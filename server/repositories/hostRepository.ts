@@ -417,6 +417,7 @@ function compactHostOption(host: any) {
     geoLongitudeMicro: host?.geoLongitudeMicro,
     geoUpdatedAt: host?.geoUpdatedAt,
     geoManual: !!host?.geoManual,
+    addressManual: !!host?.addressManual,
   };
 }
 
@@ -483,6 +484,7 @@ export async function getHostOptions(ownerUserId?: number, allowedHostIds?: numb
         geoLongitudeMicro: hosts.geoLongitudeMicro,
         geoUpdatedAt: hosts.geoUpdatedAt,
         geoManual: hosts.geoManual,
+        addressManual: hosts.addressManual,
       })
       .from(hosts);
     const rows = condition
@@ -860,6 +862,26 @@ export async function updateHostHeartbeat(id: number, metrics?: Partial<InsertHo
   if (!db) return;
   const now = nowDate();
   await db.update(hosts).set({ isOnline: true, lastHeartbeat: now, updatedAt: now, ...(metrics ?? {}) }).where(eq(hosts.id, id));
+}
+
+/**
+ * 写 Agent 上报的地址（ip / ipv4 / ipv6），只在这台主机的地址不是手改的时候写。
+ *
+ * 判断放在 UPDATE 的条件里，不靠心跳开头读到的那份主机：心跳读完主机、还没写回之间用户刚好保存了
+ * 手改地址，按旧快照写就会把它盖掉，之后 addressManual 一直是 true，Agent 的值就永远留在那儿了。
+ * 地址变了顺手清掉定位（换了 IP 要重新定）。返回是否真的写了。
+ */
+export async function applyAgentReportedHostAddress(id: number, address: { ip: string; ipv4: string | null; ipv6: string | null }) {
+  const q = quoteIdentifier;
+  const result = await executeRaw(
+    `UPDATE ${q("hosts")}
+     SET ${q("ip")} = ?, ${q("ipv4")} = ?, ${q("ipv6")} = ?,
+         ${q("geoCountryCode")} = NULL, ${q("geoCountryName")} = NULL, ${q("geoRegion")} = NULL, ${q("geoEmoji")} = NULL,
+         ${q("geoLatitudeMicro")} = NULL, ${q("geoLongitudeMicro")} = NULL, ${q("geoUpdatedAt")} = NULL
+     WHERE ${q("id")} = ? AND COALESCE(${q("addressManual")}, ?) = ?`,
+    [address.ip, address.ipv4, address.ipv6, id, boolValue(false), boolValue(false)],
+  );
+  return rawAffectedRows(result) > 0;
 }
 
 /**

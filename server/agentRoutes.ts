@@ -398,18 +398,6 @@ agentApiRouter.post("/api/agent/register", async (req: Request, res: Response) =
         ["ipv6", reportedAddress.ipv6],
       ].some(([key, value]) => String(value || "") !== String((existingHost as any)[key as string] || ""));
       await db.updateHost(existingHost.id, {
-        ip: reportedAddress.ip,
-        ipv4: reportedAddress.ipv4,
-        ipv6: reportedAddress.ipv6,
-        ...(entryChanged ? {
-          geoCountryCode: null,
-          geoCountryName: null,
-          geoRegion: null,
-          geoEmoji: null,
-          geoLatitudeMicro: null,
-          geoLongitudeMicro: null,
-          geoUpdatedAt: null,
-        } : {}),
         osInfo: nextOsInfo || existingHost.osInfo,
         cpuInfo: nextCpuInfo || existingHost.cpuInfo,
         memoryTotal: finiteAgentNumber(memoryTotal) || existingHost.memoryTotal,
@@ -418,7 +406,9 @@ agentApiRouter.post("/api/agent/register", async (req: Request, res: Response) =
         isOnline: true,
         lastHeartbeat: new Date(),
       });
-      if (entryChanged) {
+      // 地址单独写、带条件：手改过的地址不被上报盖掉（见 applyAgentReportedHostAddress）
+      const addressApplied = entryChanged && await db.applyAgentReportedHostAddress(existingHost.id, reportedAddress);
+      if (addressApplied) {
         await handleHostAddressChanged(
           existingHost.id,
           { ...existingHost, ...reportedAddress },

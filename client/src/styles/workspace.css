@@ -1599,19 +1599,8 @@ html[data-personalization-background="image"] .auth-divider-label, html[data-per
 [data-slot="checkbox"]:checked { background-image: var(--fx-primary-gradient); border-color: transparent; }
 
 /* ═══════════════════════════════════════════════════════════════════════
-   线路语言：首页网络地图、规则卡路径条、列表行里的一小段线
+   线路语言：规则卡路径条、列表行里的一小段线
    ═══════════════════════════════════════════════════════════════════════ */
-.fx-netmap-label { font-size: 11px; font-weight: 600; fill: var(--fx-text); font-family: var(--fx-font); }
-.fx-netmap-note { font-size: 9.5px; fill: var(--fx-text-muted); font-family: var(--fx-font); font-variant-numeric: tabular-nums; }
-.fx-netmap-flag { font-size: 13px; font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", var(--fx-font); }
-.fx-netmap-pill { font-size: 9.5px; font-weight: 600; font-family: var(--fx-font); font-variant-numeric: tabular-nums; }
-/* 地图线上流动的小点：沿 offset-path 走，只动 offset-distance / opacity，不触发重排 */
-.fx-netmap-flow { position: absolute; inset: 0; pointer-events: none; overflow: hidden; contain: strict; }
-.fx-netmap-flow i { position: absolute; left: 0; top: 0; width: 10px; height: 10px; border-radius: 999px; background: var(--fx-l1-surface); border: 2px solid var(--fx-accent); offset-rotate: 0deg; offset-distance: 0%; opacity: 0; will-change: offset-distance, opacity; animation-name: fx-netmap-flow; animation-timing-function: linear; animation-iteration-count: infinite; }
-@keyframes fx-netmap-flow { 0% { offset-distance: 0%; opacity: 0; } 14% { opacity: 1; } 86% { opacity: 1; } 100% { offset-distance: 100%; opacity: 0; } }
-@media (prefers-reduced-motion: reduce) { .fx-netmap-flow { display: none; } }
-.fx-netmap svg [role="button"]:focus-visible { outline: 0; }
-.fx-netmap svg [role="button"]:focus-visible > circle:first-of-type { stroke-width: 4; }
 
 /*
   路径条：左节点 ─ 线 ─ 右节点。线用 background 画（虚线用 repeating-linear-gradient），
@@ -1803,3 +1792,6 @@ button.fx-rule-tag:hover { filter: brightness(.96); }
   :root, .dark { --fx-glass-blur: blur(10px); }
   .fx-navbar, .workspace-tabs { -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
 }
+/* 首页「概览」图（components/network/NetworkOverview）：名字和地名描一圈卡片底色，压在线上也读得清 */
+.fx-overview-label { font-size: 11px; font-weight: 600; fill: var(--fx-text); font-family: var(--fx-font); paint-order: stroke; stroke: var(--fx-l1-surface); stroke-width: 3px; stroke-linejoin: round; }
+.fx-overview-note { font-size: 9.5px; fill: var(--fx-text-muted); font-family: var(--fx-font); paint-order: stroke; stroke: var(--fx-l1-surface); stroke-width: 3px; stroke-linejoin: round; }

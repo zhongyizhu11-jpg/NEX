@@ -14,6 +14,7 @@ import {
   type DashboardAttentionTotals,
 } from "../../shared/dashboardAttention";
 import { timestampMillis } from "../../shared/timestamp";
+import { buildForwardMapLinks, type ForwardMapHost, type ForwardMapRule } from "../../shared/forwardMapLinks";
 
 type DashboardTrafficBreakdownItem = {
   id: number;
@@ -667,4 +668,50 @@ export async function getDashboardTrafficBreakdown(opts: {
     portRules: sortTrafficItems(portRuleTotals, limit),
     forwardGroupRules: sortTrafficItems(forwardGroupRuleTotals, limit),
   };
+}
+
+/**
+ * 首页「概览」上主机之间的转发连线（规则 → 目标那台主机，算法在 shared/forwardMapLinks）。
+ *
+ * 两条小查询，各只取要用的几列：规则（没在删除的；租户只取自己的）和主机地址。租户只看得到自己的
+ * 主机和被授权的主机（visibleHostIds），任何一端在这之外的线都不给 —— 不靠这张图知道别人的机器。
+ */
+export async function getDashboardForwardMap(userId?: number, visibleHostIds?: number[]) {
+  const db = await getDb();
+  if (!db) return [];
+  const ruleConds: any[] = [sql`COALESCE(${forwardRules.pendingDelete}, ${sqlBool(false)}) = ${sqlBool(false)}`];
+  if (userId) ruleConds.push(eq(forwardRules.userId, userId));
+  const [ruleRows, hostRows] = await Promise.all([
+    db.select({
+      id: forwardRules.id,
+      hostId: forwardRules.hostId,
+      targetIp: forwardRules.targetIp,
+      targetPort: forwardRules.targetPort,
+      tunnelId: forwardRules.tunnelId,
+      isEnabled: forwardRules.isEnabled,
+      isForwardGroupTemplate: forwardRules.isForwardGroupTemplate,
+      routeParentRuleId: forwardRules.routeParentRuleId,
+      failoverEnabled: forwardRules.failoverEnabled,
+      failoverTargets: forwardRules.failoverTargets,
+      routePaths: forwardRules.routePaths,
+    }).from(forwardRules).where(and(...ruleConds)),
+    db.select({
+      id: hosts.id,
+      userId: hosts.userId,
+      ip: hosts.ip,
+      ipv4: hosts.ipv4,
+      ipv6: hosts.ipv6,
+      entryIp: hosts.entryIp,
+      tunnelEntryIp: hosts.tunnelEntryIp,
+      ddnsDomain: hosts.ddnsDomain,
+      ddnsEnabled: hosts.ddnsEnabled,
+    }).from(hosts),
+  ]);
+  const visible = userId
+    ? new Set<number>([
+      ...(visibleHostIds || []).map(Number),
+      ...hostRows.filter((host: any) => Number(host.userId) === Number(userId)).map((host: any) => Number(host.id)),
+    ])
+    : undefined;
+  return buildForwardMapLinks(ruleRows as ForwardMapRule[], hostRows as ForwardMapHost[], { visibleHostIds: visible });
 }

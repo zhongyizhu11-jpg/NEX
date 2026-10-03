@@ -52,6 +52,21 @@ export const dashboardRouter = router({
         () => db.getDashboardHealth(scope),
       );
     }),
+    /**
+     * 首页「概览」图上主机之间的转发连线（隧道那几条另外从 tunnels.options 来）。
+     * 租户只拿自己的规则，线的两头都得是他看得到的主机。
+     */
+    forwardMap: protectedProcedure.query(async ({ ctx }) => {
+      const scope = dashboardScopeUserId(ctx.user);
+      return cachedDashboardQuery(`forwardMap:${dashboardScopeCacheKey(scope)}`, 10_000, 60_000, async () => {
+        if (scope === undefined) return db.getDashboardForwardMap();
+        const [allowedHostIds, billingResourceIds] = await Promise.all([
+          db.getUserEffectiveAllowedHostIds(scope),
+          db.getUserUsableTrafficBillingResourceIds(scope),
+        ]);
+        return db.getDashboardForwardMap(scope, [...allowedHostIds, ...billingResourceIds.hostIds]);
+      });
+    }),
     trafficTotals: protectedProcedure.query(async ({ ctx }) => {
       return cachedDashboardQuery(`trafficTotals:${ctx.user.id}`, 5_000, 0, async () => {
         const traffic = await db.getTotalTraffic(ctx.user.id);

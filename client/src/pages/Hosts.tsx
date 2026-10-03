@@ -33,7 +33,7 @@ import HostGroupManager, { compareHostGroupDisplayOrder, type HostGroupView, typ
 import HostProbeServiceManager, { type HostProbeServiceViewMode } from "@/components/hosts/HostProbeServiceManager";
 import HostProbeServiceLatencyDialog from "@/components/hosts/HostProbeServiceLatencyDialog";
 import {
-  agentDetectedIpText,
+  editableDetectedAddress,
   compareVersions,
   formatBytes,
   formatUptime,
@@ -562,6 +562,10 @@ type HostFormData = {
   networkInterface: string;
   entryIp: string;
   tunnelEntryIp: string;
+  /** 「Agent 检测 IP」一栏：可以手改（改过才提交，见 hosts.update 的 detectedAddress） */
+  detectedAddress: string;
+  /** 打开编辑框时那一栏的原值，用来判断改没改 */
+  detectedAddressInitial: string;
   portRangeStart: number | null;
   portRangeEnd: number | null;
   portAllowlist: string;
@@ -594,6 +598,8 @@ const defaultFormData: HostFormData = {
   networkInterface: "",
   entryIp: "",
   tunnelEntryIp: "",
+  detectedAddress: "",
+  detectedAddressInitial: "",
   portRangeStart: null,
   portRangeEnd: null,
   portAllowlist: "",
@@ -2054,6 +2060,8 @@ function HostsContent() {
       networkInterface: host.networkInterface || "",
       entryIp: host.entryIp || "",
       tunnelEntryIp: host.tunnelEntryIp || "",
+      detectedAddress: editableDetectedAddress(host),
+      detectedAddressInitial: editableDetectedAddress(host),
       portRangeStart: host.portRangeStart ?? null,
       portRangeEnd: host.portRangeEnd ?? null,
       portAllowlist: host.portAllowlist || "",
@@ -2111,6 +2119,9 @@ function HostsContent() {
     if (name.length > 128) { toast.error("主机名称不能超过 128 个字符"); return; }
     if (entry.length > 253) { toast.error("入口 IP / 域名不能超过 253 个字符"); return; }
     if (tunnelEntry.length > 128) { toast.error("内网地址不能超过 128 个字符"); return; }
+    const detectedAddress = (form.detectedAddress || "").trim();
+    const detectedAddressChanged = detectedAddress !== (form.detectedAddressInitial || "").trim();
+    if (detectedAddress.length > 200) { toast.error("Agent 检测 IP 不能超过 200 个字符"); return; }
 
     const ps = form.portRangeStart;
     const pe = form.portRangeEnd;
@@ -2188,6 +2199,7 @@ function HostsContent() {
         networkInterface: ni || null,
         entryIp: entry || null,
         tunnelEntryIp: tunnelEntry || null,
+        ...(detectedAddressChanged ? { detectedAddress: detectedAddress } : {}),
         portRangeStart: ps ?? null,
         portRangeEnd: pe ?? null,
         portAllowlist: customPorts.normalized || null,
@@ -3263,7 +3275,21 @@ function HostsContent() {
                     </FormField>
                     <FormField className="space-y-1">
                       <Label className="text-sm">Agent 检测 IP</Label>
-                      <Input className="h-8 bg-muted/40" value={agentDetectedIpText(displayHosts.find((host: any) => host.id === editingId) || form)} readOnly />
+                      <Input
+                        className="h-8"
+                        placeholder="Agent 自动检测"
+                        value={form.detectedAddress}
+                        onChange={(e) => setForm({ ...form, detectedAddress: e.target.value })}
+                      />
+                      {/*
+                        手改之后地址由用户说了算，心跳不再覆盖（agentAddressState）；清空保存交回 Agent。
+                        IPv4、IPv6 各一个，用逗号或空格隔开。
+                      */}
+                      <p className="text-xs text-muted-foreground">
+                        {editingHostRow?.addressManual
+                          ? "已手动指定，Agent 上报不再覆盖；清空后保存恢复自动检测"
+                          : "可以手改（IPv4、IPv6 用逗号隔开），改了之后 Agent 上报不再覆盖"}
+                      </p>
                     </FormField>
                   </div>
                   <div className="mt-2.5 grid gap-2.5 sm:grid-cols-2">

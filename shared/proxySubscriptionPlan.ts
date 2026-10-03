@@ -95,6 +95,13 @@ export type ProxySubscriptionRuleRow = {
   entryDomainEnabled?: unknown;
   entryDomain?: unknown;
   entryDomainValue?: unknown;
+  /**
+   * 转发组 / 转发链 / 线路组由面板拆出来的内部规则：forwardGroupRuleId 指向用户建的
+   * 那条主规则，routeParentRuleId 指向线路组的父规则。调用方没查这几列时不做判断。
+   */
+  forwardGroupRuleId?: unknown;
+  isForwardGroupTemplate?: unknown;
+  routeParentRuleId?: unknown;
 };
 
 export type ProxySubscriptionHostRow = HostEntryAddressSource & {
@@ -351,12 +358,30 @@ export function buildProxySubscriptionPlan(input: BuildProxySubscriptionPlanInpu
     return frontId && emittedTemplateIds.has(frontId) ? frontId : 0;
   };
 
+  /**
+   * 面板拆出来的内部规则（链的每一段、线路组的中转），它的主规则已经绑了节点时就不再
+   * 单独出节点：主规则那条已经是这条线路的入口，内部段再出一条，订阅里就是同一个入口
+   * 两个节点（名字后面带 #2），后面几段的还会绕开前面的机器直连中间那台。
+   */
+  const boundRuleIds = new Set<number>();
+  for (const rule of input.rules) {
+    if (Number(rule.proxyNodeId || 0) > 0 && !bool(rule.pendingDelete)) boundRuleIds.add(Number(rule.id));
+  }
+  const internalParentOf = (rule: ProxySubscriptionRuleRow) => {
+    const routeParent = Number(rule.routeParentRuleId || 0);
+    if (routeParent > 0) return routeParent;
+    const groupTemplate = Number(rule.forwardGroupRuleId || 0);
+    return groupTemplate > 0 && !bool(rule.isForwardGroupTemplate) ? groupTemplate : 0;
+  };
+
   for (const rule of input.rules) {
     const ruleId = Number(rule.id);
     const ruleName = text(rule.name) || `规则 #${ruleId}`;
     const skip = (reason: ProxySubscriptionSkipReason) => skipped.push({ ruleId, ruleName, reason });
 
     if (bool(rule.pendingDelete)) continue;
+    const parentRuleId = internalParentOf(rule);
+    if (parentRuleId > 0 && boundRuleIds.has(parentRuleId)) continue;
 
     const templateId = Number(rule.proxyNodeId || 0);
     if (!templateId) {
@@ -497,9 +522,17 @@ export function buildProxySubscriptionPlan(input: BuildProxySubscriptionPlanInpu
     });
   }
 
+  /*
+    因为暂时不通而没发出去的，它的节点不算「没有转发指向」—— 转发明明在，只是这会儿
+    不通，原因已经写在 skipped 里了。再报一遍「没有任何转发指向它们」是说错了话。
+  */
+  const unreachableRuleIdSet = new Set(skipped.filter((item) => item.reason === "unreachable").map((item) => item.ruleId));
   const emittedTemplates = new Set<number>([
     ...directWithFront.map((entry) => Number(entry.templateId)),
     ...entries.map((entry) => Number(entry.templateId)),
+    ...input.rules
+      .filter((rule) => unreachableRuleIdSet.has(Number(rule.id)))
+      .map((rule) => Number(rule.proxyNodeId || 0)),
   ]);
   for (const template of input.templates) {
     const templateId = Number(template.id);

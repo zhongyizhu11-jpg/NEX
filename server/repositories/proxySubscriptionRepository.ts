@@ -1047,6 +1047,10 @@ async function buildProxySubscriptionContextForUser(userId: number): Promise<{
       // 核对「绑定还算不算真的」：目标已经不指向那个节点时要告警，见 proxyNodeBindingTruth。
       targetIp: forwardRules.targetIp,
       targetPort: forwardRules.targetPort,
+      // 链 / 转发组 / 线路组拆出来的内部规则，主规则已绑节点时不再单独出节点。
+      forwardGroupRuleId: forwardRules.forwardGroupRuleId,
+      isForwardGroupTemplate: forwardRules.isForwardGroupTemplate,
+      routeParentRuleId: forwardRules.routeParentRuleId,
     })
     .from(forwardRules)
     .where(and(eq(forwardRules.userId, userId), eq(forwardRules.pendingDelete, false)))

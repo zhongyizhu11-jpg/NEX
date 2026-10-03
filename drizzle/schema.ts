@@ -315,6 +315,11 @@ export const hosts = table("hosts", {
     按 IP 的自动定位不得覆盖 —— 机房 IP 段的库经常把香港机器放到深圳。
   */
   geoManual: boolean("geoManual").notNull().default(false),
+  /*
+    「Agent 检测 IP」是人手改的（shared/hostManualAddress）：为 true 时 ip / ipv4 / ipv6 由用户说了算，
+    心跳上报的地址不再覆盖。
+  */
+  addressManual: boolean("addressManual").notNull().default(false),
   // ===== 端口区间限制 =====
   portRangeStart: int("portRangeStart"),  // 允许转发的起始端口，null = 不限制
   portRangeEnd: int("portRangeEnd"),      // 允许转发的结束端口，null = 不限制
