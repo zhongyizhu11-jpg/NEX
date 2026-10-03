@@ -704,6 +704,7 @@ export async function getDashboardForwardMap(userId?: number, visibleHostIds?: n
       entryIp: hosts.entryIp,
       tunnelEntryIp: hosts.tunnelEntryIp,
       ddnsDomain: hosts.ddnsDomain,
+      ddnsEnabled: hosts.ddnsEnabled,
     }).from(hosts),
   ]);
   const visible = userId

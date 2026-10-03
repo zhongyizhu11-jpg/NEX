@@ -1690,9 +1690,6 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         await db.touchHostHeartbeat(host.id);
       }
     } else await db.updateHostHeartbeat(host.id, {
-      ip: reportedAddress.ip,
-      ipv4: reportedAddress.ipv4,
-      ipv6: reportedAddress.ipv6,
       agentVersion: nextAgentVersion || (host as any).agentVersion || null,
       ...(nextFxpVersion ? { fxpVersion: nextFxpVersion } : {}),
       cpuInfo: nextCpuInfo || (host as any).cpuInfo || null,
@@ -1723,17 +1720,10 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         mimicMessage: mimicEnvironment.message,
         mimicCheckedAt: new Date(),
       } : {}),
-      ...(addressChanged ? {
-        geoCountryCode: null,
-        geoCountryName: null,
-        geoRegion: null,
-        geoEmoji: null,
-        geoLatitudeMicro: null,
-        geoLongitudeMicro: null,
-        geoUpdatedAt: null,
-      } : {}),
     } as any);
-    Object.assign(host as any, reportedAddress);
+    // 地址单独写、带条件：用户刚好在这次心跳期间手改了地址时不盖掉它（见 applyAgentReportedHostAddress）
+    const addressApplied = addressChanged && await db.applyAgentReportedHostAddress(host.id, reportedAddress);
+    if (addressApplied) Object.assign(host as any, reportedAddress);
     if (fxpVersionChanged) {
       appendPanelLog(
         "info",
@@ -1772,7 +1762,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         console.warn(`[HostStatus] Online notify failed host=${host.id}: ${error instanceof Error ? error.message : String(error)}`);
       });
     }
-    if (addressChanged) {
+    if (addressApplied) {
       await handleHostAddressChanged(host.id, host, previousHost, "agent-address-changed");
     }
     if (recoveryTriggered) {
@@ -1854,7 +1844,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         || hasQueuedIperf3AgentTasks(host.id)
         || hasQueuedPluginAgentTasks(host.id),
       recoveryTriggered,
-      addressChanged,
+      addressChanged: addressApplied,
       hasDnsChanges: dnsChangedReports.length > 0,
       hasLocalStateUpload: !!req.body?.localState || localRuntimeState.requestLocalState,
       hasEndpointEvents: fxpEndpointEvents.length > 0,

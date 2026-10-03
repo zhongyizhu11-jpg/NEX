@@ -5,7 +5,7 @@ import { buildForwardMapLinks, buildHostAddressIndex } from "./forwardMapLinks";
 
 const hosts = [
   { id: 1, ip: "134.175.173.171", entryIp: "gz.example.com" },
-  { id: 2, ipv4: "45.76.10.2", ddnsDomain: "Jinx.Example.com." },
+  { id: 2, ipv4: "45.76.10.2", ddnsDomain: "Jinx.Example.com.", ddnsEnabled: true },
   { id: 3, ipv6: "2001:db8::3" },
 ];
 
@@ -54,4 +54,10 @@ test("两台主机报了同一个地址时，这个地址谁也不认", () => {
   const index = buildHostAddressIndex([{ id: 1, ip: "10.0.0.1" }, { id: 2, entryIp: "10.0.0.1" }, { id: 3, ip: "10.0.0.3" }]);
   assert.equal(index.has("10.0.0.1"), false);
   assert.equal(index.get("10.0.0.3"), 3);
+});
+
+test("DDNS 关掉之后留着的域名不算这台主机的地址", () => {
+  const index = buildHostAddressIndex([{ id: 1, ip: "10.0.0.1", ddnsDomain: "old.example.com", ddnsEnabled: false }]);
+  assert.equal(index.has("old.example.com"), false);
+  assert.equal(index.get("10.0.0.1"), 1);
 });

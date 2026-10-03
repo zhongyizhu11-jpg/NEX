@@ -5,7 +5,7 @@ import { routePathDestination, routePathsOf } from "./routeGroup";
  *
  * 隧道本来就画在图上（入口 → 中转 → 出口）；端口转发、转发链、线路组的中转都是规则，规则只写
  * 「目标地址」，图上要的是「目标是哪台主机」—— 拿目标地址去和每台主机的地址（IP / 入口 IP /
- * DDNS 域名）对上。对不上的（落地是外面的机器）不画：它不是两台主机之间的线。
+ * 开着的 DDNS 域名）对上。对不上的（落地是外面的机器）不画：它不是两台主机之间的线。
  *
  * 各种规则怎么算：
  *   普通规则       本机 → 目标那台主机。
@@ -39,6 +39,8 @@ export type ForwardMapHost = {
   entryIp?: unknown;
   tunnelEntryIp?: unknown;
   ddnsDomain?: unknown;
+  /** DDNS 关掉之后域名可能还留着，那时它已经不是这台主机的地址了 */
+  ddnsEnabled?: unknown;
 };
 
 export type ForwardMapLink = {
@@ -69,7 +71,8 @@ export function buildHostAddressIndex(hosts: readonly ForwardMapHost[]): Map<str
   for (const host of hosts) {
     const id = Number(host.id);
     if (!Number.isFinite(id) || id <= 0) continue;
-    for (const raw of [host.ip, host.ipv4, host.ipv6, host.entryIp, host.tunnelEntryIp, host.ddnsDomain]) {
+    const ddnsDomain = truthy(host.ddnsEnabled) ? host.ddnsDomain : null;
+    for (const raw of [host.ip, host.ipv4, host.ipv6, host.entryIp, host.tunnelEntryIp, ddnsDomain]) {
       const token = addressToken(raw);
       if (!token) continue;
       const seen = index.get(token);
