@@ -417,6 +417,7 @@ function compactHostOption(host: any) {
     geoLongitudeMicro: host?.geoLongitudeMicro,
     geoUpdatedAt: host?.geoUpdatedAt,
     geoManual: !!host?.geoManual,
+    addressManual: !!host?.addressManual,
   };
 }
 
@@ -483,6 +484,7 @@ export async function getHostOptions(ownerUserId?: number, allowedHostIds?: numb
         geoLongitudeMicro: hosts.geoLongitudeMicro,
         geoUpdatedAt: hosts.geoUpdatedAt,
         geoManual: hosts.geoManual,
+        addressManual: hosts.addressManual,
       })
       .from(hosts);
     const rows = condition

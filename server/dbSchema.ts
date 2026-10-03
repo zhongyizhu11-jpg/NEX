@@ -242,6 +242,8 @@ const tables: TableDef[] = [
       c("geoLatitudeMicro", "int"), c("geoLongitudeMicro", "int"), c("geoUpdatedAt", "epoch"),
       // 手动指定位置的标记：自动定位见到它就绕开（hostGeo.ts）
       c("geoManual", "bool", { notNull: true, default: false }),
+      // 「Agent 检测 IP」手改过：心跳不再覆盖 ip / ipv4 / ipv6（agentAddressState）
+      c("addressManual", "bool", { notNull: true, default: false }),
       c("portRangeStart", "int"), c("portRangeEnd", "int"), c("portAllowlist", "text"),
       c("blockHttp", "bool", { notNull: true, default: false }), c("blockSocks", "bool", { notNull: true, default: false }),
       c("blockTls", "bool", { notNull: true, default: false }),

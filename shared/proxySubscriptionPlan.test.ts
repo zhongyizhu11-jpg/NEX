@@ -131,6 +131,47 @@ test("端到端一直不通的转发暂时不进订阅，写明原因", () => {
   assert.equal(off.entries.length, 1);
 });
 
+test("链 / 线路组拆出来的内部规则：主规则已绑节点时不再单独出节点", () => {
+  const plan = buildProxySubscriptionPlan({
+    rules: [
+      // 用户建的链主规则，入口在 1 号机
+      rule({ id: 10, hostId: 1, sourcePort: 52582, isForwardGroupTemplate: true }),
+      // 链的两段（第二段在 2 号机，目标正好是落地节点，以前会被绑上）
+      rule({ id: 11, hostId: 1, sourcePort: 52582, forwardGroupRuleId: 10, isForwardGroupTemplate: false }),
+      rule({ id: 12, hostId: 2, sourcePort: 30001, forwardGroupRuleId: 10, isForwardGroupTemplate: false, proxyNodeVisible: false }),
+      // 线路组的中转
+      rule({ id: 13, hostId: 2, sourcePort: 30002, routeParentRuleId: 10 }),
+    ],
+    templates: [HKT_TEMPLATE],
+    hosts: HOSTS,
+  });
+  assert.deepEqual(plan.entries.map((entry) => entry.ruleId), [10], "同一个入口只出一个节点");
+  assert.equal(plan.skipped.length, 0, "内部规则不出现在「被你关掉的」「没绑节点」里");
+
+  // 主规则没绑节点时，内部规则照旧（不改变原来的行为）
+  const unboundParent = buildProxySubscriptionPlan({
+    rules: [
+      rule({ id: 10, proxyNodeId: 0, isForwardGroupTemplate: true }),
+      rule({ id: 11, hostId: 2, sourcePort: 30001, forwardGroupRuleId: 10, isForwardGroupTemplate: false }),
+    ],
+    templates: [HKT_TEMPLATE],
+    hosts: HOSTS,
+  });
+  assert.deepEqual(unboundParent.entries.map((entry) => entry.ruleId), [11]);
+});
+
+test("因为不通被暂时隐藏的节点，不报「没有转发指向它」", () => {
+  const plan = buildProxySubscriptionPlan({
+    rules: [rule({ id: 1 })],
+    templates: [HKT_TEMPLATE],
+    hosts: HOSTS,
+    unreachableRuleIds: new Set([1]),
+  });
+  assert.equal(plan.entries.length, 0);
+  assert.deepEqual(plan.skipped.map((item) => item.reason), ["unreachable"]);
+  assert.equal(plan.warnings.filter((item) => item.reason === "node-unused").length, 0);
+});
+
 test("待删除的转发既不出节点也不报原因", () => {
   const plan = buildProxySubscriptionPlan({
     rules: [rule({ id: 1, pendingDelete: true })],

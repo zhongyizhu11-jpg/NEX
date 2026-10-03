@@ -39,6 +39,13 @@ function unmapIpv4(value: string) {
 }
 
 export function mergeAgentReportedAddress(body: any, existingHost?: any, observedAddress = ""): AgentReportedAddress {
+  // 用户在编辑框里手改过检测 IP（shared/hostManualAddress）：地址由他说了算，上报的一律不认
+  const manual = existingHost?.addressManual;
+  if (manual === true || manual === 1 || manual === "1") {
+    const ipv4 = normalizeAgentAddress(existingHost?.ipv4) || null;
+    const ipv6 = normalizeAgentAddress(existingHost?.ipv6) || null;
+    return { ip: normalizeAgentAddress(existingHost?.ip) || ipv4 || ipv6 || "unknown", ipv4, ipv6 };
+  }
   const safeIpv4 = normalizeAgentAddress(body?.ipv4);
   const safeIpv6 = normalizeAgentAddress(body?.ipv6);
   const safeIp = normalizeAgentAddress(body?.ip);

@@ -27,6 +27,7 @@ import { billingCalendarParts } from "@shared/billingTime";
 import { normalizeAgentProbeCounts } from "@shared/agentDtos";
 import { buildAgentScriptCommand } from "@shared/agentInstallCommand";
 import { getConfiguredPanelUrl } from "../agentPanelUrl";
+import { parseManualHostAddress } from "@shared/hostManualAddress";
 
 const HOST_UPGRADE_CLEANUP_INTERVAL_MS = 60 * 1000;
 const GITHUB_API_LIMIT_STATUSES = new Set([403, 429]);
@@ -1389,6 +1390,8 @@ export const hostsRouter = router({
         id: z.number(),
         name: z.string().min(1).max(128).optional(),
         ip: hostAddressSchema.optional(),
+        /** 手改「Agent 检测 IP」：只有改过才传；空串 = 交回自动检测（shared/hostManualAddress） */
+        detectedAddress: z.string().max(200).optional(),
         hostType: z.enum(["master", "slave"]).optional(),
         networkInterface: networkInterfaceSchema,
         sortOrder: hostSortOrderSchema,
@@ -1435,8 +1438,15 @@ export const hostsRouter = router({
         const nextPortAllowlist = input.portAllowlist !== undefined
           ? normalizePortAllowlist(input.portAllowlist)
           : String((host as any).portAllowlist || "");
-        const { id, ...data } = input;
+        const { id, detectedAddress, ...data } = input;
         let ddnsConfigChanged = false;
+        if (detectedAddress !== undefined) {
+          const parsed = parseManualHostAddress(detectedAddress);
+          if ("error" in parsed) throw new Error(`Agent 检测 IP：${parsed.error}`);
+          if (parsed.manual) Object.assign(data as any, { ip: parsed.ip, ipv4: parsed.ipv4, ipv6: parsed.ipv6, addressManual: true });
+          // 清空：交回 Agent，下一次心跳就会写上它查到的地址
+          else (data as any).addressManual = false;
+        }
         if (data.networkInterface !== undefined) data.networkInterface = data.networkInterface || null;
         if ((data as any).sortOrder !== undefined) (data as any).sortOrder = Math.min(200, Math.max(0, Math.floor(Number((data as any).sortOrder) || 0)));
         if (data.entryIp !== undefined) data.entryIp = data.entryIp || null;
@@ -1509,7 +1519,7 @@ export const hostsRouter = router({
         const portRangeChanged = ["portRangeStart", "portRangeEnd"].some((key) =>
           (data as any)[key] !== undefined && Number((data as any)[key] ?? 0) !== Number((host as any)[key] ?? 0)
         ) || ((data as any).portAllowlist !== undefined && nextPortAllowlist !== String((host as any).portAllowlist || ""));
-        const entryChanged = ["entryIp", "tunnelEntryIp"].some((key) =>
+        const entryChanged = ["entryIp", "tunnelEntryIp", "ip", "ipv4", "ipv6"].some((key) =>
           (data as any)[key] !== undefined && String((data as any)[key] || "") !== String((host as any)[key] || "")
         );
         if (entryChanged) {

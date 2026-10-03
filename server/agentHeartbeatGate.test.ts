@@ -790,3 +790,12 @@ test("empty address reports during Agent restart preserve the last valid address
     ipv6: "2001:db8::9",
   });
 });
+
+test("检测 IP 手改过（addressManual）：心跳上报的地址、面板看到的连接地址都不覆盖", () => {
+  const existing = { ip: "43.136.54.65", ipv4: "43.136.54.65", ipv6: null, addressManual: true };
+  assert.deepEqual(
+    mergeAgentReportedAddress({ ip: "134.175.173.171", ipv4: "134.175.173.171", ipv6: "2001:db8::9" }, existing, "134.175.173.171"),
+    { ip: "43.136.54.65", ipv4: "43.136.54.65", ipv6: null },
+  );
+  assert.equal(mergeAgentReportedAddress({ ipv4: "134.175.173.171" }, { ...existing, addressManual: false }).ipv4, "134.175.173.171");
+});

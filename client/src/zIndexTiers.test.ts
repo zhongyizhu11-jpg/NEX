@@ -46,10 +46,6 @@ const 在案: Record<string, { 值: number[]; 因为: string }> = {
     值: [20, 30],
     因为: "30 是表格冻结列，只和同表格的单元格比先后；20 在六档内",
   },
-  "components/network/networkMap.css": {
-    值: [5, 6],
-    因为: "首页网络地图的容器 isolation: isolate 自成层叠上下文，这两个数字只在地图内部排先后（+ / −、回到全览、未定位压在 marker 上 5 → 点一下的提示 6），跟页面六档没有可比性",
-  },
   "components/plugins/Live2DWidgetHost.tsx": {
     值: [45],
     因为: "看板娘浮窗要压住吸顶头部（40）又不能盖住弹窗（50），卡在中间。第三方挂件的样式，单独记着",

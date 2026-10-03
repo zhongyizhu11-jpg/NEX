@@ -1,6 +1,5 @@
 import { useMemo } from "react";
 
-import type { NetworkMapLink, NetworkMapNode } from "@/components/network/NetworkMap";
 import { tunnelHealthFromAvailability } from "@/features/links/tunnelHealth";
 import { hostGeoCoordinate } from "@/lib/hostGeo";
 import { countryFlagLabel } from "@/lib/flagEmojiSupport";
@@ -20,8 +19,7 @@ import { lineKindOfHealth, lineLegend, type LineKind } from "./networkMapLines";
  * 数据用的是各页已经在用的两条轻量列表（hosts.options / tunnels.options，见 networkMapData）。
  * 隧道的状态和隧道页一样从 linkAvailability 算 —— 这里红的，点进隧道页也是红的。
  *
- * 节点和线是 SVG 示意图（没有 WebGL 时的兜底）的类型再加上真地图要的几样：中文城市名、
- * 国家代码、四类线的哪一类、逐跳延迟。
+ * 节点和线带上概览图要的几样：中文城市名、国家代码、四类线的哪一类、逐跳延迟。
  */
 function hostNote(host: any, now: number, linkCount: number): string | null {
   if (host?.isOnline === false || host?.isOnline === 0) {
@@ -51,6 +49,29 @@ function hostHealth(host: any): NetworkHealth {
   if (host?.lastHeartbeat == null) return "unknown";
   return "down";
 }
+
+/** 图上的一台主机 */
+export type NetworkMapNode = {
+  id: number;
+  name: string;
+  health: NetworkHealth;
+  /** 「香港 · 2 条线路」这种一句话；没有就按状态写 */
+  note?: string | null;
+  /** 有经纬度的按它落位 */
+  geo?: { lat: number; lng: number } | null;
+  /** 国旗（由国家码算出来） */
+  emoji?: string | null;
+};
+
+/** 图上的一条隧道 */
+export type NetworkMapLink = {
+  id: number;
+  name: string;
+  /** 依次经过的主机 id：入口、中转…、出口。少于两个的不画 */
+  path: number[];
+  health: NetworkHealth;
+  latencyMs?: number | null;
+};
 
 export type NetworkMapHostNode = NetworkMapNode & {
   countryCode: string | null;
