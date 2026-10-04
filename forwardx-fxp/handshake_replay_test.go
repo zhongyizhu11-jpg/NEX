@@ -165,7 +165,8 @@ func TestFxpReplayWithinWindowGetsFreshSessionKeys(t *testing.T) {
 		for err == nil && len(result.frames) < 2 {
 			var frame []byte
 			if frame, err = sec.readFrame(); err == nil {
-				result.frames = append(result.frames, frame)
+				// readFrame 返回的切片只在下一次读之前有效，留着比较要拷一份。
+				result.frames = append(result.frames, append([]byte(nil), frame...))
 				if len(result.frames) == 1 {
 					err = sec.writeFrame([]byte("response"))
 				}

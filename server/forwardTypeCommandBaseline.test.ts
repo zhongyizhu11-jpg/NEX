@@ -108,17 +108,17 @@ const BASELINE: Record<string, Fingerprint> = {
   "socat:both": {
     commands: 0, preCommands: 32, postCommands: 4, managedConfigs: 0,
     hash: "12e1697475b9d5fb",
-    svcName: "forwardx-socat-tcp-20012", svcNameExtra: "forwardx-socat-udp-20012", serviceHash: "3bf9e5c5667ad86f",
+    svcName: "forwardx-socat-tcp-20012", svcNameExtra: "forwardx-socat-udp-20012", serviceHash: "e95cec455a2fbccb",
   },
   "socat:tcp": {
     commands: 0, preCommands: 27, postCommands: 4, managedConfigs: 0,
     hash: "f7206dd451e62023",
-    svcName: "forwardx-socat-tcp-20010", svcNameExtra: "", serviceHash: "fde51953aa29401a",
+    svcName: "forwardx-socat-tcp-20010", svcNameExtra: "", serviceHash: "5efc503e7ef202b8",
   },
   "socat:udp": {
     commands: 0, preCommands: 26, postCommands: 4, managedConfigs: 0,
     hash: "6e2e7906d1e870f5",
-    svcName: "forwardx-socat-udp-20011", svcNameExtra: "", serviceHash: "966bdfd4dc22e86e",
+    svcName: "forwardx-socat-udp-20011", svcNameExtra: "", serviceHash: "ab0167ebb07532a4",
   },
 };
 

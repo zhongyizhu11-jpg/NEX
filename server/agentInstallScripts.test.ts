@@ -77,6 +77,11 @@ test("Agent install and upgrade both apply forwarding network tuning", () => {
   assert.match(script, /FORWARDX_NETWORK_TUNING/);
   assert.match(script, /net\.ipv4\.tcp_fastopen = \$\(\(cur \| 3\)\)/);
   assert.match(script, /net\.ipv4\.tcp_congestion_control = bbr/);
+  // 跨境长往返线路跑满千兆要 64MB 窗口上限；只抬上限（tuning_raise），不压低已有更大的值。
+  for (const key of ["net.core.rmem_max", "net.core.wmem_max", "net.ipv4.tcp_rmem", "net.ipv4.tcp_wmem"]) {
+    assert.match(script, new RegExp(`tuning_raise ${key.replace(/\./g, "\\.")} 67108864`));
+  }
+  assert.match(script, /tuning_raise net\.netfilter\.nf_conntrack_max 1048576/);
   assert.match(upgrade, /\n\s*apply_network_tuning\n/);
   assert.ok(upgrade.indexOf("apply_network_tuning") < upgrade.indexOf("write_agent_service"));
 });

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/netip"
 	"os"
@@ -358,6 +357,9 @@ func newWireGuardRuntime(spec wireGuardSpec) (*wireGuardRuntime, error) {
 	tunDevice, tnet, err := netstack.CreateNetTUN([]netip.Addr{address}, nil, normalized.MTU)
 	if err != nil {
 		return nil, fmt.Errorf("create wireguard netstack: %w", err)
+	}
+	if err := tuneWireGuardNetstack(tnet); err != nil {
+		logf("wireguard tunnel=%d netstack tuning skipped: %v", normalized.TunnelID, err)
 	}
 	logger := &device.Logger{
 		Verbosef: device.DiscardLogf,
@@ -1581,13 +1583,11 @@ func (session *wireGuardUDPProxySession) close() {
 	})
 }
 
+// proxyWireGuardConnections 在本机回环连接和 netstack 连接之间双向转发。走
+// relayTCPBidirectional：一个方向结束时把半关闭传下去、另一个方向继续，而不是
+// 立刻关掉两边（以前那样会截断对端还没发完的数据）。
 func proxyWireGuardConnections(left, right net.Conn) {
-	defer left.Close()
-	defer right.Close()
-	done := make(chan struct{}, 2)
-	go func() { _, _ = io.Copy(left, right); done <- struct{}{} }()
-	go func() { _, _ = io.Copy(right, left); done <- struct{}{} }()
-	<-done
+	relayTCPBidirectional(left, right, tcpRelayHalfCloseLinger)
 }
 
 func (proxy *wireGuardOutboundProxy) close() {

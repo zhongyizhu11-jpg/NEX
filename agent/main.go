@@ -154,6 +154,11 @@ const protocolGuardUDPIdleTimeout = 2 * time.Minute
 // Bound each rule so a source flood cannot reserve hundreds of megabytes before cleanup.
 const protocolGuardUDPMaxSessions = 512
 
+// failoverProxyDialTimeout 是线路组调度器拨每条路径的超时。以前是 10 秒：主路径
+// 被黑洞时，每个新连接都要干等 10 秒才换下一条。4 秒够 SYN 重传两次（1s、3s），
+// 跨境丢包的线路也拨得通；拨不通就换路，和 gost 的 fastFailover（3s）一个量级。
+const failoverProxyDialTimeout = 4 * time.Second
+
 // Protocol guard copies use 32 KiB chunks while UDP packets may be almost
 // 64 KiB. Keep the bucket burst large enough for either without allowing an
 // unbounded one-time burst when a very high rate is configured.
@@ -13267,7 +13272,7 @@ func (p *failoverProxy) handleConn(client net.Conn) {
 			logf("failover no target available rule=%d source=%d", p.ruleID, p.sourcePort)
 			return
 		}
-		upstream, err = net.DialTimeout("tcp", net.JoinHostPort(target.TargetIP, strconv.Itoa(target.TargetPort)), 10*time.Second)
+		upstream, err = net.DialTimeout("tcp", net.JoinHostPort(target.TargetIP, strconv.Itoa(target.TargetPort)), failoverProxyDialTimeout)
 		if err == nil {
 			break
 		}
@@ -13281,7 +13286,7 @@ func (p *failoverProxy) handleConn(client net.Conn) {
 		p.checkHealthShared()
 		target, index = p.pickTargetForKey(visitor, attempted)
 		if index >= 0 {
-			upstream, err = net.DialTimeout("tcp", net.JoinHostPort(target.TargetIP, strconv.Itoa(target.TargetPort)), 10*time.Second)
+			upstream, err = net.DialTimeout("tcp", net.JoinHostPort(target.TargetIP, strconv.Itoa(target.TargetPort)), failoverProxyDialTimeout)
 		} else {
 			logf("failover dial failed rule=%d no target available after trying %d targets: %v", p.ruleID, len(attempted), err)
 			return

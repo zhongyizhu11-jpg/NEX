@@ -171,7 +171,7 @@ test("UDP 监听要带上缓冲区那几项，TCP 不带", () => {
     keepalive: true,
     ttl: "30s",
     readBufferSize: "8192",
-    readQueueSize: "64",
+    readQueueSize: "256",
     backlog: "128",
   });
   assert.equal(serviceByName.get("fwx-1-tcp").listener.metadata, undefined);
@@ -203,7 +203,7 @@ test("整份配置的内容基线（重构安全网）", () => {
   );
   assert.equal(
     loaded.hash,
-    "4dc46fe885940dc8",
+    "bc7fd8fbae10f35f",
     "gost.json 的内容变了；结构断言没说话就是变在它们没盯的地方。如果是故意改的，更新这个哈希并在提交信息里说清楚",
   );
 });

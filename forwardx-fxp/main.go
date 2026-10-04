@@ -108,9 +108,11 @@ type secureConn struct {
 	// （hello、首包）合成一个 TCP 段发出去；握手确认也不等，ackPending 让第一次
 	// readFrame 先把它读掉再交出数据帧。每一跳因此省掉一个往返。
 	pendingPrefix []byte
-	ackPending    bool
-	ackTunnelID   int
-	ackTimeout    time.Duration
+	// readBuf 是上一帧解密用的池缓冲，下一次读帧前归还。只由读协程访问。
+	readBuf     []byte
+	ackPending  bool
+	ackTunnelID int
+	ackTimeout  time.Duration
 	// onAck 报告握手确认的结果，出口择优靠它更新健康状态。
 	onAck func(error)
 	// 客户端在收到确认之前留着派生会话密钥的材料：确认里带着服务端的 salt，
@@ -2233,7 +2235,7 @@ func copyPlainToSecure(dst frameConn, src net.Conn, limiter *limiter, counter *a
 }
 
 func copyPlainToSecureWithPolicy(dst frameConn, src net.Conn, limiter *limiter, counter *atomic.Uint64, policy protocolPolicy, onBlock func(string), initialSample []byte) error {
-	buf := getFXPByteBuffer(32 * 1024)
+	buf := getFXPByteBuffer(fxpCopyChunkSize)
 	defer putFXPByteBuffer(buf)
 	sample := make([]byte, 0, fxpProtocolSampleMax)
 	initialSample = trimLeadingHTTPBlankLines(initialSample)
@@ -2902,6 +2904,7 @@ func (c *secureConn) appendSealedFrameLocked(dst []byte, plain []byte) []byte {
 }
 
 func (c *secureConn) readEncryptedFrame() ([]byte, error) {
+	c.releaseReadBuffer()
 	counter := c.readCounter
 	c.readCounter++
 	var lenCipher [64]byte
@@ -2917,13 +2920,31 @@ func (c *secureConn) readEncryptedFrame() ([]byte, error) {
 		return nil, err
 	}
 	dataCipher := getFXPByteBuffer(int(n) + dataAEAD.Overhead())
-	defer putFXPByteBuffer(dataCipher)
 	if _, err := io.ReadFull(c.conn, dataCipher); err != nil {
+		putFXPByteBuffer(dataCipher)
 		return nil, err
 	}
 	var nonce [12]byte
 	fillFXPNonce(nonce[:], c.readDir, counter, 1)
-	return dataAEAD.Open(nil, nonce[:], dataCipher, c.payloadAD)
+	// 就地解密：明文直接覆盖在密文缓冲上，不再每帧新分配一块。这块缓冲留到下一次
+	// readFrame 才还回池里（见 releaseReadBuffer），所以调用方拿到的切片只在下一次
+	// 读之前有效 —— 现有调用方都是读完立刻写出或自行拷贝。
+	plain, err := dataAEAD.Open(dataCipher[:0], nonce[:], dataCipher, c.payloadAD)
+	if err != nil {
+		putFXPByteBuffer(dataCipher)
+		return nil, err
+	}
+	c.readBuf = dataCipher
+	return plain, nil
+}
+
+// releaseReadBuffer 把上一帧占着的缓冲还回池里。在阻塞等下一帧之前调用，
+// 空闲连接因此不占缓冲。
+func (c *secureConn) releaseReadBuffer() {
+	if c.readBuf != nil {
+		putFXPByteBuffer(c.readBuf)
+		c.readBuf = nil
+	}
 }
 
 // openFrameLength 解开帧长度，并告诉调用方这一帧的内容该用哪把密钥。服务端在

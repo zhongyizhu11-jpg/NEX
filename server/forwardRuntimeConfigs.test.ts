@@ -102,8 +102,8 @@ test("监听的协议族和拨号的协议族是两件事", () => {
     两种都是「服务起来了但流量不通」。
   */
   const toIpv4 = buildSocatServiceUnit({ ...socatBase, descriptionProtocol: "tcp", dialProtocol: "TCP" });
-  assert.match(toIpv4, /socat TCP6-LISTEN:20002,fork,reuseaddr,ipv6only=0 /);
-  assert.match(toIpv4, / TCP:198\.51\.100\.7:443$/m);
+  assert.match(toIpv4, /socat -b65536 TCP6-LISTEN:20002,fork,reuseaddr,ipv6only=0,nodelay /);
+  assert.match(toIpv4, / TCP:198\.51\.100\.7:443,nodelay$/m);
 
   const toIpv6 = buildSocatServiceUnit({
     ...socatBase,
@@ -111,16 +111,18 @@ test("监听的协议族和拨号的协议族是两件事", () => {
     dialProtocol: "TCP",
     dialHost: "2001:db8::1",
   });
-  assert.match(toIpv6, /socat TCP6-LISTEN:20002,fork,reuseaddr,ipv6only=0 /);
+  assert.match(toIpv6, /socat -b65536 TCP6-LISTEN:20002,fork,reuseaddr,ipv6only=0,nodelay /);
   // 目标是 IPv6：协议名带 6，地址带方括号，两样缺一不可。
-  assert.match(toIpv6, / TCP6:\[2001:db8::1\]:443$/m);
+  assert.match(toIpv6, / TCP6:\[2001:db8::1\]:443,nodelay$/m);
 });
 
 test("UDP 规则的监听和拨号都走 UDP", () => {
   const unit = buildSocatServiceUnit({ ...socatBase, descriptionProtocol: "udp", dialProtocol: "UDP" });
-  assert.match(unit, /socat UDP6-LISTEN:20002,/);
+  assert.match(unit, /socat -b65536 UDP6-LISTEN:20002,/);
   assert.match(unit, / UDP:198\.51\.100\.7:443$/m);
   assert.doesNotMatch(unit, /TCP/);
+  // nodelay 是 TCP 选项，写到 UDP 地址上 socat 会直接报错退出。
+  assert.doesNotMatch(unit, /nodelay/);
 });
 
 test("拨号目标和展示目标分开：走故障转移时拨本机，说明里仍写真实落地", () => {
@@ -137,7 +139,7 @@ test("拨号目标和展示目标分开：走故障转移时拨本机，说明�
     dialPort: 51443,
   });
   assert.match(unit, /Description=ForwardX socat tcp forwarder 20002->198\.51\.100\.7:443$/m);
-  assert.match(unit, / TCP:127\.0\.0\.1:51443$/m);
+  assert.match(unit, / TCP:127\.0\.0\.1:51443,nodelay$/m);
 });
 
 test("服务名按协议分开，TCP 和 UDP 不会抢同一个 systemd 单元", () => {

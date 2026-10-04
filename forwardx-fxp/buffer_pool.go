@@ -6,7 +6,12 @@ package main
 // retained by the process. Use bounded channels instead of sync.Pool so a
 // source-address burst cannot leave one 65 KiB buffer per historical session
 // behind until a future GC cycle.
-const fxpBytePoolSlots = 32
+const fxpBytePoolSlots = 128
+
+// fxpCopyChunkSize 是明文侧一次读取、也就是一帧的最大明文长度。64 KiB 比原来的
+// 32 KiB 少一半的加解密调用、锁和系统调用；加上帧头和认证标签后仍落在 65 KiB
+// 那一档池里。对端接受的帧上限远大于此（fxpMaxFrame，多路径 256 KiB），旧版本兼容。
+const fxpCopyChunkSize = 64 * 1024
 
 type fxpBytePool struct {
 	size int
