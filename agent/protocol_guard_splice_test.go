@@ -501,3 +501,53 @@ func TestProtocolGuardUDPRelaysPerSourceSessions(t *testing.T) {
 		}
 	}
 }
+
+// 安静的长连接正阻塞在 splice 里时挂上限速：要被立刻踢回逐块循环，之后哪怕只有
+// 几 KB 也要经过限速器，而不是等再搬满一整块（4 MiB）才生效。
+func TestProtocolGuardHotLimitKicksQuietSplicedConnection(t *testing.T) {
+	rule := guardRule{RuleID: 56, ListenPort: 25006, RateLimitScope: t.Name()}
+	server := newProtocolGuardServer(rule)
+	defer server.close()
+	peerClient, guardClient := tcpConnPair(t)
+	guardTarget, peerTarget := tcpConnPair(t)
+	in := &protocolGuardTCPPipe{src: guardClient, dst: guardTarget, direction: protocolGuardRateIn}
+	done := make(chan error, 1)
+	go func() {
+		done <- server.copyTCPToTargetWithGuard(context.Background(), Config{}, in, nil, newProtocolGuardInspection(protocolPolicy{}))
+	}()
+	waitPipeSpliced(t, in, true)
+
+	limited := rule
+	limited.LimitIn = 1024 * 1024
+	server.updateRateLimits(limited)
+	limiter := server.rateLimiter(protocolGuardRateIn)
+	if limiter == nil {
+		t.Fatal("hot update did not attach the limiter")
+	}
+	burst := protocolGuardRateBurst(limited.LimitIn)
+	// 等限速踢把读从 splice 里拽出来（读超时被清掉后连接必须还活着）。
+	time.Sleep(50 * time.Millisecond)
+	payload := guardTestPayload(8 * 1024)
+	if _, err := peerClient.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	_ = peerTarget.SetReadDeadline(time.Now().Add(5 * time.Second))
+	got := make([]byte, len(payload))
+	if _, err := io.ReadFull(peerTarget, got); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatal("payload changed after the rate kick")
+	}
+	limiter.mu.Lock()
+	tokens := limiter.limiter.Tokens()
+	limiter.mu.Unlock()
+	if tokens >= float64(burst) {
+		t.Fatalf("small write after hot-added limit bypassed the limiter: tokens=%f burst=%d", tokens, burst)
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("relay ended after the rate kick: %v", err)
+	default:
+	}
+}

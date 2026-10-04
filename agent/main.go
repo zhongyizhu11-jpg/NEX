@@ -14012,6 +14012,8 @@ type protocolGuardTCPPipe struct {
 	progress *atomic.Int64
 	// halfClosed 置位以后这个方向不再进入 splice。
 	halfClosed atomic.Bool
+	// rateKick 表示读超时是限速热更新踢出来的（见 spliceTCPWithGuard），不是错误。
+	rateKick atomic.Bool
 	// spliced 记录这个方向是否进入过零拷贝阶段（测试用，读写都很便宜）。
 	spliced atomic.Bool
 }
@@ -14033,7 +14035,11 @@ func (p *protocolGuardTCPPipe) leaveSplice() {
 // resumeAfterKick 判断一个读错误是不是 leaveSplice 踢出来的；是的话清掉读超时，
 // 调用方接着用逐块循环转发。
 func (p *protocolGuardTCPPipe) resumeAfterKick(err error) bool {
-	if !p.halfClosed.Load() || !isNetTimeout(err) {
+	if !isNetTimeout(err) {
+		return false
+	}
+	// 先看限速踢（一次性），再看半关闭踢（之后一直有效）。
+	if !p.rateKick.Swap(false) && !p.halfClosed.Load() {
 		return false
 	}
 	_ = p.src.SetReadDeadline(time.Time{})
@@ -14059,15 +14065,30 @@ func (p *protocolGuardTCPPipe) spliceCapable() bool {
 func (s *protocolGuardServer) spliceTCPWithGuard(p *protocolGuardTCPPipe) (switchBack bool, err error) {
 	p.spliced.Store(true)
 	for {
-		if p.halfClosed.Load() || s.rateLimiter(p.direction) != nil {
+		limiter, rateChanged := s.rateWaitState(p.direction)
+		if p.halfClosed.Load() || limiter != nil {
 			return true, nil
+		}
+		// 限速热更新时把阻塞在 splice 里的读踢出来，回到循环开头重新判断：不然一条
+		// 安静的长连接（SSH、长轮询）要等到再搬满一块才会受新限速约束。
+		stopWatch := make(chan struct{})
+		if rateChanged != nil {
+			go func() {
+				select {
+				case <-rateChanged:
+					p.rateKick.Store(true)
+					_ = p.src.SetReadDeadline(time.Now())
+				case <-stopWatch:
+				}
+			}()
 		}
 		reader := &io.LimitedReader{R: p.src, N: protocolGuardSpliceChunk}
 		n, copyErr := io.Copy(p.dst, reader)
+		close(stopWatch)
 		p.addProgress(n)
 		if copyErr != nil {
 			if p.resumeAfterKick(copyErr) {
-				return true, nil
+				continue
 			}
 			return false, copyErr
 		}
