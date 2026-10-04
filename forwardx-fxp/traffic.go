@@ -401,44 +401,117 @@ func startTrafficReporter(cfg config, counter *trafficCounter) func() {
 	})
 }
 
+const trafficReportInterval = 10 * time.Second
+
+/*
+每条连接（以及每个 UDP 监听、每条规则的出口计数）都有一个上报器：每 10 秒把
+计数器的增量交出去，停的时候再交最后一次。
+
+以前每个上报器自己开一个协程、一个 10 秒的定时器，入口上一条 TCP 连接就是一个
+协程加一个定时器，几万条连接就是几万个只为了每 10 秒醒一次的协程。现在所有
+上报器登记在一张表里，由一个共用的协程每 10 秒挨个交一次增量。
+
+交出去的东西不变：每次交的都是「当前值减上次交过的值」，停的时候交最后一次，
+停了之后再也不交，所以每个上报器交出去的总数和以前一样。唯一不同的是中途那几次
+的时刻按全局的节拍走，而不是按各自开始的时刻 —— 批量上报本来就按 10 秒攒一批，
+面板看到的总量不变。
+*/
+type trafficReporter struct {
+	counter *trafficCounter
+	report  func(bytesIn, bytesOut, connections uint64)
+
+	mu              sync.Mutex
+	lastIn          uint64
+	lastOut         uint64
+	lastConnections uint64
+	// stopped：最后一次已经交过了，共用协程手里就算还拿着它也不再交。
+	stopped bool
+}
+
+var trafficReporters = struct {
+	sync.Mutex
+	active  map[*trafficReporter]struct{}
+	started bool
+	// scratch 是共用协程每次拍快照用的切片，反复用，不在锁外被别人碰。
+	scratch []*trafficReporter
+}{active: map[*trafficReporter]struct{}{}}
+
+// reportDelta 交出自上次以来的增量。final 为 true 时这是最后一次，之后不再交。
+func (r *trafficReporter) reportDelta(final bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.stopped {
+		return
+	}
+	if final {
+		r.stopped = true
+	}
+	curIn := r.counter.in.Load()
+	curOut := r.counter.out.Load()
+	deltaIn := curIn - r.lastIn
+	deltaOut := curOut - r.lastOut
+	curConnections := r.counter.connections.Load()
+	deltaConnections := curConnections - r.lastConnections
+	if deltaIn > 0 || deltaOut > 0 || deltaConnections > 0 {
+		r.report(deltaIn, deltaOut, deltaConnections)
+		r.lastIn = curIn
+		r.lastOut = curOut
+		r.lastConnections = curConnections
+	}
+}
+
+func registerTrafficReporter(r *trafficReporter) {
+	trafficReporters.Lock()
+	trafficReporters.active[r] = struct{}{}
+	if !trafficReporters.started {
+		trafficReporters.started = true
+		go trafficReporterLoop()
+	}
+	trafficReporters.Unlock()
+}
+
+func unregisterTrafficReporter(r *trafficReporter) {
+	trafficReporters.Lock()
+	delete(trafficReporters.active, r)
+	trafficReporters.Unlock()
+}
+
+func trafficReporterLoop() {
+	ticker := time.NewTicker(trafficReportInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		tickTrafficReporters()
+	}
+}
+
+// tickTrafficReporters 让每个登记着的上报器交一次增量。上报器自己的锁在表的锁
+// 外面拿：交增量会进批量上报的锁，不能让登记、注销跟着等。
+func tickTrafficReporters() {
+	trafficReporters.Lock()
+	snapshot := trafficReporters.scratch[:0]
+	for r := range trafficReporters.active {
+		snapshot = append(snapshot, r)
+	}
+	trafficReporters.scratch = nil
+	trafficReporters.Unlock()
+	for _, r := range snapshot {
+		r.reportDelta(false)
+	}
+	clear(snapshot)
+	trafficReporters.Lock()
+	trafficReporters.scratch = snapshot[:0]
+	trafficReporters.Unlock()
+}
+
 // startTrafficReporterWith 每 10 秒把计数器的增量交给 report，停的时候再交最后一次。
 func startTrafficReporterWith(counter *trafficCounter, report func(bytesIn, bytesOut, connections uint64)) func() {
-	done := make(chan struct{})
-	var reportMu sync.Mutex
-	var lastIn, lastOut, lastConnections uint64
-	reportDelta := func() {
-		reportMu.Lock()
-		defer reportMu.Unlock()
-		curIn := counter.in.Load()
-		curOut := counter.out.Load()
-		deltaIn := curIn - lastIn
-		deltaOut := curOut - lastOut
-		curConnections := counter.connections.Load()
-		deltaConnections := curConnections - lastConnections
-		if deltaIn > 0 || deltaOut > 0 || deltaConnections > 0 {
-			report(deltaIn, deltaOut, deltaConnections)
-			lastIn = curIn
-			lastOut = curOut
-			lastConnections = curConnections
-		}
-	}
-	go func() {
-		ticker := time.NewTicker(10 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				reportDelta()
-			case <-done:
-				return
-			}
-		}
-	}()
+	r := &trafficReporter{counter: counter, report: report}
+	registerTrafficReporter(r)
 	var once sync.Once
 	return func() {
 		once.Do(func() {
-			close(done)
-			reportDelta()
+			unregisterTrafficReporter(r)
+			r.reportDelta(true)
 			wakeTrafficBatchWorker()
 		})
 	}

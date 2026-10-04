@@ -28,7 +28,15 @@ func newFXPBytePool(size int) fxpBytePool {
 	}
 }
 
+// 4 KiB 以下的几档是给 UDP 包的：直连路径上每个包的明文都要在队列里待到写出去
+// 为止，以前每包新分配一块，现在从这几档借、写完还回来（见 udp_direct.go）。
+// 档位翻倍，借到的容量最多是包长的两倍（256 B 以下的小包另算，绝对值很小），
+// 队列额度按包长记账，所以内存放大有界。TCP 帧的小帧（hello、确认）也顺带受益。
 var fxpBytePools = []fxpBytePool{
+	newFXPBytePool(256),
+	newFXPBytePool(512),
+	newFXPBytePool(1024),
+	newFXPBytePool(2 * 1024),
 	newFXPBytePool(4 * 1024),
 	newFXPBytePool(8 * 1024),
 	newFXPBytePool(16 * 1024),
