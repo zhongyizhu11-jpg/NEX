@@ -297,6 +297,8 @@ const SHARED_NGINX_FORWARD_TYPES = new Set(["nginx", "nginx-tunnel", "nginx-tunn
 const GOST_TUNNEL_MODES = new Set(["tls", "wss", "tcp", "mtls", "mwss", "mtcp"]);
 const VERBOSE_AGENT_ACTIONS = /^(1|true|yes|on)$/i.test(String(process.env.FORWARDX_VERBOSE_AGENT_ACTIONS || ""));
 const BYTES_PER_MEGABIT = 1_000_000 / 8;
+/** 多条规则共用一个进程的运行时（gost、隧道 gost）的句柄上限，和 Agent 自己的一致。 */
+const SHARED_RUNTIME_NOFILE = 1048576;
 const GOST_UDP_LISTENER_METADATA = {
   keepalive: true,
   ttl: "30s",
@@ -2052,7 +2054,9 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       `ExecStart=${RUNTIME_BIN} -C ${RUNTIME_CONFIG_PATH}`,
       "Restart=always",
       "RestartSec=5",
-      "LimitNOFILE=65535",
+      // 这台机器上所有 gost 规则共用这一个进程，一条转发占两个句柄：65535 意味着
+      // 整机三万来个并发就到顶，新连接直接 accept 失败。
+      `LimitNOFILE=${SHARED_RUNTIME_NOFILE}`,
       "",
       "[Install]",
       "WantedBy=multi-user.target",
@@ -4235,7 +4239,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
           `ExecStart=${RUNTIME_BIN} -C ${TUNNEL_RUNTIME_CONFIG_PATH}`,
           "Restart=always",
           "RestartSec=5",
-          "LimitNOFILE=65535",
+          `LimitNOFILE=${SHARED_RUNTIME_NOFILE}`,
           "",
           "[Install]",
           "WantedBy=multi-user.target",
