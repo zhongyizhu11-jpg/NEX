@@ -294,3 +294,63 @@ func TestFailoverRaceDelayAdaptsToProbeLatency(t *testing.T) {
 		t.Fatalf("far path delay = %v, want 800ms", got)
 	}
 }
+
+// 缓存里的地址被黑洞（只有另一个地址族能通）时，不能把整个超时耗在它上面：
+// 留一半时间按域名拨，让解析器把所有地址都试一遍。
+func TestFailoverTCPDialFallsBackWhenCachedAddressHangs(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			_ = conn.Close()
+		}
+	}()
+	port := listener.Addr().(*net.TCPAddr).Port
+
+	oldLookup := failoverUDPLookup
+	failoverUDPLookup = func(ctx context.Context, host string) ([]net.IPAddr, error) {
+		return []net.IPAddr{{IP: net.IPv4(192, 0, 2, 1)}}, nil
+	}
+	setFailoverTCPDialHookForTest(t, func(ctx context.Context, network, address string) (net.Conn, error) {
+		if host, _, _ := net.SplitHostPort(address); host == "192.0.2.1" {
+			<-ctx.Done() // 黑洞：一直不回，直到超时
+			return nil, ctx.Err()
+		}
+		var dialer net.Dialer
+		return dialer.DialContext(ctx, network, net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	})
+	defer func() {
+		failoverUDPLookup = oldLookup
+		failoverUDPResolveMu.Lock()
+		failoverUDPResolveCache = map[string]failoverUDPResolveEntry{}
+		failoverUDPResolveMu.Unlock()
+	}()
+
+	target := failoverTarget{TargetIP: "tcp-cache-hang.test.invalid", TargetPort: port}
+	if conn, err := failoverDialTCP(context.Background(), target, 2*time.Second); err == nil {
+		_ = conn.Close()
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for failoverCachedTargetIP(target.TargetIP, port) == nil && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if failoverCachedTargetIP(target.TargetIP, port) == nil {
+		t.Fatal("resolve cache was not populated")
+	}
+	start := time.Now()
+	conn, err := failoverDialTCP(context.Background(), target, 2*time.Second)
+	if err != nil {
+		t.Fatalf("hostname fallback did not run after the cached address hung: %v", err)
+	}
+	_ = conn.Close()
+	if elapsed := time.Since(start); elapsed > 1500*time.Millisecond {
+		t.Fatalf("cached attempt used more than half the budget: %v", elapsed)
+	}
+}

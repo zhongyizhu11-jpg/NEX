@@ -88,11 +88,15 @@ func failoverDialTCP(ctx context.Context, target failoverTarget, timeout time.Du
 	defer cancel()
 	port := strconv.Itoa(target.TargetPort)
 	if ip := failoverCachedTargetIP(target.TargetIP, target.TargetPort); ip != nil {
-		conn, err := failoverTCPDialContext(ctx, "tcp", net.JoinHostPort(ip.String(), port))
+		// 缓存里只存了一个地址（优先 IPv4）。只给它一半的时间：域名可能有多个地址，
+		// 缓存的那个被黑洞时，剩下的一半按域名拨，让系统解析器把所有地址都试一遍 ——
+		// 否则缓存地址吃满超时，每次刷新缓存又选回同一个，能用的目标会一直连不上。
+		cachedCtx, cancelCached := context.WithTimeout(ctx, timeout/2)
+		conn, err := failoverTCPDialContext(cachedCtx, "tcp", net.JoinHostPort(ip.String(), port))
+		cancelCached()
 		if err == nil || ctx.Err() != nil {
 			return conn, err
 		}
-		// 缓存的地址拨不通（域名可能有多个地址、或者刚换了地址）：剩下的时间按域名再拨一次。
 	}
 	return failoverTCPDialContext(ctx, "tcp", net.JoinHostPort(target.TargetIP, port))
 }
