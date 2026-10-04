@@ -20,6 +20,7 @@ import (
 	mathrand "math/rand"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/exec"
@@ -162,8 +163,10 @@ const failoverProxyDialTimeout = 4 * time.Second
 // Protocol guard copies use 32 KiB chunks while UDP packets may be almost
 // 64 KiB. Keep the bucket burst large enough for either without allowing an
 // unbounded one-time burst when a very high rate is configured.
+// 上限 4 MiB：突发取速率的 1/10 再截断，1 Gbps 时 1 MiB 只够 8 ms，令牌桶在调度
+// 抖动下频繁见底，实际速率明显低于设定值；4 MiB 约 32 ms，高速率下也能跟上。
 const protocolGuardRateBurstMin = 64 * 1024
-const protocolGuardRateBurstMax = 1024 * 1024
+const protocolGuardRateBurstMax = 4 * 1024 * 1024
 const protocolGuardRateWaitChunk = 16 * 1024
 
 // Protocol-block notifications are advisory: the local Guard already blocks
@@ -7343,22 +7346,99 @@ type runtimeListenSnapshot struct {
 	tcpPorts map[int][]string
 	udpPorts map[int][]string
 	usable   bool
+	// lazy 不为空时端口表在第一次查询时才加载（newRuntimeListenSnapshot 建的都是这种）；
+	// 测试里直接构造的快照没有它，按构造时的内容原样使用。
+	lazy *runtimeListenLazyLoad
+}
+
+/*
+就绪检查里的进程信息（ss 的 -p）确实有用：带进程名的检查（gost / nginx / forwardx-fxp…）
+要看端口是不是被对的进程占着。但 -p 会让 ss 遍历每个进程的每个文件描述符，连接多的机器上
+是就绪检查里最重的一步，而以前不管有没有查询、要不要进程名，每次建快照都先跑一遍。
+
+现在按需：第一次查询时才跑 ss，这次查询要进程名才带 -p；之前不带 -p 加载过、后来某个带
+进程名的查询命中了正在监听的端口，再补跑一次带 -p 的。查一个根本没在监听的端口用不着进程
+信息（结果一定是没就绪），不会触发 -p。每个查询看到的内容和以前一次 ss -ltnup 的结果一致：
+不带 -p 只少了 users:(...) 那一列，端口集合相同。
+*/
+type runtimeListenLazyLoad struct {
+	mu     sync.Mutex
+	loaded bool
+	// owners：当前端口表带着进程信息，或者已经不可能拿到（ss 不可用、走了 /proc 兜底）。
+	owners bool
+}
+
+// runtimeListenSSOutput 测试里替换。
+var runtimeListenSSOutput = func(withOwners bool) (string, bool) {
+	if _, err := exec.LookPath("ss"); err != nil {
+		return "", false
+	}
+	args := []string{"-H", "-ltnu"}
+	if withOwners {
+		args = []string{"-H", "-ltnup"}
+	}
+	out, err := commandCombinedOutputWithTimeout(3*time.Second, "ss", args...)
+	if err != nil {
+		return "", false
+	}
+	return string(out), true
 }
 
 func newRuntimeListenSnapshot() *runtimeListenSnapshot {
-	snapshot := &runtimeListenSnapshot{
+	return &runtimeListenSnapshot{
 		tcpPorts: map[int][]string{},
 		udpPorts: map[int][]string{},
+		lazy:     &runtimeListenLazyLoad{},
 	}
-	if _, err := exec.LookPath("ss"); err == nil {
-		if out, err := commandCombinedOutputWithTimeout(3*time.Second, "ss", "-H", "-ltnup"); err == nil {
-			snapshot.parseSSListenOutput(string(out))
+}
+
+// loadLocked 跑一次 ss 并替换端口表（整张换掉，已经交出去的切片不会被改）。upgrade 为 true
+// 是补拿进程信息：这次 ss 失败就保留原来的端口表，不再重试。
+func (s *runtimeListenSnapshot) loadLocked(withOwners bool, upgrade bool) {
+	fresh := &runtimeListenSnapshot{tcpPorts: map[int][]string{}, udpPorts: map[int][]string{}}
+	if out, ok := runtimeListenSSOutput(withOwners); ok {
+		fresh.parseSSListenOutput(out)
+	}
+	owners := withOwners
+	if !fresh.usable {
+		if upgrade {
+			s.lazy.owners = true
+			return
 		}
+		fresh.parseProcNetListenFiles()
+		owners = true
 	}
-	if !snapshot.usable {
-		snapshot.parseProcNetListenFiles()
+	s.tcpPorts, s.udpPorts, s.usable = fresh.tcpPorts, fresh.udpPorts, fresh.usable
+	s.lazy.loaded = true
+	s.lazy.owners = owners
+}
+
+func (s *runtimeListenSnapshot) portLinesLocked(port int, protocol string) []string {
+	if normalizeRuntimeProtocol(protocol) == "udp" {
+		return s.udpPorts[port]
 	}
-	return snapshot
+	return s.tcpPorts[port]
+}
+
+// listenLines 返回快照是否可用，以及这个端口、协议上的监听行；needOwners 表示调用方要按进程名判断。
+func (s *runtimeListenSnapshot) listenLines(port int, protocol string, needOwners bool) (bool, []string) {
+	if s == nil {
+		return false, nil
+	}
+	if s.lazy == nil {
+		return s.usable, s.portLinesLocked(port, protocol)
+	}
+	s.lazy.mu.Lock()
+	defer s.lazy.mu.Unlock()
+	if !s.lazy.loaded {
+		s.loadLocked(needOwners, false)
+	}
+	lines := s.portLinesLocked(port, protocol)
+	if needOwners && !s.lazy.owners && len(lines) > 0 {
+		s.loadLocked(true, true)
+		lines = s.portLinesLocked(port, protocol)
+	}
+	return s.usable, lines
 }
 
 func (s *runtimeListenSnapshot) parseSSListenOutput(text string) {
@@ -7452,8 +7532,9 @@ func runtimeListenPortReady(snapshot *runtimeListenSnapshot, port int, protocol 
 	if port <= 0 {
 		return false
 	}
+	needOwners := len(normalizeRuntimeProcessNeedles(processNeedles)) > 0
 	for _, proto := range runtimeProtocols(protocol) {
-		if snapshot != nil && snapshot.usable {
+		if usable, _ := snapshot.listenLines(port, proto, needOwners); usable {
 			if !snapshot.protocolPortReady(port, proto, processNeedles) {
 				return false
 			}
@@ -7467,19 +7548,14 @@ func runtimeListenPortReady(snapshot *runtimeListenSnapshot, port int, protocol 
 }
 
 func (s *runtimeListenSnapshot) protocolPortReady(port int, protocol string, processNeedles []string) bool {
-	if s == nil || !s.usable || port <= 0 {
-		return false
-	}
-	var lines []string
-	if normalizeRuntimeProtocol(protocol) == "udp" {
-		lines = s.udpPorts[port]
-	} else {
-		lines = s.tcpPorts[port]
-	}
-	if len(lines) == 0 {
+	if s == nil || port <= 0 {
 		return false
 	}
 	needles := normalizeRuntimeProcessNeedles(processNeedles)
+	usable, lines := s.listenLines(port, protocol, len(needles) > 0)
+	if !usable || len(lines) == 0 {
+		return false
+	}
 	if len(needles) == 0 {
 		return true
 	}
@@ -7674,7 +7750,7 @@ func writeUnitAndRestart(name, unit string, signature string) bool {
 	}
 	if commandExists("rc-service") && commandExists("rc-update") {
 		path := "/etc/init.d/" + name
-		changed, err := writeFileIfChanged(path, []byte(openRCServiceScript(name, execStart)), 0755)
+		changed, err := writeFileIfChanged(path, []byte(openRCServiceScript(name, execStart, systemdUnitLimitNOFILE(unit))), 0755)
 		if err != nil {
 			logf("write openrc service %s: %v", name, err)
 			return false
@@ -7693,7 +7769,7 @@ func writeUnitAndRestart(name, unit string, signature string) bool {
 	}
 	if _, err := os.Stat("/etc/init.d"); err == nil {
 		path := "/etc/init.d/" + name
-		changed, err := writeFileIfChanged(path, []byte(sysVServiceScript(name, execStart)), 0755)
+		changed, err := writeFileIfChanged(path, []byte(sysVServiceScript(name, execStart, systemdUnitLimitNOFILE(unit))), 0755)
 		if err != nil {
 			logf("write sysv service %s: %v", name, err)
 			return false
@@ -8019,6 +8095,63 @@ func systemdUnitExecStart(unit string) string {
 	return ""
 }
 
+// managedServiceDefaultNOFILE 是单元没写 LimitNOFILE（或写了 infinity / 看不懂的值）时
+// OpenRC / SysV 脚本里设的文件描述符上限。和内核默认的 fs.nr_open 一样大；转发程序每条
+// 连接占两个描述符，发行版默认的 1024 撑不了几百个并发。
+const managedServiceDefaultNOFILE = "1048576"
+
+// systemdUnitLimitNOFILE 取单元 [Service] 里的 LimitNOFILE，原样返回（"65535" 或
+// "软:硬"）；没有就返回空串。
+func systemdUnitLimitNOFILE(unit string) string {
+	value := ""
+	inService := false
+	for _, line := range strings.Split(strings.ReplaceAll(unit, "\r\n", "\n"), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			inService = strings.EqualFold(trimmed, "[Service]")
+			continue
+		}
+		if !inService {
+			continue
+		}
+		if key, raw, ok := strings.Cut(trimmed, "="); ok && strings.EqualFold(strings.TrimSpace(key), "LimitNOFILE") {
+			// systemd 以最后一次出现的为准。
+			value = strings.TrimSpace(raw)
+		}
+	}
+	return value
+}
+
+// managedServiceNOFILEShell 把 LimitNOFILE 换成 sh 的 ulimit。转成 OpenRC / SysV 脚本以后
+// systemd 的 Limit* 不再生效，以前这些服务只能用发行版默认的 1024 个描述符，并发一多就
+// 报 too many open files。只接受纯数字（防止单元里的值被当成命令拼进脚本），其余情况用
+// 默认值；硬上限不允许时静默保持原样，不影响服务启动。
+func managedServiceNOFILEShell(limit string) string {
+	isNumber := func(value string) bool {
+		if value == "" || len(value) > 10 {
+			return false
+		}
+		for _, c := range value {
+			if c < '0' || c > '9' {
+				return false
+			}
+		}
+		return value != "0"
+	}
+	limit = strings.TrimSpace(limit)
+	if soft, hard, ok := strings.Cut(limit, ":"); ok {
+		soft, hard = strings.TrimSpace(soft), strings.TrimSpace(hard)
+		if isNumber(soft) && isNumber(hard) {
+			return "ulimit -Hn " + hard + " 2>/dev/null || true; ulimit -Sn " + soft + " 2>/dev/null || true; "
+		}
+		limit = ""
+	}
+	if !isNumber(limit) {
+		limit = managedServiceDefaultNOFILE
+	}
+	return "ulimit -n " + limit + " 2>/dev/null || true; "
+}
+
 func hardenManagedSystemdUnit(unit string) string {
 	lines := strings.Split(strings.ReplaceAll(unit, "\r\n", "\n"), "\n")
 	serviceIndex := -1
@@ -8064,13 +8197,13 @@ func hardenManagedSystemdUnit(unit string) string {
 	return strings.Join(result, "\n")
 }
 
-func openRCServiceScript(name, execStart string) string {
+func openRCServiceScript(name, execStart, limitNOFILE string) string {
 	return strings.Join([]string{
 		"#!/sbin/openrc-run",
 		"name=\"" + name + "\"",
 		"description=\"ForwardX managed service " + name + "\"",
 		"command=\"/bin/sh\"",
-		"command_args=\"-lc " + shellQuote("ulimit -c 0 2>/dev/null || true; exec "+execStart) + "\"",
+		"command_args=\"-lc " + shellQuote(managedServiceNOFILEShell(limitNOFILE)+"ulimit -c 0 2>/dev/null || true; exec "+execStart) + "\"",
 		"command_background=true",
 		"pidfile=\"/run/${RC_SVCNAME}.pid\"",
 		"output_log=\"/var/log/forwardx-agent/${RC_SVCNAME}.log\"",
@@ -8082,8 +8215,8 @@ func openRCServiceScript(name, execStart string) string {
 	}, "\n")
 }
 
-func sysVServiceScript(name, execStart string) string {
-	quotedCmd := shellQuote("ulimit -c 0 2>/dev/null || true; exec " + execStart)
+func sysVServiceScript(name, execStart, limitNOFILE string) string {
+	quotedCmd := shellQuote(managedServiceNOFILEShell(limitNOFILE) + "ulimit -c 0 2>/dev/null || true; exec " + execStart)
 	return strings.Join([]string{
 		"#!/bin/sh",
 		"### BEGIN INIT INFO",
@@ -11879,6 +12012,8 @@ type protocolGuardServer struct {
 	rateOut     *protocolGuardSharedRateLimiter
 	rateChanged chan struct{}
 	closed      bool
+	// halfCloseLinger 为 0 时用 tcpRelayHalfCloseLinger；测试里调短。
+	halfCloseLinger time.Duration
 }
 
 func newProtocolGuardServer(rule guardRule) *protocolGuardServer {
@@ -12064,6 +12199,28 @@ func (i *protocolGuardInspection) inspectClient(chunk []byte) (string, bool) {
 	i.serverSample = nil
 	i.socksCandidate.Store(true)
 	return "", false
+}
+
+// clientFinished 表示客户端方向不再需要逐块检测：没开协议拦截，或者样本已经
+// 收满且不是待确认的 SOCKS 握手。clientInspectionDone 一旦置位就不会再被清掉
+// （inspectClient 之后直接返回），所以这个结论是终态，可以放心切到 splice。
+func (i *protocolGuardInspection) clientFinished() bool {
+	if i == nil || !i.policy.enabled() {
+		return true
+	}
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.clientInspectionDone && !i.blocked && !i.socksCandidate.Load()
+}
+
+// serverFinished 表示服务端方向不再需要逐块检测。服务端数据只用来确认 SOCKS
+// 握手，没开 SOCKS 拦截时从一开始就不用看；开了的话要等客户端检测结束，否则
+// 后面的客户端数据还可能让连接变成待确认的 SOCKS 候选。
+func (i *protocolGuardInspection) serverFinished() bool {
+	if i == nil || !i.policy.enabled() || !i.policy.BlockSocks {
+		return true
+	}
+	return i.clientFinished()
 }
 
 func (i *protocolGuardInspection) inspectServer(chunk []byte) (string, bool) {
@@ -12334,8 +12491,9 @@ type failoverProxy struct {
 	retireOnce sync.Once
 	mu         sync.RWMutex
 	// UDP 会话：按来源地址记，一个会话一直走它挑中的那条路径，空闲够久回收（route_group_udp.go）。
-	udpMu       sync.Mutex
-	udpSessions map[string]*failoverUDPSession
+	// 每个包都要查会话表，查表只拿读锁；增删会话才拿写锁。
+	udpMu       sync.RWMutex
+	udpSessions map[netip.AddrPort]*failoverUDPSession
 	// 进行中的一轮健康检查：所有目标都拨不通时，每个新连接都会要求立即检查一次，
 	// 同一时刻只跑一轮，其余连接等它的结果（见 checkHealthShared）。
 	healthFlightMu sync.Mutex
@@ -13161,11 +13319,9 @@ func (p *failoverProxy) checkHealth() {
 	if len(targets) == 0 {
 		return
 	}
-	results := make([]bool, len(targets))
-	latencies := make([]int, len(targets))
-	for i, target := range targets {
-		latencies[i], results[i] = failoverProbeTarget(protocol, target)
-	}
+	// 各条路径并行探测：客户端在所有路径都拨不通时会同步等这一轮（checkHealthShared），
+	// 串行时 N 条路径就要等 N×2 秒。
+	latencies, results := probeFailoverTargets(protocol, targets)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if failoverSignature(p.spec) != specSignature {
@@ -13272,13 +13428,15 @@ func (p *failoverProxy) handleConn(client net.Conn) {
 			logf("failover no target available rule=%d source=%d", p.ruleID, p.sourcePort)
 			return
 		}
-		upstream, err = net.DialTimeout("tcp", net.JoinHostPort(target.TargetIP, strconv.Itoa(target.TargetPort)), failoverProxyDialTimeout)
+		// 拨失败的路径在里面记失败、加进 attempted；允许竞速的策略可能实际连上的是另一条。
+		upstream, target, index, err = p.dialFailoverPath(visitor, target, index, attempted, failoverProxyDialTimeout)
 		if err == nil {
 			break
 		}
-		attempted[index] = true
-		p.markTargetFailure(index, "dial failed")
-		if len(attempted) >= len(p.spec.Targets) {
+		p.mu.RLock()
+		exhausted := len(attempted) >= len(p.spec.Targets)
+		p.mu.RUnlock()
+		if exhausted {
 			break
 		}
 	}
@@ -13286,7 +13444,7 @@ func (p *failoverProxy) handleConn(client net.Conn) {
 		p.checkHealthShared()
 		target, index = p.pickTargetForKey(visitor, attempted)
 		if index >= 0 {
-			upstream, err = net.DialTimeout("tcp", net.JoinHostPort(target.TargetIP, strconv.Itoa(target.TargetPort)), failoverProxyDialTimeout)
+			upstream, err = failoverDialTCP(context.Background(), target, failoverProxyDialTimeout)
 		} else {
 			logf("failover dial failed rule=%d no target available after trying %d targets: %v", p.ruleID, len(attempted), err)
 			return
@@ -13576,6 +13734,9 @@ func startProtocolGuard(cfg Config, rule guardRule) {
 			logf("protocol guard udp listen failed rule=%d port=%d: %v", rule.RuleID, rule.ListenPort, err)
 			return
 		}
+		if udpConn, ok := conn.(*net.UDPConn); ok {
+			_ = udpConn.SetReadBuffer(protocolGuardUDPReadBuffer)
+		}
 		server.udpConn = conn
 	}
 	if server.tcpLn == nil && server.udpConn == nil {
@@ -13775,12 +13936,14 @@ func (s *protocolGuardServer) handleConn(cfg Config, client net.Conn) {
 		err      error
 	}
 	var progress atomic.Int64
+	toTarget := &protocolGuardTCPPipe{src: client, dst: target, direction: protocolGuardRateIn, progress: &progress}
+	toClient := &protocolGuardTCPPipe{src: target, dst: client, direction: protocolGuardRateOut, progress: &progress}
 	results := make(chan copyResult, 2)
 	go func() {
-		results <- copyResult{toTarget: true, err: s.copyTCPToTargetWithGuard(connCtx, cfg, client, target, first, inspection, &progress)}
+		results <- copyResult{toTarget: true, err: s.copyTCPToTargetWithGuard(connCtx, cfg, toTarget, first, inspection)}
 	}()
 	go func() {
-		results <- copyResult{toTarget: false, err: s.copyTCPToClientWithGuard(connCtx, cfg, client, target, inspection, &progress)}
+		results <- copyResult{toTarget: false, err: s.copyTCPToClientWithGuard(connCtx, cfg, toClient, inspection)}
 	}()
 	closeAll := func() {
 		// Cancel rate reservations and close both sockets so the other copy
@@ -13790,9 +13953,9 @@ func (s *protocolGuardServer) handleConn(cfg Config, client net.Conn) {
 		_ = target.Close()
 	}
 	firstResult := <-results
-	source, destination := client, target
+	source, destination, remaining := client, target, toClient
 	if !firstResult.toTarget {
-		source, destination = target, client
+		source, destination, remaining = target, client, toTarget
 	}
 	_, sourceHalfCloses := source.(*net.TCPConn)
 	destinationTCP, destinationHalfCloses := destination.(*net.TCPConn)
@@ -13807,7 +13970,14 @@ func (s *protocolGuardServer) handleConn(cfg Config, client net.Conn) {
 	// 把半关闭传给另一端，另一个方向接着跑；它有数据在走就一直等，空闲超过
 	// linger 才收掉，免得一个永远不关的对端把协程钉住。
 	_ = destinationTCP.CloseWrite()
-	ticker := time.NewTicker(tcpRelayHalfCloseLinger)
+	// 剩下的方向如果正在 splice，先把它踢回逐块循环：下面按字节计数判断空闲，
+	// splice 一次搬一大块、中途不更新计数，而且写端卡住时也没有机会返回。
+	remaining.leaveSplice()
+	linger := s.halfCloseLinger
+	if linger <= 0 {
+		linger = tcpRelayHalfCloseLinger
+	}
+	ticker := time.NewTicker(linger)
 	defer ticker.Stop()
 	last := progress.Load()
 	for {
@@ -13827,7 +13997,92 @@ func (s *protocolGuardServer) handleConn(cfg Config, client net.Conn) {
 	}
 }
 
-func (s *protocolGuardServer) copyTCPToTargetWithGuard(ctx context.Context, cfg Config, client net.Conn, target net.Conn, initial []byte, inspection *protocolGuardInspection, progress *atomic.Int64) error {
+// protocolGuardSpliceChunk 是零拷贝阶段每次 io.Copy 搬运的上限。每搬完一块就重新
+// 看一眼这个方向有没有被热更新挂上限速：限速加上以后最多再放过这么多字节不受限
+// （和 protocolGuardRateBurstMax 一样大，相当于多给一次突发），换来的是不用为每条
+// 连接再起一个监听协程去打断 splice。
+const protocolGuardSpliceChunk = 4 * 1024 * 1024
+
+// protocolGuardTCPPipe 是协议防护 TCP 连接里的一个转发方向。
+type protocolGuardTCPPipe struct {
+	src       net.Conn
+	dst       net.Conn
+	direction protocolGuardRateDirection
+	// progress 两个方向共用，半关闭以后 handleConn 靠它判断剩下的方向是否空闲。
+	progress *atomic.Int64
+	// halfClosed 置位以后这个方向不再进入 splice。
+	halfClosed atomic.Bool
+	// spliced 记录这个方向是否进入过零拷贝阶段（测试用，读写都很便宜）。
+	spliced atomic.Bool
+}
+
+func (p *protocolGuardTCPPipe) addProgress(n int64) {
+	if p.progress != nil && n > 0 {
+		p.progress.Add(n)
+	}
+}
+
+// leaveSplice 在另一个方向半关闭后调用：读超时设成现在，把可能阻塞在 splice 里的
+// io.Copy 踢出来（读超时不会丢数据：splice 是先等可读再搬）。逐块循环里的 Read 被
+// 踢到也只是返回超时，清掉超时接着读。
+func (p *protocolGuardTCPPipe) leaveSplice() {
+	p.halfClosed.Store(true)
+	_ = p.src.SetReadDeadline(time.Now())
+}
+
+// resumeAfterKick 判断一个读错误是不是 leaveSplice 踢出来的；是的话清掉读超时，
+// 调用方接着用逐块循环转发。
+func (p *protocolGuardTCPPipe) resumeAfterKick(err error) bool {
+	if !p.halfClosed.Load() || !isNetTimeout(err) {
+		return false
+	}
+	_ = p.src.SetReadDeadline(time.Time{})
+	return true
+}
+
+// spliceCapable 只有两端都是原生 *net.TCPConn 时 io.Copy 才会走 splice；
+// 其他连接类型（测试里的 net.Pipe 等）继续用逐块循环，行为不变。
+func (p *protocolGuardTCPPipe) spliceCapable() bool {
+	_, srcTCP := p.src.(*net.TCPConn)
+	_, dstTCP := p.dst.(*net.TCPConn)
+	return srcTCP && dstTCP
+}
+
+// spliceTCPWithGuard 在协议检测已经结束、这个方向又没有限速时把剩下的数据交给
+// 内核搬（*net.TCPConn 之间的 io.Copy 在 Linux 上走 splice），省掉每个字节两次
+// 用户态拷贝。按方向各自切换而不是整条连接交给 relayTCPBidirectional：两个方向
+// 的检测结束时间不同（服务端方向只有 SOCKS 检测需要看），限速可以热更新到已有
+// 连接上，半关闭以后的空闲判断也要沿用原来按字节计数的办法，所以切走以后必须
+// 还能回到逐块循环。
+// switchBack=true 表示要回到逐块循环（中途挂上了限速，或者另一个方向半关闭了）；
+// 此时已经读出来的数据都已完整写出，不会丢也不会乱序。
+func (s *protocolGuardServer) spliceTCPWithGuard(p *protocolGuardTCPPipe) (switchBack bool, err error) {
+	p.spliced.Store(true)
+	for {
+		if p.halfClosed.Load() || s.rateLimiter(p.direction) != nil {
+			return true, nil
+		}
+		reader := &io.LimitedReader{R: p.src, N: protocolGuardSpliceChunk}
+		n, copyErr := io.Copy(p.dst, reader)
+		p.addProgress(n)
+		if copyErr != nil {
+			if p.resumeAfterKick(copyErr) {
+				return true, nil
+			}
+			return false, copyErr
+		}
+		if reader.N > 0 {
+			// 没搬满一块、也没有错误：源端读到了 EOF（对端半关闭或关闭）。
+			return false, io.EOF
+		}
+	}
+}
+
+func (s *protocolGuardServer) canSpliceTCP(p *protocolGuardTCPPipe, inspectionFinished bool) bool {
+	return inspectionFinished && !p.halfClosed.Load() && s.rateLimiter(p.direction) == nil
+}
+
+func (s *protocolGuardServer) copyTCPToTargetWithGuard(ctx context.Context, cfg Config, p *protocolGuardTCPPipe, initial []byte, inspection *protocolGuardInspection) error {
 	writeChunk := func(chunk []byte) error {
 		if len(chunk) == 0 {
 			return nil
@@ -13839,35 +14094,51 @@ func (s *protocolGuardServer) copyTCPToTargetWithGuard(ctx context.Context, cfg 
 		if err := s.waitRate(ctx, protocolGuardRateIn, len(chunk)); err != nil {
 			return err
 		}
-		_, err := target.Write(chunk)
-		if progress != nil {
-			progress.Add(int64(len(chunk)))
-		}
+		_, err := p.dst.Write(chunk)
+		p.addProgress(int64(len(chunk)))
 		return err
 	}
+	// 解析 PROXY 协议时多读出来的字节必须先写出去，之后才可能切到 splice。
 	if err := writeChunk(initial); err != nil {
 		return err
 	}
+	spliceCapable := p.spliceCapable()
 	buf := getAgentByteBuffer(32 * 1024)
 	defer putAgentByteBuffer(buf)
 	for {
-		n, err := client.Read(buf)
+		if spliceCapable && s.canSpliceTCP(p, inspection.clientFinished()) {
+			switchBack, err := s.spliceTCPWithGuard(p)
+			if !switchBack {
+				return err
+			}
+		}
+		n, err := p.src.Read(buf)
 		if n > 0 {
 			if writeErr := writeChunk(buf[:n]); writeErr != nil {
 				return writeErr
 			}
 		}
 		if err != nil {
+			if p.resumeAfterKick(err) {
+				continue
+			}
 			return err
 		}
 	}
 }
 
-func (s *protocolGuardServer) copyTCPToClientWithGuard(ctx context.Context, cfg Config, client net.Conn, target net.Conn, inspection *protocolGuardInspection, progress *atomic.Int64) error {
+func (s *protocolGuardServer) copyTCPToClientWithGuard(ctx context.Context, cfg Config, p *protocolGuardTCPPipe, inspection *protocolGuardInspection) error {
+	spliceCapable := p.spliceCapable()
 	buf := getAgentByteBuffer(32 * 1024)
 	defer putAgentByteBuffer(buf)
 	for {
-		n, err := target.Read(buf)
+		if spliceCapable && s.canSpliceTCP(p, inspection.serverFinished()) {
+			switchBack, err := s.spliceTCPWithGuard(p)
+			if !switchBack {
+				return err
+			}
+		}
+		n, err := p.src.Read(buf)
 		if n > 0 {
 			chunk := buf[:n]
 			if proto, blocked := inspection.inspectServer(chunk); blocked {
@@ -13877,22 +14148,62 @@ func (s *protocolGuardServer) copyTCPToClientWithGuard(ctx context.Context, cfg 
 			if err := s.waitRate(ctx, protocolGuardRateOut, len(chunk)); err != nil {
 				return err
 			}
-			if _, writeErr := client.Write(chunk); writeErr != nil {
+			if _, writeErr := p.dst.Write(chunk); writeErr != nil {
 				return writeErr
 			}
-			if progress != nil {
-				progress.Add(int64(n))
-			}
+			p.addProgress(int64(n))
 		}
 		if err != nil {
+			if p.resumeAfterKick(err) {
+				continue
+			}
 			return err
 		}
 	}
 }
 
+// protocolGuardUDPEvictMinIdle：会话数到上限时，只有空闲至少这么久的最久未用会话
+// 才会被挤掉给新来源。正在收发的会话不会被一波新来源（扫描、伪造源地址）冲掉；
+// DNS/QUIC 这种一问一答后就闲着的会话能尽快让位，而不是像以前那样新来源一律被丢。
+const protocolGuardUDPEvictMinIdle = 10 * time.Second
+
+// protocolGuardUDPReadBuffer：守护 UDP 监听只有一个读协程，突发时内核默认的
+// 接收缓冲（常见 208 KiB）很快溢出丢包；调大失败（超过 rmem_max）就保持默认。
+const protocolGuardUDPReadBuffer = 4 << 20
+
 type protocolGuardUDPSession struct {
 	target net.Conn
-	last   time.Time
+	// last 是最近一次收发的 UnixNano。回包方向每个包都要更新，用原子量避免
+	// 每个包都去抢整张会话表的锁。
+	last atomic.Int64
+}
+
+func (session *protocolGuardUDPSession) touch(now time.Time) {
+	session.last.Store(now.UnixNano())
+}
+
+func (session *protocolGuardUDPSession) idleFor(now time.Time) time.Duration {
+	return now.Sub(time.Unix(0, session.last.Load()))
+}
+
+// evictProtocolGuardUDPSessionLocked 在会话数到上限时挤掉空闲最久、且空闲超过
+// protocolGuardUDPEvictMinIdle 的会话。调用方持有 sessionMu。返回被挤掉的会话
+// （调用方在锁外关闭它的连接），没有可挤的返回 nil。
+func evictProtocolGuardUDPSessionLocked(sessions map[string]*protocolGuardUDPSession, now time.Time) *protocolGuardUDPSession {
+	var oldestKey string
+	var oldest *protocolGuardUDPSession
+	var oldestLast int64
+	for key, session := range sessions {
+		last := session.last.Load()
+		if oldest == nil || last < oldestLast {
+			oldestKey, oldest, oldestLast = key, session, last
+		}
+	}
+	if oldest == nil || oldest.idleFor(now) < protocolGuardUDPEvictMinIdle {
+		return nil
+	}
+	delete(sessions, oldestKey)
+	return oldest
 }
 
 func (s *protocolGuardServer) serveUDP() {
@@ -13925,7 +14236,7 @@ func (s *protocolGuardServer) serveUDP() {
 				now := time.Now()
 				sessionMu.Lock()
 				for key, session := range sessions {
-					if now.Sub(session.last) <= protocolGuardUDPIdleTimeout {
+					if session.idleFor(now) <= protocolGuardUDPIdleTimeout {
 						continue
 					}
 					_ = session.target.Close()
@@ -13960,6 +14271,8 @@ func (s *protocolGuardServer) serveUDP() {
 		// so the read buffer remains valid for the target Write. Avoid a heap
 		// allocation for every datagram on high-PPS UDP rules.
 		packet := buf[:n]
+		// 限速等待留在读协程里：它就是这条规则入方向的背压，挪到每个会话各自的
+		// 队列里要额外的缓冲和排队丢包策略，收益不大。
 		if err := s.waitRate(s.ctx, protocolGuardRateIn, len(packet)); err != nil {
 			select {
 			case <-s.done:
@@ -13969,31 +14282,18 @@ func (s *protocolGuardServer) serveUDP() {
 			continue
 		}
 		key := clientAddr.String()
+		now := time.Now()
 		sessionMu.Lock()
 		session := sessions[key]
-		if session == nil {
-			if len(sessions) >= protocolGuardUDPMaxSessions {
-				sessionMu.Unlock()
-				if shouldLogAgentReport(fmt.Sprintf("protocol-guard-udp-session-limit:%d", s.rule.RuleID), agentReportLogInterval) {
-					logf("protocol guard udp session limit reached rule=%d sessions=%d", s.rule.RuleID, protocolGuardUDPMaxSessions)
-				}
-				continue
-			}
-			target, err := net.DialTimeout("udp", net.JoinHostPort(s.rule.TargetIP, strconv.Itoa(s.rule.TargetPort)), 10*time.Second)
-			if err != nil {
-				sessionMu.Unlock()
-				if shouldLogAgentReport(fmt.Sprintf("protocol-guard-udp-dial:%d", s.rule.RuleID), agentReportLogInterval) {
-					logf("protocol guard udp dial target rule=%d: %v", s.rule.RuleID, err)
-				}
-				continue
-			}
-			session = &protocolGuardUDPSession{target: target, last: time.Now()}
-			sessions[key] = session
-			go s.copyUDPToClient(key, clientAddr, target, sessions, &sessionMu)
-		}
-		session.last = time.Now()
-		target := session.target
 		sessionMu.Unlock()
+		if session == nil {
+			session = s.openUDPSession(key, clientAddr, now, sessions, &sessionMu)
+			if session == nil {
+				continue
+			}
+		}
+		session.touch(now)
+		target := session.target
 		if _, err := target.Write(packet); err != nil {
 			sessionMu.Lock()
 			if sessions[key] == session {
@@ -14008,7 +14308,82 @@ func (s *protocolGuardServer) serveUDP() {
 	}
 }
 
-func (s *protocolGuardServer) copyUDPToClient(key string, clientAddr net.Addr, target net.Conn, sessions map[string]*protocolGuardUDPSession, sessionMu *sync.Mutex) {
+// openUDPSession 为新来源建会话。拨号在锁外做：以前拨号时一直拿着 sessionMu，
+// 期间所有会话的回包协程更新时间戳、清理协程都得等它。
+func (s *protocolGuardServer) openUDPSession(key string, clientAddr net.Addr, now time.Time, sessions map[string]*protocolGuardUDPSession, sessionMu *sync.Mutex) *protocolGuardUDPSession {
+	sessionMu.Lock()
+	full := len(sessions) >= protocolGuardUDPMaxSessions
+	sessionMu.Unlock()
+	if full && !s.makeUDPSessionRoom(sessions, sessionMu, now) {
+		return nil
+	}
+	target, err := net.DialTimeout("udp", net.JoinHostPort(s.rule.TargetIP, strconv.Itoa(s.rule.TargetPort)), 10*time.Second)
+	if err != nil {
+		if shouldLogAgentReport(fmt.Sprintf("protocol-guard-udp-dial:%d", s.rule.RuleID), agentReportLogInterval) {
+			logf("protocol guard udp dial target rule=%d: %v", s.rule.RuleID, err)
+		}
+		return nil
+	}
+	session := &protocolGuardUDPSession{target: target}
+	session.touch(now)
+	sessionMu.Lock()
+	if existing := sessions[key]; existing != nil {
+		// 拨号期间已经有人建好了同一来源的会话：用现成的，关掉多拨的这条。
+		sessionMu.Unlock()
+		_ = target.Close()
+		return existing
+	}
+	var evicted *protocolGuardUDPSession
+	if len(sessions) >= protocolGuardUDPMaxSessions {
+		evicted = evictProtocolGuardUDPSessionLocked(sessions, now)
+		if evicted == nil {
+			sessionMu.Unlock()
+			_ = target.Close()
+			s.logUDPSessionLimit(false)
+			return nil
+		}
+	}
+	sessions[key] = session
+	sessionMu.Unlock()
+	if evicted != nil {
+		_ = evicted.target.Close()
+		s.logUDPSessionLimit(true)
+	}
+	go s.copyUDPToClient(key, clientAddr, session, sessions, sessionMu)
+	return session
+}
+
+// makeUDPSessionRoom 在拨号前先腾位置，腾不出来就不必白拨一次。
+func (s *protocolGuardServer) makeUDPSessionRoom(sessions map[string]*protocolGuardUDPSession, sessionMu *sync.Mutex, now time.Time) bool {
+	sessionMu.Lock()
+	if len(sessions) < protocolGuardUDPMaxSessions {
+		sessionMu.Unlock()
+		return true
+	}
+	evicted := evictProtocolGuardUDPSessionLocked(sessions, now)
+	sessionMu.Unlock()
+	if evicted == nil {
+		s.logUDPSessionLimit(false)
+		return false
+	}
+	_ = evicted.target.Close()
+	s.logUDPSessionLimit(true)
+	return true
+}
+
+func (s *protocolGuardServer) logUDPSessionLimit(evicted bool) {
+	if !shouldLogAgentReport(fmt.Sprintf("protocol-guard-udp-session-limit:%d", s.rule.RuleID), agentReportLogInterval) {
+		return
+	}
+	if evicted {
+		logf("protocol guard udp session limit reached rule=%d sessions=%d; evicted least recently used idle session", s.rule.RuleID, protocolGuardUDPMaxSessions)
+		return
+	}
+	logf("protocol guard udp session limit reached rule=%d sessions=%d", s.rule.RuleID, protocolGuardUDPMaxSessions)
+}
+
+func (s *protocolGuardServer) copyUDPToClient(key string, clientAddr net.Addr, session *protocolGuardUDPSession, sessions map[string]*protocolGuardUDPSession, sessionMu *sync.Mutex) {
+	target := session.target
 	buf := getAgentByteBuffer(65535)
 	defer putAgentByteBuffer(buf)
 	for {
@@ -14023,14 +14398,12 @@ func (s *protocolGuardServer) copyUDPToClient(key string, clientAddr net.Addr, t
 			}
 			_, _ = s.udpConn.WriteTo(buf[:n], clientAddr)
 		}
-		sessionMu.Lock()
-		if session := sessions[key]; session != nil && session.target == target {
-			session.last = time.Now()
-		}
-		sessionMu.Unlock()
+		// 会话被挤掉或清理后连接已关闭，下一次 Read 会出错退出；这里更新一个
+		// 已经不在表里的会话时间戳没有副作用，所以不用再拿锁核对。
+		session.touch(time.Now())
 	}
 	sessionMu.Lock()
-	if session := sessions[key]; session != nil && session.target == target {
+	if sessions[key] == session {
 		delete(sessions, key)
 	}
 	sessionMu.Unlock()

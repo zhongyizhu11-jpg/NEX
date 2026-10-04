@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
@@ -41,12 +42,16 @@ const (
 	failoverUDPReapInterval = 30 * time.Second
 	failoverUDPBufferSize   = 65535
 	failoverUDPDialTimeout  = 5 * time.Second
+	// 调度器的 UDP 监听只有一个读协程，突发时内核默认接收缓冲（常见 208 KiB）很快溢出丢包。
+	// 超过 net.core.rmem_max 时内核会截断或拒绝，失败就保持默认，不影响转发。
+	failoverUDPReadBuffer = 4 << 20
 	// 前面的转发工具连上调度器以后马上就发 PROXY 头；等这么久还没有，就当没有。
 	failoverProxyHeaderTimeout = 5 * time.Second
 )
 
 type failoverUDPSession struct {
-	key      string
+	key netip.AddrPort
+	// client 只给监听不是 *net.UDPConn 的情况（测试替身）回包用；正常路径用 key 直接回。
 	client   net.Addr
 	upstream net.Conn
 	index    int
@@ -101,7 +106,7 @@ func (p *failoverProxy) closeUDPSessions() {
 	for _, session := range p.udpSessions {
 		sessions = append(sessions, session)
 	}
-	p.udpSessions = map[string]*failoverUDPSession{}
+	p.udpSessions = map[netip.AddrPort]*failoverUDPSession{}
 	p.udpMu.Unlock()
 	for _, session := range sessions {
 		p.untrackConn(session.index, session.upstream)
@@ -110,8 +115,8 @@ func (p *failoverProxy) closeUDPSessions() {
 }
 
 func (p *failoverProxy) udpSessionCount() int {
-	p.udpMu.Lock()
-	defer p.udpMu.Unlock()
+	p.udpMu.RLock()
+	defer p.udpMu.RUnlock()
 	return len(p.udpSessions)
 }
 
@@ -119,10 +124,27 @@ func (p *failoverProxy) serveUDP() {
 	stopReaper := make(chan struct{})
 	defer close(stopReaper)
 	go p.reapUDPSessions(stopReaper)
+	// 正常情况下监听是 *net.UDPConn：用 ReadFromUDPAddrPort 拿值类型的来源地址当会话键，
+	// 每个包不再分配 *net.UDPAddr 和 client.String()。
+	udpConn, _ := p.udp.(*net.UDPConn)
+	if udpConn != nil {
+		_ = udpConn.SetReadBuffer(failoverUDPReadBuffer)
+	}
 	buf := make([]byte, failoverUDPBufferSize)
 	var backoff serveLoopBackoff
 	for {
-		n, client, err := p.udp.ReadFrom(buf)
+		var n int
+		var client netip.AddrPort
+		var err error
+		if udpConn != nil {
+			n, client, err = udpConn.ReadFromUDPAddrPort(buf)
+		} else {
+			var addr net.Addr
+			n, addr, err = p.udp.ReadFrom(buf)
+			if udpAddr, ok := addr.(*net.UDPAddr); ok {
+				client = udpAddr.AddrPort()
+			}
+		}
 		if err != nil {
 			if p.retired() {
 				return
@@ -144,18 +166,27 @@ func (p *failoverProxy) serveUDP() {
 			continue
 		}
 		backoff.success()
-		if n <= 0 || client == nil {
+		if n <= 0 || !client.IsValid() {
 			continue
 		}
 		// 这个包在下一次 ReadFrom 之前就写出去了，buf 可以复用。
-		p.forwardUDPPacket(client, buf[:n])
+		p.forwardUDPPacket(failoverUDPSessionKey(client), buf[:n])
 	}
 }
 
-func (p *failoverProxy) forwardUDPPacket(client net.Addr, packet []byte) {
-	key := client.String()
+// failoverUDPSessionKey 把双栈监听收到的 IPv4 映射地址（::ffff:a.b.c.d）还原成 IPv4，
+// 让会话键的字符串形式和以前 (*net.UDPAddr).String() 完全一样 ——「按访客固定」拿它哈希，
+// 换了写法不能让同一个来源换路径。
+func failoverUDPSessionKey(client netip.AddrPort) netip.AddrPort {
+	if client.Addr().Is4In6() {
+		return netip.AddrPortFrom(client.Addr().Unmap(), client.Port())
+	}
+	return client
+}
+
+func (p *failoverProxy) forwardUDPPacket(key netip.AddrPort, packet []byte) {
 	for attempt := 0; attempt < 2; attempt++ {
-		session := p.udpSessionFor(key, client)
+		session := p.udpSessionFor(key)
 		if session == nil {
 			return
 		}
@@ -171,18 +202,19 @@ func (p *failoverProxy) forwardUDPPacket(client net.Addr, packet []byte) {
 	}
 }
 
-func (p *failoverProxy) udpSessionFor(key string, client net.Addr) *failoverUDPSession {
-	p.udpMu.Lock()
+func (p *failoverProxy) udpSessionFor(key netip.AddrPort) *failoverUDPSession {
+	p.udpMu.RLock()
 	session := p.udpSessions[key]
-	p.udpMu.Unlock()
+	p.udpMu.RUnlock()
 	if session != nil {
 		return session
 	}
-	upstream, index := p.dialUDPPath(key)
+	// 只有新会话才需要字符串形式（「按访客固定」的哈希键），热路径上不再每个包都格式化一次。
+	upstream, index := p.dialUDPPath(key.String())
 	if upstream == nil {
 		return nil
 	}
-	session = &failoverUDPSession{key: key, client: client, upstream: upstream, index: index}
+	session = &failoverUDPSession{key: key, client: net.UDPAddrFromAddrPort(key), upstream: upstream, index: index}
 	session.touch(time.Now())
 	// 先记到路径名下再放进会话表：中间要是正好切换、断旧连接，这个会话也在被断的名单里。
 	p.trackConn(index, upstream)
@@ -195,7 +227,7 @@ func (p *failoverProxy) udpSessionFor(key string, client net.Addr) *failoverUDPS
 		return nil
 	}
 	if p.udpSessions == nil {
-		p.udpSessions = map[string]*failoverUDPSession{}
+		p.udpSessions = map[netip.AddrPort]*failoverUDPSession{}
 	}
 	if len(p.udpSessions) >= failoverUDPMaxSessions {
 		if evicted = p.oldestUDPSessionLocked(); evicted != nil {
@@ -267,14 +299,30 @@ func (p *failoverProxy) copyUDPToClient(session *failoverUDPSession) {
 	defer p.dropUDPSession(session)
 	buf := getAgentByteBuffer(failoverUDPBufferSize)
 	defer putAgentByteBuffer(buf)
+	udpConn, _ := p.udp.(*net.UDPConn)
 	failures := 0
+	var deadline time.Time
 	for {
-		_ = session.upstream.SetReadDeadline(time.Now().Add(failoverUDPIdleTimeout))
+		// 读超时不再每个回包都重设（每次都是一次系统调用加定时器调整）：剩下不到一半空闲
+		// 窗口时才续到「两个方向最后一个包 + 空闲窗口」。到点以后照旧按最后一个包的时刻判断
+		// 会话是否真的空闲，所以空闲回收的语义不变（回收器每 30 秒也按同一标准收）。
+		if deadline.Sub(time.Now()) < failoverUDPIdleTimeout/2 {
+			if next := time.Unix(0, session.last.Load()).Add(failoverUDPIdleTimeout); next.After(deadline) {
+				deadline = next
+				_ = session.upstream.SetReadDeadline(deadline)
+			}
+		}
 		n, err := session.upstream.Read(buf)
 		if n > 0 {
 			failures = 0
 			session.touch(time.Now())
-			if _, werr := p.udp.WriteTo(buf[:n], session.client); werr != nil && (p.retired() || errors.Is(werr, net.ErrClosed)) {
+			var werr error
+			if udpConn != nil {
+				_, werr = udpConn.WriteToUDPAddrPort(buf[:n], session.key)
+			} else {
+				_, werr = p.udp.WriteTo(buf[:n], session.client)
+			}
+			if werr != nil && (p.retired() || errors.Is(werr, net.ErrClosed)) {
 				return
 			}
 		}
