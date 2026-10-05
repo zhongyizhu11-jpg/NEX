@@ -73,8 +73,8 @@ export const OVERVIEW_PAD_BOTTOM = 44;
 /** 至少取这么大的经纬度范围：三台同城的机器不会被放大成铺满整张图，周围还看得到一点陆地 */
 const MIN_LNG_SPAN = 60;
 const MIN_LAT_SPAN = 30;
-/** 两个方向的比例尺最多差这么多：横向跨太平洋、纵向只有几度时，纵向不会被拉得太夸张 */
-const MAX_SCALE_RATIO = 1.6;
+/** 两个方向的比例尺一样大：底下铺的是真地球图，横竖拉得不一样会把大陆拉变形 */
+const MAX_SCALE_RATIO = 1;
 
 type Located = { id: number; lng: number; lat: number };
 
@@ -101,7 +101,7 @@ function expand(min: number, max: number, minSpan: number): [number, number] {
 
 /**
  * 取景：有经纬度的主机的外接框，撑到最小范围，再按画布里主机可用的区域算比例尺。
- * 横竖的比例尺各算各的（世界图本来就不是等比的），但相差太多时把窄的那一边放大。
+ * 横竖用同一个比例尺（等经纬投影，地球图才不变形）：窄的那一边把范围放大到填满。
  * 一台主机都没定位时返回 null：那就没有底图，只有底下一行主机。
  */
 export function overviewViewport(

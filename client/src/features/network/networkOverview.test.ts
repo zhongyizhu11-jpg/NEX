@@ -38,11 +38,11 @@ test("落位：跨太平洋的两台挨着画（经度按 0~360 算范围更小�
   assert.ok(Math.abs(viewport.x(-122 + 360) - byId.get(1)!.x) < 1, "主机点和点阵用同一套投影");
 });
 
-test("取景：主机挤在一小片时至少取 60° × 30°，横竖比例尺最多差 1.6 倍；一台都没定位时没有底图", () => {
+test("取景：主机挤在一小片时至少取 60° × 30°，横竖比例尺一样大（地球图不变形）；一台都没定位时没有底图", () => {
   const viewport = overviewViewport([node(1, [22.3, 114.2]), node(2, [22.4, 114.3])], 390, 240)!;
   const innerW = 390 - OVERVIEW_PAD_X * 2;
   assert.ok(Math.abs(innerW / viewport.sx - 60) < 0.01, `经度范围 ${innerW / viewport.sx}`);
-  assert.ok(viewport.sy / viewport.sx <= 1.6 + 1e-9 && viewport.sx / viewport.sy <= 1.6 + 1e-9, `${viewport.sx} / ${viewport.sy}`);
+  assert.ok(Math.abs(viewport.sy - viewport.sx) < 1e-9, `${viewport.sx} / ${viewport.sy}`);
   assert.equal(overviewViewport([node(1)], 390, 240), null);
 });
 

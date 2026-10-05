@@ -1802,6 +1802,11 @@ button.fx-rule-tag:hover { filter: brightness(.96); }
 .dark { --fx-overview-canvas: #232323; }
 .fx-overview-canvas { border-radius: 16px; overflow: hidden; background: linear-gradient(165deg, color-mix(in srgb, var(--fx-primary-fill) 11%, var(--fx-overview-canvas)) 0%, var(--fx-overview-canvas) 62%); }
 .dark .fx-overview-canvas { background: linear-gradient(165deg, color-mix(in srgb, var(--fx-primary-fill) 14%, var(--fx-overview-canvas)) 0%, var(--fx-overview-canvas) 62%); }
+/* 地球图上罩一层极淡的画布色，浅色下卫星图不抢标签；深色的夜景图本来就暗，不罩 */
+.fx-overview-earth-wash { fill: var(--fx-overview-canvas); fill-opacity: 0.22; }
+.dark .fx-overview-earth-wash { fill-opacity: 0; }
+.fx-overview-land { fill: color-mix(in srgb, var(--fx-primary-fill) 13%, transparent); }
+.dark .fx-overview-land { fill: color-mix(in srgb, var(--fx-primary-fill) 18%, transparent); }
 .fx-overview-flow { stroke: #fff; stroke-opacity: 0.75; stroke-linecap: round; stroke-dasharray: 1.2 16; animation: fx-overview-flow 2.2s linear infinite; }
 @keyframes fx-overview-flow { to { stroke-dashoffset: -17.2; } }
 @media (prefers-reduced-motion: reduce) { .fx-overview-flow { animation: none; } }

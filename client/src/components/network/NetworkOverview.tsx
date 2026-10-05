@@ -1,5 +1,7 @@
 import { useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 
+import { useTheme } from "@/contexts/ThemeContext";
+
 import {
   buildOverviewEdges,
   bundleOverviewEdges,
@@ -13,18 +15,22 @@ import {
   type OverviewNode,
 } from "@/features/network/networkOverview";
 import type { NetworkMapModel } from "@/features/network/networkMapModel";
-import { worldDots } from "@/features/network/worldDots";
+import { worldDots, worldLandPath } from "@/features/network/worldDots";
 import { describeNetworkHealth } from "@shared/networkHealth";
 import type { ForwardMapLink } from "@shared/forwardMapLinks";
 
 /**
- * 首页「概览」图：一层主色点阵的世界剪影（裁到主机所在的那片），主机按真实位置落在上面，
+ * 首页「概览」图：底下是一张真的地球图（浅色卫星图 / 深色夜景图，等经纬投影，裁到主机所在的那片；
+ * 图没加载出来时退回陆地剪影 + 主色点阵），主机按真实位置落在上面，
  * 画成带渐变环的点，旁边一枚两行的胶囊写「旗 · 城市 / 主机名」；主机之间的线合成一条，
  * 正常 = 主色实线 + 往出口流动的光点，降级 = 琥珀虚线，中断 = 红虚线、正中一个 ⊗，停用 = 灰虚线。
  * 纯 SVG，没有瓦片、没有地图库。
  *
  * 点主机去主机页，点线去隧道页（这一对只有转发时去转发页）。
  */
+/** 等经纬投影的地球图（client/public/globe，2048×1024）：浅色用白天的卫星图，深色用夜景灯光图 */
+const EARTH_IMAGE: Record<"light" | "dark", string> = { light: "/globe/earth-day.jpg", dark: "/globe/earth-night.jpg" };
+
 const NODE_R = 5.5;
 const EDGE_INSET = NODE_R + 5;
 /** 画布外再多画一点点阵，圆角裁掉的地方不留白边 */
@@ -82,6 +88,11 @@ export function NetworkOverview({ model, forwardLinks, onOpen, initialWidth = 72
 }) {
   const { ref, width } = useMeasuredWidth(initialWidth);
   const height = overviewHeight(width);
+  const { resolvedTheme } = useTheme();
+  const earthHref = EARTH_IMAGE[resolvedTheme === "dark" ? "dark" : "light"];
+  // 地球图没加载出来（内网没带静态文件、被拦）就退回陆地剪影 + 点阵
+  const [earthFailed, setEarthFailed] = useState<string | null>(null);
+  const earthReady = earthFailed !== earthHref;
   const viewport = useMemo(() => overviewViewport(model.nodes, width, height), [model.nodes, width, height]);
   const placed = useMemo(() => layoutOverview(model.nodes, width, height), [model.nodes, width, height]);
   const byId = useMemo(() => new Map(placed.map((node) => [node.id, node])), [placed]);
@@ -113,7 +124,8 @@ export function NetworkOverview({ model, forwardLinks, onOpen, initialWidth = 72
   }, [placed, width, height]);
 
   const idBase = useId().replace(/:/g, "");
-  const ids = { ring: `${idBase}-ring`, dots: `${idBase}-dots`, vignette: `${idBase}-vig`, line: `${idBase}-line` };
+  const ids = { ring: `${idBase}-ring`, dots: `${idBase}-dots`, vignette: `${idBase}-vig`, line: `${idBase}-line`, clip: `${idBase}-clip` };
+  const land = viewport ? worldLandPath() : "";
 
   // 断了的线放最上面画，不被正常的线盖住
   const drawOrder = [...bundles].sort((a, b) => toneRank(a.tone) - toneRank(b.tone));
@@ -139,18 +151,49 @@ export function NetworkOverview({ model, forwardLinks, onOpen, initialWidth = 72
             <stop offset="1" stopColor="var(--fx-primary-fill)" />
           </linearGradient>
           <radialGradient id={ids.dots} gradientUnits="userSpaceOnUse" cx={center.x} cy={center.y} r={width * 0.62}>
-            <stop offset="0" stopColor="var(--fx-primary-fill)" stopOpacity="0.42" />
-            <stop offset="1" stopColor="var(--fx-primary-fill)" stopOpacity="0.1" />
+            <stop offset="0" stopColor="var(--fx-primary-fill)" stopOpacity="0.5" />
+            <stop offset="1" stopColor="var(--fx-primary-fill)" stopOpacity="0.16" />
           </radialGradient>
+          <clipPath id={ids.clip}><rect width={width} height={height} /></clipPath>
           <radialGradient id={ids.vignette} cx="50%" cy="45%" r="70%">
             <stop offset="0.6" stopColor="var(--fx-overview-canvas)" stopOpacity="0" />
             <stop offset="1" stopColor="var(--fx-overview-canvas)" stopOpacity="0.75" />
           </radialGradient>
         </defs>
 
-        {dots.length > 0 ? (
+        {viewport && earthReady ? (
+          // 真地图：等经纬的地球图按同一套投影铺满（宽 = 360°、高 = 180°），跨太平洋时再铺一份 +360°
+          <g aria-hidden="true" className="fx-overview-earth" clipPath={`url(#${ids.clip})`}>
+            {[0, 360].map((offset) => (
+              <image
+                key={offset}
+                href={earthHref}
+                x={(viewport.x(-180 + offset)).toFixed(1)}
+                y={viewport.y(90).toFixed(1)}
+                width={(360 * viewport.sx).toFixed(1)}
+                height={(180 * viewport.sy).toFixed(1)}
+                preserveAspectRatio="none"
+                onError={() => setEarthFailed(earthHref)}
+              />
+            ))}
+            <rect width={width} height={height} className="fx-overview-earth-wash" />
+          </g>
+        ) : null}
+        {viewport && !earthReady ? (
+          // 陆地剪影：一条经纬度坐标的 path，整体缩放到画布上；跨太平洋时再画一份 +360°（两份都画也不碍事）
+          <g aria-hidden="true" className="fx-overview-land" fillRule="evenodd" clipPath={`url(#${ids.clip})`}>
+            {[0, 360].map((offset) => (
+              <path
+                key={offset}
+                d={land}
+                transform={`translate(${viewport.x(offset).toFixed(2)} ${viewport.y(0).toFixed(2)}) scale(${viewport.sx.toFixed(4)} ${(-viewport.sy).toFixed(4)})`}
+              />
+            ))}
+          </g>
+        ) : null}
+        {dots.length > 0 && !earthReady ? (
           <g fill={`url(#${ids.dots})`} aria-hidden="true">
-            {dots.map(([x, y]) => <circle key={`${x},${y}`} cx={x} cy={y} r={1.4} />)}
+            {dots.map(([x, y]) => <circle key={`${x},${y}`} cx={x} cy={y} r={1.5} />)}
           </g>
         ) : null}
         <rect width={width} height={height} fill={`url(#${ids.vignette})`} pointerEvents="none" aria-hidden="true" />
