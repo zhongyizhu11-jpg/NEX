@@ -4,7 +4,7 @@ import type { ForwardMapLink } from "@shared/forwardMapLinks";
 import type { NetworkMapModel } from "./networkMapModel";
 
 /**
- * 首页「概览」：一张裁到主机范围的世界剪影（主色点阵，worldDots），主机按真实经纬度落在上面，
+ * 首页「概览」：一张裁到主机范围的矢量世界底图（国界，worldCountries），主机按真实经纬度落在上面，
  * 主机之间的隧道和转发合成一条线，线的颜色说状态。没有瓦片、没有地图库，只有点和线。
  *
  * 这里是纯函数（取景、落位、合线、摆标签），画在 components/network/NetworkOverview.tsx。

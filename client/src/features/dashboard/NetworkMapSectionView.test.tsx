@@ -11,7 +11,7 @@ const host = (id: number, name: string, geo?: [number, number], countryCode?: st
   ...(countryCode ? { geoCountryCode: countryCode } : {}),
 });
 
-test("概览卡片：标题、状态胶囊、底下的图例（线路 / 转发 / 主机），图里有点阵、主机点和合成的线，没有地图引擎的壳", () => {
+test("概览卡片：标题、状态胶囊、底下的图例（线路 / 转发 / 主机），图里有国界底图、主机点和合成的线，没有地图引擎的壳", () => {
   const model = buildNetworkMapModel({
     now,
     hosts: [host(1, "HK", [22.32, 114.17], "HK"), host(2, "JP", [35.68, 139.65]), host(3, "无坐标")],
@@ -29,7 +29,7 @@ test("概览卡片：标题、状态胶囊、底下的图例（线路 / 转发 /
   assert.match(html, /线路 <b>2<\/b> · 转发 <b>2<\/b>/);
   assert.match(html, /data-tone="ok"[^>]*>.*?全部正常/, "没有断的、没有降级的，胶囊写全部正常");
   assert.doesNotMatch(html, /中断|降级/, "没有断的不写中断");
-  assert.match(html, /class="fx-overview-countries" data-style="plain"/, "底下铺着矢量国界底图");
+  assert.match(html, /class="fx-overview-countries"/, "底下铺着矢量国界底图");
   assert.ok((html.match(/<path [^>]*vector-effect="non-scaling-stroke"/g) || []).length === 2, "国界画两份（本体一份、+360° 一份）");
   assert.match(html, /aria-label="概览：3 台主机，3 段连线"/);
   assert.match(html, /HK → JP · 隧道 live/);

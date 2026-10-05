@@ -11,7 +11,7 @@ import {
   truncateLabel,
   OVERVIEW_PAD_X,
 } from "./networkOverview";
-import { worldDots } from "./worldDots";
+import { worldCountriesPath, WORLD_COUNTRIES_UNIT } from "./worldCountries";
 
 const node = (id: number, geo?: [number, number]) => ({
   id, name: `h${id}`, city: "", health: "healthy" as const,
@@ -28,14 +28,14 @@ test("落位：按经纬度摆，西边的在左、北边的在上", () => {
   }
 });
 
-test("落位：跨太平洋的两台挨着画（经度按 0~360 算范围更小时换过去），点阵也跟着换", () => {
+test("落位：跨太平洋的两台挨着画（经度按 0~360 算范围更小时换过去），底图也跟着换", () => {
   const nodes = [node(1, [37.4, -122]), node(2, [35.7, 139.7]), node(3, [22.3, 114.2])];
   const placed = layoutOverview(nodes, 800, 340);
   const byId = new Map(placed.map((item) => [item.id, item]));
   assert.ok(byId.get(1)!.x > byId.get(2)!.x, "美西在东京的东边（右边），不是图的另一头");
   const viewport = overviewViewport(nodes, 800, 340)!;
   assert.equal(viewport.wrap, true);
-  assert.ok(Math.abs(viewport.x(-122 + 360) - byId.get(1)!.x) < 1, "主机点和点阵用同一套投影");
+  assert.ok(Math.abs(viewport.x(-122 + 360) - byId.get(1)!.x) < 1, "主机点和底图用同一套投影");
 });
 
 test("取景：主机挤在一小片时至少取 60° × 30°，横竖比例尺一样大（地球图不变形）；一台都没定位时没有底图", () => {
@@ -128,15 +128,15 @@ test("连线：隧道按经过的主机拆段，转发按对；两头不在图�
   assert.deepEqual(sameName[0].tunnelNames, ["t", "loop"]);
 });
 
-test("世界点阵：解出来有几千个点，经纬度都在范围内，伦敦附近是陆地、太平洋中间不是", () => {
-  const dots = worldDots();
-  assert.ok(dots.length > 3000 && dots.length < 5000, `${dots.length}`);
-  for (const [lon, lat] of dots) {
-    assert.ok(lon >= -180 && lon < 181 && lat <= 74 && lat >= -56, `${lon},${lat}`);
+test("国界底图：几十 KB 的一条 path，坐标单位 0.1°，没有南极，北京、伦敦附近有边界点", () => {
+  const d = worldCountriesPath();
+  assert.equal(WORLD_COUNTRIES_UNIT, 10);
+  assert.ok(d.length > 20_000 && d.length < 60_000, `${d.length}`);
+  assert.ok(d.startsWith("M") && d.endsWith("z"));
+  const starts = [...d.matchAll(/M(-?\d+) (-?\d+)/g)].map((m) => [Number(m[1]) / 10, Number(m[2]) / 10]);
+  assert.ok(starts.length > 150, `${starts.length} 圈`);
+  for (const [lon, lat] of starts) {
+    assert.ok(lon >= -180 && lon <= 180 && lat > -60 && lat < 85, `${lon},${lat}`);
   }
-  const near = (lon: number, lat: number) => dots.some(([x, y]) => Math.abs(x - lon) <= 2 && Math.abs(y - lat) <= 2);
-  assert.ok(near(0, 51.5), "伦敦附近该有陆地点");
-  assert.ok(near(116, 40), "北京附近该有陆地点");
-  assert.ok(!near(-150, -20), "南太平洋中间不该有陆地点");
-  assert.strictEqual(worldDots(), dots, "第二次拿的是缓存");
+  assert.strictEqual(worldCountriesPath(), d);
 });

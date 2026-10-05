@@ -1,7 +1,5 @@
 import { useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import { useTheme } from "@/contexts/ThemeContext";
-
 import {
   buildOverviewEdges,
   bundleOverviewEdges,
@@ -16,31 +14,20 @@ import {
 } from "@/features/network/networkOverview";
 import type { NetworkMapModel } from "@/features/network/networkMapModel";
 import { WORLD_COUNTRIES_UNIT, worldCountriesPath } from "@/features/network/worldCountries";
-import { worldDots, worldLandPath } from "@/features/network/worldDots";
 import { describeNetworkHealth } from "@shared/networkHealth";
 import type { ForwardMapLink } from "@shared/forwardMapLinks";
 
 /**
- * 首页「概览」图：底下一层世界底图（等经纬投影，裁到主机所在的那片），样式在设置里选：
- * 简约（矢量国界，白陆地 + 淡主色海面）/ 线条（只描国界）/ 卫星（真实地球图，加载失败退回简约）/ 点阵。
- * 主机按真实位置落在上面，
- * 画成带渐变环的点，旁边一枚两行的胶囊写「旗 · 城市 / 主机名」；主机之间的线合成一条，
+ * 首页「概览」图：底下一层矢量世界底图（Natural Earth 110m 国界，等经纬投影，裁到主机所在的那片）：
+ * 浅色是白色陆地 + 淡主色海面，深色是炭灰陆地，国界一道细线，海面颜色跟着配色走。
+ * 主机按真实位置落在上面，画成带渐变环的点，旁边一枚两行的胶囊写「旗 · 城市 / 主机名」；主机之间的线合成一条，
  * 正常 = 主色实线 + 往出口流动的光点，降级 = 琥珀虚线，中断 = 红虚线、正中一个 ⊗，停用 = 灰虚线。
- * 纯 SVG，没有瓦片、没有地图库。
+ * 纯 SVG，没有瓦片、没有地图库、没有图片。
  *
  * 点主机去主机页，点线去隧道页（这一对只有转发时去转发页）。
  */
-/** 等经纬投影的地球图（client/public/globe，2048×1024）：浅色用白天的卫星图，深色用夜景灯光图 */
-const EARTH_IMAGE: Record<"light" | "dark", string> = { light: "/globe/earth-day.jpg", dark: "/globe/earth-night.jpg" };
-
-/** 底图样式（候选，用户挑定后只留一种） */
-export type OverviewMapStyle = "plain" | "line" | "mono" | "tint" | "paper" | "relief" | "satellite" | "dots";
-const VECTOR_STYLES: ReadonlySet<OverviewMapStyle> = new Set(["plain", "line", "mono", "tint", "paper", "relief"]);
-
 const NODE_R = 5.5;
 const EDGE_INSET = NODE_R + 5;
-/** 画布外再多画一点点阵，圆角裁掉的地方不留白边 */
-const DOT_MARGIN = 2;
 
 const TONE_STROKE: Record<OverviewEdgeTone, string> = {
   ok: "var(--fx-primary-fill)",
@@ -85,22 +72,15 @@ function bundleTitle(bundle: OverviewBundle, a: OverviewNode, b: OverviewNode) {
   return `${a.name} → ${b.name} · ${parts.join(" · ")}`;
 }
 
-export function NetworkOverview({ model, forwardLinks, onOpen, initialWidth = 720, mapStyle = "plain" }: {
+export function NetworkOverview({ model, forwardLinks, onOpen, initialWidth = 720 }: {
   model: Pick<NetworkMapModel, "nodes" | "links">;
   forwardLinks: readonly ForwardMapLink[];
   onOpen?: (href: string) => void;
   /** 量到真实宽度之前（以及服务端渲染时）按这个宽度画 */
   initialWidth?: number;
-  /** 底图样式（设置 › 个性化 › 概览底图） */
-  mapStyle?: OverviewMapStyle;
 }) {
   const { ref, width } = useMeasuredWidth(initialWidth);
   const height = overviewHeight(width);
-  const { resolvedTheme } = useTheme();
-  const earthHref = EARTH_IMAGE[resolvedTheme === "dark" ? "dark" : "light"];
-  const [earthFailed, setEarthFailed] = useState<string | null>(null);
-  // 卫星图没加载出来（内网没带静态文件、被拦）就退回「简约」的矢量底图
-  const layer: OverviewMapStyle = mapStyle === "satellite" && earthFailed === earthHref ? "plain" : mapStyle;
   const viewport = useMemo(() => overviewViewport(model.nodes, width, height), [model.nodes, width, height]);
   const placed = useMemo(() => layoutOverview(model.nodes, width, height), [model.nodes, width, height]);
   const byId = useMemo(() => new Map(placed.map((node) => [node.id, node])), [placed]);
@@ -110,31 +90,10 @@ export function NetworkOverview({ model, forwardLinks, onOpen, initialWidth = 72
     [placed, flags, width, height],
   );
   const bundles = useMemo(() => bundleOverviewEdges(buildOverviewEdges(model, forwardLinks)), [model, forwardLinks]);
-  const dots = useMemo(() => {
-    if (!viewport || layer !== "dots") return [];
-    const out: Array<[number, number]> = [];
-    for (const [lon, lat] of worldDots()) {
-      const x = viewport.x(viewport.wrap && lon < 0 ? lon + 360 : lon);
-      const y = viewport.y(lat);
-      if (x < -DOT_MARGIN || x > width + DOT_MARGIN || y < -DOT_MARGIN || y > height + DOT_MARGIN) continue;
-      out.push([Math.round(x * 10) / 10, Math.round(y * 10) / 10]);
-    }
-    return out;
-  }, [viewport, layer, width, height]);
-  // 点阵的亮度从主机那一片往外淡出：中心取主机的重心
-  const center = useMemo(() => {
-    const located = placed.filter((node) => !node.unlocated);
-    if (located.length === 0) return { x: width / 2, y: height / 2 };
-    return {
-      x: located.reduce((sum, node) => sum + node.x, 0) / located.length,
-      y: located.reduce((sum, node) => sum + node.y, 0) / located.length,
-    };
-  }, [placed, width, height]);
 
   const idBase = useId().replace(/:/g, "");
-  const ids = { ring: `${idBase}-ring`, dots: `${idBase}-dots`, vignette: `${idBase}-vig`, line: `${idBase}-line`, clip: `${idBase}-clip` };
-  const land = viewport && layer === "dots" ? worldLandPath() : "";
-  const countries = viewport && VECTOR_STYLES.has(layer) ? worldCountriesPath() : "";
+  const ids = { ring: `${idBase}-ring`, vignette: `${idBase}-vig`, line: `${idBase}-line`, clip: `${idBase}-clip` };
+  const countries = viewport ? worldCountriesPath() : "";
 
   // 断了的线放最上面画，不被正常的线盖住
   const drawOrder = [...bundles].sort((a, b) => toneRank(a.tone) - toneRank(b.tone));
@@ -159,10 +118,6 @@ export function NetworkOverview({ model, forwardLinks, onOpen, initialWidth = 72
             <stop offset="0" stopColor="color-mix(in srgb, var(--fx-primary-fill) 62%, white)" />
             <stop offset="1" stopColor="var(--fx-primary-fill)" />
           </linearGradient>
-          <radialGradient id={ids.dots} gradientUnits="userSpaceOnUse" cx={center.x} cy={center.y} r={width * 0.62}>
-            <stop offset="0" stopColor="var(--fx-primary-fill)" stopOpacity="0.5" />
-            <stop offset="1" stopColor="var(--fx-primary-fill)" stopOpacity="0.16" />
-          </radialGradient>
           <clipPath id={ids.clip}><rect width={width} height={height} /></clipPath>
           <radialGradient id={ids.vignette} cx="50%" cy="45%" r="70%">
             <stop offset="0.6" stopColor="var(--fx-overview-canvas)" stopOpacity="0" />
@@ -170,27 +125,9 @@ export function NetworkOverview({ model, forwardLinks, onOpen, initialWidth = 72
           </radialGradient>
         </defs>
 
-        {viewport && layer === "satellite" ? (
-          // 真地图：等经纬的地球图按同一套投影铺满（宽 = 360°、高 = 180°），跨太平洋时再铺一份 +360°
-          <g aria-hidden="true" className="fx-overview-earth" clipPath={`url(#${ids.clip})`}>
-            {[0, 360].map((offset) => (
-              <image
-                key={offset}
-                href={earthHref}
-                x={(viewport.x(-180 + offset)).toFixed(1)}
-                y={viewport.y(90).toFixed(1)}
-                width={(360 * viewport.sx + 1).toFixed(1)}
-                height={(180 * viewport.sy).toFixed(1)}
-                preserveAspectRatio="none"
-                onError={() => setEarthFailed(earthHref)}
-              />
-            ))}
-            <rect width={width} height={height} className="fx-overview-earth-wash" />
-          </g>
-        ) : null}
-        {viewport && VECTOR_STYLES.has(layer) ? (
+        {viewport ? (
           // 矢量国界：单位 0.1° 的 path 整体缩放到画布上，描边不跟着缩；跨太平洋时再画一份 +360°
-          <g aria-hidden="true" className="fx-overview-countries" data-style={layer} clipPath={`url(#${ids.clip})`}>
+          <g aria-hidden="true" className="fx-overview-countries" clipPath={`url(#${ids.clip})`}>
             {[0, 360].map((offset) => (
               <path
                 key={offset}
@@ -200,39 +137,9 @@ export function NetworkOverview({ model, forwardLinks, onOpen, initialWidth = 72
                 transform={`translate(${viewport.x(offset).toFixed(2)} ${viewport.y(0).toFixed(2)}) scale(${(viewport.sx / WORLD_COUNTRIES_UNIT).toFixed(5)} ${(-viewport.sy / WORLD_COUNTRIES_UNIT).toFixed(5)})`}
               />
             ))}
-            {layer === "relief"
-              ? [0, 360].map((offset) => (
-                <image
-                  key={`relief-${offset}`}
-                  className="fx-overview-relief"
-                  href="/globe/earth-topology.png"
-                  x={(viewport.x(-180 + offset)).toFixed(1)}
-                  y={viewport.y(90).toFixed(1)}
-                  width={(360 * viewport.sx + 1).toFixed(1)}
-                  height={(180 * viewport.sy).toFixed(1)}
-                  preserveAspectRatio="none"
-                />
-              ))
-              : null}
           </g>
         ) : null}
-        {viewport && layer === "dots" ? (
-          // 陆地剪影：一条经纬度坐标的 path，整体缩放到画布上；跨太平洋时再画一份 +360°（两份都画也不碍事）
-          <g aria-hidden="true" className="fx-overview-land" fillRule="evenodd" clipPath={`url(#${ids.clip})`}>
-            {[0, 360].map((offset) => (
-              <path
-                key={offset}
-                d={land}
-                transform={`translate(${viewport.x(offset).toFixed(2)} ${viewport.y(0).toFixed(2)}) scale(${viewport.sx.toFixed(4)} ${(-viewport.sy).toFixed(4)})`}
-              />
-            ))}
-          </g>
-        ) : null}
-        {dots.length > 0 ? (
-          <g fill={`url(#${ids.dots})`} aria-hidden="true">
-            {dots.map(([x, y]) => <circle key={`${x},${y}`} cx={x} cy={y} r={1.5} />)}
-          </g>
-        ) : null}
+
         <rect width={width} height={height} fill={`url(#${ids.vignette})`} pointerEvents="none" aria-hidden="true" />
 
         <g>

@@ -1,5 +1,5 @@
 /**
- * 首页「概览」的矢量底图（「简约」「线条」两种样式用）：Natural Earth 110m 国界，去掉南极和 0.4 平方度以下的小岛，
+ * 首页「概览」的矢量底图：Natural Earth 110m 国界，去掉南极和 0.4 平方度以下的小岛，
  * Douglas–Peucker 简化到 0.15°，一个国家一圈（多块的国家多圈）。离线从 client/public/globe/ne_110m_admin_0_countries.geojson
  * 算出来，scripts 里没有生成器，改精度要重算一遍。
  *

@@ -1798,45 +1798,13 @@ button.fx-rule-tag:hover { filter: brightness(.96); }
   --fx-primary-fill 调白算出来，跟着 Settings 的配色走。光点沿线流动（CSS 动画，只动 dashoffset，不重排），
   reduced-motion 时不动。标签是一枚白胶囊：浅色靠投影成形，深色加一圈细边。
 */
-:root { --fx-overview-canvas: var(--fx-l0-page); }
-.dark { --fx-overview-canvas: #232323; }
-.fx-overview-canvas { border-radius: 16px; overflow: hidden; background: linear-gradient(165deg, color-mix(in srgb, var(--fx-primary-fill) 11%, var(--fx-overview-canvas)) 0%, var(--fx-overview-canvas) 62%); }
-.dark .fx-overview-canvas { background: linear-gradient(165deg, color-mix(in srgb, var(--fx-primary-fill) 14%, var(--fx-overview-canvas)) 0%, var(--fx-overview-canvas) 62%); }
+/* 概览底图：海面是一层淡主色（四周暗角也按它淡出），陆地白、国界细灰线；深色下炭灰陆地 */
+:root { --fx-overview-canvas: color-mix(in srgb, var(--fx-primary-fill) 13%, #eef1f5); }
+.dark { --fx-overview-canvas: color-mix(in srgb, var(--fx-primary-fill) 9%, #17191d); }
+.fx-overview-canvas { border-radius: 16px; overflow: hidden; background: var(--fx-overview-canvas); }
+.fx-overview-countries { fill: #fdfdfd; stroke: color-mix(in srgb, var(--fx-primary-fill) 18%, #d6dae1); stroke-width: 0.7px; }
+.dark .fx-overview-countries { fill: #2c2f35; stroke: #42464f; }
 /* 地球图上罩一层极淡的画布色，浅色下卫星图不抢标签；深色的夜景图本来就暗，不罩 */
-.fx-overview-earth-wash { fill: var(--fx-overview-canvas); fill-opacity: 0.22; }
-.dark .fx-overview-earth-wash { fill-opacity: 0; }
-.fx-overview-land { fill: color-mix(in srgb, var(--fx-primary-fill) 13%, transparent); }
-/* 概览底图「简约」：海面是一层淡主色（暗角也按它淡出），陆地白、国界细灰线；深色下炭灰陆地 */
-.fx-overview-canvas[data-map-style="plain"] { --fx-overview-canvas: color-mix(in srgb, var(--fx-primary-fill) 13%, #eef1f5); background: var(--fx-overview-canvas); }
-.dark .fx-overview-canvas[data-map-style="plain"] { --fx-overview-canvas: color-mix(in srgb, var(--fx-primary-fill) 9%, #17191d); }
-.fx-overview-countries[data-style="plain"] { fill: #fdfdfd; stroke: color-mix(in srgb, var(--fx-primary-fill) 18%, #d6dae1); stroke-width: 0.7px; }
-.dark .fx-overview-countries[data-style="plain"] { fill: #2c2f35; stroke: #42464f; }
-/* 「线条」：只描国界和海岸线，陆地一层几乎看不出的主色 */
-.fx-overview-countries[data-style="line"] { fill: color-mix(in srgb, var(--fx-primary-fill) 5%, transparent); stroke: color-mix(in srgb, var(--fx-primary-fill) 42%, transparent); stroke-width: 0.8px; }
-.dark .fx-overview-countries[data-style="line"] { fill: color-mix(in srgb, var(--fx-primary-fill) 8%, transparent); stroke: color-mix(in srgb, var(--fx-primary-fill) 48%, transparent); }
-/* 「灰阶」：浅灰陆地，国界是海面色的细缝 */
-.fx-overview-canvas[data-map-style="mono"] { --fx-overview-canvas: #f5f6f8; background: var(--fx-overview-canvas); }
-.dark .fx-overview-canvas[data-map-style="mono"] { --fx-overview-canvas: #1b1c1f; }
-.fx-overview-countries[data-style="mono"] { fill: #e2e5ea; stroke: #f5f6f8; stroke-width: 0.8px; }
-.dark .fx-overview-countries[data-style="mono"] { fill: #303339; stroke: #1b1c1f; }
-/* 「主色块」：陆地是一层主色，海面近白，国界白缝 */
-.fx-overview-canvas[data-map-style="tint"] { --fx-overview-canvas: #fafbfd; background: var(--fx-overview-canvas); }
-.dark .fx-overview-canvas[data-map-style="tint"] { --fx-overview-canvas: #18191c; }
-.fx-overview-countries[data-style="tint"] { fill: color-mix(in srgb, var(--fx-primary-fill) 22%, #fafbfd); stroke: #fafbfd; stroke-width: 0.8px; }
-.dark .fx-overview-countries[data-style="tint"] { fill: color-mix(in srgb, var(--fx-primary-fill) 28%, #18191c); stroke: #18191c; }
-/* 「纸张」：米色陆地、灰蓝海面，像印刷地图 */
-.fx-overview-canvas[data-map-style="paper"] { --fx-overview-canvas: #e3eaee; background: var(--fx-overview-canvas); }
-.dark .fx-overview-canvas[data-map-style="paper"] { --fx-overview-canvas: #1a1e23; }
-.fx-overview-countries[data-style="paper"] { fill: #f6f2ea; stroke: #d8d0c0; stroke-width: 0.7px; }
-.dark .fx-overview-countries[data-style="paper"] { fill: #2e2b26; stroke: #454037; }
-/* 「地形」：简约的配色，再叠一层高程（高原、山脉更深） */
-.fx-overview-canvas[data-map-style="relief"] { --fx-overview-canvas: color-mix(in srgb, var(--fx-primary-fill) 13%, #eef1f5); background: var(--fx-overview-canvas); }
-.dark .fx-overview-canvas[data-map-style="relief"] { --fx-overview-canvas: color-mix(in srgb, var(--fx-primary-fill) 9%, #17191d); }
-.fx-overview-countries[data-style="relief"] { fill: #fbfaf7; stroke: color-mix(in srgb, var(--fx-primary-fill) 18%, #d6dae1); stroke-width: 0.7px; }
-.dark .fx-overview-countries[data-style="relief"] { fill: #2c2f35; stroke: #42464f; }
-.fx-overview-relief { filter: invert(1); mix-blend-mode: multiply; opacity: 0.32; }
-.dark .fx-overview-relief { filter: none; mix-blend-mode: screen; opacity: 0.35; }
-.dark .fx-overview-land { fill: color-mix(in srgb, var(--fx-primary-fill) 18%, transparent); }
 .fx-overview-flow { stroke: #fff; stroke-opacity: 0.75; stroke-linecap: round; stroke-dasharray: 1.2 16; animation: fx-overview-flow 2.2s linear infinite; }
 @keyframes fx-overview-flow { to { stroke-dashoffset: -17.2; } }
 @media (prefers-reduced-motion: reduce) { .fx-overview-flow { animation: none; } }
