@@ -1792,6 +1792,30 @@ button.fx-rule-tag:hover { filter: brightness(.96); }
   :root, .dark { --fx-glass-blur: blur(10px); }
   .fx-navbar, .workspace-tabs { -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
 }
-/* 首页「概览」图（components/network/NetworkOverview）：名字和地名描一圈卡片底色，压在线上也读得清 */
-.fx-overview-label { font-size: 11px; font-weight: 600; fill: var(--fx-text); font-family: var(--fx-font); paint-order: stroke; stroke: var(--fx-l1-surface); stroke-width: 3px; stroke-linejoin: round; }
-.fx-overview-note { font-size: 9.5px; fill: var(--fx-text-muted); font-family: var(--fx-font); paint-order: stroke; stroke: var(--fx-l1-surface); stroke-width: 3px; stroke-linejoin: round; }
+/*
+  首页「概览」图（components/network/NetworkOverview）。画布是卡片里一块圆角的浅色内衬，左上角带一点主色，
+  上面铺主色点阵的世界剪影；SVG 里的渐变取不到 CSS 的 linear-gradient，所以线和环的渐变用
+  --fx-primary-fill 调白算出来，跟着 Settings 的配色走。光点沿线流动（CSS 动画，只动 dashoffset，不重排），
+  reduced-motion 时不动。标签是一枚白胶囊：浅色靠投影成形，深色加一圈细边。
+*/
+:root { --fx-overview-canvas: var(--fx-l0-page); }
+.dark { --fx-overview-canvas: #232323; }
+.fx-overview-canvas { border-radius: 16px; overflow: hidden; background: linear-gradient(165deg, color-mix(in srgb, var(--fx-primary-fill) 11%, var(--fx-overview-canvas)) 0%, var(--fx-overview-canvas) 62%); }
+.dark .fx-overview-canvas { background: linear-gradient(165deg, color-mix(in srgb, var(--fx-primary-fill) 14%, var(--fx-overview-canvas)) 0%, var(--fx-overview-canvas) 62%); }
+.fx-overview-flow { stroke: #fff; stroke-opacity: 0.75; stroke-linecap: round; stroke-dasharray: 1.2 16; animation: fx-overview-flow 2.2s linear infinite; }
+@keyframes fx-overview-flow { to { stroke-dashoffset: -17.2; } }
+@media (prefers-reduced-motion: reduce) { .fx-overview-flow { animation: none; } }
+.fx-overview-label-box { fill: var(--fx-l1-surface); filter: drop-shadow(0 3px 10px rgb(0 0 0 / 10%)); }
+.dark .fx-overview-label-box { stroke: var(--fx-stroke-weak); stroke-width: 1px; filter: drop-shadow(0 3px 10px rgb(0 0 0 / 40%)); }
+.fx-overview-city { font-size: 12px; font-weight: 600; fill: var(--fx-text); font-family: var(--fx-font); }
+.fx-overview-name { font-size: 10px; fill: var(--fx-text-muted); font-family: var(--fx-font); }
+.fx-overview-verdict { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px 0 8px; border-radius: 13px; font-size: 12.5px; font-weight: 600; white-space: nowrap; }
+.fx-overview-verdict-dot { width: 7px; height: 7px; border-radius: 999px; background: currentColor; }
+.fx-overview-verdict[data-tone="ok"] { color: var(--fx-healthy-text); background: color-mix(in srgb, var(--fx-healthy) 11%, transparent); }
+.fx-overview-verdict[data-tone="warn"] { color: var(--fx-warn-text); background: color-mix(in srgb, var(--fx-warn) 12%, transparent); }
+.fx-overview-verdict[data-tone="down"] { color: var(--fx-down-text); background: color-mix(in srgb, var(--fx-down) 10%, transparent); }
+.fx-overview-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 10px 16px 12px; font-size: 12px; color: var(--fx-text-muted); font-variant-numeric: tabular-nums; }
+.fx-overview-legend b { font-weight: 600; color: var(--fx-text); }
+.fx-overview-swatch { display: inline-block; width: 14px; height: 2.5px; margin-right: 5px; border-radius: 2px; vertical-align: middle; background: linear-gradient(90deg, color-mix(in srgb, var(--fx-primary-fill) 62%, white), var(--fx-primary-fill)); }
+.fx-overview-swatch[data-tone="warn"] { background: repeating-linear-gradient(90deg, var(--fx-warn) 0 3px, transparent 3px 6px); }
+.fx-overview-swatch[data-tone="down"] { background: repeating-linear-gradient(90deg, var(--fx-down) 0 3px, transparent 3px 6px); }
