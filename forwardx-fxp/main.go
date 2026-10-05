@@ -18,6 +18,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/netip"
 	"os"
 	"os/signal"
 	"strconv"
@@ -108,9 +109,11 @@ type secureConn struct {
 	// （hello、首包）合成一个 TCP 段发出去；握手确认也不等，ackPending 让第一次
 	// readFrame 先把它读掉再交出数据帧。每一跳因此省掉一个往返。
 	pendingPrefix []byte
-	ackPending    bool
-	ackTunnelID   int
-	ackTimeout    time.Duration
+	// readBuf 是上一帧解密用的池缓冲，下一次读帧前归还。只由读协程访问。
+	readBuf     []byte
+	ackPending  bool
+	ackTunnelID int
+	ackTimeout  time.Duration
 	// onAck 报告握手确认的结果，出口择优靠它更新健康状态。
 	onAck func(error)
 	// 客户端在收到确认之前留着派生会话密钥的材料：确认里带着服务端的 salt，
@@ -193,7 +196,7 @@ const (
 	fxpUDPIdleTimeout    = 5 * time.Minute
 	fxpProtocolSampleMax = 512
 	fxpMasterContext     = "forwardx-fxp-v2 master"
-	fxpRuntimeVersion    = "2.2.124"
+	fxpRuntimeVersion    = "2.2.125"
 	fxpFallbackRetry     = 5 * time.Second
 	// A node that stays down is re-probed on a growing delay, because probing a
 	// peer that accepts but never answers costs a whole handshake timeout.
@@ -992,8 +995,10 @@ func protocolHas(cfg config, network string) bool {
 	return cfg.Protocol == "both" || cfg.Protocol == network
 }
 
-func dialTCP(host string, port int, timeout time.Duration) (net.Conn, error) {
-	d := net.Dialer{Timeout: timeout, KeepAlive: fxpTCPKeepAlive}
+// dialTCP 拨下一跳。fastOpen 跟着面板上的 TFO 开关（cfg.TCPFastOpen），见
+// tcpFastOpenDialControl。
+func dialTCP(host string, port int, timeout time.Duration, fastOpen bool) (net.Conn, error) {
+	d := net.Dialer{Timeout: timeout, KeepAlive: fxpTCPKeepAlive, Control: tcpFastOpenDialControl(fastOpen)}
 	address, err := resolveHopAddress(host, port)
 	if err != nil {
 		return nil, err
@@ -1043,7 +1048,7 @@ func dialSecureTCP(host string, port int, cfg config) (net.Conn, *secureConn, er
 // dialSecureTCPFresh 不碰连接池，现拨一条并完整握手。连接池预热和后台探测用它：
 // 它们要的就是真实地走一遍网络。
 func dialSecureTCPFresh(host string, port int, cfg config) (net.Conn, *secureConn, error) {
-	conn, err := dialTCP(host, port, secureDialTimeout(cfg))
+	conn, err := dialTCP(host, port, secureDialTimeout(cfg), cfg.TCPFastOpen)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1540,7 +1545,8 @@ func formatProxyProtocolV1(hello helloFrame) string {
 }
 
 type udpEntrySession struct {
-	key          string
+	key          netip.AddrPort
+	sourceIP     netip.Addr
 	clientAddr   *net.UDPAddr
 	conn         *net.UDPConn
 	exit         net.Conn
@@ -1575,8 +1581,9 @@ func udpEntrySessionSnapshot(session *udpEntrySession) fxpUDPSessionSnapshot {
 }
 
 func serveEntryUDP(conn *net.UDPConn, cfg config, selector *exitEndpointSelector, inLimiter, outLimiter *limiter) error {
-	sessions := map[string]*udpEntrySession{}
-	sessionsPerIP := map[string]int{}
+	// 和 UDP 直连入口一样按 netip 地址找会话，读循环里不再每包格式化地址。
+	sessions := map[netip.AddrPort]*udpEntrySession{}
+	sessionsPerIP := map[netip.Addr]int{}
 	policy := defaultFXPUDPSessionPolicy()
 	var sessionsMu sync.Mutex
 	var workerWG sync.WaitGroup
@@ -1589,12 +1596,11 @@ func serveEntryUDP(conn *net.UDPConn, cfg config, selector *exitEndpointSelector
 			return false
 		}
 		delete(sessions, session.key)
-		if session.clientAddr != nil {
-			sourceIP := session.clientAddr.IP.String()
-			if sessionsPerIP[sourceIP] <= 1 {
-				delete(sessionsPerIP, sourceIP)
+		if session.sourceIP.IsValid() {
+			if sessionsPerIP[session.sourceIP] <= 1 {
+				delete(sessionsPerIP, session.sourceIP)
 			} else {
-				sessionsPerIP[sourceIP]--
+				sessionsPerIP[session.sourceIP]--
 			}
 		}
 		return true
@@ -1634,7 +1640,7 @@ func serveEntryUDP(conn *net.UDPConn, cfg config, selector *exitEndpointSelector
 	defer stopSweeper()
 	buf := make([]byte, 65535)
 	for {
-		n, clientAddr, err := conn.ReadFromUDP(buf)
+		n, clientAddrPort, err := conn.ReadFromUDPAddrPort(buf)
 		if err != nil {
 			var closing []*udpEntrySession
 			sessionsMu.Lock()
@@ -1648,8 +1654,9 @@ func serveEntryUDP(conn *net.UDPConn, cfg config, selector *exitEndpointSelector
 			workerWG.Wait()
 			return err
 		}
-		key := clientAddr.String()
-		sourceIP := clientAddr.IP.String()
+		clientAddrPort = fxpUDPNormalizeAddrPort(clientAddrPort)
+		key := clientAddrPort
+		sourceIP := fxpUDPSourceIP(clientAddrPort)
 		sessionsMu.Lock()
 		session := sessions[key]
 		if session != nil {
@@ -1657,16 +1664,18 @@ func serveEntryUDP(conn *net.UDPConn, cfg config, selector *exitEndpointSelector
 		}
 		preflight := fxpUDPAdmission{allow: true}
 		if session == nil {
-			preflight = checkFXPUDPSessionCapacity(len(sessions), sessionsPerIP[sourceIP], sourceIP, policy)
+			preflight = checkFXPUDPSessionCapacity(len(sessions), sessionsPerIP[sourceIP], sourceIP.String(), policy)
 		}
 		sessionsMu.Unlock()
 		if !preflight.allow {
 			wakeSweeper()
-			fxpUDPDropLog.Printf("entry udp stream rejected new session tunnel=%d rule=%d client=%s reason=%s sessions=%d perIP=%d hardSessions=%d hardPerIP=%d", cfg.TunnelID, cfg.RuleID, clientAddr, preflight.reason, preflight.total, preflight.perIP, policy.hardSessions, policy.hardPerIP)
+			fxpUDPDropLog.Printf("entry udp stream rejected new session tunnel=%d rule=%d client=%s reason=%s sessions=%d perIP=%d hardSessions=%d hardPerIP=%d", cfg.TunnelID, cfg.RuleID, clientAddrPort, preflight.reason, preflight.total, preflight.perIP, policy.hardSessions, policy.hardPerIP)
 			continue
 		}
 		startSession := false
 		if session == nil {
+			clientAddr := net.UDPAddrFromAddrPort(clientAddrPort)
+			sourceIPLabel := sourceIP.String()
 			created, err := newUDPEntrySession(conn, clientAddr, cfg, selector, inLimiter, outLimiter, counter, queueBudget, removeSession)
 			if err != nil {
 				if !isClosedErr(err) {
@@ -1684,7 +1693,7 @@ func serveEntryUDP(conn *net.UDPConn, cfg config, selector *exitEndpointSelector
 				session.touch()
 				closeCreated = created
 			} else {
-				admission = checkFXPUDPSessionCapacity(len(sessions), sessionsPerIP[sourceIP], sourceIP, policy)
+				admission = checkFXPUDPSessionCapacity(len(sessions), sessionsPerIP[sourceIP], sourceIPLabel, policy)
 				if !admission.allow {
 					closeCreated = created
 					rejected = true
@@ -1693,7 +1702,7 @@ func serveEntryUDP(conn *net.UDPConn, cfg config, selector *exitEndpointSelector
 					sessionsPerIP[sourceIP]++
 					session = created
 					startSession = true
-					pressure = fxpUDPSessionPressure(len(sessions), sessionsPerIP[sourceIP], sourceIP, policy)
+					pressure = fxpUDPSessionPressure(len(sessions), sessionsPerIP[sourceIP], sourceIPLabel, policy)
 				}
 			}
 			sessionsMu.Unlock()
@@ -1713,7 +1722,10 @@ func serveEntryUDP(conn *net.UDPConn, cfg config, selector *exitEndpointSelector
 			session.counter.connections.Add(1)
 			session.start(&workerWG)
 		}
-		session.enqueue(append([]byte(nil), buf[:n]...))
+		// 明文拷进借来的缓冲，连同所有权交给发送队列，写出去之后还回池里。
+		payload := getFXPByteBuffer(n)
+		copy(payload, buf[:n])
+		session.enqueue(payload, true)
 	}
 }
 
@@ -1738,8 +1750,10 @@ func newUDPEntrySession(conn *net.UDPConn, clientAddr *net.UDPAddr, cfg config, 
 	if counter == nil {
 		counter = &trafficCounter{}
 	}
+	clientAddrPort := fxpUDPAddrPortOf(clientAddr)
 	session := &udpEntrySession{
-		key:        clientAddr.String(),
+		key:        clientAddrPort,
+		sourceIP:   fxpUDPSourceIP(clientAddrPort),
 		clientAddr: clientAddr,
 		conn:       conn,
 		exit:       exit,
@@ -1767,13 +1781,15 @@ func (s *udpEntrySession) start(workerWG *sync.WaitGroup) {
 	fxpVerbosef("entry udp session started tunnel=%d rule=%d client=%s exit=%s:%d target=%s:%d", s.cfg.TunnelID, s.cfg.RuleID, s.clientAddr, s.endpoint.Host, s.endpoint.Port, s.cfg.TargetIP, s.cfg.TargetPort)
 }
 
-func (s *udpEntrySession) enqueue(payload []byte) {
+// enqueue 把客户端发来的一个包放进发送队列。pooled 时 payload 的所有权一并交出。
+func (s *udpEntrySession) enqueue(payload []byte, pooled bool) {
 	s.touch()
 	select {
 	case <-s.done:
+		recycleFXPUDPPayload(payload, pooled)
 		return
 	default:
-		if s.send.enqueue(payload) {
+		if s.send.enqueueOwned(payload, pooled) {
 			fxpUDPDropLog.Printf("entry udp session queue congested tunnel=%d rule=%d client=%s; packet dropped", s.cfg.TunnelID, s.cfg.RuleID, s.clientAddr)
 		}
 	}
@@ -2015,8 +2031,11 @@ func handleExitUDP(sec *secureConn, hello helloFrame, cfg config) error {
 	go func() {
 		buf := getFXPByteBuffer(fxpUDPMaxDatagramPayload)
 		defer putFXPByteBuffer(buf)
+		// 读超时只用来定期醒来检查空闲（按 lastActivity 算），不再每包重设，
+		// 见 fxpRearmingReadDeadline。
+		deadline := fxpRearmingReadDeadline{period: fxpUDPTargetReadWake}
 		for {
-			_ = target.SetReadDeadline(time.Now().Add(5 * time.Second))
+			deadline.arm(target, time.Now())
 			n, err := target.Read(buf)
 			if err != nil {
 				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
@@ -2233,7 +2252,7 @@ func copyPlainToSecure(dst frameConn, src net.Conn, limiter *limiter, counter *a
 }
 
 func copyPlainToSecureWithPolicy(dst frameConn, src net.Conn, limiter *limiter, counter *atomic.Uint64, policy protocolPolicy, onBlock func(string), initialSample []byte) error {
-	buf := getFXPByteBuffer(32 * 1024)
+	buf := getFXPByteBuffer(fxpCopyChunkSize)
 	defer putFXPByteBuffer(buf)
 	sample := make([]byte, 0, fxpProtocolSampleMax)
 	initialSample = trimLeadingHTTPBlankLines(initialSample)
@@ -2902,6 +2921,7 @@ func (c *secureConn) appendSealedFrameLocked(dst []byte, plain []byte) []byte {
 }
 
 func (c *secureConn) readEncryptedFrame() ([]byte, error) {
+	c.releaseReadBuffer()
 	counter := c.readCounter
 	c.readCounter++
 	var lenCipher [64]byte
@@ -2917,13 +2937,31 @@ func (c *secureConn) readEncryptedFrame() ([]byte, error) {
 		return nil, err
 	}
 	dataCipher := getFXPByteBuffer(int(n) + dataAEAD.Overhead())
-	defer putFXPByteBuffer(dataCipher)
 	if _, err := io.ReadFull(c.conn, dataCipher); err != nil {
+		putFXPByteBuffer(dataCipher)
 		return nil, err
 	}
 	var nonce [12]byte
 	fillFXPNonce(nonce[:], c.readDir, counter, 1)
-	return dataAEAD.Open(nil, nonce[:], dataCipher, c.payloadAD)
+	// 就地解密：明文直接覆盖在密文缓冲上，不再每帧新分配一块。这块缓冲留到下一次
+	// readFrame 才还回池里（见 releaseReadBuffer），所以调用方拿到的切片只在下一次
+	// 读之前有效 —— 现有调用方都是读完立刻写出或自行拷贝。
+	plain, err := dataAEAD.Open(dataCipher[:0], nonce[:], dataCipher, c.payloadAD)
+	if err != nil {
+		putFXPByteBuffer(dataCipher)
+		return nil, err
+	}
+	c.readBuf = dataCipher
+	return plain, nil
+}
+
+// releaseReadBuffer 把上一帧占着的缓冲还回池里。在阻塞等下一帧之前调用，
+// 空闲连接因此不占缓冲。
+func (c *secureConn) releaseReadBuffer() {
+	if c.readBuf != nil {
+		putFXPByteBuffer(c.readBuf)
+		c.readBuf = nil
+	}
 }
 
 // openFrameLength 解开帧长度，并告诉调用方这一帧的内容该用哪把密钥。服务端在

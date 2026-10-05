@@ -144,11 +144,29 @@ export function endpointHostPort(host: unknown, port: unknown) {
   return isIpv6Literal(clean) ? `[${clean}]:${Number(port) || 0}` : `${clean}:${Number(port) || 0}`;
 }
 
+/**
+ * socat 的转发参数。
+ *
+ * - `-b65536`：socat 默认每次只搬 8 KiB，UDP 下超过 8 KiB 的数据报还会被截断。
+ * - `nodelay`（只对 TCP）：socat 默认不关 Nagle，小包请求/响应（游戏、SSH、API）
+ *   会被攒包和延迟确认叠出几十毫秒的延迟。realm / gost / nginx / FXP 都已经开了。
+ */
+export const SOCAT_TRANSFER_BUFFER_FLAG = "-b65536";
+
+export function socatSocketOptions(protocol: "TCP" | "UDP") {
+  return protocol === "TCP" ? ",nodelay" : "";
+}
+
 /** socat 的拨号端点：`TCP:1.2.3.4:80`，目标是 IPv6 时变成 `TCP6:[::1]:80`。 */
 export function socatDialEndpoint(protocol: "TCP" | "UDP", host: unknown, port: unknown) {
   const clean = cleanEndpointHost(host);
   const dialProtocol = isIpv6Literal(clean) ? `${protocol}6` : protocol;
   return `${dialProtocol}:${endpointHostPort(clean, port)}`;
+}
+
+/** 写进 ExecStart 的拨号端，带上 socatSocketOptions。 */
+export function socatDialAddress(protocol: "TCP" | "UDP", host: unknown, port: unknown) {
+  return `${socatDialEndpoint(protocol, host, port)}${socatSocketOptions(protocol)}`;
 }
 
 /* ---------------------------------------------------------------------------
@@ -190,7 +208,7 @@ export type SocatUnitInput = {
  * 比起两个单元各监听一个协议栈少一半进程，也不会出现「v6 起来了 v4 没起来」。
  */
 export function buildSocatServiceUnit(input: SocatUnitInput): string {
-  const dial = socatDialEndpoint(input.dialProtocol, input.dialHost, input.dialPort);
+  const dial = socatDialAddress(input.dialProtocol, input.dialHost, input.dialPort);
   return [
     "[Unit]",
     `Description=ForwardX socat ${input.descriptionProtocol} forwarder ${input.sourcePort}->${input.targetIp}:${input.targetPort}`,
@@ -198,7 +216,7 @@ export function buildSocatServiceUnit(input: SocatUnitInput): string {
     "",
     "[Service]",
     "Type=simple",
-    `ExecStart=/usr/bin/socat ${input.dialProtocol}6-LISTEN:${input.sourcePort},fork,reuseaddr,ipv6only=0 ${dial}`,
+    `ExecStart=/usr/bin/socat ${SOCAT_TRANSFER_BUFFER_FLAG} ${input.dialProtocol}6-LISTEN:${input.sourcePort},fork,reuseaddr,ipv6only=0${socatSocketOptions(input.dialProtocol)} ${dial}`,
     "Restart=always",
     "RestartSec=5",
     "LimitNOFILE=65535",

@@ -109,7 +109,9 @@ import {
   realmServiceNameForPort,
   realmTomlString,
   serviceProtocolSuffix,
-  socatDialEndpoint,
+  SOCAT_TRANSFER_BUFFER_FLAG,
+  socatDialAddress,
+  socatSocketOptions,
   socatServiceNameForPort,
 } from "./forwardRuntimeConfigs";
 import { handleHostAddressChanged, hostIngressAddress, refreshAgentsAffectedByHostAddress } from "./hostAddressRuntime";
@@ -295,12 +297,17 @@ const SHARED_NGINX_FORWARD_TYPES = new Set(["nginx", "nginx-tunnel", "nginx-tunn
 const GOST_TUNNEL_MODES = new Set(["tls", "wss", "tcp", "mtls", "mwss", "mtcp"]);
 const VERBOSE_AGENT_ACTIONS = /^(1|true|yes|on)$/i.test(String(process.env.FORWARDX_VERBOSE_AGENT_ACTIONS || ""));
 const BYTES_PER_MEGABIT = 1_000_000 / 8;
+/** 多条规则共用一个进程的运行时（gost、隧道 gost）的句柄上限，和 Agent 自己的一致。 */
+const SHARED_RUNTIME_NOFILE = 1048576;
 const GOST_UDP_LISTENER_METADATA = {
   keepalive: true,
   ttl: "30s",
   // GOST v3.2.6 GetInt ignores JSON numbers decoded as float64, so integer metadata stays string-encoded.
+  // 队列里每个包占一块 readBufferSize 大小的缓冲，所以缓冲保持 8K（公网 UDP 包
+  // 远小于此），只把每个客户端的队列从 64 包放到 256 包：64 包在突发（QUIC 握手、
+  // 游戏开局）时直接丢包，256 包最坏也只占 2MB。
   readBufferSize: "8192",
-  readQueueSize: "64",
+  readQueueSize: "256",
   backlog: "128",
 } as const;
 const AGENT_STATE_SECTION_NAMES = [
@@ -399,6 +406,9 @@ export function buildNginxStreamConfig(options: {
   return [
     `include ${NGINX_CONFIG_DIR}/modules.conf;`,
     "worker_processes auto;",
+    // 每个 worker 的句柄上限跟着 worker_connections 走：一条转发占两个句柄，
+    // 不抬的话 65535 个连接位实际只用得到系统默认的那一点。
+    "worker_rlimit_nofile 1048576;",
     `error_log ${NGINX_ERROR_LOG_PATH} notice;`,
     "pid /run/forwardx-nginx.pid;",
     ...(options.certFingerprints || []).sort(),
@@ -412,6 +422,8 @@ export function buildNginxStreamConfig(options: {
       "  log_format forwardx_session '$time_iso8601 status=$status protocol=$protocol listen=$server_port session_time=$session_time bytes_received=$bytes_received bytes_sent=$bytes_sent upstream=$upstream_addr upstream_connect_time=$upstream_connect_time';",
       `  access_log ${NGINX_SESSION_LOG_PATH} forwardx_session buffer=32k flush=5s;`,
       "  tcp_nodelay on;",
+      // 默认 16k：每搬 16k 就一次读写，高带宽下系统调用翻几倍。64k 和其他转发方式一致。
+      "  proxy_buffer_size 64k;",
       "  resolver 1.1.1.1 8.8.8.8 valid=60s ipv6=on;",
       "",
       ...options.upstreams.flatMap((block) => [block, ""]),
@@ -2042,7 +2054,9 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       `ExecStart=${RUNTIME_BIN} -C ${RUNTIME_CONFIG_PATH}`,
       "Restart=always",
       "RestartSec=5",
-      "LimitNOFILE=65535",
+      // 这台机器上所有 gost 规则共用这一个进程，一条转发占两个句柄：65535 意味着
+      // 整机三万来个并发就到顶，新连接直接 accept 失败。
+      `LimitNOFILE=${SHARED_RUNTIME_NOFILE}`,
       "",
       "[Install]",
       "WantedBy=multi-user.target",
@@ -4225,7 +4239,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
           `ExecStart=${RUNTIME_BIN} -C ${TUNNEL_RUNTIME_CONFIG_PATH}`,
           "Restart=always",
           "RestartSec=5",
-          "LimitNOFILE=65535",
+          `LimitNOFILE=${SHARED_RUNTIME_NOFILE}`,
           "",
           "[Install]",
           "WantedBy=multi-user.target",
@@ -5467,7 +5481,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
                 "",
                 "[Service]",
                 "Type=simple",
-                `ExecStart=/usr/bin/socat TCP4-LISTEN:${guardTarget.backendPort},fork,reuseaddr,bind=127.0.0.1 ${socatDialEndpoint("TCP", backendDial.targetIp, backendDial.targetPort)}`,
+                `ExecStart=/usr/bin/socat ${SOCAT_TRANSFER_BUFFER_FLAG} TCP4-LISTEN:${guardTarget.backendPort},fork,reuseaddr,bind=127.0.0.1${socatSocketOptions("TCP")} ${socatDialAddress("TCP", backendDial.targetIp, backendDial.targetPort)}`,
                 "Restart=always",
                 "RestartSec=5",
                 "LimitNOFILE=65535",
@@ -5483,7 +5497,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
                 "",
                 "[Service]",
                 "Type=simple",
-                `ExecStart=/usr/bin/socat UDP4-LISTEN:${guardTarget.backendPort},fork,reuseaddr,bind=127.0.0.1 ${socatDialEndpoint("UDP", backendDial.targetIp, backendDial.targetPort)}`,
+                `ExecStart=/usr/bin/socat ${SOCAT_TRANSFER_BUFFER_FLAG} UDP4-LISTEN:${guardTarget.backendPort},fork,reuseaddr,bind=127.0.0.1 ${socatDialAddress("UDP", backendDial.targetIp, backendDial.targetPort)}`,
                 "Restart=always",
                 "RestartSec=5",
                 "LimitNOFILE=65535",
@@ -5508,7 +5522,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
                 "",
                 "[Service]",
                 "Type=simple",
-                `ExecStart=/usr/bin/socat ${listenProto}-LISTEN:${guardTarget.backendPort},fork,reuseaddr,bind=127.0.0.1 ${socatDialEndpoint(protoUpper, backendDial.targetIp, backendDial.targetPort)}`,
+                `ExecStart=/usr/bin/socat ${SOCAT_TRANSFER_BUFFER_FLAG} ${listenProto}-LISTEN:${guardTarget.backendPort},fork,reuseaddr,bind=127.0.0.1${socatSocketOptions(protoUpper)} ${socatDialAddress(protoUpper, backendDial.targetIp, backendDial.targetPort)}`,
                 "Restart=always",
                 "RestartSec=5",
                 "LimitNOFILE=65535",

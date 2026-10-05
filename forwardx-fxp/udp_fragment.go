@@ -225,21 +225,45 @@ func sealFXPUDPDatagrams(packet fxpUDPPacket, key string, counter *atomic.Uint64
 }
 
 func sealFXPUDPDatagramsWithCodec(packet fxpUDPPacket, codec *fxpUDPCodec, counter *atomic.Uint64) ([][]byte, error) {
+	var frames [][]byte
+	err := sealFXPUDPDatagramFragments(packet, codec, counter, nil, func(sealed []byte) error {
+		frames = append(frames, sealed)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return frames, nil
+}
+
+// sealFXPUDPDatagramsEach 和 sealFXPUDPDatagramsWithCodec 封出来的线上字节完全
+// 一样，只是每一片都封进 ws 里同一块缓冲、立刻交给 emit，不再每片分配一块、再
+// 分配一个切片装它们。emit 返回之后这块缓冲就被下一片覆盖，所以 emit 只能同步
+// 用完（写进 socket），不能留着。emit 返回错误就停下、原样返回这个错误。
+func sealFXPUDPDatagramsEach(packet fxpUDPPacket, codec *fxpUDPCodec, counter *atomic.Uint64, ws *fxpUDPWorkspace, emit func([]byte) error) error {
+	if ws == nil {
+		return errors.New("udp seal workspace is nil")
+	}
+	return sealFXPUDPDatagramFragments(packet, codec, counter, ws, emit)
+}
+
+// sealFXPUDPDatagramFragments 分片、取序号、逐片封包。ws 为 nil 时每片单独分配，
+// 交给 emit 的切片可以留着。
+func sealFXPUDPDatagramFragments(packet fxpUDPPacket, codec *fxpUDPCodec, counter *atomic.Uint64, ws *fxpUDPWorkspace, emit func([]byte) error) error {
 	if packet.fragment != 0 || packet.fragments != 0 || packet.sequence != 0 {
-		return nil, errors.New("udp datagram already has wire metadata")
+		return errors.New("udp datagram already has wire metadata")
 	}
 	if codec == nil || !codec.matches(packet) {
-		return nil, errors.New("udp datagram does not match cached encryption context")
+		return errors.New("udp datagram does not match cached encryption context")
 	}
 	count, err := fxpUDPFragmentCount(len(packet.payload))
 	if err != nil {
-		return nil, err
+		return err
 	}
 	sequence, err := nextFXPUDPSequence(counter)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	frames := make([][]byte, 0, count)
 	fragmentPayload := fxpUDPFragmentPayloadLimit()
 	for index := 0; index < count; index++ {
 		start := index * fragmentPayload
@@ -251,18 +275,50 @@ func sealFXPUDPDatagramsWithCodec(packet fxpUDPPacket, codec *fxpUDPCodec, count
 			fragment.fragment = uint8(index)
 			fragment.fragments = uint8(count)
 		}
-		sealed, err := codec.sealPacket(fragment)
+		var sealed []byte
+		if ws != nil {
+			sealed, err = codec.sealPacketInto(ws.wire, fragment, &ws.nonce)
+		} else {
+			sealed, err = codec.sealPacket(fragment)
+		}
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if len(sealed) > fxpUDPMaxWirePacketSize {
-			return nil, fmt.Errorf("sealed udp fragment exceeds wire limit: %d", len(sealed))
+			return fmt.Errorf("sealed udp fragment exceeds wire limit: %d", len(sealed))
 		}
-		frames = append(frames, sealed)
+		if err := emit(sealed); err != nil {
+			return err
+		}
 	}
-	return frames, nil
+	return nil
 }
 
+// acceptOwned 是收包热路径用的 accept：pooled 表示 packet.payload 是从池里借的、
+// 所有权交给这里。返回能入队的明文、它是不是借来的（入队时连同所有权交给队列）。
+//   - 单包：明文就是传进来的那块缓冲，原样交出去；没收下就当场还掉。
+//   - 分片：重组器已经把这一片拷走了，传进来的缓冲当场还掉；拼好的整包是重组器
+//     从池里借的。
+func (r *udpFragmentReassembler) acceptOwned(packet fxpUDPPacket, replay *udpReplayWindow, pooled bool) ([]byte, bool, bool) {
+	payload, ok := r.accept(packet, replay)
+	if packet.fragments == 0 {
+		if !ok {
+			if pooled {
+				putFXPByteBuffer(packet.payload)
+			}
+			return nil, false, false
+		}
+		return payload, pooled, true
+	}
+	if pooled {
+		putFXPByteBuffer(packet.payload)
+	}
+	return payload, ok, ok
+}
+
+// accept 收一个包。分片会被拷进重组器自己的缓冲（调用方之后可以随意复用
+// packet.payload）；拼好的整包从 fxpBytePools 借，调用方用完可以还回去，不还
+// 也只是交给 GC。单包原样返回 packet.payload。
 func (r *udpFragmentReassembler) accept(packet fxpUDPPacket, replay *udpReplayWindow) ([]byte, bool) {
 	if r == nil || r.closed.Load() || replay == nil || !validFXPUDPFragmentMetadata(packet.fragment, packet.fragments) {
 		return nil, false
@@ -322,22 +378,34 @@ func (r *udpFragmentReassembler) accept(packet fxpUDPPacket, replay *udpReplayWi
 		}
 		r.pending[packet.sequence] = assembly
 	}
+	// 拷一份：收包缓冲（或者解密用的借来的缓冲）在这个包处理完之后就要被复用了。
+	chunk := getFXPByteBuffer(len(packet.payload))
+	copy(chunk, packet.payload)
 	assembly.total += len(packet.payload)
-	assembly.chunks[index] = packet.payload
+	assembly.chunks[index] = chunk
 	assembly.received++
 	if assembly.received != int(assembly.fragments) {
 		return nil, false
 	}
-	r.removeAssemblyLocked(packet.sequence)
+	r.detachAssemblyLocked(packet.sequence)
+	defer assembly.recycle()
 	if !replay.accept(packet.sequence) {
 		return nil, false
 	}
-	payload := make([]byte, assembly.total)
+	payload := getFXPByteBuffer(assembly.total)
 	offset := 0
 	for _, chunk := range assembly.chunks {
 		offset += copy(payload[offset:], chunk)
 	}
 	return payload, true
+}
+
+// recycle 把各片的缓冲还回池里。只在组已经从 pending 里摘下之后调用。
+func (a *udpFragmentAssembly) recycle() {
+	for i, chunk := range a.chunks {
+		putFXPByteBuffer(chunk)
+		a.chunks[i] = nil
+	}
 }
 
 func (r *udpFragmentReassembler) expireLocked(now time.Time) {
@@ -363,14 +431,22 @@ func (r *udpFragmentReassembler) evictOldestLocked() {
 }
 
 func (r *udpFragmentReassembler) removeAssemblyLocked(sequence uint64) {
+	if assembly := r.detachAssemblyLocked(sequence); assembly != nil {
+		assembly.recycle()
+	}
+}
+
+// detachAssemblyLocked 把一组从 pending 里摘下、归还额度，缓冲留给调用方处理。
+func (r *udpFragmentReassembler) detachAssemblyLocked(sequence uint64) *udpFragmentAssembly {
 	assembly := r.pending[sequence]
 	if assembly == nil {
-		return
+		return nil
 	}
 	delete(r.pending, sequence)
 	if r.budget != nil {
 		r.budget.release(assembly.total)
 	}
+	return assembly
 }
 
 func (r *udpFragmentReassembler) clearLocked() {

@@ -23,7 +23,13 @@ import (
 
 const (
 	fxpPoolMinSize = 2
-	fxpPoolMaxSize = 16
+	// 池子的上限。池子按最近 30 秒里最忙的那一秒取了几条来备，16 条在突发时
+	// 不够：网页、测速、多条规则共用一个出口时，一秒内几十条新连接很常见，
+	// 第 17 条起就得现拨（多一个往返）。抬到 64：只有真被取得这么快才会备这么
+	// 多，平时还是按峰值备；空闲连接照旧在 fxpPoolMaxIdleAge 后换新，没人用了
+	// （fxpPoolActiveWindow）整个池子清空。对端每个上一跳 IP 给待定连接留了
+	// fxpListenerMaxPendingPerIP 条，够十几个端点各备满 64 条。
+	fxpPoolMaxSize = 64
 	// 池里的连接空闲超过这个时长就换新：对端等 hello 的时长（fxpServerHelloWait）
 	// 要比它长，中间设备的空闲超时一般也远大于它。
 	fxpPoolMaxIdleAge = 25 * time.Second

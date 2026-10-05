@@ -77,7 +77,7 @@ func (t *selectedTransport) connectLocked() error {
 			t.useLocked(conn, sec, endpoint, index, true)
 			return nil
 		}
-		conn, err := dialTCP(endpoint.Host, endpoint.Port, secureDialTimeout(dialCfg))
+		conn, err := dialTCP(endpoint.Host, endpoint.Port, secureDialTimeout(dialCfg), dialCfg.TCPFastOpen)
 		if err != nil {
 			lastErr = err
 			t.selector.markFailure(index, err)

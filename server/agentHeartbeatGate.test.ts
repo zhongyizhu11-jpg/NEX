@@ -346,7 +346,7 @@ test("GOST UDP rule listeners retain active game sessions with bounded buffers",
       keepalive: true,
       ttl: "30s",
       readBufferSize: "8192",
-      readQueueSize: "64",
+      readQueueSize: "256",
       backlog: "128",
     },
   });

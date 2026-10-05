@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -2583,16 +2584,49 @@ func nativePingIP(ip net.IP, timeout time.Duration, count int) (int, bool, error
 	return latency, ok, err
 }
 
+// nativePingListenRaw / nativePingListenDatagram 测试里替换，用来验证回退顺序。
+var (
+	nativePingListenRaw      = func() (net.PacketConn, error) { return net.ListenPacket("ip4:icmp", "0.0.0.0") }
+	nativePingListenDatagram = listenICMPDatagram
+)
+
+// nativePingIPDetailed 先用原始 ICMP 套接字（需要 CAP_NET_RAW）；不行再用无特权的
+// ICMP 数据报套接字（Linux 的 SOCK_DGRAM + IPPROTO_ICMP，受 net.ipv4.ping_group_range
+// 控制，较新的 systemd 发行版默认对所有组开放）。两样都不行才返回错误，由调用方回退到
+// 外部 ping 命令 —— 线路组只转 UDP 的路径每 5 秒每条探一次，fork+exec 一个 ping 的开销
+// 远大于发一个 ICMP 包。IPv6 没有原始套接字实现，只走数据报套接字。
 func nativePingIPDetailed(ip net.IP, timeout time.Duration, count int) (int, bool, error, int, int) {
-	ipv4 := ip.To4()
-	if ipv4 == nil {
-		return 0, false, fmt.Errorf("native ping currently supports ipv4 only"), 0, 0
+	if ipv4 := ip.To4(); ipv4 != nil {
+		conn, err := nativePingListenRaw()
+		if err == nil {
+			defer conn.Close()
+			return nativePingExchange(conn, &net.IPAddr{IP: ipv4}, ipv4, 8, 0, true, timeout, count)
+		}
+		dgram, dgramErr := nativePingListenDatagram(false)
+		if dgramErr != nil {
+			return 0, false, fmt.Errorf("raw icmp: %v; datagram icmp: %v", err, dgramErr), 0, 0
+		}
+		defer dgram.Close()
+		// 数据报套接字的标识符由内核改写成套接字自己的编号，回包也由内核按它分发，
+		// 所以不按标识符过滤。
+		return nativePingExchange(dgram, &net.UDPAddr{IP: ipv4}, ipv4, 8, 0, false, timeout, count)
 	}
-	conn, err := net.ListenPacket("ip4:icmp", "0.0.0.0")
+	ipv6 := ip.To16()
+	if ipv6 == nil {
+		return 0, false, fmt.Errorf("native ping: invalid address"), 0, 0
+	}
+	dgram, err := nativePingListenDatagram(true)
 	if err != nil {
-		return 0, false, err, 0, 0
+		return 0, false, fmt.Errorf("native ping ipv6: %v", err), 0, 0
 	}
-	defer conn.Close()
+	defer dgram.Close()
+	return nativePingExchange(dgram, &net.UDPAddr{IP: ipv6}, ipv6, 128, 129, false, timeout, count)
+}
+
+// nativePingExchange 发 count 个回显请求、收回显应答。原始 IPv4 套接字收到的包带 IP
+// 头，数据报套接字不带；stripIPv4Header 只在开头真是 IPv4 头时才剥（ICMP 应答类型 0/129
+// 的首字节不会被误认成 IPv4 头）。
+func nativePingExchange(conn net.PacketConn, dst net.Addr, peer net.IP, echoType byte, replyType byte, matchID bool, timeout time.Duration, count int) (int, bool, error, int, int) {
 	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
 		return 0, false, err, 0, 0
 	}
@@ -2601,9 +2635,9 @@ func nativePingIPDetailed(ip net.IP, timeout time.Duration, count int) (int, boo
 	sentAt := map[int]time.Time{}
 	for i := 0; i < count; i++ {
 		seq := (baseSeq + i) & 0xffff
-		packet := buildICMPEchoRequest(8, id, seq)
+		packet := buildICMPEchoRequest(echoType, id, seq)
 		sentAt[seq] = time.Now()
-		if _, err := conn.WriteTo(packet, &net.IPAddr{IP: ipv4}); err != nil {
+		if _, err := conn.WriteTo(packet, dst); err != nil {
 			return 0, false, err, len(sentAt), 0
 		}
 	}
@@ -2615,14 +2649,17 @@ func nativePingIPDetailed(ip net.IP, timeout time.Duration, count int) (int, boo
 		if err != nil {
 			break
 		}
-		if ipAddr, ok := addr.(*net.IPAddr); ok && !ipAddr.IP.Equal(ipv4) {
+		if from := nativePingSourceIP(addr); from != nil && !from.Equal(peer) {
 			continue
 		}
-		msg := stripIPv4Header(buf[:n])
-		if len(msg) < 8 || msg[0] != 0 || msg[1] != 0 {
+		msg := buf[:n]
+		if replyType == 0 {
+			msg = stripIPv4Header(msg)
+		}
+		if len(msg) < 8 || msg[0] != replyType || msg[1] != 0 {
 			continue
 		}
-		if int(binary.BigEndian.Uint16(msg[4:6])) != id {
+		if matchID && int(binary.BigEndian.Uint16(msg[4:6])) != id {
 			continue
 		}
 		seq := int(binary.BigEndian.Uint16(msg[6:8]))
@@ -2651,6 +2688,16 @@ func nativePingIPDetailed(ip net.IP, timeout time.Duration, count int) (int, boo
 		latency = 1
 	}
 	return latency, true, nil, count, successes
+}
+
+func nativePingSourceIP(addr net.Addr) net.IP {
+	switch a := addr.(type) {
+	case *net.IPAddr:
+		return a.IP
+	case *net.UDPAddr:
+		return a.IP
+	}
+	return nil
 }
 
 func buildICMPEchoRequest(typ byte, id int, seq int) []byte {
@@ -3192,9 +3239,9 @@ func conntrackConnectionsSnapshot(states []localRuleState) (map[string]uint64, m
 	for port := range protocolsByPort {
 		_, _, _, baselines[port] = readPrev(port)
 	}
-	raw, err := os.ReadFile("/proc/net/nf_conntrack")
+	current, err := readConntrackFlowSnapshot("/proc/net/nf_conntrack", protocolsByPort)
 	if err != nil {
-		raw, err = os.ReadFile("/proc/net/ip_conntrack")
+		current, err = readConntrackFlowSnapshot("/proc/net/ip_conntrack", protocolsByPort)
 		if err != nil {
 			conntrackFlowMu.Lock()
 			for port := range protocolsByPort {
@@ -3210,7 +3257,6 @@ func conntrackConnectionsSnapshot(states []localRuleState) (map[string]uint64, m
 			return active, totals
 		}
 	}
-	current := parseConntrackFlowSnapshot(string(raw), protocolsByPort)
 	conntrackFlowMu.Lock()
 	active, totals = updateConntrackConnectionTotals(conntrackFlowsByPort, current, conntrackTotalsByPort, baselines, protocolsByPort)
 	conntrackFlowsByPort = current
@@ -3260,46 +3306,108 @@ func pruneConntrackState(protocolsByPort map[string]map[string]bool) {
 // attribute one connection to an unrelated rule whose source port happens to
 // match the translated target port.
 func parseConntrackFlowSnapshot(raw string, protocolsByPort map[string]map[string]bool) map[string]map[string]struct{} {
+	out, _ := parseConntrackFlowSnapshotReader(strings.NewReader(raw), protocolsByPort)
+	return out
+}
+
+// conntrackScanBufferMax：conntrack 一行通常三四百字节；上限放宽到 1 MiB，只是防止异常
+// 内容让扫描器无限增长。
+const conntrackScanBufferMax = 1 << 20
+
+// readConntrackFlowSnapshot 流式读 conntrack 表。以前 os.ReadFile 把整张表读进内存再
+// strings.Split + 每行 strings.Fields，连接数大（几十万条、上百 MB）时每个采集周期都要
+// 分配同样量级的内存。读到一半出错就整份作废，按读不到处理：半份快照会让流「消失再出现」，
+// 把累计连接数算多。
+func readConntrackFlowSnapshot(path string, protocolsByPort map[string]map[string]bool) (map[string]map[string]struct{}, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	return parseConntrackFlowSnapshotReader(file, protocolsByPort)
+}
+
+func parseConntrackFlowSnapshotReader(r io.Reader, protocolsByPort map[string]map[string]bool) (map[string]map[string]struct{}, error) {
 	out := make(map[string]map[string]struct{}, len(protocolsByPort))
 	for port := range protocolsByPort {
 		out[port] = map[string]struct{}{}
 	}
-	for _, line := range strings.Split(raw, "\n") {
-		protocol, sourceIP, targetIP, sourcePort, targetPort, ok := conntrackOriginalTuple(line)
-		if !ok || !protocolsByPort[targetPort][protocol] {
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 64*1024), conntrackScanBufferMax)
+	var key []byte
+	for scanner.Scan() {
+		protocol, sourceIP, targetIP, sourcePort, targetPort, ok := conntrackOriginalTupleBytes(scanner.Bytes())
+		// string(...) 只用作 map 下标时编译器不分配内存；只有命中的行才拼流的键。
+		if !ok || !protocolsByPort[string(targetPort)][string(protocol)] {
 			continue
 		}
-		flow := strings.Join([]string{protocol, sourceIP, targetIP, sourcePort, targetPort}, "|")
-		out[targetPort][flow] = struct{}{}
+		key = append(key[:0], protocol...)
+		key = append(key, '|')
+		key = append(key, sourceIP...)
+		key = append(key, '|')
+		key = append(key, targetIP...)
+		key = append(key, '|')
+		key = append(key, sourcePort...)
+		key = append(key, '|')
+		key = append(key, targetPort...)
+		out[string(targetPort)][string(key)] = struct{}{}
 	}
-	return out
+	if err := scanner.Err(); err != nil {
+		return out, err
+	}
+	return out, nil
 }
 
-func conntrackOriginalTuple(line string) (protocol, sourceIP, targetIP, sourcePort, targetPort string, ok bool) {
-	for _, field := range strings.Fields(line) {
-		if protocol == "" && (field == "tcp" || field == "udp") {
+// conntrackOriginalTupleBytes 是 conntrackOriginalTuple 的零分配版本：返回的切片指向 line，
+// 调用方在下一次读行之前用完。按 ASCII 空白切字段（conntrack 的输出只有 ASCII）。
+func conntrackOriginalTupleBytes(line []byte) (protocol, sourceIP, targetIP, sourcePort, targetPort []byte, ok bool) {
+	for i := 0; i < len(line); {
+		for i < len(line) && isConntrackSpace(line[i]) {
+			i++
+		}
+		start := i
+		for i < len(line) && !isConntrackSpace(line[i]) {
+			i++
+		}
+		field := line[start:i]
+		if len(field) == 0 {
+			continue
+		}
+		// 条件都按「长度为 0」判断，和字符串版的 == "" 一致（空值的 "src=" 不算取到）。
+		if len(protocol) == 0 && (string(field) == "tcp" || string(field) == "udp") {
 			protocol = field
 			continue
 		}
-		if sourceIP == "" && strings.HasPrefix(field, "src=") {
-			sourceIP = strings.TrimPrefix(field, "src=")
+		if len(sourceIP) == 0 && bytes.HasPrefix(field, conntrackSrcPrefix) {
+			sourceIP = field[len(conntrackSrcPrefix):]
 			continue
 		}
-		if sourceIP != "" && targetIP == "" && strings.HasPrefix(field, "dst=") {
-			targetIP = strings.TrimPrefix(field, "dst=")
+		if len(sourceIP) > 0 && len(targetIP) == 0 && bytes.HasPrefix(field, conntrackDstPrefix) {
+			targetIP = field[len(conntrackDstPrefix):]
 			continue
 		}
-		if targetIP != "" && sourcePort == "" && strings.HasPrefix(field, "sport=") {
-			sourcePort = strings.TrimPrefix(field, "sport=")
+		if len(targetIP) > 0 && len(sourcePort) == 0 && bytes.HasPrefix(field, conntrackSportPrefix) {
+			sourcePort = field[len(conntrackSportPrefix):]
 			continue
 		}
-		if sourcePort != "" && strings.HasPrefix(field, "dport=") {
-			targetPort = strings.TrimPrefix(field, "dport=")
+		if len(sourcePort) > 0 && bytes.HasPrefix(field, conntrackDportPrefix) {
+			targetPort = field[len(conntrackDportPrefix):]
 			break
 		}
 	}
-	ok = protocol != "" && sourceIP != "" && targetIP != "" && sourcePort != "" && targetPort != ""
+	ok = len(protocol) > 0 && len(sourceIP) > 0 && len(targetIP) > 0 && len(sourcePort) > 0 && len(targetPort) > 0
 	return
+}
+
+var (
+	conntrackSrcPrefix   = []byte("src=")
+	conntrackDstPrefix   = []byte("dst=")
+	conntrackSportPrefix = []byte("sport=")
+	conntrackDportPrefix = []byte("dport=")
+)
+
+func isConntrackSpace(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f'
 }
 
 func conntrackConnections(port string) uint64 {
