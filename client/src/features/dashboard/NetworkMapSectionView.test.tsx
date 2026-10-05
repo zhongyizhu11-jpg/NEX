@@ -29,7 +29,8 @@ test("概览卡片：标题、状态胶囊、底下的图例（线路 / 转发 /
   assert.match(html, /线路 <b>2<\/b> · 转发 <b>2<\/b>/);
   assert.match(html, /data-tone="ok"[^>]*>.*?全部正常/, "没有断的、没有降级的，胶囊写全部正常");
   assert.doesNotMatch(html, /中断|降级/, "没有断的不写中断");
-  assert.ok((html.match(/<image [^>]*href="\/globe\/earth-day.jpg"/g) || []).length === 2, "底下铺着地球图（本体一份、+360° 一份）");
+  assert.match(html, /class="fx-overview-countries" data-style="plain"/, "底下铺着矢量国界底图");
+  assert.ok((html.match(/<path [^>]*vector-effect="non-scaling-stroke"/g) || []).length === 2, "国界画两份（本体一份、+360° 一份）");
   assert.match(html, /aria-label="概览：3 台主机，3 段连线"/);
   assert.match(html, /HK → JP · 隧道 live/);
   assert.match(html, /JP → 无坐标 · 2 条转发/);

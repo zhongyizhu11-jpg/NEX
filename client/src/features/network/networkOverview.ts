@@ -254,10 +254,12 @@ const LABEL_CANDIDATES: Array<[number, number]> = [
   [-1, -1], // 左上
   [1, 1], // 右下
   [-1, 1], // 左下
+  [0, -1], // 正上方
+  [0, 1], // 正下方
 ];
 
 /**
- * 摆标签：每台主机的胶囊在右上 / 左上 / 右下 / 左下里挑一个，不压别的主机点、不和已经摆好的
+ * 摆标签：每台主机的胶囊在右上 / 左上 / 右下 / 左下 / 正上 / 正下里挑一个，不压别的主机点、不和已经摆好的
  * 胶囊叠在一起、不出画布；都不行就取叠得最少的。从上到下摆，先摆的先占位。
  */
 export function placeOverviewLabels(
@@ -276,14 +278,16 @@ export function placeOverviewLabels(
     const h = line2 ? 36 : 24;
     let best: { dx: number; dy: number; score: number } | null = null;
     for (const [sx, sy] of LABEL_CANDIDATES) {
-      const dx = sx > 0 ? LABEL_GAP : -LABEL_GAP - w;
-      const dy = sy < 0 ? -h + 6 : -6;
+      const dx = sx > 0 ? LABEL_GAP : sx < 0 ? -LABEL_GAP - w : -Math.round(w / 2);
+      const dy = sx === 0 ? (sy < 0 ? -h - LABEL_GAP : LABEL_GAP) : sy < 0 ? -h + 6 : -6;
       const box = { x: node.x + dx, y: node.y + dy, w, h };
-      let score = 0;
-      if (box.x < 2) score += 2 - box.x;
-      if (box.x + box.w > width - 2) score += box.x + box.w - (width - 2);
-      if (box.y < 2) score += 2 - box.y;
-      if (box.y + box.h > height - 2) score += box.y + box.h - (height - 2);
+      // 出画布会被裁掉，比压住别的胶囊还难看：超出的那一条按面积的 4 倍算
+      let out = 0;
+      if (box.x < 2) out += (2 - box.x) * h;
+      if (box.x + box.w > width - 2) out += (box.x + box.w - (width - 2)) * h;
+      if (box.y < 2) out += (2 - box.y) * w;
+      if (box.y + box.h > height - 2) out += (box.y + box.h - (height - 2)) * w;
+      let score = out * 4;
       for (const other of taken) {
         const ox = Math.min(box.x + box.w, other.x + other.w) - Math.max(box.x, other.x);
         const oy = Math.min(box.y + box.h, other.y + other.h) - Math.max(box.y, other.y);
@@ -292,7 +296,10 @@ export function placeOverviewLabels(
       if (!best || score < best.score) best = { dx, dy, score };
       if (score === 0) break;
     }
-    const label = { id: node.id, dx: best!.dx, dy: best!.dy, width: w, height: h, line1, line2 };
+    // 哪个位置都放不下（画布太窄）就整体挪回画布里
+    const x = Math.min(Math.max(node.x + best!.dx, 2), width - 2 - w);
+    const y = Math.min(Math.max(node.y + best!.dy, 2), height - 2 - h);
+    const label = { id: node.id, dx: x - node.x, dy: y - node.y, width: w, height: h, line1, line2 };
     out.set(node.id, label);
     taken.push({ x: node.x + label.dx, y: node.y + label.dy, w, h });
   }
