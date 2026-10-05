@@ -1808,6 +1808,7 @@ button.fx-rule-tag:hover { filter: brightness(.96); }
 .dark .fx-overview-borders { stroke: #3d4149; }
 .fx-overview-count { font-size: 10.5px; font-weight: 700; fill: #fff; font-family: var(--fx-font); font-variant-numeric: tabular-nums; pointer-events: none; }
 .fx-overview-leader { fill: none; stroke: var(--fx-text-muted); stroke-opacity: 0.55; stroke-width: 1px; }
+.fx-overview-tether { fill: none; stroke: var(--fx-text-muted); stroke-opacity: 0.6; stroke-width: 1px; }
 .fx-overview-city[data-tone="down"] { fill: var(--fx-down-text); }
 .fx-overview-city[data-tone="warn"] { fill: var(--fx-warn-text); }
 .fx-overview-popover { position: absolute; z-index: var(--fx-z-raised); display: flex; flex-direction: column; padding: 6px; border-radius: 14px; background: var(--fx-l1-surface); box-shadow: 0 10px 30px -8px rgb(0 0 0 / 22%), 0 0 0 1px var(--fx-stroke-weak); font-size: 13px; }

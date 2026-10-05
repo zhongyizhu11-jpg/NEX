@@ -4,6 +4,7 @@ import {
   buildOverviewEdges,
   clusterOverviewBundles,
   layoutOverview,
+  overviewDotRadius,
   overviewBend,
   overviewCurve,
   overviewViewport,
@@ -20,16 +21,15 @@ import type { ForwardMapLink } from "@shared/forwardMapLinks";
 /**
  * 首页「概览」图：底下一层矢量世界底图（Natural Earth 50m 陆地 + 国界，等经纬投影，裁到主机所在的那片）：
  * 浅色是白色陆地 + 淡主色海面，深色是炭灰陆地，海面颜色跟着配色走。
- * 主机按真实经纬度落点，不为了避让挪位置；画布上挨得太近的几台合成一个点，点里写台数，点一下展开列表。
- * 每个点一枚一行的胶囊「旗 城市」（合点时「广州 · 香港」），近处放不下就挪远一点、画一根引线；
+ * 一座城市一个点：同城的几台合成一个，点里写台数，点一下展开列表；不同城市不合。
+ * 两座城市在画布上压在一起时（全图下的广州和香港），点各让开一点，真实位置留一个小点、细线连过去。
+ * 每个点一枚一行的胶囊「旗 城市」，近处放不下就挪远一点、画一根引线；
  * 有问题的点先摆、画在最上层、字是红 / 琥珀色。
  * 点之间的线合成一条：正常 = 主色实线 + 往出口流动的光点，降级 = 琥珀虚线，中断 = 红虚线、正中一个 ⊗，停用 = 灰虚线；
  * 两头在同一个点里的线不画，状态算进那个点的颜色。纯 SVG，没有瓦片、没有地图库、没有图片。
  *
  * 点单台主机去主机页，点合起来的点展开列表，点线去隧道页（这一对只有转发时去转发页）。
  */
-const NODE_R = 5.5;
-
 type NodeTone = "ok" | "warn" | "down" | "off";
 const TONE_RANK: Record<NodeTone, number> = { off: 0, ok: 1, warn: 2, down: 3 };
 
@@ -52,7 +52,7 @@ function clusterTone(cluster: OverviewCluster, inner: OverviewEdgeTone | undefin
 }
 
 function clusterRadius(cluster: OverviewCluster) {
-  return cluster.members.length <= 1 ? NODE_R : cluster.members.length < 10 ? 9.5 : 11;
+  return overviewDotRadius(cluster.members.length);
 }
 
 /** 提示和线的说明里怎么称呼一个点：单台写主机名，合起来的写城市 */
@@ -134,6 +134,13 @@ export function NetworkOverview({ model, forwardLinks, onOpen, initialWidth = 72
       return [node.id, set.size === 1 ? [...set][0] : null] as const;
     }));
   }, [model.nodes, placed]);
+  // 中断线正中的 ⊗：标签别盖住它
+  const marks = useMemo(() => bundles.flatMap((bundle) => {
+    const a = byId.get(bundle.from), b = byId.get(bundle.to);
+    if (bundle.tone !== "down" || !a || !b) return [];
+    const inset = Math.max(clusterRadius(a), clusterRadius(b)) + 5;
+    return [{ ...overviewCurve(a, b, overviewBend(bundle), inset).mid, r: 7 }];
+  }), [bundles, byId]);
   const labels = useMemo(
     () => placeOverviewLabels(
       placed.map((node) => ({
@@ -145,8 +152,9 @@ export function NetworkOverview({ model, forwardLinks, onOpen, initialWidth = 72
       })),
       width,
       height,
+      marks,
     ),
-    [placed, flags, tones, width, height],
+    [placed, flags, tones, width, height, marks],
   );
 
   const idBase = useId().replace(/:/g, "");
@@ -247,6 +255,25 @@ export function NetworkOverview({ model, forwardLinks, onOpen, initialWidth = 72
                 ) : null}
                 {/* 透明的粗一层，细线也点得中 */}
                 <path d={d} fill="none" stroke="transparent" strokeWidth={14} />
+              </g>
+            );
+          })}
+        </g>
+
+        {/* 被推开的城市：真实位置一个小点，细线连到画出来的点上 */}
+        <g aria-hidden="true" pointerEvents="none">
+          {placed.map((node) => {
+            const dx = node.x - node.anchor.x, dy = node.y - node.anchor.y;
+            const d = Math.hypot(dx, dy);
+            if (d < 2) return null;
+            const r = clusterRadius(node);
+            const tone = tones.get(node.id) ?? "off";
+            const color = tone === "ok" ? "var(--fx-primary-fill)" : TONE_STROKE[tone];
+            const ex = node.x - (dx / d) * r, ey = node.y - (dy / d) * r;
+            return (
+              <g key={node.id}>
+                {d > r ? <path d={`M${node.anchor.x.toFixed(1)} ${node.anchor.y.toFixed(1)} L${ex.toFixed(1)} ${ey.toFixed(1)}`} className="fx-overview-tether" /> : null}
+                <circle cx={node.anchor.x} cy={node.anchor.y} r={2.2} fill={color} />
               </g>
             );
           })}

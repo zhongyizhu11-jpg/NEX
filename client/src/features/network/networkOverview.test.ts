@@ -6,6 +6,8 @@ import {
   bundleOverviewEdges,
   clusterOverview,
   clusterOverviewBundles,
+  overviewDotRadius,
+  separateOverview,
   labelTextWidth,
   layoutOverview,
   overviewViewport,
@@ -49,7 +51,7 @@ test("取景：主机挤在一小片时至少取 28° × 14°，横竖比例尺�
   assert.equal(overviewViewport([node(1)], 390, 240), null);
 });
 
-test("落位：点就在真实经纬度上，不为了避让挪动；挨得比 18px 近的合成一个点（位置取重心），没定位的合成底下一个点", () => {
+test("落位：点就在真实经纬度上；一座城市一个点（同城几台合成一个），不同城市挨得再近也不合；没定位的合成底下一个点", () => {
   const nodes = [
     { ...node(1, [23.13, 113.26]), city: "广州" },
     { ...node(2, [23.13, 113.26]), city: "广州" },
@@ -61,32 +63,40 @@ test("落位：点就在真实经纬度上，不为了避让挪动；挨得比 1
   const viewport = overviewViewport(nodes, 390, 240)!;
   assert.ok(Math.abs(projected[3].x - viewport.x(151.21)) < 1e-6 && Math.abs(projected[3].y - viewport.y(-33.87)) < 1e-6, "悉尼就在悉尼");
   const clusters = layoutOverview(nodes, 390, 240);
-  const south = clusters.find((cluster) => cluster.members.some((member) => member.id === 1))!;
-  assert.deepEqual(south.members.map((member) => member.id), [1, 2, 3], "广州两台和香港挨得太近，合成一个点");
-  assert.equal(south.id, 1);
-  assert.equal(south.city, "广州 · 香港", "台数多的城市在前");
-  assert.equal(south.name, "3 台");
-  assert.equal(south.health, "down", "点的状态取最差的那台");
-  const cx = (projected[0].x * 2 + projected[2].x) / 3;
-  assert.ok(Math.abs(south.x - cx) < 1e-6, "合出来的点在重心");
+  const guangzhou = clusters.find((cluster) => cluster.id === 1)!;
+  assert.deepEqual(guangzhou.members.map((member) => member.id), [1, 2], "广州两台合成一个点");
+  assert.equal(guangzhou.city, "广州");
+  assert.equal(guangzhou.name, "2 台");
+  assert.ok(Math.abs(guangzhou.anchor.x - projected[0].x) < 1e-6 && Math.abs(guangzhou.anchor.y - projected[0].y) < 1e-6, "真实位置留在 anchor");
+  const hongkong = clusters.find((cluster) => cluster.id === 3)!;
+  assert.deepEqual(hongkong.members.map((member) => member.id), [3], "香港自己一个点");
+  assert.equal(hongkong.health, "down");
   const sydney = clusters.find((cluster) => cluster.id === 4)!;
-  assert.deepEqual(sydney.members.map((member) => member.id), [4]);
-  assert.equal(sydney.city, "悉尼");
+  assert.equal(sydney.x, sydney.anchor.x, "没跟别人压在一起的点不动");
   const unlocated = clusters.find((cluster) => cluster.unlocated)!;
   assert.deepEqual(unlocated.members.map((member) => member.id), [5]);
   assert.ok(clusters.filter((cluster) => !cluster.unlocated).every((cluster) => cluster.y < unlocated.y), "没定位的在最下面");
 });
 
-test("合点：有问题的主机不被正常的点吞掉，除非几乎压在一起", () => {
-  const at = (id: number, x: number, health: "healthy" | "down") => ({ id, name: `h${id}`, city: `c${id}`, health, x, y: 100, unlocated: false });
-  const apart = clusterOverview([at(1, 100, "healthy"), at(2, 100, "healthy"), at(3, 114, "down")]);
-  assert.equal(apart.length, 2, "差 14px：断了的那台自己一个点");
-  assert.equal(apart.find((cluster) => cluster.id === 3)!.health, "down");
-  const healthy = clusterOverview([at(1, 100, "healthy"), at(2, 100, "healthy"), at(3, 114, "healthy")]);
-  assert.equal(healthy.length, 1, "同样的距离，都正常就合");
-  const stacked = clusterOverview([at(1, 100, "healthy"), at(3, 106, "down")]);
-  assert.equal(stacked.length, 1, "差 6px：压在一起了，还是合");
-  assert.equal(stacked[0].health, "down");
+test("分开：两座城市压在一起时各让开，圆不再相叠、都在画布里，真实位置不变", () => {
+  const at = (id: number, x: number, y: number, city: string) => ({ id, name: `h${id}`, city, health: "healthy" as const, x, y, unlocated: false });
+  const clusters = clusterOverview([at(1, 200, 120, "广州"), at(2, 201, 120, "广州"), at(3, 202.5, 121, "香港"), at(4, 200, 119, "深圳")]);
+  assert.equal(clusters.length, 3, "三座城市三个点");
+  const separated = separateOverview(clusters, 390, 240);
+  for (let i = 0; i < separated.length; i += 1) {
+    for (let j = i + 1; j < separated.length; j += 1) {
+      const a = separated[i], b = separated[j];
+      const need = overviewDotRadius(a.members.length) + overviewDotRadius(b.members.length);
+      assert.ok(Math.hypot(a.x - b.x, a.y - b.y) >= need, `${a.city} 和 ${b.city} 不相叠`);
+    }
+  }
+  for (const cluster of separated) {
+    assert.ok(cluster.x > 0 && cluster.x < 390 && cluster.y > 0 && cluster.y < 240);
+    assert.ok(Math.hypot(cluster.x - cluster.anchor.x, cluster.y - cluster.anchor.y) < 30, "只让开一点");
+  }
+  assert.deepEqual(separated.find((cluster) => cluster.id === 3)!.anchor, { x: 202.5, y: 121 });
+  const again = separateOverview(clusters, 390, 240);
+  assert.deepEqual(again.map((cluster) => [cluster.x, cluster.y]), separated.map((cluster) => [cluster.x, cluster.y]), "每次结果一样");
 });
 
 test("合线：两头落在同一个点里的线不画，最差的状态记到那个点上；跨点的线照常合", () => {
@@ -104,7 +114,7 @@ test("合线：两头落在同一个点里的线不画，最差的状态记到�
   assert.deepEqual(bundles.map((bundle) => `${bundle.key}:${bundle.tone}:${bundle.tunnels}t/${bundle.forwards}f`), ["1-4:ok:1t/1f"]);
 });
 
-test("标签：一行「旗 城市」，合起来的点写「广州 · 香港」；有问题的先挑位置；挑不压别人的位置，都在画布里", () => {
+test("标签：一行「旗 城市」；有问题的先挑位置；挑不压别人的位置，都在画布里", () => {
   const nodes = [
     { ...node(1, [23.13, 113.26]), city: "广州" },
     { ...node(2, [23.13, 113.26]), city: "广州" },
