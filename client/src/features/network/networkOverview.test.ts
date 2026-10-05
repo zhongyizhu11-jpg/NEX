@@ -8,6 +8,7 @@ import {
   layoutOverview,
   overviewViewport,
   placeOverviewLabels,
+  truncateLabel,
   OVERVIEW_PAD_X,
 } from "./networkOverview";
 import { worldDots } from "./worldDots";
@@ -80,6 +81,16 @@ test("标签：城市 + 主机名两行，城市就是主机名时一行；挑�
   assert.ok(labelTextWidth("香港", 12) > labelTextWidth("HK", 12), "汉字比字母宽");
 });
 
+test("标签：太长的城市 / 主机名截掉加 …，胶囊不会比画布宽", () => {
+  const longName = "hk-entry-node-with-a-really-long-name-01";
+  const placed = layoutOverview([{ ...node(1, [22.3, 114.2]), name: longName }], 390, 240);
+  const [label] = placeOverviewLabels(placed.map((item) => ({ ...item, city: "一个特别特别长的城市名字", flag: null })), 390, 240);
+  assert.equal(label.line1, "一个特别特别长的城…");
+  assert.equal(label.line2, "hk-entry-node-wit…");
+  assert.ok(label.width <= 390 - 22, `${label.width}`);
+  assert.equal(truncateLabel("🇭🇰 香港", 10), "🇭🇰 香港", "够短的原样");
+});
+
 test("连线：隧道按经过的主机拆段，转发按对；两头不在图上的不画；同一对主机合成一条，状态取最差", () => {
   const model = {
     nodes: [1, 2, 3].map((id) => ({ ...node(id), countryCode: null, region: null, isOnline: true, linkCount: 0 })),
@@ -104,6 +115,17 @@ test("连线：隧道按经过的主机拆段，转发按对；两头不在图�
   assert.deepEqual(toDown.filter((edge) => edge.kind === "forward").map((edge) => edge.tone), ["warn", "off"], "开着的转发指向掉线主机算降级，停用的还是停用");
   assert.deepEqual(bundles.map((bundle) => `${bundle.key}:${bundle.tone}:${bundle.tunnels}t/${bundle.forwards}f`), ["1-2:down:2t/2f", "2-3:down:1t/0f"]);
   assert.deepEqual(bundles[0].tunnelNames, ["t", "u"]);
+  // 两条同名隧道是两条；同一条隧道来回经过同一对主机只算一次
+  const sameName = bundleOverviewEdges(buildOverviewEdges({
+    ...model,
+    links: [
+      { id: 1, name: "t", path: [1, 2], health: "healthy" as const, hopLatencies: [], kind: "healthy" as const },
+      { id: 2, name: "t", path: [1, 2], health: "healthy" as const, hopLatencies: [], kind: "healthy" as const },
+      { id: 3, name: "loop", path: [1, 2, 1], health: "healthy" as const, hopLatencies: [], kind: "healthy" as const },
+    ],
+  } as any, []));
+  assert.equal(sameName[0].tunnels, 3);
+  assert.deepEqual(sameName[0].tunnelNames, ["t", "loop"]);
 });
 
 test("世界点阵：解出来有几千个点，经纬度都在范围内，伦敦附近是陆地、太平洋中间不是", () => {

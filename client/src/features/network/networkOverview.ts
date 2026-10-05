@@ -28,6 +28,8 @@ export type OverviewEdgeTone = "ok" | "warn" | "down" | "off";
 export type OverviewEdge = {
   key: string;
   kind: OverviewEdgeKind;
+  /** 隧道 id（转发没有）：合线时按它去重，名字不唯一 */
+  tunnelId?: number;
   from: number;
   to: number;
   tone: OverviewEdgeTone;
@@ -218,7 +220,7 @@ export type OverviewLabel = {
   dy: number;
   width: number;
   height: number;
-  /** 第一行：旗 + 城市；第二行：主机名（和城市一样时只有一行） */
+  /** 第一行：旗 + 城市；第二行：主机名（和城市一样时只有一行）。太长的截掉加 … */
   line1: string;
   line2: string | null;
 };
@@ -237,6 +239,16 @@ export function labelTextWidth(text: string, fontSize: number): number {
 }
 
 const LABEL_GAP = 11;
+/** 胶囊里每行最多这么多字（汉字算 1），再长的截掉加 …；主机名可以随便起，胶囊不能盖住半张图 */
+const LABEL_MAX_CITY = 10;
+const LABEL_MAX_NAME = 18;
+
+/** 截到 max 个字（按码点数，旗帜的两个区域指示符算一个） */
+export function truncateLabel(text: string, max: number): string {
+  const chars = Array.from(String(text || "").trim());
+  if (chars.length <= max) return chars.join("");
+  return `${chars.slice(0, Math.max(1, max - 1)).join("")}…`;
+}
 const LABEL_CANDIDATES: Array<[number, number]> = [
   [1, -1], // 右上
   [-1, -1], // 左上
@@ -258,9 +270,9 @@ export function placeOverviewLabels(
   const out = new Map<number, OverviewLabel>();
   for (const node of order) {
     const city = node.city || node.name;
-    const line1 = [node.flag, city].filter(Boolean).join(" ");
-    const line2 = node.unlocated ? "未定位" : city === node.name ? null : node.name;
-    const w = Math.ceil(Math.max(labelTextWidth(line1, 12), line2 ? labelTextWidth(line2, 10) : 0) + 20);
+    const line1 = [node.flag, truncateLabel(city, LABEL_MAX_CITY)].filter(Boolean).join(" ");
+    const line2 = node.unlocated ? "未定位" : city === node.name ? null : truncateLabel(node.name, LABEL_MAX_NAME);
+    const w = Math.min(width - LABEL_GAP * 2, Math.ceil(Math.max(labelTextWidth(line1, 12), line2 ? labelTextWidth(line2, 10) : 0) + 20));
     const h = line2 ? 36 : 24;
     let best: { dx: number; dy: number; score: number } | null = null;
     for (const [sx, sy] of LABEL_CANDIDATES) {
@@ -309,7 +321,7 @@ export function buildOverviewEdges(model: Pick<NetworkMapModel, "nodes" | "links
     for (let i = 0; i < link.path.length - 1; i += 1) {
       const from = link.path[i], to = link.path[i + 1];
       if (from === to || !ids.has(from) || !ids.has(to)) continue;
-      edges.push({ key: `t${link.id}:${i}`, kind: "tunnel", from, to, tone, label: link.name, count: 1 });
+      edges.push({ key: `t${link.id}:${i}`, kind: "tunnel", tunnelId: link.id, from, to, tone, label: link.name, count: 1 });
     }
   }
   for (const link of forwardLinks) {
@@ -331,10 +343,11 @@ const TONE_RANK: Record<OverviewEdgeTone, number> = { off: 0, ok: 1, warn: 2, do
 
 /**
  * 合线：同一对主机之间的隧道段和转发合成一条，方向取第一条的方向（流动的光点往那边走），
- * 状态取最差的那条。同一条隧道在同一对主机之间只算一次。
+ * 状态取最差的那条。同一条隧道在同一对主机之间只算一次（按 id 去重，名字只用来写提示）。
  */
 export function bundleOverviewEdges(edges: readonly OverviewEdge[]): OverviewBundle[] {
   const bundles = new Map<string, OverviewBundle>();
+  const seenTunnels = new Map<string, Set<number>>();
   for (const edge of edges) {
     const lo = Math.min(edge.from, edge.to), hi = Math.max(edge.from, edge.to);
     const key = `${lo}-${hi}`;
@@ -342,12 +355,17 @@ export function bundleOverviewEdges(edges: readonly OverviewEdge[]): OverviewBun
     if (!bundle) {
       bundle = { key, from: edge.from, to: edge.to, tone: edge.tone, tunnels: 0, tunnelNames: [], forwards: 0 };
       bundles.set(key, bundle);
+      seenTunnels.set(key, new Set());
     }
     if (TONE_RANK[edge.tone] > TONE_RANK[bundle.tone]) bundle.tone = edge.tone;
     if (edge.kind === "tunnel") {
-      if (!bundle.tunnelNames.includes(edge.label)) {
-        bundle.tunnelNames.push(edge.label);
+      // 同一条隧道在同一对主机之间只算一次（按 id：两条隧道可以同名）
+      const seen = seenTunnels.get(key)!;
+      const id = edge.tunnelId ?? Number.NaN;
+      if (!seen.has(id)) {
+        seen.add(id);
         bundle.tunnels += 1;
+        if (!bundle.tunnelNames.includes(edge.label)) bundle.tunnelNames.push(edge.label);
       }
     } else {
       bundle.forwards += edge.count;
