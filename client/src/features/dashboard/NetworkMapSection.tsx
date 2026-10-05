@@ -6,10 +6,10 @@ import { describeNetworkHealth } from "@shared/networkHealth";
 import type { ForwardMapLink } from "@shared/forwardMapLinks";
 
 /**
- * 首页的「概览」：这个账号看得到的主机，按真实位置摆在一张裁到它们范围的矢量世界底图上，主机之间的
+ * 首页的「概览」：这个账号看得到的主机，按真实经纬度落在一张裁到它们范围的矢量世界底图上（挨太近的合成一个点），主机之间的
  * 隧道和转发合成一条线（components/network/NetworkOverview）。标题行右边一枚状态胶囊
- * （全部正常 / N 台离线 / N 条降级 / N 条中断），图例在卡片底下一行：线路几条、转发几条、
- * 画成降级 / 中断的线几条、几台主机。
+ * （全部正常 / N 台离线 / N 条降级 / N 条中断，按隧道数），图例在卡片底下一行：只说线的画法
+ * （正常 / 降级 / 中断，图上有才列）和几台主机，总数看页头。
  *
  * 这个文件整个由首页的 NetworkMapSlot lazy 进来（模型、中文地名表、国界底图都不进首屏包）；数据是 Slot
  * 早就发出去的那几条请求。一台主机都没有时整块不出现：那是「快速开始」的事。
@@ -61,11 +61,15 @@ export function NetworkOverviewSection({ model, forwardLinks, onOpen }: {
       <div className="fx-overview-canvas mx-2.5">
         <NetworkOverview model={model} forwardLinks={forwardLinks} onOpen={onOpen} />
       </div>
+      {/*
+        图例只说线的画法，不再自己数一遍：总数在页头（N 条线路 · N 条转发），状态在右上角的胶囊，
+        三处各数各的只会对不上（2.3.410 真机上「1 条中断」和「中断 2」并排）。
+      */}
       <div className="fx-overview-legend">
-        <span><span aria-hidden="true" className="fx-overview-swatch" data-tone="ok" />线路 <b>{counts.tunnels}</b> · 转发 <b>{counts.forwards}</b></span>
-        {lines.warn > 0 ? <span className="text-[var(--fx-warn-text)]"><span aria-hidden="true" className="fx-overview-swatch" data-tone="warn" />降级 <b>{lines.warn}</b></span> : null}
-        {lines.down > 0 ? <span className="text-[var(--fx-down-text)]"><span aria-hidden="true" className="fx-overview-swatch" data-tone="down" />中断 <b>{lines.down}</b></span> : null}
-        <span className="ml-auto">{model.nodes.length} 台主机</span>
+        <span><span aria-hidden="true" className="fx-overview-swatch" data-tone="ok" />正常</span>
+        {lines.warn > 0 ? <span className="text-[var(--fx-warn-text)]"><span aria-hidden="true" className="fx-overview-swatch" data-tone="warn" />降级</span> : null}
+        {lines.down > 0 ? <span className="text-[var(--fx-down-text)]"><span aria-hidden="true" className="fx-overview-swatch" data-tone="down" />中断</span> : null}
+        <span className="ml-auto tabular-nums">{model.nodes.length} 台主机</span>
       </div>
       {model.hiddenLinkCount > 0 ? (
         <div className="px-4 pb-3 text-meta tabular-nums text-muted-foreground">{model.hiddenLinkCount} 条隧道经过你看不到的主机，没有画出来</div>

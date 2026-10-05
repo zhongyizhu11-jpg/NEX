@@ -11,7 +11,7 @@ const host = (id: number, name: string, geo?: [number, number], countryCode?: st
   ...(countryCode ? { geoCountryCode: countryCode } : {}),
 });
 
-test("概览卡片：标题、状态胶囊、底下的图例（线路 / 转发 / 主机），图里有国界底图、主机点和合成的线，没有地图引擎的壳", () => {
+test("概览卡片：标题、状态胶囊、底下的图例（线的画法 + 主机数，不再自己数线路），图里有陆地和国界底图、主机点和合成的线，没有地图引擎的壳", () => {
   const model = buildNetworkMapModel({
     now,
     hosts: [host(1, "HK", [22.32, 114.17], "HK"), host(2, "JP", [35.68, 139.65]), host(3, "无坐标")],
@@ -26,12 +26,14 @@ test("概览卡片：标题、状态胶囊、底下的图例（线路 / 转发 /
   assert.match(html, /aria-label="概览"/);
   assert.match(html, />概览</);
   assert.match(html, /3 台主机/);
-  assert.match(html, /线路 <b>2<\/b> · 转发 <b>2<\/b>/);
+  assert.match(html, /data-tone="ok"><\/span>正常/);
+  assert.doesNotMatch(html, /线路 <b>/, "图例不再自己数线路 / 转发：总数在页头，三处各数各的会对不上");
   assert.match(html, /data-tone="ok"[^>]*>.*?全部正常/, "没有断的、没有降级的，胶囊写全部正常");
   assert.doesNotMatch(html, /中断|降级/, "没有断的不写中断");
-  assert.match(html, /class="fx-overview-countries"/, "底下铺着矢量国界底图");
-  assert.ok((html.match(/<path [^>]*vector-effect="non-scaling-stroke"/g) || []).length === 2, "国界画两份（本体一份、+360° 一份）");
-  assert.match(html, /aria-label="概览：3 台主机，3 段连线"/);
+  assert.match(html, /class="fx-overview-land"/, "底下铺着陆地");
+  assert.match(html, /class="fx-overview-borders"/, "和陆地国界");
+  assert.equal((html.match(/<path [^>]*vector-effect="non-scaling-stroke"/g) || []).length, 4, "陆地、国界各画两份（本体一份、+360° 一份）");
+  assert.match(html, /aria-label="概览：3 台主机，3 个地点，3 段连线"/);
   assert.match(html, /HK → JP · 隧道 live/);
   assert.match(html, /JP → 无坐标 · 2 条转发/);
   assert.match(html, /HK → 无坐标 · 隧道 paused · 停用/);
@@ -40,7 +42,7 @@ test("概览卡片：标题、状态胶囊、底下的图例（线路 / 转发 /
   assert.doesNotMatch(html, /nm-mini|maplibre/);
 });
 
-test("概览卡片：有主机掉线时胶囊写几台离线，指向它的转发在图例里算降级", () => {
+test("概览卡片：有主机掉线时胶囊写几台离线，指向它的转发画成降级、图例列出降级", () => {
   const model = buildNetworkMapModel({
     now,
     hosts: [host(1, "HK", [22.32, 114.17]), { ...host(2, "JP", [35.68, 139.65]), isOnline: false, lastHeartbeat: now - 10 * 60_000 }],
@@ -50,7 +52,7 @@ test("概览卡片：有主机掉线时胶囊写几台离线，指向它的转�
     <NetworkOverviewSection model={model} forwardLinks={[{ fromHostId: 1, toHostId: 2, rules: 1, enabled: 1 }]} onOpen={() => {}} />,
   );
   assert.match(html, /data-tone="warn"[^>]*>.*?1 台离线/);
-  assert.match(html, /降级 <b>1<\/b>/);
+  assert.match(html, /data-tone="warn"><\/span>降级/, "指向掉线主机的转发画成降级，图例列出降级");
   assert.doesNotMatch(html, /中断/);
 });
 
