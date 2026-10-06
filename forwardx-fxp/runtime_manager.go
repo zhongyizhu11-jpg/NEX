@@ -770,6 +770,7 @@ type fxpReloadRequest struct {
 
 // runManaged 启动运行时并一直跑到 done；reloads 送来的新配置原地生效。
 func runManaged(done <-chan struct{}, cfg config, reloads <-chan fxpReloadRequest) error {
+	applyTCPCongestionConfig(cfg)
 	manager := newFXPRuntimeManager(strings.ToLower(cfg.Role))
 	if err := manager.apply(cfg); err != nil {
 		manager.shutdown()
@@ -794,6 +795,7 @@ func runManaged(done <-chan struct{}, cfg config, reloads <-chan fxpReloadReques
 			}
 			if err == nil {
 				cfg = request.cfg
+				applyTCPCongestionConfig(cfg)
 				log.Printf("fxp config reloaded role=%s tunnel=%d", cfg.Role, cfg.TunnelID)
 			} else {
 				log.Printf("fxp config reload rejected, previous config keeps running: %v", err)

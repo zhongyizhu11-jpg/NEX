@@ -52,6 +52,8 @@ function nodeToRow(node: ProxyNode, sourceLink: string) {
     udp: node.udp,
     obfs: node.obfs || null,
     obfsPassword: node.obfsPassword || null,
+    upMbps: node.upMbps || 0,
+    downMbps: node.downMbps || 0,
     congestionControl: node.congestionControl || null,
     udpRelayMode: node.udpRelayMode || null,
     disableSni: node.disableSni,

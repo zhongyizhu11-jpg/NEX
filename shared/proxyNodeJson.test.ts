@@ -400,3 +400,29 @@ test("妙妙屋X 那种 AnyTLS 服务端入站：password 也在 settings.users 
   assert.equal(result.node.sni, "your.domain.com");
   assert.equal(result.node.tls, true);
 });
+
+test("hysteria2 的带宽：mihomo 的 up/down 带单位、Stash 的 up-speed/down-speed 与 auth、sing-box 的 up_mbps/down_mbps", () => {
+  const mihomo = ok(JSON.stringify({
+    name: "HY2", type: "hysteria2", server: "1.2.3.4", port: 443, password: "pw", up: "30 Mbps", down: "1 Gbps",
+  }));
+  assert.equal(mihomo.node.upMbps, 30);
+  assert.equal(mihomo.node.downMbps, 1000);
+
+  const stash = ok(JSON.stringify({
+    name: "HY2", type: "hysteria2", server: "1.2.3.4", port: 443, auth: "pw", "up-speed": 20, "down-speed": 200,
+  }));
+  assert.equal(stash.node.password, "pw");
+  assert.equal(stash.node.upMbps, 20);
+  assert.equal(stash.node.downMbps, 200);
+
+  const singbox = ok(JSON.stringify({
+    type: "hysteria2", tag: "HY2", server: "1.2.3.4", server_port: 443, password: "pw", up_mbps: 10, down_mbps: 100,
+  }));
+  assert.equal(singbox.node.upMbps, 10);
+  assert.equal(singbox.node.downMbps, 100);
+
+  // 不填、填错都当成没声明。
+  const none = ok(JSON.stringify({ name: "HY2", type: "hysteria2", server: "1.2.3.4", port: 443, password: "pw", up: "fast" }));
+  assert.equal(none.node.upMbps, 0);
+  assert.equal(none.node.downMbps, 0);
+});

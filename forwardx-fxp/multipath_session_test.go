@@ -195,6 +195,10 @@ func TestMultipathSessionCompletesAfterOneLegDies(t *testing.T) {
 
 func TestMultipathSessionFailsWhenEveryLegDies(t *testing.T) {
 	pair := newMultipathTestPair(t, 2, 16)
+	// 小写会并进同一片，这里要的是每次写都往死腿上递一片。
+	pair.client.mu.Lock()
+	pair.client.coalesceLimit = 0
+	pair.client.mu.Unlock()
 	for _, leg := range pair.client.legs {
 		_ = leg.sec.conn.Close()
 	}

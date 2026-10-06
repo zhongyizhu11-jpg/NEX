@@ -103,6 +103,15 @@ export type ProxyNode = {
   obfs: string;
   /** Hysteria2 的混淆密码 */
   obfsPassword: string;
+  /**
+   * Hysteria2 客户端向服务端声明的带宽（Mbps），0 表示不声明。
+   *
+   * 填了之后 Hysteria2 走 Brutal 拥塞控制：按这个速率发包，不把跨境线路的丢包当
+   * 拥塞，单条连接也能跑到声明的速率 —— 这正是 BBR / cubic 在高丢包线路上做不到
+   * 的。不填就退回 BBR。服务端若也配了上限，实际取两者较小值。
+   */
+  upMbps: number;
+  downMbps: number;
   /** TUIC 的拥塞控制：cubic / new_reno / bbr */
   congestionControl: string;
   /** TUIC 的 UDP 转发模式：native 或 quic */
@@ -154,6 +163,8 @@ export function createEmptyProxyNode(): ProxyNode {
     udp: true,
     obfs: "",
     obfsPassword: "",
+    upMbps: 0,
+    downMbps: 0,
     congestionControl: "",
     udpRelayMode: "",
     disableSni: false,

@@ -746,6 +746,12 @@ export function proxyNodeFromInbound(
   node.alpn = [...inbound.alpn];
   node.obfs = inbound.obfs;
   node.obfsPassword = inbound.obfsPassword;
+  // 入站上声明的带宽就是客户端该按的速率：Hysteria2 的 Brutal 靠客户端报的这个
+  // 数发包，不带过去客户端就只能退回 BBR，跨境丢包一重单连接就起不来。
+  if (inbound.protocol === "hysteria2") {
+    node.upMbps = Math.max(0, Math.floor(Number(inbound.upMbps) || 0));
+    node.downMbps = Math.max(0, Math.floor(Number(inbound.downMbps) || 0));
+  }
   node.congestionControl = inbound.congestionControl;
   node.snellVersion = inbound.snellVersion;
   node.snellMode = inbound.snellMode;
