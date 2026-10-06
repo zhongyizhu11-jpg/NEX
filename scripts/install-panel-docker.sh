@@ -10,7 +10,7 @@ PORT="${EXPLICIT_PORT:-9810}"
 REPO_SLUG="${FORWARDX_GITHUB_REPO:-zhongyizhu11-jpg/NEX}"
 IMAGE_REPO="${FORWARDX_IMAGE_REPO:-ghcr.io/zhongyizhu11-jpg/forwardx}"
 ASSETS_PENDING_EXIT_CODE=12
-# 面板端靠 "[ForwardX] step N/M …" 行画进度条，改动格式要连 client/src/lib/panelUpgrade.ts 一起改。
+# 面板端靠 "[NEX] step N/M …" 行画进度条，改动格式要连 client/src/lib/panelUpgrade.ts 一起改。
 PANEL_STEP_TOTAL=4
 SCRIPT_STARTED_AT="$(date +%s)"
 ENABLE_ADMIN_ACCOUNT="false"
@@ -229,7 +229,7 @@ release_tag_from_url() {
 }
 
 panel_step() {
-  echo "[ForwardX] step $1/$PANEL_STEP_TOTAL $2"
+  echo "[NEX] step $1/$PANEL_STEP_TOTAL $2"
 }
 
 elapsed_seconds() {
@@ -362,7 +362,7 @@ EOF
     return
   fi
 
-  echo "[INFO] Database host must be reachable from inside the ForwardX panel container." > /dev/tty
+  echo "[INFO] Database host must be reachable from inside the NEX panel container." > /dev/tty
   echo "[INFO] If the database runs on the host, try host.docker.internal or the host LAN IP instead of 127.0.0.1." > /dev/tty
   echo "[INFO] If the database runs in another container, make sure both containers share a Docker network and use the database service/container name." > /dev/tty
 
@@ -717,7 +717,7 @@ remove_existing_panel_containers() {
   while IFS= read -r id; do
     [ -z "$id" ] && continue
     if docker rm -f "$id" >/dev/null 2>&1; then
-      echo "[INFO] Removed previous ForwardX container: $id"
+      echo "[INFO] Removed previous NEX container: $id"
     fi
   done <<< "$ids"
 }
@@ -754,7 +754,7 @@ assert_target_image_ready() {
   normalized_label="$(printf "%s" "$label_version" | tr '[:upper:]' '[:lower:]')"
 
   if [ "$package_version" != "$expected" ]; then
-    echo "[ERROR] Pulled ForwardX image failed version verification: $image"
+    echo "[ERROR] Pulled NEX image failed version verification: $image"
     echo "[ERROR] Expected v$expected; package=${package_version:-unreadable}; label=${label_version:-unreadable}"
     echo "[INFO] The release image may still be publishing, or a Docker registry mirror/proxy may be serving stale content."
     echo "[INFO] Check 'docker info' for Registry Mirrors, bypass or purge the stale mirror cache, then retry the upgrade."
@@ -768,7 +768,7 @@ assert_target_image_ready() {
     "$expected")
       ;;
     *)
-      echo "[ERROR] Pulled ForwardX image label conflicts with its expected version: $image"
+      echo "[ERROR] Pulled NEX image label conflicts with its expected version: $image"
       echo "[ERROR] Expected v$expected; package=v$package_version; label=v$label_version"
       echo "[INFO] A Docker registry mirror/proxy may be serving stale or inconsistent image metadata."
       echo "[INFO] Check 'docker info' for Registry Mirrors, bypass or purge the stale mirror cache, then retry the upgrade."
@@ -805,12 +805,12 @@ assert_running_panel_ready() {
   done
 
   if [ "$running" != "true" ]; then
-    echo "[ERROR] ForwardX container did not remain running after recreation: $CONTAINER_NAME"
+    echo "[ERROR] NEX container did not remain running after recreation: $CONTAINER_NAME"
     echo "[INFO] Inspect it with: docker logs --tail 100 $CONTAINER_NAME"
     return 1
   fi
   if [ -z "$running_version" ]; then
-    echo "[ERROR] Unable to read the ForwardX version from the running container: $CONTAINER_NAME"
+    echo "[ERROR] Unable to read the NEX version from the running container: $CONTAINER_NAME"
     echo "[INFO] Inspect it with: docker logs --tail 100 $CONTAINER_NAME"
     return 1
   fi
@@ -825,12 +825,12 @@ assert_running_panel_ready() {
   running_version="$(normalize_version "$running_version")"
   expected_version="$(normalize_version "$expected_version")"
   if [ -n "$expected_version" ] && [ "$running_version" != "$expected_version" ]; then
-    echo "[ERROR] Running ForwardX version mismatch: expected v$expected_version, got ${running_version:+v}${running_version:-unreadable}"
+    echo "[ERROR] Running NEX version mismatch: expected v$expected_version, got ${running_version:+v}${running_version:-unreadable}"
     echo "[INFO] The container image ID is correct, but its runtime package is inconsistent. Check Docker storage and registry mirror integrity."
     return 1
   fi
 
-  echo "[INFO] Verified running ForwardX container: image=$active_image_id version=${running_version:+v}$running_version"
+  echo "[INFO] Verified running NEX container: image=$active_image_id version=${running_version:+v}$running_version"
 }
 
 image_repository_from_ref() {
@@ -856,14 +856,14 @@ cleanup_old_panel_images() {
 
   running="$(docker inspect --format '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null || true)"
   if [ "$running" != "true" ]; then
-    echo "[WARN] ForwardX container is not running; old image cleanup skipped."
+    echo "[WARN] NEX container is not running; old image cleanup skipped."
     return
   fi
 
   current_image_id="$(docker inspect --format '{{.Image}}' "$CONTAINER_NAME" 2>/dev/null || true)"
   repository="$(image_repository_from_ref "$image")"
   if [ -z "$current_image_id" ] || [ -z "$repository" ]; then
-    echo "[WARN] Unable to identify the active ForwardX image; old image cleanup skipped."
+    echo "[WARN] Unable to identify the active NEX image; old image cleanup skipped."
     return
   fi
 
@@ -878,9 +878,9 @@ cleanup_old_panel_images() {
 
     image_ref="${listed_repository}:${tag}"
     if docker image rm "$image_ref" >/dev/null 2>&1; then
-      echo "[INFO] Removed old ForwardX image: $image_ref"
+      echo "[INFO] Removed old NEX image: $image_ref"
     else
-      echo "[WARN] Could not remove old ForwardX image (it may still be in use): $image_ref"
+      echo "[WARN] Could not remove old NEX image (it may still be in use): $image_ref"
     fi
   done <<< "$rows"
 }
@@ -908,7 +908,7 @@ start_panel() {
   remove_existing_panel_containers
   ensure_data_volume
   # 容器里点的升级（挂了 docker.sock 时）会随旧容器一起被杀，后面的行到不了面板日志，用时先报一次。
-  echo "[ForwardX] restarting panel service (elapsed $(elapsed_seconds)s)"
+  echo "[NEX] restarting panel service (elapsed $(elapsed_seconds)s)"
   compose_cmd --env-file "$APP_DIR/.env" -p "$PROJECT_NAME" up -d --remove-orphans forwardx
   panel_step 4 "等待面板就绪"
   assert_running_panel_ready "$pulled_image_id" "$expected_version"
@@ -929,8 +929,8 @@ install_panel() {
   write_env "$image"
   write_database_config_to_volume
   start_panel "$image" "$EXPECTED_PANEL_VERSION"
-  echo "[ForwardX] elapsed $(elapsed_seconds)s"
-  echo "[DONE] ForwardX Docker panel started in $(elapsed_seconds)s: http://SERVER_IP:$PORT"
+  echo "[NEX] elapsed $(elapsed_seconds)s"
+  echo "[DONE] NEX Docker panel started in $(elapsed_seconds)s: http://SERVER_IP:$PORT"
   echo "[INFO] Image: $image"
 }
 
@@ -946,8 +946,8 @@ upgrade_panel() {
   write_compose_file
   write_env "$image"
   start_panel "$image" "$EXPECTED_PANEL_VERSION"
-  echo "[ForwardX] elapsed $(elapsed_seconds)s"
-  echo "[DONE] ForwardX Docker panel upgraded and restarted in $(elapsed_seconds)s"
+  echo "[NEX] elapsed $(elapsed_seconds)s"
+  echo "[DONE] NEX Docker panel upgraded and restarted in $(elapsed_seconds)s"
   echo "[INFO] Image: $image"
 }
 
@@ -957,7 +957,7 @@ uninstall_panel() {
   local volume_remove_failed="false"
   require_root
   load_existing_env
-  if ! confirm_yes "Confirm uninstall ForwardX Docker panel and delete deployment dir + Docker volume? [y/N] "; then
+  if ! confirm_yes "Confirm uninstall NEX Docker panel and delete deployment dir + Docker volume? [y/N] "; then
     echo "[INFO] Uninstall cancelled"
     return
   fi
@@ -983,13 +983,13 @@ uninstall_panel() {
     fi
   done <<< "$volume_names"
   if [ "$volume_remove_failed" = "true" ]; then
-    echo "[ERROR] ForwardX containers were removed, but persistent data was not fully deleted."
+    echo "[ERROR] NEX containers were removed, but persistent data was not fully deleted."
     echo "[INFO] Deployment metadata is retained at $APP_DIR so the remaining volume can be located and the uninstall retried."
     return 1
   fi
   rm -rf "$APP_DIR"
   echo "[INFO] External MySQL/PostgreSQL database contents, if configured, were not deleted."
-  echo "[DONE] ForwardX Docker panel uninstalled"
+  echo "[DONE] NEX Docker panel uninstalled"
 }
 
 reset_admin_password() {
@@ -1002,7 +1002,7 @@ reset_admin_password() {
   load_existing_env
   running="$(docker inspect --format '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null || true)"
   if [ "$running" != "true" ]; then
-    echo "[ERROR] ForwardX container is not running: $CONTAINER_NAME"
+    echo "[ERROR] NEX container is not running: $CONTAINER_NAME"
     echo "[INFO] Start the panel and retry; no container or database data was changed."
     return 1
   fi

@@ -96,12 +96,12 @@ install_runtime_dependencies
     "pnpm install --prod --frozen-lockfile --prefer-offline",
     "pnpm install --prod --frozen-lockfile --prefer-offline",
   ]);
-  const stepLines = result.stdout.split("\n").filter((line) => line.startsWith("[ForwardX] step 4/5"));
+  const stepLines = result.stdout.split("\n").filter((line) => line.startsWith("[NEX] step 4/5"));
   assert.deepEqual(stepLines, [
-    "[ForwardX] step 4/5 安装依赖",
-    "[ForwardX] step 4/5 依赖未变化，跳过安装",
-    "[ForwardX] step 4/5 依赖未变化，跳过安装",
-    "[ForwardX] step 4/5 安装依赖",
+    "[NEX] step 4/5 安装依赖",
+    "[NEX] step 4/5 依赖未变化，跳过安装",
+    "[NEX] step 4/5 依赖未变化，跳过安装",
+    "[NEX] step 4/5 安装依赖",
   ]);
   assert.match(result.stdout, /Dependencies unchanged since last install, skipping pnpm install/);
   assert.match(result.fingerprint, /^[0-9a-f]{64}$/);
@@ -131,8 +131,8 @@ install_runtime_dependencies
   assert.equal(result.status, 0, result.stderr || result.stdout);
   assert.match(result.stdout, /Recorded the dependency fingerprint of the running install/);
   assert.deepEqual(result.calls, ["pnpm install --prod --frozen-lockfile --prefer-offline"], "only the real lockfile change installs");
-  const stepLines = result.stdout.split("\n").filter((line) => line.startsWith("[ForwardX] step 4/5"));
-  assert.deepEqual(stepLines, ["[ForwardX] step 4/5 依赖未变化，跳过安装", "[ForwardX] step 4/5 安装依赖"]);
+  const stepLines = result.stdout.split("\n").filter((line) => line.startsWith("[NEX] step 4/5"));
+  assert.deepEqual(stepLines, ["[NEX] step 4/5 依赖未变化，跳过安装", "[NEX] step 4/5 安装依赖"]);
 });
 
 test("without node_modules there is nothing to seed and the installer installs", { skip: !bash }, () => {
@@ -238,9 +238,9 @@ printf 'CODE=%s SIZE=%s\\n' "$code" "$(file_size_bytes "$APP_DIR/panel.tar.gz")"
   });
   assert.equal(result.status, 0, result.stderr || result.stdout);
   assert.equal(result.stdout.trim(), "CODE=200 SIZE=3072");
-  const progress = result.stderr.split("\n").filter((line) => line.startsWith("[ForwardX] progress download "));
+  const progress = result.stderr.split("\n").filter((line) => line.startsWith("[NEX] progress download "));
   assert.ok(progress.length >= 2, `expected intermediate progress lines, got:\n${result.stderr}`);
   // 跟随跳转后取最后一个 Content-Length，最终一行必须是 100%。
-  assert.equal(progress[progress.length - 1], "[ForwardX] progress download 3072/3072 100%");
+  assert.equal(progress[progress.length - 1], "[NEX] progress download 3072/3072 100%");
   assert.ok(progress.some((line) => /\/3072 (33|66)%$/.test(line)), progress.join("\n"));
 });

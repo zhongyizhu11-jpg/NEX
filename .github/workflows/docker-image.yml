@@ -74,8 +74,8 @@ jobs:
           platforms: ${{ matrix.platform }}
           outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
           labels: |
-            org.opencontainers.image.title=ForwardX
-            org.opencontainers.image.description=ForwardX port forwarding panel
+            org.opencontainers.image.title=NEX
+            org.opencontainers.image.description=NEX port forwarding panel
             org.opencontainers.image.version=${{ needs.prepare.outputs.version }}
             org.forwardx.version=${{ needs.prepare.outputs.version }}
           build-args: |

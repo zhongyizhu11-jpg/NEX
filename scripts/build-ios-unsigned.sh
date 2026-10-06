@@ -15,7 +15,7 @@ test -f ios/App/App/public/index.html
 xcrun swift scripts/prepare-ios-assets.swift "$ROOT"
 mkdir -p ios/build
 STAGING="$(mktemp -d "$ROOT/ios/build/ipa.XXXXXX")"
-ARCHIVE="$STAGING/ForwardX.xcarchive"
+ARCHIVE="$STAGING/NEX.xcarchive"
 OUTPUT="$ROOT/ios/build/forwardx-ios-v$VERSION-unsigned.ipa"
 
 xcodebuild -project ios/App/App.xcodeproj -scheme App \

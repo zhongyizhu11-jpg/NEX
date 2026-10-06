@@ -151,7 +151,7 @@ async function downloadAgentAssetToCache(version: string, asset: string) {
         headers: {
           "Cache-Control": "no-cache",
           Pragma: "no-cache",
-          "User-Agent": `ForwardX/${APP_VERSION}`,
+          "User-Agent": `NEX/${APP_VERSION}`,
         },
       });
       if (!res.ok || !res.body) {

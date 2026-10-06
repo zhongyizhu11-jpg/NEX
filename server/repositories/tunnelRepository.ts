@@ -43,7 +43,7 @@ import { LINK_PROBE_FRESH_MS, LINK_PROBE_MAX_FUTURE_SKEW_MS } from "../../shared
 // The Agent uses the tunnel row's listener for the lowest-id active GOST
 // rule. Nginx Stream follows the same convention. Keep this predicate local
 // to the allocation repository so every writer applies the same ownership
-// rule; ForwardX has a separate endpoint allocator and is intentionally not
+// rule; NEX has a separate endpoint allocator and is intentionally not
 // included here.
 const SHARED_TUNNEL_PRIMARY_LISTENER_MODES = new Set([
   "tls",
@@ -1514,8 +1514,8 @@ export async function reconcileTunnelRulePrimaryExitPorts(
   if (!Number.isInteger(tunnelId) || tunnelId <= 0) return { processed: 0, changed: 0 };
   const tunnel = await getTunnelById(tunnelId) || tunnelInput;
   const mode = String(tunnel?.mode || "").trim().toLowerCase();
-  // ForwardX does not use forwardRules.tunnelExitPort for its transport; its
-  // endpoint/mimic state is reconciled by the dedicated ForwardX paths.
+  // NEX does not use forwardRules.tunnelExitPort for its transport; its
+  // endpoint/mimic state is reconciled by the dedicated NEX paths.
   if (!tunnel || mode === "forwardx") return { processed: 0, changed: 0 };
   const hostId = Number(options.hostId || tunnel?.exitHostId || 0);
   const listenPort = Number(options.listenPort ?? tunnel?.listenPort ?? 0);

@@ -28,7 +28,7 @@ test("relay failover requires a supported runtime and at least two relay candida
   assert.equal(isTunnelRelayFailover({ relayMode: "failover", mode: "nginx_stream" }, hops), false);
 });
 
-test("aggregate mode is recognised only for the ForwardX protocol", () => {
+test("aggregate mode is recognised only for the NEX protocol", () => {
   const hops = [{ id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }];
   assert.equal(normalizeTunnelRelayMode("aggregate"), "aggregate");
   assert.equal(tunnelRelayAggregateSupported("forwardx"), true);

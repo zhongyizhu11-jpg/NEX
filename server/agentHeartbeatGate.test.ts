@@ -98,7 +98,7 @@ test("legacy string booleans do not enable tunnel transport options", () => {
   assert.equal(normalized.zeroCopy, false);
 });
 
-test("retires stale ForwardX Nginx state without requiring or reinstalling Nginx", () => {
+test("retires stale NEX Nginx state without requiring or reinstalling Nginx", () => {
   const plan = buildNginxRuntimeRetirementPlan();
   const commands = plan.commands.join("\n");
 
@@ -362,7 +362,7 @@ test("GOST TCP rule listeners remain free of UDP session metadata", () => {
   assert.deepEqual(buildGostRuleListener("tcp"), { type: "tcp" });
 });
 
-test("ForwardX UDP targets prefer the heartbeat-resolved address", () => {
+test("NEX UDP targets prefer the heartbeat-resolved address", () => {
   assert.equal(forwardXUDPTargetAddress({
     targetIp: "192.0.2.20",
     _originalTargetIp: "game.example.com",

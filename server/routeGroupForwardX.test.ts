@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 
 /**
- * 线路组走 ForwardX 隧道。
+ * 线路组走 NEX 隧道。
  *
  * FXP 的出口是整条隧道共用的一个进程，按入口握手里给的目标拨出去（UDP 按面板给出口的
  * udpTargets），调度器只能放在出口机上（server/agentHeartbeatRoute.ts 的 forwardXSchedulerFailover）：
@@ -75,21 +75,21 @@ function run(): Outcome {
         [id, name, ip, ip, "slave", token, version, now],
       );
     }
-    // 隧道 1：ForwardX，入口 2、出口 1。
+    // 隧道 1：NEX，入口 2、出口 1。
     await exec(
       'INSERT INTO tunnels (id, name, "entryHostId", "exitHostId", mode, "listenPort", "userId", "isEnabled") VALUES (1, ?, 2, 1, ?, ?, 1, 1)',
-      ["ForwardX 隧道", "forwardx", 23001],
+      ["NEX 隧道", "forwardx", 23001],
     );
-    // 隧道 2：ForwardX，开着负载均衡，另一个出口是 Agent 很旧的 4 号机。
+    // 隧道 2：NEX，开着负载均衡，另一个出口是 Agent 很旧的 4 号机。
     await exec(
       'INSERT INTO tunnels (id, name, "entryHostId", "exitHostId", mode, "listenPort", "userId", "isEnabled", "loadBalanceEnabled", "loadBalanceStrategy") VALUES (2, ?, 2, 1, ?, ?, 1, 1, 1, ?)',
-      ["ForwardX 负载均衡", "forwardx", 23002, "round_robin"],
+      ["NEX 负载均衡", "forwardx", 23002, "round_robin"],
     );
     await exec('INSERT INTO tunnel_exit_nodes ("tunnelId", seq, "hostId", "listenPort", "isEnabled") VALUES (2, 1, 4, 23102, 1)');
-    // 隧道 3：ForwardX，打开了 PROXY Protocol 的「出口发送到目标」。
+    // 隧道 3：NEX，打开了 PROXY Protocol 的「出口发送到目标」。
     await exec(
       'INSERT INTO tunnels (id, name, "entryHostId", "exitHostId", mode, "listenPort", "userId", "isEnabled", "proxyProtocolExitSend") VALUES (3, ?, 2, 1, ?, ?, 1, 1, 1)',
-      ["ForwardX 带 PROXY 头", "forwardx", 23003],
+      ["NEX 带 PROXY 头", "forwardx", 23003],
     );
 
     const direct = (key, dest) => ({ key, name: key, hops: [], dest, weight: 50, probe: null, dial: null });
@@ -341,6 +341,6 @@ test("只有主出口有权报隧道上的线路组，入口、负载均衡的�
   assert.deepEqual(outcome.reportable["3"], [], "中转机只报它自己的中继规则");
 });
 
-test("保存时放开 ForwardX 隧道", () => {
+test("保存时放开 NEX 隧道", () => {
   assert.equal(outcome.allowed, true);
 });

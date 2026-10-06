@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ForwardX-owned firewall and data adapter for the China region whitelist plugin.
+# NEX-owned firewall and data adapter for the China region whitelist plugin.
 # The runtime deliberately uses the plugin's local data and never executes a
 # downloaded third-party shell script.
 
@@ -351,7 +351,7 @@ cn_require_commands() {
 cn_source_config() {
   [[ -r "${CN_CONFIG_FILE}" ]] || { echo "配置文件不存在：${CN_CONFIG_FILE}" >&2; return 1; }
   # The panel writes shell-quoted assignments only; loading this file keeps
-  # compatibility with existing ForwardX host configurations.
+  # compatibility with existing NEX host configurations.
   # shellcheck disable=SC1090
   source "${CN_CONFIG_FILE}"
 }
@@ -602,7 +602,7 @@ cn_install_systemd_service() {
   temporary="${unit}.tmp.$$"
   mkdir -p "$(dirname "${unit}")"
   {
-    printf '[Unit]\nDescription=ForwardX China region whitelist\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/bin/bash %q apply-config\nExecStop=/bin/bash %q clear\n\n[Install]\nWantedBy=multi-user.target\n' "${CN_ROOT}/forwardx-agent-run.sh" "${CN_ROOT}/forwardx-agent-run.sh"
+    printf '[Unit]\nDescription=NEX China region whitelist\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/bin/bash %q apply-config\nExecStop=/bin/bash %q clear\n\n[Install]\nWantedBy=multi-user.target\n' "${CN_ROOT}/forwardx-agent-run.sh" "${CN_ROOT}/forwardx-agent-run.sh"
   } > "${temporary}"
   chmod 0644 "${temporary}"
   mv -f "${temporary}" "${unit}"

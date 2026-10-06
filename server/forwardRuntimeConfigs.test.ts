@@ -138,7 +138,7 @@ test("拨号目标和展示目标分开：走故障转移时拨本机，说明�
     dialHost: "127.0.0.1",
     dialPort: 51443,
   });
-  assert.match(unit, /Description=ForwardX socat tcp forwarder 20002->198\.51\.100\.7:443$/m);
+  assert.match(unit, /Description=NEX socat tcp forwarder 20002->198\.51\.100\.7:443$/m);
   assert.match(unit, / TCP:127\.0\.0\.1:51443,nodelay$/m);
 });
 

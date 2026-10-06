@@ -168,7 +168,7 @@ export async function generateSelfSignedPanelSslCertificate(inputHosts: string[]
 
   const hosts = Array.from(hostSet).slice(0, 20);
   const san = hosts.map((host) => (net.isIP(host) ? `IP:${host}` : `DNS:${host}`)).join(",");
-  const cn = (hosts.find((host) => !net.isIP(host)) || "ForwardX Panel").replace(/[\/\\]/g, "-").slice(0, 64);
+  const cn = (hosts.find((host) => !net.isIP(host)) || "NEX Panel").replace(/[\/\\]/g, "-").slice(0, 64);
   const normalizedDays = Math.min(3650, Math.max(1, Math.floor(Number(days) || 825)));
   const certDir = defaultPanelSslCertDir();
   await fs.promises.mkdir(certDir, { recursive: true });

@@ -8,7 +8,7 @@ import (
 func TestHardenManagedSystemdUnitAddsRuntimeLimitsOnce(t *testing.T) {
 	unit := strings.Join([]string{
 		"[Unit]",
-		"Description=ForwardX runtime",
+		"Description=NEX runtime",
 		"",
 		"[Service]",
 		"Type=simple",
@@ -54,7 +54,7 @@ func TestOpenRCAndSysVScriptsKeepFileDescriptorLimit(t *testing.T) {
 	execStart := "/usr/local/bin/forwardx-runtime -C /etc/forwardx/runtime/gost.json"
 	unit := strings.Join([]string{
 		"[Unit]",
-		"Description=ForwardX runtime",
+		"Description=NEX runtime",
 		"LimitNOFILE=1",
 		"[Service]",
 		"ExecStart=" + execStart,

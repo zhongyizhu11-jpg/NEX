@@ -81,7 +81,7 @@ export function normalizeProxySubscriptionFormat(value: unknown): ProxySubscript
 }
 
 /** 订阅里的主选择器名，各格式统一使用，方便用户在不同客户端之间对照。 */
-export const PROXY_SUBSCRIPTION_GROUP_NAME = "ForwardX";
+export const PROXY_SUBSCRIPTION_GROUP_NAME = "NEX";
 
 /**
  * 只有这两种格式能表达策略组。

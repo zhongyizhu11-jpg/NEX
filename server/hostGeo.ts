@@ -300,7 +300,7 @@ async function fetchFromGeoProvider(provider: GeoProvider, address: string): Pro
   try {
     const res = await fetch(provider.url(address), {
       cache: "no-store",
-      headers: { Accept: "application/json", "User-Agent": "ForwardX" },
+      headers: { Accept: "application/json", "User-Agent": "NEX" },
       signal: controller.signal,
     });
     if (res.status === 429) {

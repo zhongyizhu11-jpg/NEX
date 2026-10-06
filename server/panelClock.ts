@@ -165,7 +165,7 @@ export async function probePanelClockSource(
         Accept: "text/plain, */*;q=0.1",
         "Cache-Control": "no-cache",
         Pragma: "no-cache",
-        "User-Agent": "ForwardX-Panel-Clock/1",
+        "User-Agent": "NEX-Panel-Clock/1",
       },
     });
     if (!response.url || new URL(response.url).protocol !== "https:") return null;

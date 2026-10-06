@@ -215,7 +215,7 @@ async function startServer() {
   const onListening = () => {
     console.info(`Server running on ${protocol}://localhost:${port}/`);
     console.info(
-      `[Server] ForwardX panel started on ${protocol.toUpperCase()} port ${port}`
+      `[Server] NEX panel started on ${protocol.toUpperCase()} port ${port}`
         + ` startupMs=${Date.now() - startupStartedAt} database=${databaseStatus.ready ? "ready" : "not-ready"}`,
     );
   };

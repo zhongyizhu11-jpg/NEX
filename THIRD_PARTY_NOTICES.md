@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-ForwardX Agent includes the userspace WireGuard implementation from the
+NEX Agent includes the userspace WireGuard implementation from the
 official `wireguard-go` project.
 
 ## WireGuard userspace implementation
@@ -9,7 +9,7 @@ official `wireguard-go` project.
 - Pinned revision: `v0.0.0-20250521234502-f333402bd9cb`
 - Upstream source: <https://git.zx2c4.com/wireguard-go/>
 - License: MIT
-- Usage: compiled into the ForwardX Agent binary; `agent/wireguard_netstack.go`
+- Usage: compiled into the NEX Agent binary; `agent/wireguard_netstack.go`
   is a modified copy of its `tun/netstack/tun.go` (batched packet reads on top
   of the gVisor stack)
 

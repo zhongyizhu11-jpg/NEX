@@ -280,12 +280,12 @@ test("同一落地节点被两台中转指向时生成自动选路组", () => {
     templates,
   );
 
-  const doc = buildProxySubscriptionDocument(plan, templates, { mainGroupName: "ForwardX" });
+  const doc = buildProxySubscriptionDocument(plan, templates, { mainGroupName: "NEX" });
 
   assert.equal(doc.groups.length, 2);
   const [main, auto] = doc.groups;
 
-  assert.equal(main.name, "ForwardX");
+  assert.equal(main.name, "NEX");
   assert.equal(main.type, "select");
   // 自动选路组排在裸节点前面，用户第一眼就是「自动」。
   assert.deepEqual(main.members, ["HKT 自动选路", "广州1 → HKT", "广州2 → HKT"]);
@@ -299,7 +299,7 @@ test("只有一台中转时不生成自动选路组", () => {
   const templates = [HKT_TEMPLATE];
   const plan = planFor([rule({ id: 1, hostId: 1 })], templates);
 
-  const doc = buildProxySubscriptionDocument(plan, templates, { mainGroupName: "ForwardX" });
+  const doc = buildProxySubscriptionDocument(plan, templates, { mainGroupName: "NEX" });
 
   // 一条线路无从选路，多一个组只会让客户端界面变乱。
   assert.equal(doc.groups.length, 1);
@@ -312,7 +312,7 @@ test("模板可以关闭自动选路，或改成主备切换", () => {
   const offDoc = buildProxySubscriptionDocument(
     planFor([rule({ id: 1, hostId: 1 }), rule({ id: 2, hostId: 2, sourcePort: 20002 })], off),
     off,
-    { mainGroupName: "ForwardX" },
+    { mainGroupName: "NEX" },
   );
   assert.equal(offDoc.groups.length, 1);
   assert.deepEqual(offDoc.groups[0].members, ["广州1 → HKT", "广州2 → HKT"]);
@@ -321,7 +321,7 @@ test("模板可以关闭自动选路，或改成主备切换", () => {
   const fallbackDoc = buildProxySubscriptionDocument(
     planFor([rule({ id: 1, hostId: 1 }), rule({ id: 2, hostId: 2, sourcePort: 20002 })], fallback),
     fallback,
-    { mainGroupName: "ForwardX" },
+    { mainGroupName: "NEX" },
   );
   assert.equal(fallbackDoc.groups[1].type, "fallback");
 });
@@ -339,7 +339,7 @@ test("多个落地节点各自成组，互不混淆", () => {
     templates,
   );
 
-  const doc = buildProxySubscriptionDocument(plan, templates, { mainGroupName: "ForwardX" });
+  const doc = buildProxySubscriptionDocument(plan, templates, { mainGroupName: "NEX" });
   const autoGroups = doc.groups.filter((group) => group.type !== "select");
 
   assert.equal(autoGroups.length, 2);
@@ -358,7 +358,7 @@ test("分组引用的是去重后的节点名", () => {
     templates,
   );
 
-  const doc = buildProxySubscriptionDocument(plan, templates, { mainGroupName: "ForwardX" });
+  const doc = buildProxySubscriptionDocument(plan, templates, { mainGroupName: "NEX" });
 
   assert.deepEqual(doc.nodes.map((node) => node.name), ["香港", "香港 #2"]);
   assert.deepEqual(doc.groups[1].members, ["香港", "香港 #2"]);
@@ -366,7 +366,7 @@ test("分组引用的是去重后的节点名", () => {
 
 test("没有节点时不产出任何策略组", () => {
   const doc = buildProxySubscriptionDocument({ entries: [], skipped: [], warnings: [] }, [HKT_TEMPLATE], {
-    mainGroupName: "ForwardX",
+    mainGroupName: "NEX",
   });
 
   assert.deepEqual(doc.nodes, []);

@@ -15,7 +15,7 @@ import test from "node:test";
  *
  * 起一个真的 sqlite 和真的流量上报路由跑一遍。
  */
-test("ForwardX traffic is accounted on exactly one side, at the exit when an entry host is tenant-owned", () => {
+test("NEX traffic is accounted on exactly one side, at the exit when an entry host is tenant-owned", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-exit-traffic-accounting-"));
   const databasePath = path.join(directory, "traffic.db");
   const script = String.raw`

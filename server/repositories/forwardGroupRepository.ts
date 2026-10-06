@@ -192,7 +192,7 @@ function managedChildControlState(templateRule: any, existing: any) {
   };
 }
 
-// GOST 隧道和 Nginx 隧道能挂线路组（调度器在出口机上），ForwardX 隧道还不行。
+// GOST 隧道和 Nginx 隧道能挂线路组（调度器在出口机上），NEX 隧道还不行。
 function isMainBackupGostTunnelMode(mode: unknown) {
   return routeGroupTunnelModeSupported(mode);
 }

@@ -37,9 +37,9 @@ test("节点名和注脚都渲染出来，注脚不是第二个标题", () => {
 test("延迟是数字在前、单位在后，不是「延迟 8ms」一整串", () => {
   // 数据型产品里数字本身就是视觉元素，一眼该看到 8 而不是「延迟」两个字。
   const html = renderToStaticMarkup(
-    <NetworkPath nodes={[po0, jinx]} edges={[{ via: "ForwardX", latencyMs: 8 }]} />,
+    <NetworkPath nodes={[po0, jinx]} edges={[{ via: "NEX", latencyMs: 8 }]} />,
   );
-  assert.match(html, /ForwardX/);
+  assert.match(html, /NEX/);
   assert.match(html, /8/);
   assert.match(html, /ms/);
   assert.doesNotMatch(html, /延迟 ?8/);

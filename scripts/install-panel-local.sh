@@ -9,7 +9,7 @@ REPO_SLUG="${FORWARDX_GITHUB_REPO:-zhongyizhu11-jpg/NEX}"
 PANEL_BUNDLE_PREFIX="${FORWARDX_PANEL_BUNDLE_PREFIX:-forwardx-panel-v}"
 PNPM_VERSION="${FORWARDX_PNPM_VERSION:-10.28.1}"
 ASSETS_PENDING_EXIT_CODE=12
-# 面板端靠这些 "[ForwardX] step N/M …" / "progress download …" 行画进度条，改动格式要连 client/src/lib/panelUpgrade.ts 一起改。
+# 面板端靠这些 "[NEX] step N/M …" / "progress download …" 行画进度条，改动格式要连 client/src/lib/panelUpgrade.ts 一起改。
 PANEL_STEP_TOTAL=5
 SCRIPT_STARTED_AT="$(date +%s)"
 # 上一次安装成功时依赖输入的指纹放在 node_modules 里：node_modules 被删掉指纹也跟着没了，不会误判「没变」。
@@ -178,7 +178,7 @@ release_tag_from_url() {
 
 panel_step() {
   # 进度标记：面板按「第几步 / 共几步」画条，标签直接显示给用户看。
-  echo "[ForwardX] step $1/$PANEL_STEP_TOTAL $2"
+  echo "[NEX] step $1/$PANEL_STEP_TOTAL $2"
 }
 
 elapsed_seconds() {
@@ -217,9 +217,9 @@ report_download_progress() {
     percent=$((downloaded * 100 / total))
     # HEAD 探测拿到的长度可能和实际下载的不一样（镜像站返回错误页之类），不让百分比超过 100。
     if [ "$percent" -gt 100 ]; then percent=100; fi
-    echo "[ForwardX] progress download ${downloaded}/${total} ${percent}%" >&2
+    echo "[NEX] progress download ${downloaded}/${total} ${percent}%" >&2
   else
-    echo "[ForwardX] progress download ${downloaded}/- -%" >&2
+    echo "[NEX] progress download ${downloaded}/- -%" >&2
   fi
 }
 
@@ -491,7 +491,7 @@ write_openrc_service() {
   cat > "/etc/init.d/$SERVICE_NAME" <<EOF
 #!/sbin/openrc-run
 name="$SERVICE_NAME"
-description="ForwardX Panel"
+description="NEX Panel"
 command="/bin/sh"
 # The Node entrypoint loads .env through dotenv/config; do not source it in a shell.
 command_args="-lc $(shell_quote "cd \"$APP_DIR\" && exec env DOTENV_CONFIG_PATH=\"$APP_DIR/.env\" DOTENV_CONFIG_OVERRIDE=true \"$node_bin\" dist/index.js")"
@@ -516,7 +516,7 @@ write_sysv_service() {
 # Required-Stop:     \$network
 # Default-Start:     2 3 4 5
 # Default-Stop:      0 1 6
-# Short-Description: ForwardX Panel
+# Short-Description: NEX Panel
 ### END INIT INFO
 PIDFILE=/run/$SERVICE_NAME.pid
 LOGFILE=$APP_DIR/data/panel.log
@@ -549,7 +549,7 @@ write_service() {
   if is_systemd_host; then
     cat > "/etc/systemd/system/$SERVICE_NAME.service" <<EOF
 [Unit]
-Description=ForwardX Panel
+Description=NEX Panel
 After=network.target
 
 [Service]
@@ -582,7 +582,7 @@ restart_service() {
   panel_step 5 "重启面板"
   # 面板里点的升级是面板进程的子进程，systemctl restart 会连本脚本一起杀掉，后面的 [DONE] 行
   # 到不了面板日志，所以用时在重启前先报一次。
-  echo "[ForwardX] restarting panel service (elapsed $(elapsed_seconds)s)"
+  echo "[NEX] restarting panel service (elapsed $(elapsed_seconds)s)"
   if is_systemd_host; then
     systemctl restart "$SERVICE_NAME"
   elif command -v rc-service >/dev/null 2>&1; then
@@ -855,7 +855,7 @@ seed_dependency_fingerprint() {
   fingerprint="$(dependency_fingerprint "$APP_DIR" 2>/dev/null || true)"
   [ -n "$fingerprint" ] || return 0
   printf "%s\n" "$fingerprint" > "$fingerprint_file" 2>/dev/null || true
-  echo "[ForwardX] Recorded the dependency fingerprint of the running install"
+  echo "[NEX] Recorded the dependency fingerprint of the running install"
 }
 
 install_runtime_dependencies() {
@@ -875,7 +875,7 @@ install_runtime_dependencies() {
   if [ -n "$fingerprint" ] && [ "$fingerprint" = "$stored" ] \
     && [ -d node_modules/.pnpm ] && [ -f node_modules/.modules.yaml ]; then
     panel_step 4 "依赖未变化，跳过安装"
-    echo "[ForwardX] Dependencies unchanged since last install, skipping pnpm install"
+    echo "[NEX] Dependencies unchanged since last install, skipping pnpm install"
     return
   fi
   panel_step 4 "安装依赖"
@@ -926,8 +926,8 @@ install_panel() {
   read_database_config
   write_service
   restart_service
-  echo "[ForwardX] elapsed $(elapsed_seconds)s"
-  echo "[DONE] ForwardX panel started (release v$release_version) in $(elapsed_seconds)s: http://SERVER_IP:$PORT"
+  echo "[NEX] elapsed $(elapsed_seconds)s"
+  echo "[DONE] NEX panel started (release v$release_version) in $(elapsed_seconds)s: http://SERVER_IP:$PORT"
 }
 
 upgrade_panel() {
@@ -942,13 +942,13 @@ upgrade_panel() {
   write_env
   write_service
   restart_service
-  echo "[ForwardX] elapsed $(elapsed_seconds)s"
-  echo "[DONE] ForwardX panel upgraded to release v$release_version and restarted in $(elapsed_seconds)s"
+  echo "[NEX] elapsed $(elapsed_seconds)s"
+  echo "[DONE] NEX panel upgraded to release v$release_version and restarted in $(elapsed_seconds)s"
 }
 
 uninstall_panel() {
   require_root
-  if ! confirm_yes "Confirm uninstall ForwardX local panel and remove service files? [y/N] "; then
+  if ! confirm_yes "Confirm uninstall NEX local panel and remove service files? [y/N] "; then
     echo "[INFO] Uninstall cancelled"
     return
   fi

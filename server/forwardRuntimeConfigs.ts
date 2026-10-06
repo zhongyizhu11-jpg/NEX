@@ -105,7 +105,7 @@ export function buildRealmServiceUnit(input: RealmUnitInput): string {
   const ifaceFlag = input.networkInterface ? ` --interface ${input.networkInterface}` : "";
   return [
     "[Unit]",
-    `Description=ForwardX realm forwarder ${input.sourcePort}->${input.targetIp}:${input.targetPort}`,
+    `Description=NEX realm forwarder ${input.sourcePort}->${input.targetIp}:${input.targetPort}`,
     "After=network.target",
     "StartLimitIntervalSec=60",
     "StartLimitBurst=5",
@@ -211,7 +211,7 @@ export function buildSocatServiceUnit(input: SocatUnitInput): string {
   const dial = socatDialAddress(input.dialProtocol, input.dialHost, input.dialPort);
   return [
     "[Unit]",
-    `Description=ForwardX socat ${input.descriptionProtocol} forwarder ${input.sourcePort}->${input.targetIp}:${input.targetPort}`,
+    `Description=NEX socat ${input.descriptionProtocol} forwarder ${input.sourcePort}->${input.targetIp}:${input.targetPort}`,
     "After=network.target",
     "",
     "[Service]",

@@ -36,12 +36,12 @@ test("延迟和转发实现只标在中间那一段", () => {
     hosts,
     health: "healthy",
     latencyMs: 8,
-    via: "ForwardX V2",
+    via: "NEX V2",
   });
   const labelled = path.edges.filter((e) => e.latencyMs != null || e.via);
   assert.equal(labelled.length, 1);
   assert.equal(labelled[0].latencyMs, 8);
-  assert.equal(labelled[0].via, "ForwardX V2");
+  assert.equal(labelled[0].via, "NEX V2");
 });
 
 test("边比节点少一条", () => {

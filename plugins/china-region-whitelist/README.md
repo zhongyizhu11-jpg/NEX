@@ -1,12 +1,12 @@
-# ForwardX 中国区域白名单
+# NEX 中国区域白名单
 
-这个插件把中国区域白名单能力适配到 ForwardX 面板里使用。启用后，ForwardX 自有运行时和数据会自动同步到所有 Agent。左侧列出全部主机并支持筛选；点击主机后，可在右侧新增、查看、修改、删除和刷新该 Agent 的实际白名单规则。
+这个插件把中国区域白名单能力适配到 NEX 面板里使用。启用后，NEX 自有运行时和数据会自动同步到所有 Agent。左侧列出全部主机并支持筛选；点击主机后，可在右侧新增、查看、修改、删除和刷新该 Agent 的实际白名单规则。
 
 每台主机的配置彼此独立，切换主机不会混用规则或状态。资源同步只会在配置不存在时写入默认配置，不会周期性覆盖用户在白名单管理界面保存的内容。
 
 Agent 节点管理通过通用 `resourceSchema` 和 Agent 操作接口实现，需要 Agent `2.2.151` 或更高版本，不会占用转发规则队列。选择 Agent 后会自动读取已配置的全国或省份名单、防火墙后端、规则数量、持久化服务状态和执行错误；保存或删除后会自动回读最新状态。
 
-插件运行时不依赖 Python，也不下载或执行第三方白名单 shell 脚本。动态配置使用 Agent 安装脚本已校验的 `jq` 解析；区域解析、防火墙命令生成和 systemd 持久化均由 ForwardX 自有适配完成。
+插件运行时不依赖 Python，也不下载或执行第三方白名单 shell 脚本。动态配置使用 Agent 安装脚本已校验的 `jq` 解析；区域解析、防火墙命令生成和 systemd 持久化均由 NEX 自有适配完成。
 
 ## 支持能力
 
@@ -41,6 +41,6 @@ Agent 会把完整插件目录写入：
 - `data/country/CN.txt`：APNIC delegated stats 生成的国家级数据。
 - `data/regions/*.txt`、`data/regions.tsv`、`data/regions.json`：省级 CIDR 和区域索引数据。
 - `data/asn/AS16509.txt`：ipverse/as-ip-blocks 的 ASN 数据。
-- `tools/forwardx_firewall.sh`：ForwardX 自有 nftables/iptables 规则生成和清理逻辑。
+- `tools/forwardx_firewall.sh`：NEX 自有 nftables/iptables 规则生成和清理逻辑。
 
-插件适配层为 `forwardx-agent-run.sh`，用于让 ForwardX Agent 以非交互方式执行状态查看、JSON 状态回传、预演、应用和清理。完整来源、版权和许可证边界见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
+插件适配层为 `forwardx-agent-run.sh`，用于让 NEX Agent 以非交互方式执行状态查看、JSON 状态回传、预演、应用和清理。完整来源、版权和许可证边界见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。

@@ -302,7 +302,7 @@ export async function assertSupportedMysqlServer(query: (sqlText: string) => Pro
   const version = parseMysqlVersion(versionText);
   if (!version || !isMysqlVersionSupported(version)) {
     throw new Error(
-      `Unsupported MySQL server version ${versionText || "unknown"}. ForwardX requires MySQL ${MYSQL_MIN_VERSION} or later. MySQL 5.7 does not support the current metrics queries and default-value DDL syntax.`,
+      `Unsupported MySQL server version ${versionText || "unknown"}. NEX requires MySQL ${MYSQL_MIN_VERSION} or later. MySQL 5.7 does not support the current metrics queries and default-value DDL syntax.`,
     );
   }
 }

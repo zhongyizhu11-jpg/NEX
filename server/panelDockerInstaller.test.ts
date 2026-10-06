@@ -102,7 +102,7 @@ test("Docker upgrade verifies the recreated container image ID and embedded vers
   assert.match(verification, /docker exec "\$CONTAINER_NAME" node/);
   assert.match(verification, /\.State\.Running/);
   assert.match(verification, /\.Image/);
-  assert.match(verification, /Unable to read the ForwardX version from the running container/);
+  assert.match(verification, /Unable to read the NEX version from the running container/);
   assert.match(verification, /active_image_id.*!=.*expected_image_id/);
   assert.match(verification, /running_version.*!=.*expected_version/);
   assertBefore(start, 'pulled_image_id="$(image_id "$image"', "remove_existing_panel_containers");
@@ -114,7 +114,7 @@ test("Docker container replacement logs an explicit removal message", () => {
   const removal = section("remove_existing_panel_containers() {", "image_panel_version() {");
 
   assert.match(removal, /docker rm -f "\$id" >\/dev\/null 2>&1/);
-  assert.match(removal, /Removed previous ForwardX container/);
+  assert.match(removal, /Removed previous NEX container/);
 });
 
 test("the environment example does not advertise the removed ADMIN_PASSWORD behavior", () => {

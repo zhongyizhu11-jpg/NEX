@@ -300,7 +300,7 @@ async function refreshTouchedHosts(rule: any, touched: Set<number>, reason: stri
       if (tunnel) {
         hostIds.add(Number(tunnel.entryHostId));
         hostIds.add(Number(tunnel.exitHostId));
-        // 负载均衡的出口节点上也各跑一个调度器（GOST、ForwardX 隧道），路径的拨号地址变了它们也要刷新。
+        // 负载均衡的出口节点上也各跑一个调度器（GOST、NEX 隧道），路径的拨号地址变了它们也要刷新。
         for (const node of await getTunnelExitNodes(tunnelId).catch(() => [])) hostIds.add(Number((node as any)?.hostId || 0));
       }
     }

@@ -71,7 +71,7 @@ test("composed tunnel rule probe uses the lower segment success ratio", () => {
   }), { probeCount: 5, probeSuccesses: 0 });
 });
 
-test("traffic accounting accepts every ForwardX entry-group host", () => {
+test("traffic accounting accepts every NEX entry-group host", () => {
   const hosts = trafficAccountingHostIds(
     { id: 41, hostId: 5 },
     { id: 7, mode: "forwardx", entryHostId: 5, exitHostId: 9 },
@@ -119,7 +119,7 @@ test("traffic accounting ignores extra exits when load balancing is disabled", (
   assert.deepEqual([...hosts], [9]);
 });
 
-test("ForwardX traffic moves to the exit side when an entry host is not admin-owned", () => {
+test("NEX traffic moves to the exit side when an entry host is not admin-owned", () => {
   const tunnel = {
     id: 12,
     mode: "forwardx",

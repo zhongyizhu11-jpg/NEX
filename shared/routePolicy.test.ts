@@ -228,7 +228,7 @@ test("UDP、TCP+UDP：调度所在机器的 Agent 到 2.2.199 才调度，更老
   assert.deepEqual(policyAt(IN_WINDOW, { protocol: "tcp" }).warnings, [], "TCP 不看这个版本");
 });
 
-test("ForwardX 隧道：隧道出口的 Agent 到 2.2.199 才调度，更老的全部走路径 A、不切换", () => {
+test("NEX 隧道：隧道出口的 Agent 到 2.2.199 才调度，更老的全部走路径 A、不切换", () => {
   const ready = { isOnline: true, agentVersion: "2.2.199" };
   const fxp = { tunnelId: 7, tunnelMode: "forwardx" };
   for (const protocol of ["tcp", "udp", "both"]) {

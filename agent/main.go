@@ -38,7 +38,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.210"
+var Version = "2.2.211"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -2592,7 +2592,7 @@ type runningRule struct {
 	ForwardType string                  `json:"forwardType"`
 	Failover    *failoverSpec           `json:"failover,omitempty"`
 	GroupHealth *forwardGroupHealthSpec `json:"forwardGroupHealth,omitempty"`
-	// 只跑线路组的调度器（2.2.199 起）：ForwardX 隧道的出口机上没有这条规则自己的进程，出口的
+	// 只跑线路组的调度器（2.2.199 起）：NEX 隧道的出口机上没有这条规则自己的进程，出口的
 	// FXP 拨本机的调度器。它不占规则端口 —— SourcePort 是调度器自己的监听端口，只当标识用；
 	// 不写端口状态、不装计数链、不算进要保留的端口，流量照旧在入口计。
 	SchedulerOnly bool `json:"schedulerOnly,omitempty"`
@@ -8307,7 +8307,7 @@ func openRCServiceScript(name, execStart, limitNOFILE string) string {
 	return strings.Join([]string{
 		"#!/sbin/openrc-run",
 		"name=\"" + name + "\"",
-		"description=\"ForwardX managed service " + name + "\"",
+		"description=\"NEX managed service " + name + "\"",
 		"command=\"/bin/sh\"",
 		"command_args=\"-lc " + shellQuote(managedServiceNOFILEShell(limitNOFILE)+"ulimit -c 0 2>/dev/null || true; exec "+execStart) + "\"",
 		"command_background=true",
@@ -8331,7 +8331,7 @@ func sysVServiceScript(name, execStart, limitNOFILE string) string {
 		"# Required-Stop:     $network",
 		"# Default-Start:     2 3 4 5",
 		"# Default-Stop:      0 1 6",
-		"# Short-Description: ForwardX managed service " + name,
+		"# Short-Description: NEX managed service " + name,
 		"### END INIT INFO",
 		"PIDFILE=/run/" + name + ".pid",
 		"LOGFILE=/var/log/forwardx-agent/" + name + ".log",
@@ -8483,7 +8483,7 @@ func resetTrafficStateIfRuleChanged(port string, nextRuleID int) {
 }
 
 // 运行规则里哪些端口要留着（端口状态、计数链），哪些调度器要开着。只跑调度器的规则
-// （ForwardX 隧道的出口，见 runningRule.SchedulerOnly）只进后者：它不占端口，同号端口上要是
+// （NEX 隧道的出口，见 runningRule.SchedulerOnly）只进后者：它不占端口，同号端口上要是
 // 有别的规则留下的状态，照常按孤儿清。
 func runningRuleWants(rules []runningRule) (map[string]bool, []runningRule) {
 	ports := map[string]bool{}
@@ -9769,9 +9769,9 @@ func attachDesiredSharedFXPEntryGroups(actions []action) {
 			group.add(persisted)
 		}
 	}
-	// A desired non-FXP apply supersedes any persisted ForwardX member with the
+	// A desired non-FXP apply supersedes any persisted NEX member with the
 	// same rule identity. Remove it before attaching the final group to sibling
-	// ForwardX actions so those siblings rebuild immediately in this batch.
+	// NEX actions so those siblings rebuild immediately in this batch.
 	for _, item := range actions {
 		if strings.TrimSpace(item.Op) != "apply" || item.Fxp != nil || item.RuleID <= 0 {
 			continue

@@ -1,7 +1,7 @@
 # 第三方来源与许可证声明
 
 本插件中的防火墙规则渲染、配置持久化、区域索引读取和 Agent 运行入口由
-ForwardX 自行维护，作为 ForwardX 项目的一部分按根目录 `LICENSE` 的
+NEX 自行维护，作为 NEX 项目的一部分按根目录 `LICENSE` 的
 GNU Affero General Public License v3.0 发布。本文件只说明插件使用的数据来源。
 
 ## 省级区域数据：metowolf/iplist
@@ -16,7 +16,7 @@ GNU Affero General Public License v3.0 发布。本文件只说明插件使用�
 
 上游项目页面说明其数据基于 OpenIPDB、IPinfo 和 bgp.tools 等来源，但在本次
 发布审核时没有发现明确的 SPDX 许可证标识或仓库内 `LICENSE` 文件。上述文件
-应被视为外部数据集，不是 ForwardX 的原创 IP 归属声明；使用者需要同时遵守
+应被视为外部数据集，不是 NEX 的原创 IP 归属声明；使用者需要同时遵守
 上游项目及其底层数据源的适用条款。来源地址：
 
 - <https://github.com/metowolf/iplist>
@@ -50,6 +50,6 @@ ASN 数据会在 Agent 有权限且需要时缓存到
 
 早期版本曾参考并打包
 `GHUNLIL/china-region-whitelist` 的脚本和数据结构。该仓库在本次审核时没有
-声明许可证。自插件 `0.7.0` 起，ForwardX 不再打包、下载或执行该上游脚本，
-运行时改为 ForwardX 自有实现；历史 Git 提交中的文件不代表当前发布物中的
+声明许可证。自插件 `0.7.0` 起，NEX 不再打包、下载或执行该上游脚本，
+运行时改为 NEX 自有实现；历史 Git 提交中的文件不代表当前发布物中的
 运行时依赖。

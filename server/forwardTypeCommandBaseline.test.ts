@@ -93,32 +93,32 @@ const BASELINE: Record<string, Fingerprint> = {
   "realm:both": {
     commands: 4, preCommands: 36, postCommands: 0, managedConfigs: 0,
     hash: "6d11e3df42b80db5",
-    svcName: "forwardx-realm-both-20009", svcNameExtra: "", serviceHash: "da02cadd2fdc6b49",
+    svcName: "forwardx-realm-both-20009", svcNameExtra: "", serviceHash: "5d838a006b0ac881",
   },
   "realm:tcp": {
     commands: 4, preCommands: 30, postCommands: 0, managedConfigs: 0,
     hash: "241a37193c57736f",
-    svcName: "forwardx-realm-tcp-20007", svcNameExtra: "", serviceHash: "c89ac3ef706d6b04",
+    svcName: "forwardx-realm-tcp-20007", svcNameExtra: "", serviceHash: "79a28070f6d97393",
   },
   "realm:udp": {
     commands: 4, preCommands: 27, postCommands: 0, managedConfigs: 0,
     hash: "75852e5e4c96e940",
-    svcName: "forwardx-realm-udp-20008", svcNameExtra: "", serviceHash: "97741e73c0bd2c00",
+    svcName: "forwardx-realm-udp-20008", svcNameExtra: "", serviceHash: "046d73a8a531bea5",
   },
   "socat:both": {
     commands: 0, preCommands: 32, postCommands: 4, managedConfigs: 0,
     hash: "12e1697475b9d5fb",
-    svcName: "forwardx-socat-tcp-20012", svcNameExtra: "forwardx-socat-udp-20012", serviceHash: "e95cec455a2fbccb",
+    svcName: "forwardx-socat-tcp-20012", svcNameExtra: "forwardx-socat-udp-20012", serviceHash: "578ca68128b707fd",
   },
   "socat:tcp": {
     commands: 0, preCommands: 27, postCommands: 4, managedConfigs: 0,
     hash: "f7206dd451e62023",
-    svcName: "forwardx-socat-tcp-20010", svcNameExtra: "", serviceHash: "5efc503e7ef202b8",
+    svcName: "forwardx-socat-tcp-20010", svcNameExtra: "", serviceHash: "aed69a0848d05841",
   },
   "socat:udp": {
     commands: 0, preCommands: 26, postCommands: 4, managedConfigs: 0,
     hash: "6e2e7906d1e870f5",
-    svcName: "forwardx-socat-udp-20011", svcNameExtra: "", serviceHash: "ab0167ebb07532a4",
+    svcName: "forwardx-socat-udp-20011", svcNameExtra: "", serviceHash: "3140c5bbf792afcc",
   },
 };
 

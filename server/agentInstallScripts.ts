@@ -210,7 +210,7 @@ fxp_version_wire_compatible() {
 warn_fxp_unavailable() {
   echo ""
   echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-  echo "[警告] ForwardX FXP ${"$"}{1:-安装}失败（已重试 ${"$"}{FORWARDX_DOWNLOAD_ATTEMPTS:-3} 次）"
+  echo "[警告] NEX FXP ${"$"}{1:-安装}失败（已重试 ${"$"}{FORWARDX_DOWNLOAD_ATTEMPTS:-3} 次）"
   echo "[警告] 这台机器上 NEX 加密隧道不可用；iptables/realm/socat/gost 转发不受影响"
   echo "[警告] 网络恢复后在面板上对这台主机点「升级 Agent」即可补装 FXP"
   echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
@@ -226,7 +226,7 @@ upgrade_agent_and_fxp_binaries() {
     return 1
   fi
   FXP_RELEASE_VERSION="${"$"}{DOWNLOADED_RELEASE_VERSION:-$RELEASE_VERSION}"
-  if RELEASE_VERSION="$FXP_RELEASE_VERSION" stage_release_binary "forwardx-fxp-linux-${"$"}{GO_ARCH}" "$FXP_BIN" "ForwardX FXP" "0"; then
+  if RELEASE_VERSION="$FXP_RELEASE_VERSION" stage_release_binary "forwardx-fxp-linux-${"$"}{GO_ARCH}" "$FXP_BIN" "NEX FXP" "0"; then
     NEW_FXP="$(fxp_binary_version "$FXP_STAGE")"
     echo "[信息] 新 FXP 版本: $NEW_FXP"
   else
@@ -249,7 +249,7 @@ upgrade_agent_and_fxp_binaries() {
       return 1
     fi
   fi
-  if [ -s "$FXP_STAGE" ] && ! promote_staged_binary "$FXP_BIN" "ForwardX FXP"; then
+  if [ -s "$FXP_STAGE" ] && ! promote_staged_binary "$FXP_BIN" "NEX FXP"; then
     rm -f "$AGENT_STAGE"
     echo "[错误] FXP 替换失败，升级中止（Agent 没有改动）"
     return 1
@@ -290,7 +290,7 @@ export function generateInstallScript(defaultPanelUrl: string, options: AgentIns
   const panelMigrationStartedAt = Math.max(0, Math.floor(Number(options.panelMigrationStartedAt) || 0));
   const lines = [
     '#!/bin/bash',
-    '# ForwardX Agent (Go) 一键安装/管理脚本',
+    '# NEX Agent (Go) 一键安装/管理脚本',
     '# 安装: curl -sL PANEL_URL/api/agent/install.sh | bash -s -- install YOUR_TOKEN',
     '# 升级: curl -sL PANEL_URL/api/agent/install.sh | bash -s -- upgrade',
     '# 卸载: curl -sL PANEL_URL/api/agent/install.sh | bash -s -- uninstall',
@@ -483,7 +483,7 @@ export function generateInstallScript(defaultPanelUrl: string, options: AgentIns
     '  cat > "/etc/init.d/$SERVICE_NAME" << EOF',
     '#!/sbin/openrc-run',
     'name="$SERVICE_NAME"',
-    'description="ForwardX Agent"',
+    'description="NEX Agent"',
     'command="/bin/sh"',
     'command_args="-lc $(shell_quote "ulimit -c 0 2>/dev/null || true; ulimit -n 1048576 2>/dev/null || ulimit -n 65535 2>/dev/null || true; exec $GO_AGENT_BIN -config $CONFIG_DIR/config.json")"',
     'command_background=true',
@@ -507,7 +507,7 @@ export function generateInstallScript(defaultPanelUrl: string, options: AgentIns
     '# Required-Stop:     $network',
     '# Default-Start:     2 3 4 5',
     '# Default-Stop:      0 1 6',
-    '# Short-Description: ForwardX Agent',
+    '# Short-Description: NEX Agent',
     '### END INIT INFO',
     'PIDFILE=/run/$SERVICE_NAME.pid',
     'LOGFILE=/var/log/forwardx-agent/$SERVICE_NAME-stderr.log',
@@ -543,7 +543,7 @@ export function generateInstallScript(defaultPanelUrl: string, options: AgentIns
     '  TUNING_FILE=/etc/sysctl.d/99-forwardx-network.conf',
     '  mkdir -p /etc/sysctl.d 2>/dev/null || return 0',
     '  TUNING_TMP=$(mktemp /tmp/forwardx-sysctl.XXXXXX) || return 0',
-    '  echo "# ForwardX 转发调优，由 Agent 安装脚本生成；安装时设置 FORWARDX_NETWORK_TUNING=0 可跳过" > "$TUNING_TMP"',
+    '  echo "# NEX 转发调优，由 Agent 安装脚本生成；安装时设置 FORWARDX_NETWORK_TUNING=0 可跳过" > "$TUNING_TMP"',
     '  tuning_current() { sysctl -n "$1" 2>/dev/null | tr -s "\\t " "  "; }',
     '  tuning_last() { echo "$1" | awk \'{print $NF}\'; }',
     '  tuning_numeric() { case "$1" in ""|*[!0-9]*) return 1 ;; esac; return 0; }',
@@ -609,7 +609,7 @@ export function generateInstallScript(defaultPanelUrl: string, options: AgentIns
     '  if is_systemd_host; then',
     '    cat > "/etc/systemd/system/$SERVICE_NAME.service" << EOF',
     '[Unit]',
-    'Description=ForwardX Agent',
+    'Description=NEX Agent',
     'Wants=network-online.target',
     'After=network-online.target forwardx-runtime.service forwardx-tunnel-runtime.service forwardx-nginx.service',
     '',
@@ -693,7 +693,7 @@ export function generateInstallScript(defaultPanelUrl: string, options: AgentIns
     '',
     'show_help() {',
     '  echo "======================================"',
-    '  echo "  ForwardX Agent 管理工具"',
+    '  echo "  NEX Agent 管理工具"',
     '  echo "======================================"',
     '  echo ""',
     '  echo "用法:"',
@@ -753,10 +753,10 @@ export function generateInstallScript(defaultPanelUrl: string, options: AgentIns
     '}',
     '',
     'preserve_system_nginx_if_present() {',
-    '  # ForwardX 使用 /usr/local/bin/forwardx-nginx 和 forwardx-nginx.service 独立运行。',
+    '  # NEX 使用 /usr/local/bin/forwardx-nginx 和 forwardx-nginx.service 独立运行。',
     '  # 不停止、不禁用系统 nginx，避免影响用户机器上已有的网站或反代服务。',
     '  if system_nginx_active; then',
-    '    echo "[信息] 检测到系统 nginx 正在运行，保持不变；ForwardX 使用 forwardx-nginx 独立运行"',
+    '    echo "[信息] 检测到系统 nginx 正在运行，保持不变；NEX 使用 forwardx-nginx 独立运行"',
     '  fi',
     '  return 0',
     '}',
@@ -1182,7 +1182,7 @@ export function generateInstallScript(defaultPanelUrl: string, options: AgentIns
     '',
     'do_uninstall() {',
     '  echo "======================================"',
-    '  echo "  ForwardX Agent 卸载程序"',
+    '  echo "  NEX Agent 卸载程序"',
     '  echo "======================================"',
     '  echo ""',
     '',
@@ -1232,7 +1232,7 @@ export function generateInstallScript(defaultPanelUrl: string, options: AgentIns
     '    fi',
     '  done',
     '',
-    '  # Clean ForwardX iptables/ip6tables rules',
+    '  # Clean NEX iptables/ip6tables rules',
     '  for BIN in iptables ip6tables; do',
     '    command -v "$BIN" >/dev/null 2>&1 || continue',
     '    for CH in $($BIN -t mangle -L 2>/dev/null | awk \'/^Chain FWX_/ {print $2}\'); do',
@@ -1274,7 +1274,7 @@ export function generateInstallScript(defaultPanelUrl: string, options: AgentIns
     '',
     '  echo ""',
     '  echo "======================================"',
-    '  echo "  ForwardX Agent 卸载完成!"',
+    '  echo "  NEX Agent 卸载完成!"',
     '  echo "======================================"',
     '  echo ""',
     '  echo "  如需重新安装，请使用 install 命令"',
@@ -1668,11 +1668,11 @@ export function generateInstallScript(defaultPanelUrl: string, options: AgentIns
     '    return 1',
     '  fi',
     '',
-    '  echo "[步骤 4/6] 安装 ForwardX Tunnel Runtime..."',
+    '  echo "[步骤 4/6] 安装 NEX Tunnel Runtime..."',
     '  FXP_RELEASE_VERSION="${DOWNLOADED_RELEASE_VERSION:-$RELEASE_VERSION}"',
-    '  if RELEASE_VERSION="$FXP_RELEASE_VERSION" stage_release_binary "forwardx-fxp-linux-${GO_ARCH}" "$FXP_BIN" "ForwardX FXP" "0" \\',
-    '    && promote_staged_binary "$FXP_BIN" "ForwardX FXP"; then',
-    '    echo "[信息] ForwardX FXP 版本: $(fxp_binary_version "$FXP_BIN")"',
+    '  if RELEASE_VERSION="$FXP_RELEASE_VERSION" stage_release_binary "forwardx-fxp-linux-${GO_ARCH}" "$FXP_BIN" "NEX FXP" "0" \\',
+    '    && promote_staged_binary "$FXP_BIN" "NEX FXP"; then',
+    '    echo "[信息] NEX FXP 版本: $(fxp_binary_version "$FXP_BIN")"',
     '  else',
     '    warn_fxp_unavailable "安装"',
     '  fi',
@@ -1724,7 +1724,7 @@ export function generateInstallScript(defaultPanelUrl: string, options: AgentIns
     '  migrate_legacy_config',
     '',
     '  echo "======================================"',
-    '  echo "  ForwardX Agent 安装程序"',
+    '  echo "  NEX Agent 安装程序"',
     '  echo "======================================"',
     '  echo "面板地址: $PANEL_URL"',
     '  echo "Token: ${AGENT_TOKEN:0:8}***"',
@@ -1796,7 +1796,7 @@ export function generateInstallScript(defaultPanelUrl: string, options: AgentIns
     '',
     '  echo ""',
     '  echo "======================================"',
-    '  echo "  ForwardX Agent 安装完成!"',
+    '  echo "  NEX Agent 安装完成!"',
     '  echo "======================================"',
     '  echo "  Go Agent:  $GO_AGENT_BIN"',
     '  echo "  配置文件:  $CONFIG_DIR/config.json"',
@@ -1835,7 +1835,7 @@ export function generateInstallScript(defaultPanelUrl: string, options: AgentIns
     '  fi',
     '',
     '  echo "======================================"',
-    '  echo "  ForwardX Agent 升级程序"',
+    '  echo "  NEX Agent 升级程序"',
     '  echo "======================================"',
     '  echo "面板地址: $PANEL_URL"',
     '  echo ""',
@@ -1881,7 +1881,7 @@ export function generateInstallScript(defaultPanelUrl: string, options: AgentIns
     '    fi',
     '    echo ""',
     '    echo "======================================"',
-    '    echo "  ForwardX Agent 升级完成!"',
+    '    echo "  NEX Agent 升级完成!"',
     '    echo "======================================"',
     '  else',
     '    echo "[错误] 升级失败"',

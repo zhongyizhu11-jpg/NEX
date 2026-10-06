@@ -380,7 +380,7 @@ chmod 600 /opt/forwardx-panel/.env
 ```bash
 cat > /etc/systemd/system/forwardx-panel.service <<'EOF'
 [Unit]
-Description=ForwardX Panel
+Description=NEX Panel
 After=network-online.target
 Wants=network-online.target
 

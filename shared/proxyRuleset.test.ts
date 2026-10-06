@@ -14,7 +14,7 @@ import {
   PROXY_RULE_TARGET_REJECT,
 } from "./proxyRuleset";
 
-const PLAN_OPTIONS = { mainGroupName: "ForwardX", selectableMembers: ["HKT 自动选路", "广州1 → HKT"] };
+const PLAN_OPTIONS = { mainGroupName: "NEX", selectableMembers: ["HKT 自动选路", "广州1 → HKT"] };
 
 test("不带规则时什么都不生成", () => {
   const plan = buildProxyRulePlan({ preset: "off", ...PLAN_OPTIONS });
@@ -22,7 +22,7 @@ test("不带规则时什么都不生成", () => {
   assert.deepEqual(plan.ruleSets, []);
   assert.deepEqual(plan.categoryGroups, []);
   // 仍然要有兜底，否则客户端不知道其余流量往哪走。
-  assert.deepEqual(plan.rules, [{ type: "match", target: "ForwardX" }]);
+  assert.deepEqual(plan.rules, [{ type: "match", target: "NEX" }]);
 });
 
 test("预设逐级包含，完整包含均衡、均衡包含精简", () => {
@@ -75,11 +75,11 @@ test("其余分类各建一个策略组，首选项即默认去向", () => {
   assert.ok(cn);
   // 国内默认直连，但用户仍能在客户端里改成走代理。
   assert.equal(cn!.members[0], PROXY_RULE_TARGET_DIRECT);
-  assert.equal(cn!.members[1], "ForwardX");
+  assert.equal(cn!.members[1], "NEX");
 
   const ai = plan.categoryGroups.find((group) => group.name.includes("AI"));
   assert.ok(ai);
-  assert.equal(ai!.members[0], "ForwardX");
+  assert.equal(ai!.members[0], "NEX");
   assert.equal(ai!.members[1], PROXY_RULE_TARGET_DIRECT);
   // 自动选路组和各节点都能选，这样单独给 AI 指定一条中转也可以。
   assert.ok(ai!.members.includes("HKT 自动选路"));
@@ -150,7 +150,7 @@ test("规则指向的策略组都真实存在", () => {
     const plan = buildProxyRulePlan({ preset, ...PLAN_OPTIONS });
     const groups = new Set([
       ...plan.categoryGroups.map((group) => group.name),
-      "ForwardX",
+      "NEX",
       PROXY_RULE_TARGET_DIRECT,
       PROXY_RULE_TARGET_REJECT,
     ]);

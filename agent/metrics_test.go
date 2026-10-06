@@ -1189,7 +1189,7 @@ func TestCountingLayoutPresenceUsesTheExpectedSingleBackend(t *testing.T) {
 		{name: "missing IPv4 kernel layout", state: localRuleState{Port: "22006", RuleID: 6, ForwardType: "iptables", TargetIP: "192.0.2.20", TargetPort: 443}, want: false},
 		{name: "unresolved kernel target waits for DNS", state: localRuleState{Port: "22007", RuleID: 7, ForwardType: "iptables", TargetIP: "expired.example", TargetPort: 443}, want: true},
 		{name: "native nft owns its counters", state: localRuleState{Port: "22008", RuleID: 8, ForwardType: "nftables"}, want: true},
-		{name: "ForwardX self reports", state: localRuleState{Port: "22009", RuleID: 9, ForwardType: "forwardx-v1"}, want: true},
+		{name: "NEX self reports", state: localRuleState{Port: "22009", RuleID: 9, ForwardType: "forwardx-v1"}, want: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

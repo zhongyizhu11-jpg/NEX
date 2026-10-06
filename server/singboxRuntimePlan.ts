@@ -51,7 +51,7 @@ export function singboxAssetUrl(version: string, arch: string): string {
 export function buildSingboxServiceUnit(): string {
   return [
     "[Unit]",
-    "Description=ForwardX sing-box inbound runtime",
+    "Description=NEX sing-box inbound runtime",
     "After=network.target",
     "StartLimitIntervalSec=60",
     "StartLimitBurst=5",

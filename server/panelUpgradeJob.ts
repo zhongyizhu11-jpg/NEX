@@ -35,7 +35,8 @@ export const UPGRADE_JOB_STALE_MS = 15 * 60 * 1000;
 /** 重启成功后没有客户端来确认，这么久之后自动清掉，免得一直占着侧栏。 */
 export const UPGRADE_JOB_RESTARTED_TTL_MS = 30 * 60 * 1000;
 
-const DOWNLOAD_PROGRESS_LINE = /^\[ForwardX\] progress download /;
+/** 安装脚本的下载进度行；2.3.414 之前的脚本打的前缀是 `[ForwardX]`，升级时跑的可能还是旧脚本，所以两种都认。 */
+const DOWNLOAD_PROGRESS_LINE = /^\[(?:NEX|ForwardX)\] progress download /;
 
 export function idleUpgradeJob(): UpgradeJob {
   return {
@@ -128,9 +129,9 @@ export function reconcileRestoredUpgradeJob(saved: unknown, options: ReconcileOp
   if (target && target === currentVersion) {
     const restartedAt = new Date(now).toISOString();
     const elapsed = upgradeJobElapsedMs({ ...job, restartedAt }, now);
-    appendUpgradeJobLog(job.logs, `[ForwardX] Panel restarted on v${currentVersion}`);
+    appendUpgradeJobLog(job.logs, `[NEX] Panel restarted on v${currentVersion}`);
     if (elapsed !== null) {
-      appendUpgradeJobLog(job.logs, `[ForwardX] ${operationText}用时 ${formatUpgradeDuration(elapsed)}`);
+      appendUpgradeJobLog(job.logs, `[NEX] ${operationText}用时 ${formatUpgradeDuration(elapsed)}`);
     }
     return {
       ...job,
@@ -145,11 +146,11 @@ export function reconcileRestoredUpgradeJob(saved: unknown, options: ReconcileOp
   if (job.status === "running" || job.status === "success") {
     if (age <= UPGRADE_JOB_STALE_MS) {
       // 面板重启了但版本没变：可能是脚本还没跑完、或者这次重启和升级无关。先按「还在跑」等一等。
-      appendUpgradeJobLog(job.logs, `[ForwardX] Panel restarted on v${currentVersion} while the ${job.mode || "upgrade"} to ${target || "?"} is still pending`);
+      appendUpgradeJobLog(job.logs, `[NEX] Panel restarted on v${currentVersion} while the ${job.mode || "upgrade"} to ${target || "?"} is still pending`);
       return { ...job, status: "running", restarted: false, restartedAt: null };
     }
     const reason = `面板重启后版本仍是 v${currentVersion}，${operationText}没有生效。请在服务器上手动执行一键脚本。`;
-    appendUpgradeJobLog(job.logs, `[ForwardX] ${reason}`);
+    appendUpgradeJobLog(job.logs, `[NEX] ${reason}`);
     for (const line of options.manualHintLines || []) appendUpgradeJobLog(job.logs, line);
     return {
       ...job,

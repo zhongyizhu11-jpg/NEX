@@ -72,7 +72,7 @@ function queueFileOperation<T>(filePath: string, operation: () => Promise<T>): P
 
 function reportLogFileError(action: string, filePath: string, error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
-  process.stderr.write(`[ForwardX] ${action} failed file=${filePath}: ${message}\n`);
+  process.stderr.write(`[NEX] ${action} failed file=${filePath}: ${message}\n`);
 }
 
 function queuePendingAppend(filePath: string) {
@@ -181,7 +181,7 @@ function recordPendingAppendDrop(filePath: string, count = 1) {
   const lastLoggedAt = pendingAppendDropLoggedAt.get(filePath) || 0;
   if (now - lastLoggedAt < 60 * 1000) return;
   pendingAppendDropLoggedAt.set(filePath, now);
-  process.stderr.write(`[ForwardX] log write backlog capped file=${filePath}; droppedPending=${dropped}\n`);
+  process.stderr.write(`[NEX] log write backlog capped file=${filePath}; droppedPending=${dropped}\n`);
 }
 
 export async function readRecentJsonLogPageAsync<T extends FileLogEntry = FileLogEntry>(

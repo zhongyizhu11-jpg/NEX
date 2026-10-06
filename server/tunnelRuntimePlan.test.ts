@@ -200,7 +200,7 @@ test("keeps nginx tunnels out of the GOST runtime family", () => {
   assert.equal(tunnelRuleRuntimeForwardType(tunnel), "nginx-tunnel");
 });
 
-test("keeps ForwardX and GOST tunnel action types unchanged", () => {
+test("keeps NEX and GOST tunnel action types unchanged", () => {
   assert.equal(tunnelExitRuntimeForwardType({ mode: "forwardx" }), "forwardx-tunnel");
   assert.equal(tunnelHopRuntimeForwardType({ mode: "forwardx" }), "forwardx-tunnel");
   assert.equal(tunnelRuleRuntimeForwardType({ mode: "forwardx" }), "forwardx");
@@ -211,7 +211,7 @@ test("keeps ForwardX and GOST tunnel action types unchanged", () => {
   }
 });
 
-test("recognizes only the passive ForwardX first-hop marker", () => {
+test("recognizes only the passive NEX first-hop marker", () => {
   const marker = {
     tunnelId: 17,
     port: 25117,

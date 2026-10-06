@@ -137,7 +137,7 @@ export async function agentEncryptionMiddleware(req: Request, res: Response, nex
       error: "Unauthorized",
       message,
       ...(message.toLowerCase().includes("mac verification failed") ? {
-        hint: "Agent Token 与当前面板不匹配，或面板地址/反代指向了另一个 ForwardX 实例。",
+        hint: "Agent Token 与当前面板不匹配，或面板地址/反代指向了另一个 NEX 实例。",
       } : {}),
     });
     return;

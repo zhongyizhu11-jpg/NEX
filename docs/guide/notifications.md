@@ -33,7 +33,7 @@ NEX 支持邮件（SMTP）和 Telegram 两种通知渠道，可以同时启用�
 | 端口 | 通常为 `465`（SSL/TLS）或 `587`（STARTTLS） |
 | 加密方式 | 与端口对应，选择 SSL/TLS 或 STARTTLS |
 | 发件人地址 | 发送通知的邮箱地址 |
-| 发件人名称 | 显示给收件人的名称，例如 `ForwardX` |
+| 发件人名称 | 显示给收件人的名称，例如 `NEX` |
 | 用户名 | SMTP 登录账号，通常与发件人地址相同 |
 | 密码 | SMTP 登录密码或应用专用密码 |
 
@@ -44,7 +44,7 @@ SMTP_HOST=smtp.example.com
 SMTP_PORT=465
 SMTP_TLS=true
 SMTP_FROM=noreply@example.com
-SMTP_FROM_NAME=ForwardX
+SMTP_FROM_NAME=NEX
 SMTP_USER=noreply@example.com
 SMTP_PASS=your_smtp_password
 ```
@@ -198,7 +198,7 @@ AI 助手用于 Telegram 自然语言查询和管理指令解析。进入：
 /ask 帮我关闭第 12 条规则
 ```
 
-AI 助手内置 `ForwardX Core Skill`，用于理解主机、规则、隧道、转发组、用户和计费相关术语。模型只负责识别意图，不会直接读取面板数据库，也不会生成命令在服务器上执行。
+AI 助手内置 `NEX Core Skill`，用于理解主机、规则、隧道、转发组、用户和计费相关术语。模型只负责识别意图，不会直接读取面板数据库，也不会生成命令在服务器上执行。
 
 - 查询由面板本地读取数据，并根据当前用户权限过滤结果。
 - 管理操作与网页端共用相同业务校验，仍会检查协议、端口、资源权限、套餐和计费状态。
