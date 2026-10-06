@@ -30,7 +30,7 @@ import {
 import { useEffect, useMemo, useRef, useState, type ElementType } from "react";
 import { toast } from "sonner";
 
-type Method = "ping" | "ping6" | "traceroute" | "traceroute6" | "mtr" | "mtr6" | "tcp" | "iperf3";
+type Method = "ping" | "ping6" | "traceroute" | "traceroute6" | "mtr" | "mtr6" | "tcp" | "iperf3-client" | "iperf3";
 type NetworkMethod = Exclude<Method, "iperf3">;
 type RunState = "idle" | "queued" | "running" | "success" | "warning" | "error";
 type Iperf3State = "idle" | "queued" | "starting" | "running" | "stopping" | "stopped" | "error";
@@ -86,8 +86,13 @@ const methods: Array<{
   { value: "mtr", label: "MTR IPv4", description: "连续检测 IPv4 路由质量和丢包情况", icon: Activity },
   { value: "mtr6", label: "MTR IPv6", description: "连续检测 IPv6 路由质量和丢包情况", icon: Activity },
   { value: "tcp", label: "TCPing", description: "测试目标 TCP 端口连接延迟", icon: RadioTower },
+  { value: "iperf3-client", label: "iperf3 客户端", description: "从选中 Agent 向目标上的 iperf3 服务端跑一次带宽测试，可反向测下行", icon: Gauge },
   { value: "iperf3", label: "iperf3 服务端", description: "在选中 Agent 上启动 iperf3 服务端并展示客户端命令", icon: Gauge },
 ];
+
+/** iperf3 客户端的可选项。边界和服务端 normalizeIperf3ClientOptions 一致。 */
+const IPERF3_CLIENT_STREAM_OPTIONS = ["1", "4", "8", "16"] as const;
+const IPERF3_CLIENT_SECOND_OPTIONS = ["10", "20", "30"] as const;
 
 const examples = ["1.1.1.1", "8.8.8.8", "github.com", "cloudflare.com"];
 
@@ -106,7 +111,13 @@ function resultOk(result?: LookingGlassResult | null) {
   return !!result && !result.timedOut && result.exitCode === 0;
 }
 
-function buildPendingOutput(method: NetworkMethod, hostName: string, target: string, port?: string) {
+function buildPendingOutput(
+  method: NetworkMethod,
+  hostName: string,
+  target: string,
+  port?: string,
+  iperf3?: { reverse: boolean; streams: string; seconds: string },
+) {
   const lines = [
     `[${new Date().toLocaleTimeString("zh-CN", { hour12: false })}] 已创建网络测试任务`,
     `测试主机: ${hostName || "-"}`,
@@ -114,6 +125,11 @@ function buildPendingOutput(method: NetworkMethod, hostName: string, target: str
     `目标地址: ${target || "-"}`,
   ];
   if (method === "tcp") lines.push(`目标端口: ${port || "443"}`);
+  if (method === "iperf3-client") {
+    lines.push(`服务端端口: ${port || "5201"}`);
+    lines.push(`方向: ${iperf3?.reverse ? "反向（目标 → 测试主机，看下行）" : "正向（测试主机 → 目标，看上行）"}`);
+    lines.push(`并行连接: ${iperf3?.streams || "4"}，时长: ${iperf3?.seconds || "10"} 秒`);
+  }
   lines.push("等待 Agent 拉取任务并执行...");
   return lines.join("\n");
 }
@@ -305,6 +321,10 @@ export default function LookingGlass() {
   const [target, setTarget] = useState("");
   const [port, setPort] = useState("443");
   const [iperf3Port, setIperf3Port] = useState("");
+  const [iperf3ClientPort, setIperf3ClientPort] = useState("5201");
+  const [iperf3Streams, setIperf3Streams] = useState<string>("4");
+  const [iperf3Seconds, setIperf3Seconds] = useState<string>("10");
+  const [iperf3Reverse, setIperf3Reverse] = useState(false);
   const [hostId, setHostId] = useState("");
   const [activeTaskId, setActiveTaskId] = useState("");
   const [runStartedAt, setRunStartedAt] = useState<number | null>(null);
@@ -481,17 +501,37 @@ export default function LookingGlass() {
       toast.error("请输入 1-65535 的端口");
       return;
     }
+    const numericClientPort = Number(iperf3ClientPort);
+    if (method === "iperf3-client" && (!Number.isInteger(numericClientPort) || numericClientPort < 1 || numericClientPort > 65535)) {
+      toast.error("请输入 1-65535 的 iperf3 服务端端口");
+      return;
+    }
     const networkMethod = method as NetworkMethod;
+    const isIperf3Client = networkMethod === "iperf3-client";
     setRunState("queued");
     setRunStartedAt(Date.now());
     setLatestResult(null);
     setActiveTaskId("");
-    setLiveOutput(buildPendingOutput(networkMethod, selectedHost?.name || "", target.trim(), port));
+    setLiveOutput(buildPendingOutput(
+      networkMethod,
+      selectedHost?.name || "",
+      target.trim(),
+      isIperf3Client ? iperf3ClientPort : port,
+      isIperf3Client ? { reverse: iperf3Reverse, streams: iperf3Streams, seconds: iperf3Seconds } : undefined,
+    ));
     mutation.mutate({
       method: networkMethod,
       target: target.trim(),
       hostId: Number(hostId),
       ...(networkMethod === "tcp" ? { port: numericPort } : {}),
+      ...(isIperf3Client
+        ? {
+          port: numericClientPort,
+          reverse: iperf3Reverse,
+          streams: Number(iperf3Streams) || 4,
+          seconds: Number(iperf3Seconds) || 10,
+        }
+        : {}),
     });
   };
 
@@ -550,7 +590,7 @@ export default function LookingGlass() {
   return (
     <DashboardLayout>
       <div className="space-y-5">
-        <WorkspaceHeader title="网络测试" description="从 Agent 主机发起 Ping、Traceroute、MTR、TCPing 或 iperf3 测试。" />
+        <WorkspaceHeader title="网络测试" description="从 Agent 主机发起 Ping、Traceroute、MTR、TCPing 或 iperf3 带宽测试。" />
 
         <Alert className="border-border bg-card text-foreground [&>svg]:text-muted-foreground">
           <Globe2 className="h-4 w-4" />
@@ -663,6 +703,63 @@ export default function LookingGlass() {
                     placeholder="自定义端口"
                     className="font-mono"
                   />
+                </div>
+              )}
+
+              {method === "iperf3-client" && (
+                <div className="space-y-3">
+                  <div className="space-y-2">
+                    <Label htmlFor="looking-glass-iperf3-client-port">服务端端口</Label>
+                    <Input
+                      id="looking-glass-iperf3-client-port"
+                      value={iperf3ClientPort}
+                      onChange={(event) => setIperf3ClientPort(event.target.value.replace(/\D/g, "").slice(0, 5))}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") runTest();
+                      }}
+                      inputMode="numeric"
+                      placeholder="5201"
+                      className="font-mono"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      先在另一台主机上用「iperf3 服务端」开好，再把它的地址和端口填到这里；两台都是面板里的主机时，这就是入口到出口那一段的真实带宽。
+                    </p>
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <FormField className="min-w-0 space-y-2">
+                      <Label htmlFor="looking-glass-iperf3-direction">方向</Label>
+                      <Select value={iperf3Reverse ? "reverse" : "forward"} onValueChange={(value) => setIperf3Reverse(value === "reverse")}>
+                        <SelectTrigger id="looking-glass-iperf3-direction"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="forward">正向：测试主机 → 目标（上行）</SelectItem>
+                          <SelectItem value="reverse">反向：目标 → 测试主机（下行）</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </FormField>
+                    <FormField className="min-w-0 space-y-2">
+                      <Label htmlFor="looking-glass-iperf3-streams">并行连接</Label>
+                      <Select value={iperf3Streams} onValueChange={setIperf3Streams}>
+                        <SelectTrigger id="looking-glass-iperf3-streams"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {IPERF3_CLIENT_STREAM_OPTIONS.map((value) => (
+                            <SelectItem key={value} value={value}>{value === "1" ? "1（单连接）" : `${value} 条`}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </FormField>
+                    <FormField className="min-w-0 space-y-2">
+                      <Label htmlFor="looking-glass-iperf3-seconds">时长</Label>
+                      <Select value={iperf3Seconds} onValueChange={setIperf3Seconds}>
+                        <SelectTrigger id="looking-glass-iperf3-seconds"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {IPERF3_CLIENT_SECOND_OPTIONS.map((value) => (
+                            <SelectItem key={value} value={value}>{value} 秒</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </FormField>
+                  </div>
+                  <p className="text-xs text-muted-foreground">单连接的数字就是一条下载能跑到的上限；多条连接的合计才是这段线路的总带宽。两个数差很多，说明是单连接被窗口或丢包卡住，不是线路本身不够。</p>
                 </div>
               )}
 

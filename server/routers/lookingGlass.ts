@@ -10,6 +10,10 @@ import {
   enqueueLookingGlassAgentTask,
   getLookingGlassAgentTaskStatus,
   hasActiveLookingGlassTask,
+  IPERF3_CLIENT_MAX_SECONDS,
+  IPERF3_CLIENT_MAX_STREAMS,
+  IPERF3_CLIENT_MIN_SECONDS,
+  normalizeIperf3ClientOptions,
   type LookingGlassTaskStatus,
 } from "../lookingGlassAgentTasks";
 import {
@@ -21,7 +25,7 @@ import {
 } from "../iperf3AgentTasks";
 import { requireHostAccess } from "./helpers";
 
-const methodSchema = z.enum(["ping", "ping6", "traceroute", "traceroute6", "mtr", "mtr6", "tcp"]);
+const methodSchema = z.enum(["ping", "ping6", "traceroute", "traceroute6", "mtr", "mtr6", "tcp", "iperf3-client"]);
 
 type LookingGlassMethod = z.infer<typeof methodSchema>;
 
@@ -55,7 +59,7 @@ function isPrivateAddress(address: string) {
 }
 
 async function resolvePublicTarget(target: string, method: LookingGlassMethod) {
-  const family = method.endsWith("6") ? 6 : method === "tcp" ? 0 : 4;
+  const family = method.endsWith("6") ? 6 : method === "tcp" || method === "iperf3-client" ? 0 : 4;
   const literalFamily = net.isIP(target);
   let resolved: Array<{ address: string; family: number }>;
   try {
@@ -157,6 +161,10 @@ export const lookingGlassRouter = router({
       target: z.string().min(1).max(253),
       port: z.number().int().min(1).max(65535).optional(),
       hostId: z.number().int().positive(),
+      // iperf3 客户端专用；其他方法忽略。
+      reverse: z.boolean().optional(),
+      streams: z.number().int().min(1).max(IPERF3_CLIENT_MAX_STREAMS).optional(),
+      seconds: z.number().int().min(IPERF3_CLIENT_MIN_SECONDS).max(IPERF3_CLIENT_MAX_SECONDS).optional(),
     }))
     .mutation(async ({ input, ctx }) => {
       await assertNetworkTestAllowed(ctx);
@@ -171,6 +179,12 @@ export const lookingGlassRouter = router({
         throw new Error(`测试主机「${(host as any).name || `Host #${input.hostId}`}」未检测到 IPv6 地址，无法执行 ${methodMetaLabel(method)} 测试`);
       }
       const resolved = await resolvePublicTarget(target, method);
+      /*
+        iperf3 客户端：从这台 Agent 往目标上的 iperf3 服务端跑一次带宽测试。
+        对端通常就是面板里另一台主机上一键开的 iperf3 服务端（默认端口同
+        AUTO_IPERF3_SERVER_PORT）。它跑满 seconds 秒才出结果，时限单独算。
+      */
+      const iperf3 = method === "iperf3-client" ? normalizeIperf3ClientOptions(input) : null;
       const { task, status } = enqueueLookingGlassAgentTask(input.hostId, {
         method,
         target,
@@ -178,7 +192,15 @@ export const lookingGlassRouter = router({
         resolvedAddresses: resolved.addresses,
         family: resolved.family,
         ...(method === "tcp" ? { port: input.port || 443 } : {}),
-      });
+        ...(iperf3
+          ? {
+            port: input.port || AUTO_IPERF3_SERVER_PORT,
+            reverse: iperf3.reverse,
+            streams: iperf3.streams,
+            seconds: iperf3.seconds,
+          }
+          : {}),
+      }, iperf3 ? iperf3.timeoutMs : undefined);
       pushAgentRefresh(input.hostId, "looking-glass");
       return decorateStatus({ ...status, taskId: task.taskId }, host);
     }),
@@ -247,5 +269,6 @@ function methodMetaLabel(method: LookingGlassMethod) {
   if (method === "ping6") return "Ping IPv6";
   if (method === "traceroute6") return "Traceroute IPv6";
   if (method === "mtr6") return "MTR IPv6";
+  if (method === "iperf3-client") return "iperf3 客户端";
   return method;
 }
