@@ -1801,17 +1801,43 @@ button.fx-rule-tag:hover { filter: brightness(.96); }
 /* 概览底图：海面是一层淡主色（四周暗角也按它淡出），陆地白、国界细灰线；深色下炭灰陆地 */
 :root { --fx-overview-canvas: color-mix(in srgb, var(--fx-primary-fill) 13%, #eef1f5); }
 .dark { --fx-overview-canvas: color-mix(in srgb, var(--fx-primary-fill) 9%, #17191d); }
-.fx-overview-canvas { border-radius: 16px; overflow: hidden; background: var(--fx-overview-canvas); }
-.fx-overview-countries { fill: #fdfdfd; stroke: color-mix(in srgb, var(--fx-primary-fill) 18%, #d6dae1); stroke-width: 0.7px; }
-.dark .fx-overview-countries { fill: #2c2f35; stroke: #42464f; }
+.fx-overview-canvas { border-radius: 16px; overflow: hidden; background: linear-gradient(180deg, color-mix(in srgb, var(--fx-overview-canvas) 55%, #fff) 0%, var(--fx-overview-canvas) 100%); }
+.dark .fx-overview-canvas { background: linear-gradient(180deg, color-mix(in srgb, var(--fx-overview-canvas) 80%, #2a2e36) 0%, var(--fx-overview-canvas) 100%); }
+/* 陆地外一圈浅滩：陆地 path 再描一遍宽边，不用滤镜（动效在跑时滤镜每帧都要重算） */
+.fx-overview-shore { fill: none; stroke: var(--fx-primary-fill); stroke-opacity: 0.1; stroke-width: 8px; }
+.dark .fx-overview-shore { stroke-opacity: 0.14; }
+.fx-overview-graticule line { stroke: var(--fx-primary-fill); stroke-opacity: 0.09; stroke-width: 1px; }
+.dark .fx-overview-graticule line { stroke: #fff; stroke-opacity: 0.045; }
+.fx-overview-land { fill: #fdfdfd; stroke: color-mix(in srgb, var(--fx-primary-fill) 26%, #cfd5dd); stroke-width: 0.8px; }
+.dark .fx-overview-land { fill: #30343b; stroke: #4e545e; }
+.fx-overview-pulse { transform-box: fill-box; transform-origin: center; animation: fx-overview-pulse 2.4s ease-out infinite; }
+@keyframes fx-overview-pulse { 0% { transform: scale(0.7); opacity: 0.8; } 100% { transform: scale(1.9); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .fx-overview-pulse { animation: none; opacity: 0; } }
+.fx-overview-borders { fill: none; stroke: color-mix(in srgb, var(--fx-primary-fill) 14%, #d9dde4); stroke-width: 0.6px; }
+.dark .fx-overview-borders { stroke: #3d4149; }
+.fx-overview-count { font-size: 10.5px; font-weight: 700; fill: #fff; font-family: var(--fx-font); font-variant-numeric: tabular-nums; pointer-events: none; }
+.fx-overview-leader { fill: none; stroke: var(--fx-text-muted); stroke-opacity: 0.55; stroke-width: 1px; }
+.fx-overview-tether { fill: none; stroke: var(--fx-text-muted); stroke-opacity: 0.6; stroke-width: 1px; }
+.fx-overview-city[data-tone="down"] { fill: var(--fx-down-text); }
+.fx-overview-city[data-tone="warn"] { fill: var(--fx-warn-text); }
+.fx-overview-popover { position: absolute; z-index: var(--fx-z-raised); display: flex; flex-direction: column; padding: 6px; border-radius: 14px; background: var(--fx-l1-surface); box-shadow: 0 10px 30px -8px rgb(0 0 0 / 22%), 0 0 0 1px var(--fx-stroke-weak); font-size: 13px; }
+.fx-overview-popover-head { display: flex; flex-shrink: 0; align-items: center; gap: 8px; min-height: 32px; padding: 0 2px 0 8px; font-weight: 600; color: var(--fx-text); }
+.fx-overview-popover-close { margin-left: auto; width: 24px; height: 24px; border-radius: 12px; color: var(--fx-text-muted); font-size: 16px; line-height: 1; }
+.fx-overview-popover-list { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.fx-overview-popover-row { display: flex; width: 100%; align-items: center; gap: 8px; min-height: 32px; padding: 0 8px; border-radius: 10px; color: var(--fx-text); }
+.fx-overview-popover-row:active { background: var(--fx-l3-control-fill); }
+@media (hover: hover) { .fx-overview-popover-row:hover { background: var(--fx-l3-control-fill); } }
+.fx-overview-popover-dot { width: 7px; height: 7px; flex-shrink: 0; border-radius: 999px; background: var(--fx-text-muted); }
+.fx-overview-popover-dot[data-tone="ok"] { background: var(--fx-healthy); }
+.fx-overview-popover-dot[data-tone="warn"] { background: var(--fx-warn); }
+.fx-overview-popover-dot[data-tone="down"] { background: var(--fx-down); }
 /* 地球图上罩一层极淡的画布色，浅色下卫星图不抢标签；深色的夜景图本来就暗，不罩 */
 .fx-overview-flow { stroke: #fff; stroke-opacity: 0.75; stroke-linecap: round; stroke-dasharray: 1.2 16; animation: fx-overview-flow 2.2s linear infinite; }
 @keyframes fx-overview-flow { to { stroke-dashoffset: -17.2; } }
 @media (prefers-reduced-motion: reduce) { .fx-overview-flow { animation: none; } }
-.fx-overview-label-box { fill: var(--fx-l1-surface); filter: drop-shadow(0 3px 10px rgb(0 0 0 / 10%)); }
+.fx-overview-label-box { fill: var(--fx-l1-surface); stroke: rgb(0 0 0 / 5%); stroke-width: 1px; filter: drop-shadow(0 3px 10px rgb(0 0 0 / 10%)); }
 .dark .fx-overview-label-box { stroke: var(--fx-stroke-weak); stroke-width: 1px; filter: drop-shadow(0 3px 10px rgb(0 0 0 / 40%)); }
 .fx-overview-city { font-size: 12px; font-weight: 600; fill: var(--fx-text); font-family: var(--fx-font); }
-.fx-overview-name { font-size: 10px; fill: var(--fx-text-muted); font-family: var(--fx-font); }
 .fx-overview-verdict { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px 0 8px; border-radius: 13px; font-size: 12.5px; font-weight: 600; white-space: nowrap; }
 .fx-overview-verdict-dot { width: 7px; height: 7px; border-radius: 999px; background: currentColor; }
 .fx-overview-verdict[data-tone="ok"] { color: var(--fx-healthy-text); background: color-mix(in srgb, var(--fx-healthy) 11%, transparent); }
