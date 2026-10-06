@@ -19,7 +19,6 @@ import (
 	"golang.zx2c4.com/wireguard/conn"
 	"golang.zx2c4.com/wireguard/device"
 	"golang.zx2c4.com/wireguard/tun"
-	"golang.zx2c4.com/wireguard/tun/netstack"
 )
 
 const (
@@ -163,7 +162,7 @@ type wireGuardRuntime struct {
 	spec              wireGuardSpec
 	signature         string
 	tunDevice         tun.Device
-	netstack          *netstack.Net
+	netstack          *wireGuardNetTUN
 	device            *device.Device
 	peers             map[string]wireGuardPeerSpec
 	outbound          map[string]*wireGuardOutboundProxy
@@ -354,11 +353,12 @@ func newWireGuardRuntime(spec wireGuardSpec) (*wireGuardRuntime, error) {
 		return nil, err
 	}
 	address := netip.MustParseAddr(normalized.Address)
-	tunDevice, tnet, err := netstack.CreateNetTUN([]netip.Addr{address}, nil, normalized.MTU)
+	tnet, err := newWireGuardNetTUN(address, normalized.MTU)
 	if err != nil {
 		return nil, fmt.Errorf("create wireguard netstack: %w", err)
 	}
-	if err := tuneWireGuardNetstack(tnet); err != nil {
+	var tunDevice tun.Device = tnet
+	if err := tuneWireGuardNetstack(tnet.stack); err != nil {
 		logf("wireguard tunnel=%d netstack tuning skipped: %v", normalized.TunnelID, err)
 	}
 	logger := &device.Logger{

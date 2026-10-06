@@ -537,3 +537,19 @@ test("单用户协议仍然派生一条节点，凭据来自入站本身", () =>
   assert.equal(derived[0].user, null);
   assert.equal(derived[0].node.password, "pw");
 });
+
+test("Hysteria2 入站声明的带宽跟着派生到客户端节点，其他协议不带", () => {
+  const hy2 = proxyNodeFromInbound(
+    inbound({
+      protocol: "hysteria2", name: "HY2", port: 8443, security: "tls", password: "pw",
+      certPath: "/c", keyPath: "/k", upMbps: 50, downMbps: 300,
+    }),
+    { address: "1.2.3.4" },
+  );
+  assert.equal(hy2.upMbps, 50);
+  assert.equal(hy2.downMbps, 300);
+
+  const vless = proxyNodeFromInbound({ ...VLESS_REALITY, upMbps: 50, downMbps: 300 }, { address: "1.2.3.4" });
+  assert.equal(vless.upMbps, 0);
+  assert.equal(vless.downMbps, 0);
+});

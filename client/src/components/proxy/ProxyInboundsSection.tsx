@@ -98,6 +98,9 @@ type InboundForm = {
   acmeEmail: string;
   obfs: string;
   obfsPassword: string;
+  /** Hysteria2 声明给客户端的带宽（Mbps，空串 = 不声明，客户端退回 BBR）。 */
+  upMbps: string;
+  downMbps: string;
   snellVersion: number;
   /** Shadowsocks 的加密方式。其他协议用不到，留着也不会下发。 */
   method: string;
@@ -139,6 +142,8 @@ function emptyForm(): InboundForm {
     acmeEmail: "",
     obfs: "",
     obfsPassword: "",
+    upMbps: "",
+    downMbps: "",
     snellVersion: PROXY_INBOUND_SNELL_VERSIONS[0],
     method: PROXY_INBOUND_SHADOWSOCKS_DEFAULT_METHOD,
     bandwidthMbps: "",
@@ -466,6 +471,8 @@ export default function ProxyInboundsSection({
       acmeEmail: String(row.acmeEmail || ""),
       obfs: String(row.obfs || ""),
       obfsPassword: String(row.obfsPassword || ""),
+      upMbps: Number(row.upMbps || 0) > 0 ? String(row.upMbps) : "",
+      downMbps: Number(row.downMbps || 0) > 0 ? String(row.downMbps) : "",
       snellVersion: Number(row.snellVersion || PROXY_INBOUND_SNELL_VERSIONS[0]),
       method: String(row.method || PROXY_INBOUND_SHADOWSOCKS_DEFAULT_METHOD),
       bandwidthMbps: Number(row.bandwidthMbps || 0) > 0 ? String(row.bandwidthMbps) : "",
@@ -508,6 +515,8 @@ export default function ProxyInboundsSection({
       acmeEmail: form.acmeEmail.trim(),
       obfs: form.obfs.trim(),
       obfsPassword: form.obfsPassword.trim(),
+      upMbps: positiveIntFromInput(form.upMbps),
+      downMbps: positiveIntFromInput(form.downMbps),
       snellVersion: form.snellVersion,
       method: form.method,
       bandwidthMbps: positiveIntFromInput(form.bandwidthMbps),
@@ -1131,6 +1140,34 @@ export default function ProxyInboundsSection({
                     <Input value={form.obfsPassword} onChange={(event) => setForm((prev) => ({ ...prev, obfsPassword: event.target.value }))} placeholder="留空自动生成" />
                   </div>
                 ) : null}
+                {/*
+                  声明给客户端的带宽。填了之后客户端走 Brutal：按这个速率发包、不把
+                  跨境线路的丢包当拥塞，单条连接也能跑满；不填就是 BBR，丢包一重单连接
+                  就起不来。按这台落地机**单个客户端**能用的速率填，填过头只会制造丢包。
+                */}
+                <div className="min-w-0 space-y-1.5">
+                  <Label className="text-xs">下行带宽（Mbps，Brutal）</Label>
+                  <Input
+                    type="number"
+                    inputMode="numeric"
+                    value={form.downMbps}
+                    onChange={(event) => setForm((prev) => ({ ...prev, downMbps: event.target.value }))}
+                    placeholder="不填 = 客户端用 BBR"
+                  />
+                </div>
+                <div className="min-w-0 space-y-1.5">
+                  <Label className="text-xs">上行带宽（Mbps，Brutal）</Label>
+                  <Input
+                    type="number"
+                    inputMode="numeric"
+                    value={form.upMbps}
+                    onChange={(event) => setForm((prev) => ({ ...prev, upMbps: event.target.value }))}
+                    placeholder="不填 = 客户端用 BBR"
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground sm:col-span-2">
+                  填了带宽，订阅里的 Hysteria2 节点就带上 up / down（Stash 为 up-speed / down-speed），客户端按声明速率发包，跨境丢包线路上单连接也能跑满；按单个客户端实际能用的速率填。
+                </p>
               </div>
             ) : null}
 

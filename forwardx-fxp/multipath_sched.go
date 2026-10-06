@@ -33,7 +33,12 @@ const multipathLegMinInflight = 256 * 1024
 const multipathLegInitialInflight = 1024 * 1024
 
 // multipathLegMaxInflight caps one leg's backlog however fast it measures.
-const multipathLegMaxInflight = 16 * 1024 * 1024
+//
+// 在途 = 写出去还没被对端确认收到的字节，其中包括还躺在本机内核发送缓冲里的。
+// 这个上限除以往返时间就是一条腿的速率上限：以前 16 MiB 在 200 ms 的线路上封顶
+// 约 640 Mbps，千兆中转跑不满。32 MiB 把这条线抬到约 1.3 Gbps；重传缓冲本来就被
+// 对端的窗口（1024 片）封着顶，这里放宽不会让内存失控。
+const multipathLegMaxInflight = 32 * 1024 * 1024
 
 // multipathRateInterval is how often a leg's delivery rate is sampled.
 const multipathRateInterval = 100 * time.Millisecond

@@ -4,24 +4,19 @@ import (
 	"net/netip"
 	"testing"
 
-	"golang.zx2c4.com/wireguard/tun/netstack"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
 )
 
 func TestTuneWireGuardNetstackRaisesBuffersAndUsesCubic(t *testing.T) {
-	dev, tnet, err := netstack.CreateNetTUN([]netip.Addr{netip.MustParseAddr("10.77.0.1")}, nil, 1380)
+	dev, err := newWireGuardNetTUN(netip.MustParseAddr("10.77.0.1"), 1380)
 	if err != nil {
 		t.Fatalf("create netstack: %v", err)
 	}
 	defer dev.Close()
 
-	// 依赖升级把字段改名时这里会先失败，而不是在真机上悄悄退回 reno + 4MB。
-	s := wireGuardNetstackStack(tnet)
-	if s == nil {
-		t.Fatal("netstack stack field not reachable; wireguard-go layout changed")
-	}
-	if err := tuneWireGuardNetstack(tnet); err != nil {
+	s := dev.stack
+	if err := tuneWireGuardNetstack(s); err != nil {
 		t.Fatalf("tune: %v", err)
 	}
 	var recv tcpip.TCPReceiveBufferSizeRangeOption

@@ -31,6 +31,16 @@ func normalizeConfig(cfg config) config {
 	cfg.RelayExitHost = strings.TrimSpace(cfg.RelayExitHost)
 	cfg.ListenHost = strings.TrimSpace(cfg.ListenHost)
 	cfg.ProxyProtocolVersion = normalizeProxyProtocolVersion(cfg.ProxyProtocolVersion)
+	// 这两项面板暂时不下发；没写时看环境变量（写在 Agent 的 systemd 单元里，FXP 是
+	// 它的子进程），给需要手动指定的人留一个口子。
+	if strings.TrimSpace(cfg.TCPCongestion) == "" {
+		cfg.TCPCongestion = os.Getenv("FORWARDX_FXP_TCP_CONGESTION")
+	}
+	if strings.TrimSpace(cfg.AEAD) == "" {
+		cfg.AEAD = os.Getenv("FORWARDX_FXP_AEAD")
+	}
+	cfg.TCPCongestion = strings.ToLower(strings.TrimSpace(cfg.TCPCongestion))
+	cfg.AEAD = normalizeAEADConfig(cfg.AEAD)
 	if cfg.UDPListenPort <= 0 {
 		cfg.UDPListenPort = cfg.ListenPort
 	}

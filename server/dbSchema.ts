@@ -361,6 +361,8 @@ const tables: TableDef[] = [
       c("realityPublicKey", "text"), c("realityShortId", "text"),
       c("udp", "bool", { notNull: true, default: true }),
       c("obfs", "text"), c("obfsPassword", "text"),
+      // Hysteria2 客户端声明的带宽（Brutal），自建节点从入站带过来，粘来的节点从配置里读。
+      c("upMbps", "int", { notNull: true, default: 0 }), c("downMbps", "int", { notNull: true, default: 0 }),
       c("congestionControl", "text"), c("udpRelayMode", "text"),
       c("disableSni", "bool", { notNull: true, default: false }),
       c("snellVersion", "int", { notNull: true, default: 0 }), c("snellMode", "text"), c("xhttpMode", "text"),

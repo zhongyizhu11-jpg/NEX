@@ -1103,3 +1103,47 @@ test("节点主人在 sni 里塞换行，插不进收到共享的人的 Surge / 
     }
   }
 });
+
+// ==================== Hysteria2 的 Brutal 带宽与 Stash 键名 ====================
+
+test("Hysteria2 声明了带宽时，Clash 带 up/down（mihomo）和 up-speed/down-speed（Stash），并同时写 auth", () => {
+  const document = only(HY2, "广州1 → HY2");
+  document.nodes[0] = { ...document.nodes[0], upMbps: 50, downMbps: 300 };
+  const parsed = parseYamlSubset(renderProxySubscription(document, "clash"));
+  const proxy = (parsed.proxies as Record<string, unknown>[])[0];
+
+  assert.equal(proxy.up, "50 Mbps");
+  assert.equal(proxy.down, "300 Mbps");
+  assert.equal(proxy["up-speed"], 50);
+  assert.equal(proxy["down-speed"], 300);
+  // Stash 的 hysteria2 鉴权键叫 auth，mihomo 叫 password；两个都给。
+  assert.equal(proxy.password, "hy2-pass");
+  assert.equal(proxy.auth, "hy2-pass");
+});
+
+test("Hysteria2 没声明带宽时，Clash 不写任何带宽键（客户端退回 BBR）", () => {
+  const parsed = parseYamlSubset(renderProxySubscription(only(HY2, "广州1 → HY2"), "clash"));
+  const proxy = (parsed.proxies as Record<string, unknown>[])[0];
+  for (const key of ["up", "down", "up-speed", "down-speed"]) {
+    assert.equal(proxy[key], undefined, key);
+  }
+});
+
+test("Hysteria2 的带宽在 sing-box 里是 up_mbps / down_mbps，在 Surge 里是 download-bandwidth", () => {
+  const document = only(HY2, "广州1 → HY2");
+  document.nodes[0] = { ...document.nodes[0], upMbps: 50, downMbps: 300 };
+
+  const singbox = JSON.parse(renderProxySubscription(document, "singbox"));
+  const outbound = singbox.outbounds.find((item: any) => item.type === "hysteria2");
+  assert.equal(outbound.up_mbps, 50);
+  assert.equal(outbound.down_mbps, 300);
+
+  const surge = renderProxySubscription(document, "surge");
+  assert.match(surge, /hysteria2, 1\.2\.3\.4, 20001, password=hy2-pass, download-bandwidth=300/);
+
+  // 其他协议不受影响。
+  const trojan = only(TROJAN, "广州1 → TJ");
+  trojan.nodes[0] = { ...trojan.nodes[0], upMbps: 50, downMbps: 300 };
+  const trojanClash = parseYamlSubset(renderProxySubscription(trojan, "clash"));
+  assert.equal((trojanClash.proxies as Record<string, unknown>[])[0].up, undefined);
+});

@@ -162,9 +162,22 @@ function clashProxyLines(node: ProxyNode): YamlLine[] {
     if (node.protocol === "hysteria2") {
       field("type", "hysteria2");
       field("password", yamlQuote(node.password));
+      // Stash 的 hysteria2 鉴权键叫 auth（mihomo 叫 password）。两家都忽略不认识的
+      // 键，所以两个都写，同一份订阅两边都能连。
+      field("auth", yamlQuote(node.password));
       if (node.obfs) {
         field("obfs", yamlQuote(node.obfs));
         if (node.obfsPassword) field("obfs-password", yamlQuote(node.obfsPassword));
+      }
+      // 声明了带宽才有 Brutal：按这个速率发、不理会丢包，单连接在跨境线路上才跑得
+      // 满。mihomo 读 up / down（带单位），Stash 读 up-speed / down-speed（Mbps）。
+      if (node.upMbps > 0) {
+        field("up", yamlQuote(`${node.upMbps} Mbps`));
+        field("up-speed", String(node.upMbps));
+      }
+      if (node.downMbps > 0) {
+        field("down", yamlQuote(`${node.downMbps} Mbps`));
+        field("down-speed", String(node.downMbps));
       }
     } else if (node.protocol === "tuic") {
       field("type", "tuic");
@@ -368,6 +381,9 @@ function singboxOutbound(node: ProxyNode): Record<string, unknown> {
     if (node.obfs) {
       outbound.obfs = { type: node.obfs, ...(node.obfsPassword ? { password: node.obfsPassword } : {}) };
     }
+    // 声明带宽 = Brutal；不声明 = BBR。
+    if (node.upMbps > 0) outbound.up_mbps = node.upMbps;
+    if (node.downMbps > 0) outbound.down_mbps = node.downMbps;
   } else if (node.protocol === "tuic") {
     outbound.type = "tuic";
     outbound.uuid = node.uuid;
@@ -778,6 +794,8 @@ function surgeNodeLine(node: ProxyNode): string {
     parts.push("trojan", node.address, String(node.port), `password=${node.password}`);
   } else if (node.protocol === "hysteria2") {
     parts.push("hysteria2", node.address, String(node.port), `password=${node.password}`);
+    // Surge 只有下行带宽这一个参数（Mbps），填了才走 Brutal。
+    if (node.downMbps > 0) parts.push(`download-bandwidth=${node.downMbps}`);
     // Surge 的混淆按类型分成两个参数名，没有统一的 obfs 键。
     if (node.obfsPassword && node.obfs === "salamander") parts.push(`salamander-password=${node.obfsPassword}`);
     if (node.obfsPassword && node.obfs === "gecko") parts.push(`gecko-password=${node.obfsPassword}`);

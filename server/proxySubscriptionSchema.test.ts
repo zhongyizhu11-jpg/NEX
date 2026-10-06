@@ -130,3 +130,17 @@ test("已有安装升级时通过 ALTER TABLE 补齐新列且不丢数据", () =
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("Drizzle 的 proxyNodes 声明了物理表 proxy_nodes 的每一列", async () => {
+  // 物理列加在 server/dbSchema.ts 里就会建出来，但 db.select().from(proxyNodes) 只投影
+  // drizzle/schema.ts 里声明过的列：漏声明的列读出来永远是 undefined，订阅里就是 0。
+  const { getTableColumns } = await import("drizzle-orm");
+  const { proxyNodes } = await import("../drizzle/schema");
+  const physical = getDatabaseTableDefs().find((table) => table.name === "proxy_nodes");
+  assert.ok(physical);
+  const columns = getTableColumns(proxyNodes) as Record<string, { name: string }>;
+  const declared = new Set(Object.values(columns).map((column) => column.name));
+  for (const column of physical!.columns) {
+    assert.ok(declared.has(column.name), `drizzle/schema.ts 的 proxyNodes 缺列: ${column.name}`);
+  }
+});
