@@ -69,13 +69,20 @@ type config struct {
 	ProxyProtocolExitSend    bool           `json:"proxyProtocolExitSend"`
 	ProxyProtocolVersion     int            `json:"proxyProtocolVersion"`
 	TCPFastOpen              bool           `json:"tcpFastOpen"`
-	PanelURL                 string         `json:"panelUrl"`
-	Token                    string         `json:"token"`
-	RelayExitHost            string         `json:"relayExitHost,omitempty"`
-	RelayExitPort            int            `json:"relayExitPort,omitempty"`
-	UDPRelayExitPort         int            `json:"udpRelayExitPort,omitempty"`
-	RelayKey                 string         `json:"relayKey,omitempty"`
-	DNSGeneration            int            `json:"dnsGeneration,omitempty"`
+	// TCPCongestion 是给 FXP 自己收发的每条 TCP 连接设的拥塞控制算法：空 / auto
+	// 表示系统默认是 cubic、reno 时换成 bbr；off 表示保持系统默认；也可以直接写
+	// 算法名。见 tcp_congestion.go。
+	TCPCongestion string `json:"tcpCongestion,omitempty"`
+	// AEAD 是帧加密算法：空 / auto 按本机实测（没有 AES 硬件时偏好 ChaCha20），
+	// 也可以写 aes-gcm 或 chacha20-poly1305。两端握手时协商，见 aead.go。
+	AEAD             string `json:"aead,omitempty"`
+	PanelURL         string `json:"panelUrl"`
+	Token            string `json:"token"`
+	RelayExitHost    string `json:"relayExitHost,omitempty"`
+	RelayExitPort    int    `json:"relayExitPort,omitempty"`
+	UDPRelayExitPort int    `json:"udpRelayExitPort,omitempty"`
+	RelayKey         string `json:"relayKey,omitempty"`
+	DNSGeneration    int    `json:"dnsGeneration,omitempty"`
 	// Single-connection multipath aggregation. When enabled the entry stripes
 	// one client connection over every leg and the exit reassembles it.
 	MultipathEnabled    bool           `json:"multipathEnabled,omitempty"`

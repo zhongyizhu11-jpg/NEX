@@ -59,6 +59,23 @@ function toPort(value: unknown): number {
   return Number.isInteger(port) && port > 0 && port <= 65535 ? port : 0;
 }
 
+/**
+ * 带宽字段统一成 Mbps 整数。sing-box 是裸数字（Mbps）；mihomo 的 up / down 可以是
+ * 裸数字（按 Mbps）或 "30 Mbps"、"1 Gbps" 这样的带单位字符串；Stash 的 up-speed /
+ * down-speed 是裸数字（Mbps）。
+ */
+export function bandwidthMbps(value: unknown): number {
+  if (typeof value === "number") return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+  const raw = text(value).toLowerCase();
+  if (!raw) return 0;
+  const match = raw.match(/^([0-9]+(?:\.[0-9]+)?)\s*([kmgt]?)(?:bps|b)?$/);
+  if (!match) return 0;
+  const amount = Number(match[1]);
+  if (!Number.isFinite(amount) || amount <= 0) return 0;
+  const scale = { "": 1, k: 1 / 1000, m: 1, g: 1000, t: 1_000_000 }[match[2] as "" | "k" | "m" | "g" | "t"] ?? 1;
+  return Math.max(0, Math.floor(amount * scale));
+}
+
 function toBool(value: unknown): boolean {
   return value === true || value === "true" || value === 1 || value === "1";
 }
@@ -107,6 +124,8 @@ function fromSingboxOutbound(raw: Record<string, unknown>): ProxyNode | null {
   node.flow = text(raw.flow);
   node.congestionControl = text(raw.congestion_control);
   node.udpRelayMode = text(raw.udp_relay_mode);
+  node.upMbps = bandwidthMbps(raw.up_mbps);
+  node.downMbps = bandwidthMbps(raw.down_mbps);
   if (protocol === "snell") {
     // sing-box 的 Snell 鉴权字段是 psk，不是 password。
     node.password = text(raw.psk) || node.password;
@@ -170,6 +189,11 @@ function fromClashProxy(raw: Record<string, unknown>): ProxyNode | null {
   node.udp = raw.udp === undefined ? true : toBool(raw.udp);
   node.obfs = text(raw.obfs).toLowerCase();
   node.obfsPassword = text(raw["obfs-password"]);
+  // Hysteria2 的 Brutal 带宽：mihomo 叫 up / down（可带单位），Stash 叫 up-speed / down-speed。
+  node.upMbps = bandwidthMbps(raw.up ?? raw["up-speed"]);
+  node.downMbps = bandwidthMbps(raw.down ?? raw["down-speed"]);
+  // Stash 的 hysteria2 鉴权键叫 auth，mihomo 叫 password。
+  if (protocol === "hysteria2" && !node.password) node.password = text(raw.auth);
   // mihomo 的 tuic 键名是 congestion-controller，别写成 sing-box 的 congestion_control。
   node.congestionControl = text(raw["congestion-controller"]);
   node.udpRelayMode = text(raw["udp-relay-mode"]);

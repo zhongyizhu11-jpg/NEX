@@ -63,6 +63,8 @@ export type ProxyNodeTemplateRow = {
   udp?: unknown;
   obfs?: unknown;
   obfsPassword?: unknown;
+  upMbps?: unknown;
+  downMbps?: unknown;
   congestionControl?: unknown;
   udpRelayMode?: unknown;
   disableSni?: unknown;
@@ -238,6 +240,8 @@ export function proxyNodeFromTemplateRow(row: ProxyNodeTemplateRow): ProxyNode {
   node.udp = row.udp === undefined ? true : bool(row.udp);
   node.obfs = text(row.obfs).toLowerCase();
   node.obfsPassword = text(row.obfsPassword);
+  node.upMbps = Math.max(0, Math.floor(Number(text(row.upMbps)) || 0));
+  node.downMbps = Math.max(0, Math.floor(Number(text(row.downMbps)) || 0));
   node.congestionControl = text(row.congestionControl);
   node.udpRelayMode = text(row.udpRelayMode);
   node.disableSni = bool(row.disableSni);

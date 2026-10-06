@@ -156,6 +156,10 @@ type multipathSession struct {
 	// aliveLegs drops as legs fail; reaching zero fails the session.
 	aliveLegs atomic.Int64
 
+	// coalesceLimit is multipathCoalesceTarget, as a field so tests that count
+	// chunks can switch coalescing off. Guarded by mu.
+	coalesceLimit int
+
 	closeOnce sync.Once
 	closed    chan struct{}
 	finOnce   sync.Once
@@ -172,11 +176,12 @@ type multipathSession struct {
 func newMultipathSession(legs []*multipathLegConn, maxPending int) *multipathSession {
 	now := time.Now()
 	session := &multipathSession{
-		reorder:    newReorderBuffer(maxPending),
-		changed:    make(chan struct{}),
-		closed:     make(chan struct{}),
-		peerWindow: multipathInitialWindow,
-		lastAckAt:  now,
+		reorder:       newReorderBuffer(maxPending),
+		changed:       make(chan struct{}),
+		closed:        make(chan struct{}),
+		peerWindow:    multipathInitialWindow,
+		lastAckAt:     now,
+		coalesceLimit: multipathCoalesceTarget,
 	}
 	session.legStallTimeout.Store(int64(multipathLegStallTimeout))
 	session.legStallCheck.Store(int64(multipathLegStallCheck))
@@ -569,6 +574,20 @@ func (s *multipathSession) legReader(leg *multipathLegConn) {
 	}
 }
 
+// multipathCoalesceTarget is how large a queued chunk may grow by absorbing
+// the writes that follow it while no leg has claimed it yet.
+//
+// 分片的大小是复制循环一次 Read 读到多少：出口从目标读、入口从客户端读，内核
+// 里攒着多少就给多少。读得勤的时候一次常常只有一两个 TCP 段（一两千字节），
+// 于是一片就只有一两千字节。窗口、重排缓冲上限都是按**片数**记的（1024 片），
+// 小片的时候整个窗口才一两兆：往返 200ms 的线路上这就把整条会话钉在几十兆。
+// 每片还各付一份帧头、系统调用和回执。
+//
+// 所以腿都忙着的时候，后面的写并进队尾那片还没被认领的分片里，凑到和复制循环
+// 的读缓冲一样大（64 KiB）为止。腿空着的时候分片立刻就被领走，并不进去，
+// 小流量照旧一来一片、不多等。合并只改分片的大小，不改任何线上格式。
+const multipathCoalesceTarget = fxpCopyChunkSize
+
 // writeFrame queues one outbound chunk, or ends the stream when given no data.
 //
 // It blocks while the far side's window is closed or every leg is busy, which
@@ -577,6 +596,13 @@ func (s *multipathSession) writeFrame(plain []byte) error {
 	if len(plain) == 0 {
 		return s.writeFin()
 	}
+	// 快路径：队尾那片还没有腿认领，这次写直接并进去，既不占序号也不占窗口。
+	s.mu.Lock()
+	if s.coalesceLocked(plain) {
+		s.mu.Unlock()
+		return nil
+	}
+	s.mu.Unlock()
 	// The copy loops reuse their read buffer, so the chunk must be copied
 	// before it is handed to a leg writer running on another goroutine.
 	data := make([]byte, len(plain))
@@ -595,10 +621,36 @@ func (s *multipathSession) writeFrame(plain []byte) error {
 	if s.finQueued {
 		return errors.New("multipath write after end of stream")
 	}
+	// 等窗口的这段时间里腿只会认领分片，不会添分片，所以队尾那片要是还在，
+	// 它一定是刚才那一片；再试一次合并，省掉一个序号。
+	if s.coalesceLocked(plain) {
+		return nil
+	}
 	s.out = append(s.out, &mpOut{seq: s.sendSeq, data: data})
 	s.sendSeq++
 	s.signalLocked()
 	return nil
+}
+
+// coalesceLocked appends plain to the newest queued chunk when no leg has
+// claimed that chunk yet and the result stays within multipathCoalesceTarget.
+// It reports whether the write was absorbed.
+//
+// 只并进从没被认领过的分片（序号不小于 nextFresh）：被腿退回来重发的那些序号
+// 已经在 nextFresh 之前，对端可能已经收到过它原来的内容，不能再改。
+func (s *multipathSession) coalesceLocked(plain []byte) bool {
+	if s.closedLocked() || s.finQueued || s.coalesceLimit <= 0 || s.nextFresh >= s.sendSeq {
+		return false
+	}
+	out := s.out[len(s.out)-1]
+	if out.seq < s.nextFresh || out.leg != nil || out.writing {
+		return false
+	}
+	if len(out.data)+len(plain) > s.coalesceLimit {
+		return false
+	}
+	out.data = append(out.data, plain...)
+	return true
 }
 
 // writeFin announces the total chunk count and waits until the far side has

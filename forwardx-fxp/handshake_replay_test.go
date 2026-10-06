@@ -221,7 +221,7 @@ func TestFxpReplayWithinWindowGetsFreshSessionKeys(t *testing.T) {
 		t.Fatal("服务端每次握手都应该换新 salt")
 	}
 	master := sha256.Sum256([]byte(cfg.Key))
-	originalKeys, err := deriveFXPSessionAEADs(master[:], fxpFinalSessionSalt(sent[:fxpSaltSize], originalSalt), fxpFinalSessionInfo(fxpWireCurrent), fxpWireCurrent)
+	originalKeys, err := deriveFXPSessionAEADs(master[:], fxpFinalSessionSalt(sent[:fxpSaltSize], originalSalt), fxpFinalSessionInfo(fxpWireCurrent), fxpWireCurrent, fxpAEADAESGCM)
 	if err != nil {
 		t.Fatal(err)
 	}

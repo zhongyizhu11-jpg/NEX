@@ -485,6 +485,10 @@ func rawAckPeer(t *testing.T) (*multipathSession, *secureConn) {
 
 func TestMultipathSenderStaysInsideTheReportedWindow(t *testing.T) {
 	session, peer := rawAckPeer(t)
+	// 这个用例按片数数窗口，小写不能并进同一片里。
+	session.mu.Lock()
+	session.coalesceLimit = 0
+	session.mu.Unlock()
 	if err := peer.writeFrame(encodeMultipathAck(multipathAck{window: 4})); err != nil {
 		t.Fatal(err)
 	}
@@ -538,6 +542,10 @@ func TestMultipathSenderGivesUpWhenTheFarSideGoesSilent(t *testing.T) {
 	// 对端彻底没声音的时候，发送端不能永远挂着 —— 宁可带着原因收掉，让上层重连。
 	session, _ := rawAckPeer(t)
 	session.sendStallTimeout.Store(int64(200 * time.Millisecond))
+	// 按片数把窗口写满：单字节的写会并进同一片，这里不要合并。
+	session.mu.Lock()
+	session.coalesceLimit = 0
+	session.mu.Unlock()
 	var err error
 	done := make(chan struct{})
 	go func() {

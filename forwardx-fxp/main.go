@@ -87,6 +87,11 @@ type fxpHandshake struct {
 	V        int   `json:"v"`
 	TSMilli  int64 `json:"tsMs"`
 	TunnelID int   `json:"tunnelId"`
+	// AEADs 是客户端能用的帧加密算法，偏好的排前面；旧版本不写，只会 AES-256-GCM。
+	AEADs []string `json:"aeads,omitempty"`
+	// AEAD 是服务端在确认里选定的算法；省略表示 AES-256-GCM（旧版本也从不写）。
+	// 见 aead.go。
+	AEAD string `json:"aead,omitempty"`
 }
 
 type secureConn struct {
@@ -126,6 +131,10 @@ type secureConn struct {
 	// 之后再出现首轮密钥的帧一律当作伪造。
 	earlyLenReadAEAD  cipher.AEAD
 	earlyDataReadAEAD cipher.AEAD
+	// aead 是这条连接确认之后两个方向用的算法名，空表示 AES-256-GCM；
+	// offeredAEADs 是客户端报出去的列表，用来核对服务端的选择。
+	aead         string
+	offeredAEADs []string
 }
 
 // fxpAckError 表示对端没有确认握手：连不通的黑洞、拒绝了密钥、半路断开。
@@ -196,7 +205,7 @@ const (
 	fxpUDPIdleTimeout    = 5 * time.Minute
 	fxpProtocolSampleMax = 512
 	fxpMasterContext     = "forwardx-fxp-v2 master"
-	fxpRuntimeVersion    = "2.2.125"
+	fxpRuntimeVersion    = "2.2.126"
 	fxpFallbackRetry     = 5 * time.Second
 	// A node that stays down is re-probed on a growing delay, because probing a
 	// peer that accepts but never answers costs a whole handshake timeout.
@@ -889,6 +898,13 @@ func main() {
 		cfg.LimitOut,
 	)
 	log.Printf("forwardx-fxp udp wire packet limit=%dB transport=%s", configureFXPUDPWireLimit(cfg), cfg.TransportVersion)
+	// 启动时就把帧加密算法的实测结果打出来（没写死时），排查「跑不满」能第一眼看到
+	// 这台机器的 AES 快不快。
+	if pinned := normalizeAEADConfig(cfg.AEAD); pinned != "" {
+		log.Printf("fxp aead pinned=%s by config", pinned)
+	} else {
+		_ = preferredAEAD()
+	}
 	ctx := shutdownContext()
 	writeFXPReloadAck(*configPath, cfg.ReloadNonce, nil)
 	err = runManaged(ctx.done, cfg, watchFXPConfigReloads(*configPath))
@@ -1060,6 +1076,8 @@ func dialSecureTCPFresh(host string, port int, cfg config) (net.Conn, *secureCon
 	return conn, sec, nil
 }
 
+// enableTCPKeepAlive 是 FXP 拨出和接受的每一条 TCP 连接都要过的一道：
+// 关 Nagle、开保活，以及按策略设拥塞控制（tcp_congestion.go）。
 func enableTCPKeepAlive(conn net.Conn) {
 	tcp, ok := conn.(*net.TCPConn)
 	if !ok {
@@ -1068,6 +1086,7 @@ func enableTCPKeepAlive(conn net.Conn) {
 	_ = tcp.SetNoDelay(true)
 	_ = tcp.SetKeepAlive(true)
 	_ = tcp.SetKeepAlivePeriod(fxpTCPKeepAlive)
+	tuneTCPCongestion(tcp)
 }
 
 func closeWriteConn(conn net.Conn) {
@@ -2474,7 +2493,9 @@ func newPipelinedClientSecureConn(conn net.Conn, cfg config, wire fxpWireContext
 	if err != nil {
 		return nil, err
 	}
-	hs, _ := json.Marshal(fxpHandshake{V: fxpHandshakeVersion, TSMilli: time.Now().UnixMilli(), TunnelID: cfg.TunnelID})
+	offered := fxpOfferedAEADs(cfg)
+	hs, _ := json.Marshal(fxpHandshake{V: fxpHandshakeVersion, TSMilli: time.Now().UnixMilli(), TunnelID: cfg.TunnelID, AEADs: offered})
+	sec.offeredAEADs = offered
 	prefix := make([]byte, 0, fxpSaltSize+4+sec.lenWriteAEAD.Overhead()+len(hs)+sec.dataWriteAEAD.Overhead())
 	prefix = append(prefix, salt...)
 	prefix = sec.appendSealedFrameLocked(prefix, hs)
@@ -2505,10 +2526,12 @@ func (c *secureConn) consumeHandshakeAck() error {
 	// 确认 = 服务端 salt（明文）+ 用会话密钥加密的确认帧。先派生会话密钥装到读
 	// 方向，确认帧能解开就说明对端确实持有隧道密钥、而且是这次新握的手。
 	var final fxpSessionAEADs
+	var finalSalt []byte
 	if err == nil {
 		serverSalt := make([]byte, fxpSaltSize)
 		if _, err = io.ReadFull(c.conn, serverSalt); err == nil {
-			final, err = deriveFXPSessionAEADs(c.handshakeMaster, fxpFinalSessionSalt(c.handshakeSalt, serverSalt), fxpFinalSessionInfo(c.handshakeWire), c.handshakeWire)
+			finalSalt = fxpFinalSessionSalt(c.handshakeSalt, serverSalt)
+			final, err = deriveFXPSessionAEADs(c.handshakeMaster, finalSalt, fxpFinalSessionInfo(c.handshakeWire), c.handshakeWire, fxpAEADAESGCM)
 		}
 	}
 	if err == nil {
@@ -2519,11 +2542,23 @@ func (c *secureConn) consumeHandshakeAck() error {
 		var reply fxpHandshake
 		if jsonErr := json.Unmarshal(ack, &reply); jsonErr != nil || reply.V != fxpHandshakeVersion || reply.TunnelID != c.ackTunnelID {
 			err = errors.New("fxp handshake rejected")
+		} else if chosen := strings.TrimSpace(reply.AEAD); chosen != "" && chosen != fxpAEADAESGCM {
+			// 服务端选了别的算法：必须是我们报过的，确认之后两个方向换成它的密钥。
+			if !containsAEAD(c.offeredAEADs, chosen) {
+				err = fmt.Errorf("fxp handshake rejected: peer chose aead %q we did not offer", chosen)
+			} else {
+				final, err = deriveFXPSessionAEADs(c.handshakeMaster, finalSalt, fxpNegotiatedSessionInfo(c.handshakeWire, chosen), c.handshakeWire, chosen)
+				if err == nil {
+					c.aead = chosen
+				}
+			}
 		}
 	}
 	if err == nil {
 		// 从这里起客户端往服务端写的帧也换成会话密钥（计数接着往下走）。确认之前
 		// 已经写出去的那些用的是首轮密钥，服务端两把都认，见 openFrameLength。
+		// 服务端确认之后写来的帧也用选定算法的密钥（没换算法时和确认帧同一套）。
+		c.lenReadAEAD, c.dataReadAEAD = final.s2cLen, final.s2cData
 		c.writeMu.Lock()
 		c.lenWriteAEAD, c.dataWriteAEAD = final.c2sLen, final.c2sData
 		c.writeMu.Unlock()
@@ -2613,7 +2648,7 @@ func newServerSecureConnWithWires(conn net.Conn, cfg config, wires []fxpWireCont
 			return nil, errors.New("fxp replay detected")
 		}
 		sec.readCounter = 1
-		sec, err = finishServerHandshake(sec, cfg, salt, wire)
+		sec, err = finishServerHandshake(sec, cfg, salt, wire, hs)
 		if err != nil {
 			return nil, err
 		}
@@ -2758,7 +2793,7 @@ func validateServerHandshake(cfg config, frame []byte, now time.Time) (fxpHandsh
 // 隧道密钥的出口去重放首轮，那台出口会照 hello 再拨一次目标、再发一遍首包，
 // 但回程用的是它自己新派生的密钥，攻击者什么也读不到，首轮之后录下的数据也
 // 放不进去。
-func finishServerHandshake(sec *secureConn, cfg config, clientSalt []byte, wire fxpWireContext) (*secureConn, error) {
+func finishServerHandshake(sec *secureConn, cfg config, clientSalt []byte, wire fxpWireContext, hs fxpHandshake) (*secureConn, error) {
 	if wire.compat {
 		log.Printf("fxp accepted compatibility wire context=%s tunnel=%d", wire.name, cfg.TunnelID)
 	}
@@ -2767,19 +2802,39 @@ func finishServerHandshake(sec *secureConn, cfg config, clientSalt []byte, wire 
 		return nil, err
 	}
 	master := sha256.Sum256([]byte(cfg.Key))
-	final, err := deriveFXPSessionAEADs(master[:], fxpFinalSessionSalt(clientSalt, serverSalt), fxpFinalSessionInfo(wire), wire)
+	finalSalt := fxpFinalSessionSalt(clientSalt, serverSalt)
+	final, err := deriveFXPSessionAEADs(master[:], finalSalt, fxpFinalSessionInfo(wire), wire, fxpAEADAESGCM)
 	if err != nil {
 		return nil, err
 	}
+	// 客户端报了能用的算法就选一个（aead.go）。确认帧本身仍用 AES-256-GCM 的会话
+	// 密钥：客户端读到确认之前不知道选了什么。确认之后两个方向换成选定算法。
+	session := final
+	chosen := chooseAEAD(cfg, hs.AEADs)
+	if chosen != fxpAEADAESGCM {
+		if session, err = deriveFXPSessionAEADs(master[:], finalSalt, fxpNegotiatedSessionInfo(wire, chosen), wire, chosen); err != nil {
+			return nil, err
+		}
+		sec.aead = chosen
+	}
 	sec.earlyLenReadAEAD, sec.earlyDataReadAEAD = sec.lenReadAEAD, sec.dataReadAEAD
-	sec.lenReadAEAD, sec.dataReadAEAD = final.c2sLen, final.c2sData
+	sec.lenReadAEAD, sec.dataReadAEAD = session.c2sLen, session.c2sData
 	sec.lenWriteAEAD, sec.dataWriteAEAD = final.s2cLen, final.s2cData
-	reply, _ := json.Marshal(fxpHandshake{V: fxpHandshakeVersion, TSMilli: time.Now().UnixMilli(), TunnelID: cfg.TunnelID})
+	reply := fxpHandshake{V: fxpHandshakeVersion, TSMilli: time.Now().UnixMilli(), TunnelID: cfg.TunnelID}
+	if chosen != fxpAEADAESGCM {
+		reply.AEAD = chosen
+	}
+	replyFrame, _ := json.Marshal(reply)
 	// 服务端 salt 挂在 pendingPrefix 上，和确认帧一次写出。
 	sec.pendingPrefix = serverSalt
-	if err := sec.writeFrame(reply); err != nil {
+	if err := sec.writeFrame(replyFrame); err != nil {
 		return nil, err
 	}
+	// 确认已经按 AES-256-GCM 写出去了，之后的帧换成选定算法（计数接着往下走）。
+	sec.writeMu.Lock()
+	sec.lenWriteAEAD, sec.dataWriteAEAD = session.s2cLen, session.s2cData
+	sec.writeMu.Unlock()
+	noteNegotiatedAEAD(cfg.Role, cfg, chosen)
 	return sec, nil
 }
 
@@ -2792,12 +2847,15 @@ type fxpSessionAEADs struct {
 	c2sLen, c2sData, s2cLen, s2cData cipher.AEAD
 }
 
-func deriveFXPSessionAEADs(master, salt, info []byte, wire fxpWireContext) (fxpSessionAEADs, error) {
+// deriveFXPSessionAEADs 从主密钥、salt 和派生上下文得到两个方向各一套的帧密钥。
+// aead 是这套密钥用的算法（空 = AES-256-GCM）；不同算法用不同的 info，密钥材料
+// 本身也就不同。
+func deriveFXPSessionAEADs(master, salt, info []byte, wire fxpWireContext, aead string) (fxpSessionAEADs, error) {
 	material := blake3Derive(master, salt, info, wire.masterContext, 128)
 	var out fxpSessionAEADs
 	var err error
 	for index, dst := range []*cipher.AEAD{&out.c2sLen, &out.c2sData, &out.s2cLen, &out.s2cData} {
-		if *dst, err = newAEAD(material[index*32 : (index+1)*32]); err != nil {
+		if *dst, err = newAEADNamed(aead, material[index*32:(index+1)*32]); err != nil {
 			return fxpSessionAEADs{}, err
 		}
 	}
@@ -2822,7 +2880,7 @@ func fxpFinalSessionInfo(wire fxpWireContext) []byte {
 
 func newSessionSecureConnWithWire(conn net.Conn, key string, salt []byte, client bool, wire fxpWireContext) (*secureConn, error) {
 	master := sha256.Sum256([]byte(key))
-	keys, err := deriveFXPSessionAEADs(master[:], salt, wire.sessionInfo, wire)
+	keys, err := deriveFXPSessionAEADs(master[:], salt, wire.sessionInfo, wire, fxpAEADAESGCM)
 	if err != nil {
 		return nil, err
 	}
