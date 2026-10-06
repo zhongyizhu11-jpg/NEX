@@ -14,13 +14,13 @@ import {
   type OverviewEdgeTone,
 } from "@/features/network/networkOverview";
 import type { NetworkMapModel } from "@/features/network/networkMapModel";
-import { WORLD_GEO_UNIT, worldBordersPath, worldLandPath } from "@/features/network/worldGeo";
+import { WORLD_GEO_UNIT, worldBordersPath, worldLandPath, worldShorePath } from "@/features/network/worldGeo";
 import { describeNetworkHealth, networkHealthPriority, type NetworkHealth } from "@shared/networkHealth";
 import type { ForwardMapLink } from "@shared/forwardMapLinks";
 
 /**
  * 首页「概览」图：底下一层矢量世界底图（Natural Earth 50m 陆地 + 国界，等经纬投影，裁到主机所在的那片）：
- * 浅色是白色陆地 + 淡主色海面，深色是炭灰陆地，海面颜色跟着配色走。
+ * 浅色是白色陆地 + 淡主色海面，深色是炭灰陆地，海面颜色跟着配色走；陆地外一圈浅滩、海面一层淡经纬网，都是静态 path，没有滤镜。
  * 一座城市一个点：同城的几台合成一个，点里写台数，点一下展开列表；不同城市不合。
  * 两座城市在画布上压在一起时（全图下的广州和香港），点各让开一点，真实位置留一个小点、细线连过去。
  * 每个点一枚一行的胶囊「旗 城市」，近处放不下就挪远一点、画一根引线；
@@ -30,6 +30,10 @@ import type { ForwardMapLink } from "@shared/forwardMapLinks";
  *
  * 点单台主机去主机页，点合起来的点展开列表，点线去隧道页（这一对只有转发时去转发页）。
  */
+/** 经纬网每 20° 一条；经度多画到 540°，跨太平洋（经度按 0~360 算）时右半边也有 */
+const GRATICULE_LAT = [-60, -40, -20, 0, 20, 40, 60, 80];
+const GRATICULE_LNG = Array.from({ length: 37 }, (_, index) => -180 + index * 20);
+
 type NodeTone = "ok" | "warn" | "down" | "off";
 const TONE_RANK: Record<NodeTone, number> = { off: 0, ok: 1, warn: 2, down: 3 };
 
@@ -168,6 +172,7 @@ export function NetworkOverview({ model, forwardLinks, onOpen, initialWidth = 72
   const ids = { ring: `${idBase}-ring`, vignette: `${idBase}-vig`, line: `${idBase}-line`, clip: `${idBase}-clip` };
   const land = viewport ? worldLandPath() : "";
   const borders = viewport ? worldBordersPath() : "";
+  const shore = viewport ? worldShorePath() : "";
   const geoTransform = (offset: number) => viewport
     ? `translate(${viewport.x(offset).toFixed(2)} ${viewport.y(0).toFixed(2)}) scale(${(viewport.sx / WORLD_GEO_UNIT).toFixed(5)} ${(-viewport.sy / WORLD_GEO_UNIT).toFixed(5)})`
     : undefined;
@@ -218,10 +223,20 @@ export function NetworkOverview({ model, forwardLinks, onOpen, initialWidth = 72
         </defs>
 
         {viewport ? (
-          // 陆地填色 + 海岸线，再描一层陆地国界；单位 0.05° 的 path 整体缩放到画布上，描边不跟着缩；跨太平洋时再画一份 +360°
+          // 海面上一层很淡的经纬网；陆地外先描一圈宽的浅色「浅滩」，再填陆地 + 海岸线，再描国界；
+          // 单位 0.05° 的 path 整体缩放到画布上，描边不跟着缩；跨太平洋时再画一份 +360°
           <g aria-hidden="true" clipPath={`url(#${ids.clip})`} pointerEvents="none">
+            <g className="fx-overview-graticule">
+              {GRATICULE_LAT.map((lat) => (
+                <line key={`lat${lat}`} x1={0} x2={width} y1={viewport.y(lat).toFixed(1)} y2={viewport.y(lat).toFixed(1)} />
+              ))}
+              {GRATICULE_LNG.map((lng) => (
+                <line key={`lng${lng}`} x1={viewport.x(lng).toFixed(1)} x2={viewport.x(lng).toFixed(1)} y1={0} y2={height} />
+              ))}
+            </g>
             {[0, 360].map((offset) => (
               <g key={offset} transform={geoTransform(offset)}>
+                <path d={shore} className="fx-overview-shore" vectorEffect="non-scaling-stroke" strokeLinejoin="round" />
                 <path d={land} className="fx-overview-land" fillRule="evenodd" vectorEffect="non-scaling-stroke" strokeLinejoin="round" />
                 <path d={borders} className="fx-overview-borders" vectorEffect="non-scaling-stroke" strokeLinejoin="round" />
               </g>
@@ -308,11 +323,16 @@ export function NetworkOverview({ model, forwardLinks, onOpen, initialWidth = 72
                     <circle r={r + 4} fill="var(--fx-primary-fill)" fillOpacity={0.22} />
                   </>
                 ) : tone === "down" || tone === "warn" ? (
-                  <circle r={r + 6.5} fill={TONE_STROKE[tone]} fillOpacity={0.14} />
+                  <>
+                    <circle r={r + 6.5} fill={TONE_STROKE[tone]} fillOpacity={0.14} />
+                    {/* 往外扩散一圈的脉冲：一眼看到出问题的点；关了动效就只剩静止的光晕 */}
+                    <circle r={r + 6.5} fill="none" stroke={TONE_STROKE[tone]} strokeWidth={1.5} className="fx-overview-pulse" />
+                  </>
                 ) : null}
                 {many ? (
                   <>
                     <circle r={r} fill={fill} stroke="var(--fx-l1-surface)" strokeWidth={2} />
+                    <circle r={r - 2.2} fill="none" stroke="#fff" strokeOpacity={0.35} strokeWidth={1} />
                     <text y={3.6} textAnchor="middle" className="fx-overview-count">{node.members.length}</text>
                   </>
                 ) : (

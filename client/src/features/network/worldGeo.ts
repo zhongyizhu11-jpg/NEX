@@ -22,3 +22,33 @@ export function worldLandPath(): string {
 export function worldBordersPath(): string {
   return BORDERS;
 }
+
+/** 浅滩只描在这么大（长或宽 ≥ 3°）的陆地外面：小岛描一圈会在海上变成一堆圆点 */
+const SHORE_MIN_EXTENT = 3 * WORLD_GEO_UNIT;
+let shoreCache: string | null = null;
+
+/**
+ * 画「浅滩」用的陆地 path：只保留大块陆地的那些圈（按每圈的外接框算），一次算好缓存。
+ * 每圈是「M x y」绝对起点 + 一串相对的 l，走一遍累加就得到外接框。
+ */
+export function worldShorePath(): string {
+  if (shoreCache !== null) return shoreCache;
+  const kept: string[] = [];
+  for (const ring of LAND.split("M")) {
+    if (!ring) continue;
+    // 数字之间可能只隔一个负号（"-9-10"），按正则挑出来
+    const numbers = (ring.match(/-?\d+(?:\.\d+)?/g) || []).map(Number);
+    if (numbers.length < 2) continue;
+    let x = numbers[0], y = numbers[1];
+    let minX = x, maxX = x, minY = y, maxY = y;
+    for (let index = 2; index + 1 < numbers.length; index += 2) {
+      x += numbers[index];
+      y += numbers[index + 1];
+      if (x < minX) minX = x; else if (x > maxX) maxX = x;
+      if (y < minY) minY = y; else if (y > maxY) maxY = y;
+    }
+    if (Math.max(maxX - minX, maxY - minY) >= SHORE_MIN_EXTENT) kept.push(`M${ring}`);
+  }
+  shoreCache = kept.join("");
+  return shoreCache;
+}

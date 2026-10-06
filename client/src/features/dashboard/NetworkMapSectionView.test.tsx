@@ -32,7 +32,10 @@ test("概览卡片：标题、状态胶囊、底下的图例（线的画法 + �
   assert.doesNotMatch(html, /中断|降级/, "没有断的不写中断");
   assert.match(html, /class="fx-overview-land"/, "底下铺着陆地");
   assert.match(html, /class="fx-overview-borders"/, "和陆地国界");
-  assert.equal((html.match(/<path [^>]*vector-effect="non-scaling-stroke"/g) || []).length, 4, "陆地、国界各画两份（本体一份、+360° 一份）");
+  assert.equal((html.match(/<path [^>]*vector-effect="non-scaling-stroke"/g) || []).length, 6, "浅滩、陆地、国界各画两份（本体一份、+360° 一份）");
+  assert.match(html, /class="fx-overview-shore"/, "陆地外一圈浅滩");
+  assert.match(html, /class="fx-overview-graticule"/, "海面一层经纬网");
+  assert.match(html, /3 台主机 · 3 个地点/, "标题旁写主机数和地点数");
   assert.match(html, /aria-label="概览：3 台主机，3 个地点，3 段连线"/);
   assert.match(html, /HK → JP · 隧道 live/);
   assert.match(html, /JP → 无坐标 · 2 条转发/);

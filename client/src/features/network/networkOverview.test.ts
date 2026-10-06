@@ -16,7 +16,7 @@ import {
   truncateLabel,
   OVERVIEW_PAD_X,
 } from "./networkOverview";
-import { WORLD_GEO_UNIT, worldBordersPath, worldLandPath } from "./worldGeo";
+import { WORLD_GEO_UNIT, worldBordersPath, worldLandPath, worldShorePath } from "./worldGeo";
 
 const node = (id: number, geo?: [number, number]) => ({
   id, name: `h${id}`, city: "", health: "healthy" as const,
@@ -234,4 +234,14 @@ test("底图：50m 陆地和国界两条 path，坐标单位 0.05°，没有南�
   assert.ok(near(114.17, 22.3, 0.3), "香港附近有海岸线");
   assert.ok(near(-0.1, 51.5, 1.5), "伦敦附近（泰晤士河口）有海岸线");
   assert.ok(!near(-150, -20, 2), "南太平洋中间没有");
+});
+
+
+test("浅滩 path：只剩大块陆地的圈，比陆地 path 短得多，圈数也少得多", () => {
+  const land = worldLandPath(), shore = worldShorePath();
+  const rings = (path: string) => (path.match(/M/g) || []).length;
+  assert.ok(rings(shore) > 20 && rings(shore) < rings(land) / 4, `${rings(shore)} / ${rings(land)}`);
+  assert.ok(shore.length < land.length * 0.9);
+  assert.ok(shore.startsWith("M") && shore.endsWith("z"));
+  assert.equal(worldShorePath(), shore, "缓存了");
 });

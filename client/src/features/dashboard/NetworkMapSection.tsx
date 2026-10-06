@@ -52,7 +52,10 @@ export function NetworkOverviewSection({ model, forwardLinks, onOpen }: {
   return (
     <section aria-label="概览" className="fx-netmap-card fx-card-face flex min-w-0 flex-col overflow-hidden">
       <div className="flex items-center justify-between gap-3 px-4 pb-2.5 pt-3.5">
-        <span className="shrink-0 whitespace-nowrap text-primary-type font-semibold text-foreground">概览</span>
+        <span className="flex min-w-0 items-baseline gap-2">
+          <span className="shrink-0 whitespace-nowrap text-primary-type font-semibold text-foreground">概览</span>
+          <span className="truncate text-meta tabular-nums text-muted-foreground">{model.nodes.length} 台主机 · {placed.length} 个地点</span>
+        </span>
         {drawable > 0 || counts.tunnels > 0 ? (
           <span className="fx-overview-verdict tabular-nums" data-tone={verdict.tone}>
             <span aria-hidden="true" className="fx-overview-verdict-dot" />
@@ -71,7 +74,6 @@ export function NetworkOverviewSection({ model, forwardLinks, onOpen }: {
         <span><span aria-hidden="true" className="fx-overview-swatch" data-tone="ok" />正常</span>
         {lines.warn > 0 ? <span className="text-[var(--fx-warn-text)]"><span aria-hidden="true" className="fx-overview-swatch" data-tone="warn" />降级</span> : null}
         {lines.down > 0 ? <span className="text-[var(--fx-down-text)]"><span aria-hidden="true" className="fx-overview-swatch" data-tone="down" />中断</span> : null}
-        <span className="ml-auto tabular-nums">{model.nodes.length} 台主机</span>
       </div>
       {model.hiddenLinkCount > 0 ? (
         <div className="px-4 pb-3 text-meta tabular-nums text-muted-foreground">{model.hiddenLinkCount} 条隧道经过你看不到的主机，没有画出来</div>
