@@ -4926,6 +4926,9 @@ func missingNetworkToolMessage(tool string) string {
 	}
 }
 
+// lookingGlassProgressInterval 是输出行触发的进度回报的最小间隔。
+const lookingGlassProgressInterval = time.Second
+
 func runLookingGlassCommand(name string, args []string, timeout time.Duration, onProgress func(string, int)) (string, *int, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -4966,7 +4969,29 @@ func runLookingGlassCommand(name string, args []string, timeout time.Duration, o
 		defer mu.Unlock()
 		return strings.TrimSpace(output.String())
 	}
+	// 每次进度回报都是一次同步的 HTTP POST。ping / mtr 一共没几行无所谓，iperf3
+	// 开 16 条流、--forceflush 之后每秒十几行：逐行回报会让读管道的协程排在网络
+	// 往返后面，iperf3 早跑完了这边还在一条条发，面板也白白多收几百个快照。所以
+	// 输出行触发的回报每秒最多一次（下面的定时器本来就每秒报一次），最后一次
+	// 完整输出随结果一起发，不会漏。
+	var lastProgressAt atomic.Int64
 	report := func(fallback string) {
+		text := currentOutput()
+		if text == "" {
+			text = fallback
+		}
+		lastProgressAt.Store(time.Now().UnixNano())
+		onProgress(text, int(time.Since(started).Milliseconds()))
+	}
+	reportThrottled := func(fallback string) {
+		now := time.Now().UnixNano()
+		last := lastProgressAt.Load()
+		if now-last < int64(lookingGlassProgressInterval) {
+			return
+		}
+		if !lastProgressAt.CompareAndSwap(last, now) {
+			return // 另一条管道的协程刚报过
+		}
 		text := currentOutput()
 		if text == "" {
 			text = fallback
@@ -4989,7 +5014,7 @@ func runLookingGlassCommand(name string, args []string, timeout time.Duration, o
 		scanner.Buffer(make([]byte, 0, 4096), 1024*1024)
 		for scanner.Scan() {
 			appendLine(scanner.Text())
-			report("命令正在执行，等待输出...")
+			reportThrottled("命令正在执行，等待输出...")
 		}
 	}
 	wg.Add(2)

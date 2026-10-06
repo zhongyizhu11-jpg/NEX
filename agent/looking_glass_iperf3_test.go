@@ -2,7 +2,9 @@ package main
 
 import (
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestIperf3ClientCommandDefaultsAndClamps(t *testing.T) {
@@ -36,5 +38,27 @@ func TestIperf3ClientCommandDefaultsAndClamps(t *testing.T) {
 
 	if _, _, err := iperf3ClientCommand(lookingGlassTask{}); err == nil {
 		t.Fatal("empty target must be rejected")
+	}
+}
+
+func TestRunLookingGlassCommandThrottlesProgressReports(t *testing.T) {
+	// 一口气吐 300 行：逐行回报会是 300 次 HTTP，节流后一秒之内只该报一两次。
+	var calls atomic.Int32
+	var lastOutput atomic.Value
+	output, code, timedOut := runLookingGlassCommand("sh", []string{"-c", "i=0; while [ $i -lt 300 ]; do i=$((i+1)); echo line$i; done"}, 10*time.Second, func(text string, _ int) {
+		calls.Add(1)
+		lastOutput.Store(text)
+	})
+	if timedOut || code == nil || *code != 0 {
+		t.Fatalf("command failed: timedOut=%v code=%v output=%q", timedOut, code, output)
+	}
+	if !strings.Contains(output, "line300") {
+		t.Fatalf("final output lost lines: %q", output[len(output)-40:])
+	}
+	if n := calls.Load(); n > 5 {
+		t.Fatalf("progress was reported %d times for a burst of 300 lines; expected throttling to about one per second", n)
+	}
+	if n := calls.Load(); n < 1 {
+		t.Fatal("the first output line must still be reported promptly")
 	}
 }
