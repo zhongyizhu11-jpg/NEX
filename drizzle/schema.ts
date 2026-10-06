@@ -539,6 +539,10 @@ export const proxyNodes = table("proxy_nodes", {
   // Hysteria2 的混淆：salamander | gecko，空表示不混淆
   obfs: text("obfs"),
   obfsPassword: text("obfsPassword"),
+  // Hysteria2 客户端声明的带宽（Brutal）。物理列在 server/dbSchema.ts；这里不声明的话
+  // db.select().from(proxyNodes) 根本不会把它们读出来，订阅里永远是 0。
+  upMbps: int("upMbps").notNull().default(0),
+  downMbps: int("downMbps").notNull().default(0),
   // TUIC 的拥塞控制（cubic | new_reno | bbr）与 UDP 转发模式（native | quic）
   congestionControl: text("congestionControl"),
   udpRelayMode: text("udpRelayMode"),
