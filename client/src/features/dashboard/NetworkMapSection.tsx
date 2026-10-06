@@ -1,7 +1,7 @@
 import { NetworkOverview } from "@/components/network/NetworkOverview";
 import type { NetworkMapData } from "@/features/network/networkMapData";
 import { useNetworkMapModelFromData, type NetworkMapModel } from "@/features/network/networkMapModel";
-import { buildOverviewEdges, bundleOverviewEdges, overviewCounts } from "@/features/network/networkOverview";
+import { buildOverviewEdges, clusterOverview, clusterOverviewBundles, overviewCounts, projectOverview } from "@/features/network/networkOverview";
 import { describeNetworkHealth } from "@shared/networkHealth";
 import type { ForwardMapLink } from "@shared/forwardMapLinks";
 
@@ -32,8 +32,10 @@ export function NetworkOverviewSection({ model, forwardLinks, onOpen }: {
 }) {
   const counts = overviewCounts(model, forwardLinks);
   const drawable = model.links.length + forwardLinks.length;
-  // 图例按画出来的线数：同一对主机之间合成一条，降级 / 中断各几条（转发指向掉线主机的也算降级）
-  const bundles = bundleOverviewEdges(buildOverviewEdges(model, forwardLinks));
+  // 图例按真正画出来的线：同城的主机合成一个点，两头都在一个点里的线不画（状态进了点的颜色），
+  // 图例也别提它。合点只看城市名，和画布宽度无关，这里按一个固定尺寸算一遍就够
+  const placed = clusterOverview(projectOverview(model.nodes, 800, 340));
+  const { bundles } = clusterOverviewBundles(buildOverviewEdges(model, forwardLinks), placed);
   const lines = {
     warn: bundles.filter((bundle) => bundle.tone === "warn").length,
     down: bundles.filter((bundle) => bundle.tone === "down").length,

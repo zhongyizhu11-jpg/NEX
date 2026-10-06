@@ -15,7 +15,7 @@ import {
 } from "@/features/network/networkOverview";
 import type { NetworkMapModel } from "@/features/network/networkMapModel";
 import { WORLD_GEO_UNIT, worldBordersPath, worldLandPath } from "@/features/network/worldGeo";
-import { describeNetworkHealth, type NetworkHealth } from "@shared/networkHealth";
+import { describeNetworkHealth, networkHealthPriority, type NetworkHealth } from "@shared/networkHealth";
 import type { ForwardMapLink } from "@shared/forwardMapLinks";
 
 /**
@@ -49,6 +49,13 @@ function hostTone(health: NetworkHealth): NodeTone {
 function clusterTone(cluster: OverviewCluster, inner: OverviewEdgeTone | undefined): NodeTone {
   const host = hostTone(cluster.health);
   return inner && TONE_RANK[inner] > TONE_RANK[host] ? inner : host;
+}
+
+/** 提示里的状态：主机的状态，点内有断掉 / 降级的线（线没画出来、只改了点的颜色）就一并说 */
+function clusterTitleStatus(cluster: OverviewCluster, inner: OverviewEdgeTone | undefined) {
+  const host = describeNetworkHealth(cluster.health).label;
+  if (!inner || TONE_RANK[inner] <= TONE_RANK[hostTone(cluster.health)]) return host;
+  return `${host} · 点内连线${inner === "down" ? "中断" : "降级"}`;
 }
 
 function clusterRadius(cluster: OverviewCluster) {
@@ -294,7 +301,7 @@ export function NetworkOverview({ model, forwardLinks, onOpen, initialWidth = 72
                 onClick={() => openNode(node)}
                 data-cluster={many ? node.members.length : undefined}
               >
-                <title>{`${node.unlocated ? "未定位" : node.city || node.name} · ${names}${node.members.length > 8 ? ` 等 ${node.members.length} 台` : ""} · ${describeNetworkHealth(node.health).label}`}</title>
+                <title>{`${node.unlocated ? "未定位" : node.city || node.name} · ${names}${node.members.length > 8 ? ` 等 ${node.members.length} 台` : ""} · ${clusterTitleStatus(node, inner.get(node.id))}`}</title>
                 {tone === "ok" ? (
                   <>
                     <circle r={r + 9.5} fill="var(--fx-primary-fill)" fillOpacity={0.1} />
@@ -351,7 +358,7 @@ export function NetworkOverview({ model, forwardLinks, onOpen, initialWidth = 72
   );
 }
 
-/** 合起来的点展开的列表：有问题的排前面，放不下就在气泡里滚，点一行去主机页 */
+/** 合起来的点展开的列表：最该先看的排前面（和首页「需要关注」同一个顺序），放不下就在气泡里滚，点一行去主机页 */
 function ClusterPopover({ cluster, width, height, onClose, onOpenHost }: {
   cluster: OverviewCluster;
   width: number;
@@ -361,7 +368,7 @@ function ClusterPopover({ cluster, width, height, onClose, onOpenHost }: {
 }) {
   const r = clusterRadius(cluster);
   const left = Math.min(Math.max(cluster.x - POPOVER_W / 2, 6), width - POPOVER_W - 6);
-  const members = [...cluster.members].sort((a, b) => TONE_RANK[hostTone(b.health)] - TONE_RANK[hostTone(a.health)] || a.id - b.id);
+  const members = [...cluster.members].sort((a, b) => networkHealthPriority(a.health) - networkHealthPriority(b.health) || a.id - b.id);
   // 手机上地图只有两百来像素高：气泡最高到地图高减 16，放不下的行在气泡里滚，气泡整个留在地图里
   const rowH = popoverRowHeight();
   const shown = members.length <= POPOVER_ROWS ? members : members.slice(0, POPOVER_ROWS - 1);

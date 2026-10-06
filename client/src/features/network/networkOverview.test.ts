@@ -78,6 +78,16 @@ test("落位：点就在真实经纬度上；一座城市一个点（同城几�
   assert.ok(clusters.filter((cluster) => !cluster.unlocated).every((cluster) => cluster.y < unlocated.y), "没定位的在最下面");
 });
 
+test("合点：同城里有一台从没上报过（unknown）的，点不能算正常（按面板统一的汇总）", () => {
+  const nodes = [
+    { ...node(1, [23.13, 113.26]), city: "广州" },
+    { ...node(2, [23.13, 113.26]), city: "广州", health: "unknown" as const },
+  ];
+  const [cluster] = layoutOverview(nodes, 390, 240);
+  assert.equal(cluster.members.length, 2);
+  assert.equal(cluster.health, "unknown");
+});
+
 test("分开：两座城市压在一起时各让开，圆不再相叠、都在画布里，真实位置不变", () => {
   const at = (id: number, x: number, y: number, city: string) => ({ id, name: `h${id}`, city, health: "healthy" as const, x, y, unlocated: false });
   const clusters = clusterOverview([at(1, 200, 120, "广州"), at(2, 201, 120, "广州"), at(3, 202.5, 121, "香港"), at(4, 200, 119, "深圳")]);

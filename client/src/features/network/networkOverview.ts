@@ -1,4 +1,4 @@
-import { describeNetworkHealth, type NetworkHealth } from "@shared/networkHealth";
+import { describeNetworkHealth, type NetworkHealth, rollUpNetworkHealth } from "@shared/networkHealth";
 import type { ForwardMapLink } from "@shared/forwardMapLinks";
 
 import type { NetworkMapModel } from "./networkMapModel";
@@ -183,11 +183,6 @@ export type OverviewCluster = OverviewNode & {
   anchor: { x: number; y: number };
 };
 
-const HEALTH_RANK: Record<string, number> = { standby: 0, healthy: 1, path: 2, warn: 2, down: 3 };
-function healthRank(health: NetworkHealth) {
-  return HEALTH_RANK[describeNetworkHealth(health).token] ?? 0;
-}
-
 /** 点的半径：单台 5.5，合了几台的 9.5，十台以上 11（数字要放得下） */
 export function overviewDotRadius(count: number) {
   return count <= 1 ? 5.5 : count < 10 ? 9.5 : 11;
@@ -196,7 +191,7 @@ export function overviewDotRadius(count: number) {
 /**
  * 合点：一座城市一个点。同城的主机（城市名相同）合成一个，点放在它们的重心；没写城市的按画布上的
  * 落点（取整到 1px）合。不同城市不合，挨得再近也各是各的点（见 separateOverview）。
- * 没定位的全部合成底下一个「未定位」点。点的 id 取成员里最小的主机 id，health 取成员里最差的。
+ * 没定位的全部合成底下一个「未定位」点。点的 id 取成员里最小的主机 id，health 按 rollUpNetworkHealth 汇总。
  */
 export function clusterOverview(placed: readonly OverviewNode[]): OverviewCluster[] {
   const groups = new Map<string, OverviewNode[]>();
@@ -212,12 +207,12 @@ export function clusterOverview(placed: readonly OverviewNode[]): OverviewCluste
     const x = members.reduce((sum, node) => sum + node.x, 0) / members.length;
     const y = unlocated ? members[0].y : members.reduce((sum, node) => sum + node.y, 0) / members.length;
     const city = members[0].city;
-    const worst = members.reduce((acc, member) => (healthRank(member.health) > healthRank(acc.health) ? member : acc), members[0]);
     return {
       id: members[0].id,
       name: members.length === 1 ? members[0].name : `${members.length} 台`,
       city: unlocated ? "" : city,
-      health: worst.health,
+      // 用面板统一的汇总：unknown（从没上报过）不会被同城一台正常的盖成绿色
+      health: rollUpNetworkHealth(members.map((member) => member.health)),
       x,
       y,
       unlocated,

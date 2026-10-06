@@ -56,6 +56,19 @@ test("概览卡片：有主机掉线时胶囊写几台离线，指向它的转�
   assert.doesNotMatch(html, /中断/);
 });
 
+test("概览卡片：两头都在同一个点里的线不画，图例也不列它的样式，点的提示里说点内连线中断", () => {
+  const model = buildNetworkMapModel({
+    now,
+    hosts: [host(1, "GZ-1", [23.13, 113.26]), host(2, "GZ-2", [23.13, 113.26])],
+    tunnels: [{ id: 1, name: "local", mode: "forwardx", isEnabled: true, entryHostId: 1, exitHostId: 2, availability: { status: "unavailable", available: false, source: "hosts", message: "x" } }],
+  });
+  const html = renderToStaticMarkup(<NetworkOverviewSection model={model} forwardLinks={[]} onOpen={() => {}} />);
+  assert.match(html, /1 条中断/, "胶囊照旧数隧道");
+  assert.doesNotMatch(html, /data-tone="down"><\/span>中断/, "线没画出来，图例别说有中断的线");
+  assert.match(html, /aria-label="概览：2 台主机，1 个地点，0 段连线"/);
+  assert.match(html, /正常 · 点内连线中断/, "两台都在线，提示里要说点内那条隧道断了");
+});
+
 test("概览卡片：一条线也没有时写一句怎么连，经过看不到的主机的隧道说明没画出来", () => {
   const empty = buildNetworkMapModel({ now, hosts: [host(1, "a")], tunnels: [] });
   assert.match(renderToStaticMarkup(<NetworkOverviewSection model={empty} forwardLinks={[]} onOpen={() => {}} />), /还没有连线/);
