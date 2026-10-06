@@ -12,6 +12,7 @@ import {
   hasActiveLookingGlassTask,
   IPERF3_CLIENT_MAX_SECONDS,
   IPERF3_CLIENT_MAX_STREAMS,
+  IPERF3_CLIENT_UDP_MAX_MBPS,
   IPERF3_CLIENT_MIN_SECONDS,
   normalizeIperf3ClientOptions,
   type LookingGlassTaskStatus,
@@ -165,6 +166,8 @@ export const lookingGlassRouter = router({
       reverse: z.boolean().optional(),
       streams: z.number().int().min(1).max(IPERF3_CLIENT_MAX_STREAMS).optional(),
       seconds: z.number().int().min(IPERF3_CLIENT_MIN_SECONDS).max(IPERF3_CLIENT_MAX_SECONDS).optional(),
+      udp: z.boolean().optional(),
+      udpMbps: z.number().int().min(0).max(IPERF3_CLIENT_UDP_MAX_MBPS).optional(),
     }))
     .mutation(async ({ input, ctx }) => {
       await assertNetworkTestAllowed(ctx);
@@ -198,6 +201,7 @@ export const lookingGlassRouter = router({
             reverse: iperf3.reverse,
             streams: iperf3.streams,
             seconds: iperf3.seconds,
+            ...(iperf3.udp ? { udp: true, udpMbps: iperf3.udpMbps } : {}),
           }
           : {}),
       }, iperf3 ? iperf3.timeoutMs : undefined);

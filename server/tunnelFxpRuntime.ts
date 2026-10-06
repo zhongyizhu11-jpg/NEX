@@ -74,3 +74,22 @@ export function redactTunnelFxpRuntimeIssue(issue: TunnelFxpRuntimeIssue, visibl
     message: "隧道中有一台节点的 FXP 版本过旧，需要管理员升级 Agent",
   };
 }
+
+/** 链路带宽上限字段能填的最大值（Mbit/s），和 FXP 的 linkShaperMaxMbps 一致。 */
+export const TUNNEL_LINK_MBPS_MAX = 1_000_000;
+
+/**
+ * 隧道两端链路的带宽上限（Mbit/s）：upMbps 是入口→出口，downMbps 是出口→入口。
+ * 中间有硬限速（云联网地域间带宽、公网带宽上限）时填：FXP 把往那个方向发的所有
+ * 隧道帧合起来整形到上限之下，限速器不再丢包，多连接也能稳稳贴着上限跑。
+ * 0 = 不整形。只对 NEX 隧道有意义。
+ */
+export function tunnelLinkShaping(tunnel: any): { upMbps: number; downMbps: number } {
+  if (!isForwardXTunnel(tunnel)) return { upMbps: 0, downMbps: 0 };
+  const clamp = (value: unknown) => {
+    const parsed = Math.floor(Number(value));
+    if (!Number.isFinite(parsed) || parsed <= 0) return 0;
+    return Math.min(TUNNEL_LINK_MBPS_MAX, parsed);
+  };
+  return { upMbps: clamp(tunnel?.linkUpMbps), downMbps: clamp(tunnel?.linkDownMbps) };
+}

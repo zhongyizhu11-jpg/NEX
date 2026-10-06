@@ -185,6 +185,9 @@ type TunnelForm = {
   proxyProtocolVersion: 1 | 2;
   tcpFastOpen: boolean;
   udpOverTcp: boolean;
+  /** 链路带宽上限（Mbit/s）：入口→出口 / 出口→入口，0 = 不整形。 */
+  linkUpMbps: number;
+  linkDownMbps: number;
   loadBalanceEnabled: boolean;
   loadBalanceStrategy: "none" | "round_robin" | "random" | "least_conn" | "ip_hash" | "fallback";
   loadBalanceExits: Array<{ hostId: number | null; connectHost: string }>;
@@ -336,6 +339,8 @@ const defaultForm: TunnelForm = {
   proxyProtocolVersion: 1,
   tcpFastOpen: false,
   udpOverTcp: false,
+  linkUpMbps: 0,
+  linkDownMbps: 0,
   loadBalanceEnabled: false,
   loadBalanceStrategy: "round_robin",
   loadBalanceExits: [],
@@ -359,6 +364,14 @@ const defaultChainCreateForm: ChainCreateForm = {
   trafficMultiplier: 1,
   isEnabled: true,
 };
+
+/** 链路带宽上限输入：整数 Mbit/s，0 = 不整形；上限和服务端一致（1 Tbit/s）。 */
+const LINK_MBPS_MAX = 1_000_000;
+function normalizeLinkMbpsInput(value: unknown) {
+  const parsed = Math.floor(Number(value));
+  if (!Number.isFinite(parsed) || parsed <= 0) return 0;
+  return Math.min(LINK_MBPS_MAX, parsed);
+}
 
 function isValidPort(port: number, allowZero = false) {
   return Number.isInteger(port) && port >= (allowZero ? 0 : 1) && port <= 65535;
@@ -2662,6 +2675,8 @@ function TunnelsContent() {
       proxyProtocolVersion: Number(tunnel.proxyProtocolVersion) === 2 ? 2 : 1,
       tcpFastOpen: transportTuningSupported && !!tunnel.tcpFastOpen,
       udpOverTcp: transportTuningSupported && !!tunnel.udpOverTcp,
+      linkUpMbps: transportTuningSupported ? normalizeLinkMbpsInput((tunnel as any).linkUpMbps) : 0,
+      linkDownMbps: transportTuningSupported ? normalizeLinkMbpsInput((tunnel as any).linkDownMbps) : 0,
       loadBalanceEnabled: exitGroupId ? !!tunnel.loadBalanceEnabled : false,
       loadBalanceStrategy: (["none", "round_robin", "random", "least_conn", "ip_hash", "fallback"].includes(String(tunnel.loadBalanceStrategy || ""))
         ? tunnel.loadBalanceStrategy
@@ -3047,6 +3062,8 @@ function TunnelsContent() {
       proxyProtocolVersion: proxyAnyEnabled ? submitForm.proxyProtocolVersion : 1,
       tcpFastOpen: transportTuningSupported && submitForm.tcpFastOpen,
       udpOverTcp: transportTuningSupported && submitForm.udpOverTcp,
+      linkUpMbps: transportTuningSupported ? normalizeLinkMbpsInput(submitForm.linkUpMbps) : 0,
+      linkDownMbps: transportTuningSupported ? normalizeLinkMbpsInput(submitForm.linkDownMbps) : 0,
       entryGroupId: submitForm.entryGroupId || null,
       exitGroupId: submitForm.exitGroupId || null,
       entryHostId,
@@ -3160,6 +3177,8 @@ function TunnelsContent() {
       proxyProtocolVersion: proxySupported ? prev.proxyProtocolVersion : 1,
       tcpFastOpen: transportTuningSupported ? prev.tcpFastOpen : false,
       udpOverTcp: transportTuningSupported ? prev.udpOverTcp : false,
+      linkUpMbps: transportTuningSupported ? prev.linkUpMbps : 0,
+      linkDownMbps: transportTuningSupported ? prev.linkDownMbps : 0,
     }));
   };
   const importNginxPemFiles = async (files: readonly File[]) => {
@@ -3433,8 +3452,30 @@ function TunnelsContent() {
     const transportTuningSupported = isTunnelTransportTuningSupported(form.mode);
     if (!proxySupported && !transportTuningSupported) return null;
     const proxyAnyEnabled = form.proxyProtocolReceive || form.proxyProtocolSend || form.proxyProtocolExitReceive || form.proxyProtocolExitSend;
-    const advancedConfigured = proxyAnyEnabled || form.tcpFastOpen || form.udpOverTcp;
+    const advancedConfigured = proxyAnyEnabled || form.tcpFastOpen || form.udpOverTcp || form.linkUpMbps > 0 || form.linkDownMbps > 0;
     const shouldCollapseAdvanced = proxySupported && transportTuningSupported;
+    const renderLinkMbpsInput = (label: string, field: "linkUpMbps" | "linkDownMbps") => (
+      <label className="flex min-h-10 items-center justify-between gap-2">
+        <span className="min-w-0 truncate text-sm">{label}</span>
+        <span className="flex shrink-0 items-center gap-1">
+          <Input
+            type="number"
+            min={0}
+            max={LINK_MBPS_MAX}
+            inputMode="numeric"
+            className="h-9 w-28 text-right tabular-nums"
+            value={form[field] > 0 ? form[field] : ""}
+            placeholder="不限"
+            aria-label={label}
+            onChange={(event) => {
+              const next = normalizeLinkMbpsInput(event.target.value);
+              setForm((prev) => ({ ...prev, [field]: next }));
+            }}
+          />
+          <span className="text-xs text-muted-foreground">Mbit/s</span>
+        </span>
+      </label>
+    );
     const renderProxySwitch = (label: string, field: "proxyProtocolReceive" | "proxyProtocolSend" | "proxyProtocolExitReceive" | "proxyProtocolExitSend") => (
       <label className="flex min-h-10 items-center justify-between gap-2 rounded-md border border-border/50 bg-background/60 px-2.5 py-2">
         <span className="min-w-0 truncate text-sm">{label}</span>
@@ -3555,6 +3596,19 @@ function TunnelsContent() {
             (udpOverTcp) => setForm((prev) => ({ ...prev, udpOverTcp })),
             "需要安装 mimic/mimic-dkms。UDP 丢包时可将业务 MTU 调整为 1200-1300。",
           )}
+        </div>
+        <div className="space-y-2 rounded-md border border-border/50 bg-background/60 px-3 py-2">
+          <span className="block text-sm font-medium">链路带宽上限</span>
+          <span className="block text-xs text-muted-foreground">
+            两端之间有硬限速（云联网地域间带宽、公网带宽上限）时填：隧道把发送速率整形到上限之下，限速器不再丢包，多少条连接合计都能稳稳贴着上限跑，加载时延迟也不涨。留空 = 不整形。
+          </span>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {renderLinkMbpsInput("入口 → 出口（上行）", "linkUpMbps")}
+            {renderLinkMbpsInput("出口 → 入口（下行）", "linkDownMbps")}
+          </div>
+          <span className="block text-xs text-muted-foreground">
+            填 iperf3 测出来的实际吞吐（网络测试「iperf3 客户端」，UDP 模式测限速点最准）或购买的带宽即可：FXP 从 96% 起步，按重传自动微调到不丢包的最高速率。需要两端 FXP 2.2.127 起。
+          </span>
         </div>
         {form.udpOverTcp && form.forwardxVersion === "v1" && (
           <label className="flex min-h-12 items-center justify-between gap-3 rounded-md border border-primary/25 bg-primary/5 px-3 py-2">

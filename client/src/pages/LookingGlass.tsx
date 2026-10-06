@@ -116,7 +116,7 @@ function buildPendingOutput(
   hostName: string,
   target: string,
   port?: string,
-  iperf3?: { reverse: boolean; streams: string; seconds: string },
+  iperf3?: { reverse: boolean; streams: string; seconds: string; udp?: boolean; udpMbps?: string },
 ) {
   const lines = [
     `[${new Date().toLocaleTimeString("zh-CN", { hour12: false })}] 已创建网络测试任务`,
@@ -129,6 +129,10 @@ function buildPendingOutput(
     lines.push(`服务端端口: ${port || "5201"}`);
     lines.push(`方向: ${iperf3?.reverse ? "反向（目标 → 测试主机，看下行）" : "正向（测试主机 → 目标，看上行）"}`);
     lines.push(`并行连接: ${iperf3?.streams || "4"}，时长: ${iperf3?.seconds || "10"} 秒`);
+    if (iperf3?.udp) {
+      const rate = Number(iperf3.udpMbps) > 0 ? `每条流 ${Number(iperf3.udpMbps)} Mbit/s` : "每条流不限速";
+      lines.push(`模式: UDP 灌包（${rate}），接收端那行 receiver 的速率就是链路的限速点`);
+    }
   }
   lines.push("等待 Agent 拉取任务并执行...");
   return lines.join("\n");
@@ -325,6 +329,8 @@ export default function LookingGlass() {
   const [iperf3Streams, setIperf3Streams] = useState<string>("4");
   const [iperf3Seconds, setIperf3Seconds] = useState<string>("10");
   const [iperf3Reverse, setIperf3Reverse] = useState(false);
+  const [iperf3Udp, setIperf3Udp] = useState(false);
+  const [iperf3UdpMbps, setIperf3UdpMbps] = useState<string>("");
   const [hostId, setHostId] = useState("");
   const [activeTaskId, setActiveTaskId] = useState("");
   const [runStartedAt, setRunStartedAt] = useState<number | null>(null);
@@ -517,7 +523,7 @@ export default function LookingGlass() {
       selectedHost?.name || "",
       target.trim(),
       isIperf3Client ? iperf3ClientPort : port,
-      isIperf3Client ? { reverse: iperf3Reverse, streams: iperf3Streams, seconds: iperf3Seconds } : undefined,
+      isIperf3Client ? { reverse: iperf3Reverse, streams: iperf3Streams, seconds: iperf3Seconds, udp: iperf3Udp, udpMbps: iperf3UdpMbps } : undefined,
     ));
     mutation.mutate({
       method: networkMethod,
@@ -530,6 +536,7 @@ export default function LookingGlass() {
           reverse: iperf3Reverse,
           streams: Number(iperf3Streams) || 4,
           seconds: Number(iperf3Seconds) || 10,
+          ...(iperf3Udp ? { udp: true, udpMbps: Math.max(0, Math.floor(Number(iperf3UdpMbps) || 0)) } : {}),
         }
         : {}),
     });
@@ -759,7 +766,39 @@ export default function LookingGlass() {
                       </Select>
                     </FormField>
                   </div>
-                  <p className="text-xs text-muted-foreground">单连接的数字就是一条下载能跑到的上限；多条连接的合计才是这段线路的总带宽。两个数差很多，说明是单连接被窗口或丢包卡住，不是线路本身不够。</p>
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <FormField className="min-w-0 space-y-2">
+                      <Label htmlFor="looking-glass-iperf3-mode">协议</Label>
+                      <Select value={iperf3Udp ? "udp" : "tcp"} onValueChange={(value) => setIperf3Udp(value === "udp")}>
+                        <SelectTrigger id="looking-glass-iperf3-mode"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="tcp">TCP：真实的单连接 / 多连接吞吐</SelectItem>
+                          <SelectItem value="udp">UDP：按固定速率灌包，测链路的限速点</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </FormField>
+                    {iperf3Udp && (
+                      <FormField className="min-w-0 space-y-2">
+                        <Label htmlFor="looking-glass-iperf3-udp-mbps">每条流速率（Mbit/s）</Label>
+                        <Input
+                          id="looking-glass-iperf3-udp-mbps"
+                          type="number"
+                          min={0}
+                          max={100000}
+                          inputMode="numeric"
+                          value={iperf3UdpMbps}
+                          onChange={(event) => setIperf3UdpMbps(event.target.value)}
+                          placeholder="留空 = 不限"
+                          className="font-mono"
+                        />
+                      </FormField>
+                    )}
+                  </div>
+                  {iperf3Udp ? (
+                    <p className="text-xs text-muted-foreground">UDP 不受拥塞控制约束：发得比链路上限高时（留空不限，或填一个明显高于预期的值），结果里 receiver 那行的速率就是限速点，可直接填进隧道的「链路带宽上限」。灌包会把这段链路塞满几秒钟，业务流量会受影响，建议空闲时测。</p>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">单连接的数字就是一条下载能跑到的上限；多条连接的合计才是这段线路的总带宽。两个数差很多，说明是单连接被窗口或丢包卡住，不是线路本身不够。多连接合计反而比单连接低、还逐秒抖，是中间有硬限速在丢包：切到 UDP 模式测出限速点，填进隧道的「链路带宽上限」。</p>
+                  )}
                 </div>
               )}
 

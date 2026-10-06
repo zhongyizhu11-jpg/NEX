@@ -15,6 +15,9 @@ export type LookingGlassAgentTask = {
   reverse?: boolean;
   streams?: number;
   seconds?: number;
+  /** UDP 模式（-u）：按固定速率灌包测链路的限速点；udpMbps 是每条流的速率，0 = 不限。 */
+  udp?: boolean;
+  udpMbps?: number;
   createdAt: string;
 };
 
@@ -33,10 +36,15 @@ export const IPERF3_CLIENT_MAX_SECONDS = 30;
 /** Agent 拉任务、建连、跑完再回报，都算在这段宽限里。 */
 export const IPERF3_CLIENT_TIMEOUT_GRACE_MS = 45_000;
 
+/** UDP 每条流的速率上限（Mbit/s）；0 = 不限（iperf3 的 -b 0）。 */
+export const IPERF3_CLIENT_UDP_MAX_MBPS = 100_000;
+
 export type Iperf3ClientOptions = {
   reverse: boolean;
   streams: number;
   seconds: number;
+  udp: boolean;
+  udpMbps: number;
   /** 面板侧给这个任务的总时限（毫秒）。 */
   timeoutMs: number;
 };
@@ -48,13 +56,18 @@ function clampInt(value: unknown, min: number, max: number, fallback: number) {
 }
 
 /** 把界面传来的 iperf3 客户端参数收敛到边界内；没填的用默认值。 */
-export function normalizeIperf3ClientOptions(input: { reverse?: unknown; streams?: unknown; seconds?: unknown } = {}): Iperf3ClientOptions {
+export function normalizeIperf3ClientOptions(
+  input: { reverse?: unknown; streams?: unknown; seconds?: unknown; udp?: unknown; udpMbps?: unknown } = {},
+): Iperf3ClientOptions {
   const streams = clampInt(input.streams, 1, IPERF3_CLIENT_MAX_STREAMS, IPERF3_CLIENT_DEFAULT_STREAMS);
   const seconds = clampInt(input.seconds, IPERF3_CLIENT_MIN_SECONDS, IPERF3_CLIENT_MAX_SECONDS, IPERF3_CLIENT_DEFAULT_SECONDS);
+  const udp = input.udp === true;
   return {
     reverse: input.reverse === true,
     streams,
     seconds,
+    udp,
+    udpMbps: udp ? clampInt(input.udpMbps, 0, IPERF3_CLIENT_UDP_MAX_MBPS, 0) : 0,
     timeoutMs: seconds * 1000 + IPERF3_CLIENT_TIMEOUT_GRACE_MS,
   };
 }

@@ -75,7 +75,13 @@ type config struct {
 	TCPCongestion string `json:"tcpCongestion,omitempty"`
 	// AEAD 是帧加密算法：空 / auto 按本机实测（没有 AES 硬件时偏好 ChaCha20），
 	// 也可以写 aes-gcm 或 chacha20-poly1305。两端握手时协商，见 aead.go。
-	AEAD             string `json:"aead,omitempty"`
+	AEAD string `json:"aead,omitempty"`
+	// LinkUpMbps / LinkDownMbps 是这条隧道两端之间链路的带宽上限（Mbit/s）：
+	// 入口→出口（上行）和出口→入口（下行）。>0 时本进程往那个方向发的所有隧道帧
+	// 合起来整形到略低于上限，并按重传自动微调，让中间的限速器（云联网、公网带宽
+	// 上限）不丢包。0 = 不整形。见 link_shaper.go。
+	LinkUpMbps       int    `json:"linkUpMbps,omitempty"`
+	LinkDownMbps     int    `json:"linkDownMbps,omitempty"`
 	PanelURL         string `json:"panelUrl"`
 	Token            string `json:"token"`
 	RelayExitHost    string `json:"relayExitHost,omitempty"`

@@ -9,6 +9,7 @@ import {
   routePathDial,
 } from "../shared/routeGroup";
 import { routeHopDownHints } from "./routeGroupStats";
+import { tunnelLinkShaping } from "./tunnelFxpRuntime";
 import { ingestFailoverLineReports } from "./failoverLineReports";
 import { claimTunnelExitReportRequest, hasTunnelExitPort, loadTunnelExitPorts, recordTunnelExitPorts, tunnelExitPortFor, type TunnelExitPortEntry } from "./tunnelExitPorts";
 import * as db from "./db";
@@ -3271,6 +3272,11 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       }
     };
     const applyForwardXTransport = async (fxpSpec: any, tunnel: any) => {
+      // 链路带宽上限跟着每个角色的配置走（入口、出口、中转都要）：主动拨出去的连接按
+      // 上行整形，接进来的连接按下行整形，FXP 自己按方向取。
+      const link = tunnelLinkShaping(tunnel);
+      if (link.upMbps > 0) fxpSpec.linkUpMbps = link.upMbps;
+      if (link.downMbps > 0) fxpSpec.linkDownMbps = link.downMbps;
       if (!isForwardXWireGuardV2(tunnel)) {
         fxpSpec.transportVersion = "v1";
         return fxpSpec;

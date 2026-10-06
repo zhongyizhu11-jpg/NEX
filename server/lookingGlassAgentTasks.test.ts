@@ -12,6 +12,7 @@ import {
   IPERF3_CLIENT_TIMEOUT_GRACE_MS,
   LOOKING_GLASS_OUTPUT_MAX_BYTES,
   getLookingGlassAgentTaskStatus,
+  IPERF3_CLIENT_UDP_MAX_MBPS,
   normalizeIperf3ClientOptions,
   pruneLookingGlassAgentTaskStates,
   takeLookingGlassAgentTasks,
@@ -76,6 +77,17 @@ test("iperf3 客户端参数收敛到边界内，任务时限跟着时长走", (
   assert.equal(low.streams, 1);
   assert.equal(low.seconds, IPERF3_CLIENT_MIN_SECONDS);
   assert.equal(low.reverse, false);
+  assert.equal(low.udp, false);
+  assert.equal(low.udpMbps, 0);
+
+  // UDP 模式：每条流的速率封顶，0 = 不限；没开 UDP 时速率不带过去。
+  const udp = normalizeIperf3ClientOptions({ udp: true, udpMbps: 2500 });
+  assert.equal(udp.udp, true);
+  assert.equal(udp.udpMbps, 2500);
+  assert.equal(normalizeIperf3ClientOptions({ udp: true, udpMbps: 9_999_999 }).udpMbps, IPERF3_CLIENT_UDP_MAX_MBPS);
+  assert.equal(normalizeIperf3ClientOptions({ udp: true }).udpMbps, 0);
+  assert.equal(normalizeIperf3ClientOptions({ udp: "true", udpMbps: 100 }).udp, false);
+  assert.equal(normalizeIperf3ClientOptions({ udp: false, udpMbps: 100 }).udpMbps, 0);
 
   // 任务里带着这些参数走到 Agent 那一侧。
   const hostId = 987656;

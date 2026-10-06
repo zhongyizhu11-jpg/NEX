@@ -135,6 +135,8 @@ type secureConn struct {
 	// offeredAEADs 是客户端报出去的列表，用来核对服务端的选择。
 	aead         string
 	offeredAEADs []string
+	// shaper 是这条连接所属方向的链路整形器（可能为 nil）：写帧前先领额度。
+	shaper *linkShaper
 }
 
 // fxpAckError 表示对端没有确认握手：连不通的黑洞、拒绝了密钥、半路断开。
@@ -205,7 +207,7 @@ const (
 	fxpUDPIdleTimeout    = 5 * time.Minute
 	fxpProtocolSampleMax = 512
 	fxpMasterContext     = "forwardx-fxp-v2 master"
-	fxpRuntimeVersion    = "2.2.126"
+	fxpRuntimeVersion    = "2.2.127"
 	fxpFallbackRetry     = 5 * time.Second
 	// A node that stays down is re-probed on a growing delay, because probing a
 	// peer that accepts but never answers costs a whole handshake timeout.
@@ -2507,6 +2509,9 @@ func newPipelinedClientSecureConn(conn net.Conn, cfg config, wire fxpWireContext
 	sec.handshakeMaster = master[:]
 	sec.handshakeSalt = salt
 	sec.handshakeWire = wire
+	// 主动拨出去的连接发的是往出口方向的流量：按 linkUpMbps 整形。
+	sec.shaper = linkShaperFor("up", cfg)
+	sec.shaper.attach(conn)
 	return sec, nil
 }
 
@@ -2655,6 +2660,9 @@ func newServerSecureConnWithWires(conn net.Conn, cfg config, wires []fxpWireCont
 		if err := clearFXPConnDeadline(conn); err != nil && !isClosedErr(err) {
 			return nil, err
 		}
+		// 接进来的连接发的是往入口方向的流量：按 linkDownMbps 整形。
+		sec.shaper = linkShaperFor("down", cfg)
+		sec.shaper.attach(conn)
 		return sec, nil
 	}
 	if lastErr == nil {
@@ -2932,6 +2940,13 @@ func (c *secureConn) writeEncryptedFrame(plain []byte) error {
 func (c *secureConn) writeFrames(frames ...[]byte) error {
 	if c == nil {
 		return errors.New("nil secure connection")
+	}
+	if c.shaper != nil {
+		total := 0
+		for _, plain := range frames {
+			total += len(plain)
+		}
+		c.shaper.wait(total)
 	}
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()

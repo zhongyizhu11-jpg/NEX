@@ -25,6 +25,7 @@ import test from "node:test";
 
 type Beat = {
   fxpEntry: Record<string, { targetIp: string; targetPort: number }>;
+  fxpLink: Record<string, { up?: number; down?: number }>;
   gostEntry: Record<string, string>;
   schedulers: Record<string, number>;
   guards: Record<string, { listenPort: number; target: string }>;
@@ -77,7 +78,7 @@ function run(): Outcome {
       const values = [id, name, 2, 1, mode, listenPort, 1, 1, ...Object.values(extra)];
       return exec("INSERT INTO tunnels (" + columns.join(", ") + ") VALUES (" + values.map(() => "?").join(", ") + ")", values);
     };
-    await tunnel(1, "NEX", "forwardx", 23001);
+    await tunnel(1, "NEX", "forwardx", 23001, { linkUpMbps: 1500, linkDownMbps: 1560 });
     await tunnel(2, "GOST", "tls", 23002);
     await tunnel(3, "GOST 出口发 PROXY 头", "tls", 23003, { proxyProtocolExitSend: 1 });
     await tunnel(4, "GOST 负载均衡", "tls", 23004, { loadBalanceEnabled: 1, loadBalanceStrategy: "round_robin" });
@@ -123,10 +124,14 @@ function run(): Outcome {
       const body = await response.json();
       if (response.status !== 200) throw new Error("心跳没通: " + response.status + " " + JSON.stringify(body));
       const fxpEntry = {};
+      const fxpLink = {};
       const gostEntry = {};
       for (const action of (body.desiredState && body.desiredState.actions) || []) {
         if (action && action.fxp && action.op === "apply" && action.fxp.role === "entry") {
           fxpEntry[String(action.ruleId)] = { targetIp: String(action.fxp.targetIp), targetPort: Number(action.fxp.targetPort) };
+        }
+        if (action && action.fxp && action.op === "apply") {
+          fxpLink[String(action.fxp.role) + ":" + String(action.fxp.tunnelId)] = { up: action.fxp.linkUpMbps, down: action.fxp.linkDownMbps };
         }
         for (const config of (action && action.managedConfigs) || []) {
           if (!String(config.path || "").endsWith(".json")) continue;
@@ -148,7 +153,7 @@ function run(): Outcome {
       for (const guard of body.guardRules || []) {
         if (Number(guard.tunnelId || 0) > 0) guards[String(guard.ruleId)] = { listenPort: Number(guard.listenPort), target: guard.targetIp + ":" + guard.targetPort };
       }
-      return { fxpEntry, gostEntry, schedulers, guards };
+      return { fxpEntry, fxpLink, gostEntry, schedulers, guards };
     };
 
     // 入口「稳定计划」：放一份假的，看出口报端口以后它有没有被清掉（清掉 = 入口马上重算）。
@@ -271,4 +276,13 @@ test("面板重启后从库里读回出口的端口，入口不用先变一次�
   assert.equal(outcome.entryAfterRestart.gostEntry["5"], "127.0.0.1:41006");
   assert.deepEqual(outcome.persistedHosts, [1, 4], "只存有出口端口的机器");
   assert.deepEqual(outcome.settingsLeak, [], "运行时缓存不混进系统设置");
+});
+
+test("链路带宽上限跟着 FXP 配置下发：入口和出口都拿到，没填的隧道不带这两个字段", () => {
+  assert.deepEqual(outcome.entryAfter.fxpLink["entry:1"], { up: 1500, down: 1560 }, "入口的 FXP 配置");
+  assert.deepEqual(outcome.exit.fxpLink["exit:1"], { up: 1500, down: 1560 }, "出口的 FXP 配置");
+  for (const [key, value] of Object.entries(outcome.entryAfter.fxpLink)) {
+    if (key.endsWith(":1")) continue;
+    assert.deepEqual(value, { up: undefined, down: undefined }, key + " 不该带链路上限");
+  }
 });

@@ -62,3 +62,23 @@ func TestRunLookingGlassCommandThrottlesProgressReports(t *testing.T) {
 		t.Fatal("the first output line must still be reported promptly")
 	}
 }
+
+func TestIperf3ClientCommandUDPMode(t *testing.T) {
+	_, args, _ := iperf3ClientCommand(lookingGlassTask{ResolvedAddress: "203.0.113.9", Family: 4, UDP: true, UDPMbps: 2000})
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "-u -b 2000M") {
+		t.Fatalf("udp mode must pass -u and the per-stream bandwidth: %q", joined)
+	}
+	_, args, _ = iperf3ClientCommand(lookingGlassTask{ResolvedAddress: "203.0.113.9", Family: 4, UDP: true})
+	if joined = strings.Join(args, " "); !strings.Contains(joined, "-u -b 0M") {
+		t.Fatalf("udp mode without a rate must be unlimited (-b 0): %q", joined)
+	}
+	_, args, _ = iperf3ClientCommand(lookingGlassTask{ResolvedAddress: "203.0.113.9", Family: 4, UDP: true, UDPMbps: 999999})
+	if joined = strings.Join(args, " "); !strings.Contains(joined, "-b 100000M") {
+		t.Fatalf("udp rate must be clamped: %q", joined)
+	}
+	_, args, _ = iperf3ClientCommand(lookingGlassTask{ResolvedAddress: "203.0.113.9", Family: 4})
+	if joined = strings.Join(args, " "); strings.Contains(joined, "-u") {
+		t.Fatalf("tcp mode must not pass -u: %q", joined)
+	}
+}

@@ -941,6 +941,8 @@ export const tunnels = table("tunnels", {
   proxyProtocolVersion: int("proxyProtocolVersion").notNull().default(1),
   tcpFastOpen: boolean("tcpFastOpen").notNull().default(false),
   udpOverTcp: boolean("udpOverTcp").notNull().default(false),
+  linkUpMbps: int("linkUpMbps").notNull().default(0),
+  linkDownMbps: int("linkDownMbps").notNull().default(0),
   blockHttp: boolean("blockHttp").notNull().default(false),
   blockSocks: boolean("blockSocks").notNull().default(false),
   blockTls: boolean("blockTls").notNull().default(false),

@@ -569,6 +569,8 @@ const tables: TableDef[] = [
       c("proxyProtocolExitReceive", "bool", { notNull: true, default: false }), c("proxyProtocolExitSend", "bool", { notNull: true, default: false }),
       c("proxyProtocolVersion", "int", { notNull: true, default: 1 }),
       c("tcpFastOpen", "bool", { notNull: true, default: false }), c("udpOverTcp", "bool", { notNull: true, default: false }),
+      // 链路带宽上限（Mbit/s）：入口→出口 / 出口→入口。>0 时 FXP 把发送速率整形到限速器之下。
+      c("linkUpMbps", "int", { notNull: true, default: 0 }), c("linkDownMbps", "int", { notNull: true, default: 0 }),
       c("blockHttp", "bool", { notNull: true, default: false }), c("blockSocks", "bool", { notNull: true, default: false }),
       c("blockTls", "bool", { notNull: true, default: false }), c("loadBalanceEnabled", "bool", { notNull: true, default: false }),
       c("loadBalanceStrategy", "varchar", { length: 32, notNull: true, default: "round_robin" }),
