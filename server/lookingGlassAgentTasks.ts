@@ -1,6 +1,6 @@
 import crypto from "crypto";
 
-export type LookingGlassMethod = "ping" | "ping6" | "traceroute" | "traceroute6" | "mtr" | "mtr6" | "tcp";
+export type LookingGlassMethod = "ping" | "ping6" | "traceroute" | "traceroute6" | "mtr" | "mtr6" | "tcp" | "iperf3-client";
 export type LookingGlassTaskState = "queued" | "running" | "success" | "error" | "timeout";
 
 export type LookingGlassAgentTask = {
@@ -11,8 +11,53 @@ export type LookingGlassAgentTask = {
   resolvedAddresses: string[];
   family: number;
   port?: number;
+  /** iperf3 客户端：反向（-R，测目标 → 本机）、并行连接数（-P）、时长秒（-t）。 */
+  reverse?: boolean;
+  streams?: number;
+  seconds?: number;
   createdAt: string;
 };
+
+/*
+  iperf3 客户端测试的参数边界。
+
+  并行连接数封到 16：再多对测出带宽没帮助，只是在对端服务端上多占线程。
+  时长封到 30 秒：一次任务独占这台 Agent 的网络测试槽位，也独占对端那个
+  iperf3 服务端（它空闲 3 分钟就自动停），长测用命令行自己跑。
+*/
+export const IPERF3_CLIENT_DEFAULT_STREAMS = 4;
+export const IPERF3_CLIENT_MAX_STREAMS = 16;
+export const IPERF3_CLIENT_DEFAULT_SECONDS = 10;
+export const IPERF3_CLIENT_MIN_SECONDS = 5;
+export const IPERF3_CLIENT_MAX_SECONDS = 30;
+/** Agent 拉任务、建连、跑完再回报，都算在这段宽限里。 */
+export const IPERF3_CLIENT_TIMEOUT_GRACE_MS = 45_000;
+
+export type Iperf3ClientOptions = {
+  reverse: boolean;
+  streams: number;
+  seconds: number;
+  /** 面板侧给这个任务的总时限（毫秒）。 */
+  timeoutMs: number;
+};
+
+function clampInt(value: unknown, min: number, max: number, fallback: number) {
+  const parsed = Math.floor(Number(value));
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, parsed));
+}
+
+/** 把界面传来的 iperf3 客户端参数收敛到边界内；没填的用默认值。 */
+export function normalizeIperf3ClientOptions(input: { reverse?: unknown; streams?: unknown; seconds?: unknown } = {}): Iperf3ClientOptions {
+  const streams = clampInt(input.streams, 1, IPERF3_CLIENT_MAX_STREAMS, IPERF3_CLIENT_DEFAULT_STREAMS);
+  const seconds = clampInt(input.seconds, IPERF3_CLIENT_MIN_SECONDS, IPERF3_CLIENT_MAX_SECONDS, IPERF3_CLIENT_DEFAULT_SECONDS);
+  return {
+    reverse: input.reverse === true,
+    streams,
+    seconds,
+    timeoutMs: seconds * 1000 + IPERF3_CLIENT_TIMEOUT_GRACE_MS,
+  };
+}
 
 export type LookingGlassAgentResult = {
   taskId: string;

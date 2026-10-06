@@ -4,8 +4,15 @@ import {
   capLookingGlassOutput,
   completeLookingGlassAgentTask,
   enqueueLookingGlassAgentTask,
+  IPERF3_CLIENT_DEFAULT_SECONDS,
+  IPERF3_CLIENT_DEFAULT_STREAMS,
+  IPERF3_CLIENT_MAX_SECONDS,
+  IPERF3_CLIENT_MAX_STREAMS,
+  IPERF3_CLIENT_MIN_SECONDS,
+  IPERF3_CLIENT_TIMEOUT_GRACE_MS,
   LOOKING_GLASS_OUTPUT_MAX_BYTES,
   getLookingGlassAgentTaskStatus,
+  normalizeIperf3ClientOptions,
   pruneLookingGlassAgentTaskStates,
   takeLookingGlassAgentTasks,
 } from "./lookingGlassAgentTasks";
@@ -50,4 +57,41 @@ test("Looking Glass output reported by an Agent is capped before it is kept", ()
   assert.equal(completeLookingGlassAgentTask(hostId, { taskId: task.taskId, output: huge, exitCode: 0 } as any), true);
   const status = getLookingGlassAgentTaskStatus(hostId, task.taskId);
   assert.ok(Buffer.byteLength(String(status?.output || ""), "utf8") < LOOKING_GLASS_OUTPUT_MAX_BYTES + 256);
+});
+
+test("iperf3 客户端参数收敛到边界内，任务时限跟着时长走", () => {
+  const defaults = normalizeIperf3ClientOptions({});
+  assert.equal(defaults.streams, IPERF3_CLIENT_DEFAULT_STREAMS);
+  assert.equal(defaults.seconds, IPERF3_CLIENT_DEFAULT_SECONDS);
+  assert.equal(defaults.reverse, false);
+  assert.equal(defaults.timeoutMs, IPERF3_CLIENT_DEFAULT_SECONDS * 1000 + IPERF3_CLIENT_TIMEOUT_GRACE_MS);
+
+  const clamped = normalizeIperf3ClientOptions({ streams: 500, seconds: 3600, reverse: true });
+  assert.equal(clamped.streams, IPERF3_CLIENT_MAX_STREAMS);
+  assert.equal(clamped.seconds, IPERF3_CLIENT_MAX_SECONDS);
+  assert.equal(clamped.reverse, true);
+  assert.equal(clamped.timeoutMs, IPERF3_CLIENT_MAX_SECONDS * 1000 + IPERF3_CLIENT_TIMEOUT_GRACE_MS);
+
+  const low = normalizeIperf3ClientOptions({ streams: 0, seconds: 1, reverse: "yes" });
+  assert.equal(low.streams, 1);
+  assert.equal(low.seconds, IPERF3_CLIENT_MIN_SECONDS);
+  assert.equal(low.reverse, false);
+
+  // 任务里带着这些参数走到 Agent 那一侧。
+  const hostId = 987656;
+  const { task } = enqueueLookingGlassAgentTask(hostId, {
+    method: "iperf3-client",
+    target: "203.0.113.9",
+    resolvedAddress: "203.0.113.9",
+    resolvedAddresses: ["203.0.113.9"],
+    family: 4,
+    port: 5201,
+    ...clamped,
+  }, clamped.timeoutMs);
+  const [taken] = takeLookingGlassAgentTasks(hostId);
+  assert.equal(taken.taskId, task.taskId);
+  assert.equal(taken.method, "iperf3-client");
+  assert.equal(taken.reverse, true);
+  assert.equal(taken.streams, IPERF3_CLIENT_MAX_STREAMS);
+  assert.equal(taken.seconds, IPERF3_CLIENT_MAX_SECONDS);
 });

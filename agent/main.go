@@ -38,7 +38,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.209"
+var Version = "2.2.210"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -4779,7 +4779,16 @@ func runLookingGlassTask(cfg Config, task lookingGlassTask) lookingGlassResult {
 		return result
 	}
 
+	timeout := 30 * time.Second
+	if task.Method == "iperf3-client" {
+		// 跑满 -t 秒才出汇总，再给建连和收尾留一点。
+		timeout = time.Duration(iperf3ClientSeconds(task))*time.Second + 20*time.Second
+		result.Port = iperf3ClientPort(task)
+	}
 	command, args, err := lookingGlassCommand(task.Method, task.ResolvedAddress)
+	if task.Method == "iperf3-client" {
+		command, args, err = iperf3ClientCommand(task)
+	}
 	if err != nil {
 		code := 1
 		result.ExitCode = &code
@@ -4804,7 +4813,7 @@ func runLookingGlassTask(cfg Config, task lookingGlassTask) lookingGlassResult {
 		result.DurationMs = durationMs
 		reportLookingGlassProgress(cfg, result)
 	}
-	output, exitCode, timedOut := runLookingGlassCommand(command, args, 30*time.Second, progress)
+	output, exitCode, timedOut := runLookingGlassCommand(command, args, timeout, progress)
 	result.Output = output
 	if strings.TrimSpace(result.Output) == "" {
 		result.Output = "命令没有返回输出"
@@ -4828,6 +4837,78 @@ func lookingGlassCommand(method string, host string) (string, []string, error) {
 	default:
 		return "", nil, fmt.Errorf("不支持的网络测试方法: %s", method)
 	}
+}
+
+/*
+iperf3 客户端：从这台 Agent 往目标上的 iperf3 服务端跑一次带宽测试，面板里另一台
+主机一键开的服务端就是典型的对端。面板给的参数在这里再收一次边界，免得旧面板或
+手改的任务把 -P 开到几百。
+
+--forceflush 让 iperf3 在 stdout 不是终端时也逐秒刷出中间行，面板上才看得到实时
+速率；iperf 3.1 起就有这个参数。-f m 固定用 Mbits/sec 显示，各机器输出一致。
+*/
+const (
+	iperf3ClientDefaultPort    = 5201
+	iperf3ClientDefaultStreams = 4
+	iperf3ClientMaxStreams     = 16
+	iperf3ClientDefaultSeconds = 10
+	iperf3ClientMinSeconds     = 5
+	iperf3ClientMaxSeconds     = 30
+)
+
+func iperf3ClientPort(task lookingGlassTask) int {
+	if task.Port <= 0 || task.Port > 65535 {
+		return iperf3ClientDefaultPort
+	}
+	return task.Port
+}
+
+func iperf3ClientStreams(task lookingGlassTask) int {
+	if task.Streams <= 0 {
+		return iperf3ClientDefaultStreams
+	}
+	if task.Streams > iperf3ClientMaxStreams {
+		return iperf3ClientMaxStreams
+	}
+	return task.Streams
+}
+
+func iperf3ClientSeconds(task lookingGlassTask) int {
+	if task.Seconds <= 0 {
+		return iperf3ClientDefaultSeconds
+	}
+	if task.Seconds < iperf3ClientMinSeconds {
+		return iperf3ClientMinSeconds
+	}
+	if task.Seconds > iperf3ClientMaxSeconds {
+		return iperf3ClientMaxSeconds
+	}
+	return task.Seconds
+}
+
+func iperf3ClientCommand(task lookingGlassTask) (string, []string, error) {
+	host := strings.TrimSpace(task.ResolvedAddress)
+	if host == "" {
+		return "", nil, fmt.Errorf("iperf3 客户端测试缺少目标地址")
+	}
+	args := []string{
+		"-c", host,
+		"-p", strconv.Itoa(iperf3ClientPort(task)),
+		"-P", strconv.Itoa(iperf3ClientStreams(task)),
+		"-t", strconv.Itoa(iperf3ClientSeconds(task)),
+		"-i", "1",
+		"-f", "m",
+		"--forceflush",
+	}
+	if task.Family == 6 || strings.Contains(host, ":") {
+		args = append(args, "-6")
+	} else if task.Family == 4 {
+		args = append(args, "-4")
+	}
+	if task.Reverse {
+		args = append(args, "-R")
+	}
+	return "iperf3", args, nil
 }
 
 func missingNetworkToolMessage(tool string) string {
@@ -12278,7 +12359,11 @@ type lookingGlassTask struct {
 	ResolvedAddresses []string `json:"resolvedAddresses"`
 	Family            int      `json:"family"`
 	Port              int      `json:"port"`
-	CreatedAt         string   `json:"createdAt"`
+	// iperf3 客户端（method = iperf3-client）：-R、-P、-t。
+	Reverse   bool   `json:"reverse,omitempty"`
+	Streams   int    `json:"streams,omitempty"`
+	Seconds   int    `json:"seconds,omitempty"`
+	CreatedAt string `json:"createdAt"`
 }
 
 type lookingGlassResult struct {
