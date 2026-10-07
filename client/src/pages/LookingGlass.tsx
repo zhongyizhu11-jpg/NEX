@@ -794,11 +794,7 @@ export default function LookingGlass() {
                       </FormField>
                     )}
                   </div>
-                  {iperf3Udp ? (
-                    <p className="text-xs text-muted-foreground">UDP 不受拥塞控制约束：发得比链路上限高时（留空不限，或填一个明显高于预期的值），结果里 receiver 那行的速率就是限速点，可直接填进隧道的「链路带宽上限」。灌包会把这段链路塞满几秒钟，业务流量会受影响，建议空闲时测。</p>
-                  ) : (
-                    <p className="text-xs text-muted-foreground">单连接的数字就是一条下载能跑到的上限；多条连接的合计才是这段线路的总带宽。两个数差很多，说明是单连接被窗口或丢包卡住，不是线路本身不够。多连接合计反而比单连接低、还逐秒抖，是中间有硬限速在丢包：切到 UDP 模式测出限速点，填进隧道的「链路带宽上限」。</p>
-                  )}
+                  <p className="text-xs text-muted-foreground">单连接的数字就是一条下载能跑到的上限；多条连接的合计才是这段线路的总带宽。两个数差很多，说明是单连接被窗口或丢包卡住，不是线路本身不够。</p>
                 </div>
               )}
 

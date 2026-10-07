@@ -83,22 +83,30 @@ const (
 	linkShaperLossDown    = 0.003  // 重传率超过 0.3% 就降
 	linkShaperLossClean   = 0.0005 // 低于 0.05% 算干净
 	linkShaperDownStep    = 0.97
+	// 重传很重（>2%）说明离限速点还远，降快点。
+	linkShaperHeavyLoss     = 0.02
+	linkShaperHeavyDownStep = 0.94
+	// 干净时的爬升：连续干净的轮次越多步子越大（1%、2%、4%、8%、10%），一碰到丢包
+	// 回到 1%。学错了一个偏低的值不至于要半小时才爬回来。
 	linkShaperUpStep      = 1.01
-	linkShaperCleanRounds = 10
+	linkShaperUpStepMax   = 1.10
+	linkShaperCleanRounds = 5
 	// 升到丢包点之下这个比例就停，免得每隔几十秒就撞一次限速器。
 	linkShaperCeilingMargin = 0.985
 	linkShaperCeilingTTL    = 15 * time.Minute
 	linkShaperBytesPerMbps  = 125000
-	// 自动模式：连续两秒「积压 + 重传」才认定撞上了限速器（一秒的抖动不算），
-	// 起点是最近几秒观察到的最高送达速率再放宽一点（限速器的桶会放出一小段突发，
-	// 起点偏高没关系，往下降就是了）。
+	// 自动模式：重传明显（≥1%）加积压，一秒就认定撞上了限速器；轻一点（0.3% 到 1%）
+	// 要连续两秒。起点取最近几秒里三秒平均送达速率的最高值再放宽一点：单秒峰值
+	// 含限速器的桶放出的突发，偏高太多；三秒平均更接近真实上限。
 	linkShaperAutoStartMargin = 1.05
-	linkShaperAutoWindows     = 3
+	linkShaperAutoWindows     = 6
+	linkShaperAutoAverageSpan = 3
 	linkShaperAutoTriggerRuns = 2
+	linkShaperAutoStrongLoss  = 0.01
 	// 起点也可能偏低（几条流互相打得只剩上限的三分之一时开始的）：还没碰到过
-	// 丢包之前每个干净的秒升 10%，碰到丢包再换成每十秒 1% 的细调。升到起点的
-	// 四倍还没丢，说明限速器没了，回到观察。
-	linkShaperSearchStep       = 1.10
+	// 丢包之前每个干净的秒升 25%，碰到丢包再换成细调。升到起点的四倍还没丢，
+	// 说明限速器没了，回到观察。
+	linkShaperSearchStep       = 1.25
 	linkShaperSearchGiveUpMult = 4.0
 	// 自动模式：送达速率低于这个数（1 MB/s）的丢包不当回事。
 	linkShaperAutoMinDelivered = 1 << 20
@@ -155,6 +163,7 @@ type linkShaper struct {
 	ceiling      int64 // 上次观察到丢包时的速率，0 = 没有
 	ceilingAt    time.Time
 	cleanRuns    int
+	upStep       float64 // 当前的爬升步子（1.01 起，每轮干净翻倍到 1.10）
 	lastTick     time.Time
 	descentStart int64 // 自动模式这一轮整形的起点
 	triggerRuns  int   // 自动模式：连续几秒看到「积压 + 重传」
@@ -380,18 +389,12 @@ func (s *linkShaper) stepLocked(now time.Time, w linkWindow) {
 			return
 		}
 		s.triggerRuns++
-		if s.triggerRuns < linkShaperAutoTriggerRuns {
+		if s.triggerRuns < linkShaperAutoTriggerRuns && w.loss < linkShaperAutoStrongLoss {
 			return
 		}
 		s.triggerRuns = 0
-		// 撞上限速器了：按最近几秒的最高送达速率起步，往下找不丢包的点。
-		peak := 0.0
-		for _, item := range s.windows {
-			if item.delivered > peak {
-				peak = item.delivered
-			}
-		}
-		start := int64(peak * linkShaperAutoStartMargin)
+		// 撞上限速器了：按最近几秒里最高的三秒平均送达速率起步，往下找不丢包的点。
+		start := int64(s.sustainedPeakLocked() * linkShaperAutoStartMargin)
 		s.descentStart = start
 		s.rate.Store(start)
 		s.ceiling, s.ceilingAt, s.cleanRuns = 0, time.Time{}, 0
@@ -407,7 +410,12 @@ func (s *linkShaper) stepLocked(now time.Time, w linkWindow) {
 		return
 	}
 	if w.loss > linkShaperLossDown {
-		next := int64(float64(rate) * linkShaperDownStep)
+		step := linkShaperDownStep
+		if w.loss > linkShaperHeavyLoss {
+			step = linkShaperHeavyDownStep
+		}
+		next := int64(float64(rate) * step)
+		s.upStep = 0
 		if mode == linkShapingManual {
 			if floor := int64(float64(s.max.Load()) * linkShaperFloor); next < floor {
 				next = floor
@@ -465,7 +473,10 @@ func (s *linkShaper) stepLocked(now time.Time, w linkWindow) {
 			limit = capped
 		}
 	}
-	next := int64(float64(rate) * linkShaperUpStep)
+	if s.upStep < linkShaperUpStep {
+		s.upStep = linkShaperUpStep
+	}
+	next := int64(float64(rate) * s.upStep)
 	if next > limit {
 		next = limit
 	}
@@ -473,6 +484,34 @@ func (s *linkShaper) stepLocked(now time.Time, w linkWindow) {
 		s.rate.Store(next)
 		log.Printf("fxp link shaper %s clean at %dMbit/s, rate up to %dMbit/s (limit %dMbit/s)", s.key, rate/linkShaperBytesPerMbps, next/linkShaperBytesPerMbps, limit/linkShaperBytesPerMbps)
 	}
+	// 下一轮步子翻倍：1%、2%、4%、8%、10%。
+	if s.upStep = 1 + (s.upStep-1)*2; s.upStep > linkShaperUpStepMax {
+		s.upStep = linkShaperUpStepMax
+	}
+}
+
+// sustainedPeakLocked 是最近几秒里最高的三秒平均送达速率（不足三秒就按单秒最高）。
+func (s *linkShaper) sustainedPeakLocked() float64 {
+	peak := 0.0
+	n := len(s.windows)
+	if n >= linkShaperAutoAverageSpan {
+		for i := 0; i+linkShaperAutoAverageSpan <= n; i++ {
+			sum := 0.0
+			for _, item := range s.windows[i : i+linkShaperAutoAverageSpan] {
+				sum += item.delivered
+			}
+			if avg := sum / linkShaperAutoAverageSpan; avg > peak {
+				peak = avg
+			}
+		}
+		return peak
+	}
+	for _, item := range s.windows {
+		if item.delivered > peak {
+			peak = item.delivered
+		}
+	}
+	return peak
 }
 
 // rememberLocked：自动模式连续十秒干净的速率就是限速点，记下来（变化超过 2% 才写）。
@@ -483,6 +522,7 @@ func (s *linkShaper) rememberLocked(now time.Time, rate int64) {
 	}
 	s.learned.Store(rate)
 	s.descentStart = 0
+	s.upStep = 0
 	s.applyPacingLocked(rate)
 	if learned <= 0 {
 		log.Printf("fxp link shaper %s auto: learned rate limit %dMbit/s", s.key, rate/linkShaperBytesPerMbps)
