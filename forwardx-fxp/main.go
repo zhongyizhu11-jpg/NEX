@@ -2042,6 +2042,8 @@ func handleExitUDP(sec *secureConn, hello helloFrame, cfg config) error {
 				errCh <- nil
 				return
 			}
+			// 出口往目标发的 UDP 也从这台机器的公网出口出去。
+			linkShaperEgress().wait(len(frame))
 			if _, err := target.Write(frame); err != nil {
 				errCh <- err
 				return

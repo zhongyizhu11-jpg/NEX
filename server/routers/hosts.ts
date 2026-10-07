@@ -1340,7 +1340,8 @@ export const hostsRouter = router({
           ? normalizeHostDdnsPayload(input)
           : { ddnsEnabled: false, ddnsDomain: null, ddnsRecordType: "A", ddnsIpVersion: "ipv4" };
         if ((ddnsConfig as any).ddnsEnabled) await assertHostDdnsServiceConfigured();
-        const egressConfig = hostEgressShapingPayload(input);
+        // 公网出口整形只有管理员能设：整台机器一起减速，不是租户自己那几条规则的事。
+        const egressConfig = ctx.user.role === "admin" ? hostEgressShapingPayload(input) : { egressShapingMode: "off", egressMbps: 0 };
         const id = await db.createHost({
           ...input,
           ...trafficConfig,
@@ -1489,6 +1490,10 @@ export const hostsRouter = router({
         let ddnsConfigChanged = false;
         // 公网出口整形：两个字段一起收敛；变了要让这台机器的 Agent 重发 FXP 配置。
         let egressShapingChanged = false;
+        if (ctx.user.role !== "admin") {
+          delete (data as any).egressShapingMode;
+          delete (data as any).egressMbps;
+        }
         if ((data as any).egressShapingMode !== undefined || (data as any).egressMbps !== undefined) {
           const egressConfig = hostEgressShapingPayload({
             egressShapingMode: (data as any).egressShapingMode !== undefined ? (data as any).egressShapingMode : (host as any).egressShapingMode,

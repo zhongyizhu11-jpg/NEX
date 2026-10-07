@@ -178,6 +178,8 @@ type linkShaper struct {
 	savedAt      time.Time
 	// changed 让上报协程尽快报一次。
 	changed atomic.Bool
+	// shared：主机公网出口整形跨进程共享的桶（见 link_shaper_shared.go），其它整形器为 nil。
+	shared *linkShaperShared
 }
 
 func newLinkShaper(key, direction string, tunnelID int) *linkShaper {
@@ -194,6 +196,7 @@ func (s *linkShaper) configure(mode linkShapingMode, mbps int, hintMbps int) {
 	}
 	s.tuneMu.Lock()
 	defer s.tuneMu.Unlock()
+	defer s.shareRateLocked()
 	previous := s.currentMode()
 	switch mode {
 	case linkShapingManual:
@@ -292,15 +295,24 @@ func (s *linkShaper) wait(n int) {
 	if rate <= 0 {
 		return
 	}
-	s.mu.Lock()
 	now := time.Now()
-	if credit := now.Add(-linkShaperBurst); s.next.Before(credit) {
-		s.next = credit
+	var at time.Time
+	if sh := s.shared; sh != nil {
+		// 跨进程共享的桶：所有 FXP 进程从同一个虚拟时钟上领额度。
+		s.mu.Lock()
+		s.sent += uint64(n)
+		s.mu.Unlock()
+		at = sh.take(now, n, rate)
+	} else {
+		s.mu.Lock()
+		if credit := now.Add(-linkShaperBurst); s.next.Before(credit) {
+			s.next = credit
+		}
+		at = s.next
+		s.next = s.next.Add(time.Duration(float64(n) * float64(time.Second) / float64(rate)))
+		s.sent += uint64(n)
+		s.mu.Unlock()
 	}
-	at := s.next
-	s.next = s.next.Add(time.Duration(float64(n) * float64(time.Second) / float64(rate)))
-	s.sent += uint64(n)
-	s.mu.Unlock()
 	delay := at.Sub(now)
 	if delay <= 0 {
 		return
@@ -357,7 +369,21 @@ func (s *linkShaper) tick(now time.Time) {
 		}
 		member.last, member.primed = stats, true
 	}
-	if s.currentMode() == linkShapingOff || elapsed <= 0 || elapsed > 5*linkShaperTuneInterval {
+	if elapsed <= 0 || elapsed > 5*linkShaperTuneInterval {
+		return
+	}
+	if sh := s.shared; sh != nil {
+		// 跨进程：先把自己这一秒的量发布出去；领头的进程把所有进程的加起来再决策，
+		// 其它进程每秒读一次它算出来的速率跟着走。
+		sh.publish(now, ackedDelta, retransDelta, segsDelta, sent, pathBusy)
+		if !sh.electLeader(now) {
+			s.followSharedLocked()
+			return
+		}
+		defer s.shareRateLocked()
+		ackedDelta, retransDelta, segsDelta, sent, pathBusy = sh.aggregate(now)
+	}
+	if s.currentMode() == linkShapingOff {
 		return
 	}
 	window := linkWindow{elapsed: elapsed, sent: sent, segs: segsDelta, pathBusy: pathBusy}
@@ -367,6 +393,31 @@ func (s *linkShaper) tick(now time.Time) {
 	}
 	s.lastLoss = window.loss
 	s.stepLocked(now, window)
+}
+
+// followSharedLocked：不是领头的进程按共享头部里的速率和学到的值走。调用方持有 tuneMu。
+func (s *linkShaper) followSharedLocked() {
+	if s.currentMode() == linkShapingOff {
+		return
+	}
+	rate, learned := s.shared.loadRate()
+	s.rate.Store(rate)
+	if learned != s.learned.Load() {
+		s.learned.Store(learned)
+		s.applyPacingLocked(s.pacingCap())
+	}
+	if rate > 0 {
+		s.state = "shaping"
+	} else if s.state == "shaping" {
+		s.state = "watching"
+	}
+}
+
+// shareRateLocked：领头的进程把速率和学到的值写回共享头部。调用方持有 tuneMu。
+func (s *linkShaper) shareRateLocked() {
+	if sh := s.shared; sh != nil && sh.isLeader() {
+		sh.storeRate(s.rate.Load(), s.learned.Load())
+	}
 }
 
 // stepLocked 是每秒的决策。调用方持有 tuneMu。
@@ -745,6 +796,11 @@ func linkEgressApply(cfg config) {
 		linkShapers.mu.Lock()
 		if s = linkEgress.Load(); s == nil {
 			s = newLinkShaper(linkEgressDirection, linkEgressDirection, 0)
+			if shared, err := openLinkShaperShared(linkShaperSharedDir); err != nil {
+				log.Printf("fxp link shaper egress: shared bucket unavailable (%v); shaping this process alone", err)
+			} else {
+				s.shared = shared
+			}
 			linkEgress.Store(s)
 			go s.run()
 		}
