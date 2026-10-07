@@ -3271,12 +3271,27 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         return null;
       }
     };
+    // 自动模式的提示值：这台主机上每条隧道学到过的限速点（FXP 报上来记在面板里的）。
+    let linkShapingHintsPromise: Promise<Map<number, { up: number; down: number }>> | null = null;
+    const linkShapingHints = () => {
+      if (!linkShapingHintsPromise) {
+        linkShapingHintsPromise = db.tunnelLinkShapingHintsByHost(Number(host.id)).catch(() => new Map());
+      }
+      return linkShapingHintsPromise;
+    };
     const applyForwardXTransport = async (fxpSpec: any, tunnel: any) => {
-      // 链路带宽上限跟着每个角色的配置走（入口、出口、中转都要）：主动拨出去的连接按
-      // 上行整形，接进来的连接按下行整形，FXP 自己按方向取。
+      // 链路整形跟着每个角色的配置走（入口、出口、中转都要）：主动拨出去的连接按
+      // 上行整形，接进来的连接按下行整形，FXP 自己按方向取。手动给上限，自动给提示值。
       const link = tunnelLinkShaping(tunnel);
-      if (link.upMbps > 0) fxpSpec.linkUpMbps = link.upMbps;
-      if (link.downMbps > 0) fxpSpec.linkDownMbps = link.downMbps;
+      fxpSpec.linkShaping = link.mode;
+      if (link.mode === "manual") {
+        if (link.upMbps > 0) fxpSpec.linkUpMbps = link.upMbps;
+        if (link.downMbps > 0) fxpSpec.linkDownMbps = link.downMbps;
+      } else if (link.mode === "auto") {
+        const hint = (await linkShapingHints()).get(Number(tunnel.id));
+        if (hint?.up) fxpSpec.linkUpHintMbps = hint.up;
+        if (hint?.down) fxpSpec.linkDownHintMbps = hint.down;
+      }
       if (!isForwardXWireGuardV2(tunnel)) {
         fxpSpec.transportVersion = "v1";
         return fxpSpec;

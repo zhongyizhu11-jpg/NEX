@@ -11,6 +11,7 @@ import { StatusDot } from "@/components/network/StatusDot";
 import { buildTunnelPath } from "@/features/links/tunnelPath";
 import { tunnelHealthFromAvailability } from "@/features/links/tunnelHealth";
 import { TunnelFxpIssueNotice } from "@/features/links/TunnelFxpIssueNotice";
+import { TunnelLinkShapingNotice } from "@/features/links/TunnelLinkShapingNotice";
 import DataSectionError from "@/components/DataSectionError";
 import { sameNullableStringArray } from "@/lib/multiHopAddress";
 import { normalizeLatencySeriesKey } from "@shared/latencyProbe";
@@ -185,9 +186,13 @@ type TunnelForm = {
   proxyProtocolVersion: 1 | 2;
   tcpFastOpen: boolean;
   udpOverTcp: boolean;
-  /** 链路带宽上限（Mbit/s）：入口→出口 / 出口→入口，0 = 不整形。 */
+  /** 链路整形：auto 自动识别限速点（默认）/ manual 按下面两个值 / off 关。 */
+  linkShapingMode: LinkShapingMode;
+  /** 手动档的链路带宽上限（Mbit/s）：入口→出口 / 出口→入口，0 = 没填。 */
   linkUpMbps: number;
   linkDownMbps: number;
+  /** 编辑时带进来的 FXP 整形状态（只读，不提交）。 */
+  linkShapingStatus: LinkShapingStatus[];
   loadBalanceEnabled: boolean;
   loadBalanceStrategy: "none" | "round_robin" | "random" | "least_conn" | "ip_hash" | "fallback";
   loadBalanceExits: Array<{ hostId: number | null; connectHost: string }>;
@@ -339,8 +344,10 @@ const defaultForm: TunnelForm = {
   proxyProtocolVersion: 1,
   tcpFastOpen: false,
   udpOverTcp: false,
+  linkShapingMode: "auto",
   linkUpMbps: 0,
   linkDownMbps: 0,
+  linkShapingStatus: [],
   loadBalanceEnabled: false,
   loadBalanceStrategy: "round_robin",
   loadBalanceExits: [],
@@ -365,6 +372,46 @@ const defaultChainCreateForm: ChainCreateForm = {
   isEnabled: true,
 };
 
+type LinkShapingMode = "auto" | "manual" | "off";
+type LinkShapingStatus = {
+  hostId: number;
+  hostName?: string | null;
+  role: string;
+  direction: string;
+  mode: string;
+  state: string;
+  rateMbps: number;
+  learnedMbps: number;
+  lossPct: number;
+  updatedAt?: string | number | null;
+};
+function normalizeLinkShapingMode(value: unknown): LinkShapingMode {
+  const mode = String(value || "").trim().toLowerCase();
+  return mode === "manual" || mode === "off" ? mode : "auto";
+}
+/** 一条整形状态的人话：方向 + 主机 + 状态。 */
+function describeLinkShapingStatus(item: LinkShapingStatus) {
+  const direction = item.direction === "down" ? "出口 → 入口" : "入口 → 出口";
+  const host = item.hostName ? `${item.hostName}` : `主机 #${item.hostId}`;
+  let detail: string;
+  switch (item.state) {
+    case "shaping":
+      detail = item.learnedMbps > 0
+        ? `学到限速点 ${item.learnedMbps} Mbit/s，当前整形到 ${item.rateMbps} Mbit/s`
+        : `正在找限速点，当前 ${item.rateMbps} Mbit/s`;
+      break;
+    case "paused":
+      detail = "降了一大截还在丢包，判定不是限速器，暂停十分钟再看";
+      break;
+    case "off":
+      detail = "关";
+      break;
+    default:
+      detail = "还没遇到限速，没整形";
+  }
+  const loss = item.lossPct > 0 ? `，最近重传 ${item.lossPct}%` : "";
+  return `${direction}（${host}）：${detail}${loss}`;
+}
 /** 链路带宽上限输入：整数 Mbit/s，0 = 不整形；上限和服务端一致（1 Tbit/s）。 */
 const LINK_MBPS_MAX = 1_000_000;
 function normalizeLinkMbpsInput(value: unknown) {
@@ -2675,8 +2722,10 @@ function TunnelsContent() {
       proxyProtocolVersion: Number(tunnel.proxyProtocolVersion) === 2 ? 2 : 1,
       tcpFastOpen: transportTuningSupported && !!tunnel.tcpFastOpen,
       udpOverTcp: transportTuningSupported && !!tunnel.udpOverTcp,
+      linkShapingMode: transportTuningSupported ? normalizeLinkShapingMode((tunnel as any).linkShapingMode) : "off",
       linkUpMbps: transportTuningSupported ? normalizeLinkMbpsInput((tunnel as any).linkUpMbps) : 0,
       linkDownMbps: transportTuningSupported ? normalizeLinkMbpsInput((tunnel as any).linkDownMbps) : 0,
+      linkShapingStatus: Array.isArray((tunnel as any).linkShapingStatus) ? (tunnel as any).linkShapingStatus : [],
       loadBalanceEnabled: exitGroupId ? !!tunnel.loadBalanceEnabled : false,
       loadBalanceStrategy: (["none", "round_robin", "random", "least_conn", "ip_hash", "fallback"].includes(String(tunnel.loadBalanceStrategy || ""))
         ? tunnel.loadBalanceStrategy
@@ -3062,8 +3111,9 @@ function TunnelsContent() {
       proxyProtocolVersion: proxyAnyEnabled ? submitForm.proxyProtocolVersion : 1,
       tcpFastOpen: transportTuningSupported && submitForm.tcpFastOpen,
       udpOverTcp: transportTuningSupported && submitForm.udpOverTcp,
-      linkUpMbps: transportTuningSupported ? normalizeLinkMbpsInput(submitForm.linkUpMbps) : 0,
-      linkDownMbps: transportTuningSupported ? normalizeLinkMbpsInput(submitForm.linkDownMbps) : 0,
+      linkShapingMode: transportTuningSupported ? submitForm.linkShapingMode : "off",
+      linkUpMbps: transportTuningSupported && submitForm.linkShapingMode === "manual" ? normalizeLinkMbpsInput(submitForm.linkUpMbps) : 0,
+      linkDownMbps: transportTuningSupported && submitForm.linkShapingMode === "manual" ? normalizeLinkMbpsInput(submitForm.linkDownMbps) : 0,
       entryGroupId: submitForm.entryGroupId || null,
       exitGroupId: submitForm.exitGroupId || null,
       entryHostId,
@@ -3177,6 +3227,7 @@ function TunnelsContent() {
       proxyProtocolVersion: proxySupported ? prev.proxyProtocolVersion : 1,
       tcpFastOpen: transportTuningSupported ? prev.tcpFastOpen : false,
       udpOverTcp: transportTuningSupported ? prev.udpOverTcp : false,
+      linkShapingMode: transportTuningSupported ? prev.linkShapingMode : "off",
       linkUpMbps: transportTuningSupported ? prev.linkUpMbps : 0,
       linkDownMbps: transportTuningSupported ? prev.linkDownMbps : 0,
     }));
@@ -3452,7 +3503,7 @@ function TunnelsContent() {
     const transportTuningSupported = isTunnelTransportTuningSupported(form.mode);
     if (!proxySupported && !transportTuningSupported) return null;
     const proxyAnyEnabled = form.proxyProtocolReceive || form.proxyProtocolSend || form.proxyProtocolExitReceive || form.proxyProtocolExitSend;
-    const advancedConfigured = proxyAnyEnabled || form.tcpFastOpen || form.udpOverTcp || form.linkUpMbps > 0 || form.linkDownMbps > 0;
+    const advancedConfigured = proxyAnyEnabled || form.tcpFastOpen || form.udpOverTcp || form.linkShapingMode !== "auto" || form.linkUpMbps > 0 || form.linkDownMbps > 0;
     const shouldCollapseAdvanced = proxySupported && transportTuningSupported;
     const renderLinkMbpsInput = (label: string, field: "linkUpMbps" | "linkDownMbps") => (
       <label className="flex min-h-10 items-center justify-between gap-2">
@@ -3598,17 +3649,47 @@ function TunnelsContent() {
           )}
         </div>
         <div className="space-y-2 rounded-md border border-border/50 bg-background/60 px-3 py-2">
-          <span className="block text-sm font-medium">链路带宽上限</span>
-          <span className="block text-xs text-muted-foreground">
-            两端之间有硬限速（云联网地域间带宽、公网带宽上限）时填：隧道把发送速率整形到上限之下，限速器不再丢包，多少条连接合计都能稳稳贴着上限跑，加载时延迟也不涨。留空 = 不整形。
-          </span>
-          <div className="grid gap-2 sm:grid-cols-2">
-            {renderLinkMbpsInput("入口 → 出口（上行）", "linkUpMbps")}
-            {renderLinkMbpsInput("出口 → 入口（下行）", "linkDownMbps")}
+          <div className="flex min-w-0 items-center justify-between gap-3">
+            <span className="min-w-0">
+              <span className="block text-sm font-medium">链路整形</span>
+              <span className="block text-xs text-muted-foreground">两端之间有硬限速（云联网地域间带宽、公网带宽上限）时，把发送速率压在限速点之下：不丢包、不抖、多连接也贴着上限跑。</span>
+            </span>
+            <Select value={form.linkShapingMode} onValueChange={(value) => setForm((prev) => ({ ...prev, linkShapingMode: normalizeLinkShapingMode(value) }))}>
+              <SelectTrigger className="h-9 w-28 shrink-0" aria-label="链路整形"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="auto">自动</SelectItem>
+                <SelectItem value="manual">手动</SelectItem>
+                <SelectItem value="off">关</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
-          <span className="block text-xs text-muted-foreground">
-            填 iperf3 测出来的实际吞吐（网络测试「iperf3 客户端」，UDP 模式测限速点最准）或购买的带宽即可：FXP 从 96% 起步，按重传自动微调到不丢包的最高速率。需要两端 FXP 2.2.127 起。
-          </span>
+          {form.linkShapingMode === "auto" && (
+            <div className="space-y-1">
+              <span className="block text-xs text-muted-foreground">
+                平时不整形；一旦出现「发送端有积压 + 重传」就是撞上了限速器，FXP 立刻按观察到的速率开始整形，再找到不丢包的最高点记住，重启不丢。需要两端 Agent 2.2.212 起。
+              </span>
+              {form.linkShapingStatus.length > 0 ? (
+                <ul className="space-y-0.5 text-xs">
+                  {form.linkShapingStatus.map((item) => (
+                    <li key={`${item.hostId}:${item.direction}`} className="text-foreground/80">{describeLinkShapingStatus(item)}</li>
+                  ))}
+                </ul>
+              ) : (
+                <span className="block text-xs text-muted-foreground">两端 Agent 升级后，这里会显示每个方向的状态和学到的限速点。</span>
+              )}
+            </div>
+          )}
+          {form.linkShapingMode === "manual" && (
+            <>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {renderLinkMbpsInput("入口 → 出口（上行）", "linkUpMbps")}
+                {renderLinkMbpsInput("出口 → 入口（下行）", "linkDownMbps")}
+              </div>
+              <span className="block text-xs text-muted-foreground">
+                填 iperf3 测出来的实际吞吐（网络测试「iperf3 客户端」，UDP 模式测限速点最准）或购买的带宽：FXP 从 96% 起步，按重传在 60% 到 100% 之间自动微调。至少填一个方向。
+              </span>
+            </>
+          )}
         </div>
         {form.udpOverTcp && form.forwardxVersion === "v1" && (
           <label className="flex min-h-12 items-center justify-between gap-3 rounded-md border border-primary/25 bg-primary/5 px-3 py-2">
@@ -3959,6 +4040,7 @@ function TunnelsContent() {
                 <p className="mt-1 text-[11px] text-destructive">{tunnelProtocolLabel(protocolKey)} 当前不支持</p>
               )}
               <TunnelFxpIssueNotice tunnel={tunnel} />
+              <TunnelLinkShapingNotice tunnel={tunnel} />
             </div>
             <div className="fx-rule-head-actions">
               <SortableDragHandle

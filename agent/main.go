@@ -2906,10 +2906,14 @@ type fxpSpec struct {
 	ProxyProtocolExitSend    bool              `json:"proxyProtocolExitSend"`
 	ProxyProtocolVersion     int               `json:"proxyProtocolVersion"`
 	TCPFastOpen              bool              `json:"tcpFastOpen"`
-	// LinkUpMbps / LinkDownMbps：隧道两端链路的带宽上限（Mbit/s），FXP 据此把发送速率
-	// 整形到限速器之下（见 forwardx-fxp/link_shaper.go），原样交给 FXP。
+	// 链路整形（见 forwardx-fxp/link_shaper.go），原样交给 FXP：LinkShaping 是档位
+	// （auto / manual / off），LinkUpMbps / LinkDownMbps 是手动上限（Mbit/s），
+	// LinkUpHintMbps / LinkDownHintMbps 是自动模式的提示值（面板记住的限速点）。
+	LinkShaping      string `json:"linkShaping,omitempty"`
 	LinkUpMbps       int    `json:"linkUpMbps,omitempty"`
 	LinkDownMbps     int    `json:"linkDownMbps,omitempty"`
+	LinkUpHintMbps   int    `json:"linkUpHintMbps,omitempty"`
+	LinkDownHintMbps int    `json:"linkDownHintMbps,omitempty"`
 	PanelURL         string `json:"panelUrl,omitempty"`
 	Token            string `json:"token,omitempty"`
 	RelayExitHost    string `json:"relayExitHost,omitempty"`
@@ -10047,7 +10051,9 @@ func fxpServerSignature(spec fxpSpec) string {
 		strconv.FormatBool(spec.ProxyProtocolExitSend),
 		strconv.Itoa(normalizeProxyProtocolVersion(spec.ProxyProtocolVersion)),
 		strconv.FormatBool(spec.TCPFastOpen),
-		// 链路带宽上限变了要让 FXP 重读配置（热更新就够，监听不动）。
+		// 链路整形的档位和上限变了要让 FXP 重读配置（热更新就够，监听不动）；
+		// 提示值只在 FXP 启动时用，不进签名。
+		strings.ToLower(strings.TrimSpace(spec.LinkShaping)),
 		strconv.Itoa(spec.LinkUpMbps),
 		strconv.Itoa(spec.LinkDownMbps),
 		spec.RelayExitHost,
@@ -10928,7 +10934,7 @@ func startFXPProcessLockedWithPersistence(cfg Config, spec fxpSpec, actionMessag
 	}
 	spec = fxpSpecWithPanelCredentials(cfg, spec)
 	logf(
-		"proxy-debug fxp config role=%s tunnel=%d rule=%d listen=%d udpListen=%d protocol=%s exitStrategy=%s proxyReceive=%v proxySend=%v proxyExitReceive=%v proxyExitSend=%v tcpFastOpen=%v linkUp=%d linkDown=%d exit=%s:%d udpExit=%d relayNext=%s:%d udpRelayNext=%d target=%s:%d udpTargets=%d",
+		"proxy-debug fxp config role=%s tunnel=%d rule=%d listen=%d udpListen=%d protocol=%s exitStrategy=%s proxyReceive=%v proxySend=%v proxyExitReceive=%v proxyExitSend=%v tcpFastOpen=%v linkShaping=%s linkUp=%d linkDown=%d exit=%s:%d udpExit=%d relayNext=%s:%d udpRelayNext=%d target=%s:%d udpTargets=%d",
 		spec.Role,
 		spec.TunnelID,
 		spec.RuleID,
@@ -10941,6 +10947,7 @@ func startFXPProcessLockedWithPersistence(cfg Config, spec fxpSpec, actionMessag
 		spec.ProxyProtocolExitReceive,
 		spec.ProxyProtocolExitSend,
 		spec.TCPFastOpen,
+		spec.LinkShaping,
 		spec.LinkUpMbps,
 		spec.LinkDownMbps,
 		spec.ExitHost,

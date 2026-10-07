@@ -76,12 +76,16 @@ type config struct {
 	// AEAD 是帧加密算法：空 / auto 按本机实测（没有 AES 硬件时偏好 ChaCha20），
 	// 也可以写 aes-gcm 或 chacha20-poly1305。两端握手时协商，见 aead.go。
 	AEAD string `json:"aead,omitempty"`
-	// LinkUpMbps / LinkDownMbps 是这条隧道两端之间链路的带宽上限（Mbit/s）：
-	// 入口→出口（上行）和出口→入口（下行）。>0 时本进程往那个方向发的所有隧道帧
-	// 合起来整形到略低于上限，并按重传自动微调，让中间的限速器（云联网、公网带宽
-	// 上限）不丢包。0 = 不整形。见 link_shaper.go。
+	// 链路整形（见 link_shaper.go）。LinkShaping 是档位：auto 自动识别限速点、
+	// manual 按下面的上限整形、off 关；没写（旧面板）时填了上限就是 manual。
+	// LinkUpMbps / LinkDownMbps 是手动模式的上限（Mbit/s）：入口→出口（上行）和
+	// 出口→入口（下行）。LinkUpHintMbps / LinkDownHintMbps 是自动模式的提示值：
+	// 面板记住的上次学到的限速点，本机没有记录时从它起步。
+	LinkShaping      string `json:"linkShaping,omitempty"`
 	LinkUpMbps       int    `json:"linkUpMbps,omitempty"`
 	LinkDownMbps     int    `json:"linkDownMbps,omitempty"`
+	LinkUpHintMbps   int    `json:"linkUpHintMbps,omitempty"`
+	LinkDownHintMbps int    `json:"linkDownHintMbps,omitempty"`
 	PanelURL         string `json:"panelUrl"`
 	Token            string `json:"token"`
 	RelayExitHost    string `json:"relayExitHost,omitempty"`

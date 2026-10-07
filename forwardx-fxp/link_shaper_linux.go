@@ -9,21 +9,35 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// tcpConnRetransStats 读一条连接的累计重传段数和发出段数（TCP_INFO）。
-// 连接已经关掉时 ok=false，调用方据此把它从成员里清掉。
-func tcpConnRetransStats(tcp *net.TCPConn) (retrans, segsOut uint32, ok bool) {
+// tcpLinkStats 是一条连接的 TCP_INFO 里整形用得到的几项（都是累计值）。
+type tcpLinkStats struct {
+	retrans       uint32 // 重传段数
+	segsOut       uint32 // 发出段数
+	bytesAcked    uint64 // 被确认的字节数
+	notsentBytes  uint32 // 写进去了还没发出去的字节（被拥塞窗口 / pacing 卡着）
+	sndbufLimited uint64 // 被发送缓冲卡住的时间（微秒）：应用比链路快
+}
+
+// tcpConnLinkStats 读一条连接的 TCP_INFO。连接已经关掉时 ok=false，调用方据此把它从成员里清掉。
+func tcpConnLinkStats(tcp *net.TCPConn) (stats tcpLinkStats, ok bool) {
 	raw, err := tcp.SyscallConn()
 	if err != nil {
-		return 0, 0, false
+		return stats, false
 	}
 	var info *unix.TCPInfo
 	var infoErr error
 	if err := raw.Control(func(fd uintptr) {
 		info, infoErr = unix.GetsockoptTCPInfo(int(fd), unix.IPPROTO_TCP, unix.TCP_INFO)
 	}); err != nil || infoErr != nil || info == nil {
-		return 0, 0, false
+		return stats, false
 	}
-	return info.Total_retrans, info.Segs_out, true
+	return tcpLinkStats{
+		retrans:       info.Total_retrans,
+		segsOut:       info.Segs_out,
+		bytesAcked:    info.Bytes_acked,
+		notsentBytes:  info.Notsent_bytes,
+		sndbufLimited: info.Sndbuf_limited,
+	}, true
 }
 
 // setTCPMaxPacingRate 给一条连接设内核发包速率上限（SO_MAX_PACING_RATE，字节/秒）。
