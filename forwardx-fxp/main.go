@@ -2510,7 +2510,7 @@ func newPipelinedClientSecureConn(conn net.Conn, cfg config, wire fxpWireContext
 	sec.handshakeSalt = salt
 	sec.handshakeWire = wire
 	// 主动拨出去的连接发的是往出口方向的流量：按 linkUpMbps 整形。
-	sec.shaper = linkShaperFor("up", cfg)
+	sec.shaper = linkShaperHandle("up", cfg)
 	sec.shaper.attach(conn)
 	return sec, nil
 }
@@ -2661,7 +2661,7 @@ func newServerSecureConnWithWires(conn net.Conn, cfg config, wires []fxpWireCont
 			return nil, err
 		}
 		// 接进来的连接发的是往入口方向的流量：按 linkDownMbps 整形。
-		sec.shaper = linkShaperFor("down", cfg)
+		sec.shaper = linkShaperHandle("down", cfg)
 		sec.shaper.attach(conn)
 		return sec, nil
 	}

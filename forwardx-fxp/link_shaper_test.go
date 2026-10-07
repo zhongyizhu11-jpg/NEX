@@ -401,6 +401,17 @@ func TestLinkShaperConfigModesAndDirections(t *testing.T) {
 	if idle.rate.Load() != int64(300*linkShaperBytesPerMbps*linkShaperHeadroom) {
 		t.Fatalf("enabling via reload must take effect on the existing handle, rate=%d", idle.rate.Load())
 	}
+	// 连接池、探测协程拿的是热更新前拷的配置（没有 linkShaping）：建连时只取句柄，
+	// 不能把面板刚打开的「自动」拨回「关」。
+	linkShapersApply(config{Role: "entry", TunnelID: 80, LinkShaping: "auto"})
+	stale := config{Role: "entry", TunnelID: 80, Key: "k"}
+	pooled := linkShaperHandle("up", stale)
+	if pooled == nil || pooled.currentMode() != linkShapingAuto {
+		t.Fatalf("a stale dial config must not reconfigure the shaper, mode=%v", pooled.currentMode())
+	}
+	if linkShaperHandle("down", stale) == nil || linkShaperHandle("up", config{TunnelID: 0}) != nil {
+		t.Fatal("handle lookup must follow the tunnel id rule")
+	}
 	for _, bad := range []config{
 		{Role: "exit", Key: "k", ListenPort: 1000, TunnelID: 1, LinkUpMbps: linkShaperMaxMbps + 1},
 		{Role: "exit", Key: "k", ListenPort: 1000, TunnelID: 1, LinkShaping: "sometimes"},

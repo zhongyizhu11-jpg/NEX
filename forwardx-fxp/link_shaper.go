@@ -637,16 +637,30 @@ func linkShapingSettings(direction string, cfg config) (mode linkShapingMode, mb
 }
 
 // linkShaperFor 按方向（up：往出口方向；down：往入口方向）和隧道号取整形器，
-// 并把这份配置应用上去。关着也返回同一个整形器（速率 0，写帧不等）：连接拿着
+// 并把这份配置应用上去（配置生效时用；建连时用 linkShaperHandle）。关着也返回同一个整形器（速率 0，写帧不等）：连接拿着
 // 稳定的句柄，之后热更新打开，已有的长连接立刻跟着受限，不用等重连。
 // 隧道号为 0（测试直接拼的配置）不整形。
 func linkShaperFor(direction string, cfg config) *linkShaper {
-	if cfg.TunnelID <= 0 {
+	s := linkShaperHandle(direction, cfg)
+	if s == nil {
 		return nil
 	}
 	mode, mbps, hint := linkShapingSettings(direction, cfg)
+	s.configure(mode, mbps, hint)
+	return s
+}
+
+// linkShaperHandle 只取句柄，不改档位：给建连的地方用。连接池、探测协程手里
+// 的配置可能是热更新之前拷的那份（没有 linkShaping 字段），要是按它重新配置，
+// 每补一条连接就把面板刚打开的「自动」拨回「关」。档位只在 linkShapersApply
+// 里跟着生效的配置走。
+func linkShaperHandle(direction string, cfg config) *linkShaper {
+	if cfg.TunnelID <= 0 {
+		return nil
+	}
 	key := direction + ":" + strconv.Itoa(cfg.TunnelID)
 	linkShapers.mu.Lock()
+	defer linkShapers.mu.Unlock()
 	s := linkShapers.byKey[key]
 	if s == nil {
 		s = newLinkShaper(key, direction, cfg.TunnelID)
@@ -660,8 +674,6 @@ func linkShaperFor(direction string, cfg config) *linkShaper {
 		s.panelURL, s.token = url, token
 		startLinkShaperReporter()
 	}
-	linkShapers.mu.Unlock()
-	s.configure(mode, mbps, hint)
 	return s
 }
 
