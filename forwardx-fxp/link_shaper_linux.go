@@ -40,6 +40,20 @@ func tcpConnLinkStats(tcp *net.TCPConn) (stats tcpLinkStats, ok bool) {
 	}, true
 }
 
+// clearTCPMaxPacingRate 把内核发包速率上限恢复成不限（内核默认值 ~0）。
+func clearTCPMaxPacingRate(tcp *net.TCPConn) {
+	if tcp == nil {
+		return
+	}
+	raw, err := tcp.SyscallConn()
+	if err != nil {
+		return
+	}
+	_ = raw.Control(func(fd uintptr) {
+		_ = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_MAX_PACING_RATE, int(uint32(math.MaxUint32)))
+	})
+}
+
 // setTCPMaxPacingRate 给一条连接设内核发包速率上限（SO_MAX_PACING_RATE，字节/秒）。
 // fq 队列或 TCP 内部 pacing（BBR）都认它；设不上就算了，整形主体在用户态。
 func setTCPMaxPacingRate(tcp *net.TCPConn, bytesPerSec int64) {

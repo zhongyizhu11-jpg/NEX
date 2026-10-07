@@ -380,8 +380,14 @@ func TestLinkShaperConfigModesAndDirections(t *testing.T) {
 	if linkShaperFor("up", config{TunnelID: 0, LinkShaping: "auto"}) != nil {
 		t.Fatal("tunnel 0 must not be shaped")
 	}
-	if linkShaperFor("up", config{TunnelID: 79, LinkShaping: "off"}) != nil {
-		t.Fatal("off must not create a shaper")
+	// 关着也给一个稳定的句柄（速率 0）：之后热更新打开，拿着它的旧连接立刻受限。
+	idle := linkShaperFor("up", config{Role: "entry", TunnelID: 79, LinkShaping: "off"})
+	if idle == nil || idle.rate.Load() != 0 || idle.currentMode() != linkShapingOff {
+		t.Fatal("off must still hand out an inactive shaper")
+	}
+	linkShapersApply(config{Role: "entry", TunnelID: 79, LinkShaping: "manual", LinkUpMbps: 300})
+	if idle.rate.Load() != int64(300*linkShaperBytesPerMbps*linkShaperHeadroom) {
+		t.Fatalf("enabling via reload must take effect on the existing handle, rate=%d", idle.rate.Load())
 	}
 	for _, bad := range []config{
 		{Role: "exit", Key: "k", ListenPort: 1000, TunnelID: 1, LinkUpMbps: linkShaperMaxMbps + 1},

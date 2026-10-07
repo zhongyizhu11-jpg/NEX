@@ -230,6 +230,7 @@ func (s *linkShaper) configure(mode linkShapingMode, mbps int, hintMbps int) {
 		} else {
 			s.rate.Store(0)
 			s.state = "watching"
+			s.applyPacingLocked(0)
 			log.Printf("fxp link shaper %s auto: watching for a rate limiter", s.key)
 		}
 		s.changed.Store(true)
@@ -245,15 +246,23 @@ func (s *linkShaper) disableLocked(reason string) {
 	s.mode.Store(int32(linkShapingOff))
 	s.max.Store(0)
 	s.rate.Store(0)
+	s.learned.Store(0)
 	s.ceiling, s.ceilingAt, s.cleanRuns = 0, time.Time{}, 0
+	s.descentStart = 0
 	s.state = "off"
+	s.applyPacingLocked(0)
 	log.Printf("fxp link shaper %s disabled (%s)", s.key, reason)
 	s.changed.Store(true)
 }
 
+// applyPacingLocked 给所有成员连接设内核发包上限；0 = 清掉（恢复不限）。
 func (s *linkShaper) applyPacingLocked(bytesPerSec int64) {
 	for _, member := range s.members {
-		setTCPMaxPacingRate(member.conn, bytesPerSec)
+		if bytesPerSec > 0 {
+			setTCPMaxPacingRate(member.conn, bytesPerSec)
+		} else {
+			clearTCPMaxPacingRate(member.conn)
+		}
 	}
 }
 
@@ -432,6 +441,7 @@ func (s *linkShaper) stepLocked(now time.Time, w linkWindow) {
 			s.rate.Store(0)
 			s.descentStart = 0
 			s.state = "watching"
+			s.applyPacingLocked(0)
 			s.changed.Store(true)
 			return
 		}
@@ -497,6 +507,7 @@ func (s *linkShaper) pauseLocked(now time.Time, rate int64, loss float64) {
 	s.pausedUntil = now.Add(linkShaperAutoPause)
 	s.state = "paused"
 	s.windows = s.windows[:0]
+	s.applyPacingLocked(0)
 	s.changed.Store(true)
 }
 
@@ -586,7 +597,9 @@ func linkShapingSettings(direction string, cfg config) (mode linkShapingMode, mb
 }
 
 // linkShaperFor 按方向（up：往出口方向；down：往入口方向）和隧道号取整形器，
-// 并把这份配置应用上去。隧道号为 0（测试直接拼的配置）不整形。
+// 并把这份配置应用上去。关着也返回同一个整形器（速率 0，写帧不等）：连接拿着
+// 稳定的句柄，之后热更新打开，已有的长连接立刻跟着受限，不用等重连。
+// 隧道号为 0（测试直接拼的配置）不整形。
 func linkShaperFor(direction string, cfg config) *linkShaper {
 	if cfg.TunnelID <= 0 {
 		return nil
@@ -596,10 +609,6 @@ func linkShaperFor(direction string, cfg config) *linkShaper {
 	linkShapers.mu.Lock()
 	s := linkShapers.byKey[key]
 	if s == nil {
-		if mode == linkShapingOff {
-			linkShapers.mu.Unlock()
-			return nil
-		}
 		s = newLinkShaper(key, direction, cfg.TunnelID)
 		linkShapers.byKey[key] = s
 		go s.run()

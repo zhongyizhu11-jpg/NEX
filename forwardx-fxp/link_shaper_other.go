@@ -18,3 +18,5 @@ func tcpConnLinkStats(*net.TCPConn) (tcpLinkStats, bool) {
 }
 
 func setTCPMaxPacingRate(*net.TCPConn, int64) {}
+
+func clearTCPMaxPacingRate(*net.TCPConn) {}

@@ -447,7 +447,6 @@ func (m *fxpRuntimeManager) apply(cfg config) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.logCfg = cfg
-	linkShapersApply(cfg)
 	// 新配置里所有会被占用的端口。旧配置里要删掉、又和它们撞端口的监听得先关，
 	// 否则新监听绑不上（比如 0.0.0.0:80 换成 1.2.3.4:80）。
 	wantedTCP := map[string]tcpListenPlan{}
@@ -571,6 +570,8 @@ func (m *fxpRuntimeManager) apply(cfg config) error {
 			log.Printf("%s udp listener on :%d removed", slot.label, slot.plan.port)
 		}
 	}
+	// 5. 监听都落定了再改链路整形：绑不上整批回滚时，已有连接也不能先按新速率走。
+	linkShapersApply(cfg)
 	return nil
 }
 
