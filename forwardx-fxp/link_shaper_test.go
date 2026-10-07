@@ -251,6 +251,32 @@ func TestLinkShaperAutoLearnsTheRateLimiter(t *testing.T) {
 	if got := avg.rate.Load(); got != int64(mb(1200)*linkShaperAutoStartMargin) {
 		t.Fatalf("start = %dMbit/s, want 1260 (three-second average × 1.05)", got/linkShaperBytesPerMbps)
 	}
+	// 闲了几秒再开始测速：空秒不参与平均，起点还是按有流量的那一秒。
+	idle := testShaper(t, "down:idle")
+	idle.configure(linkShapingAuto, 0, 0)
+	for i := 0; i < linkShaperAutoWindows; i++ {
+		idle.stepLocked(now, linkWindow{elapsed: time.Second, delivered: 0, segs: 0})
+	}
+	idle.stepLocked(now, linkWindow{elapsed: time.Second, delivered: mb(1200), loss: 0.05, segs: 50000, pathBusy: true})
+	if got := idle.rate.Load(); got != int64(mb(1200)*linkShaperAutoStartMargin) {
+		t.Fatalf("start after idle = %dMbit/s, want 1260 (idle seconds must not dilute the average)", got/linkShaperBytesPerMbps)
+	}
+	// 学低了的值要几轮之内补回来：记住一个值不重置上探步子，1%、2%、4%、8% 继续翻倍。
+	grow := testShaper(t, "down:grow")
+	grow.configure(linkShapingAuto, 0, 0)
+	grow.stepLocked(now, linkWindow{elapsed: time.Second, delivered: mb(1000), loss: 0.05, segs: 50000, pathBusy: true})
+	grow.stepLocked(now, busyWindow(grow, 0.03))
+	grow.ceilingAt = now.Add(-linkShaperCeilingTTL - time.Second)
+	base := grow.rate.Load()
+	for round := 0; round < 4; round++ {
+		for i := 0; i < linkShaperCleanRounds; i++ {
+			grow.stepLocked(now, busyWindow(grow, 0))
+		}
+	}
+	// 四轮：×1.01 ×1.02 ×1.04 ×1.08 ≈ ×1.158。
+	if got := float64(grow.rate.Load()) / float64(base); got < 1.15 {
+		t.Fatalf("after four clean rounds the rate grew only ×%.3f; the probe step must keep doubling after learning", got)
+	}
 }
 
 // 起点偏低（几条流互相打得只剩上限的三分之一时开始的）：没碰到丢包之前每秒升 10%，

@@ -491,13 +491,22 @@ func (s *linkShaper) stepLocked(now time.Time, w linkWindow) {
 }
 
 // sustainedPeakLocked 是最近几秒里最高的三秒平均送达速率（不足三秒就按单秒最高）。
+// 只看末尾连续有流量的那几秒：闲了一阵再开始测速时，前面的空秒不能把平均拉到
+// 实际送达的三分之一。
 func (s *linkShaper) sustainedPeakLocked() float64 {
+	active := s.windows
+	for i := len(s.windows) - 1; i >= 0; i-- {
+		if s.windows[i].delivered < linkShaperAutoMinDelivered {
+			active = s.windows[i+1:]
+			break
+		}
+	}
 	peak := 0.0
-	n := len(s.windows)
+	n := len(active)
 	if n >= linkShaperAutoAverageSpan {
 		for i := 0; i+linkShaperAutoAverageSpan <= n; i++ {
 			sum := 0.0
-			for _, item := range s.windows[i : i+linkShaperAutoAverageSpan] {
+			for _, item := range active[i : i+linkShaperAutoAverageSpan] {
 				sum += item.delivered
 			}
 			if avg := sum / linkShaperAutoAverageSpan; avg > peak {
@@ -506,7 +515,7 @@ func (s *linkShaper) sustainedPeakLocked() float64 {
 		}
 		return peak
 	}
-	for _, item := range s.windows {
+	for _, item := range active {
 		if item.delivered > peak {
 			peak = item.delivered
 		}
@@ -514,7 +523,7 @@ func (s *linkShaper) sustainedPeakLocked() float64 {
 	return peak
 }
 
-// rememberLocked：自动模式连续十秒干净的速率就是限速点，记下来（变化超过 2% 才写）。
+// rememberLocked：自动模式连续五秒干净的速率就是限速点，记下来（变化超过 2% 才写）。
 func (s *linkShaper) rememberLocked(now time.Time, rate int64) {
 	learned := s.learned.Load()
 	if learned > 0 && abs64(rate-learned) < int64(float64(learned)*linkShaperLearnedDelta) {
@@ -522,7 +531,8 @@ func (s *linkShaper) rememberLocked(now time.Time, rate int64) {
 	}
 	s.learned.Store(rate)
 	s.descentStart = 0
-	s.upStep = 0
+	// 上探的步子不在这里重置：记住一个值不等于碰到丢包，步子继续翻倍，
+	// 之前学低了的值才能几轮之内补回来；碰到丢包那一支才把步子归零。
 	s.applyPacingLocked(rate)
 	if learned <= 0 {
 		log.Printf("fxp link shaper %s auto: learned rate limit %dMbit/s", s.key, rate/linkShaperBytesPerMbps)
