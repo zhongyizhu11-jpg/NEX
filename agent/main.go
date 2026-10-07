@@ -8307,7 +8307,7 @@ func openRCServiceScript(name, execStart, limitNOFILE string) string {
 	return strings.Join([]string{
 		"#!/sbin/openrc-run",
 		"name=\"" + name + "\"",
-		"description=\"NEX managed service " + name + "\"",
+		"description=\"ForwardX managed service " + name + "\"",
 		"command=\"/bin/sh\"",
 		"command_args=\"-lc " + shellQuote(managedServiceNOFILEShell(limitNOFILE)+"ulimit -c 0 2>/dev/null || true; exec "+execStart) + "\"",
 		"command_background=true",
@@ -8331,7 +8331,7 @@ func sysVServiceScript(name, execStart, limitNOFILE string) string {
 		"# Required-Stop:     $network",
 		"# Default-Start:     2 3 4 5",
 		"# Default-Stop:      0 1 6",
-		"# Short-Description: NEX managed service " + name,
+		"# Short-Description: ForwardX managed service " + name,
 		"### END INIT INFO",
 		"PIDFILE=/run/" + name + ".pid",
 		"LOGFILE=/var/log/forwardx-agent/" + name + ".log",

@@ -2044,7 +2044,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     const gostServiceName = RUNTIME_SERVICE_NAME;
     const gostServiceUnit = [
       "[Unit]",
-      "Description=NEX unified runtime forwarder",
+      "Description=ForwardX unified runtime forwarder",
       "After=network.target",
       "StartLimitIntervalSec=60",
       "StartLimitBurst=5",
@@ -4229,7 +4229,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         ...proxyDebugCmds,
         writeManagedServiceCmd(TUNNEL_RUNTIME_SERVICE_NAME, [
           "[Unit]",
-          "Description=NEX managed tunnel runtime",
+          "Description=ForwardX managed tunnel runtime",
           "After=network.target",
           "StartLimitIntervalSec=60",
           "StartLimitBurst=5",
@@ -4531,7 +4531,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         const nginxApplyCmd = [
           writeManagedServiceCmd(NGINX_SERVICE_NAME, [
             "[Unit]",
-            "Description=NEX managed Nginx stream runtime",
+            "Description=ForwardX managed Nginx stream runtime",
             "After=network.target",
             "",
             "[Service]",
@@ -5439,7 +5439,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
             guardAction.svcName = svcName;
             guardAction.unit = [
               "[Unit]",
-              `Description=NEX guarded realm backend ${rule.sourcePort}->${rule.targetIp}:${rule.targetPort}`,
+              `Description=ForwardX guarded realm backend ${rule.sourcePort}->${rule.targetIp}:${rule.targetPort}`,
               "After=network.target",
               "StartLimitIntervalSec=60",
               "StartLimitBurst=5",
@@ -5476,7 +5476,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
               guardAction.svcNameExtra = svcNameUdp;
               guardAction.unit = [
                 "[Unit]",
-                `Description=NEX guarded socat TCP backend ${rule.sourcePort}->${rule.targetIp}:${rule.targetPort}`,
+                `Description=ForwardX guarded socat TCP backend ${rule.sourcePort}->${rule.targetIp}:${rule.targetPort}`,
                 "After=network.target",
                 "",
                 "[Service]",
@@ -5492,7 +5492,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
               ].join("\n");
               guardAction.unitExtra = [
                 "[Unit]",
-                `Description=NEX guarded socat UDP backend ${rule.sourcePort}->${rule.targetIp}:${rule.targetPort}`,
+                `Description=ForwardX guarded socat UDP backend ${rule.sourcePort}->${rule.targetIp}:${rule.targetPort}`,
                 "After=network.target",
                 "",
                 "[Service]",
@@ -5517,7 +5517,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
               ];
               guardAction.unit = [
                 "[Unit]",
-                `Description=NEX guarded socat ${rule.protocol} backend ${rule.sourcePort}->${rule.targetIp}:${rule.targetPort}`,
+                `Description=ForwardX guarded socat ${rule.protocol} backend ${rule.sourcePort}->${rule.targetIp}:${rule.targetPort}`,
                 "After=network.target",
                 "",
                 "[Service]",
