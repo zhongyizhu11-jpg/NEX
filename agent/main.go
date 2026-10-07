@@ -38,7 +38,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.213"
+var Version = "2.2.214"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -2914,6 +2914,12 @@ type fxpSpec struct {
 	LinkDownMbps     int    `json:"linkDownMbps,omitempty"`
 	LinkUpHintMbps   int    `json:"linkUpHintMbps,omitempty"`
 	LinkDownHintMbps int    `json:"linkDownHintMbps,omitempty"`
+	// 主机公网出口整形（也见 link_shaper.go）：整台机器往客户端、往目标发的明文流量
+	// 合起来整形到公网带宽上限之下。EgressShaping 档位、EgressMbps 手动上限、
+	// EgressHintMbps 自动模式提示值。按主机配置，每条隧道的 spec 都带同一份。
+	EgressShaping    string `json:"egressShaping,omitempty"`
+	EgressMbps       int    `json:"egressMbps,omitempty"`
+	EgressHintMbps   int    `json:"egressHintMbps,omitempty"`
 	PanelURL         string `json:"panelUrl,omitempty"`
 	Token            string `json:"token,omitempty"`
 	RelayExitHost    string `json:"relayExitHost,omitempty"`
@@ -10056,6 +10062,8 @@ func fxpServerSignature(spec fxpSpec) string {
 		strings.ToLower(strings.TrimSpace(spec.LinkShaping)),
 		strconv.Itoa(spec.LinkUpMbps),
 		strconv.Itoa(spec.LinkDownMbps),
+		strings.ToLower(strings.TrimSpace(spec.EgressShaping)),
+		strconv.Itoa(spec.EgressMbps),
 		spec.RelayExitHost,
 		strconv.Itoa(spec.RelayExitPort),
 		strconv.Itoa(spec.UDPRelayExitPort),
@@ -10934,7 +10942,7 @@ func startFXPProcessLockedWithPersistence(cfg Config, spec fxpSpec, actionMessag
 	}
 	spec = fxpSpecWithPanelCredentials(cfg, spec)
 	logf(
-		"proxy-debug fxp config role=%s tunnel=%d rule=%d listen=%d udpListen=%d protocol=%s exitStrategy=%s proxyReceive=%v proxySend=%v proxyExitReceive=%v proxyExitSend=%v tcpFastOpen=%v linkShaping=%s linkUp=%d linkDown=%d exit=%s:%d udpExit=%d relayNext=%s:%d udpRelayNext=%d target=%s:%d udpTargets=%d",
+		"proxy-debug fxp config role=%s tunnel=%d rule=%d listen=%d udpListen=%d protocol=%s exitStrategy=%s proxyReceive=%v proxySend=%v proxyExitReceive=%v proxyExitSend=%v tcpFastOpen=%v linkShaping=%s linkUp=%d linkDown=%d egress=%s/%d exit=%s:%d udpExit=%d relayNext=%s:%d udpRelayNext=%d target=%s:%d udpTargets=%d",
 		spec.Role,
 		spec.TunnelID,
 		spec.RuleID,
@@ -10950,6 +10958,8 @@ func startFXPProcessLockedWithPersistence(cfg Config, spec fxpSpec, actionMessag
 		spec.LinkShaping,
 		spec.LinkUpMbps,
 		spec.LinkDownMbps,
+		spec.EgressShaping,
+		spec.EgressMbps,
 		spec.ExitHost,
 		spec.ExitPort,
 		spec.UDPExitPort,

@@ -17,7 +17,9 @@ export type TunnelLinkShapingReport = {
   lossPct: number;
 };
 
-const LINK_SHAPING_DIRECTIONS = new Set(["up", "down"]);
+// egress 是主机公网出口整形：整台机器一行，tunnelId 记 0（见 hostEgressShapingHint）。
+export const HOST_EGRESS_SHAPING_TUNNEL_ID = 0;
+const LINK_SHAPING_DIRECTIONS = new Set(["up", "down", "egress"]);
 const LINK_SHAPING_MODES = new Set(["auto", "manual", "off"]);
 const LINK_SHAPING_STATES = new Set(["off", "watching", "shaping", "paused"]);
 const LINK_MBPS_MAX = 1_000_000;
@@ -96,14 +98,41 @@ export async function tunnelLinkShapingHintsByHost(hostId: number) {
   const hints = new Map<number, { up: number; down: number }>();
   for (const row of await listTunnelLinkShapingByHost(hostId)) {
     const learned = clampMbps((row as any).learnedMbps);
-    if (learned <= 0) continue;
     const tunnelId = Number((row as any).tunnelId);
+    // 主机公网出口整形那一行（tunnelId 0、egress）不是隧道的提示值。
+    if (learned <= 0 || tunnelId <= 0 || ((row as any).direction !== "up" && (row as any).direction !== "down")) continue;
     const current = hints.get(tunnelId) || { up: 0, down: 0 };
     if ((row as any).direction === "up") current.up = learned;
     if ((row as any).direction === "down") current.down = learned;
     hints.set(tunnelId, current);
   }
   return hints;
+}
+
+/** 主机公网出口整形：这台机器的那一行（tunnelId 0、direction egress）。 */
+export async function getHostEgressShaping(hostId: number): Promise<TunnelLinkShaping | null> {
+  for (const row of await listTunnelLinkShapingByHost(hostId)) {
+    if (Number((row as any).tunnelId) === HOST_EGRESS_SHAPING_TUNNEL_ID && (row as any).direction === "egress") return row;
+  }
+  return null;
+}
+
+/** 主机公网出口整形自动档的提示值：这台机器学到过的公网带宽上限（Mbit/s），没有就是 0。 */
+export async function hostEgressShapingHint(hostId: number) {
+  const row = await getHostEgressShaping(hostId);
+  return row ? clampMbps((row as any).learnedMbps) : 0;
+}
+
+/** 一批主机的公网出口整形状态，主机列表用。 */
+export async function listHostEgressShapingByHostIds(hostIds: number[]): Promise<TunnelLinkShaping[]> {
+  const ids = Array.from(new Set(hostIds.map((value) => Number(value)).filter((value) => Number.isFinite(value) && value > 0)));
+  if (ids.length === 0) return [];
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(tunnelLinkShaping)
+    .where(and(eq(tunnelLinkShaping.tunnelId, HOST_EGRESS_SHAPING_TUNNEL_ID), eq(tunnelLinkShaping.direction, "egress"), inArray(tunnelLinkShaping.hostId, ids))) as Promise<TunnelLinkShaping[]>;
 }
 
 export async function deleteTunnelLinkShapingByTunnel(tunnelId: number) {

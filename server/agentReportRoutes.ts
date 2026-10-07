@@ -741,14 +741,22 @@ agentRouter.post("/api/agent/fxp-link-shaping", async (req: Request, res: Respon
     const role = String(req.body?.role || "").trim().toLowerCase().slice(0, 16);
     const rawShapers = Array.isArray(req.body?.shapers) ? req.body.shapers : [];
     const shapers = rawShapers.map(db.normalizeTunnelLinkShapingReport).filter(Boolean) as db.TunnelLinkShapingReport[];
-    if (!Number.isFinite(tunnelId) || tunnelId <= 0 || shapers.length === 0 || rawShapers.length > 4) {
+    // 主机公网出口整形整台机器一份，tunnelId 报 0、方向 egress；其余必须是真实隧道。
+    const hostEgress = tunnelId === db.HOST_EGRESS_SHAPING_TUNNEL_ID && shapers.length > 0 && shapers.every((item) => item.direction === "egress");
+    if (!Number.isFinite(tunnelId) || (tunnelId <= 0 && !hostEgress) || shapers.length === 0 || rawShapers.length > 4) {
       res.status(400).json({ error: "tunnelId and shapers are required" });
       return;
     }
-    const tunnel = await db.getTunnelById(tunnelId);
-    if (!tunnel) {
-      res.status(404).json({ error: "tunnel not found" });
-      return;
+    if (!hostEgress) {
+      if (shapers.some((item) => item.direction === "egress")) {
+        res.status(400).json({ error: "egress must be reported with tunnelId 0" });
+        return;
+      }
+      const tunnel = await db.getTunnelById(tunnelId);
+      if (!tunnel) {
+        res.status(404).json({ error: "tunnel not found" });
+        return;
+      }
     }
     const saved = await db.recordTunnelLinkShaping(tunnelId, Number((host as any).id), role, shapers);
     res.json({ ok: true, saved });

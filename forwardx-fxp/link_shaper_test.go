@@ -448,3 +448,59 @@ func TestLinkShaperConfigModesAndDirections(t *testing.T) {
 		}
 	}
 }
+
+// 主机公网出口整形：整台机器一个，入口组里任一条目带档位就生效；明文侧写入按它等。
+func TestLinkShaperHostEgress(t *testing.T) {
+	linkShaperStateDir = t.TempDir()
+	linkEgress.Store(nil)
+	// 没配过：不建整形器，写入不等。
+	linkShapersApply(config{Role: "exit", TunnelID: 81, LinkShaping: "auto"})
+	if linkShaperEgress() != nil {
+		t.Fatal("egress shaper must not exist until configured")
+	}
+	linkShaperEgress().wait(1 << 20)
+	linkShaperEgress().attach(nil)
+	// 入口组：顶层没有，条目上有。
+	group := config{Role: "entry-group", TunnelID: 81, Entries: []config{
+		{Role: "entry", TunnelID: 81, Key: "a", PanelURL: "http://panel", Token: "t"},
+		{Role: "entry", TunnelID: 81, Key: "b", EgressShaping: "manual", EgressMbps: 500},
+	}}
+	linkShapersApply(group)
+	s := linkShaperEgress()
+	if s == nil || s.direction != "egress" || s.tunnelID != 0 || s.role != "entry" || s.panelURL != "http://panel" {
+		t.Fatalf("egress shaper = %+v", s)
+	}
+	if s.rate.Load() != int64(500*linkShaperBytesPerMbps*linkShaperHeadroom) || s.currentMode() != linkShapingManual {
+		t.Fatalf("manual 500 must start at 480Mbit/s, got %d mode=%s", s.rate.Load()/linkShaperBytesPerMbps, s.currentMode())
+	}
+	status := s.snapshot()
+	if status.Direction != "egress" || status.Mode != "manual" || status.State != "shaping" || status.RateMbps != 480 {
+		t.Fatalf("snapshot = %+v", status)
+	}
+	found := false
+	for _, item := range linkShapersSnapshot() {
+		if item == s {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("egress shaper must be reported")
+	}
+	// 出口进程：顶层配置带档位；提示值给自动档起步。
+	linkShapersApply(config{Role: "exit", TunnelID: 82, EgressShaping: "auto", EgressHintMbps: 490})
+	if s2 := linkShaperEgress(); s2 != s || s.currentMode() != linkShapingAuto || s.role != "exit" || s.learned.Load() != 490*linkShaperBytesPerMbps {
+		t.Fatalf("auto with hint: same=%v mode=%s role=%s learned=%d", s2 == s, s.currentMode(), s.role, s.learned.Load()/linkShaperBytesPerMbps)
+	}
+	// 热更新关掉：句柄不变，速率归零。
+	linkShapersApply(config{Role: "exit", TunnelID: 82, EgressShaping: "off"})
+	if s.rate.Load() != 0 || s.currentMode() != linkShapingOff {
+		t.Fatalf("off left rate=%d mode=%s", s.rate.Load(), s.currentMode())
+	}
+	if err := validateConfig(config{Role: "exit", Key: "k", ListenPort: 1000, TunnelID: 1, EgressShaping: "sometimes"}); err == nil {
+		t.Fatal("bad egressShaping must be rejected")
+	}
+	if err := validateConfig(config{Role: "exit", Key: "k", ListenPort: 1000, TunnelID: 1, EgressMbps: linkShaperMaxMbps + 1}); err == nil {
+		t.Fatal("bad egressMbps must be rejected")
+	}
+	linkEgress.Store(nil)
+}

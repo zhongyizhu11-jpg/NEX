@@ -26,12 +26,13 @@ import test from "node:test";
 type Beat = {
   fxpEntry: Record<string, { targetIp: string; targetPort: number }>;
   fxpLink: Record<string, { mode?: string; up?: number; down?: number; upHint?: number; downHint?: number }>;
+  fxpEgress: Record<string, { mode?: string; mbps?: number; hint?: number }>;
   gostEntry: Record<string, string>;
   schedulers: Record<string, number>;
   guards: Record<string, { listenPort: number; target: string }>;
 };
 type Outcome = {
-  linkRepo: { savedCount: number; linkRows: any[]; hints: Record<string, { up: number; down: number }> };
+  linkRepo: { savedCount: number; linkRows: any[]; hints: Record<string, { up: number; down: number }>; egressHint: number; egressRows: number };
   entryFirst: Beat;
   exit: Beat;
   node: Beat;
@@ -64,16 +65,21 @@ function run(): Outcome {
     const now = Math.floor(Date.now() / 1000);
 
     await exec("INSERT INTO users (id, username, password, role) VALUES (1, 'admin', 'hash', 'admin')");
-    for (const [id, name, ip, token] of [
-      [1, "出口", "203.0.113.1", "tok1"],
-      [2, "入口", "203.0.113.2", "tok2"],
-      [4, "出口节点", "203.0.113.4", "tok4"],
+    // 出口手动 500M、入口自动档（面板里已经记着它学到的 488）、出口节点关。
+    for (const [id, name, ip, token, egressMode, egressMbps] of [
+      [1, "出口", "203.0.113.1", "tok1", "manual", 500],
+      [2, "入口", "203.0.113.2", "tok2", "auto", 0],
+      [4, "出口节点", "203.0.113.4", "tok4", "off", 0],
     ]) {
       await exec(
-        'INSERT INTO hosts (id, name, ip, ipv4, "hostType", "agentToken", "agentVersion", "userId", "isOnline", "lastHeartbeat") VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1, ?)',
-        [id, name, ip, ip, "slave", token, "2.2.199", now],
+        'INSERT INTO hosts (id, name, ip, ipv4, "hostType", "agentToken", "agentVersion", "userId", "isOnline", "lastHeartbeat", "egressShapingMode", "egressMbps") VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?, ?)',
+        [id, name, ip, ip, "slave", token, "2.2.199", now, egressMode, egressMbps],
       );
     }
+    await exec(
+      'INSERT INTO tunnel_link_shaping ("tunnelId", "hostId", role, direction, mode, state, "rateMbps", "learnedMbps", "lossPermille") VALUES (0, 2, ?, ?, ?, ?, 478, 488, 1)',
+      ["entry", "egress", "auto", "shaping"],
+    );
     const tunnel = (id, name, mode, listenPort, extra = {}) => {
       const columns = ["id", "name", '"entryHostId"', '"exitHostId"', "mode", '"listenPort"', '"userId"', '"isEnabled"', ...Object.keys(extra).map((key) => '"' + key + '"')];
       const values = [id, name, 2, 1, mode, listenPort, 1, 1, ...Object.values(extra)];
@@ -136,6 +142,7 @@ function run(): Outcome {
       if (response.status !== 200) throw new Error("心跳没通: " + response.status + " " + JSON.stringify(body));
       const fxpEntry = {};
       const fxpLink = {};
+      const fxpEgress = {};
       const gostEntry = {};
       for (const action of (body.desiredState && body.desiredState.actions) || []) {
         if (action && action.fxp && action.op === "apply" && action.fxp.role === "entry") {
@@ -146,6 +153,9 @@ function run(): Outcome {
             mode: action.fxp.linkShaping, up: action.fxp.linkUpMbps, down: action.fxp.linkDownMbps,
             upHint: action.fxp.linkUpHintMbps, downHint: action.fxp.linkDownHintMbps,
           };
+          if (action.fxp.egressShaping !== undefined || action.fxp.egressMbps !== undefined || action.fxp.egressHintMbps !== undefined) {
+            fxpEgress[String(action.fxp.role) + ":" + String(action.fxp.tunnelId)] = { mode: action.fxp.egressShaping, mbps: action.fxp.egressMbps, hint: action.fxp.egressHintMbps };
+          }
         }
         for (const config of (action && action.managedConfigs) || []) {
           if (!String(config.path || "").endsWith(".json")) continue;
@@ -167,7 +177,7 @@ function run(): Outcome {
       for (const guard of body.guardRules || []) {
         if (Number(guard.tunnelId || 0) > 0) guards[String(guard.ruleId)] = { listenPort: Number(guard.listenPort), target: guard.targetIp + ":" + guard.targetPort };
       }
-      return { fxpEntry, fxpLink, gostEntry, schedulers, guards };
+      return { fxpEntry, fxpLink, fxpEgress, gostEntry, schedulers, guards };
     };
 
     // 入口「稳定计划」：放一份假的，看出口报端口以后它有没有被清掉（清掉 = 入口马上重算）。
@@ -233,10 +243,14 @@ function run(): Outcome {
       .map((row) => ({ hostId: row.hostId, direction: row.direction, state: row.state, rateMbps: row.rateMbps, learnedMbps: row.learnedMbps, lossPermille: row.lossPermille }))
       .sort((a, b) => a.hostId - b.hostId);
     const hints = Object.fromEntries(await linkRepo.tunnelLinkShapingHintsByHost(2));
+    // 主机公网出口整形整台机器一行（tunnelId 0）：更新不新增，提示值按主机取，隧道提示值不混进去。
+    await linkRepo.recordTunnelLinkShaping(0, 2, "entry", [{ direction: "egress", mode: "auto", state: "shaping", rateMbps: 480, learnedMbps: 490, lossPct: 0.1 }]);
+    const egressHint = await linkRepo.hostEgressShapingHint(2);
+    const egressRows = (await linkRepo.listHostEgressShapingByHostIds([1, 2, 4])).length;
     console.log("OUTCOME " + JSON.stringify({
       entryFirst, exit, node, entryAfter, entryPlan: { afterEntryBeat, afterExitReport, afterSameExitReport },
       newRuleEntry, newRuleExit, newRuleEntryAfter, entryAfterRestart, persistedHosts, settingsLeak,
-      linkRepo: { savedCount, linkRows, hints },
+      linkRepo: { savedCount, linkRows, hints, egressHint, egressRows },
     }));
   `;
   const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
@@ -307,6 +321,13 @@ test("链路整形档位跟着 FXP 配置下发：手动给上限，自动给面
   assert.deepEqual(outcome.exit.fxpLink["exit:6"], { mode: "auto", downHint: 1520 }, "出口主机只拿自己学到的下行提示值");
 });
 
+test("主机公网出口整形跟着主机配置下发：手动给上限，自动给面板记住的上限作提示，关着不写字段", () => {
+  assert.deepEqual(outcome.exit.fxpEgress["exit:1"], { mode: "manual", mbps: 500 }, "出口主机手动 500");
+  assert.deepEqual(outcome.entryAfter.fxpEgress["entry:1"], { mode: "auto", hint: 488 }, "入口主机自动档带提示值");
+  assert.deepEqual(outcome.entryAfter.fxpEgress["entry:6"], { mode: "auto", hint: 488 }, "每条隧道的配置都带同一份");
+  assert.equal(outcome.node.fxpEgress["exit:4"], undefined, "关着的机器不写字段");
+});
+
 test("整形状态入库：同一主机同一方向只有一行，更新不是新增；提示值按主机取", () => {
   assert.equal(outcome.linkRepo.savedCount, 1);
   assert.deepEqual(outcome.linkRepo.linkRows, [
@@ -314,4 +335,6 @@ test("整形状态入库：同一主机同一方向只有一行，更新不是�
     { hostId: 2, direction: "up", state: "shaping", rateMbps: 1460, learnedMbps: 1485, lossPermille: 4 },
   ]);
   assert.deepEqual(outcome.linkRepo.hints, { "6": { up: 1485, down: 0 } });
+  assert.equal(outcome.linkRepo.egressHint, 490, "主机出口整形的那一行更新，不新增");
+  assert.equal(outcome.linkRepo.egressRows, 1);
 });

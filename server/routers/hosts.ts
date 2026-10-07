@@ -27,6 +27,7 @@ import { billingCalendarParts } from "@shared/billingTime";
 import { normalizeAgentProbeCounts } from "@shared/agentDtos";
 import { buildAgentScriptCommand } from "@shared/agentInstallCommand";
 import { getConfiguredPanelUrl } from "../agentPanelUrl";
+import { hostEgressShaping, normalizeHostEgressShapingMode, TUNNEL_LINK_MBPS_MAX } from "../tunnelFxpRuntime";
 import { parseManualHostAddress } from "@shared/hostManualAddress";
 
 const HOST_UPGRADE_CLEANUP_INTERVAL_MS = 60 * 1000;
@@ -69,6 +70,20 @@ const hostSortOrderSchema = z.number().int().min(0).max(200).optional();
 
 const optionalDateInputSchema = z.string().trim().max(64).nullable().optional();
 const hostTrafficMeasureModeSchema = z.enum(["outbound", "both", "max"]).default("both");
+const hostEgressShapingModeSchema = z.enum(["auto", "manual", "off"]);
+const hostEgressMbpsSchema = z.number().int().min(0).max(TUNNEL_LINK_MBPS_MAX);
+
+/**
+ * 主机公网出口整形的档位和手动上限收敛成要写库的两个字段。手动档必须有值；
+ * 没打开时上限清零，免得界面上残留一个没用的数字。
+ */
+function hostEgressShapingPayload(input: { egressShapingMode?: unknown; egressMbps?: unknown }) {
+  const mode = normalizeHostEgressShapingMode(input.egressShapingMode);
+  const parsed = Math.floor(Number(input.egressMbps));
+  const mbps = Number.isFinite(parsed) && parsed > 0 ? Math.min(TUNNEL_LINK_MBPS_MAX, parsed) : 0;
+  if (mode === "manual" && mbps <= 0) throw new Error("公网出口整形选了手动，需要填公网带宽上限（Mbit/s）");
+  return { egressShapingMode: mode, egressMbps: mode === "manual" ? mbps : 0 };
+}
 const hostBillingCycleMonthsSchema = z.union([
   z.literal(1), z.literal(3), z.literal(6), z.literal(12), z.literal(24), z.literal(36),
 ]);
@@ -487,6 +502,32 @@ function compactHostForList(host: any) {
   return withDetectedPrivateIpv4(rest);
 }
 
+/**
+ * 带上 FXP 报上来的主机公网出口整形状态（forwardx-fxp/link_shaper.go 的 egress，
+ * 面板记在 tunnel_link_shaping 里 tunnelId 0 那一行）。关着的机器也给 null，卡片好判断。
+ */
+async function withHostEgressShapingStatus<T extends { id?: unknown }>(hostRows: T[]) {
+  const ids = hostRows.filter((host: any) => hostEgressShaping(host).mode !== "off").map((host: any) => Number(host.id));
+  const rows = ids.length > 0 ? await db.listHostEgressShapingByHostIds(ids).catch(() => []) : [];
+  const byHost = new Map(rows.map((row: any) => [Number(row.hostId), row]));
+  return hostRows.map((host: any) => {
+    const row = byHost.get(Number(host.id));
+    return {
+      ...host,
+      egressShapingStatus: row
+        ? {
+            mode: String(row.mode || "off"),
+            state: String(row.state || "off"),
+            rateMbps: Number(row.rateMbps || 0),
+            learnedMbps: Number(row.learnedMbps || 0),
+            lossPct: Number(row.lossPermille || 0) / 10,
+            updatedAt: row.updatedAt ?? null,
+          }
+        : null,
+    };
+  });
+}
+
 /** 带上 Agent 上报的内网 IPv4，编辑框里「内网地址」拿它做建议（见 agentPrivateAddress） */
 function withDetectedPrivateIpv4<T extends Record<string, any>>(host: T): T & { detectedPrivateIpv4: string | null } {
   return { ...host, detectedPrivateIpv4: agentPrivateIpv4(host?.id) };
@@ -825,7 +866,7 @@ export const hostsRouter = router({
         scheduleOrphanedAgentHostCleanup();
       }
       const hosts = await getVisibleHostsForUser(ctx.user);
-      return hosts.map(compactHostForList);
+      return withHostEgressShapingStatus(hosts.map(compactHostForList));
     }),
     options: protectedProcedure.query(async ({ ctx }) => {
       const scope = await visibleHostQueryScope(ctx.user);
@@ -1247,6 +1288,8 @@ export const hostsRouter = router({
         stoppedAt: optionalDateInputSchema,
         trafficLimit: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
         trafficMeasureMode: hostTrafficMeasureModeSchema.optional(),
+        egressShapingMode: hostEgressShapingModeSchema.optional(),
+        egressMbps: hostEgressMbpsSchema.optional(),
         telegramTrafficAlertEnabled: z.boolean().optional(),
         trafficAlertThresholdPercent: z.number().int().min(1).max(99).optional(),
         telegramRenewalReminderEnabled: z.boolean().optional(),
@@ -1297,10 +1340,12 @@ export const hostsRouter = router({
           ? normalizeHostDdnsPayload(input)
           : { ddnsEnabled: false, ddnsDomain: null, ddnsRecordType: "A", ddnsIpVersion: "ipv4" };
         if ((ddnsConfig as any).ddnsEnabled) await assertHostDdnsServiceConfigured();
+        const egressConfig = hostEgressShapingPayload(input);
         const id = await db.createHost({
           ...input,
           ...trafficConfig,
           ...ddnsConfig,
+          ...egressConfig,
           agentToken,
           networkInterface: input.networkInterface || null,
           sortOrder: input.sortOrder ?? 0,
@@ -1404,6 +1449,8 @@ export const hostsRouter = router({
         stoppedAt: optionalDateInputSchema,
         trafficLimit: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
         trafficMeasureMode: hostTrafficMeasureModeSchema.optional(),
+        egressShapingMode: hostEgressShapingModeSchema.optional(),
+        egressMbps: hostEgressMbpsSchema.optional(),
         telegramTrafficAlertEnabled: z.boolean().optional(),
         trafficAlertThresholdPercent: z.number().int().min(1).max(99).optional(),
         telegramRenewalReminderEnabled: z.boolean().optional(),
@@ -1440,6 +1487,17 @@ export const hostsRouter = router({
           : String((host as any).portAllowlist || "");
         const { id, detectedAddress, ...data } = input;
         let ddnsConfigChanged = false;
+        // 公网出口整形：两个字段一起收敛；变了要让这台机器的 Agent 重发 FXP 配置。
+        let egressShapingChanged = false;
+        if ((data as any).egressShapingMode !== undefined || (data as any).egressMbps !== undefined) {
+          const egressConfig = hostEgressShapingPayload({
+            egressShapingMode: (data as any).egressShapingMode !== undefined ? (data as any).egressShapingMode : (host as any).egressShapingMode,
+            egressMbps: (data as any).egressMbps !== undefined ? (data as any).egressMbps : (host as any).egressMbps,
+          });
+          const current = hostEgressShaping(host);
+          egressShapingChanged = egressConfig.egressShapingMode !== current.mode || egressConfig.egressMbps !== current.mbps;
+          Object.assign(data as any, egressConfig);
+        }
         if (detectedAddress !== undefined) {
           const parsed = parseManualHostAddress(detectedAddress);
           if ("error" in parsed) throw new Error(`Agent 检测 IP：${parsed.error}`);
@@ -1534,6 +1592,7 @@ export const hostsRouter = router({
           });
         }
         await db.updateHost(id, data as any);
+        if (egressShapingChanged) pushAgentRefresh(id, "host-egress-shaping-updated", { urgent: true });
         if (ddnsConfigChanged) {
           scheduleHostDdnsUpdate({ ...host, ...(data as any), id }, "host-ddns-config-updated", { force: true });
           /**

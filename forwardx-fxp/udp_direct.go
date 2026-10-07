@@ -747,6 +747,7 @@ func (s *udpDirectEntrySession) writeResponse(payload []byte) {
 	if !s.outLimiter.waitDone(s.done, len(payload)) {
 		return
 	}
+	linkShaperEgress().wait(len(payload))
 	if _, err := s.conn.WriteToUDP(payload, s.clientAddr); err != nil {
 		if !isClosedErr(err) {
 			log.Printf("entry udp direct client write failed tunnel=%d rule=%d client=%s: %v", s.cfg.TunnelID, s.cfg.RuleID, s.clientAddr, err)

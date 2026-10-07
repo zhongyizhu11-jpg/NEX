@@ -624,11 +624,17 @@ var linkShapers = struct {
 func linkShapingSettings(direction string, cfg config) (mode linkShapingMode, mbps int, hintMbps int) {
 	mbps = cfg.LinkUpMbps
 	hintMbps = cfg.LinkUpHintMbps
-	if direction == "down" {
+	modeText := cfg.LinkShaping
+	switch direction {
+	case "down":
 		mbps = cfg.LinkDownMbps
 		hintMbps = cfg.LinkDownHintMbps
+	case linkEgressDirection:
+		mbps = cfg.EgressMbps
+		hintMbps = cfg.EgressHintMbps
+		modeText = cfg.EgressShaping
 	}
-	switch strings.ToLower(strings.TrimSpace(cfg.LinkShaping)) {
+	switch strings.ToLower(strings.TrimSpace(modeText)) {
 	case "auto":
 		return linkShapingAuto, 0, hintMbps
 	case "manual":
@@ -689,6 +695,7 @@ func linkShaperHandle(direction string, cfg config) *linkShaper {
 
 // linkShapersApply 在配置生效（启动、热更新）时把两个方向的档位应用上去，这样
 // 改了档位不用等新连接，已有连接也立刻按新速率走；关掉也立刻停。
+// 主机公网出口整形也在这里跟着配置走。
 func linkShapersApply(cfg config) {
 	configs := append([]config{cfg}, cfg.Entries...)
 	for _, item := range configs {
@@ -698,13 +705,77 @@ func linkShapersApply(cfg config) {
 		linkShaperFor("up", item)
 		linkShaperFor("down", item)
 	}
+	linkEgressApply(cfg)
+}
+
+/*
+主机公网出口整形。
+
+机房给这台机器的公网带宽（比如 500M）也是个限速器：超过就丢包。入口往客户端发的
+下载、出口往目标发的上传都从这里出去，几条 TCP 流一起跑时在限速器上互相挤，
+吞吐量在三四百兆上下锯齿，到不了标称值。做法和隧道链路一样：把这台机器往明文侧
+（客户端、目标）发的所有字节合起来整形到上限之下，自动档靠这些套接字的重传率
+找限速点。整台机器一个整形器，入口组里哪条条目带了档位都算。
+*/
+
+const linkEgressDirection = "egress"
+
+var linkEgress atomic.Pointer[linkShaper]
+
+// linkShaperEgress 取主机公网出口整形器；没配置过就是 nil（wait / attach 对 nil 不做事）。
+func linkShaperEgress() *linkShaper {
+	return linkEgress.Load()
+}
+
+// linkEgressApply 从生效的配置（顶层或入口组的任一条目）取主机出口档位。从没配过
+// 也没开过就不建，免得没用这功能的机器多一个每秒醒一次的协程。
+func linkEgressApply(cfg config) {
+	chosen, found := cfg, false
+	for _, item := range append([]config{cfg}, cfg.Entries...) {
+		if strings.TrimSpace(item.EgressShaping) != "" || item.EgressMbps > 0 || item.EgressHintMbps > 0 {
+			chosen, found = item, true
+			break
+		}
+	}
+	s := linkEgress.Load()
+	if s == nil {
+		if !found {
+			return
+		}
+		linkShapers.mu.Lock()
+		if s = linkEgress.Load(); s == nil {
+			s = newLinkShaper(linkEgressDirection, linkEgressDirection, 0)
+			linkEgress.Store(s)
+			go s.run()
+		}
+		linkShapers.mu.Unlock()
+	}
+	linkShapers.mu.Lock()
+	role := strings.ToLower(strings.TrimSpace(cfg.Role))
+	if role == "entry-group" || role == "" {
+		role = "entry"
+	}
+	s.role = role
+	for _, item := range append([]config{cfg}, cfg.Entries...) {
+		if url, token := strings.TrimSpace(item.PanelURL), strings.TrimSpace(item.Token); url != "" && token != "" {
+			s.panelURL, s.token = url, token
+			startLinkShaperReporter()
+			break
+		}
+	}
+	linkShapers.mu.Unlock()
+	mode, mbps, hint := linkShapingSettings(linkEgressDirection, chosen)
+	s.configure(mode, mbps, hint)
 }
 
 func linkShapersSnapshot() []*linkShaper {
 	linkShapers.mu.Lock()
 	defer linkShapers.mu.Unlock()
-	out := make([]*linkShaper, 0, len(linkShapers.byKey))
+	out := make([]*linkShaper, 0, len(linkShapers.byKey)+1)
 	for _, s := range linkShapers.byKey {
+		out = append(out, s)
+	}
+	if s := linkEgress.Load(); s != nil {
 		out = append(out, s)
 	}
 	return out
