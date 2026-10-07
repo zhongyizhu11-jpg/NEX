@@ -660,7 +660,8 @@ function openRcScript(svcName: string, execStart: string) {
   return [
     "#!/sbin/openrc-run",
     `name="${svcName}"`,
-    `description="NEX managed service ${svcName}"`,
+    // 脚本正文进 Agent 的服务签名，文案不改（改了升级后服务会重启一遍）。
+    `description="ForwardX managed service ${svcName}"`,
     'command="/bin/sh"',
     `command_args="-lc ${shQuote(`ulimit -c 0 2>/dev/null || true; exec ${execStart}`)}"`,
     "command_background=true",
@@ -683,7 +684,7 @@ function sysVScript(svcName: string, execStart: string) {
     "# Required-Stop:     $network",
     "# Default-Start:     2 3 4 5",
     "# Default-Stop:      0 1 6",
-    `# Short-Description: NEX managed service ${svcName}`,
+    `# Short-Description: ForwardX managed service ${svcName}`,
     "### END INIT INFO",
     `PIDFILE=/run/${svcName}.pid`,
     `LOGFILE=/var/log/forwardx-agent/${svcName}.log`,
