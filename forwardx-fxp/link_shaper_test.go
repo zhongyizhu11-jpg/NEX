@@ -109,7 +109,7 @@ func TestLinkShaperManualTuneStepsDownOnLossAndClimbsBelowCeiling(t *testing.T) 
 	if s.ceiling != int64(960*linkShaperBytesPerMbps) {
 		t.Fatalf("ceiling = %d, want 960Mbit/s", s.ceiling/linkShaperBytesPerMbps)
 	}
-	// 连续十秒干净且忙：升 1%，但停在丢包点之下 1.5%（945.6）。
+	// 连续五秒干净且忙：先升 1%，之后步子翻倍，但都停在丢包点之下 1.5%（945.6）。
 	for i := 0; i < linkShaperCleanRounds; i++ {
 		s.stepLocked(now.Add(time.Duration(i)*time.Second), busyWindow(s, 0))
 	}
@@ -166,35 +166,34 @@ func TestLinkShaperAutoLearnsTheRateLimiter(t *testing.T) {
 	if s.rate.Load() != 0 {
 		t.Fatal("loss without backlog must not start shaping")
 	}
-	// 8 流撞限速器的样子：逐秒抖，最高 2078，有积压，重传 8%。
-	for _, delivered := range []int{491, 2078, 1727} {
-		s.stepLocked(now, linkWindow{elapsed: time.Second, delivered: mb(delivered), loss: 0.08, segs: 50000, pathBusy: true})
-	}
+	// 8 流撞限速器的第一秒：重传 8% 加积压，一秒就触发；起点按三秒平均（不足三秒按单秒最高）。
+	s.stepLocked(now, linkWindow{elapsed: time.Second, delivered: mb(491), loss: 0.08, segs: 50000, pathBusy: true})
 	start := s.rate.Load()
-	if want := int64(mb(2078) * linkShaperAutoStartMargin); start != want {
+	if want := int64(mb(900) * linkShaperAutoStartMargin); start != want {
 		t.Fatalf("shaping should start at the recent peak × 1.05 = %dMbit/s, got %dMbit/s", want/linkShaperBytesPerMbps, start/linkShaperBytesPerMbps)
 	}
 	if s.snapshot().State != "shaping" {
 		t.Fatalf("state = %s, want shaping", s.snapshot().State)
 	}
-	// 还在限速点之上：每秒降 3%，直到 1500 以下不再丢。
+	// 限速点在 1500：之上就丢包（重一点 6%，轻一点 3%），之下干净。几秒之内要学到。
+	limiter := int64(mb(1500))
 	steps := 0
-	for s.rate.Load() > int64(mb(1500)) {
-		s.stepLocked(now, busyWindow(s, 0.03))
+	for s.learned.Load() <= 0 {
+		if s.rate.Load() > limiter {
+			s.stepLocked(now.Add(time.Duration(steps)*time.Second), busyWindow(s, 0.03))
+		} else {
+			s.stepLocked(now.Add(time.Duration(steps)*time.Second), busyWindow(s, 0))
+		}
 		steps++
 		if steps > 40 {
-			t.Fatal("descent did not reach the limiter")
+			t.Fatalf("did not learn the limiter within 40s, rate=%dMbit/s", s.rate.Load()/linkShaperBytesPerMbps)
 		}
 	}
-	if steps < 8 || steps > 14 {
-		t.Fatalf("took %d steps to descend from %d to under 1500Mbit/s", steps, start/linkShaperBytesPerMbps)
-	}
-	// 干净十秒：学到限速点，写文件。
-	for i := 0; i < linkShaperCleanRounds; i++ {
-		s.stepLocked(now.Add(time.Duration(i)*time.Second), busyWindow(s, 0))
+	if steps > 15 {
+		t.Fatalf("took %ds to learn the limiter from a %dMbit/s start", steps, start/linkShaperBytesPerMbps)
 	}
 	learned := s.learned.Load()
-	if learned <= 0 || learned > int64(mb(1500)) || learned < int64(mb(1300)) {
+	if learned > limiter || learned < int64(mb(1300)) {
 		t.Fatalf("learned = %dMbit/s, want just under 1500", learned/linkShaperBytesPerMbps)
 	}
 	// 文件里按整数 Mbit/s 记。
@@ -227,11 +226,56 @@ func TestLinkShaperAutoLearnsTheRateLimiter(t *testing.T) {
 	if s.rate.Load() != 0 {
 		t.Fatal("paused shaper must not start again before the pause ends")
 	}
-	for i := 0; i < linkShaperAutoTriggerRuns; i++ {
-		s.stepLocked(now.Add(linkShaperAutoPause+time.Second), linkWindow{elapsed: time.Second, delivered: mb(1800), loss: 0.08, segs: 50000, pathBusy: true})
-	}
+	s.stepLocked(now.Add(linkShaperAutoPause+time.Second), linkWindow{elapsed: time.Second, delivered: mb(1800), loss: 0.08, segs: 50000, pathBusy: true})
 	if s.rate.Load() == 0 {
 		t.Fatal("after the pause the detector must run again")
+	}
+	// 轻微重传（0.3% 到 1%）要连续两秒才触发，一秒的抖动不算。
+	light := testShaper(t, "down:light")
+	light.configure(linkShapingAuto, 0, 0)
+	light.stepLocked(now, linkWindow{elapsed: time.Second, delivered: mb(900), loss: 0.005, segs: 50000, pathBusy: true})
+	if light.rate.Load() != 0 {
+		t.Fatal("one second of light loss must not trigger")
+	}
+	light.stepLocked(now, linkWindow{elapsed: time.Second, delivered: mb(900), loss: 0.005, segs: 50000, pathBusy: true})
+	if light.rate.Load() == 0 {
+		t.Fatal("two seconds of light loss must trigger")
+	}
+	// 起点按三秒平均：三秒 [600, 1800, 1200] 的平均是 1200，不是单秒峰值 1800。
+	avg := testShaper(t, "down:avg")
+	avg.configure(linkShapingAuto, 0, 0)
+	for _, delivered := range []int{600, 1800} {
+		avg.stepLocked(now, linkWindow{elapsed: time.Second, delivered: mb(delivered), loss: 0, segs: 50000, pathBusy: false})
+	}
+	avg.stepLocked(now, linkWindow{elapsed: time.Second, delivered: mb(1200), loss: 0.05, segs: 50000, pathBusy: true})
+	if got := avg.rate.Load(); got != int64(mb(1200)*linkShaperAutoStartMargin) {
+		t.Fatalf("start = %dMbit/s, want 1260 (three-second average × 1.05)", got/linkShaperBytesPerMbps)
+	}
+	// 闲了几秒再开始测速：空秒不参与平均，起点还是按有流量的那一秒。
+	idle := testShaper(t, "down:idle")
+	idle.configure(linkShapingAuto, 0, 0)
+	for i := 0; i < linkShaperAutoWindows; i++ {
+		idle.stepLocked(now, linkWindow{elapsed: time.Second, delivered: 0, segs: 0})
+	}
+	idle.stepLocked(now, linkWindow{elapsed: time.Second, delivered: mb(1200), loss: 0.05, segs: 50000, pathBusy: true})
+	if got := idle.rate.Load(); got != int64(mb(1200)*linkShaperAutoStartMargin) {
+		t.Fatalf("start after idle = %dMbit/s, want 1260 (idle seconds must not dilute the average)", got/linkShaperBytesPerMbps)
+	}
+	// 学低了的值要几轮之内补回来：记住一个值不重置上探步子，1%、2%、4%、8% 继续翻倍。
+	grow := testShaper(t, "down:grow")
+	grow.configure(linkShapingAuto, 0, 0)
+	grow.stepLocked(now, linkWindow{elapsed: time.Second, delivered: mb(1000), loss: 0.05, segs: 50000, pathBusy: true})
+	grow.stepLocked(now, busyWindow(grow, 0.03))
+	grow.ceilingAt = now.Add(-linkShaperCeilingTTL - time.Second)
+	base := grow.rate.Load()
+	for round := 0; round < 4; round++ {
+		for i := 0; i < linkShaperCleanRounds; i++ {
+			grow.stepLocked(now, busyWindow(grow, 0))
+		}
+	}
+	// 四轮：×1.01 ×1.02 ×1.04 ×1.08 ≈ ×1.158。
+	if got := float64(grow.rate.Load()) / float64(base); got < 1.15 {
+		t.Fatalf("after four clean rounds the rate grew only ×%.3f; the probe step must keep doubling after learning", got)
 	}
 }
 
@@ -242,9 +286,7 @@ func TestLinkShaperAutoSearchesUpwardFromALowStart(t *testing.T) {
 	s.configure(linkShapingAuto, 0, 0)
 	now := time.Now()
 	mb := func(mbps int) float64 { return float64(mbps) * linkShaperBytesPerMbps }
-	for i := 0; i < linkShaperAutoTriggerRuns; i++ {
-		s.stepLocked(now, linkWindow{elapsed: time.Second, delivered: mb(500), loss: 0.05, segs: 50000, pathBusy: true})
-	}
+	s.stepLocked(now, linkWindow{elapsed: time.Second, delivered: mb(500), loss: 0.05, segs: 50000, pathBusy: true})
 	if got := s.rate.Load() / linkShaperBytesPerMbps; got != 525 {
 		t.Fatalf("start = %dMbit/s, want 525", got)
 	}
@@ -256,8 +298,8 @@ func TestLinkShaperAutoSearchesUpwardFromALowStart(t *testing.T) {
 			t.Fatal("search climb stalled")
 		}
 	}
-	if climbs > 13 {
-		t.Fatalf("search took %d clean seconds to reach 1500Mbit/s from 525", climbs)
+	if climbs > 6 {
+		t.Fatalf("search took %d clean seconds to reach 1500Mbit/s from 525, want about 5 at 25%%/s", climbs)
 	}
 	lossPoint := s.rate.Load()
 	s.stepLocked(now, busyWindow(s, 0.02))
@@ -274,9 +316,7 @@ func TestLinkShaperAutoSearchesUpwardFromALowStart(t *testing.T) {
 
 	gone := testShaper(t, "up:gone")
 	gone.configure(linkShapingAuto, 0, 0)
-	for i := 0; i < linkShaperAutoTriggerRuns; i++ {
-		gone.stepLocked(now, linkWindow{elapsed: time.Second, delivered: mb(500), loss: 0.05, segs: 50000, pathBusy: true})
-	}
+	gone.stepLocked(now, linkWindow{elapsed: time.Second, delivered: mb(500), loss: 0.05, segs: 50000, pathBusy: true})
 	for i := 0; i < 40 && gone.rate.Load() > 0; i++ {
 		gone.stepLocked(now, busyWindow(gone, 0))
 	}
@@ -290,9 +330,7 @@ func TestLinkShaperAutoGivesUpOnRandomLoss(t *testing.T) {
 	s := testShaper(t, "up:random")
 	s.configure(linkShapingAuto, 0, 0)
 	now := time.Now()
-	for i := 0; i < linkShaperAutoTriggerRuns; i++ {
-		s.stepLocked(now, linkWindow{elapsed: time.Second, delivered: 100 * linkShaperBytesPerMbps, loss: 0.02, segs: 5000, pathBusy: true})
-	}
+	s.stepLocked(now, linkWindow{elapsed: time.Second, delivered: 100 * linkShaperBytesPerMbps, loss: 0.02, segs: 5000, pathBusy: true})
 	if s.rate.Load() == 0 {
 		t.Fatal("expected shaping to start")
 	}
@@ -388,6 +426,17 @@ func TestLinkShaperConfigModesAndDirections(t *testing.T) {
 	linkShapersApply(config{Role: "entry", TunnelID: 79, LinkShaping: "manual", LinkUpMbps: 300})
 	if idle.rate.Load() != int64(300*linkShaperBytesPerMbps*linkShaperHeadroom) {
 		t.Fatalf("enabling via reload must take effect on the existing handle, rate=%d", idle.rate.Load())
+	}
+	// 连接池、探测协程拿的是热更新前拷的配置（没有 linkShaping）：建连时只取句柄，
+	// 不能把面板刚打开的「自动」拨回「关」。
+	linkShapersApply(config{Role: "entry", TunnelID: 80, LinkShaping: "auto"})
+	stale := config{Role: "entry", TunnelID: 80, Key: "k"}
+	pooled := linkShaperHandle("up", stale)
+	if pooled == nil || pooled.currentMode() != linkShapingAuto {
+		t.Fatalf("a stale dial config must not reconfigure the shaper, mode=%v", pooled.currentMode())
+	}
+	if linkShaperHandle("down", stale) == nil || linkShaperHandle("up", config{TunnelID: 0}) != nil {
+		t.Fatal("handle lookup must follow the tunnel id rule")
 	}
 	for _, bad := range []config{
 		{Role: "exit", Key: "k", ListenPort: 1000, TunnelID: 1, LinkUpMbps: linkShaperMaxMbps + 1},

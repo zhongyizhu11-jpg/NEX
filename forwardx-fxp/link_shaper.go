@@ -83,22 +83,30 @@ const (
 	linkShaperLossDown    = 0.003  // 重传率超过 0.3% 就降
 	linkShaperLossClean   = 0.0005 // 低于 0.05% 算干净
 	linkShaperDownStep    = 0.97
+	// 重传很重（>2%）说明离限速点还远，降快点。
+	linkShaperHeavyLoss     = 0.02
+	linkShaperHeavyDownStep = 0.94
+	// 干净时的爬升：连续干净的轮次越多步子越大（1%、2%、4%、8%、10%），一碰到丢包
+	// 回到 1%。学错了一个偏低的值不至于要半小时才爬回来。
 	linkShaperUpStep      = 1.01
-	linkShaperCleanRounds = 10
+	linkShaperUpStepMax   = 1.10
+	linkShaperCleanRounds = 5
 	// 升到丢包点之下这个比例就停，免得每隔几十秒就撞一次限速器。
 	linkShaperCeilingMargin = 0.985
 	linkShaperCeilingTTL    = 15 * time.Minute
 	linkShaperBytesPerMbps  = 125000
-	// 自动模式：连续两秒「积压 + 重传」才认定撞上了限速器（一秒的抖动不算），
-	// 起点是最近几秒观察到的最高送达速率再放宽一点（限速器的桶会放出一小段突发，
-	// 起点偏高没关系，往下降就是了）。
+	// 自动模式：重传明显（≥1%）加积压，一秒就认定撞上了限速器；轻一点（0.3% 到 1%）
+	// 要连续两秒。起点取最近几秒里三秒平均送达速率的最高值再放宽一点：单秒峰值
+	// 含限速器的桶放出的突发，偏高太多；三秒平均更接近真实上限。
 	linkShaperAutoStartMargin = 1.05
-	linkShaperAutoWindows     = 3
+	linkShaperAutoWindows     = 6
+	linkShaperAutoAverageSpan = 3
 	linkShaperAutoTriggerRuns = 2
+	linkShaperAutoStrongLoss  = 0.01
 	// 起点也可能偏低（几条流互相打得只剩上限的三分之一时开始的）：还没碰到过
-	// 丢包之前每个干净的秒升 10%，碰到丢包再换成每十秒 1% 的细调。升到起点的
-	// 四倍还没丢，说明限速器没了，回到观察。
-	linkShaperSearchStep       = 1.10
+	// 丢包之前每个干净的秒升 25%，碰到丢包再换成细调。升到起点的四倍还没丢，
+	// 说明限速器没了，回到观察。
+	linkShaperSearchStep       = 1.25
 	linkShaperSearchGiveUpMult = 4.0
 	// 自动模式：送达速率低于这个数（1 MB/s）的丢包不当回事。
 	linkShaperAutoMinDelivered = 1 << 20
@@ -155,6 +163,7 @@ type linkShaper struct {
 	ceiling      int64 // 上次观察到丢包时的速率，0 = 没有
 	ceilingAt    time.Time
 	cleanRuns    int
+	upStep       float64 // 当前的爬升步子（1.01 起，每轮干净翻倍到 1.10）
 	lastTick     time.Time
 	descentStart int64 // 自动模式这一轮整形的起点
 	triggerRuns  int   // 自动模式：连续几秒看到「积压 + 重传」
@@ -380,18 +389,12 @@ func (s *linkShaper) stepLocked(now time.Time, w linkWindow) {
 			return
 		}
 		s.triggerRuns++
-		if s.triggerRuns < linkShaperAutoTriggerRuns {
+		if s.triggerRuns < linkShaperAutoTriggerRuns && w.loss < linkShaperAutoStrongLoss {
 			return
 		}
 		s.triggerRuns = 0
-		// 撞上限速器了：按最近几秒的最高送达速率起步，往下找不丢包的点。
-		peak := 0.0
-		for _, item := range s.windows {
-			if item.delivered > peak {
-				peak = item.delivered
-			}
-		}
-		start := int64(peak * linkShaperAutoStartMargin)
+		// 撞上限速器了：按最近几秒里最高的三秒平均送达速率起步，往下找不丢包的点。
+		start := int64(s.sustainedPeakLocked() * linkShaperAutoStartMargin)
 		s.descentStart = start
 		s.rate.Store(start)
 		s.ceiling, s.ceilingAt, s.cleanRuns = 0, time.Time{}, 0
@@ -407,7 +410,12 @@ func (s *linkShaper) stepLocked(now time.Time, w linkWindow) {
 		return
 	}
 	if w.loss > linkShaperLossDown {
-		next := int64(float64(rate) * linkShaperDownStep)
+		step := linkShaperDownStep
+		if w.loss > linkShaperHeavyLoss {
+			step = linkShaperHeavyDownStep
+		}
+		next := int64(float64(rate) * step)
+		s.upStep = 0
 		if mode == linkShapingManual {
 			if floor := int64(float64(s.max.Load()) * linkShaperFloor); next < floor {
 				next = floor
@@ -465,7 +473,10 @@ func (s *linkShaper) stepLocked(now time.Time, w linkWindow) {
 			limit = capped
 		}
 	}
-	next := int64(float64(rate) * linkShaperUpStep)
+	if s.upStep < linkShaperUpStep {
+		s.upStep = linkShaperUpStep
+	}
+	next := int64(float64(rate) * s.upStep)
 	if next > limit {
 		next = limit
 	}
@@ -473,9 +484,46 @@ func (s *linkShaper) stepLocked(now time.Time, w linkWindow) {
 		s.rate.Store(next)
 		log.Printf("fxp link shaper %s clean at %dMbit/s, rate up to %dMbit/s (limit %dMbit/s)", s.key, rate/linkShaperBytesPerMbps, next/linkShaperBytesPerMbps, limit/linkShaperBytesPerMbps)
 	}
+	// 下一轮步子翻倍：1%、2%、4%、8%、10%。
+	if s.upStep = 1 + (s.upStep-1)*2; s.upStep > linkShaperUpStepMax {
+		s.upStep = linkShaperUpStepMax
+	}
 }
 
-// rememberLocked：自动模式连续十秒干净的速率就是限速点，记下来（变化超过 2% 才写）。
+// sustainedPeakLocked 是最近几秒里最高的三秒平均送达速率（不足三秒就按单秒最高）。
+// 只看末尾连续有流量的那几秒：闲了一阵再开始测速时，前面的空秒不能把平均拉到
+// 实际送达的三分之一。
+func (s *linkShaper) sustainedPeakLocked() float64 {
+	active := s.windows
+	for i := len(s.windows) - 1; i >= 0; i-- {
+		if s.windows[i].delivered < linkShaperAutoMinDelivered {
+			active = s.windows[i+1:]
+			break
+		}
+	}
+	peak := 0.0
+	n := len(active)
+	if n >= linkShaperAutoAverageSpan {
+		for i := 0; i+linkShaperAutoAverageSpan <= n; i++ {
+			sum := 0.0
+			for _, item := range active[i : i+linkShaperAutoAverageSpan] {
+				sum += item.delivered
+			}
+			if avg := sum / linkShaperAutoAverageSpan; avg > peak {
+				peak = avg
+			}
+		}
+		return peak
+	}
+	for _, item := range active {
+		if item.delivered > peak {
+			peak = item.delivered
+		}
+	}
+	return peak
+}
+
+// rememberLocked：自动模式连续五秒干净的速率就是限速点，记下来（变化超过 2% 才写）。
 func (s *linkShaper) rememberLocked(now time.Time, rate int64) {
 	learned := s.learned.Load()
 	if learned > 0 && abs64(rate-learned) < int64(float64(learned)*linkShaperLearnedDelta) {
@@ -483,6 +531,8 @@ func (s *linkShaper) rememberLocked(now time.Time, rate int64) {
 	}
 	s.learned.Store(rate)
 	s.descentStart = 0
+	// 上探的步子不在这里重置：记住一个值不等于碰到丢包，步子继续翻倍，
+	// 之前学低了的值才能几轮之内补回来；碰到丢包那一支才把步子归零。
 	s.applyPacingLocked(rate)
 	if learned <= 0 {
 		log.Printf("fxp link shaper %s auto: learned rate limit %dMbit/s", s.key, rate/linkShaperBytesPerMbps)
@@ -597,16 +647,30 @@ func linkShapingSettings(direction string, cfg config) (mode linkShapingMode, mb
 }
 
 // linkShaperFor 按方向（up：往出口方向；down：往入口方向）和隧道号取整形器，
-// 并把这份配置应用上去。关着也返回同一个整形器（速率 0，写帧不等）：连接拿着
+// 并把这份配置应用上去（配置生效时用；建连时用 linkShaperHandle）。关着也返回同一个整形器（速率 0，写帧不等）：连接拿着
 // 稳定的句柄，之后热更新打开，已有的长连接立刻跟着受限，不用等重连。
 // 隧道号为 0（测试直接拼的配置）不整形。
 func linkShaperFor(direction string, cfg config) *linkShaper {
-	if cfg.TunnelID <= 0 {
+	s := linkShaperHandle(direction, cfg)
+	if s == nil {
 		return nil
 	}
 	mode, mbps, hint := linkShapingSettings(direction, cfg)
+	s.configure(mode, mbps, hint)
+	return s
+}
+
+// linkShaperHandle 只取句柄，不改档位：给建连的地方用。连接池、探测协程手里
+// 的配置可能是热更新之前拷的那份（没有 linkShaping 字段），要是按它重新配置，
+// 每补一条连接就把面板刚打开的「自动」拨回「关」。档位只在 linkShapersApply
+// 里跟着生效的配置走。
+func linkShaperHandle(direction string, cfg config) *linkShaper {
+	if cfg.TunnelID <= 0 {
+		return nil
+	}
 	key := direction + ":" + strconv.Itoa(cfg.TunnelID)
 	linkShapers.mu.Lock()
+	defer linkShapers.mu.Unlock()
 	s := linkShapers.byKey[key]
 	if s == nil {
 		s = newLinkShaper(key, direction, cfg.TunnelID)
@@ -620,8 +684,6 @@ func linkShaperFor(direction string, cfg config) *linkShaper {
 		s.panelURL, s.token = url, token
 		startLinkShaperReporter()
 	}
-	linkShapers.mu.Unlock()
-	s.configure(mode, mbps, hint)
 	return s
 }
 

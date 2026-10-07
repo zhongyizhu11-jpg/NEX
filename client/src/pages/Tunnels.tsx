@@ -3650,10 +3650,7 @@ function TunnelsContent() {
         </div>
         <div className="space-y-2 rounded-md border border-border/50 bg-background/60 px-3 py-2">
           <div className="flex min-w-0 items-center justify-between gap-3">
-            <span className="min-w-0">
-              <span className="block text-sm font-medium">链路整形</span>
-              <span className="block text-xs text-muted-foreground">两端之间有硬限速（云联网地域间带宽、公网带宽上限）时，把发送速率压在限速点之下：不丢包、不抖、多连接也贴着上限跑。</span>
-            </span>
+            <span className="min-w-0 text-sm font-medium">链路整形</span>
             <Select value={form.linkShapingMode} onValueChange={(value) => setForm((prev) => ({ ...prev, linkShapingMode: normalizeLinkShapingMode(value) }))}>
               <SelectTrigger className="h-9 w-28 shrink-0" aria-label="链路整形"><SelectValue /></SelectTrigger>
               <SelectContent>
@@ -3664,31 +3661,21 @@ function TunnelsContent() {
             </Select>
           </div>
           {form.linkShapingMode === "auto" && (
-            <div className="space-y-1">
-              <span className="block text-xs text-muted-foreground">
-                平时不整形；一旦出现「发送端有积压 + 重传」就是撞上了限速器，FXP 立刻按观察到的速率开始整形，再找到不丢包的最高点记住，重启不丢。需要两端 Agent 2.2.212 起。
-              </span>
-              {form.linkShapingStatus.length > 0 ? (
-                <ul className="space-y-0.5 text-xs">
-                  {form.linkShapingStatus.map((item) => (
-                    <li key={`${item.hostId}:${item.direction}`} className="text-foreground/80">{describeLinkShapingStatus(item)}</li>
-                  ))}
-                </ul>
-              ) : (
-                <span className="block text-xs text-muted-foreground">两端 Agent 升级后，这里会显示每个方向的状态和学到的限速点。</span>
-              )}
-            </div>
+            form.linkShapingStatus.length > 0 ? (
+              <ul className="space-y-0.5 text-xs">
+                {form.linkShapingStatus.map((item) => (
+                  <li key={`${item.hostId}:${item.direction}`} className="text-foreground/80">{describeLinkShapingStatus(item)}</li>
+                ))}
+              </ul>
+            ) : (
+              <span className="block text-xs text-muted-foreground">暂无上报</span>
+            )
           )}
           {form.linkShapingMode === "manual" && (
-            <>
-              <div className="grid gap-2 sm:grid-cols-2">
-                {renderLinkMbpsInput("入口 → 出口（上行）", "linkUpMbps")}
-                {renderLinkMbpsInput("出口 → 入口（下行）", "linkDownMbps")}
-              </div>
-              <span className="block text-xs text-muted-foreground">
-                填 iperf3 测出来的实际吞吐（网络测试「iperf3 客户端」，UDP 模式测限速点最准）或购买的带宽：FXP 从 96% 起步，按重传在 60% 到 100% 之间自动微调。至少填一个方向。
-              </span>
-            </>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {renderLinkMbpsInput("入口 → 出口（上行）", "linkUpMbps")}
+              {renderLinkMbpsInput("出口 → 入口（下行）", "linkDownMbps")}
+            </div>
           )}
         </div>
         {form.udpOverTcp && form.forwardxVersion === "v1" && (
