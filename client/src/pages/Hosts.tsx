@@ -1,3 +1,10 @@
+import {
+  describeHostEgressShaping,
+  normalizeHostEgressMbpsInput,
+  normalizeHostEgressShapingMode,
+  type HostEgressShapingMode,
+  HOST_EGRESS_MBPS_MAX,
+} from "@/components/hosts/hostEgressShaping";
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { FormField } from "@/components/ui/form-field";
 import EmptyState from "@/components/EmptyState";
@@ -589,6 +596,8 @@ type HostFormData = {
   blockHttp: boolean;
   blockSocks: boolean;
   blockTls: boolean;
+  egressShapingMode: HostEgressShapingMode;
+  egressMbps: number;
 };
 
 const defaultFormData: HostFormData = {
@@ -623,6 +632,8 @@ const defaultFormData: HostFormData = {
   blockHttp: false,
   blockSocks: false,
   blockTls: false,
+  egressShapingMode: "off",
+  egressMbps: 0,
 };
 
 function clampMonthlyResetDay(value: number) {
@@ -2085,6 +2096,8 @@ function HostsContent() {
       blockHttp: !!host.blockHttp,
       blockSocks: !!host.blockSocks,
       blockTls: !!host.blockTls,
+      egressShapingMode: normalizeHostEgressShapingMode(host.egressShapingMode),
+      egressMbps: normalizeHostEgressMbpsInput(host.egressMbps),
     });
     setEditingId(host.id);
     setEditingHostSnapshot(host);
@@ -2190,6 +2203,13 @@ function HostsContent() {
     const protocolPolicyPayload = user?.role === "admin"
       ? { blockHttp: form.blockHttp, blockSocks: form.blockSocks, blockTls: form.blockTls }
       : {};
+    if (user?.role === "admin" && form.egressShapingMode === "manual" && form.egressMbps <= 0) {
+      toast.error("公网出口整形选了手动，需要填公网带宽上限（Mbit/s）");
+      return;
+    }
+    const egressShapingPayload = user?.role === "admin"
+      ? { egressShapingMode: form.egressShapingMode, egressMbps: form.egressShapingMode === "manual" ? form.egressMbps : 0 }
+      : {};
 
     if (editingId) {
       updateMutation.mutate({
@@ -2205,6 +2225,7 @@ function HostsContent() {
         portAllowlist: customPorts.normalized || null,
         ...trafficConfigPayload,
         ...protocolPolicyPayload,
+        ...egressShapingPayload,
       });
     } else {
       const ip = (form.ip || entry || "unknown").trim();
@@ -2220,6 +2241,7 @@ function HostsContent() {
         portAllowlist: customPorts.normalized || null,
         ...trafficConfigPayload,
         ...protocolPolicyPayload,
+        ...egressShapingPayload,
       });
     }
   };
@@ -3629,6 +3651,46 @@ function HostsContent() {
                         </div>
                       </div>
                       <p className="mt-1.5 px-3 text-xs text-muted-foreground">当月没有该日期时按最后一天重置。</p>
+                      <div className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="min-w-0 space-y-0.5">
+                          <Label className="text-sm font-medium">公网出口整形</Label>
+                          {form.egressShapingMode === "auto" ? (
+                            <p className="text-xs text-muted-foreground" data-host-egress-status="">
+                              {describeHostEgressShaping(editingHostRow?.egressShapingStatus)}
+                            </p>
+                          ) : null}
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2">
+                          {form.egressShapingMode === "manual" ? (
+                            <div className="flex h-8 w-36 overflow-hidden rounded-md border border-input bg-background focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2">
+                              <Input aria-label="公网带宽上限（Mbit/s）"
+                                className="h-8 min-w-0 rounded-none border-0 px-2 text-right tabular-nums focus-visible:ring-0 focus-visible:ring-offset-0"
+                                type="number"
+                                min={0}
+                                max={HOST_EGRESS_MBPS_MAX}
+                                inputMode="numeric"
+                                placeholder="例如: 500"
+                                value={form.egressMbps > 0 ? form.egressMbps : ""}
+                                onChange={(e) => setForm({ ...form, egressMbps: normalizeHostEgressMbpsInput(e.target.value) })}
+                              />
+                              <span className="flex h-8 shrink-0 items-center border-l border-border/60 bg-muted/50 px-2 text-xs text-muted-foreground">Mbit/s</span>
+                            </div>
+                          ) : null}
+                          <Select
+                            value={form.egressShapingMode}
+                            onValueChange={(value) => setForm({ ...form, egressShapingMode: normalizeHostEgressShapingMode(value) })}
+                          >
+                            <SelectTrigger aria-label="公网出口整形" className="h-8 w-24">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="auto">自动</SelectItem>
+                              <SelectItem value="manual">手动</SelectItem>
+                              <SelectItem value="off">关</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      </div>
                       <div className="mt-2.5 space-y-2 rounded-md bg-muted/35 px-3 py-2.5">
                         <FormField className="flex min-h-8 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                           <div className="flex min-w-0 items-center gap-2">

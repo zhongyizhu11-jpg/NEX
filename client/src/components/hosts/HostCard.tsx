@@ -41,6 +41,7 @@ import {
 import { parseHostOs } from "@shared/hostOs";
 import { HostOsGlyph } from "./HostOsBadge";
 import { FxpRuntimeBadge } from "./FxpRuntimeBadge";
+import { hostEgressShapingCardText } from "./hostEgressShaping";
 import {
   formatBytes,
   formatCpuPercent,
@@ -423,12 +424,19 @@ export default function HostCard({
       </div>
     </div>
   );
+  // 公网出口整形在起作用（或出了状况）时在流量下面加一行；关着、在观察时什么都不显示。
+  const egressShapingText = hostEgressShapingCardText(host);
   const renderTrafficSplitBox = () => (
     <div className={`border-t border-[var(--fx-stroke-weak)] pt-2 ${trafficPanelClass}`}>
       <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,1fr)] divide-x divide-[var(--fx-stroke-weak)]">
         {renderTrafficColumn({ label: currentTrafficLabel, inValue: currentTrafficInLabel, outValue: currentTrafficOutLabel, title: currentTrafficTitle, className: "pr-2" })}
         {renderTrafficColumn({ label: "累计", inValue: systemTrafficInLabel, outValue: systemTrafficOutLabel, title: systemTrafficTitle, className: "pl-2" })}
       </div>
+      {egressShapingText ? (
+        <p className="mt-1 truncate text-[11px] leading-snug text-muted-foreground" title={egressShapingText} data-host-egress-shaping="">
+          {egressShapingText}
+        </p>
+      ) : null}
     </div>
   );
   const billingBadge = hostBillingBadge(host.trafficBilling);

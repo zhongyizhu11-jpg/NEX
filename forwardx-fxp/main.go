@@ -207,7 +207,7 @@ const (
 	fxpUDPIdleTimeout    = 5 * time.Minute
 	fxpProtocolSampleMax = 512
 	fxpMasterContext     = "forwardx-fxp-v2 master"
-	fxpRuntimeVersion    = "2.2.128"
+	fxpRuntimeVersion    = "2.2.129"
 	fxpFallbackRetry     = 5 * time.Second
 	// A node that stays down is re-probed on a growing delay, because probing a
 	// peer that accepts but never answers costs a whole handshake timeout.
@@ -1871,6 +1871,7 @@ func (s *udpEntrySession) readLoop() {
 			s.inFlight.Add(-1)
 			return
 		}
+		linkShaperEgress().wait(len(frame))
 		if _, err := s.conn.WriteToUDP(frame, s.clientAddr); err != nil {
 			if !isClosedErr(err) {
 				log.Printf("entry udp client write failed tunnel=%d rule=%d client=%s: %v", s.cfg.TunnelID, s.cfg.RuleID, s.clientAddr, err)
@@ -2041,6 +2042,8 @@ func handleExitUDP(sec *secureConn, hello helloFrame, cfg config) error {
 				errCh <- nil
 				return
 			}
+			// 出口往目标发的 UDP 也从这台机器的公网出口出去。
+			linkShaperEgress().wait(len(frame))
 			if _, err := target.Write(frame); err != nil {
 				errCh <- err
 				return
@@ -2215,6 +2218,8 @@ func proxyPlainSecureWithPolicy(plain net.Conn, sec frameConn, inLimiter, outLim
 // 的字节，outCounter 记加密 → plain 的；入口的 plain 是客户端，出口的 plain 是目标，
 // 方向正好相反，由调用方决定哪个算 in。
 func proxyPlainSecureCounted(plain net.Conn, sec frameConn, inLimiter, outLimiter *limiter, inCounter, outCounter *atomic.Uint64, policy protocolPolicy, onBlock func(string), initialSample []byte) error {
+	// 明文侧的套接字挂到主机公网出口整形器上：自动档靠它们的重传率找限速点。
+	linkShaperEgress().attach(plain)
 	errCh := make(chan error, 2)
 	go func() {
 		errCh <- catchPanic("plain to secure copy", func() error {
@@ -2346,6 +2351,8 @@ func copySecureToPlain(dst net.Conn, src frameConn, limiter *limiter, counter *a
 			return nil
 		}
 		limiter.wait(len(frame))
+		// 往明文侧（入口的客户端、出口的目标）发的字节走主机公网出口整形。
+		linkShaperEgress().wait(len(frame))
 		if _, err := dst.Write(frame); err != nil {
 			return err
 		}

@@ -287,6 +287,10 @@ export const hosts = table("hosts", {
   expiryHandling: varchar("expiryHandling", { length: 24 }).notNull().default("none"),
   trafficLimit: bigint("trafficLimit", { mode: "number" }).notNull().default(0),
   trafficMeasureMode: varchar("trafficMeasureMode", { length: 16 }).notNull().default("both"),
+  // 主机公网出口整形（forwardx-fxp/link_shaper.go 的 egress）：off / auto / manual，
+  // manual 时 egressMbps 是公网带宽上限（Mbit/s）。
+  egressShapingMode: varchar("egressShapingMode", { length: 16 }).notNull().default("off"),
+  egressMbps: int("egressMbps").notNull().default(0),
   telegramTrafficAlertEnabled: boolean("telegramTrafficAlertEnabled").notNull().default(false),
   trafficAlertThresholdPercent: int("trafficAlertThresholdPercent").notNull().default(20),
   telegramRenewalReminderEnabled: boolean("telegramRenewalReminderEnabled").notNull().default(false),

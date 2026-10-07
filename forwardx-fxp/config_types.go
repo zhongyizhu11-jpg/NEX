@@ -86,6 +86,13 @@ type config struct {
 	LinkDownMbps     int    `json:"linkDownMbps,omitempty"`
 	LinkUpHintMbps   int    `json:"linkUpHintMbps,omitempty"`
 	LinkDownHintMbps int    `json:"linkDownHintMbps,omitempty"`
+	// 主机公网出口整形（也在 link_shaper.go）：这台机器往客户端、往目标发的所有明文
+	// 流量合起来整形到公网带宽上限之下，机房的限速器不再丢包。档位同上，EgressMbps
+	// 是手动上限，EgressHintMbps 是自动模式的提示值。整台机器一个，入口组里写在任一
+	// 条目上都行。
+	EgressShaping    string `json:"egressShaping,omitempty"`
+	EgressMbps       int    `json:"egressMbps,omitempty"`
+	EgressHintMbps   int    `json:"egressHintMbps,omitempty"`
 	PanelURL         string `json:"panelUrl"`
 	Token            string `json:"token"`
 	RelayExitHost    string `json:"relayExitHost,omitempty"`

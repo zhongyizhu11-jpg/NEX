@@ -138,6 +138,11 @@ func reportLinkShapers() {
 		if panelURL == "" || token == "" {
 			continue
 		}
+		// 主机公网出口整形只由领头的进程报，其它进程的只是它的影子。
+		if s.shared != nil && !s.shared.isLeader() {
+			s.changed.Store(false)
+			continue
+		}
 		s.changed.Store(false)
 		key := linkShaperReportKey{panelURL: panelURL, token: token, role: role, tunnelID: s.tunnelID}
 		groups[key] = append(groups[key], s.snapshot())

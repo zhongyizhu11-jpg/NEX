@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -446,5 +447,144 @@ func TestLinkShaperConfigModesAndDirections(t *testing.T) {
 		if err := validateConfig(bad); err == nil {
 			t.Fatalf("config %+v must be rejected", bad)
 		}
+	}
+}
+
+// 主机公网出口整形：整台机器一个，入口组里任一条目带档位就生效；明文侧写入按它等。
+func TestLinkShaperHostEgress(t *testing.T) {
+	linkShaperStateDir = t.TempDir()
+	linkEgress.Store(nil)
+	// 没配过：不建整形器，写入不等。
+	linkShapersApply(config{Role: "exit", TunnelID: 81, LinkShaping: "auto"})
+	if linkShaperEgress() != nil {
+		t.Fatal("egress shaper must not exist until configured")
+	}
+	linkShaperEgress().wait(1 << 20)
+	linkShaperEgress().attach(nil)
+	// 入口组：顶层没有，条目上有。
+	group := config{Role: "entry-group", TunnelID: 81, Entries: []config{
+		{Role: "entry", TunnelID: 81, Key: "a", PanelURL: "http://panel", Token: "t"},
+		{Role: "entry", TunnelID: 81, Key: "b", EgressShaping: "manual", EgressMbps: 500},
+	}}
+	linkShapersApply(group)
+	s := linkShaperEgress()
+	if s == nil || s.direction != "egress" || s.tunnelID != 0 || s.role != "entry" || s.panelURL != "http://panel" {
+		t.Fatalf("egress shaper = %+v", s)
+	}
+	if s.rate.Load() != int64(500*linkShaperBytesPerMbps*linkShaperHeadroom) || s.currentMode() != linkShapingManual {
+		t.Fatalf("manual 500 must start at 480Mbit/s, got %d mode=%s", s.rate.Load()/linkShaperBytesPerMbps, s.currentMode())
+	}
+	status := s.snapshot()
+	if status.Direction != "egress" || status.Mode != "manual" || status.State != "shaping" || status.RateMbps != 480 {
+		t.Fatalf("snapshot = %+v", status)
+	}
+	found := false
+	for _, item := range linkShapersSnapshot() {
+		if item == s {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("egress shaper must be reported")
+	}
+	// 出口进程：顶层配置带档位；提示值给自动档起步。
+	linkShapersApply(config{Role: "exit", TunnelID: 82, EgressShaping: "auto", EgressHintMbps: 490})
+	if s2 := linkShaperEgress(); s2 != s || s.currentMode() != linkShapingAuto || s.role != "exit" || s.learned.Load() != 490*linkShaperBytesPerMbps {
+		t.Fatalf("auto with hint: same=%v mode=%s role=%s learned=%d", s2 == s, s.currentMode(), s.role, s.learned.Load()/linkShaperBytesPerMbps)
+	}
+	// 热更新关掉：句柄不变，速率归零。
+	linkShapersApply(config{Role: "exit", TunnelID: 82, EgressShaping: "off"})
+	if s.rate.Load() != 0 || s.currentMode() != linkShapingOff {
+		t.Fatalf("off left rate=%d mode=%s", s.rate.Load(), s.currentMode())
+	}
+	if err := validateConfig(config{Role: "exit", Key: "k", ListenPort: 1000, TunnelID: 1, EgressShaping: "sometimes"}); err == nil {
+		t.Fatal("bad egressShaping must be rejected")
+	}
+	if err := validateConfig(config{Role: "exit", Key: "k", ListenPort: 1000, TunnelID: 1, EgressMbps: linkShaperMaxMbps + 1}); err == nil {
+		t.Fatal("bad egressMbps must be rejected")
+	}
+	linkEgress.Store(nil)
+}
+
+// 主机公网出口整形跨进程共享的桶：一台机器上好几个 FXP 进程从同一个虚拟时钟领额度，
+// 领头的进程汇总所有进程的量来决策，其它进程跟着它的速率走。
+func TestLinkShaperSharedBucket(t *testing.T) {
+	dir := t.TempDir()
+	a, err := openLinkShaperShared(dir)
+	if err != nil {
+		t.Skipf("shared bucket unavailable here: %v", err)
+	}
+	defer a.close()
+	b, err := openLinkShaperShared(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.close()
+	if a.slot == b.slot {
+		t.Fatalf("two handles must take two slots, both got %d", a.slot)
+	}
+	now := time.Now()
+	if !a.electLeader(now) || b.electLeader(now) {
+		t.Fatal("exactly the first handle must hold the lock")
+	}
+	// 领头的把别的进程发布的量加进来（第一次见到一个槽只记基线）。
+	b.publish(now, 1000, 10, 100, 5000, true)
+	a.aggregate(now)
+	b.publish(now, 1000, 10, 100, 5000, true)
+	acked, retrans, segs, sent, busy := a.aggregate(now)
+	if acked != 1000 || retrans != 10 || segs != 100 || sent != 5000 || !busy {
+		t.Fatalf("aggregate = %d/%d/%d/%d/%v", acked, retrans, segs, sent, busy)
+	}
+	// 槽被新进程占了从 0 重新累计：不算成负数。
+	if linkSharedDelta(5, 100) != 5 || linkSharedDelta(100, 5) != 95 {
+		t.Fatal("delta must survive a slot reset")
+	}
+
+	// 两个整形器共用一个桶：合计速率是一份，不是两份。
+	sa, sb := testShaper(t, "egress:a"), testShaper(t, "egress:b")
+	sa.shared, sb.shared = a, b
+	rate := int64(10 * 1000 * 1000) // 10 MB/s
+	sa.rate.Store(rate)
+	sb.rate.Store(rate)
+	var total atomic.Int64
+	var wg sync.WaitGroup
+	start := time.Now()
+	for _, s := range []*linkShaper{sa, sb} {
+		wg.Add(1)
+		go func(s *linkShaper) {
+			defer wg.Done()
+			for time.Since(start) < 300*time.Millisecond {
+				s.wait(8192)
+				total.Add(8192)
+			}
+		}(s)
+	}
+	wg.Wait()
+	elapsed := time.Since(start).Seconds()
+	got := float64(total.Load()) / elapsed
+	if got > float64(rate)*1.25 || got < float64(rate)*0.7 {
+		t.Fatalf("two shapers on one shared bucket sent %.1f MB/s, want about %.1f MB/s", got/1e6, float64(rate)/1e6)
+	}
+
+	// 领头的进程配置好的速率、学到的值，其它进程下一秒就跟上。
+	sa.configure(linkShapingManual, 80, 0)
+	sb.configure(linkShapingAuto, 0, 0)
+	if sb.rate.Load() != 0 {
+		t.Fatal("a follower in auto mode starts without a rate")
+	}
+	sb.lastTick = now.Add(-time.Second)
+	sb.tick(now)
+	if sb.rate.Load() != sa.rate.Load() || sb.rate.Load() != int64(80*linkShaperBytesPerMbps*linkShaperHeadroom) {
+		t.Fatalf("follower rate %d, leader rate %d", sb.rate.Load(), sa.rate.Load())
+	}
+	if sb.snapshot().State != "shaping" {
+		t.Fatalf("follower state = %s", sb.snapshot().State)
+	}
+	// 领头的关掉，跟随的也归零。
+	sa.configure(linkShapingOff, 0, 0)
+	sb.lastTick = now
+	sb.tick(now.Add(time.Second))
+	if sb.rate.Load() != 0 {
+		t.Fatalf("follower must stop when the leader stops, rate=%d", sb.rate.Load())
 	}
 }

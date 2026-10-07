@@ -51,3 +51,45 @@ func containsKey(raw []byte, key string) bool {
 	_, ok := m[key]
 	return ok
 }
+
+// 主机公网出口整形的三个字段也要原样进 FXP 配置：档位和手动上限进签名，提示值不进。
+func TestFXPSpecCarriesEgressShapingFields(t *testing.T) {
+	var spec fxpSpec
+	if err := json.Unmarshal([]byte(`{"role":"entry","tunnelId":9,"ruleId":1,"listenPort":1000,"key":"k","egressShaping":"auto","egressMbps":500,"egressHintMbps":488}`), &spec); err != nil {
+		t.Fatal(err)
+	}
+	if spec.EgressShaping != "auto" || spec.EgressMbps != 500 || spec.EgressHintMbps != 488 {
+		t.Fatalf("parsed egress fields = %+v", spec)
+	}
+	base := fxpServerSignature(spec)
+	changed := spec
+	changed.EgressShaping = "off"
+	if fxpServerSignature(changed) == base {
+		t.Fatal("egress mode change must change the signature")
+	}
+	limit := spec
+	limit.EgressMbps = 450
+	if fxpServerSignature(limit) == base {
+		t.Fatal("egress limit change must change the signature")
+	}
+	hinted := spec
+	hinted.EgressHintMbps = 1
+	if fxpServerSignature(hinted) != base {
+		t.Fatal("egress hint change must not change the signature")
+	}
+	out, err := json.Marshal(normalizeFXPSpec(spec))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back map[string]any
+	if err := json.Unmarshal(out, &back); err != nil {
+		t.Fatal(err)
+	}
+	if back["egressShaping"] != "auto" || back["egressMbps"] != float64(500) || back["egressHintMbps"] != float64(488) {
+		t.Fatalf("fxp config lost the egress fields: %s", out)
+	}
+	zero, _ := json.Marshal(fxpSpec{Role: "exit", TunnelID: 9})
+	if containsKey(zero, "egressShaping") || containsKey(zero, "egressMbps") || containsKey(zero, "egressHintMbps") {
+		t.Fatalf("unset egress fields must be omitted: %s", zero)
+	}
+}

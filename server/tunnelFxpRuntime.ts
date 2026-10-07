@@ -91,6 +91,26 @@ export function normalizeTunnelLinkShapingMode(value: unknown): TunnelLinkShapin
   return mode === "manual" || mode === "off" ? mode : "auto";
 }
 
+/**
+ * 主机公网出口整形（FXP 的 egress 整形器）：这台机器往客户端、往目标发的所有明文
+ * 流量合起来整形到机房公网带宽上限之下。默认关：客户端来自四面八方，随机丢包
+ * 不该让整台机器减速；只在确定有公网限速器的机器上打开。
+ */
+export type HostEgressShapingMode = "auto" | "manual" | "off";
+
+export function normalizeHostEgressShapingMode(value: unknown): HostEgressShapingMode {
+  const mode = String(value || "").trim().toLowerCase();
+  return mode === "manual" || mode === "auto" ? mode : "off";
+}
+
+export function hostEgressShaping(host: any): { mode: HostEgressShapingMode; mbps: number } {
+  const parsed = Math.floor(Number(host?.egressMbps));
+  const mbps = Number.isFinite(parsed) && parsed > 0 ? Math.min(TUNNEL_LINK_MBPS_MAX, parsed) : 0;
+  const mode = normalizeHostEgressShapingMode(host?.egressShapingMode);
+  if (mode === "manual") return { mode: mbps > 0 ? "manual" : "off", mbps };
+  return { mode, mbps: 0 };
+}
+
 export function tunnelLinkShaping(tunnel: any): { mode: TunnelLinkShapingMode; upMbps: number; downMbps: number } {
   if (!isForwardXTunnel(tunnel)) return { mode: "off", upMbps: 0, downMbps: 0 };
   const clamp = (value: unknown) => {

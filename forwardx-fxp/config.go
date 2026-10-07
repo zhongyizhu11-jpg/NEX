@@ -241,7 +241,12 @@ func validateLinkShaping(cfg config) error {
 		default:
 			return fmt.Errorf("bad linkShaping %q", item.LinkShaping)
 		}
-		for name, value := range map[string]int{"linkUpMbps": item.LinkUpMbps, "linkDownMbps": item.LinkDownMbps, "linkUpHintMbps": item.LinkUpHintMbps, "linkDownHintMbps": item.LinkDownHintMbps} {
+		switch strings.ToLower(strings.TrimSpace(item.EgressShaping)) {
+		case "", "auto", "manual", "off":
+		default:
+			return fmt.Errorf("bad egressShaping %q", item.EgressShaping)
+		}
+		for name, value := range map[string]int{"linkUpMbps": item.LinkUpMbps, "linkDownMbps": item.LinkDownMbps, "linkUpHintMbps": item.LinkUpHintMbps, "linkDownHintMbps": item.LinkDownHintMbps, "egressMbps": item.EgressMbps, "egressHintMbps": item.EgressHintMbps} {
 			if value < 0 || value > linkShaperMaxMbps {
 				return fmt.Errorf("bad %s %d", name, value)
 			}
