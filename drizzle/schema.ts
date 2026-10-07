@@ -29,7 +29,7 @@ import {
 } from "drizzle-orm/pg-core";
 
 /**
- * MySQL schema for ForwardX.
+ * MySQL schema for NEX.
  *
  * Notes:
  * - Time fields are stored as Unix epoch seconds to keep compatibility with the

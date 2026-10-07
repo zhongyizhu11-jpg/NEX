@@ -654,7 +654,7 @@ export const BUILTIN_PLUGIN_STORE_ITEMS: PluginStoreItem[] = [
     branch: "main",
     manifestPath: "plugins/live2d-widget/forwardx-plugin.json",
     homepage: "https://github.com/stevenjoezhang/live2d-widget",
-    author: "stevenjoezhang / ForwardX",
+    author: "stevenjoezhang / NEX",
     packageRepository: "https://github.com/zhongyizhu11-jpg/NEX",
     packageBranch: "main",
     packagePath: "plugins/packages/live2d-widget.tar.gz",

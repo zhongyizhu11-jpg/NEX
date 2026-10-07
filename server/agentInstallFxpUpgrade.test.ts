@@ -144,7 +144,7 @@ test("FXP 本来就没装、这次也下不来：Agent 照常升级，打醒目�
   assert.equal(result.status, 0, result.output);
   assert.equal(result.agent, "new agent\n");
   assert.equal(result.fxp, null);
-  assert.match(result.output, /ForwardX FXP 升级失败（已重试 3 次）/);
+  assert.match(result.output, /NEX FXP 升级失败（已重试 3 次）/);
 });
 
 test("Agent 下不来：什么都不换，重试 3 次后退出非 0", () => {
@@ -193,7 +193,7 @@ test("fxp_binary_version 的取值和 Agent 上报的一致", () => {
 test("全新安装拿不到 FXP 时照旧继续，但警告要醒目", () => {
   const start = script.indexOf("install_go_agent() {");
   const install = script.slice(start, script.indexOf("\n}\n", start));
-  assert.match(install, /stage_release_binary "forwardx-fxp-linux-\$\{GO_ARCH\}" "\$FXP_BIN" "ForwardX FXP" "0"/);
+  assert.match(install, /stage_release_binary "forwardx-fxp-linux-\$\{GO_ARCH\}" "\$FXP_BIN" "NEX FXP" "0"/);
   assert.match(install, /warn_fxp_unavailable "安装"/);
   assert.match(install, /return 0/);
 });

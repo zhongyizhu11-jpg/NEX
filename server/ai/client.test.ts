@@ -31,7 +31,7 @@ function completion(content: unknown) {
   });
 }
 
-test("validates structured responses against the ForwardX skill schema", async () => {
+test("validates structured responses against the NEX skill schema", async () => {
   const bodies: any[] = [];
   const client = new ForwardxAiClient({
     fetchImpl: (async (_url, init) => {

@@ -9,7 +9,7 @@ import {
 } from "./forwardxCore";
 import { aiSkillRegistry } from "./registry";
 
-test("registers the versioned ForwardX core skill and exposes read/write tools", () => {
+test("registers the versioned NEX core skill and exposes read/write tools", () => {
   assert.deepEqual(aiSkillRegistry.get("forwardx-core"), forwardxCoreSkill);
   assert.ok(forwardxCoreSkill.tools.some((tool) => tool.mode === "read"));
   assert.ok(forwardxCoreSkill.tools.some((tool) => tool.mode === "write" && tool.requiresConfirmation));

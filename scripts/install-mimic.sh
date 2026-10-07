@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# ForwardX Mimic installer — standalone, no external script dependencies.
+# NEX Mimic installer — standalone, no external script dependencies.
 # Installs mimic binary + DKMS kernel module directly from hack3ric/mimic releases.
-# Does not configure WireGuard or ForwardX forwarding rules.
+# Does not configure WireGuard or NEX forwarding rules.
 
 set -Eeuo pipefail
 
@@ -22,11 +22,11 @@ while [ "${GITHUB_ACCELERATOR_URL%/}" != "$GITHUB_ACCELERATOR_URL" ]; do
 done
 
 log() {
-  printf '[ForwardX mimic] %s\n' "$*" >&2
+  printf '[NEX mimic] %s\n' "$*" >&2
 }
 
 die() {
-  printf '[ForwardX mimic] ERROR: %s\n' "$*" >&2
+  printf '[NEX mimic] ERROR: %s\n' "$*" >&2
   exit 1
 }
 
@@ -828,7 +828,7 @@ prompt_source_build() {
     return 1
   fi
   exec 3<>/dev/tty
-  printf '[ForwardX mimic] Compile and install mimic from source? [y/N]: ' >&3
+  printf '[NEX mimic] Compile and install mimic from source? [y/N]: ' >&3
   IFS= read -r answer <&3 || answer=""
   exec 3>&-
   case "$answer" in
@@ -959,7 +959,7 @@ main() {
   current_version="$(installed_mimic_version || true)"
   if verify_mimic && [ "${current_version}" = "${TARGET_VERSION}" ]; then
     log "mimic ${TARGET_VERSION} is ready"
-    log "next: configure the network interface name in ForwardX host management before enabling mimic UDP camouflage"
+    log "next: configure the network interface name in NEX host management before enabling mimic UDP camouflage"
     exit 0
   fi
 

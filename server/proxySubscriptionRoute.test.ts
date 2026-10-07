@@ -89,7 +89,7 @@ test("订阅地址按 token 返回节点，并按客户端 UA 选择格式", () 
     // 两台中转指向同一落地节点，应额外生成自动选路组，且 MATCH 指向主选择器。
     assert.ok(clash.body.includes("name: \"HKT 自动选路\""), clash.body);
     assert.ok(clash.body.includes("type: url-test"), clash.body);
-    assert.ok(clash.body.includes("MATCH,ForwardX"), clash.body);
+    assert.ok(clash.body.includes("MATCH,NEX"), clash.body);
     // 不带 rules 参数是节点订阅：只有节点和选路组，没有分流规则。
     assert.ok(!clash.body.includes("rule-providers:"), clash.body);
     assert.ok(!clash.body.includes("RULE-SET,"), clash.body);
@@ -115,7 +115,7 @@ test("订阅地址按 token 返回节点，并按客户端 UA 选择格式", () 
     // 这里的节点是 VLESS，Surge 不支持，整份被跳过；分组和规则用 Loon 验。
     const loonProfile = await get("/api/sub/token-live?format=loon&rules=1");
     assert.ok(loonProfile.body.includes("HKT 自动选路 = url-test,"), loonProfile.body);
-    assert.ok(loonProfile.body.includes("FINAL,ForwardX"), loonProfile.body);
+    assert.ok(loonProfile.body.includes("FINAL,NEX"), loonProfile.body);
     const loonNodes = await get("/api/sub/token-live?format=loon");
     assert.ok(!loonNodes.body.includes("[Proxy Group]"), loonNodes.body);
 
@@ -137,13 +137,13 @@ test("订阅地址按 token 返回节点，并按客户端 UA 选择格式", () 
     // sing-box 没有「只给节点」的格式，节点订阅同样是完整 profile：
     // 要有 final 指向选择器，但不该有分流规则。
     const singboxNodesRoute = JSON.parse(singbox.body).route;
-    assert.equal(singboxNodesRoute.final, "ForwardX");
+    assert.equal(singboxNodesRoute.final, "NEX");
     assert.equal(singboxNodesRoute.rules, undefined);
     assert.equal(singboxNodesRoute.rule_set, undefined);
 
     const singboxRules = await get("/api/sub/token-live?format=singbox&rules=1");
     const singboxRoute = JSON.parse(singboxRules.body).route;
-    assert.equal(singboxRoute.final, "ForwardX");
+    assert.equal(singboxRoute.final, "NEX");
     // sing-box 用内置的 ip_is_private，不下载私有网段规则集。
     assert.ok(singboxRoute.rules.some((rule) => rule.ip_is_private === true), singboxRules.body.slice(0, 400));
     assert.ok(singboxRoute.rule_set.every((ref) => ref.url.endsWith(".srs")), singboxRules.body.slice(0, 400));

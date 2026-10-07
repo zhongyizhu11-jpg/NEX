@@ -256,7 +256,7 @@ export const rulesRouter = router({
       });
       const agentVersion = oldestAgentVersion(schedulerHosts.map((schedulerHost) => String(schedulerHost?.agentVersion || "").trim()));
       /*
-        UDP、TCP+UDP 和 ForwardX 隧道的线路组要 Agent 2.2.199 起才调度；更老的时候面板不下发
+        UDP、TCP+UDP 和 NEX 隧道的线路组要 Agent 2.2.199 起才调度；更老的时候面板不下发
         调度，流量走路径 A、不切换（server/agentHeartbeatRoute.ts 的 routePrimaryEndpoint）。
         界面据 agentSupportsProtocol 把这件事说出来，别让人以为配了就生效；schedulerNeed 说是
         哪一样要新 Agent，界面的说法跟着换。

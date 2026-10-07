@@ -47,7 +47,7 @@ func runAgentStateLockHelper(t *testing.T, mode string) {
 			_ = lock.Close()
 			t.Fatal("second process unexpectedly acquired the Agent state lock")
 		}
-		if !strings.Contains(err.Error(), "another ForwardX Agent") {
+		if !strings.Contains(err.Error(), "another NEX Agent") {
 			t.Fatalf("second process received an unclear lock error: %v", err)
 		}
 	case "available":

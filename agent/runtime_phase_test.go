@@ -161,7 +161,7 @@ func TestPrepareDesiredActionJobsLinksOnlyRelevantPreviousOwnerRuntime(t *testin
 	gostResult.complete(false)
 	close(gostDone)
 	if !waitForActionPrerequisites(perRule[9911]) {
-		t.Fatal("Nginx to ForwardX V1 was blocked by an unrelated Gost runtime failure")
+		t.Fatal("Nginx to NEX V1 was blocked by an unrelated Gost runtime failure")
 	}
 	if waitForActionPrerequisites(perRule[9912]) {
 		t.Fatal("Gost to Realm ignored its relevant Gost runtime failure")
@@ -369,7 +369,7 @@ func TestQueuedOwnerSnapshotSurvivesDesiredMarkerReplacement(t *testing.T) {
 		&previous,
 		false,
 	) {
-		t.Fatal("queued ForwardX owner was lost after the marker changed to the desired Nginx owner")
+		t.Fatal("queued NEX owner was lost after the marker changed to the desired Nginx owner")
 	}
 	if shouldUsePreviousRuleRuntime(
 		a,

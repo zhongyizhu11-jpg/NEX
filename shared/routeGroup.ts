@@ -69,7 +69,7 @@ export function routeGroupForwardTypeSupported(forwardType: unknown): boolean {
 }
 
 /**
- * 能挂线路组的隧道：GOST 隧道、Nginx 隧道和 ForwardX 隧道。调度器都在隧道出口机上：出口的
+ * 能挂线路组的隧道：GOST 隧道、Nginx 隧道和 NEX 隧道。调度器都在隧道出口机上：出口的
  * gost / nginx / FXP 把流量交给它。
  */
 export const ROUTE_GROUP_TUNNEL_MODES = ["tls", "wss", "tcp", "mtls", "mwss", "mtcp", "nginx_stream", "forwardx"] as const;
@@ -80,7 +80,7 @@ export function routeGroupTunnelModeSupported(mode: unknown): boolean {
 }
 
 /**
- * ForwardX 隧道的线路组：出口 Agent 2.2.199 起。
+ * NEX 隧道的线路组：出口 Agent 2.2.199 起。
  *
  * FXP 的出口是整条隧道共用的一个进程，按入口给的目标拨出去（UDP 按面板给出口的 udpTargets），
  * 出口机上没有这条规则自己的进程可以挂调度器。所以出口机收到一条「只跑调度器」的运行规则
@@ -100,7 +100,7 @@ export function routeGroupNeedsUdpAgent(protocol: unknown): boolean {
 }
 
 /**
- * 调度所在机器的 Agent 至少要多新，面板才下发调度：ForwardX 隧道、UDP、TCP+UDP 要 2.2.199；
+ * 调度所在机器的 Agent 至少要多新，面板才下发调度：NEX 隧道、UDP、TCP+UDP 要 2.2.199；
  * 其余返回 null（老 Agent 照老规矩按主备切）。版本不够时前面的转发工具拨路径 A、不切换。
  */
 export function routeGroupSchedulerAgentVersion(protocol: unknown, tunnelMode?: unknown): string | null {

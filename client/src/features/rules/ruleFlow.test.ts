@@ -52,12 +52,12 @@ test("via 和延迟只标在中间那一段", () => {
     entry: "a:1",
     target: "b:2",
     hops: ["Po0", "Jinx"],
-    via: "ForwardX V2",
+    via: "NEX V2",
     latencyMs: 8,
   });
   const labelled = flow.edges.filter((e) => e.via || e.latencyMs != null);
   assert.equal(labelled.length, 1);
-  assert.equal(labelled[0].via, "ForwardX V2");
+  assert.equal(labelled[0].via, "NEX V2");
   assert.equal(labelled[0].latencyMs, 8);
 });
 
@@ -99,11 +99,11 @@ test("title 带完整链路和延迟，窄屏截断时还读得到", () => {
     entry: "42.194.198.67:22222",
     target: "217.116.172.44:22222",
     hops: ["Po0", "Jinx"],
-    via: "ForwardX V2",
+    via: "NEX V2",
     latencyMs: 8,
   });
   assert.match(flow.title, /42\.194\.198\.67:22222 → Po0 → Jinx → 217\.116\.172\.44:22222/);
-  assert.match(flow.title, /ForwardX V2/);
+  assert.match(flow.title, /NEX V2/);
   assert.match(flow.title, /8 ms/);
 });
 

@@ -96,7 +96,7 @@ test("creates a hosted USDT order with a signed form request", async (t) => {
     network: "tron",
   }, {
     outTradeNo: "FWX100",
-    subject: "ForwardX",
+    subject: "NEX",
     amountCents: 1000,
     notifyUrl: "https://panel.example.com/api/payment/webhook/gmpay",
     returnUrl: "https://panel.example.com/api/payment/return/gmpay",

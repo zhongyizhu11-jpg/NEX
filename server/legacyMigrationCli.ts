@@ -35,7 +35,7 @@ type CliOptions = {
 
 function usage() {
   return [
-    "ForwardX legacy compatibility migration",
+    "NEX legacy compatibility migration",
     "",
     "Usage:",
     "  node dist/migrate-legacy.js [--json]",

@@ -2,7 +2,7 @@
  * 客户端节点模型。
  *
  * 端口转发规则本身只存 host:port，不含任何节点凭据（UUID、密码、加密方式、
- * TLS 参数都没有），因为 ForwardX 是四层转发器，并不知道目标端口后面跑的是
+ * TLS 参数都没有），因为 NEX 是四层转发器，并不知道目标端口后面跑的是
  * 什么协议。所以订阅功能要求用户把落地机的原始节点链接粘贴一次，这里把它
  * 解析成统一模型，之后由 proxySubscription.ts 渲染成各家客户端的格式。
  *
@@ -41,7 +41,7 @@ export const PROXY_NODE_PROTOCOL_LABELS: Record<ProxyNodeProtocol, string> = {
 /**
  * 跑在 QUIC 上的协议，也就是只走 UDP 的那几个。
  *
- * ForwardX 的转发规则可以只放行 TCP。把这类节点绑到一条 TCP-only 的转发上，
+ * NEX 的转发规则可以只放行 TCP。把这类节点绑到一条 TCP-only 的转发上，
  * 客户端能导入、能识别协议，握手时却永远收不到回包 —— 报出来只是一句超时，
  * 跟「转发没放 UDP」毫无字面关联。所以要在绑定时就拦住。
  */

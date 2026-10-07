@@ -280,7 +280,7 @@ async function releaseAssetExistsViaDownloadUrl(tag: string, assetName: string) 
   const headers = {
     "Cache-Control": "no-cache",
     Pragma: "no-cache",
-    "User-Agent": `ForwardX/${APP_VERSION}`,
+    "User-Agent": `NEX/${APP_VERSION}`,
   };
   let res = await fetch(`${url}?_=${Date.now()}`, {
     cache: "no-store",
@@ -316,7 +316,7 @@ async function assertAgentReleaseAssetsReady(agentVersion: string, releaseVersio
       Accept: "application/vnd.github+json",
       "Cache-Control": "no-cache",
       Pragma: "no-cache",
-      "User-Agent": `ForwardX/${APP_VERSION}`,
+      "User-Agent": `NEX/${APP_VERSION}`,
     },
   });
   if (res.status === 404) {

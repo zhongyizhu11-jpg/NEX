@@ -29,14 +29,14 @@ test("direct rules always keep their source port", () => {
   }), 55503);
 });
 
-test("local ForwardX transport version survives a deleted tunnel record", () => {
+test("local NEX transport version survives a deleted tunnel record", () => {
   assert.equal(resolveLocalForwardXTransportVersion({
     reportedTransportVersion: "v2",
     tunnel: undefined,
   }), "v2");
 });
 
-test("missing local ForwardX transport version stays unknown after tunnel deletion", () => {
+test("missing local NEX transport version stays unknown after tunnel deletion", () => {
   assert.equal(resolveLocalForwardXTransportVersion({
     reportedTransportVersion: undefined,
     tunnel: undefined,

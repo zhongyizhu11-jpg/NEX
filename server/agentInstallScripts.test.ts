@@ -164,7 +164,7 @@ test("Agent upgrade stages Agent and FXP before replacing either", () => {
   assert.match(binaries, /stage_release_binary "forwardx-agent-linux-\$\{GO_ARCH\}" "\$GO_AGENT_BIN" "Go Agent" "0"/);
   assert.match(
     binaries,
-    /RELEASE_VERSION="\$FXP_RELEASE_VERSION" stage_release_binary "forwardx-fxp-linux-\$\{GO_ARCH\}" "\$FXP_BIN" "ForwardX FXP" "0"/,
+    /RELEASE_VERSION="\$FXP_RELEASE_VERSION" stage_release_binary "forwardx-fxp-linux-\$\{GO_ARCH\}" "\$FXP_BIN" "NEX FXP" "0"/,
   );
   assert.ok(
     binaries.indexOf('promote_staged_binary "$FXP_BIN"') < binaries.indexOf('promote_staged_binary "$GO_AGENT_BIN"'),
@@ -251,7 +251,7 @@ test("nginx installer validates a staged candidate and preserves the existing ru
 test("Managed systemd units receive bounded logging defaults idempotently", () => {
   const unit = [
     "[Unit]",
-    "Description=ForwardX runtime",
+    "Description=NEX runtime",
     "",
     "[Service]",
     "Type=simple",

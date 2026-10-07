@@ -269,7 +269,7 @@ async function applyAgentRuleStatus(host: any, payload: any, lookups?: AgentStat
     }
     if (isForwardXTunnel(tunnel) && Number(tunnel.exitHostId) !== Number(host.id) && !isExtraExit) {
       if (shouldLogStatus(`tunnel:${tunnelId}:ignored:${host.id}`, `running=${!!isRunning}`, !!message)) {
-        appendPanelLog("info", `[Tunnel] status ignored non-exit ForwardX tunnel=${tunnelId} name=${safeStatusLogText((tunnel as any)?.name)} ${hostLogText} running=${!!isRunning}${logMessage !== "-" ? ` message=${logMessage}` : ""}`);
+        appendPanelLog("info", `[Tunnel] status ignored non-exit NEX tunnel=${tunnelId} name=${safeStatusLogText((tunnel as any)?.name)} ${hostLogText} running=${!!isRunning}${logMessage !== "-" ? ` message=${logMessage}` : ""}`);
       }
       return { status: 200, body: { success: true, ignored: true } };
     }

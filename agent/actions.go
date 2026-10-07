@@ -599,7 +599,7 @@ func desiredActionLocalRuntimeReady(a action) bool {
 	case "nginx", "nginx-tunnel", "nginx-tunnel-exit":
 		return desiredNginxRuntimeReady(a.SourcePort, a.Protocol)
 	case "forwardx-tunnel":
-		// A multi-hop ForwardX first hop is represented by a passive marker;
+		// A multi-hop NEX first hop is represented by a passive marker;
 		// there is intentionally no local FXP listener to probe.
 		return true
 	case "guard":

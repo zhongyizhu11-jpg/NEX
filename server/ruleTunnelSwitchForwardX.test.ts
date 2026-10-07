@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 
 /**
- * 一条 NEX（ForwardX）隧道规则从隧道 A 换到隧道 B（两条隧道共用同一台出口机）。
+ * 一条 NEX（NEX）隧道规则从隧道 A 换到隧道 B（两条隧道共用同一台出口机）。
  *
  * 换过去之后三台机器拿到的配置必须对得上：
  *   · 旧入口（隧道 A 的入口）撤掉这个端口；

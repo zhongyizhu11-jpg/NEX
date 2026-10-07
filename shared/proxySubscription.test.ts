@@ -271,7 +271,7 @@ test("Clash 的自动选路组带测速地址和容差", () => {
       node(VLESS_WS, { address: "5.6.7.8", port: 20002, name: "广州2 → HKT" }),
     ],
     groups: [
-      { name: "ForwardX", type: "select" as const, members: ["HKT 自动选路", "广州1 → HKT", "广州2 → HKT"] },
+      { name: "NEX", type: "select" as const, members: ["HKT 自动选路", "广州1 → HKT", "广州2 → HKT"] },
       { name: "HKT 自动选路", type: "url-test" as const, members: ["广州1 → HKT", "广州2 → HKT"] },
     ],
     ruleSets: [],
@@ -293,14 +293,14 @@ test("Clash 的自动选路组带测速地址和容差", () => {
   assert.equal(groups[1].tolerance, 50);
 
   // 流量入口指向主选择器。
-  assert.deepEqual(parsed.rules, ["MATCH,ForwardX"]);
+  assert.deepEqual(parsed.rules, ["MATCH,NEX"]);
 });
 
 test("Clash 的主备组不带容差", () => {
   const document = {
     nodes: [node(VLESS_WS, { address: "1.2.3.4", port: 20001, name: "广州1 → HKT" })],
     groups: [
-      { name: "ForwardX", type: "select" as const, members: ["HKT 自动选路"] },
+      { name: "NEX", type: "select" as const, members: ["HKT 自动选路"] },
       { name: "HKT 自动选路", type: "fallback" as const, members: ["广州1 → HKT"] },
     ],
     ruleSets: [],
@@ -323,7 +323,7 @@ test("sing-box 的自动选路组渲染成 urltest", () => {
       node(VLESS_WS, { address: "5.6.7.8", port: 20002, name: "广州2 → HKT" }),
     ],
     groups: [
-      { name: "ForwardX", type: "select" as const, members: ["HKT 自动选路"] },
+      { name: "NEX", type: "select" as const, members: ["HKT 自动选路"] },
       { name: "HKT 自动选路", type: "url-test" as const, members: ["广州1 → HKT", "广州2 → HKT"] },
     ],
     ruleSets: [],
@@ -353,7 +353,7 @@ test("Clash 的带宽叠加组是轮询的 load-balance", () => {
       node(VLESS_WS, { address: "5.6.7.8", port: 20002, name: "广州2 → HKT" }),
     ],
     groups: [
-      { name: "ForwardX", type: "select" as const, members: ["HKT 带宽叠加"] },
+      { name: "NEX", type: "select" as const, members: ["HKT 带宽叠加"] },
       { name: "HKT 带宽叠加", type: "load-balance" as const, members: ["广州1 → HKT", "广州2 → HKT"] },
     ],
     ruleSets: [],
@@ -379,7 +379,7 @@ test("sing-box 没有负载均衡出站，带宽叠加退成 urltest", () => {
       node(VLESS_WS, { address: "5.6.7.8", port: 20002, name: "广州2 → HKT" }),
     ],
     groups: [
-      { name: "ForwardX", type: "select" as const, members: ["HKT 带宽叠加"] },
+      { name: "NEX", type: "select" as const, members: ["HKT 带宽叠加"] },
       { name: "HKT 带宽叠加", type: "load-balance" as const, members: ["广州1 → HKT", "广州2 → HKT"] },
     ],
     ruleSets: [],
@@ -396,7 +396,7 @@ test("base64 与 Loon 忽略策略组，只输出节点", () => {
   const document = {
     nodes: [node(VLESS_WS, { address: "1.2.3.4", port: 20001, name: "广州1 → HKT" })],
     groups: [
-      { name: "ForwardX", type: "select" as const, members: ["HKT 自动选路"] },
+      { name: "NEX", type: "select" as const, members: ["HKT 自动选路"] },
       { name: "HKT 自动选路", type: "url-test" as const, members: ["广州1 → HKT"] },
     ],
     ruleSets: [],
@@ -563,7 +563,7 @@ test("Surge 与 QX 都不输出策略组", () => {
   const document = {
     nodes: [node(TROJAN, { address: "5.6.7.8", port: 20002, name: "TJ" })],
     groups: [
-      { name: "ForwardX", type: "select" as const, members: ["TJ"] },
+      { name: "NEX", type: "select" as const, members: ["TJ"] },
       { name: "自动选路", type: "url-test" as const, members: ["TJ"] },
     ],
     ruleSets: [],
@@ -919,7 +919,7 @@ test("跳掉节点时，策略组里对它的引用要一起清干净", () => {
       node(TROJAN, { address: "5.6.7.8", port: 20002, name: "广州2 → HK" }),
     ],
     groups: [
-      { name: "ForwardX", type: "select" as const, members: ["S6 自动选路", "广州1 → S6", "广州2 → HK"] },
+      { name: "NEX", type: "select" as const, members: ["S6 自动选路", "广州1 → S6", "广州2 → HK"] },
       { name: "S6 自动选路", type: "url-test" as const, members: ["广州1 → S6"] },
     ],
     ruleSets: [],
@@ -933,12 +933,12 @@ test("跳掉节点时，策略组里对它的引用要一起清干净", () => {
   const groups = parsed["proxy-groups"] as Record<string, unknown>[];
   // 只剩一个成员的自动选路组空掉了，而它本身还是主选择器的成员 —— 引用要连着清两层。
   assert.equal(groups.length, 1);
-  assert.equal(groups[0].name, "ForwardX");
+  assert.equal(groups[0].name, "NEX");
   assert.deepEqual(groups[0].proxies, ["广州2 → HK"]);
 
   // sing-box 也支持 Snell v6，那边两个节点都在，组原样保留。
   const singbox = JSON.parse(renderProxySubscription(document, "singbox"));
-  const selector = singbox.outbounds.find((item: any) => item.tag === "ForwardX");
+  const selector = singbox.outbounds.find((item: any) => item.tag === "NEX");
   assert.deepEqual(selector.outbounds, ["S6 自动选路", "广州1 → S6", "广州2 → HK"]);
 });
 
@@ -995,7 +995,7 @@ test("Surge 完整配置：托管地址、叠加组是 load-balance、规则走 
   assert.equal(section(text, "[Proxy]").length, 2);
 
   const groups = section(text, "[Proxy Group]");
-  assert.equal(groups[0], "ForwardX = select, HKT 带宽叠加, 前置A → HKT, 前置B → HKT");
+  assert.equal(groups[0], "NEX = select, HKT 带宽叠加, 前置A → HKT, 前置B → HKT");
   // 不带 persistent：每个请求随机挑，才叠得起来。
   assert.equal(groups[1], "HKT 带宽叠加 = load-balance, 前置A → HKT, 前置B → HKT");
 
@@ -1005,7 +1005,7 @@ test("Surge 完整配置：托管地址、叠加组是 load-balance、规则走 
   assert.ok(rules.includes("IP-CIDR,192.168.0.0/16,🏠 局域网,no-resolve"));
   // 国内 IP 用内置 GEOIP，不下列表。
   assert.ok(rules.includes("GEOIP,CN,🎯 国内直连"));
-  assert.equal(rules[rules.length - 1], "FINAL,ForwardX");
+  assert.equal(rules[rules.length - 1], "FINAL,NEX");
 });
 
 test("Loon 完整配置：叠加组 Round-Robin，远程规则放 [Remote Rule]", () => {
@@ -1020,7 +1020,7 @@ test("Loon 完整配置：叠加组 Round-Robin，远程规则放 [Remote Rule]"
   const remote = section(text, "[Remote Rule]");
   assert.ok(remote.includes("https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Loon/YouTube/YouTube.list,policy=📹 油管视频,enabled=true"));
   const local = section(text, "[Rule]");
-  assert.equal(local[local.length - 1], "FINAL,ForwardX");
+  assert.equal(local[local.length - 1], "FINAL,NEX");
 });
 
 test("Shadowrocket 拉 Loon / Surge 格式的完整配置：叠加组换成 random，别的不动", () => {
@@ -1045,13 +1045,13 @@ test("Quantumult X 完整配置：round-robin、内置策略小写、force-polic
   assert.ok(policies.includes("round-robin=HKT 带宽叠加, 前置A → HKT, 前置B → HKT"));
   // 分类组里的 DIRECT 在 QX 里必须是小写 direct。
   const lan = policies.find((line) => line.startsWith("static=🏠 局域网, "));
-  assert.match(String(lan), /^static=🏠 局域网, direct, ForwardX/);
+  assert.match(String(lan), /^static=🏠 局域网, direct, NEX/);
   assert.ok(section(text, "[filter_remote]").some((line) =>
     line.startsWith("https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/QuantumultX/Google/Google.list, tag=google-Google, force-policy=🔍 谷歌服务,")));
   const local = section(text, "[filter_local]");
   assert.ok(local.includes("ip-cidr, 10.0.0.0/8, 🏠 局域网"));
   assert.ok(local.includes("geoip, cn, 🎯 国内直连"));
-  assert.equal(local[local.length - 1], "final, ForwardX");
+  assert.equal(local[local.length - 1], "final, NEX");
   assert.equal(section(text, "[server_local]").length, 2);
 });
 
@@ -1065,7 +1065,7 @@ test("Shadowrocket 完整配置：不带节点，叠加用 random，名字和 ba
   assert.ok(groups.includes("HKT 带宽叠加 = random, 前置A → HKT, 前置B → HKT, url=http://www.gstatic.com/generate_204, interval=300"));
   const rules = section(text, "[Rule]");
   assert.ok(rules.some((line) => line.includes("/rule/Shadowrocket/Telegram/Telegram.list,✈️ 电报消息")));
-  assert.equal(rules[rules.length - 1], "FINAL,ForwardX");
+  assert.equal(rules[rules.length - 1], "FINAL,NEX");
 });
 
 test("完整配置里组名和节点名去掉逗号与等号，引用处同步改", () => {

@@ -1,7 +1,7 @@
 /**
  * Database entrypoint.
  *
- * ForwardX uses the configured SQLite, MySQL, or PostgreSQL database as the
+ * NEX uses the configured SQLite, MySQL, or PostgreSQL database as the
  * source of truth and reuses existing users during normal startup.
  */
 

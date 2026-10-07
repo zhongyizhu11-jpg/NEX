@@ -82,7 +82,7 @@ export async function formatPanelLogsForExport(level: PanelLogFilterLevel = "all
   }, { all: 0, log: 0, info: 0, warn: 0, error: 0 });
   const generatedAt = new Date().toISOString();
   const header = [
-    "ForwardX Panel Logs",
+    "NEX Panel Logs",
     `Generated At: ${generatedAt}`,
     `Level: ${level}`,
     `Exported Count: ${selectedLogs.length}`,
@@ -106,7 +106,7 @@ export function installPanelLogger() {
   installed = true;
   const runRetention = () => {
     void pruneJsonLogFile(PANEL_LOG_FILE).catch((error) => {
-      process.stderr.write(`[ForwardX] panel log retention failed: ${error instanceof Error ? error.message : String(error)}\n`);
+      process.stderr.write(`[NEX] panel log retention failed: ${error instanceof Error ? error.message : String(error)}\n`);
     });
   };
   runRetention();

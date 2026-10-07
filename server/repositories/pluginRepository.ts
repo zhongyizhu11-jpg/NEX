@@ -1492,7 +1492,7 @@ async function fetchText(url: string, maxBytes = MAX_PLUGIN_ASSET_BYTES) {
   await assertSafePluginHttpUrl(url);
   const response = await fetch(url, {
     headers: {
-      "User-Agent": "ForwardX-Plugin-Installer",
+      "User-Agent": "NEX-Plugin-Installer",
       Accept: "application/json,text/plain,*/*",
     },
   });
@@ -1511,7 +1511,7 @@ async function fetchBuffer(url: string) {
   await assertSafePluginHttpUrl(url);
   const response = await fetch(url, {
     headers: {
-      "User-Agent": "ForwardX-Plugin-Installer",
+      "User-Agent": "NEX-Plugin-Installer",
       Accept: "application/gzip,application/zip,application/octet-stream,*/*",
     },
   });
@@ -3122,7 +3122,7 @@ function buildChinaRegionWhitelistConfig(usage: HostAssetSyncUsageConfig, target
 function buildChinaRegionWhitelistOperationCommands(usage: HostAssetSyncUsageConfig, targetDir: string, signature: string) {
   const operation = usage.operation || "sync";
   if (operation === "sync") {
-    return [`echo ${shellQuote("[ForwardX Plugin] china-region-whitelist synced files and config")}`];
+    return [`echo ${shellQuote("[NEX Plugin] china-region-whitelist synced files and config")}`];
   }
   const commandByOperation: Record<string, string> = {
     status: "status",
@@ -3143,7 +3143,7 @@ function buildChinaRegionWhitelistOperationCommands(usage: HostAssetSyncUsageCon
   ].join(" && ");
   if (operation === "status") return [run];
   return [
-    `mkdir -p ${shellQuote(markerDir)}; if [ "$(cat ${shellQuote(markerFile)} 2>/dev/null || true)" = ${shellQuote(signature)} ]; then echo ${shellQuote(`[ForwardX Plugin] china-region-whitelist ${operation} already applied`)}; else ${run} && printf '%s' ${shellQuote(signature)} > ${shellQuote(markerFile)}; fi`,
+    `mkdir -p ${shellQuote(markerDir)}; if [ "$(cat ${shellQuote(markerFile)} 2>/dev/null || true)" = ${shellQuote(signature)} ]; then echo ${shellQuote(`[NEX Plugin] china-region-whitelist ${operation} already applied`)}; else ${run} && printf '%s' ${shellQuote(signature)} > ${shellQuote(markerFile)}; fi`,
   ];
 }
 
@@ -3270,7 +3270,7 @@ export async function buildPluginHostAssetSyncActions(hostId: number) {
       const hasInteractiveResources = (plugin.manifest.resourceViews || []).some((view: PluginResourceViewDefinition) => view.usageViewId === usageView.id);
       if (hasInteractiveResources) {
         postSyncCommands.push(`if [ ! -s /etc/china-region-whitelist.conf ]; then cp ${shellQuote(`${targetDir}/forwardx-generated.conf`)} /etc/china-region-whitelist.conf; fi`);
-        postSyncCommands.push(`echo ${shellQuote("[ForwardX Plugin] china-region-whitelist assets synced; per-host config preserved")}`);
+        postSyncCommands.push(`echo ${shellQuote("[NEX Plugin] china-region-whitelist assets synced; per-host config preserved")}`);
       } else {
         postSyncCommands.push(...buildPluginTextFileCommands("/etc/china-region-whitelist.conf", generatedConfig));
         postSyncCommands.push(...buildChinaRegionWhitelistOperationCommands(usage, targetDir, operationSignature));

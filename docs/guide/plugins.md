@@ -28,7 +28,7 @@ NEX 插件用于给面板增加可选能力。插件可以声明设置项、说�
   "version": "0.1.0",
   "description": "一个声明式插件示例",
   "detailsMarkdown": "这里可以写更完整的插件介绍，支持 **Markdown**。\n\n- 说明插件解决什么问题\n- 说明安装后在哪里使用\n- 说明是否会同步文件、调用动作或展示页面",
-  "author": "ForwardX",
+  "author": "NEX",
   "logo": "https://example.com/plugin-logo.png",
   "releaseDate": "2026-07-09",
   "updatedAt": "2026-07-09",
@@ -53,7 +53,7 @@ NEX 插件用于给面板增加可选能力。插件可以声明设置项、说�
       "key": "title",
       "label": "展示标题",
       "type": "text",
-      "defaultValue": "Hello ForwardX"
+      "defaultValue": "Hello NEX"
     }
   ],
   "pages": [
@@ -110,7 +110,7 @@ NEX 插件用于给面板增加可选能力。插件可以声明设置项、说�
     "id": "hello-panel",
     "name": "Hello Panel",
     "version": "0.1.0",
-    "author": "ForwardX",
+    "author": "NEX",
     "updatedAt": "2026-07-09",
     "features": [
       {

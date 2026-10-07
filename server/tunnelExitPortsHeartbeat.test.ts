@@ -11,7 +11,7 @@ import test from "node:test";
  * 调度器和出口桥守卫的端口每台机器按自己的规则集分（allocateProtocolGuardPorts），被占了就往后
  * 顺延。这里在出口机上放两条普通规则，正好占掉 1 号、3 号规则想要的端口，出口就会顺延，入口不会：
  *
- *   · 1 号走 ForwardX 隧道、2 号走 GOST 隧道：入口让出口拨的调度器端口要跟出口走；
+ *   · 1 号走 NEX 隧道、2 号走 GOST 隧道：入口让出口拨的调度器端口要跟出口走；
  *   · 3 号走打开了「出口发送到目标」的 GOST 隧道，流量先进出口桥的守卫：守卫端口也要跟出口走；
  *   · 4 号走负载均衡的 GOST 隧道，两个出口分到的调度器端口不一样：一个目标满足不了两个出口，
  *     退回路径 A —— 修之前入口让 1 号出口拨的端口正好是 3 号规则的调度器，流量会跑进别人的线路；
@@ -77,7 +77,7 @@ function run(): Outcome {
       const values = [id, name, 2, 1, mode, listenPort, 1, 1, ...Object.values(extra)];
       return exec("INSERT INTO tunnels (" + columns.join(", ") + ") VALUES (" + values.map(() => "?").join(", ") + ")", values);
     };
-    await tunnel(1, "ForwardX", "forwardx", 23001);
+    await tunnel(1, "NEX", "forwardx", 23001);
     await tunnel(2, "GOST", "tls", 23002);
     await tunnel(3, "GOST 出口发 PROXY 头", "tls", 23003, { proxyProtocolExitSend: 1 });
     await tunnel(4, "GOST 负载均衡", "tls", 23004, { loadBalanceEnabled: 1, loadBalanceStrategy: "round_robin" });
@@ -242,7 +242,7 @@ test("出口一次都没报过（刚升级）：入口先按自己算的，和�
 });
 
 test("出口报上来以后，入口按出口分到的端口填", () => {
-  assert.deepEqual(outcome.entryAfter.fxpEntry["1"], { targetIp: "127.0.0.1", targetPort: 41002 }, "ForwardX 隧道：握手里的目标");
+  assert.deepEqual(outcome.entryAfter.fxpEntry["1"], { targetIp: "127.0.0.1", targetPort: 41002 }, "NEX 隧道：握手里的目标");
   assert.equal(outcome.entryAfter.gostEntry["2"], "127.0.0.1:41003", "GOST 隧道：relay 请求里的目标");
   assert.equal(outcome.entryAfter.gostEntry["3"], "127.0.0.1:39004", "出口桥：守卫的端口");
 });

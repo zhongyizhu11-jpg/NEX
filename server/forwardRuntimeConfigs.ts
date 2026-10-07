@@ -105,6 +105,8 @@ export function buildRealmServiceUnit(input: RealmUnitInput): string {
   const ifaceFlag = input.networkInterface ? ` --interface ${input.networkInterface}` : "";
   return [
     "[Unit]",
+    // 单元正文是 Agent 服务签名的一部分（managedServiceActionSignature）：这里的文案改了，
+    // 已装机器升级后每个 realm/socat 服务都会被当成过期重启一遍。所以品牌词保持 ForwardX。
     `Description=ForwardX realm forwarder ${input.sourcePort}->${input.targetIp}:${input.targetPort}`,
     "After=network.target",
     "StartLimitIntervalSec=60",

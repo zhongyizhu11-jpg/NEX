@@ -8,7 +8,7 @@ MIGRATION_ID="legacy-compat-v1"
 
 usage() {
   cat <<'EOF'
-ForwardX Agent legacy plugin manifest migration
+NEX Agent legacy plugin manifest migration
 
 Usage:
   bash migrate-agent-legacy.sh

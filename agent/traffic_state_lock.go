@@ -34,9 +34,9 @@ func acquireAgentStateLock(stateDir string) (*agentStateLock, error) {
 		}
 		_ = file.Close()
 		if owner != "" {
-			return nil, fmt.Errorf("another ForwardX Agent is already using %s (pid %s): %w", stateDir, owner, err)
+			return nil, fmt.Errorf("another NEX Agent is already using %s (pid %s): %w", stateDir, owner, err)
 		}
-		return nil, fmt.Errorf("another ForwardX Agent is already using %s: %w", stateDir, err)
+		return nil, fmt.Errorf("another NEX Agent is already using %s: %w", stateDir, err)
 	}
 	lock := &agentStateLock{file: file}
 	if err := file.Truncate(0); err != nil {

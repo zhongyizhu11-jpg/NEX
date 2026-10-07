@@ -391,9 +391,9 @@ function restoreUpgradeJob(): UpgradeJob {
   const job = reconcileRestoredUpgradeJob(saved, {
     currentVersion: APP_VERSION,
     manualHintLines: [
-      "[ForwardX] Run a one-click script on the server to upgrade manually:",
-      `[ForwardX] Local: ${panelManualUpgradeCommand("local", null)}`,
-      `[ForwardX] Docker: ${panelManualUpgradeCommand("docker", null)}`,
+      "[NEX] Run a one-click script on the server to upgrade manually:",
+      `[NEX] Local: ${panelManualUpgradeCommand("local", null)}`,
+      `[NEX] Docker: ${panelManualUpgradeCommand("docker", null)}`,
     ],
   });
   if (job.status === "idle") {
@@ -575,7 +575,7 @@ async function fetchGithubJson<T>(
           "Accept": "application/vnd.github+json",
           "Cache-Control": "no-cache",
           "Pragma": "no-cache",
-          "User-Agent": `ForwardX/${APP_VERSION}`,
+          "User-Agent": `NEX/${APP_VERSION}`,
         },
       });
       if (!res.ok) throw new Error(`GitHub API 请求失败：${res.status} ${res.statusText}`);
@@ -601,7 +601,7 @@ async function fetchTextNoCache(
         headers: {
           "Cache-Control": "no-cache",
           "Pragma": "no-cache",
-          "User-Agent": `ForwardX/${APP_VERSION}`,
+          "User-Agent": `NEX/${APP_VERSION}`,
         },
       });
       if (!res.ok) throw new Error(`HTTP 请求失败：${res.status} ${res.statusText}`);
@@ -627,7 +627,7 @@ async function fetchPanelBundleAssetStatus(
     headers: {
       "Cache-Control": "no-cache",
       "Pragma": "no-cache",
-      "User-Agent": `ForwardX/${APP_VERSION}`,
+      "User-Agent": `NEX/${APP_VERSION}`,
     },
   }, accelerator);
   return { ready: res.ok, status: res.status, url };
@@ -838,7 +838,7 @@ async function fetchRegistryJson<T>(url: string, accept: string, scope: string):
     "Accept": accept,
     "Cache-Control": "no-cache",
     "Pragma": "no-cache",
-    "User-Agent": `ForwardX/${APP_VERSION}`,
+    "User-Agent": `NEX/${APP_VERSION}`,
   };
   let res = await fetch(url, { cache: "no-store", headers });
   if (res.status === 401) {
@@ -849,7 +849,7 @@ async function fetchRegistryJson<T>(url: string, accept: string, scope: string):
       tokenUrl.searchParams.set("scope", challenge.scope || scope);
       const tokenRes = await fetch(tokenUrl, {
         cache: "no-store",
-        headers: { "User-Agent": `ForwardX/${APP_VERSION}` },
+        headers: { "User-Agent": `NEX/${APP_VERSION}` },
       });
       if (!tokenRes.ok) throw new Error(`Docker 镜像令牌请求失败：${tokenRes.status} ${tokenRes.statusText}`);
       const tokenData = await tokenRes.json() as { token?: string; access_token?: string };
@@ -1174,9 +1174,9 @@ function normalizeUpgradeCommand(
 }
 
 function appendManualUpgradeHint(accelerator?: GithubAcceleratorConfig | null) {
-  appendUpgradeLog("[ForwardX] Automatic upgrade failed. Run a one-click script on the server to upgrade manually:");
-  appendUpgradeLog(`[ForwardX] Local: ${panelManualUpgradeCommand("local", accelerator)}`);
-  appendUpgradeLog(`[ForwardX] Docker: ${panelManualUpgradeCommand("docker", accelerator)}`);
+  appendUpgradeLog("[NEX] Automatic upgrade failed. Run a one-click script on the server to upgrade manually:");
+  appendUpgradeLog(`[NEX] Local: ${panelManualUpgradeCommand("local", accelerator)}`);
+  appendUpgradeLog(`[NEX] Docker: ${panelManualUpgradeCommand("docker", accelerator)}`);
 }
 
 function setUpgradeWaitingForAssets(targetVersion: string, reason: string, mode: "upgrade" | "rollback" = "upgrade") {
@@ -1187,10 +1187,10 @@ function setUpgradeWaitingForAssets(targetVersion: string, reason: string, mode:
     finishedAt: new Date().toISOString(),
     targetVersion,
     logs: [
-      `[ForwardX] Current version v${APP_VERSION}`,
-      `[ForwardX] Selected target ${targetVersion}`,
-      "[ForwardX] Release assets are still building on GitHub Actions.",
-      `[ForwardX] ${reason}`,
+      `[NEX] Current version v${APP_VERSION}`,
+      `[NEX] Selected target ${targetVersion}`,
+      "[NEX] Release assets are still building on GitHub Actions.",
+      `[NEX] ${reason}`,
     ],
     error: reason,
     restarted: false,
@@ -1260,9 +1260,9 @@ async function startPanelVersionTask(targetVersionInput: string | null | undefin
     finishedAt: null,
     targetVersion,
     logs: [
-      `[ForwardX] Current version v${APP_VERSION}`,
-      `[ForwardX] Selected ${mode} target ${targetVersion}`,
-      `[ForwardX] Starting panel ${operationText} to ${targetVersion}`,
+      `[NEX] Current version v${APP_VERSION}`,
+      `[NEX] Selected ${mode} target ${targetVersion}`,
+      `[NEX] Starting panel ${operationText} to ${targetVersion}`,
     ],
     error: null,
     restarted: false,
@@ -1289,7 +1289,7 @@ async function startPanelVersionTask(targetVersionInput: string | null | undefin
     upgradeJob.error = `${err.message}. Please run the one-click script manually.`;
     upgradeJob.finishedAt = new Date().toISOString();
     console.error(`[Upgrade] Failed to start upgrade command: ${err.message}`);
-    appendUpgradeLog(`[ForwardX] Upgrade command failed to start: ${err.message}`);
+    appendUpgradeLog(`[NEX] Upgrade command failed to start: ${err.message}`);
     appendManualUpgradeHint(accelerator);
     persistUpgradeJob({ immediate: true });
   });
@@ -1299,18 +1299,18 @@ async function startPanelVersionTask(targetVersionInput: string | null | undefin
       upgradeJob.status = "success";
       console.info(`[Upgrade] Panel ${mode} command completed target=${targetVersion}`);
       const elapsed = upgradeJobElapsedMs(upgradeJob);
-      appendUpgradeLog(`[ForwardX] Panel ${operationText} command completed${elapsed !== null ? ` in ${Math.round(elapsed / 1000)}s` : ""}. The service may be restarting, refresh the page later.`);
+      appendUpgradeLog(`[NEX] Panel ${operationText} command completed${elapsed !== null ? ` in ${Math.round(elapsed / 1000)}s` : ""}. The service may be restarting, refresh the page later.`);
     } else if (code === UPGRADE_ASSETS_PENDING_EXIT_CODE) {
       const reason = `v${normalizeVersion(targetVersion)} 的发布资产仍在 GitHub Actions 构建或上传中，请稍后重新检查更新。`;
       upgradeJob.status = "waiting_assets";
       upgradeJob.error = reason;
       console.warn(`[Upgrade] Panel upgrade assets pending target=${targetVersion} exitCode=${code}`);
-      appendUpgradeLog(`[ForwardX] ${reason}`);
+      appendUpgradeLog(`[NEX] ${reason}`);
     } else {
       upgradeJob.status = "error";
       upgradeJob.error = `Upgrade command exited with code ${code}. Please run the one-click script manually.`;
       console.error(`[Upgrade] Panel upgrade failed target=${targetVersion} exitCode=${code}`);
-      appendUpgradeLog(`[ForwardX] Upgrade failed, exit code: ${code}`);
+      appendUpgradeLog(`[NEX] Upgrade failed, exit code: ${code}`);
       appendManualUpgradeHint(accelerator);
     }
     persistUpgradeJob({ immediate: true });
@@ -2948,7 +2948,7 @@ export const systemRouter = router({
       const timestamp = exported.generatedAt.replace(/[:.]/g, "-");
       console.info(`[PanelLogs] Exported panel logs level=${level} count=${exported.count}`);
       return {
-        filename: `forwardx-panel-logs-${level}-${timestamp}.txt`,
+        filename: `nex-panel-logs-${level}-${timestamp}.txt`,
         mimeType: "text/plain;charset=utf-8",
         content: exported.content,
         count: exported.count,

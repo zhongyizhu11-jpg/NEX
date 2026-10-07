@@ -660,6 +660,7 @@ function openRcScript(svcName: string, execStart: string) {
   return [
     "#!/sbin/openrc-run",
     `name="${svcName}"`,
+    // 脚本正文进 Agent 的服务签名，文案不改（改了升级后服务会重启一遍）。
     `description="ForwardX managed service ${svcName}"`,
     'command="/bin/sh"',
     `command_args="-lc ${shQuote(`ulimit -c 0 2>/dev/null || true; exec ${execStart}`)}"`,

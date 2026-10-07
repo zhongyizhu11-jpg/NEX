@@ -184,7 +184,7 @@ func TestStopStaleForwardXRuleRuntimeRejectsUnrelatedOwners(t *testing.T) {
 	_, running := fxpServers[id]
 	fxpMu.Unlock()
 	if !running {
-		t.Fatal("invalid or non-ForwardX handoff stopped an unrelated entry group")
+		t.Fatal("invalid or non-NEX handoff stopped an unrelated entry group")
 	}
 }
 

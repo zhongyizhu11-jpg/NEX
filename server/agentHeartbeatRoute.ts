@@ -2488,7 +2488,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
           tunnelExitNodesByTunnelId.set(Number(tunnel.id), ensured.exitNodes);
         }
         if (ensured.changed) {
-          appendPanelLog("info", `[Tunnel] allocated dedicated UDP transport ports for ForwardX tunnel=${tunnel.id}`);
+          appendPanelLog("info", `[Tunnel] allocated dedicated UDP transport ports for NEX tunnel=${tunnel.id}`);
         }
       } catch (error) {
         appendPanelLog("error", `[Tunnel] failed to allocate dedicated UDP transport port tunnel=${tunnel.id}: ${error instanceof Error ? error.message : String(error)}`);
@@ -2806,7 +2806,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     const failoverProxyPort = (rule: any) => protocolGuardPortsForRule(rule).failoverProxyPort;
     /*
       线路组的调度器跑在哪台机上，就看哪台机的 Agent：直连规则是规则所在的机器，隧道规则是
-      出口（多出口时每个出口各跑一个）。UDP、TCP+UDP 和 ForwardX 隧道的调度要 Agent 2.2.199 起
+      出口（多出口时每个出口各跑一个）。UDP、TCP+UDP 和 NEX 隧道的调度要 Agent 2.2.199 起
       （shared/routeGroup 的 routeGroupSchedulerAgentVersion）—— 更老的只会开 TCP 监听、也不认
       「只跑调度器」，下发了反而坏事。隧道规则的入口和出口各自心跳、各自生成配置：入口这边算
       「出口拨哪儿」时也得按出口的版本判断，所以出口的版本先读好。
@@ -2826,7 +2826,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       return Array.from(new Set(ids.filter((id) => id > 0)));
     };
     /*
-      ForwardX 隧道由出口的 FXP 拨目标：主出口（多跳时是最后一跳），负载均衡开着时还有额外的
+      NEX 隧道由出口的 FXP 拨目标：主出口（多跳时是最后一跳），负载均衡开着时还有额外的
       出口节点 —— 和入口分流用的 forwardXExtraExitRoutes 同一个条件（开着负载均衡、分法不是
       none、节点开着、有端口）。每个出口各跑一个调度器。
     */
@@ -2846,7 +2846,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       真正跑调度器的机器，要新 Agent 的调度得每一台都够版本：直连规则是规则所在的机器；GOST /
       Nginx 隧道是这条规则实际用到的出口（tunnelExitEndpointsForRule：主出口加上开着的负载均衡
       出口）—— 停用的出口节点、负载均衡关掉后还留着的节点不算，不然一台用不上的旧出口会让所有
-      出口都退回路径 A；ForwardX 隧道是 forwardXSchedulerHostIds。入口给出口的目标对每个出口
+      出口都退回路径 A；NEX 隧道是 forwardXSchedulerHostIds。入口给出口的目标对每个出口
       都一样，所以要每个出口都够版本。tunnelExitEndpointsForRule 定义在后面：这里只在调用时读，
       而 actionFailover 都是在它定义之后才调的。
     */
@@ -2892,7 +2892,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     const actionFailover = (rule: any, options?: { listenPort?: number; bindAddress?: string; proxyDirection?: "send" | "exitSend" | "none" }) => {
       if (!routeSchedulingAllowed(rule)) return undefined;
       const protocol = normalizeForwardRuleProtocol(rule.protocol);
-      // 版本不够时不下发：前面的转发工具（ForwardX 隧道是出口的 FXP）改拨主线路（routePrimaryEndpoint），等 Agent 升级。
+      // 版本不够时不下发：前面的转发工具（NEX 隧道是出口的 FXP）改拨主线路（routePrimaryEndpoint），等 Agent 升级。
       const requiredAgentVersion = routeGroupSchedulerAgentVersion(protocol, routeTunnelOf(rule)?.mode);
       if (requiredAgentVersion && !routeSchedulerAgentAtLeast(rule, requiredAgentVersion)) return undefined;
       /*
@@ -2970,7 +2970,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       };
     };
     /*
-      调度器下发不了（UDP 规则或 ForwardX 隧道，而调度所在机器的 Agent 还没到 2.2.199）时，前面的转发工具拨主线路
+      调度器下发不了（UDP 规则或 NEX 隧道，而调度所在机器的 Agent 还没到 2.2.199）时，前面的转发工具拨主线路
       （路径 A）的拨号地址。直接拨规则目标的话，路径 A 带中转时流量会绕过中转直奔落地 —— 用户
       配中转多半就是因为直连不通。不是线路组、或者路径 A 解析不出来，才退回规则目标（老行为）。
     */
@@ -2993,7 +2993,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       return endpointHostPort(endpoint.targetIp, endpoint.targetPort);
     };
     /*
-      隧道入口让出口拨的调度器（GOST 隧道写进 relay 请求，ForwardX 隧道写进握手）。调度器跑在出口上，
+      隧道入口让出口拨的调度器（GOST 隧道写进 relay 请求，NEX 隧道写进握手）。调度器跑在出口上，
       端口是出口按它自己的规则集分的，不一定等于入口这边算的：按出口报的填（server/tunnelExitPorts）。
       几个出口分到的不一样时，一个目标满足不了所有出口，这条规则退回路径 A（不调度，流量照样通）。
     */
@@ -3024,7 +3024,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       const listenPort = Number(options?.listenPort || failoverProxyPort(rule));
       if (!tunnel) return actionFailover(rule, { listenPort, bindAddress: "127.0.0.1" });
       /*
-        ForwardX 隧道的调度器不在入口：FXP 的出口拨的是入口握手里给的目标，调度器只能在出口机上
+        NEX 隧道的调度器不在入口：FXP 的出口拨的是入口握手里给的目标，调度器只能在出口机上
         （forwardXSchedulerFailover，出口机收到一条只跑调度器的运行规则）。上一版把它开在入口、
         又让入口把 127.0.0.1 当目标发给出口，出口拨的是它自己的本机 —— 那里什么都没有。
       */
@@ -3039,7 +3039,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       return undefined;
     };
     /*
-      ForwardX 隧道在这台出口机上的调度规格（这台是 forwardXSchedulerHostIds 之一时）。FXP 出口
+      NEX 隧道在这台出口机上的调度规格（这台是 forwardXSchedulerHostIds 之一时）。FXP 出口
       按入口握手里的 exitSend 给目标发 PROXY 头：发的话调度器原样转，按访客固定从头里读访客。
       入口按出口报上来的端口当目标（tunnelExitSchedulerEndpoint），出口的 UDP 目标表
       （forwardXUDPTargets）也指到这里。
@@ -3251,7 +3251,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       if (!isForwardXWireGuardV2(tunnel)) return null;
       if (!isAgentVersionAtLeast(String((host as any).agentVersion || ""), AGENT_FORWARDX_WIREGUARD_VERSION)) {
         const logKey = `wireguard-agent-version:${Number(host.id)}:${Number(tunnel?.id || 0)}`;
-        const message = `ForwardX V2 requires Agent v${AGENT_FORWARDX_WIREGUARD_VERSION} or newer`;
+        const message = `NEX V2 requires Agent v${AGENT_FORWARDX_WIREGUARD_VERSION} or newer`;
         if (tunnelRouteLogCache.get(logKey) !== message) {
           setBoundedMapValue(tunnelRouteLogCache, logKey, message, AGENT_DYNAMIC_CACHE_MAX);
           appendPanelLog("warn", `[Tunnel] V2 waiting for Agent upgrade tunnel=${tunnel?.id || 0} host=${host.id} current=${(host as any).agentVersion || "-"} required=${AGENT_FORWARDX_WIREGUARD_VERSION}`);
@@ -3427,7 +3427,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
           const extraRoutes = await forwardXExtraExitRoutes(tunnel);
           if (extraRoutes.length > 0) {
             if (tunnelNeedsMimic(tunnel) && extraRoutes.some((route) => Number(route.udpPort || 0) <= 0)) {
-              appendPanelLog("error", `[TunnelRoute] missing ForwardX mimic UDP port tunnel=${tunnel.id} hop=${hopIdx} extraExit=1`);
+              appendPanelLog("error", `[TunnelRoute] missing NEX mimic UDP port tunnel=${tunnel.id} hop=${hopIdx} extraExit=1`);
               return null;
             }
             for (const route of extraRoutes) {
@@ -3443,20 +3443,20 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
           }
         }
         if (op === "apply" && (!fxpSpec.relayExitHost || fxpSpec.relayExitPort <= 0 || !fxpSpec.relayKey)) {
-          appendPanelLog("error", `[TunnelRoute] invalid ForwardX relay next hop tunnel=${tunnel.id} hop=${hopIdx} nextHost=${fxpSpec.relayExitHost || "-"} nextPort=${fxpSpec.relayExitPort || "-"}`);
+          appendPanelLog("error", `[TunnelRoute] invalid NEX relay next hop tunnel=${tunnel.id} hop=${hopIdx} nextHost=${fxpSpec.relayExitHost || "-"} nextPort=${fxpSpec.relayExitPort || "-"}`);
           return null;
         }
         if (op === "apply" && tunnelNeedsMimic(tunnel) && nextMimicPort <= 0) {
-          appendPanelLog("error", `[TunnelRoute] missing ForwardX mimic UDP next port tunnel=${tunnel.id} hop=${hopIdx} nextHost=${fxpSpec.relayExitHost || "-"} nextPort=${fxpSpec.relayExitPort || "-"}`);
+          appendPanelLog("error", `[TunnelRoute] missing NEX mimic UDP next port tunnel=${tunnel.id} hop=${hopIdx} nextHost=${fxpSpec.relayExitHost || "-"} nextPort=${fxpSpec.relayExitPort || "-"}`);
           return null;
         }
       }
       if (op === "apply" && listenPort <= 0) {
-        appendPanelLog("error", `[TunnelRoute] invalid ForwardX hop listen port tunnel=${tunnel.id} hop=${hopIdx} listen=${listenPort || "-"}`);
+        appendPanelLog("error", `[TunnelRoute] invalid NEX hop listen port tunnel=${tunnel.id} hop=${hopIdx} listen=${listenPort || "-"}`);
         return null;
       }
       if (op === "apply" && !wireGuardV2 && tunnelNeedsMimic(tunnel) && udpListenPort <= 0) {
-        appendPanelLog("error", `[TunnelRoute] missing ForwardX mimic UDP listen port tunnel=${tunnel.id} hop=${hopIdx} listen=${listenPort || "-"}`);
+        appendPanelLog("error", `[TunnelRoute] missing NEX mimic UDP listen port tunnel=${tunnel.id} hop=${hopIdx} listen=${listenPort || "-"}`);
         return null;
       }
       return applyForwardXTransport(fxpSpec, tunnel);
@@ -5179,7 +5179,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
               resourceId: Number(tunnel.id),
             }]);
           }
-          // ForwardX multi-hop
+          // NEX multi-hop
           if (isFirst) {
             actions.push({
               tunnelId: tunnel.id,
@@ -5739,7 +5739,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
             const entryRoutes = await forwardXEntryRoutes(rule, tunnel);
             const entryRoute = entryRoutes[0] || { host: "", port: 0, key: "" };
             if (!entryRoute.host || entryRoute.port <= 0 || !entryRoute.key) {
-              appendPanelLog("error", `[TunnelRoute] invalid ForwardX entry route tunnel=${tunnel.id} rule=${rule.id} nextHost=${entryRoute.host || "-"} nextPort=${entryRoute.port || "-"}`);
+              appendPanelLog("error", `[TunnelRoute] invalid NEX entry route tunnel=${tunnel.id} rule=${rule.id} nextHost=${entryRoute.host || "-"} nextPort=${entryRoute.port || "-"}`);
               continue;
             }
             const rateLimits = ruleRateLimits(rule, tunnel);
@@ -5760,7 +5760,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
               version: proxyProtocolVersion(rule),
             });
             if (useUdpOverTcp && entryRoutes.some((route) => Number((route as any).udpPort || 0) <= 0)) {
-              appendPanelLog("error", `[TunnelRoute] missing ForwardX mimic UDP exit port tunnel=${tunnel.id} rule=${rule.id}`);
+              appendPanelLog("error", `[TunnelRoute] missing NEX mimic UDP exit port tunnel=${tunnel.id} rule=${rule.id}`);
               continue;
             }
             if (useUdpOverTcp) {
@@ -5964,7 +5964,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       }
     }
     /*
-      ForwardX 隧道的线路组：出口机上只跑调度器（schedulerOnly，Agent 2.2.199 起，见 shared/routeGroup
+      NEX 隧道的线路组：出口机上只跑调度器（schedulerOnly，Agent 2.2.199 起，见 shared/routeGroup
       的 ROUTE_GROUP_FORWARDX_AGENT_VERSION）。这台机器上没有这条规则的端口：sourcePort 填调度器自己
       的监听端口，只给 Agent 当认调度器的标识；Agent 不给它写端口状态、不装计数链，流量照旧在入口计。
       版本不够时 forwardXSchedulerFailover 返回空、这里不发，老 Agent 不会把它当普通规则去装端口。
@@ -6051,7 +6051,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     }
 
     for (const runningRule of runningRules) {
-      // 只跑调度器的那种不占端口（上面 ForwardX 隧道出口那段），不算这台机器上「应该有」的端口。
+      // 只跑调度器的那种不占端口（上面 NEX 隧道出口那段），不算这台机器上「应该有」的端口。
       if (runningRule.schedulerOnly) continue;
       const port = Number(runningRule.sourcePort || 0);
       if (port > 0) expectedRulePorts.add(runtimePortProtocolKey(port, runningRule.protocol));

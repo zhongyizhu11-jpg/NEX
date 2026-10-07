@@ -6,7 +6,7 @@ export type TunnelRuleRuntimeForwardType = "forwardx" | "gost" | "nginx-tunnel";
 export type GostTunnelTransportType = "tls" | "wss" | "tcp" | "mtls" | "mwss" | "mtcp";
 
 /**
- * A multi-hop ForwardX entry host does not own a tunnel FXP listener. Its
+ * A multi-hop NEX entry host does not own a tunnel FXP listener. Its
  * entry rule owns that process, while the tunnel action only persists a
  * bookkeeping marker so the panel can track the hop. The Agent therefore
  * reports this marker as not-ready even though that is the expected state.

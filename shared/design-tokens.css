@@ -1,5 +1,5 @@
 /*
-  ForwardX Design Tokens V2 —— Professional Network Control Plane
+  NEX Design Tokens V2 —— Professional Network Control Plane
 
   这个文件是整套界面唯一的取值来源，面板和文档站共用。
 
@@ -94,7 +94,7 @@
      **颜色必须有语义，不能只是装饰** —— 一个颜色如果回答不了「它在说什么」，
      就不该出现在界面上。
 
-     ForwardX 的识别色就是这个强调色（路径色跟着它走），不是到处刷一层品牌色。
+     NEX 的识别色就是这个强调色（路径色跟着它走），不是到处刷一层品牌色。
      ═══════════════════════════════════════════════════════ */
 
   /*
@@ -182,7 +182,7 @@
   --fx-standby: #737373;
   --fx-standby-soft: rgb(115 115 115 / 10%);
 
-  /* 路径色：网络关系、正在流动的数据。就是强调色 —— ForwardX 的识别色 */
+  /* 路径色：网络关系、正在流动的数据。就是强调色 —— NEX 的识别色 */
   --fx-path: var(--fx-accent);
   --fx-path-soft: var(--fx-accent-soft);
   --fx-path-text: var(--fx-accent);

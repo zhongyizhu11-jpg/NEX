@@ -269,7 +269,7 @@ printf 'CODE=%s\\n' "$code"
   ]);
   assert.match(result.stderr, /invalid-archive/);
   // 下载结束时报一次最终字节数，面板据此把进度条推到这一步的末尾。
-  assert.match(result.stderr, /\[ForwardX\] progress download \d+\/4096 \d+%/);
+  assert.match(result.stderr, /\[NEX\] progress download \d+\/4096 \d+%/);
 });
 
 test("both installers persist the accelerator and Docker keeps GHCR image pulls unchanged", () => {

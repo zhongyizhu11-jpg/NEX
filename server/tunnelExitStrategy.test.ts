@@ -16,7 +16,7 @@ test("normalizes exit-group strategies without enabling unknown values", () => {
   assert.equal(exitGroupUsesMultipleExits("random"), true);
 });
 
-test("maps shared exit strategies to GOST and ForwardX selectors", () => {
+test("maps shared exit strategies to GOST and NEX selectors", () => {
   assert.deepEqual(gostExitSelector("fallback"), {
     strategy: "fifo",
     maxFails: 1,

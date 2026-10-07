@@ -154,7 +154,7 @@ func TestDesiredEntryGroupDropsMemberReplacedByNonFXPAction(t *testing.T) {
 	}
 	attachDesiredSharedFXPEntryGroups(actions)
 	if actions[1].FXPEntryGroup == nil {
-		t.Fatal("remaining ForwardX action has no desired entry group")
+		t.Fatal("remaining NEX action has no desired entry group")
 	}
 	requireFXPEntryGroupMembers(t, *actions[1].FXPEntryGroup, second)
 	if fxpEntryGroupContains(*actions[1].FXPEntryGroup, first) {

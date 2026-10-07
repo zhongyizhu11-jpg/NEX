@@ -34,7 +34,7 @@ function runningJob(overrides: Partial<UpgradeJob> = {}): UpgradeJob {
     mode: "upgrade",
     startedAt: new Date(now - 3 * minute).toISOString(),
     targetVersion: "2.3.398",
-    logs: ["[ForwardX] Starting panel 升级 to 2.3.398", "[ForwardX] step 5/5 重启面板", "[ForwardX] restarting panel service (elapsed 170s)"],
+    logs: ["[NEX] Starting panel 升级 to 2.3.398", "[NEX] step 5/5 重启面板", "[NEX] restarting panel service (elapsed 170s)"],
     ...overrides,
   };
 }
@@ -45,7 +45,7 @@ test("面板带着目标版本重启回来：任务判成功，记下重启和�
   assert.equal(job.restarted, true);
   assert.equal(job.restartedAt, new Date(now).toISOString());
   assert.equal(job.error, null);
-  assert.ok(job.logs.includes("[ForwardX] Panel restarted on v2.3.398"), job.logs.join("\n"));
+  assert.ok(job.logs.includes("[NEX] Panel restarted on v2.3.398"), job.logs.join("\n"));
   assert.ok(job.logs.some((line) => line.includes("升级用时 3 分 0 秒")), job.logs.join("\n"));
   // 用时按重启时刻算，不随之后的查询时间一直涨
   assert.equal(upgradeJobElapsedMs(job, now + 10 * minute), 3 * minute);
@@ -64,11 +64,11 @@ test("重启后版本没变：15 分钟内继续等，超过就算升级没生�
 
   const stale = reconcileRestoredUpgradeJob(
     runningJob({ startedAt: new Date(now - 16 * minute).toISOString() }),
-    { currentVersion: "2.3.397", now, manualHintLines: ["[ForwardX] Local: bash install.sh upgrade"] },
+    { currentVersion: "2.3.397", now, manualHintLines: ["[NEX] Local: bash install.sh upgrade"] },
   );
   assert.equal(stale.status, "error");
   assert.match(stale.error || "", /面板重启后版本仍是 v2\.3\.397，升级没有生效/);
-  assert.ok(stale.logs.includes("[ForwardX] Local: bash install.sh upgrade"));
+  assert.ok(stale.logs.includes("[NEX] Local: bash install.sh upgrade"));
   assert.equal(stale.finishedAt, new Date(now).toISOString());
 });
 
@@ -109,21 +109,28 @@ test("出错 / 等资产的旧任务：刚发生的保留，老的丢掉；目�
 
 test("下载进度行只留最新一条，别把前面的 step 标记挤出 300 行窗口", () => {
   const logs: string[] = [];
-  appendUpgradeJobLog(logs, "[ForwardX] step 2/5 下载面板包");
-  for (let i = 1; i <= 500; i += 1) appendUpgradeJobLog(logs, `[ForwardX] progress download ${i * 1000}/500000 ${Math.floor(i / 5)}%`);
-  assert.deepEqual(logs, ["[ForwardX] step 2/5 下载面板包", "[ForwardX] progress download 500000/500000 100%"]);
-  appendUpgradeJobLog(logs, "[ForwardX] step 3/5 解压文件");
-  appendUpgradeJobLog(logs, "[ForwardX] progress download 1/2 50%");
+  appendUpgradeJobLog(logs, "[NEX] step 2/5 下载面板包");
+  for (let i = 1; i <= 500; i += 1) appendUpgradeJobLog(logs, `[NEX] progress download ${i * 1000}/500000 ${Math.floor(i / 5)}%`);
+  assert.deepEqual(logs, ["[NEX] step 2/5 下载面板包", "[NEX] progress download 500000/500000 100%"]);
+  appendUpgradeJobLog(logs, "[NEX] step 3/5 解压文件");
+  appendUpgradeJobLog(logs, "[NEX] progress download 1/2 50%");
   appendUpgradeJobLog(logs, "  ");
   assert.equal(logs.length, 4);
   for (let i = 0; i < UPGRADE_JOB_MAX_LOG_LINES + 20; i += 1) appendUpgradeJobLog(logs, `line ${i}`);
   assert.equal(logs.length, UPGRADE_JOB_MAX_LOG_LINES);
 });
 
+test("2.3.414 之前的脚本打的 [ForwardX] 下载进度行同样只留最新一条", () => {
+  const logs: string[] = [];
+  appendUpgradeJobLog(logs, "[ForwardX] step 2/5 下载面板包");
+  for (let i = 1; i <= 50; i += 1) appendUpgradeJobLog(logs, `[ForwardX] progress download ${i * 1000}/50000 ${i * 2}%`);
+  assert.deepEqual(logs, ["[ForwardX] step 2/5 下载面板包", "[ForwardX] progress download 50000/50000 100%"]);
+});
+
 test("重启前那几行必须同步落盘", () => {
-  assert.equal(isUpgradeLogFlushPoint("[ForwardX] restarting panel service (elapsed 12s)"), true);
+  assert.equal(isUpgradeLogFlushPoint("[NEX] restarting panel service (elapsed 12s)"), true);
   assert.equal(isUpgradeLogFlushPoint("+ systemctl restart forwardx-panel"), true);
-  assert.equal(isUpgradeLogFlushPoint("[ForwardX] progress download 1/2 50%"), false);
+  assert.equal(isUpgradeLogFlushPoint("[NEX] progress download 1/2 50%"), false);
 });
 
 test("用时的说法", () => {
@@ -250,7 +257,7 @@ test("面板重启后：目标版本 == 当前版本 → upgradeStatus 报 succe
   assert.equal(out.first.restarted, true);
   assert.equal(out.first.startedAt, startedAt);
   assert.ok(out.first.elapsedMs >= 100_000 && out.first.elapsedMs < 130_000, String(out.first.elapsedMs));
-  assert.ok(out.first.logs.includes(`[ForwardX] Panel restarted on v${APP_VERSION}`), out.first.logs.join("\n"));
+  assert.ok(out.first.logs.includes(`[NEX] Panel restarted on v${APP_VERSION}`), out.first.logs.join("\n"));
   assert.equal(out.fileAfterRestore, "success");
   assert.deepEqual(out.ack, { cleared: true });
   assert.equal(out.second.status, "idle");

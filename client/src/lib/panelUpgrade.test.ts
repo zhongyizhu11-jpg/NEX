@@ -95,12 +95,12 @@ const 新脚本升级中 = (...logs: string[]) => ({
   status: "running",
   mode: "upgrade",
   startedAt: "2026-09-30T08:00:00.000Z",
-  logs: ["[ForwardX] Current version v2.3.397", "[ForwardX] Starting panel 升级 to 2.3.398", ...logs],
+  logs: ["[NEX] Current version v2.3.397", "[NEX] Starting panel 升级 to 2.3.398", ...logs],
 });
 const 时刻 = (seconds: number) => ({ now: Date.parse("2026-09-30T08:00:00.000Z") + seconds * 1000 });
 
 test("按脚本报的 step N/M 算：五步均匀铺开 10 / 28 / 46 / 64 / 82", () => {
-  const first = getPanelUpgradeProgress(新脚本升级中("[ForwardX] step 1/5 检查发布资产"), 时刻(3));
+  const first = getPanelUpgradeProgress(新脚本升级中("[NEX] step 1/5 检查发布资产"), 时刻(3));
   assert.equal(first.percent, 10);
   assert.equal(first.label, "检查发布资产");
   assert.equal(first.detail, "已用 3 秒");
@@ -108,34 +108,45 @@ test("按脚本报的 step N/M 算：五步均匀铺开 10 / 28 / 46 / 64 / 82",
   assert.deepEqual(first.steps.map((step) => step.active), [true, false, false, false, false]);
 
   const percents = [1, 2, 3, 4, 5].map((n) =>
-    getPanelUpgradeProgress(新脚本升级中(...Array.from({ length: n }, (_, i) => `[ForwardX] step ${i + 1}/5 x`)), 时刻(0)).percent,
+    getPanelUpgradeProgress(新脚本升级中(...Array.from({ length: n }, (_, i) => `[NEX] step ${i + 1}/5 x`)), 时刻(0)).percent,
   );
   assert.deepEqual(percents, [10, 28, 46, 64, 82]);
 
-  const docker = getPanelUpgradeProgress(新脚本升级中("[ForwardX] step 1/4 检查镜像", "[ForwardX] step 2/4 拉取镜像"), 时刻(0));
+  const docker = getPanelUpgradeProgress(新脚本升级中("[NEX] step 1/4 检查镜像", "[NEX] step 2/4 拉取镜像"), 时刻(0));
   assert.equal(docker.label, "拉取镜像");
   assert.deepEqual(docker.steps.map((step) => step.done), [true, false, false, false]);
   assert.equal(docker.steps.length, 4);
 });
 
-test("下载那一步的条真的随字节数走，小字写着「已下载 / 总量」", () => {
-  const at = (line: string) => getPanelUpgradeProgress(
-    新脚本升级中("[ForwardX] step 1/5 检查发布资产", "[ForwardX] step 2/5 下载面板包", "[INFO] Downloading panel bundle: https://…", line),
+test("2.3.414 之前的脚本打的是 [ForwardX] 前缀：升级到这版时跑的还是旧脚本，照样按标记算", () => {
+  const legacy = getPanelUpgradeProgress(
+    新脚本升级中("[ForwardX] step 1/5 检查发布资产", "[ForwardX] step 2/5 下载面板包", "[ForwardX] progress download 12845056/51380224 25%"),
     时刻(80),
   );
-  const quarter = at("[ForwardX] progress download 12845056/51380224 25%");
+  assert.equal(legacy.percent, 33);
+  assert.equal(legacy.label, "下载面板包");
+  assert.equal(legacy.detail, "12.25 MB / 49 MB · 已用 1 分 20 秒");
+  assert.deepEqual(legacy.steps.map((step) => step.done), [true, false, false, false, false]);
+});
+
+test("下载那一步的条真的随字节数走，小字写着「已下载 / 总量」", () => {
+  const at = (line: string) => getPanelUpgradeProgress(
+    新脚本升级中("[NEX] step 1/5 检查发布资产", "[NEX] step 2/5 下载面板包", "[INFO] Downloading panel bundle: https://…", line),
+    时刻(80),
+  );
+  const quarter = at("[NEX] progress download 12845056/51380224 25%");
   assert.equal(quarter.percent, 33); // 28 + 18 * 0.25 = 32.5
   assert.equal(quarter.label, "下载面板包");
   assert.equal(quarter.detail, "12.25 MB / 49 MB · 已用 1 分 20 秒");
-  const done = at("[ForwardX] progress download 51380224/51380224 100%");
+  const done = at("[NEX] progress download 51380224/51380224 100%");
   assert.equal(done.percent, 46);
   // 总长度不知道：百分比不动（不能瞎猜），只说已下载多少
-  const unknown = at("[ForwardX] progress download 4194304/- -%");
+  const unknown = at("[NEX] progress download 4194304/- -%");
   assert.equal(unknown.percent, 28);
   assert.equal(unknown.detail, "已下载 4 MB · 已用 1 分 20 秒");
   // 进入下一步后，上一步留下的进度行不再影响条
   const extracting = getPanelUpgradeProgress(
-    新脚本升级中("[ForwardX] step 2/5 下载面板包", "[ForwardX] progress download 1/2 50%", "[ForwardX] step 3/5 解压文件"),
+    新脚本升级中("[NEX] step 2/5 下载面板包", "[NEX] progress download 1/2 50%", "[NEX] step 3/5 解压文件"),
     时刻(0),
   );
   assert.equal(extracting.percent, 46);
@@ -144,7 +155,7 @@ test("下载那一步的条真的随字节数走，小字写着「已下载 / �
 
 test("「依赖未变化，跳过安装」那一步立刻完成，条推到重启那一步", () => {
   const progress = getPanelUpgradeProgress(
-    新脚本升级中("[ForwardX] step 3/5 解压文件", "[ForwardX] step 4/5 依赖未变化，跳过安装"),
+    新脚本升级中("[NEX] step 3/5 解压文件", "[NEX] step 4/5 依赖未变化，跳过安装"),
     时刻(40),
   );
   assert.equal(progress.percent, 82);
@@ -155,7 +166,7 @@ test("「依赖未变化，跳过安装」那一步立刻完成，条推到重�
 });
 
 test("轮询失败（面板在重启）：文案换成等待恢复，最后一步转圈，百分比不掉", () => {
-  const job = 新脚本升级中("[ForwardX] step 5/5 重启面板", "[ForwardX] restarting panel service (elapsed 95s)");
+  const job = 新脚本升级中("[NEX] step 5/5 重启面板", "[NEX] restarting panel service (elapsed 95s)");
   const connected = getPanelUpgradeProgress(job, 时刻(100));
   assert.equal(connected.percent, 82);
   assert.equal(connected.label, "重启面板");
@@ -166,7 +177,7 @@ test("轮询失败（面板在重启）：文案换成等待恢复，最后一�
   assert.deepEqual(lost.steps.map((step) => step.active), [false, false, false, false, true]);
 
   // 断线时才走到第 2 步（脚本被杀的那种）：也把最后一步点亮，条不后退
-  const early = getPanelUpgradeProgress(新脚本升级中("[ForwardX] step 2/5 下载面板包"), { ...时刻(10), disconnected: true });
+  const early = getPanelUpgradeProgress(新脚本升级中("[NEX] step 2/5 下载面板包"), { ...时刻(10), disconnected: true });
   assert.equal(early.percent, 82);
   assert.equal(early.steps[4].active, true);
 
@@ -182,7 +193,7 @@ test("轮询失败（面板在重启）：文案换成等待恢复，最后一�
 
 test("面板带着新版本回来：100%，标签写用时；服务端给的用时优先", () => {
   const restarted = getPanelUpgradeProgress(
-    { ...新脚本升级中("[ForwardX] step 5/5 重启面板"), status: "success", restarted: true, restartedAt: "2026-09-30T08:01:42.000Z" },
+    { ...新脚本升级中("[NEX] step 5/5 重启面板"), status: "success", restarted: true, restartedAt: "2026-09-30T08:01:42.000Z" },
   );
   assert.equal(restarted.percent, 100);
   assert.equal(restarted.label, "升级完成，用时 1 分 42 秒");
@@ -200,7 +211,7 @@ test("面板带着新版本回来：100%，标签写用时；服务端给的用�
 
 test("老脚本的日志（这版升级时跑的还是上一版装好的脚本）照旧按里程碑猜，多了已用时间", () => {
   const legacy = getPanelUpgradeProgress(
-    { ...升级中("[ForwardX] Starting panel 升级", "[INFO] Downloading panel bundle: https://…"), startedAt: "2026-09-30T08:00:00.000Z" },
+    { ...升级中("[NEX] Starting panel 升级", "[INFO] Downloading panel bundle: https://…"), startedAt: "2026-09-30T08:00:00.000Z" },
     时刻(200),
   );
   assert.equal(legacy.percent, 74);
@@ -211,7 +222,7 @@ test("老脚本的日志（这版升级时跑的还是上一版装好的脚本�
 });
 
 test("坏掉的标记不认：越界的 step、没有 step 的 progress 行", () => {
-  const bad = getPanelUpgradeProgress(新脚本升级中("[ForwardX] step 9/5 x", "[ForwardX] progress download 1/2 50%"), 时刻(0));
+  const bad = getPanelUpgradeProgress(新脚本升级中("[NEX] step 9/5 x", "[NEX] progress download 1/2 50%"), 时刻(0));
   assert.equal(bad.label, "检查发布资产"); // 退回老办法（Starting panel 判完第 1 步）
   assert.equal(bad.steps.length, 4);
 });

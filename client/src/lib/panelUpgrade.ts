@@ -24,7 +24,8 @@ export const PANEL_UPGRADE_REFRESH_DELAY_MS = PANEL_UPGRADE_REFRESH_DELAY_SECOND
   关于百分比：这不是假进度 —— 步骤都是从真实日志判出来的里程碑，percent 只是把里程碑映射成条宽。
   所以手册「不要假进度」这条不冲突：它反对的是拿定时器凭空爬的那种。
 
-  2.3.398 起安装脚本自己报步骤：`[ForwardX] step N/M 标签`、`[ForwardX] progress download X/Y P%`。
+  2.3.398 起安装脚本自己报步骤：`[NEX] step N/M 标签`、`[NEX] progress download X/Y P%`。
+  （2.3.414 之前脚本打的前缀是 `[ForwardX]`：升级到这版时跑的可能还是旧脚本，所以两种前缀都认。）
   有这些标记就按标记算 —— 下载那一步的条真的随字节数走，「依赖未变化」那一步立刻完成；
   没有（老脚本：这版升级时跑的还是上一版装好的脚本）就退回下面那套按日志特征猜里程碑的老办法。
   老办法的毛病正是这次要修的：「Downloading panel bundle」一行同时判完第 2、3 步，下载一开始就 74%，
@@ -58,8 +59,8 @@ export type PanelUpgradeProgressContext = {
   disconnected?: boolean;
 };
 
-const STEP_MARKER = /^\[ForwardX\] step (\d+)\/(\d+) (.+?)\s*$/;
-const DOWNLOAD_MARKER = /^\[ForwardX\] progress download (\d+)\/(\d+|-) (\d+|-)%\s*$/;
+const STEP_MARKER = /^\[(?:NEX|ForwardX)\] step (\d+)\/(\d+) (.+?)\s*$/;
+const DOWNLOAD_MARKER = /^\[(?:NEX|ForwardX)\] progress download (\d+)\/(\d+|-) (\d+|-)%\s*$/;
 const SKIPPED_STEP = /跳过/;
 
 const DEFAULT_STEP_LABELS: Record<number, string[]> = {

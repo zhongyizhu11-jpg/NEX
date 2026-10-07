@@ -2,7 +2,7 @@ import { getSettingsByPrefix, RUNTIME_CACHE_SETTING_PREFIX, setSetting } from ".
 
 /*
   隧道规则里有两个出口上的端口是入口替出口填的：线路组的调度器，和出口桥的协议守卫。GOST 隧道由
-  入口在 relay 请求里告诉出口拨哪儿，ForwardX 隧道写在握手里，出口照着拨 127.0.0.1:端口。这两个端口
+  入口在 relay 请求里告诉出口拨哪儿，NEX 隧道写在握手里，出口照着拨 127.0.0.1:端口。这两个端口
   却是每台机器按自己的规则集分的（agentHeartbeatRoute 的 allocateProtocolGuardPorts：被占了往后顺延），
   入口和出口上的规则、保留端口不一样，顺延出来的就可能不一样 —— 入口让出口拨的端口上可能什么都没有，
   也可能是另一条规则的调度器，流量跑进别人的线路。

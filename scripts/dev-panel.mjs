@@ -125,7 +125,7 @@ server.stdout.on("data", (chunk) => {
   // Read the port from the child instead of assuming the preferred port. In
   // development mode the server may select the next available port.
   startupOutput = `${startupOutput}${output}`.slice(-8_192);
-  const match = startupOutput.match(/ForwardX panel started on \S+ port (\d+)/);
+  const match = startupOutput.match(/NEX panel started on \S+ port (\d+)/);
   if (match && !backendPort) {
     const port = Number.parseInt(match[1], 10);
     if (Number.isInteger(port) && port > 0 && port < 65_536) {
@@ -142,7 +142,7 @@ server.on("exit", (code, signal) => {
   backendExited = true;
   if (shuttingDown) return;
   const reason = signal || code || 1;
-  const error = new Error(`[ForwardX] dev panel server exited: ${reason}`);
+  const error = new Error(`[NEX] dev panel server exited: ${reason}`);
   if (!backendPort) backendReadyReject(error);
   else {
     console.error(error.message);
@@ -153,11 +153,11 @@ server.on("exit", (code, signal) => {
 let readyTimer;
 try {
   readyTimer = setTimeout(() => {
-    backendReadyReject(new Error(`[ForwardX] dev panel server did not announce a listening port within 20s (preferred port ${serverPort})`));
+    backendReadyReject(new Error(`[NEX] dev panel server did not announce a listening port within 20s (preferred port ${serverPort})`));
   }, 20_000);
   backendPort = await backendReady;
   if (!await waitForServer(backendPort, 5_000)) {
-    throw new Error(`[ForwardX] dev panel server announced port ${backendPort}, but it is not accepting connections`);
+    throw new Error(`[NEX] dev panel server announced port ${backendPort}, but it is not accepting connections`);
   }
 } catch (error) {
   clearTimeout(readyTimer);
@@ -189,7 +189,7 @@ try {
 
   await vite.listen();
 } catch (error) {
-  console.error(`[ForwardX] Vite dev server failed: ${error instanceof Error ? error.message : error}`);
+  console.error(`[NEX] Vite dev server failed: ${error instanceof Error ? error.message : error}`);
   await shutdown(1);
   process.exit(1);
 }
@@ -198,13 +198,13 @@ const localUrls = vite.resolvedUrls?.local || [];
 const baseUrl = localUrls[0] || `http://${host}:${clientPort}/`;
 
 console.log("");
-console.log("[ForwardX] 本地真实开发后台已启动");
-console.log(`[ForwardX] 访问地址：${baseUrl}`);
-console.log(`[ForwardX] 公开主机监控：${new URL("dev", baseUrl).toString()}`);
-console.log(`[ForwardX] 本地 SQLite：${sqlitePath}`);
-console.log(`[ForwardX] 开发管理员：dev.admin@forwardx.local / forwardx-dev`);
-console.log("[ForwardX] 该模式使用真实页面、真实路由和真实组件，只是数据为本地开发数据。");
-console.log("[ForwardX] 按 Ctrl+C 停止服务。");
+console.log("[NEX] 本地真实开发后台已启动");
+console.log(`[NEX] 访问地址：${baseUrl}`);
+console.log(`[NEX] 公开主机监控：${new URL("dev", baseUrl).toString()}`);
+console.log(`[NEX] 本地 SQLite：${sqlitePath}`);
+console.log(`[NEX] 开发管理员：dev.admin@forwardx.local / forwardx-dev`);
+console.log("[NEX] 该模式使用真实页面、真实路由和真实组件，只是数据为本地开发数据。");
+console.log("[NEX] 按 Ctrl+C 停止服务。");
 console.log("");
 
 async function shutdown(exitCode = 0) {

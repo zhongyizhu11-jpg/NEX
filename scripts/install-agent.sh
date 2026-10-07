@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-# ForwardX Agent GitHub 入口脚本
+# NEX Agent GitHub 入口脚本
 # install/upgrade: 从面板获取安装脚本并自动执行
 # uninstall: 本地清理，不依赖面板
 
@@ -43,7 +43,7 @@ STATE_DIR="/var/lib/forwardx-agent"
 show_help() {
   cat <<'EOF'
 ======================================
-  ForwardX Agent 管理工具
+  NEX Agent 管理工具
 ======================================
 
 用法:
@@ -186,7 +186,7 @@ do_install() {
   fi
 
   echo "======================================"
-  echo "  ForwardX Agent 安装程序（GitHub 入口）"
+  echo "  NEX Agent 安装程序（GitHub 入口）"
   echo "======================================"
   echo "Panel URL: ${PANEL_URL}"
   echo "Token: ${agent_token:0:8}***"
@@ -216,7 +216,7 @@ do_upgrade() {
   fi
 
   echo "======================================"
-  echo "  ForwardX Agent 升级程序"
+  echo "  NEX Agent 升级程序"
   echo "======================================"
   echo "Panel URL: ${PANEL_URL}"
   if [ -n "$agent_token" ]; then
@@ -237,7 +237,7 @@ do_upgrade() {
 do_uninstall() {
   require_root
   echo "======================================"
-  echo "  ForwardX Agent 卸载程序（本地）"
+  echo "  NEX Agent 卸载程序（本地）"
   echo "======================================"
 
   remove_service_by_name "$SERVICE_NAME"

@@ -17,7 +17,7 @@ import test from "node:test";
  *   · 中转机上的中继规则跟着父规则的协议走；
  *   · gost 端口转发的「按访客固定」：面板让 gost 给调度器加一个 PROXY 头、调度器读完就扔，
  *     只在 Agent 认得这个（2.2.199 起）时才这么做 —— 老 Agent 会把头原样转给目标；
- *   · Nginx 隧道：调度器在出口机上，出口的 nginx 拨它（ForwardX 隧道见 routeGroupForwardX.test.ts）。
+ *   · Nginx 隧道：调度器在出口机上，出口的 nginx 拨它（NEX 隧道见 routeGroupForwardX.test.ts）。
  *
  * 起一个真的 sqlite 和真的心跳路由跑一遍。
  */
@@ -362,7 +362,7 @@ test("Nginx 隧道：出口的 nginx 拨出口机上的调度器，规格下发�
   assert.match(outcome.oldAgent.nginxConfig, /upstream fwx_texit_1_6_22006_tcp\s*\{[^}]*198\.51\.100\.7:7443/, outcome.oldAgent.nginxConfig);
 });
 
-test("保存时放开 Nginx 隧道和 ForwardX 隧道，认不出来的隧道类型照样拦", () => {
+test("保存时放开 Nginx 隧道和 NEX 隧道，认不出来的隧道类型照样拦", () => {
   assert.equal(outcome.nginxTunnelAllowed, true);
   assert.equal(outcome.forwardxTunnelAllowed, true);
   assert.match(outcome.unknownTunnelError, /这种隧道用不了线路组/);
@@ -382,7 +382,7 @@ test("线路面板读版本的机器和心跳同一个口径；按最旧的那�
   assert.deepEqual(outcome.statusHosts["3"], [1], "负载均衡关掉后留着的节点不算");
   assert.deepEqual(outcome.statusHosts["4"], [1, 3], "开着的负载均衡出口都算");
   assert.deepEqual(outcome.statusHosts.direct, [5], "直连规则：规则所在的机器");
-  assert.deepEqual(outcome.statusHosts.forwardx, [1, 3], "ForwardX 隧道：出口和开着的负载均衡出口");
-  assert.deepEqual(outcome.statusHosts.forwardxSingle, [1], "ForwardX 隧道没开负载均衡：只有出口");
+  assert.deepEqual(outcome.statusHosts.forwardx, [1, 3], "NEX 隧道：出口和开着的负载均衡出口");
+  assert.deepEqual(outcome.statusHosts.forwardxSingle, [1], "NEX 隧道没开负载均衡：只有出口");
   assert.deepEqual(outcome.oldest, ["2.2.150", "2.2.150", "2.2.199", ""]);
 });

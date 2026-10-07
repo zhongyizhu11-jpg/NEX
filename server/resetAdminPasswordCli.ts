@@ -53,7 +53,7 @@ type AdminRow = {
 
 function usage() {
   return [
-    "ForwardX administrator password reset",
+    "NEX administrator password reset",
     "",
     "Usage:",
     "  node dist/reset-admin-password.js",
