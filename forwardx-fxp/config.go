@@ -100,6 +100,9 @@ func normalizeExitStrategy(value string) string {
 }
 
 func validateConfig(cfg config) error {
+	if err := validateLinkShaping(cfg); err != nil {
+		return err
+	}
 	if cfg.Role == "entry-group" {
 		return validateEntryGroupConfig(cfg)
 	}
@@ -224,6 +227,25 @@ func (registry *entryListenLaneRegistry) add(lane entryListenLane) error {
 		registry.wildcard[key] = lane
 	} else {
 		registry.exact[key+"\x00"+lane.host] = lane
+	}
+	return nil
+}
+
+// linkShaperMaxMbps 是链路带宽上限字段能填的最大值（1 Tbit/s）。
+const linkShaperMaxMbps = 1_000_000
+
+func validateLinkShaping(cfg config) error {
+	for _, item := range append([]config{cfg}, cfg.Entries...) {
+		switch strings.ToLower(strings.TrimSpace(item.LinkShaping)) {
+		case "", "auto", "manual", "off":
+		default:
+			return fmt.Errorf("bad linkShaping %q", item.LinkShaping)
+		}
+		for name, value := range map[string]int{"linkUpMbps": item.LinkUpMbps, "linkDownMbps": item.LinkDownMbps, "linkUpHintMbps": item.LinkUpHintMbps, "linkDownHintMbps": item.LinkDownHintMbps} {
+			if value < 0 || value > linkShaperMaxMbps {
+				return fmt.Errorf("bad %s %d", name, value)
+			}
+		}
 	}
 	return nil
 }

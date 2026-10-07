@@ -25,11 +25,13 @@ import test from "node:test";
 
 type Beat = {
   fxpEntry: Record<string, { targetIp: string; targetPort: number }>;
+  fxpLink: Record<string, { mode?: string; up?: number; down?: number; upHint?: number; downHint?: number }>;
   gostEntry: Record<string, string>;
   schedulers: Record<string, number>;
   guards: Record<string, { listenPort: number; target: string }>;
 };
 type Outcome = {
+  linkRepo: { savedCount: number; linkRows: any[]; hints: Record<string, { up: number; down: number }> };
   entryFirst: Beat;
   exit: Beat;
   node: Beat;
@@ -77,11 +79,21 @@ function run(): Outcome {
       const values = [id, name, 2, 1, mode, listenPort, 1, 1, ...Object.values(extra)];
       return exec("INSERT INTO tunnels (" + columns.join(", ") + ") VALUES (" + values.map(() => "?").join(", ") + ")", values);
     };
-    await tunnel(1, "NEX", "forwardx", 23001);
+    await tunnel(1, "NEX", "forwardx", 23001, { linkShapingMode: "manual", linkUpMbps: 1500, linkDownMbps: 1560 });
     await tunnel(2, "GOST", "tls", 23002);
     await tunnel(3, "GOST 出口发 PROXY 头", "tls", 23003, { proxyProtocolExitSend: 1 });
     await tunnel(4, "GOST 负载均衡", "tls", 23004, { loadBalanceEnabled: 1, loadBalanceStrategy: "round_robin" });
     await exec('INSERT INTO tunnel_exit_nodes ("tunnelId", seq, "hostId", "listenPort", "isEnabled") VALUES (4, 1, 4, 23104, 1)');
+    // 6 号：NEX 隧道，链路整形默认自动档；面板里已经记着两端各自学到的限速点。
+    await tunnel(6, "NEX 自动", "forwardx", 23006);
+    await exec(
+      'INSERT INTO forward_rules (id, "hostId", name, "forwardType", protocol, "sourcePort", "targetIp", "targetPort", "userId", "isEnabled", "isRunning", "tunnelId", "tunnelExitPort") VALUES (6, 2, ?, ?, ?, ?, ?, ?, 1, 1, 1, 6, 23006)',
+      ["route-6", "gost", "tcp", 24006, "198.51.100.7", 443],
+    );
+    await exec(
+      'INSERT INTO tunnel_link_shaping ("tunnelId", "hostId", role, direction, mode, state, "rateMbps", "learnedMbps", "lossPermille") VALUES (6, 2, ?, ?, ?, ?, 1450, 1480, 0), (6, 1, ?, ?, ?, ?, 1490, 1520, 2)',
+      ["entry", "up", "auto", "shaping", "exit", "down", "auto", "shaping"],
+    );
 
     const direct = (key, dest) => ({ key, name: key, hops: [], dest, weight: 50, probe: null, dial: null });
     const paths = JSON.stringify([direct("main", null), direct("backup", { ip: "198.51.100.9", port: 443 })]);
@@ -123,10 +135,17 @@ function run(): Outcome {
       const body = await response.json();
       if (response.status !== 200) throw new Error("心跳没通: " + response.status + " " + JSON.stringify(body));
       const fxpEntry = {};
+      const fxpLink = {};
       const gostEntry = {};
       for (const action of (body.desiredState && body.desiredState.actions) || []) {
         if (action && action.fxp && action.op === "apply" && action.fxp.role === "entry") {
           fxpEntry[String(action.ruleId)] = { targetIp: String(action.fxp.targetIp), targetPort: Number(action.fxp.targetPort) };
+        }
+        if (action && action.fxp && action.op === "apply") {
+          fxpLink[String(action.fxp.role) + ":" + String(action.fxp.tunnelId)] = {
+            mode: action.fxp.linkShaping, up: action.fxp.linkUpMbps, down: action.fxp.linkDownMbps,
+            upHint: action.fxp.linkUpHintMbps, downHint: action.fxp.linkDownHintMbps,
+          };
         }
         for (const config of (action && action.managedConfigs) || []) {
           if (!String(config.path || "").endsWith(".json")) continue;
@@ -148,7 +167,7 @@ function run(): Outcome {
       for (const guard of body.guardRules || []) {
         if (Number(guard.tunnelId || 0) > 0) guards[String(guard.ruleId)] = { listenPort: Number(guard.listenPort), target: guard.targetIp + ":" + guard.targetPort };
       }
-      return { fxpEntry, gostEntry, schedulers, guards };
+      return { fxpEntry, fxpLink, gostEntry, schedulers, guards };
     };
 
     // 入口「稳定计划」：放一份假的，看出口报端口以后它有没有被清掉（清掉 = 入口马上重算）。
@@ -207,9 +226,17 @@ function run(): Outcome {
     const persistedHosts = Object.keys(persisted).map((key) => Number(key.slice(ports.TUNNEL_EXIT_PORTS_SETTING_PREFIX.length))).sort((a, b) => a - b);
     settings.invalidateAllSettingsCache();
     const settingsLeak = Object.keys(await settings.getAllSettings()).filter((key) => key.startsWith("runtimeCache:"));
+    // FXP 报上来的整形状态：同一主机同一方向只有一行（更新，不新增）；提示值按主机取。
+    const linkRepo = await import(url("server/repositories/tunnelLinkShapingRepository.ts"));
+    const savedCount = await linkRepo.recordTunnelLinkShaping(6, 2, "entry", [{ direction: "up", mode: "auto", state: "shaping", rateMbps: 1460, learnedMbps: 1485, lossPct: 0.4 }]);
+    const linkRows = (await linkRepo.listTunnelLinkShapingByTunnelIds([6]))
+      .map((row) => ({ hostId: row.hostId, direction: row.direction, state: row.state, rateMbps: row.rateMbps, learnedMbps: row.learnedMbps, lossPermille: row.lossPermille }))
+      .sort((a, b) => a.hostId - b.hostId);
+    const hints = Object.fromEntries(await linkRepo.tunnelLinkShapingHintsByHost(2));
     console.log("OUTCOME " + JSON.stringify({
       entryFirst, exit, node, entryAfter, entryPlan: { afterEntryBeat, afterExitReport, afterSameExitReport },
       newRuleEntry, newRuleExit, newRuleEntryAfter, entryAfterRestart, persistedHosts, settingsLeak,
+      linkRepo: { savedCount, linkRows, hints },
     }));
   `;
   const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
@@ -271,4 +298,20 @@ test("面板重启后从库里读回出口的端口，入口不用先变一次�
   assert.equal(outcome.entryAfterRestart.gostEntry["5"], "127.0.0.1:41006");
   assert.deepEqual(outcome.persistedHosts, [1, 4], "只存有出口端口的机器");
   assert.deepEqual(outcome.settingsLeak, [], "运行时缓存不混进系统设置");
+});
+
+test("链路整形档位跟着 FXP 配置下发：手动给上限，自动给面板记住的限速点作提示", () => {
+  assert.deepEqual(outcome.entryAfter.fxpLink["entry:1"], { mode: "manual", up: 1500, down: 1560 }, "入口的 FXP 配置");
+  assert.deepEqual(outcome.exit.fxpLink["exit:1"], { mode: "manual", up: 1500, down: 1560 }, "出口的 FXP 配置");
+  assert.deepEqual(outcome.entryAfter.fxpLink["entry:6"], { mode: "auto", upHint: 1480 }, "入口主机只拿自己学到的上行提示值");
+  assert.deepEqual(outcome.exit.fxpLink["exit:6"], { mode: "auto", downHint: 1520 }, "出口主机只拿自己学到的下行提示值");
+});
+
+test("整形状态入库：同一主机同一方向只有一行，更新不是新增；提示值按主机取", () => {
+  assert.equal(outcome.linkRepo.savedCount, 1);
+  assert.deepEqual(outcome.linkRepo.linkRows, [
+    { hostId: 1, direction: "down", state: "shaping", rateMbps: 1490, learnedMbps: 1520, lossPermille: 2 },
+    { hostId: 2, direction: "up", state: "shaping", rateMbps: 1460, learnedMbps: 1485, lossPermille: 4 },
+  ]);
+  assert.deepEqual(outcome.linkRepo.hints, { "6": { up: 1485, down: 0 } });
 });

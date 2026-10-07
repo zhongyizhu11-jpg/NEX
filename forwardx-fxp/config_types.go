@@ -75,7 +75,17 @@ type config struct {
 	TCPCongestion string `json:"tcpCongestion,omitempty"`
 	// AEAD 是帧加密算法：空 / auto 按本机实测（没有 AES 硬件时偏好 ChaCha20），
 	// 也可以写 aes-gcm 或 chacha20-poly1305。两端握手时协商，见 aead.go。
-	AEAD             string `json:"aead,omitempty"`
+	AEAD string `json:"aead,omitempty"`
+	// 链路整形（见 link_shaper.go）。LinkShaping 是档位：auto 自动识别限速点、
+	// manual 按下面的上限整形、off 关；没写（旧面板）时填了上限就是 manual。
+	// LinkUpMbps / LinkDownMbps 是手动模式的上限（Mbit/s）：入口→出口（上行）和
+	// 出口→入口（下行）。LinkUpHintMbps / LinkDownHintMbps 是自动模式的提示值：
+	// 面板记住的上次学到的限速点，本机没有记录时从它起步。
+	LinkShaping      string `json:"linkShaping,omitempty"`
+	LinkUpMbps       int    `json:"linkUpMbps,omitempty"`
+	LinkDownMbps     int    `json:"linkDownMbps,omitempty"`
+	LinkUpHintMbps   int    `json:"linkUpHintMbps,omitempty"`
+	LinkDownHintMbps int    `json:"linkDownHintMbps,omitempty"`
 	PanelURL         string `json:"panelUrl"`
 	Token            string `json:"token"`
 	RelayExitHost    string `json:"relayExitHost,omitempty"`

@@ -44,7 +44,7 @@ import {
   selectTunnelHopDialAddress,
 } from "../tunnelAddressSelection";
 import { planManualTunnelTestRefresh } from "../tunnelRuntimePlan";
-import { isForwardXTunnel, tunnelFxpMemberHostIds, tunnelFxpRuntimeIssues, tunnelFxpRuntimeIssueSummary } from "../tunnelFxpRuntime";
+import { TUNNEL_LINK_MBPS_MAX, normalizeTunnelLinkShapingMode, isForwardXTunnel, tunnelFxpMemberHostIds, tunnelFxpRuntimeIssues, tunnelFxpRuntimeIssueSummary } from "../tunnelFxpRuntime";
 import {
   filterTunnelFieldsForUser,
   getLinkAccessScope,
@@ -153,7 +153,24 @@ function normalizeTunnelRuntimeOptions(input: any, mode: unknown) {
     proxyProtocolVersion: proxyAny && Number(input.proxyProtocolVersion) === 2 ? 2 : 1,
     tcpFastOpen: forwardxMode && dbBool(input.tcpFastOpen),
     udpOverTcp: forwardxMode && dbBool(input.udpOverTcp),
+    linkUpMbps: forwardxMode ? normalizeLinkMbps(input.linkUpMbps) : 0,
+    linkDownMbps: forwardxMode ? normalizeLinkMbps(input.linkDownMbps) : 0,
+    linkShapingMode: forwardxMode ? normalizeTunnelLinkShapingMode(input.linkShapingMode) : "off",
   };
+}
+
+/** 手动档必须至少填一个方向，否则等于没开；界面也拦，这里兜底。 */
+function assertLinkShapingOptions(options: { linkShapingMode: string; linkUpMbps: number; linkDownMbps: number }) {
+  if (options.linkShapingMode === "manual" && options.linkUpMbps <= 0 && options.linkDownMbps <= 0) {
+    throw new Error("链路带宽上限选了手动，至少要填一个方向的数值");
+  }
+}
+
+/** 链路带宽上限（Mbit/s）：0 = 不整形；上限和 FXP 的 linkShaperMaxMbps 一致。 */
+function normalizeLinkMbps(value: unknown) {
+  const parsed = Math.floor(Number(value));
+  if (!Number.isFinite(parsed) || parsed <= 0) return 0;
+  return Math.min(TUNNEL_LINK_MBPS_MAX, parsed);
 }
 
 async function validateMimicUdpPort(input: {
@@ -554,6 +571,12 @@ async function attachTunnelEndpointHosts(tunnels: any[], options: { includeLaten
     }
   }
   const latestLatencyByTunnel = await db.getLatestTunnelLatencies(tunnels.map((tunnel) => Number(tunnel.id)));
+  const linkShapingByTunnel = new Map<number, any[]>();
+  for (const row of await db.listTunnelLinkShapingByTunnelIds(tunnels.map((tunnel) => Number(tunnel.id)))) {
+    const list = linkShapingByTunnel.get(Number((row as any).tunnelId)) || [];
+    list.push(row);
+    linkShapingByTunnel.set(Number((row as any).tunnelId), list);
+  }
   const latestLatencySeriesByTunnel: Map<number, any[]> = options.includeLatencySeries === false
     ? new Map()
     : await db.getLatestTunnelLatencySeries(tunnels.map((tunnel) => Number(tunnel.id)));
@@ -645,6 +668,19 @@ async function attachTunnelEndpointHosts(tunnels: any[], options: { includeLaten
       exitGroup: groupSummary(endpointGroupById.get(Number(tunnel.exitGroupId || 0))),
       // 成员主机里 FXP 握不上当前协议的（见 server/tunnelFxpRuntime.ts）。
       fxpIssues,
+      // FXP 报上来的链路整形状态：每台成员主机每个方向一条（自动模式学到的限速点在 learnedMbps）。
+      linkShapingStatus: (linkShapingByTunnel.get(Number(tunnel.id)) || []).map((row: any) => ({
+        hostId: Number(row.hostId),
+        hostName: hostSummary(hostMap.get(Number(row.hostId)))?.name ?? null,
+        role: String(row.role || "entry"),
+        direction: String(row.direction),
+        mode: String(row.mode || "off"),
+        state: String(row.state || "off"),
+        rateMbps: Number(row.rateMbps || 0),
+        learnedMbps: Number(row.learnedMbps || 0),
+        lossPct: Number(row.lossPermille || 0) / 10,
+        updatedAt: row.updatedAt ?? null,
+      })),
     };
   });
 }
@@ -927,6 +963,9 @@ export const tunnelsRouter = router({
         proxyProtocolVersion: proxyProtocolVersionSchema.optional().default(1),
         tcpFastOpen: z.boolean().optional().default(false),
         udpOverTcp: z.boolean().optional().default(false),
+        linkUpMbps: z.number().int().min(0).max(1_000_000).optional().default(0),
+        linkDownMbps: z.number().int().min(0).max(1_000_000).optional().default(0),
+        linkShapingMode: z.enum(["auto", "manual", "off"]).optional().default("auto"),
         blockHttp: z.boolean().optional().default(false),
         blockSocks: z.boolean().optional().default(false),
         blockTls: z.boolean().optional().default(false),
@@ -1056,6 +1095,7 @@ export const tunnelsRouter = router({
           ]);
         }
         const runtimeOptions = normalizeTunnelRuntimeOptions(input, normalizedMode);
+        assertLinkShapingOptions(runtimeOptions);
         if (runtimeOptions.udpOverTcp) {
           const entryHostIds = await getTunnelEntryTestHostIds({
             entryGroupId: input.entryGroupId ?? null,
@@ -1202,6 +1242,9 @@ export const tunnelsRouter = router({
         proxyProtocolVersion: proxyProtocolVersionSchema.optional(),
         tcpFastOpen: z.boolean().optional(),
         udpOverTcp: z.boolean().optional(),
+        linkUpMbps: z.number().int().min(0).max(1_000_000).optional(),
+        linkDownMbps: z.number().int().min(0).max(1_000_000).optional(),
+        linkShapingMode: z.enum(["auto", "manual", "off"]).optional(),
         blockHttp: z.boolean().optional(),
         blockSocks: z.boolean().optional(),
         blockTls: z.boolean().optional(),
@@ -1319,6 +1362,9 @@ export const tunnelsRouter = router({
           "proxyProtocolVersion",
           "tcpFastOpen",
           "udpOverTcp",
+          "linkUpMbps",
+          "linkDownMbps",
+          "linkShapingMode",
         ] as const;
         const runtimeOptionsProvided = tunnelRuntimeKeys.some((key) => (data as any)[key] !== undefined);
         if (runtimeOptionsProvided || (data as any).mode !== undefined) {
@@ -1326,7 +1372,9 @@ export const tunnelsRouter = router({
           for (const key of tunnelRuntimeKeys) {
             runtimeSource[key] = (data as any)[key] !== undefined ? (data as any)[key] : (tunnel as any)[key];
           }
-          Object.assign(data as any, normalizeTunnelRuntimeOptions(runtimeSource, nextModeForRuntime));
+          const nextRuntimeOptions = normalizeTunnelRuntimeOptions(runtimeSource, nextModeForRuntime);
+          assertLinkShapingOptions(nextRuntimeOptions);
+          Object.assign(data as any, nextRuntimeOptions);
         }
         const modeChanged = (data as any).mode !== undefined && nextModeForRuntime !== normalizeTunnelMode((tunnel as any).mode);
         const forwardXVersionChanged = nextForwardXVersion !== normalizeForwardXVersion((tunnel as any).forwardxVersion);

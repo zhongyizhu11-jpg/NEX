@@ -941,6 +941,9 @@ export const tunnels = table("tunnels", {
   proxyProtocolVersion: int("proxyProtocolVersion").notNull().default(1),
   tcpFastOpen: boolean("tcpFastOpen").notNull().default(false),
   udpOverTcp: boolean("udpOverTcp").notNull().default(false),
+  linkUpMbps: int("linkUpMbps").notNull().default(0),
+  linkDownMbps: int("linkDownMbps").notNull().default(0),
+  linkShapingMode: varchar("linkShapingMode", { length: 16 }).notNull().default("auto"),
   blockHttp: boolean("blockHttp").notNull().default(false),
   blockSocks: boolean("blockSocks").notNull().default(false),
   blockTls: boolean("blockTls").notNull().default(false),
@@ -987,6 +990,22 @@ export const tunnelHops = table("tunnel_hops", {
 });
 export type TunnelHop = typeof tunnelHops.$inferSelect;
 export type InsertTunnelHop = typeof tunnelHops.$inferInsert;
+
+export const tunnelLinkShaping = table("tunnel_link_shaping", {
+  id: serial("id"),
+  tunnelId: int("tunnelId").notNull(),
+  hostId: int("hostId").notNull(),
+  role: varchar("role", { length: 16 }).notNull().default("entry"),
+  direction: varchar("direction", { length: 8 }).notNull(),
+  mode: varchar("mode", { length: 16 }).notNull().default("auto"),
+  state: varchar("state", { length: 16 }).notNull().default("watching"),
+  rateMbps: int("rateMbps").notNull().default(0),
+  learnedMbps: int("learnedMbps").notNull().default(0),
+  lossPermille: int("lossPermille").notNull().default(0),
+  updatedAt: epoch("updatedAt").notNull().default(nowDefault()),
+});
+export type TunnelLinkShaping = typeof tunnelLinkShaping.$inferSelect;
+export type InsertTunnelLinkShaping = typeof tunnelLinkShaping.$inferInsert;
 
 export const forwardRuleTunnelExits = table("forward_rule_tunnel_exits", {
   id: serial("id"),

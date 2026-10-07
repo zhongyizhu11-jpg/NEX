@@ -38,7 +38,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.211"
+var Version = "2.2.212"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -2906,14 +2906,22 @@ type fxpSpec struct {
 	ProxyProtocolExitSend    bool              `json:"proxyProtocolExitSend"`
 	ProxyProtocolVersion     int               `json:"proxyProtocolVersion"`
 	TCPFastOpen              bool              `json:"tcpFastOpen"`
-	PanelURL                 string            `json:"panelUrl,omitempty"`
-	Token                    string            `json:"token,omitempty"`
-	RelayExitHost            string            `json:"relayExitHost,omitempty"`
-	RelayExitPort            int               `json:"relayExitPort,omitempty"`
-	UDPRelayExitPort         int               `json:"udpRelayExitPort,omitempty"`
-	RelayPeerID              string            `json:"relayPeerId,omitempty"`
-	RelayKey                 string            `json:"relayKey,omitempty"`
-	DNSGeneration            int               `json:"dnsGeneration,omitempty"`
+	// 链路整形（见 forwardx-fxp/link_shaper.go），原样交给 FXP：LinkShaping 是档位
+	// （auto / manual / off），LinkUpMbps / LinkDownMbps 是手动上限（Mbit/s），
+	// LinkUpHintMbps / LinkDownHintMbps 是自动模式的提示值（面板记住的限速点）。
+	LinkShaping      string `json:"linkShaping,omitempty"`
+	LinkUpMbps       int    `json:"linkUpMbps,omitempty"`
+	LinkDownMbps     int    `json:"linkDownMbps,omitempty"`
+	LinkUpHintMbps   int    `json:"linkUpHintMbps,omitempty"`
+	LinkDownHintMbps int    `json:"linkDownHintMbps,omitempty"`
+	PanelURL         string `json:"panelUrl,omitempty"`
+	Token            string `json:"token,omitempty"`
+	RelayExitHost    string `json:"relayExitHost,omitempty"`
+	RelayExitPort    int    `json:"relayExitPort,omitempty"`
+	UDPRelayExitPort int    `json:"udpRelayExitPort,omitempty"`
+	RelayPeerID      string `json:"relayPeerId,omitempty"`
+	RelayKey         string `json:"relayKey,omitempty"`
+	DNSGeneration    int    `json:"dnsGeneration,omitempty"`
 	// Single-connection multipath aggregation: the entry stripes each client
 	// connection over every leg and the exit reassembles it.
 	MultipathEnabled    bool              `json:"multipathEnabled,omitempty"`
@@ -4908,7 +4916,22 @@ func iperf3ClientCommand(task lookingGlassTask) (string, []string, error) {
 	if task.Reverse {
 		args = append(args, "-R")
 	}
+	if task.UDP {
+		// UDP 的 -b 默认只有 1 Mbit/s，必须显式给；0 表示不限速（iperf3 自己的约定）。
+		args = append(args, "-u", "-b", strconv.Itoa(iperf3ClientUDPMbps(task))+"M")
+	}
 	return "iperf3", args, nil
+}
+
+// iperf3ClientUDPMbps 是 UDP 模式每条流的发送速率（Mbit/s），0 = 不限；上限 100 Gbit/s。
+func iperf3ClientUDPMbps(task lookingGlassTask) int {
+	if task.UDPMbps <= 0 {
+		return 0
+	}
+	if task.UDPMbps > 100000 {
+		return 100000
+	}
+	return task.UDPMbps
 }
 
 func missingNetworkToolMessage(tool string) string {
@@ -10028,6 +10051,11 @@ func fxpServerSignature(spec fxpSpec) string {
 		strconv.FormatBool(spec.ProxyProtocolExitSend),
 		strconv.Itoa(normalizeProxyProtocolVersion(spec.ProxyProtocolVersion)),
 		strconv.FormatBool(spec.TCPFastOpen),
+		// 链路整形的档位和上限变了要让 FXP 重读配置（热更新就够，监听不动）；
+		// 提示值只在 FXP 启动时用，不进签名。
+		strings.ToLower(strings.TrimSpace(spec.LinkShaping)),
+		strconv.Itoa(spec.LinkUpMbps),
+		strconv.Itoa(spec.LinkDownMbps),
 		spec.RelayExitHost,
 		strconv.Itoa(spec.RelayExitPort),
 		strconv.Itoa(spec.UDPRelayExitPort),
@@ -10906,7 +10934,7 @@ func startFXPProcessLockedWithPersistence(cfg Config, spec fxpSpec, actionMessag
 	}
 	spec = fxpSpecWithPanelCredentials(cfg, spec)
 	logf(
-		"proxy-debug fxp config role=%s tunnel=%d rule=%d listen=%d udpListen=%d protocol=%s exitStrategy=%s proxyReceive=%v proxySend=%v proxyExitReceive=%v proxyExitSend=%v tcpFastOpen=%v exit=%s:%d udpExit=%d relayNext=%s:%d udpRelayNext=%d target=%s:%d udpTargets=%d",
+		"proxy-debug fxp config role=%s tunnel=%d rule=%d listen=%d udpListen=%d protocol=%s exitStrategy=%s proxyReceive=%v proxySend=%v proxyExitReceive=%v proxyExitSend=%v tcpFastOpen=%v linkShaping=%s linkUp=%d linkDown=%d exit=%s:%d udpExit=%d relayNext=%s:%d udpRelayNext=%d target=%s:%d udpTargets=%d",
 		spec.Role,
 		spec.TunnelID,
 		spec.RuleID,
@@ -10919,6 +10947,9 @@ func startFXPProcessLockedWithPersistence(cfg Config, spec fxpSpec, actionMessag
 		spec.ProxyProtocolExitReceive,
 		spec.ProxyProtocolExitSend,
 		spec.TCPFastOpen,
+		spec.LinkShaping,
+		spec.LinkUpMbps,
+		spec.LinkDownMbps,
 		spec.ExitHost,
 		spec.ExitPort,
 		spec.UDPExitPort,
@@ -12384,10 +12415,13 @@ type lookingGlassTask struct {
 	ResolvedAddresses []string `json:"resolvedAddresses"`
 	Family            int      `json:"family"`
 	Port              int      `json:"port"`
-	// iperf3 客户端（method = iperf3-client）：-R、-P、-t。
+	// iperf3 客户端（method = iperf3-client）：-R、-P、-t；UDP 模式（-u -b）用来测
+	// 链路的限速点，UDPMbps 是每条流的发送速率（0 = 不限）。
 	Reverse   bool   `json:"reverse,omitempty"`
 	Streams   int    `json:"streams,omitempty"`
 	Seconds   int    `json:"seconds,omitempty"`
+	UDP       bool   `json:"udp,omitempty"`
+	UDPMbps   int    `json:"udpMbps,omitempty"`
 	CreatedAt string `json:"createdAt"`
 }
 

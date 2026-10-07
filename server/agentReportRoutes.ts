@@ -1,5 +1,6 @@
 import { Router, Request, Response } from "express";
 import * as db from "./db";
+import { appendPanelLog } from "./_core/panelLogger";
 import { isHostMetricsWatching, pushAgentRefresh } from "./agentEvents";
 import { handleTrafficBillingShortfall } from "./trafficBillingRuleBlock";
 import {
@@ -725,6 +726,35 @@ agentRouter.post("/api/agent/plugin-action-result", async (req: Request, res: Re
   } catch (error) {
     console.error("[Agent Plugin Action] Error:", error);
     res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// FXP 报链路整形状态（forwardx-fxp/link_shaper_report.go）：一条隧道一次，两个方向。
+agentRouter.post("/api/agent/fxp-link-shaping", async (req: Request, res: Response) => {
+  try {
+    const host = await getAgentHostIdentityFromRequest(req);
+    if (!host) {
+      res.status(401).json({ error: "Invalid token" });
+      return;
+    }
+    const tunnelId = Math.floor(Number(req.body?.tunnelId || 0));
+    const role = String(req.body?.role || "").trim().toLowerCase().slice(0, 16);
+    const rawShapers = Array.isArray(req.body?.shapers) ? req.body.shapers : [];
+    const shapers = rawShapers.map(db.normalizeTunnelLinkShapingReport).filter(Boolean) as db.TunnelLinkShapingReport[];
+    if (!Number.isFinite(tunnelId) || tunnelId <= 0 || shapers.length === 0 || rawShapers.length > 4) {
+      res.status(400).json({ error: "tunnelId and shapers are required" });
+      return;
+    }
+    const tunnel = await db.getTunnelById(tunnelId);
+    if (!tunnel) {
+      res.status(404).json({ error: "tunnel not found" });
+      return;
+    }
+    const saved = await db.recordTunnelLinkShaping(tunnelId, Number((host as any).id), role, shapers);
+    res.json({ ok: true, saved });
+  } catch (error) {
+    appendPanelLog("error", `[LinkShaping] report failed: ${error instanceof Error ? error.message : String(error)}`);
+    res.status(500).json({ error: "failed to record link shaping status" });
   }
 });
 

@@ -570,6 +570,8 @@ func (m *fxpRuntimeManager) apply(cfg config) error {
 			log.Printf("%s udp listener on :%d removed", slot.label, slot.plan.port)
 		}
 	}
+	// 5. 监听都落定了再改链路整形：绑不上整批回滚时，已有连接也不能先按新速率走。
+	linkShapersApply(cfg)
 	return nil
 }
 
