@@ -159,19 +159,27 @@ export function buildHostActions(
 }
 
 /**
- * 资源一行三个规格格，**不画条**。
+ * 资源一行三个规格格。格子的样子照 kfchost 套餐卡里的规格格：比卡深一点的灰底、
+ * 12px 圆角，标签在上、数字在下，不带图标（「CPU」「内存」「磁盘」三个词自己就认得出）。
  *
- * 条留给详情页。列表要回答的是「有没有哪台快满了」，一个数字就够。格子的样子照
- * kfchost 套餐卡里的规格格：比卡深一点的灰底、12px 圆角，标签在上、数字在下，不带图标
- * （「CPU」「内存」「磁盘」三个词自己就认得出，图标只是占地方）。
+ * 格子底部一根 3px 细条（2026-10-08 用户要的），颜色跟数字走：正常主色渐变、≥70% 琥珀、
+ * ≥90% 红。条是绝对定位贴在格子底部的，格子和卡片的高度一点不变（见 workspace.css
+ * 的 .fx-host-spec-bar）。条长用 transform: scaleX 而不是 width，数值刷新时只走合成层。
+ * 数字不知道（— 或还没上报）就不画条。
  *
  * 只在线时画：离线的机器那三个数是最后一次上报的化石，画出来像是此刻的占用。
  */
-function SpecBlock({ label, value, tone, muted }: { label: string; value: string; tone?: "warn" | "down"; muted?: boolean }) {
+function SpecBlock({ label, value, percent, tone, muted }: { label: string; value: string; percent: number | null; tone?: "warn" | "down"; muted?: boolean }) {
+  const ratio = percent === null || muted ? null : Math.max(0, Math.min(100, percent)) / 100;
   return (
     <span className="fx-host-spec">
       <i>{label}</i>
       <b data-tone={tone} data-muted={muted ? "" : undefined}>{value}</b>
+      {ratio === null ? null : (
+        <span className="fx-host-spec-bar" aria-hidden="true">
+          <span data-tone={tone} style={{ transform: `scaleX(${ratio})` }} />
+        </span>
+      )}
     </span>
   );
 }
@@ -183,14 +191,14 @@ function usageTone(value: number | null): "warn" | "down" | undefined {
   return undefined;
 }
 
-function ResourceRow({ vitals }: { vitals: HostVitals }) {
+export function ResourceRow({ vitals }: { vitals: HostVitals }) {
   const pct = (value: number | null) => (value === null ? "—" : `${Math.round(value)}%`);
   const unknown = vitals.cpuPercent === null;
   return (
     <div className="grid min-w-0 grid-cols-3 gap-2">
-      <SpecBlock label="CPU" value={formatCpuPercent(vitals.cpuPercent, vitals.isOnline)} tone={usageTone(vitals.cpuPercent)} muted={unknown} />
-      <SpecBlock label="内存" value={pct(vitals.memoryPercent)} tone={usageTone(vitals.memoryPercent)} muted={unknown} />
-      <SpecBlock label="磁盘" value={pct(vitals.diskPercent)} tone={usageTone(vitals.diskPercent)} muted={unknown} />
+      <SpecBlock label="CPU" value={formatCpuPercent(vitals.cpuPercent, vitals.isOnline)} percent={vitals.cpuPercent} tone={usageTone(vitals.cpuPercent)} muted={unknown} />
+      <SpecBlock label="内存" value={pct(vitals.memoryPercent)} percent={vitals.memoryPercent} tone={usageTone(vitals.memoryPercent)} muted={unknown} />
+      <SpecBlock label="磁盘" value={pct(vitals.diskPercent)} percent={vitals.diskPercent} tone={usageTone(vitals.diskPercent)} muted={unknown} />
     </div>
   );
 }

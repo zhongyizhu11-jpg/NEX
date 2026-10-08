@@ -1744,12 +1744,19 @@ button.fx-rule-tag:hover { filter: brightness(.96); }
 .fx-rule-mark[data-muted] { color: var(--fx-text-muted); }
 
 /* 主机卡：三个规格格（无图标、标签在上）和底部一行「速率 …… N 条转发 · N 条线路经过」 */
-.fx-host-spec { display: flex; min-width: 0; flex-direction: column; gap: 1px; border-radius: 12px; background: var(--fx-l2-group); padding: 7px 10px; }
+/* 高度和加条前一样是 49px：上 6 + 标签 14 + 数字 20 + 下 9。条绝对定位在底下 5px 处，不占流高度、不压数字。 */
+.fx-host-spec { position: relative; display: flex; min-width: 0; flex-direction: column; border-radius: 12px; background: var(--fx-l2-group); padding: 6px 10px 9px; }
 .fx-host-spec > i { font-style: normal; font-size: 11px; line-height: 14px; color: var(--fx-text-muted); }
 .fx-host-spec > b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; line-height: 20px; font-weight: 600; color: var(--fx-text); font-variant-numeric: tabular-nums; }
 .fx-host-spec > b[data-tone="warn"] { color: var(--fx-warn-text); }
 .fx-host-spec > b[data-tone="down"] { color: var(--fx-down-text); }
 .fx-host-spec > b[data-muted] { color: var(--fx-text-muted); font-weight: 500; }
+.fx-host-spec-bar { position: absolute; left: 10px; right: 10px; bottom: 5px; height: 3px; overflow: hidden; border-radius: 999px; background: rgb(0 0 0 / 7%); }
+.dark .fx-host-spec-bar { background: rgb(255 255 255 / 10%); }
+.fx-host-spec-bar > span { display: block; height: 100%; border-radius: 999px; background: var(--fx-primary-gradient); transform-origin: left center; transition: transform 300ms cubic-bezier(0.22, 1, 0.36, 1); }
+.fx-host-spec-bar > span[data-tone="warn"] { background: linear-gradient(90deg, #fbbf24, var(--fx-warn)); }
+.fx-host-spec-bar > span[data-tone="down"] { background: var(--fx-down-fill); }
+@media (prefers-reduced-motion: reduce) { .fx-host-spec-bar > span { transition: none; } }
 .fx-host-foot { display: flex; min-width: 0; align-items: center; gap: 10px; font-size: 12.5px; line-height: 16px; color: var(--fx-text-secondary); font-variant-numeric: tabular-nums; }
 .fx-host-foot > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fx-host-foot-links { margin-left: auto; flex: none; color: var(--fx-accent); }
