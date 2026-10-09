@@ -4121,28 +4121,20 @@ function TunnelsContent() {
               <Globe className="h-4 w-4" />
             </Button>}
           </div>
-          <Button
-            className="gap-2"
-            disabled={!canCreateActive}
-            title={createDisabledTitle}
-            onClick={openCreateTypeDialog}
-          >
-            <Plus className="h-4 w-4" />
-            新建链路
-          </Button>
       </>} />
 
       <Tabs value={activeSection} onValueChange={(value) => setActiveSection(value as TunnelSection)} className="space-y-4">
         <SlidingTabsList items={TUNNEL_SECTION_ITEMS} activeValue={activeSection} ariaLabel="链路管理" minItemWidthRem={7.75} />
 
-      <div className="flex min-w-0 items-center gap-3">
-        <div className="relative min-w-0 flex-1">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+      {/* 搜索栏一行，和主机管理一样：小搜索框在左、「新建链路」在最右；条数只在搜索时出现。 */}
+      <div className="flex min-w-0 items-center gap-2">
+        <div className="relative min-w-0 flex-1 sm:max-w-[340px]">
+          <Search className="pointer-events-none absolute left-3.5 top-1/2 z-[1] h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={linkSearchQuery}
             onChange={(event) => setLinkSearchQuery(event.target.value)}
             aria-label="搜索链路" placeholder="搜索链路、主机或 IP"
-            className="h-10 w-full pl-8 pr-10 text-sm"
+            className="fx-search-pill w-full pr-9"
           />
           {linkSearchQuery ? (
             <button
@@ -4155,9 +4147,20 @@ function TunnelsContent() {
             </button>
           ) : null}
         </div>
-        <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
-          {linkSearchStats.filtered} / {linkSearchStats.total} {linkSearchStats.unit}
-        </span>
+        {linkSearchQuery ? (
+          <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+            {linkSearchStats.filtered} / {linkSearchStats.total} {linkSearchStats.unit}
+          </span>
+        ) : null}
+        <Button
+          className="fx-row-action ml-auto h-9 shrink-0 gap-1.5 rounded-full px-3.5"
+          disabled={!canCreateActive}
+          title={createDisabledTitle}
+          onClick={openCreateTypeDialog}
+        >
+          <Plus className="h-4 w-4" />
+          新建链路
+        </Button>
       </div>
 
 

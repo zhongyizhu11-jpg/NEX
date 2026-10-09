@@ -191,6 +191,13 @@ function usageTone(value: number | null): "warn" | "down" | undefined {
   return undefined;
 }
 
+function hostCardTone(health: HostVitals["health"]): "ok" | "warn" | "down" | "off" {
+  if (health === "down") return "down";
+  if (health === "degraded" || health === "switching") return "warn";
+  if (health === "healthy") return "ok";
+  return "off";
+}
+
 export function ResourceRow({ vitals }: { vitals: HostVitals }) {
   const pct = (value: number | null) => (value === null ? "—" : `${Math.round(value)}%`);
   const unknown = vitals.cpuPercent === null;
@@ -287,6 +294,12 @@ export default function HostSummaryCard(props: HostSummaryCardProps) {
   return (
     <EntityCard
       interactive
+      /*
+        fx-card-face 让主机卡也吃设置里的「卡片风格」（彩色描边 / 状态光 / 渐变卡头 / 纯白），
+        和规则卡同一套 CSS。颜色跟状态：在线主色、降级琥珀、掉线红、没上报过不着色。
+      */
+      className="fx-card-face fx-host-card"
+      data-tone={hostCardTone(vitals.health)}
       role="button"
       tabIndex={0}
       aria-label={`查看 ${name} 详情`}

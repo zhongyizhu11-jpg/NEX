@@ -726,7 +726,8 @@ html:not([data-card-style]) .fx-card-face, html[data-card-style="edge"] .fx-card
     linear-gradient(var(--fx-l1-surface), var(--fx-l1-surface)) padding-box,
     linear-gradient(135deg, color-mix(in srgb, var(--fx-card-tone) 62%, transparent), color-mix(in srgb, var(--fx-card-tone) 16%, transparent) 70%, color-mix(in srgb, var(--fx-card-tone) 34%, transparent)) border-box;
 }
-html:not([data-card-style]) .workspace-main [data-tone="off"][data-slot="card"], html[data-card-style="edge"] .workspace-main [data-tone="off"][data-slot="card"] {
+html:not([data-card-style]) .workspace-main [data-tone="off"][data-slot="card"], html[data-card-style="edge"] .workspace-main [data-tone="off"][data-slot="card"],
+html:not([data-card-style]) .fx-card-face[data-tone="off"], html[data-card-style="edge"] .fx-card-face[data-tone="off"] {
   background: var(--fx-l1-surface); border-color: var(--fx-card-stroke, var(--fx-stroke-weak));
 }
 /* 状态光：左上角一抹状态色的光，2.3.379 规则卡那种 */
@@ -1682,6 +1683,10 @@ html[data-personalization-background="image"] .auth-divider-label, html[data-per
 /* 卡的状态色交给卡片风格（上面那一节）：状态光 / 彩色描边 / 渐变卡头都读 --fx-card-tone */
 .workspace-main .fx-rule-card { --fx-card-tone: var(--fx-rule-tone); overflow: hidden; }
 .workspace-main .fx-rule-card[data-tone="off"] { --fx-card-tone: transparent; }
+/* 主机卡同样读 --fx-card-tone：在线主色、降级琥珀、掉线红、没上报过不着色（纯白边） */
+.fx-host-card[data-tone="warn"] { --fx-card-tone: var(--fx-warn); }
+.fx-host-card[data-tone="down"] { --fx-card-tone: var(--fx-down); }
+.fx-host-card[data-tone="off"] { --fx-card-tone: transparent; }
 .workspace-main .fx-rule-card .fx-rule-card-body { padding: 14px 14px 12px; }
 .workspace-main .fx-rule-card[data-size="standard"] .fx-rule-card-body { padding: 16px 16px 14px; }
 .workspace-main .fx-rule-card .fx-rule-card-body > * + * { margin-top: 0; }
