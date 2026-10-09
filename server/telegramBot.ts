@@ -41,6 +41,20 @@ import { KeyedTaskDispatcher } from "./keyedTaskDispatcher";
 import { canUseForwardRuleResource, getLinkAccessScope } from "./linkAccessView";
 import { gateForwardRulesForUserSurface } from "./forwardRuleVisibility";
 import { RULE_RESOURCE_AUTHORIZATION_REVOKED_REASON } from "./ruleResourceAuthorization";
+import { isHostConsideredOnline } from "./hostHeartbeatPolicy";
+import { dispatchReminders, type PendingReminder } from "./reminderDispatch";
+import {
+  isTelegramDigestEnabled,
+  isTelegramNotifyMuted,
+  readTelegramNotifyPrefs,
+  TELEGRAM_NOTIFY_CATEGORIES,
+  updateTelegramNotifyPref,
+  type TelegramNotifyCategory,
+} from "./telegramNotifyPrefs";
+import { ROUTE_MODE_INFO, routeGroupOf, routePathLabel, routePathLetter } from "../shared/routeGroup";
+import { PIN_DURATION_OPTIONS, pinUntilSeconds } from "../shared/routePolicy";
+import { describeFailoverActiveLine } from "../shared/failoverActiveLine";
+import { billingCalendarParts } from "../shared/billingTime";
 import {
   adjustUserBalanceCommand,
   renewUserCommand,
@@ -252,6 +266,10 @@ const TELEGRAM_BOT_COMMANDS: TelegramBotCommand[] = [
   { command: "menu", description: "打开功能菜单" },
   { command: "usage", description: "查询流量和额度" },
   { command: "rules", description: "查看和管理转发规则" },
+  { command: "hosts", description: "主机状态和负载" },
+  { command: "routes", description: "线路组状态和切换" },
+  { command: "notify", description: "通知开关" },
+  { command: "digest", description: "查看今日简报" },
   { command: "ask", description: "自然语言查询面板信息" },
   { command: "redeem", description: "兑换余额或套餐兑换码" },
   { command: "bind", description: "使用绑定码绑定后台账号" },
@@ -788,7 +806,11 @@ function helpText(bound: boolean, isAdmin = false) {
       ? "可用命令："
       : "请先在面板个人菜单点击 Telegram 绑定按钮生成绑定码，然后在这里完成绑定。",
     "/usage - 查询我的用量",
-    "/rules - 查看我的转发规则",
+    "/rules - 查看我的转发规则（详情里可测延迟）",
+    "/hosts - 主机状态和负载",
+    "/routes - 线路组状态，临时改走别的路径",
+    "/notify - 通知开关、每日简报",
+    "/digest - 现在看一份简报",
     "/ask 问题 - 用自然语言查询面板信息",
     "/redeem 兑换码 - 兑换余额或套餐",
     "/login - 生成网页一次性登录链接",
@@ -977,6 +999,11 @@ export function mainMenuKeyboard(user: any, webAppUrl?: string): InlineKeyboardM
       { text: "👤 账户", callback_data: "fx:user" },
       { text: "📊 流量", callback_data: "fx:usage" },
       { text: "⚙️ 规则", callback_data: "fx:rules" },
+    ],
+    [
+      { text: "🖥 主机", callback_data: "fx:hosts:0" },
+      { text: "🔀 线路组", callback_data: "fx:routes:0" },
+      { text: "🔔 通知", callback_data: "fx:notify" },
     ],
   ];
   const secondaryRow: InlineKeyboardButton[] = [];
@@ -1411,6 +1438,692 @@ async function editMainMenu(chatId: number | string, messageId: number, user: an
 function isPanelButtonRejection(error: unknown) {
   const message = error instanceof Error ? error.message : String(error ?? "");
   return /button|URL|HTTPS/i.test(message);
+}
+
+// ==================== 主机 / 测延迟 / 线路组 / 通知 / 每日简报 ====================
+//
+// 2026-10-09 用户要的五项：菜单里能看主机、规则详情能测延迟、每天早上一份简报、
+// 自己关掉不想收的通知、在 TG 里看线路组并临时改走别的路径。都是面板已有的能力，
+// 这里只是把它们搬进按钮；能复用面板接口的（测延迟、改走路径）直接调同一个 tRPC
+// 过程，权限和副作用跟网页上点一模一样。
+
+const HOST_PAGE_SIZE = 8;
+const ROUTE_PAGE_SIZE = 8;
+const DIGEST_HOUR = 9;
+const RULE_TEST_WAIT_MS = 40_000;
+const RULE_TEST_POLL_MS = 2_000;
+
+/** 面板 tRPC 过程要的上下文。机器人没有 HTTP 请求，给一个够用的壳：没有 cookie 可写，审计里记成 telegram。 */
+function telegramTrpcContext(user: any) {
+  return {
+    req: { headers: { "x-request-id": "telegram-bot" }, ip: "telegram", socket: {} } as any,
+    res: { cookie() {}, clearCookie() {} } as any,
+    user,
+    authSession: null,
+    authFailureReason: null,
+  } as any;
+}
+
+async function telegramRulesCaller(user: any) {
+  const { rulesRouter } = await import("./routers/rules");
+  return rulesRouter.createCaller(telegramTrpcContext(user)) as any;
+}
+
+/** 文字进度条：十格，满格按 100%。 */
+export function telegramMeter(percent: unknown) {
+  const value = Number(percent);
+  if (!Number.isFinite(value)) return "";
+  const filled = Math.max(0, Math.min(10, Math.round(value / 10)));
+  return `${"▰".repeat(filled)}${"▱".repeat(10 - filled)}`;
+}
+
+function formatPercent(value: unknown) {
+  const number = Number(value);
+  return Number.isFinite(number) ? `${Math.round(number)}%` : "-";
+}
+
+function formatAgo(value: unknown) {
+  if (!value) return "从未上报";
+  const ms = Date.now() - new Date(value as any).getTime();
+  if (!Number.isFinite(ms)) return "从未上报";
+  if (ms < 60_000) return "刚刚";
+  if (ms < 3600_000) return `${Math.floor(ms / 60_000)} 分钟前`;
+  if (ms < 86400_000) return `${Math.floor(ms / 3600_000)} 小时前`;
+  return `${Math.floor(ms / 86400_000)} 天前`;
+}
+
+function formatUptime(seconds: unknown) {
+  const value = Number(seconds);
+  if (!Number.isFinite(value) || value <= 0) return "";
+  const days = Math.floor(value / 86400);
+  const hours = Math.floor((value % 86400) / 3600);
+  return days > 0 ? `${days} 天 ${hours} 小时` : `${hours} 小时 ${Math.floor((value % 3600) / 60)} 分`;
+}
+
+function formatSpeed(bytesPerSecond: unknown) {
+  const value = Number(bytesPerSecond);
+  if (!Number.isFinite(value) || value < 0) return "-";
+  return `${formatBytes(value)}/s`;
+}
+
+type TelegramHostState = "online" | "offline" | "unknown";
+
+function telegramHostState(host: any): TelegramHostState {
+  if (!host?.lastHeartbeat) return "unknown";
+  return isHostConsideredOnline(host) ? "online" : "offline";
+}
+
+function hostStateMark(state: TelegramHostState) {
+  return state === "online" ? "🟢" : state === "offline" ? "🔴" : "⚪";
+}
+
+export function hostNeedsAgentUpgrade(host: any) {
+  const current = String(host?.agentVersion || "").trim();
+  if (!current) return false;
+  const target = String(AGENT_VERSION || "").trim();
+  if (!target) return false;
+  return !isHostAgentUpgradeUnnecessary(host, target, AGENT_VERSION);
+}
+
+/** 「可升级」后面那半句：版本落后说目标版本；版本已是最新、只是 FXP 旧了，说 FXP。 */
+function agentUpgradeNote(host: any) {
+  const current = String(host?.agentVersion || "").trim();
+  const target = String(AGENT_VERSION || "").trim();
+  if (current && target && isAgentVersionAtLeast(current, target)) {
+    return `FXP ${fxpRuntimeStatus(host).label}，重装 Agent 可修复`;
+  }
+  return `可升级到 v${target}`;
+}
+
+/** 掉线的排最前：打开这一页通常是为了找出问题机器。 */
+function sortHostsForTelegram(hosts: any[]) {
+  const rank = (host: any) => (telegramHostState(host) === "offline" ? 0 : telegramHostState(host) === "unknown" ? 2 : 1);
+  return [...hosts].sort((a, b) => rank(a) - rank(b)
+    || Number(a?.sortOrder || 0) - Number(b?.sortOrder || 0)
+    || Number(a?.id || 0) - Number(b?.id || 0));
+}
+
+/** 普通用户只看得到自己名下机器的负载；被授权使用的别人的机器只给在线状态。 */
+function canSeeHostMetrics(user: any, host: any) {
+  return user?.role === "admin" || Number(host?.userId) === Number(user?.id);
+}
+
+async function hostsView(user: any, page = 0) {
+  const hosts = sortHostsForTelegram(await visibleHostsForTelegramUser(user));
+  const { page: safePage, totalPages } = clampPage(page, hosts.length, HOST_PAGE_SIZE);
+  const visible = hosts.slice(safePage * HOST_PAGE_SIZE, safePage * HOST_PAGE_SIZE + HOST_PAGE_SIZE);
+  const metricRows = await db.getLatestHostMetricRows(
+    visible.filter((host) => canSeeHostMetrics(user, host)).map((host) => Number(host.id)),
+  ).catch(() => [] as any[]);
+  const metricsByHost = new Map((metricRows as any[]).map((row) => [Number(row.hostId), row]));
+  const online = hosts.filter((host) => telegramHostState(host) === "online").length;
+  const offline = hosts.filter((host) => telegramHostState(host) === "offline").length;
+  const lines = visible.map((host: any) => {
+    const state = telegramHostState(host);
+    const name = `#${host.id} <b>${escapeHtml(shortText(host.name || host.ip, 20))}</b>`;
+    if (state !== "online") {
+      return `${hostStateMark(state)} ${name}\n${state === "offline" ? `离线 · 最后心跳 ${escapeHtml(formatAgo(host.lastHeartbeat))}` : "还没有上报过"}`;
+    }
+    const metric = metricsByHost.get(Number(host.id));
+    const load = metric
+      ? `CPU ${formatPercent(metric.cpuUsage)} · 内存 ${formatPercent(metric.memoryUsage)} · 磁盘 ${formatPercent(metric.diskUsage)}`
+      : "在线";
+    const upgrade = user.role === "admin" && hostNeedsAgentUpgrade(host) ? " · 可升级" : "";
+    return `${hostStateMark(state)} ${name}\n${load}${upgrade}`;
+  });
+  const text = hosts.length === 0
+    ? "<b>主机</b>\n\n暂无可查看的主机。"
+    : [
+        `<b>主机</b> · 在线 ${online} / ${hosts.length}${offline > 0 ? ` · 离线 ${offline}` : ""}`,
+        totalPages > 1 ? `第 ${safePage + 1}/${totalPages} 页` : "",
+        "",
+        lines.join("\n\n"),
+      ].filter((line, index) => index !== 1 || line).join("\n");
+  const rows: InlineKeyboardMarkup["inline_keyboard"] = [];
+  let row: InlineKeyboardButton[] = [];
+  for (const host of visible) {
+    row.push({ text: `${hostStateMark(telegramHostState(host))} ${shortText(host.name || host.ip, 12)}`, callback_data: `fx:host:${host.id}:${safePage}` });
+    if (row.length >= 2) {
+      rows.push(row);
+      row = [];
+    }
+  }
+  if (row.length > 0) rows.push(row);
+  if (totalPages > 1) {
+    rows.push([
+      { text: "⬅️ 上一页", callback_data: `fx:hosts:${Math.max(0, safePage - 1)}` },
+      { text: "➡️ 下一页", callback_data: `fx:hosts:${Math.min(totalPages - 1, safePage + 1)}` },
+    ]);
+  }
+  rows.push([{ text: "🔄 刷新", callback_data: `fx:hosts:${safePage}` }, { text: "🏠 返回菜单", callback_data: "fx:menu" }]);
+  return { text, keyboard: { inline_keyboard: rows } as InlineKeyboardMarkup };
+}
+
+async function hostDetailView(user: any, hostId: number, page = 0) {
+  const host = (await visibleHostsForTelegramUser(user)).find((item: any) => Number(item.id) === Number(hostId));
+  const back: InlineKeyboardMarkup = {
+    inline_keyboard: [
+      [{ text: "🖥 返回主机列表", callback_data: `fx:hosts:${page}` }],
+      [{ text: "🏠 返回菜单", callback_data: "fx:menu" }],
+    ],
+  };
+  if (!host) return { text: "主机不存在或无权查看。", keyboard: back };
+  const state = telegramHostState(host);
+  const showMetrics = canSeeHostMetrics(user, host);
+  const metric = showMetrics
+    ? ((await db.getLatestHostMetricRows([Number(host.id)]).catch(() => [] as any[])) as any[])[0]
+    : null;
+  const region = [host.geoEmoji, host.geoRegion || host.geoCountryName].filter(Boolean).join(" ");
+  const meterLine = (label: string, value: unknown, extra = "") => (Number.isFinite(Number(value))
+    ? `${label} ${telegramMeter(value)} ${formatPercent(value)}${extra}`
+    : `${label} -`);
+  const upgradable = user.role === "admin" && hostNeedsAgentUpgrade(host);
+  const lines = [
+    `<b>${hostStateMark(state)} ${escapeHtml(host.name || host.ip)}</b> #${host.id}`,
+    "",
+    `状态：${state === "online" ? "在线" : state === "offline" ? "离线" : "未上报"}${state !== "online" && host.lastHeartbeat ? ` · 最后心跳 ${escapeHtml(formatAgo(host.lastHeartbeat))}` : ""}`,
+    region ? `地区：${escapeHtml(region)}` : "",
+    `地址：<code>${escapeHtml(host.ip || host.ipv4 || host.ipv6 || "-")}</code>`,
+    host.osInfo ? `系统：${escapeHtml(shortText(host.osInfo, 40))}` : "",
+  ];
+  if (metric && state === "online") {
+    const memoryExtra = Number(metric.memoryUsed) > 0 && Number(host.memoryTotal) > 0
+      ? `（${escapeHtml(formatBytes(metric.memoryUsed))} / ${escapeHtml(formatBytes(host.memoryTotal))}）`
+      : "";
+    const diskExtra = Number(metric.diskUsed) > 0 && Number(metric.diskTotal) > 0
+      ? `（${escapeHtml(formatBytes(metric.diskUsed))} / ${escapeHtml(formatBytes(metric.diskTotal))}）`
+      : "";
+    lines.push(
+      "",
+      `<code>${meterLine("CPU ", metric.cpuUsage)}</code>`,
+      `<code>${meterLine("内存", metric.memoryUsage)}</code>${memoryExtra}`,
+      `<code>${meterLine("磁盘", metric.diskUsage)}</code>${diskExtra}`,
+      `网速：↓ ${escapeHtml(formatSpeed(metric.networkSpeedIn))} · ↑ ${escapeHtml(formatSpeed(metric.networkSpeedOut))}`,
+      formatUptime(metric.uptime) ? `已运行：${escapeHtml(formatUptime(metric.uptime))}` : "",
+    );
+  }
+  if (user.role === "admin") {
+    lines.push(
+      "",
+      `Agent：${host.agentVersion ? `v${escapeHtml(host.agentVersion)}` : "未知"}${upgradable ? ` · ${escapeHtml(agentUpgradeNote(host))}` : ""}`,
+    );
+  }
+  const rows: InlineKeyboardMarkup["inline_keyboard"] = [];
+  if (upgradable) rows.push([{ text: "⬆️ 升级这台的 Agent", callback_data: `fx:host:upgrade:${host.id}:${page}` }]);
+  rows.push([{ text: "🔄 刷新", callback_data: `fx:host:${host.id}:${page}` }, { text: "🖥 返回列表", callback_data: `fx:hosts:${page}` }]);
+  rows.push([{ text: "🏠 返回菜单", callback_data: "fx:menu" }]);
+  return { text: lines.filter((line) => line !== "").join("\n").replace(/\n(?=<code>CPU)/, "\n\n").replace(/\n(?=Agent：)/, "\n\n"), keyboard: { inline_keyboard: rows } };
+}
+
+/** 单台升级：走 /updateagent 同一个确认流程，只是名单里只有这一台。 */
+async function hostUpgradeConfirm(user: any, hostId: number) {
+  const host = await db.getHostById(hostId) as any;
+  if (!host) return { text: "主机不存在。", keyboard: backMenuKeyboard() };
+  if (!hostNeedsAgentUpgrade(host)) {
+    return { text: `#${host.id} ${escapeHtml(host.name || host.ip)} 的 Agent 已是最新。`, keyboard: backMenuKeyboard() };
+  }
+  const targetVersion = String(AGENT_VERSION || "").trim();
+  const pending = createPendingUpdateAction({ actorUserId: Number(user.id), kind: "agent", targetVersion, hostIds: [Number(host.id)] });
+  return {
+    text: [
+      "<b>升级 Agent</b>",
+      "",
+      `主机：#${host.id} ${escapeHtml(host.name || host.ip)}`,
+      `版本：v${escapeHtml(host.agentVersion || "未知")} → <b>v${escapeHtml(targetVersion)}</b>`,
+      isAgentVersionAtLeast(String(host.agentVersion || ""), targetVersion) ? escapeHtml(agentUpgradeNote(host)) : "",
+      "",
+      "升级时这台机器上的转发会短暂中断几秒。",
+      `请在 ${Math.round(UPDATE_ACTION_CONFIRM_TTL_MS / 60000)} 分钟内确认。`,
+    ].filter(Boolean).join("\n"),
+    keyboard: updateActionConfirmKeyboard("agent", pending.key),
+  };
+}
+
+function ruleDetailKeyboard(rule: any, page = 0): InlineKeyboardMarkup {
+  const first: InlineKeyboardButton[] = [{ text: "⚡ 测延迟", callback_data: `fx:rule:test:${rule.id}:${page}` }];
+  if (rule && routeGroupOf(rule)) first.push({ text: "🔀 线路组", callback_data: `fx:route:${rule.id}:0` });
+  return {
+    inline_keyboard: [
+      first,
+      [{ text: "⚙️ 返回规则列表", callback_data: `fx:rules:${page}` }],
+      [{ text: "🏠 返回菜单", callback_data: "fx:menu" }],
+    ],
+  };
+}
+
+function ruleTestKeyboard(ruleId: number, page = 0, pending = false): InlineKeyboardMarkup {
+  return {
+    inline_keyboard: [
+      [pending
+        ? { text: "🔄 查看结果", callback_data: `fx:rule:testres:${ruleId}:${page}` }
+        : { text: "🔁 再测一次", callback_data: `fx:rule:test:${ruleId}:${page}` }],
+      [{ text: "📄 返回规则详情", callback_data: `fx:rule:view:${ruleId}:${page}` }],
+      [{ text: "🏠 返回菜单", callback_data: "fx:menu" }],
+    ],
+  };
+}
+
+function parseRuleTestMessage(raw: unknown) {
+  const text = typeof raw === "string" ? raw.trim() : "";
+  if (!text) return { message: "", details: [] as any[], totalLatencyMs: null as number | null };
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed && typeof parsed === "object") {
+      return {
+        message: typeof parsed.message === "string" ? parsed.message : "",
+        details: Array.isArray(parsed.details) ? parsed.details : [],
+        totalLatencyMs: typeof parsed.totalLatencyMs === "number" ? parsed.totalLatencyMs : null,
+      };
+    }
+  } catch {
+    // 老结果是纯文本。
+  }
+  return { message: text, details: [] as any[], totalLatencyMs: null as number | null };
+}
+
+/** 最近一小时的探测：平均延迟和丢包。面板「延迟」图用的是同一份数据。 */
+async function ruleRecentProbeSummary(ruleId: number) {
+  const rows = await db.getTcpingSeriesByRule(ruleId, { since: new Date(Date.now() - 3600_000) }).catch(() => [] as any[]);
+  if (!rows || rows.length === 0) return "";
+  let probes = 0;
+  let successes = 0;
+  const latencies: number[] = [];
+  for (const row of rows as any[]) {
+    const count = Math.max(0, Number(row.probeCount || 0));
+    if (count > 0) {
+      probes += count;
+      successes += Math.max(0, Math.min(count, Number(row.probeSuccesses || 0)));
+    } else {
+      probes += 1;
+      successes += row.isTimeout ? 0 : 1;
+    }
+    if (!row.isTimeout && typeof row.latencyMs === "number" && row.latencyMs >= 0) latencies.push(row.latencyMs);
+  }
+  const loss = probes > 0 ? Math.round(((probes - successes) / probes) * 1000) / 10 : null;
+  const avg = latencies.length > 0 ? Math.round(latencies.reduce((sum, value) => sum + value, 0) / latencies.length) : null;
+  return `近 1 小时：${avg === null ? "无延迟数据" : `平均 ${avg} ms`}${loss === null ? "" : ` · 丢包 ${loss}%`}`;
+}
+
+export function formatRuleTestResult(rule: any, test: any, recent = "") {
+  const parsed = parseRuleTestMessage(test?.message);
+  const status = String(test?.status || "");
+  const latency = parsed.totalLatencyMs ?? (typeof test?.latencyMs === "number" && test.latencyMs > 0 ? test.latencyMs : null);
+  const head = status === "success"
+    ? `✅ 通过${latency !== null ? ` · 延迟 <b>${Math.round(latency)} ms</b>` : ""}`
+    : status === "timeout"
+      ? "⏱ 超时"
+      : "❌ 没通过";
+  const hops = parsed.details
+    .filter((item: any) => item && !item.pending)
+    .slice(0, 8)
+    .map((item: any) => {
+      const label = String(item.routeLabel || item.hopLabel || "链路").replace(/^第\s*\d+\s*跳\s*/, "");
+      const value = item.success
+        ? (typeof item.latencyMs === "number" ? `${Math.round(item.latencyMs)} ms` : "通")
+        : `不通${item.message ? `（${shortText(item.message, 40)}）` : ""}`;
+      return `· ${escapeHtml(shortText(label, 30))}：${escapeHtml(value)}`;
+    });
+  return `<b>测延迟 · 规则 #${rule.id}</b> ${escapeHtml(shortText(rule.name, 24))}\n\n` + [
+    head,
+    ...hops,
+    status !== "success" && parsed.message ? `原因：${escapeHtml(shortText(parsed.message, 160))}` : "",
+    recent ? `\n${escapeHtml(recent)}` : "",
+    test?.updatedAt ? `测试时间：${escapeHtml(formatAgo(test.updatedAt))}` : "",
+  ].filter(Boolean).join("\n");
+}
+
+async function visibleRuleForTelegram(user: any, ruleId: number) {
+  return (await visibleRulesForTelegramUser(user)).find((item: any) => Number(item.id) === Number(ruleId)) || null;
+}
+
+/**
+ * 发起一次诊断，然后在后台等结果、回来改同一条消息。
+ *
+ * 不在当前更新里等：同一个聊天的更新是排队处理的，干等四十秒，这期间点别的按钮都没反应。
+ */
+async function startRuleLatencyTest(chatId: number | string, messageId: number, user: any, ruleId: number, page: number) {
+  const rule = await visibleRuleForTelegram(user, ruleId);
+  if (!rule) {
+    await editMessage(chatId, messageId, "规则不存在或无权查看。", ruleListBackKeyboard(page));
+    return;
+  }
+  const caller = await telegramRulesCaller(user);
+  let started: { id?: number } | null = null;
+  try {
+    started = await caller.startSelfTest({ ruleId: Number(rule.id) });
+  } catch (error) {
+    await editMessage(chatId, messageId, `测延迟没发出去：${escapeHtml(error instanceof Error ? error.message : String(error))}`, ruleDetailKeyboard(rule, page));
+    return;
+  }
+  const startedId = Number(started?.id || 0);
+  await editMessage(chatId, messageId, `<b>测延迟 · 规则 #${rule.id}</b> ${escapeHtml(shortText(rule.name, 24))}\n\n⏳ 正在从入口一段段测到目标，通常十几秒…`, ruleTestKeyboard(Number(rule.id), page, true));
+  void (async () => {
+    const deadline = Date.now() + RULE_TEST_WAIT_MS;
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, RULE_TEST_POLL_MS));
+      const latest = await db.getLatestForwardTest(Number(rule.id), { includeActive: true }).catch(() => null) as any;
+      if (!latest) continue;
+      const status = String(latest.status || "");
+      if (status === "pending" || status === "running") continue;
+      if (startedId > 0 && Number(latest.id || 0) < startedId) continue;
+      const recent = await ruleRecentProbeSummary(Number(rule.id));
+      await editMessage(chatId, messageId, formatRuleTestResult(rule, latest, recent), ruleTestKeyboard(Number(rule.id), page));
+      return;
+    }
+    await editMessage(
+      chatId,
+      messageId,
+      `<b>测延迟 · 规则 #${rule.id}</b> ${escapeHtml(shortText(rule.name, 24))}\n\n测试已发出，结果还没回来（Agent 可能离线或较忙）。稍后点「查看结果」。`,
+      ruleTestKeyboard(Number(rule.id), page, true),
+    );
+  })().catch((error) => console.warn(`[Telegram] rule latency test follow-up failed rule=${rule.id}: ${error instanceof Error ? error.message : String(error)}`));
+}
+
+async function ruleLatestTestView(user: any, ruleId: number, page: number) {
+  const rule = await visibleRuleForTelegram(user, ruleId);
+  if (!rule) return { text: "规则不存在或无权查看。", keyboard: ruleListBackKeyboard(page) };
+  const latest = await db.getLatestForwardTest(Number(rule.id), { includeActive: true }).catch(() => null) as any;
+  const status = String(latest?.status || "");
+  if (!latest) return { text: "这条规则还没有测过。", keyboard: ruleTestKeyboard(Number(rule.id), page) };
+  if (status === "pending" || status === "running") {
+    return { text: `<b>测延迟 · 规则 #${rule.id}</b>\n\n⏳ 还在测，稍后再看。`, keyboard: ruleTestKeyboard(Number(rule.id), page, true) };
+  }
+  return { text: formatRuleTestResult(rule, latest, await ruleRecentProbeSummary(Number(rule.id))), keyboard: ruleTestKeyboard(Number(rule.id), page) };
+}
+
+// ---------- 线路组 ----------
+
+async function routeRulesForTelegram(user: any) {
+  return (await visibleRulesForTelegramUser(user)).filter((rule: any) => !rule.routeParentRuleId && !!routeGroupOf(rule));
+}
+
+async function routesView(user: any, page = 0) {
+  const rules = await routeRulesForTelegram(user);
+  const { page: safePage, totalPages } = clampPage(page, rules.length, ROUTE_PAGE_SIZE);
+  const visible = rules.slice(safePage * ROUTE_PAGE_SIZE, safePage * ROUTE_PAGE_SIZE + ROUTE_PAGE_SIZE);
+  const lines = visible.map((rule: any) => {
+    const group = routeGroupOf(rule)!;
+    const active = describeFailoverActiveLine(rule);
+    const activeIndex = active ? active.index : 0;
+    const path = group.paths[activeIndex];
+    const pinned = group.policy.pin && group.policy.mode !== "manual" ? " · 人工指定" : "";
+    return `#${rule.id} <b>${escapeHtml(shortText(rule.name, 22))}</b>\n${escapeHtml(ROUTE_MODE_INFO[group.policy.mode].label)} · 当前 ${routePathLetter(activeIndex)} ${escapeHtml(shortText(routePathLabel(path, activeIndex), 14))}${pinned}`;
+  });
+  const text = rules.length === 0
+    ? "<b>线路组</b>\n\n还没有开了线路组（主备）的规则。可以在面板的规则里添加备用线路。"
+    : [`<b>线路组</b> · 共 ${rules.length} 组${totalPages > 1 ? ` · 第 ${safePage + 1}/${totalPages} 页` : ""}`, "", lines.join("\n\n")].join("\n");
+  const rows: InlineKeyboardMarkup["inline_keyboard"] = visible.map((rule: any) => [
+    { text: `🔀 #${rule.id} ${shortText(rule.name, 18)}`, callback_data: `fx:route:${rule.id}:${safePage}` },
+  ]);
+  if (totalPages > 1) {
+    rows.push([
+      { text: "⬅️ 上一页", callback_data: `fx:routes:${Math.max(0, safePage - 1)}` },
+      { text: "➡️ 下一页", callback_data: `fx:routes:${Math.min(totalPages - 1, safePage + 1)}` },
+    ]);
+  }
+  rows.push([{ text: "🏠 返回菜单", callback_data: "fx:menu" }]);
+  return { text, keyboard: { inline_keyboard: rows } as InlineKeyboardMarkup };
+}
+
+function formatPinUntil(untilMs: unknown) {
+  const value = Number(untilMs);
+  if (!Number.isFinite(value) || value <= 0) return "一直";
+  const parts = billingCalendarParts(value);
+  return `到 ${parts.month}月${parts.day}日 ${String(parts.hour).padStart(2, "0")}:${String(parts.minute).padStart(2, "0")}`;
+}
+
+async function routeView(user: any, ruleId: number, page = 0, notice = "") {
+  const back: InlineKeyboardMarkup = {
+    inline_keyboard: [
+      [{ text: "🔀 返回线路组列表", callback_data: `fx:routes:${page}` }],
+      [{ text: "🏠 返回菜单", callback_data: "fx:menu" }],
+    ],
+  };
+  let status: any = null;
+  try {
+    status = await (await telegramRulesCaller(user)).routeStatus({ ruleId });
+  } catch (error) {
+    return { text: escapeHtml(error instanceof Error ? error.message : String(error)), keyboard: back };
+  }
+  const rule = await visibleRuleForTelegram(user, ruleId);
+  if (!status || !rule) return { text: "这条规则没有开线路组。", keyboard: back };
+  const policy = status.policy;
+  const mode = String(policy?.mode || "failover") as keyof typeof ROUTE_MODE_INFO;
+  const pin = policy?.pin && mode !== "manual" ? policy.pin : null;
+  const lines = [
+    `<b>🔀 线路组 · #${rule.id}</b> ${escapeHtml(shortText(rule.name, 24))}`,
+    notice ? `\n${notice}` : "",
+    "",
+    `策略：${escapeHtml(ROUTE_MODE_INFO[mode]?.label || mode)}`,
+    pin ? `人工指定：${routePathLetter(Number(pin.index))}，${escapeHtml(formatPinUntil(pin.untilMs))}` : "",
+    status.agentStale ? "⚠️ 调度机最近没有上报，下面的评分可能是旧的。" : "",
+    "",
+    ...(status.paths as any[]).map((path: any) => {
+      const metrics = [
+        typeof path.score === "number" ? `评分 ${path.score}` : "",
+        typeof path.latencyMs === "number" ? `${Math.round(path.latencyMs)} ms` : "",
+        typeof path.lossPct === "number" ? `丢包 ${Math.round(path.lossPct * 10) / 10}%` : "",
+      ].filter(Boolean).join(" · ");
+      const mark = path.active ? "▶" : path.down ? "✖" : "·";
+      return [
+        `${mark} <b>${path.letter} ${escapeHtml(shortText(path.name, 16))}</b>${path.active ? "（当前）" : ""}`,
+        metrics ? `  ${escapeHtml(metrics)}` : "",
+        path.down ? `  ❌ ${escapeHtml(shortText(path.downReason || "不可用", 50))}` : "",
+      ].filter(Boolean).join("\n");
+    }),
+  ];
+  const rows: InlineKeyboardMarkup["inline_keyboard"] = [];
+  if (mode !== "weighted") {
+    let row: InlineKeyboardButton[] = [];
+    for (const path of status.paths as any[]) {
+      if (path.active && !pin && mode !== "manual") continue;
+      if (pin && Number(pin.index) === Number(path.index)) continue;
+      if (mode === "manual" && path.active) continue;
+      row.push({ text: `改走 ${path.letter} ${shortText(path.name, 8)}`, callback_data: `fx:route:pick:${rule.id}:${path.index}:${page}` });
+      if (row.length >= 2) {
+        rows.push(row);
+        row = [];
+      }
+    }
+    if (row.length > 0) rows.push(row);
+    if (pin) rows.push([{ text: "🤖 交回自动", callback_data: `fx:route:auto:${rule.id}:${page}` }]);
+  }
+  rows.push([{ text: "🔄 刷新", callback_data: `fx:route:${rule.id}:${page}` }, { text: "🔀 返回列表", callback_data: `fx:routes:${page}` }]);
+  rows.push([{ text: "🏠 返回菜单", callback_data: "fx:menu" }]);
+  const text = lines.filter((line, index) => line !== "" || index === 2 || index === 6).join("\n").replace(/\n{3,}/g, "\n\n");
+  return { text, keyboard: { inline_keyboard: rows } as InlineKeyboardMarkup };
+}
+
+function routePinDurationKeyboard(ruleId: number, index: number, page: number): InlineKeyboardMarkup {
+  const options = PIN_DURATION_OPTIONS.map((option, optionIndex) => ({
+    text: option.seconds === null ? "一直走它" : option.label,
+    callback_data: `fx:route:pin:${ruleId}:${index}:${optionIndex}:${page}`,
+  }));
+  return {
+    inline_keyboard: [
+      options.slice(0, 2),
+      options.slice(2, 4),
+      options.slice(4),
+      [{ text: "❌ 取消", callback_data: `fx:route:${ruleId}:${page}` }],
+    ].filter((row) => row.length > 0),
+  };
+}
+
+async function routePickView(user: any, ruleId: number, index: number, page: number) {
+  const rule = await visibleRuleForTelegram(user, ruleId);
+  const group = rule ? routeGroupOf(rule) : null;
+  if (!rule || !group || !group.paths[index]) return routeView(user, ruleId, page, "那条路径已经不存在了。");
+  const label = `${routePathLetter(index)} ${escapeHtml(routePathLabel(group.paths[index], index))}`;
+  if (group.policy.mode === "manual") {
+    // 手动主备本来就是「一直走指定的那条」，不问期限，直接换。
+    return routePinApply(user, ruleId, index, null, page);
+  }
+  return {
+    text: [
+      `<b>改走 ${label}</b>`,
+      "",
+      "压过时段表和评分，到点自动交回。它要是挂了，仍然会往下切，不会守着一条断掉的路。",
+      "",
+      "改走多久？",
+    ].join("\n"),
+    keyboard: routePinDurationKeyboard(ruleId, index, page),
+  };
+}
+
+async function routePinApply(user: any, ruleId: number, index: number | null, durationSeconds: number | null, page: number) {
+  const caller = await telegramRulesCaller(user);
+  try {
+    await caller.update({
+      id: ruleId,
+      failoverPinnedIndex: index,
+      failoverPinnedUntil: index === null ? null : pinUntilSeconds(durationSeconds),
+    });
+  } catch (error) {
+    return routeView(user, ruleId, page, `⚠️ 没改成：${escapeHtml(error instanceof Error ? error.message : String(error))}`);
+  }
+  const notice = index === null ? "✅ 已交回自动。" : `✅ 已改走 ${routePathLetter(index)}，几秒内生效。`;
+  return routeView(user, ruleId, page, notice);
+}
+
+// ---------- 通知开关 ----------
+
+async function telegramHostStatusGlobalEnabled() {
+  const settings = await db.getAllSettings();
+  return settings.telegramHostStatusNotify === "true";
+}
+
+async function notifyView(user: any, notice = "") {
+  const prefs = await readTelegramNotifyPrefs();
+  const isAdmin = user.role === "admin";
+  const digestOn = isTelegramDigestEnabled(prefs, user);
+  const hostGlobal = isAdmin ? await telegramHostStatusGlobalEnabled() : true;
+  const lines = [
+    "<b>🔔 通知设置</b>",
+    notice ? `\n${notice}` : "",
+    "",
+    isAdmin ? "这里只改发给你的那一份，不影响其他管理员。" : "",
+  ];
+  const rows: InlineKeyboardMarkup["inline_keyboard"] = [];
+  if (isAdmin) {
+    for (const category of TELEGRAM_NOTIFY_CATEGORIES) {
+      const on = !isTelegramNotifyMuted(prefs, user.id, category.key);
+      lines.push(`${on ? "✅" : "🔕"} ${category.label}${category.key === "host" && !hostGlobal ? "（面板总开关是关的）" : ""}`);
+      rows.push([{ text: `${on ? "🔕 关闭" : "✅ 打开"}${category.label}`, callback_data: `fx:notify:t:${category.key}` }]);
+    }
+  }
+  lines.push(`${digestOn ? "✅" : "🔕"} 每日简报（每天 ${DIGEST_HOUR}:00）`);
+  rows.push([{ text: `${digestOn ? "🔕 关闭" : "✅ 打开"}每日简报`, callback_data: `fx:notify:digest:${digestOn ? "0" : "1"}` }]);
+  if (isAdmin && !hostGlobal) {
+    rows.push([{ text: "🖥 打开主机上下线总开关", callback_data: "fx:notify:hostglobal" }]);
+  }
+  rows.push([{ text: "📰 现在看一份简报", callback_data: "fx:digest" }]);
+  rows.push([{ text: "🏠 返回菜单", callback_data: "fx:menu" }]);
+  if (isAdmin) lines.push("", "规则异常和线路切换只对面板里开了 Telegram 通知的规则发。");
+  return { text: lines.filter((line, index) => line !== "" || index === 2).join("\n").replace(/\n{3,}/g, "\n\n"), keyboard: { inline_keyboard: rows } as InlineKeyboardMarkup };
+}
+
+// ---------- 每日简报 ----------
+
+function billingDateLabel(value: Date | number) {
+  const parts = billingCalendarParts(value);
+  return `${parts.month}月${parts.day}日`;
+}
+
+function billingDateKey(value: Date | number) {
+  const parts = billingCalendarParts(value);
+  return `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
+}
+
+async function last24hTrafficBytes(userId?: number) {
+  const series = await db.getGlobalTrafficSeries({ bucketMinutes: 60, since: new Date(Date.now() - 24 * 3600_000), userId }).catch(() => [] as any[]);
+  return (series as any[]).reduce((sum, point) => sum + Math.max(0, Number(point.bytesIn || 0)) + Math.max(0, Number(point.bytesOut || 0)), 0);
+}
+
+async function abnormalRulesForDigest(user: any) {
+  const rules = (await visibleRulesForTelegramUser(user)).filter((rule: any) => !rule.routeParentRuleId);
+  const summaries = await aiRuleTrafficSummaryMap(user, rules.map((rule: any) => Number(rule.id)), { includeLatency: true });
+  const abnormal = rules.filter((rule: any) => effectiveRuleStatusInfo(rule, summaries.get(Number(rule.id))).kind === "abnormal");
+  return { total: rules.length, abnormal, summaries };
+}
+
+function daysUntil(value: unknown, now = Date.now()) {
+  if (!value) return null;
+  const time = new Date(value as any).getTime();
+  if (!Number.isFinite(time)) return null;
+  return Math.ceil((time - now) / 86400_000);
+}
+
+export async function buildTelegramDigestText(user: any, now = Date.now()) {
+  const lines: string[] = [`<b>📰 NEX 每日简报</b> · ${billingDateLabel(now)}`, ""];
+  const { total, abnormal, summaries } = await abnormalRulesForDigest(user);
+  const abnormalLines = abnormal.slice(0, 5).map((rule: any) => `  · #${rule.id} ${escapeHtml(shortText(rule.name, 18))}：${escapeHtml(effectiveRuleStatusInfo(rule, summaries.get(Number(rule.id))).label)}`);
+  if (user.role === "admin") {
+    const hosts = await db.getHosts() as any[];
+    const online = hosts.filter((host) => telegramHostState(host) === "online").length;
+    const offline = sortHostsForTelegram(hosts).filter((host) => telegramHostState(host) === "offline");
+    lines.push(`🖥 主机：在线 <b>${online}</b> / ${hosts.length}`);
+    if (offline.length > 0) {
+      lines.push(`  离线：${offline.slice(0, 5).map((host) => `${escapeHtml(shortText(host.name || host.ip, 12))}（${escapeHtml(formatAgo(host.lastHeartbeat))}）`).join("、")}${offline.length > 5 ? ` 等 ${offline.length} 台` : ""}`);
+    }
+    const upgradable = hosts.filter(hostNeedsAgentUpgrade).length;
+    if (upgradable > 0) lines.push(`  可升级 Agent：${upgradable} 台`);
+    lines.push(`⚙️ 规则：共 ${total} 条${abnormal.length > 0 ? `，<b>异常 ${abnormal.length}</b> 条` : "，全部正常"}`, ...abnormalLines);
+    if (abnormal.length > 5) lines.push(`  …其余 ${abnormal.length - 5} 条在面板里看`);
+    lines.push(`📊 近 24 小时转发流量：<b>${escapeHtml(formatBytes(await last24hTrafficBytes()))}</b>`);
+    const users = await db.getUserTrafficSummaries() as any[];
+    const expiringUsers = users
+      .filter((item) => item.role !== "admin" && item.accountEnabled !== false)
+      .map((item) => ({ item, days: daysUntil(item.expiresAt, now) }))
+      .filter((entry) => entry.days !== null && entry.days >= 0 && entry.days <= 7)
+      .sort((a, b) => Number(a.days) - Number(b.days));
+    const expiringHosts = hosts
+      .map((host) => ({ host, days: daysUntil(host.stoppedAt, now) }))
+      .filter((entry) => entry.days !== null && entry.days >= 0 && entry.days <= 7)
+      .sort((a, b) => Number(a.days) - Number(b.days));
+    if (expiringUsers.length + expiringHosts.length > 0) {
+      lines.push("⏰ 7 天内到期：");
+      for (const { item, days } of expiringUsers.slice(0, 5)) lines.push(`  · 用户 #${item.id} ${escapeHtml(shortText(item.name || item.username, 14))}：${days === 0 ? "今天" : `${days} 天后`}`);
+      if (expiringUsers.length > 5) lines.push(`  · 其余 ${expiringUsers.length - 5} 个用户`);
+      for (const { host, days } of expiringHosts.slice(0, 5)) lines.push(`  · 主机 #${host.id} ${escapeHtml(shortText(host.name || host.ip, 14))}：${days === 0 ? "今天" : `${days} 天后`}`);
+      if (expiringHosts.length > 5) lines.push(`  · 其余 ${expiringHosts.length - 5} 台主机`);
+    } else {
+      lines.push("⏰ 7 天内没有到期的用户和主机");
+    }
+    return lines.join("\n");
+  }
+  const fresh = await db.getUserById(Number(user.id)) as any || user;
+  const limit = Number(fresh.trafficLimit) || 0;
+  const used = Number(fresh.trafficUsed) || 0;
+  lines.push(`📊 流量：已用 <b>${escapeHtml(formatBytes(used))}</b>${limit > 0 ? ` / ${escapeHtml(formatBytes(limit))}（${Math.min(100, Math.round((used / limit) * 100))}%）` : "（不限）"}`);
+  lines.push(`  近 24 小时：${escapeHtml(formatBytes(await last24hTrafficBytes(Number(user.id))))}`);
+  lines.push(`⚙️ 规则：共 ${total} 条${abnormal.length > 0 ? `，<b>异常 ${abnormal.length}</b> 条` : "，全部正常"}`, ...abnormalLines);
+  const days = daysUntil(fresh.expiresAt, now);
+  lines.push(days === null ? "⏰ 套餐：长期有效" : days < 0 ? "⏰ 套餐：<b>已到期</b>" : `⏰ 套餐：${escapeHtml(formatDate(fresh.expiresAt))} 到期（还有 ${days} 天）`);
+  return lines.join("\n");
+}
+
+/**
+ * 每天 9 点（北京时间）发一次。调度每十分钟看一眼，过了 9 点就把今天还没发的发掉；
+ * 去重键带北京日期、走提醒同一套 dispatchReminders，面板重启也不会重发。
+ */
+export async function runTelegramDigests(now = Date.now()) {
+  const settings = await getTelegramSettings();
+  if (!settings.enabled || !settings.token) return 0;
+  if (billingCalendarParts(now).hour < DIGEST_HOUR) return 0;
+  const prefs = await readTelegramNotifyPrefs();
+  const users = (await db.getUserTrafficSummaries() as any[])
+    .filter((user) => !!user.telegramId && user.accountEnabled !== false && isTelegramDigestEnabled(prefs, user));
+  if (users.length === 0) return 0;
+  const dateKey = billingDateKey(now);
+  const pending: PendingReminder[] = users.map((summary) => ({
+    key: `telegramReminder:digest:${summary.id}:${dateKey}`,
+    send: async () => {
+      const user = await db.getUserById(Number(summary.id)) as any;
+      if (!user?.telegramId || user.accountEnabled === false) return;
+      await sendTelegramMessage(user.telegramId, await buildTelegramDigestText(user, now));
+    },
+  }));
+  return dispatchReminders(pending);
 }
 
 async function handleBind(message: TelegramMessage, code: string) {
@@ -5009,6 +5722,25 @@ async function handleMessage(message: TelegramMessage) {
 
   if (command === "/menu") return sendMainMenu(message.chat.id, user);
   if (command === "/usage") return handleUsage(message, user);
+  if (command === "/hosts") {
+    const view = await hostsView(user, 0);
+    await sendMessage(message.chat.id, view.text, view.keyboard);
+    return;
+  }
+  if (command === "/routes") {
+    const view = await routesView(user, 0);
+    await sendMessage(message.chat.id, view.text, view.keyboard);
+    return;
+  }
+  if (command === "/notify") {
+    const view = await notifyView(user);
+    await sendMessage(message.chat.id, view.text, view.keyboard);
+    return;
+  }
+  if (command === "/digest") {
+    await sendMessage(message.chat.id, await buildTelegramDigestText(user), backMenuKeyboard());
+    return;
+  }
   if (command === "/rules") return handleRules(message, user);
   if (command === "/ask") {
     return handleAiInteraction(message, user, text);
@@ -5143,7 +5875,80 @@ async function handleCallback(query: TelegramCallbackQuery) {
     const [, , , ruleIdRaw, pageRaw] = data.split(":");
     const ruleId = Number(ruleIdRaw);
     const page = Number(pageRaw || 0);
-    await editMessage(chatId, messageId, await ruleDetailText(ruleId, user), ruleListBackKeyboard(page));
+    const rule = await visibleRuleForTelegram(user, ruleId);
+    await editMessage(chatId, messageId, await ruleDetailText(ruleId, user), rule ? ruleDetailKeyboard(rule, page) : ruleListBackKeyboard(page));
+    return;
+  }
+  if (data.startsWith("fx:rule:test:")) {
+    const [, , , ruleIdRaw, pageRaw] = data.split(":");
+    await startRuleLatencyTest(chatId, messageId, user, Number(ruleIdRaw), Number(pageRaw || 0));
+    return;
+  }
+  if (data.startsWith("fx:rule:testres:")) {
+    const [, , , ruleIdRaw, pageRaw] = data.split(":");
+    const view = await ruleLatestTestView(user, Number(ruleIdRaw), Number(pageRaw || 0));
+    await editMessage(chatId, messageId, view.text, view.keyboard);
+    return;
+  }
+  if (data.startsWith("fx:hosts:")) {
+    const view = await hostsView(user, Number(data.split(":")[2] || 0));
+    await editMessage(chatId, messageId, view.text, view.keyboard);
+    return;
+  }
+  if (data.startsWith("fx:host:upgrade:")) {
+    if (user.role !== "admin") {
+      await editMessage(chatId, messageId, "你没有管理员权限。", backMenuKeyboard());
+      return;
+    }
+    const [, , , hostIdRaw] = data.split(":");
+    const view = await hostUpgradeConfirm(user, Number(hostIdRaw));
+    await editMessage(chatId, messageId, view.text, view.keyboard);
+    return;
+  }
+  if (data.startsWith("fx:host:")) {
+    const [, , hostIdRaw, pageRaw] = data.split(":");
+    const view = await hostDetailView(user, Number(hostIdRaw), Number(pageRaw || 0));
+    await editMessage(chatId, messageId, view.text, view.keyboard);
+    return;
+  }
+  if (data.startsWith("fx:routes:")) {
+    const view = await routesView(user, Number(data.split(":")[2] || 0));
+    await editMessage(chatId, messageId, view.text, view.keyboard);
+    return;
+  }
+  if (data.startsWith("fx:route:")) {
+    const parts = data.split(":");
+    let view: { text: string; keyboard: InlineKeyboardMarkup };
+    if (parts[2] === "pick") {
+      view = await routePickView(user, Number(parts[3]), Number(parts[4]), Number(parts[5] || 0));
+    } else if (parts[2] === "pin") {
+      const option = PIN_DURATION_OPTIONS[Number(parts[5])];
+      view = option
+        ? await routePinApply(user, Number(parts[3]), Number(parts[4]), option.seconds, Number(parts[6] || 0))
+        : await routeView(user, Number(parts[3]), Number(parts[6] || 0));
+    } else if (parts[2] === "auto") {
+      view = await routePinApply(user, Number(parts[3]), null, null, Number(parts[4] || 0));
+    } else {
+      view = await routeView(user, Number(parts[2]), Number(parts[3] || 0));
+    }
+    await editMessage(chatId, messageId, view.text, view.keyboard);
+    return;
+  }
+  if (data.startsWith("fx:notify:")) {
+    const parts = data.split(":");
+    let notice = "";
+    if (parts[2] === "t" && TELEGRAM_NOTIFY_CATEGORIES.some((item) => item.key === parts[3]) && user.role === "admin") {
+      await updateTelegramNotifyPref(Number(user.id), { toggleCategory: parts[3] as TelegramNotifyCategory });
+      notice = "已更新。";
+    } else if (parts[2] === "digest") {
+      await updateTelegramNotifyPref(Number(user.id), { digest: parts[3] === "1" });
+      notice = parts[3] === "1" ? `已打开，每天 ${DIGEST_HOUR}:00 发给你。` : "已关闭每日简报。";
+    } else if (parts[2] === "hostglobal" && user.role === "admin") {
+      await db.setSetting("telegramHostStatusNotify", "true");
+      notice = "已打开主机上下线总开关（面板设置里同一个开关）。";
+    }
+    const view = await notifyView(user, notice);
+    await editMessage(chatId, messageId, view.text, view.keyboard);
     return;
   }
   if (data.startsWith("fx:rule:toggle:")) {
@@ -5437,6 +6242,20 @@ async function handleCallback(query: TelegramCallbackQuery) {
     case "fx:usage":
       await editMessage(chatId, messageId, await usageText(user), backMenuKeyboard());
       return;
+    case "fx:notify":
+      {
+        const view = await notifyView(user);
+        await editMessage(chatId, messageId, view.text, view.keyboard);
+      }
+      return;
+    case "fx:digest":
+      await editMessage(chatId, messageId, await buildTelegramDigestText(user), {
+        inline_keyboard: [
+          [{ text: "🔔 通知设置", callback_data: "fx:notify" }],
+          [{ text: "🏠 返回菜单", callback_data: "fx:menu" }],
+        ],
+      });
+      return;
     case "fx:rules":
       {
         const view = await rulesView(user, 0);
@@ -5477,7 +6296,7 @@ function telegramUpdateQueueKey(update: TelegramUpdate) {
   return chatId ? `telegram-chat:${chatId}` : `telegram-update:${update.update_id}`;
 }
 
-async function processTelegramUpdate(update: TelegramUpdate) {
+export async function processTelegramUpdate(update: TelegramUpdate) {
   try {
     if (update.message) await handleMessage(update.message);
     if (update.callback_query) await handleCallback(update.callback_query);

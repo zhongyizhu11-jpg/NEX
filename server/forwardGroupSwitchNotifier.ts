@@ -2,6 +2,7 @@ import { ENV } from "./env";
 import { sendTelegramMessage } from "./telegramBot";
 import { getAllSettings } from "./repositories/settingsRepository";
 import { getTelegramAdminRecipients } from "./repositories/userRepository";
+import { filterTelegramRecipients } from "./telegramNotifyPrefs";
 
 type ForwardGroupSwitchNotifyPayload = {
   groupId: number;
@@ -63,7 +64,7 @@ function forwardGroupSwitchMessage(payload: ForwardGroupSwitchNotifyPayload) {
 
 export async function notifyForwardGroupSwitch(payload: ForwardGroupSwitchNotifyPayload) {
   if (!(await telegramForwardGroupSwitchEnabled())) return;
-  const recipients = await getTelegramAdminRecipients();
+  const recipients = await filterTelegramRecipients(await getTelegramAdminRecipients() as any[], "route");
   if (recipients.length === 0) return;
   const text = forwardGroupSwitchMessage(payload);
   let sent = 0;

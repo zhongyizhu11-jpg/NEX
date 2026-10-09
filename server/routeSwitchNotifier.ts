@@ -2,6 +2,7 @@ import { describeRouteReason, type RouteEventKind } from "../shared/routeGroup";
 import { sendTelegramMessage } from "./telegramBot";
 import { getTelegramAdminRecipients } from "./repositories/userRepository";
 import { isTelegramBotReady } from "./telegramReady";
+import { filterTelegramRecipients } from "./telegramNotifyPrefs";
 
 /*
   线路组切换的 Telegram 提醒。
@@ -93,7 +94,7 @@ export async function notifyRouteSwitch(payload: RouteSwitchNotifyPayload) {
   if (!ruleId || !payload.rule?.telegramErrorNotifyEnabled) return;
   if (!(await isTelegramBotReady())) return;
   if (!shouldNotifyRouteSwitch(ruleId, payload.kind)) return;
-  const recipients = await getTelegramAdminRecipients();
+  const recipients = await filterTelegramRecipients(await getTelegramAdminRecipients() as any[], "route");
   if (recipients.length === 0) return;
   const text = routeSwitchMessage(payload);
   let sent = 0;

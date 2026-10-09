@@ -12,7 +12,7 @@ import {
   proxyTrafficReminderTitle,
 } from "./proxyTrafficReminders";
 import { dispatchReminders, type PendingReminder } from "./reminderDispatch";
-import { sendTelegramMessage } from "./telegramBot";
+import { runTelegramDigests, sendTelegramMessage } from "./telegramBot";
 import { recordTunnelHopTestResult } from "./tunnelHopTestState";
 import { recordHopTestResult } from "./hopTestState";
 import { primeHostStatusNotifier, sweepOfflineHostsAndNotify } from "./hostStatusNotifier";
@@ -1002,6 +1002,14 @@ export function startScheduler() {
     await runEmailReminders();
     await runTelegramReminders();
   }, { slowTaskMs: 15_000 });
+  // 每日简报：北京时间 9 点以后发当天那一份，十分钟看一次；去重键带日期，一天只发一次。
+  const telegramDigest = createNonOverlappingScheduledTask("Telegram daily digest", async () => {
+    try {
+      await runTelegramDigests();
+    } catch (error) {
+      console.error("[Scheduler] Telegram digest error:", error);
+    }
+  }, { slowTaskMs: 30_000 });
   const updateCheck = createNonOverlappingScheduledTask("panel update check", async () => {
     await runUpdateAutoCheck();
   }, { slowTaskMs: 15_000 });
@@ -1072,6 +1080,7 @@ export function startScheduler() {
   repeatAfter(paymentMaintenance, 60 * 1000, 35_000);
   repeatAfter(entryBridgeExpiry, 60 * 1000, 50_000);
   repeatAfter(reminderSweep, 6 * 60 * 60 * 1000, 30_000);
+  repeatAfter(telegramDigest, 10 * 60 * 1000, 70_000);
   repeatAfter(updateCheck, UPDATE_AUTO_CHECK_INTERVAL_MS, 45_000);
   repeatAfter(historyCleanup, 60 * 60 * 1000, 2 * 60_000);
   // 没定到位的主机五分钟看一次；真正的重试间隔由 hostGeo 里的退避（10 分钟起、封顶 6 小时）决定。
