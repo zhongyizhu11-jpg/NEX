@@ -3,6 +3,7 @@ import { sendTelegramMessage } from "./telegramBot";
 import { getTelegramAdminRecipients } from "./repositories/userRepository";
 import { formatForwardRuleProtocol, FORWARD_TYPE_LABELS, type ForwardType } from "../shared/forwardTypes";
 import { isTelegramBotReady } from "./telegramReady";
+import { filterTelegramRecipients } from "./telegramNotifyPrefs";
 
 type ForwardRuleErrorPayload = {
   rule: any;
@@ -98,7 +99,7 @@ export async function notifyForwardRuleError(payload: ForwardRuleErrorPayload) {
   if (!ruleId || !payload.rule?.telegramErrorNotifyEnabled) return;
   if (!(await isTelegramBotReady())) return;
 
-  const recipients = await getTelegramAdminRecipients();
+  const recipients = await filterTelegramRecipients(await getTelegramAdminRecipients() as any[], "rule");
   if (recipients.length === 0) return;
   if (!shouldNotifyForwardRuleError(ruleId, payload.message)) return;
   const text = ruleErrorMessage(payload);

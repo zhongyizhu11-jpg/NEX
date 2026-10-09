@@ -52,7 +52,7 @@ import {
 import { OptimisticSwitch, Switch } from "@/components/ui/switch";
 import { Tabs } from "@/components/ui/tabs";
 import { SlidingTabsList, type SlidingTabItem } from "@/components/ui/sliding-tabs";
-import { FilterChips, type FilterChipItem } from "@/components/ui/filter-chips";
+import type { FilterChipItem } from "@/components/ui/filter-chips";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Table,
@@ -4140,6 +4140,10 @@ function RulesContent() {
     { value: "chain", label: desktopRuleTypeLabels.chain, count: ruleCategoryCountsReady ? ruleCategoryCounts.chain : null },
     { value: "group", label: desktopRuleTypeLabels.group, count: ruleCategoryCountsReady ? ruleCategoryCounts.group : null },
   ], [ruleCategoryCounts, ruleCategoryCountsReady]);
+  const ruleCategoryTabItems = useMemo<SlidingTabItem<RuleCategory>[]>(
+    () => ruleCategoryItems.map((item) => ({ value: item.value, label: item.label, badge: item.count ?? undefined })),
+    [ruleCategoryItems],
+  );
   const visibleRuleIdsForMetrics = useMemo(() => (
     Array.from(new Set(filteredRules.map((rule: any) => Number(rule.id)).filter((id: number) => Number.isInteger(id) && id > 0)))
       .sort((a, b) => a - b)
@@ -7064,7 +7068,18 @@ function RulesContent() {
 
       {(user?.role === "admin" || ruleScopeTotal > 0 || hasActiveRuleFilter || (rules && rules.length > 0)) && (
         <div className="space-y-3">
-          {/* 第一行：小搜索框、筛选、最右边「新建规则」；第二行：分类药丸（选中的走主色渐变）。 */}
+          {/*
+            第一行：分类条，和主机管理、链路管理顶上那条一样的分段条（2026-10-09 用户要统一）；
+            第二行：小搜索框、筛选、最右边「新建规则」。
+            这里的 Tabs 只管分类条本身，不带 TabsContent：列表下面照旧按 ruleCategory 过滤。
+          */}
+          <Tabs value={ruleCategory} onValueChange={handleRuleCategoryChange}>
+            <SlidingTabsList
+              items={ruleCategoryTabItems}
+              activeValue={ruleCategory}
+              ariaLabel="转发规则分类"
+            />
+          </Tabs>
           <FilterToolbar
             activeCount={Number(hasActiveUserFilter) + Number(filterResource !== "all")}
             action={createRuleAction}
@@ -7199,7 +7214,6 @@ function RulesContent() {
               </SelectContent>
             </Select>
           </FilterToolbar>
-          <FilterChips items={ruleCategoryItems} value={ruleCategory} onChange={handleRuleCategoryChange} ariaLabel="转发规则分类" />
 
 
         </div>

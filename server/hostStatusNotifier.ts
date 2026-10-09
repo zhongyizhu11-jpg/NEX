@@ -10,6 +10,7 @@ import {
   type AgentFastLivenessTransition,
 } from "./agentFastLiveness";
 import { withKeyedTaskLock } from "./keyedTaskLock";
+import { filterTelegramRecipients } from "./telegramNotifyPrefs";
 import { HostOfflineNotificationDebouncer } from "./hostOfflineNotificationDebouncer";
 
 type HostStatus = "online" | "offline";
@@ -114,7 +115,7 @@ function hostStatusSummaryMessage(hosts: any[], status: HostStatus) {
 
 async function sendTelegramToAdmins(text: string, logLabel: string) {
   if (!(await telegramHostStatusEnabled())) return;
-  const recipients = await db.getTelegramAdminRecipients();
+  const recipients = await filterTelegramRecipients(await db.getTelegramAdminRecipients() as any[], "host");
   if (recipients.length === 0) return;
   let sent = 0;
   let failed = 0;

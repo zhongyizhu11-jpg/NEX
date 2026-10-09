@@ -1,6 +1,6 @@
-export const APP_VERSION = "2.3.417";
+export const APP_VERSION = "2.3.418";
 export const ANDROID_APP_VERSION = "2.3.100";
-export const ANDROID_APK_RELEASE_VERSION = "2.3.417";
+export const ANDROID_APK_RELEASE_VERSION = "2.3.418";
 export const AGENT_VERSION = "2.2.214";
 /**
  * 面板这一版随 Agent 一起发布的 forwardx-fxp 版本（forwardx-fxp/main.go 的

@@ -28,7 +28,7 @@ import { deriveHostVitals, type HostVitals } from "./useHostVitals";
  * 这张卡只留支撑「要不要点进去」这个决定所需的东西（照 2026-09-27 定稿的效果图）：
  *
  *   [U]  ● HK entry 01 (Debian 12)                ···   发行版图标、状态点、名字、系统标签；右上角 ···
- *        Hong Kong · 192.0.2.21 · Agent 2.2.199        一行注脚：地区 · IP · Agent 版本（可升级就标一句）
+ *        Hong Kong · 192.0.2.21 · 可升级                 一行注脚：地区 · IP（Agent 版本进详情，可升级就标一句）
  *        CPU 18% | 内存 42% | 磁盘 36%                  三个规格格，标签在上数字在下
  *        ↓ 8.42 MB/s · ↑ 11.6 MB/s      6 条转发 · 2 条线路经过
  *
@@ -159,19 +159,27 @@ export function buildHostActions(
 }
 
 /**
- * 资源一行三个规格格，**不画条**。
+ * 资源一行三个规格格。格子的样子照 kfchost 套餐卡里的规格格：比卡深一点的灰底、
+ * 12px 圆角，标签在上、数字在下，不带图标（「CPU」「内存」「磁盘」三个词自己就认得出）。
  *
- * 条留给详情页。列表要回答的是「有没有哪台快满了」，一个数字就够。格子的样子照
- * kfchost 套餐卡里的规格格：比卡深一点的灰底、12px 圆角，标签在上、数字在下，不带图标
- * （「CPU」「内存」「磁盘」三个词自己就认得出，图标只是占地方）。
+ * 格子底部一根 3px 细条（2026-10-08 用户要的），颜色跟数字走：正常主色渐变、≥70% 琥珀、
+ * ≥90% 红。条是绝对定位贴在格子底部的，格子和卡片的高度一点不变（见 workspace.css
+ * 的 .fx-host-spec-bar）。条长用 transform: scaleX 而不是 width，数值刷新时只走合成层。
+ * 数字不知道（— 或还没上报）就不画条。
  *
  * 只在线时画：离线的机器那三个数是最后一次上报的化石，画出来像是此刻的占用。
  */
-function SpecBlock({ label, value, tone, muted }: { label: string; value: string; tone?: "warn" | "down"; muted?: boolean }) {
+function SpecBlock({ label, value, percent, tone, muted }: { label: string; value: string; percent: number | null; tone?: "warn" | "down"; muted?: boolean }) {
+  const ratio = percent === null || muted ? null : Math.max(0, Math.min(100, percent)) / 100;
   return (
     <span className="fx-host-spec">
       <i>{label}</i>
       <b data-tone={tone} data-muted={muted ? "" : undefined}>{value}</b>
+      {ratio === null ? null : (
+        <span className="fx-host-spec-bar" aria-hidden="true">
+          <span data-tone={tone} style={{ transform: `scaleX(${ratio})` }} />
+        </span>
+      )}
     </span>
   );
 }
@@ -183,14 +191,21 @@ function usageTone(value: number | null): "warn" | "down" | undefined {
   return undefined;
 }
 
-function ResourceRow({ vitals }: { vitals: HostVitals }) {
+function hostCardTone(health: HostVitals["health"]): "ok" | "warn" | "down" | "off" {
+  if (health === "down") return "down";
+  if (health === "degraded" || health === "switching") return "warn";
+  if (health === "healthy") return "ok";
+  return "off";
+}
+
+export function ResourceRow({ vitals }: { vitals: HostVitals }) {
   const pct = (value: number | null) => (value === null ? "—" : `${Math.round(value)}%`);
   const unknown = vitals.cpuPercent === null;
   return (
     <div className="grid min-w-0 grid-cols-3 gap-2">
-      <SpecBlock label="CPU" value={formatCpuPercent(vitals.cpuPercent, vitals.isOnline)} tone={usageTone(vitals.cpuPercent)} muted={unknown} />
-      <SpecBlock label="内存" value={pct(vitals.memoryPercent)} tone={usageTone(vitals.memoryPercent)} muted={unknown} />
-      <SpecBlock label="磁盘" value={pct(vitals.diskPercent)} tone={usageTone(vitals.diskPercent)} muted={unknown} />
+      <SpecBlock label="CPU" value={formatCpuPercent(vitals.cpuPercent, vitals.isOnline)} percent={vitals.cpuPercent} tone={usageTone(vitals.cpuPercent)} muted={unknown} />
+      <SpecBlock label="内存" value={pct(vitals.memoryPercent)} percent={vitals.memoryPercent} tone={usageTone(vitals.memoryPercent)} muted={unknown} />
+      <SpecBlock label="磁盘" value={pct(vitals.diskPercent)} percent={vitals.diskPercent} tone={usageTone(vitals.diskPercent)} muted={unknown} />
     </div>
   );
 }
@@ -255,7 +270,7 @@ export default function HostSummaryCard(props: HostSummaryCardProps) {
 
   const name = String(host?.name || "-").trim() || "-";
   const os = hostOsOf(host);
-  // 注脚里只写城市（「Tokyo」），没有城市才写国家：一行要放下地区、IP 和 Agent 版本。
+  // 注脚里只写城市（「Tokyo」），没有城市才写国家：一行是地区 · IP（能升级再加「可升级」）。
   const region = String(host?.geoRegion || "").trim() || hostRegionText(host);
   const address = hostPrimaryAddressLines(host).map((row) => row.value).filter((value) => value && value !== "-")[0] || "";
   const agentVersion = String(host?.agentVersion ?? "").trim().replace(/^v/i, "");
@@ -279,6 +294,12 @@ export default function HostSummaryCard(props: HostSummaryCardProps) {
   return (
     <EntityCard
       interactive
+      /*
+        fx-card-face 让主机卡也吃设置里的「卡片风格」（彩色描边 / 状态光 / 渐变卡头 / 纯白），
+        和规则卡同一套 CSS。颜色跟状态：在线主色、降级琥珀、掉线红、没上报过不着色。
+      */
+      className="fx-card-face fx-host-card"
+      data-tone={hostCardTone(vitals.health)}
       role="button"
       tabIndex={0}
       aria-label={`查看 ${name} 详情`}
@@ -302,7 +323,7 @@ export default function HostSummaryCard(props: HostSummaryCardProps) {
           </span>
         }
         /*
-          系统标签挂在名字旁边（「Debian 12」），Agent 版本进下面那行注脚：名字才是主角，
+          系统标签挂在名字旁边（「Debian 12」），Agent 版本不上卡、进详情：名字才是主角，
           标签只有一枚就不会把名字挤成「Tokyo-II…」。
         */
         badges={os.label ? (
@@ -312,12 +333,12 @@ export default function HostSummaryCard(props: HostSummaryCardProps) {
         ) : null}
         subtitle={
           <>
+            {/* Agent 版本号不上卡（2026-10-09 用户要求），进详情看；能升级时只留一句「可升级」。 */}
             {[region, address].filter(Boolean).join(" · ")}
-            {agentVersion ? (
+            {agentVersion && props.upgradeAvailable ? (
               <>
                 {region || address ? " · " : ""}
-                Agent {agentVersion}
-                {props.upgradeAvailable ? <span className="text-[var(--fx-warn-text)]"> 可升级</span> : null}
+                <span className="text-[var(--fx-warn-text)]">可升级</span>
               </>
             ) : null}
           </>
