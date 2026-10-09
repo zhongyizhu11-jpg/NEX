@@ -944,7 +944,23 @@ function buildTelegramWebAppUrl(panelPublicUrl: string, challenge?: string) {
   return `${base}/login?${params.toString()}`;
 }
 
-function webAppOpenKeyboard(url: string): InlineKeyboardMarkup {
+/**
+ * Telegram 的 Web App 按钮只接受 https 地址。面板地址是 http（比如 http://IP:端口）时，
+ * 带 web_app 的键盘整条被拒（Bad Request: ... Only HTTPS links are allowed），连菜单都发不出来
+ * —— 2026-10-09 用户点「返回菜单」就是这样失败的。http 面板退成普通链接按钮（在浏览器打开）。
+ */
+export function isTelegramWebAppUrl(url: string) {
+  return /^https:\/\//i.test(String(url || "").trim());
+}
+
+export function panelButton(text: string, url: string): InlineKeyboardButton {
+  return isTelegramWebAppUrl(url) ? { text, web_app: { url } } : { text, url };
+}
+
+export function webAppOpenKeyboard(url: string): InlineKeyboardMarkup {
+  if (!isTelegramWebAppUrl(url)) {
+    return { inline_keyboard: [[{ text: "🔗 在浏览器打开面板", url }]] };
+  }
   return {
     inline_keyboard: [
       [
@@ -955,7 +971,7 @@ function webAppOpenKeyboard(url: string): InlineKeyboardMarkup {
   };
 }
 
-function mainMenuKeyboard(user: any, webAppUrl?: string): InlineKeyboardMarkup {
+export function mainMenuKeyboard(user: any, webAppUrl?: string): InlineKeyboardMarkup {
   const rows: InlineKeyboardMarkup["inline_keyboard"] = [
     [
       { text: "👤 账户", callback_data: "fx:user" },
@@ -970,7 +986,7 @@ function mainMenuKeyboard(user: any, webAppUrl?: string): InlineKeyboardMarkup {
     secondaryRow.push({ text: "🎟 兑换", callback_data: "fx:redeem" });
   }
   if (webAppUrl) {
-    secondaryRow.push({ text: "🌐 面板", web_app: { url: webAppUrl } });
+    secondaryRow.push(panelButton("🌐 面板", webAppUrl));
   }
   rows.push(secondaryRow);
   return { inline_keyboard: rows };
@@ -1367,7 +1383,12 @@ async function sendMainMenu(chatId: number | string, user: any) {
       createTelegramWebAppLoginChallenge({ telegramId: user?.telegramId || null }),
     )
     : "";
-  await sendMessage(chatId, menuText(user), mainMenuKeyboard(user, webAppUrl || undefined));
+  try {
+    await sendMessage(chatId, menuText(user), mainMenuKeyboard(user, webAppUrl || undefined));
+  } catch (error) {
+    if (!webAppUrl || !isPanelButtonRejection(error)) throw error;
+    await sendMessage(chatId, menuText(user), mainMenuKeyboard(user));
+  }
 }
 
 async function editMainMenu(chatId: number | string, messageId: number, user: any) {
@@ -1378,7 +1399,18 @@ async function editMainMenu(chatId: number | string, messageId: number, user: an
       createTelegramWebAppLoginChallenge({ telegramId: user?.telegramId || null }),
     )
     : "";
-  await editMessage(chatId, messageId, menuText(user), mainMenuKeyboard(user, webAppUrl || undefined));
+  try {
+    await editMessage(chatId, messageId, menuText(user), mainMenuKeyboard(user, webAppUrl || undefined));
+  } catch (error) {
+    if (!webAppUrl || !isPanelButtonRejection(error)) throw error;
+    await editMessage(chatId, messageId, menuText(user), mainMenuKeyboard(user));
+  }
+}
+
+/** Telegram 不收面板按钮的地址（非 https、内网、域名不合规）时，菜单退成不带面板按钮的版本，菜单本身照常能用。 */
+function isPanelButtonRejection(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /button|URL|HTTPS/i.test(message);
 }
 
 async function handleBind(message: TelegramMessage, code: string) {
