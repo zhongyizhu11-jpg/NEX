@@ -4129,7 +4129,7 @@ function TunnelsContent() {
       {/* 搜索栏一行，和主机管理一样：小搜索框在左、「新建链路」在最右；条数只在搜索时出现。 */}
       <div className="flex min-w-0 items-center gap-2">
         <div className="relative min-w-0 flex-1 sm:max-w-[340px]">
-          <Search className="pointer-events-none absolute left-3.5 top-1/2 z-[1] h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={linkSearchQuery}
             onChange={(event) => setLinkSearchQuery(event.target.value)}
