@@ -28,7 +28,7 @@ import { deriveHostVitals, type HostVitals } from "./useHostVitals";
  * 这张卡只留支撑「要不要点进去」这个决定所需的东西（照 2026-09-27 定稿的效果图）：
  *
  *   [U]  ● HK entry 01 (Debian 12)                ···   发行版图标、状态点、名字、系统标签；右上角 ···
- *        Hong Kong · 192.0.2.21 · Agent 2.2.199        一行注脚：地区 · IP · Agent 版本（可升级就标一句）
+ *        Hong Kong · 192.0.2.21 · 可升级                 一行注脚：地区 · IP（Agent 版本进详情，可升级就标一句）
  *        CPU 18% | 内存 42% | 磁盘 36%                  三个规格格，标签在上数字在下
  *        ↓ 8.42 MB/s · ↑ 11.6 MB/s      6 条转发 · 2 条线路经过
  *
@@ -270,7 +270,7 @@ export default function HostSummaryCard(props: HostSummaryCardProps) {
 
   const name = String(host?.name || "-").trim() || "-";
   const os = hostOsOf(host);
-  // 注脚里只写城市（「Tokyo」），没有城市才写国家：一行要放下地区、IP 和 Agent 版本。
+  // 注脚里只写城市（「Tokyo」），没有城市才写国家：一行是地区 · IP（能升级再加「可升级」）。
   const region = String(host?.geoRegion || "").trim() || hostRegionText(host);
   const address = hostPrimaryAddressLines(host).map((row) => row.value).filter((value) => value && value !== "-")[0] || "";
   const agentVersion = String(host?.agentVersion ?? "").trim().replace(/^v/i, "");
@@ -323,7 +323,7 @@ export default function HostSummaryCard(props: HostSummaryCardProps) {
           </span>
         }
         /*
-          系统标签挂在名字旁边（「Debian 12」），Agent 版本进下面那行注脚：名字才是主角，
+          系统标签挂在名字旁边（「Debian 12」），Agent 版本不上卡、进详情：名字才是主角，
           标签只有一枚就不会把名字挤成「Tokyo-II…」。
         */
         badges={os.label ? (
@@ -333,12 +333,12 @@ export default function HostSummaryCard(props: HostSummaryCardProps) {
         ) : null}
         subtitle={
           <>
+            {/* Agent 版本号不上卡（2026-10-09 用户要求），进详情看；能升级时只留一句「可升级」。 */}
             {[region, address].filter(Boolean).join(" · ")}
-            {agentVersion ? (
+            {agentVersion && props.upgradeAvailable ? (
               <>
                 {region || address ? " · " : ""}
-                Agent {agentVersion}
-                {props.upgradeAvailable ? <span className="text-[var(--fx-warn-text)]"> 可升级</span> : null}
+                <span className="text-[var(--fx-warn-text)]">可升级</span>
               </>
             ) : null}
           </>
