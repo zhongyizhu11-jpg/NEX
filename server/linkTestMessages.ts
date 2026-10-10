@@ -8,12 +8,14 @@ export function structuredLinkTestMessage(input: {
   groupId?: number | null;
   tunnelId?: number | null;
   tunnelProbeTimedOut?: boolean;
+  tunnelLatencyMs?: number | null;
 }) {
   return JSON.stringify({
     kind: input.kind,
     ...(input.groupId ? { groupId: input.groupId } : {}),
     ...(input.tunnelId ? { tunnelId: input.tunnelId } : {}),
     ...(input.tunnelProbeTimedOut ? { tunnelProbeTimedOut: true } : {}),
+    ...(typeof input.tunnelLatencyMs === "number" && Number.isFinite(input.tunnelLatencyMs) ? { tunnelLatencyMs: input.tunnelLatencyMs } : {}),
     generatedAt: new Date().toISOString(),
     message: input.message,
     details: input.details || [],

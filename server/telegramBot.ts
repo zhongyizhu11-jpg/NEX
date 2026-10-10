@@ -1705,7 +1705,7 @@ function ruleTestKeyboard(ruleId: number, page = 0, pending = false): InlineKeyb
 
 function parseRuleTestMessage(raw: unknown) {
   const text = typeof raw === "string" ? raw.trim() : "";
-  if (!text) return { message: "", details: [] as any[], totalLatencyMs: null as number | null };
+  if (!text) return { message: "", details: [] as any[], totalLatencyMs: null as number | null, tunnelLatencyMs: null as number | null };
   try {
     const parsed = JSON.parse(text);
     if (parsed && typeof parsed === "object") {
@@ -1713,12 +1713,13 @@ function parseRuleTestMessage(raw: unknown) {
         message: typeof parsed.message === "string" ? parsed.message : "",
         details: Array.isArray(parsed.details) ? parsed.details : [],
         totalLatencyMs: typeof parsed.totalLatencyMs === "number" ? parsed.totalLatencyMs : null,
+        tunnelLatencyMs: typeof parsed.tunnelLatencyMs === "number" && parsed.tunnelLatencyMs > 0 ? parsed.tunnelLatencyMs : null,
       };
     }
   } catch {
     // 老结果是纯文本。
   }
-  return { message: text, details: [] as any[], totalLatencyMs: null as number | null };
+  return { message: text, details: [] as any[], totalLatencyMs: null as number | null, tunnelLatencyMs: null as number | null };
 }
 
 /** 最近一小时的探测：平均延迟和丢包。面板「延迟」图用的是同一份数据。 */
@@ -1763,8 +1764,13 @@ export function formatRuleTestResult(rule: any, test: any, recent = "") {
         : `不通${item.message ? `（${shortText(item.message, 40)}）` : ""}`;
       return `· ${escapeHtml(shortText(label, 30))}：${escapeHtml(value)}`;
     });
+  // 单跳隧道没有逐跳明细，隧道段延迟单独带回来；落地不通时靠这一行看出隧道本身是好的。
+  const tunnelLine = parsed.tunnelLatencyMs !== null && !parsed.details.some((item: any) => item?.toHostId)
+    ? `· 隧道段：${Math.round(parsed.tunnelLatencyMs)} ms`
+    : "";
   return `<b>测延迟 · 规则 #${rule.id}</b> ${escapeHtml(shortText(rule.name, 24))}\n\n` + [
     head,
+    tunnelLine,
     ...hops,
     status !== "success" && parsed.message ? `原因：${escapeHtml(shortText(parsed.message, 160))}` : "",
     recent ? `\n${escapeHtml(recent)}` : "",

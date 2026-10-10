@@ -10,6 +10,7 @@ import { structuredLinkTestMessage, tunnelHopLatencyMode, tunnelHopModeText } fr
 import {
   canReuseRecentTunnelLatencySample,
   combineTunnelRuleLatencySample,
+  freshTunnelSegmentLatency,
   tunnelRuleLatencySampleSucceeded,
 } from "./ruleLatency";
 import { clearRuleLatencyQueryCache } from "./ruleLatencyQueryCache";
@@ -304,8 +305,16 @@ agentRouter.post("/api/agent/selftest-result", async (req: Request, res: Respons
         tunnelIsTimeout: !!(tunnelLatency as any)?.isTimeout,
         tunnelRecordedAt: (tunnelLatency as any)?.recordedAt,
       });
-      const tunnelLatencyMs = combinedLatency && !combinedLatency.isTimeout && typeof (tunnelLatency as any)?.latencyMs === "number"
-        ? Number((tunnelLatency as any).latencyMs)
+      // 隧道段单独算：落地不通时它照样有值，诊断里才看得出是断在隧道还是断在落地。
+      const tunnelSegment = tunnelLatency
+        ? freshTunnelSegmentLatency({
+          tunnelLatencyMs: (tunnelLatency as any).latencyMs,
+          tunnelIsTimeout: !!(tunnelLatency as any).isTimeout,
+          tunnelRecordedAt: (tunnelLatency as any).recordedAt,
+        })
+        : null;
+      const tunnelLatencyMs = tunnelSegment && !tunnelSegment.isTimeout && tunnelSegment.latencyMs > 0
+        ? Number(tunnelSegment.latencyMs)
         : 0;
       let tunnelDetails: any[] = tunnelLatency
         ? await loadFreshTunnelAutoDetails(tunnel, tunnelLatency)
@@ -378,6 +387,7 @@ agentRouter.post("/api/agent/selftest-result", async (req: Request, res: Respons
         }],
         totalLatencyMs: totalLatency,
         tunnelProbeTimedOut,
+        tunnelLatencyMs: tunnelLatencyMs > 0 ? tunnelLatencyMs : null,
       });
       const accepted = await db.completeForwardTestIfActive(testId, {
         status: overallSuccess ? "success" : overallTimedOut ? "timeout" : "failed",
