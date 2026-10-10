@@ -12,6 +12,7 @@ import { toast } from "sonner";
 import { useTheme } from "@/contexts/ThemeContext";
 import { Link, useLocation, useSearch } from "wouter";
 import { mobileAuth } from "@/lib/mobileAuth";
+import { clearPersistedQueryCache } from "@/lib/queryPersistence";
 import { authErrorMessage } from "@/lib/authErrorMessage";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "@/components/ui/dialog";
 import { ACCOUNT_DISABLED_ERR_MSG } from "@shared/const";
@@ -293,6 +294,10 @@ function rememberLoginWelcome(user: any) {
 
 export default function Login() {
   const [location] = useLocation();
+  // 到了登录页，上一位登录者留在本机的列表数据就不该再拿来画了（换账号登录时不会闪出别人的数据）。
+  useEffect(() => {
+    clearPersistedQueryCache();
+  }, []);
   // wouter 的 useLocation() 只有路径，查询串要从 useSearch() 取。
   const search = useSearch();
   const initialMode = new URLSearchParams(search).get("mode") === "register" ? "register" : "login";

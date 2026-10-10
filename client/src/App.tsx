@@ -288,7 +288,8 @@ function SetupGate() {
     return <Router />;
   }
 
-  if (setup.isLoading) return null;
+  // 没有本机缓存（第一次打开、刚升级）时要等这一个来回：接着显示 index.html 里那条启动进度条，不留空白。
+  if (setup.isLoading) return <div id="fx-boot" aria-hidden="true" />;
 
   const ready = !!setup.data?.setupComplete;
   if (!ready && location !== "/setup") return <Redirect to="/setup" />;
