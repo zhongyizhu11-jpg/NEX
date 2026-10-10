@@ -144,19 +144,16 @@ export function validateTunnelRuleLatencyReport(input: {
   return true;
 }
 
-export function combineTunnelRuleLatencySample(input: {
-  targetLatencyMs: unknown;
-  targetIsTimeout: boolean;
+/**
+ * 隧道段这次能不能算数：样本够新才用，旧样本返回 null（当作没测到）。
+ * 和目标通不通无关 —— 落地不通时，隧道段自己的延迟照样能告诉人「断在后面」。
+ */
+export function freshTunnelSegmentLatency(input: {
   tunnelLatencyMs?: unknown;
   tunnelIsTimeout?: boolean;
   tunnelRecordedAt?: Date | string | number | null;
   nowMs?: number;
 }) {
-  const targetLatencyMs = validLatency(input.targetLatencyMs);
-  if (input.targetIsTimeout || targetLatencyMs === null) {
-    return { latencyMs: null, isTimeout: true } as const;
-  }
-
   const rawRecordedAt = input.tunnelRecordedAt;
   const numericRecordedAt = typeof rawRecordedAt === "number" ? rawRecordedAt : Number.NaN;
   const recordedAtMs = rawRecordedAt == null
@@ -171,8 +168,27 @@ export function combineTunnelRuleLatencySample(input: {
   if (input.tunnelIsTimeout) return { latencyMs: null, isTimeout: true } as const;
   const tunnelLatencyMs = validLatency(input.tunnelLatencyMs);
   if (tunnelLatencyMs === null) return null;
+  return { latencyMs: tunnelLatencyMs, isTimeout: false } as const;
+}
+
+export function combineTunnelRuleLatencySample(input: {
+  targetLatencyMs: unknown;
+  targetIsTimeout: boolean;
+  tunnelLatencyMs?: unknown;
+  tunnelIsTimeout?: boolean;
+  tunnelRecordedAt?: Date | string | number | null;
+  nowMs?: number;
+}) {
+  const targetLatencyMs = validLatency(input.targetLatencyMs);
+  if (input.targetIsTimeout || targetLatencyMs === null) {
+    return { latencyMs: null, isTimeout: true } as const;
+  }
+
+  const tunnel = freshTunnelSegmentLatency(input);
+  if (!tunnel) return null;
+  if (tunnel.isTimeout) return { latencyMs: null, isTimeout: true } as const;
   return {
-    latencyMs: Math.round((targetLatencyMs + tunnelLatencyMs) * 10) / 10,
+    latencyMs: Math.round((targetLatencyMs + tunnel.latencyMs) * 10) / 10,
     isTimeout: false,
   } as const;
 }
