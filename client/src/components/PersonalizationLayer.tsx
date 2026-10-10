@@ -31,6 +31,7 @@ export default function PersonalizationLayer() {
   const personalizationTheme = (data as any)?.personalizationTheme;
   const personalizationPageTint = (data as any)?.personalizationPageTint;
   const personalizationCardStyle = (data as any)?.personalizationCardStyle;
+  const personalizationUiTheme = (data as any)?.personalizationUiTheme;
   const effectiveBlur = reduceMobileBackground ? 0 : blur;
   const scale = 1 + effectiveBlur / 320;
   const isVideoBackground = source === "url" && urlType === "video" && !!effectiveUrl;
@@ -77,7 +78,7 @@ export default function PersonalizationLayer() {
     const applyTheme = () => {
       applyPersonalizationTheme(personalizationTheme, root);
       // 底色只在浅色下写，所以深浅切换（class 变化）时要跟着重算
-      applyPersonalizationSurface({ pageTint: personalizationPageTint, cardStyle: personalizationCardStyle }, root);
+      applyPersonalizationSurface({ pageTint: personalizationPageTint, cardStyle: personalizationCardStyle, uiTheme: personalizationUiTheme }, root);
     };
     applyTheme();
     const observer = new MutationObserver(applyTheme);
@@ -87,7 +88,7 @@ export default function PersonalizationLayer() {
       clearPersonalizationTheme(root);
       clearPersonalizationSurface(root);
     };
-  }, [personalizationTheme, personalizationPageTint, personalizationCardStyle]);
+  }, [personalizationTheme, personalizationPageTint, personalizationCardStyle, personalizationUiTheme]);
 
   if (!showVideo) return null;
 

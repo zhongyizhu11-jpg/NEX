@@ -103,3 +103,28 @@ test("页面底色只在浅色下写到 <html>，深色撤掉；卡片风格是�
   clearPersonalizationSurface(light.root);
   assert.equal(light.attrs.has("data-card-style"), false);
 });
+
+test("界面主题：极光挂 data-ui-theme 并记进 localStorage，经典去掉属性和记录", async () => {
+  const { applyPersonalizationSurface, clearPersonalizationSurface } = await import("./personalizationTheme");
+  const store = new Map<string, string>();
+  (globalThis as any).localStorage = {
+    getItem: (key: string) => store.get(key) ?? null,
+    setItem: (key: string, value: string) => { store.set(key, value); },
+    removeItem: (key: string) => { store.delete(key); },
+  };
+  try {
+    const { root, attrs } = fakeRoot(false);
+    assert.equal(applyPersonalizationSurface({ uiTheme: "aurora" }, root).uiTheme, "aurora");
+    assert.equal(attrs.get("data-ui-theme"), "aurora");
+    assert.equal(store.get("forwardx-ui-theme"), "aurora");
+    // 不认识的值回到经典：属性去掉、本地记录也去掉（下次开机不会先挂上极光）
+    assert.equal(applyPersonalizationSurface({ uiTheme: "neon" }, root).uiTheme, "classic");
+    assert.equal(attrs.has("data-ui-theme"), false);
+    assert.equal(store.has("forwardx-ui-theme"), false);
+    applyPersonalizationSurface({ uiTheme: "aurora" }, root);
+    clearPersonalizationSurface(root);
+    assert.equal(attrs.has("data-ui-theme"), false);
+  } finally {
+    delete (globalThis as any).localStorage;
+  }
+});
