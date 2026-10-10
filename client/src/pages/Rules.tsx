@@ -3787,7 +3787,7 @@ function RulesContent() {
       return;
     }
     if (kernelForwardWarning) {
-      toast.warning(kernelForwardWarning, { duration: 7000 });
+      toast.warning(kernelForwardWarning);
     }
     if (editingId && editingOriginalProtocol === "both" && form.protocol !== "both") {
       const confirmed = await confirmDialog({
@@ -8963,7 +8963,7 @@ function SelfTestDialog({
       if (lastFailureToastKey.current !== key) {
         lastFailureToastKey.current = key;
         manualTestRef.current = false;
-        toast.error(isTimeout ? "诊断超时" : "诊断没通过", { duration: 5000 });
+        toast.error(isTimeout ? "诊断超时" : "诊断没通过");
       }
     }
   }, [open, isTesting, isSuccess, isTerminalStatus, isTimeout, latest, latest?.updatedAt, parsedMessage.message, ruleId, status]);
