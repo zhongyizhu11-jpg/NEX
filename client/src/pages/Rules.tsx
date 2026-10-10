@@ -8884,7 +8884,8 @@ function SelfTestDialog({
     { ruleId, includeActive: optimisticTesting },
     {
       enabled: open,
-      refetchInterval: pollingInterval("interactive", open),
+      // 诊断进行中每秒查一次，结果回来最多晚 1 秒。
+      refetchInterval: pollingInterval(optimisticTesting ? "realtime" : "interactive", open),
       refetchOnWindowFocus: false,
     }
   );
