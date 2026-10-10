@@ -652,6 +652,7 @@ const seedSettings = [
   ["personalizationTheme", "ink"],
   ["personalizationPageTint", "grey"],
   ["personalizationCardStyle", "edge"],
+  ["personalizationUiTheme", "classic"],
   ["lookingGlassUserEnabled", "true"],
   ["allowMultiDeviceLogin", "false"],
   ["publicHostMonitorEnabled", "false"],

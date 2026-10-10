@@ -4,6 +4,7 @@ import {
   normalizePersonalizationCardStyle,
   normalizePersonalizationPageTint,
   normalizePersonalizationThemePresetId,
+  normalizePersonalizationUiTheme,
   personalizationPageTintVars,
   primaryGradientStops,
 } from "@shared/personalization";
@@ -127,15 +128,36 @@ export function clearPersonalizationTheme(root?: HTMLElement) {
 */
 const PAGE_TINT_VARS = ["--fx-l0-page", "--fx-l3-control-fill"] as const;
 
+/*
+  界面主题（经典 / 极光）是 <html data-ui-theme>，画法全在 theme-aurora.css。经典不写属性。
+  首屏在 publicInfo 回来之前先按经典画，再切到极光会闪一下：所以把选过的主题记进 localStorage，
+  index.html 顶部那段内联脚本开机就按它先把属性挂上（和深浅色 forwardx-theme 同一套做法）。
+*/
+export const UI_THEME_STORAGE_KEY = "forwardx-ui-theme";
+
+function rememberUiTheme(uiTheme: string) {
+  try {
+    if (typeof localStorage === "undefined") return;
+    if (uiTheme === "classic") localStorage.removeItem(UI_THEME_STORAGE_KEY);
+    else localStorage.setItem(UI_THEME_STORAGE_KEY, uiTheme);
+  } catch {
+    // 隐私模式 / 存储被禁用：只是少了首屏预载，不影响功能
+  }
+}
+
 export function applyPersonalizationSurface(
-  input: { pageTint?: unknown; cardStyle?: unknown },
+  input: { pageTint?: unknown; cardStyle?: unknown; uiTheme?: unknown },
   root?: HTMLElement,
 ) {
   const target = root || (typeof document !== "undefined" ? document.documentElement : null);
   const pageTint = normalizePersonalizationPageTint(input.pageTint);
   const cardStyle = normalizePersonalizationCardStyle(input.cardStyle);
-  if (!target) return { pageTint, cardStyle };
+  const uiTheme = normalizePersonalizationUiTheme(input.uiTheme);
+  if (!target) return { pageTint, cardStyle, uiTheme };
   target.setAttribute("data-card-style", cardStyle);
+  if (uiTheme === "classic") target.removeAttribute("data-ui-theme");
+  else target.setAttribute("data-ui-theme", uiTheme);
+  rememberUiTheme(uiTheme);
   const dark = target.classList.contains("dark");
   const vars = dark ? null : personalizationPageTintVars(pageTint);
   if (vars) {
@@ -146,7 +168,7 @@ export function applyPersonalizationSurface(
     for (const cssVar of PAGE_TINT_VARS) target.style.removeProperty(cssVar);
     target.removeAttribute("data-page-tint");
   }
-  return { pageTint, cardStyle };
+  return { pageTint, cardStyle, uiTheme };
 }
 
 export function clearPersonalizationSurface(root?: HTMLElement) {
@@ -155,4 +177,5 @@ export function clearPersonalizationSurface(root?: HTMLElement) {
   for (const cssVar of PAGE_TINT_VARS) target.style.removeProperty(cssVar);
   target.removeAttribute("data-page-tint");
   target.removeAttribute("data-card-style");
+  target.removeAttribute("data-ui-theme");
 }

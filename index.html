@@ -17,6 +17,9 @@
             : theme;
           document.documentElement.classList.remove("light", "dark");
           document.documentElement.classList.add(resolved === "dark" ? "dark" : "light");
+          // 界面主题（设置 › 个性化 › 界面主题）：上次选的记在本地，开机先挂上，免得首屏从经典闪到极光
+          var uiTheme = window.localStorage.getItem("forwardx-ui-theme");
+          if (uiTheme === "aurora") document.documentElement.setAttribute("data-ui-theme", uiTheme);
         } catch (error) {
           document.documentElement.classList.add("light");
         }

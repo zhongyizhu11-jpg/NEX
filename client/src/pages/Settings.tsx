@@ -122,10 +122,12 @@ import {
   BUILTIN_WALLPAPERS,
   DEFAULT_PERSONALIZATION_BACKGROUND,
   PERSONALIZATION_CARD_STYLES,
+  PERSONALIZATION_UI_THEMES,
   PERSONALIZATION_PAGE_TINTS,
   PERSONALIZATION_THEME_PRESETS,
   isHexColor,
   normalizePersonalizationCardStyle,
+  normalizePersonalizationUiTheme,
   normalizePersonalizationPageTint,
   personalizationSwatchGradient,
   clampBackgroundBlur,
@@ -3190,12 +3192,13 @@ function normalizePublicHostMonitorPathInput(value: string) {
     .toLowerCase();
 }
 
-type PersonalizationSaveKey = "title" | "logo" | "theme" | "pageTint" | "cardStyle" | "background" | "homepage" | "sidebarPages";
+type PersonalizationSaveKey = "title" | "logo" | "theme" | "uiTheme" | "pageTint" | "cardStyle" | "background" | "homepage" | "sidebarPages";
 
 const personalizationSaveMessages: Record<PersonalizationSaveKey, string> = {
   title: "网站标题已保存",
   logo: "Logo 已保存",
   theme: "默认配色已保存",
+  uiTheme: "界面主题已保存",
   pageTint: "页面底色已保存",
   cardStyle: "卡片风格已保存",
   background: "自定义背景已保存",
@@ -3207,6 +3210,7 @@ const personalizationSaveErrorMessages: Record<PersonalizationSaveKey, string> =
   title: "网站标题保存失败",
   logo: "Logo 保存失败",
   theme: "默认配色保存失败",
+  uiTheme: "界面主题保存失败",
   pageTint: "页面底色保存失败",
   cardStyle: "卡片风格保存失败",
   background: "自定义背景保存失败",
@@ -3232,6 +3236,8 @@ function PersonalizationSettingsSection() {
   const [customTintInput, setCustomTintInput] = useState<string>("#eef3fb");
   const [cardStyle, setCardStyle] = useState<string>("edge");
   const [savedCardStyle, setSavedCardStyle] = useState<string>("edge");
+  const [uiTheme, setUiTheme] = useState<string>("classic");
+  const [savedUiTheme, setSavedUiTheme] = useState<string>("classic");
   const [homepageEnabled, setHomepageEnabled] = useState(true);
   const [homepageCustomEnabled, setHomepageCustomEnabled] = useState(false);
   const [homepageHtml, setHomepageHtml] = useState("");
@@ -3263,6 +3269,9 @@ function PersonalizationSettingsSection() {
     const nextCardStyle = normalizePersonalizationCardStyle((settings as any).personalizationCardStyle);
     setCardStyle(nextCardStyle);
     setSavedCardStyle(nextCardStyle);
+    const nextUiTheme = normalizePersonalizationUiTheme((settings as any).personalizationUiTheme);
+    setUiTheme(nextUiTheme);
+    setSavedUiTheme(nextUiTheme);
     setHomepageEnabled(settings.homepageEnabled ?? true);
     setHomepageCustomEnabled(!!settings.homepageCustomEnabled);
     setHomepageHtml(settings.homepageHtml || "");
@@ -3282,11 +3291,15 @@ function PersonalizationSettingsSection() {
       }
       if (key === "pageTint") {
         setSavedPageTint(pageTint);
-        applyPersonalizationSurface({ pageTint, cardStyle: savedCardStyle });
+        applyPersonalizationSurface({ pageTint, cardStyle: savedCardStyle, uiTheme: savedUiTheme });
       }
       if (key === "cardStyle") {
         setSavedCardStyle(cardStyle);
-        applyPersonalizationSurface({ pageTint: savedPageTint, cardStyle });
+        applyPersonalizationSurface({ pageTint: savedPageTint, cardStyle, uiTheme: savedUiTheme });
+      }
+      if (key === "uiTheme") {
+        setSavedUiTheme(uiTheme);
+        applyPersonalizationSurface({ pageTint: savedPageTint, cardStyle: savedCardStyle, uiTheme });
       }
       if (key === "sidebarPages" && pendingCustomSidebarPagesRef.current) {
         setCustomSidebarPages(pendingCustomSidebarPagesRef.current);
@@ -3315,6 +3328,7 @@ function PersonalizationSettingsSection() {
   const themeDirty = personalizationTheme !== savedPersonalizationTheme;
   const pageTintDirty = pageTint !== savedPageTint;
   const cardStyleDirty = cardStyle !== savedCardStyle;
+  const uiThemeDirty = uiTheme !== savedUiTheme;
   const savePersonalizationSection = (
     key: PersonalizationSaveKey,
     payload: Parameters<typeof updateSettingsMutation.mutate>[0],
@@ -3500,6 +3514,10 @@ function PersonalizationSettingsSection() {
 
   const handleSaveCardStyle = () => {
     savePersonalizationSection("cardStyle", { personalizationCardStyle: cardStyle });
+  };
+
+  const handleSaveUiTheme = () => {
+    savePersonalizationSection("uiTheme", { personalizationUiTheme: uiTheme });
   };
 
   const handleSaveBackground = () => {
@@ -3796,6 +3814,63 @@ function PersonalizationSettingsSection() {
               新增第一个菜单项
             </button>
           )}
+        </CardContent>
+      </Card>
+
+      {/*
+        界面主题：整套界面的气质（底、卡、外壳、控件形状一起换），是配色 / 底色 / 卡片风格底下那一层。
+        两枚预览是 CSS 画的小手机屏（.fx-uitheme-swatch，见 theme-aurora.css），经典是灰底白卡，
+        极光是柔光底玻璃卡；预览自带颜色，和当前选的是哪个无关。
+      */}
+      <Card className="border-border bg-card">
+        <CardHeader className="gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="space-y-1.5">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Palette className="h-4 w-4 text-primary" />
+              界面主题
+            </CardTitle>
+            <CardDescription>
+              一套换掉底色、卡片、顶栏和控件形状的整体风格。下面的配色、页面底色、卡片风格都是在它之上微调。App 要更新到新版本才会跟着变。
+            </CardDescription>
+          </div>
+          <Button
+            type="button"
+            onClick={handleSaveUiTheme}
+            disabled={isSavingPersonalization("uiTheme") || !uiThemeDirty}
+            className="w-full gap-2 sm:w-auto"
+          >
+            {isSavingPersonalization("uiTheme") && <Loader2 className="h-4 w-4 animate-spin" />}
+            保存主题
+          </Button>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-2 gap-3 sm:max-w-xl">
+            {PERSONALIZATION_UI_THEMES.map((theme) => {
+              const active = uiTheme === theme.id;
+              return (
+                <button
+                  key={theme.id}
+                  type="button"
+                  onClick={() => setUiTheme(theme.id)}
+                  disabled={isSavingPersonalization("uiTheme")}
+                  aria-pressed={active}
+                  className={cn(
+                    "group flex flex-col gap-2 rounded-lg border p-2.5 text-left transition hover:border-primary/50 disabled:pointer-events-none disabled:opacity-70",
+                    active ? "border-primary bg-primary/5 ring-2 ring-primary/15" : "border-border/40",
+                  )}
+                >
+                  <span className="fx-uitheme-swatch" data-theme={theme.id} aria-hidden="true">
+                    <i /><i /><b />
+                  </span>
+                  <span className="flex items-center justify-between gap-2">
+                    <span className={cn("text-sm", active ? "font-semibold text-foreground" : "font-medium text-foreground")}>{theme.name}</span>
+                    {active ? <CheckCircle2 className="h-4 w-4 shrink-0 text-primary" /> : null}
+                  </span>
+                  <span className="text-xs leading-5 text-muted-foreground">{theme.description}</span>
+                </button>
+              );
+            })}
+          </div>
         </CardContent>
       </Card>
 
