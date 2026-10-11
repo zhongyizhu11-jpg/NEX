@@ -615,6 +615,8 @@ function compactHostMetricSummary(row: any) {
     diskUsed: row?.diskUsed ?? null,
     diskTotal: row?.diskTotal ?? null,
     uptime: row?.uptime ?? null,
+    tcpConnections: row?.tcpConnections ?? null,
+    udpConnections: row?.udpConnections ?? null,
     recordedAt: row?.recordedAt || null,
   };
 }

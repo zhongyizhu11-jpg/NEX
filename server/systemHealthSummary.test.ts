@@ -45,6 +45,17 @@ test("SQLite 系统健康摘要：三类异常数得准，两类似是而非的�
     await addHost(12, 1, 1, null);    // 从没连过 = 还没装 Agent，不算异常
     await addHost(13, 2, 1, fresh);   // 租户的，在线
 
+    // 连接数：每台取最新一条，只加在线的。11 号掉线了、12 号没连过，它们的数不该进总数；
+    // 10 号有两条上报，取新的那条；13 号是旧 Agent，没报连接数。
+    const addMetric = (host, tcp, udp, at) => exec(
+      'INSERT INTO host_metrics ("hostId", "tcpConnections", "udpConnections", "recordedAt") VALUES (?, ?, ?, ?)',
+      [host, tcp, udp, at],
+    );
+    await addMetric(10, 900, 50, fresh - 60);
+    await addMetric(10, 120, 8, fresh);
+    await addMetric(11, 5000, 700, stale);
+    await addMetric(13, null, null, fresh);
+
     const addRule = (id, host, owner, enabled, running, parent = null) => exec(
       'INSERT INTO forward_rules (id, "hostId", name, "sourcePort", "targetIp", "targetPort", "userId", "isEnabled", "isRunning", "forwardGroupRuleId")'
         + ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
@@ -97,11 +108,18 @@ test("SQLite 系统健康摘要：三类异常数得准，两类似是而非的�
 
     assert.equal(admin.issues, 1 + 2 + 1, "异常总数 = 掉线主机 + 不健康线路 + 该跑没跑的转发");
 
+    assert.deepEqual(
+      admin.connections,
+      { tcp: 120, udp: 8, reported: 1 },
+      "总连接数 = 在线主机各自最新一条上报相加：掉线的 11 号不算，10 号取新的那条，旧 Agent 的 13 号没报不计台数",
+    );
+
     /** 租户只看自己的。 */
     const tenant = await dash.getSystemHealthSummary(2);
     assert.equal(tenant.hosts.total, 1);
     assert.equal(tenant.forwards.total, 0);
     assert.equal(tenant.issues, 0, "别人的异常不该出现在租户的首页上");
+    assert.deepEqual(tenant.connections, { tcp: 0, udp: 0, reported: 0 }, "租户那台是旧 Agent，没报连接数就一台都不算");
 
     /** 全部正常时 issues 归零。 */
     await exec('UPDATE hosts SET "lastHeartbeat" = ? WHERE id = 11', [fresh]);

@@ -62,6 +62,12 @@ export type HostVitals = {
   memoryTotal: number | null;
   diskUsed: number | null;
   diskTotal: number | null;
+  /**
+   * 此刻的 TCP / UDP 连接数。和 CPU 一样是「此刻」的量：离线回 null；
+   * 旧 Agent（2.2.215 之前）不报这两项，也是 null，画成「—」。
+   */
+  tcpConnections: number | null;
+  udpConnections: number | null;
 };
 
 const bytesOrNull = (value: unknown) => (value == null ? null : Number(value));
@@ -153,6 +159,8 @@ export function deriveHostVitals(
     memoryTotal: bytesOrNull(host?.memoryTotal),
     diskUsed: bytesOrNull(latest?.diskUsed),
     diskTotal: bytesOrNull(latest?.diskTotal),
+    tcpConnections: pct(latest?.tcpConnections),
+    udpConnections: pct(latest?.udpConnections),
   };
 }
 

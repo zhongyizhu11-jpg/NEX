@@ -38,7 +38,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.214"
+var Version = "2.2.215"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -4081,6 +4081,7 @@ func heartbeat(cfg Config, forceReconcile ...bool) (heartbeatResult, error) {
 	diskUsageValue, diskUsed, diskTotal := diskStats()
 	cpuUsageValue := cpuUsage()
 	uptimeValue := uptime()
+	tcpConnections, udpConnections := connectionCounts()
 	receivedRevision, appliedRevision, receivedHash, appliedHash := desiredRevisionSnapshot()
 	compactEnabled := compactAgentReports.Load()
 	currentStatic := heartbeatStaticSnapshot{
@@ -4127,24 +4128,28 @@ func heartbeat(cfg Config, forceReconcile ...bool) (heartbeatResult, error) {
 			diskUsed,
 			diskTotal,
 			uptimeValue,
+			tcpConnections,
+			udpConnections,
 		}
 	} else {
 		payload = map[string]any{
-			"cpuUsage":     cpuUsageValue,
-			"memoryUsage":  usagePercent(memoryUsed, memoryTotal),
-			"memoryUsed":   memoryUsed,
-			"memoryTotal":  memoryTotal,
-			"swapUsage":    usagePercent(swapUsed, swapTotal),
-			"swapUsed":     swapUsed,
-			"swapTotal":    swapTotal,
-			"networkIn":    netBytes(0),
-			"networkOut":   netBytes(1),
-			"diskUsage":    diskUsageValue,
-			"diskUsed":     diskUsed,
-			"diskTotal":    diskTotal,
-			"uptime":       uptimeValue,
-			"cpuInfo":      currentStatic.CPUInfo,
-			"agentVersion": Version,
+			"cpuUsage":       cpuUsageValue,
+			"memoryUsage":    usagePercent(memoryUsed, memoryTotal),
+			"memoryUsed":     memoryUsed,
+			"memoryTotal":    memoryTotal,
+			"swapUsage":      usagePercent(swapUsed, swapTotal),
+			"swapUsed":       swapUsed,
+			"swapTotal":      swapTotal,
+			"networkIn":      netBytes(0),
+			"networkOut":     netBytes(1),
+			"diskUsage":      diskUsageValue,
+			"diskUsed":       diskUsed,
+			"diskTotal":      diskTotal,
+			"uptime":         uptimeValue,
+			"tcpConnections": tcpConnections,
+			"udpConnections": udpConnections,
+			"cpuInfo":        currentStatic.CPUInfo,
+			"agentVersion":   Version,
 		}
 	}
 	if len(forceReconcile) > 0 && forceReconcile[0] {
@@ -4346,6 +4351,7 @@ func heartbeatKeepalive(cfg Config) (heartbeatResult, error) {
 	}
 	payload["mimicEnvironment"] = mimicEnvironment(false)
 	payload["fxpVersion"] = reportedFXPVersion()
+	tcpConnections, udpConnections := connectionCounts()
 	if compactAgentReports.Load() {
 		payload["m"] = []any{
 			cpuUsage(),
@@ -4361,6 +4367,8 @@ func heartbeatKeepalive(cfg Config) (heartbeatResult, error) {
 			diskUsed,
 			diskTotal,
 			uptime(),
+			tcpConnections,
+			udpConnections,
 		}
 	} else {
 		payload["cpuUsage"] = cpuUsage()
@@ -4376,6 +4384,8 @@ func heartbeatKeepalive(cfg Config) (heartbeatResult, error) {
 		payload["diskUsed"] = diskUsed
 		payload["diskTotal"] = diskTotal
 		payload["uptime"] = uptime()
+		payload["tcpConnections"] = tcpConnections
+		payload["udpConnections"] = udpConnections
 	}
 	if shouldReportStatic && primaryIP != "" {
 		payload["ip"] = primaryIP
