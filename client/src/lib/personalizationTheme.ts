@@ -5,6 +5,7 @@ import {
   normalizePersonalizationPageTint,
   normalizePersonalizationThemePresetId,
   normalizePersonalizationUiTheme,
+  type PersonalizationUiThemeId,
   personalizationPageTintVars,
   primaryGradientStops,
 } from "@shared/personalization";
@@ -129,7 +130,7 @@ export function clearPersonalizationTheme(root?: HTMLElement) {
 const PAGE_TINT_VARS = ["--fx-l0-page", "--fx-l3-control-fill"] as const;
 
 /*
-  界面主题（经典 / 极光 / 墨金）是 <html data-ui-theme>，画法全在 theme-aurora.css / theme-gilt.css。经典不写属性。
+  界面主题（经典 / 极光 / 墨金 / 玫瑰）是 <html data-ui-theme>，画法全在 theme-*.css。经典不写属性。
   首屏在 publicInfo 回来之前先按经典画，再切到极光会闪一下：所以把选过的主题记进 localStorage，
   index.html 顶部那段内联脚本开机就按它先把属性挂上（和深浅色 forwardx-theme 同一套做法）。
 */
@@ -145,20 +146,96 @@ function rememberUiTheme(uiTheme: string) {
   }
 }
 
+/*
+  「我自己看哪一套」（顶栏调色盘，2026-10-11 参考 Rosélune 面板加的）：站点默认是管理员在设置里存的那套，
+  每个人还可以在顶栏给自己选一套，只记在这台设备上（localStorage），不影响别人。没选就跟站点默认。
+  设置页里点主题卡片「试看」时要看的是站点默认那一套，所以那里传 ignoreOverride 绕过它。
+*/
+export const UI_THEME_OVERRIDE_STORAGE_KEY = "forwardx-ui-theme-override";
+export const UI_THEME_OVERRIDE_EVENT = "fx-ui-theme-override";
+
+export function readUiThemeOverride(): PersonalizationUiThemeId | null {
+  try {
+    if (typeof localStorage === "undefined") return null;
+    const raw = localStorage.getItem(UI_THEME_OVERRIDE_STORAGE_KEY);
+    if (!raw) return null;
+    const id = normalizePersonalizationUiTheme(raw);
+    return id === raw ? id : null;
+  } catch {
+    return null;
+  }
+}
+
+export function setUiThemeOverride(value: string | null) {
+  try {
+    if (typeof localStorage !== "undefined") {
+      if (value) localStorage.setItem(UI_THEME_OVERRIDE_STORAGE_KEY, normalizePersonalizationUiTheme(value));
+      else localStorage.removeItem(UI_THEME_OVERRIDE_STORAGE_KEY);
+    }
+  } catch {
+    // 存不了就只在这一次生效
+  }
+  if (typeof window !== "undefined" && typeof window.dispatchEvent === "function" && typeof Event === "function") {
+    window.dispatchEvent(new Event(UI_THEME_OVERRIDE_EVENT));
+  }
+}
+
+/*
+  浏览器外框的颜色（<meta name="theme-color">）：iOS Safari 的地址栏 / 状态栏、安卓 Chrome 的顶栏
+  会涂成这个颜色。跟着页面底色走，切到玫瑰时外框也是胭脂粉，不再是一条白边。
+  读的是算出来的 --fx-l0-page，所以页面底色设置、深浅色都算在里面。
+*/
+function syncThemeColorMeta(target: HTMLElement) {
+  if (typeof document === "undefined" || typeof getComputedStyle !== "function") return;
+  if (target !== document.documentElement) return;
+  const page = getComputedStyle(target).getPropertyValue("--fx-l0-page").trim();
+  if (!page) return;
+  let meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+  if (!meta) {
+    meta = document.createElement("meta");
+    meta.name = "theme-color";
+    document.head?.appendChild(meta);
+  }
+  if (meta.content !== page) meta.content = page;
+}
+
+/*
+  换主题 / 深浅色时 0.5 秒淡过去，不是一下跳过去（参考站 body 上的 .5s 过渡）。只在「换」的那一下
+  给 <html> 挂 fx-theme-fading，0.6 秒后摘掉，平时不带任何过渡（不影响滚动和别的动画）。
+  第一次挂上（开机）不淡：开机那一下本来就该是最终的样子。
+*/
+const FADE_CLASS = "fx-theme-fading";
+const fadeTimers = new WeakMap<HTMLElement, ReturnType<typeof setTimeout>>();
+function fadeIfChanged(target: HTMLElement, key: string) {
+  const previous = target.getAttribute("data-fx-surface");
+  target.setAttribute("data-fx-surface", key);
+  if (previous === null || previous === key) return;
+  if (typeof setTimeout !== "function") return;
+  target.classList.add(FADE_CLASS);
+  const timer = fadeTimers.get(target);
+  if (timer) clearTimeout(timer);
+  fadeTimers.set(target, setTimeout(() => {
+    target.classList.remove(FADE_CLASS);
+    fadeTimers.delete(target);
+  }, 600));
+}
+
 export function applyPersonalizationSurface(
-  input: { pageTint?: unknown; cardStyle?: unknown; uiTheme?: unknown },
+  input: { pageTint?: unknown; cardStyle?: unknown; uiTheme?: unknown; ignoreOverride?: boolean },
   root?: HTMLElement,
 ) {
   const target = root || (typeof document !== "undefined" ? document.documentElement : null);
   const pageTint = normalizePersonalizationPageTint(input.pageTint);
   const cardStyle = normalizePersonalizationCardStyle(input.cardStyle);
-  const uiTheme = normalizePersonalizationUiTheme(input.uiTheme);
+  const override = input.ignoreOverride ? null : readUiThemeOverride();
+  const uiTheme = override ?? normalizePersonalizationUiTheme(input.uiTheme);
   if (!target) return { pageTint, cardStyle, uiTheme };
   target.setAttribute("data-card-style", cardStyle);
   if (uiTheme === "classic") target.removeAttribute("data-ui-theme");
   else target.setAttribute("data-ui-theme", uiTheme);
   rememberUiTheme(uiTheme);
   const dark = target.classList.contains("dark");
+  fadeIfChanged(target, `${uiTheme}|${dark ? "dark" : "light"}|${pageTint}`);
   const vars = dark ? null : personalizationPageTintVars(pageTint);
   if (vars) {
     target.style.setProperty("--fx-l0-page", vars.page);
@@ -168,6 +245,7 @@ export function applyPersonalizationSurface(
     for (const cssVar of PAGE_TINT_VARS) target.style.removeProperty(cssVar);
     target.removeAttribute("data-page-tint");
   }
+  syncThemeColorMeta(target);
   return { pageTint, cardStyle, uiTheme };
 }
 
@@ -178,4 +256,5 @@ export function clearPersonalizationSurface(root?: HTMLElement) {
   target.removeAttribute("data-page-tint");
   target.removeAttribute("data-card-style");
   target.removeAttribute("data-ui-theme");
+  target.removeAttribute("data-fx-surface");
 }

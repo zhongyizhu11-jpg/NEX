@@ -24,6 +24,7 @@ import {
   SidebarGroupLabel,
 } from "@/components/ui/sidebar";
 import { useTheme } from "@/contexts/ThemeContext";
+import { UiThemeQuickSwitch } from "@/components/UiThemeQuickSwitch";
 import {
   LayoutDashboard,
   Ellipsis,
@@ -1534,6 +1535,7 @@ function DashboardLayoutContent({
             >
               {resolvedTheme === "dark" ? <Sun className="h-4 w-4" aria-hidden="true" /> : <Moon className="h-4 w-4" aria-hidden="true" />}
             </button>
+            <UiThemeQuickSwitch />
           <DropdownMenu open={accountMenuOpen} onOpenChange={setAccountMenuOpen} modal={false}>
             <DropdownMenuTrigger asChild>
               <button

@@ -10,16 +10,22 @@ import { applyPersonalizationTheme, clearPersonalizationTheme } from "./personal
 function fakeRoot(dark = false) {
   const props = new Map<string, string>();
   const attrs = new Map<string, string>();
+  const classes = new Set<string>();
   const root = {
     style: {
       setProperty: (name: string, value: string) => { props.set(name, value); },
       removeProperty: (name: string) => { props.delete(name); },
     },
-    classList: { contains: (name: string) => dark && name === "dark" },
+    classList: {
+      contains: (name: string) => (dark && name === "dark") || classes.has(name),
+      add: (name: string) => { classes.add(name); },
+      remove: (name: string) => { classes.delete(name); },
+    },
+    getAttribute: (name: string) => attrs.get(name) ?? null,
     setAttribute: (name: string, value: string) => { attrs.set(name, value); },
     removeAttribute: (name: string) => { attrs.delete(name); },
   };
-  return { root: root as unknown as HTMLElement, props, attrs };
+  return { root: root as unknown as HTMLElement, props, attrs, classes };
 }
 
 const PRIMARY_CONTROL_VARS = [
@@ -127,6 +133,36 @@ test("界面主题：极光挂 data-ui-theme 并记进 localStorage，经典去�
     applyPersonalizationSurface({ uiTheme: "aurora" }, root);
     clearPersonalizationSurface(root);
     assert.equal(attrs.has("data-ui-theme"), false);
+  } finally {
+    delete (globalThis as any).localStorage;
+  }
+});
+
+test("界面主题：玫瑰；顶栏给自己选的那套盖过站点默认，设置页试看时绕过它；换主题那一下淡过去", async () => {
+  const { applyPersonalizationSurface, setUiThemeOverride, readUiThemeOverride } = await import("./personalizationTheme");
+  const store = new Map<string, string>();
+  (globalThis as any).localStorage = {
+    getItem: (key: string) => store.get(key) ?? null,
+    setItem: (key: string, value: string) => { store.set(key, value); },
+    removeItem: (key: string) => { store.delete(key); },
+  };
+  try {
+    const { root, attrs, classes } = fakeRoot(false);
+    assert.equal(applyPersonalizationSurface({ uiTheme: "rose" }, root).uiTheme, "rose");
+    assert.equal(attrs.get("data-ui-theme"), "rose");
+    assert.equal(classes.has("fx-theme-fading"), false, "第一次挂上不淡");
+
+    setUiThemeOverride("gilt");
+    assert.equal(readUiThemeOverride(), "gilt");
+    assert.equal(applyPersonalizationSurface({ uiTheme: "rose" }, root).uiTheme, "gilt", "自己选的盖过站点默认");
+    assert.equal(store.get("forwardx-ui-theme"), "gilt", "开机预载记的是实际生效的那套");
+    assert.equal(classes.has("fx-theme-fading"), true, "换了主题：淡过去");
+    assert.equal(applyPersonalizationSurface({ uiTheme: "rose", ignoreOverride: true }, root).uiTheme, "rose", "设置页试看看的是站点默认");
+
+    setUiThemeOverride(null);
+    assert.equal(readUiThemeOverride(), null);
+    store.set("forwardx-ui-theme-override", "neon");
+    assert.equal(readUiThemeOverride(), null, "不认识的值当没选");
   } finally {
     delete (globalThis as any).localStorage;
   }

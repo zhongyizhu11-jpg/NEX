@@ -454,13 +454,19 @@ export function normalizePersonalizationCardStyle(value: unknown): Personalizati
             金线，分组小标题金色小字；筛选 chip 选中态墨色实心（深色下金色）。深色是暖墨黑配金线。
             高端杂志 / 精品酒店的气质；主按钮仍是主色渐变。
 
-  画法全在 client/src/styles/theme-aurora.css / theme-gilt.css 里按 <html data-ui-theme> 选；这里只管 id 和文案。
+    rose    玫瑰 —— 胭脂粉底上一层很淡的玫瑰 / 淡紫 / 蜜桃柔光，卡片是没有边线的大圆角白瓣（软影浮着），
+            数字嵌在卡里一枚胭脂色托盘中；页面标题和大数字用斜体衬线；分段控件是一圈细线的空槽、
+            选中格淡底墨字，全部药丸。设置页在这套下改成编号分节 + 贴底保存栏。深色是酒红墨色。
+            参考 Rosélune 面板的 Romance（design/losantos-settings-2026-10-11/）。
+
+  画法全在 client/src/styles/theme-aurora.css / theme-gilt.css / theme-rose.css 里按 <html data-ui-theme> 选；这里只管 id 和文案。
   存的是 id；别的值一律回到 classic。
 */
 export const PERSONALIZATION_UI_THEMES = [
   { id: "classic", name: "经典", description: "浅灰底托白卡、细线分区、天蓝渐变控件；深色是炭灰。现在这套。" },
   { id: "aurora", name: "极光", description: "彩色柔光底 + 半透明玻璃卡 + 胶囊控件，顶栏和标签栏更通透；深色是深蓝黑底上的微光。" },
   { id: "gilt", name: "墨金", description: "米白纸底、平贴的小圆角卡纸，数字放在米色带上；衬线标题、金色下划线分段、方标签筛选；深色是墨黑配金。" },
+  { id: "rose", name: "玫瑰", description: "胭脂粉底、无边线的浮起白瓣卡，数字嵌在托盘里；斜体衬线标题、细线空槽分段、全药丸；设置页改为编号分节。" },
 ] as const;
 
 export type PersonalizationUiThemeId = typeof PERSONALIZATION_UI_THEMES[number]["id"];

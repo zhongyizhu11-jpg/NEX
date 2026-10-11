@@ -6,6 +6,7 @@
 @import "./styles/workspace.css";
 @import "./styles/theme-aurora.css";
 @import "./styles/theme-gilt.css";
+@import "./styles/theme-rose.css";
 
 @custom-variant dark (&:is(.dark *));
 

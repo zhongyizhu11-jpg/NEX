@@ -1,6 +1,6 @@
 import { trpc } from "@/lib/trpc";
 import { mobileAuth } from "@/lib/mobileAuth";
-import { applyPersonalizationSurface, applyPersonalizationTheme, clearPersonalizationSurface, clearPersonalizationTheme } from "@/lib/personalizationTheme";
+import { applyPersonalizationSurface, applyPersonalizationTheme, clearPersonalizationSurface, clearPersonalizationTheme, UI_THEME_OVERRIDE_EVENT, UI_THEME_OVERRIDE_STORAGE_KEY } from "@/lib/personalizationTheme";
 import { useEffect, useLayoutEffect, useState } from "react";
 
 const MOBILE_BACKGROUND_MEDIA = "(max-width: 767px), (pointer: coarse)";
@@ -83,7 +83,13 @@ export default function PersonalizationLayer() {
     applyTheme();
     const observer = new MutationObserver(applyTheme);
     observer.observe(root, { attributes: true, attributeFilter: ["class"] });
+    // 顶栏调色盘给自己换了一套（这一页或别的标签页）：马上重挂
+    const onStorage = (event: StorageEvent) => { if (event.key === UI_THEME_OVERRIDE_STORAGE_KEY) applyTheme(); };
+    window.addEventListener(UI_THEME_OVERRIDE_EVENT, applyTheme);
+    window.addEventListener("storage", onStorage);
     return () => {
+      window.removeEventListener(UI_THEME_OVERRIDE_EVENT, applyTheme);
+      window.removeEventListener("storage", onStorage);
       observer.disconnect();
       clearPersonalizationTheme(root);
       clearPersonalizationSurface(root);

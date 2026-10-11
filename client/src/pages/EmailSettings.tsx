@@ -1,5 +1,6 @@
 import { FormField } from "@/components/ui/form-field";
 import { useEffect, useRef, useState } from "react";
+import { useSaveDockItem } from "@/components/settings/SaveDock";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
@@ -34,6 +35,7 @@ export function EmailSettingsContent() {
   const utils = trpc.useUtils();
   const { data: settings, isLoading } = trpc.system.getSettings.useQuery();
   const email = settings?.email;
+  const savedEmail = email;
   const expiryReminderDays = String(settings?.telegram?.expiryReminderDays || "7,3,1").split(/[,，\s]+/).filter(Boolean).join("、");
   const [form, setForm] = useState({
     enabled: false,
@@ -55,9 +57,7 @@ export function EmailSettingsContent() {
   const testAttemptRef = useRef(0);
   const testTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(() => {
-    if (!email) return;
-    setForm({
+  const formFromEmail = (email: NonNullable<typeof savedEmail>) => ({
       enabled: !!email.enabled,
       host: email.host || "",
       port: Number(email.port || 587),
@@ -71,7 +71,11 @@ export function EmailSettingsContent() {
       expiryReminder: !!email.expiryReminder,
       trafficReminder: !!email.trafficReminder,
       trafficReminderThreshold: Number(email.trafficReminderThreshold || 20),
-    });
+  });
+
+  useEffect(() => {
+    if (!email) return;
+    setForm(formFromEmail(email));
   }, [email]);
 
   useEffect(() => () => {
@@ -90,16 +94,16 @@ export function EmailSettingsContent() {
 
   const sendTestEmail = trpc.system.sendTestEmail.useMutation();
 
-  const saveEmailSettings = () => {
+  const saveEmailSettings = (): Promise<boolean> | boolean => {
     if (form.enabled && !form.host.trim()) {
       toast.error("请输入 SMTP 服务器地址");
-      return;
+      return false;
     }
     if (form.enabled && !form.from.trim() && !form.user.trim()) {
       toast.error("请输入发件邮箱或 SMTP 用户名");
-      return;
+      return false;
     }
-    updateSettings.mutate({
+    return updateSettings.mutateAsync({
       email: {
         enabled: form.enabled,
         host: form.host,
@@ -115,8 +119,18 @@ export function EmailSettingsContent() {
         trafficReminder: form.trafficReminder,
         trafficReminderThreshold: Number(form.trafficReminderThreshold || 20),
       },
-    });
+    }).then(() => true, () => false);
   };
+
+  /* 玫瑰主题下的贴底保存栏（components/settings/SaveDock.tsx）：这一页登记自己 */
+  useSaveDockItem({
+    id: "email.smtp",
+    label: "邮箱",
+    dirty: !!email && JSON.stringify(form) !== JSON.stringify(formFromEmail(email)),
+    pending: updateSettings.isPending,
+    save: saveEmailSettings,
+    reset: () => { if (email) setForm(formFromEmail(email)); },
+  });
 
   const handleTestEmail = () => {
     const to = testTo.trim();
@@ -333,7 +347,7 @@ export function EmailSettingsContent() {
             </Alert>
           )}
           <div className="flex flex-col gap-3 sm:flex-row">
-            <Button onClick={saveEmailSettings} disabled={updateSettings.isPending}>
+            <Button data-dock-save onClick={saveEmailSettings} disabled={updateSettings.isPending}>
               {updateSettings.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               保存邮箱设置
             </Button>
