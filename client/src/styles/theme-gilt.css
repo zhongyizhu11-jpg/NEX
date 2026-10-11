@@ -220,6 +220,10 @@ html[data-ui-theme="gilt"] .workspace-header-aside .fx-sparkline { width: 220px;
   html[data-ui-theme="gilt"] .workspace-header-aside { flex: 1 1 100%; align-items: stretch; padding-top: 4px; }
   html[data-ui-theme="gilt"] .workspace-header-aside .fx-sparkline { width: 100%; height: 30px; }
   html[data-ui-theme="gilt"] .workspace-header-aside > span { text-align: right; }
+  /* 页头右上的 ··· / 视图切换钉在标题那一行的右边，不再压在通栏走势上（用户 2026-10-11 截图指出） */
+  html[data-ui-theme="gilt"] .workspace-header { position: relative; }
+  html[data-ui-theme="gilt"] .workspace-header-actions { position: absolute; top: 0; right: 0; max-width: none; }
+  html[data-ui-theme="gilt"] .workspace-header-row > div:first-child { padding-right: 52px; }
 
   /*
     折叠的分类条（sliding-tabs.tsx 的 FoldedTabsList）浮在左边，搜索 / 筛选 / 新建那一行
