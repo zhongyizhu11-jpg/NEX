@@ -702,7 +702,7 @@
 .workspace-main [data-slot="card"] {
   border: 1px solid var(--fx-card-stroke, var(--fx-stroke-weak));
   border-radius: var(--fx-radius-surface);
-  background: var(--fx-l1-surface);
+  background: var(--fx-card-fill, var(--fx-l1-surface)); /* --fx-card-fill 只有「极光」主题给（半透明玻璃），见 theme-aurora.css */
   box-shadow: var(--fx-elevation-card);
   backdrop-filter: none;
 }
@@ -716,42 +716,42 @@
 
   .fx-card-face 给那些不是 <Card> 的卡（首页统计卡、网络地图）同一套壳。
 */
-.fx-card-face { border: 1px solid var(--fx-card-stroke, var(--fx-stroke-weak)); border-radius: var(--fx-radius-surface); background: var(--fx-l1-surface); box-shadow: var(--fx-elevation-card); }
+.fx-card-face { border: 1px solid var(--fx-card-stroke, var(--fx-stroke-weak)); border-radius: var(--fx-radius-surface); background: var(--fx-card-fill, var(--fx-l1-surface)); box-shadow: var(--fx-elevation-card); }
 .workspace-main [data-slot="card"], .fx-card-face { --fx-card-tone: var(--fx-primary-fill); }
 /* 彩色描边：1.5px 的渐变边（左上浓、右下淡），卡身仍是白的（padding-box 只铺白） */
 html:not([data-card-style]) .workspace-main [data-slot="card"], html[data-card-style="edge"] .workspace-main [data-slot="card"],
 html:not([data-card-style]) .fx-card-face, html[data-card-style="edge"] .fx-card-face {
   border: 1.5px solid transparent;
   background:
-    linear-gradient(var(--fx-l1-surface), var(--fx-l1-surface)) padding-box,
+    linear-gradient(var(--fx-card-fill, var(--fx-l1-surface)), var(--fx-card-fill, var(--fx-l1-surface))) padding-box,
     linear-gradient(135deg, color-mix(in srgb, var(--fx-card-tone) 62%, transparent), color-mix(in srgb, var(--fx-card-tone) 16%, transparent) 70%, color-mix(in srgb, var(--fx-card-tone) 34%, transparent)) border-box;
 }
 html:not([data-card-style]) .workspace-main [data-tone="off"][data-slot="card"], html[data-card-style="edge"] .workspace-main [data-tone="off"][data-slot="card"],
 html:not([data-card-style]) .fx-card-face[data-tone="off"], html[data-card-style="edge"] .fx-card-face[data-tone="off"] {
-  background: var(--fx-l1-surface); border-color: var(--fx-card-stroke, var(--fx-stroke-weak));
+  background: var(--fx-card-fill, var(--fx-l1-surface)); border-color: var(--fx-card-stroke, var(--fx-stroke-weak));
 }
 /* 状态光：左上角一抹状态色的光，2.3.379 规则卡那种 */
 html[data-card-style="glow"] .workspace-main [data-slot="card"], html[data-card-style="glow"] .fx-card-face {
-  background: radial-gradient(120% 90% at 0% 0%, color-mix(in srgb, var(--fx-card-tone) 15%, transparent), transparent 55%) var(--fx-l1-surface);
+  background: radial-gradient(120% 90% at 0% 0%, color-mix(in srgb, var(--fx-card-tone) 15%, transparent), transparent 55%) var(--fx-card-fill, var(--fx-l1-surface));
 }
 /* 渐变卡头：顶上一条 3px 的渐变线（跟着圆角走，背景自己会被圆角裁掉），卡身一层极淡的同色渐变 */
 html[data-card-style="bar"] .workspace-main [data-slot="card"], html[data-card-style="bar"] .fx-card-face {
   background:
     linear-gradient(90deg, var(--fx-card-tone), color-mix(in srgb, var(--fx-card-tone) 45%, white)) top / 100% 3px no-repeat,
-    linear-gradient(180deg, color-mix(in srgb, var(--fx-card-tone) 9%, transparent), transparent 42%) var(--fx-l1-surface);
+    linear-gradient(180deg, color-mix(in srgb, var(--fx-card-tone) 9%, transparent), transparent 42%) var(--fx-card-fill, var(--fx-l1-surface));
 }
 html.dark[data-card-style="bar"] .workspace-main [data-slot="card"], html.dark[data-card-style="bar"] .fx-card-face {
   background:
     linear-gradient(90deg, var(--fx-card-tone), color-mix(in srgb, var(--fx-card-tone) 55%, transparent)) top / 100% 3px no-repeat,
-    linear-gradient(180deg, color-mix(in srgb, var(--fx-card-tone) 10%, transparent), transparent 42%) var(--fx-l1-surface);
+    linear-gradient(180deg, color-mix(in srgb, var(--fx-card-tone) 10%, transparent), transparent 42%) var(--fx-card-fill, var(--fx-l1-surface));
 }
 /* 纯白：由上面那条基础规则画，这里什么都不加 */
 /* 设置页「卡片风格」的四个色块：一小块灰底上一张缩小的卡，画法和真卡一致（同一组变量） */
 .fx-cardstyle-swatch { --fx-card-tone: var(--fx-primary-fill); display: flex; height: 56px; align-items: center; justify-content: center; border-radius: 10px; background: var(--fx-l0-page); }
-.fx-cardstyle-swatch-face { display: block; width: 72%; height: 34px; border-radius: 9px; border: 1px solid var(--fx-card-stroke, var(--fx-stroke-weak)); background: var(--fx-l1-surface); box-shadow: var(--fx-elevation-card); }
-.fx-cardstyle-swatch[data-style="edge"] .fx-cardstyle-swatch-face { border: 1.5px solid transparent; background: linear-gradient(var(--fx-l1-surface), var(--fx-l1-surface)) padding-box, linear-gradient(135deg, color-mix(in srgb, var(--fx-card-tone) 62%, transparent), color-mix(in srgb, var(--fx-card-tone) 16%, transparent) 70%, color-mix(in srgb, var(--fx-card-tone) 34%, transparent)) border-box; }
-.fx-cardstyle-swatch[data-style="glow"] .fx-cardstyle-swatch-face { background: radial-gradient(120% 90% at 0% 0%, color-mix(in srgb, var(--fx-card-tone) 22%, transparent), transparent 55%) var(--fx-l1-surface); }
-.fx-cardstyle-swatch[data-style="bar"] .fx-cardstyle-swatch-face { background: linear-gradient(90deg, var(--fx-card-tone), color-mix(in srgb, var(--fx-card-tone) 45%, white)) top / 100% 3px no-repeat, linear-gradient(180deg, color-mix(in srgb, var(--fx-card-tone) 10%, transparent), transparent 45%) var(--fx-l1-surface); }
+.fx-cardstyle-swatch-face { display: block; width: 72%; height: 34px; border-radius: 9px; border: 1px solid var(--fx-card-stroke, var(--fx-stroke-weak)); background: var(--fx-card-fill, var(--fx-l1-surface)); box-shadow: var(--fx-elevation-card); }
+.fx-cardstyle-swatch[data-style="edge"] .fx-cardstyle-swatch-face { border: 1.5px solid transparent; background: linear-gradient(var(--fx-card-fill, var(--fx-l1-surface)), var(--fx-card-fill, var(--fx-l1-surface))) padding-box, linear-gradient(135deg, color-mix(in srgb, var(--fx-card-tone) 62%, transparent), color-mix(in srgb, var(--fx-card-tone) 16%, transparent) 70%, color-mix(in srgb, var(--fx-card-tone) 34%, transparent)) border-box; }
+.fx-cardstyle-swatch[data-style="glow"] .fx-cardstyle-swatch-face { background: radial-gradient(120% 90% at 0% 0%, color-mix(in srgb, var(--fx-card-tone) 22%, transparent), transparent 55%) var(--fx-card-fill, var(--fx-l1-surface)); }
+.fx-cardstyle-swatch[data-style="bar"] .fx-cardstyle-swatch-face { background: linear-gradient(90deg, var(--fx-card-tone), color-mix(in srgb, var(--fx-card-tone) 45%, white)) top / 100% 3px no-repeat, linear-gradient(180deg, color-mix(in srgb, var(--fx-card-tone) 10%, transparent), transparent 45%) var(--fx-card-fill, var(--fx-l1-surface)); }
 /* 侧栏：一列白纸 + 右侧一条弱线（见上面导航那一节）；深色下比页面再深一档 */
 .workspace-layout [data-sidebar="sidebar"] { background: var(--fx-sidebar); border-right: 1px solid var(--fx-stroke-weak); }
 [data-sidebar="menu-button"] { min-height: 34px; }
@@ -1015,7 +1015,7 @@ html[data-personalization-background="image"] .auth-divider-label, html[data-per
   统计带：原来是页面上「上下两条弱线夹着的几格」。页面换成浅灰底之后，白卡之间夹一条裸的
   灰格子像安卓设置的分割线；现在它也是一张白卡（不描边、软影），格子之间仍用弱线分。
 */
-.fx-summary { padding: 0 14px; border: 1px solid var(--fx-card-stroke, var(--fx-stroke-weak)); border-radius: var(--fx-radius-surface); background: var(--fx-l1-surface); box-shadow: var(--fx-elevation-card); }
+.fx-summary { padding: 0 14px; border: 1px solid var(--fx-card-stroke, var(--fx-stroke-weak)); border-radius: var(--fx-radius-surface); background: var(--fx-card-fill, var(--fx-l1-surface)); box-shadow: var(--fx-elevation-card); }
 /*
   首页的运行状态卡：三格读数（主机 / 线路 / 转发）和底下一行结论合成一张卡。
   上一版是统计带一张卡、结论一条带框的行 —— 两张卡说一件事（有几个、有没有事）。
