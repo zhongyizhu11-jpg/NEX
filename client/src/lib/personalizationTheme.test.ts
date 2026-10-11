@@ -121,9 +121,9 @@ test("界面主题：极光挂 data-ui-theme 并记进 localStorage，经典去�
     assert.equal(applyPersonalizationSurface({ uiTheme: "neon" }, root).uiTheme, "classic");
     assert.equal(attrs.has("data-ui-theme"), false);
     assert.equal(store.has("forwardx-ui-theme"), false);
-    assert.equal(applyPersonalizationSurface({ uiTheme: "minimal" }, root).uiTheme, "minimal");
-    assert.equal(attrs.get("data-ui-theme"), "minimal");
-    assert.equal(store.get("forwardx-ui-theme"), "minimal");
+    assert.equal(applyPersonalizationSurface({ uiTheme: "gilt" }, root).uiTheme, "gilt");
+    assert.equal(attrs.get("data-ui-theme"), "gilt");
+    assert.equal(store.get("forwardx-ui-theme"), "gilt");
     applyPersonalizationSurface({ uiTheme: "aurora" }, root);
     clearPersonalizationSurface(root);
     assert.equal(attrs.has("data-ui-theme"), false);

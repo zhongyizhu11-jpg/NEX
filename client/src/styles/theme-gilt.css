@@ -1,0 +1,184 @@
+/*
+  ── 界面主题「墨金」（设置 › 个性化 › 界面主题）──
+
+  第三种气质，由 <html data-ui-theme="gilt"> 打开；没有这个属性这个文件一条都不生效。
+  经典是「浅灰托白卡」，极光是「柔光托玻璃卡」，墨金是**米白纸底 + 墨色衬线标题 + 金色细节**：
+  高端杂志 / 精品酒店那一路。深色不是炭灰，是带一点暖的墨黑，细线和强调都换成金。
+
+  前两版的教训（2026-10-11）：「留白」把线画满一屏被说太乱；「极简」只换了底和卡的灰白，
+  被说和经典没区别。这一版换的是**气质**：纸的颜色、标题的字体、金属色的点缀，一眼就不是经典。
+
+  四件事一起换：
+
+    1. 底   米白的纸（#f5f2ec），不是冷灰也不是纯白；深色是暖墨黑（#131110）。
+    2. 卡   奶白卡 + 一圈很淡的暖色细线 + 卡顶一条内高光 + 暖色软影。卡片风格四档照常，
+            「彩色描边」只给有事的卡（警告 / 故障）把状态色调进这圈线里，正常的卡只有暖线。卡里的读数格是米色内衬。
+    3. 字   页面标题、卡标题、统计大数字用衬线（New York / Songti / Georgia）；标题下一截 28px 的
+            金线。正文仍是无衬线。
+    4. 控件 筛选 chip 选中态是墨色实心（深色下是金色实心）；分段控件的槽是米色 + 细线；主按钮仍是
+            主色渐变（跟着「默认配色」换）—— 蓝 / 粉 / 绿配米白加金都成立。顶栏、底部胶囊是米白毛玻璃
+            带金色细线。
+
+  不新增任何 backdrop 模糊。
+*/
+
+html[data-ui-theme="gilt"] {
+  --fx-l0-page: #f5f2ec;
+  --fx-l1-surface: #fffdf9;
+  --fx-l2-group: #f4f0e8;
+  --fx-l3-control: #fffdf9;
+  --fx-l3-control-fill: #ebe6dc;
+  --fx-sidebar: #faf8f3;
+  --fx-hover: #f3efe7;
+  --fx-pressed: #e9e3d8;
+  --fx-stroke-weak: rgb(122 95 50 / 14%);
+  --fx-stroke-base: rgb(122 95 50 / 24%);
+  --fx-stroke-strong: rgb(122 95 50 / 45%);
+  --fx-text: #1c1814;
+  --fx-text-secondary: #4d463e;
+  --fx-text-muted: #7e7569;
+  --fx-gilt: #b08d57;                 /* 金：细线、分组小标题、标题下那一截 */
+  --fx-gilt-soft: rgb(176 141 87 / 14%);
+  --fx-ink: #1c1814;                  /* 墨：选中 chip 的实心 */
+  --fx-ink-text: #fbf8f2;
+  --fx-card-fill: #fffdf9;
+  --fx-card-stroke: rgb(122 95 50 / 16%);
+  --fx-elevation-card: inset 0 1px 0 rgb(255 255 255 / 90%), 0 1px 2px rgb(70 50 20 / 4%), 0 16px 36px -24px rgb(70 50 20 / 32%);
+  --fx-elevation-control: 0 1px 2px rgb(70 50 20 / 5%);
+  --fx-elevation-popover: 0 12px 32px -8px rgb(70 50 20 / 18%), 0 2px 6px rgb(70 50 20 / 6%), 0 0 0 1px rgb(122 95 50 / 14%);
+  --fx-glass: rgb(250 247 241 / 78%);
+  --fx-glass-strong: rgb(252 250 245 / 86%);
+  --fx-radius-control: 12px;
+  --fx-radius-card: 14px;
+  --fx-radius-surface: 18px;
+  --fx-radius-modal: 24px;
+  --fx-font-display: "New York", "Iowan Old Style", "Songti SC", "STSong", Georgia, "Noto Serif CJK SC", "Source Han Serif SC", "Times New Roman", serif;
+}
+html.dark[data-ui-theme="gilt"] {
+  --fx-l0-page: #131110;
+  --fx-l1-surface: #1c1917;
+  --fx-raised: #241f1b;
+  --fx-l2-group: #242019;
+  --fx-l3-control: #1c1917;
+  --fx-l3-control-fill: #2a2521;
+  --fx-sidebar: #161312;
+  --fx-hover: #221e1a;
+  --fx-pressed: #2c2723;
+  --fx-stroke-weak: rgb(201 166 107 / 16%);
+  --fx-stroke-base: rgb(201 166 107 / 26%);
+  --fx-stroke-strong: rgb(201 166 107 / 45%);
+  --fx-text: #f3ede3;
+  --fx-text-secondary: #cfc6b8;
+  --fx-text-muted: #9c9285;
+  --fx-gilt: #c9a66b;
+  --fx-gilt-soft: rgb(201 166 107 / 16%);
+  --fx-ink: #c9a66b;                  /* 深色下的「墨」是金：选中 chip 金色实心、墨字 */
+  --fx-ink-text: #1c1814;
+  --fx-card-fill: #1c1917;
+  --fx-card-stroke: rgb(201 166 107 / 18%);
+  --fx-elevation-card: inset 0 1px 0 rgb(255 255 255 / 4%), 0 1px 2px rgb(0 0 0 / 30%), 0 18px 40px -24px rgb(0 0 0 / 70%);
+  --fx-elevation-control: 0 1px 2px rgb(0 0 0 / 30%);
+  --fx-elevation-popover: 0 12px 32px -8px rgb(0 0 0 / 65%), 0 2px 6px rgb(0 0 0 / 40%), 0 0 0 1px rgb(201 166 107 / 18%);
+  --fx-glass: rgb(19 17 16 / 78%);
+  --fx-glass-strong: rgb(24 21 19 / 86%);
+}
+
+/* ── 2. 卡 ───────────────────────────────────────────────────── */
+/*
+  「彩色描边」：经典是 1.5px 的状态色渐变边；墨金里是把状态色调进那圈暖色细线（1px，不渐变），
+  卡身仍是奶白。特指度和 workspace.css 那条一样，靠文件靠后写赢。
+*/
+html[data-ui-theme="gilt"]:not([data-card-style]) .workspace-main [data-slot="card"],
+html[data-ui-theme="gilt"][data-card-style="edge"] .workspace-main [data-slot="card"],
+html[data-ui-theme="gilt"]:not([data-card-style]) .fx-card-face,
+html[data-ui-theme="gilt"][data-card-style="edge"] .fx-card-face {
+  border: 1px solid var(--fx-card-stroke);
+  background: var(--fx-card-fill);
+}
+/* 正常的卡只有暖线（主色描一圈会把整页描成蓝框，和经典一个样）；有事的卡（警告 / 故障）那圈线才调进状态色 */
+html[data-ui-theme="gilt"]:not([data-card-style]) .workspace-main [data-tone="warn"][data-slot="card"],
+html[data-ui-theme="gilt"][data-card-style="edge"] .workspace-main [data-tone="warn"][data-slot="card"],
+html[data-ui-theme="gilt"]:not([data-card-style]) .fx-card-face[data-tone="warn"],
+html[data-ui-theme="gilt"][data-card-style="edge"] .fx-card-face[data-tone="warn"],
+html[data-ui-theme="gilt"]:not([data-card-style]) .workspace-main [data-tone="down"][data-slot="card"],
+html[data-ui-theme="gilt"][data-card-style="edge"] .workspace-main [data-tone="down"][data-slot="card"],
+html[data-ui-theme="gilt"]:not([data-card-style]) .fx-card-face[data-tone="down"],
+html[data-ui-theme="gilt"][data-card-style="edge"] .fx-card-face[data-tone="down"] {
+  border-color: color-mix(in srgb, var(--fx-card-tone) 55%, var(--fx-card-stroke));
+}
+html[data-ui-theme="gilt"] .fx-cardstyle-swatch[data-style="edge"] .fx-cardstyle-swatch-face { border: 1px solid color-mix(in srgb, var(--fx-card-tone) 45%, var(--fx-card-stroke)); background: var(--fx-card-fill); }
+/* 卡里的读数格（CPU / 内存 / 磁盘）：米色内衬，没有线；条的槽是更深一点的米色 */
+html[data-ui-theme="gilt"] .fx-host-spec-bar { background: rgb(122 95 50 / 12%); }
+html.dark[data-ui-theme="gilt"] .fx-host-spec-bar { background: rgb(201 166 107 / 14%); }
+
+/* ── 3. 字：衬线标题和大数字，金色分组小标题 ─────────────────── */
+html[data-ui-theme="gilt"] .workspace-main .workspace-header-title,
+html[data-ui-theme="gilt"] .fx-navbar-large-title,
+html[data-ui-theme="gilt"] .workspace-main .fx-pane-title,
+html[data-ui-theme="gilt"] .workspace-main [data-slot="card-title"],
+html[data-ui-theme="gilt"] .fx-rule-name,
+html[data-ui-theme="gilt"] .fx-rule-num > b,
+html[data-ui-theme="gilt"] .fx-summary-value,
+html[data-ui-theme="gilt"] .fx-host-spec > b {
+  font-family: var(--fx-font-display);
+  letter-spacing: 0;
+}
+html[data-ui-theme="gilt"] .workspace-main .workspace-header-title,
+html[data-ui-theme="gilt"] .fx-navbar-large-title { font-weight: 600; }
+/* 页头标题下一截 28px 的金线：整页唯一一道装饰线 */
+html[data-ui-theme="gilt"] .workspace-main .workspace-header-title {
+  padding-bottom: 7px;
+  background: linear-gradient(var(--fx-gilt), var(--fx-gilt)) left bottom / 28px 1.5px no-repeat;
+}
+@media (max-width: 767px) {
+  html[data-ui-theme="gilt"] .workspace-main .workspace-header-title { font-size: 26px; line-height: 32px; white-space: nowrap; }
+  /* 标题不折行；右边那组走势 + 读数放不下时整组掉到下一行 */
+  html[data-ui-theme="gilt"] .workspace-header-row { flex-wrap: wrap; }
+}
+html[data-ui-theme="gilt"] .fx-rule-num > b,
+html[data-ui-theme="gilt"] .fx-summary-value,
+html[data-ui-theme="gilt"] .fx-host-spec > b { font-weight: 600; }
+html[data-ui-theme="gilt"] .fx-rule-num > b { font-size: 24px; }
+html[data-ui-theme="gilt"] .fx-host-spec > b { font-size: 17px; }
+/* 分组小标题（「需要关注」「隧道链路」这类）：金色、小字、拉开字距，像版面上的栏目名 */
+html[data-ui-theme="gilt"] .fx-list-section-header,
+html[data-ui-theme="gilt"] .workspace-main .fx-list-section-header { color: var(--fx-gilt); letter-spacing: .12em; font-weight: 600; font-size: 11.5px; }
+
+/* ── 4. 控件 ─────────────────────────────────────────────────── */
+/* 筛选 chip：未选中奶白 + 细线；选中墨色实心（深色下金色实心），不走主色 —— 主色留给真正的动作按钮 */
+html[data-ui-theme="gilt"] .fx-chip:not(.fx-chip-on) { background: var(--fx-l1-surface); border-color: var(--fx-stroke-weak); }
+html[data-ui-theme="gilt"] .fx-chip-on,
+html[data-ui-theme="gilt"] .fx-chip-on:hover { border-color: var(--fx-ink); background: var(--fx-ink); background-image: none; color: var(--fx-ink-text); }
+/* 分段控件：米色槽 + 一圈细线；选中项仍是主色渐变（和底部胶囊、主按钮同一个颜色，整页只有一种强调色） */
+html[data-ui-theme="gilt"] .workspace-tabs { border: 1px solid var(--fx-stroke-weak); background: var(--fx-l3-control-fill); }
+/* 输入框、搜索框：奶白 + 细线 */
+html[data-ui-theme="gilt"] .workspace-main [data-slot="input"],
+html[data-ui-theme="gilt"] .workspace-main [data-slot="select-trigger"] { background: var(--fx-l1-surface); border-color: var(--fx-stroke-base); }
+html[data-ui-theme="gilt"] .fx-search-pill { background: var(--fx-l1-surface) !important; border-color: var(--fx-stroke-weak) !important; }
+html[data-ui-theme="gilt"] .fx-search-pill:focus-visible { border-color: var(--fx-primary-stroke) !important; }
+/* 外壳：顶栏、大标题导航栏、底部胶囊都是米白毛玻璃，线是金的 */
+html[data-ui-theme="gilt"] .workspace-appbar { border-bottom-color: var(--fx-stroke-weak); }
+html[data-ui-theme="gilt"] .workspace-layout [data-sidebar="sidebar"] { border-right-color: var(--fx-stroke-weak); }
+@media (max-width: 767px) {
+  html[data-ui-theme="gilt"] .fx-navbar { background: color-mix(in srgb, var(--fx-l0-page) 82%, transparent); }
+  html[data-ui-theme="gilt"] .fx-tabbar {
+    border-color: rgb(176 141 87 / 32%);
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 80%), 0 18px 40px -16px rgb(70 50 20 / 40%), 0 2px 6px rgb(70 50 20 / 6%);
+  }
+  html.dark[data-ui-theme="gilt"] .fx-tabbar {
+    border-color: rgb(201 166 107 / 28%);
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 5%), 0 18px 40px -16px rgb(0 0 0 / 80%), 0 2px 6px rgb(0 0 0 / 40%);
+  }
+}
+
+/* ── 设置页「界面主题」的预览 ───────────────────────────────── */
+/* 米白纸、两张奶白卡带暖线、左上一截金线、底下一枚胶囊 */
+.fx-uitheme-swatch[data-theme="gilt"] { background: #f5f2ec; }
+.dark .fx-uitheme-swatch[data-theme="gilt"] { background: #131110; }
+.fx-uitheme-swatch[data-theme="gilt"]::before { content: ""; position: absolute; left: 12px; top: 5px; width: 18px; height: 1.5px; background: #b08d57; }
+.dark .fx-uitheme-swatch[data-theme="gilt"]::before { background: #c9a66b; }
+.fx-uitheme-swatch[data-theme="gilt"] > i { border-color: rgb(122 95 50 / 18%); background: #fffdf9; box-shadow: inset 0 1px 0 rgb(255 255 255 / 90%), 0 8px 18px -12px rgb(70 50 20 / 35%); }
+.dark .fx-uitheme-swatch[data-theme="gilt"] > i { border-color: rgb(201 166 107 / 22%); background: #1c1917; box-shadow: none; }
+.fx-uitheme-swatch[data-theme="gilt"] > i:first-child { margin-top: 4px; }
+.fx-uitheme-swatch[data-theme="gilt"] > b { border-color: rgb(176 141 87 / 40%); background: rgb(255 253 249 / 90%); }
+.dark .fx-uitheme-swatch[data-theme="gilt"] > b { border-color: rgb(201 166 107 / 32%); background: rgb(28 25 23 / 90%); }
