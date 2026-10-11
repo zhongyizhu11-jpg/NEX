@@ -8,16 +8,20 @@
   前两版的教训（2026-10-11）：「留白」把线画满一屏被说太乱；「极简」只换了底和卡的灰白，
   被说和经典没区别。这一版换的是**气质**：纸的颜色、标题的字体、金属色的点缀，一眼就不是经典。
 
-  四件事一起换：
+  第一版墨金只换了颜色和字，用户说「卡片分类条这些没改变」—— 形状也得不一样。所以这一版
+  连**形状**一起换，像印在卡纸上的东西，不是浮在屏幕上的气泡：
 
     1. 底   米白的纸（#f5f2ec），不是冷灰也不是纯白；深色是暖墨黑（#131110）。
-    2. 卡   奶白卡 + 一圈很淡的暖色细线 + 卡顶一条内高光 + 暖色软影。卡片风格四档照常，
-            「彩色描边」只给有事的卡（警告 / 故障）把状态色调进这圈线里，正常的卡只有暖线。卡里的读数格是米色内衬。
+    2. 卡   平贴的卡纸：小圆角（12px）、一圈暖色细线、**不投影**（纸贴在纸上，没有悬浮感）。
+            主机卡的系统图标是一枚细线圆章。卡分三段：白卡头、一条通栏米色带托着数字（主机卡三个
+            读数、规则卡流量大数字、链路卡延迟）、白的地址行。卡片风格四档照常，「彩色描边」只给有事的卡（警告 / 故障）把状态色
+            调进这圈线里，正常的卡只有暖线。
     3. 字   页面标题、卡标题、统计大数字用衬线（New York / Songti / Georgia）；标题下一截 28px 的
             金线。正文仍是无衬线。
-    4. 控件 筛选 chip 选中态是墨色实心（深色下是金色实心）；分段控件的槽是米色 + 细线；主按钮仍是
-            主色渐变（跟着「默认配色」换）—— 蓝 / 粉 / 绿配米白加金都成立。顶栏、底部胶囊是米白毛玻璃
-            带金色细线。
+    4. 控件 分段控件不再是灰槽 + 蓝块：**一行文字标签，选中项墨字 + 金色下划线**，整行底下一道细线
+            （杂志栏目导航）。筛选 chip 从药丸改成小圆角方标签（8px），未选中只有一圈线，选中墨色实心
+            （深色下金色实心）。主按钮、底部胶囊仍是主色渐变（跟着「默认配色」换）—— 蓝 / 粉 / 绿配
+            米白加金都成立。顶栏、底部胶囊是米白毛玻璃带金色细线。
 
   不新增任何 backdrop 模糊。
 */
@@ -42,16 +46,16 @@ html[data-ui-theme="gilt"] {
   --fx-ink: #1c1814;                  /* 墨：选中 chip 的实心 */
   --fx-ink-text: #fbf8f2;
   --fx-card-fill: #fffdf9;
-  --fx-card-stroke: rgb(122 95 50 / 16%);
-  --fx-elevation-card: inset 0 1px 0 rgb(255 255 255 / 90%), 0 1px 2px rgb(70 50 20 / 4%), 0 16px 36px -24px rgb(70 50 20 / 32%);
+  --fx-card-stroke: rgb(122 95 50 / 22%);
+  --fx-elevation-card: none;                    /* 卡纸贴在纸上：不投影 */
   --fx-elevation-control: 0 1px 2px rgb(70 50 20 / 5%);
   --fx-elevation-popover: 0 12px 32px -8px rgb(70 50 20 / 18%), 0 2px 6px rgb(70 50 20 / 6%), 0 0 0 1px rgb(122 95 50 / 14%);
   --fx-glass: rgb(250 247 241 / 78%);
   --fx-glass-strong: rgb(252 250 245 / 86%);
-  --fx-radius-control: 12px;
-  --fx-radius-card: 14px;
-  --fx-radius-surface: 18px;
-  --fx-radius-modal: 24px;
+  --fx-radius-control: 10px;
+  --fx-radius-card: 10px;
+  --fx-radius-surface: 12px;
+  --fx-radius-modal: 20px;
   --fx-font-display: "New York", "Iowan Old Style", "Songti SC", "STSong", Georgia, "Noto Serif CJK SC", "Source Han Serif SC", "Times New Roman", serif;
 }
 html.dark[data-ui-theme="gilt"] {
@@ -75,8 +79,8 @@ html.dark[data-ui-theme="gilt"] {
   --fx-ink: #c9a66b;                  /* 深色下的「墨」是金：选中 chip 金色实心、墨字 */
   --fx-ink-text: #1c1814;
   --fx-card-fill: #1c1917;
-  --fx-card-stroke: rgb(201 166 107 / 18%);
-  --fx-elevation-card: inset 0 1px 0 rgb(255 255 255 / 4%), 0 1px 2px rgb(0 0 0 / 30%), 0 18px 40px -24px rgb(0 0 0 / 70%);
+  --fx-card-stroke: rgb(201 166 107 / 24%);
+  --fx-elevation-card: none;
   --fx-elevation-control: 0 1px 2px rgb(0 0 0 / 30%);
   --fx-elevation-popover: 0 12px 32px -8px rgb(0 0 0 / 65%), 0 2px 6px rgb(0 0 0 / 40%), 0 0 0 1px rgb(201 166 107 / 18%);
   --fx-glass: rgb(19 17 16 / 78%);
@@ -107,9 +111,28 @@ html[data-ui-theme="gilt"][data-card-style="edge"] .fx-card-face[data-tone="down
   border-color: color-mix(in srgb, var(--fx-card-tone) 55%, var(--fx-card-stroke));
 }
 html[data-ui-theme="gilt"] .fx-cardstyle-swatch[data-style="edge"] .fx-cardstyle-swatch-face { border: 1px solid color-mix(in srgb, var(--fx-card-tone) 45%, var(--fx-card-stroke)); background: var(--fx-card-fill); }
-/* 卡里的读数格（CPU / 内存 / 磁盘）：米色内衬，没有线；条的槽是更深一点的米色 */
-html[data-ui-theme="gilt"] .fx-host-spec-bar { background: rgb(122 95 50 / 12%); }
-html.dark[data-ui-theme="gilt"] .fx-host-spec-bar { background: rgb(201 166 107 / 14%); }
+/* 整张可点的卡悬停时也不要抬起来（EntityCard 的 hover:shadow 读的是这个变量，已经是 none） */
+/* 主机卡的系统图标：一枚细线圆章，不是淡色方块 */
+html[data-ui-theme="gilt"] .fx-host-card > div:first-child > span:first-child { border-radius: 999px; border: 1px solid var(--fx-stroke-base); background: var(--fx-l1-surface); }
+/*
+  卡的结构：数字放在一条米色带上。
+  经典的卡是「一块白，里面几行字」；墨金的卡是三段：白的卡头（名字 + 注脚），一条通栏的米色带
+  托着数字（主机卡是 CPU / 内存 / 磁盘 三栏，规则卡是流量大数字 + 走势，链路卡是延迟 + 评级），
+  底下再回到白的地址行 / 速率行。带是软色块、没有线，所以不会乱；但一眼看过去卡的结构就不是经典。
+*/
+/* 主机卡：三个读数不再是灰色小方块，是米色带上的三栏，标签在上、衬线数字在下、条贴栏底 */
+html[data-ui-theme="gilt"] .fx-host-card .grid.grid-cols-3 { margin: 2px calc(-1 * var(--fx-card-padding)) 4px; padding: 8px var(--fx-card-padding) 10px; gap: 14px; background: var(--fx-l2-group); }
+html[data-ui-theme="gilt"] .fx-host-spec { border-radius: 0; background: transparent; padding: 0 0 9px; }
+html[data-ui-theme="gilt"] .fx-host-spec > i { letter-spacing: .04em; }
+html[data-ui-theme="gilt"] .fx-host-spec-bar { left: 0; right: 0; bottom: 3px; height: 2px; background: rgb(122 95 50 / 18%); }
+html.dark[data-ui-theme="gilt"] .fx-host-spec-bar { background: rgb(201 166 107 / 20%); }
+/* 规则卡：流量大数字 + 走势那一行是米色带，带下面的地址行不再画细线（带已经把两段分开了） */
+html[data-ui-theme="gilt"] .workspace-main .fx-rule-card .fx-rule-card-body { --fx-gilt-pad: 14px; --fx-gilt-pad-b: 12px; }
+html[data-ui-theme="gilt"] .workspace-main .fx-rule-card[data-size="standard"] .fx-rule-card-body { --fx-gilt-pad: 16px; --fx-gilt-pad-b: 14px; }
+html[data-ui-theme="gilt"] .fx-rule-big { margin: 12px calc(-1 * var(--fx-gilt-pad)) 0; padding: 10px var(--fx-gilt-pad) 9px; background: var(--fx-l2-group); }
+html[data-ui-theme="gilt"] .fx-rule-path { margin-top: 10px; padding-top: 0; border-top: 0; }
+/* 链路卡：底下那行「延迟 · 评级 · 走势」是米色带，贴到卡底（卡自己 overflow: hidden，圆角会裁） */
+html[data-ui-theme="gilt"] .fx-tunnel-foot { margin: 12px calc(-1 * var(--fx-gilt-pad)) calc(-1 * var(--fx-gilt-pad-b)); padding: 10px var(--fx-gilt-pad) 12px; border-top: 0; background: var(--fx-l2-group); }
 
 /* ── 3. 字：衬线标题和大数字，金色分组小标题 ─────────────────── */
 html[data-ui-theme="gilt"] .workspace-main .workspace-header-title,
@@ -145,12 +168,29 @@ html[data-ui-theme="gilt"] .fx-list-section-header,
 html[data-ui-theme="gilt"] .workspace-main .fx-list-section-header { color: var(--fx-gilt); letter-spacing: .12em; font-weight: 600; font-size: 11.5px; }
 
 /* ── 4. 控件 ─────────────────────────────────────────────────── */
-/* 筛选 chip：未选中奶白 + 细线；选中墨色实心（深色下金色实心），不走主色 —— 主色留给真正的动作按钮 */
-html[data-ui-theme="gilt"] .fx-chip:not(.fx-chip-on) { background: var(--fx-l1-surface); border-color: var(--fx-stroke-weak); }
+/* 筛选 chip：药丸改成小圆角方标签。未选中只有一圈线（纸上印的框），选中墨色实心（深色下金色实心），不走主色 —— 主色留给真正的动作按钮 */
+html[data-ui-theme="gilt"] .fx-chip { height: 30px; padding: 0 11px; border-radius: 8px; font-size: 12.5px; letter-spacing: .02em; }
+html[data-ui-theme="gilt"] .fx-chip:not(.fx-chip-on) { background: transparent; border-color: var(--fx-stroke-base); color: var(--fx-text-secondary); }
 html[data-ui-theme="gilt"] .fx-chip-on,
 html[data-ui-theme="gilt"] .fx-chip-on:hover { border-color: var(--fx-ink); background: var(--fx-ink); background-image: none; color: var(--fx-ink-text); }
-/* 分段控件：米色槽 + 一圈细线；选中项仍是主色渐变（和底部胶囊、主按钮同一个颜色，整页只有一种强调色） */
-html[data-ui-theme="gilt"] .workspace-tabs { border: 1px solid var(--fx-stroke-weak); background: var(--fx-l3-control-fill); }
+@media (pointer: coarse) { html[data-ui-theme="gilt"] .fx-chip-scroller > .fx-chip { min-height: 30px; } }
+/*
+  分段控件：不再是灰槽里一块蓝。一行文字标签靠左排，选中的那个墨字加粗、底下一道 2px 金线，
+  整行底下一道细线托着（杂志目录那种栏目导航）。桌面和手机同一套；手机那段写的 34px 槽样式
+  特指度一样，这里靠 html[data-ui-theme] 赢。
+*/
+html[data-ui-theme="gilt"] .workspace-tabs,
+html.dark[data-ui-theme="gilt"] .workspace-tabs { padding: 0; border: 0; border-bottom: 1px solid var(--fx-stroke-weak); border-radius: 0; background: transparent; backdrop-filter: none; -webkit-backdrop-filter: none; }
+html[data-ui-theme="gilt"] .workspace-tabs .workspace-tabs-list { gap: 18px; padding: 0 2px; }
+html[data-ui-theme="gilt"] .workspace-tabs .workspace-tab,
+html.dark[data-ui-theme="gilt"] .workspace-tabs .workspace-tab { flex: none; min-height: 38px; margin-bottom: -1px; padding: 0 1px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--fx-text-muted); font-size: 14px; font-weight: 500; box-shadow: none; }
+html[data-ui-theme="gilt"] .workspace-tabs .workspace-tab[data-state="active"],
+html.dark[data-ui-theme="gilt"] .workspace-tabs .workspace-tab[data-state="active"] { background: transparent; color: var(--fx-text); font-weight: 600; border-bottom-color: var(--fx-gilt); box-shadow: none; }
+html[data-ui-theme="gilt"] .workspace-tabs .workspace-tab[data-state="active"] > svg { color: var(--fx-gilt); }
+html[data-ui-theme="gilt"] .workspace-tabs .workspace-tab-count,
+html[data-ui-theme="gilt"] .workspace-tabs .workspace-tab[data-state="active"] .workspace-tab-count { min-width: 0; height: auto; padding: 0; border-radius: 0; background: transparent; color: var(--fx-gilt); font-size: 12px; font-weight: 500; }
+/* 搜索框跟 chip 一个圆角，不再是药丸 */
+html[data-ui-theme="gilt"] .fx-search-pill { border-radius: 10px !important; }
 /* 输入框、搜索框：奶白 + 细线 */
 html[data-ui-theme="gilt"] .workspace-main [data-slot="input"],
 html[data-ui-theme="gilt"] .workspace-main [data-slot="select-trigger"] { background: var(--fx-l1-surface); border-color: var(--fx-stroke-base); }
@@ -172,13 +212,13 @@ html[data-ui-theme="gilt"] .workspace-layout [data-sidebar="sidebar"] { border-r
 }
 
 /* ── 设置页「界面主题」的预览 ───────────────────────────────── */
-/* 米白纸、两张奶白卡带暖线、左上一截金线、底下一枚胶囊 */
+/* 米白纸、两张平贴的小圆角卡纸带暖线、左上一截金线、底下一枚胶囊 */
 .fx-uitheme-swatch[data-theme="gilt"] { background: #f5f2ec; }
 .dark .fx-uitheme-swatch[data-theme="gilt"] { background: #131110; }
 .fx-uitheme-swatch[data-theme="gilt"]::before { content: ""; position: absolute; left: 12px; top: 5px; width: 18px; height: 1.5px; background: #b08d57; }
 .dark .fx-uitheme-swatch[data-theme="gilt"]::before { background: #c9a66b; }
-.fx-uitheme-swatch[data-theme="gilt"] > i { border-color: rgb(122 95 50 / 18%); background: #fffdf9; box-shadow: inset 0 1px 0 rgb(255 255 255 / 90%), 0 8px 18px -12px rgb(70 50 20 / 35%); }
-.dark .fx-uitheme-swatch[data-theme="gilt"] > i { border-color: rgb(201 166 107 / 22%); background: #1c1917; box-shadow: none; }
+.fx-uitheme-swatch[data-theme="gilt"] > i { border-radius: 4px; border-color: rgb(122 95 50 / 26%); background: #fffdf9; box-shadow: none; }
+.dark .fx-uitheme-swatch[data-theme="gilt"] > i { border-color: rgb(201 166 107 / 28%); background: #1c1917; box-shadow: none; }
 .fx-uitheme-swatch[data-theme="gilt"] > i:first-child { margin-top: 4px; }
 .fx-uitheme-swatch[data-theme="gilt"] > b { border-color: rgb(176 141 87 / 40%); background: rgb(255 253 249 / 90%); }
 .dark .fx-uitheme-swatch[data-theme="gilt"] > b { border-color: rgb(201 166 107 / 32%); background: rgb(28 25 23 / 90%); }
