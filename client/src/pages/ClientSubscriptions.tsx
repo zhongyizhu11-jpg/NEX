@@ -423,6 +423,19 @@ export default function ClientSubscriptionsPage() {
     },
     onError: (error) => toast.error(error.message),
   });
+  /**
+   * 「指向已经变了」那张卡上直接改绑。
+   *
+   * 同一个 bindRule 接口，分开一个实例只为了提示语：那边是「加入订阅」，这边是
+   * 「改绑」或「移出」—— 用户在订阅这一屏就把事办了，不必再去转发页找这条规则。
+   */
+  const rebindRule = trpc.proxySubscriptions.bindRule.useMutation({
+    onSuccess: (_data, variables) => {
+      toast.success(variables.proxyNodeId === null ? "已移出订阅" : "已改绑落地节点");
+      refresh();
+    },
+    onError: (error) => toast.error(error.message),
+  });
   const setRuleVisible = trpc.proxySubscriptions.setRuleVisible.useMutation({
     onSuccess: () => refresh(),
     onError: (error) => toast.error(error.message),
@@ -1607,22 +1620,69 @@ export default function ClientSubscriptionsPage() {
                     <SectionLabel count={driftedRules.length}>指向已经变了</SectionLabel>
                     <p className="text-xs leading-relaxed text-muted-foreground">
                       这几条转发的目标已经不是它绑的那个节点了。线路还在订阅里，但客户端连过去是
-                      拿着原来那个落地的凭据去连新目标 —— 要么把目标改回去，要么在转发页上重新选节点。
+                      拿着原来那个落地的凭据去连新目标 —— 在这里改绑成现在真正通向的那个节点，
+                      或者把转发的目标改回去；这条转发不再通向任何落地的话，就移出订阅。
                     </p>
-                    {driftedRules.map((item) => (
-                      <div
-                        key={`drift-${item.ruleId}`}
-                        className="space-y-1 rounded-md border border-[color-mix(in_srgb,var(--fx-warn)_40%,transparent)] bg-[var(--fx-warn)]/[0.06] px-2.5 py-2"
-                      >
-                        <div className="flex items-center gap-2">
-                          <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-[var(--fx-warn-text)]" />
-                          <span className="min-w-0 flex-1 truncate text-sm font-medium">{item.ruleName}</span>
+                    {driftedRules.map((item) => {
+                      /*
+                        目标正好是某个节点的地址端口时，那个节点就是答案：单独点出来，
+                        一下就能改过去，不用在下拉里翻。
+                      */
+                      const matched = enabledNodes.find((node: any) =>
+                        Number(node.id) !== Number(item.nodeId)
+                        && `${String(node.address || "").toLowerCase()}:${Number(node.port)}` === String(item.targetText || "").toLowerCase());
+                      const busy = rebindRule.isPending && rebindRule.variables?.ruleId === item.ruleId;
+                      return (
+                        <div
+                          key={`drift-${item.ruleId}`}
+                          className="space-y-1.5 rounded-md border border-[color-mix(in_srgb,var(--fx-warn)_40%,transparent)] bg-[var(--fx-warn)]/[0.06] px-2.5 py-2"
+                        >
+                          <div className="flex items-center gap-2">
+                            <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-[var(--fx-warn-text)]" />
+                            <span className="min-w-0 flex-1 truncate text-sm font-medium">{item.ruleName}</span>
+                          </div>
+                          <p className="break-all text-xs text-muted-foreground">
+                            绑的是「{item.nodeName}」（{item.nodeText}），现在指向 {item.targetText}
+                          </p>
+                          <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                            <Select
+                              value={String(item.nodeId)}
+                              disabled={busy}
+                              onValueChange={(value) => {
+                                if (value === String(item.nodeId)) return;
+                                rebindRule.mutate({
+                                  ruleId: item.ruleId,
+                                  proxyNodeId: value === "__unbind" ? null : Number(value),
+                                });
+                              }}
+                            >
+                              <SelectTrigger aria-label={`${item.ruleName} 改绑落地节点`} className="h-8 w-40 shrink-0 text-xs">
+                                <SelectValue placeholder="改绑落地节点" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {enabledNodes.map((node: any) => (
+                                  <SelectItem key={node.id} value={String(node.id)}>
+                                    {node.name}
+                                  </SelectItem>
+                                ))}
+                                <SelectItem value="__unbind">移出订阅（解绑）</SelectItem>
+                              </SelectContent>
+                            </Select>
+                            {matched ? (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-8 text-xs"
+                                disabled={busy}
+                                onClick={() => rebindRule.mutate({ ruleId: item.ruleId, proxyNodeId: Number(matched.id) })}
+                              >
+                                目标就是「{matched.name}」，改绑过去
+                              </Button>
+                            ) : null}
+                          </div>
                         </div>
-                        <p className="break-all text-xs text-muted-foreground">
-                          绑的是「{item.nodeName}」（{item.nodeText}），现在指向 {item.targetText}
-                        </p>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
 
