@@ -160,6 +160,34 @@ test("链 / 线路组拆出来的内部规则：主规则已绑节点时不再�
   assert.deepEqual(unboundParent.entries.map((entry) => entry.ruleId), [11]);
 });
 
+test("串两跳：第一跳写的是第二跳机器的 IP 而机器首选入口是域名，不报「指向已经变了」", () => {
+  const hosts: ProxySubscriptionHostRow[] = [
+    { id: 1, name: "入口", ip: "1.2.3.4", ipv4: "1.2.3.4" },
+    // 第二跳机器配了 DDNS 域名：订阅里用域名，但他手填第一跳目标时写的是 IP。
+    { id: 2, name: "香港中转", ip: "38.45.64.91", ipv4: "38.45.64.91", ddnsEnabled: true, ddnsDomain: "hk.example.net" },
+  ];
+  const plan = buildProxySubscriptionPlan({
+    rules: [
+      // 第一跳：入口机 44752 → 香港中转机 44752，绑定挂在它上面
+      rule({ id: 1, hostId: 1, sourcePort: 44752, targetIp: "38.45.64.91", targetPort: 44752 }),
+      // 第二跳：香港中转机 44752 → 落地
+      rule({ id: 2, hostId: 2, sourcePort: 44752, targetIp: "hkt.example.com", targetPort: 443, proxyNodeId: 0 }),
+    ],
+    templates: [HKT_TEMPLATE],
+    hosts,
+  });
+  assert.equal(plan.warnings.filter((item) => item.reason === "target-mismatch").length, 0, "串接到自己机器上不该报警");
+  assert.ok(plan.entries.some((entry) => entry.ruleId === 1 && !entry.targetMismatch));
+
+  // 目标端口对不上任何一条自己的入口时，照旧要报。
+  const drifted = buildProxySubscriptionPlan({
+    rules: [rule({ id: 1, hostId: 1, sourcePort: 44752, targetIp: "38.45.64.91", targetPort: 44752 })],
+    templates: [HKT_TEMPLATE],
+    hosts,
+  });
+  assert.equal(drifted.warnings.filter((item) => item.reason === "target-mismatch").length, 1, "没有第二跳时它就是真的指错了");
+});
+
 test("因为不通被暂时隐藏的节点，不报「没有转发指向它」", () => {
   const plan = buildProxySubscriptionPlan({
     rules: [rule({ id: 1 })],
