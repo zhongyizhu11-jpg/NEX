@@ -7,6 +7,7 @@ import { createRoot } from "react-dom/client";
 import superjson from "superjson";
 import App from "./App";
 import { mobileAuth } from "./lib/mobileAuth";
+import { clearPersistedQueryCache, restorePersistedQueryCache, startQueryCachePersistence } from "./lib/queryPersistence";
 import "./index.css";
 
 const LOGIN_EXPIRED_NOTICE = "登录状态已失效，请重新登录";
@@ -61,6 +62,7 @@ const redirectToLoginIfUnauthorized = (error: unknown) => {
     mobileAuth.clear();
   }
   window.sessionStorage.setItem("forwardx.loginNotice", notice);
+  clearPersistedQueryCache();
   void queryClient.cancelQueries();
   queryClient.clear();
 
@@ -152,6 +154,12 @@ async function bootstrap() {
     document.documentElement.classList.toggle("capacitor-ios", mobileAuth.platform === "ios");
   }
 
+  // 先把上一次的数据放进缓存再挂页面：有缓存时不再整屏空白等接口，接口回来再换新的。
+  // App 里按面板地址分开存，换了面板不会串。
+  const cacheScope = () => (mobileAuth.isNative ? mobileAuth.getPanelUrl() || "native" : "");
+  restorePersistedQueryCache(queryClient, { scope: cacheScope() });
+  startQueryCachePersistence(queryClient, { scope: cacheScope });
+
   createRoot(document.getElementById("root")!).render(
     <trpc.Provider client={trpcClient} queryClient={queryClient}>
       <QueryClientProvider client={queryClient}>
@@ -159,6 +167,8 @@ async function bootstrap() {
       </QueryClientProvider>
     </trpc.Provider>
   );
+  // index.html 里的启动底色只管脚本跑起来之前；页面画上之后交还给正常样式（页面底色、壁纸）。
+  requestAnimationFrame(() => document.documentElement.classList.remove("fx-booting"));
 }
 
 void bootstrap();

@@ -4,9 +4,9 @@ import { useOverlayContainer } from "@/components/ui/overlay-root"
 import { cn } from "@/lib/utils"
 import { createPortal } from "react-dom"
 import { Toaster as Sonner } from "sonner"
-import { installShortToastDurations } from "@/lib/toastDurations"
+import { installToastDurations, TOAST_DURATION_MS } from "@/lib/toastDurations"
 
-installShortToastDurations()
+installToastDurations()
 
 type ToasterProps = React.ComponentProps<typeof Sonner>
 
@@ -20,6 +20,7 @@ const Toaster = ({ className, style, toastOptions, ...props }: ToasterProps) => 
       position="bottom-right"
       className={cn("toaster group", className)}
       style={{ zIndex: "var(--fx-z-in-overlay-toast)", ...style }}
+      duration={TOAST_DURATION_MS}
       toastOptions={{
         ...toastOptions,
         classNames: {

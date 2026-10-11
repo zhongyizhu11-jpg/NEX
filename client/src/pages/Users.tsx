@@ -363,7 +363,7 @@ function UsersContent() {
       if (ownerCredential.length > 0) {
         // 这类节点分出去的是主人的真实密码，取消分享 / 对方到期都收不回来。
         const names = ownerCredential.slice(0, 3).map((item: any) => item.name || `#${item.nodeId}`).join("、");
-        toast.warning(`${names}${ownerCredential.length > 3 ? " 等" : ""} 分享的是节点主人的真实凭据：以后取消分享或对方到期，他手上的配置仍然能连，只能靠换密码收回。能用多用户入站的话，改用多用户入站分享`, { duration: 10_000 });
+        toast.warning(`${names}${ownerCredential.length > 3 ? " 等" : ""} 分享的是节点主人的真实凭据：以后取消分享或对方到期，他手上的配置仍然能连，只能靠换密码收回。能用多用户入站的话，改用多用户入站分享`);
       }
       if (result?.recipientCanUse === false) {
         toast.warning("这个用户还没有客户端订阅权限，分享了他也看不到 —— 在上面「权限」里打开后才生效");

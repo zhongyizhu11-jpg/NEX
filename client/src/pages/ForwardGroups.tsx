@@ -801,7 +801,7 @@ function ForwardGroupSelfTestDialog({
     if (lastFailureToastKey.current !== key) {
       lastFailureToastKey.current = key;
       manualTestRef.current = false;
-      toast.error("诊断没通过", { description: message, duration: 12000 });
+      toast.error("诊断没通过", { description: message });
     }
   }, [groupId, hasFreshResult, isFailed, isTesting, latest?.updatedAt, open, parsedMessage.message, status]);
 

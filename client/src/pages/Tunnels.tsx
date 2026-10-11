@@ -1904,7 +1904,6 @@ function TunnelSelfTestDialog({
         manualTestRef.current = false;
         toast.error("诊断没通过", {
           description: message,
-          duration: 12000,
         });
       }
     }

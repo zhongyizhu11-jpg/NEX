@@ -163,7 +163,10 @@ export function buildMetaAgentSelfTestPayload(
     const method = normalizeLinkProbeMethod(meta.method);
     return {
       testId: agentInteger(test?.id),
-      kind: meta.kind,
+      // 隧道规则的这一步是出口主机直接连目标，不经过隧道运行时，和转发链最后一段一样不用等运行时就绪。
+      // 用 Agent 不认识的 kind 下发：Agent 按普通目标测一次（1.5 秒），不再为不通的目标重试满 20 秒。
+      // 入口端口那一步走的是运行时，仍按原 kind。
+      kind: entryProbe ? meta.kind : "forward-via-tunnel-target",
       tunnelId: agentInteger(meta.tunnelId),
       ruleId: agentInteger(test?.ruleId),
       forwardType: "gost-tunnel",

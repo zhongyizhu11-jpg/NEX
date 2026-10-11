@@ -450,3 +450,90 @@ test("a tunnel rule keeps the current tunnel segment when it reconciles with the
   assert.equal(html.match(/41 ms/g)?.length, 1);
   assert.doesNotMatch(html, /未诊断|诊断中/);
 });
+
+test("an unreachable target still shows the measured tunnel segment", () => {
+  const parsed = parseLinkTestMessage(JSON.stringify({
+    kind: "forward-via-tunnel",
+    message: "隧道整体链路测试 失败; 出口到目标 hk.example:24895; 隧道段 7ms; 目标 hk.example:24895 TCP不可达或超时",
+    tunnelLatencyMs: 7,
+    details: [{
+      success: false,
+      latencyMs: null,
+      message: "目标 hk.example:24895 TCP不可达或超时",
+      routeLabel: "Exit -> Target",
+      fromHostId: 2,
+    }],
+    totalLatencyMs: null,
+  }));
+  const html = renderToStaticMarkup(
+    <LinkTestProbeView
+      parsed={parsed}
+      fallbackLatencyMs={null}
+      isSuccess={false}
+      isTesting={false}
+      mobileStacked={false}
+      ignorePlannedResultsWhenDetailsPresent
+      plannedSegments={[
+        { from: "Entry", to: "Exit", fromHostId: 1, toHostId: 2, hopIndex: 0, hopCount: 1, success: true, latencyMs: 9 },
+        { from: "Exit", to: "Target", fromHostId: 2 },
+      ]}
+    />,
+  );
+
+  assert.equal(html.match(/7 ms/g)?.length, 1);
+  assert.doesNotMatch(html, /9 ms/);
+  assert.match(html, /超时/);
+  assert.doesNotMatch(html, /未诊断|诊断中/);
+});
+
+test("a tunnel latency is not spread over a multi-hop tunnel without hop details", () => {
+  const parsed = parseLinkTestMessage(JSON.stringify({
+    kind: "forward-via-tunnel",
+    tunnelLatencyMs: 20,
+    details: [{ success: false, message: "超时", routeLabel: "Exit -> Target", fromHostId: 3 }],
+    totalLatencyMs: null,
+  }));
+  const html = renderToStaticMarkup(
+    <LinkTestProbeView
+      parsed={parsed}
+      isSuccess={false}
+      isTesting={false}
+      mobileStacked={false}
+      ignorePlannedResultsWhenDetailsPresent
+      plannedSegments={[
+        { from: "Entry", to: "Relay", fromHostId: 1, toHostId: 2, hopIndex: 0, hopCount: 2 },
+        { from: "Relay", to: "Exit", fromHostId: 2, toHostId: 3, hopIndex: 1, hopCount: 2 },
+        { from: "Exit", to: "Target", fromHostId: 3 },
+      ]}
+    />,
+  );
+
+  assert.match(html, /Relay/);
+  assert.doesNotMatch(html, /20 ms/);
+});
+
+test("an older passing result derives the tunnel segment from the total when the list latency drifted", () => {
+  const parsed = parseLinkTestMessage(JSON.stringify({
+    kind: "forward-via-tunnel",
+    details: [{ success: true, latencyMs: 32, routeLabel: "Exit -> Target", fromHostId: 2 }],
+    totalLatencyMs: 40,
+  }));
+  const html = renderToStaticMarkup(
+    <LinkTestProbeView
+      parsed={parsed}
+      fallbackLatencyMs={40}
+      isSuccess
+      isTesting={false}
+      mobileStacked={false}
+      ignorePlannedResultsWhenDetailsPresent
+      plannedSegments={[
+        { from: "Entry", to: "Exit", fromHostId: 1, toHostId: 2, hopIndex: 0, hopCount: 1, success: true, latencyMs: 7 },
+        { from: "Exit", to: "Target", fromHostId: 2 },
+      ]}
+    />,
+  );
+
+  assert.equal(html.match(/8 ms/g)?.length, 1);
+  assert.doesNotMatch(html, /7 ms/);
+  assert.doesNotMatch(html, /未诊断|诊断中/);
+});

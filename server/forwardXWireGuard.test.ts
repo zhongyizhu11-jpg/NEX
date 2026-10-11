@@ -169,6 +169,19 @@ test("forward-chain final domain probes bypass unrelated runtime waits", () => {
   });
 });
 
+test("a tunnel rule's exit-to-target probe bypasses the runtime readiness wait", () => {
+  const payload = buildMetaAgentSelfTestPayload({ id: "95", ruleId: "21" }, {
+    kind: "forward-via-tunnel",
+    tunnelId: "8",
+    targetIp: "hk.example",
+    targetPort: "24895",
+    method: "tcp",
+  } as any);
+  assert.equal(payload?.kind, "forward-via-tunnel-target");
+  assert.equal(payload?.targetIp, "hk.example");
+  assert.equal(payload?.targetPort, 24895);
+});
+
 test("normalizes PostgreSQL string numbers for every Agent self-test payload", () => {
   const metaPayload = buildMetaAgentSelfTestPayload({ id: "93", ruleId: "19" }, {
     kind: "forward-via-tunnel-entry",

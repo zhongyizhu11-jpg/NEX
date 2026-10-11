@@ -27,6 +27,7 @@ export type ParsedLinkTestMessage = {
   details: LinkTestDetail[];
   totalLatencyMs: number | null;
   tunnelProbeTimedOut?: boolean;
+  tunnelLatencyMs?: number | null;
 };
 
 type ProbeSegment = {
@@ -113,6 +114,7 @@ export function parseLinkTestMessage(raw: unknown): ParsedLinkTestMessage {
         details,
         totalLatencyMs: typeof source.totalLatencyMs === "number" ? source.totalLatencyMs : null,
         tunnelProbeTimedOut: source.tunnelProbeTimedOut === true,
+        tunnelLatencyMs: typeof source.tunnelLatencyMs === "number" && Number.isFinite(source.tunnelLatencyMs) ? source.tunnelLatencyMs : null,
       };
     }
   } catch {
@@ -158,6 +160,26 @@ function currentTotalBacksPlannedResult(
   const candidate = candidates[0];
   const reconciledTotal = detailTotal + Number(candidate.segment.latencyMs);
   return Math.abs(reconciledTotal - Number(parsed.totalLatencyMs)) <= 0.11 ? candidate.index : -1;
+}
+
+/**
+ * 单跳隧道：服务端没有逐跳明细，隧道段的延迟要自己放到那一段上。
+ * 优先用服务端单独带回的隧道段延迟（落地不通时也有）；老结果没有这个字段，就用「合计 − 出口到目标」。
+ * 以前只认面板列表里的隧道延迟，和这次测的差 1ms 就对不上账，明明测过的隧道段显示成「未诊断」。
+ * 多跳隧道拆不出每一跳，不猜。
+ */
+function currentTunnelSegmentResult(
+  parsed: ParsedLinkTestMessage,
+  plannedSegments: LinkTestPlannedSegment[],
+): { index: number; latencyMs: number } | null {
+  if (parsed.kind !== "forward-via-tunnel" || plannedSegments.length !== 2 || plannedSegments[0]?.pending === true) return null;
+  const details = parsed.details || [];
+  if (details.length === 0 || details.some((detail) => detail.pending || detail.toHostId || (detail.hopIndex !== null && detail.hopIndex !== undefined))) return null;
+  if (hasUsableLatencyValue(parsed.tunnelLatencyMs)) return { index: 0, latencyMs: Number(parsed.tunnelLatencyMs) };
+  if (!hasUsableLatencyValue(parsed.totalLatencyMs)) return null;
+  if (details.some((detail) => !detail.success || !hasUsableLatencyValue(detail.latencyMs))) return null;
+  const tunnelLatency = Math.round((Number(parsed.totalLatencyMs) - details.reduce((sum, detail) => sum + Number(detail.latencyMs), 0)) * 10) / 10;
+  return tunnelLatency > 0 ? { index: 0, latencyMs: tunnelLatency } : null;
 }
 
 function formatLatencyMs(value: number | null | undefined) {
@@ -705,8 +727,11 @@ export function LinkTestProbeView({
 }) {
   const effectivePlannedSegments = useMemo(() => {
     if (!ignorePlannedResultsWhenDetailsPresent || (parsed.details || []).length === 0) return plannedSegments;
-    const backedResultIndex = currentTotalBacksPlannedResult(parsed, plannedSegments || []);
-    return plannedSegments?.map((segment, index) => index === backedResultIndex
+    const tunnelResult = currentTunnelSegmentResult(parsed, plannedSegments || []);
+    const backedResultIndex = tunnelResult ? -1 : currentTotalBacksPlannedResult(parsed, plannedSegments || []);
+    return plannedSegments?.map((segment, index) => index === tunnelResult?.index
+      ? { ...segment, success: true, latencyMs: tunnelResult.latencyMs, message: null, pending: false }
+      : index === backedResultIndex
       ? segment
       : {
         ...segment,

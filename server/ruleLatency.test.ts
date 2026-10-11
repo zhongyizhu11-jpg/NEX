@@ -4,6 +4,7 @@ import {
   buildTunnelRuleLatencyProbe,
   canReuseRecentTunnelLatencySample,
   combineTunnelRuleLatencySample,
+  freshTunnelSegmentLatency,
   TUNNEL_RULE_LATENCY_FRESH_MS,
   tunnelRuleLatencySampleSucceeded,
   tunnelRuleLatencyTopologyKey,
@@ -87,6 +88,15 @@ test("tunnel rule latency is the fresh tunnel path plus exit-to-target latency",
     targetIsTimeout: true,
     nowMs,
   }), { latencyMs: null, isTimeout: true });
+});
+
+test("the tunnel segment keeps its own latency when the target is unreachable", () => {
+  const nowMs = Date.parse("2026-07-20T10:00:00Z");
+  const fresh = { tunnelLatencyMs: 7, tunnelIsTimeout: false, tunnelRecordedAt: new Date(nowMs - 1000), nowMs };
+  assert.deepEqual(combineTunnelRuleLatencySample({ targetLatencyMs: null, targetIsTimeout: true, ...fresh }), { latencyMs: null, isTimeout: true });
+  assert.deepEqual(freshTunnelSegmentLatency(fresh), { latencyMs: 7, isTimeout: false });
+  assert.equal(freshTunnelSegmentLatency({ ...fresh, tunnelRecordedAt: new Date(nowMs - 6 * 60 * 1000) }), null);
+  assert.deepEqual(freshTunnelSegmentLatency({ ...fresh, tunnelLatencyMs: null, tunnelIsTimeout: true }), { latencyMs: null, isTimeout: true });
 });
 
 test("a tunnel rule cannot succeed from the target segment alone", () => {
