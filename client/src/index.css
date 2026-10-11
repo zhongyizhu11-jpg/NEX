@@ -5,6 +5,7 @@
 @import "../../shared/design-tokens.css";
 @import "./styles/workspace.css";
 @import "./styles/theme-aurora.css";
+@import "./styles/theme-gilt.css";
 
 @custom-variant dark (&:is(.dark *));
 

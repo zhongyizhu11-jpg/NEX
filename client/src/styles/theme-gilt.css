@@ -1,0 +1,297 @@
+/*
+  ── 界面主题「墨金」（设置 › 个性化 › 界面主题）──
+
+  第三种气质，由 <html data-ui-theme="gilt"> 打开；没有这个属性这个文件一条都不生效。
+  经典是「浅灰托白卡」，极光是「柔光托玻璃卡」，墨金是**米白纸底 + 墨色衬线标题 + 金色细节**：
+  高端杂志 / 精品酒店那一路。深色不是炭灰，是带一点暖的墨黑，细线和强调都换成金。
+
+  前两版的教训（2026-10-11）：「留白」把线画满一屏被说太乱；「极简」只换了底和卡的灰白，
+  被说和经典没区别。这一版换的是**气质**：纸的颜色、标题的字体、金属色的点缀，一眼就不是经典。
+
+  第一版墨金只换了颜色和字，用户说「卡片分类条这些没改变」—— 形状也得不一样。所以这一版
+  连**形状**一起换，像印在卡纸上的东西，不是浮在屏幕上的气泡：
+
+    1. 底   米白的纸（#f5f2ec），不是冷灰也不是纯白；深色是暖墨黑（#131110）。
+    2. 卡   平贴的卡纸：小圆角（12px）、一圈暖色细线、**不投影**（纸贴在纸上，没有悬浮感）。
+            主机卡的系统图标是一枚细线圆章。卡分三段：白卡头、一条通栏米色带托着数字（主机卡三个
+            读数、规则卡流量大数字、链路卡延迟）、白的地址行。卡片风格四档照常，「彩色描边」只给有事的卡（警告 / 故障）把状态色
+            调进这圈线里，正常的卡只有暖线。
+    3. 字   页面标题、卡标题、统计大数字用衬线（New York / Songti / Georgia）；标题下一截 28px 的
+            金线。正文仍是无衬线。
+    5. 顶部 手机上分类条折成一枚「当前分类 ⌄」的小按钮（点开是一列下拉），搜索收成圆钮、新建只留「＋」，
+            三样排在同一行；页头的流量走势拉成通栏长线。
+    4. 控件 分段控件不再是灰槽 + 蓝块：**一行文字标签，选中项墨字 + 金色下划线**，整行底下一道细线
+            （杂志栏目导航）。筛选 chip 从药丸改成小圆角方标签（8px），未选中只有一圈线，选中墨色实心
+            （深色下金色实心）。主按钮、底部胶囊仍是主色渐变（跟着「默认配色」换）—— 蓝 / 粉 / 绿配
+            米白加金都成立。顶栏、底部胶囊是米白毛玻璃带金色细线。
+
+  不新增任何 backdrop 模糊。
+*/
+
+html[data-ui-theme="gilt"] {
+  --fx-l0-page: #f5f2ec;
+  --fx-l1-surface: #fffdf9;
+  --fx-l2-group: #f4f0e8;
+  --fx-l3-control: #fffdf9;
+  --fx-l3-control-fill: #ebe6dc;
+  --fx-sidebar: #faf8f3;
+  --fx-hover: #f3efe7;
+  --fx-pressed: #e9e3d8;
+  --fx-stroke-weak: rgb(122 95 50 / 14%);
+  --fx-stroke-base: rgb(122 95 50 / 24%);
+  --fx-stroke-strong: rgb(122 95 50 / 45%);
+  --fx-text: #1c1814;
+  --fx-text-secondary: #4d463e;
+  --fx-text-muted: #7e7569;
+  --fx-gilt: #b08d57;                 /* 金：细线、分组小标题、标题下那一截 */
+  --fx-gilt-soft: rgb(176 141 87 / 14%);
+  --fx-ink: #1c1814;                  /* 墨：选中 chip 的实心 */
+  --fx-ink-text: #fbf8f2;
+  --fx-card-fill: #fffdf9;
+  --fx-card-stroke: rgb(122 95 50 / 22%);
+  --fx-elevation-card: none;                    /* 卡纸贴在纸上：不投影 */
+  --fx-elevation-control: 0 1px 2px rgb(70 50 20 / 5%);
+  --fx-elevation-popover: 0 12px 32px -8px rgb(70 50 20 / 18%), 0 2px 6px rgb(70 50 20 / 6%), 0 0 0 1px rgb(122 95 50 / 14%);
+  --fx-glass: rgb(250 247 241 / 78%);
+  --fx-glass-strong: rgb(252 250 245 / 86%);
+  --fx-radius-control: 10px;
+  --fx-radius-card: 10px;
+  --fx-radius-surface: 12px;
+  --fx-radius-modal: 20px;
+  --fx-font-display: "New York", "Iowan Old Style", "Songti SC", "STSong", Georgia, "Noto Serif CJK SC", "Source Han Serif SC", "Times New Roman", serif;
+}
+html.dark[data-ui-theme="gilt"] {
+  --fx-l0-page: #131110;
+  --fx-l1-surface: #1c1917;
+  --fx-raised: #241f1b;
+  --fx-l2-group: #242019;
+  --fx-l3-control: #1c1917;
+  --fx-l3-control-fill: #2a2521;
+  --fx-sidebar: #161312;
+  --fx-hover: #221e1a;
+  --fx-pressed: #2c2723;
+  --fx-stroke-weak: rgb(201 166 107 / 16%);
+  --fx-stroke-base: rgb(201 166 107 / 26%);
+  --fx-stroke-strong: rgb(201 166 107 / 45%);
+  --fx-text: #f3ede3;
+  --fx-text-secondary: #cfc6b8;
+  --fx-text-muted: #9c9285;
+  --fx-gilt: #c9a66b;
+  --fx-gilt-soft: rgb(201 166 107 / 16%);
+  --fx-ink: #c9a66b;                  /* 深色下的「墨」是金：选中 chip 金色实心、墨字 */
+  --fx-ink-text: #1c1814;
+  --fx-card-fill: #1c1917;
+  --fx-card-stroke: rgb(201 166 107 / 24%);
+  --fx-elevation-card: none;
+  --fx-elevation-control: 0 1px 2px rgb(0 0 0 / 30%);
+  --fx-elevation-popover: 0 12px 32px -8px rgb(0 0 0 / 65%), 0 2px 6px rgb(0 0 0 / 40%), 0 0 0 1px rgb(201 166 107 / 18%);
+  --fx-glass: rgb(19 17 16 / 78%);
+  --fx-glass-strong: rgb(24 21 19 / 86%);
+}
+
+/* ── 2. 卡 ───────────────────────────────────────────────────── */
+/*
+  「彩色描边」：经典是 1.5px 的状态色渐变边；墨金里是把状态色调进那圈暖色细线（1px，不渐变），
+  卡身仍是奶白。特指度和 workspace.css 那条一样，靠文件靠后写赢。
+*/
+html[data-ui-theme="gilt"]:not([data-card-style]) .workspace-main [data-slot="card"],
+html[data-ui-theme="gilt"][data-card-style="edge"] .workspace-main [data-slot="card"],
+html[data-ui-theme="gilt"]:not([data-card-style]) .fx-card-face,
+html[data-ui-theme="gilt"][data-card-style="edge"] .fx-card-face {
+  border: 1px solid var(--fx-card-stroke);
+  background: var(--fx-card-fill);
+}
+/* 正常的卡只有暖线（主色描一圈会把整页描成蓝框，和经典一个样）；有事的卡（警告 / 故障）那圈线才调进状态色 */
+html[data-ui-theme="gilt"]:not([data-card-style]) .workspace-main [data-tone="warn"][data-slot="card"],
+html[data-ui-theme="gilt"][data-card-style="edge"] .workspace-main [data-tone="warn"][data-slot="card"],
+html[data-ui-theme="gilt"]:not([data-card-style]) .fx-card-face[data-tone="warn"],
+html[data-ui-theme="gilt"][data-card-style="edge"] .fx-card-face[data-tone="warn"],
+html[data-ui-theme="gilt"]:not([data-card-style]) .workspace-main [data-tone="down"][data-slot="card"],
+html[data-ui-theme="gilt"][data-card-style="edge"] .workspace-main [data-tone="down"][data-slot="card"],
+html[data-ui-theme="gilt"]:not([data-card-style]) .fx-card-face[data-tone="down"],
+html[data-ui-theme="gilt"][data-card-style="edge"] .fx-card-face[data-tone="down"] {
+  border-color: color-mix(in srgb, var(--fx-card-tone) 55%, var(--fx-card-stroke));
+}
+html[data-ui-theme="gilt"] .fx-cardstyle-swatch[data-style="edge"] .fx-cardstyle-swatch-face { border: 1px solid color-mix(in srgb, var(--fx-card-tone) 45%, var(--fx-card-stroke)); background: var(--fx-card-fill); }
+/* 整张可点的卡悬停时也不要抬起来（EntityCard 的 hover:shadow 读的是这个变量，已经是 none） */
+/* 主机卡的系统图标：一枚细线圆章，不是淡色方块 */
+html[data-ui-theme="gilt"] .fx-host-card > div:first-child > span:first-child { border-radius: 999px; border: 1px solid var(--fx-stroke-base); background: var(--fx-l1-surface); }
+/*
+  卡的结构：数字放在一条米色带上。
+  经典的卡是「一块白，里面几行字」；墨金的卡是三段：白的卡头（名字 + 注脚），一条通栏的米色带
+  托着数字（主机卡是 CPU / 内存 / 磁盘 三栏，规则卡是流量大数字 + 走势，链路卡是延迟 + 评级），
+  底下再回到白的地址行 / 速率行。带是软色块、没有线，所以不会乱；但一眼看过去卡的结构就不是经典。
+*/
+/* 主机卡：三个读数不再是灰色小方块，是米色带上的三栏，标签在上、衬线数字在下、条贴栏底 */
+html[data-ui-theme="gilt"] .fx-host-card .grid.grid-cols-3 { margin: 2px calc(-1 * var(--fx-card-padding)) 4px; padding: 8px var(--fx-card-padding) 10px; gap: 14px; background: var(--fx-l2-group); }
+html[data-ui-theme="gilt"] .fx-host-spec { border-radius: 0; background: transparent; padding: 0 0 9px; }
+html[data-ui-theme="gilt"] .fx-host-spec > i { letter-spacing: .04em; }
+html[data-ui-theme="gilt"] .fx-host-spec-bar { left: 0; right: 0; bottom: 3px; height: 2px; background: rgb(122 95 50 / 18%); }
+html.dark[data-ui-theme="gilt"] .fx-host-spec-bar { background: rgb(201 166 107 / 20%); }
+/* 规则卡：流量大数字 + 走势那一行是米色带，带下面的地址行不再画细线（带已经把两段分开了） */
+html[data-ui-theme="gilt"] .workspace-main .fx-rule-card .fx-rule-card-body { --fx-gilt-pad: 14px; --fx-gilt-pad-b: 12px; }
+html[data-ui-theme="gilt"] .workspace-main .fx-rule-card[data-size="standard"] .fx-rule-card-body { --fx-gilt-pad: 16px; --fx-gilt-pad-b: 14px; }
+html[data-ui-theme="gilt"] .fx-rule-big { margin: 12px calc(-1 * var(--fx-gilt-pad)) 0; padding: 10px var(--fx-gilt-pad) 9px; background: var(--fx-l2-group); }
+html[data-ui-theme="gilt"] .fx-rule-path { margin-top: 10px; padding-top: 0; border-top: 0; }
+/* 链路卡：底下那行「延迟 · 评级 · 走势」是米色带，贴到卡底（卡自己 overflow: hidden，圆角会裁） */
+html[data-ui-theme="gilt"] .fx-tunnel-foot { margin: 12px calc(-1 * var(--fx-gilt-pad)) calc(-1 * var(--fx-gilt-pad-b)); padding: 10px var(--fx-gilt-pad) 12px; border-top: 0; background: var(--fx-l2-group); }
+
+/* ── 3. 字：衬线标题和大数字，金色分组小标题 ─────────────────── */
+html[data-ui-theme="gilt"] .workspace-main .workspace-header-title,
+html[data-ui-theme="gilt"] .fx-navbar-large-title,
+html[data-ui-theme="gilt"] .workspace-main .fx-pane-title,
+html[data-ui-theme="gilt"] .workspace-main [data-slot="card-title"],
+html[data-ui-theme="gilt"] .fx-rule-name,
+html[data-ui-theme="gilt"] .fx-rule-num > b,
+html[data-ui-theme="gilt"] .fx-summary-value,
+html[data-ui-theme="gilt"] .fx-host-spec > b {
+  font-family: var(--fx-font-display);
+  letter-spacing: 0;
+}
+html[data-ui-theme="gilt"] .workspace-main .workspace-header-title,
+html[data-ui-theme="gilt"] .fx-navbar-large-title { font-weight: 600; }
+/* 页头标题下一截 28px 的金线：整页唯一一道装饰线 */
+html[data-ui-theme="gilt"] .workspace-main .workspace-header-title {
+  padding-bottom: 7px;
+  background: linear-gradient(var(--fx-gilt), var(--fx-gilt)) left bottom / 28px 1.5px no-repeat;
+}
+@media (max-width: 767px) {
+  html[data-ui-theme="gilt"] .workspace-main .workspace-header-title { font-size: 26px; line-height: 32px; white-space: nowrap; }
+  /* 标题不折行；右边那组走势 + 读数放不下时整组掉到下一行 */
+  html[data-ui-theme="gilt"] .workspace-header-row { flex-wrap: wrap; }
+}
+html[data-ui-theme="gilt"] .fx-rule-num > b,
+html[data-ui-theme="gilt"] .fx-summary-value,
+html[data-ui-theme="gilt"] .fx-host-spec > b { font-weight: 600; }
+html[data-ui-theme="gilt"] .fx-rule-num > b { font-size: 24px; }
+html[data-ui-theme="gilt"] .fx-host-spec > b { font-size: 17px; }
+/* 分组小标题（「需要关注」「隧道链路」这类）：金色、小字、拉开字距，像版面上的栏目名 */
+html[data-ui-theme="gilt"] .fx-list-section-header,
+html[data-ui-theme="gilt"] .workspace-main .fx-list-section-header { color: var(--fx-gilt); letter-spacing: .12em; font-weight: 600; font-size: 11.5px; }
+
+/* ── 4. 控件 ─────────────────────────────────────────────────── */
+/* 筛选 chip：药丸改成小圆角方标签。未选中只有一圈线（纸上印的框），选中墨色实心（深色下金色实心），不走主色 —— 主色留给真正的动作按钮 */
+html[data-ui-theme="gilt"] .fx-chip { height: 30px; padding: 0 11px; border-radius: 8px; font-size: 12.5px; letter-spacing: .02em; }
+html[data-ui-theme="gilt"] .fx-chip:not(.fx-chip-on) { background: transparent; border-color: var(--fx-stroke-base); color: var(--fx-text-secondary); }
+html[data-ui-theme="gilt"] .fx-chip-on,
+html[data-ui-theme="gilt"] .fx-chip-on:hover { border-color: var(--fx-ink); background: var(--fx-ink); background-image: none; color: var(--fx-ink-text); }
+@media (pointer: coarse) { html[data-ui-theme="gilt"] .fx-chip-scroller > .fx-chip { min-height: 30px; } }
+/*
+  分段控件：不再是灰槽里一块蓝。一行文字标签靠左排，选中的那个墨字加粗、底下一道 2px 金线，
+  整行底下一道细线托着（杂志目录那种栏目导航）。桌面和手机同一套；手机那段写的 34px 槽样式
+  特指度一样，这里靠 html[data-ui-theme] 赢。
+*/
+html[data-ui-theme="gilt"] .workspace-tabs,
+html.dark[data-ui-theme="gilt"] .workspace-tabs { padding: 0; border: 0; border-bottom: 1px solid var(--fx-stroke-weak); border-radius: 0; background: transparent; backdrop-filter: none; -webkit-backdrop-filter: none; }
+html[data-ui-theme="gilt"] .workspace-tabs .workspace-tabs-list { gap: 18px; padding: 0 2px; }
+html[data-ui-theme="gilt"] .workspace-tabs .workspace-tab,
+html.dark[data-ui-theme="gilt"] .workspace-tabs .workspace-tab { flex: none; min-height: 38px; margin-bottom: -1px; padding: 0 1px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--fx-text-muted); font-size: 14px; font-weight: 500; box-shadow: none; }
+html[data-ui-theme="gilt"] .workspace-tabs .workspace-tab[data-state="active"],
+html.dark[data-ui-theme="gilt"] .workspace-tabs .workspace-tab[data-state="active"] { background: transparent; color: var(--fx-text); font-weight: 600; border-bottom-color: var(--fx-gilt); box-shadow: none; }
+html[data-ui-theme="gilt"] .workspace-tabs .workspace-tab[data-state="active"] > svg { color: var(--fx-gilt); }
+html[data-ui-theme="gilt"] .workspace-tabs .workspace-tab-count,
+html[data-ui-theme="gilt"] .workspace-tabs .workspace-tab[data-state="active"] .workspace-tab-count { min-width: 0; height: auto; padding: 0; border-radius: 0; background: transparent; color: var(--fx-gilt); font-size: 12px; font-weight: 500; }
+/* 搜索框跟 chip 一个圆角，不再是药丸 */
+html[data-ui-theme="gilt"] .fx-search-pill { border-radius: 10px !important; }
+/* 输入框、搜索框：奶白 + 细线 */
+html[data-ui-theme="gilt"] .workspace-main [data-slot="input"],
+html[data-ui-theme="gilt"] .workspace-main [data-slot="select-trigger"] { background: var(--fx-l1-surface); border-color: var(--fx-stroke-base); }
+html[data-ui-theme="gilt"] .fx-search-pill { background: var(--fx-l1-surface) !important; border-color: var(--fx-stroke-weak) !important; }
+html[data-ui-theme="gilt"] .fx-search-pill:focus-visible { border-color: var(--fx-primary-stroke) !important; }
+/* 外壳：顶栏、大标题导航栏、底部胶囊都是米白毛玻璃，线是金的 */
+html[data-ui-theme="gilt"] .workspace-appbar { border-bottom-color: var(--fx-stroke-weak); }
+html[data-ui-theme="gilt"] .workspace-layout [data-sidebar="sidebar"] { border-right-color: var(--fx-stroke-weak); }
+@media (max-width: 767px) {
+  html[data-ui-theme="gilt"] .fx-navbar { background: color-mix(in srgb, var(--fx-l0-page) 82%, transparent); }
+  html[data-ui-theme="gilt"] .fx-tabbar {
+    border-color: rgb(176 141 87 / 32%);
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 80%), 0 18px 40px -16px rgb(70 50 20 / 40%), 0 2px 6px rgb(70 50 20 / 6%);
+  }
+  html.dark[data-ui-theme="gilt"] .fx-tabbar {
+    border-color: rgb(201 166 107 / 28%);
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 5%), 0 18px 40px -16px rgb(0 0 0 / 80%), 0 2px 6px rgb(0 0 0 / 40%);
+  }
+}
+
+/* ── 5. 顶上那一块：折叠的分类条、通栏长走势、图标化的搜索和新建（2026-10-11 用户要的）── */
+/* 页头右边那条小走势拉长：手机上通栏（标题下面自己占一行），桌面上 220px */
+html[data-ui-theme="gilt"] .workspace-header-aside .fx-sparkline { width: 220px; height: 26px; }
+@media (max-width: 767px) {
+  html[data-ui-theme="gilt"] .workspace-header-aside { flex: 1 1 100%; align-items: stretch; padding-top: 4px; }
+  html[data-ui-theme="gilt"] .workspace-header-aside .fx-sparkline { width: 100%; height: 30px; }
+  html[data-ui-theme="gilt"] .workspace-header-aside > span { text-align: right; }
+  /* 页头右上的 ··· / 视图切换钉在标题那一行的右边，不再压在通栏走势上（用户 2026-10-11 截图指出） */
+  html[data-ui-theme="gilt"] .workspace-header { position: relative; }
+  html[data-ui-theme="gilt"] .workspace-header-actions { position: absolute; top: 0; right: 0; max-width: none; }
+  html[data-ui-theme="gilt"] .workspace-header-row > div:first-child { padding-right: 52px; }
+
+  /*
+    折叠的分类条（sliding-tabs.tsx 的 FoldedTabsList）浮在左边，搜索 / 筛选 / 新建那一行
+    靠在它右边同一行 —— 那一行是 flex / grid（BFC），自己会躲开浮动。包着它的 Radix Tabs
+    根节点高度是 0，把它从 space-y 里拿掉，否则下一行被它的外边距顶下去 12px。
+  */
+  html[data-ui-theme="gilt"] :has(> .workspace-tabs-folded) { margin-block: 0 !important; }
+  html[data-ui-theme="gilt"] .workspace-tabs-folded { position: relative; float: left; height: 36px; margin-right: 10px; z-index: var(--fx-z-popover); }
+  html[data-ui-theme="gilt"] .workspace-tabs-fold {
+    display: inline-flex; align-items: center; gap: 6px; height: 36px; max-width: 60vw; padding: 0 10px 0 13px;
+    border: 1px solid var(--fx-stroke-base); border-radius: 10px; background: var(--fx-l1-surface);
+    color: var(--fx-text); font-size: 14px; font-weight: 600; line-height: 1; white-space: nowrap;
+  }
+  html[data-ui-theme="gilt"] .workspace-tabs-fold:active { background: var(--fx-pressed); }
+  html[data-ui-theme="gilt"] .workspace-tabs-fold-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  html[data-ui-theme="gilt"] .workspace-tabs-fold .workspace-tab-count { color: var(--fx-gilt); font-size: 12px; font-weight: 500; }
+  html[data-ui-theme="gilt"] .workspace-tabs-fold-chevron { color: var(--fx-text-muted); transition: transform .15s; }
+  html[data-ui-theme="gilt"] .workspace-tabs-folded[data-open] .workspace-tabs-fold-chevron { transform: rotate(180deg); }
+  /* 点开的那列分类：一张小卡纸浮在列表上面 */
+  html[data-ui-theme="gilt"] .workspace-tabs-fold-panel {
+    position: absolute; left: 0; top: calc(100% + 6px); min-width: 200px; max-width: calc(100vw - 32px); padding: 5px;
+    border: 1px solid var(--fx-card-stroke); border-radius: 12px; background: var(--fx-l1-surface); box-shadow: var(--fx-elevation-popover);
+  }
+  html[data-ui-theme="gilt"] .workspace-tabs-fold-list { display: flex; flex-direction: column; gap: 1px; height: auto; width: 100%; padding: 0; border-radius: 0; background: transparent; }
+  html[data-ui-theme="gilt"] .workspace-tab-folded {
+    display: flex; width: 100%; height: 38px; align-items: center; gap: 8px; padding: 0 10px 0 12px;
+    border: 0; border-radius: 8px; background: transparent; box-shadow: none; color: var(--fx-text-secondary); font-size: 14px; font-weight: 500;
+  }
+  html[data-ui-theme="gilt"] .workspace-tab-folded .workspace-tab-count { color: var(--fx-gilt); font-size: 12px; font-weight: 500; }
+  html[data-ui-theme="gilt"] .workspace-tab-folded[data-state="active"] { background: var(--fx-l2-group); color: var(--fx-text); font-weight: 600; box-shadow: none; }
+  html[data-ui-theme="gilt"] .workspace-tab-folded > svg { color: var(--fx-text-muted); }
+  html[data-ui-theme="gilt"] .workspace-tab-folded[data-state="active"] > svg { color: var(--fx-gilt); }
+
+  /* 搜索框收成一枚圆钮：点进去（或已经打了字）才展开成输入框 */
+  html[data-ui-theme="gilt"] .workspace-filter { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; }
+  html[data-ui-theme="gilt"] .workspace-filter-options { flex: 1 1 100%; }
+  html[data-ui-theme="gilt"] .workspace-filter-search,
+  html[data-ui-theme="gilt"] .workspace-filter-action { margin: 0; flex: none; }
+  html[data-ui-theme="gilt"] :has(> .fx-search-pill) { flex: none; width: 36px; }
+  /* 展开时吃掉这一行剩下的宽度，筛选和「＋」仍留在同一行 */
+  html[data-ui-theme="gilt"] :has(> .fx-search-pill:focus),
+  html[data-ui-theme="gilt"] :has(> .fx-search-pill:not(:placeholder-shown)),
+  html[data-ui-theme="gilt"] .workspace-filter-search:has(.fx-search-pill:focus),
+  html[data-ui-theme="gilt"] .workspace-filter-search:has(.fx-search-pill:not(:placeholder-shown)) { flex: 1 1 0; min-width: 0; width: auto; }
+  /* 主机 / 链路页的那一行（搜索 + 新建）：几枚圆钮靠右，和规则页的筛选行一个样 */
+  html[data-ui-theme="gilt"] .workspace-tabs-folded + div { justify-content: flex-end; }
+  html[data-ui-theme="gilt"] .workspace-tabs-folded + div > .fx-row-action { margin-left: 0; }
+  html[data-ui-theme="gilt"] :has(> .fx-search-pill) > svg:first-child { left: 10px; }
+  html[data-ui-theme="gilt"] .fx-search-pill { width: 36px; padding-left: 36px !important; padding-right: 0 !important; color: transparent; caret-color: var(--fx-text); border-color: var(--fx-stroke-base) !important; }
+  html[data-ui-theme="gilt"] .fx-search-pill::placeholder { color: transparent; }
+  html[data-ui-theme="gilt"] .fx-search-pill:focus,
+  html[data-ui-theme="gilt"] .fx-search-pill:not(:placeholder-shown) { width: 100%; padding-right: 32px !important; color: var(--fx-text); }
+  html[data-ui-theme="gilt"] .fx-search-pill:focus::placeholder { color: var(--fx-text-muted); }
+  /* 新建 / 添加：只留「＋」，一枚主色圆钮；筛选那枚和它同尺寸 */
+  html[data-ui-theme="gilt"] .fx-row-action { width: 36px; min-width: 36px; height: 36px; padding: 0; gap: 0; font-size: 0; border-radius: 999px; }
+  html[data-ui-theme="gilt"] .fx-row-action > svg { width: 18px; height: 18px; }
+  html[data-ui-theme="gilt"] .fx-row-action > span { display: none; }
+  html[data-ui-theme="gilt"] .workspace-filter > .fx-filter-pill { width: 36px; height: 36px !important; border: 1px solid var(--fx-stroke-base); background: var(--fx-l1-surface); }
+}
+
+/* ── 设置页「界面主题」的预览 ───────────────────────────────── */
+/* 米白纸、两张平贴的小圆角卡纸带暖线、左上一截金线、底下一枚胶囊 */
+.fx-uitheme-swatch[data-theme="gilt"] { background: #f5f2ec; }
+.dark .fx-uitheme-swatch[data-theme="gilt"] { background: #131110; }
+.fx-uitheme-swatch[data-theme="gilt"]::before { content: ""; position: absolute; left: 12px; top: 5px; width: 18px; height: 1.5px; background: #b08d57; }
+.dark .fx-uitheme-swatch[data-theme="gilt"]::before { background: #c9a66b; }
+.fx-uitheme-swatch[data-theme="gilt"] > i { border-radius: 4px; border-color: rgb(122 95 50 / 26%); background: #fffdf9; box-shadow: none; }
+.dark .fx-uitheme-swatch[data-theme="gilt"] > i { border-color: rgb(201 166 107 / 28%); background: #1c1917; box-shadow: none; }
+.fx-uitheme-swatch[data-theme="gilt"] > i:first-child { margin-top: 4px; }
+.fx-uitheme-swatch[data-theme="gilt"] > b { border-color: rgb(176 141 87 / 40%); background: rgb(255 253 249 / 90%); }
+.dark .fx-uitheme-swatch[data-theme="gilt"] > b { border-color: rgb(201 166 107 / 32%); background: rgb(28 25 23 / 90%); }

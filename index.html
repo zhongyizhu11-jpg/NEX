@@ -20,7 +20,7 @@
           document.documentElement.classList.add(resolved === "dark" ? "dark" : "light");
           // 界面主题（设置 › 个性化 › 界面主题）：上次选的记在本地，开机先挂上，免得首屏从经典闪到极光
           var uiTheme = window.localStorage.getItem("forwardx-ui-theme");
-          if (uiTheme === "aurora") document.documentElement.setAttribute("data-ui-theme", uiTheme);
+          if (uiTheme === "aurora" || uiTheme === "gilt") document.documentElement.setAttribute("data-ui-theme", uiTheme);
         } catch (error) {
           document.documentElement.classList.add("fx-booting", "light");
         }
@@ -32,6 +32,8 @@
       html.fx-booting.dark, html.fx-booting.dark body { background: #1e1e1e; }
       html.fx-booting[data-ui-theme="aurora"], html.fx-booting[data-ui-theme="aurora"] body { background: #f4f6fb; }
       html.fx-booting.dark[data-ui-theme="aurora"], html.fx-booting.dark[data-ui-theme="aurora"] body { background: #0f1117; }
+      html.fx-booting[data-ui-theme="gilt"], html.fx-booting[data-ui-theme="gilt"] body { background: #f5f2ec; }
+      html.fx-booting.dark[data-ui-theme="gilt"], html.fx-booting.dark[data-ui-theme="gilt"] body { background: #131110; }
       #fx-boot { position: fixed; inset: 0 0 auto 0; height: 2px; overflow: hidden; opacity: 0; animation: fx-boot-in 0.2s ease 0.25s forwards; }
       #fx-boot::after { content: ""; position: absolute; inset: 0; width: 40%; border-radius: 2px; background: linear-gradient(90deg, #6cc4f5, #3ea4ec); animation: fx-boot-run 1.1s ease-in-out infinite; }
       @keyframes fx-boot-in { to { opacity: 1; } }

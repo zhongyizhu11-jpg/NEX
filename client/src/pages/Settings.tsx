@@ -3819,8 +3819,8 @@ function PersonalizationSettingsSection() {
 
       {/*
         界面主题：整套界面的气质（底、卡、外壳、控件形状一起换），是配色 / 底色 / 卡片风格底下那一层。
-        两枚预览是 CSS 画的小手机屏（.fx-uitheme-swatch，见 theme-aurora.css），经典是灰底白卡，
-        极光是柔光底玻璃卡；预览自带颜色，和当前选的是哪个无关。
+        三枚预览是 CSS 画的小手机屏（.fx-uitheme-swatch，见 theme-aurora.css / theme-gilt.css），经典是灰底白卡，
+        极光是柔光底玻璃卡，墨金是米白纸上两张带暖线的奶白卡加一截金线；预览自带颜色，和当前选的是哪个无关。
       */}
       <Card className="border-border bg-card">
         <CardHeader className="gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -3844,7 +3844,7 @@ function PersonalizationSettingsSection() {
           </Button>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-2 gap-3 sm:max-w-xl">
+          <div className="grid grid-cols-2 gap-3 sm:max-w-2xl sm:grid-cols-3">
             {PERSONALIZATION_UI_THEMES.map((theme) => {
               const active = uiTheme === theme.id;
               return (

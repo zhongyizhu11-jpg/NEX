@@ -62,7 +62,7 @@ export function ListSection({
         白底、大圆角、一圈弱线 —— 页面是白纸，分组块靠这条 1px 的弱线成形，
         和工作区里的卡片同一种线。行自己不是面，行与行之间只有分隔线。
       */}
-      <div className="overflow-hidden rounded-[var(--fx-radius-surface)] border border-[var(--fx-stroke-weak)] bg-[var(--fx-l1-surface)]">
+      <div className="fx-grouped-list overflow-hidden rounded-[var(--fx-radius-surface)] border border-[var(--fx-stroke-weak)] bg-[var(--fx-l1-surface)]">
         {children}
       </div>
       {footer ? (
