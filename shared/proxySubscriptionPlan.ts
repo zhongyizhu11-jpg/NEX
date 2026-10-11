@@ -7,7 +7,7 @@
  * 这里只做纯计算，不碰数据库；调用方负责把行取出来传进来。
  */
 
-import { getHostEntryAddress, hostNeverConnected, type HostEntryAddressSource } from "./hostEntryAddress";
+import { getHostEntryAddress, getHostEntryAddresses, hostAutoIpv4, hostAutoIpv6, hostNeverConnected, type HostEntryAddressSource } from "./hostEntryAddress";
 import { publishedRuleEntryDomain } from "./ruleEntryDomain";
 import { proxyNodeBindingTruth } from "./proxyNodeAutoBind";
 import {
@@ -312,9 +312,18 @@ export function buildProxySubscriptionPlan(input: BuildProxySubscriptionPlanInpu
   for (const rule of input.rules) {
     if (bool(rule.pendingDelete)) continue;
     const host = hostsById.get(Number(rule.hostId || 0));
-    const address = getHostEntryAddress(host);
     const port = toPort(rule.sourcePort);
-    if (address && port) ownForwardEntries.add(entryKey(address, port));
+    /*
+      这台机器**所有**叫得出的地址都算入口，不只是订阅里用的那个首选地址。
+      第一跳的目标是他自己手填的：机器配了入口域名或 DDNS 时，他照样可能写的是
+      机器的 IP（或 IPv6）—— 只认首选地址就会把这条好好的串接报成「指向已经变了」。
+    */
+    if (port) {
+      for (const entry of getHostEntryAddresses(host)) ownForwardEntries.add(entryKey(entry.value, port));
+      for (const raw of [host?.ip, host?.ipv4, host?.ipv6, hostAutoIpv4(host), hostAutoIpv6(host)]) {
+        if (text(raw)) ownForwardEntries.add(entryKey(raw, port));
+      }
+    }
     // 第一跳的目标可能写的是第二跳的专属域名，同样算自己的入口。
     const domain = publishedRuleEntryDomain(rule, input.ruleEntryDomainSuffix);
     if (domain && port) ownForwardEntries.add(entryKey(domain, port));
