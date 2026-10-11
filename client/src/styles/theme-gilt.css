@@ -18,6 +18,8 @@
             调进这圈线里，正常的卡只有暖线。
     3. 字   页面标题、卡标题、统计大数字用衬线（New York / Songti / Georgia）；标题下一截 28px 的
             金线。正文仍是无衬线。
+    5. 顶部 手机上分类条折成一枚「当前分类 ⌄」的小按钮（点开是一列下拉），搜索收成圆钮、新建只留「＋」，
+            三样排在同一行；页头的流量走势拉成通栏长线。
     4. 控件 分段控件不再是灰槽 + 蓝块：**一行文字标签，选中项墨字 + 金色下划线**，整行底下一道细线
             （杂志栏目导航）。筛选 chip 从药丸改成小圆角方标签（8px），未选中只有一圈线，选中墨色实心
             （深色下金色实心）。主按钮、底部胶囊仍是主色渐变（跟着「默认配色」换）—— 蓝 / 粉 / 绿配
@@ -209,6 +211,73 @@ html[data-ui-theme="gilt"] .workspace-layout [data-sidebar="sidebar"] { border-r
     border-color: rgb(201 166 107 / 28%);
     box-shadow: inset 0 1px 0 rgb(255 255 255 / 5%), 0 18px 40px -16px rgb(0 0 0 / 80%), 0 2px 6px rgb(0 0 0 / 40%);
   }
+}
+
+/* ── 5. 顶上那一块：折叠的分类条、通栏长走势、图标化的搜索和新建（2026-10-11 用户要的）── */
+/* 页头右边那条小走势拉长：手机上通栏（标题下面自己占一行），桌面上 220px */
+html[data-ui-theme="gilt"] .workspace-header-aside .fx-sparkline { width: 220px; height: 26px; }
+@media (max-width: 767px) {
+  html[data-ui-theme="gilt"] .workspace-header-aside { flex: 1 1 100%; align-items: stretch; padding-top: 4px; }
+  html[data-ui-theme="gilt"] .workspace-header-aside .fx-sparkline { width: 100%; height: 30px; }
+  html[data-ui-theme="gilt"] .workspace-header-aside > span { text-align: right; }
+
+  /*
+    折叠的分类条（sliding-tabs.tsx 的 FoldedTabsList）浮在左边，搜索 / 筛选 / 新建那一行
+    靠在它右边同一行 —— 那一行是 flex / grid（BFC），自己会躲开浮动。包着它的 Radix Tabs
+    根节点高度是 0，把它从 space-y 里拿掉，否则下一行被它的外边距顶下去 12px。
+  */
+  html[data-ui-theme="gilt"] :has(> .workspace-tabs-folded) { margin-block: 0 !important; }
+  html[data-ui-theme="gilt"] .workspace-tabs-folded { position: relative; float: left; height: 36px; margin-right: 10px; z-index: var(--fx-z-popover); }
+  html[data-ui-theme="gilt"] .workspace-tabs-fold {
+    display: inline-flex; align-items: center; gap: 6px; height: 36px; max-width: 60vw; padding: 0 10px 0 13px;
+    border: 1px solid var(--fx-stroke-base); border-radius: 10px; background: var(--fx-l1-surface);
+    color: var(--fx-text); font-size: 14px; font-weight: 600; line-height: 1; white-space: nowrap;
+  }
+  html[data-ui-theme="gilt"] .workspace-tabs-fold:active { background: var(--fx-pressed); }
+  html[data-ui-theme="gilt"] .workspace-tabs-fold-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  html[data-ui-theme="gilt"] .workspace-tabs-fold .workspace-tab-count { color: var(--fx-gilt); font-size: 12px; font-weight: 500; }
+  html[data-ui-theme="gilt"] .workspace-tabs-fold-chevron { color: var(--fx-text-muted); transition: transform .15s; }
+  html[data-ui-theme="gilt"] .workspace-tabs-folded[data-open] .workspace-tabs-fold-chevron { transform: rotate(180deg); }
+  /* 点开的那列分类：一张小卡纸浮在列表上面 */
+  html[data-ui-theme="gilt"] .workspace-tabs-fold-panel {
+    position: absolute; left: 0; top: calc(100% + 6px); min-width: 200px; max-width: calc(100vw - 32px); padding: 5px;
+    border: 1px solid var(--fx-card-stroke); border-radius: 12px; background: var(--fx-l1-surface); box-shadow: var(--fx-elevation-popover);
+  }
+  html[data-ui-theme="gilt"] .workspace-tabs-fold-list { display: flex; flex-direction: column; gap: 1px; height: auto; width: 100%; padding: 0; border-radius: 0; background: transparent; }
+  html[data-ui-theme="gilt"] .workspace-tab-folded {
+    display: flex; width: 100%; height: 38px; align-items: center; gap: 8px; padding: 0 10px 0 12px;
+    border: 0; border-radius: 8px; background: transparent; box-shadow: none; color: var(--fx-text-secondary); font-size: 14px; font-weight: 500;
+  }
+  html[data-ui-theme="gilt"] .workspace-tab-folded .workspace-tab-count { color: var(--fx-gilt); font-size: 12px; font-weight: 500; }
+  html[data-ui-theme="gilt"] .workspace-tab-folded[data-state="active"] { background: var(--fx-l2-group); color: var(--fx-text); font-weight: 600; box-shadow: none; }
+  html[data-ui-theme="gilt"] .workspace-tab-folded > svg { color: var(--fx-text-muted); }
+  html[data-ui-theme="gilt"] .workspace-tab-folded[data-state="active"] > svg { color: var(--fx-gilt); }
+
+  /* 搜索框收成一枚圆钮：点进去（或已经打了字）才展开成输入框 */
+  html[data-ui-theme="gilt"] .workspace-filter { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; }
+  html[data-ui-theme="gilt"] .workspace-filter-options { flex: 1 1 100%; }
+  html[data-ui-theme="gilt"] .workspace-filter-search,
+  html[data-ui-theme="gilt"] .workspace-filter-action { margin: 0; flex: none; }
+  html[data-ui-theme="gilt"] :has(> .fx-search-pill) { flex: none; width: 36px; }
+  /* 展开时吃掉这一行剩下的宽度，筛选和「＋」仍留在同一行 */
+  html[data-ui-theme="gilt"] :has(> .fx-search-pill:focus),
+  html[data-ui-theme="gilt"] :has(> .fx-search-pill:not(:placeholder-shown)),
+  html[data-ui-theme="gilt"] .workspace-filter-search:has(.fx-search-pill:focus),
+  html[data-ui-theme="gilt"] .workspace-filter-search:has(.fx-search-pill:not(:placeholder-shown)) { flex: 1 1 0; min-width: 0; width: auto; }
+  /* 主机 / 链路页的那一行（搜索 + 新建）：几枚圆钮靠右，和规则页的筛选行一个样 */
+  html[data-ui-theme="gilt"] .workspace-tabs-folded + div { justify-content: flex-end; }
+  html[data-ui-theme="gilt"] .workspace-tabs-folded + div > .fx-row-action { margin-left: 0; }
+  html[data-ui-theme="gilt"] :has(> .fx-search-pill) > svg:first-child { left: 10px; }
+  html[data-ui-theme="gilt"] .fx-search-pill { width: 36px; padding-left: 36px !important; padding-right: 0 !important; color: transparent; caret-color: var(--fx-text); border-color: var(--fx-stroke-base) !important; }
+  html[data-ui-theme="gilt"] .fx-search-pill::placeholder { color: transparent; }
+  html[data-ui-theme="gilt"] .fx-search-pill:focus,
+  html[data-ui-theme="gilt"] .fx-search-pill:not(:placeholder-shown) { width: 100%; padding-right: 32px !important; color: var(--fx-text); }
+  html[data-ui-theme="gilt"] .fx-search-pill:focus::placeholder { color: var(--fx-text-muted); }
+  /* 新建 / 添加：只留「＋」，一枚主色圆钮；筛选那枚和它同尺寸 */
+  html[data-ui-theme="gilt"] .fx-row-action { width: 36px; min-width: 36px; height: 36px; padding: 0; gap: 0; font-size: 0; border-radius: 999px; }
+  html[data-ui-theme="gilt"] .fx-row-action > svg { width: 18px; height: 18px; }
+  html[data-ui-theme="gilt"] .fx-row-action > span { display: none; }
+  html[data-ui-theme="gilt"] .workspace-filter > .fx-filter-pill { width: 36px; height: 36px !important; border: 1px solid var(--fx-stroke-base); background: var(--fx-l1-surface); }
 }
 
 /* ── 设置页「界面主题」的预览 ───────────────────────────────── */
