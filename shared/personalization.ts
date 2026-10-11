@@ -450,12 +450,17 @@ export function normalizePersonalizationCardStyle(value: unknown): Personalizati
             （白 72% + 白高光边 + 带一点主色的软影，**不做 backdrop 模糊**，滚动不卡），
             分段控件、搜索框、按钮全部改成胶囊，顶栏和底部标签栏更透。深色是深蓝黑底上压暗的同一组光。
 
-  画法全在 client/src/styles/theme-aurora.css 里按 <html data-ui-theme> 选；这里只管 id 和文案。
+    paper   留白 —— 没有卡：整页一张白纸（深色是纯黑），每条内容靠顶上一道 1px 细线分开（手机上满幅），
+            字号撑层次（手机大标题 34px + 主色短下划线、读数 28px），分段控件是文字 + 主色下划线，
+            筛选 chip 选中态是墨色实心，底部标签栏贴底铺满不悬浮。杂志版面 / 干净表格的气质。
+
+  画法全在 client/src/styles/theme-aurora.css / theme-paper.css 里按 <html data-ui-theme> 选；这里只管 id 和文案。
   存的是 id；别的值一律回到 classic。
 */
 export const PERSONALIZATION_UI_THEMES = [
   { id: "classic", name: "经典", description: "浅灰底托白卡、细线分区、天蓝渐变控件；深色是炭灰。现在这套。" },
   { id: "aurora", name: "极光", description: "彩色柔光底 + 半透明玻璃卡 + 胶囊控件，顶栏和标签栏更通透；深色是深蓝黑底上的微光。" },
+  { id: "paper", name: "留白", description: "没有卡片：白纸上只用细线分区、大字撑层次，标签栏贴底不悬浮；深色是纯黑。" },
 ] as const;
 
 export type PersonalizationUiThemeId = typeof PERSONALIZATION_UI_THEMES[number]["id"];
