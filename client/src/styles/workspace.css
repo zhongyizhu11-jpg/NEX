@@ -1482,6 +1482,20 @@ html[data-personalization-background="image"] .auth-divider-label, html[data-per
 }
 .fx-ios-switch[aria-checked="true"] .fx-ios-switch-knob { transform: translateX(20px); }
 
+/*
+  滚动区边缘的渐隐（ScrollFade）：滚到中间时上下各淡出 18px，说明「还有内容」，
+  也不再出现半行字被标题硬切掉的样子。顶到头 / 到底时对应那一边不淡 —— 第一张卡
+  的上边线和最后一行字不能被吃掉。mask 不挡点击，也跟着容器的圆角走。
+*/
+.fx-scroll-fade {
+  --fx-fade-top: 0px;
+  --fx-fade-bottom: 0px;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 var(--fx-fade-top), #000 calc(100% - var(--fx-fade-bottom)), transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 var(--fx-fade-top), #000 calc(100% - var(--fx-fade-bottom)), transparent 100%);
+}
+.fx-scroll-fade[data-fade-top="true"] { --fx-fade-top: 18px; }
+.fx-scroll-fade[data-fade-bottom="true"] { --fx-fade-bottom: 18px; }
+
 /* ═══════════════════════════════════════════════════════════════════════
    手机上的对话框是从底部滑上来的 Sheet
    ═══════════════════════════════════════════════════════════════════════

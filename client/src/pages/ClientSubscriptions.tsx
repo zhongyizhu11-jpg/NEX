@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { ScrollFade } from "@/components/ui/scroll-fade";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -1436,7 +1437,7 @@ export default function ClientSubscriptionsPage() {
               ) : null}
             </DialogDescription>
           </DialogHeader>
-          <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+          <ScrollFade className="min-h-0 flex-1 overflow-y-auto pr-1">
             {/*
               客户端测延迟只测到入口，后面断了照样显示几十毫秒，负载均衡组还会把连接分给它。
               开着的话，端到端探测连续不通的转发暂时不放进订阅，通了自动回来。
@@ -1731,7 +1732,7 @@ export default function ClientSubscriptionsPage() {
                 )}
               </div>
             )}
-          </div>
+          </ScrollFade>
           <DialogFooter className="shrink-0 border-t pt-3">
             <Button variant="outline" onClick={() => setPreviewOpen(false)}>关闭</Button>
           </DialogFooter>
