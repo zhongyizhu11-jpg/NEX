@@ -54,7 +54,8 @@ export function SettingRow({
         </span>
         {control ? <span className="flex shrink-0 items-center gap-2">{control}</span> : null}
       </Row>
-      {children}
+      {/* fx-setting-sub：玫瑰主题下这一段往里缩、左边一条细竖线挂在开关下面（见 theme-rose.css），别的主题下没有样式 */}
+      {children ? <div className="fx-setting-sub flex min-w-0 flex-col gap-3">{children}</div> : null}
     </div>
   );
 }

@@ -1874,3 +1874,24 @@ button.fx-rule-tag:hover { filter: brightness(.96); }
 .fx-overview-swatch { display: inline-block; width: 14px; height: 2.5px; margin-right: 5px; border-radius: 2px; vertical-align: middle; background: linear-gradient(90deg, color-mix(in srgb, var(--fx-primary-fill) 62%, white), var(--fx-primary-fill)); }
 .fx-overview-swatch[data-tone="warn"] { background: repeating-linear-gradient(90deg, var(--fx-warn) 0 3px, transparent 3px 6px); }
 .fx-overview-swatch[data-tone="down"] { background: repeating-linear-gradient(90deg, var(--fx-down) 0 3px, transparent 3px 6px); }
+
+/*
+  换界面主题 / 深浅色那一下淡过去（0.5s），不是硬切。personalizationTheme.ts 只在「换」的那一下给 <html>
+  挂 fx-theme-fading，0.6 秒后摘掉；平时任何元素都不带这组过渡。只过渡颜色类属性，不碰 transform / opacity，
+  不影响别的动画。参考 Rosélune 面板 body 上的 .5s 过渡（2026-10-11）。
+*/
+html.fx-theme-fading,
+html.fx-theme-fading *,
+html.fx-theme-fading *::before,
+html.fx-theme-fading *::after {
+  transition-property: background-color, color, border-color, fill, stroke, box-shadow !important;
+  transition-duration: .5s !important;
+  transition-timing-function: cubic-bezier(.2, .8, .2, 1) !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  html.fx-theme-fading, html.fx-theme-fading *, html.fx-theme-fading *::before, html.fx-theme-fading *::after { transition: none !important; }
+}
+
+/* 界面主题小圆点（顶栏调色盘、设置里的主题卡）：底是那套的页面底色，右上一点是强调色 */
+.fx-theme-dot { display: inline-block; flex: none; width: 18px; height: 18px; border-radius: 999px; background: radial-gradient(circle at 66% 34%, var(--sw-a) 0 30%, transparent 31%), var(--sw-b); box-shadow: inset 0 0 0 1px rgb(128 128 128 / 35%); }
+.fx-theme-dot-auto { background: conic-gradient(#3ea4ec 0 25%, #a78bfa 0 50%, #b08d57 0 75%, #c13a66 0); }

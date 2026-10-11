@@ -112,7 +112,9 @@ import {
   Plus,
 } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { useMemo, useRef, useState, useEffect } from "react";
+import { useCallback, useMemo, useRef, useState, useEffect } from "react";
+import { SaveDockBar, SaveDockProvider, useSaveDockActive, useSaveDockItem } from "@/components/settings/SaveDock";
+import { UiThemeDot } from "@/components/UiThemeQuickSwitch";
 import { toast } from "sonner";
 import { useLocation } from "wouter";
 import { BRAND_LOGO_MAX_BYTES } from "@shared/avatar";
@@ -833,30 +835,38 @@ function SettingsContent() {
               </div>
             ) : null}
 
-            <TabsContent value="system" className="space-y-4">
-              <SystemInfoSection />
-            </TabsContent>
+            {/*
+              fx-settings-pane：玫瑰主题下这几页改成「编号分节」（每张卡去掉框，变成 01、02… 一节一节往下，
+              见 theme-rose.css），卡里各自的保存按钮交给底下那条贴底保存栏（SaveDockBar）。别的主题下不变。
+            */}
+            <SaveDockProvider>
+              <TabsContent value="system" className="fx-settings-pane space-y-4">
+                <SystemInfoSection />
+              </TabsContent>
 
-            <TabsContent value="telegram" className="space-y-4">
-              <TelegramBotSettingsCard />
-              <DeepSeekSettingsCard />
-            </TabsContent>
+              <TabsContent value="telegram" className="fx-settings-pane space-y-4">
+                <TelegramBotSettingsCard />
+                <DeepSeekSettingsCard />
+              </TabsContent>
 
-            <TabsContent value="email" className="space-y-4">
-              <EmailSettingsContent />
-            </TabsContent>
+              <TabsContent value="email" className="fx-settings-pane space-y-4">
+                <EmailSettingsContent />
+              </TabsContent>
 
-            <TabsContent value="personalization" className="space-y-4">
-              <PersonalizationSettingsSection />
-            </TabsContent>
+              <TabsContent value="personalization" className="fx-settings-pane space-y-4">
+                <PersonalizationSettingsSection />
+              </TabsContent>
 
-            <TabsContent value="backup" className="space-y-4">
-              <BackupRestoreSection panelUrl={panelUrl} />
-            </TabsContent>
+              <TabsContent value="backup" className="fx-settings-pane space-y-4">
+                <BackupRestoreSection panelUrl={panelUrl} />
+              </TabsContent>
 
-            <TabsContent value="logs" className="space-y-4">
-              <PanelLogsSection />
-            </TabsContent>
+              <TabsContent value="logs" className="fx-settings-pane space-y-4">
+                <PanelLogsSection />
+              </TabsContent>
+
+              <SaveDockBar />
+            </SaveDockProvider>
           </div>
         </div>
       </Tabs>
@@ -2425,20 +2435,20 @@ function TelegramBotSettingsCard() {
     onError: (err) => toast.error(err.message || "测试发送失败"),
   });
 
-  const handleSaveTelegram = () => {
+  const handleSaveTelegram = (): Promise<boolean> | boolean => {
     const canSubmitToken = !settings?.telegram?.configured && settings?.telegram?.tokenSource !== "env";
     const nextToken = canSubmitToken ? telegramBotTokenInput.trim() : "";
     const hasTelegramToken = !!settings?.telegram?.configured || settings?.telegram?.tokenSource === "env" || !!nextToken;
     const remindersReady = telegramEnabled && !!settings?.telegram?.configured;
     if (telegramEnabled && !hasTelegramToken) {
       toast.error("请先填写 Bot Token");
-      return;
+      return false;
     }
     if ((telegramExpiryReminder || telegramTrafficReminder || telegramHostStatusNotify) && !remindersReady) {
       toast.error("请先保存并启用 Telegram 机器人后再开启提醒");
-      return;
+      return false;
     }
-    updateSettingsMutation.mutate({
+    const saving = updateSettingsMutation.mutateAsync({
       telegram: {
         enabled: telegramEnabled,
         botToken: nextToken || undefined,
@@ -2448,9 +2458,43 @@ function TelegramBotSettingsCard() {
         trafficReminderThreshold: telegramTrafficThreshold,
         expiryReminderDays,
       },
-    });
+    }).then(() => true, () => false);
     setTelegramBotTokenInput("");
+    return saving;
   };
+
+  /* 玫瑰主题下的贴底保存栏（SaveDock.tsx）：机器人这一张登记自己 */
+  const telegramSaved = settings ? (() => {
+    const ready = !!settings.telegram?.enabled && !!settings.telegram?.configured;
+    return [
+      !!settings.telegram?.enabled,
+      ready && !!settings.telegram?.expiryReminder,
+      ready && !!settings.telegram?.trafficReminder,
+      ready && !!settings.telegram?.hostStatusNotify,
+      Number(settings.telegram?.trafficReminderThreshold || 20),
+      String(settings.telegram?.expiryReminderDays || "7,3,1"),
+      "",
+    ];
+  })() : null;
+  const telegramDraft = [telegramEnabled, telegramExpiryReminder, telegramTrafficReminder, telegramHostStatusNotify, Number(telegramTrafficThreshold), expiryReminderDays, telegramBotTokenInput.trim()];
+  useSaveDockItem({
+    id: "telegram.bot",
+    label: "Telegram 机器人",
+    dirty: !!telegramSaved && JSON.stringify(telegramDraft) !== JSON.stringify(telegramSaved),
+    pending: updateSettingsMutation.isPending,
+    save: handleSaveTelegram,
+    reset: () => {
+      if (!settings) return;
+      const ready = !!settings.telegram?.enabled && !!settings.telegram?.configured;
+      setTelegramEnabled(!!settings.telegram?.enabled);
+      setTelegramExpiryReminder(ready && !!settings.telegram?.expiryReminder);
+      setTelegramTrafficReminder(ready && !!settings.telegram?.trafficReminder);
+      setTelegramHostStatusNotify(ready && !!settings.telegram?.hostStatusNotify);
+      setTelegramTrafficThreshold(Number(settings.telegram?.trafficReminderThreshold || 20));
+      setExpiryReminderDays(String(settings.telegram?.expiryReminderDays || "7,3,1"));
+      setTelegramBotTokenInput("");
+    },
+  });
 
   const handleClearTelegramToken = () => {
     updateSettingsMutation.mutate({
@@ -2623,7 +2667,7 @@ function TelegramBotSettingsCard() {
               </AlertDescription>
             </Alert>
             <div className="flex flex-wrap gap-2">
-              <Button onClick={handleSaveTelegram} disabled={updateSettingsMutation.isPending}>
+              <Button data-dock-save onClick={handleSaveTelegram} disabled={updateSettingsMutation.isPending}>
                 保存 Telegram 配置
               </Button>
               <Button
@@ -3222,6 +3266,7 @@ function PersonalizationSettingsSection() {
   const utils = trpc.useUtils();
   const confirmDialog = useConfirmDialog();
   const { data: settings, isLoading } = trpc.system.getSettings.useQuery();
+  const personalizationSettingsData = settings;
   const logoInputRef = useRef<HTMLInputElement | null>(null);
   const backgroundInputRef = useRef<HTMLInputElement | null>(null);
   const customSidebarIconInputRef = useRef<HTMLInputElement | null>(null);
@@ -3252,8 +3297,7 @@ function PersonalizationSettingsSection() {
   const [customSidebarDialogOpen, setCustomSidebarDialogOpen] = useState(false);
   const [customSidebarDraft, setCustomSidebarDraft] = useState<CustomSidebarPageDraft>(() => createCustomSidebarPageDraft());
 
-  useEffect(() => {
-    if (!settings) return;
+  const loadPersonalizationFromSettings = useCallback((settings: NonNullable<typeof personalizationSettingsData>) => {
     const nextBackground = normalizePersonalizationBackgroundConfig(
       (settings as any).personalizationBackgroundConfig || settings.personalizationBackground,
     );
@@ -3280,7 +3324,11 @@ function PersonalizationSettingsSection() {
     setBackgroundUrlInput(nextBackground.url || "");
     setBackgroundUrlType(nextBackground.urlType || "image");
     setCustomSidebarPages(normalizeCustomSidebarPages((settings as any).customSidebarPages));
-  }, [settings]);
+  }, []);
+
+  useEffect(() => {
+    if (settings) loadPersonalizationFromSettings(settings);
+  }, [settings, loadPersonalizationFromSettings]);
 
   const updateSettingsMutation = trpc.system.updateSettings.useMutation({
     onSuccess: async () => {
@@ -3329,14 +3377,18 @@ function PersonalizationSettingsSection() {
   const pageTintDirty = pageTint !== savedPageTint;
   const cardStyleDirty = cardStyle !== savedCardStyle;
   const uiThemeDirty = uiTheme !== savedUiTheme;
+  /*
+    返回「存成了没有」，给玫瑰主题下的贴底保存栏用（它一项一项按顺序存）。正在存的判断看 ref 不看
+    personalizationSaving：栏连着存两项时，第二项拿到的还是上一次渲染的 isPending。
+  */
   const savePersonalizationSection = (
     key: PersonalizationSaveKey,
     payload: Parameters<typeof updateSettingsMutation.mutate>[0],
-  ) => {
-    if (personalizationSaving) return;
+  ): Promise<boolean> => {
+    if (savingSectionRef.current !== null) return Promise.resolve(false);
     savingSectionRef.current = key;
     setSavingSection(key);
-    updateSettingsMutation.mutate(payload);
+    return updateSettingsMutation.mutateAsync(payload).then(() => true, () => false);
   };
 
   const updateBackground = (patch: Partial<PersonalizationBackgroundConfig>) => {
@@ -3484,15 +3536,15 @@ function PersonalizationSettingsSection() {
   };
 
   const handleSaveTitle = () => {
-    savePersonalizationSection("title", { siteTitle: siteTitleInput.trim().slice(0, 64) });
+    return savePersonalizationSection("title", { siteTitle: siteTitleInput.trim().slice(0, 64) });
   };
 
   const handleSaveLogo = () => {
     if (siteLogoDataUrl && imageDataUrlSize(siteLogoDataUrl) > BRAND_LOGO_MAX_BYTES) {
       toast.error("Logo 超过 100KB，请重新上传");
-      return;
+      return false;
     }
-    savePersonalizationSection("logo", { siteLogoDataUrl });
+    return savePersonalizationSection("logo", { siteLogoDataUrl });
   };
 
   const handleThemePresetSelect = (theme: PersonalizationThemePresetId) => {
@@ -3500,11 +3552,11 @@ function PersonalizationSettingsSection() {
   };
 
   const handleSaveThemePreset = () => {
-    savePersonalizationSection("theme", { personalizationTheme });
+    return savePersonalizationSection("theme", { personalizationTheme });
   };
 
   const handleSavePageTint = () => {
-    savePersonalizationSection("pageTint", { personalizationPageTint: pageTint });
+    return savePersonalizationSection("pageTint", { personalizationPageTint: pageTint });
   };
 
   const handleCustomTintChange = (value: string) => {
@@ -3513,11 +3565,11 @@ function PersonalizationSettingsSection() {
   };
 
   const handleSaveCardStyle = () => {
-    savePersonalizationSection("cardStyle", { personalizationCardStyle: cardStyle });
+    return savePersonalizationSection("cardStyle", { personalizationCardStyle: cardStyle });
   };
 
   const handleSaveUiTheme = () => {
-    savePersonalizationSection("uiTheme", { personalizationUiTheme: uiTheme });
+    return savePersonalizationSection("uiTheme", { personalizationUiTheme: uiTheme });
   };
 
   const handleSaveBackground = () => {
@@ -3525,14 +3577,14 @@ function PersonalizationSettingsSection() {
     if (nextBackground.source === "url") {
       if (!nextBackground.url.trim()) {
         toast.error("请先应用背景链接");
-        return;
+        return false;
       }
       if (!/^https?:\/\//i.test(nextBackground.url.trim())) {
         toast.error("背景链接必须以 http:// 或 https:// 开头");
-        return;
+        return false;
       }
     }
-    savePersonalizationSection("background", { personalizationBackground: nextBackground });
+    return savePersonalizationSection("background", { personalizationBackground: nextBackground });
   };
 
   const handleResetBackground = () => {
@@ -3545,12 +3597,67 @@ function PersonalizationSettingsSection() {
   };
 
   const handleSaveHomepage = () => {
-    savePersonalizationSection("homepage", {
+    return savePersonalizationSection("homepage", {
       homepageEnabled,
       homepageCustomEnabled,
       homepageHtml,
     });
   };
+
+  /*
+    「点一下就试看」（参考 Rosélune 设置页的 Look：Click one to try it here）：界面主题、配色、页面底色、
+    卡片风格选了就先在这一页挂上看效果，不用先存；存了才对所有人生效。离开设置页没存的话，退回到
+    存着的那套（PersonalizationLayer 的规矩，含顶栏给自己选的那套）。
+  */
+  const savedLookRef = useRef({ theme: savedPersonalizationTheme, pageTint: savedPageTint, cardStyle: savedCardStyle, uiTheme: savedUiTheme });
+  savedLookRef.current = { theme: savedPersonalizationTheme, pageTint: savedPageTint, cardStyle: savedCardStyle, uiTheme: savedUiTheme };
+  const previewTouchedRef = useRef(false);
+  useEffect(() => {
+    if (!settings) return;
+    const saved = savedLookRef.current;
+    const changed = personalizationTheme !== saved.theme || pageTint !== saved.pageTint || cardStyle !== saved.cardStyle || uiTheme !== saved.uiTheme;
+    if (!changed && !previewTouchedRef.current) return;
+    previewTouchedRef.current = changed;
+    applyPersonalizationTheme(personalizationTheme);
+    // 试看的是站点默认那一套：绕过顶栏给自己选的；什么都没改时回到平常的规矩
+    applyPersonalizationSurface({ pageTint, cardStyle, uiTheme, ignoreOverride: changed });
+  }, [settings, personalizationTheme, pageTint, cardStyle, uiTheme, savedPersonalizationTheme, savedPageTint, savedCardStyle, savedUiTheme]);
+  useEffect(() => () => {
+    if (!previewTouchedRef.current) return;
+    const saved = savedLookRef.current;
+    applyPersonalizationTheme(saved.theme);
+    applyPersonalizationSurface({ pageTint: saved.pageTint, cardStyle: saved.cardStyle, uiTheme: saved.uiTheme });
+  }, []);
+
+  /* 玫瑰主题下的贴底保存栏：每一块登记自己（见 SaveDock.tsx）。自定义菜单在弹窗里存，不登记。 */
+  const dockActive = useSaveDockActive();
+  const resetPersonalizationDraft = () => { if (settings) loadPersonalizationFromSettings(settings); };
+  const savedBackgroundJson = settings
+    ? JSON.stringify(normalizePersonalizationBackgroundConfig((settings as any).personalizationBackgroundConfig || settings.personalizationBackground))
+    : "";
+  const personalizationDockItems: Array<{ id: PersonalizationSaveKey; label: string; dirty: boolean; save: () => Promise<boolean> | boolean }> = [
+    { id: "title", label: "网站标题", dirty: !!settings && siteTitleInput.trim().slice(0, 64) !== resolveSiteTitle(settings.siteTitle), save: handleSaveTitle },
+    { id: "logo", label: "Logo", dirty: !!settings && siteLogoDataUrl !== (settings.siteLogoDataUrl || ""), save: handleSaveLogo },
+    { id: "uiTheme", label: "界面主题", dirty: uiThemeDirty, save: handleSaveUiTheme },
+    { id: "theme", label: "配色", dirty: themeDirty, save: handleSaveThemePreset },
+    { id: "pageTint", label: "页面底色", dirty: pageTintDirty, save: handleSavePageTint },
+    { id: "cardStyle", label: "卡片风格", dirty: cardStyleDirty, save: handleSaveCardStyle },
+    { id: "background", label: "背景", dirty: !!settings && JSON.stringify(normalizePersonalizationBackgroundConfig(backgroundConfig)) !== savedBackgroundJson, save: handleSaveBackground },
+    {
+      id: "homepage",
+      label: "首页",
+      dirty: !!settings && (
+        homepageEnabled !== (settings.homepageEnabled ?? true)
+        || homepageCustomEnabled !== !!settings.homepageCustomEnabled
+        || homepageHtml !== (settings.homepageHtml || "")
+      ),
+      save: handleSaveHomepage,
+    },
+  ];
+  for (const item of personalizationDockItems) {
+    // 列表是固定的八项、顺序不变，所以在循环里调 hook 是安全的
+    useSaveDockItem({ ...item, id: `personalization.${item.id}`, pending: isSavingPersonalization(item.id), reset: resetPersonalizationDraft });
+  }
 
   const openCustomSidebarDialog = (page?: CustomSidebarPage) => {
     setCustomSidebarDraft(page ? {
@@ -3648,8 +3755,34 @@ function PersonalizationSettingsSection() {
     return <DataSectionLoading label="正在加载个性化配置" minHeight="min-h-[220px]" />;
   }
 
+  const previewUiTheme = PERSONALIZATION_UI_THEMES.find((theme) => theme.id === uiTheme) || PERSONALIZATION_UI_THEMES[0];
+
   return (
     <div className="space-y-4">
+      {/*
+        玫瑰主题下顶上一张「大家看到的样子」预览卡（参考 Rosélune 设置页 Name and logo 左边那张）：
+        Logo、站点名、现在选的界面主题，跟着下面的输入实时变，不用先存。
+      */}
+      {dockActive ? (
+        <div className="fx-brand-preview" aria-label="预览">
+          <span className="fx-brand-preview-logo">
+            {siteLogoDataUrl ? (
+              <img src={siteLogoDataUrl} alt="" />
+            ) : (
+              <>
+                <img src="/logo-light.png" alt="" className="dark:hidden" />
+                <img src="/logo-dark.png" alt="" className="hidden dark:block" />
+              </>
+            )}
+          </span>
+          <b className="fx-brand-preview-name">{siteTitleInput.trim() || "NEX"}</b>
+          <span className="fx-brand-preview-meta">
+            <UiThemeDot id={previewUiTheme.id} />
+            {previewUiTheme.name}
+            {uiThemeDirty ? <em>试看中，未保存</em> : null}
+          </span>
+        </div>
+      ) : null}
       <div className="grid gap-4 @[58rem]:grid-cols-2">
         <Card className="border-border bg-card">
           <CardHeader>
@@ -3669,7 +3802,7 @@ function PersonalizationSettingsSection() {
                 placeholder="NEX"
                 className="flex-1"
               />
-              <Button type="button" onClick={handleSaveTitle} disabled={isSavingPersonalization("title")} className="gap-2">
+              <Button type="button" data-dock-save onClick={handleSaveTitle} disabled={isSavingPersonalization("title")} className="gap-2">
                 {isSavingPersonalization("title") && <Loader2 className="h-4 w-4 animate-spin" />}
                 保存
               </Button>
@@ -3719,7 +3852,7 @@ function PersonalizationSettingsSection() {
                     <RefreshCw className="mr-2 h-4 w-4" />
                     还原默认
                   </Button>
-                  <Button type="button" onClick={handleSaveLogo} disabled={compressingLogo || isSavingPersonalization("logo")} className="gap-2">
+                  <Button type="button" data-dock-save onClick={handleSaveLogo} disabled={compressingLogo || isSavingPersonalization("logo")} className="gap-2">
                     {isSavingPersonalization("logo") && <Loader2 className="h-4 w-4 animate-spin" />}
                     保存 Logo
                   </Button>
@@ -3830,11 +3963,12 @@ function PersonalizationSettingsSection() {
               界面主题
             </CardTitle>
             <CardDescription>
-              一套换掉底色、卡片、顶栏和控件形状的整体风格。下面的配色、页面底色、卡片风格都是在它之上微调。App 要更新到新版本才会跟着变。
+              一套换掉底色、卡片、顶栏和控件形状的整体风格。下面的配色、页面底色、卡片风格都是在它之上微调。点一下就在这一页试看，保存后才对所有人生效；每个人也可以在顶栏调色盘里给自己换。App 要更新到新版本才会跟着变。
             </CardDescription>
           </div>
           <Button
             type="button"
+            data-dock-save
             onClick={handleSaveUiTheme}
             disabled={isSavingPersonalization("uiTheme") || !uiThemeDirty}
             className="w-full gap-2 sm:w-auto"
@@ -3844,7 +3978,7 @@ function PersonalizationSettingsSection() {
           </Button>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-2 gap-3 sm:max-w-2xl sm:grid-cols-3">
+          <div className="grid grid-cols-2 gap-3 sm:max-w-3xl sm:grid-cols-4">
             {PERSONALIZATION_UI_THEMES.map((theme) => {
               const active = uiTheme === theme.id;
               return (
@@ -3887,6 +4021,7 @@ function PersonalizationSettingsSection() {
           </div>
           <Button
             type="button"
+            data-dock-save
             onClick={handleSaveThemePreset}
             disabled={isSavingPersonalization("theme") || !themeDirty}
             className="w-full gap-2 sm:w-auto"
@@ -3961,6 +4096,7 @@ function PersonalizationSettingsSection() {
           </div>
           <Button
             type="button"
+            data-dock-save
             onClick={handleSavePageTint}
             disabled={isSavingPersonalization("pageTint") || !pageTintDirty}
             className="w-full gap-2 sm:w-auto"
@@ -4041,6 +4177,7 @@ function PersonalizationSettingsSection() {
           </div>
           <Button
             type="button"
+            data-dock-save
             onClick={handleSaveCardStyle}
             disabled={isSavingPersonalization("cardStyle") || !cardStyleDirty}
             className="w-full gap-2 sm:w-auto"
@@ -4096,7 +4233,7 @@ function PersonalizationSettingsSection() {
               <RefreshCw className="h-4 w-4" />
               恢复默认
             </Button>
-            <Button type="button" onClick={handleSaveBackground} disabled={compressingBackground || isSavingPersonalization("background")} className="w-full gap-2 sm:w-auto">
+            <Button type="button" data-dock-save onClick={handleSaveBackground} disabled={compressingBackground || isSavingPersonalization("background")} className="w-full gap-2 sm:w-auto">
               {isSavingPersonalization("background") && <Loader2 className="h-4 w-4 animate-spin" />}
               保存背景
             </Button>
@@ -4389,7 +4526,7 @@ function PersonalizationSettingsSection() {
               设置未登录时展示的首页。
             </CardDescription>
           </div>
-          <Button type="button" onClick={handleSaveHomepage} disabled={isSavingPersonalization("homepage")} className="w-full gap-2 sm:w-auto">
+          <Button type="button" data-dock-save onClick={handleSaveHomepage} disabled={isSavingPersonalization("homepage")} className="w-full gap-2 sm:w-auto">
             {isSavingPersonalization("homepage") && <Loader2 className="h-4 w-4 animate-spin" />}
             保存首页
           </Button>
@@ -4579,6 +4716,7 @@ function PersonalizationSettingsSection() {
 function SystemInfoSection() {
   const utils = trpc.useUtils();
   const { data: settings, isLoading } = trpc.system.getSettings.useQuery();
+  const settingsData = settings;
   // 和侧栏是同一个查询（同 key 共享缓存）。升级进行中要熬过面板重启和手机锁屏，见 DashboardLayout 里那段说明。
   const { data: upgradeStatus, refetch: refetchUpgradeStatus, isError: upgradeStatusUnreachable } = trpc.system.upgradeStatus.useQuery(
     undefined,
@@ -4658,8 +4796,11 @@ function SystemInfoSection() {
     { enabled: showRollbackDialog, refetchOnWindowFocus: false, retry: false }
   );
 
-  useEffect(() => {
-    if (settings) {
+  /*
+    把表单填回服务端存的值：首次拿到设置、存完之后设置刷新、玫瑰主题下贴底栏点「放弃」都走这里。
+  */
+  const loadFromSettings = useCallback((settings: NonNullable<typeof settingsData>) => {
+    {
       setPanelUrlInput(settings.panelPublicUrl || "");
       setWebPortInput(String(settings.webPort || 3000));
       setPanelSslEnabled(!!settings.panelSsl?.enabled);
@@ -4710,7 +4851,11 @@ function SystemInfoSection() {
         setPublicHostMonitorTitle(settings.publicHostMonitor.title || "");
       }
     }
-  }, [settings]);
+  }, []);
+
+  useEffect(() => {
+    if (settings) loadFromSettings(settings);
+  }, [settings, loadFromSettings]);
 
   useEffect(() => {
     if (!showWebPortConfirm) return;
@@ -4828,13 +4973,23 @@ function SystemInfoSection() {
     onError: (err) => toast.error(err.message || "生成自签证书失败"),
   });
 
+  /*
+    存一组系统设置。返回「存成了没有」：卡片上的保存按钮不看它，玫瑰主题下的贴底保存栏一项一项存，
+    要知道这一项成没成再决定存不存下一项。失败的报错由 updateSettingsMutation 自己弹，这里不会 reject。
+  */
   const saveSystemSettings = (
     key: SystemSettingsSaveKey,
     payload: Parameters<typeof updateSettingsMutation.mutate>[0],
-    options?: Parameters<typeof updateSettingsMutation.mutate>[1],
-  ) => {
+    options?: { onSuccess?: () => unknown },
+  ): Promise<boolean> => {
     setSavingSetting(key);
-    updateSettingsMutation.mutate(payload, options);
+    return updateSettingsMutation.mutateAsync(payload).then(
+      async () => {
+        await options?.onSuccess?.();
+        return true;
+      },
+      () => false,
+    );
   };
 
   const isSavingSetting = (key: SystemSettingsSaveKey) => (
@@ -4855,13 +5010,13 @@ function SystemInfoSection() {
     const v = panelUrlInput.trim();
     if (v && !/^https?:\/\//i.test(v)) {
       toast.error("面板公开地址必须以 http:// 或 https:// 开头");
-      return;
+      return false;
     }
-    saveSystemSettings("panelUrl", { panelPublicUrl: v });
+    return saveSystemSettings("panelUrl", { panelPublicUrl: v });
   };
 
   const handleSaveLookingGlass = () => {
-    saveSystemSettings("networkTest", { lookingGlassUserEnabled }, {
+    return saveSystemSettings("networkTest", { lookingGlassUserEnabled }, {
       onSuccess: () => utils.system.publicInfo.invalidate(),
     });
   };
@@ -4956,11 +5111,11 @@ function SystemInfoSection() {
   };
 
   const handleSaveRegistration = () => {
-    saveSystemSettings("registration", { registrationEnabled });
+    return saveSystemSettings("registration", { registrationEnabled });
   };
 
   const handleSaveTwoFactor = () => {
-    saveSystemSettings("twoFactor", { twoFactorEnabled });
+    return saveSystemSettings("twoFactor", { twoFactorEnabled });
   };
 
   const handleSaveDdns = () => {
@@ -4968,14 +5123,14 @@ function SystemInfoSection() {
     const aliyunEndpoint = normalizeConfigUrl(ddnsAliyunEndpoint);
     if (huaweicloudEndpoint && !/^https?:\/\//i.test(huaweicloudEndpoint)) {
       toast.error("华为云 Endpoint 需要以 http:// 或 https:// 开头");
-      return;
+      return false;
     }
     if (aliyunEndpoint && !/^https?:\/\//i.test(aliyunEndpoint)) {
       toast.error("阿里云 Endpoint 需要以 http:// 或 https:// 开头");
-      return;
+      return false;
     }
     const ttl = normalizeTtl(ddnsTtl, Number(settings?.ddns?.ttl || 60));
-    saveSystemSettings("ddns", {
+    return saveSystemSettings("ddns", {
       ddns: {
         enabled: ddnsEnabled,
         provider: ddnsProvider,
@@ -5020,9 +5175,9 @@ function SystemInfoSection() {
     const path = normalizePublicHostMonitorPathInput(publicHostMonitorPath) || "dev";
     if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(path)) {
       toast.error("主机监控面板路径只能包含小写字母、数字、短横线或下划线，且不能超过 64 个字符");
-      return;
+      return false;
     }
-    saveSystemSettings("hostMonitor", {
+    return saveSystemSettings("hostMonitor", {
       publicHostMonitor: {
         enabled: publicHostMonitorEnabled,
         path,
@@ -5039,7 +5194,7 @@ function SystemInfoSection() {
   };
 
   const handleSaveSessionPolicy = () => {
-    saveSystemSettings("sessionPolicy", { allowMultiDeviceLogin });
+    return saveSystemSettings("sessionPolicy", { allowMultiDeviceLogin });
   };
 
   const handleSaveEntryBridge = () => {
@@ -5047,9 +5202,9 @@ function SystemInfoSection() {
     const value = Number(raw);
     if (!raw || !Number.isInteger(value) || value < 0 || value > MAX_RULE_SWITCH_BRIDGE_HOURS) {
       toast.error(`请输入 0 到 ${MAX_RULE_SWITCH_BRIDGE_HOURS} 之间的整数小时`);
-      return;
+      return false;
     }
-    saveSystemSettings("entryBridge", { ruleSwitchBridgeHours: value });
+    return saveSystemSettings("entryBridge", { ruleSwitchBridgeHours: value });
   };
 
   const resetForwardProtocolDraft = () => {
@@ -5111,9 +5266,9 @@ function SystemInfoSection() {
     const acceleratorUrl = normalizeGithubAcceleratorUrl(inputUrl);
     if (inputUrl && !acceleratorUrl) {
       toast.error("GitHub 加速地址必须是 HTTP(S) 基础地址，且不能包含查询参数或锚点");
-      return;
+      return false;
     }
-    saveSystemSettings("agentInstall", {
+    return saveSystemSettings("agentInstall", {
       githubAccelerator: {
         enabled: githubAcceleratorEnabled,
         url: acceleratorUrl,
@@ -5130,6 +5285,69 @@ function SystemInfoSection() {
       },
     });
   };
+
+  /*
+    玫瑰主题下的贴底保存栏（components/settings/SaveDock.tsx）：每张卡登记「有没有改动、怎么存」。
+    有没有改动 = 表单现在的值和服务端存的值比；服务端的值按 loadFromSettings 同样的规矩取。
+    端口和 SSL 要倒计时确认、会重启面板，协议和菜单在弹窗里改 —— 这几张不登记，保留自己的按钮。
+  */
+  const resetSystemDraft = () => { if (settings) loadFromSettings(settings); };
+  const savedHostMonitor = settings?.publicHostMonitor;
+  const ddnsDraft = [
+    ddnsEnabled, ddnsProvider, ddnsTtl, ddnsCloudflareApiToken, ddnsHuaweiCloudAccessKeyId, ddnsHuaweiCloudSecretKey,
+    ddnsHuaweiCloudRegion, ddnsHuaweiCloudEndpoint, ddnsHuaweiCloudZoneId, ddnsHuaweiCloudLine, ddnsAliyunAccessKeyId,
+    ddnsAliyunAccessKeySecret, ddnsAliyunDomainName, ddnsAliyunEndpoint, ddnsAliyunLine, ddnsTencentCloudSecretId,
+    ddnsTencentCloudSecretKey, ddnsTencentCloudDomainName, ddnsTencentCloudRecordLine, ddnsTencentCloudRecordLineId,
+    ddnsWebhookUrl, ddnsWebhookMethod, ddnsWebhookHeaders, ruleEntryDomainSuffix,
+  ];
+  const ddnsSaved = settings ? [
+    !!settings.ddns?.enabled,
+    isDdnsProvider(settings.ddns?.provider) ? settings.ddns.provider : "disabled",
+    String(settings.ddns?.ttl || settings.ddns?.huaweicloudTtl || settings.ddns?.aliyunTtl || settings.ddns?.tencentcloudTtl || 60),
+    "", settings.ddns?.huaweicloudAccessKeyId || "", "",
+    settings.ddns?.huaweicloudRegion || "cn-north-4", settings.ddns?.huaweicloudEndpoint || "", settings.ddns?.huaweicloudZoneId || "",
+    settings.ddns?.huaweicloudLine || "default_view", settings.ddns?.aliyunAccessKeyId || "",
+    "", settings.ddns?.aliyunDomainName || "", settings.ddns?.aliyunEndpoint || "https://alidns.aliyuncs.com", settings.ddns?.aliyunLine || "default",
+    settings.ddns?.tencentcloudSecretId || "", "", settings.ddns?.tencentcloudDomainName || "",
+    settings.ddns?.tencentcloudRecordLine || "默认", settings.ddns?.tencentcloudRecordLineId || "",
+    settings.ddns?.webhookUrl || "",
+    (settings.ddns?.webhookMethod === "PUT" || settings.ddns?.webhookMethod === "GET") ? settings.ddns.webhookMethod : "POST",
+    settings.ddns?.webhookHeaders || "", settings.ddns?.ruleEntryDomainSuffix || "",
+  ] : ddnsDraft;
+  const systemDockItems: Array<{ id: SystemSettingsSaveKey; label: string; dirty: boolean; save: () => Promise<boolean> | boolean }> = [
+    { id: "panelUrl", label: "面板地址", dirty: !!settings && panelUrlInput !== (settings.panelPublicUrl || ""), save: handleSavePanelUrl },
+    { id: "networkTest", label: "网络测试", dirty: !!settings && lookingGlassUserEnabled !== (settings.lookingGlassUserEnabled ?? true), save: handleSaveLookingGlass },
+    { id: "entryBridge", label: "换线过渡", dirty: !!settings && ruleSwitchBridgeHours !== String(normalizeRuleSwitchBridgeHours((settings as any).ruleSwitchBridgeHours)), save: handleSaveEntryBridge },
+    { id: "registration", label: "注册", dirty: !!settings && registrationEnabled !== (settings.registrationEnabled ?? true), save: handleSaveRegistration },
+    { id: "twoFactor", label: "双重验证", dirty: !!settings && twoFactorEnabled !== !!settings.twoFactorEnabled, save: handleSaveTwoFactor },
+    { id: "ddns", label: "DDNS", dirty: JSON.stringify(ddnsDraft) !== JSON.stringify(ddnsSaved), save: handleSaveDdns },
+    {
+      id: "hostMonitor",
+      label: "公开主机监控",
+      dirty: !!settings && (
+        publicHostMonitorEnabled !== (savedHostMonitor ? !!savedHostMonitor.enabled : false)
+        || publicHostMonitorPath !== (savedHostMonitor?.path || "dev")
+        || publicHostMonitorTitle !== (savedHostMonitor?.title || "")
+      ),
+      save: handleSavePublicHostMonitor,
+    },
+    { id: "sessionPolicy", label: "登录设备", dirty: !!settings && allowMultiDeviceLogin !== !!settings.allowMultiDeviceLogin, save: handleSaveSessionPolicy },
+    {
+      id: "agentInstall",
+      label: "Agent 安装",
+      dirty: !!settings && (
+        githubAcceleratorEnabled !== !!settings.githubAccelerator?.enabled
+        || githubAcceleratorPanelUpdateEnabled !== !!settings.githubAccelerator?.panelUpdateEnabled
+        || githubAcceleratorUrlInput !== (settings.githubAccelerator?.url || "")
+        || agentPreferPanelInstall !== !!settings.agentPreferPanelInstall
+      ),
+      save: handleSaveAgentInstall,
+    },
+  ];
+  for (const item of systemDockItems) {
+    // 列表是固定的九项、顺序不变，所以在循环里调 hook 是安全的
+    useSaveDockItem({ ...item, id: `system.${item.id}`, pending: isSavingSetting(item.id), reset: resetSystemDraft });
+  }
 
   const setForwardProtocolEnabled = (key: keyof ForwardProtocolSettings, enabled: boolean) => {
     setForwardProtocols((prev) => ({ ...prev, [key]: enabled }));
@@ -5368,7 +5586,7 @@ function SystemInfoSection() {
             </SettingList>
             {/* 保存放右下角：这一页别的卡片都是这个位置，只有这一张在左边。 */}
             <div className="flex justify-end">
-              <Button onClick={handleSaveLookingGlass} disabled={isSavingSetting("networkTest")}>
+              <Button data-dock-save onClick={handleSaveLookingGlass} disabled={isSavingSetting("networkTest")}>
                 保存
               </Button>
             </div>
@@ -5429,7 +5647,7 @@ function SystemInfoSection() {
                 onChange={(e) => setRuleSwitchBridgeHours(e.target.value)}
               />
             </FormField>
-            <Button onClick={handleSaveEntryBridge} disabled={isSavingSetting("entryBridge")}>
+            <Button data-dock-save onClick={handleSaveEntryBridge} disabled={isSavingSetting("entryBridge")}>
               {isSavingSetting("entryBridge") && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               保存
             </Button>
@@ -5457,6 +5675,7 @@ function SystemInfoSection() {
                 className="flex-1"
               />
               <Button
+                data-dock-save
                 onClick={handleSavePanelUrl}
                 disabled={isSavingSetting("panelUrl")}
               >
@@ -5720,7 +5939,7 @@ function SystemInfoSection() {
               />
             </SettingList>
             <div className="flex justify-end">
-              <Button onClick={handleSaveRegistration} disabled={isSavingSetting("registration")}>
+              <Button data-dock-save onClick={handleSaveRegistration} disabled={isSavingSetting("registration")}>
                 保存注册设置
               </Button>
             </div>
@@ -5747,7 +5966,7 @@ function SystemInfoSection() {
               />
             </SettingList>
             <div className="flex justify-end">
-              <Button onClick={handleSaveTwoFactor} disabled={isSavingSetting("twoFactor")}>
+              <Button data-dock-save onClick={handleSaveTwoFactor} disabled={isSavingSetting("twoFactor")}>
                 保存双重验证设置
               </Button>
             </div>
@@ -5987,7 +6206,7 @@ function SystemInfoSection() {
           )}
 
           <div className="flex justify-end">
-            <Button onClick={handleSaveDdns} disabled={isSavingSetting("ddns")}>
+            <Button data-dock-save onClick={handleSaveDdns} disabled={isSavingSetting("ddns")}>
               {isSavingSetting("ddns") && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               {isSavingSetting("ddns") ? "保存中..." : "保存 DDNS 配置"}
             </Button>
@@ -6047,7 +6266,7 @@ function SystemInfoSection() {
           </div>
 
           <div className="flex justify-end">
-            <Button onClick={handleSavePublicHostMonitor} disabled={isSavingSetting("hostMonitor")}>
+            <Button data-dock-save onClick={handleSavePublicHostMonitor} disabled={isSavingSetting("hostMonitor")}>
               {isSavingSetting("hostMonitor") && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               {isSavingSetting("hostMonitor") ? "保存中..." : "保存主机监控配置"}
             </Button>
@@ -6076,7 +6295,7 @@ function SystemInfoSection() {
               />
             </SettingList>
             <div className="flex justify-end">
-              <Button onClick={handleSaveSessionPolicy} disabled={isSavingSetting("sessionPolicy")}>
+              <Button data-dock-save onClick={handleSaveSessionPolicy} disabled={isSavingSetting("sessionPolicy")}>
                 {isSavingSetting("sessionPolicy") && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 {isSavingSetting("sessionPolicy") ? "保存中..." : "保存登录会话配置"}
               </Button>
@@ -6521,7 +6740,7 @@ function SystemInfoSection() {
             </p>
           </FormField>
           <div className="flex justify-end">
-            <Button onClick={handleSaveAgentInstall} disabled={isSavingSetting("agentInstall")}>
+            <Button data-dock-save onClick={handleSaveAgentInstall} disabled={isSavingSetting("agentInstall")}>
               保存 GitHub 下载配置
             </Button>
           </div>

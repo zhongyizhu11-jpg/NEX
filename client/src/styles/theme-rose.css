@@ -1,0 +1,417 @@
+/*
+  ── 界面主题「玫瑰」（设置 › 个性化 › 界面主题）──
+
+  第四种气质，由 <html data-ui-theme="rose"> 打开；没有这个属性这个文件一条都不生效。
+  参考的是 deep.losantos.space（Rosélune 面板）默认的 Romance 那一套（2026-10-11 看过源码，
+  记录在 design/losantos-settings-2026-10-11/）：**粉底 + 斜体衬线 + 全药丸 + 浮着的半透明卡**。
+  经典是「浅灰托白卡」、极光是「彩色柔光托玻璃卡」、墨金是「米白纸上平贴的卡纸」，玫瑰是
+  「胭脂色的纸上浮着几片白瓣」—— 暖、软、轻，像一本精装的旅行手帐。
+
+  四件一起换（只换色对这位用户来说等于「没变」）：
+
+    1. 底   胭脂粉（#fbf0f2），不是冷白也不是米白；左上一团玫瑰、右上一抹淡紫、右下一抹蜜桃，
+            很淡，固定一层画（position: fixed），滚动不重绘。深色是带酒红的墨色（#150f12），
+            同一组光压暗。
+    2. 卡   大圆角（18px）、**没有边线**、白 78% 半透、一道带玫瑰色的软影 + 卡顶一条内高光，
+            像浮在纸上。卡里的数字不再是灰方格也不是通栏色带，而是**嵌在卡里的一枚圆角托盘**
+            （14px，胭脂淡色）：主机卡三个读数并排在一枚托盘里，规则卡的流量大数字和走势在
+            一枚托盘里，链路卡的延迟一行在一枚托盘里；托盘下面的地址行不再画线。主机卡的
+            系统图标是一枚胭脂色圆章。「彩色描边」四档照常：这里描边是把状态色调进那道软影和
+            一圈 1px 的内描边，卡身仍是白瓣。
+    3. 字   页面大标题、统计大数字、规则卡的流量数字用**斜体衬线**（Iowan Old Style / Palatino /
+            Georgia，中文回落宋体），字重 400 —— 墨金是直立的粗衬线，这里是轻的斜体。
+            分组小标题玫瑰色斜体。正文仍是无衬线。
+    4. 控件 全部药丸：分段控件是**一圈玫瑰色细线的空槽**，选中格是主色 12% 的淡底 + 墨字，
+            不再是一块渐变；筛选 chip 未选中只有一圈线，选中淡底 + 主色字；搜索框、输入框是
+            白 84% 的半透；主按钮仍是主色渐变（跟「默认配色」换），加一道带色的软影和顶部
+            内高光。顶栏、大标题导航栏、底部胶囊是粉色毛玻璃 —— 模糊只留给这几个固定面，
+            滚动内容上不做模糊（极光那次的结论）。
+
+  不新增任何滚动内容上的 backdrop 模糊。
+*/
+
+html[data-ui-theme="rose"] {
+  --fx-l0-page: #fbf0f2;
+  --fx-l1-surface: #fffafb;
+  --fx-raised: #fff;
+  --fx-l2-group: rgb(193 58 102 / 6%);
+  --fx-l3-control: #fffafb;
+  --fx-l3-control-fill: rgb(255 255 255 / 64%);
+  --fx-sidebar: rgb(255 250 251 / 72%);
+  --fx-hover: rgb(122 30 64 / 5%);
+  --fx-pressed: rgb(122 30 64 / 10%);
+  --fx-stroke-weak: rgb(122 30 64 / 10%);
+  --fx-stroke-base: rgb(122 30 64 / 19%);
+  --fx-stroke-strong: rgb(122 30 64 / 38%);
+  --fx-text: #3e1d2b;
+  --fx-text-secondary: #6c4253;
+  --fx-text-muted: #876071;
+  --fx-rose: #c13a66;                 /* 玫瑰：分组小标题、细线里的那点颜色、标题下那道渐变线 */
+  --fx-rose-soft: rgb(193 58 102 / 10%);
+  --fx-rose-glow-1: rgb(255 196 212 / 80%);
+  --fx-rose-glow-2: rgb(226 210 255 / 55%);
+  --fx-rose-glow-3: rgb(255 214 190 / 60%);
+  --fx-card-fill: rgb(255 255 255 / 78%);
+  --fx-card-stroke: transparent;
+  --fx-tray: rgb(193 58 102 / 6%);    /* 卡里托数字的那枚托盘 */
+  --fx-elevation-card:
+    inset 0 1px 0 rgb(255 255 255 / 90%),
+    0 1px 2px rgb(122 30 64 / 4%),
+    0 18px 40px -30px rgb(122 30 64 / 45%);
+  --fx-elevation-control: 0 1px 2px rgb(122 30 64 / 5%);
+  --fx-elevation-popover: 0 30px 80px -24px rgb(122 30 64 / 35%), 0 2px 6px rgb(122 30 64 / 6%), 0 0 0 1px rgb(122 30 64 / 8%);
+  --fx-glass: rgb(251 240 242 / 74%);
+  --fx-glass-strong: rgb(255 250 251 / 82%);
+  --fx-glass-blur: saturate(140%) blur(14px);
+  --fx-radius-control: 12px;
+  --fx-radius-card: 18px;
+  --fx-radius-surface: 18px;
+  --fx-radius-modal: 22px;
+  --fx-font-display: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", "New York", Georgia, "Songti SC", "STSong", "Noto Serif CJK SC", "Source Han Serif SC", serif;
+}
+html.dark[data-ui-theme="rose"] {
+  --fx-l0-page: #150f12;
+  --fx-l1-surface: #1e1619;
+  --fx-raised: #271d22;
+  --fx-l2-group: rgb(255 190 210 / 7%);
+  --fx-l3-control: #1e1619;
+  --fx-l3-control-fill: rgb(255 190 210 / 8%);
+  --fx-sidebar: rgb(21 15 18 / 70%);
+  --fx-hover: rgb(255 255 255 / 5%);
+  --fx-pressed: rgb(255 255 255 / 10%);
+  --fx-stroke-weak: rgb(255 180 200 / 11%);
+  --fx-stroke-base: rgb(255 180 200 / 20%);
+  --fx-stroke-strong: rgb(255 180 200 / 38%);
+  --fx-text: #f4e9ee;
+  --fx-text-secondary: #cdb6c0;
+  --fx-text-muted: #967c88;
+  --fx-rose: #e0667f;
+  --fx-rose-soft: rgb(224 102 127 / 16%);
+  --fx-rose-glow-1: rgb(193 58 102 / 22%);
+  --fx-rose-glow-2: rgb(142 107 191 / 16%);
+  --fx-rose-glow-3: rgb(223 138 94 / 12%);
+  --fx-card-fill: rgb(34 24 29 / 80%);
+  --fx-card-stroke: transparent;
+  --fx-tray: rgb(255 190 210 / 7%);
+  --fx-elevation-card:
+    inset 0 1px 0 rgb(255 255 255 / 6%),
+    0 1px 2px rgb(0 0 0 / 30%),
+    0 20px 44px -26px rgb(0 0 0 / 75%);
+  --fx-elevation-control: 0 1px 2px rgb(0 0 0 / 30%);
+  --fx-elevation-popover: 0 30px 80px -24px rgb(0 0 0 / 70%), 0 2px 6px rgb(0 0 0 / 40%), 0 0 0 1px rgb(255 180 200 / 12%);
+  --fx-glass: rgb(21 15 18 / 74%);
+  --fx-glass-strong: rgb(30 22 25 / 82%);
+  --fx-glass-blur: saturate(140%) blur(14px);
+}
+
+/* ── 1. 胭脂底 ───────────────────────────────────────────────── */
+/*
+  和极光一样：<html> 自己有底色，body 的底会盖住负 z-index 那层，所以 body 不铺底，
+  三团光画在 body::after（固定一层，z-index -1，#root 的 1 盖住它；账本见 zIndexTiers.test.ts）。
+*/
+html[data-ui-theme="rose"] body { background: transparent; }
+html[data-ui-theme="rose"] body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(48vw 34vw at 6% -6%, var(--fx-rose-glow-1), transparent 70%),
+    radial-gradient(40vw 30vw at 102% 4%, var(--fx-rose-glow-2), transparent 70%),
+    radial-gradient(52vw 40vw at 96% 108%, var(--fx-rose-glow-3), transparent 70%);
+}
+html[data-ui-theme="rose"] .auth-shell,
+html[data-ui-theme="rose"] .public-home-shell,
+html[data-ui-theme="rose"] .setup-shell { background: transparent; }
+
+/* ── 2. 浮着的白瓣 ───────────────────────────────────────────── */
+/*
+  没有边线：卡靠软影从底上浮出来。「彩色描边」在这里只给出了状态的卡（告警 / 掉线）描一圈 1px 的
+  状态色内描边，正常的卡什么都不描。
+*/
+html[data-ui-theme="rose"]:not([data-card-style]) .workspace-main [data-slot="card"],
+html[data-ui-theme="rose"][data-card-style="edge"] .workspace-main [data-slot="card"],
+html[data-ui-theme="rose"]:not([data-card-style]) .fx-card-face,
+html[data-ui-theme="rose"][data-card-style="edge"] .fx-card-face {
+  border: 1px solid transparent;
+  background: var(--fx-card-fill);
+  box-shadow: var(--fx-elevation-card);
+}
+/* 只有出了状态的卡（告警 / 掉线）才描一圈状态色；正常的卡一圈都不描，否则主色会在卡沿上泛出一道蓝边 */
+html[data-ui-theme="rose"]:not([data-card-style]) .workspace-main [data-tone="warn"][data-slot="card"],
+html[data-ui-theme="rose"][data-card-style="edge"] .workspace-main [data-tone="warn"][data-slot="card"],
+html[data-ui-theme="rose"]:not([data-card-style]) .fx-card-face[data-tone="warn"],
+html[data-ui-theme="rose"][data-card-style="edge"] .fx-card-face[data-tone="warn"],
+html[data-ui-theme="rose"]:not([data-card-style]) .workspace-main [data-tone="down"][data-slot="card"],
+html[data-ui-theme="rose"][data-card-style="edge"] .workspace-main [data-tone="down"][data-slot="card"],
+html[data-ui-theme="rose"]:not([data-card-style]) .fx-card-face[data-tone="down"],
+html[data-ui-theme="rose"][data-card-style="edge"] .fx-card-face[data-tone="down"] {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fx-card-tone) 34%, transparent), var(--fx-elevation-card);
+}
+html[data-ui-theme="rose"] .fx-cardstyle-swatch[data-style="edge"] .fx-cardstyle-swatch-face {
+  border: 1px solid transparent;
+  background: var(--fx-card-fill);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fx-card-tone) 30%, transparent), var(--fx-elevation-card);
+}
+html[data-ui-theme="rose"] .fx-cardstyle-swatch {
+  background:
+    radial-gradient(70% 60% at 0% 0%, var(--fx-rose-glow-1), transparent 70%),
+    radial-gradient(60% 55% at 100% 100%, var(--fx-rose-glow-3), transparent 70%),
+    var(--fx-l0-page);
+}
+/* 主机卡的系统图标：一枚胭脂色圆章 */
+html[data-ui-theme="rose"] .fx-host-card > div:first-child > span:first-child { border-radius: 999px; border: 0; background: var(--fx-rose-soft); color: var(--fx-rose); }
+/*
+  卡里的托盘：数字不是散在白卡里，是嵌在一枚胭脂淡色的圆角托盘里。
+  主机卡：三个读数并排在一枚托盘里（原来是三个各自的灰方格）。
+*/
+html[data-ui-theme="rose"] .fx-host-card .grid.grid-cols-3 { gap: 0; padding: 7px 4px 6px; border-radius: 14px; background: var(--fx-tray); }
+html[data-ui-theme="rose"] .fx-host-spec { border-radius: 0; background: transparent; padding: 2px 8px 10px; }
+html[data-ui-theme="rose"] .fx-host-spec + .fx-host-spec { border-left: 1px solid var(--fx-stroke-weak); }
+html[data-ui-theme="rose"] .fx-host-spec-bar { left: 8px; right: 8px; bottom: 4px; height: 2px; background: rgb(122 30 64 / 14%); }
+html.dark[data-ui-theme="rose"] .fx-host-spec-bar { background: rgb(255 180 200 / 16%); }
+/* 规则卡：流量大数字 + 走势那一行在一枚托盘里，托盘下面的地址行不画线 */
+html[data-ui-theme="rose"] .fx-rule-big { margin-top: 12px; padding: 9px 12px 8px; border-radius: 14px; background: var(--fx-tray); }
+html[data-ui-theme="rose"] .fx-rule-path { margin-top: 10px; padding-top: 0; border-top: 0; }
+/* 链路卡：底下那行「延迟 · 评级 · 走势」在一枚托盘里 */
+html[data-ui-theme="rose"] .fx-tunnel-foot { margin-top: 12px; padding: 9px 12px 8px; border-top: 0; border-radius: 14px; background: var(--fx-tray); }
+/* 首页的统计条：格与格之间的线换成玫瑰色细线 */
+html[data-ui-theme="rose"] .fx-summary-cell + .fx-summary-cell { border-left-color: var(--fx-stroke-weak); }
+
+/* ── 3. 斜体衬线 ─────────────────────────────────────────────── */
+html[data-ui-theme="rose"] .workspace-main .workspace-header-title,
+html[data-ui-theme="rose"] .fx-navbar-large-title,
+html[data-ui-theme="rose"] .workspace-main .fx-pane-title,
+html[data-ui-theme="rose"] .fx-rule-num > b,
+html[data-ui-theme="rose"] .fx-summary-value,
+html[data-ui-theme="rose"] .fx-host-spec > b {
+  font-family: var(--fx-font-display);
+  font-style: italic;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+html[data-ui-theme="rose"] .workspace-main .workspace-header-title,
+html[data-ui-theme="rose"] .fx-navbar-large-title { font-size: 30px; line-height: 36px; }
+@media (max-width: 767px) {
+  html[data-ui-theme="rose"] .fx-navbar-large-title { font-size: 28px; line-height: 34px; }
+  /* 斜体衬线比无衬线宽：手机上标题收到 26px、不折行；右边那组走势 + 读数放不下时整组掉到下一行 */
+  html[data-ui-theme="rose"] .workspace-main .workspace-header-title { font-size: 26px; line-height: 32px; white-space: nowrap; }
+  html[data-ui-theme="rose"] .workspace-header-row { flex-wrap: wrap; }
+  /* 掉下去的那组走势拉成通栏；右上的 ··· 钉在标题那一行右边，不再悬在走势和标题之间 */
+  html[data-ui-theme="rose"] .workspace-header-aside { flex: 1 1 100%; align-items: stretch; padding-top: 4px; }
+  html[data-ui-theme="rose"] .workspace-header-aside .fx-sparkline { width: 100%; height: 30px; }
+  html[data-ui-theme="rose"] .workspace-header-aside > span { text-align: right; }
+  html[data-ui-theme="rose"] .workspace-header { position: relative; }
+  html[data-ui-theme="rose"] .workspace-header-actions { position: absolute; top: 0; right: 0; max-width: none; }
+  html[data-ui-theme="rose"] .workspace-header-row > div:first-child { padding-right: 52px; }
+}
+html[data-ui-theme="rose"] .fx-rule-num > b { font-size: 25px; }
+html[data-ui-theme="rose"] .fx-host-spec > b { font-size: 17px; }
+html[data-ui-theme="rose"] .fx-summary-value { font-size: 26px; }
+/* 页头下面一道从左边淡入、到玫瑰色、再淡出的细线：整页唯一一道装饰线（参考站每节顶上那道） */
+html[data-ui-theme="rose"] .workspace-main .workspace-header {
+  padding-bottom: 10px;
+  background: linear-gradient(90deg, var(--fx-stroke-base), color-mix(in srgb, var(--fx-rose) 36%, transparent) 32%, transparent 80%) left bottom / 100% 1px no-repeat;
+}
+/* 分组小标题：玫瑰色斜体小字 */
+html[data-ui-theme="rose"] .fx-list-section-header,
+html[data-ui-theme="rose"] .workspace-main .fx-list-section-header { color: var(--fx-rose); font-family: var(--fx-font-display); font-style: italic; font-weight: 400; font-size: 13.5px; letter-spacing: .02em; }
+/* 走势线用玫瑰色 */
+html[data-ui-theme="rose"] .fx-rule-spark,
+html[data-ui-theme="rose"] .workspace-header-aside .fx-sparkline { color: var(--fx-rose); }
+
+/* ── 4. 药丸控件 ─────────────────────────────────────────────── */
+/*
+  分段控件：一圈玫瑰色细线的空槽（不是灰槽、不是玻璃槽），选中格是主色 12% 的淡底 + 墨字 +
+  一圈 1px 内描边，不再是一块渐变。手机那段写的 34px 槽样式特指度一样，这里靠 html[data-ui-theme] 赢。
+*/
+html[data-ui-theme="rose"] .workspace-tabs,
+html.dark[data-ui-theme="rose"] .workspace-tabs { padding: 3px; border: 1px solid var(--fx-stroke-base); border-radius: var(--fx-radius-pill); background: rgb(255 255 255 / 40%); backdrop-filter: none; -webkit-backdrop-filter: none; box-shadow: none; }
+html.dark[data-ui-theme="rose"] .workspace-tabs { background: rgb(255 255 255 / 3%); }
+html[data-ui-theme="rose"] .workspace-tabs .workspace-tab,
+html.dark[data-ui-theme="rose"] .workspace-tabs .workspace-tab,
+html[data-ui-theme="rose"] .workspace-tab-scroll { border-radius: var(--fx-radius-pill); }
+html[data-ui-theme="rose"] .workspace-tabs .workspace-tab,
+html.dark[data-ui-theme="rose"] .workspace-tabs .workspace-tab { color: var(--fx-text-muted); font-weight: 500; }
+html[data-ui-theme="rose"] .workspace-tabs .workspace-tab[data-state="active"],
+html.dark[data-ui-theme="rose"] .workspace-tabs .workspace-tab[data-state="active"] {
+  color: var(--fx-text);
+  background: color-mix(in srgb, var(--fx-primary-fill) 12%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fx-primary-fill) 26%, transparent);
+  font-weight: 600;
+}
+html[data-ui-theme="rose"] .workspace-tabs .workspace-tab[data-state="active"] > svg { color: var(--fx-accent); }
+html[data-ui-theme="rose"] .workspace-tabs .workspace-tab-count,
+html[data-ui-theme="rose"] .workspace-tabs .workspace-tab[data-state="active"] .workspace-tab-count { min-width: 0; height: auto; padding: 0; border-radius: 0; background: transparent; color: var(--fx-text-muted); font-size: 12px; font-weight: 500; }
+html[data-ui-theme="rose"] .workspace-tabs .workspace-tab[data-state="active"] .workspace-tab-count { color: var(--fx-accent); }
+/* 筛选 chip：未选中只有一圈玫瑰色线；选中淡底 + 主色字，不走渐变 —— 渐变留给真正的动作按钮 */
+html[data-ui-theme="rose"] .fx-chip { height: 30px; padding: 0 12px; font-size: 12.5px; }
+html[data-ui-theme="rose"] .fx-chip:not(.fx-chip-on) { background: transparent; border-color: var(--fx-stroke-base); color: var(--fx-text-secondary); }
+html[data-ui-theme="rose"] .fx-chip-on,
+html[data-ui-theme="rose"] .fx-chip-on:hover { border-color: transparent; background: color-mix(in srgb, var(--fx-primary-fill) 14%, transparent); background-image: none; color: var(--fx-accent); }
+@media (pointer: coarse) { html[data-ui-theme="rose"] .fx-chip-scroller > .fx-chip { min-height: 30px; } }
+/* 搜索框、输入框、下拉：白 84% 的半透，一圈玫瑰色细线 */
+html[data-ui-theme="rose"] .workspace-main [data-slot="input"],
+html[data-ui-theme="rose"] .workspace-main [data-slot="select-trigger"],
+html[data-ui-theme="rose"] .workspace-filter-search input { border-radius: var(--fx-radius-control); background: rgb(255 255 255 / 84%); border-color: var(--fx-stroke-base); }
+html.dark[data-ui-theme="rose"] .workspace-main [data-slot="input"],
+html.dark[data-ui-theme="rose"] .workspace-main [data-slot="select-trigger"],
+html.dark[data-ui-theme="rose"] .workspace-filter-search input { background: rgb(255 255 255 / 5%); }
+html[data-ui-theme="rose"] .fx-search-pill { background: rgb(255 255 255 / 84%) !important; border-color: var(--fx-stroke-base) !important; }
+html.dark[data-ui-theme="rose"] .fx-search-pill { background: rgb(255 255 255 / 5%) !important; }
+html[data-ui-theme="rose"] .fx-search-pill:focus-visible { border-color: var(--fx-primary-stroke) !important; }
+html[data-ui-theme="rose"] [data-slot="button"]:not([data-icon-button]) { border-radius: var(--fx-radius-pill); }
+/* 主按钮：主色渐变照旧，加一道带色的软影和顶部内高光（参考站的 .btn.primary） */
+html[data-ui-theme="rose"] .workspace-main [data-slot="button"][data-variant="default"],
+html[data-ui-theme="rose"] .workspace-main [data-slot="button"]:not([data-variant]) { box-shadow: var(--fx-primary-shadow), inset 0 1px 0 rgb(255 255 255 / 16%); }
+/* 外壳：顶栏、大标题导航栏是粉色毛玻璃；底部胶囊白一点，影子带玫瑰色 */
+html[data-ui-theme="rose"] .workspace-appbar { border-bottom-color: var(--fx-stroke-weak); }
+html[data-ui-theme="rose"] .workspace-layout [data-sidebar="sidebar"] { border-right-color: var(--fx-stroke-weak); }
+@media (max-width: 767px) {
+  html[data-ui-theme="rose"] .fx-navbar { background: color-mix(in srgb, var(--fx-l0-page) 74%, transparent); backdrop-filter: var(--fx-glass-blur); -webkit-backdrop-filter: var(--fx-glass-blur); }
+  html[data-ui-theme="rose"] .fx-tabbar {
+    border-color: rgb(255 255 255 / 85%);
+    background: rgb(255 255 255 / 70%);
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 95%), 0 22px 48px -18px rgb(122 30 64 / 45%), 0 2px 6px rgb(122 30 64 / 6%);
+  }
+  html.dark[data-ui-theme="rose"] .fx-tabbar {
+    border-color: rgb(255 180 200 / 12%);
+    background: rgb(30 22 25 / 76%);
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 6%), 0 22px 48px -18px rgb(0 0 0 / 80%), 0 2px 6px rgb(0 0 0 / 40%);
+  }
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  html[data-ui-theme="rose"] .fx-tabbar, html[data-ui-theme="rose"] .workspace-appbar, html[data-ui-theme="rose"] .fx-navbar { background: var(--fx-l1-surface); }
+}
+
+/* ── 设置页「界面主题」的预览 ───────────────────────────────── */
+/* 胭脂粉底，左上一团玫瑰光，两片没有边线的白瓣带软影，底下一枚白胶囊 */
+.fx-uitheme-swatch[data-theme="rose"] {
+  background:
+    radial-gradient(70% 60% at 4% 0%, rgb(255 196 212 / 85%), transparent 70%),
+    radial-gradient(55% 50% at 100% 100%, rgb(255 214 190 / 60%), transparent 70%),
+    #fbf0f2;
+}
+.dark .fx-uitheme-swatch[data-theme="rose"] {
+  background:
+    radial-gradient(70% 60% at 4% 0%, rgb(193 58 102 / 26%), transparent 70%),
+    radial-gradient(55% 50% at 100% 100%, rgb(223 138 94 / 14%), transparent 70%),
+    #150f12;
+}
+.fx-uitheme-swatch[data-theme="rose"] > i { border-radius: 11px; border-color: transparent; background: rgb(255 255 255 / 80%); box-shadow: inset 0 1px 0 rgb(255 255 255 / 90%), 0 8px 18px -10px rgb(122 30 64 / 40%); }
+.dark .fx-uitheme-swatch[data-theme="rose"] > i { border-color: transparent; background: rgb(34 24 29 / 82%); box-shadow: inset 0 1px 0 rgb(255 255 255 / 6%); }
+.fx-uitheme-swatch[data-theme="rose"] > i:first-child { margin-top: 2px; }
+.fx-uitheme-swatch[data-theme="rose"] > b { border-color: rgb(255 255 255 / 90%); background: rgb(255 255 255 / 72%); }
+.dark .fx-uitheme-swatch[data-theme="rose"] > b { border-color: rgb(255 180 200 / 12%); background: rgb(30 22 25 / 78%); }
+
+/* ── 5. 设置页：编号分节 + 贴底保存栏（参考 Rosélune 设置页，2026-10-11 用户「全做到第四套」）── */
+/*
+  经典的设置页是一摞卡片，每张一个框、一个保存按钮。玫瑰下改成一页顺着往下读的表单：
+  每张卡去掉框和影子，变成一「节」—— 顶上一道从左边淡入的玫瑰色细线，标题前面一枚斜体编号
+  「01」「02」…（CSS 计数，按页面上出现的顺序），标题是斜体衬线；节与节之间只有留白和那道线。
+  卡里各自的保存按钮藏起来，交给页底那一条贴底保存栏（SaveDock.tsx，有改动才亮）。
+  没登记到保存栏的卡（端口 / SSL 要确认重启、协议和菜单在弹窗里改）按钮照常显示。
+*/
+html[data-ui-theme="rose"] .fx-settings-pane { counter-reset: fx-sec; }
+html[data-ui-theme="rose"] .fx-settings-pane [data-slot="card"]:not([data-slot="card"] [data-slot="card"]),
+html.dark[data-ui-theme="rose"] .fx-settings-pane [data-slot="card"]:not([data-slot="card"] [data-slot="card"]) {
+  counter-increment: fx-sec;
+  position: relative;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  padding-top: 18px;
+  overflow: visible;
+}
+html[data-ui-theme="rose"] .fx-settings-pane [data-slot="card"]:not([data-slot="card"] [data-slot="card"])::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  background: linear-gradient(90deg, var(--fx-stroke-base), color-mix(in srgb, var(--fx-rose) 34%, transparent) 32%, transparent);
+  pointer-events: none;
+}
+html[data-ui-theme="rose"] .fx-settings-pane [data-slot="card"]:not([data-slot="card"] [data-slot="card"]) > [data-slot="card-header"],
+html[data-ui-theme="rose"] .fx-settings-pane [data-slot="card"]:not([data-slot="card"] [data-slot="card"]) > [data-slot="card-content"],
+html[data-ui-theme="rose"] .fx-settings-pane [data-slot="card"]:not([data-slot="card"] [data-slot="card"]) > [data-slot="card-footer"] { padding-inline: 2px; }
+/* 节标题：斜体编号 + 斜体衬线；标题前那枚小图标收掉（编号已经是记号了） */
+html[data-ui-theme="rose"] .fx-settings-pane [data-slot="card"]:not([data-slot="card"] [data-slot="card"]) > [data-slot="card-header"] [data-slot="card-title"] {
+  font-family: var(--fx-font-display);
+  font-size: 18px;
+  font-weight: 400;
+  letter-spacing: 0;
+  color: var(--fx-text);
+}
+html[data-ui-theme="rose"] .fx-settings-pane [data-slot="card"]:not([data-slot="card"] [data-slot="card"]) > [data-slot="card-header"] [data-slot="card-title"]::before {
+  content: counter(fx-sec, decimal-leading-zero);
+  margin-right: 4px;
+  font: italic 400 13px/1 var(--fx-font-display);
+  letter-spacing: .02em;
+  color: var(--fx-rose);
+}
+html[data-ui-theme="rose"] .fx-settings-pane [data-slot="card"]:not([data-slot="card"] [data-slot="card"]) > [data-slot="card-header"] [data-slot="card-title"] > svg:first-child { display: none; }
+html[data-ui-theme="rose"] .fx-settings-pane [data-slot="card-description"] { color: var(--fx-text-muted); }
+/* 节里的输入框、选择框：白 84% 的半透药丸，卡没有底了要靠它们自己立住 */
+html[data-ui-theme="rose"] .fx-settings-pane [data-slot="input"]:not(textarea),
+html[data-ui-theme="rose"] .fx-settings-pane [data-slot="select-trigger"] { border-radius: var(--fx-radius-control); }
+/* 已经登记到贴底保存栏的那些保存按钮：藏起来 */
+html[data-ui-theme="rose"] .fx-settings-pane [data-dock-save] { display: none !important; }
+/* 设置行之间的线换成玫瑰色细线；开关下面跟着的参数往里缩，左边挂一条细竖线（参考站「Show the servers」下面那组） */
+html[data-ui-theme="rose"] .fx-settings-pane .fx-list-row + .fx-list-row { border-top-color: var(--fx-stroke-weak); }
+html[data-ui-theme="rose"] .fx-setting-sub { margin-left: 4px; padding: 2px 0 2px 16px; border-left: 1px solid var(--fx-stroke-base); }
+html[data-ui-theme="rose"] .fx-setting-sub:empty { display: none; }
+
+/* 贴底保存栏：一枚浮在页底的白色药丸（固定外壳，可以用毛玻璃），左边一句话，右边「放弃 / 保存」 */
+.fx-save-dock {
+  position: sticky;
+  bottom: 16px;
+  z-index: var(--fx-z-sticky);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 20px;
+  padding: 6px 6px 6px 18px;
+  border: 1px solid rgb(255 255 255 / 85%);
+  border-radius: var(--fx-radius-pill);
+  /* 底下滚过去的字不能透上来抢眼：栏身几乎不透明，毛玻璃只是把边上那点透色揉开 */
+  background: color-mix(in srgb, var(--fx-l1-surface) 92%, transparent);
+  -webkit-backdrop-filter: var(--fx-glass-blur);
+  backdrop-filter: var(--fx-glass-blur);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 90%), 0 18px 40px -22px rgb(122 30 64 / 45%), 0 2px 6px rgb(122 30 64 / 6%);
+}
+html.dark .fx-save-dock { border-color: rgb(255 180 200 / 12%); box-shadow: inset 0 1px 0 rgb(255 255 255 / 6%), 0 18px 40px -22px rgb(0 0 0 / 80%); }
+.fx-save-dock-text { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--fx-text-muted); }
+.fx-save-dock[data-dirty] .fx-save-dock-text { color: var(--fx-text); }
+.fx-save-dock-actions { display: flex; flex: none; align-items: center; gap: 4px; }
+.fx-save-dock-actions [data-slot="button"] { height: 36px; border-radius: var(--fx-radius-pill); }
+/* 没改动时「保存」是灰的；一改动才是主色渐变（disabled 的主按钮本来就会淡掉，这里再去掉渐变，像参考站那样灰） */
+.fx-save-dock:not([data-dirty]) .fx-save-dock-actions [data-slot="button"]:last-child { background: var(--fx-hover); background-image: none; color: var(--fx-text-muted); box-shadow: none; opacity: 1; }
+@media (max-width: 767px) {
+  /* 手机上躲开底部标签栏（58 高 + 离底 12 + 安全区） */
+  .fx-save-dock { bottom: calc(82px + env(safe-area-inset-bottom, 0px)); padding-left: 14px; }
+  .fx-save-dock-text { font-size: 12.5px; }
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .fx-save-dock { background: var(--fx-l1-surface); }
+}
+
+/* 个性化顶上的预览卡：一片白瓣，Logo、站点名（斜体衬线）、现在的界面主题 */
+.fx-brand-preview {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 22px 16px 18px;
+  border-radius: var(--fx-radius-surface);
+  background: var(--fx-card-fill, var(--fx-l1-surface));
+  box-shadow: var(--fx-elevation-card);
+  text-align: center;
+}
+.fx-brand-preview-logo { display: inline-flex; width: 56px; height: 56px; align-items: center; justify-content: center; }
+.fx-brand-preview-logo img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.fx-brand-preview-name { font: italic 400 22px/1.25 var(--fx-font-display, serif); color: var(--fx-text); overflow-wrap: anywhere; }
+.fx-brand-preview-meta { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--fx-text-muted); }
+.fx-brand-preview-meta .fx-theme-dot { width: 14px; height: 14px; }
+.fx-brand-preview-meta em { font-style: normal; color: var(--fx-rose, var(--fx-accent)); }
