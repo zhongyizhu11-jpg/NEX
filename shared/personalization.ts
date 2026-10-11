@@ -440,3 +440,29 @@ export function normalizePersonalizationCardStyle(value: unknown): Personalizati
     ? text as PersonalizationCardStyleId
     : "edge";
 }
+
+/*
+  界面主题（设置 › 个性化 › 界面主题）：整套界面的气质，一次换掉底、卡、外壳、控件的形状。
+  配色 / 页面底色 / 卡片风格那三项是「在当前主题上微调」，主题是它们底下那一层。
+
+    classic 经典 —— 现在这套：浅灰页面托白卡、细线、天蓝渐变控件；深色是炭灰。出厂值，不往 <html> 上写属性。
+    aurora  极光 —— 页面是一层淡淡的彩色柔光（主色 + 薄荷 + 淡紫），卡片是半透明的玻璃片
+            （白 72% + 白高光边 + 带一点主色的软影，**不做 backdrop 模糊**，滚动不卡），
+            分段控件、搜索框、按钮全部改成胶囊，顶栏和底部标签栏更透。深色是深蓝黑底上压暗的同一组光。
+
+  画法全在 client/src/styles/theme-aurora.css 里按 <html data-ui-theme> 选；这里只管 id 和文案。
+  存的是 id；别的值一律回到 classic。
+*/
+export const PERSONALIZATION_UI_THEMES = [
+  { id: "classic", name: "经典", description: "浅灰底托白卡、细线分区、天蓝渐变控件；深色是炭灰。现在这套。" },
+  { id: "aurora", name: "极光", description: "彩色柔光底 + 半透明玻璃卡 + 胶囊控件，顶栏和标签栏更通透；深色是深蓝黑底上的微光。" },
+] as const;
+
+export type PersonalizationUiThemeId = typeof PERSONALIZATION_UI_THEMES[number]["id"];
+
+export function normalizePersonalizationUiTheme(value: unknown): PersonalizationUiThemeId {
+  const text = String(value || "").trim();
+  return PERSONALIZATION_UI_THEMES.some((theme) => theme.id === text)
+    ? text as PersonalizationUiThemeId
+    : "classic";
+}

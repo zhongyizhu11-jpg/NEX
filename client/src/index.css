@@ -4,6 +4,7 @@
 @import "@fontsource-variable/public-sans";
 @import "../../shared/design-tokens.css";
 @import "./styles/workspace.css";
+@import "./styles/theme-aurora.css";
 
 @custom-variant dark (&:is(.dark *));
 

@@ -38,6 +38,10 @@ const 在案: Record<string, { 值: number[]; 因为: string }> = {
     值: [-1, 0, 1],
     因为: "页面基座：背景视频压在 -1，#root 抬到 1 盖住它。不是分层，是一对固定搭配",
   },
+  "styles/theme-aurora.css": {
+    值: [-1],
+    因为: "「极光」主题的柔光底：和背景视频同一档，body::after 固定在 -1，#root 的 1 盖住它。和 index.css 那一对是同一个搭配",
+  },
   "styles/workspace.css": {
     值: [1],
     因为: "组件内部同级排序（滚动按钮、连线节点、箭头），不参与全站分层",

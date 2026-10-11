@@ -109,6 +109,7 @@ import {
   normalizePersonalizationCardStyle,
   normalizePersonalizationPageTint,
   normalizePersonalizationThemePresetId,
+  normalizePersonalizationUiTheme,
   type PersonalizationBackgroundConfig,
 } from "../../shared/personalization";
 import {
@@ -1669,6 +1670,7 @@ function publicSystemSettings(all: Record<string, string | null>, activeProtocol
     personalizationTheme: normalizePersonalizationThemePresetId(all.personalizationTheme),
     personalizationPageTint: normalizePersonalizationPageTint(all.personalizationPageTint),
     personalizationCardStyle: normalizePersonalizationCardStyle(all.personalizationCardStyle),
+    personalizationUiTheme: normalizePersonalizationUiTheme(all.personalizationUiTheme),
     personalizationBackground: publicPersonalizationBackground(all),
     panelPublicUrl: all.panelPublicUrl ?? "",
     panelSsl: {
@@ -1821,6 +1823,7 @@ export const systemRouter = router({
       personalizationTheme: normalizePersonalizationThemePresetId(all.personalizationTheme),
       personalizationPageTint: normalizePersonalizationPageTint(all.personalizationPageTint),
       personalizationCardStyle: normalizePersonalizationCardStyle(all.personalizationCardStyle),
+      personalizationUiTheme: normalizePersonalizationUiTheme(all.personalizationUiTheme),
       personalizationBackground: publicPersonalizationBackground(all),
       registrationEnabled: all.registrationEnabled !== "false",
       twoFactorEnabled: all.twoFactorEnabled === "true",
@@ -2103,6 +2106,7 @@ export const systemRouter = router({
         personalizationTheme: z.string().max(32).optional(),
         personalizationPageTint: z.string().max(16).optional(),
         personalizationCardStyle: z.string().max(16).optional(),
+        personalizationUiTheme: z.string().max(16).optional(),
         registrationEnabled: z.boolean().optional(),
         twoFactorEnabled: z.boolean().optional(),
         lookingGlassUserEnabled: z.boolean().optional(),
@@ -2243,6 +2247,11 @@ export const systemRouter = router({
         const cardStyle = normalizePersonalizationCardStyle(input.personalizationCardStyle);
         await db.setSetting("personalizationCardStyle", cardStyle);
         console.info(`[Settings] personalization card style updated style=${cardStyle}`);
+      }
+      if (input.personalizationUiTheme !== undefined) {
+        const uiTheme = normalizePersonalizationUiTheme(input.personalizationUiTheme);
+        await db.setSetting("personalizationUiTheme", uiTheme);
+        console.info(`[Settings] personalization ui theme updated theme=${uiTheme}`);
       }
       if (input.registrationEnabled !== undefined) {
         await db.setSetting("registrationEnabled", input.registrationEnabled ? "true" : "false");

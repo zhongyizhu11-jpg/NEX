@@ -57,3 +57,12 @@ test("卡片风格：四选一，默认彩色描边", async () => {
   assert.equal(normalizePersonalizationCardStyle("zebra"), "edge");
   assert.equal(normalizePersonalizationCardStyle(""), "edge");
 });
+
+test("界面主题：经典 / 极光二选一，默认经典", async () => {
+  const { normalizePersonalizationUiTheme, PERSONALIZATION_UI_THEMES } = await import("./personalization");
+  assert.deepEqual(PERSONALIZATION_UI_THEMES.map((theme) => theme.id), ["classic", "aurora"]);
+  assert.equal(normalizePersonalizationUiTheme("aurora"), "aurora");
+  assert.equal(normalizePersonalizationUiTheme("classic"), "classic");
+  assert.equal(normalizePersonalizationUiTheme("neon"), "classic");
+  assert.equal(normalizePersonalizationUiTheme(undefined), "classic");
+});

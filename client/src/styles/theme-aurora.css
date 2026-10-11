@@ -1,0 +1,251 @@
+/*
+  ── 界面主题「极光」（设置 › 个性化 › 界面主题）──
+
+  整套界面的第二种气质，由 <html data-ui-theme="aurora"> 打开；没有这个属性就是「经典」，
+  这个文件一条都不生效。配色（默认配色）、页面底色、卡片风格三项仍然照常工作，它们是在
+  这一层上面的微调：主色换了，柔光和玻璃的影子跟着换；卡片风格换了，玻璃卡上那点颜色跟着换。
+
+  「极光」是四件事一起换，缺一件就只是换了个颜色（用户的原话：只换颜色看着「没变」）：
+
+    1. 底   不再是一块平灰，是一层很淡的彩色柔光：左上一团主色、右上一团淡紫、右下一团薄荷、
+            左下一抹粉。独立一层 position: fixed 画（iOS WebView 里 background-attachment: fixed
+            无效），滚动时不重绘。深色是深蓝黑底上压暗的同一组光。
+    2. 卡   半透明的玻璃片：白 72% + 1px 白高光边 + 卡顶一条内高光 + 带一点主色的软影。
+            **不做 backdrop 模糊** —— 在柔光底上模糊前后几乎看不出差别，却是一屏二十张卡滚动
+            卡顿的来源（2026-10-08 Komari 主题分析的结论）。玻璃感来自「底有颜色 + 卡半透 +
+            白边」，不来自模糊。卡角再放一档（22 → 24）。
+    3. 壳   顶栏、大标题导航栏、底部标签栏、侧栏都更透：没有底边线，靠透出来的柔光和内容分开；
+            标签栏是一枚更亮的玻璃胶囊，影子带一点主色。
+    4. 控件 分段控件、搜索框、输入框、按钮全部是胶囊（999px）；分段控件的槽是半透明玻璃加白边，
+            卡里的读数格（CPU / 内存 / 磁盘）是更淡的一层玻璃。主色渐变不动，选中态仍然是那道
+            天蓝（或当前配色）渐变，跟着「默认配色」换。
+
+  模糊只留给本来就有模糊的几个固定面（顶栏、标签栏、弹层），和经典一样。
+*/
+
+html[data-ui-theme="aurora"] {
+  /* 底：很浅的冷白，柔光铺在它上面。页面底色设置仍然能换这一层（它写的就是 --fx-l0-page） */
+  --fx-l0-page: #f4f6fb;
+  --fx-l3-control-fill: rgb(255 255 255 / 58%);
+  --fx-l2-group: color-mix(in srgb, var(--fx-primary-fill) 7%, rgb(255 255 255 / 70%));
+  --fx-sidebar: rgb(255 255 255 / 46%);
+  --fx-hover: rgb(255 255 255 / 70%);
+  --fx-pressed: rgb(255 255 255 / 92%);
+  /* 四团光：主色跟着配色走，其余三团固定色相（淡紫 / 薄荷 / 粉），都很淡 */
+  --fx-aurora-1: color-mix(in srgb, var(--fx-primary-fill) 62%, transparent);
+  --fx-aurora-2: rgb(167 139 250 / 50%);
+  --fx-aurora-3: rgb(94 234 212 / 52%);
+  --fx-aurora-4: rgb(249 168 212 / 40%);
+  /* 玻璃卡 */
+  --fx-card-fill: rgb(255 255 255 / 66%);
+  --fx-card-stroke: rgb(255 255 255 / 92%);
+  --fx-elevation-card:
+    inset 0 1px 0 rgb(255 255 255 / 95%),
+    0 1px 2px rgb(30 50 90 / 4%),
+    0 18px 40px -22px color-mix(in srgb, var(--fx-primary-fill) 40%, rgb(30 50 90 / 30%));
+  --fx-glass: rgb(255 255 255 / 52%);
+  --fx-glass-strong: rgb(255 255 255 / 72%);
+  --fx-glass-blur: saturate(190%) blur(22px);
+  --fx-radius-card: 20px;
+  --fx-radius-surface: 24px;
+  --fx-radius-modal: 30px;
+  /* 弹层仍然是不透明的：下拉菜单压在玻璃卡上要看得清 */
+  --fx-elevation-popover: 0 16px 40px -10px rgb(30 50 90 / 18%), 0 2px 6px rgb(30 50 90 / 6%), 0 0 0 1px rgb(255 255 255 / 80%);
+}
+
+html.dark[data-ui-theme="aurora"] {
+  --fx-l0-page: #0f1117;
+  --fx-l1-surface: #1b1e27;
+  --fx-raised: #232734;
+  --fx-l2-group: rgb(255 255 255 / 5%);
+  --fx-l3-control: #1b1e27;
+  --fx-l3-control-fill: rgb(255 255 255 / 7%);
+  --fx-sidebar: rgb(14 16 23 / 62%);
+  --fx-hover: rgb(255 255 255 / 6%);
+  --fx-pressed: rgb(255 255 255 / 11%);
+  --fx-stroke-weak: rgb(255 255 255 / 9%);
+  --fx-aurora-1: color-mix(in srgb, var(--fx-primary-fill) 46%, transparent);
+  --fx-aurora-2: rgb(139 120 240 / 30%);
+  --fx-aurora-3: rgb(63 209 189 / 22%);
+  --fx-aurora-4: rgb(240 140 192 / 18%);
+  --fx-card-fill: rgb(30 33 43 / 74%);
+  --fx-card-stroke: rgb(255 255 255 / 9%);
+  --fx-elevation-card:
+    inset 0 1px 0 rgb(255 255 255 / 7%),
+    0 1px 2px rgb(0 0 0 / 30%),
+    0 20px 44px -24px rgb(0 0 0 / 70%);
+  --fx-glass: rgb(16 18 26 / 56%);
+  --fx-glass-strong: rgb(22 25 34 / 74%);
+  --fx-glass-blur: saturate(170%) blur(22px);
+  --fx-elevation-popover: 0 16px 40px -8px rgb(0 0 0 / 65%), 0 2px 6px rgb(0 0 0 / 40%), 0 0 0 1px rgb(255 255 255 / 9%);
+}
+
+/* ── 1. 柔光底 ───────────────────────────────────────────────── */
+/*
+  body::before 已经被自定义壁纸占了（index.css），柔光用 body::after。z-index -1 落在 body 自己的
+  底色（它会传给画布，画在最底下）之上、内容之下。四团径向渐变，不是图片：换配色时主色那团跟着换。
+*/
+/*
+  <html> 自己有底色，所以 body 的底不会传给画布，而是当成普通块背景画 —— 它排在负 z-index 那层
+  **之后**，会把柔光整个盖住。极光下 body 不铺底，页面底色由 <html> 那一层给。
+*/
+html[data-ui-theme="aurora"] body { background: transparent; }
+html[data-ui-theme="aurora"] body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(80% 60% at 4% 0%, var(--fx-aurora-1), transparent 72%),
+    radial-gradient(65% 50% at 100% 12%, var(--fx-aurora-2), transparent 72%),
+    radial-gradient(70% 55% at 94% 100%, var(--fx-aurora-3), transparent 72%),
+    radial-gradient(55% 45% at 0% 98%, var(--fx-aurora-4), transparent 72%);
+}
+/* 登录页、公开首页、安装页自己铺了一层不透明的页面底，会把柔光盖掉 */
+html[data-ui-theme="aurora"] .auth-shell,
+html[data-ui-theme="aurora"] .public-home-shell,
+html[data-ui-theme="aurora"] .setup-shell { background: transparent; }
+
+/* ── 2. 玻璃卡 ───────────────────────────────────────────────── */
+/*
+  经典的「彩色描边」是一道渐变边压在白卡上（border-box 那层渐变只露出边）。卡身一半透之后，
+  那层渐变会从卡身透出来把整张卡染色，所以极光下描边改成一圈内描边（box-shadow inset），
+  卡身仍是玻璃。颜色照旧跟 --fx-card-tone（状态）走。
+*/
+html[data-ui-theme="aurora"]:not([data-card-style]) .workspace-main [data-slot="card"],
+html[data-ui-theme="aurora"][data-card-style="edge"] .workspace-main [data-slot="card"],
+html[data-ui-theme="aurora"]:not([data-card-style]) .fx-card-face,
+html[data-ui-theme="aurora"][data-card-style="edge"] .fx-card-face {
+  border: 1px solid var(--fx-card-stroke);
+  background: var(--fx-card-fill);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fx-card-tone) 34%, transparent), var(--fx-elevation-card);
+}
+html[data-ui-theme="aurora"]:not([data-card-style]) .workspace-main [data-tone="off"][data-slot="card"],
+html[data-ui-theme="aurora"][data-card-style="edge"] .workspace-main [data-tone="off"][data-slot="card"],
+html[data-ui-theme="aurora"]:not([data-card-style]) .fx-card-face[data-tone="off"],
+html[data-ui-theme="aurora"][data-card-style="edge"] .fx-card-face[data-tone="off"] {
+  box-shadow: var(--fx-elevation-card);
+}
+/* 设置页「卡片风格」色块里的描边同样改内描边，和真卡一致 */
+html[data-ui-theme="aurora"] .fx-cardstyle-swatch[data-style="edge"] .fx-cardstyle-swatch-face {
+  border: 1px solid var(--fx-card-stroke);
+  background: var(--fx-card-fill);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fx-card-tone) 34%, transparent), var(--fx-elevation-card);
+}
+html[data-ui-theme="aurora"] .fx-cardstyle-swatch {
+  background:
+    radial-gradient(80% 70% at 0% 0%, var(--fx-aurora-1), transparent 70%),
+    radial-gradient(70% 60% at 100% 100%, var(--fx-aurora-3), transparent 70%),
+    var(--fx-l0-page);
+}
+/* 首页那张概览卡的运行状态条、规则 / 主机卡里的读数格：更淡的一层玻璃，不再是实灰 */
+html[data-ui-theme="aurora"] .fx-host-spec { background: var(--fx-l2-group); box-shadow: inset 0 0 0 1px rgb(255 255 255 / 55%); }
+html.dark[data-ui-theme="aurora"] .fx-host-spec { box-shadow: inset 0 0 0 1px rgb(255 255 255 / 5%); }
+
+/* ── 3. 外壳 ─────────────────────────────────────────────────── */
+html[data-ui-theme="aurora"] .workspace-appbar { border-bottom-color: transparent; }
+html[data-ui-theme="aurora"] .workspace-layout [data-sidebar="sidebar"] { border-right-color: rgb(255 255 255 / 55%); }
+html.dark[data-ui-theme="aurora"] .workspace-layout [data-sidebar="sidebar"] { border-right-color: rgb(255 255 255 / 6%); }
+/* 大标题导航栏：和柔光同一层，不画线；折叠后也只靠透出来的光分开 */
+html[data-ui-theme="aurora"] .fx-navbar { background: color-mix(in srgb, var(--fx-l0-page) 62%, transparent); }
+html[data-ui-theme="aurora"] .fx-navbar-collapsed { border-bottom-color: rgb(255 255 255 / 60%); }
+html.dark[data-ui-theme="aurora"] .fx-navbar-collapsed { border-bottom-color: rgb(255 255 255 / 7%); }
+/* 底部标签栏：更亮的玻璃胶囊，白高光边，影子带一点主色 */
+html[data-ui-theme="aurora"] .fx-tabbar {
+  border-color: rgb(255 255 255 / 85%);
+  background: rgb(255 255 255 / 60%);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 95%),
+    0 22px 48px -18px color-mix(in srgb, var(--fx-primary-fill) 45%, rgb(30 50 90 / 45%)),
+    0 2px 6px rgb(30 50 90 / 6%);
+}
+html.dark[data-ui-theme="aurora"] .fx-tabbar {
+  border-color: rgb(255 255 255 / 10%);
+  background: rgb(24 27 36 / 64%);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 8%), 0 22px 48px -18px rgb(0 0 0 / 80%), 0 2px 6px rgb(0 0 0 / 40%);
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  html[data-ui-theme="aurora"] .fx-tabbar, html[data-ui-theme="aurora"] .workspace-appbar { background: var(--fx-l1-surface); }
+}
+
+/* ── 4. 胶囊控件 ─────────────────────────────────────────────── */
+/*
+  分段控件：半透明玻璃槽 + 白边 + 槽顶一条内高光，整条和每一格都是胶囊。
+  原来是 14px 圆角的实灰槽；在柔光底上实灰像一块贴纸。
+*/
+html[data-ui-theme="aurora"] .workspace-tabs {
+  border-radius: var(--fx-radius-pill);
+  border: 1px solid rgb(255 255 255 / 85%);
+  background: var(--fx-l3-control-fill);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 80%), 0 1px 2px rgb(30 50 90 / 4%);
+}
+html.dark[data-ui-theme="aurora"] .workspace-tabs { border-color: rgb(255 255 255 / 8%); box-shadow: inset 0 1px 0 rgb(255 255 255 / 5%); }
+html[data-ui-theme="aurora"] .workspace-tabs .workspace-tab,
+html[data-ui-theme="aurora"] .workspace-tab-scroll { border-radius: var(--fx-radius-pill); }
+html[data-ui-theme="aurora"] .workspace-tabs .workspace-tab[data-state="active"] { box-shadow: var(--fx-primary-shadow); }
+/* 搜索框、输入框、下拉触发器、按钮：胶囊。输入框半透，坐在柔光上能看出是一块玻璃 */
+html[data-ui-theme="aurora"] .workspace-main [data-slot="input"],
+html[data-ui-theme="aurora"] .workspace-main [data-slot="select-trigger"],
+html[data-ui-theme="aurora"] .workspace-filter-search input {
+  border-radius: var(--fx-radius-pill);
+  background: rgb(255 255 255 / 62%);
+  border-color: rgb(255 255 255 / 90%);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 90%), 0 1px 2px rgb(30 50 90 / 4%);
+}
+html.dark[data-ui-theme="aurora"] .workspace-main [data-slot="input"],
+html.dark[data-ui-theme="aurora"] .workspace-main [data-slot="select-trigger"],
+html.dark[data-ui-theme="aurora"] .workspace-filter-search input {
+  background: rgb(255 255 255 / 6%);
+  border-color: rgb(255 255 255 / 9%);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 5%);
+}
+/* 多行输入框不做胶囊：一个 999px 圆角的文本域四角会吃掉第一行和最后一行 */
+html[data-ui-theme="aurora"] .workspace-main textarea[data-slot="input"] { border-radius: var(--fx-radius-control); }
+html[data-ui-theme="aurora"] [data-slot="button"]:not([data-icon-button]) { border-radius: var(--fx-radius-pill); }
+/* 主按钮的影子带主色，在柔光上像浮着 */
+html[data-ui-theme="aurora"] .workspace-main [data-slot="button"][data-variant="default"],
+html[data-ui-theme="aurora"] .workspace-main [data-slot="button"]:not([data-variant]) { box-shadow: var(--fx-primary-shadow); }
+/* 状态胶囊、分组 chip：玻璃底的未选中态 */
+html[data-ui-theme="aurora"] .fx-chip:not(.fx-chip-on) {
+  background: rgb(255 255 255 / 55%);
+  border-color: rgb(255 255 255 / 90%);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 90%);
+}
+html.dark[data-ui-theme="aurora"] .fx-chip:not(.fx-chip-on) {
+  background: rgb(255 255 255 / 6%);
+  border-color: rgb(255 255 255 / 9%);
+  box-shadow: none;
+}
+
+/* ── 设置页「界面主题」的两枚预览 ───────────────────────────── */
+/*
+  一小块手机屏：底 + 两张卡 + 底部一枚胶囊。经典那枚是灰底白卡实边线，极光那枚是柔光底玻璃卡。
+  画法和真页面用同一组变量（极光那枚自己带一套，不依赖当前是否已经选了极光）。
+*/
+.fx-uitheme-swatch { position: relative; display: flex; flex-direction: column; gap: 6px; height: 88px; padding: 10px 12px 8px; overflow: hidden; border-radius: 14px; background: #f5f5f7; isolation: isolate; }
+.dark .fx-uitheme-swatch { background: #1e1e1e; }
+.fx-uitheme-swatch > i { display: block; height: 22px; border-radius: 9px; border: 1px solid rgb(0 0 0 / 6%); background: #fff; box-shadow: 0 1px 2px rgb(0 0 0 / 3%); }
+.dark .fx-uitheme-swatch > i { border-color: rgb(255 255 255 / 8%); background: #2a2a2a; }
+.fx-uitheme-swatch > i:nth-child(2) { width: 72%; }
+.fx-uitheme-swatch > b { position: absolute; left: 50%; bottom: 7px; width: 54%; height: 12px; transform: translateX(-50%); border-radius: 999px; border: 1px solid rgb(0 0 0 / 6%); background: rgb(255 255 255 / 80%); }
+.dark .fx-uitheme-swatch > b { border-color: rgb(255 255 255 / 10%); background: rgb(42 42 42 / 85%); }
+.fx-uitheme-swatch > b::after { content: ""; position: absolute; left: 3px; top: 2px; width: 22%; height: 6px; border-radius: 999px; background: var(--fx-primary-gradient); }
+.fx-uitheme-swatch[data-theme="aurora"] {
+  background:
+    radial-gradient(70% 60% at 6% 0%, color-mix(in srgb, var(--fx-primary-fill) 40%, transparent), transparent 70%),
+    radial-gradient(55% 50% at 100% 10%, rgb(167 139 250 / 32%), transparent 70%),
+    radial-gradient(60% 55% at 92% 100%, rgb(94 234 212 / 34%), transparent 70%),
+    #f4f6fb;
+}
+.dark .fx-uitheme-swatch[data-theme="aurora"] {
+  background:
+    radial-gradient(70% 60% at 6% 0%, color-mix(in srgb, var(--fx-primary-fill) 34%, transparent), transparent 70%),
+    radial-gradient(55% 50% at 100% 10%, rgb(139 120 240 / 24%), transparent 70%),
+    radial-gradient(60% 55% at 92% 100%, rgb(63 209 189 / 16%), transparent 70%),
+    #0f1117;
+}
+.fx-uitheme-swatch[data-theme="aurora"] > i { border-color: rgb(255 255 255 / 92%); background: rgb(255 255 255 / 70%); box-shadow: inset 0 1px 0 rgb(255 255 255 / 95%), 0 8px 18px -10px rgb(30 50 90 / 30%); }
+.dark .fx-uitheme-swatch[data-theme="aurora"] > i { border-color: rgb(255 255 255 / 9%); background: rgb(30 33 43 / 74%); box-shadow: inset 0 1px 0 rgb(255 255 255 / 7%); }
+.fx-uitheme-swatch[data-theme="aurora"] > b { border-color: rgb(255 255 255 / 90%); background: rgb(255 255 255 / 62%); }
+.dark .fx-uitheme-swatch[data-theme="aurora"] > b { border-color: rgb(255 255 255 / 10%); background: rgb(24 27 36 / 70%); }
