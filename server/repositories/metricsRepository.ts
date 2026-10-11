@@ -256,7 +256,7 @@ export async function getLatestHostMetricRows(hostIds?: number[]) {
   const rows = await queryLatestHostMetricRows(ids, [
     "id", "hostId", "cpuUsage", "memoryUsage", "memoryUsed", "swapUsage",
     "swapUsed", "swapTotal", "networkIn", "networkOut", "diskUsage",
-    "diskUsed", "diskTotal", "uptime", "recordedAt",
+    "diskUsed", "diskTotal", "uptime", "tcpConnections", "udpConnections", "recordedAt",
   ]).catch(() => []);
   const mapped = (rows as any[])
     .map((row) => ({
@@ -274,6 +274,8 @@ export async function getLatestHostMetricRows(hostIds?: number[]) {
       diskUsed: row?.diskUsed == null ? null : numeric(row.diskUsed),
       diskTotal: row?.diskTotal == null ? null : numeric(row.diskTotal),
       uptime: row?.uptime == null ? null : numeric(row.uptime),
+      tcpConnections: row?.tcpConnections == null ? null : numeric(row.tcpConnections),
+      udpConnections: row?.udpConnections == null ? null : numeric(row.udpConnections),
       recordedAt: rowDate(row?.recordedAt),
       rn: Math.max(1, Math.floor(Number(row?.rn || 0))),
     }))
@@ -302,6 +304,38 @@ export async function getLatestHostMetricRows(hostIds?: number[]) {
       networkSpeedOut,
     };
   }).filter(Boolean);
+}
+
+/**
+ * 这几台主机此刻的连接数加起来：每台只取最新一条上报，TCP / UDP 分开加。
+ *
+ * 给首页「连接」那一格用。调用方负责只传在线的主机 —— 掉线机器最后一次报的数
+ * 不是「此刻」，加进去总数就虚了（和 useHostVitals 里 CPU 离线回 null 是同一条理由）。
+ * 旧 Agent 没报（null）的按 0 算，reported 记录有几台真的报了：一台都没报就不画这一格。
+ */
+export async function sumLatestHostConnections(hostIds: number[]) {
+  const empty = { tcp: 0, udp: 0, reported: 0 };
+  const db = await getDb();
+  if (!db) return empty;
+  const ids = Array.from(new Set((hostIds || [])
+    .map((id) => Number(id))
+    .filter((id) => Number.isInteger(id) && id > 0)));
+  if (ids.length === 0) return empty;
+  const rows = await queryLatestHostMetricRows(
+    ids,
+    ["id", "hostId", "tcpConnections", "udpConnections", "recordedAt"],
+  ).catch(() => []);
+  const total = { ...empty };
+  for (const row of rows as any[]) {
+    if (Number(row?.rn || 0) !== 1) continue;
+    const tcp = row?.tcpConnections == null ? null : numeric(row.tcpConnections);
+    const udp = row?.udpConnections == null ? null : numeric(row.udpConnections);
+    if (tcp === null && udp === null) continue;
+    total.reported += 1;
+    total.tcp += Math.max(0, tcp ?? 0);
+    total.udp += Math.max(0, udp ?? 0);
+  }
+  return total;
 }
 
 type LatestHostMetricSnapshot = {

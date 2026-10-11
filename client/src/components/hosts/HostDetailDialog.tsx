@@ -51,6 +51,13 @@ function Row({ label, value }: { label: ReactNode; value: ReactNode }) {
   );
 }
 
+/** 「TCP 1,284 · UDP 96」；两个都没有就是一个「—」，只有一个时另一个单独画「—」。 */
+export function connectionsText(tcp: number | null, udp: number | null) {
+  if (tcp === null && udp === null) return "—";
+  const n = (value: number | null) => (value === null ? "—" : value.toLocaleString("zh-CN"));
+  return `TCP ${n(tcp)} · UDP ${n(udp)}`;
+}
+
 export type HostDetailDialogProps = Omit<HostSummaryCardProps, "onOpenDetail"> & {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -135,6 +142,11 @@ export default function HostDetailDialog(props: HostDetailDialogProps) {
             <Row label="地址" value={hostAddressText(host) || "—"} />
             <Row label="地区" value={hostRegionText(host) || "—"} />
             <Row label={vitals.uptimeLabel} value={vitals.uptimeText} />
+            {/*
+              此刻这台机器上的连接数。离线或旧 Agent 没报都是「—」：一台断了的机器
+              写着「TCP 1284」会让人以为它还在跑（同 CPU 那条理由）。
+            */}
+            <Row label="连接数" value={connectionsText(vitals.tcpConnections, vitals.udpConnections)} />
           </Section>
 
           <Section title="资源">

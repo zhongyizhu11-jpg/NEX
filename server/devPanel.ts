@@ -469,11 +469,11 @@ async function seedAgentTokens(adminId: number, hostIds: number[]) {
 
 async function seedHostMetrics(hostIds: number[]) {
   const metricRows = [
-    { cpuUsage: 18, memoryUsage: 42, memoryUsed: 3.4 * 1024 ** 3, swapUsage: 6, swapUsed: 180 * 1024 ** 2, swapTotal: 3 * 1024 ** 3, diskUsage: 36, diskUsed: 72 * 1024 ** 3, diskTotal: 200 * 1024 ** 3, uptime: 16 * 86400 + 5 * 3600, inSpeed: 8.42 * 1024 ** 2, outSpeed: 11.6 * 1024 ** 2 },
-    { cpuUsage: 72, memoryUsage: 68, memoryUsed: 10.8 * 1024 ** 3, swapUsage: 18, swapUsed: 720 * 1024 ** 2, swapTotal: 4 * 1024 ** 3, diskUsage: 51, diskUsed: 122 * 1024 ** 3, diskTotal: 240 * 1024 ** 3, uptime: 42 * 86400 + 11 * 3600, inSpeed: 3.18 * 1024 ** 2, outSpeed: 24.9 * 1024 ** 2 },
+    { cpuUsage: 18, memoryUsage: 42, memoryUsed: 3.4 * 1024 ** 3, swapUsage: 6, swapUsed: 180 * 1024 ** 2, swapTotal: 3 * 1024 ** 3, diskUsage: 36, diskUsed: 72 * 1024 ** 3, diskTotal: 200 * 1024 ** 3, uptime: 16 * 86400 + 5 * 3600, inSpeed: 8.42 * 1024 ** 2, outSpeed: 11.6 * 1024 ** 2, tcpConnections: 1284, udpConnections: 96 },
+    { cpuUsage: 72, memoryUsage: 68, memoryUsed: 10.8 * 1024 ** 3, swapUsage: 18, swapUsed: 720 * 1024 ** 2, swapTotal: 4 * 1024 ** 3, diskUsage: 51, diskUsed: 122 * 1024 ** 3, diskTotal: 240 * 1024 ** 3, uptime: 42 * 86400 + 11 * 3600, inSpeed: 3.18 * 1024 ** 2, outSpeed: 24.9 * 1024 ** 2, tcpConnections: 3517, udpConnections: 412 },
     // 空闲的中转机：Agent 按整数上报，不到 0.5% 就是 0，面板要写成「<1%」
-    { cpuUsage: 0, memoryUsage: 56, memoryUsed: 6.8 * 1024 ** 3, swapUsage: 3, swapUsed: 96 * 1024 ** 2, swapTotal: 2 * 1024 ** 3, diskUsage: 29, diskUsed: 58 * 1024 ** 3, diskTotal: 200 * 1024 ** 3, uptime: 5 * 86400 + 4 * 3600, inSpeed: 912 * 1024, outSpeed: 1.74 * 1024 ** 2 },
-    { cpuUsage: 0, memoryUsage: 0, memoryUsed: 0, swapUsage: 0, swapUsed: 0, swapTotal: 2 * 1024 ** 3, diskUsage: 47, diskUsed: 94 * 1024 ** 3, diskTotal: 200 * 1024 ** 3, uptime: 0, inSpeed: 0, outSpeed: 0 },
+    { cpuUsage: 0, memoryUsage: 56, memoryUsed: 6.8 * 1024 ** 3, swapUsage: 3, swapUsed: 96 * 1024 ** 2, swapTotal: 2 * 1024 ** 3, diskUsage: 29, diskUsed: 58 * 1024 ** 3, diskTotal: 200 * 1024 ** 3, uptime: 5 * 86400 + 4 * 3600, inSpeed: 912 * 1024, outSpeed: 1.74 * 1024 ** 2, tcpConnections: 62, udpConnections: 9 },
+    { cpuUsage: 0, memoryUsage: 0, memoryUsed: 0, swapUsage: 0, swapUsed: 0, swapTotal: 2 * 1024 ** 3, diskUsage: 47, diskUsed: 94 * 1024 ** 3, diskTotal: 200 * 1024 ** 3, uptime: 0, inSpeed: 0, outSpeed: 0, tcpConnections: 0, udpConnections: 0 },
   ];
   const counters = [
     { bytesIn: 469.56 * 1024 ** 3, bytesOut: 471.24 * 1024 ** 3 },
@@ -500,6 +500,8 @@ async function seedHostMetrics(hostIds: number[]) {
       diskUsed: Math.round(item.diskUsed),
       diskTotal: Math.round(item.diskTotal),
       uptime: Math.max(0, item.uptime - 60),
+      tcpConnections: Math.max(0, item.tcpConnections - 7),
+      udpConnections: Math.max(0, item.udpConnections - 1),
       recordedAt: minutesAgo(1),
     });
     await insertAndGetId("host_metrics", {
@@ -516,6 +518,8 @@ async function seedHostMetrics(hostIds: number[]) {
       diskUsed: Math.round(item.diskUsed),
       diskTotal: Math.round(item.diskTotal),
       uptime: item.uptime,
+      tcpConnections: item.tcpConnections,
+      udpConnections: item.udpConnections,
       recordedAt: nowDate(),
     });
     await insertAndGetId("host_traffic_counters", {

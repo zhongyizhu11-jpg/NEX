@@ -1040,6 +1040,9 @@ export const hostMetrics = table("host_metrics", {
   diskUsed: bigint("diskUsed", { mode: "number" }),
   diskTotal: bigint("diskTotal", { mode: "number" }),
   uptime: bigint("uptime", { mode: "number" }),
+  /** 此刻的 TCP / UDP 连接数（Agent 2.2.215 起上报；旧 Agent 为 null） */
+  tcpConnections: int("tcpConnections"),
+  udpConnections: int("udpConnections"),
   recordedAt: epoch("recordedAt").notNull().default(nowDefault()),
 });
 export type HostMetric = typeof hostMetrics.$inferSelect;

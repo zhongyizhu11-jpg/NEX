@@ -2,7 +2,7 @@ import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { forwardGroups, forwardRules, hosts, tunnels, users } from "../../drizzle/schema";
 import { getDb } from "../dbRuntime";
 import { boolLiteral, quoteIdentifier, sqlCountAll } from "../dbCompat";
-import { getTotalTraffic, getTrafficSummaryByRule } from "./metricsRepository";
+import { getTotalTraffic, getTrafficSummaryByRule, sumLatestHostConnections } from "./metricsRepository";
 import { clampPositiveInt, epochSeconds, sqlBool } from "./repositoryUtils";
 import { resolveDashboardTrafficRuleIdentity } from "../dashboardTrafficIdentity";
 import { HOST_ONLINE_TTL_MS } from "../hostHeartbeatPolicy";
@@ -106,6 +106,11 @@ export type SystemHealthSummary = {
   forwards: { total: number; running: number; stalled: number; paused: number; disabled: number };
   /** 异常总数：「需要关注」里所有 down 那几类加起来。0 表示没有异常。 */
   issues: number;
+  /**
+   * 在线主机此刻的连接数加起来（TCP / UDP 分开）。reported 是其中真报了这个数的台数：
+   * 全是旧 Agent 时为 0，首页就不画那一格，而不是画一个假的 0。
+   */
+  connections: { tcp: number; udp: number; reported: number };
 };
 
 /** 首页顶上那一块的全部依据：几个数，加上这几个数背后具体是谁。 */
@@ -183,6 +188,7 @@ function emptyHealthCounts(): HealthCounts {
       links: { total: 0, healthy: 0, unhealthy: 0, degraded: 0 },
       forwards: { total: 0, running: 0, stalled: 0, paused: 0, disabled: 0 },
       issues: 0,
+      connections: { tcp: 0, udp: 0, reported: 0 },
     },
     totals: emptyAttentionTotals(),
   };
@@ -259,7 +265,13 @@ async function countDashboardHealth(userId?: number): Promise<HealthCounts> {
     })
     .from(forwardGroups)
     .where(userId ? eq(forwardGroups.userId, userId) : undefined);
-  const [hostRows, ruleRows, tunnelRows, groupRows] = await Promise.all([hostRowsQuery, ruleRowsQuery, tunnelRowsQuery, groupRowsQuery]);
+  // 连接数只加在线的机器：掉线机器最后一次报的数不是「此刻」。
+  const onlineHostIdsQuery = db
+    .select({ id: hosts.id })
+    .from(hosts)
+    .where(and(online, ...(userId ? [eq(hosts.userId, userId)] : [])));
+  const [hostRows, ruleRows, tunnelRows, groupRows, onlineHostRows] = await Promise.all([hostRowsQuery, ruleRowsQuery, tunnelRowsQuery, groupRowsQuery, onlineHostIdsQuery]);
+  const connections = await sumLatestHostConnections((onlineHostRows as Array<{ id: unknown }>).map((row) => Number(row.id)));
 
   const n = (value: unknown) => Math.max(0, Math.trunc(Number(value) || 0));
   const hostTotal = n(hostRows[0]?.total);
@@ -306,6 +318,7 @@ async function countDashboardHealth(userId?: number): Promise<HealthCounts> {
         disabled: n(ruleRows[0]?.disabled),
       },
       issues: countAttentionIssues(totals),
+      connections,
     },
     totals,
   };

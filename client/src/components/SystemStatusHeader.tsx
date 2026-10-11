@@ -1,4 +1,4 @@
-import { ArrowRight, ArrowRightLeft, Route, Server } from "lucide-react";
+import { Activity, ArrowRight, ArrowRightLeft, Route, Server } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { SummaryStrip, type SummaryItem } from "@/components/entity/SummaryStrip";
@@ -14,7 +14,24 @@ export type SystemHealth = {
   issues: number;
   /** 这几个数背后具体是谁。首页下面那块「需要关注」画的就是它 */
   attention?: DashboardAttention;
+  /** 在线主机此刻的连接数相加；reported = 其中真报了的台数（旧 Agent 不报） */
+  connections?: { tcp: number; udp: number; reported: number };
 };
+
+/** 首页那一格的补充行：手机上只放得下一个数，TCP 优先；桌面两个都给，完整的挂在 title 上。 */
+export function connectionsHint(connections: { tcp: number; udp: number }) {
+  const tcp = `TCP ${connections.tcp.toLocaleString("zh-CN")}`;
+  const udp = `UDP ${connections.udp.toLocaleString("zh-CN")}`;
+  return {
+    full: `${tcp} · ${udp}`,
+    node: (
+      <>
+        <span className="sm:hidden">{tcp}</span>
+        <span className="hidden sm:inline">{tcp} · {udp}</span>
+      </>
+    ),
+  };
+}
 
 type Props = {
   health?: SystemHealth;
@@ -58,6 +75,15 @@ export default function SystemStatusHeader({ health, loading, isAdmin, onRetry, 
   const verdict = health && !empty ? headline(health) : null;
   const linkDegraded = Math.max(0, Number(health?.links.degraded) || 0);
   const forwardPaused = Math.max(0, Number(health?.forwards.paused) || 0);
+  /*
+    「连接」这一格：管理员一直有（和「主机」一样，数的是机器）；租户只在他的机器真报了
+    连接数时才有 —— 大多数租户没有自己的机器，给他画一个永远是 0 的格子是噪音。
+    一台都没报（全是旧 Agent）时管理员那格画「—」，不画一个假的 0。
+  */
+  const connections = health?.connections;
+  const connectionsReported = !!connections && connections.reported > 0;
+  const showConnections = isAdmin || connectionsReported;
+  const connectionsHintParts = connectionsReported ? connectionsHint(connections) : null;
 
   const items: SummaryItem[] = [
     ...(isAdmin ? [{
@@ -101,6 +127,15 @@ export default function SystemStatusHeader({ health, loading, isAdmin, onRetry, 
         ? (health.forwards.stalled > 0 ? "warn" : forwardPaused > 0 && !isAdmin ? "warn" : "healthy")
         : undefined,
     },
+    ...(showConnections ? [{
+      key: "connections",
+      label: "连接",
+      icon: Activity,
+      iconTone: "orange" as const,
+      value: connectionsReported ? connections.tcp + connections.udp : "—",
+      hint: connectionsHintParts ? connectionsHintParts.node : health ? "等待 Agent 上报" : null,
+      title: connectionsHintParts ? connectionsHintParts.full : undefined,
+    } satisfies SummaryItem] : []),
   ];
 
   const verdictTone: "healthy" | "warn" | "muted" = loading && !health ? "muted" : !health ? "warn" : empty ? "muted" : verdict?.tone ?? "muted";
@@ -111,7 +146,7 @@ export default function SystemStatusHeader({ health, loading, isAdmin, onRetry, 
 
   return (
     <section className="system-health fx-overview-card fx-card-face flex min-w-0 flex-col" aria-label="运行状态">
-      <SummaryStrip items={items} loading={!!loading && !health} ariaLabel="主机、线路、转发数量" embedded />
+      <SummaryStrip items={items} loading={!!loading && !health} ariaLabel="主机、线路、转发、连接数量" embedded />
       <div
         className="system-health-verdict flex min-w-0 items-center gap-3 rounded-[var(--fx-radius-card)] border border-[var(--fx-stroke-weak)] px-3.5 py-2.5"
         data-tone={verdictTone}

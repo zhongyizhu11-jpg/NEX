@@ -1561,6 +1561,9 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     const diskUsed = heartbeatMetric("diskUsed", 10);
     const diskTotal = heartbeatMetric("diskTotal", 11);
     const uptime = heartbeatMetric("uptime", 12);
+    // 2.2.215 起 Agent 多报两个数：此刻的 TCP / UDP 连接数。旧 Agent 没有这两项，存 null，界面画「—」。
+    const tcpConnections = heartbeatMetric("tcpConnections", 13, 2147483647);
+    const udpConnections = heartbeatMetric("udpConnections", 14, 2147483647);
     const { cpuInfo, agentVersion } = req.body;
     const nextCpuInfo = normalizeAgentText(cpuInfo, 256);
     const nextAgentVersion = normalizeAgentText(agentVersion, 64);
@@ -1814,6 +1817,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       diskUsed: diskUsed ?? null,
       diskTotal: diskTotal ?? null,
       uptime: uptime ?? null,
+      tcpConnections: tcpConnections ?? null,
+      udpConnections: udpConnections ?? null,
     });
 
     if (busyHeartbeat) {
