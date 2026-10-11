@@ -3819,8 +3819,8 @@ function PersonalizationSettingsSection() {
 
       {/*
         界面主题：整套界面的气质（底、卡、外壳、控件形状一起换），是配色 / 底色 / 卡片风格底下那一层。
-        三枚预览是 CSS 画的小手机屏（.fx-uitheme-swatch，见 theme-aurora.css / theme-paper.css），经典是灰底白卡，
-        极光是柔光底玻璃卡，留白是白纸上两行字加细线；预览自带颜色，和当前选的是哪个无关。
+        三枚预览是 CSS 画的小手机屏（.fx-uitheme-swatch，见 theme-aurora.css / theme-minimal.css），经典是灰底白卡，
+        极光是柔光底玻璃卡，极简是白底上两块浅灰圆角；预览自带颜色，和当前选的是哪个无关。
       */}
       <Card className="border-border bg-card">
         <CardHeader className="gap-3 sm:flex-row sm:items-start sm:justify-between">
