@@ -86,9 +86,10 @@ export const TUNNEL_LINK_MBPS_MAX = 1_000_000;
  */
 export type TunnelLinkShapingMode = "auto" | "manual" | "off";
 
+// 默认是关：整形只在确实撞上限速器的链路上开，和「公网出口整形」「UDP 抗丢包」一样手动开。
 export function normalizeTunnelLinkShapingMode(value: unknown): TunnelLinkShapingMode {
   const mode = String(value || "").trim().toLowerCase();
-  return mode === "manual" || mode === "off" ? mode : "auto";
+  return mode === "manual" || mode === "auto" ? mode : "off";
 }
 
 /**

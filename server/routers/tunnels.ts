@@ -965,7 +965,7 @@ export const tunnelsRouter = router({
         udpOverTcp: z.boolean().optional().default(false),
         linkUpMbps: z.number().int().min(0).max(1_000_000).optional().default(0),
         linkDownMbps: z.number().int().min(0).max(1_000_000).optional().default(0),
-        linkShapingMode: z.enum(["auto", "manual", "off"]).optional().default("auto"),
+        linkShapingMode: z.enum(["auto", "manual", "off"]).optional().default("off"),
         udpFec: z.boolean().optional().default(false),
         blockHttp: z.boolean().optional().default(false),
         blockSocks: z.boolean().optional().default(false),

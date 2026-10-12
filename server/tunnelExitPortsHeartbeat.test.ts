@@ -91,8 +91,8 @@ function run(): Outcome {
     await tunnel(3, "GOST 出口发 PROXY 头", "tls", 23003, { proxyProtocolExitSend: 1 });
     await tunnel(4, "GOST 负载均衡", "tls", 23004, { loadBalanceEnabled: 1, loadBalanceStrategy: "round_robin" });
     await exec('INSERT INTO tunnel_exit_nodes ("tunnelId", seq, "hostId", "listenPort", "isEnabled") VALUES (4, 1, 4, 23104, 1)');
-    // 6 号：NEX 隧道，链路整形默认自动档；面板里已经记着两端各自学到的限速点。
-    await tunnel(6, "NEX 自动", "forwardx", 23006);
+    // 6 号：NEX 隧道，链路整形开在自动档（默认是关，自动是手动选的）；面板里已经记着两端各自学到的限速点。
+    await tunnel(6, "NEX 自动", "forwardx", 23006, { linkShapingMode: "auto" });
     await exec(
       'INSERT INTO forward_rules (id, "hostId", name, "forwardType", protocol, "sourcePort", "targetIp", "targetPort", "userId", "isEnabled", "isRunning", "tunnelId", "tunnelExitPort") VALUES (6, 2, ?, ?, ?, ?, ?, ?, 1, 1, 1, 6, 23006)',
       ["route-6", "gost", "tcp", 24006, "198.51.100.7", 443],

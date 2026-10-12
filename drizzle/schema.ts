@@ -947,7 +947,7 @@ export const tunnels = table("tunnels", {
   udpOverTcp: boolean("udpOverTcp").notNull().default(false),
   linkUpMbps: int("linkUpMbps").notNull().default(0),
   linkDownMbps: int("linkDownMbps").notNull().default(0),
-  linkShapingMode: varchar("linkShapingMode", { length: 16 }).notNull().default("auto"),
+  linkShapingMode: varchar("linkShapingMode", { length: 16 }).notNull().default("off"),
   /** 抗丢包：UDP 直连额外发纠错包（FXP 的 udp_fec.go）。只对 NEX 隧道有意义，默认关。 */
   udpFec: boolean("udpFec").notNull().default(false),
   blockHttp: boolean("blockHttp").notNull().default(false),

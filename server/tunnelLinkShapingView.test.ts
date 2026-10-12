@@ -70,3 +70,9 @@ test("主机公网出口整形：关着的机器不给，过期的标 stale", ()
   assert.equal(hostEgressShapingStatusView({ egressShapingMode: "auto" }, egress, NOW)?.stale, false);
   assert.equal(hostEgressShapingStatusView({ egressShapingMode: "auto" }, { ...egress, updatedAt: old }, NOW)?.stale, true);
 });
+
+test("没写档位的隧道默认不整形", () => {
+  // 旧版本默认「自动」，2026-10-12 起改成关：没写过档位就不探限速点
+  assert.deepEqual(tunnelLinkShapingStatusView({ mode: "forwardx" }, [row()], NOW), []);
+  assert.deepEqual(tunnelLinkShapingStatusView({ mode: "forwardx", linkShapingMode: "" }, [row()], NOW), []);
+});
