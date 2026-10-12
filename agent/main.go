@@ -38,7 +38,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.217"
+var Version = "2.2.218"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -2925,9 +2925,11 @@ type fxpSpec struct {
 	// 主机公网出口整形（也见 link_shaper.go）：整台机器往客户端、往目标发的明文流量
 	// 合起来整形到公网带宽上限之下。EgressShaping 档位、EgressMbps 手动上限、
 	// EgressHintMbps 自动模式提示值。按主机配置，每条隧道的 spec 都带同一份。
-	EgressShaping    string `json:"egressShaping,omitempty"`
-	EgressMbps       int    `json:"egressMbps,omitempty"`
-	EgressHintMbps   int    `json:"egressHintMbps,omitempty"`
+	EgressShaping  string `json:"egressShaping,omitempty"`
+	EgressMbps     int    `json:"egressMbps,omitempty"`
+	EgressHintMbps int    `json:"egressHintMbps,omitempty"`
+	// UDPFEC 是隧道的「抗丢包」开关（见 forwardx-fxp/udp_fec.go），原样交给 FXP。
+	UDPFEC           bool   `json:"udpFec,omitempty"`
 	PanelURL         string `json:"panelUrl,omitempty"`
 	Token            string `json:"token,omitempty"`
 	RelayExitHost    string `json:"relayExitHost,omitempty"`
@@ -10086,6 +10088,8 @@ func fxpServerSignature(spec fxpSpec) string {
 		strconv.Itoa(spec.LinkDownMbps),
 		strings.ToLower(strings.TrimSpace(spec.EgressShaping)),
 		strconv.Itoa(spec.EgressMbps),
+		// 抗丢包开关变了要重启 FXP 的 UDP 监听（FXP 热更新时按配置指纹自己判断）。
+		strconv.FormatBool(spec.UDPFEC),
 		spec.RelayExitHost,
 		strconv.Itoa(spec.RelayExitPort),
 		strconv.Itoa(spec.UDPRelayExitPort),

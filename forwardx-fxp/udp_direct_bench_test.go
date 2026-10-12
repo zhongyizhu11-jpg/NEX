@@ -29,7 +29,7 @@ func startUDPEchoTarget(tb testing.TB) *net.UDPConn {
 
 // benchmarkUDPDirectRoundTrip 量入口 → 出口 → 目标 → 出口 → 入口一来一回的开销
 // （含两端的加解密、排队和收发）。一问一答地发，不会因为队列溢出丢包。
-func benchmarkUDPDirectRoundTrip(b *testing.B, payloadSize int) {
+func benchmarkUDPDirectRoundTrip(b *testing.B, payloadSize int, fec bool) {
 	target := startUDPEchoTarget(b)
 	defer target.Close()
 	exitConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
@@ -41,7 +41,7 @@ func benchmarkUDPDirectRoundTrip(b *testing.B, payloadSize int) {
 		ruleID   = 902
 		key      = "udp-direct-bench-key"
 	)
-	exitCfg := config{Role: "exit", TunnelID: tunnelID, Protocol: "udp", Key: key,
+	exitCfg := config{Role: "exit", TunnelID: tunnelID, Protocol: "udp", Key: key, UDPFEC: fec,
 		UDPTargets: []udpTarget{{RuleID: ruleID, TargetIP: "127.0.0.1", TargetPort: target.LocalAddr().(*net.UDPAddr).Port}}}
 	exitDone := make(chan error, 1)
 	go func() { exitDone <- serveExitUDPDirect(exitConn, exitCfg) }()
@@ -50,7 +50,7 @@ func benchmarkUDPDirectRoundTrip(b *testing.B, payloadSize int) {
 		<-exitDone
 	}()
 	exitPort := exitConn.LocalAddr().(*net.UDPAddr).Port
-	entryCfg := config{Role: "entry", TunnelID: tunnelID, RuleID: ruleID, Protocol: "udp", Key: key,
+	entryCfg := config{Role: "entry", TunnelID: tunnelID, RuleID: ruleID, Protocol: "udp", Key: key, UDPFEC: fec,
 		ExitHost: "127.0.0.1", ExitPort: exitPort, UDPExitPort: exitPort, TargetIP: "127.0.0.1", TargetPort: 9}
 	listener, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
 	if err != nil {
@@ -101,6 +101,9 @@ func benchmarkUDPDirectRoundTrip(b *testing.B, payloadSize int) {
 //
 //	go test -run '^$' -bench UDPDirectRoundTrip -benchtime 20000x .
 func BenchmarkUDPDirectRoundTrip(b *testing.B) {
-	b.Run("1000B", func(b *testing.B) { benchmarkUDPDirectRoundTrip(b, 1000) })
-	b.Run("3000B-fragmented", func(b *testing.B) { benchmarkUDPDirectRoundTrip(b, 3000) })
+	b.Run("1000B", func(b *testing.B) { benchmarkUDPDirectRoundTrip(b, 1000, false) })
+	b.Run("3000B-fragmented", func(b *testing.B) { benchmarkUDPDirectRoundTrip(b, 3000, false) })
+	// 开着抗丢包（udp_fec.go）：每个包多一次拷贝，攒够一组算一次冗余。
+	b.Run("1000B-fec", func(b *testing.B) { benchmarkUDPDirectRoundTrip(b, 1000, true) })
+	b.Run("3000B-fragmented-fec", func(b *testing.B) { benchmarkUDPDirectRoundTrip(b, 3000, true) })
 }

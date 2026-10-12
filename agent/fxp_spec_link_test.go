@@ -93,3 +93,30 @@ func TestFXPSpecCarriesEgressShapingFields(t *testing.T) {
 		t.Fatalf("unset egress fields must be omitted: %s", zero)
 	}
 }
+
+// 隧道的「抗丢包」开关要原样进 FXP 配置，变了要进签名；关着时不写字段，旧配置不变。
+func TestFXPSpecCarriesUDPFECSwitch(t *testing.T) {
+	var spec fxpSpec
+	if err := json.Unmarshal([]byte(`{"role":"exit","tunnelId":9,"udpFec":true}`), &spec); err != nil {
+		t.Fatal(err)
+	}
+	if !spec.UDPFEC {
+		t.Fatalf("udpFec not parsed: %+v", spec)
+	}
+	off := spec
+	off.UDPFEC = false
+	if fxpServerSignature(off) == fxpServerSignature(spec) {
+		t.Fatal("toggling udpFec must change the signature")
+	}
+	out, err := json.Marshal(normalizeFXPSpec(spec))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsKey(out, "udpFec") {
+		t.Fatalf("fxp config lost udpFec: %s", out)
+	}
+	zero, _ := json.Marshal(fxpSpec{Role: "exit", TunnelID: 9})
+	if containsKey(zero, "udpFec") {
+		t.Fatalf("udpFec must be omitted when off: %s", zero)
+	}
+}

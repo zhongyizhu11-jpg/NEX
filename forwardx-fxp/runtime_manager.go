@@ -187,6 +187,8 @@ func fxpComponentSignature(cfg config, strip func(*config)) string {
 }
 
 func stripUDPOnlyFields(cfg *config) {
+	// 抗丢包只作用于 UDP 直连，开关它不该动 TCP 监听。
+	cfg.UDPFEC = false
 	cfg.UDPTargets = nil
 	cfg.UDPListenPort = 0
 	cfg.UDPExitPort = 0

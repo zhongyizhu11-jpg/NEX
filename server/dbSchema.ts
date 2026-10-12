@@ -583,6 +583,8 @@ const tables: TableDef[] = [
       c("linkUpMbps", "int", { notNull: true, default: 0 }), c("linkDownMbps", "int", { notNull: true, default: 0 }),
       // 链路整形档位：auto 自动识别限速点（默认）、manual 按上面两个值、off 关。
       c("linkShapingMode", "varchar", { length: 16, notNull: true, default: "auto" }),
+      // 抗丢包：NEX 隧道的 UDP 直连额外发 Reed-Solomon 纠错包，默认关。
+      c("udpFec", "bool", { notNull: true, default: false }),
       c("blockHttp", "bool", { notNull: true, default: false }), c("blockSocks", "bool", { notNull: true, default: false }),
       c("blockTls", "bool", { notNull: true, default: false }), c("loadBalanceEnabled", "bool", { notNull: true, default: false }),
       c("loadBalanceStrategy", "varchar", { length: 32, notNull: true, default: "round_robin" }),

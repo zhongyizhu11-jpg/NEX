@@ -156,6 +156,7 @@ function normalizeTunnelRuntimeOptions(input: any, mode: unknown) {
     linkUpMbps: forwardxMode ? normalizeLinkMbps(input.linkUpMbps) : 0,
     linkDownMbps: forwardxMode ? normalizeLinkMbps(input.linkDownMbps) : 0,
     linkShapingMode: forwardxMode ? normalizeTunnelLinkShapingMode(input.linkShapingMode) : "off",
+    udpFec: forwardxMode && dbBool(input.udpFec),
   };
 }
 
@@ -971,6 +972,7 @@ export const tunnelsRouter = router({
         linkUpMbps: z.number().int().min(0).max(1_000_000).optional().default(0),
         linkDownMbps: z.number().int().min(0).max(1_000_000).optional().default(0),
         linkShapingMode: z.enum(["auto", "manual", "off"]).optional().default("auto"),
+        udpFec: z.boolean().optional().default(false),
         blockHttp: z.boolean().optional().default(false),
         blockSocks: z.boolean().optional().default(false),
         blockTls: z.boolean().optional().default(false),
@@ -1250,6 +1252,7 @@ export const tunnelsRouter = router({
         linkUpMbps: z.number().int().min(0).max(1_000_000).optional(),
         linkDownMbps: z.number().int().min(0).max(1_000_000).optional(),
         linkShapingMode: z.enum(["auto", "manual", "off"]).optional(),
+        udpFec: z.boolean().optional(),
         blockHttp: z.boolean().optional(),
         blockSocks: z.boolean().optional(),
         blockTls: z.boolean().optional(),
@@ -1370,6 +1373,7 @@ export const tunnelsRouter = router({
           "linkUpMbps",
           "linkDownMbps",
           "linkShapingMode",
+          "udpFec",
         ] as const;
         const runtimeOptionsProvided = tunnelRuntimeKeys.some((key) => (data as any)[key] !== undefined);
         if (runtimeOptionsProvided || (data as any).mode !== undefined) {
