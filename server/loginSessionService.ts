@@ -8,6 +8,7 @@ import {
   type SessionKind,
 } from "./session";
 import { createAuthSession, revokeAuthSession } from "./repositories/sessionRepository";
+import { assertMaintenanceAllows } from "./ops/maintenance";
 
 type CreateLoginSessionInput = {
   userId: number;
@@ -17,6 +18,8 @@ type CreateLoginSessionInput = {
 };
 
 export async function createLoginAuthSession(input: CreateLoginSessionInput) {
+  // 维护模式下普通用户登录不进来：密码、Telegram、通行密钥三条路都汇合在这里。
+  await assertMaintenanceAllows(await db.getUserById(input.userId));
   await createAuthSession(input);
 
   try {

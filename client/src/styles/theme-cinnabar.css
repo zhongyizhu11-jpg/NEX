@@ -1,0 +1,424 @@
+/*
+  ── 界面主题「朱砂」（设置 › 个性化 › 界面主题）──
+
+  第五种气质，由 <html data-ui-theme="cinnabar"> 打开；没有这个属性这个文件一条都不生效。
+  参考 deep.losantos.space（Rosélune 面板）的 Umbrella 那一套（2026-10-11 看过源码）：
+  **素白纸 / 墨黑底 + 朱红记号 + 小方角 + 全大写加宽字距**。经典是「浅灰托白卡」、极光是
+  「彩色柔光托玻璃卡」、墨金是「米白纸上的卡纸」、玫瑰是「胭脂纸上的白瓣」，朱砂是一份
+  **技术规格书**：方方正正、线条清楚、每一节左上角一笔朱红。
+
+  这一套还是「监控」页和那一组运维功能（在线 IP、事件、安全巡检、地区规则、API 令牌……）
+  唯一露面的主题（features/ops/useOpsFeatures.ts）—— 外观和功能是一起换的。
+
+  换的不止颜色（只换色对这位用户等于「没变」）：
+
+    1. 底   浅色是近白的纸（#f6f6f4）铺一层极淡的方格，深色是墨黑（#0a0a0b）铺同一层格；
+            页面最上面一道 3px 的朱红斜纹（Umbrella 顶上那条红白斜纹）。
+    2. 卡   4px 小方角、一圈细线、**不投影**；卡的上沿左端一笔 24px 的朱红短线 —— 卡出了状态
+            （告警 / 掉线）这一笔就换成状态色，扫一眼左上角就知道哪张有事。卡里的数字不再放在
+            色块或托盘里，而是一张**规格表**：主机卡三个读数是被细线隔开的三格（上下各一道通栏线、
+            格间竖线），规则卡的流量数字和链路卡的延迟行上面一道虚线。
+    3. 字   页面标题全大写加宽字距、前面一枚旋转 45° 的朱红小菱形；分组小标题、卡里的小标签、
+            分段控件的字都大写加宽字距；大数字用等宽字（像仪表读数），不再用衬线。
+    4. 控件 全部 3px 方角。分段控件是一圈细线的方框，选中格是一块实心的纸（深色下是墨灰）
+            加一道朱红底线；筛选 chip 未选中一圈线，选中朱红线 + 朱红淡底 + 朱红字。主按钮仍是
+            主色渐变（跟「默认配色」换），只是方角、字加宽。底部标签栏是一条方角的实心条，
+            选中项不是药丸是顶上一道朱红线。
+    5. 设置 和玫瑰一样把卡拆成编号的节（01 02 …），编号是朱红等宽字、节标题大写加宽，
+            每节顶线左端一笔 44px 朱红；保存交给贴底保存栏（SaveDock.tsx，朱砂下是方角实心条）。
+
+  不新增任何滚动内容上的 backdrop 模糊。
+*/
+
+html[data-ui-theme="cinnabar"] {
+  --fx-l0-page: #f6f6f4;
+  --fx-l1-surface: #ffffff;
+  --fx-raised: #ffffff;
+  --fx-l2-group: #f1f1ef;
+  --fx-l3-control: #ffffff;
+  --fx-l3-control-fill: #ebebe8;
+  --fx-sidebar: #fbfbfa;
+  --fx-hover: rgb(10 10 11 / 4%);
+  --fx-pressed: rgb(10 10 11 / 8%);
+  --fx-stroke-weak: rgb(10 10 11 / 9%);
+  --fx-stroke-base: rgb(10 10 11 / 16%);
+  --fx-stroke-strong: rgb(10 10 11 / 32%);
+  --fx-text: #111113;
+  --fx-text-secondary: #3d3d42;
+  --fx-text-muted: #75757c;
+  --fx-cinnabar: #d42a33;              /* 朱红：菱形、短线、编号、选中线 */
+  --fx-cinnabar-soft: rgb(212 42 51 / 8%);
+  --fx-cinnabar-line: rgb(212 42 51 / 55%);
+  --fx-grid-line: rgb(10 10 11 / 3.2%);
+  --fx-card-fill: #ffffff;
+  --fx-card-stroke: rgb(10 10 11 / 11%);
+  --fx-elevation-card: none;
+  --fx-elevation-control: none;
+  --fx-elevation-popover: 0 16px 40px -12px rgb(10 10 11 / 22%), 0 0 0 1px rgb(10 10 11 / 10%);
+  --fx-glass: rgb(246 246 244 / 88%);
+  --fx-glass-strong: rgb(255 255 255 / 92%);
+  --fx-radius-control: 3px;
+  --fx-radius-card: 4px;
+  --fx-radius-surface: 4px;
+  --fx-radius-modal: 6px;
+  --fx-font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, "Liberation Mono", monospace;
+}
+html.dark[data-ui-theme="cinnabar"] {
+  --fx-l0-page: #0a0a0b;
+  --fx-l1-surface: #111113;
+  --fx-raised: #18181b;
+  --fx-l2-group: #151517;
+  --fx-l3-control: #111113;
+  --fx-l3-control-fill: #1b1b1e;
+  --fx-sidebar: #0d0d0e;
+  --fx-hover: rgb(255 255 255 / 5%);
+  --fx-pressed: rgb(255 255 255 / 9%);
+  --fx-stroke-weak: rgb(255 255 255 / 8%);
+  --fx-stroke-base: rgb(255 255 255 / 14%);
+  --fx-stroke-strong: rgb(255 255 255 / 28%);
+  --fx-text: #f2f2f3;
+  --fx-text-secondary: #c4c4c8;
+  --fx-text-muted: #8a8a91;
+  --fx-cinnabar: #e5333d;
+  --fx-cinnabar-soft: rgb(229 51 61 / 14%);
+  --fx-cinnabar-line: rgb(229 51 61 / 50%);
+  --fx-grid-line: rgb(255 255 255 / 2.6%);
+  --fx-card-fill: #111113;
+  --fx-card-stroke: rgb(255 255 255 / 10%);
+  --fx-elevation-card: none;
+  --fx-elevation-control: none;
+  --fx-elevation-popover: 0 16px 40px -12px rgb(0 0 0 / 80%), 0 0 0 1px rgb(255 255 255 / 10%);
+  --fx-glass: rgb(10 10 11 / 88%);
+  --fx-glass-strong: rgb(17 17 19 / 94%);
+}
+
+/* ── 1. 底：方格纸 + 顶上一道朱红斜纹 ───────────────────────── */
+/*
+  和极光、玫瑰一样：<html> 自己有底色，body 不铺底，方格画在 body::after（固定一层，z-index -1，
+  #root 的 1 盖住它；账本见 zIndexTiers.test.ts）。格子是两组 1px 的线性渐变，不是图片，滚动不重绘。
+  斜纹不用 body::before（那个被自定义壁纸占了，index.css），画成顶栏的一层背景图。
+*/
+html[data-ui-theme="cinnabar"] body { background: transparent; }
+html[data-ui-theme="cinnabar"] body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    linear-gradient(var(--fx-grid-line) 1px, transparent 1px) 0 0 / 32px 32px,
+    linear-gradient(90deg, var(--fx-grid-line) 1px, transparent 1px) 0 0 / 32px 32px;
+}
+/* 斜纹画在顶栏上沿（一层背景图叠在顶栏自己的底色上），iOS 上落在状态栏那一条里 */
+html[data-ui-theme="cinnabar"] .workspace-appbar {
+  background-image: repeating-linear-gradient(-45deg, var(--fx-cinnabar) 0 5px, transparent 5px 10px);
+  background-size: 100% 3px;
+  background-position: left top;
+  background-repeat: no-repeat;
+}
+html[data-ui-theme="cinnabar"] .auth-shell,
+html[data-ui-theme="cinnabar"] .public-home-shell,
+html[data-ui-theme="cinnabar"] .setup-shell { background: transparent; }
+
+/* ── 2. 卡：方角细线 + 左上一笔朱红 ──────────────────────────── */
+html[data-ui-theme="cinnabar"]:not([data-card-style]) .workspace-main [data-slot="card"],
+html[data-ui-theme="cinnabar"][data-card-style="edge"] .workspace-main [data-slot="card"],
+html[data-ui-theme="cinnabar"]:not([data-card-style]) .fx-card-face,
+html[data-ui-theme="cinnabar"][data-card-style="edge"] .fx-card-face {
+  border: 1px solid var(--fx-card-stroke);
+  background: var(--fx-card-fill);
+  box-shadow: none;
+}
+/*
+  那一笔朱红：画在卡的上沿左端（top: -1px 盖住那段边线）。卡里面套的卡不画（只给最外层）。
+  卡本身可能是 overflow: hidden，所以用 inset box-shadow 不行（会被圆角裁成弧）—— 这里卡角只有
+  4px，从 left: 0 起画一条 2px 高的条，和卡角那点弧几乎重合，看上去就是边线的一段变红了。
+*/
+html[data-ui-theme="cinnabar"] .workspace-main [data-slot="card"]:not([data-slot="card"] [data-slot="card"]),
+html[data-ui-theme="cinnabar"] .fx-card-face { position: relative; }
+html[data-ui-theme="cinnabar"] .workspace-main [data-slot="card"]:not([data-slot="card"] [data-slot="card"])::before,
+html[data-ui-theme="cinnabar"] .fx-card-face::before {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: -1px;
+  width: 24px;
+  height: 2px;
+  border-top-left-radius: var(--fx-radius-card);
+  background: var(--fx-cinnabar);
+  pointer-events: none;
+}
+/* 有事的卡：那一笔换成状态色，并拉长一点 */
+html[data-ui-theme="cinnabar"] .workspace-main [data-tone="warn"][data-slot="card"]::before,
+html[data-ui-theme="cinnabar"] .fx-card-face[data-tone="warn"]::before,
+html[data-ui-theme="cinnabar"] .workspace-main [data-tone="down"][data-slot="card"]::before,
+html[data-ui-theme="cinnabar"] .fx-card-face[data-tone="down"]::before { width: 44px; background: var(--fx-card-tone); }
+html[data-ui-theme="cinnabar"]:not([data-card-style]) .workspace-main [data-tone="warn"][data-slot="card"],
+html[data-ui-theme="cinnabar"][data-card-style="edge"] .workspace-main [data-tone="warn"][data-slot="card"],
+html[data-ui-theme="cinnabar"]:not([data-card-style]) .fx-card-face[data-tone="warn"],
+html[data-ui-theme="cinnabar"][data-card-style="edge"] .fx-card-face[data-tone="warn"],
+html[data-ui-theme="cinnabar"]:not([data-card-style]) .workspace-main [data-tone="down"][data-slot="card"],
+html[data-ui-theme="cinnabar"][data-card-style="edge"] .workspace-main [data-tone="down"][data-slot="card"],
+html[data-ui-theme="cinnabar"]:not([data-card-style]) .fx-card-face[data-tone="down"],
+html[data-ui-theme="cinnabar"][data-card-style="edge"] .fx-card-face[data-tone="down"] {
+  border-color: color-mix(in srgb, var(--fx-card-tone) 38%, var(--fx-card-stroke));
+}
+html[data-ui-theme="cinnabar"] .fx-cardstyle-swatch[data-style="edge"] .fx-cardstyle-swatch-face { border: 1px solid color-mix(in srgb, var(--fx-card-tone) 38%, var(--fx-card-stroke)); background: var(--fx-card-fill); box-shadow: none; }
+/* 主机卡的系统图标：一枚细线方框 */
+html[data-ui-theme="cinnabar"] .fx-host-card > div:first-child > span:first-child { border-radius: 3px; border: 1px solid var(--fx-stroke-base); background: transparent; }
+/*
+  卡里的规格表。主机卡三个读数：上下各一道通栏细线、格与格之间一道竖线，没有底色；
+  标签在上（大写加宽）、等宽数字在下、细条贴格底。
+*/
+html[data-ui-theme="cinnabar"] .fx-host-card .grid.grid-cols-3 { gap: 0; margin: 4px calc(-1 * var(--fx-card-padding)) 2px; padding: 0; border-block: 1px solid var(--fx-stroke-weak); }
+html[data-ui-theme="cinnabar"] .fx-host-spec { border-radius: 0; background: transparent; padding: 8px var(--fx-card-padding) 12px; }
+html[data-ui-theme="cinnabar"] .fx-host-spec + .fx-host-spec { border-left: 1px solid var(--fx-stroke-weak); }
+html[data-ui-theme="cinnabar"] .fx-host-spec > i { text-transform: uppercase; letter-spacing: .12em; font-size: 10.5px; }
+html[data-ui-theme="cinnabar"] .fx-host-spec-bar { left: var(--fx-card-padding); right: var(--fx-card-padding); bottom: 5px; height: 2px; border-radius: 0; background: var(--fx-stroke-weak); }
+/* 规则卡：流量大数字那一行上面一道虚线；地址行不再画线 */
+html[data-ui-theme="cinnabar"] .fx-rule-big { margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--fx-stroke-base); }
+html[data-ui-theme="cinnabar"] .fx-rule-path { margin-top: 10px; padding-top: 0; border-top: 0; }
+/* 链路卡：「延迟 · 评级 · 走势」上面一道虚线 */
+html[data-ui-theme="cinnabar"] .fx-tunnel-foot { border-top: 1px dashed var(--fx-stroke-base); }
+html[data-ui-theme="cinnabar"] .fx-summary-cell + .fx-summary-cell { border-left-color: var(--fx-stroke-weak); }
+
+/* ── 3. 字：大写加宽、朱红菱形、等宽读数 ─────────────────────── */
+html[data-ui-theme="cinnabar"] .workspace-main .workspace-header-title,
+html[data-ui-theme="cinnabar"] .fx-navbar-large-title {
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  font-weight: 600;
+}
+/* 标题前一枚旋转 45° 的朱红小菱形 */
+html[data-ui-theme="cinnabar"] .workspace-main .workspace-header-title::before,
+html[data-ui-theme="cinnabar"] .fx-navbar-large-title::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin: 0 12px 0 2px;
+  vertical-align: .2em;
+  background: var(--fx-cinnabar);
+  transform: rotate(45deg);
+}
+html[data-ui-theme="cinnabar"] .workspace-main .workspace-header-title { font-size: 24px; line-height: 30px; }
+@media (max-width: 767px) {
+  html[data-ui-theme="cinnabar"] .fx-navbar-large-title { font-size: 23px; line-height: 30px; }
+  html[data-ui-theme="cinnabar"] .workspace-main .workspace-header-title { font-size: 22px; line-height: 28px; white-space: nowrap; }
+  html[data-ui-theme="cinnabar"] .workspace-header-row { flex-wrap: wrap; }
+  html[data-ui-theme="cinnabar"] .workspace-header-aside { flex: 1 1 100%; align-items: stretch; padding-top: 4px; }
+  html[data-ui-theme="cinnabar"] .workspace-header-aside .fx-sparkline { width: 100%; height: 28px; }
+  html[data-ui-theme="cinnabar"] .workspace-header-aside > span { text-align: right; }
+  html[data-ui-theme="cinnabar"] .workspace-header { position: relative; }
+  html[data-ui-theme="cinnabar"] .workspace-header-actions { position: absolute; top: 0; right: 0; max-width: none; }
+  html[data-ui-theme="cinnabar"] .workspace-header-row > div:first-child { padding-right: 52px; }
+}
+/* 页头底下一道细线，左端一笔 44px 朱红（Umbrella 每节顶线那一笔） */
+html[data-ui-theme="cinnabar"] .workspace-main .workspace-header {
+  padding-bottom: 12px;
+  background:
+    linear-gradient(var(--fx-cinnabar), var(--fx-cinnabar)) left bottom / 44px 2px no-repeat,
+    linear-gradient(var(--fx-stroke-base), var(--fx-stroke-base)) left bottom / 100% 1px no-repeat;
+}
+/* 大数字：等宽，像仪表读数 */
+html[data-ui-theme="cinnabar"] .fx-rule-num > b,
+html[data-ui-theme="cinnabar"] .fx-summary-value,
+html[data-ui-theme="cinnabar"] .fx-host-spec > b {
+  font-family: var(--fx-font-mono);
+  font-weight: 500;
+  letter-spacing: -.01em;
+}
+html[data-ui-theme="cinnabar"] .fx-rule-num > b { font-size: 22px; }
+html[data-ui-theme="cinnabar"] .fx-host-spec > b { font-size: 15px; }
+html[data-ui-theme="cinnabar"] .fx-summary-value { font-size: 22px; }
+html[data-ui-theme="cinnabar"] .fx-summary-label,
+html[data-ui-theme="cinnabar"] .fx-rule-num > i { text-transform: uppercase; letter-spacing: .1em; }
+/* 分组小标题：大写加宽、小字、前面一枚朱红小方块 */
+html[data-ui-theme="cinnabar"] .fx-list-section-header,
+html[data-ui-theme="cinnabar"] .workspace-main .fx-list-section-header { color: var(--fx-text-secondary); text-transform: uppercase; letter-spacing: .16em; font-weight: 600; font-size: 11px; }
+html[data-ui-theme="cinnabar"] .fx-list-section-header::before { content: ""; display: inline-block; width: 5px; height: 5px; margin-right: 8px; vertical-align: .18em; background: var(--fx-cinnabar); }
+/* 卡标题、对话框标题、详情里的小节标题：加宽一点 */
+html[data-ui-theme="cinnabar"] .workspace-main [data-slot="card-title"],
+html[data-ui-theme="cinnabar"] [data-slot="dialog-title"] { letter-spacing: .04em; }
+/* 走势线用朱红 */
+html[data-ui-theme="cinnabar"] .fx-rule-spark,
+html[data-ui-theme="cinnabar"] .workspace-header-aside .fx-sparkline { color: var(--fx-cinnabar); }
+
+/* ── 4. 控件：全部 3px 方角 ──────────────────────────────────── */
+/*
+  分段控件：一圈细线的方框，选中格是一块实心的纸（深色下墨灰）加一道朱红底线，字大写加宽。
+  不是灰槽里一块渐变（经典）、不是一行字加金线（墨金）、也不是药丸空槽（玫瑰）。
+*/
+html[data-ui-theme="cinnabar"] .workspace-tabs,
+html.dark[data-ui-theme="cinnabar"] .workspace-tabs { padding: 2px; border: 1px solid var(--fx-stroke-base); border-radius: 3px; background: transparent; backdrop-filter: none; -webkit-backdrop-filter: none; box-shadow: none; }
+html[data-ui-theme="cinnabar"] .workspace-tabs .workspace-tab,
+html.dark[data-ui-theme="cinnabar"] .workspace-tabs .workspace-tab,
+html[data-ui-theme="cinnabar"] .workspace-tab-scroll { border-radius: 2px; }
+html[data-ui-theme="cinnabar"] .workspace-tabs .workspace-tab,
+html.dark[data-ui-theme="cinnabar"] .workspace-tabs .workspace-tab { color: var(--fx-text-muted); font-size: 12.5px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; }
+html[data-ui-theme="cinnabar"] .workspace-tabs .workspace-tab[data-state="active"],
+html.dark[data-ui-theme="cinnabar"] .workspace-tabs .workspace-tab[data-state="active"] {
+  color: var(--fx-text);
+  background: var(--fx-l2-group);
+  box-shadow: inset 0 -2px 0 var(--fx-cinnabar);
+  font-weight: 600;
+}
+html.dark[data-ui-theme="cinnabar"] .workspace-tabs .workspace-tab[data-state="active"] { background: var(--fx-raised); }
+html[data-ui-theme="cinnabar"] .workspace-tabs .workspace-tab[data-state="active"] > svg { color: var(--fx-cinnabar); }
+html[data-ui-theme="cinnabar"] .workspace-tabs .workspace-tab-count,
+html[data-ui-theme="cinnabar"] .workspace-tabs .workspace-tab[data-state="active"] .workspace-tab-count { min-width: 0; height: auto; padding: 0; border-radius: 0; background: transparent; color: var(--fx-text-muted); font-family: var(--fx-font-mono); font-size: 11.5px; font-weight: 500; letter-spacing: 0; }
+html[data-ui-theme="cinnabar"] .workspace-tabs .workspace-tab[data-state="active"] .workspace-tab-count { color: var(--fx-cinnabar); }
+/* 筛选 chip：方角；未选中一圈线，选中朱红线 + 朱红淡底 + 朱红字 */
+html[data-ui-theme="cinnabar"] .fx-chip { height: 30px; padding: 0 11px; border-radius: 3px; font-size: 12px; letter-spacing: .06em; }
+html[data-ui-theme="cinnabar"] .fx-chip:not(.fx-chip-on) { background: transparent; border-color: var(--fx-stroke-base); color: var(--fx-text-secondary); }
+html[data-ui-theme="cinnabar"] .fx-chip-on,
+html[data-ui-theme="cinnabar"] .fx-chip-on:hover { border-color: var(--fx-cinnabar-line); background: var(--fx-cinnabar-soft); background-image: none; color: var(--fx-cinnabar); }
+@media (pointer: coarse) { html[data-ui-theme="cinnabar"] .fx-chip-scroller > .fx-chip { min-height: 30px; } }
+/* 输入框、下拉、搜索框：方角、纸白、一圈细线 */
+html[data-ui-theme="cinnabar"] .workspace-main [data-slot="input"],
+html[data-ui-theme="cinnabar"] .workspace-main [data-slot="select-trigger"],
+html[data-ui-theme="cinnabar"] .workspace-filter-search input { border-radius: 3px; background: var(--fx-l1-surface); border-color: var(--fx-stroke-base); }
+html[data-ui-theme="cinnabar"] .fx-search-pill { border-radius: 3px !important; background: var(--fx-l1-surface) !important; border-color: var(--fx-stroke-base) !important; }
+html[data-ui-theme="cinnabar"] .fx-search-pill:focus-visible { border-color: var(--fx-primary-stroke) !important; }
+html[data-ui-theme="cinnabar"] [data-slot="button"]:not([data-icon-button]),
+html[data-ui-theme="cinnabar"] .fx-row-action,
+html[data-ui-theme="cinnabar"] .fx-filter-pill { border-radius: 3px !important; }
+html[data-ui-theme="cinnabar"] .workspace-main [data-icon-button],
+html[data-ui-theme="cinnabar"] .workspace-header-actions [data-slot="button"] { border-radius: 4px !important; }
+html[data-ui-theme="cinnabar"] [data-slot="badge"] { border-radius: 2px; letter-spacing: .04em; }
+/* 主按钮：主色渐变照旧（跟「默认配色」换），方角、字加宽 */
+html[data-ui-theme="cinnabar"] .workspace-main [data-slot="button"][data-variant="default"],
+html[data-ui-theme="cinnabar"] .workspace-main [data-slot="button"]:not([data-variant]) { letter-spacing: .06em; box-shadow: none; }
+/* 外壳：顶栏、侧栏一道细线；手机顶部导航实心纸色 */
+html[data-ui-theme="cinnabar"] .workspace-appbar { border-bottom-color: var(--fx-stroke-weak); }
+html[data-ui-theme="cinnabar"] .workspace-layout [data-sidebar="sidebar"] { border-right-color: var(--fx-stroke-weak); }
+/* 侧栏选中项：左边一道朱红竖线，不是一块蓝 */
+html[data-ui-theme="cinnabar"] .workspace-layout [data-sidebar="menu-button"] { border-radius: 3px; }
+html[data-ui-theme="cinnabar"] .workspace-layout [data-sidebar="menu-button"][data-active="true"] { box-shadow: inset 2px 0 0 var(--fx-cinnabar); }
+@media (max-width: 767px) {
+  html[data-ui-theme="cinnabar"] .fx-navbar { background: color-mix(in srgb, var(--fx-l0-page) 92%, transparent); }
+  /*
+    底部标签栏：一条方角的实心条（不再是胶囊），选中项不是渐变药丸，是顶上一道朱红线 + 墨字。
+  */
+  html[data-ui-theme="cinnabar"] .fx-tabbar {
+    border-radius: 6px;
+    border-color: var(--fx-stroke-base);
+    background: var(--fx-glass-strong);
+    box-shadow: 0 14px 30px -18px rgb(10 10 11 / 35%);
+  }
+  html.dark[data-ui-theme="cinnabar"] .fx-tabbar { box-shadow: 0 14px 30px -18px rgb(0 0 0 / 90%); }
+  html[data-ui-theme="cinnabar"] .fx-tabbar-item { border-radius: 3px; }
+  html[data-ui-theme="cinnabar"] .fx-tabbar-item-active {
+    color: var(--fx-text);
+    background: var(--fx-hover);
+    background-image: none;
+    box-shadow: inset 0 2px 0 var(--fx-cinnabar);
+  }
+  html[data-ui-theme="cinnabar"] .fx-tabbar-item-active > svg { color: var(--fx-cinnabar); }
+  html[data-ui-theme="cinnabar"] .fx-tabbar-label { letter-spacing: .06em; }
+}
+
+/* ── 设置页「界面主题」的预览 ───────────────────────────────── */
+/* 近白方格纸、顶上一道朱红斜纹、两张方角细线卡各带一笔朱红、底下一条方角条 */
+.fx-uitheme-swatch[data-theme="cinnabar"] {
+  background:
+    repeating-linear-gradient(-45deg, #d42a33 0 3px, transparent 3px 6px) top / 100% 3px no-repeat,
+    linear-gradient(rgb(10 10 11 / 5%) 1px, transparent 1px) 0 0 / 10px 10px,
+    linear-gradient(90deg, rgb(10 10 11 / 5%) 1px, transparent 1px) 0 0 / 10px 10px,
+    #f6f6f4;
+}
+.dark .fx-uitheme-swatch[data-theme="cinnabar"] {
+  background:
+    repeating-linear-gradient(-45deg, #e5333d 0 3px, transparent 3px 6px) top / 100% 3px no-repeat,
+    linear-gradient(rgb(255 255 255 / 4%) 1px, transparent 1px) 0 0 / 10px 10px,
+    linear-gradient(90deg, rgb(255 255 255 / 4%) 1px, transparent 1px) 0 0 / 10px 10px,
+    #0a0a0b;
+}
+.fx-uitheme-swatch[data-theme="cinnabar"] > i {
+  border-radius: 2px;
+  border-color: rgb(10 10 11 / 14%);
+  background: linear-gradient(#d42a33, #d42a33) left top / 10px 2px no-repeat, #fff;
+  box-shadow: none;
+}
+.dark .fx-uitheme-swatch[data-theme="cinnabar"] > i {
+  border-color: rgb(255 255 255 / 12%);
+  background: linear-gradient(#e5333d, #e5333d) left top / 10px 2px no-repeat, #111113;
+  box-shadow: none;
+}
+.fx-uitheme-swatch[data-theme="cinnabar"] > i:first-child { margin-top: 4px; }
+.fx-uitheme-swatch[data-theme="cinnabar"] > b { border-radius: 2px; border-color: rgb(10 10 11 / 16%); background: rgb(255 255 255 / 94%); }
+.dark .fx-uitheme-swatch[data-theme="cinnabar"] > b { border-color: rgb(255 255 255 / 14%); background: rgb(17 17 19 / 94%); }
+
+/* ── 5. 设置页：编号分节 + 贴底保存栏 ─────────────────────────── */
+/*
+  和玫瑰同一个骨架（SaveDock.tsx 在这两套下都亮），样子换成规格书：每张卡去掉框，变成一节 ——
+  顶上一道细线、左端一笔 44px 朱红；标题前一个朱红等宽编号「01」，标题大写加宽。
+*/
+html[data-ui-theme="cinnabar"] .fx-settings-pane { counter-reset: fx-sec; }
+html[data-ui-theme="cinnabar"] .fx-settings-pane [data-slot="card"]:not([data-slot="card"] [data-slot="card"]),
+html.dark[data-ui-theme="cinnabar"] .fx-settings-pane [data-slot="card"]:not([data-slot="card"] [data-slot="card"]) {
+  counter-increment: fx-sec;
+  position: relative;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  padding-top: 18px;
+  overflow: visible;
+}
+html[data-ui-theme="cinnabar"] .fx-settings-pane [data-slot="card"]:not([data-slot="card"] [data-slot="card"])::before {
+  inset: 0 0 auto 0;
+  top: 0;
+  left: 0;
+  width: auto;
+  height: 2px;
+  border-radius: 0;
+  background:
+    linear-gradient(var(--fx-cinnabar), var(--fx-cinnabar)) left top / 44px 2px no-repeat,
+    linear-gradient(var(--fx-stroke-base), var(--fx-stroke-base)) left top / 100% 1px no-repeat;
+}
+html[data-ui-theme="cinnabar"] .fx-settings-pane [data-slot="card"]:not([data-slot="card"] [data-slot="card"]) > [data-slot="card-header"],
+html[data-ui-theme="cinnabar"] .fx-settings-pane [data-slot="card"]:not([data-slot="card"] [data-slot="card"]) > [data-slot="card-content"],
+html[data-ui-theme="cinnabar"] .fx-settings-pane [data-slot="card"]:not([data-slot="card"] [data-slot="card"]) > [data-slot="card-footer"] { padding-inline: 2px; }
+html[data-ui-theme="cinnabar"] .fx-settings-pane [data-slot="card"]:not([data-slot="card"] [data-slot="card"]) > [data-slot="card-header"] [data-slot="card-title"] {
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--fx-text);
+}
+html[data-ui-theme="cinnabar"] .fx-settings-pane [data-slot="card"]:not([data-slot="card"] [data-slot="card"]) > [data-slot="card-header"] [data-slot="card-title"]::before {
+  content: counter(fx-sec, decimal-leading-zero);
+  margin-right: 12px;
+  font: 500 12px/1 var(--fx-font-mono);
+  letter-spacing: 0;
+  color: var(--fx-cinnabar);
+}
+html[data-ui-theme="cinnabar"] .fx-settings-pane [data-slot="card"]:not([data-slot="card"] [data-slot="card"]) > [data-slot="card-header"] [data-slot="card-title"] > svg:first-child { display: none; }
+html[data-ui-theme="cinnabar"] .fx-settings-pane [data-slot="card-description"] { color: var(--fx-text-muted); }
+html[data-ui-theme="cinnabar"] .fx-settings-pane [data-dock-save] { display: none !important; }
+html[data-ui-theme="cinnabar"] .fx-settings-pane .fx-list-row + .fx-list-row { border-top-color: var(--fx-stroke-weak); }
+html[data-ui-theme="cinnabar"] .fx-setting-sub { margin-left: 4px; padding: 2px 0 2px 16px; border-left: 1px solid var(--fx-stroke-base); }
+html[data-ui-theme="cinnabar"] .fx-setting-sub:empty { display: none; }
+/* 贴底保存栏：方角实心条，一道细线，按钮方角、字大写加宽 */
+html[data-ui-theme="cinnabar"] .fx-save-dock,
+html.dark[data-ui-theme="cinnabar"] .fx-save-dock {
+  border: 1px solid var(--fx-stroke-base);
+  border-radius: 4px;
+  background: var(--fx-l1-surface);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  box-shadow: 0 14px 30px -18px rgb(10 10 11 / 35%);
+}
+html.dark[data-ui-theme="cinnabar"] .fx-save-dock { box-shadow: 0 14px 30px -18px rgb(0 0 0 / 90%); }
+html[data-ui-theme="cinnabar"] .fx-save-dock-actions [data-slot="button"] { border-radius: 3px !important; letter-spacing: .1em; text-transform: uppercase; font-size: 12px; }
+/* 个性化顶上的预览卡：方角细线，站点名大写加宽 */
+html[data-ui-theme="cinnabar"] .fx-brand-preview { border: 1px solid var(--fx-stroke-base); border-radius: 4px; box-shadow: none; }
+html[data-ui-theme="cinnabar"] .fx-brand-preview-name { font-family: inherit; font-size: 18px; line-height: 1.3; font-weight: 600; font-style: normal; letter-spacing: .12em; text-transform: uppercase; }
+html[data-ui-theme="cinnabar"] .fx-brand-preview-meta em { color: var(--fx-cinnabar); }
+
+/* ── 6. 页面里其它圆角：一律收成小方角（Umbrella 全站 3–4px）──── */
+/* 分段按钮组、证据框、提示条这类 Tailwind 圆角；圆点、头像、状态灯（rounded-full）不动 */
+html[data-ui-theme="cinnabar"] .workspace-main :is(.rounded-md, .rounded-lg, .rounded-\[6px\]) { border-radius: 3px; }
+html[data-ui-theme="cinnabar"] .workspace-main :is(.rounded-xl, .rounded-2xl, .rounded-3xl) { border-radius: 4px; }
+html[data-ui-theme="cinnabar"] [role="dialog"] :is(.rounded-md, .rounded-lg, .rounded-xl, .rounded-2xl) { border-radius: 3px; }

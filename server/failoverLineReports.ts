@@ -6,6 +6,7 @@ import { failoverLineEndpoints } from "../shared/failoverActiveLine";
 import { normalizeRouteEventKind, routePathLabel, routePathsOf, type RouteEventKind, type RouteGroupRule } from "../shared/routeGroup";
 import { recordRouteAgentStats } from "./routeGroupStats";
 import { notifyRouteSwitch } from "./routeSwitchNotifier";
+import { recordRouteSwitchEvent } from "./ops/eventHooks";
 
 /*
   主备切换：Agent 自己切完，面板才知道。
@@ -182,6 +183,7 @@ export async function ingestFailoverLineReports(input: {
     } catch (error) {
       appendPanelLog("warn", `[Failover] host=${hostId} rule=${ruleId} 切换记录写入失败: ${String((error as any)?.message || error)}`);
     }
+    recordRouteSwitchEvent({ rule, hostId, kind, fromLabel, toLabel, reason }); // 事件时间线（与 TG 开关无关）
     if ((kind === "switch" || kind === "precheck_failed") && rule?.telegramErrorNotifyEnabled) {
       void notifyRouteSwitch({
         rule,

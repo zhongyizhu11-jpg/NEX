@@ -38,6 +38,7 @@ import {
 } from "../tunnelExitStrategy";
 import { resolveRuleProxyProtocolOptions } from "../gostProxyProtocol";
 import { HOST_ONLINE_TTL_MS } from "../hostHeartbeatPolicy";
+import { opsReservedPortsOnHost } from "../ops/opsReservedPorts";
 import { LINK_PROBE_FRESH_MS, LINK_PROBE_MAX_FUTURE_SKEW_MS } from "../../shared/linkProbePolicy";
 
 // The Agent uses the tunnel row's listener for the lowest-id active GOST
@@ -2126,6 +2127,8 @@ export async function getUsedPortsOnHost(
   // 换隧道后旧入口的临时桥接也在这台机器上真实监听着（见 shared/ruleEntryBridge）；
   // 桥接所属规则自己不算（excludedIds）：规则换回来时老端口要能还给它。
   for (const bridge of await getActiveEntryBridgesOnHost(hostId, excludedIds)) addPort(bridge.sourcePort);
+  // 第五套主题功能自己占的端口（Agent 中转），见 server/ops/opsReservedPorts.ts。
+  for (const port of await opsReservedPortsOnHost(hostId)) addPort(port);
   return used;
 }
 
@@ -2205,6 +2208,7 @@ export async function isPortUsedOnHost(
   if ((await getProxyInboundPortsOnHost(hostId, Number(excludeProxyInboundId || 0))).includes(Number(sourcePort))) return true;
   // 换隧道后旧入口的临时桥接占着的端口，到期前别的规则不能拿（规则自己换回来时除外）。
   if ((await getActiveEntryBridgesOnHost(hostId, excludedIds, Number(sourcePort))).length > 0) return true;
+  if ((await opsReservedPortsOnHost(hostId)).includes(Number(sourcePort))) return true;
   const primaryExitConds: any[] = [
     eq(tunnels.exitHostId, hostId),
     eq(forwardRules.tunnelExitPort, sourcePort),

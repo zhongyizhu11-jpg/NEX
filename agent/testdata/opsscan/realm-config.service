@@ -1,0 +1,2 @@
+[Service]
+ExecStart=/usr/local/bin/realm -c /etc/realm/config.toml

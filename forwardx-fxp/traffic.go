@@ -49,7 +49,9 @@ var trafficBatchWake = make(chan struct{}, 1)
 var trafficBatches = map[trafficBatchKey]map[int]trafficBatchValue{}
 var trafficPendingReports = map[trafficBatchKey]pendingTrafficBatch{}
 var trafficReportSequence atomic.Uint64
-var trafficHTTPClient = &http.Client{Timeout: 10 * time.Second}
+
+// Transport 拨面板时跟着 Agent 的「经其他主机连面板」走（见 panel_dial.go）。
+var trafficHTTPClient = &http.Client{Timeout: 10 * time.Second, Transport: newFXPPanelTransport()}
 var trafficDiagnostics = struct {
 	sync.Mutex
 	last map[string]time.Time

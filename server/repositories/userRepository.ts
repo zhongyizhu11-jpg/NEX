@@ -15,6 +15,7 @@ import {
 } from "../../shared/avatar";
 import { pageResult, pageWindowForTotal, type PageRequest } from "../../shared/pagination";
 import { billingCalendarParts, billingDaysInMonth, billingMonthStart } from "../../shared/billingTime";
+import { recordUserAccessPausedEvent } from "../ops/eventHooks";
 
 export type ForwardAccessPauseReason = "manual" | "traffic_billing_balance" | "traffic_limit" | "expired" | null;
 
@@ -957,6 +958,7 @@ export async function setUserForwardAccess(userId: number, enabled: boolean, rea
       eq(forwardRules.isEnabled, true),
       eq(forwardRules.pendingDelete, false),
     ));
+    if (accessChanged) recordUserAccessPausedEvent(userId, reason); // 事件时间线：流量用完 / 到期（只记这两种自动暂停）
     return accessChanged || stoppedRules > 0;
   }
   return accessChanged;

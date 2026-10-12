@@ -29,6 +29,7 @@ export const routeChunks: Record<string, () => Promise<unknown>> = {
   "/proxy-inbounds": () => import("@/pages/ProxyInbounds"),
   "/traffic-billing": () => import("@/pages/TrafficBilling"),
   "/plugins": () => import("@/pages/Plugins"),
+  "/insights": () => import("@/pages/Insights"),
 };
 
 /*

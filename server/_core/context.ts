@@ -18,6 +18,9 @@ import {
 import { DEV_ADMIN_USERNAME, isDevPanelMode } from "../devPanel";
 import { getActiveAuthSession, revokeAuthSession, touchAuthSession } from "../repositories/sessionRepository";
 import { withKeyedTaskLock } from "../keyedTaskLock";
+import { resolveApiTokenRequest } from "../ops/apiTokens";
+import type { ApiTokenContext } from "../ops/apiTokenPolicy";
+import { noteSessionClient } from "../ops/sessionDevices";
 
 export interface AuthSession {
   kind: SessionKind;
@@ -33,6 +36,8 @@ export interface TrpcContext {
   user: User | null;
   authSession: AuthSession | null;
   authFailureReason: "session_replaced" | "account_disabled" | null;
+  /** 这个请求是用个人 API 令牌（nex_…）认证的；见 server/ops/apiTokens.ts。 */
+  apiToken?: ApiTokenContext | null;
 }
 
 type TokenSource = "cookie" | "bearer";
@@ -175,6 +180,12 @@ export async function createContext({ req, res }: CreateExpressContextOptions): 
   let authSession: AuthSession | null = null;
   let authFailureReason: TrpcContext["authFailureReason"] = null;
 
+  // 个人 API 令牌（Authorization: Bearer nex_…）：不走会话，也不写 cookie。
+  const apiTokenAuth = await resolveApiTokenRequest(req, res);
+  if (apiTokenAuth) {
+    return { req, res, user: apiTokenAuth.user, authSession: null, authFailureReason: null, apiToken: apiTokenAuth.apiToken };
+  }
+
   if (isDevPanelMode()) {
     const devUser = await db.getUserByUsername(DEV_ADMIN_USERNAME).catch(() => null);
     if (devUser) {
@@ -200,6 +211,8 @@ export async function createContext({ req, res }: CreateExpressContextOptions): 
     if (resolved.user) {
       user = resolved.user;
       authSession = resolved.authSession;
+      // 已登录设备列表要的 UA / IP（节流写入，失败不影响请求）。
+      if (resolved.authSession?.sid) noteSessionClient(resolved.authSession.sid, req);
     } else {
       authFailureReason = resolved.failureReason ?? null;
     }

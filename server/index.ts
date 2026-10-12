@@ -25,6 +25,8 @@ import { TRPC_MAX_BATCH_SIZE } from "../shared/const";
 import { resolveTrustProxySetting } from "./trustProxy";
 import { authCapRouter } from "./authCaptcha";
 import { isAllowedMobileCorsOrigin } from "./mobileCors";
+import { panelAccessGuard } from "./ops/firewallPanelAccess";
+import { mcpRouter } from "./ops/mcpRoute";
 
 installPanelLogger();
 
@@ -172,6 +174,8 @@ async function startServer() {
   if (httpsServer) startPanelSslAutoReload(httpsServer, panelSsl);
   installSecurityHeaders(app);
   installCompression(app);
+  // 面板访问的地区限制（第五套主题「地区规则」页设置）：关着时只多一次内存判断。
+  app.use(panelAccessGuard);
 
   // Payment webhooks need the original request body for signature verification.
   app.use(paymentCallbackRouter);
@@ -185,6 +189,8 @@ async function startServer() {
   app.use(migrationRouter);
   app.use(proxySubscriptionRouter);
   app.use(clientLogoRouter);
+  // POST /mcp：AI 客户端用个人 API 令牌接入（server/ops/mcp.ts）。
+  app.use(mcpRouter);
   app.use(
     "/api/trpc",
     createExpressMiddleware({

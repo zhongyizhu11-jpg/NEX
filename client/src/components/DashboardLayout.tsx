@@ -64,8 +64,11 @@ import {
   BellOff,
   Puzzle,
   Search,
+  Activity,
   type LucideIcon,
 } from "lucide-react";
+import { useOpsFeatures } from "@/features/ops/useOpsFeatures";
+import OpsMaintenanceBanner from "@/features/ops/maintenance/MaintenanceBanner";
 import { App as CapacitorApp } from "@capacitor/app";
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { IosTabBar } from "@/components/ios/TabBar";
@@ -127,6 +130,8 @@ const mainMenuItems: SidebarNavItem[] = [
 const profileMenuItem: SidebarNavItem = { icon: UserRound, label: "个人资料", path: "/profile", menuKey: "profile" };
 const lookingGlassMenuItem: SidebarNavItem = { icon: Globe2, label: "网络测试", path: "/looking-glass", menuKey: "lookingGlass" };
 const pluginManagementMenuItem: SidebarNavItem = { icon: Puzzle, label: "插件管理", path: "/plugins", menuKey: "plugins" };
+/** 监控：第五套主题「朱砂」专属（见 client/src/features/ops/useOpsFeatures.ts），只给管理员。 */
+const insightsMenuItem: SidebarNavItem = { icon: Activity, label: "监控", path: "/insights" };
 
 const adminMenuItems: SidebarNavItem[] = [
   { icon: CreditCard, label: "支付对接", path: "/payments", menuKey: "payments" },
@@ -388,6 +393,7 @@ function DashboardLayoutContent({
   const accountMenuOpenRef = useRef(accountMenuOpen);
   const isDesktopCollapsed = !isMobile && state === "collapsed";
   const isAdmin = user?.role === "admin";
+  const opsFeatures = useOpsFeatures();
   const utils = trpc.useUtils();
   const queryFailure = useQueryFailureSignal();
   const { resolvedTheme, setTheme } = useTheme();
@@ -1137,7 +1143,7 @@ function DashboardLayoutContent({
     : [];
   const visibleAnnouncementsMenuItems = isSidebarNavItemVisible(announcementsMenuItem) ? [announcementsMenuItem] : [];
   const visibleProfileMenuItems = isSidebarNavItemVisible(profileMenuItem) ? [profileMenuItem] : [];
-  const visibleAdminMenuItems = filterSidebarNavItems(adminMenuItems);
+  const visibleAdminMenuItems = filterSidebarNavItems(opsFeatures ? [insightsMenuItem, ...adminMenuItems] : adminMenuItems);
   const customPageMenuItems: SidebarNavItem[] = customSidebarPages.map((page: {
     id: string;
     name: string;
@@ -1770,6 +1776,7 @@ function DashboardLayoutContent({
               </div>
             </div>
           ) : null}
+          <OpsMaintenanceBanner />
           {expiryNoticeVisible ? (
             <div className="mb-4 flex flex-col gap-2 rounded-lg border border-[color-mix(in_srgb,var(--fx-warn)_40%,transparent)] bg-[var(--fx-warn-soft)] px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between">
               <p className="min-w-0">

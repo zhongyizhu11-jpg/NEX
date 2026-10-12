@@ -42,6 +42,7 @@ const EmailSettingsPage = lazy(() => import("@/pages/EmailSettingsRoute"));
 const ForwardGroupsPage = lazy(routeChunks["/forward-groups"] as () => Promise<{ default: ComponentType<any> }>);
 const HomepagePreviewPage = lazy(() => import("@/pages/HomepagePreview"));
 const HostMonitorPage = lazy(() => import("@/pages/HostMonitor"));
+const InsightsPage = lazy(routeChunks["/insights"] as () => Promise<{ default: ComponentType<any> }>);
 const HostsPage = lazy(routeChunks["/hosts"] as () => Promise<{ default: ComponentType<any> }>);
 const MorePage = lazy(routeChunks["/more"] as () => Promise<{ default: ComponentType<any> }>);
 const LookingGlassPage = lazy(routeChunks["/looking-glass"] as () => Promise<{ default: ComponentType<any> }>);
@@ -153,6 +154,7 @@ function Routes() {
       <Route path="/forward-groups">{() => <AdminRoute component={ForwardGroupsPage} />}</Route>
       <Route path="/tunnels">{() => <AdminRoute component={TunnelsPage} />}</Route>
       <Route path="/users">{() => <AdminRoute component={UsersPage} />}</Route>
+      <Route path="/insights">{() => <AdminRoute component={InsightsPage} />}</Route>
       <Route path="/email-settings">{() => <AdminRoute component={EmailSettingsPage} />}</Route>
       <Route path="/payments">{() => <AdminRoute component={PaymentsPage} />}</Route>
       <Route path="/billing">{() => <AdminRoute component={BillingPage} />}</Route>
@@ -199,6 +201,7 @@ const shellRoutePatterns = [
   "/forward-groups",
   "/tunnels",
   "/users",
+  "/insights",
   "/email-settings",
   "/payments",
   "/billing",

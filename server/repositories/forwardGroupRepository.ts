@@ -90,6 +90,7 @@ import {
   nextForwardGroupHealthRecheckAt,
 } from "../forwardGroupHealthRecheck";
 import { notifyForwardGroupSwitch } from "../forwardGroupSwitchNotifier";
+import { recordForwardGroupSwitchEvent } from "../ops/eventHooks";
 import { trafficBillingUserLockKey, withKeyedTaskLock, withTrafficBillingUserLock } from "../keyedTaskLock";
 import {
   isHostPortReservationHeldByCaller,
@@ -4708,6 +4709,7 @@ async function syncEntryGroupDdns(group: any, ddnsSettings: any, options: Forwar
       updatedAt: nowDate(),
     }).where(eq(forwardGroups.id, group.id));
     await insertForwardGroupEvent(group.id, null, "ddns-update", `入口组 DDNS 已同步；domain=${String(group.domain || "-")} values=${joined}${excludedSuffix}${forceSync ? " force=true" : ""}`);
+    if (previousValue && previousValue !== joined) recordForwardGroupSwitchEvent({ group, mode: "entry", toLabel: `${values.length} 个健康入口`, reason: `新增 ${addedValues.length} 个、剔除 ${removedValues.length} 个` }); // 事件时间线
     if (groupSwitchNotifyEnabled(group) && !switchNotifySuppressed(options) && previousValue && previousValue !== joined) {
       void notifyForwardGroupSwitch({
         groupId: Number(group.id),
@@ -4827,6 +4829,7 @@ async function syncSingleForwardGroupDdns(
       updatedAt: nowDate(),
     }).where(eq(forwardGroups.id, group.id));
     await insertForwardGroupEvent(group.id, memberId, eventType, `${successMessage}；${detail}`);
+    if (previousMemberId > 0 && Number(previousMemberId) !== Number(memberId)) recordForwardGroupSwitchEvent({ group, mode: "failover", fromLabel: previousValue, toLabel: value, reason: options.switchReason || "入口不可用，自动切到健康成员" }); // 事件时间线
     if (groupSwitchNotifyEnabled(group) && !options.suppressSwitchNotify && previousMemberId > 0 && Number(previousMemberId) !== Number(memberId)) {
       const [fromLabel, toLabel] = await Promise.all([
         forwardGroupMemberLabel(options.previousMember, previousMemberId),

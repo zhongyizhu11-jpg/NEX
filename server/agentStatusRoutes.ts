@@ -12,6 +12,7 @@ import {
 } from "./tunnelRuntimeStatus";
 import { getAgentHostFromRequest } from "./agentAuth";
 import { notifyForwardRuleError } from "./forwardRuleErrorNotifier";
+import { recordRuleStatusEvent } from "./ops/eventHooks";
 import { mapWithConcurrency } from "./asyncPool";
 import { withKeyedTaskLock } from "./keyedTaskLock";
 import { agentStatusOrderGuard, agentStatusOrderingKey } from "./agentStatusOrdering";
@@ -366,6 +367,7 @@ async function applyAgentRuleStatus(host: any, payload: any, lookups?: AgentStat
   const wasRunning = !!(rule as any).isRunning;
   // 规则行在本函数开头刚读过（处在「本机 + 这条规则」的有序锁里），直接交给仓库，省掉它内部的再读一遍。
   await db.updateRuleRunningStatus(ruleId, !!isRunning, rule);
+  recordRuleStatusEvent({ rule, host, wasRunning, isRunning: !!isRunning, message }); // 事件时间线：规则出错 / 恢复
   if (
     (wasRunning || !!message)
     && !isRunning

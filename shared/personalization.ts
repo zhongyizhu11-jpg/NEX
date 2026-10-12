@@ -459,7 +459,11 @@ export function normalizePersonalizationCardStyle(value: unknown): Personalizati
             选中格淡底墨字，全部药丸。设置页在这套下改成编号分节 + 贴底保存栏。深色是酒红墨色。
             参考 Rosélune 面板的 Romance（design/losantos-settings-2026-10-11/）。
 
-  画法全在 client/src/styles/theme-aurora.css / theme-gilt.css / theme-rose.css 里按 <html data-ui-theme> 选；这里只管 id 和文案。
+    cinnabar 朱砂 —— 参考 Rosélune 的 Umbrella：素白纸面、几乎直角（3px）的卡和控件、标签全大写加宽字距、
+            页面标题前一枚朱红菱形、每节顶线左端一段朱红短线、页顶一条细斜纹。只有这套主题下才出现
+            「监控」页和那批借鉴来的运维功能入口（见 client/src/features/ops/）；设置开着的功能换主题后照常生效。
+
+  画法全在 client/src/styles/theme-aurora.css / theme-gilt.css / theme-rose.css / theme-cinnabar.css 里按 <html data-ui-theme> 选；这里只管 id 和文案。
   存的是 id；别的值一律回到 classic。
 */
 export const PERSONALIZATION_UI_THEMES = [
@@ -467,6 +471,7 @@ export const PERSONALIZATION_UI_THEMES = [
   { id: "aurora", name: "极光", description: "彩色柔光底 + 半透明玻璃卡 + 胶囊控件，顶栏和标签栏更通透；深色是深蓝黑底上的微光。" },
   { id: "gilt", name: "墨金", description: "米白纸底、平贴的小圆角卡纸，数字放在米色带上；衬线标题、金色下划线分段、方标签筛选；深色是墨黑配金。" },
   { id: "rose", name: "玫瑰", description: "胭脂粉底、无边线的浮起白瓣卡，数字嵌在托盘里；斜体衬线标题、细线空槽分段、全药丸；设置页改为编号分节。" },
+  { id: "cinnabar", name: "朱砂", description: "素白纸面、3px 小方角、朱红短线和菱形标记，标签全大写加宽字距；带「监控」页和一整套运维功能（状态可用率、地区规则、IP 封禁、在线 IP、安全巡检、API 与 MCP……）。" },
 ] as const;
 
 export type PersonalizationUiThemeId = typeof PERSONALIZATION_UI_THEMES[number]["id"];

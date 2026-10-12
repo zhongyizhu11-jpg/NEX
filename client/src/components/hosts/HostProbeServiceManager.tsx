@@ -23,6 +23,23 @@ import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import EmptyState from "@/components/EmptyState";
 
+/**
+ * 最近一轮探测：「23 ms · 丢包 1/5」。
+ *
+ * Agent 每轮会探测多次（probeCount），成功几次记在 probeSuccesses —— 丢包一直在库里，
+ * 只是列表上没露出来。只显示最近一轮，看趋势还是点开延迟图表。
+ */
+function latestProbeSummary(latest: any): { text: string; lossy: boolean } | null {
+  if (!latest) return null;
+  const count = Math.max(1, Number(latest.probeCount) || 1);
+  const successes = Math.max(0, Math.min(count, Number(latest.probeSuccesses ?? (latest.isTimeout ? 0 : count))));
+  if (successes === 0) return { text: "超时", lossy: true };
+  const latency = Number(latest.latencyMs);
+  const latencyText = Number.isFinite(latency) && latency > 0 ? `${Math.round(latency)} ms` : "—";
+  if (successes >= count) return { text: latencyText, lossy: false };
+  return { text: `${latencyText} · 丢包 ${Math.round(((count - successes) / count) * 100)}%`, lossy: true };
+}
+
 type ServiceForm = {
   name: string;
   method: "tcping" | "ping";
@@ -183,6 +200,7 @@ function ServiceCard({
   const target = serviceTarget(service);
   const scope = scopeText(service, hostsById);
   const interval = Number(service.intervalSeconds) || 30;
+  const latest = latestProbeSummary(service.latest);
   /*
     原来名字下面一个图标方块，底下三个灰框（目标、运行时间、主机范围）各装一个值 ——
     和 Token 卡、转发组卡片原来一样的「一个值一个框」。现在是名字那一行 + 细线下两行小表。
@@ -210,6 +228,12 @@ function ServiceCard({
           <dd className="min-w-0 truncate text-right font-mono text-foreground" title={target}>{target}</dd>
           <dt className="text-muted-foreground">主机</dt>
           <dd className="min-w-0 truncate text-right text-foreground" title={scope}>{scope}</dd>
+          {latest ? (
+            <>
+              <dt className="text-muted-foreground">最近一轮</dt>
+              <dd className={cn("min-w-0 truncate text-right tabular-nums", latest.lossy ? "text-[var(--fx-warn-text)]" : "text-foreground")}>{latest.text}</dd>
+            </>
+          ) : null}
         </dl>
 
         <CardActions>
@@ -534,7 +558,14 @@ export default function HostProbeServiceManager({
                       </TableCell>
                       <TableCell className="font-mono text-xs">{serviceTarget(service)}</TableCell>
                       <TableCell className="max-w-[360px] truncate text-sm" title={scopeText(service, hostsById)}>{scopeText(service, hostsById)}</TableCell>
-                      <TableCell className="text-sm tabular-nums">每 {service.intervalSeconds || 30} 秒</TableCell>
+                      <TableCell className="text-sm tabular-nums">
+                        每 {service.intervalSeconds || 30} 秒
+                        {latestProbeSummary(service.latest) ? (
+                          <div className={cn("text-xs", latestProbeSummary(service.latest)!.lossy ? "text-[var(--fx-warn-text)]" : "text-muted-foreground")}>
+                            最近 {latestProbeSummary(service.latest)!.text}
+                          </div>
+                        ) : null}
+                      </TableCell>
                       <TableCell>
                         <ServiceEnabledSwitch service={service} onToggle={toggleServiceEnabled} />
                       </TableCell>

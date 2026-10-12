@@ -4,6 +4,7 @@ import { quoteIdentifierFor } from "./dbRuntime";
 import type Database from "better-sqlite3";
 import type pg from "pg";
 import { getDatabaseKind, getPool, getPostgresPool, getSqlite } from "./dbRuntime";
+import { OPS_TABLE_DEFS } from "./ops/opsTables";
 
 export type ColumnType = "id" | "text" | "longtext" | "varchar" | "int" | "bigint" | "bool" | "epoch";
 
@@ -88,6 +89,12 @@ export const MIGRATION_TABLES = [
   "plugin_assets",
   "plugin_agent_states",
   "config_audit_events",
+  // 朱砂主题那组运维功能里要跟着迁移走的配置表（和 server/ops/opsTables.ts 的 OPS_MIGRATION_TABLES 一致，测试盯着）
+  "firewall_host_policies",
+  "firewall_blocked_ips",
+  "ops_agent_relay",
+  "api_tokens",
+  "user_passkeys",
 ] as const;
 
 const LAST_AUTO_TRAFFIC_RESET_BACKFILL_MARKER = "last-auto-traffic-reset-backfill-v1";
@@ -208,6 +215,8 @@ const tables: TableDef[] = [
       c("kind", "varchar", { length: 32, notNull: true, default: "browser" }), c("expiresAt", "epoch", { notNull: true }),
       c("revokedAt", "epoch"), c("revokeReason", "varchar", { length: 64 }),
       c("createdAt", "epoch", { notNull: true, default: "now" }), c("lastSeenAt", "epoch", { notNull: true, default: "now" }),
+      // 个人资料 › 已登录设备（server/ops/sessionDevices.ts）：最近一次请求的浏览器标识和来源 IP。
+      c("userAgent", "varchar", { length: 512 }), c("ip", "varchar", { length: 64 }),
     ],
     unique: [["sid"]],
     indexes: [["userId"], ["userId", "kind"], ["expiresAt"]],
@@ -642,6 +651,8 @@ const tables: TableDef[] = [
   { name: "plugin_assets", columns: [c("id", "id"), c("pluginId", "varchar", { length: 128, notNull: true }), c("path", "text", { notNull: true }), c("contentType", "varchar", { length: 128 }), c("size", "int", { notNull: true, default: 0 }), c("sha256", "varchar", { length: 64 }), c("content", "longtext"), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], unique: [["pluginId", "path"]], indexes: [["pluginId"]] },
   { name: "plugin_agent_states", columns: [c("id", "id"), c("pluginId", "varchar", { length: 128, notNull: true }), c("resourceViewId", "varchar", { length: 128, notNull: true }), c("hostId", "int", { notNull: true }), c("pluginVersion", "varchar", { length: 64 }), c("actionId", "varchar", { length: 128 }), c("groupId", "varchar", { length: 64 }), c("taskId", "varchar", { length: 64 }), c("status", "varchar", { length: 32, notNull: true, default: "idle" }), c("dataJson", "longtext"), c("output", "longtext"), c("error", "text"), c("startedAt", "epoch"), c("finishedAt", "epoch"), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], unique: [["pluginId", "resourceViewId", "hostId"]], indexes: [["hostId"], ["pluginId", "resourceViewId"], ["groupId"]] },
   { name: "config_audit_events", columns: [c("id", "id"), c("resourceType", "varchar", { length: 32, notNull: true }), c("resourceId", "int", { notNull: true }), c("hostId", "int"), c("action", "varchar", { length: 32, notNull: true }), c("source", "varchar", { length: 64, notNull: true, default: "system" }), c("actorUserId", "int"), c("actorName", "text"), c("requestId", "varchar", { length: 64 }), c("requestPath", "text"), c("beforeJson", "text"), c("afterJson", "text"), c("diffJson", "text"), c("configHash", "varchar", { length: 64, notNull: true }), c("createdAt", "epoch", { notNull: true, default: "now" })], indexes: [["resourceType", "resourceId", "id"], ["hostId", "id"], ["actorUserId", "id"]] },
+  // 第五套主题那批运维功能的表，各功能自己的文件里定义（server/ops/*Tables.ts）。
+  ...OPS_TABLE_DEFS,
 ];
 
 const seedSettings = [

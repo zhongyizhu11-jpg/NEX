@@ -12,6 +12,8 @@ import { HostOsAvatar, HostOsGlyph, hostOsOf } from "./HostOsBadge";
 import { fxpRuntimeBadgeTitle, fxpRuntimeDetailText } from "./FxpRuntimeBadge";
 import { buildHostActions, type HostSummaryCardProps } from "./HostSummaryCard";
 import { useHostVitals } from "./useHostVitals";
+import { useAuth } from "@/_core/hooks/useAuth";
+import OpsHostDetailExtraSections from "@/features/ops/slots/HostDetailExtraSections";
 
 /**
  * 主机详情 —— Detail 态。
@@ -32,7 +34,8 @@ import { useHostVitals } from "./useHostVitals";
  * PR 4「操作系统」那一轮 —— 在这里临时造一个，就等于多了一套浮层。
  */
 
-function Section({ title, children }: { title: string; children: ReactNode }) {
+/** 详情里的一节（第五套主题那几节也用它，见 features/ops/slots/HostDetailExtraSections）。 */
+export function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="flex min-w-0 flex-col gap-2 border-t border-[var(--fx-stroke-weak)] pt-3 first:border-t-0 first:pt-0">
       <h3 className="text-meta font-medium uppercase tracking-wide text-muted-foreground">{title}</h3>
@@ -42,7 +45,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 }
 
 /** 一行「标签 …… 值」。详情里大量这种键值对，值靠右并且等宽，一列能扫下来。 */
-function Row({ label, value }: { label: ReactNode; value: ReactNode }) {
+export function Row({ label, value }: { label: ReactNode; value: ReactNode }) {
   return (
     <div className="flex min-w-0 items-baseline justify-between gap-3">
       <span className="shrink-0 text-meta text-muted-foreground">{label}</span>
@@ -67,6 +70,7 @@ export type HostDetailDialogProps = Omit<HostSummaryCardProps, "onOpenDetail"> &
 export default function HostDetailDialog(props: HostDetailDialogProps) {
   const { host, open, onOpenChange } = props;
   const confirmDialog = useConfirmDialog();
+  const { user } = useAuth();
   const vitals = useHostVitals(host, {
     metrics: props.metrics,
     traffic: props.traffic,
@@ -183,6 +187,8 @@ export default function HostDetailDialog(props: HostDetailDialogProps) {
               value={vitals.trafficUsageLabel}
             />
           </Section>
+
+          <OpsHostDetailExtraSections host={host} isAdmin={user?.role === "admin"} />
         </div>
 
         <div className="flex items-center justify-end border-t border-[var(--fx-stroke-weak)] pt-3">

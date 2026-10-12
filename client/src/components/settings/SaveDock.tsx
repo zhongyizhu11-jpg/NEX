@@ -79,9 +79,10 @@ export function useSaveDockItem(item: SaveDockItem) {
   }, [registry, item.id]);
 }
 
-/** 这条栏现在画不画：只在玫瑰主题下。卡片据此决定要不要把自己的保存按钮交出去。 */
+/** 这条栏现在画不画：只在玫瑰和朱砂两套主题下（两套的设置页都是编号分节）。卡片据此决定要不要把自己的保存按钮交出去。 */
 export function useSaveDockActive() {
-  return useUiTheme() === "rose";
+  const uiTheme = useUiTheme();
+  return uiTheme === "rose" || uiTheme === "cinnabar";
 }
 
 export function SaveDockBar() {

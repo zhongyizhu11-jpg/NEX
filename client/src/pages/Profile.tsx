@@ -1,5 +1,6 @@
 import { avatarQuotaState } from "@/lib/avatarQuota";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
+import OpsProfileExtraSections from "@/features/ops/slots/ProfileExtraSections";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { AvatarPicker } from "@/components/AvatarPicker";
 import DashboardLayout from "@/components/DashboardLayout";
@@ -726,6 +727,8 @@ function ProfileContent() {
           </CardContent>
         </Card>
       )}
+
+      <OpsProfileExtraSections />
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card className="border-border/50 bg-card/70">

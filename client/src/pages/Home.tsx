@@ -12,6 +12,7 @@ import { trafficQuotaBreakdown } from "@/lib/trafficQuota";
 import { trpc } from "@/lib/trpc";
 import { AccountSection } from "@/features/dashboard/AccountSection";
 import { AttentionSection } from "@/features/dashboard/AttentionSection";
+import OpsHomeExtras from "@/features/ops/slots/HomeExtras";
 import { NetworkMapSlot } from "@/features/dashboard/NetworkMapSlot";
 import { QuickStartSection } from "@/features/dashboard/QuickStartSection";
 import { TrafficSurface, type TrafficChartPoint } from "@/features/dashboard/TrafficSurface";
@@ -243,6 +244,7 @@ function DashboardContent() {
         isAdmin={isAdmin}
         onOpen={setLocation}
       />
+      <OpsHomeExtras isAdmin={isAdmin} />
       {isAdmin ? trafficSection : accountSection}
       {isAdmin ? accountSection : trafficSection}
       <MobileAppSettings snapshot={mobileReminderSnapshot} />
