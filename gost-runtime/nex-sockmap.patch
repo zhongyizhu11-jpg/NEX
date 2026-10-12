@@ -1,0 +1,99 @@
+diff --git a/handler/forward/local/handler.go b/handler/forward/local/handler.go
+index d09a564..8deca83 100644
+--- a/handler/forward/local/handler.go
++++ b/handler/forward/local/handler.go
+@@ -26,6 +26,7 @@ import (
+ 	stats_wrapper "github.com/go-gost/x/observer/stats/wrapper"
+ 	xrecorder "github.com/go-gost/x/recorder"
+ 	"github.com/go-gost/x/registry"
++	"github.com/zhongyizhu11-jpg/NEX/sockmap"
+ )
+ 
+ func init() {
+@@ -110,6 +111,8 @@ func (h *forwardHandler) Handle(ctx context.Context, conn net.Conn, opts ...hand
+ 	})
+ 	log.Infof("%s <> %s", conn.RemoteAddr(), conn.LocalAddr())
+ 
++	// NEX: 记下监听器交过来的原始连接，普通 TCP 转发可以交给内核 sockmap 对接。
++	rawConn := conn
+ 	pStats := xstats.Stats{}
+ 	conn = stats_wrapper.WrapConn(conn, &pStats)
+ 
+@@ -263,6 +266,20 @@ func (h *forwardHandler) Handle(ctx context.Context, conn net.Conn, opts ...hand
+ 
+ 	t := time.Now()
+ 	log.Infof("%s <-> %s", conn.RemoteAddr(), target.Addr)
++	// NEX: 没开嗅探（一个字节都还没从客户端读过）、两端剥掉空转的包装层后都是
++	// *net.TCPConn（没有限速 / 统计 / PROXY 头接收）时，交给内核 sockmap 直接对接；
++	// 内核不支持时 Relay 返回 false，照旧走 Pipe。
++	if network == "tcp" && !h.md.sniffing {
++		if result, ok := sockmap.Relay(nexUnwrap(rawConn), nexUnwrap(cc), sockmap.DefaultLinger); ok {
++			pStats.Add(stats.KindInputBytes, int64(result.AcceptedToDialed))
++			pStats.Add(stats.KindOutputBytes, int64(result.DialedToAccepted))
++			log.WithFields(map[string]any{
++				"duration": time.Since(t),
++				"sockmap":  true,
++			}).Infof("%s >-< %s", conn.RemoteAddr(), target.Addr)
++			return nil
++		}
++	}
+ 	// xnet.Transport(conn, cc)
+ 	xnet.Pipe(ctx, conn, cc)
+ 	log.WithFields(map[string]any{
+diff --git a/handler/forward/local/nex_sockmap.go b/handler/forward/local/nex_sockmap.go
+new file mode 100644
+index 0000000..540d9dc
+--- /dev/null
++++ b/handler/forward/local/nex_sockmap.go
+@@ -0,0 +1,29 @@
++package local
++
++import (
++	"log"
++	"net"
++
++	"github.com/zhongyizhu11-jpg/NEX/sockmap"
++)
++
++// NEX: sockmap 只在启用 / 停用时各打一行，走标准错误进 journal。
++func init() {
++	sockmap.Logf = log.Printf
++}
++
++// nexUnwrap 剥掉声明自己可以被绕过的包装层（见 metrics/wrapper/nex_unwrap.go）。
++// 剥不到 *net.TCPConn 的连接（限速、统计、PROXY 头接收）sockmap.Relay 不会接管。
++func nexUnwrap(c net.Conn) net.Conn {
++	for {
++		u, ok := c.(interface{ NEXUnwrap() net.Conn })
++		if !ok {
++			return c
++		}
++		inner := u.NEXUnwrap()
++		if inner == nil {
++			return c
++		}
++		c = inner
++	}
++}
+diff --git a/metrics/wrapper/nex_unwrap.go b/metrics/wrapper/nex_unwrap.go
+new file mode 100644
+index 0000000..f35be2d
+--- /dev/null
++++ b/metrics/wrapper/nex_unwrap.go
+@@ -0,0 +1,16 @@
++package wrapper
++
++import (
++	"net"
++
++	xmetrics "github.com/go-gost/x/metrics"
++)
++
++// NEXUnwrap 让 NEX 的 sockmap 对接拿到底层连接。只有没开 metrics 时这一层才是空转、
++// 可以被绕过；开了 metrics 就返回 nil，连接照旧走用户态，计数不丢。
++func (c *serverConn) NEXUnwrap() net.Conn {
++	if xmetrics.IsEnabled() {
++		return nil
++	}
++	return c.Conn
++}
