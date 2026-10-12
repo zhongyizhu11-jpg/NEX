@@ -44,7 +44,7 @@ import {
   shouldPersistAgentPresence,
 } from "./agentHeartbeatGate";
 import { mapWithConcurrency } from "./asyncPool";
-import { clearTunnelRuntimeStatusForHost, getTunnelRuntimeGeneration, isTunnelRuntimeHostReady } from "./tunnelRuntimeStatus";
+import { clearTunnelRuntimeStatusForHost, getTunnelRuntimeGeneration, isTunnelRuntimeHostReady, replaceHostWireGuardPlanes } from "./tunnelRuntimeStatus";
 import { appendPanelLog } from "./_core/panelLogger";
 import { isIP } from "net";
 import { resolve4, resolve6 } from "dns/promises";
@@ -499,6 +499,7 @@ type AgentLocalRuntimeTunnelState = {
   tunnelId: number;
   forwardType: string;
   transportVersion?: "v1" | "v2";
+  wireGuardPlane?: "kernel" | "netstack";
   ready?: boolean;
 };
 type AgentLocalRuntimeServiceState = {
@@ -766,6 +767,7 @@ function normalizeAgentLocalRuntimeState(input: any): AgentLocalRuntimeState | n
           : String(item?.transportVersion || "").trim().toLowerCase() === "v1"
             ? "v1" as const
             : undefined,
+        wireGuardPlane: (["kernel", "netstack"] as const).find((plane) => plane === String(item?.wireGuardPlane || "").trim().toLowerCase()),
         ready: item?.ready !== false,
       }))
       .filter((item: AgentLocalRuntimeTunnelState) => item.port > 0 && item.tunnelId > 0)
@@ -792,6 +794,9 @@ function resolveAgentLocalRuntimeState(hostId: number, signature: string, report
   if (reported) {
     const nextSignature = signature || stableStateSignature(reported);
     setBoundedMapValue(agentLocalRuntimeStateCache, id, { signature: nextSignature, state: reported, updatedAt: Date.now() }, AGENT_HOST_CACHE_MAX);
+    replaceHostWireGuardPlanes(id, reported.tunnels
+      .filter((tunnel) => tunnel.transportVersion === "v2" && tunnel.wireGuardPlane)
+      .map((tunnel) => ({ tunnelId: tunnel.tunnelId, plane: tunnel.wireGuardPlane! })));
     return { state: reported, requestLocalState: false };
   }
   if (!signature) return { state: null as AgentLocalRuntimeState | null, requestLocalState: false };

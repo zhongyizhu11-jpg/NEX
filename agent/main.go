@@ -1043,7 +1043,10 @@ type localRuntimeTunnelState struct {
 	TunnelID         int    `json:"tunnelId"`
 	ForwardType      string `json:"forwardType"`
 	TransportVersion string `json:"transportVersion,omitempty"`
-	Ready            bool   `json:"ready"`
+	// WireGuardPlane 是 V2 隧道当前的数据面：kernel（内核 WireGuard）或 netstack
+	// （wireguard-go 用户态协议栈）。V1 和没起来的隧道为空。
+	WireGuardPlane string `json:"wireGuardPlane,omitempty"`
+	Ready          bool   `json:"ready"`
 }
 
 type localRuntimeServiceState struct {
@@ -2352,11 +2355,16 @@ func readLocalRuntimeStatePayload() localRuntimeStatePayload {
 				}
 				transportVersion = fxpTransportVersionForLocalTunnel(tunnelID, portValue, persistedFXPEntries)
 			}
+			wireGuardPlane := ""
+			if transportVersion == forwardXWireGuardVersion {
+				wireGuardPlane = wireGuardRuntimePlaneKind(tunnelID)
+			}
 			tunnels = append(tunnels, localRuntimeTunnelState{
 				Port:             portValue,
 				TunnelID:         tunnelID,
 				ForwardType:      forwardType,
 				TransportVersion: transportVersion,
+				WireGuardPlane:   wireGuardPlane,
 				Ready:            localTunnelStateReady(tunnelID, portValue, forwardType, &readiness),
 			})
 		}
@@ -3018,6 +3026,7 @@ func main() {
 		fatal("acquire Agent state lock: %v", err)
 	}
 	defer stateLock.Close()
+	go applyReceivePacketSteering()
 	restoreCountingChainStates(agentBootID)
 
 	startAgentLogMaintenance()

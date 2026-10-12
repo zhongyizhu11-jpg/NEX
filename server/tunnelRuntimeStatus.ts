@@ -1,5 +1,9 @@
 const tunnelRuntimeStatus = new Map<number, Map<number, boolean>>();
 const tunnelRuntimeGeneration = new Map<number, number>();
+// NEX V2 隧道每台主机实际用的 WireGuard 数据面（Agent 2.2.217 起上报）：
+// kernel = 内核 WireGuard，netstack = wireguard-go 用户态。
+export type TunnelWireGuardPlane = "kernel" | "netstack";
+const tunnelWireGuardPlanes = new Map<number, Map<number, TunnelWireGuardPlane>>();
 
 function normalizeTunnelId(tunnelId: unknown) {
   const id = Number(tunnelId);
@@ -78,9 +82,39 @@ export function getTunnelRuntimeTopologyStatus(tunnelId: number, topology: Tunne
   };
 }
 
+/** 用一台主机这次上报的完整列表替换它的数据面记录。 */
+export function replaceHostWireGuardPlanes(hostId: number, planes: Array<{ tunnelId: number; plane: TunnelWireGuardPlane }>) {
+  const hid = Number(hostId);
+  if (!Number.isFinite(hid) || hid <= 0) return;
+  for (const [tunnelId, hosts] of tunnelWireGuardPlanes.entries()) {
+    hosts.delete(hid);
+    if (hosts.size === 0) tunnelWireGuardPlanes.delete(tunnelId);
+  }
+  for (const { tunnelId, plane } of planes) {
+    const tid = normalizeTunnelId(tunnelId);
+    if (!tid) continue;
+    let hosts = tunnelWireGuardPlanes.get(tid);
+    if (!hosts) {
+      hosts = new Map<number, TunnelWireGuardPlane>();
+      tunnelWireGuardPlanes.set(tid, hosts);
+    }
+    hosts.set(hid, plane);
+  }
+}
+
+/** 隧道整体的数据面：所有上报的主机一致时返回那一种，不一致返回 mixed，没有上报返回 undefined。 */
+export function getTunnelWireGuardPlane(tunnelId: number): TunnelWireGuardPlane | "mixed" | undefined {
+  const hosts = tunnelWireGuardPlanes.get(Number(tunnelId));
+  if (!hosts || hosts.size === 0) return undefined;
+  const kinds = new Set(hosts.values());
+  if (kinds.size === 1) return kinds.values().next().value as TunnelWireGuardPlane;
+  return "mixed";
+}
+
 export function clearTunnelRuntimeStatusForHost(hostId: number) {
   const hid = Number(hostId);
   if (!Number.isFinite(hid) || hid <= 0) return [];
+  replaceHostWireGuardPlanes(hid, []);
   const affectedTunnelIds: number[] = [];
   for (const [tunnelId, hosts] of tunnelRuntimeStatus.entries()) {
     const deleted = hosts.delete(hid);
