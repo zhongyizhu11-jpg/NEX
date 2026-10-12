@@ -6,6 +6,8 @@ import (
 	"net"
 	"sync/atomic"
 	"time"
+
+	"github.com/zhongyizhu11-jpg/NEX/sockmap"
 )
 
 // tcpRelayHalfCloseLinger 和 FXP 数据面的 fxpHalfCloseLinger 保持一致：一个方向
@@ -81,4 +83,19 @@ func closeTCPWrite(conn net.Conn) {
 func isNetTimeout(err error) bool {
 	var netErr net.Error
 	return errors.As(err, &netErr) && netErr.Timeout()
+}
+
+// relayTCP 是 Agent 自有中继的统一入口：accepted 是本端 accept 下来的连接，dialed
+// 是本端拨出去的。两条都是没包装过的 TCP 连接、内核和权限也允许时，交给内核
+// sockmap 直接对接（仓库根目录 sockmap 模块）；否则走 relayTCPBidirectional。两条路
+// 都在返回前关闭两端。sockmap 默认关，主机上设 NEX_SOCKMAP=1 才会用。
+func relayTCP(accepted net.Conn, dialed net.Conn, linger time.Duration) {
+	if _, ok := sockmap.Relay(accepted, dialed, linger); ok {
+		return
+	}
+	relayTCPBidirectional(accepted, dialed, linger)
+}
+
+func init() {
+	sockmap.Logf = logf
 }

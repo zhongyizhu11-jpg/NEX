@@ -36,6 +36,8 @@ import (
 	"time"
 
 	"golang.org/x/time/rate"
+
+	"github.com/zhongyizhu11-jpg/NEX/sockmap"
 )
 
 var Version = "2.2.217"
@@ -3025,6 +3027,8 @@ func main() {
 	}
 	defer stateLock.Close()
 	go applyReceivePacketSteering()
+	// sockmap 第一次用到时才加载程序、跑自检；启动时先做掉，第一条连接不用等。
+	go sockmap.Status()
 	restoreCountingChainStates(agentBootID)
 
 	startAgentLogMaintenance()
@@ -13640,7 +13644,7 @@ func (p *failoverProxy) handleConn(client net.Conn) {
 	p.trackConn(index, client)
 	defer p.untrackConn(index, client)
 	// 等两个方向都结束（带半关闭 linger），客户端半关闭后仍能收完响应。
-	relayTCPBidirectional(client, upstream, tcpRelayHalfCloseLinger)
+	relayTCP(client, upstream, tcpRelayHalfCloseLinger)
 }
 
 func guardID(rule guardRule) string {
