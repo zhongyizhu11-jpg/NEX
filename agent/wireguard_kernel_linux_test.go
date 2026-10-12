@@ -316,3 +316,42 @@ func TestWireGuardKernelEnvSwitch(t *testing.T) {
 		t.Fatal("empty env must keep the kernel plane enabled")
 	}
 }
+
+func TestNftRulesetFiltersInput(t *testing.T) {
+	cases := []struct {
+		name    string
+		ruleset string
+		want    bool
+	}{
+		{"empty", "", false},
+		{"accept policy no drops", "table inet filter {\n\tchain input {\n\t\ttype filter hook input priority filter; policy accept;\n\t}\n\tchain forward {\n\t\ttype filter hook forward priority filter; policy drop;\n\t}\n}\n", false},
+		{"drop policy", "table inet filter {\n\tchain input {\n\t\ttype filter hook input priority filter; policy drop;\n\t\tct state established,related accept\n\t\ttcp dport 22 accept\n\t}\n}\n", true},
+		{"reject rule", "table inet filter {\n\tchain input {\n\t\ttype filter hook input priority 0; policy accept;\n\t\ttcp dport 1-65535 reject\n\t}\n}\n", true},
+		{"drop only in output", "table inet filter {\n\tchain input {\n\t\ttype filter hook input priority 0; policy accept;\n\t}\n\tchain output {\n\t\ttype filter hook output priority 0; policy accept;\n\t\tudp dport 53 drop\n\t}\n}\n", false},
+	}
+	for _, tc := range cases {
+		if got := nftRulesetFiltersInput(tc.ruleset); got != tc.want {
+			t.Errorf("%s: got %v want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestWireGuardKernelInboundBlockedOnlyWithoutIptables(t *testing.T) {
+	origIptables, origNft := wireGuardKernelIptablesPresent, wireGuardKernelNftRuleset
+	t.Cleanup(func() { wireGuardKernelIptablesPresent, wireGuardKernelNftRuleset = origIptables, origNft })
+	dropping := "table inet filter {\n\tchain input {\n\t\ttype filter hook input priority 0; policy drop;\n\t}\n}\n"
+	wireGuardKernelNftRuleset = func() (string, error) { return dropping, nil }
+
+	wireGuardKernelIptablesPresent = func() bool { return true }
+	if wireGuardKernelInboundBlocked() {
+		t.Fatal("with iptables present the ports are allowed by rules, not blocked")
+	}
+	wireGuardKernelIptablesPresent = func() bool { return false }
+	if !wireGuardKernelInboundBlocked() {
+		t.Fatal("nftables-only host with a dropping input chain must fall back to the userspace plane")
+	}
+	wireGuardKernelNftRuleset = func() (string, error) { return "", errors.New("nft: not found") }
+	if wireGuardKernelInboundBlocked() {
+		t.Fatal("no nft and no iptables means nothing filters input")
+	}
+}

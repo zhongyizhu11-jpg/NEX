@@ -83,6 +83,9 @@ func runWireGuardKernelCommand(args ...string) (string, error) {
 }
 
 func newWireGuardKernelPlane(spec wireGuardSpec) (*wireGuardKernelPlane, error) {
+	if wireGuardKernelInboundBlocked() {
+		return nil, errors.New("nftables input chain filters traffic and iptables is unavailable to allow the tunnel ports")
+	}
 	client, err := wgctrl.New()
 	if err != nil {
 		return nil, fmt.Errorf("open wireguard control: %w", err)
@@ -292,16 +295,70 @@ func (plane *wireGuardKernelPlane) dialUDP(addr *net.UDPAddr) (net.Conn, error) 
 	return net.DialUDP("udp4", &net.UDPAddr{IP: plane.address.AsSlice()}, addr)
 }
 
+var wireGuardKernelIptablesPresent = func() bool {
+	_, err := exec.LookPath("iptables")
+	return err == nil
+}
+
+var wireGuardKernelNftRuleset = func() (string, error) {
+	return runWireGuardKernelCommand("nft", "list", "ruleset")
+}
+
+// wireGuardKernelInboundBlocked 判断内核数据面的入站代理端口会不会被防火墙挡住而又没法放行：
+// 有 iptables 就由 allowInbound 插放行规则；没有 iptables 时只能看 nftables 的 input 链，
+// 里面有 drop / reject 就不用内核数据面（wireguard-go 的包不过 INPUT，不受影响）。
+func wireGuardKernelInboundBlocked() bool {
+	if wireGuardKernelIptablesPresent() {
+		return false
+	}
+	ruleset, err := wireGuardKernelNftRuleset()
+	if err != nil {
+		return false
+	}
+	return nftRulesetFiltersInput(ruleset)
+}
+
+// nftRulesetFiltersInput 在 `nft list ruleset` 的输出里找 hook input 的链，
+// 链策略是 drop 或者链里有 drop / reject 规则就算会拦包。
+func nftRulesetFiltersInput(ruleset string) bool {
+	inInput := false
+	for _, raw := range strings.Split(ruleset, "\n") {
+		line := strings.TrimSpace(raw)
+		if strings.Contains(line, "hook input") {
+			inInput = true
+		}
+		if !inInput {
+			continue
+		}
+		if line == "}" {
+			inInput = false
+			continue
+		}
+		for _, field := range strings.FieldsFunc(line, func(r rune) bool { return r == ' ' || r == ';' || r == '\t' }) {
+			if field == "drop" || field == "reject" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // wireGuardKernelFirewallRule 是放行入站代理端口的 iptables 规则（不含表 / 动作前缀）。
 func wireGuardKernelFirewallRule(name string, proto string, port int) string {
 	return "INPUT -i " + name + " -p " + proto + " --dport " + strconv.Itoa(port) + " -m comment --comment nex-wg-" + name + " -j ACCEPT"
 }
 
-func (plane *wireGuardKernelPlane) allowInbound(proto string, port int) {
+func (plane *wireGuardKernelPlane) allowInbound(proto string, port int) error {
+	if !wireGuardKernelIptablesPresent() {
+		// 纯 nftables 主机：建接口前已确认 input 链不拦包（见 wireGuardKernelInboundBlocked）。
+		return nil
+	}
 	rule := wireGuardKernelFirewallRule(plane.name, proto, port)
 	bin := iptablesAgentBin("iptables")
-	// iptables 不存在（纯 nftables 主机）就跳过：那种主机默认也没有拦 INPUT 的规则。
-	_ = runIptablesShellQuiet("command -v iptables >/dev/null 2>&1 || exit 0; " + bin + " -C " + rule + " 2>/dev/null || " + bin + " -I " + rule)
+	if !runIptablesShellQuiet(bin + " -C " + rule + " 2>/dev/null || " + bin + " -I " + rule) {
+		return fmt.Errorf("allow %s/%d on %s in iptables INPUT failed", proto, port, plane.name)
+	}
+	return nil
 }
 
 func (plane *wireGuardKernelPlane) revokeInbound(proto string, port int) {
@@ -340,7 +397,10 @@ func (plane *wireGuardKernelPlane) listenTCP(addr *net.TCPAddr) (net.Listener, e
 		return nil, err
 	}
 	port := listener.Addr().(*net.TCPAddr).Port
-	plane.allowInbound("tcp", port)
+	if err := plane.allowInbound("tcp", port); err != nil {
+		_ = listener.Close()
+		return nil, err
+	}
 	return &wireGuardKernelListener{Listener: listener, release: func() { plane.revokeInbound("tcp", port) }}, nil
 }
 
@@ -351,7 +411,10 @@ func (plane *wireGuardKernelPlane) listenUDP(addr *net.UDPAddr) (net.PacketConn,
 	}
 	tuneWireGuardUDPConn(conn, wireGuardUDPProxyBufferBytes)
 	port := conn.LocalAddr().(*net.UDPAddr).Port
-	plane.allowInbound("udp", port)
+	if err := plane.allowInbound("udp", port); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
 	return &wireGuardKernelPacketConn{PacketConn: conn, release: func() { plane.revokeInbound("udp", port) }}, nil
 }
 
