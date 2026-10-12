@@ -4,6 +4,8 @@ import {
   clearTunnelRuntimeStatus,
   clearTunnelRuntimeStatusForHost,
   getTunnelRuntimeTopologyStatus,
+  getTunnelWireGuardPlane,
+  replaceHostWireGuardPlanes,
   recordTunnelRuntimeHostStatus,
 } from "./tunnelRuntimeStatus";
 
@@ -38,4 +40,20 @@ test("runtime topology accepts a healthy extra exit and clears offline hosts", (
     loadBalanceEnabled: true,
     loadBalanceStrategy: "fallback",
   }).running, false);
+});
+
+test("NEX V2 隧道的 WireGuard 数据面按主机汇总，主机掉线就清掉", () => {
+  replaceHostWireGuardPlanes(9101, [{ tunnelId: 9901, plane: "kernel" }]);
+  replaceHostWireGuardPlanes(9102, [{ tunnelId: 9901, plane: "kernel" }, { tunnelId: 9902, plane: "netstack" }]);
+  assert.equal(getTunnelWireGuardPlane(9901), "kernel");
+  assert.equal(getTunnelWireGuardPlane(9902), "netstack");
+  // 一台退回用户态：整条隧道算混用。
+  replaceHostWireGuardPlanes(9102, [{ tunnelId: 9901, plane: "netstack" }]);
+  assert.equal(getTunnelWireGuardPlane(9901), "mixed");
+  // 这次没报 9902：记录被替换掉。
+  assert.equal(getTunnelWireGuardPlane(9902), undefined);
+  clearTunnelRuntimeStatusForHost(9102);
+  assert.equal(getTunnelWireGuardPlane(9901), "kernel");
+  clearTunnelRuntimeStatusForHost(9101);
+  assert.equal(getTunnelWireGuardPlane(9901), undefined);
 });

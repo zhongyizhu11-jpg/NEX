@@ -761,11 +761,15 @@ function normalizeTunnelModeForForm(mode: unknown): TunnelForm["mode"] {
     : "forwardx";
 }
 
-function getTunnelModeDisplay(mode: unknown, showNginxLabel = true, forwardxVersion: unknown = "v1") {
+function getTunnelModeDisplay(mode: unknown, showNginxLabel = true, forwardxVersion: unknown = "v1", wireGuardPlane?: unknown) {
   const normalized = String(mode || "").toLowerCase() as TunnelForm["mode"];
   const label = tunnelModeLabels[normalized] || String(mode || "").toUpperCase();
   if (isNginxTunnelModeValue(normalized)) return showNginxLabel ? "Nginx" : "Stream";
-  if (normalized === "forwardx") return normalizeForwardXVersion(forwardxVersion) === "v2" ? "NEX V2" : "NEX V1";
+  if (normalized === "forwardx") {
+    if (normalizeForwardXVersion(forwardxVersion) !== "v2") return "NEX V1";
+    // 所有主机都跑在内核 WireGuard 上时标出来；用户态或混用就不加后缀。
+    return wireGuardPlane === "kernel" ? "NEX V2 · 内核" : "NEX V2";
+  }
   return gostTunnelModes.includes(normalized) ? `GOST ${label}` : label;
 }
 
@@ -2105,7 +2109,7 @@ function tunnelMatchesLinkSearch(
     tunnel?.id,
     tunnel?.name,
     tunnel?.mode,
-    getTunnelModeDisplay(tunnel?.mode, nginxTunnelEnabled, tunnel?.forwardxVersion),
+    getTunnelModeDisplay(tunnel?.mode, nginxTunnelEnabled, tunnel?.forwardxVersion, tunnel?.wireGuardPlane),
     tunnel?.listenPort,
     tunnel?.rateLimitMbps,
     tunnel?.trafficMultiplier,
@@ -3989,7 +3993,7 @@ function TunnelsContent() {
     const hopCount = getTunnelHopIds(tunnel).length;
     const hasEntryGroup = Number(tunnel?.entryGroupId || 0) > 0;
     const subtitle = [
-      getTunnelModeDisplay(tunnel.mode, nginxTunnelEnabled, tunnel.forwardxVersion),
+      getTunnelModeDisplay(tunnel.mode, nginxTunnelEnabled, tunnel.forwardxVersion, tunnel.wireGuardPlane),
       hopCount > 2 ? `${hopCount - 1} 跳` : "直连",
       statusText,
     ].filter(Boolean).join(" · ");
@@ -4273,7 +4277,7 @@ function TunnelsContent() {
                       <TableCell className="hidden py-3 md:table-cell">
                         <div className="flex flex-wrap items-center gap-1.5">
                           <Badge variant="outline" className="text-[10px]">
-                            {getTunnelModeDisplay(tunnel.mode, nginxTunnelEnabled, tunnel.forwardxVersion)}
+                            {getTunnelModeDisplay(tunnel.mode, nginxTunnelEnabled, tunnel.forwardxVersion, tunnel.wireGuardPlane)}
                           </Badge>
                         </div>
                       </TableCell>
