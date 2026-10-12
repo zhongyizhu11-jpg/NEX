@@ -1,0 +1,27 @@
+# 手搓的 realm 配置
+[log]
+level = "warn"
+
+[network]
+no_tcp = false
+use_udp = true
+
+[[endpoints]]
+listen = "0.0.0.0:10001"
+remote = "203.0.113.10:443"
+
+[[endpoints]]
+listen = "[::]:10002"
+remote = "example.net:8443" # 注释
+[endpoints.network]
+use_udp = false
+
+[[endpoints]]
+listen = "0.0.0.0:10003"
+remote = "203.0.113.11:80"
+extra_remotes = ["203.0.113.12:80"]
+
+[[endpoints]]
+listen = "0.0.0.0:10004"
+remote = "203.0.113.13:443"
+remote_transport = "ws;host=example.org;path=/x"

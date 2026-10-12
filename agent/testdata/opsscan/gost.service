@@ -1,0 +1,12 @@
+[Unit]
+Description=gost forward
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/gost -L tcp://:32001/192.0.2.20:22 \
+  -L "udp://:32002/192.0.2.21:53" -L=rtcp://:32003/127.0.0.1:22
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,23 @@
+{"nftables": [
+ {"metainfo": {"version": "1.0.2", "release_name": "Lester Gooch", "json_schema_version": 1}},
+ {"table": {"family": "ip", "name": "mynat", "handle": 1}},
+ {"chain": {"family": "ip", "table": "mynat", "name": "prerouting", "handle": 1, "type": "nat", "hook": "prerouting", "prio": -100, "policy": "accept"}},
+ {"rule": {"family": "ip", "table": "mynat", "chain": "prerouting", "handle": 4, "expr": [
+   {"match": {"op": "==", "left": {"payload": {"protocol": "tcp", "field": "dport"}}, "right": 60001}},
+   {"dnat": {"addr": "192.0.2.100", "port": 8443}}
+ ]}},
+ {"rule": {"family": "ip", "table": "mynat", "chain": "prerouting", "handle": 5, "expr": [
+   {"match": {"op": "==", "left": {"meta": {"key": "l4proto"}}, "right": "udp"}},
+   {"match": {"op": "==", "left": {"payload": {"protocol": "udp", "field": "dport"}}, "right": 60002}},
+   {"dnat": {"addr": "192.0.2.101"}}
+ ]}},
+ {"rule": {"family": "ip", "table": "mynat", "chain": "prerouting", "handle": 6, "expr": [
+   {"match": {"op": "==", "left": {"payload": {"protocol": "tcp", "field": "dport"}}, "right": 50020}},
+   {"dnat": {"addr": "198.51.100.30", "port": 443}}
+ ]}},
+ {"table": {"family": "inet", "name": "forwardx", "handle": 2}},
+ {"rule": {"family": "inet", "table": "forwardx", "chain": "prerouting", "handle": 9, "expr": [
+   {"match": {"op": "==", "left": {"payload": {"protocol": "tcp", "field": "dport"}}, "right": 61000}},
+   {"dnat": {"family": "ip", "addr": "192.0.2.200", "port": 80}}
+ ]}}
+]}

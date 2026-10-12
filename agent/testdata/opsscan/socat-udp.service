@@ -1,0 +1,2 @@
+[Service]
+ExecStart=/bin/sh -c "exec socat UDP-LISTEN:5353,fork,reuseaddr UDP:[2001:db8::53]:53"

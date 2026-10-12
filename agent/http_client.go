@@ -36,6 +36,8 @@ func newAgentHTTPTransport(enableHTTP2 bool) *http.Transport {
 	transport.TLSHandshakeTimeout = 10 * time.Second
 	transport.ExpectContinueTimeout = time.Second
 	transport.ForceAttemptHTTP2 = enableHTTP2
+	// 拨面板地址时可能改拨中转主机（见 panel_dial.go）；拨别的地址原样直拨。
+	transport.DialContext = agentPanelDialContext
 	if transport.TLSClientConfig == nil {
 		transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 	} else {
