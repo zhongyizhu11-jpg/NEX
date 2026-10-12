@@ -19,7 +19,7 @@ import { BlockIpButton, LiveIpRowItem, OutdatedAgentNotice, limitText, regionTex
   监控 › 在线 IP（#6）。
 
   当前在线：谁此刻连着哪台机器的哪条规则，按用户分组，每组顶上写「在线几个 IP / 上限几个」，
-  到了上限提示新设备会被拒绝。开着这一页时 Agent 10 秒报一次（useOnlineIpsWatch），平时 60 秒。
+  到了上限只标一句「IP 数已到设置的上限」：现有的 maxIPs 是 iptables connlimit 按单个来源 IP 限连接数（agentHeartbeatRoute.ts buildAccessLimitCmds，mask 32），并不拒绝第 N+1 个 IP，所以不能说「新设备会被拒绝」。开着这一页时 Agent 10 秒报一次（useOnlineIpsWatch），平时 60 秒。
   IP 历史：最近 1 / 7 / 30 / 90 天出现过的 IP，谁用过、在哪些主机上、最后一次什么时候。
 */
 
@@ -111,7 +111,7 @@ function LiveView() {
                 </h3>
                 {group.atLimit ? (
                   <span className="rounded-full bg-[var(--fx-down-soft)] px-2 py-0.5 text-[11.5px] font-medium text-[var(--fx-down-text)]">
-                    已到上限，新设备会被拒绝
+                    IP 数已到设置的上限
                   </span>
                 ) : null}
               </div>
