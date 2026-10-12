@@ -581,8 +581,8 @@ const tables: TableDef[] = [
       c("tcpFastOpen", "bool", { notNull: true, default: false }), c("udpOverTcp", "bool", { notNull: true, default: false }),
       // 链路带宽上限（Mbit/s）：入口→出口 / 出口→入口。>0 时 FXP 把发送速率整形到限速器之下。
       c("linkUpMbps", "int", { notNull: true, default: 0 }), c("linkDownMbps", "int", { notNull: true, default: 0 }),
-      // 链路整形档位：auto 自动识别限速点（默认）、manual 按上面两个值、off 关。
-      c("linkShapingMode", "varchar", { length: 16, notNull: true, default: "auto" }),
+      // 链路整形档位：auto 自动识别限速点、manual 按上面两个值、off 关（默认，2026-10-12 起）。
+      c("linkShapingMode", "varchar", { length: 16, notNull: true, default: "off" }),
       // 抗丢包：NEX 隧道的 UDP 直连额外发 Reed-Solomon 纠错包，默认关。
       c("udpFec", "bool", { notNull: true, default: false }),
       c("blockHttp", "bool", { notNull: true, default: false }), c("blockSocks", "bool", { notNull: true, default: false }),

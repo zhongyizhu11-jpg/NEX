@@ -186,7 +186,7 @@ type TunnelForm = {
   proxyProtocolVersion: 1 | 2;
   tcpFastOpen: boolean;
   udpOverTcp: boolean;
-  /** 链路整形：auto 自动识别限速点（默认）/ manual 按下面两个值 / off 关。 */
+  /** 链路整形：auto 自动识别限速点 / manual 按下面两个值 / off 关（默认）。 */
   linkShapingMode: LinkShapingMode;
   /** 手动档的链路带宽上限（Mbit/s）：入口→出口 / 出口→入口，0 = 没填。 */
   linkUpMbps: number;
@@ -346,7 +346,7 @@ const defaultForm: TunnelForm = {
   proxyProtocolVersion: 1,
   tcpFastOpen: false,
   udpOverTcp: false,
-  linkShapingMode: "auto",
+  linkShapingMode: "off",
   linkUpMbps: 0,
   linkDownMbps: 0,
   linkShapingStatus: [],
@@ -387,15 +387,18 @@ type LinkShapingStatus = {
   learnedMbps: number;
   lossPct: number;
   updatedAt?: string | number | null;
+  /** 面板判定这条上报已经过期（关了整形、换了协议、机器离线），不是实时状态。 */
+  stale?: boolean;
 };
 function normalizeLinkShapingMode(value: unknown): LinkShapingMode {
   const mode = String(value || "").trim().toLowerCase();
-  return mode === "manual" || mode === "off" ? mode : "auto";
+  return mode === "manual" || mode === "auto" ? mode : "off";
 }
 /** 一条整形状态的人话：方向 + 主机 + 状态。 */
 function describeLinkShapingStatus(item: LinkShapingStatus) {
   const direction = item.direction === "down" ? "出口 → 入口" : "入口 → 出口";
   const host = item.hostName ? `${item.hostName}` : `主机 #${item.hostId}`;
+  if (item.stale) return `${direction}（${host}）：暂无最新上报`;
   let detail: string;
   switch (item.state) {
     case "shaping":
@@ -3512,7 +3515,7 @@ function TunnelsContent() {
     const transportTuningSupported = isTunnelTransportTuningSupported(form.mode);
     if (!proxySupported && !transportTuningSupported) return null;
     const proxyAnyEnabled = form.proxyProtocolReceive || form.proxyProtocolSend || form.proxyProtocolExitReceive || form.proxyProtocolExitSend;
-    const advancedConfigured = proxyAnyEnabled || form.tcpFastOpen || form.udpOverTcp || form.udpFec || form.linkShapingMode !== "auto" || form.linkUpMbps > 0 || form.linkDownMbps > 0;
+    const advancedConfigured = proxyAnyEnabled || form.tcpFastOpen || form.udpOverTcp || form.udpFec || form.linkShapingMode !== "off" || form.linkUpMbps > 0 || form.linkDownMbps > 0;
     const shouldCollapseAdvanced = proxySupported && transportTuningSupported;
     const renderLinkMbpsInput = (label: string, field: "linkUpMbps" | "linkDownMbps") => (
       <label className="flex min-h-10 items-center justify-between gap-2">

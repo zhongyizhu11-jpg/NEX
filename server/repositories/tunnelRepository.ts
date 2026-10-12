@@ -15,6 +15,7 @@ import {
   forwardGroupMembers,
   forwardGroups,
   tunnelLatencyStats,
+  tunnelLinkShaping,
   users,
 } from "../../drizzle/schema";
 import { afterDatabaseCommit, afterDatabaseTransactionSettled, executeRaw, getDatabaseKind, getDb, insertAndGetId, isDatabaseTransactionActive, nowDate, queryRaw, withDatabaseTransaction } from "../dbRuntime";
@@ -645,6 +646,8 @@ export async function deleteTunnel(id: number) {
    * 一条指向不存在资源的授权。主机那一路一直是这么删的，这几路当初漏了。
    */
   await db.delete(subscriptionPlanTunnels).where(eq(subscriptionPlanTunnels.tunnelId, id));
+  // 链路整形那几行也删掉：隧道号会被新建的隧道复用，留着的话新隧道一上来就顶着别人学到的限速点。
+  await db.delete(tunnelLinkShaping).where(eq(tunnelLinkShaping.tunnelId, id));
   await db.delete(tunnels).where(eq(tunnels.id, id));
   if (before) await recordConfigAuditEvent({ resourceType: "tunnel", resourceId: id, hostId: Number((before as any).entryHostId || 0), action: "delete", before });
   });

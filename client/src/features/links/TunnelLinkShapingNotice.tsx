@@ -6,6 +6,9 @@ import { cn } from "@/lib/utils";
  *
  * 只在真的在整形或出了状况时显示：学到的限速点、正在找、暂停。平时「在观察、没遇到
  * 限速」什么都不显示，免得每张卡片都多一行。
+ *
+ * 过期的上报（stale）也不显示：关掉整形、把隧道换成别的协议之后 FXP 就不再报了，
+ * 那条「正在找限速点」不能一直挂在卡片上（见 server/tunnelLinkShapingView.ts）。
  */
 
 export type LinkShapingStatusItem = {
@@ -14,12 +17,15 @@ export type LinkShapingStatusItem = {
   rateMbps?: number | null;
   learnedMbps?: number | null;
   hostName?: string | null;
+  /** 面板判定这条上报已经过期（关了整形、换了协议、机器离线都会这样），不是实时状态。 */
+  stale?: boolean | null;
 };
 
 export function tunnelLinkShapingText(tunnel: { linkShapingStatus?: LinkShapingStatusItem[] | null } | null | undefined) {
   const items = Array.isArray(tunnel?.linkShapingStatus) ? tunnel!.linkShapingStatus! : [];
   const parts: string[] = [];
   for (const item of items) {
+    if (item?.stale) continue;
     const direction = item?.direction === "down" ? "出口→入口" : "入口→出口";
     const state = String(item?.state || "");
     const learned = Number(item?.learnedMbps || 0);

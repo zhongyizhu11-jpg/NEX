@@ -28,6 +28,7 @@ import { normalizeAgentProbeCounts } from "@shared/agentDtos";
 import { buildAgentScriptCommand } from "@shared/agentInstallCommand";
 import { getConfiguredPanelUrl } from "../agentPanelUrl";
 import { hostEgressShaping, normalizeHostEgressShapingMode, TUNNEL_LINK_MBPS_MAX } from "../tunnelFxpRuntime";
+import { hostEgressShapingStatusView } from "../tunnelLinkShapingView";
 import { parseManualHostAddress } from "@shared/hostManualAddress";
 
 const HOST_UPGRADE_CLEANUP_INTERVAL_MS = 60 * 1000;
@@ -510,22 +511,11 @@ async function withHostEgressShapingStatus<T extends { id?: unknown }>(hostRows:
   const ids = hostRows.filter((host: any) => hostEgressShaping(host).mode !== "off").map((host: any) => Number(host.id));
   const rows = ids.length > 0 ? await db.listHostEgressShapingByHostIds(ids).catch(() => []) : [];
   const byHost = new Map(rows.map((row: any) => [Number(row.hostId), row]));
-  return hostRows.map((host: any) => {
-    const row = byHost.get(Number(host.id));
-    return {
-      ...host,
-      egressShapingStatus: row
-        ? {
-            mode: String(row.mode || "off"),
-            state: String(row.state || "off"),
-            rateMbps: Number(row.rateMbps || 0),
-            learnedMbps: Number(row.learnedMbps || 0),
-            lossPct: Number(row.lossPermille || 0) / 10,
-            updatedAt: row.updatedAt ?? null,
-          }
-        : null,
-    };
-  });
+  return hostRows.map((host: any) => ({
+    ...host,
+    // 好一会儿没上报的（机器离线、FXP 没起来）标 stale，卡片当没有实时状态，见 tunnelLinkShapingView。
+    egressShapingStatus: hostEgressShapingStatusView(host, byHost.get(Number(host.id))),
+  }));
 }
 
 /** 带上 Agent 上报的内网 IPv4，编辑框里「内网地址」拿它做建议（见 agentPrivateAddress） */

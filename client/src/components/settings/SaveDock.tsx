@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -11,7 +11,8 @@ import { useUiTheme } from "@/hooks/useUiTheme";
   没改动时两个按钮都是灰的，一改动「保存」才亮。NEX 的设置页是一张卡一个保存按钮，
   所以这里不重写表单，而是让每张卡**登记**自己：叫什么、现在有没有改动、怎么存、怎么撤。
   栏只看登记了的那些：有改动的几项一起存（一项一项按顺序存，前一项失败就停，失败那项
-  自己的报错照常弹），「放弃」把有改动的几项都撤回到已保存的值。
+  自己的报错照常弹），「放弃」把有改动的几项都撤回到已保存的值。没有未保存的改动时整条
+  栏不画，存完只留一句「改动都已保存」亮一下就收走。
 
   玫瑰下登记过的卡把自己那个保存按钮藏起来（按钮上挂 data-dock-save，CSS 在 theme-rose.css）；
   没登记的卡（要确认重启的端口 / SSL、弹窗里改的协议和菜单）保持原样，自己的按钮照常在。
@@ -85,15 +86,43 @@ export function useSaveDockActive() {
   return uiTheme === "rose" || uiTheme === "cinnabar";
 }
 
+/** 存完之后那句「改动都已保存」在屏幕上留多久（毫秒）。 */
+export const SAVE_DOCK_SAVED_FLASH_MS = 1200;
+
+/**
+ * 这条栏此刻画不画。
+ *
+ * 它是「还有东西没存」的提醒，不是常驻摆设：没有未保存的改动就收起来（存完那句话
+ * 亮一下也走）。以前不管有没有改动都挂在页底，两个灰按钮点哪都不消失。
+ */
+export function shouldShowSaveDock(input: { active: boolean; dirtyCount: number; busy: boolean; savedFlash: boolean }) {
+  if (!input.active) return false;
+  return input.dirtyCount > 0 || input.busy || input.savedFlash;
+}
+
 export function SaveDockBar() {
   const active = useSaveDockActive();
   const items = useContext(SaveDockItemsContext);
   const registry = useContext(SaveDockContext);
   const [saving, setSaving] = useState(false);
-  if (!active || !registry || items.length === 0) return null;
+  const [savedFlash, setSavedFlash] = useState(false);
 
-  const dirty = items.filter((item) => item.dirty);
+  const dirty = useMemo(() => items.filter((item) => item.dirty), [items]);
   const busy = saving || items.some((item) => item.pending);
+
+  // 存完那句话亮一下就收走；中途又改了东西就不用再亮了（栏自己会回来）
+  useEffect(() => {
+    if (!savedFlash) return;
+    const timer = setTimeout(() => setSavedFlash(false), SAVE_DOCK_SAVED_FLASH_MS);
+    return () => clearTimeout(timer);
+  }, [savedFlash]);
+  useEffect(() => {
+    if (dirty.length > 0) setSavedFlash(false);
+  }, [dirty.length]);
+
+  // 没有未保存的改动就不画（2026-10-12 用户报的：存完之后它还赖在页底，点哪都不走）
+  if (!registry || !shouldShowSaveDock({ active, dirtyCount: dirty.length, busy, savedFlash })) return null;
+
   const summary = dirty.length === 0
     ? "改动都已保存"
     : `${dirty.length} 处改动未保存：${dirty.map((item) => item.label).join("、")}`;
@@ -101,22 +130,29 @@ export function SaveDockBar() {
   const handleSave = async () => {
     if (busy || dirty.length === 0) return;
     setSaving(true);
+    let saved = true;
     try {
       // 一项存完、页面重渲染之后，后面几项的 save 可能已经换了新的：每次都去登记表里拿最新的那份
       for (const { id } of dirty) {
         const item = registry.get(id);
         if (!item || !item.dirty) continue;
         const ok = await item.save();
-        if (ok === false) break;
+        if (ok === false) {
+          saved = false;
+          break;
+        }
         await new Promise((resolve) => setTimeout(resolve, 0));
       }
     } finally {
+      // 先把「存好了」亮起来再松开 saving，免得栏在两次渲染之间先消失一下
+      setSavedFlash(saved);
       setSaving(false);
     }
   };
 
   const handleDiscard = () => {
     for (const { id } of dirty) registry.get(id)?.reset();
+    setSavedFlash(false);
   };
 
   return (

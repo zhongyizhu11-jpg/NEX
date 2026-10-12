@@ -135,8 +135,25 @@ export async function listHostEgressShapingByHostIds(hostIds: number[]): Promise
     .where(and(eq(tunnelLinkShaping.tunnelId, HOST_EGRESS_SHAPING_TUNNEL_ID), eq(tunnelLinkShaping.direction, "egress"), inArray(tunnelLinkShaping.hostId, ids))) as Promise<TunnelLinkShaping[]>;
 }
 
-export async function deleteTunnelLinkShapingByTunnel(tunnelId: number) {
+/**
+ * 整形关掉之后把记着的实时状态收掉（档位改成关、隧道换成别的协议都会这样）。
+ *
+ * FXP 从此不再上报这条隧道，留着的那份「正在找限速点」会一直挂在隧道卡片上。学到的
+ * 限速点（learnedMbps）留着：再打开自动档时还当提示值发回去，不用重新学一遍。
+ */
+export async function clearTunnelLinkShapingState(tunnelId: number) {
+  const id = Number(tunnelId);
+  if (!Number.isFinite(id) || id <= 0) return 0;
   const db = await getDb();
-  if (!db) return;
-  await db.delete(tunnelLinkShaping).where(eq(tunnelLinkShaping.tunnelId, Number(tunnelId)));
+  if (!db) return 0;
+  const rows = await db
+    .select({ id: tunnelLinkShaping.id })
+    .from(tunnelLinkShaping)
+    .where(eq(tunnelLinkShaping.tunnelId, id));
+  if (rows.length === 0) return 0;
+  await db
+    .update(tunnelLinkShaping)
+    .set({ mode: "off", state: "off", rateMbps: 0, lossPermille: 0, updatedAt: nowDate() })
+    .where(eq(tunnelLinkShaping.tunnelId, id));
+  return rows.length;
 }
