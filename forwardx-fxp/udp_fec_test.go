@@ -409,6 +409,29 @@ func TestUDPFECParityRoundTripAndValidation(t *testing.T) {
 		}
 	}
 
+	// 乱序：两个冗余包在大部分数据包之前到，后面的数据包到齐时照样还原。
+	reordered := &fxpUDPFEC{now: time.Now, recvStreams: map[fxpUDPFECStreamKey]*fxpUDPFECRecvStream{}, lastSweep: time.Now(), lastStats: time.Now()}
+	reordered.recvStreams[fxpUDPFECStreamKey{addr: from, packetType: fxpUDPTypeData, ruleID: 2, sessionID: 3}] = &fxpUDPFECRecvStream{}
+	reordered.observe(wires[0], from)
+	for _, raw := range parities {
+		reordered.observe(raw, from)
+	}
+	if len(reordered.recovered) != 0 {
+		t.Fatalf("recovered %d packets with 6 missing", len(reordered.recovered))
+	}
+	for _, i := range []int{1, 3, 4, 6} {
+		reordered.observe(wires[i], from)
+	}
+	if len(reordered.recovered) != 2 {
+		t.Fatalf("reordered: recovered %d packets, want 2", len(reordered.recovered))
+	}
+	for _, item := range reordered.recovered {
+		_, _, _, id, _ := fxpUDPWireMember(item.wire)
+		if string(item.wire) != string(wires[id.sequence-100]) {
+			t.Fatalf("reordered: recovered packet %d differs", id.sequence)
+		}
+	}
+
 	// 改坏的冗余包：长度不对、成员重复、版本不对都不认。
 	bad := append([]byte(nil), parities[0]...)
 	if _, err := parseFXPUDPFECParity(bad[:len(bad)-1]); err == nil {

@@ -656,6 +656,22 @@ func (f *fxpUDPFEC) observe(raw []byte, from netip.AddrPort) bool {
 	if stream != nil {
 		stream.lastSeen = now
 		stream.remember(id, raw)
+		// 冗余包比这一组的部分数据包先到时，当时缺得太多还原不了；后面的数据包
+		// 到了要再试一次，不然缺的那个就一直等到组过期。
+		for _, group := range stream.groups {
+			if !group.done && group.have > 0 && group.contains(id) {
+				f.tryRecover(stream, group, from)
+			}
+		}
+	}
+	return false
+}
+
+func (g *fxpUDPFECRecvGroup) contains(id fxpUDPFECMemberID) bool {
+	for i := 0; i < g.k; i++ {
+		if g.members[i] == id {
+			return true
+		}
 	}
 	return false
 }
