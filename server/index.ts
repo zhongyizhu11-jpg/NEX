@@ -25,6 +25,7 @@ import { TRPC_MAX_BATCH_SIZE } from "../shared/const";
 import { resolveTrustProxySetting } from "./trustProxy";
 import { authCapRouter } from "./authCaptcha";
 import { isAllowedMobileCorsOrigin } from "./mobileCors";
+import { mcpRouter } from "./ops/mcpRoute";
 
 installPanelLogger();
 
@@ -185,6 +186,8 @@ async function startServer() {
   app.use(migrationRouter);
   app.use(proxySubscriptionRouter);
   app.use(clientLogoRouter);
+  // POST /mcp：AI 客户端用个人 API 令牌接入（server/ops/mcp.ts）。
+  app.use(mcpRouter);
   app.use(
     "/api/trpc",
     createExpressMiddleware({

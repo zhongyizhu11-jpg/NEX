@@ -6,6 +6,8 @@ import { getSessionCookieOptions } from "./cookies";
 import { runWithConfigAuditContext } from "../configAudit";
 import { DATABASE_MAINTENANCE_MESSAGE, isDatabaseMaintenanceActive } from "../databaseMaintenance";
 import { formatTrpcErrorShape } from "./errorFormatter";
+import { apiTokenPolicyError } from "../ops/apiTokenPolicy";
+import { assertMaintenanceAllows } from "../ops/maintenance";
 
 const t = initTRPC.context<TrpcContext>().create({
   transformer: superjson,
@@ -25,7 +27,17 @@ const rejectMutationsDuringDatabaseMaintenance = t.middleware(opts => {
   return opts.next();
 });
 
-const baseProcedure = t.procedure.use(rejectMutationsDuringDatabaseMaintenance);
+/** 个人 API 令牌的两条限制（只读令牌不能改、任何令牌不能动账号本身），见 server/ops/apiTokenPolicy.ts。 */
+const enforceApiTokenPolicy = t.middleware(opts => {
+  const apiToken = opts.ctx.apiToken;
+  if (apiToken) {
+    const reason = apiTokenPolicyError(apiToken.scope, opts.path, opts.type);
+    if (reason) throw new TRPCError({ code: "FORBIDDEN", message: reason });
+  }
+  return opts.next();
+});
+
+const baseProcedure = t.procedure.use(rejectMutationsDuringDatabaseMaintenance).use(enforceApiTokenPolicy);
 
 export const publicProcedure = baseProcedure;
 
@@ -44,6 +56,8 @@ const requireUser = t.middleware(async opts => {
     ctx.res.clearCookie(COOKIE_NAME, { ...getSessionCookieOptions(ctx.req), maxAge: -1 });
     throw new TRPCError({ code: "UNAUTHORIZED", message: ACCOUNT_DISABLED_ERR_MSG });
   }
+  // 维护模式：普通用户调需要登录的接口一律「面板维护中」（管理员不受影响），见 server/ops/maintenance.ts。
+  await assertMaintenanceAllows(ctx.user);
 
   return runWithConfigAuditContext({
     actorUserId: Number(ctx.user.id),

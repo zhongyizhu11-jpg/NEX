@@ -133,7 +133,8 @@ async function issueLoginSession(ctx: any, user: any, sessionKind: SessionKind, 
   return { ...stripSessionSensitiveFields(user), mobileToken: mobile ? token : null };
 }
 
-async function createLoginSession(ctx: any, user: any, mobile?: boolean) {
+/** 通行密钥登录（server/routers/ops/passkeys.ts）也走这里：cookie、单设备策略和日志与密码登录一致。 */
+export async function createLoginSession(ctx: any, user: any, mobile?: boolean) {
   const sessionKind = resolveRequestedSessionKind(ctx.req, mobile);
   return issueLoginSession(ctx, user, sessionKind, mobile);
 }

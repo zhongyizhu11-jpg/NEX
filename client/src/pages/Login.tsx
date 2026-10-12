@@ -16,6 +16,7 @@ import { clearPersistedQueryCache } from "@/lib/queryPersistence";
 import { authErrorMessage } from "@/lib/authErrorMessage";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "@/components/ui/dialog";
 import { ACCOUNT_DISABLED_ERR_MSG } from "@shared/const";
+import OpsLoginExtras from "@/features/ops/account/LoginExtras";
 
 const REGISTRATION_CLOSED_MESSAGE = "当前注册未开放，请联系管理员";
 
@@ -1119,6 +1120,8 @@ export default function Login() {
                   </>
                 )}
               </Button>
+
+              <OpsLoginExtras disabled={isPending} />
 
               {showTelegramLoginSlot && (
                 <div className="auth-telegram-slot space-y-3">

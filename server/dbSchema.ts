@@ -209,6 +209,8 @@ const tables: TableDef[] = [
       c("kind", "varchar", { length: 32, notNull: true, default: "browser" }), c("expiresAt", "epoch", { notNull: true }),
       c("revokedAt", "epoch"), c("revokeReason", "varchar", { length: 64 }),
       c("createdAt", "epoch", { notNull: true, default: "now" }), c("lastSeenAt", "epoch", { notNull: true, default: "now" }),
+      // 个人资料 › 已登录设备（server/ops/sessionDevices.ts）：最近一次请求的浏览器标识和来源 IP。
+      c("userAgent", "varchar", { length: 512 }), c("ip", "varchar", { length: 64 }),
     ],
     unique: [["sid"]],
     indexes: [["userId"], ["userId", "kind"], ["expiresAt"]],
