@@ -178,9 +178,14 @@ async function backfillFromHostMetrics(hosts: any[], now: number) {
 
   for (const host of hosts) {
     const hostId = Number(host.id);
-    const samples = samplesByHost.get(hostId);
-    if (!samples) continue;
     const online = !!host.isOnline;
+    const lastBeat = epochSeconds(host.lastHeartbeat);
+    let samples = samplesByHost.get(hostId);
+    if (!samples) {
+      // 72 小时里一条心跳都没有：在线的（刚装好）不管；离线的从最后一次心跳算起断着（最早算到窗口开头）。
+      if (online || lastBeat === null) continue;
+      samples = [Math.max(lastBeat, windowFrom - 300)];
+    }
     let down = gapDownIntervals(samples, { until: now, currentlyOnline: online });
     // 有别的主机可作参照时，扣掉「大家一起没心跳」那段 —— 那是面板自己停了。
     const others = mergeIntervals(Array.from(coverageByHost.entries()).filter(([id]) => id !== hostId).flatMap(([, value]) => value));
@@ -207,7 +212,8 @@ async function backfillFromHostMetrics(hosts: any[], now: number) {
     for (const [a, b] of down) {
       const ongoing = !online && b >= now;
       if (ongoing) {
-        if (!openIncidents.has(hostId)) await openIncident(hostId, a);
+        // 事件的开始按真实的最后一次心跳算（可能早于 72 小时窗口），每日表只记窗口里的。
+        if (!openIncidents.has(hostId)) await openIncident(hostId, lastBeat !== null && lastBeat + 300 < a ? lastBeat + 300 : a);
       } else {
         await insertAndGetId(INCIDENTS_TABLE, { hostId, startedAt: a, endedAt: b, durationSeconds: b - a });
       }

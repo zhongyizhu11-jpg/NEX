@@ -3,6 +3,7 @@ import * as db from "./db";
 import { appendPanelLog } from "./_core/panelLogger";
 import { isHostMetricsWatching, pushAgentRefresh } from "./agentEvents";
 import { handleTrafficBillingShortfall } from "./trafficBillingRuleBlock";
+import { onUserTrafficQuotaExhausted } from "./ops/quotaAgent";
 import {
   isAgentForwardGroupLatencyResult,
   isAgentHostProbeServiceResult,
@@ -1185,6 +1186,8 @@ agentRouter.post("/api/agent/traffic", async (req: Request, res: Response) => {
           console.log(`[Traffic] User ${user.id} traffic exceeded limit, disabling rules`);
           await db.setUserForwardAccess(user.id, false, "traffic_limit");
           await refreshUserRuleAgents(user.id, "traffic-limit-exceeded");
+          // 「立即断开」模式下让内核转发那几台也清掉已建立的连接（见 server/ops/quotaPolicy.ts）
+          onUserTrafficQuotaExhausted(user.id);
         }
         // 账户到期：自动禁用该用户所有规则
         if (user.expiresAt && new Date(user.expiresAt) <= new Date()) {
