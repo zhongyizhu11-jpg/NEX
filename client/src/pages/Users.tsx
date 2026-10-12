@@ -1,5 +1,6 @@
 import { FormField } from "@/components/ui/form-field";
 import OpsUserMenuItems from "@/features/ops/slots/UserMenuItems";
+import { UserOnlineIpsDialogHost } from "@/features/ops/online/UserOnlineIpsMenuItem";
 import EmptyState from "@/components/EmptyState";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
 import DataSectionError from "@/components/DataSectionError";
@@ -2932,6 +2933,7 @@ function UsersContent() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <UserOnlineIpsDialogHost />
     </div>
   );
 
