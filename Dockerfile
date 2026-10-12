@@ -16,7 +16,7 @@ RUN pnpm build
 FROM --platform=$BUILDPLATFORM golang:1.23-bookworm AS agent-assets
 WORKDIR /app
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates curl git \
+  && apt-get install -y --no-install-recommends ca-certificates curl git patch \
   && rm -rf /var/lib/apt/lists/*
 COPY . .
 RUN bash scripts/build-agent-release.sh

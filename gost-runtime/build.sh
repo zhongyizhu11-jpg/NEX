@@ -18,6 +18,9 @@ GOST_VERSION="${GOST_VERSION#v}"
 GOST_X_VERSION="${GOST_X_VERSION:-0.8.1}"
 GOST_X_VERSION="${GOST_X_VERSION#v}"
 NEX_GOST_BUILD="${NEX_GOST_BUILD:-nex1}"
+# gost 3.2.6 的 go.mod 要求 Go >= 1.24，而 Agent 和发布流程用的是 1.23（GOTOOLCHAIN=local）。
+# 只给 gost 这一步指定工具链，go 命令会从 proxy.golang.org 自动下载。和官方发布包同一版本。
+GOST_GO_TOOLCHAIN="${GOST_GO_TOOLCHAIN:-go1.25.4}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUT_DIR="${1:?usage: build.sh <out-dir>}"
@@ -61,6 +64,7 @@ sed -i "s/version = \"${GOST_VERSION}\"/version = \"${GOST_VERSION}-${NEX_GOST_B
 
 (
   cd "$WORK/gost"
+  export GOTOOLCHAIN="$GOST_GO_TOOLCHAIN"
   go mod edit -replace=github.com/go-gost/x="$WORK/x"
   for goarch in amd64 arm64; do
     out="$OUT_DIR/forwardx-runtime-linux-${goarch}"
