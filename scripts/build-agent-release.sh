@@ -117,6 +117,10 @@ if [ "${NEX_GOST_SOURCE:-nex}" != "upstream" ] && "$ROOT_DIR/gost-runtime/build.
   echo "[runtime] using NEX-built gost runtime"
 else
   echo "[runtime] NEX gost build unavailable, falling back to official go-gost v${GOST_VERSION}" >&2
+  # 在 GitHub Actions 的运行摘要里留个黄色提示，免得退回官方版没人发现。
+  if [ -n "${GITHUB_ACTIONS:-}" ] && [ "${NEX_GOST_SOURCE:-nex}" != "upstream" ]; then
+    echo "::warning title=gost runtime::NEX gost build failed; this release bundles official go-gost v${GOST_VERSION} (no splice)"
+  fi
   download_gost_runtime amd64 forwardx-runtime-linux-amd64
   download_gost_runtime arm64 forwardx-runtime-linux-arm64
 fi
