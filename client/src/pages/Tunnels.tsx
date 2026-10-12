@@ -191,6 +191,8 @@ type TunnelForm = {
   /** 手动档的链路带宽上限（Mbit/s）：入口→出口 / 出口→入口，0 = 没填。 */
   linkUpMbps: number;
   linkDownMbps: number;
+  /** 抗丢包：UDP 直连额外发纠错包（FXP 2.2.131 起），默认关。 */
+  udpFec: boolean;
   /** 编辑时带进来的 FXP 整形状态（只读，不提交）。 */
   linkShapingStatus: LinkShapingStatus[];
   loadBalanceEnabled: boolean;
@@ -348,6 +350,7 @@ const defaultForm: TunnelForm = {
   linkUpMbps: 0,
   linkDownMbps: 0,
   linkShapingStatus: [],
+  udpFec: false,
   loadBalanceEnabled: false,
   loadBalanceStrategy: "round_robin",
   loadBalanceExits: [],
@@ -2725,6 +2728,7 @@ function TunnelsContent() {
       linkUpMbps: transportTuningSupported ? normalizeLinkMbpsInput((tunnel as any).linkUpMbps) : 0,
       linkDownMbps: transportTuningSupported ? normalizeLinkMbpsInput((tunnel as any).linkDownMbps) : 0,
       linkShapingStatus: Array.isArray((tunnel as any).linkShapingStatus) ? (tunnel as any).linkShapingStatus : [],
+      udpFec: transportTuningSupported && !!(tunnel as any).udpFec,
       loadBalanceEnabled: exitGroupId ? !!tunnel.loadBalanceEnabled : false,
       loadBalanceStrategy: (["none", "round_robin", "random", "least_conn", "ip_hash", "fallback"].includes(String(tunnel.loadBalanceStrategy || ""))
         ? tunnel.loadBalanceStrategy
@@ -3113,6 +3117,7 @@ function TunnelsContent() {
       linkShapingMode: transportTuningSupported ? submitForm.linkShapingMode : "off",
       linkUpMbps: transportTuningSupported && submitForm.linkShapingMode === "manual" ? normalizeLinkMbpsInput(submitForm.linkUpMbps) : 0,
       linkDownMbps: transportTuningSupported && submitForm.linkShapingMode === "manual" ? normalizeLinkMbpsInput(submitForm.linkDownMbps) : 0,
+      udpFec: transportTuningSupported && submitForm.udpFec,
       entryGroupId: submitForm.entryGroupId || null,
       exitGroupId: submitForm.exitGroupId || null,
       entryHostId,
@@ -3229,6 +3234,7 @@ function TunnelsContent() {
       linkShapingMode: transportTuningSupported ? prev.linkShapingMode : "off",
       linkUpMbps: transportTuningSupported ? prev.linkUpMbps : 0,
       linkDownMbps: transportTuningSupported ? prev.linkDownMbps : 0,
+      udpFec: transportTuningSupported ? prev.udpFec : false,
     }));
   };
   const importNginxPemFiles = async (files: readonly File[]) => {
@@ -3502,7 +3508,7 @@ function TunnelsContent() {
     const transportTuningSupported = isTunnelTransportTuningSupported(form.mode);
     if (!proxySupported && !transportTuningSupported) return null;
     const proxyAnyEnabled = form.proxyProtocolReceive || form.proxyProtocolSend || form.proxyProtocolExitReceive || form.proxyProtocolExitSend;
-    const advancedConfigured = proxyAnyEnabled || form.tcpFastOpen || form.udpOverTcp || form.linkShapingMode !== "auto" || form.linkUpMbps > 0 || form.linkDownMbps > 0;
+    const advancedConfigured = proxyAnyEnabled || form.tcpFastOpen || form.udpOverTcp || form.udpFec || form.linkShapingMode !== "auto" || form.linkUpMbps > 0 || form.linkDownMbps > 0;
     const shouldCollapseAdvanced = proxySupported && transportTuningSupported;
     const renderLinkMbpsInput = (label: string, field: "linkUpMbps" | "linkDownMbps") => (
       <label className="flex min-h-10 items-center justify-between gap-2">
@@ -3645,6 +3651,13 @@ function TunnelsContent() {
             form.udpOverTcp,
             (udpOverTcp) => setForm((prev) => ({ ...prev, udpOverTcp })),
             "需要安装 mimic/mimic-dkms。UDP 丢包时可将业务 MTU 调整为 1200-1300。",
+          )}
+          {renderTransportSwitch(
+            "UDP 抗丢包",
+            "多发纠错包，丢包当场补回",
+            form.udpFec,
+            (udpFec) => setForm((prev) => ({ ...prev, udpFec })),
+            "只作用于 UDP（游戏、语音、QUIC）：每 5 个包多发 1 个纠错包，丢了几个能当场还原，不用等重传。多耗约 20% 流量，包很稀时最多翻倍。隧道上的机器都要 FXP 2.2.131 起才有效果；有旧版本时照常通，只是不纠错。",
           )}
         </div>
         <div className="space-y-2 rounded-md border border-border/50 bg-background/60 px-3 py-2">

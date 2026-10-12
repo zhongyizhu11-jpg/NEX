@@ -109,6 +109,10 @@ type config struct {
 	TransportVersion string `json:"transportVersion,omitempty"`
 	// UDPWirePacketSize 显式覆盖 UDP 单包上限（字节），0 表示按传输版本取默认值。
 	UDPWirePacketSize int `json:"udpWirePacketSize,omitempty"`
+	// UDPFEC 是隧道的「抗丢包」开关：UDP 直连额外发 Reed-Solomon 冗余包，接收端
+	// 丢了几个包能当场补回来（见 udp_fec.go）。默认关；两端都打开才有效果，
+	// 对端是旧版本时照常互通。
+	UDPFEC bool `json:"udpFec,omitempty"`
 	// ReloadNonce 由 Agent 在热更新时写入，进程应用后原样写回 <config>.applied。
 	ReloadNonce string `json:"reloadNonce,omitempty"`
 }

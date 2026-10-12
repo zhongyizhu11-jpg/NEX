@@ -3308,6 +3308,9 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         if (hint?.up) fxpSpec.linkUpHintMbps = hint.up;
         if (hint?.down) fxpSpec.linkDownHintMbps = hint.down;
       }
+      // 抗丢包（FXP 的 udp_fec.go）：隧道上每个角色都要带，冗余包是逐跳发、逐跳还原的。
+      // 关着不写字段，配置和旧版本一模一样，FXP 不会因此重启。
+      if (runtimeBool((tunnel as any)?.udpFec)) fxpSpec.udpFec = true;
       // 主机公网出口整形按主机配置，每条隧道的配置都带同一份（FXP 整台机器只建一个）。
       // 关着不写字段，老 FXP 的配置保持原样。
       const egress = hostEgressShaping(host);

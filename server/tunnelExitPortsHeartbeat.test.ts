@@ -26,6 +26,7 @@ import test from "node:test";
 type Beat = {
   fxpEntry: Record<string, { targetIp: string; targetPort: number }>;
   fxpLink: Record<string, { mode?: string; up?: number; down?: number; upHint?: number; downHint?: number }>;
+  fxpFec: Record<string, unknown>;
   fxpEgress: Record<string, { mode?: string; mbps?: number; hint?: number }>;
   gostEntry: Record<string, string>;
   schedulers: Record<string, number>;
@@ -85,7 +86,7 @@ function run(): Outcome {
       const values = [id, name, 2, 1, mode, listenPort, 1, 1, ...Object.values(extra)];
       return exec("INSERT INTO tunnels (" + columns.join(", ") + ") VALUES (" + values.map(() => "?").join(", ") + ")", values);
     };
-    await tunnel(1, "NEX", "forwardx", 23001, { linkShapingMode: "manual", linkUpMbps: 1500, linkDownMbps: 1560 });
+    await tunnel(1, "NEX", "forwardx", 23001, { linkShapingMode: "manual", linkUpMbps: 1500, linkDownMbps: 1560, udpFec: 1 });
     await tunnel(2, "GOST", "tls", 23002);
     await tunnel(3, "GOST 出口发 PROXY 头", "tls", 23003, { proxyProtocolExitSend: 1 });
     await tunnel(4, "GOST 负载均衡", "tls", 23004, { loadBalanceEnabled: 1, loadBalanceStrategy: "round_robin" });
@@ -142,6 +143,7 @@ function run(): Outcome {
       if (response.status !== 200) throw new Error("心跳没通: " + response.status + " " + JSON.stringify(body));
       const fxpEntry = {};
       const fxpLink = {};
+      const fxpFec = {};
       const fxpEgress = {};
       const gostEntry = {};
       for (const action of (body.desiredState && body.desiredState.actions) || []) {
@@ -149,6 +151,7 @@ function run(): Outcome {
           fxpEntry[String(action.ruleId)] = { targetIp: String(action.fxp.targetIp), targetPort: Number(action.fxp.targetPort) };
         }
         if (action && action.fxp && action.op === "apply") {
+          fxpFec[String(action.fxp.role) + ":" + String(action.fxp.tunnelId)] = action.fxp.udpFec;
           fxpLink[String(action.fxp.role) + ":" + String(action.fxp.tunnelId)] = {
             mode: action.fxp.linkShaping, up: action.fxp.linkUpMbps, down: action.fxp.linkDownMbps,
             upHint: action.fxp.linkUpHintMbps, downHint: action.fxp.linkDownHintMbps,
@@ -177,7 +180,7 @@ function run(): Outcome {
       for (const guard of body.guardRules || []) {
         if (Number(guard.tunnelId || 0) > 0) guards[String(guard.ruleId)] = { listenPort: Number(guard.listenPort), target: guard.targetIp + ":" + guard.targetPort };
       }
-      return { fxpEntry, fxpLink, fxpEgress, gostEntry, schedulers, guards };
+      return { fxpEntry, fxpLink, fxpFec, fxpEgress, gostEntry, schedulers, guards };
     };
 
     // 入口「稳定计划」：放一份假的，看出口报端口以后它有没有被清掉（清掉 = 入口马上重算）。
@@ -319,6 +322,11 @@ test("链路整形档位跟着 FXP 配置下发：手动给上限，自动给面
   assert.deepEqual(outcome.exit.fxpLink["exit:1"], { mode: "manual", up: 1500, down: 1560 }, "出口的 FXP 配置");
   assert.deepEqual(outcome.entryAfter.fxpLink["entry:6"], { mode: "auto", upHint: 1480 }, "入口主机只拿自己学到的上行提示值");
   assert.deepEqual(outcome.exit.fxpLink["exit:6"], { mode: "auto", downHint: 1520 }, "出口主机只拿自己学到的下行提示值");
+  // 抗丢包：开了的隧道入口、出口都带 udpFec；没开的不写这个字段（FXP 配置和旧版一模一样）。
+  assert.equal(outcome.entryAfter.fxpFec["entry:1"], true, "入口的 FXP 配置带抗丢包");
+  assert.equal(outcome.exit.fxpFec["exit:1"], true, "出口的 FXP 配置带抗丢包");
+  assert.equal(outcome.entryAfter.fxpFec["entry:6"], undefined, "没开抗丢包的隧道不写字段");
+  assert.equal(outcome.exit.fxpFec["exit:6"], undefined, "没开抗丢包的隧道不写字段");
 });
 
 test("主机公网出口整形跟着主机配置下发：手动给上限，自动给面板记住的上限作提示，关着不写字段", () => {

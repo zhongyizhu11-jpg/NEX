@@ -224,6 +224,8 @@ type udpDirectEntrySession struct {
 	dataSealer      *fxpUDPCodec
 	returnOpener    *fxpUDPCodec
 	remove          func(*udpDirectEntrySession)
+	// fec 是监听口的抗丢包（nil 表示没开），发出的每个线上包都报给它。
+	fec *fxpUDPFEC
 	// releaseGate 归还这条会话在规则连接闸（maxConnections / maxIPs）上的份额。
 	// 只在会话登记表的锁里读写。
 	releaseGate func()
@@ -254,6 +256,8 @@ type udpDirectExitSession struct {
 	// counter 是这条规则在这个出口监听上的流量计数（按规则共用一个），nil 表示不记。
 	counter *trafficCounter
 	remove  func(*udpDirectExitSession)
+	// fec 是监听口的抗丢包（nil 表示没开）。
+	fec *fxpUDPFEC
 }
 
 type udpDirectRelaySession struct {
@@ -286,6 +290,8 @@ type udpDirectRelaySession struct {
 	downstreamReturnOpener *fxpUDPCodec
 	upstreamReturnSealer   *fxpUDPCodec
 	remove                 func(*udpDirectRelaySession)
+	// fec 是监听口的抗丢包（nil 表示没开）。
+	fec *fxpUDPFEC
 }
 
 func udpDirectEntrySessionSnapshot(session *udpDirectEntrySession) fxpUDPSessionSnapshot {
@@ -414,11 +420,23 @@ func serveEntryUDPDirect(conn *net.UDPConn, cfg config, selector *exitEndpointSe
 		}
 	})
 	defer stopSweeper()
+	// 入口的监听口也收客户端的包：只有从会话的出口地址来、会话号对得上的才算冗余包。
+	fec := newFXPUDPFEC(conn, cfg, fmt.Sprintf("entry tunnel=%d rule=%d", cfg.TunnelID, cfg.RuleID), func(from netip.AddrPort, packetType byte, _ int, sessionID uint64) bool {
+		if packetType != fxpUDPTypeReturn {
+			return false
+		}
+		sessionsMu.Lock()
+		defer sessionsMu.Unlock()
+		session := sessionsByID[sessionID]
+		return session != nil && from == session.remoteAddrPort
+	})
+	defer fec.close()
 	buf := make([]byte, 65535)
 	ws := newFXPUDPWorkspace()
 	for {
 		// ReadFromUDPAddrPort 不像 ReadFromUDP 那样每包分配一个 *net.UDPAddr。
-		n, clientAddrPort, err := conn.ReadFromUDPAddrPort(buf)
+		// 开了抗丢包时 fec.read 先交出还原出来的包。
+		n, clientAddrPort, err := fec.read(conn, buf)
 		if err != nil {
 			var closing []*udpDirectEntrySession
 			sessionsMu.Lock()
@@ -498,6 +516,9 @@ func serveEntryUDPDirect(conn *net.UDPConn, cfg config, selector *exitEndpointSe
 				continue
 			}
 			created, err := newUDPDirectEntrySession(conn, addr, cfg, selector, inLimiter, outLimiter, counter, queueBudget, removeSession)
+			if err == nil {
+				created.fec = fec
+			}
 			if err != nil {
 				releaseGate()
 				if errors.Is(err, errHopResolvePending) {
@@ -689,6 +710,9 @@ func (s *udpDirectEntrySession) writeLoop() {
 			payload:    payload,
 		}, s.dataSealer, &s.sendSequence, ws, func(wire []byte) error {
 			_, writeErr = s.conn.WriteToUDP(wire, s.remoteAddr)
+			if writeErr == nil {
+				s.fec.sent(wire, s.remoteAddr, false)
+			}
 			return writeErr
 		})
 		if writeErr != nil {
@@ -862,10 +886,19 @@ func serveExitUDPDirect(conn *net.UDPConn, cfg config) error {
 		}
 	})
 	defer stopSweeper()
+	fec := newFXPUDPFEC(conn, cfg, fmt.Sprintf("exit tunnel=%d", cfg.TunnelID), func(_ netip.AddrPort, packetType byte, ruleID int, sessionID uint64) bool {
+		if packetType != fxpUDPTypeData {
+			return false
+		}
+		sessionsMu.Lock()
+		defer sessionsMu.Unlock()
+		return sessions[udpRuleSessionKey{ruleID: ruleID, sessionID: sessionID}] != nil
+	})
+	defer fec.close()
 	buf := make([]byte, 65535)
 	ws := newFXPUDPWorkspace()
 	for {
-		n, peerAddrPort, err := conn.ReadFromUDPAddrPort(buf)
+		n, peerAddrPort, err := fec.read(conn, buf)
 		if err != nil {
 			var closing []*udpDirectExitSession
 			sessionsMu.Lock()
@@ -967,6 +1000,7 @@ func serveExitUDPDirect(conn *net.UDPConn, cfg config) error {
 			created, err := newUDPDirectExitSession(conn, peerAddr, cfg, packet.ruleID, packet.sessionID, target.TargetIP, target.TargetPort, queueBudgetForRule(packet.ruleID), removeSession)
 			if err == nil {
 				created.counter = trafficCounterForRule(packet.ruleID)
+				created.fec = fec
 			}
 			if err != nil {
 				if errors.Is(err, errHopResolvePending) {
@@ -1231,6 +1265,10 @@ func (s *udpDirectExitSession) readTargetLoop() {
 			payload:    buf[:n],
 		}, s.returnSealer, &s.sendSequence, ws, func(wire []byte) error {
 			_, writeErr = s.conn.WriteToUDP(wire, peer)
+			if writeErr == nil {
+				// 回程：只给发过冗余包的入口 / 中转发（旧入口会把冗余包当成客户端数据）。
+				s.fec.sent(wire, peer, true)
+			}
 			return writeErr
 		})
 		if writeErr != nil {
@@ -1318,10 +1356,20 @@ func serveRelayUDPDirect(conn *net.UDPConn, cfg config, selector *exitEndpointSe
 		}
 	})
 	defer stopSweeper()
+	fec := newFXPUDPFEC(conn, cfg, fmt.Sprintf("relay tunnel=%d", cfg.TunnelID), func(from netip.AddrPort, packetType byte, ruleID int, sessionID uint64) bool {
+		sessionsMu.Lock()
+		defer sessionsMu.Unlock()
+		if packetType == fxpUDPTypeReturn {
+			session := sessionsByID[sessionID]
+			return session != nil && from == session.downstreamAddrPort
+		}
+		return sessionsByUpstream[udpRuleSessionKey{ruleID: ruleID, sessionID: sessionID}] != nil
+	})
+	defer fec.close()
 	buf := make([]byte, 65535)
 	ws := newFXPUDPWorkspace()
 	for {
-		n, addr, err := conn.ReadFromUDPAddrPort(buf)
+		n, addr, err := fec.read(conn, buf)
 		if err != nil {
 			var closing []*udpDirectRelaySession
 			sessionsMu.Lock()
@@ -1430,6 +1478,9 @@ func serveRelayUDPDirect(conn *net.UDPConn, cfg config, selector *exitEndpointSe
 		}
 		if session == nil {
 			created, err := newUDPDirectRelaySession(conn, net.UDPAddrFromAddrPort(addr), cfg, selector, packet.ruleID, packet.sessionID, queueBudget, removeSession)
+			if err == nil {
+				created.fec = fec
+			}
 			if err != nil {
 				if errors.Is(err, errHopResolvePending) {
 					fxpUDPDropLog.Printf("relay udp direct waiting for downstream address tunnel=%d rule=%d upstream=%s: %v", cfg.TunnelID, packet.ruleID, addr, err)
@@ -1656,6 +1707,9 @@ func (s *udpDirectRelaySession) writeDownstream(payload []byte, ws *fxpUDPWorksp
 		payload:    payload,
 	}, s.downstreamDataSealer, &s.downstreamSeq, ws, func(wire []byte) error {
 		_, writeErr = s.conn.WriteToUDP(wire, s.downstreamAddr)
+		if writeErr == nil {
+			s.fec.sent(wire, s.downstreamAddr, false)
+		}
 		return writeErr
 	})
 	if writeErr != nil {
@@ -1719,6 +1773,9 @@ func (s *udpDirectRelaySession) writeUpstream(payload []byte, ws *fxpUDPWorkspac
 		payload:    payload,
 	}, s.upstreamReturnSealer, &s.upstreamSeq, ws, func(wire []byte) error {
 		_, writeErr = s.conn.WriteToUDP(wire, upstream)
+		if writeErr == nil {
+			s.fec.sent(wire, upstream, true)
+		}
 		return writeErr
 	})
 	if writeErr != nil {
