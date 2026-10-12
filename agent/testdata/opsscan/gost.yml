@@ -1,0 +1,37 @@
+services:
+- name: service-0
+  addr: ":30001"
+  handler:
+    type: tcp
+  listener:
+    type: tcp
+  forwarder:
+    nodes:
+    - name: target-0
+      addr: 192.0.2.1:80
+- name: service-1
+  addr: ':30002'
+  handler:
+    type: udp
+  listener:
+    type: udp
+  forwarder:
+    nodes:
+      - name: target-0
+        addr: "192.0.2.2:53"
+# 代理服务，不是端口转发
+- name: proxy
+  addr: :30003
+  handler:
+    type: socks5
+  listener:
+    type: tcp
+- name: multi
+  addr: ":30004"
+  handler: {type: tcp}
+  forwarder:
+    nodes:
+    - name: a
+      addr: 192.0.2.3:80
+    - name: b
+      addr: 192.0.2.4:80

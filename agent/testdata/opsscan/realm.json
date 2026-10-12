@@ -1,0 +1,7 @@
+{
+  "network": { "no_tcp": false, "use_udp": false },
+  "endpoints": [
+    { "listen": "0.0.0.0:20001", "remote": "198.51.100.1:22" },
+    { "listen": "0.0.0.0:20002", "remote": "[2001:db8::5]:53", "network": { "use_udp": true, "no_tcp": true } }
+  ]
+}
