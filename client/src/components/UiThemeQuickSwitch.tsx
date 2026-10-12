@@ -22,6 +22,7 @@ export const UI_THEME_DOTS: Record<string, { a: string; b: string }> = {
   aurora: { a: "#a78bfa", b: "#eef1fb" },
   gilt: { a: "#b08d57", b: "#f5f2ec" },
   rose: { a: "#c13a66", b: "#fbf0f2" },
+  cinnabar: { a: "#d42a33", b: "#f6f6f4" },
 };
 
 export function UiThemeDot({ id }: { id: string }) {
