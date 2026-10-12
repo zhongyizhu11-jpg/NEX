@@ -283,7 +283,7 @@ export function unregisterAgentEventClient(hostId: number, res: Response) {
   }
 }
 
-function sendAgentEvent(hostId: number, event: string, data: any) {
+export function sendAgentEvent(hostId: number, event: string, data: any) {
   const client = agentEventClients.get(hostId);
   if (!client) {
     const important = event === "agent-upgrade"

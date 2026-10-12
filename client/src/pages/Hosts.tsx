@@ -34,6 +34,7 @@ import HostCard, { HostActionButtons } from "@/components/hosts/HostCard";
 // 本页 902 行已有一个同名的统计小卡，这里取别名区分：这个是主机列表里的实体卡
 import HostEntitySummaryCard from "@/components/hosts/HostSummaryCard";
 import HostDetailDialog from "@/components/hosts/HostDetailDialog";
+import OpsHostsMenuItems from "@/features/ops/slots/HostsMenuItems";
 import { FxpRuntimeBadge, fxpRuntimeDetailText } from "@/components/hosts/FxpRuntimeBadge";
 import { hostNeedsAgentUpgrade } from "@shared/fxpRuntime";
 import HostGroupManager, { compareHostGroupDisplayOrder, type HostGroupView, type HostGroupViewMode } from "@/components/hosts/HostGroupManager";
@@ -2548,6 +2549,7 @@ function HostsContent() {
                   <DropdownMenuItem disabled={onlineOutdatedCount === 0 || upgradeAgentsMutation.isPending} onSelect={requestAllAgentUpgrades}>
                     <Download className="h-4 w-4" />升级在线 Agent
                   </DropdownMenuItem>
+                  <OpsHostsMenuItems />
                 </DropdownMenuContent></DropdownMenu>
               )}
               <div className="hidden items-center overflow-hidden rounded-md border border-border/40 sm:flex">

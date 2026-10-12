@@ -110,7 +110,11 @@ import {
   PanelLeft,
   Pencil,
   Plus,
+  SlidersHorizontal,
+  Webhook,
 } from "lucide-react";
+import { useOpsFeatures } from "@/features/ops/useOpsFeatures";
+import { OpsAdvancedSettingsPane, OpsBackupExtraSections, OpsTelegramExtraSections, OpsWebhookSettingsPane } from "@/features/ops/slots/SettingsPanes";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useCallback, useMemo, useRef, useState, useEffect } from "react";
 import { SaveDockBar, SaveDockProvider, useSaveDockActive, useSaveDockItem } from "@/components/settings/SaveDock";
@@ -471,7 +475,9 @@ function getMigrationCodeCountdown(code: { expiresAt: number } | null, now: numb
   return Math.max(0, Math.ceil((code.expiresAt - now) / 1000));
 }
 
-const settingsTabs = ["system", "telegram", "email", "personalization", "backup", "logs"] as const;
+const settingsTabs = ["system", "telegram", "email", "personalization", "backup", "logs", "advanced", "webhook"] as const;
+/** 只在第五套主题「朱砂」下出现的分区（见 client/src/features/ops/useOpsFeatures.ts）。 */
+const opsOnlySettingsTabs = new Set<string>(["advanced", "webhook"]);
 type SettingsTab = typeof settingsTabs[number];
 /**
  * 设置的分组。
@@ -487,13 +493,13 @@ const settingsGroups = [
   {
     key: "general",
     header: "通用",
-    items: ["system", "personalization"],
+    items: ["system", "personalization", "advanced"],
   },
   {
     key: "notify",
     header: "通知",
     footer: "Telegram 和邮箱都用来发告警、到期提醒和流量提醒。",
-    items: ["telegram", "email"],
+    items: ["telegram", "email", "webhook"],
   },
   {
     key: "maintenance",
@@ -513,6 +519,8 @@ const settingsTabDetail: Record<string, string> = {
   email: "SMTP 发信、注册验证与提醒邮件",
   backup: "迁移、数据库切换、导出与导入",
   logs: "运行日志与导出",
+  advanced: "流量用尽时的处理、维护模式、API 令牌与 MCP",
+  webhook: "把告警推到 Discord、Slack 或任意地址",
 };
 
 const settingsTabItems = [
@@ -522,6 +530,8 @@ const settingsTabItems = [
   { value: "personalization", label: "个性化配置", icon: Palette },
   { value: "backup", label: "备份恢复", icon: Database },
   { value: "logs", label: "面板日志", icon: FileText },
+  { value: "advanced", label: "进阶", icon: SlidersHorizontal },
+  { value: "webhook", label: "Webhook", icon: Webhook },
 ] as const;
 type DatabaseType = "sqlite" | "mysql" | "postgresql";
 type BackupSummaryCache = {
@@ -693,6 +703,11 @@ function SettingsContent() {
     defaultValue: "system",
     storageKey: SETTINGS_TAB_STORAGE_KEY,
   });
+  const opsFeatures = useOpsFeatures();
+  // 换回别的主题时，停在「进阶」「Webhook」上的人回到系统配置（这两个分区只有朱砂下有）。
+  useEffect(() => {
+    if (!opsFeatures && opsOnlySettingsTabs.has(activeTab)) setActiveTab("system");
+  }, [opsFeatures, activeTab, setActiveTab]);
 
   useEffect(() => {
     if (user && user.role !== "admin") {
@@ -731,6 +746,7 @@ function SettingsContent() {
   if (user?.role !== "admin") return null;
 
   const activeItem = settingsTabItems.find((tab) => tab.value === activeTab);
+  const visibleSettingsTabItems = settingsTabItems.filter((tab) => opsFeatures || !opsOnlySettingsTabs.has(tab.value));
   /*
     同一份分组画两个地方：手机上的索引页、宽屏左边的分区栏。两处的区别只在
     「选中的那一行要不要标出来、要不要箭头」—— 索引页点进去是下一层（画箭头），
@@ -741,7 +757,7 @@ function SettingsContent() {
       {settingsGroups.map((group) => (
         <ListSection key={group.key} header={group.header} footer={mode === "index" ? (group as { footer?: string }).footer : undefined}>
           {group.items.map((value) => {
-            const item = settingsTabItems.find((tab) => tab.value === value);
+            const item = visibleSettingsTabItems.find((tab) => tab.value === value);
             if (!item) return null;
             const Icon = item.icon;
             return (
@@ -820,7 +836,7 @@ function SettingsContent() {
               </button>
             ) : (
               <div className="@min-[56rem]/settings:hidden">
-                <SlidingTabsList items={settingsTabItems} activeValue={activeTab} ariaLabel="系统设置" minItemWidthRem={7.5} />
+                <SlidingTabsList items={visibleSettingsTabItems} activeValue={activeTab} ariaLabel="系统设置" minItemWidthRem={7.5} />
               </div>
             )}
 
@@ -847,6 +863,7 @@ function SettingsContent() {
               <TabsContent value="telegram" className="fx-settings-pane space-y-4">
                 <TelegramBotSettingsCard />
                 <DeepSeekSettingsCard />
+                <OpsTelegramExtraSections />
               </TabsContent>
 
               <TabsContent value="email" className="fx-settings-pane space-y-4">
@@ -859,10 +876,19 @@ function SettingsContent() {
 
               <TabsContent value="backup" className="fx-settings-pane space-y-4">
                 <BackupRestoreSection panelUrl={panelUrl} />
+                <OpsBackupExtraSections />
               </TabsContent>
 
               <TabsContent value="logs" className="fx-settings-pane space-y-4">
                 <PanelLogsSection />
+              </TabsContent>
+
+              <TabsContent value="advanced" className="fx-settings-pane space-y-4">
+                <OpsAdvancedSettingsPane />
+              </TabsContent>
+
+              <TabsContent value="webhook" className="fx-settings-pane space-y-4">
+                <OpsWebhookSettingsPane />
               </TabsContent>
 
               <SaveDockBar />

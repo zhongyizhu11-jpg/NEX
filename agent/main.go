@@ -38,7 +38,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.215"
+var Version = "2.2.216"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -3047,6 +3047,7 @@ func main() {
 	go agentPresenceLoop(cfg)
 	go agentMetricsScheduler(cfg)
 	go agentDNSWatchScheduler()
+	go agentExtLoop(cfg)
 	lastFullHeartbeatAt := time.Time{}
 	metricsOnlyMode := false
 	for {
@@ -5288,6 +5289,8 @@ func runAgentEventStream(cfg Config) error {
 					} else if handlePanelMigrationDirective(cfg, &directive) {
 						return io.EOF
 					}
+				} else if msg.Type == "agent-ext" {
+					wakeAgentExt()
 				} else if msg.Type == "agent-support-bundle" {
 					var request supportBundleRequest
 					if err := json.Unmarshal(msg.Data, &request); err != nil {

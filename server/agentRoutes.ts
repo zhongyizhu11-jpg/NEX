@@ -28,6 +28,7 @@ import { noteAgentPrivateIpv4 } from "./agentPrivateAddress";
 import { registerAgentStatusRoutes } from "./agentStatusRoutes";
 import { registerAgentSelfTestRoutes } from "./agentSelfTestRoutes";
 import { registerAgentReportRoutes } from "./agentReportRoutes";
+import { registerAgentExtRoutes } from "./ops/agentExtRoute";
 import { invalidateAgentDesiredStateCache, registerAgentHeartbeatRoute } from "./agentHeartbeatRoute";
 import { handleHostAddressChanged, refreshAgentsAffectedByHostAddress } from "./hostAddressRuntime";
 import { isHostStatusOnline, notifyHostOnlineIfNeeded } from "./hostStatusNotifier";
@@ -475,6 +476,7 @@ registerAgentHeartbeatRoute(agentApiRouter);
 registerAgentStatusRoutes(agentApiRouter);
 registerAgentSelfTestRoutes(agentApiRouter);
 registerAgentReportRoutes(agentApiRouter);
+registerAgentExtRoutes(agentApiRouter);
 
 agentApiRouter.post("/api/agent/migration-rollback", async (req: Request, res: Response) => {
   try {

@@ -1,4 +1,5 @@
 import { useAuth } from "@/_core/hooks/useAuth";
+import OpsProxyInboundExtras from "@/features/ops/slots/ProxyInboundExtras";
 import DataSectionLoading from "@/components/DataSectionLoading";
 import DataSectionError from "@/components/DataSectionError";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -567,9 +568,13 @@ export default function ProxyInboundsSection({
     protocol: String(row.protocol || ""),
     sortName: String(row.name || ""),
     tag: (
-      <Badge variant="secondary" className="h-4 shrink-0 px-1 text-[10px] font-normal">
-        {PROXY_NODE_PROTOCOL_LABELS[row.protocol as ProxyNodeProtocol] || row.protocol}
-      </Badge>
+      <>
+        <Badge variant="secondary" className="h-4 shrink-0 px-1 text-[10px] font-normal">
+          {PROXY_NODE_PROTOCOL_LABELS[row.protocol as ProxyNodeProtocol] || row.protocol}
+        </Badge>
+        {/* 第五套主题：一枚「8/9 款客户端」小标，点开看哪些客户端用不了、为什么 */}
+        <OpsProxyInboundExtras inbound={row} />
+      </>
     ),
     muted: !row.isEnabled,
     // 地址排最前：它是这一行里最常要看的，排后面就会被前面的安全层、归属挤到

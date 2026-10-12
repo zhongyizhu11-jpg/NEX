@@ -1,4 +1,5 @@
 import { resolveSiteTitle } from "@shared/brand";
+import OpsPublicMonitorExtras from "@/features/ops/slots/PublicMonitorExtras";
 import DataSectionLoading from "@/components/DataSectionLoading";
 import { formatMetricSizeDetail } from "@/lib/formatMetricSize";
 import { LatencyPeakCutToggle } from "@/components/LatencyPeakCutToggle";
@@ -879,6 +880,7 @@ export default function HostMonitor() {
           />
         ) : (
           <>
+            <OpsPublicMonitorExtras path={path} />
             {/*
               原来是三张统计卡，各带一个彩色图标方块 —— 「在线状态 0 / 4」旁边是一个绿色的对勾，
               4 台全离线也是绿的。颜色只说状态：一台都不在线是红，部分在线是琥珀，全在线才是绿。

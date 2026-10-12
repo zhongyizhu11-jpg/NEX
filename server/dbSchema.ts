@@ -4,6 +4,7 @@ import { quoteIdentifierFor } from "./dbRuntime";
 import type Database from "better-sqlite3";
 import type pg from "pg";
 import { getDatabaseKind, getPool, getPostgresPool, getSqlite } from "./dbRuntime";
+import { OPS_TABLE_DEFS } from "./ops/opsTables";
 
 export type ColumnType = "id" | "text" | "longtext" | "varchar" | "int" | "bigint" | "bool" | "epoch";
 
@@ -642,6 +643,8 @@ const tables: TableDef[] = [
   { name: "plugin_assets", columns: [c("id", "id"), c("pluginId", "varchar", { length: 128, notNull: true }), c("path", "text", { notNull: true }), c("contentType", "varchar", { length: 128 }), c("size", "int", { notNull: true, default: 0 }), c("sha256", "varchar", { length: 64 }), c("content", "longtext"), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], unique: [["pluginId", "path"]], indexes: [["pluginId"]] },
   { name: "plugin_agent_states", columns: [c("id", "id"), c("pluginId", "varchar", { length: 128, notNull: true }), c("resourceViewId", "varchar", { length: 128, notNull: true }), c("hostId", "int", { notNull: true }), c("pluginVersion", "varchar", { length: 64 }), c("actionId", "varchar", { length: 128 }), c("groupId", "varchar", { length: 64 }), c("taskId", "varchar", { length: 64 }), c("status", "varchar", { length: 32, notNull: true, default: "idle" }), c("dataJson", "longtext"), c("output", "longtext"), c("error", "text"), c("startedAt", "epoch"), c("finishedAt", "epoch"), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], unique: [["pluginId", "resourceViewId", "hostId"]], indexes: [["hostId"], ["pluginId", "resourceViewId"], ["groupId"]] },
   { name: "config_audit_events", columns: [c("id", "id"), c("resourceType", "varchar", { length: 32, notNull: true }), c("resourceId", "int", { notNull: true }), c("hostId", "int"), c("action", "varchar", { length: 32, notNull: true }), c("source", "varchar", { length: 64, notNull: true, default: "system" }), c("actorUserId", "int"), c("actorName", "text"), c("requestId", "varchar", { length: 64 }), c("requestPath", "text"), c("beforeJson", "text"), c("afterJson", "text"), c("diffJson", "text"), c("configHash", "varchar", { length: 64, notNull: true }), c("createdAt", "epoch", { notNull: true, default: "now" })], indexes: [["resourceType", "resourceId", "id"], ["hostId", "id"], ["actorUserId", "id"]] },
+  // 第五套主题那批运维功能的表，各功能自己的文件里定义（server/ops/*Tables.ts）。
+  ...OPS_TABLE_DEFS,
 ];
 
 const seedSettings = [
