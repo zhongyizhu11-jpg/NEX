@@ -338,3 +338,15 @@ test("dependency install keeps package manager output for diagnosis", () => {
   assert.match(deps, /tail -n 20 "\$FORWARDX_DEPS_LOG"/);
   assert.match(deps, /dump_deps_log "\[错误\]"/);
 });
+
+test("已装官方 gost 时尝试从面板换成 NEX 自编版，换上后重启 runtime", () => {
+  const script = generateInstallScript("https://panel.example.com");
+  const installRuntime = script.slice(script.indexOf("install_runtime() {"));
+  assert.match(script, /runtime_is_nex_build\(\) \{/);
+  // 已经是自编版就不再下载。
+  assert.match(installRuntime, /if runtime_is_nex_build "\$RUNTIME_BIN"; then[\s\S]*?return 0/);
+  // 官方版能用时只接受面板上的自编版，换上以后重启正在跑的 runtime。
+  assert.match(installRuntime, /NEX_RUNTIME_ONLY=1 install_runtime_from_panel; then\s+restart_runtime_services_if_running/);
+  const fromPanel = script.slice(script.indexOf("install_runtime_from_panel() {"), script.indexOf("install_runtime_from_github() {"));
+  assert.match(fromPanel, /NEX_RUNTIME_ONLY:-\}" \] && ! runtime_is_nex_build "\$STAGED_RUNTIME"/);
+});

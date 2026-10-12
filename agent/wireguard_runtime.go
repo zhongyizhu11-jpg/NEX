@@ -1591,7 +1591,7 @@ func (session *wireGuardUDPProxySession) close() {
 // relayTCPBidirectional：一个方向结束时把半关闭传下去、另一个方向继续，而不是
 // 立刻关掉两边（以前那样会截断对端还没发完的数据）。
 func proxyWireGuardConnections(left, right net.Conn) {
-	relayTCP(left, right, tcpRelayHalfCloseLinger)
+	relayTCPBidirectional(left, right, tcpRelayHalfCloseLinger)
 }
 
 func (proxy *wireGuardOutboundProxy) close() {

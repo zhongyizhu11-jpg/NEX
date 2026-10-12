@@ -3024,6 +3024,7 @@ func main() {
 		fatal("acquire Agent state lock: %v", err)
 	}
 	defer stateLock.Close()
+	go applyReceivePacketSteering()
 	restoreCountingChainStates(agentBootID)
 
 	startAgentLogMaintenance()
@@ -13639,7 +13640,7 @@ func (p *failoverProxy) handleConn(client net.Conn) {
 	p.trackConn(index, client)
 	defer p.untrackConn(index, client)
 	// 等两个方向都结束（带半关闭 linger），客户端半关闭后仍能收完响应。
-	relayTCP(client, upstream, tcpRelayHalfCloseLinger)
+	relayTCPBidirectional(client, upstream, tcpRelayHalfCloseLinger)
 }
 
 func guardID(rule guardRule) string {

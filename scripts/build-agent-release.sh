@@ -110,8 +110,16 @@ download_gost_runtime() {
   rm -rf "$tmp"
 }
 
-download_gost_runtime amd64 forwardx-runtime-linux-amd64
-download_gost_runtime arm64 forwardx-runtime-linux-arm64
+# gost runtime 优先用 NEX 自编版（gost-runtime/build.sh：普通 TCP 转发走 splice），
+# 编不出来（Go 太老、拉不到源码）就退回官方成品，装机脚本两种都认。
+# NEX_GOST_SOURCE=upstream 可以强制用官方成品。
+if [ "${NEX_GOST_SOURCE:-nex}" != "upstream" ] && "$ROOT_DIR/gost-runtime/build.sh" "$OUT_DIR"; then
+  echo "[runtime] using NEX-built gost runtime"
+else
+  echo "[runtime] NEX gost build unavailable, falling back to official go-gost v${GOST_VERSION}" >&2
+  download_gost_runtime amd64 forwardx-runtime-linux-amd64
+  download_gost_runtime arm64 forwardx-runtime-linux-arm64
+fi
 
 NOTICE_FILE="$ROOT_DIR/THIRD_PARTY_NOTICES.md"
 if [ ! -f "$NOTICE_FILE" ]; then
