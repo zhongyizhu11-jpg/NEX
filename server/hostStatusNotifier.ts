@@ -12,6 +12,7 @@ import {
 import { withKeyedTaskLock } from "./keyedTaskLock";
 import { filterTelegramRecipients } from "./telegramNotifyPrefs";
 import { HostOfflineNotificationDebouncer } from "./hostOfflineNotificationDebouncer";
+import { recordHostStatusEvent } from "./ops/eventHooks";
 
 type HostStatus = "online" | "offline";
 
@@ -155,7 +156,9 @@ function recordHostStatusTransition(host: any, status: HostStatus) {
 }
 
 async function notifyHostStatusChange(host: any, status: HostStatus) {
-  if (recordHostStatusTransition(host, status)) await sendHostStatusTelegram(host, status);
+  if (!recordHostStatusTransition(host, status)) return;
+  recordHostStatusEvent(host, status); // 事件时间线（与 Telegram 开关无关）
+  await sendHostStatusTelegram(host, status);
 }
 
 /**
@@ -168,6 +171,7 @@ async function notifyHostStatusChange(host: any, status: HostStatus) {
 async function notifyHostStatusChanges(hosts: any[], status: HostStatus) {
   const due = hosts.filter((host) => recordHostStatusTransition(host, status));
   if (due.length === 0) return;
+  for (const host of due) recordHostStatusEvent(host, status); // 事件时间线（与 Telegram 开关无关）
   if (due.length > HOST_STATUS_SUMMARY_THRESHOLD) {
     await sendTelegramToAdmins(hostStatusSummaryMessage(due, status), `status=${status} summary hosts=${due.length}`);
     return;

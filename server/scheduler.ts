@@ -38,6 +38,7 @@ import {
 import { billingMonthlyBoundary, billingStartOfCalendarDay, MONTHLY_RESET_MAX_DAY } from "@shared/billingTime";
 import { normalizeProxyNodeResetDay } from "@shared/proxyNodeQuota";
 import { expireStalePendingOrders, recoverStaleProcessingPaymentOrders, reconcilePendingPaymentOrders } from "./payment";
+import { runPanelEventsDailyMaintenance } from "./ops/eventHooks";
 
 type TimedOutForwardTest = {
   id: number;
@@ -1081,6 +1082,8 @@ export function startScheduler() {
   repeatAfter(entryBridgeExpiry, 60 * 1000, 50_000);
   repeatAfter(reminderSweep, 6 * 60 * 60 * 1000, 30_000);
   repeatAfter(telegramDigest, 10 * 60 * 1000, 70_000);
+  // 事件时间线：每天删一次 90 天前的事件、记一遍三天内到期的用户（见 server/ops/eventHooks.ts）
+  repeatAfter(createNonOverlappingScheduledTask("panel events maintenance", runPanelEventsDailyMaintenance, { slowTaskMs: 30_000 }), 24 * 60 * 60 * 1000, 3 * 60_000);
   repeatAfter(updateCheck, UPDATE_AUTO_CHECK_INTERVAL_MS, 45_000);
   repeatAfter(historyCleanup, 60 * 60 * 1000, 2 * 60_000);
   // 没定到位的主机五分钟看一次；真正的重试间隔由 hostGeo 里的退避（10 分钟起、封顶 6 小时）决定。

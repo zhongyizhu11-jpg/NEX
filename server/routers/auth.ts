@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { maskIdentifier } from "./helpers";
+import { recordLoginFailureEvent, recordLoginSuccessEvent } from "../ops/eventHooks";
 import { nanoid } from "nanoid";
 import jwt from "jsonwebtoken";
 import { ACCOUNT_DISABLED_ERR_MSG, COOKIE_NAME, SESSION_REPLACED_ERR_MSG } from "../../shared/const";
@@ -320,6 +321,7 @@ export const authRouter = router({
         if (!user) {
           recordPasswordFail(ip, input.username);
           console.warn(`[Auth] Login failed username=${maskIdentifier(input.username)} ip=${ip}`);
+          recordLoginFailureEvent(ip, input.username); // 事件时间线：同一 IP 连续失败到 5 / 20 / 100 次各记一条
           if (needsCaptcha(ip, input.username)) {
             throw new Error("CAPTCHA_REQUIRED_AFTER_FAIL");
           }
@@ -362,12 +364,14 @@ export const authRouter = router({
             // email/username aliases cannot bypass the 2FA failure budget.
             recordTwoFactorFail(ip, user.username);
             console.warn(`[Auth] Login 2FA failed userId=${user.id} username=${maskIdentifier(user.username)} ip=${ip}`);
+            recordLoginFailureEvent(ip, user.username); // 事件时间线
             throw new Error("双重验证验证码错误或已过期");
           }
         }
 
         clearLoginFail(ip, user.username);
         console.info(`[Auth] Login success userId=${user.id} username=${maskIdentifier(user.username)} ip=${ip}`);
+        recordLoginSuccessEvent(user, ip); // 事件时间线：只记管理员
         return createLoginSession(ctx, user, input.mobile);
       });
     }),
@@ -402,6 +406,7 @@ export const authRouter = router({
         }
         if (!verifyTotpToken(user.twoFactorSecret, input.code)) {
           console.warn(`[Auth] 2FA challenge failed userId=${user.id} ip=${ip}`);
+          recordLoginFailureEvent(ip, challenge.username); // 事件时间线
           recordTwoFactorFail(ip, challenge.username);
           recordTwoFactorChallengeFailure(input.challengeId);
           throw new Error("双重验证验证码错误或已过期");
@@ -409,6 +414,7 @@ export const authRouter = router({
         clearTwoFactorChallenge(input.challengeId);
         clearLoginFail(ip, challenge.username);
         console.info(`[Auth] 2FA login success userId=${user.id} username=${maskIdentifier(user.username)} ip=${ip}`);
+        recordLoginSuccessEvent(user, ip); // 事件时间线：只记管理员
         return createLoginSession(ctx, user, input.mobile ?? challenge.mobile);
       });
     }),
