@@ -189,7 +189,7 @@ function HostCountryRows({ hosts, globalRule, minAgentVersion }: { hosts: HostRo
               <div className="min-w-0">
                 <EffectiveText host={host} minAgentVersion={minAgentVersion} />
                 {host.policy === "custom" ? (
-                  <button type="button" className="mt-0.5 hidden text-[12px] text-[var(--fx-primary-text)] underline-offset-2 hover:underline sm:inline" onClick={() => openCustom(host)}>
+                  <button type="button" className="mt-0.5 hidden text-[12px] text-primary underline-offset-2 hover:underline sm:inline" onClick={() => openCustom(host)}>
                     改本机规则
                   </button>
                 ) : null}

@@ -33,7 +33,7 @@ export function NumberedSection({ index, title, description, children, aside }: 
     <section className="rounded-[var(--fx-radius-surface)] bg-[var(--fx-l1-surface)] p-3 sm:p-4" aria-label={title}>
       <header className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-baseline gap-2.5">
-          <span className="shrink-0 font-mono text-[12px] font-semibold tabular-nums text-[var(--fx-primary-text)]" aria-hidden="true">
+          <span className="shrink-0 font-mono text-[12px] font-semibold tabular-nums text-primary" aria-hidden="true">
             {String(index).padStart(2, "0")}
           </span>
           <div className="min-w-0">
@@ -137,7 +137,7 @@ export function CountryPicker({ value, onChange, disabled, label = "国家或地
           onKeyDown={(event) => {
             if (event.key === "Enter") {
               event.preventDefault();
-              if (options[0]) { toggle(options[0]); setQuery(""); }
+              if (options[0]) { toggle(options[0]); setQuery(""); setOpen(false); }
             }
             if (event.key === "Escape") { setOpen(false); inputRef.current?.blur(); }
           }}
@@ -145,10 +145,13 @@ export function CountryPicker({ value, onChange, disabled, label = "国家或地
           className="pl-8"
           aria-label={`搜索${label}`}
         />
-      </div>
+      {/*
+        候选列表浮在输入框下面、不占位：原来跟在下面占一块，输入框一失焦就收起，下面的「保存」
+        跟着往上跳 —— 手指按下去那一刻按钮正好挪走，点了个空。
+      */}
       {open && !disabled ? (
         <ul
-          className="max-h-56 overflow-y-auto rounded-md border border-[var(--fx-stroke-base)] bg-[var(--fx-l1-surface)] p-1"
+          className="absolute left-0 right-0 top-full z-30 mt-1 max-h-56 overflow-y-auto rounded-lg border border-[var(--fx-stroke-weak)] bg-popover p-1 text-popover-foreground shadow-[var(--fx-elevation-popover)] overscroll-contain"
           role="listbox"
           aria-multiselectable="true"
           aria-label={label}
@@ -174,7 +177,7 @@ export function CountryPicker({ value, onChange, disabled, label = "国家或地
                   <span className="min-w-0 truncate">{countryLabel(code)}</span>
                   <span className="flex shrink-0 items-center gap-2">
                     <span className="font-mono text-[11px] text-muted-foreground">{code}</span>
-                    <Check className={cn("h-3.5 w-3.5 text-[var(--fx-primary-text)]", !active && "invisible")} aria-hidden="true" />
+                    <Check className={cn("h-3.5 w-3.5 text-primary", !active && "invisible")} aria-hidden="true" />
                   </span>
                 </button>
               </li>
@@ -182,6 +185,7 @@ export function CountryPicker({ value, onChange, disabled, label = "国家或地
           })}
         </ul>
       ) : null}
+      </div>
     </div>
   );
 }
