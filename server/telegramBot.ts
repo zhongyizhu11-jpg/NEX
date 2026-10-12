@@ -55,6 +55,8 @@ import { ROUTE_MODE_INFO, routeGroupOf, routePathLabel, routePathLetter } from "
 import { PIN_DURATION_OPTIONS, pinUntilSeconds } from "../shared/routePolicy";
 import { describeFailoverActiveLine } from "../shared/failoverActiveLine";
 import { billingCalendarParts } from "../shared/billingTime";
+import { formatDigestHour, isDigestDue } from "../shared/opsDigest";
+import { buildOpsDigestExtraLines, getDigestHour } from "./ops/digestContent";
 import {
   adjustUserBalanceCommand,
   renewUserCommand,
@@ -1449,7 +1451,6 @@ function isPanelButtonRejection(error: unknown) {
 
 const HOST_PAGE_SIZE = 8;
 const ROUTE_PAGE_SIZE = 8;
-const DIGEST_HOUR = 9;
 const RULE_TEST_WAIT_MS = 40_000;
 const RULE_TEST_POLL_MS = 2_000;
 
@@ -2017,7 +2018,7 @@ async function notifyView(user: any, notice = "") {
       rows.push([{ text: `${on ? "🔕 关闭" : "✅ 打开"}${category.label}`, callback_data: `fx:notify:t:${category.key}` }]);
     }
   }
-  lines.push(`${digestOn ? "✅" : "🔕"} 每日简报（每天 ${DIGEST_HOUR}:00）`);
+  lines.push(`${digestOn ? "✅" : "🔕"} 每日简报（每天 ${formatDigestHour(await getDigestHour())}）`);
   rows.push([{ text: `${digestOn ? "🔕 关闭" : "✅ 打开"}每日简报`, callback_data: `fx:notify:digest:${digestOn ? "0" : "1"}` }]);
   if (isAdmin && !hostGlobal) {
     rows.push([{ text: "🖥 打开主机上下线总开关", callback_data: "fx:notify:hostglobal" }]);
@@ -2095,6 +2096,7 @@ export async function buildTelegramDigestText(user: any, now = Date.now()) {
     } else {
       lines.push("⏰ 7 天内没有到期的用户和主机");
     }
+    lines.push(...await buildOpsDigestExtraLines(now)); // 设置里勾选的可选内容块（默认一块都没有）
     return lines.join("\n");
   }
   const fresh = await db.getUserById(Number(user.id)) as any || user;
@@ -2109,13 +2111,13 @@ export async function buildTelegramDigestText(user: any, now = Date.now()) {
 }
 
 /**
- * 每天 9 点（北京时间）发一次。调度每十分钟看一眼，过了 9 点就把今天还没发的发掉；
+ * 每天设定的钟点（北京时间，默认 9 点，设置 › Telegram 里可改）发一次。调度每十分钟看一眼，过了钟点就把今天还没发的发掉；
  * 去重键带北京日期、走提醒同一套 dispatchReminders，面板重启也不会重发。
  */
 export async function runTelegramDigests(now = Date.now()) {
   const settings = await getTelegramSettings();
   if (!settings.enabled || !settings.token) return 0;
-  if (billingCalendarParts(now).hour < DIGEST_HOUR) return 0;
+  if (!isDigestDue(billingCalendarParts(now).hour, await getDigestHour())) return 0;
   const prefs = await readTelegramNotifyPrefs();
   const users = (await db.getUserTrafficSummaries() as any[])
     .filter((user) => !!user.telegramId && user.accountEnabled !== false && isTelegramDigestEnabled(prefs, user));
@@ -5948,7 +5950,7 @@ async function handleCallback(query: TelegramCallbackQuery) {
       notice = "已更新。";
     } else if (parts[2] === "digest") {
       await updateTelegramNotifyPref(Number(user.id), { digest: parts[3] === "1" });
-      notice = parts[3] === "1" ? `已打开，每天 ${DIGEST_HOUR}:00 发给你。` : "已关闭每日简报。";
+      notice = parts[3] === "1" ? `已打开，每天 ${formatDigestHour(await getDigestHour())} 发给你。` : "已关闭每日简报。";
     } else if (parts[2] === "hostglobal" && user.role === "admin") {
       await db.setSetting("telegramHostStatusNotify", "true");
       notice = "已打开主机上下线总开关（面板设置里同一个开关）。";

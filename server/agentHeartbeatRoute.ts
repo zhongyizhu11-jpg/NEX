@@ -161,6 +161,7 @@ import { isEntryBridgeRuleId } from "../shared/ruleEntryBridge";
 import { runAgentRuntimeRecovery } from "./agentRuntimeRecovery";
 import { observePresenceCapableHostActivity, registerPresenceCapableHost } from "./agentFastLiveness";
 import { recordAuthenticatedAgentActivity } from "./agentActivity";
+import { recordHostRestartEvent } from "./ops/eventHooks";
 
 // DNS 解析缓存：ruleId → 主目标上次解析到的 IPv4 地址。
 // 备用线路策略里的域名由 Agent 的 TCP 拨号和健康检查动态解析。
@@ -1781,6 +1782,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     if (addressApplied) {
       await handleHostAddressChanged(host.id, host, previousHost, "agent-address-changed");
     }
+    // 事件时间线：机器重启 / Agent 重启（含升级后的重启）
+    recordHostRestartEvent(host, { reboot: rebootDetected, processRestart: processRestartDetected, upgradedTo: agentVersionChanged ? nextAgentVersion : null });
     if (recoveryTriggered) {
       const reason = recoveredFromOffline ? "agent-reconnected" : rebootDetected ? "agent-reboot-detected" : "agent-process-restarted";
       await resetAgentRuntimeStateForRecovery(host.id, reason, {
