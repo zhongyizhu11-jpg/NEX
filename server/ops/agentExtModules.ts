@@ -4,3 +4,4 @@ import "./onlineIpsAgent";
 import "./hostSecurityAgent";
 import "./agentRelayAgent";
 import "./hostOpsAgent";
+import "./quotaAgent";
