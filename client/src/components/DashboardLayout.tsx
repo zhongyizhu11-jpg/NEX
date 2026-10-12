@@ -68,6 +68,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useOpsFeatures } from "@/features/ops/useOpsFeatures";
+import OpsMaintenanceBanner from "@/features/ops/maintenance/MaintenanceBanner";
 import { App as CapacitorApp } from "@capacitor/app";
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { IosTabBar } from "@/components/ios/TabBar";
@@ -1775,6 +1776,7 @@ function DashboardLayoutContent({
               </div>
             </div>
           ) : null}
+          <OpsMaintenanceBanner />
           {expiryNoticeVisible ? (
             <div className="mb-4 flex flex-col gap-2 rounded-lg border border-[color-mix(in_srgb,var(--fx-warn)_40%,transparent)] bg-[var(--fx-warn-soft)] px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between">
               <p className="min-w-0">
