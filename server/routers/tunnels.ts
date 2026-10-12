@@ -10,7 +10,7 @@ import { pushTunnelEndpointRefresh, requireHostAccess } from "./helpers";
 import { requireTunnelProtocolEnabled } from "../forwardProtocolSettings";
 import * as hopRepo from "../repositories/tunnelRepository";
 import { createTunnelHopBatch, registerTunnelHopTest } from "../tunnelHopTestState";
-import { clearTunnelRuntimeStatus } from "../tunnelRuntimeStatus";
+import { clearTunnelRuntimeStatus, getTunnelWireGuardPlane } from "../tunnelRuntimeStatus";
 import { createQueryCache } from "../queryCache";
 import { isPortAllowedByPolicy, portPolicyErrorMessage, portPolicyFrom } from "@shared/portPolicy";
 import { assertTenantListenPortAllowed, TENANT_SYSTEM_PORT_MAX } from "../tenantListenPortGuard";
@@ -725,12 +725,17 @@ function compactTunnelForUse(tunnel: any) {
 }
 
 function attachTunnelAvailability(tunnels: any[], availabilityIndex: LinkAvailabilitySummaryIndex) {
-  return tunnels.map((tunnel) => ({
-    ...tunnel,
-    availability: publicLinkAvailabilitySummary(
-      availabilityIndex.tunnelAvailabilityById.get(Number(tunnel.id)),
-    ),
-  }));
+  return tunnels.map((tunnel) => {
+    // NEX V2 隧道实际在用的 WireGuard 数据面（内核 / 用户态），只有 Agent 上报过才有。
+    const wireGuardPlane = isForwardXWireGuardV2(tunnel) ? getTunnelWireGuardPlane(Number(tunnel.id)) : undefined;
+    return {
+      ...tunnel,
+      ...(wireGuardPlane ? { wireGuardPlane } : {}),
+      availability: publicLinkAvailabilitySummary(
+        availabilityIndex.tunnelAvailabilityById.get(Number(tunnel.id)),
+      ),
+    };
+  });
 }
 
 function availabilityIndexForHydratedTunnels(tunnels: any[]) {
