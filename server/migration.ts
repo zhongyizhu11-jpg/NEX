@@ -795,6 +795,11 @@ const IMPORT_TABLE_ORDER = [
   "plugin_assets",
   "plugin_agent_states",
   "config_audit_events",
+  "firewall_host_policies",
+  "firewall_blocked_ips",
+  "ops_agent_relay",
+  "api_tokens",
+  "user_passkeys",
   "system_settings",
 ] as const;
 

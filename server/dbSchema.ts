@@ -89,6 +89,12 @@ export const MIGRATION_TABLES = [
   "plugin_assets",
   "plugin_agent_states",
   "config_audit_events",
+  // 朱砂主题那组运维功能里要跟着迁移走的配置表（和 server/ops/opsTables.ts 的 OPS_MIGRATION_TABLES 一致，测试盯着）
+  "firewall_host_policies",
+  "firewall_blocked_ips",
+  "ops_agent_relay",
+  "api_tokens",
+  "user_passkeys",
 ] as const;
 
 const LAST_AUTO_TRAFFIC_RESET_BACKFILL_MARKER = "last-auto-traffic-reset-backfill-v1";

@@ -15,7 +15,6 @@ import { FormField } from "@/components/ui/form-field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
 import { trpc } from "@/lib/trpc";
 import { WEBHOOK_CATEGORIES, WEBHOOK_LEVEL_OPTIONS, type WebhookCategoryKey } from "@shared/opsWebhook";
 import type { OpsEventLevel } from "@shared/opsEvents";
@@ -187,7 +186,7 @@ export default function WebhookSettings(_props: Record<string, never>) {
                 label="启用推送"
                 description={hasUrl ? "关掉后事件照常记录，只是不再推送。" : "先填好地址。"}
                 control={(
-                  <Switch
+                  <Checkbox
                     aria-label="启用推送"
                     checked={enabled}
                     onCheckedChange={(checked) => {
@@ -195,7 +194,7 @@ export default function WebhookSettings(_props: Record<string, never>) {
                         toast.error("请先填写 Webhook 地址");
                         return;
                       }
-                      setEnabled(checked);
+                      setEnabled(checked === true);
                     }}
                   />
                 )}

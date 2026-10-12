@@ -348,7 +348,7 @@ export default function OffsiteBackupSection(_props: Record<string, never>) {
                   </div>
                   {form.scheduleMode === "daily" ? (
                     <Select value={form.scheduleHour} onValueChange={(value) => set("scheduleHour", value)}>
-                      <SelectTrigger className="h-9 w-[104px]"><SelectValue /></SelectTrigger>
+                      <SelectTrigger className="h-9 w-[104px]" aria-label="每天几点备份"><SelectValue /></SelectTrigger>
                       <SelectContent>
                         {Array.from({ length: 24 }, (_, hour) => (
                           <SelectItem key={hour} value={String(hour)}>{String(hour).padStart(2, "0")}:00</SelectItem>
@@ -357,7 +357,7 @@ export default function OffsiteBackupSection(_props: Record<string, never>) {
                     </Select>
                   ) : (
                     <span className="flex items-center gap-2 text-sm">
-                      <Input className="h-9 w-20" inputMode="numeric" value={form.everyHours} onChange={(event) => set("everyHours", event.target.value.replace(/\D/g, ""))} />
+                      <Input className="h-9 w-20" inputMode="numeric" aria-label="每隔几小时备份" value={form.everyHours} onChange={(event) => set("everyHours", event.target.value.replace(/\D/g, ""))} />
                       小时
                     </span>
                   )}
@@ -368,7 +368,7 @@ export default function OffsiteBackupSection(_props: Record<string, never>) {
                 label="保留几份"
                 description="只删面板自己传上去的旧备份，目录里别的文件不动。"
                 control={(
-                  <Input className="h-9 w-20 text-right" inputMode="numeric" value={form.keep} onChange={(event) => set("keep", event.target.value.replace(/\D/g, ""))} />
+                  <Input className="h-9 w-20 text-right" inputMode="numeric" aria-label="保留几份" value={form.keep} onChange={(event) => set("keep", event.target.value.replace(/\D/g, ""))} />
                 )}
               />
             </>

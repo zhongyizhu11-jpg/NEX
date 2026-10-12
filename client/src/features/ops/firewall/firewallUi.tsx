@@ -151,7 +151,7 @@ export function CountryPicker({ value, onChange, disabled, label = "国家或地
       */}
       {open && !disabled ? (
         <ul
-          className="absolute left-0 right-0 top-full z-30 mt-1 max-h-56 overflow-y-auto rounded-lg border border-[var(--fx-stroke-weak)] bg-popover p-1 text-popover-foreground shadow-[var(--fx-elevation-popover)] overscroll-contain"
+          className="absolute left-0 right-0 top-full z-20 mt-1 max-h-56 overflow-y-auto rounded-lg border border-[var(--fx-stroke-weak)] bg-popover p-1 text-popover-foreground shadow-[var(--fx-elevation-popover)] overscroll-contain"
           role="listbox"
           aria-multiselectable="true"
           aria-label={label}

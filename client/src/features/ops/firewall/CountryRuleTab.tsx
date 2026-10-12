@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
 import { trpc } from "@/lib/trpc";
 import { pollingInterval } from "@/lib/polling";
 import { cn } from "@/lib/utils";
@@ -367,7 +367,8 @@ function PanelAccessSection() {
           label="订阅链接也一起限制"
           description="关着时，订阅链接在哪里都能拉取。"
           control={(
-            <Switch
+            <Checkbox
+              aria-label="订阅链接也一起限制"
               checked={draft.includeSubscription}
               onCheckedChange={(checked) => setDraft({ ...draft, includeSubscription: checked === true })}
               disabled={save.isPending}

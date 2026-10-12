@@ -91,7 +91,7 @@ test("events, webhook settings and digest blocks work against a real database", 
       assert.equal(view.enabled, false);
       assert.deepEqual(view.categories, ["host", "user", "rule", "account", "security"]);
 
-      // 简报：默认 9 点、不加块；全开时每块都能出（安全巡检表不存在就跳过）
+      // 简报：默认 9 点、不加块；全开时每块都能出（安全巡检表现在由 hostSecurityTables 建，没有问题时说一句「没有待处理的问题」）
       assert.deepEqual(await digest.getDigestSettings(), { hour: 9, blocks: [] });
       assert.deepEqual(await digest.buildOpsDigestExtraLines(), []);
       await digest.saveDigestSettings({ hour: 21, blocks: ["security", "hostTraffic", "topUsers", "availability", "offlineNow", "expiring", "lowQuota", "bogus"] });
@@ -103,7 +103,7 @@ test("events, webhook settings and digest blocks work against a real database", 
       assert.match(lines, /港-1：1 次，共 35 分钟/);
       assert.match(lines, /3 天内到期/);
       assert.match(lines, /小王：剩 3%/);
-      assert.doesNotMatch(lines, /安全巡检/);
+      assert.match(lines, /安全巡检：没有待处理的问题/);
 
       // 快到期扫描：一天只记一次
       assert.equal(await hooks.recordExpiringUsersEvents(), 1);
