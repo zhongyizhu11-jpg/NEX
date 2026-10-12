@@ -38,6 +38,8 @@ import {
 import { billingMonthlyBoundary, billingStartOfCalendarDay, MONTHLY_RESET_MAX_DAY } from "@shared/billingTime";
 import { normalizeProxyNodeResetDay } from "@shared/proxyNodeQuota";
 import { expireStalePendingOrders, recoverStaleProcessingPaymentOrders, reconcilePendingPaymentOrders } from "./payment";
+import { startStatusAvailabilityJob } from "./ops/statusAvailabilityJob";
+import { startOffsiteBackupJob } from "./ops/offsiteBackupJob";
 
 type TimedOutForwardTest = {
   id: number;
@@ -1085,6 +1087,9 @@ export function startScheduler() {
   repeatAfter(historyCleanup, 60 * 60 * 1000, 2 * 60_000);
   // 没定到位的主机五分钟看一次；真正的重试间隔由 hostGeo 里的退避（10 分钟起、封顶 6 小时）决定。
   repeatAfter(hostGeoSweep, 5 * 60 * 1000, 90_000);
+  // 第五套主题那批功能里的两个定时任务：公开状态页的可用率采样、异地自动备份（各自管自己的节奏）。
+  startStatusAvailabilityJob();
+  startOffsiteBackupJob();
 
   console.log("[Scheduler] Scheduled tasks started with overlap guards and staggered startup");
 }

@@ -627,6 +627,11 @@ function unsupportedReason(node: ProxyNode, format: ProxySubscriptionFormat): st
   return "";
 }
 
+/** 给 shared/proxyClientCompatibility.ts 用：订阅这一层会不会把这个节点跳掉，原因同上。 */
+export function proxyNodeUnsupportedReasonForFormat(node: ProxyNode, format: ProxySubscriptionFormat): string {
+  return unsupportedReason(node, format);
+}
+
 type SupportPartition = {
   supported: ProxyNode[];
   skipped: { node: ProxyNode; reason: string }[];

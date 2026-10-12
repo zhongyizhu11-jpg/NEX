@@ -450,7 +450,7 @@ import { canAddSelfServiceHost, selfServiceHostLimitForUser, selfServiceHostLimi
  * 这个页面不需要登录。租户自助添加的机器是他自己的，名字、所在地、负载和流量不该被
  * 管理员打开的公开页一起挂出去。
  */
-async function filterPublicMonitorHosts(rawHosts: any[]) {
+export async function filterPublicMonitorHosts(rawHosts: any[]) {
   const ownerIds = Array.from(new Set(rawHosts.map((host) => Number(host?.userId || 0)).filter((id) => id > 0)));
   // 一次 IN 查询拿全部主人的角色，不再每个主人一次 getUserById（公开页每 3 秒轮询一次）。
   const ownerRoles = await db.getUserRolesByIds(ownerIds);
@@ -711,7 +711,7 @@ function compactPublicProbeSeries(row: any) {
   };
 }
 
-async function assertPublicHostMonitorRequest(path: unknown) {
+export async function assertPublicHostMonitorRequest(path: unknown) {
   const settings = await db.getAllSettings();
   const configuredPath = normalizePublicHostMonitorPath(settings.publicHostMonitorPath);
   const requestedPath = normalizePublicHostMonitorPath(path);

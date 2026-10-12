@@ -23,6 +23,11 @@ const HOST_SERVICE_CHART_POINT_BUDGET = 3200;
 const HOST_SERVICE_CHART_MIN_POINTS = 260;
 const HOST_SERVICE_CHART_MAX_POINTS = 720;
 
+/** 丢包率：不足 1% 留一位小数（0.4% 和 0% 是两回事），否则取整。 */
+function formatLossPercent(value: number) {
+  return value < 1 ? `${value.toFixed(1)}%` : `${Math.round(value)}%`;
+}
+
 function formatTime(value: string | number | Date) {
   const d = new Date(value);
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
@@ -183,6 +188,26 @@ export default function HostProbeServiceLatencyDialog({
     return getLatencyStabilityStats(samples);
   }, [rangedData, visibleServiceIds]);
 
+  /*
+    每个服务在所选时间范围里的丢包率（按探测次数加权，和下面「丢包率」那格同一算法）。
+    下面那格是所有选中服务合起来的；这里拆到每个服务的标签上，一眼看出是哪个目标在丢。
+  */
+  const lossByService = useMemo(() => {
+    const totals = new Map<number, { count: number; lost: number }>();
+    for (const row of rangedData as any[]) {
+      const serviceId = Number(row.serviceId);
+      if (!serviceId) continue;
+      const counts = normalizeLatencyProbeCounts(row);
+      const entry = totals.get(serviceId) || { count: 0, lost: 0 };
+      entry.count += counts.probeCount;
+      entry.lost += counts.probeCount - counts.probeSuccesses;
+      totals.set(serviceId, entry);
+    }
+    const out = new Map<number, number>();
+    for (const [serviceId, entry] of totals) if (entry.count > 0) out.set(serviceId, (entry.lost / entry.count) * 100);
+    return out;
+  }, [rangedData]);
+
   useEffect(() => {
     if (!open) {
       setSelectedServiceIds(new Set());
@@ -338,6 +363,9 @@ export default function HostProbeServiceLatencyDialog({
                   >
                     <span className="h-2 w-2 rounded-full" style={{ background: colors[index % colors.length] }} />
                     <span className="truncate">{service.name}</span>
+                    {(lossByService.get(serviceId) || 0) > 0 ? (
+                      <span className="shrink-0 tabular-nums text-[var(--fx-warn-text)]">丢包 {formatLossPercent(lossByService.get(serviceId) || 0)}</span>
+                    ) : null}
                   </button>
                 );
               })}
