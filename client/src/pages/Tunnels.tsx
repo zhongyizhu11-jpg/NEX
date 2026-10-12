@@ -387,6 +387,8 @@ type LinkShapingStatus = {
   learnedMbps: number;
   lossPct: number;
   updatedAt?: string | number | null;
+  /** 面板判定这条上报已经过期（关了整形、换了协议、机器离线），不是实时状态。 */
+  stale?: boolean;
 };
 function normalizeLinkShapingMode(value: unknown): LinkShapingMode {
   const mode = String(value || "").trim().toLowerCase();
@@ -396,6 +398,7 @@ function normalizeLinkShapingMode(value: unknown): LinkShapingMode {
 function describeLinkShapingStatus(item: LinkShapingStatus) {
   const direction = item.direction === "down" ? "出口 → 入口" : "入口 → 出口";
   const host = item.hostName ? `${item.hostName}` : `主机 #${item.hostId}`;
+  if (item.stale) return `${direction}（${host}）：暂无最新上报`;
   let detail: string;
   switch (item.state) {
     case "shaping":

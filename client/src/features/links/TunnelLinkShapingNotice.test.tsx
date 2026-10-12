@@ -19,3 +19,23 @@ test("卡片上只显示真的在整形或出了状况的方向", () => {
   assert.equal(renderToStaticMarkup(<TunnelLinkShapingNotice tunnel={{ linkShapingStatus: [] }} />), "");
   assert.equal(tunnelLinkShapingText(null), "");
 });
+
+test("面板标成过期的上报不显示：关掉整形、换了协议之后 FXP 不再报", () => {
+  const tunnel = {
+    linkShapingStatus: [
+      { direction: "down", state: "shaping", rateMbps: 376, learnedMbps: 0, stale: true },
+    ],
+  };
+  assert.equal(tunnelLinkShapingText(tunnel), "");
+  assert.equal(renderToStaticMarkup(<TunnelLinkShapingNotice tunnel={tunnel} />), "");
+  // 一个方向过期、另一个还在报：只显示还在报的那个
+  assert.equal(
+    tunnelLinkShapingText({
+      linkShapingStatus: [
+        { direction: "down", state: "shaping", rateMbps: 376, learnedMbps: 0, stale: true },
+        { direction: "up", state: "shaping", rateMbps: 900, learnedMbps: 880 },
+      ],
+    }),
+    "链路整形：入口→出口 880 Mbit/s",
+  );
+});

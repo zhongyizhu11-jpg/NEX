@@ -31,3 +31,8 @@ test("主机公网出口整形：编辑框状态与卡片文字", () => {
   assert.equal(hostEgressShapingCardText({ egressShapingStatus: { state: "paused" } }), "公网出口整形：暂停（不像限速器）");
   assert.equal(hostEgressShapingCardText(null), "");
 });
+
+test("过期的上报当没有实时状态", () => {
+  assert.equal(hostEgressShapingCardText({ egressShapingStatus: { state: "shaping", learnedMbps: 488, rateMbps: 478, stale: true } }), "");
+  assert.equal(describeHostEgressShaping({ state: "shaping", learnedMbps: 488, rateMbps: 478, stale: true }), "暂无最新上报");
+});

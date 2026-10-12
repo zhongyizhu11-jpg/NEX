@@ -44,7 +44,8 @@ import {
   selectTunnelHopDialAddress,
 } from "../tunnelAddressSelection";
 import { planManualTunnelTestRefresh } from "../tunnelRuntimePlan";
-import { TUNNEL_LINK_MBPS_MAX, normalizeTunnelLinkShapingMode, isForwardXTunnel, tunnelFxpMemberHostIds, tunnelFxpRuntimeIssues, tunnelFxpRuntimeIssueSummary } from "../tunnelFxpRuntime";
+import { TUNNEL_LINK_MBPS_MAX, normalizeTunnelLinkShapingMode, isForwardXTunnel, tunnelFxpMemberHostIds, tunnelFxpRuntimeIssues, tunnelFxpRuntimeIssueSummary, tunnelLinkShaping as tunnelLinkShapingConfig } from "../tunnelFxpRuntime";
+import { tunnelLinkShapingStatusView } from "../tunnelLinkShapingView";
 import {
   filterTunnelFieldsForUser,
   getLinkAccessScope,
@@ -670,17 +671,10 @@ async function attachTunnelEndpointHosts(tunnels: any[], options: { includeLaten
       // 成员主机里 FXP 握不上当前协议的（见 server/tunnelFxpRuntime.ts）。
       fxpIssues,
       // FXP 报上来的链路整形状态：每台成员主机每个方向一条（自动模式学到的限速点在 learnedMbps）。
-      linkShapingStatus: (linkShapingByTunnel.get(Number(tunnel.id)) || []).map((row: any) => ({
-        hostId: Number(row.hostId),
+      // 关掉整形、换了协议之后 FXP 不再上报，旧记录不能再当实时状态显示，见 tunnelLinkShapingView。
+      linkShapingStatus: tunnelLinkShapingStatusView(tunnel, linkShapingByTunnel.get(Number(tunnel.id)) || []).map((row) => ({
+        ...row,
         hostName: hostSummary(hostMap.get(Number(row.hostId)))?.name ?? null,
-        role: String(row.role || "entry"),
-        direction: String(row.direction),
-        mode: String(row.mode || "off"),
-        state: String(row.state || "off"),
-        rateMbps: Number(row.rateMbps || 0),
-        learnedMbps: Number(row.learnedMbps || 0),
-        lossPct: Number(row.lossPermille || 0) / 10,
-        updatedAt: row.updatedAt ?? null,
       })),
     };
   });
@@ -1652,6 +1646,11 @@ export const tunnelsRouter = router({
           && dbBool((data as any).isEnabled) !== dbBool((tunnel as any).isEnabled);
         if (keyChanged) (data as any).isRunning = false;
         await db.updateTunnel(id, data as any);
+        // 整形关掉了（档位改成关，或者隧道换成 GOST / Nginx 这类不跑 FXP 的协议）：FXP 从此
+        // 不再上报，把记着的实时状态收掉，不然隧道卡片会一直挂着「正在找限速点」。
+        if (tunnelLinkShapingConfig({ ...tunnel, ...data, mode: nextModeForRuntime }).mode === "off") {
+          await db.clearTunnelLinkShapingState(id).catch(() => undefined);
+        }
         // Switching an existing tunnel into a shared-listener transport can
         // change which rule owns the listener even when its numeric port is
         // unchanged. Re-sync the primary rule in that case as well.

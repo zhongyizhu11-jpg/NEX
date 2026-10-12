@@ -13,6 +13,8 @@ export type HostEgressShapingStatus = {
   rateMbps?: number | null;
   learnedMbps?: number | null;
   lossPct?: number | null;
+  /** 面板判定这条上报已经过期（机器离线、FXP 没起来），不是实时状态。 */
+  stale?: boolean | null;
 } | null | undefined;
 
 export const HOST_EGRESS_MBPS_MAX = 1_000_000;
@@ -31,6 +33,7 @@ export function normalizeHostEgressMbpsInput(value: unknown) {
 /** 编辑框里自动档下的状态一句话。 */
 export function describeHostEgressShaping(status: HostEgressShapingStatus) {
   if (!status) return "暂无上报";
+  if (status.stale) return "暂无最新上报";
   const state = String(status.state || "");
   const learned = Number(status.learnedMbps || 0);
   const rate = Number(status.rateMbps || 0);
@@ -45,7 +48,7 @@ export function describeHostEgressShaping(status: HostEgressShapingStatus) {
 /** 卡片上的一行：只在整形中或出了状况时有字。 */
 export function hostEgressShapingCardText(host: { egressShapingStatus?: HostEgressShapingStatus } | null | undefined) {
   const status = host?.egressShapingStatus;
-  if (!status) return "";
+  if (!status || status.stale) return "";
   const state = String(status.state || "");
   const learned = Number(status.learnedMbps || 0);
   const rate = Number(status.rateMbps || 0);
