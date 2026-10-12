@@ -15,10 +15,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"golang.zx2c4.com/wireguard/conn"
-	"golang.zx2c4.com/wireguard/device"
-	"golang.zx2c4.com/wireguard/tun"
 )
 
 const (
@@ -161,9 +157,7 @@ type wireGuardRuntime struct {
 	mu                sync.RWMutex
 	spec              wireGuardSpec
 	signature         string
-	tunDevice         tun.Device
-	netstack          *wireGuardNetTUN
-	device            *device.Device
+	plane             wireGuardDataplane
 	peers             map[string]wireGuardPeerSpec
 	outbound          map[string]*wireGuardOutboundProxy
 	outboundRefs      map[string]int
@@ -178,11 +172,10 @@ type wireGuardRuntime struct {
 }
 
 type wireGuardRuntimeCloseResources struct {
-	tunnelID  int
-	outbound  []*wireGuardOutboundProxy
-	inbound   []*wireGuardInboundProxy
-	device    *device.Device
-	tunDevice tun.Device
+	tunnelID int
+	outbound []*wireGuardOutboundProxy
+	inbound  []*wireGuardInboundProxy
+	plane    wireGuardDataplane
 }
 
 var (
@@ -352,36 +345,14 @@ func newWireGuardRuntime(spec wireGuardSpec) (*wireGuardRuntime, error) {
 	if err != nil {
 		return nil, err
 	}
-	address := netip.MustParseAddr(normalized.Address)
-	tnet, err := newWireGuardNetTUN(address, normalized.MTU)
+	plane, err := newWireGuardPlane(normalized)
 	if err != nil {
-		return nil, fmt.Errorf("create wireguard netstack: %w", err)
-	}
-	var tunDevice tun.Device = tnet
-	if err := tuneWireGuardNetstack(tnet.stack); err != nil {
-		logf("wireguard tunnel=%d netstack tuning skipped: %v", normalized.TunnelID, err)
-	}
-	logger := &device.Logger{
-		Verbosef: device.DiscardLogf,
-		Errorf: func(format string, args ...any) {
-			logf("wireguard tunnel=%d "+format, append([]any{normalized.TunnelID}, args...)...)
-		},
-	}
-	dev := device.NewDevice(tunDevice, conn.NewDefaultBind(), logger)
-	if err := dev.IpcSet(wireGuardDeviceConfig(normalized, true, nil)); err != nil {
-		dev.Close()
-		return nil, fmt.Errorf("configure wireguard: %w", err)
-	}
-	if err := dev.Up(); err != nil {
-		dev.Close()
-		return nil, fmt.Errorf("start wireguard: %w", err)
+		return nil, err
 	}
 	runtime := &wireGuardRuntime{
 		spec:         normalized,
 		signature:    wireGuardSpecSignature(normalized),
-		tunDevice:    tunDevice,
-		netstack:     tnet,
-		device:       dev,
+		plane:        plane,
 		peers:        map[string]wireGuardPeerSpec{},
 		outbound:     map[string]*wireGuardOutboundProxy{},
 		outboundRefs: map[string]int{},
@@ -394,8 +365,29 @@ func newWireGuardRuntime(spec wireGuardSpec) (*wireGuardRuntime, error) {
 	for _, peer := range normalized.Peers {
 		runtime.peers[peer.ID] = peer
 	}
-	logf("wireguard runtime started tunnel=%d address=%s listen=:%d peers=%d mtu=%d", normalized.TunnelID, normalized.Address, normalized.ListenPort, len(normalized.Peers), normalized.MTU)
+	logf("wireguard runtime started tunnel=%d plane=%s address=%s listen=:%d peers=%d mtu=%d", normalized.TunnelID, plane.kind(), normalized.Address, normalized.ListenPort, len(normalized.Peers), normalized.MTU)
 	return runtime, nil
+}
+
+// planeKind 是这条隧道现在跑在哪种数据面上（kernel / netstack）；运行时已关闭返回空。
+func (runtime *wireGuardRuntime) planeKind() string {
+	runtime.mu.RLock()
+	defer runtime.mu.RUnlock()
+	if runtime.closed || runtime.plane == nil {
+		return ""
+	}
+	return runtime.plane.kind()
+}
+
+// wireGuardRuntimePlaneKind 给心跳用：隧道没起来返回空串。
+func wireGuardRuntimePlaneKind(tunnelID int) string {
+	wireGuardRuntimesMu.RLock()
+	runtime := wireGuardRuntimes[tunnelID]
+	wireGuardRuntimesMu.RUnlock()
+	if runtime == nil {
+		return ""
+	}
+	return runtime.planeKind()
 }
 
 func (runtime *wireGuardRuntime) update(spec wireGuardSpec) error {
@@ -417,7 +409,7 @@ func (runtime *wireGuardRuntime) update(spec wireGuardSpec) error {
 	}
 	added, removed, updated, removedKeys := wireGuardPeerUpdateSummary(runtime.spec, normalized)
 	dnsRefresh := runtime.spec.Generation != normalized.Generation
-	if err := runtime.device.IpcSet(wireGuardDeviceUpdateConfig(runtime.spec, normalized, removedKeys)); err != nil {
+	if err := wireGuardPlaneUpdate(runtime.plane, runtime.spec, normalized, removedKeys); err != nil {
 		return fmt.Errorf("update wireguard: %w", err)
 	}
 	runtime.spec = normalized
@@ -1030,7 +1022,13 @@ func (runtime *wireGuardRuntime) dialPeerTCP(ctx context.Context, peerID string,
 	if err != nil {
 		return nil, err
 	}
-	return runtime.netstack.DialContextTCP(ctx, &net.TCPAddr{IP: ip, Port: port})
+	runtime.mu.RLock()
+	plane := runtime.plane
+	runtime.mu.RUnlock()
+	if plane == nil {
+		return nil, net.ErrClosed
+	}
+	return plane.dialTCP(ctx, &net.TCPAddr{IP: ip, Port: port})
 }
 
 func (runtime *wireGuardRuntime) dialPeerUDP(peerID string, port int) (net.Conn, error) {
@@ -1038,7 +1036,13 @@ func (runtime *wireGuardRuntime) dialPeerUDP(peerID string, port int) (net.Conn,
 	if err != nil {
 		return nil, err
 	}
-	return runtime.netstack.DialUDP(nil, &net.UDPAddr{IP: ip, Port: port})
+	runtime.mu.RLock()
+	plane := runtime.plane
+	runtime.mu.RUnlock()
+	if plane == nil {
+		return nil, net.ErrClosed
+	}
+	return plane.dialUDP(&net.UDPAddr{IP: ip, Port: port})
 }
 
 func tuneWireGuardUDPConn(conn *net.UDPConn, bufferBytes int) {
@@ -1409,12 +1413,12 @@ func (runtime *wireGuardRuntime) ensureInboundProxy(refID string, tcpPort, udpPo
 		return nil
 	}
 	localIP := net.ParseIP(runtime.spec.Address)
-	tcpLn, err := runtime.netstack.ListenTCP(&net.TCPAddr{IP: localIP, Port: tcpPort})
+	tcpLn, err := runtime.plane.listenTCP(&net.TCPAddr{IP: localIP, Port: tcpPort})
 	if err != nil {
 		runtime.mu.Unlock()
 		return fmt.Errorf("wireguard tcp inbound listen %d: %w", tcpPort, err)
 	}
-	udpConn, err := runtime.netstack.ListenUDP(&net.UDPAddr{IP: localIP, Port: udpPort})
+	udpConn, err := runtime.plane.listenUDP(&net.UDPAddr{IP: localIP, Port: udpPort})
 	if err != nil {
 		_ = tcpLn.Close()
 		runtime.mu.Unlock()
@@ -1629,11 +1633,10 @@ func (runtime *wireGuardRuntime) claimCloseLocked() (wireGuardRuntimeCloseResour
 	}
 	runtime.releaseGeneration++
 	resources := wireGuardRuntimeCloseResources{
-		tunnelID:  runtime.spec.TunnelID,
-		outbound:  make([]*wireGuardOutboundProxy, 0, len(runtime.outbound)),
-		inbound:   make([]*wireGuardInboundProxy, 0, len(runtime.inbound)),
-		device:    runtime.device,
-		tunDevice: runtime.tunDevice,
+		tunnelID: runtime.spec.TunnelID,
+		outbound: make([]*wireGuardOutboundProxy, 0, len(runtime.outbound)),
+		inbound:  make([]*wireGuardInboundProxy, 0, len(runtime.inbound)),
+		plane:    runtime.plane,
 	}
 	for _, proxy := range runtime.outbound {
 		resources.outbound = append(resources.outbound, proxy)
@@ -1648,8 +1651,7 @@ func (runtime *wireGuardRuntime) claimCloseLocked() (wireGuardRuntimeCloseResour
 	runtime.inboundRefs = map[string]int{}
 	runtime.refInbound = map[string]map[string]struct{}{}
 	runtime.refs = map[string]int{}
-	runtime.device = nil
-	runtime.tunDevice = nil
+	runtime.plane = nil
 	return resources, true
 }
 
@@ -1660,10 +1662,8 @@ func (resources wireGuardRuntimeCloseResources) close() {
 	for _, proxy := range resources.inbound {
 		proxy.close()
 	}
-	if resources.device != nil {
-		resources.device.Close()
-	} else if resources.tunDevice != nil {
-		_ = resources.tunDevice.Close()
+	if resources.plane != nil {
+		resources.plane.close()
 	}
 	logf("wireguard runtime stopped tunnel=%d", resources.tunnelID)
 }
