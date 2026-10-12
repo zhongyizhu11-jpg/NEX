@@ -48,7 +48,7 @@ const 在案: Record<string, { 值: number[]; 因为: string }> = {
   },
   "styles/theme-cinnabar.css": {
     值: [-1],
-    因为: "「朱砂」主题的方格纸底：和极光、玫瑰同一个搭配，body::after 固定在 -1，#root 的 1 盖住它（顶上那道斜纹用的是 --fx-z-sticky 令牌）",
+    因为: "「朱砂」主题的方格纸底：和极光、玫瑰同一个搭配，body::after 固定在 -1，#root 的 1 盖住它",
   },
   "styles/workspace.css": {
     值: [1],

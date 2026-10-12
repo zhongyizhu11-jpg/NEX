@@ -69,10 +69,7 @@ export default function SecurityTab(_props: Record<string, never>) {
   return (
     <div className="space-y-4">
       <p className="text-[13px] leading-relaxed text-muted-foreground">
-        Agent 每隔几分钟把主机看一遍：新开的对外端口、新的登录账号、SSH 钥匙、sudo 和定时任务、新的系统服务和内核模块、
-        从临时目录运行或像在挖矿的进程、长时间占满 CPU 的陌生程序、SSH 登录，以及 Agent 自己有没有被替换。第一次只记下现状，
-        之后有变化才会出现在这里。「知道了」表示看过了，同样的事再发生会重新提醒；「这是我的」表示是你自己弄的，以后不再提醒；
-        「重新打开」撤销这两种标记。停止进程、隔离文件都要你确认后才会执行，账号和钥匙不会被自动改动。
+        Agent 每隔几分钟看一遍主机，和第一次记下的样子比，有变化才列在这里。「这是我的」以后不再提醒；停进程、隔离文件都要你确认。
       </p>
 
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center">

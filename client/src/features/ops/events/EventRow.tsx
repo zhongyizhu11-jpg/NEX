@@ -35,7 +35,7 @@ function Chip({ children, onClick, title }: { children: string; onClick?: () => 
   const className = "inline-flex max-w-[11rem] items-center truncate rounded-full bg-[var(--fx-l3-control-fill)] px-2 py-0.5 text-meta text-muted-foreground";
   if (!onClick) return <span className={className} title={title}>{children}</span>;
   return (
-    <button type="button" onClick={onClick} title={title} className={cn(className, "transition-colors hover:text-foreground")}>
+    <button type="button" onClick={onClick} title={title} style={{ minHeight: 0 }} className={cn(className, "transition-colors hover:text-foreground")}>
       {children}
     </button>
   );

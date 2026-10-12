@@ -36,7 +36,7 @@ html[data-ui-theme="cinnabar"] {
   --fx-raised: #ffffff;
   --fx-l2-group: #f1f1ef;
   --fx-l3-control: #ffffff;
-  --fx-l3-control-fill: #ffffff;
+  --fx-l3-control-fill: #ebebe8;
   --fx-sidebar: #fbfbfa;
   --fx-hover: rgb(10 10 11 / 4%);
   --fx-pressed: rgb(10 10 11 / 8%);
@@ -69,7 +69,7 @@ html.dark[data-ui-theme="cinnabar"] {
   --fx-raised: #18181b;
   --fx-l2-group: #151517;
   --fx-l3-control: #111113;
-  --fx-l3-control-fill: #111113;
+  --fx-l3-control-fill: #1b1b1e;
   --fx-sidebar: #0d0d0e;
   --fx-hover: rgb(255 255 255 / 5%);
   --fx-pressed: rgb(255 255 255 / 9%);
@@ -96,8 +96,7 @@ html.dark[data-ui-theme="cinnabar"] {
 /*
   和极光、玫瑰一样：<html> 自己有底色，body 不铺底，方格画在 body::after（固定一层，z-index -1，
   #root 的 1 盖住它；账本见 zIndexTiers.test.ts）。格子是两组 1px 的线性渐变，不是图片，滚动不重绘。
-  斜纹画在 body::before，固定在最上沿，和顶栏同一档（#root 自成层叠上下文，只有 1），所以压在
-  顶栏上面、被对话框盖住。
+  斜纹不用 body::before（那个被自定义壁纸占了，index.css），画成顶栏的一层背景图。
 */
 html[data-ui-theme="cinnabar"] body { background: transparent; }
 html[data-ui-theme="cinnabar"] body::after {
@@ -110,14 +109,12 @@ html[data-ui-theme="cinnabar"] body::after {
     linear-gradient(var(--fx-grid-line) 1px, transparent 1px) 0 0 / 32px 32px,
     linear-gradient(90deg, var(--fx-grid-line) 1px, transparent 1px) 0 0 / 32px 32px;
 }
-html[data-ui-theme="cinnabar"] body::before {
-  content: "";
-  position: fixed;
-  inset: 0 0 auto 0;
-  height: 3px;
-  z-index: var(--fx-z-sticky);
-  pointer-events: none;
-  background: repeating-linear-gradient(-45deg, var(--fx-cinnabar) 0 5px, transparent 5px 10px);
+/* 斜纹画在顶栏上沿（一层背景图叠在顶栏自己的底色上），iOS 上落在状态栏那一条里 */
+html[data-ui-theme="cinnabar"] .workspace-appbar {
+  background-image: repeating-linear-gradient(-45deg, var(--fx-cinnabar) 0 5px, transparent 5px 10px);
+  background-size: 100% 3px;
+  background-position: left top;
+  background-repeat: no-repeat;
 }
 html[data-ui-theme="cinnabar"] .auth-shell,
 html[data-ui-theme="cinnabar"] .public-home-shell,
@@ -286,6 +283,8 @@ html[data-ui-theme="cinnabar"] .fx-search-pill:focus-visible { border-color: var
 html[data-ui-theme="cinnabar"] [data-slot="button"]:not([data-icon-button]),
 html[data-ui-theme="cinnabar"] .fx-row-action,
 html[data-ui-theme="cinnabar"] .fx-filter-pill { border-radius: 3px !important; }
+html[data-ui-theme="cinnabar"] .workspace-main [data-icon-button],
+html[data-ui-theme="cinnabar"] .workspace-header-actions [data-slot="button"] { border-radius: 4px !important; }
 html[data-ui-theme="cinnabar"] [data-slot="badge"] { border-radius: 2px; letter-spacing: .04em; }
 /* 主按钮：主色渐变照旧（跟「默认配色」换），方角、字加宽 */
 html[data-ui-theme="cinnabar"] .workspace-main [data-slot="button"][data-variant="default"],
@@ -417,3 +416,9 @@ html[data-ui-theme="cinnabar"] .fx-save-dock-actions [data-slot="button"] { bord
 html[data-ui-theme="cinnabar"] .fx-brand-preview { border: 1px solid var(--fx-stroke-base); border-radius: 4px; box-shadow: none; }
 html[data-ui-theme="cinnabar"] .fx-brand-preview-name { font-family: inherit; font-size: 18px; line-height: 1.3; font-weight: 600; font-style: normal; letter-spacing: .12em; text-transform: uppercase; }
 html[data-ui-theme="cinnabar"] .fx-brand-preview-meta em { color: var(--fx-cinnabar); }
+
+/* ── 6. 页面里其它圆角：一律收成小方角（Umbrella 全站 3–4px）──── */
+/* 分段按钮组、证据框、提示条这类 Tailwind 圆角；圆点、头像、状态灯（rounded-full）不动 */
+html[data-ui-theme="cinnabar"] .workspace-main :is(.rounded-md, .rounded-lg, .rounded-\[6px\]) { border-radius: 3px; }
+html[data-ui-theme="cinnabar"] .workspace-main :is(.rounded-xl, .rounded-2xl, .rounded-3xl) { border-radius: 4px; }
+html[data-ui-theme="cinnabar"] [role="dialog"] :is(.rounded-md, .rounded-lg, .rounded-xl, .rounded-2xl) { border-radius: 3px; }
