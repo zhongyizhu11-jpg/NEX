@@ -1587,13 +1587,11 @@ func (session *wireGuardUDPProxySession) close() {
 	})
 }
 
-// proxyWireGuardConnections 在本机回环连接和隧道里的连接之间双向转发，left 是
-// accept 下来的、right 是拨出去的。走 relayTCP：一个方向结束时把半关闭传下去、另一个
-// 方向继续，而不是立刻关掉两边（以前那样会截断对端还没发完的数据）。内核 WireGuard
-// 数据面下两头都是真 TCP 连接，可以交给 sockmap；netstack 数据面的连接不是
-// *net.TCPConn，自动走用户态。
+// proxyWireGuardConnections 在本机回环连接和 netstack 连接之间双向转发。走
+// relayTCPBidirectional：一个方向结束时把半关闭传下去、另一个方向继续，而不是
+// 立刻关掉两边（以前那样会截断对端还没发完的数据）。
 func proxyWireGuardConnections(left, right net.Conn) {
-	relayTCP(left, right, tcpRelayHalfCloseLinger)
+	relayTCPBidirectional(left, right, tcpRelayHalfCloseLinger)
 }
 
 func (proxy *wireGuardOutboundProxy) close() {

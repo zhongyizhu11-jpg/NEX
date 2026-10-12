@@ -9,8 +9,6 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
-
-	"github.com/zhongyizhu11-jpg/NEX/sockmap"
 )
 
 type supportBundleRequest struct {
@@ -256,7 +254,6 @@ func collectSupportDiagnostics() map[string]any {
 		"mimicEnvironment":     mimicRuntimeEnvironment(),
 		"mimicRuntime":         mimicRuntimeDiagnostics(),
 		"fxpEndpointEvents":    fxpEndpointEventsSnapshot(),
-		"sockmap":              map[string]any{"status": sockmap.Status(), "stats": sockmap.Snapshot()},
 		"commands":             results,
 	}
 }
