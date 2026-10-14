@@ -1017,6 +1017,22 @@ function shouldLogAgentRuntimeDrift(hostId: number, ruleId: number) {
   return true;
 }
 
+/**
+ * 这条动作在不在「隧道正在下发」—— 是的话，这次心跳先不叫 Agent 立即重测（forceTcping），
+ * 免得测到一半搭好的隧道报超时。
+ *
+ * V2 隧道的 WireGuard 运行时动作（statusType = runtime）不算：它没有可核对的本地监听，
+ * knownRunning 永远是 false，每次心跳都会留在待办里。原来把它也算进来，带 V2 隧道的主机
+ * 就再也收不到立即重测：规则「诊断」等不到新的隧道段样本，18 秒后记成「端到端探测超时」，
+ * 卡片挂红，可隧道诊断明明是通的。运行时没起来时 Agent 的 WireGuard 探测本来就是「未就绪」
+ * 不上报，不会报假超时，所以不用在这里拦。
+ */
+export function isTunnelApplyBlockingProbe(action: any) {
+  if (!action || action.op !== "apply" || Number(action.ruleId || 0) > 0) return false;
+  if (action.statusType === "runtime") return false;
+  return action.statusType === "tunnel" || Number(action.tunnelId) > 0;
+}
+
 function shouldSendDesiredState(hostId: number, actions: any[], activeWorkActions: any[], now: number, configRevision = 0) {
   const id = Number(hostId);
   if (!Number.isFinite(id) || id <= 0) return actions.length > 0;
@@ -6823,11 +6839,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         appendPanelLog("info", `[AgentRecovery] host=${host.id} complete ready=${expected}/${expected} bootId=${agentBootId || "-"} pid=${agentProcessId || "-"}`);
       }
     }
-    const hasTunnelApplyActions = activeWorkActions.some((action: any) => (
-      action.op === "apply"
-      && !Number(action.ruleId || 0)
-      && (action.statusType === "tunnel" || Number(action.tunnelId) > 0)
-    ));
+    const hasTunnelApplyActions = activeWorkActions.some(isTunnelApplyBlockingProbe);
     const hasPendingMultiHopRuntime = (hostTunnels as any[]).some((tunnel: any) => {
       const hops = tunnelHopsByTunnelId.get(Number(tunnel.id));
       return runtimeBool(tunnel?.isEnabled)

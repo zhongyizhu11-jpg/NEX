@@ -20,6 +20,7 @@ import {
   stableDesiredStateHash,
   withDesiredStateConfigHash,
   normalizeAgentRuntimeBoolean,
+  isTunnelApplyBlockingProbe,
 } from "./agentHeartbeatRoute";
 import { normalizeTransportTuningInput } from "./routers/rules.crud";
 import { hasAgentVersionChanged } from "./agentRouteUtils";
@@ -798,4 +799,21 @@ test("检测 IP 手改过（addressManual）：心跳上报的地址、面板看
     { ip: "43.136.54.65", ipv4: "43.136.54.65", ipv6: null },
   );
   assert.equal(mergeAgentReportedAddress({ ipv4: "134.175.173.171" }, { ...existing, addressManual: false }).ipv4, "134.175.173.171");
+});
+
+test("V2 WireGuard runtime action does not hold back a forced re-probe", () => {
+  // 心跳每次都会带上 V2 隧道的 WireGuard 运行时动作（knownRunning 恒为 false）。
+  // 它若算作「隧道正在下发」，带 V2 隧道的主机永远收不到立即重测，规则诊断等不到隧道段样本就记成超时。
+  const wireGuardRuntime = {
+    tunnelId: 7, statusType: "runtime", ruleId: 0, op: "apply", forwardType: "forwardx-wireguard",
+    sourcePort: 0, knownRunning: false,
+  };
+  assert.equal(isTunnelApplyBlockingProbe(wireGuardRuntime), false);
+  // 真正的隧道下发照旧要拦：半搭好的隧道测出来是假超时。
+  assert.equal(isTunnelApplyBlockingProbe({ tunnelId: 7, statusType: "tunnel", ruleId: 0, op: "apply", forwardType: "forwardx-tunnel", sourcePort: 31000 }), true);
+  assert.equal(isTunnelApplyBlockingProbe({ tunnelId: 7, ruleId: 0, op: "apply", forwardType: "gost-tunnel-exit", sourcePort: 31000 }), true);
+  // 规则动作、删除动作、和隧道无关的运行时同步都不拦。
+  assert.equal(isTunnelApplyBlockingProbe({ tunnelId: 7, statusType: "rule", ruleId: 12, op: "apply" }), false);
+  assert.equal(isTunnelApplyBlockingProbe({ tunnelId: 7, statusType: "tunnel", ruleId: 0, op: "remove" }), false);
+  assert.equal(isTunnelApplyBlockingProbe({ tunnelId: 0, statusType: "runtime", ruleId: 0, op: "apply", forwardType: "gost-runtime-sync" }), false);
 });
