@@ -38,7 +38,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.219"
+var Version = "2.2.220"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -1024,6 +1024,8 @@ type localRuntimeStatePayload struct {
 	Rules    []localRuntimeRuleState    `json:"rules,omitempty"`
 	Tunnels  []localRuntimeTunnelState  `json:"tunnels,omitempty"`
 	Services []localRuntimeServiceState `json:"services,omitempty"`
+	// WireGuardPlanes 是每条跑着的 V2 隧道的数据面，入口机上也报（见 localRuntimeWireGuardPlaneState）。
+	WireGuardPlanes []localRuntimeWireGuardPlaneState `json:"wireGuardPlanes,omitempty"`
 }
 
 type localRuntimeRuleState struct {
@@ -1036,6 +1038,13 @@ type localRuntimeRuleState struct {
 	Protocol         string `json:"protocol,omitempty"`
 	TransportVersion string `json:"transportVersion,omitempty"`
 	Ready            bool   `json:"ready"`
+}
+
+// localRuntimeWireGuardPlaneState 是一条跑着的 V2 隧道的数据面（Agent 2.2.220 起单独上报：
+// 入口机上没有隧道监听端口，以前只有出口能通过 tunnels 报出数据面）。
+type localRuntimeWireGuardPlaneState struct {
+	TunnelID int    `json:"tunnelId"`
+	Plane    string `json:"plane"`
 }
 
 type localRuntimeTunnelState struct {
@@ -2381,7 +2390,7 @@ func readLocalRuntimeStatePayload() localRuntimeStatePayload {
 		}
 		return tunnels[i].Port < tunnels[j].Port
 	})
-	return localRuntimeStatePayload{Rules: rules, Tunnels: tunnels, Services: readiness.serviceStates}
+	return localRuntimeStatePayload{Rules: rules, Tunnels: tunnels, Services: readiness.serviceStates, WireGuardPlanes: wireGuardRuntimePlaneKinds()}
 }
 
 func activeFXPEntrySpecsSnapshot() []fxpSpec {
@@ -14374,6 +14383,8 @@ const protocolGuardUDPReadBuffer = 4 << 20
 
 type protocolGuardUDPSession struct {
 	target net.Conn
+	// batch 是目标套接字的批量收发句柄（Linux），nil 就逐包收发。
+	batch *udpBatchConn
 	// last 是最近一次收发的 UnixNano。回包方向每个包都要更新，用原子量避免
 	// 每个包都去抢整张会话表的锁。
 	last atomic.Int64
@@ -14389,9 +14400,10 @@ func (session *protocolGuardUDPSession) idleFor(now time.Time) time.Duration {
 
 // evictProtocolGuardUDPSessionLocked 在会话数到上限时挤掉空闲最久、且空闲超过
 // protocolGuardUDPEvictMinIdle 的会话。调用方持有 sessionMu。返回被挤掉的会话
-// （调用方在锁外关闭它的连接），没有可挤的返回 nil。
-func evictProtocolGuardUDPSessionLocked(sessions map[string]*protocolGuardUDPSession, now time.Time) *protocolGuardUDPSession {
-	var oldestKey string
+// （调用方在锁外关闭它的连接），没有可挤的返回 nil。键的类型不限：会话表以来源地址
+// （netip.AddrPort）为键，测试用字符串键。
+func evictProtocolGuardUDPSessionLocked[K comparable](sessions map[K]*protocolGuardUDPSession, now time.Time) *protocolGuardUDPSession {
+	var oldestKey K
 	var oldest *protocolGuardUDPSession
 	var oldestLast int64
 	for key, session := range sessions {
@@ -14408,7 +14420,8 @@ func evictProtocolGuardUDPSessionLocked(sessions map[string]*protocolGuardUDPSes
 }
 
 func (s *protocolGuardServer) serveUDP() {
-	sessions := map[string]*protocolGuardUDPSession{}
+	// 会话表以来源地址（值类型）为键：每个包不再 clientAddr.String()，也不再分配 net.Addr。
+	sessions := map[netip.AddrPort]*protocolGuardUDPSession{}
 	var sessionMu sync.Mutex
 	closeSessions := func() {
 		sessionMu.Lock()
@@ -14448,24 +14461,35 @@ func (s *protocolGuardServer) serveUDP() {
 		}
 	}()
 
-	buf := make([]byte, 65535)
 	var backoff serveLoopBackoff
+	// Linux 上一次系统调用收一批（recvmmsg），见 udp_batch_linux.go。
+	if listener := newUDPBatchConn(s.udpConn); listener != nil {
+		s.serveUDPBatch(listener, sessions, &sessionMu, &backoff)
+		return
+	}
+	udpConn, _ := s.udpConn.(*net.UDPConn)
+	buf := make([]byte, 65535)
 	for {
-		n, clientAddr, err := s.udpConn.ReadFrom(buf)
-		if err != nil {
-			exit, fatal := serveLoopHandleError(s.done, &backoff, err, func(err error, suppressed int) {
-				logf("protocol guard udp read rule=%d suppressed=%d: %v", s.rule.RuleID, suppressed, err)
-			})
-			if fatal {
-				s.abandonAfterServeFailure("udp read", err)
+		var n int
+		var client netip.AddrPort
+		var err error
+		if udpConn != nil {
+			n, client, err = udpConn.ReadFromUDPAddrPort(buf)
+		} else {
+			var addr net.Addr
+			n, addr, err = s.udpConn.ReadFrom(buf)
+			if udpAddr, ok := addr.(*net.UDPAddr); ok {
+				client = udpAddr.AddrPort()
 			}
-			if exit {
+		}
+		if err != nil {
+			if s.handleUDPReadError(err, &backoff) {
 				return
 			}
 			continue
 		}
 		backoff.success()
-		if n <= 0 || clientAddr == nil {
+		if n <= 0 || !client.IsValid() {
 			continue
 		}
 		// The loop consumes the packet synchronously before the next ReadFrom,
@@ -14482,36 +14506,124 @@ func (s *protocolGuardServer) serveUDP() {
 			}
 			continue
 		}
-		key := clientAddr.String()
 		now := time.Now()
-		sessionMu.Lock()
-		session := sessions[key]
-		sessionMu.Unlock()
+		session := s.udpSessionFor(client, now, sessions, &sessionMu, nil)
 		if session == nil {
-			session = s.openUDPSession(key, clientAddr, now, sessions, &sessionMu)
-			if session == nil {
-				continue
-			}
+			continue
 		}
 		session.touch(now)
-		target := session.target
-		if _, err := target.Write(packet); err != nil {
-			sessionMu.Lock()
-			if sessions[key] == session {
-				delete(sessions, key)
+		if _, err := session.target.Write(packet); err != nil {
+			s.failUDPSession(client, session, sessions, &sessionMu, err)
+		}
+	}
+}
+
+// handleUDPReadError 处理监听读出错，返回 true 表示读循环该退出。
+func (s *protocolGuardServer) handleUDPReadError(err error, backoff *serveLoopBackoff) bool {
+	exit, fatal := serveLoopHandleError(s.done, backoff, err, func(err error, suppressed int) {
+		logf("protocol guard udp read rule=%d suppressed=%d: %v", s.rule.RuleID, suppressed, err)
+	})
+	if fatal {
+		s.abandonAfterServeFailure("udp read", err)
+	}
+	return exit
+}
+
+// serveUDPBatch 是 serveUDP 的批量版：一次收一批，同一来源连着的几个包一次写到它的目标。
+func (s *protocolGuardServer) serveUDPBatch(listener *udpBatchConn, sessions map[netip.AddrPort]*protocolGuardUDPSession, sessionMu *sync.Mutex, backoff *serveLoopBackoff) {
+	for {
+		batch, n, err := listener.recv()
+		if err != nil {
+			if s.handleUDPReadError(err, backoff) {
+				return
 			}
-			sessionMu.Unlock()
-			_ = target.Close()
-			if shouldLogAgentReport(fmt.Sprintf("protocol-guard-udp-write:%d", s.rule.RuleID), agentReportLogInterval) {
-				logf("protocol guard udp write target rule=%d client=%s: %v", s.rule.RuleID, key, err)
+			continue
+		}
+		backoff.success()
+		now := time.Now()
+		start := 0
+		for i := 1; i <= n; i++ {
+			if i < n && batch.addr(i) == batch.addr(start) {
+				continue
+			}
+			if !s.forwardUDPRun(batch, start, i, now, sessions, sessionMu, listener) {
+				putUDPBatch(batch)
+				return
+			}
+			start = i
+		}
+		putUDPBatch(batch)
+	}
+}
+
+// forwardUDPRun 把同一来源连着的 [from, to) 几个包写到它的会话目标；几个包就一次 sendmmsg。
+// 返回 false 表示守护正在收尾，读循环该退出。
+func (s *protocolGuardServer) forwardUDPRun(batch *udpBatch, from int, to int, now time.Time, sessions map[netip.AddrPort]*protocolGuardUDPSession, sessionMu *sync.Mutex, listener *udpBatchConn) bool {
+	// 限速等待照旧逐包做（限速器全规则共享、可热换，没限速时立刻返回）。等不成只在收尾
+	// 时发生：这一串包丢掉。
+	for i := from; i < to; i++ {
+		if err := s.waitRate(s.ctx, protocolGuardRateIn, len(batch.packet(i))); err != nil {
+			select {
+			case <-s.done:
+				return false
+			default:
+			}
+			return true
+		}
+	}
+	if s.rateLimiter(protocolGuardRateIn) != nil {
+		// 等过限速器，时间戳按等完的时刻记。
+		now = time.Now()
+	}
+	client := batch.addr(from)
+	session := s.udpSessionFor(client, now, sessions, sessionMu, listener)
+	if session == nil {
+		return true
+	}
+	session.touch(now)
+	var err error
+	if to-from > 1 && session.batch != nil {
+		err = session.batch.send(batch, from, to)
+	} else {
+		for i := from; i < to; i++ {
+			if _, err = session.target.Write(batch.packet(i)); err != nil {
+				break
 			}
 		}
+	}
+	if err != nil {
+		s.failUDPSession(client, session, sessions, sessionMu, err)
+	}
+	return true
+}
+
+// udpSessionFor 查来源对应的会话，没有就建一个。
+func (s *protocolGuardServer) udpSessionFor(client netip.AddrPort, now time.Time, sessions map[netip.AddrPort]*protocolGuardUDPSession, sessionMu *sync.Mutex, listener *udpBatchConn) *protocolGuardUDPSession {
+	sessionMu.Lock()
+	session := sessions[client]
+	sessionMu.Unlock()
+	if session != nil {
+		return session
+	}
+	return s.openUDPSession(client, now, sessions, sessionMu, listener)
+}
+
+// failUDPSession 在往目标写失败后关掉这个会话：下一个包重新拨。
+func (s *protocolGuardServer) failUDPSession(client netip.AddrPort, session *protocolGuardUDPSession, sessions map[netip.AddrPort]*protocolGuardUDPSession, sessionMu *sync.Mutex, err error) {
+	sessionMu.Lock()
+	if sessions[client] == session {
+		delete(sessions, client)
+	}
+	sessionMu.Unlock()
+	_ = session.target.Close()
+	if shouldLogAgentReport(fmt.Sprintf("protocol-guard-udp-write:%d", s.rule.RuleID), agentReportLogInterval) {
+		logf("protocol guard udp write target rule=%d client=%s: %v", s.rule.RuleID, client, err)
 	}
 }
 
 // openUDPSession 为新来源建会话。拨号在锁外做：以前拨号时一直拿着 sessionMu，
 // 期间所有会话的回包协程更新时间戳、清理协程都得等它。
-func (s *protocolGuardServer) openUDPSession(key string, clientAddr net.Addr, now time.Time, sessions map[string]*protocolGuardUDPSession, sessionMu *sync.Mutex) *protocolGuardUDPSession {
+func (s *protocolGuardServer) openUDPSession(key netip.AddrPort, now time.Time, sessions map[netip.AddrPort]*protocolGuardUDPSession, sessionMu *sync.Mutex, listener *udpBatchConn) *protocolGuardUDPSession {
 	sessionMu.Lock()
 	full := len(sessions) >= protocolGuardUDPMaxSessions
 	sessionMu.Unlock()
@@ -14526,6 +14638,9 @@ func (s *protocolGuardServer) openUDPSession(key string, clientAddr net.Addr, no
 		return nil
 	}
 	session := &protocolGuardUDPSession{target: target}
+	if listener != nil {
+		session.batch = newUDPBatchConn(target)
+	}
 	session.touch(now)
 	sessionMu.Lock()
 	if existing := sessions[key]; existing != nil {
@@ -14550,12 +14665,12 @@ func (s *protocolGuardServer) openUDPSession(key string, clientAddr net.Addr, no
 		_ = evicted.target.Close()
 		s.logUDPSessionLimit(true)
 	}
-	go s.copyUDPToClient(key, clientAddr, session, sessions, sessionMu)
+	go s.copyUDPToClient(key, session, sessions, sessionMu, listener)
 	return session
 }
 
 // makeUDPSessionRoom 在拨号前先腾位置，腾不出来就不必白拨一次。
-func (s *protocolGuardServer) makeUDPSessionRoom(sessions map[string]*protocolGuardUDPSession, sessionMu *sync.Mutex, now time.Time) bool {
+func (s *protocolGuardServer) makeUDPSessionRoom(sessions map[netip.AddrPort]*protocolGuardUDPSession, sessionMu *sync.Mutex, now time.Time) bool {
 	sessionMu.Lock()
 	if len(sessions) < protocolGuardUDPMaxSessions {
 		sessionMu.Unlock()
@@ -14583,21 +14698,59 @@ func (s *protocolGuardServer) logUDPSessionLimit(evicted bool) {
 	logf("protocol guard udp session limit reached rule=%d sessions=%d", s.rule.RuleID, protocolGuardUDPMaxSessions)
 }
 
-func (s *protocolGuardServer) copyUDPToClient(key string, clientAddr net.Addr, session *protocolGuardUDPSession, sessions map[string]*protocolGuardUDPSession, sessionMu *sync.Mutex) {
+func (s *protocolGuardServer) copyUDPToClient(key netip.AddrPort, session *protocolGuardUDPSession, sessions map[netip.AddrPort]*protocolGuardUDPSession, sessionMu *sync.Mutex, listener *udpBatchConn) {
 	target := session.target
-	buf := getAgentByteBuffer(65535)
-	defer putAgentByteBuffer(buf)
+	// 目标和监听都有批量句柄（Linux）就一次收一批、一次 sendmmsg 原路写回；等回包期间不占缓冲。
+	// 否则逐包：一个会话常驻一个 64 KiB 缓冲。
+	batched := session.batch != nil && listener != nil
+	var buf []byte
+	if !batched {
+		buf = getAgentByteBuffer(65535)
+		defer putAgentByteBuffer(buf)
+	}
+	udpConn, _ := s.udpConn.(*net.UDPConn)
+	// client 只给监听不是 *net.UDPConn 的情况（测试替身）回包用；正常路径用 key 直接回。
+	var client net.Addr
+	if udpConn == nil {
+		client = net.UDPAddrFromAddrPort(key)
+	}
 	for {
 		_ = target.SetReadDeadline(time.Now().Add(protocolGuardUDPIdleTimeout))
-		n, err := target.Read(buf)
-		if err != nil {
-			break
-		}
-		if n > 0 {
-			if err := s.waitRate(s.ctx, protocolGuardRateOut, n); err != nil {
+		if batched {
+			batch, n, err := session.batch.recv()
+			if err != nil {
 				break
 			}
-			_, _ = s.udpConn.WriteTo(buf[:n], clientAddr)
+			// 出方向的限速照旧逐包等。
+			waited := true
+			for i := 0; i < n; i++ {
+				if err := s.waitRate(s.ctx, protocolGuardRateOut, len(batch.packet(i))); err != nil {
+					waited = false
+					break
+				}
+			}
+			if waited {
+				_ = listener.sendTo(batch, n, key)
+			}
+			putUDPBatch(batch)
+			if !waited {
+				break
+			}
+		} else {
+			n, err := target.Read(buf)
+			if err != nil {
+				break
+			}
+			if n > 0 {
+				if err := s.waitRate(s.ctx, protocolGuardRateOut, n); err != nil {
+					break
+				}
+				if udpConn != nil {
+					_, _ = udpConn.WriteToUDPAddrPort(buf[:n], key)
+				} else {
+					_, _ = s.udpConn.WriteTo(buf[:n], client)
+				}
+			}
 		}
 		// 会话被挤掉或清理后连接已关闭，下一次 Read 会出错退出；这里更新一个
 		// 已经不在表里的会话时间戳没有副作用，所以不用再拿锁核对。

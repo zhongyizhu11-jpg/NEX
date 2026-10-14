@@ -58,6 +58,8 @@ type wireGuardKernelPlane struct {
 	mu     sync.Mutex
 	routes map[string]string // peer public key -> /32 address with a route
 	closed bool
+	// passthroughInstalled 记着这个接口装过直通 / MSS 规则，拆接口时才需要去清。
+	passthroughInstalled bool
 }
 
 func wireGuardKernelInterfaceName(tunnelID int) string {
@@ -418,13 +420,124 @@ func (plane *wireGuardKernelPlane) listenUDP(addr *net.UDPAddr) (net.PacketConn,
 	return &wireGuardKernelPacketConn{PacketConn: conn, release: func() { plane.revokeInbound("udp", port) }}, nil
 }
 
+// iptables 直接 exec（不经 shell），带 xtables 锁等待参数。
+func (plane *wireGuardKernelPlane) iptables(table string, args ...string) (string, error) {
+	full := append([]string{"iptables"}, iptablesWaitArgs()...)
+	full = append(full, "-t", table)
+	full = append(full, args...)
+	return plane.run(full...)
+}
+
+// syncPassthrough 把直通表同步进 iptables：按注释找出已装的，多的删、缺的补。出口角色的条目
+// 产生 DNAT / MASQUERADE / FORWARD 放行；只要表非空（哪怕只有入口角色的条目）就顺带装上
+// 接口出方向的 MSS 钳制并打开转发。表空了就把本接口的直通规则全清掉。
+func (plane *wireGuardKernelPlane) syncPassthrough(spec wireGuardSpec) error {
+	plane.mu.Lock()
+	closed := plane.closed
+	plane.mu.Unlock()
+	if closed {
+		return net.ErrClosed
+	}
+	peers := map[string]string{}
+	for _, peer := range spec.Peers {
+		peers[peer.ID] = peer.Address
+	}
+	desired := wireGuardPassthroughFirewallRules(plane.name, plane.address.String(), peers, spec.Passthrough)
+	if len(spec.Passthrough) > 0 {
+		desired = append(desired, wireGuardPassthroughMSSRules(plane.name)...)
+	}
+	if len(desired) == 0 {
+		plane.mu.Lock()
+		installed := plane.passthroughInstalled
+		plane.mu.Unlock()
+		if installed {
+			plane.clearPassthrough()
+		}
+		return nil
+	}
+	if !wireGuardKernelIptablesPresent() {
+		return errors.New("iptables is unavailable, kernel passthrough rules cannot be installed")
+	}
+	plane.mu.Lock()
+	plane.passthroughInstalled = true
+	plane.mu.Unlock()
+	if _, err := plane.run("sysctl", "-w", "net.ipv4.ip_forward=1"); err != nil {
+		return fmt.Errorf("enable ip_forward: %w", err)
+	}
+	want := map[string]map[string]bool{}
+	for _, rule := range desired {
+		key := rule.table + "/" + rule.chain
+		if want[key] == nil {
+			want[key] = map[string]bool{}
+		}
+		want[key][rule.comment] = true
+	}
+	var firstErr error
+	installed := map[string]map[string][]string{}
+	for _, chain := range wireGuardPassthroughChains {
+		key := chain[0] + "/" + chain[1]
+		listing, err := plane.iptables(chain[0], "-S", chain[1])
+		if err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("list %s %s: %w", chain[0], chain[1], err)
+			}
+			continue
+		}
+		installed[key] = wireGuardPassthroughInstalledComments(listing, plane.name)
+		for comment, args := range installed[key] {
+			if want[key][comment] {
+				continue
+			}
+			if _, err := plane.iptables(chain[0], append([]string{"-D", chain[1]}, args...)...); err != nil && firstErr == nil {
+				firstErr = fmt.Errorf("remove stale passthrough rule %s: %w", comment, err)
+			}
+		}
+	}
+	for _, rule := range desired {
+		key := rule.table + "/" + rule.chain
+		if installed[key] != nil && installed[key][rule.comment] != nil {
+			continue
+		}
+		// 直通规则匹配得很窄（对端地址 + 本机地址 + 端口），插到链首不影响别的规则，
+		// 反而躲开了 firewalld / Docker 放在链尾的 REJECT / DROP。
+		if _, err := plane.iptables(rule.table, append([]string{"-I", rule.chain}, rule.args...)...); err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("install passthrough rule %s: %w", rule.comment, err)
+		}
+	}
+	return firstErr
+}
+
+// clearPassthrough 删掉本接口的全部直通 / MSS 规则。
+func (plane *wireGuardKernelPlane) clearPassthrough() {
+	if !wireGuardKernelIptablesPresent() {
+		return
+	}
+	for _, chain := range wireGuardPassthroughChains {
+		listing, err := plane.iptables(chain[0], "-S", chain[1])
+		if err != nil {
+			continue
+		}
+		for _, args := range wireGuardPassthroughInstalledComments(listing, plane.name) {
+			_, _ = plane.iptables(chain[0], append([]string{"-D", chain[1]}, args...)...)
+		}
+	}
+	plane.mu.Lock()
+	plane.passthroughInstalled = false
+	plane.mu.Unlock()
+}
+
 // teardown 删接口：地址、路由跟着接口一起消失。端口放行规则由各监听的 Close 收回；
-// 接口没了以后残留的规则也匹配不到任何包。
+// 接口没了以后残留的规则也匹配不到任何包。直通规则例外：它们按地址匹配，接口名
+// 以后可能被同一条隧道重建后复用，所以拆接口前先清掉。
 func (plane *wireGuardKernelPlane) teardown() {
 	plane.mu.Lock()
 	plane.closed = true
 	plane.routes = map[string]string{}
+	installed := plane.passthroughInstalled
 	plane.mu.Unlock()
+	if installed {
+		plane.clearPassthrough()
+	}
 	_, _ = plane.run("ip", "link", "del", "dev", plane.name)
 	if plane.client != nil {
 		_ = plane.client.Close()

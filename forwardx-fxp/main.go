@@ -114,7 +114,12 @@ type secureConn struct {
 	// （hello、首包）合成一个 TCP 段发出去；握手确认也不等，ackPending 让第一次
 	// readFrame 先把它读掉再交出数据帧。每一跳因此省掉一个往返。
 	pendingPrefix []byte
-	// readBuf 是上一帧解密用的池缓冲，下一次读帧前归还。只由读协程访问。
+	// reader 是加密侧的读缓冲：一次系统调用带回好几帧，帧内容在缓冲里就地解密
+	// （见 frame_reader.go）。连接上所有的读都走它 —— 握手确认、hello、数据帧，
+	// 绕开它直接读 conn 会把它已经读进缓冲的字节漏掉。只由读协程访问。
+	reader *fxpFrameReader
+	// readBuf 是上一帧解密用的池缓冲，只有装不进读缓冲的大帧（多路径的大块）才
+	// 用到，下一次读帧前归还。只由读协程访问。
 	readBuf     []byte
 	ackPending  bool
 	ackTunnelID int
@@ -137,6 +142,13 @@ type secureConn struct {
 	offeredAEADs []string
 	// shaper 是这条连接所属方向的链路整形器（可能为 nil）：写帧前先领额度。
 	shaper *linkShaper
+	// 封解帧时交给 AEAD 的 nonce 和 4 字节长度的草稿。传给接口方法的切片会逃逸
+	// 到堆上，以前每帧为此分配六次小块；放在连接结构里就一次都不用。写的那份
+	// 由 writeMu 保护，读的那份只有读协程碰。
+	writeNonce    [12]byte
+	writeLenPlain [4]byte
+	readNonce     [12]byte
+	readLenPlain  [4]byte
 }
 
 // fxpAckError 表示对端没有确认握手：连不通的黑洞、拒绝了密钥、半路断开。
@@ -207,7 +219,7 @@ const (
 	fxpUDPIdleTimeout    = 5 * time.Minute
 	fxpProtocolSampleMax = 512
 	fxpMasterContext     = "forwardx-fxp-v2 master"
-	fxpRuntimeVersion    = "2.2.131"
+	fxpRuntimeVersion    = "2.2.132"
 	fxpFallbackRetry     = 5 * time.Second
 	// A node that stays down is re-probed on a growing delay, because probing a
 	// peer that accepts but never answers costs a whole handshake timeout.
@@ -2186,16 +2198,26 @@ func relayBidir(up *secureConn, down frameConn) error {
 	})
 }
 
+// relayCopy 把一边读到的帧解开、封上另一边的密钥写出去。一次读到几帧就合成一次
+// 写：中转每帧少一次系统调用。
 func relayCopy(src, dst frameConn) error {
+	var scratch [fxpFrameBatchMax][]byte
 	for {
-		frame, err := src.readFrame()
+		frames, err := src.readFrames(scratch[:0], fxpFrameBatchMax)
 		if err != nil {
 			return err
 		}
-		if len(frame) == 0 {
-			return dst.writeFrame(nil)
+		for i, frame := range frames {
+			if len(frame) == 0 {
+				if i > 0 {
+					if err := dst.writeFrames(frames[:i]...); err != nil {
+						return err
+					}
+				}
+				return dst.writeFrame(nil)
+			}
 		}
-		if err := dst.writeFrame(frame); err != nil {
+		if err := dst.writeFrames(frames...); err != nil {
 			return err
 		}
 	}
@@ -2278,8 +2300,11 @@ func copyPlainToSecure(dst frameConn, src net.Conn, limiter *limiter, counter *a
 }
 
 func copyPlainToSecureWithPolicy(dst frameConn, src net.Conn, limiter *limiter, counter *atomic.Uint64, policy protocolPolicy, onBlock func(string), initialSample []byte) error {
-	buf := getFXPByteBuffer(fxpCopyChunkSize)
+	// 一次读两帧的量：内核里攒着的有多少拿多少，读到多少立刻封帧写出，超过一帧
+	// 就切成几帧合成一次 write。没有攒着等的环节，小写不会被耽搁。
+	buf := getFXPByteBuffer(fxpCopyReadSize)
 	defer putFXPByteBuffer(buf)
+	var frames [fxpCopyBatchFrames][]byte
 	sample := make([]byte, 0, fxpProtocolSampleMax)
 	initialSample = trimLeadingHTTPBlankLines(initialSample)
 	if len(initialSample) > 0 {
@@ -2318,7 +2343,13 @@ func copyPlainToSecureWithPolicy(dst frameConn, src net.Conn, limiter *limiter, 
 				return fmt.Errorf("protocol blocked: %s", proto)
 			}
 			limiter.wait(n)
-			if wErr := dst.writeFrame(chunk); wErr != nil {
+			batch := frames[:0]
+			for len(chunk) > fxpCopyChunkSize {
+				batch = append(batch, chunk[:fxpCopyChunkSize])
+				chunk = chunk[fxpCopyChunkSize:]
+			}
+			batch = append(batch, chunk)
+			if wErr := dst.writeFrames(batch...); wErr != nil {
 				return wErr
 			}
 			if counter != nil {
@@ -2335,8 +2366,9 @@ func copyPlainToSecureWithPolicy(dst frameConn, src net.Conn, limiter *limiter, 
 }
 
 func copySecureToPlain(dst net.Conn, src frameConn, limiter *limiter, counter *atomic.Uint64) error {
+	var scratch [fxpFrameBatchMax][]byte
 	for {
-		frame, err := src.readFrame()
+		frames, err := src.readFrames(scratch[:0], fxpFrameBatchMax)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				// 正常结束是一个空帧（下面那个分支）。没等到空帧就读到 EOF，是上一跳
@@ -2346,20 +2378,43 @@ func copySecureToPlain(dst net.Conn, src frameConn, limiter *limiter, counter *a
 			}
 			return err
 		}
-		if len(frame) == 0 {
+		// 一批里最后那帧可能是结束的空帧：前面的照常写出，然后半关明文侧。
+		total, ended := 0, false
+		for i, frame := range frames {
+			if len(frame) == 0 {
+				frames, ended = frames[:i], true
+				break
+			}
+			total += len(frame)
+		}
+		if total > 0 {
+			limiter.wait(total)
+			// 往明文侧（入口的客户端、出口的目标）发的字节走主机公网出口整形。
+			linkShaperEgress().wait(total)
+			if err := writePlainFrames(dst, frames); err != nil {
+				return err
+			}
+			if counter != nil {
+				counter.Add(uint64(total))
+			}
+		}
+		if ended {
 			closeWriteConn(dst)
 			return nil
 		}
-		limiter.wait(len(frame))
-		// 往明文侧（入口的客户端、出口的目标）发的字节走主机公网出口整形。
-		linkShaperEgress().wait(len(frame))
-		if _, err := dst.Write(frame); err != nil {
-			return err
-		}
-		if counter != nil {
-			counter.Add(uint64(len(frame)))
-		}
 	}
+}
+
+// writePlainFrames 把一批帧写到明文侧：一帧就直接写，几帧就 writev 一次写出
+// （net.Buffers 在 TCP 连接上走 writev，其它连接退化成逐帧写）。
+func writePlainFrames(dst net.Conn, frames [][]byte) error {
+	if len(frames) == 1 {
+		_, err := dst.Write(frames[0])
+		return err
+	}
+	buffers := net.Buffers(frames)
+	_, err := buffers.WriteTo(dst)
+	return err
 }
 
 type limiter struct {
@@ -2541,7 +2596,7 @@ func (c *secureConn) consumeHandshakeAck() error {
 	var finalSalt []byte
 	if err == nil {
 		serverSalt := make([]byte, fxpSaltSize)
-		if _, err = io.ReadFull(c.conn, serverSalt); err == nil {
+		if err = c.reader.readFull(serverSalt); err == nil {
 			finalSalt = fxpFinalSessionSalt(c.handshakeSalt, serverSalt)
 			final, err = deriveFXPSessionAEADs(c.handshakeMaster, finalSalt, fxpFinalSessionInfo(c.handshakeWire), c.handshakeWire, fxpAEADAESGCM)
 		}
@@ -2576,6 +2631,14 @@ func (c *secureConn) consumeHandshakeAck() error {
 		c.writeMu.Unlock()
 	}
 	c.handshakeMaster, c.handshakeSalt = nil, nil
+	if err != nil {
+		// 确认没过，这条连接到此为止。
+		c.reader.drop()
+	} else {
+		// 确认帧已经解析完了，读缓冲空着就先还回去：连接池里预热好的连接可能要
+		// 空等很久才轮到第一次读。
+		c.reader.release()
+	}
 	if err == nil {
 		if clearErr := c.conn.SetReadDeadline(time.Time{}); clearErr != nil && !isClosedErr(clearErr) {
 			err = clearErr
@@ -2615,18 +2678,33 @@ func newServerSecureConn(conn net.Conn, cfg config) (*secureConn, error) {
 }
 
 func newServerSecureConnWithWires(conn net.Conn, cfg config, wires []fxpWireContext) (*secureConn, error) {
+	// 客户端把 salt、握手帧、hello、首包合成一个段发来（流水线握手），读缓冲一次
+	// 系统调用通常就全读进来了；握手之后它继续给这条连接的帧用。握手不成就把
+	// 缓冲还回池里，连接由调用方关掉。
+	reader := newFXPFrameReader(conn)
+	sec, err := newServerSecureConnWithReader(conn, cfg, wires, reader)
+	if err != nil {
+		reader.drop()
+		return nil, err
+	}
+	return sec, nil
+}
+
+func newServerSecureConnWithReader(conn net.Conn, cfg config, wires []fxpWireContext, reader *fxpFrameReader) (*secureConn, error) {
 	if err := setFXPConnDeadline(conn, fxpServerHandshakeTimeout); err != nil {
 		return nil, err
 	}
-	salt := make([]byte, fxpSaltSize)
-	if _, err := io.ReadFull(conn, salt); err != nil {
-		return nil, err
-	}
-	var lenCipher [64]byte
+	// salt 和握手帧的长度一次读进来（握手阶段用的是小缓冲，没认证的连接占不了
+	// 多少内存）；握手帧本身走 readFull，长度是对端说的、还没认证，不按它借大缓冲。
 	lenSize := 4 + 16
-	if _, err := io.ReadFull(conn, lenCipher[:lenSize]); err != nil {
+	head, err := reader.peek(fxpSaltSize + lenSize)
+	if err != nil {
 		return nil, err
 	}
+	salt := append(make([]byte, 0, fxpSaltSize), head[:fxpSaltSize]...)
+	var lenCipher [64]byte
+	copy(lenCipher[:lenSize], head[fxpSaltSize:])
+	reader.discard(fxpSaltSize + lenSize)
 	var lastErr error
 	for _, wire := range wires {
 		sec, err := newSessionSecureConnWithWire(conn, cfg.Key, salt, false, wire)
@@ -2634,13 +2712,14 @@ func newServerSecureConnWithWires(conn net.Conn, cfg config, wires []fxpWireCont
 			lastErr = err
 			continue
 		}
+		sec.reader = reader
 		n, err := sec.decryptFrameLength(0, lenCipher[:lenSize])
 		if err != nil {
 			lastErr = err
 			continue
 		}
 		dataCipher := getFXPByteBuffer(int(n) + sec.dataReadAEAD.Overhead())
-		if _, err := io.ReadFull(conn, dataCipher); err != nil {
+		if err := reader.readFull(dataCipher); err != nil {
 			putFXPByteBuffer(dataCipher)
 			return nil, err
 		}
@@ -2899,7 +2978,7 @@ func newSessionSecureConnWithWire(conn net.Conn, key string, salt []byte, client
 	if err != nil {
 		return nil, err
 	}
-	sec := &secureConn{conn: conn, lengthAD: wire.lengthAD, payloadAD: wire.payloadAD}
+	sec := &secureConn{conn: conn, lengthAD: wire.lengthAD, payloadAD: wire.payloadAD, reader: newFXPFrameReader(conn)}
 	if client {
 		sec.lenWriteAEAD, sec.dataWriteAEAD = keys.c2sLen, keys.c2sData
 		sec.lenReadAEAD, sec.dataReadAEAD = keys.s2cLen, keys.s2cData
@@ -2988,55 +3067,123 @@ func (c *secureConn) writeFrames(frames ...[]byte) error {
 // （或者连接还没交给任何其他协程）。
 func (c *secureConn) appendSealedFrameLocked(dst []byte, plain []byte) []byte {
 	counter := c.writeCounter
-	var lenPlain [4]byte
-	binary.BigEndian.PutUint32(lenPlain[:], uint32(len(plain)))
-	var lenNonce [12]byte
-	var dataNonce [12]byte
-	fillFXPNonce(lenNonce[:], c.writeDir, counter, 0)
-	fillFXPNonce(dataNonce[:], c.writeDir, counter, 1)
-	dst = c.lenWriteAEAD.Seal(dst, lenNonce[:], lenPlain[:], c.lengthAD)
-	dst = c.dataWriteAEAD.Seal(dst, dataNonce[:], plain, c.payloadAD)
+	binary.BigEndian.PutUint32(c.writeLenPlain[:], uint32(len(plain)))
+	fillFXPNonce(c.writeNonce[:], c.writeDir, counter, 0)
+	dst = c.lenWriteAEAD.Seal(dst, c.writeNonce[:], c.writeLenPlain[:], c.lengthAD)
+	fillFXPNonce(c.writeNonce[:], c.writeDir, counter, 1)
+	dst = c.dataWriteAEAD.Seal(dst, c.writeNonce[:], plain, c.payloadAD)
 	c.writeCounter++
 	return dst
 }
 
+// readFrames 读一帧（会阻塞），再把读缓冲里已经完整到达的帧一并交出，最多 max
+// 帧，追加在 dst 后面。读缓冲一次系统调用常常带回好几帧，调用方拿到一批就能一次
+// 写出（明文侧 writev、中转一次封装）。交出的切片都指向读缓冲，只在下一次读之前
+// 有效，和 readFrame 一样。
+func (c *secureConn) readFrames(dst [][]byte, max int) ([][]byte, error) {
+	if c.ackPending {
+		if err := c.consumeHandshakeAck(); err != nil {
+			return dst, err
+		}
+	}
+	frame, err := c.readEncryptedFrame()
+	if err != nil {
+		return dst, err
+	}
+	dst = append(dst, frame)
+	for len(dst) < max && len(frame) > 0 && c.readBuf == nil {
+		// 只拿缓冲里已经完整的帧，不进内核；解不开的留给下一次阻塞读去报错，
+		// 那时拿到的是同样的字节、同样的计数，结论不会变。
+		next, nextErr := c.nextFrame(false)
+		if nextErr != nil || next == nil {
+			break
+		}
+		dst = append(dst, next)
+		frame = next
+	}
+	return dst, nil
+}
+
 func (c *secureConn) readEncryptedFrame() ([]byte, error) {
 	c.releaseReadBuffer()
+	return c.nextFrame(true)
+}
+
+// nextFrame 解下一帧。wait 为 true 时不够一帧就从连接读，直到够为止；为 false 时只看
+// 读缓冲里已经到的字节，不够一整帧就返回 nil, nil，什么都不消费、不挪动，之前
+// 交出的切片仍然有效。
+func (c *secureConn) nextFrame(wait bool) ([]byte, error) {
 	counter := c.readCounter
-	c.readCounter++
-	var lenCipher [64]byte
 	lenSize := 4 + c.lenReadAEAD.Overhead()
-	if lenSize > len(lenCipher) {
-		return nil, errors.New("invalid encrypted frame length")
+	var lenCipher []byte
+	var err error
+	if wait {
+		lenCipher, err = c.reader.peek(lenSize)
+	} else {
+		lenCipher = c.reader.peekBuffered(lenSize)
 	}
-	if _, err := io.ReadFull(c.conn, lenCipher[:lenSize]); err != nil {
-		return nil, err
-	}
-	n, dataAEAD, err := c.openFrameLength(counter, lenCipher[:lenSize])
 	if err != nil {
 		return nil, err
 	}
-	dataCipher := getFXPByteBuffer(int(n) + dataAEAD.Overhead())
-	if _, err := io.ReadFull(c.conn, dataCipher); err != nil {
-		putFXPByteBuffer(dataCipher)
-		return nil, err
+	if lenCipher == nil {
+		return nil, nil
 	}
-	var nonce [12]byte
-	fillFXPNonce(nonce[:], c.readDir, counter, 1)
-	// 就地解密：明文直接覆盖在密文缓冲上，不再每帧新分配一块。这块缓冲留到下一次
-	// readFrame 才还回池里（见 releaseReadBuffer），所以调用方拿到的切片只在下一次
-	// 读之前有效 —— 现有调用方都是读完立刻写出或自行拷贝。
-	plain, err := dataAEAD.Open(dataCipher[:0], nonce[:], dataCipher, c.payloadAD)
+	n, dataAEAD, err := c.openFrameLength(counter, lenCipher)
 	if err != nil {
-		putFXPByteBuffer(dataCipher)
 		return nil, err
 	}
-	c.readBuf = dataCipher
+	dataSize := int(n) + dataAEAD.Overhead()
+	nonce := c.readNonce[:]
+	fillFXPNonce(nonce, c.readDir, counter, 1)
+	if lenSize+dataSize > fxpFrameReadBufferSize {
+		// 装不进读缓冲的大帧：借一块正好的，就地解密，留到下一次读帧才还
+		// （见 releaseReadBuffer）。
+		if !wait {
+			return nil, nil
+		}
+		c.reader.discard(lenSize)
+		dataCipher := getFXPByteBuffer(dataSize)
+		if err := c.reader.readFull(dataCipher); err != nil {
+			putFXPByteBuffer(dataCipher)
+			return nil, err
+		}
+		plain, err := dataAEAD.Open(dataCipher[:0], nonce, dataCipher, c.payloadAD)
+		if err != nil {
+			putFXPByteBuffer(dataCipher)
+			return nil, err
+		}
+		c.readCounter++
+		c.readBuf = dataCipher
+		return plain, nil
+	}
+	var wire []byte
+	if wait {
+		wire, err = c.reader.peek(lenSize + dataSize)
+	} else {
+		wire = c.reader.peekBuffered(lenSize + dataSize)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if wire == nil {
+		return nil, nil
+	}
+	// 就地解密：明文直接覆盖在读缓冲里的密文上，不另外分配、不拷贝。读缓冲要到
+	// 下一次 readFrame 才可能挪动或还回池里，所以调用方拿到的切片只在下一次读之
+	// 前有效 —— 现有调用方都是读完立刻写出或自行拷贝。
+	dataCipher := wire[lenSize:]
+	plain, err := dataAEAD.Open(dataCipher[:0], nonce, dataCipher, c.payloadAD)
+	if err != nil {
+		return nil, err
+	}
+	c.reader.discard(lenSize + dataSize)
+	c.readCounter++
 	return plain, nil
 }
 
-// releaseReadBuffer 把上一帧占着的缓冲还回池里。在阻塞等下一帧之前调用，
-// 空闲连接因此不占缓冲。
+// releaseReadBuffer 把上一帧占着的大帧缓冲还回池里。在阻塞等下一帧之前调用。
+// 读缓冲本身不在这里还：数据在流的时候它基本不会空，还了下一次读又得借；
+// 连接读出错时读缓冲自己会还（见 fxpFrameReader.peek）。
 func (c *secureConn) releaseReadBuffer() {
 	if c.readBuf != nil {
 		putFXPByteBuffer(c.readBuf)
@@ -3056,7 +3203,7 @@ func (c *secureConn) openFrameLength(counter uint64, lenCipher []byte) (uint32, 
 	if c.earlyLenReadAEAD == nil {
 		return 0, nil, err
 	}
-	n, earlyErr := decryptFXPFrameLength(c.earlyLenReadAEAD, c.readDir, counter, lenCipher, c.lengthAD)
+	n, earlyErr := decryptFXPFrameLengthInto(c.earlyLenReadAEAD, c.readDir, counter, lenCipher, c.lengthAD, c.readNonce[:], c.readLenPlain[:0])
 	if earlyErr != nil {
 		return 0, nil, err
 	}
@@ -3064,14 +3211,20 @@ func (c *secureConn) openFrameLength(counter uint64, lenCipher []byte) (uint32, 
 }
 
 func (c *secureConn) decryptFrameLength(counter uint64, lenCipher []byte) (uint32, error) {
-	return decryptFXPFrameLength(c.lenReadAEAD, c.readDir, counter, lenCipher, c.lengthAD)
+	return decryptFXPFrameLengthInto(c.lenReadAEAD, c.readDir, counter, lenCipher, c.lengthAD, c.readNonce[:], c.readLenPlain[:0])
 }
 
 func decryptFXPFrameLength(aead cipher.AEAD, direction uint32, counter uint64, lenCipher, lengthAD []byte) (uint32, error) {
 	var nonce [12]byte
 	var plain [4]byte
-	fillFXPNonce(nonce[:], direction, counter, 0)
-	lenPlain, err := aead.Open(plain[:0], nonce[:], lenCipher, lengthAD)
+	return decryptFXPFrameLengthInto(aead, direction, counter, lenCipher, lengthAD, nonce[:], plain[:0])
+}
+
+// decryptFXPFrameLengthInto 用调用方给的 nonce（12 字节）和明文草稿（容量 4）解帧长度，
+// 热路径上不分配。
+func decryptFXPFrameLengthInto(aead cipher.AEAD, direction uint32, counter uint64, lenCipher, lengthAD, nonce, plain []byte) (uint32, error) {
+	fillFXPNonce(nonce, direction, counter, 0)
+	lenPlain, err := aead.Open(plain, nonce, lenCipher, lengthAD)
 	if err != nil {
 		return 0, err
 	}

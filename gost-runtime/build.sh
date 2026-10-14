@@ -1,15 +1,23 @@
 #!/usr/bin/env bash
 # NEX 自编 gost 运行时：官方 go-gost/gost 源码 + go-gost/x 打上 nex-splice.patch。
 #
-# 官方 gost 的普通 TCP 转发在两条连接外面各包了几层（metrics、统计），io.Copy 认不出
-# 底下是 *net.TCPConn，只能在用户态一块块拷。补丁在没开 metrics、没限速、没收 PROXY
-# 头、没开嗅探时把空转的包装层剥掉，直接在两条原始 TCP 连接之间中继，Go 会走
-# splice(2)，数据在内核里搬。限速、统计这些情况照旧走原来的路。
+# 官方 gost 在两条连接外面各包了几层（metrics、统计），io.Copy 认不出底下是
+# *net.TCPConn，只能在用户态一块块拷。补丁在没开 metrics、没限速、没收 PROXY 头、
+# 没开嗅探时把空转的包装层剥掉，直接在两条原始 TCP 连接之间中继，Go 会走 splice(2)，
+# 数据在内核里搬。限速、统计这些情况照旧走原来的路。
+#
+# 覆盖面（nex2）：
+#   - 普通端口转发（forward/local），包括发 PROXY 头的：头先同步写进目标连接，再中继；
+#   - 「TCP」模式隧道入口（forward/local + chain，relay 连接器 nodelay 握手完后链路就是裸 TCP）；
+#   - 「TCP」模式隧道出口和 TCP 监听的中间跳（relay handler 的 CONNECT：握手读写完、目标是 TCP）。
+#   TLS / WSS / MTLS / MWSS 模式必须在用户态加解密，隧道两端都改不了；UDP、嗅探、限速、
+#   PROXY 头接收、开 metrics 时照旧用户态拷贝。日志里 "splice":true 表示这条连接走了内核中继。
+#   回归：gost-runtime/test/splice-check.sh <二进制>。
 #
 # 用法：gost-runtime/build.sh <输出目录>
 # 产出：<输出目录>/forwardx-runtime-linux-amd64、forwardx-runtime-linux-arm64
 #
-# 版本号写成 ${GOST_VERSION}-${NEX_GOST_BUILD}（例如 3.2.6-nex1），装机脚本据此
+# 版本号写成 ${GOST_VERSION}-${NEX_GOST_BUILD}（例如 3.2.6-nex2），装机脚本据此
 # 区分 NEX 自编版和官方版。改了补丁就把 NEX_GOST_BUILD 加一。
 set -euo pipefail
 
@@ -17,7 +25,7 @@ GOST_VERSION="${GOST_VERSION:-3.2.6}"
 GOST_VERSION="${GOST_VERSION#v}"
 GOST_X_VERSION="${GOST_X_VERSION:-0.8.1}"
 GOST_X_VERSION="${GOST_X_VERSION#v}"
-NEX_GOST_BUILD="${NEX_GOST_BUILD:-nex1}"
+NEX_GOST_BUILD="${NEX_GOST_BUILD:-nex2}"
 # gost 3.2.6 的 go.mod 要求 Go >= 1.24，而 Agent 和发布流程用的是 1.23（GOTOOLCHAIN=local）。
 # 只给 gost 这一步指定工具链，go 命令会从 proxy.golang.org 自动下载。和官方发布包同一版本。
 GOST_GO_TOOLCHAIN="${GOST_GO_TOOLCHAIN:-go1.25.4}"

@@ -8,10 +8,31 @@ package main
 // behind until a future GC cycle.
 const fxpBytePoolSlots = 128
 
-// fxpCopyChunkSize 是明文侧一次读取、也就是一帧的最大明文长度。64 KiB 比原来的
-// 32 KiB 少一半的加解密调用、锁和系统调用；加上帧头和认证标签后仍落在 65 KiB
-// 那一档池里。对端接受的帧上限远大于此（fxpMaxFrame，多路径 256 KiB），旧版本兼容。
+// fxpCopyChunkSize 是一帧的最大明文长度。64 KiB 比原来的 32 KiB 少一半的加解密
+// 调用、锁和系统调用；加上帧头和认证标签后仍落在 65 KiB 那一档池里。对端接受的
+// 帧上限远大于此（fxpMaxFrame，多路径 256 KiB），旧版本兼容。帧不再切得更大：
+// 旧版本的对端按帧长借缓冲，超过 65 KiB 的帧它每帧都要现分配。
 const fxpCopyChunkSize = 64 * 1024
+
+// fxpFrameOverhead 是一帧在线上比明文多出的字节：4 字节长度、长度的认证标签、
+// 内容的认证标签。两种算法的标签都是 16 字节。
+const fxpFrameOverhead = 4 + 16 + 16
+
+// fxpCopyBatchFrames 是明文侧一次读、也就是一次写出的最多帧数。明文侧一次读
+// fxpCopyReadSize（两帧的量），内核里攒着多少就给多少：数据来得快就是两帧合成
+// 一次 write，来得慢（交互式的小写）读到多少就立刻封成一帧发走，没有任何等待。
+// 两帧而不是更多，是因为这块读缓冲在整条连接存续期间都占着。
+const fxpCopyBatchFrames = 2
+const fxpCopyReadSize = fxpCopyBatchFrames * fxpCopyChunkSize
+
+// fxpFrameReadBufferSize 是加密侧读缓冲的大小：正好装下两个满帧。一次系统调用
+// 通常就能带回好几帧；满帧的流上要么整帧装得下、要么缓冲正好读空，从不挪动
+// （见 fxpFrameReader.peek）。两帧合并写的线上缓冲也是这个大小，共用一档池。
+const fxpFrameReadBufferSize = fxpCopyBatchFrames * (fxpCopyChunkSize + fxpFrameOverhead)
+
+// fxpFrameBatchMax 是 readFrames 一次最多交出的帧数：读缓冲里已经完整到达的帧
+// 一并交给调用方，往明文侧一次 writev 写出、中转一次封装写出。
+const fxpFrameBatchMax = 8
 
 type fxpBytePool struct {
 	size int
@@ -43,6 +64,8 @@ var fxpBytePools = []fxpBytePool{
 	newFXPBytePool(32 * 1024),
 	newFXPBytePool(64 * 1024),
 	newFXPBytePool(65 * 1024),
+	// 两帧那一档：加密侧的读缓冲、两帧合并写的线上缓冲、明文侧的读缓冲都用它。
+	newFXPBytePool(fxpFrameReadBufferSize),
 }
 
 func getFXPByteBuffer(size int) []byte {

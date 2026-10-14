@@ -585,6 +585,8 @@ const tables: TableDef[] = [
       c("linkShapingMode", "varchar", { length: 16, notNull: true, default: "off" }),
       // 抗丢包：NEX 隧道的 UDP 直连额外发 Reed-Solomon 纠错包，默认关。
       c("udpFec", "bool", { notNull: true, default: false }),
+      // 内核直通：V2 隧道两端都是内核 WireGuard 时，普通规则直接 iptables DNAT 进 nexwg，不经 FXP。默认关。
+      c("kernelPassthrough", "bool", { notNull: true, default: false }),
       c("blockHttp", "bool", { notNull: true, default: false }), c("blockSocks", "bool", { notNull: true, default: false }),
       c("blockTls", "bool", { notNull: true, default: false }), c("loadBalanceEnabled", "bool", { notNull: true, default: false }),
       c("loadBalanceStrategy", "varchar", { length: 32, notNull: true, default: "round_robin" }),

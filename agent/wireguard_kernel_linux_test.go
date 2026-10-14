@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"net/netip"
 	"strings"
@@ -17,6 +18,8 @@ func init() {
 	// 运行时相关的测试一律走 netstack：CI 上没有 root，内核数据面本来就起不来，
 	// 本机有模块时也不该在测试里真的建接口。内核数据面有自己的用例。
 	wireGuardKernelPlaneDisabled = true
+	// MTU 探测要往对端公网地址发包、解析域名，测试里直接用配置值。探测本身有自己的用例。
+	wireGuardMTUProbeFunc = func(_ context.Context, _ string, _ int, configured int) int { return configured }
 }
 
 type fakeWireGuardKernelRunner struct {

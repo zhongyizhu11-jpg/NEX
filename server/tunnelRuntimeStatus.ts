@@ -102,6 +102,11 @@ export function replaceHostWireGuardPlanes(hostId: number, planes: Array<{ tunne
   }
 }
 
+/** 某台主机在这条隧道上报的数据面；没上报返回 undefined。 */
+export function getHostWireGuardPlane(tunnelId: number, hostId: number): TunnelWireGuardPlane | undefined {
+  return tunnelWireGuardPlanes.get(Number(tunnelId))?.get(Number(hostId));
+}
+
 /** 隧道整体的数据面：所有上报的主机一致时返回那一种，不一致返回 mixed，没有上报返回 undefined。 */
 export function getTunnelWireGuardPlane(tunnelId: number): TunnelWireGuardPlane | "mixed" | undefined {
   const hosts = tunnelWireGuardPlanes.get(Number(tunnelId));

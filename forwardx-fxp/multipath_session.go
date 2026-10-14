@@ -18,7 +18,12 @@ import (
 // secureConn and a multipathSession implement it.
 type frameConn interface {
 	writeFrame(plain []byte) error
+	// writeFrames 连着写几帧数据，能合成一次写的就合成一次。
+	writeFrames(frames ...[]byte) error
 	readFrame() ([]byte, error)
+	// readFrames 读一帧（阻塞），再把已经到了、不用等的帧一并追加到 dst 后面，
+	// 最多 max 帧。交出的切片只在下一次读之前有效，和 readFrame 一样。
+	readFrames(dst [][]byte, max int) ([][]byte, error)
 	// closeTransport tears down the underlying connections.
 	closeTransport()
 }
@@ -694,6 +699,26 @@ func (s *multipathSession) writeFin() error {
 // returns an empty, non-nil slice at end of stream, matching secureConn.
 func (s *multipathSession) readFrame() ([]byte, error) {
 	return s.reorder.pop()
+}
+
+// readFrames 满足 frameConn：重排缓冲一次交一块，块本来就是合并过的。
+func (s *multipathSession) readFrames(dst [][]byte, max int) ([][]byte, error) {
+	frame, err := s.readFrame()
+	if err != nil {
+		return dst, err
+	}
+	return append(dst, frame), nil
+}
+
+// writeFrames 满足 frameConn：多路径自己会把小块合并（coalesceLocked），逐帧交
+// 给它就行。
+func (s *multipathSession) writeFrames(frames ...[]byte) error {
+	for _, frame := range frames {
+		if err := s.writeFrame(frame); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *multipathSession) closedErr() error {

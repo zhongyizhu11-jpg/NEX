@@ -34,6 +34,8 @@ const (
 	wireGuardRuntimeReleaseDelay   = time.Minute
 	wireGuardProbeReadyPoll        = 100 * time.Millisecond
 	wireGuardProbeRetryDelay       = 250 * time.Millisecond
+	// wireGuardMTUProbeTimeout 是建数据面前 MTU 探测的上限（解析域名 + 发一个包 + 等 300 ms）。
+	wireGuardMTUProbeTimeout = 3 * time.Second
 )
 
 type wireGuardPeerSpec struct {
@@ -55,6 +57,8 @@ type wireGuardSpec struct {
 	ListenPort int                 `json:"listenPort,omitempty"`
 	MTU        int                 `json:"mtu,omitempty"`
 	Peers      []wireGuardPeerSpec `json:"peers,omitempty"`
+	// Passthrough 是内核直通表（见 wireguard_passthrough.go）；为空表示这条隧道没有直通规则。
+	Passthrough []wireGuardPassthroughRule `json:"passthrough,omitempty"`
 }
 
 type wireGuardOutboundProxy struct {
@@ -154,28 +158,37 @@ func reclaimWireGuardUDPProxySession(sessions map[string]*wireGuardUDPProxySessi
 }
 
 type wireGuardRuntime struct {
-	mu                sync.RWMutex
-	spec              wireGuardSpec
-	signature         string
-	plane             wireGuardDataplane
-	peers             map[string]wireGuardPeerSpec
-	outbound          map[string]*wireGuardOutboundProxy
-	outboundRefs      map[string]int
-	refOutbound       map[string]map[string]struct{}
-	inbound           map[string]*wireGuardInboundProxy
-	inboundRefs       map[string]int
-	refInbound        map[string]map[string]struct{}
+	mu           sync.RWMutex
+	spec         wireGuardSpec
+	signature    string
+	plane        wireGuardDataplane
+	peers        map[string]wireGuardPeerSpec
+	outbound     map[string]*wireGuardOutboundProxy
+	outboundRefs map[string]int
+	refOutbound  map[string]map[string]struct{}
+	inbound      map[string]*wireGuardInboundProxy
+	inboundRefs  map[string]int
+	refInbound   map[string]map[string]struct{}
+	// direct 为 true 时 FXP 直接绑在 WireGuard 地址上收发，不再经过上面的回环代理
+	// （见 wireguard_direct.go）；directInbound 记录为此放行的入站端口。
+	direct            bool
+	directInbound     map[string]*wireGuardDirectInbound
+	directInboundRefs map[string]int
+	refDirectInbound  map[string]map[string]struct{}
 	refs              map[string]int
 	releaseTimer      *time.Timer
 	releaseGeneration uint64
 	closed            bool
+	// passthroughRef 为 true 时 refs 里有直通规则占的那个引用（见 wireguard_passthrough.go）。
+	passthroughRef bool
 }
 
 type wireGuardRuntimeCloseResources struct {
-	tunnelID int
-	outbound []*wireGuardOutboundProxy
-	inbound  []*wireGuardInboundProxy
-	plane    wireGuardDataplane
+	tunnelID      int
+	outbound      []*wireGuardOutboundProxy
+	inbound       []*wireGuardInboundProxy
+	directInbound []*wireGuardDirectInbound
+	plane         wireGuardDataplane
 }
 
 var (
@@ -240,6 +253,11 @@ func normalizeWireGuardSpec(spec wireGuardSpec) (wireGuardSpec, error) {
 	}
 	sort.Slice(peers, func(i, j int) bool { return peers[i].ID < peers[j].ID })
 	spec.Peers = peers
+	passthrough, err := normalizeWireGuardPassthrough(spec.Passthrough, peers)
+	if err != nil {
+		return spec, err
+	}
+	spec.Passthrough = passthrough
 	return spec, nil
 }
 
@@ -340,12 +358,32 @@ func wireGuardDeviceUpdateConfig(previous, next wireGuardSpec, removedKeys []str
 	return "listen_port=" + strconv.Itoa(next.ListenPort) + "\n" + config
 }
 
+// wireGuardMTUProbeFunc 是建数据面前跑的 MTU 探测（wireguard_mtu_linux.go）；测试换成直通。
+var wireGuardMTUProbeFunc = probeWireGuardMTU
+
+// wireGuardPlaneSpec 是真正下给数据面的规格：MTU 换成探测结果（面板给的 1380 只是保底，
+// 路径放得下就用 1420）。runtime.spec 里仍留面板的值，后续配置推送比对 MTU 时不会因为
+// 探测值和面板值不同而重建数据面。只有拨号的那一端知道对端公网地址，监听端维持原值。
+func wireGuardPlaneSpec(spec wireGuardSpec) wireGuardSpec {
+	for _, peer := range spec.Peers {
+		if strings.TrimSpace(peer.EndpointHost) == "" || peer.EndpointPort <= 0 {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), wireGuardMTUProbeTimeout)
+		spec.MTU = wireGuardMTUProbeFunc(ctx, peer.EndpointHost, peer.EndpointPort, spec.MTU)
+		cancel()
+		break
+	}
+	return spec
+}
+
 func newWireGuardRuntime(spec wireGuardSpec) (*wireGuardRuntime, error) {
 	normalized, err := normalizeWireGuardSpec(spec)
 	if err != nil {
 		return nil, err
 	}
-	plane, err := newWireGuardPlane(normalized)
+	planeSpec := wireGuardPlaneSpec(normalized)
+	plane, err := newWireGuardPlane(planeSpec)
 	if err != nil {
 		return nil, err
 	}
@@ -362,11 +400,68 @@ func newWireGuardRuntime(spec wireGuardSpec) (*wireGuardRuntime, error) {
 		refInbound:   map[string]map[string]struct{}{},
 		refs:         map[string]int{},
 	}
+	runtime.direct = wireGuardDirectFXPSupported(plane)
+	runtime.directInbound = map[string]*wireGuardDirectInbound{}
+	runtime.directInboundRefs = map[string]int{}
+	runtime.refDirectInbound = map[string]map[string]struct{}{}
 	for _, peer := range normalized.Peers {
 		runtime.peers[peer.ID] = peer
 	}
-	logf("wireguard runtime started tunnel=%d plane=%s address=%s listen=:%d peers=%d mtu=%d", normalized.TunnelID, plane.kind(), normalized.Address, normalized.ListenPort, len(normalized.Peers), normalized.MTU)
+	if len(normalized.Passthrough) > 0 {
+		runtime.refs[wireGuardPassthroughRefID] = 1
+		runtime.passthroughRef = true
+	}
+	runtime.syncPassthrough(normalized)
+	logf("wireguard runtime started tunnel=%d plane=%s direct=%v address=%s listen=:%d peers=%d mtu=%d passthrough=%d", normalized.TunnelID, plane.kind(), runtime.direct, normalized.Address, normalized.ListenPort, len(normalized.Peers), planeSpec.MTU, len(normalized.Passthrough))
 	return runtime, nil
+}
+
+// syncPassthrough 把直通表交给数据面装进防火墙；用户态数据面装不了，只记一次日志。
+// 装失败只记日志不影响隧道：FXP 那条路还在，面板下一次改配置时会再同步一遍。
+func (runtime *wireGuardRuntime) syncPassthrough(spec wireGuardSpec) {
+	syncer, ok := runtime.plane.(wireGuardPassthroughSyncer)
+	if !ok {
+		if len(spec.Passthrough) > 0 {
+			logf("wireguard passthrough ignored tunnel=%d plane=%s: kernel dataplane required", spec.TunnelID, runtime.plane.kind())
+		}
+		return
+	}
+	if err := syncer.syncPassthrough(spec); err != nil {
+		logf("wireguard passthrough sync failed tunnel=%d rules=%d: %v", spec.TunnelID, len(spec.Passthrough), err)
+		return
+	}
+	if len(spec.Passthrough) > 0 {
+		logf("wireguard passthrough synced tunnel=%d rules=%d", spec.TunnelID, len(spec.Passthrough))
+	}
+}
+
+// updatePassthroughRefLocked 让直通规则持有 / 放掉运行时引用：有直通规则时接口不能因为
+// FXP 都停了而被拆掉。调用方持有 runtime.mu。
+func (runtime *wireGuardRuntime) updatePassthroughRefLocked(spec wireGuardSpec) {
+	if len(spec.Passthrough) > 0 && !runtime.passthroughRef {
+		runtime.passthroughRef = true
+		_ = runtime.addRefLocked(wireGuardPassthroughRefID)
+		return
+	}
+	if len(spec.Passthrough) == 0 && runtime.passthroughRef {
+		runtime.passthroughRef = false
+		delete(runtime.refs, wireGuardPassthroughRefID)
+		delete(runtime.refOutbound, wireGuardPassthroughRefID)
+		delete(runtime.refInbound, wireGuardPassthroughRefID)
+		runtime.scheduleReleaseLocked()
+	}
+}
+
+// scheduleReleaseLocked 在引用归零时起一分钟的拆除定时器。调用方持有 runtime.mu。
+func (runtime *wireGuardRuntime) scheduleReleaseLocked() {
+	if len(runtime.refs) == 0 && runtime.releaseTimer == nil && !runtime.closed {
+		tunnelID := runtime.spec.TunnelID
+		runtime.releaseGeneration++
+		releaseGeneration := runtime.releaseGeneration
+		runtime.releaseTimer = time.AfterFunc(wireGuardRuntimeReleaseDelay, func() {
+			stopWireGuardRuntimeInstanceIfUnused(tunnelID, runtime, releaseGeneration)
+		})
+	}
 }
 
 // planeKind 是这条隧道现在跑在哪种数据面上（kernel / netstack）；运行时已关闭返回空。
@@ -412,14 +507,47 @@ func (runtime *wireGuardRuntime) update(spec wireGuardSpec) error {
 	if err := wireGuardPlaneUpdate(runtime.plane, runtime.spec, normalized, removedKeys); err != nil {
 		return fmt.Errorf("update wireguard: %w", err)
 	}
+	passthroughChanged := wireGuardPassthroughSignature(runtime.spec) != wireGuardPassthroughSignature(normalized)
 	runtime.spec = normalized
 	runtime.signature = signature
 	runtime.peers = map[string]wireGuardPeerSpec{}
 	for _, peer := range normalized.Peers {
 		runtime.peers[peer.ID] = peer
 	}
-	logf("wireguard runtime updated tunnel=%d listen=:%d peers=%d generation=%d peerAdded=%d peerRemoved=%d peerUpdated=%d dnsRefresh=%v", normalized.TunnelID, normalized.ListenPort, len(normalized.Peers), normalized.Generation, added, removed, updated, dnsRefresh)
+	runtime.updatePassthroughRefLocked(normalized)
+	if passthroughChanged {
+		runtime.syncPassthrough(normalized)
+	}
+	logf("wireguard runtime updated tunnel=%d listen=:%d peers=%d generation=%d peerAdded=%d peerRemoved=%d peerUpdated=%d dnsRefresh=%v passthrough=%d", normalized.TunnelID, normalized.ListenPort, len(normalized.Peers), normalized.Generation, added, removed, updated, dnsRefresh, len(normalized.Passthrough))
 	return nil
+}
+
+func wireGuardPassthroughSignature(spec wireGuardSpec) string {
+	raw, _ := json.Marshal(spec.Passthrough)
+	return string(raw)
+}
+
+// wireGuardRuntimePlaneKinds 给心跳用：每条跑着的 V2 隧道现在用的数据面。
+func wireGuardRuntimePlaneKinds() []localRuntimeWireGuardPlaneState {
+	wireGuardRuntimesMu.RLock()
+	runtimes := make([]*wireGuardRuntime, 0, len(wireGuardRuntimes))
+	for _, runtime := range wireGuardRuntimes {
+		runtimes = append(runtimes, runtime)
+	}
+	wireGuardRuntimesMu.RUnlock()
+	out := make([]localRuntimeWireGuardPlaneState, 0, len(runtimes))
+	for _, runtime := range runtimes {
+		kind := runtime.planeKind()
+		if kind == "" {
+			continue
+		}
+		runtime.mu.RLock()
+		tunnelID := runtime.spec.TunnelID
+		runtime.mu.RUnlock()
+		out = append(out, localRuntimeWireGuardPlaneState{TunnelID: tunnelID, Plane: kind})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].TunnelID < out[j].TunnelID })
+	return out
 }
 
 func applyWireGuardRuntime(spec wireGuardSpec) error {
@@ -676,6 +804,10 @@ func wireGuardFXPProxiesMatchConfig(spec fxpSpec, active fxpSpec, expectedRefIDs
 			udpPort = tcpPort
 		}
 		key := fmt.Sprintf("%d:%d", tcpPort, udpPort)
+		if runtime.direct {
+			return runtime.directInbound[key] != nil && runtime.directInboundRefs[key] > 0 && refOwns(runtime.refDirectInbound, key) &&
+				strings.TrimSpace(activeSpec.ListenHost) == runtime.spec.Address && activeSpec.ListenPort == tcpPort && activeSpec.UDPListenPort == udpPort
+		}
 		proxy := runtime.inbound[key]
 		if proxy == nil || runtime.inboundRefs[key] <= 0 || !refOwns(runtime.refInbound, key) || !wireGuardProxyOpen(proxy.done) ||
 			proxy.tcpLn == nil || proxy.udpConn == nil {
@@ -691,6 +823,10 @@ func wireGuardFXPProxiesMatchConfig(spec fxpSpec, active fxpSpec, expectedRefIDs
 	outboundReady := func(peerID string, tcpPort, udpPort int, activeHost string, activeTCPPort, activeUDPPort int) bool {
 		if udpPort <= 0 {
 			udpPort = tcpPort
+		}
+		if runtime.direct {
+			peer, exists := runtime.peers[strings.TrimSpace(peerID)]
+			return exists && strings.TrimSpace(activeHost) == peer.Address && activeTCPPort == tcpPort && activeUDPPort == udpPort
 		}
 		key := wireGuardOutboundProxyKey(peerID, tcpPort, udpPort)
 		proxy := runtime.outbound[key]
@@ -923,6 +1059,7 @@ func releaseWireGuardRuntimeInstanceRef(runtime *wireGuardRuntime, tunnelID int,
 	}
 	outboundToClose := make([]*wireGuardOutboundProxy, 0)
 	inboundToClose := make([]*wireGuardInboundProxy, 0)
+	var directToRevoke []*wireGuardDirectInbound
 	runtime.mu.Lock()
 	if runtime.refs[id] <= 0 {
 		runtime.mu.Unlock()
@@ -954,16 +1091,12 @@ func releaseWireGuardRuntimeInstanceRef(runtime *wireGuardRuntime, tunnelID int,
 			}
 		}
 		delete(runtime.refInbound, id)
+		directToRevoke = runtime.releaseDirectInboundLocked(id)
 	} else {
 		runtime.refs[id]--
 	}
-	if len(runtime.refs) == 0 && runtime.releaseTimer == nil && !runtime.closed {
-		runtime.releaseGeneration++
-		releaseGeneration := runtime.releaseGeneration
-		runtime.releaseTimer = time.AfterFunc(wireGuardRuntimeReleaseDelay, func() {
-			stopWireGuardRuntimeInstanceIfUnused(tunnelID, runtime, releaseGeneration)
-		})
-	}
+	runtime.scheduleReleaseLocked()
+	plane := runtime.plane
 	runtime.mu.Unlock()
 	for _, proxy := range outboundToClose {
 		proxy.close()
@@ -972,6 +1105,10 @@ func releaseWireGuardRuntimeInstanceRef(runtime *wireGuardRuntime, tunnelID int,
 	for _, proxy := range inboundToClose {
 		proxy.close()
 		logf("wireguard inbound proxy stopped tunnel=%d target=%s", tunnelID, proxy.key)
+	}
+	for _, inbound := range directToRevoke {
+		inbound.revoke(plane)
+		logf("wireguard direct inbound released tunnel=%d ports=%s", tunnelID, inbound.key)
 	}
 }
 
@@ -1644,12 +1781,18 @@ func (runtime *wireGuardRuntime) claimCloseLocked() (wireGuardRuntimeCloseResour
 	for _, proxy := range runtime.inbound {
 		resources.inbound = append(resources.inbound, proxy)
 	}
+	for _, inbound := range runtime.directInbound {
+		resources.directInbound = append(resources.directInbound, inbound)
+	}
 	runtime.outbound = map[string]*wireGuardOutboundProxy{}
 	runtime.outboundRefs = map[string]int{}
 	runtime.refOutbound = map[string]map[string]struct{}{}
 	runtime.inbound = map[string]*wireGuardInboundProxy{}
 	runtime.inboundRefs = map[string]int{}
 	runtime.refInbound = map[string]map[string]struct{}{}
+	runtime.directInbound = map[string]*wireGuardDirectInbound{}
+	runtime.directInboundRefs = map[string]int{}
+	runtime.refDirectInbound = map[string]map[string]struct{}{}
 	runtime.refs = map[string]int{}
 	runtime.plane = nil
 	return resources, true
@@ -1661,6 +1804,9 @@ func (resources wireGuardRuntimeCloseResources) close() {
 	}
 	for _, proxy := range resources.inbound {
 		proxy.close()
+	}
+	for _, inbound := range resources.directInbound {
+		inbound.revoke(resources.plane)
 	}
 	if resources.plane != nil {
 		resources.plane.close()
@@ -1695,15 +1841,26 @@ func prepareFXPWireGuard(spec fxpSpec, refID string) (prepared fxpSpec, err erro
 			releaseWireGuardRuntimeInstanceRef(runtime, spec.TunnelID, refID)
 		}
 	}()
+	direct := runtime.directFXP()
 	if spec.Role == "exit" || spec.Role == "relay" {
-		if err := runtime.ensureInboundProxy(refID, spec.ListenPort, spec.UDPListenPort); err != nil {
-			return spec, err
+		if direct {
+			if err := runtime.ensureDirectInbound(refID, spec.ListenPort, spec.UDPListenPort); err != nil {
+				return spec, err
+			}
+			spec.ListenHost = runtime.spec.Address
+		} else {
+			if err := runtime.ensureInboundProxy(refID, spec.ListenPort, spec.UDPListenPort); err != nil {
+				return spec, err
+			}
+			spec.ListenHost = "127.0.0.1"
 		}
-		spec.ListenHost = "127.0.0.1"
 	}
 	prepareEndpoint := func(peerID string, tcpPort, udpPort int) (string, int, int, error) {
 		if udpPort <= 0 {
 			udpPort = tcpPort
+		}
+		if direct {
+			return runtime.directPeerEndpoint(peerID, tcpPort, udpPort)
 		}
 		return runtime.ensureOutboundProxy(refID, peerID, tcpPort, udpPort)
 	}

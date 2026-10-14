@@ -12,7 +12,7 @@ import (
 )
 
 // 一个同时空着 TCP 和 UDP 的端口（both 规格两个都要绑）。
-func failoverTestDualPort(t *testing.T) int {
+func failoverTestDualPort(t testing.TB) int {
 	t.Helper()
 	for attempt := 0; attempt < 20; attempt++ {
 		port := failoverTestPort(t)
@@ -63,7 +63,7 @@ func failoverUDPExchange(t *testing.T, client net.Conn, payload string) string {
 	return string(buf[:n])
 }
 
-func failoverUDPTestSetup(t *testing.T) {
+func failoverUDPTestSetup(t testing.TB) {
 	t.Helper()
 	oldPersistentDir := persistentFailoverDir
 	persistentFailoverDir = filepath.Join(t.TempDir(), "failover")
@@ -77,7 +77,7 @@ func failoverUDPTestSetup(t *testing.T) {
 	})
 }
 
-func startUDPFailoverForTest(t *testing.T, ruleID int, sourcePort int, spec failoverSpec) (*failoverProxy, string) {
+func startUDPFailoverForTest(t testing.TB, ruleID int, sourcePort int, spec failoverSpec) (*failoverProxy, string) {
 	t.Helper()
 	t.Cleanup(func() { stopFailoverProxy(ruleID, sourcePort) })
 	if !startFailoverProxy(ruleID, sourcePort, spec, nil) {

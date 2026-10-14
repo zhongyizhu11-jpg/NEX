@@ -950,6 +950,8 @@ export const tunnels = table("tunnels", {
   linkShapingMode: varchar("linkShapingMode", { length: 16 }).notNull().default("off"),
   /** 抗丢包：UDP 直连额外发纠错包（FXP 的 udp_fec.go）。只对 NEX 隧道有意义，默认关。 */
   udpFec: boolean("udpFec").notNull().default(false),
+  /** 内核直通：V2 隧道两端都是内核 WireGuard 时，普通 TCP/UDP 规则改走 iptables DNAT 进 nexwg，不经 FXP。默认关。 */
+  kernelPassthrough: boolean("kernelPassthrough").notNull().default(false),
   blockHttp: boolean("blockHttp").notNull().default(false),
   blockSocks: boolean("blockSocks").notNull().default(false),
   blockTls: boolean("blockTls").notNull().default(false),
