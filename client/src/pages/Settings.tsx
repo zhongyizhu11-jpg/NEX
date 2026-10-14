@@ -4004,7 +4004,7 @@ function PersonalizationSettingsSection() {
           </Button>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-2 gap-3 sm:max-w-3xl sm:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 sm:max-w-3xl sm:grid-cols-3">
             {PERSONALIZATION_UI_THEMES.map((theme) => {
               const active = uiTheme === theme.id;
               return (

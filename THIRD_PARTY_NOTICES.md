@@ -84,3 +84,9 @@ map warps it to Web Mercator in the browser, tile by tile.
 
 - `ne_110m_admin_0_countries.geojson` — Natural Earth 1:110m admin-0 country
   boundaries (public domain, <https://www.naturalearthdata.com/>).
+
+## Inter（界面主题「液态玻璃」的字体）
+
+- 文件：`client/public/fonts/inter-latin-variable.woff2`（仅 latin 子集的变量字体，随面板自带）
+- 来源：<https://github.com/rsms/inter>，经 freetodo/monitor-theme-liquid-glass 转发
+- 许可：SIL Open Font License 1.1，全文见 `client/public/fonts/inter-LICENSE.txt`
