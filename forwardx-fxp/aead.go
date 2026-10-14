@@ -3,8 +3,11 @@ package main
 import (
 	"crypto/cipher"
 	"crypto/rand"
+	"crypto/subtle"
+	"errors"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -39,10 +42,32 @@ ChaCha20-Poly1305 不需要专用指令，SSSE3 / AVX2 / NEON 上的汇编实现
 const (
 	fxpAEADAESGCM   = "aes-256-gcm"
 	fxpAEADChaCha20 = "chacha20-poly1305"
+	// fxpAEADNone：帧不加密（见下面 V2 的说明），2.2.132 起。
+	fxpAEADNone = "none"
+	// fxpAEADNoneEnv 置 0 关掉 V2 上的明文帧，退回协商 AES / ChaCha20。
+	fxpAEADNoneEnv = "FORWARDX_FXP_V2_PLAIN"
 )
 
+/*
+V2 隧道上帧不再加密。
+
+V2 的两台机器之间是内核 WireGuard：FXP 帧本来就封在 WireGuard 的 ChaCha20-Poly1305
+里，FXP 自己再封一层 AES-GCM 纯属重复 —— 入口封一次、WireGuard 封一次、出口解两次，
+没有 AES 指令的机器上这一层就是带宽上限。所以两端都是 V2 时协商出 none：帧内容原样
+走，只有 WireGuard 这一层加密。
+
+none 不是真的没有尾巴：每帧仍带 16 字节，内容是从会话密钥派生的标记。这样帧格式和
+AES / ChaCha20 完全一样（长度 4+16、数据 n+16），服务端认首轮密钥和会话密钥的那段
+逻辑（openFrameLength）照旧成立 —— AES 解不开的是 none 帧，标记对不上的是 AES 帧；
+而且不是从 WireGuard 里出来的随便什么字节也进不了会话。握手本身还是 AES-256-GCM
+认证过的，选 none 是握手之后的事，路上改不了。
+
+只在两端配置都是 V2 时才会用：客户端是 V2 才报 none，服务端是 V2 才选 none。V2 的 FXP
+只监听回环或 WireGuard 地址，公网上到不了它。FORWARDX_FXP_V2_PLAIN=0 可以关掉。
+*/
+
 // fxpSupportedAEADs 是这个版本能用的算法。
-var fxpSupportedAEADs = []string{fxpAEADAESGCM, fxpAEADChaCha20}
+var fxpSupportedAEADs = []string{fxpAEADAESGCM, fxpAEADChaCha20, fxpAEADNone}
 
 // newAEADNamed 按名字造 AEAD。空名就是 AES-256-GCM：旧版本只会它。
 func newAEADNamed(name string, key []byte) (cipher.AEAD, error) {
@@ -51,8 +76,59 @@ func newAEADNamed(name string, key []byte) (cipher.AEAD, error) {
 		return newAEAD(key)
 	case fxpAEADChaCha20:
 		return chacha20poly1305.New(key)
+	case fxpAEADNone:
+		return newPlainAEAD(key)
 	}
 	return nil, fmt.Errorf("unsupported fxp aead %q", name)
+}
+
+// plainAEAD 是 none：Seal 原样附上明文再加 16 字节标记，Open 核对标记后原样返回。
+type plainAEAD struct {
+	marker [16]byte
+}
+
+func newPlainAEAD(key []byte) (cipher.AEAD, error) {
+	if len(key) < 16 {
+		return nil, errors.New("plain aead key too short")
+	}
+	aead := &plainAEAD{}
+	copy(aead.marker[:], key[:16])
+	return aead, nil
+}
+
+func (a *plainAEAD) NonceSize() int { return 12 }
+func (a *plainAEAD) Overhead() int  { return len(a.marker) }
+
+func (a *plainAEAD) Seal(dst, _ []byte, plaintext, _ []byte) []byte {
+	dst = append(dst, plaintext...)
+	return append(dst, a.marker[:]...)
+}
+
+func (a *plainAEAD) Open(dst, _ []byte, ciphertext, _ []byte) ([]byte, error) {
+	if len(ciphertext) < len(a.marker) {
+		return nil, errPlainAEADMarker
+	}
+	body := ciphertext[:len(ciphertext)-len(a.marker)]
+	if subtle.ConstantTimeCompare(ciphertext[len(body):], a.marker[:]) != 1 {
+		return nil, errPlainAEADMarker
+	}
+	return append(dst, body...), nil
+}
+
+var errPlainAEADMarker = errors.New("fxp plain frame marker mismatch")
+
+// fxpPlainFramesEnabled：V2 上默认明文帧，环境变量可以关。
+func fxpPlainFramesEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(fxpAEADNoneEnv))) {
+	case "0", "off", "false", "no", "disable", "disabled":
+		return false
+	}
+	return true
+}
+
+// fxpConfigIsV2 判断这个进程的配置是不是 V2 隧道（两端都在 WireGuard 里）。
+func fxpConfigIsV2(cfg config) bool {
+	return strings.ToLower(strings.TrimSpace(cfg.TransportVersion)) == "v2"
 }
 
 // normalizeAEADConfig 把配置里的写法收敛成算法名；空表示 auto（实测决定）。
@@ -161,12 +237,17 @@ func localAEADPreference(cfg config) string {
 	return preferredAEAD()
 }
 
-// offeredAEADs 是客户端握手时报出去的列表：两种都会，偏好的排前面。
+// offeredAEADs 是客户端握手时报出去的列表：两种都会，偏好的排前面。V2 且没有
+// 写死算法时 none 排最前。
 func offeredAEADs(cfg config) []string {
-	if localAEADPreference(cfg) == fxpAEADChaCha20 {
-		return []string{fxpAEADChaCha20, fxpAEADAESGCM}
+	var out []string
+	if fxpConfigIsV2(cfg) && fxpPlainFramesEnabled() && normalizeAEADConfig(cfg.AEAD) == "" {
+		out = append(out, fxpAEADNone)
 	}
-	return []string{fxpAEADAESGCM, fxpAEADChaCha20}
+	if localAEADPreference(cfg) == fxpAEADChaCha20 {
+		return append(out, fxpAEADChaCha20, fxpAEADAESGCM)
+	}
+	return append(out, fxpAEADAESGCM, fxpAEADChaCha20)
 }
 
 // fxpOfferedAEADs 是客户端实际用的那份，测试可以换掉它来模拟旧版本客户端。
@@ -184,18 +265,25 @@ func containsAEAD(list []string, name string) bool {
 // chooseAEAD 是服务端的决定。offered 是客户端报的列表，旧版本客户端没有。
 //
 //   - 客户端一个都没报（旧版本）或报的全不认识：AES-256-GCM，确认里不写 aead。
+//   - 客户端报了 none（它是 V2）而服务端也是 V2、没写死算法：none。
 //   - 服务端配置里写死了算法：按配置，前提是客户端会。
 //   - 否则任一端偏好 ChaCha20 就用 ChaCha20：偏好它的那一端正是没有 AES 硬件的
 //     那一端，它才是瓶颈；两端都偏好 AES 就 AES。
 func chooseAEAD(cfg config, offered []string) string {
 	known := make([]string, 0, len(offered))
 	for _, name := range offered {
+		if name == fxpAEADNone && !(fxpConfigIsV2(cfg) && fxpPlainFramesEnabled()) {
+			continue
+		}
 		if containsAEAD(fxpSupportedAEADs, name) && !containsAEAD(known, name) {
 			known = append(known, name)
 		}
 	}
 	if len(known) == 0 {
 		return fxpAEADAESGCM
+	}
+	if containsAEAD(known, fxpAEADNone) && normalizeAEADConfig(cfg.AEAD) == "" {
+		return fxpAEADNone
 	}
 	if configured := normalizeAEADConfig(cfg.AEAD); configured != "" {
 		if containsAEAD(known, configured) {
@@ -230,6 +318,10 @@ func noteNegotiatedAEAD(role string, cfg config, aead string) {
 		return
 	}
 	fxpAEADNegotiatedLogOnce.Do(func() {
+		if aead == fxpAEADNone {
+			log.Printf("fxp %s tunnel=%d session frames carried in the clear inside WireGuard (both ends are V2)", role, cfg.TunnelID)
+			return
+		}
 		log.Printf("fxp %s tunnel=%d using %s for session frames (negotiated with the peer)", role, cfg.TunnelID, aead)
 	})
 	fxpVerbosef("fxp %s tunnel=%d session aead=%s", role, cfg.TunnelID, aead)

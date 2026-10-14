@@ -338,3 +338,125 @@ func benchmarkSecureFrames(b *testing.B, aead string) {
 
 func BenchmarkSecureFramesAESGCM(b *testing.B)   { benchmarkSecureFrames(b, fxpAEADAESGCM) }
 func BenchmarkSecureFramesChaCha20(b *testing.B) { benchmarkSecureFrames(b, fxpAEADChaCha20) }
+
+func TestFxpAEADPlainFramesOnlyWhenBothEndsAreV2(t *testing.T) {
+	forcePreferredAEAD(t, fxpAEADAESGCM)
+	v2 := config{Role: "exit", TunnelID: 507, ListenPort: 1, Key: "aead-test-key", TransportVersion: "v2"}
+	v1 := v2
+	v1.TransportVersion = "v1"
+
+	client, server := handshakeOverPipe(t, v2, v2)
+	if client.aead != fxpAEADNone || server.aead != fxpAEADNone {
+		t.Fatalf("both V2: expected none on both ends, got client=%q server=%q", client.aead, server.aead)
+	}
+	if client.dataWriteAEAD.Overhead() != 16 || server.lenReadAEAD.Overhead() != 16 {
+		t.Fatal("none must keep the 16-byte frame trailer so the frame layout stays the same")
+	}
+	exchangeFrames(t, client, server)
+
+	for name, pair := range map[string][2]config{"v1 client": {v1, v2}, "v1 server": {v2, v1}} {
+		client, server := handshakeOverPipe(t, pair[0], pair[1])
+		if client.aead == fxpAEADNone || server.aead == fxpAEADNone {
+			t.Fatalf("%s: plain frames negotiated across a V1 end: client=%q server=%q", name, client.aead, server.aead)
+		}
+		exchangeFrames(t, client, server)
+	}
+
+	pinned := v2
+	pinned.AEAD = "chacha20-poly1305"
+	client, server = handshakeOverPipe(t, v2, pinned)
+	if client.aead != fxpAEADChaCha20 || server.aead != fxpAEADChaCha20 {
+		t.Fatalf("server pinned chacha20 must win over none: client=%q server=%q", client.aead, server.aead)
+	}
+	exchangeFrames(t, client, server)
+
+	t.Setenv(fxpAEADNoneEnv, "0")
+	client, server = handshakeOverPipe(t, v2, v2)
+	if client.aead == fxpAEADNone || server.aead == fxpAEADNone {
+		t.Fatalf("kill switch ignored: client=%q server=%q", client.aead, server.aead)
+	}
+	exchangeFrames(t, client, server)
+}
+
+func TestFxpAEADPlainFramesRejectForeignBytes(t *testing.T) {
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		t.Fatal(err)
+	}
+	aead, err := newPlainAEAD(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonce := make([]byte, aead.NonceSize())
+	sealed := aead.Seal(nil, nonce, []byte("payload"), nil)
+	if len(sealed) != len("payload")+aead.Overhead() || string(sealed[:7]) != "payload" {
+		t.Fatalf("sealed = %q", sealed)
+	}
+	opened, err := aead.Open(nil, nonce, sealed, nil)
+	if err != nil || string(opened) != "payload" {
+		t.Fatalf("open = %q, %v", opened, err)
+	}
+	sealed[len(sealed)-1] ^= 1
+	if _, err := aead.Open(nil, nonce, sealed, nil); err == nil {
+		t.Fatal("a frame with a wrong marker was accepted")
+	}
+	if _, err := aead.Open(nil, nonce, sealed[:8], nil); err == nil {
+		t.Fatal("a frame shorter than the marker was accepted")
+	}
+	other, _ := newPlainAEAD(append([]byte("different-key-material-0123456789"), key...))
+	if _, err := other.Open(nil, nonce, aead.Seal(nil, nonce, []byte("x"), nil), nil); err == nil {
+		t.Fatal("a frame sealed under another session's marker was accepted")
+	}
+}
+
+func TestFxpAEADPipelinedHandshakeSwitchesToPlainAfterTheAck(t *testing.T) {
+	// 首轮用 AES 写出的帧和确认之后的明文帧都要认，顺序不乱（openFrameLength 的两把钥匙）。
+	forcePreferredAEAD(t, fxpAEADAESGCM)
+	cfg := config{Role: "exit", TunnelID: 508, ListenPort: 1, Key: "aead-test-key", TransportVersion: "v2"}
+	clientConn, serverConn := loopbackTCPPair(t)
+	client, err := newPipelinedClientSecureConn(clientConn, cfg, fxpWireCurrent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	received := make(chan string, 4)
+	serverErr := make(chan error, 1)
+	go func() {
+		server, err := newServerSecureConn(serverConn, cfg)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		for i := 0; i < 3; i++ {
+			frame, err := server.readFrame()
+			if err != nil {
+				serverErr <- err
+				return
+			}
+			received <- string(frame)
+		}
+		if server.aead != fxpAEADNone {
+			serverErr <- errorString("server did not switch to plain frames")
+			return
+		}
+		serverErr <- nil
+	}()
+	if err := client.writeFrames([]byte("hello"), []byte("first-payload")); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.consumeHandshakeAck(); err != nil {
+		t.Fatal(err)
+	}
+	if client.aead != fxpAEADNone {
+		t.Fatalf("client did not switch, aead=%q", client.aead)
+	}
+	if err := client.writeFrame([]byte("after-ack")); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatal(err)
+	}
+	got := []string{<-received, <-received, <-received}
+	if strings.Join(got, ",") != "hello,first-payload,after-ack" {
+		t.Fatalf("frames out of order or corrupted: %v", got)
+	}
+}
