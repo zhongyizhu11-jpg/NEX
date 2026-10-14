@@ -44,8 +44,17 @@ func (c *recordingFrameConn) writeFrame(plain []byte) error {
 	c.frames = append(c.frames, append([]byte(nil), plain...))
 	return nil
 }
-func (c *recordingFrameConn) readFrame() ([]byte, error) { select {} }
-func (c *recordingFrameConn) closeTransport()            {}
+func (c *recordingFrameConn) writeFrames(frames ...[]byte) error {
+	for _, frame := range frames {
+		if err := c.writeFrame(frame); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func (c *recordingFrameConn) readFrame() ([]byte, error)                 { select {} }
+func (c *recordingFrameConn) readFrames([][]byte, int) ([][]byte, error) { select {} }
+func (c *recordingFrameConn) closeTransport()                            {}
 
 // 先发一大段 CRLF 把采样撑满，再发请求行：以前采样满了就不再检查。
 func TestBlockHTTPIsNotBypassedByLeadingBlankLines(t *testing.T) {

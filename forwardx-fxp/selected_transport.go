@@ -198,17 +198,27 @@ func (t *selectedTransport) failoverLocked(cause error) error {
 }
 
 func (t *selectedTransport) writeFrame(plain []byte) error {
+	return t.writeFrames(plain)
+}
+
+// writeFrames 把几帧合成一次写；每一帧都先进重放缓存（确认之前），和单帧一样。
+func (t *selectedTransport) writeFrames(frames ...[]byte) error {
 	t.mu.Lock()
 	if t.closed {
 		t.mu.Unlock()
 		return net.ErrClosed
 	}
 	sec := t.sec
-	buffered := t.bufferLocked(plain)
+	buffered := true
+	for _, plain := range frames {
+		if !t.bufferLocked(plain) {
+			buffered = false
+		}
+	}
 	t.mu.Unlock()
-	err := sec.writeFrame(plain)
+	err := sec.writeFrames(frames...)
 	if err != nil && buffered {
-		// 还没确认的连接写失败：读协程会在等确认时发现并切走，这一帧已经在
+		// 还没确认的连接写失败：读协程会在等确认时发现并切走，这些帧已经在
 		// 缓存里，会随重放送到新端点。
 		return nil
 	}
@@ -216,21 +226,31 @@ func (t *selectedTransport) writeFrame(plain []byte) error {
 }
 
 func (t *selectedTransport) readFrame() ([]byte, error) {
+	var one [1][]byte
+	frames, err := t.readFrames(one[:0], 1)
+	if err != nil {
+		return nil, err
+	}
+	return frames[0], nil
+}
+
+// readFrames 从当前连接读一批帧；确认失败就切换端点重放，再从新连接读。
+func (t *selectedTransport) readFrames(dst [][]byte, max int) ([][]byte, error) {
 	for {
 		t.mu.Lock()
 		sec := t.sec
 		closed := t.closed
 		t.mu.Unlock()
 		if closed {
-			return nil, net.ErrClosed
+			return dst, net.ErrClosed
 		}
-		frame, err := sec.readFrame()
+		frames, err := sec.readFrames(dst, max)
 		if err == nil {
-			return frame, nil
+			return frames, nil
 		}
 		var ackErr *fxpAckError
 		if !errors.As(err, &ackErr) {
-			return nil, err
+			return dst, err
 		}
 		t.mu.Lock()
 		if t.sec != sec {
@@ -240,7 +260,7 @@ func (t *selectedTransport) readFrame() ([]byte, error) {
 		failoverErr := t.failoverLocked(err)
 		t.mu.Unlock()
 		if failoverErr != nil {
-			return nil, failoverErr
+			return dst, failoverErr
 		}
 	}
 }
