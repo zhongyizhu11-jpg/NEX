@@ -55,6 +55,9 @@ type failoverUDPSession struct {
 	client   net.Addr
 	upstream net.Conn
 	index    int
+	// batch / listener 是上游套接字和监听套接字的批量收发句柄（Linux），任一为 nil 就逐包收发。
+	batch    *udpBatchConn
+	listener *udpBatchConn
 	// 最近一次有包（两个方向都算）的时刻，UnixNano。
 	last atomic.Int64
 }
@@ -130,8 +133,13 @@ func (p *failoverProxy) serveUDP() {
 	if udpConn != nil {
 		_ = udpConn.SetReadBuffer(failoverUDPReadBuffer)
 	}
-	buf := make([]byte, failoverUDPBufferSize)
 	var backoff serveLoopBackoff
+	// Linux 上一次系统调用收一批（recvmmsg），见 udp_batch_linux.go。
+	if listener := newUDPBatchConn(p.udp); listener != nil {
+		p.serveUDPBatch(listener, &backoff)
+		return
+	}
+	buf := make([]byte, failoverUDPBufferSize)
 	for {
 		var n int
 		var client netip.AddrPort
@@ -146,21 +154,7 @@ func (p *failoverProxy) serveUDP() {
 			}
 		}
 		if err != nil {
-			if p.retired() {
-				return
-			}
-			var netErr net.Error
-			if errors.As(err, &netErr) && netErr.Timeout() {
-				continue
-			}
-			// 临时错误退避重试；监听意外关闭则摘掉整个代理等对账重建（以前直接退出，UDP 从此没人收）。
-			exit, fatal := serveLoopHandleError(p.done, &backoff, err, func(err error, suppressed int) {
-				logf("failover udp read failed rule=%d source=%d suppressed=%d: %v", p.ruleID, p.sourcePort, suppressed, err)
-			})
-			if fatal {
-				p.abandonAfterServeFailure("udp read", err)
-			}
-			if exit {
+			if p.handleUDPReadError(err, &backoff) {
 				return
 			}
 			continue
@@ -171,6 +165,76 @@ func (p *failoverProxy) serveUDP() {
 		}
 		// 这个包在下一次 ReadFrom 之前就写出去了，buf 可以复用。
 		p.forwardUDPPacket(failoverUDPSessionKey(client), buf[:n])
+	}
+}
+
+// handleUDPReadError 处理监听读出错，返回 true 表示读循环该退出。
+func (p *failoverProxy) handleUDPReadError(err error, backoff *serveLoopBackoff) bool {
+	if p.retired() {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return false
+	}
+	// 临时错误退避重试；监听意外关闭则摘掉整个代理等对账重建（以前直接退出，UDP 从此没人收）。
+	exit, fatal := serveLoopHandleError(p.done, backoff, err, func(err error, suppressed int) {
+		logf("failover udp read failed rule=%d source=%d suppressed=%d: %v", p.ruleID, p.sourcePort, suppressed, err)
+	})
+	if fatal {
+		p.abandonAfterServeFailure("udp read", err)
+	}
+	return exit
+}
+
+// serveUDPBatch 是 serveUDP 的批量版：一次收一批，同一来源连着的几个包一次写到它的上游。
+func (p *failoverProxy) serveUDPBatch(listener *udpBatchConn, backoff *serveLoopBackoff) {
+	for {
+		batch, n, err := listener.recv()
+		if err != nil {
+			if p.handleUDPReadError(err, backoff) {
+				return
+			}
+			continue
+		}
+		backoff.success()
+		start := 0
+		for i := 1; i <= n; i++ {
+			if i < n && failoverUDPSessionKey(batch.addr(i)) == failoverUDPSessionKey(batch.addr(start)) {
+				continue
+			}
+			p.forwardUDPRun(failoverUDPSessionKey(batch.addr(start)), batch, start, i)
+			start = i
+		}
+		// 这批包都写出去了（或者丢了），下一次 recv 之前缓冲就可以还回去。
+		putUDPBatch(batch)
+	}
+}
+
+// forwardUDPRun 把同一来源连着的 [from, to) 几个包写到它的会话上游；几个包就一次 sendmmsg。
+// 上游刚被关掉（强制切换断旧连接、或者刚好被回收）就和 forwardUDPPacket 一样丢掉会话重挑一次。
+func (p *failoverProxy) forwardUDPRun(key netip.AddrPort, batch *udpBatch, from int, to int) {
+	for attempt := 0; attempt < 2; attempt++ {
+		session := p.udpSessionFor(key)
+		if session == nil {
+			return
+		}
+		session.touch(time.Now())
+		var err error
+		if to-from > 1 && session.batch != nil {
+			err = session.batch.send(batch, from, to)
+		} else {
+			for i := from; i < to; i++ {
+				// 别的写错误（对端回过 ICMP 不可达之类）只丢这一个包，下一个照发。
+				if _, err = session.upstream.Write(batch.packet(i)); err != nil && errors.Is(err, net.ErrClosed) {
+					break
+				}
+			}
+		}
+		if err == nil || !errors.Is(err, net.ErrClosed) {
+			return
+		}
+		p.dropUDPSession(session)
 	}
 }
 
@@ -215,6 +279,8 @@ func (p *failoverProxy) udpSessionFor(key netip.AddrPort) *failoverUDPSession {
 		return nil
 	}
 	session = &failoverUDPSession{key: key, client: net.UDPAddrFromAddrPort(key), upstream: upstream, index: index}
+	session.batch = newUDPBatchConn(upstream)
+	session.listener = newUDPBatchConn(p.udp)
 	session.touch(time.Now())
 	// 先记到路径名下再放进会话表：中间要是正好切换、断旧连接，这个会话也在被断的名单里。
 	p.trackConn(index, upstream)
@@ -297,9 +363,15 @@ func (p *failoverProxy) dialUDPPath(key string) (net.Conn, int) {
 
 func (p *failoverProxy) copyUDPToClient(session *failoverUDPSession) {
 	defer p.dropUDPSession(session)
-	buf := getAgentByteBuffer(failoverUDPBufferSize)
-	defer putAgentByteBuffer(buf)
 	udpConn, _ := p.udp.(*net.UDPConn)
+	// 上游和监听都有批量句柄（Linux）就一次收一批、一次 sendmmsg 原路写回；等回包期间不占缓冲。
+	// 否则逐包：一个会话常驻一个 64 KiB 缓冲。
+	batched := session.batch != nil && session.listener != nil
+	var buf []byte
+	if !batched {
+		buf = getAgentByteBuffer(failoverUDPBufferSize)
+		defer putAgentByteBuffer(buf)
+	}
 	failures := 0
 	var deadline time.Time
 	for {
@@ -312,19 +384,32 @@ func (p *failoverProxy) copyUDPToClient(session *failoverUDPSession) {
 				_ = session.upstream.SetReadDeadline(deadline)
 			}
 		}
-		n, err := session.upstream.Read(buf)
-		if n > 0 {
-			failures = 0
-			session.touch(time.Now())
-			var werr error
-			if udpConn != nil {
-				_, werr = udpConn.WriteToUDPAddrPort(buf[:n], session.key)
-			} else {
-				_, werr = p.udp.WriteTo(buf[:n], session.client)
+		var n int
+		var err error
+		var werr error
+		if batched {
+			var batch *udpBatch
+			batch, n, err = session.batch.recv()
+			if n > 0 {
+				failures = 0
+				session.touch(time.Now())
+				werr = session.listener.sendTo(batch, n, session.key)
+				putUDPBatch(batch)
 			}
-			if werr != nil && (p.retired() || errors.Is(werr, net.ErrClosed)) {
-				return
+		} else {
+			n, err = session.upstream.Read(buf)
+			if n > 0 {
+				failures = 0
+				session.touch(time.Now())
+				if udpConn != nil {
+					_, werr = udpConn.WriteToUDPAddrPort(buf[:n], session.key)
+				} else {
+					_, werr = p.udp.WriteTo(buf[:n], session.client)
+				}
 			}
+		}
+		if werr != nil && (p.retired() || errors.Is(werr, net.ErrClosed)) {
+			return
 		}
 		if err == nil {
 			continue
