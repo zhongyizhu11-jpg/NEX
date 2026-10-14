@@ -1,20 +1,26 @@
 import { useEffect, useMemo, useState } from "react";
 
+import { BUILTIN_WALLPAPERS, normalizeLiquidGlassConfig, type LiquidGlassConfig } from "@shared/personalization";
 import { trpc } from "@/lib/trpc";
 import { mobileAuth } from "@/lib/mobileAuth";
 import { useUiTheme } from "@/hooks/useUiTheme";
+import { applyLiquidGlassVars, clearLiquidGlassVars, LIQUID_GLASS_PREVIEW_EVENT, readLiquidGlassPreview } from "@/lib/liquidGlass";
 
 /*
   「液态玻璃」主题（theme-liquid-glass.css）的两件动的东西，只在 <html data-ui-theme="liquid-glass"> 下挂：
 
-    1. 照片底   两张大幅圆角照片错落铺在页面后面（预览站 BackgroundScroll 的画法）。默认和预览站一样每次
-                打开随机拉两张（picsum.photos），记在 sessionStorage 里，同一个标签页里换页不换图；用户在
-                设置 › 个性化 › 背景图里设了壁纸就两格都放那张（视频壁纸这套不放，照片格退回渐变色块）。
+    1. 照片底   两张大幅圆角照片错落铺在页面后面（预览站 BackgroundScroll 的画法）。照片从哪来由设置 ›
+                个性化 › 液态玻璃的「照片来源」定（shared/personalization.ts 的 LIQUID_GLASS_PHOTO_SOURCES）：
+                随机拉（picsum.photos，记在 sessionStorage 里，同一个标签页里换页不换图）、用「自定义背景」
+                那张、内置壁纸里随机挑两张，或者不放。视频壁纸这套不放，照片格退回渐变色块。
                 图拉不到（断网、被墙）就让 CSS 里那组渐变色块露出来，卡仍然是玻璃。
     2. 光标跟随 鼠标在玻璃卡上移动时，卡里跟着亮一团白光：把光标相对卡的位置写进卡的 --fx-sheen-x/y，
                 进来 --fx-sheen-a 置 1、离开置 0，画法在 CSS 的卡片背景第一层。只在有鼠标的设备上监听
-                （hover: hover + pointer: fine），触屏一次都不跑。pointermove 只写三个自定义属性、不读布局
-                （getBoundingClientRect 在 pointerenter 时读一次缓存起来），一帧之内合并成一次。
+                （hover: hover + pointer: fine），触屏一次都不跑；设置里关了就不挂。pointermove 只写三个
+                自定义属性、不读布局（getBoundingClientRect 在进卡时读一次缓存起来），一帧之内合并成一次。
+
+  白雾 / 深色照片亮度 / 模糊三个数字由 lib/liquidGlass.ts 写到 <html> 上，CSS 读。设置页拨旋钮时广播一份
+  草稿（setLiquidGlassPreview），这里优先按草稿画。
 */
 
 const PHOTO_PROVIDER = "https://picsum.photos";
@@ -22,20 +28,28 @@ const SEED_STORAGE_KEY = "forwardx-liquid-glass-seed";
 const SHEEN_MEDIA = "(hover: hover) and (pointer: fine)";
 const SHEEN_TARGETS = '.workspace-main [data-slot="card"], .fx-card-face, .fx-summary, .auth-card-surface';
 
-function readSeed(): string {
+function readSeed(): number {
   try {
-    const saved = sessionStorage.getItem(SEED_STORAGE_KEY);
-    if (saved) return saved;
-    const fresh = String(Math.floor(Math.random() * 100000));
-    sessionStorage.setItem(SEED_STORAGE_KEY, fresh);
+    const saved = Number(sessionStorage.getItem(SEED_STORAGE_KEY));
+    if (Number.isFinite(saved) && saved > 0) return saved;
+    const fresh = Math.floor(Math.random() * 100000) + 1;
+    sessionStorage.setItem(SEED_STORAGE_KEY, String(fresh));
     return fresh;
   } catch {
-    return String(Math.floor(Math.random() * 100000));
+    return Math.floor(Math.random() * 100000) + 1;
   }
 }
 
-function photoUrl(seed: string, index: number) {
+function randomPhotoUrl(seed: number, index: number) {
   return `${PHOTO_PROVIDER}/seed/${seed}-${index}/900/1200`;
+}
+
+/* 内置壁纸里按 seed 挑两张不同的：同一个标签页里稳定，下次打开换 */
+function builtinPair(seed: number): [string, string] {
+  const list = BUILTIN_WALLPAPERS;
+  const first = seed % list.length;
+  const second = list.length > 1 ? (first + 1 + (Math.floor(seed / list.length) % (list.length - 1))) % list.length : first;
+  return [list[first].url, list[second].url];
 }
 
 function Photo({ src }: { src: string | null }) {
@@ -114,6 +128,16 @@ function useCursorSheen(enabled: boolean) {
   }, [enabled]);
 }
 
+function useLiquidGlassPreview() {
+  const [preview, setPreview] = useState<LiquidGlassConfig | null>(() => readLiquidGlassPreview());
+  useEffect(() => {
+    const sync = () => setPreview(readLiquidGlassPreview());
+    window.addEventListener(LIQUID_GLASS_PREVIEW_EVENT, sync);
+    return () => window.removeEventListener(LIQUID_GLASS_PREVIEW_EVENT, sync);
+  }, []);
+  return preview;
+}
+
 export default function LiquidGlassBackdrop() {
   const uiTheme = useUiTheme();
   const active = uiTheme === "liquid-glass";
@@ -124,19 +148,33 @@ export default function LiquidGlassBackdrop() {
     staleTime: 60_000,
   });
   const seed = useMemo(() => readSeed(), []);
-  useCursorSheen(active);
+  const preview = useLiquidGlassPreview();
+  const config = useMemo(
+    () => preview ?? normalizeLiquidGlassConfig((data as any)?.personalizationLiquidGlass),
+    [preview, data],
+  );
+  useCursorSheen(active && config.sheen);
+  useEffect(() => {
+    if (!active) return;
+    applyLiquidGlassVars(config);
+    return () => clearLiquidGlassVars();
+  }, [active, config]);
   if (!active) return null;
 
   const background = data?.personalizationBackground;
-  const source = background?.source || "none";
+  const backgroundSource = background?.source || "none";
   const urlType = background?.urlType || "image";
   const customUrl = String(background?.effectiveUrl || "");
-  const isVideo = source === "url" && urlType === "video";
-  const sources: [string | null, string | null] = isVideo
-    ? [null, null]
-    : source !== "none" && customUrl
-      ? [customUrl, customUrl]
-      : [photoUrl(seed, 1), photoUrl(seed, 2)];
+  const wallpaper = backgroundSource !== "none" && urlType !== "video" && customUrl ? customUrl : null;
+  const random: [string, string] = [randomPhotoUrl(seed, 1), randomPhotoUrl(seed, 2)];
+  let sources: [string | null, string | null];
+  switch (config.photoSource) {
+    case "random": sources = random; break;
+    case "wallpaper": sources = [wallpaper, wallpaper]; break;
+    case "builtin": sources = builtinPair(seed); break;
+    case "none": sources = [null, null]; break;
+    default: sources = wallpaper ? [wallpaper, wallpaper] : random;
+  }
 
   return (
     <div className="fx-lg-backdrop" aria-hidden="true">

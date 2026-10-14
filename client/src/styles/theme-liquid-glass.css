@@ -64,8 +64,9 @@ html[data-ui-theme="liquid-glass"] {
   --fx-lg-card: rgb(255 255 255 / 45%);
   --fx-lg-card-stroke: rgb(255 255 255 / 65%);
   --fx-lg-card-stroke-hover: rgb(255 255 255 / 90%);
-  --fx-lg-blur: blur(28px) saturate(180%) brightness(1.08);
-  --fx-lg-blur-light: blur(16px) saturate(160%) brightness(1.06);
+  /* 三个数字由设置 › 个性化 › 液态玻璃给（client/src/lib/liquidGlass.ts 写到 <html> 上），没给就是预览站的值 */
+  --fx-lg-blur: blur(var(--fx-lg-blur-px, 28px)) saturate(180%) brightness(1.08);
+  --fx-lg-blur-light: blur(calc(var(--fx-lg-blur-px, 28px) * 0.6)) saturate(160%) brightness(1.06);
   --fx-lg-highlight: inset 0 1px 1px rgb(255 255 255 / 90%);
   --fx-lg-sheen-alpha: 0.28;
   --fx-lg-photo-opacity: 1;
@@ -120,11 +121,11 @@ html.dark[data-ui-theme="liquid-glass"] {
   --fx-lg-card: rgb(255 255 255 / 5%);
   --fx-lg-card-stroke: rgb(255 255 255 / 10%);
   --fx-lg-card-stroke-hover: rgb(255 255 255 / 20%);
-  --fx-lg-blur: blur(32px) saturate(190%);
-  --fx-lg-blur-light: blur(14px) saturate(160%);
+  --fx-lg-blur: blur(calc(var(--fx-lg-blur-px, 28px) * 1.15)) saturate(190%);
+  --fx-lg-blur-light: blur(calc(var(--fx-lg-blur-px, 28px) * 0.5)) saturate(160%);
   --fx-lg-highlight: inset 0 1px 1px rgb(255 255 255 / 15%);
   --fx-lg-sheen-alpha: 0.12;
-  --fx-lg-photo-opacity: 0.4;
+  --fx-lg-photo-opacity: var(--fx-lg-dark-opacity, 0.4);
   --fx-lg-photo-stroke: rgb(255 255 255 / 10%);
   --fx-lg-photo-shadow: 0 25px 50px -12px rgb(0 0 0 / 60%);
   --fx-lg-glow-1: rgb(99 102 241 / 8%);
@@ -235,11 +236,11 @@ html[data-ui-theme="liquid-glass"] .setup-shell { background: transparent; }
 }
 .fx-lg-photo:nth-child(1)::before { background: linear-gradient(to right, transparent 0%, transparent 60%, color-mix(in srgb, var(--fx-l0-page) 25%, transparent) 100%); }
 .fx-lg-photo:nth-child(2)::before { background: linear-gradient(to left, transparent 0%, transparent 60%, color-mix(in srgb, var(--fx-l0-page) 25%, transparent) 100%); }
-/* 浅色下照片再罩一层 30% 的页面底色：预览站的随机图偏亮，NEX 的页面标题和侧栏文字直接压在照片上，不罩一层会看不清 */
+/* 浅色下照片再罩一层页面底色（出厂 30%，设置里可调）：预览站的随机图偏亮，NEX 的页面标题和侧栏文字直接压在照片上，不罩一层会看不清 */
 .fx-lg-photo::after {
   background:
     linear-gradient(to top, color-mix(in srgb, var(--fx-l0-page) 40%, transparent) 0%, transparent 50%),
-    linear-gradient(color-mix(in srgb, var(--fx-l0-page) 30%, transparent), color-mix(in srgb, var(--fx-l0-page) 30%, transparent));
+    linear-gradient(color-mix(in srgb, var(--fx-l0-page) var(--fx-lg-wash, 30%), transparent), color-mix(in srgb, var(--fx-l0-page) var(--fx-lg-wash, 30%), transparent));
 }
 .dark .fx-lg-photo::after { background: linear-gradient(to top, color-mix(in srgb, var(--fx-l0-page) 40%, transparent) 0%, transparent 50%); }
 .dark .fx-lg-photo:nth-child(1)::before { background: linear-gradient(to right, transparent 0%, transparent 60%, color-mix(in srgb, var(--fx-l0-page) 50%, transparent) 100%); }

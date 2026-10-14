@@ -69,3 +69,14 @@ test("界面主题：经典 / 极光 / 墨金 / 玫瑰 / 朱砂 / 液态玻璃�
   assert.equal(normalizePersonalizationUiTheme("neon"), "classic");
   assert.equal(normalizePersonalizationUiTheme(undefined), "classic");
 });
+
+test("液态玻璃参数：越界的数字夹回范围，坏值回到出厂", async () => {
+  const { normalizeLiquidGlassConfig, DEFAULT_LIQUID_GLASS } = await import("./personalization");
+  assert.deepEqual(normalizeLiquidGlassConfig(undefined), DEFAULT_LIQUID_GLASS);
+  assert.deepEqual(normalizeLiquidGlassConfig("not json"), DEFAULT_LIQUID_GLASS);
+  assert.deepEqual(
+    normalizeLiquidGlassConfig({ photoSource: "builtin", wash: 95, darkOpacity: "55", blur: -3, sheen: false }),
+    { photoSource: "builtin", wash: 80, darkOpacity: 55, blur: 0, sheen: false },
+  );
+  assert.deepEqual(normalizeLiquidGlassConfig(JSON.stringify({ photoSource: "moon", blur: 12.4 })), { ...DEFAULT_LIQUID_GLASS, blur: 12 });
+});
