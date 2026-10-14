@@ -16,12 +16,17 @@ type passthroughKernelRunner struct {
 	listings map[string]string // "nat PREROUTING" -> -S 输出
 }
 
+// passthroughIptables 按数据面的拼法拼出期望的命令：xtables 锁等待参数空着时不能多出一个空格。
+func passthroughIptables(rest string) string {
+	return strings.Join(append(append([]string{"iptables"}, iptablesWaitArgs()...), rest), " ")
+}
+
 func (runner *passthroughKernelRunner) run(args ...string) (string, error) {
 	line := strings.Join(args, " ")
 	runner.mu.Lock()
 	runner.commands = append(runner.commands, line)
 	runner.mu.Unlock()
-	if len(args) >= 6 && args[0] == "iptables" {
+	if len(args) >= 5 && args[0] == "iptables" {
 		for i := 0; i+3 < len(args); i++ {
 			if args[i] == "-t" && args[i+2] == "-S" {
 				return runner.listings[args[i+1]+" "+args[i+3]], nil
@@ -89,13 +94,13 @@ func TestWireGuardKernelPlaneSyncsPassthroughRules(t *testing.T) {
 	text := strings.Join(runner.lines(), "\n")
 	for _, want := range []string{
 		"sysctl -w net.ipv4.ip_forward=1",
-		"iptables " + iptablesWaitFlag() + " -t nat -D PREROUTING -s 10.77.0.2/32 -d 10.77.0.1/32 -i nexwg42 -p tcp -m tcp --dport 443 -m comment --comment " + stale + " -j DNAT --to-destination 1.2.3.9:8443",
-		"iptables " + iptablesWaitFlag() + " -t nat -I PREROUTING -i nexwg42 -s 10.77.0.2/32 -d 10.77.0.1/32 -p tcp --dport 443 -m comment --comment nex-pt-nexwg42-12-tcp-",
+		passthroughIptables("-t nat -D PREROUTING -s 10.77.0.2/32 -d 10.77.0.1/32 -i nexwg42 -p tcp -m tcp --dport 443 -m comment --comment " + stale + " -j DNAT --to-destination 1.2.3.9:8443"),
+		passthroughIptables("-t nat -I PREROUTING -i nexwg42 -s 10.77.0.2/32 -d 10.77.0.1/32 -p tcp --dport 443 -m comment --comment nex-pt-nexwg42-12-tcp-"),
 		"-j DNAT --to-destination 1.2.3.4:8443",
-		"iptables " + iptablesWaitFlag() + " -t nat -I POSTROUTING -s 10.77.0.2/32 -d 1.2.3.4/32 -p tcp --dport 8443 -m comment --comment nex-pt-nexwg42-12-tcp-",
-		"iptables " + iptablesWaitFlag() + " -t filter -I FORWARD -i nexwg42 -s 10.77.0.2/32 -d 1.2.3.4/32 -p tcp --dport 8443",
-		"iptables " + iptablesWaitFlag() + " -t filter -I FORWARD -o nexwg42 -d 10.77.0.2/32 -s 1.2.3.4/32 -p tcp --sport 8443 -m conntrack --ctstate ESTABLISHED,RELATED",
-		"iptables " + iptablesWaitFlag() + " -t mangle -I FORWARD -o nexwg42 -p tcp --tcp-flags SYN,RST SYN -m comment --comment nex-pt-nexwg42-mss -j TCPMSS --clamp-mss-to-pmtu",
+		passthroughIptables("-t nat -I POSTROUTING -s 10.77.0.2/32 -d 1.2.3.4/32 -p tcp --dport 8443 -m comment --comment nex-pt-nexwg42-12-tcp-"),
+		passthroughIptables("-t filter -I FORWARD -i nexwg42 -s 10.77.0.2/32 -d 1.2.3.4/32 -p tcp --dport 8443"),
+		passthroughIptables("-t filter -I FORWARD -o nexwg42 -d 10.77.0.2/32 -s 1.2.3.4/32 -p tcp --sport 8443 -m conntrack --ctstate ESTABLISHED,RELATED"),
+		passthroughIptables("-t mangle -I FORWARD -o nexwg42 -p tcp --tcp-flags SYN,RST SYN -m comment --comment nex-pt-nexwg42-mss -j TCPMSS --clamp-mss-to-pmtu"),
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("sync commands missing %q:\n%s", want, text)
