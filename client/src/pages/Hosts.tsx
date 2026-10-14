@@ -5,6 +5,7 @@ import {
   type HostEgressShapingMode,
   HOST_EGRESS_MBPS_MAX,
 } from "@/components/hosts/hostEgressShaping";
+import { describeHostFlowOffload } from "@/components/hosts/hostFlowOffload";
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { FormField } from "@/components/ui/form-field";
 import EmptyState from "@/components/EmptyState";
@@ -599,6 +600,7 @@ type HostFormData = {
   blockTls: boolean;
   egressShapingMode: HostEgressShapingMode;
   egressMbps: number;
+  flowOffload: boolean;
 };
 
 const defaultFormData: HostFormData = {
@@ -635,6 +637,7 @@ const defaultFormData: HostFormData = {
   blockTls: false,
   egressShapingMode: "off",
   egressMbps: 0,
+  flowOffload: false,
 };
 
 function clampMonthlyResetDay(value: number) {
@@ -2099,6 +2102,7 @@ function HostsContent() {
       blockTls: !!host.blockTls,
       egressShapingMode: normalizeHostEgressShapingMode(host.egressShapingMode),
       egressMbps: normalizeHostEgressMbpsInput(host.egressMbps),
+      flowOffload: !!host.flowOffload,
     });
     setEditingId(host.id);
     setEditingHostSnapshot(host);
@@ -2211,6 +2215,7 @@ function HostsContent() {
     const egressShapingPayload = user?.role === "admin"
       ? { egressShapingMode: form.egressShapingMode, egressMbps: form.egressShapingMode === "manual" ? form.egressMbps : 0 }
       : {};
+    const flowOffloadPayload = user?.role === "admin" && editingId ? { flowOffload: form.flowOffload } : {};
 
     if (editingId) {
       updateMutation.mutate({
@@ -2227,6 +2232,7 @@ function HostsContent() {
         ...trafficConfigPayload,
         ...protocolPolicyPayload,
         ...egressShapingPayload,
+        ...flowOffloadPayload,
       });
     } else {
       const ip = (form.ip || entry || "unknown").trim();
@@ -3693,6 +3699,26 @@ function HostsContent() {
                           </Select>
                         </div>
                       </div>
+                      {editingId ? (
+                        <div className="mt-2.5 flex min-h-9 items-start justify-between gap-3 rounded-md bg-muted/35 px-3 py-2">
+                          <div className="min-w-0 space-y-0.5">
+                            <Label className="text-sm font-medium">内核快速转发</Label>
+                            <p className="text-xs text-muted-foreground">
+                              iptables / nftables 规则和内核直通的连接建立后跳过防火墙逐包检查，转发更省 CPU；流量改从 conntrack 计。需要 Linux 6.1 起。
+                            </p>
+                            {form.flowOffload && editingHostRow?.flowOffloadStatus ? (
+                              <p className="text-xs text-muted-foreground" data-host-flow-offload-status="">
+                                {describeHostFlowOffload(editingHostRow.flowOffloadStatus)}
+                              </p>
+                            ) : null}
+                          </div>
+                          <Checkbox
+                            aria-label="内核快速转发"
+                            checked={form.flowOffload}
+                            onCheckedChange={(checked) => setForm({ ...form, flowOffload: checked })}
+                          />
+                        </div>
+                      ) : null}
                       <div className="mt-2.5 space-y-2 rounded-md bg-muted/35 px-3 py-2.5">
                         <FormField className="flex min-h-8 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                           <div className="flex min-w-0 items-center gap-2">

@@ -288,6 +288,26 @@ export const PROXY_SUBSCRIPTION_KIND_HINTS: Record<ProxySubscriptionKind, string
 };
 
 /**
+ * 订阅导进客户端后显示的名字：就是这份订阅所属用户的用户名，规则订阅后面加「规则」两个字，
+ * 两份导进同一个客户端也分得清。以前是「用途 · 节点订阅」，太长，导进去每次都得重命名。
+ *
+ * 一键导入链接的 name 参数和订阅响应头（Content-Disposition / Profile-Title，给 Surge、
+ * 手动添加的那些客户端）用的都是它。
+ */
+export function proxySubscriptionProfileName(username: string, kind: ProxySubscriptionKind): string {
+  const base = Array.from(String(username ?? "").replace(/[\u0000-\u001f\u007f"\\/]/g, "").trim()).slice(0, 32).join("") || "订阅";
+  return kind === "rules" ? `${base} 规则` : base;
+}
+
+/** 订阅响应头里的名字：RFC 5987 的 filename*（Clash 系、v2rayN 读这个）和 base64 的 Profile-Title（Hiddify、sing-box 系）。 */
+export function proxySubscriptionProfileHeaders(name: string): Record<string, string> {
+  return {
+    "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(name)}`,
+    "Profile-Title": `base64:${encodeBase64Utf8(name)}`,
+  };
+}
+
+/**
  * 拼订阅地址。
  *
  * 节点订阅不带 rules 参数，规则订阅带上 —— 这样同一个令牌就能同时提供两种，

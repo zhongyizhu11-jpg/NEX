@@ -498,6 +498,18 @@ type trafficPrevState struct {
 	out        uint64
 	conns      uint64
 	connSource string
+	// byteSource 是 in / out 这两个累计值的来源：空 = 规则自己的计数器（iptables / nft），
+	// trafficByteSourceConntrack = 快速转发开着时按 conntrack 算的累计值。来源一变就重新起基线。
+	byteSource string
+}
+
+const trafficByteSourceConntrack = "conntrack-acct-v1"
+
+func normalizeTrafficByteSource(source string) string {
+	if strings.TrimSpace(source) == trafficByteSourceConntrack {
+		return trafficByteSourceConntrack
+	}
+	return ""
 }
 
 type trafficBaselineUpdate struct {
@@ -512,6 +524,7 @@ type persistedTrafficBaseline struct {
 	Out        uint64 `json:"out"`
 	Conns      uint64 `json:"conns"`
 	ConnSource string `json:"connSource,omitempty"`
+	ByteSource string `json:"byteSource,omitempty"`
 }
 
 type pendingTrafficReport struct {
@@ -974,7 +987,7 @@ func persistedTrafficBaselines(updates []trafficBaselineUpdate) []persistedTraff
 		baselines = append(baselines, persistedTrafficBaseline{
 			Port: update.port, RuleID: update.state.ruleID,
 			In: update.state.in, Out: update.state.out, Conns: update.state.conns,
-			ConnSource: update.state.connSource,
+			ConnSource: update.state.connSource, ByteSource: update.state.byteSource,
 		})
 	}
 	return baselines
@@ -991,6 +1004,7 @@ func pendingTrafficBaselineUpdates(baselines []persistedTrafficBaseline) []traff
 			state: trafficPrevState{
 				ruleID: baseline.RuleID, in: baseline.In, out: baseline.Out, conns: baseline.Conns,
 				connSource: normalizeTrafficConnectionSource(baseline.ConnSource),
+				byteSource: normalizeTrafficByteSource(baseline.ByteSource),
 			},
 		})
 	}
@@ -1292,6 +1306,8 @@ func collectTraffic(cfg Config) time.Duration {
 			}
 			states = reliable
 		}
+		// 快速转发开着时，内核规则端口的 in / out 改从 conntrack 计（flowtable_offload.go）。
+		offloadPorts, offloadCounters, offloadOK := flowOffloadTrafficCounters(states)
 		connCounts, connTotals := conntrackConnectionsSnapshot(conntrackFallbackTrafficStates(states, diagnostics))
 		// Capture the fallback snapshot before queuing a missing connection rule.
 		// The new persistent counter starts after this point, so the migration
@@ -1303,13 +1319,21 @@ func collectTraffic(cfg Config) time.Duration {
 				continue
 			}
 			counters := countersForRuleTrafficState(state, iptablesCounters, nftCounters, nftProcessCounters, diagnostics.nftProcessMarkers)
+			byteSource := ""
+			if flowOffloadCountsState(state) && offloadPorts[parseStatePort(state.Port)] != nil {
+				if !offloadOK {
+					// 这一轮 conntrack 没读到：不报也不动基线，下一轮把增量一起补上。
+					continue
+				}
+				fromConntrack := offloadCounters[state.Port]
+				counters.In, counters.Out = fromConntrack.In, fromConntrack.Out
+				byteSource = trafficByteSourceConntrack
+			}
 			curConns := connCounts[state.Port]
 			previous := readPrevState(state.Port)
-			prevIn, prevOut, prevConns := previous.in, previous.out, previous.conns
+			prevConns := previous.conns
 			initialBaseline := previous.ruleID <= 0 || previous.ruleID != state.RuleID
-			if initialBaseline {
-				prevIn, prevOut = counters.In, counters.Out
-			}
+			prevIn, prevOut := trafficBytesBaseline(previous, counters, byteSource, initialBaseline)
 			connectionTotal, connectionSource := connectionCounterForTrafficState(state, counters, connTotals[state.Port], diagnostics)
 			connectionTotal, connectionSource, prevConns = prepareConnectionCounterBaseline(
 				state, previous, connectionTotal, connectionSource,
@@ -1321,7 +1345,7 @@ func collectTraffic(cfg Config) time.Duration {
 			}
 			nextBaseline := trafficPrevState{
 				ruleID: state.RuleID, in: counters.In, out: counters.Out,
-				conns: connectionTotal, connSource: connectionSource,
+				conns: connectionTotal, connSource: connectionSource, byteSource: byteSource,
 			}
 			if din > 0 || dout > 0 || dconns > 0 {
 				stats = append(stats, map[string]any{"ruleId": state.RuleID, "bytesIn": din, "bytesOut": dout, "connections": dconns})
@@ -3540,7 +3564,11 @@ func readPrevState(port string) trafficPrevState {
 		if len(lines) >= 5 && validTrafficConnectionSource(strings.TrimSpace(lines[4])) {
 			connSource = normalizeTrafficConnectionSource(strings.TrimSpace(lines[4]))
 		}
-		state := trafficPrevState{ruleID: rid, in: prevIn, out: prevOut, conns: prevConns, connSource: connSource}
+		byteSource := ""
+		if len(lines) >= 6 {
+			byteSource = normalizeTrafficByteSource(lines[5])
+		}
+		state := trafficPrevState{ruleID: rid, in: prevIn, out: prevOut, conns: prevConns, connSource: connSource, byteSource: byteSource}
 		cacheTrafficPrev(port, state)
 		return state
 	}
@@ -3588,6 +3616,7 @@ func writePrevState(port string, next trafficPrevState) error {
 
 func writePrevStateFile(port string, next trafficPrevState) (string, error) {
 	next.connSource = normalizeTrafficConnectionSource(next.connSource)
+	next.byteSource = normalizeTrafficByteSource(next.byteSource)
 	trafficPrevMu.Lock()
 	previous, exists := trafficPrevCache[port]
 	trafficPrevMu.Unlock()
@@ -3599,6 +3628,10 @@ func writePrevStateFile(port string, next trafficPrevState) (string, error) {
 	}
 	path := trafficStateDir + "/traffic_" + port + ".prev"
 	data := []byte(fmt.Sprintf("%d\n%d\n%d\n%d\n%s\n", next.ruleID, next.in, next.out, next.conns, next.connSource))
+	if next.byteSource != "" {
+		// 第 6 行只在按 conntrack 计时才写，旧格式的文件和旧版本 Agent 都照常读。
+		data = append(data, []byte(next.byteSource+"\n")...)
+	}
 	if err := writeTrafficStateFileDeferred(path, data, 0644); err != nil {
 		return "", err
 	}
@@ -3658,4 +3691,34 @@ func delta(cur, prev uint64) uint64 {
 		return cur - prev
 	}
 	return 0
+}
+
+// flowOffloadTrafficCounters 在快速转发开着时 dump 一次 conntrack：返回要改从 conntrack 计的端口、
+// 这些端口的累计值，以及这一轮读成功没有。没开时返回空表和 true（全部照旧）。
+func flowOffloadTrafficCounters(states []localRuleState) (map[int]map[string]bool, map[string]trafficCounters, bool) {
+	manager := sharedFlowOffloadManager()
+	if !manager.accountingActive() {
+		return map[int]map[string]bool{}, nil, true
+	}
+	ports := flowOffloadAccountingPorts(states)
+	counters, err := manager.accountant.sample(ports, func(port string) (uint64, uint64) {
+		previous := readPrevState(port)
+		return previous.in, previous.out
+	})
+	if err != nil {
+		if shouldLogAgentReport("flow-offload-accounting-failed", agentReportLogInterval) {
+			logf("flow offload conntrack accounting failed ports=%d: %v", len(ports), err)
+		}
+		return ports, nil, false
+	}
+	return ports, counters, true
+}
+
+// trafficBytesBaseline 给出这一轮 in / out 增量的起点：新规则从当前值起；计数来源换了（快速转发
+// 刚开 / 刚关，iptables 计数器和 conntrack 累计值没法互相相减）也从当前值重新起，这一轮记 0。
+func trafficBytesBaseline(previous trafficPrevState, counters trafficCounters, byteSource string, initialBaseline bool) (uint64, uint64) {
+	if initialBaseline || normalizeTrafficByteSource(previous.byteSource) != normalizeTrafficByteSource(byteSource) {
+		return counters.In, counters.Out
+	}
+	return previous.in, previous.out
 }

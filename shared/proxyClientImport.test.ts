@@ -14,6 +14,8 @@ import {
   PROXY_CLIENT_PLATFORMS,
   PROXY_CLIENT_TARGETS,
   PROXY_SUBSCRIPTION_KINDS,
+  proxySubscriptionProfileHeaders,
+  proxySubscriptionProfileName,
 } from "./proxyClientImport";
 
 const ORIGIN = "https://panel.example.com";
@@ -345,4 +347,17 @@ test("规则订阅在 Loon / QX / Shadowrocket 上走手动添加配置，不借
   );
   // 没有单独写 profileImport 的客户端，两种订阅同一个入口。
   assert.equal(proxyClientImportFor(byId("clash"), "rules").buildImportUrl, byId("clash").buildImportUrl);
+});
+
+test("订阅名称：用户名，规则订阅加「规则」，响应头能还原出同一个名字", () => {
+  assert.equal(proxySubscriptionProfileName("xixixi", "nodes"), "xixixi");
+  assert.equal(proxySubscriptionProfileName("小王", "rules"), "小王 规则");
+  assert.equal(proxySubscriptionProfileName("  ", "nodes"), "订阅");
+  assert.equal(proxySubscriptionProfileName('a"b\\c/d\n', "nodes"), "abcd");
+  assert.equal(proxySubscriptionProfileName("一".repeat(40), "nodes"), "一".repeat(32));
+  const headers = proxySubscriptionProfileHeaders("小王 规则");
+  assert.equal(headers["Content-Disposition"], "attachment; filename*=UTF-8''%E5%B0%8F%E7%8E%8B%20%E8%A7%84%E5%88%99");
+  assert.equal(decodeBase64Utf8(headers["Profile-Title"].slice("base64:".length)), "小王 规则");
+  // 响应头里不能有 HTTP 不允许的字符。
+  for (const value of Object.values(headers)) assert.match(value, /^[\x20-\x7e]+$/);
 });
