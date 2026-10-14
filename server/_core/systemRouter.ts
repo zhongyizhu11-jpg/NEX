@@ -299,7 +299,7 @@ const liquidGlassPhotoSourceSchema = z.enum(["auto", "random", "wallpaper", "bui
 const personalizationLiquidGlassSchema = z.object({
   photoSource: liquidGlassPhotoSourceSchema.optional(),
   wash: z.number().min(0).max(80).optional(),
-  darkOpacity: z.number().min(0).max(100).optional(),
+  darkOpacity: z.number().min(10).max(100).optional(),
   blur: z.number().min(0).max(40).optional(),
   sheen: z.boolean().optional(),
 });
