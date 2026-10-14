@@ -463,7 +463,13 @@ export function normalizePersonalizationCardStyle(value: unknown): Personalizati
             页面标题前一枚朱红菱形、每节顶线左端一段朱红短线、页顶一条细斜纹。只有这套主题下才出现
             「监控」页和那批借鉴来的运维功能入口（见 client/src/features/ops/）；设置开着的功能换主题后照常生效。
 
-  画法全在 client/src/styles/theme-aurora.css / theme-gilt.css / theme-rose.css / theme-cinnabar.css 里按 <html data-ui-theme> 选；这里只管 id 和文案。
+    liquid-glass 液态玻璃 —— 照 freetodo/monitor-theme-liquid-glass（Apple Liquid Glass）搬过来：页面后面两张大幅圆角
+            照片错落铺着（默认随机拉，设了壁纸就用壁纸），卡片是真毛玻璃（白 45% + 白边 + backdrop 模糊 28px），
+            鼠标移上去卡里跟着亮一团光；顶栏是浮着的玻璃条，按钮 / chip / 分段全是胶囊玻璃，选中态 Apple 蓝实心；
+            Inter 字体、标题和大数字字重 500。深色是 #111318 底上压暗到 40% 的照片。
+            照片层和光标跟随在 client/src/components/LiquidGlassBackdrop.tsx。
+
+  画法全在 client/src/styles/theme-aurora.css / theme-gilt.css / theme-rose.css / theme-cinnabar.css / theme-liquid-glass.css 里按 <html data-ui-theme> 选；这里只管 id 和文案。
   存的是 id；别的值一律回到 classic。
 */
 export const PERSONALIZATION_UI_THEMES = [
@@ -472,6 +478,7 @@ export const PERSONALIZATION_UI_THEMES = [
   { id: "gilt", name: "墨金", description: "米白纸底、平贴的小圆角卡纸，数字放在米色带上；衬线标题、金色下划线分段、方标签筛选；深色是墨黑配金。" },
   { id: "rose", name: "玫瑰", description: "胭脂粉底、无边线的浮起白瓣卡，数字嵌在托盘里；斜体衬线标题、细线空槽分段、全药丸；设置页改为编号分节。" },
   { id: "cinnabar", name: "朱砂", description: "素白纸面、3px 小方角、朱红短线和菱形标记，标签全大写加宽字距；带「监控」页和一整套运维功能（状态可用率、地区规则、IP 封禁、在线 IP、安全巡检、API 与 MCP……）。" },
+  { id: "liquid-glass", name: "液态玻璃", description: "Apple Liquid Glass：页面后面两张随机照片（设了壁纸就用壁纸），卡片是真毛玻璃、鼠标移上去跟着亮一团光，浮着的玻璃顶栏、胶囊玻璃按钮、Apple 蓝选中态；深色是压暗的照片。" },
 ] as const;
 
 export type PersonalizationUiThemeId = typeof PERSONALIZATION_UI_THEMES[number]["id"];
@@ -481,4 +488,63 @@ export function normalizePersonalizationUiTheme(value: unknown): Personalization
   return PERSONALIZATION_UI_THEMES.some((theme) => theme.id === text)
     ? text as PersonalizationUiThemeId
     : "classic";
+}
+
+/*
+  「液态玻璃」主题的几个旋钮（设置 › 个性化 › 液态玻璃）。只在界面主题是 liquid-glass 时生效，
+  存成一段 JSON（personalizationLiquidGlass），画法在 client/src/styles/theme-liquid-glass.css，
+  照片和光标跟随在 client/src/components/LiquidGlassBackdrop.tsx。
+
+    photoSource  照片从哪来：
+      auto      设了「自定义背景」就用那张，没设就随机拉（出厂值）
+      random    每次打开从 picsum.photos 拉两张随机照片（预览站的做法；国内服务器可能拉不到，拉不到退回色块）
+      wallpaper 只用「自定义背景」里设的那张；没设就是色块
+      builtin   面板自带的那几张壁纸里随机挑两张，不依赖外网
+      none      不放照片，只留渐变色块
+    wash         浅色下罩在照片上的那层页面底色，0～80%：数字越大照片越淡、压在照片上的字越清楚
+    darkOpacity  深色下照片的不透明度，10～100%（预览站是 40）
+    blur         玻璃卡的模糊半径，0～40px（预览站是 28；手机上卡多时调小更顺）
+    sheen        鼠标移上去卡里跟着亮一团光（只在有鼠标的设备上）
+*/
+export const LIQUID_GLASS_PHOTO_SOURCES = [
+  { id: "auto", name: "自动", description: "设了自定义背景就用那张，没设就随机拉。" },
+  { id: "random", name: "随机照片", description: "每次打开从 picsum.photos 拉两张，和预览站一样；拉不到退回色块。" },
+  { id: "wallpaper", name: "自定义背景", description: "只用「自定义背景」里设的那张。" },
+  { id: "builtin", name: "内置壁纸", description: "面板自带的壁纸里随机挑两张，不依赖外网。" },
+  { id: "none", name: "不放照片", description: "只留渐变色块。" },
+] as const;
+
+export type LiquidGlassPhotoSource = typeof LIQUID_GLASS_PHOTO_SOURCES[number]["id"];
+
+export type LiquidGlassConfig = {
+  photoSource: LiquidGlassPhotoSource;
+  wash: number;
+  darkOpacity: number;
+  blur: number;
+  sheen: boolean;
+};
+
+export const DEFAULT_LIQUID_GLASS: LiquidGlassConfig = { photoSource: "auto", wash: 30, darkOpacity: 40, blur: 28, sheen: true };
+export const LIQUID_GLASS_LIMITS = { wash: [0, 80], darkOpacity: [10, 100], blur: [0, 40] } as const;
+
+function clampInt(value: unknown, [min, max]: readonly [number, number], fallback: number) {
+  const n = typeof value === "string" ? Number(value) : value;
+  if (typeof n !== "number" || !Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(n)));
+}
+
+export function normalizeLiquidGlassConfig(value: unknown): LiquidGlassConfig {
+  let raw: any = value;
+  if (typeof raw === "string") {
+    try { raw = JSON.parse(raw); } catch { raw = null; }
+  }
+  if (!raw || typeof raw !== "object") return { ...DEFAULT_LIQUID_GLASS };
+  const source = String(raw.photoSource || "");
+  return {
+    photoSource: LIQUID_GLASS_PHOTO_SOURCES.some((item) => item.id === source) ? source as LiquidGlassPhotoSource : DEFAULT_LIQUID_GLASS.photoSource,
+    wash: clampInt(raw.wash, LIQUID_GLASS_LIMITS.wash, DEFAULT_LIQUID_GLASS.wash),
+    darkOpacity: clampInt(raw.darkOpacity, LIQUID_GLASS_LIMITS.darkOpacity, DEFAULT_LIQUID_GLASS.darkOpacity),
+    blur: clampInt(raw.blur, LIQUID_GLASS_LIMITS.blur, DEFAULT_LIQUID_GLASS.blur),
+    sheen: raw.sheen === undefined ? DEFAULT_LIQUID_GLASS.sheen : raw.sheen === true || raw.sheen === "true",
+  };
 }

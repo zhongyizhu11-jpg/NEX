@@ -1,0 +1,578 @@
+/*
+  ── 界面主题「液态玻璃」（设置 › 个性化 › 界面主题）──
+
+  第六种气质，由 <html data-ui-theme="liquid-glass"> 打开；没有这个属性这个文件一条都不生效。
+  照 freetodo/monitor-theme-liquid-glass（Apple Liquid Glass 风格的 monitor 主题，2026-10-14 看过源码和
+  预览站 liquid-glass.monitor-themes.pages.dev）搬过来：**照片底 + 真毛玻璃 + 胶囊控件 + Inter 细字**。
+
+  极光是「柔光底上的半透明卡、不模糊」；这一套反过来：底是两张真照片，卡必须模糊，否则照片的纹理会
+  从卡里透出来把字糊掉 —— 玻璃感恰恰来自「卡后面有东西在被模糊」。
+
+    1. 底   两张大幅圆角照片错落铺在页面后面（左那张靠上、右那张靠下），每张外面一圈白边、一层大影，
+            图上压一层很淡的径向彩色柔光。照片由 LiquidGlassBackdrop.tsx 画：默认每次打开随机拉两张
+            （picsum.photos，和预览站一样），用户在「背景图」里设了壁纸就用那张；拉不到图退回一组渐变色块。
+            深色下照片压到 40%，底是 #111318。
+    2. 卡   白 45% + 1px 白 65% 边 + 卡顶一条内高光 + backdrop 模糊 28px、提饱和 180%、提亮 8%；
+            鼠标移上去卡里跟着光标亮一团白光（--fx-sheen-x/y 由 LiquidGlassBackdrop.tsx 写，只在有鼠标的设备上）。
+            首页那排概览卡更透：没有底色、只有边和模糊。
+    3. 壳   顶栏是一枚浮在页面上的玻璃条（离边 12px、圆角 18px），侧栏、底部标签栏、弹层都是同一种玻璃。
+    4. 控件 按钮、chip、徽标、分段控件全部胶囊玻璃，选中态是 Apple 蓝实心（#2563eb）加蓝色光晕；
+            输入框是白 60% 的 12px 圆角玻璃。
+    5. 字   Inter（随面板自带 latin 变量字体，48KB，中文回落到苹方 / 微软雅黑），标题和大数字字重 500、
+            字距收紧；数字等宽。
+
+  不支持 backdrop-filter、或系统开了「减少透明度」时，卡退回近乎不透明的白 / 深灰。
+*/
+
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/fonts/inter-latin-variable.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+html[data-ui-theme="liquid-glass"] {
+  --fx-l0-page: #f8f9fb;
+  --fx-l1-surface: rgb(255 255 255 / 72%);
+  --fx-raised: rgb(255 255 255 / 86%);
+  --fx-l2-group: rgb(255 255 255 / 42%);
+  --fx-l3-control: rgb(255 255 255 / 70%);
+  --fx-l3-control-fill: rgb(255 255 255 / 34%);
+  --fx-sidebar: rgb(255 255 255 / 42%);
+  --fx-hover: rgb(255 255 255 / 55%);
+  --fx-pressed: rgb(255 255 255 / 80%);
+  --fx-stroke-weak: rgb(255 255 255 / 60%);
+  --fx-stroke-base: rgb(20 30 50 / 12%);
+  --fx-stroke-strong: rgb(20 30 50 / 30%);
+  --fx-text: #14161c;
+  --fx-text-secondary: #3f4452;
+  --fx-text-muted: #5f6574;
+  /* Apple 蓝：主色控件实心，不再是天蓝渐变。「默认配色」选了别的预设时内联变量会盖掉这几条 */
+  --fx-accent: #1d6fe0;
+  --fx-accent-strong: #2563eb;
+  --fx-accent-soft: rgb(37 99 235 / 12%);
+  --fx-accent-fill: #2563eb;
+  --fx-primary-gradient: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+  --fx-primary-gradient-hover: linear-gradient(135deg, #2f74ee 0%, #1d4fd8 100%);
+  --fx-primary-fill: #2563eb;
+  --fx-primary-fill-hover: #1d4fd8;
+  --fx-primary-stroke: rgb(59 130 246 / 70%);
+  --fx-primary-shadow: 0 4px 14px rgb(37 99 235 / 35%), inset 0 1px 1px rgb(255 255 255 / 30%);
+  /* 玻璃 */
+  --fx-lg-card: rgb(255 255 255 / 45%);
+  --fx-lg-card-stroke: rgb(255 255 255 / 65%);
+  --fx-lg-card-stroke-hover: rgb(255 255 255 / 90%);
+  /* 三个数字由设置 › 个性化 › 液态玻璃给（client/src/lib/liquidGlass.ts 写到 <html> 上），没给就是预览站的值 */
+  --fx-lg-blur: blur(var(--fx-lg-blur-px, 28px)) saturate(180%) brightness(1.08);
+  --fx-lg-blur-light: blur(calc(var(--fx-lg-blur-px, 28px) * 0.6)) saturate(160%) brightness(1.06);
+  --fx-lg-highlight: inset 0 1px 1px rgb(255 255 255 / 90%);
+  --fx-lg-sheen-alpha: 0.28;
+  --fx-lg-photo-opacity: 1;
+  --fx-lg-photo-stroke: rgb(255 255 255 / 25%);
+  --fx-lg-photo-shadow: 0 25px 50px -12px rgb(0 0 0 / 25%);
+  --fx-lg-glow-1: rgb(99 102 241 / 6%);
+  --fx-lg-glow-2: rgb(168 85 247 / 5%);
+  --fx-lg-glow-3: rgb(59 130 246 / 4%);
+  --fx-card-fill: var(--fx-lg-card);
+  --fx-card-stroke: var(--fx-lg-card-stroke);
+  --fx-elevation-card: 0 4px 16px rgb(0 0 0 / 3%), var(--fx-lg-highlight);
+  --fx-elevation-control: 0 2px 10px rgb(0 0 0 / 3%), inset 0 1px 1px rgb(255 255 255 / 80%);
+  --fx-elevation-popover: 0 16px 40px -10px rgb(20 30 50 / 18%), 0 2px 6px rgb(20 30 50 / 5%), 0 0 0 1px rgb(255 255 255 / 70%);
+  --fx-elevation-modal: 0 32px 80px -24px rgb(20 30 50 / 30%), 0 8px 24px -8px rgb(20 30 50 / 10%), 0 0 0 1px rgb(255 255 255 / 70%);
+  --fx-glass: rgb(255 255 255 / 15%);
+  --fx-glass-strong: rgb(255 255 255 / 55%);
+  --fx-glass-blur: saturate(160%) blur(10px);
+  --fx-radius-control: 12px;
+  --fx-radius-card: 14px;
+  --fx-radius-surface: 16px;
+  --fx-radius-modal: 24px;
+  --fx-font: "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  --fx-overview-canvas: rgb(255 255 255 / 30%);
+}
+
+html.dark[data-ui-theme="liquid-glass"] {
+  --fx-l0-page: #111318;
+  --fx-l1-surface: rgb(24 28 38 / 78%);
+  --fx-raised: rgb(30 34 46 / 88%);
+  --fx-l2-group: rgb(255 255 255 / 6%);
+  --fx-l3-control: rgb(255 255 255 / 8%);
+  --fx-l3-control-fill: rgb(255 255 255 / 7%);
+  --fx-sidebar: rgb(17 19 24 / 40%);
+  --fx-hover: rgb(255 255 255 / 8%);
+  --fx-pressed: rgb(255 255 255 / 14%);
+  --fx-stroke-weak: rgb(255 255 255 / 12%);
+  --fx-stroke-base: rgb(255 255 255 / 18%);
+  --fx-stroke-strong: rgb(255 255 255 / 34%);
+  --fx-text: #ffffff;
+  --fx-text-secondary: rgb(255 255 255 / 82%);
+  --fx-text-muted: rgb(255 255 255 / 64%);
+  --fx-accent: #8ec5ff;
+  --fx-accent-strong: #60a5fa;
+  --fx-accent-soft: rgb(96 165 250 / 16%);
+  --fx-accent-fill: #3b82f6;
+  --fx-primary-gradient: linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%);
+  --fx-primary-gradient-hover: linear-gradient(135deg, #4f98f5 0%, #2f74ee 100%);
+  --fx-primary-fill: #3b82f6;
+  --fx-primary-fill-hover: #2f74ee;
+  --fx-primary-stroke: rgb(96 165 250 / 70%);
+  --fx-primary-shadow: 0 4px 16px rgb(59 130 246 / 45%), inset 0 1px 1px rgb(255 255 255 / 35%);
+  --fx-lg-card: rgb(255 255 255 / 5%);
+  --fx-lg-card-stroke: rgb(255 255 255 / 10%);
+  --fx-lg-card-stroke-hover: rgb(255 255 255 / 20%);
+  --fx-lg-blur: blur(calc(var(--fx-lg-blur-px, 28px) * 1.15)) saturate(190%);
+  --fx-lg-blur-light: blur(calc(var(--fx-lg-blur-px, 28px) * 0.5)) saturate(160%);
+  --fx-lg-highlight: inset 0 1px 1px rgb(255 255 255 / 15%);
+  --fx-lg-sheen-alpha: 0.12;
+  --fx-lg-photo-opacity: var(--fx-lg-dark-opacity, 0.4);
+  --fx-lg-photo-stroke: rgb(255 255 255 / 10%);
+  --fx-lg-photo-shadow: 0 25px 50px -12px rgb(0 0 0 / 60%);
+  --fx-lg-glow-1: rgb(99 102 241 / 8%);
+  --fx-lg-glow-2: rgb(168 85 247 / 6%);
+  --fx-lg-glow-3: rgb(37 99 235 / 5%);
+  --fx-card-fill: var(--fx-lg-card);
+  --fx-card-stroke: var(--fx-lg-card-stroke);
+  --fx-elevation-card: 0 2px 10px rgb(0 0 0 / 20%), var(--fx-lg-highlight);
+  --fx-elevation-control: 0 2px 12px rgb(0 0 0 / 25%), inset 0 1px 1px rgb(255 255 255 / 15%);
+  --fx-elevation-popover: 0 16px 40px -8px rgb(0 0 0 / 65%), 0 2px 6px rgb(0 0 0 / 40%), 0 0 0 1px rgb(255 255 255 / 12%);
+  --fx-elevation-modal: 0 32px 80px -24px rgb(0 0 0 / 80%), 0 8px 24px -8px rgb(0 0 0 / 50%), 0 0 0 1px rgb(255 255 255 / 12%);
+  --fx-glass: rgb(20 24 33 / 18%);
+  --fx-glass-strong: rgb(18 22 32 / 70%);
+  --fx-glass-blur: saturate(160%) blur(10px);
+  --fx-overview-canvas: rgb(255 255 255 / 6%);
+}
+
+/* ── 1. 照片底 ───────────────────────────────────────────────── */
+/*
+  <html> 自己有底色（--fx-l0-page），body 不铺底；照片层由 LiquidGlassBackdrop.tsx 挂在 #root 里
+  （position: fixed、z-index -1，落在 #root 这个层叠上下文的最底下、<html> 底色之上）。
+  body::before 那层自定义壁纸不再单独铺 —— 用户设了壁纸时照片格里放的就是它。
+*/
+html[data-ui-theme="liquid-glass"] body { background: transparent; }
+html[data-ui-theme="liquid-glass"] body::before { display: none; }
+html[data-ui-theme="liquid-glass"] .personalization-video-background { display: none; }
+html[data-ui-theme="liquid-glass"] .fx-mesh { display: none; }
+html[data-ui-theme="liquid-glass"] .auth-shell,
+html[data-ui-theme="liquid-glass"] .public-home-shell,
+html[data-ui-theme="liquid-glass"] .setup-shell { background: transparent; }
+
+.fx-lg-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+  /* 照片上压一层很淡的彩色柔光（预览站 body 的三团径向渐变） */
+  background:
+    radial-gradient(at 20% 20%, var(--fx-lg-glow-1) 0px, transparent 50%),
+    radial-gradient(at 80% 15%, var(--fx-lg-glow-2) 0px, transparent 50%),
+    radial-gradient(at 50% 60%, var(--fx-lg-glow-3) 0px, transparent 60%);
+}
+.fx-lg-backdrop-wings {
+  display: flex;
+  justify-content: center;
+  gap: 32px;
+  width: 100%;
+  height: 100%;
+  margin: 0 auto;
+  padding: 0 16px;
+}
+.fx-lg-photo {
+  position: relative;
+  width: 50%;
+  max-width: 1300px;
+  height: 90vh;
+  min-height: 520px;
+  overflow: hidden;
+  border-radius: 44px;
+  border: 1px solid var(--fx-lg-photo-stroke);
+  box-shadow: var(--fx-lg-photo-shadow);
+  /* 拉不到图时露出来的渐变色块：和照片一样有明暗，玻璃卡压上去仍然成立 */
+  background:
+    radial-gradient(120% 80% at 20% 10%, #cfd9ea 0%, transparent 60%),
+    radial-gradient(100% 70% at 90% 90%, #e9d5c3 0%, transparent 60%),
+    linear-gradient(160deg, #e6ebf3 0%, #c9d2e3 45%, #b7c3d8 100%);
+  opacity: var(--fx-lg-photo-opacity);
+  transition: opacity 700ms ease;
+}
+.fx-lg-photo:nth-child(1) { top: -24px; }
+.fx-lg-photo:nth-child(2) { top: 80px; }
+.fx-lg-photo:nth-child(2) {
+  background:
+    radial-gradient(120% 80% at 80% 10%, #d8d2e6 0%, transparent 60%),
+    radial-gradient(100% 70% at 10% 90%, #c8dcd8 0%, transparent 60%),
+    linear-gradient(200deg, #e3e7f0 0%, #cbd3e2 45%, #b5bfd4 100%);
+}
+.dark .fx-lg-photo {
+  background:
+    radial-gradient(120% 80% at 20% 10%, #2a3350 0%, transparent 60%),
+    radial-gradient(100% 70% at 90% 90%, #3a2f45 0%, transparent 60%),
+    linear-gradient(160deg, #1b2030 0%, #151a26 45%, #10141d 100%);
+}
+.dark .fx-lg-photo:nth-child(2) {
+  background:
+    radial-gradient(120% 80% at 80% 10%, #2d2a48 0%, transparent 60%),
+    radial-gradient(100% 70% at 10% 90%, #223a3c 0%, transparent 60%),
+    linear-gradient(200deg, #1a1f2d 0%, #141926 45%, #0f131c 100%);
+}
+.fx-lg-photo > img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity 700ms ease;
+}
+.fx-lg-photo[data-loaded="true"] > img { opacity: 1; }
+/* 边缘融合与底部渐隐：照片朝页面中间和朝下渐渐化进底色里 */
+.fx-lg-photo::before,
+.fx-lg-photo::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.fx-lg-photo:nth-child(1)::before { background: linear-gradient(to right, transparent 0%, transparent 60%, color-mix(in srgb, var(--fx-l0-page) 25%, transparent) 100%); }
+.fx-lg-photo:nth-child(2)::before { background: linear-gradient(to left, transparent 0%, transparent 60%, color-mix(in srgb, var(--fx-l0-page) 25%, transparent) 100%); }
+/* 浅色下照片再罩一层页面底色（出厂 30%，设置里可调）：预览站的随机图偏亮，NEX 的页面标题和侧栏文字直接压在照片上，不罩一层会看不清 */
+.fx-lg-photo::after {
+  background:
+    linear-gradient(to top, color-mix(in srgb, var(--fx-l0-page) 40%, transparent) 0%, transparent 50%),
+    linear-gradient(color-mix(in srgb, var(--fx-l0-page) var(--fx-lg-wash, 30%), transparent), color-mix(in srgb, var(--fx-l0-page) var(--fx-lg-wash, 30%), transparent));
+}
+.dark .fx-lg-photo::after { background: linear-gradient(to top, color-mix(in srgb, var(--fx-l0-page) 40%, transparent) 0%, transparent 50%); }
+.dark .fx-lg-photo:nth-child(1)::before { background: linear-gradient(to right, transparent 0%, transparent 60%, color-mix(in srgb, var(--fx-l0-page) 50%, transparent) 100%); }
+.dark .fx-lg-photo:nth-child(2)::before { background: linear-gradient(to left, transparent 0%, transparent 60%, color-mix(in srgb, var(--fx-l0-page) 50%, transparent) 100%); }
+@media (max-width: 767px) {
+  .fx-lg-backdrop-wings { gap: 16px; padding: 0 8px; }
+  .fx-lg-photo { height: 85vh; border-radius: 32px; }
+  .fx-lg-photo:nth-child(2) { top: 64px; }
+}
+
+/* 直接压在照片上的字（页面标题、标题下那行、侧栏分组小标题、手机大标题）：一圈同底色的光晕托住，照片再花也读得清 */
+html[data-ui-theme="liquid-glass"] .workspace-header-title,
+html[data-ui-theme="liquid-glass"] .workspace-header-meta,
+html[data-ui-theme="liquid-glass"] .fx-navbar-large-title,
+html[data-ui-theme="liquid-glass"] .workspace-layout [data-sidebar="group-label"] {
+  text-shadow: 0 1px 2px rgb(255 255 255 / 80%), 0 0 14px rgb(255 255 255 / 80%), 0 0 28px rgb(255 255 255 / 60%);
+}
+html.dark[data-ui-theme="liquid-glass"] .workspace-header-title,
+html.dark[data-ui-theme="liquid-glass"] .workspace-header-meta,
+html.dark[data-ui-theme="liquid-glass"] .fx-navbar-large-title,
+html.dark[data-ui-theme="liquid-glass"] .workspace-layout [data-sidebar="group-label"] {
+  text-shadow: 0 1px 2px rgb(0 0 0 / 70%), 0 0 14px rgb(0 0 0 / 60%);
+}
+
+/* ── 2. 玻璃卡 ───────────────────────────────────────────────── */
+/*
+  经典的「彩色描边」是 padding-box / border-box 两层渐变压在不透明白卡上；卡身一半透之后那层渐变会从
+  卡身透出来把整张卡染色，所以这里和极光一样把描边改成一圈内描边（box-shadow inset），卡身是玻璃。
+  光标跟随的那团白光是背景的第一层：radial-gradient 圆心落在 --fx-sheen-x/y，透明度 --fx-sheen-a
+  （LiquidGlassBackdrop.tsx 在鼠标进出时写 0/1），跟着圆角一起裁，不用伪元素（伪元素要 overflow: hidden，
+  会把弹出层和拖拽手柄一起裁掉）。
+*/
+html[data-ui-theme="liquid-glass"] .workspace-main [data-slot="card"],
+html[data-ui-theme="liquid-glass"] .fx-card-face,
+html[data-ui-theme="liquid-glass"] .fx-summary,
+html[data-ui-theme="liquid-glass"] .public-home-shell [data-slot="card"] {
+  border: 1px solid var(--fx-lg-card-stroke);
+  background:
+    radial-gradient(360px circle at var(--fx-sheen-x, 50%) var(--fx-sheen-y, 50%), rgb(255 255 255 / calc(var(--fx-sheen-a, 0) * var(--fx-lg-sheen-alpha))), transparent 62%),
+    var(--fx-lg-card);
+  box-shadow: var(--fx-elevation-card);
+  -webkit-backdrop-filter: var(--fx-lg-blur);
+  backdrop-filter: var(--fx-lg-blur);
+  transition: border-color 300ms cubic-bezier(0.32, 0.72, 0, 1), box-shadow 300ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+html[data-ui-theme="liquid-glass"] .workspace-main [data-slot="card"]:hover,
+html[data-ui-theme="liquid-glass"] .fx-card-face:hover,
+html[data-ui-theme="liquid-glass"] .fx-summary:hover { border-color: var(--fx-lg-card-stroke-hover); }
+/* 彩色描边：内描边一圈状态色，卡身仍是玻璃 */
+html[data-ui-theme="liquid-glass"]:not([data-card-style]) .workspace-main [data-slot="card"],
+html[data-ui-theme="liquid-glass"][data-card-style="edge"] .workspace-main [data-slot="card"],
+html[data-ui-theme="liquid-glass"]:not([data-card-style]) .fx-card-face,
+html[data-ui-theme="liquid-glass"][data-card-style="edge"] .fx-card-face {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fx-card-tone) 30%, transparent), var(--fx-elevation-card);
+}
+html[data-ui-theme="liquid-glass"]:not([data-card-style]) .workspace-main [data-tone="off"][data-slot="card"],
+html[data-ui-theme="liquid-glass"][data-card-style="edge"] .workspace-main [data-tone="off"][data-slot="card"],
+html[data-ui-theme="liquid-glass"]:not([data-card-style]) .fx-card-face[data-tone="off"],
+html[data-ui-theme="liquid-glass"][data-card-style="edge"] .fx-card-face[data-tone="off"] {
+  box-shadow: var(--fx-elevation-card);
+}
+/* 状态光 / 渐变卡头：在玻璃上再铺那一层颜色 */
+html[data-ui-theme="liquid-glass"][data-card-style="glow"] .workspace-main [data-slot="card"],
+html[data-ui-theme="liquid-glass"][data-card-style="glow"] .fx-card-face {
+  background:
+    radial-gradient(360px circle at var(--fx-sheen-x, 50%) var(--fx-sheen-y, 50%), rgb(255 255 255 / calc(var(--fx-sheen-a, 0) * var(--fx-lg-sheen-alpha))), transparent 62%),
+    radial-gradient(120% 90% at 0% 0%, color-mix(in srgb, var(--fx-card-tone) 15%, transparent), transparent 55%),
+    var(--fx-lg-card);
+}
+html[data-ui-theme="liquid-glass"][data-card-style="bar"] .workspace-main [data-slot="card"],
+html[data-ui-theme="liquid-glass"][data-card-style="bar"] .fx-card-face {
+  background:
+    linear-gradient(90deg, var(--fx-card-tone), color-mix(in srgb, var(--fx-card-tone) 45%, white)) top / 100% 3px no-repeat,
+    radial-gradient(360px circle at var(--fx-sheen-x, 50%) var(--fx-sheen-y, 50%), rgb(255 255 255 / calc(var(--fx-sheen-a, 0) * var(--fx-lg-sheen-alpha))), transparent 62%),
+    linear-gradient(180deg, color-mix(in srgb, var(--fx-card-tone) 9%, transparent), transparent 42%),
+    var(--fx-lg-card);
+}
+/* 设置页「卡片风格」色块：和真卡一致 */
+html[data-ui-theme="liquid-glass"] .fx-cardstyle-swatch {
+  background:
+    radial-gradient(80% 70% at 0% 0%, #cfd9ea, transparent 70%),
+    radial-gradient(70% 60% at 100% 100%, #e9d5c3, transparent 70%),
+    var(--fx-l0-page);
+}
+html.dark[data-ui-theme="liquid-glass"] .fx-cardstyle-swatch {
+  background:
+    radial-gradient(80% 70% at 0% 0%, #2a3350, transparent 70%),
+    radial-gradient(70% 60% at 100% 100%, #3a2f45, transparent 70%),
+    var(--fx-l0-page);
+}
+html[data-ui-theme="liquid-glass"] .fx-cardstyle-swatch-face {
+  border: 1px solid var(--fx-lg-card-stroke);
+  background: var(--fx-lg-card);
+  -webkit-backdrop-filter: var(--fx-lg-blur-light);
+  backdrop-filter: var(--fx-lg-blur-light);
+}
+html[data-ui-theme="liquid-glass"] .fx-cardstyle-swatch[data-style="edge"] .fx-cardstyle-swatch-face {
+  border: 1px solid var(--fx-lg-card-stroke);
+  background: var(--fx-lg-card);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fx-card-tone) 30%, transparent), var(--fx-elevation-card);
+}
+/* 首页那排概览卡（预览站的 Summary 行）：更透，没有底色，只有边、模糊和一条内高光 */
+html[data-ui-theme="liquid-glass"] .fx-overview-card,
+html[data-ui-theme="liquid-glass"] .fx-overview-card.fx-card-face,
+html[data-ui-theme="liquid-glass"] .fx-overview-card[data-slot="card"] {
+  background: transparent;
+  box-shadow: var(--fx-lg-highlight);
+  -webkit-backdrop-filter: var(--fx-lg-blur-light);
+  backdrop-filter: var(--fx-lg-blur-light);
+}
+html[data-ui-theme="liquid-glass"] .fx-overview-card .system-health-verdict { border-top-color: var(--fx-lg-card-stroke); }
+html[data-ui-theme="liquid-glass"] .fx-overview-canvas { border: 1px solid var(--fx-lg-card-stroke); background: var(--fx-overview-canvas); }
+/* 卡里的读数格（CPU / 内存 / 磁盘）：更淡的一层玻璃；进度槽是预览站那种细白槽 */
+html[data-ui-theme="liquid-glass"] .fx-host-spec { background: var(--fx-l2-group); box-shadow: inset 0 0 0 1px rgb(255 255 255 / 45%); }
+html.dark[data-ui-theme="liquid-glass"] .fx-host-spec { box-shadow: inset 0 0 0 1px rgb(255 255 255 / 6%); }
+html[data-ui-theme="liquid-glass"] .fx-host-spec-bar { background: rgb(20 30 50 / 8%); }
+html.dark[data-ui-theme="liquid-glass"] .fx-host-spec-bar { background: rgb(255 255 255 / 12%); }
+html[data-ui-theme="liquid-glass"] .fx-summary-cell + .fx-summary-cell { border-left-color: var(--fx-lg-card-stroke); }
+
+/* ── 3. 外壳 ─────────────────────────────────────────────────── */
+/* 顶栏：一枚浮在页面上的玻璃条，离边 12px，滚起来停在离顶 8px 的地方 */
+html[data-ui-theme="liquid-glass"] .workspace-appbar {
+  top: 8px;
+  margin: 8px 12px 0;
+  border: 1px solid rgb(255 255 255 / 45%);
+  border-radius: 18px;
+  background: var(--fx-glass);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 2%), inset 0 1px 1px rgb(255 255 255 / 60%);
+}
+html.dark[data-ui-theme="liquid-glass"] .workspace-appbar {
+  border-color: rgb(255 255 255 / 8%);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 15%), inset 0 1px 1px rgb(255 255 255 / 8%);
+}
+html[data-ui-theme="liquid-glass"] .workspace-appbar-icon:hover { background: var(--fx-hover); }
+/* 侧栏：透的玻璃，右边一条白线 */
+html[data-ui-theme="liquid-glass"] .workspace-layout [data-sidebar="sidebar"] {
+  border-right-color: rgb(255 255 255 / 45%);
+  -webkit-backdrop-filter: var(--fx-lg-blur-light);
+  backdrop-filter: var(--fx-lg-blur-light);
+}
+html.dark[data-ui-theme="liquid-glass"] .workspace-layout [data-sidebar="sidebar"] { border-right-color: rgb(255 255 255 / 8%); }
+html[data-ui-theme="liquid-glass"] .workspace-layout [data-sidebar="menu-button"] { border-radius: var(--fx-radius-pill); }
+html[data-ui-theme="liquid-glass"] .workspace-layout [data-sidebar="menu-button"][data-active="true"] { box-shadow: var(--fx-primary-shadow); }
+/* 大标题导航栏（手机）：和照片同一层，只靠模糊分开 */
+html[data-ui-theme="liquid-glass"] .fx-navbar { background: color-mix(in srgb, var(--fx-l0-page) 40%, transparent); }
+html[data-ui-theme="liquid-glass"] .fx-navbar-collapsed { border-bottom-color: rgb(255 255 255 / 45%); }
+html.dark[data-ui-theme="liquid-glass"] .fx-navbar-collapsed { border-bottom-color: rgb(255 255 255 / 8%); }
+/* 底部标签栏：玻璃胶囊 */
+html[data-ui-theme="liquid-glass"] .fx-tabbar {
+  border-color: rgb(255 255 255 / 65%);
+  background: rgb(255 255 255 / 40%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  backdrop-filter: blur(20px) saturate(180%);
+  box-shadow: inset 0 1px 1px rgb(255 255 255 / 80%), 0 12px 36px rgb(0 0 0 / 8%);
+}
+html.dark[data-ui-theme="liquid-glass"] .fx-tabbar {
+  border-color: rgb(255 255 255 / 12%);
+  background: rgb(20 24 33 / 55%);
+  box-shadow: inset 0 1px 1px rgb(255 255 255 / 12%), 0 12px 36px rgb(0 0 0 / 50%);
+}
+/* 弹层：预览站的 popover 是白 90% + 模糊 */
+html[data-ui-theme="liquid-glass"] .fx-glass-surface,
+html[data-ui-theme="liquid-glass"] [role="menu"].fx-glass-surface,
+html[data-ui-theme="liquid-glass"] [role="listbox"].fx-glass-surface {
+  background: rgb(255 255 255 / 88%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  backdrop-filter: blur(24px) saturate(180%);
+}
+html.dark[data-ui-theme="liquid-glass"] .fx-glass-surface,
+html.dark[data-ui-theme="liquid-glass"] [role="menu"].fx-glass-surface,
+html.dark[data-ui-theme="liquid-glass"] [role="listbox"].fx-glass-surface { background: rgb(23 38 49 / 88%); }
+html[data-ui-theme="liquid-glass"] .dialog-panel {
+  border: 1px solid rgb(255 255 255 / 70%);
+  background: rgb(255 255 255 / 82%);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  backdrop-filter: blur(28px) saturate(180%);
+}
+html.dark[data-ui-theme="liquid-glass"] .dialog-panel { border-color: rgb(255 255 255 / 12%); background: rgb(20 24 33 / 82%); }
+/* 登录页：壁纸上那张卡回来，是玻璃的 */
+html[data-ui-theme="liquid-glass"] .auth-card-surface {
+  border: 1px solid var(--fx-lg-card-stroke);
+  background: var(--fx-lg-card);
+  box-shadow: var(--fx-elevation-card);
+  -webkit-backdrop-filter: var(--fx-lg-blur);
+  backdrop-filter: var(--fx-lg-blur);
+}
+html[data-ui-theme="liquid-glass"] .auth-divider-label { background: transparent; }
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  html[data-ui-theme="liquid-glass"] { --fx-lg-card: rgb(255 255 255 / 92%); --fx-glass: rgb(255 255 255 / 90%); --fx-glass-strong: rgb(255 255 255 / 94%); }
+  html.dark[data-ui-theme="liquid-glass"] { --fx-lg-card: rgb(24 28 38 / 94%); --fx-glass: rgb(20 24 33 / 92%); --fx-glass-strong: rgb(18 22 32 / 95%); }
+}
+@media (prefers-reduced-transparency: reduce) {
+  html[data-ui-theme="liquid-glass"] { --fx-lg-card: rgb(255 255 255 / 92%); --fx-glass: rgb(255 255 255 / 90%); }
+  html.dark[data-ui-theme="liquid-glass"] { --fx-lg-card: rgb(24 28 38 / 94%); --fx-glass: rgb(20 24 33 / 92%); }
+}
+
+/* ── 4. 胶囊玻璃控件 ─────────────────────────────────────────── */
+/* 分段控件：玻璃槽 + 白边，整条和每一格都是胶囊；选中格 Apple 蓝实心加光晕 */
+html[data-ui-theme="liquid-glass"] .workspace-tabs {
+  border-radius: var(--fx-radius-pill);
+  border: 1px solid rgb(255 255 255 / 60%);
+  background: var(--fx-l3-control-fill);
+  box-shadow: inset 0 1px 1px rgb(255 255 255 / 70%);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+html.dark[data-ui-theme="liquid-glass"] .workspace-tabs { border-color: rgb(255 255 255 / 8%); box-shadow: inset 0 1px 1px rgb(255 255 255 / 6%); }
+html[data-ui-theme="liquid-glass"] .workspace-tabs .workspace-tab,
+html[data-ui-theme="liquid-glass"] .workspace-tab-scroll { border-radius: var(--fx-radius-pill); }
+html[data-ui-theme="liquid-glass"] .workspace-tabs .workspace-tab[data-state="active"] { box-shadow: var(--fx-primary-shadow); }
+/* 输入框、下拉触发器、搜索框：白 60% 的玻璃，12px 圆角 */
+html[data-ui-theme="liquid-glass"] .workspace-main [data-slot="input"],
+html[data-ui-theme="liquid-glass"] .workspace-main [data-slot="select-trigger"],
+html[data-ui-theme="liquid-glass"] .workspace-filter-search input,
+html[data-ui-theme="liquid-glass"] .auth-card-surface [data-slot="input"] {
+  border-radius: var(--fx-radius-control);
+  background: rgb(255 255 255 / 60%);
+  border-color: rgb(255 255 255 / 75%);
+  box-shadow: inset 0 1px 1px rgb(255 255 255 / 80%), 0 1px 2px rgb(20 30 50 / 3%);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+html.dark[data-ui-theme="liquid-glass"] .workspace-main [data-slot="input"],
+html.dark[data-ui-theme="liquid-glass"] .workspace-main [data-slot="select-trigger"],
+html.dark[data-ui-theme="liquid-glass"] .workspace-filter-search input,
+html.dark[data-ui-theme="liquid-glass"] .auth-card-surface [data-slot="input"] {
+  background: rgb(255 255 255 / 8%);
+  border-color: rgb(255 255 255 / 14%);
+  box-shadow: inset 0 1px 1px rgb(255 255 255 / 8%);
+}
+html[data-ui-theme="liquid-glass"] .workspace-filter-search input { border-radius: var(--fx-radius-pill); }
+/* 按钮全部胶囊；次要 / 描边 / 幽灵按钮是玻璃，主按钮 Apple 蓝加光晕 */
+html[data-ui-theme="liquid-glass"] [data-slot="button"]:not([data-icon-button]) { border-radius: var(--fx-radius-pill); }
+html[data-ui-theme="liquid-glass"] [data-slot="button"][data-variant="outline"],
+html[data-ui-theme="liquid-glass"] [data-slot="button"][data-variant="secondary"] {
+  border: 1px solid rgb(255 255 255 / 60%);
+  background: rgb(255 255 255 / 20%);
+  box-shadow: 0 2px 10px rgb(0 0 0 / 3%), inset 0 1px 1px rgb(255 255 255 / 80%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  backdrop-filter: blur(20px) saturate(180%);
+  transition: background-color 200ms ease, border-color 200ms ease, box-shadow 200ms ease, transform 200ms ease;
+}
+html[data-ui-theme="liquid-glass"] [data-slot="button"][data-variant="outline"]:hover,
+html[data-ui-theme="liquid-glass"] [data-slot="button"][data-variant="secondary"]:hover {
+  background: rgb(255 255 255 / 35%);
+  border-color: rgb(255 255 255 / 90%);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 5%), inset 0 1px 1px rgb(255 255 255 / 95%);
+}
+html.dark[data-ui-theme="liquid-glass"] [data-slot="button"][data-variant="outline"],
+html.dark[data-ui-theme="liquid-glass"] [data-slot="button"][data-variant="secondary"] {
+  border-color: rgb(255 255 255 / 15%);
+  background: rgb(255 255 255 / 8%);
+  box-shadow: 0 2px 12px rgb(0 0 0 / 25%), inset 0 1px 1px rgb(255 255 255 / 15%);
+}
+html.dark[data-ui-theme="liquid-glass"] [data-slot="button"][data-variant="outline"]:hover,
+html.dark[data-ui-theme="liquid-glass"] [data-slot="button"][data-variant="secondary"]:hover {
+  background: rgb(255 255 255 / 16%);
+  border-color: rgb(255 255 255 / 25%);
+}
+html[data-ui-theme="liquid-glass"] .workspace-main [data-slot="button"][data-variant="default"],
+html[data-ui-theme="liquid-glass"] .workspace-main [data-slot="button"]:not([data-variant]) { box-shadow: var(--fx-primary-shadow); }
+@media (prefers-reduced-motion: no-preference) {
+  html[data-ui-theme="liquid-glass"] [data-slot="button"][data-variant="outline"]:active,
+  html[data-ui-theme="liquid-glass"] [data-slot="button"][data-variant="secondary"]:active { transform: scale(0.96); }
+}
+/* 状态胶囊、分组 chip、徽标：玻璃底的未选中态 */
+html[data-ui-theme="liquid-glass"] .fx-chip:not(.fx-chip-on) {
+  background: rgb(255 255 255 / 40%);
+  border-color: rgb(255 255 255 / 60%);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 80%);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+html.dark[data-ui-theme="liquid-glass"] .fx-chip:not(.fx-chip-on) {
+  background: rgb(255 255 255 / 10%);
+  border-color: rgb(255 255 255 / 18%);
+  box-shadow: none;
+}
+html[data-ui-theme="liquid-glass"] .fx-chip-on { box-shadow: var(--fx-primary-shadow); }
+html[data-ui-theme="liquid-glass"] [data-slot="badge"][data-variant="outline"],
+html[data-ui-theme="liquid-glass"] [data-slot="badge"][data-variant="secondary"] {
+  border-color: rgb(255 255 255 / 60%);
+  background: rgb(255 255 255 / 40%);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+html.dark[data-ui-theme="liquid-glass"] [data-slot="badge"][data-variant="outline"],
+html.dark[data-ui-theme="liquid-glass"] [data-slot="badge"][data-variant="secondary"] {
+  border-color: rgb(255 255 255 / 18%);
+  background: rgb(255 255 255 / 10%);
+}
+
+/* ── 5. 字 ───────────────────────────────────────────────────── */
+/* 预览站的 Inter：正文 400、标题和大数字 500 收字距，数字等宽 */
+html[data-ui-theme="liquid-glass"] body { font-optical-sizing: auto; letter-spacing: 0.005em; }
+html[data-ui-theme="liquid-glass"] h1,
+html[data-ui-theme="liquid-glass"] h2,
+html[data-ui-theme="liquid-glass"] h3,
+html[data-ui-theme="liquid-glass"] .fx-navbar-large-title,
+html[data-ui-theme="liquid-glass"] [data-slot="card-title"] { font-weight: 500; letter-spacing: -0.025em; }
+html[data-ui-theme="liquid-glass"] .fx-summary-value,
+html[data-ui-theme="liquid-glass"] .fx-rule-num > b,
+html[data-ui-theme="liquid-glass"] .fx-host-spec > b { font-weight: 500; letter-spacing: -0.035em; font-variant-numeric: tabular-nums; }
+
+/* ── 设置页「界面主题」的预览 ───────────────────────────────── */
+/* 一小块手机屏：两张照片色块错落在底上，两张玻璃卡压着，底部一枚玻璃胶囊 */
+.fx-uitheme-swatch[data-theme="liquid-glass"] {
+  background:
+    radial-gradient(60% 70% at 18% 30%, #d8a37a 0%, transparent 70%),
+    radial-gradient(60% 70% at 82% 70%, #6f9bd1 0%, transparent 70%),
+    radial-gradient(50% 50% at 50% 100%, #c9b8e8 0%, transparent 70%),
+    linear-gradient(160deg, #f1e6dc 0%, #c5d3e8 50%, #8fa9cf 100%);
+}
+.dark .fx-uitheme-swatch[data-theme="liquid-glass"] {
+  background:
+    radial-gradient(60% 70% at 18% 30%, #6b4a3a 0%, transparent 70%),
+    radial-gradient(60% 70% at 82% 70%, #2a4a7a 0%, transparent 70%),
+    radial-gradient(50% 50% at 50% 100%, #3d3356 0%, transparent 70%),
+    linear-gradient(160deg, #1f2330 0%, #151a26 50%, #111318 100%);
+}
+.fx-uitheme-swatch[data-theme="liquid-glass"] > i {
+  border-color: rgb(255 255 255 / 65%);
+  background: rgb(255 255 255 / 45%);
+  box-shadow: inset 0 1px 1px rgb(255 255 255 / 90%), 0 4px 12px rgb(0 0 0 / 5%);
+  -webkit-backdrop-filter: blur(6px) saturate(160%);
+  backdrop-filter: blur(6px) saturate(160%);
+}
+.dark .fx-uitheme-swatch[data-theme="liquid-glass"] > i {
+  border-color: rgb(255 255 255 / 12%);
+  background: rgb(255 255 255 / 8%);
+  box-shadow: inset 0 1px 1px rgb(255 255 255 / 15%), 0 4px 12px rgb(0 0 0 / 25%);
+}
+.fx-uitheme-swatch[data-theme="liquid-glass"] > b { border-color: rgb(255 255 255 / 70%); background: rgb(255 255 255 / 45%); }
+.dark .fx-uitheme-swatch[data-theme="liquid-glass"] > b { border-color: rgb(255 255 255 / 14%); background: rgb(20 24 33 / 60%); }
+.fx-uitheme-swatch[data-theme="liquid-glass"] > b::after { background: linear-gradient(135deg, #3b82f6, #2563eb); }

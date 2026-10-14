@@ -50,6 +50,10 @@ const 在案: Record<string, { 值: number[]; 因为: string }> = {
     值: [-1],
     因为: "「朱砂」主题的方格纸底：和极光、玫瑰同一个搭配，body::after 固定在 -1，#root 的 1 盖住它",
   },
+  "styles/theme-liquid-glass.css": {
+    值: [-1],
+    因为: "「液态玻璃」主题的照片底：.fx-lg-backdrop 固定在 #root 这个层叠上下文的 -1，落在页面内容之下、<html> 底色之上，和极光那一对是同一个搭配",
+  },
   "styles/workspace.css": {
     值: [1],
     因为: "组件内部同级排序（滚动按钮、连线节点、箭头），不参与全站分层",

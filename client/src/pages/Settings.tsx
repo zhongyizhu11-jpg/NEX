@@ -119,6 +119,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useCallback, useMemo, useRef, useState, useEffect } from "react";
 import { SaveDockBar, SaveDockProvider, useSaveDockActive, useSaveDockItem } from "@/components/settings/SaveDock";
 import { UiThemeDot } from "@/components/UiThemeQuickSwitch";
+import { setLiquidGlassPreview } from "@/lib/liquidGlass";
 import { toast } from "sonner";
 import { useLocation } from "wouter";
 import { BRAND_LOGO_MAX_BYTES } from "@shared/avatar";
@@ -133,6 +134,11 @@ import {
   PERSONALIZATION_THEME_PRESETS,
   isHexColor,
   normalizePersonalizationCardStyle,
+  normalizeLiquidGlassConfig,
+  DEFAULT_LIQUID_GLASS,
+  LIQUID_GLASS_LIMITS,
+  LIQUID_GLASS_PHOTO_SOURCES,
+  type LiquidGlassConfig,
   normalizePersonalizationUiTheme,
   normalizePersonalizationPageTint,
   personalizationSwatchGradient,
@@ -3262,13 +3268,14 @@ function normalizePublicHostMonitorPathInput(value: string) {
     .toLowerCase();
 }
 
-type PersonalizationSaveKey = "title" | "logo" | "theme" | "uiTheme" | "pageTint" | "cardStyle" | "background" | "homepage" | "sidebarPages";
+type PersonalizationSaveKey = "title" | "logo" | "theme" | "uiTheme" | "liquidGlass" | "pageTint" | "cardStyle" | "background" | "homepage" | "sidebarPages";
 
 const personalizationSaveMessages: Record<PersonalizationSaveKey, string> = {
   title: "网站标题已保存",
   logo: "Logo 已保存",
   theme: "默认配色已保存",
   uiTheme: "界面主题已保存",
+  liquidGlass: "液态玻璃参数已保存",
   pageTint: "页面底色已保存",
   cardStyle: "卡片风格已保存",
   background: "自定义背景已保存",
@@ -3281,6 +3288,7 @@ const personalizationSaveErrorMessages: Record<PersonalizationSaveKey, string> =
   logo: "Logo 保存失败",
   theme: "默认配色保存失败",
   uiTheme: "界面主题保存失败",
+  liquidGlass: "液态玻璃参数保存失败",
   pageTint: "页面底色保存失败",
   cardStyle: "卡片风格保存失败",
   background: "自定义背景保存失败",
@@ -3309,6 +3317,8 @@ function PersonalizationSettingsSection() {
   const [savedCardStyle, setSavedCardStyle] = useState<string>("edge");
   const [uiTheme, setUiTheme] = useState<string>("classic");
   const [savedUiTheme, setSavedUiTheme] = useState<string>("classic");
+  const [liquidGlass, setLiquidGlass] = useState<LiquidGlassConfig>(DEFAULT_LIQUID_GLASS);
+  const [savedLiquidGlass, setSavedLiquidGlass] = useState<LiquidGlassConfig>(DEFAULT_LIQUID_GLASS);
   const [homepageEnabled, setHomepageEnabled] = useState(true);
   const [homepageCustomEnabled, setHomepageCustomEnabled] = useState(false);
   const [homepageHtml, setHomepageHtml] = useState("");
@@ -3342,6 +3352,9 @@ function PersonalizationSettingsSection() {
     const nextUiTheme = normalizePersonalizationUiTheme((settings as any).personalizationUiTheme);
     setUiTheme(nextUiTheme);
     setSavedUiTheme(nextUiTheme);
+    const nextLiquidGlass = normalizeLiquidGlassConfig((settings as any).personalizationLiquidGlass);
+    setLiquidGlass(nextLiquidGlass);
+    setSavedLiquidGlass(nextLiquidGlass);
     setHomepageEnabled(settings.homepageEnabled ?? true);
     setHomepageCustomEnabled(!!settings.homepageCustomEnabled);
     setHomepageHtml(settings.homepageHtml || "");
@@ -3375,6 +3388,10 @@ function PersonalizationSettingsSection() {
         setSavedUiTheme(uiTheme);
         applyPersonalizationSurface({ pageTint: savedPageTint, cardStyle: savedCardStyle, uiTheme });
       }
+      if (key === "liquidGlass") {
+        setSavedLiquidGlass(liquidGlass);
+        setLiquidGlassPreview(null);
+      }
       if (key === "sidebarPages" && pendingCustomSidebarPagesRef.current) {
         setCustomSidebarPages(pendingCustomSidebarPagesRef.current);
         setCustomSidebarDialogOpen(false);
@@ -3403,6 +3420,7 @@ function PersonalizationSettingsSection() {
   const pageTintDirty = pageTint !== savedPageTint;
   const cardStyleDirty = cardStyle !== savedCardStyle;
   const uiThemeDirty = uiTheme !== savedUiTheme;
+  const liquidGlassDirty = JSON.stringify(liquidGlass) !== JSON.stringify(savedLiquidGlass);
   /*
     返回「存成了没有」，给玫瑰主题下的贴底保存栏用（它一项一项按顺序存）。正在存的判断看 ref 不看
     personalizationSaving：栏连着存两项时，第二项拿到的还是上一次渲染的 isPending。
@@ -3598,6 +3616,13 @@ function PersonalizationSettingsSection() {
     return savePersonalizationSection("uiTheme", { personalizationUiTheme: uiTheme });
   };
 
+  const handleSaveLiquidGlass = () => {
+    return savePersonalizationSection("liquidGlass", { personalizationLiquidGlass: liquidGlass });
+  };
+  const updateLiquidGlass = (patch: Partial<LiquidGlassConfig>) => {
+    setLiquidGlass((prev) => normalizeLiquidGlassConfig({ ...prev, ...patch }));
+  };
+
   const handleSaveBackground = () => {
     const nextBackground = normalizePersonalizationBackgroundConfig(backgroundConfig);
     if (nextBackground.source === "url") {
@@ -3654,6 +3679,11 @@ function PersonalizationSettingsSection() {
     applyPersonalizationTheme(saved.theme);
     applyPersonalizationSurface({ pageTint: saved.pageTint, cardStyle: saved.cardStyle, uiTheme: saved.uiTheme });
   }, []);
+  /* 液态玻璃的旋钮同样点一下就试看：拨了就把草稿广播给照片层，存了或离开这页就撤 */
+  useEffect(() => {
+    setLiquidGlassPreview(liquidGlassDirty ? liquidGlass : null);
+  }, [liquidGlass, liquidGlassDirty]);
+  useEffect(() => () => setLiquidGlassPreview(null), []);
 
   /* 玫瑰主题下的贴底保存栏：每一块登记自己（见 SaveDock.tsx）。自定义菜单在弹窗里存，不登记。 */
   const dockActive = useSaveDockActive();
@@ -3665,6 +3695,7 @@ function PersonalizationSettingsSection() {
     { id: "title", label: "网站标题", dirty: !!settings && siteTitleInput.trim().slice(0, 64) !== resolveSiteTitle(settings.siteTitle), save: handleSaveTitle },
     { id: "logo", label: "Logo", dirty: !!settings && siteLogoDataUrl !== (settings.siteLogoDataUrl || ""), save: handleSaveLogo },
     { id: "uiTheme", label: "界面主题", dirty: uiThemeDirty, save: handleSaveUiTheme },
+    { id: "liquidGlass", label: "液态玻璃", dirty: liquidGlassDirty, save: handleSaveLiquidGlass },
     { id: "theme", label: "配色", dirty: themeDirty, save: handleSaveThemePreset },
     { id: "pageTint", label: "页面底色", dirty: pageTintDirty, save: handleSavePageTint },
     { id: "cardStyle", label: "卡片风格", dirty: cardStyleDirty, save: handleSaveCardStyle },
@@ -4004,7 +4035,7 @@ function PersonalizationSettingsSection() {
           </Button>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-2 gap-3 sm:max-w-3xl sm:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 sm:max-w-3xl sm:grid-cols-3">
             {PERSONALIZATION_UI_THEMES.map((theme) => {
               const active = uiTheme === theme.id;
               return (
@@ -4031,6 +4062,103 @@ function PersonalizationSettingsSection() {
               );
             })}
           </div>
+        </CardContent>
+      </Card>
+
+      {/*
+        液态玻璃的旋钮：只有界面主题是液态玻璃时才看得出效果，但一直露着 —— 先调好再切主题也行。
+        拨了就在这一页试看（setLiquidGlassPreview），保存后才对所有人生效。
+      */}
+      <Card className="border-border bg-card">
+        <CardHeader className="gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="space-y-1.5">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Palette className="h-4 w-4 text-primary" />
+              液态玻璃
+            </CardTitle>
+            <CardDescription>
+              「液态玻璃」主题的几个旋钮：照片从哪来、浅色下照片上罩多厚的白雾、深色下照片多亮、玻璃卡模糊多少、鼠标移上去要不要跟着亮。
+              {uiTheme !== "liquid-glass" ? "现在选的不是液态玻璃，调了要切到那套才看得见。" : "拨一下就在这一页试看，保存后才对所有人生效。"}
+            </CardDescription>
+          </div>
+          <Button
+            type="button"
+            data-dock-save
+            onClick={handleSaveLiquidGlass}
+            disabled={isSavingPersonalization("liquidGlass") || !liquidGlassDirty}
+            className="w-full gap-2 sm:w-auto"
+          >
+            {isSavingPersonalization("liquidGlass") && <Loader2 className="h-4 w-4 animate-spin" />}
+            保存参数
+          </Button>
+        </CardHeader>
+        <CardContent className="space-y-5">
+          <div className="space-y-2">
+            <Label>照片来源</Label>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+              {LIQUID_GLASS_PHOTO_SOURCES.map((item) => {
+                const active = liquidGlass.photoSource === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => updateLiquidGlass({ photoSource: item.id })}
+                    disabled={isSavingPersonalization("liquidGlass")}
+                    aria-pressed={active}
+                    className={cn(
+                      "flex flex-col gap-1 rounded-lg border p-2.5 text-left transition hover:border-primary/50 disabled:pointer-events-none disabled:opacity-70",
+                      active ? "border-primary bg-primary/5 ring-2 ring-primary/15" : "border-border/40",
+                    )}
+                  >
+                    <span className={cn("text-sm", active ? "font-semibold text-foreground" : "font-medium text-foreground")}>{item.name}</span>
+                    <span className="text-xs leading-5 text-muted-foreground">{item.description}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <div className="grid gap-4 @[42rem]:grid-cols-3 [&>*]:min-w-0">
+            {([
+              { key: "wash", label: "浅色白雾", unit: "%", hint: "罩在照片上的页面底色，越大照片越淡、字越清楚" },
+              { key: "darkOpacity", label: "深色照片亮度", unit: "%", hint: "深色模式下照片的不透明度" },
+              { key: "blur", label: "玻璃模糊", unit: "px", hint: "卡片背后的模糊半径，手机上卡多时调小更顺" },
+            ] as const).map((item) => {
+              const [min, max] = LIQUID_GLASS_LIMITS[item.key];
+              const value = liquidGlass[item.key];
+              return (
+                <FormField key={item.key} className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_5rem] sm:items-center">
+                  <div className="space-y-2">
+                    <Label>{item.label}</Label>
+                    <input
+                      type="range"
+                      aria-label={item.label}
+                      min={min}
+                      max={max}
+                      step={1}
+                      value={value}
+                      onChange={(event) => updateLiquidGlass({ [item.key]: Number(event.target.value) })}
+                      className="w-full accent-primary"
+                    />
+                    <p className="text-xs leading-5 text-muted-foreground">{item.hint}</p>
+                  </div>
+                  <div className="flex items-center gap-1 sm:mt-6 sm:self-start">
+                    <Input
+                      aria-label={`${item.label}（${item.unit}）`}
+                      value={String(value)}
+                      onChange={(event) => updateLiquidGlass({ [item.key]: Number(event.target.value.replace(/\D/g, "") || 0) })}
+                      inputMode="numeric"
+                    />
+                    <span className="text-xs text-muted-foreground">{item.unit}</span>
+                  </div>
+                </FormField>
+              );
+            })}
+          </div>
+          <SettingRow
+            label="光标跟随的光斑"
+            description="鼠标在玻璃卡上移动时，卡里跟着亮一团光。只在有鼠标的设备上有，触屏不跑。"
+            control={<Checkbox aria-label="光标跟随的光斑" checked={liquidGlass.sheen} onCheckedChange={(checked) => updateLiquidGlass({ sheen: checked === true })} disabled={isSavingPersonalization("liquidGlass")} />}
+          />
         </CardContent>
       </Card>
 

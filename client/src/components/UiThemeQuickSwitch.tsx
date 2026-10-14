@@ -23,6 +23,7 @@ export const UI_THEME_DOTS: Record<string, { a: string; b: string }> = {
   gilt: { a: "#b08d57", b: "#f5f2ec" },
   rose: { a: "#c13a66", b: "#fbf0f2" },
   cinnabar: { a: "#d42a33", b: "#f6f6f4" },
+  "liquid-glass": { a: "#2563eb", b: "#dfe7f3" },
 };
 
 export function UiThemeDot({ id }: { id: string }) {

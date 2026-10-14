@@ -110,6 +110,7 @@ import {
   normalizePersonalizationPageTint,
   normalizePersonalizationThemePresetId,
   normalizePersonalizationUiTheme,
+  normalizeLiquidGlassConfig,
   type PersonalizationBackgroundConfig,
 } from "../../shared/personalization";
 import {
@@ -293,6 +294,14 @@ const personalizationBackgroundSchema = z.object({
     size: z.number().int().min(0).max(personalizationBackgroundImageMaxBytes).optional(),
     createdAt: z.number().int().min(0).optional(),
   })).max(6).optional(),
+});
+const liquidGlassPhotoSourceSchema = z.enum(["auto", "random", "wallpaper", "builtin", "none"]);
+const personalizationLiquidGlassSchema = z.object({
+  photoSource: liquidGlassPhotoSourceSchema.optional(),
+  wash: z.number().min(0).max(80).optional(),
+  darkOpacity: z.number().min(10).max(100).optional(),
+  blur: z.number().min(0).max(40).optional(),
+  sheen: z.boolean().optional(),
 });
 const githubAcceleratorUrlSchema = z.string().trim().max(256);
 const mysqlDatabaseConfigInput = z.object({
@@ -504,6 +513,10 @@ function resolvePersonalizationBackgroundUrl(config: PersonalizationBackgroundCo
   if (config.source === "upload") return config.images.find((item) => item.id === config.selectedId)?.dataUrl || "";
   if (config.source === "url") return config.url || "";
   return "";
+}
+
+function readPersonalizationLiquidGlass(all: Record<string, string | null>) {
+  return normalizeLiquidGlassConfig(all.personalizationLiquidGlass || "");
 }
 
 function publicPersonalizationBackground(all: Record<string, string | null>) {
@@ -1672,6 +1685,7 @@ function publicSystemSettings(all: Record<string, string | null>, activeProtocol
     personalizationCardStyle: normalizePersonalizationCardStyle(all.personalizationCardStyle),
     personalizationUiTheme: normalizePersonalizationUiTheme(all.personalizationUiTheme),
     personalizationBackground: publicPersonalizationBackground(all),
+    personalizationLiquidGlass: readPersonalizationLiquidGlass(all),
     panelPublicUrl: all.panelPublicUrl ?? "",
     panelSsl: {
       enabled: false,
@@ -1825,6 +1839,7 @@ export const systemRouter = router({
       personalizationCardStyle: normalizePersonalizationCardStyle(all.personalizationCardStyle),
       personalizationUiTheme: normalizePersonalizationUiTheme(all.personalizationUiTheme),
       personalizationBackground: publicPersonalizationBackground(all),
+      personalizationLiquidGlass: readPersonalizationLiquidGlass(all),
       registrationEnabled: all.registrationEnabled !== "false",
       twoFactorEnabled: all.twoFactorEnabled === "true",
       lookingGlassUserEnabled: all.lookingGlassUserEnabled !== "false",
@@ -2122,6 +2137,7 @@ export const systemRouter = router({
         homepageCustomEnabled: z.boolean().optional(),
         homepageHtml: z.string().max(60000).optional(),
         personalizationBackground: personalizationBackgroundSchema.optional(),
+        personalizationLiquidGlass: personalizationLiquidGlassSchema.optional(),
         forwardProtocols: forwardProtocolSettingsSchema.optional(),
         sidebarMenu: sidebarMenuSettingsSchema.optional(),
         customSidebarPages: customSidebarPagesSchema.optional(),
@@ -2312,6 +2328,11 @@ export const systemRouter = router({
         }
         await db.setSetting("personalizationBackground", encoded);
         console.info(`[Settings] personalization background updated source=${background.source}`);
+      }
+      if (input.personalizationLiquidGlass !== undefined) {
+        const liquidGlass = normalizeLiquidGlassConfig(input.personalizationLiquidGlass);
+        await db.setSetting("personalizationLiquidGlass", JSON.stringify(liquidGlass));
+        console.info(`[Settings] personalization liquid glass updated source=${liquidGlass.photoSource} wash=${liquidGlass.wash} blur=${liquidGlass.blur}`);
       }
       if (input.forwardProtocols !== undefined) {
         const normalized = normalizeForwardProtocolSettings(input.forwardProtocols);
