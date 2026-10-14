@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"sort"
 	"strconv"
@@ -115,7 +116,9 @@ func validateConfig(cfg config) error {
 	if cfg.UDPListenPort < 0 || cfg.UDPListenPort > 65535 {
 		return fmt.Errorf("bad udp listen port %d", cfg.UDPListenPort)
 	}
-	if cfg.ListenHost != "" && cfg.ListenHost != "127.0.0.1" && cfg.ListenHost != "::1" {
+	// 监听地址只许回环或者一个具体的 IP：V2 隧道在内核 WireGuard 数据面上让出口直接
+	// 监听在接口地址（100.64.0.0/10 里）上，不再经过 Agent 的回环代理（2.2.132 起）。
+	if cfg.ListenHost != "" && cfg.ListenHost != "127.0.0.1" && cfg.ListenHost != "::1" && net.ParseIP(cfg.ListenHost) == nil {
 		return fmt.Errorf("unsupported listen host %q", cfg.ListenHost)
 	}
 	if cfg.Role == "entry" {

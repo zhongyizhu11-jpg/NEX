@@ -154,17 +154,23 @@ func reclaimWireGuardUDPProxySession(sessions map[string]*wireGuardUDPProxySessi
 }
 
 type wireGuardRuntime struct {
-	mu                sync.RWMutex
-	spec              wireGuardSpec
-	signature         string
-	plane             wireGuardDataplane
-	peers             map[string]wireGuardPeerSpec
-	outbound          map[string]*wireGuardOutboundProxy
-	outboundRefs      map[string]int
-	refOutbound       map[string]map[string]struct{}
-	inbound           map[string]*wireGuardInboundProxy
-	inboundRefs       map[string]int
-	refInbound        map[string]map[string]struct{}
+	mu           sync.RWMutex
+	spec         wireGuardSpec
+	signature    string
+	plane        wireGuardDataplane
+	peers        map[string]wireGuardPeerSpec
+	outbound     map[string]*wireGuardOutboundProxy
+	outboundRefs map[string]int
+	refOutbound  map[string]map[string]struct{}
+	inbound      map[string]*wireGuardInboundProxy
+	inboundRefs  map[string]int
+	refInbound   map[string]map[string]struct{}
+	// direct 为 true 时 FXP 直接绑在 WireGuard 地址上收发，不再经过上面的回环代理
+	// （见 wireguard_direct.go）；directInbound 记录为此放行的入站端口。
+	direct            bool
+	directInbound     map[string]*wireGuardDirectInbound
+	directInboundRefs map[string]int
+	refDirectInbound  map[string]map[string]struct{}
 	refs              map[string]int
 	releaseTimer      *time.Timer
 	releaseGeneration uint64
@@ -172,10 +178,11 @@ type wireGuardRuntime struct {
 }
 
 type wireGuardRuntimeCloseResources struct {
-	tunnelID int
-	outbound []*wireGuardOutboundProxy
-	inbound  []*wireGuardInboundProxy
-	plane    wireGuardDataplane
+	tunnelID      int
+	outbound      []*wireGuardOutboundProxy
+	inbound       []*wireGuardInboundProxy
+	directInbound []*wireGuardDirectInbound
+	plane         wireGuardDataplane
 }
 
 var (
@@ -362,10 +369,14 @@ func newWireGuardRuntime(spec wireGuardSpec) (*wireGuardRuntime, error) {
 		refInbound:   map[string]map[string]struct{}{},
 		refs:         map[string]int{},
 	}
+	runtime.direct = wireGuardDirectFXPSupported(plane)
+	runtime.directInbound = map[string]*wireGuardDirectInbound{}
+	runtime.directInboundRefs = map[string]int{}
+	runtime.refDirectInbound = map[string]map[string]struct{}{}
 	for _, peer := range normalized.Peers {
 		runtime.peers[peer.ID] = peer
 	}
-	logf("wireguard runtime started tunnel=%d plane=%s address=%s listen=:%d peers=%d mtu=%d", normalized.TunnelID, plane.kind(), normalized.Address, normalized.ListenPort, len(normalized.Peers), normalized.MTU)
+	logf("wireguard runtime started tunnel=%d plane=%s direct=%v address=%s listen=:%d peers=%d mtu=%d", normalized.TunnelID, plane.kind(), runtime.direct, normalized.Address, normalized.ListenPort, len(normalized.Peers), normalized.MTU)
 	return runtime, nil
 }
 
@@ -676,6 +687,10 @@ func wireGuardFXPProxiesMatchConfig(spec fxpSpec, active fxpSpec, expectedRefIDs
 			udpPort = tcpPort
 		}
 		key := fmt.Sprintf("%d:%d", tcpPort, udpPort)
+		if runtime.direct {
+			return runtime.directInbound[key] != nil && runtime.directInboundRefs[key] > 0 && refOwns(runtime.refDirectInbound, key) &&
+				strings.TrimSpace(activeSpec.ListenHost) == runtime.spec.Address && activeSpec.ListenPort == tcpPort && activeSpec.UDPListenPort == udpPort
+		}
 		proxy := runtime.inbound[key]
 		if proxy == nil || runtime.inboundRefs[key] <= 0 || !refOwns(runtime.refInbound, key) || !wireGuardProxyOpen(proxy.done) ||
 			proxy.tcpLn == nil || proxy.udpConn == nil {
@@ -691,6 +706,10 @@ func wireGuardFXPProxiesMatchConfig(spec fxpSpec, active fxpSpec, expectedRefIDs
 	outboundReady := func(peerID string, tcpPort, udpPort int, activeHost string, activeTCPPort, activeUDPPort int) bool {
 		if udpPort <= 0 {
 			udpPort = tcpPort
+		}
+		if runtime.direct {
+			peer, exists := runtime.peers[strings.TrimSpace(peerID)]
+			return exists && strings.TrimSpace(activeHost) == peer.Address && activeTCPPort == tcpPort && activeUDPPort == udpPort
 		}
 		key := wireGuardOutboundProxyKey(peerID, tcpPort, udpPort)
 		proxy := runtime.outbound[key]
@@ -923,6 +942,7 @@ func releaseWireGuardRuntimeInstanceRef(runtime *wireGuardRuntime, tunnelID int,
 	}
 	outboundToClose := make([]*wireGuardOutboundProxy, 0)
 	inboundToClose := make([]*wireGuardInboundProxy, 0)
+	var directToRevoke []*wireGuardDirectInbound
 	runtime.mu.Lock()
 	if runtime.refs[id] <= 0 {
 		runtime.mu.Unlock()
@@ -954,6 +974,7 @@ func releaseWireGuardRuntimeInstanceRef(runtime *wireGuardRuntime, tunnelID int,
 			}
 		}
 		delete(runtime.refInbound, id)
+		directToRevoke = runtime.releaseDirectInboundLocked(id)
 	} else {
 		runtime.refs[id]--
 	}
@@ -964,6 +985,7 @@ func releaseWireGuardRuntimeInstanceRef(runtime *wireGuardRuntime, tunnelID int,
 			stopWireGuardRuntimeInstanceIfUnused(tunnelID, runtime, releaseGeneration)
 		})
 	}
+	plane := runtime.plane
 	runtime.mu.Unlock()
 	for _, proxy := range outboundToClose {
 		proxy.close()
@@ -972,6 +994,10 @@ func releaseWireGuardRuntimeInstanceRef(runtime *wireGuardRuntime, tunnelID int,
 	for _, proxy := range inboundToClose {
 		proxy.close()
 		logf("wireguard inbound proxy stopped tunnel=%d target=%s", tunnelID, proxy.key)
+	}
+	for _, inbound := range directToRevoke {
+		inbound.revoke(plane)
+		logf("wireguard direct inbound released tunnel=%d ports=%s", tunnelID, inbound.key)
 	}
 }
 
@@ -1644,12 +1670,18 @@ func (runtime *wireGuardRuntime) claimCloseLocked() (wireGuardRuntimeCloseResour
 	for _, proxy := range runtime.inbound {
 		resources.inbound = append(resources.inbound, proxy)
 	}
+	for _, inbound := range runtime.directInbound {
+		resources.directInbound = append(resources.directInbound, inbound)
+	}
 	runtime.outbound = map[string]*wireGuardOutboundProxy{}
 	runtime.outboundRefs = map[string]int{}
 	runtime.refOutbound = map[string]map[string]struct{}{}
 	runtime.inbound = map[string]*wireGuardInboundProxy{}
 	runtime.inboundRefs = map[string]int{}
 	runtime.refInbound = map[string]map[string]struct{}{}
+	runtime.directInbound = map[string]*wireGuardDirectInbound{}
+	runtime.directInboundRefs = map[string]int{}
+	runtime.refDirectInbound = map[string]map[string]struct{}{}
 	runtime.refs = map[string]int{}
 	runtime.plane = nil
 	return resources, true
@@ -1661,6 +1693,9 @@ func (resources wireGuardRuntimeCloseResources) close() {
 	}
 	for _, proxy := range resources.inbound {
 		proxy.close()
+	}
+	for _, inbound := range resources.directInbound {
+		inbound.revoke(resources.plane)
 	}
 	if resources.plane != nil {
 		resources.plane.close()
@@ -1695,15 +1730,26 @@ func prepareFXPWireGuard(spec fxpSpec, refID string) (prepared fxpSpec, err erro
 			releaseWireGuardRuntimeInstanceRef(runtime, spec.TunnelID, refID)
 		}
 	}()
+	direct := runtime.directFXP()
 	if spec.Role == "exit" || spec.Role == "relay" {
-		if err := runtime.ensureInboundProxy(refID, spec.ListenPort, spec.UDPListenPort); err != nil {
-			return spec, err
+		if direct {
+			if err := runtime.ensureDirectInbound(refID, spec.ListenPort, spec.UDPListenPort); err != nil {
+				return spec, err
+			}
+			spec.ListenHost = runtime.spec.Address
+		} else {
+			if err := runtime.ensureInboundProxy(refID, spec.ListenPort, spec.UDPListenPort); err != nil {
+				return spec, err
+			}
+			spec.ListenHost = "127.0.0.1"
 		}
-		spec.ListenHost = "127.0.0.1"
 	}
 	prepareEndpoint := func(peerID string, tcpPort, udpPort int) (string, int, int, error) {
 		if udpPort <= 0 {
 			udpPort = tcpPort
+		}
+		if direct {
+			return runtime.directPeerEndpoint(peerID, tcpPort, udpPort)
 		}
 		return runtime.ensureOutboundProxy(refID, peerID, tcpPort, udpPort)
 	}
