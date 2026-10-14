@@ -232,3 +232,32 @@ func wireGuardPassthroughInstalledComments(listing string, iface string) map[str
 	}
 	return out
 }
+
+// wireGuardPassthroughExitPorts 是本机作为内核直通出口时，在 nexwg 上做 DNAT 的端口 → 协议
+// （快速转发要把这些连接也放进 flowtable）。
+func wireGuardPassthroughExitPorts() map[int]map[string]bool {
+	wireGuardRuntimesMu.RLock()
+	runtimes := make([]*wireGuardRuntime, 0, len(wireGuardRuntimes))
+	for _, runtime := range wireGuardRuntimes {
+		runtimes = append(runtimes, runtime)
+	}
+	wireGuardRuntimesMu.RUnlock()
+	out := map[int]map[string]bool{}
+	for _, runtime := range runtimes {
+		runtime.mu.RLock()
+		rules := append([]wireGuardPassthroughRule(nil), runtime.spec.Passthrough...)
+		runtime.mu.RUnlock()
+		for _, rule := range rules {
+			if rule.Role != wireGuardPassthroughRoleExit || rule.Port <= 0 {
+				continue
+			}
+			if out[rule.Port] == nil {
+				out[rule.Port] = map[string]bool{}
+			}
+			for _, protocol := range runtimeProtocolList(rule.Protocol) {
+				out[rule.Port][protocol] = true
+			}
+		}
+	}
+	return out
+}

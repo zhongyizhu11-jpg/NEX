@@ -30,6 +30,8 @@ import { getConfiguredPanelUrl } from "../agentPanelUrl";
 import { hostEgressShaping, normalizeHostEgressShapingMode, TUNNEL_LINK_MBPS_MAX } from "../tunnelFxpRuntime";
 import { hostEgressShapingStatusView } from "../tunnelLinkShapingView";
 import { parseManualHostAddress } from "@shared/hostManualAddress";
+import { wakeAgentExt } from "../ops/agentExt";
+import { flowOffloadStatusView } from "../ops/flowOffloadStatus";
 
 const HOST_UPGRADE_CLEANUP_INTERVAL_MS = 60 * 1000;
 const GITHUB_API_LIMIT_STATUSES = new Set([403, 429]);
@@ -500,7 +502,15 @@ export function hostOwnerLabel(
 
 function compactHostForList(host: any) {
   const { agentToken, ...rest } = host || {};
-  return withDetectedPrivateIpv4(rest);
+  return withFlowOffloadStatus(withDetectedPrivateIpv4(rest));
+}
+
+/**
+ * 「内核快速转发」的实际状态（Agent 扩展通道上报，见 server/ops/flowOffloadAgent.ts）。
+ * 开关关着就是 null，设置页不显示任何状态行；超过 5 分钟没上报算 stale。
+ */
+function withFlowOffloadStatus<T extends Record<string, any>>(host: T): T & { flowOffloadStatus: ReturnType<typeof flowOffloadStatusView> } {
+  return { ...host, flowOffloadStatus: flowOffloadStatusView(host) };
 }
 
 /**
@@ -1262,7 +1272,7 @@ export const hostsRouter = router({
             if (!hasPermission) return null;
           }
         }
-        return ctx.user.role === "admin" ? withDetectedPrivateIpv4(host) : compactHostForList(host);
+        return ctx.user.role === "admin" ? withFlowOffloadStatus(withDetectedPrivateIpv4(host)) : compactHostForList(host);
       }),
     create: protectedProcedure
       .input(z.object({
@@ -1444,6 +1454,7 @@ export const hostsRouter = router({
         trafficMeasureMode: hostTrafficMeasureModeSchema.optional(),
         egressShapingMode: hostEgressShapingModeSchema.optional(),
         egressMbps: hostEgressMbpsSchema.optional(),
+        flowOffload: z.boolean().optional(),
         telegramTrafficAlertEnabled: z.boolean().optional(),
         trafficAlertThresholdPercent: z.number().int().min(1).max(99).optional(),
         telegramRenewalReminderEnabled: z.boolean().optional(),
@@ -1485,7 +1496,11 @@ export const hostsRouter = router({
         if (ctx.user.role !== "admin") {
           delete (data as any).egressShapingMode;
           delete (data as any).egressMbps;
+          // 内核快速转发改的是整台机器的转发路径和计数方式，只有管理员能开关。
+          delete (data as any).flowOffload;
         }
+        const flowOffloadChanged = (data as any).flowOffload !== undefined && !!(data as any).flowOffload !== !!(host as any).flowOffload;
+        if ((data as any).flowOffload !== undefined) (data as any).flowOffload = !!(data as any).flowOffload;
         if ((data as any).egressShapingMode !== undefined || (data as any).egressMbps !== undefined) {
           const egressConfig = hostEgressShapingPayload({
             egressShapingMode: (data as any).egressShapingMode !== undefined ? (data as any).egressShapingMode : (host as any).egressShapingMode,
@@ -1590,6 +1605,7 @@ export const hostsRouter = router({
         }
         await db.updateHost(id, data as any);
         if (egressShapingChanged) pushAgentRefresh(id, "host-egress-shaping-updated", { urgent: true });
+        if (flowOffloadChanged) wakeAgentExt(id, "flow-offload-updated");
         if (ddnsConfigChanged) {
           scheduleHostDdnsUpdate({ ...host, ...(data as any), id }, "host-ddns-config-updated", { force: true });
           /**

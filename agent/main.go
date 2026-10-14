@@ -38,7 +38,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.220"
+var Version = "2.2.221"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -3065,6 +3065,8 @@ func main() {
 	go selfTestPoller(cfg)
 	go agentEventStream(cfg)
 	go agentPresenceLoop(cfg)
+	// 快速转发的表留在内核里时，流量采集第一轮之前就得把 conntrack 计数接上。
+	startFlowOffloadLoop()
 	go agentMetricsScheduler(cfg)
 	go agentDNSWatchScheduler()
 	go agentExtLoop(cfg)

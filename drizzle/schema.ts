@@ -291,6 +291,9 @@ export const hosts = table("hosts", {
   // manual 时 egressMbps 是公网带宽上限（Mbit/s）。
   egressShapingMode: varchar("egressShapingMode", { length: 16 }).notNull().default("off"),
   egressMbps: int("egressMbps").notNull().default(0),
+  // 内核快速转发（nftables flowtable，agent/flowtable_offload.go）：本机 iptables / nftables 规则和内核直通的
+  // 连接建立后走 ingress 快速路径，流量改从 conntrack 计。只有管理员能开，默认关。
+  flowOffload: boolean("flowOffload").notNull().default(false),
   telegramTrafficAlertEnabled: boolean("telegramTrafficAlertEnabled").notNull().default(false),
   trafficAlertThresholdPercent: int("trafficAlertThresholdPercent").notNull().default(20),
   telegramRenewalReminderEnabled: boolean("telegramRenewalReminderEnabled").notNull().default(false),
