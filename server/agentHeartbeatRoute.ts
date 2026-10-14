@@ -44,7 +44,7 @@ import {
   shouldPersistAgentPresence,
 } from "./agentHeartbeatGate";
 import { mapWithConcurrency } from "./asyncPool";
-import { clearTunnelRuntimeStatusForHost, getTunnelRuntimeGeneration, isTunnelRuntimeHostReady, replaceHostWireGuardPlanes } from "./tunnelRuntimeStatus";
+import { clearTunnelRuntimeStatusForHost, getHostWireGuardPlane, getTunnelRuntimeGeneration, isTunnelRuntimeHostReady, replaceHostWireGuardPlanes } from "./tunnelRuntimeStatus";
 import { appendPanelLog } from "./_core/panelLogger";
 import { isIP } from "net";
 import { resolve4, resolve6 } from "dns/promises";
@@ -502,6 +502,12 @@ type AgentLocalRuntimeTunnelState = {
   wireGuardPlane?: "kernel" | "netstack";
   ready?: boolean;
 };
+// Agent 2.2.220 起单独上报每条跑着的 V2 隧道数据面（入口机上没有隧道监听端口，
+// 以前只有出口通过 tunnels[] 报得出来）。
+type AgentLocalRuntimeWireGuardPlaneState = {
+  tunnelId: number;
+  plane: "kernel" | "netstack";
+};
 type AgentLocalRuntimeServiceState = {
   name: string;
   active: boolean;
@@ -515,6 +521,7 @@ type AgentLocalRuntimeState = {
   rules: AgentLocalRuntimeRuleState[];
   tunnels: AgentLocalRuntimeTunnelState[];
   services: AgentLocalRuntimeServiceState[];
+  wireGuardPlanes?: AgentLocalRuntimeWireGuardPlaneState[];
 };
 const agentLocalRuntimeStateCache = new Map<number, { signature: string; state: AgentLocalRuntimeState; updatedAt: number }>();
 
@@ -785,7 +792,15 @@ function normalizeAgentLocalRuntimeState(input: any): AgentLocalRuntimeState | n
       }))
       .filter((item: AgentLocalRuntimeServiceState) => !!item.name)
     : [];
-  return { rules, tunnels, services };
+  const wireGuardPlanes = Array.isArray(input.wireGuardPlanes)
+    ? input.wireGuardPlanes
+      .map((item: any) => ({
+        tunnelId: Number(item?.tunnelId || 0),
+        plane: (["kernel", "netstack"] as const).find((plane) => plane === String(item?.plane || "").trim().toLowerCase()),
+      }))
+      .filter((item: any): item is AgentLocalRuntimeWireGuardPlaneState => item.tunnelId > 0 && !!item.plane)
+    : [];
+  return { rules, tunnels, services, wireGuardPlanes };
 }
 
 function resolveAgentLocalRuntimeState(hostId: number, signature: string, reported: AgentLocalRuntimeState | null) {
@@ -794,9 +809,12 @@ function resolveAgentLocalRuntimeState(hostId: number, signature: string, report
   if (reported) {
     const nextSignature = signature || stableStateSignature(reported);
     setBoundedMapValue(agentLocalRuntimeStateCache, id, { signature: nextSignature, state: reported, updatedAt: Date.now() }, AGENT_HOST_CACHE_MAX);
-    replaceHostWireGuardPlanes(id, reported.tunnels
-      .filter((tunnel) => tunnel.transportVersion === "v2" && tunnel.wireGuardPlane)
-      .map((tunnel) => ({ tunnelId: tunnel.tunnelId, plane: tunnel.wireGuardPlane! })));
+    replaceHostWireGuardPlanes(id, [
+      ...(reported.wireGuardPlanes || []),
+      ...reported.tunnels
+        .filter((tunnel) => tunnel.transportVersion === "v2" && tunnel.wireGuardPlane)
+        .map((tunnel) => ({ tunnelId: tunnel.tunnelId, plane: tunnel.wireGuardPlane! })),
+    ]);
     return { state: reported, requestLocalState: false };
   }
   if (!signature) return { state: null as AgentLocalRuntimeState | null, requestLocalState: false };
@@ -3770,6 +3788,122 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     };
     const ruleProtocolPolicy = (rule: any) => getHostProtocolPolicy(Number((rule as any)?.hostId || 0));
     const tunnelProtocolPolicy = (tunnel: any) => getHostProtocolPolicy(isCurrentHostTunnelEntry(tunnel) ? Number(host.id) : Number((tunnel as any)?.entryHostId || 0));
+    /*
+      V2 内核直通（隧道开关 kernelPassthrough，2.3.431 起）。
+
+      开着的时候，这条隧道上的普通规则不再经 FXP：入口机把规则端口 DNAT 到出口机的 WireGuard
+      地址（同一个端口），包在内核里直接进 nexwg；出口机在 nexwg 上把来自入口 WireGuard 地址的
+      这个端口 DNAT 到规则目标。两头都没有用户态进程，加密只有 WireGuard 这一层。入口这边下发
+      的就是一条普通的 iptables 规则（目标 = 出口 WireGuard 地址:规则端口），所以状态上报、
+      流量计数、就绪检查、从 FXP 切换过来时停掉旧进程这些都走现成的 iptables 路径；出口那边
+      的 DNAT 跟着 WireGuard 数据面配置一起下发（wireGuard.passthrough），Agent 在建 / 更新
+      nexwg 时同步，隧道停掉时跟着清掉。
+
+      只有这些条件全满足才直通，否则规则照旧走 FXP（切换是自动的，不用改规则）：
+        - 隧道是 V2，单入口、单出口（没有中转、没有入口组、没有额外出口）；
+        - 两台机器都报告自己跑的是内核 WireGuard（用户态 wireguard-go 没有内核路由可用），
+          Agent 都 ≥ 2.2.220；
+        - 隧道没开链路整形、UDP 抗丢包、协议拦截、PROXY protocol（这些都是 FXP 里做的）；
+        - 规则没有限速、连接数 / IP 数限制、线路组、PROXY protocol，目标是 IPv4 地址
+          （域名由面板解析成 IP 后同样可以）。
+    */
+    const AGENT_KERNEL_PASSTHROUGH_VERSION = "2.2.220";
+    type KernelPassthroughPlan = { entryHostId: number; exitHostId: number; entryAddress: string; exitAddress: string };
+    const kernelPassthroughPlanPromises = new Map<number, Promise<KernelPassthroughPlan | null>>();
+    const tunnelKernelPassthroughPlan = (tunnel: any): Promise<KernelPassthroughPlan | null> => {
+      const tunnelId = Number(tunnel?.id || 0);
+      const cached = kernelPassthroughPlanPromises.get(tunnelId);
+      if (cached) return cached;
+      const work = (async () => {
+        if (!tunnel || tunnelId <= 0 || !runtimeBool((tunnel as any).kernelPassthrough) || !isForwardXWireGuardV2(tunnel)) return null;
+        if (!runtimeBool(tunnel.isEnabled) || !isTunnelProtocolEnabled(forwardProtocolSettings, tunnel)) return null;
+        const entryHostIds = tunnelEntryHostIds(tunnel);
+        const exitHostId = Number(tunnel.exitHostId || 0);
+        const hops = tunnelHopsByTunnelId.get(tunnelId) || [];
+        const extraExits = (tunnelExitNodesByTunnelId.get(tunnelId) || []).filter((node: any) => runtimeBool(node?.isEnabled, true));
+        if (entryHostIds.length !== 1 || exitHostId <= 0 || entryHostIds[0] === exitHostId) return null;
+        if (hops.length >= 3 || (runtimeBool((tunnel as any).loadBalanceEnabled) && extraExits.length > 0)) return null;
+        if (tunnelLinkShaping(tunnel).mode !== "off" || runtimeBool((tunnel as any).udpFec)) return null;
+        if (runtimeBool((tunnel as any).proxyProtocolReceive) || runtimeBool((tunnel as any).proxyProtocolSend)
+          || runtimeBool((tunnel as any).proxyProtocolExitReceive) || runtimeBool((tunnel as any).proxyProtocolExitSend)) return null;
+        const policy = await tunnelProtocolPolicy(tunnel);
+        if (policy.blockHttp || policy.blockSocks || policy.blockTls) return null;
+        const entryHostId = entryHostIds[0];
+        for (const hostId of [entryHostId, exitHostId]) {
+          if (getHostWireGuardPlane(tunnelId, hostId) !== "kernel") return null;
+          const member = hostId === Number(host.id) ? host : await getTunnelDialHost(hostId).catch(() => null);
+          if (!isAgentVersionAtLeast(String((member as any)?.agentVersion || ""), AGENT_KERNEL_PASSTHROUGH_VERSION)) return null;
+        }
+        let plans: Map<number, ForwardXWireGuardNodePlan>;
+        try {
+          plans = await getForwardXWireGuardPlans(tunnel);
+        } catch {
+          return null;
+        }
+        const entryAddress = String(plans.get(entryHostId)?.address || "").trim();
+        const exitAddress = String(plans.get(exitHostId)?.address || "").trim();
+        if (!entryAddress || !exitAddress) return null;
+        return { entryHostId, exitHostId, entryAddress, exitAddress };
+      })();
+      kernelPassthroughPlanPromises.set(tunnelId, work);
+      return work;
+    };
+    const kernelPassthroughRuleTarget = (rule: any) => {
+      const targetIp = cleanEndpointHost(rule?.targetIp);
+      const targetPort = Number(rule?.targetPort || 0);
+      if (isIP(targetIp) !== 4 || !Number.isInteger(targetPort) || targetPort <= 0 || targetPort > 65535) return null;
+      return { targetIp, targetPort };
+    };
+    const ruleKernelPassthroughEligible = (rule: any, tunnel: any) => {
+      if (!rule || rule.forwardType !== "gost" || runtimeBool(rule.pendingDelete) || !runtimeBool(rule.isEnabled)) return false;
+      if (Number(rule.tunnelId || 0) !== Number(tunnel?.id || 0) || !isRuleProtocolEnabled(forwardProtocolSettings, rule, tunnel)) return false;
+      if (isEntryBridgeRuntimeRule(rule) || runtimeBool(rule.failoverEnabled) || forwardGroupHealthByRuleId.has(Number(rule.id))) return false;
+      const port = Number(rule.sourcePort || 0);
+      if (!Number.isInteger(port) || port <= 0 || port > 65535 || !kernelPassthroughRuleTarget(rule)) return false;
+      const limits = ruleRateLimits(rule, tunnel);
+      if (limits.limitIn > 0 || limits.limitOut > 0) return false;
+      const access = userAccessLimits(Number(rule.userId));
+      if (access.maxConnections > 0 || access.maxIPs > 0) return false;
+      const proxy = proxyProtocolOptions(rule);
+      if (proxy.proxyProtocolReceive || proxy.proxyProtocolSend || proxy.proxyProtocolExitReceive || proxy.proxyProtocolExitSend) return false;
+      return true;
+    };
+    /** 入口机上这条规则该不该直通；是的话返回隧道的直通计划（出口 WireGuard 地址在里面）。 */
+    const kernelPassthroughForRule = async (rule: any, tunnel: any) => {
+      if (!tunnel || !isForwardXWireGuardV2(tunnel) || !runtimeBool((tunnel as any).kernelPassthrough)) return null;
+      if (!ruleKernelPassthroughEligible(rule, tunnel)) return null;
+      const plan = await tunnelKernelPassthroughPlan(tunnel);
+      return plan && plan.entryHostId === Number(host.id) ? plan : null;
+    };
+    /** 直通规则在入口机上的样子：一条 iptables 规则，目标是出口 WireGuard 地址上的同一个端口。 */
+    const kernelPassthroughRuleView = (rule: any, plan: KernelPassthroughPlan) => ({
+      ...rule,
+      forwardType: "iptables",
+      targetIp: plan.exitAddress,
+      _originalTargetIp: plan.exitAddress,
+      targetPort: Number(rule.sourcePort),
+    });
+    /** 这台机器在隧道 WireGuard 配置里要带的直通表：出口带 DNAT 目标，入口只是告诉 Agent 有规则在用这条隧道。 */
+    const kernelPassthroughEntriesForTunnel = async (tunnel: any) => {
+      const plan = await tunnelKernelPassthroughPlan(tunnel);
+      if (!plan) return [] as Array<Record<string, unknown>>;
+      const role = plan.exitHostId === Number(host.id) ? "exit" : plan.entryHostId === Number(host.id) ? "entry" : "";
+      if (!role) return [] as Array<Record<string, unknown>>;
+      const entries: Array<Record<string, unknown>> = [];
+      for (const rule of agentAllRules as any[]) {
+        if (!ruleKernelPassthroughEligible(rule, tunnel)) continue;
+        const target = kernelPassthroughRuleTarget(rule)!;
+        entries.push({
+          ruleId: Number(rule.id),
+          role,
+          peerId: String(role === "exit" ? plan.entryHostId : plan.exitHostId),
+          port: Number(rule.sourcePort),
+          protocol: normalizeForwardRuleProtocol(rule.protocol, "both"),
+          ...(role === "exit" ? { targetIp: target.targetIp, targetPort: target.targetPort } : {}),
+        });
+      }
+      return entries.sort((a, b) => Number(a.ruleId) - Number(b.ruleId));
+    };
     const shouldUseProcessBackendGuard = (rule: any) => PROTOCOL_GUARD_PROCESS_BACKENDS.has(String(rule?.forwardType || ""));
     const tunnelForRule = (rule: any) => (
       Number(rule?.tunnelId || 0) > 0 ? tunnelById.get(Number(rule.tunnelId)) as any : null
@@ -5325,7 +5459,12 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       const ruleProtocolEnabled = isEntryBridgeRuntimeRule(rule) || isRuleProtocolEnabled(forwardProtocolSettings, rule, ruleTunnel);
       const useRuleGuard = await shouldUseRuleGuard(rule);
       const ruleGuardPolicy = useRuleGuard ? await ruleProtocolPolicy(rule) : emptyProtocolPolicy;
-      if (runtimeBool(rule.isEnabled) && ruleProtocolEnabled && rule.forwardType === "gost" && ruleTunnel && isForwardXTunnel(ruleTunnel)) {
+      // V2 内核直通：入口机上这条规则变成一条到出口 WireGuard 地址的 iptables 规则（见 tunnelKernelPassthroughPlan）。
+      const rulePassthrough = !useRuleGuard && ruleProtocolEnabled && rule.forwardType === "gost" && ruleTunnel
+        && isForwardXTunnel(ruleTunnel) && isCurrentHostTunnelEntry(ruleTunnel)
+        ? await kernelPassthroughForRule(rule, ruleTunnel)
+        : null;
+      if (runtimeBool(rule.isEnabled) && ruleProtocolEnabled && rule.forwardType === "gost" && ruleTunnel && isForwardXTunnel(ruleTunnel) && !rulePassthrough) {
         await collectMimicFiltersForRule(rule, ruleTunnel);
       }
       if (!ruleProtocolEnabled) {
@@ -5369,6 +5508,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
           }
           const runningForwardType = useRuleGuard
             ? "guard"
+            : rulePassthrough
+            ? "iptables"
             : rule.forwardType === "gost" && ruleTunnel
             ? tunnelRuleRuntimeForwardType(ruleTunnel) || rule.forwardType
             : rule.forwardType;
@@ -5376,8 +5517,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
             ruleId: rule.id,
             tunnelId: ruleTunnel ? Number(ruleTunnel.id) : 0,
             sourcePort: trafficPort,
-            targetIp: rule.targetIp,
-            targetPort: rule.targetPort,
+            targetIp: rulePassthrough ? rulePassthrough.exitAddress : rule.targetIp,
+            targetPort: rulePassthrough ? Number(rule.sourcePort) : rule.targetPort,
             protocol: rule.protocol,
             forwardType: runningForwardType,
             failover: failoverForCurrentHost(rule, ruleTunnel, { listenPort: failoverProxyPort(rule) }),
@@ -5410,6 +5551,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       const expectedRulePort = Number(rule.sourcePort) || 0;
       const expectedRuleForwardType = useRuleGuard
         ? "guard"
+        : rulePassthrough
+        ? "iptables"
         : rule.forwardType === "gost" && ruleTunnel
         ? tunnelRuleRuntimeForwardType(ruleTunnel) || rule.forwardType
         : rule.forwardType;
@@ -5421,7 +5564,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       }
       const shouldRepairLocalRule = runtimeBool(rule.isEnabled)
         && expectedRulePort > 0
-        && !localRuleMatches(rule, expectedRuleForwardType, expectedRulePort);
+        && !localRuleMatches(rulePassthrough ? kernelPassthroughRuleView(rule, rulePassthrough) : rule, expectedRuleForwardType, expectedRulePort);
       if (shouldRepairLocalRule && runtimeBool(rule.isRunning)) {
         runtimeDriftedRuleIds.push(Number(rule.id));
         rule.isRunning = false;
@@ -5800,6 +5943,28 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
               commands: [
                 ...buildKernelForwardTransitionCleanupCmds(rule),
                 nginxRuntimeVerifyCmd(),
+              ],
+            });
+            continue;
+          }
+          if (tunnel && isForwardXTunnel(tunnel) && rulePassthrough) {
+            // 内核直通：和用户自己选 iptables 的规则一样下发，只是目标换成出口的 WireGuard 地址。
+            // Agent 看到端口上的转发方式从 forwardx 变成 iptables，会先停掉这条规则的 FXP 入口进程。
+            const view = kernelPassthroughRuleView(rule, rulePassthrough);
+            actions.push({
+              tunnelId: tunnel.id,
+              statusType: "rule",
+              ruleId: rule.id,
+              op: "apply",
+              forwardType: "iptables",
+              sourcePort: rule.sourcePort,
+              targetIp: view.targetIp,
+              targetPort: view.targetPort,
+              protocol: rule.protocol,
+              networkInterface: hostInterface,
+              commands: [
+                ...buildManagedPortCleanupCmds(rule.sourcePort, rule.targetIp, rule.targetPort, rule.protocol),
+                ...buildKernelForwardCmds(view, "iptables"),
               ],
             });
             continue;
@@ -6298,6 +6463,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         const enabled = runtimeBool(tunnel.isEnabled) && tunnelProtocolEnabled;
         const plan = enabled ? await getCurrentHostForwardXWireGuardPlan(tunnel) : null;
         if (enabled && !plan) continue;
+        const passthrough = plan ? await kernelPassthroughEntriesForTunnel(tunnel) : [];
         actions.push({
           tunnelId: Number(tunnel.id),
           statusType: "runtime",
@@ -6309,7 +6475,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
           targetPort: 0,
           protocol: "udp",
           commands: [],
-          wireGuard: plan || undefined,
+          wireGuard: plan ? (passthrough.length > 0 ? { ...plan, passthrough } : plan) : undefined,
           reportStatus: false,
         });
       }

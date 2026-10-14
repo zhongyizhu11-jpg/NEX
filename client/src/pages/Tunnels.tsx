@@ -193,6 +193,7 @@ type TunnelForm = {
   linkDownMbps: number;
   /** 抗丢包：UDP 直连额外发纠错包（FXP 2.2.131 起），默认关。 */
   udpFec: boolean;
+  kernelPassthrough: boolean;
   /** 编辑时带进来的 FXP 整形状态（只读，不提交）。 */
   linkShapingStatus: LinkShapingStatus[];
   loadBalanceEnabled: boolean;
@@ -351,6 +352,7 @@ const defaultForm: TunnelForm = {
   linkDownMbps: 0,
   linkShapingStatus: [],
   udpFec: false,
+  kernelPassthrough: false,
   loadBalanceEnabled: false,
   loadBalanceStrategy: "round_robin",
   loadBalanceExits: [],
@@ -2736,6 +2738,7 @@ function TunnelsContent() {
       linkDownMbps: transportTuningSupported ? normalizeLinkMbpsInput((tunnel as any).linkDownMbps) : 0,
       linkShapingStatus: Array.isArray((tunnel as any).linkShapingStatus) ? (tunnel as any).linkShapingStatus : [],
       udpFec: transportTuningSupported && !!(tunnel as any).udpFec,
+      kernelPassthrough: transportTuningSupported && !!(tunnel as any).kernelPassthrough,
       loadBalanceEnabled: exitGroupId ? !!tunnel.loadBalanceEnabled : false,
       loadBalanceStrategy: (["none", "round_robin", "random", "least_conn", "ip_hash", "fallback"].includes(String(tunnel.loadBalanceStrategy || ""))
         ? tunnel.loadBalanceStrategy
@@ -3125,6 +3128,7 @@ function TunnelsContent() {
       linkUpMbps: transportTuningSupported && submitForm.linkShapingMode === "manual" ? normalizeLinkMbpsInput(submitForm.linkUpMbps) : 0,
       linkDownMbps: transportTuningSupported && submitForm.linkShapingMode === "manual" ? normalizeLinkMbpsInput(submitForm.linkDownMbps) : 0,
       udpFec: transportTuningSupported && submitForm.udpFec,
+      kernelPassthrough: transportTuningSupported && submitForm.kernelPassthrough,
       entryGroupId: submitForm.entryGroupId || null,
       exitGroupId: submitForm.exitGroupId || null,
       entryHostId,
@@ -3242,6 +3246,7 @@ function TunnelsContent() {
       linkUpMbps: transportTuningSupported ? prev.linkUpMbps : 0,
       linkDownMbps: transportTuningSupported ? prev.linkDownMbps : 0,
       udpFec: transportTuningSupported ? prev.udpFec : false,
+      kernelPassthrough: transportTuningSupported ? prev.kernelPassthrough : false,
     }));
   };
   const importNginxPemFiles = async (files: readonly File[]) => {
@@ -3515,7 +3520,7 @@ function TunnelsContent() {
     const transportTuningSupported = isTunnelTransportTuningSupported(form.mode);
     if (!proxySupported && !transportTuningSupported) return null;
     const proxyAnyEnabled = form.proxyProtocolReceive || form.proxyProtocolSend || form.proxyProtocolExitReceive || form.proxyProtocolExitSend;
-    const advancedConfigured = proxyAnyEnabled || form.tcpFastOpen || form.udpOverTcp || form.udpFec || form.linkShapingMode !== "off" || form.linkUpMbps > 0 || form.linkDownMbps > 0;
+    const advancedConfigured = proxyAnyEnabled || form.tcpFastOpen || form.udpOverTcp || form.udpFec || form.kernelPassthrough || form.linkShapingMode !== "off" || form.linkUpMbps > 0 || form.linkDownMbps > 0;
     const shouldCollapseAdvanced = proxySupported && transportTuningSupported;
     const renderLinkMbpsInput = (label: string, field: "linkUpMbps" | "linkDownMbps") => (
       <label className="flex min-h-10 items-center justify-between gap-2">
@@ -3665,6 +3670,13 @@ function TunnelsContent() {
             form.udpFec,
             (udpFec) => setForm((prev) => ({ ...prev, udpFec })),
             "只作用于 UDP（游戏、语音、QUIC）：每 5 个包多发 1 个纠错包，丢了几个能当场还原，不用等重传。多耗约 20% 流量，包很稀时最多翻倍。隧道上的机器都要 FXP 2.2.131 起才有效果；有旧版本时照常通，只是不纠错。",
+          )}
+          {renderTransportSwitch(
+            "内核直通",
+            "规则不经 FXP，内核里直接进 WireGuard",
+            form.kernelPassthrough,
+            (kernelPassthrough) => setForm((prev) => ({ ...prev, kernelPassthrough })),
+            "只对 V2 隧道有效：入口把规则端口 DNAT 进 WireGuard，出口在 WireGuard 上 DNAT 到目标，两头都没有用户态进程、只加密一层，延迟和吞吐都更好。要求两台机器都跑内核 WireGuard、Agent 2.2.220 起，且隧道是单入口单出口、没开链路整形 / 抗丢包 / 协议拦截 / PROXY；规则没有限速、连接数限制、线路组。不满足的规则自动照旧走 FXP。",
           )}
         </div>
         <div className="space-y-2 rounded-md border border-border/50 bg-background/60 px-3 py-2">

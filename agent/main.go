@@ -1024,6 +1024,8 @@ type localRuntimeStatePayload struct {
 	Rules    []localRuntimeRuleState    `json:"rules,omitempty"`
 	Tunnels  []localRuntimeTunnelState  `json:"tunnels,omitempty"`
 	Services []localRuntimeServiceState `json:"services,omitempty"`
+	// WireGuardPlanes 是每条跑着的 V2 隧道的数据面，入口机上也报（见 localRuntimeWireGuardPlaneState）。
+	WireGuardPlanes []localRuntimeWireGuardPlaneState `json:"wireGuardPlanes,omitempty"`
 }
 
 type localRuntimeRuleState struct {
@@ -1036,6 +1038,13 @@ type localRuntimeRuleState struct {
 	Protocol         string `json:"protocol,omitempty"`
 	TransportVersion string `json:"transportVersion,omitempty"`
 	Ready            bool   `json:"ready"`
+}
+
+// localRuntimeWireGuardPlaneState 是一条跑着的 V2 隧道的数据面（Agent 2.2.220 起单独上报：
+// 入口机上没有隧道监听端口，以前只有出口能通过 tunnels 报出数据面）。
+type localRuntimeWireGuardPlaneState struct {
+	TunnelID int    `json:"tunnelId"`
+	Plane    string `json:"plane"`
 }
 
 type localRuntimeTunnelState struct {
@@ -2381,7 +2390,7 @@ func readLocalRuntimeStatePayload() localRuntimeStatePayload {
 		}
 		return tunnels[i].Port < tunnels[j].Port
 	})
-	return localRuntimeStatePayload{Rules: rules, Tunnels: tunnels, Services: readiness.serviceStates}
+	return localRuntimeStatePayload{Rules: rules, Tunnels: tunnels, Services: readiness.serviceStates, WireGuardPlanes: wireGuardRuntimePlaneKinds()}
 }
 
 func activeFXPEntrySpecsSnapshot() []fxpSpec {

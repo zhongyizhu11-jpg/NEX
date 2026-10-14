@@ -57,6 +57,8 @@ type wireGuardSpec struct {
 	ListenPort int                 `json:"listenPort,omitempty"`
 	MTU        int                 `json:"mtu,omitempty"`
 	Peers      []wireGuardPeerSpec `json:"peers,omitempty"`
+	// Passthrough 是内核直通表（见 wireguard_passthrough.go）；为空表示这条隧道没有直通规则。
+	Passthrough []wireGuardPassthroughRule `json:"passthrough,omitempty"`
 }
 
 type wireGuardOutboundProxy struct {
@@ -177,6 +179,8 @@ type wireGuardRuntime struct {
 	releaseTimer      *time.Timer
 	releaseGeneration uint64
 	closed            bool
+	// passthroughRef 为 true 时 refs 里有直通规则占的那个引用（见 wireguard_passthrough.go）。
+	passthroughRef bool
 }
 
 type wireGuardRuntimeCloseResources struct {
@@ -249,6 +253,11 @@ func normalizeWireGuardSpec(spec wireGuardSpec) (wireGuardSpec, error) {
 	}
 	sort.Slice(peers, func(i, j int) bool { return peers[i].ID < peers[j].ID })
 	spec.Peers = peers
+	passthrough, err := normalizeWireGuardPassthrough(spec.Passthrough, peers)
+	if err != nil {
+		return spec, err
+	}
+	spec.Passthrough = passthrough
 	return spec, nil
 }
 
@@ -398,8 +407,61 @@ func newWireGuardRuntime(spec wireGuardSpec) (*wireGuardRuntime, error) {
 	for _, peer := range normalized.Peers {
 		runtime.peers[peer.ID] = peer
 	}
-	logf("wireguard runtime started tunnel=%d plane=%s direct=%v address=%s listen=:%d peers=%d mtu=%d", normalized.TunnelID, plane.kind(), runtime.direct, normalized.Address, normalized.ListenPort, len(normalized.Peers), planeSpec.MTU)
+	if len(normalized.Passthrough) > 0 {
+		runtime.refs[wireGuardPassthroughRefID] = 1
+		runtime.passthroughRef = true
+	}
+	runtime.syncPassthrough(normalized)
+	logf("wireguard runtime started tunnel=%d plane=%s direct=%v address=%s listen=:%d peers=%d mtu=%d passthrough=%d", normalized.TunnelID, plane.kind(), runtime.direct, normalized.Address, normalized.ListenPort, len(normalized.Peers), planeSpec.MTU, len(normalized.Passthrough))
 	return runtime, nil
+}
+
+// syncPassthrough 把直通表交给数据面装进防火墙；用户态数据面装不了，只记一次日志。
+// 装失败只记日志不影响隧道：FXP 那条路还在，面板下一次改配置时会再同步一遍。
+func (runtime *wireGuardRuntime) syncPassthrough(spec wireGuardSpec) {
+	syncer, ok := runtime.plane.(wireGuardPassthroughSyncer)
+	if !ok {
+		if len(spec.Passthrough) > 0 {
+			logf("wireguard passthrough ignored tunnel=%d plane=%s: kernel dataplane required", spec.TunnelID, runtime.plane.kind())
+		}
+		return
+	}
+	if err := syncer.syncPassthrough(spec); err != nil {
+		logf("wireguard passthrough sync failed tunnel=%d rules=%d: %v", spec.TunnelID, len(spec.Passthrough), err)
+		return
+	}
+	if len(spec.Passthrough) > 0 {
+		logf("wireguard passthrough synced tunnel=%d rules=%d", spec.TunnelID, len(spec.Passthrough))
+	}
+}
+
+// updatePassthroughRefLocked 让直通规则持有 / 放掉运行时引用：有直通规则时接口不能因为
+// FXP 都停了而被拆掉。调用方持有 runtime.mu。
+func (runtime *wireGuardRuntime) updatePassthroughRefLocked(spec wireGuardSpec) {
+	if len(spec.Passthrough) > 0 && !runtime.passthroughRef {
+		runtime.passthroughRef = true
+		_ = runtime.addRefLocked(wireGuardPassthroughRefID)
+		return
+	}
+	if len(spec.Passthrough) == 0 && runtime.passthroughRef {
+		runtime.passthroughRef = false
+		delete(runtime.refs, wireGuardPassthroughRefID)
+		delete(runtime.refOutbound, wireGuardPassthroughRefID)
+		delete(runtime.refInbound, wireGuardPassthroughRefID)
+		runtime.scheduleReleaseLocked()
+	}
+}
+
+// scheduleReleaseLocked 在引用归零时起一分钟的拆除定时器。调用方持有 runtime.mu。
+func (runtime *wireGuardRuntime) scheduleReleaseLocked() {
+	if len(runtime.refs) == 0 && runtime.releaseTimer == nil && !runtime.closed {
+		tunnelID := runtime.spec.TunnelID
+		runtime.releaseGeneration++
+		releaseGeneration := runtime.releaseGeneration
+		runtime.releaseTimer = time.AfterFunc(wireGuardRuntimeReleaseDelay, func() {
+			stopWireGuardRuntimeInstanceIfUnused(tunnelID, runtime, releaseGeneration)
+		})
+	}
 }
 
 // planeKind 是这条隧道现在跑在哪种数据面上（kernel / netstack）；运行时已关闭返回空。
@@ -445,14 +507,47 @@ func (runtime *wireGuardRuntime) update(spec wireGuardSpec) error {
 	if err := wireGuardPlaneUpdate(runtime.plane, runtime.spec, normalized, removedKeys); err != nil {
 		return fmt.Errorf("update wireguard: %w", err)
 	}
+	passthroughChanged := wireGuardPassthroughSignature(runtime.spec) != wireGuardPassthroughSignature(normalized)
 	runtime.spec = normalized
 	runtime.signature = signature
 	runtime.peers = map[string]wireGuardPeerSpec{}
 	for _, peer := range normalized.Peers {
 		runtime.peers[peer.ID] = peer
 	}
-	logf("wireguard runtime updated tunnel=%d listen=:%d peers=%d generation=%d peerAdded=%d peerRemoved=%d peerUpdated=%d dnsRefresh=%v", normalized.TunnelID, normalized.ListenPort, len(normalized.Peers), normalized.Generation, added, removed, updated, dnsRefresh)
+	runtime.updatePassthroughRefLocked(normalized)
+	if passthroughChanged {
+		runtime.syncPassthrough(normalized)
+	}
+	logf("wireguard runtime updated tunnel=%d listen=:%d peers=%d generation=%d peerAdded=%d peerRemoved=%d peerUpdated=%d dnsRefresh=%v passthrough=%d", normalized.TunnelID, normalized.ListenPort, len(normalized.Peers), normalized.Generation, added, removed, updated, dnsRefresh, len(normalized.Passthrough))
 	return nil
+}
+
+func wireGuardPassthroughSignature(spec wireGuardSpec) string {
+	raw, _ := json.Marshal(spec.Passthrough)
+	return string(raw)
+}
+
+// wireGuardRuntimePlaneKinds 给心跳用：每条跑着的 V2 隧道现在用的数据面。
+func wireGuardRuntimePlaneKinds() []localRuntimeWireGuardPlaneState {
+	wireGuardRuntimesMu.RLock()
+	runtimes := make([]*wireGuardRuntime, 0, len(wireGuardRuntimes))
+	for _, runtime := range wireGuardRuntimes {
+		runtimes = append(runtimes, runtime)
+	}
+	wireGuardRuntimesMu.RUnlock()
+	out := make([]localRuntimeWireGuardPlaneState, 0, len(runtimes))
+	for _, runtime := range runtimes {
+		kind := runtime.planeKind()
+		if kind == "" {
+			continue
+		}
+		runtime.mu.RLock()
+		tunnelID := runtime.spec.TunnelID
+		runtime.mu.RUnlock()
+		out = append(out, localRuntimeWireGuardPlaneState{TunnelID: tunnelID, Plane: kind})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].TunnelID < out[j].TunnelID })
+	return out
 }
 
 func applyWireGuardRuntime(spec wireGuardSpec) error {
@@ -1000,13 +1095,7 @@ func releaseWireGuardRuntimeInstanceRef(runtime *wireGuardRuntime, tunnelID int,
 	} else {
 		runtime.refs[id]--
 	}
-	if len(runtime.refs) == 0 && runtime.releaseTimer == nil && !runtime.closed {
-		runtime.releaseGeneration++
-		releaseGeneration := runtime.releaseGeneration
-		runtime.releaseTimer = time.AfterFunc(wireGuardRuntimeReleaseDelay, func() {
-			stopWireGuardRuntimeInstanceIfUnused(tunnelID, runtime, releaseGeneration)
-		})
-	}
+	runtime.scheduleReleaseLocked()
 	plane := runtime.plane
 	runtime.mu.Unlock()
 	for _, proxy := range outboundToClose {
