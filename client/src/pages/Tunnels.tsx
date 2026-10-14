@@ -737,6 +737,21 @@ const tunnelModeLabels: Record<TunnelForm["mode"], string> = {
 };
 
 const gostTunnelModes: TunnelForm["mode"][] = ["tls", "wss", "tcp", "mtls", "mwss", "mtcp"];
+
+// 自编的 gost 只有 TCP 模式能让内核直接搬数据（splice）；TLS / WSS 要加解密，
+// M 开头的多路复用把多条连接塞进一条，都得在用户态拷一遍。
+function gostModeTransportHint(mode: TunnelForm["mode"]) {
+  switch (normalizeTunnelModeForForm(mode)) {
+    case "tcp":
+      return "明文 TCP：两端的 gost 由内核直接搬数据（零拷贝），吞吐最高、占 CPU 最少；安全靠隧道自身的密钥。";
+    case "mtcp":
+    case "mtls":
+    case "mwss":
+      return "多路复用（M 开头）把多条连接合进一条，每个包都要在用户态拆合，吞吐低于对应的非 M 模式；连接数很多、带宽不大时才划算。";
+    default:
+      return "加密模式：gost 在用户态加解密后转发；只求吞吐可选 TCP，内核直接搬数据。";
+  }
+}
 const nginxTunnelModes: TunnelForm["mode"][] = ["nginx_stream"];
 const unsupportedProtocolTitle = "该隧道协议已被管理员停用";
 
@@ -4715,6 +4730,7 @@ function TunnelsContent() {
                             ))}
                           </SelectContent>
                         </Select>
+                        <p className="text-xs text-muted-foreground">{gostModeTransportHint(form.mode)}</p>
                       </FormField>
                     )}
                     {nginxTunnelEnabled && isNginxTunnelModeValue(form.mode) && renderNginxCertFields()}
@@ -5027,6 +5043,7 @@ function TunnelsContent() {
                     ))}
                   </SelectContent>
                 </Select>
+                <p className="text-xs text-muted-foreground">{gostModeTransportHint(form.mode)}</p>
               </FormField>
             )}
             {nginxTunnelEnabled && isNginxTunnelModeValue(form.mode) && renderNginxCertFields()}
