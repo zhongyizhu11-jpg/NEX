@@ -34,6 +34,8 @@ const (
 	wireGuardRuntimeReleaseDelay   = time.Minute
 	wireGuardProbeReadyPoll        = 100 * time.Millisecond
 	wireGuardProbeRetryDelay       = 250 * time.Millisecond
+	// wireGuardMTUProbeTimeout 是建数据面前 MTU 探测的上限（解析域名 + 发一个包 + 等 300 ms）。
+	wireGuardMTUProbeTimeout = 3 * time.Second
 )
 
 type wireGuardPeerSpec struct {
@@ -347,12 +349,32 @@ func wireGuardDeviceUpdateConfig(previous, next wireGuardSpec, removedKeys []str
 	return "listen_port=" + strconv.Itoa(next.ListenPort) + "\n" + config
 }
 
+// wireGuardMTUProbeFunc 是建数据面前跑的 MTU 探测（wireguard_mtu_linux.go）；测试换成直通。
+var wireGuardMTUProbeFunc = probeWireGuardMTU
+
+// wireGuardPlaneSpec 是真正下给数据面的规格：MTU 换成探测结果（面板给的 1380 只是保底，
+// 路径放得下就用 1420）。runtime.spec 里仍留面板的值，后续配置推送比对 MTU 时不会因为
+// 探测值和面板值不同而重建数据面。只有拨号的那一端知道对端公网地址，监听端维持原值。
+func wireGuardPlaneSpec(spec wireGuardSpec) wireGuardSpec {
+	for _, peer := range spec.Peers {
+		if strings.TrimSpace(peer.EndpointHost) == "" || peer.EndpointPort <= 0 {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), wireGuardMTUProbeTimeout)
+		spec.MTU = wireGuardMTUProbeFunc(ctx, peer.EndpointHost, peer.EndpointPort, spec.MTU)
+		cancel()
+		break
+	}
+	return spec
+}
+
 func newWireGuardRuntime(spec wireGuardSpec) (*wireGuardRuntime, error) {
 	normalized, err := normalizeWireGuardSpec(spec)
 	if err != nil {
 		return nil, err
 	}
-	plane, err := newWireGuardPlane(normalized)
+	planeSpec := wireGuardPlaneSpec(normalized)
+	plane, err := newWireGuardPlane(planeSpec)
 	if err != nil {
 		return nil, err
 	}
@@ -376,7 +398,7 @@ func newWireGuardRuntime(spec wireGuardSpec) (*wireGuardRuntime, error) {
 	for _, peer := range normalized.Peers {
 		runtime.peers[peer.ID] = peer
 	}
-	logf("wireguard runtime started tunnel=%d plane=%s direct=%v address=%s listen=:%d peers=%d mtu=%d", normalized.TunnelID, plane.kind(), runtime.direct, normalized.Address, normalized.ListenPort, len(normalized.Peers), normalized.MTU)
+	logf("wireguard runtime started tunnel=%d plane=%s direct=%v address=%s listen=:%d peers=%d mtu=%d", normalized.TunnelID, plane.kind(), runtime.direct, normalized.Address, normalized.ListenPort, len(normalized.Peers), planeSpec.MTU)
 	return runtime, nil
 }
 
