@@ -48,9 +48,14 @@ html[data-ui-theme="hex"] {
   --fx-text: #242933;
   --fx-text-secondary: #3f4654;
   --fx-text-muted: #626b78;
-  --fx-hex-tone: #4268aa;               /* HEX 的靛蓝：细条、选中态、链接 */
-  --fx-hex-tone-soft: rgb(66 104 170 / 9%);
-  --fx-hex-tone-ink: #3a5c98;           /* 靛蓝淡底上的字：HEX 的 --tone-ink（主色掺 12% 墨） */
+  /*
+    HEX 的「tone」：细条、选中态、侧栏当前项都用它。从 --fx-primary-fill 推，而不是写死靛蓝 ——
+    「默认配色」另选一套（比如下面那五套 HEX 自带的海洋 / 落日 / 森林 / 午夜 / 玫瑰）时，那个值内联在
+    <html> 上，这里跟着变。出厂就是靛蓝（下面 --fx-primary-fill 给的）。
+  */
+  --fx-hex-tone: var(--fx-primary-fill);
+  --fx-hex-tone-soft: color-mix(in srgb, var(--fx-primary-fill) 9%, transparent);
+  --fx-hex-tone-ink: color-mix(in srgb, var(--fx-primary-fill) 88%, var(--fx-text)); /* HEX 的 --tone-ink：主色掺 12% 墨 */
   --fx-hex-track: #eceef2;              /* 进度条的槽 */
   --fx-card-fill: #ffffff;
   --fx-card-stroke: #e2e5ea;
@@ -112,9 +117,8 @@ html.dark[data-ui-theme="hex"] {
   --fx-text: #e6e8ec;
   --fx-text-secondary: #c3c9d2;
   --fx-text-muted: #a3abb7;
-  --fx-hex-tone: #91afe0;
-  --fx-hex-tone-soft: rgb(145 175 224 / 14%);
-  --fx-hex-tone-ink: #a9c1ea;
+  --fx-hex-tone-soft: color-mix(in srgb, var(--fx-primary-fill) 14%, transparent);
+  --fx-hex-tone-ink: color-mix(in srgb, var(--fx-primary-fill) 80%, var(--fx-text));
   --fx-hex-track: #2b3038;
   --fx-card-fill: #1b1e23;
   --fx-card-stroke: #30363f;
