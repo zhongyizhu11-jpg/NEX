@@ -140,3 +140,16 @@ func listenWireGuardMTUProbeTarget(t *testing.T, network, address string) (net.P
 	}
 	return listener, listener.LocalAddr().(*net.UDPAddr).Port
 }
+
+// IPv6 端点在没有 IPv6 的机器上也只能报错，不能 panic（As4 在 IPv6 地址上会 panic）。
+func TestProbeWireGuardPathMTUIPv6EndpointNeverPanics(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	for _, host := range []string{"::1", "2001:db8::1", "::ffff:127.0.0.1"} {
+		addr, err := resolveWireGuardMTUProbeHost(ctx, host)
+		if err != nil {
+			t.Fatalf("resolve %s: %v", host, err)
+		}
+		_, _ = probeWireGuardPathMTU(ctx, addr, 9)
+	}
+}

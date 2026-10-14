@@ -130,10 +130,13 @@ func resolveWireGuardMTUProbeHost(ctx context.Context, host string) (netip.Addr,
 // 流缓存的路径 MTU。发送失败（EMSGSIZE 等）按探测不可用处理。
 func probeWireGuardPathMTU(ctx context.Context, addr netip.Addr, port int) (int, error) {
 	family := unix.AF_INET
-	var sockaddr unix.Sockaddr = &unix.SockaddrInet4{Port: port, Addr: addr.As4()}
+	var sockaddr unix.Sockaddr
 	if addr.Is6() {
 		family = unix.AF_INET6
 		sockaddr = &unix.SockaddrInet6{Port: port, Addr: addr.As16(), ZoneId: wireGuardZoneID(addr)}
+	} else {
+		// As4 在 IPv6 地址上会 panic，只能在分支里取。
+		sockaddr = &unix.SockaddrInet4{Port: port, Addr: addr.As4()}
 	}
 	fd, err := unix.Socket(family, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, unix.IPPROTO_UDP)
 	if err != nil {
