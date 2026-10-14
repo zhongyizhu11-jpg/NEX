@@ -1,0 +1,328 @@
+/*
+  ── 界面主题「靛蓝」（设置 › 个性化 › 界面主题）──
+
+  第六种气质，由 <html data-ui-theme="indigo"> 打开；没有这个属性这个文件一条都不生效。
+  照 8bitNull 的 monitor-probe 主题 HEX（github.com/8bitNull/monitor-theme-hex，预览
+  hex.monitor-themes.pages.dev，2026-10-14 看过源码 src/styles/tokens.css + components.css）：
+  **冷灰底 + 纯白细线卡 + 一枚沉稳的靛蓝 + 粗黑读数配细进度条**。经典是「浅灰托白卡、天蓝渐变」，
+  极光是「彩色柔光托玻璃卡」，墨金是「米白纸上的卡纸」，玫瑰是「胭脂纸上的白瓣」，朱砂是「技术规格书」，
+  靛蓝是一块**监控大屏**：每张卡都是一块仪表，标签小而灰、数字大而黑、数字底下一根细条说占了多少。
+
+  换的不止颜色（只换色对这位用户等于「没变」）：
+
+    1. 底   浅色是冷灰（#f2f3f5，HEX 的 --background），深色是蓝黑（#121417）。不铺任何花纹、不打光。
+            顶栏是和页面同色的实底（HEX 的 header 是 94% 的底色），不做毛玻璃。
+    2. 卡   纯白、一圈 1px 冷灰细线（#e2e5ea）、12px 圆角、**不投影**；鼠标悬上去那圈线染成靛蓝
+            （HEX 的 .node-card:hover）。卡出了状态（告警 / 掉线）那圈线染成状态色。
+            主机卡三个读数照 HEX 的 .resource 画：标签在左、数字靠右、底下一根 6px 的圆角细条
+            （灰槽 + 靛蓝填充，≥70% 琥珀、≥90% 红）。统计条（SummaryStrip）照 HEX 的 .summary-grid：
+            标签是 11px 加宽字距的小灰字（.eyebrow），数字 26px / 650 字重。
+    3. 字   整套换成系统字（system-ui / PingFang / Segoe），不再是 Public Sans —— HEX 就是系统字。
+            标题 22px / 650，大数字 650 字重 + tabular-nums；单位是 11px 的小灰字跟在数字后面。
+    4. 控件 全部 8px 圆角（HEX 的 --radius-control），不再是胶囊。主按钮是**一块平的靛蓝**，没有渐变、
+            没有投影；选中的分段项是槽里一块白（HEX 的 .view-switch）；筛选 chip 没有边线，选中是
+            「靛蓝淡底 + 靛蓝字」（HEX 的 .status-tabs .active）；侧栏选中项同一个画法。
+            状态徽标 6px 圆角（HEX 的 .status-pill）。底部标签栏是贴底的一条通栏白条，不是悬浮胶囊；
+            选中项的图标坐在一块靛蓝淡底的圆角方块里（HEX 手机版的底栏）。
+    5. 色   强调色默认是 HEX 的靛蓝 #4268aa（深色 #91afe0 配深字）；状态色是 HEX 的那三个：
+            正常 #287c63、警告 #906515、故障 #b83e50（深色 #79bea6 / #d7b575 / #e68e9a）。
+            「默认配色」里另选一套时，按钮和选中态照常跟着换（那些值内联在 <html> 上，盖过这里）。
+
+  不新增任何 backdrop 模糊；不用伪元素画卡（弹层和拖拽手柄会被裁）。
+*/
+
+html[data-ui-theme="indigo"] {
+  --fx-l0-page: #f2f3f5;
+  --fx-l1-surface: #ffffff;
+  --fx-raised: #ffffff;
+  --fx-l2-group: #f7f8fa;
+  --fx-l3-control: #ffffff;
+  --fx-l3-control-fill: #e7e9ed;
+  --fx-sidebar: #ffffff;
+  --fx-hover: rgb(36 41 51 / 5%);
+  --fx-pressed: rgb(36 41 51 / 9%);
+  --fx-stroke-weak: #e2e5ea;
+  --fx-stroke-base: #cfd4db;
+  --fx-stroke-strong: #808c9a;
+  --fx-control-stroke: #b4bcc6;         /* 输入框的边比分隔线深一档（HEX：input boundaries stay stronger than separators） */
+  --fx-text: #242933;
+  --fx-text-secondary: #3f4654;
+  --fx-text-muted: #626b78;
+  /*
+    「tone」（HEX 里的叫法）：细条、选中态、侧栏当前项都用它。从 --fx-primary-fill 推，而不是写死靛蓝 ——
+    「默认配色」另选一套（比如从 HEX 搬来的海洋 / 落日 / 森林 / 午夜 / 玫红）时，那个值内联在
+    <html> 上，这里跟着变。出厂就是靛蓝（下面 --fx-primary-fill 给的）。
+  */
+  --fx-indigo-tone: var(--fx-primary-fill);
+  --fx-indigo-tone-soft: color-mix(in srgb, var(--fx-primary-fill) 9%, transparent);
+  --fx-indigo-tone-ink: color-mix(in srgb, var(--fx-primary-fill) 88%, var(--fx-text)); /* HEX 的 --tone-ink：主色掺 12% 墨 */
+  --fx-indigo-track: #eceef2;              /* 进度条的槽 */
+  --fx-card-fill: #ffffff;
+  --fx-card-stroke: #e2e5ea;
+  --fx-elevation-card: none;
+  --fx-elevation-control: none;
+  --fx-elevation-popover: 0 12px 32px -8px rgb(36 41 51 / 18%), 0 0 0 1px #e2e5ea;
+  --fx-glass: rgb(242 243 245 / 96%);
+  --fx-glass-strong: rgb(255 255 255 / 97%);
+  --fx-radius-control: 8px;
+  --fx-radius-card: 10px;
+  --fx-radius-surface: 12px;
+  --fx-radius-modal: 16px;
+  --fx-header-height: 56px;
+  --fx-font: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", Roboto, "Helvetica Neue", "Noto Sans", Arial, sans-serif;
+  /* 强调色：HEX 的靛蓝。「默认配色」另选时这些会被 <html> 上的内联值盖掉（那是用户的选择） */
+  --fx-accent: #4268aa;
+  --fx-accent-strong: #4268aa;
+  --fx-accent-soft: rgb(66 104 170 / 12%);
+  --fx-accent-fill: #4268aa;
+  --fx-accent-fill-foreground: #ffffff;
+  --fx-primary-gradient: linear-gradient(#4268aa, #4268aa);
+  --fx-primary-gradient-hover: linear-gradient(#37599a, #37599a);
+  --fx-primary-sheen: none;
+  --fx-primary-fill: #4268aa;
+  --fx-primary-fill-hover: #37599a;
+  --fx-primary-text: #ffffff;
+  --fx-primary-stroke: #4268aa;
+  --fx-primary-shadow: none;
+  --fx-mesh-1: rgb(66 104 170 / 14%);
+  /* 状态色：HEX 的三个（比经典的绿 / 琥珀 / 红都沉一点，灰底上不刺） */
+  --fx-healthy: #287c63;
+  --fx-healthy-soft: rgb(40 124 99 / 10%);
+  --fx-healthy-text: #287c63;
+  --fx-warn: #906515;
+  --fx-warn-soft: rgb(144 101 21 / 12%);
+  --fx-warn-text: #906515;
+  --fx-down: #b83e50;
+  --fx-down-soft: rgb(184 62 80 / 10%);
+  --fx-down-text: #b83e50;
+  --fx-down-fill: #b83e50;
+  /* 流量：上行靛蓝、下行绿（HEX 的 --upload / --download） */
+  --fx-flow-in: #287c63;
+  --fx-flow-out: #4268aa;
+}
+html.dark[data-ui-theme="indigo"] {
+  --fx-l0-page: #121417;
+  --fx-l1-surface: #1b1e23;
+  --fx-raised: #22262c;
+  --fx-l2-group: #24282f;
+  --fx-l3-control: #1b1e23;
+  --fx-l3-control-fill: #2a2f37;
+  --fx-sidebar: #16191d;
+  --fx-hover: rgb(255 255 255 / 5%);
+  --fx-pressed: rgb(255 255 255 / 9%);
+  --fx-stroke-weak: #30363f;
+  --fx-stroke-base: #3d444f;
+  --fx-stroke-strong: #687484;
+  --fx-control-stroke: #4a5260;
+  --fx-text: #e6e8ec;
+  --fx-text-secondary: #c3c9d2;
+  --fx-text-muted: #a3abb7;
+  --fx-indigo-tone-soft: color-mix(in srgb, var(--fx-primary-fill) 14%, transparent);
+  --fx-indigo-tone-ink: color-mix(in srgb, var(--fx-primary-fill) 80%, var(--fx-text));
+  --fx-indigo-track: #2b3038;
+  --fx-card-fill: #1b1e23;
+  --fx-card-stroke: #30363f;
+  --fx-elevation-card: none;
+  --fx-elevation-control: none;
+  --fx-elevation-popover: 0 12px 32px -8px rgb(0 0 0 / 70%), 0 0 0 1px #30363f;
+  --fx-glass: rgb(18 20 23 / 96%);
+  --fx-glass-strong: rgb(27 30 35 / 97%);
+  --fx-accent: #91afe0;
+  --fx-accent-strong: #91afe0;
+  --fx-accent-soft: rgb(145 175 224 / 18%);
+  --fx-accent-fill: #91afe0;
+  --fx-accent-fill-foreground: #142032;
+  --fx-primary-gradient: linear-gradient(#91afe0, #91afe0);
+  --fx-primary-gradient-hover: linear-gradient(#a3bde6, #a3bde6);
+  --fx-primary-fill: #91afe0;
+  --fx-primary-fill-hover: #a3bde6;
+  --fx-primary-text: #142032;
+  --fx-primary-stroke: #91afe0;
+  --fx-mesh-1: rgb(145 175 224 / 12%);
+  --fx-healthy: #79bea6;
+  --fx-healthy-soft: rgb(121 190 166 / 14%);
+  --fx-healthy-text: #79bea6;
+  --fx-warn: #d7b575;
+  --fx-warn-soft: rgb(215 181 117 / 14%);
+  --fx-warn-text: #d7b575;
+  --fx-down: #e68e9a;
+  --fx-down-soft: rgb(230 142 154 / 14%);
+  --fx-down-text: #e68e9a;
+  --fx-down-fill: #e68e9a;
+  --fx-flow-in: #79bea6;
+  --fx-flow-out: #91afe0;
+}
+
+/* ── 1. 底：冷灰实底，顶栏、侧栏实色一道细线 ──────────────────── */
+html[data-ui-theme="indigo"] .workspace-appbar { background: var(--fx-glass); -webkit-backdrop-filter: none; backdrop-filter: none; border-bottom-color: var(--fx-stroke-weak); }
+html[data-ui-theme="indigo"] .workspace-layout [data-sidebar="sidebar"] { border-right-color: var(--fx-stroke-weak); }
+html[data-ui-theme="indigo"] .workspace-appbar-title { font-size: 17px; font-weight: 650; letter-spacing: 0; }
+html[data-ui-theme="indigo"] .workspace-appbar-version { border-radius: 6px; border: 1px solid var(--fx-stroke-weak); background: transparent; }
+/* 顶栏的搜索：HEX 顶栏那枚带边线的搜索框 */
+html[data-ui-theme="indigo"] .workspace-appbar-search { border-radius: 8px; border: 1px solid var(--fx-stroke-weak); background: var(--fx-l1-surface); }
+html[data-ui-theme="indigo"] .workspace-appbar-search:hover { border-color: var(--fx-stroke-base); background: var(--fx-l1-surface); }
+html[data-ui-theme="indigo"] .workspace-appbar-icon,
+html[data-ui-theme="indigo"] .workspace-appbar-account,
+html[data-ui-theme="indigo"] .workspace-appbar-brand { border-radius: 8px; }
+@media (max-width: 639px) {
+  html[data-ui-theme="indigo"] .workspace-appbar-search { border-color: transparent; background: transparent; }
+}
+
+/* ── 2. 卡：纯白、1px 冷灰线、12px 圆角、不投影；悬停染靛蓝 ──── */
+html[data-ui-theme="indigo"]:not([data-card-style]) .workspace-main [data-slot="card"],
+html[data-ui-theme="indigo"][data-card-style="edge"] .workspace-main [data-slot="card"],
+html[data-ui-theme="indigo"]:not([data-card-style]) .fx-card-face,
+html[data-ui-theme="indigo"][data-card-style="edge"] .fx-card-face {
+  border: 1px solid var(--fx-card-stroke);
+  background: var(--fx-card-fill);
+  box-shadow: none;
+  transition: border-color 160ms;
+}
+/* 有事的卡（警告 / 故障）：那圈线染成状态色（HEX 用 45% 的主色染 hover 边，这里同一个配方给状态） */
+html[data-ui-theme="indigo"]:not([data-card-style]) .workspace-main [data-tone="warn"][data-slot="card"],
+html[data-ui-theme="indigo"][data-card-style="edge"] .workspace-main [data-tone="warn"][data-slot="card"],
+html[data-ui-theme="indigo"]:not([data-card-style]) .fx-card-face[data-tone="warn"],
+html[data-ui-theme="indigo"][data-card-style="edge"] .fx-card-face[data-tone="warn"],
+html[data-ui-theme="indigo"]:not([data-card-style]) .workspace-main [data-tone="down"][data-slot="card"],
+html[data-ui-theme="indigo"][data-card-style="edge"] .workspace-main [data-tone="down"][data-slot="card"],
+html[data-ui-theme="indigo"]:not([data-card-style]) .fx-card-face[data-tone="down"],
+html[data-ui-theme="indigo"][data-card-style="edge"] .fx-card-face[data-tone="down"] {
+  border-color: color-mix(in srgb, var(--fx-card-tone) 45%, var(--fx-card-stroke));
+}
+/* 整张能点的卡（主机卡、规则卡）：鼠标悬上去边线染靛蓝，不抬起、不投影 */
+html[data-ui-theme="indigo"] .workspace-main .fx-host-card:hover,
+html[data-ui-theme="indigo"] .workspace-main .fx-rule-card:hover { border-color: color-mix(in srgb, var(--fx-indigo-tone) 45%, var(--fx-card-stroke)); box-shadow: none; }
+html[data-ui-theme="indigo"] .fx-cardstyle-swatch[data-style="edge"] .fx-cardstyle-swatch-face { border: 1px solid var(--fx-card-stroke); background: var(--fx-card-fill); box-shadow: none; }
+/* 主机卡的系统图标：一枚 8px 圆角的淡灰方块，图标靛蓝（HEX 的 .node-symbol） */
+html[data-ui-theme="indigo"] .fx-host-card > div:first-child > span:first-child { border-radius: 8px; border: 1px solid var(--fx-stroke-weak); background: var(--fx-l2-group); color: var(--fx-indigo-tone); }
+/*
+  主机卡三个读数照 HEX 的 .resource 画：一格里标签在左（小灰字）、数字靠右（粗黑 tabular），
+  底下一根 6px 的圆角细条：灰槽 + 靛蓝填充；≥70% 琥珀、≥90% 红（颜色由 data-tone 给，照旧）。
+  格子不再是灰底小方块，三格之间 16px 空着。
+*/
+html[data-ui-theme="indigo"] .fx-host-card .grid.grid-cols-3 { gap: 16px; }
+html[data-ui-theme="indigo"] .fx-host-spec { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: baseline; column-gap: 6px; border-radius: 0; background: transparent; padding: 0 0 12px; }
+html[data-ui-theme="indigo"] .fx-host-spec > i { font-size: 12px; line-height: 18px; }
+html[data-ui-theme="indigo"] .fx-host-spec > b { font-size: 14.5px; line-height: 18px; font-weight: 650; text-align: right; }
+html[data-ui-theme="indigo"] .fx-host-spec-bar { left: 0; right: 0; bottom: 0; height: 6px; border-radius: 4px; background: var(--fx-indigo-track); }
+html[data-ui-theme="indigo"] .fx-host-spec-bar > span { border-radius: 4px; background: var(--fx-indigo-tone); }
+html[data-ui-theme="indigo"] .fx-host-spec-bar > span[data-tone="warn"] { background: var(--fx-warn); }
+html[data-ui-theme="indigo"] .fx-host-spec-bar > span[data-tone="down"] { background: var(--fx-down); }
+/* 统计条（SummaryStrip）照 HEX 的 .summary-grid：小标签是 11px 加宽字距的灰字，数字 26px / 650 */
+html[data-ui-theme="indigo"] .fx-summary-cell { border-left-color: var(--fx-stroke-weak); }
+html[data-ui-theme="indigo"] .fx-summary-cell > span:first-child { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--fx-text-muted); }
+html[data-ui-theme="indigo"] .fx-summary-value { font-size: 26px; line-height: 32px; font-weight: 650; letter-spacing: -.01em; }
+@media (max-width: 767px) { html[data-ui-theme="indigo"] .fx-summary-value { font-size: 22px; line-height: 28px; } }
+/* 规则卡：流量大数字 22px / 600（HEX 的 .speed-pair strong），单位 11px 跟在后面；地址行上面一道细线照旧 */
+html[data-ui-theme="indigo"] .fx-rule-num > b { font-size: 22px; font-weight: 650; letter-spacing: -.01em; }
+html[data-ui-theme="indigo"] .fx-rule-num > small { font-size: 11px; font-weight: 400; }
+html[data-ui-theme="indigo"] .fx-rule-path,
+html[data-ui-theme="indigo"] .fx-tunnel-foot { border-top-color: var(--fx-stroke-weak); }
+/* 走势线用靛蓝 */
+html[data-ui-theme="indigo"] .fx-rule-spark,
+html[data-ui-theme="indigo"] .workspace-header-aside .fx-sparkline { color: var(--fx-indigo-tone); }
+/* 规则卡里的小标签：6px 圆角、一圈细线（HEX 的 .tag） */
+html[data-ui-theme="indigo"] .fx-rule-tag { border-radius: 6px; }
+
+/* ── 3. 字：系统字；页面标题 22px / 650；分组小标题是 eyebrow ──── */
+html[data-ui-theme="indigo"] .workspace-main .workspace-header-title { font-size: 22px; line-height: 30px; font-weight: 650; letter-spacing: -.01em; }
+html[data-ui-theme="indigo"] .fx-navbar-large-title { font-weight: 650; letter-spacing: -.01em; }
+html[data-ui-theme="indigo"] .workspace-main .workspace-header { padding-bottom: 4px; }
+html[data-ui-theme="indigo"] .fx-list-section-header,
+html[data-ui-theme="indigo"] .workspace-main .fx-list-section-header { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; font-weight: 500; color: var(--fx-text-muted); }
+html[data-ui-theme="indigo"] .workspace-main [data-slot="card-title"] { font-weight: 650; letter-spacing: 0; }
+html[data-ui-theme="indigo"] .workspace-layout [data-sidebar="group-label"] { letter-spacing: .08em; }
+
+/* ── 4. 控件：全部 8px；平的靛蓝；槽里一块白；淡底 + 靛蓝字 ────── */
+/* 分段控件：一条淡灰槽（HEX 的 .view-switch），选中格是一块白（深色下亮一档的灰），没有渐变、不投影 */
+html[data-ui-theme="indigo"] .workspace-tabs,
+html.dark[data-ui-theme="indigo"] .workspace-tabs { padding: 4px; border: 0; border-radius: 8px; background: var(--fx-l3-control-fill); box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
+html[data-ui-theme="indigo"] .workspace-tabs .workspace-tab,
+html.dark[data-ui-theme="indigo"] .workspace-tabs .workspace-tab,
+html[data-ui-theme="indigo"] .workspace-tab-scroll { border-radius: 6px; }
+html[data-ui-theme="indigo"] .workspace-tabs .workspace-tab { color: var(--fx-text-muted); font-size: 13px; font-weight: 500; }
+html[data-ui-theme="indigo"] .workspace-tabs .workspace-tab[data-state="active"],
+html.dark[data-ui-theme="indigo"] .workspace-tabs .workspace-tab[data-state="active"] { color: var(--fx-text); background: var(--fx-l1-surface); background-image: none; box-shadow: none; font-weight: 600; }
+html.dark[data-ui-theme="indigo"] .workspace-tabs .workspace-tab[data-state="active"] { background: var(--fx-raised); }
+html[data-ui-theme="indigo"] .workspace-tabs .workspace-tab[data-state="active"] > svg { color: var(--fx-indigo-tone); }
+html[data-ui-theme="indigo"] .workspace-tabs .workspace-tab[data-state="active"] .workspace-tab-count { color: var(--fx-text-muted); }
+/* 筛选 chip（HEX 的 .status-tabs / .region-pills）：没有边线、8px 圆角；选中是靛蓝淡底 + 靛蓝字 */
+html[data-ui-theme="indigo"] .fx-chip { height: 32px; padding: 0 10px; border-radius: 8px; border-color: transparent; background: transparent; color: var(--fx-text-muted); font-weight: 500; }
+html[data-ui-theme="indigo"] .fx-chip:hover { background: var(--fx-hover); color: var(--fx-text); }
+html[data-ui-theme="indigo"] .fx-chip-on,
+html[data-ui-theme="indigo"] .fx-chip-on:hover { border-color: transparent; background: var(--fx-indigo-tone-soft); background-image: none; color: var(--fx-indigo-tone-ink); font-weight: 600; }
+/* 输入框、下拉、搜索框：8px 圆角、白底、边线比分隔线深一档 */
+html[data-ui-theme="indigo"] .workspace-main [data-slot="input"],
+html[data-ui-theme="indigo"] .workspace-main [data-slot="textarea"],
+html[data-ui-theme="indigo"] .workspace-main [data-slot="select-trigger"],
+html[data-ui-theme="indigo"] .workspace-filter-search input { border-radius: 8px; background: var(--fx-l1-surface); border-color: var(--fx-control-stroke); }
+html[data-ui-theme="indigo"] .fx-search-pill { border-radius: 8px !important; background: var(--fx-l1-surface) !important; border-color: var(--fx-control-stroke) !important; }
+html[data-ui-theme="indigo"] .fx-search-pill:focus-visible { border-color: var(--fx-indigo-tone) !important; }
+html[data-ui-theme="indigo"] [data-slot="button"]:not([data-icon-button]),
+html[data-ui-theme="indigo"] .fx-row-action,
+html[data-ui-theme="indigo"] .fx-filter-pill { border-radius: 8px !important; }
+html[data-ui-theme="indigo"] .workspace-main [data-icon-button],
+html[data-ui-theme="indigo"] .workspace-header-actions [data-slot="button"] { border-radius: 8px !important; }
+html[data-ui-theme="indigo"] [data-slot="badge"] { border-radius: 6px; }
+/* 主按钮：一块平的靛蓝（跟「默认配色」换色，但永远是平的），不投影、不描边 */
+html[data-ui-theme="indigo"] [data-slot="button"][data-variant="default"],
+html[data-ui-theme="indigo"] [data-slot="button"]:not([data-variant]) { background-image: none !important; background-color: var(--fx-primary-fill); border-color: transparent; box-shadow: none; font-weight: 600; }
+html[data-ui-theme="indigo"] [data-slot="button"][data-variant="default"]:hover,
+html[data-ui-theme="indigo"] [data-slot="button"]:not([data-variant]):hover { background-color: var(--fx-primary-fill-hover); }
+html[data-ui-theme="indigo"] [data-slot="button"][data-variant="outline"] { box-shadow: none; }
+/* 侧栏选中项：靛蓝淡底 + 靛蓝字（HEX 的 .status-tabs .active），不是一块实心蓝 */
+html[data-ui-theme="indigo"] .workspace-layout [data-sidebar="menu-button"] { border-radius: 8px; }
+html[data-ui-theme="indigo"] .workspace-layout [data-sidebar="menu-button"][data-active="true"] { background: var(--fx-indigo-tone-soft); background-image: none; color: var(--fx-indigo-tone-ink); font-weight: 600; }
+html[data-ui-theme="indigo"] .workspace-layout [data-sidebar="menu-button"][data-active="true"] > svg { color: var(--fx-indigo-tone); }
+/* 开关、徽标那类读 --fx-primary-gradient 的：令牌已经是平色，不用再管 */
+@media (max-width: 767px) {
+  html[data-ui-theme="indigo"] .fx-navbar { background: var(--fx-glass); -webkit-backdrop-filter: none; backdrop-filter: none; }
+  /*
+    底部标签栏：贴底的一条通栏白条、顶上一道细线（HEX 手机版的底栏），不是悬浮胶囊。
+    选中项的图标坐在一块靛蓝淡底的圆角方块里，字也是靛蓝。
+  */
+  html[data-ui-theme="indigo"] .fx-tabbar {
+    inset-inline: 0;
+    bottom: 0;
+    height: calc(60px + env(safe-area-inset-bottom, 0px));
+    padding: 4px 8px calc(4px + env(safe-area-inset-bottom, 0px));
+    border: 0;
+    border-top: 1px solid var(--fx-stroke-weak);
+    border-radius: 0;
+    background: var(--fx-glass-strong);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    box-shadow: none;
+  }
+  html[data-ui-theme="indigo"] .fx-tabbar-item { height: 52px; border-radius: 8px; gap: 3px; }
+  html[data-ui-theme="indigo"] .fx-tabbar-item:active { transform: none; }
+  html[data-ui-theme="indigo"] .fx-tabbar-item > svg { width: 44px; height: 26px; padding: 3px 11px; border-radius: 8px; box-sizing: border-box; transition: background-color 160ms; }
+  html[data-ui-theme="indigo"] .fx-tabbar-item-active { color: var(--fx-indigo-tone-ink); background: transparent; background-image: none; box-shadow: none; }
+  html[data-ui-theme="indigo"] .fx-tabbar-item-active > svg { background: var(--fx-indigo-tone-soft); color: var(--fx-indigo-tone); }
+  html[data-ui-theme="indigo"] .fx-tabbar-label { font-size: 11px; }
+}
+
+/* ── 设置页「界面主题」的预览 ───────────────────────────────── */
+/* 冷灰底、两张白卡各一圈冷灰线和一根靛蓝细条、底下一条白的通栏条 */
+.fx-uitheme-swatch[data-theme="indigo"] { background: #f2f3f5; }
+.dark .fx-uitheme-swatch[data-theme="indigo"] { background: #121417; }
+.fx-uitheme-swatch[data-theme="indigo"] > i {
+  border-radius: 4px;
+  border-color: #e2e5ea;
+  background: linear-gradient(#4268aa, #4268aa) 6px calc(100% - 4px) / 46% 2px no-repeat, linear-gradient(#eceef2, #eceef2) 6px calc(100% - 4px) / calc(100% - 12px) 2px no-repeat, #fff;
+  box-shadow: none;
+}
+.dark .fx-uitheme-swatch[data-theme="indigo"] > i {
+  border-color: #30363f;
+  background: linear-gradient(#91afe0, #91afe0) 6px calc(100% - 4px) / 46% 2px no-repeat, linear-gradient(#2b3038, #2b3038) 6px calc(100% - 4px) / calc(100% - 12px) 2px no-repeat, #1b1e23;
+  box-shadow: none;
+}
+.fx-uitheme-swatch[data-theme="indigo"] > b { border-radius: 0; border-color: #e2e5ea; background: #fff; }
+.dark .fx-uitheme-swatch[data-theme="indigo"] > b { border-color: #30363f; background: #1b1e23; }
+
+/* ── 5. 页面里其它圆角：一律收到 8 / 12（HEX 的两档）──────────── */
+/* 分段按钮组、证据框、提示条这类 Tailwind 圆角；圆点、头像、状态灯（rounded-full）不动 */
+html[data-ui-theme="indigo"] .workspace-main :is(.rounded-md, .rounded-lg, .rounded-\[6px\]) { border-radius: 8px; }
+html[data-ui-theme="indigo"] .workspace-main :is(.rounded-xl, .rounded-2xl, .rounded-3xl) { border-radius: 12px; }
+html[data-ui-theme="indigo"] [role="dialog"] :is(.rounded-md, .rounded-lg) { border-radius: 8px; }
+html[data-ui-theme="indigo"] [role="dialog"] :is(.rounded-xl, .rounded-2xl) { border-radius: 12px; }

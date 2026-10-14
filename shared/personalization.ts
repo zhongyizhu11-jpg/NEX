@@ -267,14 +267,15 @@ export const PERSONALIZATION_THEME_PRESETS = [
     },
   },
   /*
-    下面五套是 monitor-probe 的 HEX 主题自带的配色（src/styles/tokens.css 的 [data-palette]）：
-    浅色一个沉稳的中间调、深色一个亮一档的同色；经典蓝就是「HEX」界面主题的出厂色，不单列。
-    它们是普通的强调色预设，任何界面主题下都能选；在「HEX」主题下按钮是平色，所以换起来最像原版。
+    下面五套搬自 monitor-probe 的 HEX 主题（src/styles/tokens.css 的 [data-palette]）：
+    浅色一个沉稳的中间调、深色一个亮一档的同色；它的经典蓝就是「靛蓝」界面主题的出厂色，不单列。
+    它们是普通的强调色预设，任何界面主题下都能选；在「靛蓝」主题下按钮是平色，所以换起来最像原版。
+    id 不叫 forest / rose：forest 已经是「森绿」，rose 是同名的界面主题，所以用 pine / rouge。
   */
   {
-    id: "hex-ocean",
-    name: "HEX · 海洋",
-    description: "HEX 的海洋：青蓝 #167e90，深色下是 #74d1df。",
+    id: "ocean",
+    name: "海洋",
+    description: "青蓝色，取自 monitor-probe 的 HEX 主题：#167e90，深色下是 #74d1df。",
     swatches: ["#167e90", "color-mix(in srgb, #167e90 12%, white)", "#74d1df"],
     light: {
       primary: "#167e90",
@@ -302,9 +303,9 @@ export const PERSONALIZATION_THEME_PRESETS = [
     },
   },
   {
-    id: "hex-sunset",
-    name: "HEX · 落日",
-    description: "HEX 的落日：砖橙 #b65b2c，深色下是 #f5b38c。",
+    id: "sunset",
+    name: "落日",
+    description: "砖橙色，取自 monitor-probe 的 HEX 主题：#b65b2c，深色下是 #f5b38c。",
     swatches: ["#b65b2c", "color-mix(in srgb, #b65b2c 12%, white)", "#f5b38c"],
     light: {
       primary: "#b65b2c",
@@ -332,9 +333,9 @@ export const PERSONALIZATION_THEME_PRESETS = [
     },
   },
   {
-    id: "hex-forest",
-    name: "HEX · 森林",
-    description: "HEX 的森林：松绿 #248064，深色下是 #7dd8b4。",
+    id: "pine",
+    name: "森林",
+    description: "松绿色，取自 monitor-probe 的 HEX 主题：#248064，深色下是 #7dd8b4。",
     swatches: ["#248064", "color-mix(in srgb, #248064 12%, white)", "#7dd8b4"],
     light: {
       primary: "#248064",
@@ -362,9 +363,9 @@ export const PERSONALIZATION_THEME_PRESETS = [
     },
   },
   {
-    id: "hex-midnight",
-    name: "HEX · 午夜",
-    description: "HEX 的午夜：蓝紫 #7860bb，深色下是 #c2adff。",
+    id: "midnight",
+    name: "午夜",
+    description: "蓝紫色，取自 monitor-probe 的 HEX 主题：#7860bb，深色下是 #c2adff。",
     swatches: ["#7860bb", "color-mix(in srgb, #7860bb 12%, white)", "#c2adff"],
     light: {
       primary: "#7860bb",
@@ -392,9 +393,9 @@ export const PERSONALIZATION_THEME_PRESETS = [
     },
   },
   {
-    id: "hex-rose",
-    name: "HEX · 玫瑰",
-    description: "HEX 的玫瑰：玫红 #b24e77，深色下是 #f2a9c5。",
+    id: "rouge",
+    name: "玫红",
+    description: "玫红色，取自 monitor-probe 的 HEX 主题：#b24e77，深色下是 #f2a9c5。",
     swatches: ["#b24e77", "color-mix(in srgb, #b24e77 12%, white)", "#f2a9c5"],
     light: {
       primary: "#b24e77",
@@ -618,11 +619,11 @@ export function normalizePersonalizationCardStyle(value: unknown): Personalizati
             页面标题前一枚朱红菱形、每节顶线左端一段朱红短线、页顶一条细斜纹。只有这套主题下才出现
             「监控」页和那批借鉴来的运维功能入口（见 client/src/features/ops/）；设置开着的功能换主题后照常生效。
 
-    hex     HEX —— 照 8bitNull 的 monitor-probe 主题 HEX：冷灰底（#f2f3f5）托纯白 1px 细线卡、不投影；强调色是沉稳的
+    indigo  靛蓝 —— 照 8bitNull 的 monitor-probe 主题 HEX：冷灰底（#f2f3f5）托纯白 1px 细线卡、不投影；强调色是沉稳的
             靛蓝（#4268aa），按钮是平色、选中态是淡底 + 靛蓝字；整套换成系统字，读数粗黑 + 底下一根细进度条，
             统计条是「小灰标签 + 26px 大数字」；控件一律 8px 圆角，底部标签栏是贴底通栏条。深色是蓝黑（#121417）。
 
-  画法全在 client/src/styles/theme-aurora.css / theme-gilt.css / theme-rose.css / theme-cinnabar.css / theme-hex.css 里按 <html data-ui-theme> 选；这里只管 id 和文案。
+  画法全在 client/src/styles/theme-aurora.css / theme-gilt.css / theme-rose.css / theme-cinnabar.css / theme-indigo.css 里按 <html data-ui-theme> 选；这里只管 id 和文案。
   存的是 id；别的值一律回到 classic。
 */
 export const PERSONALIZATION_UI_THEMES = [
@@ -631,7 +632,7 @@ export const PERSONALIZATION_UI_THEMES = [
   { id: "gilt", name: "墨金", description: "米白纸底、平贴的小圆角卡纸，数字放在米色带上；衬线标题、金色下划线分段、方标签筛选；深色是墨黑配金。" },
   { id: "rose", name: "玫瑰", description: "胭脂粉底、无边线的浮起白瓣卡，数字嵌在托盘里；斜体衬线标题、细线空槽分段、全药丸；设置页改为编号分节。" },
   { id: "cinnabar", name: "朱砂", description: "素白纸面、3px 小方角、朱红短线和菱形标记，标签全大写加宽字距；带「监控」页和一整套运维功能（状态可用率、地区规则、IP 封禁、在线 IP、安全巡检、API 与 MCP……）。" },
-  { id: "hex", name: "HEX", description: "冷灰底托纯白细线卡、靛蓝平色控件、系统字；读数粗黑、底下一根细进度条，像一块监控大屏；深色是蓝黑。照 monitor-probe 的 HEX 主题。" },
+  { id: "indigo", name: "靛蓝", description: "冷灰底托纯白细线卡、靛蓝平色控件、系统字；读数粗黑、底下一根细进度条，像一块监控大屏；深色是蓝黑。照 monitor-probe 的 HEX 主题。" },
 ] as const;
 
 export type PersonalizationUiThemeId = typeof PERSONALIZATION_UI_THEMES[number]["id"];
