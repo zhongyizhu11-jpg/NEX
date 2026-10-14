@@ -82,6 +82,21 @@ test("Agent install and upgrade both apply forwarding network tuning", () => {
     assert.match(script, new RegExp(`tuning_raise ${key.replace(/\./g, "\\.")} 67108864`));
   }
   assert.match(script, /tuning_raise net\.netfilter\.nf_conntrack_max 1048576/);
+  // conntrack 哈希桶跟着表上限走：新内核走 sysctl，老内核这个键只读，退回 /sys 模块参数并写 modprobe.d。
+  assert.match(script, /tuning_conntrack_buckets 262144/);
+  assert.match(script, /want=\$\(\(max \/ 4\)\)/);
+  assert.match(script, /sysctl -w "net\.netfilter\.nf_conntrack_buckets=\$want"/);
+  assert.match(script, /\/sys\/module\/nf_conntrack\/parameters\/hashsize/);
+  assert.match(script, /options nf_conntrack hashsize=\$want/);
+  // 只在模块加载时生效的 be_liberal 和其余只抬不压的键
+  assert.match(script, /tuning_raise net\.netfilter\.nf_conntrack_tcp_be_liberal 1/);
+  assert.match(script, /tuning_raise net\.ipv4\.tcp_no_metrics_save 1/);
+  for (const key of ["net.core.rmem_default", "net.core.wmem_default"]) {
+    assert.match(script, new RegExp(`tuning_raise ${key.replace(/\./g, "\\.")} 1048576`));
+  }
+  for (const key of ["net.ipv4.udp_rmem_min", "net.ipv4.udp_wmem_min"]) {
+    assert.match(script, new RegExp(`tuning_raise ${key.replace(/\./g, "\\.")} 16384`));
+  }
   assert.match(upgrade, /\n\s*apply_network_tuning\n/);
   assert.ok(upgrade.indexOf("apply_network_tuning") < upgrade.indexOf("write_agent_service"));
 });
