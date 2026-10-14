@@ -1,0 +1,346 @@
+/*
+  ── 界面主题「云母」（设置 › 个性化 › 界面主题）──
+
+  第六种气质，由 <html data-ui-theme="mica"> 打开；没有这个属性这个文件一条都不生效。
+  参考 bluesmkun/openlat（monitor 状态面板的第三方主题，2026-10-14 看过源码和
+  openlat.monitor-themes.pages.dev 的预览）：**淡紫灰底 + 纯白微拟物卡 + 凹陷轨道控件**。
+  经典是「浅灰托白卡」、极光是「彩色柔光托玻璃卡」、墨金是「米白纸上的卡纸」、玫瑰是「胭脂纸上
+  的白瓣」、朱砂是「技术规格书」，云母是**一块软的、有厚度的白瓷**：卡是从底上凸起来的（右下一道
+  深影、左上一道白光），读数和输入框是按进去的（凹陷轨道），按钮按下去会真的陷下去。
+
+  换的不止颜色（只换色对这位用户等于「没变」）：
+
+    1. 底   很淡的紫灰（#f9fafe，openlat 的 oklch(0.985 0.006 275)），右上一团靛蓝、左下一团
+            天蓝的柔光（openlat body::before / ::after 那两团 blur(72px) 的光，这里用径向渐变画，
+            不用 filter），独立一层 position: fixed，滚动不重绘。深色是墨蓝（#0e1120）上压暗的同一组光。
+    2. 卡   纯白、150° 一点点从白到底色的渐变、一圈 55% 的淡线，**双向软影**：右下 9px 深影 +
+            左上 7px 白光（openlat 的 --sh-neu）。出了状态的卡（告警 / 掉线）多描一圈状态色内描边，
+            影子带一点状态色。卡里的读数不是灰方格也不是托盘，是**凹陷轨道**（openlat 的 .neu-track：
+            淡底 + 双向内影）：主机卡三个读数各在一条轨道里、规则卡的流量数字 + 走势在一条轨道里、
+            链路卡的延迟行在一条轨道里。主机卡的三根小条按 CPU / 内存 / 硬盘 分别是
+            紫粉 / 蓝青 / 绿黄 三道渐变（openlat 的 --grad-cpu / mem / disk）。
+    3. 字   不换字体（openlat 全站系统无衬线、等宽数字），页面标题更粗一点；分组小标题靛蓝小字；
+            走势线靛蓝。
+    4. 控件 全部 12px 圆角，两种状态：**凸起**（白底 + 小双向影：筛选 chip、图标按钮、分段控件的选中格、
+            底部标签栏）和**凹陷**（淡底 + 内影：搜索框、输入框、下拉、分段控件的槽、选中的 chip、
+            侧栏和标签栏的选中项、顶栏的搜索）。按下去（:active）凸的会陷成凹的并下沉 1px
+            （openlat 的 .neu-press）。主按钮仍是主色渐变（跟「默认配色」换），加一道带色软影和顶部内高光。
+            顶栏是白 68% 的毛玻璃（openlat 的 .glass），底下没有线，靠一道很淡的影子和内容分开。
+
+  模糊只留给本来就有模糊的几个固定面（顶栏、标签栏、弹层），滚动内容上不新增 backdrop 模糊。
+*/
+
+html[data-ui-theme="mica"] {
+  --fx-l0-page: #f9fafe;
+  --fx-l1-surface: #ffffff;
+  --fx-raised: #ffffff;
+  --fx-l2-group: #edf0f8;
+  --fx-l3-control: #ffffff;
+  --fx-l3-control-fill: rgb(237 240 248 / 88%);
+  --fx-sidebar: rgb(255 255 255 / 55%);
+  --fx-hover: rgb(100 104 123 / 7%);
+  --fx-pressed: rgb(100 104 123 / 13%);
+  --fx-stroke-weak: rgb(218 221 234 / 70%);
+  --fx-stroke-base: #daddea;
+  --fx-stroke-strong: #b9bed3;
+  --fx-text: #191c2b;
+  --fx-text-secondary: #474d66;
+  --fx-text-muted: #666b81;
+  --fx-mica: #545be9;                       /* 靛蓝：分组小标题、走势线、选中态的字和图标 */
+  --fx-mica-soft: rgb(84 91 233 / 10%);
+  --fx-mica-wash-1: rgb(84 91 233 / 10%);    /* 右上那片大的淡靛蓝（openlat body 的 radial） */
+  --fx-mica-wash-2: rgb(0 139 204 / 9%);     /* 左上那片淡天蓝 */
+  --fx-mica-blob-1: rgb(84 91 233 / 14%);    /* 右上那团光（openlat body::before，32% × opacity .4） */
+  --fx-mica-blob-2: rgb(0 139 204 / 11%);    /* 左下那团光（openlat body::after，26% × .4） */
+  --fx-neu-dark: rgb(100 104 123 / 16%);
+  --fx-neu-light: rgb(255 255 255 / 90%);
+  --fx-sh-neu: 9px 9px 22px var(--fx-neu-dark), -7px -7px 18px var(--fx-neu-light);
+  --fx-sh-neu-sm: 4px 4px 10px rgb(100 104 123 / 13%), -3px -3px 8px rgb(255 255 255 / 85%);
+  --fx-sh-inset: inset 2px 2px 5px rgb(100 104 123 / 15%), inset -2px -2px 5px rgb(255 255 255 / 80%);
+  --fx-track: rgb(237 240 248 / 88%);        /* 凹陷轨道的底（openlat .neu-track：muted 88%） */
+  --fx-track-line: rgb(218 221 234 / 60%);
+  --fx-card-fill: #ffffff;
+  --fx-card-face: linear-gradient(150deg, #ffffff, color-mix(in oklab, #ffffff 90%, #f9fafe));
+  --fx-card-stroke: rgb(218 221 234 / 55%);
+  --fx-elevation-card: var(--fx-sh-neu);
+  --fx-elevation-control: var(--fx-sh-neu-sm);
+  --fx-elevation-popover: 0 16px 40px -10px rgb(25 28 43 / 18%), 0 2px 6px rgb(25 28 43 / 6%), 0 0 0 1px rgb(218 221 234 / 70%);
+  --fx-glass: rgb(255 255 255 / 68%);
+  --fx-glass-strong: rgb(255 255 255 / 80%);
+  --fx-glass-blur: saturate(135%) blur(18px);
+  --fx-radius-control: 12px;
+  --fx-radius-card: 14px;
+  --fx-radius-surface: 18px;
+  --fx-radius-modal: 22px;
+  /* 主机卡三根小条：CPU 紫粉、内存 蓝青、硬盘 绿黄（openlat 的 --grad-cpu / mem / disk） */
+  --fx-grad-cpu: linear-gradient(90deg, #745af4, #b954cf);
+  --fx-grad-mem: linear-gradient(90deg, #0095d3, #00b8b9);
+  --fx-grad-disk: linear-gradient(90deg, #00ac6c, #8cc14a);
+}
+html.dark[data-ui-theme="mica"] {
+  --fx-l0-page: #0e1120;
+  --fx-l1-surface: #171a2a;
+  --fx-raised: #1d2133;
+  --fx-l2-group: #222536;
+  --fx-l3-control: #171a2a;
+  --fx-l3-control-fill: rgb(34 37 54 / 88%);
+  --fx-sidebar: rgb(14 17 32 / 60%);
+  --fx-hover: rgb(255 255 255 / 5%);
+  --fx-pressed: rgb(255 255 255 / 9%);
+  --fx-stroke-weak: rgb(255 255 255 / 8%);
+  --fx-stroke-base: rgb(255 255 255 / 12%);
+  --fx-stroke-strong: rgb(255 255 255 / 24%);
+  --fx-text: #f0f1f7;
+  --fx-text-secondary: #c3c7d8;
+  --fx-text-muted: #9fa4b8;
+  --fx-mica: #8798ff;
+  --fx-mica-soft: rgb(135 152 255 / 16%);
+  --fx-mica-wash-1: rgb(135 152 255 / 8%);
+  --fx-mica-wash-2: rgb(22 179 235 / 7%);
+  --fx-mica-blob-1: rgb(135 152 255 / 12%);
+  --fx-mica-blob-2: rgb(22 179 235 / 9%);
+  --fx-neu-dark: rgb(2 2 6 / 60%);
+  --fx-neu-light: rgb(100 104 123 / 14%);
+  --fx-sh-neu: 10px 10px 24px var(--fx-neu-dark), -8px -8px 20px var(--fx-neu-light);
+  --fx-sh-neu-sm: 4px 4px 10px rgb(2 2 6 / 55%), -3px -3px 8px rgb(100 104 123 / 12%);
+  --fx-sh-inset: inset 2px 2px 6px rgb(2 2 6 / 55%), inset -2px -2px 6px rgb(100 104 123 / 10%);
+  --fx-track: rgb(34 37 54 / 88%);
+  --fx-track-line: rgb(255 255 255 / 6%);
+  --fx-card-fill: #171a2a;
+  --fx-card-face: linear-gradient(150deg, color-mix(in oklab, #171a2a 94%, white), color-mix(in oklab, #171a2a 90%, #0e1120));
+  --fx-card-stroke: rgb(255 255 255 / 6%);
+  --fx-elevation-popover: 0 16px 40px -10px rgb(0 0 0 / 70%), 0 2px 6px rgb(0 0 0 / 40%), 0 0 0 1px rgb(255 255 255 / 8%);
+  --fx-glass: rgb(23 26 42 / 68%);
+  --fx-glass-strong: rgb(23 26 42 / 80%);
+  --fx-grad-cpu: linear-gradient(90deg, #8f7fff, #d57ae9);
+  --fx-grad-mem: linear-gradient(90deg, #00aee9, #1ad1d1);
+  --fx-grad-disk: linear-gradient(90deg, #38c789, #a4d76a);
+}
+
+/* ── 1. 底：淡紫灰 + 两团光 ──────────────────────────────────── */
+/*
+  和极光、玫瑰一样：<html> 自己有底色，body 不铺底，光画在 body::after（固定一层，z-index -1，
+  #root 的 1 盖住它；账本见 zIndexTiers.test.ts）。openlat 是两片大的淡色 + 两团 blur(72px) 的圆，
+  这里四个径向渐变画同样的东西，不用 filter（一整屏的模糊层在手机上是掉帧的来源）。
+*/
+html[data-ui-theme="mica"] body { background: transparent; }
+html[data-ui-theme="mica"] body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(28rem 28rem at calc(100% + 4rem) -4rem, var(--fx-mica-blob-1), transparent 70%),
+    radial-gradient(24rem 24rem at -3rem calc(100% + 3rem), var(--fx-mica-blob-2), transparent 70%),
+    radial-gradient(52rem 34rem at 104% -10%, var(--fx-mica-wash-1), transparent 70%),
+    radial-gradient(44rem 30rem at -12% -6%, var(--fx-mica-wash-2), transparent 70%);
+}
+html[data-ui-theme="mica"] .auth-shell,
+html[data-ui-theme="mica"] .public-home-shell,
+html[data-ui-theme="mica"] .setup-shell { background: transparent; }
+
+/* ── 2. 凸起的白瓷卡 ─────────────────────────────────────────── */
+/*
+  「彩色描边」四档里的默认那档在这里是：一圈 55% 的淡线 + 双向软影，正常的卡不描状态色；
+  出了状态的卡（告警 / 掉线）才描一圈 1px 状态色内描边，右下那道影子也染一点状态色。
+*/
+html[data-ui-theme="mica"]:not([data-card-style]) .workspace-main [data-slot="card"],
+html[data-ui-theme="mica"][data-card-style="edge"] .workspace-main [data-slot="card"],
+html[data-ui-theme="mica"]:not([data-card-style]) .fx-card-face,
+html[data-ui-theme="mica"][data-card-style="edge"] .fx-card-face {
+  border: 1px solid var(--fx-card-stroke);
+  background: var(--fx-card-face);
+  box-shadow: var(--fx-sh-neu);
+}
+html[data-ui-theme="mica"]:not([data-card-style]) .workspace-main [data-tone="warn"][data-slot="card"],
+html[data-ui-theme="mica"][data-card-style="edge"] .workspace-main [data-tone="warn"][data-slot="card"],
+html[data-ui-theme="mica"]:not([data-card-style]) .fx-card-face[data-tone="warn"],
+html[data-ui-theme="mica"][data-card-style="edge"] .fx-card-face[data-tone="warn"],
+html[data-ui-theme="mica"]:not([data-card-style]) .workspace-main [data-tone="down"][data-slot="card"],
+html[data-ui-theme="mica"][data-card-style="edge"] .workspace-main [data-tone="down"][data-slot="card"],
+html[data-ui-theme="mica"]:not([data-card-style]) .fx-card-face[data-tone="down"],
+html[data-ui-theme="mica"][data-card-style="edge"] .fx-card-face[data-tone="down"] {
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--fx-card-tone) 32%, transparent),
+    9px 9px 22px color-mix(in srgb, var(--fx-card-tone) 14%, var(--fx-neu-dark)),
+    -7px -7px 18px var(--fx-neu-light);
+}
+/* 状态光 / 渐变卡头两档：卡身照它们自己的画法，影子换成双向软影 */
+html[data-ui-theme="mica"][data-card-style="glow"] .workspace-main [data-slot="card"],
+html[data-ui-theme="mica"][data-card-style="glow"] .fx-card-face,
+html[data-ui-theme="mica"][data-card-style="bar"] .workspace-main [data-slot="card"],
+html[data-ui-theme="mica"][data-card-style="bar"] .fx-card-face,
+html[data-ui-theme="mica"][data-card-style="plain"] .workspace-main [data-slot="card"],
+html[data-ui-theme="mica"][data-card-style="plain"] .fx-card-face { border-color: var(--fx-card-stroke); box-shadow: var(--fx-sh-neu); }
+html[data-ui-theme="mica"] .fx-cardstyle-swatch[data-style="edge"] .fx-cardstyle-swatch-face { border: 1px solid var(--fx-card-stroke); background: var(--fx-card-face); box-shadow: var(--fx-sh-neu-sm); }
+html[data-ui-theme="mica"] .fx-cardstyle-swatch {
+  background:
+    radial-gradient(70% 60% at 100% 0%, var(--fx-mica-blob-1), transparent 70%),
+    radial-gradient(60% 55% at 0% 100%, var(--fx-mica-blob-2), transparent 70%),
+    var(--fx-l0-page);
+}
+/* 主机卡的系统图标：一枚凸起的小白方块 */
+html[data-ui-theme="mica"] .fx-host-card > div:first-child > span:first-child { border-radius: 10px; border: 0; background: var(--fx-card-face); box-shadow: var(--fx-sh-neu-sm); color: var(--fx-mica); }
+/*
+  卡里的凹陷轨道（openlat 的 .neu-track）：淡底 + 双向内影。
+  主机卡三个读数：各在一条轨道里（原来是三个灰方格）；小条按位置换三道渐变。
+*/
+html[data-ui-theme="mica"] .fx-host-card .grid.grid-cols-3 { gap: 8px; }
+html[data-ui-theme="mica"] .fx-host-spec { border-radius: 11px; background: var(--fx-track); box-shadow: var(--fx-sh-inset); padding: 6px 10px 10px; }
+html[data-ui-theme="mica"] .fx-host-spec-bar { left: 10px; right: 10px; bottom: 5px; height: 3px; background: rgb(100 104 123 / 14%); box-shadow: inset 0 1px 1px rgb(100 104 123 / 12%); }
+html.dark[data-ui-theme="mica"] .fx-host-spec-bar { background: rgb(2 2 6 / 40%); box-shadow: inset 0 1px 1px rgb(0 0 0 / 40%); }
+html[data-ui-theme="mica"] .fx-host-spec-bar > span:not([data-tone]) { background: var(--fx-grad-cpu); }
+html[data-ui-theme="mica"] .fx-host-spec:nth-child(2) .fx-host-spec-bar > span:not([data-tone]) { background: var(--fx-grad-mem); }
+html[data-ui-theme="mica"] .fx-host-spec:nth-child(3) .fx-host-spec-bar > span:not([data-tone]) { background: var(--fx-grad-disk); }
+html[data-ui-theme="mica"] .fx-host-spec-bar > span { box-shadow: inset 0 1px 0 rgb(255 255 255 / 35%); }
+/* 规则卡：流量大数字 + 走势那一行在一条轨道里，轨道下面的地址行不画线 */
+html[data-ui-theme="mica"] .fx-rule-big { margin-top: 12px; padding: 9px 12px 8px; border-radius: 12px; background: var(--fx-track); box-shadow: var(--fx-sh-inset); }
+html[data-ui-theme="mica"] .fx-rule-path { margin-top: 10px; padding-top: 0; border-top: 0; }
+/* 链路卡：底下那行「延迟 · 评级 · 走势」在一条轨道里 */
+html[data-ui-theme="mica"] .fx-tunnel-foot { margin-top: 12px; padding: 9px 12px 8px; border-top: 0; border-radius: 12px; background: var(--fx-track); box-shadow: var(--fx-sh-inset); }
+/* 首页的统计条：格与格之间一道淡线 */
+html[data-ui-theme="mica"] .fx-summary-cell + .fx-summary-cell { border-left-color: var(--fx-track-line); }
+/* 卡里的状态小标签：带一点顶部高光，像一枚软的胶囊 */
+html[data-ui-theme="mica"] .fx-rule-tag { box-shadow: inset 0 1px 0 rgb(255 255 255 / 45%); }
+html.dark[data-ui-theme="mica"] .fx-rule-tag { box-shadow: inset 0 1px 0 rgb(255 255 255 / 8%); }
+
+/* ── 3. 字 ───────────────────────────────────────────────────── */
+html[data-ui-theme="mica"] .workspace-main .workspace-header-title,
+html[data-ui-theme="mica"] .fx-navbar-large-title { font-weight: 700; letter-spacing: -.02em; }
+/* 分组小标题：靛蓝小字 */
+html[data-ui-theme="mica"] .fx-list-section-header,
+html[data-ui-theme="mica"] .workspace-main .fx-list-section-header { color: var(--fx-mica); font-size: 12.5px; font-weight: 600; letter-spacing: .02em; }
+/* 走势线用靛蓝 */
+html[data-ui-theme="mica"] .fx-rule-spark,
+html[data-ui-theme="mica"] .workspace-header-aside .fx-sparkline { color: var(--fx-mica); }
+
+/* ── 4. 控件：凸起 / 凹陷 ────────────────────────────────────── */
+/*
+  分段控件：槽是一条凹陷轨道，选中格是一块凸起的白瓷（小双向影）+ 靛蓝字；
+  不是灰槽里一块渐变（经典），也不是药丸空槽（玫瑰）。
+*/
+html[data-ui-theme="mica"] .workspace-tabs,
+html.dark[data-ui-theme="mica"] .workspace-tabs { padding: 4px; border: 1px solid var(--fx-track-line); border-radius: 12px; background: var(--fx-track); box-shadow: var(--fx-sh-inset); backdrop-filter: none; -webkit-backdrop-filter: none; }
+html[data-ui-theme="mica"] .workspace-tabs .workspace-tab,
+html.dark[data-ui-theme="mica"] .workspace-tabs .workspace-tab,
+html[data-ui-theme="mica"] .workspace-tab-scroll { border-radius: 9px; }
+html[data-ui-theme="mica"] .workspace-tabs .workspace-tab,
+html.dark[data-ui-theme="mica"] .workspace-tabs .workspace-tab { color: var(--fx-text-muted); font-weight: 500; }
+html[data-ui-theme="mica"] .workspace-tabs .workspace-tab[data-state="active"],
+html.dark[data-ui-theme="mica"] .workspace-tabs .workspace-tab[data-state="active"] {
+  color: var(--fx-mica);
+  background: var(--fx-card-face);
+  box-shadow: var(--fx-sh-neu-sm);
+  font-weight: 600;
+}
+html[data-ui-theme="mica"] .workspace-tabs .workspace-tab[data-state="active"] > svg { color: var(--fx-mica); }
+html[data-ui-theme="mica"] .workspace-tabs .workspace-tab-count,
+html[data-ui-theme="mica"] .workspace-tabs .workspace-tab[data-state="active"] .workspace-tab-count { min-width: 0; height: auto; padding: 0; border-radius: 0; background: transparent; color: var(--fx-text-muted); font-size: 12px; font-weight: 500; }
+html[data-ui-theme="mica"] .workspace-tabs .workspace-tab[data-state="active"] .workspace-tab-count { color: var(--fx-mica); }
+/* 筛选 chip：未选中是一枚凸起的白瓷（小双向影）；选中是按进去的（内影 + 靛蓝淡底 + 靛蓝字） */
+html[data-ui-theme="mica"] .fx-chip { height: 30px; padding: 0 12px; border-radius: 10px; font-size: 12.5px; transition: color .15s, background-color .15s, box-shadow .15s, transform .15s; }
+html[data-ui-theme="mica"] .fx-chip:not(.fx-chip-on) { background: var(--fx-card-face); border-color: transparent; color: var(--fx-text-secondary); box-shadow: var(--fx-sh-neu-sm); }
+html[data-ui-theme="mica"] .fx-chip-on,
+html[data-ui-theme="mica"] .fx-chip-on:hover { border-color: transparent; background: var(--fx-mica-soft); background-image: none; color: var(--fx-mica); box-shadow: var(--fx-sh-inset); }
+html[data-ui-theme="mica"] .fx-chip:active { box-shadow: var(--fx-sh-inset); transform: translateY(1px); }
+@media (pointer: coarse) { html[data-ui-theme="mica"] .fx-chip-scroller > .fx-chip { min-height: 30px; } }
+/* 搜索框、输入框、下拉：凹陷轨道 */
+html[data-ui-theme="mica"] .workspace-main [data-slot="input"],
+html[data-ui-theme="mica"] .workspace-main [data-slot="select-trigger"],
+html[data-ui-theme="mica"] .workspace-filter-search input { border-radius: 12px; background: var(--fx-track); border-color: var(--fx-track-line); box-shadow: var(--fx-sh-inset); }
+html[data-ui-theme="mica"] .workspace-main [data-slot="input"]:focus-visible,
+html[data-ui-theme="mica"] .workspace-main [data-slot="select-trigger"]:focus-visible { border-color: var(--fx-primary-stroke); }
+html[data-ui-theme="mica"] .fx-search-pill { border-radius: 12px !important; background: var(--fx-track) !important; border-color: var(--fx-track-line) !important; box-shadow: var(--fx-sh-inset); }
+html[data-ui-theme="mica"] .fx-search-pill:focus-visible { border-color: var(--fx-primary-stroke) !important; }
+html[data-ui-theme="mica"] .workspace-appbar-search { background: var(--fx-track); box-shadow: var(--fx-sh-inset); border-radius: 12px; }
+html[data-ui-theme="mica"] [data-slot="button"]:not([data-icon-button]),
+html[data-ui-theme="mica"] .fx-row-action,
+html[data-ui-theme="mica"] .fx-filter-pill { border-radius: 12px !important; }
+html[data-ui-theme="mica"] .workspace-main [data-icon-button],
+html[data-ui-theme="mica"] .workspace-header-actions [data-slot="button"] { border-radius: 12px !important; }
+/*
+  次要按钮（描边 / 浅底）和筛选栏里的小圆钮：凸起的白瓷，按下去陷进去。
+  主按钮（data-variant="default"，比如「添加主机」也挂着 .fx-row-action）不在内 —— 它是主色渐变 + 白字，
+  刷成白底就只剩一块白板。
+*/
+html[data-ui-theme="mica"] .workspace-main [data-slot="button"][data-variant="outline"],
+html[data-ui-theme="mica"] .workspace-main [data-slot="button"][data-variant="secondary"],
+html[data-ui-theme="mica"] .workspace-main .fx-filter-pill:not([data-variant="default"]),
+html[data-ui-theme="mica"] .workspace-main .fx-row-action:not([data-variant="default"]) { border-color: transparent; background: var(--fx-card-face); box-shadow: var(--fx-sh-neu-sm); }
+html[data-ui-theme="mica"] .workspace-main [data-slot="button"][data-variant="outline"]:hover,
+html[data-ui-theme="mica"] .workspace-main [data-slot="button"][data-variant="secondary"]:hover { background: var(--fx-card-face); color: var(--fx-mica); }
+/* 筛选栏里「有筛选在用」的那枚小圆钮：按进去的轨道 + 靛蓝 */
+html[data-ui-theme="mica"] .workspace-main .workspace-filter > .fx-filter-pill[data-variant="secondary"] { background: var(--fx-mica-soft); color: var(--fx-mica); box-shadow: var(--fx-sh-inset); }
+html[data-ui-theme="mica"] [data-slot="button"]:not([disabled]):active,
+html[data-ui-theme="mica"] .workspace-appbar-icon:active,
+html[data-ui-theme="mica"] .workspace-appbar-search:active { transform: translateY(1px); }
+html[data-ui-theme="mica"] .workspace-main [data-slot="button"][data-variant="outline"]:not([disabled]):active,
+html[data-ui-theme="mica"] .workspace-main [data-slot="button"][data-variant="secondary"]:not([disabled]):active,
+html[data-ui-theme="mica"] .workspace-main .fx-filter-pill:not([data-variant="default"]):active,
+html[data-ui-theme="mica"] .workspace-main .fx-row-action:not([data-variant="default"]):active { box-shadow: var(--fx-sh-inset); }
+/* 主按钮：主色渐变照旧，加一道带色的软影和顶部内高光 */
+html[data-ui-theme="mica"] .workspace-main [data-slot="button"][data-variant="default"],
+html[data-ui-theme="mica"] .workspace-main [data-slot="button"]:not([data-variant]) { box-shadow: var(--fx-primary-shadow), inset 0 1px 0 rgb(255 255 255 / 22%); }
+/* 开关、徽标：带一点顶部高光 */
+html[data-ui-theme="mica"] [data-slot="badge"] { box-shadow: inset 0 1px 0 rgb(255 255 255 / 40%); }
+html.dark[data-ui-theme="mica"] [data-slot="badge"] { box-shadow: inset 0 1px 0 rgb(255 255 255 / 7%); }
+/* 外壳：顶栏是白 68% 的毛玻璃，底下没有线，靠一道淡影和内容分开；侧栏半透，没有右线 */
+html[data-ui-theme="mica"] .workspace-appbar { border-bottom-color: transparent; box-shadow: 0 8px 24px -18px rgb(25 28 43 / 22%); }
+html.dark[data-ui-theme="mica"] .workspace-appbar { box-shadow: 0 8px 24px -18px rgb(0 0 0 / 70%); }
+html[data-ui-theme="mica"] .workspace-appbar-icon { border-radius: 12px; }
+html[data-ui-theme="mica"] .workspace-appbar-version { box-shadow: var(--fx-sh-inset); }
+html[data-ui-theme="mica"] .workspace-layout [data-sidebar="sidebar"] { border-right-color: transparent; }
+/* 侧栏选中项：按进去的轨道 + 靛蓝字，不是一块渐变 */
+html[data-ui-theme="mica"] .workspace-layout [data-sidebar="menu-button"] { border-radius: 11px; }
+html[data-ui-theme="mica"] .workspace-layout [data-sidebar="menu-button"][data-active="true"] { background: var(--fx-track); color: var(--fx-mica); box-shadow: var(--fx-sh-inset); }
+html[data-ui-theme="mica"] .workspace-layout [data-sidebar="menu-button"][data-active="true"] > svg { color: var(--fx-mica); }
+@media (max-width: 767px) {
+  html[data-ui-theme="mica"] .fx-navbar { background: color-mix(in srgb, var(--fx-l0-page) 78%, transparent); backdrop-filter: var(--fx-glass-blur); -webkit-backdrop-filter: var(--fx-glass-blur); }
+  /* 底部标签栏：一枚凸起的白瓷胶囊（双向软影），选中项按进去（内影 + 靛蓝图标） */
+  html[data-ui-theme="mica"] .fx-tabbar {
+    border-color: var(--fx-card-stroke);
+    background: var(--fx-card-face);
+    box-shadow: var(--fx-sh-neu);
+  }
+  html[data-ui-theme="mica"] .fx-tabbar-item { border-radius: 14px; transition: box-shadow 150ms, background-color 150ms, color 150ms, transform 120ms; }
+  html[data-ui-theme="mica"] .fx-tabbar-item-active {
+    color: var(--fx-mica);
+    background: var(--fx-track);
+    background-image: none;
+    box-shadow: var(--fx-sh-inset);
+  }
+  html[data-ui-theme="mica"] .fx-tabbar-item-active > svg { color: var(--fx-mica); }
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  html[data-ui-theme="mica"] .workspace-appbar, html[data-ui-theme="mica"] .fx-navbar { background: var(--fx-l1-surface); }
+}
+/* 弹层、对话框：和卡一样是凸起的白瓷 */
+html[data-ui-theme="mica"] [data-slot="dropdown-menu-content"],
+html[data-ui-theme="mica"] [data-slot="select-content"],
+html[data-ui-theme="mica"] [data-slot="popover-content"] { border-radius: 14px; }
+
+/* ── 设置页「界面主题」的预览 ───────────────────────────────── */
+/* 淡紫灰底、右上一团靛蓝光，两张凸起的白卡带双向影，底下一条凹陷轨道 */
+.fx-uitheme-swatch[data-theme="mica"] {
+  background:
+    radial-gradient(70% 60% at 100% 0%, rgb(84 91 233 / 18%), transparent 70%),
+    radial-gradient(55% 50% at 0% 100%, rgb(0 139 204 / 14%), transparent 70%),
+    #f9fafe;
+}
+.dark .fx-uitheme-swatch[data-theme="mica"] {
+  background:
+    radial-gradient(70% 60% at 100% 0%, rgb(135 152 255 / 16%), transparent 70%),
+    radial-gradient(55% 50% at 0% 100%, rgb(22 179 235 / 12%), transparent 70%),
+    #0e1120;
+}
+.fx-uitheme-swatch[data-theme="mica"] > i { border-radius: 8px; border-color: rgb(218 221 234 / 55%); background: linear-gradient(150deg, #fff, #f6f7fc); box-shadow: 4px 4px 10px rgb(100 104 123 / 16%), -3px -3px 8px rgb(255 255 255 / 90%); }
+.dark .fx-uitheme-swatch[data-theme="mica"] > i { border-color: rgb(255 255 255 / 6%); background: linear-gradient(150deg, #1d2032, #161826); box-shadow: 4px 4px 10px rgb(2 2 6 / 60%), -3px -3px 8px rgb(100 104 123 / 14%); }
+.fx-uitheme-swatch[data-theme="mica"] > i:first-child { margin-top: 2px; }
+.fx-uitheme-swatch[data-theme="mica"] > b { border-color: transparent; background: rgb(237 240 248 / 92%); box-shadow: inset 2px 2px 5px rgb(100 104 123 / 15%), inset -2px -2px 5px rgb(255 255 255 / 80%); }
+.dark .fx-uitheme-swatch[data-theme="mica"] > b { border-color: transparent; background: rgb(34 37 54 / 92%); box-shadow: inset 2px 2px 6px rgb(2 2 6 / 55%), inset -2px -2px 6px rgb(100 104 123 / 10%); }
+
+/* 个性化顶上的预览卡：站点名粗一点，「现在的界面主题」那几个字靛蓝 */
+html[data-ui-theme="mica"] .fx-brand-preview { border: 1px solid var(--fx-card-stroke); background: var(--fx-card-face); box-shadow: var(--fx-sh-neu); }
+html[data-ui-theme="mica"] .fx-brand-preview-name { font-family: inherit; font-size: 20px; line-height: 1.3; font-weight: 700; font-style: normal; letter-spacing: -.02em; }
+html[data-ui-theme="mica"] .fx-brand-preview-meta em { color: var(--fx-mica); }

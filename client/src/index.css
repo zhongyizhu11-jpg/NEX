@@ -8,6 +8,7 @@
 @import "./styles/theme-gilt.css";
 @import "./styles/theme-rose.css";
 @import "./styles/theme-cinnabar.css";
+@import "./styles/theme-mica.css";
 
 @custom-variant dark (&:is(.dark *));
 

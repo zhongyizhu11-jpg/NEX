@@ -50,6 +50,10 @@ const 在案: Record<string, { 值: number[]; 因为: string }> = {
     值: [-1],
     因为: "「朱砂」主题的方格纸底：和极光、玫瑰同一个搭配，body::after 固定在 -1，#root 的 1 盖住它",
   },
+  "styles/theme-mica.css": {
+    值: [-1],
+    因为: "「云母」主题的淡紫灰底和两团光：和极光、玫瑰、朱砂同一个搭配，body::after 固定在 -1，#root 的 1 盖住它",
+  },
   "styles/workspace.css": {
     值: [1],
     因为: "组件内部同级排序（滚动按钮、连线节点、箭头），不参与全站分层",

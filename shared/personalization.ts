@@ -463,7 +463,12 @@ export function normalizePersonalizationCardStyle(value: unknown): Personalizati
             页面标题前一枚朱红菱形、每节顶线左端一段朱红短线、页顶一条细斜纹。只有这套主题下才出现
             「监控」页和那批借鉴来的运维功能入口（见 client/src/features/ops/）；设置开着的功能换主题后照常生效。
 
-  画法全在 client/src/styles/theme-aurora.css / theme-gilt.css / theme-rose.css / theme-cinnabar.css 里按 <html data-ui-theme> 选；这里只管 id 和文案。
+    mica    云母 —— 参考 bluesmkun/openlat（monitor 状态面板主题，2026-10-14）：淡紫灰底托纯白的微拟物卡
+            （右下深影 + 左上白光，像一块有厚度的白瓷），卡里的读数、搜索框、输入框、分段控件的槽都是
+            按进去的凹陷轨道，按钮按下去真的会陷下去；主机卡三根小条按 CPU / 内存 / 硬盘 分三道渐变。
+            深色是墨蓝。不换字体，不改设置页结构。
+
+  画法全在 client/src/styles/theme-aurora.css / theme-gilt.css / theme-rose.css / theme-cinnabar.css / theme-mica.css 里按 <html data-ui-theme> 选；这里只管 id 和文案。
   存的是 id；别的值一律回到 classic。
 */
 export const PERSONALIZATION_UI_THEMES = [
@@ -472,6 +477,7 @@ export const PERSONALIZATION_UI_THEMES = [
   { id: "gilt", name: "墨金", description: "米白纸底、平贴的小圆角卡纸，数字放在米色带上；衬线标题、金色下划线分段、方标签筛选；深色是墨黑配金。" },
   { id: "rose", name: "玫瑰", description: "胭脂粉底、无边线的浮起白瓣卡，数字嵌在托盘里；斜体衬线标题、细线空槽分段、全药丸；设置页改为编号分节。" },
   { id: "cinnabar", name: "朱砂", description: "素白纸面、3px 小方角、朱红短线和菱形标记，标签全大写加宽字距；带「监控」页和一整套运维功能（状态可用率、地区规则、IP 封禁、在线 IP、安全巡检、API 与 MCP……）。" },
+  { id: "mica", name: "云母", description: "openlat 风格的微拟物：淡紫灰底托凸起的纯白卡（双向软影），读数和输入框是按进去的凹陷轨道，主机三根小条各一道渐变；深色是墨蓝。" },
 ] as const;
 
 export type PersonalizationUiThemeId = typeof PERSONALIZATION_UI_THEMES[number]["id"];

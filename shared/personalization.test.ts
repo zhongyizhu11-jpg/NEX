@@ -60,7 +60,7 @@ test("卡片风格：四选一，默认彩色描边", async () => {
 
 test("界面主题：经典 / 极光 / 墨金 / 玫瑰四选一，默认经典", async () => {
   const { normalizePersonalizationUiTheme, PERSONALIZATION_UI_THEMES } = await import("./personalization");
-  assert.deepEqual(PERSONALIZATION_UI_THEMES.map((theme) => theme.id), ["classic", "aurora", "gilt", "rose", "cinnabar"]);
+  assert.deepEqual(PERSONALIZATION_UI_THEMES.map((theme) => theme.id), ["classic", "aurora", "gilt", "rose", "cinnabar", "mica"]);
   assert.equal(normalizePersonalizationUiTheme("rose"), "rose");
   assert.equal(normalizePersonalizationUiTheme("gilt"), "gilt");
   assert.equal(normalizePersonalizationUiTheme("aurora"), "aurora");
