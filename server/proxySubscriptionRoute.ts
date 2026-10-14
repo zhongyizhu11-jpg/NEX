@@ -10,6 +10,7 @@ import {
   type ProxySubscriptionFormat,
 } from "../shared/proxySubscription";
 import { normalizeProxyRulePreset } from "../shared/proxyRuleset";
+import { proxySubscriptionProfileHeaders, proxySubscriptionProfileName } from "../shared/proxyClientImport";
 import { proxyCredentialRecipientActive } from "./repositories/proxyInboundRepository";
 
 export const proxySubscriptionRouter = express.Router();
@@ -147,6 +148,10 @@ proxySubscriptionRouter.get("/api/sub/:token", async (req: Request, res: Respons
 
     res.setHeader("Content-Type", PROXY_SUBSCRIPTION_FORMAT_CONTENT_TYPES[format]);
     res.setHeader("Profile-Update-Interval", "12");
+    // 不带 name 参数导入的客户端按这个给订阅起名：用户名，规则订阅加「规则」。
+    for (const [header, value] of Object.entries(proxySubscriptionProfileHeaders(
+      proxySubscriptionProfileName(String((owner as any).username || ""), profile ? "rules" : "nodes"),
+    ))) res.setHeader(header, value);
     // 订阅内容随转发增删而变，缓存会让用户以为新建的转发没生效。
     res.setHeader("Cache-Control", "no-store");
     res.status(200).send(body);
