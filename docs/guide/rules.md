@@ -93,7 +93,7 @@ mimic 只用于 NEX 隧道，且规则协议需要包含 UDP：
 - V2：处理 userspace WireGuard 的外层 UDP。
 - TCP 仍走原 TCP 通道，不与同端口 UDP 混淆处理互相替代。
 
-参与链路的 Agent 主机需要安装 `mimic`/`mimic-dkms`。Agent 安装脚本提供可选安装，默认不安装；也可以手动执行：
+参与链路的 Agent 主机需要安装 `mimic`/`mimic-dkms`。Agent 安装脚本默认安装（可跳过）；装 Agent 时没装的，在 **主机管理 › 主机详情 › mimic UDP 混淆** 里点「安装 mimic」即可（Agent 2.2.223 起）；也可以手动执行：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/zhongyizhu11-jpg/NEX/main/scripts/install-mimic.sh | sudo bash
@@ -101,7 +101,7 @@ curl -fsSL https://raw.githubusercontent.com/zhongyizhu11-jpg/NEX/main/scripts/i
 
 NEX 安装器默认安装或升级到 `mimic v0.7.1`。该版本仍要求 Linux 6.1+、XDP 入站和 TC 出站 eBPF 钩子；Agent 会在 XDP `native` 与 `skb` 模式之间自动回退。发行版没有对应二进制包时，上游安装器会尝试源码构建。
 
-Agent 会只读检测 mimic 命令和内核模块，并把结果上报给面板。开启 UDP 混淆、重新启用隧道或更换链路主机时，面板会逐台校验；缺少环境时本次操作失败并提示手动安装，Agent 不会自行安装。
+Agent 会检测 mimic 命令和内核模块，并把结果上报给面板。开启 UDP 混淆、重新启用隧道或更换链路主机时，面板会逐台校验；缺少环境时本次操作失败，提示里指向主机详情的一键安装。Agent 发现「命令在、内核模块不在」（典型是内核升级后）会自己跑一次 `dkms autoinstall`，成功就不用人管。
 
 mimic 依赖 Linux 内核、XDP 入站和 TC 出站能力，只改变 UDP 包外观。它不会修复线路本身的丢包、抖动或 NAT 限制。
 

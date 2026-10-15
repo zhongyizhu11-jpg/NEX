@@ -30,6 +30,7 @@ import { getTunnelMultiEntryLatency, recordTunnelMultiEntryLatency } from "./tun
 import { completeLookingGlassAgentTask, updateLookingGlassAgentTaskProgress, type LookingGlassMethod } from "./lookingGlassAgentTasks";
 import { completeIperf3AgentTask } from "./iperf3AgentTasks";
 import { completePluginAgentTask } from "./pluginAgentTasks";
+import { reportMimicInstallResult } from "./mimicInstallTasks";
 import { getAgentHostIdentityFromRequest } from "./agentAuth";
 import { ingestRouteHopProbeReports } from "./routeGroups";
 import { applyTrafficMultiplier, normalizeTrafficMultiplier } from "../shared/trafficMultiplier";
@@ -726,6 +727,36 @@ agentRouter.post("/api/agent/plugin-action-result", async (req: Request, res: Re
     res.json({ success: ok });
   } catch (error) {
     console.error("[Agent Plugin Action] Error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// 「安装 / 修复 mimic」的进度和结果（agent/mimic_install.go）：跑的时候每几秒一次 running + 输出尾巴，跑完一次终态。
+agentRouter.post("/api/agent/mimic-install-result", async (req: Request, res: Response) => {
+  try {
+    const host = await getAgentHostIdentityFromRequest(req);
+    if (!host) {
+      res.status(401).json({ error: "Invalid token" });
+      return;
+    }
+    const result = req.body?.result;
+    if (!result?.taskId || !result?.status) {
+      res.status(400).json({ error: "result.taskId and result.status are required" });
+      return;
+    }
+    const ok = reportMimicInstallResult(host.id, {
+      taskId: String(result.taskId),
+      status: String(result.status),
+      output: String(result.output || "").slice(-64 * 1024),
+      error: result.error ? String(result.error).slice(0, 2000) : undefined,
+      exitCode: result.exitCode === undefined || result.exitCode === null ? null : Number(result.exitCode),
+      startedAt: result.startedAt ? String(result.startedAt) : undefined,
+      finishedAt: result.finishedAt ? String(result.finishedAt) : undefined,
+      mimicEnvironment: result.mimicEnvironment && typeof result.mimicEnvironment === "object" ? result.mimicEnvironment : null,
+    });
+    res.json({ success: ok });
+  } catch (error) {
+    console.error("[Agent Mimic Install] Error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });

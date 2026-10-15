@@ -8,6 +8,7 @@ import { describeNetworkHealth } from "@shared/networkHealth";
 import ConnectionPath from "@/components/ConnectionPath";
 import { NetworkPath } from "@/components/network/NetworkPath";
 import { StatusDot } from "@/components/network/StatusDot";
+import { MimicHostsStatus } from "@/components/hosts/MimicInstallPanel";
 import { buildTunnelPath } from "@/features/links/tunnelPath";
 import { tunnelHealthFromAvailability } from "@/features/links/tunnelHealth";
 import { TunnelFxpIssueNotice } from "@/features/links/TunnelFxpIssueNotice";
@@ -3694,6 +3695,15 @@ function TunnelsContent() {
             "只对 V2 隧道有效：入口把规则端口 DNAT 进 WireGuard，出口在 WireGuard 上 DNAT 到目标，两头都没有用户态进程、只加密一层，延迟和吞吐都更好。要求两台机器都跑内核 WireGuard、Agent 2.2.220 起，且隧道是单入口单出口、没开链路整形 / 抗丢包 / 协议拦截 / PROXY；规则没有限速、连接数限制、线路组。不满足的规则自动照旧走 FXP。",
           )}
         </div>
+        {/* 开了 mimic：参与链路的每台主机的 mimic 环境，缺的当场装（2.3.439） */}
+        {form.udpOverTcp && (
+          <MimicHostsStatus
+            hosts={Array.from(new Set([form.entryHostId, ...form.hopHostIds, form.exitHostId].map((id) => Number(id || 0)).filter((id) => id > 0)))
+              .map((id) => (hosts || []).find((host: any) => Number(host.id) === id))
+              .filter(Boolean) as any[]}
+            canManage={user?.role === "admin"}
+          />
+        )}
         <div className="space-y-2 rounded-md border border-border/50 bg-background/60 px-3 py-2">
           <div className="flex min-w-0 items-center justify-between gap-3">
             <span className="min-w-0 text-sm font-medium">链路整形</span>

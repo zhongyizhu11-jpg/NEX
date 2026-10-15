@@ -41,7 +41,7 @@ export function mimicEnvironmentProblem(host: MimicEnvironmentHost) {
     }
   })();
   const detail = String(host.mimicMessage || "").trim();
-  return `${label}：${reason}${detail ? `（${detail}）` : ""}。请手动安装或修复 mimic/mimic-dkms 后重试。`;
+  return `${label}：${reason}${detail ? `（${detail}）` : ""}。可在主机详情里一键安装 / 修复 mimic（Agent 2.2.223 起），或手动安装 mimic/mimic-dkms 后重试。`;
 }
 
 export function assertMimicEnvironment(hosts: MimicEnvironmentHost[]) {

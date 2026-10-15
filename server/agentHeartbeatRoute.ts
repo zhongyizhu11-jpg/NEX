@@ -51,6 +51,7 @@ import { resolve4, resolve6 } from "dns/promises";
 import { hasQueuedLookingGlassAgentTasks, takeLookingGlassAgentTasks } from "./lookingGlassAgentTasks";
 import { hasQueuedIperf3AgentTasks, takeIperf3AgentTasks } from "./iperf3AgentTasks";
 import { hasQueuedPluginAgentTasks, takePluginAgentTasks } from "./pluginAgentTasks";
+import { hasPendingMimicInstallTask, takeMimicInstallTask } from "./mimicInstallTasks";
 import { getAgentPluginInventory, updateAgentPluginInventory } from "./agentPluginInventory";
 import { getAgentHostFromRequest, getAgentPresenceHostFromRequest, getResolvedAgentToken } from "./agentAuth";
 import { normalizeAgentText, normalizeNetworkInterface } from "./agentInputValidation";
@@ -7029,10 +7030,14 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         ))
       : [];
     const hasPendingPluginTasks = supportsPluginTasks && hasQueuedPluginAgentTasks(host.id);
+    // 「安装 / 修复 mimic」（2.3.439）：排了就下一次心跳带下去，跑的时候心跳也勤一点，页面上进度跟得紧
+    const mimicInstallTask = takeMimicInstallTask(host.id);
     const hasInteractiveTasks = lookingGlassTests.length > 0
       || iperf3Tasks.length > 0
       || pluginTasks.length > 0
       || hasPendingPluginTasks
+      || !!mimicInstallTask
+      || hasPendingMimicInstallTask(host.id)
       || pluginSyncActionQueued
       || forceTcping
       || (hasPendingMultiHopRuntime && !hasTunnelApplyActions);
@@ -7203,6 +7208,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       lookingGlassTests,
       iperf3Tasks,
       pluginTasks,
+      ...(mimicInstallTask ? { mimicInstallTask } : {}),
       agentUpgrade,
       panelUrl,
       panelMigration,

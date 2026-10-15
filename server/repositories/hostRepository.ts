@@ -400,6 +400,10 @@ function compactHostOption(host: any) {
     lastHeartbeat: host?.lastHeartbeat,
     agentVersion: host?.agentVersion,
     fxpVersion: host?.fxpVersion,
+    mimicAvailable: host?.mimicAvailable ?? null,
+    mimicStatus: host?.mimicStatus ?? null,
+    mimicVersion: host?.mimicVersion ?? null,
+    mimicMessage: host?.mimicMessage ?? null,
     memoryTotal: host?.memoryTotal,
     ddnsEnabled: host?.ddnsEnabled,
     ddnsDomain: host?.ddnsDomain,
@@ -466,6 +470,11 @@ export async function getHostOptions(ownerUserId?: number, allowedHostIds?: numb
         // compactHostOption 会带上 fxpVersion，但这条投影原来没选它：主机选项里的 FXP 版本
         // 一直是 undefined，FxpRuntimeBadge 就看不到「FXP 过旧」。
         fxpVersion: hosts.fxpVersion,
+        // mimic 环境（主机详情、隧道编辑开 mimic 时按参与主机画状态和「安装」按钮，2.3.439）
+        mimicAvailable: hosts.mimicAvailable,
+        mimicStatus: hosts.mimicStatus,
+        mimicVersion: hosts.mimicVersion,
+        mimicMessage: hosts.mimicMessage,
         // 内存要写「2.1G / 4.0G」时：已用在 host_metrics 里，总量只有主机表有
         memoryTotal: hosts.memoryTotal,
         ddnsEnabled: hosts.ddnsEnabled,

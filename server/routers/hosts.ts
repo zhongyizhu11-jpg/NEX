@@ -18,6 +18,7 @@ import { refreshHostAddressRuntime } from "../hostAddressRuntime";
 import { scheduleHostDdnsUpdate } from "../hostDdns";
 import { scheduleRuleEntryDomainSyncForHost } from "../ruleEntryDomain";
 import { clearTunnelRuntimeStatusForHost } from "../tunnelRuntimeStatus";
+import { enqueueMimicInstallTask, getMimicInstallTasks, MIMIC_TARGET_VERSION, readMimicInstallerScript } from "../mimicInstallTasks";
 import { createQueryCache } from "../queryCache";
 import { describePortPolicy, normalizePortAllowlist, portPolicyFrom, portPolicyHasRestriction } from "@shared/portPolicy";
 import { ENV } from "../env";
@@ -1062,6 +1063,47 @@ export const hostsRouter = router({
           offlineItems: outdated.filter((host: any) => !host.isOnline).length,
         };
       }),
+    /*
+      「安装 / 修复 mimic」（2.3.439，Agent 2.2.223 起）：给这些主机各排一个任务，Agent 下一次心跳取走、
+      在机器上跑 scripts/install-mimic.sh，进度和结果回到 mimicInstallStatus 里。离线、Agent 太旧的主机
+      当场报错，不排。
+    */
+    installMimic: adminProcedure
+      .input(z.object({
+        hostIds: z.array(z.number().int().positive()).min(1).max(50),
+        mode: z.enum(["install", "repair"]).default("install"),
+      }))
+      .mutation(async ({ input }) => {
+        const settings = await db.getAllSettings();
+        const script = readMimicInstallerScript();
+        const results: Array<{ hostId: number; ok: boolean; error?: string }> = [];
+        for (const hostId of Array.from(new Set(input.hostIds))) {
+          const host = await db.getHostById(hostId) as any;
+          if (!host) {
+            results.push({ hostId, ok: false, error: "主机不存在" });
+            continue;
+          }
+          try {
+            enqueueMimicInstallTask({
+              host,
+              mode: input.mode,
+              version: MIMIC_TARGET_VERSION,
+              acceleratorEnabled: settings.githubAcceleratorEnabled === "true",
+              acceleratorUrl: settings.githubAcceleratorUrl || "",
+              script,
+            });
+            // 不等下一次常规心跳：推一下让 Agent 马上来取
+            pushAgentRefresh(hostId, "mimic-install", { urgent: true });
+            results.push({ hostId, ok: true });
+          } catch (error) {
+            results.push({ hostId, ok: false, error: error instanceof Error ? error.message : String(error) });
+          }
+        }
+        return { results, tasks: getMimicInstallTasks(input.hostIds) };
+      }),
+    mimicInstallStatus: adminProcedure
+      .input(z.object({ hostIds: z.array(z.number().int().positive()).max(100) }))
+      .query(({ input }) => getMimicInstallTasks(input.hostIds)),
     mapPoints: protectedProcedure
       .input(z.object({
         cursor: z.number().int().min(0).optional(),
