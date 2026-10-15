@@ -31,13 +31,13 @@
 */
 
 html[data-ui-theme="mica"] {
-  --fx-l0-page: #f9fafe;
+  --fx-l0-page: #f3f4fa;
   --fx-l1-surface: #ffffff;
   --fx-raised: #ffffff;
   --fx-l2-group: #edf0f8;
   --fx-l3-control: #ffffff;
-  --fx-l3-control-fill: rgb(237 240 248 / 88%);
-  --fx-sidebar: rgb(255 255 255 / 55%);
+  --fx-l3-control-fill: rgb(232 235 246 / 90%);
+  --fx-sidebar: transparent;
   --fx-hover: rgb(100 104 123 / 7%);
   --fx-pressed: rgb(100 104 123 / 13%);
   --fx-stroke-weak: rgb(218 221 234 / 70%);
@@ -47,21 +47,39 @@ html[data-ui-theme="mica"] {
   --fx-text-secondary: #474d66;
   --fx-text-muted: #666b81;
   --fx-mica: #545be9;                       /* 靛蓝：分组小标题、走势线、选中态的字和图标 */
-  --fx-mica-soft: rgb(84 91 233 / 10%);
-  --fx-mica-wash-1: rgb(84 91 233 / 10%);    /* 右上那片大的淡靛蓝（openlat body 的 radial） */
-  --fx-mica-wash-2: rgb(0 139 204 / 9%);     /* 左上那片淡天蓝 */
-  --fx-mica-blob-1: rgb(84 91 233 / 14%);    /* 右上那团光（openlat body::before，32% × opacity .4） */
-  --fx-mica-blob-2: rgb(0 139 204 / 11%);    /* 左下那团光（openlat body::after，26% × .4） */
-  --fx-neu-dark: rgb(100 104 123 / 16%);
-  --fx-neu-light: rgb(255 255 255 / 90%);
-  --fx-sh-neu: 9px 9px 22px var(--fx-neu-dark), -7px -7px 18px var(--fx-neu-light);
-  --fx-sh-neu-sm: 4px 4px 10px rgb(100 104 123 / 13%), -3px -3px 8px rgb(255 255 255 / 85%);
-  --fx-sh-inset: inset 2px 2px 5px rgb(100 104 123 / 15%), inset -2px -2px 5px rgb(255 255 255 / 80%);
-  --fx-track: rgb(237 240 248 / 88%);        /* 凹陷轨道的底（openlat .neu-track：muted 88%） */
-  --fx-track-line: rgb(218 221 234 / 60%);
+  --fx-mica-soft: rgb(84 91 233 / 11%);
+  --fx-mica-wash-1: rgb(84 91 233 / 12%);    /* 右上那片大的淡靛蓝（openlat body 的 radial） */
+  --fx-mica-wash-2: rgb(0 139 204 / 10%);    /* 左上那片淡天蓝 */
+  --fx-mica-blob-1: rgb(84 91 233 / 18%);    /* 右上那团光（openlat body::before） */
+  --fx-mica-blob-2: rgb(0 139 204 / 14%);    /* 左下那团光（openlat body::after） */
+  --fx-neu-dark: rgb(84 91 140 / 20%);
+  --fx-neu-light: rgb(255 255 255 / 100%);
+  --fx-sh-neu: 10px 10px 26px var(--fx-neu-dark), -8px -8px 20px var(--fx-neu-light);
+  --fx-sh-neu-sm: 4px 4px 11px rgb(84 91 140 / 16%), -3px -3px 9px rgb(255 255 255 / 95%);
+  --fx-sh-inset: inset 2px 2px 6px rgb(84 91 140 / 17%), inset -2px -2px 6px rgb(255 255 255 / 90%);
+  --fx-track: rgb(232 235 246 / 90%);        /* 凹陷轨道的底（openlat .neu-track：muted 88%） */
+  --fx-track-line: rgb(210 214 232 / 60%);
   --fx-card-fill: #ffffff;
-  --fx-card-face: linear-gradient(150deg, #ffffff, color-mix(in oklab, #ffffff 90%, #f9fafe));
-  --fx-card-stroke: rgb(218 221 234 / 55%);
+  --fx-card-face: linear-gradient(150deg, #ffffff, #f7f8fd);
+  --fx-card-stroke: rgb(255 255 255 / 90%);
+  /*
+    这套的强调色是 openlat 的靛蓝（oklch(0.55 0.21 275)），不跟天蓝：主按钮、开关、选中项、
+    侧栏选中、图标格全部换成靛蓝渐变。「默认配色」选了别的预设时，那些值内联在 <html> 上，
+    会盖过这里 —— 用户主动换配色就按用户的来。
+  */
+  --fx-accent: #4a51dc;
+  --fx-accent-strong: #6b79ea;
+  --fx-accent-soft: rgb(84 91 233 / 12%);
+  --fx-accent-fill: #545be9;
+  --fx-accent-fill-foreground: #ffffff;
+  --fx-primary-gradient: linear-gradient(#545be9, #545be9);           /* openlat 的主按钮是实心的，不是渐变 */
+  --fx-primary-gradient-hover: linear-gradient(#4b52d6, #4b52d6);
+  --fx-primary-fill: #545be9;
+  --fx-primary-fill-hover: #434ad9;
+  --fx-primary-text: #ffffff;
+  --fx-primary-stroke: rgb(84 91 233 / 45%);
+  --fx-primary-shadow: 0 10px 22px -10px rgb(84 91 233 / 65%);
+  --fx-mesh-1: rgb(84 91 233 / 22%);
   --fx-elevation-card: var(--fx-sh-neu);
   --fx-elevation-control: var(--fx-sh-neu-sm);
   --fx-elevation-popover: 0 16px 40px -10px rgb(25 28 43 / 18%), 0 2px 6px rgb(25 28 43 / 6%), 0 0 0 1px rgb(218 221 234 / 70%);
@@ -70,12 +88,17 @@ html[data-ui-theme="mica"] {
   --fx-glass-blur: saturate(135%) blur(18px);
   --fx-radius-control: 12px;
   --fx-radius-card: 14px;
-  --fx-radius-surface: 18px;
+  --fx-radius-surface: 16px;
   --fx-radius-modal: 22px;
   /* 主机卡三根小条：CPU 紫粉、内存 蓝青、硬盘 绿黄（openlat 的 --grad-cpu / mem / disk） */
   --fx-grad-cpu: linear-gradient(90deg, #745af4, #b954cf);
   --fx-grad-mem: linear-gradient(90deg, #0095d3, #00b8b9);
   --fx-grad-disk: linear-gradient(90deg, #00ac6c, #8cc14a);
+  --fx-grad-net: linear-gradient(90deg, #de9300, #ef6c22);
+  --fx-grad-danger: linear-gradient(90deg, #d8422a, #ea7a2c);
+  --fx-mica-ok: #00a263;      /* openlat 的 --ok / --info / --warn */
+  --fx-mica-info: #008bcc;
+  --fx-mica-warn: #da7f00;
 }
 html.dark[data-ui-theme="mica"] {
   --fx-l0-page: #0e1120;
@@ -97,24 +120,42 @@ html.dark[data-ui-theme="mica"] {
   --fx-mica-soft: rgb(135 152 255 / 16%);
   --fx-mica-wash-1: rgb(135 152 255 / 8%);
   --fx-mica-wash-2: rgb(22 179 235 / 7%);
-  --fx-mica-blob-1: rgb(135 152 255 / 12%);
-  --fx-mica-blob-2: rgb(22 179 235 / 9%);
-  --fx-neu-dark: rgb(2 2 6 / 60%);
-  --fx-neu-light: rgb(100 104 123 / 14%);
-  --fx-sh-neu: 10px 10px 24px var(--fx-neu-dark), -8px -8px 20px var(--fx-neu-light);
-  --fx-sh-neu-sm: 4px 4px 10px rgb(2 2 6 / 55%), -3px -3px 8px rgb(100 104 123 / 12%);
-  --fx-sh-inset: inset 2px 2px 6px rgb(2 2 6 / 55%), inset -2px -2px 6px rgb(100 104 123 / 10%);
-  --fx-track: rgb(34 37 54 / 88%);
+  --fx-mica-blob-1: rgb(135 152 255 / 16%);
+  --fx-mica-blob-2: rgb(22 179 235 / 12%);
+  --fx-neu-dark: rgb(2 2 6 / 65%);
+  --fx-neu-light: rgb(100 104 123 / 16%);
+  --fx-sh-neu: 10px 10px 26px var(--fx-neu-dark), -8px -8px 20px var(--fx-neu-light);
+  --fx-sh-neu-sm: 4px 4px 11px rgb(2 2 6 / 60%), -3px -3px 9px rgb(100 104 123 / 14%);
+  --fx-sh-inset: inset 2px 2px 6px rgb(2 2 6 / 60%), inset -2px -2px 6px rgb(100 104 123 / 12%);
+  --fx-track: rgb(30 33 50 / 90%);
   --fx-track-line: rgb(255 255 255 / 6%);
-  --fx-card-fill: #171a2a;
-  --fx-card-face: linear-gradient(150deg, color-mix(in oklab, #171a2a 94%, white), color-mix(in oklab, #171a2a 90%, #0e1120));
-  --fx-card-stroke: rgb(255 255 255 / 6%);
+  --fx-card-fill: #161826;
+  --fx-card-face: linear-gradient(150deg, #1c1f30, #141624);
+  --fx-card-stroke: rgb(255 255 255 / 7%);
+  --fx-accent: #8798ff;
+  --fx-accent-strong: #9aa6ff;
+  --fx-accent-soft: rgb(135 152 255 / 16%);
+  --fx-accent-fill: #6f7ef5;
+  --fx-accent-fill-foreground: #ffffff;
+  --fx-primary-gradient: linear-gradient(#6f7ef5, #6f7ef5);
+  --fx-primary-gradient-hover: linear-gradient(#5f6eea, #5f6eea);
+  --fx-primary-fill: #6f7ef5;
+  --fx-primary-fill-hover: #5f6eea;
+  --fx-primary-text: #ffffff;
+  --fx-primary-stroke: rgb(135 152 255 / 45%);
+  --fx-primary-shadow: 0 10px 22px -10px rgb(111 126 245 / 60%);
+  --fx-mesh-1: rgb(135 152 255 / 18%);
   --fx-elevation-popover: 0 16px 40px -10px rgb(0 0 0 / 70%), 0 2px 6px rgb(0 0 0 / 40%), 0 0 0 1px rgb(255 255 255 / 8%);
   --fx-glass: rgb(23 26 42 / 68%);
   --fx-glass-strong: rgb(23 26 42 / 80%);
   --fx-grad-cpu: linear-gradient(90deg, #8f7fff, #d57ae9);
   --fx-grad-mem: linear-gradient(90deg, #00aee9, #1ad1d1);
   --fx-grad-disk: linear-gradient(90deg, #38c789, #a4d76a);
+  --fx-grad-net: linear-gradient(90deg, #f0b23a, #f08a4a);
+  --fx-grad-danger: linear-gradient(90deg, #e8603f, #f29a4c);
+  --fx-mica-ok: #3ecf8e;
+  --fx-mica-info: #16b3eb;
+  --fx-mica-warn: #f0b23a;
 }
 
 /* ── 1. 底：淡紫灰 + 两团光 ──────────────────────────────────── */
@@ -183,31 +224,110 @@ html[data-ui-theme="mica"] .fx-cardstyle-swatch {
 /* 主机卡的系统图标：一枚凸起的小白方块 */
 html[data-ui-theme="mica"] .fx-host-card > div:first-child > span:first-child { border-radius: 10px; border: 0; background: var(--fx-card-face); box-shadow: var(--fx-sh-neu-sm); color: var(--fx-mica); }
 /*
-  卡里的凹陷轨道（openlat 的 .neu-track）：淡底 + 双向内影。
-  主机卡三个读数：各在一条轨道里（原来是三个灰方格）；小条按位置换三道渐变。
+  主机卡的卡身照 openlat 的 NodeCard 排（HostMicaBody.tsx，只在这套主题下渲染）：
+  右上一枚状态胶囊；2×2 四格读数（Meter：图标 + 标签在左、百分比在右、6px 凹槽里一段渐变、底下一行小字）；
+  「连接 / 转发」两列；最底下两条凹陷轨道（下行 / 上行）。数值和间距照 openlat 的 Tailwind 类换算：
+  gap-x-4 gap-y-4 = 16px，text-xs = 12px，h-1.5 = 6px，px-2.5 py-1.5 = 10px / 6px，rounded-lg = 12px。
 */
-html[data-ui-theme="mica"] .fx-host-card .grid.grid-cols-3 { gap: 8px; }
-html[data-ui-theme="mica"] .fx-host-spec { border-radius: 11px; background: var(--fx-track); box-shadow: var(--fx-sh-inset); padding: 6px 10px 10px; }
-html[data-ui-theme="mica"] .fx-host-spec-bar { left: 10px; right: 10px; bottom: 5px; height: 3px; background: rgb(100 104 123 / 14%); box-shadow: inset 0 1px 1px rgb(100 104 123 / 12%); }
-html.dark[data-ui-theme="mica"] .fx-host-spec-bar { background: rgb(2 2 6 / 40%); box-shadow: inset 0 1px 1px rgb(0 0 0 / 40%); }
-html[data-ui-theme="mica"] .fx-host-spec-bar > span:not([data-tone]) { background: var(--fx-grad-cpu); }
-html[data-ui-theme="mica"] .fx-host-spec:nth-child(2) .fx-host-spec-bar > span:not([data-tone]) { background: var(--fx-grad-mem); }
-html[data-ui-theme="mica"] .fx-host-spec:nth-child(3) .fx-host-spec-bar > span:not([data-tone]) { background: var(--fx-grad-disk); }
-html[data-ui-theme="mica"] .fx-host-spec-bar > span { box-shadow: inset 0 1px 0 rgb(255 255 255 / 35%); }
+html[data-ui-theme="mica"] .fx-mica-body { display: flex; flex-direction: column; min-width: 0; }
+html[data-ui-theme="mica"] .fx-mica-meters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 16px; margin-top: 4px; }
+html[data-ui-theme="mica"] .fx-mica-meter { min-width: 0; }
+html[data-ui-theme="mica"] .fx-mica-meter-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+html[data-ui-theme="mica"] .fx-mica-meter-label { display: inline-flex; min-width: 0; align-items: center; gap: 4px; font-size: 12px; line-height: 16px; color: var(--fx-text-muted); }
+html[data-ui-theme="mica"] .fx-mica-meter-label > svg { width: 12px; height: 12px; flex: none; }
+html[data-ui-theme="mica"] .fx-mica-meter-label > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html[data-ui-theme="mica"] .fx-mica-meter-head > b { font-size: 12px; line-height: 16px; font-weight: 600; color: color-mix(in srgb, var(--fx-text) 85%, transparent); font-variant-numeric: tabular-nums; }
+html[data-ui-theme="mica"] .fx-mica-meter-head > b[data-danger] { color: var(--fx-down-text); }
+html[data-ui-theme="mica"] .fx-mica-bar { margin-top: 6px; height: 6px; width: 100%; overflow: hidden; border-radius: 999px; background: color-mix(in oklab, var(--fx-l2-group) 88%, transparent); box-shadow: var(--fx-sh-inset); }
+html[data-ui-theme="mica"] .fx-mica-bar > span { display: block; height: 100%; border-radius: 999px; background-image: var(--fx-grad-cpu); transition: width 700ms; }
+html[data-ui-theme="mica"] .fx-mica-bar[data-tone="mem"] > span { background-image: var(--fx-grad-mem); }
+html[data-ui-theme="mica"] .fx-mica-bar[data-tone="disk"] > span { background-image: var(--fx-grad-disk); }
+html[data-ui-theme="mica"] .fx-mica-bar[data-tone="net"] > span { background-image: var(--fx-grad-net); }
+html[data-ui-theme="mica"] .fx-mica-bar[data-tone="danger"] > span { background-image: var(--fx-grad-danger); }
+@media (prefers-reduced-motion: reduce) { html[data-ui-theme="mica"] .fx-mica-bar > span { transition: none; } }
+html[data-ui-theme="mica"] .fx-mica-meter-foot { margin-top: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; line-height: 16px; color: var(--fx-text-muted); font-variant-numeric: tabular-nums; }
+/* 「连接 / 转发」两列（openlat 的 连接 / 续费 dl） */
+html[data-ui-theme="mica"] .fx-mica-dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 16px; margin: 12px 0 0; font-size: 11px; line-height: 16px; }
+html[data-ui-theme="mica"] .fx-mica-dl > div { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 8px; }
+html[data-ui-theme="mica"] .fx-mica-dl dt { flex: none; color: var(--fx-text-muted); }
+html[data-ui-theme="mica"] .fx-mica-dl dd { min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fx-text); font-variant-numeric: tabular-nums; }
+/* 下行 / 上行：两条凹陷轨道，箭头下行蓝（openlat 的 text-info）、上行琥珀（chart-4） */
+html[data-ui-theme="mica"] .fx-mica-tracks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 8px; }
+html[data-ui-theme="mica"] .fx-mica-track { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; border: 1px solid var(--fx-track-line); border-radius: 12px; background: var(--fx-track); box-shadow: var(--fx-sh-inset); }
+html[data-ui-theme="mica"] .fx-mica-track-label { display: inline-flex; flex: none; align-items: center; gap: 4px; font-size: 11px; line-height: 16px; color: var(--fx-text-muted); }
+html[data-ui-theme="mica"] .fx-mica-track-label > svg { width: 16px; height: 16px; flex: none; }
+html[data-ui-theme="mica"] .fx-mica-track-label > svg[data-dir="down"] { color: var(--fx-mica-info); }
+html[data-ui-theme="mica"] .fx-mica-track-label > svg[data-dir="up"] { color: var(--fx-mica-warn); }
+html[data-ui-theme="mica"] .fx-mica-track > b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; line-height: 16px; font-weight: 600; color: var(--fx-text); font-variant-numeric: tabular-nums; }
+/* 右上角的状态胶囊（openlat 的 StatusPill = Badge ok / danger / muted + 呼吸点） */
+html[data-ui-theme="mica"] .fx-mica-pill { display: inline-flex; flex: none; align-items: center; gap: 4px; padding: 4px 8px; border: 1px solid transparent; border-radius: 999px; font-size: 12px; line-height: 16px; font-weight: 400; white-space: nowrap; }
+html[data-ui-theme="mica"] .fx-mica-pill > i { position: relative; width: 8px; height: 8px; flex: none; border-radius: 999px; background: currentColor; }
+html[data-ui-theme="mica"] .fx-mica-pill[data-tone="ok"] { border-color: color-mix(in srgb, var(--fx-mica-ok) 25%, transparent); background: color-mix(in srgb, var(--fx-mica-ok) 12%, transparent); color: var(--fx-mica-ok); }
+html[data-ui-theme="mica"] .fx-mica-pill[data-tone="danger"] { border-color: color-mix(in srgb, var(--fx-down) 25%, transparent); background: color-mix(in srgb, var(--fx-down) 12%, transparent); color: var(--fx-down-text); }
+html[data-ui-theme="mica"] .fx-mica-pill[data-tone="danger"] > i { opacity: .8; }
+html[data-ui-theme="mica"] .fx-mica-pill[data-tone="muted"] { background: var(--fx-l2-group); color: var(--fx-text-muted); }
+html[data-ui-theme="mica"] .fx-mica-pill[data-tone="muted"] > i { opacity: .4; }
+/* 在线点的呼吸光晕：只动 transform / opacity（openlat 的 ping-soft） */
+html[data-ui-theme="mica"] .fx-mica-pill[data-tone="ok"] > i::after { content: ""; position: absolute; inset: 0; border-radius: inherit; background: color-mix(in srgb, var(--fx-mica-ok) 62%, transparent); animation: fx-mica-ping 2.4s ease-out infinite; }
+@keyframes fx-mica-ping { 0% { transform: scale(1); opacity: .55; } 70%, 100% { transform: scale(2.6); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { html[data-ui-theme="mica"] .fx-mica-pill > i::after { animation: none; } }
+/* 卡头：名字 font-semibold；状态胶囊贴右（EntityHeader 的 badges 槽） */
+html[data-ui-theme="mica"] .fx-host-card [data-slot="entity-header"] > div > div:first-child,
+html[data-ui-theme="mica"] .fx-host-card .fx-entity-title-row { justify-content: space-between; }
+html[data-ui-theme="mica"] .fx-host-card .fx-mica-pill { margin-left: auto; }
 /* 规则卡：流量大数字 + 走势那一行在一条轨道里，轨道下面的地址行不画线 */
 html[data-ui-theme="mica"] .fx-rule-big { margin-top: 12px; padding: 9px 12px 8px; border-radius: 12px; background: var(--fx-track); box-shadow: var(--fx-sh-inset); }
 html[data-ui-theme="mica"] .fx-rule-path { margin-top: 10px; padding-top: 0; border-top: 0; }
 /* 链路卡：底下那行「延迟 · 评级 · 走势」在一条轨道里 */
 html[data-ui-theme="mica"] .fx-tunnel-foot { margin-top: 12px; padding: 9px 12px 8px; border-top: 0; border-radius: 12px; background: var(--fx-track); box-shadow: var(--fx-sh-inset); }
-/* 首页的统计条：格与格之间一道淡线 */
-html[data-ui-theme="mica"] .fx-summary-cell + .fx-summary-cell { border-left-color: var(--fx-track-line); }
-/* 卡里的状态小标签：带一点顶部高光，像一枚软的胶囊 */
-html[data-ui-theme="mica"] .fx-rule-tag { box-shadow: inset 0 1px 0 rgb(255 255 255 / 45%); }
-html.dark[data-ui-theme="mica"] .fx-rule-tag { box-shadow: inset 0 1px 0 rgb(255 255 255 / 8%); }
+/*
+  首页的统计：不再是一条带里切成几格，而是几张各自凸起的小卡（openlat 的四张概览卡：
+  图标 + 标签一行、大数字、一行小字，全部居中）。运行状态卡自己的壳去掉，底下那行结论
+  单独成一条凸起的小卡。
+*/
+html[data-ui-theme="mica"] .fx-summary { gap: 12px; padding: 0; border: 0; background: transparent; box-shadow: none; }
+html[data-ui-theme="mica"] .fx-summary-cell,
+html[data-ui-theme="mica"] .fx-summary-cell:first-child { position: relative; isolation: isolate; overflow: hidden; border: 1px solid var(--fx-card-stroke) !important; border-radius: 16px; padding: 14px !important; align-items: center; justify-content: center; text-align: center; background: var(--fx-card-face); box-shadow: var(--fx-sh-neu); --fx-tile-tone: var(--fx-mica); }
+/* 右上那团同色的光（openlat Tile 的 blob：-top-8 -right-8 size-24 blur-3xl bg-tone/15） */
+html[data-ui-theme="mica"] .fx-summary-cell::before { content: ""; position: absolute; top: -32px; right: -32px; width: 96px; height: 96px; border-radius: 999px; background: color-mix(in srgb, var(--fx-tile-tone) 15%, transparent); filter: blur(32px); pointer-events: none; z-index: -1; }
+html[data-ui-theme="mica"] .fx-summary-cell:has(.fx-tile[data-tone="violet"]) { --fx-tile-tone: #7c6cf6; }
+html[data-ui-theme="mica"] .fx-summary-cell:has(.fx-tile[data-tone="teal"]) { --fx-tile-tone: #22b8cf; }
+html[data-ui-theme="mica"] .fx-summary-cell:has(.fx-tile[data-tone="orange"]) { --fx-tile-tone: #f5923e; }
+html[data-ui-theme="mica"] .fx-summary-cell:has(.fx-tile[data-tone="green"]) { --fx-tile-tone: #34c07a; }
+html[data-ui-theme="mica"] .fx-summary-cell:has(.fx-tile[data-tone="pink"]) { --fx-tile-tone: #ec6aa8; }
+html[data-ui-theme="mica"] .fx-summary-cell > span:first-child { justify-content: center; gap: 8px; font-size: 12px; }
+/* 图标泡泡：24px、8px 圆角、同色 12% 的淡底 + 同色图标（openlat 的 BUBBLE），不是渐变方块 */
+html[data-ui-theme="mica"] .fx-summary-cell .fx-tile { width: 24px; height: 24px; border-radius: 8px; background: color-mix(in srgb, var(--fx-tile-tone) 12%, transparent); color: var(--fx-tile-tone); box-shadow: none; }
+html[data-ui-theme="mica"] .fx-summary-cell .fx-tile > svg { width: 14px; height: 14px; }
+html[data-ui-theme="mica"] .fx-summary-cell > span:nth-child(2) { width: 100%; margin-top: 8px; text-align: center; }
+html[data-ui-theme="mica"] .fx-summary-value { font-size: 20px; line-height: 28px; font-weight: 600; letter-spacing: -.01em; }
+html[data-ui-theme="mica"] .fx-summary-cell > span:nth-child(3) { margin-top: 2px; font-size: 12px; }
+@media (max-width: 767px) {
+  /* 手机上四张小卡排成 2×2（openlat 的 grid-cols-2） */
+  html[data-ui-theme="mica"] .fx-summary.grid-cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+}
+html[data-ui-theme="mica"] .workspace-main .fx-overview-card,
+html.dark[data-ui-theme="mica"] .workspace-main .fx-overview-card { padding: 0 !important; border: 0 !important; background: transparent !important; box-shadow: none !important; overflow: visible; }
+html[data-ui-theme="mica"] .fx-overview-card .system-health-verdict { margin-top: 12px; padding: 11px 16px; border: 1px solid var(--fx-card-stroke); border-radius: 14px; background: var(--fx-card-face); box-shadow: var(--fx-sh-neu-sm); }
+html[data-ui-theme="mica"] .fx-summary-cell + .fx-summary-cell { border-left-color: var(--fx-card-stroke); }
+/* 卡里的状态小标签：openlat 的 Badge —— 一圈同色 25% 的线 + 12% 的底，字不加粗 */
+html[data-ui-theme="mica"] .fx-rule-tag { height: 22px; padding: 0 8px; border: 1px solid color-mix(in srgb, currentColor 25%, transparent); font-weight: 500; }
+html[data-ui-theme="mica"] .fx-rule-tag[data-tone="off"] { border-color: transparent; }
+
+/* 主机卡能点进详情：悬停轻轻抬起，影子里带一点靛蓝（openlat 的 .glow-hover） */
+html[data-ui-theme="mica"] .fx-host-card { transition: transform .25s ease, box-shadow .25s ease; }
+html[data-ui-theme="mica"] .fx-host-card:hover { transform: translateY(-2px); box-shadow: var(--fx-sh-neu), 0 22px 48px -26px rgb(84 91 233 / 55%); }
+@media (prefers-reduced-motion: reduce) { html[data-ui-theme="mica"] .fx-host-card { transition: none; } html[data-ui-theme="mica"] .fx-host-card:hover { transform: none; } }
+/* 细圆滚动条（openlat） */
+html[data-ui-theme="mica"] ::-webkit-scrollbar { width: 10px; height: 10px; }
+html[data-ui-theme="mica"] ::-webkit-scrollbar-thumb { background: color-mix(in oklab, var(--fx-text-muted) 32%, transparent); border: 3px solid transparent; border-radius: 999px; background-clip: content-box; }
+html[data-ui-theme="mica"] ::-webkit-scrollbar-thumb:hover { background-color: color-mix(in oklab, var(--fx-text-muted) 55%, transparent); }
+html[data-ui-theme="mica"] ::selection { background: rgb(84 91 233 / 25%); }
 
 /* ── 3. 字 ───────────────────────────────────────────────────── */
 html[data-ui-theme="mica"] .workspace-main .workspace-header-title,
-html[data-ui-theme="mica"] .fx-navbar-large-title { font-weight: 700; letter-spacing: -.02em; }
+html[data-ui-theme="mica"] .fx-navbar-large-title { font-weight: 800; letter-spacing: -.025em; }
+html[data-ui-theme="mica"] .workspace-main .workspace-header-title { font-size: 26px; line-height: 32px; }
 /* 分组小标题：靛蓝小字 */
 html[data-ui-theme="mica"] .fx-list-section-header,
 html[data-ui-theme="mica"] .workspace-main .fx-list-section-header { color: var(--fx-mica); font-size: 12.5px; font-weight: 600; letter-spacing: .02em; }
@@ -245,6 +365,9 @@ html[data-ui-theme="mica"] .fx-chip-on,
 html[data-ui-theme="mica"] .fx-chip-on:hover { border-color: transparent; background: var(--fx-mica-soft); background-image: none; color: var(--fx-mica); box-shadow: var(--fx-sh-inset); }
 html[data-ui-theme="mica"] .fx-chip:active { box-shadow: var(--fx-sh-inset); transform: translateY(1px); }
 @media (pointer: coarse) { html[data-ui-theme="mica"] .fx-chip-scroller > .fx-chip { min-height: 30px; } }
+/* 筛选栏整条装进一张凸起的毛玻璃卡（openlat 的 Toolbar：neu glass rounded-2xl border p-2），搜索框在左、控件靠右 */
+html[data-ui-theme="mica"] .workspace-main .workspace-filter { gap: 8px; padding: 8px; border: 1px solid var(--fx-card-stroke); border-radius: 16px; background: var(--fx-glass); box-shadow: var(--fx-sh-neu); }
+html[data-ui-theme="mica"] .workspace-main .workspace-filter-search { max-width: 300px; }
 /* 搜索框、输入框、下拉：凹陷轨道 */
 html[data-ui-theme="mica"] .workspace-main [data-slot="input"],
 html[data-ui-theme="mica"] .workspace-main [data-slot="select-trigger"],
@@ -286,15 +409,18 @@ html[data-ui-theme="mica"] .workspace-main [data-slot="button"]:not([data-varian
 html[data-ui-theme="mica"] [data-slot="badge"] { box-shadow: inset 0 1px 0 rgb(255 255 255 / 40%); }
 html.dark[data-ui-theme="mica"] [data-slot="badge"] { box-shadow: inset 0 1px 0 rgb(255 255 255 / 7%); }
 /* 外壳：顶栏是白 68% 的毛玻璃，底下没有线，靠一道淡影和内容分开；侧栏半透，没有右线 */
-html[data-ui-theme="mica"] .workspace-appbar { border-bottom-color: transparent; box-shadow: 0 8px 24px -18px rgb(25 28 43 / 22%); }
-html.dark[data-ui-theme="mica"] .workspace-appbar { box-shadow: 0 8px 24px -18px rgb(0 0 0 / 70%); }
-html[data-ui-theme="mica"] .workspace-appbar-icon { border-radius: 12px; }
+html[data-ui-theme="mica"] .workspace-appbar { background: color-mix(in srgb, var(--fx-l0-page) 75%, transparent); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); border-bottom-color: color-mix(in srgb, var(--fx-stroke-base) 70%, transparent); box-shadow: none; }
+html[data-ui-theme="mica"] .workspace-appbar-icon { width: 32px; height: 32px; margin-inline: 2px; border: 1px solid var(--fx-track-line); border-radius: 12px; background: var(--fx-track); box-shadow: var(--fx-sh-inset); color: color-mix(in srgb, var(--fx-text) 80%, transparent); }
+html[data-ui-theme="mica"] .workspace-appbar-icon:hover { background: var(--fx-track); color: var(--fx-text); }
+html[data-ui-theme="mica"] .workspace-appbar-icon > svg { width: 16px; height: 16px; }
+html[data-ui-theme="mica"] .workspace-appbar-search { height: 32px; border: 1px solid var(--fx-track-line); font-size: 12px; }
+html[data-ui-theme="mica"] .workspace-appbar-title { font-weight: 600; }
+html[data-ui-theme="mica"] .workspace-appbar-brand img, html[data-ui-theme="mica"] .workspace-appbar-brand > div { border-radius: 8px; box-shadow: var(--fx-sh-neu-sm); }
 html[data-ui-theme="mica"] .workspace-appbar-version { box-shadow: var(--fx-sh-inset); }
 html[data-ui-theme="mica"] .workspace-layout [data-sidebar="sidebar"] { border-right-color: transparent; }
-/* 侧栏选中项：按进去的轨道 + 靛蓝字，不是一块渐变 */
+/* 侧栏：没有底、没有右线，直接坐在柔光上；选中项是一枚靛蓝渐变药丸，带一道靛蓝软影 */
 html[data-ui-theme="mica"] .workspace-layout [data-sidebar="menu-button"] { border-radius: 11px; }
-html[data-ui-theme="mica"] .workspace-layout [data-sidebar="menu-button"][data-active="true"] { background: var(--fx-track); color: var(--fx-mica); box-shadow: var(--fx-sh-inset); }
-html[data-ui-theme="mica"] .workspace-layout [data-sidebar="menu-button"][data-active="true"] > svg { color: var(--fx-mica); }
+html[data-ui-theme="mica"] .workspace-layout [data-sidebar="menu-button"][data-active="true"] { box-shadow: var(--fx-primary-shadow), inset 0 1px 0 rgb(255 255 255 / 22%); }
 @media (max-width: 767px) {
   html[data-ui-theme="mica"] .fx-navbar { background: color-mix(in srgb, var(--fx-l0-page) 78%, transparent); backdrop-filter: var(--fx-glass-blur); -webkit-backdrop-filter: var(--fx-glass-blur); }
   /* 底部标签栏：一枚凸起的白瓷胶囊（双向软影），选中项按进去（内影 + 靛蓝图标） */
@@ -303,14 +429,8 @@ html[data-ui-theme="mica"] .workspace-layout [data-sidebar="menu-button"][data-a
     background: var(--fx-card-face);
     box-shadow: var(--fx-sh-neu);
   }
-  html[data-ui-theme="mica"] .fx-tabbar-item { border-radius: 14px; transition: box-shadow 150ms, background-color 150ms, color 150ms, transform 120ms; }
-  html[data-ui-theme="mica"] .fx-tabbar-item-active {
-    color: var(--fx-mica);
-    background: var(--fx-track);
-    background-image: none;
-    box-shadow: var(--fx-sh-inset);
-  }
-  html[data-ui-theme="mica"] .fx-tabbar-item-active > svg { color: var(--fx-mica); }
+  html[data-ui-theme="mica"] .fx-tabbar-item { border-radius: 14px; }
+  html[data-ui-theme="mica"] .fx-tabbar-item-active { box-shadow: var(--fx-primary-shadow), inset 0 1px 0 rgb(255 255 255 / 22%); }
 }
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   html[data-ui-theme="mica"] .workspace-appbar, html[data-ui-theme="mica"] .fx-navbar { background: var(--fx-l1-surface); }
@@ -326,15 +446,15 @@ html[data-ui-theme="mica"] [data-slot="popover-content"] { border-radius: 14px; 
   background:
     radial-gradient(70% 60% at 100% 0%, rgb(84 91 233 / 18%), transparent 70%),
     radial-gradient(55% 50% at 0% 100%, rgb(0 139 204 / 14%), transparent 70%),
-    #f9fafe;
+    #f3f4fa;
 }
 .dark .fx-uitheme-swatch[data-theme="mica"] {
   background:
     radial-gradient(70% 60% at 100% 0%, rgb(135 152 255 / 16%), transparent 70%),
     radial-gradient(55% 50% at 0% 100%, rgb(22 179 235 / 12%), transparent 70%),
-    #0e1120;
+    #0b0e18;
 }
-.fx-uitheme-swatch[data-theme="mica"] > i { border-radius: 8px; border-color: rgb(218 221 234 / 55%); background: linear-gradient(150deg, #fff, #f6f7fc); box-shadow: 4px 4px 10px rgb(100 104 123 / 16%), -3px -3px 8px rgb(255 255 255 / 90%); }
+.fx-uitheme-swatch[data-theme="mica"] > i { border-radius: 8px; border-color: rgb(255 255 255 / 90%); background: linear-gradient(150deg, #fff, #f6f7fc); box-shadow: 4px 4px 10px rgb(84 91 140 / 20%), -3px -3px 8px rgb(255 255 255 / 100%); }
 .dark .fx-uitheme-swatch[data-theme="mica"] > i { border-color: rgb(255 255 255 / 6%); background: linear-gradient(150deg, #1d2032, #161826); box-shadow: 4px 4px 10px rgb(2 2 6 / 60%), -3px -3px 8px rgb(100 104 123 / 14%); }
 .fx-uitheme-swatch[data-theme="mica"] > i:first-child { margin-top: 2px; }
 .fx-uitheme-swatch[data-theme="mica"] > b { border-color: transparent; background: rgb(237 240 248 / 92%); box-shadow: inset 2px 2px 5px rgb(100 104 123 / 15%), inset -2px -2px 5px rgb(255 255 255 / 80%); }

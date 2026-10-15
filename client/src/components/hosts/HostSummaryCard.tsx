@@ -9,6 +9,8 @@ import {
   EntityTag,
 } from "@/components/entity/EntityCard";
 import { StatusDot } from "@/components/network/StatusDot";
+import { useUiTheme } from "@/hooks/useUiTheme";
+import { MicaHostBody, MicaStatusPill } from "./HostMicaBody";
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 import { formatAgo } from "@shared/dashboardAttention";
 import { formatCpuPercent, isAgentUpgradeTimedOut } from "./hostDisplay";
@@ -275,6 +277,8 @@ export default function HostSummaryCard(props: HostSummaryCardProps) {
   const address = hostPrimaryAddressLines(host).map((row) => row.value).filter((value) => value && value !== "-")[0] || "";
   const agentVersion = String(host?.agentVersion ?? "").trim().replace(/^v/i, "");
   const now = Date.now();
+  // 「云母」主题下整张卡照 openlat 的节点卡排（HostMicaBody.tsx）：状态胶囊在右上、2×2 读数、两条速率轨道
+  const mica = useUiTheme() === "mica";
 
   const confirmDelete = async () => {
     if (
@@ -317,16 +321,20 @@ export default function HostSummaryCard(props: HostSummaryCardProps) {
         leading={<HostOsAvatar os={os} />}
         /* 状态点在名字前面、靠左（用户定的）：一列卡片扫下来，左边一竖排点，红的那颗一眼就跳出来。 */
         title={
-          <span className="inline-flex min-w-0 max-w-full items-center gap-2">
-            <StatusDot health={vitals.health} size="large" label={vitals.isOnline ? "在线" : vitals.health === "unknown" ? "未上报" : "离线"} />
-            <span className="truncate">{name}</span>
-          </span>
+          mica ? <span className="truncate">{name}</span> : (
+            <span className="inline-flex min-w-0 max-w-full items-center gap-2">
+              <StatusDot health={vitals.health} size="large" label={vitals.isOnline ? "在线" : vitals.health === "unknown" ? "未上报" : "离线"} />
+              <span className="truncate">{name}</span>
+            </span>
+          )
         }
         /*
           系统标签挂在名字旁边（「Debian 12」），Agent 版本不上卡、进详情：名字才是主角，
           标签只有一枚就不会把名字挤成「Tokyo-II…」。
         */
-        badges={os.label ? (
+        badges={mica ? (
+          <MicaStatusPill host={host} vitals={vitals} now={now} />
+        ) : os.label ? (
           <EntityTag className="max-w-[45%] font-medium text-muted-foreground">
             <span className="truncate" title={os.full}>{os.label}</span>
           </EntityTag>
@@ -334,7 +342,7 @@ export default function HostSummaryCard(props: HostSummaryCardProps) {
         subtitle={
           <>
             {/* Agent 版本号不上卡（2026-10-09 用户要求），进详情看；能升级时只留一句「可升级」。 */}
-            {[region, address].filter(Boolean).join(" · ")}
+            {[region, mica ? os.label : null, address].filter(Boolean).join(" · ")}
             {agentVersion && props.upgradeAvailable ? (
               <>
                 {region || address ? " · " : ""}
@@ -360,8 +368,12 @@ export default function HostSummaryCard(props: HostSummaryCardProps) {
         「要不要点进去」这个问题，而列表上的每一行都要为这个问题服务。
       */}
       <EntityBody tight>
-        {vitals.isOnline ? <ResourceRow vitals={vitals} /> : null}
-        <HostFootRow host={host} vitals={vitals} now={now} />
+        {mica ? <MicaHostBody host={host} vitals={vitals} /> : (
+          <>
+            {vitals.isOnline ? <ResourceRow vitals={vitals} /> : null}
+            <HostFootRow host={host} vitals={vitals} now={now} />
+          </>
+        )}
       </EntityBody>
 
     </EntityCard>

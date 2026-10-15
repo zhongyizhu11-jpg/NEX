@@ -477,7 +477,7 @@ export const PERSONALIZATION_UI_THEMES = [
   { id: "gilt", name: "墨金", description: "米白纸底、平贴的小圆角卡纸，数字放在米色带上；衬线标题、金色下划线分段、方标签筛选；深色是墨黑配金。" },
   { id: "rose", name: "玫瑰", description: "胭脂粉底、无边线的浮起白瓣卡，数字嵌在托盘里；斜体衬线标题、细线空槽分段、全药丸；设置页改为编号分节。" },
   { id: "cinnabar", name: "朱砂", description: "素白纸面、3px 小方角、朱红短线和菱形标记，标签全大写加宽字距；带「监控」页和一整套运维功能（状态可用率、地区规则、IP 封禁、在线 IP、安全巡检、API 与 MCP……）。" },
-  { id: "mica", name: "云母", description: "openlat 风格的微拟物：淡紫灰底托凸起的纯白卡（双向软影），读数和输入框是按进去的凹陷轨道，主机三根小条各一道渐变；深色是墨蓝。" },
+  { id: "mica", name: "云母", description: "openlat 风格的微拟物：靛蓝主色，淡紫灰底托凸起的白卡（双向软影），首页四张独立统计卡，主机卡是百分比 + 三色渐变条，输入框和分段控件是按进去的凹槽；深色是墨蓝。" },
 ] as const;
 
 export type PersonalizationUiThemeId = typeof PERSONALIZATION_UI_THEMES[number]["id"];
