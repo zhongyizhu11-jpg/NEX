@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
 import { Check, Palette } from "lucide-react";
 
-import { PERSONALIZATION_UI_THEMES } from "@shared/personalization";
+import { toast } from "sonner";
+
+import { normalizePersonalizationUiTheme, PERSONALIZATION_UI_THEMES } from "@shared/personalization";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -10,10 +11,15 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { readUiThemeOverride, setUiThemeOverride, UI_THEME_OVERRIDE_EVENT } from "@/lib/personalizationTheme";
+import { setUiThemeOverride } from "@/lib/personalizationTheme";
+import { useUiThemeOverride } from "@/hooks/useUiThemeOverride";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { trpc } from "@/lib/trpc";
 
 /*
-  顶栏的调色盘：给**自己**挑一套界面主题，只记在这台设备上，不改站点默认（那个在设置 › 个性化里）。
+  顶栏的调色盘。管理员：和设置 › 个性化 › 界面主题是同一个值，选了就存成站点主题（2.3.436 起，
+  原来只记在这台设备上，和设置里各管各的，用户觉得「不同步」）。其他人改不了站点设置：仍然只给
+  **自己**这台设备挑一套（localStorage），不影响别人，没选就跟随站点默认。
   参考 Rosélune 面板顶栏的 Look 菜单（2026-10-11）：每项前面一枚小圆，底是那套的页面底色、
   右上一点是它的强调色，一眼看得出是哪一套。
 */
@@ -33,17 +39,65 @@ export function UiThemeDot({ id }: { id: string }) {
 }
 
 export function UiThemeQuickSwitch({ className }: { className?: string }) {
-  const [override, setOverride] = useState<string | null>(() => readUiThemeOverride());
-  useEffect(() => {
-    const sync = () => setOverride(readUiThemeOverride());
-    window.addEventListener(UI_THEME_OVERRIDE_EVENT, sync);
-    window.addEventListener("storage", sync);
-    return () => {
-      window.removeEventListener(UI_THEME_OVERRIDE_EVENT, sync);
-      window.removeEventListener("storage", sync);
-    };
-  }, []);
+  const override = useUiThemeOverride();
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
+  const utils = trpc.useUtils();
+  const { data: publicInfo } = trpc.system.publicInfo.useQuery(undefined, { enabled: isAdmin, staleTime: 60_000, refetchOnWindowFocus: false, retry: false });
+  const siteTheme = normalizePersonalizationUiTheme((publicInfo as any)?.personalizationUiTheme);
+  const saveSiteTheme = trpc.system.updateSettings.useMutation();
 
+  /*
+    管理员：顶栏调色盘和设置 › 个性化 › 界面主题是同一个值（2.3.436 用户要求「完全同步」）。
+    这里一选就存成站点主题，设置页、别的设备跟着变；先把两份缓存改掉让页面当场换，存失败再撤回。
+    顺手清掉这台设备以前在这里选过的「只给自己」那一套，不然它会盖过刚存的站点主题。
+  */
+  const selectSiteTheme = (id: string) => {
+    const next = normalizePersonalizationUiTheme(id);
+    setUiThemeOverride(null);
+    const previous = siteTheme;
+    utils.system.publicInfo.setData(undefined, (old: any) => (old ? { ...old, personalizationUiTheme: next } : old));
+    utils.system.getSettings.setData(undefined, (old: any) => (old ? { ...old, personalizationUiTheme: next } : old));
+    saveSiteTheme.mutate(
+      { personalizationUiTheme: next },
+      {
+        onSuccess: () => {
+          void utils.system.publicInfo.invalidate();
+          void utils.system.getSettings.invalidate();
+        },
+        onError: (error) => {
+          utils.system.publicInfo.setData(undefined, (old: any) => (old ? { ...old, personalizationUiTheme: previous } : old));
+          utils.system.getSettings.setData(undefined, (old: any) => (old ? { ...old, personalizationUiTheme: previous } : old));
+          toast.error(error.message || "界面主题保存失败");
+        },
+      },
+    );
+  };
+
+  if (isAdmin) {
+    const current = override ?? siteTheme;
+    return (
+      <DropdownMenu modal={false}>
+        <DropdownMenuTrigger asChild>
+          <button type="button" className={className || "workspace-appbar-icon"} aria-label="界面主题" title="换一套界面主题（和设置里同步）">
+            <Palette className="h-4 w-4" aria-hidden="true" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-52">
+          <DropdownMenuLabel className="text-xs font-medium text-muted-foreground">界面主题（全站，和设置同步）</DropdownMenuLabel>
+          {PERSONALIZATION_UI_THEMES.map((theme) => (
+            <DropdownMenuItem key={theme.id} onSelect={() => selectSiteTheme(theme.id)} disabled={saveSiteTheme.isPending} className="gap-2.5">
+              <UiThemeDot id={theme.id} />
+              <span className="flex-1">{theme.name}</span>
+              {current === theme.id ? <Check className="h-4 w-4 text-primary" aria-hidden="true" /> : null}
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    );
+  }
+
+  /* 其他人改不了站点设置：顶栏仍然只给自己这台设备换，没选就跟随站点默认 */
   return (
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
