@@ -70,10 +70,7 @@ export function MicaStatusPill({ host, vitals, now }: { host: any; vitals: HostV
   let text = "未接入";
   if (vitals.isOnline) {
     tone = "ok";
-    // 胶囊只写到「天」（有天就不写小时）：一行四张卡时名字要留得下
-    const up = String(vitals.uptimeText || "").trim();
-    const short = up && up !== "—" ? (up.match(/^\d+\s*天/) || [up])[0] : "";
-    text = short ? `在线 ${short}` : "在线";
+    text = vitals.uptimeText && vitals.uptimeText !== "—" ? `在线 ${vitals.uptimeText}` : "在线";
   } else if (vitals.health !== "unknown") {
     tone = "danger";
     const seen = host?.lastHeartbeat ? new Date(host.lastHeartbeat).getTime() : NaN;
@@ -120,11 +117,11 @@ export function MicaHostBody({ host, vitals }: { host: any; vitals: HostVitals }
       </dl>
       <div className="fx-mica-tracks">
         <div className="fx-mica-track">
-          <span className="fx-mica-track-label"><ArrowDown aria-hidden="true" data-dir="down" /><span>下行</span></span>
+          <span className="fx-mica-track-label"><ArrowDown aria-hidden="true" data-dir="down" />下行</span>
           <b>{online ? speed(vitals.speedIn) : "—"}</b>
         </div>
         <div className="fx-mica-track">
-          <span className="fx-mica-track-label"><ArrowUp aria-hidden="true" data-dir="up" /><span>上行</span></span>
+          <span className="fx-mica-track-label"><ArrowUp aria-hidden="true" data-dir="up" />上行</span>
           <b>{online ? speed(vitals.speedOut) : "—"}</b>
         </div>
       </div>
