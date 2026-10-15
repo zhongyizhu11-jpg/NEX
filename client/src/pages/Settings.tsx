@@ -138,6 +138,7 @@ import {
   DEFAULT_LIQUID_GLASS,
   LIQUID_GLASS_LIMITS,
   LIQUID_GLASS_PHOTO_SOURCES,
+  LIQUID_GLASS_LAYOUTS,
   type LiquidGlassConfig,
   normalizePersonalizationUiTheme,
   normalizePersonalizationPageTint,
@@ -4077,7 +4078,7 @@ function PersonalizationSettingsSection() {
               液态玻璃
             </CardTitle>
             <CardDescription>
-              「液态玻璃」主题的几个旋钮：照片从哪来、浅色下照片上罩多厚的白雾、深色下照片多亮、玻璃卡模糊多少、鼠标移上去要不要跟着亮。
+              「液态玻璃」主题的几个旋钮：照片从哪来、铺满全屏还是左右错落、浅色下照片上罩多厚的白雾、深色下照片多亮、玻璃卡模糊多少、鼠标移上去要不要跟着亮。
               {uiTheme !== "liquid-glass" ? "现在选的不是液态玻璃，调了要切到那套才看得见。" : "拨一下就在这一页试看，保存后才对所有人生效。"}
             </CardDescription>
           </div>
@@ -4103,6 +4104,30 @@ function PersonalizationSettingsSection() {
                     key={item.id}
                     type="button"
                     onClick={() => updateLiquidGlass({ photoSource: item.id })}
+                    disabled={isSavingPersonalization("liquidGlass")}
+                    aria-pressed={active}
+                    className={cn(
+                      "flex flex-col gap-1 rounded-lg border p-2.5 text-left transition hover:border-primary/50 disabled:pointer-events-none disabled:opacity-70",
+                      active ? "border-primary bg-primary/5 ring-2 ring-primary/15" : "border-border/40",
+                    )}
+                  >
+                    <span className={cn("text-sm", active ? "font-semibold text-foreground" : "font-medium text-foreground")}>{item.name}</span>
+                    <span className="text-xs leading-5 text-muted-foreground">{item.description}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Label>照片布局</Label>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+              {LIQUID_GLASS_LAYOUTS.map((item) => {
+                const active = liquidGlass.layout === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => updateLiquidGlass({ layout: item.id })}
                     disabled={isSavingPersonalization("liquidGlass")}
                     aria-pressed={active}
                     className={cn(

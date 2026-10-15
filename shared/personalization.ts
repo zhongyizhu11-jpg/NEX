@@ -666,6 +666,10 @@ export function normalizePersonalizationUiTheme(value: unknown): Personalization
     darkOpacity  深色下照片的不透明度，10～100%（预览站是 40）
     blur         玻璃卡的模糊半径，0～40px（预览站是 28；手机上卡多时调小更顺）
     sheen        鼠标移上去卡里跟着亮一团光（只在有鼠标的设备上）
+    layout       照片怎么铺：
+      auto   只有一张图（用的是自定义背景）或者屏幕窄（手机）就铺满全屏一张；两张不同的照片、宽屏时才左右错落（出厂值）
+      full   永远铺满全屏一张，没有边距和圆角
+      wings  永远左右错落两张（预览站的样子）；只有一张图时两格放同一张
 */
 export const LIQUID_GLASS_PHOTO_SOURCES = [
   { id: "auto", name: "自动", description: "设了自定义背景就用那张，没设就随机拉。" },
@@ -677,15 +681,24 @@ export const LIQUID_GLASS_PHOTO_SOURCES = [
 
 export type LiquidGlassPhotoSource = typeof LIQUID_GLASS_PHOTO_SOURCES[number]["id"];
 
+export const LIQUID_GLASS_LAYOUTS = [
+  { id: "auto", name: "自动", description: "一张图或手机上铺满全屏，两张不同的照片在宽屏上左右错落。" },
+  { id: "full", name: "铺满全屏", description: "一张照片铺满整个屏幕，没有边距和圆角。" },
+  { id: "wings", name: "左右错落", description: "两张圆角照片一左一右错落（预览站的样子）。" },
+] as const;
+
+export type LiquidGlassLayout = typeof LIQUID_GLASS_LAYOUTS[number]["id"];
+
 export type LiquidGlassConfig = {
   photoSource: LiquidGlassPhotoSource;
   wash: number;
   darkOpacity: number;
   blur: number;
   sheen: boolean;
+  layout: LiquidGlassLayout;
 };
 
-export const DEFAULT_LIQUID_GLASS: LiquidGlassConfig = { photoSource: "auto", wash: 30, darkOpacity: 40, blur: 28, sheen: true };
+export const DEFAULT_LIQUID_GLASS: LiquidGlassConfig = { photoSource: "auto", wash: 30, darkOpacity: 40, blur: 28, sheen: true, layout: "auto" };
 export const LIQUID_GLASS_LIMITS = { wash: [0, 80], darkOpacity: [10, 100], blur: [0, 40] } as const;
 
 function clampInt(value: unknown, [min, max]: readonly [number, number], fallback: number) {
@@ -701,11 +714,13 @@ export function normalizeLiquidGlassConfig(value: unknown): LiquidGlassConfig {
   }
   if (!raw || typeof raw !== "object") return { ...DEFAULT_LIQUID_GLASS };
   const source = String(raw.photoSource || "");
+  const layout = String(raw.layout || "");
   return {
     photoSource: LIQUID_GLASS_PHOTO_SOURCES.some((item) => item.id === source) ? source as LiquidGlassPhotoSource : DEFAULT_LIQUID_GLASS.photoSource,
     wash: clampInt(raw.wash, LIQUID_GLASS_LIMITS.wash, DEFAULT_LIQUID_GLASS.wash),
     darkOpacity: clampInt(raw.darkOpacity, LIQUID_GLASS_LIMITS.darkOpacity, DEFAULT_LIQUID_GLASS.darkOpacity),
     blur: clampInt(raw.blur, LIQUID_GLASS_LIMITS.blur, DEFAULT_LIQUID_GLASS.blur),
     sheen: raw.sheen === undefined ? DEFAULT_LIQUID_GLASS.sheen : raw.sheen === true || raw.sheen === "true",
+    layout: LIQUID_GLASS_LAYOUTS.some((item) => item.id === layout) ? layout as LiquidGlassLayout : DEFAULT_LIQUID_GLASS.layout,
   };
 }
