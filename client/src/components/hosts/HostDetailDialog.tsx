@@ -14,6 +14,7 @@ import { buildHostActions, type HostSummaryCardProps } from "./HostSummaryCard";
 import { useHostVitals } from "./useHostVitals";
 import { useAuth } from "@/_core/hooks/useAuth";
 import OpsHostDetailExtraSections from "@/features/ops/slots/HostDetailExtraSections";
+import MimicInstallPanel from "./MimicInstallPanel";
 
 /**
  * 主机详情 —— Detail 态。
@@ -151,6 +152,11 @@ export default function HostDetailDialog(props: HostDetailDialogProps) {
               写着「TCP 1284」会让人以为它还在跑（同 CPU 那条理由）。
             */}
             <Row label="连接数" value={connectionsText(vitals.tcpConnections, vitals.udpConnections)} />
+          </Section>
+
+          {/* mimic UDP 混淆环境：装没装、能不能用，管理员在这里一键安装 / 修复（2.3.439） */}
+          <Section title="mimic UDP 混淆">
+            <MimicInstallPanel host={host} canManage={user?.role === "admin"} />
           </Section>
 
           <Section title="资源">

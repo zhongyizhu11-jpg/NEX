@@ -27,7 +27,85 @@ log() {
 
 die() {
   printf '[NEX mimic] ERROR: %s\n' "$*" >&2
+  printf '[NEX mimic] RESULT: failed reason=%s\n' "${MIMIC_FAIL_REASON:-unknown}" >&2
   exit 1
+}
+
+# 把一个命令的输出存到日志里，失败时把尾巴打出来：以前全丢进 /dev/null 加 || true，
+# 头文件装不上根本看不到，mimic-dkms 装进去 DKMS 一编就挂，面板只剩一句「模块不存在」。
+run_logged() {
+  local label="$1"; shift
+  local logfile
+  logfile="$(mktemp /tmp/forwardx-mimic-step.XXXXXX)"
+  # 退出码要在命令失败的当下拿：写成 if cmd; then ...; fi 之后再取 $?，拿到的是 if 语句本身的 0，
+  # 失败会被当成成功，dpkg -i 之后的补依赖 / 重试路径就都不走了。
+  local rc=0
+  "$@" >"$logfile" 2>&1 || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    rm -f "$logfile"
+    return 0
+  fi
+  log "${label} failed (exit ${rc}); last lines:"
+  tail -n 15 "$logfile" | sed 's/^/[NEX mimic]   /' >&2
+  rm -f "$logfile"
+  return "$rc"
+}
+
+# DKMS 的构建日志尾巴，编译失败时比「module not found」有用得多
+show_dkms_build_log() {
+  local logfile
+  for logfile in /var/lib/dkms/mimic/*/build/make.log; do
+    [ -r "$logfile" ] || continue
+    log "DKMS build log ${logfile} (last lines):"
+    tail -n 25 "$logfile" | sed 's/^/[NEX mimic]   /' >&2
+  done
+}
+
+# 当前内核有没有可编译模块的头文件：没有的话 dkms 必失败，先把这事说清楚
+kernel_headers_present() {
+  [ -r "/lib/modules/$(uname -r)/build/Makefile" ]
+}
+
+apt_updated=0
+apt_update_once() {
+  [ "$apt_updated" = "1" ] && return 0
+  apt_updated=1
+  log "refreshing apt package lists"
+  run_logged "apt-get update" env DEBIAN_FRONTEND=noninteractive apt-get update -q || true
+}
+
+# Debian / Ubuntu 的内核头文件包名：先按 uname -r 精确找，再退回该发行版的元包
+# （Debian 云内核 6.12.x+deb13-cloud-amd64 → linux-headers-cloud-amd64 这类）。
+debian_header_candidates() {
+  local release flavour
+  release="$(uname -r)"
+  printf '%s\n' "linux-headers-${release}"
+  flavour="${release##*-}"
+  case "$release" in
+    *-"$flavour") printf '%s\n' "linux-headers-${flavour}" ;;
+  esac
+  if [ -r /etc/os-release ]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    case "${ID:-}" in
+      ubuntu|linuxmint|pop|neon|elementary) printf '%s\n' "linux-headers-generic" ;;
+      *) printf '%s\n' "linux-headers-$(dpkg --print-architecture 2>/dev/null || echo amd64)" ;;
+    esac
+  fi
+}
+
+install_debian_kernel_headers() {
+  kernel_headers_present && return 0
+  apt_update_once
+  local pkg
+  while IFS= read -r pkg; do
+    [ -n "$pkg" ] || continue
+    log "installing kernel headers ${pkg}"
+    if run_logged "apt-get install ${pkg}" env DEBIAN_FRONTEND=noninteractive apt-get install -y -q "$pkg"; then
+      kernel_headers_present && return 0
+    fi
+  done < <(debian_header_candidates | awk 'NF && !seen[$0]++')
+  kernel_headers_present
 }
 
 require_root() {
@@ -391,11 +469,15 @@ install_mimic_source_deps() {
   local family="${1:-$(detect_distro_family)}"
   case "${family}" in
     debian)
-      DEBIAN_FRONTEND=noninteractive apt-get install -y -q \
-        build-essential clang llvm bpftool pahole bubblewrap binutils \
+      apt_update_once
+      install_debian_kernel_headers || log "kernel headers missing; the source build will fail without them"
+      local pkg
+      for pkg in build-essential clang llvm bpftool pahole bubblewrap binutils \
         libbpf-dev libelf-dev zlib1g-dev libffi-dev pkg-config \
-        xz-utils lz4 zstd bzip2 lzma \
-        >/dev/null 2>&1 || true
+        xz-utils lz4 zstd bzip2; do
+        run_logged "apt-get install ${pkg}" env DEBIAN_FRONTEND=noninteractive apt-get install -y -q "$pkg" \
+          || log "package ${pkg} is unavailable on this system; continuing"
+      done
       ;;
     rhel)
       if command -v dnf >/dev/null 2>&1; then
@@ -434,11 +516,13 @@ install_dkms_deps() {
   log "installing DKMS prerequisites for ${family}"
   case "$family" in
     debian)
-      DEBIAN_FRONTEND=noninteractive apt-get install -y -q \
-        dkms "linux-headers-$(uname -r)" build-essential >/dev/null 2>&1 \
-        || DEBIAN_FRONTEND=noninteractive apt-get install -y -q \
-          dkms linux-headers-generic build-essential >/dev/null 2>&1 \
-        || true
+      apt_update_once
+      run_logged "apt-get install dkms build-essential" env DEBIAN_FRONTEND=noninteractive apt-get install -y -q dkms build-essential || true
+      if ! install_debian_kernel_headers; then
+        MIMIC_FAIL_REASON="kernel-headers"
+        log "kernel headers for $(uname -r) are not installed and could not be installed; the mimic kernel module cannot be built"
+        log "install them by hand (apt-get install linux-headers-$(uname -r)) or reboot into a kernel that has headers, then retry"
+      fi
       ;;
     rhel)
       if command -v dnf >/dev/null 2>&1; then
@@ -504,18 +588,30 @@ install_mimic_deb() {
     fi
 
     rc=0
-    DEBIAN_FRONTEND=noninteractive dpkg -i "$tmp/$dkms_deb" "$tmp/$bin_deb" >/dev/null 2>&1 || rc=$?
+    run_logged "dpkg -i ${codename} packages" env DEBIAN_FRONTEND=noninteractive dpkg -i "$tmp/$dkms_deb" "$tmp/$bin_deb" || rc=$?
     if [ "$rc" -ne 0 ]; then
       # Fix broken dependencies then retry
-      DEBIAN_FRONTEND=noninteractive apt-get install -y -f >/dev/null 2>&1 || true
-      DEBIAN_FRONTEND=noninteractive dpkg -i "$tmp/$dkms_deb" "$tmp/$bin_deb" >/dev/null 2>&1 || continue
+      apt_update_once
+      run_logged "apt-get install -f" env DEBIAN_FRONTEND=noninteractive apt-get install -y -f || true
+      run_logged "dpkg -i ${codename} packages (retry)" env DEBIAN_FRONTEND=noninteractive dpkg -i "$tmp/$dkms_deb" "$tmp/$bin_deb" || continue
     fi
-    if ! command -v mimic >/dev/null 2>&1 || ! modprobe mimic >/dev/null 2>&1; then
-      log "Mimic Debian packages installed but the command or kernel module is unavailable"
-      return 1
+    if command -v mimic >/dev/null 2>&1 && modprobe mimic >/dev/null 2>&1; then
+      log "installed Mimic Debian assets for ${codename}"
+      return 0
     fi
-    log "installed Mimic Debian assets for ${codename}"
-    return 0
+    # 包装进去了但模块不在：多半是 DKMS 没编出来（缺头文件 / 编译错），再给 DKMS 一次机会
+    if command -v dkms >/dev/null 2>&1; then
+      log "kernel module not loadable after ${codename} packages; retrying DKMS build for $(uname -r)"
+      run_logged "dkms autoinstall" dkms autoinstall -k "$(uname -r)" || true
+      run_logged "dkms install mimic/${TARGET_VERSION}" dkms install -m mimic -v "${TARGET_VERSION}" -k "$(uname -r)" --force || true
+      if command -v mimic >/dev/null 2>&1 && modprobe mimic >/dev/null 2>&1; then
+        log "installed Mimic Debian assets for ${codename} (module rebuilt by DKMS)"
+        return 0
+      fi
+      show_dkms_build_log
+    fi
+    log "Mimic ${codename} packages installed but the command or kernel module is unavailable; trying the next package set"
+    MIMIC_FAIL_REASON="dkms-build"
   done < <(detect_deb_codenames)
 
   log "no compatible Mimic Debian assets found for $(uname -m) / $(uname -r)"
@@ -890,15 +986,35 @@ main() {
   current_version="$(installed_mimic_version || true)"
   case "$verify_status" in
     0)
-      if [ "${current_version}" = "${TARGET_VERSION}" ]; then
+      # 面板上对已经能用的主机点「重新安装」会带 FORWARDX_MIMIC_MODE=repair：这时不走「已经装好」的
+      # 提前退出，往下把包整个重装一遍；普通安装（含 Agent 安装脚本）照旧装好了就不动。
+      if [ "${current_version}" = "${TARGET_VERSION}" ] && [ "${FORWARDX_MIMIC_MODE:-install}" != "repair" ]; then
         install_mimic_bpf_dropin || die "failed to install Mimic systemd capability drop-in"
         log "mimic ${TARGET_VERSION} command and kernel module are already available"
         exit 0
       fi
-      log "mimic ${current_version:-unknown} installed; upgrading to ${TARGET_VERSION}"
+      if [ "${current_version}" = "${TARGET_VERSION}" ]; then
+        log "mimic ${TARGET_VERSION} is available; reinstall requested, reinstalling packages"
+      else
+        log "mimic ${current_version:-unknown} installed; upgrading to ${TARGET_VERSION}"
+      fi
       ;;
     2)
       log "mimic ${current_version:-unknown} command exists but kernel module not loaded; repairing DKMS"
+      if [ "${current_version}" = "${TARGET_VERSION}" ] && command -v dkms >/dev/null 2>&1; then
+        family="$(detect_distro_family)"
+        [ "$family" = "debian" ] && install_debian_kernel_headers || true
+        run_logged "dkms autoinstall" dkms autoinstall -k "$(uname -r)" || true
+        run_logged "dkms install mimic/${TARGET_VERSION}" dkms install -m mimic -v "${TARGET_VERSION}" -k "$(uname -r)" --force || true
+        if verify_mimic; then
+          install_mimic_bpf_dropin || die "failed to install Mimic systemd capability drop-in"
+          log "mimic ${TARGET_VERSION} kernel module rebuilt for $(uname -r)"
+          log "RESULT: ok version=${TARGET_VERSION} kernel=$(uname -r) repaired=dkms"
+          exit 0
+        fi
+        log "DKMS rebuild did not bring the module back; reinstalling packages"
+        show_dkms_build_log
+      fi
       ;;
     *)
       log "mimic not installed; installing ${TARGET_TAG} from ${MIMIC_REPO}"
@@ -953,19 +1069,29 @@ main() {
 
   restore_mimic_units "${saved_units[@]}"
 
-  [ "$install_ok" = "1" ] \
-    || die "mimic installation failed for distro family '${family}'"
+  if [ "$install_ok" != "1" ]; then
+    show_dkms_build_log
+    if ! kernel_headers_present; then
+      MIMIC_FAIL_REASON="kernel-headers"
+      die "mimic installation failed: kernel headers for $(uname -r) are missing (apt-get install linux-headers-$(uname -r), or reboot into a kernel that has headers)"
+    fi
+    die "mimic installation failed for distro family '${family}'"
+  fi
 
   current_version="$(installed_mimic_version || true)"
   if verify_mimic && [ "${current_version}" = "${TARGET_VERSION}" ]; then
+    command -v dkms >/dev/null 2>&1 && log "dkms: $(dkms status mimic 2>/dev/null | tr '\n' ';' || true)"
     log "mimic ${TARGET_VERSION} is ready"
-    log "next: configure the network interface name in NEX host management before enabling mimic UDP camouflage"
+    log "RESULT: ok version=${TARGET_VERSION} kernel=$(uname -r)"
     exit 0
   fi
 
+  show_dkms_build_log
   if command -v mimic >/dev/null 2>&1; then
+    MIMIC_FAIL_REASON="${MIMIC_FAIL_REASON:-module-not-loaded}"
     die "mimic ${current_version:-unknown} installed but target ${TARGET_VERSION} not confirmed. Check DKMS logs, Secure Boot/MOK signing, or reboot into the kernel with the built module."
   fi
+  MIMIC_FAIL_REASON="${MIMIC_FAIL_REASON:-not-installed}"
   die "mimic installation did not complete"
 }
 

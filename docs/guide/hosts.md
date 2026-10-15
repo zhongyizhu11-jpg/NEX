@@ -90,16 +90,18 @@ Agent 配置文件位于 `/etc/forwardx/agent/config.json`，日志目录位于 
 
 ## mimic 环境检测
 
-mimic 是基于 eBPF 的 UDP 混淆方案（来自 [hack3ric/mimic](https://github.com/hack3ric/mimic)，GPL-2.0-only，当前版本 v0.7.1），需要满足特定的内核与权限条件。面板会自动检测每台主机的 mimic 运行环境，并在主机列表中显示检测结果：
+mimic 是基于 eBPF 的 UDP 混淆方案（来自 [hack3ric/mimic](https://github.com/hack3ric/mimic)，GPL-2.0-only，当前版本 v0.7.1），需要 Linux 6.1+ 内核和能编译内核模块的头文件。Agent 每次心跳检测 mimic 命令和内核模块，结果在 **主机详情 › mimic UDP 混淆** 里：
 
-| 状态 | 含义 |
-|------|------|
-| 支持 | 内核版本 ≥ 6.1，XDP 入站和 TC 出站 eBPF 钩子可用，可正常使用 mimic |
-| 内核版本不足 | 当前内核版本低于 6.1，不支持所需的 eBPF 特性 |
-| eBPF 不可用 | 系统未加载必要的 eBPF 模块或缺少相应权限 |
-| 未检测 | Agent 版本过旧或检测尚未完成 |
+| 状态 | 含义 | 怎么办 |
+|------|------|------|
+| 就绪 · vX.Y.Z | 命令和内核模块都在，可以开 mimic | — |
+| 未安装 | 机器上没有 `mimic` 命令 | 点「安装 mimic」 |
+| 内核模块缺失 | 命令在、当前内核没有模块（多半是内核升级后 DKMS 没重编，或缺 `linux-headers-$(uname -r)`） | Agent 会先自己试 `dkms autoinstall`；不行就点「修复 mimic」，日志里会写明缺什么 |
+| 内核模块加载失败 | 模块编出来了但 `modprobe` 失败（Secure Boot / MOK 签名等） | 看日志，按提示处理后点「修复」 |
+| 系统不支持 | 非 Linux | — |
+| 未检测 | Agent 版本过旧或还没上报 | 升级 Agent |
 
-如果需要使用 mimic UDP 混淆功能，请确保主机内核版本不低于 Linux 6.1，并确认 XDP 入站和 TC 出站 eBPF 功能可用。Agent 会在 XDP `native` 与 `skb` 模式之间自动回退，无需在面板手动切换。
+一键安装 / 修复需要 Agent 2.2.223 以上：面板把安装脚本下发给 Agent 在机器上跑（Debian / Ubuntu 用上游预编译包，其它发行版源码编译），每几秒回传进度，装完重新检测。隧道编辑里开 mimic 时也会按参与主机列出同样的状态和按钮。Agent 会在 XDP `native` 与 `skb` 模式之间自动回退，无需在面板手动切换。
 
 ## IPv6 检测
 

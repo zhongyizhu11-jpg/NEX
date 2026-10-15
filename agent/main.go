@@ -38,7 +38,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.222"
+var Version = "2.2.223"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -980,6 +980,7 @@ type heartbeatResp struct {
 	LookingGlassTests       []lookingGlassTask       `json:"lookingGlassTests"`
 	Iperf3Tasks             []iperf3Task             `json:"iperf3Tasks"`
 	PluginTasks             []pluginAgentTask        `json:"pluginTasks"`
+	MimicInstallTask        *mimicInstallTask        `json:"mimicInstallTask,omitempty"`
 	AgentUpgrade            *agentUpgrade            `json:"agentUpgrade"`
 	StateSignatures         map[string]string        `json:"stateSignatures,omitempty"`
 	RequestLocalState       bool                     `json:"requestLocalState,omitempty"`
@@ -3938,6 +3939,8 @@ func mimicEnvironment(force bool) mimicEnvironmentReport {
 	}, runMimicEnvironmentCommand)
 	mimicEnvironmentCached = report
 	mimicEnvironmentCheckedAt = time.Now()
+	// 命令在、模块不在：多半是内核升级后 DKMS 没重编，自己试一次（mimic_install.go）
+	maybeAutoRepairMimicModule(report)
 	return report
 }
 
@@ -4258,6 +4261,9 @@ func heartbeat(cfg Config, forceReconcile ...bool) (heartbeatResult, error) {
 	}
 	for _, task := range resp.PluginTasks {
 		enqueuePluginAgentTask(cfg, task)
+	}
+	if resp.MimicInstallTask != nil {
+		go handleMimicInstallTask(cfg, *resp.MimicInstallTask)
 	}
 	if resp.RequestLocalState {
 		requestLocalRuntimeStateUpload()

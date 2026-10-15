@@ -1,3 +1,4 @@
+import { MIMIC_TARGET_VERSION } from "./mimicInstallTasks";
 import { APP_VERSION } from "./_core/systemRouter";
 import { FXP_MIN_WIRE_VERSION } from "../shared/versions";
 import { FXP_HANDSHAKE_V3_MARKER } from "../shared/fxpRuntime";
@@ -321,7 +322,7 @@ export function generateInstallScript(defaultPanelUrl: string, options: AgentIns
     `PANEL_MIGRATION_STARTED_AT="${panelMigrationStartedAt}"`,
     'FORWARDX_INSTALL_MIMIC="${FORWARDX_INSTALL_MIMIC:-ask}"',
     'FORWARDX_MIMIC_INSTALLER_URL="${FORWARDX_MIMIC_INSTALLER_URL:-https://raw.githubusercontent.com/zhongyizhu11-jpg/NEX/main/scripts/install-mimic.sh}"',
-    'FORWARDX_MIMIC_VERSION="${FORWARDX_MIMIC_VERSION:-0.7.1}"',
+    `FORWARDX_MIMIC_VERSION="\${FORWARDX_MIMIC_VERSION:-${MIMIC_TARGET_VERSION}}"`,
     // Realm v2.9.6's default GNU build requires a newer glibc than many
     // supported distributions. Keep the known-compatible release as the
     // default; operators can opt into another release explicitly.
@@ -979,18 +980,18 @@ export function generateInstallScript(defaultPanelUrl: string, options: AgentIns
     '    0|false|FALSE|no|NO|n|N|off|OFF) echo "[信息] 已跳过 mimic UDP 混淆环境安装"; return 0 ;;',
     '  esac',
     '  echo "[可选] mimic UDP 混淆需要在参与链路的 Agent 主机安装 mimic/mimic-dkms ${FORWARDX_MIMIC_VERSION#v}。"',
-    '  echo "[可选] 默认不安装；需要使用该功能时请输入 Y。"',
+    '  echo "[可选] 默认安装（装不上不影响 Agent）；不需要可输入 n 跳过，之后也能在面板主机详情里一键安装。"',
     '  if [ -r /dev/tty ] && exec 3<>/dev/tty; then',
-    '    printf "是否安装 mimic UDP 混淆环境？[y/N]: " >&3',
+    '    printf "是否安装 mimic UDP 混淆环境？[Y/n]: " >&3',
     '    IFS= read -r ANSWER <&3 || ANSWER=""',
     '    exec 3>&-',
     '  else',
-    '    echo "[信息] 当前没有交互终端，按默认 n 跳过 mimic 安装"',
-    '    return 0',
+    '    echo "[信息] 当前没有交互终端，按默认安装 mimic（FORWARDX_INSTALL_MIMIC=no 可跳过）"',
+    '    ANSWER="y"',
     '  fi',
     '  case "$ANSWER" in',
-    '    Y|y|YES|yes) install_mimic_optional || echo "[警告] mimic 安装失败；需要使用 mimic UDP 混淆时，请稍后手动安装 mimic/mimic-dkms" ;;',
-    '    *) echo "[信息] 已跳过 mimic UDP 混淆环境安装" ;;',
+    '    N|n|NO|no) echo "[信息] 已跳过 mimic UDP 混淆环境安装；之后可在面板主机详情里一键安装" ;;',
+    '    *) install_mimic_optional || echo "[警告] mimic 安装失败；之后可在面板主机详情里一键安装 / 修复，或手动安装 mimic/mimic-dkms" ;;',
     '  esac',
     '}',
     '',

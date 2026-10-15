@@ -17,6 +17,8 @@ concurrency:
 jobs:
   release-panel:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.release.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -93,7 +95,8 @@ jobs:
             scripts/install-panel-local.sh \
             scripts/install-panel-docker.sh \
             scripts/migrate-agent-legacy.sh \
-            scripts/fetch-client-logos.mjs
+            scripts/fetch-client-logos.mjs \
+            scripts/install-mimic.sh
           cp ".release/${BUNDLE}" "dist/panel/${BUNDLE}"
           ls -lh "dist/panel/${BUNDLE}"
 
@@ -137,6 +140,30 @@ jobs:
             attempt=$((attempt + 1))
             delay=$((delay * 2))
           done
+
+  # 手动在 main 上跑这个工作流时，标签是上面用 GITHUB_TOKEN 建的；GitHub 不会因为这种标签触发
+  # 其它工作流的 push: tags，于是 Agent / APK / IPA 永远不会自己跑，Release 里缺文件，面板上的
+  # 下载链接 404（2.3.433～2.3.435 就是这么缺的）。这里直接在新标签上把它们 dispatch 起来。
+  # 推标签触发的那次不用管：三个工作流自己就会跑。
+  dispatch-release-builds:
+    needs: release-panel
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch Agent / Android APK / iOS IPA builds on the release tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.release-panel.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh workflow run release-agent.yml --ref "$RELEASE_TAG"
+          gh workflow run android-apk.yml --ref "$RELEASE_TAG" -f build_type=release
+          gh workflow run ios-ipa.yml --ref "$RELEASE_TAG"
+          echo "Dispatched release-agent / android-apk / ios-ipa on $RELEASE_TAG"
 
   docker-image:
     needs: release-panel
