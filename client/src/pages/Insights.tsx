@@ -12,9 +12,10 @@ import CountryRuleTab from "@/features/ops/firewall/CountryRuleTab";
 import NotFound from "@/pages/NotFound";
 
 /*
-  监控（第五套主题「朱砂」专属，借鉴 Rosélune 的 Monitor + Access 两页）：
+  监控（借鉴 Rosélune 的 Monitor + Access 两页）：
   谁在连、发生了什么、机器安不安全、挡了谁。一页五个分段，每段一个独立组件，
-  各自在 client/src/features/ops/ 里。别的主题下这一页不存在（侧栏没有入口，直接打开是 404）。
+  各自在 client/src/features/ops/ 里。运维功能入口关着时这一页不存在（侧栏没有入口，直接打开是 404），
+  开关在 features/ops/useOpsFeatures.ts；2.3.437 起所有主题都开。
 */
 const INSIGHTS_TABS = ["online", "events", "security", "blocked", "countries"] as const;
 type InsightsTab = typeof INSIGHTS_TABS[number];

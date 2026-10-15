@@ -58,3 +58,21 @@ test("saved forward group without template rules remains idle", () => {
   assert.equal(summary.status, "idle");
   assert.equal(summary.expectedRuleCount, 0);
 });
+
+test("多台入口的端口转发：每台入口算一个托管监听，少一台在跑就是 degraded（2 / 3）", () => {
+  const summary = summarizeForwardGroupRuntime({
+    group: { id: 4, groupMode: "port", isEnabled: true },
+    members: [{ id: 41, hostId: 401, isEnabled: true }, { id: 42, hostId: 402, isEnabled: true }, { id: 43, hostId: 403, isEnabled: true }],
+    templateRules: [{ id: 400, isEnabled: true, pendingDelete: false }],
+    childRules: [
+      { id: 4001, hostId: 401, forwardGroupRuleId: 400, forwardGroupMemberId: 41, isEnabled: true, isRunning: true },
+      { id: 4002, hostId: 402, forwardGroupRuleId: 400, forwardGroupMemberId: 42, isEnabled: true, isRunning: true },
+      { id: 4003, hostId: 403, forwardGroupRuleId: 400, forwardGroupMemberId: 43, isEnabled: true, isRunning: false },
+    ],
+  });
+  assert.equal(summary.status, "degraded");
+  assert.equal(summary.expectedRuleCount, 3);
+  assert.equal(summary.runningRuleCount, 2);
+  assert.equal(summary.failedRuleCount, 1);
+  assert.deepEqual(summary.ruleStatuses.map((item) => [item.templateRuleId, item.status, item.runningRuleCount, item.expectedRuleCount]), [[400, "degraded", 2, 3]]);
+});

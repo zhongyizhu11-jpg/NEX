@@ -4628,7 +4628,9 @@ function RulesContent() {
     const mode = forwardGroupModeOf(group);
     const billingText = isTrafficBillingForwardGroup(group) ? " / 按量计费资源" : "";
     if (isForwardChainGroup(group) || mode === "port") {
-      return [getForwardGroupSelectName(group), formatTrafficMultiplier((group as any)?.trafficMultiplier)].join(" / ") + billingText;
+      const memberCount = Number(group?.members?.length || 0);
+      const entryText = mode === "port" && memberCount > 1 ? ` / ${memberCount} 台入口` : "";
+      return [getForwardGroupSelectName(group), formatTrafficMultiplier((group as any)?.trafficMultiplier)].join(" / ") + entryText + billingText;
     }
     return `${getForwardGroupSelectName(group)} / ${getForwardGroupKindLabel(group)} / ${group?.members?.length || 0} 成员${billingText}`;
   };
@@ -4749,9 +4751,9 @@ function RulesContent() {
         <span className="min-w-0 truncate">{getForwardGroupSelectName(group)}</span>
         {(isForwardChainGroup(group) || mode === "port") && renderTrafficMultiplierBadge((group as any).trafficMultiplier)}
         {renderTrafficBillingResourceBadge(isTrafficBillingForwardGroup(group))}
-        {mode === "failover" && (
+        {(mode === "failover" || (mode === "port" && memberCount > 1)) && (
           <span className="shrink-0 rounded border border-border/50 bg-background/60 px-1.5 py-0.5 text-[11px] leading-none text-muted-foreground">
-            {memberCount} 成员
+            {memberCount} {mode === "port" ? "台入口" : "成员"}
           </span>
         )}
         <span className="sr-only">{getForwardGroupStatusText(group)}</span>
@@ -5767,9 +5769,11 @@ function RulesContent() {
         }
         return Number(a.priority || 0) - Number(b.priority || 0);
       });
+    // 多台入口的端口转发（2.3.437 起）每台都在监听，入口地址全列出来；转发组只列当前生效的那台。
+    const listAllMembers = forwardGroupModeOf(group) === "port" && members.length > 1;
     for (const member of members) {
       pushMemberEntryAddresses(rows, member);
-      if (rows.length > 0) return rows;
+      if (rows.length > 0 && !listAllMembers) return rows;
     }
     return rows;
   };

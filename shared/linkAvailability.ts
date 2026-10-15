@@ -104,6 +104,8 @@ export function resolveLinkAvailability(input: {
   hostsLoaded: boolean;
   requiredNodes?: AvailabilityNode[];
   alternativeNodeSets?: AlternativeNodeSet[];
+  /** 备选集合里有主机离线时的那句话；默认按「备用主机」说，多入口的端口转发不是备用关系，自己给。 */
+  degradedMessage?: string;
 }, now = Date.now()): LinkAvailabilityResult {
   if (!input.enabled) return result("disabled", "config", `${input.label}已停用`);
   if (input.configurationValid === false) {
@@ -145,7 +147,7 @@ export function resolveLinkAvailability(input: {
   }
 
   if (hasUnavailableAlternative) {
-    return result("degraded", "hosts", `${input.label}可用，部分备用主机离线`, usableHostIds);
+    return result("degraded", "hosts", input.degradedMessage || `${input.label}可用，部分备用主机离线`, usableHostIds);
   }
   return result("available", "hosts", `${input.label}包含的主机均在线`, usableHostIds);
 }
@@ -387,13 +389,21 @@ export function buildLinkAvailabilityIndex(input: {
         alternativeNodeSets: alternatives,
       }, now);
     } else if (mode === "port") {
+      /*
+        端口转发挂 1 台入口主机时那台是必经的；挂多台（2.3.437 起）时每台各自监听、互不依赖，
+        有一台在线就能用，有的离线算「部分入口离线」—— 别因为一台掉线把整条资源判成不可用，
+        规则页会跟着把规则画成红的。
+      */
+      const entryNodes = Array.from(memberNodes.values());
       state = resolveLinkAvailability({
         label: "端口转发",
         enabled: group?.isEnabled !== false,
-        configurationValid: members.length === 1 && memberNodes.size === 1,
-        configurationMessage: "端口转发需要一台所属主机",
+        configurationValid: members.length >= 1 && memberNodes.size === members.length,
+        configurationMessage: "端口转发需要至少一台入口主机",
         hostsLoaded,
-        requiredNodes: Array.from(memberNodes.values()),
+        ...(entryNodes.length > 1
+          ? { alternativeNodeSets: [{ label: "端口转发入口", nodes: entryNodes }], degradedMessage: "端口转发可用，部分入口主机离线" }
+          : { requiredNodes: entryNodes }),
       }, now);
     } else {
       let candidates = members;

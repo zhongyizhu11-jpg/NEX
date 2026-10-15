@@ -616,8 +616,8 @@ export function normalizePersonalizationCardStyle(value: unknown): Personalizati
             参考 Rosélune 面板的 Romance（design/losantos-settings-2026-10-11/）。
 
     cinnabar 朱砂 —— 参考 Rosélune 的 Umbrella：素白纸面、几乎直角（3px）的卡和控件、标签全大写加宽字距、
-            页面标题前一枚朱红菱形、每节顶线左端一段朱红短线、页顶一条细斜纹。只有这套主题下才出现
-            「监控」页和那批借鉴来的运维功能入口（见 client/src/features/ops/）；设置开着的功能换主题后照常生效。
+            页面标题前一枚朱红菱形、每节顶线左端一段朱红短线、页顶一条细斜纹。2.3.425 ～ 2.3.436 只有这套
+            主题下才出现「监控」页和那批借鉴来的运维功能入口（见 client/src/features/ops/），2.3.437 起所有主题都有。
 
     liquid-glass 液态玻璃 —— 照 freetodo/monitor-theme-liquid-glass（Apple Liquid Glass）搬过来：页面后面两张大幅圆角
             照片错落铺着（默认随机拉，设了壁纸就用壁纸），卡片是真毛玻璃（白 45% + 白边 + backdrop 模糊 28px），
@@ -637,7 +637,7 @@ export const PERSONALIZATION_UI_THEMES = [
   { id: "aurora", name: "极光", description: "彩色柔光底 + 半透明玻璃卡 + 胶囊控件，顶栏和标签栏更通透；深色是深蓝黑底上的微光。" },
   { id: "gilt", name: "墨金", description: "米白纸底、平贴的小圆角卡纸，数字放在米色带上；衬线标题、金色下划线分段、方标签筛选；深色是墨黑配金。" },
   { id: "rose", name: "玫瑰", description: "胭脂粉底、无边线的浮起白瓣卡，数字嵌在托盘里；斜体衬线标题、细线空槽分段、全药丸；设置页改为编号分节。" },
-  { id: "cinnabar", name: "朱砂", description: "素白纸面、3px 小方角、朱红短线和菱形标记，标签全大写加宽字距；带「监控」页和一整套运维功能（状态可用率、地区规则、IP 封禁、在线 IP、安全巡检、API 与 MCP……）。" },
+  { id: "cinnabar", name: "朱砂", description: "素白纸面、3px 小方角、朱红短线和菱形标记，标签全大写加宽字距，一份技术规格书的样子。" },
   { id: "liquid-glass", name: "液态玻璃", description: "Apple Liquid Glass：页面后面两张随机照片（设了壁纸就用壁纸），卡片是真毛玻璃、鼠标移上去跟着亮一团光，浮着的玻璃顶栏、胶囊玻璃按钮、Apple 蓝选中态；深色是压暗的照片。" },
   { id: "indigo", name: "靛蓝", description: "冷灰底托纯白细线卡、靛蓝平色控件、系统字；读数粗黑、底下一根细进度条，像一块监控大屏；深色是蓝黑。照 monitor-probe 的 HEX 主题。" },
 ] as const;

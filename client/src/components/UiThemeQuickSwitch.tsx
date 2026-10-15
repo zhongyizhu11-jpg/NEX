@@ -50,10 +50,11 @@ export function UiThemeQuickSwitch({ className }: { className?: string }) {
   /*
     管理员：顶栏调色盘和设置 › 个性化 › 界面主题是同一个值（2.3.436 用户要求「完全同步」）。
     这里一选就存成站点主题，设置页、别的设备跟着变；先把两份缓存改掉让页面当场换，存失败再撤回。
-    顺手清掉这台设备以前在这里选过的「只给自己」那一套，不然它会盖过刚存的站点主题。
+    顺手清掉这台设备以前在这里选过的「只给自己」那一套，不然它会盖过刚存的站点主题；存失败连它一起放回去。
   */
   const selectSiteTheme = (id: string) => {
     const next = normalizePersonalizationUiTheme(id);
+    const previousOverride = override;
     setUiThemeOverride(null);
     const previous = siteTheme;
     utils.system.publicInfo.setData(undefined, (old: any) => (old ? { ...old, personalizationUiTheme: next } : old));
@@ -68,6 +69,7 @@ export function UiThemeQuickSwitch({ className }: { className?: string }) {
         onError: (error) => {
           utils.system.publicInfo.setData(undefined, (old: any) => (old ? { ...old, personalizationUiTheme: previous } : old));
           utils.system.getSettings.setData(undefined, (old: any) => (old ? { ...old, personalizationUiTheme: previous } : old));
+          if (previousOverride) setUiThemeOverride(previousOverride);
           toast.error(error.message || "界面主题保存失败");
         },
       },
