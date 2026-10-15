@@ -75,8 +75,10 @@ test("液态玻璃参数：越界的数字夹回范围，坏值回到出厂", as
   assert.deepEqual(normalizeLiquidGlassConfig(undefined), DEFAULT_LIQUID_GLASS);
   assert.deepEqual(normalizeLiquidGlassConfig("not json"), DEFAULT_LIQUID_GLASS);
   assert.deepEqual(
-    normalizeLiquidGlassConfig({ photoSource: "builtin", wash: 95, darkOpacity: "55", blur: -3, sheen: false }),
-    { photoSource: "builtin", wash: 80, darkOpacity: 55, blur: 0, sheen: false },
+    normalizeLiquidGlassConfig({ photoSource: "builtin", wash: 95, darkOpacity: "55", blur: -3, sheen: false, layout: "full" }),
+    { photoSource: "builtin", wash: 80, darkOpacity: 55, blur: 0, sheen: false, layout: "full" },
   );
-  assert.deepEqual(normalizeLiquidGlassConfig(JSON.stringify({ photoSource: "moon", blur: 12.4 })), { ...DEFAULT_LIQUID_GLASS, blur: 12 });
+  assert.deepEqual(normalizeLiquidGlassConfig(JSON.stringify({ photoSource: "moon", blur: 12.4, layout: "grid" })), { ...DEFAULT_LIQUID_GLASS, blur: 12 });
+  // 2.3.433 存下来的配置没有 layout：读出来是 auto
+  assert.equal(normalizeLiquidGlassConfig({ photoSource: "wallpaper" }).layout, "auto");
 });

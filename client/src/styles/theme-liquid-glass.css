@@ -11,6 +11,7 @@
     1. 底   两张大幅圆角照片错落铺在页面后面（左那张靠上、右那张靠下），每张外面一圈白边、一层大影，
             图上压一层很淡的径向彩色柔光。照片由 LiquidGlassBackdrop.tsx 画：默认每次打开随机拉两张
             （picsum.photos，和预览站一样），用户在「背景图」里设了壁纸就用那张；拉不到图退回一组渐变色块。
+            只有一张图（用的是自定义背景）或屏幕窄时铺满全屏一张，见下面 data-layout="full"。
             深色下照片压到 40%，底是 #111318。
     2. 卡   白 45% + 1px 白 65% 边 + 卡顶一条内高光 + backdrop 模糊 28px、提饱和 180%、提亮 8%；
             鼠标移上去卡里跟着光标亮一团白光（--fx-sheen-x/y 由 LiquidGlassBackdrop.tsx 写，只在有鼠标的设备上）。
@@ -245,6 +246,26 @@ html[data-ui-theme="liquid-glass"] .setup-shell { background: transparent; }
 .dark .fx-lg-photo::after { background: linear-gradient(to top, color-mix(in srgb, var(--fx-l0-page) 40%, transparent) 0%, transparent 50%); }
 .dark .fx-lg-photo:nth-child(1)::before { background: linear-gradient(to right, transparent 0%, transparent 60%, color-mix(in srgb, var(--fx-l0-page) 50%, transparent) 100%); }
 .dark .fx-lg-photo:nth-child(2)::before { background: linear-gradient(to left, transparent 0%, transparent 60%, color-mix(in srgb, var(--fx-l0-page) 50%, transparent) 100%); }
+/*
+  铺满全屏（data-layout="full"）：只有一张照片，盖住整个视口，没有边距、圆角、白边和影子；
+  朝中间那道渐隐也去掉（那是给错落两张用的），只留底部渐隐和白雾。
+  高度用 100lvh：iOS Safari 收起地址栏后视口变高，按小视口算会在底下露一条页面底色。
+*/
+.fx-lg-backdrop[data-layout="full"] { bottom: auto; height: 100vh; height: 100lvh; }
+.fx-lg-backdrop[data-layout="full"] .fx-lg-backdrop-wings { gap: 0; padding: 0; }
+.fx-lg-backdrop[data-layout="full"] .fx-lg-photo,
+.fx-lg-backdrop[data-layout="full"] .fx-lg-photo:nth-child(1) {
+  top: 0;
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+.fx-lg-backdrop[data-layout="full"] .fx-lg-photo::before { content: none; }
+
 @media (max-width: 767px) {
   .fx-lg-backdrop-wings { gap: 16px; padding: 0 8px; }
   .fx-lg-photo { height: 85vh; border-radius: 32px; }

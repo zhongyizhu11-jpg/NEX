@@ -302,6 +302,7 @@ const personalizationLiquidGlassSchema = z.object({
   darkOpacity: z.number().min(10).max(100).optional(),
   blur: z.number().min(0).max(40).optional(),
   sheen: z.boolean().optional(),
+  layout: z.enum(["auto", "full", "wings"]).optional(),
 });
 const githubAcceleratorUrlSchema = z.string().trim().max(256);
 const mysqlDatabaseConfigInput = z.object({

@@ -19,6 +19,10 @@ import { applyLiquidGlassVars, clearLiquidGlassVars, LIQUID_GLASS_PREVIEW_EVENT,
                 （hover: hover + pointer: fine），触屏一次都不跑；设置里关了就不挂。pointermove 只写三个
                 自定义属性、不读布局（getBoundingClientRect 在进卡时读一次缓存起来），一帧之内合并成一次。
 
+  照片布局（设置里的「照片布局」）：一张图铺满全屏（data-layout="full"，没有边距和圆角），还是两张左右错落
+  （"wings"）。「自动」下只有一张图（用的是自定义背景）或屏幕窄就铺满，两张不同的照片在宽屏上才错落 ——
+  2.3.433 只有错落一种，设了一张壁纸时同一张图并排出现两遍、两边还露着页面底色（用户 2026-10-15 反馈）。
+
   白雾 / 深色照片亮度 / 模糊三个数字由 lib/liquidGlass.ts 写到 <html> 上，CSS 读。设置页拨旋钮时广播一份
   草稿（setLiquidGlassPreview），这里优先按草稿画。
 */
@@ -26,6 +30,7 @@ import { applyLiquidGlassVars, clearLiquidGlassVars, LIQUID_GLASS_PREVIEW_EVENT,
 const PHOTO_PROVIDER = "https://picsum.photos";
 const SEED_STORAGE_KEY = "forwardx-liquid-glass-seed";
 const SHEEN_MEDIA = "(hover: hover) and (pointer: fine)";
+const NARROW_MEDIA = "(max-width: 767px)";
 const SHEEN_TARGETS = '.workspace-main [data-slot="card"], .fx-card-face, .fx-summary, .auth-card-surface';
 
 function readSeed(): number {
@@ -128,6 +133,19 @@ function useCursorSheen(enabled: boolean) {
   }, [enabled]);
 }
 
+function useNarrowScreen() {
+  const [narrow, setNarrow] = useState(() => typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia(NARROW_MEDIA).matches);
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
+    const media = window.matchMedia(NARROW_MEDIA);
+    const sync = () => setNarrow(media.matches);
+    sync();
+    media.addEventListener("change", sync);
+    return () => media.removeEventListener("change", sync);
+  }, []);
+  return narrow;
+}
+
 function useLiquidGlassPreview() {
   const [preview, setPreview] = useState<LiquidGlassConfig | null>(() => readLiquidGlassPreview());
   useEffect(() => {
@@ -149,6 +167,7 @@ export default function LiquidGlassBackdrop() {
   });
   const seed = useMemo(() => readSeed(), []);
   const preview = useLiquidGlassPreview();
+  const narrow = useNarrowScreen();
   const config = useMemo(
     () => preview ?? normalizeLiquidGlassConfig((data as any)?.personalizationLiquidGlass),
     [preview, data],
@@ -167,20 +186,28 @@ export default function LiquidGlassBackdrop() {
   const customUrl = String(background?.effectiveUrl || "");
   const wallpaper = backgroundSource !== "none" && urlType !== "video" && customUrl ? customUrl : null;
   const random: [string, string] = [randomPhotoUrl(seed, 1), randomPhotoUrl(seed, 2)];
-  let sources: [string | null, string | null];
+  /* 这一套照片：一张（自定义背景）还是两张不同的（随机 / 内置壁纸）。不放照片时是空的，只剩渐变色块 */
+  let photos: string[];
   switch (config.photoSource) {
-    case "random": sources = random; break;
-    case "wallpaper": sources = [wallpaper, wallpaper]; break;
-    case "builtin": sources = builtinPair(seed); break;
-    case "none": sources = [null, null]; break;
-    default: sources = wallpaper ? [wallpaper, wallpaper] : random;
+    case "random": photos = random; break;
+    case "wallpaper": photos = wallpaper ? [wallpaper] : []; break;
+    case "builtin": photos = builtinPair(seed); break;
+    case "none": photos = []; break;
+    default: photos = wallpaper ? [wallpaper] : random;
   }
+  const full = config.layout === "full" || (config.layout === "auto" && (photos.length < 2 || narrow));
 
   return (
-    <div className="fx-lg-backdrop" aria-hidden="true">
+    <div className="fx-lg-backdrop" data-layout={full ? "full" : "wings"} aria-hidden="true">
       <div className="fx-lg-backdrop-wings">
-        <Photo src={sources[0]} />
-        <Photo src={sources[1]} />
+        {full ? (
+          <Photo src={photos[0] ?? null} />
+        ) : (
+          <>
+            <Photo src={photos[0] ?? null} />
+            <Photo src={photos[1] ?? photos[0] ?? null} />
+          </>
+        )}
       </div>
     </div>
   );
