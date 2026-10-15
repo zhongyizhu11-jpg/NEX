@@ -3360,9 +3360,32 @@ function PersonalizationSettingsSection() {
     setCustomSidebarPages(normalizeCustomSidebarPages((settings as any).customSidebarPages));
   }, []);
 
+  /*
+    什么时候把表单按库里的值重灌：只在个性化那几项的**内容**变了时，不是 settings 对象一换就灌
+    —— 查询重取、顶栏调色盘改完主题写缓存都会换对象，原来一换就把没保存的页面底色、首页
+    HTML、自定义页面全冲掉（Codex 在 #120 指出）。界面主题单独跟：顶栏选了就同步到这里的
+    下拉和「已保存」值，别的字段的草稿不动。
+  */
+  const personalizationSnapshot = settings
+    ? JSON.stringify([
+      settings.siteTitle, settings.siteLogoDataUrl, (settings as any).personalizationTheme,
+      (settings as any).personalizationPageTint, (settings as any).personalizationCardStyle,
+      (settings as any).personalizationLiquidGlass, settings.homepageEnabled, settings.homepageCustomEnabled,
+      settings.homepageHtml, (settings as any).personalizationBackgroundConfig, settings.personalizationBackground,
+      (settings as any).customSidebarPages,
+    ])
+    : null;
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
   useEffect(() => {
-    if (settings) loadPersonalizationFromSettings(settings);
-  }, [settings, loadPersonalizationFromSettings]);
+    if (settingsRef.current) loadPersonalizationFromSettings(settingsRef.current);
+  }, [personalizationSnapshot, loadPersonalizationFromSettings]);
+  const settingsUiTheme = settings ? normalizePersonalizationUiTheme((settings as any).personalizationUiTheme) : null;
+  useEffect(() => {
+    if (!settingsUiTheme) return;
+    setUiTheme(settingsUiTheme);
+    setSavedUiTheme(settingsUiTheme);
+  }, [settingsUiTheme]);
 
   const updateSettingsMutation = trpc.system.updateSettings.useMutation({
     onSuccess: async () => {
