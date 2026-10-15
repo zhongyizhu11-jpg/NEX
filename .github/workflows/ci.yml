@@ -5,6 +5,9 @@ on:
   push:
     branches:
       - main
+  # 手动补跑：GitHub 偶尔不给 PR 发 pull_request 事件（2026-10-15 #121 两次推送都没起 CI），
+  # 这时在分支上手动触发一次，不用靠空提交。
+  workflow_dispatch:
 
 permissions:
   contents: read
