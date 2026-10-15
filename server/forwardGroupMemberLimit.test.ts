@@ -34,3 +34,8 @@ test("端口转发也能挂 1 到上限台入口主机（poouo/Forwardx#15：多
   assert.throws(() => normalizeForwardGroupMembers("port", "host", members(0)), /1-\d+ 台入口主机/);
   assert.throws(() => normalizeForwardGroupMembers("port", "host", members(MAX_FORWARD_GROUP_MEMBERS + 1)), /1-\d+ 台入口主机/);
 });
+
+test("端口转发挂了入口组（externalEntry）可以不放自己的成员", () => {
+  assert.deepEqual(normalizeForwardGroupMembers("port", "host", [], { externalEntry: true }), []);
+  assert.throws(() => normalizeForwardGroupMembers("port", "host", []), /1-\d+ 台入口主机/);
+});

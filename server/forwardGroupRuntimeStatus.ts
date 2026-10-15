@@ -37,6 +37,12 @@ function expectedChildIdentities(group: any, members: any[], entryMembers: any[]
   const mode = normalizeGroupMode(group);
   const activeMembers = members.filter((member) => enabled(member?.isEnabled) && positiveId(member?.id) > 0);
   if (mode === "entry" || mode === "exit") return new Set<string>();
+  // 端口转发挂了入口组：入口组每台启用的主机一个托管监听，子规则记的是入口组成员 id
+  if (mode === "port" && positiveId(group?.entryGroupId) > 0) {
+    return new Set(entryMembers
+      .filter((member) => enabled(member?.isEnabled) && positiveId(member?.id) > 0)
+      .map((member) => `member:${positiveId(member.id)}`));
+  }
   if (mode !== "chain") return new Set(activeMembers.map((member) => `member:${positiveId(member.id)}`));
 
   const identities = new Set(activeMembers.map((member) => (

@@ -394,12 +394,22 @@ export function buildLinkAvailabilityIndex(input: {
         有一台在线就能用，有的离线算「部分入口离线」—— 别因为一台掉线把整条资源判成不可用，
         规则页会跟着把规则画成红的。
       */
-      const entryNodes = Array.from(memberNodes.values());
+      const entryGroupId = Number(group?.entryGroupId || 0);
+      const entryGroup = entryGroupId > 0 ? groupById.get(entryGroupId) : null;
+      const entryGroupUsable = !!entryGroup && entryGroup.isEnabled !== false && normalizeGroupMode(entryGroup) === "entry";
+      // 挂了入口组（2.3.438 起）：入口就是入口组里的主机
+      const entryNodes = entryGroupId > 0
+        ? (entryGroupUsable ? endpointHostMembers(entryGroup, hostById, tunnelById).map((member: any) => hostNode(Number(member.hostId))) : [])
+        : Array.from(memberNodes.values());
       state = resolveLinkAvailability({
         label: "端口转发",
         enabled: group?.isEnabled !== false,
-        configurationValid: members.length >= 1 && memberNodes.size === members.length,
-        configurationMessage: "端口转发需要至少一台入口主机",
+        configurationValid: entryGroupId > 0
+          ? entryGroupUsable && entryNodes.length > 0
+          : members.length >= 1 && memberNodes.size === members.length,
+        configurationMessage: entryGroupId > 0
+          ? (!entryGroup ? "关联入口组不存在" : !entryGroupUsable ? "关联入口组已停用" : "入口组没有已启用主机")
+          : "端口转发需要至少一台入口主机",
         hostsLoaded,
         ...(entryNodes.length > 1
           ? { alternativeNodeSets: [{ label: "端口转发入口", nodes: entryNodes }], degradedMessage: "端口转发可用，部分入口主机离线" }

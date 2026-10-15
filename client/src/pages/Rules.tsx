@@ -2915,7 +2915,9 @@ function RulesContent() {
     return Number(rule.hostId || 0);
   }, [forwardGroupById, tunnelById]);
   const availableForwardGroups = useMemo(
-    () => (forwardGroups || []).filter((group: any) => isSelectableForwardRuleGroup(group) && group.isEnabled && (group.members || []).length > 0),
+    // 挂了入口组的端口转发（2.3.438 起）自己没有成员，入口是入口组里的主机
+    () => (forwardGroups || []).filter((group: any) => isSelectableForwardRuleGroup(group) && group.isEnabled
+      && ((group.members || []).length > 0 || (forwardGroupModeOf(group) === "port" && Number(group.entryGroupId || 0) > 0))),
     [forwardGroups]
   );
   const availablePortForwardGroups = useMemo(
@@ -4628,7 +4630,7 @@ function RulesContent() {
     const mode = forwardGroupModeOf(group);
     const billingText = isTrafficBillingForwardGroup(group) ? " / 按量计费资源" : "";
     if (isForwardChainGroup(group) || mode === "port") {
-      const memberCount = Number(group?.members?.length || 0);
+      const memberCount = mode === "port" ? forwardGroupDisplayMembers(group).length : Number(group?.members?.length || 0);
       const entryText = mode === "port" && memberCount > 1 ? ` / ${memberCount} 台入口` : "";
       return [getForwardGroupSelectName(group), formatTrafficMultiplier((group as any)?.trafficMultiplier)].join(" / ") + entryText + billingText;
     }
@@ -4744,7 +4746,7 @@ function RulesContent() {
   };
   const renderForwardGroupSelectLabel = (group: any) => {
     const mode = forwardGroupModeOf(group);
-    const memberCount = Number(group?.members?.length || 0);
+    const memberCount = mode === "port" ? forwardGroupDisplayMembers(group).length : Number(group?.members?.length || 0);
     return (
       <span className="inline-flex min-w-0 items-center gap-2" title={`${getForwardGroupStatusText(group)} / ${getForwardGroupSelectText(group)}`}>
         {renderForwardGroupSelectStatusDot(group)}
@@ -5751,9 +5753,28 @@ function RulesContent() {
     pushUniqueEntryAddress(rows, "入口", member?.entryAddress);
   };
 
+  /** 挂了入口组的端口转发（2.3.438 起）：入口是入口组里的主机。 */
+  const portEntryGroupOf = (group: any | null | undefined) => {
+    if (!group || forwardGroupModeOf(group) !== "port" || Number(group.entryGroupId || 0) <= 0) return null;
+    const entryGroup = forwardGroupById.get(Number(group.entryGroupId)) || group.entryGroup || null;
+    return entryGroup && forwardGroupModeOf(entryGroup) === "entry" ? entryGroup : null;
+  };
+  /** 资源下拉、规则卡上当作入口来数 / 来画的成员：挂了入口组就是入口组的主机。 */
+  const forwardGroupDisplayMembers = (group: any | null | undefined): any[] => {
+    const entryGroup = portEntryGroupOf(group);
+    return entryGroup ? enabledHostMembers(entryGroup) : (group?.members || []);
+  };
+
   const getForwardGroupEntryAddresses = (group: any | null | undefined): EntryAddress[] => {
     if (!group) return [];
     const rows: EntryAddress[] = [];
+    const portEntryGroup = portEntryGroupOf(group);
+    if (portEntryGroup) {
+      const entryDomain = String(portEntryGroup.domain || "").trim();
+      if (entryDomain) pushUniqueEntryAddress(rows, "入口组", entryDomain);
+      for (const member of enabledHostMembers(portEntryGroup)) pushMemberEntryAddresses(rows, member);
+      return rows;
+    }
     const domain = String(group?.domain || "").trim();
     if (domain) {
       pushUniqueEntryAddress(rows, getForwardGroupRouteLabel(group), domain);
@@ -7586,12 +7607,13 @@ function RulesContent() {
                   {renderInlineLinkBody(form.routeMode)}
                   {selectedForwardGroup && (
                     <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                      {(selectedForwardGroup.members || []).slice(0, 4).map((member: any, index: number) => (
+                      {portEntryGroupOf(selectedForwardGroup) && <span>入口组 · {String(portEntryGroupOf(selectedForwardGroup)?.name || "")}</span>}
+                      {forwardGroupDisplayMembers(selectedForwardGroup).slice(0, 4).map((member: any, index: number) => (
                         <span key={member.id} className="rounded bg-background/60 px-1.5 py-0.5">
                           {index + 1}. {getForwardGroupMemberLabel(member)}
                         </span>
                       ))}
-                      {(selectedForwardGroup.members || []).length > 4 && <span>+{(selectedForwardGroup.members || []).length - 4}</span>}
+                      {forwardGroupDisplayMembers(selectedForwardGroup).length > 4 && <span>+{forwardGroupDisplayMembers(selectedForwardGroup).length - 4}</span>}
                     </div>
                   )}
                 </div>

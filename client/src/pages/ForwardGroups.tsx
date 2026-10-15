@@ -1499,7 +1499,7 @@ export function ForwardGroupsContent({
     const supportsSwitchNotify = isFailoverMode || isEntryGroup;
     if (!form.name.trim()) return toast.error(isPortMode ? "请填写端口转发名称" : isChainGroup ? "请填写转发链名称" : "请填写组名称");
     if (isPortMode) {
-      if (form.members.length < 1 || form.members.length > MAX_FORWARD_GROUP_MEMBERS) return toast.error(`端口转发需要选择 1-${MAX_FORWARD_GROUP_MEMBERS} 台入口主机`);
+      if (!form.entryGroupId && (form.members.length < 1 || form.members.length > MAX_FORWARD_GROUP_MEMBERS)) return toast.error(`端口转发需要选择 1-${MAX_FORWARD_GROUP_MEMBERS} 台入口主机，或者挂一个入口组`);
     } else if (isChainGroup) {
       const minChainMembers = form.entryGroupId ? 1 : 2;
       if (form.members.length < minChainMembers || form.members.length > MAX_FORWARD_GROUP_MEMBERS) {
@@ -1566,7 +1566,7 @@ export function ForwardGroupsContent({
       ...form,
       name: form.name.trim(),
       remark: null,
-      entryGroupId: isChainGroup ? form.entryGroupId || null : null,
+      entryGroupId: isChainGroup || isPortMode ? form.entryGroupId || null : null,
       groupType: "host" as const,
       exitStrategy: isExitGroup ? normalizeExitGroupStrategy(form.exitStrategy) : "round_robin",
       domain: isFailoverMode || isEntryGroup ? form.domain.trim() || null : null,
@@ -1598,7 +1598,8 @@ export function ForwardGroupsContent({
       bandwidthAggregationStrategy: normalizeBandwidthAggregationStrategy(form.bandwidthAggregationStrategy),
       bandwidthAggregationSlots: normalizeAggregationRecordSlots(form.bandwidthAggregationSlots),
       bandwidthAggregationMinMembers: normalizeAggregationMinMembers(form.bandwidthAggregationMinMembers),
-      members: form.members.map((member, index) => ({
+      // 端口转发挂了入口组：入口全由入口组定，不带自己的成员
+      members: (isPortMode && form.entryGroupId ? [] : form.members).map((member, index) => ({
         memberType: member.memberType,
         hostId: member.hostId,
         tunnelId: member.tunnelId,
@@ -1849,6 +1850,39 @@ export function ForwardGroupsContent({
    */
   const renderGroupMembers = (group: any) => {
     const members = Array.isArray(group.members) ? group.members : [];
+    if (normalizeGroupMode(group.groupMode) === "port" && Number(group.entryGroupId || 0) > 0) {
+      // 挂了入口组（2.3.438 起）：入口是入口组里的主机，画入口组的名字和它的成员
+      const entryGroup = groupsByMode.entry.find((item: any) => Number(item.id) === Number(group.entryGroupId));
+      const entryMembers = entryGroup
+        ? (entryGroup.members || []).filter((member: any) => member.memberType === "host" && member.isEnabled !== false)
+        : [];
+      return (
+        <div className="space-y-1.5">
+          <div className="text-meta text-muted-foreground">入口组 · {entryGroupDisplayText(group, groupsByMode)}</div>
+          {!entryGroup ? (
+            <span className="text-meta text-[var(--fx-warn-text)]">入口组不存在或不可见</span>
+          ) : entryMembers.length === 0 ? (
+            <span className="text-meta text-muted-foreground">入口组没有已启用主机</span>
+          ) : (
+            <div className="flex flex-wrap gap-1.5">
+              {entryMembers.map((member: any, index: number) => (
+                <span
+                  key={member.id}
+                  className="inline-flex max-w-full items-center gap-1 rounded-[var(--fx-radius-control)] border px-1.5 py-0.5 text-meta"
+                  style={isGroupMemberActive(entryGroup, member)
+                    ? { color: "var(--fx-healthy-text)", backgroundColor: "var(--fx-healthy-soft)", borderColor: "var(--fx-healthy-soft)" }
+                    : { color: "var(--fx-text-secondary)", backgroundColor: "transparent", borderColor: "var(--fx-stroke-base)" }}
+                  title={memberHealthTitle(entryGroup, member)}
+                >
+                  {renderMemberConfigIcon(entryGroup, member)}
+                  <span className="truncate">{index + 1}. {memberLabel(member)}</span>
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
     if (members.length === 0) {
       return <span className="text-meta text-muted-foreground">暂无成员</span>;
     }
@@ -2245,7 +2279,7 @@ export function ForwardGroupsContent({
                         {renderTableMembersSummary(group)}
                       </TableCell>
                       <TableCell className="hidden max-w-[16rem] py-3 md:table-cell">
-                        <div className="line-clamp-1 text-sm">{normalizeGroupMode(group.groupMode) === "port" ? ((group.members || []).length > 1 ? `${(group.members || []).length} 台入口主机` : (group.members || []).length ? memberLabel((group.members || [])[0]) : "未选择") : normalizeGroupMode(group.groupMode) === "chain" ? chainEntryText(group) : normalizeGroupMode(group.groupMode) === "exit" ? `${(group.members || []).length} 台出口主机` : group.domain || "未配置域名"}</div>
+                        <div className="line-clamp-1 text-sm">{normalizeGroupMode(group.groupMode) === "port" ? (Number(group.entryGroupId || 0) > 0 ? `入口组 · ${entryGroupDisplayText(group, groupsByMode)}` : (group.members || []).length > 1 ? `${(group.members || []).length} 台入口主机` : (group.members || []).length ? memberLabel((group.members || [])[0]) : "未选择") : normalizeGroupMode(group.groupMode) === "chain" ? chainEntryText(group) : normalizeGroupMode(group.groupMode) === "exit" ? `${(group.members || []).length} 台出口主机` : group.domain || "未配置域名"}</div>
                         <div className="mt-1 line-clamp-1 text-xs text-muted-foreground">{normalizeGroupMode(group.groupMode) === "port" ? "转发规则中直接选择" : normalizeGroupMode(group.groupMode) === "chain" ? "规则使用时监听入口端口" : normalizeGroupMode(group.groupMode) === "exit" ? "隧道出口组" : group.lastDdnsValue || "未切换"}</div>
                       </TableCell>
                       <TableCell className="hidden py-3 md:table-cell">{normalizeGroupMode(group.groupMode) === "chain" ? renderChainLatencySummary(group) : isCollectionMode(normalizeGroupMode(group.groupMode)) ? (normalizeGroupMode(group.groupMode) === "entry" ? "固定入口" : "固定出口") : Number(group.templateRuleCount || 0)}</TableCell>
@@ -2531,9 +2565,12 @@ export function ForwardGroupsContent({
               </>
             )}
 
-            {form.groupMode === "chain" && (
+            {(form.groupMode === "chain" || form.groupMode === "port") && (
               <FormField className="space-y-2">
-                <Label>入口组</Label>
+                <Label>{form.groupMode === "port" ? "入口组（可选）" : "入口组"}</Label>
+                {form.groupMode === "port" && (
+                  <p className="text-xs text-muted-foreground">挂上入口组就用组里的主机当入口，隧道 / 转发链共用同一个组，组里加减主机这里自动跟着变；不挂就在下面指定主机。</p>
+                )}
                 <Select
                   value={form.entryGroupId ? String(form.entryGroupId) : "none"}
                   onValueChange={(value) => setForm((prev) => applyEntryGroupToChainForm(prev, value === "none" ? null : Number(value)))}
@@ -2542,7 +2579,7 @@ export function ForwardGroupsContent({
                     <SelectValue placeholder="选择已保存入口组" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="none">不使用入口组</SelectItem>
+                    <SelectItem value="none">{form.groupMode === "port" ? "不使用入口组，指定主机" : "不使用入口组"}</SelectItem>
                     {usableEntryGroups.length === 0 ? (
                       <div className="px-2 py-4 text-center text-xs text-muted-foreground">暂无可用入口组</div>
                     ) : usableEntryGroups.map((group: any) => (
@@ -2687,7 +2724,7 @@ export function ForwardGroupsContent({
               poouo/Forwardx#15）：每台都同时监听规则的入口端口、转到同一个目标，所以没有「启用」
               开关那一列 —— 不想让哪台转就把它移掉。
             */}
-            {(
+            {!(form.groupMode === "port" && form.entryGroupId) && (
               <div className={form.groupMode === "chain" ? "space-y-2" : "space-y-3 rounded-lg border border-border/60 p-3"}>
                 <Label>{form.groupMode === "chain" ? "链路主机顺序" : form.groupMode === "port" || form.groupMode === "entry" ? "入口主机" : form.groupMode === "exit" ? "出口主机" : "成员优先级"}</Label>
                 {form.groupMode === "port" && (

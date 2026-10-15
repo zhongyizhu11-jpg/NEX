@@ -76,3 +76,19 @@ test("多台入口的端口转发：每台入口算一个托管监听，少一�
   assert.equal(summary.failedRuleCount, 1);
   assert.deepEqual(summary.ruleStatuses.map((item) => [item.templateRuleId, item.status, item.runningRuleCount, item.expectedRuleCount]), [[400, "degraded", 2, 3]]);
 });
+
+test("挂了入口组的端口转发：托管监听按入口组的主机数，子规则记的是入口组成员 id", () => {
+  const summary = summarizeForwardGroupRuntime({
+    group: { id: 5, groupMode: "port", entryGroupId: 9, isEnabled: true },
+    members: [],
+    entryMembers: [{ id: 91, hostId: 901, isEnabled: true }, { id: 92, hostId: 902, isEnabled: true }, { id: 93, hostId: 903, isEnabled: false }],
+    templateRules: [{ id: 500, isEnabled: true, pendingDelete: false }],
+    childRules: [
+      { id: 5001, hostId: 901, forwardGroupRuleId: 500, forwardGroupMemberId: 91, isEnabled: true, isRunning: true },
+      { id: 5002, hostId: 902, forwardGroupRuleId: 500, forwardGroupMemberId: 92, isEnabled: true, isRunning: true },
+    ],
+  });
+  assert.equal(summary.status, "running");
+  assert.equal(summary.expectedRuleCount, 2);
+  assert.equal(summary.runningRuleCount, 2);
+});

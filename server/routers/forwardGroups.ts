@@ -84,7 +84,8 @@ const baseSchema = z.object({
   bandwidthAggregationMinMembers: z.number().int().min(1).max(5).optional().default(1),
   autoFailback: z.boolean().default(true),
   isEnabled: z.boolean().default(true),
-  members: z.array(memberSchema).min(1),
+  // 端口转发挂了入口组时可以没有自己的成员，下限由 service 按形态判
+  members: z.array(memberSchema),
 });
 
 async function assertForwardGroupAccess(
