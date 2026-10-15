@@ -828,6 +828,16 @@ function assertNoDirectSelfForwardLoop(options: {
   }
 }
 
+/**
+ * 挂在转发组 / 端口转发上的规则，每台入口主机都要查一遍死循环：端口转发能挂多台入口（2.3.437 起）
+ * 或入口组后，目标可能正好是第二台入口自己，只查默认那台（第一台）就漏了（Codex 在 #121 指出）。
+ */
+async function assertNoGroupSelfForwardLoop(groupId: number, options: { sourcePort: number; targetIp: unknown; targetPort: number }) {
+  for (const hostId of await db.getForwardGroupRuleEntryHostIds(groupId)) {
+    assertNoDirectSelfForwardLoop({ host: await db.getHostById(hostId), ...options, tunnelId: null });
+  }
+}
+
 function normalizeLockedForwardType(value: unknown) {
   const parsed = forwardTypeSchema.safeParse(String(value || ""));
   return parsed.success ? parsed.data : "iptables";
@@ -1976,14 +1986,7 @@ export const crudRulesRouter = router({
         requireForwardTypeAllowedForActor(ctx.user, forwardType);
         const groupIsTunnel = !isForwardChain && (group as any).groupType === "tunnel";
         if (!isForwardChain && !groupIsTunnel) {
-          const host = await db.getHostById(hostId);
-          assertNoDirectSelfForwardLoop({
-            host,
-            sourcePort,
-            targetIp: input.targetIp,
-            targetPort: input.targetPort,
-            tunnelId: null,
-          });
+          await assertNoGroupSelfForwardLoop(forwardGroupId, { sourcePort, targetIp: input.targetIp, targetPort: input.targetPort });
         }
         const groupTunnelSupportsFailover = groupIsTunnel ? await forwardGroupTunnelMembersSupportMainBackup(group) : true;
         const groupSupportsFailover = !isForwardChain && routeGroupForwardTypeSupported(forwardType) && (!groupIsTunnel || groupTunnelSupportsFailover);
@@ -2516,13 +2519,10 @@ export const crudRulesRouter = router({
         await requireRuleProtocolEnabled({ ...rule, forwardType: nextForwardType, tunnelId: null });
         const activeHostId = await db.getForwardGroupDefaultHostId(activeGroupId);
         if (!isForwardChain && !groupIsTunnel) {
-          const host = await db.getHostById(activeHostId);
-          assertNoDirectSelfForwardLoop({
-            host,
+          await assertNoGroupSelfForwardLoop(activeGroupId, {
             sourcePort: Number(input.sourcePort ?? (rule as any).sourcePort),
             targetIp: input.targetIp ?? (rule as any).targetIp,
             targetPort: Number(input.targetPort ?? (rule as any).targetPort),
-            tunnelId: null,
           });
         }
         const clearable = mergeFailoverClearableFields(input, rule);
@@ -2667,13 +2667,10 @@ export const crudRulesRouter = router({
         await requireRuleProtocolEnabled({ ...rule, forwardType: nextForwardType, tunnelId: null });
         const hostId = await db.getForwardGroupDefaultHostId(groupId);
         if (!isForwardChain && (group as any).groupType !== "tunnel") {
-          const host = await db.getHostById(hostId);
-          assertNoDirectSelfForwardLoop({
-            host,
+          await assertNoGroupSelfForwardLoop(groupId, {
             sourcePort,
             targetIp: input.targetIp ?? (rule as any).targetIp,
             targetPort: Number(input.targetPort ?? (rule as any).targetPort),
-            tunnelId: null,
           });
         }
         const data: any = {

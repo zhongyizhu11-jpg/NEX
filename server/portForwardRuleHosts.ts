@@ -32,6 +32,10 @@ export function portForwardTemplateHostRepairs(rows: PortForwardTemplateHostRow[
   return repairs;
 }
 
+/**
+ * 端口转发的模板规则 hostId 钉在第一台入口主机上（模板不下发，这个字段只给显示和删主机时的引用检查看）。
+ * 挂了入口组（2.3.438 起）的端口转发自己没有成员，第一台就取入口组里第一台启用的主机。
+ */
 export async function repairPortForwardRuleHostReferences(groupIdValue?: unknown) {
   const groupId = Number(groupIdValue || 0);
   const q = quoteIdentifier;
@@ -46,10 +50,12 @@ export async function repairPortForwardRuleHostReferences(groupIdValue?: unknown
         m.${q("priority")} AS ${q("memberPriority")}
        FROM ${q("forward_rules")} r
        INNER JOIN ${q("forward_groups")} g ON g.${q("id")} = r.${q("forwardGroupId")}
-       INNER JOIN ${q("forward_group_members")} m ON m.${q("groupId")} = g.${q("id")}
+       INNER JOIN ${q("forward_group_members")} m
+          ON m.${q("groupId")} = CASE WHEN COALESCE(g.${q("entryGroupId")}, 0) > 0 THEN g.${q("entryGroupId")} ELSE g.${q("id")} END
       WHERE g.${q("groupMode")} = 'port'
         AND m.${q("memberType")} = 'host'
         AND m.${q("hostId")} IS NOT NULL
+        AND (COALESCE(g.${q("entryGroupId")}, 0) = 0 OR m.${q("isEnabled")} = ${boolLiteral(true)})
         AND r.${q("isForwardGroupTemplate")} = ${boolLiteral(true)}
         AND r.${q("pendingDelete")} = ${boolLiteral(false)}${groupFilter}
       ORDER BY r.${q("id")} ASC, m.${q("priority")} ASC, m.${q("id")} ASC`,
