@@ -45,10 +45,15 @@ export const dashboardRouter = router({
      */
     health: protectedProcedure.query(async ({ ctx }) => {
       const scope = dashboardScopeUserId(ctx.user);
+      /*
+        不给过期值：这个缓存是「过期后先返回旧值、后台再算」，一个人每隔几秒拉一次时，每次拿到的
+        都是上一次轮询时算的那份，首页「需要关注」比主机页、规则页慢一整轮（2.3.435 前是 15～30 秒，
+        用户反馈「没有实时更新」）。只留 2 秒的新鲜期，给同时打开首页的几个人合并成一次查询。
+      */
       return cachedDashboardQuery(
         `health:${dashboardScopeCacheKey(scope)}`,
-        5_000,
-        30_000,
+        2_000,
+        0,
         () => db.getDashboardHealth(scope),
       );
     }),

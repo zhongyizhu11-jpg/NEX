@@ -65,6 +65,7 @@ html[data-ui-theme="liquid-glass"] {
   --fx-lg-card: rgb(255 255 255 / 45%);
   --fx-lg-card-stroke: rgb(255 255 255 / 65%);
   --fx-lg-card-stroke-hover: rgb(255 255 255 / 90%);
+  --fx-lg-divider: rgb(20 30 50 / 9%);
   /* 三个数字由设置 › 个性化 › 液态玻璃给（client/src/lib/liquidGlass.ts 写到 <html> 上），没给就是预览站的值 */
   --fx-lg-blur: blur(var(--fx-lg-blur-px, 28px)) saturate(180%) brightness(1.08);
   --fx-lg-blur-light: blur(calc(var(--fx-lg-blur-px, 28px) * 0.6)) saturate(160%) brightness(1.06);
@@ -122,6 +123,7 @@ html.dark[data-ui-theme="liquid-glass"] {
   --fx-lg-card: rgb(255 255 255 / 5%);
   --fx-lg-card-stroke: rgb(255 255 255 / 10%);
   --fx-lg-card-stroke-hover: rgb(255 255 255 / 20%);
+  --fx-lg-divider: rgb(255 255 255 / 10%);
   --fx-lg-blur: blur(calc(var(--fx-lg-blur-px, 28px) * 1.15)) saturate(190%);
   --fx-lg-blur-light: blur(calc(var(--fx-lg-blur-px, 28px) * 0.5)) saturate(160%);
   --fx-lg-highlight: inset 0 1px 1px rgb(255 255 255 / 15%);
@@ -372,14 +374,31 @@ html[data-ui-theme="liquid-glass"] .fx-overview-card[data-slot="card"] {
   -webkit-backdrop-filter: var(--fx-lg-blur-light);
   backdrop-filter: var(--fx-lg-blur-light);
 }
-html[data-ui-theme="liquid-glass"] .fx-overview-card .system-health-verdict { border-top-color: var(--fx-lg-card-stroke); }
+/*
+  概览卡里那条统计（主机 / 线路 / 转发 / 连接）本来就嵌在卡里：上面那条给所有 .fx-summary 套玻璃卡的规则
+  会给它再画一圈直角白框、一层白底和模糊，格间线也是白的（2.3.435 用户手机截图）。这里撤掉，只留格间
+  一道很淡的细线；下面「几处需要关注」那条分隔线同样用淡线。
+*/
+html[data-ui-theme="liquid-glass"] .fx-overview-card .fx-summary,
+html[data-ui-theme="liquid-glass"] .fx-overview-card .fx-summary:hover {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+/* 格间竖线不顶到卡片的边框：上下各收进来，只陪着字（padding 换成 margin，线的长度就是内容的高度） */
+html[data-ui-theme="liquid-glass"] .fx-overview-card .fx-summary-cell { margin-block: 12px; padding-block: 0; }
+html[data-ui-theme="liquid-glass"] .fx-overview-card .system-health-verdict { border-top-color: var(--fx-lg-divider); }
 html[data-ui-theme="liquid-glass"] .fx-overview-canvas { border: 1px solid var(--fx-lg-card-stroke); background: var(--fx-overview-canvas); }
 /* 卡里的读数格（CPU / 内存 / 磁盘）：更淡的一层玻璃；进度槽是预览站那种细白槽 */
 html[data-ui-theme="liquid-glass"] .fx-host-spec { background: var(--fx-l2-group); box-shadow: inset 0 0 0 1px rgb(255 255 255 / 45%); }
 html.dark[data-ui-theme="liquid-glass"] .fx-host-spec { box-shadow: inset 0 0 0 1px rgb(255 255 255 / 6%); }
 html[data-ui-theme="liquid-glass"] .fx-host-spec-bar { background: rgb(20 30 50 / 8%); }
 html.dark[data-ui-theme="liquid-glass"] .fx-host-spec-bar { background: rgb(255 255 255 / 12%); }
-html[data-ui-theme="liquid-glass"] .fx-summary-cell + .fx-summary-cell { border-left-color: var(--fx-lg-card-stroke); }
+html[data-ui-theme="liquid-glass"] .fx-summary-cell + .fx-summary-cell { border-left-color: var(--fx-lg-divider); }
 
 /* ── 3. 外壳 ─────────────────────────────────────────────────── */
 /* 顶栏：一枚浮在页面上的玻璃条，离边 12px，滚起来停在离顶 8px 的地方 */

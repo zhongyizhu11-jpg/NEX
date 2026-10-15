@@ -74,8 +74,13 @@ function DashboardContent() {
     { refetchInterval: pollingInterval("slow"), staleTime: 25000, placeholderData: (previousData) => previousData },
   );
 
+  /*
+    顶上那几个数和「需要关注」：5 秒一刷（原来 15 秒，加上服务端先给旧值，实际慢半分钟），
+    切回这个标签页时立刻再拉一次 —— 手机上切出去处理完再回来，列表应该已经是新的。
+  */
   const { data: health, isLoading: healthLoading, refetch: refetchHealth } = trpc.dashboard.health.useQuery(undefined, {
-    refetchInterval: pollingInterval("normal"),
+    refetchInterval: pollingInterval("fast"),
+    refetchOnWindowFocus: "always",
     placeholderData: (previousData) => previousData,
   });
 
