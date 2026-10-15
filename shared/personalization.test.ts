@@ -58,9 +58,10 @@ test("卡片风格：四选一，默认彩色描边", async () => {
   assert.equal(normalizePersonalizationCardStyle(""), "edge");
 });
 
-test("界面主题：经典 / 极光 / 墨金 / 玫瑰 / 朱砂 / 靛蓝 六选一，默认经典", async () => {
+test("界面主题：经典 / 极光 / 墨金 / 玫瑰 / 朱砂 / 液态玻璃 / 靛蓝七选一，默认经典", async () => {
   const { normalizePersonalizationUiTheme, PERSONALIZATION_UI_THEMES } = await import("./personalization");
-  assert.deepEqual(PERSONALIZATION_UI_THEMES.map((theme) => theme.id), ["classic", "aurora", "gilt", "rose", "cinnabar", "indigo"]);
+  assert.deepEqual(PERSONALIZATION_UI_THEMES.map((theme) => theme.id), ["classic", "aurora", "gilt", "rose", "cinnabar", "liquid-glass", "indigo"]);
+  assert.equal(normalizePersonalizationUiTheme("liquid-glass"), "liquid-glass");
   assert.equal(normalizePersonalizationUiTheme("indigo"), "indigo");
   assert.equal(normalizePersonalizationUiTheme("hex"), "classic");
   assert.equal(normalizePersonalizationUiTheme("rose"), "rose");
@@ -69,4 +70,15 @@ test("界面主题：经典 / 极光 / 墨金 / 玫瑰 / 朱砂 / 靛蓝 六选�
   assert.equal(normalizePersonalizationUiTheme("classic"), "classic");
   assert.equal(normalizePersonalizationUiTheme("neon"), "classic");
   assert.equal(normalizePersonalizationUiTheme(undefined), "classic");
+});
+
+test("液态玻璃参数：越界的数字夹回范围，坏值回到出厂", async () => {
+  const { normalizeLiquidGlassConfig, DEFAULT_LIQUID_GLASS } = await import("./personalization");
+  assert.deepEqual(normalizeLiquidGlassConfig(undefined), DEFAULT_LIQUID_GLASS);
+  assert.deepEqual(normalizeLiquidGlassConfig("not json"), DEFAULT_LIQUID_GLASS);
+  assert.deepEqual(
+    normalizeLiquidGlassConfig({ photoSource: "builtin", wash: 95, darkOpacity: "55", blur: -3, sheen: false }),
+    { photoSource: "builtin", wash: 80, darkOpacity: 55, blur: 0, sheen: false },
+  );
+  assert.deepEqual(normalizeLiquidGlassConfig(JSON.stringify({ photoSource: "moon", blur: 12.4 })), { ...DEFAULT_LIQUID_GLASS, blur: 12 });
 });

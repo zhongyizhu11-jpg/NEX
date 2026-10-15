@@ -21,6 +21,10 @@ newAgentHTTPTransport 建的 Transport，它的 DialContext 就是 agentPanelDia
 「成功」的判定放在连接上：经中转的连接读到了面板回的第一个字节才算通；发出了请求、
 一个字节都没收到就断了（中转连不上面板时就是这样）算失败。只拨通、没用过就被连接池
 关掉的连接不算数。
+中转接下连接就挂断时，Go 的 Transport 是读和写两个 goroutine：读那边可能先于写那边
+拿到 EOF，这时连接上还一个字节都没写。所以 Read 里「一个字节没读到就断了」不要求已经
+写过 —— 一条刚拨通、正要发请求的连接被中转挂断，同样算失败；
+只有 Close 那条（可能是连接池收掉一条没用过的连接）才要求写过。
 
 当前设置写在 /var/lib/forwardx-agent/panel-relay.json，Agent 重启后照样经中转；文件里
 同时写着现在是否真的在用中转（active），FXP 进程上报流量时读的也是它。
@@ -389,9 +393,13 @@ func (c *panelRelayTrackedConn) Read(p []byte) (int, error) {
 	if n > 0 && c.read.Add(int64(n)) == int64(n) && c.reported.CompareAndSwap(false, true) {
 		panelRelay.noteSuccess(time.Now())
 	}
-	if err != nil && n == 0 && c.read.Load() == 0 && c.written.Load() > 0 && !errors.Is(err, net.ErrClosed) {
+	if err != nil && n == 0 && c.read.Load() == 0 && !errors.Is(err, net.ErrClosed) {
 		if c.reported.CompareAndSwap(false, true) {
-			notePanelRelayFailure("中转没有转回面板的回应：" + err.Error())
+			if c.written.Load() > 0 {
+				notePanelRelayFailure("中转没有转回面板的回应：" + err.Error())
+			} else {
+				notePanelRelayFailure("中转接下连接就断开了，请求还没发出：" + err.Error())
+			}
 		}
 	}
 	return n, err
