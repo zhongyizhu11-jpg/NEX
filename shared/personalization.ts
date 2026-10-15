@@ -266,6 +266,162 @@ export const PERSONALIZATION_THEME_PRESETS = [
       sidebarRing: "oklch(0.88 0.11 350)",
     },
   },
+  /*
+    下面五套搬自 monitor-probe 的 HEX 主题（src/styles/tokens.css 的 [data-palette]）：
+    浅色一个沉稳的中间调、深色一个亮一档的同色；它的经典蓝就是「靛蓝」界面主题的出厂色，不单列。
+    它们是普通的强调色预设，任何界面主题下都能选；在「靛蓝」主题下按钮是平色，所以换起来最像原版。
+    id 不叫 forest / rose：forest 已经是「森绿」，rose 是同名的界面主题，所以用 pine / rouge。
+  */
+  {
+    id: "ocean",
+    name: "海洋",
+    description: "青蓝色，取自 monitor-probe 的 HEX 主题：#167e90，深色下是 #74d1df。",
+    swatches: ["#167e90", "color-mix(in srgb, #167e90 12%, white)", "#74d1df"],
+    light: {
+      primary: "#167e90",
+      primaryForeground: "#ffffff",
+      ring: "#167e90",
+      chart1: "#167e90",
+      chart2: "var(--fx-chart-6)",
+      chart3: "var(--fx-chart-7)",
+      chart4: "var(--fx-chart-8)",
+      sidebarPrimary: "#167e90",
+      sidebarPrimaryForeground: "#ffffff",
+      sidebarRing: "#167e90",
+    },
+    dark: {
+      primary: "#74d1df",
+      primaryForeground: "#0b2a30",
+      ring: "#74d1df",
+      chart1: "#74d1df",
+      chart2: "var(--fx-chart-6)",
+      chart3: "var(--fx-chart-7)",
+      chart4: "var(--fx-chart-8)",
+      sidebarPrimary: "#74d1df",
+      sidebarPrimaryForeground: "#0b2a30",
+      sidebarRing: "#74d1df",
+    },
+  },
+  {
+    id: "sunset",
+    name: "落日",
+    description: "砖橙色，取自 monitor-probe 的 HEX 主题：#b65b2c，深色下是 #f5b38c。",
+    swatches: ["#b65b2c", "color-mix(in srgb, #b65b2c 12%, white)", "#f5b38c"],
+    light: {
+      primary: "#b65b2c",
+      primaryForeground: "#ffffff",
+      ring: "#b65b2c",
+      chart1: "#b65b2c",
+      chart2: "var(--fx-chart-6)",
+      chart3: "var(--fx-chart-7)",
+      chart4: "var(--fx-chart-8)",
+      sidebarPrimary: "#b65b2c",
+      sidebarPrimaryForeground: "#ffffff",
+      sidebarRing: "#b65b2c",
+    },
+    dark: {
+      primary: "#f5b38c",
+      primaryForeground: "#30170c",
+      ring: "#f5b38c",
+      chart1: "#f5b38c",
+      chart2: "var(--fx-chart-6)",
+      chart3: "var(--fx-chart-7)",
+      chart4: "var(--fx-chart-8)",
+      sidebarPrimary: "#f5b38c",
+      sidebarPrimaryForeground: "#30170c",
+      sidebarRing: "#f5b38c",
+    },
+  },
+  {
+    id: "pine",
+    name: "森林",
+    description: "松绿色，取自 monitor-probe 的 HEX 主题：#248064，深色下是 #7dd8b4。",
+    swatches: ["#248064", "color-mix(in srgb, #248064 12%, white)", "#7dd8b4"],
+    light: {
+      primary: "#248064",
+      primaryForeground: "#ffffff",
+      ring: "#248064",
+      chart1: "#248064",
+      chart2: "var(--fx-chart-6)",
+      chart3: "var(--fx-chart-7)",
+      chart4: "var(--fx-chart-8)",
+      sidebarPrimary: "#248064",
+      sidebarPrimaryForeground: "#ffffff",
+      sidebarRing: "#248064",
+    },
+    dark: {
+      primary: "#7dd8b4",
+      primaryForeground: "#0c2a20",
+      ring: "#7dd8b4",
+      chart1: "#7dd8b4",
+      chart2: "var(--fx-chart-6)",
+      chart3: "var(--fx-chart-7)",
+      chart4: "var(--fx-chart-8)",
+      sidebarPrimary: "#7dd8b4",
+      sidebarPrimaryForeground: "#0c2a20",
+      sidebarRing: "#7dd8b4",
+    },
+  },
+  {
+    id: "midnight",
+    name: "午夜",
+    description: "蓝紫色，取自 monitor-probe 的 HEX 主题：#7860bb，深色下是 #c2adff。",
+    swatches: ["#7860bb", "color-mix(in srgb, #7860bb 12%, white)", "#c2adff"],
+    light: {
+      primary: "#7860bb",
+      primaryForeground: "#ffffff",
+      ring: "#7860bb",
+      chart1: "#7860bb",
+      chart2: "var(--fx-chart-6)",
+      chart3: "var(--fx-chart-7)",
+      chart4: "var(--fx-chart-8)",
+      sidebarPrimary: "#7860bb",
+      sidebarPrimaryForeground: "#ffffff",
+      sidebarRing: "#7860bb",
+    },
+    dark: {
+      primary: "#c2adff",
+      primaryForeground: "#1c1534",
+      ring: "#c2adff",
+      chart1: "#c2adff",
+      chart2: "var(--fx-chart-6)",
+      chart3: "var(--fx-chart-7)",
+      chart4: "var(--fx-chart-8)",
+      sidebarPrimary: "#c2adff",
+      sidebarPrimaryForeground: "#1c1534",
+      sidebarRing: "#c2adff",
+    },
+  },
+  {
+    id: "rouge",
+    name: "玫红",
+    description: "玫红色，取自 monitor-probe 的 HEX 主题：#b24e77，深色下是 #f2a9c5。",
+    swatches: ["#b24e77", "color-mix(in srgb, #b24e77 12%, white)", "#f2a9c5"],
+    light: {
+      primary: "#b24e77",
+      primaryForeground: "#ffffff",
+      ring: "#b24e77",
+      chart1: "#b24e77",
+      chart2: "var(--fx-chart-6)",
+      chart3: "var(--fx-chart-7)",
+      chart4: "var(--fx-chart-8)",
+      sidebarPrimary: "#b24e77",
+      sidebarPrimaryForeground: "#ffffff",
+      sidebarRing: "#b24e77",
+    },
+    dark: {
+      primary: "#f2a9c5",
+      primaryForeground: "#311220",
+      ring: "#f2a9c5",
+      chart1: "#f2a9c5",
+      chart2: "var(--fx-chart-6)",
+      chart3: "var(--fx-chart-7)",
+      chart4: "var(--fx-chart-8)",
+      sidebarPrimary: "#f2a9c5",
+      sidebarPrimaryForeground: "#311220",
+      sidebarRing: "#f2a9c5",
+    },
+  },
 ] as const;
 
 export type PersonalizationThemePresetId = typeof PERSONALIZATION_THEME_PRESETS[number]["id"];
@@ -469,7 +625,11 @@ export function normalizePersonalizationCardStyle(value: unknown): Personalizati
             Inter 字体、标题和大数字字重 500。深色是 #111318 底上压暗到 40% 的照片。
             照片层和光标跟随在 client/src/components/LiquidGlassBackdrop.tsx。
 
-  画法全在 client/src/styles/theme-aurora.css / theme-gilt.css / theme-rose.css / theme-cinnabar.css / theme-liquid-glass.css 里按 <html data-ui-theme> 选；这里只管 id 和文案。
+    indigo  靛蓝 —— 照 8bitNull 的 monitor-probe 主题 HEX：冷灰底（#f2f3f5）托纯白 1px 细线卡、不投影；强调色是沉稳的
+            靛蓝（#4268aa），按钮是平色、选中态是淡底 + 靛蓝字；整套换成系统字，读数粗黑 + 底下一根细进度条，
+            统计条是「小灰标签 + 26px 大数字」；控件一律 8px 圆角，底部标签栏是贴底通栏条。深色是蓝黑（#121417）。
+
+  画法全在 client/src/styles/theme-aurora.css / theme-gilt.css / theme-rose.css / theme-cinnabar.css / theme-liquid-glass.css / theme-indigo.css 里按 <html data-ui-theme> 选；这里只管 id 和文案。
   存的是 id；别的值一律回到 classic。
 */
 export const PERSONALIZATION_UI_THEMES = [
@@ -479,6 +639,7 @@ export const PERSONALIZATION_UI_THEMES = [
   { id: "rose", name: "玫瑰", description: "胭脂粉底、无边线的浮起白瓣卡，数字嵌在托盘里；斜体衬线标题、细线空槽分段、全药丸；设置页改为编号分节。" },
   { id: "cinnabar", name: "朱砂", description: "素白纸面、3px 小方角、朱红短线和菱形标记，标签全大写加宽字距；带「监控」页和一整套运维功能（状态可用率、地区规则、IP 封禁、在线 IP、安全巡检、API 与 MCP……）。" },
   { id: "liquid-glass", name: "液态玻璃", description: "Apple Liquid Glass：页面后面两张随机照片（设了壁纸就用壁纸），卡片是真毛玻璃、鼠标移上去跟着亮一团光，浮着的玻璃顶栏、胶囊玻璃按钮、Apple 蓝选中态；深色是压暗的照片。" },
+  { id: "indigo", name: "靛蓝", description: "冷灰底托纯白细线卡、靛蓝平色控件、系统字；读数粗黑、底下一根细进度条，像一块监控大屏；深色是蓝黑。照 monitor-probe 的 HEX 主题。" },
 ] as const;
 
 export type PersonalizationUiThemeId = typeof PERSONALIZATION_UI_THEMES[number]["id"];
