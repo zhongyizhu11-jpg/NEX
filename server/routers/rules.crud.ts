@@ -2771,7 +2771,15 @@ export const crudRulesRouter = router({
       await requireRuleProtocolEnabled({ ...rule, forwardType: nextForwardTypeForRule, tunnelId: nextTunnelIdForRule }, selectedTunnelForRule);
       const requestedMainBackupEnabled = input.failoverEnabled ?? (rule as any).failoverEnabled;
       const nextProtocolForRule = input.protocol ?? (rule as any).protocol;
-      const nextMainBackupEnabled = routeChanged ? false : (nextProtocolForRule === "tcp" && nextForwardTypeForRule === "gost" ? requestedMainBackupEnabled : false);
+      // 线路组不卡协议（TCP / UDP / TCP+UDP 都能调度，UDP 按会话，Agent 2.2.199 起）：换了路由就清掉，
+      // 否则——只在转发方式支持线路组（gost / realm / socat / nginx）时保留用户的开关，隧道形态是否允许
+      // 再由下面的 requireMainBackupAllowed 判（和新建同一条）；内核转发（iptables / nftables）的老行里
+      // 可能残留 failoverEnabled，这里把它当成「关」而不是报错——routePolicy.ts 也是这么跟用户说的
+      // （「保存一次时它会被关掉」）。
+      // 2.3.439 前这里卡的是 protocol === "tcp"，表单默认 TCP+UDP，于是每次编辑隧道规则都把线路组悄悄清空。
+      const nextMainBackupEnabled = routeChanged || !routeGroupForwardTypeSupported(nextForwardTypeForRule)
+        ? false
+        : requestedMainBackupEnabled;
       requireMainBackupAllowed({
         enabled: nextMainBackupEnabled,
         protocol: nextProtocolForRule,
