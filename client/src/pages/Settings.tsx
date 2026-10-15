@@ -113,7 +113,6 @@ import {
   SlidersHorizontal,
   Webhook,
 } from "lucide-react";
-import { useOpsFeatures } from "@/features/ops/useOpsFeatures";
 import { OpsAdvancedSettingsPane, OpsBackupExtraSections, OpsTelegramExtraSections, OpsWebhookSettingsPane } from "@/features/ops/slots/SettingsPanes";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useCallback, useMemo, useRef, useState, useEffect } from "react";
@@ -484,8 +483,6 @@ function getMigrationCodeCountdown(code: { expiresAt: number } | null, now: numb
 }
 
 const settingsTabs = ["system", "telegram", "email", "personalization", "backup", "logs", "advanced", "webhook"] as const;
-/** 只在第五套主题「朱砂」下出现的分区（见 client/src/features/ops/useOpsFeatures.ts）。 */
-const opsOnlySettingsTabs = new Set<string>(["advanced", "webhook"]);
 type SettingsTab = typeof settingsTabs[number];
 /**
  * 设置的分组。
@@ -711,12 +708,6 @@ function SettingsContent() {
     defaultValue: "system",
     storageKey: SETTINGS_TAB_STORAGE_KEY,
   });
-  const opsFeatures = useOpsFeatures();
-  // 换回别的主题时，停在「进阶」「Webhook」上的人回到系统配置（这两个分区只有朱砂下有）。
-  useEffect(() => {
-    if (!opsFeatures && opsOnlySettingsTabs.has(activeTab)) setActiveTab("system");
-  }, [opsFeatures, activeTab, setActiveTab]);
-
   useEffect(() => {
     if (user && user.role !== "admin") {
       setLocation("/");
@@ -754,7 +745,7 @@ function SettingsContent() {
   if (user?.role !== "admin") return null;
 
   const activeItem = settingsTabItems.find((tab) => tab.value === activeTab);
-  const visibleSettingsTabItems = settingsTabItems.filter((tab) => opsFeatures || !opsOnlySettingsTabs.has(tab.value));
+  const visibleSettingsTabItems = settingsTabItems;
   /*
     同一份分组画两个地方：手机上的索引页、宽屏左边的分区栏。两处的区别只在
     「选中的那一行要不要标出来、要不要箭头」—— 索引页点进去是下一层（画箭头），

@@ -6,7 +6,7 @@ import WebhookSettings from "../webhook/WebhookSettings";
 import OffsiteBackupSection from "../backup/OffsiteBackupSection";
 import DigestScheduleSection from "../digest/DigestScheduleSection";
 
-/** 设置 › 进阶（第五套主题才有这个分区）：流量用尽处理、维护模式、API 令牌与 MCP。 */
+/** 设置 › 进阶：流量用尽处理、维护模式、API 令牌与 MCP。 */
 export function OpsAdvancedSettingsPane() {
   if (!useOpsFeatures()) return null;
   return (
@@ -18,7 +18,7 @@ export function OpsAdvancedSettingsPane() {
   );
 }
 
-/** 设置 › Webhook（第五套主题才有这个分区）。 */
+/** 设置 › Webhook。 */
 export function OpsWebhookSettingsPane() {
   if (!useOpsFeatures()) return null;
   return <WebhookSettings />;

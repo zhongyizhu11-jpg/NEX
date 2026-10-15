@@ -130,7 +130,7 @@ const mainMenuItems: SidebarNavItem[] = [
 const profileMenuItem: SidebarNavItem = { icon: UserRound, label: "个人资料", path: "/profile", menuKey: "profile" };
 const lookingGlassMenuItem: SidebarNavItem = { icon: Globe2, label: "网络测试", path: "/looking-glass", menuKey: "lookingGlass" };
 const pluginManagementMenuItem: SidebarNavItem = { icon: Puzzle, label: "插件管理", path: "/plugins", menuKey: "plugins" };
-/** 监控：第五套主题「朱砂」专属（见 client/src/features/ops/useOpsFeatures.ts），只给管理员。 */
+/** 监控：那批运维功能的入口页（见 client/src/features/ops/useOpsFeatures.ts），只给管理员。 */
 const insightsMenuItem: SidebarNavItem = { icon: Activity, label: "监控", path: "/insights" };
 
 const adminMenuItems: SidebarNavItem[] = [

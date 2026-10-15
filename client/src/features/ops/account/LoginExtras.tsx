@@ -10,7 +10,7 @@ import { getPasskeyAssertion, passkeyAvailability, passkeyErrorMessage } from ".
 const LOGIN_WELCOME_TOAST_KEY = "forwardx.loginWelcome";
 
 /**
- * 登录页上第五套主题多出来的两样：维护中的提示，和「用通行密钥登录」（#12 / #14）。
+ * 登录页上运维功能多出来的两样：维护中的提示，和「用通行密钥登录」（#12 / #14）。
  *
  * 通行密钥按钮只在能用的时候出现：浏览器支持、https（或 localhost）、不在 App 里。
  * 用的是「可发现凭据」，不用先填用户名 —— 浏览器自己列出这个域名下存过的通行密钥。
