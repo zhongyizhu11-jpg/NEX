@@ -40,6 +40,9 @@ type ManagedChildIntegrityRow = {
   parentPendingDelete: unknown;
   memberExists: unknown;
   memberGroupId: unknown;
+  /** 组的 groupMode / entryGroupId：端口转发挂入口组时子规则记的是入口组的成员 */
+  groupMode?: unknown;
+  groupEntryGroupId?: unknown;
 };
 
 type LegacyMemberRuleRow = {
@@ -115,7 +118,11 @@ function isValidManagedChild(row: ManagedChildIntegrityRow | undefined) {
     && positiveId(row.parentGroupId) === groupId
     && memberId > 0
     && positiveId(row.memberExists) === memberId
-    && positiveId(row.memberGroupId) === groupId;
+    && (
+      positiveId(row.memberGroupId) === groupId
+      // 端口转发挂了入口组（2.3.438 起）：子规则对应的是入口组的成员
+      || (String(row.groupMode || "") === "port" && positiveId(row.groupEntryGroupId) > 0 && positiveId(row.memberGroupId) === positiveId(row.groupEntryGroupId))
+    );
 }
 
 function normalizedText(value: unknown) {
@@ -185,6 +192,8 @@ async function managedChildIntegrity(ruleId: number) {
         r.${q("pendingDelete")} AS ${q("pendingDelete")},
         r.${q("isForwardGroupTemplate")} AS ${q("isTemplate")},
         g.${q("id")} AS ${q("groupExists")},
+        g.${q("groupMode")} AS ${q("groupMode")},
+        g.${q("entryGroupId")} AS ${q("groupEntryGroupId")},
         p.${q("id")} AS ${q("parentExists")},
         p.${q("forwardGroupId")} AS ${q("parentGroupId")},
         p.${q("isForwardGroupTemplate")} AS ${q("parentIsTemplate")},

@@ -89,9 +89,10 @@ export function normalizeForwardGroupMembers(
   const isCollectionGroup = groupMode === "entry" || groupMode === "exit";
   const effectiveGroupType = groupMode === "port" || groupMode === "chain" || isCollectionGroup ? "host" : groupType;
   const minChainMembers = options.externalEntry ? 1 : 2;
-  // 端口转发：一台或多台入口主机，每台都同时监听规则的入口端口、转到同一目标（poouo/Forwardx#15）。
-  if (groupMode === "port" && (members.length < 1 || members.length > MAX_FORWARD_GROUP_MEMBERS)) {
-    throw new Error(`端口转发需要配置 1-${MAX_FORWARD_GROUP_MEMBERS} 台入口主机`);
+  // 端口转发：一台或多台入口主机，每台都同时监听规则的入口端口、转到同一目标（poouo/Forwardx#15）；
+  // 挂了入口组（externalEntry）就不用自己的成员。
+  if (groupMode === "port" && (members.length < (options.externalEntry ? 0 : 1) || members.length > MAX_FORWARD_GROUP_MEMBERS)) {
+    throw new Error(`端口转发需要配置 1-${MAX_FORWARD_GROUP_MEMBERS} 台入口主机，或者挂一个入口组`);
   }
   if (groupMode === "chain" && (members.length < minChainMembers || members.length > MAX_FORWARD_GROUP_MEMBERS)) {
     if (options.externalEntry) throw new Error(`转发链需要配置 1-${MAX_FORWARD_GROUP_MEMBERS} 台主机`);
@@ -190,15 +191,17 @@ async function normalizeForwardGroupInput(input: ForwardGroupInput, userId?: num
   const groupMode: ForwardGroupMode = rawMode === "port" || rawMode === "chain" || rawMode === "entry" || rawMode === "exit" ? rawMode : "failover";
   const isCollectionGroup = groupMode === "entry" || groupMode === "exit";
   const groupType: ForwardGroupType = groupMode === "port" || groupMode === "chain" || isCollectionGroup ? "host" : input.groupType;
-  const entryGroupId = groupMode === "chain" ? Number(input.entryGroupId || 0) || null : null;
+  // 转发链和端口转发（2.3.438 起）都能挂入口组
+  const entryGroupId = groupMode === "chain" || groupMode === "port" ? Number(input.entryGroupId || 0) || null : null;
   await assertEntryGroupReference(entryGroupId, userId, input.isEnabled !== false);
   const domain = groupMode === "entry" || groupMode === "failover" ? input.domain?.trim() || null : null;
   if (groupMode === "entry" && !domain) throw new Error("入口组需要指定入口域名");
   const ddnsAutoResolveEnabled = groupMode === "entry" ? input.ddnsAutoResolveEnabled !== false : true;
   const bandwidthAggregationEnabled = groupMode === "entry" && !!input.bandwidthAggregationEnabled;
   if (groupMode === "entry") await assertDdnsServiceConfiguredForEntryGroup(ddnsAutoResolveEnabled);
-  const members = normalizeForwardGroupMembers(groupMode, groupType, input.members, {
-    externalEntry: groupMode === "chain" && !!entryGroupId,
+  // 端口转发挂了入口组：入口全由入口组定，自己不留成员（界面上也不显示成员列表）
+  const members = normalizeForwardGroupMembers(groupMode, groupType, groupMode === "port" && entryGroupId ? [] : input.members, {
+    externalEntry: (groupMode === "chain" || groupMode === "port") && !!entryGroupId,
   });
   if (groupMode === "exit" && input.isEnabled !== false && !members.some((member) => member.isEnabled !== false)) {
     throw new Error("Enabled exit group must contain at least one enabled host");
@@ -403,7 +406,7 @@ export async function deleteForwardGroupWithImpact(id: number, confirmRules?: bo
     throw new Error(`此转发组仍有关联转发规则 ${impact.forwardRuleCount} 条，请确认后再删除`);
   }
   /*
-    入口组 / 出口组还被隧道或转发链引用时不许删。删了之后那些隧道、转发链的 entryGroupId /
+    入口组 / 出口组还被隧道、转发链或端口转发引用时不许删。删了之后那些隧道、转发链的 entryGroupId /
     exitGroupId 还指着一个不存在的组：下发时回落到隧道自己的入口机照常跑，而恢复规则时
     又把「组不存在」当成「组已停用」—— 规则被打上隧道停用、自愈永远清不掉。先让人把
     引用改掉，比留一堆两边说法不一的隧道好。
@@ -412,7 +415,7 @@ export async function deleteForwardGroupWithImpact(id: number, confirmRules?: bo
   if (references.tunnels.length > 0 || references.chains.length > 0) {
     const names = [
       ...references.tunnels.map((tunnel: any) => `隧道「${tunnel.name || `#${tunnel.id}`}」`),
-      ...references.chains.map((chain: any) => `转发链「${chain.name || `#${chain.id}`}」`),
+      ...references.chains.map((chain: any) => `${String(chain.groupMode || "") === "port" ? "端口转发" : "转发链"}「${chain.name || `#${chain.id}`}」`),
     ];
     throw new Error(`还有 ${names.length} 处在用这个组：${names.slice(0, 5).join("、")}${names.length > 5 ? " 等" : ""}。请先把它们改用别的组或删除，再删这个组`);
   }

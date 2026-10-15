@@ -553,7 +553,9 @@ function supportsChinaHealthMode(mode: ForwardGroupMode) {
 
 function validateForwardGroupModeMembers(groupMode: ForwardGroupMode, groupType: string, members: ForwardGroupMemberInput[], options: { externalEntry?: boolean } = {}) {
   if (groupMode === "port") {
-    if (members.length < 1 || members.length > MAX_FORWARD_GROUP_MEMBERS) throw new Error(`端口转发需要配置 1-${MAX_FORWARD_GROUP_MEMBERS} 台入口主机`);
+    // 挂了入口组就用组里的主机当入口，自己可以不放成员
+    const minMembers = options.externalEntry ? 0 : 1;
+    if (members.length < minMembers || members.length > MAX_FORWARD_GROUP_MEMBERS) throw new Error(`端口转发需要配置 1-${MAX_FORWARD_GROUP_MEMBERS} 台入口主机，或者挂一个入口组`);
     if (String(groupType || "host") !== "host") throw new Error("端口转发仅支持主机成员");
     if (members.some((member) => member.memberType !== "host")) throw new Error("端口转发仅支持主机成员");
   }
@@ -641,6 +643,17 @@ function sortedMembers(group: any, enabledOnly = false) {
   return enabledOnly ? members.filter((member: any) => dbBool(member?.isEnabled)) : members;
 }
 
+/*
+  挂了入口组的转发链 / 端口转发（2.3.438 起端口转发也能挂，poouo/Forwardx#15 要的「入口组复用」）：
+  入口就是组里启用的主机。端口转发挂入口组时自己不放成员，子规则按入口组每台主机各一条，
+  forwardGroupMemberId 记的是入口组的成员 id（forwardGroupRuleIntegrity 认这种）；入口组加减主机
+  会经 refreshForwardGroupReferences → syncChainsUsingEntryGroup 重新铺。
+*/
+async function entryGroupMembersFor(group: any) {
+  const mode = forwardGroupModeOf(group);
+  return mode === "chain" || mode === "port" ? chainEntryMembers(group) : [];
+}
+
 async function chainEntryMembers(group: any) {
   const entryGroupId = Number((group as any)?.entryGroupId || 0);
   if (!entryGroupId) return [] as any[];
@@ -655,7 +668,7 @@ async function syncChainsUsingEntryGroup(entryGroupId: number, options: SyncForw
   const db = await getDb();
   if (!db) return;
   const rows = await db.select({ id: forwardGroups.id }).from(forwardGroups).where(and(
-    eq(forwardGroups.groupMode, "chain"),
+    inArray(forwardGroups.groupMode, ["chain", "port"]),
     eq(forwardGroups.entryGroupId, id),
   ));
   for (const row of rows as any[]) {
@@ -2033,12 +2046,9 @@ export async function getForwardGroupDefaultHostId(groupId: number) {
   if (!group) throw new Error("Forward group does not exist");
   const groupMode = forwardGroupModeOf(group);
   if (isCollectionGroupMode(groupMode)) throw new Error("Entry/exit groups cannot be used directly as forwarding rules");
-  if (groupMode === "chain") {
-    const entryMembers = await chainEntryMembers(group);
-    for (const member of entryMembers) {
-      const hostId = await memberEntryHostId(member);
-      if (hostId) return hostId;
-    }
+  for (const member of await entryGroupMembersFor(group)) {
+    const hostId = await memberEntryHostId(member);
+    if (hostId) return hostId;
   }
   const members = sortedMembers(group);
   for (const member of members) {
@@ -2059,12 +2069,12 @@ export async function getForwardGroupRuleEntryHostIds(groupId: number) {
   const members = sortedMembers(group);
   const enabledMembers = members.filter((member: any) => dbBool(member?.isEnabled));
   const groupMode = forwardGroupModeOf(group);
-  const chainEntries = groupMode === "chain" ? await chainEntryMembers(group) : [];
+  const chainEntries = await entryGroupMembersFor(group);
   // Only the public edge uses the user-selected source port. Downstream chain
   // listeners are allocated independently inside each member's port policy.
   const portMembers = groupMode === "chain"
     ? (chainEntries.length > 0 ? chainEntries : enabledMembers.slice(0, 1))
-    : members;
+    : (chainEntries.length > 0 ? chainEntries : members);
   const hostIds = (await Promise.all(portMembers
     .filter((member: any) => dbBool(member?.isEnabled, true))
     .map((member: any) => memberListenHostIds(member)))).flat();
@@ -2208,10 +2218,10 @@ function candidatePortsForGroup(policy: PortPolicy) {
 export async function forwardGroupEntryPortPolicy(group: any): Promise<PortPolicy> {
   const members = sortedMembers(group);
   const groupMode = forwardGroupModeOf(group);
-  const chainEntries = groupMode === "chain" ? await chainEntryMembers(group) : [];
+  const chainEntries = await entryGroupMembersFor(group);
   const portCheckMembers = groupMode === "chain"
     ? (chainEntries.length > 0 ? chainEntries : members.filter((member: any) => dbBool(member?.isEnabled)).slice(0, 1))
-    : members;
+    : (chainEntries.length > 0 ? chainEntries : members);
   let policy = portPolicyFrom(null);
   for (const member of portCheckMembers) {
     if (!dbBool(member?.isEnabled)) continue;
@@ -2231,10 +2241,10 @@ export async function getForwardGroupEntryPortRange(groupId: number): Promise<{ 
   const group = await getForwardGroupById(groupId);
   if (!group) throw new Error("Forward group does not exist");
   const members = sortedMembers(group, true);
-  if (members.length === 0) throw new Error("Forward group has no enabled members");
   const groupMode = forwardGroupModeOf(group);
   if (isCollectionGroupMode(groupMode)) throw new Error("Entry/exit groups cannot be used directly as forwarding rules");
-  const entryMembers = groupMode === "chain" ? await chainEntryMembers(group) : [];
+  const entryMembers = await entryGroupMembersFor(group);
+  if (members.length === 0 && !(groupMode === "port" && entryMembers.length > 0)) throw new Error("Forward group has no enabled members");
   if (groupMode === "chain" && (members.length < (entryMembers.length > 0 ? 1 : 2) || members.length > MAX_FORWARD_GROUP_MEMBERS)) {
     throw new Error(entryMembers.length > 0
       ? `Port forwarding chain requires 1-${MAX_FORWARD_GROUP_MEMBERS} enabled hosts`
@@ -2244,7 +2254,7 @@ export async function getForwardGroupEntryPortRange(groupId: number): Promise<{ 
   let policy = portPolicyFrom(null);
   const policyMembers = groupMode === "chain"
     ? (entryMembers.length > 0 ? entryMembers : members.slice(0, 1))
-    : members;
+    : (entryMembers.length > 0 ? entryMembers : members);
   for (const member of policyMembers) {
     const entry = await entryPortPolicyForMember(member);
     if (!entry.hostId) throw new Error("Forward group member has no valid entry agent");
@@ -2263,10 +2273,10 @@ export async function findAvailableForwardGroupPort(
   const group = await getForwardGroupById(groupId);
   if (!group) throw new Error("Forward group does not exist");
   const members = sortedMembers(group, true);
-  if (members.length === 0) throw new Error("Forward group has no enabled members");
   const groupMode = forwardGroupModeOf(group);
   if (isCollectionGroupMode(groupMode)) throw new Error("Entry/exit groups cannot be used directly as forwarding rules");
-  const entryMembers = groupMode === "chain" ? await chainEntryMembers(group) : [];
+  const entryMembers = await entryGroupMembersFor(group);
+  if (members.length === 0 && !(groupMode === "port" && entryMembers.length > 0)) throw new Error("Forward group has no enabled members");
   if (groupMode === "chain" && (members.length < (entryMembers.length > 0 ? 1 : 2) || members.length > MAX_FORWARD_GROUP_MEMBERS)) {
     throw new Error(entryMembers.length > 0
       ? `Port forwarding chain requires 1-${MAX_FORWARD_GROUP_MEMBERS} enabled hosts`
@@ -2283,7 +2293,7 @@ export async function findAvailableForwardGroupPort(
 
   const candidateMembers = groupMode === "chain"
     ? (entryMembers.length > 0 ? entryMembers : members.slice(0, 1))
-    : members;
+    : (entryMembers.length > 0 ? entryMembers : members);
   for (const member of candidateMembers) {
     const entry = await entryPortPolicyForMember(member);
     if (!entry.hostId) throw new Error("Forward group member has no valid entry agent");
@@ -2342,11 +2352,12 @@ export async function validateForwardGroupRuleConfig(groupId: number, config: Fo
     throw new Error("Forward group entry port must be 1-65535");
   }
   const members = sortedMembers(group);
-  if (members.length === 0) throw new Error("Forward group has no members");
   const groupMode = forwardGroupModeOf(group);
   if (isCollectionGroupMode(groupMode)) throw new Error("Entry/exit groups cannot be used directly as forwarding rules");
+  const chainEntries = await entryGroupMembersFor(group);
+  if (members.length === 0 && !(groupMode === "port" && chainEntries.length > 0)) throw new Error("Forward group has no members");
   if (groupMode === "port") {
-    if (members.length < 1 || members.length > MAX_FORWARD_GROUP_MEMBERS) throw new Error(`端口转发需要配置 1-${MAX_FORWARD_GROUP_MEMBERS} 台入口主机`);
+    if (chainEntries.length === 0 && (members.length < 1 || members.length > MAX_FORWARD_GROUP_MEMBERS)) throw new Error(`端口转发需要配置 1-${MAX_FORWARD_GROUP_MEMBERS} 台入口主机，或者挂一个入口组`);
     if (String(group.groupType || "host") !== "host") throw new Error("端口转发仅支持主机成员");
     if (members.some((member) => member.memberType !== "host")) throw new Error("端口转发仅支持主机成员");
   }
@@ -2383,10 +2394,9 @@ export async function validateForwardGroupRuleConfig(groupId: number, config: Fo
     }
   }
 
-  const chainEntries = groupMode === "chain" ? await chainEntryMembers(group) : [];
   const portCheckMembers = groupMode === "chain"
     ? (chainEntries.length > 0 ? chainEntries : members.filter((member: any) => dbBool(member?.isEnabled)).slice(0, 1))
-    : members;
+    : (chainEntries.length > 0 ? chainEntries : members);
   const firstChainMember = groupMode === "chain"
     ? members.filter((member: any) => dbBool(member?.isEnabled))[0] || null
     : null;
@@ -2563,7 +2573,7 @@ async function dependentChainGroupIds(entryGroupId: number) {
   const db = await getDb();
   if (!db) return [] as number[];
   const rows = await db.select({ id: forwardGroups.id }).from(forwardGroups).where(and(
-    eq(forwardGroups.groupMode, "chain"),
+    inArray(forwardGroups.groupMode, ["chain", "port"]),
     eq(forwardGroups.entryGroupId, entryGroupId),
   ));
   return (rows as any[]).map((row) => Number(row.id || 0)).filter((id) => id > 0);
@@ -2571,7 +2581,8 @@ async function dependentChainGroupIds(entryGroupId: number) {
 
 async function forwardGroupRuntimeDependenciesEnabled(group: any) {
   if (!dbBool(group?.isEnabled)) return false;
-  if (forwardGroupModeOf(group) !== "chain") return true;
+  const mode = forwardGroupModeOf(group);
+  if (mode !== "chain" && mode !== "port") return true;
   const entryGroupId = Number(group?.entryGroupId || 0);
   if (entryGroupId <= 0) return true;
   const entryGroup = await getForwardGroupById(entryGroupId) as any;
@@ -2803,7 +2814,7 @@ export async function setForwardGroupEnabled(groupId: number, isEnabled: boolean
   if (isEnabled && mode === "exit" && !sortedMembers(group, true).some((member: any) => member?.memberType === "host")) {
     throw new Error("Enabled exit group must contain at least one enabled host");
   }
-  if (isEnabled && mode === "chain" && Number(group.entryGroupId || 0) > 0) {
+  if (isEnabled && (mode === "chain" || mode === "port") && Number(group.entryGroupId || 0) > 0) {
     const entryGroup = await getForwardGroupById(Number(group.entryGroupId)) as any;
     if (!dbBool(entryGroup?.isEnabled) || forwardGroupModeOf(entryGroup) !== "entry") {
       throw new Error("关联入口组未启用，请先开启入口组");
@@ -3400,8 +3411,13 @@ async function syncForwardGroupRulesUnlocked(groupId: number, options: SyncForwa
   const preserveRuntime = !!options.preserveRuntime;
   const activeChainMembers = groupMode === "chain" ? members.filter((member: any) => dbBool(member?.isEnabled)) : members;
 
+  // 端口转发挂了入口组：入口就是入口组里启用的主机，自己的成员列表是空的
+  const portEntryMembers = groupMode === "port" ? await entryGroupMembersFor(group) : [];
+  const fanoutMembers = groupMode === "port" && Number((group as any).entryGroupId || 0) > 0 ? portEntryMembers : members;
   if (groupMode === "port") {
-    if (members.length < 1 || members.length > MAX_FORWARD_GROUP_MEMBERS) throw new Error(`端口转发需要配置 1-${MAX_FORWARD_GROUP_MEMBERS} 台入口主机`);
+    if (Number((group as any).entryGroupId || 0) <= 0 && (members.length < 1 || members.length > MAX_FORWARD_GROUP_MEMBERS)) {
+      throw new Error(`端口转发需要配置 1-${MAX_FORWARD_GROUP_MEMBERS} 台入口主机，或者挂一个入口组`);
+    }
     if (String(group.groupType || "host") !== "host") throw new Error("端口转发仅支持主机成员");
     if (members.some((member) => member.memberType !== "host")) throw new Error("端口转发仅支持主机成员");
     await repairPortForwardRuleHostReferences(groupId);
@@ -3448,7 +3464,7 @@ async function syncForwardGroupRulesUnlocked(groupId: number, options: SyncForwa
     return;
   }
 
-  const activeChainEntryMembers = groupMode === "chain" ? await chainEntryMembers(group) : [];
+  const activeChainEntryMembers = await entryGroupMembersFor(group);
   if (groupMode === "chain" && activeChainEntryMembers.length > 0) {
     const chainHostIds = new Set(activeChainMembers.map((member: any) => Number(member.hostId || 0)));
     for (const entryMember of activeChainEntryMembers) {
@@ -3459,7 +3475,7 @@ async function syncForwardGroupRulesUnlocked(groupId: number, options: SyncForwa
     }
   }
 
-  const liveMemberIds = new Set((groupMode === "chain" ? activeChainMembers : members).map((m: any) => Number(m.id)));
+  const liveMemberIds = new Set((groupMode === "chain" ? activeChainMembers : fanoutMembers).map((m: any) => Number(m.id)));
   const liveTemplateIds = new Set((templates as any[]).map((rule: any) => Number(rule.id)));
 
   if (groupMode === "chain") {
@@ -3567,7 +3583,7 @@ async function syncForwardGroupRulesUnlocked(groupId: number, options: SyncForwa
         await afterDatabaseTransactionSettled(() => releaseHostPortReservations(chainPortReservations));
       }
     } else {
-      for (const member of members) {
+      for (const member of fanoutMembers) {
         const ruleId = await ensureMemberRuleForTemplate(group, template, member, options);
         if (ruleId && !preserveRuntime) {
           await db.update(forwardRules).set({ isRunning: false, updatedAt: nowDate() }).where(eq(forwardRules.id, ruleId));
@@ -3629,16 +3645,13 @@ export async function syncForwardGroupRules(groupId: number, options: SyncForwar
 }
 
 export async function createForwardGroup(data: InsertForwardGroup, members: ForwardGroupMemberInput[]) {
-  if (members.length === 0) throw new Error("转发组至少需要一个成员");
   const groupMode = forwardGroupModeOf(data);
-  validateForwardGroupModeMembers(groupMode, String((data as any).groupType || "host"), members, {
-    externalEntry: groupMode === "chain" && Number((data as any).entryGroupId || 0) > 0,
-  });
+  const externalEntry = (groupMode === "chain" || groupMode === "port") && Number((data as any).entryGroupId || 0) > 0;
+  if (members.length === 0 && !(groupMode === "port" && externalEntry)) throw new Error("转发组至少需要一个成员");
+  validateForwardGroupModeMembers(groupMode, String((data as any).groupType || "host"), members, { externalEntry });
   if (groupMode === "entry" && !String((data as any).domain || "").trim()) throw new Error("入口组需要指定入口域名");
   for (const member of members) await targetHostIdForMember(member);
-  const normalizedMembers = await Promise.all(members.map((member, index) => normalizeForwardGroupMemberInput(groupMode, member, index, {
-    externalEntry: groupMode === "chain" && Number((data as any).entryGroupId || 0) > 0,
-  })));
+  const normalizedMembers = await Promise.all(members.map((member, index) => normalizeForwardGroupMemberInput(groupMode, member, index, { externalEntry })));
   await validateForwardGroupRecordMembers({ ...data, groupMode }, normalizedMembers as any);
   const sortOrder = (data as any).sortOrder === undefined
     ? await nextForwardGroupSortOrder(Number((data as any).userId || 0), groupMode)
@@ -3741,15 +3754,12 @@ export async function replaceForwardGroupMembers(
   members: ForwardGroupMemberInput[],
   options: { skipSync?: boolean; deferRefresh?: boolean } = {},
 ) {
-  if (members.length === 0) throw new Error("转发组至少需要一个成员");
   const group = await getForwardGroupById(groupId);
   const groupMode = forwardGroupModeOf(group);
-  validateForwardGroupModeMembers(groupMode, String((group as any)?.groupType || "host"), members, {
-    externalEntry: groupMode === "chain" && Number((group as any)?.entryGroupId || 0) > 0,
-  });
-  const normalizedMembers = await Promise.all(members.map((member, index) => normalizeForwardGroupMemberInput(groupMode, member, index, {
-    externalEntry: groupMode === "chain" && Number((group as any)?.entryGroupId || 0) > 0,
-  })));
+  const externalEntry = (groupMode === "chain" || groupMode === "port") && Number((group as any)?.entryGroupId || 0) > 0;
+  if (members.length === 0 && !(groupMode === "port" && externalEntry)) throw new Error("转发组至少需要一个成员");
+  validateForwardGroupModeMembers(groupMode, String((group as any)?.groupType || "host"), members, { externalEntry });
+  const normalizedMembers = await Promise.all(members.map((member, index) => normalizeForwardGroupMemberInput(groupMode, member, index, { externalEntry })));
   await validateForwardGroupRecordMembers(group, normalizedMembers as any);
   const db = await getDb();
   const existing = await db.select().from(forwardGroupMembers).where(eq(forwardGroupMembers.groupId, groupId));
@@ -3860,14 +3870,14 @@ export async function replaceForwardGroupMembers(
   }
 }
 
-/** 把这个组当入口组 / 出口组用的隧道，以及把它当入口组的转发链。 */
+/** 把这个组当入口组 / 出口组用的隧道，以及把它当入口组的转发链、端口转发（chains 里按 groupMode 分）。 */
 export async function getForwardGroupEndpointReferences(groupId: number) {
   const db = await getDb();
   if (!db) return { tunnels: [] as any[], chains: [] as any[] };
   const [tunnelRows, chainRows] = await Promise.all([
     db.select({ id: tunnels.id, name: tunnels.name }).from(tunnels)
       .where(or(eq(tunnels.entryGroupId, groupId), eq(tunnels.exitGroupId, groupId))),
-    db.select({ id: forwardGroups.id, name: forwardGroups.name }).from(forwardGroups)
+    db.select({ id: forwardGroups.id, name: forwardGroups.name, groupMode: forwardGroups.groupMode }).from(forwardGroups)
       .where(and(eq(forwardGroups.entryGroupId, groupId), sql`${forwardGroups.id} <> ${groupId}`)),
   ]);
   return { tunnels: tunnelRows as any[], chains: chainRows as any[] };

@@ -228,6 +228,37 @@ test("多台入口的端口转发：有一台在线就可用，部分离线算 d
   assert.equal(none.status, "unavailable");
 });
 
+test("挂了入口组的端口转发：按入口组的主机算可用性，入口组停用就不可用", () => {
+  const entryGroup = {
+    id: 40,
+    groupMode: "entry",
+    isEnabled: true,
+    domain: "entry.example.test",
+    recordType: "A",
+    members: [
+      { id: 401, memberType: "host", hostId: 7, isEnabled: true, entryAddress: "192.0.2.7" },
+      { id: 402, memberType: "host", hostId: 8, isEnabled: true, entryAddress: "192.0.2.8" },
+    ],
+  };
+  const portGroup = { id: 41, groupMode: "port", isEnabled: true, entryGroupId: 40, members: [] };
+  const build = (online: Record<number, boolean>, entryEnabled = true) => buildLinkAvailabilityIndex({
+    // 入口组按 A 记录挑成员，主机得有 IPv4
+    hosts: [7, 8].map((id) => ({ id, ip: `192.0.2.${id}`, isOnline: online[id] })),
+    groups: [{ ...entryGroup, isEnabled: entryEnabled }, portGroup],
+    tunnels: [],
+    now,
+  }).groupAvailabilityById.get(41)!;
+
+  assert.equal(build({ 7: true, 8: true }).status, "available");
+  const partial = build({ 7: true, 8: false });
+  assert.equal(partial.status, "degraded");
+  assert.equal(partial.message, "端口转发可用，部分入口主机离线");
+  assert.equal(build({ 7: false, 8: false }).status, "unavailable");
+  const disabledEntry = build({ 7: true, 8: true }, false);
+  assert.equal(disabledEntry.status, "unavailable");
+  assert.equal(disabledEntry.message, "关联入口组已停用");
+});
+
 test("a shared group uses the server summary without exposing hidden members", () => {
   const { groupAvailabilityById } = buildLinkAvailabilityIndex({
     hosts: [],
