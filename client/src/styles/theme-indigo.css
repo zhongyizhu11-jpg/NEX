@@ -264,11 +264,16 @@ html[data-ui-theme="indigo"] .fx-filter-pill { border-radius: 8px !important; }
 html[data-ui-theme="indigo"] .workspace-main [data-icon-button],
 html[data-ui-theme="indigo"] .workspace-header-actions [data-slot="button"] { border-radius: 8px !important; }
 html[data-ui-theme="indigo"] [data-slot="badge"] { border-radius: 6px; }
-/* 主按钮：一块平的靛蓝（跟「默认配色」换色，但永远是平的），不投影、不描边 */
-html[data-ui-theme="indigo"] [data-slot="button"][data-variant="default"],
-html[data-ui-theme="indigo"] [data-slot="button"]:not([data-variant]) { background-image: none !important; background-color: var(--fx-primary-fill); border-color: transparent; box-shadow: none; font-weight: 600; }
-html[data-ui-theme="indigo"] [data-slot="button"][data-variant="default"]:hover,
-html[data-ui-theme="indigo"] [data-slot="button"]:not([data-variant]):hover { background-color: var(--fx-primary-fill-hover); }
+/*
+  主按钮：一块平的靛蓝（跟「默认配色」换色，但永远是平的），不投影、不描边。
+  只管没禁用的：这条特指度比按钮组件自带的 disabled: 那几条高，要是连禁用的也盖上，
+  没改动时的「保存主题」会是一块深色主色底配灰字，看着像能点。禁用的交给组件（灰槽底 + 弱线 + 灰字）。
+*/
+html[data-ui-theme="indigo"] [data-slot="button"][data-variant="default"]:not(:disabled),
+html[data-ui-theme="indigo"] [data-slot="button"]:not([data-variant]):not(:disabled) { background-image: none !important; background-color: var(--fx-primary-fill); border-color: transparent; box-shadow: none; font-weight: 600; }
+html[data-ui-theme="indigo"] [data-slot="button"][data-variant="default"]:not(:disabled):hover,
+html[data-ui-theme="indigo"] [data-slot="button"]:not([data-variant]):not(:disabled):hover { background-color: var(--fx-primary-fill-hover); }
+html[data-ui-theme="indigo"] [data-slot="button"]:disabled { box-shadow: none; }
 html[data-ui-theme="indigo"] [data-slot="button"][data-variant="outline"] { box-shadow: none; }
 /* 侧栏选中项：靛蓝淡底 + 靛蓝字（HEX 的 .status-tabs .active），不是一块实心蓝 */
 html[data-ui-theme="indigo"] .workspace-layout [data-sidebar="menu-button"] { border-radius: 8px; }
