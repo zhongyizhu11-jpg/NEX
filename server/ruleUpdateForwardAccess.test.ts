@@ -146,6 +146,17 @@ test("editing a TCP+UDP tunnel rule keeps its route group", () => {
       // 明确关掉线路组仍然可以
       await adminRules.update({ id: 100, failoverEnabled: false });
       assert.equal(Number((await rowOf(100)).failoverEnabled), 0);
+
+      // 内核转发（iptables）老行里残留的 failoverEnabled：编辑保存应当把它关掉，而不是报错
+      await insert(
+        "forward_rules",
+        ["id", "hostId", "name", "forwardType", "protocol", "sourcePort", "targetIp", "targetPort", "userId", "isEnabled", "isRunning", "failoverEnabled", "routeMode", "routePaths"],
+        [101, 1, "legacy-iptables", "iptables", "both", 11001, "203.0.113.11", 80, 1, 1, 0, 1, "failover", paths],
+      );
+      await adminRules.update({ id: 101, name: "legacy-renamed", failoverEnabled: true });
+      const legacy = await rowOf(101);
+      assert.equal(legacy.name, "legacy-renamed");
+      assert.equal(Number(legacy.failoverEnabled), 0, "unsupported kernel forward must have its stale route group cleared, not error");
     } finally {
       await runtime.closeDatabase().catch(() => undefined);
     }
