@@ -57,7 +57,8 @@ export function mimicStatusText(host: MimicHost): { label: string; tone: "ok" | 
 
 function modeFor(host: MimicHost): "install" | "repair" {
   const status = String(host.mimicStatus || "");
-  if (host.mimicAvailable === true) return "install";
+  // 已经能用时按钮是「重新安装」：发 repair，安装脚本才会跳过「已经装好」直接重装包
+  if (host.mimicAvailable === true) return "repair";
   if (status === "kernel-module-missing" || status === "kernel-module-load-failed" || status === "command-unusable") return "repair";
   return "install";
 }

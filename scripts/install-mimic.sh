@@ -37,11 +37,14 @@ run_logged() {
   local label="$1"; shift
   local logfile
   logfile="$(mktemp /tmp/forwardx-mimic-step.XXXXXX)"
-  if "$@" >"$logfile" 2>&1; then
+  # 退出码要在命令失败的当下拿：写成 if cmd; then ...; fi 之后再取 $?，拿到的是 if 语句本身的 0，
+  # 失败会被当成成功，dpkg -i 之后的补依赖 / 重试路径就都不走了。
+  local rc=0
+  "$@" >"$logfile" 2>&1 || rc=$?
+  if [ "$rc" -eq 0 ]; then
     rm -f "$logfile"
     return 0
   fi
-  local rc=$?
   log "${label} failed (exit ${rc}); last lines:"
   tail -n 15 "$logfile" | sed 's/^/[NEX mimic]   /' >&2
   rm -f "$logfile"
@@ -983,12 +986,18 @@ main() {
   current_version="$(installed_mimic_version || true)"
   case "$verify_status" in
     0)
-      if [ "${current_version}" = "${TARGET_VERSION}" ]; then
+      # 面板上对已经能用的主机点「重新安装」会带 FORWARDX_MIMIC_MODE=repair：这时不走「已经装好」的
+      # 提前退出，往下把包整个重装一遍；普通安装（含 Agent 安装脚本）照旧装好了就不动。
+      if [ "${current_version}" = "${TARGET_VERSION}" ] && [ "${FORWARDX_MIMIC_MODE:-install}" != "repair" ]; then
         install_mimic_bpf_dropin || die "failed to install Mimic systemd capability drop-in"
         log "mimic ${TARGET_VERSION} command and kernel module are already available"
         exit 0
       fi
-      log "mimic ${current_version:-unknown} installed; upgrading to ${TARGET_VERSION}"
+      if [ "${current_version}" = "${TARGET_VERSION}" ]; then
+        log "mimic ${TARGET_VERSION} is available; reinstall requested, reinstalling packages"
+      else
+        log "mimic ${current_version:-unknown} installed; upgrading to ${TARGET_VERSION}"
+      fi
       ;;
     2)
       log "mimic ${current_version:-unknown} command exists but kernel module not loaded; repairing DKMS"

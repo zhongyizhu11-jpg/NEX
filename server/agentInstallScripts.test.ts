@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
 
 import { generateInstallScript } from "./agentInstallScripts";
@@ -315,6 +316,25 @@ test("Mimic source fallback installs a privileged service with stale-hook cleanu
   assert.match(script, /forwardx-bpf\.conf/);
   assert.doesNotMatch(script, /User=mimic/);
   assert.doesNotMatch(script, /Group=mimic/);
+});
+
+test("Mimic installer run_logged reports the failing command's exit code", () => {
+  const script = fs.readFileSync(path.join(process.cwd(), "scripts/install-mimic.sh"), "utf8");
+  const runLogged = scriptSection(script, "run_logged() {", "\n}\n") + "\n}\n";
+  const probe = `log(){ :; }\n${runLogged}\nrun_logged a false; echo "a=$?"\nrun_logged b bash -c 'exit 7'; echo "b=$?"\nrun_logged c true; echo "c=$?"\n`;
+  const result = spawnSync("bash", ["-c", probe], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  // 以前 if cmd; then ...; fi 之后再取 $?，失败一律变成 0，dpkg -i 的补依赖 / 重试路径根本不走
+  assert.match(result.stdout, /a=1\b/);
+  assert.match(result.stdout, /b=7\b/);
+  assert.match(result.stdout, /c=0\b/);
+});
+
+test("Mimic installer honours repair mode instead of exiting on a healthy host", () => {
+  const script = fs.readFileSync(path.join(process.cwd(), "scripts/install-mimic.sh"), "utf8");
+  // 面板「重新安装」发 FORWARDX_MIMIC_MODE=repair：「已经装好」的提前退出只在非 repair 时走
+  assert.match(script, /\[ "\$\{current_version\}" = "\$\{TARGET_VERSION\}" \] && \[ "\$\{FORWARDX_MIMIC_MODE:-install\}" != "repair" \]/);
+  assert.match(script, /reinstall requested, reinstalling packages/);
 });
 
 test("Agent release always builds the published FXP assets from Go", () => {
