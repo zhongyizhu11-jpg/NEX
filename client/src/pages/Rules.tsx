@@ -5769,9 +5769,11 @@ function RulesContent() {
         }
         return Number(a.priority || 0) - Number(b.priority || 0);
       });
+    // 多台入口的端口转发（2.3.437 起）每台都在监听，入口地址全列出来；转发组只列当前生效的那台。
+    const listAllMembers = forwardGroupModeOf(group) === "port" && members.length > 1;
     for (const member of members) {
       pushMemberEntryAddresses(rows, member);
-      if (rows.length > 0) return rows;
+      if (rows.length > 0 && !listAllMembers) return rows;
     }
     return rows;
   };
