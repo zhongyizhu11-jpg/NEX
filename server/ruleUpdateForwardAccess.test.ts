@@ -101,6 +101,58 @@ test("paused or expired users cannot re-enable rules through update, nor create 
 });
 
 /**
+ * 隧道规则（gost + 隧道）配了线路组后，编辑保存不能把线路组弄丢。
+ *
+ * 2.3.439 之前：update 里 nextMainBackupEnabled 卡着 protocol === "tcp"，而规则表单默认 TCP+UDP，
+ * 客户端每次保存都带上 failoverEnabled，于是编辑一条 TCP+UDP / UDP 的隧道线路组规则时，
+ * 服务端把 failoverEnabled、routePaths 一起清空 —— 还不报错、照样「保存成功」。新建没这条卡，
+ * 所以只有编辑会丢。这里建一条带线路组的 TCP+UDP 隧道规则，模拟客户端「只点了保存」
+ * （带 failoverEnabled、不重报路径），断言线路组还在。
+ */
+test("editing a TCP+UDP tunnel rule keeps its route group", () => {
+  runScript("forwardx-route-group-keep-", prelude + String.raw`
+    const { rulesRouter } = await import(moduleUrl("server/routers/rules.ts"));
+    const rowOf = async (id) => (await runtime.queryRaw('SELECT "failoverEnabled", "routeMode", "routePaths", "protocol", "name" FROM "forward_rules" WHERE "id" = ?', [id]))[0];
+    try {
+      const now = Math.floor(Date.now() / 1000);
+      await insert("users", ["id", "username", "password", "role", "canAddRules", "manualCanAddRules", "accountEnabled"], [1, "admin", "x", "admin", 1, 1, 1]);
+      for (const id of [1, 2]) {
+        await insert("hosts", ["id", "name", "ip", "ipv4", "userId", "isOnline", "lastHeartbeat", "portRangeStart", "portRangeEnd"], [id, "h" + id, "198.18.4." + id, "198.18.4." + id, 1, 1, now, 10000, 30000]);
+      }
+      await insert("tunnels", ["id", "name", "mode", "entryHostId", "exitHostId", "listenPort", "userId", "isEnabled"], [30, "tls-tunnel", "tls", 1, 2, 25000, 1, 1]);
+      const paths = JSON.stringify([
+        { key: "a", name: "主线路", hops: [], dest: null, weight: 50 },
+        { key: "b", name: "备用1", hops: [], dest: { ip: "203.0.113.9", port: 24895 }, weight: 50 },
+      ]);
+      await insert(
+        "forward_rules",
+        ["id", "hostId", "name", "forwardType", "protocol", "tunnelId", "sourcePort", "targetIp", "targetPort", "userId", "isEnabled", "isRunning", "failoverEnabled", "routeMode", "routePaths"],
+        [100, 1, "tunnel-route-group", "gost", "both", 30, 11000, "203.0.113.10", 24895, 1, 1, 0, 1, "failover", paths],
+      );
+
+      const admin = { id: 1, username: "admin", role: "admin", accountEnabled: true, allowedForwardTypes: null };
+      const adminRules = rulesRouter.createCaller(context(admin));
+      // 客户端保存时带 failoverEnabled（不重报 routeGroup），只改了个名字
+      await adminRules.update({ id: 100, name: "renamed", failoverEnabled: true });
+
+      const row = await rowOf(100);
+      assert.equal(row.name, "renamed");
+      assert.equal(Number(row.failoverEnabled), 1, "route group must survive the edit");
+      assert.equal(String(row.routeMode), "failover");
+      const savedPaths = JSON.parse(row.routePaths || "[]");
+      assert.equal(savedPaths.length, 2, "both paths must survive: " + row.routePaths);
+      assert.equal(savedPaths[1].dest && savedPaths[1].dest.port, 24895);
+
+      // 明确关掉线路组仍然可以
+      await adminRules.update({ id: 100, failoverEnabled: false });
+      assert.equal(Number((await rowOf(100)).failoverEnabled), 0);
+    } finally {
+      await runtime.closeDatabase().catch(() => undefined);
+    }
+  `);
+});
+
+/**
  * 线路组的中继规则算进端口配额，而且普通用户的中继端口只在他那台中转机的套餐端口区间里挑。
  */
 test("route relay listeners count toward maxPorts and stay inside the owner's plan port range", () => {

@@ -2771,7 +2771,10 @@ export const crudRulesRouter = router({
       await requireRuleProtocolEnabled({ ...rule, forwardType: nextForwardTypeForRule, tunnelId: nextTunnelIdForRule }, selectedTunnelForRule);
       const requestedMainBackupEnabled = input.failoverEnabled ?? (rule as any).failoverEnabled;
       const nextProtocolForRule = input.protocol ?? (rule as any).protocol;
-      const nextMainBackupEnabled = routeChanged ? false : (nextProtocolForRule === "tcp" && nextForwardTypeForRule === "gost" ? requestedMainBackupEnabled : false);
+      // 线路组不卡协议（TCP / UDP / TCP+UDP 都能调度，UDP 按会话，Agent 2.2.199 起）：换了路由就清掉，
+      // 否则保留用户的开关，转发方式 / 隧道形态是否允许由下面的 requireMainBackupAllowed 判（和新建同一条）。
+      // 2.3.439 前这里还卡着 protocol === "tcp"，表单默认 TCP+UDP，于是每次编辑隧道规则都把线路组悄悄清空。
+      const nextMainBackupEnabled = routeChanged ? false : requestedMainBackupEnabled;
       requireMainBackupAllowed({
         enabled: nextMainBackupEnabled,
         protocol: nextProtocolForRule,
