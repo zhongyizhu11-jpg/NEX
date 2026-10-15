@@ -41,7 +41,7 @@ import { trpc } from "@/lib/trpc";
 import { getPanelUpgradeProgress, PANEL_UPGRADE_REFRESH_DELAY_SECONDS } from "@/lib/panelUpgrade";
 import { compressImageFile, imageDataUrlSize } from "@/lib/imageUpload";
 import { downloadTextFile, type TextDownloadFile } from "@/lib/fileDownload";
-import { applyPersonalizationSurface, applyPersonalizationTheme } from "@/lib/personalizationTheme";
+import { applyPersonalizationSurface, applyPersonalizationTheme, setUiThemeOverride } from "@/lib/personalizationTheme";
 import { cn } from "@/lib/utils";
 import {
   FORWARD_PROTOCOL_LABELS,
@@ -120,6 +120,7 @@ import { useCallback, useMemo, useRef, useState, useEffect } from "react";
 import { SaveDockBar, SaveDockProvider, useSaveDockActive, useSaveDockItem } from "@/components/settings/SaveDock";
 import { UiThemeDot } from "@/components/UiThemeQuickSwitch";
 import { setLiquidGlassPreview } from "@/lib/liquidGlass";
+import { useUiThemeOverride } from "@/hooks/useUiThemeOverride";
 import { toast } from "sonner";
 import { useLocation } from "wouter";
 import { BRAND_LOGO_MAX_BYTES } from "@shared/avatar";
@@ -3318,6 +3319,8 @@ function PersonalizationSettingsSection() {
   const [savedCardStyle, setSavedCardStyle] = useState<string>("edge");
   const [uiTheme, setUiTheme] = useState<string>("classic");
   const [savedUiTheme, setSavedUiTheme] = useState<string>("classic");
+  /* 这台设备在顶栏调色盘里给自己选的主题；有它时页面显示的是它，不是下面存的站点默认 */
+  const uiThemeOverride = useUiThemeOverride();
   const [liquidGlass, setLiquidGlass] = useState<LiquidGlassConfig>(DEFAULT_LIQUID_GLASS);
   const [savedLiquidGlass, setSavedLiquidGlass] = useState<LiquidGlassConfig>(DEFAULT_LIQUID_GLASS);
   const [homepageEnabled, setHomepageEnabled] = useState(true);
@@ -3387,6 +3390,11 @@ function PersonalizationSettingsSection() {
       }
       if (key === "uiTheme") {
         setSavedUiTheme(uiTheme);
+        /*
+          在这里存主题，意思就是「这台设备也要看这套」：顶栏调色盘给这台设备选过的那套优先级更高，
+          不清掉的话存完页面还是原样，看起来像没生效（2.3.435 用户反馈「快捷图标和设置里换主题不同步」）。
+        */
+        setUiThemeOverride(null);
         applyPersonalizationSurface({ pageTint: savedPageTint, cardStyle: savedCardStyle, uiTheme });
       }
       if (key === "liquidGlass") {
@@ -4021,7 +4029,7 @@ function PersonalizationSettingsSection() {
               界面主题
             </CardTitle>
             <CardDescription>
-              一套换掉底色、卡片、顶栏和控件形状的整体风格。下面的配色、页面底色、卡片风格都是在它之上微调。点一下就在这一页试看，保存后才对所有人生效；每个人也可以在顶栏调色盘里给自己换。App 要更新到新版本才会跟着变。
+              一套换掉底色、卡片、顶栏和控件形状的整体风格。下面的配色、页面底色、卡片风格都是在它之上微调。点一下就在这一页试看，保存后才对所有人生效；顶栏的调色盘和这里是同一个设置，在那里换也会存到这里。App 要更新到新版本才会跟着变。
             </CardDescription>
           </div>
           <Button
@@ -4035,10 +4043,21 @@ function PersonalizationSettingsSection() {
             保存主题
           </Button>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-3">
+          {uiThemeOverride && uiThemeOverride !== savedUiTheme ? (
+            <div className="flex flex-col gap-2 rounded-lg border border-[color-mix(in_srgb,var(--fx-warn)_25%,transparent)] bg-[var(--fx-warn-soft)] px-3 py-2.5 text-xs leading-5 text-[var(--fx-warn-text)] sm:flex-row sm:items-center sm:justify-between">
+              <span>
+                这台设备在顶栏调色盘里选了「{PERSONALIZATION_UI_THEMES.find((theme) => theme.id === uiThemeOverride)?.name || uiThemeOverride}」，它盖过了这里的站点默认，所以你现在看到的是它。在这里保存主题，这台设备会自动改回跟随站点默认。
+              </span>
+              <Button type="button" variant="outline" size="sm" className="shrink-0" onClick={() => setUiThemeOverride(null)}>
+                跟随站点默认
+              </Button>
+            </div>
+          ) : null}
           <div className="grid grid-cols-2 gap-3 sm:max-w-3xl sm:grid-cols-3">
             {PERSONALIZATION_UI_THEMES.map((theme) => {
               const active = uiTheme === theme.id;
+              const deviceActive = (uiThemeOverride || savedUiTheme) === theme.id;
               return (
                 <button
                   key={theme.id}
@@ -4058,6 +4077,9 @@ function PersonalizationSettingsSection() {
                     <span className={cn("text-sm", active ? "font-semibold text-foreground" : "font-medium text-foreground")}>{theme.name}</span>
                     {active ? <CheckCircle2 className="h-4 w-4 shrink-0 text-primary" /> : null}
                   </span>
+                  {uiThemeOverride && deviceActive ? (
+                    <span className="w-fit rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">本机在用（顶栏选的）</span>
+                  ) : null}
                   <span className="text-xs leading-5 text-muted-foreground">{theme.description}</span>
                 </button>
               );
