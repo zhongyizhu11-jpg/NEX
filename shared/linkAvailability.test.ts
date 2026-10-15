@@ -196,6 +196,38 @@ test("a port forward without an independent probe follows its host", () => {
   assert.equal(online.groupAvailabilityById.get(20)?.status, "available");
 });
 
+test("多台入口的端口转发：有一台在线就可用，部分离线算 degraded，全离线才不可用", () => {
+  const groups = [{
+    id: 21,
+    groupMode: "port",
+    isEnabled: true,
+    members: [
+      { id: 211, memberType: "host", hostId: 7, isEnabled: true },
+      { id: 212, memberType: "host", hostId: 8, isEnabled: true },
+      { id: 213, memberType: "host", hostId: 9, isEnabled: true },
+    ],
+  }];
+  const build = (online: Record<number, boolean>) => buildLinkAvailabilityIndex({
+    hosts: [7, 8, 9].map((id) => ({ id, isOnline: online[id] })),
+    groups,
+    tunnels: [],
+    now,
+  }).groupAvailabilityById.get(21)!;
+
+  const all = build({ 7: true, 8: true, 9: true });
+  assert.equal(all.status, "available");
+  assert.deepEqual(Array.from(all.usableMemberIds).sort(), [211, 212, 213]);
+
+  const partial = build({ 7: true, 8: false, 9: true });
+  assert.equal(partial.status, "degraded");
+  assert.equal(partial.available, true);
+  assert.equal(partial.message, "端口转发可用，部分入口主机离线");
+  assert.deepEqual(Array.from(partial.usableMemberIds).sort(), [211, 213]);
+
+  const none = build({ 7: false, 8: false, 9: false });
+  assert.equal(none.status, "unavailable");
+});
+
 test("a shared group uses the server summary without exposing hidden members", () => {
   const { groupAvailabilityById } = buildLinkAvailabilityIndex({
     hosts: [],

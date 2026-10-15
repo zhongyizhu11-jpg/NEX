@@ -1334,7 +1334,9 @@ export function ForwardGroupsContent({
   const showAggregationColumns = form.groupMode === "entry"
     && form.bandwidthAggregationEnabled
     && effectiveGroupType === "host";
-  const memberRowGridClass = showExitAddressColumns
+  const memberRowGridClass = form.groupMode === "port"
+    ? "sm:grid-cols-[auto_auto_minmax(8rem,1fr)_36px]"
+    : showExitAddressColumns
     ? "sm:grid-cols-[auto_auto_minmax(8rem,1fr)_56px_56px_52px_36px]"
     : showAggregationColumns
       ? "sm:grid-cols-[auto_auto_minmax(8rem,1fr)_92px_72px_52px_36px]"
@@ -1348,14 +1350,12 @@ export function ForwardGroupsContent({
 
   const addMember = (id: number) => {
     if (!id) return;
-    if (form.groupMode === "port" && form.members.length >= 1) {
-      toast.error("端口转发只能选择 1 台所属主机");
-      return;
-    }
-    if ((form.groupMode === "chain" || isCollectionMode(form.groupMode)) && form.members.length >= MAX_FORWARD_GROUP_MEMBERS) {
-      toast.error(form.groupMode === "chain"
-        ? `转发链最多支持 ${MAX_FORWARD_GROUP_MEMBERS} 台主机`
-        : `入口组/出口组最多支持 ${MAX_FORWARD_GROUP_MEMBERS} 台主机`);
+    if ((form.groupMode === "port" || form.groupMode === "chain" || isCollectionMode(form.groupMode)) && form.members.length >= MAX_FORWARD_GROUP_MEMBERS) {
+      toast.error(form.groupMode === "port"
+        ? `端口转发最多支持 ${MAX_FORWARD_GROUP_MEMBERS} 台入口主机`
+        : form.groupMode === "chain"
+          ? `转发链最多支持 ${MAX_FORWARD_GROUP_MEMBERS} 台主机`
+          : `入口组/出口组最多支持 ${MAX_FORWARD_GROUP_MEMBERS} 台主机`);
       return;
     }
     const effectiveType = effectiveGroupType;
@@ -1379,23 +1379,6 @@ export function ForwardGroupsContent({
           aggregationWeight: "0",
         },
       ],
-    });
-  };
-
-  const setPortHost = (id: number) => {
-    if (!id) return;
-    setForm({
-      ...form,
-      members: [{
-        key: memberKey("host", id),
-        memberType: "host",
-        hostId: id,
-        tunnelId: null,
-        connectHost: null,
-        isEnabled: true,
-        bandwidthMbps: "0",
-        aggregationWeight: "0",
-      }],
     });
   };
 
@@ -1516,7 +1499,7 @@ export function ForwardGroupsContent({
     const supportsSwitchNotify = isFailoverMode || isEntryGroup;
     if (!form.name.trim()) return toast.error(isPortMode ? "请填写端口转发名称" : isChainGroup ? "请填写转发链名称" : "请填写组名称");
     if (isPortMode) {
-      if (form.members.length !== 1) return toast.error("端口转发需要选择 1 台所属主机");
+      if (form.members.length < 1 || form.members.length > MAX_FORWARD_GROUP_MEMBERS) return toast.error(`端口转发需要选择 1-${MAX_FORWARD_GROUP_MEMBERS} 台入口主机`);
     } else if (isChainGroup) {
       const minChainMembers = form.entryGroupId ? 1 : 2;
       if (form.members.length < minChainMembers || form.members.length > MAX_FORWARD_GROUP_MEMBERS) {
@@ -1761,7 +1744,7 @@ export function ForwardGroupsContent({
 
   const groupMemberTitle = (group: any) => {
     const mode = normalizeGroupMode(group.groupMode);
-    if (mode === "port") return "所属主机";
+    if (mode === "port") return "入口主机";
     if (mode === "chain") return "链路顺序";
     if (mode === "entry") return "入口主机";
     if (mode === "exit") return "出口主机";
@@ -1816,7 +1799,7 @@ export function ForwardGroupsContent({
    * 卡片底部的几条「名字 · 值」。
    *
    * 原来是两个带边框的小框，一个值一个框（手册「不要一个数一个小框」说的就是它），而且
-   * 五种形态里一半是在重复上面已经写过的话：端口转发的「所属主机」就是成员那一块的标题和
+   * 五种形态里一半是在重复上面已经写过的话：端口转发的「入口主机」就是成员那一块的标题和
    * 胶囊；「引用规则 N」状态那句已经写了「已被 N 条转发规则引用」；入口组、出口组的「用途 ·
    * 固定入口 / 固定出口」就是所在的那个 tab；出口组的「N 台主机」就是下面那几个胶囊；
    * 有入口组的转发链，「入口」就是路径的第一个节点。
@@ -2093,7 +2076,7 @@ export function ForwardGroupsContent({
   }> = {
     port: {
       title: "端口转发",
-      description: "管理可复用的单主机端口转发。",
+      description: "管理可复用的端口转发：一台或多台入口主机同时监听，直连同一个目标。",
       addButtonText: "添加端口转发",
       loadingLabel: "正在加载端口转发",
       emptyTitle: "暂无端口转发",
@@ -2220,7 +2203,7 @@ export function ForwardGroupsContent({
                     <TableHead>状态</TableHead>
                     <TableHead>名称</TableHead>
                     <TableHead>成员/链路</TableHead>
-                    <TableHead className="hidden md:table-cell">{activeGroupMode === "port" ? "所属主机" : activeGroupMode === "exit" ? "出口" : activeGroupMode === "entry" ? "DDNS" : "入口"}</TableHead>
+                    <TableHead className="hidden md:table-cell">{activeGroupMode === "port" ? "入口主机" : activeGroupMode === "exit" ? "出口" : activeGroupMode === "entry" ? "DDNS" : "入口"}</TableHead>
                     <TableHead className="hidden md:table-cell">{isChainMode ? "链路延迟" : isCollectionMode(activeGroupMode) ? "用途" : "引用规则"}</TableHead>
                     <TableHead className="text-right">操作</TableHead>
                   </TableRow>
@@ -2262,7 +2245,7 @@ export function ForwardGroupsContent({
                         {renderTableMembersSummary(group)}
                       </TableCell>
                       <TableCell className="hidden max-w-[16rem] py-3 md:table-cell">
-                        <div className="line-clamp-1 text-sm">{normalizeGroupMode(group.groupMode) === "port" ? ((group.members || []).length ? memberLabel((group.members || [])[0]) : "未选择") : normalizeGroupMode(group.groupMode) === "chain" ? chainEntryText(group) : normalizeGroupMode(group.groupMode) === "exit" ? `${(group.members || []).length} 台出口主机` : group.domain || "未配置域名"}</div>
+                        <div className="line-clamp-1 text-sm">{normalizeGroupMode(group.groupMode) === "port" ? ((group.members || []).length > 1 ? `${(group.members || []).length} 台入口主机` : (group.members || []).length ? memberLabel((group.members || [])[0]) : "未选择") : normalizeGroupMode(group.groupMode) === "chain" ? chainEntryText(group) : normalizeGroupMode(group.groupMode) === "exit" ? `${(group.members || []).length} 台出口主机` : group.domain || "未配置域名"}</div>
                         <div className="mt-1 line-clamp-1 text-xs text-muted-foreground">{normalizeGroupMode(group.groupMode) === "port" ? "转发规则中直接选择" : normalizeGroupMode(group.groupMode) === "chain" ? "规则使用时监听入口端口" : normalizeGroupMode(group.groupMode) === "exit" ? "隧道出口组" : group.lastDdnsValue || "未切换"}</div>
                       </TableCell>
                       <TableCell className="hidden py-3 md:table-cell">{normalizeGroupMode(group.groupMode) === "chain" ? renderChainLatencySummary(group) : isCollectionMode(normalizeGroupMode(group.groupMode)) ? (normalizeGroupMode(group.groupMode) === "entry" ? "固定入口" : "固定出口") : Number(group.templateRuleCount || 0)}</TableCell>
@@ -2325,7 +2308,7 @@ export function ForwardGroupsContent({
             <DialogTitle>{dialogTitle}</DialogTitle>
           </DialogHeader>
           <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
-            <div className={"grid gap-3 " + (isPortMode ? "sm:grid-cols-2" : isChainMode ? "sm:grid-cols-1" : "sm:grid-cols-2")}>
+            <div className={"grid gap-3 " + (isPortMode || isChainMode ? "sm:grid-cols-1" : "sm:grid-cols-2")}>
               <FormField className="space-y-2">
                 <Label>{isPortMode ? "端口转发名称" : isChainMode ? "转发链名称" : "组名称"}</Label>
                 <Input
@@ -2334,39 +2317,6 @@ export function ForwardGroupsContent({
                   placeholder={isPortMode ? "例如: 洛杉矶-备用入口" : isChainMode ? "例如: 华东-香港转发链" : activeGroupMode === "exit" ? "例如: Web 高可用出口" : "例如: Web 高可用入口"}
                 />
               </FormField>
-
-              {isPortMode && (
-                <FormField className="space-y-2">
-                  <Label>所属主机</Label>
-                  <Select
-                    value={form.members[0]?.hostId ? String(form.members[0].hostId) : ""}
-                    onValueChange={(value) => setPortHost(Number(value))}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="选择所属主机">
-                        {form.members[0]?.hostId ? (
-                          <HostStatusLabel
-                            host={hostById.get(Number(form.members[0].hostId))}
-                            label={memberLabel(form.members[0])}
-                            className="min-w-0"
-                            labelClassName="truncate"
-                          />
-                        ) : null}
-                      </SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      {availableMemberOptions.map((item: any) => (
-                        <SelectItem key={item.id} value={String(item.id)} textValue={item.label}>
-                          <HostStatusLabel host={item.host} label={item.label} />
-                        </SelectItem>
-                      ))}
-                      {availableMemberOptions.length === 0 && (
-                        <SelectItem value="__empty" disabled>没有可选主机</SelectItem>
-                      )}
-                    </SelectContent>
-                  </Select>
-                </FormField>
-              )}
 
               {false && form.groupMode === "failover" && (
                 <FormField className="space-y-2">
@@ -2732,9 +2682,17 @@ export function ForwardGroupsContent({
               </div>
             )}
 
-            {!isPortMode && (
+            {/*
+              端口转发的入口主机和转发组的成员用同一张列表（2.3.437 起端口转发能挂多台入口主机，
+              poouo/Forwardx#15）：每台都同时监听规则的入口端口、转到同一个目标，所以没有「启用」
+              开关那一列 —— 不想让哪台转就把它移掉。
+            */}
+            {(
               <div className={form.groupMode === "chain" ? "space-y-2" : "space-y-3 rounded-lg border border-border/60 p-3"}>
-                <Label>{form.groupMode === "chain" ? "链路主机顺序" : form.groupMode === "entry" ? "入口主机" : form.groupMode === "exit" ? "出口主机" : "成员优先级"}</Label>
+                <Label>{form.groupMode === "chain" ? "链路主机顺序" : form.groupMode === "port" || form.groupMode === "entry" ? "入口主机" : form.groupMode === "exit" ? "出口主机" : "成员优先级"}</Label>
+                {form.groupMode === "port" && (
+                  <p className="text-xs text-muted-foreground">选一台或多台主机，每台都在规则的入口端口上监听、转到同一个目标；加减主机后已有规则自动跟着下发。</p>
+                )}
                 {form.groupMode === "chain" ? (
                   <MultiHopEditor
                     hosts={hosts || []}
@@ -2769,7 +2727,7 @@ export function ForwardGroupsContent({
                     <div className="space-y-2">
                       {form.members.length > 0 && (
                         <>
-                          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md bg-muted/35 px-2.5 py-1.5 text-[11px] text-muted-foreground">
+                          {form.groupMode !== "port" && <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md bg-muted/35 px-2.5 py-1.5 text-[11px] text-muted-foreground">
                             <span className="font-medium text-foreground/70">开关说明</span>
                             {showExitAddressColumns && (
                               <>
@@ -2785,7 +2743,7 @@ export function ForwardGroupsContent({
                               </>
                             )}
                             <span>启用：关闭后该成员不参与当前组</span>
-                          </div>
+                          </div>}
                           <div className={"hidden items-center gap-1.5 px-2.5 text-[11px] text-muted-foreground sm:grid " + memberRowGridClass}>
                             <span className="col-span-2">顺序</span>
                             <span>{effectiveGroupType === "host" ? "主机" : "隧道"}</span>
@@ -2801,7 +2759,7 @@ export function ForwardGroupsContent({
                                 <span className="text-center">权重</span>
                               </>
                             )}
-                            <span className="text-center">启用</span>
+                            {form.groupMode !== "port" && <span className="text-center">启用</span>}
                             <span className="text-right">操作</span>
                           </div>
                         </>
@@ -2879,11 +2837,11 @@ export function ForwardGroupsContent({
                               />
                             </>
                           )}
-                          <div className="flex h-7 w-[52px] items-center justify-center">
+                          {form.groupMode !== "port" && <div className="flex h-7 w-[52px] items-center justify-center">
                             <Checkbox aria-label={`启用 ${memberLabel(member)}`} checked={member.isEnabled} onCheckedChange={(checked) => {
                               setForm({ ...form, members: form.members.map((m) => m.key === member.key ? { ...m, isEnabled: checked } : m) });
                             }} title={member.isEnabled ? "关闭后该成员不参与转发组切换" : "开启后该成员可参与转发组切换"} />
-                          </div>
+                          </div>}
                           <div className="flex h-7 w-9 items-center justify-end">
                             <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" aria-label={`移除成员 ${memberLabel(member)}`} onClick={() => removeMember(member.key)}>
                               <Trash2 className="h-3.5 w-3.5" />

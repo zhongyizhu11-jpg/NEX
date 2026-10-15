@@ -553,7 +553,7 @@ function supportsChinaHealthMode(mode: ForwardGroupMode) {
 
 function validateForwardGroupModeMembers(groupMode: ForwardGroupMode, groupType: string, members: ForwardGroupMemberInput[], options: { externalEntry?: boolean } = {}) {
   if (groupMode === "port") {
-    if (members.length !== 1) throw new Error("端口转发需要配置 1 台所属主机");
+    if (members.length < 1 || members.length > MAX_FORWARD_GROUP_MEMBERS) throw new Error(`端口转发需要配置 1-${MAX_FORWARD_GROUP_MEMBERS} 台入口主机`);
     if (String(groupType || "host") !== "host") throw new Error("端口转发仅支持主机成员");
     if (members.some((member) => member.memberType !== "host")) throw new Error("端口转发仅支持主机成员");
   }
@@ -1087,10 +1087,15 @@ export async function getForwardGroupOptions(allowedGroupIds?: number[]) {
     : await query.orderBy(asc(forwardGroups.sortOrder), desc(forwardGroups.createdAt), desc(forwardGroups.id));
   if (rows.length === 0) return [];
   const ids = rows.map((group: any) => Number(group.id));
+  // 转发链的入口组成员也要拿到：算「应有几个托管监听」时入口组每台主机算一个。
+  const relatedGroupIds = Array.from(new Set([
+    ...ids,
+    ...rows.map((group: any) => Number(group.entryGroupId || 0)).filter((id: number) => id > 0),
+  ]));
   const members = await db
     .select()
     .from(forwardGroupMembers)
-    .where(inArray(forwardGroupMembers.groupId, ids))
+    .where(inArray(forwardGroupMembers.groupId, relatedGroupIds))
     .orderBy(asc(forwardGroupMembers.priority), asc(forwardGroupMembers.id));
   const hydratedMembers = await hydrateForwardGroupMemberEntryAddresses(members as any[]);
   const membersByGroupId = new Map<number, any[]>();
@@ -1100,11 +1105,72 @@ export async function getForwardGroupOptions(allowedGroupIds?: number[]) {
     list.push(member);
     membersByGroupId.set(groupId, list);
   }
-  return rows.map((group: any) => ({
-    ...group,
-    groupMode: forwardGroupModeOf(group),
-    members: membersByGroupId.get(Number(group.id)) || [],
-  }));
+  /*
+    每条模板规则「应有几个托管监听、几个已确认在跑」（ruleRuntimeStatuses）。规则页就靠这份
+    给组规则画状态点和「3 / 3 个入口在运行」—— 它读的是这个接口，不是带完整运行态的 list。
+    端口转发能挂多台入口主机起（2.3.437）尤其需要：一条规则在三台机器上各跑一份，少一份得看得出来。
+    多两次按组查规则的开销，和 getForwardGroups({ includeRuntime: true }) 一样。
+  */
+  const { templatesByGroupId, childrenByGroupId } = await loadForwardGroupRuleRows(ids);
+  return rows.map((group: any) => {
+    const groupId = Number(group.id);
+    const runtime = summarizeForwardGroupRuntime({
+      group,
+      members: membersByGroupId.get(groupId) || [],
+      entryMembers: Number(group.entryGroupId || 0) > 0 ? membersByGroupId.get(Number(group.entryGroupId)) || [] : [],
+      templateRules: templatesByGroupId.get(groupId) || [],
+      childRules: childrenByGroupId.get(groupId) || [],
+    });
+    return {
+      ...group,
+      groupMode: forwardGroupModeOf(group),
+      runtimeStatus: runtime.status,
+      runtimeExpectedRuleCount: runtime.expectedRuleCount,
+      runtimeRunningRuleCount: runtime.runningRuleCount,
+      ruleRuntimeStatuses: runtime.ruleStatuses,
+      members: membersByGroupId.get(groupId) || [],
+    };
+  });
+}
+
+/** 这些组的模板规则和托管子规则，只取算运行态要的几列，按组分好。 */
+async function loadForwardGroupRuleRows(ids: number[]) {
+  const db = await getDb();
+  const templatesByGroupId = new Map<number, any[]>();
+  const childrenByGroupId = new Map<number, any[]>();
+  if (!db || ids.length === 0) return { templatesByGroupId, childrenByGroupId };
+  const columns = {
+    id: forwardRules.id,
+    hostId: forwardRules.hostId,
+    forwardGroupId: forwardRules.forwardGroupId,
+    forwardGroupRuleId: forwardRules.forwardGroupRuleId,
+    forwardGroupMemberId: forwardRules.forwardGroupMemberId,
+    isEnabled: forwardRules.isEnabled,
+    isRunning: forwardRules.isRunning,
+    pendingDelete: forwardRules.pendingDelete,
+  };
+  const templateRules = await db.select(columns).from(forwardRules).where(and(
+    inArray(forwardRules.forwardGroupId, ids),
+    eq(forwardRules.isForwardGroupTemplate, true),
+    eq(forwardRules.pendingDelete, false),
+  ));
+  const childRules = await db.select(columns).from(forwardRules).where(and(
+    inArray(forwardRules.forwardGroupId, ids),
+    eq(forwardRules.isForwardGroupTemplate, false),
+    isNotNull(forwardRules.forwardGroupRuleId),
+    eq(forwardRules.pendingDelete, false),
+  ));
+  for (const rule of templateRules as any[]) {
+    const groupId = Number(rule.forwardGroupId || 0);
+    if (!templatesByGroupId.has(groupId)) templatesByGroupId.set(groupId, []);
+    templatesByGroupId.get(groupId)!.push(rule);
+  }
+  for (const rule of childRules as any[]) {
+    const groupId = Number(rule.forwardGroupId || 0);
+    if (!childrenByGroupId.has(groupId)) childrenByGroupId.set(groupId, []);
+    childrenByGroupId.get(groupId)!.push(rule);
+  }
+  return { templatesByGroupId, childrenByGroupId };
 }
 
 export async function getForwardGroupById(id: number) {
@@ -2280,7 +2346,7 @@ export async function validateForwardGroupRuleConfig(groupId: number, config: Fo
   const groupMode = forwardGroupModeOf(group);
   if (isCollectionGroupMode(groupMode)) throw new Error("Entry/exit groups cannot be used directly as forwarding rules");
   if (groupMode === "port") {
-    if (members.length !== 1) throw new Error("端口转发需要配置 1 台所属主机");
+    if (members.length < 1 || members.length > MAX_FORWARD_GROUP_MEMBERS) throw new Error(`端口转发需要配置 1-${MAX_FORWARD_GROUP_MEMBERS} 台入口主机`);
     if (String(group.groupType || "host") !== "host") throw new Error("端口转发仅支持主机成员");
     if (members.some((member) => member.memberType !== "host")) throw new Error("端口转发仅支持主机成员");
   }
@@ -3335,7 +3401,7 @@ async function syncForwardGroupRulesUnlocked(groupId: number, options: SyncForwa
   const activeChainMembers = groupMode === "chain" ? members.filter((member: any) => dbBool(member?.isEnabled)) : members;
 
   if (groupMode === "port") {
-    if (members.length !== 1) throw new Error("端口转发需要配置 1 台所属主机");
+    if (members.length < 1 || members.length > MAX_FORWARD_GROUP_MEMBERS) throw new Error(`端口转发需要配置 1-${MAX_FORWARD_GROUP_MEMBERS} 台入口主机`);
     if (String(group.groupType || "host") !== "host") throw new Error("端口转发仅支持主机成员");
     if (members.some((member) => member.memberType !== "host")) throw new Error("端口转发仅支持主机成员");
     await repairPortForwardRuleHostReferences(groupId);

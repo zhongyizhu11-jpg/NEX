@@ -89,8 +89,9 @@ export function normalizeForwardGroupMembers(
   const isCollectionGroup = groupMode === "entry" || groupMode === "exit";
   const effectiveGroupType = groupMode === "port" || groupMode === "chain" || isCollectionGroup ? "host" : groupType;
   const minChainMembers = options.externalEntry ? 1 : 2;
-  if (groupMode === "port" && members.length !== 1) {
-    throw new Error("端口转发需要配置 1 台所属主机");
+  // 端口转发：一台或多台入口主机，每台都同时监听规则的入口端口、转到同一目标（poouo/Forwardx#15）。
+  if (groupMode === "port" && (members.length < 1 || members.length > MAX_FORWARD_GROUP_MEMBERS)) {
+    throw new Error(`端口转发需要配置 1-${MAX_FORWARD_GROUP_MEMBERS} 台入口主机`);
   }
   if (groupMode === "chain" && (members.length < minChainMembers || members.length > MAX_FORWARD_GROUP_MEMBERS)) {
     if (options.externalEntry) throw new Error(`转发链需要配置 1-${MAX_FORWARD_GROUP_MEMBERS} 台主机`);
