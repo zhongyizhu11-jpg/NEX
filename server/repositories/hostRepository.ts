@@ -15,6 +15,7 @@ import {
   forwardRuleTrafficCounters,
   hostTrafficCounters,
   InsertHost,
+  proxyInbounds,
   subscriptionPlanHosts,
   subscriptionPlans,
   trafficBillingConfigs,
@@ -31,7 +32,7 @@ import { boolValue, inList, quoteIdentifier, sqlCountAll } from "../dbCompat";
 import { recordRuleEntryDomainCleanupsBeforeDelete } from "./ruleEntryDomainRepository";
 import { signalRuleEntryDomainCleanup } from "../ruleEntryDomainSignals";
 import { repairPortForwardRuleHostReferences } from "../portForwardRuleHosts";
-import { sqlBool } from "./repositoryUtils";
+import { dbBool, sqlBool } from "./repositoryUtils";
 import { repairForwardGroupRuleIntegrity } from "../forwardGroupRuleIntegrity";
 import { pageResult, pageWindowForTotal, type PageRequest } from "../../shared/pagination";
 import { recordConfigAuditEvent, shouldAuditConfigPatch } from "../configAudit";
@@ -420,6 +421,9 @@ function compactHostOption(host: any) {
     geoLatitudeMicro: host?.geoLatitudeMicro,
     geoLongitudeMicro: host?.geoLongitudeMicro,
     geoUpdatedAt: host?.geoUpdatedAt,
+    geoAsn: host?.geoAsn ?? null,
+    geoIsp: host?.geoIsp ?? null,
+    geoOrg: host?.geoOrg ?? null,
     geoManual: !!host?.geoManual,
     addressManual: !!host?.addressManual,
   };
@@ -492,6 +496,9 @@ export async function getHostOptions(ownerUserId?: number, allowedHostIds?: numb
         geoLatitudeMicro: hosts.geoLatitudeMicro,
         geoLongitudeMicro: hosts.geoLongitudeMicro,
         geoUpdatedAt: hosts.geoUpdatedAt,
+        geoAsn: hosts.geoAsn,
+        geoIsp: hosts.geoIsp,
+        geoOrg: hosts.geoOrg,
         geoManual: hosts.geoManual,
         addressManual: hosts.addressManual,
       })
@@ -762,6 +769,9 @@ export async function deleteHost(id: number) {
   await db.delete(forwardRuleTrafficCounters).where(eq(forwardRuleTrafficCounters.hostId, id));
   await db.delete(trafficStats).where(eq(trafficStats.hostId, id));
   await db.delete(trafficStatBuckets).where(eq(trafficStatBuckets.hostId, id));
+  // 网络画像、解锁检测记录（server/ops/netProfileTables.ts / unlockTables.ts）：表是后加的，老库里可能还没建好，失败不拦删除
+  await executeRaw(`DELETE FROM ${quoteIdentifier("host_network_profiles")} WHERE ${quoteIdentifier("hostId")} = ?`, [id]).catch(() => undefined);
+  await executeRaw(`DELETE FROM ${quoteIdentifier("host_unlock_checks")} WHERE ${quoteIdentifier("hostId")} = ?`, [id]).catch(() => undefined);
   await db.delete(trafficBillingConfigs).where(and(
     eq(trafficBillingConfigs.resourceType, "host"),
     eq(trafficBillingConfigs.resourceId, id),
@@ -781,10 +791,34 @@ export async function deleteHost(id: number) {
  * 转发组 DDNS 解析到空地址，套餐继续卖一台已经没有的机器。所以要求先解除引用再删。
  * Agent 令牌不算：它就是这台机器自己的，deleteHost 会一起删。
  */
+/**
+ * 别的主机上、拿这台机器的落地入站当 Shadowsocks 出口的规则（2.3.445）。
+ * deleteHost 会把这台机器的入站一起删掉，这些规则就指向一个不存在的入站，下一次心跳被停掉——
+ * 所以删主机前要先让人把它们的出口改掉。这台机器自己的规则会跟着主机一起删，不算。
+ */
+async function getHostEgressDependentRules(hostId: number) {
+  const db = await getDb();
+  if (!db) return [] as Array<{ id: number; name: string }>;
+  const rows = await db.select({
+    id: forwardRules.id,
+    name: forwardRules.name,
+    ruleHostId: forwardRules.hostId,
+    pendingDelete: forwardRules.pendingDelete,
+    forwardGroupRuleId: forwardRules.forwardGroupRuleId,
+  })
+    .from(forwardRules)
+    .innerJoin(proxyInbounds, eq(proxyInbounds.id, forwardRules.egressInboundId))
+    .where(and(eq(forwardRules.egressType, "ss_host"), eq(proxyInbounds.hostId, hostId)))
+    .catch(() => [] as any[]);
+  return (rows as any[])
+    .filter((row) => Number(row.ruleHostId) !== hostId && !dbBool(row.pendingDelete) && !Number(row.forwardGroupRuleId || 0))
+    .map((row) => ({ id: Number(row.id), name: String(row.name || "") }));
+}
+
 export async function getHostDeleteReferenceLabels(hostId: number): Promise<string[]> {
   const db = await getDb();
   if (!db) return [];
-  const [tunnelRows, hopRows, extraExitRows, groupRows, planRows] = await Promise.all([
+  const [tunnelRows, hopRows, extraExitRows, groupRows, planRows, egressRuleRows] = await Promise.all([
     db.select({ id: tunnels.id, name: tunnels.name, entryHostId: tunnels.entryHostId, exitHostId: tunnels.exitHostId })
       .from(tunnels)
       .where(sql`${tunnels.entryHostId} = ${hostId} OR ${tunnels.exitHostId} = ${hostId}`),
@@ -804,6 +838,7 @@ export async function getHostDeleteReferenceLabels(hostId: number): Promise<stri
       .from(subscriptionPlanHosts)
       .innerJoin(subscriptionPlans, eq(subscriptionPlanHosts.planId, subscriptionPlans.id))
       .where(eq(subscriptionPlanHosts.hostId, hostId)),
+    getHostEgressDependentRules(hostId),
   ]);
   const names = (rows: any[]) => {
     const unique = Array.from(new Map(rows.map((row) => [Number(row.id), String(row.name || `#${row.id}`)])).values());
@@ -819,13 +854,14 @@ export async function getHostDeleteReferenceLabels(hostId: number): Promise<stri
   if (extraExitRows.length > 0) labels.push(`隧道额外出口 ${names(extraExitRows as any[])}`);
   if (groupRows.length > 0) labels.push(`转发组成员 ${names(groupRows as any[])}`);
   if (planRows.length > 0) labels.push(`套餐 ${names(planRows as any[])}`);
+  if (egressRuleRows.length > 0) labels.push(`把这台机器的落地入站当 Shadowsocks 出口的转发规则 ${names(egressRuleRows)}`);
   return labels;
 }
 
 async function hostHasLiveReferences(hostId: number) {
   const db = await getDb();
   if (!db) return true;
-  const [ruleBlockers, forwardGroupRows, tunnelRows, tunnelHopRows, tunnelExitRows, planRows, tokenRows] = await Promise.all([
+  const [ruleBlockers, forwardGroupRows, tunnelRows, tunnelHopRows, tunnelExitRows, planRows, tokenRows, egressRuleRows] = await Promise.all([
     getHostRuleDeleteBlockers(hostId),
     db.select({ count: sqlCountAll() }).from(forwardGroupMembers).where(and(
       eq(forwardGroupMembers.memberType, "host"),
@@ -836,8 +872,10 @@ async function hostHasLiveReferences(hostId: number) {
     db.select({ count: sqlCountAll() }).from(tunnelExitNodes).where(eq(tunnelExitNodes.hostId, hostId)),
     db.select({ count: sqlCountAll() }).from(subscriptionPlanHosts).where(eq(subscriptionPlanHosts.hostId, hostId)),
     db.select({ count: sqlCountAll() }).from(agentTokens).where(eq(agentTokens.hostId, hostId)),
+    getHostEgressDependentRules(hostId),
   ]);
   return ruleBlockers.ruleCount > 0
+    || egressRuleRows.length > 0
     || ruleBlockers.managedRuleCount > 0
     || Number(forwardGroupRows[0]?.count) > 0
     || Number(tunnelRows[0]?.count) > 0
@@ -889,7 +927,8 @@ export async function applyAgentReportedHostAddress(id: number, address: { ip: s
     `UPDATE ${q("hosts")}
      SET ${q("ip")} = ?, ${q("ipv4")} = ?, ${q("ipv6")} = ?,
          ${q("geoCountryCode")} = NULL, ${q("geoCountryName")} = NULL, ${q("geoRegion")} = NULL, ${q("geoEmoji")} = NULL,
-         ${q("geoLatitudeMicro")} = NULL, ${q("geoLongitudeMicro")} = NULL, ${q("geoUpdatedAt")} = NULL
+         ${q("geoLatitudeMicro")} = NULL, ${q("geoLongitudeMicro")} = NULL, ${q("geoUpdatedAt")} = NULL,
+         ${q("geoAsn")} = NULL, ${q("geoIsp")} = NULL, ${q("geoOrg")} = NULL
      WHERE ${q("id")} = ? AND COALESCE(${q("addressManual")}, ?) = ?`,
     [address.ip, address.ipv4, address.ipv6, id, boolValue(false), boolValue(false)],
   );
@@ -931,6 +970,7 @@ export async function getHostsMissingGeo(limit = 200) {
   const rows = await db.select().from(hosts).where(sql`
     ${hosts.geoCountryCode} IS NULL OR ${hosts.geoCountryCode} = ''
       OR ${hosts.geoLatitudeMicro} IS NULL OR ${hosts.geoLongitudeMicro} IS NULL
+      OR ${hosts.geoAsn} IS NULL
   `).orderBy(asc(hosts.id)).limit(Math.max(1, Math.floor(limit)));
   return rows.map(withComputedOnline);
 }

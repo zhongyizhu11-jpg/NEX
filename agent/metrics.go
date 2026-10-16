@@ -547,6 +547,7 @@ type tcpingTask struct {
 	Method          string
 	TargetIP        string
 	TargetPort      int
+	Family          string // 只有探测服务用：ipv4 / ipv6 / ""（见 probe_family.go）
 	HopIndex        int
 	HopCount        int
 	FailoverSeconds int
@@ -1529,6 +1530,7 @@ func collectTCPing(cfg Config, ruleProbes []ruleLatencyProbe, probes []tunnelPro
 				ServiceID: probe.ServiceID,
 				Method:    method,
 				TargetIP:  probe.TargetIP,
+				Family:    normalizeProbeFamily(probe.Family),
 				ProbeKey:  fmt.Sprintf("service:%d:%s:ping", probe.ServiceID, strings.ToLower(strings.TrimSpace(probe.TargetIP))),
 			})
 			continue
@@ -1542,6 +1544,7 @@ func collectTCPing(cfg Config, ruleProbes []ruleLatencyProbe, probes []tunnelPro
 			Method:     "tcping",
 			TargetIP:   probe.TargetIP,
 			TargetPort: probe.TargetPort,
+			Family:     normalizeProbeFamily(probe.Family),
 			ProbeKey:   fmt.Sprintf("service:%d:%s:%d:tcping", probe.ServiceID, strings.ToLower(strings.TrimSpace(probe.TargetIP)), probe.TargetPort),
 		})
 	}
@@ -1999,12 +2002,25 @@ func executeTCPingTaskWithProbes(
 	pingProbe func(string, time.Duration, int) probeMeasurement,
 ) tcpingTaskResult {
 	measurement := probeMeasurement{ProbeCount: 1}
-	if task.Kind == "forwardGroup" && task.Method == "self" {
+	// 实际去测的地址。上报里的 targetIp 仍是原来的域名（面板按它核对这条服务没被改过）。
+	probeTarget := task.TargetIP
+	familyMissing := false
+	if task.Family != "" {
+		// 按指定地址族把域名换成那一族的地址；没有就记这一轮不通（不悄悄改测另一族）
+		if resolved, ok := resolveProbeTargetForFamily(task.TargetIP, task.Family); ok {
+			probeTarget = resolved
+		} else {
+			familyMissing = true
+		}
+	}
+	if familyMissing {
+		measurement.Detail = "目标没有 " + task.Family + " 地址"
+	} else if task.Kind == "forwardGroup" && task.Method == "self" {
 		measurement.Reachable = true
 		measurement.ProbeSuccesses = 1
 	} else if (task.Kind == "rule" || task.Kind == "forwardGroup" || task.Kind == "service") && task.Method == "ping" {
 		if pingProbe != nil {
-			measurement = pingProbe(task.TargetIP, tcpingProbeTimeout, tcpingPingProbeCount)
+			measurement = pingProbe(probeTarget, tcpingProbeTimeout, tcpingPingProbeCount)
 		}
 	} else if task.Kind == "tunnel" && task.WireGuardPeerID != "" {
 		status := wireGuardProbeTimeout
@@ -2021,7 +2037,7 @@ func executeTCPingTaskWithProbes(
 			measurement.ProbeSuccesses = 1
 		}
 	} else {
-		measurement = tcpLatencyWithProbes(task.TargetIP, task.TargetPort, tcpingProbeTimeout, tcpingTCPProbeCount)
+		measurement = tcpLatencyWithProbes(probeTarget, task.TargetPort, tcpingProbeTimeout, tcpingTCPProbeCount)
 	}
 	if measurement.ProbeCount < 1 {
 		measurement.ProbeCount = 1

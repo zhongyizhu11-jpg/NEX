@@ -29,9 +29,13 @@ export class IpChangeSecretError extends Error {
   }
 }
 
-export function deriveIpChangeKey(secret: string) {
+/**
+ * info 区分用途：默认是云账号凭据；别的模块复用这套加密时（例如转发规则的 Shadowsocks 出口链接，
+ * server/ssEgress.ts）传自己的 info，派生出另一把密钥，两边的密文互相解不开。
+ */
+export function deriveIpChangeKey(secret: string, info = "cloud-credentials-v1") {
   if (!secret) throw new IpChangeSecretError("缺少加密密钥");
-  return Buffer.from(crypto.hkdfSync("sha256", Buffer.from(secret, "utf8"), Buffer.from("nex-ip-change", "utf8"), Buffer.from("cloud-credentials-v1", "utf8"), 32));
+  return Buffer.from(crypto.hkdfSync("sha256", Buffer.from(secret, "utf8"), Buffer.from("nex-ip-change", "utf8"), Buffer.from(info, "utf8"), 32));
 }
 
 export type CredentialCipher = {
@@ -39,8 +43,8 @@ export type CredentialCipher = {
   decrypt(stored: string | null | undefined): IpChangeCredentials;
 };
 
-export function createCredentialCipher(secret: string): CredentialCipher {
-  const key = deriveIpChangeKey(secret);
+export function createCredentialCipher(secret: string, info?: string): CredentialCipher {
+  const key = deriveIpChangeKey(secret, info);
   return {
     encrypt(credentials) {
       const iv = crypto.randomBytes(IV_LENGTH);

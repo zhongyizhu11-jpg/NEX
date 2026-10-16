@@ -2886,7 +2886,9 @@ export async function getTunnelLatencySeries(
  * 一批隧道近 N 小时的逐时延迟（链路卡上那条小走势）：每条隧道每个整点一行，平均 / 最高 / 样本数。
  *
  * 只取「总延迟」那一条序列（seriesKey = total，老数据是空的），超时的样本没有毫秒数，
- * 自然不进平均。普通用户传 userId 只看自己的隧道；管理员不传。
+ * 自然不进平均（AVG / MAX / COUNT(列) 都跳过 NULL）。attempts 是这一桶里全部探测记录（含超时），
+ * samples / attempts 就是这一段的可用率 —— 链路卡上和延迟写在一起。
+ * 普通用户传 userId 只看自己的隧道；管理员不传。
  */
 export async function getTunnelLatencySparkBatch(
   tunnelIds: number[],
@@ -2894,7 +2896,7 @@ export async function getTunnelLatencySparkBatch(
 ) {
   const db = await getDb();
   const ids = [...new Set(tunnelIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0))];
-  if (!db || ids.length === 0) return [] as Array<{ tunnelId: number; bucket: Date; avgMs: number; maxMs: number; samples: number }>;
+  if (!db || ids.length === 0) return [] as Array<{ tunnelId: number; bucket: Date; avgMs: number; maxMs: number; samples: number; attempts: number }>;
   const since = opts.since ?? new Date(Date.now() - 24 * 60 * 60 * 1000);
   const bucketSec = Math.max(60, Math.floor((opts.bucketMinutes ?? 60) * 60));
   const q = quoteIdentifier;
@@ -2905,14 +2907,14 @@ export async function getTunnelLatencySparkBatch(
   const params: unknown[] = opts.userId ? [opts.userId] : [];
   params.push(...ids, epochSeconds(since));
   const startedAt = Date.now();
-  const rows = await queryRaw<{ tunnelId: unknown; bucket: unknown; avgMs: unknown; maxMs: unknown; samples: unknown }>(
+  const rows = await queryRaw<{ tunnelId: unknown; bucket: unknown; avgMs: unknown; maxMs: unknown; samples: unknown; attempts: unknown }>(
     `SELECT s.${q("tunnelId")} AS ${q("tunnelId")}, ${bucketExprSql("s", bucketSec)} AS ${q("bucket")},
-            AVG(s.${q("latencyMs")}) AS ${q("avgMs")}, MAX(s.${q("latencyMs")}) AS ${q("maxMs")}, COUNT(*) AS ${q("samples")}
+            AVG(s.${q("latencyMs")}) AS ${q("avgMs")}, MAX(s.${q("latencyMs")}) AS ${q("maxMs")},
+            COUNT(s.${q("latencyMs")}) AS ${q("samples")}, COUNT(*) AS ${q("attempts")}
        FROM ${q("tunnel_latency_stats")} s
        ${userJoin}
       WHERE s.${q("tunnelId")} IN (${placeholders})
         AND s.${q("recordedAt")} >= ?
-        AND s.${q("latencyMs")} IS NOT NULL
         AND (s.${q("seriesKey")} = 'total' OR s.${q("seriesKey")} IS NULL OR s.${q("seriesKey")} = '')
       GROUP BY s.${q("tunnelId")}, ${bucketExprSql("s", bucketSec)}
       ORDER BY s.${q("tunnelId")}, ${q("bucket")}`,
@@ -2928,6 +2930,7 @@ export async function getTunnelLatencySparkBatch(
     avgMs: Math.round(numeric(row.avgMs)),
     maxMs: Math.round(numeric(row.maxMs)),
     samples: numeric(row.samples),
+    attempts: numeric(row.attempts),
   }));
 }
 

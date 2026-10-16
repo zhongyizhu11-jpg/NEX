@@ -6,3 +6,5 @@ import "./agentRelayAgent";
 import "./hostOpsAgent";
 import "./quotaAgent";
 import "./flowOffloadAgent";
+import "./netProfileAgent";
+import "./unlockAgent";

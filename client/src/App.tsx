@@ -45,6 +45,7 @@ const HomepagePreviewPage = lazy(() => import("@/pages/HomepagePreview"));
 const HostMonitorPage = lazy(() => import("@/pages/HostMonitor"));
 const IpChangePage = lazy(() => import("@/pages/IpChange"));
 const InsightsPage = lazy(routeChunks["/insights"] as () => Promise<{ default: ComponentType<any> }>);
+const TopologyPage = lazy(routeChunks["/topology"] as () => Promise<{ default: ComponentType<any> }>);
 const HostsPage = lazy(routeChunks["/hosts"] as () => Promise<{ default: ComponentType<any> }>);
 const MorePage = lazy(routeChunks["/more"] as () => Promise<{ default: ComponentType<any> }>);
 const LookingGlassPage = lazy(routeChunks["/looking-glass"] as () => Promise<{ default: ComponentType<any> }>);
@@ -157,6 +158,8 @@ function Routes() {
         回到总览：不写这条的话 /map 会落进下面的 /:monitorPath，被当成公开监控页的路径。
       */}
       <Route path="/map"><Redirect to="/" /></Route>
+      {/* 网络拓扑：按链路分列的整张图。普通用户也能进，服务端只给他自己的规则、隧道和经过的主机。 */}
+      <Route path="/topology">{routeComponent(TopologyPage)}</Route>
       <Route path="/rules">{routeComponent(RulesPage)}</Route>
       <Route path="/looking-glass" component={LookingGlassRoute} />
       <Route path="/forward-groups">{() => <AdminRoute component={ForwardGroupsPage} />}</Route>
@@ -211,6 +214,7 @@ const shellRoutePatterns = [
   "/hosts",
   "/more",
   "/map",
+  "/topology",
   "/rules",
   "/looking-glass",
   "/forward-groups",

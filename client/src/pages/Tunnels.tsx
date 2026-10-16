@@ -1,5 +1,6 @@
 import { FormField } from "@/components/ui/form-field";
 import EmptyState from "@/components/EmptyState";
+import { useLocation } from "wouter";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
 import { HeaderStatusChips } from "@/components/HeaderStatusChips";
 import { Sparkline } from "@/components/charts/Sparkline";
@@ -80,7 +81,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import DataSectionLoading from "@/components/DataSectionLoading";
 import { SortableDragHandle, SortableItem, SortableReorderContext, useOptimisticSortableOrder, useSortableReorder } from "@/components/SortableDragHandle";
 import { countryFeatureHasCode, normalizeCountryCode, type CountryFeatureLike } from "@/lib/countryFeatures";
-import { applyLatencyPeakCut, clipLatencyForChart, getLatencyStabilityStats, getLatencyYAxisMax, getLatencyYAxisTicks, isLatencySeriesCacheFresh, normalizeLatencyProbeCounts } from "@/lib/latencyChart";
+import { applyLatencyPeakCut, clipLatencyForChart, formatStatPercent, getLatencyStabilityStats, getLatencyYAxisMax, getLatencyYAxisTicks, isLatencySeriesCacheFresh, normalizeLatencyProbeCounts } from "@/lib/latencyChart";
 import { useUrlTab } from "@/hooks/useUrlTab";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { addHostNodeMeta, hostAddressCandidates, hostDisplayName } from "@/lib/linkTestNodeMeta";
@@ -1954,6 +1955,7 @@ function TunnelSelfTestDialog({
       lastRunAt={lastTestAt || null}
       outcome={displaySuccess ? "success" : status === "timeout" ? "timeout" : isFailed ? "failed" : null}
       failureReason={parsedMessage.message}
+      checklist={{ kind: "tunnel", id: tunnelId }}
       onRun={() => {
         lastFailureToastKey.current = "";
         manualTestRef.current = true;
@@ -2208,7 +2210,15 @@ function TunnelsContent() {
     defaultValue: "tunnels",
     storageKey: TUNNEL_SECTION_STORAGE_KEY,
   });
-  const [linkSearchQuery, setLinkSearchQuery] = useState("");
+  const [linkSearchQuery, setLinkSearchQuery] = useState((() => {
+    // 从别处（网络拓扑的详情面板）带着 ?q= 跳过来：先按它搜一遍。
+    try {
+      return new URLSearchParams(window.location.search).get("q") || "";
+    } catch {
+      return "";
+    }
+  }));
+  const [, setTopologyLocation] = useLocation();
   const [showCreateTypeDialog, setShowCreateTypeDialog] = useState(false);
   const [selectedCreateType, setSelectedCreateType] = useState<LinkCreateType>("chain");
   const [chainCreateForm, setChainCreateForm] = useState<ChainCreateForm>(defaultChainCreateForm);
@@ -2930,9 +2940,9 @@ function TunnelsContent() {
     },
   );
   const sparkByTunnel = useMemo(() => {
-    const byId = new Map<number, { values: number[]; avgMs: number | null; maxMs: number | null }>();
+    const byId = new Map<number, { values: number[]; avgMs: number | null; maxMs: number | null; availabilityPct: number | null }>();
     if (!tunnelSparkRows) return byId;
-    const grouped = new Map<number, Array<{ bucket: string | Date; avgMs: number; maxMs: number; samples: number }>>();
+    const grouped = new Map<number, Array<{ bucket: string | Date; avgMs: number; maxMs: number; samples: number; attempts?: number }>>();
     for (const row of tunnelSparkRows as any[]) {
       const id = Number(row.tunnelId);
       const list = grouped.get(id) || [];
@@ -2943,16 +2953,27 @@ function TunnelsContent() {
       let weighted = 0;
       let samples = 0;
       let maxMs = 0;
-      for (const row of rows) {
+      let okCount = 0;
+      let attempts = 0;
+      // 只有超时、没有毫秒数的桶（samples = 0）不进平均和走势线，只算进可用率。
+      const measured = rows.filter((row) => Number(row.samples) > 0);
+      for (const row of measured) {
         const n = Math.max(1, Number(row.samples) || 1);
         weighted += (Number(row.avgMs) || 0) * n;
         samples += n;
         maxMs = Math.max(maxMs, Number(row.maxMs) || 0);
       }
+      for (const row of rows) {
+        const rowAttempts = Number(row.attempts);
+        if (!Number.isFinite(rowAttempts) || rowAttempts <= 0) continue;
+        attempts += rowAttempts;
+        okCount += Math.min(rowAttempts, Math.max(0, Number(row.samples) || 0));
+      }
       byId.set(id, {
-        values: hourlySlots(rows, (row) => ({ at: row.bucket, value: Number(row.avgMs) || 0 })),
+        values: hourlySlots(measured, (row) => ({ at: row.bucket, value: Number(row.avgMs) || 0 })),
         avgMs: samples > 0 ? Math.round(weighted / samples) : null,
         maxMs: samples > 0 ? maxMs : null,
+        availabilityPct: attempts > 0 ? (okCount / attempts) * 100 : null,
       });
     });
     return byId;
@@ -3961,6 +3982,13 @@ function TunnelsContent() {
           icon: <Activity className="h-3.5 w-3.5" />,
           onSelect: () => setLatencyTunnel({ id: tunnel.id, name: tunnel.name }),
         }] : []),
+        {
+          key: "topology",
+          label: "查看拓扑",
+          ariaLabel: `在网络拓扑里查看隧道 ${tunnel.name}`,
+          icon: <Network className="h-3.5 w-3.5" />,
+          onSelect: () => setTopologyLocation(`/topology?tunnel=${Number(tunnel.id)}`),
+        },
         { key: "delete", label: "删除", ariaLabel: `删除隧道 ${tunnel.name}`, icon: <Trash2 className="h-3.5 w-3.5" />, destructive: true, onSelect: () => setDeleteTunnel(tunnel) },
       ]}
       menuLabel={`隧道 ${tunnel.name} 的更多操作`}
@@ -4114,7 +4142,9 @@ function TunnelsContent() {
             <div className="fx-rule-day">
               <span>近 24H</span>
               <span className="fx-rule-day-val">
-                {spark?.avgMs != null ? `平均 ${spark.avgMs} · 最高 ${spark.maxMs} ms` : "还没有记录"}
+                {spark?.avgMs != null
+                  ? `平均 ${spark.avgMs} · 最高 ${spark.maxMs} ms${spark.availabilityPct != null ? ` · 可用 ${formatStatPercent(spark.availabilityPct, 1)}` : ""}`
+                  : spark?.availabilityPct != null ? `可用 ${formatStatPercent(spark.availabilityPct, 1)}` : "还没有记录"}
               </span>
             </div>
           </div>

@@ -9,6 +9,7 @@ import { executeRaw, getDb, insertAndGetId, nowDate, queryRaw } from "../dbRunti
 import { boolLiteral, bucketExpression, inList, quoteIdentifier } from "../dbCompat";
 import { clampPositiveInt, epochSeconds, reorderRowsBySortOrder } from "./repositoryUtils";
 import { normalizeAgentProbeCounts } from "../../shared/agentDtos";
+import { normalizeProbeAddressFamily, type ProbeAddressFamily } from "../../shared/probeFamily";
 
 export type HostProbeMethod = "tcping" | "ping";
 export type HostProbeScope = "all" | "exclude" | "specific";
@@ -18,6 +19,8 @@ export type HostProbeServiceInput = {
   method: HostProbeMethod;
   targetIp: string;
   targetPort?: number | null;
+  /** 目标是域名时按哪一族解析（auto 照旧）；目标是 IP 时存 auto。 */
+  addressFamily?: ProbeAddressFamily;
   hostScope: HostProbeScope;
   hostIds?: number[];
   excludeHostIds?: number[];
@@ -68,6 +71,7 @@ function normalizeServiceInput(input: HostProbeServiceInput): InsertHostProbeSer
     method,
     targetIp: input.targetIp.trim(),
     targetPort: method === "tcping" ? Number(input.targetPort) : null,
+    addressFamily: normalizeProbeAddressFamily(input.addressFamily, input.targetIp),
     hostScope,
     hostIds: hostScope === "specific" ? serializeIds(input.hostIds) : null,
     excludeHostIds: hostScope === "exclude" ? serializeIds(input.excludeHostIds) : null,
@@ -86,6 +90,7 @@ export function mapHostProbeService(row: any) {
     ...row,
     id: Number(row?.id || 0),
     targetPort: row?.targetPort == null ? null : Number(row.targetPort),
+    addressFamily: normalizeProbeAddressFamily(row?.addressFamily, row?.targetIp),
     intervalSeconds: normalizeIntervalSeconds(row?.intervalSeconds),
     isEnabled: rowBool(row?.isEnabled),
     sortOrder: normalizeSortOrder(row?.sortOrder),
@@ -189,6 +194,8 @@ export async function getHostProbeTasksForHost(hostId: number) {
       targetIp: service.targetIp,
       targetPort: service.method === "tcping" ? Number(service.targetPort || 0) : 0,
       intervalSeconds: service.intervalSeconds,
+      // 只在不是 auto 时带上：老 Agent 不认这个字段；auto 不写也就不改动下发签名
+      ...(service.addressFamily && service.addressFamily !== "auto" ? { family: service.addressFamily } : {}),
     }))
     .filter((task: any) => task.serviceId > 0 && task.targetIp && (task.method === "ping" || task.targetPort > 0));
 }

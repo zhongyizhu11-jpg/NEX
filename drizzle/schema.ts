@@ -217,6 +217,13 @@ export const users = table("users", {
   googleSub: varchar("googleSub", { length: 191 }).unique(),
   googleEmail: text("googleEmail"),
   googleLinkedAt: epoch("googleLinkedAt"),
+  // Discord 登录 / 通知（server/discordLoginService.ts、server/discordBot.ts）：Discord 用户 ID（雪花，永不变）、
+  // 绑定时的用户名和邮箱（只用来显示）、绑定时间；discordDmBlockedAt = 最近一次私信被 Discord 拒收（对方关了私信）的时间。
+  discordId: varchar("discordId", { length: 32 }).unique(),
+  discordUsername: text("discordUsername"),
+  discordEmail: text("discordEmail"),
+  discordLinkedAt: epoch("discordLinkedAt"),
+  discordDmBlockedAt: epoch("discordDmBlockedAt"),
   browserSessionToken: text("browserSessionToken"),
   mobileSessionToken: text("mobileSessionToken"),
   telegramSessionToken: text("telegramSessionToken"),
@@ -327,6 +334,10 @@ export const hosts = table("hosts", {
   geoLatitudeMicro: int("geoLatitudeMicro"),
   geoLongitudeMicro: int("geoLongitudeMicro"),
   geoUpdatedAt: epoch("geoUpdatedAt"),
+  /** 运营商 / ASN（AS13335）。NULL = 还没问过，"" = 问过、定位服务没给。 */
+  geoAsn: varchar("geoAsn", { length: 16 }),
+  geoIsp: text("geoIsp"),
+  geoOrg: text("geoOrg"),
   /*
     位置是人手填的（见 hosts.setLocation）：为 true 时上面几列由用户说了算，
     按 IP 的自动定位不得覆盖 —— 机房 IP 段的库经常把香港机器放到深圳。
@@ -492,6 +503,15 @@ export const forwardRules = table("forward_rules", {
   */
   tlsInboundId: int("tlsInboundId"),
   sniNames: text("sniNames"),
+  /*
+    Shadowsocks 出口（shared/ssEgress.ts）：egressType = none | ss_host | ss_link。
+    ss_host 指向 proxy_inbounds 里的一个 Shadowsocks 落地入站（凭据每次下发时从入站现取，轮换后自动跟上）；
+    ss_link 是用户粘贴的外部链接，解析后的服务器 / 方法 / 密码用面板密钥加密存在 egressConfigJson 里。
+  */
+  egressType: varchar("egressType", { length: 16 }).notNull().default("none"),
+  egressInboundId: int("egressInboundId"),
+  egressConfigJson: text("egressConfigJson"),
+  egressUdp: boolean("egressUdp").notNull().default(false),
   userId: int("userId").notNull(),
   createdAt: epoch("createdAt").notNull().default(nowDefault()),
   updatedAt: epoch("updatedAt").notNull().default(nowDefault()),
@@ -675,6 +695,12 @@ export const proxyInbounds = table("proxy_inbounds", {
    * 按授权去收会把管理员明确分出去的端口一起停掉。老数据一律是 false（维持原来的行为）。
    */
   hostGrantRequired: boolean("hostGrantRequired").notNull().default(false),
+  /**
+   * 「一键创建落地 SS 入站」开出来的：给转发规则当 Shadowsocks 出口用（shared/ssEgress.ts）。
+   * 派生节点默认不进订阅（includeDirect = false），管理员想给客户端用时在订阅页里打开即可；
+   * 管理员开的这种入站，有这台主机使用权限的用户都能拿来当出口。
+   */
+  landingEgress: boolean("landingEgress").notNull().default(false),
   /**
    * 这个端口自己的额度与用量。
    *
@@ -943,6 +969,25 @@ export const forwardRuleRouteEvents = table("forward_rule_route_events", {
 });
 export type ForwardRuleRouteEvent = typeof forwardRuleRouteEvents.$inferSelect;
 export type InsertForwardRuleRouteEvent = typeof forwardRuleRouteEvents.$inferInsert;
+
+/*
+  线路组每条路径的质量历史：入口 Agent 随心跳报的评分（routeGroupStats 里的 RouteTargetStat），
+  每条路径最多一分钟落一行，给线路组面板画近几天的走势。丢包、可用率按千分比存整数
+  （和 tunnel_link_shaping.lossPermille 一样），接口里再换回百分比。定期只留 7 天。
+*/
+export const routePathQualityStats = table("route_path_quality_stats", {
+  id: serial("id"),
+  ruleId: int("ruleId").notNull(),
+  pathKey: varchar("pathKey", { length: 32 }).notNull(),
+  sampledAt: epoch("sampledAt").notNull().default(nowDefault()),
+  latencyMs: int("latencyMs"),
+  lossPermille: int("lossPermille").notNull().default(0),
+  jitterMs: int("jitterMs"),
+  availabilityPermille: int("availabilityPermille"),
+  score: int("score"),
+});
+export type RoutePathQualityStat = typeof routePathQualityStats.$inferSelect;
+export type InsertRoutePathQualityStat = typeof routePathQualityStats.$inferInsert;
 
 /*
   换隧道后旧入口的临时桥接：规则换到别的入口主机后，旧入口的老端口在这段时间里继续把流量转到
@@ -1218,6 +1263,8 @@ export const hostProbeServices = table("host_probe_services", {
   method: varchar("method", { length: 16 }).notNull().default("tcping"),
   targetIp: text("targetIp").notNull(),
   targetPort: int("targetPort"),
+  /** 目标是域名时按哪一族解析：auto / ipv4 / ipv6（shared/probeFamily.ts，Agent 2.2.225 起生效）。 */
+  addressFamily: varchar("addressFamily", { length: 8 }).notNull().default("auto"),
   hostScope: varchar("hostScope", { length: 16 }).notNull().default("all"),
   hostIds: text("hostIds"),
   excludeHostIds: text("excludeHostIds"),
@@ -1254,6 +1301,10 @@ export const ipGeoCache = table("ip_geo_cache", {
   geoEmoji: varchar("geoEmoji", { length: 16 }),
   geoLatitudeMicro: int("geoLatitudeMicro"),
   geoLongitudeMicro: int("geoLongitudeMicro"),
+  /** NULL = 加 ASN 之前写的旧行（读到时当作过期，重新问一次）。 */
+  geoAsn: varchar("geoAsn", { length: 16 }),
+  geoIsp: text("geoIsp"),
+  geoOrg: text("geoOrg"),
   provider: varchar("provider", { length: 32 }).notNull().default("ipapi.co"),
   fetchedAt: epoch("fetchedAt").notNull().default(nowDefault()),
   expiresAt: epoch("expiresAt").notNull(),
@@ -1910,3 +1961,32 @@ export const ipChangeEvents = table("ip_change_events", {
   finishedAt: epoch("finishedAt"),
 });
 export type IpChangeEvent = typeof ipChangeEvents.$inferSelect;
+
+// ===== 主机网络画像（建表定义见 server/ops/netProfileTables.ts，读写走 server/ops/netProfile.ts 的原生 SQL） =====
+export const hostNetworkProfiles = table("host_network_profiles", {
+  id: serial("id"),
+  hostId: int("hostId").notNull().unique(),
+  /** shared/netProfile.ts 的 NetProfileReport */
+  profileJson: longtext("profileJson"),
+  /** 最近 30 次的摘要（NetProfileHistoryItem[]） */
+  historyJson: longtext("historyJson"),
+  checkedAt: epoch("checkedAt"),
+  agentCheckedAt: epoch("agentCheckedAt"),
+  updatedAt: epoch("updatedAt").notNull().default(nowDefault()),
+});
+export type HostNetworkProfile = typeof hostNetworkProfiles.$inferSelect;
+
+// ===== 流媒体 / AI 解锁检测（建表定义见 server/ops/unlockTables.ts，读写走 server/ops/unlock.ts） =====
+export const hostUnlockChecks = table("host_unlock_checks", {
+  id: serial("id"),
+  hostId: int("hostId").notNull(),
+  family: varchar("family", { length: 8 }).notNull().default("auto"),
+  runId: varchar("runId", { length: 64 }).notNull().unique(),
+  triggerKind: varchar("triggerKind", { length: 16 }).notNull().default("manual"),
+  latest: boolean("latest").notNull().default(false),
+  resultsJson: text("resultsJson").notNull(),
+  requestedBy: int("requestedBy"),
+  checkedAt: epoch("checkedAt").notNull().default(nowDefault()),
+  createdAt: epoch("createdAt").notNull().default(nowDefault()),
+});
+export type HostUnlockCheck = typeof hostUnlockChecks.$inferSelect;

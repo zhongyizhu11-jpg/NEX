@@ -1,3 +1,4 @@
+import { useLocation } from "wouter";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
 import { NetworkPath } from "@/components/network/NetworkPath";
 import { buildChainPath } from "@/features/links/chainPath";
@@ -81,6 +82,7 @@ import {
   LayoutGrid,
   List,
   Loader2,
+  Network,
   Pencil,
   Plus,
   RefreshCw,
@@ -823,6 +825,7 @@ function ForwardGroupSelfTestDialog({
       lastRunAt={latest?.updatedAt ?? null}
       outcome={isSuccess ? "success" : status === "timeout" ? "timeout" : isFailed ? "failed" : null}
       failureReason={parsedMessage.message}
+      checklist={{ kind: "forwardGroup", id: groupId }}
       onRun={() => {
         manualTestRef.current = true;
         setBaselineTestId(latestTestId);
@@ -856,6 +859,7 @@ export function ForwardGroupsContent({
   searchQuery = "",
 }: ForwardGroupsContentProps) {
   const utils = trpc.useUtils();
+  const [, setTopologyLocation] = useLocation();
   // Keep a same-scope fallback for older/database deployments where the
   // compact options projection can fail. An error should not masquerade as an
   // empty host list and disable creation indefinitely.
@@ -2065,6 +2069,13 @@ export function ForwardGroupsContent({
             icon: <Activity className="h-3.5 w-3.5" />,
             onSelect: () => setLatencyGroup({ id: Number(group.id), name: group.name }),
           }] : []),
+          {
+            key: "topology",
+            label: "查看拓扑",
+            ariaLabel: `在网络拓扑里查看${resource} ${group.name}`,
+            icon: <Network className="h-3.5 w-3.5" />,
+            onSelect: () => setTopologyLocation(`/topology?group=${Number(group.id)}`),
+          },
           {
             key: "sync",
             label: "同步",

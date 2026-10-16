@@ -2134,6 +2134,30 @@ export async function runTelegramDigests(now = Date.now()) {
   return dispatchReminders(pending);
 }
 
+/**
+ * 每日简报的 Discord 那一份：同一个钟点、同一份内容、同一个「每日简报」开关（Telegram 和 Discord 共用），
+ * 发给绑定了 Discord 的人。去重键前缀不同，两边各发一次。
+ */
+export async function runDiscordDigests(now = Date.now()) {
+  const { discordNotifier } = await import("./discordNotify");
+  if (!(await discordNotifier.isReady())) return 0;
+  if (!isDigestDue(billingCalendarParts(now).hour, await getDigestHour())) return 0;
+  const prefs = await readTelegramNotifyPrefs();
+  const users = (await db.getUserTrafficSummaries() as any[])
+    .filter((user) => !!user.discordId && user.accountEnabled !== false && isTelegramDigestEnabled(prefs, user));
+  if (users.length === 0) return 0;
+  const dateKey = billingDateKey(now);
+  const pending: PendingReminder[] = users.map((summary) => ({
+    key: `discordReminder:digest:${summary.id}:${dateKey}`,
+    send: async () => {
+      const user = await db.getUserById(Number(summary.id)) as any;
+      if (!user?.discordId || user.accountEnabled === false) return;
+      await discordNotifier.sendReminder(user, await buildTelegramDigestText(user, now), "digest");
+    },
+  }));
+  return dispatchReminders(pending);
+}
+
 async function handleBind(message: TelegramMessage, code: string) {
   const from = message.from;
   if (!from?.id || from.is_bot) return;

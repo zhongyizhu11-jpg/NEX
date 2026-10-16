@@ -51,6 +51,8 @@ import { appendPanelLog } from "./_core/panelLogger";
 import { isIP } from "net";
 import { resolve4, resolve6 } from "dns/promises";
 import { hasQueuedLookingGlassAgentTasks, takeLookingGlassAgentTasks } from "./lookingGlassAgentTasks";
+import { hasQueuedDiagnosticsAgentTasks, hasRunningDiagnosticsAgentTasks, takeDiagnosticsAgentTasks } from "./diagnosticsAgentTasks";
+import { LINK_DIAGNOSTICS_AGENT_VERSION } from "../shared/linkDiagnostics";
 import { hasQueuedIperf3AgentTasks, takeIperf3AgentTasks } from "./iperf3AgentTasks";
 import { hasQueuedPluginAgentTasks, takePluginAgentTasks } from "./pluginAgentTasks";
 import { hasPendingMimicInstallTask, hasQueuedMimicInstallTask, takeMimicInstallTask } from "./mimicInstallTasks";
@@ -167,6 +169,7 @@ import { observePresenceCapableHostActivity, registerPresenceCapableHost } from 
 import { recordAuthenticatedAgentActivity } from "./agentActivity";
 import { recordHostRestartEvent } from "./ops/eventHooks";
 import { buildAgentSniInbounds, isSniRuntimeRule, recordTlsInboundRuntimeStatus, sniRuleRuntimeView } from "./tlsInboundRuntime";
+import { buildGostEgressChain, gostEgressChainName, loadEgressRuntimeContext, ruleEgressRuntime, ruleEgressRuntimeView } from "./ssEgress";
 
 // DNS 解析缓存：ruleId → 主目标上次解析到的 IPv4 地址。
 // 备用线路策略里的域名由 Agent 的 TCP 拨号和健康检查动态解析。
@@ -1950,6 +1953,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         || !!panelMigrationForFastPath
         || hasHostTcpingRequest(host.id)
         || hasQueuedLookingGlassAgentTasks(host.id)
+        // 一键链路诊断（2.3.444）：排着的任务只在完整心跳里下发
+        || hasQueuedDiagnosticsAgentTasks(host.id)
         || hasQueuedIperf3AgentTasks(host.id)
         || hasQueuedPluginAgentTasks(host.id)
         // 排着的 mimic 安装任务只在完整心跳里下发（2.3.441 前漏了这条：配置不变的主机任务永远发不下去）
@@ -1996,6 +2001,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         actions: [],
         selfTests: [],
         lookingGlassTests: [],
+        diagnosticsTasks: [],
         iperf3Tasks: [],
         pluginTasks: [],
         agentUpgrade: null,
@@ -2029,7 +2035,20 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       agentVersion: effectiveAgentVersion,
       inboundById: tlsInboundById,
     });
-    const gatedRules = (await gateForwardRulesForRuntime(rawRules as any[])).map(sniRuntimeView);
+    /*
+      Shadowsocks 出口（server/ssEgress.ts）：出口失效、落地入站没了、Agent 低于 2.2.226 时规则按停用下发
+      （绝不退回直连）；能跑的规则带上 egressRuntime，下面生成 gost 配置时挂出口链。只管这台主机自己的规则。
+    */
+    let egressRuntimeContext = await loadEgressRuntimeContext(rawRules as any[]);
+    const egressRuntimeView = <T extends Record<string, any>>(rule: T): T => (Number(rule?.hostId) === Number(host.id)
+      ? ruleEgressRuntimeView(rule, {
+        entryHostId: Number(host.id),
+        entryAgentVersion: effectiveAgentVersion,
+        entryHostName: String((host as any).name || ""),
+        context: egressRuntimeContext,
+      })
+      : rule);
+    const gatedRules = (await gateForwardRulesForRuntime(rawRules as any[])).map(sniRuntimeView).map(egressRuntimeView);
     /*
       换隧道后旧入口的临时桥接（server/ruleEntryBridges）：合成成普通的 iptables 规则行接在
       后面，下面整条下发流程原样生成动作、计数、孤儿清理。桥接到期或删掉后这一行消失，
@@ -2410,7 +2429,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       Number(host.id),
       (hostTunnels as any[]).map((tunnel: any) => Number(tunnel.id)),
     );
-    const agentAllRules = (await gateForwardRulesForRuntime(rawAgentAllRules as any[])).map(sniRuntimeView);
+    egressRuntimeContext = await loadEgressRuntimeContext(rawAgentAllRules as any[], egressRuntimeContext);
+    const agentAllRules = (await gateForwardRulesForRuntime(rawAgentAllRules as any[])).map(sniRuntimeView).map(egressRuntimeView);
     const forwardGroupHealthConfigs = await db.getForwardGroupHealthConfigs(([...agentAllRules, ...agentHostRules] as any[])
       .map((rule: any) => Number(rule?.forwardGroupId || 0)));
     const forwardGroupRuntimeConfigById = new Map((forwardGroupHealthConfigs as any[])
@@ -4144,6 +4164,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       if (await shouldUseRuleGuard(rule)) continue;
       routeHeaderStripRuleIds.add(Number(rule.id));
     }
+    // Shadowsocks 出口链：每条带出口的规则每个协议一条（chain-egress-<规则>-<协议>），和隧道链一起写进 chains。
+    const egressGostChains: any[] = [];
     const gostServiceConfig = (await Promise.all(gostRules
       .map(async (r: any) => {
         const useRuleGuard = await shouldUseRuleGuard(r);
@@ -4216,6 +4238,19 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
                 dialer: { type: proto },
               }],
             };
+            /*
+              Shadowsocks 出口：forwarder 仍是最终目标，handler 挂一条一跳的链 —— gost 拨的是落地的 SS
+              服务器，请它代连目标（和隧道入口同一个机制）。计数（监听端口上的计数链）、限速（服务上的
+              limiter）都在入口这一侧，和普通 gost 规则一样。运行视图已经保证：没有 egressRuntime 的
+              出口规则根本走不到这里（按停用下发）；UDP 不走出口时协议已收窄成 TCP。
+            */
+            const egressRuntime = ruleEgressRuntime(r);
+            if (egressRuntime && (proto === "tcp" || egressRuntime.udp)) {
+              service.handler = { ...service.handler, chain: gostEgressChainName(Number(r.id), proto) };
+              egressGostChains.push(buildGostEgressChain(Number(r.id), proto, egressRuntime));
+            } else if (egressRuntime) {
+              return null;
+            }
           } else if (!useMultiHopEntry && (!tunnelExitHost || tunnelExitEndpointsForRule(r, tunnel).length === 0)) {
             return null;
           } else if (useMultiHopEntry || protocolPlan?.entryNeedsTarget) {
@@ -4336,7 +4371,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
           }],
         };
       }))).filter(Boolean);
-    const gostChains = [...tunnelGostChains];
+    const gostChains = [...tunnelGostChains, ...egressGostChains];
     const gostManagedConfigs: any[] = [];
     const buildGostReloadCmds = () => {
       const encodedConfig = Buffer.from(JSON.stringify({ services: gostServiceConfig, chains: gostChains, limiters: gostRateLimiters }, null, 2), "utf8").toString("base64");
@@ -7093,6 +7128,10 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     if (forceTcping) clearHostTcpingRequest(host.id);
 
     const lookingGlassTests = takeLookingGlassAgentTasks(host.id);
+    // 一键链路诊断只发给 2.2.226 起的 Agent（面板排任务时已经按版本挡过，这里再兜一次底）
+    const diagnosticsTasks = isAgentVersionAtLeast(effectiveAgentVersion, LINK_DIAGNOSTICS_AGENT_VERSION)
+      ? takeDiagnosticsAgentTasks(host.id)
+      : [];
     const iperf3Tasks = takeIperf3AgentTasks(host.id);
     const pluginsAwaitingSync = new Set(pluginSyncTasks.map((task) => task.pluginId));
     const pluginTasks = supportsPluginTasks && reportedPluginInventory && !pluginSyncActionQueued
@@ -7105,6 +7144,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     // 「安装 / 修复 mimic」（2.3.439）：排了就下一次心跳带下去，跑的时候心跳也勤一点，页面上进度跟得紧
     const mimicInstallTask = takeMimicInstallTask(host.id);
     const hasInteractiveTasks = lookingGlassTests.length > 0
+      || diagnosticsTasks.length > 0
+      || hasRunningDiagnosticsAgentTasks(host.id)
       || iperf3Tasks.length > 0
       || pluginTasks.length > 0
       || hasPendingPluginTasks
@@ -7219,6 +7260,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       && activeWorkActions.length === 0
       && selfTests.length === 0
       && lookingGlassTests.length === 0
+      && diagnosticsTasks.length === 0
       && iperf3Tasks.length === 0
       && pluginTasks.length === 0
       && !hasPendingPluginTasks
@@ -7270,6 +7312,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       nextInterval,
       interactiveTasks: hasInteractiveTasks ? (
         lookingGlassTests.length
+        + diagnosticsTasks.length
         + iperf3Tasks.length
         + pluginTasks.length
         + (hasPendingPluginTasks ? 1 : 0)
@@ -7285,6 +7328,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       ...stateSections.payload,
       stateSignatures: stateSections.signatures,
       lookingGlassTests,
+      ...(diagnosticsTasks.length > 0 ? { diagnosticsTasks } : {}),
       iperf3Tasks,
       pluginTasks,
       ...(mimicInstallTask ? { mimicInstallTask } : {}),

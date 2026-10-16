@@ -187,10 +187,11 @@ const MIGRATION_RUNTIME_TIMEOUT_MS = Math.max(
 );
 const MIGRATION_RUNTIME_POLL_MS = 2_000;
 // 旧版本面板的库里还没有这些表（换隧道桥接是后加的，只活几小时；工单、邀请返利记录、自动换 IP 的三张表
-// 也是后加的：老面板的库里没有返利表等于「还没有返过利」），直接搬 SQLite 时缺了不算错。
+// 也是后加的：老面板的库里没有返利表等于「还没有返过利」；主机网络画像同理，没有就是还没测过），直接搬 SQLite 时缺了不算错。
 const DIRECT_SQLITE_OPTIONAL_SOURCE_TABLES = new Set([
   "agent_traffic_reports",
   "forward_rule_route_events",
+  "route_path_quality_stats",
   "forward_rule_entry_bridges",
   "tickets",
   "ticket_messages",
@@ -200,6 +201,8 @@ const DIRECT_SQLITE_OPTIONAL_SOURCE_TABLES = new Set([
   "ip_change_events",
   "host_tls_inbounds",
   "rule_sni_names",
+  "host_network_profiles",
+  "host_unlock_checks",
 ]);
 
 function normalizePanelUrl(url: string) {
@@ -232,9 +235,11 @@ export const ESSENTIAL_MIGRATION_OMITTED_TABLES = new Set<(typeof MIGRATION_TABL
   "forward_tests",
   "forward_group_events",
   "forward_rule_route_events",
+  "route_path_quality_stats",
   "ip_geo_cache",
   "config_audit_events",
   "ip_change_events",
+  "host_unlock_checks",
 ]);
 
 export type MigrationSnapshotExportProgress = {
@@ -786,6 +791,7 @@ const IMPORT_TABLE_ORDER = [
   "forward_tests",
   "forward_group_events",
   "forward_rule_route_events",
+  "route_path_quality_stats",
   "ip_geo_cache",
   "subscription_plans",
   "subscription_plan_prices",
@@ -825,6 +831,9 @@ const IMPORT_TABLE_ORDER = [
   "ip_change_cloud_accounts",
   "ip_change_host_configs",
   "ip_change_events",
+  // 主机网络画像：只依赖主机
+  "host_network_profiles",
+  "host_unlock_checks",
   "system_settings",
 ] as const;
 
@@ -843,8 +852,11 @@ const BEST_EFFORT_MIGRATION_TABLES = new Set<MigrationTableName>([
   "forward_tests",
   "forward_group_events",
   "forward_rule_route_events",
+  "route_path_quality_stats",
   "config_audit_events",
   "ip_change_events",
+  "host_network_profiles",
+  "host_unlock_checks",
   "system_settings",
 ]);
 
@@ -1133,7 +1145,7 @@ async function insertGeneratedRows(
 }
 
 async function sanitizeUserUniqueFields(row: Record<string, any>) {
-  for (const key of ["telegramId", "telegramBindCode", "telegramLoginCode", "inviteCode", "googleSub"]) {
+  for (const key of ["telegramId", "telegramBindCode", "telegramLoginCode", "inviteCode", "googleSub", "discordId"]) {
     if (!row[key]) continue;
     const existing = await findExistingId("users", { [key]: row[key] });
     if (existing) {
@@ -1144,6 +1156,13 @@ async function sanitizeUserUniqueFields(row: Record<string, any>) {
       if (key === "googleSub") {
         row.googleEmail = null;
         row.googleLinkedAt = null;
+      }
+      // Discord 同理：导入的这一条不带绑定。
+      if (key === "discordId") {
+        row.discordUsername = null;
+        row.discordEmail = null;
+        row.discordLinkedAt = null;
+        row.discordDmBlockedAt = null;
       }
     }
   }
@@ -1274,6 +1293,13 @@ async function prepareImportRow(table: string, source: Record<string, any>, maps
       row.proxyNodeId = mapOptionalId(maps, "proxy_nodes", source.proxyNodeId);
       // 老面板的库里没有共享 TLS 入站：缺省就是普通规则。
       row.tlsInboundId = mapOptionalId(maps, "host_tls_inbounds", source.tlsInboundId);
+      /*
+        Shadowsocks 出口：落地入站在规则之前导入，按映射改 id；老面板没有这几列就是「直接连接」。
+        外部链接（egressConfigJson）是用源面板密钥加密的，新面板密钥不同就解不开 —— 规则卡片会显示
+        「出口配置失效」并按停用下发，用户重新粘贴一次链接即可。
+      */
+      row.egressInboundId = Number(source.egressInboundId || 0) > 0 ? mapId(maps, "proxy_inbounds", source.egressInboundId) || null : null;
+      if (row.egressType === "ss_host" && !row.egressInboundId) row.egressType = "none";
       row.isRunning = false;
       row.pendingDelete = source.pendingDelete ?? false;
       return { row };
@@ -1439,6 +1465,7 @@ async function prepareImportRow(table: string, source: Record<string, any>, maps
       return { row };
 
     case "forward_rule_route_events":
+    case "route_path_quality_stats":
       row.ruleId = mapRequiredId(maps, "forward_rules", source.ruleId);
       return { row };
 
@@ -1610,6 +1637,16 @@ async function prepareImportRow(table: string, source: Record<string, any>, maps
       row.hostId = mapRequiredId(maps, "hosts", source.hostId);
       if (row.status === "running") row.status = "uncertain";
       return { row };
+
+    case "host_network_profiles":
+      // 每台主机一行；结果是检测出来的，导不进来也就是等下一轮重测（BEST_EFFORT）
+      row.hostId = mapRequiredId(maps, "hosts", source.hostId);
+      return { row, existingWhere: { hostId: row.hostId } };
+    case "host_unlock_checks":
+      row.hostId = mapRequiredId(maps, "hosts", source.hostId);
+      // 发起人是源面板的用户 ID，搬过来对不上，不留。
+      row.requestedBy = null;
+      return { row, existingWhere: { runId: row.runId } };
 
     case "system_settings": {
       const key = String(source.key || "");

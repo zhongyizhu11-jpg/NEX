@@ -42,6 +42,8 @@ export default defineConfig({
           { text: "主机管理", link: "/guide/hosts" },
           { text: "转发规则", link: "/guide/rules" },
           { text: "流量和延迟", link: "/guide/traffic-latency" },
+          { text: "网络拓扑", link: "/guide/topology" },
+          { text: "链路诊断", link: "/guide/link-diagnostics" },
         ],
       },
       {
@@ -55,6 +57,7 @@ export default defineConfig({
           { text: "自动换 IP", link: "/guide/auto-ip-change" },
           { text: "PROXY Protocol", link: "/guide/proxy-protocol" },
           { text: "共享 TLS 入站（SNI 分流）", link: "/guide/sni-shared-inbound" },
+          { text: "落地主机与 Shadowsocks 出口", link: "/guide/ss-egress" },
         ],
       },
       {
@@ -65,6 +68,7 @@ export default defineConfig({
           { text: "Telegram 和通知", link: "/guide/notifications" },
           { text: "工单", link: "/guide/tickets" },
           { text: "Google 登录", link: "/guide/google-login" },
+          { text: "Discord 登录和通知", link: "/guide/discord" },
           { text: "升级和备份", link: "/guide/upgrade-backup" },
           { text: "卸载 NEX", link: "/guide/uninstall" },
           { text: "常见问题排查", link: "/guide/troubleshooting" },

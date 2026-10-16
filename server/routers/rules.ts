@@ -1,4 +1,5 @@
 import { protectedProcedure, router } from "../_core/trpc";
+import { withRuleEgressDisplay } from "../ssEgress";
 import { z } from "zod";
 import * as db from "../db";
 import { crudRulesRouter, routeSchedulerHostIds } from "./rules.crud";
@@ -31,6 +32,8 @@ import {
 import { routeScoreGrade } from "@shared/routeScore";
 import { isAgentVersionBehind } from "@shared/version";
 import { getRouteStatus, routeHopDownHints } from "../routeGroupStats";
+import { bucketRouteQualityRows, routeQualityBucketMs } from "../routePathQualityHistory";
+import { ROUTE_PATH_QUALITY_RETENTION_HOURS } from "../repositories/routePathQualityRepository";
 import { routeRelayRulesByKey } from "../routeGroups";
 import { dbBool } from "../repositories/repositoryUtils";
 import { ruleTrafficQueryCache } from "../ruleLatencyQueryCache";
@@ -148,6 +151,37 @@ async function getRuleListRepositoryInput(
 }
 
 export const rulesRouter = router({
+  /**
+   * 线路组每条路径的质量历史（route_path_quality_stats）：延迟、丢包、抖动、可用率、评分，
+   * 按时间桶合并（最多约 360 个点一条）。入口 Agent 每次心跳报评分，面板每条路径一分钟留一行、
+   * 留 7 天。路径删了的历史不给（key 对不上了）。
+   */
+  routeQualityHistory: protectedProcedure
+    .input(z.object({ ruleId: z.number().int().positive(), hours: z.number().min(1).max(ROUTE_PATH_QUALITY_RETENTION_HOURS).default(24) }))
+    .query(async ({ input, ctx }) => {
+      const rule = await requireRuleVisible(ctx.user, input.ruleId);
+      const group = routeGroupOf(rule);
+      if (!group) return null;
+      const bucketMs = routeQualityBucketMs(input.hours);
+      const rows = await db.getRoutePathQualityHistory(Number(rule.id), { sinceMs: Date.now() - input.hours * 3600 * 1000 });
+      const byPath = new Map<string, typeof rows>();
+      for (const row of rows) {
+        const list = byPath.get(row.pathKey) || [];
+        list.push(row);
+        byPath.set(row.pathKey, list);
+      }
+      return {
+        hours: input.hours,
+        bucketMinutes: Math.round(bucketMs / 60_000),
+        paths: group.paths.map((path, index) => ({
+          key: path.key,
+          index,
+          letter: routePathLetter(index),
+          name: routePathLabel(path, index),
+          points: bucketRouteQualityRows(byPath.get(path.key) || [], bucketMs),
+        })),
+      };
+    }),
   /**
    * 线路组的「最近切换」：Agent 报的切换 / 异常 / 恢复 / 预热 / 预检没过，和面板这边的
    * 人工指定，按时间倒序。原因已经翻成人话（describeRouteReason），界面直接显示。
@@ -304,7 +338,7 @@ export const rulesRouter = router({
         : input.tunnelId === null
           ? rules.filter((rule: any) => !rule.tunnelId)
           : rules.filter((rule: any) => Number(rule.tunnelId || 0) === Number(input.tunnelId));
-      return withRuleResourceAccess(await withRuleEntryBridges(filtered), ctx.user);
+      return withRuleResourceAccess(await withRuleEgressDisplay(await withRuleEntryBridges(filtered)), ctx.user);
     }),
   listPage: protectedProcedure
     .input(z.object({
@@ -321,7 +355,7 @@ export const rulesRouter = router({
     .query(async ({ input, ctx }) => {
       const repositoryInput = await getRuleListRepositoryInput(input, ctx.user);
       const page = await db.getForwardRulesPage({ ...repositoryInput, page: input.page, pageSize: input.pageSize });
-      return withRuleResourceAccess(await withRuleEntryBridges(page), ctx.user);
+      return withRuleResourceAccess(await withRuleEgressDisplay(await withRuleEntryBridges(page)), ctx.user);
     }),
   mapItems: protectedProcedure
     .input(z.object({
@@ -338,7 +372,7 @@ export const rulesRouter = router({
     .query(async ({ input, ctx }) => {
       const repositoryInput = await getRuleListRepositoryInput(input, ctx.user);
       const batch = await db.getForwardRuleMapBatch(repositoryInput, input.cursor || 0, input.limit);
-      return withRuleResourceAccess(batch, ctx.user);
+      return withRuleResourceAccess(await withRuleEgressDisplay(batch), ctx.user);
     }),
   listSummary: protectedProcedure
     .input(z.object({
@@ -402,7 +436,7 @@ export const rulesRouter = router({
       if (!rule) return null;
       if (ctx.user.role !== "admin" && rule.userId !== ctx.user.id) return null;
       if (ctx.user.role !== "admin" && isManagedForwardGroupChildRule(rule)) return null;
-      return withRuleResourceAccess(await withRuleEntryBridges(rule), ctx.user);
+      return withRuleResourceAccess(await withRuleEgressDisplay(await withRuleEntryBridges(rule)), ctx.user);
     }),
   /**
    * 能当「备用线路」用的中转。

@@ -38,7 +38,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.225"
+var Version = "2.2.226"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -979,6 +979,7 @@ type heartbeatResp struct {
 	SNIInbounds             []sniInboundSpec         `json:"sniInbounds"`
 	DNSWatch                []dnsWatchItem           `json:"dnsWatch"`
 	LookingGlassTests       []lookingGlassTask       `json:"lookingGlassTests"`
+	DiagnosticsTasks        []diagnosticsTask        `json:"diagnosticsTasks,omitempty"`
 	Iperf3Tasks             []iperf3Task             `json:"iperf3Tasks"`
 	PluginTasks             []pluginAgentTask        `json:"pluginTasks"`
 	MimicInstallTask        *mimicInstallTask        `json:"mimicInstallTask,omitempty"`
@@ -2745,6 +2746,8 @@ type hostProbeServiceProbe struct {
 	TargetPort      int    `json:"targetPort"`
 	Method          string `json:"method"`
 	IntervalSeconds int    `json:"intervalSeconds"`
+	// 目标是域名时只用这一族的地址：ipv4 / ipv6；空或 auto 照旧（2.2.226 起，见 probe_family.go）
+	Family string `json:"family,omitempty"`
 }
 type forwardGroupProbe struct {
 	GroupID         int    `json:"groupId"`
@@ -3829,6 +3832,7 @@ func logHeartbeatResponse(mode string, resp *heartbeatResp, duration time.Durati
 	anomalous = anomalous || resp.AgentUpgrade != nil || resp.PanelMigration != nil
 	anomalous = anomalous || len(resp.Actions) > 0 || len(resp.SelfTests) > 0
 	anomalous = anomalous || len(resp.LookingGlassTests) > 0 || len(resp.Iperf3Tasks) > 0 || len(resp.PluginTasks) > 0
+	anomalous = anomalous || len(resp.DiagnosticsTasks) > 0
 	interval := agentHeartbeatSummaryLogInterval
 	if anomalous {
 		interval = agentReportLogInterval
@@ -4266,6 +4270,10 @@ func heartbeat(cfg Config, forceReconcile ...bool) (heartbeatResult, error) {
 	// a task while the Agent is rebuilding its runtime snapshot.
 	for _, task := range resp.LookingGlassTests {
 		go handleLookingGlassTask(cfg, task)
+	}
+	// 一键链路诊断（2.2.226 起）：每个任务一组检查，并发跑完整包回报。
+	for _, task := range resp.DiagnosticsTasks {
+		go handleDiagnosticsTask(cfg, task)
 	}
 	for _, task := range resp.Iperf3Tasks {
 		go handleIperf3Task(cfg, task)

@@ -84,6 +84,15 @@ import {
   validateSniRuleNames,
 } from "../tlsInbounds";
 import { parseSniNameJson } from "@shared/tlsInbound";
+import { forwardGroupModeOf } from "@shared/forwardTypes";
+import { RULE_EGRESS_TYPES, ruleEgressShapeError, ruleHasEgress } from "@shared/ssEgress";
+import {
+  hasEgressInput,
+  resolveRuleEgressColumns,
+  ruleEgressColumnsOf,
+  type RuleEgressColumns,
+  type RuleEgressInput,
+} from "../ssEgress";
 import {
   applyRuleEntryBridgeSwitch,
   entryBridgeAwarePortError,
@@ -1662,9 +1671,13 @@ export async function toggleForwardRuleForActor(
 export async function createDirectForwardRuleForActor(
   actor: { id: number; role: string; allowedForwardTypes?: string | null },
   input: any,
-  options: { reasonPrefix?: string } = {},
+  options: { reasonPrefix?: string; egress?: RuleEgressInput } = {},
 ) {
   await requireRuleTelegramNotifyReady(!!input.telegramErrorNotifyEnabled);
+  // 出口字段不能跟着入参一起展开进规则行（外部链接要先解析加密）。没走 tRPC 的调用方传进来的也一并摘掉。
+  input = { ...input };
+  const strippedEgress = takeEgressInput(input);
+  const egressInput: RuleEgressInput = options.egress || strippedEgress;
   /*
     名字留空就替用户起一个。
 
@@ -1690,6 +1703,17 @@ export async function createDirectForwardRuleForActor(
     isAdmin: actor.role === "admin",
   });
   await requireRuleProtocolEnabled({ forwardType: input.forwardType, tunnelId }, selectedTunnelForRule);
+  const egressColumns = egressRequested(egressInput)
+    ? await resolveRuleEgressColumns(egressInput, {
+      actor,
+      entryHostIds: [hostId],
+      forwardType: String(input.forwardType || ""),
+      protocol: String(input.protocol || "both"),
+      tunnelId,
+      failoverEnabled: !!input.failoverEnabled,
+      targetIp: input.targetIp,
+    })
+    : null;
   if (!isTrafficBillingRule && Number((currentUser as any)?.trafficLimit || 0) > 0 && Number((currentUser as any)?.trafficUsed || 0) >= Number((currentUser as any)?.trafficLimit || 0)) {
     throw new Error("您的流量已用完，无法添加规则");
   }
@@ -1845,11 +1869,13 @@ export async function createDirectForwardRuleForActor(
       gostRelayPort: null,
       tunnelId,
       tunnelExitPort,
+      ...(egressColumns || {}),
       userId: actor.id,
     });
     await quotaReservation.release();
     quotaReservation = null;
-    const autoBound = await autoBindProxyNodeForRule({
+    // 走 Shadowsocks 出口的规则不自动绑订阅（目标不是落地节点本身）。
+    const autoBound = egressColumns && egressColumns.egressType !== "none" ? null : await autoBindProxyNodeForRule({
       ruleId: Number(id),
       userId: actor.id,
       targetIp: input.targetIp,
@@ -2099,6 +2125,109 @@ export async function updateSniForwardRuleForActor(
   return { success: true, reset: runtimeChanged, hotUpdated: !runtimeChanged && routingChanged, proxyNodeBinding: null };
 }
 
+/*
+  ── Shadowsocks 出口（shared/ssEgress.ts、server/ssEgress.ts）───────────────
+
+  出口只改「入口机怎么去连目标」：gost 不直拨目标，而是经一跳 ss 节点让落地去连。所以它只挂在
+  gost 的直连规则、以及端口转发资源（gost）的规则上；规则的其余部分（端口、计数、限速、权限）
+  走原来的流程不变。这里的几样东西是把出口这一小块从入参里拿出来、单独校验、单独落库。
+*/
+const egressInputShape = {
+  egressType: z.enum(RULE_EGRESS_TYPES).optional(),
+  egressInboundId: z.number().int().positive().nullable().optional(),
+  /** 外部 ss:// 链接原文。编辑时不改链接就不传（或原样传回界面上打码的那条）。 */
+  egressLink: z.string().max(4096).nullable().optional(),
+  egressUdp: z.boolean().optional(),
+};
+
+/** 把出口那几项从入参对象上摘下来（原来的流程会把入参整个展开进 createForwardRule）。 */
+function takeEgressInput(input: Record<string, any>): RuleEgressInput {
+  const egress: RuleEgressInput = {
+    egressType: input.egressType,
+    egressInboundId: input.egressInboundId,
+    egressLink: input.egressLink,
+    egressUdp: input.egressUdp,
+  };
+  delete input.egressType;
+  delete input.egressInboundId;
+  delete input.egressLink;
+  delete input.egressUdp;
+  return egress;
+}
+
+function egressRequested(egress: RuleEgressInput) {
+  return egress.egressType !== undefined && egress.egressType !== "none";
+}
+
+type RuleEgressUpdatePlan = { columns: RuleEgressColumns };
+
+/**
+ * 编辑规则时出口那一块：按保存后的形态（转发工具、协议、隧道、转发组、线路组）先校验，
+ * 主流程成功之后再落库（applyRuleEgressUpdate）。没碰出口、规则也没出口时回 null。
+ * 没碰出口但规则带着出口时，只查形态：改成 realm / 挂上隧道之类会让出口失效的改动要拦下来。
+ */
+async function planRuleEgressUpdate(actor: { id: number; role: string }, input: any, egress: RuleEgressInput): Promise<RuleEgressUpdatePlan | null> {
+  const rule = await db.getForwardRuleById(Number(input.id)) as any;
+  if (!rule) return null;
+  const touched = hasEgressInput(egress);
+  if (!touched && !ruleHasEgress(rule)) return null;
+  if (isSniRule(rule) || input.tlsInboundId) {
+    if (egressRequested(egress)) throw new Error("共享 TLS 入站上的规则不能使用 Shadowsocks 出口");
+    return null;
+  }
+  const forwardGroupId = input.forwardGroupId !== undefined ? Number(input.forwardGroupId || 0) : Number(rule.forwardGroupId || 0);
+  const group = forwardGroupId > 0 ? await db.getForwardGroupById(forwardGroupId) as any : null;
+  const groupMode = group ? forwardGroupModeOf(group) : null;
+  const requestedForwardType = String(input.forwardType ?? rule.forwardType);
+  const forwardType = group ? lockedForwardTypeForGroup(group, requestedForwardType) : requestedForwardType;
+  const tunnelId = forwardType === "gost" ? Number(input.tunnelId !== undefined ? input.tunnelId : rule.tunnelId) || null : null;
+  const protocol = String(input.protocol ?? rule.protocol);
+  const failoverEnabled = input.failoverEnabled !== undefined ? !!input.failoverEnabled : dbBool(rule.failoverEnabled);
+  const egressType = egress.egressType ?? rule.egressType;
+  if (!touched) {
+    const shapeError = ruleEgressShapeError({
+      egressType, forwardType, protocol, egressUdp: rule.egressUdp, tunnelId, forwardGroupMode: groupMode, failoverEnabled,
+    });
+    if (shapeError) throw new Error(`${shapeError}（这条规则在用 Shadowsocks 出口；要换转发方式请先把出口改成「直接连接」）`);
+    return null;
+  }
+  const entryHostIds = group
+    ? (await db.getForwardGroupRuleEntryHostIds(forwardGroupId)).map(Number)
+    : [Number(input.hostId ?? rule.hostId)];
+  const columns = await resolveRuleEgressColumns(egress, {
+    actor,
+    entryHostIds,
+    forwardType,
+    protocol,
+    tunnelId,
+    forwardGroupMode: groupMode,
+    failoverEnabled,
+    targetIp: input.targetIp ?? rule.targetIp,
+    current: rule,
+  });
+  return columns ? { columns } : null;
+}
+
+/** 主流程保存成功后把出口那几列写上；端口转发资源的模板要同步一遍子规则，直连规则催入口机重算。 */
+async function applyRuleEgressUpdate(ruleId: number, plan: RuleEgressUpdatePlan) {
+  const rule = await db.getForwardRuleById(ruleId) as any;
+  if (!rule) return false;
+  const before = ruleEgressColumnsOf(rule);
+  const next = plan.columns;
+  const same = before.egressType === next.egressType
+    && Number(before.egressInboundId || 0) === Number(next.egressInboundId || 0)
+    && String(before.egressConfigJson || "") === String(next.egressConfigJson || "")
+    && before.egressUdp === next.egressUdp;
+  if (same) return false;
+  await db.updateForwardRule(ruleId, { ...next, isRunning: false } as any);
+  if (dbBool(rule.isForwardGroupTemplate) && Number(rule.forwardGroupId || 0) > 0) {
+    await db.syncForwardGroupRules(Number(rule.forwardGroupId));
+  } else {
+    pushAgentRefresh(Number(rule.hostId), "forward-rule-egress-updated");
+  }
+  return true;
+}
+
 export const crudRulesRouter = router({
   create: protectedProcedure
     .input(z.object({
@@ -2128,9 +2257,14 @@ export const crudRulesRouter = router({
       ...failoverInputShape,
       ...proxyProtocolInputShape,
       ...transportTuningInputShape,
+      ...egressInputShape,
     }))
     .mutation(async ({ input, ctx }) => {
-      if (input.tlsInboundId) return createSniForwardRuleForActor(ctx.user, input);
+      const egressInput = takeEgressInput(input as any);
+      if (input.tlsInboundId) {
+        if (egressRequested(egressInput)) throw new Error("共享 TLS 入站上的规则不能使用 Shadowsocks 出口");
+        return createSniForwardRuleForActor(ctx.user, input);
+      }
       // 转发组这条路自己落库，同样兜底一次；直连那条在
       // createDirectForwardRuleForActor 里兜。两处都调同一个函数。
       const ruleName = resolveForwardRuleName(input.name, input);
@@ -2243,6 +2377,18 @@ export const crudRulesRouter = router({
           });
         }
         await requireRuleProtocolEnabled({ forwardType, tunnelId: null });
+        // Shadowsocks 出口：只有端口转发资源（gost）上能挂，入口是组里的每台成员主机。
+        const templateEgressColumns = egressRequested(egressInput)
+          ? await resolveRuleEgressColumns(egressInput, {
+            actor: ctx.user,
+            entryHostIds: entryHostIds.map(Number),
+            forwardType,
+            protocol: input.protocol,
+            forwardGroupMode: forwardGroupModeOf(group),
+            failoverEnabled: !!createFailoverEnabled,
+            targetIp: input.targetIp,
+          })
+          : null;
         const templateFailoverColumns = normalizeFailoverInput({
           ...input,
           failoverEnabled: createFailoverEnabled,
@@ -2292,6 +2438,7 @@ export const crudRulesRouter = router({
             { tunnelRoute: !isForwardChain && (group as any).groupType === "tunnel", forwardxTunnel: false, clearUnsupported: true },
           ),
           ...templateFailoverColumns,
+          ...(templateEgressColumns || {}),
           isRunning: false,
           userId: ctx.user.id,
         } as any);
@@ -2314,7 +2461,7 @@ export const crudRulesRouter = router({
         });
       }
 
-      return createDirectForwardRuleForActor(ctx.user, input);
+      return createDirectForwardRuleForActor(ctx.user, input, { egress: egressInput });
     }),
   update: protectedProcedure
     .input(z.object({
@@ -2343,9 +2490,15 @@ export const crudRulesRouter = router({
       ...failoverInputShape,
       ...proxyProtocolInputShape,
       ...transportTuningInputShape,
+      ...egressInputShape,
       isEnabled: z.boolean().optional(),
     }))
-    .mutation(async ({ input, ctx }) => withKeyedTaskLock(`rule:${input.id}`, async () => {
+    .mutation(async ({ input, ctx }) => {
+      // 出口那一块单独校验、主流程成功后单独落库（见 planRuleEgressUpdate）。
+      const egressInput = takeEgressInput(input as any);
+      const egressPlan = await planRuleEgressUpdate(ctx.user, input, egressInput);
+      const egressActiveAfterSave = egressPlan ? egressPlan.columns.egressType !== "none" : ruleHasEgress(await db.getForwardRuleById(input.id));
+      const updateResult = await withKeyedTaskLock(`rule:${input.id}`, async () => {
       const heldReservations: HostPortReservation[] = [];
       // Keep the primary tunnel-exit reservation separate from source-port
       // reservations. It is released immediately after the rule row is
@@ -3403,7 +3556,8 @@ export const crudRulesRouter = router({
        * 只在「改了目标、而且这条还没绑」时认 —— 手动解绑过的人不会顺手改目标，
        * 所以不会被面板又绑回去；已经绑着别的节点的更不动，那是他明确选过的。
        */
-      const bindingChange = await autoBindProxyNodeForRule({
+      // 走 Shadowsocks 出口的规则不自动绑订阅：它的目标不是「我的某个落地节点」，绑上去订阅里就是一条错的线路。
+      const bindingChange = egressActiveAfterSave ? null : await autoBindProxyNodeForRule({
         ruleId: Number(id),
         userId: Number((rule as any).userId || ctx.user.id),
         targetIp: data.targetIp ?? (rule as any).targetIp,
@@ -3476,7 +3630,10 @@ export const crudRulesRouter = router({
         tunnelExitPortReservationForConversion?.release();
         releaseHostPortReservations(heldReservations);
       }
-    })),
+    });
+      if (egressPlan) await applyRuleEgressUpdate(Number(input.id), egressPlan);
+      return updateResult;
+    }),
   delete: protectedProcedure
     .input(z.object({ id: z.number() }))
     .mutation(async ({ input, ctx }) => deleteForwardRuleForActor(ctx.user, input.id)),

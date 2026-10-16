@@ -11,6 +11,7 @@ import {
 } from "./agentFastLiveness";
 import { withKeyedTaskLock } from "./keyedTaskLock";
 import { filterTelegramRecipients } from "./telegramNotifyPrefs";
+import { isDiscordHostStatusNotifyEnabled, notifyDiscordAdmins } from "./discordNotify";
 import { HostOfflineNotificationDebouncer } from "./hostOfflineNotificationDebouncer";
 import { recordHostStatusEvent } from "./ops/eventHooks";
 
@@ -114,7 +115,13 @@ function hostStatusSummaryMessage(hosts: any[], status: HostStatus) {
   ].join("\n");
 }
 
+/** 主机上下线通知：Telegram 和 Discord 各按各的开关发（正文同一份）。 */
 async function sendTelegramToAdmins(text: string, logLabel: string) {
+  await sendTelegramOnlyToAdmins(text, logLabel);
+  if (await isDiscordHostStatusNotifyEnabled()) await notifyDiscordAdmins(text, { category: "host", label: `host-status ${logLabel}` });
+}
+
+async function sendTelegramOnlyToAdmins(text: string, logLabel: string) {
   if (!(await telegramHostStatusEnabled())) return;
   const recipients = await filterTelegramRecipients(await db.getTelegramAdminRecipients() as any[], "host");
   if (recipients.length === 0) return;

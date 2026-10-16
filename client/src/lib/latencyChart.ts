@@ -24,9 +24,42 @@ export type LatencyStabilityStats = {
   jitter: number | null;
   spikeRate: number;
   maxLossRun: number;
+  /**
+   * 可用率（%）：有几成的探测记录至少通了一次。和丢包率不同 —— 丢包按包算（5 个包丢 1 个
+   * 是 20%），可用率按次算（那一次还是通的）。没有记录时为 null。
+   */
+  availability: number | null;
+  /** 超时率（%）：整次探测一个包都没回来的记录占比，等于 100 − 可用率。 */
+  timeoutRate: number;
   score: number | null;
   rating: LatencyStabilityRating;
 };
+
+/** 统计卡片上的毫秒数：没有就是「--」。 */
+export function formatStatLatency(value: number | null | undefined) {
+  return value === null || value === undefined || !Number.isFinite(value) ? "--" : `${Math.round(value)} ms`;
+}
+
+/** 统计卡片上的百分比：整数写「75%」「100%」，其余按位数保留小数；没有就是「--」。 */
+export function formatStatPercent(value: number | null | undefined, digits = 2) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "--";
+  const clamped = Math.max(0, Math.min(100, value));
+  if (Number.isInteger(clamped)) return `${clamped}%`;
+  return `${clamped.toFixed(digits)}%`;
+}
+
+/**
+ * 一段时间里链路的可用率（%）：至少通了一次的探测记录 / 全部记录。
+ * 多包探测（一次 ping 5 个包）只要回来一个就算这一次可用；整次全丢才算不可用。
+ */
+export function computeLinkAvailability(samples: ReadonlyArray<Pick<LatencyStabilitySample, "isTimeout" | "probeCount" | "probeSuccesses">>): number | null {
+  if (samples.length === 0) return null;
+  let ok = 0;
+  for (const sample of samples) {
+    if (normalizeLatencyProbeCounts(sample).probeSuccesses > 0) ok += 1;
+  }
+  return (ok / samples.length) * 100;
+}
 
 export type NormalizedLatencyProbeCounts = {
   probeCount: number;
@@ -196,6 +229,8 @@ export function getLatencyStabilityStats(samples: LatencyStabilitySample[]): Lat
     .sort((a, b) => a.value - b.value);
   const valid = weightedValues.reduce((sum, item) => sum + item.weight, 0);
   const maxLossRun = getMaxLossRun(samples);
+  const availability = computeLinkAvailability(samples);
+  const timeoutRate = availability === null ? 0 : 100 - availability;
 
   if (total === 0) {
     return {
@@ -211,6 +246,8 @@ export function getLatencyStabilityStats(samples: LatencyStabilitySample[]): Lat
       jitter: null,
       spikeRate: 0,
       maxLossRun,
+      availability,
+      timeoutRate,
       score: null,
       rating: getLatencyStabilityRating(null),
     };
@@ -231,6 +268,8 @@ export function getLatencyStabilityStats(samples: LatencyStabilitySample[]): Lat
       jitter: null,
       spikeRate: 0,
       maxLossRun,
+      availability,
+      timeoutRate,
       score,
       rating: getLatencyStabilityRating(score),
     };
@@ -334,6 +373,8 @@ export function getLatencyStabilityStats(samples: LatencyStabilitySample[]): Lat
     jitter: Math.round(jitter),
     spikeRate,
     maxLossRun,
+    availability,
+    timeoutRate,
     score,
     rating: getLatencyStabilityRating(score),
   };

@@ -1,6 +1,6 @@
 # 通知与提醒
 
-NEX 支持邮件（SMTP）和 Telegram 两种通知渠道，可以同时启用，互不影响。
+NEX 支持邮件（SMTP）、Telegram 和 Discord 三种通知渠道，可以同时启用，互不影响。Discord 私信机器人的配置见 [Discord 登录和通知](./discord.md)。
 
 ## 通知触发事件
 

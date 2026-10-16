@@ -8,6 +8,9 @@
  * 存成一个设置键（JSON，按用户 ID 分），读走 getAllSettings 的 5 秒缓存，通知路径上
  * 不会多一次查库。没写过的人一律按「全收」处理；每日简报管理员默认收、普通用户默认不收
  * —— 没主动开过的用户不该每天早上被机器人打扰。
+ *
+ * 这一份同时管 Telegram 和 Discord（server/discordNotify.ts）：关掉「线路切换」就是两边都不收，
+ * 在 Telegram 机器人菜单里改、在面板「个人资料 › Discord」里改，改的是同一个地方。
  */
 import { getAllSettings, setSetting } from "./repositories/settingsRepository";
 
@@ -92,4 +95,20 @@ export async function filterTelegramRecipients<T extends { id?: unknown }>(recip
   if (recipients.length === 0) return recipients;
   const prefs = await readTelegramNotifyPrefs().catch(() => ({} as TelegramNotifyPrefs));
   return recipients.filter((recipient) => !isTelegramNotifyMuted(prefs, recipient?.id, category));
+}
+
+/** 直接把某一类设成收 / 不收（面板个人资料里的开关用；机器人菜单用的是上面的 toggle）。 */
+export async function setNotifyCategoryMuted(userId: number, category: TelegramNotifyCategory, muted: boolean) {
+  const prefs = await readTelegramNotifyPrefs();
+  const key = String(Number(userId));
+  const current = prefs[key] || { muted: [] };
+  const next = new Set(current.muted || []);
+  if (muted) next.add(category);
+  else next.delete(category);
+  prefs[key] = {
+    muted: Array.from(next),
+    ...(typeof current.digest === "boolean" ? { digest: current.digest } : {}),
+  };
+  await setSetting(TELEGRAM_NOTIFY_PREFS_KEY, JSON.stringify(prefs));
+  return prefs;
 }

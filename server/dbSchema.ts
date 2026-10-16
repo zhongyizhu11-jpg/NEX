@@ -40,6 +40,7 @@ export const MIGRATION_TABLES = [
   "forward_group_members",
   "forward_group_events",
   "forward_rule_route_events",
+  "route_path_quality_stats",
   "proxy_nodes",
   "proxy_inbounds",
   "proxy_inbound_users",
@@ -105,6 +106,10 @@ export const MIGRATION_TABLES = [
   "ip_change_cloud_accounts",
   "ip_change_host_configs",
   "ip_change_events",
+  // 主机网络画像（server/ops/netProfileTables.ts）：每台主机最近一次的双栈 / 25 端口 / DNSBL 检测
+  "host_network_profiles",
+  // 流媒体 / AI 解锁检测的结果（server/ops/unlockTables.ts），跟着主机走
+  "host_unlock_checks",
 ] as const;
 
 const LAST_AUTO_TRAFFIC_RESET_BACKFILL_MARKER = "last-auto-traffic-reset-backfill-v1";
@@ -213,13 +218,15 @@ const tables: TableDef[] = [
       c("telegramBindCodeExpiresAt", "epoch"), c("telegramLoginCode", "text"), c("telegramLoginCodeExpiresAt", "epoch"),
       c("twoFactorEnabled", "bool", { notNull: true, default: false }), c("twoFactorSecret", "text"), c("twoFactorEnabledAt", "epoch"),
       c("googleSub", "varchar", { length: 191 }), c("googleEmail", "text"), c("googleLinkedAt", "epoch"),
+      c("discordId", "varchar", { length: 32 }), c("discordUsername", "text"), c("discordEmail", "text"), c("discordLinkedAt", "epoch"),
+      c("discordDmBlockedAt", "epoch"),
       c("browserSessionToken", "text"), c("mobileSessionToken", "text"), c("telegramSessionToken", "text"),
       c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" }),
       c("lastSignedIn", "epoch", { notNull: true, default: "now" }),
       // 邀请返利：自己的邀请码（第一次打开邀请页才生成）和邀请人（注册时绑定，见 shared/referral.ts）。
       c("inviteCode", "varchar", { length: 32 }), c("inviterId", "int"),
     ],
-    unique: [["username"], ["telegramId"], ["telegramBindCode"], ["telegramLoginCode"], ["inviteCode"], ["googleSub"]],
+    unique: [["username"], ["telegramId"], ["telegramBindCode"], ["telegramLoginCode"], ["inviteCode"], ["googleSub"], ["discordId"]],
     indexes: [["inviterId"]],
   },
   {
@@ -265,6 +272,8 @@ const tables: TableDef[] = [
       c("lastDdnsValue", "text"), c("lastDdnsAt", "epoch"), c("lastDdnsError", "text"), c("networkInterface", "text"), c("sortOrder", "int", { notNull: true, default: 0 }),
       c("geoCountryCode", "varchar", { length: 8 }), c("geoCountryName", "text"), c("geoRegion", "text"), c("geoEmoji", "varchar", { length: 16 }),
       c("geoLatitudeMicro", "int"), c("geoLongitudeMicro", "int"), c("geoUpdatedAt", "epoch"),
+      // 运营商 / ASN（hostGeo.ts 定位时一起写）：geoAsn 形如 AS13335；NULL = 还没问过，"" = 问过、对方没给
+      c("geoAsn", "varchar", { length: 16 }), c("geoIsp", "text"), c("geoOrg", "text"),
       // 手动指定位置的标记：自动定位见到它就绕开（hostGeo.ts）
       c("geoManual", "bool", { notNull: true, default: false }),
       // 「Agent 检测 IP」手改过：心跳不再覆盖 ip / ipv4 / ipv6（agentAddressState）
@@ -352,10 +361,13 @@ const tables: TableDef[] = [
       // 共享 TLS 入站（shared/tlsInbound.ts）：挂在哪个入站上、按哪些 SNI 分过来（JSON 数组）。
       // 这类规则的 sourcePort 是面板分的本机回环端口，不对外。
       c("tlsInboundId", "int"), c("sniNames", "text"),
+      // Shadowsocks 出口（shared/ssEgress.ts）：none | ss_host（指向落地入站）| ss_link（外部链接，egressConfigJson 加密保存）。
+      c("egressType", "varchar", { length: 16, notNull: true, default: "none" }), c("egressInboundId", "int"),
+      c("egressConfigJson", "text"), c("egressUdp", "bool", { notNull: true, default: false }),
       c("userId", "int", { notNull: true }), c("createdAt", "epoch", { notNull: true, default: "now" }),
       c("updatedAt", "epoch", { notNull: true, default: "now" }),
     ],
-    indexes: [["hostId"], ["hostId", "createdAt"], ["hostId", "sourcePort", "pendingDelete", "isEnabled"], ["userId"], ["userId", "sortOrder"], ["userId", "createdAt"], ["userId", "pendingDelete", "createdAt"], ["tunnelId"], ["forwardGroupId"], ["forwardGroupId", "isForwardGroupTemplate", "pendingDelete"], ["forwardGroupRuleId"], ["forwardGroupRuleId", "pendingDelete"], ["forwardGroupMemberId"], ["forwardGroupMemberId", "pendingDelete"], ["proxyNodeId"], ["userId", "proxyNodeId", "pendingDelete"], ["routeParentRuleId"], ["routeParentRuleId", "pendingDelete"]],
+    indexes: [["hostId"], ["hostId", "createdAt"], ["hostId", "sourcePort", "pendingDelete", "isEnabled"], ["userId"], ["userId", "sortOrder"], ["userId", "createdAt"], ["userId", "pendingDelete", "createdAt"], ["tunnelId"], ["forwardGroupId"], ["forwardGroupId", "isForwardGroupTemplate", "pendingDelete"], ["forwardGroupRuleId"], ["forwardGroupRuleId", "pendingDelete"], ["forwardGroupMemberId"], ["forwardGroupMemberId", "pendingDelete"], ["proxyNodeId"], ["userId", "proxyNodeId", "pendingDelete"], ["routeParentRuleId"], ["routeParentRuleId", "pendingDelete"], ["egressInboundId"]],
   },
   {
     /*
@@ -435,6 +447,8 @@ const tables: TableDef[] = [
       c("clonedFromInboundId", "int", { notNull: true, default: 0 }),
       // 普通用户靠主机授权开在别人机器上的入站：授权收回后不再下发。
       c("hostGrantRequired", "bool", { notNull: true, default: false }),
+      // 一键创建的落地出口入站（给规则当 Shadowsocks 出口用，派生节点默认不进订阅）。
+      c("landingEgress", "bool", { notNull: true, default: false }),
       // 端口自己的额度与用量。计数链装在监听端口上，多用户入站分不到人头，所以记在这里。
       c("bandwidthMbps", "int", { notNull: true, default: 0 }),
       c("trafficLimit", "bigint", { notNull: true, default: 0 }), c("trafficUsed", "bigint", { notNull: true, default: 0 }),
@@ -592,6 +606,17 @@ const tables: TableDef[] = [
     indexes: [["ruleId", "createdAt"], ["createdAt"]],
   },
   {
+    // 线路组每条路径的质量历史（server/routePathQualityHistory.ts）：每条路径最多一分钟一行，留 7 天。
+    name: "route_path_quality_stats",
+    columns: [
+      c("id", "id"), c("ruleId", "int", { notNull: true }), c("pathKey", "varchar", { length: 32, notNull: true }),
+      c("sampledAt", "epoch", { notNull: true, default: "now" }),
+      c("latencyMs", "int"), c("lossPermille", "int", { notNull: true, default: 0 }), c("jitterMs", "int"),
+      c("availabilityPermille", "int"), c("score", "int"),
+    ],
+    indexes: [["ruleId", "sampledAt"], ["ruleId", "pathKey", "sampledAt"], ["sampledAt"]],
+  },
+  {
     /*
       换隧道后旧入口的临时桥接（shared/ruleEntryBridge）：规则换到别的入口主机后，在旧入口的老端口
       上临时把流量转到规则当前的入口，等客户端刷新订阅。一条规则在一台主机上最多一条。
@@ -666,9 +691,9 @@ const tables: TableDef[] = [
   { name: "agent_traffic_reports", columns: [c("id", "id"), c("hostId", "int", { notNull: true }), c("producerId", "varchar", { length: 128 }), c("reportId", "varchar", { length: 128, notNull: true }), c("receivedAt", "epoch", { notNull: true, default: "now" })], unique: [["hostId", "reportId"], ["hostId", "producerId"]], indexes: [["receivedAt"]] },
   { name: "tunnel_latency_stats", columns: [c("id", "id"), c("tunnelId", "int", { notNull: true }), c("seriesKey", "varchar", { length: 64 }), c("seriesLabel", "text"), c("latencyMs", "int"), c("isTimeout", "bool", { notNull: true, default: false }), c("probeCount", "int", { notNull: true, default: 1 }), c("probeSuccesses", "int", { notNull: true, default: 0 }), c("recordedAt", "epoch", { notNull: true, default: "now" })], indexes: [["tunnelId", "recordedAt"], ["tunnelId", "seriesKey", "recordedAt"], ["recordedAt", "tunnelId"]] },
   { name: "forward_group_latency_stats", columns: [c("id", "id"), c("groupId", "int", { notNull: true }), c("latencyMs", "int"), c("isTimeout", "bool", { notNull: true, default: false }), c("probeCount", "int", { notNull: true, default: 1 }), c("probeSuccesses", "int", { notNull: true, default: 0 }), c("recordedAt", "epoch", { notNull: true, default: "now" })], indexes: [["groupId", "recordedAt"], ["recordedAt", "groupId"]] },
-  { name: "host_probe_services", columns: [c("id", "id"), c("name", "text", { notNull: true }), c("method", "varchar", { length: 16, notNull: true, default: "tcping" }), c("targetIp", "text", { notNull: true }), c("targetPort", "int"), c("hostScope", "varchar", { length: 16, notNull: true, default: "all" }), c("hostIds", "text"), c("excludeHostIds", "text"), c("intervalSeconds", "int", { notNull: true, default: 30 }), c("isEnabled", "bool", { notNull: true, default: true }), c("sortOrder", "int", { notNull: true, default: 0 }), c("userId", "int", { notNull: true }), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], indexes: [["userId", "sortOrder"], ["userId", "createdAt"], ["isEnabled"], ["hostScope"]] },
+  { name: "host_probe_services", columns: [c("id", "id"), c("name", "text", { notNull: true }), c("method", "varchar", { length: 16, notNull: true, default: "tcping" }), c("targetIp", "text", { notNull: true }), c("targetPort", "int"), c("addressFamily", "varchar", { length: 8, notNull: true, default: "auto" }), c("hostScope", "varchar", { length: 16, notNull: true, default: "all" }), c("hostIds", "text"), c("excludeHostIds", "text"), c("intervalSeconds", "int", { notNull: true, default: 30 }), c("isEnabled", "bool", { notNull: true, default: true }), c("sortOrder", "int", { notNull: true, default: 0 }), c("userId", "int", { notNull: true }), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], indexes: [["userId", "sortOrder"], ["userId", "createdAt"], ["isEnabled"], ["hostScope"]] },
   { name: "host_probe_service_stats", columns: [c("id", "id"), c("serviceId", "int", { notNull: true }), c("hostId", "int", { notNull: true }), c("latencyMs", "int"), c("isTimeout", "bool", { notNull: true, default: false }), c("probeCount", "int", { notNull: true, default: 1 }), c("probeSuccesses", "int", { notNull: true, default: 0 }), c("recordedAt", "epoch", { notNull: true, default: "now" })], indexes: [["serviceId", "recordedAt"], ["hostId", "recordedAt"], ["recordedAt", "serviceId"]] },
-  { name: "ip_geo_cache", columns: [c("id", "id"), c("address", "varchar", { length: 253, notNull: true }), c("resolvedAddress", "varchar", { length: 64, notNull: true }), c("geoCountryCode", "varchar", { length: 8, notNull: true }), c("geoCountryName", "text"), c("geoRegion", "text"), c("geoEmoji", "varchar", { length: 16 }), c("geoLatitudeMicro", "int"), c("geoLongitudeMicro", "int"), c("provider", "varchar", { length: 32, notNull: true, default: "ipapi.co" }), c("fetchedAt", "epoch", { notNull: true, default: "now" }), c("expiresAt", "epoch", { notNull: true })], unique: [["address"]], indexes: [["resolvedAddress"], ["expiresAt"]] },
+  { name: "ip_geo_cache", columns: [c("id", "id"), c("address", "varchar", { length: 253, notNull: true }), c("resolvedAddress", "varchar", { length: 64, notNull: true }), c("geoCountryCode", "varchar", { length: 8, notNull: true }), c("geoCountryName", "text"), c("geoRegion", "text"), c("geoEmoji", "varchar", { length: 16 }), c("geoLatitudeMicro", "int"), c("geoLongitudeMicro", "int"), c("geoAsn", "varchar", { length: 16 }), c("geoIsp", "text"), c("geoOrg", "text"), c("provider", "varchar", { length: 32, notNull: true, default: "ipapi.co" }), c("fetchedAt", "epoch", { notNull: true, default: "now" }), c("expiresAt", "epoch", { notNull: true })], unique: [["address"]], indexes: [["resolvedAddress"], ["expiresAt"]] },
   { name: "agent_tokens", columns: [c("id", "id"), c("token", "text", { notNull: true }), c("hostId", "int"), c("description", "text"), c("isUsed", "bool", { notNull: true, default: false }), c("sortOrder", "int", { notNull: true, default: 0 }), c("userId", "int", { notNull: true }), c("createdAt", "epoch", { notNull: true, default: "now" })], unique: [["token"]], indexes: [["userId"], ["userId", "sortOrder"]] },
   { name: "tcping_stats", columns: [c("id", "id"), c("ruleId", "int", { notNull: true }), c("hostId", "int", { notNull: true }), c("latencyMs", "int"), c("isTimeout", "bool", { notNull: true, default: false }), c("probeCount", "int", { notNull: true, default: 1 }), c("probeSuccesses", "int", { notNull: true, default: 0 }), c("healthStatus", "varchar", { length: 16 }), c("healthPending", "bool", { notNull: true, default: false }), c("recordedAt", "epoch", { notNull: true, default: "now" })], indexes: [["ruleId", "recordedAt"], ["hostId", "recordedAt"], ["recordedAt", "ruleId"], ["recordedAt", "hostId"]] },
   { name: "forward_tests", columns: [c("id", "id"), c("ruleId", "int", { notNull: true }), c("hostId", "int", { notNull: true }), c("userId", "int", { notNull: true }), c("status", "varchar", { length: 32, notNull: true, default: "pending" }), c("listenOk", "bool", { notNull: true, default: false }), c("targetReachable", "bool", { notNull: true, default: false }), c("forwardOk", "bool", { notNull: true, default: false }), c("latencyMs", "int"), c("message", "text"), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], indexes: [["ruleId", "createdAt"], ["hostId", "status"], ["status", "createdAt"], ["status", "updatedAt"], ["updatedAt"]] },

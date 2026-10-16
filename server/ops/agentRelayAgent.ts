@@ -315,7 +315,7 @@ async function autoSwitchHost(host: any, row: RelayConfigRow, offlineMinutes: nu
   void notifyAdmins(`🔀 ${message}`);
 }
 
-/** 和主机上下线通知同一个开关（Telegram「主机状态通知」）。 */
+/** 和主机上下线通知同一个开关（Telegram「主机状态通知」/ Discord「主机上下线通知」）。 */
 async function notifyAdmins(text: string) {
   try {
     const settings = await db.getAllSettings();
@@ -323,15 +323,19 @@ async function notifyAdmins(text: string) {
     const envToken = ENV.telegramBotToken.trim();
     const botEnabled = settings.telegramBotEnabled === "true" || (!!envToken && settings.telegramBotEnabled !== "false");
     const botConfigured = !!String(settings.telegramBotToken || envToken).trim();
-    if (settings.telegramHostStatusNotify !== "true" || !botEnabled || !botConfigured) return;
-    const { filterTelegramRecipients } = await import("../telegramNotifyPrefs");
-    const { sendTelegramMessage } = await import("../telegramBot");
-    const recipients = await filterTelegramRecipients(await db.getTelegramAdminRecipients() as any[], "host");
     const escaped = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    for (const user of recipients as any[]) {
-      if (!user.telegramId) continue;
-      await sendTelegramMessage(user.telegramId, escaped).catch(() => undefined);
+    if (settings.telegramHostStatusNotify === "true" && botEnabled && botConfigured) {
+      const { filterTelegramRecipients } = await import("../telegramNotifyPrefs");
+      const { sendTelegramMessage } = await import("../telegramBot");
+      const recipients = await filterTelegramRecipients(await db.getTelegramAdminRecipients() as any[], "host");
+      for (const user of recipients as any[]) {
+        if (!user.telegramId) continue;
+        await sendTelegramMessage(user.telegramId, escaped).catch(() => undefined);
+      }
     }
+    // Discord：同一类事件，开关是 Discord 卡片里的「主机上下线通知」
+    const { isDiscordHostStatusNotifyEnabled, notifyDiscordAdmins } = await import("../discordNotify");
+    if (await isDiscordHostStatusNotifyEnabled()) await notifyDiscordAdmins(escaped, { category: "host", label: "agent-relay" });
   } catch (error) {
     console.warn(`[AgentRelay] notify failed: ${error instanceof Error ? error.message : String(error)}`);
   }

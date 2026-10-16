@@ -11,6 +11,7 @@ import { reconcileForwardRuleTunnelExits } from "./repositories/tunnelRepository
 import { insertForwardRuleRouteEvent } from "./repositories/forwardRuleRepository";
 import { syncRouteRelayRulesForRule } from "./routeGroups";
 import { recordRouteAgentStats, recordRouteHopProbe } from "./routeGroupStats";
+import { insertRoutePathQualityStats, type RoutePathQualityRow } from "./repositories/routePathQualityRepository";
 import { AGENT_VERSION } from "../shared/versions";
 
 export const DEV_PANEL_FLAG = "FORWARDX_DEV_PANEL";
@@ -319,6 +320,9 @@ async function seedHosts(adminId: number) {
       geoCountryCode: "HK",
       geoCountryName: "Hong Kong",
       geoRegion: "Central",
+      geoAsn: "AS9304",
+      geoIsp: "HGC Global Communications",
+      geoOrg: "Hutchison Global Communications",
       geoEmoji: "HK",
       geoLatitudeMicro: 22319000,
       geoLongitudeMicro: 114169000,
@@ -354,6 +358,9 @@ async function seedHosts(adminId: number) {
       geoCountryCode: "JP",
       geoCountryName: "Japan",
       geoRegion: "Tokyo",
+      geoAsn: "AS2516",
+      geoIsp: "KDDI Corporation",
+      geoOrg: "KDDI CORPORATION",
       geoEmoji: "JP",
       geoLatitudeMicro: 35676000,
       geoLongitudeMicro: 139650000,
@@ -390,6 +397,9 @@ async function seedHosts(adminId: number) {
       geoCountryCode: "SG",
       geoCountryName: "Singapore",
       geoRegion: "Singapore",
+      geoAsn: "AS14061",
+      geoIsp: "DigitalOcean, LLC",
+      geoOrg: "DigitalOcean",
       geoEmoji: "SG",
       geoLatitudeMicro: 1290000,
       geoLongitudeMicro: 103850000,
@@ -422,6 +432,9 @@ async function seedHosts(adminId: number) {
       geoCountryCode: "US",
       geoCountryName: "United States",
       geoRegion: "Los Angeles",
+      geoAsn: "AS20473",
+      geoIsp: "The Constant Company, LLC",
+      geoOrg: "Vultr Holdings LLC",
       geoEmoji: "US",
       geoLatitudeMicro: 34052000,
       geoLongitudeMicro: -118244000,
@@ -436,6 +449,74 @@ async function seedHosts(adminId: number) {
     ids.push(await insertAndGetId("hosts", { ...host, createdAt: nowDate(), updatedAt: nowDate() }));
   }
   return ids;
+}
+
+/** 主机详情「网络画像」那张卡的样例数据（shared/netProfile.ts 的 NetProfileReport）。 */
+async function seedNetworkProfiles(hostIds: number[]) {
+  const now = Math.floor(Date.now() / 1000);
+  const clean = (list: string) => ({ list, listed: false, code: null, error: null });
+  const smtp = (status: "open" | "refused" | "timeout", detail: string | null) => [
+    { target: "gmail-smtp-in.l.google.com:25", status, detail },
+    { target: "mx1.mail.icloud.com:25", status, detail },
+    { target: "alt1.aspmx.l.google.com:25", status, detail },
+  ];
+  const profiles = [
+    {
+      checkedAt: now - 40 * 60,
+      ipv4: { ok: true, address: "192.0.2.21", latencyMs: 38, error: null },
+      ipv6: { ok: false, address: null, latencyMs: null, error: "dial tcp6: connect: network is unreachable", configured: false },
+      smtp25: { status: "timeout", detail: "连 3 台邮件服务器的 25 端口都超时：多半是服务商在出口静默丢弃", targets: smtp("timeout", "i/o timeout") },
+      dnsbl: [
+        { list: "zen.spamhaus.org", listed: false, code: null, error: "无法查询（公共解析器被拒绝）" },
+        clean("bl.spamcop.net"), clean("b.barracudacentral.org"), clean("cbl.abuseat.org"),
+      ],
+      dnsblAddress: "192.0.2.21",
+    },
+    {
+      checkedAt: now - 3 * 3600,
+      ipv4: { ok: false, address: null, latencyMs: null, error: "dial tcp4: connect: network is unreachable" },
+      ipv6: { ok: true, address: "2001:db8:10::41d", latencyMs: 12, error: null, configured: true },
+      smtp25: { status: "blocked", detail: "gmail-smtp-in.l.google.com:25 连接被拒绝", targets: smtp("refused", "connection refused") },
+      dnsbl: [],
+      dnsblAddress: null,
+    },
+    {
+      checkedAt: now - 15 * 60,
+      ipv4: { ok: true, address: "198.51.100.16", latencyMs: 21, error: null },
+      ipv6: { ok: true, address: "2001:db8:30::16", latencyMs: 24, error: null, configured: true },
+      smtp25: {
+        status: "open",
+        detail: "gmail-smtp-in.l.google.com:25 220 mx.google.com ESMTP 41be03b00d2f7-b6b1a8c3",
+        targets: [
+          { target: "gmail-smtp-in.l.google.com:25", status: "open", detail: "220 mx.google.com ESMTP 41be03b00d2f7-b6b1a8c3" },
+          { target: "mx1.mail.icloud.com:25", status: "open", detail: "220 mx1.mail.icloud.com ESMTP" },
+          { target: "alt1.aspmx.l.google.com:25", status: "open", detail: "220 mx.google.com ESMTP" },
+        ],
+      },
+      dnsbl: [clean("zen.spamhaus.org"), { list: "bl.spamcop.net", listed: true, code: "127.0.0.2", error: null }, clean("b.barracudacentral.org"), clean("cbl.abuseat.org")],
+      dnsblAddress: "198.51.100.16",
+    },
+  ];
+  for (let index = 0; index < profiles.length && index < hostIds.length; index += 1) {
+    const item = profiles[index];
+    const profile = {
+      ...item,
+      dnsblSource: item.dnsbl.length > 0 ? "agent" : null,
+      dnsblCheckedAt: item.dnsbl.length > 0 ? item.checkedAt : null,
+      agentCheckedAt: item.checkedAt,
+    };
+    const history = [6, 5, 4, 3, 2, 1].map((n) => ({
+      checkedAt: item.checkedAt - n * 6 * 3600, ipv4Ok: item.ipv4.ok, ipv6Ok: item.ipv6.ok, smtp25: item.smtp25.status, listed: 0,
+    }));
+    await insertAndGetId("host_network_profiles", {
+      hostId: hostIds[index],
+      profileJson: JSON.stringify(profile),
+      historyJson: JSON.stringify(history),
+      checkedAt: item.checkedAt,
+      agentCheckedAt: item.checkedAt,
+      updatedAt: now,
+    });
+  }
 }
 
 async function seedAgentTokens(adminId: number, hostIds: number[]) {
@@ -532,6 +613,39 @@ async function seedHostMetrics(hostIds: number[]) {
       createdAt: nowDate(),
       updatedAt: nowDate(),
     });
+  }
+}
+
+/** 流媒体 / AI 解锁检测的样例结果：第一台有 auto + IPv6 两份和几次历史，第二台一份，其余没测过。 */
+async function seedUnlockChecks(hostIds: number[]) {
+  const { recordUnlockRun } = await import("./ops/unlock");
+  const now = Math.floor(Date.now() / 1000);
+  type R = { service: string; status: "ok" | "partial" | "blocked" | "unknown"; region: string | null; detail: string; ms: number };
+  const hk: R[] = [
+    { service: "netflix", status: "ok", region: "HK", detail: "全解锁（非自制剧可看）", ms: 820 },
+    { service: "disney", status: "ok", region: "HK", detail: "首页可用（未验证播放）", ms: 610 },
+    { service: "youtube_premium", status: "ok", region: "HK", detail: "可订阅 Premium", ms: 540 },
+    { service: "tiktok", status: "unknown", region: null, detail: "页面里没有地区信息，无法判断", ms: 700 },
+    { service: "chatgpt", status: "ok", region: "HK", detail: "网页和 App 都可用", ms: 480 },
+    { service: "claude", status: "blocked", region: "HK", detail: "不支持这个地区", ms: 350 },
+    { service: "gemini", status: "ok", region: "HKG", detail: "可用", ms: 900 },
+    { service: "grok", status: "ok", region: "HK", detail: "可用", ms: 410 },
+    { service: "perplexity", status: "unknown", region: "HK", detail: "被 Cloudflare 人机验证拦下，无法判断", ms: 300 },
+  ];
+  const hkV6 = hk.map((item) => (item.service === "netflix" ? { ...item, status: "partial" as const, detail: "仅自制剧" } : item.service === "chatgpt" ? { ...item, status: "partial" as const, detail: "仅网页可用（App 认为是 VPN）" } : item));
+  const jp: R[] = hk.map((item) => ({ ...item, region: item.region ? (item.region.length === 3 ? "JPN" : "JP") : null, status: item.service === "claude" ? "ok" : item.status, detail: item.service === "claude" ? "可用" : item.detail }));
+  const runs: Array<{ hostId: number; family: "auto" | "ipv4" | "ipv6"; at: number; results: R[]; trigger: "manual" | "schedule" }> = [];
+  if (hostIds[0]) {
+    runs.push({ hostId: hostIds[0], family: "auto", at: now - 8 * 86400, results: hk.map((item) => (item.service === "netflix" ? { ...item, status: "partial", detail: "仅自制剧" } : item)), trigger: "schedule" });
+    runs.push({ hostId: hostIds[0], family: "auto", at: now - 86400, results: hk, trigger: "schedule" });
+    runs.push({ hostId: hostIds[0], family: "ipv6", at: now - 3 * 3600, results: hkV6, trigger: "manual" });
+    runs.push({ hostId: hostIds[0], family: "auto", at: now - 25 * 60, results: hk, trigger: "manual" });
+  }
+  if (hostIds[1]) runs.push({ hostId: hostIds[1], family: "auto", at: now - 2 * 3600, results: jp, trigger: "manual" });
+  let n = 0;
+  for (const run of runs) {
+    n += 1;
+    await recordUnlockRun({ hostId: run.hostId, family: run.family, runId: `ul-dev-${n}`, trigger: run.trigger, requestedBy: null, checkedAt: run.at, results: run.results });
   }
 }
 
@@ -1401,6 +1515,22 @@ async function seedRouteGroupDemo(ruleId: number, hostIds: number[]) {
       ],
     }],
   });
+  /*
+    近 24 小时的路径质量历史（线路组面板「线路质量」那张图）：每 5 分钟一个点，晚高峰那条
+    在傍晚抖一阵、丢一点包。真实面板上是入口 Agent 每次心跳报评分、每条路径一分钟落一行。
+  */
+  const qualityRows: RoutePathQualityRow[] = [];
+  for (let minutes = 24 * 60; minutes >= 0; minutes -= 5) {
+    const at = now - minutes * 60_000;
+    const wave = Math.sin(minutes / 47);
+    const evening = minutes > 180 && minutes < 420;
+    qualityRows.push(
+      { ruleId, pathKey: "main", sampledAt: at, latencyMs: Math.round(38 + wave * 4 + (minutes % 35 === 0 ? 22 : 0)), lossPct: minutes % 95 === 0 ? 1 : 0, jitterMs: Math.round(4 + Math.abs(wave) * 3), availabilityPct: 100, score: 92 },
+      { ruleId, pathKey: "backup-sg", sampledAt: at, latencyMs: Math.round(74 + wave * 9 + (evening ? 35 : 0)), lossPct: evening ? 2.5 : 0.5, jitterMs: Math.round(11 + (evening ? 18 : 0) + Math.abs(wave) * 4), availabilityPct: evening ? 97.5 : 99.5, score: evening ? 66 : 82 },
+      { ruleId, pathKey: "direct", sampledAt: at, latencyMs: minutes % 240 === 0 ? null : Math.round(186 + wave * 20), lossPct: minutes % 240 === 0 ? 100 : 2.5, jitterMs: 28, availabilityPct: minutes % 240 === 0 ? 0 : 97.5, score: minutes % 240 === 0 ? 0 : 64 },
+    );
+  }
+  await insertRoutePathQualityStats(qualityRows);
   const hostName = (index: number) => ["HK entry 01", "JP exit 02", "SG relay 03", "US backup 04"][index];
   recordRouteHopProbe({ parentRuleId: ruleId, pathKey: "main", hopIndex: 0, hostId: hostIds[1], hostName: hostName(1), nextLabel: "落地", ok: true, latencyMs: 92 });
   recordRouteHopProbe({ parentRuleId: ruleId, pathKey: "backup-sg", hopIndex: 0, hostId: hostIds[2], hostName: hostName(2), nextLabel: hostName(3), ok: true, latencyMs: 41 });
@@ -1442,6 +1572,8 @@ async function seedRules(hostIds: number[], resources: DevResources, usersSeed: 
     { userId: usersSeed.adminId, hostId: hostIds[0], name: "Dev chain template", forwardType: "realm", protocol: "tcp", sourcePort: 18080, targetIp: "10.40.0.80", targetPort: 8080, forwardGroupId: resources.groups.chainGroupId, isForwardGroupTemplate: true, telegramErrorNotifyEnabled: true, sortOrder: 0, isRunning: false },
     { userId: usersSeed.adminId, hostId: hostIds[0], name: "API edge chain template", forwardType: "gost", protocol: "tcp", sourcePort: 18181, targetIp: "10.80.0.81", targetPort: 8081, forwardGroupId: resources.groups.apiChainGroupId, isForwardGroupTemplate: true, sortOrder: 1, isRunning: false, proxyProtocolReceive: true, proxyProtocolSend: true, proxyProtocolVersion: 2 },
     { userId: usersSeed.adminId, hostId: hostIds[0], name: "Long relay chain template", forwardType: "realm", protocol: "both", sourcePort: 18282, targetIp: "10.81.0.82", targetPort: 8082, forwardGroupId: resources.groups.longChainGroupId, isForwardGroupTemplate: true, sortOrder: 2, isRunning: false, tcpFastOpen: true, zeroCopy: true },
+    // 落到 JP 上那个 VLESS 落地入站的中转：拓扑页上是「HK → JP → 入站」。
+    { userId: usersSeed.adminId, hostId: hostIds[0], name: "HK to JP VLESS landing", forwardType: "realm", protocol: "tcp", sourcePort: 24600, targetIp: "jp-exit.dev.forwardx.local", targetPort: 24610, sortOrder: 7, isRunning: true },
     { userId: usersSeed.activeUserId, hostId: hostIds[1], name: "User tunnel demo", forwardType: "gost", protocol: "tcp", sourcePort: 26001, targetIp: "203.0.113.10", targetPort: 443, tunnelId: resources.tunnels.primaryTunnelId, tunnelExitPort: 26002, sortOrder: 0, isRunning: true, failoverEnabled: true, failoverTargets: JSON.stringify([{ targetIp: "203.0.113.11", targetPort: 443 }]) },
     { userId: usersSeed.pausedUserId, hostId: hostIds[2], name: "Traffic billing pause demo", forwardType: "realm", protocol: "both", sourcePort: 27500, targetIp: "198.18.1.25", targetPort: 27015, sortOrder: 0, isRunning: false, disabledByUser: true },
     { userId: usersSeed.expiredUserId, hostId: hostIds[3], name: "Expired account demo", forwardType: "socat", protocol: "tcp", sourcePort: 29500, targetIp: "192.0.2.81", targetPort: 8443, sortOrder: 0, isRunning: false, disabledByUser: true },
@@ -1473,6 +1605,23 @@ async function seedRules(hostIds: number[], resources: DevResources, usersSeed: 
   }
   const routeGroupRuleId = ruleIdByName.get("US game route group");
   if (routeGroupRuleId) await seedRouteGroupDemo(routeGroupRuleId, hostIds);
+  // 落地入站：JP 上一个 VLESS Reality 端口，上面那条 HK 中转落在它上面。
+  await insertAndGetId("proxy_inbounds", {
+    userId: usersSeed.adminId,
+    hostId: hostIds[1],
+    name: "JP VLESS landing",
+    protocol: "vless",
+    port: 24610,
+    transport: "tcp",
+    security: "reality",
+    uuid: "11111111-2222-4333-8444-555555555555",
+    serverName: "www.example.com",
+    realityShortId: "a1b2c3d4",
+    isEnabled: true,
+    sortOrder: 0,
+    createdAt: nowDate(),
+    updatedAt: nowDate(),
+  });
   for (const groupId of [resources.groups.failoverGroupId, resources.groups.apiFailoverGroupId, resources.groups.mediaFailoverGroupId]) {
     await syncForwardGroupRules(groupId, { preserveRuntime: true });
   }
@@ -2334,9 +2483,11 @@ export async function seedDevPanelData() {
   await seedAgentTokens(adminId, hostIds);
   await seedHostGroups(adminId, hostIds);
   await seedHostMetrics(hostIds);
+  await seedUnlockChecks(hostIds);
   const resources = await seedTunnelsAndGroups(adminId, hostIds);
   const rules = await seedRules(hostIds, resources, usersSeed);
   await seedProbeServices(adminId, hostIds);
+  await seedNetworkProfiles(hostIds);
   const catalog = await seedCatalog(adminId, resources, hostIds);
   await seedUserState(usersSeed, hostIds, resources, rules, catalog);
   await seedForwardTests(usersSeed, rules, hostIds);

@@ -1,4 +1,5 @@
 import DataSectionLoading from "@/components/DataSectionLoading";
+import { normalizeProbeAddressFamily, PROBE_ADDRESS_FAMILIES, PROBE_ADDRESS_FAMILY_LABELS, PROBE_FAMILY_MIN_AGENT_VERSION, type ProbeAddressFamily } from "@shared/probeFamily";
 import { EntityActions } from "@/components/entity/EntityActions";
 import { CardActions } from "@/components/entity/EntityCard";
 import { useEffect, useMemo, useState } from "react";
@@ -45,6 +46,8 @@ type ServiceForm = {
   method: "tcping" | "ping";
   targetIp: string;
   targetPort: string;
+  /** 目标是域名时按哪一族解析（Agent 2.2.226 起生效） */
+  addressFamily: ProbeAddressFamily;
   hostScope: "all" | "exclude" | "specific";
   hostIds: number[];
   excludeHostIds: number[];
@@ -61,6 +64,7 @@ const defaultForm: ServiceForm = {
   method: "tcping",
   targetIp: "",
   targetPort: "",
+  addressFamily: "auto",
   hostScope: "all",
   hostIds: [],
   excludeHostIds: [],
@@ -88,7 +92,9 @@ function storeServiceViewMode(viewMode: HostProbeServiceViewMode) {
 }
 
 function serviceTarget(service: any) {
-  return service.method === "ping" ? service.targetIp : `${service.targetIp}:${service.targetPort || "-"}`;
+  const family = normalizeProbeAddressFamily(service.addressFamily, service.targetIp);
+  const suffix = family === "auto" ? "" : ` · ${PROBE_ADDRESS_FAMILY_LABELS[family]}`;
+  return (service.method === "ping" ? service.targetIp : `${service.targetIp}:${service.targetPort || "-"}`) + suffix;
 }
 
 function scopeText(service: any, hostsById: Map<number, any>) {
@@ -151,6 +157,7 @@ function buildServiceUpdatePayload(service: any, isEnabled = service?.isEnabled 
     method,
     targetIp: String(service?.targetIp || "").trim(),
     targetPort: method === "tcping" ? Number(service?.targetPort || 0) : null,
+    addressFamily: normalizeProbeAddressFamily(service?.addressFamily, service?.targetIp),
     hostScope: service?.hostScope === "exclude" || service?.hostScope === "specific" ? service.hostScope : "all",
     hostIds: Array.isArray(service?.hostIds) ? service.hostIds.map(Number).filter(Boolean) : [],
     excludeHostIds: Array.isArray(service?.excludeHostIds) ? service.excludeHostIds.map(Number).filter(Boolean) : [],
@@ -413,6 +420,7 @@ export default function HostProbeServiceManager({
       method: service.method === "ping" ? "ping" : "tcping",
       targetIp: service.targetIp || "",
       targetPort: service.targetPort ? String(service.targetPort) : "",
+      addressFamily: normalizeProbeAddressFamily(service.addressFamily, service.targetIp),
       hostScope: service.hostScope === "exclude" || service.hostScope === "specific" ? service.hostScope : "all",
       hostIds: Array.isArray(service.hostIds) ? service.hostIds.map(Number).filter(Boolean) : [],
       excludeHostIds: Array.isArray(service.excludeHostIds) ? service.excludeHostIds.map(Number).filter(Boolean) : [],
@@ -599,6 +607,16 @@ export default function HostProbeServiceManager({
               <div className="space-y-1.5"><Label>IP 地址 / 域名</Label><Input value={form.targetIp} onChange={(e) => setForm({ ...form, targetIp: e.target.value })} placeholder="1.1.1.1 或 example.com" /></div>
               {form.method === "tcping" && <div className="space-y-1.5"><Label>目标端口</Label><Input type="number" min={1} max={65535} value={form.targetPort} onChange={(e) => setForm({ ...form, targetPort: e.target.value })} placeholder="443" /></div>}
             </div>
+            <FormField className="space-y-1.5">
+              <Label>地址族</Label>
+              <Select value={form.addressFamily} onValueChange={(value) => setForm({ ...form, addressFamily: value as ProbeAddressFamily })}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {PROBE_ADDRESS_FAMILIES.map((family) => <SelectItem key={family} value={family}>{PROBE_ADDRESS_FAMILY_LABELS[family]}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              <p className="text-meta text-muted-foreground">目标是域名时才有用：只用这一族的地址测。需要 Agent {PROBE_FAMILY_MIN_AGENT_VERSION} 以上，更旧的 Agent 照旧按「自动」。</p>
+            </FormField>
             <div className="grid gap-3 sm:grid-cols-[1fr_140px]">
               <FormField className="space-y-1.5"><Label>选择主机</Label><Select value={form.hostScope} onValueChange={(value) => setForm({ ...form, hostScope: value as ServiceForm["hostScope"] })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">所有主机</SelectItem><SelectItem value="exclude">排除主机</SelectItem><SelectItem value="specific">特定主机</SelectItem></SelectContent></Select></FormField>
               <FormField className="space-y-1.5"><Label>探测间隔（秒）</Label><Input type="number" min={5} value={form.intervalSeconds} onChange={(e) => setForm({ ...form, intervalSeconds: Math.max(5, Number(e.target.value) || 5) })} /></FormField>

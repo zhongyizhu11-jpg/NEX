@@ -15,6 +15,7 @@ import { recordPanelEvent } from "./ops/panelEvents";
 import { buildPanelUrl } from "./paymentUrls";
 import { sendTelegramMessage } from "./telegramBot";
 import { filterTelegramRecipients } from "./telegramNotifyPrefs";
+import { notifyDiscordAdmins, notifyDiscordUser } from "./discordNotify";
 import { isTelegramBotReady } from "./telegramReady";
 import { DELETED_USER_LABEL, TICKET_PRIORITY_LABELS, type TicketPriority } from "../shared/tickets";
 
@@ -71,7 +72,13 @@ async function ticketPanelUrl(path: string) {
   }
 }
 
+/** 工单通知管理员：Telegram 和 Discord 两路（Discord 没开时什么也不做）。 */
 async function sendTelegramToAdmins(text: string, excludeUserId: number, ticketId: number) {
+  await sendTelegramOnlyToAdmins(text, excludeUserId, ticketId);
+  await notifyDiscordAdmins(text, { category: "ticket", excludeUserId, label: `ticket=${ticketId}` });
+}
+
+async function sendTelegramOnlyToAdmins(text: string, excludeUserId: number, ticketId: number) {
   if (!(await isTelegramBotReady())) return;
   const admins = (await db.getTelegramAdminRecipients() as any[]).filter((admin) => Number(admin.id) !== excludeUserId);
   const recipients = await filterTelegramRecipients(admins, "ticket");
@@ -145,18 +152,20 @@ export async function notifyTicketStaffReply(ticket: NotifyTicket, staff: Notify
   if (!owner || owner.accountEnabled === false || Number(owner.accountEnabled) === 0) return;
   const url = await ticketPanelUrl(`/tickets?id=${ticket.id}`);
 
+  const ownerText = [
+    "<b>💬 你的工单有新回复</b>",
+    "",
+    `<b>工单</b>：#${ticket.id} ${escapeHtml(ticket.title)}`,
+    "",
+    escapeHtml(excerpt(content, TELEGRAM_EXCERPT_LENGTH)),
+    "",
+    url ? `<a href="${escapeHtml(url)}">在面板中查看</a>` : "请登录面板在「工单」里查看。",
+  ].join("\n");
+
   if (owner.telegramId && (await isTelegramBotReady())) {
     const [recipient] = await filterTelegramRecipients([owner], "ticket");
     if (recipient) {
-      const text = [
-        "<b>💬 你的工单有新回复</b>",
-        "",
-        `<b>工单</b>：#${ticket.id} ${escapeHtml(ticket.title)}`,
-        "",
-        escapeHtml(excerpt(content, TELEGRAM_EXCERPT_LENGTH)),
-        "",
-        url ? `<a href="${escapeHtml(url)}">在面板中查看</a>` : "请登录面板在「工单」里查看。",
-      ].join("\n");
+      const text = ownerText;
       try {
         await sendTelegramMessage(owner.telegramId, text);
       } catch (error) {
@@ -164,6 +173,9 @@ export async function notifyTicketStaffReply(ticket: NotifyTicket, staff: Notify
       }
     }
   }
+
+  // Discord 私信（绑定了、没关掉「工单消息」才发）
+  await notifyDiscordUser(owner, ownerText, { category: "ticket", label: `ticket=${ticket.id}` });
 
   const settings = await db.getAllSettings().catch(() => ({} as Record<string, string | null>));
   if (shouldEmailTicketOwner(owner, settings.emailEnabled === "true")) {

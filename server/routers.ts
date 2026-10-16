@@ -6,6 +6,7 @@ import { announcementsRouter } from "./routers/announcements";
 import { authRouter } from "./routers/auth";
 import { billingRouter } from "./routers/billing";
 import { dashboardRouter } from "./routers/dashboard";
+import { diagnosticsRouter } from "./routers/diagnostics";
 import { forwardGroupsRouter } from "./routers/forwardGroups";
 import { hostsRouter } from "./routers/hosts";
 import { lookingGlassRouter } from "./routers/lookingGlass";
@@ -25,6 +26,9 @@ import { usersRouter } from "./routers/users";
 import { opsRouter } from "./routers/ops";
 import { ipChangeRouter } from "./routers/ipChange";
 import { googleAuthRouter } from "./routers/googleAuth";
+import { topologyRouter } from "./routers/topology";
+import { discordAuthRouter } from "./routers/discordAuth";
+import { netProfileRouter } from "./routers/netProfile";
 
 export const appRouter = router({
   system: systemRouter,
@@ -39,6 +43,7 @@ export const appRouter = router({
   users: usersRouter,
   hosts: hostsRouter,
   lookingGlass: lookingGlassRouter,
+  diagnostics: diagnosticsRouter,
   rules: rulesRouter,
   forwardGroups: forwardGroupsRouter,
   tunnels: tunnelsRouter,
@@ -53,6 +58,9 @@ export const appRouter = router({
   ops: opsRouter,
   ipChange: ipChangeRouter,
   googleAuth: googleAuthRouter,
+  topology: topologyRouter,
+  discordAuth: discordAuthRouter,
+  netProfile: netProfileRouter,
 });
 
 export type AppRouter = typeof appRouter;
