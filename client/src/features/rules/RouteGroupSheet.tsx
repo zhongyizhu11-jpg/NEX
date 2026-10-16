@@ -1,4 +1,5 @@
 import { useRef, type ReactNode } from "react";
+import { useLocation } from "wouter";
 
 import { EntityTag } from "@/components/entity/EntityCard";
 import { GroupedList, ListRow, ListSection } from "@/components/ios/GroupedList";
@@ -26,6 +27,7 @@ import { describeRoutePolicyReport, formatPolicyClock, type RoutePolicy } from "
 import { formatRouteScore, routeScoreGrade } from "@shared/routeScore";
 import { isAgentVersionBehind } from "@shared/version";
 import { ConditionRow, PinSection, SentenceRow } from "./RoutePolicySheet";
+import { RouteQualityHistory } from "./RouteQualityHistory";
 
 /*
   线路组面板：从规则卡上那个「主备 · 主线路 · 92 优」点进来。
@@ -441,6 +443,7 @@ export function RouteGroupSheet({
     关的那一下（130ms 的动画）调用方已经把规则清掉了，拿上一份接着画 —— 不然面板在
     动画里先塌成只剩标题再消失。
   */
+  const [, setLocation] = useLocation();
   const last = useRef<{ subjectName: string; policy: RoutePolicy } | null>(null);
   if (open && policy) last.current = { subjectName, policy };
   const shown = last.current;
@@ -458,8 +461,25 @@ export function RouteGroupSheet({
             status={(statusQuery.data as RouteStatus | null | undefined) ?? null}
             events={(eventsQuery.data as RouteEvent[] | undefined) ?? []}
           />
+          <RouteQualityHistory
+            ruleId={Number(ruleId) || 0}
+            enabled={enabled}
+            activeKey={((statusQuery.data as RouteStatus | null | undefined)?.paths || []).find((path) => path.active)?.key ?? null}
+          />
           <DialogFooter>
             {footer}
+            {ruleId ? (
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => {
+                  onOpenChange(false);
+                  setLocation(`/topology?rule=${Number(ruleId)}`);
+                }}
+              >
+                查看拓扑
+              </Button>
+            ) : null}
             {onEdit ? (
               <Button type="button" variant="outline" onClick={onEdit}>
                 编辑线路组

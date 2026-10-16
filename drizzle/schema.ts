@@ -945,6 +945,25 @@ export type ForwardRuleRouteEvent = typeof forwardRuleRouteEvents.$inferSelect;
 export type InsertForwardRuleRouteEvent = typeof forwardRuleRouteEvents.$inferInsert;
 
 /*
+  线路组每条路径的质量历史：入口 Agent 随心跳报的评分（routeGroupStats 里的 RouteTargetStat），
+  每条路径最多一分钟落一行，给线路组面板画近几天的走势。丢包、可用率按千分比存整数
+  （和 tunnel_link_shaping.lossPermille 一样），接口里再换回百分比。定期只留 7 天。
+*/
+export const routePathQualityStats = table("route_path_quality_stats", {
+  id: serial("id"),
+  ruleId: int("ruleId").notNull(),
+  pathKey: varchar("pathKey", { length: 32 }).notNull(),
+  sampledAt: epoch("sampledAt").notNull().default(nowDefault()),
+  latencyMs: int("latencyMs"),
+  lossPermille: int("lossPermille").notNull().default(0),
+  jitterMs: int("jitterMs"),
+  availabilityPermille: int("availabilityPermille"),
+  score: int("score"),
+});
+export type RoutePathQualityStat = typeof routePathQualityStats.$inferSelect;
+export type InsertRoutePathQualityStat = typeof routePathQualityStats.$inferInsert;
+
+/*
   换隧道后旧入口的临时桥接：规则换到别的入口主机后，旧入口的老端口在这段时间里继续把流量转到
   规则当前的入口（见 shared/ruleEntryBridge 与 server/repositories/ruleEntryBridgeRepository）。
 */

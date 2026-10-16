@@ -55,6 +55,7 @@ export * from "./repositories/proxyInboundRepository";
 export * from "./repositories/ruleEntryBridgeRepository";
 export * from "./repositories/referralRepository";
 export * from "./repositories/tlsInboundRepository";
+export * from "./repositories/routePathQualityRepository";
 
 // ==================== Initialization ====================
 

@@ -427,6 +427,8 @@ export async function runTcpingCleanup() {
     ["forward_tests", () => db.cleanOldForwardTests(72)],
     ["forward_group_events", () => db.cleanOldForwardGroupEvents(72)],
     ["forward_rule_route_events", () => db.cleanOldForwardRuleRouteEvents(72)],
+    // 线路组路径质量历史留 7 天（一分钟一行，比延迟明细稀，留得长一点画周走势）。
+    ["route_path_quality_stats", () => db.cleanOldRoutePathQualityStats(db.ROUTE_PATH_QUALITY_RETENTION_HOURS)],
     ["host_probe_service_stats", () => db.cleanOldHostProbeServiceStats(72)],
     ["address_geo_cache", () => cleanOldAddressGeoCache()],
     // 失效超过 7 天的登录会话（过期或已撤销），只有「未撤销且未过期」的行会被读取。

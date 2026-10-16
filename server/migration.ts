@@ -191,6 +191,7 @@ const MIGRATION_RUNTIME_POLL_MS = 2_000;
 const DIRECT_SQLITE_OPTIONAL_SOURCE_TABLES = new Set([
   "agent_traffic_reports",
   "forward_rule_route_events",
+  "route_path_quality_stats",
   "forward_rule_entry_bridges",
   "tickets",
   "ticket_messages",
@@ -232,6 +233,7 @@ export const ESSENTIAL_MIGRATION_OMITTED_TABLES = new Set<(typeof MIGRATION_TABL
   "forward_tests",
   "forward_group_events",
   "forward_rule_route_events",
+  "route_path_quality_stats",
   "ip_geo_cache",
   "config_audit_events",
   "ip_change_events",
@@ -786,6 +788,7 @@ const IMPORT_TABLE_ORDER = [
   "forward_tests",
   "forward_group_events",
   "forward_rule_route_events",
+  "route_path_quality_stats",
   "ip_geo_cache",
   "subscription_plans",
   "subscription_plan_prices",
@@ -843,6 +846,7 @@ const BEST_EFFORT_MIGRATION_TABLES = new Set<MigrationTableName>([
   "forward_tests",
   "forward_group_events",
   "forward_rule_route_events",
+  "route_path_quality_stats",
   "config_audit_events",
   "ip_change_events",
   "system_settings",
@@ -1439,6 +1443,7 @@ async function prepareImportRow(table: string, source: Record<string, any>, maps
       return { row };
 
     case "forward_rule_route_events":
+    case "route_path_quality_stats":
       row.ruleId = mapRequiredId(maps, "forward_rules", source.ruleId);
       return { row };
 
