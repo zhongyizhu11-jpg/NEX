@@ -270,6 +270,10 @@ export const hosts = table("hosts", {
   memoryTotal: bigint("memoryTotal", { mode: "number" }),
   agentVersion: text("agentVersion"),
   fxpVersion: varchar("fxpVersion", { length: 64 }),
+  // Agent 2.2.227 起每次心跳上报：装着的 gost 运行时版本（例如 3.2.6-nex3）和它实测出来的能力
+  // （JSON 数组，例如 ["ssEgress2022","ssEgressUdp"]），见 shared/ssEgress.ts。
+  runtimeVersion: varchar("runtimeVersion", { length: 64 }),
+  agentCapabilities: text("agentCapabilities"),
   mimicAvailable: boolean("mimicAvailable"),
   mimicVersion: text("mimicVersion"),
   mimicStatus: varchar("mimicStatus", { length: 64 }),

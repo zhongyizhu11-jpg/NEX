@@ -348,6 +348,8 @@ async function planEgressPath(plan: PlanBuilder, rule: any, entryHostId: number,
     entryHostId,
     entryAgentVersion: String(entryHost?.agentVersion || ""),
     entryHostName: plan.name(entryHostId),
+    entryAgentCapabilities: entryHost?.agentCapabilities,
+    entryRuntimeVersion: entryHost?.runtimeVersion,
     context,
   });
   const landingHostId = type === "ss_host" ? Number(evaluation?.landingHost?.id || 0) : 0;
@@ -376,7 +378,7 @@ async function planEgressPath(plan: PlanBuilder, rule: any, entryHostId: number,
     }, "hop");
   }
   if (landingHostId > 0) {
-    // 出口只走 TCP（SS_EGRESS_UDP_SUPPORTED = false），目标那一段由落地主机去连
+    // 目标那一段由落地主机去连（UDP 出口时目标多半是 UDP 服务，TCP 拨测只能当参考）
     planTargetDial(plan, landingHostId, target, targetPort, "tcp");
   } else {
     plan.panel({ key: `egress-target:${rule.id}`, group: "target", title: "目标连通（经外部 SS）", status: "skip", summary: "目标由外部 SS 服务器去连，面板查不到这一段", source: "panel" });

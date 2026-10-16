@@ -23,6 +23,12 @@ import {
   parseSsEgressLink,
   ruleEgressShapeError,
   ruleEgressStateBlocksDelivery,
+  ruleEgressWantsUdp,
+  hostSsEgressCapabilities,
+  isSs2022Method,
+  ssEgress2022UpgradeMessage,
+  ssEgressHostCapabilityError,
+  ssEgressUdpUpgradeMessage,
   ssEgressAgentUpgradeMessage,
   ssEgressEndpointError,
   ssEgressMethodError,
@@ -184,6 +190,18 @@ export async function resolveRuleEgressColumns(input: RuleEgressInput, context: 
       if (!isSsEgressAgentSupported(String(host?.agentVersion || ""))) throw new Error(ssEgressAgentUpgradeMessage(host?.name));
     }
   };
+  /*
+    UDP 走出口、SS2022 做出口要每一台入口机此刻都报了能力（Agent ≥ 2.2.227 且运行时 ≥ nex3、没回滚）。
+    和上面的 Agent 版本不同，这里每次保存都查：规则一旦存成「UDP 走出口」，界面就会显示它在走出口，
+    不能让一台撑不起的入口机混进来。下发时还会再按每台入口机现在的能力判一次（失去能力就按停用下发）。
+  */
+  const wantsUdp = ruleEgressWantsUdp({ protocol: context.protocol, egressUdp });
+  const assertEntryCapabilities = (method: unknown) => {
+    for (const host of entryHosts) {
+      const error = ssEgressHostCapabilityError(host, { udp: wantsUdp, method });
+      if (error) throw new Error(error);
+    }
+  };
 
   if (egressType === "ss_host") {
     const inboundId = Number(input.egressInboundId !== undefined ? input.egressInboundId : current.egressInboundId) || 0;
@@ -202,6 +220,7 @@ export async function resolveRuleEgressColumns(input: RuleEgressInput, context: 
       throw new Error("落地主机不能是规则的入口主机自己：那样流量绕一圈还是从入口出去");
     }
     if (changed) assertEntryAgents();
+    assertEntryCapabilities(inbound.method);
     // 只在新选 / 换了落地时要求它在线：已经挂着的规则改个名字，不该因为落地临时掉线被卡住。
     if (changed && !isHostConsideredOnline(landingHost)) throw new Error(`落地主机「${landingHost.name}」当前离线，请等它上线后再选`);
     if (!getHostEntryAddress(landingHost)) throw new Error(`落地主机「${landingHost.name}」还没有可用地址`);
@@ -226,6 +245,7 @@ export async function resolveRuleEgressColumns(input: RuleEgressInput, context: 
     stored = encryptSsEgressEndpoint(endpoint);
   }
   if (!keepExisting || current.egressType !== "ss_link") assertEntryAgents();
+  assertEntryCapabilities(endpoint.method);
   const server = endpoint.server.toLowerCase();
   if (entryHosts.some((host) => addressTokens(host).has(server))) {
     throw new Error("外部链接指向的是规则的入口主机自己，这会绕回入口，请换一条链接");
@@ -285,6 +305,13 @@ export async function assertProxyInboundEgressCompatibleChange(inboundId: number
   if (next.protocol !== undefined && String(next.protocol) !== "shadowsocks") reasons.push("改成别的协议");
   if (next.method !== undefined && ssEgressMethodError(next.method)) reasons.push(`改成 ${normalizeSsMethod(next.method)}（出口不支持）`);
   if (next.hostId !== undefined && Number(next.hostId) !== Number(currentHostId)) reasons.push("换到别的主机");
+  // 改成 SS2022：依赖它的规则的每台入口机都要有 ssEgress2022 能力，否则这些规则会被按停用下发。
+  if (reasons.length === 0 && next.method !== undefined && isSs2022Method(next.method)) {
+    const hostIds = Array.from(new Set(rules.map((rule) => Number(rule.hostId || 0)).filter((id) => id > 0)));
+    const hosts = hostIds.length > 0 ? await db.getHostsByIds(hostIds) as any[] : [];
+    const lacking = hosts.find((host) => !hostSsEgressCapabilities(host).ss2022);
+    if (lacking) reasons.push(`改成 ${normalizeSsMethod(next.method)}（${ssEgress2022UpgradeMessage(lacking)}）`);
+  }
   if (reasons.length === 0) return;
   throw new Error(`这个落地入站正被 ${visible.length} 条转发规则当作 Shadowsocks 出口（${ruleListText(visible)}），不能${reasons.join("、")}。请先改掉这些规则的出口`);
 }
@@ -376,6 +403,37 @@ export async function listEgressLandingOptions(actor: Actor) {
     .sort((a, b) => Number(b.inbounds.length > 0) - Number(a.inbounds.length > 0) || a.hostName.localeCompare(b.hostName));
 }
 
+/* ── 给规则编辑器的入口机能力 ───────────────────────────────────────── */
+
+/**
+ * 每台入口机现在能不能做 UDP 出口 / SS2022 出口，和保存、下发用的是同一个判断
+ * （shared/ssEgress.ts hostSsEgressCapabilities）。自己看不到的主机（端口转发资源里别人的成员）
+ * 只回能力，不回名字和版本。
+ */
+export async function listEgressEntryCapabilities(actor: Actor, hostIds: readonly number[]) {
+  const ids = Array.from(new Set(hostIds.map(Number).filter((id) => Number.isInteger(id) && id > 0))).slice(0, 64);
+  if (ids.length === 0) return [];
+  const rows = await db.getHostsByIds(ids) as any[];
+  const allowed = actor.role === "admin"
+    ? null
+    : new Set((await db.getUserEffectiveAllowedHostIds(actor.id)).map(Number));
+  return ids.map((hostId) => {
+    const host = rows.find((row) => Number(row.id) === hostId) || null;
+    const canSee = !!host && (allowed === null || Number(host.userId) === Number(actor.id) || allowed.has(hostId));
+    const capabilities = hostSsEgressCapabilities(host);
+    return {
+      hostId,
+      name: canSee ? String(host.name || "") : null,
+      agentVersion: canSee ? String(host.agentVersion || "") || null : null,
+      runtimeVersion: canSee ? String(host.runtimeVersion || "") || null : null,
+      udp: capabilities.udp,
+      ss2022: capabilities.ss2022,
+      udpMessage: capabilities.udp ? null : ssEgressUdpUpgradeMessage(canSee ? host : null),
+      ss2022Message: capabilities.ss2022 ? null : ssEgress2022UpgradeMessage(canSee ? host : null),
+    };
+  });
+}
+
 /* ── 下发：运行视图和 gost 出口链 ────────────────────────────────────── */
 
 export type SsEgressRuntime = {
@@ -425,12 +483,18 @@ export type RuleEgressEvaluation = {
  * 这条规则的出口现在是什么状态、要下发的话下发什么。纯计算（上下文由调用方查好）。
  * entryAgentVersion：规则所在入口机的 Agent 版本；entryHostId 用来查自环。
  */
-export function evaluateRuleEgress(rule: any, options: {
+export type RuleEgressEntryOptions = {
   entryHostId: number;
   entryAgentVersion: string;
   entryHostName?: string;
+  /** 入口机这次心跳上报的能力（hosts.agentCapabilities），决定 UDP / SS2022 能不能下发。 */
+  entryAgentCapabilities?: unknown;
+  /** 入口机上报的运行时版本，只用来写提示。 */
+  entryRuntimeVersion?: unknown;
   context: EgressRuntimeContext;
-}): RuleEgressEvaluation | null {
+};
+
+export function evaluateRuleEgress(rule: any, options: RuleEgressEntryOptions): RuleEgressEvaluation | null {
   const type = normalizeRuleEgressType(rule?.egressType);
   if (type === "none") return null;
   const base = { runtime: null, landingHost: null, inbound: null, endpoint: null } as const;
@@ -472,12 +536,30 @@ export function evaluateRuleEgress(rule: any, options: {
   if (!isSsEgressAgentSupported(options.entryAgentVersion)) {
     return { ...base, inbound, landingHost, endpoint, state: "agent_upgrade", message: ssEgressAgentUpgradeMessage(options.entryHostName) };
   }
+  /*
+    能力不够时整条规则按停用下发（和 Agent 太旧同一个处理）：UDP 不能偷偷直连，也不能显示成在走出口；
+    SS2022 在旧运行时上连 TCP 都不通。经典 AEAD 只走 TCP 的规则不看能力，旧入口机上照旧。
+  */
+  const entryHost = {
+    name: options.entryHostName,
+    agentVersion: options.entryAgentVersion,
+    runtimeVersion: options.entryRuntimeVersion,
+    agentCapabilities: options.entryAgentCapabilities,
+  };
+  const capabilities = hostSsEgressCapabilities(entryHost);
+  if (isSs2022Method(endpoint.method) && !capabilities.ss2022) {
+    return { ...base, inbound, landingHost, endpoint, state: "ss2022_runtime_upgrade", message: ssEgress2022UpgradeMessage(entryHost) };
+  }
+  const wantsUdp = ruleEgressWantsUdp(rule);
+  if (wantsUdp && !capabilities.udp) {
+    return { ...base, inbound, landingHost, endpoint, state: "udp_runtime_upgrade", message: ssEgressUdpUpgradeMessage(entryHost) };
+  }
   const runtime: SsEgressRuntime = {
     server: endpoint.server,
     port: endpoint.port,
     method: endpoint.method,
     password: endpoint.password,
-    udp: SS_EGRESS_UDP_SUPPORTED && dbBool(rule.egressUdp),
+    udp: SS_EGRESS_UDP_SUPPORTED && wantsUdp && capabilities.udp,
   };
   const paused = !dbBool(rule.isEnabled);
   if (landingHost && !isHostConsideredOnline(landingHost)) {
@@ -493,12 +575,7 @@ export function evaluateRuleEgress(rule: any, options: {
  *   - 能跑 → 带上 egressRuntime，下游生成 gost 配置时挂出口链；UDP 不走出口时协议收窄成 TCP。
  * 没有出口的规则原样返回（同一个对象）。
  */
-export function ruleEgressRuntimeView<T extends Record<string, any>>(rule: T, options: {
-  entryHostId: number;
-  entryAgentVersion: string;
-  entryHostName?: string;
-  context: EgressRuntimeContext;
-}): T {
+export function ruleEgressRuntimeView<T extends Record<string, any>>(rule: T, options: RuleEgressEntryOptions): T {
   const evaluation = evaluateRuleEgress(rule, options);
   if (!evaluation) return rule;
   const view: Record<string, any> = {
@@ -599,6 +676,8 @@ export async function withRuleEgressDisplay<T>(value: T): Promise<T> {
           entryHostId: Number(hostId),
           entryAgentVersion: String(host?.agentVersion || ""),
           entryHostName: host?.name,
+          entryAgentCapabilities: host?.agentCapabilities,
+          entryRuntimeVersion: host?.runtimeVersion,
           context,
         });
         if (!evaluation) continue;
@@ -616,7 +695,9 @@ export async function withRuleEgressDisplay<T>(value: T): Promise<T> {
           landingHostName: worst.landingHost ? String(worst.landingHost.name || "") : null,
           masked: worst.endpoint ? maskSsEgressEndpoint(worst.endpoint) : "",
           method: worst.endpoint ? normalizeSsMethod(worst.endpoint.method) : "",
-          udp: dbBool(rule.egressUdp),
+          // 只有真的下发了 UDP 出口才算「含 UDP」；勾了但入口机撑不起时 state 是 udp_runtime_upgrade。
+          udp: worst.runtime?.udp === true,
+          udpConfigured: dbBool(rule.egressUdp),
           state: worst.state,
           message: worst.message,
         },

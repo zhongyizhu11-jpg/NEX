@@ -1,0 +1,202 @@
+NEX patch for go-gost/x v0.8.1, applied by gost-runtime/build.sh after nex-splice.patch.
+
+Fixes classic-AEAD Shadowsocks UDP (connector "ssu" + dialer "udp"): upstream sent valid
+packets but never delivered a single reply, so UDP through an ss egress was one-way.
+  1. internal/util/ss/conn.go stored the per-flow session under session.Hash()
+     ("aead-<local addr>") and looked it up under SessionHashFromAddrPort(<local addr>)
+     ("<local addr>"). The lookup always missed, the first reply returned
+     "udp session cannot find" and the relay closed the flow. The session now lives on
+     the UDPConn (one conn = one flow); the never-pruned connector-wide map is no longer
+     written (it grew by one entry per flow).
+  2. Classic AEAD replies are [salt][AEAD(SOCKS addr + payload)]; the address was handed
+     to the client as payload. It is now stripped (SS2022 replies are already stripped
+     by go-shadowsocks2).
+  3. A reply that fails to decrypt or parse is dropped instead of failing the read and
+     tearing down the flow.
+The salt-filter and SS2022 wire-format fixes are in nex-shadowsocks2.patch (go-gost/go-shadowsocks2).
+
+diff -ruN a/connector/ss/udp/connector.go b/connector/ss/udp/connector.go
+--- a/connector/ss/udp/connector.go
++++ b/connector/ss/udp/connector.go
+@@ -4,6 +4,7 @@
+ 	"context"
+ 	"fmt"
+ 	"net"
++	"strings"
+ 	"sync"
+ 	"time"
+ 
+@@ -28,6 +29,8 @@
+ 	md         metadata
+ 	options    connector.Options
+ 	sessionMap sync.Map
++	// NEX: classic AEAD (not 2022-*) replies start with a SOCKS address, see internal/util/ss/conn.go.
++	classicAEAD bool
+ }
+ 
+ func NewConnector(opts ...connector.Option) connector.Connector {
+@@ -54,6 +57,7 @@
+ 			return nil
+ 		}
+ 		c.client = core.NewUDPClient(clientConfig, 60)
++		c.classicAEAD = !strings.HasPrefix(strings.ToLower(method), "2022-")
+ 	}
+ 
+ 	return
+@@ -90,7 +94,7 @@
+ 	pc, ok := conn.(net.PacketConn)
+ 	if ok {
+ 		// standard UDP relay
+-		return ss.UDPClientConn(pc, conn.RemoteAddr(), taddr, c.md.udpBufferSize, &c.client, &c.sessionMap), nil
++		return ss.UDPClientConn(pc, conn.RemoteAddr(), taddr, c.md.udpBufferSize, &c.client, &c.sessionMap).SetClassicAEAD(c.classicAEAD), nil
+ 	}
+ 
+ 	_, padding, err := utils.GeneratePadding()
+diff -ruN a/internal/util/ss/conn.go b/internal/util/ss/conn.go
+--- a/internal/util/ss/conn.go
++++ b/internal/util/ss/conn.go
+@@ -5,6 +5,7 @@
+ 	"net"
+ 	"net/netip"
+ 	"sync"
++	"sync/atomic"
+ 
+ 	"github.com/go-gost/core/common/bufpool"
+ 	"github.com/go-gost/go-shadowsocks2/core"
+@@ -22,6 +23,29 @@
+ 
+ // This wrapped connection has different behavior than ordinary connection:
+ // 1. ReadFrom will return target addr of shadowsocks instead of remote addr
++//
++// NEX (nex-ssu.patch): the client side of this conn never delivered a single reply
++// for the classic AEAD methods (aes-*-gcm, chacha20-ietf-poly1305), so UDP through
++// an "ssu" connector was one-way only. Two bugs, both fixed here:
++//
++//  1. The session was stored and looked up under two different keys. WriteTo
++//     stored it under session.Hash(), which for classic AEAD is "aead-<local addr>"
++//     (go-shadowsocks2 shadowaead/session.go), while ReadFrom looked it up with
++//     core.SessionHashFromAddrPort(<local addr>) = "<local addr>". The lookup always
++//     missed, ReadFrom returned "udp session cannot find" on the first reply and the
++//     relay tore the flow down. The connector-wide map also gained one entry per
++//     flow and was never pruned. A UDPConn is exactly one flow (one dialed socket,
++//     one target), so the session now lives on the conn and the shared map is no
++//     longer touched.
++//
++//  2. A classic AEAD reply is [salt][AEAD(SOCKS addr + payload)], and shadowaead's
++//     ClientHandleOutbound returns the decrypted body unchanged. Standard servers
++//     (sing-box, shadowsocks-rust/libev, Xray) always put the source address first,
++//     so it is stripped here before the payload goes back to the client. SS2022
++//     replies are already stripped by UnpackUDP.
++//
++// A reply that fails to decrypt or parse is dropped (plain UDP semantics) instead of
++// failing the read: one stray or forged datagram must not kill the whole mapping.
+ type UDPConn struct {
+ 	client     *core.UDPClient
+ 	server     *core.UDPServer
+@@ -30,8 +54,14 @@
+ 	raddr      net.Addr
+ 	taddr      net.Addr
+ 	bufferSize int
++	// NEX: the session returned by the latest WriteTo on this flow.
++	session atomic.Value // udpSessionBox
++	// NEX: classic AEAD replies carry a SOCKS address in front of the payload.
++	stripAddr bool
+ }
+ 
++type udpSessionBox struct{ s core.UDPSession }
++
+ func UDPClientConn(c net.PacketConn, remoteAddr, targetAddr net.Addr, bufferSize int, client *core.UDPClient, sessionMap *sync.Map) *UDPConn {
+ 	if bufferSize <= 0 {
+ 		bufferSize = defaultBufferSize
+@@ -47,40 +77,57 @@
+ 	}
+ }
+ 
+-func (c *UDPConn) ReadFrom(b []byte) (n int, addr net.Addr, err error) {
+-	buf := bufpool.Get(c.bufferSize)
+-	defer bufpool.Put(buf)
++// SetClassicAEAD (NEX) marks the conn as using a classic (non-2022) method, whose
++// replies start with the SOCKS source address.
++func (c *UDPConn) SetClassicAEAD(classic bool) *UDPConn {
++	c.stripAddr = classic
++	return c
++}
+ 
+-	clientAddr, err := netip.ParseAddrPort(c.LocalAddr().String())
+-	if err != nil {
+-		return
++func (c *UDPConn) ReadFrom(b []byte) (n int, addr net.Addr, err error) {
++	if c.client == nil {
++		return 0, nil, errors.New("UDPConn must be client ")
+ 	}
+ 
+-	n, _, err = c.PacketConn.ReadFrom(buf)
+-	if err != nil {
+-		return
+-	}
++	buf := bufpool.Get(c.bufferSize)
++	defer bufpool.Put(buf)
+ 
+-	var payload []byte
+-	var session core.UDPSession
+-	if c.client != nil {
+-		s, ok := c.sessionMap.Load(core.SessionHashFromAddrPort(clientAddr))
+-		if !ok {
+-			return 0, nil, errors.New("udp session cannot find")
+-		}
+-		session = s.(core.UDPSession)
+-		payload, err = c.client.Outbound(buf[:n], session)
++	for {
++		var nr int
++		nr, _, err = c.PacketConn.ReadFrom(buf)
+ 		if err != nil {
+ 			return
+ 		}
+-	} else {
+-		return 0, nil, errors.New("UDPConn must be client ")
+-	}
+ 
+-	n = copy(b, payload)
+-	addr, err = net.ResolveUDPAddr("udp", session.Target().String())
++		box, _ := c.session.Load().(udpSessionBox)
++		if box.s == nil {
++			// Nothing has been sent on this flow yet, so this cannot be a reply.
++			continue
++		}
++		session := box.s
+ 
+-	return
++		payload, derr := c.client.Outbound(buf[:nr], session)
++		if derr != nil {
++			continue
++		}
++
++		var src socks.Addr
++		if c.stripAddr {
++			if src = socks.SplitAddr(payload); src == nil {
++				continue
++			}
++			payload = payload[len(src):]
++		} else {
++			src = session.Target()
++		}
++
++		n = copy(b, payload)
++		if addr, err = net.ResolveUDPAddr("udp", src.String()); err != nil {
++			// The address is informational only; never drop data over it.
++			addr, err = c.taddr, nil
++		}
++		return
++	}
+ }
+ 
+ func (c *UDPConn) Read(b []byte) (n int, err error) {
+@@ -102,7 +149,7 @@
+ 		if err != nil {
+ 			return
+ 		}
+-		c.sessionMap.Store(session.Hash(), session)
++		c.session.Store(udpSessionBox{s: session})
+ 	} else {
+ 		return 0, errors.New("UDPConn must be client")
+ 	}

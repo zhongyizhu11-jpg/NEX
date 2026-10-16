@@ -99,7 +99,7 @@ import {
 import { cn } from "@/lib/utils";
 import { tunnelFxpIssueText } from "@/features/links/TunnelFxpIssueNotice";
 import { autoForwardRuleName, resolveForwardRuleName } from "@shared/forwardRuleName";
-import { DEFAULT_RULE_EGRESS_FORM, RuleEgressSection, type RuleEgressFormValue } from "@/components/rules/RuleEgressSection";
+import { DEFAULT_RULE_EGRESS_FORM, RuleEgressSection, useEgressEntryCapabilities, type RuleEgressFormValue } from "@/components/rules/RuleEgressSection";
 import {
   normalizeRuleEgressType,
   RULE_EGRESS_STATE_LABELS,
@@ -3187,6 +3187,7 @@ function RulesContent() {
     if (!usableForwardTypes.includes("gost")) return "出口需要 gost 转发，当前账号不能用 gost。";
     return null;
   }, [egressSectionVisible, isLegacyLocalRuleEdit, isForwardGroupRouteMode, selectedForwardGroup, effectiveRouteForwardType, usableForwardTypes]);
+  const egressCapabilities = useEgressEntryCapabilities(egressEntryHostIds, egressActive);
   const egressBlocker = useMemo<string | null>(() => {
     if (!egressActive) return null;
     if (egressBlockedReason) return egressBlockedReason;
@@ -3201,8 +3202,10 @@ function RulesContent() {
     if (shapeError) return shapeError;
     if (form.egress.egressType === "ss_host" && !form.egress.egressInboundId) return "请选择落地主机上的 Shadowsocks 入站";
     if (form.egress.egressType === "ss_link" && !form.egress.egressLink.trim() && !form.egress.egressLinkMasked) return "请粘贴外部 Shadowsocks 链接";
+    // UDP 走出口要每台入口机都报了能力（服务端保存时同样会拦）。
+    if (form.egress.egressUdp && !egressCapabilities.loading && !egressCapabilities.udp) return egressCapabilities.udpReason || "入口主机还不支持 UDP 走出口";
     return null;
-  }, [egressActive, egressBlockedReason, form.egress, form.protocol, effectiveRouteForwardType, isForwardGroupRouteMode, selectedForwardGroup]);
+  }, [egressActive, egressBlockedReason, form.egress, form.protocol, effectiveRouteForwardType, isForwardGroupRouteMode, selectedForwardGroup, egressCapabilities]);
   const submitBlocker = useMemo<string | null>(
     () => (isSniEntryMode
       ? sniRuleFormBlocker(form, selectedTlsInbound)
@@ -6113,15 +6116,16 @@ function RulesContent() {
     if (!egress || normalizeRuleEgressType(egress.type) === "none") return null;
     const state = String(egress.state || "running") as RuleEgressState;
     const tone = ruleEgressStateTone(state);
-    const text = ruleEgressSummaryText({ type: egress.type, landingHostName: egress.landingHostName });
+    const text = ruleEgressSummaryText({ type: egress.type, landingHostName: egress.landingHostName, udp: egress.udp === true });
     const title = [text, egress.masked, egress.message].filter(Boolean).join(" · ");
     return (
-      <span key="egress" className="inline-flex min-w-0 max-w-full items-center gap-1" data-testid="rule-egress-badge">
+      <span key="egress" className="inline-flex min-w-0 max-w-full flex-wrap items-center gap-1" data-testid="rule-egress-badge">
         <Badge variant="outline" className="h-5 min-w-0 max-w-full truncate px-1.5 text-[10px] font-normal" title={title}>{text}</Badge>
         <Badge
           variant="outline"
           className={cn(
-            "h-5 shrink-0 px-1.5 text-[10px]",
+            // 状态那一枚（例如「UDP 出口需要升级 Agent/运行时」）在窄屏上可能比剩下的宽度长：整枚换行，不截字。
+            "h-5 max-w-full shrink-0 truncate px-1.5 text-[10px]",
             tone === "ok" && "border-[color-mix(in_srgb,var(--fx-healthy)_40%,transparent)] text-[var(--fx-healthy-text)]",
             tone === "warn" && "border-[color-mix(in_srgb,var(--fx-warn)_40%,transparent)] text-[var(--fx-warn-text)]",
             tone === "muted" && "text-muted-foreground",
@@ -8140,7 +8144,7 @@ function RulesContent() {
               <FormField className="space-y-1.5">
               <Label>协议</Label>
               <Select
-              value={isSniEntryMode || egressActive ? "tcp" : form.protocol}
+              value={isSniEntryMode ? "tcp" : egressActive ? (form.egress.egressUdp ? "both" : "tcp") : form.protocol}
               disabled={isSniEntryMode || egressActive}
               onValueChange={(v) => setForm({
               ...form,
@@ -8181,7 +8185,12 @@ function RulesContent() {
                 isAdmin={user?.role === "admin"}
                 entryHostIds={egressEntryHostIds}
                 blockedReason={egressBlockedReason}
-                onChange={(patch) => setForm((prev) => ({ ...prev, egress: { ...prev.egress, ...patch } }))}
+                onChange={(patch) => setForm((prev) => ({
+                  ...prev,
+                  // 「UDP 也走出口」决定协议：勾上是 TCP+UDP，不勾只转 TCP（UDP 绝不绕过出口直连）。
+                  ...(patch.egressUdp !== undefined ? { protocol: patch.egressUdp ? "both" : "tcp" } : {}),
+                  egress: { ...prev.egress, ...patch },
+                }))}
                 onEgressEnabled={() => setForm((prev) => ({
                   ...prev,
                   // 出口是 gost 的转发链做的：直连主机的规则切到 gost；端口转发资源的工具由资源决定（上面已经要求是 gost）。

@@ -1,0 +1,166 @@
+NEX patch for go-gost/go-shadowsocks2 v0.1.1, applied by gost-runtime/build.sh.
+
+Makes gost's Shadowsocks client interoperate reliably with standard servers (sing-box,
+shadowsocks-rust). Root causes are explained in comments next to each change.
+  1. Classic AEAD salt filter (shadowaead/bloomring.go): the Bloom filter's double hash
+     used FNV-1 and FNV-1a of the same input, which are strongly correlated; the real
+     false-positive rate was ~0.6% instead of 1e-6 once the ring filled. Every false
+     positive drops a packet / connection as "repeated salt". The UDP client adds one
+     salt per packet, so UDP egress lost ~0.06% of replies after 10 minutes at 200 pps
+     and would settle around 0.5%. Now seeded maphash.
+  2. SS2022 UDP (shadowaead_2022/packet.go): the session subkey was derived from the
+     session ID encoded little-endian; SIP022 uses the on-wire (big-endian) bytes.
+     sing-box rejected every packet and gost could not have decrypted any reply.
+  3. SS2022 TCP (shadowaead_2022/stream.go): the client decoded the response header as a
+     request header and ignored its length. Per SIP022 that length is the size of the
+     first payload chunk, which follows WITHOUT a length prefix; the first reply chunk
+     was misread and failed authentication. Also checks the header type and the echoed
+     request salt. A length of 0 (what gost's own server sends) keeps the old path.
+  4. SS2022 UDP padding: only short DNS packets are padded (as sing-box does) instead of
+     0-899 random bytes on every datagram, which fragmented 1200-1400 byte packets.
+  5. utils.GeneratePadding returns 1..900 bytes; 0 made an SS2022 request without
+     initial payload invalid (about one nodelay connection in 900 failed).
+
+diff -ruN a/shadowaead/bloomring.go b/shadowaead/bloomring.go
+--- a/shadowaead/bloomring.go
++++ b/shadowaead/bloomring.go
+@@ -1,21 +1,27 @@
+ package shadowaead
+ 
+ import (
+-	"hash/fnv"
++	"hash/maphash"
+ 	"sync"
+ 
+ 	"github.com/riobard/go-bloom"
+ )
+ 
+-// simply use Double FNV here as our Bloom Filter hash
++// NEX (nex-shadowsocks2.patch): upstream fed the Bloom filter's double hashing with
++// FNV-1 and FNV-1a of the same input. The two are strongly correlated, so the k probe
++// positions collapse onto few bits and the filter's real false-positive rate is orders
++// of magnitude above the configured 1e-6: measured with random 32-byte salts it was
++// about 0.07% after 300k entries and 0.6% once the ring is full (1M entries), against
++// ~0.0003% with independent hashes. Every false positive is reported as a "repeated
++// salt" and the packet / connection is dropped. A UDP client adds one salt per packet,
++// so a classic-AEAD UDP egress at a few hundred packets per second reaches that level
++// within minutes and keeps losing ~0.5% of its replies (and some TCP connections).
++// Two independently seeded maphash values (y forced odd so the stride never degenerates)
++// restore the intended rate; the seeds are per process, like the filter itself.
++var bloomSeedX, bloomSeedY = maphash.MakeSeed(), maphash.MakeSeed()
++
+ func doubleFNV(b []byte) (uint64, uint64) {
+-	hx := fnv.New64()
+-	hx.Write(b)
+-	x := hx.Sum64()
+-	hy := fnv.New64a()
+-	hy.Write(b)
+-	y := hy.Sum64()
+-	return x, y
++	return maphash.Bytes(bloomSeedX, b), maphash.Bytes(bloomSeedY, b) | 1
+ }
+ 
+ type BloomRing struct {
+diff -ruN a/shadowaead_2022/packet.go b/shadowaead_2022/packet.go
+--- a/shadowaead_2022/packet.go
++++ b/shadowaead_2022/packet.go
+@@ -223,8 +223,13 @@
+ // PackUDP encrypts plaintext using SIP022 UDP format (both request and response)
+ // Format: AES(separate_header) + AEAD(body)
+ func PackUDP(c core.ShadowCipher, eih bool, separateHeaderKey, bodyKey []byte, payload []byte, target socks.Addr, sessionID, packetID, clientSessionID uint64) ([]byte, error) {
++	// NEX (nex-shadowsocks2.patch): SIP022 derives the UDP session subkey from the session ID
++	// exactly as it appears on the wire, i.e. big-endian (the separate header is encoded
++	// big-endian too). Upstream used little-endian here and in UnpackUDP, which only
++	// works gost <-> gost: sing-box / shadowsocks-rust derive a different key and every
++	// packet fails authentication.
+ 	salt := make([]byte, 8)
+-	binary.LittleEndian.PutUint64(salt, sessionID)
++	binary.BigEndian.PutUint64(salt, sessionID)
+ 
+ 	// Derive session subkey from salt for AEAD
+ 	aead, err := c.Encrypter(bodyKey, salt)
+@@ -245,7 +250,13 @@
+ 		return nil, err
+ 	}
+ 
+-	pad := rand.Intn(MaxPaddingLength)
++	// NEX: pad like the reference implementation (sing-box): only short DNS packets.
++	// Upstream added 0-899 random bytes to every datagram, which pushes ordinary
++	// 1200-1400 byte packets (QUIC) far past a 1500-byte MTU and into IP fragmentation.
++	pad := 0
++	if targetPort(target) == 53 && len(payload) < MaxPaddingLength {
++		pad = rand.Intn(MaxPaddingLength-len(payload)) + 1
++	}
+ 	padding := make([]byte, pad)
+ 	_, err = crand.Read(padding)
+ 	if err != nil {
+@@ -358,7 +369,7 @@
+ 	}
+ 
+ 	salt := make([]byte, 8)
+-	binary.LittleEndian.PutUint64(salt, separateHeader.SessionID)
++	binary.BigEndian.PutUint64(salt, separateHeader.SessionID) // NEX: big-endian, see PackUDP
+ 
+ 	// Derive session subkey from salt for AEAD
+ 	aead, err := ciph.Decrypter(decryptKey, salt)
+@@ -397,3 +408,11 @@
+ 
+ 	return separateHeader, header, payload, decryptKey, nil
+ }
++
++// targetPort (NEX) returns the port of a SOCKS address, 0 if it is too short.
++func targetPort(addr socks.Addr) int {
++	if len(addr) < 3 {
++		return 0
++	}
++	return int(addr[len(addr)-2])<<8 | int(addr[len(addr)-1])
++}
+diff -ruN a/shadowaead_2022/stream.go b/shadowaead_2022/stream.go
+--- a/shadowaead_2022/stream.go
++++ b/shadowaead_2022/stream.go
+@@ -559,12 +559,29 @@
+ 		if err != nil {
+ 			return 0, err
+ 		}
+-		_, err = DecodeFixedLengthHeader(r.buf[:size])
++		// NEX (nex-shadowsocks2.patch): this is the response header (type, timestamp, request
++		// salt, length), not a request fixed-length header. Upstream decoded it with
++		// DecodeFixedLengthHeader, i.e. took "length" from inside the request salt and
++		// then ignored it. Per SIP022 the length is the size of the first payload chunk,
++		// which follows the header WITHOUT a length prefix of its own; sing-box and
++		// shadowsocks-rust send it that way, so gost misread the stream and the first
++		// reply already failed authentication. gost's own server sends length 0 and
++		// starts with a length-prefixed chunk, which still takes the path below.
++		header, err := DecodeResponseFixedLengthHeader(r.buf[:size], r.saltSize)
+ 		if err != nil {
+ 			return 0, err
+ 		}
++		if header.Type != HeaderTypeServerStream {
++			return 0, ErrInvalidHeader
++		}
++		if r.conn != nil && r.conn.w != nil && len(r.conn.w.salt) > 0 && !bytes.Equal(header.RequestSalt, r.conn.w.salt) {
++			return 0, errors.New("response does not match the request salt")
++		}
+ 
+ 		r.headerRead = true
++		if header.Length > 0 {
++			return r.readHeaderChunk(int(header.Length))
++		}
+ 	}
+ 
+ 	// Regular payload chunks (with length prefix)
+diff -ruN a/utils/utils.go b/utils/utils.go
+--- a/utils/utils.go
++++ b/utils/utils.go
+@@ -128,7 +128,10 @@
+ }
+ 
+ func GeneratePadding() (int, []byte, error) {
+-	length := rand.Intn(shadowaead2022.MaxPaddingLength)
++	// NEX (nex-shadowsocks2.patch): 1..900, never 0. An SS2022 request without initial payload
++	// (nodelay connector) must carry padding, and InitClient rejects an empty one, so
++	// upstream's 0..899 failed about one connection in 900.
++	length := rand.Intn(shadowaead2022.MaxPaddingLength) + 1
+ 	padding := make([]byte, length)
+ 	n, err := crand.Read(padding)
+ 
