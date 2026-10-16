@@ -105,6 +105,8 @@ export const MIGRATION_TABLES = [
   "ip_change_cloud_accounts",
   "ip_change_host_configs",
   "ip_change_events",
+  // 流媒体 / AI 解锁检测的结果（server/ops/unlockTables.ts），跟着主机走
+  "host_unlock_checks",
 ] as const;
 
 const LAST_AUTO_TRAFFIC_RESET_BACKFILL_MARKER = "last-auto-traffic-reset-backfill-v1";

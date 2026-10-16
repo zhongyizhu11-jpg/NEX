@@ -200,6 +200,7 @@ const DIRECT_SQLITE_OPTIONAL_SOURCE_TABLES = new Set([
   "ip_change_events",
   "host_tls_inbounds",
   "rule_sni_names",
+  "host_unlock_checks",
 ]);
 
 function normalizePanelUrl(url: string) {
@@ -235,6 +236,7 @@ export const ESSENTIAL_MIGRATION_OMITTED_TABLES = new Set<(typeof MIGRATION_TABL
   "ip_geo_cache",
   "config_audit_events",
   "ip_change_events",
+  "host_unlock_checks",
 ]);
 
 export type MigrationSnapshotExportProgress = {
@@ -825,6 +827,7 @@ const IMPORT_TABLE_ORDER = [
   "ip_change_cloud_accounts",
   "ip_change_host_configs",
   "ip_change_events",
+  "host_unlock_checks",
   "system_settings",
 ] as const;
 
@@ -845,6 +848,7 @@ const BEST_EFFORT_MIGRATION_TABLES = new Set<MigrationTableName>([
   "forward_rule_route_events",
   "config_audit_events",
   "ip_change_events",
+  "host_unlock_checks",
   "system_settings",
 ]);
 
@@ -1610,6 +1614,12 @@ async function prepareImportRow(table: string, source: Record<string, any>, maps
       row.hostId = mapRequiredId(maps, "hosts", source.hostId);
       if (row.status === "running") row.status = "uncertain";
       return { row };
+
+    case "host_unlock_checks":
+      row.hostId = mapRequiredId(maps, "hosts", source.hostId);
+      // 发起人是源面板的用户 ID，搬过来对不上，不留。
+      row.requestedBy = null;
+      return { row, existingWhere: { runId: row.runId } };
 
     case "system_settings": {
       const key = String(source.key || "");

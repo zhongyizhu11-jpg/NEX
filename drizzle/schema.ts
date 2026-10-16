@@ -1910,3 +1910,18 @@ export const ipChangeEvents = table("ip_change_events", {
   finishedAt: epoch("finishedAt"),
 });
 export type IpChangeEvent = typeof ipChangeEvents.$inferSelect;
+
+// ===== 流媒体 / AI 解锁检测（建表定义见 server/ops/unlockTables.ts，读写走 server/ops/unlock.ts） =====
+export const hostUnlockChecks = table("host_unlock_checks", {
+  id: serial("id"),
+  hostId: int("hostId").notNull(),
+  family: varchar("family", { length: 8 }).notNull().default("auto"),
+  runId: varchar("runId", { length: 64 }).notNull().unique(),
+  triggerKind: varchar("triggerKind", { length: 16 }).notNull().default("manual"),
+  latest: boolean("latest").notNull().default(false),
+  resultsJson: text("resultsJson").notNull(),
+  requestedBy: int("requestedBy"),
+  checkedAt: epoch("checkedAt").notNull().default(nowDefault()),
+  createdAt: epoch("createdAt").notNull().default(nowDefault()),
+});
+export type HostUnlockCheck = typeof hostUnlockChecks.$inferSelect;

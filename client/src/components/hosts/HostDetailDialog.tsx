@@ -17,6 +17,7 @@ import OpsHostDetailExtraSections from "@/features/ops/slots/HostDetailExtraSect
 import MimicInstallPanel from "./MimicInstallPanel";
 import HostIpChangeSection from "./HostIpChangeSection";
 import { HostTlsInboundSection } from "./HostTlsInboundManager";
+import HostUnlockSection from "./HostUnlockSection";
 
 /**
  * 主机详情 —— Detail 态。
@@ -195,6 +196,9 @@ export default function HostDetailDialog(props: HostDetailDialogProps) {
               value={vitals.trafficUsageLabel}
             />
           </Section>
+
+          {/* 流媒体 / AI 解锁检测：能用这台主机的人都能看结果，只有管理员能发起检测（Agent 2.2.225 起） */}
+          <HostUnlockSection hostId={Number(host.id)} />
 
           {user?.role === "admin" && (
             <Section title="共享 TLS 入站">

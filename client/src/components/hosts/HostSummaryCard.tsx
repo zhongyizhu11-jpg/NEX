@@ -15,6 +15,7 @@ import { formatCpuPercent, isAgentUpgradeTimedOut } from "./hostDisplay";
 import { hostPrimaryAddressLines, hostRegionText } from "./hostDisplay";
 import { HostOsAvatar, hostOsOf } from "./HostOsBadge";
 import { deriveHostVitals, type HostVitals } from "./useHostVitals";
+import HostUnlockChip from "./HostUnlockChip";
 
 /**
  * 主机列表里的那张卡 —— Summary 态。
@@ -362,6 +363,8 @@ export default function HostSummaryCard(props: HostSummaryCardProps) {
       <EntityBody tight>
         {vitals.isOnline ? <ResourceRow vitals={vitals} /> : null}
         <HostFootRow host={host} vitals={vitals} now={now} />
+        {/* 测过流媒体 / AI 解锁的主机多一小行摘要（「NF 全解 · GPT ✓ · Claude ✗」），没测过不占地方 */}
+        <HostUnlockChip summary={host?.unlockSummary} />
       </EntityBody>
 
     </EntityCard>
