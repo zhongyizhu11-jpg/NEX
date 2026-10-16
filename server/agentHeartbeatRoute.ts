@@ -51,6 +51,8 @@ import { appendPanelLog } from "./_core/panelLogger";
 import { isIP } from "net";
 import { resolve4, resolve6 } from "dns/promises";
 import { hasQueuedLookingGlassAgentTasks, takeLookingGlassAgentTasks } from "./lookingGlassAgentTasks";
+import { hasQueuedDiagnosticsAgentTasks, hasRunningDiagnosticsAgentTasks, takeDiagnosticsAgentTasks } from "./diagnosticsAgentTasks";
+import { LINK_DIAGNOSTICS_AGENT_VERSION } from "../shared/linkDiagnostics";
 import { hasQueuedIperf3AgentTasks, takeIperf3AgentTasks } from "./iperf3AgentTasks";
 import { hasQueuedPluginAgentTasks, takePluginAgentTasks } from "./pluginAgentTasks";
 import { hasPendingMimicInstallTask, hasQueuedMimicInstallTask, takeMimicInstallTask } from "./mimicInstallTasks";
@@ -1950,6 +1952,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         || !!panelMigrationForFastPath
         || hasHostTcpingRequest(host.id)
         || hasQueuedLookingGlassAgentTasks(host.id)
+        // 一键链路诊断（2.3.444）：排着的任务只在完整心跳里下发
+        || hasQueuedDiagnosticsAgentTasks(host.id)
         || hasQueuedIperf3AgentTasks(host.id)
         || hasQueuedPluginAgentTasks(host.id)
         // 排着的 mimic 安装任务只在完整心跳里下发（2.3.441 前漏了这条：配置不变的主机任务永远发不下去）
@@ -1996,6 +2000,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         actions: [],
         selfTests: [],
         lookingGlassTests: [],
+        diagnosticsTasks: [],
         iperf3Tasks: [],
         pluginTasks: [],
         agentUpgrade: null,
@@ -7093,6 +7098,10 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     if (forceTcping) clearHostTcpingRequest(host.id);
 
     const lookingGlassTests = takeLookingGlassAgentTasks(host.id);
+    // 一键链路诊断只发给 2.2.225 起的 Agent（面板排任务时已经按版本挡过，这里再兜一次底）
+    const diagnosticsTasks = isAgentVersionAtLeast(effectiveAgentVersion, LINK_DIAGNOSTICS_AGENT_VERSION)
+      ? takeDiagnosticsAgentTasks(host.id)
+      : [];
     const iperf3Tasks = takeIperf3AgentTasks(host.id);
     const pluginsAwaitingSync = new Set(pluginSyncTasks.map((task) => task.pluginId));
     const pluginTasks = supportsPluginTasks && reportedPluginInventory && !pluginSyncActionQueued
@@ -7105,6 +7114,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     // 「安装 / 修复 mimic」（2.3.439）：排了就下一次心跳带下去，跑的时候心跳也勤一点，页面上进度跟得紧
     const mimicInstallTask = takeMimicInstallTask(host.id);
     const hasInteractiveTasks = lookingGlassTests.length > 0
+      || diagnosticsTasks.length > 0
+      || hasRunningDiagnosticsAgentTasks(host.id)
       || iperf3Tasks.length > 0
       || pluginTasks.length > 0
       || hasPendingPluginTasks
@@ -7219,6 +7230,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       && activeWorkActions.length === 0
       && selfTests.length === 0
       && lookingGlassTests.length === 0
+      && diagnosticsTasks.length === 0
       && iperf3Tasks.length === 0
       && pluginTasks.length === 0
       && !hasPendingPluginTasks
@@ -7270,6 +7282,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       nextInterval,
       interactiveTasks: hasInteractiveTasks ? (
         lookingGlassTests.length
+        + diagnosticsTasks.length
         + iperf3Tasks.length
         + pluginTasks.length
         + (hasPendingPluginTasks ? 1 : 0)
@@ -7285,6 +7298,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       ...stateSections.payload,
       stateSignatures: stateSections.signatures,
       lookingGlassTests,
+      ...(diagnosticsTasks.length > 0 ? { diagnosticsTasks } : {}),
       iperf3Tasks,
       pluginTasks,
       ...(mimicInstallTask ? { mimicInstallTask } : {}),

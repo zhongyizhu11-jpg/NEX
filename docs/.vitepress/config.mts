@@ -43,6 +43,7 @@ export default defineConfig({
           { text: "转发规则", link: "/guide/rules" },
           { text: "流量和延迟", link: "/guide/traffic-latency" },
           { text: "网络拓扑", link: "/guide/topology" },
+          { text: "链路诊断", link: "/guide/link-diagnostics" },
         ],
       },
       {

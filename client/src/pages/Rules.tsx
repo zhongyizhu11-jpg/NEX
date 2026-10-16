@@ -9282,6 +9282,7 @@ function SelfTestDialog({
       lastRunAt={latest?.updatedAt ?? null}
       outcome={isSuccess ? "success" : isTimeout ? "timeout" : isFailed ? "failed" : null}
       failureReason={parsedMessage.message}
+      checklist={{ kind: "rule", id: ruleId }}
       onRun={() => {
         manualTestRef.current = true;
         setOptimisticTesting(true);

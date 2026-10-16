@@ -1955,6 +1955,7 @@ function TunnelSelfTestDialog({
       lastRunAt={lastTestAt || null}
       outcome={displaySuccess ? "success" : status === "timeout" ? "timeout" : isFailed ? "failed" : null}
       failureReason={parsedMessage.message}
+      checklist={{ kind: "tunnel", id: tunnelId }}
       onRun={() => {
         lastFailureToastKey.current = "";
         manualTestRef.current = true;
