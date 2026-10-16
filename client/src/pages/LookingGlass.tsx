@@ -28,6 +28,7 @@ import {
   Wifi,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ElementType } from "react";
+import { PROBE_ADDRESS_FAMILIES, PROBE_ADDRESS_FAMILY_LABELS, type ProbeAddressFamily } from "@shared/probeFamily";
 import { toast } from "sonner";
 
 type Method = "ping" | "ping6" | "traceroute" | "traceroute6" | "mtr" | "mtr6" | "tcp" | "iperf3-client" | "iperf3";
@@ -324,6 +325,8 @@ export default function LookingGlass() {
   const [method, setMethod] = useState<Method>("ping");
   const [target, setTarget] = useState("");
   const [port, setPort] = useState("443");
+  // TCPing 的地址族：目标是域名时只用这一族的地址（面板解析好再下发，所以老 Agent 也生效）
+  const [tcpFamily, setTcpFamily] = useState<ProbeAddressFamily>("auto");
   const [iperf3Port, setIperf3Port] = useState("");
   const [iperf3ClientPort, setIperf3ClientPort] = useState("5201");
   const [iperf3Streams, setIperf3Streams] = useState<string>("4");
@@ -529,7 +532,7 @@ export default function LookingGlass() {
       method: networkMethod,
       target: target.trim(),
       hostId: Number(hostId),
-      ...(networkMethod === "tcp" ? { port: numericPort } : {}),
+      ...(networkMethod === "tcp" ? { port: numericPort, ...(tcpFamily !== "auto" ? { family: tcpFamily } : {}) } : {}),
       ...(isIperf3Client
         ? {
           port: numericClientPort,
@@ -710,6 +713,18 @@ export default function LookingGlass() {
                     placeholder="自定义端口"
                     className="font-mono"
                   />
+                  <Label htmlFor="looking-glass-tcp-family">地址族</Label>
+                  <Select value={tcpFamily} onValueChange={(value) => setTcpFamily(value as ProbeAddressFamily)}>
+                    <SelectTrigger id="looking-glass-tcp-family">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {PROBE_ADDRESS_FAMILIES.map((family) => (
+                        <SelectItem key={family} value={family}>{PROBE_ADDRESS_FAMILY_LABELS[family]}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">目标是域名时只用这一族的地址测；目标是 IP 时按 IP 本身。</p>
                 </div>
               )}
 

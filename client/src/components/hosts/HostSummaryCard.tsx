@@ -12,7 +12,7 @@ import { StatusDot } from "@/components/network/StatusDot";
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 import { formatAgo } from "@shared/dashboardAttention";
 import { formatCpuPercent, isAgentUpgradeTimedOut } from "./hostDisplay";
-import { hostPrimaryAddressLines, hostRegionText } from "./hostDisplay";
+import { hostGeoTooltip, hostPrimaryAddressLines, hostRegionText } from "./hostDisplay";
 import { HostOsAvatar, hostOsOf } from "./HostOsBadge";
 import { deriveHostVitals, type HostVitals } from "./useHostVitals";
 
@@ -334,7 +334,8 @@ export default function HostSummaryCard(props: HostSummaryCardProps) {
         subtitle={
           <>
             {/* Agent 版本号不上卡（2026-10-09 用户要求），进详情看；能升级时只留一句「可升级」。 */}
-            {[region, address].filter(Boolean).join(" · ")}
+            {/* 运营商 / ASN 不另占一行，悬停时给（和地区、组织一起） */}
+            <span title={hostGeoTooltip(host) || undefined}>{[region, address].filter(Boolean).join(" · ")}</span>
             {agentVersion && props.upgradeAvailable ? (
               <>
                 {region || address ? " · " : ""}

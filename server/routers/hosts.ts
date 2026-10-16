@@ -1,4 +1,6 @@
 import { protectedProcedure, adminProcedure, publicProcedure, router } from "../_core/trpc";
+import { invalidateAgentStableHeartbeatPlan } from "../agentHeartbeatGate";
+import { normalizeProbeAddressFamily, PROBE_ADDRESS_FAMILIES } from "../../shared/probeFamily";
 import { githubRepoParts } from "@shared/githubAccelerator";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
@@ -109,6 +111,8 @@ const hostProbeServiceInputSchema = z.object({
   method: z.enum(["tcping", "ping"]),
   targetIp: hostProbeTargetSchema,
   targetPort: z.number().int().min(1).max(65535).nullable().optional(),
+  // 目标是域名时按哪一族解析（Agent 2.2.225 起生效，老 Agent 照旧 auto）
+  addressFamily: z.enum(PROBE_ADDRESS_FAMILIES).default("auto"),
   hostScope: z.enum(["all", "exclude", "specific"]).default("all"),
   hostIds: hostProbeIdsSchema,
   excludeHostIds: hostProbeIdsSchema,
@@ -130,6 +134,7 @@ function normalizeHostProbeServiceInput(input: z.infer<typeof hostProbeServiceIn
   if (input.hostScope === "specific" && hostIds.length === 0) throw new Error("请选择需要运行服务的主机");
   return {
     ...input,
+    addressFamily: normalizeProbeAddressFamily(input.addressFamily, input.targetIp),
     targetPort: input.method === "tcping" ? Number(input.targetPort) : null,
     hostIds: input.hostScope === "specific" ? hostIds : [],
     excludeHostIds: input.hostScope === "exclude" ? excludeHostIds : [],
@@ -1263,6 +1268,8 @@ export const hostsRouter = router({
       .mutation(async ({ input, ctx }) => {
         const payload = normalizeHostProbeServiceInput(input);
         const id = await db.createHostProbeService({ ...payload, userId: ctx.user.id });
+        // 探测服务随心跳下发：配置没变的主机走快路径，不清掉就要等下一次全量核对才拿得到
+        invalidateAgentStableHeartbeatPlan();
         return { id };
       }),
     updateProbeService: adminProcedure
@@ -1272,6 +1279,7 @@ export const hostsRouter = router({
         if (!service) throw new Error("服务不存在");
         const payload = normalizeHostProbeServiceInput(input);
         await db.updateHostProbeService(input.id, payload);
+        invalidateAgentStableHeartbeatPlan();
         return { success: true };
       }),
     deleteProbeService: adminProcedure
@@ -1280,6 +1288,7 @@ export const hostsRouter = router({
         const service = await db.getHostProbeServiceById(input.id);
         if (!service) throw new Error("服务不存在");
         await db.deleteHostProbeService(input.id);
+        invalidateAgentStableHeartbeatPlan();
         return { success: true };
       }),
     reorderProbeServices: adminProcedure
@@ -1680,6 +1689,9 @@ export const hostsRouter = router({
             geoLatitudeMicro: null,
             geoLongitudeMicro: null,
             geoUpdatedAt: null,
+            geoAsn: null,
+            geoIsp: null,
+            geoOrg: null,
           });
         }
         await db.updateHost(id, data as any);

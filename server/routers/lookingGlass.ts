@@ -25,6 +25,7 @@ import {
   type Iperf3Status,
 } from "../iperf3AgentTasks";
 import { requireHostAccess } from "./helpers";
+import { normalizeProbeAddressFamily, PROBE_ADDRESS_FAMILIES, probeFamilyNumber, type ProbeAddressFamily } from "../../shared/probeFamily";
 
 const methodSchema = z.enum(["ping", "ping6", "traceroute", "traceroute6", "mtr", "mtr6", "tcp", "iperf3-client"]);
 
@@ -59,8 +60,14 @@ function isPrivateAddress(address: string) {
   return isPrivateOrReservedAddress(address);
 }
 
-async function resolvePublicTarget(target: string, method: LookingGlassMethod) {
-  const family = method.endsWith("6") ? 6 : method === "tcp" || method === "iperf3-client" ? 0 : 4;
+/**
+ * 把目标解析成公网地址。TCPing 可以指定地址族（requestedFamily）：域名只取这一族的地址，
+ * 没有就直接报错 —— 「仅 IPv6」却悄悄测了 IPv4，结果就是错的。目标是 IP 时地址族由地址决定。
+ * 地址是面板解析好了下发的，所以老 Agent 也照样按这个地址族测。
+ */
+export async function resolvePublicTarget(target: string, method: LookingGlassMethod, requestedFamily: ProbeAddressFamily = "auto") {
+  const tcpFamily = method === "tcp" ? probeFamilyNumber(normalizeProbeAddressFamily(requestedFamily, target)) : 0;
+  const family = method.endsWith("6") ? 6 : method === "tcp" ? tcpFamily : method === "iperf3-client" ? 0 : 4;
   const literalFamily = net.isIP(target);
   let resolved: Array<{ address: string; family: number }>;
   try {
@@ -68,13 +75,17 @@ async function resolvePublicTarget(target: string, method: LookingGlassMethod) {
       ? [{ address: target, family: literalFamily }]
       : await dns.promises.lookup(target, { all: true, family, verbatim: true });
   } catch (error: any) {
-    if (method.endsWith("6")) {
+    if (method.endsWith("6") || family === 6) {
       throw new Error(`目标 ${target} 没有可用 IPv6 地址，无法执行 IPv6 网络测试`);
+    }
+    if (family === 4) {
+      throw new Error(`目标 ${target} 没有可用 IPv4 地址，无法执行 IPv4 网络测试`);
     }
     throw new Error(`目标 ${target} 无法解析：${error?.message || "DNS 查询失败"}`);
   }
 
-  if (resolved.length === 0) throw new Error("目标无法解析");
+  if (family !== 0 && !literalFamily) resolved = resolved.filter((entry) => entry.family === family);
+  if (resolved.length === 0) throw new Error(family === 0 ? "目标无法解析" : `目标没有可用的 IPv${family} 地址`);
   const invalid = resolved.find((entry) => isPrivateAddress(entry.address));
   if (invalid) throw new Error(`目标解析到内网或保留地址，已拒绝执行：${invalid.address}`);
 
@@ -162,6 +173,8 @@ export const lookingGlassRouter = router({
       target: z.string().min(1).max(253),
       port: z.number().int().min(1).max(65535).optional(),
       hostId: z.number().int().positive(),
+      // TCPing 专用：目标是域名时只用这一族的地址（auto 照旧）。其他方法忽略。
+      family: z.enum(PROBE_ADDRESS_FAMILIES).optional(),
       // iperf3 客户端专用；其他方法忽略。
       reverse: z.boolean().optional(),
       streams: z.number().int().min(1).max(IPERF3_CLIENT_MAX_STREAMS).optional(),
@@ -181,7 +194,11 @@ export const lookingGlassRouter = router({
       if (method.endsWith("6") && !hostHasIpv6(host)) {
         throw new Error(`测试主机「${(host as any).name || `Host #${input.hostId}`}」未检测到 IPv6 地址，无法执行 ${methodMetaLabel(method)} 测试`);
       }
-      const resolved = await resolvePublicTarget(target, method);
+      const tcpFamily = method === "tcp" ? normalizeProbeAddressFamily(input.family, target) : "auto";
+      if (tcpFamily === "ipv6" && !hostHasIpv6(host)) {
+        throw new Error(`测试主机「${(host as any).name || `Host #${input.hostId}`}」未检测到 IPv6 地址，无法执行 IPv6 TCPing`);
+      }
+      const resolved = await resolvePublicTarget(target, method, tcpFamily);
       /*
         iperf3 客户端：从这台 Agent 往目标上的 iperf3 服务端跑一次带宽测试。
         对端通常就是面板里另一台主机上一键开的 iperf3 服务端（默认端口同

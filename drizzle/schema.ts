@@ -334,6 +334,10 @@ export const hosts = table("hosts", {
   geoLatitudeMicro: int("geoLatitudeMicro"),
   geoLongitudeMicro: int("geoLongitudeMicro"),
   geoUpdatedAt: epoch("geoUpdatedAt"),
+  /** 运营商 / ASN（AS13335）。NULL = 还没问过，"" = 问过、定位服务没给。 */
+  geoAsn: varchar("geoAsn", { length: 16 }),
+  geoIsp: text("geoIsp"),
+  geoOrg: text("geoOrg"),
   /*
     位置是人手填的（见 hosts.setLocation）：为 true 时上面几列由用户说了算，
     按 IP 的自动定位不得覆盖 —— 机房 IP 段的库经常把香港机器放到深圳。
@@ -1244,6 +1248,8 @@ export const hostProbeServices = table("host_probe_services", {
   method: varchar("method", { length: 16 }).notNull().default("tcping"),
   targetIp: text("targetIp").notNull(),
   targetPort: int("targetPort"),
+  /** 目标是域名时按哪一族解析：auto / ipv4 / ipv6（shared/probeFamily.ts，Agent 2.2.225 起生效）。 */
+  addressFamily: varchar("addressFamily", { length: 8 }).notNull().default("auto"),
   hostScope: varchar("hostScope", { length: 16 }).notNull().default("all"),
   hostIds: text("hostIds"),
   excludeHostIds: text("excludeHostIds"),
@@ -1280,6 +1286,10 @@ export const ipGeoCache = table("ip_geo_cache", {
   geoEmoji: varchar("geoEmoji", { length: 16 }),
   geoLatitudeMicro: int("geoLatitudeMicro"),
   geoLongitudeMicro: int("geoLongitudeMicro"),
+  /** NULL = 加 ASN 之前写的旧行（读到时当作过期，重新问一次）。 */
+  geoAsn: varchar("geoAsn", { length: 16 }),
+  geoIsp: text("geoIsp"),
+  geoOrg: text("geoOrg"),
   provider: varchar("provider", { length: 32 }).notNull().default("ipapi.co"),
   fetchedAt: epoch("fetchedAt").notNull().default(nowDefault()),
   expiresAt: epoch("expiresAt").notNull(),
@@ -1936,3 +1946,17 @@ export const ipChangeEvents = table("ip_change_events", {
   finishedAt: epoch("finishedAt"),
 });
 export type IpChangeEvent = typeof ipChangeEvents.$inferSelect;
+
+// ===== 主机网络画像（建表定义见 server/ops/netProfileTables.ts，读写走 server/ops/netProfile.ts 的原生 SQL） =====
+export const hostNetworkProfiles = table("host_network_profiles", {
+  id: serial("id"),
+  hostId: int("hostId").notNull().unique(),
+  /** shared/netProfile.ts 的 NetProfileReport */
+  profileJson: longtext("profileJson"),
+  /** 最近 30 次的摘要（NetProfileHistoryItem[]） */
+  historyJson: longtext("historyJson"),
+  checkedAt: epoch("checkedAt"),
+  agentCheckedAt: epoch("agentCheckedAt"),
+  updatedAt: epoch("updatedAt").notNull().default(nowDefault()),
+});
+export type HostNetworkProfile = typeof hostNetworkProfiles.$inferSelect;

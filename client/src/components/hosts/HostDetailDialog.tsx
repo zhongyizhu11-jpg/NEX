@@ -7,7 +7,8 @@ import { Metric, MetricGroup, ResourceMeter } from "@/components/entity/Metric";
 import { HealthBadge } from "@/components/network/StatusDot";
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { formatCpuPercent, hostAddressText, hostRegionText } from "./hostDisplay";
+import { formatCpuPercent, hostAddressText, hostGeoTooltip, hostRegionText } from "./hostDisplay";
+import HostNetProfileSection from "./HostNetProfileSection";
 import { HostOsAvatar, HostOsGlyph, hostOsOf } from "./HostOsBadge";
 import { fxpRuntimeBadgeTitle, fxpRuntimeDetailText } from "./FxpRuntimeBadge";
 import { buildHostActions, type HostSummaryCardProps } from "./HostSummaryCard";
@@ -147,7 +148,8 @@ export default function HostDetailDialog(props: HostDetailDialogProps) {
             <Row label="Agent" value={host.agentVersion ? `v${host.agentVersion}` : "—"} />
             <Row label="FXP" value={<span title={fxpRuntimeBadgeTitle(host)}>{fxpRuntimeDetailText(host)}</span>} />
             <Row label="地址" value={hostAddressText(host) || "—"} />
-            <Row label="地区" value={hostRegionText(host) || "—"} />
+            {/* 运营商 / ASN 在下面「网络画像」那一节，这里悬停给 */}
+            <Row label="地区" value={<span title={hostGeoTooltip(host) || undefined}>{hostRegionText(host) || "—"}</span>} />
             <Row label={vitals.uptimeLabel} value={vitals.uptimeText} />
             {/*
               此刻这台机器上的连接数。离线或旧 Agent 没报都是「—」：一台断了的机器
@@ -155,6 +157,9 @@ export default function HostDetailDialog(props: HostDetailDialogProps) {
             */}
             <Row label="连接数" value={connectionsText(vitals.tcpConnections, vitals.udpConnections)} />
           </Section>
+
+          {/* 网络画像：双栈出站、运营商、25 端口、DNSBL（Agent 2.2.225 起在主机上测） */}
+          <HostNetProfileSection host={host} canManage={user?.role === "admin"} />
 
           {/* mimic UDP 混淆环境：装没装、能不能用，管理员在这里一键安装 / 修复（2.3.439） */}
           <Section title="mimic UDP 混淆">

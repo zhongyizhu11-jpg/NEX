@@ -320,6 +320,9 @@ async function seedHosts(adminId: number) {
       geoCountryCode: "HK",
       geoCountryName: "Hong Kong",
       geoRegion: "Central",
+      geoAsn: "AS9304",
+      geoIsp: "HGC Global Communications",
+      geoOrg: "Hutchison Global Communications",
       geoEmoji: "HK",
       geoLatitudeMicro: 22319000,
       geoLongitudeMicro: 114169000,
@@ -355,6 +358,9 @@ async function seedHosts(adminId: number) {
       geoCountryCode: "JP",
       geoCountryName: "Japan",
       geoRegion: "Tokyo",
+      geoAsn: "AS2516",
+      geoIsp: "KDDI Corporation",
+      geoOrg: "KDDI CORPORATION",
       geoEmoji: "JP",
       geoLatitudeMicro: 35676000,
       geoLongitudeMicro: 139650000,
@@ -391,6 +397,9 @@ async function seedHosts(adminId: number) {
       geoCountryCode: "SG",
       geoCountryName: "Singapore",
       geoRegion: "Singapore",
+      geoAsn: "AS14061",
+      geoIsp: "DigitalOcean, LLC",
+      geoOrg: "DigitalOcean",
       geoEmoji: "SG",
       geoLatitudeMicro: 1290000,
       geoLongitudeMicro: 103850000,
@@ -423,6 +432,9 @@ async function seedHosts(adminId: number) {
       geoCountryCode: "US",
       geoCountryName: "United States",
       geoRegion: "Los Angeles",
+      geoAsn: "AS20473",
+      geoIsp: "The Constant Company, LLC",
+      geoOrg: "Vultr Holdings LLC",
       geoEmoji: "US",
       geoLatitudeMicro: 34052000,
       geoLongitudeMicro: -118244000,
@@ -437,6 +449,74 @@ async function seedHosts(adminId: number) {
     ids.push(await insertAndGetId("hosts", { ...host, createdAt: nowDate(), updatedAt: nowDate() }));
   }
   return ids;
+}
+
+/** 主机详情「网络画像」那张卡的样例数据（shared/netProfile.ts 的 NetProfileReport）。 */
+async function seedNetworkProfiles(hostIds: number[]) {
+  const now = Math.floor(Date.now() / 1000);
+  const clean = (list: string) => ({ list, listed: false, code: null, error: null });
+  const smtp = (status: "open" | "refused" | "timeout", detail: string | null) => [
+    { target: "gmail-smtp-in.l.google.com:25", status, detail },
+    { target: "mx1.mail.icloud.com:25", status, detail },
+    { target: "alt1.aspmx.l.google.com:25", status, detail },
+  ];
+  const profiles = [
+    {
+      checkedAt: now - 40 * 60,
+      ipv4: { ok: true, address: "192.0.2.21", latencyMs: 38, error: null },
+      ipv6: { ok: false, address: null, latencyMs: null, error: "dial tcp6: connect: network is unreachable", configured: false },
+      smtp25: { status: "timeout", detail: "连 3 台邮件服务器的 25 端口都超时：多半是服务商在出口静默丢弃", targets: smtp("timeout", "i/o timeout") },
+      dnsbl: [
+        { list: "zen.spamhaus.org", listed: false, code: null, error: "无法查询（公共解析器被拒绝）" },
+        clean("bl.spamcop.net"), clean("b.barracudacentral.org"), clean("cbl.abuseat.org"),
+      ],
+      dnsblAddress: "192.0.2.21",
+    },
+    {
+      checkedAt: now - 3 * 3600,
+      ipv4: { ok: false, address: null, latencyMs: null, error: "dial tcp4: connect: network is unreachable" },
+      ipv6: { ok: true, address: "2001:db8:10::41d", latencyMs: 12, error: null, configured: true },
+      smtp25: { status: "blocked", detail: "gmail-smtp-in.l.google.com:25 连接被拒绝", targets: smtp("refused", "connection refused") },
+      dnsbl: [],
+      dnsblAddress: null,
+    },
+    {
+      checkedAt: now - 15 * 60,
+      ipv4: { ok: true, address: "198.51.100.16", latencyMs: 21, error: null },
+      ipv6: { ok: true, address: "2001:db8:30::16", latencyMs: 24, error: null, configured: true },
+      smtp25: {
+        status: "open",
+        detail: "gmail-smtp-in.l.google.com:25 220 mx.google.com ESMTP 41be03b00d2f7-b6b1a8c3",
+        targets: [
+          { target: "gmail-smtp-in.l.google.com:25", status: "open", detail: "220 mx.google.com ESMTP 41be03b00d2f7-b6b1a8c3" },
+          { target: "mx1.mail.icloud.com:25", status: "open", detail: "220 mx1.mail.icloud.com ESMTP" },
+          { target: "alt1.aspmx.l.google.com:25", status: "open", detail: "220 mx.google.com ESMTP" },
+        ],
+      },
+      dnsbl: [clean("zen.spamhaus.org"), { list: "bl.spamcop.net", listed: true, code: "127.0.0.2", error: null }, clean("b.barracudacentral.org"), clean("cbl.abuseat.org")],
+      dnsblAddress: "198.51.100.16",
+    },
+  ];
+  for (let index = 0; index < profiles.length && index < hostIds.length; index += 1) {
+    const item = profiles[index];
+    const profile = {
+      ...item,
+      dnsblSource: item.dnsbl.length > 0 ? "agent" : null,
+      dnsblCheckedAt: item.dnsbl.length > 0 ? item.checkedAt : null,
+      agentCheckedAt: item.checkedAt,
+    };
+    const history = [6, 5, 4, 3, 2, 1].map((n) => ({
+      checkedAt: item.checkedAt - n * 6 * 3600, ipv4Ok: item.ipv4.ok, ipv6Ok: item.ipv6.ok, smtp25: item.smtp25.status, listed: 0,
+    }));
+    await insertAndGetId("host_network_profiles", {
+      hostId: hostIds[index],
+      profileJson: JSON.stringify(profile),
+      historyJson: JSON.stringify(history),
+      checkedAt: item.checkedAt,
+      agentCheckedAt: item.checkedAt,
+      updatedAt: now,
+    });
+  }
 }
 
 async function seedAgentTokens(adminId: number, hostIds: number[]) {
@@ -2373,6 +2453,7 @@ export async function seedDevPanelData() {
   const resources = await seedTunnelsAndGroups(adminId, hostIds);
   const rules = await seedRules(hostIds, resources, usersSeed);
   await seedProbeServices(adminId, hostIds);
+  await seedNetworkProfiles(hostIds);
   const catalog = await seedCatalog(adminId, resources, hostIds);
   await seedUserState(usersSeed, hostIds, resources, rules, catalog);
   await seedForwardTests(usersSeed, rules, hostIds);

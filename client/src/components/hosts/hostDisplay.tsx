@@ -121,13 +121,41 @@ export function hostRegionText(host: any) {
   return parts.join(" / ");
 }
 
+/**
+ * 运营商 / ASN 一行：「AS13335 · Cloudflare, Inc.」。geoAsn 为 "" 是问过、定位服务没给；
+ * 运营商和组织一样时只写一个。都没有返回 ""。
+ */
+export function hostNetworkText(host: any) {
+  const asn = String(host?.geoAsn || "").trim();
+  const isp = String(host?.geoIsp || "").trim();
+  const org = String(host?.geoOrg || "").trim();
+  const names = [isp, org && org.toLowerCase() !== isp.toLowerCase() ? org : ""].filter(Boolean);
+  return [asn, names[0] || ""].filter(Boolean).join(" · ");
+}
+
+/** 鼠标悬停时给的完整说明：地区 + 运营商 / ASN + 组织。 */
+export function hostGeoTooltip(host: any) {
+  const region = hostRegionText(host);
+  const asn = String(host?.geoAsn || "").trim();
+  const isp = String(host?.geoIsp || "").trim();
+  const org = String(host?.geoOrg || "").trim();
+  return [
+    region,
+    asn || isp ? `运营商 / ASN：${[isp, asn].filter(Boolean).join(" · ")}` : "",
+    org && org.toLowerCase() !== isp.toLowerCase() ? `组织：${org}` : "",
+  ].filter(Boolean).join("\n");
+}
+
 export function HostRegionBadge({ host, compact = false }: { host: any; compact?: boolean }) {
   const countryCode = String(host.geoCountryCode || "").trim().toLowerCase();
   const flagUrl = /^[a-z]{2}$/.test(countryCode) ? `https://flagcdn.com/24x18/${countryCode}.png` : "";
   const fallbackCode = countryCode.toUpperCase();
   const regionText = hostRegionText(host);
   const hasGeo = !!(flagUrl || regionText);
-  const title = hasGeo ? [fallbackCode, regionText].filter(Boolean).join(" ") : "地区获取中";
+  const network = hostNetworkText(host);
+  const title = hasGeo
+    ? [[fallbackCode, regionText].filter(Boolean).join(" "), network ? `运营商 / ASN：${network}` : ""].filter(Boolean).join("\n")
+    : "地区获取中";
   return (
     <span
       className={`inline-flex min-w-0 max-w-full shrink items-center gap-1 text-muted-foreground ${hasGeo ? "" : "opacity-70"} ${compact ? "text-[10px]" : "text-xs"}`}
