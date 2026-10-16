@@ -20,10 +20,13 @@
  *   RCPT 阶段 5xx 拒收）：记日志、照样写标记、接着发下一条。原来这种错误也会抛出去，
  *   而且标记没写 —— 清单顺序每轮都一样，于是**这一个人后面的所有提醒永远发不出去**。
  * - 单条消息本身的问题（Telegram 其它 400）：记日志、不写标记（下轮再试）、接着发。
+ *
+ * Discord 私信同样三分：403（对方关了私信）算收件人问题，其它 400 算单条问题，401 / 429 / 5xx 算通道故障。
  */
 
 import * as db from "./db";
 import { isPermanentTelegramRecipientError, TelegramApiError } from "./telegramApiError";
+import { DiscordApiError, isDiscordRecipientError } from "./discordBot";
 
 export type ReminderFailureKind = "recipient" | "item" | "transport";
 
@@ -36,6 +39,11 @@ export type ReminderFailureKind = "recipient" | "item" | "transport";
  */
 export function classifyReminderFailure(error: unknown): ReminderFailureKind {
   if (isPermanentTelegramRecipientError(error)) return "recipient";
+  // Discord 私信：对方关了私信 / 没有共同服务器（403），或者已经在冷却期里被跳过。
+  if (isDiscordRecipientError(error) || (error instanceof Error && error.name === "DiscordRecipientUnavailableError")) return "recipient";
+  if (error instanceof DiscordApiError) {
+    return error.status === 400 ? "item" : "transport";
+  }
   if (error instanceof TelegramApiError) {
     return error.errorCode === 400 ? "item" : "transport";
   }

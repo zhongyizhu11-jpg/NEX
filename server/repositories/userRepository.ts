@@ -396,6 +396,10 @@ export async function registerUser(data: {
   /** Google 注册时绑定和建号在同一条 INSERT 里（googleSub 有唯一约束，并发注册只会成功一个）。 */
   googleSub?: string | null;
   googleEmail?: string | null;
+  /** Discord 注册同理：绑定和建号在同一条 INSERT 里（discordId 有唯一约束）。 */
+  discordId?: string | null;
+  discordUsername?: string | null;
+  discordEmail?: string | null;
 }) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -403,6 +407,7 @@ export async function registerUser(data: {
     username: data.username,
     password: data.unusablePassword ? createUnusablePasswordHash() : hashPassword(data.password),
     ...(data.googleSub ? { googleSub: data.googleSub, googleEmail: data.googleEmail ?? null, googleLinkedAt: nowDate() } : {}),
+    ...(data.discordId ? { discordId: data.discordId, discordUsername: data.discordUsername ?? null, discordEmail: data.discordEmail ?? null, discordLinkedAt: nowDate() } : {}),
     name: data.name ?? data.username,
     email: data.email ?? null,
     emailVerified: data.emailVerified ?? false,
@@ -1196,5 +1201,8 @@ export async function getUserTrafficSummaries() {
     telegramUsername: users.telegramUsername,
     telegramFirstName: users.telegramFirstName,
     telegramLastName: users.telegramLastName,
+    // Discord 私信提醒用（server/scheduler.ts 的 runDiscordReminders）
+    discordId: users.discordId,
+    discordDmBlockedAt: users.discordDmBlockedAt,
   }).from(users).orderBy(desc(users.trafficUsed));
 }

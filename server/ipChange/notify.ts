@@ -97,15 +97,19 @@ export async function deliverIpChangeNotice(notice: IpChangeNotice) {
     const envToken = ENV.telegramBotToken.trim();
     const botEnabled = settings.telegramBotEnabled === "true" || (!!envToken && settings.telegramBotEnabled !== "false");
     const botConfigured = !!String(settings.telegramBotToken || envToken).trim();
-    if (!botEnabled || !botConfigured) return;
-    const recipients = await filterTelegramRecipients(await getTelegramAdminRecipients() as any[], "host");
     const text = ipChangeTelegramText(notice);
-    for (const user of recipients as any[]) {
-      if (!user.telegramId) continue;
-      await sendTelegramMessage(user.telegramId, text).catch((error) => {
-        console.warn(`[IpChange] Telegram notify failed user=${user.id}: ${error instanceof Error ? error.message : String(error)}`);
-      });
+    if (botEnabled && botConfigured) {
+      const recipients = await filterTelegramRecipients(await getTelegramAdminRecipients() as any[], "host");
+      for (const user of recipients as any[]) {
+        if (!user.telegramId) continue;
+        await sendTelegramMessage(user.telegramId, text).catch((error) => {
+          console.warn(`[IpChange] Telegram notify failed user=${user.id}: ${error instanceof Error ? error.message : String(error)}`);
+        });
+      }
     }
+    // Discord 那一路：和 Telegram 同一批管理员事件，各自独立（Discord 没开时什么也不做）
+    const { notifyDiscordAdmins } = await import("../discordNotify");
+    await notifyDiscordAdmins(text, { category: "host", label: `ip-change host=${notice.host?.id ?? "-"}` });
   } catch (error) {
     console.warn(`[IpChange] Telegram notify failed: ${error instanceof Error ? error.message : String(error)}`);
   }

@@ -21,6 +21,9 @@ import OpsLoginExtras from "@/features/ops/account/LoginExtras";
 import GoogleLoginButton from "@/features/googleLogin/GoogleLoginButton";
 import GoogleMark from "@/features/googleLogin/GoogleMark";
 import { parseGoogleLoginReturn, stripGoogleLoginReturnFromUrl } from "@/features/googleLogin/googleLoginReturn";
+import DiscordLoginButton from "@/features/discordLogin/DiscordLoginButton";
+import DiscordMark from "@/features/discordLogin/DiscordMark";
+import { parseDiscordLoginReturn, stripDiscordLoginReturnFromUrl } from "@/features/discordLogin/discordLoginReturn";
 
 const REGISTRATION_CLOSED_MESSAGE = "当前注册未开放，请联系管理员";
 
@@ -342,6 +345,8 @@ export default function Login() {
   // Google 登录失败的原因直接写在表单上方：整页跳回来的那一刻 Toaster 可能还没挂好，弹窗会丢；
   // 而且「先用密码登录再去绑定」这种话，用户要能停下来看清楚。
   const [googleNotice, setGoogleNotice] = useState<string | null>(null);
+  // Discord 登录同理（?discordError=码 / #discordTwoFactor=…）。
+  const [discordNotice, setDiscordNotice] = useState<string | null>(null);
 
   // Google 回调跳回来：?googleError=码 显示原因；#googleTwoFactor=… 弹出双重验证。
   useEffect(() => {
@@ -350,6 +355,24 @@ export default function Login() {
     if (!result.errorMessage && !result.twoFactor) return;
     stripGoogleLoginReturnFromUrl();
     if (result.errorMessage) setGoogleNotice(result.errorMessage);
+    if (result.twoFactor) {
+      postLoginPathRef.current = result.twoFactor.next;
+      setTwoFactorChallenge({
+        challengeId: result.twoFactor.challengeId,
+        username: result.twoFactor.username,
+        expiresAt: Date.now() + result.twoFactor.expiresInSeconds * 1000,
+      });
+      setTwoFactorCode("");
+      toast.info("请输入双重验证验证码");
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const result = parseDiscordLoginReturn(window.location.search, window.location.hash);
+    if (!result.errorMessage && !result.twoFactor) return;
+    stripDiscordLoginReturnFromUrl();
+    if (result.errorMessage) setDiscordNotice(result.errorMessage);
     if (result.twoFactor) {
       postLoginPathRef.current = result.twoFactor.next;
       setTwoFactorChallenge({
@@ -394,6 +417,7 @@ export default function Login() {
   const referralEnabled = emailConfig?.referralEnabled === true || publicInfo?.referralEnabled === true;
   const referralForceInvite = emailConfig?.referralForceInvite === true || publicInfo?.referralForceInvite === true;
   const googleLoginEnabled = publicInfo?.googleLoginEnabled === true;
+  const discordLoginEnabled = publicInfo?.discordLoginEnabled === true;
   const siteTitle = resolveSiteTitle(publicInfo?.siteTitle);
   const logoSrc = publicInfo?.siteLogoDataUrl || (resolvedTheme === "dark" ? "/logo-dark.png" : "/logo-light.png");
 
@@ -1100,6 +1124,15 @@ export default function Login() {
                   </button>
                 </div>
               ) : null}
+              {discordNotice ? (
+                <div role="alert" className="flex items-start gap-2 rounded-lg bg-[var(--fx-down-soft)] p-3 text-sm text-[var(--fx-down-text)]">
+                  <DiscordMark className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span className="min-w-0 flex-1">{discordNotice}</span>
+                  <button type="button" className="shrink-0 text-xs underline opacity-80 hover:opacity-100" onClick={() => setDiscordNotice(null)}>
+                    知道了
+                  </button>
+                </div>
+              ) : null}
               {mobileAuth.isNative && !hasMobilePanelUrl && (
                 <button
                   type="button"
@@ -1177,6 +1210,21 @@ export default function Login() {
 
               {googleLoginEnabled && hasMobilePanelUrl ? (
                 <GoogleLoginButton
+                  disabled={isPending}
+                  inviteCode={referralEnabled ? inviteCode : null}
+                  onLoggedIn={(data) => {
+                    rememberLoginWelcome(data);
+                    utils.auth.me.invalidate();
+                    window.location.href = "/";
+                  }}
+                  onTwoFactorRequired={(data) => {
+                    startTwoFactorFromTelegram({ twoFactorRequired: true, ...data });
+                  }}
+                />
+              ) : null}
+
+              {discordLoginEnabled && hasMobilePanelUrl ? (
+                <DiscordLoginButton
                   disabled={isPending}
                   inviteCode={referralEnabled ? inviteCode : null}
                   onLoggedIn={(data) => {

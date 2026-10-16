@@ -12,7 +12,9 @@ import {
   proxyTrafficReminderTitle,
 } from "./proxyTrafficReminders";
 import { dispatchReminders, type PendingReminder } from "./reminderDispatch";
-import { runTelegramDigests, sendTelegramMessage } from "./telegramBot";
+import { runDiscordDigests, runTelegramDigests, sendTelegramMessage } from "./telegramBot";
+import { discordNotifier } from "./discordNotify";
+import { isDiscordBotReadyFromSettings, readDiscordBotSettings } from "./discordSettings";
 import { recordTunnelHopTestResult } from "./tunnelHopTestState";
 import { recordHopTestResult } from "./hopTestState";
 import { primeHostStatusNotifier, sweepOfflineHostsAndNotify } from "./hostStatusNotifier";
@@ -821,6 +823,135 @@ export async function runTelegramReminders() {
   }
 }
 
+/**
+ * Discord 私信提醒：和 Telegram 那一路同样六类（用户到期 / 流量、主机流量 / 续费、落地节点 / 端口），
+ * 正文同一份，只是发给绑定了 Discord 的人。开关是 Discord 自己的两个（到期、流量），
+ * 剩余百分比阈值和提前天数沿用 Telegram 那边的设置；主机上的「流量告警」「续费提醒」开关两边共用。
+ * 去重键前缀是 discordReminder:，和 Telegram、邮件各发各的。
+ */
+export async function runDiscordReminders() {
+  try {
+    const settings = await db.getAllSettings();
+    if (!isDiscordBotReadyFromSettings(settings)) return;
+    const bot = readDiscordBotSettings(settings);
+    const expiryReminder = bot.expiryReminder;
+    const trafficReminder = bot.trafficReminder;
+    const trafficReminderThreshold = Math.min(99, Math.max(1, Number(settings.telegramTrafficReminderThreshold || 20)));
+    const hostRows = await db.getHosts();
+    const hostTrafficAlertHosts = (hostRows as any[]).filter((host) => !!host.telegramTrafficAlertEnabled && Number(host.trafficLimit || 0) > 0);
+    const hostRenewalReminderHosts = (hostRows as any[]).filter((host) => !!host.telegramRenewalReminderEnabled && !!host.stoppedAt);
+    const proxyTrafficSubjects = await collectDueProxyTrafficReminders();
+    if (!expiryReminder && !trafficReminder && hostTrafficAlertHosts.length === 0 && hostRenewalReminderHosts.length === 0 && proxyTrafficSubjects.length === 0) return;
+
+    const users = (await db.getUserTrafficSummaries() as any[]).filter((user) => user.accountEnabled !== false && Number(user.accountEnabled) !== 0);
+    const usersById = new Map(users.map((user) => [Number(user.id), user]));
+    const now = Date.now();
+    const reminderDays = parseExpiryReminderDays(settings.expiryReminderDays);
+    const pending: PendingReminder[] = [];
+    const send = (user: any, lines: string[], label: string) => discordNotifier.sendReminder(user, lines.join("\n"), label);
+
+    for (const user of users) {
+      if (!user.discordId) continue;
+      if (expiryReminder && user.expiresAt) {
+        const expiresAt = new Date(user.expiresAt).getTime();
+        const daysLeft = Math.ceil((expiresAt - now) / (24 * 60 * 60 * 1000));
+        if (shouldSendExpiryReminder(daysLeft, reminderDays)) {
+          pending.push({
+            key: expiryThresholdKey("discordReminder:expiry", user.id, expiresAt, daysLeft),
+            send: () => send(user, [
+              "<b>NEX 到期提醒</b>",
+              "",
+              daysLeft === 0 ? "你的套餐今天到期。" : `你的套餐将在 ${daysLeft} 天后到期。`,
+              `到期时间：${new Date(user.expiresAt).toLocaleDateString("zh-CN")}`,
+              "请及时续费或联系管理员。",
+            ], "expiry"),
+          });
+        }
+      }
+      if (trafficReminder && Number(user.trafficLimit || 0) > 0) {
+        const used = Number(user.trafficUsed || 0);
+        const limit = Number(user.trafficLimit || 0);
+        const leftPercent = Math.max(0, Math.round(((limit - used) / limit) * 100));
+        if (leftPercent <= trafficReminderThreshold) {
+          pending.push({
+            key: dayKey("discordReminder:traffic", user.id),
+            send: () => send(user, [
+              "<b>NEX 流量提醒</b>",
+              "",
+              `你的流量剩余约 ${leftPercent}%。`,
+              `已用：${formatBytes(used)}`,
+              `总量：${formatBytes(limit)}`,
+              "请及时续费或联系管理员。",
+            ], "traffic"),
+          });
+        }
+      }
+    }
+
+    if (hostTrafficAlertHosts.length > 0) {
+      const hostIds = hostTrafficAlertHosts.map((host) => Number(host.id)).filter((id) => Number.isInteger(id) && id > 0);
+      const trafficByHostId = new Map((await db.getHostTrafficSummary(hostIds) as any[]).map((traffic) => [Number(traffic.hostId), traffic]));
+      for (const host of hostTrafficAlertHosts) {
+        const owner = usersById.get(Number(host.userId));
+        if (!owner?.discordId) continue;
+        const plan = planHostTrafficReminder(host, hostTrafficUsageBytes(trafficByHostId.get(Number(host.id)), host.trafficMeasureMode));
+        if (!plan.due) continue;
+        pending.push({
+          key: dayKey(`discordReminder:hostTraffic:${host.id}`, owner.id),
+          send: () => send(owner, [
+            "<b>NEX 主机流量提醒</b>",
+            "",
+            `主机：${escapeHtmlLocal(host.name || `#${host.id}`)}`,
+            `剩余约 ${plan.leftPercent}%`,
+            `已用：${formatBytes(plan.usedBytes)}`,
+            `总量：${formatBytes(plan.limitBytes)}`,
+            `计算方式：${hostTrafficMeasureModeLabel(host.trafficMeasureMode)}`,
+          ], `hostTraffic host=${host.id}`),
+        });
+      }
+    }
+
+    for (const subject of proxyTrafficSubjects) {
+      const owner = usersById.get(subject.userId);
+      if (!owner?.discordId) continue;
+      const { plan } = subject;
+      pending.push({
+        key: dayKey(`discordReminder:${subject.dedupeKey}`, owner.id),
+        send: () => send(owner, [
+          `<b>${escapeHtmlLocal(proxyTrafficReminderTitle(subject))}</b>`,
+          "",
+          `${subject.kindText}：${escapeHtmlLocal(subject.label)}`,
+          `已用：${formatBytes(plan.usedBytes)} / ${formatBytes(plan.limitBytes)}（${plan.usedPercent}%）`,
+          "",
+          escapeHtmlLocal(proxyTrafficReminderTail(subject)),
+        ], subject.dedupeKey),
+      });
+    }
+
+    for (const host of hostRenewalReminderHosts) {
+      const owner = usersById.get(Number(host.userId));
+      if (!owner?.discordId) continue;
+      const renewal = planHostRenewalReminder(host, now);
+      if (!renewal.due) continue;
+      pending.push({
+        key: expiryThresholdKey(`discordReminder:hostRenewal:${host.id}`, owner.id, renewal.stoppedAtMs, renewal.daysLeft),
+        send: () => send(owner, [
+          "<b>NEX 主机续费提醒</b>",
+          "",
+          `主机：${escapeHtmlLocal(host.name || `#${host.id}`)}`,
+          `剩余：${renewal.daysLeft} 天`,
+          `到期时间：${new Date(host.stoppedAt).toLocaleDateString("zh-CN")}`,
+          "请及时续费或联系管理员。",
+        ], `hostRenewal host=${host.id}`),
+      });
+    }
+
+    await dispatchReminders(pending);
+  } catch (error) {
+    console.error("[Scheduler] Discord reminder error:", error);
+  }
+}
+
 async function runForwardGroupFailover() {
   try {
     await db.runForwardGroupFailoverSweep();
@@ -1010,6 +1141,7 @@ export function startScheduler() {
   const reminderSweep = createNonOverlappingScheduledTask("email and Telegram reminders", async () => {
     await runEmailReminders();
     await runTelegramReminders();
+    await runDiscordReminders();
   }, { slowTaskMs: 15_000 });
   // 每日简报：北京时间 9 点以后发当天那一份，十分钟看一次；去重键带日期，一天只发一次。
   const telegramDigest = createNonOverlappingScheduledTask("Telegram daily digest", async () => {
@@ -1017,6 +1149,11 @@ export function startScheduler() {
       await runTelegramDigests();
     } catch (error) {
       console.error("[Scheduler] Telegram digest error:", error);
+    }
+    try {
+      await runDiscordDigests();
+    } catch (error) {
+      console.error("[Scheduler] Discord digest error:", error);
     }
   }, { slowTaskMs: 30_000 });
   const updateCheck = createNonOverlappingScheduledTask("panel update check", async () => {

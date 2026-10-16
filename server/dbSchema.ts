@@ -213,13 +213,15 @@ const tables: TableDef[] = [
       c("telegramBindCodeExpiresAt", "epoch"), c("telegramLoginCode", "text"), c("telegramLoginCodeExpiresAt", "epoch"),
       c("twoFactorEnabled", "bool", { notNull: true, default: false }), c("twoFactorSecret", "text"), c("twoFactorEnabledAt", "epoch"),
       c("googleSub", "varchar", { length: 191 }), c("googleEmail", "text"), c("googleLinkedAt", "epoch"),
+      c("discordId", "varchar", { length: 32 }), c("discordUsername", "text"), c("discordEmail", "text"), c("discordLinkedAt", "epoch"),
+      c("discordDmBlockedAt", "epoch"),
       c("browserSessionToken", "text"), c("mobileSessionToken", "text"), c("telegramSessionToken", "text"),
       c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" }),
       c("lastSignedIn", "epoch", { notNull: true, default: "now" }),
       // 邀请返利：自己的邀请码（第一次打开邀请页才生成）和邀请人（注册时绑定，见 shared/referral.ts）。
       c("inviteCode", "varchar", { length: 32 }), c("inviterId", "int"),
     ],
-    unique: [["username"], ["telegramId"], ["telegramBindCode"], ["telegramLoginCode"], ["inviteCode"], ["googleSub"]],
+    unique: [["username"], ["telegramId"], ["telegramBindCode"], ["telegramLoginCode"], ["inviteCode"], ["googleSub"], ["discordId"]],
     indexes: [["inviterId"]],
   },
   {
