@@ -362,3 +362,25 @@ test("端口转发资源（gost）上的规则：出口照抄到每台入口的�
     assert.equal(listed.egress.state, "running");
   `);
 });
+
+test("删落地主机：别的主机上的规则还拿它的入站当出口就不让删；解锁记录跟着主机删", () => {
+  runInDatabase(String.raw`
+    const hostRepo = await import(url("server/repositories/hostRepository.ts"));
+    const inboundId = await makeInbound();
+    const created = await rules.create(directRule({ name: "经东京出口", egressType: "ss_host", egressInboundId: inboundId }));
+    // 东京落地（20）上的入站被香港入口（10）的规则当出口：删 20 要先解除
+    const labels = await hostRepo.getHostDeleteReferenceLabels(20);
+    assert.ok(labels.some((label) => /Shadowsocks 出口/.test(label) && /「经东京出口」/.test(label)), JSON.stringify(labels));
+    // 入口机自己的规则跟着主机一起删，不算引用
+    assert.deepEqual((await hostRepo.getHostDeleteReferenceLabels(10)).filter((label) => /Shadowsocks/.test(label)), []);
+    await rules.update({ id: created.id, egressType: "none" });
+    assert.deepEqual((await hostRepo.getHostDeleteReferenceLabels(20)).filter((label) => /Shadowsocks/.test(label)), []);
+
+    // 解锁检测记录：删主机时一起删（表没外键）
+    await exec("INSERT INTO host_unlock_checks (\"hostId\", family, \"runId\", \"resultsJson\") VALUES (30, 'auto', 'run-delete-me', '[]')");
+    await exec("INSERT INTO host_unlock_checks (\"hostId\", family, \"runId\", \"resultsJson\") VALUES (10, 'auto', 'run-keep-me', '[]')");
+    await hostRepo.deleteHost(30);
+    assert.equal(Number((await query("SELECT COUNT(*) AS c FROM host_unlock_checks WHERE \"hostId\" = 30"))[0].c), 0);
+    assert.equal(Number((await query("SELECT COUNT(*) AS c FROM host_unlock_checks WHERE \"hostId\" = 10"))[0].c), 1);
+  `);
+});

@@ -127,6 +127,9 @@ export type TopologyRuleRow = {
   routePathKey?: unknown;
   routeHopIndex?: unknown;
   proxyNodeId?: unknown;
+  /** Shadowsocks 出口（2.3.445）：none | ss_host | ss_link；ss_host 时 egressInboundId 指向落地入站 */
+  egressType?: unknown;
+  egressInboundId?: unknown;
 } & RouteGroupRule;
 
 export type TopologyTunnelRow = {
@@ -478,6 +481,8 @@ export function buildNetworkTopology(input: TopologyInput): TopologyGraph {
   const inboundByNode = new Map<number, number>();
   for (const row of input.proxyNodeInbounds || []) if (positiveInt(row.inboundId)) inboundByNode.set(Number(row.nodeId), Number(row.inboundId));
   const inboundIdByHostPort = new Map<string, number>();
+  const inboundById = new Map<number, TopologyInboundRow>();
+  for (const inbound of input.inbounds || []) inboundById.set(Number(inbound.id), inbound);
   for (const inbound of input.inbounds || []) {
     inboundIdByHostPort.set(`${positiveInt(inbound.hostId)}:${positiveInt(inbound.port)}`, Number(inbound.id));
   }
@@ -697,7 +702,35 @@ export function buildNetworkTopology(input: TopologyInput): TopologyGraph {
         }
       });
     } else {
+      /*
+        Shadowsocks 出口：真实路径是 入口 → 落地主机（SS 入站）→ 目标，目标是落地主机去连的。
+        外部 SS 链接的服务器地址是加密存的，画不出那一跳，只在入口 → 目标这条边上标出来。
+      */
+      const egressType = text(rule.egressType);
+      const egressInbound = egressType === "ss_host" ? inboundById.get(positiveInt(rule.egressInboundId)) : undefined;
+      const landing = egressInbound ? hostNode(positiveInt(egressInbound.hostId)) : null;
       for (const from of starts) {
+        if (landing && landing !== from) {
+          markRole(landing, "exit");
+          addEdge("rule", from, landing, { groupId: groupId || null }, {
+            ruleId: logicalId,
+            status: lastStatus,
+            protocol: "tcp",
+            port: positiveInt(egressInbound?.port) || null,
+            label: "SS 出口",
+          });
+          const egressTarget = targetNode(rule.targetIp, rule.targetPort, landing);
+          if (egressTarget) {
+            addEdge("rule", landing, egressTarget.id, { groupId: groupId || null }, {
+              ruleId: logicalId,
+              status: lastStatus,
+              protocol: "tcp",
+              port: positiveInt(rule.targetPort) || null,
+              latencyMs: input.ruleLatencyMs?.get(ruleId) ?? null,
+            });
+          }
+          continue;
+        }
         const target = targetNode(rule.targetIp, rule.targetPort, from);
         if (!target) continue;
         if (target.hostId) {
@@ -711,6 +744,7 @@ export function buildNetworkTopology(input: TopologyInput): TopologyGraph {
           protocol,
           port: positiveInt(rule.targetPort) || null,
           latencyMs: input.ruleLatencyMs?.get(ruleId) ?? null,
+          ...(egressType === "ss_link" ? { label: "经外部 SS 出口" } : {}),
         });
       }
     }

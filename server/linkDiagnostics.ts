@@ -16,6 +16,8 @@ import { FORWARD_PROTOCOL_LABELS, isUserspaceForwardType, normalizeForwardRulePr
 import { combineHostPortPolicyWithRange, combinePortPolicies, isPortAllowedByPolicy, portPolicyErrorMessage, portPolicyFrom } from "../shared/portPolicy";
 import { sameNetworkAddress } from "../shared/ipAddress";
 import { dbBool } from "./repositories/repositoryUtils";
+import { normalizeRuleEgressType } from "../shared/ssEgress";
+import { evaluateRuleEgress, loadEgressRuntimeContext } from "./ssEgress";
 import { getForwardProtocolSettings, getRuleProtocolKey, getTunnelProtocolKey, isForwardProtocolKeyEnabled } from "./forwardProtocolSettings";
 import { isForwardXTunnel } from "./tunnelFxpRuntime";
 import { isForwardXWireGuardV2 } from "./forwardXWireGuard";
@@ -330,6 +332,58 @@ function planTargetDial(plan: PlanBuilder, hostId: number, target: string, port:
   }
 }
 
+/**
+ * 走 Shadowsocks 出口的规则（2.3.445）：真实路径是 入口 → SS 服务器 →（落地主机）→ 目标，
+ * 不是入口直接拨目标。落地主机上的入站：检查入口能不能连上 SS 端口、落地主机能不能连上目标；
+ * 外部 SS 链接：只能检查入口到 SS 端口，目标那一段在别人的机器上，面板查不到。
+ * 返回 false 表示这条规则没有出口，调用方照直连处理。
+ */
+async function planEgressPath(plan: PlanBuilder, rule: any, entryHostId: number, target: string, targetPort: number) {
+  const type = normalizeRuleEgressType(rule?.egressType);
+  if (type === "none") return false;
+  await plan.loadHosts([entryHostId]);
+  const entryHost = plan.hosts.get(entryHostId);
+  const context = await loadEgressRuntimeContext([rule]);
+  const evaluation = evaluateRuleEgress(rule, {
+    entryHostId,
+    entryAgentVersion: String(entryHost?.agentVersion || ""),
+    entryHostName: plan.name(entryHostId),
+    context,
+  });
+  const landingHostId = type === "ss_host" ? Number(evaluation?.landingHost?.id || 0) : 0;
+  if (landingHostId > 0) {
+    await plan.loadHosts([landingHostId]);
+    plan.role(landingHostId, "落地出口");
+  }
+  const endpoint = evaluation?.endpoint || null;
+  const where = type === "ss_host"
+    ? `落地「${landingHostId > 0 ? plan.name(landingHostId) : "?"}」`
+    : endpoint ? `外部 SS ${formatHostPort(endpoint.server, endpoint.port)}` : "外部 SS";
+  const state = evaluation?.state || "config_invalid";
+  const status = state === "running" ? "pass" : state === "paused" ? "warn" : "fail";
+  plan.panel({
+    key: `egress:${rule.id}`,
+    group: "link",
+    title: "Shadowsocks 出口",
+    status,
+    summary: state === "running" ? `经 ${where} 出口` : (evaluation?.message || "出口配置无效"),
+    hint: status === "fail" ? "出口失效时规则按停用下发、不会退回直连；按提示修好出口或在规则里改掉出口" : undefined,
+    source: "panel",
+  });
+  if (endpoint) {
+    plan.agent(entryHostId, "link", `「${plan.name(entryHostId)}」→ SS 出口 ${formatHostPort(endpoint.server, endpoint.port)}`, {
+      kind: "dial", host: endpoint.server, port: endpoint.port, protocol: "tcp",
+    }, "hop");
+  }
+  if (landingHostId > 0) {
+    // 出口只走 TCP（SS_EGRESS_UDP_SUPPORTED = false），目标那一段由落地主机去连
+    planTargetDial(plan, landingHostId, target, targetPort, "tcp");
+  } else {
+    plan.panel({ key: `egress-target:${rule.id}`, group: "target", title: "目标连通（经外部 SS）", status: "skip", summary: "目标由外部 SS 服务器去连，面板查不到这一段", source: "panel" });
+  }
+  return true;
+}
+
 async function planTargetAddress(plan: PlanBuilder, target: string) {
   const value = String(target || "").trim().replace(/^\[|\]$/g, "");
   if (!value) return;
@@ -540,7 +594,10 @@ async function planRule(plan: PlanBuilder, rule: any, options: { subjectKind: Di
     await planTargetAddress(plan, target);
     for (const child of children.slice(0, 8)) {
       if (positive(child.tunnelId)) continue;
-      planTargetDial(plan, positive(child.hostId), String(child.targetIp || target), positive(child.targetPort) || targetPort, child.protocol);
+      const childTarget = String(child.targetIp || target);
+      const childPort = positive(child.targetPort) || targetPort;
+      if (await planEgressPath(plan, child, positive(child.hostId), childTarget, childPort)) continue;
+      planTargetDial(plan, positive(child.hostId), childTarget, childPort, child.protocol);
     }
     if (children.length === 0) {
       plan.panel({ key: "config.children", group: "config", title: "组成员规则", status: "fail", summary: "转发组里还没有生成成员规则", hint: "检查组里有没有启用的成员，然后重新保存一次规则", source: "panel" });
@@ -580,6 +637,7 @@ async function planRule(plan: PlanBuilder, rule: any, options: { subjectKind: Di
   await planEntryDomains(plan, rule, entryHostId);
   planEntryListener(plan, { hostId: entryHostId, port: positive(rule.sourcePort), protocol: rule.protocol, forwardType: rule.forwardType });
   await planTargetAddress(plan, target);
+  if (await planEgressPath(plan, rule, entryHostId, target, targetPort)) return;
   planTargetDial(plan, entryHostId, target, targetPort, rule.protocol);
 }
 

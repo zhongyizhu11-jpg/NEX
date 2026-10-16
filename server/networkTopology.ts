@@ -128,7 +128,7 @@ async function loadTopology(viewer: TopologyViewer, filterUserId: number | null)
       isForwardGroupTemplate: forwardRules.isForwardGroupTemplate, forwardGroupId: forwardRules.forwardGroupId,
       forwardGroupRuleId: forwardRules.forwardGroupRuleId, forwardGroupMemberId: forwardRules.forwardGroupMemberId,
       routeParentRuleId: forwardRules.routeParentRuleId, routePathKey: forwardRules.routePathKey, routeHopIndex: forwardRules.routeHopIndex,
-      proxyNodeId: forwardRules.proxyNodeId,
+      proxyNodeId: forwardRules.proxyNodeId, egressType: forwardRules.egressType, egressInboundId: forwardRules.egressInboundId,
       failoverEnabled: forwardRules.failoverEnabled, failoverTargets: forwardRules.failoverTargets, failoverProbeTarget: forwardRules.failoverProbeTarget,
       routeMode: forwardRules.routeMode, routePaths: forwardRules.routePaths, failoverStrategy: forwardRules.failoverStrategy,
     }).from(forwardRules).where(eq(forwardRules.pendingDelete, false)),

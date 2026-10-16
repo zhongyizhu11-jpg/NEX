@@ -244,3 +244,26 @@ test("入口组和主备转发组画成组节点 → 成员", () => {
   assert.equal(edge(graph, "group", "group:31", "host:1")!.label, "当前成员");
   assert.equal(edge(graph, "group", "group:31", "host:2")!.label, "备用成员");
 });
+
+test("Shadowsocks 出口：入口 → 落地主机（SS 出口）→ 目标；外部链接只在入口 → 目标上标出来", () => {
+  const extra = [
+    { id: 150, name: "经 JP 出口", userId: ADMIN, hostId: 1, protocol: "tcp", sourcePort: 27001, targetIp: "198.51.100.9", targetPort: 443, isEnabled: true, isRunning: true, egressType: "ss_host", egressInboundId: 301 },
+    { id: 151, name: "经外部 SS", userId: ADMIN, hostId: 3, protocol: "tcp", sourcePort: 27002, targetIp: "198.51.100.10", targetPort: 443, isEnabled: true, isRunning: true, egressType: "ss_link" },
+  ];
+  const graph = buildNetworkTopology(fixture({
+    rules: [...rules, ...extra] as any,
+    inbounds: [...inbounds, { id: 301, name: "JP SS 出口", userId: ADMIN, hostId: 2, protocol: "shadowsocks", port: 28388, isEnabled: true }],
+  }));
+  const toLanding = edge(graph, "rule", "host:1", "host:2");
+  assert.ok(toLanding, "入口 → 落地");
+  assert.ok(toLanding!.ruleIds.includes(150));
+  assert.equal(toLanding!.port, 28388);
+  const fromLanding = edge(graph, "rule", "host:2", "target:198.51.100.9:443");
+  assert.ok(fromLanding, "目标由落地主机去连");
+  assert.ok(fromLanding!.ruleIds.includes(150));
+  assert.equal(edge(graph, "rule", "host:1", "target:198.51.100.9:443"), undefined, "不再画成入口直连目标");
+  assert.equal(graph.nodes.find((node) => node.id === "host:2")!.roles.exit, true);
+  const viaLink = edge(graph, "rule", "host:3", "target:198.51.100.10:443");
+  assert.ok(viaLink);
+  assert.ok(viaLink!.ruleIds.includes(151));
+});

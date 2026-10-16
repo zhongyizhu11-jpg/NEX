@@ -128,3 +128,25 @@ test("隧道规则：入口 / 出口都在清单里，旧 Agent 的出口项是�
     assert.ok(offline.items.filter((item) => item.source === "agent" && item.hostId === 12).every((item) => item.status === "skip" && !item.needsUpgrade));
   `);
 });
+
+test("走 Shadowsocks 出口的规则：入口拨 SS 端口，落地主机拨目标；入口不再直拨目标", () => {
+  runInDatabase(String.raw`
+    await db.updateHostHeartbeat(12);
+    const inbounds = await import(url("server/repositories/proxyInboundRepository.ts"));
+    const inboundId = Number(await inbounds.createProxyInbound({ userId: 1, hostId: 12, name: "us SS", protocol: "shadowsocks", port: 28388, transport: "tcp", security: "none", method: "aes-256-gcm", password: "pw", isEnabled: true, landingEgress: true }));
+    await exec("INSERT INTO forward_rules (id, userId, name, hostId, forwardType, protocol, sourcePort, targetIp, targetPort, isEnabled, isRunning, pendingDelete, isForwardGroupTemplate, egressType, egressInboundId) VALUES (7, 1, 'via-us', 10, 'gost', 'tcp', 10777, '192.168.5.5', 22, 1, 1, 0, 0, 'ss_host', ?)", [inboundId]);
+
+    const report = await diagnostics.startLinkDiagnostics(admin, { kind: "rule", id: 7 });
+    const items = byKey(report);
+    assert.equal(items["egress:7"].status, "pass", items["egress:7"].summary);
+    assert.match(items["egress:7"].summary, /落地「us」/);
+    assert.ok(items["host:12"], "落地主机也在主机清单里");
+
+    const [entryTask] = tasks.takeDiagnosticsAgentTasks(10);
+    const entryDials = entryTask.checks.filter((check) => check.kind === "dial");
+    assert.ok(entryDials.some((check) => check.host === "203.0.113.12" && check.port === 28388), JSON.stringify(entryDials));
+    assert.ok(!entryDials.some((check) => check.host === "192.168.5.5"), "入口不该直拨目标");
+    const [landingTask] = tasks.takeDiagnosticsAgentTasks(12);
+    assert.ok(landingTask.checks.some((check) => check.kind === "dial" && check.host === "192.168.5.5" && check.port === 22), "目标由落地主机去连");
+  `);
+});
