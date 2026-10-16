@@ -132,6 +132,7 @@ const mainMenuItems: SidebarNavItem[] = [
   { icon: LayoutDashboard, label: "总览", path: "/", menuKey: "dashboard" },
   { icon: Server, label: "主机管理", path: "/hosts" },
   { icon: Route, label: "链路管理", path: "/tunnels" },
+  { icon: Network, label: "网络拓扑", path: "/topology", menuKey: "topology" },
   { icon: ArrowRightLeft, label: "转发规则", path: "/rules" },
   { icon: Rss, label: "订阅管理", path: "/client-subscriptions" },
 ];

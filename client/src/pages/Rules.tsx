@@ -2160,7 +2160,14 @@ function RulesContent() {
     setRuleResourceMenuType(parseRuleResourceFilter(nextResource).type || "local");
     setFilterUser(nextUser);
   }, [filterResourceStorageKey, filterUserStorageKey, user?.role]);
-  const [ruleSearchQuery, setRuleSearchQuery] = useState("");
+  const [ruleSearchQuery, setRuleSearchQuery] = useState((() => {
+    // 从别处（网络拓扑的详情面板）带着 ?q= 跳过来：先按它搜一遍。
+    try {
+      return new URLSearchParams(window.location.search).get("q") || "";
+    } catch {
+      return "";
+    }
+  }));
   const [ruleCategory, setRuleCategory] = useUrlTab<RuleCategory>({
     values: RULE_CATEGORIES,
     defaultValue: "all",
@@ -6693,6 +6700,13 @@ function RulesContent() {
             ariaLabel: `查看 ${rule.name} 的延迟`,
             icon: <Activity className="h-3.5 w-3.5" />,
             onSelect: () => setTrafficDetailRule({ id: rule.id, name: rule.name, isForwardChain: isForwardChainRule, probeMethod }),
+          },
+          {
+            key: "topology",
+            label: "查看拓扑",
+            ariaLabel: `在网络拓扑里查看 ${rule.name} 的路径`,
+            icon: <Network className="h-3.5 w-3.5" />,
+            onSelect: () => setLocation(`/topology?rule=${Number(rule.id)}`),
           },
           {
             key: "reset",

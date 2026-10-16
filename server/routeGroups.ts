@@ -32,6 +32,8 @@ import { getUserById } from "./repositories/userRepository";
 import { dbBool } from "./repositories/repositoryUtils";
 import { findAvailablePort, getTunnelById, getTunnelExitNodes, isPortUsedOnHost } from "./repositories/tunnelRepository";
 import { forgetRouteStats, recordRouteHopProbe } from "./routeGroupStats";
+import { deleteRoutePathQualityStats } from "./repositories/routePathQualityRepository";
+import { forgetRoutePathQualityThrottle } from "./routePathQualityHistory";
 
 /*
   线路组的中转：面板替用户在中转机上建规则。
@@ -412,8 +414,13 @@ export async function retireRouteRelayRulesForRule(ruleId: number, options: Sync
     const relays = await getRouteRelayRules(id) as RelayRuleRow[];
     const touched = new Set<number>();
     const retired = await retireRelayRows(relays, touched);
-    if (options.dropEvents !== false) await deleteForwardRuleRouteEvents(id);
+    if (options.dropEvents !== false) {
+      await deleteForwardRuleRouteEvents(id);
+      // 质量历史和切换记录同生共死：规则没了，留着它只是占地方（规则 id 不会复用）。
+      await deleteRoutePathQualityStats(id).catch(() => undefined);
+    }
     forgetRouteStats(id);
+    forgetRoutePathQualityThrottle(id);
     if (retired > 0 && !options.deferRefresh) {
       for (const hostId of touched) pushAgentRefresh(hostId, reason, { urgent: true });
     }

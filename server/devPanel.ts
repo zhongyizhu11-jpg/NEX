@@ -11,6 +11,7 @@ import { reconcileForwardRuleTunnelExits } from "./repositories/tunnelRepository
 import { insertForwardRuleRouteEvent } from "./repositories/forwardRuleRepository";
 import { syncRouteRelayRulesForRule } from "./routeGroups";
 import { recordRouteAgentStats, recordRouteHopProbe } from "./routeGroupStats";
+import { insertRoutePathQualityStats, type RoutePathQualityRow } from "./repositories/routePathQualityRepository";
 import { AGENT_VERSION } from "../shared/versions";
 
 export const DEV_PANEL_FLAG = "FORWARDX_DEV_PANEL";
@@ -1401,6 +1402,22 @@ async function seedRouteGroupDemo(ruleId: number, hostIds: number[]) {
       ],
     }],
   });
+  /*
+    近 24 小时的路径质量历史（线路组面板「线路质量」那张图）：每 5 分钟一个点，晚高峰那条
+    在傍晚抖一阵、丢一点包。真实面板上是入口 Agent 每次心跳报评分、每条路径一分钟落一行。
+  */
+  const qualityRows: RoutePathQualityRow[] = [];
+  for (let minutes = 24 * 60; minutes >= 0; minutes -= 5) {
+    const at = now - minutes * 60_000;
+    const wave = Math.sin(minutes / 47);
+    const evening = minutes > 180 && minutes < 420;
+    qualityRows.push(
+      { ruleId, pathKey: "main", sampledAt: at, latencyMs: Math.round(38 + wave * 4 + (minutes % 35 === 0 ? 22 : 0)), lossPct: minutes % 95 === 0 ? 1 : 0, jitterMs: Math.round(4 + Math.abs(wave) * 3), availabilityPct: 100, score: 92 },
+      { ruleId, pathKey: "backup-sg", sampledAt: at, latencyMs: Math.round(74 + wave * 9 + (evening ? 35 : 0)), lossPct: evening ? 2.5 : 0.5, jitterMs: Math.round(11 + (evening ? 18 : 0) + Math.abs(wave) * 4), availabilityPct: evening ? 97.5 : 99.5, score: evening ? 66 : 82 },
+      { ruleId, pathKey: "direct", sampledAt: at, latencyMs: minutes % 240 === 0 ? null : Math.round(186 + wave * 20), lossPct: minutes % 240 === 0 ? 100 : 2.5, jitterMs: 28, availabilityPct: minutes % 240 === 0 ? 0 : 97.5, score: minutes % 240 === 0 ? 0 : 64 },
+    );
+  }
+  await insertRoutePathQualityStats(qualityRows);
   const hostName = (index: number) => ["HK entry 01", "JP exit 02", "SG relay 03", "US backup 04"][index];
   recordRouteHopProbe({ parentRuleId: ruleId, pathKey: "main", hopIndex: 0, hostId: hostIds[1], hostName: hostName(1), nextLabel: "落地", ok: true, latencyMs: 92 });
   recordRouteHopProbe({ parentRuleId: ruleId, pathKey: "backup-sg", hopIndex: 0, hostId: hostIds[2], hostName: hostName(2), nextLabel: hostName(3), ok: true, latencyMs: 41 });
@@ -1442,6 +1459,8 @@ async function seedRules(hostIds: number[], resources: DevResources, usersSeed: 
     { userId: usersSeed.adminId, hostId: hostIds[0], name: "Dev chain template", forwardType: "realm", protocol: "tcp", sourcePort: 18080, targetIp: "10.40.0.80", targetPort: 8080, forwardGroupId: resources.groups.chainGroupId, isForwardGroupTemplate: true, telegramErrorNotifyEnabled: true, sortOrder: 0, isRunning: false },
     { userId: usersSeed.adminId, hostId: hostIds[0], name: "API edge chain template", forwardType: "gost", protocol: "tcp", sourcePort: 18181, targetIp: "10.80.0.81", targetPort: 8081, forwardGroupId: resources.groups.apiChainGroupId, isForwardGroupTemplate: true, sortOrder: 1, isRunning: false, proxyProtocolReceive: true, proxyProtocolSend: true, proxyProtocolVersion: 2 },
     { userId: usersSeed.adminId, hostId: hostIds[0], name: "Long relay chain template", forwardType: "realm", protocol: "both", sourcePort: 18282, targetIp: "10.81.0.82", targetPort: 8082, forwardGroupId: resources.groups.longChainGroupId, isForwardGroupTemplate: true, sortOrder: 2, isRunning: false, tcpFastOpen: true, zeroCopy: true },
+    // 落到 JP 上那个 VLESS 落地入站的中转：拓扑页上是「HK → JP → 入站」。
+    { userId: usersSeed.adminId, hostId: hostIds[0], name: "HK to JP VLESS landing", forwardType: "realm", protocol: "tcp", sourcePort: 24600, targetIp: "jp-exit.dev.forwardx.local", targetPort: 24610, sortOrder: 7, isRunning: true },
     { userId: usersSeed.activeUserId, hostId: hostIds[1], name: "User tunnel demo", forwardType: "gost", protocol: "tcp", sourcePort: 26001, targetIp: "203.0.113.10", targetPort: 443, tunnelId: resources.tunnels.primaryTunnelId, tunnelExitPort: 26002, sortOrder: 0, isRunning: true, failoverEnabled: true, failoverTargets: JSON.stringify([{ targetIp: "203.0.113.11", targetPort: 443 }]) },
     { userId: usersSeed.pausedUserId, hostId: hostIds[2], name: "Traffic billing pause demo", forwardType: "realm", protocol: "both", sourcePort: 27500, targetIp: "198.18.1.25", targetPort: 27015, sortOrder: 0, isRunning: false, disabledByUser: true },
     { userId: usersSeed.expiredUserId, hostId: hostIds[3], name: "Expired account demo", forwardType: "socat", protocol: "tcp", sourcePort: 29500, targetIp: "192.0.2.81", targetPort: 8443, sortOrder: 0, isRunning: false, disabledByUser: true },
@@ -1473,6 +1492,23 @@ async function seedRules(hostIds: number[], resources: DevResources, usersSeed: 
   }
   const routeGroupRuleId = ruleIdByName.get("US game route group");
   if (routeGroupRuleId) await seedRouteGroupDemo(routeGroupRuleId, hostIds);
+  // 落地入站：JP 上一个 VLESS Reality 端口，上面那条 HK 中转落在它上面。
+  await insertAndGetId("proxy_inbounds", {
+    userId: usersSeed.adminId,
+    hostId: hostIds[1],
+    name: "JP VLESS landing",
+    protocol: "vless",
+    port: 24610,
+    transport: "tcp",
+    security: "reality",
+    uuid: "11111111-2222-4333-8444-555555555555",
+    serverName: "www.example.com",
+    realityShortId: "a1b2c3d4",
+    isEnabled: true,
+    sortOrder: 0,
+    createdAt: nowDate(),
+    updatedAt: nowDate(),
+  });
   for (const groupId of [resources.groups.failoverGroupId, resources.groups.apiFailoverGroupId, resources.groups.mediaFailoverGroupId]) {
     await syncForwardGroupRules(groupId, { preserveRuntime: true });
   }

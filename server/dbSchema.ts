@@ -40,6 +40,7 @@ export const MIGRATION_TABLES = [
   "forward_group_members",
   "forward_group_events",
   "forward_rule_route_events",
+  "route_path_quality_stats",
   "proxy_nodes",
   "proxy_inbounds",
   "proxy_inbound_users",
@@ -590,6 +591,17 @@ const tables: TableDef[] = [
       c("createdAt", "epoch", { notNull: true, default: "now" }),
     ],
     indexes: [["ruleId", "createdAt"], ["createdAt"]],
+  },
+  {
+    // 线路组每条路径的质量历史（server/routePathQualityHistory.ts）：每条路径最多一分钟一行，留 7 天。
+    name: "route_path_quality_stats",
+    columns: [
+      c("id", "id"), c("ruleId", "int", { notNull: true }), c("pathKey", "varchar", { length: 32, notNull: true }),
+      c("sampledAt", "epoch", { notNull: true, default: "now" }),
+      c("latencyMs", "int"), c("lossPermille", "int", { notNull: true, default: 0 }), c("jitterMs", "int"),
+      c("availabilityPermille", "int"), c("score", "int"),
+    ],
+    indexes: [["ruleId", "sampledAt"], ["ruleId", "pathKey", "sampledAt"], ["sampledAt"]],
   },
   {
     /*

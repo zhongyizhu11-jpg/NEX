@@ -5,6 +5,7 @@ import { timestampMillis } from "../shared/timestamp";
 import { failoverLineEndpoints } from "../shared/failoverActiveLine";
 import { normalizeRouteEventKind, routePathLabel, routePathsOf, type RouteEventKind, type RouteGroupRule } from "../shared/routeGroup";
 import { recordRouteAgentStats } from "./routeGroupStats";
+import { recordRoutePathQuality } from "./routePathQualityHistory";
 import { notifyRouteSwitch } from "./routeSwitchNotifier";
 import { recordRouteSwitchEvent } from "./ops/eventHooks";
 
@@ -122,6 +123,11 @@ export async function ingestFailoverLineReports(input: {
   if (stats && (statsDue || events.length > 0)) {
     recordRouteAgentStats({ hostId, reports: stats, isAllowed: (ruleId) => rulesById.has(ruleId), nowMs });
     lastStatsAtByHost.set(hostId, nowMs);
+    // 质量历史：每条路径最多一分钟落一行（routePathQualityHistory 自己节流，写失败只记日志）。
+    const reportedRules = Array.from(new Set((stats as any[]).map((item) => Math.floor(Number(item?.ruleId || 0)))))
+      .map((ruleId) => rulesById.get(ruleId))
+      .filter((rule) => !!rule);
+    if (reportedRules.length > 0) await recordRoutePathQuality({ rules: reportedRules, nowMs });
   }
 
   // 一次心跳里同一条规则可能连切几次，只有最后一次才是「现在」。
