@@ -23,6 +23,8 @@ export const AGENT_TUNNEL_PATHS = new Set([
   "/api/agent/looking-glass-progress",
   "/api/agent/iperf3-result",
   "/api/agent/plugin-action-result",
+  // 「安装 / 修复 mimic」的进度和结果（2.3.441 前漏了这条：Agent 的上报全被 /api/sync 拒掉，页面一直「安装中」）
+  "/api/agent/mimic-install-result",
   "/api/agent/support-bundle-result",
   "/api/agent/migration-rollback",
   "/api/agent/traffic",
