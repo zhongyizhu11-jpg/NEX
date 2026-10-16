@@ -96,6 +96,10 @@ func newFakeRuntimeUpgrade(t *testing.T) *fakeRuntimeUpgrade {
 				return gostRuntimeVersionInfo{Version: gostRuntimeVersionMissing}, gostRuntimeFingerprint{}
 			}
 			fp, _ := statGostRuntimeFingerprint(path)
+			if strings.TrimSpace(string(raw)) == "SLOW" {
+				// -V 超时
+				return gostRuntimeVersionInfo{Version: gostRuntimeVersionUnknown, TimedOut: true}, fp
+			}
 			return parseGostRuntimeVersion(f.versionOf[strings.TrimSpace(string(raw))]), fp
 		},
 		serviceNeeded:  func() bool { return f.needed },
@@ -261,5 +265,61 @@ func TestGostRuntimeUpgradeMarkerFormatMatchesInstallScript(t *testing.T) {
 	}
 	if marker.PreviousPath != gostRuntimeBinaryPath+gostRuntimePreviousSuffix || marker.NewVersion != "3.2.6-nex3" || marker.StartedAt != 1800000000 {
 		t.Fatalf("%+v", marker)
+	}
+}
+
+func TestGostRuntimeUpgradeVersionTimeoutIsNotABrokenBinary(t *testing.T) {
+	f := newFakeRuntimeUpgrade(t)
+	f.active = true
+	f.install(t, "SLOW", "OLD", 5*time.Second)
+	if got, _ := reconcileGostRuntimeUpgrade(f.env); got != gostRuntimeUpgradePending {
+		t.Fatalf("-V timeout must not roll back, got %s", got)
+	}
+	// 服务一直在跑：过了宽限期也不回滚、不确认，标记留着等 -V 答得出来。
+	f.now = f.now.Add(2 * gostRuntimeUpgradeStartGrace)
+	if got, _ := reconcileGostRuntimeUpgrade(f.env); got != gostRuntimeUpgradePending {
+		t.Fatalf("timeout with an active service must stay pending, got %s", got)
+	}
+	if f.binary(t) != "SLOW" || !exists(f.env.markerPath) || f.restarts != 0 {
+		t.Fatalf("timeout must keep the new binary and the marker")
+	}
+	// 服务过了宽限期还没起来：按服务的实况回滚。
+	f.active = false
+	if got, err := reconcileGostRuntimeUpgrade(f.env); got != gostRuntimeUpgradeRolledBack || err == nil {
+		t.Fatalf("service down after grace should roll back, got %s %v", got, err)
+	}
+	if f.binary(t) != "OLD" {
+		t.Fatalf("rollback must restore .prev")
+	}
+}
+
+func TestGostRuntimeUpgradePreviousTimeoutRetries(t *testing.T) {
+	f := newFakeRuntimeUpgrade(t)
+	f.install(t, "BAD", "SLOW", time.Second)
+	if got, _ := reconcileGostRuntimeUpgrade(f.env); got != gostRuntimeUpgradePending {
+		t.Fatalf("previous -V timeout should retry later, got %s", got)
+	}
+	if !exists(f.env.markerPath) || f.binary(t) != "BAD" {
+		t.Fatalf("marker must stay for the retry")
+	}
+}
+
+func TestGostRuntimeCapabilitiesHiddenWhileUpgradeDown(t *testing.T) {
+	f := newFakeRuntimeUpgrade(t)
+	f.active = false
+	if gostRuntimeUpgradePendingAndDown(f.env) {
+		t.Fatalf("no marker -> not pending")
+	}
+	f.install(t, "NEW", "OLD", time.Second)
+	if !gostRuntimeUpgradePendingAndDown(f.env) {
+		t.Fatalf("pending upgrade with the service down must hide capabilities")
+	}
+	f.active = true
+	if gostRuntimeUpgradePendingAndDown(f.env) {
+		t.Fatalf("pending upgrade with the service up keeps capabilities")
+	}
+	f.active, f.needed = false, false
+	if gostRuntimeUpgradePendingAndDown(f.env) {
+		t.Fatalf("no gost rules on the host -> nothing to be down")
 	}
 }

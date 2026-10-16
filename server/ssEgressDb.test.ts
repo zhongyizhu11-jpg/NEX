@@ -409,7 +409,7 @@ test("UDP / SS2022 出口：只有报了能力的入口机能保存、能拿到 
     const { gost } = await heartbeat("tok10", "2.2.227");
     const chainOf = (id, proto) => gost.chains.find((item) => item.name === "chain-egress-" + id + "-" + proto);
     assert.equal(gost.services.find((item) => item.name === "fwx-" + udpRule.id + "-udp").handler.chain, "chain-egress-" + udpRule.id + "-udp");
-    assert.deepEqual(chainOf(udpRule.id, "udp").hops[0].nodes[0].connector, { type: "ssu", auth: { username: "aes-256-gcm", password: "landing-pass" } });
+    assert.deepEqual(chainOf(udpRule.id, "udp").hops[0].nodes[0].connector, { type: "ssu", auth: { username: "aes-256-gcm", password: "landing-pass" }, metadata: { udpBufferSize: 65535 } });
     assert.deepEqual(chainOf(udpRule.id, "udp").hops[0].nodes[0].dialer, { type: "udp" });
     assert.equal(chainOf(viaSs2022.id, "tcp").hops[0].nodes[0].connector.auth.username, "2022-blake3-aes-128-gcm");
     assert.equal(chainOf(viaSs2022.id, "udp").hops[0].nodes[0].connector.auth.password, key);

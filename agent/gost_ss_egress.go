@@ -136,10 +136,8 @@ func validateGostShadowsocksNode(node gostEgressNode) error {
 		if strings.Contains(password, ":") {
 			return fmt.Errorf("shadowsocks 2022 multi-user keys are not supported")
 		}
+		// gost 只用 StdEncoding 解（要「=」补齐）；不补齐的密钥同样会让 gost 留下空 client，这里一样拒掉。
 		key, err := base64.StdEncoding.DecodeString(password)
-		if err != nil {
-			key, err = base64.RawStdEncoding.DecodeString(password)
-		}
 		if err != nil || len(key) != keyBytes {
 			return fmt.Errorf("shadowsocks 2022 key for %s must be %d bytes base64", method, keyBytes)
 		}

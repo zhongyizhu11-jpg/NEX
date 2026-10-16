@@ -68,6 +68,8 @@ type gostRuntimeVersionInfo struct {
 	Base     string
 	NexBuild int
 	OK       bool
+	// TimedOut：`-V` 在时限内没答（机器忙、磁盘冷）。问不出结论，不能当成「坏了」去回滚。
+	TimedOut bool
 }
 
 // parseGostRuntimeVersion 解析 `gost -V` 的输出，例如 "gost 3.2.6-nex3 (go1.25.4 linux/amd64)"。
@@ -114,7 +116,11 @@ var gostRuntimeVersionCache = struct {
 	fp    gostRuntimeFingerprint
 	info  gostRuntimeVersionInfo
 	valid bool
+	// until 不为零：问不出结论（超时）的结果只缓存到这个时间，免得卡住的二进制让每次心跳都多等 5 秒。
+	until time.Time
 }{}
+
+const gostRuntimeVersionTimeoutCacheTTL = time.Minute
 
 // probeGostRuntimeBinary 跑 `<bin> -V`。definitive=false 表示这次问不出结论（超时），不缓存。
 var probeGostRuntimeBinary = func(path string) (gostRuntimeVersionInfo, bool) {
@@ -124,7 +130,7 @@ var probeGostRuntimeBinary = func(path string) (gostRuntimeVersionInfo, bool) {
 	cmd.WaitDelay = time.Second
 	output, _ := cmd.CombinedOutput()
 	if ctx.Err() != nil {
-		return gostRuntimeVersionInfo{Version: gostRuntimeVersionUnknown}, false
+		return gostRuntimeVersionInfo{Version: gostRuntimeVersionUnknown, TimedOut: true}, false
 	}
 	// 跑不起来（架构不对、文件坏了）解析不出版本，就是 unknown 且确定。
 	return parseGostRuntimeVersion(string(output)), true
@@ -137,21 +143,24 @@ func installedGostRuntimeVersion(path string) (gostRuntimeVersionInfo, gostRunti
 		return gostRuntimeVersionInfo{Version: gostRuntimeVersionMissing}, gostRuntimeFingerprint{}
 	}
 	gostRuntimeVersionCache.Lock()
-	if gostRuntimeVersionCache.valid && gostRuntimeVersionCache.path == path && gostRuntimeVersionCache.fp == fp {
+	if gostRuntimeVersionCache.valid && gostRuntimeVersionCache.path == path && gostRuntimeVersionCache.fp == fp &&
+		(gostRuntimeVersionCache.until.IsZero() || time.Now().Before(gostRuntimeVersionCache.until)) {
 		info := gostRuntimeVersionCache.info
 		gostRuntimeVersionCache.Unlock()
 		return info, fp
 	}
 	gostRuntimeVersionCache.Unlock()
 	info, definitive := probeGostRuntimeBinary(path)
-	if definitive {
-		gostRuntimeVersionCache.Lock()
-		gostRuntimeVersionCache.path = path
-		gostRuntimeVersionCache.fp = fp
-		gostRuntimeVersionCache.info = info
-		gostRuntimeVersionCache.valid = true
-		gostRuntimeVersionCache.Unlock()
+	gostRuntimeVersionCache.Lock()
+	gostRuntimeVersionCache.path = path
+	gostRuntimeVersionCache.fp = fp
+	gostRuntimeVersionCache.info = info
+	gostRuntimeVersionCache.valid = true
+	gostRuntimeVersionCache.until = time.Time{}
+	if !definitive {
+		gostRuntimeVersionCache.until = time.Now().Add(gostRuntimeVersionTimeoutCacheTTL)
 	}
+	gostRuntimeVersionCache.Unlock()
 	return info, fp
 }
 
@@ -235,7 +244,20 @@ func reportedGostRuntime() (string, []string) {
 	if state, ok := readGostRuntimeRollbackState(gostRuntimeRollbackStatePath); ok {
 		rollback = &state
 	}
-	return info.Version, gostRuntimeCapabilities(Version, info, fp, rollback)
+	caps := gostRuntimeCapabilities(Version, info, fp, rollback)
+	if len(caps) > 0 && gostRuntimeUpgradePendingAndDown(defaultGostRuntimeUpgradeEnv()) {
+		// 刚换的运行时还没确认、服务也没在跑：先不报能力，免得面板在回滚之前把 UDP 出口当成能用。
+		caps = []string{}
+	}
+	return info.Version, caps
+}
+
+// gostRuntimeUpgradePendingAndDown：有待确认的运行时升级，而且要跑 gost 的服务现在没起来。
+func gostRuntimeUpgradePendingAndDown(env gostRuntimeUpgradeEnv) bool {
+	if _, err := os.Stat(env.markerPath); err != nil {
+		return false
+	}
+	return env.serviceNeeded() && !env.serviceActive()
 }
 
 // addGostRuntimeReport 往心跳里加 runtimeVersion / agentCapabilities（每次都带，面板以最新一次为准）。
@@ -352,6 +374,13 @@ func reconcileGostRuntimeUpgrade(env gostRuntimeUpgradeEnv) (string, error) {
 
 	reason := ""
 	switch {
+	case current.TimedOut:
+		// -V 超时问不出结论：不据此回滚，也不确认。只有服务该跑却过了宽限期还没起来，才按服务的实况回滚。
+		if env.serviceNeeded() && !env.serviceActive() && elapsed >= gostRuntimeUpgradeStartGrace {
+			reason = fmt.Sprintf("gost runtime service not active %s after upgrading to %s (-V timed out)", elapsed.Round(time.Second), emptyDash(marker.NewVersion))
+			break
+		}
+		return gostRuntimeUpgradePending, nil
 	case !current.OK:
 		reason = fmt.Sprintf("new runtime %s failed its self-check (-V)", emptyDash(marker.NewVersion))
 	case !env.serviceNeeded():
@@ -372,6 +401,10 @@ func reconcileGostRuntimeUpgrade(env gostRuntimeUpgradeEnv) (string, error) {
 
 func rollbackGostRuntime(env gostRuntimeUpgradeEnv, marker gostRuntimeUpgradeMarker, current gostRuntimeVersionInfo, reason string) (string, error) {
 	previous, _ := env.version(marker.PreviousPath)
+	if previous.TimedOut {
+		// 旧文件也问不出来：留着标记，下次再试。
+		return gostRuntimeUpgradePending, fmt.Errorf("%s; previous runtime %s -V timed out, retrying", reason, marker.PreviousPath)
+	}
 	if !previous.OK {
 		// 没有能用的旧文件可退：留着新文件（至少不比没有强），能力照常按实测报。
 		os.Remove(env.markerPath)

@@ -176,6 +176,17 @@ function ss2022KeyBytes(method: string) {
   return 0;
 }
 
+/**
+ * gost 解 SS2022 密钥只认带「=」补齐的标准 base64（core.Base64Decode = StdEncoding），解不开就留下空的
+ * 连接器，第一条连接进来整个运行时崩掉。用户粘的链接常常不带补齐，下发前统一补好；经典方法原样返回。
+ */
+export function canonicalSsEgressPassword(method: unknown, password: unknown) {
+  const text = String(password ?? "");
+  if (!ss2022KeyBytes(normalizeSsMethod(String(method ?? "")))) return text;
+  const key = text.trim().replace(/=+$/, "");
+  return key.length % 4 === 0 ? key : key + "=".repeat(4 - (key.length % 4));
+}
+
 function base64KeyLength(value: string) {
   const text = value.trim();
   if (!/^[A-Za-z0-9+/]+={0,2}$/.test(text)) return -1;
@@ -444,6 +455,7 @@ export function ruleEgressSummaryText(egress: { type: unknown; landingHostName?:
     const name = String(egress?.landingHostName || "").trim();
     return `经 落地主机 ${name || "（已删除）"} 出口${udp}`;
   }
-  if (type === "ss_link") return `经 外部 SS 出口${udp}`;
+  // 外部 SS 服务器开没开 UDP 中继面板查不到：如实写成「需对端支持」，不当成已经通了。
+  if (type === "ss_link") return `经 外部 SS 出口${egress?.udp === true ? "（含 UDP，需对端支持 UDP）" : ""}`;
   return "";
 }

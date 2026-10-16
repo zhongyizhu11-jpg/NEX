@@ -191,6 +191,8 @@ test("状态：哪些按停用下发、卡片上那一句", () => {
   assert.equal(ruleEgressSummaryText({ type: "ss_link" }), "经 外部 SS 出口");
   // 只有 UDP 确实下发了才写「含 UDP」。
   assert.equal(ruleEgressSummaryText({ type: "ss_host", landingHostName: "东京", udp: true }), "经 落地主机 东京 出口（含 UDP）");
+  // 外部 SS 服务器的 UDP 中继面板验证不了，写明要对端支持。
+  assert.equal(ruleEgressSummaryText({ type: "ss_link", udp: true }), "经 外部 SS 出口（含 UDP，需对端支持 UDP）");
   assert.equal(ruleEgressSummaryText({ type: "ss_link", udp: false }), "经 外部 SS 出口");
   assert.equal(ruleEgressStateBlocksDelivery("udp_runtime_upgrade"), true);
   assert.equal(ruleEgressStateBlocksDelivery("ss2022_runtime_upgrade"), true);

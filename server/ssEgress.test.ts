@@ -187,10 +187,18 @@ test("gost 出口链：TCP 是 ss 连接器 + tcp 拨号器 + nodelay；UDP 是 
   });
   const udp = buildGostEgressChain(7, "udp", runtime);
   assert.equal(udp.name, gostEgressChainName(7, "udp"));
-  assert.deepEqual(udp.hops[0].nodes[0].connector, { type: "ssu", auth: { username: "aes-256-gcm", password: "pw" } });
+  // 回包缓冲开到 65535：默认 4096 装不下大的 DNS 回答，会被截断、解密失败、悄悄丢掉。
+  assert.deepEqual(udp.hops[0].nodes[0].connector, { type: "ssu", auth: { username: "aes-256-gcm", password: "pw" }, metadata: { udpBufferSize: 65535 } });
   assert.deepEqual(udp.hops[0].nodes[0].dialer, { type: "udp" });
   // SS2022 的方法和 key 原样带过去。
   const ss2022 = buildGostEgressChain(8, "tcp", { ...runtime, method: "2022-blake3-aes-128-gcm", password: Buffer.alloc(16, 2).toString("base64") });
   assert.equal(ss2022.hops[0].nodes[0].connector.auth.username, "2022-blake3-aes-128-gcm");
+  assert.equal(ss2022.hops[0].nodes[0].connector.auth.password, Buffer.alloc(16, 2).toString("base64"));
+  // 不带「=」补齐的 SS2022 密钥（链接里常见）下发前补齐：gost 只认标准 base64，解不开会让整个运行时崩掉。
+  const key = Buffer.alloc(16, 7).toString("base64");
+  const unpadded = buildGostEgressChain(8, "udp", { ...runtime, method: "2022-blake3-aes-128-gcm", password: ` ${key.replace(/=+$/, "")} ` });
+  assert.equal(unpadded.hops[0].nodes[0].connector.auth.password, key);
+  // 经典方法的密码原样带过去（可能本来就以「=」结尾）。
+  assert.equal(buildGostEgressChain(9, "tcp", { ...runtime, password: "pw==" }).hops[0].nodes[0].connector.auth.password, "pw==");
   assert.equal(buildGostEgressChain(9, "tcp", { ...runtime, server: "2001:db8::20" }).hops[0].nodes[0].addr, "[2001:db8::20]:28388");
 });

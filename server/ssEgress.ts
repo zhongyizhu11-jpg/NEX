@@ -16,6 +16,7 @@ import { forwardRules } from "../drizzle/schema";
 import { getHostEntryAddress } from "../shared/hostEntryAddress";
 import { pickAvailablePort, portPolicyFrom } from "../shared/portPolicy";
 import {
+  canonicalSsEgressPassword,
   isSsEgressAgentSupported,
   maskSsEgressEndpoint,
   normalizeRuleEgressType,
@@ -611,7 +612,7 @@ export function gostEgressChainName(ruleId: number, proto: "tcp" | "udp") {
  */
 export function buildGostEgressChain(ruleId: number, proto: "tcp" | "udp", runtime: SsEgressRuntime) {
   const host = runtime.server.includes(":") ? `[${runtime.server}]` : runtime.server;
-  const auth = { username: normalizeSsMethod(runtime.method), password: runtime.password };
+  const auth = { username: normalizeSsMethod(runtime.method), password: canonicalSsEgressPassword(runtime.method, runtime.password) };
   return {
     name: gostEgressChainName(ruleId, proto),
     hops: [{
@@ -621,7 +622,8 @@ export function buildGostEgressChain(ruleId: number, proto: "tcp" | "udp", runti
         addr: `${host}:${Number(runtime.port)}`,
         connector: proto === "tcp"
           ? { type: "ss", auth, metadata: { nodelay: true } }
-          : { type: "ssu", auth },
+          // 回包缓冲默认 4096，再大的回包（带 DNSSEC 的 DNS 回答之类）会被截断、解密失败、悄悄丢掉
+          : { type: "ssu", auth, metadata: { udpBufferSize: 65535 } },
         dialer: { type: proto },
       }],
     }],
