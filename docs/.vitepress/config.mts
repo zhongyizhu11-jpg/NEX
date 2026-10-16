@@ -57,6 +57,7 @@ export default defineConfig({
           { text: "自动换 IP", link: "/guide/auto-ip-change" },
           { text: "PROXY Protocol", link: "/guide/proxy-protocol" },
           { text: "共享 TLS 入站（SNI 分流）", link: "/guide/sni-shared-inbound" },
+          { text: "落地主机与 Shadowsocks 出口", link: "/guide/ss-egress" },
         ],
       },
       {

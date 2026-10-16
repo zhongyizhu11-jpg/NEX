@@ -1293,6 +1293,13 @@ async function prepareImportRow(table: string, source: Record<string, any>, maps
       row.proxyNodeId = mapOptionalId(maps, "proxy_nodes", source.proxyNodeId);
       // 老面板的库里没有共享 TLS 入站：缺省就是普通规则。
       row.tlsInboundId = mapOptionalId(maps, "host_tls_inbounds", source.tlsInboundId);
+      /*
+        Shadowsocks 出口：落地入站在规则之前导入，按映射改 id；老面板没有这几列就是「直接连接」。
+        外部链接（egressConfigJson）是用源面板密钥加密的，新面板密钥不同就解不开 —— 规则卡片会显示
+        「出口配置失效」并按停用下发，用户重新粘贴一次链接即可。
+      */
+      row.egressInboundId = Number(source.egressInboundId || 0) > 0 ? mapId(maps, "proxy_inbounds", source.egressInboundId) || null : null;
+      if (row.egressType === "ss_host" && !row.egressInboundId) row.egressType = "none";
       row.isRunning = false;
       row.pendingDelete = source.pendingDelete ?? false;
       return { row };

@@ -1058,7 +1058,8 @@ export async function syncProxyNodeFromInbound(inboundId: number): Promise<numbe
        * 只在新建时给默认值，更新时不动：用户后来手动关掉的话，下次保存入站
        * 不该把他的选择覆盖回去。
        */
-      const created = Number(await insertAndGetId("proxy_nodes", { ...data, includeDirect: true } as any));
+      // 一键创建的落地出口入站（给转发规则当 Shadowsocks 出口用）默认不进订阅，管理员要给客户端用时在订阅页打开。
+      const created = Number(await insertAndGetId("proxy_nodes", { ...data, includeDirect: !dbBool((row as any).landingEgress) } as any));
       kept.add(created);
       ids.push(created);
     }
@@ -1125,6 +1126,9 @@ export async function syncProxyNodesForHostAddress(hostId: number): Promise<numb
     try {
       await syncProxyNodeFromInbound(inboundId);
       changed.push(inboundId);
+      // 拿这个入站当 Shadowsocks 出口的规则：入口机的 gost 配置里写的是落地地址，地址变了要马上重算。
+      const { refreshEgressDependents } = await import("../ssEgress");
+      await refreshEgressDependents(inboundId, `proxy-inbound-address-${inboundId}`);
     } catch (error) {
       // 一个入站派生失败不该拖垮其余的：地址变更是主机层的动作，剩下的节点仍然要改过来。
       console.warn(

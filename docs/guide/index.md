@@ -73,6 +73,7 @@ NEX 用于管理多台 Linux 服务器上的转发资源、业务规则、用户
 | [隧道链路](./tunnels.md) | GOST、NEX V1/V2、Nginx、多跳和多出口 |
 | [转发链](./port-chains.md) | 固定多跳转发配置 |
 | [主备线路](./failover.md) | 一条规则配主线路和备用线路，挂了自动换 |
+| [落地主机与 Shadowsocks 出口](./ss-egress.md) | 规则经落地主机或外部 ss:// 链接出口，目标看到落地的 IP |
 | [入口组、出口组和转发组](./groups.md) | 资源复用与故障转移 |
 | [邀请返利](./referrals.md) | 邀请链接注册、按套餐比例返利到余额 |
 | [Telegram 和通知](./notifications.md) | 机器人、提醒、用户绑定和 AI 助手 |
