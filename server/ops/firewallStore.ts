@@ -375,6 +375,16 @@ export async function listManagedPorts(hostId: number): Promise<ManagedPorts> {
     [hostId, true],
   );
   for (const row of inbounds as any[]) addByProtocol(ports, row.port, "both");
+  // 共享 TLS 入站（SNI 分流）：只有 TCP。表不在（老库还没迁移）就跳过。
+  try {
+    const tlsInbounds = await queryRaw(
+      `SELECT ${q("port")} FROM ${q("host_tls_inbounds")} WHERE ${q("hostId")} = ? AND ${q("isEnabled")} = ?`,
+      [hostId, true],
+    );
+    for (const row of tlsInbounds as any[]) addByProtocol(ports, row.port, "tcp");
+  } catch {
+    // 少守一个端口而已。
+  }
   try {
     const { getActiveEntryBridgesOnHost } = await import("../repositories/ruleEntryBridgeRepository");
     for (const bridge of await getActiveEntryBridgesOnHost(hostId)) addByProtocol(ports, bridge.sourcePort, bridge.protocol);

@@ -71,6 +71,9 @@ NEX 用于管理多台 Linux 服务器上的转发资源、业务规则、用户
 | [转发链](./port-chains.md) | 固定多跳转发配置 |
 | [主备线路](./failover.md) | 一条规则配主线路和备用线路，挂了自动换 |
 | [入口组、出口组和转发组](./groups.md) | 资源复用与故障转移 |
+| [邀请返利](./referrals.md) | 邀请链接注册、按套餐比例返利到余额 |
 | [Telegram 和通知](./notifications.md) | 机器人、提醒、用户绑定和 AI 助手 |
+| [工单](./tickets.md) | 用户提交工单、管理员处理和回复、工单通知 |
+| [Google 登录](./google-login.md) | 用 Google 账号登录面板：创建 OAuth 客户端、绑定和注册规则 |
 | [升级和备份](./upgrade-backup.md) | 面板升级、数据备份和更新记录 |
 | [插件开发](./plugins.md) | 插件清单、权限、Agent 动作和资源界面 |

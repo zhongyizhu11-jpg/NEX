@@ -5,6 +5,7 @@ import type Database from "better-sqlite3";
 import type pg from "pg";
 import { getDatabaseKind, getPool, getPostgresPool, getSqlite } from "./dbRuntime";
 import { OPS_TABLE_DEFS } from "./ops/opsTables";
+import { IP_CHANGE_TABLE_DEFS } from "./ipChange/tables";
 
 export type ColumnType = "id" | "text" | "longtext" | "varchar" | "int" | "bigint" | "bool" | "epoch";
 
@@ -42,6 +43,8 @@ export const MIGRATION_TABLES = [
   "proxy_nodes",
   "proxy_inbounds",
   "proxy_inbound_users",
+  "host_tls_inbounds",
+  "rule_sni_names",
   "proxy_sub_tokens",
   "proxy_node_shares",
   "host_metrics",
@@ -84,6 +87,8 @@ export const MIGRATION_TABLES = [
   "discount_code_plans",
   "announcements",
   "announcement_reads",
+  "tickets",
+  "ticket_messages",
   "plugins",
   "plugin_store_sources",
   "plugin_assets",
@@ -95,6 +100,11 @@ export const MIGRATION_TABLES = [
   "ops_agent_relay",
   "api_tokens",
   "user_passkeys",
+  "referral_commissions",
+  // 自动换 IP（server/ipChange/tables.ts）：云账号、每台主机的配置、更换记录
+  "ip_change_cloud_accounts",
+  "ip_change_host_configs",
+  "ip_change_events",
 ] as const;
 
 const LAST_AUTO_TRAFFIC_RESET_BACKFILL_MARKER = "last-auto-traffic-reset-backfill-v1";
@@ -202,11 +212,15 @@ const tables: TableDef[] = [
       c("telegramLinkedAt", "epoch"), c("telegramLastSeenAt", "epoch"), c("telegramAnnouncementSubscribed", "bool", { notNull: true, default: false }), c("telegramBindCode", "text"),
       c("telegramBindCodeExpiresAt", "epoch"), c("telegramLoginCode", "text"), c("telegramLoginCodeExpiresAt", "epoch"),
       c("twoFactorEnabled", "bool", { notNull: true, default: false }), c("twoFactorSecret", "text"), c("twoFactorEnabledAt", "epoch"),
+      c("googleSub", "varchar", { length: 191 }), c("googleEmail", "text"), c("googleLinkedAt", "epoch"),
       c("browserSessionToken", "text"), c("mobileSessionToken", "text"), c("telegramSessionToken", "text"),
       c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" }),
       c("lastSignedIn", "epoch", { notNull: true, default: "now" }),
+      // 邀请返利：自己的邀请码（第一次打开邀请页才生成）和邀请人（注册时绑定，见 shared/referral.ts）。
+      c("inviteCode", "varchar", { length: 32 }), c("inviterId", "int"),
     ],
-    unique: [["username"], ["telegramId"], ["telegramBindCode"], ["telegramLoginCode"]],
+    unique: [["username"], ["telegramId"], ["telegramBindCode"], ["telegramLoginCode"], ["inviteCode"], ["googleSub"]],
+    indexes: [["inviterId"]],
   },
   {
     name: "auth_sessions",
@@ -335,6 +349,9 @@ const tables: TableDef[] = [
       c("entryDomainEnabled", "bool", { notNull: true, default: true }),
       c("entryDomain", "varchar", { length: 255 }), c("entryDomainValue", "varchar", { length: 255 }),
       c("entryDomainAt", "epoch"), c("entryDomainError", "text"),
+      // 共享 TLS 入站（shared/tlsInbound.ts）：挂在哪个入站上、按哪些 SNI 分过来（JSON 数组）。
+      // 这类规则的 sourcePort 是面板分的本机回环端口，不对外。
+      c("tlsInboundId", "int"), c("sniNames", "text"),
       c("userId", "int", { notNull: true }), c("createdAt", "epoch", { notNull: true, default: "now" }),
       c("updatedAt", "epoch", { notNull: true, default: "now" }),
     ],
@@ -439,6 +456,40 @@ const tables: TableDef[] = [
       c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" }),
     ],
     indexes: [["inboundId"], ["inboundId", "sortOrder"]],
+  },
+  {
+    /*
+      共享 TLS 入站（SNI 分流，见 shared/tlsInbound.ts）：一台主机上一个 TCP 端口，多条规则按
+      ClientHello 里的 SNI 分走。allowedSni 是 JSON 数组（空 = 全部放行）。
+    */
+    name: "host_tls_inbounds",
+    columns: [
+      c("id", "id"), c("hostId", "int", { notNull: true }),
+      c("name", "text", { notNull: true }), c("port", "int", { notNull: true }),
+      c("isEnabled", "bool", { notNull: true, default: true }),
+      c("allowedSni", "text"),
+      c("rejectEmptySni", "bool", { notNull: true, default: true }),
+      c("unknownSniAction", "varchar", { length: 16, notNull: true, default: "reject" }),
+      c("defaultRuleId", "int"),
+      c("proxyProtocol", "varchar", { length: 8, notNull: true, default: "off" }),
+      c("maxHandshakes", "int", { notNull: true, default: 128 }),
+      c("handshakeTimeoutSeconds", "int", { notNull: true, default: 5 }),
+      c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" }),
+    ],
+    unique: [["hostId", "port"]],
+    indexes: [["hostId"]],
+  },
+  {
+    // 规则在共享入站上占的 SNI：同一个入站里一个名字只能归一条规则（唯一索引兜底），和规则行同一个事务里改。
+    name: "rule_sni_names",
+    columns: [
+      c("id", "id"), c("tlsInboundId", "int", { notNull: true }),
+      c("name", "varchar", { length: 253, notNull: true }),
+      c("ruleId", "int", { notNull: true }),
+      c("createdAt", "epoch", { notNull: true, default: "now" }),
+    ],
+    unique: [["tlsInboundId", "name"]],
+    indexes: [["ruleId"]],
   },
   {
     // 订阅令牌：地址里带着全部节点凭据，所以令牌可单独吊销。
@@ -626,7 +677,7 @@ const tables: TableDef[] = [
   { name: "user_forward_group_permissions", columns: [c("id", "id"), c("userId", "int", { notNull: true }), c("forwardGroupId", "int", { notNull: true }), c("createdAt", "epoch", { notNull: true, default: "now" })], unique: [["userId", "forwardGroupId"]], indexes: [["forwardGroupId"]] },
   { name: "system_settings", columns: [c("key", "varchar", { length: 191, notNull: true }), c("value", "longtext"), c("updatedAt", "epoch", { notNull: true, default: "now" })], unique: [["key"]] },
   { name: "payment_orders", columns: [c("id", "id"), c("outTradeNo", "text", { notNull: true }), c("userId", "int", { notNull: true }), c("provider", "varchar", { length: 32, notNull: true }), c("paymentType", "varchar", { length: 32, notNull: true }), c("status", "varchar", { length: 32, notNull: true, default: "pending" }), c("subject", "text", { notNull: true }), c("amountCents", "bigint", { notNull: true }), c("currency", "varchar", { length: 16, notNull: true, default: "CNY" }), c("tradeNo", "text"), c("payUrl", "text"), c("qrCode", "text"), c("orderType", "varchar", { length: 32, notNull: true, default: "balance" }), c("planId", "int"), c("planDurationDays", "int"), c("subscriptionId", "int"), c("discountCodeId", "int"), c("discountConsumed", "bool", { notNull: true, default: false }), c("discountAmountCents", "bigint", { notNull: true, default: 0 }), c("clientIp", "text"), c("rawNotify", "text"), c("expiresAt", "epoch"), c("paidAt", "epoch"), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], unique: [["outTradeNo"]], indexes: [["userId", "createdAt"], ["status", "createdAt"]] },
-  { name: "subscription_plans", columns: [c("id", "id"), c("name", "text", { notNull: true }), c("description", "text"), c("priceCents", "bigint", { notNull: true, default: 0 }), c("currency", "varchar", { length: 16, notNull: true, default: "CNY" }), c("durationDays", "int", { notNull: true, default: 30 }), c("portCount", "int", { notNull: true, default: 20 }), c("trafficLimit", "bigint", { notNull: true, default: 0 }), c("rateLimitMbps", "int", { notNull: true, default: 0 }), c("maxRules", "int", { notNull: true, default: 20 }), c("maxProxyInbounds", "int", { notNull: true, default: 0 }), c("maxProxySubTokens", "int", { notNull: true, default: 0 }), c("maxConnections", "int", { notNull: true, default: 2000 }), c("maxIPs", "int", { notNull: true, default: 10 }), c("allowProxySubscription", "bool", { notNull: true, default: false }), c("isActive", "bool", { notNull: true, default: true }), c("isStoreVisible", "bool", { notNull: true, default: true }), c("dedicatedProxyPort", "bool", { notNull: true, default: false }), c("sortOrder", "int", { notNull: true, default: 0 }), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })] },
+  { name: "subscription_plans", columns: [c("id", "id"), c("name", "text", { notNull: true }), c("description", "text"), c("priceCents", "bigint", { notNull: true, default: 0 }), c("currency", "varchar", { length: 16, notNull: true, default: "CNY" }), c("durationDays", "int", { notNull: true, default: 30 }), c("portCount", "int", { notNull: true, default: 20 }), c("trafficLimit", "bigint", { notNull: true, default: 0 }), c("rateLimitMbps", "int", { notNull: true, default: 0 }), c("maxRules", "int", { notNull: true, default: 20 }), c("maxProxyInbounds", "int", { notNull: true, default: 0 }), c("maxProxySubTokens", "int", { notNull: true, default: 0 }), c("maxConnections", "int", { notNull: true, default: 2000 }), c("maxIPs", "int", { notNull: true, default: 10 }), c("allowProxySubscription", "bool", { notNull: true, default: false }), c("isActive", "bool", { notNull: true, default: true }), c("isStoreVisible", "bool", { notNull: true, default: true }), c("dedicatedProxyPort", "bool", { notNull: true, default: false }), c("sortOrder", "int", { notNull: true, default: 0 }), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" }), c("referralRateBps", "int", { notNull: true, default: 0 })] },
   // 套餐的多周期定价：一个套餐挂一组「周期 → 价格」。空表示这个套餐只有它自己
   // 那一档（存量数据全是这样），所以升级不需要迁移任何东西。
   { name: "subscription_plan_prices", columns: [c("id", "id"), c("planId", "int", { notNull: true }), c("durationDays", "int", { notNull: true }), c("priceCents", "bigint", { notNull: true, default: 0 }), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], unique: [["planId", "durationDays"]], indexes: [["planId"]] },
@@ -646,11 +697,38 @@ const tables: TableDef[] = [
   { name: "redemption_codes", columns: [c("id", "id"), c("code", "text", { notNull: true }), c("type", "varchar", { length: 32, notNull: true }), c("planId", "int"), c("durationDays", "int"), c("amountCents", "bigint", { notNull: true, default: 0 }), c("startsAt", "epoch"), c("expiresAt", "epoch"), c("isActive", "bool", { notNull: true, default: true }), c("usedByUserId", "int"), c("usedAt", "epoch"), c("createdByUserId", "int"), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], unique: [["code"]], indexes: [["isActive", "startsAt", "expiresAt", "usedAt"]] },
   { name: "discount_codes", columns: [c("id", "id"), c("code", "text", { notNull: true }), c("discountType", "varchar", { length: 32, notNull: true }), c("discountValue", "int", { notNull: true }), c("maxUses", "int", { notNull: true, default: 0 }), c("usedCount", "int", { notNull: true, default: 0 }), c("startsAt", "epoch"), c("expiresAt", "epoch"), c("isActive", "bool", { notNull: true, default: true }), c("createdByUserId", "int"), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], unique: [["code"]], indexes: [["isActive", "startsAt", "expiresAt", "usedCount"]] },
   { name: "discount_code_plans", columns: [c("id", "id"), c("discountCodeId", "int", { notNull: true }), c("planId", "int", { notNull: true }), c("createdAt", "epoch", { notNull: true, default: "now" })], unique: [["discountCodeId", "planId"]], indexes: [["planId"]] },
+  // 邀请返利记录：(sourceType, sourceRef) 唯一，是「同一笔钱只返一次」的幂等锁（见 creditReferralCommissionInTransaction）。
+  { name: "referral_commissions", columns: [c("id", "id"), c("inviterId", "int", { notNull: true }), c("inviteeId", "int", { notNull: true }), c("sourceType", "varchar", { length: 32, notNull: true }), c("sourceRef", "varchar", { length: 128, notNull: true }), c("planId", "int"), c("planName", "text"), c("baseAmountCents", "bigint", { notNull: true, default: 0 }), c("rateBps", "int", { notNull: true, default: 0 }), c("commissionCents", "bigint", { notNull: true, default: 0 }), c("mode", "varchar", { length: 16, notNull: true, default: "first" }), c("createdAt", "epoch", { notNull: true, default: "now" })], unique: [["sourceType", "sourceRef"]], indexes: [["inviterId", "createdAt"], ["inviteeId"], ["createdAt"]] },
   // 下面这几列在 MySQL 上用 LONGTEXT：TEXT 只有 64KB，而公告正文、商店条目缓存、插件资产（上限 512KB，
   // 内置的地区白名单数据就有超过 64KB 的）、Agent 回来的 dataJson（256KB）都可能更大 —— 严格模式下
   // 写入直接报 Data too long，非严格模式下被悄悄截断。SQLite / PG 的 TEXT 没有这个上限。
   { name: "announcements", columns: [c("id", "id"), c("title", "text", { notNull: true }), c("content", "longtext", { notNull: true }), c("type", "varchar", { length: 32, notNull: true, default: "normal" }), c("targetVersion", "text"), c("isActive", "bool", { notNull: true, default: true }), c("startsAt", "epoch"), c("expiresAt", "epoch"), c("createdByUserId", "int"), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], indexes: [["type", "isActive", "updatedAt"], ["type", "targetVersion", "isActive"]] },
   { name: "announcement_reads", columns: [c("id", "id"), c("announcementId", "int", { notNull: true }), c("userId", "int", { notNull: true }), c("dismissedAt", "epoch", { notNull: true, default: "now" })], unique: [["announcementId", "userId"]], indexes: [["userId", "announcementId"]] },
+  /*
+    工单：用户提给管理员的问题单，纯文本，没有附件。status 只有 waiting_staff（等管理员回）/
+    waiting_user（管理员回过了）/ closed 三种，见 server/repositories/ticketRepository.ts。
+    lastMessageAt / lastMessageByStaff 冗余记最后一条消息，列表排序和角标不用再去扫消息表。
+    用户被删后工单留着（userId 悬空），界面显示「已删除用户」。
+  */
+  {
+    name: "tickets",
+    columns: [
+      c("id", "id"), c("userId", "int", { notNull: true }), c("title", "varchar", { length: 128, notNull: true }),
+      c("priority", "varchar", { length: 16, notNull: true, default: "medium" }),
+      c("status", "varchar", { length: 32, notNull: true, default: "waiting_staff" }),
+      c("lastMessageAt", "epoch", { notNull: true, default: "now" }), c("lastMessageByStaff", "bool", { notNull: true, default: false }),
+      c("closedAt", "epoch"), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" }),
+    ],
+    indexes: [["userId", "lastMessageAt"], ["status", "lastMessageAt"], ["lastMessageAt"]],
+  },
+  {
+    name: "ticket_messages",
+    columns: [
+      c("id", "id"), c("ticketId", "int", { notNull: true }), c("senderId", "int"), c("isStaff", "bool", { notNull: true, default: false }),
+      c("content", "longtext", { notNull: true }), c("createdAt", "epoch", { notNull: true, default: "now" }),
+    ],
+    indexes: [["ticketId"]],
+  },
   { name: "plugins", columns: [c("id", "id"), c("pluginId", "varchar", { length: 128, notNull: true }), c("name", "text", { notNull: true }), c("version", "varchar", { length: 64, notNull: true, default: "0.0.0" }), c("description", "text"), c("author", "text"), c("homepage", "text"), c("repository", "text"), c("sourceType", "varchar", { length: 32, notNull: true, default: "github" }), c("sourceUrl", "text"), c("branch", "varchar", { length: 128 }), c("manifestPath", "text"), c("manifestJson", "text", { notNull: true }), c("permissionsJson", "text"), c("extensionPointsJson", "text"), c("status", "varchar", { length: 32, notNull: true, default: "disabled" }), c("trusted", "bool", { notNull: true, default: false }), c("installedAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" }), c("lastCheckedAt", "epoch"), c("latestVersion", "varchar", { length: 64 }), c("lastError", "text")], unique: [["pluginId"]], indexes: [["status"], ["sourceType"]] },
   { name: "plugin_store_sources", columns: [c("id", "id"), c("name", "text", { notNull: true }), c("repository", "text", { notNull: true }), c("branch", "varchar", { length: 128, notNull: true, default: "main" }), c("catalogPath", "text", { notNull: true, default: "forwardx-store.json" }), c("itemsJson", "longtext"), c("lastSyncedAt", "epoch"), c("lastError", "text"), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], unique: [["repository", "branch", "catalogPath"]], indexes: [["updatedAt"]] },
   { name: "plugin_assets", columns: [c("id", "id"), c("pluginId", "varchar", { length: 128, notNull: true }), c("path", "text", { notNull: true }), c("contentType", "varchar", { length: 128 }), c("size", "int", { notNull: true, default: 0 }), c("sha256", "varchar", { length: 64 }), c("content", "longtext"), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], unique: [["pluginId", "path"]], indexes: [["pluginId"]] },
@@ -658,6 +736,7 @@ const tables: TableDef[] = [
   { name: "config_audit_events", columns: [c("id", "id"), c("resourceType", "varchar", { length: 32, notNull: true }), c("resourceId", "int", { notNull: true }), c("hostId", "int"), c("action", "varchar", { length: 32, notNull: true }), c("source", "varchar", { length: 64, notNull: true, default: "system" }), c("actorUserId", "int"), c("actorName", "text"), c("requestId", "varchar", { length: 64 }), c("requestPath", "text"), c("beforeJson", "text"), c("afterJson", "text"), c("diffJson", "text"), c("configHash", "varchar", { length: 64, notNull: true }), c("createdAt", "epoch", { notNull: true, default: "now" })], indexes: [["resourceType", "resourceId", "id"], ["hostId", "id"], ["actorUserId", "id"]] },
   // 第五套主题那批运维功能的表，各功能自己的文件里定义（server/ops/*Tables.ts）。
   ...OPS_TABLE_DEFS,
+  ...IP_CHANGE_TABLE_DEFS,
 ];
 
 const seedSettings = [
@@ -684,6 +763,10 @@ const seedSettings = [
   ["ruleEntryDomainSuffix", ""],
   // 换隧道后旧入口临时桥接保留的小时数，0 为关闭（shared/ruleEntryBridge）。
   ["ruleSwitchBridgeHours", "1"],
+  // 邀请返利（shared/referral.ts）：默认关；开了以后默认只返首单。
+  ["referralEnabled", "false"],
+  ["referralMode", "first"],
+  ["referralForceInvite", "false"],
 ] as const;
 
 export function getDatabaseTableDefs(): readonly TableDef[] {

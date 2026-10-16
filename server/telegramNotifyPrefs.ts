@@ -11,12 +11,17 @@
  */
 import { getAllSettings, setSetting } from "./repositories/settingsRepository";
 
-export type TelegramNotifyCategory = "host" | "rule" | "route";
+export type TelegramNotifyCategory = "host" | "rule" | "route" | "ticket";
 
-export const TELEGRAM_NOTIFY_CATEGORIES: ReadonlyArray<{ key: TelegramNotifyCategory; label: string }> = [
-  { key: "host", label: "主机上下线" },
-  { key: "rule", label: "规则异常" },
-  { key: "route", label: "线路切换" },
+/*
+  adminOnly：只有管理员会收到的那几类，普通用户的通知设置里不列。
+  工单两边都有：管理员收新工单 / 用户回复，用户收管理员的回复。
+*/
+export const TELEGRAM_NOTIFY_CATEGORIES: ReadonlyArray<{ key: TelegramNotifyCategory; label: string; adminOnly: boolean }> = [
+  { key: "host", label: "主机上下线", adminOnly: true },
+  { key: "rule", label: "规则异常", adminOnly: true },
+  { key: "route", label: "线路切换", adminOnly: true },
+  { key: "ticket", label: "工单消息", adminOnly: false },
 ];
 
 export const TELEGRAM_NOTIFY_PREFS_KEY = "telegramNotifyPrefs";

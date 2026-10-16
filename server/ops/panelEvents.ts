@@ -12,7 +12,7 @@ export type PanelEventLevel = "info" | "warn" | "crit";
 
 export const PANEL_EVENT_LEVELS: readonly PanelEventLevel[] = ["info", "warn", "crit"] as const;
 
-/** 事件种类。新功能可以加新的 kind，前端按前缀分组（host. / user. / security. / account. / ops.）。 */
+/** 事件种类。新功能可以加新的 kind，前端按前缀分组（host. / user. / security. / account. / ops. / ticket.）。 */
 export type PanelEventKind =
   | "host.offline"
   | "host.online"
@@ -36,6 +36,8 @@ export type PanelEventKind =
   | "ops.restart_all"
   | "ops.maintenance"
   | "ops.backup"
+  | "ticket.created"
+  | "ticket.replied"
   | (string & {});
 
 export type PanelEventInput = {

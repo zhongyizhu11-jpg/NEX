@@ -43,6 +43,7 @@ const EmailSettingsPage = lazy(() => import("@/pages/EmailSettingsRoute"));
 const ForwardGroupsPage = lazy(routeChunks["/forward-groups"] as () => Promise<{ default: ComponentType<any> }>);
 const HomepagePreviewPage = lazy(() => import("@/pages/HomepagePreview"));
 const HostMonitorPage = lazy(() => import("@/pages/HostMonitor"));
+const IpChangePage = lazy(() => import("@/pages/IpChange"));
 const InsightsPage = lazy(routeChunks["/insights"] as () => Promise<{ default: ComponentType<any> }>);
 const HostsPage = lazy(routeChunks["/hosts"] as () => Promise<{ default: ComponentType<any> }>);
 const MorePage = lazy(routeChunks["/more"] as () => Promise<{ default: ComponentType<any> }>);
@@ -61,6 +62,12 @@ const TrafficBillingPage = lazy(routeChunks["/traffic-billing"] as () => Promise
 const TunnelsPage = lazy(routeChunks["/tunnels"] as () => Promise<{ default: ComponentType<any> }>);
 const UsersPage = lazy(routeChunks["/users"] as () => Promise<{ default: ComponentType<any> }>);
 const WalletPage = lazy(routeChunks["/wallet"] as () => Promise<{ default: ComponentType<any> }>);
+const TicketsPage = lazy(routeChunks["/tickets"] as () => Promise<{ default: ComponentType<any> }>);
+/** 管理员的工单管理：同一个页面组件，换成管理员那套接口。 */
+function AdminTicketsPage() {
+  return <TicketsPage mode="admin" />;
+}
+const ReferralsPage = lazy(routeChunks["/referrals"] as () => Promise<{ default: ComponentType<any> }>);
 
 type RoutableComponent = ComponentType<any>;
 
@@ -161,6 +168,9 @@ function Routes() {
       <Route path="/billing">{() => <AdminRoute component={BillingPage} />}</Route>
       <Route path="/traffic-billing">{() => <AdminRoute component={TrafficBillingPage} />}</Route>
       <Route path="/plans">{() => <AdminRoute component={PlansPage} />}</Route>
+      {/* 自动换 IP 插件的界面是核心页面，旧的插件页链接直接跳过去 */}
+      <Route path="/plugins/sidebar/auto-ip-change"><Redirect to="/ip-change" /></Route>
+      <Route path="/ip-change">{() => <AdminRoute component={IpChangePage} />}</Route>
       <Route path="/plugins/sidebar/:pluginId">
         {(params) => <PluginsRoute sidebarPluginId={params.pluginId} />}
       </Route>
@@ -170,7 +180,11 @@ function Routes() {
       <Route path="/client-subscriptions">{routeComponent(ClientSubscriptionsPage)}</Route>
       <Route path="/proxy-inbounds">{routeComponent(ProxyInboundsPage)}</Route>
       <Route path="/wallet">{routeComponent(WalletPage)}</Route>
+      {/* 邀请返利：返利没开时页面自己说「未开启」，侧边栏也不显示入口。 */}
+      <Route path="/referrals">{routeComponent(ReferralsPage)}</Route>
       <Route path="/announcements">{routeComponent(AnnouncementsPage)}</Route>
+      <Route path="/tickets">{routeComponent(TicketsPage)}</Route>
+      <Route path="/admin/tickets">{() => <AdminRoute component={AdminTicketsPage} />}</Route>
       <Route path="/settings">{() => <AdminRoute component={SettingsPage} />}</Route>
       <Route path="/custom-pages/:pageId">
         {(params) => <LazyBoundary><CustomSidebarPage pageId={params.pageId} /></LazyBoundary>}
@@ -209,13 +223,17 @@ const shellRoutePatterns = [
   "/traffic-billing",
   "/plans",
   "/plugins/sidebar/:pluginId",
+  "/ip-change",
   "/plugins",
   "/store",
   "/subscriptions",
   "/client-subscriptions",
   "/proxy-inbounds",
   "/wallet",
+  "/referrals",
   "/announcements",
+  "/tickets",
+  "/admin/tickets",
   "/settings",
   "/custom-pages/:pageId",
 ];

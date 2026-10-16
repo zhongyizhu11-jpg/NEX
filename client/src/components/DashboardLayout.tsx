@@ -50,6 +50,7 @@ import {
   Package,
   ShoppingBag,
   Megaphone,
+  LifeBuoy,
   Send,
   Copy,
   Link2Off,
@@ -65,6 +66,7 @@ import {
   Puzzle,
   Search,
   Activity,
+  Gift,
   type LucideIcon,
 } from "lucide-react";
 import { useOpsFeatures } from "@/features/ops/useOpsFeatures";
@@ -116,9 +118,15 @@ type SidebarNavItem = {
   menuKey?: SidebarMenuKey;
   iconSrc?: string;
   externalUrl?: string;
+  /** 侧栏右边的小计数（工单管理的待处理数），0 或不给就不画。 */
+  badge?: number;
 };
 
 const announcementsMenuItem: SidebarNavItem = { icon: Megaphone, label: "公告", path: "/announcements", menuKey: "announcements" };
+/** 工单：用户提单的入口跟在商店 / 账单后面；管理员的「工单管理」在管理区。同一个菜单开关管两边。 */
+const userTicketsMenuItem: SidebarNavItem = { icon: LifeBuoy, label: "工单", path: "/tickets", menuKey: "tickets" };
+const ADMIN_TICKETS_PATH = "/admin/tickets";
+const ADMIN_TICKET_COUNTS_POLL_MS = 60 * 1000;
 
 const mainMenuItems: SidebarNavItem[] = [
   { icon: LayoutDashboard, label: "总览", path: "/", menuKey: "dashboard" },
@@ -128,6 +136,8 @@ const mainMenuItems: SidebarNavItem[] = [
   { icon: Rss, label: "订阅管理", path: "/client-subscriptions" },
 ];
 const profileMenuItem: SidebarNavItem = { icon: UserRound, label: "个人资料", path: "/profile", menuKey: "profile" };
+/** 邀请返利：返利没开（publicInfo.referralEnabled）时不显示；管理员也能有自己的邀请码，一样显示。 */
+const referralsMenuItem: SidebarNavItem = { icon: Gift, label: "邀请返利", path: "/referrals", menuKey: "referrals" };
 const lookingGlassMenuItem: SidebarNavItem = { icon: Globe2, label: "网络测试", path: "/looking-glass", menuKey: "lookingGlass" };
 const pluginManagementMenuItem: SidebarNavItem = { icon: Puzzle, label: "插件管理", path: "/plugins", menuKey: "plugins" };
 /** 监控：那批运维功能的入口页（见 client/src/features/ops/useOpsFeatures.ts），只给管理员。 */
@@ -138,6 +148,7 @@ const adminMenuItems: SidebarNavItem[] = [
   { icon: WalletCards, label: "账单与兑换", path: "/billing", menuKey: "billing" },
   { icon: Package, label: "套餐管理", path: "/plans", menuKey: "plans" },
   { icon: Users, label: "用户管理", path: "/users", menuKey: "users" },
+  { icon: LifeBuoy, label: "工单管理", path: ADMIN_TICKETS_PATH, menuKey: "tickets" },
   lookingGlassMenuItem,
   { icon: Settings, label: "系统设置", path: "/settings", menuKey: "settings" },
 ];
@@ -1121,6 +1132,7 @@ function DashboardLayoutContent({
   const canShowProxySubscription = isAdmin || proxySubscriptionPermission.data?.allowed === true;
   const isSidebarNavItemVisible = (item: SidebarNavItem) => {
     if (item.menuKey === "plugins" && publicInfo?.pluginsEnabled !== true) return false;
+    if (item.menuKey === "referrals" && publicInfo?.referralEnabled !== true) return false;
     return !item.menuKey || sidebarMenuSettings[item.menuKey] !== false;
   };
   const filterSidebarNavItems = (items: SidebarNavItem[]) => items.filter(isSidebarNavItemVisible);
@@ -1134,16 +1146,27 @@ function DashboardLayoutContent({
     ))
   );
   const canShowNetworkTest = (isAdmin || publicInfo?.lookingGlassUserEnabled === true) && sidebarMenuSettings.lookingGlass !== false;
-  const userStoreMenuItems = !isAdmin
+  const userStoreMenuItems: SidebarNavItem[] = !isAdmin
     ? [
         { icon: Package, label: "我的套餐", path: "/subscriptions" },
         { icon: ReceiptText, label: "账单中心", path: "/wallet" },
         ...(storeStatus?.enabled ? [{ icon: ShoppingBag, label: "商店", path: "/store" }] : []),
+        ...(isSidebarNavItemVisible(userTicketsMenuItem) ? [userTicketsMenuItem] : []),
       ]
     : [];
+  // 管理员侧栏「工单管理」上的待处理数，一分钟问一次（只数一下，很便宜）。
+  const { data: ticketCounts } = trpc.tickets.adminCounts.useQuery(undefined, {
+    enabled: isAdmin && sidebarMenuSettings.tickets !== false,
+    refetchInterval: ADMIN_TICKET_COUNTS_POLL_MS,
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
+  const waitingTicketCount = Number(ticketCounts?.waitingStaff || 0);
   const visibleAnnouncementsMenuItems = isSidebarNavItemVisible(announcementsMenuItem) ? [announcementsMenuItem] : [];
   const visibleProfileMenuItems = isSidebarNavItemVisible(profileMenuItem) ? [profileMenuItem] : [];
-  const visibleAdminMenuItems = filterSidebarNavItems(opsFeatures ? [insightsMenuItem, ...adminMenuItems] : adminMenuItems);
+  const visibleReferralsMenuItems = isSidebarNavItemVisible(referralsMenuItem) ? [referralsMenuItem] : [];
+  const visibleAdminMenuItems = filterSidebarNavItems(opsFeatures ? [insightsMenuItem, ...adminMenuItems] : adminMenuItems)
+    .map((item) => (item.path === ADMIN_TICKETS_PATH && waitingTicketCount > 0 ? { ...item, badge: waitingTicketCount } : item));
   const customPageMenuItems: SidebarNavItem[] = customSidebarPages.map((page: {
     id: string;
     name: string;
@@ -1158,16 +1181,18 @@ function DashboardLayoutContent({
     ...(page.openMode === "external" ? { externalUrl: page.url } : {}),
   }));
   const pluginPageMenuItems: SidebarNavItem[] = isAdmin
-    ? pluginSidebarPages.map((page: { pluginId: string; label: string; icon?: string }) => ({
+    ? pluginSidebarPages.map((page: { pluginId: string; label: string; icon?: string; corePath?: string }) => ({
         icon: Puzzle,
         iconSrc: page.icon || undefined,
         label: page.label,
-        path: `/plugins/sidebar/${page.pluginId}`,
+        // 功能写在核心里的插件（自动换 IP）：入口直接开核心页面
+        path: page.corePath || `/plugins/sidebar/${page.pluginId}`,
       }))
     : [];
   const primaryMenuItems = [
     ...visibleMainMenuItems,
     ...userStoreMenuItems,
+    ...visibleReferralsMenuItems,
     ...visibleAnnouncementsMenuItems,
   ];
   const otherMenuItems: SidebarNavItem[] = [
@@ -1428,6 +1453,18 @@ function DashboardLayoutContent({
             <item.icon className={cn("sidebar-nav-icon h-4 w-4", isDesktopCollapsed && "h-[18px] w-[18px]")} />
           )}
           <span className={cn(isDesktopCollapsed && "sr-only")}>{item.label}</span>
+          {item.badge ? (
+            isDesktopCollapsed ? (
+              <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-[var(--fx-down)]" aria-label={`${item.badge} 张待处理`} />
+            ) : (
+              <span
+                className="ml-auto min-w-[1.25rem] rounded-full bg-[var(--fx-down-soft)] px-1.5 text-center text-[11px] font-medium leading-5 text-[var(--fx-down-text)]"
+                aria-label={`${item.badge} 张待处理`}
+              >
+                {item.badge > 99 ? "99+" : item.badge}
+              </span>
+            )
+          ) : null}
         </SidebarMenuButton>
       </SidebarMenuItem>
     );

@@ -73,6 +73,7 @@ import { isFreshHostHeartbeat } from "./hostRepository";
 import { assertSafePluginHttpUrl } from "../ssrf";
 import { executePluginPanelRequest, getPluginPanelOperationCapabilities } from "../pluginPanelApi";
 import { getSetting } from "./settingsRepository";
+import { AUTO_IP_CHANGE_PLUGIN_ID, AUTO_IP_CHANGE_ROUTE } from "../../shared/ipChange";
 
 const GITHUB_RE = /^https:\/\/github\.com\/([^/\s]+)\/([^/\s#?]+)(?:[/?#].*)?$/i;
 const FORWARDX_REPO_URL = "https://github.com/zhongyizhu11-jpg/NEX";
@@ -2598,7 +2599,13 @@ function normalizePluginRow(row: any) {
     permissions: parseJson<PluginPermissionKey[]>(row?.permissionsJson, []),
     extensionPoints: parseJson<PluginExtensionPoint[]>(row?.extensionPointsJson, []),
   };
-  const sidebarEnabled = pluginSettingsValues(manifest)[PLUGIN_SIDEBAR_ENABLED_SETTING_KEY] === true;
+  const sidebarSetting = pluginSettingsValues(manifest)[PLUGIN_SIDEBAR_ENABLED_SETTING_KEY];
+  /*
+    自动换 IP 的界面是核心里的页面（/ip-change），插件只是开关：没手动关过侧边栏入口的，默认显示，
+    不然装好启用后还得再去找一个开关才看得到入口。
+  */
+  const sidebarEnabled = sidebarSetting === true
+    || (sidebarSetting === undefined && String(row?.pluginId || manifest?.id || "") === AUTO_IP_CHANGE_PLUGIN_ID);
   return {
     ...normalized,
     sidebarEnabled,
@@ -2628,13 +2635,16 @@ export function resolvePluginSidebarCapability(plugin: any) {
     : undefined;
   if (target === "page" && !page) return null;
 
+  const pluginId = String(plugin.pluginId || manifest.id);
   return {
-    pluginId: String(plugin.pluginId || manifest.id),
+    pluginId,
     label: sidebar.label || plugin.name || manifest.name,
     icon: sidebar.icon || manifest.logo || "",
     target,
     pageId: page?.id || undefined,
-  };
+    /** 功能写在核心里的插件（自动换 IP）：侧边栏入口直接打开核心页面，而不是插件说明页。 */
+    ...(pluginId === AUTO_IP_CHANGE_PLUGIN_ID ? { corePath: AUTO_IP_CHANGE_ROUTE } : {}),
+  } as { pluginId: string; label: string; icon: string; target: string; pageId?: string; corePath?: string };
 }
 
 export function resolvePluginSidebarEntry(plugin: any) {

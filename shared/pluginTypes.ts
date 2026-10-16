@@ -665,6 +665,52 @@ export const BUILTIN_PLUGIN_STORE_ITEMS: PluginStoreItem[] = [
     official: true,
     builtIn: true,
   },
+  {
+    /*
+      自动换 IP：功能写在核心里（server/ipChange/，要用云账号凭据调云厂商接口，插件跑不了后端代码），
+      这个插件是开关和入口 —— 侧边栏入口直接打开核心页面 /ip-change（见 pluginRepository.resolvePluginSidebarCapability）。
+    */
+    id: "auto-ip-change",
+    name: "NEX 自动换 IP",
+    description: "主机 IP 被墙时调用云厂商接口更换公网 IP，入口地址和 DNS 跟着改。",
+    detailsMarkdown: [
+      "NEX 自动换 IP：主机的公网 IP 被墙（连不上中国大陆）时，调用云厂商接口更换 IP，入口地址和 DNS 跟着改。",
+      "",
+      "- 检测由主机自己的 Agent 完成：定时向几个大陆目标发起 TCP 连接或 ping，所有目标连续多轮都不通、且主机对面板在线时才判定被墙，不需要升级 Agent。",
+      "- 云账号凭据在面板数据库里加密保存，接口只回打码后的值。",
+      "- 冷却时间、每日上限防止反复更换；结果不确定时停下等管理员确认，绝不盲目重发。",
+      "- 换完更新主机入口地址、强制刷新主机 DDNS，并通过 Telegram 和事件时间线（Webhook）通知管理员。",
+      "",
+      "功能写在面板核心里（插件不能运行面板后端代码），这个插件是它的开关：安装并启用后，侧边栏出现「自动换 IP」入口。新的弹性 IP 可能产生费用，请先阅读使用说明。",
+    ].join("\n"),
+    version: "1.0.0",
+    releaseDate: "2026-10-16",
+    updatedAt: "2026-10-16",
+    changelog: "首个版本：Agent 探测大陆连通性、云账号加密保存、冷却与每日上限、入口地址与 DDNS 联动、Telegram / 事件通知。",
+    features: [
+      { title: "Agent 自检", description: "主机自己探测大陆目标，全部失败且在线才算被墙。" },
+      { title: "云厂商接口", description: "按云厂商声明的字段填写凭据和实例信息，凭据加密保存。" },
+      { title: "安全兜底", description: "冷却、每日上限、单机串行，结果不确定时停下等确认。" },
+      { title: "地址联动", description: "更新入口地址、强制刷新 DDNS，并通知管理员。" },
+    ],
+    logo: "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+PGRlZnM+PGxpbmVhckdyYWRpZW50IGlkPSJnIiB4MT0iOCIgeTE9IjgiIHgyPSI1NiIgeTI9IjU4Ij48c3RvcCBzdG9wLWNvbG9yPSIjNjBhNWZhIi8+PHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjMWQ0ZWQ4Ii8+PC9saW5lYXJHcmFkaWVudD48L2RlZnM+PHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByeD0iMTgiIGZpbGw9IiNlZmY2ZmYiLz48Y2lyY2xlIGN4PSIzMiIgY3k9IjMyIiByPSIyMiIgZmlsbD0idXJsKCNnKSIvPjxwYXRoIGQ9Ik0yMCAyOGExMiAxMiAwIDAgMSAyMS02bDMtM3Y5aC05bDMtM2E4IDggMCAwIDAtMTQgM3oiIGZpbGw9IiNmZmYiLz48cGF0aCBkPSJNNDQgMzZhMTIgMTIgMCAwIDEtMjEgNmwtMyAzdi05aDlsLTMgM2E4IDggMCAwIDAgMTQtM3oiIGZpbGw9IiNmZmYiLz48L3N2Zz4=",
+    tags: ["ip", "gfw", "cloud", "automation"],
+    license: "AGPL-3.0-only",
+    repository: "https://github.com/zhongyizhu11-jpg/NEX",
+    branch: "main",
+    manifestPath: "plugins/auto-ip-change/forwardx-plugin.json",
+    homepage: "https://github.com/zhongyizhu11-jpg/NEX",
+    author: "NEX",
+    packageRepository: "https://github.com/zhongyizhu11-jpg/NEX",
+    packageBranch: "main",
+    packagePath: "plugins/packages/auto-ip-change.tar.gz",
+    bundledPath: "plugins/auto-ip-change",
+    category: "automation",
+    permissions: ["ui:page"],
+    extensionPoints: ["sidebar.page"],
+    official: true,
+    builtIn: true,
+  },
 ];
 
 export const DEFAULT_PLUGIN_MANIFEST: Pick<ForwardxPluginManifest, "permissions" | "extensionPoints"> = {

@@ -20,6 +20,8 @@ export type MobileNavEntry = {
   externalUrl?: string;
   /** 分组小标题，「更多」页按它分块 */
   group?: string;
+  /** 待处理计数（工单管理），「更多」页在这一行上标出来 */
+  badge?: number;
 };
 
 export type MobileNavContextValue = {

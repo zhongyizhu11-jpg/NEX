@@ -2011,12 +2011,12 @@ async function notifyView(user: any, notice = "") {
     isAdmin ? "这里只改发给你的那一份，不影响其他管理员。" : "",
   ];
   const rows: InlineKeyboardMarkup["inline_keyboard"] = [];
-  if (isAdmin) {
-    for (const category of TELEGRAM_NOTIFY_CATEGORIES) {
-      const on = !isTelegramNotifyMuted(prefs, user.id, category.key);
-      lines.push(`${on ? "✅" : "🔕"} ${category.label}${category.key === "host" && !hostGlobal ? "（面板总开关是关的）" : ""}`);
-      rows.push([{ text: `${on ? "🔕 关闭" : "✅ 打开"}${category.label}`, callback_data: `fx:notify:t:${category.key}` }]);
-    }
+  // 主机 / 规则 / 线路只发给管理员；工单两边都有，普通用户也列出来。
+  for (const category of TELEGRAM_NOTIFY_CATEGORIES) {
+    if (category.adminOnly && !isAdmin) continue;
+    const on = !isTelegramNotifyMuted(prefs, user.id, category.key);
+    lines.push(`${on ? "✅" : "🔕"} ${category.label}${category.key === "host" && !hostGlobal ? "（面板总开关是关的）" : ""}`);
+    rows.push([{ text: `${on ? "🔕 关闭" : "✅ 打开"}${category.label}`, callback_data: `fx:notify:t:${category.key}` }]);
   }
   lines.push(`${digestOn ? "✅" : "🔕"} 每日简报（每天 ${formatDigestHour(await getDigestHour())}）`);
   rows.push([{ text: `${digestOn ? "🔕 关闭" : "✅ 打开"}每日简报`, callback_data: `fx:notify:digest:${digestOn ? "0" : "1"}` }]);
@@ -5945,7 +5945,7 @@ async function handleCallback(query: TelegramCallbackQuery) {
   if (data.startsWith("fx:notify:")) {
     const parts = data.split(":");
     let notice = "";
-    if (parts[2] === "t" && TELEGRAM_NOTIFY_CATEGORIES.some((item) => item.key === parts[3]) && user.role === "admin") {
+    if (parts[2] === "t" && TELEGRAM_NOTIFY_CATEGORIES.some((item) => item.key === parts[3] && (!item.adminOnly || user.role === "admin"))) {
       await updateTelegramNotifyPref(Number(user.id), { toggleCategory: parts[3] as TelegramNotifyCategory });
       notice = "已更新。";
     } else if (parts[2] === "digest") {

@@ -178,6 +178,8 @@ export async function getUserPortCount(userId: number): Promise<number> {
     eq(forwardRules.userId, userId),
     eq(forwardRules.pendingDelete, false),
     sql`${forwardRules.forwardGroupRuleId} IS NULL`,
+    // 挂在共享 TLS 入站上的规则没有自己的对外端口（sourcePort 是本机回环端口），不占端口额度。
+    sql`${forwardRules.tlsInboundId} IS NULL`,
   ));
   return Number(r[0]?.count) || 0;
 }

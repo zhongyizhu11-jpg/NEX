@@ -38,7 +38,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.223"
+var Version = "2.2.224"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -976,6 +976,7 @@ type heartbeatResp struct {
 	ForwardGroupProbes      []forwardGroupProbe      `json:"forwardGroupProbes"`
 	HostProbeServices       []hostProbeServiceProbe  `json:"hostProbeServices"`
 	GuardRules              []guardRule              `json:"guardRules"`
+	SNIInbounds             []sniInboundSpec         `json:"sniInbounds"`
 	DNSWatch                []dnsWatchItem           `json:"dnsWatch"`
 	LookingGlassTests       []lookingGlassTask       `json:"lookingGlassTests"`
 	Iperf3Tasks             []iperf3Task             `json:"iperf3Tasks"`
@@ -1018,6 +1019,7 @@ type heartbeatStateSnapshot struct {
 	ForwardGroupProbes []forwardGroupProbe
 	HostProbeServices  []hostProbeServiceProbe
 	GuardRules         []guardRule
+	SNIInbounds        []sniInboundSpec
 	DNSWatch           []dnsWatchItem
 }
 
@@ -1144,6 +1146,12 @@ func applyHeartbeatState(resp heartbeatResp) heartbeatStateSnapshot {
 			delete(heartbeatStateSignatures, "guardRules")
 		}
 	}
+	if resp.SNIInbounds != nil {
+		heartbeatStateCache.SNIInbounds = append([]sniInboundSpec(nil), resp.SNIInbounds...)
+		if !hasStateSignature("sniInbounds") {
+			delete(heartbeatStateSignatures, "sniInbounds")
+		}
+	}
 	if resp.DNSWatch != nil {
 		heartbeatStateCache.DNSWatch = append([]dnsWatchItem(nil), resp.DNSWatch...)
 		if !hasStateSignature("dnsWatch") {
@@ -1164,6 +1172,7 @@ func applyHeartbeatState(resp heartbeatResp) heartbeatStateSnapshot {
 		ForwardGroupProbes: append([]forwardGroupProbe(nil), heartbeatStateCache.ForwardGroupProbes...),
 		HostProbeServices:  append([]hostProbeServiceProbe(nil), heartbeatStateCache.HostProbeServices...),
 		GuardRules:         append([]guardRule(nil), heartbeatStateCache.GuardRules...),
+		SNIInbounds:        append([]sniInboundSpec(nil), heartbeatStateCache.SNIInbounds...),
 		DNSWatch:           append([]dnsWatchItem(nil), heartbeatStateCache.DNSWatch...),
 	}
 }
@@ -3208,6 +3217,7 @@ func heartbeatStateSnapshotCopy() heartbeatStateSnapshot {
 		ForwardGroupProbes: append([]forwardGroupProbe(nil), heartbeatStateCache.ForwardGroupProbes...),
 		HostProbeServices:  append([]hostProbeServiceProbe(nil), heartbeatStateCache.HostProbeServices...),
 		GuardRules:         append([]guardRule(nil), heartbeatStateCache.GuardRules...),
+		SNIInbounds:        append([]sniInboundSpec(nil), heartbeatStateCache.SNIInbounds...),
 		DNSWatch:           append([]dnsWatchItem(nil), heartbeatStateCache.DNSWatch...),
 	}
 }
@@ -4136,6 +4146,7 @@ func heartbeat(cfg Config, forceReconcile ...bool) (heartbeatResult, error) {
 	payload["agentLastReceivedHash"] = receivedHash
 	payload["agentLastAppliedHash"] = appliedHash
 	payload["fxpEndpointEvents"] = fxpEndpointEventsSnapshot()
+	payload["sniInbounds"] = sniInboundStatusSnapshot()
 	payload["failoverEvents"] = failoverProxyEventsSnapshot()
 	payload["failoverActive"] = failoverActiveSnapshot()
 	payload["failoverStats"] = failoverStatsSnapshot()
@@ -4325,6 +4336,8 @@ func heartbeat(cfg Config, forceReconcile ...bool) (heartbeatResult, error) {
 		ensureCountingChainsIfNeeded(r)
 	}
 	syncProtocolGuardsAfterActions(cfg, state.GuardRules, actionDone)
+	// 共享 TLS 入站：路由表整份换；规则的守卫起来之前拨不通就直接断开，不必等动作做完。
+	syncSNIInbounds(state.SNIInbounds)
 	if resp.ForceTCPing {
 		agentMetricsForceTCPing.Store(true)
 	}
@@ -4374,6 +4387,7 @@ func heartbeatKeepalive(cfg Config) (heartbeatResult, error) {
 		"agentLastReceivedHash":     receivedHash,
 		"agentLastAppliedHash":      appliedHash,
 		"fxpEndpointEvents":         fxpEndpointEventsSnapshot(),
+		"sniInbounds":               sniInboundStatusSnapshot(),
 		"failoverEvents":            failoverProxyEventsSnapshot(),
 		"failoverActive":            failoverActiveSnapshot(),
 		"failoverStats":             failoverStatsSnapshot(),

@@ -45,6 +45,7 @@ import { createSupportBundleTask, failSupportBundleHost, getSupportBundleTask } 
 import { withKeyedTaskLock } from "../keyedTaskLock";
 import { AGENT_ASSET_NAMES } from "../agentAssets";
 import { DEFAULT_DDNS_TTL, maskSecret } from "../ddns";
+import { isGoogleLoginUsable, readGoogleLoginSettings } from "../googleLoginSettings";
 import { reconcileHostDdnsRecords } from "../hostDdns";
 import { normalizeRuleEntryDomainSuffixInput, scheduleRuleEntryDomainReconcile } from "../ruleEntryDomain";
 import { resolveRuleEntryDomainRuntimeSettings } from "../repositories/ruleEntryDomainRepository";
@@ -1842,11 +1843,15 @@ export const systemRouter = router({
       personalizationBackground: publicPersonalizationBackground(all),
       personalizationLiquidGlass: readPersonalizationLiquidGlass(all),
       registrationEnabled: all.registrationEnabled !== "false",
+      // 邀请返利开没开（侧边栏「邀请返利」据此显隐）、注册是否必须带邀请码。
+      ...db.publicReferralFlags(all),
       twoFactorEnabled: all.twoFactorEnabled === "true",
       lookingGlassUserEnabled: all.lookingGlassUserEnabled !== "false",
       allowMultiDeviceLogin: all.allowMultiDeviceLogin === "true",
       pluginsEnabled: all.pluginsEnabled === "true",
       updateAutoCheckEnabled: isUpdateAutoCheckEnabled(all),
+      // 登录页据此显示「使用 Google 登录」：开关开着、客户端 ID / 密钥和面板公开地址都配好了才算。
+      googleLoginEnabled: isGoogleLoginUsable(readGoogleLoginSettings(all)),
       publicHostMonitor: {
         enabled: all.publicHostMonitorEnabled === "true",
         path: normalizePublicHostMonitorPath(all.publicHostMonitorPath),
