@@ -105,7 +105,7 @@ export default function GoogleLoginButton({
       return;
     }
     try {
-      const flow = await appStartMutation.mutateAsync();
+      const flow = await appStartMutation.mutateAsync({ inviteCode: inviteCode || undefined });
       setAppFlow({ flowId: flow.flowId, pollToken: flow.pollToken, expiresAt: Date.now() + flow.expiresInSeconds * 1000 });
       await Browser.open({ url: flow.startUrl });
     } catch (error: any) {

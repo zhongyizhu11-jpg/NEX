@@ -6,7 +6,7 @@ import { maskIdentifier } from "./helpers";
 import { recordPanelEvent } from "../ops/panelEvents";
 import { listUserPasskeys } from "../ops/passkeys";
 import { hasUsablePassword } from "../password";
-import { GOOGLE_START_PATH, googleLoginErrorMessage } from "../../shared/googleLogin";
+import { GOOGLE_START_PATH, googleLoginErrorMessage, sanitizeGoogleInviteCode } from "../../shared/googleLogin";
 import { googleLoginAdminView, isGoogleLoginUsable, planGoogleSettingsUpdate, readGoogleLoginSettings } from "../googleLoginSettings";
 import { setInitialPasswordForPasswordlessUser, unlinkGoogleAccount } from "../repositories/googleAccountRepository";
 import { consumeGoogleStartQuota, googleAppFlows, issueGoogleSessionOrChallenge, sessionErrorCode } from "../googleAuthRoute";
@@ -120,7 +120,9 @@ export const googleAuthRouter = router({
     }),
 
   /** App：发起一次 Google 登录，拿到用系统浏览器打开的地址和轮询凭据。 */
-  appStart: publicProcedure.mutation(async ({ ctx }) => {
+  appStart: publicProcedure
+    .input(z.object({ inviteCode: z.string().max(64).optional() }).optional())
+    .mutation(async ({ ctx, input }) => {
     const settings = readGoogleLoginSettings(await db.getAllSettings());
     if (!isGoogleLoginUsable(settings)) throw new TRPCError({ code: "BAD_REQUEST", message: googleLoginErrorMessage("disabled") });
     const ip = requestIp(ctx);
@@ -129,6 +131,9 @@ export const googleAuthRouter = router({
     const startUrl = new URL(`${settings.panelBaseUrl}${GOOGLE_START_PATH}`);
     startUrl.searchParams.set("mode", "app");
     startUrl.searchParams.set("flow", flow.flowId);
+    // 从邀请链接进来、在 App 里用 Google 注册：邀请码跟着带到浏览器那边的起始地址
+    const inviteCode = sanitizeGoogleInviteCode(input?.inviteCode);
+    if (inviteCode) startUrl.searchParams.set("invite", inviteCode);
     console.info(`[GoogleAuth] app flow started ip=${ip}`);
     return { ...flow, startUrl: startUrl.toString() };
   }),

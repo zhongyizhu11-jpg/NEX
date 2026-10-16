@@ -110,9 +110,10 @@ test("Google 登录在 SQLite 上端到端跑通", () => {
       });
 
       /** 走一遍：start → （假装在 Google 选了账号）→ callback。返回回调的响应。 */
-      async function signIn({ mode = "login", redirect = "/rules", claims, session = null, flow = null, tamper = null }) {
+      async function signIn({ mode = "login", redirect = "/rules", claims, session = null, flow = null, tamper = null, invite = null }) {
         const query = new URLSearchParams({ mode, redirect });
         if (flow) query.set("flow", flow);
+        if (invite) query.set("invite", invite);
         const start = await get("/api/auth/google/start?" + query, { app_session_id: session });
         assert.equal(start.status, 302, "start 应该跳去 Google");
         const google = new URL(start.headers.get("location"));
@@ -291,6 +292,36 @@ test("Google 登录在 SQLite 上端到端跑通", () => {
       result = await signIn({ mode: "app", claims: { sub: "sub-nobody", email: "n@x.io" }, flow: unlinkedFlow.flowId });
       assert.equal(result.response.status, 400);
       assert.deepEqual(googleAppFlows.poll(unlinkedFlow.flowId, unlinkedFlow.pollToken), { status: "failed", code: "not_linked" });
+
+      // 15. 邀请注册：网页和 App 两条路都把邀请码带到 Google 注册；开了「必须邀请注册」时没码不建号
+      await db.setSetting("googleAllowRegistration", "true");
+      await db.setSetting("referralEnabled", "true");
+      await db.setSetting("referralForceInvite", "true");
+      await runtime.executeRaw('UPDATE "users" SET "inviteCode" = ? WHERE "id" = ?', ["ABCD2345", aliceId]);
+      const inviterOf = async (sub) => (await runtime.queryRaw('SELECT "inviterId" FROM "users" WHERE "googleSub" = ?', [sub]))[0]?.inviterId ?? null;
+      // App 里没带码：失败
+      const noInviteFlow = googleAppFlows.create("127.0.0.1");
+      await signIn({ mode: "app", claims: { sub: "sub-app-noinvite", email: "noinvite@example.com" }, flow: noInviteFlow.flowId });
+      assert.deepEqual(googleAppFlows.poll(noInviteFlow.flowId, noInviteFlow.pollToken), { status: "failed", code: "invite_required" });
+      // App 里带了码：建号并记上邀请人
+      const inviteFlow = googleAppFlows.create("127.0.0.1");
+      await signIn({ mode: "app", claims: { sub: "sub-app-invited", email: "appinvited@example.com" }, flow: inviteFlow.flowId, invite: "ABCD2345" });
+      assert.equal(googleAppFlows.poll(inviteFlow.flowId, inviteFlow.pollToken).status, "done");
+      assert.equal(Number(await inviterOf("sub-app-invited")), aliceId);
+      // 网页带码同样生效
+      result = await signIn({ claims: { sub: "sub-web-invited", email: "webinvited@example.com" }, invite: "ABCD2345" });
+      assert.equal(result.response.status, 302);
+      assert.equal(Number(await inviterOf("sub-web-invited")), aliceId);
+      // App 发起接口把邀请码带进系统浏览器打开的起始地址
+      const { googleAuthRouter: googleAuthTrpc } = await import(url("server/routers/googleAuth.ts"));
+      const caller = googleAuthTrpc.createCaller({ req: { headers: {}, ip: "127.0.0.1", socket: { remoteAddress: "127.0.0.1" } }, res: { cookie() {}, clearCookie() {} }, user: null, authSession: null, authFailureReason: null });
+      googleStartLimiter.clear();
+      const appStarted = await caller.appStart({ inviteCode: "ABCD2345" });
+      assert.equal(new URL(appStarted.startUrl).searchParams.get("invite"), "ABCD2345");
+      assert.equal(new URL((await caller.appStart({ inviteCode: "bad code!" })).startUrl).searchParams.get("invite"), null);
+      await db.setSetting("referralForceInvite", "false");
+      await db.setSetting("referralEnabled", "false");
+      await db.setSetting("googleAllowRegistration", "false");
 
       // 日志 / 事件里不出现令牌
       const events = await runtime.queryRaw('SELECT "kind", "message", "dataJson" FROM "panel_events"');

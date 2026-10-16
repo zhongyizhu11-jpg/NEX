@@ -68,3 +68,14 @@ test("没配面板公开地址、没填 ID / 密钥时不让开", () => {
   assert.match(String(planGoogleSettingsUpdate(base, { allowedDomains: "!!!" }).error), /域名/);
   assert.equal(planGoogleSettingsUpdate(base, { allowedDomains: "" }).patch.googleAllowedDomains, null);
 });
+
+test("面板公开地址是 http（不是本机）时不让开，开着的也按没配好处理", () => {
+  // Google 不接受非 localhost 的 http 回调地址：开了也是每次都被 Google 拒
+  const httpPanel = { ...base, panelPublicUrl: "http://panel.example.com/" };
+  assert.equal(isGoogleLoginUsable(readGoogleLoginSettings(httpPanel)), false, "登录页不显示按钮");
+  assert.match(String(planGoogleSettingsUpdate({ ...httpPanel, googleLoginEnabled: "false" }, { enabled: true }).error), /https/);
+  // 本机调试的 localhost 例外
+  const localPanel = { ...base, panelPublicUrl: "http://localhost:3000/" };
+  assert.equal(isGoogleLoginUsable(readGoogleLoginSettings(localPanel)), true);
+  assert.equal(planGoogleSettingsUpdate({ ...localPanel, googleLoginEnabled: "false" }, { enabled: true }).error, null);
+});

@@ -10,7 +10,7 @@
   「真正能用」= 开关开着 + ID / 密钥都填了 + 配了面板公开地址（回调地址要用它拼）。
 */
 import { maskSecret } from "./ddns";
-import { buildGoogleRedirectUri, normalizePanelBaseUrl, parseEmailDomainList } from "../shared/googleLogin";
+import { buildGoogleRedirectUri, isGoogleAcceptableRedirectBase, normalizePanelBaseUrl, parseEmailDomainList } from "../shared/googleLogin";
 
 export const GOOGLE_SETTING_KEYS = {
   enabled: "googleLoginEnabled",
@@ -44,7 +44,8 @@ export function readGoogleLoginSettings(all: Record<string, string | null | unde
 }
 
 export function isGoogleLoginConfigured(settings: GoogleLoginSettings) {
-  return !!(settings.clientId && settings.clientSecret && settings.redirectUri);
+  // Google 只接受 https 的回调地址（本机 localhost 除外）：面板地址后来改成 http 时，按没配好处理，登录页不显示按钮
+  return !!(settings.clientId && settings.clientSecret && settings.redirectUri && isGoogleAcceptableRedirectBase(settings.panelBaseUrl));
 }
 
 /** 登录页能不能显示「使用 Google 登录」。 */
@@ -123,6 +124,9 @@ export function planGoogleSettingsUpdate(all: Record<string, string | null | und
     if (input.enabled) {
       const next = readGoogleLoginSettings({ ...all, ...patch });
       if (!next.panelBaseUrl) return { error: "请先在「面板地址」里填好面板公开地址：Google 回调地址要用它拼出来", patch: {} };
+      if (!isGoogleAcceptableRedirectBase(next.panelBaseUrl)) {
+        return { error: "Google 只接受 https 的回调地址（本机 localhost 除外）：请先把面板公开地址改成 https://…", patch: {} };
+      }
       if (!next.clientId || !next.clientSecret) return { error: "开启前请先填好客户端 ID 和客户端密钥", patch: {} };
     }
     patch[GOOGLE_SETTING_KEYS.enabled] = input.enabled ? "true" : "false";

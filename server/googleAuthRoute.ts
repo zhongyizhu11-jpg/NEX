@@ -258,7 +258,8 @@ async function handleStart(req: Request, res: Response) {
   const binding = readBindingCookie(req) || randomUrlToken(32);
   res.cookie(GOOGLE_BINDING_COOKIE, binding, bindingCookieOptions(req));
   const redirectPath = sanitizeRedirectPath(req.query.redirect, mode === "link" ? "/profile" : "/");
-  const inviteCode = mode === "login" ? sanitizeGoogleInviteCode(req.query.invite) : null;
+  // 登录（网页）和 App 流程都可能注册新账号，邀请码两条路都认；绑定流程用不上
+  const inviteCode = mode === "login" || mode === "app" ? sanitizeGoogleInviteCode(req.query.invite) : null;
   const created = googleAuthStates.create({ mode, redirectPath, userId, appFlowId: flowId, binding, inviteCode });
   const authorizationUrl = buildGoogleAuthorizationUrl({
     clientId: settings.clientId,
