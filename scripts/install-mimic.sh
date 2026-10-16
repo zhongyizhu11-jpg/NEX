@@ -149,34 +149,139 @@ upstream_github_mirrors() {
   printf '%s\n' "$mirrors"
 }
 
-# Download a file from a raw GitHub URL with accelerator + mirror fallback.
-# Variable naming kept compatible with existing test expectations.
-fetch_github_file() {
-  local raw_url="$1"
-  local dest="$2"
-  local url mirror mirrors=()
+# 面板转发 mimic 安装包的地址（面板下发任务时注入，形如 https://panel/api/agent/mimic-assets）。
+# 国内机连不上 GitHub 和公共镜像时，面板（一般在海外）先替它把包拿下来；包有 SHA-256 钉死，
+# 面板或镜像都换不了内容。
+FORWARDX_MIMIC_ASSET_BASE="${FORWARDX_MIMIC_ASSET_BASE:-}"
+# 下载 GitHub / 镜像时走的代理（socks5h:// socks5:// http:// https://），只用于下载，不影响 apt。
+FORWARDX_MIMIC_PROXY="${FORWARDX_MIMIC_PROXY:-}"
+# 最后一次下载失败的原因：notfound（GitHub 或面板明确 404）/ network（连不上、超时、内容不对）
+MIMIC_LAST_DOWNLOAD=""
 
+# 只认干净的 URL 字符（IPv6 的方括号也行），带引号、空格、$ 之类的一律不用
+mimic_asset_base_valid() {
+  local re='^https?://[][A-Za-z0-9._~:/%@-]+$'
+  [[ "$FORWARDX_MIMIC_ASSET_BASE" =~ $re ]]
+}
+
+mimic_proxy_valid() {
+  local re='^(socks5h|socks5|socks4a|socks4|http|https)://[][A-Za-z0-9._~:/%@-]+$'
+  [[ "$FORWARDX_MIMIC_PROXY" =~ $re ]]
+}
+
+# hack3ric/mimic 发布包的 SHA-256（只钉了面板当前目标版本）。不认识的包只做格式检查。
+mimic_known_sha256() {
+  case "${TARGET_VERSION}/$1" in
+    0.7.1/bookworm_mimic_0.7.1-1_amd64.deb) echo d227a95d8c3293f58ace79dfbed72b541a420c6fb490320e10fe98b4566cd950 ;;
+    0.7.1/bookworm_mimic_0.7.1-1_arm64.deb) echo 8d87eab9bc8f509fcf03f4036aa3311322312aba924c3dabe92ac3c0516a31cf ;;
+    0.7.1/bookworm_mimic-dkms_0.7.1-1_amd64.deb) echo ecf2791943374f4b5a603ba73ec52b132ebb6aa5d1e4ff8960cc7106e6c0b4ab ;;
+    0.7.1/bookworm_mimic-dkms_0.7.1-1_arm64.deb) echo 63635494984f28d10910b827e854060d7c4b90afa2d5a39dca5c703c74216c07 ;;
+    0.7.1/trixie_mimic_0.7.1-1_amd64.deb) echo 02facc8883cf5f8f8aea70f3b00beeb11fe26f94c19a168d5030a8b75139b3a2 ;;
+    0.7.1/trixie_mimic_0.7.1-1_arm64.deb) echo 97c227d2754051a7959eb99465c85b8ca9e92cac3322cd15dba51cf03e7a9512 ;;
+    0.7.1/trixie_mimic-dkms_0.7.1-1_amd64.deb) echo 03ec0391d1fc7aa5644f25938b84c37f02fe10727a8833fb30ecffdc99828343 ;;
+    0.7.1/trixie_mimic-dkms_0.7.1-1_arm64.deb) echo 8f3333e6f3233cc946dfd3c9255c6675f5e449fe3bb826f74887a7399277ea3c ;;
+    0.7.1/noble_mimic_0.7.1-1_amd64.deb) echo bc2fce90cf5ff597f8847eb4e571c51eb19190c41d173950e0099121b1896543 ;;
+    0.7.1/noble_mimic_0.7.1-1_arm64.deb) echo 172fbe95624f9dd901d26383ca7f3802b082b4fb933fc85581deedb254ee1d49 ;;
+    0.7.1/noble_mimic-dkms_0.7.1-1_amd64.deb) echo 75ab963becea19d35a9f3ec5696d02475fab87c7377544ef06b37054d232027a ;;
+    0.7.1/noble_mimic-dkms_0.7.1-1_arm64.deb) echo 04be95941b53b313bffb83872a75f8919cd53b55d9f260a1850be4f905fc1d1d ;;
+    *) return 1 ;;
+  esac
+}
+
+file_magic_hex() {
+  od -An -tx1 -N"$2" "$1" 2>/dev/null | tr -d ' \n'
+}
+
+# 下下来的东西是不是真包：镜像出错时常回 200 + 一页 HTML，以前照样拿去 dpkg -i
+mimic_download_valid() {
+  local name="$1" file="$2" want got
+  [ -s "$file" ] || return 1
+  case "$name" in
+    *.deb) [ "$(file_magic_hex "$file" 8)" = "213c617263683e0a" ] || return 1 ;;
+    *.tar.gz|*.tgz) [ "$(file_magic_hex "$file" 2)" = "1f8b" ] || return 1 ;;
+    *.rpm) [ "$(file_magic_hex "$file" 4)" = "edabeedb" ] || return 1 ;;
+  esac
+  want="$(mimic_known_sha256 "$name" 2>/dev/null || true)"
+  if [ -n "$want" ] && command -v sha256sum >/dev/null 2>&1; then
+    got="$(sha256sum "$file" | awk '{print $1}')"
+    [ "$got" = "$want" ] || { log "  ${name}: SHA-256 mismatch (got ${got})"; return 1; }
+  fi
+  return 0
+}
+
+curl_failure_text() {
+  case "$1" in
+    5) echo "proxy host could not be resolved" ;;
+    6) echo "could not resolve host" ;;
+    7) echo "connection failed" ;;
+    28) echo "timed out" ;;
+    35|60) echo "TLS error" ;;
+    52|56) echo "connection reset" ;;
+    97) echo "proxy handshake failed" ;;
+    *) echo "curl exit $1" ;;
+  esac
+}
+
+# 下载一个文件，标准输出打 HTTP 码。第三个参数为 noproxy 时不走 FORWARDX_MIMIC_PROXY（面板地址）。
+mimic_curl() {
+  local url="$1" dest="$2" mode="${3:-}"
+  local -a args=(-sS -L --connect-timeout 10 --max-time 300 --speed-limit 1024 --speed-time 60
+    --retry 1 --retry-delay 2 -o "$dest" -w '%{http_code}')
+  if [ "$mode" != "noproxy" ] && mimic_proxy_valid; then
+    args+=(--proxy "$FORWARDX_MIMIC_PROXY")
+  fi
+  curl "${args[@]}" "$url" 2>/dev/null
+}
+
+# Download a GitHub file: panel relay → accelerator → mirrors → GitHub itself.
+# 每个来源失败的原因都记一行，日志里能看出是连不上、超时、404 还是内容不对。
+fetch_github_file() {
+  local raw_url="$1" dest="$2" panel_url="${3:-}"
+  local name url label mode code rc entry mirror mirrors=() sources=()
+  local authoritative_404=0
+  name="${raw_url##*/}"
+  MIMIC_LAST_DOWNLOAD=""
+
+  [ -n "$panel_url" ] && sources+=("panel|noproxy|${panel_url}")
   if github_accelerator_enabled; then
     url="${GITHUB_ACCELERATOR_URL}/${raw_url}"
-    if curl -fsSL --connect-timeout 10 --max-time 120 -o "$dest" "$url" 2>/dev/null \
-      && [ -s "$dest" ]; then
-      return 0
-    fi
+    sources+=("accelerator||${url}")
   fi
-
   IFS=',' read -r -a mirrors <<< "${FORWARDX_GITHUB_MIRRORS:-$DEFAULT_MIRRORS}"
-  for mirror in "${mirrors[@]}" ""; do
-    if [ -n "$mirror" ]; then
-      url="${mirror%/}/${raw_url}"
-    else
-      url="${raw_url}?ts=${TS}"
+  for mirror in "${mirrors[@]}"; do
+    mirror="${mirror// /}"
+    [ -n "$mirror" ] || continue
+    label="${mirror#*://}"
+    sources+=("mirror ${label%%/*}||${mirror%/}/${raw_url}")
+  done
+  sources+=("github||${raw_url}?ts=${TS}")
+
+  for entry in "${sources[@]}"; do
+    label="${entry%%|*}"; entry="${entry#*|}"
+    mode="${entry%%|*}"; url="${entry#*|}"
+    if [ "$label" = "github" ] && mimic_proxy_valid; then label="github via proxy"; fi
+    rm -f "$dest"
+    rc=0
+    code="$(mimic_curl "$url" "$dest" "$mode")" || rc=$?
+    if [ "$rc" -eq 0 ] && [ "$code" = "200" ]; then
+      if mimic_download_valid "$name" "$dest"; then
+        log "  ${name}: ok via ${label}"
+        return 0
+      fi
+      log "  ${label}: response is not a valid ${name}"
+      continue
     fi
-    if curl -fsSL --connect-timeout 10 --max-time 120 -o "$dest" "$url" 2>/dev/null \
-      && [ -s "$dest" ]; then
-      return 0
+    if [ "$rc" -eq 0 ]; then
+      log "  ${label}: HTTP ${code:-?}"
+      if [ "$code" = "404" ] && { [ "$label" = "panel" ] || [ "${label#github}" != "$label" ]; }; then
+        authoritative_404=1
+      fi
+    else
+      log "  ${label}: $(curl_failure_text "$rc")"
     fi
   done
-
+  rm -f "$dest"
+  if [ "$authoritative_404" = "1" ]; then MIMIC_LAST_DOWNLOAD="notfound"; else MIMIC_LAST_DOWNLOAD="network"; fi
   return 1
 }
 
@@ -557,17 +662,20 @@ install_dkms_deps() {
   esac
 }
 
-# Download a mimic release asset with mirror fallback
+# Download a mimic release asset with panel relay + mirror fallback
 download_mimic_asset() {
-  local asset="$1" dest="$2"
+  local asset="$1" dest="$2" panel_url=""
   local raw_url="https://github.com/${MIMIC_REPO}/releases/download/${TARGET_TAG}/${asset}"
+  if mimic_asset_base_valid; then
+    panel_url="${FORWARDX_MIMIC_ASSET_BASE%/}/${TARGET_TAG}/${asset}"
+  fi
   log "downloading ${asset}"
-  fetch_github_file "$raw_url" "$dest"
+  fetch_github_file "$raw_url" "$dest" "$panel_url"
 }
 
 # Install via pre-built .deb packages (Debian / Ubuntu family)
 install_mimic_deb() {
-  local arch tmp rc=0 codename bin_deb dkms_deb
+  local arch tmp rc=0 codename bin_deb dkms_deb downloads_failed=0
   arch="$(detect_arch)"
   [ -n "$arch" ] || { log "unsupported architecture for .deb install: $(uname -m)"; return 1; }
 
@@ -580,18 +688,29 @@ install_mimic_deb() {
     dkms_deb="${codename}_mimic-dkms_${TARGET_VERSION}-1_${arch}.deb"
     rm -f "$tmp/$bin_deb" "$tmp/$dkms_deb"
     log "trying Mimic Debian assets for ${codename}"
-    if ! download_mimic_asset "$bin_deb" "$tmp/$bin_deb"; then
-      continue
-    fi
-    if ! download_mimic_asset "$dkms_deb" "$tmp/$dkms_deb"; then
-      continue
+    if ! download_mimic_asset "$bin_deb" "$tmp/$bin_deb" \
+      || ! download_mimic_asset "$dkms_deb" "$tmp/$dkms_deb"; then
+      if [ "$MIMIC_LAST_DOWNLOAD" = "notfound" ]; then
+        log "Mimic ${TARGET_VERSION} has no ${codename} packages for ${arch}; trying the next codename"
+        continue
+      fi
+      # 连不上和「没有这个包」是两回事：以前下载失败也接着试下一个代号，最后报「no compatible
+      # assets」，面板只剩 reason=unknown。网络不通换代号也一样不通，直接按下载失败收场。
+      downloads_failed=1
+      break
     fi
 
+    # 跟手动安装一样用 apt 装本地包：依赖（dkms、头文件元包等）一次解决
     rc=0
-    run_logged "dpkg -i ${codename} packages" env DEBIAN_FRONTEND=noninteractive dpkg -i "$tmp/$dkms_deb" "$tmp/$bin_deb" || rc=$?
+    apt_update_once
+    run_logged "apt-get install ${codename} packages" env DEBIAN_FRONTEND=noninteractive \
+      apt-get install -y -q "$tmp/$dkms_deb" "$tmp/$bin_deb" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      rc=0
+      run_logged "dpkg -i ${codename} packages" env DEBIAN_FRONTEND=noninteractive dpkg -i "$tmp/$dkms_deb" "$tmp/$bin_deb" || rc=$?
+    fi
     if [ "$rc" -ne 0 ]; then
       # Fix broken dependencies then retry
-      apt_update_once
       run_logged "apt-get install -f" env DEBIAN_FRONTEND=noninteractive apt-get install -y -f || true
       run_logged "dpkg -i ${codename} packages (retry)" env DEBIAN_FRONTEND=noninteractive dpkg -i "$tmp/$dkms_deb" "$tmp/$bin_deb" || continue
     fi
@@ -614,6 +733,12 @@ install_mimic_deb() {
     MIMIC_FAIL_REASON="dkms-build"
   done < <(detect_deb_codenames)
 
+  if [ "$downloads_failed" = "1" ]; then
+    MIMIC_FAIL_REASON="download"
+    log "could not download the Mimic packages from the panel relay, mirrors or GitHub"
+    log "set a download proxy in the panel (socks5h://host:port or http://host:port), or install by hand"
+    return 1
+  fi
   log "no compatible Mimic Debian assets found for $(uname -m) / $(uname -r)"
   return 1
 }
@@ -653,7 +778,7 @@ _fetch_mimic_source() {
     log "release tarball not found; fetching source archive for ${TARGET_TAG}"
     local archive_url="https://github.com/${MIMIC_REPO}/archive/refs/tags/${TARGET_TAG}.tar.gz"
     fetch_github_file "$archive_url" "$tmp/$src_tar" \
-      || { log "failed to download mimic source archive"; return 1; }
+      || { MIMIC_FAIL_REASON="download"; log "failed to download mimic source archive"; return 1; }
   fi
   tar -xzf "$tmp/$src_tar" -C "$tmp" 2>/dev/null \
     || { log "failed to extract mimic source archive"; return 1; }
@@ -1034,10 +1159,12 @@ main() {
   case "$family" in
     debian)
       # Pre-built packages preferred; silent fallback to source build on 404
-      install_mimic_deb && install_ok=1 \
-        || { log "pre-built .deb packages unavailable; falling back to DKMS source build"; true; }
-      [ "$install_ok" = "1" ] \
-        || { install_mimic_dkms_source && install_ok=1 || true; }
+      install_mimic_deb && install_ok=1 || true
+      # 包下载不下来时源码也是从 GitHub 拿的，再装一整套编译器只会白等十几分钟
+      if [ "$install_ok" != "1" ] && [ "${MIMIC_FAIL_REASON:-}" != "download" ]; then
+        log "pre-built .deb packages unavailable; falling back to DKMS source build"
+        install_mimic_dkms_source && install_ok=1 || true
+      fi
       ;;
     rhel)
       # Pre-built packages preferred; silent fallback to source build on 404
@@ -1070,6 +1197,9 @@ main() {
   restore_mimic_units "${saved_units[@]}"
 
   if [ "$install_ok" != "1" ]; then
+    if [ "${MIMIC_FAIL_REASON:-}" = "download" ]; then
+      die "mimic installation failed: could not download the Mimic ${TARGET_VERSION} packages (GitHub unreachable from this host)"
+    fi
     show_dkms_build_log
     if ! kernel_headers_present; then
       MIMIC_FAIL_REASON="kernel-headers"

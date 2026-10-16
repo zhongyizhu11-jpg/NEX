@@ -27,7 +27,9 @@ import { planAgentUpgradeWaves } from "../agentUpgradeRollout";
 import { billingCalendarParts } from "@shared/billingTime";
 import { normalizeAgentProbeCounts } from "@shared/agentDtos";
 import { buildAgentScriptCommand } from "@shared/agentInstallCommand";
-import { getConfiguredPanelUrl } from "../agentPanelUrl";
+import { getConfiguredPanelUrl, resolvePanelUrl } from "../agentPanelUrl";
+import { mimicAssetRelayBase } from "../mimicAssets";
+import { normalizeMimicDownloadProxy } from "@shared/mimicAssets";
 import { hostEgressShaping, normalizeHostEgressShapingMode, TUNNEL_LINK_MBPS_MAX } from "../tunnelFxpRuntime";
 import { hostEgressShapingStatusView } from "../tunnelLinkShapingView";
 import { parseManualHostAddress } from "@shared/hostManualAddress";
@@ -1072,10 +1074,18 @@ export const hostsRouter = router({
       .input(z.object({
         hostIds: z.array(z.number().int().positive()).min(1).max(50),
         mode: z.enum(["install", "repair"]).default("install"),
+        // 国内机连不上 GitHub 时：只用于下载安装包的代理（socks5h://127.0.0.1:1080、http://host:port）
+        proxy: z.string().trim().max(300).optional().default(""),
       }))
-      .mutation(async ({ input }) => {
+      .mutation(async ({ input, ctx }) => {
+        const proxy = normalizeMimicDownloadProxy(input.proxy);
+        if (proxy === null) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "代理地址格式不对：用 socks5h://IP:端口 或 http://IP:端口，密码里的特殊字符先 URL 编码" });
+        }
         const settings = await db.getAllSettings();
         const script = readMimicInstallerScript();
+        // 面板替主机转发 mimic 包：优先用设置里的面板公网地址（Agent 连的也是它），没配就用当前访问地址
+        const assetBase = mimicAssetRelayBase((await getConfiguredPanelUrl()) || (await resolvePanelUrl(ctx.req)));
         const results: Array<{ hostId: number; ok: boolean; error?: string }> = [];
         for (const hostId of Array.from(new Set(input.hostIds))) {
           const host = await db.getHostById(hostId) as any;
@@ -1091,6 +1101,8 @@ export const hostsRouter = router({
               acceleratorEnabled: settings.githubAcceleratorEnabled === "true",
               acceleratorUrl: settings.githubAcceleratorUrl || "",
               script,
+              assetBase,
+              proxy,
             });
             // 不等下一次常规心跳：推一下让 Agent 马上来取
             pushAgentRefresh(hostId, "mimic-install", { urgent: true });
