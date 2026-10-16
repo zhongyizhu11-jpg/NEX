@@ -2127,6 +2127,9 @@ export async function getUsedPortsOnHost(
     addPort(row.mimicPort);
   });
   for (const port of await getProxyInboundPortsOnHost(hostId)) addPort(port);
+  // 共享 TLS 入站（SNI 分流）在这台机器上占着的端口，停用的也算。
+  // 不分协议：和规则一样，一个端口在 Agent 上只算一份身份（见 protocolConflictCondition）。
+  for (const port of await getTlsInboundPortsOnHostLazy(hostId)) addPort(port);
   // 换隧道后旧入口的临时桥接也在这台机器上真实监听着（见 shared/ruleEntryBridge）；
   // 桥接所属规则自己不算（excludedIds）：规则换回来时老端口要能还给它。
   for (const bridge of await getActiveEntryBridgesOnHost(hostId, excludedIds)) addPort(bridge.sourcePort);
@@ -2163,6 +2166,12 @@ async function getProxyInboundPortsOnHost(hostId: number, excludeInboundId = 0):
     .filter((port) => port > 0);
 }
 
+async function getTlsInboundPortsOnHostLazy(hostId: number, excludeInboundId = 0): Promise<number[]> {
+  // 动态导入：和落地入站同理，避免仓库之间静态成环。
+  const { getTlsInboundPortsOnHost } = await import("./tlsInboundRepository");
+  return getTlsInboundPortsOnHost(hostId, excludeInboundId);
+}
+
 /** 检查某主机上的某端口是否已被占用 */
 export async function isPortUsedOnHost(
   hostId: number,
@@ -2174,6 +2183,8 @@ export async function isPortUsedOnHost(
   allowTunnelListener?: TunnelListenerExemptionInput,
   /** 落地节点改端口时查冲突，把它自己排除掉。 */
   excludeProxyInboundId?: number,
+  /** 共享 TLS 入站改端口时查冲突，把它自己排除掉。 */
+  excludeTlsInboundId?: number,
 ): Promise<boolean> {
   const db = await getDb();
   if (!db) return false;
@@ -2209,6 +2220,9 @@ export async function isPortUsedOnHost(
   if ((Number(entryGroupRows[0]?.count) || 0) > 0) return true;
   // 落地节点（sing-box 入站）也在这台机器上真实监听着 —— 见 getProxyInboundPortsOnHost。
   if ((await getProxyInboundPortsOnHost(hostId, Number(excludeProxyInboundId || 0))).includes(Number(sourcePort))) return true;
+  // 共享 TLS 入站（SNI 分流）的监听端口：规则、隧道、落地节点都不能再用它。
+  // 不分协议：Agent 上的清理和状态都按端口算，UDP 规则和 TCP 入站共用一个端口号会互相踩。
+  if ((await getTlsInboundPortsOnHostLazy(hostId, Number(excludeTlsInboundId || 0))).includes(Number(sourcePort))) return true;
   // 换隧道后旧入口的临时桥接占着的端口，到期前别的规则不能拿（规则自己换回来时除外）。
   if ((await getActiveEntryBridgesOnHost(hostId, excludedIds, Number(sourcePort))).length > 0) return true;
   if ((await opsReservedPortsOnHost(hostId)).includes(Number(sourcePort))) return true;

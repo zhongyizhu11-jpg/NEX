@@ -212,12 +212,22 @@ export const users = table("users", {
   twoFactorEnabled: boolean("twoFactorEnabled").notNull().default(false),
   twoFactorSecret: text("twoFactorSecret"),
   twoFactorEnabledAt: epoch("twoFactorEnabledAt"),
+  // Google 登录（server/googleLoginService.ts）：Google 账号的 sub（永不变的用户 ID）、绑定时的邮箱、绑定时间。
+  // 只按 sub 认人，邮箱只用来显示 —— Google 账号的邮箱是可以改的。
+  googleSub: varchar("googleSub", { length: 191 }).unique(),
+  googleEmail: text("googleEmail"),
+  googleLinkedAt: epoch("googleLinkedAt"),
   browserSessionToken: text("browserSessionToken"),
   mobileSessionToken: text("mobileSessionToken"),
   telegramSessionToken: text("telegramSessionToken"),
   createdAt: epoch("createdAt").notNull().default(nowDefault()),
   updatedAt: epoch("updatedAt").notNull().default(nowDefault()),
   lastSignedIn: epoch("lastSignedIn").notNull().default(nowDefault()),
+  // ===== 邀请返利（shared/referral.ts） =====
+  // 自己的邀请码：8 位、去掉易混字符；第一次打开「邀请返利」页才生成，没打开过的人是 null。
+  inviteCode: varchar("inviteCode", { length: 32 }).unique(),
+  // 邀请人：注册时凭邀请码绑定一次，用户侧接口改不了；管理员可以在用户管理里改 / 清。
+  inviterId: int("inviterId"),
 });
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
@@ -476,6 +486,12 @@ export const forwardRules = table("forward_rules", {
   entryDomainValue: varchar("entryDomainValue", { length: 255 }),
   entryDomainAt: epoch("entryDomainAt"),
   entryDomainError: text("entryDomainError"),
+  /*
+    共享 TLS 入站（shared/tlsInbound.ts）：tlsInboundId 不为空时这条规则没有自己的对外端口，
+    按 sniNames（JSON 数组）里的名字从入站分过来；sourcePort 是面板分配的本机回环端口。
+  */
+  tlsInboundId: int("tlsInboundId"),
+  sniNames: text("sniNames"),
   userId: int("userId").notNull(),
   createdAt: epoch("createdAt").notNull().default(nowDefault()),
   updatedAt: epoch("updatedAt").notNull().default(nowDefault()),
@@ -711,6 +727,38 @@ export const proxyInboundUsers = table("proxy_inbound_users", {
 });
 export type ProxyInboundUser = typeof proxyInboundUsers.$inferSelect;
 export type InsertProxyInboundUser = typeof proxyInboundUsers.$inferInsert;
+
+/**
+ * 共享 TLS 入站（SNI 分流）。一台主机上一个 TCP 端口，多条规则按 ClientHello 的 SNI 分走，
+ * 纯透传、不终止 TLS。见 shared/tlsInbound.ts。
+ */
+export const hostTlsInbounds = table("host_tls_inbounds", {
+  id: serial("id"),
+  hostId: int("hostId").notNull(),
+  name: text("name").notNull(),
+  port: int("port").notNull(),
+  isEnabled: boolean("isEnabled").notNull().default(true),
+  // JSON 数组；空 = 全部放行。`example.com` 含子域名，`.example.com` 只放子域名。
+  allowedSni: text("allowedSni"),
+  rejectEmptySni: boolean("rejectEmptySni").notNull().default(true),
+  unknownSniAction: varchar("unknownSniAction", { length: 16 }).notNull().default("reject"),
+  defaultRuleId: int("defaultRuleId"),
+  proxyProtocol: varchar("proxyProtocol", { length: 8 }).notNull().default("off"),
+  maxHandshakes: int("maxHandshakes").notNull().default(128),
+  handshakeTimeoutSeconds: int("handshakeTimeoutSeconds").notNull().default(5),
+  createdAt: epoch("createdAt").notNull().default(nowDefault()),
+  updatedAt: epoch("updatedAt").notNull().default(nowDefault()),
+});
+export type HostTlsInbound = typeof hostTlsInbounds.$inferSelect;
+
+/** 规则在共享入站上占用的 SNI。(tlsInboundId, name) 唯一。 */
+export const ruleSniNames = table("rule_sni_names", {
+  id: serial("id"),
+  tlsInboundId: int("tlsInboundId").notNull(),
+  name: varchar("name", { length: 253 }).notNull(),
+  ruleId: int("ruleId").notNull(),
+  createdAt: epoch("createdAt").notNull().default(nowDefault()),
+});
 
 /**
  * 订阅令牌。订阅地址里带着全部节点凭据，所以令牌必须不可猜且可单独吊销，
@@ -1336,6 +1384,11 @@ export const subscriptionPlans = table("subscription_plans", {
   sortOrder: int("sortOrder").notNull().default(0),
   createdAt: epoch("createdAt").notNull().default(nowDefault()),
   updatedAt: epoch("updatedAt").notNull().default(nowDefault()),
+  /**
+   * 邀请返利比例，单位基点（1 bps = 0.01%，10000 = 100%）。0 = 这个套餐不返利。
+   * 按套餐分开设：利润薄的套餐可以不返，引流套餐可以多返。
+   */
+  referralRateBps: int("referralRateBps").notNull().default(0),
 });
 export type SubscriptionPlan = typeof subscriptionPlans.$inferSelect;
 export type InsertSubscriptionPlan = typeof subscriptionPlans.$inferInsert;
@@ -1471,7 +1524,7 @@ export type InsertUserTrafficAddon = typeof userTrafficAddons.$inferInsert;
 export const balanceTransactions = table("balance_transactions", {
   id: serial("id"),
   userId: int("userId").notNull(),
-  type: varchar("type", { length: 32 }).notNull(), // admin_recharge | admin_adjust | payment | purchase | redeem | traffic_addon_purchase
+  type: varchar("type", { length: 32 }).notNull(), // admin_recharge | admin_adjust | payment | purchase | redeem | traffic_addon_purchase | referral_commission
   amountCents: bigint("amountCents", { mode: "number" }).notNull(),
   balanceAfterCents: bigint("balanceAfterCents", { mode: "number" }).notNull(),
   description: text("description"),
@@ -1600,6 +1653,35 @@ export const discountCodePlans = table("discount_code_plans", {
 export type DiscountCodePlan = typeof discountCodePlans.$inferSelect;
 export type InsertDiscountCodePlan = typeof discountCodePlans.$inferInsert;
 
+/**
+ * 邀请返利记录：每一行是「被邀请人买了一次套餐，给邀请人返了多少」。
+ *
+ * (sourceType, sourceRef) 唯一，是幂等锁 —— 支付回调重放、维护任务重试、同一笔订单
+ * 被结算两次，都只能插进来一行、只返一次钱。sourceRef：在线支付是订单号
+ * （outTradeNo），余额购买是那笔扣款的余额流水 id。
+ *
+ * 返利本身记在 balance_transactions（type = referral_commission），paymentOrderNo 故意
+ * 留空：那一列被当成「这笔订单是否已入账」的判断依据，带上被邀请人的订单号会让
+ * 被邀请人自己的订单被误判为已入账。
+ */
+export const referralCommissions = table("referral_commissions", {
+  id: serial("id"),
+  inviterId: int("inviterId").notNull(),
+  inviteeId: int("inviteeId").notNull(),
+  sourceType: varchar("sourceType", { length: 32 }).notNull(), // payment_order | balance_purchase
+  sourceRef: varchar("sourceRef", { length: 128 }).notNull(),
+  planId: int("planId"),
+  // 套餐名快照：套餐日后改名或删除，记录里仍是当时买的那个名字。
+  planName: text("planName"),
+  baseAmountCents: bigint("baseAmountCents", { mode: "number" }).notNull().default(0),
+  rateBps: int("rateBps").notNull().default(0),
+  commissionCents: bigint("commissionCents", { mode: "number" }).notNull().default(0),
+  mode: varchar("mode", { length: 16 }).notNull().default("first"), // first | recurring
+  createdAt: epoch("createdAt").notNull().default(nowDefault()),
+});
+export type ReferralCommission = typeof referralCommissions.$inferSelect;
+export type InsertReferralCommission = typeof referralCommissions.$inferInsert;
+
 export const announcements = table("announcements", {
   id: serial("id"),
   title: text("title").notNull(),
@@ -1624,6 +1706,33 @@ export const announcementReads = table("announcement_reads", {
 });
 export type AnnouncementRead = typeof announcementReads.$inferSelect;
 export type InsertAnnouncementRead = typeof announcementReads.$inferInsert;
+
+/** 工单（见 server/repositories/ticketRepository.ts）。status：waiting_staff | waiting_user | closed。 */
+export const tickets = table("tickets", {
+  id: serial("id"),
+  userId: int("userId").notNull(),
+  title: varchar("title", { length: 128 }).notNull(),
+  priority: varchar("priority", { length: 16 }).notNull().default("medium"), // low | medium | high
+  status: varchar("status", { length: 32 }).notNull().default("waiting_staff"),
+  lastMessageAt: epoch("lastMessageAt").notNull().default(nowDefault()),
+  lastMessageByStaff: boolean("lastMessageByStaff").notNull().default(false),
+  closedAt: epoch("closedAt"),
+  createdAt: epoch("createdAt").notNull().default(nowDefault()),
+  updatedAt: epoch("updatedAt").notNull().default(nowDefault()),
+});
+export type Ticket = typeof tickets.$inferSelect;
+export type InsertTicket = typeof tickets.$inferInsert;
+
+export const ticketMessages = table("ticket_messages", {
+  id: serial("id"),
+  ticketId: int("ticketId").notNull(),
+  senderId: int("senderId"),
+  isStaff: boolean("isStaff").notNull().default(false),
+  content: longtext("content").notNull(),
+  createdAt: epoch("createdAt").notNull().default(nowDefault()),
+});
+export type TicketMessage = typeof ticketMessages.$inferSelect;
+export type InsertTicketMessage = typeof ticketMessages.$inferInsert;
 
 export const plugins = table("plugins", {
   id: serial("id"),
@@ -1748,3 +1857,56 @@ export const userForwardGroupPermissions = table("user_forward_group_permissions
 });
 export type UserForwardGroupPermission = typeof userForwardGroupPermissions.$inferSelect;
 export type InsertUserForwardGroupPermission = typeof userForwardGroupPermissions.$inferInsert;
+
+// ===== 自动换 IP（插件 auto-ip-change；建表定义见 server/ipChange/tables.ts，读写走 server/ipChange/repository.ts） =====
+export const ipChangeCloudAccounts = table("ip_change_cloud_accounts", {
+  id: serial("id"),
+  name: varchar("name", { length: 128 }).notNull(),
+  provider: varchar("provider", { length: 64 }).notNull(),
+  /** AES-256-GCM 密文，见 server/ipChange/secrets.ts；永远不直接回给前端。 */
+  credentialsJson: longtext("credentialsJson"),
+  createdAt: epoch("createdAt").notNull().default(nowDefault()),
+  updatedAt: epoch("updatedAt").notNull().default(nowDefault()),
+});
+export type IpChangeCloudAccount = typeof ipChangeCloudAccounts.$inferSelect;
+
+export const ipChangeHostConfigs = table("ip_change_host_configs", {
+  id: serial("id"),
+  hostId: int("hostId").notNull().unique(),
+  enabled: boolean("enabled").notNull().default(false),
+  autoEnabled: boolean("autoEnabled").notNull().default(false),
+  cloudAccountId: int("cloudAccountId"),
+  targetJson: text("targetJson"),
+  checkTargets: text("checkTargets"),
+  checkMethod: varchar("checkMethod", { length: 16 }).notNull().default("tcp"),
+  failureThreshold: int("failureThreshold").notNull().default(5),
+  checkIntervalSeconds: int("checkIntervalSeconds").notNull().default(60),
+  cooldownMinutes: int("cooldownMinutes").notNull().default(30),
+  maxChangesPerDay: int("maxChangesPerDay").notNull().default(3),
+  releaseOldIp: boolean("releaseOldIp").notNull().default(true),
+  state: varchar("state", { length: 32 }).notNull().default("idle"),
+  consecutiveFailures: int("consecutiveFailures").notNull().default(0),
+  lastCheckAt: epoch("lastCheckAt"),
+  lastChangeAt: epoch("lastChangeAt"),
+  lastError: text("lastError"),
+  generation: int("generation").notNull().default(0),
+  createdAt: epoch("createdAt").notNull().default(nowDefault()),
+  updatedAt: epoch("updatedAt").notNull().default(nowDefault()),
+});
+export type IpChangeHostConfig = typeof ipChangeHostConfigs.$inferSelect;
+
+export const ipChangeEvents = table("ip_change_events", {
+  id: serial("id"),
+  hostId: int("hostId").notNull(),
+  triggerKind: varchar("triggerKind", { length: 16 }).notNull().default("manual"),
+  provider: varchar("provider", { length: 64 }),
+  oldIp: varchar("oldIp", { length: 64 }),
+  newIp: varchar("newIp", { length: 64 }),
+  ipRole: varchar("ipRole", { length: 16 }),
+  status: varchar("status", { length: 16 }).notNull().default("running"),
+  error: text("error"),
+  notes: text("notes"),
+  startedAt: epoch("startedAt").notNull().default(nowDefault()),
+  finishedAt: epoch("finishedAt"),
+});
+export type IpChangeEvent = typeof ipChangeEvents.$inferSelect;

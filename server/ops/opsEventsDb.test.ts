@@ -89,7 +89,7 @@ test("events, webhook settings and digest blocks work against a real database", 
       const view = await webhooks.getWebhookSettingsView();
       assert.equal(view.configured, false);
       assert.equal(view.enabled, false);
-      assert.deepEqual(view.categories, ["host", "user", "rule", "account", "security"]);
+      assert.deepEqual(view.categories, ["host", "user", "rule", "account", "security", "ticket"]);
 
       // 简报：默认 9 点、不加块；全开时每块都能出（安全巡检表现在由 hostSecurityTables 建，没有问题时说一句「没有待处理的问题」）
       assert.deepEqual(await digest.getDigestSettings(), { hour: 9, blocks: [] });

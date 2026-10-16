@@ -48,6 +48,14 @@ import { dbBool, sqlBool } from "./repositoryUtils";
 import { pushAgentRefresh } from "../agentEvents";
 import { getUserUsableTrafficBillingResourceIds } from "./trafficBillingRepository";
 import { getSetting, setSetting } from "./settingsRepository";
+import { getReferralSettings } from "./referralRepository";
+import {
+  evaluateReferralCommission,
+  formatRateBps,
+  maskUsername,
+  type ReferralSkipReason,
+  type ReferralSourceType,
+} from "../../shared/referral";
 import { pageResult, pageWindowForTotal, type PageRequest } from "../../shared/pagination";
 import { withKeyedTaskLock, withTrafficBillingUserLock } from "../keyedTaskLock";
 import {
@@ -3225,11 +3233,19 @@ async function addUserBalanceInTransaction(userId: number, amountCents: number, 
   if (next < 0) throw new Error("余额不足");
   const now = Math.floor(Date.now() / 1000);
   await executeRaw(`UPDATE ${q("users")} SET ${q("balanceCents")} = ?, ${q("updatedAt")} = ? WHERE ${q("id")} = ?`, [next, now, userId]);
-  await executeRaw(
-    `INSERT INTO ${q("balance_transactions")} (${q("userId")}, ${q("type")}, ${q("amountCents")}, ${q("balanceAfterCents")}, ${q("description")}, ${q("operatorUserId")}, ${q("paymentOrderNo")}, ${q("redemptionCodeId")}, ${q("createdAt")}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [userId, meta.type, delta, next, meta.description ?? null, meta.operatorUserId ?? null, meta.paymentOrderNo ?? null, meta.redemptionCodeId ?? null, now],
-  );
-  return { balanceCents: next };
+  // 带回流水 id：余额买套餐拿它当这一笔的唯一标识（邀请返利的幂等键，见 purchasePlanWithBalance）。
+  const transactionId = await insertAndGetId("balance_transactions", {
+    userId,
+    type: meta.type,
+    amountCents: delta,
+    balanceAfterCents: next,
+    description: meta.description ?? null,
+    operatorUserId: meta.operatorUserId ?? null,
+    paymentOrderNo: meta.paymentOrderNo ?? null,
+    redemptionCodeId: meta.redemptionCodeId ?? null,
+    createdAt: now,
+  });
+  return { balanceCents: next, transactionId };
 }
 
 
@@ -3486,11 +3502,13 @@ export async function purchasePlanWithBalance(
   // 价格取**选中那一档**，不是套餐主表上的默认价 —— 拿主表价去扣年付的单，
   // 等于按月付的钱卖了一年。
   const amountCents = calculateDiscountedAmount(Number(option.priceCents || 0), discount);
+  let purchaseTransactionId = 0;
   if (amountCents > 0) {
-    await addUserBalance(userId, -amountCents, {
+    const debit = await addUserBalance(userId, -amountCents, {
       type: "purchase",
       description: `购买套餐：${plan.name}（${option.durationDays} 天）`,
     } as any);
+    purchaseTransactionId = Number(debit.transactionId || 0);
   }
   if (discount) await consumeDiscountCode(discount.id);
   const result = await applySubscriptionToUser(
@@ -3502,8 +3520,177 @@ export async function purchasePlanWithBalance(
     option.durationDays,
     subscriptionId || null,
   );
+  /*
+   * 邀请返利：真花了钱（amountCents > 0）才返，0 元套餐不返。和扣款、开通在同一个事务里：
+   * 开通失败回滚时返利一起回滚；返利自己出错只撤销返利那一段，购买照常完成。
+   * 幂等键是这笔扣款的余额流水 id —— 每次购买 / 续费各是一笔，不会撞上别的单。
+   * 扣的是余额，余额是人民币。
+   */
+  if (amountCents > 0 && purchaseTransactionId > 0) {
+    await creditReferralCommissionInTransaction({
+      inviteeId: userId,
+      planId,
+      planName: plan.name,
+      baseAmountCents: amountCents,
+      currency: "CNY",
+      sourceType: "balance_purchase",
+      sourceRef: `balance_tx:${purchaseTransactionId}`,
+    });
+  }
   return result;
   }));
+}
+
+// ==================== Referral commission ====================
+
+const REFERRAL_SAVEPOINT = "nex_referral_commission";
+
+/** 保存点语句：MySQL 走文本协议（预处理语句不一定认 SAVEPOINT），SQLite / PG 走 executeRaw。 */
+async function runReferralSavepointStatement(statement: string) {
+  if (getDatabaseKind() === "mysql") {
+    await queryRaw(statement);
+    return;
+  }
+  await executeRaw(statement);
+}
+
+export type ReferralCreditInput = {
+  inviteeId: number;
+  planId: number;
+  planName?: string | null;
+  /** 被邀请人这一单实际付了多少（折扣之后），分。 */
+  baseAmountCents: number;
+  currency?: string | null;
+  sourceType: ReferralSourceType;
+  /** 幂等键：在线支付是订单号，余额购买是 balance_tx:<扣款流水 id>。 */
+  sourceRef: string;
+};
+
+export type ReferralCommissionResult = {
+  credited: boolean;
+  commissionCents: number;
+  inviterId?: number | null;
+  reason?: ReferralSkipReason | "duplicate" | "error";
+};
+
+/**
+ * 给邀请人记一笔返利。**只在套餐购买的事务里调**：在线支付套餐单发货（payment.ts 的
+ * finalizePaidOrder）、余额买套餐和余额自动续费（purchasePlanWithBalance）。
+ * 充值、兑换码、管理员分配、测试单、转入余额的兜底退款都不走这里 —— 充值不返是因为钱
+ * 之后拿去买套餐时还会返一次，两头都返就重复了。
+ *
+ * 不返的情况在 evaluateReferralCommission 里按顺序判断：返利没开、没有邀请人、邀请人是
+ * 自己、邀请人停用或删了、套餐比例为 0、0 元单、非人民币单（Stripe 可能收别的币种，余额
+ * 是人民币，没有可靠的汇率，干脆不返并记一行日志）、首单模式下已经返过、算出来不足一分。
+ *
+ * 失败不能连累被邀请人的这一单：
+ * - 整段包在一个保存点里（SQLite / MySQL / PG 都支持事务内 SAVEPOINT）。PG 上任何一条语句
+ *   失败都会让整个事务作废，不回滚到保存点的话购买也跟着没了。出错就 ROLLBACK TO SAVEPOINT，
+ *   只撤销返利这一段 —— 返利记录、邀请人余额、返利流水要么一起在，要么一起不在 —— 然后照常返回。
+ * - 保存点名字固定：同一个事务里只会顺序调一次，不会有两段交错；不同事务各有各的保存点。
+ *   固定名也不会挤占 SQLite 的语句缓存。
+ * - 幂等：(sourceType, sourceRef) 唯一。插入用「冲突就什么都不做」的写法，不靠抛唯一约束
+ *   错误（那在 PG 上一样会弄坏事务）；插不进去就是已经返过，不再加钱。
+ *
+ * 返利流水的 paymentOrderNo 必须留空：getBalanceTransactionByPaymentOrderNo 拿它判断「这笔
+ * 订单是否已入账」，带上被邀请人的订单号会让他自己的订单被当成已处理。
+ */
+export async function creditReferralCommissionInTransaction(input: ReferralCreditInput): Promise<ReferralCommissionResult> {
+  return withDatabaseTransaction(async () => {
+    // 保存点建不起来就说不清事务处在什么状态，只能往外抛，让整单按失败处理（会重试）。
+    await runReferralSavepointStatement(`SAVEPOINT ${REFERRAL_SAVEPOINT}`);
+    let result: ReferralCommissionResult;
+    try {
+      result = await creditReferralCommissionUnprotected(input);
+    } catch (error) {
+      // 回滚到保存点再释放；这一步也失败说明事务本身坏了，同样只能往外抛。
+      await runReferralSavepointStatement(`ROLLBACK TO SAVEPOINT ${REFERRAL_SAVEPOINT}`);
+      await runReferralSavepointStatement(`RELEASE SAVEPOINT ${REFERRAL_SAVEPOINT}`);
+      console.warn(`[Referral] commission failed and was rolled back, purchase continues source=${input.sourceType}:${input.sourceRef} invitee=${input.inviteeId}: ${error instanceof Error ? error.message : String(error)}`);
+      return { credited: false, commissionCents: 0, reason: "error" };
+    }
+    await runReferralSavepointStatement(`RELEASE SAVEPOINT ${REFERRAL_SAVEPOINT}`);
+    if (result.reason === "non_cny") {
+      console.warn(`[Referral] skipped non-CNY order source=${input.sourceType}:${input.sourceRef} currency=${input.currency || "-"} invitee=${input.inviteeId}`);
+    } else if (result.credited) {
+      console.info(`[Referral] commission credited inviter=${result.inviterId} invitee=${input.inviteeId} amount=${result.commissionCents} source=${input.sourceType}:${input.sourceRef}`);
+    }
+    return result;
+  });
+}
+
+async function creditReferralCommissionUnprotected(input: ReferralCreditInput): Promise<ReferralCommissionResult> {
+  const q = quoteDbIdentifier;
+  const settings = await getReferralSettings();
+  if (!settings.enabled) return { credited: false, commissionCents: 0, reason: "disabled" };
+  const [invitee] = await queryRaw<{ id: number; username: string; inviterId: number | null }>(
+    `SELECT ${q("id")} AS ${q("id")}, ${q("username")} AS ${q("username")}, ${q("inviterId")} AS ${q("inviterId")} FROM ${q("users")} WHERE ${q("id")} = ?`,
+    [input.inviteeId],
+  );
+  const inviterId = Number(invitee?.inviterId || 0) || null;
+  let inviterActive = false;
+  if (inviterId && inviterId !== input.inviteeId) {
+    const [inviter] = await queryRaw<{ id: number; accountEnabled: unknown }>(
+      `SELECT ${q("id")} AS ${q("id")}, ${q("accountEnabled")} AS ${q("accountEnabled")} FROM ${q("users")} WHERE ${q("id")} = ?`,
+      [inviterId],
+    );
+    inviterActive = !!inviter && dbBool(inviter.accountEnabled, true);
+  }
+  const [plan] = await queryRaw<{ id: number; name: string; referralRateBps: number }>(
+    `SELECT ${q("id")} AS ${q("id")}, ${q("name")} AS ${q("name")}, ${q("referralRateBps")} AS ${q("referralRateBps")} FROM ${q("subscription_plans")} WHERE ${q("id")} = ?`,
+    [input.planId],
+  );
+  let hasPriorCommission = false;
+  if (settings.mode === "first" && inviterId) {
+    const prior = await queryRaw<{ id: number }>(
+      `SELECT ${q("id")} AS ${q("id")} FROM ${q("referral_commissions")} WHERE ${q("inviteeId")} = ? LIMIT 1`,
+      [input.inviteeId],
+    );
+    hasPriorCommission = prior.length > 0;
+  }
+  const baseAmountCents = Math.floor(Number(input.baseAmountCents || 0));
+  const decision = evaluateReferralCommission({
+    enabled: settings.enabled,
+    mode: settings.mode,
+    inviteeId: input.inviteeId,
+    inviterId,
+    inviterActive,
+    rateBps: Number(plan?.referralRateBps || 0),
+    baseAmountCents,
+    currency: input.currency,
+    hasPriorCommission,
+  });
+  if (!decision.eligible) return { credited: false, commissionCents: 0, inviterId, reason: decision.reason };
+
+  const planName = String(input.planName || plan?.name || `套餐 #${input.planId}`);
+  const row: Array<[string, unknown]> = [
+    ["inviterId", inviterId],
+    ["inviteeId", input.inviteeId],
+    ["sourceType", input.sourceType],
+    ["sourceRef", input.sourceRef],
+    ["planId", input.planId],
+    ["planName", planName],
+    ["baseAmountCents", baseAmountCents],
+    ["rateBps", decision.rateBps],
+    ["commissionCents", decision.commissionCents],
+    ["mode", settings.mode],
+    ["createdAt", Math.floor(Date.now() / 1000)],
+  ];
+  const columnSql = row.map(([column]) => q(column)).join(", ");
+  const placeholders = row.map(() => "?").join(", ");
+  const insertSql = getDatabaseKind() === "mysql"
+    ? `INSERT IGNORE INTO ${q("referral_commissions")} (${columnSql}) VALUES (${placeholders})`
+    : `INSERT INTO ${q("referral_commissions")} (${columnSql}) VALUES (${placeholders}) ON CONFLICT (${q("sourceType")}, ${q("sourceRef")}) DO NOTHING`;
+  const inserted = rawAffectedRows(await executeRaw(insertSql, row.map(([, value]) => value)));
+  if (inserted <= 0) return { credited: false, commissionCents: 0, inviterId, reason: "duplicate" };
+
+  await addUserBalanceInTransaction(inviterId as number, decision.commissionCents, {
+    type: "referral_commission",
+    description: `邀请返利：${maskUsername(invitee?.username)} 购买套餐「${planName}」，返利 ${formatRateBps(decision.rateBps)}%`,
+    // 故意不带 paymentOrderNo，见 creditReferralCommissionInTransaction 的说明。
+    paymentOrderNo: null,
+  } as any);
+  return { credited: true, commissionCents: decision.commissionCents, inviterId };
 }
 
 // ==================== Redemption Codes ====================

@@ -16,7 +16,11 @@ import { clearPersistedQueryCache } from "@/lib/queryPersistence";
 import { authErrorMessage } from "@/lib/authErrorMessage";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "@/components/ui/dialog";
 import { ACCOUNT_DISABLED_ERR_MSG } from "@shared/const";
+import { normalizeInviteCode, readInviteCodeFromSearch } from "@shared/referral";
 import OpsLoginExtras from "@/features/ops/account/LoginExtras";
+import GoogleLoginButton from "@/features/googleLogin/GoogleLoginButton";
+import GoogleMark from "@/features/googleLogin/GoogleMark";
+import { parseGoogleLoginReturn, stripGoogleLoginReturnFromUrl } from "@/features/googleLogin/googleLoginReturn";
 
 const REGISTRATION_CLOSED_MESSAGE = "当前注册未开放，请联系管理员";
 
@@ -309,6 +313,9 @@ export default function Login() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [emailCode, setEmailCode] = useState("");
+  // 邀请链接（?invite= / ?ref=）带来的码：预填并锁住，免得被误改掉；手动来的人可以自己填。
+  const linkedInviteCode = readInviteCodeFromSearch(search);
+  const [inviteCode, setInviteCode] = useState(() => linkedInviteCode || "");
   const [captchaAnswer, setCaptchaAnswer] = useState("");
   const [captchaChallenge, setCaptchaChallenge] = useState<CaptchaChallengeState | null>(null);
   const [captchaResetKey, setCaptchaResetKey] = useState(0);
@@ -330,6 +337,30 @@ export default function Login() {
   const telegramWebAppLoginRetryMutateRef = useRef((payload: { initData: string; challenge?: string; mobile?: boolean }) => {
     void payload;
   });
+  // Google 登录要 2FA 时，验证完跳回发起登录时要去的页面（其它登录方式都回首页）。
+  const postLoginPathRef = useRef("/");
+  // Google 登录失败的原因直接写在表单上方：整页跳回来的那一刻 Toaster 可能还没挂好，弹窗会丢；
+  // 而且「先用密码登录再去绑定」这种话，用户要能停下来看清楚。
+  const [googleNotice, setGoogleNotice] = useState<string | null>(null);
+
+  // Google 回调跳回来：?googleError=码 显示原因；#googleTwoFactor=… 弹出双重验证。
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const result = parseGoogleLoginReturn(window.location.search, window.location.hash);
+    if (!result.errorMessage && !result.twoFactor) return;
+    stripGoogleLoginReturnFromUrl();
+    if (result.errorMessage) setGoogleNotice(result.errorMessage);
+    if (result.twoFactor) {
+      postLoginPathRef.current = result.twoFactor.next;
+      setTwoFactorChallenge({
+        challengeId: result.twoFactor.challengeId,
+        username: result.twoFactor.username,
+        expiresAt: Date.now() + result.twoFactor.expiresInSeconds * 1000,
+      });
+      setTwoFactorCode("");
+      toast.info("请输入双重验证验证码");
+    }
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -344,6 +375,10 @@ export default function Login() {
     setMode(nextMode);
   }, [location, search]);
 
+  useEffect(() => {
+    if (linkedInviteCode) setInviteCode(linkedInviteCode);
+  }, [linkedInviteCode]);
+
   const utils = trpc.useUtils();
   const { data: emailConfig } = trpc.auth.emailConfig.useQuery(undefined, {
     enabled: hasMobilePanelUrl && mode === "register",
@@ -356,6 +391,9 @@ export default function Login() {
     refetchOnWindowFocus: false,
   });
   const registrationEnabled = emailConfig?.registrationEnabled !== false && publicInfo?.registrationEnabled !== false;
+  const referralEnabled = emailConfig?.referralEnabled === true || publicInfo?.referralEnabled === true;
+  const referralForceInvite = emailConfig?.referralForceInvite === true || publicInfo?.referralForceInvite === true;
+  const googleLoginEnabled = publicInfo?.googleLoginEnabled === true;
   const siteTitle = resolveSiteTitle(publicInfo?.siteTitle);
   const logoSrc = publicInfo?.siteLogoDataUrl || (resolvedTheme === "dark" ? "/logo-dark.png" : "/logo-light.png");
 
@@ -655,7 +693,7 @@ export default function Login() {
       }
       rememberLoginWelcome(data);
       utils.auth.me.invalidate();
-      window.location.href = "/";
+      window.location.href = postLoginPathRef.current || "/";
     },
     onError: (error) => {
       if (error.message === ACCOUNT_DISABLED_ERR_MSG && mobileAuth.isNative) mobileAuth.clear();
@@ -903,6 +941,10 @@ export default function Login() {
         return;
       }
     }
+    if (referralForceInvite && !normalizeInviteCode(inviteCode)) {
+      toast.error("当前仅支持邀请注册，请填写有效的邀请码");
+      return;
+    }
     if (!captchaAnswer.trim()) {
       toast.error("请先完成人机验证");
       return;
@@ -918,6 +960,8 @@ export default function Login() {
       email: email.trim() || undefined,
       emailCode: emailCode.trim() || undefined,
       capToken: captchaAnswer.trim(),
+      // 返利没开时不带：服务端本来也会忽略，但没必要把链接里的码发过去。
+      inviteCode: referralEnabled ? inviteCode.trim() || undefined : undefined,
     });
   };
 
@@ -949,6 +993,7 @@ export default function Login() {
   };
 
   const cancelTwoFactorLogin = () => {
+    postLoginPathRef.current = "/";
     setTwoFactorChallenge(null);
     setTwoFactorCode("");
     setPassword("");
@@ -1046,6 +1091,15 @@ export default function Login() {
             </div>
           ) : mode === "login" ? (
             <form onSubmit={handleLogin} className="space-y-4">
+              {googleNotice ? (
+                <div role="alert" className="flex items-start gap-2 rounded-lg bg-[var(--fx-down-soft)] p-3 text-sm text-[var(--fx-down-text)]">
+                  <GoogleMark className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span className="min-w-0 flex-1">{googleNotice}</span>
+                  <button type="button" className="shrink-0 text-xs underline opacity-80 hover:opacity-100" onClick={() => setGoogleNotice(null)}>
+                    知道了
+                  </button>
+                </div>
+              ) : null}
               {mobileAuth.isNative && !hasMobilePanelUrl && (
                 <button
                   type="button"
@@ -1120,6 +1174,21 @@ export default function Login() {
                   </>
                 )}
               </Button>
+
+              {googleLoginEnabled && hasMobilePanelUrl ? (
+                <GoogleLoginButton
+                  disabled={isPending}
+                  inviteCode={referralEnabled ? inviteCode : null}
+                  onLoggedIn={(data) => {
+                    rememberLoginWelcome(data);
+                    utils.auth.me.invalidate();
+                    window.location.href = "/";
+                  }}
+                  onTwoFactorRequired={(data) => {
+                    startTwoFactorFromTelegram({ twoFactorRequired: true, ...data });
+                  }}
+                />
+              ) : null}
 
               <OpsLoginExtras disabled={isPending} />
 
@@ -1294,6 +1363,26 @@ export default function Login() {
                 />
               </div>
 
+              {referralEnabled && (
+                <div className="space-y-2">
+                  <Label htmlFor="reg-invite">{referralForceInvite ? "邀请码" : "邀请码（选填）"}</Label>
+                  <Input
+                    id="reg-invite"
+                    type="text"
+                    placeholder={referralForceInvite ? "请输入邀请码" : "没有可以不填"}
+                    value={inviteCode}
+                    onChange={(e) => setInviteCode(e.target.value.toUpperCase())}
+                    maxLength={16}
+                    autoComplete="off"
+                    readOnly={!!linkedInviteCode}
+                    disabled={isPending}
+                    className="font-mono uppercase"
+                  />
+                  {linkedInviteCode && (
+                    <p className="text-xs text-muted-foreground">已通过邀请链接填入邀请码。</p>
+                  )}
+                </div>
+              )}
               <ImageCaptchaField
                 id="reg-captcha"
                 value={captchaAnswer}

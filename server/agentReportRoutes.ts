@@ -1,5 +1,7 @@
 import { Router, Request, Response } from "express";
 import * as db from "./db";
+import { isIpChangeProbeServiceId } from "../shared/ipChange";
+import { ingestIpChangeProbeReports } from "./ipChange/runtime";
 import { appendPanelLog } from "./_core/panelLogger";
 import { isHostMetricsWatching, pushAgentRefresh } from "./agentEvents";
 import { handleTrafficBillingShortfall } from "./trafficBillingRuleBlock";
@@ -1678,9 +1680,15 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
       }
     });
 
-    const expectedServices = serviceResults.length > 0 ? await db.getHostProbeTasksForHost(Number(host.id)) as any[] : [];
+    // 自动换 IP 的探测结果（保留的 serviceId 段）交给 server/ipChange，不写 host_probe_service_stats。
+    const ipChangeServiceResults = serviceResults.filter((report) => isIpChangeProbeServiceId(report.serviceId));
+    ingestIpChangeProbeReports(Number(host.id), ipChangeServiceResults);
+    const regularServiceResults = ipChangeServiceResults.length > 0
+      ? serviceResults.filter((report) => !isIpChangeProbeServiceId(report.serviceId))
+      : serviceResults;
+    const expectedServices = regularServiceResults.length > 0 ? await db.getHostProbeTasksForHost(Number(host.id)) as any[] : [];
     const expectedServiceById = new Map(expectedServices.map((service: any) => [Number(service.serviceId), service]));
-    const serviceStats = serviceResults.flatMap((report) => {
+    const serviceStats = regularServiceResults.flatMap((report) => {
       const serviceId = Number(report.serviceId || 0);
       const expected = expectedServiceById.get(serviceId) as any;
       if (!expected) return [];

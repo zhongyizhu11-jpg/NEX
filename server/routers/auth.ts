@@ -226,7 +226,14 @@ export const authRouter = router({
   emailConfig: publicProcedure.query(async () => {
     const config = await getEmailConfig();
     const registrationEnabled = (await db.getSetting("registrationEnabled")) !== "false";
-    return { verifyRegistration: config.enabled && config.verifyRegistration, registrationEnabled };
+    // 邀请返利：注册页据此决定要不要显示「邀请码」一栏、是不是必填。
+    const referral = await db.getReferralSettings();
+    return {
+      verifyRegistration: config.enabled && config.verifyRegistration,
+      registrationEnabled,
+      referralEnabled: referral.enabled,
+      referralForceInvite: referral.enabled && referral.forceInvite,
+    };
   }),
 
   sendEmailCode: publicProcedure
@@ -430,6 +437,8 @@ export const authRouter = router({
       captchaId: z.string().optional(),
       captchaAnswer: z.string().trim().min(1).max(12).optional(),
       capToken: z.string().trim().min(1).max(256).optional(),
+      /** 邀请码（来自 ?invite= / ?ref= 或手填）。对不上就忽略，除非开了「必须邀请注册」。 */
+      inviteCode: z.string().trim().max(32).optional(),
     }))
     .mutation(async ({ input, ctx }) => {
       const registrationEnabled = (await db.getSetting("registrationEnabled")) !== "false";
@@ -468,11 +477,14 @@ export const authRouter = router({
         }
         verifiedEmail = true;
       }
+      // 放在验证码、邮箱校验之后：拿「邀请码对不对」当探针去猜码，得先过人机验证。
+      const inviterId = await db.resolveRegistrationInviter(input.inviteCode);
       const {
         captchaId: _captchaId,
         captchaAnswer: _captchaAnswer,
         capToken: _capToken,
         emailCode: _emailCode,
+        inviteCode: _inviteCode,
         ...userData
       } = input;
       const id = await db.registerUser({
@@ -481,8 +493,9 @@ export const authRouter = router({
         email: usernameEmail,
         emailVerified: verifiedEmail,
         emailVerifiedAt: verifiedEmail ? new Date() : null,
+        inviterId,
       });
-      console.info(`[Auth] Register success userId=${id} username=${maskIdentifier(usernameEmail)} emailVerified=${verifiedEmail} ip=${getRequestIp(ctx)}`);
+      console.info(`[Auth] Register success userId=${id} username=${maskIdentifier(usernameEmail)} emailVerified=${verifiedEmail} invited=${inviterId ? "yes" : "no"} ip=${getRequestIp(ctx)}`);
       return { id, message: "注册成功，请联系管理员开通权限" };
     }),
 

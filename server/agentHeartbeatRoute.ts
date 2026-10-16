@@ -13,6 +13,7 @@ import { tunnelLinkShaping, hostEgressShaping } from "./tunnelFxpRuntime";
 import { ingestFailoverLineReports } from "./failoverLineReports";
 import { claimTunnelExitReportRequest, hasTunnelExitPort, loadTunnelExitPorts, recordTunnelExitPorts, tunnelExitPortFor, type TunnelExitPortEntry } from "./tunnelExitPorts";
 import * as db from "./db";
+import { getIpChangeProbeTasksForHost, hasPendingIpChangeProbeDelivery } from "./ipChange/runtime";
 import { AGENT_VERSION } from "./_core/systemRouter";
 import { clearHostTcpingRequest, hasHostTcpingRequest, isHostMetricsWatching, pushAgentDesiredState, pushAgentRefresh } from "./agentEvents";
 import { getEnabledProxyInboundsWithUsersByHost } from "./repositories/proxyInboundRepository";
@@ -163,6 +164,7 @@ import { runAgentRuntimeRecovery } from "./agentRuntimeRecovery";
 import { observePresenceCapableHostActivity, registerPresenceCapableHost } from "./agentFastLiveness";
 import { recordAuthenticatedAgentActivity } from "./agentActivity";
 import { recordHostRestartEvent } from "./ops/eventHooks";
+import { buildAgentSniInbounds, isSniRuntimeRule, recordTlsInboundRuntimeStatus, sniRuleRuntimeView } from "./tlsInboundRuntime";
 
 // DNS 解析缓存：ruleId → 主目标上次解析到的 IPv4 地址。
 // 备用线路策略里的域名由 Agent 的 TCP 拨号和健康检查动态解析。
@@ -321,6 +323,8 @@ const AGENT_STATE_SECTION_NAMES = [
   "hostProbeServices",
   "guardRules",
   "dnsWatch",
+  // 共享 TLS 入站（SNI 分流）的路由表，见 server/tlsInboundRuntime.ts。老 Agent 不认这个键，照样回签名也无妨。
+  "sniInbounds",
 ] as const;
 const AGENT_STATE_SIGNATURE_SCHEMA = "v2";
 
@@ -1633,6 +1637,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       normalizeAgentLocalRuntimeState(req.body?.localState),
     );
     const mimicEnvironment = normalizeMimicEnvironment(req.body?.mimicEnvironment);
+    // 共享 TLS 入站的监听状态随心跳带上来（不另开上报路径），只存内存，主机详情里显示。
+    if (Array.isArray(req.body?.sniInbounds)) recordTlsInboundRuntimeStatus(Number(host.id), req.body.sniInbounds);
     const fxpEndpointEvents = Array.isArray(req.body?.fxpEndpointEvents) ? req.body.fxpEndpointEvents.slice(0, 256) : [];
     for (const rawEvent of fxpEndpointEvents) {
       const tunnelId = Math.max(0, Math.floor(Number(rawEvent?.tunnelId || 0)));
@@ -1905,7 +1911,9 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         || hasQueuedIperf3AgentTasks(host.id)
         || hasQueuedPluginAgentTasks(host.id)
         // 排着的 mimic 安装任务只在完整心跳里下发（2.3.441 前漏了这条：配置不变的主机任务永远发不下去）
-        || hasQueuedMimicInstallTask(host.id),
+        || hasQueuedMimicInstallTask(host.id)
+        // 自动换 IP 的探测任务跟着 hostProbeServices 下发；插件刚启停时配置签名没变，得靠这一条把快路径打断。
+        || hasPendingIpChangeProbeDelivery(host.id),
       recoveryTriggered,
       addressChanged: addressApplied,
       hasDnsChanges: dnsChangedReports.length > 0,
@@ -1962,13 +1970,24 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     }
 
     // 获取该主机的转发规则
-    const [rawRules, hostTunnels, forwardProtocolSettings, configRevision] = await Promise.all([
+    const [rawRules, hostTunnels, forwardProtocolSettings, configRevision, hostTlsInbounds] = await Promise.all([
       db.getForwardRulesForAgent(host.id),
       db.getTunnelsByHost(host.id),
       getForwardProtocolSettings(),
       latestConfigRevision(),
+      db.listTlsInboundsByHost(Number(host.id)),
     ]);
-    const gatedRules = await gateForwardRulesForRuntime(rawRules as any[]);
+    /*
+      共享 TLS 入站上的规则：入站不在 / 停用 / Agent 太旧时按停用下发；要发 PROXY 头时守卫先收入站给的头。
+      见 server/tlsInboundRuntime.ts。普通规则原样通过（同一个对象）。
+    */
+    const tlsInboundById = new Map(hostTlsInbounds.map((inbound) => [inbound.id, inbound] as const));
+    const sniRuntimeView = <T extends Record<string, any>>(rule: T): T => sniRuleRuntimeView(rule, {
+      hostId: Number(host.id),
+      agentVersion: effectiveAgentVersion,
+      inboundById: tlsInboundById,
+    });
+    const gatedRules = (await gateForwardRulesForRuntime(rawRules as any[])).map(sniRuntimeView);
     /*
       换隧道后旧入口的临时桥接（server/ruleEntryBridges）：合成成普通的 iptables 规则行接在
       后面，下面整条下发流程原样生成动作、计数、孤儿清理。桥接到期或删掉后这一行消失，
@@ -2349,7 +2368,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       Number(host.id),
       (hostTunnels as any[]).map((tunnel: any) => Number(tunnel.id)),
     );
-    const agentAllRules = await gateForwardRulesForRuntime(rawAgentAllRules as any[]);
+    const agentAllRules = (await gateForwardRulesForRuntime(rawAgentAllRules as any[])).map(sniRuntimeView);
     const forwardGroupHealthConfigs = await db.getForwardGroupHealthConfigs(([...agentAllRules, ...agentHostRules] as any[])
       .map((rule: any) => Number(rule?.forwardGroupId || 0)));
     const forwardGroupRuntimeConfigById = new Map((forwardGroupHealthConfigs as any[])
@@ -3932,6 +3951,9 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       // 旧入口桥接只是把流量原样递给新入口，限速、协议封禁由新入口上的规则本身执行；
       // 这里再套一层守卫会多一个用户态进程，还会让同一份限速串联两次。
       if (isEntryBridgeRuntimeRule(rule)) return false;
+      // 共享 TLS 入站上的规则一律由守卫在回环上接（入站把连接交到 127.0.0.1:sourcePort），
+      // 计数、限速和普通规则同一套。
+      if (isSniRuntimeRule(rule)) return true;
       const tunnel = tunnelForRule(rule);
       const nginxTunnelEntry = isNginxTunnelEntryRule(rule, tunnel);
       const rateLimits = guardRateLimitForRule(rule);
@@ -5498,6 +5520,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
               ruleId: rule.id,
               tunnelId: 0,
               listenPort: Number(rule.sourcePort),
+              ...(isSniRuntimeRule(rule) ? { bindAddress: "127.0.0.1" } : {}),
               targetIp: guardTarget.targetIp,
               targetPort: guardTarget.targetPort,
               backendPort: guardTarget.backendPort,
@@ -5593,6 +5616,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
             ruleId: rule.id,
             tunnelId: 0,
             listenPort: Number(rule.sourcePort),
+            ...(isSniRuntimeRule(rule) ? { bindAddress: "127.0.0.1" } : {}),
             targetIp: guardTarget.targetIp,
             targetPort: guardTarget.targetPort,
             backendPort: guardTarget.backendPort,
@@ -6457,7 +6481,11 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       })
       .filter(Boolean)
       .sort((left: any, right: any) => Number(left.ruleId) - Number(right.ruleId));
-    const hostProbeServices = await db.getHostProbeTasksForHost(host.id);
+    // 自动换 IP 的探测借同一个通道下发（保留的 serviceId 段，不进 host_probe_services 表），见 server/ipChange/。
+    const hostProbeServices = [
+      ...await db.getHostProbeTasksForHost(host.id),
+      ...await getIpChangeProbeTasksForHost(Number(host.id)),
+    ];
 
     if (isAgentVersionAtLeast(String((host as any).agentVersion || ""), AGENT_FORWARDX_WIREGUARD_VERSION)) {
       for (const tunnel of hostTunnels as any[]) {
@@ -7097,6 +7125,12 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     for (const entryHostId of recordTunnelExitPorts(Number(host.id), tunnelExitPortEntries)) {
       pushAgentRefresh(entryHostId, "tunnel-exit-ports-changed");
     }
+    const sniInbounds = buildAgentSniInbounds({
+      hostId: Number(host.id),
+      agentVersion: effectiveAgentVersion,
+      inbounds: hostTlsInbounds,
+      rules,
+    });
     const stateSections = buildAgentStateResponseSections({
       runningRules,
       ruleLatencyProbes,
@@ -7105,6 +7139,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       hostProbeServices,
       guardRules,
       dnsWatch: Array.from(dnsWatches.values()),
+      sniInbounds,
     }, agentStateSignatures);
     const probeStateRefreshed = ["runningRules", "ruleLatencyProbes", "tunnelProbes", "forwardGroupProbes", "hostProbeServices"]
       .some((name) => Object.prototype.hasOwnProperty.call(stateSections.payload, name));

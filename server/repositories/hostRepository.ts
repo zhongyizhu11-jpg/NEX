@@ -732,6 +732,9 @@ export async function deleteHost(id: number) {
   for (const inbound of await getProxyInboundsByHost(id)) {
     await deleteProxyInbound(Number((inbound as any).id));
   }
+  // 共享 TLS 入站和规则在上面占的 SNI 一起删（规则行下面整批删）。
+  const { deleteTlsInboundsForHost } = await import("./tlsInboundRepository");
+  await deleteTlsInboundsForHost(id);
   // 这台机器上的规则整批删行：先把它们发布过的专属域名记进待删表（见 ruleEntryDomainRepository）。
   const retiredRuleDomains = await recordRuleEntryDomainCleanupsBeforeDelete({ hostId: id }).catch(() => 0);
   await db.delete(forwardRules).where(eq(forwardRules.hostId, id));

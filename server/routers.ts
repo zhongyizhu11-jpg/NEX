@@ -10,16 +10,21 @@ import { forwardGroupsRouter } from "./routers/forwardGroups";
 import { hostsRouter } from "./routers/hosts";
 import { lookingGlassRouter } from "./routers/lookingGlass";
 import { plansRouter } from "./routers/plans";
+import { referralRouter } from "./routers/referral";
 import { pluginsRouter } from "./routers/plugins";
 import { proxyInboundsRouter } from "./routers/proxyInbounds";
 import { proxySubscriptionsRouter } from "./routers/proxySubscriptions";
 import { rulesRouter } from "./routers/rules";
 import { setupRouter } from "./routers/setup";
 import { telegramRouter } from "./routers/telegram";
+import { ticketsRouter } from "./routers/tickets";
 import { trafficBillingRouter } from "./routers/trafficBilling";
 import { tunnelsRouter } from "./routers/tunnels";
+import { tlsInboundsRouter } from "./routers/tlsInbounds";
 import { usersRouter } from "./routers/users";
 import { opsRouter } from "./routers/ops";
+import { ipChangeRouter } from "./routers/ipChange";
+import { googleAuthRouter } from "./routers/googleAuth";
 
 export const appRouter = router({
   system: systemRouter,
@@ -27,6 +32,7 @@ export const appRouter = router({
   payment: paymentRouter,
   billing: billingRouter,
   plans: plansRouter,
+  referral: referralRouter,
   plugins: pluginsRouter,
   auth: authRouter,
   dashboard: dashboardRouter,
@@ -40,9 +46,13 @@ export const appRouter = router({
   trafficBilling: trafficBillingRouter,
   agentTokens: agentTokensRouter,
   proxyInbounds: proxyInboundsRouter,
+  tlsInbounds: tlsInboundsRouter,
   proxySubscriptions: proxySubscriptionsRouter,
   announcements: announcementsRouter,
+  tickets: ticketsRouter,
   ops: opsRouter,
+  ipChange: ipChangeRouter,
+  googleAuth: googleAuthRouter,
 });
 
 export type AppRouter = typeof appRouter;

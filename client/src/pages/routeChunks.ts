@@ -17,6 +17,9 @@ export const routeChunks: Record<string, () => Promise<unknown>> = {
   "/profile": () => import("@/pages/Profile"),
   "/settings": () => import("@/pages/Settings"),
   "/announcements": () => import("@/pages/Announcements"),
+  // 用户的工单和管理员的工单管理是同一个页面组件，同一个包。
+  "/tickets": () => import("@/pages/Tickets"),
+  "/admin/tickets": () => import("@/pages/Tickets"),
   "/subscriptions": () => import("@/pages/Subscriptions"),
   "/looking-glass": () => import("@/pages/LookingGlass"),
   "/users": () => import("@/pages/Users"),
@@ -24,6 +27,7 @@ export const routeChunks: Record<string, () => Promise<unknown>> = {
   "/billing": () => import("@/pages/Billing"),
   "/payments": () => import("@/pages/Payments"),
   "/wallet": () => import("@/pages/Wallet"),
+  "/referrals": () => import("@/pages/Referrals"),
   "/store": () => import("@/pages/Store"),
   "/forward-groups": () => import("@/pages/ForwardGroupsRoute"),
   "/proxy-inbounds": () => import("@/pages/ProxyInbounds"),

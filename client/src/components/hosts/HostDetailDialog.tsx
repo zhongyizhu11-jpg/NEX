@@ -15,6 +15,8 @@ import { useHostVitals } from "./useHostVitals";
 import { useAuth } from "@/_core/hooks/useAuth";
 import OpsHostDetailExtraSections from "@/features/ops/slots/HostDetailExtraSections";
 import MimicInstallPanel from "./MimicInstallPanel";
+import HostIpChangeSection from "./HostIpChangeSection";
+import { HostTlsInboundSection } from "./HostTlsInboundManager";
 
 /**
  * 主机详情 —— Detail 态。
@@ -194,7 +196,14 @@ export default function HostDetailDialog(props: HostDetailDialogProps) {
             />
           </Section>
 
+          {user?.role === "admin" && (
+            <Section title="共享 TLS 入站">
+              <HostTlsInboundSection hostId={Number(host.id)} />
+            </Section>
+          )}
+
           <OpsHostDetailExtraSections host={host} isAdmin={user?.role === "admin"} />
+          {user?.role === "admin" ? <HostIpChangeSection hostId={Number(host.id)} /> : null}
         </div>
 
         <div className="flex items-center justify-end border-t border-[var(--fx-stroke-weak)] pt-3">

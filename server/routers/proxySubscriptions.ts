@@ -121,7 +121,8 @@ async function adoptRulesForNewProxyNode(
   try {
     const rules = await db.getForwardRules(Number(userId));
     const matched = rulesMatchingProxyNode(
-      (rules as any[]).map((rule) => ({
+      // 共享 TLS 入站上的规则入口是用户自己的域名 + 入站端口，订阅生成不了正确地址，不接。
+      (rules as any[]).filter((rule) => !(Number(rule.tlsInboundId || 0) > 0)).map((rule) => ({
         id: Number(rule.id),
         targetIp: rule.targetIp,
         targetPort: rule.targetPort,
@@ -410,6 +411,9 @@ export const proxySubscriptionsRouter = router({
     .mutation(async ({ ctx, input }) => {
       await assertProxySubscriptionAllowed(ctx);
       const rule = await assertOwnedRule(input.ruleId, ctx);
+      if (input.proxyNodeId !== null && Number((rule as any).tlsInboundId || 0) > 0) {
+        throw new Error("共享 TLS 入站上的规则暂不支持绑定到订阅节点（入口是你自己的域名）");
+      }
       if (input.proxyNodeId !== null) {
         const node = await assertOwnedNode(input.proxyNodeId, ctx);
         /**

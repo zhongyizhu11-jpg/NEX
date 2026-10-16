@@ -115,6 +115,7 @@ import {
 } from "lucide-react";
 import { OpsAdvancedSettingsPane, OpsBackupExtraSections, OpsTelegramExtraSections, OpsWebhookSettingsPane } from "@/features/ops/slots/SettingsPanes";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import GoogleLoginSettingsCard from "@/components/settings/GoogleLoginSettingsCard";
 import { useCallback, useMemo, useRef, useState, useEffect } from "react";
 import { SaveDockBar, SaveDockProvider, useSaveDockActive, useSaveDockItem } from "@/components/settings/SaveDock";
 import { UiThemeDot } from "@/components/UiThemeQuickSwitch";
@@ -6188,6 +6189,8 @@ function SystemInfoSection() {
           </CardContent>
         </Card>
       </div>
+
+      <GoogleLoginSettingsCard />
 
       <Card className="border-border bg-card">
         <CardHeader>

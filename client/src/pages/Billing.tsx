@@ -25,6 +25,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { SlidingTabsList, type SlidingTabItem } from "@/components/ui/sliding-tabs";
 import { useUrlTab } from "@/hooks/useUrlTab";
+import AdminReferralPanel from "@/components/referral/AdminReferralPanel";
 import { trpc } from "@/lib/trpc";
 import { CreditCard, Download, Eye, EyeOff, Gift, Package, ReceiptText, Shuffle, TicketPercent, Trash2, WalletCards } from "lucide-react";
 import { useEffect, useMemo, useState, type ElementType, type ReactNode } from "react";
@@ -32,14 +33,15 @@ import { toast } from "sonner";
 
 const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const BILLING_CODE_BODY_LENGTH = 24;
-type BillingTab = "ledger" | "subscriptions" | "balance" | "redeem" | "discount";
-const BILLING_TABS = ["ledger", "subscriptions", "balance", "redeem", "discount"] as const;
+type BillingTab = "ledger" | "subscriptions" | "balance" | "redeem" | "discount" | "referral";
+const BILLING_TABS = ["ledger", "subscriptions", "balance", "redeem", "discount", "referral"] as const;
 const BILLING_TAB_ITEMS = [
   { value: "ledger", label: "账单流水" },
   { value: "subscriptions", label: "订阅记录" },
   { value: "balance", label: "余额流水" },
   { value: "redeem", label: "兑换码" },
   { value: "discount", label: "折扣码" },
+  { value: "referral", label: "邀请返利" },
 ] as const satisfies readonly SlidingTabItem<BillingTab>[];
 const BILLING_TAB_STORAGE_KEY = "forwardx.billing.tab";
 
@@ -1075,6 +1077,10 @@ export default function Billing() {
               </CardContent>
             </Card>
             <PersistentPagination pagination={discountPagination} itemName="个折扣码" />
+          </TabsContent>
+
+          <TabsContent value="referral" className="mt-4">
+            {activeTab === "referral" && <AdminReferralPanel />}
           </TabsContent>
         </Tabs>
       </div>

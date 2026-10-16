@@ -46,6 +46,7 @@ import {
   PLAN_PRICE_TIER_LIMIT,
   planMonthlyEquivalentCents,
 } from "@shared/planPricing";
+import { formatRateBps, parseRatePercentToBps } from "@shared/referral";
 import { Check, CheckCircle2, Coins, LayoutGrid, List, Package, Pencil, Plus, RefreshCw, Settings2, ShoppingBag, Trash2 } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 import { toast } from "sonner";
@@ -70,6 +71,8 @@ type PlanForm = {
   isStoreVisible: boolean;
   syncExistingSubscribers: boolean;
   sortOrder: string;
+  /** 邀请返利比例（%），字符串原样保存，提交时按字符串换成基点（shared/referral.ts）。 */
+  referralRate: string;
   hostIds: number[];
   tunnelIds: number[];
   forwardGroupIds: number[];
@@ -136,6 +139,7 @@ const emptyForm: PlanForm = {
   isStoreVisible: true,
   syncExistingSubscribers: true,
   sortOrder: "0",
+  referralRate: "0",
   hostIds: [],
   tunnelIds: [],
   forwardGroupIds: [],
@@ -325,6 +329,8 @@ function PlanCard({
         <dd className="text-right tabular-nums text-foreground">{speed(plan.rateLimitMbps)}</dd>
         <dt className="text-muted-foreground">附加流量</dt>
         <dd className="text-right tabular-nums text-foreground">{plan.trafficAddons?.length || 0} 档</dd>
+        <dt className="text-muted-foreground">邀请返利</dt>
+        <dd className="text-right tabular-nums text-foreground">{referralRateText(plan.referralRateBps)}</dd>
       </dl>
       <div className="mx-[var(--fx-card-padding)] mt-3 border-t border-[var(--fx-stroke-weak)] py-3">
         <PlanStatusSwitches
@@ -583,6 +589,11 @@ function PlanSelectedResourceList({
   );
 }
 
+function referralRateText(bps: unknown) {
+  const value = Number(bps || 0);
+  return value > 0 ? `${formatRateBps(value)}%` : "不返";
+}
+
 function toForm(plan: any): PlanForm {
   return {
     id: plan.id,
@@ -604,6 +615,7 @@ function toForm(plan: any): PlanForm {
     isStoreVisible: !!plan.isStoreVisible,
     syncExistingSubscribers: true,
     sortOrder: String(plan.sortOrder ?? 0),
+    referralRate: formatRateBps(plan.referralRateBps),
     hostIds: plan.hostIds || [],
     tunnelIds: plan.tunnelIds || [],
     forwardGroupIds: plan.forwardGroupIds || [],
@@ -642,6 +654,8 @@ function payload(form: PlanForm) {
     isActive: form.isActive,
     isStoreVisible: form.isActive && form.isStoreVisible,
     sortOrder: Math.max(0, Math.floor(Number(form.sortOrder || 0))),
+    // save() 已经校验过；这里解析不了时按 0（不返利）兜底，不会凭空返钱。
+    referralRateBps: parseRatePercentToBps(form.referralRate) ?? 0,
     hostIds: form.hostIds,
     tunnelIds: form.tunnelIds,
     forwardGroupIds: form.forwardGroupIds,
@@ -1050,6 +1064,11 @@ export default function Plans() {
       });
       return;
     }
+    if (parseRatePercentToBps(form.referralRate) === null) {
+      setPlanDialogTab("settings");
+      toast.error("邀请返利比例需在 0 到 100 之间，最多两位小数");
+      return;
+    }
     const data = payload(form);
     if (form.id) updatePlan.mutate({ id: form.id, syncExistingSubscribers: form.syncExistingSubscribers, ...data });
     else createPlan.mutate(data);
@@ -1297,6 +1316,7 @@ export default function Plans() {
                                   <div>规则 {plan.maxRules || "不限"} · 流量 {formatQuotaBytes(plan.trafficLimit)}</div>
                                   <div>附加流量 {plan.trafficAddons?.length || 0} 档</div>
                                   <div>连接 {plan.maxConnections || "不限"} · 单 IP {plan.maxIPs || "不限"} · 限速 {speed(plan.rateLimitMbps)}</div>
+                                  <div>邀请返利 {referralRateText(plan.referralRateBps)}</div>
                                 </TableCell>
                                 <TableCell>
                                   <PlanStatusSwitches
@@ -1568,6 +1588,20 @@ export default function Plans() {
               </FormField>
               <p className="text-xs text-muted-foreground">同组规则共享限制。</p>
             </div>
+            <FormField className="space-y-2">
+              <Label htmlFor="plan-referral-rate">邀请返利比例（%）</Label>
+              <Input
+                id="plan-referral-rate"
+                inputMode="decimal"
+                placeholder="0"
+                value={form.referralRate}
+                onChange={(e) => setForm({ ...form, referralRate: e.target.value })}
+                aria-invalid={parseRatePercentToBps(form.referralRate) === null}
+              />
+              <p className="text-xs text-muted-foreground">
+                被邀请人买这个套餐（含续费）实付金额的百分之几返给邀请人，0 为不返。0 到 100，最多两位小数。需在「账单与兑换 › 邀请返利」里开启。
+              </p>
+            </FormField>
             <FormField className="space-y-2">
               <Label>排序</Label>
               <Input type="number" min={0} value={form.sortOrder} onChange={(e) => setForm({ ...form, sortOrder: e.target.value })} />

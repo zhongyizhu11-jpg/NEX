@@ -6,7 +6,7 @@
 */
 import type { OpsEventLevel } from "./opsEvents";
 
-export type WebhookCategoryKey = "host" | "user" | "rule" | "account" | "security";
+export type WebhookCategoryKey = "host" | "user" | "rule" | "account" | "security" | "ticket";
 
 export const WEBHOOK_CATEGORIES: ReadonlyArray<{
   key: WebhookCategoryKey;
@@ -14,11 +14,12 @@ export const WEBHOOK_CATEGORIES: ReadonlyArray<{
   description: string;
   prefixes: readonly string[];
 }> = [
-  { key: "host", label: "主机上下线与重启", description: "主机断线、恢复、机器重启、Agent 重启。", prefixes: ["host."] },
+  { key: "host", label: "主机上下线与重启", description: "主机断线、恢复、机器重启、Agent 重启、自动换 IP。", prefixes: ["host."] },
   { key: "user", label: "用户流量与到期", description: "用户流量用完、快到期、已到期。", prefixes: ["user."] },
   { key: "rule", label: "规则与线路异常", description: "规则出错和恢复、线路组与转发组切换。", prefixes: ["rule.", "route."] },
   { key: "account", label: "登录与安全", description: "管理员登录、同一 IP 连续登录失败。", prefixes: ["account."] },
   { key: "security", label: "安全巡检", description: "主机安全巡检发现的问题。", prefixes: ["security."] },
+  { key: "ticket", label: "工单", description: "用户新建工单、回复工单。", prefixes: ["ticket."] },
 ];
 
 export const WEBHOOK_CATEGORY_KEYS: readonly WebhookCategoryKey[] = WEBHOOK_CATEGORIES.map((category) => category.key);

@@ -26,6 +26,7 @@ import { reconcileHostDdnsRecords } from "./hostDdns";
 import { reconcileRuleEntryDomains } from "./ruleEntryDomain";
 import { checkPanelUpdateTask } from "./_core/systemRouter";
 import { createNonOverlappingScheduledTask } from "./scheduledTask";
+import { runIpChangeTick } from "./ipChange/runtime";
 import { optimizeSqliteDatabase } from "./dbRuntime";
 import { healAutoStoppedRules } from "./forwardRuleAutoRecovery";
 import { sweepExpiredRuleEntryBridges } from "./ruleEntryBridges";
@@ -996,6 +997,10 @@ export function startScheduler() {
       console.error("[Scheduler] Rule entry bridge expiry error:", error);
     }
   });
+  // 自动换 IP（插件 auto-ip-change）：冷却到期、到阈值补一次自动更换、插件启停后推探测任务；第一轮先把重启打断的标成「结果不确定」。
+  const ipChangeTick = createNonOverlappingScheduledTask("auto IP change", async () => {
+    await runIpChangeTick();
+  }, { slowTaskMs: 30_000 });
   const hostStatusSweep = createNonOverlappingScheduledTask("host status sweep", async () => {
     await runHostStatusSweep();
   });
@@ -1061,6 +1066,7 @@ export function startScheduler() {
   };
 
   repeatAfter(hostStatusSweep, 30 * 1000, 5_000);
+  repeatAfter(ipChangeTick, 30 * 1000, 12_000);
   startSelfTestSweepTimer(async () => { await selfTestTimeoutSweep(); });
   void recoverPendingSelfTestSweep();
   // Agent probe reports and host state transitions trigger failover work.

@@ -100,6 +100,14 @@ import { cn } from "@/lib/utils";
 import { tunnelFxpIssueText } from "@/features/links/TunnelFxpIssueNotice";
 import { autoForwardRuleName, resolveForwardRuleName } from "@shared/forwardRuleName";
 import {
+  formatSniRuleEntry,
+  parseSniNameJson,
+  sniRuleFormBlocker,
+  TLS_INBOUND_MAX_SNI_PER_RULE,
+  TLS_INBOUND_RULE_STATE_LABELS,
+  tlsInboundRuleState,
+} from "@shared/tlsInbound";
+import {
   BILLING_TIME_ZONE,
 } from "@shared/billingTime";
 import {
@@ -303,6 +311,14 @@ type RuleFormData = {
    * 存着，编辑器整份改、提交整份发，和服务端、Agent 说的是同一个模型。
    */
   routeGroup: RouteGroup | null;
+  /**
+   * 端口转发的入口方式：port = 自己占一个端口；sni = 挂到主机的共享 TLS 入站上，按 SNI 分流
+   * （shared/tlsInbound.ts）。sni 时没有源端口，协议固定 TCP，不支持线路组。
+   */
+  entryMode: "port" | "sni";
+  tlsInboundId: number | null;
+  /** SNI 域名，一行一个；提交时由服务端规整（小写、IDNA、去重排序）。 */
+  sniNamesText: string;
 };
 
 type ProxyProtocolVersion = 1 | 2;
@@ -322,6 +338,9 @@ const defaultForm: RuleFormData = {
   entryDomainEnabled: true,
   failoverEnabled: false,
   routeGroup: null,
+  entryMode: "port",
+  tlsInboundId: null,
+  sniNamesText: "",
 };
 
 const gostTunnelModes = new Set(["tls", "wss", "tcp", "mtls", "mwss", "mtcp"]);
@@ -1994,6 +2013,15 @@ function RulesContent() {
     staleTime: 60000,
     refetchOnWindowFocus: false,
   });
+  // 共享 TLS 入站（SNI 分流）：能挂规则的（usable）加上自己规则挂着的（只用来显示）。
+  const { data: tlsInboundOptions = [] } = trpc.tlsInbounds.listForUser.useQuery(undefined, {
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
+  });
+  const tlsInboundById = useMemo(
+    () => new Map((tlsInboundOptions as any[]).map((inbound: any) => [Number(inbound.id), inbound] as const)),
+    [tlsInboundOptions],
+  );
   // 规则页只拿隧道名称 / 归属来展示和选择，一分钟刷一次就够；隧道页和表单里就地新建隧道都会直接 invalidate。
   const { data: tunnels } = trpc.tunnels.options.useQuery(undefined, {
     refetchInterval: 60_000,
@@ -2621,7 +2649,25 @@ function RulesContent() {
         setShowDialog(true);
         return;
       }
+      if (canUseSniInbound) {
+        const inbound = usableTlsInbounds[0];
+        setForm({
+          ...defaultForm,
+          routeMode: "local",
+          entryMode: "sni",
+          tlsInboundId: Number(inbound.id),
+          hostId: Number(inbound.hostId),
+          forwardType: firstDirectForwardType,
+          protocol: "tcp",
+        });
+        setShowDialog(true);
+        return;
+      }
       toast.error("暂无可用端口转发，请检查链路配置、授权或计费余额");
+      return;
+    }
+    if (!hasSavedLocalForward && !hasBillingHostLocalForward && canUseSniInbound && !firstTunnel && !firstChain && !firstGroup) {
+      openCreate("local");
       return;
     }
     if (hasSavedLocalForward || hasBillingHostLocalForward || firstTunnel || firstChain || firstGroup) {
@@ -2686,7 +2732,9 @@ function RulesContent() {
     const editForwardGroup = rule.forwardGroupId
       ? (forwardGroups || []).find((group: any) => Number(group.id) === Number(rule.forwardGroupId))
       : null;
-    const isLegacyLocalRule = !Number(rule.forwardGroupId || 0)
+    const isSniRule = Number(rule.tlsInboundId || 0) > 0;
+    const isLegacyLocalRule = !isSniRule
+      && !Number(rule.forwardGroupId || 0)
       && !(rule.forwardType === "gost" && Number(rule.tunnelId || 0) > 0);
     setForm({
       hostId: rule.hostId,
@@ -2704,6 +2752,9 @@ function RulesContent() {
       failoverEnabled: !!rule.failoverEnabled,
       // 老主备（2.3.376 之前配的）在这里被读成路径清单：备用各是一条直连的路径。
       routeGroup: routeGroupOf(rule),
+      entryMode: isSniRule ? "sni" : "port",
+      tlsInboundId: isSniRule ? Number(rule.tlsInboundId) : null,
+      sniNamesText: isSniRule ? parseSniNameJson(rule.sniNames).join("\n") : "",
     });
     setEditingId(rule.id);
     setEditingOriginalProtocol(normalizeRuleProtocol(rule.protocol));
@@ -3042,7 +3093,14 @@ function RulesContent() {
   );
   const canUseSavedLocalForward = availablePortForwardGroups.length > 0;
   const canUseBillingHostLocalForward = user?.role !== "admin" && hasTrafficBillingBalance && availableTrafficBillingHosts.length > 0 && usableForwardTypes.length > 0;
-  const canUseLocalForward = canUseSavedLocalForward || canUseBillingHostLocalForward;
+  const usableTlsInbounds = useMemo(
+    () => (tlsInboundOptions as any[]).filter((inbound: any) => inbound.usable && inbound.isEnabled),
+    [tlsInboundOptions],
+  );
+  const canUseSniInbound = usableTlsInbounds.length > 0 && usableForwardTypes.length > 0;
+  const isSniEntryMode = form.routeMode === "local" && form.entryMode === "sni";
+  const selectedTlsInbound = isSniEntryMode && form.tlsInboundId ? tlsInboundById.get(Number(form.tlsInboundId)) || null : null;
+  const canUseLocalForward = canUseSavedLocalForward || canUseBillingHostLocalForward || canUseSniInbound;
   const canUseGost = allowedForwardTypes.includes("gost") && supportedTunnels.length > 0;
   const canUseForwardChain = availableForwardChainGroups.length > 0;
   const canUseFailoverGroup = availableFailoverForwardGroups.length > 0;
@@ -3074,8 +3132,10 @@ function RulesContent() {
     canUseForwardChain, canUseFailoverGroup, canUseGost, portStatus,
   ]);
   const submitBlocker = useMemo<string | null>(
-    () => forwardRuleFormBlocker(form, ruleFormContext),
-    [form, ruleFormContext],
+    () => (isSniEntryMode
+      ? sniRuleFormBlocker(form, selectedTlsInbound)
+      : forwardRuleFormBlocker(form, ruleFormContext)),
+    [form, ruleFormContext, isSniEntryMode, selectedTlsInbound],
   );
   const sourcePortRequired = isForwardRuleSourcePortRequired(ruleFormContext);
   /*
@@ -3196,6 +3256,7 @@ function RulesContent() {
     && form.routeMode === "local"
     && !selectedForwardGroupIsPort;
   const canUseMainBackup = !selectedForwardGroupIsChain
+    && !isSniEntryMode
     && (
       (mainBackupUsesTunnelRoute && mainBackupForwardType === "gost" && mainBackupIsTunnelRoute)
       || mainBackupPortForwardSupported
@@ -3215,6 +3276,8 @@ function RulesContent() {
   */
   const mainBackupBlock: { reason: string; fix?: { label: string; run: () => void } } | null = canUseMainBackup
     ? null
+    : isSniEntryMode
+    ? { reason: "共享 TLS 入站上的规则暂不支持线路组。" }
     : selectedForwardGroupIsChain
     ? {
       reason: "转发链不支持主备线路。想要线路出问题自动换，可以用「转发组」。",
@@ -3245,6 +3308,8 @@ function RulesContent() {
     const forwardGroupId = form.forwardGroupId;
     const tunnelId = form.tunnelId;
     const sourcePort = form.sourcePort;
+    // 共享 TLS 入站上的规则没有自己的对外端口，不查。
+    if (form.routeMode === "local" && form.entryMode === "sni") return;
     if (!sourcePort || sourcePort < 1) return;
     if (isForwardGroupRouteMode ? !forwardGroupId : !hostId) return;
     if (!isValidForwardPort(sourcePort)) {
@@ -3273,7 +3338,7 @@ function RulesContent() {
       if (latestPortCheckRef.current !== checkId) return;
       setPortStatus("idle");
     }
-  }, [form.forwardGroupId, form.hostId, form.protocol, form.routeMode, form.sourcePort, form.tunnelId, editingId, utils, selectedEntryPortPolicy, isForwardGroupRouteMode]);
+  }, [form.forwardGroupId, form.hostId, form.protocol, form.routeMode, form.sourcePort, form.tunnelId, form.entryMode, editingId, utils, selectedEntryPortPolicy, isForwardGroupRouteMode]);
 
   // A response started for the previous route must not mark the new route occupied.
   useEffect(() => {
@@ -3747,6 +3812,23 @@ function RulesContent() {
       toast.error("请先在系统设置中配置并启用 Telegram 机器人，再开启异常TG提醒");
       return;
     }
+    if (isSniEntryMode) {
+      // 共享 TLS 入站：没有源端口、不查端口占用，名字由服务端规整并检查冲突。
+      const sniPayload = {
+        name: resolveForwardRuleName(form.name, form).slice(0, 128),
+        forwardType: form.forwardType,
+        protocol: "tcp" as const,
+        targetIp: form.targetIp,
+        targetPort: form.targetPort,
+        tlsInboundId: Number(form.tlsInboundId),
+        sniNames: form.sniNamesText,
+        telegramErrorNotifyEnabled: form.telegramErrorNotifyEnabled,
+        failoverEnabled: false,
+      };
+      if (editingId) updateMutation.mutate(Object.assign({ id: editingId }, sniPayload));
+      else createMutation.mutate(Object.assign({}, sniPayload, { name: form.name, sourcePort: 0 }));
+      return;
+    }
     if (form.failoverEnabled) {
       if (!canUseMainBackup) {
         toast.error(mainBackupDisabledText || "当前规则类型不支持线路组");
@@ -3883,12 +3965,13 @@ function RulesContent() {
       searchQuery: copyRuleSearch,
     };
     return transferSourceRules
-      .filter((rule: any) => !rule.forwardGroupRuleId && !rule.forwardGroupMemberId && isRuleSupported(rule))
+      // 共享 TLS 入站上的规则不参与批量复制 / 迁移：它们没有自己的端口，搬到别的资源上就不是同一条规则了。
+      .filter((rule: any) => !rule.forwardGroupRuleId && !rule.forwardGroupMemberId && !(Number(rule.tlsInboundId || 0) > 0) && isRuleSupported(rule))
       .filter((rule: any) => isForwardRuleVisibleByFilters(rule, batchFilters));
   }, [copyRuleCategory, copyRuleSearch, isRuleSupported, ruleFilters, transferSourceRules]);
   const copySelectedRules = useMemo(() => {
     const selected = new Set(copyRuleIds.map(Number));
-    return transferSourceRules.filter((rule: any) => selected.has(Number(rule.id)) && !rule.forwardGroupRuleId && !rule.forwardGroupMemberId);
+    return transferSourceRules.filter((rule: any) => selected.has(Number(rule.id)) && !rule.forwardGroupRuleId && !rule.forwardGroupMemberId && !(Number(rule.tlsInboundId || 0) > 0));
   }, [copyRuleIds, transferSourceRules]);
   const copyTargetResources = useMemo(() => {
     if (copyTargetScopeType === "local") return availablePortForwardGroups;
@@ -5348,7 +5431,8 @@ function RulesContent() {
   }, [forwardGroupById, transferSourceRules]);
 
   const exportableRules = useMemo(
-    () => getRulesForTransferScope(exportScopeType, exportResourceId),
+    // 共享 TLS 入站上的规则不导出：它们的 sourcePort 是本机回环端口，导到别处没有意义。
+    () => getRulesForTransferScope(exportScopeType, exportResourceId).filter((rule: any) => !(Number(rule?.tlsInboundId || 0) > 0)),
     [exportScopeType, exportResourceId, getRulesForTransferScope]
   );
 
@@ -5850,6 +5934,18 @@ function RulesContent() {
   };
 
   const copyEntryAddress = async (rule: any, entryValue?: string) => {
+    if (Number(rule?.tlsInboundId || 0) > 0) {
+      const inbound = tlsInboundById.get(Number(rule.tlsInboundId));
+      const name = String(entryValue || parseSniNameJson(rule.sniNames)[0] || "").trim();
+      if (!name || !inbound?.port) {
+        toast.error("未获取到共享 TLS 入站的地址");
+        return;
+      }
+      const text = formatAddressWithPort(name, Number(inbound.port));
+      if (await copyTextToClipboard(text)) toast.success(`已复制入口地址: ${text}`);
+      else toast.error("复制失败，请手动复制");
+      return;
+    }
     if (rule.forwardGroupId) {
       const group = forwardGroupById.get(Number(rule.forwardGroupId));
       if (isForwardChainGroup(group)) {
@@ -5904,7 +6000,168 @@ function RulesContent() {
     return renderResolvedStatusDot(visual);
   };
 
+  /** 共享 TLS 入站规则卡片上那枚：「SNI：a.com、b.com @ 主机:443」，入站停用 / Agent 太旧时换成原因。 */
+  const renderSniRuleBadge = (rule: any) => {
+    if (!(Number(rule?.tlsInboundId || 0) > 0)) return null;
+    const inbound = tlsInboundById.get(Number(rule.tlsInboundId));
+    const state = tlsInboundRuleState({ inbound, agentVersion: inbound?.agentVersion });
+    const text = formatSniRuleEntry({ names: parseSniNameJson(rule.sniNames), hostName: inbound?.hostName, port: inbound?.port });
+    return (
+      <span key="sni" className="inline-flex min-w-0 max-w-full items-center gap-1">
+        <Badge variant="outline" className="h-5 min-w-0 max-w-full truncate px-1.5 text-[10px] font-normal" title={text}>{text}</Badge>
+        {state !== "ok" ? (
+          <Badge variant="outline" className="h-5 shrink-0 border-[color-mix(in_srgb,var(--fx-warn)_40%,transparent)] px-1.5 text-[10px] text-[var(--fx-warn-text)]">
+            {TLS_INBOUND_RULE_STATE_LABELS[state]}
+          </Badge>
+        ) : null}
+      </span>
+    );
+  };
+
+  /** 端口转发的两种入口方式。编辑时定死（要换就新建规则）。 */
+  const renderEntryModeSwitch = () => {
+    const pick = (mode: "port" | "sni") => {
+      if (editingId || mode === form.entryMode) return;
+      latestPortCheckRef.current += 1;
+      setPortStatus("idle");
+      setPortRangeError(null);
+      if (mode === "sni") {
+        const inbound = usableTlsInbounds[0];
+        if (!inbound) return;
+        setForm({
+          ...form,
+          entryMode: "sni",
+          tlsInboundId: Number(inbound.id),
+          hostId: Number(inbound.hostId),
+          forwardGroupId: null,
+          tunnelId: null,
+          sourcePort: 0,
+          protocol: "tcp",
+          failoverEnabled: false,
+          forwardType: usableForwardTypes.includes(form.forwardType) ? form.forwardType : usableForwardTypes[0],
+        });
+        return;
+      }
+      const firstPortGroup = canUseSavedLocalForward ? availablePortForwardGroups[0] : null;
+      const firstBillingHost = !firstPortGroup && canUseBillingHostLocalForward ? availableTrafficBillingHosts[0] : null;
+      setForm({
+        ...form,
+        entryMode: "port",
+        tlsInboundId: null,
+        hostId: firstBillingHost ? Number(firstBillingHost.id) : null,
+        forwardGroupId: firstPortGroup ? Number(firstPortGroup.id) : null,
+        forwardType: firstPortGroup ? getForwardGroupRuleForwardType(firstPortGroup, form.forwardType) : form.forwardType,
+        sourcePort: 0,
+      });
+    };
+    const portAvailable = canUseSavedLocalForward || canUseBillingHostLocalForward;
+    return (
+      <div className="flex min-w-0 flex-wrap items-center gap-2" role="group" aria-label="入口方式">
+        <span className="text-meta text-muted-foreground">入口方式</span>
+        <Button
+          type="button"
+          size="sm"
+          variant={form.entryMode === "port" ? "default" : "outline"}
+          disabled={!!editingId || !portAvailable}
+          aria-pressed={form.entryMode === "port"}
+          onClick={() => pick("port")}
+        >
+          独立端口
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant={form.entryMode === "sni" ? "default" : "outline"}
+          disabled={!!editingId || !canUseSniInbound}
+          aria-pressed={form.entryMode === "sni"}
+          onClick={() => pick("sni")}
+        >
+          共享 TLS 入站
+        </Button>
+        {editingId ? <span className="text-meta text-muted-foreground">入口方式保存后不能更改，需要的话请新建规则</span> : null}
+      </div>
+    );
+  };
+
+  /** 共享 TLS 入站：选入站 + 填 SNI。和服务端用同一份规整 / 校验（shared/tlsInbound.ts）。 */
+  const renderSniEntryFields = () => {
+    const options = (tlsInboundOptions as any[]).filter((inbound: any) => (
+      (inbound.usable && inbound.isEnabled) || Number(inbound.id) === Number(form.tlsInboundId)
+    )).filter((inbound: any) => !editingId || Number(inbound.hostId) === Number(form.hostId));
+    const blocker = submitBlocker;
+    const sniError = blocker && blocker !== "还缺目标地址" && blocker !== "还缺目标端口" && blocker !== "目标端口必须在 1-65535 之间" ? blocker : null;
+    return (
+      <div className="space-y-2">
+        <FormField className="space-y-1.5">
+          <Label>共享 TLS 入站</Label>
+          <Select
+            value={form.tlsInboundId ? String(form.tlsInboundId) : undefined}
+            onValueChange={(value) => {
+              const inbound = tlsInboundById.get(Number(value));
+              if (!inbound) return;
+              setForm({ ...form, tlsInboundId: Number(inbound.id), hostId: Number(inbound.hostId) });
+            }}
+          >
+            <SelectTrigger><SelectValue placeholder="选择主机上的共享 TLS 入站" /></SelectTrigger>
+            <SelectContent>
+              {options.map((inbound: any) => (
+                <SelectItem key={inbound.id} value={String(inbound.id)} textValue={`${inbound.hostName} ${inbound.name} ${inbound.port}`}>
+                  {inbound.hostName || "主机"} · {inbound.name} :{inbound.port}
+                  {!inbound.agentSupported ? "（需要升级 Agent）" : !inbound.isEnabled ? "（已停用）" : ""}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </FormField>
+        {selectedTlsInbound && (
+          <p className="text-meta text-muted-foreground">
+            允许的域名：{(selectedTlsInbound.allowedSni || []).length > 0 ? selectedTlsInbound.allowedSni.join("、") : "不限"}
+          </p>
+        )}
+        <FormField className="space-y-1.5">
+          <Label className="flex items-baseline gap-1.5">
+            SNI 域名 <span className="text-destructive">*</span>
+            <span className="text-xs font-normal text-muted-foreground">一行一个，最多 {TLS_INBOUND_MAX_SNI_PER_RULE} 个，精确匹配</span>
+          </Label>
+          <Textarea
+            rows={3}
+            placeholder={"www.example.com\nexample.com"}
+            value={form.sniNamesText}
+            onChange={(e) => setForm({ ...form, sniNamesText: e.target.value })}
+            className={sniError && form.sniNamesText.trim() ? "border-destructive" : undefined}
+          />
+        </FormField>
+        {sniError && form.sniNamesText.trim() ? <p className="text-xs text-destructive">{sniError}</p> : null}
+        <p className="text-meta leading-5 text-muted-foreground">
+          客户端用这些域名连接 {selectedTlsInbound ? `${selectedTlsInbound.hostName || "主机"}:${selectedTlsInbound.port}` : "入站端口"}，按 TLS 握手里的 SNI 分到这条规则，原样透传、节点不解密。每个域名的 DNS 都要解析到这台主机。适用于 HTTPS 网站、Trojan / VLESS-TLS 等任何 TLS 服务；协议固定 TCP。
+        </p>
+      </div>
+    );
+  };
+
   const getRuleTransferDisplay = (rule: any) => {
+    if (Number(rule?.tlsInboundId || 0) > 0) {
+      // 共享 TLS 入站：入口是用户自己的域名 + 入站端口；sourcePort 只是本机回环端口，不给人看。
+      const inbound = tlsInboundById.get(Number(rule.tlsInboundId));
+      const names = parseSniNameJson(rule.sniNames);
+      const port = Number(inbound?.port || 0);
+      const sniEntries = names.map((name) => ({
+        label: "SNI",
+        value: name,
+        text: port > 0 ? formatAddressWithPort(name, port) : name,
+        copyable: port > 0,
+      }));
+      const entryAddresses = sniEntries.length > 0 ? sniEntries : [{ label: "SNI", value: "", text: "SNI 未配置", copyable: false }];
+      return {
+        entryAddresses,
+        entryAddress: sniEntries.map((entry) => entry.text).join(" / "),
+        targetAddress: `${rule.targetIp}:${rule.targetPort}`,
+        entryTitle: `复制入口地址: ${sniEntries.map((entry) => entry.text).join(" / ")}`,
+        failoverCount: 0,
+        failoverEnabled: false,
+        routeLabel: "",
+      };
+    }
     const group = rule.forwardGroupId ? forwardGroupById.get(Number(rule.forwardGroupId)) : null;
     const groupRouteLabel = getForwardGroupRouteLabel(group);
     const groupEntry = isForwardChainGroup(group)
@@ -6799,6 +7056,7 @@ function RulesContent() {
     ) : null;
 
     const alerts = [
+      renderSniRuleBadge(rule),
       renderKernelForwardWarningBadge(getRuleKernelForwardWarning(rule)),
       rule?.tunnelId ? renderTunnelFxpIssueBadge(tunnelById.get(Number(rule.tunnelId))) : null,
       renderSubscriptionBadge(rule, "card"),
@@ -7506,6 +7764,7 @@ function RulesContent() {
                 {ROUTE_MODE_HINTS[form.routeMode]}
               </p>
             )}
+            {form.routeMode === "local" && (canUseSniInbound || isSniEntryMode) && renderEntryModeSwitch()}
 
             <RuleRouteTransition
               transitionKey={`rule-route-${form.routeMode}-${isForwardGroupRouteMode ? "resource" : "direct"}`}
@@ -7619,7 +7878,9 @@ function RulesContent() {
                 </div>
               )}
 
-              {form.routeMode === "local" && !isForwardGroupRouteMode && (
+              {isSniEntryMode && renderSniEntryFields()}
+
+              {form.routeMode === "local" && !isForwardGroupRouteMode && !isSniEntryMode && (
                 <div className="space-y-2">
                     <FormField className="space-y-1.5">
                       <Label>使用按量计费资源</Label>
@@ -7673,6 +7934,7 @@ function RulesContent() {
               随机按钮。
             */}
             <div className="grid grid-cols-2 gap-x-2 gap-y-3 sm:gap-3">
+              {!isSniEntryMode && (
               <div className="col-span-2 space-y-1.5 sm:col-span-1">
               <div className="flex items-center justify-between gap-2">
               <Label className="flex items-baseline gap-1.5">
@@ -7730,7 +7992,8 @@ function RulesContent() {
               </Button>
               </div>
               </div>
-              <FormField className="col-span-2 space-y-1.5 sm:col-span-1">
+              )}
+              <FormField className={isSniEntryMode ? "col-span-2 space-y-1.5" : "col-span-2 space-y-1.5 sm:col-span-1"}>
               <Label>目标地址 <span className="text-destructive">*</span></Label>
               <Input
               placeholder="例如: 10.0.0.1 或 example.com"
@@ -7753,7 +8016,8 @@ function RulesContent() {
               <FormField className="space-y-1.5">
               <Label>协议</Label>
               <Select
-              value={form.protocol}
+              value={isSniEntryMode ? "tcp" : form.protocol}
+              disabled={isSniEntryMode}
               onValueChange={(v) => setForm({
               ...form,
               protocol: v as any,

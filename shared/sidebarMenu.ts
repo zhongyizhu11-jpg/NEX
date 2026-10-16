@@ -1,6 +1,7 @@
 export const SIDEBAR_MENU_KEYS = [
   "dashboard",
   "announcements",
+  "tickets",
   "profile",
   "payments",
   "billing",
@@ -9,6 +10,7 @@ export const SIDEBAR_MENU_KEYS = [
   "plugins",
   "lookingGlass",
   "settings",
+  "referrals",
 ] as const;
 
 export type SidebarMenuKey = typeof SIDEBAR_MENU_KEYS[number];
@@ -17,6 +19,7 @@ export type SidebarMenuSettings = Record<SidebarMenuKey, boolean>;
 export const SIDEBAR_MENU_LABELS: Record<SidebarMenuKey, string> = {
   dashboard: "仪表盘",
   announcements: "公告",
+  tickets: "工单",
   profile: "个人资料",
   payments: "支付对接",
   billing: "账单与兑换",
@@ -25,6 +28,7 @@ export const SIDEBAR_MENU_LABELS: Record<SidebarMenuKey, string> = {
   plugins: "插件管理",
   lookingGlass: "网络测试",
   settings: "系统设置",
+  referrals: "邀请返利",
 };
 
 export const DEFAULT_SIDEBAR_MENU_SETTINGS: SidebarMenuSettings = SIDEBAR_MENU_KEYS.reduce((acc, key) => {

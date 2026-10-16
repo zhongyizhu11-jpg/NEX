@@ -186,8 +186,21 @@ const MIGRATION_RUNTIME_TIMEOUT_MS = Math.max(
     : 15 * 60 * 1000,
 );
 const MIGRATION_RUNTIME_POLL_MS = 2_000;
-// 旧版本面板的库里还没有这些表（换隧道桥接是后加的，只活几小时），直接搬 SQLite 时缺了不算错。
-const DIRECT_SQLITE_OPTIONAL_SOURCE_TABLES = new Set(["agent_traffic_reports", "forward_rule_route_events", "forward_rule_entry_bridges"]);
+// 旧版本面板的库里还没有这些表（换隧道桥接是后加的，只活几小时；工单、邀请返利记录、自动换 IP 的三张表
+// 也是后加的：老面板的库里没有返利表等于「还没有返过利」），直接搬 SQLite 时缺了不算错。
+const DIRECT_SQLITE_OPTIONAL_SOURCE_TABLES = new Set([
+  "agent_traffic_reports",
+  "forward_rule_route_events",
+  "forward_rule_entry_bridges",
+  "tickets",
+  "ticket_messages",
+  "referral_commissions",
+  "ip_change_cloud_accounts",
+  "ip_change_host_configs",
+  "ip_change_events",
+  "host_tls_inbounds",
+  "rule_sni_names",
+]);
 
 function normalizePanelUrl(url: string) {
   const value = url.trim().replace(/\/+$/, "");
@@ -221,6 +234,7 @@ export const ESSENTIAL_MIGRATION_OMITTED_TABLES = new Set<(typeof MIGRATION_TABL
   "forward_rule_route_events",
   "ip_geo_cache",
   "config_audit_events",
+  "ip_change_events",
 ]);
 
 export type MigrationSnapshotExportProgress = {
@@ -746,7 +760,11 @@ const IMPORT_TABLE_ORDER = [
   // 排在 proxy_nodes 之后：分享记录同时指向节点与用户，两边的 id 都得先映射好。
   "proxy_node_shares",
   "proxy_sub_tokens",
+  // 共享 TLS 入站排在规则前面：规则的 tlsInboundId 指向它；它的 defaultRuleId 指回规则，第二遍再补。
+  "host_tls_inbounds",
   "forward_rules",
+  // 规则占的 SNI 同时指向入站和规则，两边的 id 都得先映射好。
+  "rule_sni_names",
   "forward_rule_tunnel_exits",
   "tunnel_hops",
   "agent_tokens",
@@ -790,6 +808,8 @@ const IMPORT_TABLE_ORDER = [
   "user_traffic_billing_permissions",
   "announcements",
   "announcement_reads",
+  "tickets",
+  "ticket_messages",
   "plugins",
   "plugin_store_sources",
   "plugin_assets",
@@ -800,6 +820,11 @@ const IMPORT_TABLE_ORDER = [
   "ops_agent_relay",
   "api_tokens",
   "user_passkeys",
+  "referral_commissions",
+  // 自动换 IP：先有云账号，主机配置的 cloudAccountId 才映射得出来
+  "ip_change_cloud_accounts",
+  "ip_change_host_configs",
+  "ip_change_events",
   "system_settings",
 ] as const;
 
@@ -819,6 +844,7 @@ const BEST_EFFORT_MIGRATION_TABLES = new Set<MigrationTableName>([
   "forward_group_events",
   "forward_rule_route_events",
   "config_audit_events",
+  "ip_change_events",
   "system_settings",
 ]);
 
@@ -1107,13 +1133,18 @@ async function insertGeneratedRows(
 }
 
 async function sanitizeUserUniqueFields(row: Record<string, any>) {
-  for (const key of ["telegramId", "telegramBindCode", "telegramLoginCode"]) {
+  for (const key of ["telegramId", "telegramBindCode", "telegramLoginCode", "inviteCode", "googleSub"]) {
     if (!row[key]) continue;
     const existing = await findExistingId("users", { [key]: row[key] });
     if (existing) {
       row[key] = null;
       if (key === "telegramBindCode") row.telegramBindCodeExpiresAt = null;
       if (key === "telegramLoginCode") row.telegramLoginCodeExpiresAt = null;
+      // 目标面板上这个 Google 账号已经绑了别人：导入的这一条不带绑定（唯一约束），用户重新绑定即可。
+      if (key === "googleSub") {
+        row.googleEmail = null;
+        row.googleLinkedAt = null;
+      }
     }
   }
 }
@@ -1172,6 +1203,8 @@ async function prepareImportRow(table: string, source: Record<string, any>, maps
     case "users":
       if (!row.username) return null;
       await sanitizeUserUniqueFields(row);
+      // 邀请人指向同一张表里的另一行，那一行可能还没导进来：先置空，导完后按映射补（fixDeferredForwardGroupReferences）。
+      row.inviterId = null;
       return { row, existingWhere: { username: row.username } };
 
     case "hosts":
@@ -1239,8 +1272,21 @@ async function prepareImportRow(table: string, source: Record<string, any>, maps
       row.routeParentRuleId = null;
       row.forwardGroupMemberId = mapOptionalId(maps, "forward_group_members", source.forwardGroupMemberId);
       row.proxyNodeId = mapOptionalId(maps, "proxy_nodes", source.proxyNodeId);
+      // 老面板的库里没有共享 TLS 入站：缺省就是普通规则。
+      row.tlsInboundId = mapOptionalId(maps, "host_tls_inbounds", source.tlsInboundId);
       row.isRunning = false;
       row.pendingDelete = source.pendingDelete ?? false;
+      return { row };
+
+    case "host_tls_inbounds":
+      row.hostId = mapRequiredId(maps, "hosts", source.hostId);
+      // 默认规则指向 forward_rules，这一遍规则还没导入；第二遍按映射补上。
+      row.defaultRuleId = null;
+      return { row };
+
+    case "rule_sni_names":
+      row.tlsInboundId = mapRequiredId(maps, "host_tls_inbounds", source.tlsInboundId);
+      row.ruleId = mapRequiredId(maps, "forward_rules", source.ruleId);
       return { row };
 
     case "proxy_inbounds":
@@ -1446,6 +1492,13 @@ async function prepareImportRow(table: string, source: Record<string, any>, maps
       row.discountCodeId = mapOptionalId(maps, "discount_codes", source.discountCodeId);
       return { row, existingWhere: row.outTradeNo ? { outTradeNo: row.outTradeNo } : undefined };
 
+    case "referral_commissions":
+      row.inviterId = mapRequiredId(maps, "users", source.inviterId);
+      row.inviteeId = mapRequiredId(maps, "users", source.inviteeId);
+      row.planId = mapOptionalId(maps, "subscription_plans", source.planId);
+      // 幂等键：同一笔来源只该有一条返利。
+      return { row, existingWhere: { sourceType: row.sourceType, sourceRef: row.sourceRef } };
+
     case "balance_transactions":
       row.userId = mapRequiredId(maps, "users", source.userId);
       row.operatorUserId = mapOptionalId(maps, "users", source.operatorUserId);
@@ -1502,6 +1555,16 @@ async function prepareImportRow(table: string, source: Record<string, any>, maps
       row.userId = mapRequiredId(maps, "users", source.userId);
       return { row, existingWhere: { announcementId: row.announcementId, userId: row.userId } };
 
+    case "tickets":
+      row.userId = mapRequiredId(maps, "users", source.userId);
+      return { row };
+
+    case "ticket_messages":
+      row.ticketId = mapRequiredId(maps, "tickets", source.ticketId);
+      // 发消息的人可能已经被删（尤其是回复过的管理员），映射不到就留空，界面显示「已删除用户」。
+      row.senderId = mapId(maps, "users", source.senderId);
+      return { row };
+
     case "ip_geo_cache":
       return { row, existingWhere: row.address ? { address: row.address } : undefined };
 
@@ -1531,6 +1594,22 @@ async function prepareImportRow(table: string, source: Record<string, any>, maps
           hostId: row.hostId,
         },
       };
+
+    case "ip_change_host_configs":
+      row.hostId = mapRequiredId(maps, "hosts", source.hostId);
+      row.cloudAccountId = mapOptionalId(maps, "ip_change_cloud_accounts", source.cloudAccountId);
+      /*
+        运行状态不跟着走：换了面板，计数要重新数；「正在更换」导进来会永远卡住。
+        凭据是用源面板的密钥加密的，新面板上可能解不开，管理页会提示重新填写（见 server/ipChange/secrets.ts）。
+      */
+      row.state = row.enabled === true || row.enabled === 1 || row.enabled === "1" ? "idle" : "disabled";
+      row.consecutiveFailures = 0;
+      return { row, existingWhere: { hostId: row.hostId } };
+
+    case "ip_change_events":
+      row.hostId = mapRequiredId(maps, "hosts", source.hostId);
+      if (row.status === "running") row.status = "uncertain";
+      return { row };
 
     case "system_settings": {
       const key = String(source.key || "");
@@ -1618,12 +1697,27 @@ async function fixDeferredForwardGroupReferences(snapshot: MigrationSnapshot, ma
     const entryGroupId = deferredOptional("forward_groups", group.entryGroupId);
     if (entryGroupId) groupEntryGroupUpdates.push({ id: nextId, value: entryGroupId });
   }
+  const inviterUpdates: Array<{ id: number; value: number }> = [];
+  for (const user of sortedSnapshotRows(snapshot, "users")) {
+    const nextId = mapId(maps, "users", user.id);
+    if (!nextId) continue;
+    const inviterId = deferredOptional("users", user.inviterId);
+    if (inviterId && inviterId !== nextId) inviterUpdates.push({ id: nextId, value: inviterId });
+  }
   const frontProxyUpdates: Array<{ id: number; value: number }> = [];
   for (const node of sortedSnapshotRows(snapshot, "proxy_nodes")) {
     const nextId = mapId(maps, "proxy_nodes", node.id);
     if (!nextId) continue;
     const frontProxyId = deferredOptional("proxy_nodes", node.frontProxyId);
     if (frontProxyId) frontProxyUpdates.push({ id: nextId, value: frontProxyId });
+  }
+
+  const tlsInboundDefaultRuleUpdates: Array<{ id: number; value: number }> = [];
+  for (const inbound of sortedSnapshotRows(snapshot, "host_tls_inbounds")) {
+    const nextId = mapId(maps, "host_tls_inbounds", inbound.id);
+    if (!nextId) continue;
+    const defaultRuleId = deferredOptional("forward_rules", inbound.defaultRuleId);
+    if (defaultRuleId) tlsInboundDefaultRuleUpdates.push({ id: nextId, value: defaultRuleId });
   }
 
   const groupUpdates: Array<{ id: number; value: number }> = [];
@@ -1675,6 +1769,8 @@ async function fixDeferredForwardGroupReferences(snapshot: MigrationSnapshot, ma
     await updateMappedColumn("tunnels", "exitGroupId", tunnelExitGroupUpdates);
     await updateMappedColumn("forward_groups", "entryGroupId", groupEntryGroupUpdates);
     await updateMappedColumn("proxy_nodes", "frontProxyId", frontProxyUpdates);
+    await updateMappedColumn("users", "inviterId", inviterUpdates);
+    await updateMappedColumn("host_tls_inbounds", "defaultRuleId", tlsInboundDefaultRuleUpdates);
   });
   if (errors.length > 0) throw new Error(`${errors.length} 条延迟关联无法恢复；${errors.slice(0, 3).join("；")}`);
 }

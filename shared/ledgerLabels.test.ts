@@ -35,6 +35,7 @@ test("余额流水类型：每个键只有一个名字", () => {
   assert.equal(balanceTypeLabel("redeem"), "兑换入账");
   assert.equal(balanceTypeLabel("traffic_billing"), "流量计费");
   assert.equal(balanceTypeLabel("traffic_addon_purchase"), "购买附加流量");
+  assert.equal(balanceTypeLabel("referral_commission"), "邀请返利");
 });
 
 test("订阅状态：每个键只有一个名字", () => {

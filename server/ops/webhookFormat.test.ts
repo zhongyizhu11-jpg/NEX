@@ -66,6 +66,8 @@ test("category and level filtering", () => {
   assert.equal(webhookCategoryOf("rule.error"), "rule");
   assert.equal(webhookCategoryOf("account.login_failed"), "account");
   assert.equal(webhookCategoryOf("security.finding"), "security");
+  assert.equal(webhookCategoryOf("ticket.created"), "ticket");
+  assert.equal(webhookCategoryOf("ticket.replied"), "ticket");
   assert.equal(webhookCategoryOf("ops.backup"), null);
 
   assert.equal(webhookLevelAtLeast("crit", "warn"), true);
@@ -81,7 +83,7 @@ test("category and level filtering", () => {
 });
 
 test("categories default to all and drop unknown values", () => {
-  assert.deepEqual(parseWebhookCategories(null), ["host", "user", "rule", "account", "security"]);
+  assert.deepEqual(parseWebhookCategories(null), ["host", "user", "rule", "account", "security", "ticket"]);
   assert.deepEqual(parseWebhookCategories(""), []);
   assert.deepEqual(parseWebhookCategories("security,bogus,host"), ["host", "security"]);
 });

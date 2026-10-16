@@ -86,6 +86,7 @@ function MoreContent() {
               key={item.path}
               icon={<item.icon className="h-5 w-5" aria-hidden="true" />}
               label={item.label}
+              detail={item.badge ? `${item.badge} 张待处理` : undefined}
               onSelect={() => nav.navigate(item)}
             />
           ))}

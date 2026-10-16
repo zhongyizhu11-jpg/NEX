@@ -909,7 +909,8 @@ async function creditPaidOrderToBalance(
   return { credited, completed };
 }
 
-async function finalizePaidOrder(outTradeNo: string) {
+/** 导出给测试用：同一笔订单结算两次只能发一次货、返一次利。 */
+export async function finalizePaidOrder(outTradeNo: string) {
   let order = await db.claimPaidPaymentOrder(outTradeNo);
   if (!order) {
     const existing = await db.getPaymentOrderByOutTradeNo(outTradeNo);
@@ -950,6 +951,26 @@ async function finalizePaidOrder(outTradeNo: string) {
           order.subscriptionId ? Number(order.subscriptionId) : null,
         );
         await db.recoverUserForwardAccessIfEligible(order.userId);
+        /*
+         * 邀请返利：按这一单的实付金额（订单上的 amountCents 已经是折扣后的价）返给邀请人，
+         * 订单号做幂等键，回调重放 / 维护任务重试都只返一次。返利出错只撤销返利本身，
+         * 不影响发货（见 creditReferralCommissionInTransaction）。非人民币的单不返：余额是
+         * 人民币，没有可靠汇率可换。上面「已经发过货」那条分支不再返 —— 那一单第一次发货时
+         * 已经处理过了。
+         */
+        const commission = (order as any).orderType === "test" ? null : await db.creditReferralCommissionInTransaction({
+          inviteeId: Number(order.userId),
+          planId: Number(order.planId),
+          baseAmountCents: Number(order.amountCents || 0),
+          currency: String((order as any).currency || "CNY"),
+          sourceType: "payment_order",
+          sourceRef: outTradeNo,
+        });
+        if (commission?.reason === "non_cny") {
+          appendPanelLog("warn", `[Referral] order=${outTradeNo} currency=${(order as any).currency} is not CNY; referral commission skipped`);
+        } else if (commission?.credited) {
+          appendPanelLog("info", `[Referral] order=${outTradeNo} invitee=${order.userId} inviter=${commission.inviterId} commission=${commission.commissionCents}`);
+        }
         await db.updatePaymentOrder(outTradeNo, { subscriptionId: result.subscriptionId, status: "completed" } as any);
         appendPanelLog("info", `[Plan] subscription ${order.subscriptionId ? "renewed" : "granted"} user=${order.userId} plan=${order.planId} order=${outTradeNo} subscription=${result.subscriptionId} ports=${result.portRangeStart}-${result.portRangeEnd}`);
         return;

@@ -27,6 +27,7 @@ import { authCapRouter } from "./authCaptcha";
 import { isAllowedMobileCorsOrigin } from "./mobileCors";
 import { panelAccessGuard } from "./ops/firewallPanelAccess";
 import { mcpRouter } from "./ops/mcpRoute";
+import { googleAuthRouter } from "./googleAuthRoute";
 
 installPanelLogger();
 
@@ -185,6 +186,8 @@ async function startServer() {
   app.use(cookieParser());
   installMobileCors(app);
   app.use(authCapRouter);
+  // GET /api/auth/google/start、/callback：Google 登录的整页跳转（server/googleAuthRoute.ts）。
+  app.use(googleAuthRouter);
   app.use(agentRouter);
   app.use(migrationRouter);
   app.use(proxySubscriptionRouter);

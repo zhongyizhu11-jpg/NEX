@@ -1,6 +1,7 @@
 import { avatarQuotaState } from "@/lib/avatarQuota";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
 import OpsProfileExtraSections from "@/features/ops/slots/ProfileExtraSections";
+import GoogleAccountSection from "@/features/googleLogin/GoogleAccountSection";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { AvatarPicker } from "@/components/AvatarPicker";
 import DashboardLayout from "@/components/DashboardLayout";
@@ -727,6 +728,8 @@ function ProfileContent() {
           </CardContent>
         </Card>
       )}
+
+      <GoogleAccountSection />
 
       <OpsProfileExtraSections />
 

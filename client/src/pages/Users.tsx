@@ -75,6 +75,7 @@ import { pollingInterval } from "@/lib/polling";
 import { getTunnelRouteText } from "@/lib/tunnelDisplay";
 import { useUrlTab } from "@/hooks/useUrlTab";
 import { trpc } from "@/lib/trpc";
+import AdminUserReferralPanel from "@/components/referral/AdminUserReferralPanel";
 import { forwardAccessResultMessage } from "@shared/forwardAccessMessage";
 import {
   ChevronRight,
@@ -1241,6 +1242,8 @@ function UsersContent() {
           <span>单 IP: {u.maxIPs ? `${u.maxIPs}` : "不限"}</span>
           {speedLimit > 0 && <span className="col-span-2">转发限速: {formatForwardRateLimit(u.gostRateLimitIn, u.gostRateLimitOut)}</span>}
         </div>
+
+        <AdminUserReferralPanel userId={Number(u.id)} />
 
         <div className="flex h-9 items-center justify-between rounded-md border border-border/50 px-2">
           <span className="text-xs text-muted-foreground">转发</span>

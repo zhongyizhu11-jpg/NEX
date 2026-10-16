@@ -5,6 +5,7 @@ import * as db from "../db";
 import { refreshUserForwardEndpoints } from "./helpers";
 import { parseExpiryReminderDays } from "@shared/expiryReminder";
 import { findPricingOption, normalizePlanPriceTiers, planPricingOptions, PLAN_PRICE_TIER_LIMIT } from "@shared/planPricing";
+import { REFERRAL_MAX_RATE_BPS } from "@shared/referral";
 
 const planInput = z.object({
   name: z.string().min(1).max(80),
@@ -34,6 +35,11 @@ const planInput = z.object({
   /** true = 附带节点给每人单开一个端口（能按人计量）；false = 共用端口各发一份凭据。 */
   dedicatedProxyPort: z.boolean().default(false),
   sortOrder: z.number().int().min(0).max(9999).default(0),
+  /**
+   * 邀请返利比例，基点（1 = 0.01%，10000 = 100%）。0 = 这个套餐不返利。
+   * 界面上填百分比，前端按字符串换成整数基点再传，不经过浮点。
+   */
+  referralRateBps: z.number().int().min(0).max(REFERRAL_MAX_RATE_BPS).default(0),
   /**
    * 多周期定价：一个套餐挂一组「周期 → 价格」。
    *

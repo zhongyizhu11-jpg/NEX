@@ -45,6 +45,7 @@ export * from "./repositories/settingsRepository";
 export * from "./repositories/billingRepository";
 export * from "./repositories/trafficBillingRepository";
 export * from "./repositories/announcementRepository";
+export * from "./repositories/ticketRepository";
 export * from "./repositories/forwardGroupRepository";
 export * from "./repositories/hostProbeServiceRepository";
 export * from "./repositories/hostGroupRepository";
@@ -52,6 +53,8 @@ export * from "./repositories/pluginRepository";
 export * from "./repositories/proxySubscriptionRepository";
 export * from "./repositories/proxyInboundRepository";
 export * from "./repositories/ruleEntryBridgeRepository";
+export * from "./repositories/referralRepository";
+export * from "./repositories/tlsInboundRepository";
 
 // ==================== Initialization ====================
 

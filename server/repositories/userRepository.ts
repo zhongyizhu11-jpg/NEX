@@ -1,7 +1,7 @@
 import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import { InsertUser, users, forwardRules, forwardGroups, hosts, tunnels, trafficBillingUsage, userSubscriptions } from "../../drizzle/schema";
 import { executeRaw, getDatabaseKind, getDb, insertAndGetId, nowDate, queryRaw, quoteDbIdentifier, rawAffectedRows, withDatabaseTransaction } from "../dbRuntime";
-import { hashPassword, verifyPassword, verifyPasswordAgainstDummy } from "../password";
+import { createUnusablePasswordHash, hashPassword, verifyPassword, verifyPasswordAgainstDummy } from "../password";
 import { getSessionKindField, type SessionKind } from "../session";
 import { revokeUserAuthSessions } from "./sessionRepository";
 import { appendPanelLog } from "../_core/panelLogger";
@@ -382,12 +382,27 @@ export async function createUser(data: { username: string; password: string; nam
 }
 
 /** 用户自行注册（默认 role=user, canAddRules=false） */
-export async function registerUser(data: { username: string; password: string; name?: string; email?: string; emailVerified?: boolean; emailVerifiedAt?: Date | null }) {
+export async function registerUser(data: {
+  username: string;
+  password: string;
+  name?: string;
+  email?: string;
+  emailVerified?: boolean;
+  emailVerifiedAt?: Date | null;
+  /** 邀请返利：注册时绑定的邀请人（只在这里写一次）。 */
+  inviterId?: number | null;
+  /** Google 注册的账号没有密码：存一个永远对不上的标记（见 password.ts），password 字段不用。 */
+  unusablePassword?: boolean;
+  /** Google 注册时绑定和建号在同一条 INSERT 里（googleSub 有唯一约束，并发注册只会成功一个）。 */
+  googleSub?: string | null;
+  googleEmail?: string | null;
+}) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   return insertAndGetId("users", {
     username: data.username,
-    password: hashPassword(data.password),
+    password: data.unusablePassword ? createUnusablePasswordHash() : hashPassword(data.password),
+    ...(data.googleSub ? { googleSub: data.googleSub, googleEmail: data.googleEmail ?? null, googleLinkedAt: nowDate() } : {}),
     name: data.name ?? data.username,
     email: data.email ?? null,
     emailVerified: data.emailVerified ?? false,
@@ -396,6 +411,8 @@ export async function registerUser(data: { username: string; password: string; n
     role: "user",
     accountEnabled: true,
     canAddRules: false,
+    // 邀请人：注册时凭邀请码定下来（见 server/repositories/referralRepository.ts 的 resolveRegistrationInviter）。
+    inviterId: data.inviterId && data.inviterId > 0 ? data.inviterId : null,
   });
 }
 
@@ -808,6 +825,9 @@ export async function deleteUser(userId: number): Promise<{ hostIds: number[] }>
     ...await releaseAllDedicatedInboundsForUser(userId),
   ];
   await db.delete(users).where(eq(users.id, userId));
+  // 被他邀请来的人不再有邀请人：留着悬空的 id，哪天 id 被复用就错绑到别人头上。
+  // 已经返过的返利记录保留，账要对得上。
+  await db.update(users).set({ inviterId: null } as any).where(eq(users.inviterId, userId));
   return { hostIds: Array.from(new Set(hostIds.filter((id) => Number(id) > 0))) };
 }
 

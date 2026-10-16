@@ -18,6 +18,7 @@ const BALANCE_TYPE_LABELS: Record<string, string> = {
   redeem: "兑换入账",
   traffic_billing: "流量计费",
   traffic_addon_purchase: "购买附加流量",
+  referral_commission: "邀请返利",
 };
 
 /** 认不出的类型原样显示，不要吞成一句「余额变动」把信息抹掉。 */

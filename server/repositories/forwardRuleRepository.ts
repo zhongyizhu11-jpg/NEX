@@ -11,6 +11,7 @@ import { withKeyedTaskLock } from "../keyedTaskLock";
 import { reorderWithinSortOrderScope } from "./sortOrderSlots";
 import { recordRuleEntryDomainCleanupsBeforeDelete } from "./ruleEntryDomainRepository";
 import { signalRuleEntryDomainChanged, signalRuleEntryDomainCleanup } from "../ruleEntryDomainSignals";
+import { releaseRuleSniNames } from "./tlsInboundRepository";
 
 /*
   规则专属域名（server/ruleEntryDomain.ts）跟着这几列走：入口主机、开关、删除、订阅绑定、
@@ -1474,6 +1475,7 @@ export async function deleteForwardRule(id: number) {
   if (!db) return;
   const before = await getForwardRuleById(id).catch(() => undefined);
   await db.delete(forwardRuleTunnelExits).where(eq(forwardRuleTunnelExits.ruleId, id));
+  await releaseRuleSniNames(id);
   await db.update(forwardRules).set({
     isEnabled: false,
     isRunning: false,
@@ -1488,6 +1490,8 @@ export async function markForwardRulePendingDelete(id: number) {
   const db = await getDb();
   if (!db) return;
   await db.delete(forwardRuleTunnelExits).where(eq(forwardRuleTunnelExits.ruleId, id));
+  // 共享 TLS 入站上占的 SNI 立刻放掉：待删的规则不再参与分流，名字可以给别人了。
+  await releaseRuleSniNames(id);
   await db.update(forwardRules).set({
     isEnabled: false,
     isRunning: true,
@@ -1501,6 +1505,7 @@ export async function finalizeForwardRuleDelete(id: number) {
   const db = await getDb();
   if (!db) return;
   await db.delete(forwardRuleTunnelExits).where(eq(forwardRuleTunnelExits.ruleId, id));
+  await releaseRuleSniNames(id);
   await db.update(forwardGroupMembers).set({
     ruleId: null,
     updatedAt: nowDate(),
