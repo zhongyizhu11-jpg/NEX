@@ -60,3 +60,12 @@ func TestLiveMetricsCPUWindowIsItsOwn(t *testing.T) {
 		t.Fatalf("cpu=%d want 0", got)
 	}
 }
+
+func TestLiveMetricsClientIsBoundedAndSharesThePool(t *testing.T) {
+	if agentLiveMetricsHTTPClient.Timeout != liveMetricsPostTimeLimit || liveMetricsPostTimeLimit > 5*time.Second {
+		t.Fatalf("live metrics client timeout=%v want %v", agentLiveMetricsHTTPClient.Timeout, liveMetricsPostTimeLimit)
+	}
+	if agentLiveMetricsHTTPClient.Transport != agentSyncHTTPClient.Transport {
+		t.Fatalf("live metrics client should reuse the sync transport")
+	}
+}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -51,6 +52,13 @@ type liveMetricsRunner struct {
 
 var agentLiveMetrics = &liveMetricsRunner{}
 
+// 实时通道单独一个 5 秒超时的 client（连接池和常规同步共用）：面板或代理接了连接却迟迟不回时，
+// 用常规那个 60 秒的 client 会让循环一卡一分钟、3 次出错要好几分钟才停，期间新的开始事件都被忽略。
+var agentLiveMetricsHTTPClient = &http.Client{
+	Timeout:   liveMetricsPostTimeLimit,
+	Transport: agentSyncHTTPClient.Transport,
+}
+
 func normalizeLiveMetricsInterval(ms int) time.Duration {
 	if ms <= 0 {
 		return 0
@@ -77,7 +85,7 @@ func (r *liveMetricsRunner) start(cfg Config, intervalMs int) bool {
 	go func() {
 		defer r.running.Store(false)
 		r.run(cfg, interval, func(payload map[string]any, out *liveMetricsResponse) error {
-			return post(cfg, "/api/agent/live-metrics", payload, out)
+			return postWithClient(agentLiveMetricsHTTPClient, cfg, "/api/agent/live-metrics", payload, out)
 		}, time.Sleep)
 	}()
 	return true

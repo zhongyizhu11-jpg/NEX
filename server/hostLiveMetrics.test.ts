@@ -105,5 +105,5 @@ test("实时指标版本就是这一版 Agent；接口在 /api/sync 白名单里
   const middleware = fs.readFileSync(path.join(process.cwd(), "server/agentEncryptionMiddleware.ts"), "utf8");
   assert.match(middleware, /"\/api\/agent\/live-metrics"/);
   const agent = fs.readFileSync(path.join(process.cwd(), "agent/live_metrics.go"), "utf8");
-  assert.match(agent, /post\(cfg, "\/api\/agent\/live-metrics"/);
+  assert.match(agent, /postWithClient\(agentLiveMetricsHTTPClient, cfg, "\/api\/agent\/live-metrics"/);
 });
