@@ -1,4 +1,5 @@
 import { isIP } from "node:net";
+import { NO_EGRESS_COLUMNS, ruleEgressColumnsOf } from "../../shared/ssEgress";
 import { forwardGroupModeOf } from "../../shared/forwardTypes";
 import { and, asc, desc, eq, inArray, isNotNull, isNull, notInArray, or, sql } from "drizzle-orm";
 import {
@@ -235,7 +236,15 @@ function canPreserveChildRuleRuntime(existing: any, payload: any, options: SyncF
     "disabledByTunnel",
     "disabledByUser",
   ];
-  return numberKeys.every((key) => nullableNumber(existing?.[key]) === nullableNumber(payload?.[key]))
+  // 出口那几列按规整后的样子比（转发链 / 转发组的子规则不带这几列，缺省就是「直接连接」）。
+  const existingEgress = ruleEgressColumnsOf(existing);
+  const payloadEgress = ruleEgressColumnsOf(payload);
+  const egressSame = existingEgress.egressType === payloadEgress.egressType
+    && nullableNumber(existingEgress.egressInboundId) === nullableNumber(payloadEgress.egressInboundId)
+    && nullableString(existingEgress.egressConfigJson) === nullableString(payloadEgress.egressConfigJson)
+    && existingEgress.egressUdp === payloadEgress.egressUdp;
+  return egressSame
+    && numberKeys.every((key) => nullableNumber(existing?.[key]) === nullableNumber(payload?.[key]))
     && stringKeys.every((key) => nullableString(existing?.[key]) === nullableString(payload?.[key]))
     && boolKeys.every((key) => dbBool(existing?.[key]) === dbBool(payload?.[key]));
 }
@@ -3105,6 +3114,8 @@ async function ensureMemberRuleForTemplate(group: any, templateRule: any, member
     isRunning: false,
     pendingDelete: false,
     userId: Number(templateRule.userId),
+    // Shadowsocks 出口（server/ssEgress.ts）：只有端口转发资源的直连成员照抄模板的出口；隧道成员 / 别的组不带。
+    ...(isPortGroup && member.memberType !== "tunnel" ? ruleEgressColumnsOf(templateRule) : { ...NO_EGRESS_COLUMNS }),
   };
 
   // A 2.3.278 background sync could have copied group-level runtime fields

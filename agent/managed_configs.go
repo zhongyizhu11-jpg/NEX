@@ -50,6 +50,10 @@ func validateManagedConfigSpec(spec managedConfigSpec, data []byte, stagedPath s
 		if err := json.Unmarshal(data, &decoded); err != nil {
 			return fmt.Errorf("%s contains invalid JSON: %w", spec.Path, err)
 		}
+		// gost 运行时配置里的 Shadowsocks 出口节点：不认识的加密方式会让 gost 一连就崩（见 gost_ss_egress.go）。
+		if err := validateGostShadowsocksNodes(data); err != nil {
+			return fmt.Errorf("%s: %w", spec.Path, err)
+		}
 	default:
 		return fmt.Errorf("%s uses unsupported format %q", spec.Path, spec.Format)
 	}

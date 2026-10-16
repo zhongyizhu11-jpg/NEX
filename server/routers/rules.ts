@@ -1,4 +1,5 @@
 import { protectedProcedure, router } from "../_core/trpc";
+import { withRuleEgressDisplay } from "../ssEgress";
 import { z } from "zod";
 import * as db from "../db";
 import { crudRulesRouter, routeSchedulerHostIds } from "./rules.crud";
@@ -304,7 +305,7 @@ export const rulesRouter = router({
         : input.tunnelId === null
           ? rules.filter((rule: any) => !rule.tunnelId)
           : rules.filter((rule: any) => Number(rule.tunnelId || 0) === Number(input.tunnelId));
-      return withRuleResourceAccess(await withRuleEntryBridges(filtered), ctx.user);
+      return withRuleResourceAccess(await withRuleEgressDisplay(await withRuleEntryBridges(filtered)), ctx.user);
     }),
   listPage: protectedProcedure
     .input(z.object({
@@ -321,7 +322,7 @@ export const rulesRouter = router({
     .query(async ({ input, ctx }) => {
       const repositoryInput = await getRuleListRepositoryInput(input, ctx.user);
       const page = await db.getForwardRulesPage({ ...repositoryInput, page: input.page, pageSize: input.pageSize });
-      return withRuleResourceAccess(await withRuleEntryBridges(page), ctx.user);
+      return withRuleResourceAccess(await withRuleEgressDisplay(await withRuleEntryBridges(page)), ctx.user);
     }),
   mapItems: protectedProcedure
     .input(z.object({
@@ -338,7 +339,7 @@ export const rulesRouter = router({
     .query(async ({ input, ctx }) => {
       const repositoryInput = await getRuleListRepositoryInput(input, ctx.user);
       const batch = await db.getForwardRuleMapBatch(repositoryInput, input.cursor || 0, input.limit);
-      return withRuleResourceAccess(batch, ctx.user);
+      return withRuleResourceAccess(await withRuleEgressDisplay(batch), ctx.user);
     }),
   listSummary: protectedProcedure
     .input(z.object({
@@ -402,7 +403,7 @@ export const rulesRouter = router({
       if (!rule) return null;
       if (ctx.user.role !== "admin" && rule.userId !== ctx.user.id) return null;
       if (ctx.user.role !== "admin" && isManagedForwardGroupChildRule(rule)) return null;
-      return withRuleResourceAccess(await withRuleEntryBridges(rule), ctx.user);
+      return withRuleResourceAccess(await withRuleEgressDisplay(await withRuleEntryBridges(rule)), ctx.user);
     }),
   /**
    * 能当「备用线路」用的中转。

@@ -594,6 +594,8 @@ export default function ProxyInboundsSection({
       Number(row.sharedUserCount || 0) > 0 ? `分享给 ${row.sharedUserCount} 人` : "",
       // 套餐附带的专属端口是面板托管的，标出来，免得人以为是自己建的。
       Number(row.clonedFromInboundId || 0) > 0 ? "套餐附带 · 面板托管" : "",
+      // 规则编辑器里一键创建的：给转发规则当 Shadowsocks 出口用，默认不进订阅（见 docs/guide/ss-egress.md）。
+      row.landingEgress === true || Number(row.landingEgress) === 1 ? "落地出口" : "",
       // 没开直连、又没有转发指向它 —— 这个端口跑得好好的，客户端里却没有它。
       notInSubscriptionInboundIds?.has(Number(row.id)) ? "不在订阅里" : "",
       // 机器都没连上，这个端口就没跑起来 —— 比「不在订阅里」更靠前的一个问题。

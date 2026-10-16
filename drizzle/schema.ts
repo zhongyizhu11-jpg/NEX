@@ -492,6 +492,15 @@ export const forwardRules = table("forward_rules", {
   */
   tlsInboundId: int("tlsInboundId"),
   sniNames: text("sniNames"),
+  /*
+    Shadowsocks 出口（shared/ssEgress.ts）：egressType = none | ss_host | ss_link。
+    ss_host 指向 proxy_inbounds 里的一个 Shadowsocks 落地入站（凭据每次下发时从入站现取，轮换后自动跟上）；
+    ss_link 是用户粘贴的外部链接，解析后的服务器 / 方法 / 密码用面板密钥加密存在 egressConfigJson 里。
+  */
+  egressType: varchar("egressType", { length: 16 }).notNull().default("none"),
+  egressInboundId: int("egressInboundId"),
+  egressConfigJson: text("egressConfigJson"),
+  egressUdp: boolean("egressUdp").notNull().default(false),
   userId: int("userId").notNull(),
   createdAt: epoch("createdAt").notNull().default(nowDefault()),
   updatedAt: epoch("updatedAt").notNull().default(nowDefault()),
@@ -675,6 +684,12 @@ export const proxyInbounds = table("proxy_inbounds", {
    * 按授权去收会把管理员明确分出去的端口一起停掉。老数据一律是 false（维持原来的行为）。
    */
   hostGrantRequired: boolean("hostGrantRequired").notNull().default(false),
+  /**
+   * 「一键创建落地 SS 入站」开出来的：给转发规则当 Shadowsocks 出口用（shared/ssEgress.ts）。
+   * 派生节点默认不进订阅（includeDirect = false），管理员想给客户端用时在订阅页里打开即可；
+   * 管理员开的这种入站，有这台主机使用权限的用户都能拿来当出口。
+   */
+  landingEgress: boolean("landingEgress").notNull().default(false),
   /**
    * 这个端口自己的额度与用量。
    *

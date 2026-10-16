@@ -39,6 +39,14 @@ import { formatProxyNodeLink, PROXY_NODE_TRANSPORTS } from "../../shared/proxyNo
 import { combinePortPolicies, isPortAllowedByPolicy, portPolicyErrorMessage, portPolicyFrom } from "../../shared/portPolicy";
 import { dbBool } from "../repositories/repositoryUtils";
 import {
+  assertProxyInboundEgressCompatibleChange,
+  assertProxyInboundNotUsedAsEgress,
+  LANDING_EGRESS_INBOUND_DEFAULTS,
+  listEgressLandingOptions,
+  pickLandingEgressPort,
+  refreshEgressDependents,
+} from "../ssEgress";
+import {
   generateProxyInboundPassword,
   generateProxyInboundPsk,
   generateProxyInboundUuid,
@@ -382,6 +390,44 @@ function mergeInbound(base: ProxyInbound, input: Partial<InboundInput>): ProxyIn
   return merged;
 }
 
+/**
+ * 新建落地入站。「新建节点」和「一键创建落地 SS 入站」（转发规则的出口）都走这一条：
+ * 权限、额度、端口冲突、凭据生成一处都不少。landingEgress 只多打一个标记（派生节点默认不进订阅）。
+ */
+export async function createProxyInboundForActor(ctx: any, input: InboundInput, options: { landingEgress?: boolean } = {}) {
+  await assertAllowed(ctx);
+  const host = await assertUsableHost(input.hostId, ctx);
+  assertTenantListenPortAllowed({ actor: ctx.user, host, port: input.port, label: "落地节点端口" });
+  const ownerId = await resolveOwnerId(ctx, input.userId);
+
+  await assertInboundQuota(ownerId, ctx);
+
+  const conflict = await db.findProxyInboundPortConflict(input.hostId, input.port);
+  if (conflict) throw new Error(`该主机的 ${input.port} 端口已被落地节点「${conflict.name}」占用`);
+  await assertInboundPortAllowed(ctx, host, input.port);
+
+  const inbound = fillGeneratedCredentials(mergeInbound(createEmptyProxyInbound(), input));
+  const reason = validateProxyInbound(inbound);
+  if (reason) throw new Error(reason);
+  assertInboundCertPathsAllowed(ctx, host, inbound);
+
+  const id = await db.createProxyInbound({
+    userId: ownerId,
+    hostId: input.hostId,
+    name: input.name,
+    remark: input.remark || null,
+    publicLabel: input.publicLabel || null,
+    isEnabled: input.isEnabled ?? true,
+    hostGrantRequired: inboundNeedsHostGrant(ctx, host),
+    landingEgress: options.landingEgress === true,
+    ...inboundQuotaRow(input, ctx.user.role === "admin"),
+    ...db.proxyInboundToRow(inbound),
+  } as any);
+  await db.replaceProxyInboundUsers(Number(id), inbound.users);
+  await applyInbound(Number(id), input.hostId);
+  return { id };
+}
+
 export const proxyInboundsRouter = router({
   /** 这个协议能选哪些传输与安全层，以及有没有默认值。UI 用它收窄下拉。 */
   options: protectedProcedure.query(async () => ({
@@ -503,37 +549,39 @@ export const proxyInboundsRouter = router({
 
   create: protectedProcedure
     .input(inboundInput)
+    .mutation(async ({ ctx, input }) => createProxyInboundForActor(ctx, input)),
+
+  /**
+   * 转发规则编辑器「出口」那一段的落地主机清单：每台能用的主机、上面能当出口的 Shadowsocks 入站。
+   * 不要求客户端订阅权限 —— 用管理员开放的落地出口不需要能看订阅。
+   */
+  egressLandingOptions: protectedProcedure.query(async ({ ctx }) => listEgressLandingOptions(ctx.user)),
+
+  /**
+   * 一键创建落地 SS 入站：在落地主机上开一个 Shadowsocks（aes-256-gcm，见 shared/ssEgress.ts 为什么
+   * 不是 SS2022）入站，随机密码、端口从这台主机的端口范围里挑。走的就是上面 create 那条路（权限、
+   * 额度、端口冲突全照旧），只是打上 landingEgress 标记：派生节点默认不进订阅。
+   */
+  createLandingEgress: protectedProcedure
+    .input(z.object({ hostId: z.number().int().positive(), name: z.string().trim().min(1).max(64).optional() }))
     .mutation(async ({ ctx, input }) => {
-      await assertAllowed(ctx);
-      const host = await assertUsableHost(input.hostId, ctx);
-      assertTenantListenPortAllowed({ actor: ctx.user, host, port: input.port, label: "落地节点端口" });
-      const ownerId = await resolveOwnerId(ctx, input.userId);
-
-      await assertInboundQuota(ownerId, ctx);
-
-      const conflict = await db.findProxyInboundPortConflict(input.hostId, input.port);
-      if (conflict) throw new Error(`该主机的 ${input.port} 端口已被落地节点「${conflict.name}」占用`);
-      await assertInboundPortAllowed(ctx, host, input.port);
-
-      const inbound = fillGeneratedCredentials(mergeInbound(createEmptyProxyInbound(), input));
-      const reason = validateProxyInbound(inbound);
-      if (reason) throw new Error(reason);
-      assertInboundCertPathsAllowed(ctx, host, inbound);
-
-      const id = await db.createProxyInbound({
-        userId: ownerId,
+      const host = await db.getHostById(input.hostId);
+      if (!host) throw new Error("主机不存在");
+      if (ctx.user.role !== "admin" && Number(host.userId) !== Number(ctx.user.id)) {
+        throw new Error("只有管理员或主机的主人能在这台主机上一键创建落地入站");
+      }
+      const port = await pickLandingEgressPort(input.hostId);
+      const created = await createProxyInboundForActor(ctx, {
         hostId: input.hostId,
-        name: input.name,
-        remark: input.remark || null,
-        publicLabel: input.publicLabel || null,
-        isEnabled: input.isEnabled ?? true,
-        hostGrantRequired: inboundNeedsHostGrant(ctx, host),
-        ...inboundQuotaRow(input, ctx.user.role === "admin"),
-        ...db.proxyInboundToRow(inbound),
-      } as any);
-      await db.replaceProxyInboundUsers(Number(id), inbound.users);
-      await applyInbound(Number(id), input.hostId);
-      return { id };
+        name: input.name || LANDING_EGRESS_INBOUND_DEFAULTS.name,
+        protocol: LANDING_EGRESS_INBOUND_DEFAULTS.protocol,
+        method: LANDING_EGRESS_INBOUND_DEFAULTS.method,
+        security: "none",
+        transport: "tcp",
+        port,
+        remark: "转发规则的 Shadowsocks 出口",
+      } as InboundInput, { landingEgress: true });
+      return { id: Number(created.id), port, method: LANDING_EGRESS_INBOUND_DEFAULTS.method, hostId: input.hostId };
     }),
 
   update: protectedProcedure
@@ -564,6 +612,8 @@ export const proxyInboundsRouter = router({
         await assertInboundPortAllowed(ctx, host, port, input.id);
       }
 
+      // 正被转发规则当作 Shadowsocks 出口的入站：换协议 / 换成出口不支持的方法 / 换主机都会让那些规则失效，先拦下。
+      await assertProxyInboundEgressCompatibleChange(input.id, { protocol: input.protocol, method: input.method, hostId: input.hostId }, Number(row.hostId));
       const loaded = await db.loadProxyInbound(input.id);
       if (!loaded) throw new Error("落地节点不存在");
       const merged = mergeInbound(loaded, input);
@@ -621,6 +671,8 @@ export const proxyInboundsRouter = router({
       } as any);
       await db.replaceProxyInboundUsers(input.id, inbound.users);
       await applyInbound(input.id, hostId);
+      // 端口、密码、启停变了：拿它当出口的规则所在的入口机马上重算 gost 配置。
+      await refreshEgressDependents(input.id, `proxy-inbound-egress-${input.id}`);
       // 换过主机时旧主机也要重推一遍，否则那边的配置里还留着这个入站。
       if (input.hostId !== undefined && Number(row.hostId) !== hostId) {
         pushAgentRefresh(Number(row.hostId), `proxy-inbound-moved-${input.id}`, { urgent: true });
@@ -650,6 +702,8 @@ export const proxyInboundsRouter = router({
       await db.updateProxyInbound(input.id, db.proxyInboundToRow(inbound) as any);
       await db.replaceProxyInboundUsers(input.id, inbound.users);
       await applyInbound(input.id, Number(row.hostId));
+      // 拿它当 Shadowsocks 出口的规则：下发时从入站现取凭据，这里催入口机马上换上新密码。
+      await refreshEgressDependents(input.id, `proxy-inbound-rotated-${input.id}`);
       // 换了凭据，旧订阅立刻失效 —— 这是预期行为，界面上要讲清楚。
       return { success: true };
     }),
@@ -659,6 +713,8 @@ export const proxyInboundsRouter = router({
     .mutation(async ({ ctx, input }) => {
       await assertAllowed(ctx);
       const row = await assertOwnedInbound(input.id, ctx);
+      // 还有转发规则拿它当 Shadowsocks 出口：删了那些规则会断，先让人把规则改掉（报错里列出规则）。
+      await assertProxyInboundNotUsedAsEgress(input.id);
       const result = await db.deleteProxyInbound(input.id);
       pushAgentRefresh(Number(row.hostId), `proxy-inbound-deleted-${input.id}`, { urgent: true });
       return { success: true, ...result };

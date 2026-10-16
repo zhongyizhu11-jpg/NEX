@@ -99,6 +99,15 @@ import {
 import { cn } from "@/lib/utils";
 import { tunnelFxpIssueText } from "@/features/links/TunnelFxpIssueNotice";
 import { autoForwardRuleName, resolveForwardRuleName } from "@shared/forwardRuleName";
+import { DEFAULT_RULE_EGRESS_FORM, RuleEgressSection, type RuleEgressFormValue } from "@/components/rules/RuleEgressSection";
+import {
+  normalizeRuleEgressType,
+  RULE_EGRESS_STATE_LABELS,
+  ruleEgressShapeError,
+  ruleEgressStateTone,
+  ruleEgressSummaryText,
+  type RuleEgressState,
+} from "@shared/ssEgress";
 import {
   formatSniRuleEntry,
   parseSniNameJson,
@@ -319,6 +328,8 @@ type RuleFormData = {
   tlsInboundId: number | null;
   /** SNI 域名，一行一个；提交时由服务端规整（小写、IDNA、去重排序）。 */
   sniNamesText: string;
+  /** Shadowsocks 出口（shared/ssEgress.ts）：只在端口转发（gost）上有。 */
+  egress: RuleEgressFormValue;
 };
 
 type ProxyProtocolVersion = 1 | 2;
@@ -341,6 +352,7 @@ const defaultForm: RuleFormData = {
   entryMode: "port",
   tlsInboundId: null,
   sniNamesText: "",
+  egress: DEFAULT_RULE_EGRESS_FORM,
 };
 
 const gostTunnelModes = new Set(["tls", "wss", "tcp", "mtls", "mwss", "mtcp"]);
@@ -2755,6 +2767,16 @@ function RulesContent() {
       entryMode: isSniRule ? "sni" : "port",
       tlsInboundId: isSniRule ? Number(rule.tlsInboundId) : null,
       sniNamesText: isSniRule ? parseSniNameJson(rule.sniNames).join("\n") : "",
+      egress: normalizeRuleEgressType(rule.egressType) === "none"
+        ? DEFAULT_RULE_EGRESS_FORM
+        : {
+          egressType: normalizeRuleEgressType(rule.egressType),
+          egressHostId: Number(rule.egress?.landingHostId || 0) || null,
+          egressInboundId: Number(rule.egressInboundId || 0) || null,
+          egressLink: "",
+          egressLinkMasked: String(rule.egress?.masked || ""),
+          egressUdp: !!rule.egressUdp,
+        },
     });
     setEditingId(rule.id);
     setEditingOriginalProtocol(normalizeRuleProtocol(rule.protocol));
@@ -3131,11 +3153,54 @@ function RulesContent() {
     editingId, isForwardGroupRouteMode, canUseLocalForward,
     canUseForwardChain, canUseFailoverGroup, canUseGost, portStatus,
   ]);
+  /*
+    Shadowsocks 出口（shared/ssEgress.ts）：只在「端口转发」这条路上出现（直连主机 / gost 的端口转发资源）。
+    选了出口，转发工具固定 gost、协议固定 TCP、线路组关掉；端口转发资源的工具由资源决定，不是 gost 就不能选。
+  */
+  const egressSectionVisible = form.routeMode === "local" && !isSniEntryMode;
+  const egressActive = egressSectionVisible && form.egress.egressType !== "none";
+  const egressEntryHostIds = useMemo(() => {
+    const ids = new Set<number>();
+    if (form.hostId) ids.add(Number(form.hostId));
+    for (const member of (selectedForwardGroup?.members || []) as any[]) {
+      if (Number(member?.hostId || 0) > 0) ids.add(Number(member.hostId));
+    }
+    return Array.from(ids);
+  }, [form.hostId, selectedForwardGroup]);
+  const egressBlockedReason = useMemo<string | null>(() => {
+    if (!egressSectionVisible) return null;
+    if (isLegacyLocalRuleEdit) return "旧版端口转发规则请先迁移到新版端口转发，再设置出口。";
+    if (isForwardGroupRouteMode) {
+      if (!selectedForwardGroup) return null;
+      if (effectiveRouteForwardType !== "gost") {
+        return `这个端口转发用的是 ${FORWARD_TYPE_LABELS[effectiveRouteForwardType] || effectiveRouteForwardType}，出口需要 gost：请换一个 gost 的端口转发。`;
+      }
+      return null;
+    }
+    if (!usableForwardTypes.includes("gost")) return "出口需要 gost 转发，当前账号不能用 gost。";
+    return null;
+  }, [egressSectionVisible, isLegacyLocalRuleEdit, isForwardGroupRouteMode, selectedForwardGroup, effectiveRouteForwardType, usableForwardTypes]);
+  const egressBlocker = useMemo<string | null>(() => {
+    if (!egressActive) return null;
+    if (egressBlockedReason) return egressBlockedReason;
+    const shapeError = ruleEgressShapeError({
+      egressType: form.egress.egressType,
+      forwardType: effectiveRouteForwardType,
+      protocol: form.protocol,
+      egressUdp: form.egress.egressUdp,
+      forwardGroupMode: isForwardGroupRouteMode ? forwardGroupModeOf(selectedForwardGroup) : null,
+      failoverEnabled: false,
+    });
+    if (shapeError) return shapeError;
+    if (form.egress.egressType === "ss_host" && !form.egress.egressInboundId) return "请选择落地主机上的 Shadowsocks 入站";
+    if (form.egress.egressType === "ss_link" && !form.egress.egressLink.trim() && !form.egress.egressLinkMasked) return "请粘贴外部 Shadowsocks 链接";
+    return null;
+  }, [egressActive, egressBlockedReason, form.egress, form.protocol, effectiveRouteForwardType, isForwardGroupRouteMode, selectedForwardGroup]);
   const submitBlocker = useMemo<string | null>(
     () => (isSniEntryMode
       ? sniRuleFormBlocker(form, selectedTlsInbound)
-      : forwardRuleFormBlocker(form, ruleFormContext)),
-    [form, ruleFormContext, isSniEntryMode, selectedTlsInbound],
+      : forwardRuleFormBlocker(form, ruleFormContext) || egressBlocker),
+    [form, ruleFormContext, isSniEntryMode, selectedTlsInbound, egressBlocker],
   );
   const sourcePortRequired = isForwardRuleSourcePortRequired(ruleFormContext);
   /*
@@ -3257,6 +3322,7 @@ function RulesContent() {
     && !selectedForwardGroupIsPort;
   const canUseMainBackup = !selectedForwardGroupIsChain
     && !isSniEntryMode
+    && !egressActive
     && (
       (mainBackupUsesTunnelRoute && mainBackupForwardType === "gost" && mainBackupIsTunnelRoute)
       || mainBackupPortForwardSupported
@@ -3278,6 +3344,8 @@ function RulesContent() {
     ? null
     : isSniEntryMode
     ? { reason: "共享 TLS 入站上的规则暂不支持线路组。" }
+    : egressActive
+    ? { reason: "使用 Shadowsocks 出口的规则暂不支持线路组：出口本身就是固定的落地。" }
     : selectedForwardGroupIsChain
     ? {
       reason: "转发链不支持主备线路。想要线路出问题自动换，可以用「转发组」。",
@@ -3881,6 +3949,18 @@ function RulesContent() {
       });
       if (!confirmed) return;
     }
+    /*
+      出口：端口转发这条路上照表单发；别的路（隧道 / 转发链 / 转发组）编辑时发「直接连接」把旧出口清掉，新建时不发。
+      外部链接不改就不发（服务端保留原来加密存着的那条）。
+    */
+    const egressPayload = egressSectionVisible
+      ? {
+        egressType: form.egress.egressType,
+        egressInboundId: form.egress.egressType === "ss_host" ? form.egress.egressInboundId : null,
+        egressLink: form.egress.egressType === "ss_link" && form.egress.egressLink.trim() ? form.egress.egressLink.trim() : undefined,
+        egressUdp: form.egress.egressType !== "none" && form.egress.egressUdp,
+      }
+      : editingId ? { egressType: "none" as const } : {};
     if (editingId) {
       updateMutation.mutate({
         id: editingId,
@@ -3901,6 +3981,7 @@ function RulesContent() {
         telegramErrorNotifyEnabled: form.telegramErrorNotifyEnabled,
         entryDomainEnabled: form.entryDomainEnabled,
         ...failoverPayload,
+        ...egressPayload,
       });
     } else {
       createMutation.mutate({
@@ -3919,6 +4000,7 @@ function RulesContent() {
         telegramErrorNotifyEnabled: form.telegramErrorNotifyEnabled,
         entryDomainEnabled: form.entryDomainEnabled,
         ...failoverPayload,
+        ...egressPayload,
       });
     }
   };
@@ -6018,6 +6100,33 @@ function RulesContent() {
     );
   };
 
+  /** Shadowsocks 出口那一枚：「经 落地主机 X 出口」/「经 外部 SS 出口」，后面跟状态（运行 / 落地离线 / 需要升级 Agent…）。 */
+  const renderEgressBadge = (rule: any) => {
+    const egress = rule?.egress;
+    if (!egress || normalizeRuleEgressType(egress.type) === "none") return null;
+    const state = String(egress.state || "running") as RuleEgressState;
+    const tone = ruleEgressStateTone(state);
+    const text = ruleEgressSummaryText({ type: egress.type, landingHostName: egress.landingHostName });
+    const title = [text, egress.masked, egress.message].filter(Boolean).join(" · ");
+    return (
+      <span key="egress" className="inline-flex min-w-0 max-w-full items-center gap-1" data-testid="rule-egress-badge">
+        <Badge variant="outline" className="h-5 min-w-0 max-w-full truncate px-1.5 text-[10px] font-normal" title={title}>{text}</Badge>
+        <Badge
+          variant="outline"
+          className={cn(
+            "h-5 shrink-0 px-1.5 text-[10px]",
+            tone === "ok" && "border-[color-mix(in_srgb,var(--fx-healthy)_40%,transparent)] text-[var(--fx-healthy-text)]",
+            tone === "warn" && "border-[color-mix(in_srgb,var(--fx-warn)_40%,transparent)] text-[var(--fx-warn-text)]",
+            tone === "muted" && "text-muted-foreground",
+          )}
+          title={egress.message || undefined}
+        >
+          {RULE_EGRESS_STATE_LABELS[state] || state}
+        </Badge>
+      </span>
+    );
+  };
+
   /** 端口转发的两种入口方式。编辑时定死（要换就新建规则）。 */
   const renderEntryModeSwitch = () => {
     const pick = (mode: "port" | "sni") => {
@@ -7057,6 +7166,7 @@ function RulesContent() {
 
     const alerts = [
       renderSniRuleBadge(rule),
+      renderEgressBadge(rule),
       renderKernelForwardWarningBadge(getRuleKernelForwardWarning(rule)),
       rule?.tunnelId ? renderTunnelFxpIssueBadge(tunnelById.get(Number(rule.tunnelId))) : null,
       renderSubscriptionBadge(rule, "card"),
@@ -8016,8 +8126,8 @@ function RulesContent() {
               <FormField className="space-y-1.5">
               <Label>协议</Label>
               <Select
-              value={isSniEntryMode ? "tcp" : form.protocol}
-              disabled={isSniEntryMode}
+              value={isSniEntryMode || egressActive ? "tcp" : form.protocol}
+              disabled={isSniEntryMode || egressActive}
               onValueChange={(v) => setForm({
               ...form,
               protocol: v as any,
@@ -8051,6 +8161,23 @@ function RulesContent() {
 
               勾是复选框不是开关：要点「保存」才生效（见 switchVsCheckbox.test）。
             */}
+            {egressSectionVisible && (
+              <RuleEgressSection
+                value={form.egress}
+                isAdmin={user?.role === "admin"}
+                entryHostIds={egressEntryHostIds}
+                blockedReason={egressBlockedReason}
+                onChange={(patch) => setForm((prev) => ({ ...prev, egress: { ...prev.egress, ...patch } }))}
+                onEgressEnabled={() => setForm((prev) => ({
+                  ...prev,
+                  // 出口是 gost 的转发链做的：直连主机的规则切到 gost；端口转发资源的工具由资源决定（上面已经要求是 gost）。
+                  forwardType: isForwardGroupRouteMode ? prev.forwardType : "gost",
+                  tunnelId: null,
+                  protocol: "tcp",
+                  failoverEnabled: false,
+                }))}
+              />
+            )}
             <section className="rounded-[var(--fx-radius-card)] bg-[var(--fx-l2-group)] px-3 py-2.5" data-testid="failover-section">
               <div className="flex min-w-0 items-start gap-2.5">
                 <Checkbox

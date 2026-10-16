@@ -352,10 +352,13 @@ const tables: TableDef[] = [
       // 共享 TLS 入站（shared/tlsInbound.ts）：挂在哪个入站上、按哪些 SNI 分过来（JSON 数组）。
       // 这类规则的 sourcePort 是面板分的本机回环端口，不对外。
       c("tlsInboundId", "int"), c("sniNames", "text"),
+      // Shadowsocks 出口（shared/ssEgress.ts）：none | ss_host（指向落地入站）| ss_link（外部链接，egressConfigJson 加密保存）。
+      c("egressType", "varchar", { length: 16, notNull: true, default: "none" }), c("egressInboundId", "int"),
+      c("egressConfigJson", "text"), c("egressUdp", "bool", { notNull: true, default: false }),
       c("userId", "int", { notNull: true }), c("createdAt", "epoch", { notNull: true, default: "now" }),
       c("updatedAt", "epoch", { notNull: true, default: "now" }),
     ],
-    indexes: [["hostId"], ["hostId", "createdAt"], ["hostId", "sourcePort", "pendingDelete", "isEnabled"], ["userId"], ["userId", "sortOrder"], ["userId", "createdAt"], ["userId", "pendingDelete", "createdAt"], ["tunnelId"], ["forwardGroupId"], ["forwardGroupId", "isForwardGroupTemplate", "pendingDelete"], ["forwardGroupRuleId"], ["forwardGroupRuleId", "pendingDelete"], ["forwardGroupMemberId"], ["forwardGroupMemberId", "pendingDelete"], ["proxyNodeId"], ["userId", "proxyNodeId", "pendingDelete"], ["routeParentRuleId"], ["routeParentRuleId", "pendingDelete"]],
+    indexes: [["hostId"], ["hostId", "createdAt"], ["hostId", "sourcePort", "pendingDelete", "isEnabled"], ["userId"], ["userId", "sortOrder"], ["userId", "createdAt"], ["userId", "pendingDelete", "createdAt"], ["tunnelId"], ["forwardGroupId"], ["forwardGroupId", "isForwardGroupTemplate", "pendingDelete"], ["forwardGroupRuleId"], ["forwardGroupRuleId", "pendingDelete"], ["forwardGroupMemberId"], ["forwardGroupMemberId", "pendingDelete"], ["proxyNodeId"], ["userId", "proxyNodeId", "pendingDelete"], ["routeParentRuleId"], ["routeParentRuleId", "pendingDelete"], ["egressInboundId"]],
   },
   {
     /*
@@ -435,6 +438,8 @@ const tables: TableDef[] = [
       c("clonedFromInboundId", "int", { notNull: true, default: 0 }),
       // 普通用户靠主机授权开在别人机器上的入站：授权收回后不再下发。
       c("hostGrantRequired", "bool", { notNull: true, default: false }),
+      // 一键创建的落地出口入站（给规则当 Shadowsocks 出口用，派生节点默认不进订阅）。
+      c("landingEgress", "bool", { notNull: true, default: false }),
       // 端口自己的额度与用量。计数链装在监听端口上，多用户入站分不到人头，所以记在这里。
       c("bandwidthMbps", "int", { notNull: true, default: 0 }),
       c("trafficLimit", "bigint", { notNull: true, default: 0 }), c("trafficUsed", "bigint", { notNull: true, default: 0 }),
