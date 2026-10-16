@@ -1718,6 +1718,12 @@ html[data-personalization-background="image"] .auth-divider-label, html[data-per
 .fx-rule-spark { flex: 1 1 72px; min-width: 56px; max-width: 128px; width: auto; height: 26px; align-self: flex-end; color: var(--fx-text-muted); }
 .fx-rule-day { flex: none; min-width: 0; display: flex; flex-direction: column; align-items: flex-end; gap: 1px; text-align: right; font-size: 11.5px; line-height: 15px; color: var(--fx-text-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .fx-rule-day-val { color: var(--fx-text-secondary); }
+.fx-rule-day-head { display: inline-flex; align-items: center; gap: 4px; }
+/* 可用率的颜色往灰里调一点，别比延迟大数字还抢眼 */
+.fx-rule-avail { font-weight: 500; }
+.fx-rule-avail[data-tone="healthy"] { color: color-mix(in srgb, var(--fx-healthy-text) 70%, var(--fx-text-muted)); }
+.fx-rule-avail[data-tone="warn"] { color: color-mix(in srgb, var(--fx-warn-text) 70%, var(--fx-text-muted)); }
+.fx-rule-avail[data-tone="down"] { color: color-mix(in srgb, var(--fx-down-text) 75%, var(--fx-text-muted)); }
 .fx-rule-alerts { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; font-size: 12px; }
 /* 地址放不下就折行：入口一行、「→ 目标 [标签]」下一行；只有单个地址本身比卡还宽才截。 */
 .fx-rule-path { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--fx-stroke-weak); font-family: var(--fx-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 12px; line-height: 16px; color: var(--fx-text-secondary); letter-spacing: -.01em; }
