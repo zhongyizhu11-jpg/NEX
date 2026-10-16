@@ -420,6 +420,9 @@ function compactHostOption(host: any) {
     geoLatitudeMicro: host?.geoLatitudeMicro,
     geoLongitudeMicro: host?.geoLongitudeMicro,
     geoUpdatedAt: host?.geoUpdatedAt,
+    geoAsn: host?.geoAsn ?? null,
+    geoIsp: host?.geoIsp ?? null,
+    geoOrg: host?.geoOrg ?? null,
     geoManual: !!host?.geoManual,
     addressManual: !!host?.addressManual,
   };
@@ -492,6 +495,9 @@ export async function getHostOptions(ownerUserId?: number, allowedHostIds?: numb
         geoLatitudeMicro: hosts.geoLatitudeMicro,
         geoLongitudeMicro: hosts.geoLongitudeMicro,
         geoUpdatedAt: hosts.geoUpdatedAt,
+        geoAsn: hosts.geoAsn,
+        geoIsp: hosts.geoIsp,
+        geoOrg: hosts.geoOrg,
         geoManual: hosts.geoManual,
         addressManual: hosts.addressManual,
       })
@@ -762,6 +768,8 @@ export async function deleteHost(id: number) {
   await db.delete(forwardRuleTrafficCounters).where(eq(forwardRuleTrafficCounters.hostId, id));
   await db.delete(trafficStats).where(eq(trafficStats.hostId, id));
   await db.delete(trafficStatBuckets).where(eq(trafficStatBuckets.hostId, id));
+  // 网络画像（server/ops/netProfileTables.ts）：表是后加的，老库里可能还没建好，失败不拦删除
+  await executeRaw(`DELETE FROM ${quoteIdentifier("host_network_profiles")} WHERE ${quoteIdentifier("hostId")} = ?`, [id]).catch(() => undefined);
   await db.delete(trafficBillingConfigs).where(and(
     eq(trafficBillingConfigs.resourceType, "host"),
     eq(trafficBillingConfigs.resourceId, id),
@@ -889,7 +897,8 @@ export async function applyAgentReportedHostAddress(id: number, address: { ip: s
     `UPDATE ${q("hosts")}
      SET ${q("ip")} = ?, ${q("ipv4")} = ?, ${q("ipv6")} = ?,
          ${q("geoCountryCode")} = NULL, ${q("geoCountryName")} = NULL, ${q("geoRegion")} = NULL, ${q("geoEmoji")} = NULL,
-         ${q("geoLatitudeMicro")} = NULL, ${q("geoLongitudeMicro")} = NULL, ${q("geoUpdatedAt")} = NULL
+         ${q("geoLatitudeMicro")} = NULL, ${q("geoLongitudeMicro")} = NULL, ${q("geoUpdatedAt")} = NULL,
+         ${q("geoAsn")} = NULL, ${q("geoIsp")} = NULL, ${q("geoOrg")} = NULL
      WHERE ${q("id")} = ? AND COALESCE(${q("addressManual")}, ?) = ?`,
     [address.ip, address.ipv4, address.ipv6, id, boolValue(false), boolValue(false)],
   );
@@ -931,6 +940,7 @@ export async function getHostsMissingGeo(limit = 200) {
   const rows = await db.select().from(hosts).where(sql`
     ${hosts.geoCountryCode} IS NULL OR ${hosts.geoCountryCode} = ''
       OR ${hosts.geoLatitudeMicro} IS NULL OR ${hosts.geoLongitudeMicro} IS NULL
+      OR ${hosts.geoAsn} IS NULL
   `).orderBy(asc(hosts.id)).limit(Math.max(1, Math.floor(limit)));
   return rows.map(withComputedOnline);
 }

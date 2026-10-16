@@ -187,7 +187,7 @@ const MIGRATION_RUNTIME_TIMEOUT_MS = Math.max(
 );
 const MIGRATION_RUNTIME_POLL_MS = 2_000;
 // 旧版本面板的库里还没有这些表（换隧道桥接是后加的，只活几小时；工单、邀请返利记录、自动换 IP 的三张表
-// 也是后加的：老面板的库里没有返利表等于「还没有返过利」），直接搬 SQLite 时缺了不算错。
+// 也是后加的：老面板的库里没有返利表等于「还没有返过利」；主机网络画像同理，没有就是还没测过），直接搬 SQLite 时缺了不算错。
 const DIRECT_SQLITE_OPTIONAL_SOURCE_TABLES = new Set([
   "agent_traffic_reports",
   "forward_rule_route_events",
@@ -200,6 +200,7 @@ const DIRECT_SQLITE_OPTIONAL_SOURCE_TABLES = new Set([
   "ip_change_events",
   "host_tls_inbounds",
   "rule_sni_names",
+  "host_network_profiles",
 ]);
 
 function normalizePanelUrl(url: string) {
@@ -825,6 +826,8 @@ const IMPORT_TABLE_ORDER = [
   "ip_change_cloud_accounts",
   "ip_change_host_configs",
   "ip_change_events",
+  // 主机网络画像：只依赖主机
+  "host_network_profiles",
   "system_settings",
 ] as const;
 
@@ -845,6 +848,7 @@ const BEST_EFFORT_MIGRATION_TABLES = new Set<MigrationTableName>([
   "forward_rule_route_events",
   "config_audit_events",
   "ip_change_events",
+  "host_network_profiles",
   "system_settings",
 ]);
 
@@ -1610,6 +1614,11 @@ async function prepareImportRow(table: string, source: Record<string, any>, maps
       row.hostId = mapRequiredId(maps, "hosts", source.hostId);
       if (row.status === "running") row.status = "uncertain";
       return { row };
+
+    case "host_network_profiles":
+      // 每台主机一行；结果是检测出来的，导不进来也就是等下一轮重测（BEST_EFFORT）
+      row.hostId = mapRequiredId(maps, "hosts", source.hostId);
+      return { row, existingWhere: { hostId: row.hostId } };
 
     case "system_settings": {
       const key = String(source.key || "");

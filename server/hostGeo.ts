@@ -32,9 +32,26 @@ type ProviderGeo = {
   geoEmoji: string | null;
   geoLatitudeMicro: number | null;
   geoLongitudeMicro: number | null;
+  /** 「AS13335」；问过但对方没给是 ""（区别于从没问过的 null）。 */
+  geoAsn: string;
+  geoIsp: string | null;
+  geoOrg: string | null;
   geoUpdatedAt: Date;
   provider: string;
 };
+
+/**
+ * ASN 统一写成「AS13335」。三家的写法各不相同：ipapi.co "AS13335"，ip-api.com 的 as 字段是
+ * "AS13335 Cloudflare, Inc."，ipwho.is 给数字 13335。认不出来就是 ""。
+ */
+export function normalizeAsn(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  const text = String(value).trim();
+  const match = text.match(/^(?:AS)?\s*(\d{1,10})\b/i);
+  if (!match) return "";
+  const num = Number(match[1]);
+  return Number.isInteger(num) && num > 0 && num < 4294967296 ? `AS${num}` : "";
+}
 
 type GeoProvider = {
   name: string;
@@ -76,12 +93,16 @@ const GEO_PROVIDERS: GeoProvider[] = [
         geoEmoji: nonEmpty(data.emoji) || countryCodeToEmoji(countryCode) || null,
         geoLatitudeMicro: toCoordinateMicro(data.latitude),
         geoLongitudeMicro: toCoordinateMicro(data.longitude),
+        // ipapi.co 只有 org（就是 ASN 的持有者名），没有单独的 isp
+        geoAsn: normalizeAsn(data.asn),
+        geoIsp: nonEmpty(data.org),
+        geoOrg: nonEmpty(data.org),
       };
     },
   },
   {
     name: "ip-api.com",
-    url: (address) => `http://ip-api.com/json/${encodeURIComponent(address)}?fields=status,message,country,countryCode,regionName,city,lat,lon`,
+    url: (address) => `http://ip-api.com/json/${encodeURIComponent(address)}?fields=status,message,country,countryCode,regionName,city,lat,lon,isp,org,as,asname`,
     cooldownMs: 2 * 60 * 1000,
     rateLimitedUntil: 0,
     parse: (data) => {
@@ -97,6 +118,9 @@ const GEO_PROVIDERS: GeoProvider[] = [
         geoEmoji: countryCodeToEmoji(countryCode) || null,
         geoLatitudeMicro: toCoordinateMicro(data.lat),
         geoLongitudeMicro: toCoordinateMicro(data.lon),
+        geoAsn: normalizeAsn(data.as),
+        geoIsp: nonEmpty(data.isp) || nonEmpty(data.asname),
+        geoOrg: nonEmpty(data.org) || nonEmpty(data.asname),
       };
     },
   },
@@ -118,10 +142,20 @@ const GEO_PROVIDERS: GeoProvider[] = [
         geoEmoji: nonEmpty(data.flag?.emoji) || countryCodeToEmoji(countryCode) || null,
         geoLatitudeMicro: toCoordinateMicro(data.latitude),
         geoLongitudeMicro: toCoordinateMicro(data.longitude),
+        geoAsn: normalizeAsn(data.connection?.asn),
+        geoIsp: nonEmpty(data.connection?.isp) || nonEmpty(data.connection?.org),
+        geoOrg: nonEmpty(data.connection?.org) || nonEmpty(data.connection?.isp),
       };
     },
   },
 ];
+
+/** 测试用：按某家服务的规则解析一份响应。 */
+export function parseGeoProviderResponse(name: string, data: unknown) {
+  const provider = GEO_PROVIDERS.find((item) => item.name === name);
+  if (!provider) throw new Error(`unknown geo provider ${name}`);
+  return provider.parse(data);
+}
 
 function allGeoProvidersRateLimited(now = Date.now()) {
   return GEO_PROVIDERS.every((provider) => provider.rateLimitedUntil > now);
@@ -166,6 +200,10 @@ export type AddressGeoLookupResult = {
   geoEmoji: string | null;
   geoLatitudeMicro: number | null;
   geoLongitudeMicro: number | null;
+  /** 旧缓存行（加 ASN 之前写的）是 null；问过但没有是 ""。 */
+  geoAsn: string | null;
+  geoIsp: string | null;
+  geoOrg: string | null;
   geoUpdatedAt: Date;
   /** 哪家服务给的答案；从旧缓存行读出来时可能为空 */
   provider?: string | null;
@@ -218,6 +256,9 @@ function cacheResultFromRow(row: any): AddressGeoLookupResult | null {
     geoEmoji: String(row?.geoEmoji || "").trim() || countryCodeToEmoji(countryCode) || null,
     geoLatitudeMicro: row?.geoLatitudeMicro == null ? null : Number(row.geoLatitudeMicro),
     geoLongitudeMicro: row?.geoLongitudeMicro == null ? null : Number(row.geoLongitudeMicro),
+    geoAsn: row?.geoAsn == null ? null : String(row.geoAsn).trim(),
+    geoIsp: nonEmpty(row?.geoIsp),
+    geoOrg: nonEmpty(row?.geoOrg),
     geoUpdatedAt: rowDate(row?.fetchedAt || row?.geoUpdatedAt),
     provider: nonEmpty(row?.provider),
   };
@@ -228,11 +269,17 @@ function isHostUnlocated(host: any) {
   return host?.geoLatitudeMicro == null || host?.geoLongitudeMicro == null;
 }
 
+/** 运营商 / ASN 从来没问过（加这几列之前定位的主机、换过 IP 的主机）。问过但没有存的是 ""。 */
+function isHostMissingAsn(host: any) {
+  return host?.geoAsn === null || host?.geoAsn === undefined;
+}
+
 function isRefreshDue(host: any) {
   const hostId = Number(host?.id) || 0;
   const retry = hostId ? hostGeoRetryState.get(hostId) : undefined;
   if (retry && retry.notBefore > Date.now()) return false;
   if (isHostUnlocated(host)) return true;
+  if (isHostMissingAsn(host)) return true;
   const updatedAt = toTime(host?.geoUpdatedAt);
   return !updatedAt || Date.now() - updatedAt >= GEO_REFRESH_INTERVAL_MS;
 }
@@ -381,7 +428,8 @@ function cacheEntryFromRow(row: any): AddressGeoCacheEntry | null {
   const fetchedAt = toTime(row?.fetchedAt);
   const expiresAt = Number(row?.expiresAt || 0);
   return {
-    freshUntil: fetchedAt > 0 ? fetchedAt + ADDRESS_GEO_FRESH_MS : Date.now(),
+    // 加 ASN 之前写的缓存行（geoAsn 为 NULL）当作过期：值留着兜底，但要重新问一次把运营商补上
+    freshUntil: value.geoAsn === null ? 0 : fetchedAt > 0 ? fetchedAt + ADDRESS_GEO_FRESH_MS : Date.now(),
     expiresAt: expiresAt > 0 ? expiresAt * 1000 : Date.now() + ADDRESS_GEO_STALE_MS,
     value,
   };
@@ -391,7 +439,7 @@ async function readPersistentGeoCacheEntry(cacheKey: string) {
   const q = quoteIdentifier;
   const nowSec = epochSeconds();
   const rows = await queryRaw<any>(
-    `SELECT ${q("address")}, ${q("resolvedAddress")}, ${q("geoCountryCode")}, ${q("geoCountryName")}, ${q("geoRegion")}, ${q("geoEmoji")}, ${q("geoLatitudeMicro")}, ${q("geoLongitudeMicro")}, ${q("fetchedAt")}, ${q("expiresAt")}
+    `SELECT ${q("address")}, ${q("resolvedAddress")}, ${q("geoCountryCode")}, ${q("geoCountryName")}, ${q("geoRegion")}, ${q("geoEmoji")}, ${q("geoLatitudeMicro")}, ${q("geoLongitudeMicro")}, ${q("geoAsn")}, ${q("geoIsp")}, ${q("geoOrg")}, ${q("provider")}, ${q("fetchedAt")}, ${q("expiresAt")}
        FROM ${q("ip_geo_cache")}
       WHERE ${q("address")} = ? AND ${q("expiresAt")} > ?
       LIMIT 1`,
@@ -416,6 +464,9 @@ async function writePersistentGeoCache(cacheKey: string, value: AddressGeoLookup
     "geoEmoji",
     "geoLatitudeMicro",
     "geoLongitudeMicro",
+    "geoAsn",
+    "geoIsp",
+    "geoOrg",
     "provider",
     "fetchedAt",
     "expiresAt",
@@ -429,6 +480,9 @@ async function writePersistentGeoCache(cacheKey: string, value: AddressGeoLookup
     value.geoEmoji,
     value.geoLatitudeMicro,
     value.geoLongitudeMicro,
+    value.geoAsn,
+    value.geoIsp,
+    value.geoOrg,
     value.provider || "unknown",
     nowSec,
     expiresAt,
@@ -520,6 +574,18 @@ async function refreshHostGeo(host: any) {
       console.warn(`[HostGeo] unlocated host=${hostId} address=${address}; retry in ${Math.round(delay / 60000)}min`);
       return null;
     }
+    /*
+      运营商 / ASN 跟着 IP 走，总是写；地区那几列在「手动指定位置」时不动（geoManual）。
+      问过但对方没给 ASN 存 ""，免得每次翻列表都再问一遍；拿到的是还没有 ASN 的旧缓存（三家都限流）
+      就保持 NULL，按退避以后再问。
+    */
+    const networkPatch = { geoAsn: geo.geoAsn, geoIsp: geo.geoIsp ?? null, geoOrg: geo.geoOrg ?? null };
+    if (host?.geoManual) {
+      await db.updateHost(hostId, networkPatch as any);
+      if (geo.geoAsn === null) noteHostGeoFailure(hostId);
+      else hostGeoRetryState.delete(hostId);
+      return geo;
+    }
     await db.updateHost(hostId, {
       geoCountryCode: geo.geoCountryCode,
       geoCountryName: geo.geoCountryName,
@@ -528,9 +594,10 @@ async function refreshHostGeo(host: any) {
       geoLatitudeMicro: geo.geoLatitudeMicro,
       geoLongitudeMicro: geo.geoLongitudeMicro,
       geoUpdatedAt: geo.geoUpdatedAt,
+      ...networkPatch,
     } as any);
-    if (geo.geoLatitudeMicro == null || geo.geoLongitudeMicro == null) {
-      // 只有国家：地区先写上让卡片有字，坐标按退避慢慢再问，别每轮补漏都写一遍库。
+    if (geo.geoLatitudeMicro == null || geo.geoLongitudeMicro == null || geo.geoAsn === null) {
+      // 只有国家（或者三家都限流、拿的是还没有运营商的旧缓存）：地区先写上让卡片有字，坐标按退避慢慢再问，别每轮补漏都写一遍库。
       noteHostGeoFailure(hostId);
     } else {
       hostGeoRetryState.delete(hostId);

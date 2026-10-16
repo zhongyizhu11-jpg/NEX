@@ -38,7 +38,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.224"
+var Version = "2.2.225"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -2745,6 +2745,8 @@ type hostProbeServiceProbe struct {
 	TargetPort      int    `json:"targetPort"`
 	Method          string `json:"method"`
 	IntervalSeconds int    `json:"intervalSeconds"`
+	// 目标是域名时只用这一族的地址：ipv4 / ipv6；空或 auto 照旧（2.2.225 起，见 probe_family.go）
+	Family string `json:"family,omitempty"`
 }
 type forwardGroupProbe struct {
 	GroupID         int    `json:"groupId"`
