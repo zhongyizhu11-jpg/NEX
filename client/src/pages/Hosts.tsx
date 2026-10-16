@@ -1260,6 +1260,22 @@ function sameLiveRow(a: any, b: any) {
   按 id 建表，内容没变的行沿用上一轮的对象。轮询每次回来都是新对象（日期字段让
   React Query 的结构共享也认不出来），不这样 memo 卡片永远比不上。
 */
+function metricRowTime(row: any) {
+  const time = row?.recordedAt ? new Date(row.recordedAt).getTime() : 0;
+  return Number.isFinite(time) ? time : 0;
+}
+
+/** pageLive（库里最新一条）和 liveVitals（内存里的实时样本）合起来：每台主机取更新的那份。 */
+export function mergeLiveMetricRows(pageRows: Map<number, any>, liveRows: Map<number, any>) {
+  if (liveRows.size === 0) return pageRows;
+  const merged = new Map(pageRows);
+  liveRows.forEach((live, hostId) => {
+    const page = merged.get(hostId);
+    if (!page || metricRowTime(live) >= metricRowTime(page)) merged.set(hostId, page ? { ...page, ...live } : live);
+  });
+  return merged;
+}
+
 function useStableLiveRowsById(rows: any[], idKey: "id" | "hostId") {
   const previousRef = useRef(new Map<number, any>());
   return useMemo(() => {
@@ -1747,7 +1763,28 @@ function HostsContent() {
   });
   const hostStatusById = useStableLiveRowsById(hostPageLiveQuery.data?.status ?? EMPTY_LIVE_ROWS, "id");
   const hostTrafficById = useStableLiveRowsById(hostPageLiveQuery.data?.traffic ?? EMPTY_LIVE_ROWS, "hostId");
-  const hostLatestMetricById = useStableLiveRowsById(hostPageLiveQuery.data?.metrics ?? EMPTY_LIVE_ROWS, "hostId");
+  const hostPageMetricById = useStableLiveRowsById(hostPageLiveQuery.data?.metrics ?? EMPTY_LIVE_ROWS, "hostId");
+  /*
+    实时指标（2.3.444）：CPU / 内存 / 磁盘 / 上下行速度单独一个很轻的查询（只读面板内存，不查库），
+    列表 2 秒一次（手机也一样），打开了某台主机的详情 1 秒一次、并让那台主机的 Agent 每秒报一份。
+    拿到的样本比 pageLive 那份新就用它；拿不到（旧 Agent 还没报）就继续用 pageLive 的。
+  */
+  const hostLiveVitalsInterval = visiblePollingInterval(
+    detailHost ? "realtime" : "live",
+    pageVisible && activeManageTab === "hosts",
+  );
+  const detailHostId = detailHost ? Number(detailHost.id) : null;
+  const hostLiveVitalsQuery = trpc.hosts.liveVitals.useQuery({ hostIds: currentPageHostIds, focusHostId: detailHostId }, {
+    enabled: !isHostMapView && !needsFullHostList && !!hostLiveVitalsInterval && (currentPageHostIds.length > 0 || !!detailHostId),
+    refetchInterval: hostLiveVitalsInterval,
+    refetchOnWindowFocus: false,
+    placeholderData: (previousData: any) => previousData,
+  });
+  const hostLiveMetricById = useStableLiveRowsById(hostLiveVitalsQuery.data ?? EMPTY_LIVE_ROWS, "hostId");
+  const hostLatestMetricById = useMemo(
+    () => mergeLiveMetricRows(hostPageMetricById, hostLiveMetricById),
+    [hostPageMetricById, hostLiveMetricById],
+  );
   // 状态合并进主机对象时也沿用上一轮的结果，否则每轮每张卡都是新对象，memo 白做。
   const mergedHostCacheRef = useRef(new Map<number, { host: any; status: any; merged: any }>());
   // Drag-to-reorder used to wait for the server: the mutation invalidated the host

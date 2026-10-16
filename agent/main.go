@@ -38,7 +38,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.224"
+var Version = "2.2.225"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -5330,6 +5330,13 @@ func runAgentEventStream(cfg Config) error {
 						logf("decode agent-panel-migration payload: %v", err)
 					} else if handlePanelMigrationDirective(cfg, &directive) {
 						return io.EOF
+					}
+				} else if msg.Type == "agent-live-metrics" {
+					var request liveMetricsRequest
+					if err := json.Unmarshal(msg.Data, &request); err != nil {
+						logf("decode agent-live-metrics payload: %v", err)
+					} else {
+						agentLiveMetrics.start(cfg, request.IntervalMs)
 					}
 				} else if msg.Type == "agent-ext" {
 					wakeAgentExt()
