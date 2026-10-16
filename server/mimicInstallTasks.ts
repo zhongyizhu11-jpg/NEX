@@ -4,6 +4,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { appendPanelLog } from "./_core/panelLogger";
 import { isAgentVersionAtLeast } from "../shared/version";
+import { MIMIC_DEFAULT_VERSION, isShellSafeUrl, normalizeMimicDownloadProxy } from "../shared/mimicAssets";
 
 /*
   「安装 / 修复 mimic」任务（面板 2.3.439 / Agent 2.2.223 起）。
@@ -17,7 +18,7 @@ import { isAgentVersionAtLeast } from "../shared/version";
 
 export const AGENT_MIMIC_INSTALL_VERSION = "2.2.223";
 /** 面板这一版装的 mimic（hack3ric/mimic）版本，装 Agent 的脚本和面板一键安装都用它。 */
-export const MIMIC_TARGET_VERSION = "0.7.1";
+export const MIMIC_TARGET_VERSION = MIMIC_DEFAULT_VERSION;
 export const MIMIC_INSTALLER_URL = "https://raw.githubusercontent.com/zhongyizhu11-jpg/NEX/main/scripts/install-mimic.sh";
 
 export type MimicInstallMode = "install" | "repair";
@@ -131,6 +132,28 @@ export function readMimicInstallerScript(): string {
   return "";
 }
 
+/**
+ * 在安装脚本开头注入面板给的默认值（面板转发地址、下载代理）。脚本是随任务一起下发的正文，
+ * 这样不用改 Agent 就能把新参数带下去；主机上已有同名环境变量时环境变量优先。
+ * 只注入能原样写进 shell 双引号的值，别的一律丢掉。
+ */
+export function withMimicInstallerDefaults(script: string, options: { version?: string; assetBase?: string; proxy?: string }) {
+  if (!script) return script;
+  const lines: string[] = ["# --- NEX panel defaults ---"];
+  const version = String(options.version || "").replace(/^v/, "");
+  if (/^\d+\.\d+\.\d+$/.test(version)) lines.push(`FORWARDX_MIMIC_VERSION="\${FORWARDX_MIMIC_VERSION:-${version}}"`);
+  const assetBase = String(options.assetBase || "");
+  if (assetBase && isShellSafeUrl(assetBase)) lines.push(`FORWARDX_MIMIC_ASSET_BASE="\${FORWARDX_MIMIC_ASSET_BASE:-${assetBase}}"`);
+  const proxy = normalizeMimicDownloadProxy(options.proxy);
+  if (proxy) lines.push(`FORWARDX_MIMIC_PROXY="\${FORWARDX_MIMIC_PROXY:-${proxy}}"`);
+  if (lines.length === 1) return script;
+  const newline = script.indexOf("\n");
+  if (script.startsWith("#!") && newline > 0) {
+    return `${script.slice(0, newline + 1)}${lines.join("\n")}\n${script.slice(newline + 1)}`;
+  }
+  return `${lines.join("\n")}\n${script}`;
+}
+
 export function enqueueMimicInstallTask(input: {
   host: { id: number; name?: string | null; isOnline?: boolean | null; agentVersion?: string | null };
   mode: MimicInstallMode;
@@ -139,6 +162,10 @@ export function enqueueMimicInstallTask(input: {
   acceleratorUrl?: string | null;
   mirrors?: string | null;
   script?: string;
+  /** 面板转发 mimic 包的根地址（…/api/agent/mimic-assets），注入脚本 */
+  assetBase?: string;
+  /** 只用于下载 GitHub / 镜像的代理，注入脚本 */
+  proxy?: string;
 }): MimicInstallTaskState {
   expireOverdue();
   const hostId = Math.floor(Number(input.host?.id));
@@ -175,7 +202,9 @@ export function enqueueMimicInstallTask(input: {
       mode,
       version: String(input.version || "").replace(/^v/, ""),
       installerUrl: MIMIC_INSTALLER_URL,
-      script: input.script || undefined,
+      script: input.script
+        ? withMimicInstallerDefaults(input.script, { version: input.version, assetBase: input.assetBase, proxy: input.proxy })
+        : undefined,
       acceleratorEnabled: input.acceleratorEnabled === true,
       acceleratorUrl: String(input.acceleratorUrl || ""),
       mirrors: String(input.mirrors || ""),

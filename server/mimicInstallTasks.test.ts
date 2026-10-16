@@ -98,3 +98,22 @@ test("心跳稳定快路径把排着的 mimic 任务当成待办，不会把任�
   const blockingWork = source.slice(start, source.indexOf("recoveryTriggered,", start));
   assert.match(blockingWork, /hasBlockingWork:[\s\S]*hasQueuedMimicInstallTask\(host\.id\)/);
 });
+
+test("代理和面板转发地址注入到下发给 Agent 的脚本里（Agent 不用升级）", () => {
+  clearMimicInstallTasksForTest();
+  enqueueMimicInstallTask({
+    host,
+    mode: "install",
+    version: "0.7.1",
+    script: "#!/usr/bin/env bash\nMIMIC_REPO=\"hack3ric/mimic\"\n",
+    assetBase: "https://panel.example.com/api/agent/mimic-assets",
+    proxy: "socks5h://127.0.0.1:1080",
+  });
+  const payload = takeMimicInstallTask(7);
+  assert.ok(payload?.script);
+  assert.match(payload!.script!, /FORWARDX_MIMIC_ASSET_BASE="\$\{FORWARDX_MIMIC_ASSET_BASE:-https:\/\/panel\.example\.com\/api\/agent\/mimic-assets\}"/);
+  assert.match(payload!.script!, /FORWARDX_MIMIC_PROXY="\$\{FORWARDX_MIMIC_PROXY:-socks5h:\/\/127\.0\.0\.1:1080\}"/);
+  // 代理不出现在给页面看的任务状态里
+  assert.doesNotMatch(JSON.stringify(getMimicInstallTask(7)), /1080/);
+  clearMimicInstallTasksForTest();
+});
