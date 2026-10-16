@@ -1750,7 +1750,7 @@ button.fx-rule-addr:enabled:hover .fx-rule-addr-copy, button.fx-rule-addr:enable
 .fx-tunnel-route { margin-top: 12px; }
 .fx-tunnel-route .text-primary-type { font-size: 13.5px; }
 .fx-tunnel-foot { display: flex; min-width: 0; align-items: flex-end; gap: 10px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--fx-stroke-weak); }
-.fx-tunnel-foot .fx-rule-tag { align-self: center; margin-bottom: 2px; }
+.fx-tunnel-foot .fx-rule-tag { flex: none; align-self: center; margin-bottom: 2px; }
 .fx-tunnel-foot .fx-rule-spark { flex: 1 1 64px; }
 .fx-tunnel-foot .fx-rule-day { margin-left: auto; }
 .fx-tunnel-none { font-size: 13px; line-height: 20px; color: var(--fx-text-muted); }

@@ -4139,12 +4139,11 @@ function TunnelsContent() {
             )}
             {rating ? <span className="fx-rule-tag" data-tone={ratingTone}>{rating.label}</span> : null}
             <Sparkline values={spark?.values || []} width={96} height={26} stroke={toneColor} className="fx-rule-spark" title="近 24 小时延迟走势" />
+            {/* 可用率放在「近 24H」这一行：第二行不能折行，再加长会把评级和走势图挤没（2.3.445 就挤坏过） */}
             <div className="fx-rule-day">
-              <span>近 24H</span>
+              <span>近 24H{spark?.availabilityPct != null ? ` · 可用 ${formatStatPercent(spark.availabilityPct, 1)}` : ""}</span>
               <span className="fx-rule-day-val">
-                {spark?.avgMs != null
-                  ? `平均 ${spark.avgMs} · 最高 ${spark.maxMs} ms${spark.availabilityPct != null ? ` · 可用 ${formatStatPercent(spark.availabilityPct, 1)}` : ""}`
-                  : spark?.availabilityPct != null ? `可用 ${formatStatPercent(spark.availabilityPct, 1)}` : "还没有记录"}
+                {spark?.avgMs != null ? `平均 ${spark.avgMs} · 最高 ${spark.maxMs} ms` : spark?.availabilityPct != null ? "延迟还没有记录" : "还没有记录"}
               </span>
             </div>
           </div>
