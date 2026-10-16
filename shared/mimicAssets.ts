@@ -104,12 +104,15 @@ export function buildMimicManualCommands(options: { panelUrl: string; version?: 
     ? `curl -fsSL ${panelUrl}${MIMIC_INSTALL_SCRIPT_PATH} | sudo ${proxy ? `FORWARDX_MIMIC_PROXY=${proxy} ` : ""}bash`
     : "";
   const curlProxy = proxy ? ` -x ${proxy}` : "";
+  // 发布包只有 bookworm / trixie / noble 三套：别的代号按家族退回（同安装脚本的 detect_deb_codenames）。
+  // 一行一步用 && 串起来：任何一步失败就停，不会拿旧文件去装；临时目录每次新建。
   const github = [
-    `V=${version}; C=$(. /etc/os-release; echo $VERSION_CODENAME); A=$(dpkg --print-architecture)`,
-    `BASE=https://github.com/${MIMIC_RELEASE_REPO}/releases/download/v$V`,
-    `curl -fL --retry 3${curlProxy} -o /tmp/mimic.deb "$BASE/\${C}_mimic_\${V}-1_\${A}.deb"`,
-    `curl -fL --retry 3${curlProxy} -o /tmp/mimic-dkms.deb "$BASE/\${C}_mimic-dkms_\${V}-1_\${A}.deb"`,
-    `sudo apt-get install -y "linux-headers-$(uname -r)" /tmp/mimic.deb /tmp/mimic-dkms.deb`,
+    `V=${version}; A=$(dpkg --print-architecture); . /etc/os-release`,
+    `case "$VERSION_CODENAME" in bookworm|trixie|noble) C=$VERSION_CODENAME ;; *) case " $ID $ID_LIKE " in *" ubuntu "*) C=noble ;; *) C=bookworm ;; esac ;; esac`,
+    `BASE=https://github.com/${MIMIC_RELEASE_REPO}/releases/download/v$V; D=$(mktemp -d) && \\`,
+    `curl -fL --retry 3${curlProxy} -o "$D/mimic.deb" "$BASE/\${C}_mimic_\${V}-1_\${A}.deb" && \\`,
+    `curl -fL --retry 3${curlProxy} -o "$D/mimic-dkms.deb" "$BASE/\${C}_mimic-dkms_\${V}-1_\${A}.deb" && \\`,
+    `sudo apt-get install -y "linux-headers-$(uname -r)" "$D/mimic.deb" "$D/mimic-dkms.deb" && \\`,
     `sudo modprobe mimic && mimic --version`,
   ].join("\n");
   return { panel, github };

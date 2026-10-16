@@ -12,6 +12,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { copyTextFromElement } from "@/lib/clipboard";
+import { mobileAuth } from "@/lib/mobileAuth";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 
@@ -200,7 +201,8 @@ export default function MimicInstallPanel({ host, canManage, compact = false }: 
   const showLogLink = logLines.length > 0 && (active || showFailure || showSuccess);
   const showHelpLinks = canManage && !ready && !active;
 
-  const panelUrl = typeof window !== "undefined" ? window.location.origin : "";
+  // App 里页面在 capacitor://localhost，要用登录时填的面板地址，否则命令指向 localhost
+  const panelUrl = mobileAuth.panelOrigin();
   const commands = useMemo(() => buildMimicManualCommands({ panelUrl, proxy }), [panelUrl, proxy]);
   const normalizedProxy = normalizeMimicDownloadProxy(proxy);
 

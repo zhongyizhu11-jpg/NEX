@@ -139,8 +139,47 @@ test("手动安装命令：经面板一行装，GitHub 直装跟手动验证过�
 
   const proxied = buildMimicManualCommands({ panelUrl: "https://panel.example.com", proxy: "socks5h://127.0.0.1:1080" });
   assert.equal(proxied.panel, "curl -fsSL https://panel.example.com/api/agent/mimic-install.sh | sudo FORWARDX_MIMIC_PROXY=socks5h://127.0.0.1:1080 bash");
-  assert.match(proxied.github, /curl -fL --retry 3 -x socks5h:\/\/127\.0\.0\.1:1080 -o \/tmp\/mimic\.deb/);
+  assert.match(proxied.github, /curl -fL --retry 3 -x socks5h:\/\/127\.0\.0\.1:1080 -o "\$D\/mimic\.deb"/);
   assert.equal(buildMimicManualCommands({ panelUrl: "" }).panel, "");
+});
+
+/*
+  手动命令真跑一遍（curl / apt-get / modprobe / dpkg 换成桩，/etc/os-release 换成临时文件）：
+  代号按家族退回，下载失败就停在那一步，不会接着去 apt-get 装旧文件。
+*/
+function runManualGithubCommand(osRelease: string, curlFails: boolean) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nex-mimic-manual-"));
+  const osFile = path.join(dir, "os-release");
+  fs.writeFileSync(osFile, osRelease);
+  const log = path.join(dir, "calls.log");
+  const command = buildMimicManualCommands({ panelUrl: "" }).github.replace(". /etc/os-release", `. ${osFile}`);
+  const stubs = [
+    `dpkg() { echo amd64; }`,
+    `curl() { local url="\${@: -1}"; echo "curl $url" >> ${log}; ${curlFails ? "return 22" : "return 0"}; }`,
+    `sudo() { echo "sudo $*" >> ${log}; return 0; }`,
+    `mimic() { echo "mimic $*" >> ${log}; }`,
+  ].join("\n");
+  const result = spawnSync("bash", ["-c", `${stubs}\n${command}`], { encoding: "utf8" });
+  const calls = fs.existsSync(log) ? fs.readFileSync(log, "utf8") : "";
+  fs.rmSync(dir, { recursive: true, force: true });
+  return { status: result.status, calls };
+}
+
+test("手动命令：没有现成包的代号按家族退回 noble / bookworm", () => {
+  const mint = runManualGithubCommand('ID=linuxmint\nID_LIKE="ubuntu debian"\nVERSION_CODENAME=wilma\n', false);
+  assert.match(mint.calls, /noble_mimic_0\.7\.1-1_amd64\.deb/);
+  const bullseye = runManualGithubCommand("ID=debian\nVERSION_CODENAME=bullseye\n", false);
+  assert.match(bullseye.calls, /bookworm_mimic-dkms_0\.7\.1-1_amd64\.deb/);
+  const trixie = runManualGithubCommand("ID=debian\nVERSION_CODENAME=trixie\n", false);
+  assert.match(trixie.calls, /trixie_mimic_0\.7\.1-1_amd64\.deb/);
+  assert.match(trixie.calls, /sudo apt-get install -y/);
+});
+
+test("手动命令：下载失败就停，不去装", () => {
+  const failed = runManualGithubCommand("ID=debian\nVERSION_CODENAME=bookworm\n", true);
+  assert.notEqual(failed.status, 0);
+  assert.equal((failed.calls.match(/^curl /gm) || []).length, 1);
+  assert.doesNotMatch(failed.calls, /apt-get|modprobe/);
 });
 
 /*
