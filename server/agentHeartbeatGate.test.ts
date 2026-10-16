@@ -714,7 +714,7 @@ test("metrics watcher busy heartbeats explicitly select the metrics-only mode", 
     metricsWatching: true,
   });
   assert.equal(response.metricsOnly, true);
-  assert.equal(response.nextInterval, 3);
+  assert.equal(response.nextInterval, 2);
 });
 
 test("metrics-only heartbeats do not erase the last reported mimic runtime state", () => {
@@ -750,7 +750,7 @@ test("heartbeat intervals slow down only when the Agent has no interactive work"
     serviceProbeIntervals: [],
   };
   assert.equal(selectAgentHeartbeatInterval(idle), AGENT_IDLE_HEARTBEAT_INTERVAL_SECONDS);
-  assert.equal(selectAgentHeartbeatInterval({ ...idle, metricsWatching: true }), 3);
+  assert.equal(selectAgentHeartbeatInterval({ ...idle, metricsWatching: true }), 2);
   assert.equal(selectAgentHeartbeatInterval({ ...idle, hasInteractiveTasks: true }), 2);
   assert.equal(selectAgentHeartbeatInterval({ ...idle, requestLocalState: true }), 2);
   assert.equal(selectAgentHeartbeatInterval({ ...idle, serviceProbeIntervals: [20, 120] }), 20);

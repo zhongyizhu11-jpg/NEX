@@ -87,6 +87,12 @@ export class AgentHeartbeatGate {
   }
 }
 
+/**
+ * 有人在看这台机器的指标时，心跳间隔（秒）。Agent 的下限就是 2 秒（更短的值旧 Agent 会退回 30 秒），
+ * 所以这里取 2；主机详情打开时 2.2.225 起的 Agent 另走每秒一次的实时指标通道（hostLiveMetrics.ts）。
+ */
+export const AGENT_METRICS_WATCH_INTERVAL_SECONDS = 2;
+
 export function buildBusyAgentHeartbeatResponse(input: {
   panelUrl: string;
   requestLocalState: boolean;
@@ -104,7 +110,7 @@ export function buildBusyAgentHeartbeatResponse(input: {
     agentUpgrade: null,
     panelUrl: input.panelUrl,
     forceTcping: false,
-    nextInterval: metricsOnly ? 3 : 5,
+    nextInterval: metricsOnly ? AGENT_METRICS_WATCH_INTERVAL_SECONDS : 5,
     requestLocalState: input.requestLocalState,
     compactReports: true,
     presenceSupported: true,
@@ -320,7 +326,7 @@ export function selectAgentHeartbeatInterval(input: {
     return Math.min(minimum, normalized);
   }, AGENT_IDLE_HEARTBEAT_INTERVAL_SECONDS);
   return Math.min(
-    input.metricsWatching ? 3 : AGENT_IDLE_HEARTBEAT_INTERVAL_SECONDS,
+    input.metricsWatching ? AGENT_METRICS_WATCH_INTERVAL_SECONDS : AGENT_IDLE_HEARTBEAT_INTERVAL_SECONDS,
     serviceProbeInterval,
   );
 }

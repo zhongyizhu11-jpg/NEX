@@ -6,6 +6,7 @@ import { nanoid } from "nanoid";
 import * as db from "../db";
 import { appendPanelLog } from "../_core/panelLogger";
 import { markHostMetricsWatching, pushAgentRefresh, pushAgentUpgrade } from "../agentEvents";
+import { ensureHostLiveStream, getHostLiveMetric, markHostLiveFocus } from "../hostLiveMetrics";
 import { AGENT_ASSET_NAMES, getMissingBundledAgentAssets } from "../agentAssets";
 import { pushTunnelEndpointRefresh, requireHostAccess, requireHostsAccess } from "./helpers";
 import { AGENT_VERSION, APP_VERSION, REPO_URL } from "../_core/systemRouter";
@@ -622,6 +623,30 @@ function compactHostMetricSummary(row: any) {
     udpConnections: row?.udpConnections ?? null,
     recordedAt: row?.recordedAt || null,
   };
+}
+
+/*
+  hosts.liveVitals 每 1~2 秒一次：主机可见性查一次缓存 10 秒，别每秒都去查库。
+  缓存键带用户和请求的主机集合，换了页面 / 用户就重新查。
+*/
+const LIVE_VISIBILITY_TTL_MS = 10_000;
+const liveVisibilityCache = new Map<string, { at: number; hosts: LiveVisibleHost[] }>();
+
+type LiveVisibleHost = { id: number; agentVersion: string | null };
+
+async function visibleLiveHosts(user: { id: number; role: string }, hostIds: number[]): Promise<LiveVisibleHost[]> {
+  const key = `${user.id}:${user.role}:${[...hostIds].sort((a, b) => a - b).join(",")}`;
+  const now = Date.now();
+  const cached = liveVisibilityCache.get(key);
+  if (cached && now - cached.at < LIVE_VISIBILITY_TTL_MS) return cached.hosts;
+  const scope = await visibleHostQueryScope(user);
+  const rows = (await db.getHostStatusRows({ ...scope, hostIds })) as any[];
+  const hosts: LiveVisibleHost[] = rows
+    .map((row) => ({ id: Number(row?.id || 0), agentVersion: row?.agentVersion ? String(row.agentVersion) : null }))
+    .filter((host) => host.id > 0);
+  if (liveVisibilityCache.size > 2000) liveVisibilityCache.clear();
+  liveVisibilityCache.set(key, { at: now, hosts });
+  return hosts;
 }
 
 function compactHostTrafficSummary(row: any) {
@@ -1846,6 +1871,38 @@ export const hostsRouter = router({
           traffic: (trafficRows as any[]).map(compactHostTrafficSummary).filter((row) => row.hostId > 0),
           metrics: (metricRows as any[]).map(compactHostMetricSummary).filter((row) => row.hostId > 0),
         };
+      }),
+    /*
+      实时指标（2.3.444）：只读内存里的最新样本（hostLiveMetrics.ts），不碰库。
+      主机列表在看 → Agent 心跳 2 秒；focusHostId（打开了详情）→ 2.2.225 起的 Agent 每秒一份。
+      没有新鲜样本的主机不返回，前端继续用 pageLive 那份。
+    */
+    liveVitals: protectedProcedure
+      .input(z.object({
+        hostIds: z.array(z.number().int().positive()).max(100),
+        focusHostId: z.number().int().positive().nullable().optional(),
+      }))
+      .query(async ({ input, ctx }) => {
+        const requestedIds = Array.from(new Set([
+          ...input.hostIds,
+          ...(input.focusHostId ? [input.focusHostId] : []),
+        ].map(Number).filter((id) => Number.isInteger(id) && id > 0)));
+        if (requestedIds.length === 0) return [];
+        const hosts = await visibleLiveHosts(ctx.user, requestedIds);
+        if (hosts.length === 0) return [];
+        const hostIds = hosts.map((host) => host.id);
+        for (const hostId of markHostMetricsWatching(hostIds, 15_000)) pushAgentRefresh(hostId, "metrics-watch");
+        const focus = input.focusHostId ? hosts.find((host) => host.id === input.focusHostId) : undefined;
+        if (focus) {
+          markHostLiveFocus(focus.id);
+          ensureHostLiveStream(focus);
+        }
+        return hostIds
+          .map((hostId) => {
+            const row = getHostLiveMetric(hostId);
+            return row ? { ...compactHostMetricSummary(row), memoryTotal: row.memoryTotal ?? null, live: row.live } : null;
+          })
+          .filter((row): row is NonNullable<typeof row> => !!row);
       }),
     requestAgentUpgrade: adminProcedure
       .input(z.object({ hostId: z.number(), targetVersion: z.string().max(64).nullable().optional() }))

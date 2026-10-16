@@ -37,6 +37,7 @@ import {
 import {
   agentHeartbeatGate,
   agentStableHeartbeatPlanCache,
+  AGENT_METRICS_WATCH_INTERVAL_SECONDS,
   buildBusyAgentHeartbeatResponse,
   buildPresenceAgentHeartbeatResponse,
   buildReportedRuntimeHeartbeatPatch,
@@ -54,7 +55,8 @@ import { hasQueuedIperf3AgentTasks, takeIperf3AgentTasks } from "./iperf3AgentTa
 import { hasQueuedPluginAgentTasks, takePluginAgentTasks } from "./pluginAgentTasks";
 import { hasPendingMimicInstallTask, hasQueuedMimicInstallTask, takeMimicInstallTask } from "./mimicInstallTasks";
 import { getAgentPluginInventory, updateAgentPluginInventory } from "./agentPluginInventory";
-import { getAgentHostFromRequest, getAgentPresenceHostFromRequest, getResolvedAgentToken } from "./agentAuth";
+import { getAgentHostFromRequest, getAgentHostIdentityFromRequest, getAgentPresenceHostFromRequest, getResolvedAgentToken } from "./agentAuth";
+import { liveMetricsIntervalFor, liveSampleFromCompactMetrics, recordHostLiveSample } from "./hostLiveMetrics";
 import { normalizeAgentText, normalizeNetworkInterface } from "./agentInputValidation";
 import { pruneMapEntries, setBoundedMapValue } from "./boundedCache";
 import { isValidTlsServerName } from "./nginxTlsInput";
@@ -1467,6 +1469,27 @@ export function buildNginxRuntimeRetirementPlan() {
 }
 
 export function registerAgentHeartbeatRoute(agentRouter: Router) {
+/*
+  实时指标（Agent 2.2.225 起）：主机详情开着时 Agent 每秒发一份紧凑指标 m，只放内存
+  （hostLiveMetrics.ts），不进库、不碰对账。回包 intervalMs 告诉它下一次多久后发，0 就停。
+*/
+agentRouter.post("/api/agent/live-metrics", async (req: Request, res: Response) => {
+  try {
+    const host = await getAgentHostIdentityFromRequest(req);
+    if (!host) {
+      res.status(401).json({ error: "Invalid token" });
+      return;
+    }
+    const hostId = Number((host as any).id);
+    const sample = liveSampleFromCompactMetrics(req.body?.m, Date.now(), "live");
+    if (sample) recordHostLiveSample(hostId, sample);
+    res.json({ success: true, intervalMs: liveMetricsIntervalFor(hostId) });
+  } catch (error) {
+    console.error("[Agent LiveMetrics] Error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 agentRouter.post("/api/agent/presence", async (req: Request, res: Response) => {
   try {
     const host = await getAgentPresenceHostFromRequest(req);
@@ -1869,6 +1892,25 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       tcpConnections: tcpConnections ?? null,
       udpConnections: udpConnections ?? null,
     });
+    recordHostLiveSample(host.id, {
+      at: Date.now(),
+      source: "heartbeat",
+      cpuUsage: cpuUsage ?? null,
+      memoryUsage: memoryUsage ?? null,
+      memoryUsed: memoryUsed ?? null,
+      memoryTotal: memoryTotal ?? null,
+      swapUsage: swapUsage ?? null,
+      swapUsed: swapUsed ?? null,
+      swapTotal: swapTotal ?? null,
+      networkIn: networkIn ?? null,
+      networkOut: networkOut ?? null,
+      diskUsage: diskUsage ?? null,
+      diskUsed: diskUsed ?? null,
+      diskTotal: diskTotal ?? null,
+      uptime: uptime ?? null,
+      tcpConnections: tcpConnections ?? null,
+      udpConnections: udpConnections ?? null,
+    });
 
     if (busyHeartbeat) {
       const panelUrl = await resolveAgentAdvertisedPanelUrl();
@@ -1887,7 +1929,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         requestLocalState: localRuntimeState.requestLocalState,
         stable: false,
         metricsWatching,
-        nextInterval: metricsWatching ? 3 : 5,
+        nextInterval: metricsWatching ? AGENT_METRICS_WATCH_INTERVAL_SECONDS : 5,
       });
       res.json(buildBusyAgentHeartbeatResponse({
         panelUrl,
@@ -1947,7 +1989,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         requestLocalState: false,
         stable: true,
         metricsWatching,
-        nextInterval: metricsWatching ? 3 : stablePlan.idleNextInterval,
+        nextInterval: metricsWatching ? AGENT_METRICS_WATCH_INTERVAL_SECONDS : stablePlan.idleNextInterval,
       });
       res.json({
         success: true,
@@ -1959,7 +2001,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         agentUpgrade: null,
         panelUrl: stablePlan.panelUrl,
         forceTcping: false,
-        nextInterval: metricsWatching ? 3 : stablePlan.idleNextInterval,
+        nextInterval: metricsWatching ? AGENT_METRICS_WATCH_INTERVAL_SECONDS : stablePlan.idleNextInterval,
         requestLocalState: false,
         compactReports: true,
         presenceSupported: true,
