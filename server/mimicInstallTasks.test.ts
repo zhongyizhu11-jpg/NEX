@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 import test from "node:test";
 import {
   AGENT_MIMIC_INSTALL_VERSION,
@@ -6,6 +8,7 @@ import {
   enqueueMimicInstallTask,
   getMimicInstallTask,
   hasPendingMimicInstallTask,
+  hasQueuedMimicInstallTask,
   readMimicInstallerScript,
   reportMimicInstallResult,
   takeMimicInstallTask,
@@ -74,4 +77,24 @@ test("失败结果保留错误摘要和输出尾巴", () => {
 test("面板自带的安装脚本能读到（发布包里没有时退回空串）", () => {
   const script = readMimicInstallerScript();
   assert.ok(script === "" || script.includes("MIMIC_REPO="));
+});
+
+test("只有排着、还没取走的任务算 queued：心跳快路径靠它决定要不要走完整心跳", () => {
+  clearMimicInstallTasksForTest();
+  assert.equal(hasQueuedMimicInstallTask(7), false);
+  enqueueMimicInstallTask({ host, mode: "install", version: "0.7.1" });
+  assert.equal(hasQueuedMimicInstallTask(7), true);
+  assert.ok(takeMimicInstallTask(7));
+  // 取走以后安装期间不用再挡快路径（进度走单独的上报接口）
+  assert.equal(hasQueuedMimicInstallTask(7), false);
+  assert.equal(hasPendingMimicInstallTask(7), true);
+});
+
+test("心跳稳定快路径把排着的 mimic 任务当成待办，不会把任务吞掉", () => {
+  // 2.3.440 的 bug：配置不变的主机每次心跳都走快路径，mimicInstallTask 永远发不下去，页面「安装中」一直到超时。
+  const source = fs.readFileSync(path.join(process.cwd(), "server/agentHeartbeatRoute.ts"), "utf8");
+  const start = source.indexOf("agentStableHeartbeatPlanCache.match(");
+  assert.notEqual(start, -1);
+  const blockingWork = source.slice(start, source.indexOf("recoveryTriggered,", start));
+  assert.match(blockingWork, /hasBlockingWork:[\s\S]*hasQueuedMimicInstallTask\(host\.id\)/);
 });

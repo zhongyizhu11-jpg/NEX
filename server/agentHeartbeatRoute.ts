@@ -51,7 +51,7 @@ import { resolve4, resolve6 } from "dns/promises";
 import { hasQueuedLookingGlassAgentTasks, takeLookingGlassAgentTasks } from "./lookingGlassAgentTasks";
 import { hasQueuedIperf3AgentTasks, takeIperf3AgentTasks } from "./iperf3AgentTasks";
 import { hasQueuedPluginAgentTasks, takePluginAgentTasks } from "./pluginAgentTasks";
-import { hasPendingMimicInstallTask, takeMimicInstallTask } from "./mimicInstallTasks";
+import { hasPendingMimicInstallTask, hasQueuedMimicInstallTask, takeMimicInstallTask } from "./mimicInstallTasks";
 import { getAgentPluginInventory, updateAgentPluginInventory } from "./agentPluginInventory";
 import { getAgentHostFromRequest, getAgentPresenceHostFromRequest, getResolvedAgentToken } from "./agentAuth";
 import { normalizeAgentText, normalizeNetworkInterface } from "./agentInputValidation";
@@ -1903,7 +1903,9 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         || hasHostTcpingRequest(host.id)
         || hasQueuedLookingGlassAgentTasks(host.id)
         || hasQueuedIperf3AgentTasks(host.id)
-        || hasQueuedPluginAgentTasks(host.id),
+        || hasQueuedPluginAgentTasks(host.id)
+        // 排着的 mimic 安装任务只在完整心跳里下发（2.3.441 前漏了这条：配置不变的主机任务永远发不下去）
+        || hasQueuedMimicInstallTask(host.id),
       recoveryTriggered,
       addressChanged: addressApplied,
       hasDnsChanges: dnsChangedReports.length > 0,

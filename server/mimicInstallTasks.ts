@@ -203,6 +203,15 @@ export function takeMimicInstallTask(hostId: number): MimicInstallTaskPayload | 
   return task.payload;
 }
 
+/**
+ * 有没有排着、还没被 Agent 取走的任务。心跳的「稳定快路径」（配置没变时直接回空响应）必须把它当成
+ * 待办：否则主机配置一直不变，每次心跳都走快路径，任务永远发不下去，页面一直「安装中」到超时。
+ */
+export function hasQueuedMimicInstallTask(hostId: number) {
+  expireOverdue();
+  return tasks.get(Math.floor(Number(hostId)))?.status === "queued";
+}
+
 export function hasPendingMimicInstallTask(hostId: number) {
   expireOverdue();
   const task = tasks.get(Math.floor(Number(hostId)));
