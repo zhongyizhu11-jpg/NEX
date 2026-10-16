@@ -42,6 +42,7 @@ export default defineConfig({
           { text: "主机管理", link: "/guide/hosts" },
           { text: "转发规则", link: "/guide/rules" },
           { text: "流量和延迟", link: "/guide/traffic-latency" },
+          { text: "链路诊断", link: "/guide/link-diagnostics" },
         ],
       },
       {

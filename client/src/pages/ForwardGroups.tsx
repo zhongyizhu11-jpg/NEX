@@ -823,6 +823,7 @@ function ForwardGroupSelfTestDialog({
       lastRunAt={latest?.updatedAt ?? null}
       outcome={isSuccess ? "success" : status === "timeout" ? "timeout" : isFailed ? "failed" : null}
       failureReason={parsedMessage.message}
+      checklist={{ kind: "forwardGroup", id: groupId }}
       onRun={() => {
         manualTestRef.current = true;
         setBaselineTestId(latestTestId);

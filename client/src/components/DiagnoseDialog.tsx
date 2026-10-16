@@ -1,9 +1,14 @@
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Loader2, Stethoscope } from "lucide-react";
 
+import { LinkDiagnosticsPanel } from "@/components/LinkDiagnosticsPanel";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
+import type { DiagnosticSubjectKind } from "@shared/linkDiagnostics";
+
+export type DiagnoseTab = "checklist" | "latency";
 
 export type DiagnoseOutcome = "success" | "timeout" | "failed";
 
@@ -20,6 +25,9 @@ export type DiagnoseOutcome = "success" | "timeout" | "failed";
  *   的结果，却看不出是几点测的 —— 一小时前通过，不代表现在通。
  *
  * 怎么排出要测的那几段、怎么跟 Agent 要结果，各处不一样，留在各自的对话框里；这里只管人看到的部分。
+ *
+ * 2.3.444 起多了「一键诊断」页（传了 checklist 就有）：打开对话框直接跑一张通过 / 警告 / 失败
+ * 的清单（LinkDiagnosticsPanel），原来一段段测延迟的那页挪到「延迟测试」，用法不变。
  */
 export function DiagnoseDialog({
   open,
@@ -32,6 +40,7 @@ export function DiagnoseDialog({
   outcome,
   failureReason,
   onRun,
+  checklist,
   children,
 }: {
   open: boolean;
@@ -48,13 +57,23 @@ export function DiagnoseDialog({
   /** 没通时的原因（Agent 报上来的那一句），有就写在结果后面。 */
   failureReason?: string | null;
   onRun: () => void;
+  /** 一键诊断要诊断的对象；不传就只有延迟测试。 */
+  checklist?: { kind: DiagnosticSubjectKind; id: number } | null;
   /** 路径和每一段的结果（LinkTestProbeView）。 */
   children: ReactNode;
 }) {
   const ranBefore = !!lastRunAt && !Number.isNaN(new Date(lastRunAt).getTime());
+  const [tab, setTab] = useState<DiagnoseTab>("checklist");
+  useEffect(() => {
+    if (!open) setTab("checklist");
+  }, [open]);
+  const hasChecklist = !!checklist && checklist.id > 0;
+  const showLatency = !hasChecklist || tab === "latency";
+  // 清单一行一项，窄了读着累：至少 2xl；延迟测试那页要更宽时（多段）用调用方给的宽度。
+  const contentSize = hasChecklist && !/max-w-(3xl|4xl|5xl|6xl)/.test(sizeClassName || "") ? "sm:max-w-2xl" : sizeClassName;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className={cn(sizeClassName, "min-w-0")}>
+      <DialogContent className={cn(contentSize, "min-w-0")}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Stethoscope className="h-5 w-5" aria-hidden="true" />
@@ -66,16 +85,39 @@ export function DiagnoseDialog({
           </DialogDescription>
         </DialogHeader>
 
-        {children}
+        {hasChecklist ? (
+          <Tabs value={tab} onValueChange={(value) => setTab(value as DiagnoseTab)}>
+            <TabsList aria-label="诊断方式" className="w-full sm:w-auto">
+              <TabsTrigger value="checklist" className="flex-1 sm:flex-none">一键诊断</TabsTrigger>
+              <TabsTrigger value="latency" className="flex-1 sm:flex-none">延迟测试</TabsTrigger>
+            </TabsList>
+          </Tabs>
+        ) : null}
 
-        <DiagnoseStatusLine testing={testing} lastRunAt={ranBefore ? lastRunAt : null} outcome={outcome} failureReason={failureReason} />
+        {hasChecklist ? (
+          // 切到延迟测试再切回来不重跑：清单一直挂着，只是藏起来。
+          <div className={cn("min-w-0", tab !== "checklist" && "hidden")}>
+            <LinkDiagnosticsPanel kind={checklist!.kind} id={checklist!.id} active={open} />
+          </div>
+        ) : null}
 
-        <DialogFooter className="gap-2">
-          <Button onClick={onRun} disabled={testing} className="w-full min-w-0 gap-2 sm:w-auto sm:min-w-[112px]">
-            {testing ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Stethoscope className="h-4 w-4" aria-hidden="true" />}
-            {testing ? "诊断中…" : ranBefore ? "重新诊断" : "开始诊断"}
-          </Button>
-        </DialogFooter>
+        {showLatency ? (
+          <>
+            {children}
+
+            <DiagnoseStatusLine testing={testing} lastRunAt={ranBefore ? lastRunAt : null} outcome={outcome} failureReason={failureReason} />
+
+            <DialogFooter className="gap-2">
+              <Button onClick={onRun} disabled={testing} className="w-full min-w-0 gap-2 sm:w-auto sm:min-w-[112px]">
+                {testing ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Stethoscope className="h-4 w-4" aria-hidden="true" />}
+                {/* 有「一键诊断」页时这一页叫延迟测试，按钮也跟着叫测试，免得两个「重新诊断」 */}
+                {hasChecklist
+                  ? (testing ? "测试中…" : ranBefore ? "重新测试" : "开始测试")
+                  : (testing ? "诊断中…" : ranBefore ? "重新诊断" : "开始诊断")}
+              </Button>
+            </DialogFooter>
+          </>
+        ) : null}
       </DialogContent>
     </Dialog>
   );
