@@ -146,3 +146,40 @@ ping -6 -c 4 2606:4700:4700::1111
 ```
 
 如果服务器只有内网 IPv6 或 IPv6 不可出站，面板可能无法将其作为可用入口展示。
+
+## 流媒体 / AI 解锁检测
+
+**主机详情 › 流媒体 / AI 解锁** 告诉你这台机器的出口 IP 能不能看 Netflix、Disney+、YouTube Premium、TikTok，能不能用 ChatGPT、Claude、Gemini、Grok、Perplexity。需要 Agent 2.2.225 以上，旧 Agent 会显示「需要升级 Agent」。
+
+- **怎么跑** — 管理员点「检测解锁」，Agent 从这台机器自己的出口（不走代理）去打开各服务的页面，十几秒内出结果。上面的「自动 / IPv4 / IPv6」选用哪个协议栈的出口：同一台机器 v4 和 v6 的解锁情况经常不一样，两边分开存、分开看。机器没有 IPv6 出口时，IPv6 检测会全部是「无法判断 · 网络不可达」。
+- **默认不定期跑** — 每次检测都要从主机向这些第三方服务发一串请求。需要的话在同一处打开「计划检测」（每天 / 每周，对所有主机生效）：面板每 30 分钟看一次哪些在线主机到期了，每次最多排 20 台，把请求摊开。
+- **谁能看** — 能使用这台主机的用户都能看到结果；发起检测和计划检测只有管理员能改。
+- **历史** — 每台主机保留最近 10 次（每个协议栈最新的那一次一定留着），点「历史」查看。测过的主机，卡片上会多一行摘要，例如「NF 全解 · GPT ✓ · Claude ✗」。
+
+每一项只有四种结论：
+
+| 结论 | 颜色 | 含义 |
+|------|------|------|
+| 可用 | 绿 | 页面正常打开、没有地区限制的标记。Netflix 是「全解锁」：非自制剧也能看 |
+| 部分可用 | 黄 | Netflix 只能看自制剧；ChatGPT 只有网页能用（App 认为是 VPN）或只有 App 能用（API 不支持这个地区） |
+| 不可用 | 红 | 跳到了「这个地区不提供服务」的页面、页面里写着不支持这个地区，或者 IP 被直接拒绝（403） |
+| 无法判断 | 灰 | 请求失败、超时，被 Cloudflare 人机验证拦下，或者页面和预期不一样 |
+
+各服务怎么判断（照着社区常用的检测脚本做）：
+
+| 服务 | 方法 |
+|------|------|
+| Netflix | 打开两部非自制剧和一部自制剧的页面，看是不是「Oh no!」；地区取跳转后的地区路径或页面里的国家 |
+| Disney+ | 打开首页，跳到 unavailable / preview 页算不可用；地区按跳转后的语言路径推断。只看首页，不验证能否播放 |
+| YouTube Premium | 打开 /premium，看有没有「Premium is not available in your country」，地区取页面里的 GL |
+| TikTok | 首页里的 region 字段 |
+| ChatGPT | `api.openai.com/compliance/cookie_requirements` 有没有 unsupported_country、`ios.chat.openai.com` 有没有 VPN 提示；地区取 `chatgpt.com/cdn-cgi/trace` |
+| Claude | `claude.ai` 会不会跳到 app-unavailable-in-region；地区取 `claude.ai/cdn-cgi/trace` |
+| Gemini | 首页里的可用开关；地区是页面里的三字母国家码 |
+| Grok / Perplexity | 首页是正常打开、地区封锁页，还是人机验证页；地区取同站的 `/cdn-cgi/trace` |
+
+::: warning 结果是推断，不是保证
+这些服务没有公开的「这个 IP 能不能用」接口，检测靠的是页面上的标记。服务一改版，标记就可能失效，结论会变成「无法判断」甚至判错；Disney+、Grok、Perplexity 只看首页，不代表能正常播放或登录使用。拿不准时以实际使用为准。
+:::
+
+检测会从这台主机向上述服务（netflix.com、disneyplus.com、youtube.com、tiktok.com、openai.com、chatgpt.com、claude.ai、gemini.google.com、grok.com、perplexity.ai）发起普通的网页请求，每个请求 10 秒超时、最多跟 5 次跳转，不登录、不提交任何账号信息。

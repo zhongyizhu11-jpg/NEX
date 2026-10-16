@@ -202,6 +202,7 @@ const DIRECT_SQLITE_OPTIONAL_SOURCE_TABLES = new Set([
   "host_tls_inbounds",
   "rule_sni_names",
   "host_network_profiles",
+  "host_unlock_checks",
 ]);
 
 function normalizePanelUrl(url: string) {
@@ -238,6 +239,7 @@ export const ESSENTIAL_MIGRATION_OMITTED_TABLES = new Set<(typeof MIGRATION_TABL
   "ip_geo_cache",
   "config_audit_events",
   "ip_change_events",
+  "host_unlock_checks",
 ]);
 
 export type MigrationSnapshotExportProgress = {
@@ -831,6 +833,7 @@ const IMPORT_TABLE_ORDER = [
   "ip_change_events",
   // 主机网络画像：只依赖主机
   "host_network_profiles",
+  "host_unlock_checks",
   "system_settings",
 ] as const;
 
@@ -853,6 +856,7 @@ const BEST_EFFORT_MIGRATION_TABLES = new Set<MigrationTableName>([
   "config_audit_events",
   "ip_change_events",
   "host_network_profiles",
+  "host_unlock_checks",
   "system_settings",
 ]);
 
@@ -1631,6 +1635,11 @@ async function prepareImportRow(table: string, source: Record<string, any>, maps
       // 每台主机一行；结果是检测出来的，导不进来也就是等下一轮重测（BEST_EFFORT）
       row.hostId = mapRequiredId(maps, "hosts", source.hostId);
       return { row, existingWhere: { hostId: row.hostId } };
+    case "host_unlock_checks":
+      row.hostId = mapRequiredId(maps, "hosts", source.hostId);
+      // 发起人是源面板的用户 ID，搬过来对不上，不留。
+      row.requestedBy = null;
+      return { row, existingWhere: { runId: row.runId } };
 
     case "system_settings": {
       const key = String(source.key || "");

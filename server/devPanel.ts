@@ -616,6 +616,39 @@ async function seedHostMetrics(hostIds: number[]) {
   }
 }
 
+/** 流媒体 / AI 解锁检测的样例结果：第一台有 auto + IPv6 两份和几次历史，第二台一份，其余没测过。 */
+async function seedUnlockChecks(hostIds: number[]) {
+  const { recordUnlockRun } = await import("./ops/unlock");
+  const now = Math.floor(Date.now() / 1000);
+  type R = { service: string; status: "ok" | "partial" | "blocked" | "unknown"; region: string | null; detail: string; ms: number };
+  const hk: R[] = [
+    { service: "netflix", status: "ok", region: "HK", detail: "全解锁（非自制剧可看）", ms: 820 },
+    { service: "disney", status: "ok", region: "HK", detail: "首页可用（未验证播放）", ms: 610 },
+    { service: "youtube_premium", status: "ok", region: "HK", detail: "可订阅 Premium", ms: 540 },
+    { service: "tiktok", status: "unknown", region: null, detail: "页面里没有地区信息，无法判断", ms: 700 },
+    { service: "chatgpt", status: "ok", region: "HK", detail: "网页和 App 都可用", ms: 480 },
+    { service: "claude", status: "blocked", region: "HK", detail: "不支持这个地区", ms: 350 },
+    { service: "gemini", status: "ok", region: "HKG", detail: "可用", ms: 900 },
+    { service: "grok", status: "ok", region: "HK", detail: "可用", ms: 410 },
+    { service: "perplexity", status: "unknown", region: "HK", detail: "被 Cloudflare 人机验证拦下，无法判断", ms: 300 },
+  ];
+  const hkV6 = hk.map((item) => (item.service === "netflix" ? { ...item, status: "partial" as const, detail: "仅自制剧" } : item.service === "chatgpt" ? { ...item, status: "partial" as const, detail: "仅网页可用（App 认为是 VPN）" } : item));
+  const jp: R[] = hk.map((item) => ({ ...item, region: item.region ? (item.region.length === 3 ? "JPN" : "JP") : null, status: item.service === "claude" ? "ok" : item.status, detail: item.service === "claude" ? "可用" : item.detail }));
+  const runs: Array<{ hostId: number; family: "auto" | "ipv4" | "ipv6"; at: number; results: R[]; trigger: "manual" | "schedule" }> = [];
+  if (hostIds[0]) {
+    runs.push({ hostId: hostIds[0], family: "auto", at: now - 8 * 86400, results: hk.map((item) => (item.service === "netflix" ? { ...item, status: "partial", detail: "仅自制剧" } : item)), trigger: "schedule" });
+    runs.push({ hostId: hostIds[0], family: "auto", at: now - 86400, results: hk, trigger: "schedule" });
+    runs.push({ hostId: hostIds[0], family: "ipv6", at: now - 3 * 3600, results: hkV6, trigger: "manual" });
+    runs.push({ hostId: hostIds[0], family: "auto", at: now - 25 * 60, results: hk, trigger: "manual" });
+  }
+  if (hostIds[1]) runs.push({ hostId: hostIds[1], family: "auto", at: now - 2 * 3600, results: jp, trigger: "manual" });
+  let n = 0;
+  for (const run of runs) {
+    n += 1;
+    await recordUnlockRun({ hostId: run.hostId, family: run.family, runId: `ul-dev-${n}`, trigger: run.trigger, requestedBy: null, checkedAt: run.at, results: run.results });
+  }
+}
+
 async function seedHostGroups(adminId: number, hostIds: number[]) {
   const groupRows = [
     { name: "Entry nodes", isEnabled: true, sortOrder: 1, hostIds: [hostIds[0], hostIds[1]] },
@@ -2450,6 +2483,7 @@ export async function seedDevPanelData() {
   await seedAgentTokens(adminId, hostIds);
   await seedHostGroups(adminId, hostIds);
   await seedHostMetrics(hostIds);
+  await seedUnlockChecks(hostIds);
   const resources = await seedTunnelsAndGroups(adminId, hostIds);
   const rules = await seedRules(hostIds, resources, usersSeed);
   await seedProbeServices(adminId, hostIds);

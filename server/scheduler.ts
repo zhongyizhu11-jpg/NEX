@@ -44,6 +44,7 @@ import { expireStalePendingOrders, recoverStaleProcessingPaymentOrders, reconcil
 import { runPanelEventsDailyMaintenance } from "./ops/eventHooks";
 import { startStatusAvailabilityJob } from "./ops/statusAvailabilityJob";
 import { startOffsiteBackupJob } from "./ops/offsiteBackupJob";
+import { startUnlockScheduleJob } from "./ops/unlock";
 import { applyLinkShapingDefaultOffOnce } from "./linkShapingDefaultOff";
 
 type TimedOutForwardTest = {
@@ -1239,6 +1240,7 @@ export function startScheduler() {
   // 第五套主题那批功能里的两个定时任务：公开状态页的可用率采样、异地自动备份（各自管自己的节奏）。
   startStatusAvailabilityJob();
   startOffsiteBackupJob();
+  startUnlockScheduleJob();
   // 链路整形改成默认关：把还停在旧默认值「自动」的隧道关掉一次（见 server/linkShapingDefaultOff.ts）。
   void applyLinkShapingDefaultOffOnce().catch((error) => {
     console.warn("[LinkShaping] default-off migration skipped:", error instanceof Error ? error.message : String(error));
