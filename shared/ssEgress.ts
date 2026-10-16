@@ -187,12 +187,16 @@ export function canonicalSsEgressPassword(method: unknown, password: unknown) {
   return key.length % 4 === 0 ? key : key + "=".repeat(4 - (key.length % 4));
 }
 
+/** base64 解出来的字节数；补齐和长度对不上（解不开）时 -1。补不补「=」都认，下发前由 canonicalSsEgressPassword 补齐。 */
 function base64KeyLength(value: string) {
-  const text = value.trim();
-  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(text)) return -1;
-  const padded = text.length % 4 === 0 ? text : text + "=".repeat(4 - (text.length % 4));
-  const padding = padded.endsWith("==") ? 2 : padded.endsWith("=") ? 1 : 0;
-  return (padded.length / 4) * 3 - padding;
+  const match = /^([A-Za-z0-9+/]+)(={0,2})$/.exec(value.trim());
+  if (!match) return -1;
+  const body = match[1].length;
+  const padding = match[2].length;
+  // 去掉「=」后余 1 的长度不是合法 base64；带了「=」就必须正好补到 4 的倍数。
+  if (body % 4 === 1) return -1;
+  if (padding > 0 && (body + padding) % 4 !== 0) return -1;
+  return Math.floor((body * 3) / 4);
 }
 
 export type ParseSsEgressLinkResult =

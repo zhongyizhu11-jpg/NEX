@@ -18,6 +18,7 @@ import {
   ruleEgressShapeError,
   ruleEgressStateBlocksDelivery,
   ruleEgressSummaryText,
+  canonicalSsEgressPassword,
   ssEgressEndpointError,
   ssEgressMethodError,
   SS_EGRESS_AGENT_VERSION,
@@ -90,6 +91,21 @@ test("ss:// 链接：SS2022 单用户密钥收下", () => {
   // 不带 = 填充的 base64 也认（有的客户端导出时会去掉）。
   const raw = Buffer.alloc(32, 9).toString("base64").replace(/=+$/, "");
   assert.equal(parseSsEgressLink(`ss://${b64url("2022-blake3-aes-256-gcm:" + raw)}@203.0.113.9:8388`).ok, true);
+  // 补齐和长度对不上的（21 个字符 + 一个「=」解不开）不能收下：补成「===」以后 Agent 会拒掉，规则永远起不来。
+  const endpoint = { server: "203.0.113.9", port: 8388, method: "2022-blake3-aes-128-gcm" };
+  assert.match(String(ssEgressEndpointError({ ...endpoint, password: "AAAAAAAAAAAAAAAAAAAAA=" })), /16 字节/);
+  assert.match(String(ssEgressEndpointError({ ...endpoint, password: "AAAAAAAAAAAAAAAAAAAAAAA=" })), /16 字节/);
+  assert.match(String(ssEgressEndpointError({ ...endpoint, password: "AAAAAAAAAAAAAAAAAAAAA" })), /16 字节/);
+  assert.equal(ssEgressEndpointError({ ...endpoint, password: "AAAAAAAAAAAAAAAAAAAAAA==" }), null);
+  assert.equal(ssEgressEndpointError({ ...endpoint, password: "AAAAAAAAAAAAAAAAAAAAAA" }), null);
+  // 收下的密钥，补齐以后 Go 的 StdEncoding 一定解得开、而且正好 16 / 32 字节。
+  for (const value of [key, key.replace(/=+$/, ""), raw]) {
+    const method = value === raw ? "2022-blake3-aes-256-gcm" : "2022-blake3-aes-128-gcm";
+    const canonical = canonicalSsEgressPassword(method, value);
+    assert.match(canonical, /^[A-Za-z0-9+/]+={0,2}$/);
+    assert.equal(canonical.length % 4, 0);
+    assert.equal(Buffer.from(canonical, "base64").length, value === raw ? 32 : 16);
+  }
 });
 
 test("打码：密码永远不出现在界面上", () => {
