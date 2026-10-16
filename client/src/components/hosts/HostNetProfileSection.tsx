@@ -1,4 +1,5 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
+import { ChevronDown } from "lucide-react";
 import { toast } from "sonner";
 
 import { formatAgo } from "@shared/dashboardAttention";
@@ -16,7 +17,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
-import { Row, Section } from "./HostDetailDialog";
+import { Row } from "./HostDetailDialog";
 import { hostGeoTooltip, hostNetworkText, hostRegionText } from "./hostDisplay";
 
 /*
@@ -150,7 +151,34 @@ function RawDetails({ profile }: { profile: NetProfileReport }) {
   );
 }
 
+/*
+  默认折叠（2.3.445 之后）：主机详情里这一节内容多、平时用不上，只留一行标题，点开才显示，
+  点开之前也不去查（netProfile.get 只在展开后才发）。每次打开详情都从折叠开始。
+*/
 export default function HostNetProfileSection({ host, canManage }: { host: any; canManage: boolean }) {
+  const [open, setOpen] = useState(false);
+  const hostId = Number(host?.id);
+  if (!(hostId > 0)) return null;
+  return (
+    <section className="flex min-w-0 flex-col gap-2 border-t border-[var(--fx-stroke-weak)] pt-3 first:border-t-0 first:pt-0">
+      <button
+        type="button"
+        className="flex min-w-0 items-center justify-between gap-2 text-left"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <h3 className="text-meta font-medium uppercase tracking-wide text-muted-foreground">网络画像</h3>
+        <span className="inline-flex items-center gap-1 text-meta text-muted-foreground">
+          {open ? "收起" : "展开"}
+          <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", open && "rotate-180")} aria-hidden="true" />
+        </span>
+      </button>
+      {open ? <HostNetProfileBody host={host} canManage={canManage} /> : null}
+    </section>
+  );
+}
+
+function HostNetProfileBody({ host, canManage }: { host: any; canManage: boolean }) {
   const hostId = Number(host?.id);
   const utils = trpc.useUtils();
   const query = trpc.netProfile.get.useQuery(
@@ -181,7 +209,7 @@ export default function HostNetProfileSection({ host, canManage }: { host: any; 
   const busy = recheck.isPending || !!data?.pending;
 
   return (
-    <Section title="网络画像">
+    <>
       <WrapRow label="公网 IPv4">
         <FamilyValue check={profile?.ipv4} fallback={String(host?.ipv4 || "")} />
       </WrapRow>
@@ -238,6 +266,6 @@ export default function HostNetProfileSection({ host, canManage }: { host: any; 
           </Button>
         </div>
       ) : null}
-    </Section>
+    </>
   );
 }
