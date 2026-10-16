@@ -1,5 +1,5 @@
 /*
-  流媒体 / AI 解锁检测（Agent 2.2.225 起）的面板侧：排检测、收结果、存储、计划检测。
+  流媒体 / AI 解锁检测（Agent 2.2.226 起）的面板侧：排检测、收结果、存储、计划检测。
   扩展模块 "unlock" 的注册在 unlockAgent.ts（只由 agentExtModules.ts 引入 —— 路由和定时任务
   引这个文件，不能顺带注册，否则 agentExt.ts 还没初始化完就被调用）。Go 端是 agent/ext_unlock.go。
 

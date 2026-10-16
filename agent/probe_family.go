@@ -1,6 +1,6 @@
 package main
 
-// 探测服务的地址族（2.2.225 起）：面板在 hostProbeServices 里带 family = ipv4 / ipv6 时，
+// 探测服务的地址族（2.2.226 起）：面板在 hostProbeServices 里带 family = ipv4 / ipv6 时，
 // 目标是域名就只用这一族的地址去测；没有这一族的地址就记不通，而不是悄悄换另一族。
 // 目标本身是 IP、或 family 为空 / auto 时完全照旧。面板那头见 shared/probeFamily.ts。
 

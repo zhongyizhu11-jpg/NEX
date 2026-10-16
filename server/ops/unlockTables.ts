@@ -1,7 +1,7 @@
 import { col, type TableDef } from "./tableDefs";
 
 /*
-  流媒体 / AI 解锁检测（Agent 2.2.225 起，见 server/ops/unlock.ts）。
+  流媒体 / AI 解锁检测（Agent 2.2.226 起，见 server/ops/unlock.ts）。
 
   host_unlock_checks —— 每次检测一行（每台主机留最近 10 次，见 trimUnlockHistory）。
     family：auto / ipv4 / ipv6，同一台机器 v4、v6 出口的解锁情况可能不一样，分开存。

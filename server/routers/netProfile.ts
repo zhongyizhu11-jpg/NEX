@@ -17,7 +17,7 @@ import { requireHostAccess } from "./helpers";
   trpc.netProfile.* —— 主机详情里的「网络画像」。
 
   get       读最近一次的结果（能看这台主机的人都能看；运营商 / ASN 在主机行上，不在这里）
-  recheck   重新检测（管理员）：Agent ≥ 2.2.225 叫 Agent 立刻测；更旧的 Agent 只能从面板查 DNSBL
+  recheck   重新检测（管理员）：Agent ≥ 2.2.226 叫 Agent 立刻测；更旧的 Agent 只能从面板查 DNSBL
 */
 const hostIdInput = z.object({ hostId: z.number().int().positive() });
 

@@ -1,7 +1,7 @@
 import crypto from "crypto";
 
 /*
-  一键链路诊断的 Agent 任务（task 名 diagnostics，Agent 2.2.225 起）。
+  一键链路诊断的 Agent 任务（task 名 diagnostics，Agent 2.2.226 起）。
 
   一次诊断给涉及的每台主机各排一个任务，任务里是这台主机要做的几项检查（端口在不在听、
   防火墙、回环连通、DNS、拨目标、进程活着没有）。任务跟着下一次心跳下去（heartbeat 的

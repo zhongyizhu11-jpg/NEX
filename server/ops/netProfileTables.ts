@@ -1,7 +1,7 @@
 import { col, type TableDef } from "./tableDefs";
 
 /*
-  主机网络画像（Agent 2.2.225 起）：每台主机一行，存最近一次检测的完整结果和最近 30 次的摘要。
+  主机网络画像（Agent 2.2.226 起）：每台主机一行，存最近一次检测的完整结果和最近 30 次的摘要。
 
   profileJson —— shared/netProfile.ts 的 NetProfileReport（双栈、25 端口、DNSBL）。
   historyJson —— NetProfileHistoryItem[]，最近 30 次，旧的在前。每次只是十几个字段，30 条不到 3KB。

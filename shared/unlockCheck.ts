@@ -1,5 +1,5 @@
 /*
-  流媒体 / AI 解锁检测（Agent 2.2.225 起）—— 面板和界面共用的那一份：服务表、状态、校验、摘要。
+  流媒体 / AI 解锁检测（Agent 2.2.226 起）—— 面板和界面共用的那一份：服务表、状态、校验、摘要。
 
   检测在 Agent 上跑（agent/unlock_check.go，服务表 unlockServices 的 ID 和这里一一对应），
   结果经扩展模块 "unlock" 回到面板（server/ops/unlockAgent.ts，逻辑在 unlock.ts），存在 host_unlock_checks。
@@ -7,7 +7,7 @@
   这些都是按页面标记猜的，服务改了页面就可能不准（见 docs/guide/hosts.md）。
 */
 
-export const UNLOCK_MIN_AGENT_VERSION = "2.2.225";
+export const UNLOCK_MIN_AGENT_VERSION = "2.2.226";
 
 export const UNLOCK_STATUSES = ["ok", "partial", "blocked", "unknown"] as const;
 export type UnlockStatus = (typeof UNLOCK_STATUSES)[number];

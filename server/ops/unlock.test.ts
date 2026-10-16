@@ -13,13 +13,13 @@ import {
 import { handleAgentExtRound } from "./agentExt";
 import "./unlockAgent";
 
-const host = (id: number, agentVersion = "2.2.225", isOnline: unknown = true) => ({ id, name: `h${id}`, agentVersion, isOnline });
+const host = (id: number, agentVersion = "2.2.226", isOnline: unknown = true) => ({ id, name: `h${id}`, agentVersion, isOnline });
 
-test("旧 Agent、离线主机不能检测：提示升级到 2.2.225", () => {
+test("旧 Agent、离线主机不能检测：提示升级到 2.2.226", () => {
   resetUnlockStateForTest();
   assert.throws(() => startUnlockCheck(host(1, "2.2.224"), { family: "auto" }), /需要升级 Agent 到 2\.2\.225/);
   assert.throws(() => startUnlockCheck(host(1, ""), { family: "auto" }), /需要升级 Agent/);
-  assert.throws(() => startUnlockCheck(host(1, "2.2.225", false), { family: "auto" }), /主机离线/);
+  assert.throws(() => startUnlockCheck(host(1, "2.2.226", false), { family: "auto" }), /主机离线/);
   assert.equal(pendingUnlockRunsForHost(1).length, 0);
   assert.ok(startUnlockCheck(host(1, "v2.2.230"), { family: "auto" }).runId);
 });
@@ -100,7 +100,7 @@ test("走扩展通道：有在等的检测时下发指令、让 Agent 5 秒来�
 test("计划检测：只挑在线、Agent 够新、到期、没在等的主机，最久没测的先来", () => {
   resetUnlockStateForTest();
   const now = 10_000_000;
-  const hosts = [host(1), host(2), host(3, "2.2.200"), host(4, "2.2.225", false), host(5), host(6)];
+  const hosts = [host(1), host(2), host(3, "2.2.200"), host(4, "2.2.226", false), host(5), host(6)];
   const last = new Map([[1, now - 3600], [2, now - 2 * 86400], [5, now - 90_000]]);
   startUnlockCheck(host(6), { family: "ipv6" });
   assert.deepEqual(pickScheduledUnlockHosts(hosts, last, "daily", now).map((h) => h.id), [2, 5]);

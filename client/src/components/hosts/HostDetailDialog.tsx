@@ -159,7 +159,7 @@ export default function HostDetailDialog(props: HostDetailDialogProps) {
             <Row label="连接数" value={connectionsText(vitals.tcpConnections, vitals.udpConnections)} />
           </Section>
 
-          {/* 网络画像：双栈出站、运营商、25 端口、DNSBL（Agent 2.2.225 起在主机上测） */}
+          {/* 网络画像：双栈出站、运营商、25 端口、DNSBL（Agent 2.2.226 起在主机上测） */}
           <HostNetProfileSection host={host} canManage={user?.role === "admin"} />
 
           {/* mimic UDP 混淆环境：装没装、能不能用，管理员在这里一键安装 / 修复（2.3.439） */}
@@ -202,7 +202,7 @@ export default function HostDetailDialog(props: HostDetailDialogProps) {
             />
           </Section>
 
-          {/* 流媒体 / AI 解锁检测：能用这台主机的人都能看结果，只有管理员能发起检测（Agent 2.2.225 起） */}
+          {/* 流媒体 / AI 解锁检测：能用这台主机的人都能看结果，只有管理员能发起检测（Agent 2.2.226 起） */}
           <HostUnlockSection hostId={Number(host.id)} />
 
           {user?.role === "admin" && (

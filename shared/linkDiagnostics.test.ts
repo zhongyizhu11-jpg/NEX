@@ -46,7 +46,7 @@ test("复制给客服的文本：按组分段，带状态、建议和原始细�
     startedAt: "2026-10-16T00:00:00Z",
     items: [
       ...items,
-      { source: "agent", key: "agent:2:c1", group: "link", title: "防火墙放行", status: "skip", needsUpgrade: true, summary: "需要升级 Agent 到 2.2.225" },
+      { source: "agent", key: "agent:2:c1", group: "link", title: "防火墙放行", status: "skip", needsUpgrade: true, summary: "需要升级 Agent 到 2.2.226" },
       { ...base, key: "target.addr", group: "target", title: "目标地址", status: "pass", summary: "公网 IPv4", detail: "line1\nline2", latencyMs: 30 },
     ],
   });

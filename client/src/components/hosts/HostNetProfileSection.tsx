@@ -23,7 +23,7 @@ import { hostGeoTooltip, hostNetworkText, hostRegionText } from "./hostDisplay";
   主机详情里的「网络画像」：这台机器从外面看是什么样 —— 公网地址和双栈、运营商 / ASN、
   地区、25 端口能不能出站、IP 在不在邮件黑名单上。
 
-  主机侧检测（双栈、25 端口、DNSBL）要 Agent 2.2.225：每 6 小时测一次，管理员可以点「重新检测」。
+  主机侧检测（双栈、25 端口、DNSBL）要 Agent 2.2.226：每 6 小时测一次，管理员可以点「重新检测」。
   更旧的 Agent 只能从面板服务器查 DNSBL —— 那是面板的解析器在查，不是主机的。
   运营商 / ASN 跟地区一起由定位服务给（主机行上的 geoAsn / geoIsp / geoOrg），不需要 Agent。
 */

@@ -23,7 +23,7 @@ import { cn } from "@/lib/utils";
 import { Row, Section } from "./HostDetailDialog";
 
 /*
-  主机详情里「流媒体 / AI 解锁」一节（Agent 2.2.225 起）。
+  主机详情里「流媒体 / AI 解锁」一节（Agent 2.2.226 起）。
 
   结果是 Agent 从这台机器的出口去打开各服务的页面、按页面标记猜出来的（agent/unlock_check.go），
   所以每一项只有四种结论，绿 / 黄 / 红 / 灰；拿不准的就是灰的「无法判断」，不硬说可用。

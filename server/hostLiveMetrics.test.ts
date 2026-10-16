@@ -15,6 +15,7 @@ import {
 } from "./hostLiveMetrics";
 import { AGENT_METRICS_WATCH_INTERVAL_SECONDS, buildBusyAgentHeartbeatResponse, selectAgentHeartbeatInterval } from "./agentHeartbeatGate";
 import { AGENT_VERSION } from "../shared/versions";
+import { isAgentVersionAtLeast } from "../shared/version";
 
 const m = (netIn: number, netOut: number, cpu = 12) => [cpu, 40, 400, 1000, 0, 0, 0, netIn, netOut, 8, 1, 20, 3600, 10, 3];
 
@@ -100,8 +101,9 @@ test("有人在看时心跳 2 秒（旧 Agent 的下限，更短会被它当成 
   assert.equal(selectAgentHeartbeatInterval({ requestLocalState: false, hasInteractiveTasks: false, metricsWatching: true }), 2);
 });
 
-test("实时指标版本就是这一版 Agent；接口在 /api/sync 白名单里", () => {
-  assert.equal(AGENT_LIVE_METRICS_VERSION, AGENT_VERSION);
+test("实时指标版本不高于当前 Agent；接口在 /api/sync 白名单里", () => {
+  assert.equal(AGENT_LIVE_METRICS_VERSION, "2.2.225");
+  assert.ok(isAgentVersionAtLeast(AGENT_VERSION, AGENT_LIVE_METRICS_VERSION));
   const middleware = fs.readFileSync(path.join(process.cwd(), "server/agentEncryptionMiddleware.ts"), "utf8");
   assert.match(middleware, /"\/api\/agent\/live-metrics"/);
   const agent = fs.readFileSync(path.join(process.cwd(), "agent/live_metrics.go"), "utf8");

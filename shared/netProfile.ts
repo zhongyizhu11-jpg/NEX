@@ -1,5 +1,5 @@
 /*
-  主机网络画像（Agent 2.2.225 起）：双栈出站、25 端口出站、DNSBL 黑名单。
+  主机网络画像（Agent 2.2.226 起）：双栈出站、25 端口出站、DNSBL 黑名单。
 
   Agent 那头见 agent/ext_netprofile.go（扩展通道模块 "netprofile"），面板这头见
   server/ops/netProfile.ts。这里放两头都要用的东西：报告的形状、DNSBL 应答怎么解读、
@@ -7,7 +7,7 @@
 */
 
 /** 支持主机侧网络画像的最低 Agent 版本。 */
-export const NETPROFILE_MIN_AGENT_VERSION = "2.2.225";
+export const NETPROFILE_MIN_AGENT_VERSION = "2.2.226";
 /** 定期检测间隔：6 小时。这些东西一天里基本不会变，测得太勤只会被对方限流。 */
 export const NETPROFILE_INTERVAL_SECONDS = 6 * 60 * 60;
 /** 历史只留最近 30 次的摘要。 */

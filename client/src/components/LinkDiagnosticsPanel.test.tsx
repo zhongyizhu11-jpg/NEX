@@ -9,9 +9,9 @@ import { DiagnosticStatusPill, LinkDiagnosticsChecklist } from "./LinkDiagnostic
 
 const items: DiagnosticItem[] = [
   { source: "panel", key: "config.enabled", group: "config", title: "规则已启用", status: "pass", summary: "已启用" },
-  { source: "panel", key: "host:1", group: "host", title: "入口「hk」", status: "pass", summary: "在线 · Agent 2.2.225" },
+  { source: "panel", key: "host:1", group: "host", title: "入口「hk」", status: "pass", summary: "在线 · Agent 2.2.226" },
   { source: "agent", key: "agent:1:c1", group: "entry", title: "端口 443/tcp 在监听", status: "fail", summary: "没有程序在听 tcp 端口 443", hint: "看 Agent 日志", detail: "ss output" },
-  { source: "agent", key: "agent:2:c1", group: "link", title: "防火墙放行", status: "skip", needsUpgrade: true, summary: "需要升级 Agent 到 2.2.225" },
+  { source: "agent", key: "agent:2:c1", group: "link", title: "防火墙放行", status: "skip", needsUpgrade: true, summary: "需要升级 Agent 到 2.2.226" },
   { source: "agent", key: "agent:1:c2", group: "target", title: "连得上 1.1.1.1:443", status: "pending", summary: "主机正在检查…" },
 ];
 

@@ -15,7 +15,7 @@ import {
 import { UNLOCK_FAMILIES, UNLOCK_MIN_AGENT_VERSION, UNLOCK_SCHEDULES } from "@shared/unlockCheck";
 
 /*
-  trpc.hosts.unlock* —— 主机详情里的「流媒体 / AI 解锁」一节（Agent 2.2.225 起）。
+  trpc.hosts.unlock* —— 主机详情里的「流媒体 / AI 解锁」一节（Agent 2.2.226 起）。
 
   unlockStatus      最新结果（每个 family 一份）、在等的检测、是否支持；能用这台主机的人都能看
   unlockHistory     最近 10 次；同上

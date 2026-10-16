@@ -1,7 +1,7 @@
 package main
 
 /*
-流媒体 / AI 服务解锁检测（2.2.225 起），扩展模块见 ext_unlock.go，面板那头见 server/ops/unlockAgent.ts。
+流媒体 / AI 服务解锁检测（2.2.226 起），扩展模块见 ext_unlock.go，面板那头见 server/ops/unlockAgent.ts。
 
 从这台机器自己的出口 IP 去请求各服务的公开页面，按页面里的标记猜「能不能用、在哪个地区」。
 判断方法照着社区常用的检测脚本（lmc999/RegionRestrictionCheck、xykt/IPQuality 的 2025-2026 版本）：

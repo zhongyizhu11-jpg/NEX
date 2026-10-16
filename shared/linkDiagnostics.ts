@@ -1,5 +1,5 @@
 /**
- * 一键链路诊断（2.3.444 / Agent 2.2.225）：面板和浏览器共用的那一半。
+ * 一键链路诊断（2.3.444 / Agent 2.2.226）：面板和浏览器共用的那一半。
  *
  * 一次诊断产出一张清单：每一项有状态（通过 / 警告 / 失败 / 跳过 / 等待）、一句结论、
  * 一句「怎么修」，按 配置 → 主机 → 入口 → 链路 → 目标 分组。面板侧的项（配置、主机在线、
@@ -10,7 +10,7 @@
  * server/linkDiagnosticsChecks.ts 判。
  */
 
-export const LINK_DIAGNOSTICS_AGENT_VERSION = "2.2.225";
+export const LINK_DIAGNOSTICS_AGENT_VERSION = "2.2.226";
 
 export type DiagnosticStatus = "pass" | "warn" | "fail" | "skip" | "pending";
 export type DiagnosticGroup = "config" | "host" | "entry" | "link" | "target";

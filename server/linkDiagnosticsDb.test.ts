@@ -30,9 +30,9 @@ function runInDatabase(body: string) {
 
       await exec("INSERT INTO users (id, username, password, role) VALUES (1, 'admin', 'hash', 'admin')");
       await exec("INSERT INTO users (id, username, password, role, canAddRules, trafficLimit, trafficUsed) VALUES (2, 'bob', 'hash', 'user', 1, 1000, 1000)");
-      await exec("INSERT INTO hosts (id, name, ip, ipv4, agentToken, userId, agentVersion) VALUES (10, 'hk', '203.0.113.10', '203.0.113.10', 'tok10', 1, '2.2.225')");
+      await exec("INSERT INTO hosts (id, name, ip, ipv4, agentToken, userId, agentVersion) VALUES (10, 'hk', '203.0.113.10', '203.0.113.10', 'tok10', 1, '2.2.226')");
       await exec("INSERT INTO hosts (id, name, ip, ipv4, agentToken, userId, agentVersion) VALUES (11, 'jp', '203.0.113.11', '203.0.113.11', 'tok11', 1, '2.2.224')");
-      await exec("INSERT INTO hosts (id, name, ip, ipv4, agentToken, userId, agentVersion) VALUES (12, 'us', '203.0.113.12', '203.0.113.12', 'tok12', 1, '2.2.225')");
+      await exec("INSERT INTO hosts (id, name, ip, ipv4, agentToken, userId, agentVersion) VALUES (12, 'us', '203.0.113.12', '203.0.113.12', 'tok12', 1, '2.2.226')");
       await db.updateHostHeartbeat(10);
       await db.updateHostHeartbeat(11);
       const admin = { user: { id: 1, role: "admin" } };

@@ -61,7 +61,7 @@ test("扩展通道一轮：收结果、回执、重新检测、旧 Agent 只能�
       await schema.ensureDatabaseSchema();
       const exec = (sql, params = []) => runtime.executeRaw(sql, params);
       await exec("INSERT INTO users (id, username, password, role) VALUES (1, 'admin', 'hash', 'admin')");
-      await exec('INSERT INTO hosts (id, name, ip, ipv4, "hostType", "agentToken", "userId", "agentVersion") VALUES (1, ?, ?, ?, ?, ?, 1, ?)', ["新", "203.0.113.7", "203.0.113.7", "slave", "tok1", "2.2.225"]);
+      await exec('INSERT INTO hosts (id, name, ip, ipv4, "hostType", "agentToken", "userId", "agentVersion") VALUES (1, ?, ?, ?, ?, ?, 1, ?)', ["新", "203.0.113.7", "203.0.113.7", "slave", "tok1", "2.2.226"]);
       await exec('INSERT INTO hosts (id, name, ip, ipv4, "hostType", "agentToken", "userId", "agentVersion") VALUES (2, ?, ?, ?, ?, ?, 1, ?)', ["旧", "198.51.100.9", "198.51.100.9", "slave", "tok2", "2.2.224"]);
 
       const ext = await import(url("server/ops/agentExt.ts"));

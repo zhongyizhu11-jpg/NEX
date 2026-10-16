@@ -113,7 +113,7 @@ const hostProbeServiceInputSchema = z.object({
   method: z.enum(["tcping", "ping"]),
   targetIp: hostProbeTargetSchema,
   targetPort: z.number().int().min(1).max(65535).nullable().optional(),
-  // 目标是域名时按哪一族解析（Agent 2.2.225 起生效，老 Agent 照旧 auto）
+  // 目标是域名时按哪一族解析（Agent 2.2.226 起生效，老 Agent 照旧 auto）
   addressFamily: z.enum(PROBE_ADDRESS_FAMILIES).default("auto"),
   hostScope: z.enum(["all", "exclude", "specific"]).default("all"),
   hostIds: hostProbeIdsSchema,

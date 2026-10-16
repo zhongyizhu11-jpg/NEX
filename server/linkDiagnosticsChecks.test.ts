@@ -162,12 +162,12 @@ test("Agent 项：离线跳过；旧 Agent 显示「需要升级 Agent」而不�
   assert.ok(offline.every((entry) => entry.status === "skip" && !entry.needsUpgrade));
   const old = agentCheckItems(planned, { online: true, agentVersion: "2.2.224", detailVisible: true }, null);
   assert.ok(old.every((entry) => entry.status === "skip" && entry.needsUpgrade === true));
-  assert.equal(old[0].summary, "需要升级 Agent 到 2.2.225");
+  assert.equal(old[0].summary, "需要升级 Agent 到 2.2.226");
   assert.ok(old.every((entry) => entry.source === "agent"));
 });
 
 test("Agent 项：排队 / 运行中是等待；超时是警告；回报后按结果给状态和修复建议", () => {
-  const gate = { online: true, agentVersion: "2.2.225", taskId: "t", detailVisible: true };
+  const gate = { online: true, agentVersion: "2.2.226", taskId: "t", detailVisible: true };
   assert.ok(agentCheckItems(planned, gate, task("queued")).every((entry) => entry.status === "pending"));
   assert.ok(agentCheckItems(planned, gate, task("running")).every((entry) => entry.status === "pending"));
   const timedOut = agentCheckItems(planned, gate, task("timeout", [], "Agent 取走了诊断任务，但没在时限内回报"));
@@ -190,7 +190,7 @@ test("Agent 项：排队 / 运行中是等待；超时是警告；回报后按�
 });
 
 test("Agent 项：非管理员看别人的主机，不给原始输出", () => {
-  const items = agentCheckItems(planned, { online: true, agentVersion: "2.2.225", taskId: "t", detailVisible: false }, task("done", [
+  const items = agentCheckItems(planned, { online: true, agentVersion: "2.2.226", taskId: "t", detailVisible: false }, task("done", [
     { id: "c2", kind: "firewall", status: "pass", summary: "没发现", detail: "-P INPUT ACCEPT" },
   ]));
   assert.equal(items[1].detail, "（原始输出只有管理员能看）");

@@ -1,6 +1,6 @@
 package main
 
-// 扩展模块 "netprofile"（2.2.225 起）：主机网络画像。面板那头见 server/ops/netProfile.ts，
+// 扩展模块 "netprofile"（2.2.226 起）：主机网络画像。面板那头见 server/ops/netProfile.ts，
 // 报告的形状和 DNSBL 应答的读法见 shared/netProfile.ts。
 //
 // 每 6 小时（或面板发来新的 runId 时）在后台测一轮：

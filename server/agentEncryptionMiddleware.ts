@@ -22,7 +22,7 @@ export const AGENT_TUNNEL_PATHS = new Set([
   "/api/agent/selftest-result",
   "/api/agent/looking-glass-result",
   "/api/agent/looking-glass-progress",
-  // 一键链路诊断的结果（Agent 2.2.225 起）
+  // 一键链路诊断的结果（Agent 2.2.226 起）
   "/api/agent/diagnostics-result",
   "/api/agent/iperf3-result",
   "/api/agent/plugin-action-result",

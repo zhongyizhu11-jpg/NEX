@@ -1,7 +1,7 @@
 /*
   主机网络画像 —— 面板这头：存结果、给 Agent 下指令、旧 Agent 的 DNSBL 兜底。
 
-  Agent 2.2.225 起有扩展模块 "netprofile"（agent/ext_netprofile.go）：每 6 小时测一次双栈出站、
+  Agent 2.2.226 起有扩展模块 "netprofile"（agent/ext_netprofile.go）：每 6 小时测一次双栈出站、
   25 端口出站、DNSBL，结果随扩展通道上报。「重新检测」按钮在内存里记一个 runId 并叫醒 Agent，
   Agent 看到新的 runId 就立刻测一次；等结果期间让 Agent 每 5 秒来一轮。
 
@@ -9,7 +9,7 @@
   一次上报失败把结果弄丢）；lastCheckedAt 是面板存下的 Agent 检测时间，Agent 据此判断 6 小时
   到没到（Agent 重启不会立刻重测）。
 
-  Agent 低于 2.2.225 时只能从面板服务器查 DNSBL（node:dns，用面板的解析器），双栈和 25 端口
+  Agent 低于 2.2.226 时只能从面板服务器查 DNSBL（node:dns，用面板的解析器），双栈和 25 端口
   必须在主机上测，界面提示升级 Agent。
 */
 import { Resolver } from "node:dns/promises";

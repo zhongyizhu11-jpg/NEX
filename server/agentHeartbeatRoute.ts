@@ -7098,7 +7098,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     if (forceTcping) clearHostTcpingRequest(host.id);
 
     const lookingGlassTests = takeLookingGlassAgentTasks(host.id);
-    // 一键链路诊断只发给 2.2.225 起的 Agent（面板排任务时已经按版本挡过，这里再兜一次底）
+    // 一键链路诊断只发给 2.2.226 起的 Agent（面板排任务时已经按版本挡过，这里再兜一次底）
     const diagnosticsTasks = isAgentVersionAtLeast(effectiveAgentVersion, LINK_DIAGNOSTICS_AGENT_VERSION)
       ? takeDiagnosticsAgentTasks(host.id)
       : [];

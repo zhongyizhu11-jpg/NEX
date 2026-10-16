@@ -38,7 +38,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.225"
+var Version = "2.2.226"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -2746,7 +2746,7 @@ type hostProbeServiceProbe struct {
 	TargetPort      int    `json:"targetPort"`
 	Method          string `json:"method"`
 	IntervalSeconds int    `json:"intervalSeconds"`
-	// 目标是域名时只用这一族的地址：ipv4 / ipv6；空或 auto 照旧（2.2.225 起，见 probe_family.go）
+	// 目标是域名时只用这一族的地址：ipv4 / ipv6；空或 auto 照旧（2.2.226 起，见 probe_family.go）
 	Family string `json:"family,omitempty"`
 }
 type forwardGroupProbe struct {
@@ -4271,7 +4271,7 @@ func heartbeat(cfg Config, forceReconcile ...bool) (heartbeatResult, error) {
 	for _, task := range resp.LookingGlassTests {
 		go handleLookingGlassTask(cfg, task)
 	}
-	// 一键链路诊断（2.2.225 起）：每个任务一组检查，并发跑完整包回报。
+	// 一键链路诊断（2.2.226 起）：每个任务一组检查，并发跑完整包回报。
 	for _, task := range resp.DiagnosticsTasks {
 		go handleDiagnosticsTask(cfg, task)
 	}

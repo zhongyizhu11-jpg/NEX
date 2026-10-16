@@ -1,6 +1,6 @@
 package main
 
-// 一键链路诊断（2.2.225 起），面板那头见 server/diagnosticsAgentTasks.ts 和 server/linkDiagnostics.ts。
+// 一键链路诊断（2.2.226 起），面板那头见 server/diagnosticsAgentTasks.ts 和 server/linkDiagnostics.ts。
 //
 // 面板给涉及的每台主机排一个 diagnostics 任务，跟着心跳的 diagnosticsTasks 下来。任务里是这台
 // 主机要做的几项检查，这里并发跑完（整包最多 30 秒），一次 POST /api/agent/diagnostics-result 回去。

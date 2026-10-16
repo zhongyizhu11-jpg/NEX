@@ -46,7 +46,7 @@ type ServiceForm = {
   method: "tcping" | "ping";
   targetIp: string;
   targetPort: string;
-  /** 目标是域名时按哪一族解析（Agent 2.2.225 起生效） */
+  /** 目标是域名时按哪一族解析（Agent 2.2.226 起生效） */
   addressFamily: ProbeAddressFamily;
   hostScope: "all" | "exclude" | "specific";
   hostIds: number[];

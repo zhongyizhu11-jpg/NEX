@@ -1,7 +1,7 @@
 package main
 
 /*
-扩展模块 "unlock"：流媒体 / AI 解锁检测（2.2.225 起），检测本身见 unlock_check.go，
+扩展模块 "unlock"：流媒体 / AI 解锁检测（2.2.226 起），检测本身见 unlock_check.go，
 面板那头见 server/ops/unlockAgent.ts。
 
 指令（每轮重发，直到面板收到这个 runId 的 done 结果）：
