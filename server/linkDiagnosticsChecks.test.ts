@@ -102,7 +102,7 @@ test("主机：离线失败、FXP 握不上失败、Agent 旧警告、最新通�
   assert.equal(evaluateHostItem({ ...host, fxpVersion: "2.2.100" }).status, "pass", "不走 NEX 隧道就不看 FXP");
   const old = evaluateHostItem({ ...host, agentVersion: "2.2.224" });
   assert.equal(old.status, "warn");
-  assert.match(old.summary, /需要 2\.2\.225/);
+  assert.match(old.summary, /需要 2\.2\.226/);
   assert.equal(evaluateHostItem({ ...host, agentVersion: "" }).status, "warn");
   assert.equal(evaluateHostItem(host).title, "入口「hk-1」");
 });

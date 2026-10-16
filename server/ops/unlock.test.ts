@@ -17,7 +17,7 @@ const host = (id: number, agentVersion = "2.2.226", isOnline: unknown = true) =>
 
 test("旧 Agent、离线主机不能检测：提示升级到 2.2.226", () => {
   resetUnlockStateForTest();
-  assert.throws(() => startUnlockCheck(host(1, "2.2.224"), { family: "auto" }), /需要升级 Agent 到 2\.2\.225/);
+  assert.throws(() => startUnlockCheck(host(1, "2.2.224"), { family: "auto" }), /需要升级 Agent 到 2\.2\.226/);
   assert.throws(() => startUnlockCheck(host(1, ""), { family: "auto" }), /需要升级 Agent/);
   assert.throws(() => startUnlockCheck(host(1, "2.2.226", false), { family: "auto" }), /主机离线/);
   assert.equal(pendingUnlockRunsForHost(1).length, 0);
