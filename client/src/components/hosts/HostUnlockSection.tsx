@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { ChevronDown } from "lucide-react";
 import { toast } from "sonner";
 
 import { formatAgo } from "@shared/dashboardAttention";
@@ -20,7 +21,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { segmentedControlClassName, segmentedOptionClassName } from "@/components/ui/segmented";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
-import { Row, Section } from "./HostDetailDialog";
+import { Row } from "./HostDetailDialog";
 
 /*
   主机详情里「流媒体 / AI 解锁」一节（Agent 2.2.226 起）。
@@ -29,6 +30,7 @@ import { Row, Section } from "./HostDetailDialog";
   所以每一项只有四种结论，绿 / 黄 / 红 / 灰；拿不准的就是灰的「无法判断」，不硬说可用。
   默认不定期跑：每一次都要请求十来个第三方站点。管理员点「检测解锁」才跑，或者在下面开计划检测。
   普通用户能看到自己能用的主机的结果，看不到按钮和计划设置。
+  默认折叠，点开才查、才显示（和「网络画像」一样）。
 */
 
 const STATUS_TONE: Record<UnlockStatus, string> = {
@@ -124,6 +126,28 @@ function HistoryDialog({ hostId, open, onOpenChange }: { hostId: number; open: b
 }
 
 export default function HostUnlockSection({ hostId }: { hostId: number }) {
+  const [open, setOpen] = useState(false);
+  if (!(hostId > 0)) return null;
+  return (
+    <section className="flex min-w-0 flex-col gap-2 border-t border-[var(--fx-stroke-weak)] pt-3 first:border-t-0 first:pt-0">
+      <button
+        type="button"
+        className="flex min-w-0 items-center justify-between gap-2 text-left"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <h3 className="text-meta font-medium uppercase tracking-wide text-muted-foreground">流媒体 / AI 解锁</h3>
+        <span className="inline-flex items-center gap-1 text-meta text-muted-foreground">
+          {open ? "收起" : "展开"}
+          <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", open && "rotate-180")} aria-hidden="true" />
+        </span>
+      </button>
+      {open ? <HostUnlockBody hostId={hostId} /> : null}
+    </section>
+  );
+}
+
+function HostUnlockBody({ hostId }: { hostId: number }) {
   const utils = trpc.useUtils();
   const [family, setFamily] = useState<UnlockFamily | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -158,14 +182,7 @@ export default function HostUnlockSection({ hostId }: { hostId: number }) {
     lastPending.current = pendingCount;
   }, [pendingCount, utils]);
 
-  if (!(hostId > 0)) return null;
-  if (!data) {
-    return (
-      <Section title="流媒体 / AI 解锁">
-        <Row label="解锁检测" value={status.isLoading ? "读取中…" : "读取失败"} />
-      </Section>
-    );
-  }
+  if (!data) return <Row label="解锁检测" value={status.isLoading ? "读取中…" : "读取失败"} />;
 
   // 没选过就看 auto；auto 没测过但别的测过，看那个。
   const shownFamily: UnlockFamily = family ?? (data.latest.some((run) => run.family === "auto") ? "auto" : data.latest[0]?.family ?? "auto");
@@ -174,7 +191,7 @@ export default function HostUnlockSection({ hostId }: { hostId: number }) {
   const anyHistory = data.latest.length > 0;
 
   return (
-    <Section title="流媒体 / AI 解锁">
+    <>
       {!data.supported ? (
         <Row label="解锁检测" value={<span className="text-[var(--fx-warn-text)]">需要升级 Agent（{data.minAgentVersion} 起）</span>} />
       ) : null}
@@ -242,6 +259,6 @@ export default function HostUnlockSection({ hostId }: { hostId: number }) {
       </p>
 
       <HistoryDialog hostId={hostId} open={historyOpen} onOpenChange={setHistoryOpen} />
-    </Section>
+    </>
   );
 }

@@ -38,7 +38,6 @@ import { hostEgressShapingStatusView } from "../tunnelLinkShapingView";
 import { parseManualHostAddress } from "@shared/hostManualAddress";
 import { wakeAgentExt } from "../ops/agentExt";
 import { flowOffloadStatusView } from "../ops/flowOffloadStatus";
-import { latestUnlockSummariesByHostIds } from "../ops/unlock";
 import { hostUnlockProcedures } from "./hostUnlock";
 
 const HOST_UPGRADE_CLEANUP_INTERVAL_MS = 60 * 1000;
@@ -1002,11 +1001,9 @@ export const hostsRouter = router({
           转发不看启用状态；隧道按入口 / 出口 / 任一跳算，同一条隧道只算一次。
         */
         const pageHostIds = items.map((row: any) => Number(row.id));
-        const [ruleCounts, tunnelCounts, unlockSummaries] = await Promise.all([
+        const [ruleCounts, tunnelCounts] = await Promise.all([
           db.countForwardRulesByHostIds(pageHostIds),
           db.countTunnelsByHostIds(pageHostIds),
-          // 流媒体 / AI 解锁检测的最新一次（卡片上那一小条），没测过的主机没有这一项。
-          latestUnlockSummariesByHostIds(pageHostIds).catch(() => new Map()),
         ]);
         const billingStatsByHost = new Map<number, { total: number; billed: number; milliCents: number; hostDefault: boolean }>();
         for (const rule of billingRules) {
@@ -1050,7 +1047,6 @@ export const hostsRouter = router({
             // 这台上挂了几条转发、在几条隧道里；没有的话就是 0，不是 undefined。
             ruleCount: ruleCounts.get(Number(row.id)) || 0,
             tunnelCount: tunnelCounts.get(Number(row.id)) || 0,
-            unlockSummary: unlockSummaries.get(Number(row.id)) || null,
             // 不是自己的机器：能看（说明管理员授权过），但改不动也删不掉 ——
             // 服务端 update/delete 本来就按 userId 挡着，界面据此收起入口。
             manageable: ctx.user.role === "admin" || Number(row.userId) === ctx.user.id,
