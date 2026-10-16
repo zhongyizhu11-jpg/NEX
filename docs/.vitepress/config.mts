@@ -66,6 +66,7 @@ export default defineConfig({
           { text: "Telegram 和通知", link: "/guide/notifications" },
           { text: "工单", link: "/guide/tickets" },
           { text: "Google 登录", link: "/guide/google-login" },
+          { text: "Discord 登录和通知", link: "/guide/discord" },
           { text: "升级和备份", link: "/guide/upgrade-backup" },
           { text: "卸载 NEX", link: "/guide/uninstall" },
           { text: "常见问题排查", link: "/guide/troubleshooting" },

@@ -26,6 +26,7 @@ import { opsRouter } from "./routers/ops";
 import { ipChangeRouter } from "./routers/ipChange";
 import { googleAuthRouter } from "./routers/googleAuth";
 import { topologyRouter } from "./routers/topology";
+import { discordAuthRouter } from "./routers/discordAuth";
 
 export const appRouter = router({
   system: systemRouter,
@@ -55,6 +56,7 @@ export const appRouter = router({
   ipChange: ipChangeRouter,
   googleAuth: googleAuthRouter,
   topology: topologyRouter,
+  discordAuth: discordAuthRouter,
 });
 
 export type AppRouter = typeof appRouter;

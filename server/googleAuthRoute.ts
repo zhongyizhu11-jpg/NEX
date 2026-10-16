@@ -14,24 +14,17 @@
   账户开了双重验证时，先发 2FA 挑战（Google 账号被盗不应该直接绕过面板的 2FA）。
 */
 import express, { type Request, type Response } from "express";
-import { TRPCError } from "@trpc/server";
 import * as db from "./db";
-import { getEmailConfig } from "./email";
 import { createContext } from "./_core/context";
-import { createLoginSession } from "./routers/auth";
 import { maskIdentifier } from "./routers/helpers";
 import { recordPanelEvent } from "./ops/panelEvents";
 import { withKeyedTaskLock } from "./keyedTaskLock";
 import { ipRateLimitScope } from "./ipRateLimitScope";
 import { SlidingWindowRateLimiter } from "./ai/rateLimiter";
-import { createTwoFactorChallenge } from "./twoFactorChallenges";
-import { recordTwoFactorChallengeIssue, twoFactorChallengeIssueState } from "./authRateLimit";
-import { ACCOUNT_DISABLED_ERR_MSG } from "../shared/const";
 import {
   GOOGLE_CALLBACK_PATH,
   GOOGLE_START_PATH,
   googleLoginErrorMessage,
-  parseEmailDomainList,
   sanitizeGoogleInviteCode,
   sanitizeRedirectPath,
   type GoogleLoginErrorCode,
@@ -56,6 +49,21 @@ import {
   linkGoogleAccount,
   recordGoogleSignIn,
 } from "./repositories/googleAccountRepository";
+import {
+  getOAuthRegistrationPolicy,
+  issueOAuthSessionOrChallenge,
+  noStore,
+  oauthRequestIp,
+  oauthSessionErrorCode,
+  renderOAuthAppPage,
+  requestMatchesPanelHost,
+  withQuery,
+  type OAuthAppPage,
+  type OAuthTwoFactorRequired,
+} from "./oauthRouteHelpers";
+
+// 这几样和 Discord 登录共用（server/oauthRouteHelpers.ts），这里保留原来的名字。
+export { requestMatchesPanelHost };
 
 export const GOOGLE_BINDING_COOKIE = "nex_google_oauth";
 const GOOGLE_COOKIE_PATH = "/api/auth/google";
@@ -71,27 +79,7 @@ export function consumeGoogleStartQuota(ip: string) {
   return googleStartLimiter.consume(`google-start:${ipRateLimitScope(ip)}`).allowed;
 }
 
-function requestIp(req: Request) {
-  return String(req.ip || req.socket?.remoteAddress || "unknown");
-}
-
-function hostOf(value: string | null | undefined) {
-  const text = String(value || "").trim();
-  if (!text) return "";
-  try {
-    return new URL(text.includes("://") ? text : `http://${text}`).host.toLowerCase();
-  } catch {
-    return "";
-  }
-}
-
-/** 这次请求是不是打在面板公开地址的域名上（直接访问或反代转来的都算）。 */
-export function requestMatchesPanelHost(req: Pick<Request, "headers">, panelBaseUrl: string) {
-  const panelHost = hostOf(panelBaseUrl);
-  if (!panelHost) return false;
-  const candidates = [req.headers.host, ...String(req.headers["x-forwarded-host"] || "").split(",")];
-  return candidates.some((value) => hostOf(String(value || "").trim()) === panelHost);
-}
+const requestIp = (req: Request) => oauthRequestIp(req);
 
 function bindingCookieOptions(req: Request) {
   return {
@@ -108,51 +96,17 @@ function readBindingCookie(req: Request) {
   return typeof value === "string" && /^[A-Za-z0-9_-]{40,64}$/.test(value) ? value : "";
 }
 
-function noStore(res: Response) {
-  res.setHeader("Cache-Control", "no-store");
-  res.setHeader("Pragma", "no-cache");
-}
-
-function withQuery(path: string, params: Record<string, string>) {
-  const url = new URL(path, "http://panel.invalid");
-  for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
-  return `${url.pathname}${url.search}${url.hash}`;
-}
-
 function failureRedirect(res: Response, mode: GoogleLoginMode | null, code: GoogleLoginErrorCode) {
   noStore(res);
   res.redirect(302, withQuery(mode === "link" ? "/profile" : "/login", { googleError: code }));
 }
 
-function escapeHtml(value: string) {
-  return value.replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[ch]!));
-}
-
 /** App 流程在系统浏览器里显示的那几页。没有脚本，样式内联（CSP 允许 inline style）。 */
-export function renderGoogleAppPage(input: { title: string; message: string; tone: "ok" | "error" | "warn"; form?: { flowId: string; confirmId: string } }) {
-  const color = input.tone === "ok" ? "#16a34a" : input.tone === "warn" ? "#d97706" : "#dc2626";
-  const form = input.form
-    ? `<form method="post" action="/api/auth/google/app-confirm">
-        <input type="hidden" name="flow" value="${escapeHtml(input.form.flowId)}">
-        <input type="hidden" name="confirm" value="${escapeHtml(input.form.confirmId)}">
-        <button type="submit">是我本人，确认登录到 App</button>
-      </form>`
-    : "";
-  return `<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="referrer" content="no-referrer"><title>${escapeHtml(input.title)}</title>
-<style>
-:root{color-scheme:light dark;--bg:#f7f9fc;--card:#fff;--text:#0f172a;--muted:#64748b;--line:#e2e8f0}
-@media (prefers-color-scheme:dark){:root{--bg:#0b1120;--card:#111827;--text:#e5e7eb;--muted:#94a3b8;--line:#1f2937}}
-body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg);color:var(--text);font:15px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;padding:16px;box-sizing:border-box}
-main{max-width:420px;width:100%;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:24px}
-h1{font-size:18px;margin:0 0 8px;color:${color}}p{margin:0 0 12px;color:var(--muted);white-space:pre-line}
-button{width:100%;padding:10px 14px;border:0;border-radius:10px;background:#2563eb;color:#fff;font-size:15px;cursor:pointer}
-</style></head>
-<body><main><h1>${escapeHtml(input.title)}</h1><p>${escapeHtml(input.message)}</p>${form}</main></body></html>`;
+export function renderGoogleAppPage(input: OAuthAppPage) {
+  return renderOAuthAppPage({ ...input, confirmAction: "/api/auth/google/app-confirm" });
 }
 
-function sendAppPage(res: Response, status: number, page: Parameters<typeof renderGoogleAppPage>[0]) {
+function sendAppPage(res: Response, status: number, page: OAuthAppPage) {
   noStore(res);
   res.status(status).type("html").send(renderGoogleAppPage(page));
 }
@@ -162,49 +116,20 @@ function appFailurePage(res: Response, flowId: string | null, code: GoogleLoginE
   sendAppPage(res, 400, { title: "Google 登录没有完成", message: `${googleLoginErrorMessage(code)}\n请回到 NEX App 重试。`, tone: "error" });
 }
 
-export type GoogleTwoFactorRequired = {
-  twoFactorRequired: true;
-  username: string;
-  challengeId: string;
-  expiresInSeconds: number;
-};
+export type GoogleTwoFactorRequired = OAuthTwoFactorRequired;
 
 /**
  * Google 认出人之后：要 2FA 就发挑战，否则发会话（和密码登录同一个 createLoginSession）。
  * 2FA 挑战的发放频率按账号限流，和密码 / Telegram 登录共用一份额度。
  */
-export async function issueGoogleSessionOrChallenge(ctx: { req: Request; res: Response }, user: any, options: { mobile: boolean; ip: string }) {
-  if (user?.accountEnabled === false) throw new TRPCError({ code: "UNAUTHORIZED", message: ACCOUNT_DISABLED_ERR_MSG });
-  if ((await db.getSetting("twoFactorEnabled")) === "true" && user?.twoFactorEnabled && user?.twoFactorSecret) {
-    const limit = twoFactorChallengeIssueState(options.ip, user.username);
-    if (limit.limited) {
-      throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: `TWO_FACTOR_CHALLENGE_RATE_LIMITED:${Math.ceil(limit.retryAfterSeconds / 60)}` });
-    }
-    const challenge = createTwoFactorChallenge({ userId: user.id, username: user.username, mobile: options.mobile, ip: options.ip });
-    recordTwoFactorChallengeIssue(options.ip, user.username);
-    return { twoFactorRequired: true, username: user.username, ...challenge } satisfies GoogleTwoFactorRequired;
-  }
-  return createLoginSession(ctx, user, options.mobile);
-}
+export const issueGoogleSessionOrChallenge = issueOAuthSessionOrChallenge;
 
 /** 会话发放里抛出来的错误 → 失败码。 */
 export function sessionErrorCode(error: unknown): GoogleLoginErrorCode {
-  if (error instanceof TRPCError) {
-    if (error.code === "SERVICE_UNAVAILABLE") return "maintenance";
-    if (error.code === "TOO_MANY_REQUESTS") return "rate_limited";
-    if (error.message === ACCOUNT_DISABLED_ERR_MSG) return "account_disabled";
-  }
-  return "server_error";
+  return oauthSessionErrorCode(error);
 }
 
-async function getRegistrationPolicy() {
-  const registrationEnabled = (await db.getSetting("registrationEnabled")) !== "false";
-  const emailConfig = await getEmailConfig();
-  return {
-    registrationEnabled,
-    emailWhitelist: emailConfig.whitelistEnabled ? parseEmailDomainList(emailConfig.whitelist) : [],
-  };
-}
+const getRegistrationPolicy = getOAuthRegistrationPolicy;
 
 const signInDeps = {
   getUserByGoogleSub,

@@ -46,6 +46,7 @@ import { withKeyedTaskLock } from "../keyedTaskLock";
 import { AGENT_ASSET_NAMES } from "../agentAssets";
 import { DEFAULT_DDNS_TTL, maskSecret } from "../ddns";
 import { isGoogleLoginUsable, readGoogleLoginSettings } from "../googleLoginSettings";
+import { isDiscordLoginUsable, readDiscordLoginSettings } from "../discordSettings";
 import { reconcileHostDdnsRecords } from "../hostDdns";
 import { normalizeRuleEntryDomainSuffixInput, scheduleRuleEntryDomainReconcile } from "../ruleEntryDomain";
 import { resolveRuleEntryDomainRuntimeSettings } from "../repositories/ruleEntryDomainRepository";
@@ -1852,6 +1853,8 @@ export const systemRouter = router({
       updateAutoCheckEnabled: isUpdateAutoCheckEnabled(all),
       // 登录页据此显示「使用 Google 登录」：开关开着、客户端 ID / 密钥和面板公开地址都配好了才算。
       googleLoginEnabled: isGoogleLoginUsable(readGoogleLoginSettings(all)),
+      // 「使用 Discord 登录」同理：开关 + Client ID / Secret + https 的面板公开地址。
+      discordLoginEnabled: isDiscordLoginUsable(readDiscordLoginSettings(all)),
       publicHostMonitor: {
         enabled: all.publicHostMonitorEnabled === "true",
         path: normalizePublicHostMonitorPath(all.publicHostMonitorPath),

@@ -3,6 +3,7 @@ import { sendTelegramMessage } from "./telegramBot";
 import { getTelegramAdminRecipients } from "./repositories/userRepository";
 import { isTelegramBotReady } from "./telegramReady";
 import { filterTelegramRecipients } from "./telegramNotifyPrefs";
+import { isDiscordBotReady, notifyDiscordAdmins } from "./discordNotify";
 
 /*
   线路组切换的 Telegram 提醒。
@@ -92,10 +93,12 @@ export function routeSwitchMessage(payload: RouteSwitchNotifyPayload) {
 export async function notifyRouteSwitch(payload: RouteSwitchNotifyPayload) {
   const ruleId = Number(payload.rule?.id || 0);
   if (!ruleId || !payload.rule?.telegramErrorNotifyEnabled) return;
-  if (!(await isTelegramBotReady())) return;
+  const telegramReady = await isTelegramBotReady();
+  const discordReady = await isDiscordBotReady();
+  if (!telegramReady && !discordReady) return;
   if (!shouldNotifyRouteSwitch(ruleId, payload.kind)) return;
-  const recipients = await filterTelegramRecipients(await getTelegramAdminRecipients() as any[], "route");
-  if (recipients.length === 0) return;
+  const recipients = telegramReady ? await filterTelegramRecipients(await getTelegramAdminRecipients() as any[], "route") : [];
+  if (recipients.length === 0 && !discordReady) return;
   const text = routeSwitchMessage(payload);
   let sent = 0;
   let failed = 0;
@@ -112,6 +115,7 @@ export async function notifyRouteSwitch(payload: RouteSwitchNotifyPayload) {
   if (sent > 0 || failed > 0) {
     console.info(`[Telegram] Route switch notify rule=${ruleId} kind=${payload.kind} sent=${sent} failed=${failed}`);
   }
+  if (discordReady) await notifyDiscordAdmins(text, { category: "route", label: `route-switch rule=${ruleId}` });
 }
 
 /** 测试用。 */

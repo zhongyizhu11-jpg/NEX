@@ -28,6 +28,7 @@ import { isAllowedMobileCorsOrigin } from "./mobileCors";
 import { panelAccessGuard } from "./ops/firewallPanelAccess";
 import { mcpRouter } from "./ops/mcpRoute";
 import { googleAuthRouter } from "./googleAuthRoute";
+import { discordAuthRouter } from "./discordAuthRoute";
 
 installPanelLogger();
 
@@ -188,6 +189,8 @@ async function startServer() {
   app.use(authCapRouter);
   // GET /api/auth/google/start、/callback：Google 登录的整页跳转（server/googleAuthRoute.ts）。
   app.use(googleAuthRouter);
+  // GET /api/auth/discord/start、/callback：Discord 登录的整页跳转（server/discordAuthRoute.ts）。
+  app.use(discordAuthRouter);
   app.use(agentRouter);
   app.use(migrationRouter);
   app.use(proxySubscriptionRouter);

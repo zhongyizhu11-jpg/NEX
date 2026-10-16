@@ -217,6 +217,13 @@ export const users = table("users", {
   googleSub: varchar("googleSub", { length: 191 }).unique(),
   googleEmail: text("googleEmail"),
   googleLinkedAt: epoch("googleLinkedAt"),
+  // Discord 登录 / 通知（server/discordLoginService.ts、server/discordBot.ts）：Discord 用户 ID（雪花，永不变）、
+  // 绑定时的用户名和邮箱（只用来显示）、绑定时间；discordDmBlockedAt = 最近一次私信被 Discord 拒收（对方关了私信）的时间。
+  discordId: varchar("discordId", { length: 32 }).unique(),
+  discordUsername: text("discordUsername"),
+  discordEmail: text("discordEmail"),
+  discordLinkedAt: epoch("discordLinkedAt"),
+  discordDmBlockedAt: epoch("discordDmBlockedAt"),
   browserSessionToken: text("browserSessionToken"),
   mobileSessionToken: text("mobileSessionToken"),
   telegramSessionToken: text("telegramSessionToken"),

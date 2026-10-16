@@ -3,6 +3,7 @@ import { sendTelegramMessage } from "./telegramBot";
 import { getAllSettings } from "./repositories/settingsRepository";
 import { getTelegramAdminRecipients } from "./repositories/userRepository";
 import { filterTelegramRecipients } from "./telegramNotifyPrefs";
+import { isDiscordBotReady, notifyDiscordAdmins } from "./discordNotify";
 
 type ForwardGroupSwitchNotifyPayload = {
   groupId: number;
@@ -63,9 +64,11 @@ function forwardGroupSwitchMessage(payload: ForwardGroupSwitchNotifyPayload) {
 }
 
 export async function notifyForwardGroupSwitch(payload: ForwardGroupSwitchNotifyPayload) {
-  if (!(await telegramForwardGroupSwitchEnabled())) return;
-  const recipients = await filterTelegramRecipients(await getTelegramAdminRecipients() as any[], "route");
-  if (recipients.length === 0) return;
+  const telegramReady = await telegramForwardGroupSwitchEnabled();
+  const discordReady = await isDiscordBotReady();
+  if (!telegramReady && !discordReady) return;
+  const recipients = telegramReady ? await filterTelegramRecipients(await getTelegramAdminRecipients() as any[], "route") : [];
+  if (recipients.length === 0 && !discordReady) return;
   const text = forwardGroupSwitchMessage(payload);
   let sent = 0;
   let failed = 0;
@@ -82,4 +85,5 @@ export async function notifyForwardGroupSwitch(payload: ForwardGroupSwitchNotify
   if (sent > 0 || failed > 0) {
     console.info(`[Telegram] Forward group switch notify group=${payload.groupId} sent=${sent} failed=${failed}`);
   }
+  if (discordReady) await notifyDiscordAdmins(text, { category: "route", label: `group-switch group=${payload.groupId}` });
 }

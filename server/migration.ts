@@ -1137,7 +1137,7 @@ async function insertGeneratedRows(
 }
 
 async function sanitizeUserUniqueFields(row: Record<string, any>) {
-  for (const key of ["telegramId", "telegramBindCode", "telegramLoginCode", "inviteCode", "googleSub"]) {
+  for (const key of ["telegramId", "telegramBindCode", "telegramLoginCode", "inviteCode", "googleSub", "discordId"]) {
     if (!row[key]) continue;
     const existing = await findExistingId("users", { [key]: row[key] });
     if (existing) {
@@ -1148,6 +1148,13 @@ async function sanitizeUserUniqueFields(row: Record<string, any>) {
       if (key === "googleSub") {
         row.googleEmail = null;
         row.googleLinkedAt = null;
+      }
+      // Discord 同理：导入的这一条不带绑定。
+      if (key === "discordId") {
+        row.discordUsername = null;
+        row.discordEmail = null;
+        row.discordLinkedAt = null;
+        row.discordDmBlockedAt = null;
       }
     }
   }

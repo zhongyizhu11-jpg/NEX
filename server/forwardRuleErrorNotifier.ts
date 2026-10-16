@@ -4,6 +4,7 @@ import { getTelegramAdminRecipients } from "./repositories/userRepository";
 import { formatForwardRuleProtocol, FORWARD_TYPE_LABELS, type ForwardType } from "../shared/forwardTypes";
 import { isTelegramBotReady } from "./telegramReady";
 import { filterTelegramRecipients } from "./telegramNotifyPrefs";
+import { isDiscordBotReady, notifyDiscordAdmins } from "./discordNotify";
 
 type ForwardRuleErrorPayload = {
   rule: any;
@@ -97,10 +98,13 @@ function ruleErrorMessage(payload: ForwardRuleErrorPayload) {
 export async function notifyForwardRuleError(payload: ForwardRuleErrorPayload) {
   const ruleId = Number(payload.rule?.id || 0);
   if (!ruleId || !payload.rule?.telegramErrorNotifyEnabled) return;
-  if (!(await isTelegramBotReady())) return;
+  // Telegram 和 Discord 各自独立：哪一路没配置都不影响另一路。
+  const telegramReady = await isTelegramBotReady();
+  const discordReady = await isDiscordBotReady();
+  if (!telegramReady && !discordReady) return;
 
-  const recipients = await filterTelegramRecipients(await getTelegramAdminRecipients() as any[], "rule");
-  if (recipients.length === 0) return;
+  const recipients = telegramReady ? await filterTelegramRecipients(await getTelegramAdminRecipients() as any[], "rule") : [];
+  if (recipients.length === 0 && !discordReady) return;
   if (!shouldNotifyForwardRuleError(ruleId, payload.message)) return;
   const text = ruleErrorMessage(payload);
   let sent = 0;
@@ -118,6 +122,7 @@ export async function notifyForwardRuleError(payload: ForwardRuleErrorPayload) {
   if (sent > 0 || failed > 0) {
     console.info(`[Telegram] Forward rule error notify rule=${ruleId} sent=${sent} failed=${failed}`);
   }
+  if (discordReady) await notifyDiscordAdmins(text, { category: "rule", label: `rule-error rule=${ruleId}` });
 }
 
 const notifyCacheCleanupTimer = setInterval(() => pruneForwardRuleErrorNotifyCache(), RULE_ERROR_NOTIFY_COOLDOWN_MS);

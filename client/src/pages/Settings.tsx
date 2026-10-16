@@ -116,6 +116,7 @@ import {
 import { OpsAdvancedSettingsPane, OpsBackupExtraSections, OpsTelegramExtraSections, OpsWebhookSettingsPane } from "@/features/ops/slots/SettingsPanes";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import GoogleLoginSettingsCard from "@/components/settings/GoogleLoginSettingsCard";
+import DiscordSettingsCard from "@/components/settings/DiscordSettingsCard";
 import { useCallback, useMemo, useRef, useState, useEffect } from "react";
 import { SaveDockBar, SaveDockProvider, useSaveDockActive, useSaveDockItem } from "@/components/settings/SaveDock";
 import { UiThemeDot } from "@/components/UiThemeQuickSwitch";
@@ -6191,6 +6192,8 @@ function SystemInfoSection() {
       </div>
 
       <GoogleLoginSettingsCard />
+
+      <DiscordSettingsCard />
 
       <Card className="border-border bg-card">
         <CardHeader>
