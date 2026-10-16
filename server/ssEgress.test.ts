@@ -86,7 +86,9 @@ test("出口失效的几种情况都按停用下发", () => {
     ["入站被删", { context: context({ inbound: null }) }, "inbound_missing"],
     ["落地主机被删", { context: context({ host: null }) }, "inbound_missing"],
     ["入站停用", { context: context({ inbound: { ...inbound, isEnabled: false } }) }, "inbound_disabled"],
-    ["入站改成 SS2022", { context: context({ inbound: { ...inbound, method: "2022-blake3-aes-128-gcm" } }) }, "method_unsupported"],
+    ["入站改成 SS2022、入口机没这项能力", { context: context({ inbound: { ...inbound, method: "2022-blake3-aes-128-gcm", password: Buffer.alloc(16, 4).toString("base64") } }) }, "ss2022_runtime_upgrade"],
+    ["入站改成 SS2022 但密钥长度不对", { context: context({ inbound: { ...inbound, method: "2022-blake3-aes-128-gcm" } }) }, "config_invalid"],
+    ["入站改成 gost 不认得的 SS2022", { context: context({ inbound: { ...inbound, method: "2022-blake3-chacha20-poly1305" } }) }, "method_unsupported"],
     ["入站改成别的协议", { context: context({ inbound: { ...inbound, protocol: "vless" } }) }, "method_unsupported"],
     ["落地就是入口", { entryHostId: 20, context: context() }, "self_loop"],
     ["落地没有地址", { context: context({ host: { ...landingHost, ip: "", ipv4: "" } }) }, "config_invalid"],
@@ -101,6 +103,48 @@ test("出口失效的几种情况都按停用下发", () => {
   assert.equal(realm.egressRuntimeBlocked, "shape_invalid");
   const tunnel: any = ruleEgressRuntimeView(rule({ tunnelId: 3 }), { ...entry, context: context() });
   assert.equal(tunnel.egressRuntimeBlocked, "shape_invalid");
+});
+
+const capable = { entryAgentVersion: "2.2.227", entryAgentCapabilities: JSON.stringify(["ssEgress2022", "ssEgressUdp"]), entryRuntimeVersion: "3.2.6-nex3" };
+
+test("UDP 走出口：只在报了 ssEgressUdp 的入口机上下发（TCP+UDP 两条链）；没能力按停用下发，不让 UDP 直连", () => {
+  const udpRule = rule({ protocol: "both", egressUdp: true });
+  const view: any = ruleEgressRuntimeView(udpRule, { ...entry, ...capable, context: context() });
+  assert.equal(view.isEnabled, true);
+  assert.equal(view.protocol, "both");
+  assert.equal(ruleEgressRuntime(view)?.udp, true);
+  for (const [name, options] of [
+    ["运行时还是 nex2（能力为空）", { entryAgentVersion: "2.2.227", entryAgentCapabilities: "[]", entryRuntimeVersion: "3.2.6-nex2" }],
+    ["运行时回滚 / 旧 Agent 不报能力", { entryAgentVersion: "2.2.227", entryAgentCapabilities: null }],
+    ["降级回 2.2.226、库里留着旧能力", { entryAgentVersion: "2.2.226", entryAgentCapabilities: capable.entryAgentCapabilities }],
+  ] as const) {
+    const blocked: any = ruleEgressRuntimeView(udpRule, { ...entry, ...options, context: context() });
+    assert.equal(blocked.isEnabled, false, name);
+    assert.equal(blocked.egressRuntimeBlocked, "udp_runtime_upgrade", name);
+    assert.equal(ruleEgressRuntime(blocked), null, name);
+    const evaluation = evaluateRuleEgress(udpRule, { ...entry, ...options, context: context() });
+    assert.match(String(evaluation?.message), /香港入口.*UDP.*3\.2\.6-nex3/, name);
+  }
+  // 只走 UDP 的规则同样。
+  const udpOnly: any = ruleEgressRuntimeView(rule({ protocol: "udp", egressUdp: true }), { ...entry, context: context() });
+  assert.equal(udpOnly.egressRuntimeBlocked, "udp_runtime_upgrade");
+  // 经典 AEAD 只走 TCP：没能力的入口机上照旧（TCP 行为不变）。
+  const tcpOnly: any = ruleEgressRuntimeView(rule(), { ...entry, context: context() });
+  assert.equal(tcpOnly.isEnabled, true);
+  assert.equal(ruleEgressRuntime(tcpOnly)?.udp, false);
+  // Agent 太旧排在能力前面：提示升级 Agent。
+  assert.equal((ruleEgressRuntimeView(udpRule, { ...entry, entryAgentVersion: "2.2.225", context: context() }) as any).egressRuntimeBlocked, "agent_upgrade");
+});
+
+test("SS2022 出口：有 ssEgress2022 能力才下发，TCP 也一样（旧运行时连 TCP 都不通）", () => {
+  const key = Buffer.alloc(32, 5).toString("base64");
+  const ss2022 = context({ inbound: { ...inbound, method: "2022-blake3-aes-256-gcm", password: key } });
+  const view: any = ruleEgressRuntimeView(rule(), { ...entry, ...capable, context: ss2022 });
+  assert.deepEqual(ruleEgressRuntime(view), { server: "203.0.113.20", port: 28388, method: "2022-blake3-aes-256-gcm", password: key, udp: false });
+  const blocked: any = ruleEgressRuntimeView(rule(), { ...entry, context: ss2022 });
+  assert.equal(blocked.egressRuntimeBlocked, "ss2022_runtime_upgrade");
+  const udpOnlyCap: any = ruleEgressRuntimeView(rule(), { ...entry, entryAgentVersion: "2.2.227", entryAgentCapabilities: JSON.stringify(["ssEgressUdp"]), context: ss2022 });
+  assert.equal(udpOnlyCap.egressRuntimeBlocked, "ss2022_runtime_upgrade");
 });
 
 test("落地离线：照样下发（sing-box 可能还活着），状态标「落地离线」", () => {
@@ -143,10 +187,18 @@ test("gost 出口链：TCP 是 ss 连接器 + tcp 拨号器 + nodelay；UDP 是 
   });
   const udp = buildGostEgressChain(7, "udp", runtime);
   assert.equal(udp.name, gostEgressChainName(7, "udp"));
-  assert.deepEqual(udp.hops[0].nodes[0].connector, { type: "ssu", auth: { username: "aes-256-gcm", password: "pw" } });
+  // 回包缓冲开到 65535：默认 4096 装不下大的 DNS 回答，会被截断、解密失败、悄悄丢掉。
+  assert.deepEqual(udp.hops[0].nodes[0].connector, { type: "ssu", auth: { username: "aes-256-gcm", password: "pw" }, metadata: { udpBufferSize: 65535 } });
   assert.deepEqual(udp.hops[0].nodes[0].dialer, { type: "udp" });
-  // SS2022 的方法和 key 原样带过去（面板现在不放行，链的生成本身不挑）。
+  // SS2022 的方法和 key 原样带过去。
   const ss2022 = buildGostEgressChain(8, "tcp", { ...runtime, method: "2022-blake3-aes-128-gcm", password: Buffer.alloc(16, 2).toString("base64") });
   assert.equal(ss2022.hops[0].nodes[0].connector.auth.username, "2022-blake3-aes-128-gcm");
+  assert.equal(ss2022.hops[0].nodes[0].connector.auth.password, Buffer.alloc(16, 2).toString("base64"));
+  // 不带「=」补齐的 SS2022 密钥（链接里常见）下发前补齐：gost 只认标准 base64，解不开会让整个运行时崩掉。
+  const key = Buffer.alloc(16, 7).toString("base64");
+  const unpadded = buildGostEgressChain(8, "udp", { ...runtime, method: "2022-blake3-aes-128-gcm", password: ` ${key.replace(/=+$/, "")} ` });
+  assert.equal(unpadded.hops[0].nodes[0].connector.auth.password, key);
+  // 经典方法的密码原样带过去（可能本来就以「=」结尾）。
+  assert.equal(buildGostEgressChain(9, "tcp", { ...runtime, password: "pw==" }).hops[0].nodes[0].connector.auth.password, "pw==");
   assert.equal(buildGostEgressChain(9, "tcp", { ...runtime, server: "2001:db8::20" }).hops[0].nodes[0].addr, "[2001:db8::20]:28388");
 });

@@ -42,6 +42,7 @@ import {
   assertProxyInboundEgressCompatibleChange,
   assertProxyInboundNotUsedAsEgress,
   LANDING_EGRESS_INBOUND_DEFAULTS,
+  listEgressEntryCapabilities,
   listEgressLandingOptions,
   pickLandingEgressPort,
   refreshEgressDependents,
@@ -558,8 +559,16 @@ export const proxyInboundsRouter = router({
   egressLandingOptions: protectedProcedure.query(async ({ ctx }) => listEgressLandingOptions(ctx.user)),
 
   /**
-   * 一键创建落地 SS 入站：在落地主机上开一个 Shadowsocks（aes-256-gcm，见 shared/ssEgress.ts 为什么
-   * 不是 SS2022）入站，随机密码、端口从这台主机的端口范围里挑。走的就是上面 create 那条路（权限、
+   * 规则编辑器问：这几台入口机现在能不能让 UDP 走出口、能不能用 SS2022 出口（看 Agent 上报的能力）。
+   * 只回能力和给人看的原因；看不到的主机不回名字。保存时服务端还会再按同一套规则查一遍。
+   */
+  egressEntryCapabilities: protectedProcedure
+    .input(z.object({ hostIds: z.array(z.number().int().positive()).max(64) }))
+    .query(async ({ ctx, input }) => listEgressEntryCapabilities(ctx.user, input.hostIds)),
+
+  /**
+   * 一键创建落地 SS 入站：在落地主机上开一个 Shadowsocks（aes-256-gcm：经典 AEAD 在所有入口机上都能用，
+   * SS2022 要入口机的运行时 nex3 起，见 shared/ssEgress.ts）入站，随机密码、端口从这台主机的端口范围里挑。走的就是上面 create 那条路（权限、
    * 额度、端口冲突全照旧），只是打上 landingEgress 标记：派生节点默认不进订阅。
    */
   createLandingEgress: protectedProcedure

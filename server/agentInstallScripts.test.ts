@@ -385,3 +385,60 @@ test("已装官方 gost 时尝试从面板换成 NEX 自编版，换上后重启
   const fromPanel = script.slice(script.indexOf("install_runtime_from_panel() {"), script.indexOf("install_runtime_from_github() {"));
   assert.match(fromPanel, /NEX_RUNTIME_ONLY:-\}" \] && ! runtime_is_nex_build "\$STAGED_RUNTIME"/);
 });
+
+test("NEX gost runtime: build number parsing, upgrade with .prev backup + marker, rollback restores the old binary", () => {
+  const script = generateInstallScript("https://panel.example.com");
+  assert.match(script, /RUNTIME_MIN_NEX_BUILD="3"/);
+  const functions = scriptSection(script, "runtime_self_check() {", "nginx_self_check() {");
+  const dir = fs.mkdtempSync(path.join(process.env.TMPDIR || "/tmp", "fwx-runtime-"));
+  try {
+    const fake = (name: string, version: string) => {
+      const file = path.join(dir, name);
+      fs.writeFileSync(file, `#!/bin/sh\nprintf 'gost ${version} (go1.25.4 linux/amd64)\\n'\nprintf 'Usage of gost:\\n  -C string\\n  -L value\\n  -F value\\n  -l\\n  -f\\n'\n`, { mode: 0o755 });
+      return file;
+    };
+    const bin = path.join(dir, "forwardx-runtime");
+    fs.copyFileSync(fake("nex2", "3.2.6-nex2"), bin);
+    fs.chmodSync(bin, 0o755);
+    const candidate = fake("candidate", "3.2.6-nex3");
+    fake("upstream", "3.2.6");
+    const probe = [
+      `RUNTIME_BIN=${JSON.stringify(bin)}`,
+      'RUNTIME_PREV_BIN="${RUNTIME_BIN}.prev"',
+      `RUNTIME_UPGRADE_MARKER=${JSON.stringify(path.join(dir, "state/runtime-upgrade.json"))}`,
+      `RUNTIME_ROLLBACK_STATE=${JSON.stringify(path.join(dir, "state/runtime-rollback.json"))}`,
+      functions,
+      `echo "build_nex2=$(runtime_nex_build "$RUNTIME_BIN") build_upstream=$(runtime_nex_build ${JSON.stringify(path.join(dir, "upstream"))}) version=$(runtime_version_string ${JSON.stringify(candidate)})"`,
+      `commit_runtime_candidate ${JSON.stringify(candidate)} >/dev/null && echo "committed=$(runtime_version_string "$RUNTIME_BIN") prev=$(runtime_version_string "$RUNTIME_PREV_BIN")"`,
+      'echo "marker=$(cat "$RUNTIME_UPGRADE_MARKER")"',
+      'rollback_runtime_binary "restart of forwardx-runtime failed" >/dev/null && echo "rolledback=$(runtime_version_string "$RUNTIME_BIN") marker_left=$([ -e "$RUNTIME_UPGRADE_MARKER" ] && echo yes || echo no)"',
+      'echo "rollback=$(cat "$RUNTIME_ROLLBACK_STATE")"',
+    ].join("\n");
+    const result = spawnSync("bash", ["-c", probe], { encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /build_nex2=2 build_upstream=0 version=3\.2\.6-nex3/);
+    assert.match(result.stdout, /committed=3\.2\.6-nex3 prev=3\.2\.6-nex2/);
+    const marker = JSON.parse(result.stdout.match(/^marker=(.*)$/m)![1]);
+    assert.equal(marker.previousPath, `${bin}.prev`);
+    assert.equal(marker.previousVersion, "3.2.6-nex2");
+    assert.equal(marker.newVersion, "3.2.6-nex3");
+    assert.ok(Number(marker.startedAt) > 1_600_000_000);
+    assert.match(result.stdout, /rolledback=3\.2\.6-nex2 marker_left=no/);
+    const rollback = JSON.parse(result.stdout.match(/^rollback=(.*)$/m)![1]);
+    assert.equal(rollback.failedVersion, "3.2.6-nex3");
+    assert.equal(rollback.restoredVersion, "3.2.6-nex2");
+    assert.equal(rollback.restoredFingerprint.size, fs.statSync(bin).size);
+    assert.equal(rollback.restoredFingerprint.inode, fs.statSync(bin).ino);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+
+  // 已经是 NEX 自编版但构建号不够（nex2）：只从面板收更新的构建，换上后重启并检查，起不来就回滚。
+  const installRuntime = scriptSection(script, "install_runtime() {", "install_go_agent() {");
+  assert.match(installRuntime, /runtime_nex_build "\$RUNTIME_BIN"\)" -ge "\$RUNTIME_MIN_NEX_BUILD"/);
+  assert.match(installRuntime, /NEX_RUNTIME_ONLY=1 NEX_RUNTIME_MIN_BUILD="\$\(\( \$\(runtime_nex_build "\$RUNTIME_BIN"\) \+ 1 \)\)" install_runtime_from_panel; then\s+restart_runtime_services_if_running/);
+  const fromPanel = scriptSection(script, "install_runtime_from_panel() {", "install_runtime_from_github() {");
+  assert.match(fromPanel, /NEX_RUNTIME_MIN_BUILD:-\}" \] && \[ "\$\(runtime_nex_build "\$STAGED_RUNTIME"\)" -lt "\$NEX_RUNTIME_MIN_BUILD" \]/);
+  const restart = scriptSection(script, "restart_runtime_services_if_running() {", "install_runtime() {");
+  assert.match(restart, /rollback_runtime_binary "restart of \$SVC failed"/);
+});

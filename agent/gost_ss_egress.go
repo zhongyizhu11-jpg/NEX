@@ -24,8 +24,8 @@ tcp 拨号器（UDP over TCP）那条路的 client 根本没初始化，同样�
 （事务回滚到旧配置，动作报失败），也不能写下去。
 
 认得的加密方式和 go-gost/go-shadowsocks2 v0.1.1 的 SupportedMethods 一致（2022-blake3-chacha20-poly1305
-在那份表里是注释掉的）。面板这边只放行和 sing-box 实测互通的经典 AEAD，这里按运行时的能力放宽一些：
-校验管的是「不会把运行时弄崩」，互通是面板的事。
+在那份表里是注释掉的）。校验管的是「不会把运行时弄崩」；互通是面板和运行时版本的事：UDP（ssu）和 SS2022
+只有运行时 3.2.6-nex3 起才和 sing-box 互通，面板只发给报了能力的 Agent（见 gost_runtime_version.go）。
 */
 
 var gostShadowsocksMethods = map[string]int{
@@ -136,10 +136,8 @@ func validateGostShadowsocksNode(node gostEgressNode) error {
 		if strings.Contains(password, ":") {
 			return fmt.Errorf("shadowsocks 2022 multi-user keys are not supported")
 		}
+		// gost 只用 StdEncoding 解（要「=」补齐）；不补齐的密钥同样会让 gost 留下空 client，这里一样拒掉。
 		key, err := base64.StdEncoding.DecodeString(password)
-		if err != nil {
-			key, err = base64.RawStdEncoding.DecodeString(password)
-		}
 		if err != nil || len(key) != keyBytes {
 			return fmt.Errorf("shadowsocks 2022 key for %s must be %d bytes base64", method, keyBytes)
 		}

@@ -38,7 +38,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.226"
+var Version = "2.2.227"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -3050,6 +3050,8 @@ func main() {
 	defer stateLock.Close()
 	go applyReceivePacketSteering()
 	restoreCountingChainStates(agentBootID)
+	// 问一次 gost 运行时的版本（-V），处理安装脚本留下的待确认升级（见 gost_runtime_version.go）。
+	go gostRuntimeStartupSelfCheck()
 
 	startAgentLogMaintenance()
 	// Restore persisted runtimes (WireGuard / FXP / failover) in the background
@@ -4201,6 +4203,7 @@ func heartbeat(cfg Config, forceReconcile ...bool) (heartbeatResult, error) {
 	payload["pluginSyncSignatures"] = pluginSyncSignatures
 	payload["mimicEnvironment"] = mimicEnvironment(false)
 	payload["fxpVersion"] = reportedFXPVersion()
+	addGostRuntimeReport(payload)
 	if (!compactEnabled || shouldReportStatic) && primaryIP != "" {
 		payload["ip"] = primaryIP
 	}
@@ -4402,6 +4405,7 @@ func heartbeatKeepalive(cfg Config) (heartbeatResult, error) {
 	}
 	payload["mimicEnvironment"] = mimicEnvironment(false)
 	payload["fxpVersion"] = reportedFXPVersion()
+	addGostRuntimeReport(payload)
 	tcpConnections, udpConnections := connectionCounts()
 	if compactAgentReports.Load() {
 		payload["m"] = []any{

@@ -12,13 +12,17 @@
  *   ss_host  面板管的一台主机上的 Shadowsocks 落地入站（proxy_inbounds，sing-box 跑的）；
  *   ss_link  用户粘贴的外部 ss:// 链接（凭据在面板里加密保存）。
  *
- * 能用哪些加密方式不是拍脑袋定的，是拿随 Agent 下发的 gost 运行时（3.2.6，go-gost/x 0.8.1）
- * 对着 sing-box 1.14.0 的真二进制一条条试出来的：
- *   - aes-128-gcm / aes-256-gcm / chacha20-ietf-poly1305 的 TCP：互通；
- *   - SS2022（2022-blake3-*）的 TCP：gost 和 gost 之间通，和 sing-box 不通（回程解不出来）；
- *   - 所有方法的 UDP：不通（经典 AEAD 的回包 gost 解不出，SS2022 的包 sing-box 验不过）。
- * 所以出口目前只走 TCP、只收经典 AEAD。等 gost 运行时换了能互通的版本，改这里的两个常量即可，
- * 面板、Agent 两边的下发和校验代码都已经按「TCP + UDP、经典 + SS2022」写好了。
+ * 能用哪些加密方式、UDP 能不能走，不是拍脑袋定的，是拿随 Agent 下发的 gost 运行时对着 sing-box 1.14.0
+ * 的真二进制一条条试出来的（gost-runtime/test/ss-egress-e2e）：
+ *   - 上游 gost 3.2.6（go-gost/x 0.8.1）：经典 AEAD 的 TCP 通；所有 UDP 不通（gost 收不到回包）；
+ *     SS2022 只能 gost 对 gost。
+ *   - NEX 运行时 3.2.6-nex3 起（gost-runtime/nex-ssu.patch、nex-shadowsocks2.patch 修好了）：经典 AEAD 和
+ *     SS2022（2022-blake3-aes-128-gcm / 2022-blake3-aes-256-gcm）的 TCP、UDP 都和 sing-box 互通。
+ * 所以「UDP 走出口」和「SS2022 做出口」看的是入口机的能力：Agent ≥ 2.2.227 并且它上报了能力
+ * （Agent 实测装着的运行时是 nex3 或更新、没有回滚，才报 ssEgressUdp / ssEgress2022）。
+ * 没有能力的入口机上，经典 AEAD 的 TCP 出口照旧；要 UDP 或 SS2022 的规则按停用下发（不退回直连），
+ * 卡片显示「UDP 出口需要升级 Agent/运行时」。SS_EGRESS_UDP_SUPPORTED / SS_EGRESS_SS2022_SUPPORTED
+ * 是总开关，关掉就回到「只有经典 AEAD 的 TCP」。
  *
  * 这里只放纯函数和常量；加密、查库在 server/ssEgress.ts。
  */
@@ -50,18 +54,41 @@ export const GOST_RUNTIME_SS_METHODS = [
   "2022-blake3-aes-256-gcm",
 ] as const;
 
-/** 面板允许用来做出口的方法：和 sing-box 实测互通的那几个（见文件开头）。 */
-export const SS_EGRESS_METHODS = ["aes-256-gcm", "aes-128-gcm", "chacha20-ietf-poly1305"] as const;
-export type SsEgressMethod = (typeof SS_EGRESS_METHODS)[number];
+/** 经典 AEAD：所有支持出口的 Agent（2.2.226 起）上 TCP 都能用。 */
+export const SS_EGRESS_CLASSIC_METHODS = ["aes-256-gcm", "aes-128-gcm", "chacha20-ietf-poly1305"] as const;
 
-/** 一键创建落地入站时用的方法。 */
+/** SS2022：要入口机报 ssEgress2022（运行时 nex3 起）。2022-blake3-chacha20-poly1305 gost 不认得。 */
+export const SS_EGRESS_2022_METHODS = ["2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm"] as const;
+
+/** 总开关：SS2022 能不能做出口（还要看入口机的能力）。 */
+export const SS_EGRESS_SS2022_SUPPORTED = true;
+
+/** 面板允许用来做出口的方法（SS2022 还要入口机有能力，见 ssEgressHostCapabilityError）。 */
+export const SS_EGRESS_METHODS: readonly string[] = [
+  ...SS_EGRESS_CLASSIC_METHODS,
+  ...(SS_EGRESS_SS2022_SUPPORTED ? SS_EGRESS_2022_METHODS : []),
+];
+export type SsEgressMethod = (typeof SS_EGRESS_CLASSIC_METHODS)[number] | (typeof SS_EGRESS_2022_METHODS)[number];
+
+/** 一键创建落地入站时用的方法：经典 AEAD，所有入口机都能用。 */
 export const SS_EGRESS_DEFAULT_METHOD: SsEgressMethod = "aes-256-gcm";
 
-/** UDP 能不能走出口。见文件开头：当前 gost 运行时的 SS UDP 和 sing-box 不互通。 */
-export const SS_EGRESS_UDP_SUPPORTED = false;
+/** 总开关：UDP 能不能走出口（还要看入口机的能力）。 */
+export const SS_EGRESS_UDP_SUPPORTED = true;
 
 export const SS_EGRESS_UDP_UNSUPPORTED_MESSAGE =
-  "当前 gost 运行时的 Shadowsocks UDP 转发和 sing-box 不互通，UDP 暂时不能走出口；请把协议改成 TCP";
+  "UDP 暂时不能走 Shadowsocks 出口；请把协议改成 TCP";
+
+/**
+ * 从这一版起 Agent 会检测装着的 gost 运行时并上报能力。比它旧的 Agent 不报能力，一律按「没有」算。
+ */
+export const SS_EGRESS_CAPABILITY_AGENT_VERSION = "2.2.227";
+/** 运行时的 NEX 构建号门槛：3.2.6-nex3 起 Shadowsocks UDP / SS2022 和 sing-box 互通。 */
+export const SS_EGRESS_RUNTIME_MIN_NEX_BUILD = 3;
+export const SS_EGRESS_RUNTIME_MIN_VERSION_LABEL = `3.2.6-nex${SS_EGRESS_RUNTIME_MIN_NEX_BUILD}`;
+/** Agent 心跳里 agentCapabilities 的两项（和 agent/gost_runtime_version.go 一致）。 */
+export const AGENT_CAPABILITY_SS_EGRESS_UDP = "ssEgressUdp";
+export const AGENT_CAPABILITY_SS_EGRESS_2022 = "ssEgress2022";
 
 /** 常见的别名（v2rayN / Clash / 老 SIP002 链接里会写成这样）。 */
 const METHOD_ALIASES: Record<string, string> = {
@@ -87,7 +114,8 @@ export function ssEgressMethodError(raw: unknown): string | null {
   if ((SS_EGRESS_METHODS as readonly string[]).includes(method)) return null;
   const supported = SS_EGRESS_METHODS.join(" / ");
   if (isSs2022Method(method)) {
-    return `暂不支持 ${method} 做出口：当前 gost 运行时的 SS2022 和 sing-box 等主流服务端不互通。请改用 ${supported}`;
+    if (SS_EGRESS_SS2022_SUPPORTED) return `暂不支持 ${method} 做出口（gost 运行时不认得这个方法）。请改用 ${supported}`;
+    return `暂不支持 ${method} 做出口：SS2022 出口已关闭。请改用 ${supported}`;
   }
   if (["none", "plain", "table", "rc4-md5"].includes(method) || /-(cfb|ctr|ofb)$/.test(method)) {
     return `${method} 是不安全的老式加密，不支持做出口。请改用 ${supported}`;
@@ -133,7 +161,42 @@ export function ssEgressEndpointError(endpoint: Partial<SsEgressEndpoint> | null
   if (!password) return "出口缺少密码";
   if (password.length > 512) return "出口密码太长";
   if (/[\r\n\0]/.test(password)) return "出口密码里不能有换行";
+  const keyBytes = ss2022KeyBytes(normalizeSsMethod(endpoint.method));
+  if (keyBytes > 0) {
+    // SS2022 的密码是 base64 的定长密钥；多用户的「iPSK:uPSK」gost 客户端不支持。
+    if (password.includes(":")) return "SS2022 出口不支持多用户密钥（iPSK:uPSK），请用单用户的密钥";
+    if (base64KeyLength(password) !== keyBytes) return `${normalizeSsMethod(endpoint.method)} 的密码必须是 ${keyBytes} 字节密钥的 base64`;
+  }
   return null;
+}
+
+function ss2022KeyBytes(method: string) {
+  if (method === "2022-blake3-aes-128-gcm") return 16;
+  if (method === "2022-blake3-aes-256-gcm") return 32;
+  return 0;
+}
+
+/**
+ * gost 解 SS2022 密钥只认带「=」补齐的标准 base64（core.Base64Decode = StdEncoding），解不开就留下空的
+ * 连接器，第一条连接进来整个运行时崩掉。用户粘的链接常常不带补齐，下发前统一补好；经典方法原样返回。
+ */
+export function canonicalSsEgressPassword(method: unknown, password: unknown) {
+  const text = String(password ?? "");
+  if (!ss2022KeyBytes(normalizeSsMethod(String(method ?? "")))) return text;
+  const key = text.trim().replace(/=+$/, "");
+  return key.length % 4 === 0 ? key : key + "=".repeat(4 - (key.length % 4));
+}
+
+/** base64 解出来的字节数；补齐和长度对不上（解不开）时 -1。补不补「=」都认，下发前由 canonicalSsEgressPassword 补齐。 */
+function base64KeyLength(value: string) {
+  const match = /^([A-Za-z0-9+/]+)(={0,2})$/.exec(value.trim());
+  if (!match) return -1;
+  const body = match[1].length;
+  const padding = match[2].length;
+  // 去掉「=」后余 1 的长度不是合法 base64；带了「=」就必须正好补到 4 的倍数。
+  if (body % 4 === 1) return -1;
+  if (padding > 0 && (body + padding) % 4 !== 0) return -1;
+  return Math.floor((body * 3) / 4);
 }
 
 export type ParseSsEgressLinkResult =
@@ -187,6 +250,85 @@ export function isSsEgressAgentSupported(version: string | null | undefined) {
 export function ssEgressAgentUpgradeMessage(hostName?: unknown) {
   const name = String(hostName || "").trim();
   return `${name ? `主机「${name}」` : "入口主机"}的 Agent 需要升级到 ${SS_EGRESS_AGENT_VERSION} 或更新版本才能使用 Shadowsocks 出口`;
+}
+
+/** 心跳里上报的能力列表（数组或逗号分隔的字符串）规整成去重的数组。 */
+export function parseAgentCapabilities(raw: unknown): string[] {
+  let list: unknown[] = [];
+  if (Array.isArray(raw)) list = raw;
+  else if (typeof raw === "string") {
+    const text = raw.trim();
+    if (text.startsWith("[")) {
+      try {
+        const parsed = JSON.parse(text);
+        if (Array.isArray(parsed)) list = parsed;
+      } catch {
+        list = [];
+      }
+    } else list = text.split(",");
+  }
+  return Array.from(new Set(list
+    .map((item) => String(item ?? "").trim())
+    .filter((item) => /^[A-Za-z0-9_.-]{1,64}$/.test(item))))
+    .slice(0, 64)
+    .sort();
+}
+
+export type SsEgressHostCapabilities = { udp: boolean; ss2022: boolean };
+
+/**
+ * 入口机现在能不能做 UDP 出口 / SS2022 出口。两样都要：Agent ≥ 2.2.227（旧 Agent 不会报能力，这里
+ * 再把一道，防止降级后库里留着旧的能力）、它这次上报的能力里有对应的那一项。
+ */
+export function hostSsEgressCapabilities(host: { agentVersion?: unknown; agentCapabilities?: unknown } | null | undefined): SsEgressHostCapabilities {
+  if (!host || !isAgentVersionAtLeast(String(host.agentVersion || ""), SS_EGRESS_CAPABILITY_AGENT_VERSION)) {
+    return { udp: false, ss2022: false };
+  }
+  const caps = new Set(parseAgentCapabilities(host.agentCapabilities));
+  return {
+    udp: SS_EGRESS_UDP_SUPPORTED && caps.has(AGENT_CAPABILITY_SS_EGRESS_UDP),
+    ss2022: SS_EGRESS_SS2022_SUPPORTED && caps.has(AGENT_CAPABILITY_SS_EGRESS_2022),
+  };
+}
+
+function hostLabelOf(host: { name?: unknown } | null | undefined) {
+  const name = String(host?.name || "").trim();
+  return name ? `主机「${name}」` : "入口主机";
+}
+
+function runtimeRequirementText(host: { agentVersion?: unknown; runtimeVersion?: unknown } | null | undefined) {
+  const agent = String(host?.agentVersion || "").trim() || "未知";
+  const runtime = String(host?.runtimeVersion || "").trim() || "未知";
+  return `需要 Agent ${SS_EGRESS_CAPABILITY_AGENT_VERSION} 或更新、gost 运行时 ${SS_EGRESS_RUNTIME_MIN_VERSION_LABEL} 或更新（当前 Agent ${agent}，运行时 ${runtime}）`;
+}
+
+/** UDP 出口需要升级时给人看的话。 */
+export function ssEgressUdpUpgradeMessage(host?: { name?: unknown; agentVersion?: unknown; runtimeVersion?: unknown } | null) {
+  return `${hostLabelOf(host)}还不能让 UDP 走 Shadowsocks 出口：${runtimeRequirementText(host)}。请在主机列表里升级 Agent（会一起升级运行时）`;
+}
+
+export function ssEgress2022UpgradeMessage(host?: { name?: unknown; agentVersion?: unknown; runtimeVersion?: unknown } | null) {
+  return `${hostLabelOf(host)}还不能用 SS2022 做 Shadowsocks 出口：${runtimeRequirementText(host)}。请升级 Agent，或改用 ${SS_EGRESS_CLASSIC_METHODS.join(" / ")}`;
+}
+
+/**
+ * 这台入口机撑不撑得起这个出口（UDP / SS2022 两样能力）。撑得起回 null，否则回给人看的原因。
+ * 只管能力；Agent 低于 2.2.226 的情况由 isSsEgressAgentSupported 先拦。
+ */
+export function ssEgressHostCapabilityError(
+  host: { name?: unknown; agentVersion?: unknown; runtimeVersion?: unknown; agentCapabilities?: unknown } | null | undefined,
+  need: { udp: boolean; method?: unknown },
+): string | null {
+  const caps = hostSsEgressCapabilities(host);
+  if (need.method !== undefined && isSs2022Method(need.method) && !caps.ss2022) return ssEgress2022UpgradeMessage(host);
+  if (need.udp && !caps.udp) return ssEgressUdpUpgradeMessage(host);
+  return null;
+}
+
+/** 这条规则的出口要不要 UDP 能力：协议里有 UDP，并且勾了「UDP 也走出口」。 */
+export function ruleEgressWantsUdp(rule: { protocol?: unknown; egressUdp?: unknown } | null | undefined) {
+  const protocol = String(rule?.protocol ?? "both");
+  return truthy(rule?.egressUdp) && (protocol === "udp" || protocol === "both");
 }
 
 export function normalizeRuleEgressType(value: unknown): RuleEgressType {
@@ -270,6 +412,8 @@ export const RULE_EGRESS_STATES = [
   "running",
   "paused",
   "agent_upgrade",
+  "udp_runtime_upgrade",
+  "ss2022_runtime_upgrade",
   "landing_offline",
   "inbound_missing",
   "inbound_disabled",
@@ -284,6 +428,8 @@ export const RULE_EGRESS_STATE_LABELS: Record<RuleEgressState, string> = {
   running: "运行",
   paused: "已暂停",
   agent_upgrade: "需要升级 Agent",
+  udp_runtime_upgrade: "UDP 出口需要升级 Agent/运行时",
+  ss2022_runtime_upgrade: "SS2022 出口需要升级 Agent/运行时",
   landing_offline: "落地离线",
   inbound_missing: "落地入站已删除",
   inbound_disabled: "落地入站已停用",
@@ -305,12 +451,15 @@ export function ruleEgressStateTone(state: RuleEgressState): "ok" | "muted" | "w
 }
 
 /** 卡片上那一句。 */
-export function ruleEgressSummaryText(egress: { type: unknown; landingHostName?: unknown } | null | undefined) {
+export function ruleEgressSummaryText(egress: { type: unknown; landingHostName?: unknown; udp?: unknown } | null | undefined) {
   const type = normalizeRuleEgressType(egress?.type);
+  // udp 是「UDP 出口确实下发了」，不是「勾了」：撑不起的入口机上不写「含 UDP」。
+  const udp = egress?.udp === true ? "（含 UDP）" : "";
   if (type === "ss_host") {
     const name = String(egress?.landingHostName || "").trim();
-    return `经 落地主机 ${name || "（已删除）"} 出口`;
+    return `经 落地主机 ${name || "（已删除）"} 出口${udp}`;
   }
-  if (type === "ss_link") return "经 外部 SS 出口";
+  // 外部 SS 服务器开没开 UDP 中继面板查不到：如实写成「需对端支持」，不当成已经通了。
+  if (type === "ss_link") return `经 外部 SS 出口${egress?.udp === true ? "（含 UDP，需对端支持 UDP）" : ""}`;
   return "";
 }

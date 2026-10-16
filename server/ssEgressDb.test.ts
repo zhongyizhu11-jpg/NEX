@@ -384,3 +384,90 @@ test("删落地主机：别的主机上的规则还拿它的入站当出口就�
     assert.equal(Number((await query("SELECT COUNT(*) AS c FROM host_unlock_checks WHERE \"hostId\" = 10"))[0].c), 1);
   `);
 });
+
+test("UDP / SS2022 出口：只有报了能力的入口机能保存、能拿到 ssu 链；失去能力后按停用下发，卡片写明要升级", () => {
+  runInDatabase(String.raw`
+    const caps = JSON.stringify(["ssEgress2022", "ssEgressUdp"]);
+    const setCaps = (id, version, value, runtimeVersion) => exec('UPDATE hosts SET "agentVersion" = ?, "agentCapabilities" = ?, "runtimeVersion" = ? WHERE id = ?', [version, value, runtimeVersion, id]);
+    const inboundId = await makeInbound();
+    const key = Buffer.alloc(16, 6).toString("base64");
+    const ss2022 = await makeInbound({ name: "2022", port: 28389, method: "2022-blake3-aes-128-gcm", password: key });
+
+    // 入口机 2.2.226、没报能力：UDP 出口、SS2022 出口都存不进去，经典 AEAD 的 TCP 照旧能存。
+    await assert.rejects(rules.create(directRule({ protocol: "both", egressType: "ss_host", egressInboundId: inboundId, egressUdp: true })), /香港入口.*UDP.*2\.2\.227.*3\.2\.6-nex3/);
+    await assert.rejects(rules.create(directRule({ egressType: "ss_host", egressInboundId: ss2022 })), /SS2022/);
+    await assert.rejects(rules.create(directRule({ egressType: "ss_link", egressLink: "ss://" + b64url("2022-blake3-aes-128-gcm:" + key) + "@198.51.100.50:8443" })), /SS2022/);
+    await rules.create(directRule({ egressType: "ss_host", egressInboundId: inboundId }));
+    // 新 Agent 但运行时还是 nex2：一样不行。
+    await setCaps(10, "2.2.227", "[]", "3.2.6-nex2");
+    await assert.rejects(rules.create(directRule({ protocol: "udp", egressType: "ss_host", egressInboundId: inboundId, egressUdp: true })), /运行时 3\.2\.6-nex2/);
+
+    // 报了能力：都能存；心跳给 TCP 一条 ss 链、UDP 一条 ssu 链。
+    await setCaps(10, "2.2.227", caps, "3.2.6-nex3");
+    const udpRule = await rules.create(directRule({ protocol: "both", egressType: "ss_host", egressInboundId: inboundId, egressUdp: true }));
+    const viaSs2022 = await rules.create(directRule({ protocol: "both", egressType: "ss_host", egressInboundId: ss2022, egressUdp: true }));
+    const { gost } = await heartbeat("tok10", "2.2.227");
+    const chainOf = (id, proto) => gost.chains.find((item) => item.name === "chain-egress-" + id + "-" + proto);
+    assert.equal(gost.services.find((item) => item.name === "fwx-" + udpRule.id + "-udp").handler.chain, "chain-egress-" + udpRule.id + "-udp");
+    assert.deepEqual(chainOf(udpRule.id, "udp").hops[0].nodes[0].connector, { type: "ssu", auth: { username: "aes-256-gcm", password: "landing-pass" }, metadata: { udpBufferSize: 65535 } });
+    assert.deepEqual(chainOf(udpRule.id, "udp").hops[0].nodes[0].dialer, { type: "udp" });
+    assert.equal(chainOf(viaSs2022.id, "tcp").hops[0].nodes[0].connector.auth.username, "2022-blake3-aes-128-gcm");
+    assert.equal(chainOf(viaSs2022.id, "udp").hops[0].nodes[0].connector.auth.password, key);
+    const listed = (await rules.list()).find((item) => item.id === udpRule.id);
+    assert.equal(listed.egress.state, "running");
+    assert.equal(listed.egress.udp, true);
+
+    // 编辑器问能力。
+    const capability = await inboundApi.egressEntryCapabilities({ hostIds: [10, 30] });
+    assert.deepEqual(capability.map((row) => [row.hostId, row.udp, row.ss2022]), [[10, true, true], [30, false, false]]);
+    assert.match(capability[1].udpMessage, /老入口.*2\.2\.227/);
+
+    // 被当作 SS2022 出口的入站：入口机有能力时可以改成 SS2022，没有就拒绝。
+    await setCaps(10, "2.2.226", caps, "3.2.6-nex3");
+    await assert.rejects(inboundApi.update({ id: inboundId, method: "2022-blake3-aes-256-gcm" }), /不能改成 2022-blake3-aes-256-gcm.*SS2022/);
+
+    // 失去能力（运行时回滚，Agent 这次心跳报了空能力）：心跳当场按新能力重算，UDP / SS2022 规则不下发，
+    // 只走 TCP 的经典规则照旧；卡片写明要升级，不再显示「含 UDP」。
+    await setCaps(10, "2.2.227", caps, "3.2.6-nex3");
+    const gate = await import(url("server/agentHeartbeatGate.ts"));
+    gate.agentStableHeartbeatPlanCache.invalidate(10);
+    const express = (await import("express")).default;
+    const route = await import(url("server/agentHeartbeatRoute.ts"));
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => { req.agentToken = "tok10"; next(); });
+    route.registerAgentHeartbeatRoute(app);
+    const server = http.createServer(app);
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const response = await fetch("http://127.0.0.1:" + server.address().port + "/api/agent/heartbeat", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ agentVersion: "2.2.227", runtimeVersion: "3.2.6-nex2", agentCapabilities: [], forceReconcile: true, uptime: 1000, cpuUsage: 1, memoryUsage: 1, diskUsage: 1 }),
+    });
+    server.close();
+    assert.equal(response.status, 200, await response.text());
+    const stored = (await query('SELECT "agentCapabilities", "runtimeVersion" FROM hosts WHERE id = 10'))[0];
+    assert.equal(stored.agentCapabilities, "[]");
+    assert.equal(stored.runtimeVersion, "3.2.6-nex2");
+    const afterRollback = await rules.list();
+    const lost = afterRollback.find((item) => item.id === udpRule.id);
+    assert.equal(lost.egress.state, "udp_runtime_upgrade");
+    assert.equal(lost.egress.udp, false);
+    assert.match(lost.egress.message, /运行时 3\.2\.6-nex2/);
+    assert.equal(afterRollback.find((item) => item.id === viaSs2022.id).egress.state, "ss2022_runtime_upgrade");
+    // 下发：同一台机器第三次心跳只要本地状态、不给完整配置，换「老入口」（30，新 Agent、能力为空）看一份完整的 gost.json。
+    await setCaps(30, "2.2.227", "[]", "3.2.6-nex2");
+    await exec(
+      'INSERT INTO forward_rules (id, "hostId", name, "forwardType", protocol, "sourcePort", "targetIp", "targetPort", "userId", "isEnabled", "egressType", "egressInboundId", "egressUdp") VALUES (910, 30, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?, 1)',
+      ["回滚后的 UDP 出口", "gost", "both", 22910, "198.51.100.7", 443, "ss_host", inboundId],
+    );
+    await exec(
+      'INSERT INTO forward_rules (id, "hostId", name, "forwardType", protocol, "sourcePort", "targetIp", "targetPort", "userId", "isEnabled", "egressType", "egressInboundId", "egressUdp") VALUES (911, 30, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?, 0)',
+      ["经典 TCP 出口", "gost", "tcp", 22911, "198.51.100.7", 443, "ss_host", inboundId],
+    );
+    const { gost: degraded } = await heartbeat("tok30", "2.2.227");
+    assert.equal(degraded.services.some((item) => item.name.startsWith("fwx-910-")), false, "UDP 出口规则整条不下发，UDP 不会直连");
+    assert.equal(degraded.chains.some((item) => item.hops[0].nodes[0].connector.type === "ssu"), false);
+    assert.ok(degraded.services.some((item) => item.name === "fwx-911-tcp"), "经典 AEAD 的 TCP 出口照旧");
+    assert.ok(degraded.chains.some((item) => item.name === "chain-egress-911-tcp"));
+  `);
+});

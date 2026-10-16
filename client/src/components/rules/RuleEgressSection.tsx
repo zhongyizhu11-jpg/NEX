@@ -1,8 +1,11 @@
 /**
  * 规则编辑器里的「出口」一段：直接连接 / 落地主机（Shadowsocks）/ 外部 Shadowsocks 链接。
  *
- * 规则（能用哪些方法、为什么只有 TCP、规则形态的限制）都在 shared/ssEgress.ts，和服务端同一份；
- * 这里只负责选和提示。最终以服务端校验为准。
+ * 规则（能用哪些方法、UDP / SS2022 要入口机有什么能力、规则形态的限制）都在 shared/ssEgress.ts，
+ * 和服务端同一份；这里只负责选和提示。最终以服务端校验为准。
+ *
+ * 「UDP 也走出口」和 SS2022 出口要每一台入口机都报了能力（Agent 2.2.227 起、gost 运行时 3.2.6-nex3 起）：
+ * 撑不起时勾选框不可用、SS2022 入站不可选，并写清楚是哪台机器、要升级什么。
  */
 
 import { useMemo } from "react";
@@ -19,6 +22,7 @@ import { segmentedControlClassName, segmentedOptionClassName } from "@/component
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { trpc } from "@/lib/trpc";
 import {
+  isSs2022Method,
   parseSsEgressLink,
   RULE_EGRESS_TYPE_LABELS,
   SS_EGRESS_DEFAULT_METHOD,
@@ -60,6 +64,47 @@ type Props = {
   isAdmin: boolean;
 };
 
+export type EgressEntryCapabilities = {
+  /** 还在问服务端。 */
+  loading: boolean;
+  /** 每台入口机都能让 UDP 走出口。 */
+  udp: boolean;
+  /** 每台入口机都能用 SS2022 出口。 */
+  ss2022: boolean;
+  /** 不能时第一台撑不起的机器的原因。 */
+  udpReason: string | null;
+  ss2022Reason: string | null;
+};
+
+/**
+ * 入口机现在的出口能力（Agent 上报的 ssEgressUdp / ssEgress2022）。规则编辑器的出口一段和保存前的
+ * 拦截共用这一个查询（react-query 按 key 合并成一次请求）。
+ */
+export function useEgressEntryCapabilities(entryHostIds: number[], enabled: boolean): EgressEntryCapabilities {
+  const hostIds = useMemo(() => Array.from(new Set(entryHostIds.map(Number).filter((id) => id > 0))).sort((a, b) => a - b), [entryHostIds]);
+  const query = trpc.proxyInbounds.egressEntryCapabilities.useQuery({ hostIds }, {
+    enabled: enabled && hostIds.length > 0,
+    staleTime: 15_000,
+    refetchOnWindowFocus: false,
+  });
+  return useMemo(() => {
+    const rows = (query.data || []) as Array<{ udp: boolean; ss2022: boolean; udpMessage: string | null; ss2022Message: string | null }>;
+    if (!enabled || hostIds.length === 0 || query.isLoading || !query.data) {
+      const reason = hostIds.length === 0 ? "请先选择入口主机" : "正在检查入口主机的 Agent / 运行时…";
+      return { loading: enabled && hostIds.length > 0 && query.isLoading, udp: false, ss2022: false, udpReason: reason, ss2022Reason: reason };
+    }
+    const udpMissing = rows.find((row) => !row.udp);
+    const ss2022Missing = rows.find((row) => !row.ss2022);
+    return {
+      loading: false,
+      udp: SS_EGRESS_UDP_SUPPORTED && rows.length > 0 && !udpMissing,
+      ss2022: rows.length > 0 && !ss2022Missing,
+      udpReason: udpMissing ? udpMissing.udpMessage || "入口主机还不支持 UDP 走出口" : null,
+      ss2022Reason: ss2022Missing ? ss2022Missing.ss2022Message || "入口主机还不支持 SS2022 出口" : null,
+    };
+  }, [enabled, hostIds.length, query.data, query.isLoading]);
+}
+
 const OPTIONS: Array<{ type: RuleEgressType; short: string; icon: typeof Server }> = [
   { type: "none", short: "直接连接", icon: ArrowRightLeft },
   { type: "ss_host", short: "落地主机", icon: Server },
@@ -82,13 +127,22 @@ export function RuleEgressSection({ value, onChange, onEgressEnabled, blockedRea
     onError: (error) => toast.error(error.message || "创建落地入站失败"),
   });
 
+  const capabilities = useEgressEntryCapabilities(entryHostIds, value.egressType !== "none");
   const entrySet = useMemo(() => new Set(entryHostIds.map(Number)), [entryHostIds]);
   const hosts = useMemo(
     () => ((optionsQuery.data || []) as any[]).filter((host) => !entrySet.has(Number(host.hostId))),
     [entrySet, optionsQuery.data],
   );
   const selectedHost = hosts.find((host) => Number(host.hostId) === Number(value.egressHostId)) || null;
-  const usableInbounds = (selectedHost?.inbounds || []).filter((inbound: any) => !inbound.methodError && inbound.isEnabled);
+  // SS2022 入站要每台入口机都有 ssEgress2022 能力；撑不起时照样列出来，但不能选。
+  const inboundBlockReason = (inbound: any): string | null => {
+    if (inbound.methodError) return "不支持做出口";
+    if (!inbound.isEnabled) return "已停用";
+    if (isSs2022Method(inbound.method) && !capabilities.ss2022) return "入口机需升级才能用 SS2022";
+    return null;
+  };
+  const usableInbounds = (selectedHost?.inbounds || []).filter((inbound: any) => !inboundBlockReason(inbound));
+  const selectedInbound = (selectedHost?.inbounds || []).find((inbound: any) => Number(inbound.id) === Number(value.egressInboundId)) || null;
   const linkPreview = value.egressType === "ss_link" && value.egressLink.trim() ? parseSsEgressLink(value.egressLink) : null;
 
   const pick = (type: RuleEgressType) => {
@@ -146,7 +200,7 @@ export function RuleEgressSection({ value, onChange, onEgressEnabled, blockedRea
                 disabled={optionsQuery.isLoading}
                 onValueChange={(next) => {
                   const host = hosts.find((item) => Number(item.hostId) === Number(next));
-                  const first = (host?.inbounds || []).find((inbound: any) => !inbound.methodError && inbound.isEnabled);
+                  const first = (host?.inbounds || []).find((inbound: any) => !inboundBlockReason(inbound));
                   onChange({ egressHostId: Number(next), egressInboundId: first ? Number(first.id) : null });
                 }}
               >
@@ -178,11 +232,11 @@ export function RuleEgressSection({ value, onChange, onEgressEnabled, blockedRea
                     <SelectItem
                       key={inbound.id}
                       value={String(inbound.id)}
-                      disabled={!!inbound.methodError || !inbound.isEnabled}
+                      disabled={!!inboundBlockReason(inbound)}
                       textValue={`${inbound.name} ${inbound.port}`}
                     >
                       {inbound.name} :{inbound.port} · {inbound.method}
-                      {inbound.methodError ? "（不支持做出口）" : !inbound.isEnabled ? "（已停用）" : ""}
+                      {inboundBlockReason(inbound) ? `（${inboundBlockReason(inbound)}）` : ""}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -191,6 +245,9 @@ export function RuleEgressSection({ value, onChange, onEgressEnabled, blockedRea
           </div>
           {selectedHost && !selectedHost.online && (
             <p className="text-meta text-[var(--fx-warn-text)]">这台落地主机当前离线，保存前请先让它上线。</p>
+          )}
+          {selectedInbound && isSs2022Method(selectedInbound.method) && !capabilities.ss2022 && !capabilities.loading && (
+            <p className="text-meta leading-5 text-[var(--fx-warn-text)]">{capabilities.ss2022Reason}</p>
           )}
           {selectedHost && usableInbounds.length === 0 && (
             <div className="flex min-w-0 flex-col gap-2 rounded-md bg-muted/35 px-2.5 py-2 sm:flex-row sm:items-center">
@@ -257,28 +314,52 @@ export function RuleEgressSection({ value, onChange, onEgressEnabled, blockedRea
               {linkPreview.endpoint.server}:{linkPreview.endpoint.port} · {linkPreview.endpoint.method}
             </p>
           )}
+          {linkPreview && linkPreview.ok && isSs2022Method(linkPreview.endpoint.method) && !capabilities.ss2022 && !capabilities.loading && (
+            <p className="text-meta leading-5 text-[var(--fx-warn-text)]">{capabilities.ss2022Reason}</p>
+          )}
           <p className="text-meta leading-5 text-muted-foreground">
             支持 {SS_EGRESS_METHODS.join(" / ")}，不支持带插件的链接。链接里的密码由面板加密保存，能接触到面板密钥的服务器管理员可以解出它。
           </p>
         </div>
       )}
 
-      {value.egressType !== "none" && (
-        <div className="flex min-w-0 items-start gap-2.5">
-          <Checkbox id="rule-egress-udp" checked={SS_EGRESS_UDP_SUPPORTED && value.egressUdp} disabled={!SS_EGRESS_UDP_SUPPORTED} onCheckedChange={(checked) => onChange({ egressUdp: checked === true })} />
-          <div className="min-w-0 space-y-0.5">
-            <Label htmlFor="rule-egress-udp" className="flex items-center gap-1.5 text-sm">
-              UDP 也走出口
-              {!SS_EGRESS_UDP_SUPPORTED && <Badge variant="outline" className="h-5 px-1.5 text-[10px] font-normal">暂不支持</Badge>}
-            </Label>
-            <p className="text-meta leading-5 text-muted-foreground">
-              {SS_EGRESS_UDP_SUPPORTED
-                ? "需要落地的 Shadowsocks 服务端开着 UDP 转发。"
-                : "当前 gost 运行时的 Shadowsocks UDP 和 sing-box 不互通，出口只转 TCP，协议已固定为 TCP。"}
-            </p>
+      {value.egressType !== "none" && (() => {
+        // 勾着但入口机撑不起（例如入口机回滚了运行时）：让人能取消勾选，不能新勾。
+        const udpAvailable = SS_EGRESS_UDP_SUPPORTED && capabilities.udp;
+        const udpChecked = SS_EGRESS_UDP_SUPPORTED && value.egressUdp;
+        const udpDisabled = !udpChecked && !udpAvailable;
+        return (
+          <div className="flex min-w-0 items-start gap-2.5" data-testid="rule-egress-udp">
+            <Checkbox
+              id="rule-egress-udp"
+              checked={udpChecked}
+              disabled={udpDisabled}
+              onCheckedChange={(checked) => onChange({ egressUdp: checked === true })}
+              className="mt-0.5"
+            />
+            <div className="min-w-0 space-y-0.5">
+              <Label htmlFor="rule-egress-udp" className="flex flex-wrap items-center gap-1.5 text-sm">
+                UDP 也走出口
+                {!SS_EGRESS_UDP_SUPPORTED && <Badge variant="outline" className="h-5 px-1.5 text-[10px] font-normal">暂不支持</Badge>}
+                {SS_EGRESS_UDP_SUPPORTED && !udpAvailable && !capabilities.loading && (
+                  <Badge variant="outline" className="h-5 px-1.5 text-[10px] font-normal text-[var(--fx-warn-text)]">需要升级 Agent/运行时</Badge>
+                )}
+              </Label>
+              <p className={`text-meta leading-5 ${udpChecked && !udpAvailable && !capabilities.loading ? "text-[var(--fx-warn-text)]" : "text-muted-foreground"}`}>
+                {!SS_EGRESS_UDP_SUPPORTED
+                  ? "UDP 暂时不能走出口，出口只转 TCP，协议已固定为 TCP。"
+                  : udpAvailable
+                    ? "勾上后协议是 TCP+UDP，UDP 也经 Shadowsocks 从落地出去（DNS、QUIC、游戏都行）；需要落地的 Shadowsocks 服务端开着 UDP。不勾时只转 TCP。"
+                    : capabilities.loading
+                      ? "正在检查入口主机的 Agent / 运行时…"
+                      : udpChecked
+                        ? `${capabilities.udpReason}。这条规则在入口机升级之前按停用下发，UDP 不会绕过出口直连；取消勾选可以只走 TCP。`
+                        : `${capabilities.udpReason}。在那之前出口只转 TCP。`}
+              </p>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </section>
   );
 }

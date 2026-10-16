@@ -87,6 +87,8 @@ func TestGostShadowsocksEgressRejectsConfigsThatWouldCrashRuntime(t *testing.T) 
 		{"ss2022 chacha not in runtime", "ss", "tcp", "2022-blake3-chacha20-poly1305", key(32), "203.0.113.9:1", "unsupported shadowsocks method"},
 		{"ss2022 wrong key length", "ss", "tcp", "2022-blake3-aes-128-gcm", key(32), "203.0.113.9:1", "must be 16 bytes"},
 		{"ss2022 not base64", "ss", "tcp", "2022-blake3-aes-256-gcm", "not base64!!", "203.0.113.9:1", "must be 32 bytes"},
+		// gost 只用标准 base64（要补齐）解密钥，不补齐的同样会留下空 client。
+		{"ss2022 unpadded key", "ssu", "udp", "2022-blake3-aes-128-gcm", strings.TrimRight(key(16), "="), "203.0.113.9:1", "must be 16 bytes"},
 		{"ss2022 multi-user", "ss", "tcp", "2022-blake3-aes-128-gcm", key(16) + ":" + key(16), "203.0.113.9:1", "multi-user"},
 		{"empty password", "ss", "tcp", "aes-256-gcm", "", "203.0.113.9:1", "empty password"},
 		{"ssu over tcp", "ssu", "tcp", "aes-256-gcm", "x", "203.0.113.9:1", "requires udp dialer"},

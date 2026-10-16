@@ -4086,6 +4086,9 @@ function TunnelsContent() {
     const rating = hasLatency ? getLatencyRating(latencyMs) : null;
     const ratingTone = !rating ? "off" : rating.label === "优秀" ? "healthy" : rating.label === "良好" ? "ok" : rating.label === "一般" ? "warn" : "down";
     const spark = sparkByTunnel.get(Number(tunnel.id));
+    // 近 24H 可用率：≥ 99% 绿、≥ 90% 琥珀、更低红
+    const availPct = spark?.availabilityPct ?? null;
+    const availTone = availPct == null ? null : availPct >= 99 ? "healthy" : availPct >= 90 ? "warn" : "down";
     return (
       <Card
         {...sortable.itemProps}
@@ -4139,12 +4142,22 @@ function TunnelsContent() {
             )}
             {rating ? <span className="fx-rule-tag" data-tone={ratingTone}>{rating.label}</span> : null}
             <Sparkline values={spark?.values || []} width={96} height={26} stroke={toneColor} className="fx-rule-spark" title="近 24 小时延迟走势" />
+            {/*
+              第一行「24H / 100%」，可用率按高低上色；第二行「平均 · 最高」。
+              第二行不能折行，可用率再接在它后面会把评级和走势图挤没（2.3.445 就挤坏过）。
+            */}
             <div className="fx-rule-day">
-              <span>近 24H</span>
+              <span className="fx-rule-day-head">
+                24H
+                {availPct != null && availTone ? (
+                  <>
+                    <span aria-hidden="true">/</span>
+                    <span className="fx-rule-avail" data-tone={availTone} title="近 24 小时可用率">{formatStatPercent(availPct, 1)}</span>
+                  </>
+                ) : null}
+              </span>
               <span className="fx-rule-day-val">
-                {spark?.avgMs != null
-                  ? `平均 ${spark.avgMs} · 最高 ${spark.maxMs} ms${spark.availabilityPct != null ? ` · 可用 ${formatStatPercent(spark.availabilityPct, 1)}` : ""}`
-                  : spark?.availabilityPct != null ? `可用 ${formatStatPercent(spark.availabilityPct, 1)}` : "还没有记录"}
+                {spark?.avgMs != null ? `平均 ${spark.avgMs} · 最高 ${spark.maxMs} ms` : availPct != null ? "延迟还没有记录" : "还没有记录"}
               </span>
             </div>
           </div>

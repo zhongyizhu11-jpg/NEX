@@ -170,6 +170,7 @@ import { recordAuthenticatedAgentActivity } from "./agentActivity";
 import { recordHostRestartEvent } from "./ops/eventHooks";
 import { buildAgentSniInbounds, isSniRuntimeRule, recordTlsInboundRuntimeStatus, sniRuleRuntimeView } from "./tlsInboundRuntime";
 import { buildGostEgressChain, gostEgressChainName, loadEgressRuntimeContext, ruleEgressRuntime, ruleEgressRuntimeView } from "./ssEgress";
+import { parseAgentCapabilities } from "../shared/ssEgress";
 
 // DNS 解析缓存：ruleId → 主目标上次解析到的 IPv4 地址。
 // 备用线路策略里的域名由 Agent 的 TCP 拨号和健康检查动态解析。
@@ -1642,6 +1643,20 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     // 没报（旧 Agent）就保留库里的值；报了就以这次为准。
     const nextFxpVersion = normalizeReportedFxpVersion(req.body?.fxpVersion);
     const fxpVersionChanged = !!nextFxpVersion && nextFxpVersion !== String((host as any).fxpVersion || "");
+    /*
+      2.2.227 起 Agent 每次心跳都带上：实测的 gost 运行时版本和能力（ssEgressUdp / ssEgress2022，见
+      shared/ssEgress.ts）。报了就以这次为准（运行时回滚后能力会消失）；没报（旧 Agent）保留库里的值，
+      反正能力还要 Agent ≥ 2.2.227 才认。能力一变，这台机器的期望状态要重算：UDP / SS2022 出口的规则
+      按新能力下发或按停用下发。
+    */
+    const reportedCapabilities = Array.isArray(req.body?.agentCapabilities)
+      ? JSON.stringify(parseAgentCapabilities(req.body.agentCapabilities))
+      : null;
+    const reportedRuntimeVersion = req.body?.runtimeVersion !== undefined ? normalizeAgentText(req.body?.runtimeVersion, 64) : null;
+    const capabilitiesChanged = reportedCapabilities !== null
+      && reportedCapabilities !== JSON.stringify(parseAgentCapabilities((host as any).agentCapabilities));
+    const runtimeVersionChanged = reportedRuntimeVersion !== null
+      && reportedRuntimeVersion !== String((host as any).runtimeVersion || "");
     const agentBootId = normalizeAgentText(req.body?.agentBootId, 128);
     const agentBootedAtSeconds = Number(req.body?.agentBootedAt || 0);
     const agentProcessId = Math.max(0, Math.floor(Number(req.body?.agentProcessId || 0)));
@@ -1759,6 +1774,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       || addressChanged
       || agentVersionChanged
       || fxpVersionChanged
+      || capabilitiesChanged
+      || runtimeVersionChanged
       || (!!nextCpuInfo && nextCpuInfo !== String(previousHost.cpuInfo || ""))
       || (Number(memoryTotal || 0) > 0 && Number(memoryTotal) !== Number(previousHost.memoryTotal || 0))
       || (!!agentBootId && agentBootId !== normalizeAgentText(previousHost.agentBootId, 128))
@@ -1781,6 +1798,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     } else await db.updateHostHeartbeat(host.id, {
       agentVersion: nextAgentVersion || (host as any).agentVersion || null,
       ...(nextFxpVersion ? { fxpVersion: nextFxpVersion } : {}),
+      ...(reportedCapabilities !== null ? { agentCapabilities: reportedCapabilities } : {}),
+      ...(reportedRuntimeVersion !== null ? { runtimeVersion: reportedRuntimeVersion || null } : {}),
       cpuInfo: nextCpuInfo || (host as any).cpuInfo || null,
       memoryTotal: memoryTotal || (host as any).memoryTotal || null,
       ...(agentBootId ? { agentBootId } : {}),
@@ -1819,6 +1838,17 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         `[AgentUpgrade] host=${host.id} fxp=${String(previousHost.fxpVersion || "-")} -> ${nextFxpVersion}`,
       );
       (host as any).fxpVersion = nextFxpVersion;
+    }
+    if (capabilitiesChanged || runtimeVersionChanged) {
+      appendPanelLog(
+        "info",
+        `[AgentUpgrade] host=${host.id} runtime=${String(previousHost.runtimeVersion || "-")} -> ${reportedRuntimeVersion ?? String(previousHost.runtimeVersion || "-")} capabilities=${parseAgentCapabilities(previousHost.agentCapabilities).join(",") || "-"} -> ${parseAgentCapabilities(reportedCapabilities ?? previousHost.agentCapabilities).join(",") || "-"}`,
+      );
+      if (reportedCapabilities !== null) (host as any).agentCapabilities = reportedCapabilities;
+      if (reportedRuntimeVersion !== null) (host as any).runtimeVersion = reportedRuntimeVersion || null;
+      if (capabilitiesChanged && !agentVersionChanged) {
+        invalidateAgentDesiredStateCache(host.id, { preserveLocalRuntimeState: !!localRuntimeState.state });
+      }
     }
     if (agentVersionChanged) {
       invalidateAgentDesiredStateCache(host.id, { preserveLocalRuntimeState: !!localRuntimeState.state });
@@ -2036,8 +2066,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       inboundById: tlsInboundById,
     });
     /*
-      Shadowsocks 出口（server/ssEgress.ts）：出口失效、落地入站没了、Agent 低于 2.2.226 时规则按停用下发
-      （绝不退回直连）；能跑的规则带上 egressRuntime，下面生成 gost 配置时挂出口链。只管这台主机自己的规则。
+      Shadowsocks 出口（server/ssEgress.ts）：出口失效、落地入站没了、Agent 低于 2.2.226、要 UDP / SS2022
+      而入口机没报这项能力时规则按停用下发（绝不退回直连）；能跑的规则带上 egressRuntime，下面生成 gost 配置时挂出口链。只管这台主机自己的规则。
     */
     let egressRuntimeContext = await loadEgressRuntimeContext(rawRules as any[]);
     const egressRuntimeView = <T extends Record<string, any>>(rule: T): T => (Number(rule?.hostId) === Number(host.id)
@@ -2045,6 +2075,9 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         entryHostId: Number(host.id),
         entryAgentVersion: effectiveAgentVersion,
         entryHostName: String((host as any).name || ""),
+        // 这次心跳刚报的能力（上面已经写回 host）：UDP / SS2022 出口只发给此刻撑得起的入口机。
+        entryAgentCapabilities: (host as any).agentCapabilities,
+        entryRuntimeVersion: (host as any).runtimeVersion,
         context: egressRuntimeContext,
       })
       : rule);
