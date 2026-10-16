@@ -159,14 +159,6 @@ export default function HostDetailDialog(props: HostDetailDialogProps) {
             <Row label="连接数" value={connectionsText(vitals.tcpConnections, vitals.udpConnections)} />
           </Section>
 
-          {/* 网络画像：双栈出站、运营商、25 端口、DNSBL（Agent 2.2.226 起在主机上测） */}
-          <HostNetProfileSection host={host} canManage={user?.role === "admin"} />
-
-          {/* mimic UDP 混淆环境：装没装、能不能用，管理员在这里一键安装 / 修复（2.3.439） */}
-          <Section title="mimic UDP 混淆">
-            <MimicInstallPanel host={host} canManage={user?.role === "admin"} />
-          </Section>
-
           <Section title="资源">
             {/*
               百分比配绝对值。只给 25% 说不清是 2GB 里的 25% 还是 128GB 里的
@@ -200,6 +192,14 @@ export default function HostDetailDialog(props: HostDetailDialogProps) {
               label={`计费用量（${HOST_TRAFFIC_MEASURE_MODE_LABELS[measureMode]}）`}
               value={vitals.trafficUsageLabel}
             />
+          </Section>
+
+          {/* 网络画像：双栈出站、运营商、25 端口、DNSBL（Agent 2.2.226 起在主机上测） */}
+          <HostNetProfileSection host={host} canManage={user?.role === "admin"} />
+
+          {/* mimic UDP 混淆环境：装没装、能不能用，管理员在这里一键安装 / 修复（2.3.439） */}
+          <Section title="mimic UDP 混淆">
+            <MimicInstallPanel host={host} canManage={user?.role === "admin"} />
           </Section>
 
           {/* 流媒体 / AI 解锁检测：能用这台主机的人都能看结果，只有管理员能发起检测（Agent 2.2.226 起） */}
