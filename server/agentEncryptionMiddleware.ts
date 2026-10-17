@@ -33,6 +33,7 @@ export const AGENT_TUNNEL_PATHS = new Set([
   "/api/agent/migration-rollback",
   "/api/agent/traffic",
   "/api/agent/fxp-link-shaping",
+  "/api/agent/fxp-conn-stats",
   "/api/agent/tcping",
   "/api/agent/protocol-block",
   "/api/agent/rule-status",

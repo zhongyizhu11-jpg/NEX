@@ -601,6 +601,8 @@ function usersForListQuery(db: any) {
       END`.as("trafficBillingUsed"),
       gostRateLimitIn: users.gostRateLimitIn,
       gostRateLimitOut: users.gostRateLimitOut,
+      forwardBurstMbps: users.forwardBurstMbps,
+      forwardBurstSeconds: users.forwardBurstSeconds,
       expiresAt: users.expiresAt,
       trafficAutoReset: users.trafficAutoReset,
       trafficResetDay: users.trafficResetDay,
@@ -865,6 +867,8 @@ export async function updateUserTrafficSettings(userId: number, data: {
   manualAllowProxySubscription?: boolean;
   manualGostRateLimitIn?: number;
   manualGostRateLimitOut?: number;
+  forwardBurstMbps?: number;
+  forwardBurstSeconds?: number;
   manualTrafficLimit?: number;
   manualExpiresAt?: Date | null;
   allowedForwardTypes?: string | null;
@@ -1191,6 +1195,8 @@ export async function getUserTrafficSummaries() {
     manualExpiresAt: users.manualExpiresAt,
     gostRateLimitIn: users.gostRateLimitIn,
     gostRateLimitOut: users.gostRateLimitOut,
+    forwardBurstMbps: users.forwardBurstMbps,
+    forwardBurstSeconds: users.forwardBurstSeconds,
     allowForwardXTunnel: users.allowForwardXTunnel,
     allowProxySubscription: users.allowProxySubscription,
     expiresAt: users.expiresAt,

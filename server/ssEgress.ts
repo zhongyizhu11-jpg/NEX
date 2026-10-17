@@ -41,6 +41,7 @@ import {
   type RuleEgressState,
   type RuleEgressType,
   type SsEgressEndpoint,
+  RULE_EGRESS_RUNTIME_FORWARD_TYPE,
 } from "../shared/ssEgress";
 
 export { NO_EGRESS_COLUMNS, ruleEgressColumnsOf, type RuleEgressColumns };
@@ -606,6 +607,11 @@ export function ruleEgressRuntimeView<T extends Record<string, any>>(rule: T, op
   }
   view.egressRuntime = evaluation.runtime;
   if (!evaluation.runtime.udp) view.protocol = "tcp";
+  // 选的是 iptables / nftables / realm 这些不会 Shadowsocks 的工具：这一条规则下发时换成 gost 跑，库里不变。
+  if (String(view.forwardType || "") !== RULE_EGRESS_RUNTIME_FORWARD_TYPE) {
+    view.egressForwardTypeOverride = view.forwardType;
+    view.forwardType = RULE_EGRESS_RUNTIME_FORWARD_TYPE;
+  }
   return view as T;
 }
 

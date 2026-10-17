@@ -136,7 +136,16 @@ test("保存规则：落地主机出口的来源、方法、自环、在线、�
     assert.equal(Number(row.egressInboundId), inboundId);
     assert.equal(row.egressConfigJson, null);
 
-    await assert.rejects(rules.create(directRule({ forwardType: "realm", egressType: "ss_host", egressInboundId: inboundId })), /必须用 gost/);
+    // realm 也能开出口：库里仍是 realm，下发时换成 gost（见下面的心跳断言）。
+    const realmRule = await rules.create(directRule({ forwardType: "realm", sourcePort: 22999, egressType: "ss_host", egressInboundId: inboundId }));
+    assert.equal((await ruleRow(realmRule.id)).forwardType, "realm");
+    const realmBeat = await heartbeat("tok10", "2.2.226");
+    const realmService = realmBeat.gost.services.find((item) => item.name === "fwx-" + realmRule.id + "-tcp");
+    assert.ok(realmService, "realm 规则开了出口要生成 gost 服务");
+    assert.equal(realmService.handler.chain, "chain-egress-" + realmRule.id + "-tcp");
+    // 不能同时再起一个 realm 抢同一个端口。
+    assert.doesNotMatch(JSON.stringify(realmBeat.body), /forwardx-realm-(tcp-|udp-)?22999\b/);
+    await rules.delete({ id: realmRule.id });
     await assert.rejects(rules.create(directRule({ protocol: "both", egressType: "ss_host", egressInboundId: inboundId })), /UDP/);
     await assert.rejects(rules.create(directRule({ egressType: "ss_host", egressInboundId: inboundId, egressUdp: true })), /UDP/);
     await assert.rejects(rules.create(directRule({ egressType: "ss_host", egressInboundId: ss2022 })), /SS2022/);
@@ -156,8 +165,10 @@ test("保存规则：落地主机出口的来源、方法、自环、在线、�
     await assert.rejects(rules.create(directRule({ egressType: "ss_host", egressInboundId: inboundId })), /已停用/);
     await exec('UPDATE proxy_inbounds SET "isEnabled" = 1 WHERE id = ?', [inboundId]);
 
-    // 带着出口的规则不能改成 realm / 挂隧道（要先把出口改回直接连接）。
-    await assert.rejects(rules.update({ id: created.id, forwardType: "realm" }), /必须用 gost.*直接连接/);
+    // 带着出口的规则可以改成 realm（下发时仍是 gost）；挂隧道仍要先把出口改回直接连接。
+    await rules.update({ id: created.id, forwardType: "realm" });
+    assert.equal((await ruleRow(created.id)).forwardType, "realm");
+    await rules.update({ id: created.id, forwardType: "gost" });
     // 改回直接连接：几列清掉，之后可以随便改。
     await rules.update({ id: created.id, egressType: "none" });
     const cleared = await ruleRow(created.id);
@@ -327,7 +338,7 @@ test("心跳：≥ 2.2.226 的 Agent 拿到出口链；更旧的 Agent 上出口
   `);
 });
 
-test("端口转发资源（gost）上的规则：出口照抄到每台入口的子规则，心跳给子规则挂链；realm 资源拒绝", () => {
+test("端口转发资源（gost）上的规则：出口照抄到每台入口的子规则，心跳给子规则挂链；realm 资源的子规则换成 gost 跑", () => {
   runInDatabase(String.raw`
     const inboundId = await makeInbound();
     const { forwardGroupsRouter } = await import(url("server/routers/forwardGroups.ts"));
@@ -339,7 +350,11 @@ test("端口转发资源（gost）上的规则：出口照抄到每台入口的�
     assert.equal(children.length, 1);
     assert.equal(children[0].egressType, "ss_host");
     assert.equal(Number(children[0].egressInboundId), inboundId);
-    await assert.rejects(rules.create({ forwardGroupId: realmGroup.id, forwardType: "realm", protocol: "tcp", sourcePort: 23002, targetIp: "198.51.100.7", targetPort: 443, egressType: "ss_host", egressInboundId: inboundId }), /必须用 gost/);
+    // realm 资源上的规则也能开出口，子规则下发时换成 gost。
+    const realmTemplate = await rules.create({ forwardGroupId: realmGroup.id, forwardType: "realm", protocol: "tcp", sourcePort: 23002, targetIp: "198.51.100.7", targetPort: 443, egressType: "ss_host", egressInboundId: inboundId });
+    const realmChildren = await query('SELECT id, "forwardType" FROM forward_rules WHERE "forwardGroupRuleId" = ?', [realmTemplate.id]);
+    assert.equal(realmChildren.length, 1);
+    assert.equal(realmChildren[0].forwardType, "realm");
     // 落地主机是资源里的入口：自环。
     const tokyoGroup = await groups.create({ name: "东京 gost", groupMode: "port", groupType: "host", forwardType: "gost", protocol: "tcp", members: [{ memberType: "host", hostId: 20 }] });
     await assert.rejects(rules.create({ forwardGroupId: tokyoGroup.id, forwardType: "gost", protocol: "tcp", sourcePort: 23003, targetIp: "198.51.100.7", targetPort: 443, egressType: "ss_host", egressInboundId: inboundId }), /入口主机自己/);
@@ -350,6 +365,8 @@ test("端口转发资源（gost）上的规则：出口照抄到每台入口的�
     assert.ok(childService, "子规则要生成 gost 服务");
     assert.equal(childService.handler.chain, "chain-egress-" + childId + "-tcp");
     assert.ok(gost.chains.some((item) => item.name === "chain-egress-" + childId + "-tcp"));
+    const realmChildId = Number(realmChildren[0].id);
+    assert.ok(gost.services.some((item) => item.name === "fwx-" + realmChildId + "-tcp" && item.handler.chain === "chain-egress-" + realmChildId + "-tcp"), "realm 资源的子规则要换成 gost 服务挂出口链");
 
     // 模板改回直接连接：子规则跟着清掉。
     await rules.update({ id: template.id, egressType: "none" });

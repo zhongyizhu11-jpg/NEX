@@ -77,6 +77,8 @@ const ALL_PROTOCOLS_YES: Record<ProxyInboundProtocol, Fact> = {
   tuic: Y,
   anytls: Y,
   snell: Y,
+  // SOCKS5 各家客户端都有，是最老的那一档。
+  socks5: Y,
 };
 
 /** sing-box 内核、但走通用 Base64 订阅的客户端（Hiddify / NekoBox）。 */

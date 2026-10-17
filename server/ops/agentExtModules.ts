@@ -8,3 +8,4 @@ import "./quotaAgent";
 import "./flowOffloadAgent";
 import "./netProfileAgent";
 import "./unlockAgent";
+import "./hostLogsAgent";

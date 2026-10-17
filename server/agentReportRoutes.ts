@@ -33,6 +33,8 @@ import { getTunnelAutoHopAggregate, recordTunnelAutoHopLatency } from "./tunnelA
 import { getTunnelMultiEntryLatency, recordTunnelMultiEntryLatency } from "./tunnelMultiEntryLatencyState";
 import { completeLookingGlassAgentTask, updateLookingGlassAgentTaskProgress, type LookingGlassMethod } from "./lookingGlassAgentTasks";
 import { completeDiagnosticsAgentTask } from "./diagnosticsAgentTasks";
+import { observeTunnelProbeLoss } from "./resourceAlertNotifier";
+import { recordConnStatsReport } from "./ops/connStats";
 import { completeIperf3AgentTask } from "./iperf3AgentTasks";
 import { completePluginAgentTask } from "./pluginAgentTasks";
 import { reportMimicInstallResult } from "./mimicInstallTasks";
@@ -832,6 +834,29 @@ agentRouter.post("/api/agent/fxp-link-shaping", async (req: Request, res: Respon
   }
 });
 
+// FXP 报逐跳连接统计（forwardx-fxp/conn_stats.go）：每分钟一次，每个（隧道, 规则, 角色, 阶段, 端点）一行。
+agentRouter.post("/api/agent/fxp-conn-stats", async (req: Request, res: Response) => {
+  try {
+    const host = await getAgentHostIdentityFromRequest(req);
+    if (!host) {
+      res.status(401).json({ error: "Invalid token" });
+      return;
+    }
+    const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+    if (rows.length === 0 || rows.length > 500) {
+      res.status(400).json({ error: "rows must have 1-500 entries" });
+      return;
+    }
+    const saved = await recordConnStatsReport(Number((host as any).id), rows, {
+      tunnelExists: async (tunnelId) => !!(await db.getTunnelById(tunnelId)),
+    });
+    res.json({ ok: true, saved });
+  } catch (error) {
+    appendPanelLog("error", `[ConnStats] report failed: ${error instanceof Error ? error.message : String(error)}`);
+    res.status(500).json({ error: "failed to record connection stats" });
+  }
+});
+
 agentRouter.post("/api/agent/traffic", async (req: Request, res: Response) => {
   const requestStartedAt = Date.now();
   let logHostId = 0;
@@ -1417,6 +1442,7 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
       tunnelResultsById.set(tunnelId, rows);
     }
     const entryGroupMemo: EntryGroupMemo = new Map();
+    const lossSamples: Array<{ tunnelId: number; count: number; ok: number }> = [];
     await mapWithConcurrency(Array.from(tunnelResultsById.entries()), 12, async ([tunnelId, reports]) => withKeyedTaskLock(`tunnel-latency:${tunnelId}`, async () => {
       const [tunnel, hops, exitNodes] = await Promise.all([
         db.getTunnelById(tunnelId),
@@ -1436,6 +1462,7 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
         if (!await validateTunnelProbeSource(Number(host.id), tunnel, report, { hops, exitNodes, entryHostIds, topologyKey })) continue;
         collectCounter("tunnel", tunnelId, report);
         if (!acceptedTunnelReports.has(report)) continue;
+        lossSamples.push({ tunnelId, count: Number(report.probeCount) || 0, ok: Number(report.probeSuccesses) || 0 });
         const latencyValue = typeof report.latencyMs === "number" && report.latencyMs > 0 ? report.latencyMs : null;
         const isTimeout = !!report.isTimeout || latencyValue === null;
         const seriesKey = cleanTunnelSeriesKey(report.seriesKey);
@@ -1652,6 +1679,8 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
       }, { preserveMessage: true });
       if (!summary.unavailable && !tunnel.isRunning) await db.updateTunnelRunningStatus(tunnelId, true);
     }));
+    // 资源告警：隧道丢包率（滑动 10 分钟窗口，不阻塞上报）
+    observeTunnelProbeLoss(host, lossSamples);
     const needsForwardGroupHealthTopology = forwardGroupResults.some((report) => {
       const type = String(report.probeType || "");
       return type === "china" || type === "entry";

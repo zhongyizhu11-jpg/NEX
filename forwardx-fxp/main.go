@@ -56,6 +56,9 @@ type helloFrame struct {
 	// sends one, and neither side uses anything the other cannot parse.
 	// Relays forward the hello verbatim, so this reaches the exit end to end.
 	MultipathExtended bool `json:"multipathExtended,omitempty"`
+	// MultipathReplicate（2.2.133 起）：复制模式，每一片都从两条不同的腿各发一份，一条线路断了
+	// 连接也不断。出口看到它就在回程方向同样复制；老出口不认识这个字段，只有去程复制。
+	MultipathReplicate bool `json:"multipathReplicate,omitempty"`
 	// targetLiteral 不上线：出口核对过目标之后记下「配置里写的就是这个 IP」。
 	// 写死的 IP 是面板明确配的（比如出口本机调度器的 127.0.0.1），照拨；写的是
 	// 域名时，解析出来落到环回、链路本地这些地址上就不拨（见 dialExitTarget）。
@@ -219,7 +222,7 @@ const (
 	fxpUDPIdleTimeout    = 5 * time.Minute
 	fxpProtocolSampleMax = 512
 	fxpMasterContext     = "forwardx-fxp-v2 master"
-	fxpRuntimeVersion    = "2.2.132"
+	fxpRuntimeVersion    = "2.2.133"
 	fxpFallbackRetry     = 5 * time.Second
 	// A node that stays down is re-probed on a growing delay, because probing a
 	// peer that accepts but never answers costs a whole handshake timeout.
@@ -1984,7 +1987,9 @@ func handleExitTCP(sec *secureConn, hello helloFrame, cfg config) error {
 // the given transport, which is a single secure connection for an ordinary
 // session and a multipath session when the entry striped it over several legs.
 func relayExitTCPToTarget(sec frameConn, hello helloFrame, cfg config) error {
+	dialStarted := time.Now()
 	target, err := dialExitTarget(hello, 10*time.Second)
+	recordConnStage(cfg, hello.TunnelID, hello.RuleID, "exit", "target", connStatsEndpoint(hello.TargetIP, hello.TargetPort), time.Since(dialStarted), err)
 	if err != nil {
 		return fmt.Errorf("dial target: %w", err)
 	}

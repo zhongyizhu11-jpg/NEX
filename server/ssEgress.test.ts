@@ -98,9 +98,16 @@ test("出口失效的几种情况都按停用下发", () => {
     assert.equal(view.isEnabled, false, name);
     assert.equal(view.egressRuntimeBlocked, state, name);
   }
-  // 规则形态不对（比如数据库里被改成 realm）同样不下发。
+  // 选的是 realm：照常下发，只是这一条换成 gost 跑（出口链是 gost 的）；原来的工具记在 egressForwardTypeOverride 上。
   const realm: any = ruleEgressRuntimeView(rule({ forwardType: "realm" }), { ...entry, context: context() });
-  assert.equal(realm.egressRuntimeBlocked, "shape_invalid");
+  assert.equal(realm.egressRuntimeBlocked, undefined);
+  assert.equal(realm.forwardType, "gost");
+  assert.equal(realm.egressForwardTypeOverride, "realm");
+  assert.ok(realm.egressRuntime);
+  // 本来就是 gost 的不打这个标记。
+  const gostView: any = ruleEgressRuntimeView(rule(), { ...entry, context: context() });
+  assert.equal(gostView.egressForwardTypeOverride, undefined);
+  // 规则形态不对（比如挂了隧道）仍然不下发。
   const tunnel: any = ruleEgressRuntimeView(rule({ tunnelId: 3 }), { ...entry, context: context() });
   assert.equal(tunnel.egressRuntimeBlocked, "shape_invalid");
 });

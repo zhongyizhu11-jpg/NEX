@@ -38,7 +38,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.229"
+var Version = "2.2.230"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -168,6 +168,12 @@ const failoverProxyDialTimeout = 4 * time.Second
 const protocolGuardRateBurstMin = 64 * 1024
 const protocolGuardRateBurstMax = 4 * 1024 * 1024
 const protocolGuardRateWaitChunk = 16 * 1024
+
+// 突发那一级的桶可以很深（例如 300 Mbps 多跑 60 秒 ≈ 2.2 GB），但别大到溢出。
+const protocolGuardRateBurstOverrideMax = 64 * 1024 * 1024 * 1024
+
+// 一条规则最多挂几级限速（用户上下行、突发、隧道、转发组、规则、整台主机）。
+const protocolGuardMaxRateTiers = 8
 
 // Protocol-block notifications are advisory: the local Guard already blocks
 // the connection. Keep panel reporting bounded when the panel is unavailable
@@ -2970,6 +2976,8 @@ type fxpSpec struct {
 	MultipathEnabled    bool              `json:"multipathEnabled,omitempty"`
 	MultipathLegs       []fxpMultipathLeg `json:"multipathLegs,omitempty"`
 	MultipathMaxPending int               `json:"multipathMaxPending,omitempty"`
+	// MultipathReplicate：复制模式，每一片从两条腿各发一份（FXP 2.2.133 起认）。
+	MultipathReplicate bool `json:"multipathReplicate,omitempty"`
 }
 
 // fxpMultipathLeg is one parallel path from the entry to the exit, either a
@@ -3022,6 +3030,9 @@ type guardRule struct {
 	LimitIn              int64          `json:"limitIn"`
 	LimitOut             int64          `json:"limitOut"`
 	RateLimitScope       string         `json:"rateLimitScope"`
+	// RateLimits（Agent 2.2.230 起）：多级限速，每一级一个共享桶，同一方向上所有级都要过。
+	// 给了就以它为准，LimitIn / LimitOut / RateLimitScope 只留给旧 Agent。
+	RateLimits []guardRateTier `json:"rateLimits,omitempty"`
 }
 
 func main() {
@@ -4221,6 +4232,7 @@ func heartbeat(cfg Config, forceReconcile ...bool) (heartbeatResult, error) {
 	payload["mimicEnvironment"] = mimicEnvironment(false)
 	payload["fxpVersion"] = reportedFXPVersion()
 	addGostRuntimeReport(payload)
+	addHostHealthCounters(payload)
 	if (!compactEnabled || shouldReportStatic) && primaryIP != "" {
 		payload["ip"] = primaryIP
 	}
@@ -10114,6 +10126,7 @@ func normalizeFXPMultipath(spec fxpSpec) fxpSpec {
 	if len(legs) < 2 {
 		spec.MultipathEnabled = false
 		spec.MultipathLegs = nil
+		spec.MultipathReplicate = false
 		return spec
 	}
 	spec.MultipathLegs = legs
@@ -10183,6 +10196,10 @@ func fxpServerSignature(spec fxpSpec) string {
 		// must restart to pick the new mode up.
 		strconv.FormatBool(spec.MultipathEnabled),
 		strconv.Itoa(spec.MultipathMaxPending),
+	}
+	// 复制模式只在打开时进签名：没开复制的隧道签名和旧版一模一样，升级 Agent 不会因此重启 FXP。
+	if spec.MultipathReplicate {
+		parts = append(parts, "replicate")
 	}
 	for _, leg := range spec.MultipathLegs {
 		parts = append(parts, strings.TrimSpace(leg.Host), strconv.Itoa(leg.Port), strings.TrimSpace(leg.Key))
@@ -12088,11 +12105,17 @@ func normalizeProtocolGuardRateLimitScope(scope string, ruleID, listenPort int) 
 }
 
 func (l *protocolGuardSharedRateLimiter) setRate(bytesPerSecond int64) {
+	l.setRateWithBurst(bytesPerSecond, 0)
+}
+
+// setRateWithBurst：burstBytes > 0 时用它当桶深（「先放一段突发、跑久了再降速」那一级），
+// 否则按速率取 100 ms 的默认桶深。
+func (l *protocolGuardSharedRateLimiter) setRateWithBurst(bytesPerSecond, burstBytes int64) {
 	if l == nil {
 		return
 	}
 	bytesPerSecond = normalizeProtocolGuardRateLimit(bytesPerSecond)
-	burst := protocolGuardRateBurst(bytesPerSecond)
+	burst := protocolGuardRateBurstFor(bytesPerSecond, burstBytes)
 	l.mu.Lock()
 	if l.bytesPerSecond == bytesPerSecond && l.burst == burst {
 		l.mu.Unlock()
@@ -12116,6 +12139,24 @@ func (l *protocolGuardSharedRateLimiter) setRate(bytesPerSecond int64) {
 }
 
 func acquireProtocolGuardRateLimiter(scope string, direction protocolGuardRateDirection, bytesPerSecond int64) *protocolGuardSharedRateLimiter {
+	return acquireProtocolGuardRateLimiterWithBurst(scope, direction, bytesPerSecond, 0)
+}
+
+// protocolGuardRateBurstFor：给了桶深就用（不小于一次等待的块、不大于 64 GiB），否则按速率算默认值。
+func protocolGuardRateBurstFor(bytesPerSecond, burstBytes int64) int {
+	if burstBytes <= 0 {
+		return protocolGuardRateBurst(bytesPerSecond)
+	}
+	if burstBytes < protocolGuardRateBurstMin {
+		burstBytes = protocolGuardRateBurstMin
+	}
+	if burstBytes > protocolGuardRateBurstOverrideMax {
+		burstBytes = protocolGuardRateBurstOverrideMax
+	}
+	return int(burstBytes)
+}
+
+func acquireProtocolGuardRateLimiterWithBurst(scope string, direction protocolGuardRateDirection, bytesPerSecond, burstBytes int64) *protocolGuardSharedRateLimiter {
 	bytesPerSecond = normalizeProtocolGuardRateLimit(bytesPerSecond)
 	if bytesPerSecond <= 0 {
 		return nil
@@ -12125,7 +12166,7 @@ func acquireProtocolGuardRateLimiter(scope string, direction protocolGuardRateDi
 	defer protocolGuardRateMu.Unlock()
 	limiter := protocolGuardRates[key]
 	if limiter == nil {
-		burst := protocolGuardRateBurst(bytesPerSecond)
+		burst := protocolGuardRateBurstFor(bytesPerSecond, burstBytes)
 		limiter = &protocolGuardSharedRateLimiter{
 			limiter:        rate.NewLimiter(rate.Limit(bytesPerSecond), burst),
 			changed:        make(chan struct{}),
@@ -12134,7 +12175,7 @@ func acquireProtocolGuardRateLimiter(scope string, direction protocolGuardRateDi
 		}
 		protocolGuardRates[key] = limiter
 	} else {
-		limiter.setRate(bytesPerSecond)
+		limiter.setRateWithBurst(bytesPerSecond, burstBytes)
 	}
 	limiter.refs++
 	return limiter
@@ -12254,17 +12295,19 @@ func stopProtocolGuardRateTimer(timer *time.Timer) {
 }
 
 type protocolGuardServer struct {
-	rule        guardRule
-	tcpLn       net.Listener
-	udpConn     net.PacketConn
-	done        chan struct{}
-	doneOnce    sync.Once
-	ctx         context.Context
-	cancel      context.CancelFunc
-	rateMu      sync.RWMutex
-	rateScope   string
-	rateIn      *protocolGuardSharedRateLimiter
-	rateOut     *protocolGuardSharedRateLimiter
+	rule      guardRule
+	tcpLn     net.Listener
+	udpConn   net.PacketConn
+	done      chan struct{}
+	doneOnce  sync.Once
+	ctx       context.Context
+	cancel    context.CancelFunc
+	rateMu    sync.RWMutex
+	rateScope string
+	rateIn    *protocolGuardSharedRateLimiter
+	rateOut   *protocolGuardSharedRateLimiter
+	// rateExtra：多级限速里第一级之外的那些（第一级仍放在 rateScope / rateIn / rateOut）。
+	rateExtra   []protocolGuardRateHandle
 	rateChanged chan struct{}
 	closed      bool
 	// halfCloseLinger 为 0 时用 tcpRelayHalfCloseLinger；测试里调短。
@@ -12283,52 +12326,136 @@ func newProtocolGuardServer(rule guardRule) *protocolGuardServer {
 	return server
 }
 
+type guardRateTier struct {
+	Scope string `json:"scope"`
+	In    int64  `json:"in"`
+	Out   int64  `json:"out"`
+	// BurstIn / BurstOut：这一级的桶深（字节），0 = 默认 100 ms。
+	BurstIn  int64 `json:"burstIn,omitempty"`
+	BurstOut int64 `json:"burstOut,omitempty"`
+}
+
+// protocolGuardRateHandle 是一级限速在这台 guard 上借到的两个共享桶。
+type protocolGuardRateHandle struct {
+	scope string
+	in    *protocolGuardSharedRateLimiter
+	out   *protocolGuardSharedRateLimiter
+}
+
+func (h protocolGuardRateHandle) release() {
+	releaseProtocolGuardRateLimiter(h.scope, protocolGuardRateIn, h.in)
+	releaseProtocolGuardRateLimiter(h.scope, protocolGuardRateOut, h.out)
+}
+
+// protocolGuardRateTiers 把规则上的限速整理成若干级：有 RateLimits 用它（去掉空的、重复的 scope，
+// 最多 protocolGuardMaxRateTiers 级），没有就是旧的那一级。
+func protocolGuardRateTiers(rule guardRule) []guardRateTier {
+	if len(rule.RateLimits) == 0 {
+		return []guardRateTier{{
+			Scope: normalizeProtocolGuardRateLimitScope(rule.RateLimitScope, rule.RuleID, rule.ListenPort),
+			In:    normalizeProtocolGuardRateLimit(rule.LimitIn),
+			Out:   normalizeProtocolGuardRateLimit(rule.LimitOut),
+		}}
+	}
+	tiers := make([]guardRateTier, 0, len(rule.RateLimits))
+	seen := map[string]bool{}
+	for _, tier := range rule.RateLimits {
+		scope := strings.ToLower(strings.TrimSpace(tier.Scope))
+		in := normalizeProtocolGuardRateLimit(tier.In)
+		out := normalizeProtocolGuardRateLimit(tier.Out)
+		if scope == "" || seen[scope] || (in <= 0 && out <= 0) {
+			continue
+		}
+		seen[scope] = true
+		tiers = append(tiers, guardRateTier{Scope: scope, In: in, Out: out, BurstIn: tier.BurstIn, BurstOut: tier.BurstOut})
+		if len(tiers) >= protocolGuardMaxRateTiers {
+			break
+		}
+	}
+	if len(tiers) == 0 {
+		return []guardRateTier{{Scope: normalizeProtocolGuardRateLimitScope("", rule.RuleID, rule.ListenPort)}}
+	}
+	return tiers
+}
+
 func (s *protocolGuardServer) updateRateLimits(rule guardRule) {
 	if s == nil {
 		return
 	}
-	scope := normalizeProtocolGuardRateLimitScope(rule.RateLimitScope, rule.RuleID, rule.ListenPort)
-	limitIn := normalizeProtocolGuardRateLimit(rule.LimitIn)
-	limitOut := normalizeProtocolGuardRateLimit(rule.LimitOut)
-	in := acquireProtocolGuardRateLimiter(scope, protocolGuardRateIn, limitIn)
-	out := acquireProtocolGuardRateLimiter(scope, protocolGuardRateOut, limitOut)
+	tiers := protocolGuardRateTiers(rule)
+	handles := make([]protocolGuardRateHandle, 0, len(tiers))
+	for _, tier := range tiers {
+		handles = append(handles, protocolGuardRateHandle{
+			scope: tier.Scope,
+			in:    acquireProtocolGuardRateLimiterWithBurst(tier.Scope, protocolGuardRateIn, tier.In, tier.BurstIn),
+			out:   acquireProtocolGuardRateLimiterWithBurst(tier.Scope, protocolGuardRateOut, tier.Out, tier.BurstOut),
+		})
+	}
+	primary := handles[0]
+	extra := handles[1:]
 	s.rateMu.Lock()
 	if s.closed {
 		s.rateMu.Unlock()
-		releaseProtocolGuardRateLimiter(scope, protocolGuardRateIn, in)
-		releaseProtocolGuardRateLimiter(scope, protocolGuardRateOut, out)
+		for _, handle := range handles {
+			handle.release()
+		}
 		return
 	}
-	oldScope, oldIn, oldOut := s.rateScope, s.rateIn, s.rateOut
-	changed := oldScope != scope || oldIn != in || oldOut != out
+	oldPrimary := protocolGuardRateHandle{scope: s.rateScope, in: s.rateIn, out: s.rateOut}
+	oldExtra := s.rateExtra
+	changed := oldPrimary != primary || !sameProtocolGuardRateHandles(oldExtra, extra)
 	var oldRateChanged chan struct{}
 	if changed {
 		oldRateChanged = s.rateChanged
 		s.rateChanged = make(chan struct{})
 	}
-	s.rateScope, s.rateIn, s.rateOut = scope, in, out
+	s.rateScope, s.rateIn, s.rateOut = primary.scope, primary.in, primary.out
+	s.rateExtra = extra
 	s.rateMu.Unlock()
 	if oldRateChanged != nil {
 		close(oldRateChanged)
 	}
-	if oldIn != nil {
-		releaseProtocolGuardRateLimiter(oldScope, protocolGuardRateIn, oldIn)
-	}
-	if oldOut != nil {
-		releaseProtocolGuardRateLimiter(oldScope, protocolGuardRateOut, oldOut)
+	oldPrimary.release()
+	for _, handle := range oldExtra {
+		handle.release()
 	}
 }
 
+func sameProtocolGuardRateHandles(a, b []protocolGuardRateHandle) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// rateLimitersLocked：这个方向上要过的所有桶，第一级在前。调用方持有 rateMu。
+func (s *protocolGuardServer) rateLimitersLocked(direction protocolGuardRateDirection) []*protocolGuardSharedRateLimiter {
+	var out []*protocolGuardSharedRateLimiter
+	pick := func(in, outLimiter *protocolGuardSharedRateLimiter) {
+		limiter := in
+		if direction == protocolGuardRateOut {
+			limiter = outLimiter
+		}
+		if limiter != nil {
+			out = append(out, limiter)
+		}
+	}
+	pick(s.rateIn, s.rateOut)
+	for _, handle := range s.rateExtra {
+		pick(handle.in, handle.out)
+	}
+	return out
+}
+
+// rateLimiter 返回这个方向上的第一个桶（没有任何限速时是 nil）：调用方用它判断「这个方向限不限速」。
 func (s *protocolGuardServer) rateLimiter(direction protocolGuardRateDirection) *protocolGuardSharedRateLimiter {
-	if s == nil {
-		return nil
-	}
-	s.rateMu.RLock()
-	defer s.rateMu.RUnlock()
-	if direction == protocolGuardRateOut {
-		return s.rateOut
-	}
-	return s.rateIn
+	limiter, _ := s.rateWaitState(direction)
+	return limiter
 }
 
 func (s *protocolGuardServer) rateWaitState(direction protocolGuardRateDirection) (*protocolGuardSharedRateLimiter, <-chan struct{}) {
@@ -12337,12 +12464,24 @@ func (s *protocolGuardServer) rateWaitState(direction protocolGuardRateDirection
 	}
 	s.rateMu.RLock()
 	defer s.rateMu.RUnlock()
-	if direction == protocolGuardRateOut {
-		return s.rateOut, s.rateChanged
+	limiters := s.rateLimitersLocked(direction)
+	if len(limiters) == 0 {
+		return nil, s.rateChanged
 	}
-	return s.rateIn, s.rateChanged
+	return limiters[0], s.rateChanged
 }
 
+func (s *protocolGuardServer) rateWaitChain(direction protocolGuardRateDirection) ([]*protocolGuardSharedRateLimiter, <-chan struct{}) {
+	if s == nil {
+		return nil, nil
+	}
+	s.rateMu.RLock()
+	defer s.rateMu.RUnlock()
+	return s.rateLimitersLocked(direction), s.rateChanged
+}
+
+// waitRate 让这一块数据依次过这个方向上的每一级桶：多级叠加时实际速度不会超过其中最严的那一级，
+// 而每一级都是按 scope 共享的，开多少条连接、多少条规则都绕不过去。
 func (s *protocolGuardServer) waitRate(ctx context.Context, direction protocolGuardRateDirection, bytes int) error {
 	if s == nil || bytes <= 0 {
 		return nil
@@ -12358,19 +12497,22 @@ func (s *protocolGuardServer) waitRate(ctx context.Context, direction protocolGu
 		if n > protocolGuardRateWaitChunk {
 			n = protocolGuardRateWaitChunk
 		}
+		// 已经过了第几级：热更新只重试没过的那几级，过了的桶不再扣第二次。
+		passed := 0
 		for {
 			if s.ctx != nil {
 				if serverErr := s.ctx.Err(); serverErr != nil {
 					return serverErr
 				}
 			}
-			limiter, rateChanged := s.rateWaitState(direction)
-			if limiter == nil {
-				return nil
-			}
-			err := limiter.wait(ctx, rateChanged, n)
-			if err == nil {
+			limiters, rateChanged := s.rateWaitChain(direction)
+			if passed >= len(limiters) {
 				break
+			}
+			err := limiters[passed].wait(ctx, rateChanged, n)
+			if err == nil {
+				passed++
+				continue
 			}
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr
@@ -12382,7 +12524,7 @@ func (s *protocolGuardServer) waitRate(ctx context.Context, direction protocolGu
 			}
 			if errors.Is(err, errProtocolGuardRateLimiterChanged) {
 				// The guard switched scope, enabled/disabled a direction, or changed
-				// rate. Fetch the current limiter and retry only this unfinished chunk.
+				// rate. Fetch the current limiters and retry only this unfinished chunk.
 				continue
 			}
 			return err
@@ -14088,9 +14230,11 @@ func (s *protocolGuardServer) close() {
 		}
 		s.rateMu.Lock()
 		scope, in, out := s.rateScope, s.rateIn, s.rateOut
+		extra := s.rateExtra
 		rateChanged := s.rateChanged
 		s.closed = true
 		s.rateScope, s.rateIn, s.rateOut = "", nil, nil
+		s.rateExtra = nil
 		s.rateChanged = nil
 		s.rateMu.Unlock()
 		if rateChanged != nil {
@@ -14098,6 +14242,9 @@ func (s *protocolGuardServer) close() {
 		}
 		releaseProtocolGuardRateLimiter(scope, protocolGuardRateIn, in)
 		releaseProtocolGuardRateLimiter(scope, protocolGuardRateOut, out)
+		for _, handle := range extra {
+			handle.release()
+		}
 	})
 }
 

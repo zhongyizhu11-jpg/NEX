@@ -1,4 +1,5 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
+import { ChevronDown } from "lucide-react";
 
 import { formatBytes } from "@shared/formatBytes";
 import { HOST_TRAFFIC_MEASURE_MODE_LABELS, normalizeHostTrafficMeasureMode } from "@shared/hostTrafficQuota";
@@ -46,6 +47,31 @@ export function Section({ title, children }: { title: string; children: ReactNod
     <section className="flex min-w-0 flex-col gap-2 border-t border-[var(--fx-stroke-weak)] pt-3 first:border-t-0 first:pt-0">
       <h3 className="text-meta font-medium uppercase tracking-wide text-muted-foreground">{title}</h3>
       {children}
+    </section>
+  );
+}
+
+/** 默认折叠的一节：标题行点一下展开 / 收起；summary 在折叠时显示在标题右边（比如当前状态）。 */
+export function CollapsibleSection({ title, summary, children }: { title: string; summary?: ReactNode; children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <section className="flex min-w-0 flex-col gap-2 border-t border-[var(--fx-stroke-weak)] pt-3 first:border-t-0 first:pt-0">
+      <button
+        type="button"
+        className="flex min-w-0 items-center justify-between gap-2 text-left"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <h3 className="shrink-0 text-meta font-medium uppercase tracking-wide text-muted-foreground">{title}</h3>
+        <span className="inline-flex min-w-0 items-center gap-2 text-meta text-muted-foreground">
+          {!open && summary ? <span className="min-w-0 truncate">{summary}</span> : null}
+          <span className="inline-flex shrink-0 items-center gap-1">
+            {open ? "收起" : "展开"}
+            <ChevronDown className={`h-3.5 w-3.5 transition-transform ${open ? "rotate-180" : ""}`} aria-hidden="true" />
+          </span>
+        </span>
+      </button>
+      {open ? children : null}
     </section>
   );
 }

@@ -14,7 +14,7 @@
  */
 import { getAllSettings, setSetting } from "./repositories/settingsRepository";
 
-export type TelegramNotifyCategory = "host" | "rule" | "route" | "ticket";
+export type TelegramNotifyCategory = "host" | "resource" | "rule" | "route" | "ticket";
 
 /*
   adminOnly：只有管理员会收到的那几类，普通用户的通知设置里不列。
@@ -22,6 +22,7 @@ export type TelegramNotifyCategory = "host" | "rule" | "route" | "ticket";
 */
 export const TELEGRAM_NOTIFY_CATEGORIES: ReadonlyArray<{ key: TelegramNotifyCategory; label: string; adminOnly: boolean }> = [
   { key: "host", label: "主机上下线", adminOnly: true },
+  { key: "resource", label: "资源告警", adminOnly: true },
   { key: "rule", label: "规则异常", adminOnly: true },
   { key: "route", label: "线路切换", adminOnly: true },
   { key: "ticket", label: "工单消息", adminOnly: false },

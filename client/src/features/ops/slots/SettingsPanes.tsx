@@ -3,6 +3,7 @@ import QuotaModeSection from "../quota/QuotaModeSection";
 import MaintenanceSection from "../maintenance/MaintenanceSection";
 import ApiTokensSection from "../api/ApiTokensSection";
 import WebhookSettings from "../webhook/WebhookSettings";
+import ResourceAlertSettings from "../resource/ResourceAlertSettings";
 import OffsiteBackupSection from "../backup/OffsiteBackupSection";
 import DigestScheduleSection from "../digest/DigestScheduleSection";
 
@@ -18,10 +19,15 @@ export function OpsAdvancedSettingsPane() {
   );
 }
 
-/** 设置 › Webhook。 */
+/** 设置 › Webhook：Webhook 推送和资源告警。 */
 export function OpsWebhookSettingsPane() {
   if (!useOpsFeatures()) return null;
-  return <WebhookSettings />;
+  return (
+    <>
+      <WebhookSettings />
+      <ResourceAlertSettings />
+    </>
+  );
 }
 
 /** 设置 › 备份恢复 底部多出的异地自动备份。 */

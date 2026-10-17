@@ -73,11 +73,15 @@ func (t *selectedTransport) connectLocked() error {
 		if endpoint.Key != "" {
 			dialCfg.Key = endpoint.Key
 		}
+		endpointLabel := connStatsEndpoint(endpoint.Host, endpoint.Port)
 		if conn, sec, ok := t.selector.states[index].take(dialCfg); ok {
+			recordConnStage(t.cfg, t.cfg.TunnelID, t.cfg.RuleID, t.cfg.Role, "pool", endpointLabel, 0, nil)
 			t.useLocked(conn, sec, endpoint, index, true)
 			return nil
 		}
+		dialStarted := time.Now()
 		conn, err := dialTCP(endpoint.Host, endpoint.Port, secureDialTimeout(dialCfg), dialCfg.TCPFastOpen)
+		recordConnStage(t.cfg, t.cfg.TunnelID, t.cfg.RuleID, t.cfg.Role, "tcp", endpointLabel, time.Since(dialStarted), err)
 		if err != nil {
 			lastErr = err
 			t.selector.markFailure(index, err)
@@ -93,7 +97,13 @@ func (t *selectedTransport) connectLocked() error {
 			sec.ackTimeout = fxpPipelinedAckFast
 		}
 		ackIndex := index
-		sec.onAck = func(err error) { t.handleAck(sec, ackIndex, err) }
+		sec.onAck = func(err error) {
+			// 连接被我们自己关掉（客户端先走了）不算下一跳的失败。
+			if err == nil || !isClosedErr(err) {
+				recordConnStage(t.cfg, t.cfg.TunnelID, t.cfg.RuleID, t.cfg.Role, "handshake", endpointLabel, time.Since(dialStarted), err)
+			}
+			t.handleAck(sec, ackIndex, err)
+		}
 		t.useLocked(conn, sec, endpoint, index, false)
 		// 这条连接已经有着落了，顺手派一次后台探测去看看掉线的那些回来没有 ——
 		// 探测的等待由后台协程扛，不占用户的时间。

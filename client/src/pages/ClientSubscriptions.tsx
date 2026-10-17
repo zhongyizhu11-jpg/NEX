@@ -2049,7 +2049,7 @@ export default function ClientSubscriptionsPage() {
                 id="proxy-node-link"
                 value={nodeLink}
                 onChange={(event) => setNodeLink(event.target.value)}
-                placeholder={'vless:// vmess:// trojan:// ss:// hysteria2:// tuic:// anytls://\nSnell 没有链接，粘 Surge 那行：名字 = snell, 地址, 端口, psk=密钥, version=4\n或粘贴 JSON：{"type":"vless","server":"...","server_port":443,...}'}
+                placeholder={'vless:// vmess:// trojan:// ss:// hysteria2:// tuic:// anytls:// socks://\nSnell 没有链接，粘 Surge 那行：名字 = snell, 地址, 端口, psk=密钥, version=4\n或粘贴 JSON：{"type":"vless","server":"...","server_port":443,...}'}
                 rows={5}
                 className="font-mono text-xs"
               />

@@ -389,6 +389,9 @@ export const usersRouter = router({
         trafficLimit: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
         gostRateLimitIn: z.number().int().min(0).max(1_000_000).optional(),
         gostRateLimitOut: z.number().int().min(0).max(1_000_000).optional(),
+        /** 突发：峰值 Mbps 和能按峰值跑多少秒，0 = 不开（见 shared/forwardRateLimit.ts）。 */
+        forwardBurstMbps: z.number().int().min(0).max(1_000_000).optional(),
+        forwardBurstSeconds: z.number().int().min(0).max(3600).optional(),
         expiresAt: z.string().nullable().optional(), // ISO date string or null
         trafficAutoReset: z.boolean().optional(),
         trafficResetDay: z.number().int().min(1).max(31).optional(),
@@ -477,7 +480,7 @@ export const usersRouter = router({
           delete data.canAddRules;
           delete data.allowForwardXTunnel;
         }
-        const shouldRefreshRuntime = ["manualGostRateLimitIn", "manualGostRateLimitOut", "manualMaxConnections", "manualMaxIPs"].some((key) =>
+        const shouldRefreshRuntime = ["manualGostRateLimitIn", "manualGostRateLimitOut", "forwardBurstMbps", "forwardBurstSeconds", "manualMaxConnections", "manualMaxIPs"].some((key) =>
           Object.prototype.hasOwnProperty.call(data, key)
         );
         const beforeRuntimeLimits = shouldRefreshRuntime ? await db.getUserById(userId) : null;

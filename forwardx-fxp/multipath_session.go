@@ -114,6 +114,14 @@ type multipathSession struct {
 	out       []*mpOut
 	retry     []uint64
 
+	// replicate：复制模式。每一片第一次由某条腿写出之后，进 dup 排队，由另一条腿再发一份；
+	// 这份副本不改归属、不参与重传记账，对端按序号去重，谁先到用谁。
+	replicate bool
+	dup       []mpDup
+	// replicasQueued / replicasSent count replicas for tests and diagnostics.
+	replicasQueued uint64
+	replicasSent   uint64
+
 	// peerDelivered and peerWindow are the far side's flow control: this side
 	// may not run more than peerWindow chunks past peerDelivered.
 	peerDelivered uint64
@@ -171,6 +179,16 @@ type multipathSession struct {
 
 	errMu    sync.Mutex
 	firstErr error
+}
+
+// setReplicate switches replication mode on or off for chunks written from now on.
+func (s *multipathSession) setReplicate(on bool) {
+	s.mu.Lock()
+	s.replicate = on
+	if !on {
+		s.dup = nil
+	}
+	s.mu.Unlock()
 }
 
 // newMultipathSession starts the writer and reader goroutines for the legs.

@@ -105,6 +105,8 @@ type config struct {
 	MultipathEnabled    bool           `json:"multipathEnabled,omitempty"`
 	MultipathLegs       []multipathLeg `json:"multipathLegs,omitempty"`
 	MultipathMaxPending int            `json:"multipathMaxPending,omitempty"`
+	// MultipathReplicate：复制模式（见 helloFrame.MultipathReplicate），用带宽换可靠。
+	MultipathReplicate bool `json:"multipathReplicate,omitempty"`
 	// TransportVersion 是 Agent 写进来的隧道传输版本（v1 / v2），决定 UDP 单包上限。
 	TransportVersion string `json:"transportVersion,omitempty"`
 	// UDPWirePacketSize 显式覆盖 UDP 单包上限（字节），0 表示按传输版本取默认值。

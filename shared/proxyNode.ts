@@ -23,6 +23,7 @@ export const PROXY_NODE_PROTOCOLS = [
   "tuic",
   "anytls",
   "snell",
+  "socks5",
 ] as const;
 
 export type ProxyNodeProtocol = (typeof PROXY_NODE_PROTOCOLS)[number];
@@ -36,6 +37,7 @@ export const PROXY_NODE_PROTOCOL_LABELS: Record<ProxyNodeProtocol, string> = {
   tuic: "TUIC v5",
   anytls: "AnyTLS",
   snell: "Snell",
+  socks5: "SOCKS5",
 };
 
 /**
@@ -77,7 +79,9 @@ export type ProxyNode = {
   port: number;
   /** vless / vmess 的用户 ID */
   uuid: string;
-  /** trojan / shadowsocks 的密码 */
+  /** socks5 的用户名（空 = 不认证） */
+  username: string;
+  /** trojan / shadowsocks / socks5 的密码 */
   password: string;
   /** shadowsocks 的加密方式，或 vmess 的 security */
   method: string;
@@ -146,6 +150,7 @@ export function createEmptyProxyNode(): ProxyNode {
     address: "",
     port: 0,
     uuid: "",
+    username: "",
     password: "",
     method: "",
     alterId: 0,
@@ -530,6 +535,48 @@ function parseTuicLink(link: string): ProxyNode | null {
 }
 
 /**
+ * SOCKS5 的分享链接两种写法都收：
+ *
+ *   socks://base64(用户名:密码)@地址:端口#名称   —— v2rayN / Shadowrocket 导出的样子
+ *   socks5://用户名:密码@地址:端口#名称            —— 百分号编码的明文，mihomo / 浏览器的写法
+ *
+ * 没有凭据（socks5://地址:端口）就是不认证。SOCKS5 本身不加密，只适合在中转之后、
+ * 或者自己信得过的线路上用。
+ */
+function parseSocksLink(link: string, scheme: string): ProxyNode | null {
+  const { body, name } = splitLink(stripScheme(link, scheme));
+  const at = body.lastIndexOf("@");
+  let username = "";
+  let password = "";
+  if (at >= 0) {
+    const raw = body.slice(0, at);
+    let credential = "";
+    try {
+      credential = decodeURIComponent(raw);
+    } catch {
+      credential = raw;
+    }
+    if (!credential.includes(":")) {
+      const decoded = decodeBase64Utf8(raw);
+      if (decoded.includes(":")) credential = decoded;
+    }
+    const colon = credential.indexOf(":");
+    username = text(colon >= 0 ? credential.slice(0, colon) : credential);
+    password = colon >= 0 ? credential.slice(colon + 1) : "";
+  }
+  const { address, port } = splitHostPort(at >= 0 ? body.slice(at + 1) : body);
+  if (!address || !port) return null;
+  const node = createEmptyProxyNode();
+  node.protocol = "socks5";
+  node.name = name;
+  node.address = address;
+  node.port = port;
+  node.username = username;
+  node.password = password;
+  return node;
+}
+
+/**
  * anytls:// 见 anytls-go 的 URI Scheme：
  *
  *   anytls://password@hostname[:port]/?sni=&insecure=
@@ -650,6 +697,8 @@ export function parseProxyNodeLink(input: unknown): ParseProxyNodeResult {
   else if (lower.startsWith("hy2://")) node = parseHysteria2Link(link, "hy2://");
   else if (lower.startsWith("tuic://")) node = parseTuicLink(link);
   else if (lower.startsWith("anytls://")) node = parseAnytlsLink(link);
+  else if (lower.startsWith("socks5://")) node = parseSocksLink(link, "socks5://");
+  else if (lower.startsWith("socks://")) node = parseSocksLink(link, "socks://");
   else {
     return {
       ok: false,
@@ -777,6 +826,13 @@ export function formatProxyNodeLink(node: ProxyNode): string {
     if (node.allowInsecure) params.set("insecure", "1");
     const query = params.toString();
     return `anytls://${encodeURIComponent(node.password)}@${host}:${node.port}/${query ? `?${query}` : ""}${fragment}`;
+  }
+  if (node.protocol === "socks5") {
+    // v2rayN / Shadowrocket 认的写法：凭据整段 base64。
+    const credential = node.username || node.password
+      ? `${encodeBase64Utf8(`${node.username}:${node.password}`).replace(/=+$/, "")}@`
+      : "";
+    return `socks://${credential}${host}:${node.port}${fragment}`;
   }
   if (node.protocol === "shadowsocks") {
     const credential = encodeBase64Utf8(`${node.method}:${node.password}`)

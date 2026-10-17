@@ -31,6 +31,7 @@ import { isAgentVersionAtLeast } from "../agentRouteUtils";
 import {
   AGENT_FORWARDX_RELAY_AGGREGATE_VERSION,
   AGENT_FORWARDX_RELAY_FAILOVER_VERSION,
+  isTunnelRelayAggregate,
   normalizeTunnelRelayMode,
   tunnelRelayAggregateSupported,
   tunnelRelayFailoverSupported,
@@ -1888,6 +1889,27 @@ export const tunnelsRouter = router({
         if (ctx.user.role !== "admin" && tunnel.userId !== ctx.user.id) throw new Error("无权操作此隧道");
         return getTunnelDeleteImpact(input.id);
       }),
+    /**
+     * 复制模式：只对「中转带宽叠加」的 NEX 隧道有意义。开了以后入口每一片都从两条中转各发一份
+     * （出口回程同样，出口 FXP ≥ 2.2.133），用一倍带宽换「一条中转断了连接也不断」。
+     */
+    setReplicate: protectedProcedure
+      .input(z.object({ id: z.number().int().positive(), enabled: z.boolean() }))
+      .mutation(async ({ input, ctx }) => withKeyedTaskLock(`tunnel:${input.id}`, async () => {
+        const tunnel = await db.getTunnelById(input.id);
+        if (!tunnel) throw new Error("隧道不存在");
+        if (ctx.user.role !== "admin" && tunnel.userId !== ctx.user.id) throw new Error("无权操作此隧道");
+        if (input.enabled) {
+          const hops = await hopRepo.getTunnelHops(Number(tunnel.id));
+          if (!isTunnelRelayAggregate(tunnel, hops)) throw new Error("复制模式只能用在「中转带宽叠加」的 NEX 隧道上（至少两台中转）");
+        }
+        if (dbBool((tunnel as any).multipathReplicate) !== input.enabled) {
+          await db.updateTunnel(input.id, { multipathReplicate: input.enabled } as any);
+          await pushTunnelEndpointRefresh({ ...(tunnel as any), multipathReplicate: input.enabled }, "tunnel-replicate-updated", { urgent: true });
+        }
+        return { id: input.id, multipathReplicate: input.enabled };
+      })),
+
     delete: protectedProcedure
       .input(z.object({ id: z.number(), confirmRules: z.boolean().optional() }))
       .mutation(async ({ input, ctx }) => withKeyedTaskLock(`tunnel:${input.id}`, async () => {

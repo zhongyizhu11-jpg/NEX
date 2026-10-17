@@ -159,6 +159,16 @@ function clashProxyLines(node: ProxyNode): YamlLine[] {
     return lines;
   }
 
+  // SOCKS5：mihomo 的 type 叫 socks5，用户名 / 密码可选；协议本身不加密。
+  if (node.protocol === "socks5") {
+    field("type", "socks5");
+    if (node.username) field("username", yamlQuote(node.username));
+    if (node.password) field("password", yamlQuote(node.password));
+    field("udp", node.udp ? "true" : "false");
+    if (node.frontProxyName) field("dialer-proxy", yamlQuote(node.frontProxyName));
+    return lines;
+  }
+
   if (node.protocol === "hysteria2" || node.protocol === "tuic" || node.protocol === "anytls") {
     if (node.protocol === "hysteria2") {
       field("type", "hysteria2");
@@ -395,6 +405,12 @@ function singboxOutbound(node: ProxyNode): Record<string, unknown> {
   } else if (node.protocol === "anytls") {
     outbound.type = "anytls";
     outbound.password = node.password;
+  } else if (node.protocol === "socks5") {
+    // sing-box 的 SOCKS 出站叫 socks，version 写 "5"（字符串）。
+    outbound.type = "socks";
+    outbound.version = "5";
+    if (node.username) outbound.username = node.username;
+    if (node.password) outbound.password = node.password;
   } else if (node.protocol === "snell") {
     outbound.type = "snell";
     outbound.psk = node.password;
@@ -734,6 +750,13 @@ function loonNodeLine(node: ProxyNode): string {
     options.push(`udp=${node.udp ? "true" : "false"}`);
     return `${name} = ${[...parts, ...options].join(",")}`;
   }
+  if (node.protocol === "socks5") {
+    // Loon：socks5,地址,端口,用户名,"密码"；不认证就只写到端口。
+    parts.push("socks5", node.address, String(node.port));
+    if (node.username || node.password) parts.push(node.username, `"${node.password}"`);
+    options.push(`udp=${node.udp ? "true" : "false"}`);
+    return `${name} = ${[...parts, ...options].join(",")}`;
+  }
   if (node.protocol === "anytls") {
     parts.push("anytls", node.address, String(node.port), `"${node.password}"`);
     options.push(`skip-cert-verify=${node.allowInsecure ? "true" : "false"}`);
@@ -808,6 +831,10 @@ function surgeNodeLine(node: ProxyNode): string {
   } else if (node.protocol === "tuic") {
     // Surge 把 v4 和 v5 当成两种策略类型，v5 才是 uuid + password 这一套。
     parts.push("tuic-v5", node.address, String(node.port), `uuid=${node.uuid}`, `password=${node.password}`);
+  } else if (node.protocol === "socks5") {
+    // Surge 的 socks5 用户名、密码是按位置写的，不是 username= / password=。
+    parts.push("socks5", node.address, String(node.port));
+    if (node.username || node.password) parts.push(node.username, node.password);
   } else if (node.protocol === "anytls") {
     parts.push("anytls", node.address, String(node.port), `password=${node.password}`);
   } else if (node.protocol === "snell") {
@@ -872,6 +899,10 @@ function quantumultxNodeLine(node: ProxyNode): string {
     parts.push(`vmess=${target}`, `method=${node.method && node.method !== "auto" ? node.method : "none"}`, `password=${node.uuid}`);
   } else if (node.protocol === "trojan") {
     parts.push(`trojan=${target}`, `password=${node.password}`);
+  } else if (node.protocol === "socks5") {
+    parts.push(`socks5=${target}`);
+    if (node.username) parts.push(`username=${node.username}`);
+    if (node.password) parts.push(`password=${node.password}`);
   } else {
     parts.push(`shadowsocks=${target}`, `method=${node.method}`, `password=${node.password}`);
   }

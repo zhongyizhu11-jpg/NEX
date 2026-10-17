@@ -183,6 +183,9 @@ export const users = table("users", {
   manualAllowProxySubscription: boolean("manualAllowProxySubscription").notNull().default(false),
   manualGostRateLimitIn: int("manualGostRateLimitIn").notNull().default(0),
   manualGostRateLimitOut: int("manualGostRateLimitOut").notNull().default(0),
+  // 转发突发（2.3.449）：峰值 Mbps 和能按峰值跑多少秒，0 = 不开。只在用户上手动设，见 shared/forwardRateLimit.ts。
+  forwardBurstMbps: int("forwardBurstMbps").notNull().default(0),
+  forwardBurstSeconds: int("forwardBurstSeconds").notNull().default(0),
   manualTrafficLimit: bigint("manualTrafficLimit", { mode: "number" }).notNull().default(0),
   manualExpiresAt: epoch("manualExpiresAt"),
   balanceCents: bigint("balanceCents", { mode: "number" }).notNull().default(0),
@@ -259,6 +262,8 @@ export type InsertAuthSession = typeof authSessions.$inferInsert;
 export const hosts = table("hosts", {
   id: serial("id"),
   name: text("name").notNull(),
+  // 整台主机的转发限速（2.3.449，Mbps，0 = 不限）：这台机器上所有用户的转发加起来共用一个桶。
+  rateLimitMbps: int("rateLimitMbps").notNull().default(0),
   ip: text("ip").notNull(),
   ipv4: text("ipv4"),
   ipv6: text("ipv6"),
@@ -1077,6 +1082,8 @@ export const tunnels = table("tunnels", {
   udpFec: boolean("udpFec").notNull().default(false),
   /** 内核直通：V2 隧道两端都是内核 WireGuard 时，普通 TCP/UDP 规则改走 iptables DNAT 进 nexwg，不经 FXP。默认关。 */
   kernelPassthrough: boolean("kernelPassthrough").notNull().default(false),
+  // 复制模式（2.3.449）：中转带宽叠加的隧道上，每一片都从两条中转各发一份，一条线路断了连接也不断。
+  multipathReplicate: boolean("multipathReplicate").notNull().default(false),
   blockHttp: boolean("blockHttp").notNull().default(false),
   blockSocks: boolean("blockSocks").notNull().default(false),
   blockTls: boolean("blockTls").notNull().default(false),

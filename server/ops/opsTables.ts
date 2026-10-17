@@ -12,6 +12,7 @@ import { webhooksTables, webhooksMigrationTables } from "./webhooksTables";
 import { statusAvailabilityTables, statusAvailabilityMigrationTables } from "./statusAvailabilityTables";
 import { netProfileTables, netProfileMigrationTables } from "./netProfileTables";
 import { unlockTables, unlockMigrationTables } from "./unlockTables";
+import { connStatsTables, connStatsMigrationTables } from "./connStatsTables";
 
 export const OPS_TABLE_DEFS: TableDef[] = [
   ...eventsTables,
@@ -27,6 +28,7 @@ export const OPS_TABLE_DEFS: TableDef[] = [
   ...statusAvailabilityTables,
   ...netProfileTables,
   ...unlockTables,
+  ...connStatsTables,
 ];
 
 export const OPS_MIGRATION_TABLES: string[] = [
@@ -43,4 +45,5 @@ export const OPS_MIGRATION_TABLES: string[] = [
   ...statusAvailabilityMigrationTables,
   ...netProfileMigrationTables,
   ...unlockMigrationTables,
+  ...connStatsMigrationTables,
 ];
