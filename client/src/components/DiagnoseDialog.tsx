@@ -90,8 +90,13 @@ export function DiagnoseDialog({
       return;
     }
     if (autoRanRef.current) return;
-    autoRanRef.current = true;
-    if (!testingRef.current) onRunRef.current();
+    // 子组件的 effect 先于父组件跑：隧道那边打开时会重置「手动测试」的记录，这里等那一轮
+    // effect 都跑完再发，免得刚记下的测试状态被清掉。
+    const timer = setTimeout(() => {
+      autoRanRef.current = true;
+      if (!testingRef.current) onRunRef.current();
+    }, 0);
+    return () => clearTimeout(timer);
   }, [open]);
   const hasChecklist = !!checklist && checklist.id > 0;
   const showLatency = !hasChecklist || tab === "latency";
