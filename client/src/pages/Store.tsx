@@ -1,4 +1,5 @@
 import WorkspaceHeader from "@/components/WorkspaceHeader";
+import { PlanDescriptionView } from "@/components/plans/PlanDescription";
 import DashboardLayout from "@/components/DashboardLayout";
 import EmptyState from "@/components/EmptyState";
 import { MILLI_CENTS_PER_CENT, pricePerGbMilliCentsOf } from "@shared/trafficBillingPrice";
@@ -91,7 +92,6 @@ function StorePlanCard({
   /** 买的是哪一档 —— 卡片上选的那一档要一路带到收银台，不能到那儿又变回默认。 */
   onBuy: (option: PlanPricingOption) => void;
 }) {
-  const description = planDescription(plan) || "订阅后自动开通端口段和可用资源。";
   const benefits = planBenefitItems(plan);
   const options = useMemo(() => planPricingOptions(plan, plan?.priceTiers), [plan]);
   /**
@@ -114,7 +114,7 @@ function StorePlanCard({
     <EntityCard className="h-full p-[var(--fx-card-padding)]">
       <h3 className="line-clamp-1 text-primary-type font-semibold text-foreground">{plan.name}</h3>
       {/* div 不用 p：手机上 `.workspace-main p` 会在名字和说明之间再撑出 12px。 */}
-      <div className="mt-1 line-clamp-3 text-secondary-type text-muted-foreground">{description}</div>
+      <PlanDescriptionView text={planDescription(plan)} fallback="订阅后自动开通端口段和可用资源。" />
 
       <div className="mt-4 flex flex-wrap items-baseline gap-x-1.5">
         <span className="break-words text-metric font-semibold tabular-nums text-foreground">

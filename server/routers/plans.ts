@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { PLAN_DESCRIPTION_MAX_LENGTH } from "../../shared/planDescription";
 import { adminProcedure, protectedProcedure, router } from "../_core/trpc";
 import { appendPanelLog } from "../_core/panelLogger";
 import * as db from "../db";
@@ -9,7 +10,7 @@ import { REFERRAL_MAX_RATE_BPS } from "@shared/referral";
 
 const planInput = z.object({
   name: z.string().min(1).max(80),
-  description: z.string().max(500).nullable().optional(),
+  description: z.string().max(PLAN_DESCRIPTION_MAX_LENGTH).nullable().optional(),
   priceCents: z.number().int().min(0).max(100_000_000),
   currency: z.string().trim().min(3).max(8).default("CNY"),
   /**
