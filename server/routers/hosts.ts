@@ -39,6 +39,7 @@ import { parseManualHostAddress } from "@shared/hostManualAddress";
 import { wakeAgentExt } from "../ops/agentExt";
 import { flowOffloadStatusView } from "../ops/flowOffloadStatus";
 import { hostUnlockProcedures } from "./hostUnlock";
+import { deleteHostWithChecks } from "../hostDeletion";
 
 const HOST_UPGRADE_CLEANUP_INTERVAL_MS = 60 * 1000;
 const GITHUB_API_LIMIT_STATUSES = new Set([403, 429]);
@@ -1744,30 +1745,16 @@ export const hostsRouter = router({
         return { success: true };
       }),
     delete: protectedProcedure
-      .input(z.object({ id: z.number() }))
+      .input(z.object({ id: z.number(), confirmOfflineCleanup: z.boolean().optional() }))
       .mutation(async ({ input, ctx }) => {
         const host = await db.getHostById(input.id);
         if (!host) throw new Error("主机不存在");
         if (ctx.user.role !== "admin" && host.userId !== ctx.user.id) throw new Error("无权操作此主机");
-        // 检查是否存在仍会占用此主机的规则。已标记删除且停止运行的历史记录不应阻止删除主机。
-        const blockers = await db.getHostRuleDeleteBlockers(input.id);
-        if (blockers.ruleCount > 0) {
-          throw new Error(`该主机下还有 ${blockers.ruleCount} 条转发规则，请先删除所有规则后再删除主机`);
-        }
-        if (blockers.managedRuleCount > 0) {
-          throw new Error(`该主机仍被 ${blockers.managedRuleCount} 条转发组/转发链规则引用，请先在转发组中移除该主机或删除对应转发组`);
-        }
-        // 隧道、转发组成员、套餐里还引用着它时不能删：这些行不会跟着主机删，会留下指向空主机的引用。
-        const references = await db.getHostDeleteReferenceLabels(input.id);
-        if (references.length > 0) {
-          throw new Error(`该主机仍被引用：${references.join("；")}。请先解除这些引用后再删除主机`);
-        }
-        if (blockers.pendingCleanupCount > 0) {
-          await db.releaseHostPendingRuleCleanup(input.id);
-        }
-        await db.deleteHostPermissions(input.id);
-        await db.deleteHost(input.id);
-        return { success: true };
+        // 引用检查、待清理规则（在线拒绝 / 离线要确认）、权限和主机一起在一个事务里删，见 server/hostDeletion.ts。
+        return deleteHostWithChecks(input.id, {
+          confirmOfflineCleanup: input.confirmOfflineCleanup === true,
+          showRuleOwners: ctx.user.role === "admin",
+        });
       }),
     metrics: protectedProcedure
       // limit 直接进 SQL 的 LIMIT 和缓存键：不设上限一次能拖出整张指标表，小数 / 负数在

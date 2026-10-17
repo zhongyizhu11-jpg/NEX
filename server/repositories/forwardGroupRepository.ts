@@ -2072,6 +2072,62 @@ export async function getForwardGroupDefaultHostId(groupId: number) {
   throw new Error("Forward group has no valid entry agent");
 }
 
+/**
+ * 删主机前修转发组模板上过期的主机引用（照上游 poouo/Forwardx 的
+ * repairForwardGroupTemplateHostReferencesForHost 移植）。
+ *
+ * 故障转移 / 转发链的模板从不下发到 Agent，hostId 只是元数据；组里的成员换掉以后它还指着老机器，
+ * 删那台老机器时 getHostRuleDeleteBlockers 会把这条模板算成「转发组规则引用」挡住删除，而用户
+ * 在界面上根本找不到这条引用。这里只把「这台机器已经不是组里成员」的模板改指向组里现在的
+ * 默认入口机：不动子规则、不重铺运行时。端口转发的模板由 repairPortForwardRuleHostReferences 修，
+ * 入口组 / 出口组没有模板。组里一台可用的机器都没有时保持原样（照上游）。
+ */
+export async function repairForwardGroupTemplateHostReferencesForHost(hostIdValue: number) {
+  const hostId = Number(hostIdValue || 0);
+  const db = await getDb();
+  if (!db || !Number.isInteger(hostId) || hostId <= 0) return 0;
+  const rows = await db.selectDistinct({ groupId: forwardRules.forwardGroupId })
+    .from(forwardRules)
+    .where(and(
+      eq(forwardRules.hostId, hostId),
+      eq(forwardRules.isForwardGroupTemplate, true),
+      eq(forwardRules.pendingDelete, false),
+      isNotNull(forwardRules.forwardGroupId),
+    ));
+  let repaired = 0;
+  for (const row of rows as any[]) {
+    const groupId = Number(row.groupId || 0);
+    if (groupId <= 0) continue;
+    repaired += await withKeyedTaskLock(`forward-group-sync:${groupId}`, async () => {
+      const group = await getForwardGroupById(groupId);
+      if (!group) return 0;
+      const groupMode = forwardGroupModeOf(group);
+      if (isCollectionGroupMode(groupMode) || groupMode === "port") return 0;
+      const memberHostIds = new Set<number>();
+      for (const member of [...sortedMembers(group), ...await entryGroupMembersFor(group)]) {
+        const memberHostId = await memberEntryHostId(member).catch(() => 0);
+        if (memberHostId > 0) memberHostIds.add(memberHostId);
+      }
+      if (memberHostIds.has(hostId)) return 0;
+      const nextHostId = await getForwardGroupDefaultHostId(groupId).catch(() => 0);
+      if (!nextHostId || nextHostId === hostId) return 0;
+      const stale = (await getForwardGroupTemplateRules(groupId) as any[])
+        .filter((rule) => Number(rule.hostId) === hostId)
+        .map((rule) => Number(rule.id));
+      if (stale.length === 0) return 0;
+      await db.update(forwardRules).set({ hostId: nextHostId, updatedAt: nowDate() } as any).where(and(
+        inArray(forwardRules.id, stale),
+        eq(forwardRules.forwardGroupId, groupId),
+        eq(forwardRules.isForwardGroupTemplate, true),
+        eq(forwardRules.pendingDelete, false),
+      ));
+      appendPanelLog("info", `[ForwardGroup] template host references repaired group=${groupId} from=${hostId} to=${nextHostId} count=${stale.length}`);
+      return stale.length;
+    });
+  }
+  return repaired;
+}
+
 export async function getForwardGroupRuleEntryHostIds(groupId: number) {
   const group = await getForwardGroupById(groupId);
   if (!group) throw new Error("Forward group does not exist");
