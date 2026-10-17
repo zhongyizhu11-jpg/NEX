@@ -1,5 +1,6 @@
 import { Router, Request, Response } from "express";
 import * as db from "./db";
+import { reconcileRuleLimits, recordRuleQuotaTraffic, ruleLimitRootId } from "./ruleLimits";
 import { isIpChangeProbeServiceId } from "../shared/ipChange";
 import { ingestIpChangeProbeReports } from "./ipChange/runtime";
 import { appendPanelLog } from "./_core/panelLogger";
@@ -1183,6 +1184,8 @@ agentRouter.post("/api/agent/traffic", async (req: Request, res: Response) => {
     }
 
     await db.insertTrafficStatsBatch(trafficBatch);
+    // 单条规则额度：同一批、同一个事务里累加（不另起一套计量），见 server/ruleLimits.ts。
+    await recordRuleQuotaTraffic(trafficBatch, contextsByRuleId);
     // 不再按「有流量」把规则记成运行中：改完规则后 isRunning=false 表示「待重新下发」，
     // 这时旧配置照样有流量，记回 true 会让心跳以为新配置已经生效、不再下发。运行状态只认
     // Agent 的下发回执（/status，带重试）和心跳按本机监听做的恢复。
@@ -1277,6 +1280,17 @@ agentRouter.post("/api/agent/traffic", async (req: Request, res: Response) => {
       return;
     }
 
+    // 记账事务提交之后再判定规则额度：读不到半截的计数，回滚了的上报也不会触发停用。
+    const ruleLimitRootIds = Array.from(new Set((trafficContexts as any[])
+      .filter((context) => Number(context.rule.forwardGroupRuleId) > 0 || Number(context.rule.trafficLimit) > 0 || context.rule.expiresAt || context.rule.ruleLimitReason)
+      .map((context) => ruleLimitRootId(context.rule))));
+    if (ruleLimitRootIds.length > 0) {
+      try {
+        if (await reconcileRuleLimits(ruleLimitRootIds)) strictTrafficAccounting = true;
+      } catch (error) {
+        console.warn(`[RuleLimits] reconcile after traffic report failed host=${logHostId}:`, error instanceof Error ? error.message : String(error));
+      }
+    }
     const durationMs = Date.now() - requestStartedAt;
     logTrafficReportSummary({
       hostId: logHostId,

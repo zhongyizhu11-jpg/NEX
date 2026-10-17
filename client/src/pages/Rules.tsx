@@ -100,6 +100,9 @@ import { cn } from "@/lib/utils";
 import { tunnelFxpIssueText } from "@/features/links/TunnelFxpIssueNotice";
 import { autoForwardRuleName, resolveForwardRuleName } from "@shared/forwardRuleName";
 import { DEFAULT_RULE_EGRESS_FORM, RuleEgressSection, useEgressEntryCapabilities, type RuleEgressFormValue } from "@/components/rules/RuleEgressSection";
+import { RuleLimitsForm, newRuleLimitsForm, ruleLimitsChanges, ruleLimitsSummary, type RuleLimitsFormValue } from "@/components/rules/RuleLimitsForm";
+import { RuleLimitSummary } from "@/components/rules/RuleLimitSummary";
+import { ADMIN_MANAGED_RULE_MESSAGE, isAdminManagedRule, normalizeRuleLimitReason } from "@shared/ruleLimits";
 import {
   normalizeRuleEgressType,
   RULE_EGRESS_STATE_LABELS,
@@ -191,6 +194,7 @@ import {
   GitBranch,
   Globe,
   RotateCcw,
+  Lock,
 } from "lucide-react";
 import type { GlobeMethods } from "react-globe.gl";
 import {
@@ -330,6 +334,8 @@ type RuleFormData = {
   sniNamesText: string;
   /** Shadowsocks 出口（shared/ssEgress.ts）：只在端口转发（gost）上有。 */
   egress: RuleEgressFormValue;
+  /** 单条规则限额（shared/ruleLimits.ts）：只有管理员看得到、改得了。 */
+  limits: RuleLimitsFormValue;
 };
 
 type ProxyProtocolVersion = 1 | 2;
@@ -353,6 +359,7 @@ const defaultForm: RuleFormData = {
   tlsInboundId: null,
   sniNamesText: "",
   egress: DEFAULT_RULE_EGRESS_FORM,
+  limits: newRuleLimitsForm(),
 };
 
 const gostTunnelModes = new Set(["tls", "wss", "tcp", "mtls", "mwss", "mtcp"]);
@@ -2143,6 +2150,8 @@ function RulesContent() {
     return null;
   };
   const [editingId, setEditingId] = useState<number | null>(null);
+  // 编辑时规则原来的限额：提交只带改过的那几项（见 ruleLimitsChanges）。
+  const [editingLimitBaseline, setEditingLimitBaseline] = useState<any>(null);
   const [editingOriginalProtocol, setEditingOriginalProtocol] = useState<RuleProtocol | null>(null);
   const [legacyLocalRuleEditId, setLegacyLocalRuleEditId] = useState<number | null>(null);
   const [deleteRule, setDeleteRule] = useState<any | null>(null);
@@ -2210,6 +2219,14 @@ function RulesContent() {
     return Object.keys(input).length ? input : undefined;
   }, [filterUser, user?.id, user?.role]);
   const effectiveRulesQuery = selectedRulesQuery || undefined;
+  /*
+    管理员在「用户」筛选里选中了某个人：新建 / 复制 / 导入的规则归他（server/ruleOperationOwner.ts），
+    端口提示、端口检查、随机端口也按他的权限和套餐端口段来。编辑不改归属。
+  */
+  const createOwnerUserId = user?.role === "admin" && filterUser !== "self" && filterUser !== "all"
+    && Number(filterUser) > 0 && Number(filterUser) !== Number(user?.id)
+    ? Number(filterUser)
+    : undefined;
   const selectedScopeQueryEnabled = false as boolean;
   const [portStatus, setPortStatus] = useState<"idle" | "checking" | "available" | "used">("idle");
   /*
@@ -2602,6 +2619,14 @@ function RulesContent() {
     const supported = isRuleSupported(rule);
     const resourceAccessAllowed = rule.resourceAccessAllowed !== false;
     const enabled = resourceAccessAllowed && !!rule.isEnabled;
+    // 管理员管理的规则（替用户建的 / 设了限额的）：主人只能看，开关也是只读的。
+    if (user?.role !== "admin" && isAdminManagedRule(rule)) {
+      return (
+        <span className="inline-flex shrink-0" title={ADMIN_MANAGED_RULE_MESSAGE}>
+          <Switch checked={enabled && !normalizeRuleLimitReason(rule.ruleLimitReason)} disabled className="switch-compact" aria-label={`规则 ${rule.name || ""} 由管理员管理，仅可查看`} />
+        </span>
+      );
+    }
     const title = enabled ? "关闭后该转发规则将停止下发和转发" : "开启后该转发规则将重新下发并恢复转发";
     const content = supported && resourceAccessAllowed ? (
       <OptimisticSwitch
@@ -2624,6 +2649,7 @@ function RulesContent() {
   const resetForm = () => {
     setForm({ ...defaultForm });
     setEditingId(null);
+    setEditingLimitBaseline(null);
     setEditingOriginalProtocol(null);
     setLegacyLocalRuleEditId(null);
     setPortStatus("idle");
@@ -2784,8 +2810,10 @@ function RulesContent() {
           egressLinkMasked: String(rule.egress?.masked || ""),
           egressUdp: !!rule.egressUdp,
         },
+      limits: newRuleLimitsForm(rule),
     });
     setEditingId(rule.id);
+    setEditingLimitBaseline(rule);
     setEditingOriginalProtocol(normalizeRuleProtocol(rule.protocol));
     setLegacyLocalRuleEditId(isLegacyLocalRule ? Number(rule.id) : null);
     setPortStatus("idle");
@@ -2863,12 +2891,15 @@ function RulesContent() {
   const portPolicyForGroup = isForwardGroupBackedRouteModeValue(form.routeMode, form.forwardGroupId)
     || (isLegacyLocalRuleEdit && form.routeMode === "local");
   const entryPortPolicyQuery = trpc.rules.entryPortPolicy.useQuery(
-    portPolicyForGroup
-      ? { forwardGroupId: Number(form.forwardGroupId) }
-      : {
-        hostId: Number(form.hostId),
-        tunnelId: form.routeMode === "tunnel" ? form.tunnelId ?? null : null,
-      },
+    {
+      ...(portPolicyForGroup
+        ? { forwardGroupId: Number(form.forwardGroupId) }
+        : {
+          hostId: Number(form.hostId),
+          tunnelId: form.routeMode === "tunnel" ? form.tunnelId ?? null : null,
+        }),
+      userId: editingId ? undefined : createOwnerUserId,
+    },
     {
       enabled: portPolicyForGroup
         ? Number(form.forwardGroupId) > 0
@@ -2956,6 +2987,8 @@ function RulesContent() {
     (users || []).forEach((item: any) => map.set(Number(item.id), item));
     return map;
   }, [users]);
+  const ruleOperationOwner = createOwnerUserId ? userById.get(createOwnerUserId) : null;
+  const ruleOperationOwnerLabel = ruleOperationOwner?.name || ruleOperationOwner?.username || (createOwnerUserId ? `用户 #${createOwnerUserId}` : "");
   const forwardGroupById = useMemo(() => {
     const map = new Map<number, any>();
     (forwardGroups || []).forEach((group: any) => map.set(Number(group.id), group));
@@ -3226,8 +3259,10 @@ function RulesContent() {
     if (form.telegramErrorNotifyEnabled) parts.push("异常提醒");
     // 专属域名缺省是开的，只有关了才值得写出来。
     if (ruleEntryDomainAvailable && !form.entryDomainEnabled) parts.push("不用专属域名");
+    const limits = user?.role === "admin" ? ruleLimitsSummary(form.limits) : null;
+    if (limits) parts.push(limits);
     return parts;
-  }, [effectiveRouteForwardType, form.name, form.telegramErrorNotifyEnabled, form.entryDomainEnabled, ruleEntryDomainAvailable]);
+  }, [effectiveRouteForwardType, form.name, form.telegramErrorNotifyEnabled, form.entryDomainEnabled, form.limits, ruleEntryDomainAvailable, user?.role]);
   /** 线路组的入口机器：路径里的中转不能是它自己。隧道转发的入口是隧道的出口机（调度在那儿）。 */
   const routeEntryHostId = useMemo(() => {
     if (form.routeMode === "tunnel" && form.tunnelId) {
@@ -3402,6 +3437,7 @@ function RulesContent() {
     setPortStatus("checking");
     try {
       const result = await utils.rules.checkPort.fetch({
+        userId: editingId ? undefined : createOwnerUserId,
         ...(isForwardGroupRouteMode
           ? { forwardGroupId: Number(forwardGroupId) }
           : { hostId: Number(hostId), tunnelId: routeMode === "tunnel" ? tunnelId : null }),
@@ -3416,7 +3452,7 @@ function RulesContent() {
       if (latestPortCheckRef.current !== checkId) return;
       setPortStatus("idle");
     }
-  }, [form.forwardGroupId, form.hostId, form.protocol, form.routeMode, form.sourcePort, form.tunnelId, form.entryMode, editingId, utils, selectedEntryPortPolicy, isForwardGroupRouteMode]);
+  }, [form.forwardGroupId, form.hostId, form.protocol, form.routeMode, form.sourcePort, form.tunnelId, form.entryMode, editingId, createOwnerUserId, utils, selectedEntryPortPolicy, isForwardGroupRouteMode]);
 
   // A response started for the previous route must not mark the new route occupied.
   useEffect(() => {
@@ -3493,7 +3529,7 @@ function RulesContent() {
       const randomPortInput = isForwardGroupRouteMode
         ? { forwardGroupId: Number(form.forwardGroupId), excludeRuleId: editingId || undefined, protocol: form.protocol }
         : { hostId: Number(form.hostId), tunnelId: form.routeMode === "tunnel" ? form.tunnelId : null, excludeRuleId: editingId || undefined, protocol: form.protocol };
-      const result = await utils.rules.randomPort.fetch(randomPortInput);
+      const result = await utils.rules.randomPort.fetch({ ...randomPortInput, userId: editingId ? undefined : createOwnerUserId });
       setForm({ ...form, sourcePort: result.port });
       setPortStatus("available");
       toast.success(`已分配随机端口: ${result.port}`);
@@ -3563,6 +3599,7 @@ function RulesContent() {
     const keepFailover = targetType === "group" && !!rule.failoverEnabled;
     return {
       hostId: isTunnelTarget ? Number(resource.entryHostId) : undefined,
+      userId: createOwnerUserId,
       name: String(rule.name || "复制规则").trim().slice(0, 128) || "复制规则",
       forwardType,
       protocol: normalizeRuleProtocol(rule.protocol),
@@ -3870,6 +3907,17 @@ function RulesContent() {
       toast.error(submitBlocker);
       return;
     }
+    // 单条规则限额：管理员才发，而且只发改过的那几项（没动就一项都不带，规则不会因此变成管理员管理）。
+    let limitPayload: Record<string, unknown> = {};
+    if (user?.role === "admin") {
+      try {
+        limitPayload = ruleLimitsChanges(form.limits, editingId ? editingLimitBaseline : undefined);
+      } catch (error) {
+        setShowAdvanced(true);
+        toast.error(error instanceof Error ? error.message : String(error));
+        return;
+      }
+    }
     if (form.routeMode === "local" && !isProtocolEnabled(form.forwardType)) {
       toast.error(unsupportedProtocolTitle);
       return;
@@ -3903,8 +3951,8 @@ function RulesContent() {
         telegramErrorNotifyEnabled: form.telegramErrorNotifyEnabled,
         failoverEnabled: false,
       };
-      if (editingId) updateMutation.mutate(Object.assign({ id: editingId }, sniPayload));
-      else createMutation.mutate(Object.assign({}, sniPayload, { name: form.name, sourcePort: 0 }));
+      if (editingId) updateMutation.mutate(Object.assign({ id: editingId }, sniPayload, limitPayload));
+      else createMutation.mutate(Object.assign({}, sniPayload, limitPayload, { name: form.name, sourcePort: 0, userId: createOwnerUserId }));
       return;
     }
     if (form.failoverEnabled) {
@@ -3992,9 +4040,11 @@ function RulesContent() {
         entryDomainEnabled: form.entryDomainEnabled,
         ...failoverPayload,
         ...egressPayload,
+        ...limitPayload,
       });
     } else {
       createMutation.mutate({
+        userId: createOwnerUserId,
         hostId: isForwardGroupRouteMode ? undefined : form.hostId!,
         name: form.name,
         forwardType: submitForwardType,
@@ -4011,6 +4061,7 @@ function RulesContent() {
         entryDomainEnabled: form.entryDomainEnabled,
         ...failoverPayload,
         ...egressPayload,
+        ...limitPayload,
       });
     }
   };
@@ -4828,7 +4879,7 @@ function RulesContent() {
           : "pending";
       const groupStatus = rawGroupStatus === "degraded" ? "available" : rawGroupStatus;
       return resolveForwardRuleVisualStatus({
-        ruleEnabled: !!rule.isEnabled,
+        ruleEnabled: !!rule.isEnabled && !normalizeRuleLimitReason(rule.ruleLimitReason),
         ruleRunning: !!rule.isRunning,
         resourceAccessAllowed: rule.resourceAccessAllowed,
         groupEnabled: group?.isEnabled !== false,
@@ -4842,7 +4893,7 @@ function RulesContent() {
       });
     }
     return resolveForwardRuleVisualStatus({
-      ruleEnabled: !!rule.isEnabled,
+      ruleEnabled: !!rule.isEnabled && !normalizeRuleLimitReason(rule.ruleLimitReason),
       ruleRunning: !!rule.isRunning,
       resourceAccessAllowed: rule.resourceAccessAllowed,
       groupEnabled: true,
@@ -5675,6 +5726,7 @@ function RulesContent() {
       : getForwardGroupRuleForwardType(selectedGroup, rule.forwardType);
     return {
       hostId: importScopeType === "tunnel" ? Number(selectedTunnel?.entryHostId || 0) : undefined,
+      userId: createOwnerUserId,
       name: rule.name,
       forwardType: payloadForwardType,
       protocol: rule.protocol,
@@ -6093,6 +6145,16 @@ function RulesContent() {
   };
 
   /** 共享 TLS 入站规则卡片上那枚：「SNI：a.com、b.com @ 主机:443」，入站停用 / Agent 太旧时换成原因。 */
+  /** 规则主人看到的那枚「管理员管理」：说明为什么编辑、开关、删除都不在。 */
+  const renderAdminManagedBadge = (rule: any) => (
+    user?.role !== "admin" && isAdminManagedRule(rule) ? (
+      <Badge key="admin-managed" variant="outline" className="h-5 gap-1 px-1.5 text-[10px] text-muted-foreground" title={ADMIN_MANAGED_RULE_MESSAGE}>
+        <Lock className="h-3 w-3" aria-hidden="true" />
+        管理员管理
+      </Badge>
+    ) : null
+  );
+
   const renderSniRuleBadge = (rule: any) => {
     if (!(Number(rule?.tlsInboundId || 0) > 0)) return null;
     const inbound = tlsInboundById.get(Number(rule.tlsInboundId));
@@ -6794,9 +6856,18 @@ function RulesContent() {
     const isForwardChainRule = ruleCategory === "chain";
     const probeMethod = ruleLatencyProbeMethodForRule(rule);
     const resetting = resetTrafficMutation.isPending && resetTrafficTarget?.scope === "rule" && Number(resetTrafficTarget.rule?.id) === Number(rule.id);
+    const readOnly = user?.role !== "admin" && isAdminManagedRule(rule);
     return (
       <EntityActions
-        primary={[
+        primary={readOnly ? [
+          {
+            key: "test",
+            label: "诊断",
+            ariaLabel: `诊断 ${rule.name}：转发链路自测`,
+            icon: <Stethoscope className="h-3.5 w-3.5" />,
+            onSelect: () => setSelfTestRule({ id: rule.id, name: rule.name }),
+          },
+        ] : [
           {
             key: "test",
             label: "诊断",
@@ -6830,7 +6901,7 @@ function RulesContent() {
             onSelect: () => setResetTrafficTarget({ scope: "rule", rule }),
           },
           { key: "delete", label: "删除", ariaLabel: `删除 ${rule.name}`, icon: <Trash2 className="h-3.5 w-3.5" />, destructive: true, onSelect: () => setDeleteRule(rule) },
-        ]}
+        ].filter((action) => !readOnly || (action.key !== "reset" && action.key !== "delete"))}
         menuLabel={`${rule.name} 的更多操作`}
         menuOnly={menuOnly}
       />
@@ -7032,6 +7103,8 @@ function RulesContent() {
               {rule.protocolBlockReason || revokedResourceTitle}
             </span>
           )}
+          {renderAdminManagedBadge(rule) ? <div className="mt-1">{renderAdminManagedBadge(rule)}</div> : null}
+          <div className="fx-table-row-limits"><RuleLimitSummary rule={rule} /></div>
           {(() => {
             const stop = !rule.protocolBlockReason && rule.resourceAccessAllowed !== false ? resolveForwardRuleStopReason(rule) : null;
             return stop?.autoResume ? (
@@ -7183,6 +7256,7 @@ function RulesContent() {
     ) : null;
 
     const alerts = [
+      renderAdminManagedBadge(rule),
       renderSniRuleBadge(rule),
       renderEgressBadge(rule),
       renderKernelForwardWarningBadge(getRuleKernelForwardWarning(rule)),
@@ -7263,6 +7337,7 @@ function RulesContent() {
           {alerts.length > 0 ? (
             <div className="fx-rule-alerts">{alerts}</div>
           ) : null}
+          <RuleLimitSummary rule={rule} />
           {(rule.protocolBlockReason || rule.resourceAccessAllowed === false) && (
             <div className="line-clamp-2 text-[11px] leading-4 text-destructive">
               {rule.protocolBlockReason || revokedResourceTitle}
@@ -7872,6 +7947,9 @@ function RulesContent() {
         <DialogContent className="flex max-h-[96svh] w-[calc(100vw-1rem)] flex-col gap-3 overflow-hidden p-4 sm:max-w-2xl sm:p-5">
           <DialogHeader>
             <DialogTitle>{editingId ? "编辑规则" : "添加转发规则"}</DialogTitle>
+            {!editingId && createOwnerUserId ? (
+              <DialogDescription data-testid="rule-owner-hint">新规则归属：{ruleOperationOwnerLabel}（按他的权限和套餐检查，建好后他只能查看）</DialogDescription>
+            ) : null}
           </DialogHeader>
           <div className="min-h-0 flex-1 scroll-pb-28 space-y-3 overflow-y-auto pb-5 pr-1">
             <Tabs
@@ -8364,6 +8442,13 @@ function RulesContent() {
             onCheckedChange={(checked) => setForm({ ...form, entryDomainEnabled: checked })}
             />
             </FormField>
+            )}
+            {user?.role === "admin" && (
+            <RuleLimitsForm
+            value={form.limits}
+            onChange={(limits) => setForm((prev) => ({ ...prev, limits }))}
+            ownerLabel={!editingId && createOwnerUserId ? ruleOperationOwnerLabel : null}
+            />
             )}
               </div>
               )}

@@ -47,6 +47,7 @@ import {
 } from "./agentHeartbeatGate";
 import { mapWithConcurrency } from "./asyncPool";
 import { agentSupportsPortAccessLimits, portAccessLimitAction, portAccessLimitSpecs } from "./portAccessLimits";
+import { ruleLimitRootId } from "./ruleLimits";
 import { clearTunnelRuntimeStatusForHost, getHostWireGuardPlane, getTunnelRuntimeGeneration, isTunnelRuntimeHostReady, replaceHostWireGuardPlanes } from "./tunnelRuntimeStatus";
 import { appendPanelLog } from "./_core/panelLogger";
 import { isIP } from "net";
@@ -1291,6 +1292,9 @@ export function selectEffectiveForwardRateLimit(options: {
   tunnelLimitMbps?: unknown;
   forwardGroupId?: unknown;
   forwardGroupLimitMbps?: unknown;
+  /** 单条规则限速（server/ruleLimits.ts）：成员规则 / 中转跳传根规则的 id，同一台机器上共用一个桶。 */
+  ruleId?: unknown;
+  ruleLimitMbps?: unknown;
 }) {
   const userId = Math.max(0, Number(options.userId) || 0);
   const hostId = Math.max(0, Number(options.hostId) || 0);
@@ -1310,6 +1314,11 @@ export function selectEffectiveForwardRateLimit(options: {
       mbps: normalizeRateLimitMbps(options.forwardGroupLimitMbps),
       scope: `user-${userId}-host-${hostId}-group-${forwardGroupId}`,
       enabled: forwardGroupId > 0,
+    },
+    {
+      mbps: normalizeRateLimitMbps(options.ruleLimitMbps),
+      scope: `rule-${Math.max(0, Number(options.ruleId) || 0)}-host-${hostId}`,
+      enabled: Number(options.ruleId) > 0,
     },
   ].filter((candidate) => candidate.enabled !== false && candidate.mbps > 0);
   if (candidates.length === 0) return { mbps: 0, scope: "" };
@@ -2832,6 +2841,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         tunnelLimitMbps: tunnelRateLimitMbps(tunnel),
         forwardGroupId,
         forwardGroupLimitMbps: forwardGroupRateLimitMbps(group),
+        ruleId: ruleLimitRootId(rule),
+        ruleLimitMbps: rule?.rateLimitMbps,
       });
     };
     const applyGostLimiter = (service: any, rule: any, tunnel?: any | null) => {

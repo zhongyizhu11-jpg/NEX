@@ -12,7 +12,7 @@ import test from "node:test";
  *   · Agent 2.2.228 拿不到这条动作（老 Agent 照旧工作，普通规则仍不受限）；
  *   · 规则本身的下发不因此变化。
  */
-type Beat = { limitActions: any[]; ruleIds: number[] };
+type Beat = { limitActions: any[]; ruleIds: number[]; gostLimiters: string[]; gostServiceLimiters: Record<string, string> };
 
 function run(): { modern: Beat; legacy: Beat } {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "nex-port-limit-heartbeat-"));
@@ -49,6 +49,9 @@ function run(): { modern: Beat; legacy: Beat } {
     await rule(6, 1, 3, "gost", "both", 25006);
     await rule(7, 1, 1, "realm", "tcp", 25007);                          // unlimited admin
     await rule(8, 2, 2, "realm", "tcp", 25008);                          // old Agent host
+    // Per-rule limits (server/ruleLimits.ts): a speed cap rides the gost limiter, an expired rule is not dispatched.
+    await rule(9, 1, 1, "gost", "tcp", 25009, { rateLimitMbps: 10, adminManaged: 1 });
+    await rule(10, 1, 1, "realm", "tcp", 25010, { expiresAt: now - 60, adminManaged: 1 });
 
     const express = (await import("express")).default;
     const heartbeat = await import(url("server/agentHeartbeatRoute.ts"));
@@ -75,6 +78,19 @@ function run(): { modern: Beat; legacy: Beat } {
       return {
         limitActions: actions.filter((action) => action && action.forwardType === "port-access-limit-sync"),
         ruleIds: [...new Set(actions.filter((action) => action && action.op === "apply" && Number(action.ruleId) > 0).map((action) => Number(action.ruleId)))].sort((a, b) => a - b),
+        ...(() => {
+          const gostLimiters = [];
+          const gostServiceLimiters = {};
+          for (const action of actions) {
+            for (const config of (action && action.managedConfigs) || []) {
+              let parsed;
+              try { parsed = JSON.parse(Buffer.from(String(config.contentBase64 || ""), "base64").toString("utf8")); } catch { continue; }
+              for (const limiter of (parsed && parsed.limiters) || []) gostLimiters.push(String(limiter.name));
+              for (const service of (parsed && parsed.services) || []) if (service.limiter) gostServiceLimiters[String(service.name)] = String(service.limiter);
+            }
+          }
+          return { gostLimiters, gostServiceLimiters };
+        })(),
       };
     };
     const modern = await beat("tok-new", "2.2.229");
@@ -110,6 +126,13 @@ test("Agent 2.2.229 entry hosts receive one per-user TCP limit snapshot for clie
     { userId: 2, maxIPs: 3, maxConnections: 0, ports: [25001, 25002] },
     { userId: 3, maxIPs: 0, maxConnections: 40, ports: [25006] },
   ]);
+});
+
+test("per-rule limits: speed cap becomes a rule-scoped gost limiter, expired rules are not dispatched", () => {
+  assert.ok(outcome.modern.gostLimiters.some((name) => /rule-9-host-1/.test(name)), JSON.stringify(outcome.modern.gostLimiters));
+  assert.ok(Object.values(outcome.modern.gostServiceLimiters).some((name) => /rule-9-host-1/.test(name)));
+  assert.ok(outcome.modern.ruleIds.includes(9));
+  assert.ok(!outcome.modern.ruleIds.includes(10), "an expired rule must not be applied");
 });
 
 test("old Agents keep working: no limit action, ordinary rule dispatch unchanged", () => {

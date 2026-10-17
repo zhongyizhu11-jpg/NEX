@@ -365,6 +365,14 @@ const tables: TableDef[] = [
       // Shadowsocks 出口（shared/ssEgress.ts）：none | ss_host（指向落地入站）| ss_link（外部链接，egressConfigJson 加密保存）。
       c("egressType", "varchar", { length: 16, notNull: true, default: "none" }), c("egressInboundId", "int"),
       c("egressConfigJson", "text"), c("egressUdp", "bool", { notNull: true, default: false }),
+      // 单条规则限额（shared/ruleLimits.ts、server/ruleLimits.ts）：限速 / 流量额度 / 到期，管理员设置。
+      // quotaUsedIn/Out 是这条逻辑规则（转发组成员汇总到模板）的累计用量，第一次设额度时才初始化。
+      c("rateLimitMbps", "int", { notNull: true, default: 0 }),
+      c("trafficLimit", "bigint", { notNull: true, default: 0 }),
+      c("trafficMode", "varchar", { length: 16, notNull: true, default: "both" }),
+      c("expiresAt", "epoch"), c("ruleLimitReason", "varchar", { length: 32 }),
+      c("adminManaged", "bool", { notNull: true, default: false }),
+      c("quotaUsedIn", "bigint"), c("quotaUsedOut", "bigint"),
       c("userId", "int", { notNull: true }), c("createdAt", "epoch", { notNull: true, default: "now" }),
       c("updatedAt", "epoch", { notNull: true, default: "now" }),
     ],

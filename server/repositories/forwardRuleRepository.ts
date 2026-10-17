@@ -665,6 +665,14 @@ export async function getForwardRuleTrafficContextsByIds(ruleIds: number[]) {
         // 这条转发走的是哪个落地节点。落地机的已用流量按它累加 ——
         // 顺手多取一列，不必为此再查一遍。
         proxyNodeId: forwardRules.proxyNodeId,
+        routeParentRuleId: forwardRules.routeParentRuleId,
+        // 单条规则限额（server/ruleLimits.ts）：记账时判断这条要不要累加规则用量。
+        trafficLimit: forwardRules.trafficLimit,
+        quotaUsedIn: forwardRules.quotaUsedIn,
+        adminManaged: forwardRules.adminManaged,
+        rateLimitMbps: forwardRules.rateLimitMbps,
+        expiresAt: forwardRules.expiresAt,
+        ruleLimitReason: forwardRules.ruleLimitReason,
         trafficTunnelId: tunnels.id,
         trafficTunnelEntryHostId: tunnels.entryHostId,
         trafficTunnelEntryGroupId: tunnels.entryGroupId,
@@ -756,6 +764,13 @@ export async function getForwardRuleTrafficContextsByIds(ruleIds: number[]) {
         isRunning: row.isRunning,
         pendingDelete: row.pendingDelete,
         proxyNodeId: row.proxyNodeId,
+        routeParentRuleId: row.routeParentRuleId,
+        trafficLimit: row.trafficLimit,
+        quotaUsedIn: row.quotaUsedIn,
+        adminManaged: row.adminManaged,
+        rateLimitMbps: row.rateLimitMbps,
+        expiresAt: row.expiresAt,
+        ruleLimitReason: row.ruleLimitReason,
       },
       tunnel: Number(row.trafficTunnelId || 0) > 0 ? {
         id: row.trafficTunnelId,

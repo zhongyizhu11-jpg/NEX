@@ -32,6 +32,7 @@ import { runIpChangeTick } from "./ipChange/runtime";
 import { optimizeSqliteDatabase } from "./dbRuntime";
 import { healAutoStoppedRules } from "./forwardRuleAutoRecovery";
 import { sweepExpiredRuleEntryBridges } from "./ruleEntryBridges";
+import { reconcileRuleLimits } from "./ruleLimits";
 import {
   SELF_TEST_TIMEOUT_SECONDS,
   selfTestTimeoutSeconds,
@@ -1131,6 +1132,17 @@ export function startScheduler() {
       console.error("[Scheduler] Rule entry bridge expiry error:", error);
     }
   });
+  /*
+    单条规则的到期 / 流量额度（server/ruleLimits.ts）：流量上报时已经即时判定，这里补到期
+    （没有流量也要按时停）和面板重启前没做完的。只扫设过额度 / 到期 / 记过原因的规则。
+  */
+  const ruleLimitSweep = createNonOverlappingScheduledTask("rule quota and expiration", async () => {
+    try {
+      await reconcileRuleLimits();
+    } catch (error) {
+      console.error("[Scheduler] Rule limit sweep error:", error);
+    }
+  });
   // 自动换 IP（插件 auto-ip-change）：冷却到期、到阈值补一次自动更换、插件启停后推探测任务；第一轮先把重启打断的标成「结果不确定」。
   const ipChangeTick = createNonOverlappingScheduledTask("auto IP change", async () => {
     await runIpChangeTick();
@@ -1207,6 +1219,7 @@ export function startScheduler() {
 
   repeatAfter(hostStatusSweep, 30 * 1000, 5_000);
   repeatAfter(ipChangeTick, 30 * 1000, 12_000);
+  repeatAfter(ruleLimitSweep, 30 * 1000, 7_000);
   startSelfTestSweepTimer(async () => { await selfTestTimeoutSweep(); });
   void recoverPendingSelfTestSweep();
   // Agent probe reports and host state transitions trigger failover work.
