@@ -934,6 +934,7 @@ type Config struct {
 	PanelURL                  string `json:"panelUrl"`
 	Token                     string `json:"token"`
 	Interval                  int    `json:"interval"`
+	ProxyURL                  string `json:"proxyUrl,omitempty"` // 管理流量代理，见 management_proxy.go
 	MigrationFallbackPanelURL string `json:"migrationFallbackPanelUrl,omitempty"`
 	PanelMigrationID          string `json:"panelMigrationId,omitempty"`
 	PanelMigrationStartedAt   int64  `json:"panelMigrationStartedAt,omitempty"`
@@ -3022,7 +3023,13 @@ type guardRule struct {
 func main() {
 	configPath := flag.String("config", defaultConfigPath, "config file")
 	onceRegister := flag.Bool("register", false, "register and exit")
+	printVersion := flag.Bool("version", false, "print the Agent version and exit")
 	flag.Parse()
+	if *printVersion {
+		// fwxm 和安装脚本靠它判断这个二进制认不认 proxyUrl（老版本不认这个参数，直接报错退出）。
+		fmt.Println(Version)
+		return
+	}
 
 	resolvedConfigPath, cfg, err := loadConfigWithFallback(*configPath)
 	if err != nil {
@@ -3033,6 +3040,10 @@ func main() {
 	}
 	cfg.PanelURL = strings.TrimRight(cfg.PanelURL, "/")
 	activeConfigPath = resolvedConfigPath
+	// 在注册和任何通信协程之前：注册本身也要走代理。配置写错就直接退出，不悄悄改成直连。
+	if err := configureAgentManagementProxy(cfg.ProxyURL); err != nil {
+		fatal("proxy configuration: %v", err)
+	}
 	setRuntimePanelURL(cfg.PanelURL)
 	runtimeAgentToken.Store(cfg.Token)
 	initializePanelMigration(cfg)
