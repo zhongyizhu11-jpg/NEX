@@ -158,6 +158,7 @@ import {
 } from "recharts";
 import MultiHopEditor from "@/components/MultiHopEditor";
 import { ForwardGroupsContent } from "@/pages/ForwardGroups";
+import { LatencyHistoryDayStrip } from "@/components/LatencyHistoryDays";
 import { EntityActions } from "@/components/entity/EntityActions";
 
 const ReactGlobe = lazy(loadReactGlobe) as typeof import("react-globe.gl").default;
@@ -1265,6 +1266,8 @@ function TunnelLatencyDialog({
     { tunnelId, hours: 24 },
     { enabled: open, refetchInterval: pollingInterval("slow", open), refetchOnMount: "always" }
   );
+  // 近 30 天按天的色块（一天一行的汇总，见 shared/latencyHistory.ts）。
+  const history = trpc.tunnels.latencyHistory.useQuery({ tunnelId }, { enabled: open, staleTime: 60_000, refetchOnWindowFocus: false });
   const cachedData = tunnelLatencySeriesCache.get(tunnelId);
   const rawSeriesData = (data ?? cachedData) as TunnelLatencySeriesDatum[] | undefined;
   const waitForFreshSeries = open && isFetching && !isLatencySeriesCacheFresh(rawSeriesData);
@@ -1472,6 +1475,7 @@ function TunnelLatencyDialog({
           </div>
         ) : null}
         <LatencyStabilityStats stats={stats} />
+        <LatencyHistoryDayStrip summaries={history.data} loading={history.isLoading} />
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>关闭</Button>
@@ -2939,6 +2943,24 @@ function TunnelsContent() {
       placeholderData: (previousData) => previousData,
     },
   );
+  /*
+    链路卡底部那条近 30 天的色块：同一页的隧道一次拿（每条每天一行的汇总），一分钟内不重复请求。
+    和上面的 24H 走势一样，表格、地图视图不画就不请求。
+  */
+  const { data: tunnelHistoryRows } = trpc.tunnels.latencyHistoryBatch.useQuery(
+    { tunnelIds: sparkTunnelIds },
+    {
+      enabled: activeSection === "tunnels" && viewMode !== "globe" && sparkTunnelIds.length > 0,
+      staleTime: 60_000,
+      refetchInterval: pollingInterval("slow"),
+      refetchOnWindowFocus: false,
+      placeholderData: (previousData) => previousData,
+    },
+  );
+  const historyByTunnel = useMemo(
+    () => new Map((tunnelHistoryRows || []).map((row: any) => [Number(row.tunnelId), row.days])),
+    [tunnelHistoryRows],
+  );
   const sparkByTunnel = useMemo(() => {
     const byId = new Map<number, { values: number[]; avgMs: number | null; maxMs: number | null; availabilityPct: number | null }>();
     if (!tunnelSparkRows) return byId;
@@ -4161,6 +4183,14 @@ function TunnelsContent() {
               </span>
             </div>
           </div>
+          {supported ? (
+            <LatencyHistoryDayStrip
+              variant="compact"
+              summaries={historyByTunnel.get(Number(tunnel.id))}
+              loading={!tunnelHistoryRows}
+              className="mt-2"
+            />
+          ) : null}
         </CardContent>
       </Card>
     );

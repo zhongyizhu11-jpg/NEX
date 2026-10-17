@@ -28,6 +28,7 @@ import { reconcileHostDdnsRecords } from "./hostDdns";
 import { reconcileRuleEntryDomains } from "./ruleEntryDomain";
 import { checkPanelUpdateTask } from "./_core/systemRouter";
 import { createNonOverlappingScheduledTask } from "./scheduledTask";
+import { cleanOldLatencyDailyStats, rollupLatencyDailyStats } from "./repositories/latencyDailyRepository";
 import { runIpChangeTick } from "./ipChange/runtime";
 import { optimizeSqliteDatabase } from "./dbRuntime";
 import { healAutoStoppedRules } from "./forwardRuleAutoRecovery";
@@ -433,6 +434,8 @@ export async function runTcpingCleanup() {
     // 线路组路径质量历史留 7 天（一分钟一行，比延迟明细稀，留得长一点画周走势）。
     ["route_path_quality_stats", () => db.cleanOldRoutePathQualityStats(db.ROUTE_PATH_QUALITY_RETENTION_HOURS)],
     ["host_probe_service_stats", () => db.cleanOldHostProbeServiceStats(72)],
+    // 30 天延迟历史的按天汇总（每个对象每天一行），见 shared/latencyHistory.ts。
+    ["latency_daily_stats", () => cleanOldLatencyDailyStats()],
     ["address_geo_cache", () => cleanOldAddressGeoCache()],
     // 失效超过 7 天的登录会话（过期或已撤销），只有「未撤销且未过期」的行会被读取。
     ["auth_sessions", () => pruneStaleAuthSessions(7)],
@@ -1105,6 +1108,10 @@ export function startScheduler() {
     });
     if (pruned > 0) console.log(`[Scheduler] Pruned ${pruned} stale reminder marker(s)`);
   }, { slowTaskMs: 15_000 });
+  // 把最近的原始延迟样本按天汇总进 latency_daily_stats（增量、带水位，见 latencyDailyRepository.ts）。
+  const latencyDailyRollup = createNonOverlappingScheduledTask("latency daily rollup", async () => {
+    await rollupLatencyDailyStats();
+  }, { slowTaskMs: 15_000 });
   const forwardingMaintenance = createNonOverlappingScheduledTask("forward-group and DDNS maintenance", async () => {
     await runForwardGroupFailover();
     await runHostDdnsReconcile();
@@ -1235,6 +1242,7 @@ export function startScheduler() {
   repeatAfter(createNonOverlappingScheduledTask("panel events maintenance", runPanelEventsDailyMaintenance, { slowTaskMs: 30_000 }), 24 * 60 * 60 * 1000, 3 * 60_000);
   repeatAfter(updateCheck, UPDATE_AUTO_CHECK_INTERVAL_MS, 45_000);
   repeatAfter(historyCleanup, 60 * 60 * 1000, 2 * 60_000);
+  repeatAfter(latencyDailyRollup, 10 * 60 * 1000, 75_000);
   // 没定到位的主机五分钟看一次；真正的重试间隔由 hostGeo 里的退避（10 分钟起、封顶 6 小时）决定。
   repeatAfter(hostGeoSweep, 5 * 60 * 1000, 90_000);
   // 第五套主题那批功能里的两个定时任务：公开状态页的可用率采样、异地自动备份（各自管自己的节奏）。

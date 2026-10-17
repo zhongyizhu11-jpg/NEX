@@ -44,6 +44,8 @@ const memberSchema = z.object({
   aggregationWeight: z.number().int().min(0).max(MAX_MEMBER_WEIGHT).nullable().optional(),
 });
 
+import { getLatencyDailyHistory } from "../repositories/latencyDailyRepository";
+
 const forwardGroupQueryCache = createQueryCache(300);
 
 const baseSchema = z.object({
@@ -264,6 +266,18 @@ export const forwardGroupsRouter = router({
         `latencySeries:${ctx.user.id}:${input.groupId}:${input.hours}`,
         { ttlMs: 5_000, staleMs: 0 },
         () => db.getForwardGroupLatencySeries(input.groupId, { since }),
+      );
+    }),
+
+  /** 转发链近 30 天按天的延迟汇总（详情弹窗里那条色块），见 shared/latencyHistory.ts。 */
+  latencyHistory: protectedProcedure
+    .input(z.object({ groupId: z.number().int().positive() }))
+    .query(async ({ input, ctx }) => {
+      await assertForwardGroupAccess(input.groupId, ctx.user);
+      return forwardGroupQueryCache.get(
+        `latencyHistory:${input.groupId}`,
+        { ttlMs: 60_000, staleMs: 0 },
+        async () => (await getLatencyDailyHistory("group", [input.groupId])).get(input.groupId) || [],
       );
     }),
 

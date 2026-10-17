@@ -1267,6 +1267,25 @@ export const forwardGroupLatencyStats = table("forward_group_latency_stats", {
 export type ForwardGroupLatencyStat = typeof forwardGroupLatencyStats.$inferSelect;
 export type InsertForwardGroupLatencyStat = typeof forwardGroupLatencyStats.$inferInsert;
 
+/*
+  30 天延迟历史的按天汇总（server/repositories/latencyDailyRepository.ts）。原始样本只留 72 小时；
+  这张表每个对象每天一行。dayStart 是面板时区那天 0 点的 epoch 秒（用整数存，汇总 SQL 里直接算）。
+  latencySum / latencyWeight 是成功次数加权的延迟和与权重，平均延迟 = 两者相除。
+*/
+export const latencyDailyStats = table("latency_daily_stats", {
+  id: serial("id"),
+  targetType: varchar("targetType", { length: 16 }).notNull(),
+  targetId: int("targetId").notNull(),
+  dayStart: int("dayStart").notNull(),
+  probeCount: bigint("probeCount", { mode: "number" }).notNull().default(0),
+  probeSuccesses: bigint("probeSuccesses", { mode: "number" }).notNull().default(0),
+  latencySum: bigint("latencySum", { mode: "number" }).notNull().default(0),
+  latencyWeight: bigint("latencyWeight", { mode: "number" }).notNull().default(0),
+  minLatencyMs: int("minLatencyMs"),
+  maxLatencyMs: int("maxLatencyMs"),
+  updatedAt: int("updatedAt").notNull().default(0),
+});
+
 export const hostProbeServices = table("host_probe_services", {
   id: serial("id"),
   name: text("name").notNull(),

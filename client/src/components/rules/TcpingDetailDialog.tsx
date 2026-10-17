@@ -22,6 +22,7 @@ import {
   normalizeLatencyProbeCounts,
 } from "@/lib/latencyChart";
 import { pollingInterval } from "@/lib/polling";
+import { LatencyHistoryDayStrip } from "@/components/LatencyHistoryDays";
 import { trpc } from "@/lib/trpc";
 
 type TcpingChartPoint = {
@@ -97,6 +98,8 @@ function TcpingDetailDialog({
     { ruleId, hours: 24 },
     { enabled: open, refetchInterval: pollingInterval("slow", open), refetchOnMount: "always" },
   );
+  // 近 30 天按天的色块：一天一行的汇总，一分钟内不重复请求（server/repositories/latencyDailyRepository.ts）。
+  const history = trpc.rules.latencyHistory.useQuery({ ruleId }, { enabled: open, staleTime: 60_000, refetchOnWindowFocus: false });
   const cachedData = tcpingSeriesCache.get(ruleId);
   const rawSeriesData = (data ?? cachedData) as TcpingSeriesDatum[] | undefined;
   const waitForFreshSeries = open && isFetching && !isLatencySeriesCacheFresh(rawSeriesData);
@@ -220,6 +223,7 @@ function TcpingDetailDialog({
             )}
           </div>
           <LatencyStabilityStats stats={tcpingStats} />
+          <LatencyHistoryDayStrip summaries={history.data} loading={history.isLoading} />
         </div>
       </DialogContent>
     </Dialog>
