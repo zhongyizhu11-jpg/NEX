@@ -1225,7 +1225,7 @@ export default function ClientSubscriptionsPage() {
                             // 从客户端图标点进去时已经知道是哪个客户端了，钉死格式，
                             // 不让它掉到令牌默认格式上。
                             const url = subscriptionUrl(token.token, target.format, kind, true);
-                            const importName = proxySubscriptionProfileName(String(me?.username || ""), kind);
+                            const importName = proxySubscriptionProfileName(String(token.name || ""), kind, String(me?.username || ""));
                             const { icon: Icon, className: iconClass } = clientIcon(target);
                             // 运行时的优先：放在服务器上就能换图，不必重新构建。
                             const logo = runtimeLogos[target.id]

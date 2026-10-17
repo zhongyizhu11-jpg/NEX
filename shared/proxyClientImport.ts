@@ -288,14 +288,17 @@ export const PROXY_SUBSCRIPTION_KIND_HINTS: Record<ProxySubscriptionKind, string
 };
 
 /**
- * 订阅导进客户端后显示的名字：就是这份订阅所属用户的用户名，规则订阅后面加「规则」两个字，
- * 两份导进同一个客户端也分得清。以前是「用途 · 节点订阅」，太长，导进去每次都得重命名。
+ * 订阅导进客户端后显示的名字：新建订阅链接时填的名字（「用途」，比如「我的手机」），没填才用
+ * 用户名；规则订阅后面加「规则」两个字，两份导进同一个客户端也分得清。以前是「用途 · 节点订阅」，
+ * 太长，导进去每次都得重命名；后来改成用户名，几条链接导进去又都叫一个名字。
  *
  * 一键导入链接的 name 参数和订阅响应头（Content-Disposition / Profile-Title，给 Surge、
  * 手动添加的那些客户端）用的都是它。
  */
-export function proxySubscriptionProfileName(username: string, kind: ProxySubscriptionKind): string {
-  const base = Array.from(String(username ?? "").replace(/[\u0000-\u001f\u007f"\\/]/g, "").trim()).slice(0, 32).join("") || "订阅";
+export function proxySubscriptionProfileName(linkName: string, kind: ProxySubscriptionKind, username = ""): string {
+  const clean = (value: string) => Array.from(String(value ?? "").replace(/[\u0000-\u001f\u007f"\\/]/g, "").trim()).slice(0, 32).join("");
+  // 用户新建订阅链接时填的名字（「用途」）优先，没有才退回用户名。
+  const base = clean(linkName) || clean(username) || "订阅";
   return kind === "rules" ? `${base} 规则` : base;
 }
 
