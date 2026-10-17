@@ -90,3 +90,34 @@ map warps it to Web Mercator in the browser, tile by tile.
 - 文件：`client/public/fonts/inter-latin-variable.woff2`（仅 latin 子集的变量字体，随面板自带）
 - 来源：<https://github.com/rsms/inter>，经 freetodo/monitor-theme-liquid-glass 转发
 - 许可：SIL Open Font License 1.1，全文见 `client/public/fonts/inter-LICENSE.txt`
+
+## scaffold-master / Pearl Glass UI（界面主题「珍珠」）
+
+- Upstream: <https://github.com/wbr664393425-lgtm/scaffold-master>
+- Via: poouo/Forwardx 的 Pearl Glass 界面（`client/src/styles/pearl.css`、`PearlSidebarContent.tsx`）
+- License: MIT
+- Usage: the "珍珠" (`pearl`) UI theme adapts its design tokens, surface styling,
+  and navigation/motion concepts: `client/src/styles/theme-pearl.css` and
+  `client/src/components/PearlNavMarker.tsx`. The upstream Vue runtime and GSAP
+  implementation are not included. Full notice also served as `/pearl-ui-license.txt`
+  (`client/public/pearl-ui-license.txt`).
+
+Copyright (c) 2026 wbr664393425-lgtm
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

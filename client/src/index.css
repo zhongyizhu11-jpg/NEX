@@ -10,6 +10,7 @@
 @import "./styles/theme-cinnabar.css";
 @import "./styles/theme-liquid-glass.css";
 @import "./styles/theme-indigo.css";
+@import "./styles/theme-pearl.css";
 
 @custom-variant dark (&:is(.dark *));
 

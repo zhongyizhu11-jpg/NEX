@@ -100,6 +100,7 @@ import { UserAvatar } from "@/components/UserAvatar";
 import { normalizeSidebarMenuSettings, type SidebarMenuKey } from "@shared/sidebarMenu";
 import { buildPanelInstallerCommand } from "@shared/githubAccelerator";
 import { WorkspaceCommand, type WorkspaceDestination } from "@/components/WorkspaceNavigation";
+import PearlNavMarker from "@/components/PearlNavMarker";
 import { navigateAfterPrefetch, prefetchRoute, prefetchRoutesWhenIdle } from "@/pages/routeChunks";
 import { docsUrl } from "@/lib/docsLinks";
 
@@ -1662,6 +1663,7 @@ function DashboardLayoutContent({
       */}
       <Sidebar collapsible="icon" className="workspace-sidebar">
         <SidebarContent className="gap-1 pb-2 mobile-sidebar-content">
+          <PearlNavMarker collapsed={isDesktopCollapsed} />
           {primaryMenuItems.length > 0 && (
             <SidebarGroup className={cn("pb-2 mobile-sidebar-group", mobileAuth.isNative && "pb-1.5")}>
               <SidebarGroupLabel className="text-xs text-muted-foreground uppercase tracking-wider">
