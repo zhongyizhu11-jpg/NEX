@@ -19,6 +19,7 @@ function runInDatabase(body: string, fetchImpl: string) {
   try {
     const script = String.raw`
       import assert from "node:assert/strict";
+      import crypto from "node:crypto";
       import path from "node:path";
       import { pathToFileURL } from "node:url";
 
@@ -79,11 +80,11 @@ function runInDatabase(body: string, fetchImpl: string) {
 }
 
 /** 网关说「这单付了」。 */
-const PAID_GATEWAY = `async () => ({ ok: true, json: async () => ({ code: 1, status: 1, trade_no: "GW-1" }) })`;
+const PAID_GATEWAY = `async () => new Response(JSON.stringify({ code: 1, status: 1, trade_no: "GW-1" }))`;
 /** 网关说「查询成功，但还没付」。 */
-const UNPAID_GATEWAY = `async () => ({ ok: true, json: async () => ({ code: 1, status: 0 }) })`;
+const UNPAID_GATEWAY = `async () => new Response(JSON.stringify({ code: 1, status: 0 }))`;
 /** 网关说「查无此单」。 */
-const MISSING_GATEWAY = `async () => ({ ok: true, json: async () => ({ code: -1, msg: "订单不存在" }) })`;
+const MISSING_GATEWAY = `async () => new Response(JSON.stringify({ code: -1, msg: "订单不存在" }))`;
 /** 网关挂了。 */
 const DOWN_GATEWAY = `async () => { throw new Error("connect ETIMEDOUT"); }`;
 
@@ -170,5 +171,92 @@ test("刚下单的不问 —— 用户可能还停在收银台", () => {
     const result = await payment.reconcilePendingPaymentOrders();
     assert.equal(result.checked, 0);
     assert.equal(await orderStatus("R-6"), "pending");
+  `, PAID_GATEWAY);
+});
+
+/** 支付宝 / 微信官方单的查单（上游 2.3.285）：响应要验签，金额按网关回来的数比对。 */
+const OFFICIAL_GATEWAY = String.raw`async (input, init = {}) => {
+  const url = String(input);
+  const keys = globalThis.__payKeys;
+  if (url.startsWith("https://openapi.alipay.com/")) {
+    const content = JSON.stringify(globalThis.__alipayQuery);
+    const signer = globalThis.__forgeAlipay ? globalThis.__otherKeys.privateKey : keys.privateKey;
+    const sign = crypto.sign("RSA-SHA256", Buffer.from(content), signer).toString("base64");
+    return new Response('{"alipay_trade_query_response":' + content + ',"sign":"' + sign + '"}');
+  }
+  if (url.startsWith("https://api.mch.weixin.qq.com/")) {
+    const text = JSON.stringify(globalThis.__wxpayQuery);
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const signature = crypto.sign("RSA-SHA256", Buffer.from(timestamp + "\n" + "nonce" + "\n" + text + "\n"), keys.privateKey).toString("base64");
+    return new Response(text, { headers: { "wechatpay-serial": "PUB_KEY_ID", "wechatpay-timestamp": timestamp, "wechatpay-nonce": "nonce", "wechatpay-signature": signature } });
+  }
+  throw new Error("unexpected fetch " + url);
+}`;
+
+const OFFICIAL_SETUP = String.raw`
+  const gen = () => crypto.generateKeyPairSync("rsa", { modulusLength: 2048, privateKeyEncoding: { type: "pkcs8", format: "pem" }, publicKeyEncoding: { type: "spki", format: "pem" } });
+  globalThis.__payKeys = gen();
+  globalThis.__otherKeys = gen();
+  const keys = globalThis.__payKeys;
+  await settings.setSetting("paymentConfig", JSON.stringify({
+    enabled: true,
+    routes: { alipay: "alipay", wxpay: "wxpay" },
+    alipay: { enabled: true, appId: "2021000000000001", privateKey: keys.privateKey, publicKey: keys.publicKey, gateway: "https://openapi.alipay.com/gateway.do", mode: "precreate" },
+    wxpay: { enabled: true, appId: "wxapp", mchId: "1900000001", privateKey: keys.privateKey, apiV3Key: "0123456789abcdef0123456789abcdef", certSerial: "SERIAL", publicKey: keys.publicKey, publicKeyId: "PUB_KEY_ID", mode: "native" },
+  }));
+  const nowSec = Math.floor(Date.now() / 1000);
+  const makeOfficialOrder = async (outTradeNo, provider) => exec(
+    "INSERT INTO payment_orders (outTradeNo, userId, provider, paymentType, status, subject, amountCents, currency, orderType, createdAt, updatedAt, expiresAt) VALUES (?, 1, ?, ?, 'pending', '充值', 1000, 'CNY', 'balance', ?, ?, ?)",
+    [outTradeNo, provider, provider, nowSec - 300, nowSec - 300, nowSec + 900],
+  );
+`;
+
+test("支付宝 / 微信官方单：查单验签通过、金额对得上才入账", () => {
+  runInDatabase(String.raw`
+    ${OFFICIAL_SETUP}
+    await makeOfficialOrder("R-A1", "alipay");
+    await makeOfficialOrder("R-W1", "wxpay");
+    globalThis.__alipayQuery = { code: "10000", out_trade_no: "R-A1", trade_status: "TRADE_SUCCESS", trade_no: "ALI-1", total_amount: "10.00" };
+    globalThis.__wxpayQuery = { out_trade_no: "R-W1", appid: "wxapp", mchid: "1900000001", trade_state: "SUCCESS", transaction_id: "WX-1", amount: { total: 1000, currency: "CNY" } };
+    const result = await payment.reconcilePendingPaymentOrders();
+    assert.equal(result.paid, 2);
+    assert.equal(await orderStatus("R-A1"), "completed");
+    assert.equal(await orderStatus("R-W1"), "completed");
+    assert.equal(await balance(), 2000);
+  `, OFFICIAL_GATEWAY);
+});
+
+test("支付宝官方单：响应签名不对、或者网关报的金额对不上，都不能入账", () => {
+  runInDatabase(String.raw`
+    ${OFFICIAL_SETUP}
+    await makeOfficialOrder("R-A2", "alipay");
+    globalThis.__alipayQuery = { code: "10000", out_trade_no: "R-A2", trade_status: "TRADE_SUCCESS", trade_no: "ALI-2", total_amount: "10.00" };
+    globalThis.__forgeAlipay = true;
+    await payment.reconcilePendingPaymentOrders();
+    assert.equal(await orderStatus("R-A2"), "pending", "伪造签名的「已付」不算");
+    assert.equal(await balance(), 0);
+
+    globalThis.__forgeAlipay = false;
+    await makeOfficialOrder("R-A3", "alipay");
+    globalThis.__alipayQuery = { code: "10000", out_trade_no: "R-A3", trade_status: "TRADE_SUCCESS", trade_no: "ALI-3", total_amount: "0.01" };
+    await payment.reconcilePendingPaymentOrders();
+    assert.notEqual(await orderStatus("R-A3"), "completed", "实付 1 分钱不能当 10 元入账");
+    assert.equal(await balance(), 0);
+  `, OFFICIAL_GATEWAY);
+});
+
+test("易支付网关不是 HTTPS：不查单（密钥在查询串里）", () => {
+  runInDatabase(String.raw`
+    await settings.setSetting("paymentConfig", JSON.stringify({
+      easypay: { enabled: true, mode: "redirect", apiBase: "http://pay.example.com", pid: "1001", pkey: "secret" },
+    }));
+    await makePendingOrder("R-H1");
+    let calls = 0;
+    const original = globalThis.fetch;
+    globalThis.fetch = async (...args) => { calls += 1; return original(...args); };
+    await payment.reconcilePendingPaymentOrders();
+    globalThis.fetch = original;
+    assert.equal(calls, 0);
+    assert.equal(await orderStatus("R-H1"), "pending");
   `, PAID_GATEWAY);
 });
