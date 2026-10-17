@@ -16,8 +16,14 @@ import { appendPanelLog } from "./_core/panelLogger";
 import { ENV } from "./env";
 import { recordPanelEvent } from "./ops/panelEvents";
 import {
+  counterIncrease,
   DEFAULT_RESOURCE_ALERT_CONFIG,
+  emptyLossWindowState,
   emptyResourceAlertHostState,
+  evaluateLossSample,
+  normalizeServiceRestarts,
+  serviceRestartIncreases,
+  type LossWindowState,
   evaluateResourceAlertSample,
   normalizeResourceAlertConfig,
   resourceAlertMetricLabel,
@@ -37,6 +43,9 @@ const CONFIG_KEYS: Array<keyof ResourceAlertConfig> = [
   "sustainSeconds",
   "recoverMarginPercent",
   "emailEnabled",
+  "oomAlert",
+  "crashAlert",
+  "lossPercent",
 ];
 
 export async function readResourceAlertConfig(): Promise<ResourceAlertConfig> {
@@ -55,7 +64,10 @@ export async function saveResourceAlertConfig(input: Partial<ResourceAlertConfig
   const map: Record<string, string> = {};
   for (const key of CONFIG_KEYS) map[`${KEY_PREFIX}${key}`] = String(next[key]);
   await setSettings(map);
-  if (!next.enabled) hostStates.clear();
+  if (!next.enabled) {
+    hostStates.clear();
+    lossStates.clear();
+  }
   return next;
 }
 
@@ -245,12 +257,214 @@ export function getFiringResourceAlerts(): Array<{ hostId: number; metric: strin
   return out;
 }
 
+// ---------------- OOM / 服务崩溃 ----------------
+
+type HostCounterState = { bootId: string; oomKillCount: number | null; serviceRestarts: Record<string, number> | null };
+const counterStates = new Map<number, HostCounterState>();
+
+function boundedPut<K, V>(map: Map<K, V>, key: K, value: V) {
+  map.delete(key);
+  map.set(key, value);
+  while (map.size > MAX_TRACKED_HOSTS) {
+    const oldest = map.keys().next().value as K | undefined;
+    if (oldest === undefined) break;
+    map.delete(oldest);
+  }
+}
+
+/** 服务名 → 人话：「forwardx-realm-12.service」→「realm 规则 #12」。 */
+export function describeServiceUnit(unit: string) {
+  const name = unit.replace(/\.service$/, "");
+  const rule = /^forwardx-(realm|socat|gost|singbox)-(\d+)$/.exec(name);
+  if (rule) return `${rule[1]} 规则 #${rule[2]}`;
+  const labels: Record<string, string> = {
+    "forwardx-agent": "Agent",
+    "forwardx-runtime": "gost 运行时",
+    "forwardx-tunnel-runtime": "隧道运行时",
+    "forwardx-tunnels": "FXP 隧道",
+    "forwardx-nginx": "Nginx Stream",
+  };
+  return labels[name] || name;
+}
+
+/**
+ * 心跳里的 oomKillCount / serviceRestarts（Agent ≥ 2.2.229 才报）。计数涨了就记事件、发告警。
+ * 机器重启（bootId 变了）时两项都从头当基线。不抛错、不阻塞心跳。
+ */
+export function observeHostHealthCounters(host: any, input: { bootId?: string | null; oomKillCount?: unknown; serviceRestarts?: unknown }) {
+  const hostId = Number(host?.id || 0);
+  if (!Number.isInteger(hostId) || hostId <= 0) return;
+  const rawOom = Number(input.oomKillCount);
+  const oomKillCount = input.oomKillCount !== undefined && input.oomKillCount !== null && Number.isInteger(rawOom) && rawOom >= 0 ? rawOom : null;
+  const serviceRestarts = normalizeServiceRestarts(input.serviceRestarts);
+  if (oomKillCount === null && serviceRestarts === null) return;
+  const bootId = String(input.bootId || "");
+  const previous = counterStates.get(hostId);
+  const sameBoot = !!previous && previous.bootId === bootId;
+  const next: HostCounterState = {
+    bootId,
+    oomKillCount: oomKillCount ?? (sameBoot ? previous!.oomKillCount : null),
+    serviceRestarts: serviceRestarts ?? (sameBoot ? previous!.serviceRestarts : null),
+  };
+  boundedPut(counterStates, hostId, next);
+  if (!sameBoot) return;
+  const oomDelta = counterIncrease(previous!.oomKillCount, oomKillCount);
+  const crashes = serviceRestarts ? serviceRestartIncreases(previous!.serviceRestarts, serviceRestarts) : [];
+  if (oomDelta <= 0 && crashes.length === 0) return;
+  void (async () => {
+    const config = await readResourceAlertConfig();
+    if (!config.enabled) return;
+    const name = hostLabel(host);
+    if (oomDelta > 0 && config.oomAlert) {
+      await recordPanelEvent({
+        kind: "host.oom_killed",
+        level: "crit",
+        hostId,
+        message: `${name} 内存耗尽，内核 OOM 杀掉了 ${oomDelta} 个进程（开机以来共 ${oomKillCount} 次）`,
+        data: { delta: oomDelta, total: oomKillCount },
+      });
+      await sendAdminAlert({
+        title: `NEX 内存耗尽（OOM）：${name}`,
+        marker: "🔴",
+        fields: [
+          ["主机", `${name} (#${hostId})`],
+          ["说明", `内核 OOM killer 杀掉了 ${oomDelta} 个进程，转发可能中断过`],
+          ["开机以来", `${oomKillCount} 次`],
+        ],
+        logLabel: `oom host=${hostId}`,
+      }, { email: config.emailEnabled });
+    }
+    if (crashes.length > 0 && config.crashAlert) {
+      const summary = crashes.slice(0, 5).map((item) => `${describeServiceUnit(item.unit)}${item.delta > 1 ? ` ×${item.delta}` : ""}`).join("、");
+      const more = crashes.length > 5 ? ` 等 ${crashes.length} 个服务` : "";
+      await recordPanelEvent({
+        kind: "host.process_crashed",
+        level: "warn",
+        hostId,
+        message: `${name} 上的 ${summary}${more} 崩溃后被自动重启`,
+        data: { units: crashes.slice(0, 50) },
+      });
+      await sendAdminAlert({
+        title: `NEX 进程崩溃：${name}`,
+        marker: "🟠",
+        fields: [
+          ["主机", `${name} (#${hostId})`],
+          ["崩溃的服务", `${summary}${more}`],
+          ["说明", "systemd 已自动重启；反复出现请到主机详情查看日志"],
+        ],
+        logLabel: `crash host=${hostId}`,
+      }, { email: config.emailEnabled });
+    }
+  })().catch((error) => {
+    appendPanelLog("warn", `[ResourceAlert] host=${hostId} counters failed: ${error instanceof Error ? error.message : String(error)}`);
+  });
+}
+
+// ---------------- 隧道丢包 ----------------
+
+const lossStates = new Map<string, LossWindowState>();
+
+async function tunnelName(tunnelId: number) {
+  const q = quoteDbIdentifier;
+  const rows = await queryRaw<any>(`SELECT ${q("name")} FROM ${q("tunnels")} WHERE ${q("id")} = ?`, [tunnelId]).catch(() => []);
+  return String(rows[0]?.name || "").trim().slice(0, 60) || `隧道 #${tunnelId}`;
+}
+
+/**
+ * 入口 Agent 报上来一批隧道探测结果（count 个包里成功 ok 个）之后调用。
+ * 按（主机, 隧道）滑动 10 分钟窗口算丢包率。不抛错、不阻塞上报。
+ */
+export function observeTunnelProbeLoss(host: any, reports: Array<{ tunnelId: number; count: number; ok: number }>, nowMs = Date.now()) {
+  const hostId = Number(host?.id || 0);
+  if (!Number.isInteger(hostId) || hostId <= 0 || reports.length === 0) return;
+  void (async () => {
+    const config = await readResourceAlertConfig();
+    if (!config.enabled || config.lossPercent <= 0) {
+      for (const key of [...lossStates.keys()]) if (key.startsWith(`${hostId}:`)) lossStates.delete(key);
+      return;
+    }
+    const merged = new Map<number, { count: number; ok: number }>();
+    for (const report of reports) {
+      const tunnelId = Number(report.tunnelId || 0);
+      if (!Number.isInteger(tunnelId) || tunnelId <= 0) continue;
+      const current = merged.get(tunnelId) || { count: 0, ok: 0 };
+      current.count += Math.max(0, Number(report.count) || 0);
+      current.ok += Math.max(0, Number(report.ok) || 0);
+      merged.set(tunnelId, current);
+    }
+    for (const [tunnelId, sample] of merged) {
+      const key = `${hostId}:${tunnelId}`;
+      const { state, transition } = evaluateLossSample(lossStates.get(key) ?? emptyLossWindowState(), config.lossPercent, sample, nowMs);
+      boundedPut(lossStates, key, state);
+      if (!transition) continue;
+      const hostName = hostLabel(host);
+      const name = await tunnelName(tunnelId);
+      if (transition.kind === "fire") {
+        await recordPanelEvent({
+          kind: "host.packet_loss",
+          level: "warn",
+          hostId,
+          message: `隧道「${name}」从 ${hostName} 探测丢包 ${transition.lossPercent}%（近 10 分钟 ${transition.probes} 次探测）`,
+          data: { tunnelId, lossPercent: transition.lossPercent, probes: transition.probes },
+        });
+        await sendAdminAlert({
+          title: `NEX 丢包告警：${name}`,
+          marker: "🟠",
+          fields: [
+            ["隧道", `${name} (#${tunnelId})`],
+            ["探测主机", `${hostName} (#${hostId})`],
+            ["丢包率", `${transition.lossPercent}%（阈值 ${config.lossPercent}%，近 10 分钟 ${transition.probes} 次探测）`],
+          ],
+          logLabel: `loss host=${hostId} tunnel=${tunnelId}`,
+        }, { email: config.emailEnabled });
+      } else {
+        await recordPanelEvent({
+          kind: "host.packet_loss_recovered",
+          level: "info",
+          hostId,
+          message: `隧道「${name}」从 ${hostName} 探测丢包回落到 ${transition.lossPercent}%（持续 ${formatOutageDuration(transition.durationSeconds)}，最高 ${transition.peak}%）`,
+          data: { tunnelId, lossPercent: transition.lossPercent, peak: transition.peak, durationSeconds: transition.durationSeconds },
+        });
+        await sendAdminAlert({
+          title: `NEX 丢包恢复：${name}`,
+          marker: "🟢",
+          fields: [
+            ["隧道", `${name} (#${tunnelId})`],
+            ["探测主机", `${hostName} (#${hostId})`],
+            ["丢包率", `${transition.lossPercent}%（告警期间最高 ${transition.peak}%）`],
+            ["告警持续", formatOutageDuration(transition.durationSeconds)],
+          ],
+          logLabel: `loss-recover host=${hostId} tunnel=${tunnelId}`,
+        }, { email: config.emailEnabled });
+      }
+    }
+  })().catch((error) => {
+    appendPanelLog("warn", `[ResourceAlert] host=${hostId} loss failed: ${error instanceof Error ? error.message : String(error)}`);
+  });
+}
+
+/** 正在告警的丢包（故障看板用）。 */
+export function getFiringLossAlerts(): Array<{ hostId: number; tunnelId: number; firedAt: number; peak: number }> {
+  const out: Array<{ hostId: number; tunnelId: number; firedAt: number; peak: number }> = [];
+  for (const [key, state] of lossStates) {
+    if (!state.firing) continue;
+    const [hostId, tunnelId] = key.split(":").map(Number);
+    out.push({ hostId, tunnelId, firedAt: state.firedAt ?? 0, peak: state.peak });
+  }
+  return out;
+}
+
 /** 主机删掉时清掉它的状态。 */
 export function forgetHostResourceAlertState(hostId: number) {
-  hostStates.delete(Number(hostId));
+  const id = Number(hostId);
+  hostStates.delete(id);
+  counterStates.delete(id);
+  for (const key of [...lossStates.keys()]) if (key.startsWith(`${id}:`)) lossStates.delete(key);
 }
 
 /** 测试用。 */
 export function resetResourceAlertMemory() {
   hostStates.clear();
+  counterStates.clear();
+  lossStates.clear();
 }

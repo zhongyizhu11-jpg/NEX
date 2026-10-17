@@ -2,8 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  counterIncrease,
   DEFAULT_RESOURCE_ALERT_CONFIG,
+  emptyLossWindowState,
   emptyResourceAlertHostState,
+  evaluateLossSample,
+  normalizeServiceRestarts,
+  serviceRestartIncreases,
   evaluateResourceAlertSample,
   normalizeResourceAlertConfig,
   type ResourceAlertConfig,
@@ -83,4 +88,58 @@ test("设置规整：脏值退回默认，阈值 0 保留、过低抬到 50", ()
   assert.equal(normalized.sustainSeconds, 30);
   assert.equal(normalized.recoverMarginPercent, 30);
   assert.equal(normalizeResourceAlertConfig(null).enabled, false);
+});
+
+test("累计计数器：基线、增长、重置", () => {
+  assert.equal(counterIncrease(undefined, 5), 0);
+  assert.equal(counterIncrease(3, 5), 2);
+  assert.equal(counterIncrease(5, 5), 0);
+  assert.equal(counterIncrease(9, 0), 0); // 机器重启后计数归零
+});
+
+test("服务重启：第一次见到只做基线，新出现的服务从 0 算，清零不报", () => {
+  assert.deepEqual(serviceRestartIncreases(null, { "forwardx-runtime.service": 4 }), []);
+  assert.deepEqual(
+    serviceRestartIncreases({ "forwardx-runtime.service": 4 }, { "forwardx-runtime.service": 6, "forwardx-realm-3.service": 1 }),
+    [
+      { unit: "forwardx-realm-3.service", delta: 1, total: 1 },
+      { unit: "forwardx-runtime.service", delta: 2, total: 6 },
+    ],
+  );
+  assert.deepEqual(serviceRestartIncreases({ "forwardx-runtime.service": 4 }, {}), []);
+});
+
+test("serviceRestarts 规整：只认 forwardx-* 和非负整数", () => {
+  assert.equal(normalizeServiceRestarts(null), null);
+  assert.equal(normalizeServiceRestarts([1, 2]), null);
+  assert.deepEqual(
+    normalizeServiceRestarts({ "forwardx-runtime.service": 2, "sshd.service": 3, "forwardx-x": -1, "forwardx-y": 1.5, "forwardx-z;rm": 1 }),
+    { "forwardx-runtime.service": 2 },
+  );
+});
+
+test("丢包：探测数不够不判定，达到阈值报一次，回落到一半以下恢复", () => {
+  let state = emptyLossWindowState();
+  const t = (s: number) => s * 1000;
+  let r = evaluateLossSample(state, 20, { count: 4, ok: 0 }, t(0));
+  assert.equal(r.transition, null); // 只有 4 次探测
+  state = r.state;
+  r = evaluateLossSample(state, 20, { count: 6, ok: 4 }, t(30));
+  assert.equal(r.transition?.kind, "fire"); // 10 次里丢 6 次
+  assert.equal(r.transition?.lossPercent, 60);
+  state = r.state;
+  r = evaluateLossSample(state, 20, { count: 4, ok: 4 }, t(60));
+  assert.equal(r.transition, null); // 已经在告警，不重复报
+  state = r.state;
+  // 窗口滑过去，早先的失败掉出窗口
+  r = evaluateLossSample(state, 20, { count: 20, ok: 20 }, t(30 + 600));
+  assert.equal(r.transition?.kind, "recover");
+  assert.equal(r.transition?.peak, 60);
+  assert.equal(r.state.firing, false);
+});
+
+test("丢包阈值 0 表示不报", () => {
+  const r = evaluateLossSample(emptyLossWindowState(), 0, { count: 100, ok: 0 }, 0);
+  assert.equal(r.transition, null);
+  assert.equal(r.state.samples.length, 0);
 });

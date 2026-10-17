@@ -20,6 +20,9 @@ export const resourceAlertRouter = router({
       sustainSeconds: z.number().int().min(30).max(3600),
       recoverMarginPercent: z.number().int().min(0).max(30),
       emailEnabled: z.boolean(),
+      oomAlert: z.boolean(),
+      crashAlert: z.boolean(),
+      lossPercent: thresholdSchema,
     }))
     .mutation(({ input }) => saveResourceAlertConfig(input)),
 

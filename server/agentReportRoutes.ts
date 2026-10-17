@@ -31,6 +31,7 @@ import { getTunnelAutoHopAggregate, recordTunnelAutoHopLatency } from "./tunnelA
 import { getTunnelMultiEntryLatency, recordTunnelMultiEntryLatency } from "./tunnelMultiEntryLatencyState";
 import { completeLookingGlassAgentTask, updateLookingGlassAgentTaskProgress, type LookingGlassMethod } from "./lookingGlassAgentTasks";
 import { completeDiagnosticsAgentTask } from "./diagnosticsAgentTasks";
+import { observeTunnelProbeLoss } from "./resourceAlertNotifier";
 import { completeIperf3AgentTask } from "./iperf3AgentTasks";
 import { completePluginAgentTask } from "./pluginAgentTasks";
 import { reportMimicInstallResult } from "./mimicInstallTasks";
@@ -1384,6 +1385,7 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
       tunnelResultsById.set(tunnelId, rows);
     }
     const entryGroupMemo: EntryGroupMemo = new Map();
+    const lossSamples: Array<{ tunnelId: number; count: number; ok: number }> = [];
     await mapWithConcurrency(Array.from(tunnelResultsById.entries()), 12, async ([tunnelId, reports]) => withKeyedTaskLock(`tunnel-latency:${tunnelId}`, async () => {
       const [tunnel, hops, exitNodes] = await Promise.all([
         db.getTunnelById(tunnelId),
@@ -1401,6 +1403,7 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
       const branchByKey = new Map<string, { key: string; label: string; latencyMs: number | null; isTimeout: boolean; probeCount?: number; probeSuccesses?: number }>();
       for (const report of reports) {
         if (!await validateTunnelProbeSource(Number(host.id), tunnel, report, { hops, exitNodes, entryHostIds, topologyKey })) continue;
+        lossSamples.push({ tunnelId, count: Number(report.probeCount) || 0, ok: Number(report.probeSuccesses) || 0 });
         const latencyValue = typeof report.latencyMs === "number" && report.latencyMs > 0 ? report.latencyMs : null;
         const isTimeout = !!report.isTimeout || latencyValue === null;
         const seriesKey = cleanTunnelSeriesKey(report.seriesKey);
@@ -1616,6 +1619,8 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
       }, { preserveMessage: true });
       if (!summary.unavailable && !tunnel.isRunning) await db.updateTunnelRunningStatus(tunnelId, true);
     }));
+    // 资源告警：隧道丢包率（滑动 10 分钟窗口，不阻塞上报）
+    observeTunnelProbeLoss(host, lossSamples);
     const needsForwardGroupHealthTopology = forwardGroupResults.some((report) => {
       const type = String(report.probeType || "");
       return type === "china" || type === "entry";

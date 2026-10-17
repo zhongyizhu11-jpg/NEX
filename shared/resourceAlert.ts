@@ -29,6 +29,12 @@ export type ResourceAlertConfig = {
   recoverMarginPercent: number;
   /** 是否同时发邮件给有邮箱的管理员（需要面板邮件服务已开启）。 */
   emailEnabled: boolean;
+  /** 内核 OOM killer 杀了进程时告警（Agent ≥ 2.2.229）。 */
+  oomAlert: boolean;
+  /** forwardx-* 服务崩溃后被 systemd 自动拉起时告警（Agent ≥ 2.2.229）。 */
+  crashAlert: boolean;
+  /** 隧道探测 10 分钟内丢包率达到多少（%）告警，0 = 不报。 */
+  lossPercent: number;
 };
 
 export const DEFAULT_RESOURCE_ALERT_CONFIG: ResourceAlertConfig = {
@@ -39,6 +45,9 @@ export const DEFAULT_RESOURCE_ALERT_CONFIG: ResourceAlertConfig = {
   sustainSeconds: 300,
   recoverMarginPercent: 5,
   emailEnabled: false,
+  oomAlert: true,
+  crashAlert: true,
+  lossPercent: 20,
 };
 
 export const RESOURCE_ALERT_SUSTAIN_OPTIONS: ReadonlyArray<{ value: number; label: string }> = [
@@ -72,6 +81,9 @@ export function normalizeResourceAlertConfig(raw: Partial<Record<keyof ResourceA
     sustainSeconds: clampInt(source.sustainSeconds, 30, 3600, d.sustainSeconds),
     recoverMarginPercent: clampInt(source.recoverMarginPercent, 0, 30, d.recoverMarginPercent),
     emailEnabled: source.emailEnabled === true || source.emailEnabled === "true",
+    oomAlert: source.oomAlert === undefined ? d.oomAlert : source.oomAlert === true || source.oomAlert === "true",
+    crashAlert: source.crashAlert === undefined ? d.crashAlert : source.crashAlert === true || source.crashAlert === "true",
+    lossPercent: clampInt(source.lossPercent, 0, 100, d.lossPercent),
   };
 }
 
@@ -170,4 +182,115 @@ export function evaluateResourceAlertSample(
 
 export function resourceAlertMetricLabel(metric: ResourceAlertMetric) {
   return RESOURCE_ALERT_METRICS.find((item) => item.key === metric)?.label ?? metric;
+}
+
+// ---------------- OOM / 服务崩溃（累计计数器） ----------------
+
+/**
+ * 累计计数器涨了多少。上一次不知道（面板刚启动、旧 Agent）当作基线，返回 0；
+ * 变小了（机器重启、服务被手动 restart 清零）也当作基线重置，返回 0。
+ */
+export function counterIncrease(previous: number | null | undefined, next: number | null | undefined): number {
+  if (previous === null || previous === undefined || next === null || next === undefined) return 0;
+  const a = Number(previous);
+  const b = Number(next);
+  if (!Number.isFinite(a) || !Number.isFinite(b) || b <= a) return 0;
+  return b - a;
+}
+
+/** 规整 Agent 报上来的 serviceRestarts：只留 forwardx-* 服务名和非负整数，最多 512 项。 */
+export function normalizeServiceRestarts(raw: unknown): Record<string, number> | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const out: Record<string, number> = {};
+  let kept = 0;
+  for (const [unit, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (kept >= 512) break;
+    if (!/^forwardx-[A-Za-z0-9@_.:-]{1,120}$/.test(unit)) continue;
+    const n = Number(value);
+    if (!Number.isInteger(n) || n < 0 || n > 1_000_000_000) continue;
+    out[unit] = n;
+    kept += 1;
+  }
+  return out;
+}
+
+/**
+ * 哪些服务这次比上次多重启了。上次是 null（基线）时不报；上次没出现的服务按 0 算
+ * （Agent 只报大于 0 的那些，第一次崩就是从 0 变 1）。
+ */
+export function serviceRestartIncreases(
+  previous: Record<string, number> | null | undefined,
+  next: Record<string, number>,
+): Array<{ unit: string; delta: number; total: number }> {
+  if (!previous) return [];
+  const out: Array<{ unit: string; delta: number; total: number }> = [];
+  for (const [unit, total] of Object.entries(next)) {
+    const delta = counterIncrease(previous[unit] ?? 0, total);
+    if (delta > 0) out.push({ unit, delta, total });
+  }
+  return out.sort((a, b) => a.unit.localeCompare(b.unit));
+}
+
+// ---------------- 丢包（隧道探测） ----------------
+
+export const LOSS_WINDOW_MS = 10 * 60_000;
+/** 窗口里至少这么多次探测才判定，几个包的偶然失败不算。 */
+export const LOSS_MIN_PROBES = 10;
+
+export type LossWindowState = {
+  samples: Array<{ at: number; count: number; ok: number }>;
+  firing: boolean;
+  firedAt: number | null;
+  peak: number;
+};
+
+export function emptyLossWindowState(): LossWindowState {
+  return { samples: [], firing: false, firedAt: null, peak: 0 };
+}
+
+export type LossTransition = { kind: "fire" | "recover"; lossPercent: number; peak: number; probes: number; durationSeconds: number };
+
+/**
+ * 吃一次探测结果（count 个包里成功 ok 个），算 10 分钟窗口里的丢包率。
+ * 达到阈值报一次；回落到阈值的一半以下报恢复。阈值是 0 时清掉状态、什么都不报。
+ */
+export function evaluateLossSample(
+  state: LossWindowState,
+  thresholdPercent: number,
+  sample: { count: number; ok: number },
+  nowMs: number,
+): { state: LossWindowState; transition: LossTransition | null } {
+  if (!(thresholdPercent > 0)) return { state: emptyLossWindowState(), transition: null };
+  const count = Math.max(0, Math.floor(Number(sample.count) || 0));
+  const ok = Math.min(count, Math.max(0, Math.floor(Number(sample.ok) || 0)));
+  const samples = state.samples.filter((item) => nowMs - item.at < LOSS_WINDOW_MS);
+  if (count > 0) samples.push({ at: nowMs, count, ok });
+  // 心跳几秒一次，窗口最多留 600 个点。
+  while (samples.length > 600) samples.shift();
+  const probes = samples.reduce((sum, item) => sum + item.count, 0);
+  const succeeded = samples.reduce((sum, item) => sum + item.ok, 0);
+  const next: LossWindowState = { ...state, samples };
+  if (probes < LOSS_MIN_PROBES) return { state: next, transition: null };
+  const lossPercent = Math.round(((probes - succeeded) / probes) * 1000) / 10;
+  if (next.firing) {
+    next.peak = Math.max(next.peak, lossPercent);
+    if (lossPercent < thresholdPercent / 2) {
+      const transition: LossTransition = {
+        kind: "recover",
+        lossPercent,
+        peak: next.peak,
+        probes,
+        durationSeconds: Math.max(0, Math.round((nowMs - (next.firedAt ?? nowMs)) / 1000)),
+      };
+      return { state: { samples, firing: false, firedAt: null, peak: 0 }, transition };
+    }
+    return { state: next, transition: null };
+  }
+  if (lossPercent >= thresholdPercent) {
+    return {
+      state: { samples, firing: true, firedAt: nowMs, peak: lossPercent },
+      transition: { kind: "fire", lossPercent, peak: lossPercent, probes, durationSeconds: 0 },
+    };
+  }
+  return { state: next, transition: null };
 }

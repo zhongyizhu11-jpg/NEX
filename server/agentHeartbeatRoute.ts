@@ -168,7 +168,7 @@ import { runAgentRuntimeRecovery } from "./agentRuntimeRecovery";
 import { observePresenceCapableHostActivity, registerPresenceCapableHost } from "./agentFastLiveness";
 import { recordAuthenticatedAgentActivity } from "./agentActivity";
 import { recordHostRestartEvent } from "./ops/eventHooks";
-import { observeHostResourceSample } from "./resourceAlertNotifier";
+import { observeHostHealthCounters, observeHostResourceSample } from "./resourceAlertNotifier";
 import { buildAgentSniInbounds, isSniRuntimeRule, recordTlsInboundRuntimeStatus, sniRuleRuntimeView } from "./tlsInboundRuntime";
 import { buildGostEgressChain, gostEgressChainName, loadEgressRuntimeContext, ruleEgressRuntime, ruleEgressRuntimeView } from "./ssEgress";
 import { parseAgentCapabilities } from "../shared/ssEgress";
@@ -1928,6 +1928,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     });
     // 资源告警：CPU / 内存 / 磁盘持续超过阈值时通知管理员（不阻塞心跳）
     observeHostResourceSample(host, { cpu: cpuUsage ?? null, memory: memoryUsage ?? null, disk: diskUsage ?? null });
+    // OOM / 服务崩溃（Agent ≥ 2.2.229 才报这两项）
+    observeHostHealthCounters(host, { bootId: agentBootId, oomKillCount: req.body?.oomKillCount, serviceRestarts: req.body?.serviceRestarts });
     recordHostLiveSample(host.id, {
       at: Date.now(),
       source: "heartbeat",

@@ -16,7 +16,7 @@ import { trpc } from "@/lib/trpc";
 import { RESOURCE_ALERT_SUSTAIN_OPTIONS, type ResourceAlertConfig } from "@shared/resourceAlert";
 
 /*
-  设置 › Webhook 下方的「资源告警」：CPU / 内存 / 磁盘持续超过阈值时，通过 Telegram、Discord、
+  设置 › Webhook 下方的「资源告警」：CPU / 内存 / 磁盘持续超过阈值、OOM、进程崩溃、隧道丢包时，通过 Telegram、Discord、
   邮件（可选）通知管理员，同时记进事件时间线（Webhook 的「主机」类会一起推出去）。
   阈值填 0 表示这一项不报。
 */
@@ -103,7 +103,7 @@ export default function ResourceAlertSettings(_props: Record<string, never>) {
               资源告警
             </CardTitle>
             <CardDescription className="mt-1">
-              主机 CPU、内存、磁盘持续超过阈值时通知管理员，回落后再报一次恢复。
+              主机 CPU、内存、磁盘持续超过阈值，或者内存耗尽、进程崩溃、隧道丢包时通知管理员，恢复后再报一次。
             </CardDescription>
           </div>
           {settings ? (
@@ -153,6 +153,23 @@ export default function ResourceAlertSettings(_props: Record<string, never>) {
                 label="恢复回差"
                 description={`回落到阈值减去这个数以下才算恢复，免得在阈值附近来回报。`}
                 control={<ThresholdInput label="恢复回差" value={draft.recoverMarginPercent} onChange={(value) => update("recoverMarginPercent", Math.min(30, value))} />}
+              />
+              <SettingRow
+                asLabel
+                label="内存耗尽（OOM）"
+                description="内核 OOM killer 杀了进程时告警。需要 Agent 2.2.229 以上。"
+                control={<Checkbox aria-label="内存耗尽告警" checked={draft.oomAlert} onCheckedChange={(checked) => update("oomAlert", checked === true)} />}
+              />
+              <SettingRow
+                asLabel
+                label="进程崩溃"
+                description="转发、隧道运行时等 forwardx 服务崩溃后被自动重启时告警。需要 Agent 2.2.229 以上。"
+                control={<Checkbox aria-label="进程崩溃告警" checked={draft.crashAlert} onCheckedChange={(checked) => update("crashAlert", checked === true)} />}
+              />
+              <SettingRow
+                label="隧道丢包阈值"
+                description="隧道探测近 10 分钟丢包率达到这个数就告警，回落到一半以下算恢复。填 0 表示不报。"
+                control={<ThresholdInput label="隧道丢包" value={draft.lossPercent} onChange={(value) => update("lossPercent", value)} />}
               />
               <SettingRow
                 asLabel
