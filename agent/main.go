@@ -10163,8 +10163,11 @@ func fxpServerSignature(spec fxpSpec) string {
 		// failover and aggregate changes only these fields, and the runtime
 		// must restart to pick the new mode up.
 		strconv.FormatBool(spec.MultipathEnabled),
-		strconv.FormatBool(spec.MultipathReplicate),
 		strconv.Itoa(spec.MultipathMaxPending),
+	}
+	// 复制模式只在打开时进签名：没开复制的隧道签名和旧版一模一样，升级 Agent 不会因此重启 FXP。
+	if spec.MultipathReplicate {
+		parts = append(parts, "replicate")
 	}
 	for _, leg := range spec.MultipathLegs {
 		parts = append(parts, strings.TrimSpace(leg.Host), strconv.Itoa(leg.Port), strings.TrimSpace(leg.Key))
