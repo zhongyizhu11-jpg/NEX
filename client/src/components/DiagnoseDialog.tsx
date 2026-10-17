@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Loader2, Stethoscope } from "lucide-react";
 
 import { LinkDiagnosticsPanel } from "@/components/LinkDiagnosticsPanel";
@@ -28,6 +28,9 @@ export type DiagnoseOutcome = "success" | "timeout" | "failed";
  *
  * 2.3.444 起多了「一键诊断」页（传了 checklist 就有）：打开对话框直接跑一张通过 / 警告 / 失败
  * 的清单（LinkDiagnosticsPanel），原来一段段测延迟的那页挪到「延迟测试」，用法不变。
+ *
+ * 后来两页换了位置：「延迟测试」在前、打开就是它，而且一打开就测一次（不用再按按钮），
+ * 「一键诊断」挪到第二页，切过去才开始跑清单。
  */
 export function DiagnoseDialog({
   open,
@@ -63,9 +66,32 @@ export function DiagnoseDialog({
   children: ReactNode;
 }) {
   const ranBefore = !!lastRunAt && !Number.isNaN(new Date(lastRunAt).getTime());
-  const [tab, setTab] = useState<DiagnoseTab>("checklist");
+  const [tab, setTab] = useState<DiagnoseTab>("latency");
+  // 一键诊断切过去才跑；跑过一次就一直挂着，来回切不重跑。
+  const [checklistVisited, setChecklistVisited] = useState(false);
   useEffect(() => {
-    if (!open) setTab("checklist");
+    if (!open) {
+      setTab("latency");
+      setChecklistVisited(false);
+    }
+  }, [open]);
+  useEffect(() => {
+    if (tab === "checklist") setChecklistVisited(true);
+  }, [tab]);
+  // 打开就测一次延迟；正在测就不再发一次。一次打开只自动测一次。
+  const onRunRef = useRef(onRun);
+  onRunRef.current = onRun;
+  const testingRef = useRef(testing);
+  testingRef.current = testing;
+  const autoRanRef = useRef(false);
+  useEffect(() => {
+    if (!open) {
+      autoRanRef.current = false;
+      return;
+    }
+    if (autoRanRef.current) return;
+    autoRanRef.current = true;
+    if (!testingRef.current) onRunRef.current();
   }, [open]);
   const hasChecklist = !!checklist && checklist.id > 0;
   const showLatency = !hasChecklist || tab === "latency";
@@ -88,13 +114,13 @@ export function DiagnoseDialog({
         {hasChecklist ? (
           <Tabs value={tab} onValueChange={(value) => setTab(value as DiagnoseTab)}>
             <TabsList aria-label="诊断方式" className="w-full sm:w-auto">
-              <TabsTrigger value="checklist" className="flex-1 sm:flex-none">一键诊断</TabsTrigger>
               <TabsTrigger value="latency" className="flex-1 sm:flex-none">延迟测试</TabsTrigger>
+              <TabsTrigger value="checklist" className="flex-1 sm:flex-none">一键诊断</TabsTrigger>
             </TabsList>
           </Tabs>
         ) : null}
 
-        {hasChecklist ? (
+        {hasChecklist && checklistVisited ? (
           // 切到延迟测试再切回来不重跑：清单一直挂着，只是藏起来。
           <div className={cn("min-w-0", tab !== "checklist" && "hidden")}>
             <LinkDiagnosticsPanel kind={checklist!.kind} id={checklist!.id} active={open} />
