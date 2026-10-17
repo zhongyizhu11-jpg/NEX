@@ -651,6 +651,11 @@ export async function connectDatabase(config = readDatabaseConfig()) {
   if (config.type === "postgresql") {
     const normalized = normalizePostgresql(config.postgresql);
     _pgPool = new pg.Pool(pgPoolOptions(normalized));
+    // 空闲连接被服务端断开时 pg.Pool 发 error 事件；没人接就是未捕获异常，整个面板进程退出（上游 v2.3.281）。
+    // 连接本身会被池丢掉、下次查询重连，这里只记一笔。
+    _pgPool.on("error", (error) => {
+      console.error(`[Database] PostgreSQL idle client error: ${error instanceof Error ? error.message : String(error)}`);
+    });
     await _pgPool.query("SELECT 1");
     _db = drizzlePostgres(_pgPool) as Db;
     _kind = "postgresql";
