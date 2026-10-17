@@ -357,8 +357,8 @@ func reconcileGostRuntimeUpgrade(env gostRuntimeUpgradeEnv) (string, error) {
 
 	commit := func() (string, error) {
 		os.Remove(env.markerPath)
-		// 新文件确认能用：之前的回滚记录作废（它记的是别的文件）。
-		os.Remove(env.rollbackPath)
+		// 新文件确认能用：这次升级之前的回滚记录作废（它记的是别的文件）。
+		removeRollbackRecordOlderThan(env.rollbackPath, marker.StartedAt)
 		return gostRuntimeUpgradeCommitted, nil
 	}
 
@@ -366,7 +366,7 @@ func reconcileGostRuntimeUpgrade(env gostRuntimeUpgradeEnv) (string, error) {
 		// 太旧的标记不再据此回滚：能问出版本就确认，问不出也只清掉标记、交给下次安装脚本处理。
 		os.Remove(env.markerPath)
 		if current.OK {
-			os.Remove(env.rollbackPath)
+			removeRollbackRecordOlderThan(env.rollbackPath, marker.StartedAt)
 			return gostRuntimeUpgradeCommitted, nil
 		}
 		return gostRuntimeUpgradeNone, nil
@@ -397,6 +397,17 @@ func reconcileGostRuntimeUpgrade(env gostRuntimeUpgradeEnv) (string, error) {
 		return gostRuntimeUpgradePending, nil
 	}
 	return rollbackGostRuntime(env, marker, current, reason)
+}
+
+// removeRollbackRecordOlderThan 删掉这次升级开始之前留下的回滚记录。安装脚本重启服务后自己也会查一次、
+// 起不来当场回滚并写记录（和这里的确认可能同时发生）：那份记录比升级标记新，说明装着的是刚退回去的文件，
+// 不能删，否则它的能力就不会再被压成 false。
+func removeRollbackRecordOlderThan(path string, startedAt int64) {
+	state, ok := readGostRuntimeRollbackState(path)
+	if ok && startedAt > 0 && state.At >= startedAt {
+		return
+	}
+	os.Remove(path)
 }
 
 func rollbackGostRuntime(env gostRuntimeUpgradeEnv, marker gostRuntimeUpgradeMarker, current gostRuntimeVersionInfo, reason string) (string, error) {

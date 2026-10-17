@@ -20,6 +20,7 @@ import type {
   ProxySubscriptionGroup,
 } from "./proxySubscriptionPlan";
 import {
+  iosInlineDomainRules,
   iosRuleListNames,
   iosRuleListUrl,
   iosRuleUsesNativeGeoipCn,
@@ -945,6 +946,7 @@ function profileSafeName(name: string): string {
 
 type ProfileRule =
   | { kind: "list"; url: string; tag: string; target: string }
+  | { kind: "domain"; suffix: boolean; domain: string; target: string }
   | { kind: "cidr"; cidr: string; v6: boolean; target: string }
   | { kind: "geoip-cn"; target: string }
   | { kind: "final"; target: string };
@@ -974,6 +976,9 @@ function iosProfileRules(
       }
       for (const listName of iosRuleListNames(ref)) {
         out.push({ kind: "list", url: iosRuleListUrl(client, listName), tag: `${ref.name}-${listName}`, target });
+      }
+      for (const extra of iosInlineDomainRules(ref)) {
+        out.push({ kind: "domain", suffix: extra.match === "suffix", domain: extra.domain, target });
       }
     }
   }
@@ -1016,6 +1021,7 @@ function renderIosProfile(document: FilteredDocument, format: IosProfileFormat, 
 function surgeStyleRuleLines(rules: readonly ProfileRule[]): string[] {
   return rules.map((rule) => {
     if (rule.kind === "list") return `RULE-SET,${rule.url},${rule.target}`;
+    if (rule.kind === "domain") return `${rule.suffix ? "DOMAIN-SUFFIX" : "DOMAIN"},${rule.domain},${rule.target}`;
     if (rule.kind === "cidr") return `${rule.v6 ? "IP-CIDR6" : "IP-CIDR"},${rule.cidr},${rule.target},no-resolve`;
     if (rule.kind === "geoip-cn") return `GEOIP,CN,${rule.target}`;
     return `FINAL,${rule.target}`;
@@ -1086,7 +1092,8 @@ function renderLoonProfile(
   }
   lines.push("", "[Rule]");
   for (const rule of rules) {
-    if (rule.kind === "cidr") lines.push(`${rule.v6 ? "IP-CIDR6" : "IP-CIDR"},${rule.cidr},${rule.target},no-resolve`);
+    if (rule.kind === "domain") lines.push(`${rule.suffix ? "DOMAIN-SUFFIX" : "DOMAIN"},${rule.domain},${rule.target}`);
+    else if (rule.kind === "cidr") lines.push(`${rule.v6 ? "IP-CIDR6" : "IP-CIDR"},${rule.cidr},${rule.target},no-resolve`);
     else if (rule.kind === "geoip-cn") lines.push(`GEOIP,CN,${rule.target}`);
     else if (rule.kind === "final") lines.push(`FINAL,${rule.target}`);
   }
@@ -1131,7 +1138,8 @@ function renderQuantumultXProfile(
   }
   lines.push("", "[filter_local]");
   for (const rule of rules) {
-    if (rule.kind === "cidr") lines.push(`${rule.v6 ? "ip6-cidr" : "ip-cidr"}, ${rule.cidr}, ${rule.target}`);
+    if (rule.kind === "domain") lines.push(`${rule.suffix ? "host-suffix" : "host"}, ${rule.domain}, ${rule.target}`);
+    else if (rule.kind === "cidr") lines.push(`${rule.v6 ? "ip6-cidr" : "ip-cidr"}, ${rule.cidr}, ${rule.target}`);
     else if (rule.kind === "geoip-cn") lines.push(`geoip, cn, ${rule.target}`);
     else if (rule.kind === "final") lines.push(`final, ${rule.target}`);
   }

@@ -23,12 +23,15 @@
 #     哈希取得不对，误判率远高于设定（UDP 每个包都进过滤器，长跑会持续丢回包），一并修好。
 #   每个补丁开头写了根因。回归：gost-runtime/test/ss-egress-e2e/run.sh <二进制>。
 #
+# nex4：SS2022 UDP 回包按 SIP022 校验（必须是服务端包、带回本会话的 ID、包号不重复），
+#   捕获的回包不能再被重放进别的流；防重放滑动窗口不再放过重复的 0 号包（nex-shadowsocks2.patch）。
+#
 # 用法：gost-runtime/build.sh <输出目录>
 # 产出：<输出目录>/forwardx-runtime-linux-amd64、forwardx-runtime-linux-arm64
 #
-# 版本号写成 ${GOST_VERSION}-${NEX_GOST_BUILD}（例如 3.2.6-nex3），装机脚本据此
+# 版本号写成 ${GOST_VERSION}-${NEX_GOST_BUILD}（例如 3.2.6-nex4），装机脚本据此
 # 区分 NEX 自编版和官方版，Agent 据此判断运行时能力（nex3 起才有 Shadowsocks UDP / SS2022 出口）。
-# 改了补丁就把 NEX_GOST_BUILD 加一。
+# 改了补丁就把 NEX_GOST_BUILD 加一，shared/ssEgress.ts 的 NEX_GOST_RUNTIME_BUILD 跟着改。
 # GOARCHES 可以只编一部分架构（例如 GOARCHES=amd64），默认 amd64 arm64。
 set -euo pipefail
 
@@ -38,7 +41,7 @@ GOST_X_VERSION="${GOST_X_VERSION:-0.8.1}"
 GOST_X_VERSION="${GOST_X_VERSION#v}"
 GOST_SS2_VERSION="${GOST_SS2_VERSION:-0.1.1}"
 GOST_SS2_VERSION="${GOST_SS2_VERSION#v}"
-NEX_GOST_BUILD="${NEX_GOST_BUILD:-nex3}"
+NEX_GOST_BUILD="${NEX_GOST_BUILD:-nex4}"
 GOARCHES="${GOARCHES:-amd64 arm64}"
 # gost 3.2.6 的 go.mod 要求 Go >= 1.24，而 Agent 和发布流程用的是 1.23（GOTOOLCHAIN=local）。
 # 只给 gost 这一步指定工具链，go 命令会从 proxy.golang.org 自动下载。和官方发布包同一版本。

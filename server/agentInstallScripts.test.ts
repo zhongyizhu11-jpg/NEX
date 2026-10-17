@@ -389,6 +389,8 @@ test("已装官方 gost 时尝试从面板换成 NEX 自编版，换上后重启
 test("NEX gost runtime: build number parsing, upgrade with .prev backup + marker, rollback restores the old binary", () => {
   const script = generateInstallScript("https://panel.example.com");
   assert.match(script, /RUNTIME_MIN_NEX_BUILD="3"/);
+  // 换运行时按面板这一版带的构建号（nex4），不是能力门槛（nex3）：nex3 的机器也要换上 nex4。
+  assert.match(script, /RUNTIME_TARGET_NEX_BUILD="4"/);
   const functions = scriptSection(script, "runtime_self_check() {", "nginx_self_check() {");
   const dir = fs.mkdtempSync(path.join(process.env.TMPDIR || "/tmp", "fwx-runtime-"));
   try {
@@ -435,7 +437,7 @@ test("NEX gost runtime: build number parsing, upgrade with .prev backup + marker
 
   // 已经是 NEX 自编版但构建号不够（nex2）：只从面板收更新的构建，换上后重启并检查，起不来就回滚。
   const installRuntime = scriptSection(script, "install_runtime() {", "install_go_agent() {");
-  assert.match(installRuntime, /runtime_nex_build "\$RUNTIME_BIN"\)" -ge "\$RUNTIME_MIN_NEX_BUILD"/);
+  assert.match(installRuntime, /runtime_nex_build "\$RUNTIME_BIN"\)" -ge "\$RUNTIME_TARGET_NEX_BUILD"/);
   assert.match(installRuntime, /NEX_RUNTIME_ONLY=1 NEX_RUNTIME_MIN_BUILD="\$\(\( \$\(runtime_nex_build "\$RUNTIME_BIN"\) \+ 1 \)\)" install_runtime_from_panel; then\s+restart_runtime_services_if_running/);
   const fromPanel = scriptSection(script, "install_runtime_from_panel() {", "install_runtime_from_github() {");
   assert.match(fromPanel, /NEX_RUNTIME_MIN_BUILD:-\}" \] && \[ "\$\(runtime_nex_build "\$STAGED_RUNTIME"\)" -lt "\$NEX_RUNTIME_MIN_BUILD" \]/);

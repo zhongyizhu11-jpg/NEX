@@ -294,7 +294,8 @@ export const IOS_RULE_SCRIPT_BASE = "https://raw.githubusercontent.com/blackmatr
 const IOS_RULE_LIST_NAMES: Record<string, readonly string[]> = {
   "domain:private": ["Lan"],
   "domain:category-ads-all": ["AdvertisingLite"],
-  "domain:category-ai-!cn": ["Claude", "Gemini"],
+  // Anthropic / BardAI / Copilot 2026-10-17 四家逐个 HEAD 过（全部 200）。
+  "domain:category-ai-!cn": ["Claude", "Anthropic", "Gemini", "BardAI", "Copilot"],
   "domain:openai": ["OpenAI"],
   "domain:youtube": ["YouTube"],
   "domain:google": ["Google"],
@@ -315,6 +316,39 @@ const IOS_RULE_LIST_NAMES: Record<string, readonly string[]> = {
 
 export function iosRuleListNames(ref: Pick<ProxyRuleSetRef, "behavior" | "geoKey">): readonly string[] {
   return IOS_RULE_LIST_NAMES[`${ref.behavior}:${ref.geoKey}`] || [];
+}
+
+export type IosInlineDomainRule = { match: "suffix" | "exact"; domain: string };
+
+/**
+ * blackmatrix7 的列表跟不上的域名，直接写进配置（和远程列表同一个去向）。
+ *
+ * AI 这一类：mihomo / sing-box 用的 v2fly category-ai-!cn 覆盖了这些服务，iOS 四家的列表
+ * （Claude / Gemini / OpenAI …）却很旧：Claude 新域名、AI Studio、NotebookLM 缺，Perplexity、
+ * Grok、Cursor 这些干脆没有现成列表。漏掉的会落到「谷歌服务」或兜底组，AI 组单独指向美国出口时
+ * 就白指了。新增时只放常见、确实需要非大陆出口的服务。
+ */
+const IOS_INLINE_DOMAIN_RULES: Record<string, readonly IosInlineDomainRule[]> = {
+  "domain:category-ai-!cn": [
+    ...[
+      // Anthropic / Claude
+      "claude.com", "claudeusercontent.com", "clau.de", "claude.dev",
+      // Google Gemini / AI Studio / NotebookLM
+      "gemini.google", "aistudio.google.com", "notebooklm.google", "notebooklm.google.com", "labs.google", "jules.google",
+      "generativelanguage.googleapis.com",
+      // OpenAI
+      "sora.com",
+      // 其它常见 AI 服务
+      "perplexity.ai", "pplx.ai", "grok.com", "x.ai", "meta.ai", "mistral.ai", "poe.com",
+      "cursor.com", "cursor.sh", "cursorapi.com", "githubcopilot.com", "huggingface.co", "groq.com", "cohere.com",
+      "elevenlabs.io", "midjourney.com",
+    ].map((domain) => ({ match: "suffix" as const, domain })),
+    { match: "exact", domain: "copilot-proxy.githubusercontent.com" },
+  ],
+};
+
+export function iosInlineDomainRules(ref: Pick<ProxyRuleSetRef, "behavior" | "geoKey">): readonly IosInlineDomainRule[] {
+  return IOS_INLINE_DOMAIN_RULES[`${ref.behavior}:${ref.geoKey}`] || [];
 }
 
 /** 国内 IP 走各家内置的 GEOIP，不用下载列表。 */

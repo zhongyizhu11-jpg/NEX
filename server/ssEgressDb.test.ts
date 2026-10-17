@@ -422,6 +422,24 @@ test("UDP / SS2022 出口：只有报了能力的入口机能保存、能拿到 
     assert.deepEqual(capability.map((row) => [row.hostId, row.udp, row.ss2022]), [[10, true, true], [30, false, false]]);
     assert.match(capability[1].udpMessage, /老入口.*2\.2\.227/);
 
+    // 普通用户问自己看不到、也不在自己能用的端口转发资源里的主机：当成不存在来回答（和不存在的主机 99 一样），
+    // 不能借此探出主机在不在、Agent 新不新。授权以后、或者主机在他能用的资源里，才回真实能力。
+    const bob = { id: 2, username: "bob", role: "user" };
+    const bobApi = proxyInboundsRouter.createCaller(ctxFor(bob));
+    const shape = (rows) => rows.map((row) => [row.hostId, row.udp, row.ss2022, row.name, row.agentVersion, row.udpMessage]);
+    const foreign = await bobApi.egressEntryCapabilities({ hostIds: [10, 99] });
+    assert.deepEqual(shape(foreign)[0].slice(1), shape(foreign)[1].slice(1));
+    assert.equal(foreign[0].udp, false);
+    const { forwardGroupsRouter } = await import(url("server/routers/forwardGroups.ts"));
+    const group = await forwardGroupsRouter.createCaller(ctxFor(admin)).create({ name: "香港 gost 资源", groupMode: "port", groupType: "host", forwardType: "gost", protocol: "tcp", members: [{ memberType: "host", hostId: 10 }] });
+    await exec('INSERT INTO user_forward_group_permissions ("userId", "forwardGroupId") VALUES (?, ?)', [2, group.id]);
+    const viaGroup = await bobApi.egressEntryCapabilities({ hostIds: [10] });
+    assert.deepEqual([viaGroup[0].udp, viaGroup[0].ss2022, viaGroup[0].name, viaGroup[0].agentVersion], [true, true, null, null]);
+    await exec('DELETE FROM user_forward_group_permissions WHERE "userId" = ?', [2]);
+    await exec('INSERT INTO user_host_permissions ("userId", "hostId") VALUES (?, ?)', [2, 10]);
+    const granted = await bobApi.egressEntryCapabilities({ hostIds: [10] });
+    assert.deepEqual([granted[0].udp, granted[0].name], [true, "香港入口"]);
+
     // 被当作 SS2022 出口的入站：入口机有能力时可以改成 SS2022，没有就拒绝。
     await setCaps(10, "2.2.226", caps, "3.2.6-nex3");
     await assert.rejects(inboundApi.update({ id: inboundId, method: "2022-blake3-aes-256-gcm" }), /不能改成 2022-blake3-aes-256-gcm.*SS2022/);

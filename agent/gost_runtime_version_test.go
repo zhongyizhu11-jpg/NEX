@@ -323,3 +323,23 @@ func TestGostRuntimeCapabilitiesHiddenWhileUpgradeDown(t *testing.T) {
 		t.Fatalf("no gost rules on the host -> nothing to be down")
 	}
 }
+
+func TestGostRuntimeUpgradeCommitKeepsRollbackRecordWrittenDuringUpgrade(t *testing.T) {
+	f := newFakeRuntimeUpgrade(t)
+	f.needed = false
+	f.install(t, "NEW", "OLD", time.Second)
+	// 安装脚本在这次升级之后回滚了，记录比升级标记新：确认时不能删掉它。
+	writeJSONFileAtomic(f.env.rollbackPath, gostRuntimeRollbackState{Reason: "restart failed", At: f.now.Unix()})
+	if got, _ := reconcileGostRuntimeUpgrade(f.env); got != gostRuntimeUpgradeCommitted {
+		t.Fatalf("got %s", got)
+	}
+	if !exists(f.env.rollbackPath) {
+		t.Fatalf("a rollback record newer than the upgrade marker must survive the commit")
+	}
+	// 升级之前的旧记录照样作废。
+	f.install(t, "NEW", "OLD", time.Second)
+	writeJSONFileAtomic(f.env.rollbackPath, gostRuntimeRollbackState{Reason: "old", At: f.now.Add(-time.Hour).Unix()})
+	if got, _ := reconcileGostRuntimeUpgrade(f.env); got != gostRuntimeUpgradeCommitted || exists(f.env.rollbackPath) {
+		t.Fatalf("an older rollback record must be removed on commit (got %s)", got)
+	}
+}

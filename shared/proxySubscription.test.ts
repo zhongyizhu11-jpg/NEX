@@ -1008,6 +1008,29 @@ test("Surge 完整配置：托管地址、叠加组是 load-balance、规则走 
   assert.equal(rules[rules.length - 1], "FINAL,NEX");
 });
 
+test("iOS 四家的 AI 组：Claude / Gemini / Copilot 列表齐全，跟不上的新域名直接写进配置，都在国内直连和兜底之前", () => {
+  const ai = "🤖 AI 服务";
+  const lists = ["Claude", "Anthropic", "Gemini", "BardAI", "Copilot", "OpenAI"];
+  const domains = ["claude.com", "claudeusercontent.com", "aistudio.google.com", "notebooklm.google.com", "perplexity.ai", "grok.com", "cursor.com", "githubcopilot.com"];
+  const surge = section(renderProxySubscription(profileDocument(), "surge", { profile: true }), "[Rule]");
+  for (const name of lists) {
+    assert.ok(surge.includes(`RULE-SET,https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/${name}/${name}.list,${ai}`), name);
+  }
+  for (const domain of domains) assert.ok(surge.includes(`DOMAIN-SUFFIX,${domain},${ai}`), domain);
+  assert.ok(surge.includes(`DOMAIN,copilot-proxy.githubusercontent.com,${ai}`));
+  assert.ok(surge.indexOf(`DOMAIN-SUFFIX,claude.com,${ai}`) < surge.indexOf("GEOIP,CN,🎯 国内直连"));
+
+  const loon = section(renderProxySubscription(profileDocument(), "loon", { profile: true }), "[Rule]");
+  for (const domain of domains) assert.ok(loon.includes(`DOMAIN-SUFFIX,${domain},${ai}`), `loon ${domain}`);
+  assert.ok(loon.indexOf(`DOMAIN-SUFFIX,claude.com,${ai}`) < loon.findIndex((line) => line.startsWith("GEOIP,CN,")));
+  assert.ok(loon[loon.length - 1].startsWith("FINAL,"));
+
+  const qx = section(renderProxySubscription(profileDocument(), "quantumultx", { profile: true }), "[filter_local]");
+  for (const domain of domains) assert.ok(qx.includes(`host-suffix, ${domain}, ${ai}`), `qx ${domain}`);
+  assert.ok(qx.includes(`host, copilot-proxy.githubusercontent.com, ${ai}`));
+  assert.ok(qx[qx.length - 1].startsWith("final, "));
+});
+
 test("Loon 完整配置：叠加组 Round-Robin，远程规则放 [Remote Rule]", () => {
   const text = renderProxySubscription(profileDocument(), "loon", { profile: true });
   const groups = section(text, "[Proxy Group]");
