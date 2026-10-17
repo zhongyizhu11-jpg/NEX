@@ -113,9 +113,9 @@ function HostLogsViewer({ hostId }: { hostId: number }) {
 
   return (
     <div className="flex min-w-0 flex-col gap-2">
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex items-center gap-1.5">
         <Select value={source} onValueChange={setSource}>
-          <SelectTrigger className="h-8 w-44" aria-label="日志来源">
+          <SelectTrigger className="h-8 w-32 shrink-0" aria-label="日志来源">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -125,17 +125,17 @@ function HostLogsViewer({ hostId }: { hostId: number }) {
         <Input
           aria-label="筛选日志"
           placeholder="筛选关键字"
-          className="h-8 w-36"
+          className="h-8 min-w-0 flex-1"
           value={filter}
           onChange={(event) => setFilter(event.target.value)}
         />
-        <Button type="button" size="sm" variant="outline" className="h-8" onClick={() => setPaused((value) => !value)} aria-label={paused ? "继续" : "暂停"}>
+        <Button type="button" size="sm" variant="outline" className="h-8 shrink-0 px-2" onClick={() => setPaused((value) => !value)} aria-label={paused ? "继续" : "暂停"}>
           {paused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
         </Button>
-        <Button type="button" size="sm" variant="outline" className="h-8" onClick={() => setLines([])} aria-label="清屏">
+        <Button type="button" size="sm" variant="outline" className="h-8 shrink-0 px-2" onClick={() => setLines([])} aria-label="清屏">
           <Trash2 className="h-3.5 w-3.5" />
         </Button>
-        <Button type="button" size="sm" variant="outline" className="h-8" onClick={download} disabled={lines.length === 0} aria-label="下载">
+        <Button type="button" size="sm" variant="outline" className="h-8 shrink-0 px-2" onClick={download} disabled={lines.length === 0} aria-label="下载">
           <Download className="h-3.5 w-3.5" />
         </Button>
       </div>
