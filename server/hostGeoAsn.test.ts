@@ -32,17 +32,8 @@ test("ipapi.co：asn + org", () => {
   assert.equal(parsed.geoOrg, "GOOGLE");
 });
 
-test("ip-api.com：isp / org / as / asname", () => {
-  const parsed = parseGeoProviderResponse("ip-api.com", {
-    status: "success", country: "Hong Kong", countryCode: "HK", regionName: "Central and Western", city: "Hong Kong",
-    lat: 22.28, lon: 114.15, isp: "HGC Global Communications Limited", org: "Hutchison Global Communications", as: "AS9304 HGC Global Communications Limited", asname: "HUTCHISON-AS-AP",
-  }) as any;
-  assert.equal(parsed.geoAsn, "AS9304");
-  assert.equal(parsed.geoIsp, "HGC Global Communications Limited");
-  assert.equal(parsed.geoOrg, "Hutchison Global Communications");
-  const sparse = parseGeoProviderResponse("ip-api.com", { status: "success", countryCode: "JP", lat: 35, lon: 139, as: "", asname: "KDDI" }) as any;
-  assert.equal(sparse.geoAsn, "", "问过但没给：空串，不是 null");
-  assert.equal(sparse.geoIsp, "KDDI", "没有 isp 用 asname 顶上");
+test("ip-api.com（免费档只有明文 HTTP）不再是定位服务", () => {
+  assert.throws(() => parseGeoProviderResponse("ip-api.com", { status: "success", countryCode: "JP" }), /unknown geo provider/);
 });
 
 test("ipwho.is：connection.asn / isp / org", () => {

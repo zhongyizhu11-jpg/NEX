@@ -1,0 +1,18 @@
+# ip2region offline IP location data
+
+Upstream: https://github.com/lionsoul2014/ip2region
+Pinned commit: 1bf6cabfb63c1a14af0971749c2120a3e5c77d72 (same files as poouo/Forwardx)
+Files: data/ip2region_v4.xdb, data/ip2region_v6.xdb, losslessly gzip-compressed.
+License: Apache-2.0 OR MIT; redistributed under MIT (LICENSE.txt).
+
+SHA-256 and byte length of the decompressed files (checked at load time by
+server/ipRegionOffline.ts; a mismatch disables the lookup, it never falls back
+to an online service):
+
+- IPv4: 27ecba8c9a6d5e3b280aedbe7ee15c65372b179fbd0dad3845d8c608f2fcace1, 11122642 bytes
+- IPv6: 939f6b46bd2b8bec3cf7c5ceb8ba782266ae9b1f35b5ba7916700dec0b7506ed, 37277813 bytes
+
+Used only for the location of end-user (client) IPs on the "online IPs" page.
+The data is approximate network allocation information, not a precise location.
+To refresh: replace both .gz files, update the hashes / sizes / version in
+server/ipRegionOffline.ts and in this file.
