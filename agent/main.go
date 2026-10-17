@@ -3100,6 +3100,8 @@ func main() {
 	go agentMetricsScheduler(cfg)
 	go agentDNSWatchScheduler()
 	go agentExtLoop(cfg)
+	// 端口接入限制快照失败后面板不会重发（期望状态没变），由 Agent 自己重试 / 定期核对。
+	go portAccessLimitMaintenanceLoop()
 	lastFullHeartbeatAt := time.Time{}
 	metricsOnlyMode := false
 	for {

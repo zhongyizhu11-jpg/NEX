@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPortAccessLimitSharesUserCounterAndChangesChainOnlyOnThreshold(t *testing.T) {
@@ -68,5 +69,52 @@ func TestPortAccessLimitActionDecodesPanelPayload(t *testing.T) {
 	}
 	if canAdoptDesiredAction(a) {
 		t.Fatal("a runtime limit sync must never be adopted without applying it")
+	}
+}
+
+// 面板把这条动作当成 knownRunning，期望状态没变就不重发：失败的快照必须由 Agent 自己重试，
+// 成功后被人清掉的限制也要在定期核对时补回来。
+func TestPortAccessLimitMaintenanceRetriesFailedSnapshotAndRepairsDrift(t *testing.T) {
+	fw := newFakePortLimitFirewall()
+	previous := portLimitFirewallForMaintenance
+	portLimitFirewallForMaintenance = fw
+	t.Cleanup(func() {
+		portLimitFirewallForMaintenance = previous
+		portLimitHealth.Lock()
+		portLimitHealth.signature, portLimitHealth.checkedAt, portLimitHealth.desired, portLimitHealth.attemptAt = "", time.Time{}, nil, time.Time{}
+		portLimitHealth.Unlock()
+	})
+	a := action{StatusType: "runtime", Op: "apply", ForwardType: portAccessLimitForwardType, Protocol: "tcp",
+		PortAccessLimits: []portAccessLimitSpec{{UserID: 4, MaxIPs: 3, Ports: []int{31001}}}}
+
+	// 第一次对齐失败（模拟 xtables 锁）。
+	fw.failContains = "connlimit"
+	if err := syncPortAccessLimits(fw, a.PortAccessLimits, false); err == nil {
+		t.Fatal("simulated failure did not fail")
+	}
+	rememberPortLimitHealth(a, false)
+	if attempted, _ := maintainPortAccessLimits(time.Now()); attempted {
+		t.Fatal("retried before the retry interval")
+	}
+
+	// 锁释放后，到了重试间隔就自己补上。
+	fw.failContains = ""
+	if attempted, ok := maintainPortAccessLimits(time.Now().Add(portLimitRetryInterval + time.Second)); !attempted || !ok {
+		t.Fatalf("failed snapshot not retried: attempted=%v ok=%v", attempted, ok)
+	}
+	if err := syncPortAccessLimits(fw, a.PortAccessLimits, true); err != nil {
+		t.Fatalf("limits not in place after retry: %v", err)
+	}
+
+	// 成功后不频繁动防火墙；有人把表清了，到定期核对时补回来。
+	if attempted, _ := maintainPortAccessLimits(time.Now().Add(portLimitRetryInterval + time.Second)); attempted {
+		t.Fatal("healthy snapshot re-applied before the maintenance interval")
+	}
+	fw.tables = map[string]map[string][][]string{}
+	if attempted, ok := maintainPortAccessLimits(time.Now().Add(accessLimitMaintenanceInterval + time.Second)); !attempted || !ok {
+		t.Fatalf("drift not repaired: attempted=%v ok=%v", attempted, ok)
+	}
+	if err := syncPortAccessLimits(fw, a.PortAccessLimits, true); err != nil {
+		t.Fatalf("limits not restored: %v", err)
 	}
 }

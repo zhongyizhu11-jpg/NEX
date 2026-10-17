@@ -46,7 +46,7 @@ import {
   shouldPersistAgentPresence,
 } from "./agentHeartbeatGate";
 import { mapWithConcurrency } from "./asyncPool";
-import { agentSupportsPortAccessLimits, PORT_ACCESS_LIMITS_ENABLED_SETTING, portAccessLimitAction, portAccessLimitsEnabled, portAccessLimitSpecs } from "./portAccessLimits";
+import { agentSupportsPortAccessLimits, portAccessLimitAction, portAccessLimitSpecs, readPortAccessLimitsEnabled, resolvePortAccessLimitAction } from "./portAccessLimits";
 import { ruleLimitRootId } from "./ruleLimits";
 import { clearTunnelRuntimeStatusForHost, getHostWireGuardPlane, getTunnelRuntimeGeneration, isTunnelRuntimeHostReady, replaceHostWireGuardPlanes } from "./tunnelRuntimeStatus";
 import { appendPanelLog } from "./_core/panelLogger";
@@ -7174,7 +7174,10 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     */
     if (!deferActionsForLocalState && agentSupportsPortAccessLimits(effectiveAgentVersion)) {
       // 设置里没打开时候选为空 → 空快照：不限，并撤掉之前打开时下发的限制。
-      const enforcePortLimits = portAccessLimitsEnabled(await db.getSetting(PORT_ACCESS_LIMITS_ENABLED_SETTING).catch(() => null));
+      // 读设置失败不能当成「关」：空快照会撤掉全部限制，这段时间放进来的连接之后也不会被踢掉。
+      // 读不到就沿用上一次发给这台机器的快照（没有就这轮不发，Agent 保持现状）。
+      const enforcePortLimits = await readPortAccessLimitsEnabled((key) => db.getSetting(key));
+      if (enforcePortLimits === null) appendPanelLog("warn", `[PortAccessLimits] host=${host.id} setting read failed, keeping previous snapshot`);
       const portLimitCandidates: any[] = [];
       for (const rule of (enforcePortLimits ? agentHostRules : []) as any[]) {
         if (!rule || runtimeBool(rule.pendingDelete) || !runtimeBool(rule.isEnabled)) continue;
@@ -7192,7 +7195,11 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         }
         portLimitCandidates.push(rule);
       }
-      const portLimitAction = portAccessLimitAction(portAccessLimitSpecs(portLimitCandidates, userAccessLimits), true);
+      const portLimitAction = resolvePortAccessLimitAction(
+        Number(host.id),
+        enforcePortLimits,
+        () => portAccessLimitAction(portAccessLimitSpecs(portLimitCandidates, userAccessLimits), true),
+      );
       if (portLimitAction) actions.push(portLimitAction);
     }
     const effectiveActions = dropStalePortRemoveActions(actions, protectedRuleRemoveActionKeys);

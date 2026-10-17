@@ -45,7 +45,17 @@ var portLimitHealth struct {
 	sync.Mutex
 	signature string
 	checkedAt time.Time
+	// desired 是最近一次收到的快照，attemptAt 是最近一次对齐 / 核对的时间：
+	// 面板把这条动作当成 knownRunning，期望状态没变就不会重发，失败的快照只能 Agent 自己重试。
+	desired   *action
+	attemptAt time.Time
 }
+
+// portLimitRetryInterval 是快照对齐失败后（xtables 锁、模块没加载……）自己重试的间隔。
+const portLimitRetryInterval = time.Minute
+
+// portLimitFirewallForMaintenance 让测试换成假的防火墙。
+var portLimitFirewallForMaintenance portLimitFirewall = systemPortLimitFirewall{}
 
 func isPortAccessLimitAction(a action) bool {
 	return strings.TrimSpace(a.ForwardType) == portAccessLimitForwardType
@@ -54,10 +64,70 @@ func isPortAccessLimitAction(a action) bool {
 func rememberPortLimitHealth(a action, ok bool) {
 	portLimitHealth.Lock()
 	defer portLimitHealth.Unlock()
+	now := time.Now()
 	portLimitHealth.signature = actionCommandSignature(a)
 	portLimitHealth.checkedAt = time.Time{}
 	if ok {
-		portLimitHealth.checkedAt = time.Now()
+		portLimitHealth.checkedAt = now
+	}
+	copied := a
+	portLimitHealth.desired = &copied
+	portLimitHealth.attemptAt = now
+}
+
+// maintainPortAccessLimits 由 portAccessLimitMaintenanceLoop 定时调用：
+//   - 上次对齐失败：每 portLimitRetryInterval 重试一次，直到成功；
+//   - 上次成功：每 accessLimitMaintenanceInterval 只读核对一次，被清掉了（比如有人 iptables -F）就补回来。
+//
+// 和动作队列共用串行锁；拿锁前后快照被更新的话放弃这一轮，绝不拿旧快照覆盖新的。
+func maintainPortAccessLimits(now time.Time) (attempted bool, ok bool) {
+	portLimitHealth.Lock()
+	if portLimitHealth.desired == nil {
+		portLimitHealth.Unlock()
+		return false, true
+	}
+	a := *portLimitHealth.desired
+	signature := portLimitHealth.signature
+	healthy := !portLimitHealth.checkedAt.IsZero()
+	due := (healthy && now.Sub(portLimitHealth.checkedAt) >= accessLimitMaintenanceInterval) ||
+		(!healthy && now.Sub(portLimitHealth.attemptAt) >= portLimitRetryInterval)
+	portLimitHealth.Unlock()
+	if !due {
+		return false, true
+	}
+	unlock, current := acquireCurrentActionSerialLocks(a)
+	if !current {
+		return false, true
+	}
+	if unlock != nil {
+		defer unlock()
+	}
+	portLimitHealth.Lock()
+	stale := portLimitHealth.signature != signature
+	portLimitHealth.Unlock()
+	if stale {
+		return false, true
+	}
+	fw := portLimitFirewallForMaintenance
+	if syncPortAccessLimits(fw, a.PortAccessLimits, true) == nil {
+		rememberPortLimitHealth(a, true)
+		return false, true
+	}
+	err := syncPortAccessLimits(fw, a.PortAccessLimits, false)
+	ok = err == nil
+	rememberPortLimitHealth(a, ok)
+	rememberRuntimeActionResult(a, ok)
+	if err != nil && shouldLogAgentReport("port-access-limit-maintenance", agentReportLogInterval) {
+		logf("TCP port access limit retry failed; forwarding remains active: %v", err)
+	}
+	return true, ok
+}
+
+func portAccessLimitMaintenanceLoop() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		maintainPortAccessLimits(time.Now())
 	}
 }
 

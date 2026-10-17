@@ -110,3 +110,41 @@ export function portAccessLimitAction(specs: PortAccessLimitSpec[], supported: b
     commands: [] as string[],
   };
 }
+
+/**
+ * 读「普通转发接入限制」开关。读失败返回 null（不是 false）：调用方据此沿用上一次的快照，
+ * 不能把一次数据库抖动当成「关」——空快照会撤掉全部限制，这段时间放进来的连接之后也不会被踢掉。
+ */
+export async function readPortAccessLimitsEnabled(getSetting: (key: string) => Promise<unknown>): Promise<boolean | null> {
+  try {
+    return portAccessLimitsEnabled(await getSetting(PORT_ACCESS_LIMITS_ENABLED_SETTING));
+  } catch {
+    return null;
+  }
+}
+
+/** 每台机器上一次下发的快照（读开关失败时沿用）。 */
+const lastPortAccessLimitActions = new Map<number, any>();
+const LAST_PORT_ACCESS_LIMIT_ACTIONS_MAX = 10_000;
+
+/**
+ * 这轮心跳要发的快照动作：开关读成功就按 build() 新出一份并记下；读失败就沿用这台机器
+ * 上一次的那份（从没发过就这轮不发，Agent 保持现状）。返回的都是副本，心跳后面改它不影响缓存。
+ */
+export function resolvePortAccessLimitAction(hostId: number, enabled: boolean | null, build: () => any) {
+  const id = Number(hostId);
+  if (enabled === null) {
+    const previous = lastPortAccessLimitActions.get(id);
+    return previous ? structuredClone(previous) : null;
+  }
+  const next = build();
+  if (next) {
+    lastPortAccessLimitActions.delete(id);
+    lastPortAccessLimitActions.set(id, structuredClone(next));
+    if (lastPortAccessLimitActions.size > LAST_PORT_ACCESS_LIMIT_ACTIONS_MAX) {
+      const oldest = lastPortAccessLimitActions.keys().next().value;
+      if (oldest !== undefined) lastPortAccessLimitActions.delete(oldest);
+    }
+  }
+  return next;
+}

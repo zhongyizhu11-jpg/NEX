@@ -7,6 +7,8 @@ import {
   onlyPortAccessLimitChanged,
   portAccessLimitAction,
   portAccessLimitsEnabled,
+  readPortAccessLimitsEnabled,
+  resolvePortAccessLimitAction,
   portAccessLimitSpecs,
 } from "./portAccessLimits";
 
@@ -89,4 +91,22 @@ test("heartbeat sync covers already-running entry rules without restarting their
 test("the enforcement setting only turns on for an explicit \"true\"", () => {
   assert.equal(portAccessLimitsEnabled("true"), true);
   for (const value of [null, undefined, "", "false", "1", "TRUE"]) assert.equal(portAccessLimitsEnabled(value), false);
+});
+
+test("a failed setting read is not treated as off: the previous snapshot is reused, never an empty one", async () => {
+  assert.equal(await readPortAccessLimitsEnabled(async () => "true"), true);
+  assert.equal(await readPortAccessLimitsEnabled(async () => null), false);
+  assert.equal(await readPortAccessLimitsEnabled(async () => { throw new Error("SQLITE_BUSY"); }), null);
+
+  const hostId = 987654;
+  // 从没发过：读失败这轮不发，Agent 保持现状。
+  assert.equal(resolvePortAccessLimitAction(hostId, null, () => { throw new Error("must not build"); }), null);
+  const specs = [{ userId: 1, maxIPs: 2, ports: [22] }];
+  const sent = resolvePortAccessLimitAction(hostId, true, () => portAccessLimitAction(structuredClone(specs), true));
+  assert.deepEqual(sent.portAccessLimits, specs);
+  sent.portAccessLimits.push({ userId: 9, maxIPs: 1, ports: [1] }); // 心跳后面改动作不影响缓存
+  const reused = resolvePortAccessLimitAction(hostId, null, () => { throw new Error("must not build"); });
+  assert.deepEqual(reused.portAccessLimits, specs);
+  // 开关真的关了才发空快照。
+  assert.deepEqual(resolvePortAccessLimitAction(hostId, false, () => portAccessLimitAction([], true)).portAccessLimits, []);
 });
