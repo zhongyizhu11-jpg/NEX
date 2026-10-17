@@ -40,6 +40,12 @@ type ManagedChildIntegrityRow = {
   parentPendingDelete: unknown;
   memberExists: unknown;
   memberGroupId: unknown;
+  /**
+   * 子规则所在的主机 / 隧道还对得上成员现在的拓扑（移植上游 f0c58f9）：成员换了主机、换了隧道、
+   * 隧道换了入口机之后，旧主机上那条派生规则只是残留，必须清掉，否则它会一直占着端口、
+   * 被当成活动入口去测试。
+   */
+  topologyHostMatches?: unknown;
   /** 组的 groupMode / entryGroupId：端口转发挂入口组时子规则记的是入口组的成员 */
   groupMode?: unknown;
   groupEntryGroupId?: unknown;
@@ -122,7 +128,8 @@ function isValidManagedChild(row: ManagedChildIntegrityRow | undefined) {
       positiveId(row.memberGroupId) === groupId
       // 端口转发挂了入口组（2.3.438 起）：子规则对应的是入口组的成员
       || (String(row.groupMode || "") === "port" && positiveId(row.groupEntryGroupId) > 0 && positiveId(row.memberGroupId) === positiveId(row.groupEntryGroupId))
-    );
+    )
+    && databaseBoolean(row.topologyHostMatches);
 }
 
 function normalizedText(value: unknown) {
@@ -199,14 +206,34 @@ async function managedChildIntegrity(ruleId: number) {
         p.${q("isForwardGroupTemplate")} AS ${q("parentIsTemplate")},
         p.${q("pendingDelete")} AS ${q("parentPendingDelete")},
         m.${q("id")} AS ${q("memberExists")},
-        m.${q("groupId")} AS ${q("memberGroupId")}
+        m.${q("groupId")} AS ${q("memberGroupId")},
+        CASE
+          WHEN g.${q("groupMode")} IN ('entry', 'exit') THEN 0
+          WHEN m.${q("memberType")} = 'host' AND m.${q("hostId")} = r.${q("hostId")}
+            AND (g.${q("groupMode")} <> 'chain' OR m.${q("isEnabled")} = ?)
+            AND COALESCE(r.${q("tunnelId")}, 0) = 0 THEN 1
+          WHEN g.${q("groupMode")} <> 'chain' AND m.${q("memberType")} = 'tunnel'
+            AND m.${q("tunnelId")} = r.${q("tunnelId")}
+            AND EXISTS (SELECT 1 FROM ${q("tunnels")} t
+              WHERE t.${q("id")} = m.${q("tunnelId")} AND t.${q("entryHostId")} = r.${q("hostId")}) THEN 1
+          WHEN g.${q("groupMode")} = 'chain' AND COALESCE(r.${q("tunnelId")}, 0) = 0
+            AND m.${q("id")} = (SELECT first_member.${q("id")} FROM ${q("forward_group_members")} first_member
+              WHERE first_member.${q("groupId")} = g.${q("id")} AND first_member.${q("isEnabled")} = ?
+              ORDER BY first_member.${q("priority")}, first_member.${q("id")} LIMIT 1)
+            AND EXISTS (SELECT 1 FROM ${q("forward_groups")} entry_group
+              INNER JOIN ${q("forward_group_members")} entry_member ON entry_member.${q("groupId")} = entry_group.${q("id")}
+              WHERE entry_group.${q("id")} = g.${q("entryGroupId")} AND entry_group.${q("groupMode")} = 'entry'
+                AND entry_member.${q("memberType")} = 'host' AND entry_member.${q("hostId")} = r.${q("hostId")}
+                AND entry_member.${q("isEnabled")} = ?) THEN 1
+          ELSE 0
+        END AS ${q("topologyHostMatches")}
        FROM ${q("forward_rules")} r
        LEFT JOIN ${q("forward_groups")} g ON g.${q("id")} = r.${q("forwardGroupId")}
        LEFT JOIN ${q("forward_rules")} p ON p.${q("id")} = r.${q("forwardGroupRuleId")}
        LEFT JOIN ${q("forward_group_members")} m ON m.${q("id")} = r.${q("forwardGroupMemberId")}
       WHERE r.${q("id")} = ?
       LIMIT 1`,
-    [ruleId],
+    [boolValue(true), boolValue(true), boolValue(true), ruleId],
   );
   return rows[0];
 }

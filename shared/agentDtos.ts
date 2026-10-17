@@ -143,6 +143,20 @@ export function normalizeAgentProbeCounts(value: {
 
 export type SelfTestMeta =
   | {
+      /** Failover-group rule test, pinned at click time to the active member's runtime child rule. */
+      kind: "forward-group";
+      groupId: number;
+      memberId: number;
+      runtimeRuleId: number;
+      forwardType: string;
+      sourcePort: number;
+      targetIp: string;
+      targetPort: number;
+      method: "tcp" | "ping";
+      sourceLabel?: string;
+      targetLabel?: string;
+    }
+  | {
       kind: "tunnel";
       tunnelId: number;
       targetIp?: string;
@@ -279,6 +293,6 @@ function validAgentProbeResult(item: any, idKey: string) {
 export function isSelfTestMeta(value: unknown): value is SelfTestMeta {
   const meta = value as Partial<SelfTestMeta>;
   if (!meta || typeof meta.kind !== "string") return false;
-  if (meta.kind === "forward-chain") return Number.isFinite(Number((meta as any).groupId));
+  if (meta.kind === "forward-chain" || meta.kind === "forward-group") return Number.isFinite(Number((meta as any).groupId));
   return Number.isFinite(Number((meta as any).tunnelId));
 }

@@ -1,8 +1,9 @@
 import { Router, Request, Response } from "express";
 import * as db from "./db";
 import { buildMetaAgentSelfTestPayload, buildRuleAgentSelfTestPayload, parseSelfTestMeta } from "./agentRouteUtils";
-import { recordTunnelHopTestResult } from "./tunnelHopTestState";
-import { recordHopTestResult } from "./hopTestState";
+import { settleManualTunnelProbeBatch } from "./tunnelManualProbe";
+import { settleManualForwardChainBatch } from "./forwardChainManualProbe";
+import { forwardTestRequestMessage, isDurableForwardTestBatchId, TUNNEL_PROBE_BATCH_PREFIX } from "./repositories/forwardTestRepository";
 import { appendPanelLog } from "./_core/panelLogger";
 import { getAgentHostIdentityFromRequest } from "./agentAuth";
 import { normalizeLinkProbeMethod } from "@shared/latencyProbe";
@@ -155,7 +156,7 @@ agentRouter.post("/api/agent/selftest-result", async (req: Request, res: Respons
       return;
     }
     const { testId, targetReachable, latencyMs, message, resolvedTargetIp } = req.body || {};
-    if (typeof testId !== "number") {
+    if (!Number.isInteger(testId) || testId <= 0) {
       res.status(400).json({ error: "testId is required" });
       return;
     }
@@ -164,11 +165,39 @@ agentRouter.post("/api/agent/selftest-result", async (req: Request, res: Respons
       res.status(404).json({ error: "test not found" });
       return;
     }
-    const meta = parseSelfTestMeta((t as any).message);
-    const success = !!targetReachable;
-    const cleanLatency = typeof latencyMs === "number" ? latencyMs : null;
+    // The Agent's result overwrites `message`; the dispatch payload lives in requestMessage.
+    const meta = parseSelfTestMeta(forwardTestRequestMessage(t as any));
+    const success = targetReachable === true;
+    const cleanLatency = typeof latencyMs === "number" && Number.isFinite(latencyMs) && latencyMs >= 0
+      ? Math.max(1, Math.round(latencyMs))
+      : null;
     const cleanMessage = typeof message === "string" ? message.slice(0, 4000) : null;
     const cleanResolvedTargetIp = typeof resolvedTargetIp === "string" ? resolvedTargetIp.trim().slice(0, 255) : "";
+    if (typeof targetReachable !== "boolean" || (success && cleanLatency === null)) {
+      res.status(400).json({ error: "Invalid probe result: successful probes require a finite latency" });
+      return;
+    }
+    const durableBatchId = String((t as any).batchId || "");
+    if (isDurableForwardTestBatchId(durableBatchId)) {
+      // Commit this hop's report on its own first, then try to aggregate the
+      // batch from the database (whoever completes the last hop wins).
+      const accepted = await db.completeForwardTestIfActive(testId, {
+        status: success ? "success" : "failed",
+        listenOk: true,
+        targetReachable: success,
+        forwardOk: success,
+        latencyMs: success ? cleanLatency : null,
+        message: cleanMessage,
+      });
+      const hopLabel = String((meta as any)?.hopLabel || "hop");
+      if (accepted) {
+        appendPanelLog(success ? "info" : "warn", `[SelfTest] batch=${durableBatchId} test=${testId} host=${host.id} ${hopLabel} success=${success} latency=${success ? `${cleanLatency}ms` : "-"}${!success && cleanMessage ? ` message=${cleanMessage}` : ""}`);
+      }
+      if (durableBatchId.startsWith(TUNNEL_PROBE_BATCH_PREFIX)) await settleManualTunnelProbeBatch(durableBatchId);
+      else await settleManualForwardChainBatch(durableBatchId);
+      res.json({ success: true, ...(accepted ? {} : { ignored: true }) });
+      return;
+    }
     const tunnelLatencyBaselineId = meta?.kind === "forward-via-tunnel"
       ? Number((meta as any).tunnelLatencyBaselineId || 0)
       : 0;
@@ -185,9 +214,9 @@ agentRouter.post("/api/agent/selftest-result", async (req: Request, res: Respons
       const accepted = await db.completeForwardTestIfActive(testId, {
         status: success ? "success" : "failed",
         listenOk: true,
-        targetReachable: !!targetReachable,
+        targetReachable: success,
         forwardOk: success,
-        latencyMs: cleanLatency,
+        latencyMs: success ? cleanLatency : null,
         message: cleanMessage,
       });
       if (!accepted) {
@@ -213,77 +242,19 @@ agentRouter.post("/api/agent/selftest-result", async (req: Request, res: Respons
       }
     }
     if (meta?.kind === "tunnel-hop" && typeof meta.tunnelId === "number") {
+      // Only rows created before durable batches reach here; their in-memory
+      // batch did not survive the panel restart, so the aggregate can never be
+      // computed. Release the tunnel's pending status instead of leaving it.
       const hopLabel = String((meta as any).hopLabel || "hop");
-      const routeLabel = typeof (meta as any).routeLabel === "string" ? (meta as any).routeLabel : null;
-      const groupKey = typeof (meta as any).groupKey === "string" ? (meta as any).groupKey : null;
-      const groupLabel = typeof (meta as any).groupLabel === "string" ? (meta as any).groupLabel : null;
-      const latencyMode = tunnelHopLatencyMode(meta as any);
-      const modeText = tunnelHopModeText(latencyMode);
-      const aggregate = recordTunnelHopTestResult(testId, {
-        success,
-        latencyMs: success ? cleanLatency : null,
-        message: cleanMessage,
-        hopLabel,
-        routeLabel,
-        groupKey,
-        groupLabel,
-      }, {
-        latencyMode,
-        successPrefix: modeText.successPrefix,
-        failurePrefix: modeText.failurePrefix,
-        totalLabel: modeText.totalLabel,
-      });
-      if (success) {
-        console.log(`[TunnelTest] tunnel=${meta.tunnelId} ${hopLabel} success latency=${cleanLatency ?? "-"}ms`);
-      } else {
-        console.warn(`[TunnelTest] tunnel=${meta.tunnelId} ${hopLabel} failed: ${cleanMessage || "unknown"}`);
-      }
-      if (aggregate) {
-        const aggregateMessage = structuredLinkTestMessage({
-          kind: modeText.kind,
-          tunnelId: aggregate.tunnelId,
-          message: aggregate.message,
-          details: aggregate.details,
-          totalLatencyMs: aggregate.latencyMs,
+      const tunnel = await db.getTunnelById(meta.tunnelId);
+      if (["pending", "running"].includes(String((tunnel as any)?.lastTestStatus || ""))) {
+        await db.updateTunnelTestResult(meta.tunnelId, {
+          status: "failed",
+          latencyMs: null,
+          message: `隧道测试批次已失效（面板重启前发起），${hopLabel} 的结果无法汇总，请重新测试`,
         });
-        if (aggregate.success) await db.updateTunnelRunningStatus(aggregate.tunnelId, true);
-        await db.updateTunnelTestResult(aggregate.tunnelId, {
-          status: aggregate.success ? "success" : "failed",
-          latencyMs: aggregate.success ? aggregate.latencyMs : null,
-          message: aggregateMessage,
-        });
-        const recordedAt = new Date();
-        if (latencyMode === "max") {
-          let branchIndex = 0;
-          for (const detail of aggregate.details || []) {
-            branchIndex += 1;
-            const key = branchIndex === 1 ? "primary" : `exit-${branchIndex}`;
-            const label = tunnelSeriesLabel((detail as any).routeLabel || (detail as any).hopLabel, `出口 ${branchIndex}`);
-            const branchLatency = typeof (detail as any).latencyMs === "number" && (detail as any).latencyMs > 0 ? Number((detail as any).latencyMs) : null;
-            await db.insertTunnelLatencyStat({
-              tunnelId: aggregate.tunnelId,
-              latencyMs: (detail as any).success ? branchLatency : null,
-              isTimeout: !(detail as any).success,
-              seriesKey: key,
-              seriesLabel: label,
-              recordedAt,
-            }, { preserveMessage: true, updateTunnel: false });
-          }
-        }
-        await db.insertTunnelLatencyStat({
-          tunnelId: aggregate.tunnelId,
-          latencyMs: aggregate.success ? aggregate.latencyMs : null,
-          isTimeout: !aggregate.success,
-          seriesKey: "total",
-          seriesLabel: modeText.seriesLabel,
-          recordedAt,
-        }, { message: aggregateMessage });
-        if (aggregate.success) {
-          console.log(`[TunnelTest] tunnel=${aggregate.tunnelId} multi-hop total latency=${aggregate.latencyMs}ms`);
-        } else {
-          console.warn(`[TunnelTest] tunnel=${aggregate.tunnelId} multi-hop failed: ${aggregate.message}`);
-        }
       }
+      console.warn(`[TunnelTest] tunnel=${meta.tunnelId} legacy hop result without durable batch test=${testId} ${hopLabel}`);
     }
     if (meta?.kind === "forward-via-tunnel" && typeof meta.tunnelId === "number") {
       const tunnel = await db.getTunnelById(meta.tunnelId);
@@ -440,48 +411,10 @@ agentRouter.post("/api/agent/selftest-result", async (req: Request, res: Respons
       const finalTarget = `${meta.targetIp || "-"}:${meta.targetPort || "-"}`;
       const hopLabel = String((meta as any).hopLabel || "");
       const routeLabel = typeof (meta as any).routeLabel === "string" ? (meta as any).routeLabel : null;
-      const latencyMode = (meta as any).latencyMode === "multi-source-remaining-path"
-        ? "multi-source-remaining-path"
-        : (meta as any).latencyMode === "remaining-path" ? "remaining-path" : "sum";
       if (hopLabel) {
-        const aggregate = recordHopTestResult(testId, {
-          success,
-          latencyMs: success ? cleanLatency : null,
-          message: cleanMessage,
-          hopLabel,
-          routeLabel,
-          method: normalizeLinkProbeMethod((meta as any).method),
-        }, {
-          successPrefix: "转发链逐跳测试成功",
-          failurePrefix: "转发链逐跳测试失败",
-          latencyMode,
-        });
-        if (aggregate) {
-          const aggregateMessage = structuredLinkTestMessage({
-            kind: "forward-chain-hop-summary",
-            groupId: meta.groupId,
-            message: aggregate.message,
-            details: aggregate.details,
-            totalLatencyMs: aggregate.latencyMs,
-          });
-          await db.updateForwardTestResult(testId, {
-            status: aggregate.success ? "success" : "failed",
-            listenOk: aggregate.success,
-            targetReachable: aggregate.success,
-            forwardOk: aggregate.success,
-            latencyMs: aggregate.success ? aggregate.latencyMs : null,
-            message: aggregateMessage,
-          });
-          await db.insertForwardGroupLatencyStat({
-            groupId: meta.groupId,
-            latencyMs: aggregate.success ? aggregate.latencyMs : null,
-            isTimeout: !aggregate.success,
-          });
-          appendPanelLog(
-            aggregate.success ? "info" : "warn",
-            `[SelfTest] forward-chain group=${meta.groupId} aggregate success=${aggregate.success} latency=${aggregate.success && aggregate.latencyMs !== null ? `${aggregate.latencyMs}ms` : "-"} message=${aggregate.message}`,
-          );
-        }
+        // Only rows created before durable batches reach here; the row itself
+        // already holds the hop result, the lost in-memory batch cannot be summarized.
+        appendPanelLog("warn", `[SelfTest] forward-chain group=${meta.groupId} legacy hop result without durable batch test=${testId} hop=${hopLabel} success=${success}`);
         res.json({ success: true });
         return;
       }
@@ -504,7 +437,7 @@ agentRouter.post("/api/agent/selftest-result", async (req: Request, res: Respons
         `[SelfTest] forward-chain test=${testId} group=${meta.groupId} success=${success} latency=${success && cleanLatency !== null ? `${cleanLatency}ms` : "-"} entry=${entryTarget} target=${finalTarget}${cleanMessage && !success ? ` message=${cleanMessage}` : ""}`,
       );
     }
-    if (!meta) {
+    if (!meta || meta.kind === "forward-group") {
       await db.insertTcpingStat({
         ruleId: Number(t.ruleId),
         hostId: Number(host.id),
@@ -535,7 +468,7 @@ agentRouter.post("/api/agent/selftest-pull", async (req: Request, res: Response)
     for (const t of pendingTests) {
       const claimed = await db.markForwardTestRunning(t.id);
       if (!claimed) continue;
-      const meta = parseSelfTestMeta((t as any).message);
+      const meta = parseSelfTestMeta(forwardTestRequestMessage(t as any));
       const metaSelfTest = buildMetaAgentSelfTestPayload(t, meta);
       if (metaSelfTest) {
         selfTests.push(metaSelfTest);

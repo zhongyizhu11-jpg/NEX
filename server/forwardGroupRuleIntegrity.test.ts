@@ -40,6 +40,8 @@ test("repairs orphaned and legacy forward-group rule references without touching
     await insertRule(15, 7, 10, 10, 200, false);
     await insertRule(16, 7, 999, 10, 100, false);
     await insertRule(17, 8, 10, 999, 100, false);
+    // Stale derived rule: member 100 is host 7 now; the child left on host 8 is a leftover.
+    await insertRule(18, 8, 10, 10, 100, false);
     await insertRule(30, 7, null, null, null, false);
     await insertRule(31, 7, null, null, null, false);
     await runtime.executeRaw('UPDATE "forward_rules" SET "name" = \'[组] group-10\', "sourcePort" = 1, "targetPort" = 1 WHERE "id" = 30');
@@ -47,7 +49,7 @@ test("repairs orphaned and legacy forward-group rule references without touching
     await runtime.executeRaw('INSERT INTO "traffic_billing_rule_usage" ("userId", "ruleId", "resourceType", "resourceId", "totalBytes", "billedGb", "pendingMilliCents", "settled") VALUES (9, 12, \'forward_group\', 10, 123, 0, 0, 0), (9, 17, \'forward_group\', 10, 456, 0, 0, 0), (9, 30, \'host\', 7, 789, 0, 0, 0)');
 
     assert.deepEqual(await integrity.repairForwardGroupRuleIntegrity(7), {
-      orphanRules: 5,
+      orphanRules: 6,
       legacyRules: 1,
       legacyPointers: 4,
       orphanTemplates: 0,
@@ -64,6 +66,7 @@ test("repairs orphaned and legacy forward-group rule references without touching
         { id: 15, isEnabled: 0, pendingDelete: 1, isRunning: 1 },
         { id: 16, isEnabled: 0, pendingDelete: 1, isRunning: 1 },
         { id: 17, isEnabled: 1, pendingDelete: 0, isRunning: 1 },
+        { id: 18, isEnabled: 0, pendingDelete: 1, isRunning: 1 },
         { id: 20, isEnabled: 1, pendingDelete: 0, isRunning: 1 },
         { id: 30, isEnabled: 0, pendingDelete: 1, isRunning: 1 },
         { id: 31, isEnabled: 1, pendingDelete: 0, isRunning: 1 },

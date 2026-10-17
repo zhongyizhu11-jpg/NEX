@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, notInArray, or, sql } from "drizzle-orm";
 import { normalizeLatencySeriesKey } from "../../shared/latencyProbe";
 import {
   hostMetrics, InsertHostMetric,
@@ -24,6 +24,7 @@ import { notifyTunnelLatencyRefresh } from "../tunnelLatencyRefresh";
 import { normalizeAgentProbeCounts } from "../../shared/agentDtos";
 import { normalizeTrafficCounterBytes } from "../../shared/trafficCounterBytes";
 import { getProbeCounterStatistics } from "./probeCounterRepository";
+import { SELF_TEST_MAX_LIFETIME_SECONDS } from "../selfTestTiming";
 
 const TRAFFIC_BUCKET_MINUTES = 30;
 const TRAFFIC_BUCKET_SECONDS = TRAFFIC_BUCKET_MINUTES * 60;
@@ -2684,7 +2685,13 @@ export async function insertTunnelLatencyStat(
   } else if (!options.preserveMessage) {
     updates.lastTestMessage = null;
   }
-  await db.update(tunnels).set(updates).where(eq(tunnels.id, stat.tunnelId));
+  // Periodic health samples stay in history, but cannot complete a manual
+  // test that is still pending/running, nor leave its pending details under a
+  // periodic "success".
+  await db.update(tunnels).set(updates).where(and(
+    eq(tunnels.id, stat.tunnelId),
+    ...(options.preserveMessage ? [or(isNull(tunnels.lastTestStatus), notInArray(tunnels.lastTestStatus, ["pending", "running"]))] : []),
+  ));
 }
 
 export async function getLatestTunnelLatencies(tunnelIds: number[]) {
@@ -3261,6 +3268,8 @@ export type TimedOutForwardTest = {
   ruleId: number;
   hostId: number;
   message: string | null;
+  requestMessage?: string | null;
+  batchId?: string | null;
   timeoutSeconds?: number;
 };
 
@@ -3268,6 +3277,7 @@ type ActiveForwardTestCandidate = TimedOutForwardTest & {
   status: string;
   createdAt: number;
   updatedAt: number;
+  firstDispatchedAt?: number | null;
 };
 
 export async function timeoutStaleForwardTests(
@@ -3282,11 +3292,13 @@ export async function timeoutStaleForwardTests(
   const baseCutoffSec = Math.floor((nowMs - baseTimeoutSeconds * 1000) / 1000);
   const candidates = await queryRaw<ActiveForwardTestCandidate>(
     `SELECT ${quoteIdentifier("id")}, ${quoteIdentifier("ruleId")}, ${quoteIdentifier("hostId")}, ${quoteIdentifier("message")},
+            ${quoteIdentifier("requestMessage")}, ${quoteIdentifier("batchId")}, ${quoteIdentifier("firstDispatchedAt")},
             ${quoteIdentifier("status")}, ${quoteIdentifier("createdAt")}, ${quoteIdentifier("updatedAt")}
      FROM ${quoteIdentifier("forward_tests")}
      WHERE (${quoteIdentifier("status")} = 'pending' AND ${quoteIdentifier("createdAt")} < ?)
-        OR (${quoteIdentifier("status")} = 'running' AND ${quoteIdentifier("updatedAt")} < ?)`,
-    [baseCutoffSec, baseCutoffSec],
+        OR (${quoteIdentifier("status")} = 'running' AND COALESCE(${quoteIdentifier("firstDispatchedAt")}, ${quoteIdentifier("updatedAt")}) < ?)
+        OR (${quoteIdentifier("status")} IN ('pending', 'running') AND ${quoteIdentifier("createdAt")} < ?)`,
+    [baseCutoffSec, baseCutoffSec, nowSec - SELF_TEST_MAX_LIFETIME_SECONDS],
   );
   if (candidates.length === 0) return [];
 
@@ -3298,11 +3310,14 @@ export async function timeoutStaleForwardTests(
     const effectiveTimeout = Number.isFinite(requestedTimeout) && requestedTimeout > 0
       ? Math.max(baseTimeoutSeconds, Math.floor(requestedTimeout))
       : baseTimeoutSeconds;
+    // A running test's deadline counts from its first dispatch: lease renewals
+    // (redelivery to a polling Agent) must not postpone the timeout forever.
     const referenceSec = String(candidate.status) === "running"
-      ? Number(candidate.updatedAt)
+      ? Number(candidate.firstDispatchedAt ?? candidate.updatedAt)
       : Number(candidate.createdAt);
     const cutoffSec = Math.floor((nowMs - effectiveTimeout * 1000) / 1000);
-    if (!Number.isFinite(referenceSec) || referenceSec >= cutoffSec) continue;
+    const lifetimeExceeded = Number(candidate.createdAt) < nowSec - SELF_TEST_MAX_LIFETIME_SECONDS;
+    if (!lifetimeExceeded && (!Number.isFinite(referenceSec) || referenceSec >= cutoffSec)) continue;
     timeoutById.set(id, effectiveTimeout);
   }
   if (timeoutById.size === 0) return [];
@@ -3321,15 +3336,17 @@ export async function timeoutStaleForwardTests(
            ${quoteIdentifier("updatedAt")} = ?
        WHERE ${quoteIdentifier("id")} = ?
          AND ((${quoteIdentifier("status")} = 'pending' AND ${quoteIdentifier("createdAt")} < ?)
-           OR (${quoteIdentifier("status")} = 'running' AND ${quoteIdentifier("updatedAt")} < ?))`,
-      [effectiveTimeout, nowSec, id, cutoffSec, cutoffSec],
+           OR (${quoteIdentifier("status")} = 'running' AND COALESCE(${quoteIdentifier("firstDispatchedAt")}, ${quoteIdentifier("updatedAt")}) < ?)
+           OR (${quoteIdentifier("status")} IN ('pending', 'running') AND ${quoteIdentifier("createdAt")} < ?))`,
+      [effectiveTimeout, nowSec, id, cutoffSec, cutoffSec, nowSec - SELF_TEST_MAX_LIFETIME_SECONDS],
     );
     if (rawAffectedRows(info) > 0) changedIds.push(id);
   }
   if (changedIds.length === 0) return [];
   const placeholders = changedIds.map(() => "?").join(", ");
   const timedOut = await queryRaw<TimedOutForwardTest>(
-    `SELECT ${quoteIdentifier("id")}, ${quoteIdentifier("ruleId")}, ${quoteIdentifier("hostId")}, ${quoteIdentifier("message")}
+    `SELECT ${quoteIdentifier("id")}, ${quoteIdentifier("ruleId")}, ${quoteIdentifier("hostId")}, ${quoteIdentifier("message")},
+            ${quoteIdentifier("requestMessage")}, ${quoteIdentifier("batchId")}
      FROM ${quoteIdentifier("forward_tests")}
      WHERE ${quoteIdentifier("id")} IN (${placeholders})
        AND ${quoteIdentifier("status")} = 'timeout'
