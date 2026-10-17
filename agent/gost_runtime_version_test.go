@@ -167,13 +167,28 @@ func TestGostRuntimeUpgradeCommitsIdleHost(t *testing.T) {
 	f := newFakeRuntimeUpgrade(t)
 	f.needed = false
 	f.install(t, "NEW", "OLD", time.Second)
-	// 一份旧的回滚记录：新文件确认能用之后要作废。
-	writeJSONFileAtomic(f.env.rollbackPath, gostRuntimeRollbackState{Reason: "old"})
+	// 回滚记录（可能是安装脚本这时刚写的）确认时一律不删：它只对被退回去的那个文件起作用，
+	// 新文件的能力照常报。
+	oldFile := filepath.Join(f.dir, "restored-earlier")
+	if err := os.WriteFile(oldFile, []byte("OLD"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	restoredFp, _ := statGostRuntimeFingerprint(oldFile)
+	writeJSONFileAtomic(f.env.rollbackPath, gostRuntimeRollbackState{Reason: "restart failed", RestoredFingerprint: restoredFp})
 	if got, _ := reconcileGostRuntimeUpgrade(f.env); got != gostRuntimeUpgradeCommitted {
 		t.Fatalf("idle host with working -V should commit, got %s", got)
 	}
-	if exists(f.env.rollbackPath) {
-		t.Fatalf("stale rollback record should be removed on commit")
+	if !exists(f.env.rollbackPath) {
+		t.Fatalf("commit must not delete the rollback record (the installer may have just written it)")
+	}
+	state, _ := readGostRuntimeRollbackState(f.env.rollbackPath)
+	info, fp := f.env.version(f.env.binaryPath)
+	if caps := gostRuntimeCapabilities("2.2.228", info, fp, &state); len(caps) != 2 {
+		t.Fatalf("a rollback record for another file must not hide the new runtime's capabilities, got %v", caps)
+	}
+	restoredInfo := parseGostRuntimeVersion("gost 3.2.6-nex3")
+	if caps := gostRuntimeCapabilities("2.2.228", restoredInfo, restoredFp, &state); len(caps) != 0 {
+		t.Fatalf("the restored file itself stays without capabilities, got %v", caps)
 	}
 }
 

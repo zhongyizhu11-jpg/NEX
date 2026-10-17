@@ -418,9 +418,22 @@ export async function listEgressEntryCapabilities(actor: Actor, hostIds: readonl
   const allowed = actor.role === "admin"
     ? null
     : new Set((await db.getUserEffectiveAllowedHostIds(actor.id)).map(Number));
+  const canSeeHost = (host: any) => !!host && (allowed === null || Number(host.userId) === Number(actor.id) || allowed.has(Number(host.id)));
+  // 规则可以挂在自己能用的端口转发资源上，入口是资源里别人的机器：这些机器能问能力（不回名字和版本）。
+  // 其它主机一律当成不存在来回答，不然随便填个主机 ID 就能探出它在不在、Agent 新不新。
+  let reachable: Set<number> | null = null;
+  if (allowed !== null && rows.some((host) => !canSeeHost(host))) {
+    reachable = new Set<number>();
+    const groupIds = (await db.getUserAllowedForwardGroupIds(actor.id).catch(() => [])) as number[];
+    for (const groupId of groupIds) {
+      const memberIds = (await db.getForwardGroupRuleEntryHostIds(Number(groupId)).catch(() => [])) as number[];
+      for (const id of memberIds) reachable.add(Number(id));
+    }
+  }
   return ids.map((hostId) => {
-    const host = rows.find((row) => Number(row.id) === hostId) || null;
-    const canSee = !!host && (allowed === null || Number(host.userId) === Number(actor.id) || allowed.has(hostId));
+    const row = rows.find((item) => Number(item.id) === hostId) || null;
+    const canSee = canSeeHost(row);
+    const host = canSee || (row && reachable?.has(hostId)) ? row : null;
     const capabilities = hostSsEgressCapabilities(host);
     return {
       hostId,

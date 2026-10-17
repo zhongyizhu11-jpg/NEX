@@ -86,6 +86,11 @@ export const SS_EGRESS_CAPABILITY_AGENT_VERSION = "2.2.227";
 /** 运行时的 NEX 构建号门槛：3.2.6-nex3 起 Shadowsocks UDP / SS2022 和 sing-box 互通。 */
 export const SS_EGRESS_RUNTIME_MIN_NEX_BUILD = 3;
 export const SS_EGRESS_RUNTIME_MIN_VERSION_LABEL = `3.2.6-nex${SS_EGRESS_RUNTIME_MIN_NEX_BUILD}`;
+/**
+ * 这一版面板带的自编运行时构建号（gost-runtime/build.sh 的 NEX_GOST_BUILD，scripts/check-versions.mjs 会查）。
+ * 装机脚本把比它旧的 NEX 自编版换成它；能力门槛仍是上面的 nex3（nex4 只加固了 SS2022 UDP 回包校验）。
+ */
+export const NEX_GOST_RUNTIME_BUILD = 4;
 /** Agent 心跳里 agentCapabilities 的两项（和 agent/gost_runtime_version.go 一致）。 */
 export const AGENT_CAPABILITY_SS_EGRESS_UDP = "ssEgressUdp";
 export const AGENT_CAPABILITY_SS_EGRESS_2022 = "ssEgress2022";

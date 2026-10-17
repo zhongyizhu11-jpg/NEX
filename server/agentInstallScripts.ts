@@ -2,7 +2,7 @@ import { MIMIC_TARGET_VERSION } from "./mimicInstallTasks";
 import { APP_VERSION } from "./_core/systemRouter";
 import { FXP_MIN_WIRE_VERSION } from "../shared/versions";
 import { FXP_HANDSHAKE_V3_MARKER } from "../shared/fxpRuntime";
-import { SS_EGRESS_RUNTIME_MIN_NEX_BUILD } from "../shared/ssEgress";
+import { NEX_GOST_RUNTIME_BUILD, SS_EGRESS_RUNTIME_MIN_NEX_BUILD } from "../shared/ssEgress";
 
 /**
  * 「上一个版本」的猜测值：补丁号减一。
@@ -360,6 +360,8 @@ export function generateInstallScript(defaultPanelUrl: string, options: AgentIns
     'RUNTIME_ROLLBACK_STATE="/var/lib/forwardx-agent/runtime-rollback.json"',
     // 已经是 NEX 自编版、但构建号低于这个时，从面板换新的（nex3 起 Shadowsocks UDP / SS2022 出口才能用）。
     `RUNTIME_MIN_NEX_BUILD="${SS_EGRESS_RUNTIME_MIN_NEX_BUILD}"`,
+    // 面板这一版带的自编运行时构建号：装着的 NEX 自编版比它旧就从面板换新的。
+    `RUNTIME_TARGET_NEX_BUILD="${NEX_GOST_RUNTIME_BUILD}"`,
     'NGINX_BIN="/usr/local/bin/forwardx-nginx"',
     'NGINX_SERVICE_NAME="forwardx-nginx"',
 
@@ -1749,8 +1751,8 @@ export function generateInstallScript(defaultPanelUrl: string, options: AgentIns
     "    chmod 0755 \"$RUNTIME_BIN\" 2>/dev/null || true",
     "    if runtime_self_check \"$RUNTIME_BIN\"; then",
     "      if runtime_is_nex_build \"$RUNTIME_BIN\"; then",
-    "        # 构建号够新就不动；低于 RUNTIME_MIN_NEX_BUILD（例如 nex2）时从面板换新的，换不了就继续用旧的。",
-    "        if [ \"$(runtime_nex_build \"$RUNTIME_BIN\")\" -ge \"$RUNTIME_MIN_NEX_BUILD\" ] 2>/dev/null; then",
+    "        # 已是面板这一版的构建号（或更新）就不动；更旧时从面板换新的，换不了就继续用旧的。",
+    "        if [ \"$(runtime_nex_build \"$RUNTIME_BIN\")\" -ge \"$RUNTIME_TARGET_NEX_BUILD\" ] 2>/dev/null; then",
     "          echo \"[信息] gost runtime 已是 NEX 自编版: $RUNTIME_BIN ($(runtime_version_string \"$RUNTIME_BIN\"))\"",
     "          return 0",
     "        fi",

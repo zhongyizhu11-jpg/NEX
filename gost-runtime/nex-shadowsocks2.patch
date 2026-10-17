@@ -20,6 +20,16 @@ shadowsocks-rust). Root causes are explained in comments next to each change.
      0-899 random bytes on every datagram, which fragmented 1200-1400 byte packets.
   5. utils.GeneratePadding returns 1..900 bytes; 0 made an SS2022 request without
      initial payload invalid (about one nodelay connection in 900 failed).
+  6. SS2022 UDP replies (shadowaead_2022/session_manager.go, session_client.go): the client
+     did not check that a reply is a server packet, that it echoes this session ID, or
+     that its packet ID is new, so a captured reply could be re-injected into any flow
+     within its 30 s timestamp window. Now checked as SIP022 requires (current and previous
+     server session each get a sliding window; a session window is kept at least the 60 s
+     NAT timeout after its last packet, so a third session showing up sooner is rejected
+     instead of evicting a window whose packets could then be replayed).
+  7. shadowaead_2022/replay.go: the sliding window treated maxPacketID == 0 as "empty",
+     so packet ID 0 (the first one) was accepted again and again until a higher ID came.
+  Regression tests: shadowaead_2022/nex_replay_test.go.
 
 diff -ruN a/shadowaead/bloomring.go b/shadowaead/bloomring.go
 --- a/shadowaead/bloomring.go
@@ -115,6 +125,128 @@ diff -ruN a/shadowaead_2022/packet.go b/shadowaead_2022/packet.go
 +	}
 +	return int(addr[len(addr)-2])<<8 | int(addr[len(addr)-1])
 +}
+diff -ruN a/shadowaead_2022/replay.go b/shadowaead_2022/replay.go
+--- a/shadowaead_2022/replay.go
++++ b/shadowaead_2022/replay.go
+@@ -11,6 +11,7 @@
+ // a specific packet ID has been received. The window slides forward as newer packets arrive.
+ type SlidingWindow struct {
+ 	maxPacketID uint64   // Highest packet ID seen so far
++	started     bool     // NEX: at least one packet accepted (maxPacketID 0 is a valid ID)
+ 	bitmap      []uint64 // Bitmap of received packets, bitmap[0] covers newest packets
+ 	windowSize  uint64   // Size of the sliding window (e.g., 2000)
+ }
+@@ -40,8 +41,11 @@
+ // - Packets already received are rejected (replay attack)
+ // - New packets update the bitmap and slide the window if necessary
+ func (w *SlidingWindow) Validate(packetID uint64) bool {
+-	// Special case: first packet ever
+-	if w.maxPacketID == 0 {
++	// Special case: first packet ever.
++	// NEX: keyed on started, not maxPacketID == 0: packet IDs start at 0, so the old
++	// check accepted packet 0 again and again (a replay hole) until a higher ID arrived.
++	if !w.started {
++		w.started = true
+ 		w.maxPacketID = packetID
+ 		w.markReceived(0) // Mark position 0 in bitmap
+ 		return true
+diff -ruN a/shadowaead_2022/session_client.go b/shadowaead_2022/session_client.go
+--- a/shadowaead_2022/session_client.go
++++ b/shadowaead_2022/session_client.go
+@@ -26,6 +26,65 @@
+ 	lastUsed   atomic.Int64  // Last time this session was used (for timeout cleanup)
+ 	clientAddr netip.AddrPort
+ 	mu         sync.RWMutex
++
++	// NEX: replay protection for replies (SIP022: the client tracks the server's
++	// session ID and filters packet IDs with a sliding window). The current and the
++	// previous server session are kept so replies still in flight across a server
++	// restart are not dropped.
++	replayMu   sync.Mutex
++	serverCur  *serverReplayState
++	serverPrev *serverReplayState
++	now        func() time.Time // tests
++}
++
++type serverReplayState struct {
++	sessionID uint64
++	window    *SlidingWindow
++	lastSeen  time.Time
++}
++
++// serverSessionHold (NEX): a server session's replay window is kept at least this long
++// after its last packet (the NAT timeout). Dropping it sooner would let a captured
++// packet of that session be accepted again as if the session were new; a packet sent
++// before the window was dropped is older than the 30 s timestamp limit by then.
++const serverSessionHold = 60 * time.Second
++
++// acceptServerPacket (NEX) reports whether a reply with this server session / packet ID
++// is new. Call it only after the packet authenticated.
++func (s *ClientSession) acceptServerPacket(serverSessionID, packetID uint64) bool {
++	s.replayMu.Lock()
++	defer s.replayMu.Unlock()
++	now := time.Now()
++	if s.now != nil {
++		now = s.now()
++	}
++	for _, state := range []*serverReplayState{s.serverCur, s.serverPrev} {
++		if state != nil && state.sessionID == serverSessionID {
++			if !state.window.Validate(packetID) {
++				return false
++			}
++			state.lastSeen = now
++			return true
++		}
++	}
++	// A new server session. Only one older session is kept, and it may be dropped only
++	// once it has been idle for serverSessionHold: a third session showing up sooner
++	// (two quick restarts, or a replayed packet of a session we already dropped) is
++	// rejected until then (SIP022 allows either behaviour).
++	if s.serverPrev != nil && now.Sub(s.serverPrev.lastSeen) < serverSessionHold {
++		return false
++	}
++	state := &serverReplayState{sessionID: serverSessionID, window: NewSlidingWindow(0), lastSeen: now}
++	state.window.Validate(packetID)
++	s.serverPrev, s.serverCur = s.serverCur, state
++	return true
++}
++
++// SetClockForTest (NEX) overrides the clock used by the reply replay filter.
++func (s *ClientSession) SetClockForTest(now func() time.Time) {
++	s.replayMu.Lock()
++	s.now = now
++	s.replayMu.Unlock()
+ }
+ 
+ // NewClientSession creates a new client session with a random session ID.
+diff -ruN a/shadowaead_2022/session_manager.go b/shadowaead_2022/session_manager.go
+--- a/shadowaead_2022/session_manager.go
++++ b/shadowaead_2022/session_manager.go
+@@ -133,10 +133,23 @@
+ func (m *UDPSessionManager) ClientHandleOutbound(encrypted []byte, udpSession core.UDPSession) ([]byte, error) {
+ 	session := udpSession.(*ClientSession)
+ 
+-	_, _, payload, _, err := UnpackUDP(m.cipher, nil, encrypted)
++	separateHeader, header, payload, _, err := UnpackUDP(m.cipher, nil, encrypted)
+ 	if err != nil {
+ 		return nil, err
+ 	}
++	// NEX: SIP022 requires the client to check that a reply is a server packet, that it
++	// echoes this session's ID, and that its packet ID is not a replay. Upstream checked
++	// none of it, so a captured reply could be re-injected into any flow for as long as
++	// its timestamp stayed within 30 s.
++	if header.Type != HeaderTypeServerStream {
++		return nil, ErrInvalidHeader
++	}
++	if header.ClientSessionID != session.SessionID() {
++		return nil, ErrInvalidSessionID
++	}
++	if !session.acceptServerPacket(separateHeader.SessionID, separateHeader.PacketID) {
++		return nil, ErrReplayAttack
++	}
+ 
+ 	session.Touch()
+ 
 diff -ruN a/shadowaead_2022/stream.go b/shadowaead_2022/stream.go
 --- a/shadowaead_2022/stream.go
 +++ b/shadowaead_2022/stream.go
@@ -149,6 +281,105 @@ diff -ruN a/shadowaead_2022/stream.go b/shadowaead_2022/stream.go
  	}
  
  	// Regular payload chunks (with length prefix)
+diff -ruN a/shadowaead_2022/nex_replay_test.go b/shadowaead_2022/nex_replay_test.go
+--- a/shadowaead_2022/nex_replay_test.go
++++ b/shadowaead_2022/nex_replay_test.go
+@@ -0,0 +1,95 @@
++package shadowaead2022_test
++
++// NEX (nex-shadowsocks2.patch): replies to an SS2022 UDP client must be server packets that
++// echo this session's ID and carry a packet ID not seen before.
++
++import (
++	"encoding/base64"
++	"net/netip"
++	"testing"
++	"time"
++
++	"github.com/go-gost/go-shadowsocks2/core"
++	shadowaead2022 "github.com/go-gost/go-shadowsocks2/shadowaead_2022"
++	"github.com/go-gost/go-shadowsocks2/socks"
++	"github.com/go-gost/go-shadowsocks2/utils"
++)
++
++func TestNexSlidingWindowPacketZeroIsNotReplayable(t *testing.T) {
++	w := shadowaead2022.NewSlidingWindow(0)
++	if !w.Validate(0) {
++		t.Fatal("first packet 0 must be accepted")
++	}
++	if w.Validate(0) {
++		t.Fatal("packet 0 replayed must be rejected")
++	}
++	if !w.Validate(2) || !w.Validate(1) || w.Validate(1) || w.Validate(2) {
++		t.Fatal("out-of-order packets accepted once, replays rejected")
++	}
++}
++
++func TestNexClientRejectsForeignAndReplayedReplies(t *testing.T) {
++	for _, method := range []string{"2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm"} {
++		t.Run(method, func(t *testing.T) {
++			size := 16
++			if method == "2022-blake3-aes-256-gcm" {
++				size = 32
++			}
++			key := make([]byte, size)
++			for i := range key {
++				key[i] = byte(i + 1)
++			}
++			cfg, err := utils.NewClientConfig(method, base64.StdEncoding.EncodeToString(key))
++			if err != nil {
++				t.Fatal(err)
++			}
++			client := core.NewUDPClient(cfg, 60)
++			target := socks.ParseAddr("1.1.1.1:443")
++			session, _, err := client.Inbound([]byte("hello"), netip.MustParseAddrPort("127.0.0.1:40000"), target)
++			if err != nil {
++				t.Fatal(err)
++			}
++			clientSID := session.(*shadowaead2022.ClientSession).SessionID()
++			reply := func(serverSID, packetID, echoed uint64) []byte {
++				pkt, err := shadowaead2022.PackUDP(cfg.Cipher, false, cfg.Cipher.Key(), cfg.Cipher.Key(), []byte("pong"), target, serverSID, packetID, echoed)
++				if err != nil {
++					t.Fatal(err)
++				}
++				return pkt
++			}
++			accept := func(name string, pkt []byte, want bool) {
++				t.Helper()
++				// Outbound decrypts in place: hand it a copy so a "replay" really is the same bytes.
++				payload, err := client.Outbound(append([]byte(nil), pkt...), session)
++				if want && (err != nil || string(payload) != "pong") {
++					t.Fatalf("%s: want accepted, got %q %v", name, payload, err)
++				}
++				if !want && err == nil {
++					t.Fatalf("%s: want rejected", name)
++				}
++			}
++			first := reply(7, 0, clientSID)
++			accept("first reply", first, true)
++			accept("replayed first reply", first, false)
++			accept("next packet", reply(7, 1, clientSID), true)
++			accept("other session's reply", reply(7, 2, clientSID+1), false)
++			accept("client-type packet", reply(7, 3, 0), false)
++			// Server restarted: a new server session is accepted; the previous one still works.
++			clock := time.Unix(1_800_000_000, 0)
++			session.(*shadowaead2022.ClientSession).SetClockForTest(func() time.Time { return clock })
++			accept("new server session", reply(9, 0, clientSID), true)
++			accept("previous server session, new packet", reply(7, 5, clientSID), true)
++			accept("previous server session replay", reply(7, 1, clientSID), false)
++			// A third session while the oldest one is still within the NAT timeout is rejected:
++			// otherwise the oldest window would be dropped and its packets accepted again.
++			accept("third session too soon", reply(11, 0, clientSID), false)
++			accept("current sessions still work", reply(9, 1, clientSID), true)
++			// Session 7 last seen > 60 s ago: now a new session may replace it.
++			clock = clock.Add(61 * time.Second)
++			accept("current session keeps going", reply(9, 2, clientSID), true)
++			accept("third session after the hold", reply(11, 0, clientSID), true)
++			// 9 is now the previous session (seen just now), 7 is gone: a fourth session must wait again.
++			accept("dropped session cannot come back while 9 is fresh", reply(7, 6, clientSID), false)
++		})
++	}
++}
 diff -ruN a/utils/utils.go b/utils/utils.go
 --- a/utils/utils.go
 +++ b/utils/utils.go

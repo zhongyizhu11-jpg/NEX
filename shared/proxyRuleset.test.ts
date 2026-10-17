@@ -59,6 +59,17 @@ test("规则顺序：局域网和广告在前，国内直连在所有服务之�
   assert.equal(match, order.length - 1, "兜底必须是最后一条");
 });
 
+test("规则顺序：AI 排在谷歌、微软、GitHub 之前（不然 gemini.google.com、copilot 先被它们吃掉）", () => {
+  const plan = buildProxyRulePlan({ preset: "comprehensive", ...PLAN_OPTIONS });
+  const order = plan.rules.map((rule) => (rule.type === "rule-set" ? rule.ruleSet : rule.type));
+  const at = (key: string) => order.findIndex((name) => name === key || name.startsWith(`${key}-`));
+  const ai = at("ai");
+  assert.ok(ai >= 0);
+  for (const later of ["google", "microsoft", "github", "youtube", "cn"]) {
+    assert.ok(at(later) < 0 || ai < at(later), `AI 应排在 ${later} 之前`);
+  }
+});
+
 test("广告直接拦截，不建策略组", () => {
   const plan = buildProxyRulePlan({ preset: "minimal", ...PLAN_OPTIONS });
 

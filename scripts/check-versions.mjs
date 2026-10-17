@@ -86,6 +86,11 @@ const defaultNexBuild = Number(gostRuntimeBuild.match(/NEX_GOST_BUILD="\$\{NEX_G
 if (!defaultNexBuild || defaultNexBuild < minNexBuild) {
   errors.push(`gost-runtime/build.sh NEX_GOST_BUILD default nex${defaultNexBuild || "?"} is below SS_EGRESS_RUNTIME_MIN_NEX_BUILD ${minNexBuild}`);
 }
+// 装机脚本按 NEX_GOST_RUNTIME_BUILD 决定要不要换运行时：必须就是这一版编出来的构建号。
+const targetNexBuild = Number(tsNumber(sharedSsEgress, "NEX_GOST_RUNTIME_BUILD") || 0);
+if (targetNexBuild !== defaultNexBuild) {
+  errors.push(`shared/ssEgress.ts NEX_GOST_RUNTIME_BUILD ${targetNexBuild || "(missing)"} does not match gost-runtime/build.sh NEX_GOST_BUILD default nex${defaultNexBuild || "?"}`);
+}
 const capabilityAgentVersion = tsString(sharedSsEgress, "SS_EGRESS_CAPABILITY_AGENT_VERSION");
 if (capabilityAgentVersion && agentVersion.split(".").map(Number).reduce((acc, part, index) => acc || (part - (capabilityAgentVersion.split(".").map(Number)[index] || 0)), 0) < 0) {
   errors.push(`AGENT_VERSION ${agentVersion} is older than SS_EGRESS_CAPABILITY_AGENT_VERSION ${capabilityAgentVersion}`);
