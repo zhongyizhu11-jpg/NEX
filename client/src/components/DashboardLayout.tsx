@@ -72,6 +72,7 @@ import {
 import { useOpsFeatures } from "@/features/ops/useOpsFeatures";
 import OpsMaintenanceBanner from "@/features/ops/maintenance/MaintenanceBanner";
 import { App as CapacitorApp } from "@capacitor/app";
+import { rememberSidebarScroll } from "@/lib/sidebarScroll";
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { IosTabBar } from "@/components/ios/TabBar";
 import { MobileNavContext, type MobileNavEntry } from "@/components/ios/navigationContext";
@@ -408,6 +409,33 @@ function DashboardLayoutContent({
   const accountMenuOpenRef = useRef(accountMenuOpen);
   const isDesktopCollapsed = !isMobile && state === "collapsed";
   const isAdmin = user?.role === "admin";
+  /*
+    侧栏滚动位置（上游 2.3.285）：每个页面自己包一层外壳，换页时侧栏重新挂载、滚动条跳回顶部。
+    按账号 + 侧栏形态记住位置，挂载后还原；用户自己一滚就以他为准。
+  */
+  const sidebarContentRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const content = sidebarContentRef.current;
+    if (!content) return;
+    const scroll = rememberSidebarScroll(content, `${user?.id ?? 0}:${isMobile ? "mobile" : state}`);
+    scroll.restore();
+    const interrupt = (event: Event) => {
+      if (event instanceof KeyboardEvent && !["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) return;
+      scroll.interrupt();
+    };
+    const inputEvents = ["wheel", "touchstart", "pointerdown", "keydown"];
+    content.addEventListener("scroll", scroll.save, { passive: true });
+    for (const name of inputEvents) content.addEventListener(name, interrupt, { passive: true });
+    // 菜单（插件页、自定义页）可能是异步补进来的：内容一变再试着还原一次。
+    const mutations = new MutationObserver(() => scroll.restore());
+    mutations.observe(content, { childList: true, subtree: true });
+    return () => {
+      scroll.save();
+      mutations.disconnect();
+      content.removeEventListener("scroll", scroll.save);
+      for (const name of inputEvents) content.removeEventListener(name, interrupt);
+    };
+  }, [user?.id, isMobile, state]);
   const opsFeatures = useOpsFeatures();
   const utils = trpc.useUtils();
   const queryFailure = useQueryFailureSignal();
@@ -1734,7 +1762,7 @@ function DashboardLayoutContent({
             )}
           </SidebarHeader>
         ) : null}
-        <SidebarContent className="gap-1 pb-2 mobile-sidebar-content">
+        <SidebarContent ref={sidebarContentRef} className="gap-1 pb-2 mobile-sidebar-content">
           <PearlNavMarker collapsed={isDesktopCollapsed || isMobile} />
           {primaryMenuItems.length > 0 && (
             <SidebarGroup className={cn("pb-2 mobile-sidebar-group", mobileAuth.isNative && "pb-1.5")}>
