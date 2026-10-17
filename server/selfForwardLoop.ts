@@ -1,4 +1,5 @@
 import { isIP } from "node:net";
+import { normalizeClientIp } from "./ops/firewallCidr";
 
 /*
   「本机端口转发回本机同端口」的死循环检查。规则新建 / 编辑（server/routers/rules.crud.ts）和
@@ -7,11 +8,15 @@ import { isIP } from "node:net";
 */
 
 export function normalizeAddressToken(value: unknown) {
-  return String(value || "")
+  const token = String(value || "")
     .trim()
     .replace(/^\[(.*)\]$/, "$1")
     .replace(/\.$/, "")
     .toLowerCase();
+  // 是 IP 就换成统一写法再比：2001:0db8:0:0:0:0:0:9 和 2001:db8::9、::ffff:1.2.3.4 和 1.2.3.4 是同一个地址。
+  // 带 %zone 的链路本地地址不动（zone 不同可能是另一台邻居）；不是 IP 的（域名）照旧按小写文本比。
+  if (isIP(token) && !token.includes("%")) return normalizeClientIp(token) || token;
+  return token;
 }
 
 export function isLoopbackAddress(value: unknown) {

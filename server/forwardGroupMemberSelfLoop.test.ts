@@ -110,3 +110,24 @@ test("assertNoDirectSelfForwardLoop：同端口转回本机地址 / 环回地址
   assert.doesNotThrow(() => assertNoDirectSelfForwardLoop({ host, sourcePort: 443, targetIp: "203.0.113.1", targetPort: 443 }));
   assert.doesNotThrow(() => assertNoDirectSelfForwardLoop({ host, sourcePort: 443, targetIp: "127.0.0.1", targetPort: 443, tunnelId: 3 }), "走隧道的不是本机直转");
 });
+
+test("assertNoDirectSelfForwardLoop：同一个 IP 换个写法（IPv6 展开 / 压缩、IPv4-mapped）照样认出来", () => {
+  const compressedHost = { ip: "198.51.100.9", ipv6: "2001:db8::9" };
+  const expandedHost = { ip: "198.51.100.9", ipv6: "2001:0DB8:0:0:0:0:0:9" };
+  const loops: Array<[any, string]> = [
+    [compressedHost, "2001:0db8:0:0:0:0:0:9"],
+    [compressedHost, "[2001:db8:0::0:9]"],
+    [expandedHost, "2001:db8::9"],
+    [compressedHost, "::ffff:198.51.100.9"],
+    [compressedHost, "::ffff:c633:6409"],
+    [{ ip: "::ffff:198.51.100.9" }, "198.51.100.9"],
+    [compressedHost, "::ffff:127.0.0.1"],
+    [compressedHost, "0::1"],
+  ];
+  for (const [host, targetIp] of loops) {
+    assert.throws(() => assertNoDirectSelfForwardLoop({ host, sourcePort: 443, targetIp, targetPort: 443 }), /死循环/, `${JSON.stringify(host)} -> ${targetIp}`);
+  }
+  assert.doesNotThrow(() => assertNoDirectSelfForwardLoop({ host: compressedHost, sourcePort: 443, targetIp: "2001:db8::10", targetPort: 443 }));
+  // 不是 IP 的照旧按文本（不分大小写）比。
+  assert.throws(() => assertNoDirectSelfForwardLoop({ host: { ddnsDomain: "Edge.Example.com" }, sourcePort: 443, targetIp: "edge.example.COM", targetPort: 443 }), /死循环/);
+});
