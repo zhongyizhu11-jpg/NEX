@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { decodeHtmlEntities, escapeDiscordMarkdown, telegramHtmlToDiscordText, truncateDiscordText } from "./discordText";
+import { decodeHtmlEntities, DISCORD_MESSAGE_MAX_CHUNKS, escapeDiscordMarkdown, splitDiscordText, telegramHtmlToDiscordText, truncateDiscordText } from "./discordText";
 
 test("Telegram HTML 的格式换成 Discord Markdown", () => {
   assert.equal(
@@ -40,12 +40,40 @@ test("HTML 实体正确解开", () => {
   assert.equal(escapeDiscordMarkdown("a_b*c"), "a\\_b\\*c");
 });
 
-test("超过 2000 字在换行处截断并注明", () => {
+test("长通知不再截在 2000 字：整段转好，发送时按换行拆成每条 ≤ 2000 字", () => {
   const long = Array.from({ length: 300 }, (_, i) => `第 ${i} 行内容`).join("\n");
   const text = telegramHtmlToDiscordText(long);
-  assert.ok(text.length <= 2000, String(text.length));
-  assert.match(text, /完整内容请到面板查看）$/);
+  assert.ok(text.length > 2000, "转换这一步不截断");
+  assert.doesNotMatch(text, /完整内容请到面板查看/);
+  const chunks = splitDiscordText(text);
+  assert.ok(chunks.length >= 2);
+  for (const chunk of chunks) assert.ok(chunk.length <= 2000 && chunk.length > 0, String(chunk.length));
+  assert.equal(chunks.join("\n"), text, "按换行拆，拼回去就是原文");
+  assert.deepEqual(splitDiscordText("短"), ["短"]);
+  assert.deepEqual(splitDiscordText("   "), []);
+
+  // 没有换行的一大段：硬切，但不劈开代理对、不留下半个转义。
+  const emoji = "😀".repeat(1500);
+  const emojiChunks = splitDiscordText(emoji);
+  assert.equal(emojiChunks.join(""), emoji);
+  for (const chunk of emojiChunks) assert.ok(!/[\ud800-\udbff]$/.test(chunk) && !/^[\udc00-\udfff]/.test(chunk));
+  const slashy = splitDiscordText(`${"x".repeat(1999)}\\*${"y".repeat(100)}`);
+  assert.ok(slashy.every((chunk) => !/(^|[^\\])\\$/.test(chunk)), "不会留下半个转义");
+  assert.equal(slashy.join(""), `${"x".repeat(1999)}\\*${"y".repeat(100)}`);
+
+  // 代码块跨了两条：前一条补上收尾的 ```，后一条重新开。
+  const code = "<pre>" + Array.from({ length: 200 }, (_, i) => `line ${i} ${"z".repeat(10)}`).join("\n") + "</pre>";
+  const codeChunks = splitDiscordText(telegramHtmlToDiscordText(code));
+  assert.ok(codeChunks.length >= 2);
+  for (const chunk of codeChunks) {
+    assert.ok(chunk.length <= 2000);
+    assert.equal((chunk.match(/```/g) || []).length % 2, 0, "每条里的代码块都是闭合的");
+  }
+
+  // 太长的（超过 10 条）最后一条注明去面板看。
+  const huge = Array.from({ length: 3000 }, (_, i) => `第 ${i} 行内容内容内容`).join("\n");
+  const hugeChunks = splitDiscordText(telegramHtmlToDiscordText(huge));
+  assert.equal(hugeChunks.length, DISCORD_MESSAGE_MAX_CHUNKS);
+  assert.match(hugeChunks.at(-1)!, /完整内容请到面板查看）$/);
   assert.equal(truncateDiscordText("短"), "短");
-  const slashy = truncateDiscordText(`${"x".repeat(1969)}\\*${"y".repeat(100)}`, 2000);
-  assert.ok(!/(^|[^\\])\\\n/.test(slashy), "不会留下半个转义");
 });
