@@ -6,6 +6,7 @@ import {
   agentSupportsPortAccessLimits,
   onlyPortAccessLimitChanged,
   portAccessLimitAction,
+  portAccessLimitsEnabled,
   portAccessLimitSpecs,
 } from "./portAccessLimits";
 
@@ -83,4 +84,9 @@ test("heartbeat sync covers already-running entry rules without restarting their
   assert.match(block, /"chain"/);
   assert.doesNotMatch(block, /rule\.isRunning|restart|resetForward/);
   assert.match(source, /portAccessLimits: action\?\.portAccessLimits \|\| \[\]/);
+});
+
+test("the enforcement setting only turns on for an explicit \"true\"", () => {
+  assert.equal(portAccessLimitsEnabled("true"), true);
+  for (const value of [null, undefined, "", "false", "1", "TRUE"]) assert.equal(portAccessLimitsEnabled(value), false);
 });

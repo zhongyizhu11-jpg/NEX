@@ -7,14 +7,15 @@ import test from "node:test";
 
 /**
  * 普通端口转发的单 IP 接入限制走真的心跳路由（sqlite + express）：
- *   · Agent 2.2.229 的入口机拿到一条 port-access-limit-sync 运行时动作，快照只含面对客户端的
+ *   · 系统设置默认关：Agent 2.2.229 只收到空快照，普通规则照旧不限；
+ *   · 打开后 Agent 2.2.229 的入口机拿到一条 port-access-limit-sync 运行时动作，快照只含面对客户端的
  *     TCP 入口端口，按用户聚合；
  *   · Agent 2.2.228 拿不到这条动作（老 Agent 照旧工作，普通规则仍不受限）；
  *   · 规则本身的下发不因此变化。
  */
 type Beat = { limitActions: any[]; ruleIds: number[]; gostLimiters: string[]; gostServiceLimiters: Record<string, string> };
 
-function run(): { modern: Beat; legacy: Beat } {
+function run(): { disabled: Beat; modern: Beat; legacy: Beat } {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "nex-port-limit-heartbeat-"));
   const script = String.raw`
     import http from "node:http";
@@ -93,11 +94,14 @@ function run(): { modern: Beat; legacy: Beat } {
         })(),
       };
     };
+    // 默认关：新 Agent 收到空快照（不限，并撤掉之前的限制）。
+    const disabled = await beat("tok-new", "2.2.229");
+    await exec('INSERT INTO system_settings ("key", "value") VALUES (?, ?)', ["portAccessLimitsEnabled", "true"]);
     const modern = await beat("tok-new", "2.2.229");
     const legacy = await beat("tok-old", "2.2.228");
     server.close();
     await runtime.closeDatabase();
-    console.log(JSON.stringify({ modern, legacy }));
+    console.log(JSON.stringify({ disabled, modern, legacy }));
     process.exit(0);
   `;
   try {
@@ -117,7 +121,13 @@ function run(): { modern: Beat; legacy: Beat } {
 
 const outcome = run();
 
-test("Agent 2.2.229 entry hosts receive one per-user TCP limit snapshot for client-facing ordinary rules", () => {
+test("the setting is off by default: Agent 2.2.229 gets an empty snapshot and ordinary rules stay unlimited", () => {
+  assert.equal(outcome.disabled.limitActions.length, 1);
+  assert.deepEqual(outcome.disabled.limitActions[0].portAccessLimits, []);
+  assert.ok(outcome.disabled.ruleIds.includes(1) && outcome.disabled.ruleIds.includes(6));
+});
+
+test("with the setting on, Agent 2.2.229 entry hosts receive one per-user TCP limit snapshot for client-facing ordinary rules", () => {
   assert.equal(outcome.modern.limitActions.length, 1);
   const action = outcome.modern.limitActions[0];
   assert.equal(action.statusType, "runtime");

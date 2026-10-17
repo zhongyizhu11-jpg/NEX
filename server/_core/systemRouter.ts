@@ -7,6 +7,7 @@ import * as db from "../db";
 import { ENV } from "../env";
 import { compareVersions, normalizeVersion } from "../../shared/version";
 import { MAX_RULE_SWITCH_BRIDGE_HOURS, RULE_SWITCH_BRIDGE_HOURS_SETTING, normalizeRuleSwitchBridgeHours } from "../../shared/ruleEntryBridge";
+import { PORT_ACCESS_LIMITS_ENABLED_SETTING, portAccessLimitsEnabled } from "../portAccessLimits";
 import { spawn } from "child_process";
 import {
   appendUpgradeJobLog,
@@ -1919,6 +1920,7 @@ export const systemRouter = router({
       customSidebarPages: readCustomSidebarPages(all),
       tunnelRuntimeDefault: all.tunnelRuntimeDefault === "gost" ? "gost" : "forwardx",
       ruleSwitchBridgeHours: normalizeRuleSwitchBridgeHours(all[RULE_SWITCH_BRIDGE_HOURS_SETTING]),
+      portAccessLimitsEnabled: portAccessLimitsEnabled(all[PORT_ACCESS_LIMITS_ENABLED_SETTING]),
       githubAccelerator: {
         enabled: all.githubAcceleratorEnabled === "true",
         url: all.githubAcceleratorUrl ?? "",
@@ -2152,6 +2154,7 @@ export const systemRouter = router({
         customSidebarPages: customSidebarPagesSchema.optional(),
         tunnelRuntimeDefault: z.enum(["forwardx", "gost"]).optional(),
         ruleSwitchBridgeHours: z.number().int().min(0).max(MAX_RULE_SWITCH_BRIDGE_HOURS).optional(),
+        portAccessLimitsEnabled: z.boolean().optional(),
         githubAccelerator: z.object({
           enabled: z.boolean().optional(),
           url: githubAcceleratorUrlSchema.optional(),
@@ -2375,6 +2378,11 @@ export const systemRouter = router({
         // 只影响之后的换隧道；已经留着的桥接按当时定的到期时间走。
         await db.setSetting(RULE_SWITCH_BRIDGE_HOURS_SETTING, String(hours));
         console.info(`[Settings] rule switch bridge hours set to ${hours}`);
+      }
+      if (input.portAccessLimitsEnabled !== undefined) {
+        // 下一轮心跳生效：打开时按用户的单 IP / 连接数下发，关掉时下发空快照撤掉。
+        await db.setSetting(PORT_ACCESS_LIMITS_ENABLED_SETTING, input.portAccessLimitsEnabled ? "true" : "false");
+        console.info(`[Settings] ordinary port access limits ${input.portAccessLimitsEnabled ? "enabled" : "disabled"}`);
       }
       if (input.githubAccelerator) {
         const next: Record<string, string | null> = {};

@@ -46,7 +46,7 @@ import {
   shouldPersistAgentPresence,
 } from "./agentHeartbeatGate";
 import { mapWithConcurrency } from "./asyncPool";
-import { agentSupportsPortAccessLimits, portAccessLimitAction, portAccessLimitSpecs } from "./portAccessLimits";
+import { agentSupportsPortAccessLimits, PORT_ACCESS_LIMITS_ENABLED_SETTING, portAccessLimitAction, portAccessLimitsEnabled, portAccessLimitSpecs } from "./portAccessLimits";
 import { ruleLimitRootId } from "./ruleLimits";
 import { clearTunnelRuntimeStatusForHost, getHostWireGuardPlane, getTunnelRuntimeGeneration, isTunnelRuntimeHostReady, replaceHostWireGuardPlanes } from "./tunnelRuntimeStatus";
 import { appendPanelLog } from "./_core/panelLogger";
@@ -7077,8 +7077,10 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       全体用户都会被卡住。
     */
     if (!deferActionsForLocalState && agentSupportsPortAccessLimits(effectiveAgentVersion)) {
+      // 设置里没打开时候选为空 → 空快照：不限，并撤掉之前打开时下发的限制。
+      const enforcePortLimits = portAccessLimitsEnabled(await db.getSetting(PORT_ACCESS_LIMITS_ENABLED_SETTING).catch(() => null));
       const portLimitCandidates: any[] = [];
-      for (const rule of agentHostRules as any[]) {
+      for (const rule of (enforcePortLimits ? agentHostRules : []) as any[]) {
         if (!rule || runtimeBool(rule.pendingDelete) || !runtimeBool(rule.isEnabled)) continue;
         if (Number(rule.hostId || 0) !== Number(host.id) || runtimeBool(rule.isForwardGroupTemplate)) continue;
         if (Number(rule.tunnelId || 0) > 0 || Number(rule.routeParentRuleId || 0) > 0 || Number(rule.tlsInboundId || 0) > 0) continue;

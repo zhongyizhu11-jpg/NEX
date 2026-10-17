@@ -17,6 +17,16 @@ import { isAgentVersionAtLeast } from "@shared/version";
  */
 export const PORT_ACCESS_LIMIT_AGENT_VERSION = "2.2.229";
 export const PORT_ACCESS_LIMIT_FORWARD_TYPE = "port-access-limit-sync";
+/**
+ * 系统设置开关，默认关：以前普通规则从来不受单 IP 接入限制，套餐默认又带着 maxIPs=10，
+ * Agent 一升级就悄悄开始限会把正在用的人挡在门外。管理员在设置里打开后才执行；
+ * 关着时新 Agent 照样收到一份空快照，把之前打开时留下的限制撤干净。
+ */
+export const PORT_ACCESS_LIMITS_ENABLED_SETTING = "portAccessLimitsEnabled";
+
+export function portAccessLimitsEnabled(value: unknown) {
+  return String(value ?? "") === "true";
+}
 
 export type PortAccessLimitSpec = {
   userId: number;
