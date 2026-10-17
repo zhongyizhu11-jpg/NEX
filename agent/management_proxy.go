@@ -20,7 +20,7 @@ const agentManagementProxyVersion = "2.2.229"
 // 不能带路径、查询和片段。socks5 统一改成 socks5h：面板域名交给代理解析，不在本机泄露 DNS 查询。
 func parseAgentProxy(raw string) (*url.URL, error) {
 	value := strings.TrimSpace(raw)
-	if value == "" {
+	if value == "" || isDirectAgentProxy(value) {
 		return nil, nil
 	}
 	u, err := url.Parse(value)
@@ -51,6 +51,12 @@ func redactedProxyEndpoint(u *url.URL) string {
 	return u.Scheme + "://" + u.Host
 }
 
+// isDirectAgentProxy：proxyUrl 写成 direct 是明确要求直连（fwxm proxy off / --no-proxy），
+// 连进程环境变量里的代理也不用；字段不存在才是「跟随环境变量」。
+func isDirectAgentProxy(raw string) bool {
+	return strings.EqualFold(strings.TrimSpace(raw), "direct")
+}
+
 func agentManagementHTTPClients() []*http.Client {
 	return []*http.Client{agentSyncHTTPClient, agentPresenceHTTPClient, agentEventHTTPClient}
 }
@@ -58,6 +64,16 @@ func agentManagementHTTPClients() []*http.Client {
 // configureAgentManagementProxy 在启动时、任何通信协程开始之前调用一次。没配 proxyUrl 时保持
 // 原来的行为（跟随进程环境变量里的代理设置），老部署升级上来不会突然换一条路。
 func configureAgentManagementProxy(raw string) error {
+	if isDirectAgentProxy(raw) {
+		for _, client := range agentManagementHTTPClients() {
+			if transport, ok := client.Transport.(*http.Transport); ok {
+				transport.CloseIdleConnections()
+				transport.Proxy = nil
+			}
+		}
+		logf("management proxy disabled: direct (environment proxy variables ignored for panel traffic)")
+		return nil
+	}
 	u, err := parseAgentProxy(raw)
 	if err != nil {
 		return err
@@ -85,5 +101,5 @@ func agentUpgradeProxySetup(path string) string {
 		path = defaultConfigPath
 	}
 	// 配置里根本没有 proxyUrl（老部署）就不用 jq：这样老机器没装 jq 也照样能升级。
-	return fmt.Sprintf(`proxy=''; if grep -q '"proxyUrl"' %[1]s 2>/dev/null; then proxy=$(jq -er 'if type == "object" and (.proxyUrl == null or (.proxyUrl | type == "string")) then (.proxyUrl // "") else error("invalid proxy config") end' %[1]s) || { echo '[ERROR] Cannot read Agent proxy configuration; upgrade cancelled' >&2; upgrade_log proxy-config-invalid; exit 1; }; fi; if [ -n "$proxy" ]; then unset http_proxy https_proxy all_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY no_proxy NO_PROXY; case "$proxy" in socks5://*) proxy="socks5h://${proxy#socks5://}";; esac; export FORWARDX_AGENT_PROXY="$proxy" http_proxy="$proxy" https_proxy="$proxy" all_proxy="$proxy" HTTP_PROXY="$proxy" HTTPS_PROXY="$proxy" ALL_PROXY="$proxy" no_proxy='' NO_PROXY=''; upgrade_log proxy-enabled; fi; `, shellQuote(path))
+	return fmt.Sprintf(`proxy=''; if grep -q '"proxyUrl"' %[1]s 2>/dev/null; then proxy=$(jq -er 'if type == "object" and (.proxyUrl == null or (.proxyUrl | type == "string")) then (.proxyUrl // "") else error("invalid proxy config") end' %[1]s) || { echo '[ERROR] Cannot read Agent proxy configuration; upgrade cancelled' >&2; upgrade_log proxy-config-invalid; exit 1; }; fi; if [ "$proxy" = direct ]; then unset http_proxy https_proxy all_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY; export FORWARDX_AGENT_PROXY=direct; upgrade_log proxy-direct; elif [ -n "$proxy" ]; then unset http_proxy https_proxy all_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY no_proxy NO_PROXY; case "$proxy" in socks5://*) proxy="socks5h://${proxy#socks5://}";; esac; export FORWARDX_AGENT_PROXY="$proxy" http_proxy="$proxy" https_proxy="$proxy" all_proxy="$proxy" HTTP_PROXY="$proxy" HTTPS_PROXY="$proxy" ALL_PROXY="$proxy" no_proxy='' NO_PROXY=''; upgrade_log proxy-enabled; fi; `, shellQuote(path))
 }

@@ -11,12 +11,13 @@ TOKEN=""
 # 这个入口脚本自己从面板拉安装脚本时也走它。不给就沿用 Agent 配置里已有的代理。
 AGENT_PROXY_EXPLICIT=false
 AGENT_PROXY=""
-if [ "${FORWARDX_AGENT_PROXY+x}" = x ]; then AGENT_PROXY_EXPLICIT=true; AGENT_PROXY="$FORWARDX_AGENT_PROXY"; fi
+if [ "${FORWARDX_AGENT_PROXY+x}" = x ]; then AGENT_PROXY_EXPLICIT=true; AGENT_PROXY="${FORWARDX_AGENT_PROXY:-direct}"; fi
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --proxy) [ "$#" -ge 2 ] || { echo "[错误] --proxy 后面要跟代理地址" >&2; exit 1; }; AGENT_PROXY="$2"; AGENT_PROXY_EXPLICIT=true; shift 2 ;;
     --proxy=*) AGENT_PROXY="${1#*=}"; AGENT_PROXY_EXPLICIT=true; shift ;;
-    --no-proxy) AGENT_PROXY=""; AGENT_PROXY_EXPLICIT=true; shift ;;
+    # direct：明确直连，连继承来的环境变量代理也不用（和「没给」不同，没给是沿用配置 / 环境）。
+    --no-proxy) AGENT_PROXY=direct; AGENT_PROXY_EXPLICIT=true; shift ;;
     --*) echo "[错误] 不认识的参数: ${1%%=*}" >&2; exit 1 ;;
     *) if [ -z "$ACTION" ]; then ACTION="$1"; elif [ -z "$TOKEN" ]; then TOKEN="$1"; else echo "[错误] 多余的参数" >&2; exit 1; fi; shift ;;
   esac
@@ -155,12 +156,22 @@ run_panel_installer() {
     fetch_proxy="$(jq -r '.proxyUrl // empty' "$CONFIG_DIR/config.json" 2>/dev/null || true)"
   fi
   echo "[信息] 正在从面板获取安装脚本: ${PANEL_URL}"
+  fetch_panel_installer() {
+    curl -fsSL \
+      --connect-timeout "$FORWARDX_CURL_CONNECT_TIMEOUT" \
+      --speed-limit "$FORWARDX_CURL_LOW_SPEED_LIMIT" \
+      --speed-time "$low_speed_time" \
+      "$url" -o "$tmp_script"
+  }
+  local fetched=false
+  if [ "$fetch_proxy" = direct ]; then
+    # 明确要直连：继承来的代理变量（坏掉的代理正是要绕开的）这一次全部不用。
+    if (unset http_proxy https_proxy all_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY; fetch_panel_installer); then fetched=true; fi
   # 代理地址走环境变量，不放进 curl 的命令行参数（ps 里会看到密码）。
-  if ! http_proxy="${fetch_proxy:-${http_proxy:-}}" https_proxy="${fetch_proxy:-${https_proxy:-}}" all_proxy="${fetch_proxy:-${all_proxy:-}}" curl -fsSL \
-    --connect-timeout "$FORWARDX_CURL_CONNECT_TIMEOUT" \
-    --speed-limit "$FORWARDX_CURL_LOW_SPEED_LIMIT" \
-    --speed-time "$low_speed_time" \
-    "$url" -o "$tmp_script"; then
+  elif http_proxy="${fetch_proxy:-${http_proxy:-}}" https_proxy="${fetch_proxy:-${https_proxy:-}}" all_proxy="${fetch_proxy:-${all_proxy:-}}" fetch_panel_installer; then
+    fetched=true
+  fi
+  if [ "$fetched" != true ]; then
     rm -f "$tmp_script"
     return 1
   fi

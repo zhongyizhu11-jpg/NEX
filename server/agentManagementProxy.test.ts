@@ -27,9 +27,9 @@ test("the Go Agent and the panel agree on the version that understands proxyUrl"
 });
 
 test("proxy URLs are validated, socks5 becomes socks5h, and credentials never reach the output", () => {
-  const ok = bash(`${functions}\nfwx_proxy_normalize 'socks5://user:p%40ss@10.0.0.1:1080/'; echo; fwx_proxy_normalize 'http://proxy.example:3128'; echo; fwx_proxy_redacted 'socks5h://user:secret@10.0.0.1:1080'; fwx_proxy_redacted ''`);
+  const ok = bash(`${functions}\nfwx_proxy_normalize 'socks5://user:p%40ss@10.0.0.1:1080/'; echo; fwx_proxy_normalize 'http://proxy.example:3128'; echo; fwx_proxy_redacted 'socks5h://user:secret@10.0.0.1:1080'; fwx_proxy_redacted ''; fwx_proxy_normalize direct; echo; fwx_proxy_redacted direct`);
   assert.equal(ok.status, 0, ok.stderr);
-  assert.deepEqual(ok.stdout.trim().split("\n"), ["socks5h://user:p%40ss@10.0.0.1:1080", "http://proxy.example:3128", "socks5h://***@10.0.0.1:1080", "直连（未设置代理）"]);
+  assert.deepEqual(ok.stdout.trim().split("\n"), ["socks5h://user:p%40ss@10.0.0.1:1080", "http://proxy.example:3128", "socks5h://***@10.0.0.1:1080", "未设置代理（跟随系统环境变量，一般就是直连）", "direct", "直连（不走任何代理，包括系统环境变量里的）"]);
   for (const bad of ["ftp://h:21", "http://host", "socks5://h:0", "socks5://h:65536", "http://h:80/path", "http://h:80?x=1", "http://u:pa ss@h:80", "socks5://:1080"]) {
     const result = bash(`${functions}\nfwx_proxy_normalize ${JSON.stringify(bad)}`);
     assert.notEqual(result.status, 0, bad);
@@ -59,16 +59,25 @@ test("install/upgrade arguments: explicit proxy wins, upgrades reuse the saved p
   assert.notEqual(bash(`${prelude}fwx_agent_proxy_args upgrade`).status, 0);
   assert.equal(bash(`${prelude}fwx_agent_proxy_args uninstall`).status, 0);
   assert.notEqual(bash(`${prelude}fwx_agent_proxy_args install T --proxy ftp://x:1`).status, 0);
+  // --no-proxy 是明确直连：存 direct，继承来的代理变量这次全部不用（和「没给」不同）。
+  const direct = bash(`${prelude}fwx_agent_proxy_args upgrade --no-proxy >/dev/null; echo "$FORWARDX_AGENT_PROXY|$FWX_PROXY_EXPLICIT|[$HTTPS_PROXY][$http_proxy]"`, { HTTPS_PROXY: "http://broken:1", http_proxy: "http://broken:1" });
+  assert.equal(direct.status, 0, direct.stderr);
+  assert.equal(direct.stdout.trim(), "direct|true|[][]");
+  // 老入口脚本传进来的空 FORWARDX_AGENT_PROXY 也按直连处理。
+  const emptyExplicit = bash(`${prelude}fwx_agent_proxy_args upgrade >/dev/null; echo "$FORWARDX_AGENT_PROXY|[$HTTPS_PROXY]"`, { FORWARDX_AGENT_PROXY: "", HTTPS_PROXY: "http://broken:1" });
+  assert.equal(emptyExplicit.stdout.trim(), "direct|[]");
   assert.notEqual(bash(`${prelude}fwx_agent_proxy_args install T --bogus`).status, 0);
 }));
 
-test("saving the proxy keeps other config fields, removes the key for direct and keeps the file private", () => withTempDir((dir) => {
+test("saving the proxy keeps other config fields, stores direct explicitly, removes the key when unset and keeps the file private", () => withTempDir((dir) => {
   const file = path.join(dir, "config.json");
   fs.writeFileSync(file, JSON.stringify({ panelUrl: "https://p", token: "t", interval: 30, panelMigrationId: "m" }));
   const prelude = `${functions}\nCONFIG_DIR=${dir}\n`;
   assert.equal(bash(`${prelude}FORWARDX_AGENT_PROXY='socks5h://u:p@h:1080' fwx_agent_proxy_save`).status, 0);
   assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), { panelUrl: "https://p", token: "t", interval: 30, panelMigrationId: "m", proxyUrl: "socks5h://u:p@h:1080" });
   assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  assert.equal(bash(`${prelude}FORWARDX_AGENT_PROXY=direct fwx_agent_proxy_save`).status, 0);
+  assert.equal(JSON.parse(fs.readFileSync(file, "utf8")).proxyUrl, "direct");
   assert.equal(bash(`${prelude}FORWARDX_AGENT_PROXY='' fwx_agent_proxy_save`).status, 0);
   assert.equal("proxyUrl" in JSON.parse(fs.readFileSync(file, "utf8")), false);
 }));
@@ -134,7 +143,7 @@ test("fwxm shows, sets and clears the proxy and restarts only the Agent", { skip
   fs.writeFileSync(path.join(bin, "agent"), '#!/bin/bash\necho 2.2.229\n', { mode: 0o755 });
   const env = { PATH: `${bin}:${process.env.PATH}`, FWXM_MANAGE_DIR: manage, FORWARDX_AGENT_CONFIG_DIR: config, FWXM_AGENT_BIN: path.join(bin, "agent") };
   const run = (...args: string[]) => spawnSync("bash", [path.join(dir, "fwxm"), ...args], { encoding: "utf8", env, input: "" });
-  assert.equal(run("proxy", "show").stdout.trim(), "直连（未设置代理）");
+  assert.equal(run("proxy", "show").stdout.trim(), "未设置代理（跟随系统环境变量，一般就是直连）");
   const set = run("proxy", "set", "socks5://user:secret@127.0.0.1:1080");
   assert.equal(set.status, 0, set.stderr);
   assert.doesNotMatch(set.stdout + set.stderr, /secret/);
@@ -147,8 +156,34 @@ test("fwxm shows, sets and clears the proxy and restarts only the Agent", { skip
   assert.doesNotMatch(info.stdout, /secret/);
   assert.notEqual(run("proxy", "set", "ftp://x:1").status, 0);
   assert.equal(run("proxy", "off").status, 0);
-  assert.equal("proxyUrl" in JSON.parse(fs.readFileSync(path.join(config, "config.json"), "utf8")), false);
+  // off 存 direct：Agent 据此连服务管理器给的环境变量代理也不用，不是退回「跟随环境变量」。
+  assert.equal(JSON.parse(fs.readFileSync(path.join(config, "config.json"), "utf8")).proxyUrl, "direct");
+  assert.equal(run("proxy", "show").stdout.trim(), "直连（不走任何代理，包括系统环境变量里的）");
   // 卸载 / 修复要在终端里确认，没有终端（或没确认）时什么都不做，也不去面板下载安装脚本。
   const uninstall = run("uninstall");
   assert.doesNotMatch(uninstall.stdout, /从面板获取安装脚本/);
+}));
+
+test("the GitHub entry script fetches the panel installer without inherited proxies when --no-proxy is given", () => withTempDir((dir) => {
+  const script = fs.readFileSync(path.join(process.cwd(), "scripts/install-agent.sh"), "utf8");
+  const start = script.indexOf("run_panel_installer() {");
+  const end = script.indexOf("\ndo_install() {");
+  assert.ok(start >= 0 && end > start);
+  const bin = path.join(dir, "bin");
+  fs.mkdirSync(bin);
+  // curl 桩：记下它看到的代理变量，然后失败退出（只测下载这一步）。
+  fs.writeFileSync(path.join(bin, "curl"), `#!/bin/bash\necho "curl-env:[\${HTTPS_PROXY:-}|\${https_proxy:-}|\${ALL_PROXY:-}]" >&2\nexit 22\n`, { mode: 0o755 });
+  const run = (proxyArgs: string) => spawnSync("bash", ["-c", [
+    script.slice(0, script.indexOf("\n# Leave these empty")).replace(/^#!.*\n/, ""),
+    script.slice(start, end),
+    `CONFIG_DIR=${dir}/none; PANEL_URL=https://panel.invalid; FORWARDX_CURL_CONNECT_TIMEOUT=1; FORWARDX_CURL_LOW_SPEED_LIMIT=1; FORWARDX_CURL_LOW_SPEED_TIME=1; run_panel_installer install TOKEN || true`,
+  ].join("\n"), "x", ...proxyArgs.split(" ").filter(Boolean)], {
+    encoding: "utf8",
+    env: { PATH: `${bin}:${process.env.PATH}`, HTTPS_PROXY: "http://broken:1", https_proxy: "http://broken:1", ALL_PROXY: "http://broken:1" },
+  });
+  const direct = run("install TOKEN --no-proxy");
+  assert.match(direct.stderr, /curl-env:\[\|\|\]/, direct.stderr);
+  // 没给 --no-proxy：照旧沿用继承来的环境变量。
+  const inherited = run("install TOKEN");
+  assert.match(inherited.stderr, /curl-env:\[http:\/\/broken:1\|http:\/\/broken:1\|http:\/\/broken:1\]/, inherited.stderr);
 }));

@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -193,5 +195,42 @@ func TestUpgradeProxyReadsProtectedConfig(t *testing.T) {
 		if !strings.Contains(setup, expected) {
 			t.Fatalf("missing %s", expected)
 		}
+	}
+}
+
+// fwxm proxy off / --no-proxy 存的是 direct：服务管理器给了 HTTP_PROXY 之类的环境变量也不能再走它。
+func TestManagementProxyDirectIgnoresEnvironmentProxy(t *testing.T) {
+	defer resetManagementProxyForTest()
+	if u, err := parseAgentProxy("direct"); err != nil || u != nil {
+		t.Fatalf("direct must parse as no proxy: %v %v", u, err)
+	}
+	if err := configureAgentManagementProxy(" Direct "); err != nil {
+		t.Fatal(err)
+	}
+	for _, client := range agentManagementHTTPClients() {
+		if client.Transport.(*http.Transport).Proxy != nil {
+			t.Fatal("direct must disable environment proxy lookup for panel traffic")
+		}
+	}
+}
+
+func TestUpgradeProxySetupHonoursDirect(t *testing.T) {
+	dir := t.TempDir()
+	config := dir + "/config.json"
+	if err := os.WriteFile(config, []byte(`{"panelUrl":"https://p","proxyUrl":"direct"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not installed")
+	}
+	script := "upgrade_log() { echo \"log:$1\"; }; " + agentUpgradeProxySetup(config) + ` echo "env:[${HTTPS_PROXY:-}|${http_proxy:-}|${FORWARDX_AGENT_PROXY:-}]"`
+	cmd := exec.Command("bash", "-c", script)
+	cmd.Env = append(os.Environ(), "HTTPS_PROXY=http://broken:1", "http_proxy=http://broken:1")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	if !strings.Contains(string(out), "log:proxy-direct") || !strings.Contains(string(out), "env:[||direct]") {
+		t.Fatalf("direct must clear inherited proxies during upgrade: %s", out)
 	}
 }
