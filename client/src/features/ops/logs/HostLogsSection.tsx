@@ -5,6 +5,8 @@ import { Section } from "@/components/hosts/HostDetailDialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { downloadTextFile } from "@/lib/fileDownload";
+import { pollingInterval } from "@/lib/polling";
 import { trpc } from "@/lib/trpc";
 
 /*
@@ -15,7 +17,6 @@ import { trpc } from "@/lib/trpc";
   只给管理员（调用方已经判断过）。
 */
 
-const POLL_INTERVAL_MS = 2_000;
 const MAX_CLIENT_LINES = 2_000;
 
 const SOURCE_LABELS: Record<string, string> = {
@@ -47,7 +48,7 @@ function HostLogsViewer({ hostId }: { hostId: number }) {
     { hostId, source, afterSeq: afterSeqRef.current },
     {
       enabled: !paused && !!status.data?.supported,
-      refetchInterval: POLL_INTERVAL_MS,
+      refetchInterval: pollingInterval("live"),
       refetchIntervalInBackground: false,
       retry: false,
       staleTime: 0,
@@ -92,13 +93,7 @@ function HostLogsViewer({ hostId }: { hostId: number }) {
   const visible = needle ? lines.filter((line) => line.text.toLowerCase().includes(needle)) : lines;
 
   const download = () => {
-    const blob = new Blob([lines.map((line) => line.text).join("\n") + "\n"], { type: "text/plain;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = `host-${hostId}-${source.replace(/[^A-Za-z0-9._-]+/g, "_")}.log`;
-    anchor.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1_000);
+    downloadTextFile(`host-${hostId}-${source.replace(/[^A-Za-z0-9._-]+/g, "_")}.log`, `${lines.map((line) => line.text).join("\n")}\n`);
   };
 
   if (status.isLoading) return <div className="text-meta text-muted-foreground">正在读取…</div>;
