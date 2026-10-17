@@ -822,8 +822,17 @@ export const tunnelsRouter = router({
         const pageData = await db.getTunnelsPage({ ...input, ...scope });
         const hydratedItems = await attachTunnelEndpointHosts(pageData.items as any[]);
         const availabilityIndex = availabilityIndexForHydratedTunnels(hydratedItems);
-        const items = attachTunnelAvailability(hydratedItems, availabilityIndex)
+        const visibleItems = attachTunnelAvailability(hydratedItems, availabilityIndex)
           .map((tunnel) => tunnelForUser(tunnel, accessScope));
+        // 卡片上的「累计流量 · 引用规则」（上游 2.3.285）；普通用户只算自己规则的用量。
+        const trafficByTunnelId = await db.getTunnelTrafficSummaries(
+          visibleItems.map((tunnel: any) => Number(tunnel.id)),
+          ctx.user.role === "admin" ? undefined : ctx.user.id,
+        );
+        const items = visibleItems.map((tunnel: any) => ({
+          ...tunnel,
+          trafficSummary: trafficByTunnelId.get(Number(tunnel.id)),
+        }));
         const relatedGroupIds = Array.from(new Set(items.flatMap((tunnel: any) => [
           Number(tunnel.entryGroupId || 0),
           Number(tunnel.exitGroupId || 0),

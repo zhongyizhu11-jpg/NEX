@@ -2100,6 +2100,126 @@ export async function getTotalTraffic(userId?: number) {
   };
 }
 
+/**
+ * 隧道 / 转发组卡片上的「累计流量 · 引用规则数」（上游 2.3.285）。
+ *
+ * 按逻辑规则的流量计数器加总，不拿主机 / 网卡总量，也不把多跳每一跳的数加起来。
+ * 只算这一页要显示的资源，不扫历史明细、不按卡片逐个查。共享资源上，普通用户只看到自己规则的用量。
+ * 引用规则数按逻辑规则去重，含停用的、不含待删除的；隧道还没实际下发出子规则的也照配置算上。
+ */
+export async function getForwardGroupTrafficSummaries(groupIds: number[], userId?: number) {
+  return getResourceTrafficSummaries("group", groupIds, userId);
+}
+
+export async function getTunnelTrafficSummaries(tunnelIds: number[], userId?: number) {
+  return getResourceTrafficSummaries("tunnel", tunnelIds, userId);
+}
+
+async function getResourceTrafficSummaries(kind: "group" | "tunnel", resourceIds: number[], userId?: number) {
+  const ids = Array.from(new Set(resourceIds.map(Number).filter((id) => Number.isInteger(id) && id > 0)));
+  const totals = new Map(ids.map((id) => [id, { bytesIn: 0, bytesOut: 0, totalBytes: 0, ruleCount: 0 }]));
+  const db = await getDb();
+  if (!db || ids.length === 0) return totals;
+  const q = quoteIdentifier;
+  const placeholders = ids.map(() => "?").join(",");
+  // Include direct references and live managed tunnel children. The latter
+  // attribute only their own counters to a tunnel, never the entire template's
+  // traffic across other tunnel members. Ownership always comes from the parent.
+  const rules = await queryRaw<{
+    id: number; logicalRuleId: number; groupId: number | null; groupEntryId: number | null; tunnelId: number | null;
+    tunnelEntryId: number | null; tunnelExitId: number | null;
+  }>(
+    `SELECT r.${q("id")}, COALESCE(p.${q("id")}, r.${q("id")}) AS ${q("logicalRuleId")},
+            r.${q("forwardGroupId")} AS ${q("groupId")}, r.${q("tunnelId")} AS ${q("tunnelId")},
+            g.${q("entryGroupId")} AS ${q("groupEntryId")},
+            t.${q("entryGroupId")} AS ${q("tunnelEntryId")},
+            t.${q("exitGroupId")} AS ${q("tunnelExitId")}
+       FROM ${q("forward_rules")} r
+       LEFT JOIN ${q("forward_rules")} p ON p.${q("id")} = r.${q("forwardGroupRuleId")}
+         AND p.${q("forwardGroupId")} = r.${q("forwardGroupId")}
+         AND p.${q("isForwardGroupTemplate")} = ${boolLiteral(true)}
+         AND p.${q("pendingDelete")} = ${boolLiteral(false)}
+       LEFT JOIN ${q("forward_groups")} g ON g.${q("id")} = r.${q("forwardGroupId")}
+       LEFT JOIN ${q("forward_group_members")} m ON m.${q("id")} = r.${q("forwardGroupMemberId")}
+         AND m.${q("groupId")} = r.${q("forwardGroupId")}
+         AND m.${q("memberType")} = 'tunnel' AND m.${q("tunnelId")} = r.${q("tunnelId")}
+       LEFT JOIN ${q("tunnels")} t ON t.${q("id")} = r.${q("tunnelId")}
+      WHERE r.${q("pendingDelete")} = ${boolLiteral(false)}
+        AND (r.${q("forwardGroupRuleId")} IS NULL OR (p.${q("id")} IS NOT NULL AND m.${q("id")} IS NOT NULL))
+        ${userId !== undefined ? `AND COALESCE(p.${q("userId")}, r.${q("userId")}) = ?` : ""}
+        AND ${kind === "tunnel" ? `r.${q("tunnelId")} IN (${placeholders})` : `(
+          (r.${q("forwardGroupRuleId")} IS NULL AND (
+            r.${q("forwardGroupId")} IN (${placeholders}) OR g.${q("entryGroupId")} IN (${placeholders})))
+          OR t.${q("entryGroupId")} IN (${placeholders}) OR t.${q("exitGroupId")} IN (${placeholders}))`}`,
+    [...(userId !== undefined ? [userId] : []), ...ids, ...(kind === "group" ? [...ids, ...ids, ...ids] : [])],
+  );
+  const resourcesByRule = new Map<number, { logicalRuleId: number; resourceIds: number[] }>();
+  for (const rule of rules) {
+    const isRoot = Number(rule.id) === Number(rule.logicalRuleId);
+    const linkedIds = kind === "tunnel" ? [rule.tunnelId] : [
+      ...(isRoot ? [rule.groupId, rule.groupEntryId] : []), rule.tunnelEntryId, rule.tunnelExitId,
+    ];
+    resourcesByRule.set(Number(rule.id), {
+      logicalRuleId: Number(rule.logicalRuleId),
+      resourceIds: Array.from(new Set(linkedIds.map(Number).filter((id) => totals.has(id)))),
+    });
+  }
+  const logicalRulesByResource = new Map(ids.map((id) => [id, new Set<number>()]));
+  for (const [ruleId, link] of resourcesByRule) {
+    if (ruleId !== link.logicalRuleId) {
+      // A direct logical-rule summary already expands all its children.
+      const rootResources = resourcesByRule.get(link.logicalRuleId)?.resourceIds || [];
+      link.resourceIds = link.resourceIds.filter((id) => !rootResources.includes(id));
+    }
+    for (const id of link.resourceIds) logicalRulesByResource.get(id)!.add(link.logicalRuleId);
+  }
+  // Reference counts describe saved configuration, not successful runtime
+  // materialization: an unused/disabled tunnel may have no child rule yet.
+  const configuredReferences = await queryRaw<{
+    logicalRuleId: number; tunnelId: number; tunnelEntryId: number | null; tunnelExitId: number | null;
+  }>(
+    `SELECT DISTINCT r.${q("id")} AS ${q("logicalRuleId")}, t.${q("id")} AS ${q("tunnelId")},
+            t.${q("entryGroupId")} AS ${q("tunnelEntryId")}, t.${q("exitGroupId")} AS ${q("tunnelExitId")}
+       FROM ${q("forward_rules")} r
+       JOIN ${q("forward_group_members")} m ON m.${q("groupId")} = r.${q("forwardGroupId")}
+         AND m.${q("memberType")} = 'tunnel'
+       JOIN ${q("tunnels")} t ON t.${q("id")} = m.${q("tunnelId")}
+      WHERE r.${q("pendingDelete")} = ${boolLiteral(false)} AND r.${q("forwardGroupRuleId")} IS NULL
+        AND r.${q("isForwardGroupTemplate")} = ${boolLiteral(true)}
+        ${userId !== undefined ? `AND r.${q("userId")} = ?` : ""}
+        AND ${kind === "tunnel" ? `t.${q("id")} IN (${placeholders})` : `(
+          t.${q("entryGroupId")} IN (${placeholders}) OR t.${q("exitGroupId")} IN (${placeholders}))`}`,
+    [...(userId !== undefined ? [userId] : []), ...ids, ...(kind === "group" ? ids : [])],
+  );
+  for (const link of configuredReferences) {
+    const linkedIds = kind === "tunnel" ? [link.tunnelId] : [link.tunnelEntryId, link.tunnelExitId];
+    for (const id of linkedIds.map(Number)) logicalRulesByResource.get(id)?.add(Number(link.logicalRuleId));
+  }
+  for (const [id, logicalIds] of logicalRulesByResource) totals.get(id)!.ruleCount = logicalIds.size;
+  // Bound the size of SQL IN lists for large resources. Guard the empty case:
+  // the existing counter API intentionally treats [] as an unfiltered request.
+  for (const managedChildren of [false, true]) {
+    const ruleIds = Array.from(resourcesByRule)
+      .filter(([id, link]) => (id !== link.logicalRuleId) === managedChildren && link.resourceIds.length > 0)
+      .map(([id]) => id);
+    for (let offset = 0; offset < ruleIds.length; offset += 200) {
+      const opts = { ruleIds: ruleIds.slice(offset, offset + 200), userId };
+      const rows = managedChildren
+        ? await getTrafficSummaryRowsFromCounters(opts)
+        : await getTrafficCounterSummaryByRule(opts);
+      for (const row of rows) {
+        for (const id of resourcesByRule.get(row.ruleId)?.resourceIds || []) {
+          const total = totals.get(id)!;
+          total.bytesIn += row.bytesIn;
+          total.bytesOut += row.bytesOut;
+          total.totalBytes += row.bytesIn + row.bytesOut;
+        }
+      }
+    }
+  }
+  return totals;
+}
+
 /** Summarize cumulative traffic by rule from bounded counter rows. */
 export async function getTrafficCounterSummaryByRule(opts: {
   userId?: number;

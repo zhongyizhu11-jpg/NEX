@@ -225,9 +225,18 @@ export const forwardGroupsRouter = router({
         : [];
       const availabilityIndex = await availabilityIndexForGroups(result.items as any[], relatedRows as any[]);
       const hydratedItems = attachForwardGroupAvailability(result.items as any[], availabilityIndex, accessScope);
-      const items = accessScope
+      const visibleItems = accessScope
         ? db.filterForwardGroupFieldsForUse(hydratedItems, accessScope)
         : hydratedItems;
+      // 卡片上的「累计流量 · 引用规则」（上游 2.3.285）；普通用户只算自己规则的用量。
+      const trafficByGroupId = await db.getForwardGroupTrafficSummaries(
+        visibleItems.map((group: any) => Number(group.id)),
+        ctx.user.role === "admin" ? undefined : ctx.user.id,
+      );
+      const items = visibleItems.map((group: any) => ({
+        ...group,
+        trafficSummary: trafficByGroupId.get(Number(group.id)),
+      }));
       const visibleRelatedRows = accessScope
         ? (relatedRows as any[]).filter((group) => accessScope.groupIds.has(Number(group.id)))
         : relatedRows as any[];

@@ -1,4 +1,5 @@
 import { FormField } from "@/components/ui/form-field";
+import { ResourceTrafficLine } from "@/components/links/ResourceTrafficLine";
 import EmptyState from "@/components/EmptyState";
 import TunnelConnStatsDialog from "@/components/tunnels/TunnelConnStatsDialog";
 import { useLocation } from "wouter";
@@ -4192,6 +4193,7 @@ function TunnelsContent() {
           <div className="fx-tunnel-route">
             {renderTunnelRoute(tunnel, true, hopCount <= 3 && !hasEntryGroup ? "horizontal" : "auto", false)}
           </div>
+          <ResourceTrafficLine summary={tunnel.trafficSummary} className="mt-1.5" />
           <div className="fx-tunnel-foot">
             {hasLatency ? (
               <div className="fx-rule-num"><b>{Math.round(latencyMs)}</b><small>ms</small></div>

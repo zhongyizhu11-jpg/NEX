@@ -1,4 +1,5 @@
 import { useLocation } from "wouter";
+import { ResourceTrafficLine } from "@/components/links/ResourceTrafficLine";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
 import { NetworkPath } from "@/components/network/NetworkPath";
 import { buildChainPath } from "@/features/links/chainPath";
@@ -2009,6 +2010,7 @@ export function ForwardGroupsContent({
                   </div>
 
                   {renderGroupFacts(group)}
+                  <ResourceTrafficLine summary={group.trafficSummary} />
                   </CardContent>
                 </Card>
       )}
