@@ -29,7 +29,7 @@ export type DiagnoseOutcome = "success" | "timeout" | "failed";
  * 2.3.444 起多了「一键诊断」页（传了 checklist 就有）：打开对话框直接跑一张通过 / 警告 / 失败
  * 的清单（LinkDiagnosticsPanel），原来一段段测延迟的那页挪到「延迟测试」，用法不变。
  *
- * 后来两页换了位置：「延迟测试」在前、打开就是它，而且一打开就测一次（不用再按按钮），
+ * 2.3.450 起两页换了位置：「延迟测试」在前、打开就是它，而且一打开就测一次（不用再按按钮），
  * 「一键诊断」挪到第二页，切过去才开始跑清单。
  */
 export function DiagnoseDialog({
