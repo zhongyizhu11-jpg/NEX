@@ -142,8 +142,26 @@ async function sendTelegramOnlyToAdmins(text: string, logLabel: string) {
   }
 }
 
+/**
+ * 只留下要推送的主机（主机设置里「上下线通知」开着的）。
+ *
+ * 读库里此刻的开关，不信调用方手里的主机快照：快速离线那条路会把通知延后 30 秒，
+ * 期间管理员关掉了这台的通知，延后的那条就不该再发（上游 2.3.285）。
+ * 关掉的只是推送：状态变化照样记进事件时间线和可用性统计，故障转移也不受影响。
+ */
+async function hostsWithStatusNotify(hosts: any[]) {
+  const ids = hosts.map((host) => Number(host?.id)).filter((id) => Number.isFinite(id) && id > 0);
+  if (ids.length === 0) return [];
+  const current = new Map((await db.getHostsByIds(ids) as any[]).map((host) => [Number(host.id), host]));
+  return hosts
+    .map((host) => current.get(Number(host?.id)))
+    .filter((host) => host && host.hostStatusNotifyEnabled !== false && host.hostStatusNotifyEnabled !== 0);
+}
+
 async function sendHostStatusTelegram(host: any, status: HostStatus) {
-  await sendTelegramToAdmins(hostStatusMessage(host, status), `status=${status} host=${host?.id}`);
+  const [current] = await hostsWithStatusNotify([host]);
+  if (!current) return;
+  await sendTelegramToAdmins(hostStatusMessage(current, status), `status=${status} host=${current.id}`);
 }
 
 /**
@@ -179,11 +197,12 @@ async function notifyHostStatusChanges(hosts: any[], status: HostStatus) {
   const due = hosts.filter((host) => recordHostStatusTransition(host, status));
   if (due.length === 0) return;
   for (const host of due) recordHostStatusEvent(host, status); // 事件时间线（与 Telegram 开关无关）
-  if (due.length > HOST_STATUS_SUMMARY_THRESHOLD) {
-    await sendTelegramToAdmins(hostStatusSummaryMessage(due, status), `status=${status} summary hosts=${due.length}`);
+  const notify = await hostsWithStatusNotify(due);
+  if (notify.length > HOST_STATUS_SUMMARY_THRESHOLD) {
+    await sendTelegramToAdmins(hostStatusSummaryMessage(notify, status), `status=${status} summary hosts=${notify.length}`);
     return;
   }
-  for (const host of due) await sendHostStatusTelegram(host, status);
+  for (const host of notify) await sendTelegramToAdmins(hostStatusMessage(host, status), `status=${status} host=${host.id}`);
 }
 
 /**

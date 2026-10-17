@@ -272,6 +272,8 @@ const tables: TableDef[] = [
       c("trafficFailoverExcluded", "bool", { notNull: true, default: false }),
       c("egressShapingMode", "varchar", { length: 16, notNull: true, default: "off" }), c("egressMbps", "int", { notNull: true, default: 0 }),
       c("flowOffload", "bool", { notNull: true, default: false }),
+      // 这台机器上下线要不要推 Telegram / Discord（上游 2.3.285）。只管推送，不影响离线判定、事件和故障转移。
+      c("hostStatusNotifyEnabled", "bool", { notNull: true, default: true }),
       c("telegramTrafficAlertEnabled", "bool", { notNull: true, default: false }), c("trafficAlertThresholdPercent", "int", { notNull: true, default: 20 }),
       c("telegramRenewalReminderEnabled", "bool", { notNull: true, default: false }), c("renewalReminderDays", "int", { notNull: true, default: 3 }),
       c("trafficAutoReset", "bool", { notNull: true, default: false }), c("trafficResetDay", "int", { notNull: true, default: 1 }),

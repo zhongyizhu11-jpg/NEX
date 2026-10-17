@@ -329,6 +329,7 @@ export const hosts = table("hosts", {
   // 内核快速转发（nftables flowtable，agent/flowtable_offload.go）：本机 iptables / nftables 规则和内核直通的
   // 连接建立后走 ingress 快速路径，流量改从 conntrack 计。只有管理员能开，默认关。
   flowOffload: boolean("flowOffload").notNull().default(false),
+  hostStatusNotifyEnabled: boolean("hostStatusNotifyEnabled").notNull().default(true),
   telegramTrafficAlertEnabled: boolean("telegramTrafficAlertEnabled").notNull().default(false),
   trafficAlertThresholdPercent: int("trafficAlertThresholdPercent").notNull().default(20),
   telegramRenewalReminderEnabled: boolean("telegramRenewalReminderEnabled").notNull().default(false),
