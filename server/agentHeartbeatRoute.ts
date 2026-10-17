@@ -46,6 +46,8 @@ import {
   shouldPersistAgentPresence,
 } from "./agentHeartbeatGate";
 import { mapWithConcurrency } from "./asyncPool";
+import { agentSupportsPortAccessLimits, PORT_ACCESS_LIMITS_ENABLED_SETTING, portAccessLimitAction, portAccessLimitsEnabled, portAccessLimitSpecs } from "./portAccessLimits";
+import { ruleLimitRootId } from "./ruleLimits";
 import { clearTunnelRuntimeStatusForHost, getHostWireGuardPlane, getTunnelRuntimeGeneration, isTunnelRuntimeHostReady, replaceHostWireGuardPlanes } from "./tunnelRuntimeStatus";
 import { appendPanelLog } from "./_core/panelLogger";
 import { isIP } from "net";
@@ -556,6 +558,7 @@ function stableActionSignature(actions: any[]) {
     removalCommands: action?.removalCommands || [],
     removalToken: action?.removalToken || "",
     managedConfigs: action?.managedConfigs || [],
+    portAccessLimits: action?.portAccessLimits || [],
     rollbackCommands: action?.rollbackCommands || [],
     preCommands: action?.preCommands || [],
     postCommands: action?.postCommands || [],
@@ -1293,6 +1296,9 @@ export function selectEffectiveForwardRateLimit(options: {
   tunnelLimitMbps?: unknown;
   forwardGroupId?: unknown;
   forwardGroupLimitMbps?: unknown;
+  /** 单条规则限速（server/ruleLimits.ts）：成员规则 / 中转跳传根规则的 id，同一台机器上共用一个桶。 */
+  ruleId?: unknown;
+  ruleLimitMbps?: unknown;
 }) {
   const userId = Math.max(0, Number(options.userId) || 0);
   const hostId = Math.max(0, Number(options.hostId) || 0);
@@ -1312,6 +1318,11 @@ export function selectEffectiveForwardRateLimit(options: {
       mbps: normalizeRateLimitMbps(options.forwardGroupLimitMbps),
       scope: `user-${userId}-host-${hostId}-group-${forwardGroupId}`,
       enabled: forwardGroupId > 0,
+    },
+    {
+      mbps: normalizeRateLimitMbps(options.ruleLimitMbps),
+      scope: `rule-${Math.max(0, Number(options.ruleId) || 0)}-host-${hostId}`,
+      enabled: Number(options.ruleId) > 0,
     },
   ].filter((candidate) => candidate.enabled !== false && candidate.mbps > 0);
   if (candidates.length === 0) return { mbps: 0, scope: "" };
@@ -2847,6 +2858,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         tunnelLimitMbps: tunnelRateLimitMbps(tunnel),
         forwardGroupId,
         forwardGroupLimitMbps: forwardGroupRateLimitMbps(group),
+        ruleId: ruleLimitRootId(rule),
+        ruleLimitMbps: rule?.rateLimitMbps,
       });
     };
     const applyGostLimiter = (service: any, rule: any, tunnel?: any | null) => {
@@ -7072,6 +7085,36 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       const bridgeOnPort = reportedLocalRules.some((local: AgentLocalRuntimeRuleState) => Number(local?.port || 0) === port && isEntryBridgeRuleId(local?.ruleId));
       if (!bridgeOnPort) continue;
       action.preCommands = [...buildEntryBridgeConntrackFlushCmds(port, action.protocol), ...(Array.isArray(action.preCommands) ? action.preCommands : [])];
+    }
+    /*
+      普通端口转发的单 IP 接入限制（server/portAccessLimits.ts）：按这台入口机上全部
+      已启用的普通规则出一份完整快照，和规则自己的下发互不相干 —— 已经在跑的规则不会因此
+      被重新下发或重启。只算面对客户端的入口端口：线路组中转跳、转发链后面几跳、共享 TLS
+      入站分过来的回环端口、换隧道留下的入口桥接，来源都是上一台机器或本机，按单 IP 一限
+      全体用户都会被卡住。
+    */
+    if (!deferActionsForLocalState && agentSupportsPortAccessLimits(effectiveAgentVersion)) {
+      // 设置里没打开时候选为空 → 空快照：不限，并撤掉之前打开时下发的限制。
+      const enforcePortLimits = portAccessLimitsEnabled(await db.getSetting(PORT_ACCESS_LIMITS_ENABLED_SETTING).catch(() => null));
+      const portLimitCandidates: any[] = [];
+      for (const rule of (enforcePortLimits ? agentHostRules : []) as any[]) {
+        if (!rule || runtimeBool(rule.pendingDelete) || !runtimeBool(rule.isEnabled)) continue;
+        if (Number(rule.hostId || 0) !== Number(host.id) || runtimeBool(rule.isForwardGroupTemplate)) continue;
+        if (Number(rule.tunnelId || 0) > 0 || Number(rule.routeParentRuleId || 0) > 0 || Number(rule.tlsInboundId || 0) > 0) continue;
+        if (isEntryBridgeRuntimeRule(rule) || !isRuleProtocolEnabled(forwardProtocolSettings, rule, null)) continue;
+        if (Number(rule.forwardGroupRuleId || 0) > 0 && Number(rule.forwardGroupMemberId || 0) > 0) {
+          const group = await getForwardChainGroup(Number(rule.forwardGroupId || 0));
+          if (String((group as any)?.groupMode || "") === "chain") {
+            const members = [...(((group as any)?.members || []) as any[])]
+              .filter((member: any) => runtimeBool(member?.isEnabled))
+              .sort((a: any, b: any) => Number(a.priority) - Number(b.priority));
+            if (Number(members[0]?.id || 0) !== Number(rule.forwardGroupMemberId)) continue;
+          }
+        }
+        portLimitCandidates.push(rule);
+      }
+      const portLimitAction = portAccessLimitAction(portAccessLimitSpecs(portLimitCandidates, userAccessLimits), true);
+      if (portLimitAction) actions.push(portLimitAction);
     }
     const effectiveActions = dropStalePortRemoveActions(actions, protectedRuleRemoveActionKeys);
     const actionBatchIssuedAt = resolveActionBatchIssuedAt(Number(host.id), effectiveActions, responseIssuedAt);

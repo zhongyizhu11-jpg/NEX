@@ -516,6 +516,22 @@ export const forwardRules = table("forward_rules", {
   egressInboundId: int("egressInboundId"),
   egressConfigJson: text("egressConfigJson"),
   egressUdp: boolean("egressUdp").notNull().default(false),
+  /*
+    单条规则限额（shared/ruleLimits.ts、server/ruleLimits.ts），只有管理员能设：
+    rateLimitMbps 叠在用户 / 隧道 / 转发组限速上取最严的那个；trafficLimit + trafficMode
+    是这条规则自己的流量额度；expiresAt 到期停用。达到时 ruleLimitReason 记原因
+    （expired / traffic_limit），运行时按停用下发，规则自己的开关不动。
+    adminManaged：管理员替用户建的、或设过限额的规则，用户只能看不能改。
+    quotaUsedIn/Out：这条逻辑规则的累计用量（转发组成员汇总到模板），null 表示还没开始记。
+  */
+  rateLimitMbps: int("rateLimitMbps").notNull().default(0),
+  trafficLimit: bigint("trafficLimit", { mode: "number" }).notNull().default(0),
+  trafficMode: varchar("trafficMode", { length: 16 }).notNull().default("both"),
+  expiresAt: epoch("expiresAt"),
+  ruleLimitReason: varchar("ruleLimitReason", { length: 32 }),
+  adminManaged: boolean("adminManaged").notNull().default(false),
+  quotaUsedIn: bigint("quotaUsedIn", { mode: "number" }),
+  quotaUsedOut: bigint("quotaUsedOut", { mode: "number" }),
   userId: int("userId").notNull(),
   createdAt: epoch("createdAt").notNull().default(nowDefault()),
   updatedAt: epoch("updatedAt").notNull().default(nowDefault()),

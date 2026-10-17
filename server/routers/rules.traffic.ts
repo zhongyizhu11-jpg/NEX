@@ -3,6 +3,8 @@ import { z } from "zod";
 import * as db from "../db";
 import { lookupAddressGeo } from "../hostGeo";
 import { requireRuleAccess } from "./helpers";
+import { assertRuleWritable, isAdminManagedRule } from "../../shared/ruleLimits";
+import { reconcileRuleLimits, resetRuleQuotaCounters } from "../ruleLimits";
 import { appendPanelLog } from "../_core/panelLogger";
 import {
   clearRuleTrafficAndLatencyQueryCaches,
@@ -34,19 +36,31 @@ export const trafficRulesRouter = router({
       if (input.scope === "rule") {
         const ruleId = Number(input.ruleId || 0);
         if (!Number.isInteger(ruleId) || ruleId <= 0) throw new Error("请选择要重置的规则");
-        await requireRuleAccess(ctx, ruleId);
+        const rule = await requireRuleAccess(ctx, ruleId);
+        // 管理员管理的规则：用量就是额度的依据，用户不能自己清。
+        assertRuleWritable(ctx.user, rule);
         targetRuleIds = [ruleId];
       } else {
         const requestedRuleIds = Array.from(new Set<number>((input.ruleIds || [])
           .map((id) => Number(id))
           .filter((id): id is number => Number.isInteger(id) && id > 0)));
         const visibleRules = await db.getForwardRules(ctx.user.role === "admin" ? undefined : ctx.user.id);
-        const visibleRuleIds = new Set<number>((visibleRules || [])
-          .map((rule: any) => Number(rule.id || 0))
-          .filter((id: number): id is number => Number.isInteger(id) && id > 0));
+        const visibleRuleById = new Map<number, any>((visibleRules || [])
+          .map((rule: any) => [Number(rule.id || 0), rule] as const)
+          .filter(([id]: readonly [number, any]) => Number.isInteger(id) && id > 0));
+        if (ctx.user.role !== "admin" && requestedRuleIds.length > 0) {
+          // 点名要清的里面有管理员管理的：整批拒绝，不清一半。
+          for (const id of requestedRuleIds) {
+            const rule = visibleRuleById.get(id);
+            if (rule) assertRuleWritable(ctx.user, rule);
+          }
+        }
         targetRuleIds = requestedRuleIds.length > 0
-          ? requestedRuleIds.filter((id) => visibleRuleIds.has(id))
-          : Array.from(visibleRuleIds);
+          ? requestedRuleIds.filter((id) => visibleRuleById.has(id))
+          // 「全部重置」不碰管理员管理的规则（用户看得到但清不了）。
+          : Array.from(visibleRuleById.entries())
+            .filter(([, rule]) => ctx.user.role === "admin" || !isAdminManagedRule(rule))
+            .map(([id]) => id);
       }
       targetRuleIds = Array.from(new Set(targetRuleIds)).sort((a, b) => a - b);
       if (targetRuleIds.length === 0) throw new Error("没有可重置的规则流量");
@@ -57,8 +71,11 @@ export const trafficRulesRouter = router({
         `[RuleTraffic] reset scope=${input.scope} count=${targetRuleIds.length} rules=${rules.filter(Boolean).map(ruleResetLogItem).join(" | ") || "-"}${omitted > 0 ? ` omitted=${omitted}` : ""}`,
       );
       const result = await db.resetRuleTrafficStats(targetRuleIds);
+      // 管理员重置时连同单条规则的额度用量一起清零（用户自己清不了，见上面）。
+      if (ctx.user.role === "admin") await resetRuleQuotaCounters(targetRuleIds);
       // 重置同时删了流量明细和 tcping_stats，两份缓存都得清。
       clearRuleTrafficAndLatencyQueryCaches();
+      if (ctx.user.role === "admin") await reconcileRuleLimits(targetRuleIds, true);
       return result;
     }),
   traffic: protectedProcedure

@@ -74,6 +74,10 @@ import { trafficBillingUserLockKey, withKeyedTaskLock, withTrafficBillingUserLoc
 import { mapWithConcurrency } from "../asyncPool";
 import { reserveRuleCreateQuota, type RuleQuotaReservation } from "../ruleQuotaReservations";
 import { assertRuleTargetsAllowedForActor } from "../ruleTargetPolicy";
+import { hasRuleLimitInput, ruleLimitColumns, ruleLimitInputShape, takeRuleLimitInput, validateRuleLimitInput, validateRuleRateLimitTargets } from "./ruleLimitInput";
+import { assertRuleWritable, isAdminManagedRule } from "../../shared/ruleLimits";
+import { reconcileRuleLimits } from "../ruleLimits";
+import { resolveRuleOperationOwner } from "../ruleOperationOwner";
 import {
   assertSniRuleTargetNotLoop,
   isSniRule,
@@ -1414,6 +1418,8 @@ export async function deleteForwardRuleForActor(
     const rule = await db.getForwardRuleById(ruleId);
     if (!rule || dbBool((rule as any).pendingDelete)) throw new Error("规则不存在或已删除");
     if (actor.role !== "admin" && rule.userId !== actor.id) throw new Error("无权操作此规则");
+    // 管理员管理的规则（替用户建的、设了限额的）用户只能看。
+    assertRuleWritable(actor, rule);
     if ((rule as any).forwardGroupRuleId) throw new Error("转发组成员规则由系统维护，不能直接删除");
     if (Number((rule as any).routeParentRuleId || 0) > 0) throw new Error("线路组的中转规则由面板维护，不能直接删除");
     const reasonPrefix = String(options.reasonPrefix || "forward-rule").trim() || "forward-rule";
@@ -1474,6 +1480,7 @@ export async function toggleForwardRuleForActor(
       // 待删除的规则只等 Agent 确认停掉后清理，不能再被打开。
       if (!rule || dbBool((rule as any).pendingDelete)) throw new Error("规则不存在");
       if (actor.role !== "admin" && rule.userId !== actor.id) throw new Error("无权操作此规则");
+      assertRuleWritable(actor, rule);
       if ((rule as any).forwardGroupRuleId) throw new Error("转发组成员规则由系统维护，不能直接开关");
       if (Number((rule as any).routeParentRuleId || 0) > 0) throw new Error("线路组的中转规则由面板维护，不能直接开关");
       if ((rule as any).isForwardGroupTemplate) {
@@ -1671,12 +1678,19 @@ export async function toggleForwardRuleForActor(
 export async function createDirectForwardRuleForActor(
   actor: { id: number; role: string; allowedForwardTypes?: string | null },
   input: any,
-  options: { reasonPrefix?: string; egress?: RuleEgressInput } = {},
+  options: { reasonPrefix?: string; egress?: RuleEgressInput; limitColumns?: Record<string, unknown> } = {},
 ) {
   await requireRuleTelegramNotifyReady(!!input.telegramErrorNotifyEnabled);
   // 出口字段不能跟着入参一起展开进规则行（外部链接要先解析加密）。没走 tRPC 的调用方传进来的也一并摘掉。
   input = { ...input };
   const strippedEgress = takeEgressInput(input);
+  // 限额同理：只认调用方算好的 limitColumns（管理员才有），入参里带的一律摘掉。
+  takeRuleLimitInput(input);
+  delete input.userId;
+  delete input.adminManaged;
+  delete input.quotaUsedIn;
+  delete input.quotaUsedOut;
+  delete input.ruleLimitReason;
   const egressInput: RuleEgressInput = options.egress || strippedEgress;
   /*
     名字留空就替用户起一个。
@@ -1870,6 +1884,7 @@ export async function createDirectForwardRuleForActor(
       tunnelId,
       tunnelExitPort,
       ...(egressColumns || {}),
+      ...(options.limitColumns || {}),
       userId: actor.id,
     });
     await quotaReservation.release();
@@ -1963,7 +1978,7 @@ async function requireSniRuleOwnerReady(
 export async function createSniForwardRuleForActor(
   actor: { id: number; role: string; allowedForwardTypes?: string | null },
   input: any,
-  options: { reasonPrefix?: string } = {},
+  options: { reasonPrefix?: string; limitColumns?: Record<string, unknown> } = {},
 ) {
   await requireRuleTelegramNotifyReady(!!input.telegramErrorNotifyEnabled);
   if (Number(input.tunnelId || 0) > 0 || Number(input.forwardGroupId || 0) > 0) {
@@ -2034,6 +2049,7 @@ export async function createSniForwardRuleForActor(
         failoverEnabled: false,
         tlsInboundId: inbound.id,
         sniNames: JSON.stringify(names),
+        ...(options.limitColumns || {}),
         userId: actor.id,
       } as any);
       await db.replaceRuleSniNames(Number(createdId), inbound.id, names);
@@ -2231,6 +2247,8 @@ async function applyRuleEgressUpdate(ruleId: number, plan: RuleEgressUpdatePlan)
 export const crudRulesRouter = router({
   create: protectedProcedure
     .input(z.object({
+      // 管理员在规则页选了某个用户时，新规则归他（见 server/ruleOperationOwner.ts）。
+      userId: z.number().int().positive().optional(),
       hostId: z.number().optional(),
       // 留空由服务端按目标地址兜底生成，见 resolveForwardRuleName。
       name: z.string().max(128).optional(),
@@ -2258,12 +2276,25 @@ export const crudRulesRouter = router({
       ...proxyProtocolInputShape,
       ...transportTuningInputShape,
       ...egressInputShape,
+      ...ruleLimitInputShape,
     }))
     .mutation(async ({ input, ctx }) => {
       const egressInput = takeEgressInput(input as any);
+      // 单条规则限额：只有管理员能设，按操作者（不是新规则的主人）判定；摘出来单独落库。
+      const limitInput = takeRuleLimitInput(input as any);
+      validateRuleLimitInput(ctx.user.role, limitInput);
+      await validateRuleRateLimitTargets({ ...input, ...limitInput });
+      const requestedOwnerId = (input as any).userId as number | undefined;
+      delete (input as any).userId;
+      // 管理员替别人建的、或设了限额的：管理员管理，主人只能看。
+      const adminManaged = ctx.user.role === "admin"
+        && (hasRuleLimitInput(limitInput) || (requestedOwnerId !== undefined && Number(requestedOwnerId) !== Number(ctx.user.id)));
+      const limitColumns = adminManaged ? ruleLimitColumns(limitInput, true) : {};
+      ctx = { ...ctx, user: await resolveRuleOperationOwner(ctx.user, requestedOwnerId) as any };
+      const created: any = await (async () => {
       if (input.tlsInboundId) {
         if (egressRequested(egressInput)) throw new Error("共享 TLS 入站上的规则不能使用 Shadowsocks 出口");
-        return createSniForwardRuleForActor(ctx.user, input);
+        return createSniForwardRuleForActor(ctx.user, input, { limitColumns });
       }
       // 转发组这条路自己落库，同样兜底一次；直连那条在
       // createDirectForwardRuleForActor 里兜。两处都调同一个函数。
@@ -2439,6 +2470,7 @@ export const crudRulesRouter = router({
           ),
           ...templateFailoverColumns,
           ...(templateEgressColumns || {}),
+          ...limitColumns,
           isRunning: false,
           userId: ctx.user.id,
         } as any);
@@ -2461,7 +2493,12 @@ export const crudRulesRouter = router({
         });
       }
 
-      return createDirectForwardRuleForActor(ctx.user, input, { egress: egressInput });
+      return createDirectForwardRuleForActor(ctx.user, input, { egress: egressInput, limitColumns });
+      })();
+      if (Object.keys(limitColumns).length > 0 && Number(created?.id) > 0) {
+        await reconcileRuleLimits([Number(created.id)], true);
+      }
+      return created;
     }),
   update: protectedProcedure
     .input(z.object({
@@ -2491,9 +2528,32 @@ export const crudRulesRouter = router({
       ...proxyProtocolInputShape,
       ...transportTuningInputShape,
       ...egressInputShape,
+      ...ruleLimitInputShape,
       isEnabled: z.boolean().optional(),
     }))
     .mutation(async ({ input, ctx }) => {
+      // 单条规则限额和出口一样：先校验，主流程成功后单独落库。用户改不了管理员管理的规则。
+      const limitInput = takeRuleLimitInput(input as any);
+      const ruleBeforeUpdate = await db.getForwardRuleById(input.id);
+      if (ruleBeforeUpdate && !dbBool((ruleBeforeUpdate as any).pendingDelete)) {
+        if (ctx.user.role !== "admin" && ruleBeforeUpdate.userId !== ctx.user.id) throw new Error("无权操作此规则");
+        assertRuleWritable(ctx.user, ruleBeforeUpdate);
+        validateRuleLimitInput(ctx.user.role, limitInput, ruleBeforeUpdate);
+        // 设限速、或者带着限速换了入口，才需要确认入口机的 Agent 撑得住；不相干的编辑不受旧 Agent 牵连。
+        const routeChanged = ["hostId", "tunnelId", "forwardGroupId"].some((key) => (input as any)[key] !== undefined
+          && Number((input as any)[key] || 0) !== Number((ruleBeforeUpdate as any)[key] || 0));
+        if (Number(limitInput.rateLimitMbps) > 0 || (routeChanged && Number((ruleBeforeUpdate as any).rateLimitMbps) > 0)) {
+          await validateRuleRateLimitTargets({ ...ruleBeforeUpdate, ...input, ...limitInput });
+        }
+      }
+      const limitPatch = ctx.user.role !== "admin" || !ruleBeforeUpdate
+        ? null
+        : hasRuleLimitInput(limitInput)
+          ? ruleLimitColumns(limitInput, true)
+          // 老数据：设过限额却没记 adminManaged 的，管理员一编辑就补上。
+          : isAdminManagedRule(ruleBeforeUpdate) && !dbBool((ruleBeforeUpdate as any).adminManaged)
+            ? { adminManaged: true }
+            : null;
       // 出口那一块单独校验、主流程成功后单独落库（见 planRuleEgressUpdate）。
       const egressInput = takeEgressInput(input as any);
       const egressPlan = await planRuleEgressUpdate(ctx.user, input, egressInput);
@@ -3632,6 +3692,11 @@ export const crudRulesRouter = router({
       }
     });
       if (egressPlan) await applyRuleEgressUpdate(Number(input.id), egressPlan);
+      if (limitPatch && Object.keys(limitPatch).length > 0) {
+        await db.updateForwardRule(Number(input.id), limitPatch as any);
+        // 判定、写回原因、通知入口机（限速变了也靠这次通知重算限速守卫 / gost limiter）。
+        if (hasRuleLimitInput(limitInput)) await reconcileRuleLimits([Number(input.id)], true);
+      }
       return updateResult;
     }),
   delete: protectedProcedure
