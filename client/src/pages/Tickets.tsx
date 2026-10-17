@@ -22,6 +22,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { FormField } from "@/components/ui/form-field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useIsMobile } from "@/hooks/useMobile";
@@ -205,6 +206,18 @@ export default function Tickets({ mode = "user" }: { mode?: Mode }) {
   const showList = !isMobile || !selectedId;
   const showThread = !isMobile || !!selectedId;
 
+  // 工单总开关（server/routers/tickets.ts）：关掉后普通用户不能新建、回复；管理员在这里开关。
+  const ticketStatus = trpc.tickets.status.useQuery(undefined, { staleTime: 30_000 });
+  const ticketsOpen = ticketStatus.data?.enabled !== false;
+  const setTicketsEnabled = trpc.tickets.adminSetEnabled.useMutation({
+    onSuccess: (result) => {
+      toast.success(result.enabled ? "已开放工单" : "已关闭工单，普通用户暂时不能提交和回复");
+      void utils.tickets.status.invalidate();
+      void utils.system.publicInfo.invalidate();
+    },
+    onError: (error) => toast.error(error.message || "操作失败"),
+  });
+
   return (
     <DashboardLayout>
       <div className="space-y-4">
@@ -213,12 +226,35 @@ export default function Tickets({ mode = "user" }: { mode?: Mode }) {
           description={isAdmin ? "处理用户提交的工单，待处理的排在最前面。" : "遇到问题可以在这里联系管理员。"}
           status={total > 0 ? `共 ${total} 张` : undefined}
           actions={!isAdmin ? (
-            <Button onClick={() => setCreateOpen(true)} className="gap-2 max-md:w-[34px] max-md:px-0" aria-label="新建工单">
-              <Plus className="h-4 w-4" />
-              <span className="max-md:sr-only">新建工单</span>
-            </Button>
-          ) : undefined}
+            ticketsOpen ? (
+              <Button onClick={() => setCreateOpen(true)} className="gap-2 max-md:w-[34px] max-md:px-0" aria-label="新建工单">
+                <Plus className="h-4 w-4" />
+                <span className="max-md:sr-only">新建工单</span>
+              </Button>
+            ) : undefined
+          ) : (
+            <label className="flex items-center gap-2 text-sm">
+              <span className="text-muted-foreground">开放工单</span>
+              <Switch
+                aria-label="开放工单"
+                checked={ticketsOpen}
+                disabled={!ticketStatus.data || setTicketsEnabled.isPending}
+                onCheckedChange={(enabled) => setTicketsEnabled.mutate({ enabled })}
+              />
+            </label>
+          )}
         />
+
+        {!ticketsOpen ? (
+          <div role="status" className="flex items-start gap-2 rounded-[var(--fx-radius-control)] border border-[color-mix(in_srgb,var(--fx-warn)_35%,transparent)] bg-[var(--fx-warn-soft)] px-3 py-2 text-sm text-[var(--fx-warn-text)]">
+            <Lock className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+            <span>
+              {isAdmin
+                ? "工单已关闭：普通用户侧边栏看不到「工单」，也不能新建或回复。你仍然可以在这里查看和处理已有工单。"
+                : "工单功能已关闭，暂时不能新建或回复工单。之前的工单仍可查看。"}
+            </span>
+          </div>
+        ) : null}
 
         <div className="grid gap-4 md:grid-cols-[minmax(260px,360px)_minmax(0,1fr)] md:items-start">
           {showList ? (
@@ -271,7 +307,7 @@ export default function Tickets({ mode = "user" }: { mode?: Mode }) {
                   <EmptyState
                     icon={<Inbox />}
                     title={isAdmin ? "没有符合条件的工单" : "还没有工单"}
-                    description={isAdmin ? "换个筛选条件试试。" : "遇到问题时点右上角「新建工单」联系管理员。"}
+                    description={isAdmin ? "换个筛选条件试试。" : ticketsOpen ? "遇到问题时点右上角「新建工单」联系管理员。" : "工单功能已关闭。"}
                   />
                 ) : (
                   <ul className="-mx-1 space-y-1" aria-label="工单列表">
@@ -363,6 +399,7 @@ function TicketThread({ mode, ticketId, onChanged, onMissing }: {
   onMissing: () => void;
 }) {
   const isAdmin = mode === "admin";
+  const ticketStatus = trpc.tickets.status.useQuery(undefined, { staleTime: 30_000 });
   const utils = trpc.useUtils();
   const confirmDialog = useConfirmDialog();
   const threadOptions = { refetchInterval: THREAD_POLL_MS, retry: false };
@@ -460,6 +497,7 @@ function TicketThread({ mode, ticketId, onChanged, onMissing }: {
   if (!ticket) return null;
 
   const closed = ticket.status === "closed";
+  const ticketsOpen = ticketStatus.data?.enabled !== false;
   const contentLength = draft.trim().length;
 
   return (
@@ -532,6 +570,10 @@ function TicketThread({ mode, ticketId, onChanged, onMissing }: {
               <RotateCcw className="h-3.5 w-3.5" />
               重新打开
             </Button>
+          </div>
+        ) : !isAdmin && !ticketsOpen ? (
+          <div className="rounded-[var(--fx-radius-control)] border border-dashed border-[var(--fx-stroke-base)] p-3 text-sm text-muted-foreground">
+            工单功能已关闭，暂时不能回复。
           </div>
         ) : (
           <div className="space-y-2">

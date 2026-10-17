@@ -747,7 +747,8 @@ const tables: TableDef[] = [
       c("lastMessageAt", "epoch", { notNull: true, default: "now" }), c("lastMessageByStaff", "bool", { notNull: true, default: false }),
       c("closedAt", "epoch"), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" }),
     ],
-    indexes: [["userId", "lastMessageAt"], ["status", "lastMessageAt"], ["lastMessageAt"]],
+    // userId + createdAt：新建频率按库里的记录数（server/ticketRateLimit.ts）。
+    indexes: [["userId", "lastMessageAt"], ["status", "lastMessageAt"], ["lastMessageAt"], ["userId", "createdAt"]],
   },
   {
     name: "ticket_messages",
@@ -755,7 +756,8 @@ const tables: TableDef[] = [
       c("id", "id"), c("ticketId", "int", { notNull: true }), c("senderId", "int"), c("isStaff", "bool", { notNull: true, default: false }),
       c("content", "longtext", { notNull: true }), c("createdAt", "epoch", { notNull: true, default: "now" }),
     ],
-    indexes: [["ticketId"]],
+    // senderId + createdAt：回复频率按库里的记录数（server/ticketRateLimit.ts）。
+    indexes: [["ticketId"], ["senderId", "createdAt"]],
   },
   { name: "plugins", columns: [c("id", "id"), c("pluginId", "varchar", { length: 128, notNull: true }), c("name", "text", { notNull: true }), c("version", "varchar", { length: 64, notNull: true, default: "0.0.0" }), c("description", "text"), c("author", "text"), c("homepage", "text"), c("repository", "text"), c("sourceType", "varchar", { length: 32, notNull: true, default: "github" }), c("sourceUrl", "text"), c("branch", "varchar", { length: 128 }), c("manifestPath", "text"), c("manifestJson", "text", { notNull: true }), c("permissionsJson", "text"), c("extensionPointsJson", "text"), c("status", "varchar", { length: 32, notNull: true, default: "disabled" }), c("trusted", "bool", { notNull: true, default: false }), c("installedAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" }), c("lastCheckedAt", "epoch"), c("latestVersion", "varchar", { length: 64 }), c("lastError", "text")], unique: [["pluginId"]], indexes: [["status"], ["sourceType"]] },
   { name: "plugin_store_sources", columns: [c("id", "id"), c("name", "text", { notNull: true }), c("repository", "text", { notNull: true }), c("branch", "varchar", { length: 128, notNull: true, default: "main" }), c("catalogPath", "text", { notNull: true, default: "forwardx-store.json" }), c("itemsJson", "longtext"), c("lastSyncedAt", "epoch"), c("lastError", "text"), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], unique: [["repository", "branch", "catalogPath"]], indexes: [["updatedAt"]] },
@@ -777,6 +779,8 @@ const seedSettings = [
   ["personalizationCardStyle", "edge"],
   ["personalizationUiTheme", "classic"],
   ["lookingGlassUserEnabled", "true"],
+  // 工单总开关：关掉后普通用户看不到入口、不能提交 / 回复，管理员照常处理（server/routers/tickets.ts）。
+  ["ticketsEnabled", "true"],
   ["allowMultiDeviceLogin", "false"],
   ["publicHostMonitorEnabled", "false"],
   ["publicHostMonitorPath", "dev"],
