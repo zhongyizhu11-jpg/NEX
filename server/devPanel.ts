@@ -1539,9 +1539,14 @@ async function seedRouteGroupDemo(ruleId: number, hostIds: number[]) {
 
 async function seedRules(hostIds: number[], resources: DevResources, usersSeed: DevUsers): Promise<DevRules> {
   const rules = [
-    { userId: usersSeed.adminId, hostId: hostIds[0], name: "Website TCP forward", forwardType: "iptables", protocol: "tcp", sourcePort: 15201, targetIp: "2a0e:97c0:3f4:1::41d", targetPort: 5201, sortOrder: 0, isRunning: true },
-    { userId: usersSeed.adminId, hostId: hostIds[1], name: "Game TCP+UDP forward", forwardType: "realm", protocol: "both", sourcePort: 21001, targetIp: "10.10.3.88", targetPort: 25565, sortOrder: 1, isRunning: true, proxyProtocolSend: true, proxyProtocolExitReceive: true, proxyProtocolExitSend: true },
-    { userId: usersSeed.adminId, hostId: hostIds[2], name: "UDP over TCP sample", forwardType: "gost", protocol: "both", sourcePort: 32000, targetIp: "172.16.8.30", targetPort: 19132, sortOrder: 2, udpOverTcp: true, udpOverTcpPort: 32001, isRunning: true },
+    { userId: usersSeed.adminId, hostId: hostIds[0], name: "Website TCP forward", forwardType: "iptables", protocol: "tcp", sourcePort: 15201, targetIp: "2a0e:97c0:3f4:1::41d", targetPort: 5201, sortOrder: 0, isRunning: true,
+      // 单条规则限额（server/ruleLimits.ts）：限速 + 额度 + 到期，卡片上那一行的演示。
+      adminManaged: true, rateLimitMbps: 50, trafficLimit: Math.round(100 * 1024 ** 3), trafficMode: "both", quotaUsedIn: Math.round(30 * 1024 ** 3), quotaUsedOut: Math.round(11.2 * 1024 ** 3), expiresAt: daysFromNow(45) },
+    { userId: usersSeed.adminId, hostId: hostIds[1], name: "Game TCP+UDP forward", forwardType: "realm", protocol: "both", sourcePort: 21001, targetIp: "10.10.3.88", targetPort: 25565, sortOrder: 1, isRunning: true, proxyProtocolSend: true, proxyProtocolExitReceive: true, proxyProtocolExitSend: true,
+      adminManaged: true, expiresAt: daysFromNow(12) },
+    { userId: usersSeed.adminId, hostId: hostIds[2], name: "UDP over TCP sample", forwardType: "gost", protocol: "both", sourcePort: 32000, targetIp: "172.16.8.30", targetPort: 19132, sortOrder: 2, udpOverTcp: true, udpOverTcpPort: 32001, isRunning: false,
+      // 额度用尽：规则自己的开关还开着，运行时按停用下发，卡片上标「额度用尽」。
+      adminManaged: true, trafficLimit: Math.round(20 * 1024 ** 3), trafficMode: "max", quotaUsedIn: Math.round(20.4 * 1024 ** 3), quotaUsedOut: Math.round(3.1 * 1024 ** 3), ruleLimitReason: "traffic_limit" },
     { userId: usersSeed.adminId, hostId: hostIds[3], name: "Offline backup rule", forwardType: "socat", protocol: "tcp", sourcePort: 30080, targetIp: "192.168.9.20", targetPort: 80, sortOrder: 3, isRunning: false, disabledByUser: true },
     { userId: usersSeed.adminId, hostId: hostIds[0], name: "Local API mirror", forwardType: "nginx_stream", protocol: "tcp", sourcePort: 15443, targetIp: "10.64.0.43", targetPort: 443, sortOrder: 4, isRunning: true, tcpFastOpen: true, zeroCopy: true },
     { userId: usersSeed.adminId, hostId: hostIds[2], name: "Local metrics UDP", forwardType: "realm", protocol: "udp", sourcePort: 18125, targetIp: "10.64.0.125", targetPort: 8125, sortOrder: 5, isRunning: true },
@@ -1574,7 +1579,9 @@ async function seedRules(hostIds: number[], resources: DevResources, usersSeed: 
     { userId: usersSeed.adminId, hostId: hostIds[0], name: "Long relay chain template", forwardType: "realm", protocol: "both", sourcePort: 18282, targetIp: "10.81.0.82", targetPort: 8082, forwardGroupId: resources.groups.longChainGroupId, isForwardGroupTemplate: true, sortOrder: 2, isRunning: false, tcpFastOpen: true, zeroCopy: true },
     // 落到 JP 上那个 VLESS 落地入站的中转：拓扑页上是「HK → JP → 入站」。
     { userId: usersSeed.adminId, hostId: hostIds[0], name: "HK to JP VLESS landing", forwardType: "realm", protocol: "tcp", sourcePort: 24600, targetIp: "jp-exit.dev.forwardx.local", targetPort: 24610, sortOrder: 7, isRunning: true },
-    { userId: usersSeed.activeUserId, hostId: hostIds[1], name: "User tunnel demo", forwardType: "gost", protocol: "tcp", sourcePort: 26001, targetIp: "203.0.113.10", targetPort: 443, tunnelId: resources.tunnels.primaryTunnelId, tunnelExitPort: 26002, sortOrder: 0, isRunning: true, failoverEnabled: true, failoverTargets: JSON.stringify([{ targetIp: "203.0.113.11", targetPort: 443 }]) },
+    { userId: usersSeed.activeUserId, hostId: hostIds[1], name: "User tunnel demo", forwardType: "gost", protocol: "tcp", sourcePort: 26001, targetIp: "203.0.113.10", targetPort: 443, tunnelId: resources.tunnels.primaryTunnelId, tunnelExitPort: 26002, sortOrder: 0, isRunning: true, failoverEnabled: true, failoverTargets: JSON.stringify([{ targetIp: "203.0.113.11", targetPort: 443 }]),
+      // 管理员替用户建的、带限额的规则：用户那边只读，额度快用完（琥珀色）。
+      adminManaged: true, rateLimitMbps: 20, trafficLimit: Math.round(50 * 1024 ** 3), trafficMode: "both", quotaUsedIn: Math.round(40 * 1024 ** 3), quotaUsedOut: Math.round(6.5 * 1024 ** 3), expiresAt: daysFromNow(30) },
     { userId: usersSeed.pausedUserId, hostId: hostIds[2], name: "Traffic billing pause demo", forwardType: "realm", protocol: "both", sourcePort: 27500, targetIp: "198.18.1.25", targetPort: 27015, sortOrder: 0, isRunning: false, disabledByUser: true },
     { userId: usersSeed.expiredUserId, hostId: hostIds[3], name: "Expired account demo", forwardType: "socat", protocol: "tcp", sourcePort: 29500, targetIp: "192.0.2.81", targetPort: 8443, sortOrder: 0, isRunning: false, disabledByUser: true },
   ] as const;

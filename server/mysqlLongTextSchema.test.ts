@@ -33,3 +33,11 @@ test("MySQL system settings use LONGTEXT and upgrade an existing TEXT value colu
     true,
   );
 });
+
+test("MySQL forward test results keep complete multi-hop summaries beyond the TEXT limit", async () => {
+  const { pool, queries } = mysqlPool();
+  await ensureDatabaseSchema(pool as any);
+  const column = getDatabaseTableDefs().find((def) => def.name === "forward_tests")?.columns.find((def) => def.name === "message");
+  assert.equal(column?.type, "longtext");
+  assert.equal(queries.some((entry) => entry.sql === "ALTER TABLE `forward_tests` MODIFY COLUMN `message` LONGTEXT NULL"), true);
+});

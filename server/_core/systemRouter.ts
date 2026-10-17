@@ -7,6 +7,7 @@ import * as db from "../db";
 import { ENV } from "../env";
 import { compareVersions, normalizeVersion } from "../../shared/version";
 import { MAX_RULE_SWITCH_BRIDGE_HOURS, RULE_SWITCH_BRIDGE_HOURS_SETTING, normalizeRuleSwitchBridgeHours } from "../../shared/ruleEntryBridge";
+import { PORT_ACCESS_LIMITS_ENABLED_SETTING, portAccessLimitsEnabled } from "../portAccessLimits";
 import { spawn } from "child_process";
 import {
   appendUpgradeJobLog,
@@ -1702,6 +1703,7 @@ function publicSystemSettings(all: Record<string, string | null>, activeProtocol
     webPort: getPublicWebPort(),
     webPortManagement: getWebPortManagement({ publicView: true }),
     registrationEnabled: all.registrationEnabled !== "false",
+    authCaptchaEnabled: all.authCaptchaEnabled !== "false",
     twoFactorEnabled: all.twoFactorEnabled === "true",
     lookingGlassUserEnabled: all.lookingGlassUserEnabled !== "false",
     allowMultiDeviceLogin: all.allowMultiDeviceLogin === "true",
@@ -1844,10 +1846,13 @@ export const systemRouter = router({
       personalizationBackground: publicPersonalizationBackground(all),
       personalizationLiquidGlass: readPersonalizationLiquidGlass(all),
       registrationEnabled: all.registrationEnabled !== "false",
+      authCaptchaEnabled: all.authCaptchaEnabled !== "false",
       // 邀请返利开没开（侧边栏「邀请返利」据此显隐）、注册是否必须带邀请码。
       ...db.publicReferralFlags(all),
       twoFactorEnabled: all.twoFactorEnabled === "true",
       lookingGlassUserEnabled: all.lookingGlassUserEnabled !== "false",
+      // 工单总开关：关了普通用户侧边栏不显示「工单」（server/routers/tickets.ts）。
+      ticketsEnabled: all.ticketsEnabled !== "false",
       allowMultiDeviceLogin: all.allowMultiDeviceLogin === "true",
       pluginsEnabled: all.pluginsEnabled === "true",
       updateAutoCheckEnabled: isUpdateAutoCheckEnabled(all),
@@ -1905,6 +1910,7 @@ export const systemRouter = router({
       webPort: getPublicWebPort(),
       webPortManagement: getWebPortManagement(),
       registrationEnabled: all.registrationEnabled !== "false",
+      authCaptchaEnabled: all.authCaptchaEnabled !== "false",
       twoFactorEnabled: all.twoFactorEnabled === "true",
       lookingGlassUserEnabled: all.lookingGlassUserEnabled !== "false",
       pluginsEnabled: all.pluginsEnabled === "true",
@@ -1919,6 +1925,7 @@ export const systemRouter = router({
       customSidebarPages: readCustomSidebarPages(all),
       tunnelRuntimeDefault: all.tunnelRuntimeDefault === "gost" ? "gost" : "forwardx",
       ruleSwitchBridgeHours: normalizeRuleSwitchBridgeHours(all[RULE_SWITCH_BRIDGE_HOURS_SETTING]),
+      portAccessLimitsEnabled: portAccessLimitsEnabled(all[PORT_ACCESS_LIMITS_ENABLED_SETTING]),
       githubAccelerator: {
         enabled: all.githubAcceleratorEnabled === "true",
         url: all.githubAcceleratorUrl ?? "",
@@ -2132,6 +2139,7 @@ export const systemRouter = router({
         personalizationCardStyle: z.string().max(16).optional(),
         personalizationUiTheme: z.string().max(16).optional(),
         registrationEnabled: z.boolean().optional(),
+        authCaptchaEnabled: z.boolean().optional(),
         twoFactorEnabled: z.boolean().optional(),
         lookingGlassUserEnabled: z.boolean().optional(),
         allowMultiDeviceLogin: z.boolean().optional(),
@@ -2152,6 +2160,7 @@ export const systemRouter = router({
         customSidebarPages: customSidebarPagesSchema.optional(),
         tunnelRuntimeDefault: z.enum(["forwardx", "gost"]).optional(),
         ruleSwitchBridgeHours: z.number().int().min(0).max(MAX_RULE_SWITCH_BRIDGE_HOURS).optional(),
+        portAccessLimitsEnabled: z.boolean().optional(),
         githubAccelerator: z.object({
           enabled: z.boolean().optional(),
           url: githubAcceleratorUrlSchema.optional(),
@@ -2282,6 +2291,10 @@ export const systemRouter = router({
         await db.setSetting("registrationEnabled", input.registrationEnabled ? "true" : "false");
         console.info(`[Settings] public registration ${input.registrationEnabled ? "enabled" : "disabled"}`);
       }
+      if (input.authCaptchaEnabled !== undefined) {
+        await db.setSetting("authCaptchaEnabled", input.authCaptchaEnabled ? "true" : "false");
+        console.info(`[Settings] authentication captcha ${input.authCaptchaEnabled ? "enabled" : "disabled"}`);
+      }
       if (input.twoFactorEnabled !== undefined) {
         await db.setSetting("twoFactorEnabled", input.twoFactorEnabled ? "true" : "false");
         console.info(`[Settings] 2FA ${input.twoFactorEnabled ? "enabled" : "disabled"}`);
@@ -2375,6 +2388,11 @@ export const systemRouter = router({
         // 只影响之后的换隧道；已经留着的桥接按当时定的到期时间走。
         await db.setSetting(RULE_SWITCH_BRIDGE_HOURS_SETTING, String(hours));
         console.info(`[Settings] rule switch bridge hours set to ${hours}`);
+      }
+      if (input.portAccessLimitsEnabled !== undefined) {
+        // 下一轮心跳生效：打开时按用户的单 IP / 连接数下发，关掉时下发空快照撤掉。
+        await db.setSetting(PORT_ACCESS_LIMITS_ENABLED_SETTING, input.portAccessLimitsEnabled ? "true" : "false");
+        console.info(`[Settings] ordinary port access limits ${input.portAccessLimitsEnabled ? "enabled" : "disabled"}`);
       }
       if (input.githubAccelerator) {
         const next: Record<string, string | null> = {};

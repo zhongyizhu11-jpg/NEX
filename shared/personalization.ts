@@ -629,7 +629,13 @@ export function normalizePersonalizationCardStyle(value: unknown): Personalizati
             靛蓝（#4268aa），按钮是平色、选中态是淡底 + 靛蓝字；整套换成系统字，读数粗黑 + 底下一根细进度条，
             统计条是「小灰标签 + 26px 大数字」；控件一律 8px 圆角，底部标签栏是贴底通栏条。深色是蓝黑（#121417）。
 
-  画法全在 client/src/styles/theme-aurora.css / theme-gilt.css / theme-rose.css / theme-cinnabar.css / theme-liquid-glass.css / theme-indigo.css 里按 <html data-ui-theme> 选；这里只管 id 和文案。
+    pearl   珍珠 —— 照上游 poouo/Forwardx 现在那套 Pearl Glass（改编自 scaffold-master，MIT，见 THIRD_PARTY_NOTICES.md）：
+            带一丝灰绿的珍珠灰底（#f4f6f5）托瓷片卡（白→珍珠白的淡渐变 + 1px 灰绿细线 + 两层很淡的影 + 顶部白高光，
+            16px 圆角）；控件 12px 圆角，主按钮是上游出厂的墨色（深色下是一块亮白瓷），分段控件是一条凹槽、选中格是
+            浮起来的瓷片；侧栏选中项也是一块瓷片，换页时滑过去（client/src/components/PearlNavMarker.tsx）；
+            页面标题下一道细线，系统字。深色是蓝灰墨（#161b1e）。
+
+  画法全在 client/src/styles/theme-aurora.css / theme-gilt.css / theme-rose.css / theme-cinnabar.css / theme-liquid-glass.css / theme-indigo.css / theme-pearl.css 里按 <html data-ui-theme> 选；这里只管 id 和文案。
   存的是 id；别的值一律回到 classic。
 */
 export const PERSONALIZATION_UI_THEMES = [
@@ -640,6 +646,7 @@ export const PERSONALIZATION_UI_THEMES = [
   { id: "cinnabar", name: "朱砂", description: "素白纸面、3px 小方角、朱红短线和菱形标记，标签全大写加宽字距，一份技术规格书的样子。" },
   { id: "liquid-glass", name: "液态玻璃", description: "Apple Liquid Glass：页面后面两张随机照片（设了壁纸就用壁纸），卡片是真毛玻璃、鼠标移上去跟着亮一团光，浮着的玻璃顶栏、胶囊玻璃按钮、Apple 蓝选中态；深色是压暗的照片。" },
   { id: "indigo", name: "靛蓝", description: "冷灰底托纯白细线卡、靛蓝平色控件、系统字；读数粗黑、底下一根细进度条，像一块监控大屏；深色是蓝黑。照 monitor-probe 的 HEX 主题。" },
+  { id: "pearl", name: "珍珠", description: "珍珠灰底托瓷片卡：细线、淡渐变、两层软影和一道顶部高光；墨色主按钮、凹槽分段控件里浮起的选中格，侧栏选中项会滑；深色是蓝灰墨。照上游 Forwardx 的 Pearl Glass。" },
 ] as const;
 
 export type PersonalizationUiThemeId = typeof PERSONALIZATION_UI_THEMES[number]["id"];

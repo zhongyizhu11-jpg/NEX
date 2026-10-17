@@ -414,6 +414,8 @@ export default function Login() {
     refetchOnWindowFocus: false,
   });
   const registrationEnabled = emailConfig?.registrationEnabled !== false && publicInfo?.registrationEnabled !== false;
+  // 管理员可以在设置里关掉登录 / 注册的人机验证（默认开）；关掉时注册页不画验证框、不带 token。
+  const registrationCaptchaEnabled = emailConfig?.authCaptchaEnabled !== false;
   const referralEnabled = emailConfig?.referralEnabled === true || publicInfo?.referralEnabled === true;
   const referralForceInvite = emailConfig?.referralForceInvite === true || publicInfo?.referralForceInvite === true;
   const googleLoginEnabled = publicInfo?.googleLoginEnabled === true;
@@ -436,7 +438,7 @@ export default function Login() {
     staleTime: 0,
   });
   const serverRequiresLoginCaptcha = captchaStatusQuery.data?.required === true;
-  const loginCaptchaRequired = serverRequiresLoginCaptcha || loginCaptchaRequiredFor === normalizedUsername;
+  const loginCaptchaRequired = captchaStatusQuery.data?.enabled !== false && (serverRequiresLoginCaptcha || loginCaptchaRequiredFor === normalizedUsername);
   // The image challenge remains available only for old clients; the current
   // page uses the self-hosted Cap widget below.
   const captchaVisible = false;
@@ -969,7 +971,7 @@ export default function Login() {
       toast.error("当前仅支持邀请注册，请填写有效的邀请码");
       return;
     }
-    if (!captchaAnswer.trim()) {
+    if (registrationCaptchaEnabled && !captchaAnswer.trim()) {
       toast.error("请先完成人机验证");
       return;
     }
@@ -983,7 +985,7 @@ export default function Login() {
       name: name.trim() || undefined,
       email: email.trim() || undefined,
       emailCode: emailCode.trim() || undefined,
-      capToken: captchaAnswer.trim(),
+      capToken: registrationCaptchaEnabled ? captchaAnswer.trim() : undefined,
       // 返利没开时不带：服务端本来也会忽略，但没必要把链接里的码发过去。
       inviteCode: referralEnabled ? inviteCode.trim() || undefined : undefined,
     });
@@ -1431,18 +1433,20 @@ export default function Login() {
                   )}
                 </div>
               )}
-              <ImageCaptchaField
-                id="reg-captcha"
-                value={captchaAnswer}
-                imageDataUrl={activeCaptchaImage}
-                loading={createCaptchaMutation.isPending}
-                refreshDisabled={createCaptchaMutation.isPending || captchaCooldownSeconds > 0}
-                refreshTitle={captchaRefreshTitle}
-                disabled={isPending || !hasMobilePanelUrl}
-                onChange={setCaptchaAnswer}
-                resetKey={captchaResetKey}
-                onRefresh={() => requestCaptcha("register", false)}
-              />
+              {registrationCaptchaEnabled ? (
+                <ImageCaptchaField
+                  id="reg-captcha"
+                  value={captchaAnswer}
+                  imageDataUrl={activeCaptchaImage}
+                  loading={createCaptchaMutation.isPending}
+                  refreshDisabled={createCaptchaMutation.isPending || captchaCooldownSeconds > 0}
+                  refreshTitle={captchaRefreshTitle}
+                  disabled={isPending || !hasMobilePanelUrl}
+                  onChange={setCaptchaAnswer}
+                  resetKey={captchaResetKey}
+                  onRefresh={() => requestCaptcha("register", false)}
+                />
+              ) : null}
 
               <Button
                 type="submit"

@@ -46,6 +46,8 @@ import {
   shouldPersistAgentPresence,
 } from "./agentHeartbeatGate";
 import { mapWithConcurrency } from "./asyncPool";
+import { agentSupportsPortAccessLimits, portAccessLimitAction, portAccessLimitSpecs, readPortAccessLimitsEnabled, resolvePortAccessLimitAction } from "./portAccessLimits";
+import { ruleLimitRootId } from "./ruleLimits";
 import { clearTunnelRuntimeStatusForHost, getHostWireGuardPlane, getTunnelRuntimeGeneration, isTunnelRuntimeHostReady, replaceHostWireGuardPlanes } from "./tunnelRuntimeStatus";
 import { appendPanelLog } from "./_core/panelLogger";
 import { isIP } from "net";
@@ -94,9 +96,12 @@ import {
   iptablesEnsureShell,
   killByPatternCmd,
   removeManagedServiceCmd,
+  gostRuntimeApiConfig,
+  gostRuntimeApiExecStart,
   restartManagedServiceIfConfigChangedCmd,
   restartMimicServiceIfConfigChangedCmd,
   shQuote,
+  syncGostServiceIfConfigChangedCmd,
   startManagedServiceCmd,
   stopManagedServiceCmd,
   writeManagedServiceCmd,
@@ -162,6 +167,8 @@ import { selectResolvedTargetIp } from "./dnsTargetResolution";
 import { createResolvedTargetGate } from "./ruleTargetPolicy";
 import { buildForwardXMimicConfig } from "./mimicConfig";
 import { gateForwardRulesForRuntime } from "./linkAccessView";
+import { getTrafficExcludedHostIds } from "./hostTrafficPolicy";
+import { groupRuleTrafficBlocked, planTunnelTrafficParticipation } from "./hostTrafficRuntimePlan";
 import { isEntryBridgeRuntimeRule, loadEntryBridgeRuntimeRules, markRuntimeRulesNotRunning, setRuntimeRuleRunning } from "./ruleEntryBridges";
 import { isEntryBridgeRuleId } from "../shared/ruleEntryBridge";
 import { runAgentRuntimeRecovery } from "./agentRuntimeRecovery";
@@ -171,6 +178,7 @@ import { recordHostRestartEvent } from "./ops/eventHooks";
 import { buildAgentSniInbounds, isSniRuntimeRule, recordTlsInboundRuntimeStatus, sniRuleRuntimeView } from "./tlsInboundRuntime";
 import { buildGostEgressChain, gostEgressChainName, loadEgressRuntimeContext, ruleEgressRuntime, ruleEgressRuntimeView } from "./ssEgress";
 import { parseAgentCapabilities } from "../shared/ssEgress";
+import { hostSupportsGostApiSync } from "../shared/gostRuntimeApi";
 
 // DNS 解析缓存：ruleId → 主目标上次解析到的 IPv4 地址。
 // 备用线路策略里的域名由 Agent 的 TCP 拨号和健康检查动态解析。
@@ -552,6 +560,7 @@ function stableActionSignature(actions: any[]) {
     removalCommands: action?.removalCommands || [],
     removalToken: action?.removalToken || "",
     managedConfigs: action?.managedConfigs || [],
+    portAccessLimits: action?.portAccessLimits || [],
     rollbackCommands: action?.rollbackCommands || [],
     preCommands: action?.preCommands || [],
     postCommands: action?.postCommands || [],
@@ -1289,6 +1298,9 @@ export function selectEffectiveForwardRateLimit(options: {
   tunnelLimitMbps?: unknown;
   forwardGroupId?: unknown;
   forwardGroupLimitMbps?: unknown;
+  /** 单条规则限速（server/ruleLimits.ts）：成员规则 / 中转跳传根规则的 id，同一台机器上共用一个桶。 */
+  ruleId?: unknown;
+  ruleLimitMbps?: unknown;
 }) {
   const userId = Math.max(0, Number(options.userId) || 0);
   const hostId = Math.max(0, Number(options.hostId) || 0);
@@ -1308,6 +1320,11 @@ export function selectEffectiveForwardRateLimit(options: {
       mbps: normalizeRateLimitMbps(options.forwardGroupLimitMbps),
       scope: `user-${userId}-host-${hostId}-group-${forwardGroupId}`,
       enabled: forwardGroupId > 0,
+    },
+    {
+      mbps: normalizeRateLimitMbps(options.ruleLimitMbps),
+      scope: `rule-${Math.max(0, Number(options.ruleId) || 0)}-host-${hostId}`,
+      enabled: Number(options.ruleId) > 0,
     },
   ].filter((candidate) => candidate.enabled !== false && candidate.mbps > 0);
   if (candidates.length === 0) return { mbps: 0, scope: "" };
@@ -2206,6 +2223,19 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
      * 不设 RETURN，所以只作计数不影响路由。三种转发方式都会经过 mangle 表，覆盖 100% 路径。
      */
     const gostServiceName = RUNTIME_SERVICE_NAME;
+    /*
+      能力 gostApiSync（Agent ≥ 2.2.229、运行时 ≥ 3.2.6）的机器：gost.json 开 root 专用的 Unix 套接字 API，
+      ExecStart 包一层准备套接字目录，重启命令前加 API 同步标记 —— API 能做的改动不再重启共享进程（shared/gostRuntimeApi.ts）。
+      别的机器上配置、单元、命令和以前逐字节相同。
+    */
+    const gostApiSync = hostSupportsGostApiSync({ agentVersion: effectiveAgentVersion, agentCapabilities: (host as any).agentCapabilities });
+    const gostRuntimeExecStart = (service: string, configPath: string) => (
+      gostApiSync ? gostRuntimeApiExecStart(RUNTIME_BIN, service, configPath) : `${RUNTIME_BIN} -C ${configPath}`
+    );
+    const gostRuntimeApiSection = (service: string) => (gostApiSync ? { api: gostRuntimeApiConfig(service) } : {});
+    const gostRuntimeSyncCmd = (service: string, configPath: string) => (
+      gostApiSync ? syncGostServiceIfConfigChangedCmd(service, configPath) : restartManagedServiceIfConfigChangedCmd(service, configPath)
+    );
     const gostServiceUnit = [
       "[Unit]",
       "Description=ForwardX unified runtime forwarder",
@@ -2215,7 +2245,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       "",
       "[Service]",
       "Type=simple",
-      `ExecStart=${RUNTIME_BIN} -C ${RUNTIME_CONFIG_PATH}`,
+      `ExecStart=${gostRuntimeExecStart(gostServiceName, RUNTIME_CONFIG_PATH)}`,
       "Restart=always",
       "RestartSec=5",
       // 这台机器上所有 gost 规则共用这一个进程，一条转发占两个句柄：65535 意味着
@@ -2608,7 +2638,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     const tunnelEntryHostIds = (tunnel: any) => {
       const tunnelId = Number(tunnel?.id || 0);
       const cached = tunnelEntryHostIdsByTunnelId.get(tunnelId);
-      if (cached && cached.length > 0) return cached;
+      // 空数组是「入口组里的入口全被流量故障转移暂停了」，不能再退回到保存着的主入口。
+      if (cached) return cached;
       const entryHostId = Number(tunnel?.entryHostId || 0);
       return Number.isFinite(entryHostId) && entryHostId > 0 ? [entryHostId] : [];
     };
@@ -2687,6 +2718,82 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       if (!tunnelExitRowsMatchNodes(rows, extraNodes)) {
         const nextRows = await db.reconcileForwardRuleTunnelExits(rule, tunnel);
         tunnelExitRowsByRuleId.set(Number(rule.id), nextRows as any[]);
+      }
+    }
+    /*
+      主机流量故障转移（上游 v2.3.281，见 shared/hostTrafficPolicy.ts）：端口分配、出口映射都排好之后
+      再按暂停名单改运行时副本 —— 下面每一处改的都是这次心跳里的对象，保存着的成员、端口、
+      开关一样不动，流量重置后下一次心跳自然回到原样。
+    */
+    const trafficExcludedHosts = await getTrafficExcludedHostIds();
+    if (trafficExcludedHosts.size > 0) {
+      const blockForTraffic = (rule: any) => {
+        rule.isEnabled = false;
+        rule.resourceAccessDenied = true;
+        rule.hostTrafficExcluded = true;
+      };
+      const groupById = new Map<number, any>();
+      for (const rule of [...agentHostRules, ...agentAllRules] as any[]) {
+        const groupId = Number(rule.forwardGroupId || 0);
+        if (groupId > 0 && !groupById.has(groupId)) groupById.set(groupId, await db.getForwardGroupById(groupId));
+        const group = groupById.get(groupId);
+        const chainHostIds = String(group?.groupMode) === "chain"
+          ? (group.members || []).filter((member: any) => runtimeBool(member.isEnabled, true)).map((member: any) => Number(member.hostId))
+          : [];
+        if (groupRuleTrafficBlocked(rule, trafficExcludedHosts, chainHostIds)) blockForTraffic(rule);
+        // 组成员用的是固定出口 / 链式中转的隧道：出口或中转被暂停，这条子规则也走不通。
+        const memberTunnel = tunnelById.get(Number(rule.tunnelId)) as any;
+        const memberHops = memberTunnel ? tunnelHopsByTunnelId.get(Number(memberTunnel.id)) || [] : [];
+        const blockedFixedExit = memberTunnel && !Number(memberTunnel.exitGroupId) && !runtimeBool(memberTunnel.loadBalanceEnabled)
+          && trafficExcludedHosts.has(Number(memberTunnel.exitHostId));
+        const blockedTransit = memberTunnel && !isTunnelRelayFailover(memberTunnel, memberHops)
+          && memberHops.slice(1, -1).some((hop: any) => trafficExcludedHosts.has(Number(hop.hostId)));
+        if (groupId > 0 && (blockedFixedExit || blockedTransit)) blockForTraffic(rule);
+      }
+      for (const tunnel of hostTunnels as any[]) {
+        const tunnelId = Number(tunnel.id);
+        const originalHops = tunnelHopsByTunnelId.get(tunnelId) || [];
+        const originalExits = tunnelExitNodesByTunnelId.get(tunnelId) || [];
+        const plan = planTunnelTrafficParticipation(tunnel, originalHops, originalExits,
+          tunnelEntryHostIdsByTunnelId.get(tunnelId) || [], trafficExcludedHosts);
+        if (Number(tunnel.entryGroupId) > 0 && trafficExcludedHosts.has(Number(host.id))) {
+          // 入口组隧道的规则存着原主人的 hostId、却装在每个入口上：按「当前这台 Agent」拦，
+          // 不按存着的 hostId；全局的出口规则留给别的入口用。
+          for (const rule of agentHostRules as any[]) {
+            if (Number(rule.tunnelId) === tunnelId) blockForTraffic(rule);
+          }
+        }
+        // 出口组 / 多出口的 NEX 隧道：这台被暂停时明确撤掉它原来的出口监听（只改主出口的运行时
+        // 副本，老 Agent 上那个监听会一直留着）。
+        if (String(tunnel.mode) === "forwardx" && (Number(tunnel.exitGroupId) > 0 || runtimeBool(tunnel.loadBalanceEnabled)) && trafficExcludedHosts.has(Number(host.id))) {
+          const localExit = Number(tunnel.exitHostId) === Number(host.id) ? tunnel
+            : originalExits.find((node: any) => Number(node.hostId) === Number(host.id));
+          if (localExit && Number(localExit.listenPort) > 0 && isTunnelRuntimeHostReady(tunnelId, Number(host.id))) {
+            actions.push({
+              tunnelId, ruleId: 0, statusType: "tunnel", op: "remove", forwardType: "forwardx-tunnel",
+              sourcePort: Number(localExit.listenPort), targetIp: host.ip, targetPort: Number(localExit.listenPort), protocol: "both", commands: [],
+              fxp: { role: "exit", tunnelId, ruleId: 0, listenPort: Number(localExit.listenPort) },
+            } as any);
+          }
+        }
+        if (plan.promotedExit) {
+          // GOST 在每个出口上给每条规则分的端口不一样：提上来的出口要用它自己的那组映射，不能沿用原主出口的端口。
+          for (const rule of [...agentHostRules, ...agentAllRules] as any[]) {
+            if (Number(rule.tunnelId) !== tunnelId) continue;
+            const mapping = (tunnelExitRowsByRuleId.get(Number(rule.id)) || [])
+              .find((row: any) => Number(row.exitNodeId) === Number(plan.promotedExit.id));
+            if (mapping) rule.tunnelExitPort = Number(mapping.tunnelExitPort);
+          }
+        }
+        Object.assign(tunnel, plan.tunnel);
+        tunnelHopsByTunnelId.set(tunnelId, plan.hops);
+        tunnelExitNodesByTunnelId.set(tunnelId, plan.exits);
+        tunnelEntryHostIdsByTunnelId.set(tunnelId, plan.entryHostIds);
+        if (!runtimeBool(tunnel.isEnabled)) {
+          for (const rule of [...agentHostRules, ...agentAllRules] as any[]) {
+            if (Number(rule.tunnelId) === tunnelId) blockForTraffic(rule);
+          }
+        }
       }
     }
     // realm/socat/gost 进程命令使用原始 targetIp（域名形式），以便工具自身解析 DNS，
@@ -2830,6 +2937,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         tunnelLimitMbps: tunnelRateLimitMbps(tunnel),
         forwardGroupId,
         forwardGroupLimitMbps: forwardGroupRateLimitMbps(group),
+        ruleId: ruleLimitRootId(rule),
+        ruleLimitMbps: rule?.rateLimitMbps,
       });
     };
     const applyGostLimiter = (service: any, rule: any, tunnel?: any | null) => {
@@ -4407,7 +4516,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     const gostChains = [...tunnelGostChains, ...egressGostChains];
     const gostManagedConfigs: any[] = [];
     const buildGostReloadCmds = () => {
-      const encodedConfig = Buffer.from(JSON.stringify({ services: gostServiceConfig, chains: gostChains, limiters: gostRateLimiters }, null, 2), "utf8").toString("base64");
+      const encodedConfig = Buffer.from(JSON.stringify({ services: gostServiceConfig, chains: gostChains, limiters: gostRateLimiters, ...gostRuntimeApiSection(gostServiceName) }, null, 2), "utf8").toString("base64");
       gostManagedConfigs.push({
         path: RUNTIME_CONFIG_PATH,
         contentBase64: encodedConfig,
@@ -4435,7 +4544,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         if (anyTunnelDnsRefresh(hostTunnels as any[])) {
           cmds.push(dnsRuntimeRefreshCmd("gost"), `rm -f ${shQuote(`${RUNTIME_CONFIG_PATH}.sha256`)} 2>/dev/null || true`);
         }
-        cmds.push(restartManagedServiceIfConfigChangedCmd(gostServiceName, RUNTIME_CONFIG_PATH));
+        cmds.push(gostRuntimeSyncCmd(gostServiceName, RUNTIME_CONFIG_PATH));
       } else {
         cmds.push(stopManagedServiceCmd(gostServiceName));
       }
@@ -4555,7 +4664,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
           listener: gostTunnelTransportType(tunnel.mode),
         }));
       }) : [];
-      const encodedConfig = Buffer.from(JSON.stringify({ services }, null, 2), "utf8").toString("base64");
+      const encodedConfig = Buffer.from(JSON.stringify({ services, ...gostRuntimeApiSection(TUNNEL_RUNTIME_SERVICE_NAME) }, null, 2), "utf8").toString("base64");
       gostManagedConfigs.push({
         path: TUNNEL_RUNTIME_CONFIG_PATH,
         contentBase64: encodedConfig,
@@ -4574,7 +4683,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
           "",
           "[Service]",
           "Type=simple",
-          `ExecStart=${RUNTIME_BIN} -C ${TUNNEL_RUNTIME_CONFIG_PATH}`,
+          `ExecStart=${gostRuntimeExecStart(TUNNEL_RUNTIME_SERVICE_NAME, TUNNEL_RUNTIME_CONFIG_PATH)}`,
           "Restart=always",
           "RestartSec=5",
           `LimitNOFILE=${SHARED_RUNTIME_NOFILE}`,
@@ -4590,7 +4699,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         if (anyTunnelDnsRefresh(hostTunnels as any[])) {
           cmds.push(dnsRuntimeRefreshCmd("gost-tunnel"), `rm -f ${shQuote(`${TUNNEL_RUNTIME_CONFIG_PATH}.sha256`)} 2>/dev/null || true`);
         }
-        cmds.push(restartManagedServiceIfConfigChangedCmd(TUNNEL_RUNTIME_SERVICE_NAME, TUNNEL_RUNTIME_CONFIG_PATH));
+        cmds.push(gostRuntimeSyncCmd(TUNNEL_RUNTIME_SERVICE_NAME, TUNNEL_RUNTIME_CONFIG_PATH));
       } else {
         cmds.push(stopManagedServiceCmd(TUNNEL_RUNTIME_SERVICE_NAME));
       }
@@ -6662,7 +6771,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       for (const t of pendingTests) {
         const claimed = await db.markForwardTestRunning(t.id);
         if (!claimed) continue;
-        const meta = parseSelfTestMeta((t as any).message);
+        const meta = parseSelfTestMeta(db.forwardTestRequestMessage(t as any));
         const metaSelfTest = buildMetaAgentSelfTestPayload(t, meta);
         if (metaSelfTest) {
           selfTests.push(metaSelfTest);
@@ -7055,6 +7164,43 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       const bridgeOnPort = reportedLocalRules.some((local: AgentLocalRuntimeRuleState) => Number(local?.port || 0) === port && isEntryBridgeRuleId(local?.ruleId));
       if (!bridgeOnPort) continue;
       action.preCommands = [...buildEntryBridgeConntrackFlushCmds(port, action.protocol), ...(Array.isArray(action.preCommands) ? action.preCommands : [])];
+    }
+    /*
+      普通端口转发的单 IP 接入限制（server/portAccessLimits.ts）：按这台入口机上全部
+      已启用的普通规则出一份完整快照，和规则自己的下发互不相干 —— 已经在跑的规则不会因此
+      被重新下发或重启。只算面对客户端的入口端口：线路组中转跳、转发链后面几跳、共享 TLS
+      入站分过来的回环端口、换隧道留下的入口桥接，来源都是上一台机器或本机，按单 IP 一限
+      全体用户都会被卡住。
+    */
+    if (!deferActionsForLocalState && agentSupportsPortAccessLimits(effectiveAgentVersion)) {
+      // 设置里没打开时候选为空 → 空快照：不限，并撤掉之前打开时下发的限制。
+      // 读设置失败不能当成「关」：空快照会撤掉全部限制，这段时间放进来的连接之后也不会被踢掉。
+      // 读不到就沿用上一次发给这台机器的快照（没有就这轮不发，Agent 保持现状）。
+      const enforcePortLimits = await readPortAccessLimitsEnabled((key) => db.getSetting(key));
+      if (enforcePortLimits === null) appendPanelLog("warn", `[PortAccessLimits] host=${host.id} setting read failed, keeping previous snapshot`);
+      const portLimitCandidates: any[] = [];
+      for (const rule of (enforcePortLimits ? agentHostRules : []) as any[]) {
+        if (!rule || runtimeBool(rule.pendingDelete) || !runtimeBool(rule.isEnabled)) continue;
+        if (Number(rule.hostId || 0) !== Number(host.id) || runtimeBool(rule.isForwardGroupTemplate)) continue;
+        if (Number(rule.tunnelId || 0) > 0 || Number(rule.routeParentRuleId || 0) > 0 || Number(rule.tlsInboundId || 0) > 0) continue;
+        if (isEntryBridgeRuntimeRule(rule) || !isRuleProtocolEnabled(forwardProtocolSettings, rule, null)) continue;
+        if (Number(rule.forwardGroupRuleId || 0) > 0 && Number(rule.forwardGroupMemberId || 0) > 0) {
+          const group = await getForwardChainGroup(Number(rule.forwardGroupId || 0));
+          if (String((group as any)?.groupMode || "") === "chain") {
+            const members = [...(((group as any)?.members || []) as any[])]
+              .filter((member: any) => runtimeBool(member?.isEnabled))
+              .sort((a: any, b: any) => Number(a.priority) - Number(b.priority));
+            if (Number(members[0]?.id || 0) !== Number(rule.forwardGroupMemberId)) continue;
+          }
+        }
+        portLimitCandidates.push(rule);
+      }
+      const portLimitAction = resolvePortAccessLimitAction(
+        Number(host.id),
+        enforcePortLimits,
+        () => portAccessLimitAction(portAccessLimitSpecs(portLimitCandidates, userAccessLimits), true),
+      );
+      if (portLimitAction) actions.push(portLimitAction);
     }
     const effectiveActions = dropStalePortRemoveActions(actions, protectedRuleRemoveActionKeys);
     const actionBatchIssuedAt = resolveActionBatchIssuedAt(Number(host.id), effectiveActions, responseIssuedAt);

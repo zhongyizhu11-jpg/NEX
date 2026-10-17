@@ -8,9 +8,12 @@ import {
   requireTunnelUseOrTrafficBillingAccess,
 } from "./helpers";
 import { assertTenantListenPortAllowedOnHosts } from "../tenantListenPortGuard";
+import { resolveRuleOperationOwner } from "../ruleOperationOwner";
 import { combineHostPortPolicyWithRange, combinePortPolicies, isPortAllowedByPolicy, portPolicyErrorMessage, portPolicyFrom, type PortPolicy } from "@shared/portPolicy";
 
 const randomPortInputSchema = z.object({
+  // 管理员替所选用户建规则时，按那个用户的权限和套餐端口段来挑（server/ruleOperationOwner.ts）。
+  userId: z.number().int().positive().optional(),
   hostId: z.number().optional(),
   tunnelId: z.number().nullable().optional(),
   forwardGroupId: z.number().optional(),
@@ -99,6 +102,7 @@ export const portsRulesRouter = router({
    */
   entryPortPolicy: protectedProcedure
     .input(z.object({
+      userId: z.number().int().positive().optional(),
       hostId: z.number().int().positive().optional(),
       forwardGroupId: z.number().int().positive().optional(),
       tunnelId: z.number().nullable().optional(),
@@ -107,6 +111,7 @@ export const portsRulesRouter = router({
       { message: "请选择一个主机、隧道或转发组" },
     ))
     .query(async ({ input, ctx }) => {
+      ctx = { ...ctx, user: await resolveRuleOperationOwner(ctx.user, input.userId) as any };
       if (input.forwardGroupId) {
         const { effective } = await resolveForwardGroupPortPolicy(ctx, input.forwardGroupId);
         return { policy: effective };
@@ -119,6 +124,7 @@ export const portsRulesRouter = router({
     }),
   checkPort: protectedProcedure
     .input(z.object({
+      userId: z.number().int().positive().optional(),
       hostId: z.number().int().positive().optional(),
       forwardGroupId: z.number().int().positive().optional(),
       tunnelId: z.number().nullable().optional(),
@@ -130,6 +136,7 @@ export const portsRulesRouter = router({
       { message: "请选择一个主机、隧道或转发组" },
     ))
     .query(async ({ input, ctx }) => {
+      ctx = { ...ctx, user: await resolveRuleOperationOwner(ctx.user, input.userId) as any };
       if (input.excludeRuleId) {
         await requireRuleAccess(ctx, input.excludeRuleId);
       }
@@ -205,6 +212,7 @@ export const portsRulesRouter = router({
   randomPort: protectedProcedure
     .input(randomPortInputSchema)
     .query(async ({ input, ctx }) => {
+      ctx = { ...ctx, user: await resolveRuleOperationOwner(ctx.user, input.userId) as any };
       if (input.excludeRuleId) {
         await requireRuleAccess(ctx, input.excludeRuleId);
       }

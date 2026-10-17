@@ -349,7 +349,11 @@ test("规则订阅在 Loon / QX / Shadowrocket 上走手动添加配置，不借
   assert.equal(proxyClientImportFor(byId("clash"), "rules").buildImportUrl, byId("clash").buildImportUrl);
 });
 
-test("订阅名称：用户名，规则订阅加「规则」，响应头能还原出同一个名字", () => {
+test("订阅名称：新建链接时起的名字，没有才用用户名，规则订阅加「规则」，响应头能还原出同一个名字", () => {
+  assert.equal(proxySubscriptionProfileName("我的手机", "nodes", "xixixi"), "我的手机");
+  assert.equal(proxySubscriptionProfileName("Loon", "rules", "xixixi"), "Loon 规则");
+  assert.equal(proxySubscriptionProfileName("", "nodes", "xixixi"), "xixixi");
+  assert.equal(proxySubscriptionProfileName("///", "rules", "小王"), "小王 规则");
   assert.equal(proxySubscriptionProfileName("xixixi", "nodes"), "xixixi");
   assert.equal(proxySubscriptionProfileName("小王", "rules"), "小王 规则");
   assert.equal(proxySubscriptionProfileName("  ", "nodes"), "订阅");

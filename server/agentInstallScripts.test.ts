@@ -359,6 +359,17 @@ test("iperf3 is optional so a node without it still installs", () => {
 
   // 仍然安装它，只是失败不致命。
   assert.match(deps, /apt-get install -y -qq .*iperf3/);
+
+  // 而且是单独一条命令：apt / dnf 一条事务里有一个包找不到就整条不装，
+  // iperf3 和 curl / jq 写在一起时，源里没有 iperf3 会让 curl / jq 也装不上（上游 v2.3.281）。
+  for (const line of deps.split("\n").filter((item) => /(apt-get install|dnf install|yum install|zypper -n install|apk add|pacman -Sy)/.test(item))) {
+    if (/\bjq\b/.test(line)) assert.doesNotMatch(line, /iperf3/, line);
+  }
+  for (const manager of ["apt-get install -y -qq iperf3", "dnf install -y -q iperf3", "yum install -y -q iperf3", "zypper -n install iperf3", "apk add --no-cache iperf3", "pacman -Sy --noconfirm iperf3"]) {
+    assert.ok(deps.includes(manager), manager);
+  }
+  // 单独那一步排在核心依赖之后、校验之前。
+  assert.ok(deps.indexOf("apt-get install -y -qq iperf3") < deps.indexOf("for B in curl jq iptables od; do"));
 });
 
 test("dependency install keeps package manager output for diagnosis", () => {
@@ -389,8 +400,8 @@ test("已装官方 gost 时尝试从面板换成 NEX 自编版，换上后重启
 test("NEX gost runtime: build number parsing, upgrade with .prev backup + marker, rollback restores the old binary", () => {
   const script = generateInstallScript("https://panel.example.com");
   assert.match(script, /RUNTIME_MIN_NEX_BUILD="3"/);
-  // 换运行时按面板这一版带的构建号（nex4），不是能力门槛（nex3）：nex3 的机器也要换上 nex4。
-  assert.match(script, /RUNTIME_TARGET_NEX_BUILD="4"/);
+  // 换运行时按面板这一版带的构建号（nex5），不是能力门槛（nex3）：nex3 的机器也要换上 nex5。
+  assert.match(script, /RUNTIME_TARGET_NEX_BUILD="5"/);
   const functions = scriptSection(script, "runtime_self_check() {", "nginx_self_check() {");
   const dir = fs.mkdtempSync(path.join(process.env.TMPDIR || "/tmp", "fwx-runtime-"));
   try {

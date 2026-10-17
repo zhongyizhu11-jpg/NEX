@@ -1,2 +1,4 @@
 * text=auto
 
+*.gz binary
+*.xdb binary

@@ -5,14 +5,14 @@
     指令里把「端口 → 规则 / 入站」发给 Agent，Agent 不用知道面板的状态。
   - 当前在线：每台主机一份内存快照，每轮整份替换，超过两个周期没更新就不算（onlineIpsCore）。
   - 历史：ip_sightings，同一个键每分钟最多写一次，保留 90 天。写库在后台排队做，不拖慢上报。
-  - 地区：沿用 hostGeo 的 lookupAddressGeo（内存 + ip_geo_cache 两层缓存），后台串行慢慢查，
-    查不到就显示「未知」，从不在上报路径上等它。
+  - 地区：这里是终端用户的 IP，只查面板自带的离线库（server/ipRegionOffline.ts，ip2region + sha256 校验），
+    不发给任何第三方；离线库不可用就显示「未知」，不退回在线查询。后台串行查，从不在上报路径上等它。
   - 刷新频率：有人开着「在线 IP」时 10 秒一轮，否则 60 秒（watch() 续期，第一次打开时叫醒 Agent）。
   - 设备上限：用户在线 IP 数超过 maxIPs 时记一条 user.ip_limit_exceeded（每人 6 小时最多一条）。
 */
 import { executeRaw, insertAndGetId, queryRaw, quoteDbIdentifier } from "../dbRuntime";
 import { classifyIpAddress, isPrivateOrReservedAddress } from "../../shared/ipAddress";
-import { lookupAddressGeo } from "../hostGeo";
+import { lookupOfflineIpRegion } from "../ipRegionOffline";
 import { hostSupportsAgentExt, wakeAgentExt, type AgentExtHost } from "./agentExt";
 import { recordPanelEvent } from "./panelEvents";
 import {
@@ -215,6 +215,33 @@ export function queueIpGeo(ips: Iterable<string>) {
   if (!geoWorking && geoQueue.length > 0) void runGeoQueue();
 }
 
+const regionNames = (() => {
+  try {
+    return new Intl.DisplayNames(["zh-CN"], { type: "region" });
+  } catch {
+    return null;
+  }
+})();
+
+function countryFlag(code: string) {
+  return /^[A-Z]{2}$/.test(code)
+    ? Array.from(code).map((char) => String.fromCodePoint(0x1f1e6 + char.charCodeAt(0) - 65)).join("")
+    : "";
+}
+
+/** 「🇺🇸 美国 · California」：国家名按中文显示，省 / 州照离线库原样。 */
+export function offlineRegionLabel(geo: { countryCode: string; countryName: string | null; region: string | null } | null) {
+  if (!geo) return null;
+  let country = geo.countryName || geo.countryCode;
+  try {
+    country = regionNames?.of(geo.countryCode) || country;
+  } catch {
+    // 认不出的代码保留原文
+  }
+  const region = geo.region && geo.region !== country && geo.region !== geo.countryName ? ` · ${geo.region}` : "";
+  return `${[countryFlag(geo.countryCode), country].filter(Boolean).join(" ")}${region}`;
+}
+
 async function runGeoQueue() {
   geoWorking = true;
   try {
@@ -223,11 +250,7 @@ async function runGeoQueue() {
       geoQueued.delete(ip);
       let label: string | null = null;
       try {
-        const geo = await lookupAddressGeo(ip);
-        if (geo) {
-          const country = geo.geoCountryName || geo.geoCountryCode;
-          label = [geo.geoEmoji, country].filter(Boolean).join(" ") + (geo.geoRegion && geo.geoRegion !== country ? ` · ${geo.geoRegion}` : "");
-        }
+        label = offlineRegionLabel(await lookupOfflineIpRegion(ip));
       } catch {
         label = null;
       }
@@ -236,8 +259,8 @@ async function runGeoQueue() {
         const oldest = geoLabels.keys().next().value;
         if (oldest !== undefined) geoLabels.delete(oldest);
       }
-      // 三家免费服务都有额度，串行再歇一下，别让在线 IP 把主机定位的额度吃光。
-      await new Promise((resolve) => setTimeout(resolve, 400));
+      // 离线查很快，但一轮可能有几百个 IP：每个之间让一下事件循环。
+      await new Promise((resolve) => setImmediate(resolve));
     }
   } finally {
     geoWorking = false;

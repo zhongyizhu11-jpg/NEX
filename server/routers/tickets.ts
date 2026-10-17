@@ -10,7 +10,7 @@ import { z } from "zod";
 import { adminProcedure, protectedProcedure, router } from "../_core/trpc";
 import { appendPanelLog } from "../_core/panelLogger";
 import * as db from "../db";
-import { consumeTicketCreateQuota, consumeTicketReplyQuota } from "../ticketRateLimit";
+import { checkTicketCreateQuota, checkTicketReopenQuota, checkTicketReplyQuota, withTicketUserQuota } from "../ticketRateLimit";
 import {
   dispatchTicketNotification,
   notifyTicketCreated,
@@ -132,7 +132,33 @@ const messagesInput = z.object({
   beforeId: z.number().int().positive().optional(),
 });
 
+/*
+  工单总开关（设置项 ticketsEnabled，默认开）。关掉以后：普通用户侧边栏不显示「工单」，
+  不能新建、不能回复（自己的历史工单还能看）；管理员照常查看、回复、关单，也在工单管理页里开关。
+*/
+export const TICKETS_DISABLED_MESSAGE = "工单功能已关闭，如需帮助请通过其他方式联系管理员";
+
+async function ticketsEnabled() {
+  return (await db.getSetting("ticketsEnabled")) !== "false";
+}
+
+async function requireTicketsEnabledForUser(user: { role?: unknown }) {
+  if (isAdmin(user as any)) return;
+  if (!(await ticketsEnabled())) throw new TRPCError({ code: "FORBIDDEN", message: TICKETS_DISABLED_MESSAGE });
+}
+
 export const ticketsRouter = router({
+  /** 工单开没开（用户页据此提示、隐藏「新建工单」）。 */
+  status: protectedProcedure.query(async () => ({ enabled: await ticketsEnabled() })),
+
+  adminSetEnabled: adminProcedure
+    .input(z.object({ enabled: z.boolean() }))
+    .mutation(async ({ input, ctx }) => {
+      await db.setSetting("ticketsEnabled", input.enabled ? "true" : "false");
+      appendPanelLog("info", `[Ticket] ${input.enabled ? "enabled" : "disabled"} by admin=${ctx.user.id}`);
+      return { enabled: input.enabled };
+    }),
+
   list: protectedProcedure
     .input(z.object({
       status: z.enum(TICKET_STATUS_FILTERS).optional(),
@@ -160,9 +186,12 @@ export const ticketsRouter = router({
     .mutation(async ({ input, ctx }) => {
       const title = cleanTitle(input.title);
       const content = cleanContent(input.content);
-      const limited = consumeTicketCreateQuota(ctx.user.id, isAdmin(ctx.user));
-      if (limited) throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: limited });
-      const ticket = await db.createTicket({ userId: ctx.user.id, title, priority: input.priority, content });
+      await requireTicketsEnabledForUser(ctx.user);
+      const ticket = await withTicketUserQuota(ctx.user.id, async () => {
+        const limited = await checkTicketCreateQuota(ctx.user.id, isAdmin(ctx.user));
+        if (limited) throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: limited });
+        return db.createTicket({ userId: ctx.user.id, title, priority: input.priority, content });
+      });
       appendPanelLog("info", `[Ticket] created id=${ticket.id} user=${ctx.user.id} priority=${ticket.priority}`);
       dispatchTicketNotification("create", () => notifyTicketCreated(ticket, ctx.user, content));
       return userTicketView(ticket);
@@ -174,10 +203,13 @@ export const ticketsRouter = router({
       const content = cleanContent(input.content);
       const existing = await requireOwnTicket(input.ticketId, ctx.user.id);
       if (existing.status === "closed") rethrowTicketError(new db.TicketClosedError());
-      const limited = consumeTicketReplyQuota(ctx.user.id, isAdmin(ctx.user));
-      if (limited) throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: limited });
-      const { ticket } = await db.addTicketMessage({ ticketId: existing.id, senderId: ctx.user.id, isStaff: false, content })
-        .catch(rethrowTicketError);
+      await requireTicketsEnabledForUser(ctx.user);
+      const { ticket } = await withTicketUserQuota(ctx.user.id, async () => {
+        const limited = await checkTicketReplyQuota(ctx.user.id, isAdmin(ctx.user));
+        if (limited) throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: limited });
+        return db.addTicketMessage({ ticketId: existing.id, senderId: ctx.user.id, isStaff: false, content })
+          .catch(rethrowTicketError);
+      });
       dispatchTicketNotification("reply", () => notifyTicketUserReply(ticket, ctx.user, content));
       return userTicketView(ticket);
     }),
@@ -186,7 +218,14 @@ export const ticketsRouter = router({
     .input(z.object({ ticketId: ticketIdSchema, status: z.enum(["open", "closed"]) }))
     .mutation(async ({ input, ctx }) => {
       const existing = await requireOwnTicket(input.ticketId, ctx.user.id);
-      const { ticket, changed } = await db.setTicketOpenState(existing.id, input.status === "open").catch(rethrowTicketError);
+      // 重新打开会让没关闭的工单多一张：和新建一样在同一把锁里先查上限再写（关单不限）。
+      const { ticket, changed } = input.status === "open"
+        ? await withTicketUserQuota(ctx.user.id, async () => {
+          const limited = await checkTicketReopenQuota(ctx.user.id, existing.id, isAdmin(ctx.user));
+          if (limited) throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: limited });
+          return db.setTicketOpenState(existing.id, true).catch(rethrowTicketError);
+        })
+        : await db.setTicketOpenState(existing.id, false).catch(rethrowTicketError);
       if (changed) appendPanelLog("info", `[Ticket] ${input.status === "open" ? "reopened" : "closed"} id=${ticket.id} by user=${ctx.user.id}`);
       return userTicketView(ticket);
     }),

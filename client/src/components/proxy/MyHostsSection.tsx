@@ -3,6 +3,7 @@ import AddSelfServiceHostDialog from "@/components/hosts/AddSelfServiceHostDialo
 import DataSectionLoading from "@/components/DataSectionLoading";
 import { Button } from "@/components/ui/button";
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
+import { hostDeleteNeedsOfflineConfirmation, offlineCleanupConfirmOptions } from "@/components/hosts/hostDeletion";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -121,7 +122,17 @@ export default function MyHostsSection() {
       invalidate();
       toast.success("已删除");
     },
-    onError: (error) => toast.error(error.message || "删除失败"),
+    onError: async (error, variables) => {
+      // 离线主机上还有待清理的规则：问一句，同意了再带确认删一次（见 components/hosts/hostDeletion.ts）。
+      if (hostDeleteNeedsOfflineConfirmation(error) && !variables.confirmOfflineCleanup) {
+        const host = ((hostsQuery.data || []) as any[]).find((item) => Number(item?.id) === Number(variables.id));
+        if (await confirm(offlineCleanupConfirmOptions(host?.name, error.message))) {
+          deleteHost.mutate({ id: variables.id, confirmOfflineCleanup: true });
+        }
+        return;
+      }
+      toast.error(error.message || "删除失败");
+    },
   });
 
   // 管理员有整页的「主机管理」，这里再放一个精简版只是噪音。

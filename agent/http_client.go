@@ -22,9 +22,16 @@ var agentEventHTTPClient = &http.Client{
 	Transport: newAgentEventHTTPTransport(),
 }
 
+// 公网 IP 探测：永远直连。走了代理量到的是代理的出口 IP，不是这台机器的。
 var agentPublicHTTPClient = &http.Client{
 	Timeout:   5 * time.Second,
-	Transport: newAgentHTTPTransport(true),
+	Transport: newAgentDirectHTTPTransport(true),
+}
+
+func newAgentDirectHTTPTransport(enableHTTP2 bool) *http.Transport {
+	transport := newAgentHTTPTransport(enableHTTP2)
+	transport.Proxy = nil
+	return transport
 }
 
 func newAgentHTTPTransport(enableHTTP2 bool) *http.Transport {

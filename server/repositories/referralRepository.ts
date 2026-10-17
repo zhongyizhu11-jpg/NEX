@@ -164,9 +164,12 @@ export async function setUserInviter(userId: number, inviterId: number | null, o
     }
   }
   const guard = options.onlyIfUnset ? ` AND ${q("inviterId")} IS NULL` : "";
+  // 绑定时刻跟着邀请人一起写：这之前下的单不返利（管理员后补邀请人，不能把之前的单也算进去）。
+  // 邀请人没变就不动时刻，免得管理员重复保存一次就把之前的单「挪」到绑定之前。
+  const boundAt = inviterId === null ? null : Math.floor(Date.now() / 1000);
   const result = await executeRaw(
-    `UPDATE ${q("users")} SET ${q("inviterId")} = ? WHERE ${q("id")} = ?${guard}`,
-    [inviterId, userId],
+    `UPDATE ${q("users")} SET ${q("inviterBoundAt")} = CASE WHEN ${q("inviterId")} = ? THEN ${q("inviterBoundAt")} ELSE ? END, ${q("inviterId")} = ? WHERE ${q("id")} = ?${guard}`,
+    [inviterId, boundAt, inviterId, userId],
   );
   return rawAffectedRows(result) > 0;
 }

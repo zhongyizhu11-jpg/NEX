@@ -256,6 +256,22 @@ test("Google 登录在 SQLite 上端到端跑通", () => {
       assert.equal(locationOf(await get("/api/auth/google/start")), "/login?googleError=disabled");
       await db.setSetting("googleLoginEnabled", "true");
 
+      // 12b. 发起之后管理员改了 Google 配置（换了密钥）：回调不认，也不拿这次的授权码去换票
+      googleStartLimiter.clear();
+      {
+        const start = await get("/api/auth/google/start?mode=login&redirect=%2F");
+        const google = new URL(start.headers.get("location"));
+        const binding = cookieOf(start, "nex_google_oauth");
+        identity = { nonce: google.searchParams.get("nonce"), claims: ALICE_GOOGLE };
+        await db.setSetting("googleClientSecret", "rotated-secret");
+        const before = tokenRequests.length;
+        const callback = await get("/api/auth/google/callback?code=c1&state=" + google.searchParams.get("state"), { nex_google_oauth: binding });
+        assert.equal(locationOf(callback), "/login?googleError=state_invalid");
+        assert.equal(tokenRequests.length, before, "配置变了就不去换票");
+        assert.equal(cookieOf(callback, "app_session_id"), null);
+        await db.setSetting("googleClientSecret", "e2e-secret");
+      }
+
       // 13. 发起次数限流：同一来源一分钟 20 次
       googleStartLimiter.clear();
       for (let i = 0; i < 20; i += 1) assert.equal((await get("/api/auth/google/start")).status, 302);

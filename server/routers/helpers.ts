@@ -134,9 +134,15 @@ export async function requireTunnelUseOrTrafficBillingAccess(ctx: { user: { id: 
 export async function pushTunnelEndpointRefresh(
   tunnel: any,
   reason: string,
-  options?: { urgent?: boolean; forceTcping?: boolean },
+  options?: { urgent?: boolean; forceTcping?: boolean; refreshMode?: "runtime" | "probe" },
 ) {
-  if (tunnel?.id) clearTunnelRuntimeStatus(Number(tunnel.id));
+  // refreshMode "probe": a measurement request (self-test) only wakes the
+  // Agents and forces a fresh TCPing round. It must not invalidate a healthy
+  // runtime and schedule redundant re-applies ahead of the probe it waits for.
+  // Configuration refreshes keep the existing invalidation by default.
+  const probeOnly = options?.refreshMode === "probe";
+  const forceTcping = probeOnly || options?.forceTcping === true;
+  if (tunnel?.id && !probeOnly) clearTunnelRuntimeStatus(Number(tunnel.id));
   const hopRows = tunnel?.id ? await db.getTunnelHops(Number(tunnel.id)) : [];
   const extraExitRows = tunnel?.id ? await db.getTunnelExitNodes(Number(tunnel.id)) : [];
   const hopHostIds = Array.isArray(hopRows)
@@ -164,10 +170,10 @@ export async function pushTunnelEndpointRefresh(
     ...extraExitHostIds,
   ];
   const uniqueHostIds = Array.from(new Set(hostIds));
-  const tcpingHostIds = options?.forceTcping === true
+  const tcpingHostIds = forceTcping
     ? tunnelLatencyProbeSourceHostIds(entryHostIds, hopRows)
     : [];
-  if (options?.forceTcping === true) {
+  if (forceTcping) {
     clearTunnelAutoHopLatencyState(Number(tunnel?.id));
     clearTunnelMultiEntryLatencyState(Number(tunnel?.id));
   }
@@ -180,7 +186,7 @@ export async function pushTunnelEndpointRefresh(
   const allPushed = pushed.every((item) => item.pushed);
   appendPanelLog(
     allPushed ? "info" : "warn",
-    `[Tunnel] refresh tunnel=${tunnel.id} name=${tunnelName} reason=${reason} urgent=${options?.urgent === true} forceTcping=${options?.forceTcping === true} tcpingHosts=${tcpingHostIds.join(",") || "-"} entry=${Number(tunnel?.entryHostId || 0) || "-"} exit=${Number(tunnel?.exitHostId || 0) || "-"} loadBalance=${!!tunnel?.loadBalanceEnabled} hops=${hopHostIds.join("->") || "-"} extraExits=${extraExitHostIds.join(",") || "-"} hosts=${pushed.map((item) => `${item.hostId}:${item.pushed}`).join(",") || "-"}`,
+    `[Tunnel] refresh tunnel=${tunnel.id} name=${tunnelName} reason=${reason} refreshMode=${probeOnly ? "probe" : "runtime"} urgent=${options?.urgent === true} forceTcping=${forceTcping} tcpingHosts=${tcpingHostIds.join(",") || "-"} entry=${Number(tunnel?.entryHostId || 0) || "-"} exit=${Number(tunnel?.exitHostId || 0) || "-"} loadBalance=${!!tunnel?.loadBalanceEnabled} hops=${hopHostIds.join("->") || "-"} extraExits=${extraExitHostIds.join(",") || "-"} hosts=${pushed.map((item) => `${item.hostId}:${item.pushed}`).join(",") || "-"}`,
   );
   const entryHostIdSet = new Set(entryHostIds);
   return {
@@ -193,10 +199,16 @@ export async function pushTunnelEndpointRefresh(
 export async function refreshUserForwardEndpoints(
   userId: number,
   reason: string,
-  options: { urgent?: boolean } = {},
+  options: { urgent?: boolean; preserveOrdinaryRuntime?: boolean } = {},
 ) {
   const rules = [...await db.getForwardRulesForUserSync(userId)] as any[];
-  await db.resetForwardRulesForUserSync(userId);
+  if (options.preserveOrdinaryRuntime) {
+    // 普通规则的单 IP 接入限制有自己的防火墙对齐（server/portAccessLimits.ts），
+    // 只有隧道规则的限制还写在它们自己的下发命令里，需要重新下发。
+    await db.markForwardRulesNotRunning(rules.filter((rule) => Number(rule.tunnelId || 0) > 0).map((rule) => Number(rule.id)));
+  } else {
+    await db.resetForwardRulesForUserSync(userId);
+  }
   const hostIds = new Set<number>();
   const tunnelIds = new Set<number>();
   for (const rule of rules as any[]) {

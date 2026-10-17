@@ -68,11 +68,11 @@ function nonEmpty(value: unknown) {
 }
 
 /*
-  三家免费服务按顺序兜底。任何一家查不到、超时、限流，就换下一家；限流状态
-  各记各的 —— ipapi.co 被打满不代表 ip-api.com 也不能用，以前一个全局标记
-  把三家一起判死刑，机器就只能等一小时。
-  ip-api.com 免费档只走 http（https 要付费），查的是公网 IP 的归属地，不带
-  任何凭据，明文也无妨。
+  两家免费服务按顺序兜底。任何一家查不到、超时、限流，就换下一家；限流状态
+  各记各的 —— ipapi.co 被打满不代表 ipwho.is 也不能用，以前一个全局标记
+  把几家一起判死刑，机器就只能等一小时。
+  只用 HTTPS：以前的 ip-api.com 免费档只有明文 HTTP，查询的地址（主机、规则目标）在路上谁都看得见、
+  改得了，已去掉。终端用户的 IP（在线 IP）不走这里，只查离线库（server/ipRegionOffline.ts）。
 */
 const GEO_PROVIDERS: GeoProvider[] = [
   {
@@ -97,30 +97,6 @@ const GEO_PROVIDERS: GeoProvider[] = [
         geoAsn: normalizeAsn(data.asn),
         geoIsp: nonEmpty(data.org),
         geoOrg: nonEmpty(data.org),
-      };
-    },
-  },
-  {
-    name: "ip-api.com",
-    url: (address) => `http://ip-api.com/json/${encodeURIComponent(address)}?fields=status,message,country,countryCode,regionName,city,lat,lon,isp,org,as,asname`,
-    cooldownMs: 2 * 60 * 1000,
-    rateLimitedUntil: 0,
-    parse: (data) => {
-      if (String(data?.status || "") !== "success") {
-        return /quota|limit|too many/i.test(String(data?.message || "")) ? { rateLimited: true } : null;
-      }
-      const countryCode = String(data.countryCode || "").trim().toUpperCase();
-      if (!countryCode) return null;
-      return {
-        geoCountryCode: countryCode,
-        geoCountryName: nonEmpty(data.country),
-        geoRegion: nonEmpty(data.regionName) || nonEmpty(data.city),
-        geoEmoji: countryCodeToEmoji(countryCode) || null,
-        geoLatitudeMicro: toCoordinateMicro(data.lat),
-        geoLongitudeMicro: toCoordinateMicro(data.lon),
-        geoAsn: normalizeAsn(data.as),
-        geoIsp: nonEmpty(data.isp) || nonEmpty(data.asname),
-        geoOrg: nonEmpty(data.org) || nonEmpty(data.asname),
       };
     },
   },

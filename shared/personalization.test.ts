@@ -60,9 +60,10 @@ test("卡片风格：四选一，默认彩色描边", async () => {
 
 test("界面主题：经典 / 极光 / 墨金 / 玫瑰 / 朱砂 / 液态玻璃 / 靛蓝七选一，默认经典", async () => {
   const { normalizePersonalizationUiTheme, PERSONALIZATION_UI_THEMES } = await import("./personalization");
-  assert.deepEqual(PERSONALIZATION_UI_THEMES.map((theme) => theme.id), ["classic", "aurora", "gilt", "rose", "cinnabar", "liquid-glass", "indigo"]);
+  assert.deepEqual(PERSONALIZATION_UI_THEMES.map((theme) => theme.id), ["classic", "aurora", "gilt", "rose", "cinnabar", "liquid-glass", "indigo", "pearl"]);
   assert.equal(normalizePersonalizationUiTheme("liquid-glass"), "liquid-glass");
   assert.equal(normalizePersonalizationUiTheme("indigo"), "indigo");
+  assert.equal(normalizePersonalizationUiTheme("pearl"), "pearl");
   assert.equal(normalizePersonalizationUiTheme("hex"), "classic");
   assert.equal(normalizePersonalizationUiTheme("rose"), "rose");
   assert.equal(normalizePersonalizationUiTheme("gilt"), "gilt");

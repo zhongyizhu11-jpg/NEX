@@ -9,7 +9,7 @@ import { pushAgentRefresh } from "../agentEvents";
 import { pushTunnelEndpointRefresh, requireHostAccess } from "./helpers";
 import { requireTunnelProtocolEnabled } from "../forwardProtocolSettings";
 import * as hopRepo from "../repositories/tunnelRepository";
-import { createTunnelHopBatch, registerTunnelHopTest } from "../tunnelHopTestState";
+import { newTunnelProbeBatchId, supersedeManualTunnelProbeBatches } from "../tunnelManualProbe";
 import { clearTunnelRuntimeStatus, getTunnelWireGuardPlane } from "../tunnelRuntimeStatus";
 import { createQueryCache } from "../queryCache";
 import { isPortAllowedByPolicy, portPolicyErrorMessage, portPolicyFrom } from "@shared/portPolicy";
@@ -57,6 +57,7 @@ import {
   publicLinkAvailabilitySummary,
   type LinkAvailabilitySummaryIndex,
 } from "../linkAvailabilitySummary";
+import { getLatencyDailyHistory } from "../repositories/latencyDailyRepository";
 
 const tunnelNetworkTypeSchema = z.enum(["public", "private"]);
 const tunnelModeSchema = z.enum(["forwardx", "tls", "wss", "tcp", "mtls", "mwss", "mtcp", "nginx_stream"]);
@@ -67,6 +68,7 @@ const tunnelRelayModeSchema = z.enum(["chain", "failover", "aggregate"]);
 const MAX_TUNNEL_HOPS = 10;
 const MAX_EXTRA_TUNNEL_EXITS = 4;
 const MAX_NGINX_CERT_BYTES = 64 * 1024;
+
 const tunnelQueryCache = createQueryCache(300);
 
 function normalizeTunnelMode(mode: unknown) {
@@ -897,6 +899,19 @@ export const tunnelsRouter = router({
         await db.reorderTunnels(input.ids, input.startIndex);
         return { success: true };
       }),
+    /** 隧道各跳的累计真实探测次数（Agent 2.2.229+）。 */
+    probeStatistics: protectedProcedure
+      .input(z.object({ tunnelId: z.number().int().positive(), hours: z.number().min(0.5).max(24 * 3).default(24) }))
+      .query(async ({ input, ctx }) => {
+        const tunnel = await db.getTunnelById(input.tunnelId);
+        if (!tunnel) throw new Error("Tunnel not found");
+        if (ctx.user.role !== "admin" && tunnel.userId !== ctx.user.id) throw new Error("No permission to view this tunnel");
+        return tunnelQueryCache.get(
+          `probeStatistics:${ctx.user.id}:${input.tunnelId}:${input.hours}`,
+          { ttlMs: 5_000, staleMs: 0 },
+          () => db.getProbeCounterStatistics("tunnel", input.tunnelId, new Date(Date.now() - input.hours * 3600_000)),
+        );
+      }),
     latencySeries: protectedProcedure
     .input(z.object({
       tunnelId: z.number(),
@@ -913,6 +928,39 @@ export const tunnelsRouter = router({
           `latencySeries:${ctx.user.id}:${input.tunnelId}:${input.hours}`,
           { ttlMs: 5_000, staleMs: 0 },
           () => db.getTunnelLatencySeries(input.tunnelId, { since }),
+        );
+      }),
+    /** 隧道近 30 天按天的延迟汇总（详情弹窗里那条色块），见 shared/latencyHistory.ts。 */
+    latencyHistory: protectedProcedure
+      .input(z.object({ tunnelId: z.number().int().positive() }))
+      .query(async ({ input, ctx }) => {
+        const tunnel = await db.getTunnelById(input.tunnelId);
+        if (!tunnel) throw new Error("Tunnel not found");
+        if (ctx.user.role !== "admin" && tunnel.userId !== ctx.user.id) {
+          throw new Error("No permission to view this tunnel");
+        }
+        return tunnelQueryCache.get(
+          `latencyHistory:${input.tunnelId}`,
+          { ttlMs: 60_000, staleMs: 0 },
+          async () => (await getLatencyDailyHistory("tunnel", [input.tunnelId])).get(input.tunnelId) || [],
+        );
+      }),
+    /** 链路卡底部那条 30 天色块：这一页的隧道一次全拿（每条每天一行）。看不到的隧道直接不返回。 */
+    latencyHistoryBatch: protectedProcedure
+      .input(z.object({ tunnelIds: z.array(z.number().int().positive()).max(200) }))
+      .query(async ({ input, ctx }) => {
+        const ids = [...new Set(input.tunnelIds)].sort((a, b) => a - b);
+        if (ids.length === 0) return [];
+        return tunnelQueryCache.get(
+          `latencyHistoryBatch:${ctx.user.role === "admin" ? "admin" : ctx.user.id}:${ids.join(",")}`,
+          { ttlMs: 60_000, staleMs: 120_000 },
+          async () => {
+            const visible = ctx.user.role === "admin"
+              ? ids
+              : ((await db.getTunnelsByIds(ids)) as any[]).filter((tunnel) => Number(tunnel.userId) === Number(ctx.user.id)).map((tunnel) => Number(tunnel.id));
+            const history = await getLatencyDailyHistory("tunnel", visible);
+            return visible.map((tunnelId) => ({ tunnelId, days: history.get(tunnelId) || [] }));
+          },
         );
       }),
     /** 链路卡上那条近 24H 延迟小走势：这一页的隧道一次全拿。 */
@@ -1979,11 +2027,18 @@ export const tunnelsRouter = router({
           appendPanelLog("error", `[TunnelTest] tunnel=${tunnel.id} invalid test target. exitHost=${exit.id} target=${target || "-"} port=${targetPort || "-"}`);
           return { success: false, latencyMs: null, message };
         }
+        // Manual multi-segment tests are durable batches (forward_tests rows
+        // sharing a "tp-" batchId): rows are planned first and inserted in one
+        // transaction, and the batch is aggregated from the database.
+        const queueTunnelProbeBatch = async (batchId: string, rows: any[]) => {
+          await supersedeManualTunnelProbeBatches(Number(tunnel.id));
+          return (await db.createForwardTestBatch(batchId, rows)).length;
+        };
         if (!hasEntryGroupTest && Array.isArray(tunnelHops) && tunnelHops.length >= 3) {
-          const batchId = createTunnelHopBatch(Number(tunnel.id));
+          const batchId = newTunnelProbeBatchId();
           const pendingDetails: any[] = [];
           const testHostIds = new Set<number>();
-          let queued = 0;
+          const batchRows: any[] = [];
           for (let i = 0; i < tunnelHops.length - 1; i++) {
             const currentHop = tunnelHops[i] as any;
             const nextHop = tunnelHops[i + 1] as any;
@@ -2020,17 +2075,16 @@ export const tunnelsRouter = router({
               routeLabel,
               batchId,
             };
-            const testId = await db.createForwardTest({
+            batchRows.push({
               ruleId: 0,
               hostId: fromHostId,
               userId: tunnel.userId,
               message: JSON.stringify(payload),
-            } as any);
-            registerTunnelHopTest(batchId, Number(testId));
+            });
             testHostIds.add(fromHostId);
-            queued += 1;
             appendPanelLog("info", `[TunnelTest] tunnel=${tunnel.id} queued hop tcping ${hopLabel} target=${nextAddr}:${nextPort}`);
           }
+          const queued = await queueTunnelProbeBatch(batchId, batchRows);
           const message = structuredLinkTestMessage({
             kind: "tunnel-hop-pending",
             tunnelId: tunnel.id,
@@ -2058,14 +2112,14 @@ export const tunnelsRouter = router({
             appendPanelLog("error", `[TunnelTest] tunnel=${tunnel.id} invalid entry-group test target target=${firstTarget || "-"} port=${firstTargetPort || "-"}`);
             return { success: false, latencyMs: null, message };
           }
-          const batchId = createTunnelHopBatch(Number(tunnel.id));
+          const batchId = newTunnelProbeBatchId();
           const pendingDetails: any[] = [];
           const testHostIds = new Set<number>();
-          let queued = 0;
+          const batchRows: any[] = [];
           for (const entryHostId of entryTestHostIds) {
             const entryHost = await db.getHostById(entryHostId);
             const routeLabel = `${(entryHost as any)?.name || `主机${entryHostId}`} -> ${(nextHost as any)?.name || `主机${nextHostId}`}`;
-            const hopLabel = `入口 ${queued + 1}/${entryTestHostIds.length} ${entryHostId}->${nextHostId}`;
+            const hopLabel = `入口 ${batchRows.length + 1}/${entryTestHostIds.length} ${entryHostId}->${nextHostId}`;
             pendingDetails.push({
               success: false,
               latencyMs: null,
@@ -2086,15 +2140,13 @@ export const tunnelsRouter = router({
               batchId,
               latencyMode: "multi-source",
             };
-            const testId = await db.createForwardTest({
+            batchRows.push({
               ruleId: 0,
               hostId: entryHostId,
               userId: tunnel.userId,
               message: JSON.stringify(payload),
-            } as any);
-            registerTunnelHopTest(batchId, Number(testId));
+            });
             testHostIds.add(entryHostId);
-            queued += 1;
             appendPanelLog("info", `[TunnelTest] tunnel=${tunnel.id} queued entry-group TCPing ${hopLabel} target=${firstTarget}:${firstTargetPort}`);
           }
           if (Array.isArray(tunnelHops) && tunnelHops.length >= 3) {
@@ -2135,18 +2187,17 @@ export const tunnelsRouter = router({
                 batchId,
                 latencyMode: "multi-source",
               };
-              const testId = await db.createForwardTest({
+              batchRows.push({
                 ruleId: 0,
                 hostId: fromHostId,
                 userId: tunnel.userId,
                 message: JSON.stringify(payload),
-              } as any);
-              registerTunnelHopTest(batchId, Number(testId));
+              });
               testHostIds.add(fromHostId);
-              queued += 1;
               appendPanelLog("info", `[TunnelTest] tunnel=${tunnel.id} queued entry-group hop TCPing ${hopLabel} target=${nextAddr}:${nextPort}`);
             }
           }
+          const queued = await queueTunnelProbeBatch(batchId, batchRows);
           const message = structuredLinkTestMessage({
             kind: "tunnel-entry-group-pending",
             tunnelId: tunnel.id,
@@ -2175,7 +2226,7 @@ export const tunnelsRouter = router({
           .filter((node: any) => node.hostId > 0 && node.listenPort > 0)
           .sort((a: any, b: any) => a.seq - b.seq);
         if (extraExitEndpoints.length > 0) {
-          const batchId = createTunnelHopBatch(Number(tunnel.id));
+          const batchId = newTunnelProbeBatchId();
           const pendingDetails: any[] = [];
           const branchGroupKey = `tunnel-${tunnel.id}-load-balance`;
           const branchGroupLabel = "多出口负载";
@@ -2204,14 +2255,12 @@ export const tunnelsRouter = router({
             groupKey: branchGroupKey,
             groupLabel: branchGroupLabel,
           });
-          const primaryTestId = await db.createForwardTest({
+          const batchRows: any[] = [{
             ruleId: 0,
             hostId: tunnel.entryHostId,
             userId: tunnel.userId,
             message: JSON.stringify(primaryPayload),
-          } as any);
-          registerTunnelHopTest(batchId, Number(primaryTestId));
-          let queued = 1;
+          }];
           for (const endpoint of extraExitEndpoints) {
             const endpointHost = await db.getHostById(endpoint.hostId);
             const endpointTarget = selectTunnelHopDialAddress(endpoint, endpointHost, tunnel);
@@ -2223,7 +2272,7 @@ export const tunnelsRouter = router({
               appendPanelLog("error", `[TunnelTest] tunnel=${tunnel.id} invalid load-balance exit target host=${endpoint.hostId} target=${endpointTarget || "-"} port=${endpointPort || "-"}`);
               return { success: false, latencyMs: null, message };
             }
-            const hopLabel = `出口 ${queued + 1}/${extraExitEndpoints.length + 1} ${tunnel.entryHostId}->${endpoint.hostId}`;
+            const hopLabel = `出口 ${batchRows.length + 1}/${extraExitEndpoints.length + 1} ${tunnel.entryHostId}->${endpoint.hostId}`;
             const routeLabel = `${(entry as any)?.name || `主机${tunnel.entryHostId}`} -> ${(endpointHost as any)?.name || `主机${endpoint.hostId}`}`;
             pendingDetails.push({
               success: false,
@@ -2249,16 +2298,15 @@ export const tunnelsRouter = router({
               groupLabel: branchGroupLabel,
               latencyMode: "max",
             };
-            const testId = await db.createForwardTest({
+            batchRows.push({
               ruleId: 0,
               hostId: tunnel.entryHostId,
               userId: tunnel.userId,
               message: JSON.stringify(payload),
-            } as any);
-            registerTunnelHopTest(batchId, Number(testId));
-            queued += 1;
+            });
             appendPanelLog("info", `[TunnelTest] tunnel=${tunnel.id} queued load-balance TCPing ${hopLabel} target=${endpointTarget}:${endpointPort}`);
           }
+          const queued = await queueTunnelProbeBatch(batchId, batchRows);
           const message = structuredLinkTestMessage({
             kind: "tunnel-load-balance-pending",
             tunnelId: tunnel.id,
@@ -2272,6 +2320,7 @@ export const tunnelsRouter = router({
           return { success: false, latencyMs: null, message, pending: true };
         }
 
+        await supersedeManualTunnelProbeBatches(Number(tunnel.id));
         const payload = {
           kind: "tunnel",
           tunnelId: tunnel.id,

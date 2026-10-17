@@ -27,3 +27,24 @@ test("every toast, errors and explicit durations included, lasts one second", ()
   for (const call of calls) assert.equal(call.data.duration, TOAST_DURATION_MS);
   assert.equal(calls[3].data.description, "原因");
 });
+
+test("error toasts replace raw OpenSSL / fetch failures with a readable sentence and leave other text alone", () => {
+  const messages: unknown[] = [];
+  const record = (message: unknown) => { messages.push(message); return 1; };
+  const fake: any = { success: record, info: record, message: record, error: record, warning: record };
+  installToastDurations(fake);
+  fake.error("error:1E08010C:DECODER routines::unsupported");
+  fake.error("fetch failed");
+  fake.error("Failed to fetch");
+  fake.error("LOGIN_RATE_LIMITED:30");
+  fake.error("最低支付金额为 5");
+  fake.success("fetch failed");
+  assert.deepEqual(messages, [
+    "密钥或证书无法解析，请检查格式或联系管理员查看日志。",
+    "网络请求失败，请检查连接后重试。",
+    "网络请求失败，请检查连接后重试。",
+    "LOGIN_RATE_LIMITED:30",
+    "最低支付金额为 5",
+    "fetch failed",
+  ]);
+});

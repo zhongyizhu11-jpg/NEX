@@ -44,6 +44,8 @@ const memberSchema = z.object({
   aggregationWeight: z.number().int().min(0).max(MAX_MEMBER_WEIGHT).nullable().optional(),
 });
 
+import { getLatencyDailyHistory } from "../repositories/latencyDailyRepository";
+
 const forwardGroupQueryCache = createQueryCache(300);
 
 const baseSchema = z.object({
@@ -251,6 +253,19 @@ export const forwardGroupsRouter = router({
       return { success: true };
     }),
 
+  /** 转发链各跳的累计真实探测次数（Agent 2.2.229+）。 */
+  probeStatistics: protectedProcedure
+    .input(z.object({ groupId: z.number().int().positive(), hours: z.number().min(0.5).max(24 * 3).default(24) }))
+    .query(async ({ input, ctx }) => {
+      const group = await assertForwardGroupAccess(input.groupId, ctx.user);
+      if (String(group.groupMode || "failover") !== "chain") throw new Error("仅转发链支持链路探测统计");
+      return forwardGroupQueryCache.get(
+        `probeStatistics:${ctx.user.id}:${input.groupId}:${input.hours}`,
+        { ttlMs: 5_000, staleMs: 0 },
+        () => db.getProbeCounterStatistics("forwardGroup", input.groupId, new Date(Date.now() - input.hours * 3600_000)),
+      );
+    }),
+
   latencySeries: protectedProcedure
     .input(z.object({
       groupId: z.number(),
@@ -264,6 +279,18 @@ export const forwardGroupsRouter = router({
         `latencySeries:${ctx.user.id}:${input.groupId}:${input.hours}`,
         { ttlMs: 5_000, staleMs: 0 },
         () => db.getForwardGroupLatencySeries(input.groupId, { since }),
+      );
+    }),
+
+  /** 转发链近 30 天按天的延迟汇总（详情弹窗里那条色块），见 shared/latencyHistory.ts。 */
+  latencyHistory: protectedProcedure
+    .input(z.object({ groupId: z.number().int().positive() }))
+    .query(async ({ input, ctx }) => {
+      await assertForwardGroupAccess(input.groupId, ctx.user);
+      return forwardGroupQueryCache.get(
+        `latencyHistory:${input.groupId}`,
+        { ttlMs: 60_000, staleMs: 0 },
+        async () => (await getLatencyDailyHistory("group", [input.groupId])).get(input.groupId) || [],
       );
     }),
 

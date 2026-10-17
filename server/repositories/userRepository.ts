@@ -418,6 +418,8 @@ export async function registerUser(data: {
     canAddRules: false,
     // 邀请人：注册时凭邀请码定下来（见 server/repositories/referralRepository.ts 的 resolveRegistrationInviter）。
     inviterId: data.inviterId && data.inviterId > 0 ? data.inviterId : null,
+    // 绑定时刻：这之前下的单不返利。注册时绑定就是注册这一刻。
+    inviterBoundAt: data.inviterId && data.inviterId > 0 ? nowDate() : null,
   });
 }
 

@@ -15,6 +15,12 @@ import { formatCpuPercent, isAgentUpgradeTimedOut } from "./hostDisplay";
 import { hostGeoTooltip, hostPrimaryAddressLines, hostRegionText } from "./hostDisplay";
 import { HostOsAvatar, hostOsOf } from "./HostOsBadge";
 import { deriveHostVitals, type HostVitals } from "./useHostVitals";
+import { hostTrafficExcluded, normalizeHostTrafficFailoverPercent } from "@shared/hostTrafficPolicy";
+
+/** 流量到阈值、被暂停参与组调度时，卡上那句注脚的悬停说明。 */
+export function hostTrafficFailoverTitle(host: any) {
+  return `流量已用到套餐的 ${normalizeHostTrafficFailoverPercent(host?.trafficFailoverThresholdPercent)}%：这台暂停参与转发组、入口组和出口组，组里由别的成员顶上。流量重置或关闭「流量故障转移」后自动恢复。`;
+}
 
 /**
  * 主机列表里的那张卡 —— Summary 态。
@@ -336,9 +342,16 @@ export default function HostSummaryCard(props: HostSummaryCardProps) {
             {/* Agent 版本号不上卡（2026-10-09 用户要求），进详情看；能升级时只留一句「可升级」。 */}
             {/* 运营商 / ASN 不另占一行，悬停时给（和地区、组织一起） */}
             <span title={hostGeoTooltip(host) || undefined}>{[region, address].filter(Boolean).join(" · ")}</span>
-            {agentVersion && props.upgradeAvailable ? (
+            {/* 流量到阈值被暂停参与组调度：比「可升级」要紧，排在它前面，免得窄卡上被截掉。 */}
+            {hostTrafficExcluded(host) ? (
               <>
                 {region || address ? " · " : ""}
+                <span className="text-[var(--fx-warn-text)]" title={hostTrafficFailoverTitle(host)} data-host-traffic-failover="">组调度已暂停</span>
+              </>
+            ) : null}
+            {agentVersion && props.upgradeAvailable ? (
+              <>
+                {region || address || hostTrafficExcluded(host) ? " · " : ""}
                 <span className="text-[var(--fx-warn-text)]">可升级</span>
               </>
             ) : null}

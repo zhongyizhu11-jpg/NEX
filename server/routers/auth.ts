@@ -56,6 +56,15 @@ function needsCaptcha(ip: string, username: string): boolean {
   return authCaptcha.requiresLoginCaptcha(ip, username);
 }
 
+/**
+ * 登录 / 注册的人机验证开关（上游 v2.3.282）：默认开，只有明确存成 "false" 才关。
+ * 有些只走 HTTP 的环境里浏览器跑不了验证组件，管理员可以在设置里关掉；关掉以后密码校验、
+ * 登录失败限流和两步验证都照旧。
+ */
+async function captchaEnabled(): Promise<boolean> {
+  return (await db.getSetting("authCaptchaEnabled")) !== "false";
+}
+
 function loginRateLimitState(ip: string, username: string) {
   return authRateLimitState(ip, username);
 }
@@ -231,6 +240,7 @@ export const authRouter = router({
     return {
       verifyRegistration: config.enabled && config.verifyRegistration,
       registrationEnabled,
+      authCaptchaEnabled: await captchaEnabled(),
       referralEnabled: referral.enabled,
       referralForceInvite: referral.enabled && referral.forceInvite,
     };
@@ -278,9 +288,10 @@ export const authRouter = router({
 
   needsCaptcha: publicProcedure
     .input(z.object({ username: z.string() }))
-    .query(({ input, ctx }) => {
+    .query(async ({ input, ctx }) => {
       const ip = ctx.req.ip || ctx.req.socket.remoteAddress || "unknown";
-      return { required: needsCaptcha(ip, input.username) };
+      const enabled = await captchaEnabled();
+      return { enabled, required: enabled && needsCaptcha(ip, input.username) };
     }),
 
   login: publicProcedure
@@ -305,7 +316,8 @@ export const authRouter = router({
           });
         }
 
-        if (needsCaptcha(ip, input.username)) {
+        const useCaptcha = await captchaEnabled();
+        if (useCaptcha && needsCaptcha(ip, input.username)) {
           let captchaValid = false;
           if (input.capToken) {
             captchaValid = await authCaptcha.verifyCapToken(ip, "login", input.capToken);
@@ -330,7 +342,7 @@ export const authRouter = router({
           recordPasswordFail(ip, input.username);
           console.warn(`[Auth] Login failed username=${maskIdentifier(input.username)} ip=${ip}`);
           recordLoginFailureEvent(ip, input.username); // 事件时间线：同一 IP 连续失败到 5 / 20 / 100 次各记一条
-          if (needsCaptcha(ip, input.username)) {
+          if (useCaptcha && needsCaptcha(ip, input.username)) {
             throw new Error("CAPTCHA_REQUIRED_AFTER_FAIL");
           }
           throw new Error("用户名或密码错误");
@@ -447,17 +459,19 @@ export const authRouter = router({
         throw new Error("当前注册未开放，请联系管理员");
       }
       const ip = getRequestIp(ctx);
-      let captchaValid = false;
-      if (input.capToken) {
-        captchaValid = await authCaptcha.verifyCapToken(ip, "register", input.capToken);
-      } else if (input.captchaId && input.captchaAnswer) {
-        // Legacy image challenge compatibility for clients that have not yet
-        // loaded the Cap widget.
-        captchaValid = authCaptcha.verifyChallenge(input.captchaId, input.captchaAnswer, ip, "register");
-      }
-      if (!captchaValid) {
-        console.warn(`[Auth] Register captcha failed username=${maskIdentifier(input.username)} ip=${ip}`);
-        throw new Error(input.capToken || input.captchaId ? "CAPTCHA_INVALID" : "CAPTCHA_REQUIRED");
+      if (await captchaEnabled()) {
+        let captchaValid = false;
+        if (input.capToken) {
+          captchaValid = await authCaptcha.verifyCapToken(ip, "register", input.capToken);
+        } else if (input.captchaId && input.captchaAnswer) {
+          // Legacy image challenge compatibility for clients that have not yet
+          // loaded the Cap widget.
+          captchaValid = authCaptcha.verifyChallenge(input.captchaId, input.captchaAnswer, ip, "register");
+        }
+        if (!captchaValid) {
+          console.warn(`[Auth] Register captcha failed username=${maskIdentifier(input.username)} ip=${ip}`);
+          throw new Error(input.capToken || input.captchaId ? "CAPTCHA_INVALID" : "CAPTCHA_REQUIRED");
+        }
       }
       const emailConfig = await getEmailConfig();
       const usernameEmail = ensureAllowedEmail(input.username, emailConfig);

@@ -2,7 +2,7 @@ import * as db from "../db";
 import { getDdnsSettings } from "../ddns";
 import { appendPanelLog } from "../_core/panelLogger";
 import { pushAgentRefresh } from "../agentEvents";
-import { createHopTestBatch, registerHopTest } from "../hopTestState";
+import { newForwardChainBatchId } from "../forwardChainManualProbe";
 import { ENV } from "../env";
 import { normalizeTrafficMultiplier } from "../../shared/trafficMultiplier";
 import { normalizeForwardRuleProtocol, type ForwardRuleProtocol } from "../../shared/forwardTypes";
@@ -431,10 +431,9 @@ export async function runForwardGroupChainSelfTest(groupId: number) {
   const probes = await db.getForwardGroupChainProbes(groupId, { includeFinalTarget: false, method: "ping" });
   if (probes.length === 0) throw new Error("转发链没有可测试的有效链路");
 
-  const batchId = createHopTestBatch("fg", groupId);
+  const batchId = newForwardChainBatchId();
   const testHostIds = new Set<number>();
-  let queued = 0;
-  for (const probe of probes) {
+  const rows = probes.map((probe) => {
     const message = JSON.stringify({
       kind: "forward-chain",
       groupId,
@@ -448,7 +447,8 @@ export async function runForwardGroupChainSelfTest(groupId: number) {
       batchId,
       runtimeDependent: probe.runtimeDependent,
     });
-    const testId = await db.createForwardTest({
+    testHostIds.add(probe.fromHostId);
+    return {
       ruleId: 0,
       hostId: probe.fromHostId,
       userId: Number(group.userId),
@@ -457,12 +457,10 @@ export async function runForwardGroupChainSelfTest(groupId: number) {
       targetReachable: false,
       forwardOk: false,
       message,
-    } as any);
-    registerHopTest(batchId, Number(testId));
-    testHostIds.add(probe.fromHostId);
-    queued += 1;
-    appendPanelLog("info", `[SelfTest] forward-chain=${groupId} queued hop=${probe.hopLabel} method=${probe.method} target=${probe.targetIp}${probe.targetPort ? `:${probe.targetPort}` : ""}`);
-  }
+    } as any;
+  });
+  const queued = (await db.createForwardTestBatch(batchId, rows)).length;
+  appendPanelLog("info", `[SelfTest] forward-chain=${groupId} batch=${batchId} queued segments=${queued} sourceHosts=${testHostIds.size}`);
   for (const hostId of testHostIds) {
     pushAgentRefresh(hostId, "forward-chain-selftest", { urgent: true });
   }

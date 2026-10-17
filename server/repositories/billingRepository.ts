@@ -3564,6 +3564,8 @@ export type ReferralCreditInput = {
   sourceType: ReferralSourceType;
   /** 幂等键：在线支付是订单号，余额购买是 balance_tx:<扣款流水 id>。 */
   sourceRef: string;
+  /** 这一单是什么时候下的（秒）。在线支付是订单创建时刻，余额购买就是现在；不传按现在算。 */
+  orderCreatedAt?: number | Date | null;
 };
 
 export type ReferralCommissionResult = {
@@ -3573,6 +3575,39 @@ export type ReferralCommissionResult = {
   reason?: ReferralSkipReason | "duplicate" | "error";
 };
 
+function referralEpochSeconds(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  if (value instanceof Date) {
+    const ms = value.getTime();
+    return Number.isFinite(ms) ? Math.floor(ms / 1000) : null;
+  }
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric > 0) return Math.floor(numeric > 1e12 ? numeric / 1000 : numeric);
+  const parsed = new Date(String(value)).getTime();
+  return Number.isFinite(parsed) ? Math.floor(parsed / 1000) : null;
+}
+
+async function inviteeHasPriorPaidPlanOrder(inviteeId: number, sourceType: ReferralSourceType, sourceRef: string) {
+  const q = quoteDbIdentifier;
+  const currentOrderNo = sourceType === "payment_order" ? sourceRef : "";
+  const currentTxId = sourceType === "balance_purchase" ? Number(String(sourceRef).replace(/^balance_tx:/, "")) || 0 : 0;
+  const onlineRows = await queryRaw<{ id: number }>(
+    `SELECT ${q("id")} AS ${q("id")} FROM ${q("payment_orders")}
+      WHERE ${q("userId")} = ? AND ${q("outTradeNo")} <> ? AND ${q("orderType")} = 'plan'
+        AND ${q("planId")} IS NOT NULL AND ${q("amountCents")} > 0 AND ${q("status")} = 'completed'
+      LIMIT 1`,
+    [inviteeId, currentOrderNo],
+  );
+  if (onlineRows.length > 0) return true;
+  const balanceRows = await queryRaw<{ id: number }>(
+    `SELECT ${q("id")} AS ${q("id")} FROM ${q("balance_transactions")}
+      WHERE ${q("userId")} = ? AND ${q("type")} = 'purchase' AND ${q("amountCents")} < 0 AND ${q("id")} <> ?
+      LIMIT 1`,
+    [inviteeId, currentTxId],
+  );
+  return balanceRows.length > 0;
+}
+
 /**
  * 给邀请人记一笔返利。**只在套餐购买的事务里调**：在线支付套餐单发货（payment.ts 的
  * finalizePaidOrder）、余额买套餐和余额自动续费（purchasePlanWithBalance）。
@@ -3581,7 +3616,8 @@ export type ReferralCommissionResult = {
  *
  * 不返的情况在 evaluateReferralCommission 里按顺序判断：返利没开、没有邀请人、邀请人是
  * 自己、邀请人停用或删了、套餐比例为 0、0 元单、非人民币单（Stripe 可能收别的币种，余额
- * 是人民币，没有可靠的汇率，干脆不返并记一行日志）、首单模式下已经返过、算出来不足一分。
+ * 是人民币，没有可靠的汇率，干脆不返并记一行日志）、绑定邀请人之前下的单、首单模式下之前已经付过
+ * 套餐单（不管当时返没返）、算出来不足一分。
  *
  * 失败不能连累被邀请人的这一单：
  * - 整段包在一个保存点里（SQLite / MySQL / PG 都支持事务内 SAVEPOINT）。PG 上任何一条语句
@@ -3623,8 +3659,8 @@ async function creditReferralCommissionUnprotected(input: ReferralCreditInput): 
   const q = quoteDbIdentifier;
   const settings = await getReferralSettings();
   if (!settings.enabled) return { credited: false, commissionCents: 0, reason: "disabled" };
-  const [invitee] = await queryRaw<{ id: number; username: string; inviterId: number | null }>(
-    `SELECT ${q("id")} AS ${q("id")}, ${q("username")} AS ${q("username")}, ${q("inviterId")} AS ${q("inviterId")} FROM ${q("users")} WHERE ${q("id")} = ?`,
+  const [invitee] = await queryRaw<{ id: number; username: string; inviterId: number | null; inviterBoundAt: unknown; createdAt: unknown }>(
+    `SELECT ${q("id")} AS ${q("id")}, ${q("username")} AS ${q("username")}, ${q("inviterId")} AS ${q("inviterId")}, ${q("inviterBoundAt")} AS ${q("inviterBoundAt")}, ${q("createdAt")} AS ${q("createdAt")} FROM ${q("users")} WHERE ${q("id")} = ?`,
     [input.inviteeId],
   );
   const inviterId = Number(invitee?.inviterId || 0) || null;
@@ -3640,13 +3676,21 @@ async function creditReferralCommissionUnprotected(input: ReferralCreditInput): 
     `SELECT ${q("id")} AS ${q("id")}, ${q("name")} AS ${q("name")}, ${q("referralRateBps")} AS ${q("referralRateBps")} FROM ${q("subscription_plans")} WHERE ${q("id")} = ?`,
     [input.planId],
   );
-  let hasPriorCommission = false;
+  /*
+   * 绑定时刻（照上游 poouo/Forwardx affiliateRepository 的语义）：绑定这个邀请人之前下的单不返 ——
+   * 管理员后补的邀请人拿不到之前的单。老数据没记绑定时刻，按注册时刻算（那时绑定的只可能是注册时）。
+   */
+  const boundAtSec = referralEpochSeconds(invitee?.inviterBoundAt) ?? referralEpochSeconds(invitee?.createdAt);
+  const orderedAtSec = referralEpochSeconds(input.orderCreatedAt) ?? Math.floor(Date.now() / 1000);
+  const orderedBeforeInviterBound = !!inviterId && boundAtSec !== null && orderedAtSec < boundAtSec;
+  /*
+   * 首单 = 这个人之前没有付过钱的套餐单（在线支付已完成的套餐单，或余额买套餐 / 自动续费的扣款），
+   * 不看「返没返过」：返利关着时买的、绑定邀请人之前买的、比例为 0 的套餐都算。
+   * 当前这一单自己不算（在线支付按订单号排除，余额购买按扣款流水 id 排除）。
+   */
+  let hasPriorPaidOrder = false;
   if (settings.mode === "first" && inviterId) {
-    const prior = await queryRaw<{ id: number }>(
-      `SELECT ${q("id")} AS ${q("id")} FROM ${q("referral_commissions")} WHERE ${q("inviteeId")} = ? LIMIT 1`,
-      [input.inviteeId],
-    );
-    hasPriorCommission = prior.length > 0;
+    hasPriorPaidOrder = await inviteeHasPriorPaidPlanOrder(input.inviteeId, input.sourceType, input.sourceRef);
   }
   const baseAmountCents = Math.floor(Number(input.baseAmountCents || 0));
   const decision = evaluateReferralCommission({
@@ -3658,7 +3702,8 @@ async function creditReferralCommissionUnprotected(input: ReferralCreditInput): 
     rateBps: Number(plan?.referralRateBps || 0),
     baseAmountCents,
     currency: input.currency,
-    hasPriorCommission,
+    hasPriorPaidOrder,
+    orderedBeforeInviterBound,
   });
   if (!decision.eligible) return { credited: false, commissionCents: 0, inviterId, reason: decision.reason };
 

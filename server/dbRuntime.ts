@@ -11,6 +11,7 @@ import Database from "better-sqlite3";
 import { SCHEMA_DIALECT } from "../drizzle/schema";
 import { ENV } from "./env";
 import { databasePoolSettingsForHostCount } from "./databasePoolSizing";
+import { databaseHealth } from "./databaseHealthState";
 
 export type DatabaseKind = "mysql" | "sqlite" | "postgresql";
 export const MYSQL_MIN_VERSION = "8.0.13";
@@ -44,6 +45,38 @@ export type DatabaseConfig =
   | { type: "postgresql"; postgresql: PostgresqlConfig };
 
 type Db = any;
+
+/**
+ * 给面板主库的驱动对象套一层：query / execute 出错时报给 databaseHealth（上游 v2.3.281）。
+ * 只套面板自己的连接池和事务连接 —— SMTP、GitHub、设置页「测试连接」、库切换连的另一个库
+ * 出的网络错误都碰不到这里，不会把主库误判成故障。
+ */
+function reportingDatabaseClient<T extends object>(client: T): T {
+  return new Proxy(client, {
+    get(target, key) {
+      const value = Reflect.get(target, key, target);
+      if (typeof value !== "function") return value;
+      if (key === "query" || key === "execute") {
+        return (...args: any[]) => {
+          try {
+            const result = Reflect.apply(value, target, args);
+            return result && typeof result.catch === "function"
+              ? result.catch((error: unknown) => { databaseHealth.unavailable(error); throw error; })
+              : result;
+          } catch (error) { databaseHealth.unavailable(error); throw error; }
+        };
+      }
+      return value.bind(target);
+    },
+  });
+}
+
+export async function reportDatabaseErrors<T>(work: () => Promise<T> | T): Promise<T> {
+  try { return await work(); } catch (error) {
+    databaseHealth.unavailable(error);
+    throw error;
+  }
+}
 
 let _kind: DatabaseKind | null = null;
 let _pool: Pool | null = null;
@@ -200,12 +233,12 @@ function prepareSqliteStatement(sqlite: Database.Database, sqlText: string): Dat
 
 function createSqliteDrizzleDatabase(sqlite: Database.Database): Db {
   const callback: any = (sqlText: string, params: any[], method: "run" | "all" | "get" | "values") => (
-    withSqliteConnectionLock(sqlite, () => {
+    reportDatabaseErrors(() => withSqliteConnectionLock(sqlite, () => {
       const statement = prepareSqliteStatement(sqlite, sqlText);
       if (method === "run") return { rows: [], ...statement.run(...params) };
       if (method === "get") return { rows: statement.raw(true).get(...params) };
       return { rows: statement.raw(true).all(...params) };
-    }, `drizzle-${method}`)
+    }, `drizzle-${method}`))
   );
   return drizzleSqliteProxy(callback) as Db;
 }
@@ -249,6 +282,8 @@ export function isDatabaseSetupPendingConfig() {
     return false;
   }
 }
+
+databaseHealth.treatAsSetupWhile(isDatabaseSetupPendingConfig);
 
 export function defaultSqlitePath() {
   return ENV.sqlitePath || "/data/forwardx.db";
@@ -621,7 +656,33 @@ export async function testDatabaseConnection(config: DatabaseConfig) {
   }
 }
 
-export async function connectDatabase(config = readDatabaseConfig()) {
+let connectionAttempt: { key: string; promise: Promise<Db | null> } | null = null;
+
+/**
+ * 同一份配置同时只连一次：数据库挂着的时候每个 HTTP 请求都会走到这里，不能每个都去
+ * 新建 / 关闭一遍连接池（上游 v2.3.281）。换了配置的调用等上一个连完再连自己的。
+ */
+export async function connectDatabase(config = readDatabaseConfig()): Promise<Db | null> {
+  const key = JSON.stringify(config);
+  if (connectionAttempt) {
+    if (connectionAttempt.key === key) return connectionAttempt.promise;
+    await connectionAttempt.promise.catch(() => undefined);
+    return connectDatabase(config);
+  }
+  const promise = connectDatabaseOnce(config).catch(async (error) => {
+    databaseHealth.configure(config?.type || null);
+    databaseHealth.unavailable(error);
+    await closeDatabase();
+    throw error;
+  });
+  connectionAttempt = { key, promise };
+  try { return await promise; } finally {
+    if (connectionAttempt?.promise === promise) connectionAttempt = null;
+  }
+}
+
+async function connectDatabaseOnce(config: DatabaseConfig | null): Promise<Db | null> {
+  databaseHealth.configure(config?.type || null);
   if (!config) {
     _kind = null;
     _pool = null;
@@ -642,7 +703,7 @@ export async function connectDatabase(config = readDatabaseConfig()) {
     _pool = mysql.createPool(poolOptions(normalized));
     await _pool.query("SELECT 1");
     await assertSupportedMysqlServer((sqlText) => _pool!.query(sqlText));
-    _db = drizzleMysql(_pool) as Db;
+    _db = drizzleMysql(reportingDatabaseClient(_pool)) as Db;
     _kind = "mysql";
     console.log(`[Database] MySQL connected at ${normalized.host}:${normalized.port}/${normalized.database}`);
     return _db;
@@ -651,8 +712,14 @@ export async function connectDatabase(config = readDatabaseConfig()) {
   if (config.type === "postgresql") {
     const normalized = normalizePostgresql(config.postgresql);
     _pgPool = new pg.Pool(pgPoolOptions(normalized));
+    // 空闲连接被服务端断开时 pg.Pool 发 error 事件；没人接就是未捕获异常，整个面板进程退出（上游 v2.3.281）。
+    // 连接本身会被池丢掉、下次查询重连，这里记一笔，同时报给健康状态（故障页、暂停调度器）。
+    _pgPool.on("error", (error) => {
+      console.error(`[Database] PostgreSQL idle client error: ${error instanceof Error ? error.message : String(error)}`);
+      databaseHealth.unavailable(error);
+    });
     await _pgPool.query("SELECT 1");
-    _db = drizzlePostgres(_pgPool) as Db;
+    _db = drizzlePostgres(reportingDatabaseClient(_pgPool)) as Db;
     _kind = "postgresql";
     console.log(`[Database] PostgreSQL connected at ${normalized.host}:${normalized.port}/${normalized.database}`);
     return _db;
@@ -765,6 +832,10 @@ async function runAfterSettledCallbacks(callbacks: Array<() => Promise<void> | v
 }
 
 export async function withDatabaseTransaction<T>(work: () => Promise<T>): Promise<T> {
+  return reportDatabaseErrors(() => runDatabaseTransaction(work));
+}
+
+async function runDatabaseTransaction<T>(work: () => Promise<T>): Promise<T> {
   if (transactionContext.getStore()) return work();
   if (!_db || !_kind) await connectDatabase();
   if (_kind === "mysql") {
@@ -776,7 +847,7 @@ export async function withDatabaseTransaction<T>(work: () => Promise<T>): Promis
     try {
       try {
         await connection.beginTransaction();
-        const db = drizzleMysql(connection as any) as Db;
+        const db = drizzleMysql(reportingDatabaseClient(connection) as any) as Db;
         result = await transactionContext.run({ db, mysqlConnection: connection, afterCommit, afterSettled }, work);
         await connection.commit();
       } catch (error) {
@@ -800,7 +871,7 @@ export async function withDatabaseTransaction<T>(work: () => Promise<T>): Promis
     try {
       try {
         await client.query("BEGIN");
-        const db = drizzlePostgres(client as any) as Db;
+        const db = drizzlePostgres(reportingDatabaseClient(client) as any) as Db;
         result = await transactionContext.run({ db, postgresClient: client, afterCommit, afterSettled }, work);
         await client.query("COMMIT");
       } catch (error) {
@@ -890,6 +961,10 @@ function postgresSql(sqlText: string, params: any[] = []) {
 }
 
 export async function executeRaw(sqlText: string, params: any[] = []) {
+  return reportDatabaseErrors(() => executeRawImpl(sqlText, params));
+}
+
+async function executeRawImpl(sqlText: string, params: any[]) {
   const active = transactionContext.getStore();
   const normalizedParams = params.map((value) => normalizeRawValue(value, _kind));
   if (_kind === "mysql") {
@@ -913,6 +988,10 @@ export async function executeRaw(sqlText: string, params: any[] = []) {
 }
 
 export async function queryRaw<T = Record<string, any>>(sqlText: string, params: any[] = []): Promise<T[]> {
+  return reportDatabaseErrors(() => queryRawImpl<T>(sqlText, params));
+}
+
+async function queryRawImpl<T>(sqlText: string, params: any[]): Promise<T[]> {
   const active = transactionContext.getStore();
   const normalizedParams = params.map((value) => normalizeRawValue(value, _kind));
   if (_kind === "mysql") {
