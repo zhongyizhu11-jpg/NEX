@@ -7,13 +7,13 @@ import { EventRow, type OpsEventItem } from "./EventRow";
 import { useMinuteNow } from "./useNow";
 
 /*
-  主机详情里的「最近动态」：这台机器最近 10 条事件（断线 / 恢复、重启、上面规则出错……）。
+  主机详情里的「最近动态」：这台机器最近 3 条事件（断线 / 恢复、重启、上面规则出错……）。
   行里不再画主机标签 —— 整节都是这台机器的。「查看全部」带着 ?host= 去监控 › 事件。
 */
 export default function HostEventsSection({ host }: { host: any }) {
   const hostId = Number(host?.id || 0);
   const now = useMinuteNow();
-  const query = trpc.ops.events.recent.useQuery({ limit: 10, hostId }, {
+  const query = trpc.ops.events.recent.useQuery({ limit: 3, hostId }, {
     enabled: hostId > 0,
     staleTime: 15_000,
   });

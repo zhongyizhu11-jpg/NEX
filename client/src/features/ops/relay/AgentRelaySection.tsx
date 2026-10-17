@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
-import { Section, Row } from "@/components/hosts/HostDetailDialog";
+import { CollapsibleSection, Row } from "@/components/hosts/HostDetailDialog";
 import { Button } from "@/components/ui/button";
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 import { FormField } from "@/components/ui/form-field";
@@ -74,17 +74,17 @@ export default function AgentRelaySection({ host }: { host: any }) {
   if (!hostId || query.isLoading) return null;
   if (query.isError || !data) {
     return (
-      <Section title="与面板的连接">
+      <CollapsibleSection title="与面板的连接">
         <p className="text-meta text-muted-foreground">读不到连接设置：{query.error?.message || "未知错误"}</p>
-      </Section>
+      </CollapsibleSection>
     );
   }
 
   if (!data.supported) {
     return (
-      <Section title="与面板的连接">
+      <CollapsibleSection title="与面板的连接">
         <Row label="现在" value={<span className="text-muted-foreground">需要把 Agent 升级到 2.2.216</span>} />
-      </Section>
+      </CollapsibleSection>
     );
   }
 
@@ -121,7 +121,7 @@ export default function AgentRelaySection({ host }: { host: any }) {
   const viaPort = data.viaPort;
 
   return (
-    <Section title="与面板的连接">
+    <CollapsibleSection title="与面板的连接" summary={<span className={toneClass[data.status.tone]}>{data.status.text}</span>}>
       <div className="flex min-w-0 flex-col gap-0.5">
         <Row label="现在" value={<span className={toneClass[data.status.tone]}>{data.status.text}</span>} />
         {data.status.detail ? (
@@ -236,6 +236,6 @@ export default function AgentRelaySection({ host }: { host: any }) {
           </Button>
         </div>
       ) : null}
-    </Section>
+    </CollapsibleSection>
   );
 }
