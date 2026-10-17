@@ -173,18 +173,25 @@ function hostLabel(host: any) {
   return String(host?.name || "").trim().slice(0, 60) || `主机 #${Number(host?.id) || "?"}`;
 }
 
+/** 「CPU使用率」→「CPU 使用率」：中英文之间留空格，和全站文案一致。前后两个版本：标签后面接中文、标签前面接中文。 */
+function spacedLabel(label: string) {
+  const latin = /^[A-Za-z]/.test(label);
+  return { before: latin ? `${label} ` : label, around: latin ? ` ${label} ` : label };
+}
+
 export function describeResourceTransition(host: any, transition: ResourceAlertTransition, config: ResourceAlertConfig) {
   const name = hostLabel(host);
   const label = resourceAlertMetricLabel(transition.metric);
+  const spaced = spacedLabel(label);
   if (transition.kind === "fire") {
     return {
-      event: `${name} 的${label}使用率 ${Math.round(transition.value)}%，已连续 ${formatOutageDuration(transition.durationSeconds)}超过 ${transition.threshold}%`,
+      event: `${name} 的${spaced.around}使用率 ${Math.round(transition.value)}%，已连续 ${formatOutageDuration(transition.durationSeconds)}超过 ${transition.threshold}%`,
       alert: {
-        title: `NEX ${label}告警：${name}`,
+        title: `NEX ${spaced.before}告警：${name}`,
         marker: "🟠",
         fields: [
           ["主机", `${name} (#${Number(host?.id) || "-"})`],
-          [`${label}使用率`, `${Math.round(transition.value)}%（阈值 ${transition.threshold}%）`],
+          [`${spaced.before}使用率`, `${Math.round(transition.value)}%（阈值 ${transition.threshold}%）`],
           ["持续", formatOutageDuration(transition.durationSeconds)],
         ],
         logLabel: `fire host=${Number(host?.id) || "-"} metric=${transition.metric}`,
@@ -192,13 +199,13 @@ export function describeResourceTransition(host: any, transition: ResourceAlertT
     };
   }
   return {
-    event: `${name} 的${label}使用率回落到 ${Math.round(transition.value)}%（告警持续 ${formatOutageDuration(transition.durationSeconds)}，最高 ${Math.round(transition.peak)}%）`,
+    event: `${name} 的${spaced.around}使用率回落到 ${Math.round(transition.value)}%（告警持续 ${formatOutageDuration(transition.durationSeconds)}，最高 ${Math.round(transition.peak)}%）`,
     alert: {
-      title: `NEX ${label}恢复：${name}`,
+      title: `NEX ${spaced.before}恢复：${name}`,
       marker: "🟢",
       fields: [
         ["主机", `${name} (#${Number(host?.id) || "-"})`],
-        [`${label}使用率`, `${Math.round(transition.value)}%（恢复线 ${Math.max(0, transition.threshold - config.recoverMarginPercent)}%）`],
+        [`${spaced.before}使用率`, `${Math.round(transition.value)}%（恢复线 ${Math.max(0, transition.threshold - config.recoverMarginPercent)}%）`],
         ["告警期间最高", `${Math.round(transition.peak)}%`],
         ["告警持续", formatOutageDuration(transition.durationSeconds)],
       ],

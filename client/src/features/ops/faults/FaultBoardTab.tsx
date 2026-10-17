@@ -82,19 +82,20 @@ export default function FaultBoardTab() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className={segmentedControlClassName} role="radiogroup" aria-label="时间范围">
-          {RANGE_OPTIONS.map((option) => (
-            <button
-              key={option.value}
-              type="button"
-              role="radio"
-              aria-checked={hours === option.value}
-              className={segmentedOptionClassName(hours === option.value)}
-              onClick={() => setHours(option.value)}
-            >
-              {option.label}
-            </button>
-          ))}
+        <div className={segmentedControlClassName} role="group" aria-label="时间范围">
+          <div className="grid grid-cols-3 gap-1">
+            {RANGE_OPTIONS.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                aria-pressed={hours === option.value}
+                className={segmentedOptionClassName(hours === option.value)}
+                onClick={() => setHours(option.value)}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button size="sm" variant="outline" disabled={exportMutation.isPending} onClick={() => exportMutation.mutate({ hours, format: "csv" })}>

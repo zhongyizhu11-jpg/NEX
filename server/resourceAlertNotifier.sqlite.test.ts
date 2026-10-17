@@ -51,7 +51,7 @@ test("resource alerts record fire / recover events against a real database", () 
       assert.deepEqual(kinds, ["host.resource_high", "host.resource_recovered"]);
       const high = list.find((event) => event.kind === "host.resource_high");
       assert.equal(high.level, "warn");
-      assert.match(high.message, /港-1 的CPU使用率 97%/);
+      assert.match(high.message, /港-1 的 CPU 使用率 97%/);
       const recovered = list.find((event) => event.kind === "host.resource_recovered");
       assert.match(recovered.message, /最高 97%/);
       assert.equal(notifier.getFiringResourceAlerts().length, 0);
