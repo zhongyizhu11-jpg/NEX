@@ -44,6 +44,7 @@ export default defineConfig({
           { text: "流量和延迟", link: "/guide/traffic-latency" },
           { text: "网络拓扑", link: "/guide/topology" },
           { text: "链路诊断", link: "/guide/link-diagnostics" },
+          { text: "监控与告警", link: "/guide/monitoring-alerts" },
         ],
       },
       {
@@ -58,6 +59,7 @@ export default defineConfig({
           { text: "PROXY Protocol", link: "/guide/proxy-protocol" },
           { text: "共享 TLS 入站（SNI 分流）", link: "/guide/sni-shared-inbound" },
           { text: "落地主机与 Shadowsocks 出口", link: "/guide/ss-egress" },
+          { text: "限速、复制模式与 SOCKS5", link: "/guide/rate-limits" },
         ],
       },
       {
