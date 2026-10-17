@@ -4958,6 +4958,7 @@ function SystemInfoSection() {
   const [showPanelSslConfirm, setShowPanelSslConfirm] = useState(false);
   const [panelSslCountdown, setPanelSslCountdown] = useState(5);
   const [registrationEnabled, setRegistrationEnabled] = useState(true);
+  const [authCaptchaEnabled, setAuthCaptchaEnabled] = useState(true);
   const [twoFactorEnabled, setTwoFactorEnabled] = useState(false);
   const [lookingGlassUserEnabled, setLookingGlassUserEnabled] = useState(true);
   const [forwardProtocols, setForwardProtocols] = useState<ForwardProtocolSettings>(() => normalizeForwardProtocolSettings());
@@ -5027,6 +5028,7 @@ function SystemInfoSection() {
       setPanelSslCertPem(settings.panelSsl?.certPem || "");
       setPanelSslKeyPem(settings.panelSsl?.keyPem || "");
       setRegistrationEnabled(settings.registrationEnabled ?? true);
+      setAuthCaptchaEnabled(settings.authCaptchaEnabled ?? true);
       setTwoFactorEnabled(!!settings.twoFactorEnabled);
       setLookingGlassUserEnabled(settings.lookingGlassUserEnabled ?? true);
       setAllowMultiDeviceLogin(!!settings.allowMultiDeviceLogin);
@@ -5328,7 +5330,12 @@ function SystemInfoSection() {
   };
 
   const handleSaveRegistration = () => {
-    return saveSystemSettings("registration", { registrationEnabled });
+    return saveSystemSettings("registration", { registrationEnabled, authCaptchaEnabled }, {
+      onSuccess: () => {
+        void utils.auth.emailConfig.invalidate();
+        void utils.auth.needsCaptcha.invalidate();
+      },
+    });
   };
 
   const handleSaveTwoFactor = () => {
@@ -5535,7 +5542,7 @@ function SystemInfoSection() {
     { id: "panelUrl", label: "面板地址", dirty: !!settings && panelUrlInput !== (settings.panelPublicUrl || ""), save: handleSavePanelUrl },
     { id: "networkTest", label: "网络测试", dirty: !!settings && lookingGlassUserEnabled !== (settings.lookingGlassUserEnabled ?? true), save: handleSaveLookingGlass },
     { id: "entryBridge", label: "换线过渡", dirty: !!settings && ruleSwitchBridgeHours !== String(normalizeRuleSwitchBridgeHours((settings as any).ruleSwitchBridgeHours)), save: handleSaveEntryBridge },
-    { id: "registration", label: "注册", dirty: !!settings && registrationEnabled !== (settings.registrationEnabled ?? true), save: handleSaveRegistration },
+    { id: "registration", label: "注册", dirty: !!settings && (registrationEnabled !== (settings.registrationEnabled ?? true) || authCaptchaEnabled !== (settings.authCaptchaEnabled ?? true)), save: handleSaveRegistration },
     { id: "twoFactor", label: "双重验证", dirty: !!settings && twoFactorEnabled !== !!settings.twoFactorEnabled, save: handleSaveTwoFactor },
     { id: "ddns", label: "DDNS", dirty: JSON.stringify(ddnsDraft) !== JSON.stringify(ddnsSaved), save: handleSaveDdns },
     {
@@ -6153,6 +6160,12 @@ function SystemInfoSection() {
                 label="开放注册"
                 description="关闭后仅管理员可添加用户。"
                 control={<Checkbox aria-label="开放注册" checked={registrationEnabled} onCheckedChange={setRegistrationEnabled} />}
+              />
+              <SettingRow
+                asLabel
+                label="登录 / 注册人机验证"
+                description="默认开启。只走 HTTP、浏览器跑不了验证组件时可以关掉；关掉后密码校验、登录失败限流和双重验证照旧。"
+                control={<Checkbox aria-label="登录 / 注册人机验证" checked={authCaptchaEnabled} onCheckedChange={setAuthCaptchaEnabled} />}
               />
             </SettingList>
             <div className="flex justify-end">

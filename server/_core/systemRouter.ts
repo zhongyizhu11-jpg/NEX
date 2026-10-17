@@ -1702,6 +1702,7 @@ function publicSystemSettings(all: Record<string, string | null>, activeProtocol
     webPort: getPublicWebPort(),
     webPortManagement: getWebPortManagement({ publicView: true }),
     registrationEnabled: all.registrationEnabled !== "false",
+    authCaptchaEnabled: all.authCaptchaEnabled !== "false",
     twoFactorEnabled: all.twoFactorEnabled === "true",
     lookingGlassUserEnabled: all.lookingGlassUserEnabled !== "false",
     allowMultiDeviceLogin: all.allowMultiDeviceLogin === "true",
@@ -1844,6 +1845,7 @@ export const systemRouter = router({
       personalizationBackground: publicPersonalizationBackground(all),
       personalizationLiquidGlass: readPersonalizationLiquidGlass(all),
       registrationEnabled: all.registrationEnabled !== "false",
+      authCaptchaEnabled: all.authCaptchaEnabled !== "false",
       // 邀请返利开没开（侧边栏「邀请返利」据此显隐）、注册是否必须带邀请码。
       ...db.publicReferralFlags(all),
       twoFactorEnabled: all.twoFactorEnabled === "true",
@@ -1905,6 +1907,7 @@ export const systemRouter = router({
       webPort: getPublicWebPort(),
       webPortManagement: getWebPortManagement(),
       registrationEnabled: all.registrationEnabled !== "false",
+      authCaptchaEnabled: all.authCaptchaEnabled !== "false",
       twoFactorEnabled: all.twoFactorEnabled === "true",
       lookingGlassUserEnabled: all.lookingGlassUserEnabled !== "false",
       pluginsEnabled: all.pluginsEnabled === "true",
@@ -2132,6 +2135,7 @@ export const systemRouter = router({
         personalizationCardStyle: z.string().max(16).optional(),
         personalizationUiTheme: z.string().max(16).optional(),
         registrationEnabled: z.boolean().optional(),
+        authCaptchaEnabled: z.boolean().optional(),
         twoFactorEnabled: z.boolean().optional(),
         lookingGlassUserEnabled: z.boolean().optional(),
         allowMultiDeviceLogin: z.boolean().optional(),
@@ -2281,6 +2285,10 @@ export const systemRouter = router({
       if (input.registrationEnabled !== undefined) {
         await db.setSetting("registrationEnabled", input.registrationEnabled ? "true" : "false");
         console.info(`[Settings] public registration ${input.registrationEnabled ? "enabled" : "disabled"}`);
+      }
+      if (input.authCaptchaEnabled !== undefined) {
+        await db.setSetting("authCaptchaEnabled", input.authCaptchaEnabled ? "true" : "false");
+        console.info(`[Settings] authentication captcha ${input.authCaptchaEnabled ? "enabled" : "disabled"}`);
       }
       if (input.twoFactorEnabled !== undefined) {
         await db.setSetting("twoFactorEnabled", input.twoFactorEnabled ? "true" : "false");
