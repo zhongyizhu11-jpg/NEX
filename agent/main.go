@@ -2593,6 +2593,10 @@ type action struct {
 	ForceRuntimeSync          bool                `json:"forceRuntimeSync,omitempty"`
 	RequiresMimicEnvironment  bool                `json:"requiresMimicEnvironment,omitempty"`
 	HandoffOnly               bool                `json:"-"`
+
+	// 普通端口转发的单 IP / 连接数限制快照（port_access_limits.go），只出现在
+	// forwardType=port-access-limit-sync 的运行时动作里。
+	PortAccessLimits []portAccessLimitSpec `json:"portAccessLimits,omitempty"`
 }
 
 type desiredState struct {
@@ -5478,6 +5482,9 @@ func handleActionJobWithRuntimeSnapshot(cfg Config, a action, releaseRuntimeGate
 			}
 			return true
 		}
+		if isPortAccessLimitAction(a) {
+			return applyPortAccessLimitAction(cfg, a, actionMessage)
+		}
 		if wireGuardAction {
 			if a.Op == "remove" {
 				stopWireGuardRuntime(a.TunnelID)
@@ -6148,6 +6155,9 @@ func runtimeActionKey(a action) string {
 }
 
 func runtimeActionServicesHealthy(a action) bool {
+	if isPortAccessLimitAction(a) {
+		return portAccessLimitsReady(a)
+	}
 	if isWireGuardRuntimeAction(a) {
 		if a.Op == "remove" {
 			return !wireGuardRuntimeReady(a.TunnelID, nil)
@@ -6662,6 +6672,11 @@ func actionCommandSignature(a action) string {
 	write(a.ServiceNameExtra)
 	write(a.Unit)
 	write(a.UnitExtra)
+	if len(a.PortAccessLimits) > 0 {
+		if raw, err := json.Marshal(a.PortAccessLimits); err == nil {
+			write(string(raw))
+		}
+	}
 	if a.ForceRuntimeSync {
 		write("force-runtime-sync")
 	}
