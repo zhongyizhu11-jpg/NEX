@@ -66,18 +66,14 @@ func gostTestJSON(t *testing.T, value any) (map[string]any, []byte) {
 func gostPlanSteps(plan gostSyncPlan) []string {
 	var out []string
 	for _, step := range plan.steps {
-		if step.op == gostOpCut {
-			out = append(out, fmt.Sprintf("cut %v", step.ports))
-		} else {
-			out = append(out, step.op+" "+step.collection+"/"+step.name)
-		}
+		out = append(out, step.op+" "+step.collection+"/"+step.name)
 	}
 	return out
 }
 
 func mustPlan(t *testing.T, previous, desired map[string]any) gostSyncPlan {
 	t.Helper()
-	plan, reason, err := planGostSync(previous, desired, nil)
+	plan, reason, err := planGostSync(previous, desired, nil, true)
 	if err != nil || reason != "" {
 		t.Fatalf("plan rejected reason=%q err=%v", reason, err)
 	}
@@ -132,13 +128,13 @@ func TestGostSyncPlanEditsAndRemovalsRecreateOnlyTheTouchedRule(t *testing.T) {
 		return nil
 	}
 
-	// 改目标（TCP）：删、断这个端口的连接、按新配置建；同端口的 UDP 服务和别的规则都不碰。
+	// 改目标（TCP）：删（运行时关掉它的连接）、按新配置建；同端口的 UDP 服务和别的规则都不碰。
 	next := base()
 	find(next, "fwx-1-tcp")["forwarder"] = map[string]any{"nodes": []any{map[string]any{"name": "target-fwx-1-tcp", "addr": "127.0.0.1:10"}}}
-	if got := gostPlanSteps(mustPlan(t, previous, next)); !reflect.DeepEqual(got, []string{"delete services/fwx-1-tcp", "cut [1001]", "add services/fwx-1-tcp"}) {
+	if got := gostPlanSteps(mustPlan(t, previous, next)); !reflect.DeepEqual(got, []string{"delete services/fwx-1-tcp", "add services/fwx-1-tcp"}) {
 		t.Fatalf("tcp edit steps = %v", got)
 	}
-	// 改 UDP 服务：关监听会话就结束，不用断 TCP（同端口的 fwx-1-tcp 不能被误伤）。
+	// 改 UDP 服务：只重建它，同端口的 fwx-1-tcp 不动。
 	next = base()
 	find(next, "fwx-1-udp")["forwarder"] = map[string]any{"nodes": []any{map[string]any{"name": "target-fwx-1-udp", "addr": "127.0.0.1:10"}}}
 	if got := gostPlanSteps(mustPlan(t, previous, next)); !reflect.DeepEqual(got, []string{"delete services/fwx-1-udp", "add services/fwx-1-udp"}) {
@@ -156,15 +152,15 @@ func TestGostSyncPlanEditsAndRemovalsRecreateOnlyTheTouchedRule(t *testing.T) {
 	next["chains"] = next["chains"].([]any)[:1]
 	next["limiters"] = next["limiters"].([]any)[:1]
 	if got := gostPlanSteps(mustPlan(t, previous, next)); !reflect.DeepEqual(got, []string{
-		"delete services/fwx-1-tcp", "delete services/fwx-1-udp", "cut [1001]", "delete chains/chain-old", "delete limiters/fwx-gone",
+		"delete services/fwx-1-tcp", "delete services/fwx-1-udp", "delete chains/chain-old", "delete limiters/fwx-gone",
 	}) {
 		t.Fatalf("removal steps = %v", got)
 	}
-	// 改出口链（例如换了落地）：引用它的服务先删、断连接，链切换期间没有服务能拿到空链直连目标，再按新配置建回来。
+	// 改出口链（例如换了落地）：引用它的服务先删，链切换期间没有服务能拿到空链直连目标，再按新配置建回来。
 	next = base()
 	next["chains"].([]any)[0] = map[string]any{"name": "chain-egress-3-tcp", "hops": []any{map[string]any{"name": "hop-chain-egress-3-tcp", "nodes": []any{map[string]any{"name": "node", "addr": "10.0.0.5:8388"}}}}}
 	if got := gostPlanSteps(mustPlan(t, previous, next)); !reflect.DeepEqual(got, []string{
-		"delete services/fwx-3-tcp", "cut [1003]", "update chains/chain-egress-3-tcp", "add services/fwx-3-tcp",
+		"delete services/fwx-3-tcp", "update chains/chain-egress-3-tcp", "add services/fwx-3-tcp",
 	}) {
 		t.Fatalf("chain edit steps = %v", got)
 	}
@@ -179,13 +175,13 @@ func TestGostSyncPlanEditsAndRemovalsRecreateOnlyTheTouchedRule(t *testing.T) {
 	find(next, "fwx-2-tcp")["limiter"] = "fwx-rule-2-host-1-10"
 	next["limiters"] = append(next["limiters"].([]any), map[string]any{"name": "fwx-rule-2-host-1-10", "limits": []any{"$ 10B 10B"}})
 	if got := gostPlanSteps(mustPlan(t, previous, next)); !reflect.DeepEqual(got, []string{
-		"add limiters/fwx-rule-2-host-1-10", "delete services/fwx-2-tcp", "cut [1002]", "add services/fwx-2-tcp",
+		"add limiters/fwx-rule-2-host-1-10", "delete services/fwx-2-tcp", "add services/fwx-2-tcp",
 	}) {
 		t.Fatalf("limiter switch steps = %v", got)
 	}
 	// 线上坏掉的服务：重建它（不为它重启整个进程）。
-	plan, reason, err := planGostSync(previous, previous, map[string]bool{"fwx-2-tcp": true})
-	if err != nil || reason != "" || !reflect.DeepEqual(gostPlanSteps(plan), []string{"delete services/fwx-2-tcp", "cut [1002]", "add services/fwx-2-tcp"}) {
+	plan, reason, err := planGostSync(previous, previous, map[string]bool{"fwx-2-tcp": true}, true)
+	if err != nil || reason != "" || !reflect.DeepEqual(gostPlanSteps(plan), []string{"delete services/fwx-2-tcp", "add services/fwx-2-tcp"}) {
 		t.Fatalf("unhealthy recreate = %v %q %v", gostPlanSteps(plan), reason, err)
 	}
 }
@@ -197,34 +193,45 @@ func TestGostSyncPlanRestartOnlyCases(t *testing.T) {
 		"global-config-changed:log": func(c map[string]any) { c["log"] = map[string]any{"level": "debug"} },
 		// gost 没有 NEX 用得上的 API 的集合（这里是独立的 hops）也只能重启。
 		"global-config-changed:hops": func(c map[string]any) { c["hops"] = []any{map[string]any{"name": "h"}} },
-		// 同一个 TCP 端口上还有没变的服务：断连接会误伤它。
-		"connection-cut-port-shared": func(c map[string]any) {
-			c["services"].([]any)[0].(map[string]any)["forwarder"] = map[string]any{"nodes": []any{}}
-		},
 	}
 	for want, mutate := range cases {
 		next, _ := gostTestJSON(t, previous)
 		mutate(next)
-		if _, reason, err := planGostSync(previous, next, nil); err != nil || reason != want {
+		if _, reason, err := planGostSync(previous, next, nil, true); err != nil || reason != want {
 			t.Fatalf("%s: reason=%q err=%v", want, reason, err)
 		}
 	}
-	// 看不懂的监听（这里是 tun）：删它时不知道怎么断它的连接，重启。
+	// 运行时关服务时不关连接（官方 gost、nex5 以前）：删 / 改 TCP 类（或看不懂的）服务只能重启；UDP 的照样走 API。
+	removeTCP, _ := gostTestJSON(t, previous)
+	removeTCP["services"] = removeTCP["services"].([]any)[1:]
+	if _, reason, _ := planGostSync(previous, removeTCP, nil, false); reason != "connection-close-unsupported" {
+		t.Fatalf("tcp removal on old runtime reason=%q", reason)
+	}
+	if _, reason, _ := planGostSync(previous, removeTCP, nil, true); reason != "" {
+		t.Fatalf("tcp removal on nex5 reason=%q", reason)
+	}
+	withUDP, _ := gostTestJSON(t, previous)
+	withUDP["services"] = append(withUDP["services"].([]any), gostTestUDPService("fwx-u", ":1005"))
+	editUDP, _ := gostTestJSON(t, withUDP)
+	editUDP["services"].([]any)[2].(map[string]any)["addr"] = ":1006"
+	if plan, reason, _ := planGostSync(withUDP, editUDP, nil, false); reason != "" || len(plan.steps) != 2 {
+		t.Fatalf("udp edit on old runtime: reason=%q steps=%v", reason, gostPlanSteps(plan))
+	}
 	tun := gostTestService("fwx-tun", ":0")
 	tun["listener"] = map[string]any{"type": "tun"}
 	withTun, _ := gostTestJSON(t, gostTestConfig("/s", []any{tun}, nil, nil))
 	without, _ := gostTestJSON(t, gostTestConfig("/s", []any{}, nil, nil))
-	if _, reason, _ := planGostSync(withTun, without, nil); reason != "connection-cut-unknown-listener" {
-		t.Fatalf("unknown listener reason=%q", reason)
+	if _, reason, _ := planGostSync(withTun, without, nil, false); reason != "connection-close-unsupported" {
+		t.Fatalf("unknown listener on old runtime reason=%q", reason)
 	}
 	duplicate, _ := gostTestJSON(t, previous)
 	duplicate["services"] = append(duplicate["services"].([]any), gostTestService("fwx-1-tcp", ":1001"))
-	if _, _, err := planGostSync(previous, duplicate, nil); err == nil {
+	if _, _, err := planGostSync(previous, duplicate, nil, true); err == nil {
 		t.Fatal("duplicate service names accepted")
 	}
 	badName, _ := gostTestJSON(t, previous)
 	badName["services"] = append(badName["services"].([]any), gostTestService("../x", ":1001"))
-	if _, _, err := planGostSync(previous, badName, nil); err == nil {
+	if _, _, err := planGostSync(previous, badName, nil, true); err == nil {
 		t.Fatal("unsafe service name accepted")
 	}
 }
@@ -401,11 +408,10 @@ type gostSyncFixture struct {
 	socket string
 	api    *fakeGostAPI
 	target gostAPISyncTarget
-	cuts   [][]int
 }
 
 // newGostSyncFixture：临时目录里一份「旧配置」、对应的 .sha256、一个假的 API 套接字；规范化直接用 JSON 原样；
-// 断连接只记下来。
+// 运行时当作 nex5（关服务时关它的连接）。
 func newGostSyncFixture(t *testing.T, previous map[string]any) *gostSyncFixture {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "gost-api-sync-")
@@ -437,7 +443,7 @@ func newGostSyncFixture(t *testing.T, previous map[string]any) *gostSyncFixture 
 	f.target = gostAPISyncTarget{service: "test-runtime", path: f.path, socket: f.socket, binary: "unused"}
 
 	oldCanonical, oldActive, oldVerify, oldHash := canonicalGostConfig, gostAPISyncServiceActive, verifyGostAPISocket, gostShellHashAvailable
-	oldCut, oldCutAvailable, oldPID := gostCutConnections, gostConnCutAvailable, gostRuntimePID
+	oldCloses := gostRuntimeClosesConns
 	canonicalGostConfig = func(_ string, data []byte) (map[string]any, error) {
 		var out map[string]any
 		return out, json.Unmarshal(data, &out)
@@ -445,15 +451,10 @@ func newGostSyncFixture(t *testing.T, previous map[string]any) *gostSyncFixture 
 	gostAPISyncServiceActive = func(string) bool { return true }
 	verifyGostAPISocket = func(string) error { return nil }
 	gostShellHashAvailable = func() bool { return true }
-	gostCutConnections = func(pid int, ports []int) (int, error) {
-		f.cuts = append(f.cuts, append([]int(nil), ports...))
-		return len(ports), nil
-	}
-	gostConnCutAvailable = func() string { return "test" }
-	gostRuntimePID = func(string) (int, error) { return 4242, nil }
+	gostRuntimeClosesConns = func(gostAPISyncTarget) bool { return true }
 	t.Cleanup(func() {
 		canonicalGostConfig, gostAPISyncServiceActive, verifyGostAPISocket, gostShellHashAvailable = oldCanonical, oldActive, oldVerify, oldHash
-		gostCutConnections, gostConnCutAvailable, gostRuntimePID = oldCut, oldCutAvailable, oldPID
+		gostRuntimeClosesConns = oldCloses
 	})
 	return f
 }
@@ -511,9 +512,6 @@ func TestGostAPISyncAddModifyDeleteAndTransactionRollback(t *testing.T) {
 		"PUT /limiters/fwx-l", "DELETE /services/fwx-2-tcp", "DELETE /services/fwx-1-tcp", "POST /services", "POST /services",
 	}) {
 		t.Fatalf("mutations = %v", got)
-	}
-	if !reflect.DeepEqual(f.cuts, [][]int{{1001, 1002}}) {
-		t.Fatalf("cuts = %v (only the edited and the deleted rule's ports)", f.cuts)
 	}
 	if f.api.object("services", "fwx-9-tcp")["addr"] != untouchedBefore["addr"] {
 		t.Fatal("untouched rule modified")
@@ -582,7 +580,9 @@ func TestGostAPISyncFallsBackWithoutTouchingAPI(t *testing.T) {
 		}, addOne},
 		{"service inactive", "service-inactive", func(*gostSyncFixture) { gostAPISyncServiceActive = func(string) bool { return false } }, addOne},
 		{"api unreachable", "api-unavailable", func(f *gostSyncFixture) { os.Remove(f.socket) }, addOne},
-		{"no way to cut connections", "connection-cut-unavailable", func(*gostSyncFixture) { gostConnCutAvailable = func() string { return "" } }, removeOne},
+		{"runtime keeps connections of closed services", "connection-close-unsupported", func(*gostSyncFixture) {
+			gostRuntimeClosesConns = func(gostAPISyncTarget) bool { return false }
+		}, removeOne},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newGostSyncFixture(t, syncTestBase())
@@ -682,7 +682,7 @@ func TestGostAPIErrorsNeverCarryResponseBodies(t *testing.T) {
 	f := newGostSyncFixture(t, gostTestConfig("", []any{}, nil, nil))
 	f.api.failPost["x"] = true
 	plan := gostSyncPlan{steps: []gostAPIStep{{op: gostOpAdd, collection: "services", name: "x", object: gostTestService("x", ":1")}}}
-	_, _, err := executeGostSyncPlan(context.Background(), newGostAPIClient(f.socket), plan, 0)
+	_, err := executeGostSyncPlan(context.Background(), newGostAPIClient(f.socket), plan)
 	if err == nil || strings.Contains(err.Error(), "hunter2") || gostAPIErrorCode(err) != 40005 {
 		t.Fatalf("err = %v", err)
 	}

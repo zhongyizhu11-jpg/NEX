@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -75,6 +76,32 @@ func startUDPEcho(t *testing.T) string {
 		}
 	}()
 	return c.LocalAddr().String()
+}
+
+// startObservedEcho：回声服务，每条连接结束（读到 EOF 或出错）时把时间报到 closed 里 —— 用来证明 gost 关服务时
+// 上游那条连接也随即关掉（而不是等 Pipe 的 10 秒半关超时）。
+func startObservedEcho(t *testing.T) (string, chan time.Time) {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { l.Close() })
+	closed := make(chan time.Time, 64)
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				io.Copy(c, c)
+				closed <- time.Now()
+			}()
+		}
+	}()
+	return l.Addr().String(), closed
 }
 
 type realGostRuntime struct {
@@ -219,6 +246,11 @@ func rollbackFileOnly(t *testing.T, tx *managedConfigTransaction) {
 	}
 }
 
+func isTimeout(err error) bool {
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
+}
+
 func cloneGostConfig(t *testing.T, config map[string]any) map[string]any {
 	out, _ := gostTestJSON(t, config)
 	return out
@@ -237,6 +269,11 @@ func TestGostRealRuntimeAPISyncKeepsEstablishedConnections(t *testing.T) {
 	}
 	version, _ := exec.Command(bin, "-V").CombinedOutput()
 	t.Logf("runtime: %s", strings.TrimSpace(string(version)))
+	// nex5 起关服务时连它的连接一起关：TCP 规则的修改、删除也走 API；更旧的运行时这些改动走重启。
+	closesConns := parseGostRuntimeVersion(string(version)).NexBuild >= gostServiceCloseMinNexBuild
+	oldCloses := gostRuntimeClosesConns
+	gostRuntimeClosesConns = func(gostAPISyncTarget) bool { return closesConns }
+	defer func() { gostRuntimeClosesConns = oldCloses }()
 
 	dir, err := os.MkdirTemp("", "nex-gost-api-")
 	if err != nil {
@@ -250,6 +287,10 @@ func TestGostRealRuntimeAPISyncKeepsEstablishedConnections(t *testing.T) {
 
 	echo1, echo2, udpEcho := startTCPEcho(t), startTCPEcho(t), startUDPEcho(t)
 	port1, port2, port3, udpPort := freeTCPPort(t), freeTCPPort(t), freeTCPPort(t), freeUDPPort(t)
+	// fwx-6-tcp：没有限速的普通转发，走 nex-splice 的内核中继；后面删掉它，看连接和上游都被关掉。
+	spliceEcho, spliceClosed := startObservedEcho(t)
+	newTarget3, newTarget3Closed := startObservedEcho(t)
+	port6 := freeTCPPort(t)
 	occupied, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -289,7 +330,7 @@ func TestGostRealRuntimeAPISyncKeepsEstablishedConnections(t *testing.T) {
 	}}}
 	limiter1 := map[string]any{"name": "fwx-user-1-host-1-1000", "limits": []any{"$ 125000000B 125000000B"}}
 	api := map[string]any{"addr": "unix://" + socket}
-	configA := map[string]any{"services": []any{svc1, udp, tunnelSvc}, "chains": []any{tunnelChain}, "limiters": []any{limiter1}, "api": api}
+	configA := map[string]any{"services": []any{svc1, udp, tunnelSvc, forward("fwx-6-tcp", port6, spliceEcho)}, "chains": []any{tunnelChain}, "limiters": []any{limiter1}, "api": api}
 
 	// 新增：一条普通转发（带新限速器）+ 一条走 Shadowsocks 出口链的规则（链和服务都是新的）。
 	svc3 := forward("fwx-3-tcp", port2, echo2)
@@ -303,7 +344,8 @@ func TestGostRealRuntimeAPISyncKeepsEstablishedConnections(t *testing.T) {
 	svc4["handler"] = map[string]any{"type": "tcp", "chain": "chain-egress-4-tcp"}
 	configB := cloneGostConfig(t, configA)
 	// 新规则插在中间：文件里的顺序和 API 追加的顺序不同，比较要按名字。
-	configB["services"] = []any{configB["services"].([]any)[0], svc3, configB["services"].([]any)[1], configB["services"].([]any)[2], svc4}
+	base := configB["services"].([]any)
+	configB["services"] = []any{base[0], svc3, base[1], base[2], base[3], svc4}
 	configB["chains"] = append(configB["chains"].([]any), egressChain)
 	configB["limiters"] = append(configB["limiters"].([]any), map[string]any{"name": "fwx-user-2-host-1-500", "limits": []any{"$ 62500000B 62500000B"}})
 	configB = cloneGostConfig(t, configB)
@@ -364,8 +406,25 @@ func TestGostRealRuntimeAPISyncKeepsEstablishedConnections(t *testing.T) {
 		t.Fatalf("live state after additive sync differs from new config: %s", drift)
 	}
 
-	// 2. 提交。（事务回滚要撤掉刚加的 TCP 服务，也就要断它已经接进来的连接，这一版做不到，回滚走重启成旧配置；
-	//    这条路径在单元测试里测。）
+	// 2. 之后的步骤失败、事务回滚：nex5 上 API 把刚加的对象删掉（运行状态回到旧配置）、不重启；
+	//    旧运行时上撤掉 TCP 服务需要关它的连接，只能重启成旧配置（这条路径在单元测试里测），这里直接提交。
+	if closesConns {
+		if !tx.rollback() {
+			t.Fatal("transaction rollback via API failed")
+		}
+		if drift, _ := gostConfigsEquivalent(rt.live(), canonA, true, false); drift != "" {
+			t.Fatalf("live state after rollback differs from previous config: %s", drift)
+		}
+		if hash, _ := os.ReadFile(path + ".sha256"); string(hash) != gostShellHash(rawA) {
+			t.Fatal("runtime hash not restored after API rollback")
+		}
+		long.check("after-rollback")
+		longUDP.check("udp-after-rollback")
+		tx, _ = writeRealGostConfig(t, path, configB)
+		if handled, reason := gostAPISync(target, tx); !handled {
+			t.Fatalf("re-add fell back: %s", reason)
+		}
+	}
 	tx.commit()
 	long.check("after-commit")
 
@@ -393,17 +452,87 @@ func TestGostRealRuntimeAPISyncKeepsEstablishedConnections(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 5. 删除 TCP 规则：已经接进来的连接要和重启一样断开，这一版做不到单条断开，所以不碰 API、交给重启。
+	// 5. 改一条 TCP 规则（fwx-3 换目标）、删一条 TCP 规则（fwx-6，内核 splice 中继上的连接）。
+	conn3 := dialEcho(t, "tcp", fmt.Sprintf("127.0.0.1:%d", port2))
+	conn3.check("fwx-3-before-edit")
+	conn6 := dialEcho(t, "tcp", fmt.Sprintf("127.0.0.1:%d", port6))
+	conn6.check("fwx-6-before-delete")
+	// 等一下让 splice 中继真正开始（第一段数据之后两边都在 splice 里阻塞着）。
+	time.Sleep(200 * time.Millisecond)
 	configD := cloneGostConfig(t, configB)
-	configD["services"] = configD["services"].([]any)[:4]
-	tx, _ = writeRealGostConfig(t, path, configD)
-	if handled, reason := gostAPISync(target, tx); handled || reason != "connection-cut-unavailable" {
-		t.Fatalf("tcp removal: handled=%v reason=%s", handled, reason)
+	kept := []any{}
+	for _, raw := range configD["services"].([]any) {
+		svc := raw.(map[string]any)
+		switch svc["name"] {
+		case "fwx-6-tcp":
+			continue
+		case "fwx-3-tcp":
+			svc["forwarder"] = map[string]any{"nodes": []any{map[string]any{"name": "target-fwx-3-tcp", "addr": newTarget3,
+				"connector": map[string]any{"type": "tcp"}, "dialer": map[string]any{"type": "tcp"}}}}
+		}
+		kept = append(kept, svc)
 	}
-	if drift, _ := gostConfigsEquivalent(rt.live(), canonB, true, false); drift != "" {
-		t.Fatalf("removal plan touched the runtime: %s", drift)
+	configD["services"] = kept
+	tx, rawD := writeRealGostConfig(t, path, configD)
+	editAt := time.Now()
+	handled, reason = gostAPISync(target, tx)
+	if !closesConns {
+		if handled || reason != "connection-close-unsupported" {
+			t.Fatalf("tcp edit/delete on %s: handled=%v reason=%s, want restart fallback", strings.TrimSpace(string(version)), handled, reason)
+		}
+		if drift, _ := gostConfigsEquivalent(rt.live(), canonB, true, false); drift != "" {
+			t.Fatalf("fallback plan touched the runtime: %s", drift)
+		}
+		t.Logf("runtime without per-service close: TCP edit/delete falls back to restart (reason=%s)", reason)
+		rollbackFileOnly(t, tx)
+	} else {
+		if !handled {
+			t.Fatalf("tcp edit/delete fell back on nex5: %s", reason)
+		}
+		tx.commit()
+		if rt.cmd.Process.Pid != pid {
+			t.Fatal("runtime process was restarted")
+		}
+		// 被删的规则：客户端读到 EOF，上游那条（splice 的另一头）也马上被关掉。
+		for _, c := range []*echoConn{conn6, conn3} {
+			_ = c.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+			if _, err := c.reader.ReadByte(); err == nil || isTimeout(err) {
+				t.Fatalf("connection on an edited/deleted rule still open: %v", err)
+			}
+		}
+		select {
+		case at := <-spliceClosed:
+			t.Logf("deleted rule: client got EOF, upstream (splice peer) closed %s after the sync started", at.Sub(editAt).Round(time.Millisecond))
+			if at.Sub(editAt) > 3*time.Second {
+				t.Fatal("upstream closed only after the half-close timeout")
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("upstream of the deleted rule never closed")
+		}
+		log, _ := os.ReadFile(filepath.Join(dir, "gost.log"))
+		if !strings.Contains(string(log), `"service":"fwx-6-tcp"`) || !strings.Contains(string(log), `"splice":true`) {
+			t.Fatalf("fwx-6-tcp did not use the splice relay; log:\n%s", log)
+		}
+		if c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port6), time.Second); err == nil {
+			c.Close()
+			t.Fatal("deleted service still listening")
+		}
+		// 改过的规则：新连接按新配置走到新目标。
+		dialEcho(t, "tcp", fmt.Sprintf("127.0.0.1:%d", port2)).check("fwx-3-after-edit")
+		select {
+		case <-newTarget3Closed:
+			t.Fatal("new target saw a close before the test closed its connection")
+		default:
+		}
+		canonD, _ := canonicalGostConfig(bin, rawD)
+		if drift, _ := gostConfigsEquivalent(rt.live(), canonD, true, false); drift != "" {
+			t.Fatalf("live state after edit/delete differs: %s", drift)
+		}
+		configB = configD
 	}
-	rollbackFileOnly(t, tx)
+	// 没碰的规则：长连接、UDP 一直通。
+	long.check("after-edit-delete")
+	longUDP.check("udp-after-edit-delete")
 
 	// 6. 对照：用 B 真重启。线上状态和增量后的完全相同；那条长连接被重启断掉（这正是增量要避免的）。
 	incremental := rt.live()
@@ -421,5 +550,5 @@ func TestGostRealRuntimeAPISyncKeepsEstablishedConnections(t *testing.T) {
 	} else {
 		t.Logf("control: full restart dropped the long-lived connection (%v)", err)
 	}
-	t.Logf("long-lived TCP connection survived %d echo round trips across 1 additive sync, 1 failed add (rolled back via API) and 1 removal that fell back", long.n-1)
+	t.Logf("long-lived TCP connection on an untouched rule survived %d echo round trips (closesConns=%v)", long.n-1, closesConns)
 }

@@ -1,0 +1,245 @@
+NEX patch for go-gost/x v0.8.1, applied by gost-runtime/build.sh after nex-splice.patch and nex-ssu.patch.
+
+Closing a service closes the connections it accepted (nex5).
+Upstream Service.Close only closes the listener: connections already accepted keep forwarding
+until they end on their own. A rule deleted or edited through the API (DELETE, or PUT, which is
+close + create) therefore left its old connections running on the old definition - after a quota
+"cut", for example, after its counting rules were already gone - whereas a process restart would
+have ended them. NEX applies rule changes through the API so that other rules keep running, which
+needs the per-rule part of a restart:
+  1. service/service.go registers every accepted connection (TCP conns, and per-client UDP conns
+     from the udp listener) before handing it to the handler and unregisters it when the handler
+     returns. A connection accepted after the service was closed is closed instead of handled.
+  2. Service.Close closes the listener, then for each tracked connection cancels the handler
+     context and closes the connection. xnet.Pipe returns on ctx.Done(), so the handler returns and
+     its deferred cc.Close() closes the upstream side at once; closing the client connection also
+     interrupts a read, write or splice(2) blocked on it (the nex-splice kernel relay path).
+  3. Other services are untouched: each service tracks only what its own listener accepted.
+Regression test: service/nex_conns_test.go (go test ./service/ in the patched go-gost/x tree).
+End-to-end (splice relay, UDP sessions, upstream close): agent/gost_api_sync_runtime_test.go and
+gost-runtime/test/hitless-sync/.
+
+diff --git a/service/nex_conns.go b/service/nex_conns.go
+--- /dev/null
++++ b/service/nex_conns.go
+@@ -0,0 +1,68 @@
++package service
++
++import (
++	"context"
++	"net"
++	"sync"
++)
++
++// NEX: per-service set of accepted connections.
++//
++// Upstream gost only closes the listener when a service is closed, so the
++// connections it already accepted keep forwarding until they end on their
++// own. A deleted or edited rule must behave like a process restart for its own
++// connections and leave every other service alone, so each service tracks what
++// it accepted and closes exactly those on Close.
++//
++// Closing a connection does two things:
++//   - cancels the handler context. xnet.Pipe returns on ctx.Done(), so the
++//     handler returns and its deferred cc.Close() closes the upstream side
++//     immediately, including on the nex-splice kernel relay path;
++//   - closes the client connection, which interrupts any read, write or
++//     splice(2) blocked on it.
++type nexServiceConns struct {
++	mu     sync.Mutex
++	closed bool
++	conns  map[net.Conn]context.CancelFunc
++}
++
++// track registers conn and returns the handler context and a release function
++// to call once the handler has returned. ok is false when the service is
++// already closed; the caller must close conn and not handle it.
++func (c *nexServiceConns) track(ctx context.Context, conn net.Conn) (context.Context, func(), bool) {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	if c.closed {
++		return ctx, func() {}, false
++	}
++	if c.conns == nil {
++		c.conns = make(map[net.Conn]context.CancelFunc)
++	}
++	ctx, cancel := context.WithCancel(ctx)
++	c.conns[conn] = cancel
++	return ctx, func() {
++		c.mu.Lock()
++		delete(c.conns, conn)
++		c.mu.Unlock()
++		cancel()
++	}, true
++}
++
++// closeAll ends every tracked connection and rejects later ones.
++func (c *nexServiceConns) closeAll() {
++	c.mu.Lock()
++	c.closed = true
++	conns := c.conns
++	c.conns = nil
++	c.mu.Unlock()
++	for conn, cancel := range conns {
++		cancel()
++		conn.Close()
++	}
++}
++
++func (c *nexServiceConns) count() int {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	return len(c.conns)
++}
+diff --git a/service/nex_conns_test.go b/service/nex_conns_test.go
+--- /dev/null
++++ b/service/nex_conns_test.go
+@@ -0,0 +1,103 @@
++package service
++
++import (
++	"context"
++	"errors"
++	"io"
++	"net"
++	"testing"
++	"time"
++
++	"github.com/go-gost/core/handler"
++	"github.com/go-gost/core/listener"
++	"github.com/go-gost/core/metadata"
++	xlogger "github.com/go-gost/x/logger"
++)
++
++type nexTestListener struct{ net.Listener }
++
++func (l nexTestListener) Init(metadata.Metadata) error { return nil }
++
++type nexEchoHandler struct{}
++
++func (nexEchoHandler) Init(metadata.Metadata) error { return nil }
++
++func (nexEchoHandler) Handle(ctx context.Context, conn net.Conn, _ ...handler.HandleOption) error {
++	defer conn.Close()
++	done := make(chan struct{})
++	go func() { io.Copy(conn, conn); close(done) }()
++	select {
++	case <-done:
++	case <-ctx.Done():
++	}
++	return nil
++}
++
++func nexTestService(t *testing.T) (*defaultService, string) {
++	t.Helper()
++	ln, err := net.Listen("tcp", "127.0.0.1:0")
++	if err != nil {
++		t.Fatal(err)
++	}
++	s := NewService("t", nexTestListener{ln}, nexEchoHandler{}, LoggerOption(xlogger.Nop())).(*defaultService)
++	go s.Serve()
++	return s, ln.Addr().String()
++}
++
++func nexEcho(c net.Conn) error {
++	c.SetDeadline(time.Now().Add(2 * time.Second))
++	if _, err := c.Write([]byte("x")); err != nil {
++		return err
++	}
++	b := make([]byte, 1)
++	_, err := io.ReadFull(c, b)
++	return err
++}
++
++// Closing one service ends exactly its own accepted connections.
++func TestNEXServiceCloseEndsOnlyItsConnections(t *testing.T) {
++	a, addrA := nexTestService(t)
++	b, addrB := nexTestService(t)
++	defer b.Close()
++	var ca, cb []net.Conn
++	for i := 0; i < 8; i++ {
++		x, err := net.Dial("tcp", addrA)
++		if err != nil {
++			t.Fatal(err)
++		}
++		y, err := net.Dial("tcp", addrB)
++		if err != nil {
++			t.Fatal(err)
++		}
++		defer x.Close()
++		defer y.Close()
++		ca, cb = append(ca, x), append(cb, y)
++		if nexEcho(x) != nil || nexEcho(y) != nil {
++			t.Fatal("echo before close")
++		}
++	}
++	if n := a.conns.count(); n != 8 {
++		t.Fatalf("tracked=%d", n)
++	}
++	a.Close()
++	for _, c := range ca {
++		c.SetReadDeadline(time.Now().Add(2 * time.Second))
++		if _, err := c.Read(make([]byte, 1)); err == nil || errors.Is(err, context.DeadlineExceeded) {
++			t.Fatalf("connection of the closed service still open: %v", err)
++		}
++	}
++	for _, c := range cb {
++		if err := nexEcho(c); err != nil {
++			t.Fatalf("other service touched: %v", err)
++		}
++	}
++	deadline := time.Now().Add(2 * time.Second)
++	for a.conns.count() != 0 && time.Now().Before(deadline) {
++		time.Sleep(10 * time.Millisecond)
++	}
++	if a.conns.count() != 0 {
++		t.Fatal("closed service still tracks connections")
++	}
++}
++
++var _ listener.Listener = nexTestListener{}
+diff --git a/service/service.go b/service/service.go
+--- a/service/service.go
++++ b/service/service.go
+@@ -109,6 +109,8 @@
+ 	handler  handler.Handler
+ 	status   *Status
+ 	options  options
++	// NEX: connections this service accepted, closed together with the service.
++	conns nexServiceConns
+ }
+ 
+ func NewService(name string, ln listener.Listener, h handler.Handler, opts ...Option) service.Service {
+@@ -253,10 +255,19 @@
+ 			continue
+ 		}
+ 
++		// NEX: track the connection so Close can end it. A service closed after
++		// Accept returned this connection rejects it here.
++		ctx, release, ok := s.conns.track(ctx, conn)
++		if !ok {
++			conn.Close()
++			continue
++		}
++
+ 		wg.Add(1)
+ 
+ 		go func() {
+ 			defer wg.Done()
++			defer release()
+ 
+ 			if v := xmetrics.GetCounter(xmetrics.MetricServiceRequestsCounter,
+ 				metrics.Labels{"service": s.name, "client": clientIP}); v != nil {
+@@ -302,7 +313,11 @@
+ 	if closer, ok := s.handler.(io.Closer); ok {
+ 		closer.Close()
+ 	}
+-	return s.listener.Close()
++	err := s.listener.Close()
++	// NEX: unlike upstream, closing a service (API delete / update, or process
++	// stop) also ends every connection it accepted, as a process restart would.
++	s.conns.closeAll()
++	return err
+ }
+ 
+ func (s *defaultService) execCmds(phase string, cmds []string) {

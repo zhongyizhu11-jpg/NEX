@@ -50,23 +50,25 @@ NEX 扩展到新增、修改、删除都走 API，失败语义也按 NEX 的要�
 执行顺序（每一步先记进回滚日志再发请求：回复丢了也可能已经生效）：
   1. 限速器：POST 新的，PUT 改了的。服务每次读写都按名字现查限速器（registry 的懒包装），
      所以改了的限速对这个限速器下已有的连接立刻生效，和重启后一样，不用动服务。
-  2. 删服务：删掉的、改了的、以及引用了改动 / 删除的链的服务，DELETE（关监听）。
-  3. 断连接：gost 关服务只关监听，不关已经接进来的 TCP 连接；不断的话，删掉 / 停用的规则（例如流量用尽）上的
-     连接会一直跑下去、计数规则也没了 —— 重启时它们是会断的。这一版不实现单条断开，所以计划里一旦有这一步
-     （TCP 规则的修改或删除），整次同步走重启（connection-cut-unavailable）。UDP 服务的监听一关，客户端发来的包
-     就没人收了，会话随之结束，不用另外断，所以 UDP 规则的修改、删除照样走 API。
-  4. 链：DELETE 删掉的，PUT 改了的（引用它的服务第 2 步已经删了，切换中间不会有新连接拿到空链直连目标），
+  2. 删服务：删掉的、改了的、以及引用了改动 / 删除的链的服务，DELETE。
+     上游 gost 关服务只关监听，已经接进来的连接按旧配置一直跑下去；删掉 / 停用的规则（例如流量用尽）上的连接
+     不断、计数规则也没了 —— 重启时它们是会断的。NEX 运行时 nex5 起（gost-runtime/nex-service-close.patch）
+     关服务时连它接进来的连接（TCP 连接、UDP 会话）一起关，别的服务不动，所以 TCP 规则的修改、删除也走 API。
+     正在跑的运行时不到 nex5（官方 gost、旧的自编版、刚换了文件还没重启的进程）时，删 / 改 TCP 类服务只能
+     重启（connection-close-unsupported）；UDP 服务的监听一关，客户端发来的包就没人收了，会话随之结束，
+     所以 UDP 规则的修改、删除在旧运行时上照样走 API。
+  3. 链：DELETE 删掉的，PUT 改了的（引用它的服务第 2 步已经删了，切换中间不会有新连接拿到空链直连目标），
      POST 新的。
-  5. 服务：POST 新增的和第 2 步删掉的（按新配置重建）。
-  6. 限速器：DELETE 删掉的（这时已经没有服务引用它）。
+  4. 服务：POST 新增的和第 2 步删掉的（按新配置重建）。
+  5. 限速器：DELETE 删掉的（这时已经没有服务引用它）。
 最后再 GET 一次，线上状态必须和新配置的规范形式完全相同，然后把新配置的哈希写进 .sha256（和 shell 一样的
 "sha256:<hex>"），重启命令不再执行。
 
 没被改动的规则（服务、它引用的链和限速器都没变）全程不碰：它们的监听、已建立的 TCP 连接、UDP 会话都留着。
-被改动 / 删除的规则：已有的 TCP 连接被断开（客户端看到连接关闭，重连就按新配置走），同一端口重建期间（通常
-几毫秒）新连接会被拒；UDP 会话结束、下一个包按新配置建会话。只改了限速值的规则不断连接。
+被改动 / 删除的规则（nex5）：已有的 TCP 连接被关掉（客户端读到 EOF，上游那条也随即关掉；重连就按新配置走），
+同一端口重建期间（通常几毫秒）新连接会被拒；UDP 会话结束、下一个包按新配置建会话。只改了限速值的规则不断连接。
 
-失败（API 不通、请求被拒、断连接失败、核对不一致）：按回滚日志倒序撤销（新加的删掉、改了的 PUT 回旧的、删掉的
+失败（API 不通、请求被拒、核对不一致）：按回滚日志倒序撤销（新加的删掉、改了的 PUT 回旧的、删掉的
 POST 回来），再执行后面的全量写 + 重启，gost.json 和运行状态不会分叉。之后的步骤（监听核对）失败、事务回滚时：
 配置文件先恢复，再用 API 把运行状态改回旧配置（同样是一次按规范形式的差量同步）；做不到就照旧重启成旧配置。
 */
@@ -89,14 +91,17 @@ var gostAPIObjectNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_.-]{1,128}$`)
 // gost 里可以单独增删改、NEX 也用到的三个集合。
 var gostAPICollections = []string{"limiters", "chains", "services"}
 
-// 监听在 TCP 上的 gost 监听类型（删 / 改这种服务要断开它已经接进来的连接）。
+// 运行时关服务时会关掉它接进来的连接的最低 NEX 构建号（gost-runtime/nex-service-close.patch）。
+const gostServiceCloseMinNexBuild = 5
+
+// 监听在 TCP 上的 gost 监听类型（旧运行时上删 / 改这种服务，已经接进来的连接不会断，只能重启）。
 var gostTCPListenerTypes = map[string]bool{
 	"": true, "tcp": true, "tls": true, "mtls": true, "ws": true, "wss": true, "mws": true, "mwss": true,
 	"mtcp": true, "h2": true, "h2c": true, "http2": true, "grpc": true, "pht": true, "phts": true,
 	"ssh": true, "sshd": true, "red": true, "redir": true, "redirect": true, "otls": true, "obfs-http": true, "obfs-tls": true,
 }
 
-// 监听在 UDP 上的：关了监听会话就结束，不用另外断。
+// 监听在 UDP 上的：关了监听会话就结束，旧运行时上也能走 API。
 var gostUDPListenerTypes = map[string]bool{
 	"udp": true, "rudp": true, "kcp": true, "quic": true, "h3": true, "wt": true, "dtls": true, "redu": true,
 }
@@ -400,29 +405,18 @@ func gostObjectMentions(value any, names map[string]bool) bool {
 	return false
 }
 
-// gostServiceListen 返回服务的监听端口和它是不是 TCP 类监听；known=false 表示看不懂（不知道怎么断它的连接）。
-func gostServiceListen(service map[string]any) (port int, tcp bool, known bool) {
+// gostServiceListenerKind：服务的监听是 UDP 类（udp=true）、TCP 类（udp=false），还是看不懂（known=false）。
+func gostServiceListenerKind(service map[string]any) (udp bool, known bool) {
 	listener, _ := service["listener"].(map[string]any)
 	kind, _ := listener["type"].(string)
 	kind = strings.ToLower(strings.TrimSpace(kind))
 	switch {
 	case gostTCPListenerTypes[kind]:
-		tcp = true
+		return false, true
 	case gostUDPListenerTypes[kind]:
-		tcp = false
-	default:
-		return 0, false, false
+		return true, true
 	}
-	addr, _ := service["addr"].(string)
-	_, portText, err := net.SplitHostPort(addr)
-	if err != nil {
-		return 0, tcp, false
-	}
-	port, err = strconv.Atoi(portText)
-	if err != nil || port <= 0 || port > 65535 {
-		return 0, tcp, false
-	}
-	return port, tcp, true
+	return false, false
 }
 
 /* ── 计划 ───────────────────────────────────────────────────────────── */
@@ -431,7 +425,6 @@ const (
 	gostOpAdd    = "add"
 	gostOpUpdate = "update"
 	gostOpDelete = "delete"
-	gostOpCut    = "cut"
 )
 
 type gostAPIStep struct {
@@ -439,18 +432,18 @@ type gostAPIStep struct {
 	collection, name string
 	object           map[string]any // add / update：新的对象
 	previous         map[string]any // update / delete：旧的对象（回滚用）
-	ports            []int          // cut：要断开已有连接的 TCP 端口
 }
 
 type gostSyncPlan struct {
 	steps []gostAPIStep
 	// 计数，只用于日志。
 	added, updated, deleted, recreated int
-	cutPorts                           []int
+	// closedServices：删掉 / 重建的服务（它们已有的连接随服务关掉）。
+	closedServices []string
 }
 
 func (p gostSyncPlan) summary() string {
-	return fmt.Sprintf("added=%d updated=%d deleted=%d recreatedServices=%d cutPorts=%v", p.added, p.updated, p.deleted, p.recreated, p.cutPorts)
+	return fmt.Sprintf("added=%d updated=%d deleted=%d recreatedServices=%d closedServices=%v", p.added, p.updated, p.deleted, p.recreated, p.closedServices)
 }
 
 func sortedNames(set map[string]bool) []string {
@@ -464,7 +457,8 @@ func sortedNames(set map[string]bool) []string {
 
 // planGostSync 比较旧、新两份规范形式，排出 API 步骤（见文件开头的顺序）。reason 不为空表示只能重启。
 // recreate：线上 failed / closed 的服务（重建一次让它重新监听，不用为它重启整个进程）。
-func planGostSync(previous, desired map[string]any, recreate map[string]bool) (gostSyncPlan, string, error) {
+// closesConns：正在跑的运行时关服务时会关掉它的连接（nex5 起）；否则删 / 改 TCP 类服务只能重启。
+func planGostSync(previous, desired map[string]any, recreate map[string]bool, closesConns bool) (gostSyncPlan, string, error) {
 	var plan gostSyncPlan
 	if key, ok := gostGlobalKeysEqual(previous, desired); !ok {
 		return plan, "global-config-changed:" + key, nil
@@ -532,23 +526,15 @@ func planGostSync(previous, desired map[string]any, recreate map[string]bool) (g
 	}
 	plan.recreated = len(rebuild)
 
-	// 要断连接的 TCP 端口：删掉的和重建的服务。没变的 TCP 服务也监听这个端口时不能断（会误伤）。
-	cutPorts := map[int]bool{}
-	for _, name := range append(sortedNames(svcRemoved), sortedNames(rebuild)...) {
-		port, tcp, known := gostServiceListen(old["services"][name])
-		if !known {
-			return plan, "connection-cut-unknown-listener", nil
-		}
-		if tcp {
-			cutPorts[port] = true
-		}
-	}
-	for name, object := range old["services"] {
-		if svcRemoved[name] || rebuild[name] {
-			continue
-		}
-		if port, tcp, known := gostServiceListen(object); known && tcp && cutPorts[port] {
-			return plan, "connection-cut-port-shared", nil
+	// 要关掉的服务（删掉的 + 重建的）：它们已有的连接必须和重启时一样断开。
+	closing := append(sortedNames(svcRemoved), sortedNames(rebuild)...)
+	plan.closedServices = closing
+	if !closesConns {
+		for _, name := range closing {
+			udp, known := gostServiceListenerKind(old["services"][name])
+			if !known || !udp {
+				return plan, "connection-close-unsupported", nil
+			}
 		}
 	}
 
@@ -581,17 +567,7 @@ func planGostSync(previous, desired map[string]any, recreate map[string]bool) (g
 	for _, name := range append(sortedNames(svcRemoved), inDesiredOrder("services", rebuild)...) {
 		remove("services", name)
 	}
-	// 3. 断连接
-	if len(cutPorts) > 0 {
-		ports := make([]int, 0, len(cutPorts))
-		for port := range cutPorts {
-			ports = append(ports, port)
-		}
-		sort.Ints(ports)
-		plan.steps = append(plan.steps, gostAPIStep{op: gostOpCut, ports: ports})
-		plan.cutPorts = ports
-	}
-	// 4. 链
+	// 3. 链
 	for _, name := range sortedNames(chainRemoved) {
 		remove("chains", name)
 	}
@@ -601,7 +577,7 @@ func planGostSync(previous, desired map[string]any, recreate map[string]bool) (g
 	for _, name := range inDesiredOrder("chains", chainAdded) {
 		add("chains", name)
 	}
-	// 5. 服务（新增的 + 重建的，按新配置的顺序）
+	// 4. 服务（新增的 + 重建的，按新配置的顺序）
 	recreateOrAdd := map[string]bool{}
 	for name := range svcAdded {
 		recreateOrAdd[name] = true
@@ -612,7 +588,7 @@ func planGostSync(previous, desired map[string]any, recreate map[string]bool) (g
 	for _, name := range inDesiredOrder("services", recreateOrAdd) {
 		add("services", name)
 	}
-	// 6. 删限速器
+	// 5. 删限速器
 	for _, name := range sortedNames(limRemoved) {
 		remove("limiters", name)
 	}
@@ -624,13 +600,44 @@ func planGostSync(previous, desired map[string]any, recreate map[string]bool) (g
 
 /* ── 执行与回滚 ─────────────────────────────────────────────────────── */
 
-// 断开某个服务已经接进来的 TCP 连接：这一版没有实现（不去动 gost 进程自己的套接字）。gost 删 / 改服务只关监听，
-// 已经接进来的连接会一直跑下去；重启时它们是会断的（流量用尽「立即断开」依赖这一点）。所以需要断连接的改动
-// （TCP 规则的修改、删除）一律走重启：gostConnCutAvailable 返回空 → connection-cut-unavailable。
-// 这几个钩子只给测试换。
-var gostCutConnections = func(int, []int) (int, error) { return 0, fmt.Errorf("connection cut not supported") }
-var gostConnCutAvailable = func() string { return "" }
-var gostRuntimePID = func(string) (int, error) { return 0, fmt.Errorf("not needed") }
+// gostRuntimeClosesConns：正在跑的这个运行时进程关服务时会不会关掉它的连接（NEX 构建号 ≥ 5）。
+// 看的是进程，不只是文件：/proc/<pid>/exe 必须就是装着的那个文件（换了文件还没重启时链接会带 "(deleted)"），
+// 再按文件的 `-V` 结果（和能力上报同一份缓存）判断构建号。说不清就当不支持（删 / 改 TCP 规则走重启）。
+var gostRuntimeClosesConns = func(target gostAPISyncTarget) bool {
+	pid := managedServiceMainPID(target.service)
+	if pid <= 0 {
+		return false
+	}
+	exe, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", pid))
+	if err != nil || exe != target.binary {
+		return false
+	}
+	info, _ := installedGostRuntimeVersion(target.binary)
+	return info.OK && info.NexBuild >= gostServiceCloseMinNexBuild
+}
+
+// managedServiceMainPID：托管服务的主进程。systemd 问 MainPID；OpenRC / SysV 读面板写的脚本里的 pidfile
+// （/run/<服务>.pid）。ExecStart 的 sh 是 exec 过去的，主进程就是 gost 本身。
+func managedServiceMainPID(name string) int {
+	name = sanitizeServiceName(name)
+	if name == "" {
+		return 0
+	}
+	if isSystemdHost() {
+		out, err := commandCombinedOutputWithTimeout(10*time.Second, "systemctl", "show", "-p", "MainPID", "--value", name+".service")
+		if err != nil {
+			return 0
+		}
+		pid, _ := strconv.Atoi(strings.TrimSpace(string(out)))
+		return pid
+	}
+	raw, err := os.ReadFile("/run/" + name + ".pid")
+	if err != nil {
+		return 0
+	}
+	pid, _ := strconv.Atoi(strings.TrimSpace(string(raw)))
+	return pid
+}
 
 func marshalGostObject(object map[string]any) ([]byte, error) {
 	return json.Marshal(object)
@@ -638,16 +645,16 @@ func marshalGostObject(object map[string]any) ([]byte, error) {
 
 // executeGostSyncPlan 按顺序执行。返回的日志是「可能已经生效」的步骤（发请求之前就记上：回复丢了也可能已经
 // 生效），回滚就按它倒序撤销。gost 说「已存在」的新增不是这次建的，不记，回滚也不删它。
-func executeGostSyncPlan(ctx context.Context, api gostAPIClient, plan gostSyncPlan, pid int) ([]gostAPIStep, int, error) {
+func executeGostSyncPlan(ctx context.Context, api gostAPIClient, plan gostSyncPlan) ([]gostAPIStep, error) {
 	journal := make([]gostAPIStep, 0, len(plan.steps))
-	cut := 0
 	for _, step := range plan.steps {
 		var err error
+		stepStarted := time.Now()
 		switch step.op {
 		case gostOpAdd:
 			var body []byte
 			if body, err = marshalGostObject(step.object); err != nil {
-				return journal, cut, err
+				return journal, err
 			}
 			journal = append(journal, step)
 			if _, err = api.request(ctx, http.MethodPost, "/"+step.collection, body); err != nil && gostAPIErrorCode(err) == gostAPIErrCodeDup {
@@ -656,27 +663,26 @@ func executeGostSyncPlan(ctx context.Context, api gostAPIClient, plan gostSyncPl
 		case gostOpUpdate:
 			var body []byte
 			if body, err = marshalGostObject(step.object); err != nil {
-				return journal, cut, err
+				return journal, err
 			}
 			journal = append(journal, step)
 			_, err = api.request(ctx, http.MethodPut, "/"+step.collection+"/"+step.name, body)
 		case gostOpDelete:
 			journal = append(journal, step)
 			_, err = api.request(ctx, http.MethodDelete, "/"+step.collection+"/"+step.name, nil)
-		case gostOpCut:
-			var n int
-			n, err = gostCutConnections(pid, step.ports)
-			cut += n
+		}
+		if elapsed := time.Since(stepStarted); elapsed > 500*time.Millisecond {
+			logf("gost api sync slow step op=%s collection=%s name=%s duration=%s", step.op, step.collection, step.name, elapsed.Round(time.Millisecond))
 		}
 		if err != nil {
-			return journal, cut, fmt.Errorf("%s %s/%s: %w", step.op, step.collection, step.name, err)
+			return journal, fmt.Errorf("%s %s/%s: %w", step.op, step.collection, step.name, err)
 		}
 	}
-	return journal, cut, nil
+	return journal, nil
 }
 
-// rollbackGostSteps 倒序撤销：新加的删掉，改了的 PUT 回旧的，删掉的 POST 回来。断掉的连接没法恢复（它们本来就在
-// 被改动的规则上）。全部撤销成功才返回 true。
+// rollbackGostSteps 倒序撤销：新加的删掉，改了的 PUT 回旧的，删掉的 POST 回来。随服务关掉的连接没法恢复（它们
+// 本来就在被改动的规则上）。全部撤销成功才返回 true。
 func rollbackGostSteps(api gostAPIClient, journal []gostAPIStep) bool {
 	if len(journal) == 0 {
 		return true
@@ -774,42 +780,33 @@ func findManagedConfigBackup(tx *managedConfigTransaction, path, service string)
 
 // gostAPIApply 把运行状态从 fromData（必须就是现在在跑的配置）改成 toData：规划、核对线上状态、执行、再核对。
 // 成功返回 ""；失败返回原因，这时已经按日志撤销过（mutated 表示撤销前确实改过运行状态）。
-func gostAPIApply(target gostAPISyncTarget, fromData, toData []byte) (plan gostSyncPlan, cut int, reason string, mutated bool) {
+func gostAPIApply(target gostAPISyncTarget, fromData, toData []byte) (plan gostSyncPlan, reason string, mutated bool) {
 	from, err := canonicalGostConfig(target.binary, fromData)
 	if err != nil {
-		return plan, 0, "parse-previous", false
+		return plan, "parse-previous", false
 	}
 	to, err := canonicalGostConfig(target.binary, toData)
 	if err != nil {
-		return plan, 0, "parse-desired", false
+		return plan, "parse-desired", false
 	}
 	api := newGostAPIClient(target.socket)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	live, err := api.liveConfig(ctx)
 	if err != nil {
-		return plan, 0, "api-unavailable", false
+		return plan, "api-unavailable", false
 	}
 	if drift, err := gostConfigsEquivalent(live, from, true, false); err != nil || drift != "" {
-		return plan, 0, "live-drift-" + drift, false
+		return plan, "live-drift-" + drift, false
 	}
-	plan, reason, err = planGostSync(from, to, gostLiveUnhealthyServices(live))
+	plan, reason, err = planGostSync(from, to, gostLiveUnhealthyServices(live), gostRuntimeClosesConns(target))
 	if err != nil {
-		return plan, 0, "plan-invalid", false
+		return plan, "plan-invalid", false
 	}
 	if reason != "" {
-		return plan, 0, reason, false
+		return plan, reason, false
 	}
-	pid := 0
-	if len(plan.cutPorts) > 0 {
-		if method := gostConnCutAvailable(); method == "" {
-			return plan, 0, "connection-cut-unavailable", false
-		}
-		if pid, err = gostRuntimePID(target.socket); err != nil {
-			return plan, 0, "runtime-pid-unknown", false
-		}
-	}
-	journal, cut, err := executeGostSyncPlan(ctx, api, plan, pid)
+	journal, err := executeGostSyncPlan(ctx, api, plan)
 	failure := ""
 	if err != nil {
 		logf("gost api sync step failed service=%s error=%v", target.service, err)
@@ -823,13 +820,14 @@ func gostAPIApply(target gostAPISyncTarget, fromData, toData []byte) (plan gostS
 	}
 	if failure != "" {
 		rollbackGostSteps(api, journal)
-		return plan, cut, failure, len(journal) > 0 || cut > 0
+		return plan, failure, len(journal) > 0
 	}
-	return plan, cut, "", len(journal) > 0 || cut > 0
+	return plan, "", len(journal) > 0
 }
 
 // gostAPISync 返回 true 表示已经通过 API 同步好（运行状态 == 新配置），重启命令不用再跑；
 // 返回 false 表示要执行后面的全量写 + 重启（这时这次通过 API 做的改动已经撤销了）。reason 只用于日志。
+// 没有旧配置（首次）、旧配置没开 API、记录的哈希对不上、服务没在跑：这些是正常的「需要重启」，不是 API 失败。
 func gostAPISync(target gostAPISyncTarget, tx *managedConfigTransaction) (bool, string) {
 	backup := findManagedConfigBackup(tx, target.path, target.service)
 	if backup == nil || !backup.hadPrevious {
@@ -867,7 +865,7 @@ func gostAPISync(target gostAPISyncTarget, tx *managedConfigTransaction) (bool, 
 		return false, "api-socket-unsafe"
 	}
 	started := time.Now()
-	plan, cut, reason, _ := gostAPIApply(target, backup.previous, desiredData)
+	plan, reason, _ := gostAPIApply(target, backup.previous, desiredData)
 	if reason == "" {
 		if err := writeManagedConfigAtomic(target.path+".sha256", []byte(gostShellHash(desiredData)), 0644); err != nil {
 			// 运行状态已经是新配置了；记不下哈希只会让后面的重启命令多重启一次，状态不会分叉。
@@ -882,14 +880,14 @@ func gostAPISync(target gostAPISyncTarget, tx *managedConfigTransaction) (bool, 
 	// 之后的步骤失败、事务回滚时：配置文件恢复成旧的，再用 API 把运行状态改回旧配置；做不到就重启成旧配置。
 	previous := append([]byte(nil), backup.previous...)
 	tx.setRuntimeRestore(target.path, func() bool {
-		_, _, reason, _ := gostAPIApply(target, desiredData, previous)
+		_, reason, _ := gostAPIApply(target, desiredData, previous)
 		if reason != "" {
 			logf("gost api rollback to previous config failed service=%s reason=%s", target.service, reason)
 		}
 		return reason == ""
 	})
-	logf("gost runtime api sync service=%s %s connectionsCut=%d duration=%s; untouched rules kept running",
-		target.service, plan.summary(), cut, time.Since(started).Round(time.Millisecond))
+	logf("gost runtime api sync service=%s %s duration=%s; untouched rules kept running",
+		target.service, plan.summary(), time.Since(started).Round(time.Millisecond))
 	return true, ""
 }
 
