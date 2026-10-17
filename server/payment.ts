@@ -967,6 +967,8 @@ export async function finalizePaidOrder(outTradeNo: string) {
           currency: String((order as any).currency || "CNY"),
           sourceType: "payment_order",
           sourceRef: outTradeNo,
+          // 绑定邀请人之前下的单不返：按下单时刻比，不按付款时刻。
+          orderCreatedAt: (order as any).createdAt ?? null,
         });
         if (commission?.reason === "non_cny") {
           appendPanelLog("warn", `[Referral] order=${outTradeNo} currency=${(order as any).currency} is not CNY; referral commission skipped`);

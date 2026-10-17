@@ -150,6 +150,7 @@ export type ReferralSkipReason =
   | "free"
   | "non_cny"
   | "first_only"
+  | "before_binding"
   | "zero_commission";
 
 export const REFERRAL_SKIP_REASON_LABELS: Record<ReferralSkipReason, string> = {
@@ -160,7 +161,8 @@ export const REFERRAL_SKIP_REASON_LABELS: Record<ReferralSkipReason, string> = {
   rate_zero: "该套餐不返利",
   free: "免费订单",
   non_cny: "非人民币订单",
-  first_only: "仅首单返利，已返过",
+  first_only: "仅首单返利，之前已经付过套餐单",
+  before_binding: "下单时还没绑定这个邀请人",
   zero_commission: "返利金额不足一分",
 };
 
@@ -176,8 +178,14 @@ export type ReferralCommissionInput = {
   baseAmountCents: number;
   /** 订单币种。余额是人民币，在线支付的 Stripe 可能不是。 */
   currency?: string | null;
-  /** 这个被邀请人之前是否已经产生过返利（首单模式用）。 */
-  hasPriorCommission: boolean;
+  /**
+   * 这个被邀请人之前是否已经付过钱买过套餐（首单模式用；照上游 poouo/Forwardx 的语义）。
+   * 不看「返没返过」：返利关着时买的、绑定邀请人之前买的、比例为 0 的套餐也算 —— 改一次设置不能让
+   * 后面的某一单变成「首单」。
+   */
+  hasPriorPaidOrder: boolean;
+  /** 这一单是在绑定这个邀请人之前下的（管理员后补的邀请人拿不到之前的单）。 */
+  orderedBeforeInviterBound?: boolean;
 };
 
 export type ReferralCommissionDecision =
@@ -196,7 +204,8 @@ export function evaluateReferralCommission(input: ReferralCommissionInput): Refe
   if (!(Number(input.baseAmountCents) > 0)) return { eligible: false, reason: "free" };
   const currency = String(input.currency || "CNY").trim().toUpperCase();
   if (currency !== "CNY") return { eligible: false, reason: "non_cny" };
-  if (input.mode === "first" && input.hasPriorCommission) return { eligible: false, reason: "first_only" };
+  if (input.orderedBeforeInviterBound) return { eligible: false, reason: "before_binding" };
+  if (input.mode === "first" && input.hasPriorPaidOrder) return { eligible: false, reason: "first_only" };
   const commissionCents = computeCommissionCents(input.baseAmountCents, rateBps);
   if (commissionCents <= 0) return { eligible: false, reason: "zero_commission" };
   return { eligible: true, commissionCents, rateBps };

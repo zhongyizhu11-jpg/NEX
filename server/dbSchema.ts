@@ -225,6 +225,8 @@ const tables: TableDef[] = [
       c("lastSignedIn", "epoch", { notNull: true, default: "now" }),
       // 邀请返利：自己的邀请码（第一次打开邀请页才生成）和邀请人（注册时绑定，见 shared/referral.ts）。
       c("inviteCode", "varchar", { length: 32 }), c("inviterId", "int"),
+      // 绑定邀请人的时刻：这之前下的单不返利（老数据为空，按注册时刻算）。
+      c("inviterBoundAt", "epoch"),
     ],
     unique: [["username"], ["telegramId"], ["telegramBindCode"], ["telegramLoginCode"], ["inviteCode"], ["googleSub"], ["discordId"]],
     indexes: [["inviterId"]],
