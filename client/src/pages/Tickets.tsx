@@ -372,7 +372,7 @@ export default function Tickets({ mode = "user" }: { mode?: Mode }) {
                 <EmptyState
                   icon={<LifeBuoy />}
                   title="选择一张工单"
-                  description={isAdmin ? "在左边点开一张工单查看和回复。" : "在左边点开一张工单查看对话，或者新建一张。"}
+                  description={isAdmin ? "在左边点开一张工单查看和回复。" : ticketsOpen ? "在左边点开一张工单查看对话，或者新建一张。" : "在左边点开一张工单查看对话。"}
                 />
               )}
             </div>
