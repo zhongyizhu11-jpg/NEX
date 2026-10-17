@@ -10,7 +10,7 @@ import { z } from "zod";
 import { adminProcedure, protectedProcedure, router } from "../_core/trpc";
 import { appendPanelLog } from "../_core/panelLogger";
 import * as db from "../db";
-import { checkTicketCreateQuota, checkTicketReplyQuota, withTicketUserQuota } from "../ticketRateLimit";
+import { checkTicketCreateQuota, checkTicketReopenQuota, checkTicketReplyQuota, withTicketUserQuota } from "../ticketRateLimit";
 import {
   dispatchTicketNotification,
   notifyTicketCreated,
@@ -218,7 +218,14 @@ export const ticketsRouter = router({
     .input(z.object({ ticketId: ticketIdSchema, status: z.enum(["open", "closed"]) }))
     .mutation(async ({ input, ctx }) => {
       const existing = await requireOwnTicket(input.ticketId, ctx.user.id);
-      const { ticket, changed } = await db.setTicketOpenState(existing.id, input.status === "open").catch(rethrowTicketError);
+      // 重新打开会让没关闭的工单多一张：和新建一样在同一把锁里先查上限再写（关单不限）。
+      const { ticket, changed } = input.status === "open"
+        ? await withTicketUserQuota(ctx.user.id, async () => {
+          const limited = await checkTicketReopenQuota(ctx.user.id, existing.id, isAdmin(ctx.user));
+          if (limited) throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: limited });
+          return db.setTicketOpenState(existing.id, true).catch(rethrowTicketError);
+        })
+        : await db.setTicketOpenState(existing.id, false).catch(rethrowTicketError);
       if (changed) appendPanelLog("info", `[Ticket] ${input.status === "open" ? "reopened" : "closed"} id=${ticket.id} by user=${ctx.user.id}`);
       return userTicketView(ticket);
     }),

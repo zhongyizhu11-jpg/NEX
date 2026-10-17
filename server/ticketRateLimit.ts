@@ -1,7 +1,7 @@
 /*
   工单的限制（按用户）：
   - 每人每小时最多新建 5 张，每 10 分钟最多回复 30 条；
-  - 每人同时最多 10 张没关闭的工单（照上游 poouo/Forwardx 的「未完成工单最多 10 个」）。
+  - 每人同时最多 10 张没关闭的工单（照上游 poouo/Forwardx 的「未完成工单最多 10 个」），新建和用户自己重新打开都算。
   管理员不受限 —— 限制是防普通用户刷屏，不该拦着管理员处理工单。
 
   以前频率只记在进程内存里，面板一重启就清零（重启一次就能再刷一轮）。现在直接数库里的记录：
@@ -58,6 +58,24 @@ export async function checkTicketCreateQuota(userId: number, isAdmin: boolean): 
   }
   if (Number(row?.recent || 0) >= TICKET_CREATE_LIMIT) {
     return `新建工单太频繁了（每小时最多 ${TICKET_CREATE_LIMIT} 张），请 ${retryText(retryAfterMs(row?.oldest, TICKET_CREATE_WINDOW_MS))}后再试`;
+  }
+  return null;
+}
+
+/**
+ * 用户自己重新打开一张已关闭的工单：同样受「没关闭的最多 10 张」限制，不然关掉旧工单再一张张重开就绕过去了。
+ * 数的时候不算这张自己 —— 它本来就开着时重开什么都不改，不该被拦。管理员（含管理员后台替用户重开）不受限。
+ * 在 withTicketUserQuota 里、写入之前调用，和新建共用同一把锁。
+ */
+export async function checkTicketReopenQuota(userId: number, ticketId: number, isAdmin: boolean): Promise<string | null> {
+  if (isAdmin || !(await getDb())) return null;
+  const [row] = await queryRaw<{ open: number | string | null }>(
+    `SELECT COUNT(*) AS ${q("open")} FROM ${q("tickets")}
+     WHERE ${q("userId")} = ? AND ${q("status")} <> 'closed' AND ${q("id")} <> ?`,
+    [userId, ticketId],
+  );
+  if (Number(row?.open || 0) >= TICKET_OPEN_LIMIT) {
+    return `没关闭的工单最多 ${TICKET_OPEN_LIMIT} 张，请先关掉已经解决的工单，再重新打开这张`;
   }
   return null;
 }

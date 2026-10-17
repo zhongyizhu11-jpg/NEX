@@ -459,6 +459,38 @@ test("每人最多 10 张没关闭的工单，关掉一张才能再提", () => {
   `);
 });
 
+test("10 张没关闭的工单也拦重新打开：用户自己重开旧工单不能绕过上限，管理员替他重开不拦", () => {
+  runScript("forwardx-tickets-reopen-cap-", prelude + String.raw`
+    try {
+      const ids = [];
+      for (let i = 0; i < 11; i += 1) {
+        ids.push((await asAlice.create({ title: "工单 " + i, priority: "low", content: "x" })).id);
+        await runtime.executeRaw('UPDATE "tickets" SET "createdAt" = "createdAt" - 7200 WHERE "id" = ?', [ids[i]]);
+        await runtime.executeRaw('UPDATE "ticket_messages" SET "createdAt" = "createdAt" - 7200 WHERE "ticketId" = ?', [ids[i]]);
+        // 前两张提完就关掉，留着后面重开。
+        if (i < 2) await asAlice.setStatus({ ticketId: ids[i], status: "closed" });
+      }
+      // 现在 9 张没关闭：重开一张到 10 张可以，再重开一张就超了。
+      assert.equal((await asAlice.setStatus({ ticketId: ids[0], status: "open" })).status, "waiting_staff");
+      await assert.rejects(() => asAlice.setStatus({ ticketId: ids[1], status: "open" }), (error) => {
+        assert.equal(error.code, "TOO_MANY_REQUESTS");
+        assert.match(error.message, /没关闭的工单最多 10 张/);
+        return true;
+      });
+      assert.equal(await statusOf(ids[1]), "closed");
+      // 已经开着的再点一次「打开」不改变数量，照常放行；关单永远放行。
+      assert.equal((await asAlice.setStatus({ ticketId: ids[0], status: "open" })).status, "waiting_staff");
+      await asAlice.setStatus({ ticketId: ids[2], status: "closed" });
+      await asAlice.setStatus({ ticketId: ids[2], status: "open" });
+      // 管理员替用户重开不受这个限制。
+      await asAdmin.adminSetStatus({ ticketId: ids[1], status: "open" });
+      assert.notEqual(await statusOf(ids[1]), "closed");
+    } finally {
+      await runtime.closeDatabase().catch(() => undefined);
+    }
+  `);
+});
+
 test("工单总开关：关掉后普通用户不能提交、回复，管理员照常查看和处理", () => {
   runScript("forwardx-tickets-switch-", prelude + String.raw`
     try {
