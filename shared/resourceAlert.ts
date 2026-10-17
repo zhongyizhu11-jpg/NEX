@@ -29,9 +29,9 @@ export type ResourceAlertConfig = {
   recoverMarginPercent: number;
   /** 是否同时发邮件给有邮箱的管理员（需要面板邮件服务已开启）。 */
   emailEnabled: boolean;
-  /** 内核 OOM killer 杀了进程时告警（Agent ≥ 2.2.229）。 */
+  /** 内核 OOM killer 杀了进程时告警（Agent ≥ 2.2.230）。 */
   oomAlert: boolean;
-  /** forwardx-* 服务崩溃后被 systemd 自动拉起时告警（Agent ≥ 2.2.229）。 */
+  /** forwardx-* 服务崩溃后被 systemd 自动拉起时告警（Agent ≥ 2.2.230）。 */
   crashAlert: boolean;
   /** 隧道探测 10 分钟内丢包率达到多少（%）告警，0 = 不报。 */
   lossPercent: number;

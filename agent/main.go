@@ -38,7 +38,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.229"
+var Version = "2.2.230"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -940,6 +940,7 @@ type Config struct {
 	PanelURL                  string `json:"panelUrl"`
 	Token                     string `json:"token"`
 	Interval                  int    `json:"interval"`
+	ProxyURL                  string `json:"proxyUrl,omitempty"` // 管理流量代理，见 management_proxy.go
 	MigrationFallbackPanelURL string `json:"migrationFallbackPanelUrl,omitempty"`
 	PanelMigrationID          string `json:"panelMigrationId,omitempty"`
 	PanelMigrationStartedAt   int64  `json:"panelMigrationStartedAt,omitempty"`
@@ -2599,6 +2600,10 @@ type action struct {
 	ForceRuntimeSync          bool                `json:"forceRuntimeSync,omitempty"`
 	RequiresMimicEnvironment  bool                `json:"requiresMimicEnvironment,omitempty"`
 	HandoffOnly               bool                `json:"-"`
+
+	// 普通端口转发的单 IP 接入限制快照（port_access_limits.go），只出现在
+	// forwardType=port-access-limit-sync 的运行时动作里。
+	PortAccessLimits []portAccessLimitSpec `json:"portAccessLimits,omitempty"`
 }
 
 type desiredState struct {
@@ -3025,7 +3030,7 @@ type guardRule struct {
 	LimitIn              int64          `json:"limitIn"`
 	LimitOut             int64          `json:"limitOut"`
 	RateLimitScope       string         `json:"rateLimitScope"`
-	// RateLimits（Agent 2.2.229 起）：多级限速，每一级一个共享桶，同一方向上所有级都要过。
+	// RateLimits（Agent 2.2.230 起）：多级限速，每一级一个共享桶，同一方向上所有级都要过。
 	// 给了就以它为准，LimitIn / LimitOut / RateLimitScope 只留给旧 Agent。
 	RateLimits []guardRateTier `json:"rateLimits,omitempty"`
 }
@@ -3033,7 +3038,13 @@ type guardRule struct {
 func main() {
 	configPath := flag.String("config", defaultConfigPath, "config file")
 	onceRegister := flag.Bool("register", false, "register and exit")
+	printVersion := flag.Bool("version", false, "print the Agent version and exit")
 	flag.Parse()
+	if *printVersion {
+		// fwxm 和安装脚本靠它判断这个二进制认不认 proxyUrl（老版本不认这个参数，直接报错退出）。
+		fmt.Println(Version)
+		return
+	}
 
 	resolvedConfigPath, cfg, err := loadConfigWithFallback(*configPath)
 	if err != nil {
@@ -3044,6 +3055,10 @@ func main() {
 	}
 	cfg.PanelURL = strings.TrimRight(cfg.PanelURL, "/")
 	activeConfigPath = resolvedConfigPath
+	// 在注册和任何通信协程之前：注册本身也要走代理。配置写错就直接退出，不悄悄改成直连。
+	if err := configureAgentManagementProxy(cfg.ProxyURL); err != nil {
+		fatal("proxy configuration: %v", err)
+	}
 	setRuntimePanelURL(cfg.PanelURL)
 	runtimeAgentToken.Store(cfg.Token)
 	initializePanelMigration(cfg)
@@ -3096,6 +3111,8 @@ func main() {
 	go agentMetricsScheduler(cfg)
 	go agentDNSWatchScheduler()
 	go agentExtLoop(cfg)
+	// 端口接入限制快照失败后面板不会重发（期望状态没变），由 Agent 自己重试 / 定期核对。
+	go portAccessLimitMaintenanceLoop()
 	lastFullHeartbeatAt := time.Time{}
 	metricsOnlyMode := false
 	for {
@@ -5474,7 +5491,12 @@ func handleActionJobWithRuntimeSnapshot(cfg Config, a action, releaseRuntimeGate
 	if strings.TrimSpace(a.StatusType) == "runtime" {
 		mimicAction := isMimicRuntimeAction(a)
 		wireGuardAction := isWireGuardRuntimeAction(a)
+		var managedConfigTx *managedConfigTransaction
 		runRuntimeShellBatch := func(commands []string, phase string) bool {
+			if phase == "sync" && strings.TrimSpace(a.ForwardType) == "gost-runtime-sync" && hasGostAPISyncMarker(commands) {
+				// gost 规则的增删改走 gost API，不重启共享进程（gost_api_sync.go）；API 做不了或失败才重启。
+				return runGostAPISyncCommands(commands, managedConfigTx, actionMessage)
+			}
 			if !mimicAction {
 				return runShellBatch(commands)
 			}
@@ -5489,6 +5511,9 @@ func handleActionJobWithRuntimeSnapshot(cfg Config, a action, releaseRuntimeGate
 				logf("mimic runtime sync skipped; cached state healthy diagnostics=%s", mimicRuntimeDiagnostics())
 			}
 			return true
+		}
+		if isPortAccessLimitAction(a) {
+			return applyPortAccessLimitAction(cfg, a, actionMessage)
 		}
 		if wireGuardAction {
 			if a.Op == "remove" {
@@ -5519,7 +5544,6 @@ func handleActionJobWithRuntimeSnapshot(cfg Config, a action, releaseRuntimeGate
 				logf("mimic environment check failed status=%s commandReady=%v moduleReady=%v message=%s", environment.Status, environment.CommandReady, environment.ModuleReady, environment.Message)
 			}
 		}
-		var managedConfigTx *managedConfigTransaction
 		if ok && len(a.PreCommands) > 0 {
 			ok = runRuntimeShellBatch(a.PreCommands, "prepare") && ok
 		}
@@ -6160,6 +6184,9 @@ func runtimeActionKey(a action) string {
 }
 
 func runtimeActionServicesHealthy(a action) bool {
+	if isPortAccessLimitAction(a) {
+		return portAccessLimitsReady(a)
+	}
 	if isWireGuardRuntimeAction(a) {
 		if a.Op == "remove" {
 			return !wireGuardRuntimeReady(a.TunnelID, nil)
@@ -6674,6 +6701,11 @@ func actionCommandSignature(a action) string {
 	write(a.ServiceNameExtra)
 	write(a.Unit)
 	write(a.UnitExtra)
+	if len(a.PortAccessLimits) > 0 {
+		if raw, err := json.Marshal(a.PortAccessLimits); err == nil {
+			write(string(raw))
+		}
+	}
 	if a.ForceRuntimeSync {
 		write("force-runtime-sync")
 	}

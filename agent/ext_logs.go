@@ -1,7 +1,7 @@
 package main
 
 /*
-扩展模块 "logs"（面板 2.3.449 起）：面板主机详情里看这台机器的实时日志，不用 SSH。
+扩展模块 "logs"（面板 2.3.451 起）：面板主机详情里看这台机器的实时日志，不用 SSH。
 
 面板那头见 server/ops/hostLogsAgent.ts。有人开着日志窗口时，面板每轮下发
 {"requests":[{"id","source","cursor","lines"}]}；Agent 在 Apply 里按来源读出 cursor 之后的新行，

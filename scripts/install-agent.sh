@@ -5,8 +5,24 @@ set -euo pipefail
 # install/upgrade: 从面板获取安装脚本并自动执行
 # uninstall: 本地清理，不依赖面板
 
-ACTION="${1:-}"
-TOKEN="${2:-}"
+ACTION=""
+TOKEN=""
+# 管理流量代理（--proxy URL / --no-proxy）：原样交给面板的安装脚本处理（校验、写进 config.json）；
+# 这个入口脚本自己从面板拉安装脚本时也走它。不给就沿用 Agent 配置里已有的代理。
+AGENT_PROXY_EXPLICIT=false
+AGENT_PROXY=""
+if [ "${FORWARDX_AGENT_PROXY+x}" = x ]; then AGENT_PROXY_EXPLICIT=true; AGENT_PROXY="${FORWARDX_AGENT_PROXY:-direct}"; fi
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --proxy) [ "$#" -ge 2 ] || { echo "[错误] --proxy 后面要跟代理地址" >&2; exit 1; }; AGENT_PROXY="$2"; AGENT_PROXY_EXPLICIT=true; shift 2 ;;
+    --proxy=*) AGENT_PROXY="${1#*=}"; AGENT_PROXY_EXPLICIT=true; shift ;;
+    # direct：明确直连，连继承来的环境变量代理也不用（和「没给」不同，没给是沿用配置 / 环境）。
+    --no-proxy) AGENT_PROXY=direct; AGENT_PROXY_EXPLICIT=true; shift ;;
+    --*) echo "[错误] 不认识的参数: ${1%%=*}" >&2; exit 1 ;;
+    *) if [ -z "$ACTION" ]; then ACTION="$1"; elif [ -z "$TOKEN" ]; then TOKEN="$1"; else echo "[错误] 多余的参数" >&2; exit 1; fi; shift ;;
+  esac
+done
+case "$AGENT_PROXY" in socks5://*) AGENT_PROXY="socks5h://${AGENT_PROXY#socks5://}" ;; esac
 
 # Leave these empty unless the caller explicitly overrides them. The panel-side
 # installer embeds the saved defaults and applies them when these values are empty.
@@ -63,6 +79,8 @@ show_help() {
   install   <TOKEN>  安装 Agent 并注册到面板
   upgrade   [TOKEN]  升级 Agent，默认复用现有配置
   uninstall          完全卸载 Agent 及相关服务
+  --proxy URL        管理流量代理（http/https/socks5/socks5h），只管和面板的通信与下载，不影响转发
+  --no-proxy         保存为直连；升级默认沿用配置里的代理
 
 说明:
   安装过程中会询问是否安装 mimic UDP 混淆环境，默认 n，只有输入 Y 才会安装。
@@ -133,12 +151,27 @@ run_panel_installer() {
 
   local url="${PANEL_URL}/api/agent/install.sh"
 
+  local fetch_proxy="$AGENT_PROXY"
+  if [ "$AGENT_PROXY_EXPLICIT" != true ] && [ -f "$CONFIG_DIR/config.json" ] && command -v jq >/dev/null 2>&1; then
+    fetch_proxy="$(jq -r '.proxyUrl // empty' "$CONFIG_DIR/config.json" 2>/dev/null || true)"
+  fi
   echo "[信息] 正在从面板获取安装脚本: ${PANEL_URL}"
-  if ! curl -fsSL \
-    --connect-timeout "$FORWARDX_CURL_CONNECT_TIMEOUT" \
-    --speed-limit "$FORWARDX_CURL_LOW_SPEED_LIMIT" \
-    --speed-time "$low_speed_time" \
-    "$url" -o "$tmp_script"; then
+  fetch_panel_installer() {
+    curl -fsSL \
+      --connect-timeout "$FORWARDX_CURL_CONNECT_TIMEOUT" \
+      --speed-limit "$FORWARDX_CURL_LOW_SPEED_LIMIT" \
+      --speed-time "$low_speed_time" \
+      "$url" -o "$tmp_script"
+  }
+  local fetched=false
+  if [ "$fetch_proxy" = direct ]; then
+    # 明确要直连：继承来的代理变量（坏掉的代理正是要绕开的）这一次全部不用。
+    if (unset http_proxy https_proxy all_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY; fetch_panel_installer); then fetched=true; fi
+  # 代理地址走环境变量，不放进 curl 的命令行参数（ps 里会看到密码）。
+  elif http_proxy="${fetch_proxy:-${http_proxy:-}}" https_proxy="${fetch_proxy:-${https_proxy:-}}" all_proxy="${fetch_proxy:-${all_proxy:-}}" fetch_panel_installer; then
+    fetched=true
+  fi
+  if [ "$fetched" != true ]; then
     rm -f "$tmp_script"
     return 1
   fi
@@ -149,6 +182,13 @@ run_panel_installer() {
   fi
 
   chmod 700 "$tmp_script"
+  # 显式给了代理（包括 --no-proxy）才交给安装脚本；它看到这个变量就当显式设置处理。
+  # 走环境变量而不是命令行参数：代理密码不出现在进程列表里。
+  if [ "$AGENT_PROXY_EXPLICIT" = true ]; then
+    export FORWARDX_AGENT_PROXY="$AGENT_PROXY"
+  else
+    unset FORWARDX_AGENT_PROXY
+  fi
 
   if PANEL_URL="$PANEL_URL" \
     GITHUB_ACCELERATOR_ENABLED="$GITHUB_ACCELERATOR_ENABLED" \

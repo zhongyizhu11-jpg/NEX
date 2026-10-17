@@ -3243,7 +3243,8 @@ type SystemSettingsSaveKey =
   | "forwardProtocols"
   | "sidebarMenu"
   | "agentInstall"
-  | "entryBridge";
+  | "entryBridge"
+  | "portAccessLimits";
 
 function isValidWebPort(value: string | number) {
   const port = Math.floor(Number(value));
@@ -4958,6 +4959,7 @@ function SystemInfoSection() {
   const [showPanelSslConfirm, setShowPanelSslConfirm] = useState(false);
   const [panelSslCountdown, setPanelSslCountdown] = useState(5);
   const [registrationEnabled, setRegistrationEnabled] = useState(true);
+  const [authCaptchaEnabled, setAuthCaptchaEnabled] = useState(true);
   const [twoFactorEnabled, setTwoFactorEnabled] = useState(false);
   const [lookingGlassUserEnabled, setLookingGlassUserEnabled] = useState(true);
   const [forwardProtocols, setForwardProtocols] = useState<ForwardProtocolSettings>(() => normalizeForwardProtocolSettings());
@@ -4967,6 +4969,7 @@ function SystemInfoSection() {
   const [githubAcceleratorUrlInput, setGithubAcceleratorUrlInput] = useState(defaultGithubAcceleratorUrl);
   const [agentPreferPanelInstall, setAgentPreferPanelInstall] = useState(false);
   const [ruleSwitchBridgeHours, setRuleSwitchBridgeHours] = useState(String(DEFAULT_RULE_SWITCH_BRIDGE_HOURS));
+  const [portAccessLimitsEnabled, setPortAccessLimitsEnabled] = useState(false);
   const [ddnsEnabled, setDdnsEnabled] = useState(false);
   const [ddnsProvider, setDdnsProvider] = useState<DdnsProvider>("disabled");
   const [ddnsTtl, setDdnsTtl] = useState("60");
@@ -5027,6 +5030,7 @@ function SystemInfoSection() {
       setPanelSslCertPem(settings.panelSsl?.certPem || "");
       setPanelSslKeyPem(settings.panelSsl?.keyPem || "");
       setRegistrationEnabled(settings.registrationEnabled ?? true);
+      setAuthCaptchaEnabled(settings.authCaptchaEnabled ?? true);
       setTwoFactorEnabled(!!settings.twoFactorEnabled);
       setLookingGlassUserEnabled(settings.lookingGlassUserEnabled ?? true);
       setAllowMultiDeviceLogin(!!settings.allowMultiDeviceLogin);
@@ -5041,6 +5045,7 @@ function SystemInfoSection() {
       setGithubAcceleratorUrlInput(settings.githubAccelerator?.url || "");
       setAgentPreferPanelInstall(!!settings.agentPreferPanelInstall);
       setRuleSwitchBridgeHours(String(normalizeRuleSwitchBridgeHours((settings as any).ruleSwitchBridgeHours)));
+      setPortAccessLimitsEnabled(!!(settings as any).portAccessLimitsEnabled);
       setDdnsEnabled(!!settings.ddns?.enabled);
       setDdnsProvider(isDdnsProvider(settings.ddns?.provider) ? settings.ddns.provider : "disabled");
       const ddnsUnifiedTtl = String(settings.ddns?.ttl || settings.ddns?.huaweicloudTtl || settings.ddns?.aliyunTtl || settings.ddns?.tencentcloudTtl || 60);
@@ -5328,7 +5333,12 @@ function SystemInfoSection() {
   };
 
   const handleSaveRegistration = () => {
-    return saveSystemSettings("registration", { registrationEnabled });
+    return saveSystemSettings("registration", { registrationEnabled, authCaptchaEnabled }, {
+      onSuccess: () => {
+        void utils.auth.emailConfig.invalidate();
+        void utils.auth.needsCaptcha.invalidate();
+      },
+    });
   };
 
   const handleSaveTwoFactor = () => {
@@ -5422,6 +5432,10 @@ function SystemInfoSection() {
       return false;
     }
     return saveSystemSettings("entryBridge", { ruleSwitchBridgeHours: value });
+  };
+
+  const handleSavePortAccessLimits = () => {
+    return saveSystemSettings("portAccessLimits", { portAccessLimitsEnabled });
   };
 
   const resetForwardProtocolDraft = () => {
@@ -5535,7 +5549,8 @@ function SystemInfoSection() {
     { id: "panelUrl", label: "面板地址", dirty: !!settings && panelUrlInput !== (settings.panelPublicUrl || ""), save: handleSavePanelUrl },
     { id: "networkTest", label: "网络测试", dirty: !!settings && lookingGlassUserEnabled !== (settings.lookingGlassUserEnabled ?? true), save: handleSaveLookingGlass },
     { id: "entryBridge", label: "换线过渡", dirty: !!settings && ruleSwitchBridgeHours !== String(normalizeRuleSwitchBridgeHours((settings as any).ruleSwitchBridgeHours)), save: handleSaveEntryBridge },
-    { id: "registration", label: "注册", dirty: !!settings && registrationEnabled !== (settings.registrationEnabled ?? true), save: handleSaveRegistration },
+    { id: "portAccessLimits", label: "接入限制", dirty: !!settings && portAccessLimitsEnabled !== !!(settings as any).portAccessLimitsEnabled, save: handleSavePortAccessLimits },
+    { id: "registration", label: "注册", dirty: !!settings && (registrationEnabled !== (settings.registrationEnabled ?? true) || authCaptchaEnabled !== (settings.authCaptchaEnabled ?? true)), save: handleSaveRegistration },
     { id: "twoFactor", label: "双重验证", dirty: !!settings && twoFactorEnabled !== !!settings.twoFactorEnabled, save: handleSaveTwoFactor },
     { id: "ddns", label: "DDNS", dirty: JSON.stringify(ddnsDraft) !== JSON.stringify(ddnsSaved), save: handleSaveDdns },
     {
@@ -5871,6 +5886,35 @@ function SystemInfoSection() {
           </div>
         </CardContent>
       </Card>
+      {/* 普通端口转发的单 IP 接入限制（server/portAccessLimits.ts），默认关，隧道规则一直照限。 */}
+      <Card className="border-border bg-card">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Shield className="h-4 w-4 text-primary" />
+            普通转发接入限制
+          </CardTitle>
+          <CardDescription>
+            隧道规则一直按用户的「单 IP 接入限制」执行；普通端口转发默认不限。
+            打开后普通转发也限制每个来源 IP 的 TCP 并发连接数（需要 Agent 2.2.229 及以上），只拦新连接，已建立的连接和转发进程不受影响。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <SettingList>
+            <SettingRow
+              asLabel
+              label="普通转发也执行单 IP 接入限制"
+              description="套餐默认每个 IP 最多 10 条连接，打开前请确认用户的限制值合适。"
+              control={<Checkbox aria-label="普通转发也执行单 IP 接入限制" checked={portAccessLimitsEnabled} onCheckedChange={(checked) => setPortAccessLimitsEnabled(checked === true)} />}
+            />
+          </SettingList>
+          <div className="flex justify-end">
+            <Button data-dock-save onClick={handleSavePortAccessLimits} disabled={isSavingSetting("portAccessLimits")}>
+              {isSavingSetting("portAccessLimits") && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              保存
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
       <div className="grid gap-4 @[58rem]:grid-cols-2">
         {/* 面板公开访问地址 */}
         <Card className="border-border bg-card">
@@ -6153,6 +6197,12 @@ function SystemInfoSection() {
                 label="开放注册"
                 description="关闭后仅管理员可添加用户。"
                 control={<Checkbox aria-label="开放注册" checked={registrationEnabled} onCheckedChange={setRegistrationEnabled} />}
+              />
+              <SettingRow
+                asLabel
+                label="登录 / 注册人机验证"
+                description="默认开启。只走 HTTP、浏览器跑不了验证组件时可以关掉；关掉后密码校验、登录失败限流和双重验证照旧。"
+                control={<Checkbox aria-label="登录 / 注册人机验证" checked={authCaptchaEnabled} onCheckedChange={setAuthCaptchaEnabled} />}
               />
             </SettingList>
             <div className="flex justify-end">

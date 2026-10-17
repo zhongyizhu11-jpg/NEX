@@ -65,7 +65,7 @@ const base: ReferralCommissionInput = {
   rateBps: 1000,
   baseAmountCents: 1000,
   currency: "CNY",
-  hasPriorCommission: false,
+  hasPriorPaidOrder: false,
 };
 
 test("返不返：每一种「不返」都有自己的理由", () => {
@@ -88,11 +88,18 @@ test("返不返：每一种「不返」都有自己的理由", () => {
 });
 
 test("首单 / 每单：首单模式只返第一次，每单模式次次返", () => {
-  const first = evaluateReferralCommission({ ...base, mode: "first", hasPriorCommission: true });
+  const first = evaluateReferralCommission({ ...base, mode: "first", hasPriorPaidOrder: true });
   assert.equal(first.eligible, false);
   assert.equal(first.eligible ? "" : first.reason, "first_only");
-  const recurring = evaluateReferralCommission({ ...base, mode: "recurring", hasPriorCommission: true });
+  const recurring = evaluateReferralCommission({ ...base, mode: "recurring", hasPriorPaidOrder: true });
   assert.equal(recurring.eligible, true);
+});
+
+test("绑定邀请人之前下的单：首单、每单模式都不返", () => {
+  for (const mode of ["first", "recurring"] as const) {
+    const decision = evaluateReferralCommission({ ...base, mode, orderedBeforeInviterBound: true });
+    assert.equal(decision.eligible ? "" : decision.reason, "before_binding", mode);
+  }
 });
 
 test("邀请码：去掉易混字符、大小写不敏感、链接里 invite / ref 都认", () => {

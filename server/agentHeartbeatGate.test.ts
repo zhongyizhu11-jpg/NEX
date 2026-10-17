@@ -246,9 +246,9 @@ test("resource rate limits use the strictest configured scope", () => {
 test("multi-tier rate limits only go to Agents that understand them", () => {
   const rateLimits = [{ scope: "user-7-host-3", in: 125_000, out: 250_000 }, { scope: "host-3", in: 1_250_000, out: 1_250_000 }];
   const base = { hostId: 3, rule: { forwardType: "realm", userId: 7 }, limitIn: 125_000, limitOut: 250_000, rateLimits };
-  assert.deepEqual(selectProtocolGuardRateLimit({ ...base, agentVersion: "2.2.229" }).rateLimits, rateLimits);
-  assert.equal("rateLimits" in selectProtocolGuardRateLimit({ ...base, agentVersion: "2.2.228" }), false);
-  assert.equal("rateLimits" in selectProtocolGuardRateLimit({ ...base, agentVersion: "2.2.229", rateLimits: [] }), false);
+  assert.deepEqual(selectProtocolGuardRateLimit({ ...base, agentVersion: "2.2.230" }).rateLimits, rateLimits);
+  assert.equal("rateLimits" in selectProtocolGuardRateLimit({ ...base, agentVersion: "2.2.229" }), false);
+  assert.equal("rateLimits" in selectProtocolGuardRateLimit({ ...base, agentVersion: "2.2.230", rateLimits: [] }), false);
 });
 
 test("running process-backed Guards remain in desired reconciliation", () => {

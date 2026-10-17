@@ -14,8 +14,47 @@ import {
   buildKernelForwardCmds,
   buildNftForwardCmds,
   buildNftTransitionCleanupCmds,
+  gostRuntimeApiConfig,
+  gostRuntimeApiExecStart,
+  restartManagedServiceIfConfigChangedCmd,
   restartMimicServiceIfConfigChangedCmd,
+  syncGostServiceIfConfigChangedCmd,
 } from "./agentActionCommands";
+import { AGENT_CAPABILITY_GOST_API_SYNC, hostSupportsGostApiSync } from "../shared/gostRuntimeApi";
+
+test("GOST API sync uses root-only Unix sockets and keeps the restart command as fallback", () => {
+  for (const [service, configPath] of [
+    ["forwardx-runtime", "/etc/forwardx/runtime/gost.json"],
+    ["forwardx-tunnel-runtime", "/etc/forwardx/runtime/tunnel-gost.json"],
+  ]) {
+    const socket = `/run/forwardx-agent/gost-api/${service}.sock`;
+    assert.deepEqual(gostRuntimeApiConfig(service), { addr: `unix://${socket}` });
+    const command = syncGostServiceIfConfigChangedCmd(service, configPath);
+    const [marker, ...rest] = command.split("\n");
+    assert.equal(marker, `# forwardx-gost-api-sync ${service} ${configPath}`);
+    // The fallback is byte-for-byte the old restart command, so old Agents behave exactly as before.
+    assert.equal(rest.join("\n"), restartManagedServiceIfConfigChangedCmd(service, configPath));
+    const execStart = gostRuntimeApiExecStart("/usr/local/bin/forwardx-runtime", service, configPath);
+    assert.ok(execStart.startsWith("/bin/sh -c '"));
+    assert.ok(execStart.includes("mkdir -p -m 700 /run/forwardx-agent/gost-api && chmod 700 /run/forwardx-agent/gost-api"));
+    assert.ok(execStart.includes(`rm -f ${socket} && umask 177 && exec /usr/local/bin/forwardx-runtime -C ${configPath}'`));
+    // systemd would substitute $VAR inside ExecStart; never expose the API on TCP.
+    assert.ok(!(execStart + command).includes("127.0.0.1"));
+    assert.ok(!execStart.includes("$"));
+  }
+  assert.throws(() => gostRuntimeApiConfig("other"));
+  assert.throws(() => gostRuntimeApiConfig("__proto__"));
+  assert.throws(() => syncGostServiceIfConfigChangedCmd("forwardx-runtime", "/tmp/config"));
+  assert.throws(() => gostRuntimeApiExecStart("/usr/local/bin/x; rm -rf /", "forwardx-runtime", "/etc/forwardx/runtime/gost.json"));
+});
+
+test("GOST API sync is enabled only for capable Agents", () => {
+  assert.equal(hostSupportsGostApiSync({ agentVersion: "2.2.229", agentCapabilities: JSON.stringify([AGENT_CAPABILITY_GOST_API_SYNC]) }), true);
+  assert.equal(hostSupportsGostApiSync({ agentVersion: "2.2.229", agentCapabilities: "[]" }), false);
+  // A downgraded Agent may still have the stored capability; the version gate rejects it.
+  assert.equal(hostSupportsGostApiSync({ agentVersion: "2.2.228", agentCapabilities: JSON.stringify([AGENT_CAPABILITY_GOST_API_SYNC]) }), false);
+  assert.equal(hostSupportsGostApiSync(null), false);
+});
 
 test("nft rule comments keep nft string quotes after shell parsing", () => {
   const commands = buildNftForwardCmds({

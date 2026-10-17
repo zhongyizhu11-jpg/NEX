@@ -15,8 +15,9 @@ import { dispatchReminders, type PendingReminder } from "./reminderDispatch";
 import { runDiscordDigests, runTelegramDigests, sendTelegramMessage } from "./telegramBot";
 import { discordNotifier } from "./discordNotify";
 import { isDiscordBotReadyFromSettings, readDiscordBotSettings } from "./discordSettings";
-import { recordTunnelHopTestResult } from "./tunnelHopTestState";
-import { recordHopTestResult } from "./hopTestState";
+import { recoverManualTunnelProbeBatches, settleManualTunnelProbeBatch } from "./tunnelManualProbe";
+import { recoverManualForwardChainBatches, settleManualForwardChainBatch } from "./forwardChainManualProbe";
+import { forwardTestRequestMessage, isDurableForwardTestBatchId, TUNNEL_PROBE_BATCH_PREFIX } from "./repositories/forwardTestRepository";
 import { primeHostStatusNotifier, sweepOfflineHostsAndNotify } from "./hostStatusNotifier";
 import { normalizeLinkProbeMethod } from "@shared/latencyProbe";
 import { clearRuleLatencyQueryCache } from "./ruleLatencyQueryCache";
@@ -28,10 +29,12 @@ import { reconcileHostDdnsRecords } from "./hostDdns";
 import { reconcileRuleEntryDomains } from "./ruleEntryDomain";
 import { checkPanelUpdateTask } from "./_core/systemRouter";
 import { createNonOverlappingScheduledTask } from "./scheduledTask";
+import { cleanOldLatencyDailyStats, rollupLatencyDailyStats } from "./repositories/latencyDailyRepository";
 import { runIpChangeTick } from "./ipChange/runtime";
 import { optimizeSqliteDatabase } from "./dbRuntime";
 import { healAutoStoppedRules } from "./forwardRuleAutoRecovery";
 import { sweepExpiredRuleEntryBridges } from "./ruleEntryBridges";
+import { reconcileRuleLimits } from "./ruleLimits";
 import {
   SELF_TEST_TIMEOUT_SECONDS,
   selfTestTimeoutSeconds,
@@ -52,11 +55,13 @@ type TimedOutForwardTest = {
   ruleId: number;
   hostId: number;
   message: string | null;
+  requestMessage?: string | null;
+  batchId?: string | null;
   timeoutSeconds?: number;
 };
 
 function timeoutSecondsForForwardTest(test: TimedOutForwardTest) {
-  return selfTestTimeoutSeconds(parseSelfTestMeta(test.message));
+  return selfTestTimeoutSeconds(parseSelfTestMeta(forwardTestRequestMessage(test)));
 }
 
 const UPDATE_AUTO_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
@@ -230,6 +235,7 @@ export async function runExpirationCheck() {
 
 async function settleTimedOutTunnelTests(timedOutTests: TimedOutForwardTest[], defaultTimeoutSeconds: number) {
   const settledTunnelIds = new Set<number>();
+  const settledBatchIds = new Set<string>();
 
   const settleTunnel = async (tunnelId: number, message: string, logSuffix: string, timeoutSeconds: number) => {
     if (!Number.isFinite(tunnelId) || tunnelId <= 0 || settledTunnelIds.has(tunnelId)) return;
@@ -239,36 +245,20 @@ async function settleTimedOutTunnelTests(timedOutTests: TimedOutForwardTest[], d
     appendPanelLog("warn", `[TunnelTest] tunnel=${tunnelId} timeout after ${timeoutSeconds}s ${logSuffix}`);
   };
 
-  const settleTunnelAggregate = async (
-    aggregate: NonNullable<ReturnType<typeof recordTunnelHopTestResult>>,
-    message: string,
-    logSuffix: string,
-  ) => {
-    const tunnelId = Number(aggregate.tunnelId);
-    if (!Number.isFinite(tunnelId) || tunnelId <= 0 || settledTunnelIds.has(tunnelId)) return;
-    settledTunnelIds.add(tunnelId);
-    if (aggregate.success) await db.updateTunnelRunningStatus(tunnelId, true);
-    await db.updateTunnelTestResult(tunnelId, {
-      status: aggregate.success ? "success" : "failed",
-      latencyMs: aggregate.success ? aggregate.latencyMs : null,
-      message,
-    });
-    await db.insertTunnelLatencyStat({
-      tunnelId,
-      latencyMs: aggregate.success ? aggregate.latencyMs : null,
-      isTimeout: !aggregate.success,
-    }, { message });
-    appendPanelLog(
-      aggregate.success ? "info" : "warn",
-      `[TunnelTest] tunnel=${tunnelId} timeout aggregation success=${aggregate.success} ${logSuffix}`,
-    );
-  };
-
   for (const test of timedOutTests) {
     const timeoutSeconds = Number(test.timeoutSeconds) > 0
       ? Number(test.timeoutSeconds)
       : defaultTimeoutSeconds;
-    const meta = parseSelfTestMeta(test.message);
+    // Durable multi-hop batches: the timed-out row is final now; aggregate the
+    // batch from the database if this was its last outstanding hop.
+    if (isDurableForwardTestBatchId(test.batchId)) {
+      if (settledBatchIds.has(test.batchId)) continue;
+      settledBatchIds.add(test.batchId);
+      if (test.batchId.startsWith(TUNNEL_PROBE_BATCH_PREFIX)) await settleManualTunnelProbeBatch(test.batchId);
+      else await settleManualForwardChainBatch(test.batchId);
+      continue;
+    }
+    const meta = parseSelfTestMeta(forwardTestRequestMessage(test));
     if (!meta) continue;
 
     if (meta.kind === "tunnel") {
@@ -282,85 +272,22 @@ async function settleTimedOutTunnelTests(timedOutTests: TimedOutForwardTest[], d
     }
 
     if (meta.kind === "tunnel-hop") {
+      // A hop row without a durable batch was created by a panel version that
+      // kept batches in memory; that batch is gone, so fail the tunnel test.
       const hopLabel = String((meta as any).hopLabel || "hop");
-      const routeLabel = typeof (meta as any).routeLabel === "string" ? (meta as any).routeLabel : null;
-      const groupKey = typeof (meta as any).groupKey === "string" ? (meta as any).groupKey : null;
-      const groupLabel = typeof (meta as any).groupLabel === "string" ? (meta as any).groupLabel : null;
-      const latencyMode = tunnelHopLatencyMode(meta as any);
-      const modeText = tunnelHopModeText(latencyMode);
-      const message = `${modeText.label}超时：${hopLabel} 未在 ${timeoutSeconds} 秒内上报结果`;
-      const aggregate = recordTunnelHopTestResult(Number(test.id), {
-        success: false,
-        latencyMs: null,
-        message,
-        hopLabel,
-        routeLabel,
-        groupKey,
-        groupLabel,
-      }, {
-        latencyMode,
-        successPrefix: modeText.successPrefix,
-        failurePrefix: modeText.failurePrefix,
-        totalLabel: modeText.totalLabel,
-      });
-      if (aggregate) {
-        const aggregateMessage = structuredLinkTestMessage({
-          kind: modeText.kind,
-          tunnelId: aggregate.tunnelId,
-          message: aggregate.message,
-          details: aggregate.details,
-          totalLatencyMs: aggregate.latencyMs,
-        });
-        await settleTunnelAggregate(aggregate, aggregateMessage, `test=${test.id} aggregate=true`);
-      } else {
-        appendPanelLog("warn", `[TunnelTest] tunnel=${meta.tunnelId} branch timeout test=${test.id} host=${test.hostId} hop=${hopLabel}`);
-      }
+      const modeText = tunnelHopModeText(tunnelHopLatencyMode(meta as any));
+      await settleTunnel(
+        meta.tunnelId,
+        `${modeText.label}超时：${hopLabel} 未在 ${timeoutSeconds} 秒内上报结果`,
+        `test=${test.id} host=${test.hostId} legacy-hop=${hopLabel}`,
+        timeoutSeconds,
+      );
+      continue;
     }
 
     if (meta.kind === "forward-chain") {
       const hopLabel = String((meta as any).hopLabel || "hop");
-      const routeLabel = typeof (meta as any).routeLabel === "string" ? (meta as any).routeLabel : null;
-      const latencyMode = (meta as any).latencyMode === "multi-source-remaining-path"
-        ? "multi-source-remaining-path"
-        : (meta as any).latencyMode === "remaining-path" ? "remaining-path" : "sum";
-      const message = `转发链逐跳测试超时：${hopLabel} 未在 ${timeoutSeconds} 秒内上报结果`;
-      const aggregate = recordHopTestResult(Number(test.id), {
-        success: false,
-        latencyMs: null,
-        message,
-        hopLabel,
-        routeLabel,
-        method: normalizeLinkProbeMethod((meta as any).method),
-      }, {
-        successPrefix: "转发链逐跳测试成功",
-        failurePrefix: "转发链逐跳测试失败",
-        latencyMode,
-      });
-      if (aggregate) {
-        const aggregateMessage = structuredLinkTestMessage({
-          kind: "forward-chain-hop-summary",
-          groupId: aggregate.ownerId,
-          message: aggregate.message,
-          details: aggregate.details,
-          totalLatencyMs: aggregate.latencyMs,
-        });
-        await db.updateForwardTestResult(Number(test.id), {
-          status: "failed",
-          listenOk: false,
-          targetReachable: false,
-          forwardOk: false,
-          latencyMs: null,
-          message: aggregateMessage,
-        });
-        await db.insertForwardGroupLatencyStat({
-          groupId: aggregate.ownerId,
-          latencyMs: null,
-          isTimeout: true,
-        });
-        appendPanelLog("warn", `[SelfTest] forward-chain group=${aggregate.ownerId} timeout aggregate=true test=${test.id}`);
-      } else {
-        appendPanelLog("warn", `[SelfTest] forward-chain group=${meta.groupId} timeout test=${test.id} host=${test.hostId} hop=${hopLabel}`);
-      }
+      appendPanelLog("warn", `[SelfTest] forward-chain group=${meta.groupId} timeout test=${test.id} host=${test.hostId} hop=${hopLabel}`);
     }
   }
 }
@@ -375,7 +302,8 @@ export async function runSelfTestTimeoutSweep() {
     if (timedOutTests.length > 0) {
       await settleTimedOutTunnelTests(timedOutTests, SELF_TEST_TIMEOUT_SECONDS);
       for (const test of timedOutTests) {
-        const meta = parseSelfTestMeta(test.message);
+        if (isDurableForwardTestBatchId(test.batchId)) continue;
+        const meta = parseSelfTestMeta(forwardTestRequestMessage(test));
         if (meta?.kind === "tunnel" || meta?.kind === "tunnel-hop") continue;
         if (!meta || meta.kind === "forward-via-tunnel") {
           await db.insertTcpingStat({
@@ -398,13 +326,18 @@ export async function runSelfTestTimeoutSweep() {
       }
       console.log(`[Scheduler] Self-test timeout sweep: ${timedOutTests.length} test(s) marked as timeout`);
     }
+    await recoverManualTunnelProbeBatches();
+    await recoverManualForwardChainBatches();
   } catch (error) {
     console.error("[Scheduler] Self-test timeout sweep error:", error);
   }
 }
 
-async function recoverPendingSelfTestSweep() {
+export async function recoverPendingSelfTestSweep() {
   try {
+    // Batches whose last report arrived just before the panel exited.
+    await recoverManualTunnelProbeBatches();
+    await recoverManualForwardChainBatches();
     if (await db.hasActiveForwardTests()) selfTestSweepActivity.markActive();
   } catch (error) {
     console.error("[Scheduler] Self-test recovery check error:", error);
@@ -433,6 +366,8 @@ export async function runTcpingCleanup() {
     // 线路组路径质量历史留 7 天（一分钟一行，比延迟明细稀，留得长一点画周走势）。
     ["route_path_quality_stats", () => db.cleanOldRoutePathQualityStats(db.ROUTE_PATH_QUALITY_RETENTION_HOURS)],
     ["host_probe_service_stats", () => db.cleanOldHostProbeServiceStats(72)],
+    // 30 天延迟历史的按天汇总（每个对象每天一行），见 shared/latencyHistory.ts。
+    ["latency_daily_stats", () => cleanOldLatencyDailyStats()],
     ["address_geo_cache", () => cleanOldAddressGeoCache()],
     // 失效超过 7 天的登录会话（过期或已撤销），只有「未撤销且未过期」的行会被读取。
     ["auth_sessions", () => pruneStaleAuthSessions(7)],
@@ -1105,6 +1040,10 @@ export function startScheduler() {
     });
     if (pruned > 0) console.log(`[Scheduler] Pruned ${pruned} stale reminder marker(s)`);
   }, { slowTaskMs: 15_000 });
+  // 把最近的原始延迟样本按天汇总进 latency_daily_stats（增量、带水位，见 latencyDailyRepository.ts）。
+  const latencyDailyRollup = createNonOverlappingScheduledTask("latency daily rollup", async () => {
+    await rollupLatencyDailyStats();
+  }, { slowTaskMs: 15_000 });
   const forwardingMaintenance = createNonOverlappingScheduledTask("forward-group and DDNS maintenance", async () => {
     await runForwardGroupFailover();
     await runHostDdnsReconcile();
@@ -1129,6 +1068,17 @@ export function startScheduler() {
       await sweepExpiredRuleEntryBridges();
     } catch (error) {
       console.error("[Scheduler] Rule entry bridge expiry error:", error);
+    }
+  });
+  /*
+    单条规则的到期 / 流量额度（server/ruleLimits.ts）：流量上报时已经即时判定，这里补到期
+    （没有流量也要按时停）和面板重启前没做完的。只扫设过额度 / 到期 / 记过原因的规则。
+  */
+  const ruleLimitSweep = createNonOverlappingScheduledTask("rule quota and expiration", async () => {
+    try {
+      await reconcileRuleLimits();
+    } catch (error) {
+      console.error("[Scheduler] Rule limit sweep error:", error);
     }
   });
   // 自动换 IP（插件 auto-ip-change）：冷却到期、到阈值补一次自动更换、插件启停后推探测任务；第一轮先把重启打断的标成「结果不确定」。
@@ -1207,6 +1157,7 @@ export function startScheduler() {
 
   repeatAfter(hostStatusSweep, 30 * 1000, 5_000);
   repeatAfter(ipChangeTick, 30 * 1000, 12_000);
+  repeatAfter(ruleLimitSweep, 30 * 1000, 7_000);
   startSelfTestSweepTimer(async () => { await selfTestTimeoutSweep(); });
   void recoverPendingSelfTestSweep();
   // Agent probe reports and host state transitions trigger failover work.
@@ -1235,6 +1186,7 @@ export function startScheduler() {
   repeatAfter(createNonOverlappingScheduledTask("panel events maintenance", runPanelEventsDailyMaintenance, { slowTaskMs: 30_000 }), 24 * 60 * 60 * 1000, 3 * 60_000);
   repeatAfter(updateCheck, UPDATE_AUTO_CHECK_INTERVAL_MS, 45_000);
   repeatAfter(historyCleanup, 60 * 60 * 1000, 2 * 60_000);
+  repeatAfter(latencyDailyRollup, 10 * 60 * 1000, 75_000);
   // 没定到位的主机五分钟看一次；真正的重试间隔由 hostGeo 里的退避（10 分钟起、封顶 6 小时）决定。
   repeatAfter(hostGeoSweep, 5 * 60 * 1000, 90_000);
   // 第五套主题那批功能里的两个定时任务：公开状态页的可用率采样、异地自动备份（各自管自己的节奏）。

@@ -157,13 +157,13 @@ export default function ResourceAlertSettings(_props: Record<string, never>) {
               <SettingRow
                 asLabel
                 label="内存耗尽（OOM）"
-                description="内核 OOM killer 杀了进程时告警。需要 Agent 2.2.229 以上。"
+                description="内核 OOM killer 杀了进程时告警。需要 Agent 2.2.230 以上。"
                 control={<Checkbox aria-label="内存耗尽告警" checked={draft.oomAlert} onCheckedChange={(checked) => update("oomAlert", checked === true)} />}
               />
               <SettingRow
                 asLabel
                 label="进程崩溃"
-                description="转发、隧道运行时等 forwardx 服务崩溃后被自动重启时告警。需要 Agent 2.2.229 以上。"
+                description="转发、隧道运行时等 forwardx 服务崩溃后被自动重启时告警。需要 Agent 2.2.230 以上。"
                 control={<Checkbox aria-label="进程崩溃告警" checked={draft.crashAlert} onCheckedChange={(checked) => update("crashAlert", checked === true)} />}
               />
               <SettingRow

@@ -102,13 +102,18 @@ import {
   type HostPortReservation,
 } from "../portReservations";
 import { repairPortForwardRuleHostReferences } from "../portForwardRuleHosts";
+import { assertNoDirectSelfForwardLoop } from "../selfForwardLoop";
 import { summarizeForwardGroupRuntime } from "../forwardGroupRuntimeStatus";
 import { dbBool, sqlBool } from "./repositoryUtils";
 import { reorderWithinSortOrderScope } from "./sortOrderSlots";
 import { normalizeExitGroupStrategy } from "@shared/exitStrategy";
-import { MAX_FORWARD_GROUP_MEMBERS } from "../../shared/forwardGroup";
+import { MAX_FORWARD_GROUP_MEMBERS, forwardGroupRouteMembers } from "../../shared/forwardGroup";
 import { routeGroupForwardTypeSupported, routeGroupTunnelModeSupported } from "../../shared/routeGroup";
 import { getLastAuthenticatedAgentActivity } from "../agentActivity";
+import { HOST_TRAFFIC_FAILOVER_EXCLUDED_MESSAGE, hostTrafficExcluded } from "../../shared/hostTrafficPolicy";
+import { getTrafficExcludedHostIds } from "../hostTrafficPolicy";
+import { planTunnelTrafficParticipation } from "../hostTrafficRuntimePlan";
+import { isTunnelRelayFailover } from "../../shared/tunnelRelay";
 import {
   getPresenceCapableHostLivenessSnapshot,
   primePresenceCapableHosts,
@@ -380,14 +385,36 @@ function freshForwardGroupRuleProbe(stat: any, now: Date) {
 type MemberAgentLiveness = {
   hostId: number;
   available: boolean;
+  /** 主机流量到了故障转移阈值（shared/hostTrafficPolicy.ts）：不等离线宽限期，直接换下一个成员。 */
+  trafficExcluded: boolean;
   failureSince: Date | null;
   lastOfflineAt: number | null;
   signature: string;
 };
 
+/**
+ * 隧道成员是否因为流量暂停而走不通：入口组全被暂停、固定出口 / 链式中转被暂停，都等于这条隧道
+ * 现在用不了（和心跳里生成的运行时副本同一套判断，见 hostTrafficRuntimePlan.ts）。
+ */
+async function tunnelMemberTrafficExcluded(member: any) {
+  if (member?.memberType !== "tunnel") return false;
+  const excluded = await getTrafficExcludedHostIds();
+  if (excluded.size === 0) return false;
+  const tunnel = await getTunnelById(Number(member.tunnelId)).catch(() => null);
+  if (!tunnel) return false;
+  const [hops, exits] = await Promise.all([getTunnelHops(Number(tunnel.id)).catch(() => []), getTunnelExitNodes(Number(tunnel.id)).catch(() => [])]);
+  const plan = planTunnelTrafficParticipation(tunnel, hops as any[], exits as any[], [Number((tunnel as any).entryHostId)], excluded);
+  if (!dbBool(plan.tunnel.isEnabled) && dbBool((tunnel as any).isEnabled)) return true;
+  // 固定出口的隧道成员没有别的出口可换。
+  if (!Number((tunnel as any).exitGroupId) && !dbBool((tunnel as any).loadBalanceEnabled) && excluded.has(Number((tunnel as any).exitHostId))) return true;
+  if (!isTunnelRelayFailover(tunnel, hops as any[])) return (hops as any[]).slice(1, -1).some((hop: any) => excluded.has(Number(hop.hostId)));
+  return false;
+}
+
 async function resolveMemberAgentLiveness(member: any, nowMs = Date.now()): Promise<MemberAgentLiveness> {
   const hostId = await memberEntryHostId(member).catch(() => 0);
   const host = hostId > 0 ? await getHostById(hostId).catch(() => null) : null;
+  const trafficExcluded = hostTrafficExcluded(host as any) || await tunnelMemberTrafficExcluded(member).catch(() => false);
   const fastState = hostId > 0 ? getPresenceCapableHostLivenessSnapshot(hostId) : null;
   const authenticatedAt = hostId > 0 ? getLastAuthenticatedAgentActivity(hostId) || 0 : 0;
   const heartbeatAt = toDate((host as any)?.lastHeartbeat)?.getTime() || 0;
@@ -408,7 +435,7 @@ async function resolveMemberAgentLiveness(member: any, nowMs = Date.now()): Prom
   // Legacy hosts have no such timer, so their last known activity keeps the
   // existing 150-second compatibility window. A lone DB status flag is not a
   // hard health signal while that activity is still fresh.
-  const available = !!host && (fastState
+  const available = !!host && !trafficExcluded && (fastState
     ? !confirmedOffline
     : legacyActivityRecently);
   const failureAt = lastSeenAt > 0 ? Math.min(lastSeenAt, nowMs) : Math.min(lifecycleAt, nowMs);
@@ -416,11 +443,13 @@ async function resolveMemberAgentLiveness(member: any, nowMs = Date.now()): Prom
   return {
     hostId,
     available,
+    trafficExcluded,
     failureSince: available ? null : new Date(failureAt),
     lastOfflineAt,
     signature: [
       hostId,
       available ? 1 : 0,
+      trafficExcluded ? 1 : 0,
       confirmedOffline ? 1 : 0,
       Number(fastState?.transitionEpoch || 0),
       lastOfflineAt || 0,
@@ -1848,6 +1877,9 @@ async function hydrateForwardGroupMemberEntryAddresses(
       ddnsEnabled: hosts.ddnsEnabled,
       ddnsDomain: hosts.ddnsDomain,
       isOnline: hosts.isOnline,
+      trafficFailoverEnabled: hosts.trafficFailoverEnabled,
+      trafficFailoverExcluded: hosts.trafficFailoverExcluded,
+      trafficLimit: hosts.trafficLimit,
       lastHeartbeat: hosts.lastHeartbeat,
     }).from(hosts).where(inArray(hosts.id, hostIds))
     : [];
@@ -1949,6 +1981,8 @@ async function firstAvailableResolvableMember(members: any[], group: any, record
     const value = await memberDdnsValue(member, recordType).catch(() => "");
     if (!value) continue;
     const liveness = await resolveMemberAgentLiveness(member, now);
+    // 流量到阈值的成员直接跳过，不像离线那样还给当前成员留一段宽限期。
+    if (liveness.trafficExcluded) continue;
     if (!liveness.available) {
       const failoverAt = (liveness.failureSince?.getTime() || now) + failoverMs;
       if (Number(member.id || 0) === activeMemberId && now < failoverAt) {
@@ -2050,6 +2084,37 @@ async function memberListenHostIds(member: any): Promise<number[]> {
   return tunnel ? tunnelRuleListenHostIds(tunnel) : [];
 }
 
+/**
+ * Which listener a failover-group rule's self-test must probe: the child rule
+ * of the member that currently carries the traffic (activeMemberId), never the
+ * template's historical host metadata. Without an active member and without a
+ * DDNS domain any live member's listener is equivalent. Throws instead of
+ * testing a standby while the actual active route is offline.
+ */
+export async function getForwardGroupRuleForSelfTest(template: any, group: any) {
+  if (!group || !dbBool(group.isEnabled)) throw new Error("转发组不存在或已停用");
+  if (forwardGroupModeOf(group) !== "failover") throw new Error("此转发组不支持单入口链路测试");
+  const members = forwardGroupRouteMembers(group);
+  const activeMemberId = Number(group.activeMemberId || 0);
+  const candidates = activeMemberId > 0
+    ? members.filter((member) => Number(member.id) === activeMemberId)
+    : group.domain ? [] : members;
+  const children = await getForwardGroupChildRulesForTemplate(Number(template.id)) as any[];
+  for (const member of candidates) {
+    const liveness = await resolveMemberAgentLiveness(member);
+    if (!liveness.available) continue;
+    const tunnelId = member.memberType === "tunnel" ? Number(member.tunnelId || 0) : 0;
+    const child = children.find((rule) => !dbBool(rule.pendingDelete)
+      && dbBool(rule.isEnabled)
+      && Number(rule.forwardGroupId) === Number(group.id)
+      && Number(rule.forwardGroupMemberId) === Number(member.id)
+      && Number(rule.hostId) === liveness.hostId
+      && Number(rule.tunnelId || 0) === tunnelId);
+    if (child) return { rule: child, memberId: Number(member.id), groupId: Number(group.id) };
+  }
+  throw new Error("转发组当前没有可测试的活动入口，请等待故障切换完成后重试");
+}
+
 export async function getForwardGroupDefaultHostId(groupId: number) {
   const group = await getForwardGroupById(groupId);
   if (!group) throw new Error("Forward group does not exist");
@@ -2070,6 +2135,62 @@ export async function getForwardGroupDefaultHostId(groupId: number) {
     if (hostId) return hostId;
   }
   throw new Error("Forward group has no valid entry agent");
+}
+
+/**
+ * 删主机前修转发组模板上过期的主机引用（照上游 poouo/Forwardx 的
+ * repairForwardGroupTemplateHostReferencesForHost 移植）。
+ *
+ * 故障转移 / 转发链的模板从不下发到 Agent，hostId 只是元数据；组里的成员换掉以后它还指着老机器，
+ * 删那台老机器时 getHostRuleDeleteBlockers 会把这条模板算成「转发组规则引用」挡住删除，而用户
+ * 在界面上根本找不到这条引用。这里只把「这台机器已经不是组里成员」的模板改指向组里现在的
+ * 默认入口机：不动子规则、不重铺运行时。端口转发的模板由 repairPortForwardRuleHostReferences 修，
+ * 入口组 / 出口组没有模板。组里一台可用的机器都没有时保持原样（照上游）。
+ */
+export async function repairForwardGroupTemplateHostReferencesForHost(hostIdValue: number) {
+  const hostId = Number(hostIdValue || 0);
+  const db = await getDb();
+  if (!db || !Number.isInteger(hostId) || hostId <= 0) return 0;
+  const rows = await db.selectDistinct({ groupId: forwardRules.forwardGroupId })
+    .from(forwardRules)
+    .where(and(
+      eq(forwardRules.hostId, hostId),
+      eq(forwardRules.isForwardGroupTemplate, true),
+      eq(forwardRules.pendingDelete, false),
+      isNotNull(forwardRules.forwardGroupId),
+    ));
+  let repaired = 0;
+  for (const row of rows as any[]) {
+    const groupId = Number(row.groupId || 0);
+    if (groupId <= 0) continue;
+    repaired += await withKeyedTaskLock(`forward-group-sync:${groupId}`, async () => {
+      const group = await getForwardGroupById(groupId);
+      if (!group) return 0;
+      const groupMode = forwardGroupModeOf(group);
+      if (isCollectionGroupMode(groupMode) || groupMode === "port") return 0;
+      const memberHostIds = new Set<number>();
+      for (const member of [...sortedMembers(group), ...await entryGroupMembersFor(group)]) {
+        const memberHostId = await memberEntryHostId(member).catch(() => 0);
+        if (memberHostId > 0) memberHostIds.add(memberHostId);
+      }
+      if (memberHostIds.has(hostId)) return 0;
+      const nextHostId = await getForwardGroupDefaultHostId(groupId).catch(() => 0);
+      if (!nextHostId || nextHostId === hostId) return 0;
+      const stale = (await getForwardGroupTemplateRules(groupId) as any[])
+        .filter((rule) => Number(rule.hostId) === hostId)
+        .map((rule) => Number(rule.id));
+      if (stale.length === 0) return 0;
+      await db.update(forwardRules).set({ hostId: nextHostId, updatedAt: nowDate() } as any).where(and(
+        inArray(forwardRules.id, stale),
+        eq(forwardRules.forwardGroupId, groupId),
+        eq(forwardRules.isForwardGroupTemplate, true),
+        eq(forwardRules.pendingDelete, false),
+      ));
+      appendPanelLog("info", `[ForwardGroup] template host references repaired group=${groupId} from=${hostId} to=${nextHostId} count=${stale.length}`);
+      return stale.length;
+    });
+  }
+  return repaired;
 }
 
 export async function getForwardGroupRuleEntryHostIds(groupId: number) {
@@ -3760,6 +3881,56 @@ export async function updateForwardGroup(id: number, data: Partial<InsertForward
   }
 }
 
+/**
+ * 换成员前查死循环（和 rules.crud.ts 新建 / 编辑规则时同一个检查，见 server/selfForwardLoop.ts）：
+ * 新加入（或重新启用）的主机会按模板端口铺子规则 —— 主机地址正好是规则目标、端口又相同，就是转回自己。
+ * - 端口转发 / 故障转移（主机型）组自己加成员：查这个组的模板；
+ * - 入口组加主机：查挂这个入口组的端口转发的模板（转发链的入口只转给下一跳，不查，和 rules.crud 一致）。
+ * 停用状态加进来的成员不铺子规则，等它被启用时再查。
+ */
+async function assertMemberChangeHasNoSelfForwardLoop(group: any, groupMode: ForwardGroupMode, existing: any[], nextMembers: any[]) {
+  const previousEnabledHostIds = new Set(existing
+    .filter((member) => member.memberType === "host" && dbBool(member.isEnabled, true))
+    .map((member) => Number(member.hostId || 0)));
+  const addedHostIds = Array.from(new Set(nextMembers
+    .filter((member) => member.memberType === "host" && dbBool(member.isEnabled, true))
+    .map((member) => Number(member.hostId || 0))
+    .filter((hostId) => hostId > 0 && !previousEnabledHostIds.has(hostId))));
+  if (addedHostIds.length === 0) return;
+  const groupIds: number[] = [];
+  if (groupMode === "entry") {
+    const db = await getDb();
+    const dependents = await db.select({ id: forwardGroups.id, groupMode: forwardGroups.groupMode, groupType: forwardGroups.groupType })
+      .from(forwardGroups)
+      .where(eq(forwardGroups.entryGroupId, Number(group.id)));
+    for (const dependent of dependents as any[]) {
+      if (forwardGroupModeOf(dependent) === "port" && String(dependent.groupType || "host") !== "tunnel") groupIds.push(Number(dependent.id));
+    }
+  } else if (groupMode !== "chain" && !isCollectionGroupMode(groupMode) && String(group?.groupType || "host") !== "tunnel") {
+    groupIds.push(Number(group.id));
+  }
+  for (const groupId of groupIds) {
+    const templates = await getForwardGroupTemplateRules(groupId) as any[];
+    if (templates.length === 0) continue;
+    for (const hostId of addedHostIds) {
+      const host = await getHostById(hostId);
+      for (const template of templates) {
+        try {
+          assertNoDirectSelfForwardLoop({
+            host,
+            sourcePort: Number(template.sourcePort),
+            targetIp: template.targetIp,
+            targetPort: Number(template.targetPort),
+            tunnelId: null,
+          });
+        } catch {
+          throw new Error(`成员主机「${(host as any)?.name || hostId}」加入后，规则「${template.name || template.id}」会在它上面把 ${template.sourcePort} 端口转发回自己的同一端口，造成转发死循环。请先修改规则目标或端口`);
+        }
+      }
+    }
+  }
+}
+
 export async function replaceForwardGroupMembers(
   groupId: number,
   members: ForwardGroupMemberInput[],
@@ -3779,6 +3950,7 @@ export async function replaceForwardGroupMembers(
     .map((member) => Number(member.hostId || 0))
     .filter((hostId) => Number.isFinite(hostId) && hostId > 0);
   const keepKeys = new Set(normalizedMembers.map((m) => `${m.memberType}:${m.memberType === "host" ? m.hostId : m.tunnelId}`));
+  await assertMemberChangeHasNoSelfForwardLoop(group, groupMode, existing as any[], normalizedMembers as any[]);
   if (groupMode === "entry" && dbBool((group as any)?.isEnabled)) {
     // 新加入（或重新启用）的入口组主机会替组里所有隧道的规则监听 sourcePort，
     // 写成员之前先查端口，冲突就整体拒绝，别写一半。
@@ -4151,7 +4323,11 @@ async function evaluateMemberHealth(member: any, group: any) {
   let allRuleHealthAgentFinal = false;
   let nextProbeExpiryAt: number | null = null;
 
-  if (!dbBool(member?.isEnabled)) {
+  if (agentLiveness.trafficExcluded) {
+    message = HOST_TRAFFIC_FAILOVER_EXCLUDED_MESSAGE;
+    agentFailureFinal = true;
+    observedFailureSince = now;
+  } else if (!dbBool(member?.isEnabled)) {
     message = "Member disabled";
   } else if (childRules.length === 0) {
     message = "No forwarding rule is using this group yet";
@@ -4375,6 +4551,37 @@ async function preserveForwardGroupDdns(
   const groupId = Number(group.id);
   const domain = String(group.domain || "").trim();
   const recordType = normalizeForwardGroupRecordType(group.recordType);
+  /*
+    普通的健康故障可以保留最后一条解析等成员恢复；但流量到阈值、被暂停的主机不行 ——
+    保留它就等于继续往一台快被机房停掉的机器上导流。有成员被暂停时只保留没被暂停的那些地址。
+  */
+  if ((await getTrafficExcludedHostIds()).size > 0) {
+    const enabledMembers = sortedMembers(group, true) as any[];
+    const quotaBlocked: boolean[] = [];
+    for (const member of enabledMembers) quotaBlocked.push((await resolveMemberAgentLiveness(member)).trafficExcluded);
+    if (quotaBlocked.some(Boolean)) {
+      const allowedValues = new Set<string>();
+      for (const [index, member] of enabledMembers.entries()) {
+        if (!quotaBlocked[index]) allowedValues.add(await memberDdnsValue(member, recordType).catch(() => ""));
+      }
+      const retainedValues = String(group.lastDdnsValue || "").split(",").map((value) => value.trim()).filter((value) => value && allowedValues.has(value));
+      const changed = retainedValues.join(",") !== String(group.lastDdnsValue || "").trim();
+      if ((changed || options.forceSync) && ddnsSettings.enabled && ddnsSettings.provider !== "disabled" && group.ddnsAutoResolveEnabled !== false && domain) {
+        await updateDdnsRecordValues({ groupId, domain, recordType, values: retainedValues, ttl: Number(ddnsSettings.ttl || DEFAULT_DDNS_TTL) }).catch((error) => {
+          console.warn(`[ForwardGroup] removing traffic-excluded DDNS values failed group=${groupId}: ${error instanceof Error ? error.message : String(error)}`);
+        });
+      }
+      await updateForwardGroupRuntimeIfChanged(db, group, {
+        activeMemberId: null,
+        lastDdnsValue: retainedValues.join(",") || null,
+        lastStatus: "down",
+        lastMessage: retainedValues.length
+          ? `${reason}；保留未超量的入口，等待恢复`
+          : "没有可用成员：流量到阈值的主机已暂停参与，等流量重置或关闭流量故障转移后恢复",
+      });
+      return;
+    }
+  }
   const retainedValue = await forwardGroupDdnsFallbackValue(group, recordType);
   const shouldReconcile = !!options.forceSync
     || (!!retainedValue && exactDdnsReconciliationDue(group, retainedValue));
@@ -4509,6 +4716,7 @@ async function syncEntryGroupDdns(group: any, ddnsSettings: any, options: Forwar
   const failoverMs = forwardGroupFailoverDelayMs(group);
   const recoverMs = forwardGroupRecoverDelayMs(group);
   let pendingAgentHealth = false;
+  let trafficExcludedMemberCount = 0;
   // Bandwidth aggregation needs the member behind every published value so it
   // can weight the records by each front VPS's declared uplink.
   const aggregationMembers: AggregationMemberRow[] = [];
@@ -4537,6 +4745,12 @@ async function syncEntryGroupDdns(group: any, ddnsSettings: any, options: Forwar
     const memberId = Number(member.id);
     initialAgentLivenessSnapshot.set(memberId, liveness.signature);
     agentLivenessByMemberId.set(memberId, liveness);
+    if (liveness.trafficExcluded) {
+      // 流量到阈值：立刻移出解析，不走离线宽限期。
+      trafficExcludedMemberCount += 1;
+      if (!excluded.includes(value)) excluded.push(value);
+      continue;
+    }
     const checkedAt = chinaHealthEnabled ? member.chinaHealthCheckedAt : member.lastCheckedAt;
     const storedStatus = chinaHealthEnabled ? member.chinaHealthStatus : member.healthStatus;
     initialHealthSnapshot.set(
@@ -4703,7 +4917,7 @@ async function syncEntryGroupDdns(group: any, ddnsSettings: any, options: Forwar
   // A newly enabled health check starts with unknown member states.  Keep the
   // current provider record intact until at least one probe result arrives;
   // once results exist, only healthy members are emitted above.
-  if (pendingAgentHealth && (publishedValues.length === 0 || joined === previousValue)) {
+  if (trafficExcludedMemberCount === 0 && pendingAgentHealth && (publishedValues.length === 0 || joined === previousValue)) {
     await updateForwardGroupRuntimeIfChanged(db, group, {
       lastStatus: "unknown",
       lastMessage: "等待 Agent 健康度检测结果；暂不变更现有 DDNS 解析",
@@ -4832,11 +5046,15 @@ async function syncEntryGroupDdns(group: any, ddnsSettings: any, options: Forwar
 
 async function markExitGroupReady(group: any) {
   const db = await getDb();
-  const members = sortedMembers(group, true) as any[];
+  const enabledMembers = sortedMembers(group, true) as any[];
+  const excludedHosts = await getTrafficExcludedHostIds();
+  const members = enabledMembers.filter((member) => !excludedHosts.has(Number(member.hostId)));
   await updateForwardGroupRuntimeIfChanged(db, group, {
     activeMemberId: Number(members[0]?.id || 0) || null,
     lastStatus: members.length > 0 ? "healthy" : "down",
-    lastMessage: members.length > 0 ? "出口组已保存，可在隧道中作为出口组选择。" : "出口组没有已启用主机。",
+    lastMessage: members.length > 0
+      ? "出口组已保存，可在隧道中作为出口组选择。"
+      : enabledMembers.length > 0 ? "出口组没有可用主机：流量到阈值的成员已暂停参与。" : "出口组没有已启用主机。",
   });
 }
 

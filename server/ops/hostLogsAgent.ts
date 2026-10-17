@@ -1,5 +1,5 @@
 /*
-  扩展模块 "logs"（面板 2.3.449、Agent 2.2.229 起）：主机详情里看实时日志，不用 SSH。
+  扩展模块 "logs"（面板 2.3.451、Agent 2.2.230 起）：主机详情里看实时日志，不用 SSH。
 
   - 只有管理员能看；来源是 Agent 那头的白名单（agent / runtime / tunnel / nginx / kernel /
     fxp:<文件名>），Agent 会把可用的来源列表每分钟报一次。
@@ -12,7 +12,7 @@ import { randomBytes } from "node:crypto";
 import { isAgentVersionAtLeast } from "../../shared/version";
 import { registerAgentExtModule, wakeAgentExt, type AgentExtHost } from "./agentExt";
 
-export const HOST_LOGS_MIN_AGENT_VERSION = "2.2.229";
+export const HOST_LOGS_MIN_AGENT_VERSION = "2.2.230";
 const VIEWER_TTL_MS = 30_000;
 const INFLIGHT_TIMEOUT_MS = 20_000;
 const MAX_BUFFER_LINES = 2_000;

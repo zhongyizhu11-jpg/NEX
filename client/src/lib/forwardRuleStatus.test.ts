@@ -3,6 +3,7 @@ import test from "node:test";
 import { LINK_PROBE_FRESH_MS } from "@shared/linkProbePolicy";
 import {
   preferLastKnownForwardRuleVisualStatus,
+  resolveForwardRuleStopReason,
   resolveForwardRuleVisualStatus,
 } from "./forwardRuleStatus";
 
@@ -191,4 +192,14 @@ test("an explicit current result is never replaced by the cache", () => {
   for (const { current, cached } of cases) {
     assert.deepEqual(preferLastKnownForwardRuleVisualStatus(current, cached), current);
   }
+});
+
+test("rules stopped by their own limit say why and that they resume on their own", () => {
+  assert.equal(resolveForwardRuleStopReason({ isEnabled: true, ruleLimitReason: "expired" })?.label, "已到期");
+  const quota = resolveForwardRuleStopReason({ isEnabled: true, ruleLimitReason: "traffic_limit" });
+  assert.equal(quota?.label, "额度用尽");
+  assert.equal(quota?.autoResume, true);
+  // A rule the user switched off reports the manual stop, not the limit.
+  assert.equal(resolveForwardRuleStopReason({ isEnabled: false, ruleLimitReason: "expired" })?.label, "已停用");
+  assert.equal(resolveForwardRuleStopReason({ isEnabled: true, ruleLimitReason: null }), null);
 });

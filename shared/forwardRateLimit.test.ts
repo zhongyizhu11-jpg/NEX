@@ -23,7 +23,7 @@ test("用户上下行分开，和隧道、规则、整台主机叠加；每个�
     rule: { id: 9, inMbps: 0, outMbps: 80 },
     hostLimitMbps: 500,
   });
-  assert.deepEqual(tiers.map((tier) => tier.scope), ["user-1-host-2", "user-1-host-2-tunnel-7", "rule-9", "host-2"]);
+  assert.deepEqual(tiers.map((tier) => tier.scope), ["user-1-host-2", "user-1-host-2-tunnel-7", "rule-9-host-2", "host-2"]);
   assert.deepEqual(strictestForwardRate(tiers), { inMbps: 50, outMbps: 80, scope: "user-1-host-2" });
 });
 

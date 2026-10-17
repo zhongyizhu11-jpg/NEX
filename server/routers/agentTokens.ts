@@ -4,19 +4,7 @@ import { nanoid } from "nanoid";
 import { protectedProcedure, router } from "../_core/trpc";
 import * as db from "../db";
 import { maskToken } from "./helpers";
-
-function ruleOwnerSummary(owners: Array<{ userId: number; username: string | null; name: string | null; ruleCount: number }>) {
-  const visibleOwners = owners.slice(0, 5);
-  const labels = visibleOwners.map((owner) => {
-    const username = owner.username || `用户 ID ${owner.userId}`;
-    const label = owner.name && owner.name !== username ? `${owner.name}（${username}）` : username;
-    return `用户 ${label}：${owner.ruleCount} 条`;
-  });
-  const hiddenRuleCount = owners.slice(visibleOwners.length)
-    .reduce((total, owner) => total + owner.ruleCount, 0);
-  if (hiddenRuleCount > 0) labels.push(`其他用户 ${hiddenRuleCount} 条`);
-  return labels.join("、");
-}
+import { ruleOwnerSummary } from "../hostDeletion";
 
 export const agentTokensRouter = router({
   list: protectedProcedure.query(async ({ ctx }) => {

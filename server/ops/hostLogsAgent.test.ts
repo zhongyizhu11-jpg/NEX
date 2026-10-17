@@ -9,7 +9,7 @@ import {
   resetHostLogsStateForTest,
 } from "./hostLogsAgent";
 
-const host = { id: 3, name: "港-1", agentVersion: "2.2.229" };
+const host = { id: 3, name: "港-1", agentVersion: "2.2.230" };
 
 test("来源只认白名单", () => {
   for (const ok of ["agent", "runtime", "tunnel", "nginx", "kernel", "fxp:fxp-exit-7301-0-36397.log"]) assert.equal(isValidHostLogSource(ok), true, ok);

@@ -6,6 +6,7 @@ import { FORWARD_TYPES } from "../../shared/forwardTypes";
 import { isValidAvatarValue } from "../../shared/avatar";
 import { parseBillingExpiryInput } from "../../shared/billingTime";
 import { ensureAdminOrSelf, refreshUserForwardEndpoints } from "./helpers";
+import { onlyPortAccessLimitChanged } from "../portAccessLimits";
 import { clearLinkAccessScopeCache } from "../linkAccessView";
 import { getEmailConfig, sendMail } from "../email";
 import {
@@ -482,9 +483,14 @@ export const usersRouter = router({
         const shouldRefreshRuntime = ["manualGostRateLimitIn", "manualGostRateLimitOut", "forwardBurstMbps", "forwardBurstSeconds", "manualMaxConnections", "manualMaxIPs"].some((key) =>
           Object.prototype.hasOwnProperty.call(data, key)
         );
-        await db.updateUserManualEntitlements(userId, data);
+        const beforeRuntimeLimits = shouldRefreshRuntime ? await db.getUserById(userId) : null;
+        const effectiveLimits = await db.updateUserManualEntitlements(userId, data);
         if (shouldRefreshRuntime) {
-          await refreshUserForwardEndpoints(userId, "user-runtime-limits-updated");
+          // 只改了单 IP：普通规则的限制由心跳里那份端口限制快照单独对齐，
+          // 不必把他名下所有普通规则标成未运行、重新下发一遍（见 server/portAccessLimits.ts）。
+          await refreshUserForwardEndpoints(userId, "user-runtime-limits-updated", {
+            preserveOrdinaryRuntime: onlyPortAccessLimitChanged(beforeRuntimeLimits, effectiveLimits),
+          });
         }
         console.info(`[Users] Updated traffic settings userId=${userId} keys=${Object.keys(data).join(",") || "none"} ${actorLabel(ctx)}`);
         return { success: true };

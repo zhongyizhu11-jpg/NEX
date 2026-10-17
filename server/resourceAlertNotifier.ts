@@ -312,7 +312,7 @@ export function describeServiceUnit(unit: string) {
 }
 
 /**
- * 心跳里的 oomKillCount / serviceRestarts（Agent ≥ 2.2.229 才报）。计数涨了就记事件、发告警。
+ * 心跳里的 oomKillCount / serviceRestarts（Agent ≥ 2.2.230 才报）。计数涨了就记事件、发告警。
  * 机器重启（bootId 变了）时两项都从头当基线。不抛错、不阻塞心跳。
  */
 export function observeHostHealthCounters(host: any, input: { bootId?: string | null; oomKillCount?: unknown; serviceRestarts?: unknown }) {

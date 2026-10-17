@@ -82,7 +82,6 @@ function runProbe(): Probe {
     );
     plan = {
       "ipapi.co": jsonResponse(200, { country_code: "JP", country_name: "Japan", region: "Tokyo" }),
-      "ip-api.com": jsonResponse(200, { status: "fail", message: "reserved range" }),
       "ipwho.is": jsonResponse(200, { success: false, message: "Invalid IP address" }),
     };
     await geo.runHostGeoSweep();
@@ -99,31 +98,29 @@ function runProbe(): Probe {
     geo.resetHostGeoStateForTests();
     plan = {
       "ipapi.co": jsonResponse(200, { country_code: "AQ", country_name: "Antarctica" }),
-      "ip-api.com": jsonResponse(200, { status: "fail", message: "reserved range" }),
       "ipwho.is": jsonResponse(200, { success: false, message: "Invalid IP address" }),
     };
     const unknown = await geo.lookupAddressGeo("2400:8902::99");
     out.countryOnlyUnknown = { country: unknown?.geoCountryCode ?? null, lat: unknown?.geoLatitudeMicro ?? null };
 
-    // ---- 三家兜底：ipapi.co 429 → ip-api.com ----
+    // ---- 两家兜底（都是 HTTPS）：ipapi.co 429 → ipwho.is ----
     geo.resetHostGeoStateForTests();
     fetchLog.length = 0;
     plan = {
       "ipapi.co": jsonResponse(429, {}),
-      "ip-api.com": jsonResponse(200, { status: "success", country: "United States", countryCode: "US", regionName: "California", city: "Los Angeles", lat: 34.05, lon: -118.24 }),
+      "ipwho.is": jsonResponse(200, { success: true, country: "United States", country_code: "US", region: "California", city: "Los Angeles", latitude: 34.05, longitude: -118.24 }),
     };
     const first = await geo.lookupAddressGeo("1.0.0.1");
     const statesAfterFirst = Object.fromEntries(geo.getGeoProviderStates().map((state) => [state.name, state.rateLimitedUntil > Date.now()]));
     const firstHosts = fetchLog.slice();
     fetchLog.length = 0;
     plan = {
-      "ip-api.com": jsonResponse(200, { status: "fail", message: "private range" }),
       "ipwho.is": jsonResponse(200, { success: true, country: "Japan", country_code: "JP", region: "Tokyo", city: "Tokyo", latitude: 35.68, longitude: 139.69, flag: { emoji: "🇯🇵" } }),
     };
     const second = await geo.lookupAddressGeo("9.9.9.9");
     const secondHosts = fetchLog.slice();
     fetchLog.length = 0;
-    plan = { "ip-api.com": jsonResponse(500, {}), "ipwho.is": jsonResponse(200, { success: false, message: "Invalid IP address" }) };
+    plan = { "ipwho.is": jsonResponse(200, { success: false, message: "Invalid IP address" }) };
     const third = await geo.lookupAddressGeo("4.2.2.2");
     out.fallback = {
       first: { provider: first?.provider ?? null, country: first?.geoCountryCode ?? "", region: first?.geoRegion ?? null, hosts: firstHosts },
@@ -140,7 +137,7 @@ function runProbe(): Probe {
       'INSERT INTO hosts (id, name, ip, ipv4, "hostType", "agentToken", "userId") VALUES (3, ?, ?, ?, ?, ?, 1)',
       ["查不到", "208.67.222.222", "208.67.222.222", "slave", "tok3"],
     );
-    plan = { "ipapi.co": jsonResponse(500, {}), "ip-api.com": jsonResponse(500, {}), "ipwho.is": jsonResponse(500, {}) };
+    plan = { "ipapi.co": jsonResponse(500, {}), "ipwho.is": jsonResponse(500, {}) };
     await geo.runHostGeoSweep();
     const retry1 = geo.getHostGeoRetryState(3);
     const firstDelayMinutes = Math.round((retry1.notBefore - Date.now()) / 60000);
@@ -208,15 +205,15 @@ test("定位服务只答出国家：地区照样显示，坐标按国家补近�
   assert.equal(probe.countryOnlyUnknown.lat, null);
 });
 
-test("三家服务按顺序兜底，限流状态各记各的", () => {
-  assert.deepEqual(probe.fallback.first.hosts, ["ipapi.co", "ip-api.com"]);
-  assert.equal(probe.fallback.first.provider, "ip-api.com");
+test("两家 HTTPS 服务按顺序兜底，限流状态各记各的", () => {
+  assert.deepEqual(probe.fallback.first.hosts, ["ipapi.co", "ipwho.is"]);
+  assert.equal(probe.fallback.first.provider, "ipwho.is");
   assert.equal(probe.fallback.first.country, "US");
   assert.equal(probe.fallback.first.region, "California");
-  assert.deepEqual(probe.fallback.statesAfterFirst, { "ipapi.co": true, "ip-api.com": false, "ipwho.is": false });
-  assert.deepEqual(probe.fallback.second.hosts, ["ip-api.com", "ipwho.is"]);
+  assert.deepEqual(probe.fallback.statesAfterFirst, { "ipapi.co": true, "ipwho.is": false });
+  assert.deepEqual(probe.fallback.second.hosts, ["ipwho.is"], "限流中的那家不再打");
   assert.equal(probe.fallback.second.provider, "ipwho.is");
-  assert.deepEqual(probe.fallback.third.hosts, ["ip-api.com", "ipwho.is"]);
+  assert.deepEqual(probe.fallback.third.hosts, ["ipwho.is"]);
   assert.equal(probe.fallback.third.provider, null, "全失败返回 null，不抛");
 });
 

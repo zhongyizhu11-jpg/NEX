@@ -94,6 +94,36 @@ test("403（对方关了私信）、401（Token 失效）按类型抛；缓存�
   assert.equal(opened, 2, "频道没了就重新建一次");
 });
 
+test("长消息拆成几条依次发（每条不超过 2000 字），不再截断；中途限流按 retry_after 等", async () => {
+  const lines = Array.from({ length: 400 }, (_, i) => `第 ${i} 行：转发规则状态正常`);
+  const content = lines.join("\n");
+  assert.ok(content.length > 4000);
+  const waits: number[] = [];
+  let limitedOnce = true;
+  const discord = fakeDiscord((call, index) => {
+    if (call.url.endsWith("/users/@me/channels")) return json(200, { id: "123456789" });
+    if (limitedOnce && index === 2) {
+      limitedOnce = false;
+      return json(429, { message: "You are being rate limited.", retry_after: 0.5, global: false });
+    }
+    return json(200, { id: String(1000 + index) });
+  });
+  const client = new DiscordRestClient({ token: BOT_TOKEN, fetchImpl: discord.fetchImpl, sleep: async (ms) => { waits.push(ms); } });
+  await client.sendDirectMessage("80351110224678912", content);
+  const sent = discord.calls.filter((call) => call.url.endsWith("/messages") && call.body).map((call) => call.body.content as string);
+  // 被限流的那次请求重发了一遍：去掉重复的那条再拼。
+  const delivered = sent.filter((text, index) => index === 0 || text !== sent[index - 1]);
+  assert.ok(delivered.length >= 3, `应该拆成几条：${delivered.length}`);
+  for (const chunk of delivered) assert.ok(chunk.length <= 2000, String(chunk.length));
+  assert.equal(delivered.join("\n"), content, "内容一个字都不少，按原来的顺序");
+  assert.ok(!delivered.some((chunk) => chunk.includes("内容太长")), "不再截断");
+  assert.deepEqual(waits, [500], "中途 429 等一下接着发");
+  for (const call of discord.calls.filter((item) => item.url.endsWith("/messages"))) {
+    assert.deepEqual(call.body.allowed_mentions, { parse: [] });
+    assert.equal(call.body.flags, 4);
+  }
+});
+
 function fakeNotifier(options: {
   admins?: DiscordNotifyRecipient[];
   prefs?: TelegramNotifyPrefs;

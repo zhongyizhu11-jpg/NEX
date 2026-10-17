@@ -57,6 +57,7 @@ export const MIGRATION_TABLES = [
   "agent_traffic_reports",
   "tunnel_latency_stats",
   "forward_group_latency_stats",
+  "latency_daily_stats",
   "host_probe_services",
   "host_probe_service_stats",
   "ip_geo_cache",
@@ -226,6 +227,8 @@ const tables: TableDef[] = [
       c("lastSignedIn", "epoch", { notNull: true, default: "now" }),
       // 邀请返利：自己的邀请码（第一次打开邀请页才生成）和邀请人（注册时绑定，见 shared/referral.ts）。
       c("inviteCode", "varchar", { length: 32 }), c("inviterId", "int"),
+      // 绑定邀请人的时刻：这之前下的单不返利（老数据为空，按注册时刻算）。
+      c("inviterBoundAt", "epoch"),
     ],
     unique: [["username"], ["telegramId"], ["telegramBindCode"], ["telegramLoginCode"], ["inviteCode"], ["googleSub"], ["discordId"]],
     indexes: [["inviterId"]],
@@ -265,6 +268,8 @@ const tables: TableDef[] = [
       c("billingCycleMonths", "int", { notNull: true, default: 1 }), c("billingMonth", "int", { notNull: true, default: 1 }),
       c("billingDay", "int", { notNull: true, default: 1 }), c("expiryHandling", "varchar", { length: 24, notNull: true, default: "none" }),
       c("trafficLimit", "bigint", { notNull: true, default: 0 }), c("trafficMeasureMode", "varchar", { length: 16, notNull: true, default: "both" }),
+      c("trafficFailoverEnabled", "bool", { notNull: true, default: false }), c("trafficFailoverThresholdPercent", "int", { notNull: true, default: 100 }),
+      c("trafficFailoverExcluded", "bool", { notNull: true, default: false }),
       c("egressShapingMode", "varchar", { length: 16, notNull: true, default: "off" }), c("egressMbps", "int", { notNull: true, default: 0 }),
       c("flowOffload", "bool", { notNull: true, default: false }),
       c("telegramTrafficAlertEnabled", "bool", { notNull: true, default: false }), c("trafficAlertThresholdPercent", "int", { notNull: true, default: 20 }),
@@ -294,6 +299,7 @@ const tables: TableDef[] = [
       ["userId", "createdAt"],
       ["agentToken"],
       ["isOnline", "lastHeartbeat"],
+      ["trafficFailoverExcluded"],
     ],
   },
   {
@@ -318,7 +324,6 @@ const tables: TableDef[] = [
     name: "forward_rules",
     columns: [
       c("id", "id"), c("hostId", "int", { notNull: true }), c("name", "text", { notNull: true }),
-      c("rateLimitInMbps", "int", { notNull: true, default: 0 }), c("rateLimitOutMbps", "int", { notNull: true, default: 0 }),
       c("forwardType", "varchar", { length: 32, notNull: true, default: "iptables" }), c("protocol", "varchar", { length: 16, notNull: true, default: "both" }),
       c("gostMode", "varchar", { length: 32, notNull: true, default: "direct" }), c("gostRelayHost", "text"), c("gostRelayPort", "int"),
       c("tunnelId", "int"), c("tunnelExitPort", "int"),
@@ -368,6 +373,14 @@ const tables: TableDef[] = [
       // Shadowsocks 出口（shared/ssEgress.ts）：none | ss_host（指向落地入站）| ss_link（外部链接，egressConfigJson 加密保存）。
       c("egressType", "varchar", { length: 16, notNull: true, default: "none" }), c("egressInboundId", "int"),
       c("egressConfigJson", "text"), c("egressUdp", "bool", { notNull: true, default: false }),
+      // 单条规则限额（shared/ruleLimits.ts、server/ruleLimits.ts）：限速 / 流量额度 / 到期，管理员设置。
+      // quotaUsedIn/Out 是这条逻辑规则（转发组成员汇总到模板）的累计用量，第一次设额度时才初始化。
+      c("rateLimitMbps", "int", { notNull: true, default: 0 }),
+      c("trafficLimit", "bigint", { notNull: true, default: 0 }),
+      c("trafficMode", "varchar", { length: 16, notNull: true, default: "both" }),
+      c("expiresAt", "epoch"), c("ruleLimitReason", "varchar", { length: 32 }),
+      c("adminManaged", "bool", { notNull: true, default: false }),
+      c("quotaUsedIn", "bigint"), c("quotaUsedOut", "bigint"),
       c("userId", "int", { notNull: true }), c("createdAt", "epoch", { notNull: true, default: "now" }),
       c("updatedAt", "epoch", { notNull: true, default: "now" }),
     ],
@@ -695,13 +708,39 @@ const tables: TableDef[] = [
   { name: "traffic_stat_buckets", columns: [c("id", "id"), c("bucketStart", "epoch", { notNull: true }), c("bucketMinutes", "int", { notNull: true, default: 30 }), c("userId", "int", { notNull: true }), c("ruleId", "int", { notNull: true }), c("hostId", "int", { notNull: true }), c("bytesIn", "bigint", { notNull: true, default: 0 }), c("bytesOut", "bigint", { notNull: true, default: 0 }), c("connections", "int", { notNull: true, default: 0 }), c("updatedAt", "epoch", { notNull: true, default: "now" })], unique: [["bucketStart", "bucketMinutes", "ruleId", "hostId"]], indexes: [["userId", "bucketStart"], ["bucketStart", "userId"], ["bucketMinutes", "bucketStart"], ["bucketMinutes", "userId", "bucketStart"], ["bucketMinutes", "ruleId", "bucketStart"], ["bucketMinutes", "hostId", "bucketStart"], ["ruleId", "bucketStart"], ["hostId", "bucketStart"]] },
   { name: "agent_traffic_reports", columns: [c("id", "id"), c("hostId", "int", { notNull: true }), c("producerId", "varchar", { length: 128 }), c("reportId", "varchar", { length: 128, notNull: true }), c("receivedAt", "epoch", { notNull: true, default: "now" })], unique: [["hostId", "reportId"], ["hostId", "producerId"]], indexes: [["receivedAt"]] },
   { name: "tunnel_latency_stats", columns: [c("id", "id"), c("tunnelId", "int", { notNull: true }), c("seriesKey", "varchar", { length: 64 }), c("seriesLabel", "text"), c("latencyMs", "int"), c("isTimeout", "bool", { notNull: true, default: false }), c("probeCount", "int", { notNull: true, default: 1 }), c("probeSuccesses", "int", { notNull: true, default: 0 }), c("recordedAt", "epoch", { notNull: true, default: "now" })], indexes: [["tunnelId", "recordedAt"], ["tunnelId", "seriesKey", "recordedAt"], ["recordedAt", "tunnelId"]] },
+  {
+    name: "latency_daily_stats",
+    columns: [
+      c("id", "id"), c("targetType", "varchar", { length: 16, notNull: true }), c("targetId", "int", { notNull: true }), c("dayStart", "int", { notNull: true }),
+      c("probeCount", "bigint", { notNull: true, default: 0 }), c("probeSuccesses", "bigint", { notNull: true, default: 0 }),
+      c("latencySum", "bigint", { notNull: true, default: 0 }), c("latencyWeight", "bigint", { notNull: true, default: 0 }),
+      c("minLatencyMs", "int"), c("maxLatencyMs", "int"), c("updatedAt", "int", { notNull: true, default: 0 }),
+    ],
+    unique: [["targetType", "targetId", "dayStart"]],
+    indexes: [["dayStart", "id"]],
+  },
   { name: "forward_group_latency_stats", columns: [c("id", "id"), c("groupId", "int", { notNull: true }), c("latencyMs", "int"), c("isTimeout", "bool", { notNull: true, default: false }), c("probeCount", "int", { notNull: true, default: 1 }), c("probeSuccesses", "int", { notNull: true, default: 0 }), c("recordedAt", "epoch", { notNull: true, default: "now" })], indexes: [["groupId", "recordedAt"], ["recordedAt", "groupId"]] },
   { name: "host_probe_services", columns: [c("id", "id"), c("name", "text", { notNull: true }), c("method", "varchar", { length: 16, notNull: true, default: "tcping" }), c("targetIp", "text", { notNull: true }), c("targetPort", "int"), c("addressFamily", "varchar", { length: 8, notNull: true, default: "auto" }), c("hostScope", "varchar", { length: 16, notNull: true, default: "all" }), c("hostIds", "text"), c("excludeHostIds", "text"), c("intervalSeconds", "int", { notNull: true, default: 30 }), c("isEnabled", "bool", { notNull: true, default: true }), c("sortOrder", "int", { notNull: true, default: 0 }), c("userId", "int", { notNull: true }), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], indexes: [["userId", "sortOrder"], ["userId", "createdAt"], ["isEnabled"], ["hostScope"]] },
   { name: "host_probe_service_stats", columns: [c("id", "id"), c("serviceId", "int", { notNull: true }), c("hostId", "int", { notNull: true }), c("latencyMs", "int"), c("isTimeout", "bool", { notNull: true, default: false }), c("probeCount", "int", { notNull: true, default: 1 }), c("probeSuccesses", "int", { notNull: true, default: 0 }), c("recordedAt", "epoch", { notNull: true, default: "now" })], indexes: [["serviceId", "recordedAt"], ["hostId", "recordedAt"], ["recordedAt", "serviceId"]] },
   { name: "ip_geo_cache", columns: [c("id", "id"), c("address", "varchar", { length: 253, notNull: true }), c("resolvedAddress", "varchar", { length: 64, notNull: true }), c("geoCountryCode", "varchar", { length: 8, notNull: true }), c("geoCountryName", "text"), c("geoRegion", "text"), c("geoEmoji", "varchar", { length: 16 }), c("geoLatitudeMicro", "int"), c("geoLongitudeMicro", "int"), c("geoAsn", "varchar", { length: 16 }), c("geoIsp", "text"), c("geoOrg", "text"), c("provider", "varchar", { length: 32, notNull: true, default: "ipapi.co" }), c("fetchedAt", "epoch", { notNull: true, default: "now" }), c("expiresAt", "epoch", { notNull: true })], unique: [["address"]], indexes: [["resolvedAddress"], ["expiresAt"]] },
   { name: "agent_tokens", columns: [c("id", "id"), c("token", "text", { notNull: true }), c("hostId", "int"), c("description", "text"), c("isUsed", "bool", { notNull: true, default: false }), c("sortOrder", "int", { notNull: true, default: 0 }), c("userId", "int", { notNull: true }), c("createdAt", "epoch", { notNull: true, default: "now" })], unique: [["token"]], indexes: [["userId"], ["userId", "sortOrder"]] },
   { name: "tcping_stats", columns: [c("id", "id"), c("ruleId", "int", { notNull: true }), c("hostId", "int", { notNull: true }), c("latencyMs", "int"), c("isTimeout", "bool", { notNull: true, default: false }), c("probeCount", "int", { notNull: true, default: 1 }), c("probeSuccesses", "int", { notNull: true, default: 0 }), c("healthStatus", "varchar", { length: 16 }), c("healthPending", "bool", { notNull: true, default: false }), c("recordedAt", "epoch", { notNull: true, default: "now" })], indexes: [["ruleId", "recordedAt"], ["hostId", "recordedAt"], ["recordedAt", "ruleId"], ["recordedAt", "hostId"]] },
-  { name: "forward_tests", columns: [c("id", "id"), c("ruleId", "int", { notNull: true }), c("hostId", "int", { notNull: true }), c("userId", "int", { notNull: true }), c("status", "varchar", { length: 32, notNull: true, default: "pending" }), c("listenOk", "bool", { notNull: true, default: false }), c("targetReachable", "bool", { notNull: true, default: false }), c("forwardOk", "bool", { notNull: true, default: false }), c("latencyMs", "int"), c("message", "text"), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], indexes: [["ruleId", "createdAt"], ["hostId", "status"], ["status", "createdAt"], ["status", "updatedAt"], ["updatedAt"]] },
+  { name: "forward_tests", columns: [c("id", "id"), c("ruleId", "int", { notNull: true }), c("hostId", "int", { notNull: true }), c("userId", "int", { notNull: true }), c("status", "varchar", { length: 32, notNull: true, default: "pending" }), c("listenOk", "bool", { notNull: true, default: false }), c("targetReachable", "bool", { notNull: true, default: false }), c("forwardOk", "bool", { notNull: true, default: false }), c("latencyMs", "int"), c("message", "longtext"), c("requestMessage", "text"), c("batchId", "varchar", { length: 96 }), c("batchSettled", "bool", { notNull: true, default: false }), c("firstDispatchedAt", "epoch"), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], indexes: [["ruleId", "createdAt"], ["hostId", "status"], ["batchId"], ["batchSettled", "batchId"], ["status", "createdAt"], ["status", "updatedAt"], ["updatedAt"]] },
+  // Short-lived (72h) telemetry. Intentionally not in MIGRATION_TABLES: refId is
+  // polymorphic by kind, and a migrated panel simply starts new counter streams.
+  {
+    name: "probe_counter_snapshots",
+    columns: [
+      c("id", "id"), c("kind", "varchar", { length: 16, notNull: true }),
+      c("refId", "int", { notNull: true }), c("hostId", "int", { notNull: true }),
+      c("probeKey", "varchar", { length: 64, notNull: true }), c("epoch", "varchar", { length: 64, notNull: true }),
+      c("totalCount", "int", { notNull: true }), c("totalSuccesses", "int", { notNull: true }),
+      c("batchCount", "int", { notNull: true }), c("batchSuccesses", "int", { notNull: true }),
+      c("recordedAt", "epoch", { notNull: true, default: "now" }),
+    ],
+    unique: [["hostId", "kind", "refId", "probeKey", "epoch", "totalCount"]],
+    indexes: [["kind", "refId", "recordedAt"], ["recordedAt"]],
+  },
   { name: "user_host_permissions", columns: [c("id", "id"), c("userId", "int", { notNull: true }), c("hostId", "int", { notNull: true }), c("createdAt", "epoch", { notNull: true, default: "now" })], unique: [["userId", "hostId"]], indexes: [["hostId"]] },
   { name: "user_tunnel_permissions", columns: [c("id", "id"), c("userId", "int", { notNull: true }), c("tunnelId", "int", { notNull: true }), c("createdAt", "epoch", { notNull: true, default: "now" })], unique: [["userId", "tunnelId"]], indexes: [["tunnelId"]] },
   { name: "user_forward_group_permissions", columns: [c("id", "id"), c("userId", "int", { notNull: true }), c("forwardGroupId", "int", { notNull: true }), c("createdAt", "epoch", { notNull: true, default: "now" })], unique: [["userId", "forwardGroupId"]], indexes: [["forwardGroupId"]] },
@@ -749,7 +788,8 @@ const tables: TableDef[] = [
       c("lastMessageAt", "epoch", { notNull: true, default: "now" }), c("lastMessageByStaff", "bool", { notNull: true, default: false }),
       c("closedAt", "epoch"), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" }),
     ],
-    indexes: [["userId", "lastMessageAt"], ["status", "lastMessageAt"], ["lastMessageAt"]],
+    // userId + createdAt：新建频率按库里的记录数（server/ticketRateLimit.ts）。
+    indexes: [["userId", "lastMessageAt"], ["status", "lastMessageAt"], ["lastMessageAt"], ["userId", "createdAt"]],
   },
   {
     name: "ticket_messages",
@@ -757,7 +797,8 @@ const tables: TableDef[] = [
       c("id", "id"), c("ticketId", "int", { notNull: true }), c("senderId", "int"), c("isStaff", "bool", { notNull: true, default: false }),
       c("content", "longtext", { notNull: true }), c("createdAt", "epoch", { notNull: true, default: "now" }),
     ],
-    indexes: [["ticketId"]],
+    // senderId + createdAt：回复频率按库里的记录数（server/ticketRateLimit.ts）。
+    indexes: [["ticketId"], ["senderId", "createdAt"]],
   },
   { name: "plugins", columns: [c("id", "id"), c("pluginId", "varchar", { length: 128, notNull: true }), c("name", "text", { notNull: true }), c("version", "varchar", { length: 64, notNull: true, default: "0.0.0" }), c("description", "text"), c("author", "text"), c("homepage", "text"), c("repository", "text"), c("sourceType", "varchar", { length: 32, notNull: true, default: "github" }), c("sourceUrl", "text"), c("branch", "varchar", { length: 128 }), c("manifestPath", "text"), c("manifestJson", "text", { notNull: true }), c("permissionsJson", "text"), c("extensionPointsJson", "text"), c("status", "varchar", { length: 32, notNull: true, default: "disabled" }), c("trusted", "bool", { notNull: true, default: false }), c("installedAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" }), c("lastCheckedAt", "epoch"), c("latestVersion", "varchar", { length: 64 }), c("lastError", "text")], unique: [["pluginId"]], indexes: [["status"], ["sourceType"]] },
   { name: "plugin_store_sources", columns: [c("id", "id"), c("name", "text", { notNull: true }), c("repository", "text", { notNull: true }), c("branch", "varchar", { length: 128, notNull: true, default: "main" }), c("catalogPath", "text", { notNull: true, default: "forwardx-store.json" }), c("itemsJson", "longtext"), c("lastSyncedAt", "epoch"), c("lastError", "text"), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], unique: [["repository", "branch", "catalogPath"]], indexes: [["updatedAt"]] },
@@ -779,6 +820,8 @@ const seedSettings = [
   ["personalizationCardStyle", "edge"],
   ["personalizationUiTheme", "classic"],
   ["lookingGlassUserEnabled", "true"],
+  // 工单总开关：关掉后普通用户看不到入口、不能提交 / 回复，管理员照常处理（server/routers/tickets.ts）。
+  ["ticketsEnabled", "true"],
   ["allowMultiDeviceLogin", "false"],
   ["publicHostMonitorEnabled", "false"],
   ["publicHostMonitorPath", "dev"],

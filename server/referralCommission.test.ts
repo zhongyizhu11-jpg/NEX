@@ -12,6 +12,8 @@ import test from "node:test";
  * - 该返的返、按套餐比例向下取整到分，不该返的（没开、没邀请人、比例 0、充值单、非人民币单、
  *   邀请人停用）一分不返；
  * - 首单模式只返一次，每单模式续费也返；
+ * - 首单 = 这个人之前没有付过钱的套餐单（返利关着时买的、绑定邀请人之前买的都算）；
+ * - 绑定邀请人之前下的单不返（管理员后补的邀请人不能拿到之前的单）；
  * - 同一笔订单结算两次只返一次；
  * - 返利出错只撤销返利本身，被邀请人的购买照常完成；
  * - 返利流水不带被邀请人的订单号（那一列是「这单是否已入账」的判断依据）。
@@ -192,6 +194,8 @@ test("在线支付的套餐单：结算时返利；同一笔订单结算两次�
 
 test("充值单、非人民币单不返；被邀请人自己的入账不受返利流水影响", () => {
   runInDatabase(String.raw`
+    // 美元单本身也是一笔已付的套餐单，首单模式下后面的人民币单就不算首单了；这里看的是币种，用每单模式。
+    await settings.setSetting("referralMode", "recurring");
     const planId = await makePlan(1000, 5000);
     // 充值单：钱进了被邀请人余额，之后拿去买套餐时才返；这里返就重复了。
     await makePaidOrder("TOPUP-1", { orderType: "balance", amountCents: 2000 });
@@ -292,5 +296,103 @@ test("邀请人：不能是自己，不能互相邀请；管理员可以清掉",
     const info = await referral.getAdminUserReferralInfo(3);
     assert.equal(info.inviterId, null);
     assert.equal(info.invitedCount, 1, "3 邀请了 4");
+  `);
+});
+
+test("首单看的是之前有没有付过钱的套餐单：返利关着时买过的，之后不再算首单", () => {
+  runInDatabase(String.raw`
+    const planId = await makePlan(1000, 1000);
+    await settings.setSetting("referralEnabled", "false");
+    await billing.purchasePlanWithBalance(3, planId);
+    await settings.setSetting("referralEnabled", "true");
+
+    const subscriptionId = Number((await subscriptionsOf(3))[0].id);
+    const result = await billing.purchasePlanWithBalance(3, planId, null, subscriptionId);
+    assert.ok(result);
+    assert.equal((await commissions()).length, 0, "第二单不是首单，不返");
+    assert.equal(await balanceOf(2), 0);
+
+    // 在线支付的单同样看之前有没有付过钱的套餐单。
+    await makePaidOrder("FIRST-ONLINE-2", { planId, amountCents: 1000 });
+    await payment.finalizePaidOrder("FIRST-ONLINE-2");
+    assert.equal((await commissions()).length, 0);
+    const direct = await billing.creditReferralCommissionInTransaction({
+      inviteeId: 3, planId, baseAmountCents: 1000, currency: "CNY", sourceType: "payment_order", sourceRef: "FIRST-ONLINE-3",
+    });
+    assert.equal(direct.reason, "first_only");
+  `);
+});
+
+test("首单模式：在线支付的第一单照常返（不把自己这一单算成「之前的单」）", () => {
+  runInDatabase(String.raw`
+    const planId = await makePlan(1000, 1000);
+    // 没付成功的单、测试单、充值单都不算付过钱的套餐单。
+    await makePaidOrder("UNPAID-1", { planId, amountCents: 1000 });
+    await exec("UPDATE payment_orders SET status = 'expired' WHERE outTradeNo = 'UNPAID-1'");
+    await makePaidOrder("TOPUP-FIRST", { orderType: "balance", amountCents: 500 });
+    await payment.finalizePaidOrder("TOPUP-FIRST");
+    await makePaidOrder("FIRST-1", { planId, amountCents: 1000 });
+    await payment.finalizePaidOrder("FIRST-1");
+    assert.equal((await commissions()).length, 1);
+    assert.equal(await balanceOf(2), 100);
+  `);
+});
+
+test("绑定邀请人之前下的单不返：管理员后补的邀请人拿不到之前的单", () => {
+  runInDatabase(String.raw`
+    await settings.setSetting("referralMode", "recurring");
+    const planId = await makePlan(1000, 1000);
+    // 4 号没有邀请人，先下了一张在线支付的单，还没付。
+    const orderedAt = Math.floor(Date.now() / 1000) - 600;
+    await makePaidOrder("LATE-BIND-1", { userId: 4, planId, amountCents: 1000 });
+    await exec("UPDATE payment_orders SET createdAt = ? WHERE outTradeNo = 'LATE-BIND-1'", [orderedAt]);
+
+    // 管理员把 2 号设成他的邀请人，之后那张单才付成功。
+    await referral.setUserInviter(4, 2);
+    const [bound] = await query("SELECT inviterBoundAt FROM users WHERE id = 4");
+    assert.ok(Number(bound.inviterBoundAt) >= orderedAt + 600 - 5, "绑定时刻记下来");
+    await payment.finalizePaidOrder("LATE-BIND-1");
+    assert.equal((await query("SELECT status FROM payment_orders WHERE outTradeNo = 'LATE-BIND-1'"))[0].status, "completed");
+    assert.equal((await commissions()).length, 0, "绑定之前下的单不返");
+    const direct = await billing.creditReferralCommissionInTransaction({
+      inviteeId: 4, planId, baseAmountCents: 1000, currency: "CNY", sourceType: "payment_order", sourceRef: "LATE-BIND-2",
+      orderCreatedAt: orderedAt,
+    });
+    assert.equal(direct.reason, "before_binding");
+
+    // 绑定之后的单照常返（每单模式）。
+    await billing.purchasePlanWithBalance(4, planId);
+    assert.equal((await commissions()).length, 1);
+    assert.equal(await balanceOf(2), 100);
+
+    // 换邀请人会重新记时刻；清掉邀请人时刻也清掉。
+    await referral.setUserInviter(4, 1);
+    assert.ok(Number((await query("SELECT inviterBoundAt FROM users WHERE id = 4"))[0].inviterBoundAt) > 0);
+    await referral.setUserInviter(4, null);
+    assert.equal((await query("SELECT inviterBoundAt FROM users WHERE id = 4"))[0].inviterBoundAt, null);
+  `);
+});
+
+test("首单模式：管理员后补邀请人，用户之前买过的话后面那单也不算首单", () => {
+  runInDatabase(String.raw`
+    const planId = await makePlan(1000, 1000);
+    await billing.purchasePlanWithBalance(4, planId);
+    await referral.setUserInviter(4, 2);
+    await billing.purchasePlanWithBalance(4, planId, null, Number((await subscriptionsOf(4))[0].id));
+    assert.equal((await commissions()).length, 0);
+    assert.equal(await balanceOf(2), 0);
+  `);
+});
+
+test("注册时带邀请人的，绑定时刻就是注册时刻", () => {
+  runInDatabase(String.raw`
+    const users = await import(url("server/repositories/userRepository.ts"));
+    const before = Math.floor(Date.now() / 1000) - 1;
+    const id = Number(await users.registerUser({ username: "dave@example.com", password: "pw-123456", inviterId: 2 }));
+    const [row] = await query("SELECT inviterId, inviterBoundAt FROM users WHERE id = ?", [id]);
+    assert.equal(Number(row.inviterId), 2);
+    assert.ok(Number(row.inviterBoundAt) >= before);
+    const plain = Number(await users.registerUser({ username: "erin@example.com", password: "pw-123456" }));
+    assert.equal((await query("SELECT inviterBoundAt FROM users WHERE id = ?", [plain]))[0].inviterBoundAt, null);
   `);
 });

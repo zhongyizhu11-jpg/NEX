@@ -1,5 +1,6 @@
 import { isLinkProbeFresh } from "@shared/linkProbePolicy";
 import { TRAFFIC_BILLING_BALANCE_BLOCK_REASON } from "@shared/const";
+import { normalizeRuleLimitReason } from "@shared/ruleLimits";
 
 export type ForwardRuleVisualState = "disabled" | "running" | "pending" | "error";
 
@@ -113,8 +114,21 @@ export function resolveForwardRuleStopReason(rule: {
   disabledByGroup?: unknown;
   disabledByUser?: unknown;
   protocolBlockReason?: string | null;
+  ruleLimitReason?: string | null;
 } | null | undefined): ForwardRuleStopReason | null {
-  if (!rule || truthy(rule.isEnabled)) return null;
+  if (!rule) return null;
+  /*
+    单条规则限额（shared/ruleLimits.ts）停的：规则自己的开关还开着，只是运行时按停用下发。
+    管理员延期 / 放宽额度 / 重置用量后自动恢复，不用去动开关。
+  */
+  const limitReason = truthy(rule.isEnabled) ? normalizeRuleLimitReason(rule.ruleLimitReason) : null;
+  if (limitReason === "expired") {
+    return { label: "已到期", detail: "规则已到管理员设置的到期时间，延期后自动恢复", autoResume: true };
+  }
+  if (limitReason === "traffic_limit") {
+    return { label: "额度用尽", detail: "规则流量额度已用尽，管理员放宽额度或重置统计后自动恢复", autoResume: true };
+  }
+  if (truthy(rule.isEnabled)) return null;
   if (truthy(rule.disabledByUser)) {
     return {
       label: "账户暂停",

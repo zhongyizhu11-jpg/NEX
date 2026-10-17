@@ -67,7 +67,6 @@ const prelude = String.raw`
   const bob = { id: 3, username: "bob", role: "user", accountEnabled: true };
   const { ticketsRouter } = await import(moduleUrl("server/routers/tickets.ts"));
   const notifier = await import(moduleUrl("server/ticketNotifier.ts"));
-  const rateLimit = await import(moduleUrl("server/ticketRateLimit.ts"));
   const asAdmin = ticketsRouter.createCaller(context(admin));
   const asAlice = ticketsRouter.createCaller(context(alice));
   const asBob = ticketsRouter.createCaller(context(bob));
@@ -275,8 +274,9 @@ test("接口上的校验和频率限制", () => {
       await assert.rejects(() => asAlice.reply({ ticketId: ids[0], content: "第 31 条" }), /回复太频繁/);
       for (let i = 0; i < 35; i += 1) await asAdmin.adminReply({ ticketId: ids[0], content: "管理员 " + i });
 
-      rateLimit.resetTicketRateLimits();
-      await asAlice.reply({ ticketId: ids[0], content: "计数清零后可以了" });
+      // 窗口滑过去（把 Alice 的消息挪到 11 分钟前）就又能回了。
+      await runtime.executeRaw('UPDATE "ticket_messages" SET "createdAt" = "createdAt" - 660 WHERE "senderId" = 2');
+      await asAlice.reply({ ticketId: ids[0], content: "窗口过了之后可以了" });
     } finally {
       await runtime.closeDatabase().catch(() => undefined);
     }
@@ -382,6 +382,148 @@ test("面板备份导入：工单和消息跟着用户走，发消息的人已�
         [Number(tickets[0].id), Number(carol.id), "问题"],
         [Number(tickets[0].id), null, "已经不在的管理员回的"],
       ]);
+    } finally {
+      await runtime.closeDatabase().catch(() => undefined);
+    }
+  `);
+});
+
+/** 同一个库先后跑两个进程：第二个进程就是「面板重启之后」。 */
+function runScriptsSharedDb(prefix: string, scripts: string[]) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  try {
+    scripts.forEach((script, index) => {
+      const scriptPath = path.join(directory, `probe-${index}.mjs`);
+      fs.writeFileSync(scriptPath, script, "utf8");
+      const result = spawnSync(process.execPath, ["--import", "tsx", scriptPath], {
+        cwd: process.cwd(),
+        env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: path.join(directory, "t.db"), FORWARDX_LOG_DIR: path.join(directory, "logs") },
+        encoding: "utf8",
+        timeout: 60_000,
+      });
+      assert.equal(result.status, 0, `step ${index}\n${result.stdout}\n${result.stderr}`);
+    });
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+const preludeAfterRestart = prelude.replace(/  await insert\("users"[^\n]*\n/g, "");
+
+test("频率限制记在库里：面板重启之后照样算", () => {
+  runScriptsSharedDb("forwardx-tickets-restart-", [
+    prelude + String.raw`
+      try {
+        const first = await asAlice.create({ title: "工单 0", priority: "low", content: "x" });
+        for (let i = 1; i < 5; i += 1) await asAlice.create({ title: "工单 " + i, priority: "low", content: "x" });
+        for (let i = 0; i < 30; i += 1) await asAlice.reply({ ticketId: first.id, content: "回复 " + i });
+      } finally {
+        await runtime.closeDatabase().catch(() => undefined);
+      }
+    `,
+    preludeAfterRestart + String.raw`
+      try {
+        await assert.rejects(() => asAlice.create({ title: "重启后第六张", priority: "low", content: "x" }), /新建工单太频繁/);
+        const [ticket] = await runtime.queryRaw('SELECT "id" FROM "tickets" WHERE "userId" = 2 ORDER BY "id" LIMIT 1');
+        await assert.rejects(() => asAlice.reply({ ticketId: Number(ticket.id), content: "重启后第 31 条" }), /回复太频繁/);
+        await asBob.create({ title: "Bob", priority: "low", content: "x" });
+      } finally {
+        await runtime.closeDatabase().catch(() => undefined);
+      }
+    `,
+  ]);
+});
+
+test("每人最多 10 张没关闭的工单，关掉一张才能再提", () => {
+  runScript("forwardx-tickets-open-cap-", prelude + String.raw`
+    try {
+      const ids = [];
+      for (let i = 0; i < 10; i += 1) {
+        ids.push((await asAlice.create({ title: "工单 " + i, priority: "low", content: "x" })).id);
+        // 每张都挪到两小时前，免得撞上每小时 5 张的频率限制 —— 这里只看「没关闭的有几张」。
+        await runtime.executeRaw('UPDATE "tickets" SET "createdAt" = "createdAt" - 7200 WHERE "id" = ?', [ids[i]]);
+        await runtime.executeRaw('UPDATE "ticket_messages" SET "createdAt" = "createdAt" - 7200 WHERE "ticketId" = ?', [ids[i]]);
+      }
+      await assert.rejects(() => asAlice.create({ title: "第 11 张", priority: "low", content: "x" }), (error) => {
+        assert.equal(error.code, "TOO_MANY_REQUESTS");
+        assert.match(error.message, /没关闭的工单最多 10 张/);
+        return true;
+      });
+      await asAlice.setStatus({ ticketId: ids[0], status: "closed" });
+      await asAlice.create({ title: "关掉一张之后", priority: "low", content: "x" });
+      // 管理员不受限。
+      for (let i = 0; i < 11; i += 1) await asAdmin.create({ title: "管理员 " + i, priority: "low", content: "x" });
+    } finally {
+      await runtime.closeDatabase().catch(() => undefined);
+    }
+  `);
+});
+
+test("10 张没关闭的工单也拦重新打开：用户自己重开旧工单不能绕过上限，管理员替他重开不拦", () => {
+  runScript("forwardx-tickets-reopen-cap-", prelude + String.raw`
+    try {
+      const ids = [];
+      for (let i = 0; i < 11; i += 1) {
+        ids.push((await asAlice.create({ title: "工单 " + i, priority: "low", content: "x" })).id);
+        await runtime.executeRaw('UPDATE "tickets" SET "createdAt" = "createdAt" - 7200 WHERE "id" = ?', [ids[i]]);
+        await runtime.executeRaw('UPDATE "ticket_messages" SET "createdAt" = "createdAt" - 7200 WHERE "ticketId" = ?', [ids[i]]);
+        // 前两张提完就关掉，留着后面重开。
+        if (i < 2) await asAlice.setStatus({ ticketId: ids[i], status: "closed" });
+      }
+      // 现在 9 张没关闭：重开一张到 10 张可以，再重开一张就超了。
+      assert.equal((await asAlice.setStatus({ ticketId: ids[0], status: "open" })).status, "waiting_staff");
+      await assert.rejects(() => asAlice.setStatus({ ticketId: ids[1], status: "open" }), (error) => {
+        assert.equal(error.code, "TOO_MANY_REQUESTS");
+        assert.match(error.message, /没关闭的工单最多 10 张/);
+        return true;
+      });
+      assert.equal(await statusOf(ids[1]), "closed");
+      // 已经开着的再点一次「打开」不改变数量，照常放行；关单永远放行。
+      assert.equal((await asAlice.setStatus({ ticketId: ids[0], status: "open" })).status, "waiting_staff");
+      await asAlice.setStatus({ ticketId: ids[2], status: "closed" });
+      await asAlice.setStatus({ ticketId: ids[2], status: "open" });
+      // 管理员替用户重开不受这个限制。
+      await asAdmin.adminSetStatus({ ticketId: ids[1], status: "open" });
+      assert.notEqual(await statusOf(ids[1]), "closed");
+    } finally {
+      await runtime.closeDatabase().catch(() => undefined);
+    }
+  `);
+});
+
+test("工单总开关：关掉后普通用户不能提交、回复，管理员照常查看和处理", () => {
+  runScript("forwardx-tickets-switch-", prelude + String.raw`
+    try {
+      assert.deepEqual(await asAlice.status(), { enabled: true }, "默认开着");
+      const ticket = await asAlice.create({ title: "开着的时候提的", priority: "low", content: "x" });
+      await assert.rejects(() => asAlice.adminSetEnabled({ enabled: false }), (error) => error.code === "FORBIDDEN");
+
+      await asAdmin.adminSetEnabled({ enabled: false });
+      assert.deepEqual(await asAlice.status(), { enabled: false });
+      await assert.rejects(() => asAlice.create({ title: "关了", priority: "low", content: "x" }), (error) => {
+        assert.equal(error.code, "FORBIDDEN");
+        assert.match(error.message, /工单功能已关闭/);
+        return true;
+      });
+      await assert.rejects(() => asAlice.reply({ ticketId: ticket.id, content: "关了还能回吗" }), /工单功能已关闭/);
+      assert.equal((await runtime.queryRaw('SELECT COUNT(*) AS "count" FROM "tickets"'))[0].count, 1);
+
+      // 管理员：列表、详情、回复、关单都照常。
+      assert.equal((await asAdmin.adminList()).items.length, 1);
+      await asAdmin.adminGet({ ticketId: ticket.id });
+      await asAdmin.adminReply({ ticketId: ticket.id, content: "已经处理" });
+      await asAdmin.adminSetStatus({ ticketId: ticket.id, status: "closed" });
+      // 用户自己的历史照样能看。
+      assert.equal((await asAlice.list()).items.length, 1);
+
+      await asAdmin.adminSetEnabled({ enabled: true });
+      await asAlice.create({ title: "又开了", priority: "low", content: "x" });
+
+      // 侧边栏据 publicInfo 的 ticketsEnabled 显隐。
+      const { systemRouter } = await import(moduleUrl("server/_core/systemRouter.ts"));
+      await asAdmin.adminSetEnabled({ enabled: false });
+      const info = await systemRouter.createCaller(context(alice)).publicInfo();
+      assert.equal(info.ticketsEnabled, false);
     } finally {
       await runtime.closeDatabase().catch(() => undefined);
     }

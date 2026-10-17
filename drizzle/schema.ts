@@ -238,6 +238,9 @@ export const users = table("users", {
   inviteCode: varchar("inviteCode", { length: 32 }).unique(),
   // 邀请人：注册时凭邀请码绑定一次，用户侧接口改不了；管理员可以在用户管理里改 / 清。
   inviterId: int("inviterId"),
+  // 绑定邀请人的时刻（注册时 / 管理员改的时候写，清掉时清空）。这之前下的单不返利；
+  // 老数据是 null，按注册时刻算（见 billingRepository 的 creditReferralCommissionUnprotected）。
+  inviterBoundAt: epoch("inviterBoundAt"),
 });
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
@@ -313,6 +316,12 @@ export const hosts = table("hosts", {
   expiryHandling: varchar("expiryHandling", { length: 24 }).notNull().default("none"),
   trafficLimit: bigint("trafficLimit", { mode: "number" }).notNull().default(0),
   trafficMeasureMode: varchar("trafficMeasureMode", { length: 16 }).notNull().default("both"),
+  // 流量故障转移（shared/hostTrafficPolicy.ts）：用到套餐流量的这个比例后暂停参与转发组 / 入口组 /
+  // 出口组 / 多出口隧道。trafficFailoverExcluded 是按 host_traffic_counters 算出来的派生值，
+  // 不改任何成员配置。
+  trafficFailoverEnabled: boolean("trafficFailoverEnabled").notNull().default(false),
+  trafficFailoverThresholdPercent: int("trafficFailoverThresholdPercent").notNull().default(100),
+  trafficFailoverExcluded: boolean("trafficFailoverExcluded").notNull().default(false),
   // 主机公网出口整形（forwardx-fxp/link_shaper.go 的 egress）：off / auto / manual，
   // manual 时 egressMbps 是公网带宽上限（Mbit/s）。
   egressShapingMode: varchar("egressShapingMode", { length: 16 }).notNull().default("off"),
@@ -399,9 +408,6 @@ export const forwardRules = table("forward_rules", {
   id: serial("id"),
   hostId: int("hostId").notNull(),
   name: text("name").notNull(),
-  // 这条规则（端口）自己的上行 / 下行限速（2.3.449，Mbps，0 = 不限）。
-  rateLimitInMbps: int("rateLimitInMbps").notNull().default(0),
-  rateLimitOutMbps: int("rateLimitOutMbps").notNull().default(0),
   forwardType: varchar("forwardType", { length: 32 }).notNull().default("iptables"), // 'iptables' | 'realm' | 'socat'
   protocol: varchar("protocol", { length: 16 }).notNull().default("both"), // 'tcp' | 'udp' | 'both'
   gostMode: varchar("gostMode", { length: 32 }).notNull().default("direct"), // 'direct' | 'reverse'
@@ -524,6 +530,22 @@ export const forwardRules = table("forward_rules", {
   egressInboundId: int("egressInboundId"),
   egressConfigJson: text("egressConfigJson"),
   egressUdp: boolean("egressUdp").notNull().default(false),
+  /*
+    单条规则限额（shared/ruleLimits.ts、server/ruleLimits.ts），只有管理员能设：
+    rateLimitMbps 叠在用户 / 隧道 / 转发组限速上取最严的那个；trafficLimit + trafficMode
+    是这条规则自己的流量额度；expiresAt 到期停用。达到时 ruleLimitReason 记原因
+    （expired / traffic_limit），运行时按停用下发，规则自己的开关不动。
+    adminManaged：管理员替用户建的、或设过限额的规则，用户只能看不能改。
+    quotaUsedIn/Out：这条逻辑规则的累计用量（转发组成员汇总到模板），null 表示还没开始记。
+  */
+  rateLimitMbps: int("rateLimitMbps").notNull().default(0),
+  trafficLimit: bigint("trafficLimit", { mode: "number" }).notNull().default(0),
+  trafficMode: varchar("trafficMode", { length: 16 }).notNull().default("both"),
+  expiresAt: epoch("expiresAt"),
+  ruleLimitReason: varchar("ruleLimitReason", { length: 32 }),
+  adminManaged: boolean("adminManaged").notNull().default(false),
+  quotaUsedIn: bigint("quotaUsedIn", { mode: "number" }),
+  quotaUsedOut: bigint("quotaUsedOut", { mode: "number" }),
   userId: int("userId").notNull(),
   createdAt: epoch("createdAt").notNull().default(nowDefault()),
   updatedAt: epoch("updatedAt").notNull().default(nowDefault()),
@@ -1242,6 +1264,25 @@ export const agentTrafficReports = table("agent_traffic_reports", {
 export type AgentTrafficReport = typeof agentTrafficReports.$inferSelect;
 export type InsertAgentTrafficReport = typeof agentTrafficReports.$inferInsert;
 
+// Cumulative real-probe counter snapshots (Agent 2.2.229+). Deliberately
+// separate from the path-health rows in tcping_stats / *_latency_stats: those
+// suppress steady successes and reuse cached hops, so they cannot yield an
+// accurate failure rate. Statistics are deltas between snapshots of one
+// (hostId, kind, refId, probeKey, epoch) stream.
+export const probeCounterSnapshots = table("probe_counter_snapshots", {
+  id: serial("id"),
+  kind: varchar("kind", { length: 16 }).notNull(),
+  refId: int("refId").notNull(),
+  hostId: int("hostId").notNull(),
+  probeKey: varchar("probeKey", { length: 64 }).notNull(),
+  epoch: varchar("epoch", { length: 64 }).notNull(),
+  totalCount: int("totalCount").notNull(),
+  totalSuccesses: int("totalSuccesses").notNull(),
+  batchCount: int("batchCount").notNull(),
+  batchSuccesses: int("batchSuccesses").notNull(),
+  recordedAt: epoch("recordedAt").notNull().default(nowDefault()),
+});
+
 export const tunnelLatencyStats = table("tunnel_latency_stats", {
   id: serial("id"),
   tunnelId: int("tunnelId").notNull(),
@@ -1270,6 +1311,25 @@ export const forwardGroupLatencyStats = table("forward_group_latency_stats", {
 });
 export type ForwardGroupLatencyStat = typeof forwardGroupLatencyStats.$inferSelect;
 export type InsertForwardGroupLatencyStat = typeof forwardGroupLatencyStats.$inferInsert;
+
+/*
+  30 天延迟历史的按天汇总（server/repositories/latencyDailyRepository.ts）。原始样本只留 72 小时；
+  这张表每个对象每天一行。dayStart 是面板时区那天 0 点的 epoch 秒（用整数存，汇总 SQL 里直接算）。
+  latencySum / latencyWeight 是成功次数加权的延迟和与权重，平均延迟 = 两者相除。
+*/
+export const latencyDailyStats = table("latency_daily_stats", {
+  id: serial("id"),
+  targetType: varchar("targetType", { length: 16 }).notNull(),
+  targetId: int("targetId").notNull(),
+  dayStart: int("dayStart").notNull(),
+  probeCount: bigint("probeCount", { mode: "number" }).notNull().default(0),
+  probeSuccesses: bigint("probeSuccesses", { mode: "number" }).notNull().default(0),
+  latencySum: bigint("latencySum", { mode: "number" }).notNull().default(0),
+  latencyWeight: bigint("latencyWeight", { mode: "number" }).notNull().default(0),
+  minLatencyMs: int("minLatencyMs"),
+  maxLatencyMs: int("maxLatencyMs"),
+  updatedAt: int("updatedAt").notNull().default(0),
+});
 
 export const hostProbeServices = table("host_probe_services", {
   id: serial("id"),
@@ -1349,7 +1409,17 @@ export const forwardTests = table("forward_tests", {
   targetReachable: boolean("targetReachable").notNull().default(false),
   forwardOk: boolean("forwardOk").notNull().default(false),
   latencyMs: int("latencyMs"),
-  message: text("message"),
+  message: longtext("message"),
+  // The dispatch payload (self-test meta). `message` is overwritten by the
+  // Agent's result, so batch aggregation and timeouts read this instead.
+  requestMessage: text("requestMessage"),
+  // Durable multi-hop batch ("fc-..." forward chain, "tb-..." tunnel hops). Rows
+  // of a batch are aggregated from the database, so a panel restart no longer
+  // loses the batch; batchSettled is the single-winner claim on aggregation.
+  batchId: varchar("batchId", { length: 96 }),
+  batchSettled: boolean("batchSettled").notNull().default(false),
+  // First delivery to an Agent; lease renewals never extend the timeout.
+  firstDispatchedAt: epoch("firstDispatchedAt"),
   createdAt: epoch("createdAt").notNull().default(nowDefault()),
   updatedAt: epoch("updatedAt").notNull().default(nowDefault()),
 });

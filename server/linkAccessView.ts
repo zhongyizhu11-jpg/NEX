@@ -434,6 +434,10 @@ export function canUseForwardRuleResource(rule: any, scope: LinkAccessScope | nu
  * listener without hiding or mutating the user's saved rule.
  */
 export async function gateForwardRulesForRuntime<T extends Record<string, any>>(rules: T[]): Promise<T[]> {
+  // 单条规则限额（到期 / 额度用尽）和授权失效一样按停用下发；成员规则、中转跳继承根规则。
+  // 动态导入：ruleLimits 经 db 汇总模块会回头引到这里（permissionRepository），静态引会成环。
+  const { applyRuleLimitsForRuntime } = await import("./ruleLimits");
+  rules = await applyRuleLimitsForRuntime(rules);
   const userIds = Array.from(new Set(rules
     .map((rule) => positiveId(rule?.userId))
     .filter((id) => id > 0)));

@@ -1,5 +1,5 @@
 /*
-  逐跳连接监控（面板 2.3.449、FXP 2.2.133 起）。
+  逐跳连接监控（面板 2.3.451、FXP 2.2.133 起）。
 
   FXP 每分钟把这一分钟里每个（隧道, 规则, 角色, 阶段, 端点）的次数、失败、耗时分档报上来
   （forwardx-fxp/conn_stats.go → POST /api/agent/fxp-conn-stats），这里落成 connection_stage_stats

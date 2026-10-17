@@ -1,4 +1,5 @@
 import { DATABASE_MAINTENANCE_MESSAGE, isDatabaseMaintenanceActive } from "./databaseMaintenance";
+import { importPaymentPrivateKey, importPaymentPublicKey, type PaymentSigningProvider } from "./paymentCrypto";
 import crypto from "crypto";
 import express from "express";
 import { z } from "zod";
@@ -7,6 +8,8 @@ import { appendPanelLog } from "./_core/panelLogger";
 import { getConfiguredPanelUrl, resolvePanelUrl } from "./agentPanelUrl";
 import * as db from "./db";
 import { withKeyedTaskLock, withTrafficBillingUserLock } from "./keyedTaskLock";
+import { paymentOrderFailureMessage } from "./paymentFailureMessage";
+import { TRPCError } from "@trpc/server";
 import {
   parseEasyPayOrderQuery,
   parseStripeSessionQuery,
@@ -363,29 +366,14 @@ function getClientIp(req: express.Request) {
   return req.ip || req.socket.remoteAddress || "";
 }
 
-function formatPem(key: string, type: "PRIVATE KEY" | "PUBLIC KEY") {
-  const value = key.trim();
-  if (!value) return "";
-  if (value.includes("-----BEGIN")) return value;
-  const lines = value.replace(/\s+/g, "").match(/.{1,64}/g)?.join("\n") || value;
-  return `-----BEGIN ${type}-----\n${lines}\n-----END ${type}-----`;
+// 密钥格式的兼容和报错见 server/paymentCrypto.ts。
+function rsaSha256Sign(data: string, privateKey: string, provider: PaymentSigningProvider, output: BufferEncoding = "base64") {
+  return crypto.sign("RSA-SHA256", Buffer.from(data), importPaymentPrivateKey(privateKey, provider)).toString(output);
 }
 
-function importPrivateKey(key: string) {
-  return crypto.createPrivateKey(formatPem(key, "PRIVATE KEY"));
-}
-
-function importPublicKey(key: string) {
-  return crypto.createPublicKey(formatPem(key, "PUBLIC KEY"));
-}
-
-function rsaSha256Sign(data: string, privateKey: string, output: BufferEncoding = "base64") {
-  return crypto.sign("RSA-SHA256", Buffer.from(data), importPrivateKey(privateKey)).toString(output);
-}
-
-function rsaSha256Verify(data: string, signature: string, publicKey: string, input: BufferEncoding = "base64") {
+function rsaSha256Verify(data: string, signature: string, publicKey: string, provider: PaymentSigningProvider, input: BufferEncoding = "base64") {
   try {
-    return crypto.verify("RSA-SHA256", Buffer.from(data), importPublicKey(publicKey), Buffer.from(signature, input));
+    return crypto.verify("RSA-SHA256", Buffer.from(data), importPaymentPublicKey(publicKey, provider), Buffer.from(signature, input));
   } catch {
     return false;
   }
@@ -461,7 +449,7 @@ function alipaySign(params: Record<string, string>, privateKey: string) {
     .sort()
     .map((key) => `${key}=${params[key]}`)
     .join("&");
-  return rsaSha256Sign(signContent, privateKey);
+  return rsaSha256Sign(signContent, privateKey, "alipay");
 }
 
 function alipaySignContent(params: Record<string, string>) {
@@ -635,7 +623,7 @@ function wxpayAuthorization(config: WxpayConfig, method: string, urlPathWithQuer
   const timestamp = Math.floor(Date.now() / 1000).toString();
   const nonce = wxpayNonce();
   const message = `${method}\n${urlPathWithQuery}\n${timestamp}\n${nonce}\n${body}\n`;
-  const signature = rsaSha256Sign(message, config.privateKey);
+  const signature = rsaSha256Sign(message, config.privateKey, "wxpay");
   return `WECHATPAY2-SHA256-RSA2048 mchid="${config.mchId}",nonce_str="${nonce}",timestamp="${timestamp}",serial_no="${config.certSerial}",signature="${signature}"`;
 }
 
@@ -685,7 +673,7 @@ function verifyWxpaySignature(raw: string, headers: express.Request["headers"], 
   const ts = Number(timestamp);
   if (!Number.isFinite(ts) || Math.abs(Date.now() / 1000 - ts) > 5 * 60) return false;
   const message = `${timestamp}\n${nonce}\n${raw}\n`;
-  return rsaSha256Verify(message, signature, publicKey);
+  return rsaSha256Verify(message, signature, publicKey, "wxpay");
 }
 
 function verifyWxpaySerial(headers: express.Request["headers"], expectedPublicKeyId: string) {
@@ -965,6 +953,8 @@ export async function finalizePaidOrder(outTradeNo: string) {
           currency: String((order as any).currency || "CNY"),
           sourceType: "payment_order",
           sourceRef: outTradeNo,
+          // 绑定邀请人之前下的单不返：按下单时刻比，不按付款时刻。
+          orderCreatedAt: (order as any).createdAt ?? null,
         });
         if (commission?.reason === "non_cny") {
           appendPanelLog("warn", `[Referral] order=${outTradeNo} currency=${(order as any).currency} is not CNY; referral commission skipped`);
@@ -1497,8 +1487,10 @@ export const paymentRouter = router({
         // Only a still-pending order may be closed as failed. A provider
         // callback can complete the order while the create request is unwinding.
         await closePaymentOrderAndReleaseDiscount(outTradeNo, "failed").catch(() => undefined);
-        appendPanelLog("error", `[Payment] order create failed user=${ctx.user.id} provider=${provider} outTradeNo=${outTradeNo}: ${error?.message || error}`);
-        throw error;
+        appendPanelLog("error", `[Payment] order create failed user=${ctx.user.id} provider=${provider} outTradeNo=${outTradeNo}: ${error?.message || error}${error?.cause?.code ? ` (${error.cause.code})` : ""}`);
+        // 网关原文（HTML 错误页、Stripe 的密钥报错、OpenSSL 错误码、fetch failed）只进上面这条日志，
+        // 顾客只拿到归好类的说明，见 server/paymentFailureMessage.ts。
+        throw new TRPCError({ code: "BAD_GATEWAY", message: paymentOrderFailureMessage(error), cause: error });
       }
     }),
 });
@@ -1661,7 +1653,7 @@ paymentCallbackRouter.post("/api/payment/webhook/alipay", express.raw({ type: "*
     const raw = Buffer.isBuffer(req.body) ? req.body.toString("utf8") : "";
     const params = parseRawForm(raw);
     const sign = params.sign || "";
-    if (!config.alipay.publicKey || !sign || !rsaSha256Verify(alipaySignContent(params), sign, config.alipay.publicKey)) {
+    if (!config.alipay.publicKey || !sign || !rsaSha256Verify(alipaySignContent(params), sign, config.alipay.publicKey, "alipay")) {
       appendPanelLog("warn", "[Payment] Alipay notify signature failed");
       res.status(400).send("failure");
       return;

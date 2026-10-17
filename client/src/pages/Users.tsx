@@ -2355,7 +2355,7 @@ function UsersContent() {
                     onChange={(e) => setMaxIPs(parseInt(e.target.value) || 0)}
                     placeholder="0=不限制"
                   />
-                  <p className="text-xs text-muted-foreground">同一主机或同一隧道下，多条规则共享这个单 IP 接入上限。</p>
+                  <p className="text-xs text-muted-foreground">限制每个来源 IP 的 TCP 并发连接数，不是 IP 个数。隧道按规则计数；普通转发要在系统设置里打开「普通转发接入限制」才执行，按用户、入口主机共享。UDP 不适用。</p>
                 </FormField>
               </div>
               <Separator />
@@ -2501,7 +2501,7 @@ function UsersContent() {
                 </div>
                 <p className="text-xs text-muted-foreground">
                   填 0 表示不限速。突发：先按峰值跑这么多秒，用满了降回上面的速度，用得少时额度慢慢回满；峰值不高于上下行速度时不生效。
-                  上下行分开和突发需要 Agent 2.2.229 以上，gost 转发和隧道入口只按上下行速度限、不做突发。
+                  上下行分开和突发需要 Agent 2.2.230 以上，gost 转发和隧道入口只按上下行速度限、不做突发。
                 </p>
               </div>
 

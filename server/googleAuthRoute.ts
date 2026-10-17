@@ -37,7 +37,9 @@ import {
   GoogleJwksCache,
   GoogleOidcError,
   GOOGLE_STATE_TTL_MS,
+  googleConfigFingerprint,
   randomUrlToken,
+  timingSafeEqualText,
   verifyGoogleIdToken,
 } from "./googleOidc";
 import { isGoogleLoginConfigured, isGoogleLoginUsable, readGoogleLoginSettings } from "./googleLoginSettings";
@@ -185,7 +187,10 @@ async function handleStart(req: Request, res: Response) {
   const redirectPath = sanitizeRedirectPath(req.query.redirect, mode === "link" ? "/profile" : "/");
   // 登录（网页）和 App 流程都可能注册新账号，邀请码两条路都认；绑定流程用不上
   const inviteCode = mode === "login" || mode === "app" ? sanitizeGoogleInviteCode(req.query.invite) : null;
-  const created = googleAuthStates.create({ mode, redirectPath, userId, appFlowId: flowId, binding, inviteCode });
+  const created = googleAuthStates.create({
+    mode, redirectPath, userId, appFlowId: flowId, binding, inviteCode,
+    configHash: googleConfigFingerprint(settings),
+  });
   const authorizationUrl = buildGoogleAuthorizationUrl({
     clientId: settings.clientId,
     redirectUri: settings.redirectUri,
@@ -215,6 +220,11 @@ async function handleCallback(req: Request, res: Response) {
   }
   const settings = readGoogleLoginSettings(await db.getAllSettings());
   if (!isGoogleLoginUsable(settings)) return fail("disabled");
+  // 发起之后管理员改了客户端 / 密钥 / 面板地址：这次登录作废，不拿旧配置下的授权码去换票。
+  if (!entry.configHash || !timingSafeEqualText(entry.configHash, googleConfigFingerprint(settings))) {
+    console.warn(`[GoogleAuth] callback rejected: Google config changed since start mode=${mode} ip=${ip}`);
+    return fail("state_invalid");
+  }
   const code = typeof req.query.code === "string" ? req.query.code : "";
   if (!code || code.length > 2048) return fail("state_invalid");
 

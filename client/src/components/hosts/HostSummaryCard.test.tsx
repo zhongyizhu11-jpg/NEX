@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { HostFootRow, ResourceRow } from "./HostSummaryCard";
+import HostSummaryCard, { HostFootRow, ResourceRow, hostTrafficFailoverTitle } from "./HostSummaryCard";
+import { ConfirmDialogProvider } from "@/components/ui/confirm-dialog";
 import { deriveHostVitals } from "./useHostVitals";
 
 const now = 1_700_000_000_000;
@@ -46,4 +47,20 @@ test("规格格数字不知道（没上报过）就不画条", () => {
   const host = { id: 5, name: "new", isOnline: true, lastHeartbeat: now - 5000 };
   const html = renderToStaticMarkup(<ResourceRow vitals={deriveHostVitals(host, [])} />);
   assert.doesNotMatch(html, /fx-host-spec-bar/);
+});
+
+test("流量到阈值被暂停参与组调度：注脚里标「组调度已暂停」，排在「可升级」前面", () => {
+  const base = { id: 5, name: "HK entry 01", isOnline: true, lastHeartbeat: now - 5000, geoRegion: "Central", ip: "192.0.2.21", agentVersion: "2.2.100", trafficLimit: 1000, trafficFailoverEnabled: true, trafficFailoverThresholdPercent: 90 };
+  const render = (host: any) => renderToStaticMarkup(
+    <ConfirmDialogProvider>
+      <HostSummaryCard host={host} metrics={[metric]} canUpgrade upgradeAvailable onOpenDetail={() => {}} onEdit={() => {}} onDelete={() => {}} onUpgrade={() => {}} />
+    </ConfirmDialogProvider>,
+  );
+  const paused = render({ ...base, trafficFailoverExcluded: true });
+  assert.match(paused, /data-host-traffic-failover="">组调度已暂停</);
+  assert.ok(paused.indexOf("组调度已暂停") < paused.indexOf("可升级"));
+  assert.match(hostTrafficFailoverTitle(base), /90%/);
+  // 没到阈值、或者开关关着（存着的派生值还没来得及重算）：都不标。
+  assert.doesNotMatch(render({ ...base, trafficFailoverExcluded: false }), /组调度已暂停/);
+  assert.doesNotMatch(render({ ...base, trafficFailoverEnabled: false, trafficFailoverExcluded: true }), /组调度已暂停/);
 });

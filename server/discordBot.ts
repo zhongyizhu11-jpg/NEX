@@ -18,7 +18,7 @@
 import crypto from "node:crypto";
 import { setBoundedMapValue } from "./boundedCache";
 import type { FetchLike } from "./googleOidc";
-import { DISCORD_MESSAGE_MAX_LENGTH, truncateDiscordText } from "./discordText";
+import { splitDiscordText } from "./discordText";
 
 export const DISCORD_API_BASE = "https://discord.com/api/v10";
 export const DISCORD_RETRY_AFTER_MAX_MS = 30_000;
@@ -147,9 +147,21 @@ export class DiscordRestClient {
     this.dmChannels.delete(recipientId);
   }
 
-  /** 给这个 Discord 用户发一条私信（纯文字 / Markdown，不提醒任何人，不展开链接预览）。 */
+  /**
+   * 给这个 Discord 用户发私信（纯文字 / Markdown，不提醒任何人，不展开链接预览）。
+   * 超过 2000 字的拆成几条按顺序发（splitDiscordText），不截断；每条都走 request，429 按 retry_after 等。
+   * 返回最后一条的结果。
+   */
   async sendDirectMessage(recipientId: string, content: string) {
-    const text = truncateDiscordText(String(content || "").trim() || "（空消息）", DISCORD_MESSAGE_MAX_LENGTH);
+    const chunks = splitDiscordText(String(content || "").trim());
+    let result: { id?: string } | undefined;
+    for (const chunk of chunks.length > 0 ? chunks : ["（空消息）"]) {
+      result = await this.sendDirectMessageChunk(recipientId, chunk);
+    }
+    return result;
+  }
+
+  private async sendDirectMessageChunk(recipientId: string, text: string) {
     const payload = { content: text, allowed_mentions: { parse: [] as string[] }, flags: SUPPRESS_EMBEDS };
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const channelId = await this.openDmChannel(recipientId);

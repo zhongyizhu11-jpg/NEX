@@ -1,5 +1,5 @@
 /*
-  转发限速（面板 2.3.449 起）：上下行分开、多级叠加、先放一段突发再降速。
+  转发限速（面板 2.3.451 起）：上下行分开、多级叠加、先放一段突发再降速。
 
   一条转发规则同时受这几级约束，每一级是一个按 scope 共享的桶（同一个 scope 下所有规则、所有连接
   共用，开多少线程都绕不过去）；同一方向上每一级都要过，实际速度就是最严的那一级：
@@ -8,7 +8,7 @@
     用户突发    同上 + user-…-sustain              峰值 burstMbps，跑满 burstSeconds 秒的额度后回到基础速率
     隧道        user-<用户>-host-<主机>-tunnel-<隧道> 上下行同一个数
     转发组      user-<用户>-host-<主机>-group-<组>   上下行同一个数
-    规则（端口） rule-<规则>                         上行 / 下行分开
+    规则        rule-<根规则>-host-<主机>            上下行同一个数（规则表单里的单条规则限速，管理员设）
     整台主机    host-<主机>                         所有用户加起来，上下行同一个数
 
   方向：in = 客户端 → 目标（上行），out = 目标 → 客户端（下行），和 Agent 守卫、gost 限速器一致。
@@ -103,7 +103,8 @@ export function buildForwardRateTiers(input: ForwardRateInput): ForwardRateTier[
   const ruleId = positiveId(input.rule?.id);
   const ruleIn = normalizeMbps(input.rule?.inMbps);
   const ruleOut = normalizeMbps(input.rule?.outMbps);
-  if (ruleId > 0 && (ruleIn > 0 || ruleOut > 0)) tiers.push({ scope: `rule-${ruleId}`, inMbps: ruleIn, outMbps: ruleOut });
+  // 和 server/ruleLimits.ts 的口径一致：根规则的 id，同一台机器上共用一个桶。
+  if (ruleId > 0 && (ruleIn > 0 || ruleOut > 0)) tiers.push({ scope: `rule-${ruleId}-host-${hostId}`, inMbps: ruleIn, outMbps: ruleOut });
 
   const hostMbps = normalizeMbps(input.hostLimitMbps);
   if (hostId > 0 && hostMbps > 0) tiers.push({ scope: `host-${hostId}`, inMbps: hostMbps, outMbps: hostMbps });

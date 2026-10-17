@@ -82,8 +82,9 @@ test("订阅地址按 token 返回节点，并按客户端 UA 选择格式", () 
     assert.equal(base64.headers["subscription-userinfo"], "upload=0; download=12345; total=1000000");
     assert.equal(base64.headers["cache-control"], "no-store");
     // 订阅名称用订阅所属用户的用户名，导进客户端不用再改名。
-    assert.equal(base64.headers["content-disposition"], "attachment; filename*=UTF-8''owner");
-    assert.equal(base64.headers["profile-title"], "base64:" + Buffer.from("owner").toString("base64"));
+    // 订阅名是新建链接时起的名字（「手机」），不是用户名。
+    assert.equal(base64.headers["content-disposition"], "attachment; filename*=UTF-8''" + encodeURIComponent("手机"));
+    assert.equal(base64.headers["profile-title"], "base64:" + Buffer.from("手机").toString("base64"));
 
     // UA 识别：Clash 拿到 YAML，sing-box 拿到 JSON，Loon 拿到节点行。
     const clash = await get("/api/sub/token-live", { "user-agent": "clash-verge/1.5.0" });
@@ -100,7 +101,7 @@ test("订阅地址按 token 返回节点，并按客户端 UA 选择格式", () 
     // 同一个令牌带上 rules=1 就是规则订阅，用令牌上配的预设。
     const clashRules = await get("/api/sub/token-live?format=clash&rules=1");
     assert.ok(clashRules.body.includes("rule-providers:"), clashRules.body);
-    assert.equal(clashRules.headers["content-disposition"], "attachment; filename*=UTF-8''" + encodeURIComponent("owner 规则"));
+    assert.equal(clashRules.headers["content-disposition"], "attachment; filename*=UTF-8''" + encodeURIComponent("手机 规则"));
     assert.ok(clashRules.body.includes("RULE-SET,ads,REJECT"), clashRules.body);
     assert.ok(clashRules.body.includes("🎯 国内直连"), clashRules.body);
     // 局域网走原生网段，不引用外部规则集。
