@@ -7,6 +7,8 @@ import { appendPanelLog } from "./_core/panelLogger";
 import { getConfiguredPanelUrl, resolvePanelUrl } from "./agentPanelUrl";
 import * as db from "./db";
 import { withKeyedTaskLock, withTrafficBillingUserLock } from "./keyedTaskLock";
+import { paymentOrderFailureMessage } from "./paymentFailureMessage";
+import { TRPCError } from "@trpc/server";
 import {
   parseEasyPayOrderQuery,
   parseStripeSessionQuery,
@@ -1497,8 +1499,10 @@ export const paymentRouter = router({
         // Only a still-pending order may be closed as failed. A provider
         // callback can complete the order while the create request is unwinding.
         await closePaymentOrderAndReleaseDiscount(outTradeNo, "failed").catch(() => undefined);
-        appendPanelLog("error", `[Payment] order create failed user=${ctx.user.id} provider=${provider} outTradeNo=${outTradeNo}: ${error?.message || error}`);
-        throw error;
+        appendPanelLog("error", `[Payment] order create failed user=${ctx.user.id} provider=${provider} outTradeNo=${outTradeNo}: ${error?.message || error}${error?.cause?.code ? ` (${error.cause.code})` : ""}`);
+        // 网关原文（HTML 错误页、Stripe 的密钥报错、OpenSSL 错误码、fetch failed）只进上面这条日志，
+        // 顾客只拿到归好类的说明，见 server/paymentFailureMessage.ts。
+        throw new TRPCError({ code: "BAD_GATEWAY", message: paymentOrderFailureMessage(error), cause: error });
       }
     }),
 });

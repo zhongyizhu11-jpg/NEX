@@ -1,4 +1,5 @@
 import { toast } from "sonner";
+import { friendlyErrorNotificationText } from "./errorNotificationText";
 
 /*
   结果通知的显示时长：所有通知一律 1 秒。
@@ -16,6 +17,11 @@ function withFixedDuration(original: ToastFn): ToastFn {
   return (message, data) => original(message, { ...data, duration: TOAST_DURATION_MS });
 }
 
+/** 报错通知顺手把认得出的底层报错（OpenSSL / fetch failed）换成人话，见 errorNotificationText.ts。 */
+function withFriendlyErrorText(original: ToastFn): ToastFn {
+  return (message, data) => original(typeof message === "string" ? friendlyErrorNotificationText(message) : message, data);
+}
+
 let installed = false;
 
 export function installToastDurations(target: typeof toast = toast) {
@@ -24,6 +30,6 @@ export function installToastDurations(target: typeof toast = toast) {
   target.success = withFixedDuration(target.success.bind(target));
   target.info = withFixedDuration(target.info.bind(target));
   target.message = withFixedDuration(target.message.bind(target));
-  target.error = withFixedDuration(target.error.bind(target));
+  target.error = withFriendlyErrorText(withFixedDuration(target.error.bind(target)));
   target.warning = withFixedDuration(target.warning.bind(target));
 }
