@@ -219,7 +219,7 @@ const (
 	fxpUDPIdleTimeout    = 5 * time.Minute
 	fxpProtocolSampleMax = 512
 	fxpMasterContext     = "forwardx-fxp-v2 master"
-	fxpRuntimeVersion    = "2.2.132"
+	fxpRuntimeVersion    = "2.2.133"
 	fxpFallbackRetry     = 5 * time.Second
 	// A node that stays down is re-probed on a growing delay, because probing a
 	// peer that accepts but never answers costs a whole handshake timeout.
@@ -1984,7 +1984,9 @@ func handleExitTCP(sec *secureConn, hello helloFrame, cfg config) error {
 // the given transport, which is a single secure connection for an ordinary
 // session and a multipath session when the entry striped it over several legs.
 func relayExitTCPToTarget(sec frameConn, hello helloFrame, cfg config) error {
+	dialStarted := time.Now()
 	target, err := dialExitTarget(hello, 10*time.Second)
+	recordConnStage(cfg, hello.TunnelID, hello.RuleID, "exit", "target", connStatsEndpoint(hello.TargetIP, hello.TargetPort), time.Since(dialStarted), err)
 	if err != nil {
 		return fmt.Errorf("dial target: %w", err)
 	}

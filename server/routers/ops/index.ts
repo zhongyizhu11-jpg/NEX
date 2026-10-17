@@ -21,6 +21,7 @@ import { quotaPolicyRouter } from "./quotaPolicy";
 import { resourceAlertRouter } from "./resourceAlert";
 import { hostLogsRouter } from "./hostLogs";
 import { faultBoardRouter } from "./faultBoard";
+import { connStatsRouter } from "./connStats";
 
 export const opsRouter = router({
   events: eventsRouter,
@@ -41,4 +42,5 @@ export const opsRouter = router({
   resourceAlert: resourceAlertRouter,
   hostLogs: hostLogsRouter,
   faultBoard: faultBoardRouter,
+  connStats: connStatsRouter,
 });

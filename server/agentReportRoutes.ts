@@ -32,6 +32,7 @@ import { getTunnelMultiEntryLatency, recordTunnelMultiEntryLatency } from "./tun
 import { completeLookingGlassAgentTask, updateLookingGlassAgentTaskProgress, type LookingGlassMethod } from "./lookingGlassAgentTasks";
 import { completeDiagnosticsAgentTask } from "./diagnosticsAgentTasks";
 import { observeTunnelProbeLoss } from "./resourceAlertNotifier";
+import { recordConnStatsReport } from "./ops/connStats";
 import { completeIperf3AgentTask } from "./iperf3AgentTasks";
 import { completePluginAgentTask } from "./pluginAgentTasks";
 import { reportMimicInstallResult } from "./mimicInstallTasks";
@@ -826,6 +827,29 @@ agentRouter.post("/api/agent/fxp-link-shaping", async (req: Request, res: Respon
   } catch (error) {
     appendPanelLog("error", `[LinkShaping] report failed: ${error instanceof Error ? error.message : String(error)}`);
     res.status(500).json({ error: "failed to record link shaping status" });
+  }
+});
+
+// FXP 报逐跳连接统计（forwardx-fxp/conn_stats.go）：每分钟一次，每个（隧道, 规则, 角色, 阶段, 端点）一行。
+agentRouter.post("/api/agent/fxp-conn-stats", async (req: Request, res: Response) => {
+  try {
+    const host = await getAgentHostIdentityFromRequest(req);
+    if (!host) {
+      res.status(401).json({ error: "Invalid token" });
+      return;
+    }
+    const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+    if (rows.length === 0 || rows.length > 500) {
+      res.status(400).json({ error: "rows must have 1-500 entries" });
+      return;
+    }
+    const saved = await recordConnStatsReport(Number((host as any).id), rows, {
+      tunnelExists: async (tunnelId) => !!(await db.getTunnelById(tunnelId)),
+    });
+    res.json({ ok: true, saved });
+  } catch (error) {
+    appendPanelLog("error", `[ConnStats] report failed: ${error instanceof Error ? error.message : String(error)}`);
+    res.status(500).json({ error: "failed to record connection stats" });
   }
 });
 
