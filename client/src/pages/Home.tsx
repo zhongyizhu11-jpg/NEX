@@ -1,4 +1,6 @@
 import WorkspaceHeader from "@/components/WorkspaceHeader";
+import PearlHeaderBadges from "@/components/PearlHeaderBadges";
+import { useUiTheme } from "@/hooks/useUiTheme";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { quotaSourceLabel } from "@shared/ledgerLabels";
 import { formatMoneyCents as money } from "@shared/formatMoney";
@@ -54,6 +56,8 @@ function getExpiryStatus(value: string | Date | null | undefined) {
 
 function DashboardContent() {
   const { user } = useAuth();
+  // 「珍珠」主题照上游仪表盘：标题右边日期铭牌 + 系统在线，四张统计卡排在地图前面。别的主题顺序和节点都不变。
+  const pearl = useUiTheme() === "pearl";
   const isAdmin = user?.role === "admin";
   const [, setLocation] = useLocation();
   const { data: trafficTotals, isLoading: trafficTotalsLoading } = trpc.dashboard.trafficTotals.useQuery(undefined, {
@@ -213,6 +217,18 @@ function DashboardContent() {
     我的账户。租户把账户提到流量前面：对他来说「额度还剩多少、哪天到期」就是
     他的「系统状态」，比一张走势图要紧。
   */
+  const statusHeader = (
+      <SystemStatusHeader
+        health={health as SystemHealth | undefined}
+        loading={healthLoading}
+        isAdmin={isAdmin}
+        onRetry={() => { void refetchHealth(); }}
+        onOpenAttention={() => {
+          document.getElementById("dashboard-attention")?.scrollIntoView({ behavior: "smooth", block: "start" });
+        }}
+      />
+  );
+
   return (
     <div className="space-y-6">
       {/*
@@ -227,22 +243,15 @@ function DashboardContent() {
             `${health.forwards.total} 条转发`,
           ].filter(Boolean).join(" · ")}
         </span>
-      ) : null} />
+      ) : null} actions={pearl ? <PearlHeaderBadges /> : undefined} />
       {/*
         概览放在数字前面：这一页第一眼看到的是「机器在哪、谁转给谁、哪条断了」，数字是第二眼的事
         （用户 2026-09-27 明确要它留在顶端）。没有主机时它自己不出现。
         它的几条请求不等 health：health 还没回来时照常并行取，health 说没有主机才停。
       */}
+      {pearl ? statusHeader : null}
       <NetworkMapSlot enabled={!health || health.hosts.total > 0} cacheScope={accountCacheScope} onOpen={setLocation} />
-      <SystemStatusHeader
-        health={health as SystemHealth | undefined}
-        loading={healthLoading}
-        isAdmin={isAdmin}
-        onRetry={() => { void refetchHealth(); }}
-        onOpenAttention={() => {
-          document.getElementById("dashboard-attention")?.scrollIntoView({ behavior: "smooth", block: "start" });
-        }}
-      />
+      {pearl ? null : statusHeader}
       <QuickStartSection health={health as SystemHealth | undefined} isAdmin={isAdmin} onOpen={setLocation} />
       <AttentionSection
         attention={(health as SystemHealth | undefined)?.attention}

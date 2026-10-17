@@ -58,6 +58,7 @@ test("theme-pearl.css 的每条选择器都只在珍珠主题下生效", () => {
     /^html(\.dark)?\[data-ui-theme="pearl"\]/,
     /^(\.dark )?\.fx-uitheme-swatch\[data-theme="pearl"\]/,
     /^\.fx-pearl-nav-marker$/,
+    /^@keyframes fx-pearl-/,
   ];
   const leaks = all.filter((selector) => !allowed.some((pattern) => pattern.test(selector)));
   assert.deepEqual(leaks, []);

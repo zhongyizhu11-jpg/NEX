@@ -101,6 +101,7 @@ import { normalizeSidebarMenuSettings, type SidebarMenuKey } from "@shared/sideb
 import { buildPanelInstallerCommand } from "@shared/githubAccelerator";
 import { WorkspaceCommand, type WorkspaceDestination } from "@/components/WorkspaceNavigation";
 import PearlNavMarker from "@/components/PearlNavMarker";
+import { useUiTheme } from "@/hooks/useUiTheme";
 import { navigateAfterPrefetch, prefetchRoute, prefetchRoutesWhenIdle } from "@/pages/routeChunks";
 import { docsUrl } from "@/lib/docsLinks";
 
@@ -386,6 +387,7 @@ function DashboardLayoutContent({
   const { user, logout } = useAuth();
   const [location, setLocation] = useLocation();
   const { state, toggleSidebar, isMobile, openMobile, setOpenMobile } = useSidebar();
+  const uiTheme = useUiTheme();
   const openMobileRef = useRef(openMobile);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   /*
@@ -1530,36 +1532,8 @@ function DashboardLayoutContent({
     };
   }, [isMobile, setOpenMobile]);
 
-  return (
-    <>
-      {/*
-        ── 顶栏 ──────────────────────────────────────────────────
-
-        照参考站（New API / Vexo）的外壳：一条 48px 的顶栏横贯整个宽度，品牌在左，
-        搜索、主题、账户在右；侧栏从顶栏下面开始，只放导航。上一版把品牌、主题开关、
-        折叠键塞在侧栏头上、账户塞在侧栏脚下 —— 侧栏一列要干四件事，而参考站的侧栏
-        只干一件：导航。
-
-        手机上顶栏也在（品牌 + 搜索 + 账户），导航仍交给底部标签栏。
-      */}
-      <header className="workspace-appbar">
-        <div className="workspace-appbar-inner">
-          {!isMobile ? (
-            <button
-              type="button"
-              onClick={toggleSidebar}
-              className="workspace-appbar-icon"
-              aria-label={isDesktopCollapsed ? "展开导航" : "收起导航"}
-            >
-              <PanelLeft className="h-4 w-4" aria-hidden="true" />
-            </button>
-          ) : null}
-          <button type="button" className="workspace-appbar-brand" onClick={() => navigateFromSidebar("/")} title={siteTitle}>
-            {logoMark}
-            <span className="workspace-appbar-title">{siteTitle}</span>
-            {publicInfo?.version ? <span className="workspace-appbar-version">v{String(publicInfo.version).replace(/^v/i, "")}</span> : null}
-          </button>
-          <div className="workspace-appbar-actions">
+  const pearl = uiTheme === "pearl";
+  const appbarSearchButton = (
             <button
               type="button"
               className="workspace-appbar-search"
@@ -1571,6 +1545,8 @@ function DashboardLayoutContent({
               <span className="workspace-appbar-search-label">搜索</span>
               <kbd className="workspace-appbar-kbd">⌘K</kbd>
             </button>
+  );
+  const appbarThemeButton = (
             <button
               type="button"
               onClick={toggleTheme}
@@ -1580,18 +1556,8 @@ function DashboardLayoutContent({
             >
               {resolvedTheme === "dark" ? <Sun className="h-4 w-4" aria-hidden="true" /> : <Moon className="h-4 w-4" aria-hidden="true" />}
             </button>
-            <UiThemeQuickSwitch />
-          <DropdownMenu open={accountMenuOpen} onOpenChange={setAccountMenuOpen} modal={false}>
-            <DropdownMenuTrigger asChild>
-              <button
-                type="button"
-                className="workspace-appbar-account"
-                title={accountDisplayName}
-                aria-label={`账户：${accountDisplayName}`}
-              >
-                <UserAvatar user={user as any} className="h-7 w-7 shrink-0" />
-              </button>
-            </DropdownMenuTrigger>
+  );
+  const accountMenuContent = (
             <DropdownMenuContent align="end" className="w-56">
               <div className="px-2 py-1.5">
                 <div className="flex items-start gap-2">
@@ -1651,10 +1617,94 @@ function DashboardLayoutContent({
                 <span>退出登录</span>
               </DropdownMenuItem>
             </DropdownMenuContent>
+  );
+  const pearlPageLabel = activeMenuItem?.label ?? siteTitle;
+  const pearlAccountRole = `${isAdmin ? "管理员" : "用户"} · ${telegramStatus?.bound ? "TG 已绑定" : "TG 未绑定"}`;
+  const pearlAppbar = pearl ? (
+      <header className="workspace-appbar fx-pearl-topbar" data-mobile={isMobile ? "" : undefined}>
+        <div className="workspace-appbar-inner">
+          {isMobile ? (
+            <>
+              <button type="button" onClick={toggleSidebar} className="workspace-appbar-icon fx-pearl-drawer-trigger" aria-label="打开导航" aria-expanded={openMobile}>
+                <PanelLeft className="h-5 w-5" aria-hidden="true" />
+              </button>
+              <span className="fx-pearl-topbar-title">{pearlPageLabel}</span>
+            </>
+          ) : (
+            <nav className="fx-pearl-crumb" aria-label="当前位置">
+              <span className="fx-pearl-crumb-site">{siteTitle}</span>
+              <span className="fx-pearl-crumb-sep" aria-hidden="true">/</span>
+              <span className="fx-pearl-crumb-page">{pearlPageLabel}</span>
+            </nav>
+          )}
+          <div className="workspace-appbar-actions">
+            {appbarSearchButton}
+            {appbarThemeButton}
+            <UiThemeQuickSwitch />
+            {!isMobile ? <span className="fx-pearl-topbar-user" title={accountDisplayName}>{accountDisplayName}</span> : null}
+          </div>
+        </div>
+      </header>
+  ) : null;
+
+  return (
+    <>
+      {/*
+        ── 顶栏 ──────────────────────────────────────────────────
+
+        照参考站（New API / Vexo）的外壳：一条 48px 的顶栏横贯整个宽度，品牌在左，
+        搜索、主题、账户在右；侧栏从顶栏下面开始，只放导航。上一版把品牌、主题开关、
+        折叠键塞在侧栏头上、账户塞在侧栏脚下 —— 侧栏一列要干四件事，而参考站的侧栏
+        只干一件：导航。
+
+        手机上顶栏也在（品牌 + 搜索 + 账户），导航仍交给底部标签栏。
+      */}
+      {pearl ? null : (
+      <header className="workspace-appbar">
+        <div className="workspace-appbar-inner">
+          {!isMobile ? (
+            <button
+              type="button"
+              onClick={toggleSidebar}
+              className="workspace-appbar-icon"
+              aria-label={isDesktopCollapsed ? "展开导航" : "收起导航"}
+            >
+              <PanelLeft className="h-4 w-4" aria-hidden="true" />
+            </button>
+          ) : null}
+          <button type="button" className="workspace-appbar-brand" onClick={() => navigateFromSidebar("/")} title={siteTitle}>
+            {logoMark}
+            <span className="workspace-appbar-title">{siteTitle}</span>
+            {publicInfo?.version ? <span className="workspace-appbar-version">v{String(publicInfo.version).replace(/^v/i, "")}</span> : null}
+          </button>
+          <div className="workspace-appbar-actions">
+            {appbarSearchButton}
+            {appbarThemeButton}
+            <UiThemeQuickSwitch />
+          <DropdownMenu open={accountMenuOpen} onOpenChange={setAccountMenuOpen} modal={false}>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className="workspace-appbar-account"
+                title={accountDisplayName}
+                aria-label={`账户：${accountDisplayName}`}
+              >
+                <UserAvatar user={user as any} className="h-7 w-7 shrink-0" />
+              </button>
+            </DropdownMenuTrigger>
+            {accountMenuContent}
           </DropdownMenu>
           </div>
         </div>
       </header>
+      )}
+      {/*
+        「珍珠」主题（theme-pearl.css）照上游 Forwardx 的 Pearl 外壳：桌面上顶栏在侧栏右边（左边一条
+        「站点 / 页面」面包屑，右边搜索、深浅色、调色盘、一段用户名），品牌和折叠键挪到侧栏头上，
+        账户挪到侧栏脚下一张用户卡；手机上是一条「抽屉键 + 页面名」的顶栏，导航走抽屉，不要底部标签栏。
+        只在珍珠下渲染，别的主题这里一个节点都不多。
+      */}
+      {pearl && isMobile ? pearlAppbar : null}
 
       <div className="workspace-body">
       {/*
@@ -1662,8 +1712,29 @@ function DashboardLayoutContent({
         只放导航：品牌、搜索、主题、账户都在顶栏上。
       */}
       <Sidebar collapsible="icon" className="workspace-sidebar">
+        {pearl ? (
+          <SidebarHeader className="fx-pearl-sidebar-header">
+            {isDesktopCollapsed ? (
+              <button type="button" onClick={toggleSidebar} className="fx-pearl-sidebar-logo-button" aria-label="展开导航" title={siteTitle}>
+                {logoMark}
+              </button>
+            ) : (
+              <>
+                <button type="button" className="fx-pearl-sidebar-brand" onClick={() => navigateFromSidebar("/")} title={siteTitle}>
+                  {logoMark}
+                  <span className="fx-pearl-sidebar-title">{siteTitle}</span>
+                </button>
+                {!isMobile ? (
+                  <button type="button" onClick={toggleSidebar} className="fx-pearl-sidebar-toggle" aria-label="收起导航">
+                    <PanelLeft className="h-4 w-4" aria-hidden="true" />
+                  </button>
+                ) : null}
+              </>
+            )}
+          </SidebarHeader>
+        ) : null}
         <SidebarContent className="gap-1 pb-2 mobile-sidebar-content">
-          <PearlNavMarker collapsed={isDesktopCollapsed} />
+          <PearlNavMarker collapsed={isDesktopCollapsed || isMobile} />
           {primaryMenuItems.length > 0 && (
             <SidebarGroup className={cn("pb-2 mobile-sidebar-group", mobileAuth.isNative && "pb-1.5")}>
               <SidebarGroupLabel className="text-xs text-muted-foreground uppercase tracking-wider">
@@ -1781,11 +1852,26 @@ function DashboardLayoutContent({
               </div>
             </button>
           )}
+          {pearl ? (
+            <DropdownMenu open={accountMenuOpen} onOpenChange={setAccountMenuOpen} modal={false}>
+              <DropdownMenuTrigger asChild>
+                <button type="button" className="fx-pearl-user-card" title={accountDisplayName} aria-label={`账户：${accountDisplayName}`}>
+                  <UserAvatar user={user as any} className="fx-pearl-user-avatar shrink-0" />
+                  <span className="fx-pearl-user-text">
+                    <span className="fx-pearl-user-name">{accountDisplayName}</span>
+                    <span className="fx-pearl-user-role">{pearlAccountRole}</span>
+                  </span>
+                </button>
+              </DropdownMenuTrigger>
+              {accountMenuContent}
+            </DropdownMenu>
+          ) : null}
         </SidebarFooter>
       </Sidebar>
 
       <SidebarInset className="workspace-inset workspace-with-mobile-nav">
         <a className="workspace-skip-link" href="#workspace-content">跳到主要内容</a>
+        {pearl && !isMobile ? pearlAppbar : null}
         {/*
           手机端不再有这条常驻顶栏。
 
@@ -1796,7 +1882,7 @@ function DashboardLayoutContent({
 
           页面名由各页的 WorkspaceHeader 画，见那个组件。
         */}
-        <main id="workspace-content" tabIndex={-1} data-mobile-main="true" className={cn("workspace-main flex-1 px-3 pb-4 pt-3 sm:px-6 sm:pb-6 sm:pt-5 lg:px-8", isMobile && tabBarPlan.tabs.length ? "workspace-has-tabbar" : null, isMobile ? "workspace-has-iosnav" : null)}>
+        <main id="workspace-content" tabIndex={-1} data-mobile-main="true" className={cn("workspace-main flex-1 px-3 pb-4 pt-3 sm:px-6 sm:pb-6 sm:pt-5 lg:px-8", isMobile && tabBarPlan.tabs.length && !pearl ? "workspace-has-tabbar" : null, isMobile ? "workspace-has-iosnav" : null)}>
           {/*
             兜底的「没读到」提示。
             各个列表自己会画失败态，但一页上挂着十几个查询，不可能每个都单独接一遍；
@@ -1874,7 +1960,7 @@ function DashboardLayoutContent({
             ) : null}
           </div>
         </footer>
-        {isMobile ? (
+        {isMobile && !pearl ? (
           <IosTabBar plan={tabBarPlan} currentPath={currentPath} onNavigate={(path) => navigateFromSidebar(path)} />
         ) : null}
       </SidebarInset>

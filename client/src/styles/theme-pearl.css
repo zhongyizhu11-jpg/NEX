@@ -81,11 +81,11 @@ html[data-ui-theme="pearl"] {
   --fx-accent-soft: rgb(14 17 22 / 7%);
   --fx-accent-fill: #0e1116;
   --fx-accent-fill-foreground: #fafafa;
-  --fx-primary-gradient: linear-gradient(180deg, #262b33 0%, #0e1116 100%);
-  --fx-primary-gradient-hover: linear-gradient(180deg, #1c2128 0%, #050608 100%);
+  --fx-primary-gradient: linear-gradient(#12161c, #12161c);
+  --fx-primary-gradient-hover: linear-gradient(#262b33, #262b33);
   --fx-primary-sheen: linear-gradient(180deg, rgb(255 255 255 / 16%) 0%, rgb(255 255 255 / 0%) 100%);
-  --fx-primary-fill: #0e1116;
-  --fx-primary-fill-hover: #050608;
+  --fx-primary-fill: #12161c;
+  --fx-primary-fill-hover: #262b33;
   --fx-primary-text: #fafafa;
   --fx-primary-stroke: transparent;
   --fx-primary-shadow: inset 0 1px 0 rgb(255 255 255 / 18%), 0 3px 8px -3px color-mix(in srgb, var(--fx-primary-fill) 48%, transparent);
@@ -143,11 +143,11 @@ html.dark[data-ui-theme="pearl"] {
   --fx-accent-soft: rgb(232 236 239 / 10%);
   --fx-accent-fill: #e8ecef;
   --fx-accent-fill-foreground: #0e1116;
-  --fx-primary-gradient: linear-gradient(180deg, #f6f8f9 0%, #dde2e6 100%);
-  --fx-primary-gradient-hover: linear-gradient(180deg, #ffffff 0%, #e8ecef 100%);
+  --fx-primary-gradient: linear-gradient(#e6e9ec, #e6e9ec);
+  --fx-primary-gradient-hover: linear-gradient(#f4f6f7, #f4f6f7);
   --fx-primary-sheen: linear-gradient(180deg, rgb(255 255 255 / 30%) 0%, rgb(255 255 255 / 0%) 100%);
-  --fx-primary-fill: #e8ecef;
-  --fx-primary-fill-hover: #ffffff;
+  --fx-primary-fill: #e6e9ec;
+  --fx-primary-fill-hover: #f4f6f7;
   --fx-primary-text: #0e1116;
   --fx-primary-shadow: inset 0 1px 0 rgb(255 255 255 / 60%), 0 3px 10px -3px rgb(0 0 0 / 55%);
   --fx-mesh-1: rgb(255 255 255 / 4%);
@@ -171,55 +171,141 @@ html.dark[data-ui-theme="pearl"] .dialog-overlay { --dialog-overlay-tint: rgb(0 
 html[data-ui-theme="pearl"] body { -webkit-font-smoothing: antialiased; }
 html[data-ui-theme="pearl"] ::selection { background: color-mix(in srgb, var(--fx-primary-fill) 18%, transparent); }
 
-/* ── 1. 外壳：珍珠玻璃顶栏 + 侧栏 ─────────────────────────────── */
+/* ── 1. 外壳：照上游 Pearl 的侧栏 + 顶栏 ─────────────────────────
+  量的是上游本地跑起来的样子（1440 宽，2026-10-17）：侧栏 240px 通顶，头上一条 64px 的品牌栏
+  （28px 标志 + 16px 粗体站名 + 折叠键），分组小标题 12px / 500 / 0.05em 加宽、淡到 60%；菜单项
+  40px 高、14px 字、8px 内边距、项间 4px；脚下一张用户卡（36px 头像 + 名字 + 「管理员 · TG 未绑定」）。
+  顶栏在侧栏右边，64px，左边「站点 / 页面」面包屑（12.8px），右边控件之后一段用户名（12px，左边一道线）。
+  这些节点由 DashboardLayout.tsx 只在珍珠下渲染（fx-pearl-*）。
+*/
+html[data-ui-theme="pearl"] {
+  --fx-sidebar-width: 15rem;
+  --fx-pearl-sidebar-fg: #59666b;
+  --fx-pearl-label: rgb(96 109 115 / 60%);
+}
+html.dark[data-ui-theme="pearl"] {
+  --fx-pearl-sidebar-fg: #b2beba;
+  --fx-pearl-label: rgb(163 176 182 / 60%);
+}
 html[data-ui-theme="pearl"] .workspace-appbar {
   background: var(--fx-pearl-glass);
-  -webkit-backdrop-filter: blur(12px);
-  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   border-bottom-color: var(--fx-stroke-weak);
+  box-shadow: none;
 }
-@media (min-width: 768px) {
-  /* 上游顶栏 4rem 高；手机上 NEX 走大标题导航栏，不动 */
-  html[data-ui-theme="pearl"] { --fx-header-height: 60px; }
-  html[data-ui-theme="pearl"] .workspace-appbar-inner { padding-inline: 12px 16px; }
-}
-html[data-ui-theme="pearl"] .workspace-appbar-title { font-size: 16px; font-weight: 650; letter-spacing: -.01em; }
-html[data-ui-theme="pearl"] .workspace-appbar-version { border: 1px solid var(--fx-stroke-weak); background: transparent; font-family: var(--fx-font-mono); font-size: 10.5px; }
+html[data-ui-theme="pearl"] .workspace-appbar-icon { width: 36px; height: 36px; border-radius: 12px; color: var(--fx-text); }
+html[data-ui-theme="pearl"] .workspace-appbar-icon:hover { background: var(--fx-hover); }
+/* 搜索：上游这个位置是那枚带边线的语言下拉（33px 高、14px 圆角、页面底色） */
 html[data-ui-theme="pearl"] .workspace-appbar-search {
+  height: 34px;
+  padding: 0 10px;
   border: 1px solid var(--fx-stroke-weak);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--fx-l1-surface) 80%, var(--fx-l0-page));
-  box-shadow: var(--fx-pearl-inset);
+  border-radius: 14px;
+  background: var(--fx-l0-page);
+  color: var(--fx-text);
+  font-size: 14px;
 }
-html[data-ui-theme="pearl"] .workspace-appbar-search:hover { border-color: var(--fx-stroke-base); background: var(--fx-l1-surface); }
-html[data-ui-theme="pearl"] .workspace-appbar-icon,
-html[data-ui-theme="pearl"] .workspace-appbar-brand { border-radius: 12px; }
-@media (max-width: 639px) {
-  html[data-ui-theme="pearl"] .workspace-appbar-search { border-color: transparent; background: transparent; box-shadow: none; }
+html[data-ui-theme="pearl"] .workspace-appbar-search:hover { border-color: var(--fx-stroke-base); background: var(--fx-l0-page); }
+html[data-ui-theme="pearl"] .workspace-appbar-actions { gap: 8px; }
+html[data-ui-theme="pearl"] .fx-theme-dot { box-shadow: 0 0 0 1px var(--fx-stroke-weak); }
+@media (min-width: 768px) {
+  html[data-ui-theme="pearl"] { --fx-header-height: 64px; }
+  /* 侧栏通顶：顶栏不再横在它上面，挪进了右边的内容区（fx-pearl-topbar） */
+  html[data-ui-theme="pearl"] .workspace-sidebar { top: 0; }
+  html[data-ui-theme="pearl"] .workspace-inset { min-height: 100svh; }
+  html[data-ui-theme="pearl"] .fx-pearl-topbar { flex-shrink: 0; }
+  html[data-ui-theme="pearl"] .fx-pearl-topbar .workspace-appbar-inner { height: 64px; gap: 16px; padding: 0 24px; justify-content: space-between; }
+  html[data-ui-theme="pearl"] .workspace-main { padding: 24px; }
+}
+html[data-ui-theme="pearl"] .fx-pearl-crumb { display: flex; min-width: 0; align-items: center; gap: 12px; font-size: 12.8px; line-height: 19.2px; color: var(--fx-text); }
+html[data-ui-theme="pearl"] .fx-pearl-crumb > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html[data-ui-theme="pearl"] .fx-pearl-crumb-site { color: var(--fx-text-muted); }
+html[data-ui-theme="pearl"] .fx-pearl-crumb-sep { color: color-mix(in srgb, var(--fx-text-muted) 50%, transparent); }
+html[data-ui-theme="pearl"] .fx-pearl-crumb-page { font-weight: 500; }
+html[data-ui-theme="pearl"] .fx-pearl-topbar-user {
+  max-width: 9rem;
+  overflow: hidden;
+  padding-left: 12px;
+  border-left: 1px solid var(--fx-stroke-weak);
+  color: var(--fx-text-muted);
+  font-size: 12px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 手机顶栏：上游是一条 56px 的玻璃条，左边抽屉键（36px、页面底色的小方块）+ 页面名，右边深浅色 */
+@media (max-width: 767px) {
+  html[data-ui-theme="pearl"] { --fx-header-height: 56px; }
+  html[data-ui-theme="pearl"] .fx-pearl-topbar .workspace-appbar-inner { gap: 8px; padding: 0 8px; }
+  html[data-ui-theme="pearl"] .fx-pearl-drawer-trigger { background: var(--fx-l0-page); border-radius: 12px; }
+  html[data-ui-theme="pearl"] .fx-pearl-topbar-title { min-width: 0; overflow: hidden; color: var(--fx-text); font-size: 16px; letter-spacing: -.025em; text-overflow: ellipsis; white-space: nowrap; }
+  html[data-ui-theme="pearl"] .fx-pearl-topbar .workspace-appbar-search { width: 36px; height: 36px; padding: 0; justify-content: center; border-color: transparent; background: transparent; }
+  html[data-ui-theme="pearl"] .workspace-main { padding-inline: 12px; }
 }
 
-/* 侧栏：比页面亮一点的珍珠白，右边一道细线；分组小标题全大写加宽字距、淡一档 */
-html[data-ui-theme="pearl"] .workspace-layout [data-sidebar="sidebar"] { background: var(--fx-sidebar); border-right-color: var(--fx-stroke-weak); }
-/* 不写 opacity：折叠成图标栏时侧栏组件靠 opacity: 0 把小标题藏起来，这里写了会把它盖回来 */
-html[data-ui-theme="pearl"] .workspace-layout [data-sidebar="group-label"] { font-size: 10.5px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; color: color-mix(in srgb, var(--fx-text-muted) 85%, transparent); }
-html[data-ui-theme="pearl"] .workspace-layout [data-sidebar="menu-button"] {
-  min-height: 38px;
+/* 侧栏：珍珠白（#f6f8f7），右边一道细线 */
+html[data-ui-theme="pearl"] .workspace-layout [data-sidebar="sidebar"],
+html[data-ui-theme="pearl"] [data-mobile-sidebar="true"] { background: var(--fx-sidebar); color: var(--fx-pearl-sidebar-fg); }
+html[data-ui-theme="pearl"] .workspace-sidebar { border-right-color: var(--fx-stroke-weak); }
+/* 手机抽屉也挂着 workspace-sidebar 这个类（它给桌面侧栏让出顶栏的高度）；珍珠的抽屉通顶 */
+html[data-ui-theme="pearl"] [data-mobile-sidebar="true"].workspace-sidebar { top: 0; height: 100dvh; }
+html[data-ui-theme="pearl"] .fx-pearl-sidebar-header {
+  height: 64px;
+  min-height: 64px;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--fx-stroke-weak);
+}
+html[data-ui-theme="pearl"] .fx-pearl-sidebar-brand { display: flex; min-width: 0; align-items: center; gap: 8px; color: var(--fx-pearl-sidebar-fg); }
+html[data-ui-theme="pearl"] .fx-pearl-sidebar-brand img,
+html[data-ui-theme="pearl"] .fx-pearl-sidebar-brand > div,
+html[data-ui-theme="pearl"] .fx-pearl-sidebar-logo-button img { width: 28px; height: 28px; border-radius: 6px; }
+html[data-ui-theme="pearl"] .fx-pearl-sidebar-title { overflow: hidden; font-size: 16px; font-weight: 700; line-height: 24px; letter-spacing: -.025em; text-overflow: ellipsis; white-space: nowrap; }
+html[data-ui-theme="pearl"] .fx-pearl-sidebar-toggle,
+html[data-ui-theme="pearl"] .fx-pearl-sidebar-logo-button { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 10px; color: var(--fx-text-muted); transition: background-color 150ms; }
+html[data-ui-theme="pearl"] .fx-pearl-sidebar-logo-button { width: 36px; height: 36px; }
+html[data-ui-theme="pearl"] .fx-pearl-sidebar-toggle:hover,
+html[data-ui-theme="pearl"] .fx-pearl-sidebar-logo-button:hover { background: var(--fx-hover); }
+html[data-ui-theme="pearl"] .group[data-collapsible="icon"] .fx-pearl-sidebar-header { justify-content: center; padding-inline: 0; }
+/* 分组小标题：12px / 500 / 0.05em 加宽、全大写、淡到 60%（不写 opacity：折叠时组件靠 opacity: 0 藏它） */
+html[data-ui-theme="pearl"] .workspace-layout [data-sidebar="group-label"],
+html[data-ui-theme="pearl"] [data-mobile-sidebar="true"] [data-sidebar="group-label"] { height: 32px; padding-inline: 8px; color: var(--fx-pearl-label); font-size: 12px; font-weight: 500; line-height: 16px; letter-spacing: .05em; text-transform: uppercase; }
+html[data-ui-theme="pearl"] [data-sidebar="menu"] { gap: 4px; }
+html[data-ui-theme="pearl"] .workspace-layout [data-sidebar="menu-button"],
+html[data-ui-theme="pearl"] [data-mobile-sidebar="true"] [data-sidebar="menu-button"] {
+  height: 40px;
+  min-height: 40px;
+  gap: 8px;
+  padding: 8px;
   border: 1px solid transparent;
-  border-radius: 12px;
-  padding-inline: 11px;
-  font-weight: 500;
+  border-radius: 14px;
+  color: var(--fx-pearl-sidebar-fg);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 20px;
   transition: color 160ms, background-color 160ms, border-color 160ms, box-shadow 160ms;
 }
+html[data-ui-theme="pearl"] .workspace-layout [data-sidebar="menu-button"] > svg,
+html[data-ui-theme="pearl"] [data-mobile-sidebar="true"] [data-sidebar="menu-button"] > svg { color: currentColor; }
+html[data-ui-theme="pearl"] .workspace-layout [data-sidebar="menu-button"]:hover,
+html[data-ui-theme="pearl"] [data-mobile-sidebar="true"] [data-sidebar="menu-button"]:hover { background: color-mix(in srgb, var(--fx-hover) 70%, transparent); color: var(--fx-text); }
 /*
-  选中项：一块浮起来的瓷片（瓷面 + 主色 13% 掺进去的细线 + 软影），字和图标是主色（墨）。
+  选中项：一块浮起来的瓷片（瓷面 + 主色 13% 掺进去的细线 + 软影，12px），字和图标是主色（墨）、字重不变。
   PearlNavMarker 量好位置后给侧栏挂 data-pearl-marker，这块瓷片就交给那枚会滑的标记画，
-  按钮本身透明；标记没挂上（还没量、或者折叠成图标栏）时按钮自己画同一块瓷片。
+  按钮本身透明；标记没挂上（还没量、折叠成图标栏、手机抽屉）时按钮自己画同一块瓷片。
 */
-html[data-ui-theme="pearl"] .workspace-layout [data-sidebar="menu-button"][data-active="true"] {
+html[data-ui-theme="pearl"] .workspace-layout [data-sidebar="menu-button"][data-active="true"],
+html[data-ui-theme="pearl"] [data-mobile-sidebar="true"] [data-sidebar="menu-button"][data-active="true"] {
   border-color: color-mix(in srgb, var(--fx-primary-fill) 13%, var(--fx-stroke-weak));
+  border-radius: 12px;
   background: var(--fx-pearl-surface);
   color: var(--fx-primary-fill);
-  font-weight: 600;
+  font-weight: 400;
   box-shadow: var(--fx-pearl-shadow);
 }
 html[data-ui-theme="pearl"] .workspace-layout [data-sidebar="menu-button"][data-active="true"] > svg,
@@ -242,13 +328,56 @@ html[data-ui-theme="pearl"] .fx-pearl-nav-marker {
 }
 html[data-ui-theme="pearl"] .fx-pearl-nav-marker[data-instant] { transition: none; }
 html[data-ui-theme="pearl"] .fx-pearl-nav-marker[hidden] { display: none; }
+/* 侧栏脚：一道细线，下面一张用户卡（36px 头像、14px / 500 名字、12px 灰字身份，16px 圆角、淡边） */
+html[data-ui-theme="pearl"] .workspace-layout [data-sidebar="footer"],
+html[data-ui-theme="pearl"] [data-mobile-sidebar="true"] [data-sidebar="footer"] { padding: 12px; border-top: 1px solid var(--fx-stroke-weak); }
+html[data-ui-theme="pearl"] .group[data-collapsible="icon"] [data-sidebar="footer"] { padding: 6px; }
+html[data-ui-theme="pearl"] .fx-pearl-user-card {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 8px;
+  border: 1px solid color-mix(in srgb, var(--fx-stroke-weak) 40%, transparent);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--fx-l0-page) 35%, transparent);
+  text-align: left;
+  transition: background-color 150ms;
+}
+html[data-ui-theme="pearl"] .fx-pearl-user-card:hover { background: color-mix(in srgb, var(--fx-hover) 50%, transparent); }
+html[data-ui-theme="pearl"] .fx-pearl-user-card:focus-visible { outline: 2px solid var(--fx-accent-strong); outline-offset: 2px; }
+html[data-ui-theme="pearl"] .fx-pearl-user-avatar { width: 36px; height: 36px; }
+html[data-ui-theme="pearl"] .fx-pearl-user-text { display: flex; min-width: 0; flex: 1 1 auto; flex-direction: column; gap: 4px; }
+html[data-ui-theme="pearl"] .fx-pearl-user-name { overflow: hidden; color: var(--fx-pearl-sidebar-fg); font-size: 14px; font-weight: 500; line-height: 20px; text-overflow: ellipsis; white-space: nowrap; }
+html[data-ui-theme="pearl"] .fx-pearl-user-role { color: var(--fx-text-muted); font-size: 12px; line-height: 16px; overflow-wrap: anywhere; }
+html[data-ui-theme="pearl"] .group[data-collapsible="icon"] .fx-pearl-user-card { justify-content: center; padding: 4px 0; border-color: transparent; background: transparent; }
+html[data-ui-theme="pearl"] .group[data-collapsible="icon"] .fx-pearl-user-text { display: none; }
+html[data-ui-theme="pearl"] .group[data-collapsible="icon"] .fx-pearl-user-avatar { width: 32px; height: 32px; }
 
-/* 页面标题：底下一道细线把标题区和内容分开（上游 .pearl-page-header），标题 650 收字距 */
-html[data-ui-theme="pearl"] .workspace-main .workspace-header { padding-bottom: 16px; border-bottom: 1px solid var(--fx-stroke-weak); }
-html[data-ui-theme="pearl"] .workspace-main .workspace-header-title { font-weight: 650; letter-spacing: -.02em; }
-html[data-ui-theme="pearl"] .fx-navbar-large-title { font-weight: 650; letter-spacing: -.02em; }
+/* 页面标题：上游 .pearl-page-header —— 24px / 700 / -0.025em，下面 14px 灰字，标题区底下一道细线、和内容隔 24px */
+html[data-ui-theme="pearl"] .workspace-main .workspace-header { padding: 4px 0 16px; border-bottom: 1px solid var(--fx-stroke-weak); }
+html[data-ui-theme="pearl"] .workspace-main .workspace-header-title { font-size: 24px; line-height: 32px; font-weight: 700; letter-spacing: -.025em; }
+html[data-ui-theme="pearl"] .workspace-main .workspace-header-meta { margin-top: 4px; color: var(--fx-text-muted); font-size: 14px; line-height: 20px; }
+html[data-ui-theme="pearl"] .fx-navbar-large-title { font-weight: 700; letter-spacing: -.025em; }
+/* 标题旁边并排挂着一枚徽标的页（个人资料）：细线画在外面那一行上，横贯整页，不只垫在标题下面 */
+html[data-ui-theme="pearl"] .workspace-main div.flex:has(> .workspace-header:first-child + [data-slot="badge"]) { padding-bottom: 16px; border-bottom: 1px solid var(--fx-stroke-weak); }
+html[data-ui-theme="pearl"] .workspace-main div.flex:has(> .workspace-header:first-child + [data-slot="badge"]) > .workspace-header { padding-bottom: 0; border-bottom: 0; }
+@media (max-width: 639px) {
+  html[data-ui-theme="pearl"] .workspace-main .workspace-header { padding: 2px 0 14px; }
+  html[data-ui-theme="pearl"] .workspace-main .workspace-header-title { font-size: 20px; line-height: 28px; }
+  html[data-ui-theme="pearl"] .workspace-main .workspace-header-meta { font-size: 12px; line-height: 16px; }
+}
+/* 首页标题右边的日期铭牌（深色等宽字小牌）+「系统在线」绿边胶囊：PearlHeaderBadges，只在珍珠下渲染 */
+html[data-ui-theme="pearl"] .fx-pearl-header-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+html[data-ui-theme="pearl"] .fx-pearl-spec-plate { padding: 8.8px 13.6px; border: 1px solid rgb(255 255 255 / 10%); border-radius: 12px; background: #20282c; color: #e4ece7; font: 500 12px/18px ui-monospace, SFMono-Regular, Consolas, monospace; box-shadow: inset 0 1px 0 rgb(255 255 255 / 7%); }
+html[data-ui-theme="pearl"] .fx-pearl-online { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border: 1px solid rgb(16 185 129 / 30%); border-radius: 999px; color: #047857; font-size: 12px; font-weight: 500; line-height: 16px; }
+html.dark[data-ui-theme="pearl"] .fx-pearl-online { color: #6ee7b7; }
+html[data-ui-theme="pearl"] .fx-pearl-online::before { content: ""; width: 6px; height: 6px; border-radius: 999px; background: #10b981; }
+@media (max-width: 767px) {
+  html[data-ui-theme="pearl"] .fx-pearl-spec-plate { display: none; }
+}
 html[data-ui-theme="pearl"] .fx-list-section-header,
-html[data-ui-theme="pearl"] .workspace-main .fx-list-section-header { font-size: 11px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; color: var(--fx-text-muted); }
+html[data-ui-theme="pearl"] .workspace-main .fx-list-section-header { font-size: 12px; font-weight: 500; letter-spacing: .05em; color: var(--fx-text-muted); }
 html[data-ui-theme="pearl"] .workspace-main [data-slot="card-title"] { font-weight: 600; letter-spacing: -.01em; }
 
 /* ── 2. 瓷片卡 ─────────────────────────────────────────────── */
@@ -259,30 +388,109 @@ html[data-ui-theme="pearl"] .workspace-main [data-slot="card-title"] { font-weig
 */
 html[data-ui-theme="pearl"]:not([data-card-style]) .workspace-main [data-slot="card"],
 html[data-ui-theme="pearl"][data-card-style="edge"] .workspace-main [data-slot="card"],
-html[data-ui-theme="pearl"]:not([data-card-style]) .fx-card-face,
-html[data-ui-theme="pearl"][data-card-style="edge"] .fx-card-face,
-html[data-ui-theme="pearl"] .fx-summary {
+html[data-ui-theme="pearl"]:not([data-card-style]) .fx-card-face:not(.fx-summary):not(.system-health),
+html[data-ui-theme="pearl"][data-card-style="edge"] .fx-card-face:not(.fx-summary):not(.system-health) {
   border: 1px solid var(--fx-card-stroke);
   background: var(--fx-pearl-surface);
   box-shadow: var(--fx-pearl-shadow);
 }
-html[data-ui-theme="pearl"]:not([data-card-style]) .workspace-main [data-tone="warn"][data-slot="card"],
-html[data-ui-theme="pearl"][data-card-style="edge"] .workspace-main [data-tone="warn"][data-slot="card"],
-html[data-ui-theme="pearl"]:not([data-card-style]) .fx-card-face[data-tone="warn"],
-html[data-ui-theme="pearl"][data-card-style="edge"] .fx-card-face[data-tone="warn"],
-html[data-ui-theme="pearl"]:not([data-card-style]) .workspace-main [data-tone="down"][data-slot="card"],
-html[data-ui-theme="pearl"][data-card-style="edge"] .workspace-main [data-tone="down"][data-slot="card"],
-html[data-ui-theme="pearl"]:not([data-card-style]) .fx-card-face[data-tone="down"],
-html[data-ui-theme="pearl"][data-card-style="edge"] .fx-card-face[data-tone="down"] {
-  border-color: color-mix(in srgb, var(--fx-card-tone) 35%, var(--fx-card-stroke));
+/* 上游的卡不按状态染边：状态由卡里的点、标签和读数说。这里也不染（纯中性细线）。 */
+/*
+  统计条（SummaryStrip，首页「主机 / 线路 / 转发 / 连接」和各页的数字条）照上游仪表盘的 DashboardStatCard：
+  一格一张卡（16px 圆角、淡边、瓷面 + 那张卡颜色 4% 的一层底），左边 12px 灰标题、24px 粗数字、12px 小字，
+  右上一颗 40px 的实心圆、里面白色图标（上游 teal / blue / emerald / orange 四色）；卡与卡隔 16px。
+  手机上两列、圆图标收起来（上游 sm:flex）。
+  首页那张「运行状态」（.system-health）在这套下不再是一整张卡：四张统计卡一排，「几处需要关注」单独一张横条卡。
+*/
+html[data-ui-theme="pearl"] .fx-summary,
+html[data-ui-theme="pearl"] .fx-overview-card .fx-summary {
+  gap: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
-/* 首页那张大概览卡：上游 Card variant="featured" —— 线掺一点主色，左上角一抹 5% 的主色 */
-html[data-ui-theme="pearl"] .fx-overview-card.fx-card-face,
-html[data-ui-theme="pearl"] .fx-overview-card[data-slot="card"] {
-  border-color: color-mix(in srgb, var(--fx-primary-fill) 18%, var(--fx-card-stroke));
-  background: radial-gradient(ellipse at 0% 0%, color-mix(in srgb, var(--fx-primary-fill) 5%, transparent), transparent 65%), var(--fx-pearl-surface);
+html[data-ui-theme="pearl"] .fx-summary-cell,
+html[data-ui-theme="pearl"] .fx-overview-card .fx-summary-cell {
+  --fx-pearl-tone-a: #14b8a6;
+  --fx-pearl-tone-b: #0d9488;
+  position: relative;
+  min-height: 104px;
+  gap: 4px;
+  margin: 0;
+  padding: 16px 68px 16px 16px;
+  border: 1px solid color-mix(in srgb, var(--fx-stroke-weak) 40%, transparent);
+  border-radius: 16px;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--fx-pearl-tone-a) 4%, transparent), color-mix(in srgb, var(--fx-pearl-tone-b) 4%, transparent)),
+    var(--fx-pearl-surface);
+  box-shadow: var(--fx-pearl-shadow);
+  transition: border-color 300ms var(--fx-pearl-ease), box-shadow 300ms var(--fx-pearl-ease);
 }
-html[data-ui-theme="pearl"] .fx-overview-card .fx-summary { border: 0; background: transparent; box-shadow: none; }
+html.dark[data-ui-theme="pearl"] .fx-summary-cell {
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--fx-pearl-tone-a) 7%, transparent), color-mix(in srgb, var(--fx-pearl-tone-b) 7%, transparent)),
+    var(--fx-pearl-surface);
+}
+html[data-ui-theme="pearl"] .fx-summary-cell + .fx-summary-cell { border-left-color: color-mix(in srgb, var(--fx-stroke-weak) 40%, transparent); }
+html[data-ui-theme="pearl"] .fx-summary-cell:has(.fx-tile[data-tone="teal"]) { --fx-pearl-tone-a: #3b82f6; --fx-pearl-tone-b: #2563eb; }
+html[data-ui-theme="pearl"] .fx-summary-cell:has(.fx-tile[data-tone="green"]) { --fx-pearl-tone-a: #10b981; --fx-pearl-tone-b: #059669; }
+html[data-ui-theme="pearl"] .fx-summary-cell:has(.fx-tile[data-tone="orange"]) { --fx-pearl-tone-a: #f97316; --fx-pearl-tone-b: #ea580c; }
+html[data-ui-theme="pearl"] .fx-summary-cell:has(.fx-tile[data-tone="violet"]) { --fx-pearl-tone-a: #8b5cf6; --fx-pearl-tone-b: #7c3aed; }
+html[data-ui-theme="pearl"] .fx-summary-cell:has(.fx-tile[data-tone="pink"]) { --fx-pearl-tone-a: #ec4899; --fx-pearl-tone-b: #db2777; }
+html[data-ui-theme="pearl"] .fx-summary-cell:not(:has(.fx-tile)) { padding-right: 16px; }
+html[data-ui-theme="pearl"] .fx-summary-cell .fx-tile {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  background: linear-gradient(to bottom right, var(--fx-pearl-tone-a), var(--fx-pearl-tone-b));
+  box-shadow: 0 1px 2px rgb(0 0 0 / 5%);
+}
+html[data-ui-theme="pearl"] .fx-summary-cell .fx-tile > svg { width: 20px; height: 20px; }
+html[data-ui-theme="pearl"] .fx-summary-cell > span:first-child { color: var(--fx-text-muted); font-size: 12px; font-weight: 500; line-height: 16px; }
+html[data-ui-theme="pearl"] .fx-summary-value,
+html[data-ui-theme="pearl"] .fx-overview-card .fx-summary-value { font-size: 24px; line-height: 30px; font-weight: 700; letter-spacing: -.025em; }
+html[data-ui-theme="pearl"] .fx-summary-cell > span:last-child:not(:first-child):not(:nth-child(2)) { font-size: 12px; line-height: 16px; }
+@media (hover: hover) and (pointer: fine) {
+  html[data-ui-theme="pearl"] .fx-summary-cell:hover {
+    border-color: color-mix(in srgb, var(--fx-primary-fill) 30%, var(--fx-stroke-weak));
+    box-shadow: 0 4px 20px -4px var(--fx-pearl-glow), var(--fx-pearl-overlay-shadow);
+  }
+}
+@media (max-width: 639px) {
+  html[data-ui-theme="pearl"] .fx-summary.grid-cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  html[data-ui-theme="pearl"] .fx-summary { gap: 12px; }
+  html[data-ui-theme="pearl"] .fx-summary-cell,
+  html[data-ui-theme="pearl"] .fx-overview-card .fx-summary-cell { min-height: 0; padding: 16px; }
+  html[data-ui-theme="pearl"] .fx-summary-cell .fx-tile { display: none; }
+  html[data-ui-theme="pearl"] .fx-summary-value,
+  html[data-ui-theme="pearl"] .fx-overview-card .fx-summary-value { font-size: 24px; line-height: 30px; }
+}
+/* 首页「运行状态」：外层不再是卡，四张统计卡之下「几处需要关注」是一张横条卡 */
+html[data-ui-theme="pearl"] .system-health.fx-overview-card.fx-card-face {
+  gap: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+html[data-ui-theme="pearl"] .system-health .system-health-verdict,
+html[data-ui-theme="pearl"] .fx-overview-card .system-health-verdict {
+  padding: 14px 16px;
+  border: 1px solid color-mix(in srgb, var(--fx-stroke-weak) 40%, transparent);
+  border-radius: 16px;
+  background: var(--fx-pearl-surface);
+  box-shadow: var(--fx-pearl-shadow);
+}
+html[data-ui-theme="pearl"] .system-health .system-health-verdict[data-tone="warn"] {
+  border-color: color-mix(in srgb, var(--fx-warn) 30%, var(--fx-stroke-weak));
+  background: radial-gradient(ellipse at 0% 50%, color-mix(in srgb, var(--fx-warn) 7%, transparent), transparent 60%), var(--fx-pearl-surface);
+}
 /*
   整张能点的卡：悬上去线染一点主色、影子换成浮层那一档（上游 .pearl-card-interactive:hover），
   不位移不缩放；键盘焦点落在卡里时线也染上。只在有鼠标的设备上。
@@ -301,9 +509,7 @@ html[data-ui-theme="pearl"] .fx-cardstyle-swatch[data-style="edge"] .fx-cardstyl
 html[data-ui-theme="pearl"] .fx-host-spec { background: color-mix(in srgb, var(--fx-hover) 65%, var(--fx-l1-surface)); box-shadow: var(--fx-pearl-inset); }
 html[data-ui-theme="pearl"] .fx-host-spec-bar { box-shadow: inset 0 1px 2px rgb(20 34 28 / 7%); }
 html[data-ui-theme="pearl"] .fx-host-spec > b,
-html[data-ui-theme="pearl"] .fx-summary-value,
 html[data-ui-theme="pearl"] .fx-rule-num > b { font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
-html[data-ui-theme="pearl"] .fx-summary-cell + .fx-summary-cell { border-left-color: var(--fx-stroke-weak); }
 /* 主机卡的系统图标格：上游 .pearl-icon-badge 那种 10px 圆角、一圈细线、一道顶部高光 */
 html[data-ui-theme="pearl"] .fx-host-card > div:first-child > span:first-child { border-radius: 10px; border: 1px solid var(--fx-stroke-weak); box-shadow: 0 1px 2px rgb(0 0 0 / 4%), inset 0 1px 0 var(--fx-pearl-highlight); }
 /* 规则卡 / 链路卡底部那条：上面一道细线；规则卡里的小标签 8px 圆角 */
@@ -320,14 +526,228 @@ html[data-ui-theme="pearl"] .workspace-header-aside .fx-sparkline path:last-of-t
 html[data-ui-theme="pearl"] .fx-rule-card[data-tone="ok"] .fx-rule-spark stop,
 html[data-ui-theme="pearl"] .workspace-header-aside .fx-sparkline stop { stop-color: var(--fx-chart-1); }
 
-/* ── 3. 控件 ─────────────────────────────────────────────────── */
-/* 按钮：12px；悬上去上浮 1px、按下缩到 96.5%（上游 .pearl-button），只在有鼠标的设备上浮 */
+/*
+  ── 2b. 卡的版式：照上游的规则卡 / 链路卡 / 主机卡 / 分组卡 ─────────────
+  节点全是 NEX 自己的（内容一样不少），珍珠下只换摆法：
+    · 卡：16px 圆角、淡边（40%）、瓷面 + 两层软影，内边距 24px（手机 16px）。
+    · 规则卡：名字 16px / 500、下面一行灰字；入口 / 出口各是一格凹进去的小框（框头一行 11px「入口」「出口」小字，
+      框里等宽地址），两格之间一枚小圆圈里的向下箭头；累计流量 + 走势 + 近 24H 收进一块凹进去的读数板，排在地址后面。
+    · 链路卡：路径收进一格凹进去的框；底下延迟那一行上面一道细线。
+    · 主机卡：系统图标格（32px、10px 圆角、细线）和右上角操作在第一行，名字 + 地区 / IP 收进一格凹进去的信息框，
+      资源一项一行（左标签、右数、下面一根 6px 的细条），底下状态那一行上面一道细线。
+    · 分组列表（ListSection）：整个分组是一张卡，组名是卡头（14px / 500 灰字，内边距 24px），
+      行收进卡里一块凹进去的框（上游「我的消耗」里那种读数格）。
+*/
+html[data-ui-theme="pearl"] .workspace-main .fx-rule-card,
+html[data-ui-theme="pearl"] .workspace-main .fx-host-card,
+html[data-ui-theme="pearl"] section:has(> .fx-grouped-list) {
+  border-radius: 16px;
+}
+/* 凹进去的一格：上游 .pearl-readout —— muted 65% 掺卡底、一道很淡的内阴影 + 底边高光 */
+html[data-ui-theme="pearl"] {
+  --fx-pearl-well: color-mix(in srgb, var(--fx-hover) 65%, var(--fx-l1-surface));
+  --fx-pearl-well-stroke: color-mix(in srgb, var(--fx-stroke-weak) 50%, transparent);
+}
+
+/* 规则卡 */
+html[data-ui-theme="pearl"] .workspace-main .fx-rule-card .fx-rule-card-body,
+html[data-ui-theme="pearl"] .workspace-main .fx-rule-card[data-size="standard"] .fx-rule-card-body { display: flex; flex-direction: column; padding: 22px 24px 20px; }
+html[data-ui-theme="pearl"] .fx-rule-name { font-size: 16px; font-weight: 500; line-height: 24px; letter-spacing: 0; }
+html[data-ui-theme="pearl"] .fx-rule-sub { margin-top: 2px; font-size: 12.5px; line-height: 18px; }
+html[data-ui-theme="pearl"] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-path {
+  order: 3;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 22px;
+  margin-top: 14px;
+  padding-top: 0;
+  border-top: 0;
+  font-size: 12px;
+  color: var(--fx-text);
+}
+html[data-ui-theme="pearl"] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-path > .fx-rule-addr-group,
+html[data-ui-theme="pearl"] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-path > .fx-rule-addr-list,
+html[data-ui-theme="pearl"] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-path > .fx-rule-path-to {
+  position: relative;
+  display: flex;
+  min-height: 52px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  max-width: none;
+  padding: 22px 12px 8px;
+  border: 1px solid var(--fx-pearl-well-stroke);
+  border-radius: 16px;
+  background: var(--fx-pearl-well);
+  box-shadow: var(--fx-pearl-inset);
+}
+html[data-ui-theme="pearl"] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-path > :is(.fx-rule-addr-group, .fx-rule-addr-list, .fx-rule-path-to)::before {
+  position: absolute;
+  top: 5px;
+  left: 9px;
+  color: var(--fx-text-muted);
+  font-family: var(--fx-font);
+  font-size: 11px;
+  line-height: 14px;
+  letter-spacing: 0;
+}
+html[data-ui-theme="pearl"] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-path > :is(.fx-rule-addr-group, .fx-rule-addr-list)::before { content: "入口"; }
+html[data-ui-theme="pearl"] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-path > .fx-rule-path-to::before { content: "出口"; }
+html[data-ui-theme="pearl"] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-path .fx-rule-addr { flex: 1 1 auto; justify-content: space-between; }
+/* 入口和出口之间那枚小圆圈里的向下箭头（就是 NEX 原来那根 → 箭头，转 90°、挪到两格中间） */
+html[data-ui-theme="pearl"] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-path-arrow {
+  position: absolute;
+  top: -20px;
+  left: calc(50% - 9px);
+  width: 18px;
+  height: 18px;
+  padding: 3px;
+  border: 1px solid color-mix(in srgb, var(--fx-primary-fill) 25%, var(--fx-stroke-weak));
+  border-radius: 999px;
+  background: var(--fx-l1-surface);
+  color: var(--fx-text-secondary);
+  transform: rotate(90deg);
+}
+html[data-ui-theme="pearl"] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-path-end { justify-content: flex-end; margin: -12px 0 0; padding: 0; }
+html[data-ui-theme="pearl"] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-path-end:empty { display: none; }
+/* 累计 + 走势 + 近 24H：一块凹进去的读数板，排在地址后面 */
+html[data-ui-theme="pearl"] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-big {
+  order: 4;
+  align-items: center;
+  gap: 14px;
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--fx-pearl-well-stroke);
+  border-radius: 16px;
+  background: var(--fx-pearl-well);
+  box-shadow: var(--fx-pearl-inset);
+}
+html[data-ui-theme="pearl"] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-num { display: grid; grid-template-columns: auto auto; align-items: baseline; column-gap: 3px; row-gap: 4px; }
+html[data-ui-theme="pearl"] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-num::before { content: "累计流量"; grid-column: 1 / -1; color: var(--fx-text-muted); font-size: 12px; font-weight: 400; line-height: 16px; }
+html[data-ui-theme="pearl"] .fx-rule-num > b { font-size: 18px; font-weight: 600; letter-spacing: -.01em; }
+html[data-ui-theme="pearl"] .fx-rule-day { gap: 4px; font-size: 12px; line-height: 16px; }
+html[data-ui-theme="pearl"] .fx-rule-day-val { color: var(--fx-text); font-weight: 500; }
+html[data-ui-theme="pearl"] .fx-rule-alerts { margin-top: 12px; }
+
+/* 链路卡：路径收进一格凹进去的框，底下延迟那行上面一道细线 */
+html[data-ui-theme="pearl"] .fx-tunnel-route {
+  margin-top: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--fx-pearl-well-stroke);
+  border-radius: 16px;
+  background: var(--fx-pearl-well);
+  box-shadow: var(--fx-pearl-inset);
+}
+html[data-ui-theme="pearl"] .fx-tunnel-foot { margin-top: 16px; padding-top: 14px; border-top-color: var(--fx-stroke-weak); }
+
+/* 主机卡 */
+html[data-ui-theme="pearl"] .workspace-main .fx-host-card { padding: 20px 24px; gap: 14px; }
+html[data-ui-theme="pearl"] .fx-host-card > div:first-child {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas: "icon . actions" "info info info";
+  row-gap: 12px;
+  padding: 0;
+}
+html[data-ui-theme="pearl"] .fx-host-card > div:first-child > span:first-child { grid-area: icon; width: 32px; height: 32px; border-radius: 10px; }
+html[data-ui-theme="pearl"] .fx-host-card > div:first-child > div:nth-child(2) {
+  grid-area: info;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--fx-pearl-well-stroke);
+  border-radius: 16px;
+  background: var(--fx-pearl-well);
+  box-shadow: var(--fx-pearl-inset);
+}
+html[data-ui-theme="pearl"] .fx-host-card > div:first-child > div:last-child:not(:nth-child(2)) { grid-area: actions; }
+html[data-ui-theme="pearl"] .fx-host-card > div:first-child > div:nth-child(2) > div:first-child > span:first-child { font-size: 16px; font-weight: 500; }
+html[data-ui-theme="pearl"] .fx-host-card > div:first-child > div:nth-child(2) > span { font-size: 13px; }
+html[data-ui-theme="pearl"] .fx-host-card .grid.grid-cols-3 { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+html[data-ui-theme="pearl"] .fx-host-spec { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: baseline; padding: 0 0 12px; border-radius: 0; background: transparent; box-shadow: none; }
+html[data-ui-theme="pearl"] .fx-host-spec > i { font-size: 13px; line-height: 18px; }
+html[data-ui-theme="pearl"] .fx-host-spec > b { font-size: 13px; line-height: 18px; font-weight: 500; text-align: right; }
+html[data-ui-theme="pearl"] .fx-host-spec-bar { left: 0; right: 0; bottom: 0; height: 6px; background: var(--fx-l3-control-fill); }
+html[data-ui-theme="pearl"] .fx-host-foot { padding-top: 12px; border-top: 1px solid var(--fx-stroke-weak); font-size: 13px; }
+
+/* 分组列表（ListSection）：整组一张卡，组名是卡头，行收进卡里一块凹进去的框 */
+html[data-ui-theme="pearl"] section:has(> .fx-grouped-list) {
+  padding: 0 16px 16px;
+  border: 1px solid color-mix(in srgb, var(--fx-stroke-weak) 40%, transparent);
+  background: var(--fx-pearl-surface);
+  box-shadow: var(--fx-pearl-shadow);
+}
+html[data-ui-theme="pearl"] section:not(:has(> .fx-list-section-header)):has(> .fx-grouped-list) { padding-top: 16px; }
+html[data-ui-theme="pearl"] section:has(> .fx-grouped-list) > .fx-list-section-header,
+html[data-ui-theme="pearl"] .workspace-main section:has(> .fx-grouped-list) > .fx-list-section-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 20px 8px 14px;
+  color: var(--fx-text-muted);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+html[data-ui-theme="pearl"] section:has(> .fx-grouped-list) > .fx-grouped-list {
+  border-color: var(--fx-pearl-well-stroke);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--fx-l0-page) 35%, transparent);
+}
+html[data-ui-theme="pearl"] section:has(> .fx-grouped-list) > p { padding: 8px 8px 0; }
+@media (max-width: 639px) {
+  html[data-ui-theme="pearl"] .workspace-main .fx-rule-card .fx-rule-card-body,
+  html[data-ui-theme="pearl"] .workspace-main .fx-rule-card[data-size="standard"] .fx-rule-card-body { padding: 18px 16px 16px; }
+  html[data-ui-theme="pearl"] .workspace-main .fx-host-card { padding: 16px; }
+  html[data-ui-theme="pearl"] section:has(> .fx-grouped-list) { padding: 0 12px 12px; }
+  html[data-ui-theme="pearl"] section:has(> .fx-grouped-list) > .fx-list-section-header { padding: 16px 4px 12px; }
+}
+
+/*
+  表格：照上游 .pearl-table —— 表头一条 muted 70% 的底、12px 加宽 0.025em 的灰字，行悬停染 4% 主色；
+  放在卡里的表格贴着卡边铺满（上游的表格没有再缩一圈内边距）。表格里的徽标照上游是有边的小胶囊，
+  「管理员」这种默认徽标是一枚实心的墨色小胶囊。
+*/
+html[data-ui-theme="pearl"] [data-slot="table-header"] { background: color-mix(in srgb, var(--fx-hover) 70%, var(--fx-l1-surface)); }
+html[data-ui-theme="pearl"] [data-slot="table-head"] { height: 48px; color: var(--fx-text-muted); font-size: 12px; letter-spacing: .025em; }
+html[data-ui-theme="pearl"] [data-slot="table"] tbody > tr { transition: background-color 160ms; }
+html[data-ui-theme="pearl"] [data-slot="table"] tbody > tr:hover { background: color-mix(in srgb, var(--fx-primary-fill) 4%, var(--fx-l1-surface)); }
+html[data-ui-theme="pearl"] [data-slot="table"] tbody > tr[data-state="selected"] { background: color-mix(in srgb, var(--fx-primary-fill) 9%, var(--fx-l1-surface)); }
+html[data-ui-theme="pearl"] .workspace-main [data-slot="card"]:has(> [data-slot="card-content"] > * > [data-slot="table"]) > [data-slot="card-content"],
+html[data-ui-theme="pearl"] .workspace-main [data-slot="card"]:has(> [data-slot="card-content"] > [data-slot="table"]) > [data-slot="card-content"] { padding: 0; }
+html[data-ui-theme="pearl"] .workspace-main [data-slot="card"]:has(> [data-slot="card-content"] > * > [data-slot="table"]),
+html[data-ui-theme="pearl"] .workspace-main [data-slot="card"]:has(> [data-slot="card-content"] > [data-slot="table"]) { border-radius: 16px; overflow: hidden; }
+html[data-ui-theme="pearl"] [data-slot="table"] [data-slot="badge"] { padding-inline: 8px; border-color: var(--fx-stroke-weak); font-size: 11px; }
+html[data-ui-theme="pearl"] [data-slot="table"] [data-slot="badge"][data-variant="default"] { border-color: transparent; background: var(--fx-primary-fill); color: var(--fx-primary-text); }
+html[data-ui-theme="pearl"] [data-slot="table"] [data-slot="badge"][data-variant="destructive"] { border-color: transparent; background: var(--fx-down-fill); color: #fff; }
+
+/* 设置行（SettingRow）：上游设置页每一项是一格浅底、细边、14px 圆角的小框，项与项隔 10px */
+html[data-ui-theme="pearl"] .workspace-main [data-slot="card"] .fx-list-row:not(.fx-grouped-list .fx-list-row) {
+  padding: 12px 14px;
+  border: 1px solid var(--fx-pearl-well-stroke);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--fx-l0-page) 50%, transparent);
+}
+html[data-ui-theme="pearl"] .workspace-main [data-slot="card"] .fx-list-row:not(.fx-grouped-list .fx-list-row) + .fx-list-row { margin-top: 10px; border-top: 1px solid var(--fx-pearl-well-stroke); }
+
+/* ── 3. 控件 ───────────────────────────────────────────────────
+  照上游量的：按钮 14px 圆角、36px 高、14px / 500 字、8px 16px 内边距；主按钮是一块平的墨色（顶部一道白高光 +
+  同色软影），描边按钮是页面底色 + 输入框那档线 + 顶部高光；悬上去上浮 1px、按下缩到 96.5%。
+  输入框 / 下拉 14px 圆角、页面底色、一道很淡的内阴影，聚焦时 3px 主色 15% 的光。
+  分段控件是一条整圆的凹槽（muted 70%、6px 内边距），各格按内容宽、居中排，选中格是一枚浮起的白瓷胶囊、墨色字，
+  后面的数是一枚 10px / 600 的小胶囊（主色 10% 底）。页头的状态小胶囊 30px 高、整圆、一圈细线。
+*/
 html[data-ui-theme="pearl"] [data-slot="button"]:not([data-icon-button]),
 html[data-ui-theme="pearl"] .fx-row-action,
-html[data-ui-theme="pearl"] .fx-filter-pill { border-radius: 12px; }
+html[data-ui-theme="pearl"] .fx-filter-pill { border-radius: 14px !important; }
 html[data-ui-theme="pearl"] .workspace-main [data-icon-button],
-html[data-ui-theme="pearl"] .workspace-header-actions [data-slot="button"] { border-radius: 12px; }
+html[data-ui-theme="pearl"] .workspace-header-actions [data-slot="button"] { border-radius: 14px !important; }
 html[data-ui-theme="pearl"] [data-slot="button"] {
+  font-weight: 500;
   transition: transform 180ms var(--fx-pearl-ease), background-color 180ms, color 180ms, border-color 180ms, box-shadow 220ms;
   touch-action: manipulation;
 }
@@ -335,19 +755,30 @@ html[data-ui-theme="pearl"] [data-slot="button"]:active:not(:disabled):not([aria
 @media (hover: hover) and (pointer: fine) {
   html[data-ui-theme="pearl"] [data-slot="button"]:hover:not(:disabled):not(:active) { transform: translateY(-1px); }
 }
-/* 主按钮：墨色（跟「默认配色」换色）+ 一道顶部白高光 + 同色软影；禁用的交给组件画 */
+/* 主按钮：一块平的墨色（跟「默认配色」换色）+ 顶部白高光 + 同色软影；禁用的交给组件画 */
 html[data-ui-theme="pearl"] [data-slot="button"][data-variant="default"]:not(:disabled),
-html[data-ui-theme="pearl"] [data-slot="button"]:not([data-variant]):not(:disabled) { border-color: transparent; box-shadow: var(--fx-primary-shadow); }
-/* 描边 / 次要按钮：瓷面 + 细线 + 顶部高光 */
-html[data-ui-theme="pearl"] [data-slot="button"][data-variant="outline"] {
-  border-color: var(--fx-stroke-weak);
-  background-color: var(--fx-l1-surface);
-  box-shadow: var(--fx-elevation-control);
+html[data-ui-theme="pearl"] [data-slot="button"]:not([data-variant]):not(:disabled) {
+  border-color: transparent;
+  background-image: none !important;
+  background-color: var(--fx-primary-fill);
+  color: var(--fx-primary-text);
+  box-shadow: var(--fx-primary-shadow);
 }
-html[data-ui-theme="pearl"] [data-slot="button"][data-variant="outline"]:hover:not(:disabled) { border-color: var(--fx-stroke-base); background-color: var(--fx-l1-surface); }
+html[data-ui-theme="pearl"] [data-slot="button"][data-variant="default"]:not(:disabled):hover,
+html[data-ui-theme="pearl"] [data-slot="button"]:not([data-variant]):not(:disabled):hover { background-color: var(--fx-primary-fill-hover); }
+/* 描边按钮：页面底色 + 输入框那档线 + 顶部高光 */
+html[data-ui-theme="pearl"] [data-slot="button"][data-variant="outline"] {
+  border-color: var(--fx-control-stroke);
+  background-color: var(--fx-l0-page);
+  box-shadow: inset 0 1px 0 var(--fx-pearl-highlight), 0 1px 2px rgb(20 34 28 / 3%);
+}
+html[data-ui-theme="pearl"] [data-slot="button"][data-variant="outline"]:hover:not(:disabled) { border-color: var(--fx-stroke-strong); background-color: var(--fx-l1-surface); }
+html[data-ui-theme="pearl"] [data-slot="button"][data-variant="secondary"] { background-color: var(--fx-l3-control-fill); }
 html[data-ui-theme="pearl"] [data-slot="button"]:disabled { box-shadow: none; }
+/* 页头操作区里的按钮和上游同高（36px），字 14px */
+html[data-ui-theme="pearl"] .workspace-header-actions [data-slot="button"]:not([data-icon-button]) { height: 36px; padding-inline: 16px; font-size: 14px; }
 
-/* 输入框、下拉、搜索框：12px、比卡淡一点的底、一道内阴影；聚焦时一圈 3px 主色 15% 的光（上游 .pearl-field） */
+/* 输入框、下拉、搜索框：14px、页面底色、一道很淡的内阴影 */
 html[data-ui-theme="pearl"] .workspace-main [data-slot="input"],
 html[data-ui-theme="pearl"] .workspace-main [data-slot="textarea"],
 html[data-ui-theme="pearl"] .workspace-main [data-slot="select-trigger"],
@@ -355,73 +786,110 @@ html[data-ui-theme="pearl"] .dialog-panel [data-slot="input"],
 html[data-ui-theme="pearl"] .dialog-panel [data-slot="textarea"],
 html[data-ui-theme="pearl"] .dialog-panel [data-slot="select-trigger"],
 html[data-ui-theme="pearl"] .workspace-filter-search input {
-  border-radius: 12px;
+  border-radius: 14px;
   border-color: var(--fx-control-stroke);
-  background-color: color-mix(in srgb, var(--fx-l1-surface) 80%, var(--fx-l0-page));
+  background-color: var(--fx-l0-page);
   box-shadow: inset 0 1px 2px rgb(20 34 28 / 3%), 0 1px 0 var(--fx-pearl-highlight);
   transition: border-color 180ms, box-shadow 180ms, background-color 180ms;
 }
 html[data-ui-theme="pearl"] .workspace-main :is([data-slot="input"], [data-slot="textarea"], [data-slot="select-trigger"]):focus-visible,
 html[data-ui-theme="pearl"] .dialog-panel :is([data-slot="input"], [data-slot="textarea"], [data-slot="select-trigger"]):focus-visible,
-html[data-ui-theme="pearl"] .workspace-filter-search input:focus-visible { box-shadow: 0 0 0 3px color-mix(in srgb, var(--fx-primary-fill) 15%, transparent); }
+html[data-ui-theme="pearl"] .workspace-filter-search input:focus-visible { border-color: var(--fx-accent-strong); box-shadow: 0 0 0 3px color-mix(in srgb, var(--fx-primary-fill) 15%, transparent); }
 html[data-ui-theme="pearl"] .fx-search-pill {
-  border-radius: 12px !important;
+  border-radius: 14px !important;
   border: 1px solid var(--fx-control-stroke) !important;
-  background: color-mix(in srgb, var(--fx-l1-surface) 80%, var(--fx-l0-page)) !important;
+  background: var(--fx-l0-page) !important;
   box-shadow: inset 0 1px 2px rgb(20 34 28 / 3%), 0 1px 0 var(--fx-pearl-highlight);
 }
 
-/*
-  分段控件：一条凹槽（muted 底 + 内阴影 + 细线，14px），选中格是一块浮起来的瓷片（瓷面 + 细线 + 软影），
-  字是主色（墨），10px 圆角 —— 上游的 [data-sliding-tabs] + .pearl-tab-indicator。
-*/
+/* 分段控件：整圆的凹槽，各格按内容宽、居中；选中格是一枚浮起的白瓷胶囊 */
 html[data-ui-theme="pearl"] .workspace-tabs,
 html.dark[data-ui-theme="pearl"] .workspace-tabs {
-  padding: 4px;
-  border: 1px solid var(--fx-stroke-weak);
-  border-radius: 14px;
-  background: var(--fx-l3-control-fill);
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--fx-stroke-weak) 70%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--fx-l3-control-fill) 70%, transparent);
   box-shadow: inset 0 1px 3px rgb(20 34 28 / 5%);
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
+html[data-ui-theme="pearl"] .workspace-tabs .workspace-tabs-list { justify-content: center; gap: 4px; }
 html[data-ui-theme="pearl"] .workspace-tabs .workspace-tab,
-html[data-ui-theme="pearl"] .workspace-tab-scroll { border-radius: 10px; }
-html[data-ui-theme="pearl"] .workspace-tabs .workspace-tab { min-height: 32px; border: 1px solid transparent; color: var(--fx-text-muted); transition: color 180ms, background-color 180ms, border-color 180ms, box-shadow 220ms; }
-html[data-ui-theme="pearl"] .workspace-tabs .workspace-tab:hover:not([data-state="active"]) { color: var(--fx-text); }
+html[data-ui-theme="pearl"] .workspace-tab-scroll { border-radius: 999px; }
+html[data-ui-theme="pearl"] .workspace-tabs .workspace-tab {
+  flex: 0 0 auto;
+  min-width: 136px;
+  min-height: 36px;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid transparent;
+  color: var(--fx-text-muted);
+  font-size: 14px;
+  font-weight: 500;
+  transition: color 180ms, background-color 180ms, border-color 180ms, box-shadow 220ms;
+}
+html[data-ui-theme="pearl"] .workspace-tabs .workspace-tab > svg { color: currentColor; }
+html[data-ui-theme="pearl"] .workspace-tabs .workspace-tab:hover:not([data-state="active"]) { color: var(--fx-text); background: color-mix(in srgb, var(--fx-l1-surface) 60%, transparent); }
 html[data-ui-theme="pearl"] .workspace-tabs .workspace-tab[data-state="active"],
 html.dark[data-ui-theme="pearl"] .workspace-tabs .workspace-tab[data-state="active"] {
   border-color: var(--fx-stroke-weak);
   background: var(--fx-pearl-surface);
   color: var(--fx-primary-fill);
-  box-shadow: var(--fx-pearl-shadow);
+  font-weight: 500;
+  box-shadow: 0 1px 2px rgb(14 17 22 / 6%), var(--fx-pearl-shadow);
 }
 html[data-ui-theme="pearl"] .workspace-tabs .workspace-tab[data-state="active"] > svg { color: var(--fx-primary-fill); }
-html[data-ui-theme="pearl"] .workspace-tabs .workspace-tab[data-state="active"] .workspace-tab-count { color: var(--fx-text-muted); }
+html[data-ui-theme="pearl"] .workspace-tabs .workspace-tab-count {
+  display: inline-flex;
+  min-width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--fx-text-muted) 10%, transparent);
+  color: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 10px;
+}
+html[data-ui-theme="pearl"] .workspace-tabs .workspace-tab[data-state="active"] .workspace-tab-count { background: color-mix(in srgb, var(--fx-primary-fill) 10%, transparent); color: var(--fx-primary-fill); }
+@media (max-width: 767px) {
+  html[data-ui-theme="pearl"] .workspace-tabs .workspace-tabs-list { justify-content: flex-start; }
+  html[data-ui-theme="pearl"] .workspace-tabs .workspace-tab { min-width: 0; }
+}
 
-/* 筛选 chip：12px 的瓷面小块；选中同分段控件的选中格（浮起的瓷片 + 主色字 + 线掺主色） */
-html[data-ui-theme="pearl"] .fx-chip { border-radius: 12px; border-color: var(--fx-stroke-weak); background: var(--fx-l1-surface); box-shadow: var(--fx-elevation-control); color: var(--fx-text-secondary); }
+/* 筛选 chip：14px 的小块、页面底色、一圈细线；选中是一枚浮起的白瓷 + 墨色字 + 线掺主色 */
+html[data-ui-theme="pearl"] .fx-chip { height: 36px; border-radius: 14px; border-color: var(--fx-stroke-weak); background: var(--fx-l0-page); box-shadow: inset 0 1px 0 var(--fx-pearl-highlight); color: var(--fx-text-secondary); font-size: 14px; }
 html[data-ui-theme="pearl"] .fx-chip:hover { border-color: var(--fx-stroke-base); color: var(--fx-text); }
 html[data-ui-theme="pearl"] .fx-chip-on,
 html[data-ui-theme="pearl"] .fx-chip-on:hover {
-  border-color: color-mix(in srgb, var(--fx-primary-fill) 35%, var(--fx-stroke-weak));
+  border-color: color-mix(in srgb, var(--fx-primary-fill) 30%, var(--fx-stroke-weak));
   background: var(--fx-pearl-surface);
   background-image: var(--fx-pearl-surface);
   color: var(--fx-primary-fill);
   box-shadow: var(--fx-pearl-shadow);
-  font-weight: 600;
+  font-weight: 500;
 }
-html[data-ui-theme="pearl"] .fx-chip-on .fx-chip-count { color: var(--fx-text-muted); }
-html[data-ui-theme="pearl"] [data-slot="badge"] { border-radius: 8px; }
+html[data-ui-theme="pearl"] .fx-chip-count { opacity: 1; display: inline-flex; min-width: 20px; height: 20px; align-items: center; justify-content: center; padding: 0 6px; border-radius: 999px; background: color-mix(in srgb, var(--fx-text-muted) 10%, transparent); font-size: 10px; font-weight: 600; }
+html[data-ui-theme="pearl"] .fx-chip-on .fx-chip-count { background: color-mix(in srgb, var(--fx-primary-fill) 10%, transparent); color: var(--fx-primary-fill); }
+/* 徽标：整圆、一圈细线（上游 Badge rounded-full border） */
+html[data-ui-theme="pearl"] [data-slot="badge"] { border-radius: 999px; }
+/* 页头状态行（「0 / 4 在线 · 离线 4」那一行）照上游页头的状态小胶囊：30px、整圆、细线、12px / 500 */
+html[data-ui-theme="pearl"] .workspace-main .workspace-header-chips > * { display: inline-flex; height: 30px; align-items: center; gap: 6px; padding: 0 12px; border: 1px solid var(--fx-stroke-weak); border-radius: 999px; background: var(--fx-l0-page); font-size: 12px; font-weight: 500; line-height: 16px; }
+html[data-ui-theme="pearl"] .workspace-main .workspace-header-chips { gap: 8px; }
+html[data-ui-theme="pearl"] .workspace-header-aside { color: var(--fx-text-muted); }
 
-/* 开关：凹槽里一颗带高光的钮（上游 .pearl-switch）；进度条：一道凹槽 */
-html[data-ui-theme="pearl"] [data-slot="switch"] { box-shadow: inset 0 1px 3px rgb(20 34 28 / 12%); }
+/* 开关：上游 44×24、开是一块平的墨色、2px 同色描边、一道内阴影；钮带高光 */
+html[data-ui-theme="pearl"] [data-slot="switch"] { box-shadow: inset 0 2px 4px rgb(0 0 0 / 5%); }
+html[data-ui-theme="pearl"] [data-slot="switch"][data-state="checked"] { background-image: none; background-color: var(--fx-primary-fill); }
 html[data-ui-theme="pearl"] [data-slot="switch"] > span { box-shadow: 0 1px 3px rgb(0 0 0 / 18%), inset 0 1px 0 rgb(255 255 255 / 75%); }
 html[data-ui-theme="pearl"] [data-slot="progress"] { box-shadow: inset 0 1px 2px rgb(20 34 28 / 7%); }
 /* 深色下「开」是一条亮白瓷槽：白钮压上去看不出来，钮换成墨色（上游深色开关同款） */
 html.dark[data-ui-theme="pearl"] [data-slot="switch"][data-state="checked"] > span,
 html.dark[data-ui-theme="pearl"] .fx-ios-switch[aria-checked="true"] .fx-ios-switch-knob { background: #161b1e; box-shadow: 0 1px 3px rgb(0 0 0 / 30%), inset 0 1px 0 rgb(255 255 255 / 8%); }
-html[data-ui-theme="pearl"] .fx-ios-switch { box-shadow: inset 0 1px 3px rgb(20 34 28 / 12%); }
+html[data-ui-theme="pearl"] .fx-ios-switch { box-shadow: inset 0 2px 4px rgb(0 0 0 / 5%); }
+html[data-ui-theme="pearl"] .fx-ios-switch[aria-checked="true"] { background: var(--fx-primary-fill); }
 
 /* ── 4. 弹层 ─────────────────────────────────────────────────── */
 /* 对话框：瓷面 + 浮层影，22px（手机底部 sheet 的圆角归 workspace.css 管，只换底色和影子） */
@@ -454,6 +922,32 @@ html[data-ui-theme="pearl"] [role="menuitem"],
 html[data-ui-theme="pearl"] [role="menuitemradio"],
 html[data-ui-theme="pearl"] [role="menuitemcheckbox"],
 html[data-ui-theme="pearl"] [role="option"] { border-radius: 10px; transition: background-color 140ms, color 140ms; }
+
+/*
+  手机上的对话框：NEX 别的主题是从底部滑上来的 sheet；上游 Pearl 在手机上仍是居中的一张卡
+  （左右各留 12px、18px 圆角、16px 内边距，淡入 + 轻微放大）。动作面板（fx-action-sheet）照旧贴底。
+*/
+@media (max-width: 767px) {
+  html[data-ui-theme="pearl"] .dialog-positioner:has(> .dialog-panel:not(.fx-action-sheet)) { place-items: center; padding: 12px; }
+  html[data-ui-theme="pearl"] .dialog-panel[class]:not(.fx-action-sheet) {
+    width: calc(100vw - 1.5rem);
+    max-height: 92svh;
+    padding: 16px;
+    border-width: 1px;
+    border-radius: 18px;
+    background-image: none;
+  }
+  html[data-ui-theme="pearl"] .dialog-panel[data-state="open"][class]:not(.fx-action-sheet) { animation: fx-pearl-dialog-in 300ms var(--fx-pearl-ease) both; }
+  html[data-ui-theme="pearl"] .dialog-panel[data-state="closed"][class]:not(.fx-action-sheet) { animation: fx-pearl-dialog-out 160ms ease-in both; }
+}
+@keyframes fx-pearl-dialog-in {
+  from { opacity: 0; transform: translateY(8px) scale(.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes fx-pearl-dialog-out {
+  from { opacity: 1; transform: scale(1); }
+  to { opacity: 0; transform: scale(.97); }
+}
 
 /* ── 5. 手机：大标题导航栏、底部标签栏 ──────────────────────── */
 @media (max-width: 767px) {
@@ -491,7 +985,7 @@ html[data-ui-theme="pearl"] [role="option"] { border-radius: 10px; transition: b
   html[data-ui-theme="pearl"] .workspace-main :is(.fx-host-card, .fx-rule-card, .fx-tunnel-card, .fx-entity-card) { transition: none !important; }
   html[data-ui-theme="pearl"] [data-slot="button"]:hover,
   html[data-ui-theme="pearl"] [data-slot="button"]:active { transform: none !important; }
-  html[data-ui-theme="pearl"] .dialog-panel[data-state="open"] { animation-duration: 1ms; }
+  html[data-ui-theme="pearl"] .dialog-panel[data-state][class] { animation-duration: 1ms !important; }
 }
 
 /* ── 设置页「界面主题」的预览 ───────────────────────────────── */
