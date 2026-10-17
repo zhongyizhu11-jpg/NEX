@@ -1060,6 +1060,8 @@ export const tunnels = table("tunnels", {
   udpFec: boolean("udpFec").notNull().default(false),
   /** 内核直通：V2 隧道两端都是内核 WireGuard 时，普通 TCP/UDP 规则改走 iptables DNAT 进 nexwg，不经 FXP。默认关。 */
   kernelPassthrough: boolean("kernelPassthrough").notNull().default(false),
+  // 复制模式（2.3.449）：中转带宽叠加的隧道上，每一片都从两条中转各发一份，一条线路断了连接也不断。
+  multipathReplicate: boolean("multipathReplicate").notNull().default(false),
   blockHttp: boolean("blockHttp").notNull().default(false),
   blockSocks: boolean("blockSocks").notNull().default(false),
   blockTls: boolean("blockTls").notNull().default(false),

@@ -84,6 +84,14 @@ type mpOut struct {
 	claimedAt time.Time
 	// avoid is a leg that already failed to deliver this chunk in time.
 	avoid *multipathLegConn
+	// duplicated: replication mode already queued a second copy of this chunk.
+	duplicated bool
+}
+
+// mpDup is a chunk waiting for its replica: any live leg but from sends it again.
+type mpDup struct {
+	seq  uint64
+	from *multipathLegConn
 }
 
 // rttMark remembers when a leg's byte count reached end, for round trips.
@@ -270,6 +278,13 @@ func (s *multipathSession) claim(leg *multipathLegConn) mpWork {
 			if leg.pace.inflight() == 0 {
 				leg.pace.progressAt = now
 			}
+			if out.leg != nil && out.leg != leg {
+				// 复制模式的副本：这一片仍归原来那条腿，这里只多发一份，字节照样记在这条腿上。
+				leg.pace.writingBytes += uint64(len(out.data))
+				s.replicasSent++
+				s.signalLocked()
+				return mpWork{out: out}
+			}
 			out.leg, out.writing, out.legEnd, out.claimedAt = leg, true, 0, now
 			leg.pace.writingBytes += uint64(len(out.data))
 			// 取走一片，队列就腾出了位置：叫醒等着写的一方，也叫醒让过路的腿。
@@ -296,6 +311,9 @@ func (s *multipathSession) pickLocked(leg *multipathLegConn) *mpOut {
 		return nil
 	}
 	if out := s.pickRetryLocked(leg); out != nil {
+		return out
+	}
+	if out := s.pickDupLocked(leg); out != nil {
 		return out
 	}
 	if s.nextFresh >= s.sendSeq || s.betterIdleLegLocked(leg, nil) {
@@ -406,7 +424,43 @@ func (s *multipathSession) wrote(leg *multipathLegConn, out *mpOut, err error) {
 	if out.leg == leg && out.writing {
 		out.writing = false
 		out.legEnd = leg.pace.sentBytes
+		if s.replicate && !out.duplicated && s.otherLiveLegLocked(leg) {
+			out.duplicated = true
+			s.dup = append(s.dup, mpDup{seq: out.seq, from: leg})
+			s.replicasQueued++
+			s.signalLocked()
+		}
 	}
+}
+
+// pickDupLocked takes the oldest chunk waiting for its replica that this leg
+// may carry (any leg but the one that sent the first copy). Entries the far
+// side has already delivered in order, or whose only other legs are gone, are
+// dropped. A chunk the far side merely read off the first leg still gets its
+// replica: that is what replication buys — the second path is already carrying
+// the data when the first one dies, instead of waiting to notice and resend.
+func (s *multipathSession) pickDupLocked(leg *multipathLegConn) *mpOut {
+	if len(s.dup) == 0 {
+		return nil
+	}
+	kept := s.dup[:0]
+	var picked *mpOut
+	for _, entry := range s.dup {
+		if entry.seq < s.outBase {
+			continue // 对端已经收到了
+		}
+		out := s.out[entry.seq-s.outBase]
+		if !s.otherLiveLegLocked(entry.from) {
+			continue
+		}
+		if picked == nil && entry.from != leg && out.leg != leg {
+			picked = out
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	s.dup = kept
+	return picked
 }
 
 // requeueLegLocked gives back every chunk a retired leg had not delivered.

@@ -56,6 +56,9 @@ type helloFrame struct {
 	// sends one, and neither side uses anything the other cannot parse.
 	// Relays forward the hello verbatim, so this reaches the exit end to end.
 	MultipathExtended bool `json:"multipathExtended,omitempty"`
+	// MultipathReplicate（2.2.133 起）：复制模式，每一片都从两条不同的腿各发一份，一条线路断了
+	// 连接也不断。出口看到它就在回程方向同样复制；老出口不认识这个字段，只有去程复制。
+	MultipathReplicate bool `json:"multipathReplicate,omitempty"`
 	// targetLiteral 不上线：出口核对过目标之后记下「配置里写的就是这个 IP」。
 	// 写死的 IP 是面板明确配的（比如出口本机调度器的 127.0.0.1），照拨；写的是
 	// 域名时，解析出来落到环回、链路本地这些地址上就不拨（见 dialExitTarget）。

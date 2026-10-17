@@ -164,6 +164,25 @@ export async function sendAdminAlert(message: AdminAlertMessage, options: { emai
   }
 }
 
+// ---------------- 每台主机串行 ----------------
+
+/*
+  同一台主机的样本按到达顺序一个一个判：判定前要读设置（有 await），两次心跳挨得近时
+  后一次可能读到前一次还没写回的状态，把「连续超过」算断。按主机排队就没这个问题。
+*/
+const hostQueues = new Map<string, Promise<void>>();
+
+function runSerialized(key: string, task: () => Promise<void>, label: string) {
+  const previous = hostQueues.get(key) ?? Promise.resolve();
+  const next = previous.then(task).catch((error) => {
+    appendPanelLog("warn", `[ResourceAlert] ${label} failed: ${error instanceof Error ? error.message : String(error)}`);
+  });
+  hostQueues.set(key, next);
+  void next.finally(() => {
+    if (hostQueues.get(key) === next) hostQueues.delete(key);
+  });
+}
+
 // ---------------- 资源阈值 ----------------
 
 const hostStates = new Map<number, ResourceAlertHostState>();
@@ -221,7 +240,7 @@ export function describeResourceTransition(host: any, transition: ResourceAlertT
 export function observeHostResourceSample(host: any, sample: ResourceAlertSample, nowMs = Date.now()) {
   const hostId = Number(host?.id || 0);
   if (!Number.isInteger(hostId) || hostId <= 0) return;
-  void (async () => {
+  runSerialized(`resource:${hostId}`, async () => {
     const config = await readResourceAlertConfig();
     if (!config.enabled) {
       hostStates.delete(hostId);
@@ -247,9 +266,7 @@ export function observeHostResourceSample(host: any, sample: ResourceAlertSample
       });
       await sendAdminAlert(described.alert, { email: config.emailEnabled });
     }
-  })().catch((error) => {
-    appendPanelLog("warn", `[ResourceAlert] host=${hostId} evaluate failed: ${error instanceof Error ? error.message : String(error)}`);
-  });
+  }, `host=${hostId} evaluate`);
 }
 
 /** 某台主机现在哪几项正在告警（主机列表 / 故障看板用）。 */
@@ -322,6 +339,8 @@ export function observeHostHealthCounters(host: any, input: { bootId?: string | 
     const config = await readResourceAlertConfig();
     if (!config.enabled) return;
     const name = hostLabel(host);
+    // 先把事件都记下，再发通知：时间线不该等 Telegram / 邮件。
+    const alerts: AdminAlertMessage[] = [];
     if (oomDelta > 0 && config.oomAlert) {
       await recordPanelEvent({
         kind: "host.oom_killed",
@@ -330,7 +349,7 @@ export function observeHostHealthCounters(host: any, input: { bootId?: string | 
         message: `${name} 内存耗尽，内核 OOM 杀掉了 ${oomDelta} 个进程（开机以来共 ${oomKillCount} 次）`,
         data: { delta: oomDelta, total: oomKillCount },
       });
-      await sendAdminAlert({
+      alerts.push({
         title: `NEX 内存耗尽（OOM）：${name}`,
         marker: "🔴",
         fields: [
@@ -339,7 +358,7 @@ export function observeHostHealthCounters(host: any, input: { bootId?: string | 
           ["开机以来", `${oomKillCount} 次`],
         ],
         logLabel: `oom host=${hostId}`,
-      }, { email: config.emailEnabled });
+      });
     }
     if (crashes.length > 0 && config.crashAlert) {
       const summary = crashes.slice(0, 5).map((item) => `${describeServiceUnit(item.unit)}${item.delta > 1 ? ` ×${item.delta}` : ""}`).join("、");
@@ -351,7 +370,7 @@ export function observeHostHealthCounters(host: any, input: { bootId?: string | 
         message: `${name} 上的 ${summary}${more} 崩溃后被自动重启`,
         data: { units: crashes.slice(0, 50) },
       });
-      await sendAdminAlert({
+      alerts.push({
         title: `NEX 进程崩溃：${name}`,
         marker: "🟠",
         fields: [
@@ -360,8 +379,9 @@ export function observeHostHealthCounters(host: any, input: { bootId?: string | 
           ["说明", "systemd 已自动重启；反复出现请到主机详情查看日志"],
         ],
         logLabel: `crash host=${hostId}`,
-      }, { email: config.emailEnabled });
+      });
     }
+    for (const alert of alerts) await sendAdminAlert(alert, { email: config.emailEnabled });
   })().catch((error) => {
     appendPanelLog("warn", `[ResourceAlert] host=${hostId} counters failed: ${error instanceof Error ? error.message : String(error)}`);
   });
@@ -384,7 +404,7 @@ async function tunnelName(tunnelId: number) {
 export function observeTunnelProbeLoss(host: any, reports: Array<{ tunnelId: number; count: number; ok: number }>, nowMs = Date.now()) {
   const hostId = Number(host?.id || 0);
   if (!Number.isInteger(hostId) || hostId <= 0 || reports.length === 0) return;
-  void (async () => {
+  runSerialized(`loss:${hostId}`, async () => {
     const config = await readResourceAlertConfig();
     if (!config.enabled || config.lossPercent <= 0) {
       for (const key of [...lossStates.keys()]) if (key.startsWith(`${hostId}:`)) lossStates.delete(key);
@@ -445,9 +465,7 @@ export function observeTunnelProbeLoss(host: any, reports: Array<{ tunnelId: num
         }, { email: config.emailEnabled });
       }
     }
-  })().catch((error) => {
-    appendPanelLog("warn", `[ResourceAlert] host=${hostId} loss failed: ${error instanceof Error ? error.message : String(error)}`);
-  });
+  }, `host=${hostId} loss`);
 }
 
 /** 正在告警的丢包（故障看板用）。 */

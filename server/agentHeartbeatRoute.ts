@@ -6121,7 +6121,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
               protocol: rule.protocol,
               exitHost: entryRoute.host,
               exitPort: entryRoute.port,
-              ...(multipathLegs.length >= 2 ? { multipathEnabled: true, multipathLegs } : {}),
+              ...(multipathLegs.length >= 2 ? { multipathEnabled: true, multipathLegs, ...(runtimeBool((tunnel as any).multipathReplicate) ? { multipathReplicate: true } : {}) } : {}),
               exitStrategy: tunnelRelayUsesParallelRelays(tunnel, tunnelHopsByTunnelId.get(Number(tunnel.id)) || [])
                 ? "fallback"
                 : forwardXExitStrategy((tunnel as any).loadBalanceStrategy),

@@ -2971,6 +2971,8 @@ type fxpSpec struct {
 	MultipathEnabled    bool              `json:"multipathEnabled,omitempty"`
 	MultipathLegs       []fxpMultipathLeg `json:"multipathLegs,omitempty"`
 	MultipathMaxPending int               `json:"multipathMaxPending,omitempty"`
+	// MultipathReplicate：复制模式，每一片从两条腿各发一份（FXP 2.2.133 起认）。
+	MultipathReplicate bool `json:"multipathReplicate,omitempty"`
 }
 
 // fxpMultipathLeg is one parallel path from the entry to the exit, either a
@@ -10092,6 +10094,7 @@ func normalizeFXPMultipath(spec fxpSpec) fxpSpec {
 	if len(legs) < 2 {
 		spec.MultipathEnabled = false
 		spec.MultipathLegs = nil
+		spec.MultipathReplicate = false
 		return spec
 	}
 	spec.MultipathLegs = legs
@@ -10160,6 +10163,7 @@ func fxpServerSignature(spec fxpSpec) string {
 		// failover and aggregate changes only these fields, and the runtime
 		// must restart to pick the new mode up.
 		strconv.FormatBool(spec.MultipathEnabled),
+		strconv.FormatBool(spec.MultipathReplicate),
 		strconv.Itoa(spec.MultipathMaxPending),
 	}
 	for _, leg := range spec.MultipathLegs {

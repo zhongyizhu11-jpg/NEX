@@ -97,6 +97,7 @@ import { cn } from "@/lib/utils";
 import {
   Activity,
   Gauge,
+  Copy,
   ArrowRight,
   ArrowRightLeft,
   ChevronRight,
@@ -2229,6 +2230,13 @@ function TunnelsContent() {
   const [groupCreateRequest, setGroupCreateRequest] = useState<{ mode: TunnelGroupMode; requestKey: number } | null>(null);
   const [deleteTunnel, setDeleteTunnel] = useState<any | null>(null);
   const [connStatsTunnel, setConnStatsTunnel] = useState<{ id: number; name: string } | null>(null);
+  const setReplicateMutation = trpc.tunnels.setReplicate.useMutation({
+    onSuccess: (result) => {
+      void utils.tunnels.list.invalidate();
+      toast.success(result.multipathReplicate ? "复制模式已开启：每一片都从两条中转各发一份" : "复制模式已关闭");
+    },
+    onError: (error) => toast.error(error.message || "设置失败"),
+  });
   useEffect(() => {
     if (showDialog || showCreateTypeDialog) return;
     nginxCertImportRequestRef.current += 1;
@@ -3991,6 +3999,16 @@ function TunnelsContent() {
           ariaLabel: `查看隧道 ${tunnel.name} 每一跳的连接成功率和耗时`,
           icon: <Gauge className="h-3.5 w-3.5" />,
           onSelect: () => setConnStatsTunnel({ id: Number(tunnel.id), name: String(tunnel.name || "") }),
+        }] : []),
+        ...(supported && String(tunnel.mode || "").toLowerCase() === "forwardx" && String(tunnel.relayMode || "") === "aggregate" ? [{
+          key: "replicate",
+          label: tunnel.multipathReplicate ? "关闭复制模式" : "开启复制模式",
+          ariaLabel: tunnel.multipathReplicate
+            ? `关闭隧道 ${tunnel.name} 的复制模式`
+            : `开启隧道 ${tunnel.name} 的复制模式：每一片从两条中转各发一份，一条断了连接不断，流量翻倍`,
+          icon: <Copy className="h-3.5 w-3.5" />,
+          disabled: setReplicateMutation.isPending,
+          onSelect: () => setReplicateMutation.mutate({ id: Number(tunnel.id), enabled: !tunnel.multipathReplicate }),
         }] : []),
         {
           key: "topology",

@@ -129,6 +129,7 @@ func dialMultipathLegs(cfg config, hello helloFrame, sessionID string, indexes [
 			legHello.MultipathSessionID = sessionID
 			legHello.MultipathLegIndex = index
 			legHello.MultipathLegCount = len(cfg.MultipathLegs)
+			legHello.MultipathReplicate = cfg.MultipathReplicate
 			frame, err := json.Marshal(legHello)
 			if err == nil {
 				err = writeSecureHello(sec, frame)
@@ -244,6 +245,9 @@ func handleExitMultipath(sec *secureConn, hello helloFrame, cfg config) error {
 	if err != nil {
 		return err
 	}
+	if hello.MultipathReplicate {
+		session.setReplicate(true)
+	}
 	if !leader {
 		<-leg.dead
 		return nil
@@ -293,6 +297,7 @@ func dialEntryMultipath(cfg config, hello helloFrame, client net.Conn) (*multipa
 		multipathLegHealthMemory.dialed(result.key)
 		first = result.leg
 		session = newMultipathSession([]*multipathLegConn{first}, multipathPendingLimit(cfg))
+		session.setReplicate(cfg.MultipathReplicate)
 	}
 	if session == nil {
 		if firstErr == nil {

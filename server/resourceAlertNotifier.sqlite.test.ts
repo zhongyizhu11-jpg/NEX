@@ -25,6 +25,15 @@ test("resource alerts record fire / recover events against a real database", () 
       const notifier = await import(url("server/resourceAlertNotifier.ts"));
       const events = await import(url("server/ops/panelEvents.ts"));
       const settled = () => new Promise((resolve) => setTimeout(resolve, 200));
+      // 并发跑测试时机器很忙：等到事件真的写进去（最多 15 秒），不靠固定的等待时间。
+      const waitForEvents = async (prefix, count) => {
+        const deadline = Date.now() + 15_000;
+        for (;;) {
+          const list = await events.listPanelEvents({ kindPrefix: prefix, limit: 10 });
+          if (list.length >= count || Date.now() > deadline) return list;
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+      };
 
       await runtime.executeRaw("INSERT INTO users (id, username, password, role, email) VALUES (1, 'admin', 'h', 'admin', 'ops@example.com')");
       await runtime.executeRaw("INSERT INTO hosts (id, name, ip, hostType, agentToken, userId, isOnline) VALUES (1, '港-1', '203.0.113.1', 'slave', 'tok1', 1, 1)");
@@ -41,12 +50,12 @@ test("resource alerts record fire / recover events against a real database", () 
       notifier.observeHostResourceSample(host, { cpu: 95, memory: 99, disk: 10 }, t0);
       await settled();
       notifier.observeHostResourceSample(host, { cpu: 97, memory: 99, disk: 10 }, t0 + 61_000);
-      await settled();
+      await waitForEvents("host.resource", 1);
       assert.deepEqual(notifier.getFiringResourceAlerts().map((item) => item.metric), ["cpu"]);
       notifier.observeHostResourceSample(host, { cpu: 40, memory: 99, disk: 10 }, t0 + 180_000);
       await settled();
 
-      const list = await events.listPanelEvents({ kindPrefix: "host.resource", limit: 10 });
+      const list = await waitForEvents("host.resource", 2);
       const kinds = list.map((event) => event.kind).sort();
       assert.deepEqual(kinds, ["host.resource_high", "host.resource_recovered"]);
       const high = list.find((event) => event.kind === "host.resource_high");
@@ -63,21 +72,21 @@ test("resource alerts record fire / recover events against a real database", () 
       notifier.observeHostHealthCounters(host, { bootId: "b2", oomKillCount: 0, serviceRestarts: {} });
       notifier.observeHostHealthCounters(host, { bootId: "b2", oomKillCount: 0, serviceRestarts: {} });
       await settled();
-      const oom = await events.listPanelEvents({ kindPrefix: "host.oom", limit: 10 });
+      const oom = await waitForEvents("host.oom", 1);
       assert.equal(oom.length, 1);
       assert.equal(oom[0].level, "crit");
       assert.match(oom[0].message, /OOM 杀掉了 1 个进程/);
-      const crash = await events.listPanelEvents({ kindPrefix: "host.process", limit: 10 });
+      const crash = await waitForEvents("host.process", 1);
       assert.equal(crash.length, 1);
       assert.match(crash[0].message, /realm 规则 #12 ×2/);
 
       // 隧道丢包
       await runtime.executeRaw("INSERT INTO tunnels (id, name, entryHostId, exitHostId, listenPort, userId) VALUES (7, '港-日', 1, 1, 30000, 1)");
       notifier.observeTunnelProbeLoss(host, [{ tunnelId: 7, count: 10, ok: 5 }], t0);
-      await settled();
+      await waitForEvents("host.packet", 1);
       notifier.observeTunnelProbeLoss(host, [{ tunnelId: 7, count: 40, ok: 40 }], t0 + 11 * 60_000);
       await settled();
-      const loss = await events.listPanelEvents({ kindPrefix: "host.packet", limit: 10 });
+      const loss = await waitForEvents("host.packet", 2);
       assert.deepEqual(loss.map((event) => event.kind).sort(), ["host.packet_loss", "host.packet_loss_recovered"]);
       assert.match(loss.find((event) => event.kind === "host.packet_loss").message, /隧道「港-日」从 港-1 探测丢包 50%/);
       console.log("OK");
