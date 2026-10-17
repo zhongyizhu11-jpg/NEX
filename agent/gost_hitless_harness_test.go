@@ -473,7 +473,8 @@ func TestGostHitlessSyncHarness(t *testing.T) {
 		a := fmt.Sprintf("fwx-%d-tcp", 2000+round)
 		b := fmt.Sprintf("fwx-%d-udp", 2000+round)
 		// 1. 加一条 TCP、一条 UDP
-		churn[a] = &churnRule{name: a, proto: "tcp", port: freeTCPPort(t), target: tcpEcho, limiter: "fwx-limit-churn"}
+		// 这条之后会从 TCP 改成同端口的 UDP：端口要 TCP、UDP 都空着（面板分配端口时也是两种协议一起查）。
+		churn[a] = &churnRule{name: a, proto: "tcp", port: freeDualStackPort(t), target: tcpEcho, limiter: "fwx-limit-churn"}
 		churn[b] = &churnRule{name: b, proto: "udp", port: freeUDPPort(t), target: udpEcho}
 		doSync("add")
 		// 2. 改目标（上面开着的连接被关、新连接走新目标）
@@ -588,6 +589,20 @@ func TestGostHitlessSyncHarness(t *testing.T) {
 	if c1Ratio < 1.0 || c1Ratio > 1.25 || c2Ratio < 1.0 || c2Ratio > 1.25 {
 		t.Errorf("traffic counters do not match the bytes sent: tcp ratio %.3f udp ratio %.3f", c1Ratio, c2Ratio)
 	}
+}
+
+// freeDualStackPort：TCP 和 UDP 都没人占的端口号。
+func freeDualStackPort(t *testing.T) int {
+	t.Helper()
+	for i := 0; i < 50; i++ {
+		port := freeTCPPort(t)
+		if c, err := net.ListenPacket("udp", fmt.Sprintf("127.0.0.1:%d", port)); err == nil {
+			c.Close()
+			return port
+		}
+	}
+	t.Fatal("no port free for both TCP and UDP")
+	return 0
 }
 
 func mustAtoi(t *testing.T, s string) int {
