@@ -18,6 +18,7 @@ import LiquidGlassBackdrop from "./components/LiquidGlassBackdrop";
 import Live2DWidgetHost from "./components/plugins/Live2DWidgetHost";
 import HomePage from "@/pages/Home";
 import LoginPage from "@/pages/Login";
+import DatabaseHealthGate from "./components/DatabaseHealthGate";
 
 const loadMotionFeatures = () => import("@/motionFeatures").then((mod) => mod.default);
 
@@ -341,7 +342,9 @@ function App() {
             <LiquidGlassBackdrop />
             <Live2DWidgetHost />
             <Toaster />
-            <SetupGate />
+            <DatabaseHealthGate>
+              <SetupGate />
+            </DatabaseHealthGate>
           </ConfirmDialogProvider>
         </TooltipProvider>
       </ThemeProvider>

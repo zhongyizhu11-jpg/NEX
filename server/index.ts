@@ -29,6 +29,8 @@ import { panelAccessGuard } from "./ops/firewallPanelAccess";
 import { mcpRouter } from "./ops/mcpRoute";
 import { googleAuthRouter } from "./googleAuthRoute";
 import { discordAuthRouter } from "./discordAuthRoute";
+import { databaseRequestErrorHandler, databaseUnavailableApiGuard, registerDatabaseHealthRoutes } from "./databaseHealthRoutes";
+import { startDatabaseHealthMonitor } from "./databaseHealthMonitor";
 
 installPanelLogger();
 
@@ -178,6 +180,10 @@ async function startServer() {
   installCompression(app);
   // 面板访问的地区限制（第五套主题「地区规则」页设置）：关着时只多一次内存判断。
   app.use(panelAccessGuard);
+  // 数据库故障页（上游 v2.3.281）：/api/database-health 不查库、不要登录；故障期间别的 /api/*
+  // 直接 503，tRPC 由 createContext / 中间件回 503，静态页照常。
+  registerDatabaseHealthRoutes(app);
+  app.use(databaseUnavailableApiGuard);
 
   // Payment webhooks need the original request body for signature verification.
   app.use(paymentCallbackRouter);
@@ -206,6 +212,7 @@ async function startServer() {
       maxBatchSize: TRPC_MAX_BATCH_SIZE,
     }),
   );
+  app.use(databaseRequestErrorHandler);
   serveStatic(app);
 
   const preferredPort = Number.parseInt(process.env.PORT || "9810", 10);
@@ -236,9 +243,18 @@ async function startServer() {
 
   if (databaseStatus.ready) {
     startBackgroundServices();
+  } else if (databaseStatus.configured) {
+    console.warn("[Server] Database is not ready; Web diagnostics stay available and background tasks start after the database recovers");
   } else {
-    console.warn("[Server] Database is not ready; background tasks are paused until the database setup is fixed and the panel restarts");
+    console.warn("[Server] Database is not configured; background tasks start after setup completes");
   }
+  // 没配置数据库时初始化归安装向导（setup.saveDatabase 自己会启动后台服务），这里只管
+  // 「配置了但启动时连不上」的那种：恢复后补跑一次 initDatabase 再启动调度器。
+  startDatabaseHealthMonitor({
+    initialized: databaseStatus.ready || !databaseStatus.configured,
+    initialize: initDatabase,
+    onReady: () => { startBackgroundServices(); },
+  });
 }
 
 startServer().catch((error) => {

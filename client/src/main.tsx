@@ -9,6 +9,8 @@ import App from "./App";
 import { mobileAuth } from "./lib/mobileAuth";
 import { clearPersistedQueryCache, restorePersistedQueryCache, startQueryCachePersistence } from "./lib/queryPersistence";
 import "./index.css";
+import { DATABASE_UNAVAILABLE_MESSAGE } from "@shared/databaseHealth";
+import { DATABASE_HEALTH_QUERY_KEY } from "./components/DatabaseHealthGate";
 
 const LOGIN_EXPIRED_NOTICE = "登录状态已失效，请重新登录";
 
@@ -31,6 +33,8 @@ const queryClient = new QueryClient({
       refetchOnWindowFocus: false,
       retry: (failureCount, error) => {
         if (error instanceof TRPCClientError) {
+          // 数据库故障：重试没有意义，交给故障页每 5 秒检查一次恢复。
+          if (error.message === DATABASE_UNAVAILABLE_MESSAGE) return false;
           if (
             error.message === UNAUTHED_ERR_MSG ||
             error.message === ACCOUNT_DISABLED_ERR_MSG ||
@@ -72,9 +76,17 @@ const redirectToLoginIfUnauthorized = (error: unknown) => {
   }
 };
 
+/** 业务请求拿到「数据库暂时不可用」：立刻查一次健康状态，故障页不用等下一轮。不跳登录页、不清登录态。 */
+const checkDatabaseHealthOnOutage = (error: unknown) => {
+  if (!(error instanceof TRPCClientError) || error.message !== DATABASE_UNAVAILABLE_MESSAGE) return false;
+  void queryClient.invalidateQueries({ queryKey: [DATABASE_HEALTH_QUERY_KEY] });
+  return true;
+};
+
 queryClient.getQueryCache().subscribe(event => {
   if (event.type === "updated" && event.action.type === "error") {
     const error = event.query.state.error;
+    if (checkDatabaseHealthOnOutage(error)) return;
     redirectToLoginIfUnauthorized(error);
     console.error("[API Query Error]", error);
   }
@@ -83,6 +95,7 @@ queryClient.getQueryCache().subscribe(event => {
 queryClient.getMutationCache().subscribe(event => {
   if (event.type === "updated" && event.action.type === "error") {
     const error = event.mutation.state.error;
+    if (checkDatabaseHealthOnOutage(error)) return;
     redirectToLoginIfUnauthorized(error);
     console.error("[API Mutation Error]", error);
   }

@@ -12,6 +12,7 @@ import {
 import { panelCryptoNowMs } from "./panelClock";
 import { appendPanelLog } from "./_core/panelLogger";
 import { pruneMapEntries, setBoundedMapValue } from "./boundedCache";
+import { databaseHealth } from "./databaseHealthState";
 
 export const AGENT_TUNNEL_PATHS = new Set([
   "/api/agent/register",
@@ -134,6 +135,12 @@ export async function agentEncryptionMiddleware(req: Request, res: Response, nex
       throw new Error("Agent auth proof required");
     }
   } catch (err: any) {
+    if (databaseHealth.unavailable(err)) {
+      // 查 token 时数据库出错不代表 token 不对：交给 databaseRequestErrorHandler 回 503，
+      // Agent 按失败重试，而不是收到 401 当成被拒（上游 v2.3.281）。
+      next(err);
+      return;
+    }
     const message = String(err?.message || "Unauthorized");
     logAgentAuthRejection(req, authStage, message);
     res.setHeader(
