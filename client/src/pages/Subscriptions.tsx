@@ -136,7 +136,7 @@ export default function Subscriptions() {
     onSuccess: () => {
       toast.success("已取消的订阅记录已删除");
       utils.plans.mySubscriptions.invalidate();
-      utils.billing.ledger.invalidate();
+      utils.billing.ledgerPage.invalidate();
     },
     onError: (error) => toast.error(error.message || "删除订阅记录失败"),
   });
@@ -157,7 +157,7 @@ export default function Subscriptions() {
       setSelected(null);
       utils.plans.mySubscriptions.invalidate();
       utils.billing.me.invalidate();
-      utils.billing.ledger.invalidate();
+      utils.billing.ledgerPage.invalidate();
       utils.dashboard.userTraffic.invalidate();
     },
     onError: (error) => toast.error(error.message || "购买附加流量失败"),
@@ -175,7 +175,7 @@ export default function Subscriptions() {
       utils.payment.myOrders.invalidate();
       utils.plans.mySubscriptions.invalidate();
       utils.billing.me.invalidate();
-      utils.billing.ledger.invalidate();
+      utils.billing.ledgerPage.invalidate();
       utils.dashboard.userTraffic.invalidate();
     },
   });
@@ -187,7 +187,7 @@ export default function Subscriptions() {
       utils.payment.myOrders.invalidate();
       utils.plans.mySubscriptions.invalidate();
       utils.billing.me.invalidate();
-      utils.billing.ledger.invalidate();
+      utils.billing.ledgerPage.invalidate();
       paymentDialog.launch(order);
     },
     onError: (error) => toast.error(error.message || "创建续费订单失败"),
@@ -199,7 +199,7 @@ export default function Subscriptions() {
       closeRenewDialog();
       utils.plans.mySubscriptions.invalidate();
       utils.billing.me.invalidate();
-      utils.billing.ledger.invalidate();
+      utils.billing.ledgerPage.invalidate();
       utils.dashboard.userTraffic.invalidate();
     },
     onError: (error) => toast.error(error.message || "续费失败"),

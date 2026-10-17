@@ -3288,9 +3288,9 @@ export async function getBillingAdminSummary() {
   };
 }
 
-export async function listBalanceTransactions(userId?: number, limit = 100) {
+export async function listBalanceTransactions(userId?: number, limit = 100, selectedIds?: number[]) {
   const db = await getDb();
-  if (!db) return [];
+  if (!db || selectedIds?.length === 0) return [];
   const base = db
     .select({
       id: balanceTransactions.id,
@@ -3308,9 +3308,14 @@ export async function listBalanceTransactions(userId?: number, limit = 100) {
     })
     .from(balanceTransactions)
     .leftJoin(users, eq(balanceTransactions.userId, users.id));
-  const rows = userId !== undefined
-    ? await base.where(eq(balanceTransactions.userId, userId)).orderBy(desc(balanceTransactions.createdAt)).limit(limit)
-    : await base.orderBy(desc(balanceTransactions.createdAt)).limit(limit);
+  const conditions = [
+    ...(userId !== undefined ? [eq(balanceTransactions.userId, userId)] : []),
+    ...(selectedIds ? [inArray(balanceTransactions.id, selectedIds)] : []),
+  ];
+  const rows = await base
+    .where(conditions.length > 0 ? and(...conditions) : undefined)
+    .orderBy(desc(balanceTransactions.createdAt), desc(balanceTransactions.id))
+    .limit(limit);
   return (rows as any[]).map((row) => ({
     ...row,
     typeLabel: balanceTypeLabel(row.type),
@@ -3350,13 +3355,15 @@ async function listUserSubscriptionsForLedger(
   userId: number | undefined,
   limit: number,
   options: { isAdmin: boolean; includeCancelledSubscriptions: boolean },
+  selectedIds?: number[],
 ) {
   const db = await getDb();
-  if (!db) return [];
+  if (!db || selectedIds?.length === 0) return [];
   const query = userSubscriptionsListQuery(db);
   const conditions = subscriptionVisibilityConditions(options.isAdmin ? "admin" : "user");
   if (userId !== undefined) conditions.push(eq(userSubscriptions.userId, userId));
   if (!options.includeCancelledSubscriptions) conditions.push(ne(userSubscriptions.status, "cancelled"));
+  if (selectedIds) conditions.push(inArray(userSubscriptions.id, selectedIds));
   return query
     .where(and(...conditions))
     .orderBy(desc(userSubscriptions.createdAt), desc(userSubscriptions.id))
@@ -3369,18 +3376,18 @@ export async function listBillingLedger(options?: {
   userId?: number;
   limit?: number;
   includeCancelledSubscriptions?: boolean;
-}) {
+}, selectedIds?: { balance: number[]; payment: number[]; subscription: number[] }) {
   const limit = normalizeBillingLimit(options?.limit);
   const targetUserId = options?.isAdmin ? options?.userId : options?.viewerUserId;
   if (!options?.isAdmin && !targetUserId) return [];
 
   const [transactions, orders, subscriptions] = await Promise.all([
-    listBalanceTransactions(targetUserId, limit),
-    listPaymentOrders(limit, targetUserId),
+    listBalanceTransactions(targetUserId, limit, selectedIds?.balance),
+    listPaymentOrders(limit, targetUserId, selectedIds?.payment),
     listUserSubscriptionsForLedger(targetUserId, limit, {
       isAdmin: !!options?.isAdmin,
       includeCancelledSubscriptions: !!options?.includeCancelledSubscriptions,
-    }),
+    }, selectedIds?.subscription),
   ]);
 
   const items = [
@@ -3456,6 +3463,63 @@ export async function listBillingLedger(options?: {
   return items
     .sort((a, b) => billingTime(b.createdAt) - billingTime(a.createdAt))
     .slice(0, limit);
+}
+
+/**
+ * 余额流水分页（上游 2.3.285）：原来一次最多拿 100 / 500 条，再早的流水在面板上就看不到了。
+ */
+export async function listBalanceTransactionsPage(input: PageRequest & { userId?: number }) {
+  const db = await getDb();
+  if (!db) return pageResult([], 0, input, 20);
+  const condition = input.userId === undefined ? undefined : eq(balanceTransactions.userId, input.userId);
+  const [count] = await db.select({ count: sql<number>`COUNT(*)` }).from(balanceTransactions).where(condition);
+  const total = Number(count?.count || 0);
+  const window = pageWindowForTotal(input, total, 20);
+  const selected = await db.select({ id: balanceTransactions.id }).from(balanceTransactions).where(condition)
+    .orderBy(desc(balanceTransactions.createdAt), desc(balanceTransactions.id)).limit(window.pageSize).offset(window.offset);
+  const items = await listBalanceTransactions(input.userId, window.pageSize, selected.map((row: any) => Number(row.id)));
+  return pageResult(items, total, window, 20);
+}
+
+/**
+ * 账单（余额流水 + 支付订单 + 套餐记录三张表合在一起）分页（上游 2.3.285）。
+ *
+ * 原来三张表各取最近 N 条再合并截断，N 之前的记录永远翻不到。现在先在 SQL 里把三张表的
+ * （类别、id、时间）UNION 起来排序分页，只取这一页的 id，再按 id 把详情读出来 —— 不整表读，
+ * 同一时刻的多条按类别、id 定序，翻页不重不漏。
+ */
+export async function listBillingLedgerPage(input: NonNullable<Parameters<typeof listBillingLedger>[0]> & PageRequest) {
+  const targetUserId = input.isAdmin ? input.userId : input.viewerUserId;
+  if (!input.isAdmin && !targetUserId) return pageResult([], 0, input, 20);
+  const q = quoteDbIdentifier;
+  const parameters: unknown[] = [];
+  const parts = ([
+    ["balance", "balance_transactions"], ["payment", "payment_orders"], ["subscription", "user_subscriptions"],
+  ] as const).map(([kind, table]) => {
+    const conditions: string[] = [];
+    if (targetUserId !== undefined) { conditions.push(`${q("userId")} = ?`); parameters.push(targetUserId); }
+    if (kind === "subscription") {
+      conditions.push(`${q("adminDismissedAt")} IS NULL`);
+      if (!input.isAdmin) conditions.push(`${q("userDismissedAt")} IS NULL`);
+      if (!input.includeCancelledSubscriptions) { conditions.push(`${q("status")} <> ?`); parameters.push("cancelled"); }
+    }
+    return `SELECT '${kind}' AS ${q("kind")}, ${q("id")} AS ${q("sourceId")}, ${q("createdAt")} AS ${q("createdAt")}
+      FROM ${q(table)}${conditions.length ? ` WHERE ${conditions.join(" AND ")}` : ""}`;
+  });
+  const union = parts.join(" UNION ALL ");
+  const [count] = await queryRaw<{ totalItems: number }>(`SELECT COUNT(*) AS ${q("totalItems")} FROM (${union}) AS ${q("ledger")}`, parameters);
+  const total = Number(count?.totalItems || 0);
+  const window = pageWindowForTotal(input, total, 20);
+  const selected = await queryRaw<{ kind: "balance" | "payment" | "subscription"; sourceId: number }>(
+    `SELECT * FROM (${union}) AS ${q("ledger")} ORDER BY ${q("createdAt")} DESC, ${q("kind")} ASC, ${q("sourceId")} DESC
+     LIMIT ${window.pageSize} OFFSET ${window.offset}`, parameters,
+  );
+  const ids = { balance: [] as number[], payment: [] as number[], subscription: [] as number[] };
+  for (const row of selected) ids[row.kind].push(Number(row.sourceId));
+  const hydrated = await listBillingLedger({ ...input, limit: window.pageSize }, ids);
+  const byId = new Map(hydrated.map((item) => [item.id, item]));
+  const items = selected.map((row) => byId.get(`${row.kind}-${row.sourceId}`)).filter((item): item is NonNullable<typeof item> => !!item);
+  return pageResult(items, total, window, 20);
 }
 
 export async function addUserBalance(userId: number, amountCents: number, meta: Omit<InsertBalanceTransaction, "userId" | "amountCents" | "balanceAfterCents">) {
@@ -4102,9 +4166,9 @@ export async function releaseDiscountCode(id: number) {
   return rawAffectedRows(result) === 1;
 }
 
-export async function listPaymentOrders(limit = 100, userId?: number) {
+export async function listPaymentOrders(limit = 100, userId?: number, selectedIds?: number[]) {
   const db = await getDb();
-  if (!db) return [];
+  if (!db || selectedIds?.length === 0) return [];
   const base = db
     .select({
       id: paymentOrders.id,
@@ -4134,10 +4198,11 @@ export async function listPaymentOrders(limit = 100, userId?: number) {
     })
     .from(paymentOrders)
     .leftJoin(users, eq(paymentOrders.userId, users.id));
-  if (userId !== undefined) {
-    return base.where(eq(paymentOrders.userId, userId)).orderBy(desc(paymentOrders.createdAt)).limit(limit);
-  }
-  return base.orderBy(desc(paymentOrders.createdAt)).limit(limit);
+  const conditions = [
+    ...(userId !== undefined ? [eq(paymentOrders.userId, userId)] : []),
+    ...(selectedIds ? [inArray(paymentOrders.id, selectedIds)] : []),
+  ];
+  return base.where(conditions.length > 0 ? and(...conditions) : undefined).orderBy(desc(paymentOrders.createdAt), desc(paymentOrders.id)).limit(limit);
 }
 
 export async function updatePaymentOrder(outTradeNo: string, data: Partial<InsertPaymentOrder>) {

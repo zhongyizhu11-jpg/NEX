@@ -19,6 +19,11 @@ function getRequestIp(ctx: { req: { ip?: string; socket: { remoteAddress?: strin
   return ctx.req.ip || ctx.req.socket.remoteAddress || "unknown";
 }
 
+const billingPageInput = z.object({
+  page: z.number().int().min(1).max(100_000).default(1),
+  pageSize: z.number().int().min(1).max(100).default(20),
+});
+
 export const billingRouter = router({
   summary: adminProcedure.query(async () => db.getBillingAdminSummary()),
 
@@ -52,6 +57,29 @@ export const billingRouter = router({
   listTransactions: adminProcedure
     .input(z.object({ userId: z.number().int().positive().optional(), limit: z.number().int().min(1).max(500).default(100) }).optional())
     .query(async ({ input }) => db.listBalanceTransactions(input?.userId, input?.limit || 100)),
+
+  /** 余额流水分页（管理员看全部或某个用户）。 */
+  listTransactionsPage: adminProcedure
+    .input(billingPageInput.extend({ userId: z.number().int().positive().optional() }))
+    .query(async ({ input }) => db.listBalanceTransactionsPage(input)),
+
+  /** 账单分页：普通用户只能看自己的，传别人的 userId 也只按自己算。 */
+  ledgerPage: protectedProcedure
+    .input(billingPageInput.extend({
+      userId: z.number().int().positive().optional(),
+      includeCancelledSubscriptions: z.boolean().default(false),
+    }))
+    .query(async ({ input, ctx }) => {
+      const isAdmin = ctx.user.role === "admin";
+      return db.listBillingLedgerPage({
+        viewerUserId: ctx.user.id,
+        isAdmin,
+        userId: isAdmin ? input.userId : undefined,
+        includeCancelledSubscriptions: input.includeCancelledSubscriptions,
+        page: input.page,
+        pageSize: input.pageSize,
+      });
+    }),
 
   ledger: protectedProcedure
     .input(z.object({
