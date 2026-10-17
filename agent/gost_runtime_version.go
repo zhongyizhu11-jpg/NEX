@@ -245,6 +245,11 @@ func reportedGostRuntime() (string, []string) {
 		rollback = &state
 	}
 	caps := gostRuntimeCapabilities(Version, info, fp, rollback)
+	// gostApiSync：面板据此才在 gost.json 里开 Unix 套接字 API、发增量同步的标记（gost_api_sync.go）。
+	if gostAPISyncCapable(Version, info) {
+		caps = append(caps, agentCapabilityGostAPISync)
+		sort.Strings(caps)
+	}
 	if len(caps) > 0 && gostRuntimeUpgradePendingAndDown(defaultGostRuntimeUpgradeEnv()) {
 		// 刚换的运行时还没确认、服务也没在跑：先不报能力，免得面板在回滚之前把 UDP 出口当成能用。
 		caps = []string{}

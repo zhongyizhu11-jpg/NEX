@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -26,6 +27,13 @@ type managedConfigBackup struct {
 	hadPrevious  bool
 	previousMode os.FileMode
 	generation   uint64
+	// unchanged：这次写进去的 gost 运行时配置和原来一模一样。回滚时没有东西要恢复，不重启它的服务
+	// （一个事务里同时带着 gost.json 和 tunnel-gost.json，只改了其中一个时，不能连带重启另一个）。
+	// 只用于这两份自成一体的 gost 配置：nginx 之类的配置还引用别的文件（证书），内容没变也可能要重启。
+	unchanged bool
+	// restoreRuntime 不为空：这份配置是通过 gost API 增量同步的（gost_api_sync.go）。回滚时用它删掉
+	// 这次加上的对象，返回 true 就不用重启；返回 false（删不掉）照旧重启成旧配置。
+	restoreRuntime func() bool
 }
 
 type managedConfigTransaction struct {
@@ -146,7 +154,8 @@ func applyManagedConfigs(specs []managedConfigSpec) (*managedConfigTransaction, 
 				return nil, err
 			}
 		}
-		tx.backups = append(tx.backups, managedConfigBackup{spec: spec, previous: previous, hadPrevious: hadPrevious, previousMode: previousMode, generation: generation})
+		tx.backups = append(tx.backups, managedConfigBackup{spec: spec, previous: previous, hadPrevious: hadPrevious, previousMode: previousMode, generation: generation,
+			unchanged: isSelfContainedGostRuntimeConfig(spec) && hadPrevious && previousMode == mode && bytes.Equal(previous, data)})
 		if err := os.Rename(stagedPath, spec.Path); err != nil {
 			cleanup()
 			tx.rollbackLocked()
@@ -217,8 +226,23 @@ func (tx *managedConfigTransaction) rollbackLocked() bool {
 			continue
 		}
 		delete(managedConfigCurrentGeneration, backup.spec.Path)
+		if backup.unchanged {
+			// 内容没变：运行状态本来就对得上，哈希记录也还是对的，什么都不用做。
+			continue
+		}
 		_ = os.Remove(backup.spec.Path + ".sha256")
-		if service := strings.TrimSpace(backup.spec.ServiceName); service != "" {
+		service := strings.TrimSpace(backup.spec.ServiceName)
+		if backup.restoreRuntime != nil {
+			if backup.restoreRuntime() {
+				// API 删掉了这次加的对象，运行状态已经回到旧配置：把旧配置的哈希记回去，下次同步还能走增量。
+				if backup.hadPrevious {
+					_ = writeManagedConfigAtomic(backup.spec.Path+".sha256", []byte(gostShellHash(backup.previous)), 0644)
+				}
+				continue
+			}
+			logf("managed config runtime restore via API failed path=%s; restarting service", backup.spec.Path)
+		}
+		if service != "" {
 			services[service] = services[service] || backup.hadPrevious
 		}
 	}
@@ -232,6 +256,26 @@ func (tx *managedConfigTransaction) rollbackLocked() bool {
 	tx.finished = true
 	tx.rollbackOK = ok
 	return ok
+}
+
+func isSelfContainedGostRuntimeConfig(spec managedConfigSpec) bool {
+	service := strings.TrimSpace(spec.ServiceName)
+	return (service == runtimeServiceName && spec.Path == runtimeConfigPath) ||
+		(service == tunnelRuntimeServiceName && spec.Path == tunnelRuntimeConfigPath)
+}
+
+// setRuntimeRestore 给事务里这份配置挂上（或用 nil 取消）回滚时的运行状态恢复办法，见 managedConfigBackup.restoreRuntime。
+func (tx *managedConfigTransaction) setRuntimeRestore(path string, restore func() bool) {
+	if tx == nil {
+		return
+	}
+	tx.stateMu.Lock()
+	defer tx.stateMu.Unlock()
+	for i := range tx.backups {
+		if tx.backups[i].spec.Path == path {
+			tx.backups[i].restoreRuntime = restore
+		}
+	}
 }
 
 func (tx *managedConfigTransaction) commit() {

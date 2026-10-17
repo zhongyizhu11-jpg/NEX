@@ -1,5 +1,6 @@
 import { forwardRuleProtocols, normalizeForwardRuleProtocol } from "@shared/forwardTypes";
 import { isEntryBridgeRuleId } from "@shared/ruleEntryBridge";
+import { GOST_API_DIR } from "@shared/gostRuntimeApi";
 import { isIP } from "net";
 
 type IptablesBinary = "iptables" | "ip6tables";
@@ -728,6 +729,54 @@ export function restartManagedServiceIfConfigChangedCmd(svcNameRaw: string, conf
   const alreadyRunning = `if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then systemctl is-active --quiet ${q}.service; elif command -v rc-service >/dev/null 2>&1; then rc-service ${q} status >/dev/null 2>&1; elif [ -x /etc/init.d/${svcName} ]; then /etc/init.d/${svcName} status >/dev/null 2>&1; else false; fi`;
   const configHash = `if command -v sha256sum >/dev/null 2>&1; then sha256sum ${config} 2>/dev/null | awk '{print "sha256:"$1}'; elif command -v cksum >/dev/null 2>&1; then cksum ${config} 2>/dev/null | awk '{print "cksum:"$1":"$2}'; else echo "mtime:$(wc -c < ${config} 2>/dev/null):$(date -r ${config} +%s 2>/dev/null)"; fi`;
   return `new_hash=$(${configHash}); old_hash=$(cat ${config}.sha256 2>/dev/null || true); if [ "$new_hash" != "$old_hash" ] || ! { ${alreadyRunning}; }; then ${start}; [ -n "$new_hash" ] && printf '%s' "$new_hash" > ${config}.sha256; else echo "[service] ${svcName} config unchanged"; fi`;
+}
+
+/*
+  gost 共享运行时的增量同步（shared/gostRuntimeApi.ts、agent/gost_api_sync.go）。只给报了 gostApiSync 能力的
+  机器用；别的机器上下面这些一个都不出现，配置、单元、命令和以前逐字节相同。
+*/
+const GOST_API_RUNTIMES: Record<string, string> = {
+  "forwardx-runtime": "/etc/forwardx/runtime/gost.json",
+  "forwardx-tunnel-runtime": "/etc/forwardx/runtime/tunnel-gost.json",
+};
+
+function gostApiRuntimeConfigPath(service: string) {
+  const configPath = Object.prototype.hasOwnProperty.call(GOST_API_RUNTIMES, service) ? GOST_API_RUNTIMES[service] : "";
+  if (!configPath) throw new Error(`Unsupported GOST runtime service: ${service}`);
+  return configPath;
+}
+
+export function gostRuntimeApiSocketPath(service: string) {
+  gostApiRuntimeConfigPath(service);
+  return `${GOST_API_DIR}/${service}.sock`;
+}
+
+/** gost.json 里的 api 段：只监听 root 专用的 Unix 套接字，绝不开 TCP 管理端口。 */
+export function gostRuntimeApiConfig(service: string) {
+  return { addr: `unix://${gostRuntimeApiSocketPath(service)}` };
+}
+
+/**
+ * 开了 API 的运行时的 ExecStart：建 0700 的套接字目录，删掉上次异常退出（SIGKILL、断电、崩溃）留下的
+ * 套接字（否则 gost 监听失败、整个进程起不来），umask 177 让 gost 建出来的套接字是 0600，再 exec gost
+ * （PID、信号、命令行都还是 gost 自己的）。systemd / OpenRC / SysV 都只用 ExecStart，所以三种都管用。
+ * 不用 shell 变量：systemd 会替换 ExecStart 里的 $VAR。
+ */
+export function gostRuntimeApiExecStart(runtimeBin: string, service: string, configPath: string) {
+  if (gostApiRuntimeConfigPath(service) !== configPath) throw new Error("Unsupported GOST runtime config");
+  if (!/^\/[A-Za-z0-9_./-]+$/.test(runtimeBin)) throw new Error("Unsupported GOST runtime binary");
+  const socket = gostRuntimeApiSocketPath(service);
+  const parent = GOST_API_DIR.slice(0, GOST_API_DIR.lastIndexOf("/"));
+  return `/bin/sh -c 'mkdir -p ${parent} && mkdir -p -m 700 ${GOST_API_DIR} && chmod 700 ${GOST_API_DIR} && rm -f ${socket} && umask 177 && exec ${runtimeBin} -C ${configPath}'`;
+}
+
+/**
+ * 新 Agent 认这行标记：先走 gost API 同步（新增、限速变化、UDP 规则的修改删除等），做不了或失败再执行后面的命令；旧 Agent 把它当注释。
+ * 标记后面就是原来那条「配置变了就重启」的命令，回退时语义和以前完全一样。
+ */
+export function syncGostServiceIfConfigChangedCmd(service: string, configPath: string) {
+  if (gostApiRuntimeConfigPath(service) !== configPath) throw new Error("Unsupported GOST runtime config");
+  return `# forwardx-gost-api-sync ${service} ${configPath}\n${restartManagedServiceIfConfigChangedCmd(service, configPath)}`;
 }
 
 function mimicInterfaceName(value: string) {
