@@ -18,6 +18,7 @@ import { maintenanceRouter } from "./maintenance";
 import { offsiteBackupRouter } from "./offsiteBackup";
 import { statusAvailabilityRouter } from "./statusAvailability";
 import { quotaPolicyRouter } from "./quotaPolicy";
+import { resourceAlertRouter } from "./resourceAlert";
 
 export const opsRouter = router({
   events: eventsRouter,
@@ -35,4 +36,5 @@ export const opsRouter = router({
   offsiteBackup: offsiteBackupRouter,
   statusAvailability: statusAvailabilityRouter,
   quotaPolicy: quotaPolicyRouter,
+  resourceAlert: resourceAlertRouter,
 });

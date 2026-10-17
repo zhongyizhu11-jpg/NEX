@@ -20,6 +20,8 @@ export type PanelEventKind =
   | "host.rebooted"
   | "host.relay_switched"
   | "host.config_refused"
+  | "host.resource_high"
+  | "host.resource_recovered"
   | "user.quota_exhausted"
   | "user.expiring"
   | "user.expired"

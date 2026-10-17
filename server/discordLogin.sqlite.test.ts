@@ -363,7 +363,7 @@ test("Discord 登录和通知在 SQLite 上端到端跑通", () => {
       // alice 在个人资料里关掉「主机上下线」：Discord 不再发（Telegram 读的是同一份）
       const aliceCaller = callerFor(await db.getUserById(aliceId));
       const prefsBefore = await aliceCaller.notifyPrefs();
-      assert.deepEqual(prefsBefore.categories.map((c) => c.key), ["host", "rule", "route", "ticket"]);
+      assert.deepEqual(prefsBefore.categories.map((c) => c.key), ["host", "resource", "rule", "route", "ticket"]);
       await aliceCaller.setNotifyCategory({ category: "host", enabled: false });
       const tgPrefs = await import(url("server/telegramNotifyPrefs.ts"));
       assert.equal(tgPrefs.isTelegramNotifyMuted(await tgPrefs.readTelegramNotifyPrefs(), aliceId, "host"), true, "Telegram 那边也关了");
