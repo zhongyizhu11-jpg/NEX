@@ -36,6 +36,7 @@ export * from "./repositories/forwardRuleRepository";
 export * from "./repositories/tunnelRepository";
 export * from "./repositories/tunnelLinkShapingRepository";
 export * from "./repositories/metricsRepository";
+export * from "./repositories/probeCounterRepository";
 export * from "./repositories/tokenRepository";
 export * from "./forwardGroupRuleIntegrity";
 export * from "./repositories/dashboardRepository";

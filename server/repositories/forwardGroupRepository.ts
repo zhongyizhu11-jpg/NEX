@@ -106,7 +106,7 @@ import { summarizeForwardGroupRuntime } from "../forwardGroupRuntimeStatus";
 import { dbBool, sqlBool } from "./repositoryUtils";
 import { reorderWithinSortOrderScope } from "./sortOrderSlots";
 import { normalizeExitGroupStrategy } from "@shared/exitStrategy";
-import { MAX_FORWARD_GROUP_MEMBERS } from "../../shared/forwardGroup";
+import { MAX_FORWARD_GROUP_MEMBERS, forwardGroupRouteMembers } from "../../shared/forwardGroup";
 import { routeGroupForwardTypeSupported, routeGroupTunnelModeSupported } from "../../shared/routeGroup";
 import { getLastAuthenticatedAgentActivity } from "../agentActivity";
 import {
@@ -2048,6 +2048,37 @@ async function memberListenHostIds(member: any): Promise<number[]> {
   }
   const tunnel = await getTunnelById(Number(member.tunnelId));
   return tunnel ? tunnelRuleListenHostIds(tunnel) : [];
+}
+
+/**
+ * Which listener a failover-group rule's self-test must probe: the child rule
+ * of the member that currently carries the traffic (activeMemberId), never the
+ * template's historical host metadata. Without an active member and without a
+ * DDNS domain any live member's listener is equivalent. Throws instead of
+ * testing a standby while the actual active route is offline.
+ */
+export async function getForwardGroupRuleForSelfTest(template: any, group: any) {
+  if (!group || !dbBool(group.isEnabled)) throw new Error("转发组不存在或已停用");
+  if (forwardGroupModeOf(group) !== "failover") throw new Error("此转发组不支持单入口链路测试");
+  const members = forwardGroupRouteMembers(group);
+  const activeMemberId = Number(group.activeMemberId || 0);
+  const candidates = activeMemberId > 0
+    ? members.filter((member) => Number(member.id) === activeMemberId)
+    : group.domain ? [] : members;
+  const children = await getForwardGroupChildRulesForTemplate(Number(template.id)) as any[];
+  for (const member of candidates) {
+    const liveness = await resolveMemberAgentLiveness(member);
+    if (!liveness.available) continue;
+    const tunnelId = member.memberType === "tunnel" ? Number(member.tunnelId || 0) : 0;
+    const child = children.find((rule) => !dbBool(rule.pendingDelete)
+      && dbBool(rule.isEnabled)
+      && Number(rule.forwardGroupId) === Number(group.id)
+      && Number(rule.forwardGroupMemberId) === Number(member.id)
+      && Number(rule.hostId) === liveness.hostId
+      && Number(rule.tunnelId || 0) === tunnelId);
+    if (child) return { rule: child, memberId: Number(member.id), groupId: Number(group.id) };
+  }
+  throw new Error("转发组当前没有可测试的活动入口，请等待故障切换完成后重试");
 }
 
 export async function getForwardGroupDefaultHostId(groupId: number) {

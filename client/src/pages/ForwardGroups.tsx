@@ -545,6 +545,10 @@ function ForwardGroupLatencyDialog({
     { groupId, hours: 24 },
     { enabled: open, refetchInterval: pollingInterval("slow", open), refetchOnMount: "always" }
   );
+  const { data: counterStatistics } = trpc.forwardGroups.probeStatistics.useQuery(
+    { groupId, hours: timeRangeHours },
+    { enabled: open, refetchInterval: pollingInterval("slow", open), refetchOnMount: "always" },
+  );
   const cachedData = groupLatencySeriesCache.get(groupId);
   const rawSeriesData = (data ?? cachedData) as GroupLatencySeriesDatum[] | undefined;
   const waitForFreshSeries = open && isFetching && !isLatencySeriesCacheFresh(rawSeriesData);
@@ -582,8 +586,8 @@ function ForwardGroupLatencyDialog({
     ]) as GroupLatencyPoint[];
   }, [peakCutEnabled, rawChartData]);
   const stats = useMemo(() => {
-    return getLatencyStabilityStats(chartData);
-  }, [chartData]);
+    return getLatencyStabilityStats(chartData, counterStatistics ?? null);
+  }, [chartData, counterStatistics]);
   const yMax = useMemo(() => getLatencyYAxisMax(Math.max(...chartData.filter((d) => !d.isTimeout).map((d) => d.chartLatency), 0), 120), [chartData]);
   const yTicks = useMemo(() => getLatencyYAxisTicks(yMax), [yMax]);
   const shouldAnimateChart = open && chartData.length > 0 && !groupLatencyAnimatedKeys.has(groupId);
@@ -650,7 +654,11 @@ function ForwardGroupLatencyDialog({
             </ResponsiveContainer>
           )}
         </div>
-        <LatencyStabilityStats stats={stats} />
+        <LatencyStabilityStats
+          stats={stats}
+          counterStatistics={counterStatistics ?? null}
+          description="统计各跳实际的 TCP / Ping 探测（含已上报的备用路径），不等于端到端业务丢包。"
+        />
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>关闭</Button>

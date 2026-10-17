@@ -158,6 +158,22 @@ export function buildMetaAgentSelfTestPayload(
   const tunnelPayload = buildTunnelAgentSelfTestPayload(test, meta);
   if (tunnelPayload) return tunnelPayload;
 
+  if (meta?.kind === "forward-group") {
+    // Execute the snapshot taken at click time: a failover after enqueueing
+    // must not silently re-target a pending test.
+    const method = normalizeLinkProbeMethod(meta.method);
+    return {
+      testId: agentInteger(test?.id),
+      ruleId: agentInteger(meta.runtimeRuleId),
+      forwardType: String(meta.forwardType || ""),
+      protocol: method,
+      method,
+      sourcePort: agentInteger(meta.sourcePort),
+      targetIp: String(meta.targetIp || ""),
+      targetPort: agentInteger(meta.targetPort),
+    };
+  }
+
   if (meta?.kind === "forward-via-tunnel" || meta?.kind === "forward-via-tunnel-entry") {
     const entryProbe = meta.kind === "forward-via-tunnel-entry";
     const method = normalizeLinkProbeMethod(meta.method);

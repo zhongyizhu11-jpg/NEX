@@ -5,7 +5,7 @@ import { appendPanelLog } from "../_core/panelLogger";
 import { pushAgentRefresh } from "../agentEvents";
 import { pushTunnelEndpointRefresh } from "./helpers";
 import { requireRuleProtocolEnabled } from "../forwardProtocolSettings";
-import { createHopTestBatch, registerHopTest } from "../hopTestState";
+import { newForwardChainBatchId } from "../forwardChainManualProbe";
 import { linkProbeMethodForRule } from "@shared/latencyProbe";
 import { ruleLatencySeriesQueryCache as selfTestQueryCache } from "../ruleLatencyQueryCache";
 import * as hopRepo from "../repositories/tunnelRepository";
@@ -41,6 +41,19 @@ async function forwardXTunnelFxpIssueMessage(tunnel: any) {
 }
 
 export const selfTestRulesRouter = router({
+  /** 累计真实探测次数（Agent 2.2.229+）；available=false 时前端退回按状态样本统计。 */
+  probeStatistics: protectedProcedure
+    .input(z.object({ ruleId: z.number().int().positive(), hours: z.number().min(0.5).max(24 * 3).default(24) }))
+    .query(async ({ input, ctx }) => {
+      const rule = await db.getForwardRuleById(input.ruleId);
+      if (!rule) throw new Error("规则不存在");
+      if (ctx.user.role !== "admin" && rule.userId !== ctx.user.id) throw new Error("无权查看此规则");
+      return selfTestQueryCache.get(
+        `probeStatistics:${ctx.user.id}:${input.ruleId}:${input.hours}`,
+        { ttlMs: 5_000, staleMs: 0 },
+        () => db.getTcpingProbeStatisticsByRule(input.ruleId, new Date(Date.now() - input.hours * 3600_000)),
+      );
+    }),
   tcpingSeries: protectedProcedure
       .input(z.object({
         ruleId: z.number(),
@@ -70,6 +83,9 @@ export const selfTestRulesRouter = router({
       }
       await requireRuleProtocolEnabled(rule);
       let hostId = rule.hostId;
+      // The rule that actually carries the traffic: for a failover-group
+      // template that is the active member's child rule, not the template.
+      let runtimeRule: any = rule;
       let message: string | null = null;
       if ((rule as any).isForwardGroupTemplate && (rule as any).forwardGroupId) {
         const group = await db.getForwardGroupById(Number((rule as any).forwardGroupId)) as any;
@@ -83,11 +99,11 @@ export const selfTestRulesRouter = router({
               : "remaining-path"
             : "sum";
           if (probes.length === 0) throw new Error("转发链没有可测试的有效链路");
-          const batchId = createHopTestBatch("fgr", Number(group.id));
+          // Durable batch: every hop row carries the batchId and the batch is
+          // aggregated from the database (survives a panel restart).
+          const batchId = newForwardChainBatchId();
           const testHostIds = new Set<number>();
-          let firstTestId = 0;
-          let queued = 0;
-          for (const probe of probes) {
+          const rows = probes.map((probe) => {
             const probeMessage = JSON.stringify({
               kind: "forward-chain",
               groupId: group.id,
@@ -103,7 +119,8 @@ export const selfTestRulesRouter = router({
               latencyMode: chainLatencyMode,
               runtimeDependent: probe.runtimeDependent,
             });
-            const testId = await db.createForwardTest({
+            testHostIds.add(probe.fromHostId);
+            return {
               ruleId: rule.id,
               hostId: probe.fromHostId,
               userId: rule.userId,
@@ -112,21 +129,41 @@ export const selfTestRulesRouter = router({
               targetReachable: false,
               forwardOk: false,
               message: probeMessage,
-            });
-            if (!firstTestId) firstTestId = Number(testId);
-            registerHopTest(batchId, Number(testId));
-            testHostIds.add(probe.fromHostId);
-            queued += 1;
-            appendPanelLog("info", `[SelfTest] rule=${rule.id} forward-chain=${group.id} queued hop=${probe.hopLabel} method=${probe.method} target=${probe.targetIp}:${probe.targetPort}`);
-          }
+            };
+          });
+          const ids = await db.createForwardTestBatch(batchId, rows);
+          const queued = ids.length;
+          appendPanelLog("info", `[SelfTest] rule=${rule.id} forward-chain=${group.id} batch=${batchId} queued segments=${queued} sourceHosts=${testHostIds.size}`);
           for (const hostId of testHostIds) {
             pushAgentRefresh(hostId, "forward-chain-rule-selftest", { urgent: true });
           }
-          return { id: firstTestId, queued };
+          return { id: Number(ids[0] || 0), queued };
+        }
+        if (String(group?.groupMode || "failover") === "failover") {
+          const selected = await db.getForwardGroupRuleForSelfTest(rule, group);
+          runtimeRule = selected.rule;
+          await requireRuleProtocolEnabled(runtimeRule);
+          hostId = Number(runtimeRule.hostId);
+          const sourceHost = await db.getHostById(hostId);
+          // Persist the selected listener/target at click time so both Agent
+          // pull paths run the same test even if failover happens afterwards.
+          message = JSON.stringify({
+            kind: "forward-group",
+            groupId: selected.groupId,
+            memberId: selected.memberId,
+            runtimeRuleId: Number(runtimeRule.id),
+            forwardType: runtimeRule.forwardType,
+            sourcePort: runtimeRule.sourcePort,
+            targetIp: runtimeRule.targetIp,
+            targetPort: runtimeRule.targetPort,
+            method: linkProbeMethodForRule(runtimeRule),
+            sourceLabel: (sourceHost as any)?.name || `主机 #${hostId}`,
+            targetLabel: rule.name,
+          });
         }
       }
-      if ((rule as any).tunnelId) {
-        const tunnel = await db.getTunnelById((rule as any).tunnelId);
+      if (runtimeRule.tunnelId) {
+        const tunnel = await db.getTunnelById(runtimeRule.tunnelId);
         if (!tunnel) throw new Error("隧道不存在");
         const fxpIssueMessage = await forwardXTunnelFxpIssueMessage(tunnel);
         if (fxpIssueMessage) {
@@ -144,12 +181,14 @@ export const selfTestRulesRouter = router({
           return { id };
         }
         hostId = tunnel.exitHostId;
-        const targetIp = rule.targetIp;
+        const targetIp = runtimeRule.targetIp;
         if (!targetIp) throw new Error("目标地址不可用，请检查规则目标地址");
         const tunnelLatencyBaseline = await db.getLatestTunnelLatency(Number(tunnel.id));
+        // Probe only: a measurement must not invalidate a healthy runtime and
+        // queue redundant re-applies ahead of the probe it is waiting for.
         const pushed = await pushTunnelEndpointRefresh(tunnel, "forward-selftest-via-tunnel", {
           urgent: true,
-          forceTcping: true,
+          refreshMode: "probe",
         });
         message = JSON.stringify({
           kind: "forward-via-tunnel",
@@ -157,12 +196,12 @@ export const selfTestRulesRouter = router({
           entryHostId: tunnel.entryHostId,
           exitHostId: tunnel.exitHostId,
           targetIp,
-          targetPort: rule.targetPort,
-          method: linkProbeMethodForRule(rule),
+          targetPort: runtimeRule.targetPort,
+          method: linkProbeMethodForRule(runtimeRule),
           tunnelLatencyBaselineId: Number((tunnelLatencyBaseline as any)?.id || 0),
           refreshPushed: pushed,
         });
-        appendPanelLog("info", `[SelfTest] rule=${rule.id} tunnel=${tunnel.id} queued tunnel+target test from exitHost=${tunnel.exitHostId} to target=${targetIp}:${rule.targetPort}`);
+        appendPanelLog("info", `[SelfTest] rule=${rule.id} tunnel=${tunnel.id} queued tunnel+target test from exitHost=${tunnel.exitHostId} to target=${targetIp}:${runtimeRule.targetPort}`);
       }
       const id = await db.createForwardTest({
         ruleId: rule.id,
@@ -175,8 +214,8 @@ export const selfTestRulesRouter = router({
         message,
       });
       pushAgentRefresh(hostId, "forward-selftest", { urgent: true });
-      if (!(rule as any).tunnelId) {
-        appendPanelLog("info", `[SelfTest] rule=${rule.id} queued direct test=${id} from host=${hostId} to target=${rule.targetIp}:${rule.targetPort}`);
+      if (!runtimeRule.tunnelId) {
+        appendPanelLog("info", `[SelfTest] rule=${rule.id}${runtimeRule !== rule ? ` runtimeRule=${runtimeRule.id}` : ""} queued direct test=${id} from host=${hostId} to target=${runtimeRule.targetIp}:${runtimeRule.targetPort}`);
       }
       return { id };
     }),

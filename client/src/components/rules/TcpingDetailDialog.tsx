@@ -93,6 +93,10 @@ function TcpingDetailDialog({
   const [peakCutEnabled, setPeakCutEnabled] = useState(false);
   const [timeRangeHours, setTimeRangeHours] = useState<LatencyTimeRangeHours>(DEFAULT_LATENCY_TIME_RANGE_HOURS);
   const methodLabel = probeMethod === "ping" ? "Ping" : "TCPing";
+  const { data: counterStatistics } = trpc.rules.probeStatistics.useQuery(
+    { ruleId, hours: timeRangeHours },
+    { enabled: open, refetchInterval: pollingInterval("slow", open), refetchOnMount: "always" },
+  );
   const { data, isLoading, isFetching } = trpc.rules.tcpingSeries.useQuery(
     { ruleId, hours: 24 },
     { enabled: open, refetchInterval: pollingInterval("slow", open), refetchOnMount: "always" },
@@ -142,7 +146,10 @@ function TcpingDetailDialog({
   }, [chartData]);
   const yTicks = useMemo(() => getLatencyYAxisTicks(yMax), [yMax]);
 
-  const tcpingStats = useMemo(() => getLatencyStabilityStats(chartData), [chartData]);
+  const tcpingStats = useMemo(
+    () => getLatencyStabilityStats(chartData, counterStatistics ?? null),
+    [chartData, counterStatistics],
+  );
   const shouldAnimateChart = open && chartData.length > 0 && !tcpingAnimatedKeys.has(ruleId);
 
   useEffect(() => {
@@ -219,7 +226,13 @@ function TcpingDetailDialog({
               </ResponsiveContainer>
             )}
           </div>
-          <LatencyStabilityStats stats={tcpingStats} />
+          <LatencyStabilityStats
+            stats={tcpingStats}
+            counterStatistics={counterStatistics ?? null}
+            description={isForwardChain
+              ? "转发链按各跳的实际探测计数，不等于端到端业务丢包。"
+              : "统计的是当前目标的实际探测，不代表业务丢包。"}
+          />
         </div>
       </DialogContent>
     </Dialog>

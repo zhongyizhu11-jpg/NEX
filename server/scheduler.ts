@@ -15,8 +15,9 @@ import { dispatchReminders, type PendingReminder } from "./reminderDispatch";
 import { runDiscordDigests, runTelegramDigests, sendTelegramMessage } from "./telegramBot";
 import { discordNotifier } from "./discordNotify";
 import { isDiscordBotReadyFromSettings, readDiscordBotSettings } from "./discordSettings";
-import { recordTunnelHopTestResult } from "./tunnelHopTestState";
-import { recordHopTestResult } from "./hopTestState";
+import { recoverManualTunnelProbeBatches, settleManualTunnelProbeBatch } from "./tunnelManualProbe";
+import { recoverManualForwardChainBatches, settleManualForwardChainBatch } from "./forwardChainManualProbe";
+import { forwardTestRequestMessage, isDurableForwardTestBatchId, TUNNEL_PROBE_BATCH_PREFIX } from "./repositories/forwardTestRepository";
 import { primeHostStatusNotifier, sweepOfflineHostsAndNotify } from "./hostStatusNotifier";
 import { normalizeLinkProbeMethod } from "@shared/latencyProbe";
 import { clearRuleLatencyQueryCache } from "./ruleLatencyQueryCache";
@@ -53,11 +54,13 @@ type TimedOutForwardTest = {
   ruleId: number;
   hostId: number;
   message: string | null;
+  requestMessage?: string | null;
+  batchId?: string | null;
   timeoutSeconds?: number;
 };
 
 function timeoutSecondsForForwardTest(test: TimedOutForwardTest) {
-  return selfTestTimeoutSeconds(parseSelfTestMeta(test.message));
+  return selfTestTimeoutSeconds(parseSelfTestMeta(forwardTestRequestMessage(test)));
 }
 
 const UPDATE_AUTO_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
@@ -231,6 +234,7 @@ export async function runExpirationCheck() {
 
 async function settleTimedOutTunnelTests(timedOutTests: TimedOutForwardTest[], defaultTimeoutSeconds: number) {
   const settledTunnelIds = new Set<number>();
+  const settledBatchIds = new Set<string>();
 
   const settleTunnel = async (tunnelId: number, message: string, logSuffix: string, timeoutSeconds: number) => {
     if (!Number.isFinite(tunnelId) || tunnelId <= 0 || settledTunnelIds.has(tunnelId)) return;
@@ -240,36 +244,20 @@ async function settleTimedOutTunnelTests(timedOutTests: TimedOutForwardTest[], d
     appendPanelLog("warn", `[TunnelTest] tunnel=${tunnelId} timeout after ${timeoutSeconds}s ${logSuffix}`);
   };
 
-  const settleTunnelAggregate = async (
-    aggregate: NonNullable<ReturnType<typeof recordTunnelHopTestResult>>,
-    message: string,
-    logSuffix: string,
-  ) => {
-    const tunnelId = Number(aggregate.tunnelId);
-    if (!Number.isFinite(tunnelId) || tunnelId <= 0 || settledTunnelIds.has(tunnelId)) return;
-    settledTunnelIds.add(tunnelId);
-    if (aggregate.success) await db.updateTunnelRunningStatus(tunnelId, true);
-    await db.updateTunnelTestResult(tunnelId, {
-      status: aggregate.success ? "success" : "failed",
-      latencyMs: aggregate.success ? aggregate.latencyMs : null,
-      message,
-    });
-    await db.insertTunnelLatencyStat({
-      tunnelId,
-      latencyMs: aggregate.success ? aggregate.latencyMs : null,
-      isTimeout: !aggregate.success,
-    }, { message });
-    appendPanelLog(
-      aggregate.success ? "info" : "warn",
-      `[TunnelTest] tunnel=${tunnelId} timeout aggregation success=${aggregate.success} ${logSuffix}`,
-    );
-  };
-
   for (const test of timedOutTests) {
     const timeoutSeconds = Number(test.timeoutSeconds) > 0
       ? Number(test.timeoutSeconds)
       : defaultTimeoutSeconds;
-    const meta = parseSelfTestMeta(test.message);
+    // Durable multi-hop batches: the timed-out row is final now; aggregate the
+    // batch from the database if this was its last outstanding hop.
+    if (isDurableForwardTestBatchId(test.batchId)) {
+      if (settledBatchIds.has(test.batchId)) continue;
+      settledBatchIds.add(test.batchId);
+      if (test.batchId.startsWith(TUNNEL_PROBE_BATCH_PREFIX)) await settleManualTunnelProbeBatch(test.batchId);
+      else await settleManualForwardChainBatch(test.batchId);
+      continue;
+    }
+    const meta = parseSelfTestMeta(forwardTestRequestMessage(test));
     if (!meta) continue;
 
     if (meta.kind === "tunnel") {
@@ -283,85 +271,22 @@ async function settleTimedOutTunnelTests(timedOutTests: TimedOutForwardTest[], d
     }
 
     if (meta.kind === "tunnel-hop") {
+      // A hop row without a durable batch was created by a panel version that
+      // kept batches in memory; that batch is gone, so fail the tunnel test.
       const hopLabel = String((meta as any).hopLabel || "hop");
-      const routeLabel = typeof (meta as any).routeLabel === "string" ? (meta as any).routeLabel : null;
-      const groupKey = typeof (meta as any).groupKey === "string" ? (meta as any).groupKey : null;
-      const groupLabel = typeof (meta as any).groupLabel === "string" ? (meta as any).groupLabel : null;
-      const latencyMode = tunnelHopLatencyMode(meta as any);
-      const modeText = tunnelHopModeText(latencyMode);
-      const message = `${modeText.label}超时：${hopLabel} 未在 ${timeoutSeconds} 秒内上报结果`;
-      const aggregate = recordTunnelHopTestResult(Number(test.id), {
-        success: false,
-        latencyMs: null,
-        message,
-        hopLabel,
-        routeLabel,
-        groupKey,
-        groupLabel,
-      }, {
-        latencyMode,
-        successPrefix: modeText.successPrefix,
-        failurePrefix: modeText.failurePrefix,
-        totalLabel: modeText.totalLabel,
-      });
-      if (aggregate) {
-        const aggregateMessage = structuredLinkTestMessage({
-          kind: modeText.kind,
-          tunnelId: aggregate.tunnelId,
-          message: aggregate.message,
-          details: aggregate.details,
-          totalLatencyMs: aggregate.latencyMs,
-        });
-        await settleTunnelAggregate(aggregate, aggregateMessage, `test=${test.id} aggregate=true`);
-      } else {
-        appendPanelLog("warn", `[TunnelTest] tunnel=${meta.tunnelId} branch timeout test=${test.id} host=${test.hostId} hop=${hopLabel}`);
-      }
+      const modeText = tunnelHopModeText(tunnelHopLatencyMode(meta as any));
+      await settleTunnel(
+        meta.tunnelId,
+        `${modeText.label}超时：${hopLabel} 未在 ${timeoutSeconds} 秒内上报结果`,
+        `test=${test.id} host=${test.hostId} legacy-hop=${hopLabel}`,
+        timeoutSeconds,
+      );
+      continue;
     }
 
     if (meta.kind === "forward-chain") {
       const hopLabel = String((meta as any).hopLabel || "hop");
-      const routeLabel = typeof (meta as any).routeLabel === "string" ? (meta as any).routeLabel : null;
-      const latencyMode = (meta as any).latencyMode === "multi-source-remaining-path"
-        ? "multi-source-remaining-path"
-        : (meta as any).latencyMode === "remaining-path" ? "remaining-path" : "sum";
-      const message = `转发链逐跳测试超时：${hopLabel} 未在 ${timeoutSeconds} 秒内上报结果`;
-      const aggregate = recordHopTestResult(Number(test.id), {
-        success: false,
-        latencyMs: null,
-        message,
-        hopLabel,
-        routeLabel,
-        method: normalizeLinkProbeMethod((meta as any).method),
-      }, {
-        successPrefix: "转发链逐跳测试成功",
-        failurePrefix: "转发链逐跳测试失败",
-        latencyMode,
-      });
-      if (aggregate) {
-        const aggregateMessage = structuredLinkTestMessage({
-          kind: "forward-chain-hop-summary",
-          groupId: aggregate.ownerId,
-          message: aggregate.message,
-          details: aggregate.details,
-          totalLatencyMs: aggregate.latencyMs,
-        });
-        await db.updateForwardTestResult(Number(test.id), {
-          status: "failed",
-          listenOk: false,
-          targetReachable: false,
-          forwardOk: false,
-          latencyMs: null,
-          message: aggregateMessage,
-        });
-        await db.insertForwardGroupLatencyStat({
-          groupId: aggregate.ownerId,
-          latencyMs: null,
-          isTimeout: true,
-        });
-        appendPanelLog("warn", `[SelfTest] forward-chain group=${aggregate.ownerId} timeout aggregate=true test=${test.id}`);
-      } else {
-        appendPanelLog("warn", `[SelfTest] forward-chain group=${meta.groupId} timeout test=${test.id} host=${test.hostId} hop=${hopLabel}`);
-      }
+      appendPanelLog("warn", `[SelfTest] forward-chain group=${meta.groupId} timeout test=${test.id} host=${test.hostId} hop=${hopLabel}`);
     }
   }
 }
@@ -376,7 +301,8 @@ export async function runSelfTestTimeoutSweep() {
     if (timedOutTests.length > 0) {
       await settleTimedOutTunnelTests(timedOutTests, SELF_TEST_TIMEOUT_SECONDS);
       for (const test of timedOutTests) {
-        const meta = parseSelfTestMeta(test.message);
+        if (isDurableForwardTestBatchId(test.batchId)) continue;
+        const meta = parseSelfTestMeta(forwardTestRequestMessage(test));
         if (meta?.kind === "tunnel" || meta?.kind === "tunnel-hop") continue;
         if (!meta || meta.kind === "forward-via-tunnel") {
           await db.insertTcpingStat({
@@ -399,13 +325,18 @@ export async function runSelfTestTimeoutSweep() {
       }
       console.log(`[Scheduler] Self-test timeout sweep: ${timedOutTests.length} test(s) marked as timeout`);
     }
+    await recoverManualTunnelProbeBatches();
+    await recoverManualForwardChainBatches();
   } catch (error) {
     console.error("[Scheduler] Self-test timeout sweep error:", error);
   }
 }
 
-async function recoverPendingSelfTestSweep() {
+export async function recoverPendingSelfTestSweep() {
   try {
+    // Batches whose last report arrived just before the panel exited.
+    await recoverManualTunnelProbeBatches();
+    await recoverManualForwardChainBatches();
     if (await db.hasActiveForwardTests()) selfTestSweepActivity.markActive();
   } catch (error) {
     console.error("[Scheduler] Self-test recovery check error:", error);

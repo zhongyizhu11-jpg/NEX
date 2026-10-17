@@ -6692,7 +6692,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       for (const t of pendingTests) {
         const claimed = await db.markForwardTestRunning(t.id);
         if (!claimed) continue;
-        const meta = parseSelfTestMeta((t as any).message);
+        const meta = parseSelfTestMeta(db.forwardTestRequestMessage(t as any));
         const metaSelfTest = buildMetaAgentSelfTestPayload(t, meta);
         if (metaSelfTest) {
           selfTests.push(metaSelfTest);

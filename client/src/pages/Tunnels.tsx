@@ -1265,6 +1265,10 @@ function TunnelLatencyDialog({
     { tunnelId, hours: 24 },
     { enabled: open, refetchInterval: pollingInterval("slow", open), refetchOnMount: "always" }
   );
+  const { data: counterStatistics } = trpc.tunnels.probeStatistics.useQuery(
+    { tunnelId, hours: timeRangeHours },
+    { enabled: open, refetchInterval: pollingInterval("slow", open), refetchOnMount: "always" },
+  );
   const cachedData = tunnelLatencySeriesCache.get(tunnelId);
   const rawSeriesData = (data ?? cachedData) as TunnelLatencySeriesDatum[] | undefined;
   const waitForFreshSeries = open && isFetching && !isLatencySeriesCacheFresh(rawSeriesData);
@@ -1352,8 +1356,8 @@ function TunnelLatencyDialog({
   }, [chartData, seriesMeta]);
 
   const stats = useMemo(() => {
-    return getLatencyStabilityStats(statsSeries);
-  }, [statsSeries]);
+    return getLatencyStabilityStats(statsSeries, counterStatistics ?? null);
+  }, [statsSeries, counterStatistics]);
   const yMax = useMemo(() => {
     if (chartData.length === 0 || seriesMeta.length === 0) return 120;
     const values = chartData.flatMap((point) => seriesMeta.map((meta) => Number(point[meta.dataKey] || 0))).filter((value) => value > 0);
@@ -1471,7 +1475,11 @@ function TunnelLatencyDialog({
             ))}
           </div>
         ) : null}
-        <LatencyStabilityStats stats={stats} />
+        <LatencyStabilityStats
+          stats={stats}
+          counterStatistics={counterStatistics ?? null}
+          description="统计各跳实际的连接探测（含已上报的备用入口 / 出口），不等于可用路径的业务丢包。"
+        />
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>关闭</Button>
