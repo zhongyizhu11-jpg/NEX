@@ -23,6 +23,7 @@ import { appendPanelLog } from "../_core/panelLogger";
 import { notifyTunnelLatencyRefresh } from "../tunnelLatencyRefresh";
 import { normalizeAgentProbeCounts } from "../../shared/agentDtos";
 import { normalizeTrafficCounterBytes } from "../../shared/trafficCounterBytes";
+import { getProbeCounterStatistics } from "./probeCounterRepository";
 
 const TRAFFIC_BUCKET_MINUTES = 30;
 const TRAFFIC_BUCKET_SECONDS = TRAFFIC_BUCKET_MINUTES * 60;
@@ -3201,9 +3202,39 @@ export async function getGlobalTcpingSeries(opts: { bucketMinutes?: number; sinc
   }));
 }
 
+/**
+ * Cumulative real-probe statistics for the rule's latency dialog. Resolves the
+ * same active series as getTcpingSeriesByRule (chain template -> group, failover
+ * template -> active member child), but never manufactures failed probes for
+ * unreported children or reuses cached tunnel samples. `available: false`
+ * means no Agent counters (old Agent): callers fall back to the sample rows.
+ */
+export async function getTcpingProbeStatisticsByRule(ruleId: number, since: Date) {
+  const db = await getDb();
+  if (!db) return getProbeCounterStatistics("rule", [], since);
+  const chainGroupId = await getChainGroupIdForTemplateRule(ruleId);
+  if (chainGroupId) return getProbeCounterStatistics("forwardGroup", chainGroupId, since);
+  const children = await db.select({
+    id: forwardRules.id, groupId: forwardRules.forwardGroupId,
+    parentId: forwardRules.forwardGroupRuleId, memberId: forwardRules.forwardGroupMemberId,
+  }).from(forwardRules).where(and(eq(forwardRules.forwardGroupRuleId, ruleId), eq(forwardRules.pendingDelete, false)))
+    .orderBy(asc(forwardRules.id));
+  if (!children.length) return getProbeCounterStatistics("rule", ruleId, since);
+  const modes = await getForwardGroupModeMap(children.map((row: any) => Number(row.groupId || 0)));
+  const chain = children.filter((row: any) => modes.get(Number(row.groupId)) === "chain");
+  if (chain.length) return getProbeCounterStatistics("forwardGroup", Number(chain[0].groupId), since);
+  const groupId = Number(children[0].groupId);
+  const [active, first] = await Promise.all([getActiveMemberByGroup([groupId]), getFirstEnabledMemberByGroup([groupId])]);
+  const selected = selectPreferredForwardGroupLatencyChild(children
+    .filter((row: any) => Number(row.groupId) === groupId)
+    .map((row: any) => ({ id: Number(row.id), groupId: Number(row.groupId), memberId: Number(row.memberId) })),
+  [Number(active.get(groupId) || 0), Number(first.get(groupId)?.id || 0)]);
+  return getProbeCounterStatistics("rule", selected?.id || ruleId, since);
+}
+
 /** Clean expired TCPing data, keeping the most recent N hours. */
 /**
- * 名字只提了 tcping，实际上连转发组的延迟历史一起清 —— 两张表是同一轮探测写下的。
+ * 名字只提了 tcping，实际上连转发组的延迟历史和累计探测计数快照一起清 —— 这几张表是同一轮探测写下的。
  *
  * 写在这里说一句，是因为按名字找不到它：`forward_group_latency_stats` 看上去
  * 像一张没人清的表（它的兄弟 tunnel_latency_stats 有自己的清理函数），照着名字
@@ -3215,6 +3246,7 @@ export async function cleanOldTcpingStats(retainHours: number = 72) {
   const cutoff = retentionCutoffSeconds(retainHours);
   await deleteExpiredHistoryRows("tcping_stats", "recordedAt", cutoff);
   await deleteExpiredHistoryRows("forward_group_latency_stats", "recordedAt", cutoff);
+  await deleteExpiredHistoryRows("probe_counter_snapshots", "recordedAt", cutoff);
 }
 
 export async function cleanOldTunnelLatencyStats(retainHours: number = 72) {

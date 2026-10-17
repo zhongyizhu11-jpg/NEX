@@ -1232,6 +1232,25 @@ export const agentTrafficReports = table("agent_traffic_reports", {
 export type AgentTrafficReport = typeof agentTrafficReports.$inferSelect;
 export type InsertAgentTrafficReport = typeof agentTrafficReports.$inferInsert;
 
+// Cumulative real-probe counter snapshots (Agent 2.2.229+). Deliberately
+// separate from the path-health rows in tcping_stats / *_latency_stats: those
+// suppress steady successes and reuse cached hops, so they cannot yield an
+// accurate failure rate. Statistics are deltas between snapshots of one
+// (hostId, kind, refId, probeKey, epoch) stream.
+export const probeCounterSnapshots = table("probe_counter_snapshots", {
+  id: serial("id"),
+  kind: varchar("kind", { length: 16 }).notNull(),
+  refId: int("refId").notNull(),
+  hostId: int("hostId").notNull(),
+  probeKey: varchar("probeKey", { length: 64 }).notNull(),
+  epoch: varchar("epoch", { length: 64 }).notNull(),
+  totalCount: int("totalCount").notNull(),
+  totalSuccesses: int("totalSuccesses").notNull(),
+  batchCount: int("batchCount").notNull(),
+  batchSuccesses: int("batchSuccesses").notNull(),
+  recordedAt: epoch("recordedAt").notNull().default(nowDefault()),
+});
+
 export const tunnelLatencyStats = table("tunnel_latency_stats", {
   id: serial("id"),
   tunnelId: int("tunnelId").notNull(),
@@ -1339,7 +1358,17 @@ export const forwardTests = table("forward_tests", {
   targetReachable: boolean("targetReachable").notNull().default(false),
   forwardOk: boolean("forwardOk").notNull().default(false),
   latencyMs: int("latencyMs"),
-  message: text("message"),
+  message: longtext("message"),
+  // The dispatch payload (self-test meta). `message` is overwritten by the
+  // Agent's result, so batch aggregation and timeouts read this instead.
+  requestMessage: text("requestMessage"),
+  // Durable multi-hop batch ("fc-..." forward chain, "tb-..." tunnel hops). Rows
+  // of a batch are aggregated from the database, so a panel restart no longer
+  // loses the batch; batchSettled is the single-winner claim on aggregation.
+  batchId: varchar("batchId", { length: 96 }),
+  batchSettled: boolean("batchSettled").notNull().default(false),
+  // First delivery to an Agent; lease renewals never extend the timeout.
+  firstDispatchedAt: epoch("firstDispatchedAt"),
   createdAt: epoch("createdAt").notNull().default(nowDefault()),
   updatedAt: epoch("updatedAt").notNull().default(nowDefault()),
 });

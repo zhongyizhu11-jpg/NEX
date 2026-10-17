@@ -1,4 +1,6 @@
 
+import type { ProbeStatistics } from "@shared/probeStatistics";
+
 export type LatencyStabilitySample = {
   latency: number;
   isTimeout?: boolean | null;
@@ -33,7 +35,19 @@ export type LatencyStabilityStats = {
   timeoutRate: number;
   score: number | null;
   rating: LatencyStabilityRating;
+  /**
+   * 次数与丢包率来自 Agent 的累计探测计数（2.2.229+），而不是图表上的状态样本。
+   * 状态样本里稳定成功的上报 5 分钟才发一次、失败每次都发，直接按样本算会把丢包率算高。
+   */
+  fromCounters?: boolean;
 };
+
+/** 累计计数能不能用：有上报、数字自洽。拿不到时退回按状态样本统计（旧 Agent）。 */
+export function usableProbeCounters(actual: ProbeStatistics | null | undefined): actual is ProbeStatistics {
+  return !!actual?.available
+    && Number.isSafeInteger(actual.total) && actual.total > 0
+    && Number.isSafeInteger(actual.successes) && actual.successes >= 0 && actual.successes <= actual.total;
+}
 
 /** 统计卡片上的毫秒数：没有就是「--」。 */
 export function formatStatLatency(value: number | null | undefined) {
@@ -215,22 +229,34 @@ function processPeakCutValues(values: number[], alpha: number) {
   return ewma;
 }
 
-export function getLatencyStabilityStats(samples: LatencyStabilitySample[]): LatencyStabilityStats {
+/**
+ * @param actual 累计探测计数（rules/tunnels/forwardGroups.probeStatistics）。可用时次数、丢包率
+ *   按真实探测算，延迟分布仍取自样本；不可用（旧 Agent、还没上报）时与原来一样全按样本算。
+ */
+export function getLatencyStabilityStats(samples: LatencyStabilitySample[], actual?: ProbeStatistics | null): LatencyStabilityStats {
   const weightedSamples = samples.map((sample) => {
     const counts = normalizeLatencyProbeCounts(sample);
     return { sample, ...counts };
   });
-  const total = weightedSamples.reduce((sum, item) => sum + item.probeCount, 0);
-  const timeout = weightedSamples.reduce((sum, item) => sum + item.probeCount - item.probeSuccesses, 0);
+  const fromCounters = usableProbeCounters(actual);
+  const total = fromCounters
+    ? actual.total
+    : weightedSamples.reduce((sum, item) => sum + item.probeCount, 0);
+  const timeout = fromCounters
+    ? actual.total - actual.successes
+    : weightedSamples.reduce((sum, item) => sum + item.probeCount - item.probeSuccesses, 0);
   const lossRate = total > 0 ? (timeout / total) * 100 : 0;
   const weightedValues = weightedSamples
     .filter(({ sample, probeSuccesses }) => probeSuccesses > 0 && Number.isFinite(sample.latency) && sample.latency > 0)
     .map(({ sample, probeSuccesses }) => ({ value: sample.latency, weight: probeSuccesses }))
     .sort((a, b) => a.value - b.value);
   const valid = weightedValues.reduce((sum, item) => sum + item.weight, 0);
-  const maxLossRun = getMaxLossRun(samples);
-  const availability = computeLinkAvailability(samples);
+  // 状态样本里的连续失败不是一串独立的探测（稳定成功被省略、链路复用缓存的跳），
+  // 有累计计数时不再拿它扣分；可用率同理按样本算会偏低，此时不显示。
+  const maxLossRun = fromCounters ? 0 : getMaxLossRun(samples);
+  const availability = fromCounters ? null : computeLinkAvailability(samples);
   const timeoutRate = availability === null ? 0 : 100 - availability;
+  const counterFlag = fromCounters ? { fromCounters: true } : {};
 
   if (total === 0) {
     return {
@@ -250,11 +276,13 @@ export function getLatencyStabilityStats(samples: LatencyStabilitySample[]): Lat
       timeoutRate,
       score: null,
       rating: getLatencyStabilityRating(null),
+      ...counterFlag,
     };
   }
 
   if (valid === 0) {
-    const score = applyStabilityCaps(0, lossRate, null, maxLossRun);
+    // 有成功的累计探测却没有延迟样本（样本窗口里恰好都是失败行）：不给 0 分误导。
+    const score = fromCounters && actual.successes > 0 ? null : applyStabilityCaps(0, lossRate, null, maxLossRun);
     return {
       total,
       timeout,
@@ -272,6 +300,7 @@ export function getLatencyStabilityStats(samples: LatencyStabilitySample[]): Lat
       timeoutRate,
       score,
       rating: getLatencyStabilityRating(score),
+      ...counterFlag,
     };
   }
 
@@ -377,6 +406,7 @@ export function getLatencyStabilityStats(samples: LatencyStabilitySample[]): Lat
     timeoutRate,
     score,
     rating: getLatencyStabilityRating(score),
+    ...counterFlag,
   };
 }
 

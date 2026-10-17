@@ -41,6 +41,19 @@ async function forwardXTunnelFxpIssueMessage(tunnel: any) {
 }
 
 export const selfTestRulesRouter = router({
+  /** 累计真实探测次数（Agent 2.2.229+）；available=false 时前端退回按状态样本统计。 */
+  probeStatistics: protectedProcedure
+    .input(z.object({ ruleId: z.number().int().positive(), hours: z.number().min(0.5).max(24 * 3).default(24) }))
+    .query(async ({ input, ctx }) => {
+      const rule = await db.getForwardRuleById(input.ruleId);
+      if (!rule) throw new Error("规则不存在");
+      if (ctx.user.role !== "admin" && rule.userId !== ctx.user.id) throw new Error("无权查看此规则");
+      return selfTestQueryCache.get(
+        `probeStatistics:${ctx.user.id}:${input.ruleId}:${input.hours}`,
+        { ttlMs: 5_000, staleMs: 0 },
+        () => db.getTcpingProbeStatisticsByRule(input.ruleId, new Date(Date.now() - input.hours * 3600_000)),
+      );
+    }),
   tcpingSeries: protectedProcedure
       .input(z.object({
         ruleId: z.number(),

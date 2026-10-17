@@ -251,6 +251,19 @@ export const forwardGroupsRouter = router({
       return { success: true };
     }),
 
+  /** 转发链各跳的累计真实探测次数（Agent 2.2.229+）。 */
+  probeStatistics: protectedProcedure
+    .input(z.object({ groupId: z.number().int().positive(), hours: z.number().min(0.5).max(24 * 3).default(24) }))
+    .query(async ({ input, ctx }) => {
+      const group = await assertForwardGroupAccess(input.groupId, ctx.user);
+      if (String(group.groupMode || "failover") !== "chain") throw new Error("仅转发链支持链路探测统计");
+      return forwardGroupQueryCache.get(
+        `probeStatistics:${ctx.user.id}:${input.groupId}:${input.hours}`,
+        { ttlMs: 5_000, staleMs: 0 },
+        () => db.getProbeCounterStatistics("forwardGroup", input.groupId, new Date(Date.now() - input.hours * 3600_000)),
+      );
+    }),
+
   latencySeries: protectedProcedure
     .input(z.object({
       groupId: z.number(),

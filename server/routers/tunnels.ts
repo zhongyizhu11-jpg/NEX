@@ -897,6 +897,19 @@ export const tunnelsRouter = router({
         await db.reorderTunnels(input.ids, input.startIndex);
         return { success: true };
       }),
+    /** 隧道各跳的累计真实探测次数（Agent 2.2.229+）。 */
+    probeStatistics: protectedProcedure
+      .input(z.object({ tunnelId: z.number().int().positive(), hours: z.number().min(0.5).max(24 * 3).default(24) }))
+      .query(async ({ input, ctx }) => {
+        const tunnel = await db.getTunnelById(input.tunnelId);
+        if (!tunnel) throw new Error("Tunnel not found");
+        if (ctx.user.role !== "admin" && tunnel.userId !== ctx.user.id) throw new Error("No permission to view this tunnel");
+        return tunnelQueryCache.get(
+          `probeStatistics:${ctx.user.id}:${input.tunnelId}:${input.hours}`,
+          { ttlMs: 5_000, staleMs: 0 },
+          () => db.getProbeCounterStatistics("tunnel", input.tunnelId, new Date(Date.now() - input.hours * 3600_000)),
+        );
+      }),
     latencySeries: protectedProcedure
     .input(z.object({
       tunnelId: z.number(),

@@ -14,6 +14,7 @@ import {
   isAgentTrafficStat,
   isAgentTunnelTcpingResult,
   normalizeAgentProbeCounts,
+  hasAgentProbeCounter,
   type AgentForwardGroupLatencyResult,
   type AgentHostProbeServiceResult,
   type AgentHostTrafficStat,
@@ -53,6 +54,8 @@ import { clearRuleLatencyQueryCache } from "./ruleLatencyQueryCache";
 import { agentTcpingReportGate } from "./agentTcpingReportGate";
 import { selectAgentTrafficReportInterval } from "./agentHeartbeatGate";
 import { pruneMapEntries, setBoundedMapValue } from "./boundedCache";
+import { probeCounterSnapshot, type ProbeCounterSnapshot } from "./repositories/probeCounterRepository";
+import { agentProbeCounterReportGate } from "./agentProbeCounterReportGate";
 
 const VERBOSE_AGENT_REPORTS = /^(1|true|yes|on)$/i.test(String(process.env.FORWARDX_VERBOSE_AGENT_REPORTS || ""));
 
@@ -1369,14 +1372,30 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
       forwardGroups: forwardGroupResults,
       services: serviceResults,
     } = topologyGatePlan;
-    if (results.length === 0 && tunnelResults.length === 0 && forwardGroupResults.length === 0 && serviceResults.length === 0) {
+    // Cumulative probe counters (Agent 2.2.229+) are collected only after the
+    // same host / entity / target / topology authorization as the health
+    // sample, and independently of the health gate: a report the gate drops
+    // still carries real attempts that the failure rate must include.
+    const counterSnapshots: ProbeCounterSnapshot[] = [];
+    const collectCounter = (kind: "rule" | "tunnel" | "forwardGroup", refId: number, report: any) => {
+      const snapshot = probeCounterSnapshot(kind, refId, Number(host.id), report);
+      if (snapshot) counterSnapshots.push(snapshot);
+    };
+    const acceptedTunnelReports = new Set(tunnelResults);
+    const acceptedGroupReports = new Set(forwardGroupResults);
+    // Old Agents send no cumulative metadata. Keep their existing gate savings
+    // instead of reloading topology for every suppressed report.
+    const counterTunnelReports = parsedTunnelResults.filter((report) => acceptedTunnelReports.has(report) || hasAgentProbeCounter(report));
+    const counterGroupReports = parsedForwardGroupResults.filter((report) => acceptedGroupReports.has(report)
+      || (hasAgentProbeCounter(report) && !["china", "entry"].includes(String(report.probeType || ""))));
+    if (results.length === 0 && counterTunnelReports.length === 0 && counterGroupReports.length === 0 && serviceResults.length === 0) {
       res.json({ success: true });
       return;
     }
     logTcpingReportSummary(host.id, results, tunnelResults, forwardGroupResults, serviceResults);
 
     const tunnelResultsById = new Map<number, AgentTunnelTcpingResult[]>();
-    for (const report of tunnelResults) {
+    for (const report of counterTunnelReports) {
       const tunnelId = Number(report.tunnelId || 0);
       if (tunnelId <= 0) continue;
       const rows = tunnelResultsById.get(tunnelId) || [];
@@ -1401,6 +1420,8 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
       const branchByKey = new Map<string, { key: string; label: string; latencyMs: number | null; isTimeout: boolean; probeCount?: number; probeSuccesses?: number }>();
       for (const report of reports) {
         if (!await validateTunnelProbeSource(Number(host.id), tunnel, report, { hops, exitNodes, entryHostIds, topologyKey })) continue;
+        collectCounter("tunnel", tunnelId, report);
+        if (!acceptedTunnelReports.has(report)) continue;
         const latencyValue = typeof report.latencyMs === "number" && report.latencyMs > 0 ? report.latencyMs : null;
         const isTimeout = !!report.isTimeout || latencyValue === null;
         const seriesKey = cleanTunnelSeriesKey(report.seriesKey);
@@ -1556,6 +1577,7 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
         }
       }
 
+      if (!reports.some((report) => acceptedTunnelReports.has(report))) return;
       if (relayFailover) {
         const aggregates = Array.from({ length: relayCandidateCount }, (_, index) => {
           const key = `relay-${index + 1}`;
@@ -1633,7 +1655,7 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
       probe,
     ]));
     const forwardGroupResultsById = new Map<number, AgentForwardGroupLatencyResult[]>();
-    for (const report of forwardGroupResults) {
+    for (const report of counterGroupReports) {
       const groupId = Number(report.groupId || 0);
       if (groupId <= 0) continue;
       const rows = forwardGroupResultsById.get(groupId) || [];
@@ -1649,6 +1671,7 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
       const topologyKey = forwardGroupProbeTopologyKey(groupId, chainProbes);
       for (const report of reports) {
         if (String(report.probeType || "") === "china") {
+          if (!acceptedGroupReports.has(report)) continue;
           const expected = chinaExpectedByKey.get(`${groupId}:${Number(report.memberId || 0)}`) as any;
           if (!expected) continue;
           if (report.targetIp && !sameProbeTarget(report.targetIp, expected.targetIp)) continue;
@@ -1664,6 +1687,7 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
           continue;
         }
         if (String(report.probeType || "") === "entry") {
+          if (!acceptedGroupReports.has(report)) continue;
           const expected = entryExpectedByKey.get(`${groupId}:${Number(report.memberId || 0)}`) as any;
           if (!expected || report.healthStatus === undefined) continue;
           await db.updateForwardGroupMemberAgentHealth({
@@ -1687,6 +1711,8 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
           && (!report.targetPort || Number(report.targetPort) === Number(probe.targetPort))
         ));
         if (!expected) continue;
+        collectCounter("forwardGroup", groupId, report);
+        if (!acceptedGroupReports.has(report)) continue;
         const aggregate = recordForwardGroupAutoHopLatency({
           groupId,
           hopIndex,
@@ -1782,6 +1808,7 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
         if (report.sourcePort && Number(report.sourcePort) !== Number(rule.sourcePort || 0)) return null;
         if (report.targetPort && Number(report.targetPort) !== Number(rule.targetPort || 0)) return null;
         if (!isRuleLatencyReportMethodCompatible(rule.protocol, report.method)) return null;
+        collectCounter("rule", ruleId, report);
         const isTimeout = !!report.isTimeout || baseLatency === null;
         const latencyMs = isTimeout ? null : baseLatency;
         return {
@@ -1806,6 +1833,7 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
         tunnel: tunnelContext.tunnel,
         report,
       })) return null;
+      collectCounter("rule", ruleId, report);
       const latestTunnelLatency = report.isTimeout ? null : await getLatestTunnelLatency(tunnelId);
       const combined = combineTunnelRuleLatencySample({
         targetLatencyMs: baseLatency,
@@ -1866,6 +1894,9 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
         .filter((groupId) => Number.isInteger(groupId) && groupId > 0))));
     }
 
+    const counterPlan = agentProbeCounterReportGate.plan(counterSnapshots, force);
+    await db.insertProbeCounterSnapshots(counterPlan.rows);
+    counterPlan.commit();
     topologyGatePlan.commit();
     ruleGatePlan.commit();
     res.json({ success: true });
