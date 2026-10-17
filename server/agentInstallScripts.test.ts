@@ -389,8 +389,8 @@ test("已装官方 gost 时尝试从面板换成 NEX 自编版，换上后重启
 test("NEX gost runtime: build number parsing, upgrade with .prev backup + marker, rollback restores the old binary", () => {
   const script = generateInstallScript("https://panel.example.com");
   assert.match(script, /RUNTIME_MIN_NEX_BUILD="3"/);
-  // 换运行时按面板这一版带的构建号（nex4），不是能力门槛（nex3）：nex3 的机器也要换上 nex4。
-  assert.match(script, /RUNTIME_TARGET_NEX_BUILD="4"/);
+  // 换运行时按面板这一版带的构建号（nex5），不是能力门槛（nex3）：nex3 的机器也要换上 nex5。
+  assert.match(script, /RUNTIME_TARGET_NEX_BUILD="5"/);
   const functions = scriptSection(script, "runtime_self_check() {", "nginx_self_check() {");
   const dir = fs.mkdtempSync(path.join(process.env.TMPDIR || "/tmp", "fwx-runtime-"));
   try {

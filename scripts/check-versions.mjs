@@ -12,6 +12,8 @@ const sharedFxpRuntime = read("shared/fxpRuntime.ts");
 const sharedSsEgress = read("shared/ssEgress.ts");
 const agentGostRuntime = read("agent/gost_runtime_version.go");
 const gostRuntimeBuild = read("gost-runtime/build.sh");
+const sharedGostRuntimeApi = read("shared/gostRuntimeApi.ts");
+const agentGostApiSync = read("agent/gost_api_sync.go");
 
 const findTsConst = (name) => {
   const match = versionsTs.match(new RegExp(`export const ${name}\\s*=\\s*["']([^"']+)["']`));
@@ -80,6 +82,16 @@ for (const [goName, tsName, tsValue] of [
 ]) {
   const goValue = goConst(goName);
   if (!tsValue || goValue !== tsValue) errors.push(`agent/gost_runtime_version.go ${goName} ${goValue || "(missing)"} does not match shared/ssEgress.ts ${tsName} ${tsValue || "(missing)"}`);
+}
+// gost API 同步（agent/gost_api_sync.go、shared/gostRuntimeApi.ts）：能力名、Agent 门槛、套接字目录两边一致。
+for (const [goName, tsName] of [
+  ["gostAPISyncAgentVersion", "GOST_API_SYNC_AGENT_VERSION"],
+  ["agentCapabilityGostAPISync", "AGENT_CAPABILITY_GOST_API_SYNC"],
+  ["gostAPIDir", "GOST_API_DIR"],
+]) {
+  const goValue = agentGostApiSync.match(new RegExp(`${goName}\\s*=\\s*"([^"]+)"`))?.[1];
+  const tsValue = tsString(sharedGostRuntimeApi, tsName);
+  if (!tsValue || goValue !== tsValue) errors.push(`agent/gost_api_sync.go ${goName} ${goValue || "(missing)"} does not match shared/gostRuntimeApi.ts ${tsName} ${tsValue || "(missing)"}`);
 }
 const minNexBuild = Number(tsNumber(sharedSsEgress, "SS_EGRESS_RUNTIME_MIN_NEX_BUILD") || 0);
 const defaultNexBuild = Number(gostRuntimeBuild.match(/NEX_GOST_BUILD="\$\{NEX_GOST_BUILD:-nex(\d+)\}"/)?.[1] || 0);

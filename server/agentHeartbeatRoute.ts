@@ -94,9 +94,12 @@ import {
   iptablesEnsureShell,
   killByPatternCmd,
   removeManagedServiceCmd,
+  gostRuntimeApiConfig,
+  gostRuntimeApiExecStart,
   restartManagedServiceIfConfigChangedCmd,
   restartMimicServiceIfConfigChangedCmd,
   shQuote,
+  syncGostServiceIfConfigChangedCmd,
   startManagedServiceCmd,
   stopManagedServiceCmd,
   writeManagedServiceCmd,
@@ -171,6 +174,7 @@ import { recordHostRestartEvent } from "./ops/eventHooks";
 import { buildAgentSniInbounds, isSniRuntimeRule, recordTlsInboundRuntimeStatus, sniRuleRuntimeView } from "./tlsInboundRuntime";
 import { buildGostEgressChain, gostEgressChainName, loadEgressRuntimeContext, ruleEgressRuntime, ruleEgressRuntimeView } from "./ssEgress";
 import { parseAgentCapabilities } from "../shared/ssEgress";
+import { hostSupportsGostApiSync } from "../shared/gostRuntimeApi";
 
 // DNS 解析缓存：ruleId → 主目标上次解析到的 IPv4 地址。
 // 备用线路策略里的域名由 Agent 的 TCP 拨号和健康检查动态解析。
@@ -2206,6 +2210,19 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
      * 不设 RETURN，所以只作计数不影响路由。三种转发方式都会经过 mangle 表，覆盖 100% 路径。
      */
     const gostServiceName = RUNTIME_SERVICE_NAME;
+    /*
+      能力 gostApiSync（Agent ≥ 2.2.229、运行时 ≥ 3.2.6）的机器：gost.json 开 root 专用的 Unix 套接字 API，
+      ExecStart 包一层准备套接字目录，重启命令前加 API 同步标记 —— API 能做的改动不再重启共享进程（shared/gostRuntimeApi.ts）。
+      别的机器上配置、单元、命令和以前逐字节相同。
+    */
+    const gostApiSync = hostSupportsGostApiSync({ agentVersion: effectiveAgentVersion, agentCapabilities: (host as any).agentCapabilities });
+    const gostRuntimeExecStart = (service: string, configPath: string) => (
+      gostApiSync ? gostRuntimeApiExecStart(RUNTIME_BIN, service, configPath) : `${RUNTIME_BIN} -C ${configPath}`
+    );
+    const gostRuntimeApiSection = (service: string) => (gostApiSync ? { api: gostRuntimeApiConfig(service) } : {});
+    const gostRuntimeSyncCmd = (service: string, configPath: string) => (
+      gostApiSync ? syncGostServiceIfConfigChangedCmd(service, configPath) : restartManagedServiceIfConfigChangedCmd(service, configPath)
+    );
     const gostServiceUnit = [
       "[Unit]",
       "Description=ForwardX unified runtime forwarder",
@@ -2215,7 +2232,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       "",
       "[Service]",
       "Type=simple",
-      `ExecStart=${RUNTIME_BIN} -C ${RUNTIME_CONFIG_PATH}`,
+      `ExecStart=${gostRuntimeExecStart(gostServiceName, RUNTIME_CONFIG_PATH)}`,
       "Restart=always",
       "RestartSec=5",
       // 这台机器上所有 gost 规则共用这一个进程，一条转发占两个句柄：65535 意味着
@@ -4407,7 +4424,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     const gostChains = [...tunnelGostChains, ...egressGostChains];
     const gostManagedConfigs: any[] = [];
     const buildGostReloadCmds = () => {
-      const encodedConfig = Buffer.from(JSON.stringify({ services: gostServiceConfig, chains: gostChains, limiters: gostRateLimiters }, null, 2), "utf8").toString("base64");
+      const encodedConfig = Buffer.from(JSON.stringify({ services: gostServiceConfig, chains: gostChains, limiters: gostRateLimiters, ...gostRuntimeApiSection(gostServiceName) }, null, 2), "utf8").toString("base64");
       gostManagedConfigs.push({
         path: RUNTIME_CONFIG_PATH,
         contentBase64: encodedConfig,
@@ -4435,7 +4452,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         if (anyTunnelDnsRefresh(hostTunnels as any[])) {
           cmds.push(dnsRuntimeRefreshCmd("gost"), `rm -f ${shQuote(`${RUNTIME_CONFIG_PATH}.sha256`)} 2>/dev/null || true`);
         }
-        cmds.push(restartManagedServiceIfConfigChangedCmd(gostServiceName, RUNTIME_CONFIG_PATH));
+        cmds.push(gostRuntimeSyncCmd(gostServiceName, RUNTIME_CONFIG_PATH));
       } else {
         cmds.push(stopManagedServiceCmd(gostServiceName));
       }
@@ -4555,7 +4572,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
           listener: gostTunnelTransportType(tunnel.mode),
         }));
       }) : [];
-      const encodedConfig = Buffer.from(JSON.stringify({ services }, null, 2), "utf8").toString("base64");
+      const encodedConfig = Buffer.from(JSON.stringify({ services, ...gostRuntimeApiSection(TUNNEL_RUNTIME_SERVICE_NAME) }, null, 2), "utf8").toString("base64");
       gostManagedConfigs.push({
         path: TUNNEL_RUNTIME_CONFIG_PATH,
         contentBase64: encodedConfig,
@@ -4574,7 +4591,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
           "",
           "[Service]",
           "Type=simple",
-          `ExecStart=${RUNTIME_BIN} -C ${TUNNEL_RUNTIME_CONFIG_PATH}`,
+          `ExecStart=${gostRuntimeExecStart(TUNNEL_RUNTIME_SERVICE_NAME, TUNNEL_RUNTIME_CONFIG_PATH)}`,
           "Restart=always",
           "RestartSec=5",
           `LimitNOFILE=${SHARED_RUNTIME_NOFILE}`,
@@ -4590,7 +4607,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         if (anyTunnelDnsRefresh(hostTunnels as any[])) {
           cmds.push(dnsRuntimeRefreshCmd("gost-tunnel"), `rm -f ${shQuote(`${TUNNEL_RUNTIME_CONFIG_PATH}.sha256`)} 2>/dev/null || true`);
         }
-        cmds.push(restartManagedServiceIfConfigChangedCmd(TUNNEL_RUNTIME_SERVICE_NAME, TUNNEL_RUNTIME_CONFIG_PATH));
+        cmds.push(gostRuntimeSyncCmd(TUNNEL_RUNTIME_SERVICE_NAME, TUNNEL_RUNTIME_CONFIG_PATH));
       } else {
         cmds.push(stopManagedServiceCmd(TUNNEL_RUNTIME_SERVICE_NAME));
       }

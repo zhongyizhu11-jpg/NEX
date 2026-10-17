@@ -5462,7 +5462,12 @@ func handleActionJobWithRuntimeSnapshot(cfg Config, a action, releaseRuntimeGate
 	if strings.TrimSpace(a.StatusType) == "runtime" {
 		mimicAction := isMimicRuntimeAction(a)
 		wireGuardAction := isWireGuardRuntimeAction(a)
+		var managedConfigTx *managedConfigTransaction
 		runRuntimeShellBatch := func(commands []string, phase string) bool {
+			if phase == "sync" && strings.TrimSpace(a.ForwardType) == "gost-runtime-sync" && hasGostAPISyncMarker(commands) {
+				// gost 规则的增删改走 gost API，不重启共享进程（gost_api_sync.go）；API 做不了或失败才重启。
+				return runGostAPISyncCommands(commands, managedConfigTx, actionMessage)
+			}
 			if !mimicAction {
 				return runShellBatch(commands)
 			}
@@ -5507,7 +5512,6 @@ func handleActionJobWithRuntimeSnapshot(cfg Config, a action, releaseRuntimeGate
 				logf("mimic environment check failed status=%s commandReady=%v moduleReady=%v message=%s", environment.Status, environment.CommandReady, environment.ModuleReady, environment.Message)
 			}
 		}
-		var managedConfigTx *managedConfigTransaction
 		if ok && len(a.PreCommands) > 0 {
 			ok = runRuntimeShellBatch(a.PreCommands, "prepare") && ok
 		}
