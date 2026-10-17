@@ -601,6 +601,7 @@ type HostFormData = {
   egressShapingMode: HostEgressShapingMode;
   egressMbps: number;
   flowOffload: boolean;
+  rateLimitMbps: number;
 };
 
 const defaultFormData: HostFormData = {
@@ -638,6 +639,7 @@ const defaultFormData: HostFormData = {
   egressShapingMode: "off",
   egressMbps: 0,
   flowOffload: false,
+  rateLimitMbps: 0,
 };
 
 function clampMonthlyResetDay(value: number) {
@@ -2140,6 +2142,7 @@ function HostsContent() {
       egressShapingMode: normalizeHostEgressShapingMode(host.egressShapingMode),
       egressMbps: normalizeHostEgressMbpsInput(host.egressMbps),
       flowOffload: !!host.flowOffload,
+      rateLimitMbps: Math.max(0, Math.floor(Number(host.rateLimitMbps) || 0)),
     });
     setEditingId(host.id);
     setEditingHostSnapshot(host);
@@ -2253,6 +2256,7 @@ function HostsContent() {
       ? { egressShapingMode: form.egressShapingMode, egressMbps: form.egressShapingMode === "manual" ? form.egressMbps : 0 }
       : {};
     const flowOffloadPayload = user?.role === "admin" && editingId ? { flowOffload: form.flowOffload } : {};
+    const hostRateLimitPayload = user?.role === "admin" && editingId ? { rateLimitMbps: form.rateLimitMbps } : {};
 
     if (editingId) {
       updateMutation.mutate({
@@ -2270,6 +2274,7 @@ function HostsContent() {
         ...protocolPolicyPayload,
         ...egressShapingPayload,
         ...flowOffloadPayload,
+        ...hostRateLimitPayload,
       });
     } else {
       const ip = (form.ip || entry || "unknown").trim();
@@ -3696,6 +3701,27 @@ function HostsContent() {
                         </div>
                       </div>
                       <p className="mt-1.5 px-3 text-xs text-muted-foreground">当月没有该日期时按最后一天重置。</p>
+                      {user?.role === "admin" && editingId ? (
+                        <div className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+                          <div className="min-w-0 space-y-0.5">
+                            <Label className="text-sm font-medium">整台主机转发限速</Label>
+                            <p className="text-xs text-muted-foreground">这台机器上所有用户的转发加起来不超过这个速度，上下行各算。0 = 不限；需要 Agent 2.2.229 以上。</p>
+                          </div>
+                          <div className="flex h-8 w-36 shrink-0 overflow-hidden rounded-md border border-input bg-background focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2">
+                            <Input aria-label="整台主机转发限速（Mbit/s）"
+                              className="h-8 min-w-0 rounded-none border-0 px-2 text-right tabular-nums focus-visible:ring-0 focus-visible:ring-offset-0"
+                              type="number"
+                              min={0}
+                              max={1000000}
+                              inputMode="numeric"
+                              placeholder="不限"
+                              value={form.rateLimitMbps > 0 ? form.rateLimitMbps : ""}
+                              onChange={(e) => setForm({ ...form, rateLimitMbps: Math.min(1_000_000, Math.max(0, Math.floor(Number(e.target.value) || 0))) })}
+                            />
+                            <span className="flex h-8 shrink-0 items-center border-l border-border/60 bg-muted/50 px-2 text-xs text-muted-foreground">Mbit/s</span>
+                          </div>
+                        </div>
+                      ) : null}
                       <div className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
                         <div className="min-w-0 space-y-0.5">
                           <Label className="text-sm font-medium">公网出口整形</Label>

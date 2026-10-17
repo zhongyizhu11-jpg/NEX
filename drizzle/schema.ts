@@ -183,6 +183,9 @@ export const users = table("users", {
   manualAllowProxySubscription: boolean("manualAllowProxySubscription").notNull().default(false),
   manualGostRateLimitIn: int("manualGostRateLimitIn").notNull().default(0),
   manualGostRateLimitOut: int("manualGostRateLimitOut").notNull().default(0),
+  // 转发突发（2.3.449）：峰值 Mbps 和能按峰值跑多少秒，0 = 不开。只在用户上手动设，见 shared/forwardRateLimit.ts。
+  forwardBurstMbps: int("forwardBurstMbps").notNull().default(0),
+  forwardBurstSeconds: int("forwardBurstSeconds").notNull().default(0),
   manualTrafficLimit: bigint("manualTrafficLimit", { mode: "number" }).notNull().default(0),
   manualExpiresAt: epoch("manualExpiresAt"),
   balanceCents: bigint("balanceCents", { mode: "number" }).notNull().default(0),
@@ -256,6 +259,8 @@ export type InsertAuthSession = typeof authSessions.$inferInsert;
 export const hosts = table("hosts", {
   id: serial("id"),
   name: text("name").notNull(),
+  // 整台主机的转发限速（2.3.449，Mbps，0 = 不限）：这台机器上所有用户的转发加起来共用一个桶。
+  rateLimitMbps: int("rateLimitMbps").notNull().default(0),
   ip: text("ip").notNull(),
   ipv4: text("ipv4"),
   ipv6: text("ipv6"),
@@ -394,6 +399,9 @@ export const forwardRules = table("forward_rules", {
   id: serial("id"),
   hostId: int("hostId").notNull(),
   name: text("name").notNull(),
+  // 这条规则（端口）自己的上行 / 下行限速（2.3.449，Mbps，0 = 不限）。
+  rateLimitInMbps: int("rateLimitInMbps").notNull().default(0),
+  rateLimitOutMbps: int("rateLimitOutMbps").notNull().default(0),
   forwardType: varchar("forwardType", { length: 32 }).notNull().default("iptables"), // 'iptables' | 'realm' | 'socat'
   protocol: varchar("protocol", { length: 16 }).notNull().default("both"), // 'tcp' | 'udp' | 'both'
   gostMode: varchar("gostMode", { length: 32 }).notNull().default("direct"), // 'direct' | 'reverse'

@@ -32,6 +32,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
+import RuleRateLimitDialog from "@/components/rules/RuleRateLimitDialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
@@ -170,6 +171,7 @@ import {
   ArrowDownToLine,
   ArrowUpFromLine,
   Stethoscope,
+  Gauge,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -2146,6 +2148,7 @@ function RulesContent() {
   const [editingOriginalProtocol, setEditingOriginalProtocol] = useState<RuleProtocol | null>(null);
   const [legacyLocalRuleEditId, setLegacyLocalRuleEditId] = useState<number | null>(null);
   const [deleteRule, setDeleteRule] = useState<any | null>(null);
+  const [rateLimitRule, setRateLimitRule] = useState<any | null>(null);
   // 主备策略面板开着的是哪条规则。存 id 不存整行：强制走之后列表会刷新，面板要跟着新数据走。
   const [policyRuleId, setPolicyRuleId] = useState<number | null>(null);
   const [resetTrafficTarget, setResetTrafficTarget] = useState<{ scope: "all" } | { scope: "rule"; rule: any } | null>(null);
@@ -6821,6 +6824,13 @@ function RulesContent() {
             icon: <Network className="h-3.5 w-3.5" />,
             onSelect: () => setLocation(`/topology?rule=${Number(rule.id)}`),
           },
+          ...(rule.isForwardGroupTemplate ? [] : [{
+            key: "rate-limit",
+            label: Number(rule.rateLimitInMbps) > 0 || Number(rule.rateLimitOutMbps) > 0 ? "端口限速（已设）" : "端口限速",
+            ariaLabel: `设置 ${rule.name} 的端口限速`,
+            icon: <Gauge className="h-3.5 w-3.5" />,
+            onSelect: () => setRateLimitRule(rule),
+          }]),
           {
             key: "reset",
             label: resetting ? "正在重置统计" : "重置统计",
@@ -9269,6 +9279,7 @@ function RulesContent() {
           />
         );
       })()}
+      <RuleRateLimitDialog rule={rateLimitRule} onClose={() => setRateLimitRule(null)} />
       <Dialog open={!!deleteRule} onOpenChange={(open) => !open && setDeleteRule(null)}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>

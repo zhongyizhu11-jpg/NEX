@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { buildForwardRateTiers, strictestForwardRate } from "../shared/forwardRateLimit";
 import { mergeAgentReportedAddress } from "./agentAddressState";
 import {
   allocateProtocolGuardPorts,
@@ -11,7 +12,6 @@ import {
   buildNginxTunnelTlsClientOptions,
   buildGostRuleListener,
   forwardXUDPTargetAddress,
-  selectEffectiveForwardRateLimit,
   selectProtocolGuardRateLimit,
   selectProtocolGuardProxyProtocol,
   selectForwardChainListenerPort,
@@ -226,30 +226,29 @@ test("protocol guard rate limits require a supported rule and a current Agent", 
 });
 
 test("resource rate limits use the strictest configured scope", () => {
-  const base = { userId: 7, hostId: 3, forwardGroupId: 19 };
-  assert.deepEqual(selectEffectiveForwardRateLimit(base), { mbps: 0, scope: "" });
-  assert.deepEqual(selectEffectiveForwardRateLimit({
-    ...base,
-    userLimitMbps: 200,
-    forwardGroupLimitMbps: 80,
-  }), { mbps: 80, scope: "user-7-host-3-group-19" });
-  assert.deepEqual(selectEffectiveForwardRateLimit({
-    ...base,
-    userLimitMbps: 80,
-    forwardGroupLimitMbps: 200,
-  }), { mbps: 80, scope: "user-7-host-3" });
-  assert.deepEqual(selectEffectiveForwardRateLimit({
-    ...base,
-    userLimitMbps: 80,
-    forwardGroupLimitMbps: 80,
-  }), { mbps: 80, scope: "user-7-host-3" });
-  assert.deepEqual(selectEffectiveForwardRateLimit({
-    ...base,
-    userLimitMbps: 300,
-    tunnelId: 11,
-    tunnelLimitMbps: 160,
-    forwardGroupLimitMbps: 120,
-  }), { mbps: 120, scope: "user-7-host-3-group-19" });
+  const strictest = (options: { userLimitMbps?: number; tunnelLimitMbps?: number; forwardGroupLimitMbps?: number }) => {
+    const limit = strictestForwardRate(buildForwardRateTiers({
+      userId: 7,
+      hostId: 3,
+      user: { inMbps: options.userLimitMbps, outMbps: options.userLimitMbps },
+      tunnel: { id: options.tunnelLimitMbps ? 11 : 0, mbps: options.tunnelLimitMbps },
+      group: { id: 19, mbps: options.forwardGroupLimitMbps },
+    }));
+    return { mbps: limit.inMbps, scope: limit.scope };
+  };
+  assert.deepEqual(strictest({}), { mbps: 0, scope: "" });
+  assert.deepEqual(strictest({ userLimitMbps: 200, forwardGroupLimitMbps: 80 }), { mbps: 80, scope: "user-7-host-3-group-19" });
+  assert.deepEqual(strictest({ userLimitMbps: 80, forwardGroupLimitMbps: 200 }), { mbps: 80, scope: "user-7-host-3" });
+  assert.deepEqual(strictest({ userLimitMbps: 80, forwardGroupLimitMbps: 80 }), { mbps: 80, scope: "user-7-host-3" });
+  assert.deepEqual(strictest({ userLimitMbps: 300, tunnelLimitMbps: 160, forwardGroupLimitMbps: 120 }), { mbps: 120, scope: "user-7-host-3-group-19" });
+});
+
+test("multi-tier rate limits only go to Agents that understand them", () => {
+  const rateLimits = [{ scope: "user-7-host-3", in: 125_000, out: 250_000 }, { scope: "host-3", in: 1_250_000, out: 1_250_000 }];
+  const base = { hostId: 3, rule: { forwardType: "realm", userId: 7 }, limitIn: 125_000, limitOut: 250_000, rateLimits };
+  assert.deepEqual(selectProtocolGuardRateLimit({ ...base, agentVersion: "2.2.229" }).rateLimits, rateLimits);
+  assert.equal("rateLimits" in selectProtocolGuardRateLimit({ ...base, agentVersion: "2.2.228" }), false);
+  assert.equal("rateLimits" in selectProtocolGuardRateLimit({ ...base, agentVersion: "2.2.229", rateLimits: [] }), false);
 });
 
 test("running process-backed Guards remain in desired reconciliation", () => {

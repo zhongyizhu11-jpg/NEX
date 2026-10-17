@@ -169,6 +169,7 @@ import { observePresenceCapableHostActivity, registerPresenceCapableHost } from 
 import { recordAuthenticatedAgentActivity } from "./agentActivity";
 import { recordHostRestartEvent } from "./ops/eventHooks";
 import { observeHostHealthCounters, observeHostResourceSample } from "./resourceAlertNotifier";
+import { buildForwardRateTiers, forwardRateTiersForAgent, mbpsToBytesPerSecond, strictestForwardRate } from "../shared/forwardRateLimit";
 import { buildAgentSniInbounds, isSniRuntimeRule, recordTlsInboundRuntimeStatus, sniRuleRuntimeView } from "./tlsInboundRuntime";
 import { buildGostEgressChain, gostEgressChainName, loadEgressRuntimeContext, ruleEgressRuntime, ruleEgressRuntimeView } from "./ssEgress";
 import { parseAgentCapabilities } from "../shared/ssEgress";
@@ -286,6 +287,8 @@ const MIMIC_CONFIG_DIR = "/etc/mimic";
 const AGENT_FIREWALL_COUNTER_REFRESH_VERSION = "2.2.178";
 const AGENT_PROTOCOL_GUARD_BACKEND_VERSION = "2.2.127";
 export const AGENT_RATE_LIMIT_GUARD_VERSION = "2.2.187";
+/** 多级限速、上下行分开、突发（guardRule.rateLimits）从这一版 Agent 起。 */
+export const AGENT_RATE_TIERS_VERSION = "2.2.229";
 const RATE_LIMIT_GUARD_FORWARD_TYPES = new Set(["iptables", "nftables", "realm", "socat", "nginx"]);
 const AGENT_DESIRED_STATE_VERSION = "2.2.134";
 const AGENT_STATE_SIGNATURE_VERSION = "2.2.137";
@@ -308,7 +311,6 @@ const SHARED_GOST_FORWARD_TYPES = new Set([
 const SHARED_NGINX_FORWARD_TYPES = new Set(["nginx", "nginx-tunnel", "nginx-tunnel-exit"]);
 const GOST_TUNNEL_MODES = new Set(["tls", "wss", "tcp", "mtls", "mwss", "mtcp"]);
 const VERBOSE_AGENT_ACTIONS = /^(1|true|yes|on)$/i.test(String(process.env.FORWARDX_VERBOSE_AGENT_ACTIONS || ""));
-const BYTES_PER_MEGABIT = 1_000_000 / 8;
 /** 多条规则共用一个进程的运行时（gost、隧道 gost）的句柄上限，和 Agent 自己的一致。 */
 const SHARED_RUNTIME_NOFILE = 1048576;
 const GOST_UDP_LISTENER_METADATA = {
@@ -1261,70 +1263,6 @@ function udpOverTcpEnabled(rule: any, tunnel: any) {
     && isForwardRuleProtocolUdpEnabled(rule?.protocol);
 }
 
-function normalizeRateLimitMbps(value: unknown) {
-  const num = Number(value);
-  if (!Number.isFinite(num) || num <= 0) return 0;
-  return Math.max(0, Math.floor(num));
-}
-
-function userForwardRateLimitMbps(user: any) {
-  return Math.max(
-    normalizeRateLimitMbps(user?.gostRateLimitIn),
-    normalizeRateLimitMbps(user?.gostRateLimitOut),
-  );
-}
-
-function tunnelRateLimitMbps(tunnel: any) {
-  return normalizeRateLimitMbps(tunnel?.rateLimitMbps);
-}
-
-function forwardGroupRateLimitMbps(group: any) {
-  return normalizeRateLimitMbps(group?.rateLimitMbps);
-}
-
-export function selectEffectiveForwardRateLimit(options: {
-  userId: number;
-  hostId: number;
-  userLimitMbps?: unknown;
-  tunnelId?: unknown;
-  tunnelLimitMbps?: unknown;
-  forwardGroupId?: unknown;
-  forwardGroupLimitMbps?: unknown;
-}) {
-  const userId = Math.max(0, Number(options.userId) || 0);
-  const hostId = Math.max(0, Number(options.hostId) || 0);
-  const tunnelId = Math.max(0, Number(options.tunnelId) || 0);
-  const forwardGroupId = Math.max(0, Number(options.forwardGroupId) || 0);
-  const candidates = [
-    {
-      mbps: normalizeRateLimitMbps(options.userLimitMbps),
-      scope: `user-${userId}-host-${hostId}`,
-    },
-    {
-      mbps: normalizeRateLimitMbps(options.tunnelLimitMbps),
-      scope: `user-${userId}-host-${hostId}-tunnel-${tunnelId}`,
-      enabled: tunnelId > 0,
-    },
-    {
-      mbps: normalizeRateLimitMbps(options.forwardGroupLimitMbps),
-      scope: `user-${userId}-host-${hostId}-group-${forwardGroupId}`,
-      enabled: forwardGroupId > 0,
-    },
-  ].filter((candidate) => candidate.enabled !== false && candidate.mbps > 0);
-  if (candidates.length === 0) return { mbps: 0, scope: "" };
-  // Keep the broader user scope on equal limits so multiple resources still
-  // share the user's aggregate bucket. A stricter resource limit gets its own
-  // shared bucket across that resource's generated rules.
-  const selected = candidates.reduce((current, candidate) => (
-    candidate.mbps < current.mbps ? candidate : current
-  ));
-  return { mbps: selected.mbps, scope: selected.scope };
-}
-
-function mbpsToBytesPerSecond(mbps: unknown) {
-  return Math.max(0, Math.floor(normalizeRateLimitMbps(mbps) * BYTES_PER_MEGABIT));
-}
-
 export function selectProtocolGuardRateLimit(options: {
   agentVersion: string;
   hostId: number;
@@ -1332,6 +1270,8 @@ export function selectProtocolGuardRateLimit(options: {
   limitIn: number;
   limitOut: number;
   rateLimitScope?: unknown;
+  /** 多级限速（shared/forwardRateLimit.ts 的 forwardRateTiersForAgent），Agent ≥ 2.2.229 才下发。 */
+  rateLimits?: ReturnType<typeof forwardRateTiersForAgent>;
 }) {
   const forwardType = String(options.rule?.forwardType || "").trim();
   const tunnelId = Number(options.rule?.tunnelId || 0);
@@ -1351,12 +1291,14 @@ export function selectProtocolGuardRateLimit(options: {
   ) {
     return { rateLimitScope: "", limitIn: 0, limitOut: 0 };
   }
+  const tiers = Array.isArray(options.rateLimits) ? options.rateLimits : [];
   return {
     rateLimitScope: String(options.rateLimitScope || "").trim() || (nginxTunnelEntry
       ? `user-${userId}-host-${Math.max(0, Number(options.hostId) || 0)}-tunnel-${tunnelId}`
       : `user-${userId}-host-${Math.max(0, Number(options.hostId) || 0)}`),
     limitIn,
     limitOut,
+    ...(tiers.length > 0 && isAgentVersionAtLeast(options.agentVersion, AGENT_RATE_TIERS_VERSION) ? { rateLimits: tiers } : {}),
   };
 }
 
@@ -2813,46 +2755,58 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     const rateLimitUserById = new Map(rateLimitUsers.filter(Boolean).map((u: any) => [u.id, u]));
     const gostRateLimiters: any[] = [];
     const gostRateLimiterNames = new Set<string>();
-    const ensureGostLimiter = (name: string, mbps: number) => {
-      const bytesPerSecond = mbpsToBytesPerSecond(mbps);
-      if (bytesPerSecond <= 0 || gostRateLimiterNames.has(name)) return;
+    const ensureGostLimiter = (name: string, inMbps: number, outMbps: number) => {
+      const inBytes = mbpsToBytesPerSecond(inMbps);
+      const outBytes = mbpsToBytesPerSecond(outMbps);
+      if ((inBytes <= 0 && outBytes <= 0) || gostRateLimiterNames.has(name)) return;
       gostRateLimiterNames.add(name);
       gostRateLimiters.push({
         name,
-        limits: [`$ ${bytesPerSecond}B ${bytesPerSecond}B`],
+        // gost 限速器：上行（in）/ 下行（out），0 = 这个方向不限。
+        limits: [`$ ${inBytes}B ${outBytes}B`],
       });
     };
-    const effectiveRateLimitForRule = (rule: any, tunnel?: any | null) => {
+    /** 这条规则在这台主机上的各级限速（见 shared/forwardRateLimit.ts）。 */
+    const rateTiersForRule = (rule: any, tunnel?: any | null) => {
       const userId = Number(rule?.userId || 0);
       const user = rateLimitUserById.get(userId) as any;
       const forwardGroupId = Number(rule?.forwardGroupId || 0);
       const group = forwardGroupRuntimeConfigById.get(forwardGroupId) as any;
-      return selectEffectiveForwardRateLimit({
+      return buildForwardRateTiers({
         userId,
         hostId: Number(host.id) || 0,
-        userLimitMbps: userForwardRateLimitMbps(user),
-        tunnelId: Number(tunnel?.id || 0),
-        tunnelLimitMbps: tunnelRateLimitMbps(tunnel),
-        forwardGroupId,
-        forwardGroupLimitMbps: forwardGroupRateLimitMbps(group),
+        user: {
+          inMbps: user?.gostRateLimitIn,
+          outMbps: user?.gostRateLimitOut,
+          burstMbps: user?.forwardBurstMbps,
+          burstSeconds: user?.forwardBurstSeconds,
+        },
+        tunnel: { id: tunnel?.id, mbps: tunnel?.rateLimitMbps },
+        group: { id: forwardGroupId, mbps: group?.rateLimitMbps },
+        rule: { id: rule?.id, inMbps: rule?.rateLimitInMbps, outMbps: rule?.rateLimitOutMbps },
+        hostLimitMbps: (host as any).rateLimitMbps,
       });
     };
     const applyGostLimiter = (service: any, rule: any, tunnel?: any | null) => {
-      const limit = effectiveRateLimitForRule(rule, tunnel);
-      if (limit.mbps > 0) {
-        const name = `fwx-${limit.scope}-${limit.mbps}`;
-        ensureGostLimiter(name, limit.mbps);
+      // gost 自带的限速器只认一对上下行数：每个方向取最严的那一级，同名的规则共用一个桶。
+      const limit = strictestForwardRate(rateTiersForRule(rule, tunnel));
+      if (limit.inMbps > 0 || limit.outMbps > 0) {
+        const name = limit.inMbps === limit.outMbps
+          ? `fwx-${limit.scope}-${limit.inMbps}`
+          : `fwx-${limit.scope}-${limit.inMbps}-${limit.outMbps}`;
+        ensureGostLimiter(name, limit.inMbps, limit.outMbps);
         service.limiter = name;
       }
       return service;
     };
     const ruleRateLimits = (rule: any, tunnel?: any | null) => {
-      const limit = effectiveRateLimitForRule(rule, tunnel);
-      const bytesPerSecond = mbpsToBytesPerSecond(limit.mbps);
+      const tiers = rateTiersForRule(rule, tunnel);
+      const limit = strictestForwardRate(tiers);
       return {
         rateLimitScope: limit.scope,
-        limitIn: bytesPerSecond,
-        limitOut: bytesPerSecond,
+        limitIn: mbpsToBytesPerSecond(limit.inMbps),
+        limitOut: mbpsToBytesPerSecond(limit.outMbps),
+        rateLimits: forwardRateTiersForAgent(tiers),
       };
     };
     const userAccessLimits = (userId: number) => {

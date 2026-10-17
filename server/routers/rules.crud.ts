@@ -3664,5 +3664,28 @@ export const crudRulesRouter = router({
     }),
   toggle: protectedProcedure
     .input(z.object({ id: z.number(), isEnabled: z.boolean() }))
-    .mutation(async ({ input, ctx }) => toggleForwardRuleForActor(ctx.user, input.id, input.isEnabled))
+    .mutation(async ({ input, ctx }) => toggleForwardRuleForActor(ctx.user, input.id, input.isEnabled)),
+
+  /**
+   * 这条规则（端口）自己的上行 / 下行限速（Mbps，0 = 不限）。它只会和用户、隧道、转发组、整台主机
+   * 那几级一起叠加、取最严（shared/forwardRateLimit.ts），所以规则的主人自己也能改：只会更慢，不会更快。
+   */
+  setRateLimit: protectedProcedure
+    .input(z.object({
+      id: z.number().int().positive(),
+      inMbps: z.number().int().min(0).max(1_000_000),
+      outMbps: z.number().int().min(0).max(1_000_000),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      const rule = await db.getForwardRuleById(input.id);
+      if (!rule || dbBool((rule as any).pendingDelete)) throw new Error("规则不存在");
+      if (ctx.user.role !== "admin" && Number((rule as any).userId) !== Number(ctx.user.id)) throw new Error("无权操作此规则");
+      if (dbBool((rule as any).isForwardGroupTemplate)) throw new Error("转发组生成的规则请在转发组上设置限速");
+      const unchanged = Number((rule as any).rateLimitInMbps || 0) === input.inMbps && Number((rule as any).rateLimitOutMbps || 0) === input.outMbps;
+      if (!unchanged) {
+        await db.updateForwardRule(input.id, { rateLimitInMbps: input.inMbps, rateLimitOutMbps: input.outMbps } as any);
+        pushAgentRefresh(Number((rule as any).hostId), "forward-rule-rate-limit-updated");
+      }
+      return { id: input.id, rateLimitInMbps: input.inMbps, rateLimitOutMbps: input.outMbps };
+    }),
 });

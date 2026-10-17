@@ -125,8 +125,11 @@ function formatSpeedMbps(mbps: number | string | null | undefined): string {
 }
 
 function formatForwardRateLimit(inMbps: unknown, outMbps: unknown): string {
-  const speed = Math.max(0, Math.floor(Number(inMbps) || 0), Math.floor(Number(outMbps) || 0));
-  return speed > 0 ? `上下行 ${formatSpeedMbps(speed)}` : "不限";
+  const up = Math.max(0, Math.floor(Number(inMbps) || 0));
+  const down = Math.max(0, Math.floor(Number(outMbps) || 0));
+  if (up === 0 && down === 0) return "不限";
+  if (up === down) return `上下行 ${formatSpeedMbps(up)}`;
+  return `上行 ${up > 0 ? formatSpeedMbps(up) : "不限"} / 下行 ${down > 0 ? formatSpeedMbps(down) : "不限"}`;
 }
 
 function userLabel(user: any) {
@@ -210,6 +213,8 @@ function UsersContent() {
   const [trafficLimitInput, setTrafficLimitInput] = useState("");
   const [gostRateLimitInInput, setGostRateLimitInInput] = useState("");
   const [gostRateLimitOutInput, setGostRateLimitOutInput] = useState("");
+  const [forwardBurstMbpsInput, setForwardBurstMbpsInput] = useState("");
+  const [forwardBurstSecondsInput, setForwardBurstSecondsInput] = useState("");
   const [expiresAtInput, setExpiresAtInput] = useState("");
   const [trafficAutoReset, setTrafficAutoReset] = useState(false);
   const [trafficResetDay, setTrafficResetDay] = useState(1);
@@ -893,11 +898,10 @@ function UsersContent() {
     setExpiresAtInput(formatBillingDateInput(u.manualExpiresAt));
     setTrafficAutoReset(!!u.trafficAutoReset);
     setTrafficResetDay(u.trafficResetDay || 1);
-    const gostIn = Number(u.manualGostRateLimitIn) || 0;
-    const gostOut = Number(u.manualGostRateLimitOut) || 0;
-    const unifiedRateLimit = Math.max(gostIn, gostOut);
-    setGostRateLimitInInput(unifiedRateLimit > 0 ? String(unifiedRateLimit) : "0");
-    setGostRateLimitOutInput(unifiedRateLimit > 0 ? String(unifiedRateLimit) : "0");
+    setGostRateLimitInInput(String(Math.max(0, Number(u.manualGostRateLimitIn) || 0)));
+    setGostRateLimitOutInput(String(Math.max(0, Number(u.manualGostRateLimitOut) || 0)));
+    setForwardBurstMbpsInput(String(Math.max(0, Number(u.forwardBurstMbps) || 0)));
+    setForwardBurstSecondsInput(String(Math.max(0, Number(u.forwardBurstSeconds) || 0)));
     setMaxRules(u.manualMaxRules || 0);
     setMaxProxyInbounds(u.manualMaxProxyInbounds || 0);
     setMaxSelfServiceHosts(u.maxSelfServiceHosts == null ? "" : String(u.maxSelfServiceHosts));
@@ -944,15 +948,20 @@ function UsersContent() {
     if (allowSocat) allowed.push("socat");
     if (allowGost) allowed.push("gost");
     const allowedForwardTypes = allowed.length === FORWARD_TYPES.length ? null : allowed.join(",");
-    const unifiedRateLimit = parseSpeedInputMbps(gostRateLimitInInput);
+    const rateLimitIn = parseSpeedInputMbps(gostRateLimitInInput);
+    const rateLimitOut = parseSpeedInputMbps(gostRateLimitOutInput);
+    const burstMbps = parseSpeedInputMbps(forwardBurstMbpsInput);
+    const burstSeconds = Math.min(3600, parseSpeedInputMbps(forwardBurstSecondsInput));
     const displayRemark = trafficDisplayRemark.trim().slice(0, 24);
     const expiresAt = expiresAtInput.trim() || null;
     updateTrafficMutation.mutate({
       userId: trafficUserId,
       displayRemark: displayRemark || null,
       trafficLimit: limitBytes,
-      gostRateLimitIn: unifiedRateLimit,
-      gostRateLimitOut: unifiedRateLimit,
+      gostRateLimitIn: rateLimitIn,
+      gostRateLimitOut: rateLimitOut,
+      forwardBurstMbps: burstMbps,
+      forwardBurstSeconds: burstSeconds,
       expiresAt,
       trafficAutoReset,
       trafficResetDay,
@@ -2427,29 +2436,73 @@ function UsersContent() {
                     转发限速
                   </Label>
                   <p className="text-xs text-muted-foreground">
-                    对普通端口转发和隧道入口的上下行同时生效。
+                    对普通端口转发和隧道入口生效。同一用户在一台主机上的所有规则、所有连接共用这个速度，开多线程也绕不过去。
                   </p>
                 </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">最大速度</Label>
-                  <div className="flex items-center gap-2">
-                    <Input
-                      type="number"
-                      inputMode="decimal"
-                      min={0}
-                      max={1000000}
-                      step="1"
-                      value={gostRateLimitInInput}
-                      onChange={(e) => {
-                        setGostRateLimitInInput(e.target.value);
-                        setGostRateLimitOutInput(e.target.value);
-                      }}
-                      placeholder="0"
-                    />
-                    <span className="text-xs text-muted-foreground select-none whitespace-nowrap">Mbps</span>
+                <div className="grid grid-cols-2 gap-3">
+                  {([
+                    ["上行（客户端 → 目标）", gostRateLimitInInput, setGostRateLimitInInput],
+                    ["下行（目标 → 客户端）", gostRateLimitOutInput, setGostRateLimitOutInput],
+                  ] as const).map(([label, value, setValue]) => (
+                    <div key={label} className="space-y-2">
+                      <Label className="text-xs">{label}</Label>
+                      <div className="flex items-center gap-2">
+                        <Input
+                          type="number"
+                          inputMode="decimal"
+                          min={0}
+                          max={1000000}
+                          step="1"
+                          value={value}
+                          onChange={(e) => setValue(e.target.value)}
+                          placeholder="0"
+                          aria-label={label}
+                        />
+                        <span className="text-xs text-muted-foreground select-none whitespace-nowrap">Mbps</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-2">
+                    <Label className="text-xs">突发峰值</Label>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        type="number"
+                        inputMode="decimal"
+                        min={0}
+                        max={1000000}
+                        step="1"
+                        value={forwardBurstMbpsInput}
+                        onChange={(e) => setForwardBurstMbpsInput(e.target.value)}
+                        placeholder="0"
+                        aria-label="突发峰值"
+                      />
+                      <span className="text-xs text-muted-foreground select-none whitespace-nowrap">Mbps</span>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-xs">突发时长</Label>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        type="number"
+                        inputMode="numeric"
+                        min={0}
+                        max={3600}
+                        step="1"
+                        value={forwardBurstSecondsInput}
+                        onChange={(e) => setForwardBurstSecondsInput(e.target.value)}
+                        placeholder="0"
+                        aria-label="突发时长"
+                      />
+                      <span className="text-xs text-muted-foreground select-none whitespace-nowrap">秒</span>
+                    </div>
                   </div>
                 </div>
-                <p className="text-xs text-muted-foreground">填 0 表示不限速。保存后会同时限制入站和出站，Agent 刷新转发配置时生效。</p>
+                <p className="text-xs text-muted-foreground">
+                  填 0 表示不限速。突发：先按峰值跑这么多秒，用满了降回上面的速度，用得少时额度慢慢回满；峰值不高于上下行速度时不生效。
+                  上下行分开和突发需要 Agent 2.2.229 以上，gost 转发和隧道入口只按上下行速度限、不做突发。
+                </p>
               </div>
 
               <Separator />

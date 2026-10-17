@@ -36,7 +36,7 @@ function Stat({ label, value, hint, tone }: { label: string; value: string; hint
   return (
     <div className="rounded-lg border bg-card p-3">
       <div className="text-meta text-muted-foreground">{label}</div>
-      <div className={`mt-1 text-2xl font-semibold tabular-nums ${tone === "danger" ? "text-destructive" : tone === "ok" ? "text-emerald-600 dark:text-emerald-400" : ""}`}>{value}</div>
+      <div className={`mt-1 text-2xl font-semibold tabular-nums ${tone === "danger" ? "text-[var(--fx-down-text)]" : tone === "ok" ? "text-[var(--fx-healthy-text)]" : ""}`}>{value}</div>
       {hint ? <div className="mt-0.5 text-meta text-muted-foreground">{hint}</div> : null}
     </div>
   );
@@ -53,7 +53,7 @@ function HourlyBars({ values, hours }: { values: number[]; hours: number }) {
       {buckets.map((value, index) => (
         <div
           key={index}
-          className={value > 0 ? "flex-1 rounded-sm bg-orange-500/70" : "flex-1 rounded-sm bg-muted"}
+          className={value > 0 ? "flex-1 rounded-sm bg-[var(--fx-warn)]" : "flex-1 rounded-sm bg-muted"}
           style={{ height: `${Math.max(6, (value / max) * 100)}%` }}
           title={`${value} 条`}
         />
@@ -143,7 +143,7 @@ export default function FaultBoardTab() {
                 <>
                   {data.hosts.offline.map((host) => (
                     <div key={`offline-${host.id}`} className="flex flex-wrap items-baseline gap-x-2">
-                      <span className="inline-block h-2 w-2 shrink-0 rounded-full bg-destructive" aria-hidden />
+                      <span className="inline-block h-2 w-2 shrink-0 rounded-full bg-[var(--fx-down)]" aria-hidden />
                       <span className="font-medium">{host.name}</span>
                       <span className="text-muted-foreground">离线{host.lastHeartbeat ? `，最后心跳 ${new Date(host.lastHeartbeat).toLocaleString()}` : "，从没连上过"}</span>
                     </div>
@@ -153,7 +153,7 @@ export default function FaultBoardTab() {
                   ) : null}
                   {data.firing.map((item, index) => (
                     <div key={`firing-${index}`} className="flex flex-wrap items-baseline gap-x-2">
-                      <span className="inline-block h-2 w-2 shrink-0 rounded-full bg-orange-500" aria-hidden />
+                      <span className="inline-block h-2 w-2 shrink-0 rounded-full bg-[var(--fx-warn)]" aria-hidden />
                       <span className="font-medium">{item.hostName || `#${item.hostId}`}</span>
                       <span className="text-muted-foreground">{item.label}{item.since ? `，从 ${new Date(item.since).toLocaleTimeString()} 开始` : ""}</span>
                     </div>

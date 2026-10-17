@@ -208,6 +208,7 @@ const tables: TableDef[] = [
       c("manualMaxPorts", "int", { notNull: true, default: 0 }), c("manualMaxConnections", "int", { notNull: true, default: 0 }),
       c("manualMaxIPs", "int", { notNull: true, default: 0 }), c("manualAllowForwardXTunnel", "bool", { notNull: true, default: false }), c("manualAllowProxySubscription", "bool", { notNull: true, default: false }),
       c("manualGostRateLimitIn", "int", { notNull: true, default: 0 }), c("manualGostRateLimitOut", "int", { notNull: true, default: 0 }),
+      c("forwardBurstMbps", "int", { notNull: true, default: 0 }), c("forwardBurstSeconds", "int", { notNull: true, default: 0 }),
       c("manualTrafficLimit", "bigint", { notNull: true, default: 0 }), c("manualExpiresAt", "epoch"),
       c("trafficLimit", "bigint", { notNull: true, default: 0 }), c("trafficUsed", "bigint", { notNull: true, default: 0 }),
       c("trafficBillingResetBytes", "bigint", { notNull: true, default: 0 }),
@@ -246,6 +247,7 @@ const tables: TableDef[] = [
     name: "hosts",
     columns: [
       c("id", "id"), c("name", "text", { notNull: true }), c("ip", "text", { notNull: true }),
+      c("rateLimitMbps", "int", { notNull: true, default: 0 }),
       c("ipv4", "text"), c("ipv6", "text"), c("hostType", "varchar", { length: 32, notNull: true, default: "slave" }),
       c("agentToken", "text"), c("entryIp", "text"), c("tunnelEntryIp", "text"), c("osInfo", "text"), c("cpuInfo", "text"),
       c("memoryTotal", "bigint"), c("agentVersion", "text"), c("fxpVersion", "varchar", { length: 64 }),
@@ -316,6 +318,7 @@ const tables: TableDef[] = [
     name: "forward_rules",
     columns: [
       c("id", "id"), c("hostId", "int", { notNull: true }), c("name", "text", { notNull: true }),
+      c("rateLimitInMbps", "int", { notNull: true, default: 0 }), c("rateLimitOutMbps", "int", { notNull: true, default: 0 }),
       c("forwardType", "varchar", { length: 32, notNull: true, default: "iptables" }), c("protocol", "varchar", { length: 16, notNull: true, default: "both" }),
       c("gostMode", "varchar", { length: 32, notNull: true, default: "direct" }), c("gostRelayHost", "text"), c("gostRelayPort", "int"),
       c("tunnelId", "int"), c("tunnelExitPort", "int"),

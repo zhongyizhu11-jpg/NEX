@@ -1546,6 +1546,8 @@ export const hostsRouter = router({
         egressShapingMode: hostEgressShapingModeSchema.optional(),
         egressMbps: hostEgressMbpsSchema.optional(),
         flowOffload: z.boolean().optional(),
+        /** 整台主机的转发限速（Mbps，0 = 不限）：所有用户加起来共用一个桶。只有管理员能改。 */
+        rateLimitMbps: z.number().int().min(0).max(1_000_000).optional(),
         telegramTrafficAlertEnabled: z.boolean().optional(),
         trafficAlertThresholdPercent: z.number().int().min(1).max(99).optional(),
         telegramRenewalReminderEnabled: z.boolean().optional(),
@@ -1589,7 +1591,11 @@ export const hostsRouter = router({
           delete (data as any).egressMbps;
           // 内核快速转发改的是整台机器的转发路径和计数方式，只有管理员能开关。
           delete (data as any).flowOffload;
+          // 整台主机限速压的是机器上所有人的流量，只有管理员能改。
+          delete (data as any).rateLimitMbps;
         }
+        const hostRateLimitChanged = (data as any).rateLimitMbps !== undefined
+          && Number((data as any).rateLimitMbps) !== Number((host as any).rateLimitMbps || 0);
         const flowOffloadChanged = (data as any).flowOffload !== undefined && !!(data as any).flowOffload !== !!(host as any).flowOffload;
         if ((data as any).flowOffload !== undefined) (data as any).flowOffload = !!(data as any).flowOffload;
         if ((data as any).egressShapingMode !== undefined || (data as any).egressMbps !== undefined) {
@@ -1699,6 +1705,7 @@ export const hostsRouter = router({
         }
         await db.updateHost(id, data as any);
         if (egressShapingChanged) pushAgentRefresh(id, "host-egress-shaping-updated", { urgent: true });
+        if (hostRateLimitChanged) pushAgentRefresh(id, "host-rate-limit-updated", { urgent: true });
         if (flowOffloadChanged) wakeAgentExt(id, "flow-offload-updated");
         if (ddnsConfigChanged) {
           scheduleHostDdnsUpdate({ ...host, ...(data as any), id }, "host-ddns-config-updated", { force: true });
