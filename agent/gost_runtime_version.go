@@ -355,10 +355,11 @@ func reconcileGostRuntimeUpgrade(env gostRuntimeUpgradeEnv) (string, error) {
 	elapsed := now.Sub(started)
 	current, _ := env.version(env.binaryPath)
 
+	// 确认时不动回滚记录：它只在装着的正是被退回去的那个文件时才压掉能力（gostRuntimeCapabilities 比指纹），
+	// 新文件确认能用以后它自然不起作用。删它反而危险：安装脚本是另一个进程，可能正好在这时回滚并写下
+	// 新记录，读了再删之间那一下会把新记录删掉，被退回去的文件就又报能力了。
 	commit := func() (string, error) {
 		os.Remove(env.markerPath)
-		// 新文件确认能用：这次升级之前的回滚记录作废（它记的是别的文件）。
-		removeRollbackRecordOlderThan(env.rollbackPath, marker.StartedAt)
 		return gostRuntimeUpgradeCommitted, nil
 	}
 
@@ -366,7 +367,6 @@ func reconcileGostRuntimeUpgrade(env gostRuntimeUpgradeEnv) (string, error) {
 		// 太旧的标记不再据此回滚：能问出版本就确认，问不出也只清掉标记、交给下次安装脚本处理。
 		os.Remove(env.markerPath)
 		if current.OK {
-			removeRollbackRecordOlderThan(env.rollbackPath, marker.StartedAt)
 			return gostRuntimeUpgradeCommitted, nil
 		}
 		return gostRuntimeUpgradeNone, nil
@@ -397,17 +397,6 @@ func reconcileGostRuntimeUpgrade(env gostRuntimeUpgradeEnv) (string, error) {
 		return gostRuntimeUpgradePending, nil
 	}
 	return rollbackGostRuntime(env, marker, current, reason)
-}
-
-// removeRollbackRecordOlderThan 删掉这次升级开始之前留下的回滚记录。安装脚本重启服务后自己也会查一次、
-// 起不来当场回滚并写记录（和这里的确认可能同时发生）：那份记录比升级标记新，说明装着的是刚退回去的文件，
-// 不能删，否则它的能力就不会再被压成 false。
-func removeRollbackRecordOlderThan(path string, startedAt int64) {
-	state, ok := readGostRuntimeRollbackState(path)
-	if ok && startedAt > 0 && state.At >= startedAt {
-		return
-	}
-	os.Remove(path)
 }
 
 func rollbackGostRuntime(env gostRuntimeUpgradeEnv, marker gostRuntimeUpgradeMarker, current gostRuntimeVersionInfo, reason string) (string, error) {
@@ -515,7 +504,10 @@ func gostRuntimeStartupSelfCheck() {
 	version, caps := reportedGostRuntime()
 	rollbackNote := ""
 	if state, ok := readGostRuntimeRollbackState(gostRuntimeRollbackStatePath); ok {
-		rollbackNote = fmt.Sprintf(" rollback=%s->%s reason=%q", state.FailedVersion, state.RestoredVersion, state.Reason)
+		// 只有装着的还是那次退回去的文件，这条记录才有意义。
+		if fp, ok := statGostRuntimeFingerprint(gostRuntimeBinaryPath); ok && sameGostRuntimeFile(state.RestoredFingerprint, fp) {
+			rollbackNote = fmt.Sprintf(" rollback=%s->%s reason=%q", state.FailedVersion, state.RestoredVersion, state.Reason)
+		}
 	}
 	logf("gost runtime self-check path=%s version=%s capabilities=%s%s", gostRuntimeBinaryPath, version, strings.Join(caps, ","), rollbackNote)
 }
