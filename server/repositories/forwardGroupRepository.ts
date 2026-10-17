@@ -102,6 +102,7 @@ import {
   type HostPortReservation,
 } from "../portReservations";
 import { repairPortForwardRuleHostReferences } from "../portForwardRuleHosts";
+import { assertNoDirectSelfForwardLoop } from "../selfForwardLoop";
 import { summarizeForwardGroupRuntime } from "../forwardGroupRuntimeStatus";
 import { dbBool, sqlBool } from "./repositoryUtils";
 import { reorderWithinSortOrderScope } from "./sortOrderSlots";
@@ -2136,6 +2137,62 @@ export async function getForwardGroupDefaultHostId(groupId: number) {
   throw new Error("Forward group has no valid entry agent");
 }
 
+/**
+ * 删主机前修转发组模板上过期的主机引用（照上游 poouo/Forwardx 的
+ * repairForwardGroupTemplateHostReferencesForHost 移植）。
+ *
+ * 故障转移 / 转发链的模板从不下发到 Agent，hostId 只是元数据；组里的成员换掉以后它还指着老机器，
+ * 删那台老机器时 getHostRuleDeleteBlockers 会把这条模板算成「转发组规则引用」挡住删除，而用户
+ * 在界面上根本找不到这条引用。这里只把「这台机器已经不是组里成员」的模板改指向组里现在的
+ * 默认入口机：不动子规则、不重铺运行时。端口转发的模板由 repairPortForwardRuleHostReferences 修，
+ * 入口组 / 出口组没有模板。组里一台可用的机器都没有时保持原样（照上游）。
+ */
+export async function repairForwardGroupTemplateHostReferencesForHost(hostIdValue: number) {
+  const hostId = Number(hostIdValue || 0);
+  const db = await getDb();
+  if (!db || !Number.isInteger(hostId) || hostId <= 0) return 0;
+  const rows = await db.selectDistinct({ groupId: forwardRules.forwardGroupId })
+    .from(forwardRules)
+    .where(and(
+      eq(forwardRules.hostId, hostId),
+      eq(forwardRules.isForwardGroupTemplate, true),
+      eq(forwardRules.pendingDelete, false),
+      isNotNull(forwardRules.forwardGroupId),
+    ));
+  let repaired = 0;
+  for (const row of rows as any[]) {
+    const groupId = Number(row.groupId || 0);
+    if (groupId <= 0) continue;
+    repaired += await withKeyedTaskLock(`forward-group-sync:${groupId}`, async () => {
+      const group = await getForwardGroupById(groupId);
+      if (!group) return 0;
+      const groupMode = forwardGroupModeOf(group);
+      if (isCollectionGroupMode(groupMode) || groupMode === "port") return 0;
+      const memberHostIds = new Set<number>();
+      for (const member of [...sortedMembers(group), ...await entryGroupMembersFor(group)]) {
+        const memberHostId = await memberEntryHostId(member).catch(() => 0);
+        if (memberHostId > 0) memberHostIds.add(memberHostId);
+      }
+      if (memberHostIds.has(hostId)) return 0;
+      const nextHostId = await getForwardGroupDefaultHostId(groupId).catch(() => 0);
+      if (!nextHostId || nextHostId === hostId) return 0;
+      const stale = (await getForwardGroupTemplateRules(groupId) as any[])
+        .filter((rule) => Number(rule.hostId) === hostId)
+        .map((rule) => Number(rule.id));
+      if (stale.length === 0) return 0;
+      await db.update(forwardRules).set({ hostId: nextHostId, updatedAt: nowDate() } as any).where(and(
+        inArray(forwardRules.id, stale),
+        eq(forwardRules.forwardGroupId, groupId),
+        eq(forwardRules.isForwardGroupTemplate, true),
+        eq(forwardRules.pendingDelete, false),
+      ));
+      appendPanelLog("info", `[ForwardGroup] template host references repaired group=${groupId} from=${hostId} to=${nextHostId} count=${stale.length}`);
+      return stale.length;
+    });
+  }
+  return repaired;
+}
+
 export async function getForwardGroupRuleEntryHostIds(groupId: number) {
   const group = await getForwardGroupById(groupId);
   if (!group) throw new Error("Forward group does not exist");
@@ -3824,6 +3881,56 @@ export async function updateForwardGroup(id: number, data: Partial<InsertForward
   }
 }
 
+/**
+ * 换成员前查死循环（和 rules.crud.ts 新建 / 编辑规则时同一个检查，见 server/selfForwardLoop.ts）：
+ * 新加入（或重新启用）的主机会按模板端口铺子规则 —— 主机地址正好是规则目标、端口又相同，就是转回自己。
+ * - 端口转发 / 故障转移（主机型）组自己加成员：查这个组的模板；
+ * - 入口组加主机：查挂这个入口组的端口转发的模板（转发链的入口只转给下一跳，不查，和 rules.crud 一致）。
+ * 停用状态加进来的成员不铺子规则，等它被启用时再查。
+ */
+async function assertMemberChangeHasNoSelfForwardLoop(group: any, groupMode: ForwardGroupMode, existing: any[], nextMembers: any[]) {
+  const previousEnabledHostIds = new Set(existing
+    .filter((member) => member.memberType === "host" && dbBool(member.isEnabled, true))
+    .map((member) => Number(member.hostId || 0)));
+  const addedHostIds = Array.from(new Set(nextMembers
+    .filter((member) => member.memberType === "host" && dbBool(member.isEnabled, true))
+    .map((member) => Number(member.hostId || 0))
+    .filter((hostId) => hostId > 0 && !previousEnabledHostIds.has(hostId))));
+  if (addedHostIds.length === 0) return;
+  const groupIds: number[] = [];
+  if (groupMode === "entry") {
+    const db = await getDb();
+    const dependents = await db.select({ id: forwardGroups.id, groupMode: forwardGroups.groupMode, groupType: forwardGroups.groupType })
+      .from(forwardGroups)
+      .where(eq(forwardGroups.entryGroupId, Number(group.id)));
+    for (const dependent of dependents as any[]) {
+      if (forwardGroupModeOf(dependent) === "port" && String(dependent.groupType || "host") !== "tunnel") groupIds.push(Number(dependent.id));
+    }
+  } else if (groupMode !== "chain" && !isCollectionGroupMode(groupMode) && String(group?.groupType || "host") !== "tunnel") {
+    groupIds.push(Number(group.id));
+  }
+  for (const groupId of groupIds) {
+    const templates = await getForwardGroupTemplateRules(groupId) as any[];
+    if (templates.length === 0) continue;
+    for (const hostId of addedHostIds) {
+      const host = await getHostById(hostId);
+      for (const template of templates) {
+        try {
+          assertNoDirectSelfForwardLoop({
+            host,
+            sourcePort: Number(template.sourcePort),
+            targetIp: template.targetIp,
+            targetPort: Number(template.targetPort),
+            tunnelId: null,
+          });
+        } catch {
+          throw new Error(`成员主机「${(host as any)?.name || hostId}」加入后，规则「${template.name || template.id}」会在它上面把 ${template.sourcePort} 端口转发回自己的同一端口，造成转发死循环。请先修改规则目标或端口`);
+        }
+      }
+    }
+  }
+}
+
 export async function replaceForwardGroupMembers(
   groupId: number,
   members: ForwardGroupMemberInput[],
@@ -3843,6 +3950,7 @@ export async function replaceForwardGroupMembers(
     .map((member) => Number(member.hostId || 0))
     .filter((hostId) => Number.isFinite(hostId) && hostId > 0);
   const keepKeys = new Set(normalizedMembers.map((m) => `${m.memberType}:${m.memberType === "host" ? m.hostId : m.tunnelId}`));
+  await assertMemberChangeHasNoSelfForwardLoop(group, groupMode, existing as any[], normalizedMembers as any[]);
   if (groupMode === "entry" && dbBool((group as any)?.isEnabled)) {
     // 新加入（或重新启用）的入口组主机会替组里所有隧道的规则监听 sourcePort，
     // 写成员之前先查端口，冲突就整体拒绝，别写一半。

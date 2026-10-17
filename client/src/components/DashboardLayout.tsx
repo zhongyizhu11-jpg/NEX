@@ -1155,7 +1155,8 @@ function DashboardLayoutContent({
         { icon: Package, label: "我的套餐", path: "/subscriptions" },
         { icon: ReceiptText, label: "账单中心", path: "/wallet" },
         ...(storeStatus?.enabled ? [{ icon: ShoppingBag, label: "商店", path: "/store" }] : []),
-        ...(isSidebarNavItemVisible(userTicketsMenuItem) ? [userTicketsMenuItem] : []),
+        // 工单总开关关了（publicInfo.ticketsEnabled）普通用户不显示；管理员的「工单管理」照常。
+        ...(publicInfo?.ticketsEnabled !== false && isSidebarNavItemVisible(userTicketsMenuItem) ? [userTicketsMenuItem] : []),
       ]
     : [];
   // 管理员侧栏「工单管理」上的待处理数，一分钟问一次（只数一下，很便宜）。

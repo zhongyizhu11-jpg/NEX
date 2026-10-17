@@ -1851,6 +1851,8 @@ export const systemRouter = router({
       ...db.publicReferralFlags(all),
       twoFactorEnabled: all.twoFactorEnabled === "true",
       lookingGlassUserEnabled: all.lookingGlassUserEnabled !== "false",
+      // 工单总开关：关了普通用户侧边栏不显示「工单」（server/routers/tickets.ts）。
+      ticketsEnabled: all.ticketsEnabled !== "false",
       allowMultiDeviceLogin: all.allowMultiDeviceLogin === "true",
       pluginsEnabled: all.pluginsEnabled === "true",
       updateAutoCheckEnabled: isUpdateAutoCheckEnabled(all),

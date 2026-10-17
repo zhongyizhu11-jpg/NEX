@@ -121,3 +121,13 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## ip2region（在线 IP 的离线归属地库）
+
+- 文件：`server/assets/ip2region/ip2region_v4.xdb.gz`、`ip2region_v6.xdb.gz`（构建时拷到 `dist/geo/`）
+- 来源：<https://github.com/lionsoul2014/ip2region>，固定提交 `1bf6cabfb63c1a14af0971749c2120a3e5c77d72`
+- 许可：Apache-2.0 或 MIT，按 MIT 再分发；全文见 `server/assets/ip2region/LICENSE.txt`
+- 用途：只用来显示终端用户 IP 的大致归属地，查询全在本地完成，不发网络请求；读取代码是 NEX 自己按 xdb 格式实现的
+  （`server/ipRegionOffline.ts`），加载时校验 sha256，见 `server/assets/ip2region/NOTICE.txt`
+
+Copyright (c) 2015 Lionsoul<chenxin619315@gmail.com>

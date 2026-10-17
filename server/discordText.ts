@@ -11,6 +11,13 @@
 */
 
 export const DISCORD_MESSAGE_MAX_LENGTH = 2000;
+/**
+ * 一条通知最多拆成几条私信（照上游 poouo/Forwardx discordBot 的做法：长内容分几条发，不再截断）。
+ * 再多就是刷屏了：最后一条注明「完整内容请到面板查看」。每条之间的限流由 DiscordRestClient 的 429 处理兜着。
+ */
+export const DISCORD_MESSAGE_MAX_CHUNKS = 10;
+/** 转换后整段的上限：10 条 × 2000 字。 */
+export const DISCORD_TEXT_MAX_TOTAL_LENGTH = DISCORD_MESSAGE_MAX_LENGTH * DISCORD_MESSAGE_MAX_CHUNKS;
 
 const NAMED_ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: "\"", apos: "'", nbsp: " " };
 
@@ -55,8 +62,8 @@ const WRAP: Record<string, string> = {
 
 type Frame = { tag: string; out: string; href?: string; raw?: boolean };
 
-/** Telegram HTML → Discord Markdown（不超过 2000 字，超了在换行处截断并注明）。 */
-export function telegramHtmlToDiscordText(html: string, maxLength = DISCORD_MESSAGE_MAX_LENGTH) {
+/** Telegram HTML → Discord Markdown（整段；发送时 splitDiscordText 再拆成每条 ≤ 2000 字）。 */
+export function telegramHtmlToDiscordText(html: string, maxLength = DISCORD_TEXT_MAX_TOTAL_LENGTH) {
   const source = String(html ?? "");
   const stack: Frame[] = [{ tag: "#root", out: "" }];
   const top = () => stack[stack.length - 1];
@@ -136,4 +143,62 @@ export function truncateDiscordText(text: string, maxLength = DISCORD_MESSAGE_MA
   if (/[\ud800-\udbff]$/.test(head)) head = head.slice(0, -1);
   if (/(^|[^\\])\\$/.test(head)) head = head.slice(0, -1);
   return `${head}${TRUNCATED_NOTICE}`;
+}
+
+/** 切在 cut 之前：别把代理对、转义反斜杠劈成两半。 */
+function safeCut(text: string, cut: number) {
+  let end = Math.max(1, Math.min(cut, text.length));
+  if (end < text.length && /[\ud800-\udbff]/.test(text[end - 1])) end -= 1;
+  // 结尾是奇数个反斜杠：最后一个是在转义下一个字，留给下一条
+  let slashes = 0;
+  while (end - slashes - 1 >= 0 && text[end - slashes - 1] === "\\") slashes += 1;
+  if (slashes % 2 === 1 && end > 1) end -= 1;
+  return end;
+}
+
+const CODE_FENCE = "```";
+
+/**
+ * 把一段 Discord 文字拆成每条 ≤ maxLength 的几条，按顺序发。
+ * 优先切在换行处（换行本身丢掉，拼回去用 "\n"）；整段没换行就硬切（不劈代理对 / 转义）。
+ * 代码块（```）跨了两条：前一条补上收尾，后一条重新开，免得后面的字全被当成代码。
+ * 超过 maxChunks 条：最后一条截断并注明去面板看完整内容。
+ */
+export function splitDiscordText(input: string, maxLength = DISCORD_MESSAGE_MAX_LENGTH, maxChunks = DISCORD_MESSAGE_MAX_CHUNKS) {
+  const text = String(input ?? "");
+  if (!text.trim()) return [];
+  const fenceReserve = CODE_FENCE.length + 1;
+  const chunks: string[] = [];
+  let rest = text;
+  let reopenFence = false;
+  while (rest.length > 0) {
+    const prefix: string = reopenFence ? `${CODE_FENCE}\n` : "";
+    const budget = maxLength - prefix.length - fenceReserve;
+    let piece: string;
+    let consumed: number;
+    if (prefix.length + rest.length <= maxLength) {
+      piece = rest;
+      consumed = rest.length;
+    } else {
+      const newline = rest.lastIndexOf("\n", budget);
+      if (newline >= budget * 0.5) {
+        piece = rest.slice(0, newline);
+        consumed = newline + 1;
+      } else {
+        consumed = safeCut(rest, budget);
+        piece = rest.slice(0, consumed);
+      }
+    }
+    let chunk: string = prefix + piece;
+    const openFence: boolean = ((chunk.match(/```/g) || []).length % 2) === 1;
+    if (openFence && consumed < rest.length) chunk += `\n${CODE_FENCE}`;
+    reopenFence = openFence && consumed < rest.length;
+    rest = rest.slice(consumed);
+    if (chunk.trim()) chunks.push(chunk);
+    if (chunks.length === maxChunks && rest.length > 0) {
+      chunks[chunks.length - 1] = truncateDiscordText(`${chunks[chunks.length - 1]}\n${rest}`, maxLength);
+      break;
+    }
+  }
+  return chunks;
 }

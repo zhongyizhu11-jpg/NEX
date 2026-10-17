@@ -1,4 +1,5 @@
 import crypto, { type KeyObject } from "node:crypto";
+import { PAYMENT_ERRORS } from "../shared/paymentErrors";
 
 /*
   支付宝 / 微信支付的 RSA 密钥导入（照上游 poouo/Forwardx 的 paymentCrypto 移植）。
@@ -12,11 +13,12 @@ import crypto, { type KeyObject } from "node:crypto";
 
 export type PaymentSigningProvider = "alipay" | "wxpay";
 
+// 文案和 shared/paymentErrors.ts 共用一份：下单失败归类（server/paymentFailureMessage.ts）只放行那里的固定说明。
 export const PAYMENT_KEY_ERRORS = {
-  alipayPrivateKey: "支付宝应用私钥无效，请填写 RSA 私钥（PKCS#1 或 PKCS#8），不要填写公钥或证书。",
-  alipayPublicKey: "支付宝公钥无效，请填写 RSA 公钥，不要填写应用私钥。",
-  wxpayPrivateKey: "微信支付商户私钥无效，请填写未加密的 RSA 私钥（PKCS#1 或 PKCS#8）。",
-  wxpayPublicKey: "微信支付公钥或证书无效，请检查平台公钥或平台证书。",
+  alipayPrivateKey: PAYMENT_ERRORS.alipayPrivateKey,
+  alipayPublicKey: PAYMENT_ERRORS.alipayPublicKey,
+  wxpayPrivateKey: PAYMENT_ERRORS.wxpayPrivateKey,
+  wxpayPublicKey: PAYMENT_ERRORS.wxpayPublicKey,
 } as const;
 
 export class PaymentKeyConfigurationError extends Error {

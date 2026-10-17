@@ -27,7 +27,7 @@ import {
   userHostPermissions,
   users,
 } from "../../drizzle/schema";
-import { executeRaw, getDb, insertAndGetId, nowDate, queryRaw, rawAffectedRows, refreshDatabasePoolSettings, withDatabaseTransaction } from "../dbRuntime";
+import { afterDatabaseCommit, executeRaw, getDb, insertAndGetId, nowDate, queryRaw, rawAffectedRows, refreshDatabasePoolSettings, withDatabaseTransaction } from "../dbRuntime";
 import { boolValue, inList, quoteIdentifier, sqlCountAll } from "../dbCompat";
 import { recordRuleEntryDomainCleanupsBeforeDelete } from "./ruleEntryDomainRepository";
 import { signalRuleEntryDomainCleanup } from "../ruleEntryDomainSignals";
@@ -757,7 +757,7 @@ export async function deleteHost(id: number) {
   // 这台机器上的规则整批删行：先把它们发布过的专属域名记进待删表（见 ruleEntryDomainRepository）。
   const retiredRuleDomains = await recordRuleEntryDomainCleanupsBeforeDelete({ hostId: id }).catch(() => 0);
   await db.delete(forwardRules).where(eq(forwardRules.hostId, id));
-  if (retiredRuleDomains > 0) signalRuleEntryDomainCleanup("host-deleted");
+  if (retiredRuleDomains > 0) await afterDatabaseCommit(() => signalRuleEntryDomainCleanup("host-deleted"));
   await db.delete(forwardRuleTunnelExits).where(eq(forwardRuleTunnelExits.exitHostId, id));
   await db.delete(agentTokens).where(eq(agentTokens.hostId, id));
   await db.delete(userHostPermissions).where(eq(userHostPermissions.hostId, id));
@@ -789,10 +789,14 @@ export async function deleteHost(id: number) {
     eq(trafficBillingConfigs.resourceId, id),
   ));
   await db.delete(hosts).where(eq(hosts.id, id));
-  removePresenceCapableHost(id);
-  invalidateAgentAuthTokenCandidates();
   if (before) await recordConfigAuditEvent({ resourceType: "host", resourceId: id, hostId: id, action: "delete", before });
-  await refreshDatabasePoolSettings().catch(() => undefined);
+  // 在删主机的事务里调用时（server/hostDeletion.ts），内存里的在线表、Token 缓存和连接池要等提交以后再动，
+  // 回滚了主机还在。不在事务里就是立刻执行。
+  await afterDatabaseCommit(async () => {
+    removePresenceCapableHost(id);
+    invalidateAgentAuthTokenCandidates();
+    await refreshDatabasePoolSettings().catch(() => undefined);
+  });
 }
 
 /**
@@ -1291,15 +1295,25 @@ export async function getHostAgentPresenceById(id: number) {
 
 export async function getHostRuleDeleteBlockers(hostId: number) {
   const db = await getDb();
-  if (!db) return {
-    ruleCount: 0,
-    ruleOwners: [],
-    managedRuleCount: 0,
-    managedRuleOwners: [],
-    pendingCleanupCount: 0,
-  };
+  if (!db) return countHostRuleDeleteBlockers(hostId);
   await repairPortForwardRuleHostReferences();
   await repairForwardGroupRuleIntegrity(hostId);
+  return countHostRuleDeleteBlockers(hostId);
+}
+
+/**
+ * 只数、不修：getHostRuleDeleteBlockers 先修引用（会拿转发组的同步锁）再数，删主机的事务里
+ * 不能再拿那些锁，所以事务里只调这一半（见 server/hostDeletion.ts）。
+ */
+export async function countHostRuleDeleteBlockers(hostId: number) {
+  const db = await getDb();
+  if (!db) return {
+    ruleCount: 0,
+    ruleOwners: [] as Array<{ userId: number; username: string | null; name: string | null; ruleCount: number }>,
+    managedRuleCount: 0,
+    managedRuleOwners: [] as Array<{ userId: number; username: string | null; name: string | null; ruleCount: number }>,
+    pendingCleanupCount: 0,
+  };
   const managedRuleSql = sql`
     ${forwardRules.forwardGroupId} IS NOT NULL
     OR ${forwardRules.forwardGroupRuleId} IS NOT NULL

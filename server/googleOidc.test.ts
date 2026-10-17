@@ -8,6 +8,9 @@ import {
   GoogleAuthStateStore,
   GoogleJwksCache,
   GoogleOidcError,
+  GOOGLE_MAX_CONCURRENT_EXCHANGES,
+  GOOGLE_RESPONSE_MAX_BYTES,
+  googleConfigFingerprint,
   jwksMaxAgeMs,
   sha256Base64Url,
   verifyGoogleIdToken,
@@ -270,4 +273,85 @@ test("JWKS 拉不到或没有能用的钥匙：当作令牌无效", async () => 
   await rejectsWith(down.getKey("k1"), "token_invalid", /jwks/);
   const empty = new GoogleJwksCache({ fetchImpl: (async () => new Response(JSON.stringify({ keys: [{ kid: "k", kty: "EC" }] }), { status: 200 })) as any });
   await rejectsWith(empty.getKey("k"), "token_invalid", /no usable keys/);
+});
+
+test("换票和拉 JWKS 都不跟随重定向（redirect: error）", async () => {
+  const seen: Array<{ url: string; redirect: RequestRedirect | undefined }> = [];
+  await exchangeGoogleAuthorizationCode({
+    code: "c", codeVerifier: "v", clientId: CLIENT_ID, clientSecret: "s", redirectUri: "https://x/cb",
+    fetchImpl: (async (url: string, init?: RequestInit) => {
+      seen.push({ url, redirect: init?.redirect });
+      return new Response(JSON.stringify({ id_token: "a.b.c" }), { status: 200 });
+    }) as any,
+  });
+  const jwks = new GoogleJwksCache({
+    fetchImpl: (async (url: string, init?: RequestInit) => {
+      seen.push({ url, redirect: init?.redirect });
+      return new Response(JSON.stringify({ keys: [jwkOf(signingKey.publicKey, "k1")] }), { status: 200 });
+    }) as any,
+  });
+  await jwks.getKey("k1");
+  assert.deepEqual(seen.map((item) => item.redirect), ["error", "error"]);
+});
+
+test("Google 的响应超过 128KB 就不读了", async () => {
+  assert.equal(GOOGLE_RESPONSE_MAX_BYTES, 128 * 1024);
+  const huge = JSON.stringify({ id_token: "a.b.c", padding: "x".repeat(GOOGLE_RESPONSE_MAX_BYTES) });
+  await rejectsWith(exchangeGoogleAuthorizationCode({
+    code: "c", codeVerifier: "v", clientId: CLIENT_ID, clientSecret: "s", redirectUri: "https://x/cb",
+    fetchImpl: (async () => new Response(huge, { status: 200 })) as any,
+  }), "exchange_failed", /too large/);
+  // 不带 Content-Length、一点点流过来的也一样按实际读到的字节数截住。
+  const streamed = new ReadableStream({
+    start(controller) {
+      for (let i = 0; i < 40; i += 1) controller.enqueue(new TextEncoder().encode("x".repeat(4096)));
+      controller.close();
+    },
+  });
+  await rejectsWith(exchangeGoogleAuthorizationCode({
+    code: "c", codeVerifier: "v", clientId: CLIENT_ID, clientSecret: "s", redirectUri: "https://x/cb",
+    fetchImpl: (async () => new Response(streamed, { status: 200 })) as any,
+  }), "exchange_failed", /too large/);
+  const bigKeys = new GoogleJwksCache({
+    fetchImpl: (async () => new Response(JSON.stringify({ keys: [], padding: "x".repeat(GOOGLE_RESPONSE_MAX_BYTES) }), { status: 200 })) as any,
+  });
+  await rejectsWith(bigKeys.getKey("k1"), "token_invalid", /too large/);
+});
+
+test("同时最多 32 个换票请求，多出来的直接拒绝（不排队）", async () => {
+  assert.equal(GOOGLE_MAX_CONCURRENT_EXCHANGES, 32);
+  const releases: Array<() => void> = [];
+  const slowFetch = (async () => {
+    await new Promise<void>((resolve) => releases.push(resolve));
+    return new Response(JSON.stringify({ id_token: "a.b.c" }), { status: 200 });
+  }) as any;
+  const exchange = () => exchangeGoogleAuthorizationCode({
+    code: "c", codeVerifier: "v", clientId: CLIENT_ID, clientSecret: "s", redirectUri: "https://x/cb", fetchImpl: slowFetch,
+  });
+  const pending = Array.from({ length: GOOGLE_MAX_CONCURRENT_EXCHANGES }, exchange);
+  await rejectsWith(exchange(), "rate_limited");
+  while (releases.length < GOOGLE_MAX_CONCURRENT_EXCHANGES) await new Promise((resolve) => setImmediate(resolve));
+  for (const release of releases.splice(0)) release();
+  await Promise.all(pending);
+  // 名额还回来了。
+  const again = exchange();
+  while (releases.length < 1) await new Promise((resolve) => setImmediate(resolve));
+  releases.splice(0).forEach((release) => release());
+  assert.deepEqual(await again, { idToken: "a.b.c" });
+  // 出错的那次也要还名额。
+  for (let i = 0; i < GOOGLE_MAX_CONCURRENT_EXCHANGES + 1; i += 1) {
+    await rejectsWith(exchangeGoogleAuthorizationCode({
+      code: "c", codeVerifier: "v", clientId: CLIENT_ID, clientSecret: "s", redirectUri: "https://x/cb",
+      fetchImpl: (async () => { throw new TypeError("fetch failed"); }) as any,
+    }), "exchange_failed");
+  }
+});
+
+test("配置指纹：客户端 ID、密钥、回调地址任何一项变了都不一样", () => {
+  const base = { clientId: CLIENT_ID, clientSecret: "s1", redirectUri: "https://panel.example.com/api/auth/google/callback" };
+  assert.equal(googleConfigFingerprint(base), googleConfigFingerprint({ ...base }));
+  assert.notEqual(googleConfigFingerprint(base), googleConfigFingerprint({ ...base, clientSecret: "s2" }));
+  assert.notEqual(googleConfigFingerprint(base), googleConfigFingerprint({ ...base, clientId: "other" }));
+  assert.notEqual(googleConfigFingerprint(base), googleConfigFingerprint({ ...base, redirectUri: "https://other.example.com/api/auth/google/callback" }));
+  assert.ok(!googleConfigFingerprint(base).includes("s1"), "指纹里不能看出密钥");
 });

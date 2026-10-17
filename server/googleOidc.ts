@@ -16,6 +16,10 @@
     虽然令牌是我们自己经 TLS 从 Google 的 token 端点拿的，签名还是要验 —— 多一道不贵。
 
   - 令牌（code、id_token、access_token）只在内存里过一下：不进日志、不进 URL、不落库。
+
+  - 对 Google 的出站请求（照上游 poouo/Forwardx server/googleOAuth.ts 收紧）：不跟随重定向
+    （redirect: "error"）、响应最多读 128KB、同时最多 32 个换票请求（多出来的直接拒绝，不排队）。
+    发起时记下当时的配置指纹（客户端 ID / 密钥 / 回调地址的哈希），回调时配置已经变了就不认这次登录。
 */
 import crypto from "node:crypto";
 import { pruneMapEntries, setBoundedMapValue } from "./boundedCache";
@@ -31,10 +35,14 @@ export const GOOGLE_STATE_TTL_MS = 10 * 60 * 1000;
 export const GOOGLE_STATE_MAX_ENTRIES = 10_000;
 export const GOOGLE_CLOCK_SKEW_SECONDS = 60;
 const GOOGLE_HTTP_TIMEOUT_MS = 10_000;
+/** Google 的 token / JWKS 响应只有几 KB；多出来的不读，免得被一个异常的大响应拖住。 */
+export const GOOGLE_RESPONSE_MAX_BYTES = 128 * 1024;
+/** 同时在换票的回调数上限：到了就直接拒绝，不排队（排队只会攒一堆挂着的登录请求）。 */
+export const GOOGLE_MAX_CONCURRENT_EXCHANGES = 32;
 
 /** 失败原因只是一个短码，调用方据此跳回登录页；message 只给日志看（不含令牌）。 */
 export class GoogleOidcError extends Error {
-  constructor(public readonly code: "state_invalid" | "exchange_failed" | "token_invalid" | "email_unverified", message: string) {
+  constructor(public readonly code: "state_invalid" | "exchange_failed" | "token_invalid" | "email_unverified" | "rate_limited", message: string) {
     super(message);
     this.name = "GoogleOidcError";
   }
@@ -52,6 +60,49 @@ export function sha256Base64Url(value: string) {
 export function createPkcePair() {
   const verifier = randomUrlToken(32);
   return { verifier, challenge: sha256Base64Url(verifier), method: "S256" as const };
+}
+
+/**
+ * 发起登录时的 Google 配置指纹。回调时重新算一遍：管理员中途换了客户端 / 密钥 / 面板地址，
+ * 这次登录就作废（不拿旧配置下拿到的授权码去换票）。只存哈希，看不出密钥。
+ */
+export function googleConfigFingerprint(config: { clientId: string; clientSecret: string; redirectUri: string }) {
+  return crypto.createHash("sha256")
+    .update(JSON.stringify([config.clientId, config.clientSecret, config.redirectUri]))
+    .digest("base64url");
+}
+
+/** 读响应正文，最多 maxBytes 字节（按实际读到的算，不信 Content-Length）；超了抛错并丢掉剩下的。 */
+export async function readCappedResponseText(response: Response, maxBytes = GOOGLE_RESPONSE_MAX_BYTES) {
+  const declared = Number(response.headers.get("content-length") || 0);
+  if (declared > maxBytes) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new Error("response too large");
+  }
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => undefined);
+      throw new Error("response too large");
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString("utf8");
+}
+
+async function readCappedJson(response: Response) {
+  const text = await readCappedResponseText(response);
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
 }
 
 export function timingSafeEqualText(a: string, b: string) {
@@ -77,6 +128,8 @@ export type GoogleAuthStateEntry = {
   appFlowId: string | null;
   /** 从邀请链接进来时的邀请码（已过 sanitizeGoogleInviteCode），只在 Google 注册新账号时用。 */
   inviteCode?: string | null;
+  /** 发起时的配置指纹（googleConfigFingerprint）；回调时配置变了就不认。 */
+  configHash?: string | null;
   createdAt: number;
   expiresAt: number;
 };
@@ -118,6 +171,7 @@ export class GoogleAuthStateStore {
       userId: input.userId,
       appFlowId: input.appFlowId,
       inviteCode: input.inviteCode ?? null,
+      configHash: input.configHash ?? null,
       codeVerifier: pkce.verifier,
       nonce,
       bindingHash: sha256Base64Url(input.binding),
@@ -172,8 +226,22 @@ export function buildGoogleAuthorizationUrl(input: {
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
+let activeExchanges = 0;
+
 /** 用授权码 + code_verifier 换 ID Token。只返回 id_token；access_token 用不上，直接丢掉。 */
-export async function exchangeGoogleAuthorizationCode(input: {
+export async function exchangeGoogleAuthorizationCode(input: Parameters<typeof exchangeGoogleAuthorizationCodeUnbounded>[0]) {
+  if (activeExchanges >= GOOGLE_MAX_CONCURRENT_EXCHANGES) {
+    throw new GoogleOidcError("rate_limited", "too many concurrent token exchanges");
+  }
+  activeExchanges += 1;
+  try {
+    return await exchangeGoogleAuthorizationCodeUnbounded(input);
+  } finally {
+    activeExchanges -= 1;
+  }
+}
+
+async function exchangeGoogleAuthorizationCodeUnbounded(input: {
   code: string;
   codeVerifier: string;
   clientId: string;
@@ -195,6 +263,7 @@ export async function exchangeGoogleAuthorizationCode(input: {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
       body: body.toString(),
+      redirect: "error",
       signal: AbortSignal.timeout(GOOGLE_HTTP_TIMEOUT_MS),
     });
   } catch (error) {
@@ -202,9 +271,9 @@ export async function exchangeGoogleAuthorizationCode(input: {
   }
   let data: any = null;
   try {
-    data = await response.json();
+    data = await readCappedJson(response);
   } catch {
-    data = null;
+    throw new GoogleOidcError("exchange_failed", "token endpoint response too large");
   }
   if (!response.ok) {
     // Google 的错误体是 { error, error_description }，不含令牌，可以记下 error 码。
@@ -252,13 +321,19 @@ export class GoogleJwksCache {
       try {
         response = await (this.options.fetchImpl || fetch)(this.options.url || GOOGLE_JWKS_URL, {
           headers: { Accept: "application/json" },
+          redirect: "error",
           signal: AbortSignal.timeout(GOOGLE_HTTP_TIMEOUT_MS),
         });
       } catch (error) {
         throw new GoogleOidcError("token_invalid", `jwks unreachable: ${error instanceof Error ? error.name : "error"}`);
       }
       if (!response.ok) throw new GoogleOidcError("token_invalid", `jwks http_${response.status}`);
-      const data: any = await response.json().catch(() => null);
+      let data: any = null;
+      try {
+        data = await readCappedJson(response);
+      } catch {
+        throw new GoogleOidcError("token_invalid", "jwks response too large");
+      }
       const next = new Map<string, crypto.KeyObject>();
       for (const jwk of Array.isArray(data?.keys) ? (data.keys as Jwk[]) : []) {
         if (!jwk?.kid || jwk.kty !== "RSA" || !jwk.n || !jwk.e) continue;

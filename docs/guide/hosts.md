@@ -111,7 +111,7 @@ mimic 是基于 eBPF 的 UDP 混淆方案（来自 [hack3ric/mimic](https://gith
 |------|------|------|
 | 公网 IPv4 / IPv6 | Agent 强制用 IPv4 / IPv6 各请求一次 `ipv4.icanhazip.com` / `ipv6.icanhazip.com`（不通再试 ipify），不走代理 | 「通 · 38 ms」就是这一族能出站，地址是对方看到的出口地址；「不通」悬停看原因。另外会看网卡上有没有全局 IPv6 地址：有地址却不通，多半是路由或防火墙没放行 |
 | 双栈 | 由上面两项得出 | 双栈 / 仅 IPv4 / 仅 IPv6 / 都不通 |
-| 运营商 / ASN、组织 | 跟地区一起由定位服务给（ipapi.co / ip-api.com / ipwho.is），不需要 Agent | 例如「AS13335 · Cloudflare」。换了 IP 会重新查 |
+| 运营商 / ASN、组织 | 跟地区一起由定位服务给（ipapi.co / ipwho.is，只走 HTTPS），不需要 Agent | 例如「AS13335 · Cloudflare」。换了 IP 会重新查 |
 | 25 端口出站 | 连 Gmail、iCloud 的收信服务器的 25 端口（5 秒超时），读到欢迎语就发 `QUIT` 断开，**不发任何邮件命令** | 可出站 / 被拦截（连接被拒绝或重置）/ 超时（多半被封） |
 | DNSBL 黑名单 | 用主机自己的系统解析器查公网 IPv4 在 Spamhaus ZEN、SpamCop、Barracuda、CBL 里的记录 | 未列入 / 列入 N 个列表（列出名字）/ 无法查询 |
 

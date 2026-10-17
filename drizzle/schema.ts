@@ -235,6 +235,9 @@ export const users = table("users", {
   inviteCode: varchar("inviteCode", { length: 32 }).unique(),
   // 邀请人：注册时凭邀请码绑定一次，用户侧接口改不了；管理员可以在用户管理里改 / 清。
   inviterId: int("inviterId"),
+  // 绑定邀请人的时刻（注册时 / 管理员改的时候写，清掉时清空）。这之前下的单不返利；
+  // 老数据是 null，按注册时刻算（见 billingRepository 的 creditReferralCommissionUnprotected）。
+  inviterBoundAt: epoch("inviterBoundAt"),
 });
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;

@@ -35,6 +35,8 @@ import HostCard, { HostActionButtons } from "@/components/hosts/HostCard";
 // 本页 902 行已有一个同名的统计小卡，这里取别名区分：这个是主机列表里的实体卡
 import HostEntitySummaryCard from "@/components/hosts/HostSummaryCard";
 import HostDetailDialog from "@/components/hosts/HostDetailDialog";
+import { hostDeleteNeedsOfflineConfirmation, offlineCleanupConfirmOptions } from "@/components/hosts/hostDeletion";
+import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 import OpsHostsMenuItems from "@/features/ops/slots/HostsMenuItems";
 import { FxpRuntimeBadge, fxpRuntimeDetailText } from "@/components/hosts/FxpRuntimeBadge";
 import { hostNeedsAgentUpgrade } from "@shared/fxpRuntime";
@@ -1555,6 +1557,7 @@ const HostTableRow = memo(function HostTableRow({
 
 function HostsContent() {
   const { user } = useAuth();
+  const confirmDialog = useConfirmDialog();
   const utils = trpc.useUtils();
   const pageVisible = usePageVisible();
   const isMobileViewport = useIsMobile();
@@ -1998,7 +2001,17 @@ function HostsContent() {
       utils.hosts.summary.invalidate();
       toast.success("主机已删除");
     },
-    onError: (err) => toast.error(err.message || "删除失败"),
+    onError: async (err, variables) => {
+      // 离线主机上还有待清理的规则：问一句，同意了再带确认删一次（见 components/hosts/hostDeletion.ts）。
+      if (hostDeleteNeedsOfflineConfirmation(err) && !variables.confirmOfflineCleanup) {
+        const host = (hosts || []).find((item: any) => Number(item.id) === Number(variables.id));
+        if (await confirmDialog(offlineCleanupConfirmOptions(host?.name, err.message))) {
+          deleteMutation.mutate({ id: variables.id, confirmOfflineCleanup: true });
+        }
+        return;
+      }
+      toast.error(err.message || "删除失败");
+    },
   });
 
   const resetHostTrafficMutation = trpc.hosts.resetTraffic.useMutation({
