@@ -137,6 +137,7 @@ import {
   normalizeForwardGroupHealthCheckMethod,
   type ForwardGroupHealthCheckMethod,
 } from "@shared/forwardGroupHealthCheck";
+import { LatencyHistoryDayStrip } from "@/components/LatencyHistoryDays";
 import {
   BANDWIDTH_AGGREGATION_STRATEGIES,
   BANDWIDTH_AGGREGATION_STRATEGY_HINTS,
@@ -549,6 +550,8 @@ function ForwardGroupLatencyDialog({
     { groupId, hours: timeRangeHours },
     { enabled: open, refetchInterval: pollingInterval("slow", open), refetchOnMount: "always" },
   );
+  // 近 30 天按天的色块（一天一行的汇总，见 shared/latencyHistory.ts）。
+  const history = trpc.forwardGroups.latencyHistory.useQuery({ groupId }, { enabled: open, staleTime: 60_000, refetchOnWindowFocus: false });
   const cachedData = groupLatencySeriesCache.get(groupId);
   const rawSeriesData = (data ?? cachedData) as GroupLatencySeriesDatum[] | undefined;
   const waitForFreshSeries = open && isFetching && !isLatencySeriesCacheFresh(rawSeriesData);
@@ -659,6 +662,7 @@ function ForwardGroupLatencyDialog({
           counterStatistics={counterStatistics ?? null}
           description="统计各跳实际的 TCP / Ping 探测（含已上报的备用路径），不等于端到端业务丢包。"
         />
+        <LatencyHistoryDayStrip summaries={history.data} loading={history.isLoading} />
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>关闭</Button>

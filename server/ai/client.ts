@@ -53,6 +53,8 @@ type CircuitState = {
 
 const TRANSIENT_HTTP_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
 const RESPONSE_FORMAT_UNSUPPORTED_STATUS = new Set([400, 404, 415, 422]);
+/** 结构化 JSON 回复的正文上限。超过就当作异常响应，不再往内存里读。 */
+export const AI_RESPONSE_MAX_BYTES = 256 * 1024;
 
 function emptyMetrics(): AiClientMetrics {
   return {
@@ -154,12 +156,46 @@ export class ForwardxAiClient {
     this.circuits.delete(key);
   }
 
+  /**
+   * 请求和读响应体共用同一个截止时间。原来拿到响应头就清掉了计时器，再去 response.text() /
+   * json() 读正文 —— 服务商吐完头之后卡住不发正文（或者一直往下吐），这个请求就永远挂着，
+   * 连带占着 AI 助手的并发名额。正文另外限 256KB：结构化 JSON 回复远到不了这个量（上游 v2.3.282）。
+   */
   private async fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        reject(new AiClientError("AI 请求超时", "timeout", { retryable: true }));
+      }, timeoutMs);
+    });
+    const read = (async () => {
+      const response = await this.fetchImpl(url, { ...init, signal: controller.signal });
+      const reader = response.body?.getReader();
+      const chunks: Uint8Array[] = [];
+      let length = 0;
+      if (reader) {
+        while (true) {
+          const part = await reader.read();
+          if (part.done) break;
+          length += part.value.byteLength;
+          if (length > AI_RESPONSE_MAX_BYTES) {
+            controller.abort();
+            void reader.cancel().catch(() => undefined);
+            throw new AiClientError("AI 响应过长", "invalid_response");
+          }
+          chunks.push(part.value);
+        }
+      }
+      return { ok: response.ok, status: response.status, text: Buffer.concat(chunks).toString("utf8") };
+    })();
+    // 超时先到时 read 之后还会因为 abort 被拒绝，接住免得变成未处理的 rejection。
+    read.catch(() => undefined);
     try {
-      return await this.fetchImpl(url, { ...init, signal: controller.signal });
+      return await Promise.race([timeout, read]);
     } catch (error) {
+      if (error instanceof AiClientError) throw error;
       if (controller.signal.aborted) {
         throw new AiClientError("AI 请求超时", "timeout", { retryable: true });
       }
@@ -209,7 +245,7 @@ export class ForwardxAiClient {
         }, remainingMs);
 
         if (!response.ok) {
-          const responseText = await response.text().catch(() => "");
+          const responseText = response.text;
           if (includeResponseFormat && RESPONSE_FORMAT_UNSUPPORTED_STATUS.has(response.status)) {
             includeResponseFormat = false;
             this.metrics.compatibilityFallbacks += 1;
@@ -228,7 +264,8 @@ export class ForwardxAiClient {
           );
         }
 
-        const payload = await response.json().catch(() => null) as any;
+        let payload: any = null;
+        try { payload = JSON.parse(response.text); } catch { /* 格式不对交给下面的 schema 校验报错 */ }
         const content = String(payload?.choices?.[0]?.message?.content || "");
         const parsedJson = extractJsonObject(content);
         const validated = request.schema.safeParse(parsedJson);

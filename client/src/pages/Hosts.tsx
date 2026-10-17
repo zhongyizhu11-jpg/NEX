@@ -60,6 +60,7 @@ import { parseHostOs } from "@shared/hostOs";
 import { PersistentPagination, usePersistentPageRequest, useServerPagination } from "@/components/PersistentPagination";
 import { SortableDragHandle, SortableItem, SortableReorderContext, useSortableReorder } from "@/components/SortableDragHandle";
 import { Checkbox } from "@/components/ui/checkbox";
+import { HOST_TRAFFIC_FAILOVER_DEFAULT_PERCENT, hostTrafficExcluded, normalizeHostTrafficFailoverPercent } from "@shared/hostTrafficPolicy";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -582,6 +583,8 @@ type HostFormData = {
   stoppedAt: string;
   trafficLimitGb: string;
   trafficMeasureMode: HostTrafficMeasureMode;
+  trafficFailoverEnabled: boolean;
+  trafficFailoverThresholdPercent: number;
   billingCycleMonths: HostBillingCycleMonths;
   billingMonth: number;
   billingDay: number;
@@ -619,6 +622,8 @@ const defaultFormData: HostFormData = {
   stoppedAt: "",
   trafficLimitGb: "",
   trafficMeasureMode: "both",
+  trafficFailoverEnabled: false,
+  trafficFailoverThresholdPercent: HOST_TRAFFIC_FAILOVER_DEFAULT_PERCENT,
   billingCycleMonths: 1,
   billingMonth: 1,
   billingDay: 1,
@@ -2121,6 +2126,8 @@ function HostsContent() {
       stoppedAt: formatDateTimeLocal(host.stoppedAt),
       trafficLimitGb: formatTrafficLimitGbInput(host.trafficLimit),
       trafficMeasureMode: normalizeHostTrafficMeasureMode(host.trafficMeasureMode),
+      trafficFailoverEnabled: !!host.trafficFailoverEnabled,
+      trafficFailoverThresholdPercent: normalizeHostTrafficFailoverPercent(host.trafficFailoverThresholdPercent),
       billingCycleMonths: normalizeHostBillingCycleMonths(host.billingCycleMonths),
       billingMonth: clampBillingMonth(host.billingMonth),
       billingDay: clampBillingDay(host.billingDay),
@@ -2218,6 +2225,10 @@ function HostsContent() {
       }
     }
     const trafficLimitBytes = Math.round(trafficLimitGb * HOST_TRAFFIC_GB_BYTES);
+    if (user?.role === "admin" && form.trafficFailoverEnabled && trafficLimitBytes <= 0) {
+      toast.error("开启流量故障转移需要先设置大于 0 的套餐流量");
+      return;
+    }
     const trafficAlertThresholdPercent = clampTrafficAlertThresholdPercent(form.trafficAlertThresholdPercent);
     const renewalReminderDays = clampRenewalReminderDays(form.renewalReminderDays);
     const trafficConfigPayload = user?.role === "admin"
@@ -2226,6 +2237,8 @@ function HostsContent() {
           stoppedAt: stoppedAt ? stoppedAt.toISOString() : null,
           trafficLimit: trafficLimitBytes,
           trafficMeasureMode: form.trafficMeasureMode,
+          trafficFailoverEnabled: form.trafficFailoverEnabled,
+          trafficFailoverThresholdPercent: normalizeHostTrafficFailoverPercent(form.trafficFailoverThresholdPercent),
           billingCycleMonths: normalizeHostBillingCycleMonths(form.billingCycleMonths),
           billingMonth: clampBillingMonth(form.billingMonth),
           billingDay: clampBillingDay(form.billingDay),
@@ -3617,6 +3630,39 @@ function HostsContent() {
                             </SelectContent>
                           </Select>
                         </FormField>
+                      </div>
+                      <div className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between" data-host-traffic-failover-setting="">
+                        <div className="min-w-0 space-y-0.5">
+                          <Label className="text-sm font-medium">流量故障转移</Label>
+                          {/*
+                            上游 v2.3.281。和下面的「流量耗尽提醒」是两回事：提醒只发消息，这个会真的
+                            把这台从组里摘出去（转发组、入口组、出口组、多出口隧道），组里换别的成员顶上。
+                            只改运行时，成员和端口都不删；流量重置（手动或每月自动）或关掉这个开关就恢复。
+                          */}
+                          <p className="text-xs text-muted-foreground">用到套餐流量的这个比例后，暂停这台参与转发组和隧道的入口 / 出口组，组里换别的成员顶上；流量重置或关闭后恢复，不删成员配置。</p>
+                          {editingHostRow && hostTrafficExcluded(editingHostRow) ? (
+                            <p className="text-xs text-[var(--fx-warn-text)]">现在已到阈值，正暂停参与组调度（主机本身照常在线，独立规则不受影响）。</p>
+                          ) : null}
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2">
+                          <div className="flex h-8 w-20 overflow-hidden rounded-md border border-input bg-background focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2">
+                            <Input aria-label="流量故障转移阈值（%）"
+                              className="h-8 rounded-none border-0 px-2 text-right focus-visible:ring-0 focus-visible:ring-offset-0"
+                              type="number"
+                              min={1}
+                              max={100}
+                              step={1}
+                              disabled={!form.trafficFailoverEnabled}
+                              value={form.trafficFailoverThresholdPercent}
+                              onChange={(e) => setForm({ ...form, trafficFailoverThresholdPercent: normalizeHostTrafficFailoverPercent(e.target.value) })}
+                            />
+                            <span className="flex h-8 shrink-0 items-center border-l border-border/60 bg-muted/50 px-1.5 text-sm text-muted-foreground">%</span>
+                          </div>
+                          <Checkbox aria-label="流量故障转移"
+                            checked={form.trafficFailoverEnabled}
+                            onCheckedChange={(checked) => setForm({ ...form, trafficFailoverEnabled: checked })}
+                          />
+                        </div>
                       </div>
                       <div className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
                         <div className="min-w-0 space-y-0.5">

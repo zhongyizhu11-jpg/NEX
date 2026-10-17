@@ -229,6 +229,7 @@ export const ESSENTIAL_MIGRATION_OMITTED_TABLES = new Set<(typeof MIGRATION_TABL
   "host_probe_service_stats",
   "tunnel_latency_stats",
   "forward_group_latency_stats",
+  "latency_daily_stats",
   "traffic_stats",
   "traffic_stat_buckets",
   "tcping_stats",
@@ -784,6 +785,7 @@ const IMPORT_TABLE_ORDER = [
   "forward_rule_traffic_counters",
   "tunnel_latency_stats",
   "forward_group_latency_stats",
+  "latency_daily_stats",
   "traffic_stats",
   "traffic_stat_buckets",
   "agent_traffic_reports",
@@ -847,6 +849,7 @@ const BEST_EFFORT_MIGRATION_TABLES = new Set<MigrationTableName>([
   "traffic_stat_buckets",
   "tunnel_latency_stats",
   "forward_group_latency_stats",
+  "latency_daily_stats",
   "ip_geo_cache",
   "tcping_stats",
   "forward_tests",
@@ -1421,6 +1424,14 @@ async function prepareImportRow(table: string, source: Record<string, any>, maps
     case "forward_group_latency_stats":
       row.groupId = mapRequiredId(maps, "forward_groups", source.groupId);
       return { row };
+
+    case "latency_daily_stats": {
+      // targetId 指向哪张表看 targetType（shared/latencyHistory.ts）；认不出的类型不搬。
+      const targetTable = source.targetType === "rule" ? "forward_rules" : source.targetType === "tunnel" ? "tunnels" : source.targetType === "group" ? "forward_groups" : null;
+      if (!targetTable) return null;
+      row.targetId = mapRequiredId(maps, targetTable, source.targetId);
+      return { row, existingWhere: { targetType: row.targetType, targetId: row.targetId, dayStart: row.dayStart } };
+    }
 
     case "tcping_stats":
       row.ruleId = mapRequiredId(maps, "forward_rules", source.ruleId);

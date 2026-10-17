@@ -21,6 +21,9 @@ import { withKeyedTaskLock } from "../keyedTaskLock";
 import { resolveApiTokenRequest } from "../ops/apiTokens";
 import type { ApiTokenContext } from "../ops/apiTokenPolicy";
 import { noteSessionClient } from "../ops/sessionDevices";
+import { TRPCError } from "@trpc/server";
+import { databaseHealth, describeDatabaseError } from "../databaseHealthState";
+import { DATABASE_UNAVAILABLE_MESSAGE } from "../../shared/databaseHealth";
 
 export interface AuthSession {
   kind: SessionKind;
@@ -83,7 +86,8 @@ async function allowMultiDeviceLogin() {
   if (now - allowMultiDeviceLoginCache.loadedAt < MULTI_DEVICE_LOGIN_SETTING_CACHE_MS) {
     return allowMultiDeviceLoginCache.value;
   }
-  const value = (await db.getSetting("allowMultiDeviceLogin").catch(() => null)) === "true";
+  // 读不到设置时不再当成 false 吞掉：数据库故障要原样抛出去，由下面判成 503 而不是「会话被顶掉」。
+  const value = (await db.getSetting("allowMultiDeviceLogin")) === "true";
   allowMultiDeviceLoginCache = { value, loadedAt: now };
   return value;
 }
@@ -167,7 +171,12 @@ async function resolveSessionFromToken(req: Request, res: Response, token: strin
         source,
       },
     };
-  } catch {
+  } catch (error) {
+    if (describeDatabaseError(error) || databaseHealth.isUnavailable()) {
+      databaseHealth.unavailable(error);
+      // 数据库挂了不等于 cookie 无效：保留登录态等恢复，也绝不因此放行任何权限检查（上游 v2.3.281）。
+      throw new TRPCError({ code: "SERVICE_UNAVAILABLE", message: DATABASE_UNAVAILABLE_MESSAGE });
+    }
     if (source === "cookie") {
       clearSessionCookie(res, req);
     }
@@ -176,6 +185,9 @@ async function resolveSessionFromToken(req: Request, res: Response, token: strin
 }
 
 export async function createContext({ req, res }: CreateExpressContextOptions): Promise<TrpcContext> {
+  if (databaseHealth.isUnavailable()) {
+    throw new TRPCError({ code: "SERVICE_UNAVAILABLE", message: DATABASE_UNAVAILABLE_MESSAGE });
+  }
   let user: User | null = null;
   let authSession: AuthSession | null = null;
   let authFailureReason: TrpcContext["authFailureReason"] = null;

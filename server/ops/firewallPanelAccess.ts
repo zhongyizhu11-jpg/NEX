@@ -17,6 +17,7 @@ import { setBoundedMapValue } from "../boundedCache";
 import { normalizeClientIp } from "./firewallCidr";
 import { countryMatchers, ensureCountryData, onCountryDataChanged } from "./firewallCountryData";
 import { readPanelAccessRule, type PanelAccessRule } from "./firewallStore";
+import { databaseHealth } from "../databaseHealthState";
 
 export type CountryLookup = {
   /** 这个 IP 落在哪个选中的国家里；都不在返回 null。 */
@@ -117,6 +118,12 @@ onCountryDataChanged(() => {
 
 async function currentRule(): Promise<PanelAccessRule> {
   if (ruleCache && Date.now() - ruleCache.loadedAt < RULE_TTL_MS) return ruleCache.rule;
+  // 数据库故障期间不去读库（每个静态资源请求都会等一次连接超时，故障页半天打不开）：
+  // 有旧规则就接着用旧的，没有就按「出错放行」处理。
+  if (databaseHealth.isUnavailable()) {
+    if (ruleCache) return ruleCache.rule;
+    throw new Error("database unavailable");
+  }
   if (!ruleLoad) {
     ruleLoad = readPanelAccessRule()
       .then((rule) => {

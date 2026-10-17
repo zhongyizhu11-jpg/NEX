@@ -147,6 +147,9 @@ func selfUpgrade(cfg Config, up *agentUpgrade) {
 	upgradeRelease := shellQuote(releaseVersion)
 	upgradeLogPath := shellQuote(agentLogDir + "/agent-upgrade.log")
 	upgradeCmd := fmt.Sprintf(`sleep 1; tmp=%s; upgrade_log(){ stage="$1"; shift; printf '%%s self-upgrade stage=%%s target=%%s release=%%s %%s\n' "$(date -u +%%Y-%%m-%%dT%%H:%%M:%%SZ)" "$stage" %s %s "$*" >> %s 2>/dev/null || true; }; lock=/var/lock/forwardx-agent-upgrade; if ! mkdir -p /var/lock || ! mkdir "$lock" 2>/dev/null; then upgrade_log lock-skipped; rm -f "$tmp"; exit 0; fi; upgrade_log lock-acquired; cleanup(){ rm -f "$tmp"; rmdir "$lock" 2>/dev/null || true; }; trap cleanup EXIT; upgrade_log download-verified; if ! bash -n "$tmp"; then upgrade_log syntax-check-failed; exit 1; fi; upgrade_log syntax-check-ok; env %s bash "$tmp" upgrade >> %s 2>&1; status=$?; upgrade_log installer-finished exit=$status; exit $status`, installScript, upgradeTarget, upgradeRelease, upgradeLogPath, installEnv, upgradeLogPath)
+	// 管理代理：升级脚本里的下载（Agent 二进制、运行时、FXP）和这台 Agent 用同一个代理（management_proxy.go）。
+	// 放在拿到升级锁、挂好清理之后：读配置失败退出时临时脚本和锁一起清掉。
+	upgradeCmd = strings.Replace(upgradeCmd, "trap cleanup EXIT; ", "trap cleanup EXIT; "+agentUpgradeProxySetup(activeConfigPath), 1)
 	cmd := fmt.Sprintf(`if command -v systemd-run >/dev/null 2>&1; then systemd-run --unit=forwardx-agent-upgrade --collect /bin/sh -lc %s; else nohup sh -lc %s >/var/log/forwardx-agent/agent-upgrade.log 2>&1 < /dev/null & fi`, shellQuote(upgradeCmd), shellQuote(upgradeCmd))
 	logf("self-upgrade requested target=%s release=%s", up.TargetVersion, releaseVersion)
 	if !runShell(cmd) {

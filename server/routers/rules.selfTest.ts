@@ -10,6 +10,7 @@ import { linkProbeMethodForRule } from "@shared/latencyProbe";
 import { ruleLatencySeriesQueryCache as selfTestQueryCache } from "../ruleLatencyQueryCache";
 import * as hopRepo from "../repositories/tunnelRepository";
 import { dbBool } from "../repositories/repositoryUtils";
+import { getLatencyDailyHistory } from "../repositories/latencyDailyRepository";
 import { isForwardXTunnel, tunnelFxpMemberHostIds, tunnelFxpRuntimeIssues, tunnelFxpRuntimeIssueSummary } from "../tunnelFxpRuntime";
 
 /*
@@ -70,6 +71,22 @@ export const selfTestRulesRouter = router({
         `tcpingSeries:${ctx.user.id}:${input.ruleId}:${input.hours}`,
         { ttlMs: 5_000, staleMs: 0 },
         () => db.getTcpingSeriesByRule(input.ruleId, { since }),
+      );
+    }),
+
+  /** 近 30 天按天的延迟汇总（详情弹窗里那条色块），见 shared/latencyHistory.ts。 */
+  latencyHistory: protectedProcedure
+    .input(z.object({ ruleId: z.number().int().positive() }))
+    .query(async ({ input, ctx }) => {
+      const rule = await db.getForwardRuleById(input.ruleId);
+      if (!rule) throw new Error("规则不存在");
+      if (ctx.user.role !== "admin" && rule.userId !== ctx.user.id) {
+        throw new Error("无权查看此规则");
+      }
+      return selfTestQueryCache.get(
+        `latencyHistory:${input.ruleId}`,
+        { ttlMs: 60_000, staleMs: 0 },
+        async () => (await getLatencyDailyHistory("rule", [input.ruleId])).get(input.ruleId) || [],
       );
     }),
 

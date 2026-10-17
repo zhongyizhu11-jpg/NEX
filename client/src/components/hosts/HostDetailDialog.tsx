@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 
 import { formatBytes } from "@shared/formatBytes";
 import { HOST_TRAFFIC_MEASURE_MODE_LABELS, normalizeHostTrafficMeasureMode } from "@shared/hostTrafficQuota";
+import { hostPolicyBool, hostTrafficExcluded, normalizeHostTrafficFailoverPercent } from "@shared/hostTrafficPolicy";
 import { EntityActions } from "@/components/entity/EntityActions";
 import { Metric, MetricGroup, ResourceMeter } from "@/components/entity/Metric";
 import { HealthBadge } from "@/components/network/StatusDot";
@@ -11,7 +12,7 @@ import { formatCpuPercent, hostAddressText, hostGeoTooltip, hostRegionText } fro
 import HostNetProfileSection from "./HostNetProfileSection";
 import { HostOsAvatar, HostOsGlyph, hostOsOf } from "./HostOsBadge";
 import { fxpRuntimeBadgeTitle, fxpRuntimeDetailText } from "./FxpRuntimeBadge";
-import { buildHostActions, type HostSummaryCardProps } from "./HostSummaryCard";
+import { buildHostActions, hostTrafficFailoverTitle, type HostSummaryCardProps } from "./HostSummaryCard";
 import { useHostVitals } from "./useHostVitals";
 import { useAuth } from "@/_core/hooks/useAuth";
 import OpsHostDetailExtraSections from "@/features/ops/slots/HostDetailExtraSections";
@@ -192,6 +193,14 @@ export default function HostDetailDialog(props: HostDetailDialogProps) {
               label={`计费用量（${HOST_TRAFFIC_MEASURE_MODE_LABELS[measureMode]}）`}
               value={vitals.trafficUsageLabel}
             />
+            {hostPolicyBool(host?.trafficFailoverEnabled) && Number(host?.trafficLimit) > 0 ? (
+              <Row
+                label="流量故障转移"
+                value={hostTrafficExcluded(host)
+                  ? <span className="text-[var(--fx-warn-text)]" title={hostTrafficFailoverTitle(host)}>已暂停组调度（到 {normalizeHostTrafficFailoverPercent(host?.trafficFailoverThresholdPercent)}%）</span>
+                  : `用到 ${normalizeHostTrafficFailoverPercent(host?.trafficFailoverThresholdPercent)}% 时暂停组调度`}
+              />
+            ) : null}
           </Section>
 
           {/* 网络画像：双栈出站、运营商、25 端口、DNSBL（Agent 2.2.226 起在主机上测） */}

@@ -662,6 +662,13 @@ export async function updateHost(id: number, data: Partial<InsertHost>) {
   const audit = shouldAuditConfigPatch(data as any);
   const before = audit ? await getHostById(id).catch(() => undefined) : undefined;
   await db.update(hosts).set({ ...data, updatedAt: nowDate() }).where(eq(hosts.id, id));
+  // 改了套餐流量 / 计量方式 / 流量故障转移开关或比例：按当前用量重算一次暂停状态（上游 v2.3.281）。
+  // 动态引入：hostTrafficPolicy 在刷新运行时的时候会回头用到转发组仓库。
+  const { invalidateHostTrafficPolicyCache, reconcileHostTrafficPolicy, touchesHostTrafficPolicy } = await import("../hostTrafficPolicy");
+  if (touchesHostTrafficPolicy(data as Record<string, unknown>)) {
+    invalidateHostTrafficPolicyCache();
+    await reconcileHostTrafficPolicy(id);
+  }
   if (Object.prototype.hasOwnProperty.call(data, "agentToken") || Object.prototype.hasOwnProperty.call(data, "name")) {
     invalidateAgentAuthTokenCandidates();
   }

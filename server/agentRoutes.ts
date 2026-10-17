@@ -105,9 +105,11 @@ function migratedAgentPayload(panelUrl: string) {
 }
 
 async function rejectAgentWhenPanelMigrated(req: Request, res: Response, next: NextFunction) {
-  // agentRouter is mounted at the application root. Static pages/assets must
-  // not perform this DB lookup just because they pass through the router.
+  // agentApiRouter 挂在应用根上（agentRouter.use(agentApiRouter)），面板页面、静态资源、
+  // tRPC 请求都要从这里过 —— 只有 Agent 接口才需要查「面板是否已迁走」（上游 v2.3.281）。
   if (!req.path.startsWith("/api/agent/")) { next(); return; }
+  // Express 4 不会把 async 中间件里抛出的错误交给错误处理器：读设置失败（比如数据库挂了）
+  // 原来是一个没人接的 rejection，Node 22 下直接让整个面板进程退出。
   try {
     const migratedTo = await getMigratedToPanelUrl();
     if (migratedTo) {
@@ -116,7 +118,6 @@ async function rejectAgentWhenPanelMigrated(req: Request, res: Response, next: N
     }
     next();
   } catch (error) {
-    // Express 4 does not automatically forward rejected async middleware.
     next(error);
   }
 }

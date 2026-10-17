@@ -308,6 +308,12 @@ export const hosts = table("hosts", {
   expiryHandling: varchar("expiryHandling", { length: 24 }).notNull().default("none"),
   trafficLimit: bigint("trafficLimit", { mode: "number" }).notNull().default(0),
   trafficMeasureMode: varchar("trafficMeasureMode", { length: 16 }).notNull().default("both"),
+  // 流量故障转移（shared/hostTrafficPolicy.ts）：用到套餐流量的这个比例后暂停参与转发组 / 入口组 /
+  // 出口组 / 多出口隧道。trafficFailoverExcluded 是按 host_traffic_counters 算出来的派生值，
+  // 不改任何成员配置。
+  trafficFailoverEnabled: boolean("trafficFailoverEnabled").notNull().default(false),
+  trafficFailoverThresholdPercent: int("trafficFailoverThresholdPercent").notNull().default(100),
+  trafficFailoverExcluded: boolean("trafficFailoverExcluded").notNull().default(false),
   // 主机公网出口整形（forwardx-fxp/link_shaper.go 的 egress）：off / auto / manual，
   // manual 时 egressMbps 是公网带宽上限（Mbit/s）。
   egressShapingMode: varchar("egressShapingMode", { length: 16 }).notNull().default("off"),
@@ -1295,6 +1301,25 @@ export const forwardGroupLatencyStats = table("forward_group_latency_stats", {
 });
 export type ForwardGroupLatencyStat = typeof forwardGroupLatencyStats.$inferSelect;
 export type InsertForwardGroupLatencyStat = typeof forwardGroupLatencyStats.$inferInsert;
+
+/*
+  30 天延迟历史的按天汇总（server/repositories/latencyDailyRepository.ts）。原始样本只留 72 小时；
+  这张表每个对象每天一行。dayStart 是面板时区那天 0 点的 epoch 秒（用整数存，汇总 SQL 里直接算）。
+  latencySum / latencyWeight 是成功次数加权的延迟和与权重，平均延迟 = 两者相除。
+*/
+export const latencyDailyStats = table("latency_daily_stats", {
+  id: serial("id"),
+  targetType: varchar("targetType", { length: 16 }).notNull(),
+  targetId: int("targetId").notNull(),
+  dayStart: int("dayStart").notNull(),
+  probeCount: bigint("probeCount", { mode: "number" }).notNull().default(0),
+  probeSuccesses: bigint("probeSuccesses", { mode: "number" }).notNull().default(0),
+  latencySum: bigint("latencySum", { mode: "number" }).notNull().default(0),
+  latencyWeight: bigint("latencyWeight", { mode: "number" }).notNull().default(0),
+  minLatencyMs: int("minLatencyMs"),
+  maxLatencyMs: int("maxLatencyMs"),
+  updatedAt: int("updatedAt").notNull().default(0),
+});
 
 export const hostProbeServices = table("host_probe_services", {
   id: serial("id"),

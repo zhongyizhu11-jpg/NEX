@@ -116,3 +116,40 @@ test("opens the circuit after repeated provider failures", async () => {
   await assert.rejects(request(), (error) => error instanceof AiClientError && error.code === "circuit_open");
   assert.equal(calls, 2);
 });
+
+test("keeps the deadline while a response body stalls after headers", async () => {
+  // 服务商先回响应头再卡住不发正文：原来拿到头就清了计时器，这个请求会一直挂着。
+  const client = new ForwardxAiClient({
+    timeoutMs: 30,
+    transientRetries: 0,
+    fetchImpl: (async () => new Response(new ReadableStream({
+      start(controller) { controller.enqueue(new TextEncoder().encode("{")); },
+    }))) as typeof fetch,
+  });
+  const startedAt = Date.now();
+  await assert.rejects(
+    client.requestStructuredJson({ operation: "test.stalled-body", settings: settings(), systemPrompt: "s", userText: "u", schema: z.object({ ok: z.boolean() }) }),
+    (error) => error instanceof AiClientError && error.code === "timeout",
+  );
+  assert.ok(Date.now() - startedAt < 2_000);
+});
+
+test("rejects oversized provider responses instead of buffering them", async () => {
+  const client = new ForwardxAiClient({
+    transientRetries: 0,
+    fetchImpl: (async () => new Response("x".repeat(300_000))) as typeof fetch,
+  });
+  await assert.rejects(
+    client.requestStructuredJson({ operation: "test.oversized", settings: settings(), systemPrompt: "s", userText: "u", schema: z.object({ ok: z.boolean() }) }),
+    (error) => error instanceof AiClientError && error.code === "invalid_response",
+  );
+  // 错误响应体同样走上限，不会因为是 5xx 就整段读进内存。
+  const errorClient = new ForwardxAiClient({
+    transientRetries: 0,
+    fetchImpl: (async () => new Response("y".repeat(300_000), { status: 500 })) as typeof fetch,
+  });
+  await assert.rejects(
+    errorClient.requestStructuredJson({ operation: "test.oversized-error", settings: settings(), systemPrompt: "s", userText: "u", schema: z.object({ ok: z.boolean() }) }),
+    (error) => error instanceof AiClientError && error.code === "invalid_response",
+  );
+});

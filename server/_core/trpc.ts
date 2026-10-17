@@ -8,6 +8,8 @@ import { DATABASE_MAINTENANCE_MESSAGE, isDatabaseMaintenanceActive } from "../da
 import { formatTrpcErrorShape } from "./errorFormatter";
 import { apiTokenPolicyError } from "../ops/apiTokenPolicy";
 import { assertMaintenanceAllows } from "../ops/maintenance";
+import { databaseHealth } from "../databaseHealthState";
+import { DATABASE_UNAVAILABLE_MESSAGE } from "../../shared/databaseHealth";
 
 const t = initTRPC.context<TrpcContext>().create({
   transformer: superjson,
@@ -37,7 +39,23 @@ const enforceApiTokenPolicy = t.middleware(opts => {
   return opts.next();
 });
 
-const baseProcedure = t.procedure.use(rejectMutationsDuringDatabaseMaintenance).use(enforceApiTokenPolicy);
+/**
+ * 主库不可用时所有过程一律 503「数据库暂时不可用」（上游 v2.3.281）。执行中途库挂了、
+ * 过程本身报了别的错（比如因为读不到用户而报「未登录」）也改成 503：前端靠这句 message
+ * 认出数据库故障、显示故障页，而不是把人踢回登录页。
+ */
+const rejectWhileDatabaseUnavailable = t.middleware(async opts => {
+  if (databaseHealth.isUnavailable()) {
+    throw new TRPCError({ code: "SERVICE_UNAVAILABLE", message: DATABASE_UNAVAILABLE_MESSAGE });
+  }
+  const result = await opts.next();
+  if (!result.ok && databaseHealth.isUnavailable()) {
+    throw new TRPCError({ code: "SERVICE_UNAVAILABLE", message: DATABASE_UNAVAILABLE_MESSAGE });
+  }
+  return result;
+});
+
+const baseProcedure = t.procedure.use(rejectWhileDatabaseUnavailable).use(rejectMutationsDuringDatabaseMaintenance).use(enforceApiTokenPolicy);
 
 export const publicProcedure = baseProcedure;
 

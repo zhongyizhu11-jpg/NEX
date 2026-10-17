@@ -57,6 +57,7 @@ import {
   publicLinkAvailabilitySummary,
   type LinkAvailabilitySummaryIndex,
 } from "../linkAvailabilitySummary";
+import { getLatencyDailyHistory } from "../repositories/latencyDailyRepository";
 
 const tunnelNetworkTypeSchema = z.enum(["public", "private"]);
 const tunnelModeSchema = z.enum(["forwardx", "tls", "wss", "tcp", "mtls", "mwss", "mtcp", "nginx_stream"]);
@@ -67,6 +68,7 @@ const tunnelRelayModeSchema = z.enum(["chain", "failover", "aggregate"]);
 const MAX_TUNNEL_HOPS = 10;
 const MAX_EXTRA_TUNNEL_EXITS = 4;
 const MAX_NGINX_CERT_BYTES = 64 * 1024;
+
 const tunnelQueryCache = createQueryCache(300);
 
 function normalizeTunnelMode(mode: unknown) {
@@ -926,6 +928,39 @@ export const tunnelsRouter = router({
           `latencySeries:${ctx.user.id}:${input.tunnelId}:${input.hours}`,
           { ttlMs: 5_000, staleMs: 0 },
           () => db.getTunnelLatencySeries(input.tunnelId, { since }),
+        );
+      }),
+    /** 隧道近 30 天按天的延迟汇总（详情弹窗里那条色块），见 shared/latencyHistory.ts。 */
+    latencyHistory: protectedProcedure
+      .input(z.object({ tunnelId: z.number().int().positive() }))
+      .query(async ({ input, ctx }) => {
+        const tunnel = await db.getTunnelById(input.tunnelId);
+        if (!tunnel) throw new Error("Tunnel not found");
+        if (ctx.user.role !== "admin" && tunnel.userId !== ctx.user.id) {
+          throw new Error("No permission to view this tunnel");
+        }
+        return tunnelQueryCache.get(
+          `latencyHistory:${input.tunnelId}`,
+          { ttlMs: 60_000, staleMs: 0 },
+          async () => (await getLatencyDailyHistory("tunnel", [input.tunnelId])).get(input.tunnelId) || [],
+        );
+      }),
+    /** 链路卡底部那条 30 天色块：这一页的隧道一次全拿（每条每天一行）。看不到的隧道直接不返回。 */
+    latencyHistoryBatch: protectedProcedure
+      .input(z.object({ tunnelIds: z.array(z.number().int().positive()).max(200) }))
+      .query(async ({ input, ctx }) => {
+        const ids = [...new Set(input.tunnelIds)].sort((a, b) => a - b);
+        if (ids.length === 0) return [];
+        return tunnelQueryCache.get(
+          `latencyHistoryBatch:${ctx.user.role === "admin" ? "admin" : ctx.user.id}:${ids.join(",")}`,
+          { ttlMs: 60_000, staleMs: 120_000 },
+          async () => {
+            const visible = ctx.user.role === "admin"
+              ? ids
+              : ((await db.getTunnelsByIds(ids)) as any[]).filter((tunnel) => Number(tunnel.userId) === Number(ctx.user.id)).map((tunnel) => Number(tunnel.id));
+            const history = await getLatencyDailyHistory("tunnel", visible);
+            return visible.map((tunnelId) => ({ tunnelId, days: history.get(tunnelId) || [] }));
+          },
         );
       }),
     /** 链路卡上那条近 24H 延迟小走势：这一页的隧道一次全拿。 */
