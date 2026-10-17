@@ -389,6 +389,18 @@ function truthy(value: unknown) {
 }
 
 /** 规则形态对不对。对回 null，否则回给人看的原因。 */
+/**
+ * 出口是 gost 的转发链实现的（ss 连接器）。规则选的是别的转发工具（iptables / nftables / realm / socat / nginx）时，
+ * 不拒绝：下发时这一条规则换成 gost 跑（server/ssEgress.ts 的 ruleEgressRuntimeView），库里存的转发工具不变，
+ * 去掉出口就回到原来的工具。内核转发、realm 这些本来就不会 Shadowsocks，要加密成 SS 只能由 gost 来做。
+ */
+export const RULE_EGRESS_RUNTIME_FORWARD_TYPE = "gost";
+
+/** 这条规则开了出口后会不会被换成 gost 跑（界面上提示用）。 */
+export function ruleEgressSwitchesForwardType(egressType: unknown, forwardType: unknown) {
+  return normalizeRuleEgressType(egressType) !== "none" && String(forwardType ?? "") !== RULE_EGRESS_RUNTIME_FORWARD_TYPE;
+}
+
 export function ruleEgressShapeError(shape: RuleEgressShape): string | null {
   if (normalizeRuleEgressType(shape.egressType) === "none") return null;
   if (Number(shape.tlsInboundId || 0) > 0) return "共享 TLS 入站上的规则不能使用 Shadowsocks 出口";
@@ -396,9 +408,6 @@ export function ruleEgressShapeError(shape: RuleEgressShape): string | null {
   const groupMode = String(shape.forwardGroupMode ?? "").trim();
   if (groupMode && groupMode !== "port") return "转发链 / 转发组上的规则不能使用 Shadowsocks 出口，请用端口转发或直连规则";
   if (truthy(shape.failoverEnabled)) return "使用 Shadowsocks 出口的规则暂不支持线路组 / 主备线路";
-  if (String(shape.forwardType ?? "") !== "gost") {
-    return "使用 Shadowsocks 出口的规则必须用 gost 转发（出口是 gost 的转发链实现的），请把转发工具改成 gost";
-  }
   const protocol = String(shape.protocol ?? "both");
   const wantsUdp = protocol === "udp" || protocol === "both";
   const udp = truthy(shape.egressUdp);

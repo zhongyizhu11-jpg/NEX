@@ -105,6 +105,7 @@ import {
   normalizeRuleEgressType,
   RULE_EGRESS_STATE_LABELS,
   ruleEgressShapeError,
+  ruleEgressSwitchesForwardType,
   ruleEgressStateTone,
   ruleEgressSummaryText,
   type RuleEgressState,
@@ -3165,7 +3166,8 @@ function RulesContent() {
   ]);
   /*
     Shadowsocks 出口（shared/ssEgress.ts）：只在「端口转发」这条路上出现（直连主机 / gost 的端口转发资源）。
-    选了出口，转发工具固定 gost、协议固定 TCP、线路组关掉；端口转发资源的工具由资源决定，不是 gost 就不能选。
+    选了出口，协议固定 TCP、线路组关掉；直连主机的规则转发工具切到 gost。端口转发资源的工具由资源决定，
+    不是 gost 也能选：这一条规则下发时改用 gost 跑（server/ssEgress.ts 的 ruleEgressRuntimeView），库里不变。
   */
   const egressSectionVisible = form.routeMode === "local" && !isSniEntryMode;
   const egressActive = egressSectionVisible && form.egress.egressType !== "none";
@@ -3180,16 +3182,17 @@ function RulesContent() {
   const egressBlockedReason = useMemo<string | null>(() => {
     if (!egressSectionVisible) return null;
     if (isLegacyLocalRuleEdit) return "旧版端口转发规则请先迁移到新版端口转发，再设置出口。";
-    if (isForwardGroupRouteMode) {
-      if (!selectedForwardGroup) return null;
-      if (effectiveRouteForwardType !== "gost") {
-        return `这个端口转发用的是 ${FORWARD_TYPE_LABELS[effectiveRouteForwardType] || effectiveRouteForwardType}，出口需要 gost：请换一个 gost 的端口转发。`;
-      }
-      return null;
-    }
+    // 端口转发资源不是 gost 也能开出口：这一条规则下发时改用 gost（见 egressRuntimeNote）。
+    if (isForwardGroupRouteMode) return null;
     if (!usableForwardTypes.includes("gost")) return "出口需要 gost 转发，当前账号不能用 gost。";
     return null;
   }, [egressSectionVisible, isLegacyLocalRuleEdit, isForwardGroupRouteMode, selectedForwardGroup, effectiveRouteForwardType, usableForwardTypes]);
+  const egressRuntimeNote = useMemo<string | null>(() => {
+    if (!isForwardGroupRouteMode || !selectedForwardGroup) return null;
+    if (!ruleEgressSwitchesForwardType(form.egress.egressType, effectiveRouteForwardType)) return null;
+    const label = FORWARD_TYPE_LABELS[effectiveRouteForwardType] || effectiveRouteForwardType;
+    return `这个端口转发用的是 ${label}，${label} 不会 Shadowsocks：开了出口的这一条规则改用 gost 转发，端口、计数、限速照旧；其它规则不受影响，改回「直接连接」就恢复成 ${label}。`;
+  }, [isForwardGroupRouteMode, selectedForwardGroup, form.egress.egressType, effectiveRouteForwardType]);
   const egressCapabilities = useEgressEntryCapabilities(egressEntryHostIds, egressActive);
   const egressBlocker = useMemo<string | null>(() => {
     if (!egressActive) return null;
@@ -8195,6 +8198,7 @@ function RulesContent() {
                 isAdmin={user?.role === "admin"}
                 entryHostIds={egressEntryHostIds}
                 blockedReason={egressBlockedReason}
+                runtimeNote={egressRuntimeNote}
                 onChange={(patch) => setForm((prev) => ({
                   ...prev,
                   // 「UDP 也走出口」决定协议：勾上是 TCP+UDP，不勾只转 TCP（UDP 绝不绕过出口直连）。
@@ -8203,7 +8207,7 @@ function RulesContent() {
                 }))}
                 onEgressEnabled={() => setForm((prev) => ({
                   ...prev,
-                  // 出口是 gost 的转发链做的：直连主机的规则切到 gost；端口转发资源的工具由资源决定（上面已经要求是 gost）。
+                  // 出口是 gost 的转发链做的：直连主机的规则切到 gost；端口转发资源的工具由资源决定，不是 gost 的下发时自动换成 gost。
                   forwardType: isForwardGroupRouteMode ? prev.forwardType : "gost",
                   tunnelId: null,
                   protocol: "tcp",

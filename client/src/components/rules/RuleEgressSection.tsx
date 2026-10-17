@@ -57,8 +57,10 @@ type Props = {
   onChange: (patch: Partial<RuleEgressFormValue>) => void;
   /** 选了出口之后整张表单要跟着变的（gost、TCP、关掉线路组）由上层做。 */
   onEgressEnabled: (type: RuleEgressType) => void;
-  /** 当前规则能不能挂出口；不能时给原因（例如端口转发不是 gost）。 */
+  /** 当前规则能不能挂出口；不能时给原因（例如旧版端口转发规则）。 */
   blockedReason?: string | null;
+  /** 选了出口之后要额外说明的一句（例如这条规则会改用 gost 转发）。 */
+  runtimeNote?: string | null;
   /** 规则在哪些主机上监听：这些主机不能当落地。 */
   entryHostIds: number[];
   isAdmin: boolean;
@@ -111,7 +113,7 @@ const OPTIONS: Array<{ type: RuleEgressType; short: string; icon: typeof Server 
   { type: "ss_link", short: "外部 SS 链接", icon: Link2 },
 ];
 
-export function RuleEgressSection({ value, onChange, onEgressEnabled, blockedReason, entryHostIds, isAdmin }: Props) {
+export function RuleEgressSection({ value, onChange, onEgressEnabled, blockedReason, runtimeNote, entryHostIds, isAdmin }: Props) {
   const utils = trpc.useUtils();
   const optionsQuery = trpc.proxyInbounds.egressLandingOptions.useQuery(undefined, {
     enabled: value.egressType === "ss_host",
@@ -189,6 +191,10 @@ export function RuleEgressSection({ value, onChange, onEgressEnabled, blockedRea
             : <>入口机自己连接目标。选「落地主机」或「外部 SS 链接」后，入口机经 Shadowsocks 让落地去连目标，流量从落地出去。</>}
         </p>
       )}
+
+      {value.egressType !== "none" && runtimeNote ? (
+        <p className="text-meta leading-5 text-muted-foreground">{runtimeNote}</p>
+      ) : null}
 
       {value.egressType === "ss_host" && (
         <div className="space-y-2">

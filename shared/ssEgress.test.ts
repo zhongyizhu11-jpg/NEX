@@ -16,6 +16,7 @@ import {
   parseSsEgressLink,
   ruleEgressColumnsOf,
   ruleEgressShapeError,
+  ruleEgressSwitchesForwardType,
   ruleEgressStateBlocksDelivery,
   ruleEgressSummaryText,
   canonicalSsEgressPassword,
@@ -131,8 +132,12 @@ test("规则形态：出口只挂在 gost 的直连 / 端口转发规则上", ()
   assert.equal(ruleEgressShapeError(base), null);
   assert.equal(ruleEgressShapeError({ ...base, forwardGroupMode: "port" }), null);
   assert.equal(ruleEgressShapeError({ ...base, egressType: "none", forwardType: "realm" }), null);
-  assert.match(String(ruleEgressShapeError({ ...base, forwardType: "realm" })), /必须用 gost/);
-  assert.match(String(ruleEgressShapeError({ ...base, forwardType: "iptables" })), /必须用 gost/);
+  // 不会 Shadowsocks 的转发工具也能开出口：下发时这一条换成 gost 跑（ruleEgressSwitchesForwardType）。
+  assert.equal(ruleEgressShapeError({ ...base, forwardType: "realm" }), null);
+  assert.equal(ruleEgressShapeError({ ...base, forwardType: "iptables" }), null);
+  assert.equal(ruleEgressSwitchesForwardType("ss_host", "nftables"), true);
+  assert.equal(ruleEgressSwitchesForwardType("ss_link", "gost"), false);
+  assert.equal(ruleEgressSwitchesForwardType("none", "nftables"), false);
   assert.match(String(ruleEgressShapeError({ ...base, tunnelId: 3 })), /隧道/);
   assert.match(String(ruleEgressShapeError({ ...base, forwardGroupMode: "chain" })), /转发链/);
   assert.match(String(ruleEgressShapeError({ ...base, forwardGroupMode: "failover" })), /转发组/);
