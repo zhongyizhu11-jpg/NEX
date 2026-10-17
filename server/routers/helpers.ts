@@ -197,7 +197,7 @@ export async function refreshUserForwardEndpoints(
 ) {
   const rules = [...await db.getForwardRulesForUserSync(userId)] as any[];
   if (options.preserveOrdinaryRuntime) {
-    // 普通规则的单 IP / 连接数限制有自己的防火墙对齐（server/portAccessLimits.ts），
+    // 普通规则的单 IP 接入限制有自己的防火墙对齐（server/portAccessLimits.ts），
     // 只有隧道规则的限制还写在它们自己的下发命令里，需要重新下发。
     await db.markForwardRulesNotRunning(rules.filter((rule) => Number(rule.tunnelId || 0) > 0).map((rule) => Number(rule.id)));
   } else {

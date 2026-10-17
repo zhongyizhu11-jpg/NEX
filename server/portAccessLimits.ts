@@ -2,11 +2,12 @@ import { isForwardRuleProtocolTcpEnabled } from "@shared/forwardTypes";
 import { isAgentVersionAtLeast } from "@shared/version";
 
 /**
- * 普通端口转发（不走隧道）上的用户连接数 / 单 IP 限制。
+ * 普通端口转发（不走隧道）上的用户「单 IP 接入限制」，和上游一致：限制每个来源 IP 的 TCP
+ * 并发连接数（不是 IP 个数），同一用户、同一入口机的规则共享上限；UDP 不适用。
  *
  * 以前只有隧道规则会下发 connlimit（见心跳里的 buildAccessLimitCmds，按端口挂在 filter 表）；
- * 普通规则只下发清理命令，于是用户的「单 IP」「连接数」对 iptables / realm / gost …… 这些
- * 最常见的转发完全不起作用。这里按「入口机 + 用户」给出一份完整快照，Agent 在 mangle 表上
+ * 普通规则只下发清理命令，于是这一项对 iptables / realm / gost …… 这些最常见的转发完全
+ * 不起作用。这里按「入口机 + 用户」给出一份完整快照，Agent 在 mangle 表上
  * 对齐（agent/port_access_limits.go）：
  *   - 每个用户一条计数链，规则增删只改分发，不清零已在计数的连接；
  *   - 只看新建的 SYN，不碰已建立的连接，也不重启任何转发进程；
@@ -20,7 +21,6 @@ export const PORT_ACCESS_LIMIT_FORWARD_TYPE = "port-access-limit-sync";
 export type PortAccessLimitSpec = {
   userId: number;
   maxIPs: number;
-  maxConnections: number;
   ports: number[];
 };
 
@@ -31,16 +31,15 @@ function nonNegativeInt(value: unknown) {
 }
 
 /**
- * 这次改用户限制，是不是**只**动了单 IP / 连接数。
+ * 这次改用户限制，是不是**只**动了单 IP。
  *
  * 是的话普通规则不必重新下发（它们的限制由上面那份快照单独对齐，转发进程不用动）；
  * 只有隧道规则还要按老路刷新，因为隧道的限制仍然写在它自己的下发命令里。
  */
 export function onlyPortAccessLimitChanged(before: any, after: any) {
   if (!before || !after) return false;
-  const limitChanged = ["maxIPs", "maxConnections"].some((key) => nonNegativeInt(before[key]) !== nonNegativeInt(after[key]));
-  if (!limitChanged) return false;
-  return ["gostRateLimitIn", "gostRateLimitOut", "canAddRules"].every((key) => (
+  if (nonNegativeInt(before.maxIPs) === nonNegativeInt(after.maxIPs)) return false;
+  return ["maxConnections", "gostRateLimitIn", "gostRateLimitOut", "canAddRules"].every((key) => (
     key === "canAddRules"
       ? !!before[key] === !!after[key]
       : nonNegativeInt(before[key]) === nonNegativeInt(after[key])
@@ -63,9 +62,8 @@ export function portAccessLimitSpecs(
     if (!Number.isSafeInteger(userId) || userId <= 0 || !Number.isInteger(port) || port < 1 || port > 65535) continue;
     const limits = limitsForUser(userId);
     const maxIPs = nonNegativeInt(limits?.maxIPs);
-    const maxConnections = nonNegativeInt(limits?.maxConnections);
-    if (!maxIPs && !maxConnections) continue;
-    const spec = users.get(userId) || { userId, maxIPs, maxConnections, ports: [] };
+    if (!maxIPs) continue;
+    const spec = users.get(userId) || { userId, maxIPs, ports: [] };
     spec.ports.push(port);
     users.set(userId, spec);
   }

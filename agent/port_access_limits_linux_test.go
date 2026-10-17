@@ -85,56 +85,6 @@ func TestPortAccessLimitsNetworkNamespace(t *testing.T) {
 	for _, ipv6 := range families {
 		t.Run(fmt.Sprintf("ipv6=%v", ipv6), func(t *testing.T) { testPortAccessLimitTraffic(t, ipv6) })
 	}
-	t.Run("connection-cap", testPortAccessConnectionCapTraffic)
-}
-
-// A user's total connection cap is shared by every source address and port.
-func testPortAccessConnectionCapTraffic(t *testing.T) {
-	listen := func() int {
-		ln, err := net.Listen("tcp4", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { ln.Close() })
-		go func() {
-			for {
-				conn, err := ln.Accept()
-				if err != nil {
-					return
-				}
-				go func() { defer conn.Close(); io.Copy(conn, conn) }()
-			}
-		}()
-		return ln.Addr().(*net.TCPAddr).Port
-	}
-	portA, portB := listen(), listen()
-	specs := []portAccessLimitSpec{{UserID: 3, MaxConnections: 2, Ports: []int{portA, portB}}}
-	if err := syncPortAccessLimits(systemPortLimitFirewall{}, specs, false); err != nil {
-		t.Fatal(err)
-	}
-	dial := func(port int, source string) (net.Conn, error) {
-		d := net.Dialer{Timeout: 250 * time.Millisecond, LocalAddr: &net.TCPAddr{IP: net.ParseIP(source)}}
-		return d.Dial("tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
-	}
-	for i, source := range []string{"127.0.0.1", "127.0.0.2"} {
-		conn, err := dial([]int{portA, portB}[i], source)
-		if err != nil {
-			t.Fatalf("connection %d under the cap rejected: %v", i, err)
-		}
-		t.Cleanup(func() { conn.Close() })
-	}
-	if conn, err := dial(portA, "127.0.0.3"); err == nil {
-		conn.Close()
-		t.Fatal("total connection cap ignored a new source address")
-	}
-	if err := syncPortAccessLimits(systemPortLimitFirewall{}, nil, false); err != nil {
-		t.Fatal(err)
-	}
-	conn, err := dial(portA, "127.0.0.3")
-	if err != nil {
-		t.Fatalf("removing the cap did not release new connections: %v", err)
-	}
-	conn.Close()
 }
 
 func testPortAccessLimitTraffic(t *testing.T, ipv6 bool) {

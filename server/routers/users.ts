@@ -483,7 +483,7 @@ export const usersRouter = router({
         const beforeRuntimeLimits = shouldRefreshRuntime ? await db.getUserById(userId) : null;
         const effectiveLimits = await db.updateUserManualEntitlements(userId, data);
         if (shouldRefreshRuntime) {
-          // 只改了单 IP / 连接数：普通规则的限制由心跳里那份端口限制快照单独对齐，
+          // 只改了单 IP：普通规则的限制由心跳里那份端口限制快照单独对齐，
           // 不必把他名下所有普通规则标成未运行、重新下发一遍（见 server/portAccessLimits.ts）。
           await refreshUserForwardEndpoints(userId, "user-runtime-limits-updated", {
             preserveOrdinaryRuntime: onlyPortAccessLimitChanged(beforeRuntimeLimits, effectiveLimits),

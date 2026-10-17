@@ -9,11 +9,11 @@ import {
   portAccessLimitSpecs,
 } from "./portAccessLimits";
 
-test("only effective per-IP / connection changes bypass ordinary runtime restarts", () => {
+test("only per-IP limit changes bypass ordinary runtime restarts; maxConnections is tunnel-only", () => {
   const before = { maxIPs: 2, maxConnections: 100, gostRateLimitIn: 10, gostRateLimitOut: 20, canAddRules: true };
   assert.equal(onlyPortAccessLimitChanged(before, { ...before, maxIPs: 3 }), true);
   assert.equal(onlyPortAccessLimitChanged(before, { ...before, maxIPs: 0 }), true);
-  assert.equal(onlyPortAccessLimitChanged(before, { ...before, maxConnections: 50 }), true);
+  assert.equal(onlyPortAccessLimitChanged(before, { ...before, maxConnections: 50 }), false);
   assert.equal(onlyPortAccessLimitChanged(before, before), false);
   assert.equal(onlyPortAccessLimitChanged(before, { ...before, maxIPs: 3, gostRateLimitIn: 30 }), false);
   assert.equal(onlyPortAccessLimitChanged(before, { ...before, maxIPs: 3, canAddRules: false }), false);
@@ -27,8 +27,7 @@ test("all ordinary forwarding backends share TCP limits per user on the entry ho
   rules.push({ userId: 8, sourcePort: 65535, protocol: "tcp", forwardType: "realm" });
   const specs = portAccessLimitSpecs(rules, (user) => ({ maxIPs: user === 7 ? 2 : 0, maxConnections: user === 8 ? 40 : 0 }));
   assert.deepEqual(specs, [
-    { userId: 7, maxIPs: 2, maxConnections: 0, ports: [22000, 22001, 22002, 22003, 22004, 22005, 22006] },
-    { userId: 8, maxIPs: 0, maxConnections: 40, ports: [65535] },
+    { userId: 7, maxIPs: 2, ports: [22000, 22001, 22002, 22003, 22004, 22005, 22006] },
   ]);
 });
 
@@ -57,7 +56,7 @@ test("Agent 2.2.229 gate: new Agents always get a snapshot (empty removes limits
   assert.equal(agentSupportsPortAccessLimits("2.2.230"), true);
   assert.deepEqual(portAccessLimitAction([], true)?.portAccessLimits, []);
   assert.equal(portAccessLimitAction([], false), null);
-  const specs = [{ userId: 1, maxIPs: 2, maxConnections: 0, ports: [22] }];
+  const specs = [{ userId: 1, maxIPs: 2, ports: [22] }];
   assert.equal(portAccessLimitAction(specs, false), null);
   const action = portAccessLimitAction(specs, true)!;
   assert.equal(action.statusType, "runtime");

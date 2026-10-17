@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// 普通端口转发的单 IP / 连接数限制（面板 server/portAccessLimits.ts，Agent 2.2.229 起）。
+// 普通端口转发的单 IP 接入限制（每个来源 IP 的 TCP 并发连接数；面板 server/portAccessLimits.ts，Agent 2.2.229 起）。
 //
 // 面板按「这台入口机 + 用户」下发一份完整快照（空快照 = 撤销全部限制），这里在 mangle 表
 // 上对齐：
@@ -23,12 +23,12 @@ import (
 //   - mangle 在 DNAT 之前，内核转发（iptables / nftables）和进程转发（realm / gost ……）
 //     看到的都是同一个原始入口端口；OUTPUT 顺带覆盖本机发起的连接，PREROUTING 排除 lo，
 //     免得本机的一个 SYN 先过 OUTPUT 再过 lo 的 PREROUTING 被数两次。
+//
 // 准备失败时保留之前的钩子和计数链：限制宁可暂时是旧的，也不能把转发弄断。
 type portAccessLimitSpec struct {
-	UserID         int   `json:"userId"`
-	MaxIPs         int   `json:"maxIPs"`
-	MaxConnections int   `json:"maxConnections,omitempty"`
-	Ports          []int `json:"ports"`
+	UserID int   `json:"userId"`
+	MaxIPs int   `json:"maxIPs"`
+	Ports  []int `json:"ports"`
 }
 
 const portAccessLimitForwardType = "port-access-limit-sync"
@@ -119,11 +119,11 @@ func normalizedPortLimits(specs []portAccessLimitSpec) ([]portAccessLimitSpec, e
 	out := make([]portAccessLimitSpec, 0, len(specs))
 	users, ports := map[int]bool{}, map[int]bool{}
 	for _, spec := range specs {
-		if spec.UserID <= 0 || spec.MaxIPs < 0 || spec.MaxConnections < 0 || users[spec.UserID] {
+		if spec.UserID <= 0 || spec.MaxIPs < 0 || users[spec.UserID] {
 			return nil, fmt.Errorf("invalid or duplicate port access limit user=%d", spec.UserID)
 		}
 		users[spec.UserID] = true
-		if spec.MaxIPs == 0 && spec.MaxConnections == 0 {
+		if spec.MaxIPs == 0 {
 			continue
 		}
 		seen := map[int]bool{}
@@ -149,11 +149,7 @@ func normalizedPortLimits(specs []portAccessLimitSpec) ([]portAccessLimitSpec, e
 
 // portLimitCounterChain 只由用户和阈值决定，与端口无关：加减端口不会换计数链、不清零计数。
 func portLimitCounterChain(spec portAccessLimitSpec) string {
-	if spec.MaxConnections <= 0 {
-		// 只有单 IP 限制时沿用旧的哈希输入，链名与上游实现一致。
-		return portLimitChain("FWX_PC_", []int{spec.UserID, spec.MaxIPs})
-	}
-	return portLimitChain("FWX_PC_", []int{spec.UserID, spec.MaxIPs, spec.MaxConnections})
+	return portLimitChain("FWX_PC_", []int{spec.UserID, spec.MaxIPs})
 }
 
 func portLimitRules(specs []portAccessLimitSpec, ipv6 bool) (string, map[string][][]string) {
@@ -168,13 +164,8 @@ func portLimitRules(specs []portAccessLimitSpec, ipv6 bool) (string, map[string]
 	}
 	for _, spec := range specs {
 		counter := portLimitCounterChain(spec)
-		// 先按总连接数（mask 0：所有来源算一组）、再按单个来源地址；任何一条超了就丢新 SYN。
-		if spec.MaxConnections > 0 {
-			rules[counter] = append(rules[counter], []string{"-p", "tcp", "-m", "connlimit", "--connlimit-above", strconv.Itoa(spec.MaxConnections), "--connlimit-mask", "0", "--connlimit-saddr", "-j", "DROP"})
-		}
-		if spec.MaxIPs > 0 {
-			rules[counter] = append(rules[counter], []string{"-p", "tcp", "-m", "connlimit", "--connlimit-above", strconv.Itoa(spec.MaxIPs), "--connlimit-mask", mask, "--connlimit-saddr", "-j", "DROP"})
-		}
+		// 每个来源地址的并发 TCP 连接超过上限就丢新 SYN。
+		rules[counter] = append(rules[counter], []string{"-p", "tcp", "-m", "connlimit", "--connlimit-above", strconv.Itoa(spec.MaxIPs), "--connlimit-mask", mask, "--connlimit-saddr", "-j", "DROP"})
 		rules[counter] = append(rules[counter], []string{"-j", "RETURN"})
 		for start := 0; start < len(spec.Ports); start += 15 {
 			end := start + 15

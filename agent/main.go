@@ -2594,7 +2594,7 @@ type action struct {
 	RequiresMimicEnvironment  bool                `json:"requiresMimicEnvironment,omitempty"`
 	HandoffOnly               bool                `json:"-"`
 
-	// 普通端口转发的单 IP / 连接数限制快照（port_access_limits.go），只出现在
+	// 普通端口转发的单 IP 接入限制快照（port_access_limits.go），只出现在
 	// forwardType=port-access-limit-sync 的运行时动作里。
 	PortAccessLimits []portAccessLimitSpec `json:"portAccessLimits,omitempty"`
 }

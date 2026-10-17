@@ -7070,7 +7070,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       action.preCommands = [...buildEntryBridgeConntrackFlushCmds(port, action.protocol), ...(Array.isArray(action.preCommands) ? action.preCommands : [])];
     }
     /*
-      普通端口转发的单 IP / 连接数限制（server/portAccessLimits.ts）：按这台入口机上全部
+      普通端口转发的单 IP 接入限制（server/portAccessLimits.ts）：按这台入口机上全部
       已启用的普通规则出一份完整快照，和规则自己的下发互不相干 —— 已经在跑的规则不会因此
       被重新下发或重启。只算面对客户端的入口端口：线路组中转跳、转发链后面几跳、共享 TLS
       入站分过来的回环端口、换隧道留下的入口桥接，来源都是上一台机器或本机，按单 IP 一限

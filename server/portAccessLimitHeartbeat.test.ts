@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 
 /**
- * 普通端口转发的单 IP / 连接数限制走真的心跳路由（sqlite + express）：
+ * 普通端口转发的单 IP 接入限制走真的心跳路由（sqlite + express）：
  *   · Agent 2.2.229 的入口机拿到一条 port-access-limit-sync 运行时动作，快照只含面对客户端的
  *     TCP 入口端口，按用户聚合；
  *   · Agent 2.2.228 拿不到这条动作（老 Agent 照旧工作，普通规则仍不受限）；
@@ -123,8 +123,7 @@ test("Agent 2.2.229 entry hosts receive one per-user TCP limit snapshot for clie
   assert.equal(action.statusType, "runtime");
   assert.equal(action.knownRunning, true);
   assert.deepEqual(action.portAccessLimits, [
-    { userId: 2, maxIPs: 3, maxConnections: 0, ports: [25001, 25002] },
-    { userId: 3, maxIPs: 0, maxConnections: 40, ports: [25006] },
+    { userId: 2, maxIPs: 3, ports: [25001, 25002] },
   ]);
 });
 
