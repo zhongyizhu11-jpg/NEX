@@ -23,6 +23,7 @@ import { appendPanelLog } from "../_core/panelLogger";
 import { notifyTunnelLatencyRefresh } from "../tunnelLatencyRefresh";
 import { normalizeAgentProbeCounts } from "../../shared/agentDtos";
 import { normalizeTrafficCounterBytes } from "../../shared/trafficCounterBytes";
+import { reconcileHostTrafficPolicy } from "../hostTrafficPolicy";
 
 const TRAFFIC_BUCKET_MINUTES = 30;
 const TRAFFIC_BUCKET_SECONDS = TRAFFIC_BUCKET_MINUTES * 60;
@@ -546,6 +547,7 @@ export async function recordHostTrafficSample(hostId: number, sample: HostTraffi
          ${q("updatedAt")} = VALUES(${q("updatedAt")})`,
       values,
     );
+    await reconcileHostTrafficPolicy(id);
     return null;
   }
 
@@ -569,6 +571,8 @@ export async function recordHostTrafficSample(hostId: number, sample: HostTraffi
        ${q("updatedAt")} = ${incoming("updatedAt")}`,
     values,
   );
+  // 只有开了流量故障转移（或者还暂停着）的主机才会真的跑这一步，见 server/hostTrafficPolicy.ts。
+  await reconcileHostTrafficPolicy(id);
   return null;
 }
 
@@ -625,6 +629,7 @@ export async function resetHostTraffic(hostId: number) {
         WHERE ${q("hostId")} = ?`,
       [nowSec, nowSec, id],
     );
+    await reconcileHostTrafficPolicy(id);
     return getHostTraffic(id);
   }
   const cols = ["hostId", "bytesIn", "bytesOut", "lastDeltaIn", "lastDeltaOut", "resetAt", "createdAt", "updatedAt"];
@@ -632,6 +637,7 @@ export async function resetHostTraffic(hostId: number) {
     `INSERT INTO ${table} (${cols.map(q).join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`,
     [id, 0, 0, 0, 0, nowSec, nowSec, nowSec],
   ).catch(() => undefined);
+  await reconcileHostTrafficPolicy(id);
   return getHostTraffic(id);
 }
 
@@ -679,6 +685,7 @@ export async function correctHostTraffic(
     );
   }
 
+  await reconcileHostTrafficPolicy(id);
   return getHostTraffic(id);
 }
 // ==================== Traffic Stats Queries ====================

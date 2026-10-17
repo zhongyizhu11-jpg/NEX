@@ -308,6 +308,12 @@ export const hosts = table("hosts", {
   expiryHandling: varchar("expiryHandling", { length: 24 }).notNull().default("none"),
   trafficLimit: bigint("trafficLimit", { mode: "number" }).notNull().default(0),
   trafficMeasureMode: varchar("trafficMeasureMode", { length: 16 }).notNull().default("both"),
+  // 流量故障转移（shared/hostTrafficPolicy.ts）：用到套餐流量的这个比例后暂停参与转发组 / 入口组 /
+  // 出口组 / 多出口隧道。trafficFailoverExcluded 是按 host_traffic_counters 算出来的派生值，
+  // 不改任何成员配置。
+  trafficFailoverEnabled: boolean("trafficFailoverEnabled").notNull().default(false),
+  trafficFailoverThresholdPercent: int("trafficFailoverThresholdPercent").notNull().default(100),
+  trafficFailoverExcluded: boolean("trafficFailoverExcluded").notNull().default(false),
   // 主机公网出口整形（forwardx-fxp/link_shaper.go 的 egress）：off / auto / manual，
   // manual 时 egressMbps 是公网带宽上限（Mbit/s）。
   egressShapingMode: varchar("egressShapingMode", { length: 16 }).notNull().default("off"),
