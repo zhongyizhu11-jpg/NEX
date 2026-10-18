@@ -2997,6 +2997,8 @@ type fxpExitEndpoint struct {
 	PeerID  string `json:"peerId,omitempty"`
 	// Weight 给出口策略 weighted 用，原样交给 FXP；没写按 1 算。
 	Weight int `json:"weight,omitempty"`
+	// CapacityMbps 是出口主机的线路带宽，FXP「按负载」按它折算；没写按一样大。
+	CapacityMbps int `json:"capacityMbps,omitempty"`
 }
 
 type fxpUDPTarget struct {
@@ -10047,7 +10049,7 @@ func normalizeFXPSpec(spec fxpSpec) fxpSpec {
 	spec.ListenHost = strings.TrimSpace(spec.ListenHost)
 	spec.ExitHost = strings.TrimSpace(spec.ExitHost)
 	switch strings.ToLower(strings.TrimSpace(spec.ExitStrategy)) {
-	case "fallback", "random", "ip_hash", "weighted":
+	case "fallback", "random", "ip_hash", "weighted", "least_load":
 		spec.ExitStrategy = strings.ToLower(strings.TrimSpace(spec.ExitStrategy))
 	default:
 		spec.ExitStrategy = "round_robin"
@@ -10214,6 +10216,9 @@ func fxpServerSignature(spec fxpSpec) string {
 		// 权重只在写了时进签名：不用 weighted 的规则签名和旧版一样，升级不重启 FXP。
 		if exit.Weight > 0 {
 			parts = append(parts, "w"+strconv.Itoa(exit.Weight))
+		}
+		if exit.CapacityMbps > 0 {
+			parts = append(parts, "c"+strconv.Itoa(exit.CapacityMbps))
 		}
 	}
 	for _, target := range spec.UDPTargets {
@@ -12865,6 +12870,10 @@ type failoverProxy struct {
 	signature      string
 	activeIndex    int
 	roundRobinNext int
+	// wrrCurrent 是「按权重」的平滑加权轮询计数；slowStartAt 是每条路径从挂掉恢复的时刻，
+	// 之后 routeSlowStartWindow 内按比例慢慢加量（route_group_balance.go）。
+	wrrCurrent     []int
+	slowStartAt    []time.Time
 	targetHealth   []bool
 	failureSince   []time.Time
 	recoveredSince []time.Time
@@ -12962,7 +12971,7 @@ func normalizeFailoverSpec(spec failoverSpec) failoverSpec {
 	}
 	spec.Protocol = failoverProtocol(spec)
 	switch strings.TrimSpace(spec.Strategy) {
-	case "round_robin", "random", "ip_hash", "weighted", "fallback":
+	case "round_robin", "random", "ip_hash", "weighted", "least_load", "fallback":
 		spec.Strategy = strings.TrimSpace(spec.Strategy)
 	default:
 		spec.Strategy = "fallback"
@@ -13253,15 +13262,6 @@ func failoverRemoteIP(conn net.Conn) string {
 	return conn.RemoteAddr().String()
 }
 
-func failoverHashIndex(key string, count int) int {
-	if count <= 0 {
-		return 0
-	}
-	h := fnv.New32a()
-	_, _ = h.Write([]byte(key))
-	return int(h.Sum32() % uint32(count))
-}
-
 func (p *failoverProxy) candidateIndicesLocked(exclude map[int]bool, healthyOnly bool) []int {
 	indices := make([]int, 0, len(p.spec.Targets))
 	for i := range p.spec.Targets {
@@ -13300,6 +13300,8 @@ func (p *failoverProxy) pickTargetForKey(hashKey string, exclude map[int]bool) (
 	switch p.spec.Strategy {
 	case "weighted":
 		index = p.weightedPickLocked(candidates)
+	case "least_load":
+		index = p.leastLoadPickLocked(candidates)
 	case "round_robin":
 		index = candidates[p.roundRobinNext%len(candidates)]
 		p.roundRobinNext = (p.roundRobinNext + 1) % 1000000
@@ -13313,7 +13315,7 @@ func (p *failoverProxy) pickTargetForKey(hashKey string, exclude map[int]bool) (
 		if key == "" {
 			key = strconv.Itoa(p.sourcePort)
 		}
-		index = candidates[failoverHashIndex(key, len(candidates))]
+		index = p.rendezvousPickLocked(candidates, key)
 	default:
 		if !p.healthyLocked(p.activeIndex) || (exclude != nil && exclude[p.activeIndex]) {
 			index = candidates[0]
@@ -13762,6 +13764,7 @@ func (p *failoverProxy) checkHealth() {
 				} else if now.Sub(p.recoveredSince[i]) >= time.Duration(recoverSeconds)*time.Second {
 					p.targetHealth[i] = true
 					p.recoveredSince[i] = time.Time{}
+					p.markSlowStartLocked(i, now)
 					logf("failover target recovered rule=%d source=%d index=%d target=%s:%d", p.ruleID, p.sourcePort, i, target.TargetIP, target.TargetPort)
 					p.recordTargetEventLocked(i, "recovered", "health check")
 				}
@@ -13854,8 +13857,10 @@ func (p *failoverProxy) handleConn(client net.Conn) {
 		}
 	}
 	if err != nil {
+		// 每条都拨失败了：重新探一遍再挑一次。这里不能再带 attempted —— 里面已经是全部路径，
+		// 带着它永远挑不出来，这一步等于没有（以前就是这样）。
 		p.checkHealthShared()
-		target, index = p.pickTargetForKey(visitor, attempted)
+		target, index = p.pickTargetForKey(visitor, nil)
 		if index >= 0 {
 			upstream, err = failoverDialTCP(context.Background(), target, failoverProxyDialTimeout)
 		} else {

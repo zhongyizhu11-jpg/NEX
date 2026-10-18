@@ -484,38 +484,6 @@ func (p *failoverProxy) shouldCloseOldConnsLocked(oldIndex int) bool {
 	}
 }
 
-// ---- 权重负载：新连接按权重分到各条能用的出站，旧连接不动 ----
-
-func (p *failoverProxy) weightedPickLocked(candidates []int) int {
-	if len(candidates) == 0 {
-		return -1
-	}
-	total := 0
-	for _, index := range candidates {
-		if weight := p.spec.Targets[index].Weight; weight > 0 {
-			total += weight
-		}
-	}
-	if p.rng == nil {
-		p.rng = newFailoverRand(p.ruleID, p.sourcePort)
-	}
-	if total <= 0 {
-		return candidates[p.rng.Intn(len(candidates))]
-	}
-	pick := p.rng.Intn(total)
-	for _, index := range candidates {
-		weight := p.spec.Targets[index].Weight
-		if weight <= 0 {
-			continue
-		}
-		if pick < weight {
-			return index
-		}
-		pick -= weight
-	}
-	return candidates[len(candidates)-1]
-}
-
 // ---- 随心跳带回去的统计快照 ----
 
 /*

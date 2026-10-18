@@ -149,3 +149,21 @@ func TestFXPSpecWeightedExitStrategy(t *testing.T) {
 		t.Fatal("权重变了签名却没变")
 	}
 }
+
+// 出口组「按负载」：Agent 原样交给 FXP，线路带宽变了 FXP 要拿到新值。
+func TestFXPSpecLeastLoadExitStrategy(t *testing.T) {
+	base := fxpSpec{
+		Role: "entry", RuleID: 7, ListenPort: 30001, Protocol: "tcp", ExitHost: "203.0.113.1", ExitPort: 40001, Key: "k",
+		ExitStrategy: "least_load",
+		Exits:        []fxpExitEndpoint{{Host: "203.0.113.1", Port: 40001, CapacityMbps: 500}, {Host: "203.0.113.2", Port: 40001, CapacityMbps: 300}},
+	}
+	if got := normalizeFXPSpec(base).ExitStrategy; got != "least_load" {
+		t.Fatalf("least_load 被规整成了 %q", got)
+	}
+	before := fxpServerSignature(normalizeFXPSpec(base))
+	changed := base
+	changed.Exits = []fxpExitEndpoint{{Host: "203.0.113.1", Port: 40001, CapacityMbps: 1000}, {Host: "203.0.113.2", Port: 40001, CapacityMbps: 300}}
+	if fxpServerSignature(normalizeFXPSpec(changed)) == before {
+		t.Fatal("线路带宽变了签名却没变")
+	}
+}

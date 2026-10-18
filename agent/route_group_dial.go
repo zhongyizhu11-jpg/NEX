@@ -104,7 +104,7 @@ func failoverDialTCP(ctx context.Context, target failoverTarget, timeout time.Du
 // raceAllowedLocked 只有本来就会把连接分到不同路径上的策略才竞速。
 func (p *failoverProxy) raceAllowedLocked() bool {
 	switch p.spec.Strategy {
-	case "weighted", "round_robin", "random":
+	case "weighted", "round_robin", "random", "least_load":
 		return len(p.spec.Targets) > 1
 	}
 	return false
