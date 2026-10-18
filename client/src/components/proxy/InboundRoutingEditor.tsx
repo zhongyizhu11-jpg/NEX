@@ -90,7 +90,8 @@ export function InboundRoutingEditor({ routes, onChange, hostId, status }: {
             type="button"
             variant="outline"
             size="sm"
-            className="shrink-0"
+            data-compact-touch=""
+            className="h-7 shrink-0 px-2.5 text-xs"
             onClick={() => onChange([...routes, { presets: [], domainsText: "", target: "auto_unlock", landingInboundId: 0 }])}
           >
             <Plus className="mr-1 h-3.5 w-3.5" />加一条
@@ -106,13 +107,14 @@ export function InboundRoutingEditor({ routes, onChange, hostId, status }: {
         return (
           <div key={index} className="space-y-2 rounded-md border bg-muted/30 p-2.5">
             <div className="flex items-start justify-between gap-2">
-              <div className="flex flex-wrap gap-1" role="group" aria-label={`第 ${index + 1} 条分流的服务`}>
+              <div className="flex flex-wrap gap-1.5" role="group" aria-label={`第 ${index + 1} 条分流的服务`}>
                 {INBOUND_ROUTE_PRESETS.map((preset) => {
                   const on = route.presets.includes(preset.id);
                   return (
                     <button
                       key={preset.id}
                       type="button"
+                      data-compact-touch=""
                       aria-pressed={on}
                       onClick={() => togglePreset(index, preset.id)}
                       className={cn(
