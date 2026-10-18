@@ -15,6 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { ProxyNodeRow, proxyNodeMetaText, type ProxyNodeRowSpec } from "@/components/proxy/ProxyNodeRow";
 import { ProxyNodeShareDialog, type ProxyNodeShareTarget } from "@/components/proxy/ProxyNodeShareDialog";
 import { ProxyNodeQuotaDetail, ProxyNodeQuotaToggle } from "@/components/proxy/ProxyNodeQuotaCells";
+import { InboundRoutingEditor, inboundRoutesFromForm, inboundRoutesToForm, type InboundRouteForm } from "@/components/proxy/InboundRoutingEditor";
 import { MONTHLY_RESET_MAX_DAY } from "@shared/billingTime";
 import { bytesFromGb, gbFromBytes, positiveIntFromInput } from "@shared/trafficGb";
 import { clipboardNeedsManualCopy, copyTextFromElement, copyTextToClipboard } from "@/lib/clipboard";
@@ -120,6 +121,8 @@ type InboundForm = {
   /** 只有 id 与名字：凭据一律服务端生成，前端拿不到也不该传。 */
   /** sharedUserId > 0 = 分享时自动发的凭据，界面上只读：它的生死跟着分享走。 */
   users: Array<{ id: number; name: string; sharedUserId?: number }>;
+  /** 分流（按服务 / 域名从别的落地出去）。空 = 全部直连。 */
+  routes: InboundRouteForm[];
 };
 
 function emptyForm(): InboundForm {
@@ -154,6 +157,7 @@ function emptyForm(): InboundForm {
     trafficResetDay: "1",
     isEnabled: true,
     users: [{ id: 0, name: "默认" }],
+    routes: [],
   };
 }
 
@@ -240,6 +244,8 @@ export default function ProxyInboundsSection({
     setExpandedQuotaIds((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]));
   };
   const [form, setForm] = useState<InboundForm>(emptyForm());
+  // 编辑已有节点时，每条分流现在实际去了哪（列表接口带回来的，新建时为空）。
+  const [editingRoutingStatus, setEditingRoutingStatus] = useState<Array<{ note: string; action: string }>>([]);
   /** 折叠着的 REALITY 里设了什么。只写填过的 —— 都留空时说「按默认值」就够了。 */
   const realitySummary = [
     form.serverName.trim(),
@@ -435,6 +441,7 @@ export default function ProxyInboundsSection({
   const openCreate = () => {
     const first = hosts[0];
     setForm({ ...emptyForm(), hostId: first ? Number(first.id) : 0, userId: Number(me?.id || 0) });
+    setEditingRoutingStatus([]);
     setDialogOpen(true);
   };
 
@@ -489,7 +496,9 @@ export default function ProxyInboundsSection({
           sharedUserId: Number(user.sharedUserId || 0),
         }))
         : [{ id: 0, name: "默认" }],
+      routes: inboundRoutesToForm(row.routing),
     });
+    setEditingRoutingStatus(Array.isArray(row.routingStatus) ? row.routingStatus : []);
     setDialogOpen(true);
   };
 
@@ -527,6 +536,7 @@ export default function ProxyInboundsSection({
       trafficResetDay: Math.min(MONTHLY_RESET_MAX_DAY, Math.max(1, positiveIntFromInput(form.trafficResetDay) || 1)),
       isEnabled: form.isEnabled,
       users: form.users.map((user, index) => ({ id: user.id, name: user.name.trim() || `凭据 ${index + 1}` })),
+      routing: inboundRoutesFromForm(form.routes),
     };
     if (form.id > 0) updateInbound.mutate({ id: form.id, ...payload });
     else createInbound.mutate(payload);
@@ -596,6 +606,8 @@ export default function ProxyInboundsSection({
       Number(row.clonedFromInboundId || 0) > 0 ? "套餐附带 · 面板托管" : "",
       // 规则编辑器里一键创建的：给转发规则当 Shadowsocks 出口用，默认不进订阅（见 docs/guide/ss-egress.md）。
       row.landingEgress === true || Number(row.landingEgress) === 1 ? "落地出口" : "",
+      // 设了分流：一部分流量从别的落地出去，编辑里看每条实际去了哪。
+      Array.isArray(row.routing?.routes) && row.routing.routes.length > 0 ? `分流 ${row.routing.routes.length} 条` : "",
       // 没开直连、又没有转发指向它 —— 这个端口跑得好好的，客户端里却没有它。
       notInSubscriptionInboundIds?.has(Number(row.id)) ? "不在订阅里" : "",
       // 机器都没连上，这个端口就没跑起来 —— 比「不在订阅里」更靠前的一个问题。
@@ -1345,6 +1357,13 @@ export default function ProxyInboundsSection({
                 </div>
               </div>
             </div>
+
+            <InboundRoutingEditor
+              routes={form.routes}
+              onChange={(routes) => setForm((prev) => ({ ...prev, routes }))}
+              hostId={form.hostId}
+              status={editingRoutingStatus}
+            />
 
             <div className="flex items-center justify-between rounded-md border p-3">
               <div className="min-w-0">

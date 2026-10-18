@@ -18,6 +18,7 @@ import { AGENT_VERSION } from "./_core/systemRouter";
 import { clearHostTcpingRequest, hasHostTcpingRequest, isHostMetricsWatching, pushAgentDesiredState, pushAgentRefresh } from "./agentEvents";
 import { getEnabledProxyInboundsWithUsersByHost } from "./repositories/proxyInboundRepository";
 import { buildSingboxRuntimePlan } from "./singboxRuntimePlan";
+import { resolveHostInboundRoutes } from "./inboundRoutingRuntime";
 import {
   PROXY_INBOUND_TRAFFIC_FORWARD_TYPE,
   proxyInboundTrafficProtocol,
@@ -148,6 +149,12 @@ import { agentActionIssueTracker, agentStatusOrderGuard, agentStatusOrderingKey 
 import { forwardGroupProbeTopologyKey, tunnelProbeTopologyKey } from "./probeTopology";
 import { resolveLocalForwardXTransportVersion, resolveRuleTrafficPortForHost } from "./agentRuntimeRuleState";
 import { isTunnelRelayAggregate, isTunnelRelayFailover, tunnelRelayCandidates, tunnelRelayUsesParallelRelays } from "@shared/tunnelRelay";
+import {
+  buildParallelStreamLegs,
+  normalizeTunnelParallelStreams,
+  tunnelParallelStreamsAgentsReady,
+  tunnelParallelStreamsUnavailableReason,
+} from "@shared/tunnelParallelStreams";
 import { normalizeExitGroupStrategy } from "@shared/exitStrategy";
 import { forwardXExitStrategy, gostExitSelector, shouldUseFastTunnelFailover } from "./tunnelExitStrategy";
 import {
@@ -3745,6 +3752,18 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         key: tunnelSecretSeed(tunnel),
       };
     };
+    // 单连接多路并发要看沿线每台主机的 Agent 版本；一次心跳里同一台只查一次。
+    const parallelStreamVersionCache = new Map<number, string>();
+    const parallelStreamAgentVersions = async (hostIds: number[]) => {
+      const ids = Array.from(new Set(hostIds.filter((id) => Number.isInteger(id) && id > 0)));
+      const missing = ids.filter((id) => !parallelStreamVersionCache.has(id));
+      if (missing.length > 0) {
+        const rows = await db.getHostsByIds(missing) as any[];
+        for (const id of missing) parallelStreamVersionCache.set(id, "");
+        for (const row of rows) parallelStreamVersionCache.set(Number(row.id), String(row.agentVersion || ""));
+      }
+      return ids.map((id) => parallelStreamVersionCache.get(id) || "");
+    };
     const forwardXEntryRoutes = async (rule: any, tunnel: any) => {
       const routes: Array<{ hostId: number; host: string; port: number; udpPort: number; key: string }> = [];
       const hops = tunnelHopsByTunnelId.get(Number(tunnel.id));
@@ -6213,6 +6232,19 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
                   via: `relay#${Number((route as any).hostId || 0)}`,
                 }))
               : [];
+            // 单连接多路并发：没有并排中转时，把同一个出口（或链的第一跳）重复 N 条腿。
+            // 沿线有 Agent 太旧就不拆，按单路下发（原来的「每条连接各走各的」）。
+            if (!relayAggregate && normalizeTunnelParallelStreams((tunnel as any).parallelStreams) >= 2) {
+              const hopsForStreams = tunnelHopsByTunnelId.get(Number(tunnel.id)) || [];
+              if (!tunnelParallelStreamsUnavailableReason(tunnel, hopsForStreams, entryRoutes.length)) {
+                const peerIds = [Number(tunnel.exitHostId), ...hopsForStreams.map((hop: any) => Number(hop?.hostId || 0))]
+                  .filter((id) => id !== Number(host.id));
+                const peerVersions = await parallelStreamAgentVersions(peerIds);
+                if (tunnelParallelStreamsAgentsReady(String((host as any).agentVersion || ""), peerVersions)) {
+                  multipathLegs.push(...buildParallelStreamLegs(entryRoute, (tunnel as any).parallelStreams));
+                }
+              }
+            }
             const fxpSpec = await applyForwardXTransport({
               role: "entry",
               tunnelId: tunnel.id,
@@ -6981,11 +7013,17 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
      * 会按签名去重，所以只会真正下发一次。
      */
     if (!deferActionsForLocalState) {
+      // 分流（按服务 / 域名从别的落地出去）：出口在这里现挑，解锁检测结果变了下次心跳就跟着变。
+      const inboundRoutes = await resolveHostInboundRoutes(Number(host.id), hostProxyInbounds).catch((error) => {
+        appendPanelLog("warn", `[SingboxRouting] resolve failed host=${host.id}: ${error instanceof Error ? error.message : String(error)}`);
+        return new Map<number, any[]>();
+      });
       const singboxPlan = buildSingboxRuntimePlan({
         inbounds: hostProxyInbounds.map((row) => ({
           inbound: row.inbound,
           // 用行 id 做 tag：改名不该让 sing-box 认为这是另一个入站。
           tag: `inbound-${row.id}`,
+          ...(inboundRoutes.has(row.id) ? { routes: inboundRoutes.get(row.id) } : {}),
         })),
         accelerator: await getSingboxAccelerator(),
       });

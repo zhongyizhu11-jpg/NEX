@@ -59,6 +59,7 @@ export default defineConfig({
           { text: "PROXY Protocol", link: "/guide/proxy-protocol" },
           { text: "共享 TLS 入站（SNI 分流）", link: "/guide/sni-shared-inbound" },
           { text: "落地主机与 Shadowsocks 出口", link: "/guide/ss-egress" },
+          { text: "落地节点分流（按解锁选出口）", link: "/guide/inbound-routing" },
           { text: "限速、复制模式与 SOCKS5", link: "/guide/rate-limits" },
         ],
       },

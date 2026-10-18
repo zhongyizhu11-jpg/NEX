@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { protectedProcedure, router } from "../_core/trpc";
 import { getLinkDiagnosticsReport, startLinkDiagnostics } from "../linkDiagnostics";
+import { buildFaultBundle, faultBundleFilename } from "../faultBundle";
 
 /**
  * 一键链路诊断。start 当场给出面板侧的结论、给涉及的主机排 diagnostics 任务；
@@ -18,4 +19,18 @@ export const diagnosticsRouter = router({
   status: protectedProcedure
     .input(z.object({ sessionId: z.string().min(8).max(64) }))
     .query(({ input, ctx }) => getLinkDiagnosticsReport(ctx, input.sessionId)),
+
+  /**
+   * 一键故障包（见 server/faultBundle.ts）：只读，不给主机派任务。
+   * 是 query 不是 mutation：只读 API 令牌、MCP 的只读工具也能取。
+   */
+  faultBundle: protectedProcedure
+    .input(z.object({
+      kind: z.enum(["rule", "tunnel", "forwardGroup"]),
+      id: z.number().int().positive(),
+    }))
+    .query(async ({ input, ctx }) => ({
+      filename: faultBundleFilename(input),
+      bundle: await buildFaultBundle(ctx, input),
+    })),
 });

@@ -38,6 +38,15 @@ import {
 import { formatProxyNodeLink, PROXY_NODE_TRANSPORTS } from "../../shared/proxyNode";
 import { combinePortPolicies, isPortAllowedByPolicy, portPolicyErrorMessage, portPolicyFrom } from "../../shared/portPolicy";
 import { dbBool } from "../repositories/repositoryUtils";
+import { INBOUND_ROUTE_TARGETS, MAX_INBOUND_ROUTES, parseInboundRouting, serializeInboundRouting } from "../../shared/inboundRouting";
+import {
+  describeInboundRoutingStatus,
+  getInboundsRoutingVia,
+  invalidateInboundRoutingContext,
+  listRoutingLandingOptions,
+  refreshInboundRoutingDependents,
+  validateInboundRoutingForSave,
+} from "../inboundRoutingRuntime";
 import {
   assertProxyInboundEgressCompatibleChange,
   assertProxyInboundNotUsedAsEgress,
@@ -262,6 +271,7 @@ function fillGeneratedCredentials(inbound: ProxyInbound): ProxyInbound {
  * 启用中的入站合成一份 sing-box 配置。
  */
 async function applyInbound(inboundId: number, hostId: number) {
+  invalidateInboundRoutingContext();
   await db.syncProxyNodeFromInbound(inboundId);
   pushAgentRefresh(hostId, `proxy-inbound-${inboundId}`, { urgent: true });
 }
@@ -320,6 +330,18 @@ const inboundInput = z.object({
     id: z.number().int().nonnegative().default(0),
     name: z.string().trim().max(64),
   })).max(200).optional(),
+  /**
+   * 分流（shared/inboundRouting.ts）：按服务 / 域名把一部分流量从别的落地出去。
+   * 不传 = 不改；null 或空列表 = 不分流。
+   */
+  routing: z.object({
+    routes: z.array(z.object({
+      presets: z.array(z.string().max(40)).max(20).default([]),
+      domains: z.array(z.string().max(300)).max(200).default([]),
+      target: z.enum(INBOUND_ROUTE_TARGETS),
+      landingInboundId: z.number().int().nonnegative().default(0),
+    })).max(MAX_INBOUND_ROUTES),
+  }).nullable().optional(),
 });
 
 type InboundInput = z.infer<typeof inboundInput>;
@@ -411,6 +433,7 @@ export async function createProxyInboundForActor(ctx: any, input: InboundInput, 
   const reason = validateProxyInbound(inbound);
   if (reason) throw new Error(reason);
   assertInboundCertPathsAllowed(ctx, host, inbound);
+  const routing = input.routing ? await validateInboundRoutingForSave(input.routing, { ownerId, hostId: input.hostId }) : null;
 
   const id = await db.createProxyInbound({
     userId: ownerId,
@@ -421,6 +444,7 @@ export async function createProxyInboundForActor(ctx: any, input: InboundInput, 
     isEnabled: input.isEnabled ?? true,
     hostGrantRequired: inboundNeedsHostGrant(ctx, host),
     landingEgress: options.landingEgress === true,
+    routingJson: serializeInboundRouting(routing),
     ...inboundQuotaRow(input, ctx.user.role === "admin"),
     ...db.proxyInboundToRow(inbound),
   } as any);
@@ -462,6 +486,8 @@ export const proxyInboundsRouter = router({
     );
     // 用户清单一次查完：一行一次的话，管理员那边五十个端口就是五十次往返。
     const usersByInbound = await db.getProxyInboundUsersByInbounds(rows.map((row: any) => Number(row.id)));
+    // 带分流的入站：每条分流现在实际去了哪（自动挑的那台、或者为什么拒绝 / 直连）。
+    const routingStatus = await describeInboundRoutingStatus(rows as any[]).catch(() => new Map());
     /*
       这些端口所在机器的机房额度。
 
@@ -516,6 +542,9 @@ export const proxyInboundsRouter = router({
         (derived.get(Number(row.id))?.ids || []).flatMap((id: number) => shareUserIds.get(Number(id)) || []),
       ).size,
       hostQuota: hostQuotaOf(Number(row.hostId)),
+      routingJson: undefined,
+      routing: parseInboundRouting(row.routingJson),
+      routingStatus: routingStatus.get(Number(row.id)) || [],
     }));
   }),
 
@@ -557,6 +586,12 @@ export const proxyInboundsRouter = router({
    * 不要求客户端订阅权限 —— 用管理员开放的落地出口不需要能看订阅。
    */
   egressLandingOptions: protectedProcedure.query(async ({ ctx }) => listEgressLandingOptions(ctx.user)),
+
+  /** 节点编辑器「分流」那一段：能走的 Shadowsocks 落地，带各服务最新的解锁检测结论。 */
+  routingLandingOptions: protectedProcedure.query(async ({ ctx }) => {
+    await assertAllowed(ctx);
+    return listRoutingLandingOptions(ctx.user);
+  }),
 
   /**
    * 规则编辑器问：这几台入口机现在能不能让 UDP 走出口、能不能用 SS2022 出口（看 Agent 上报的能力）。
@@ -665,6 +700,15 @@ export const proxyInboundsRouter = router({
        * 没换归属时不查：那会让一个已经超额的用户连改名字都改不了。
        */
       if (ownerId !== Number(row.userId)) await assertInboundQuota(ownerId, ctx);
+      /*
+        分流没动就不重新校验：表单每次都会原样回传，面板克隆给租户的专属端口带着源入站的分流
+        （点名的是管理员的落地），租户改个名字不该因为「你用不了那台落地」被拦住。
+      */
+      const routingChanged = input.routing !== undefined
+        && serializeInboundRouting(parseInboundRouting(input.routing)) !== ((row as any).routingJson ? String((row as any).routingJson) : null);
+      const routing = routingChanged
+        ? await validateInboundRoutingForSave(input.routing, { ownerId, hostId })
+        : undefined;
 
       await db.updateProxyInbound(input.id, {
         hostId,
@@ -675,6 +719,7 @@ export const proxyInboundsRouter = router({
         ...(input.remark !== undefined ? { remark: input.remark || null } : {}),
         ...(input.publicLabel !== undefined ? { publicLabel: input.publicLabel || null } : {}),
         ...(input.isEnabled !== undefined ? { isEnabled: input.isEnabled } : {}),
+        ...(routing !== undefined ? { routingJson: serializeInboundRouting(routing) } : {}),
         ...inboundQuotaRow(input, ctx.user.role === "admin"),
         ...db.proxyInboundToRow(inbound),
       } as any);
@@ -682,6 +727,8 @@ export const proxyInboundsRouter = router({
       await applyInbound(input.id, hostId);
       // 端口、密码、启停变了：拿它当出口的规则所在的入口机马上重算 gost 配置。
       await refreshEgressDependents(input.id, `proxy-inbound-egress-${input.id}`);
+      // 别的落地分流时点名走它的，也马上换上新的端口 / 密码。
+      await refreshInboundRoutingDependents(input.id, `proxy-inbound-routing-${input.id}`);
       // 换过主机时旧主机也要重推一遍，否则那边的配置里还留着这个入站。
       if (input.hostId !== undefined && Number(row.hostId) !== hostId) {
         pushAgentRefresh(Number(row.hostId), `proxy-inbound-moved-${input.id}`, { urgent: true });
@@ -713,6 +760,7 @@ export const proxyInboundsRouter = router({
       await applyInbound(input.id, Number(row.hostId));
       // 拿它当 Shadowsocks 出口的规则：下发时从入站现取凭据，这里催入口机马上换上新密码。
       await refreshEgressDependents(input.id, `proxy-inbound-rotated-${input.id}`);
+      await refreshInboundRoutingDependents(input.id, `proxy-inbound-routing-rotated-${input.id}`);
       // 换了凭据，旧订阅立刻失效 —— 这是预期行为，界面上要讲清楚。
       return { success: true };
     }),
@@ -724,7 +772,14 @@ export const proxyInboundsRouter = router({
       const row = await assertOwnedInbound(input.id, ctx);
       // 还有转发规则拿它当 Shadowsocks 出口：删了那些规则会断，先让人把规则改掉（报错里列出规则）。
       await assertProxyInboundNotUsedAsEgress(input.id);
+      // 别的落地分流时点名走它：删了那部分流量就只能拒绝，先让人把分流改掉。
+      const routingVia = await getInboundsRoutingVia(input.id);
+      if (routingVia.length > 0) {
+        const names = routingVia.slice(0, 5).map((item: any) => `「${item.name}」`).join("、");
+        throw new Error(`落地节点${names}${routingVia.length > 5 ? ` 等 ${routingVia.length} 个` : ""}的分流在用它，先去改掉那边的分流再删`);
+      }
       const result = await db.deleteProxyInbound(input.id);
+      invalidateInboundRoutingContext();
       pushAgentRefresh(Number(row.hostId), `proxy-inbound-deleted-${input.id}`, { urgent: true });
       return { success: true, ...result };
     }),

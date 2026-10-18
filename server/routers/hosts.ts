@@ -1393,6 +1393,8 @@ export const hostsRouter = router({
         trafficFailoverThresholdPercent: z.number().int().min(1).max(100).optional(),
         egressShapingMode: hostEgressShapingModeSchema.optional(),
         egressMbps: hostEgressMbpsSchema.optional(),
+        /** 上下线推送（默认开）。只有管理员能关：通知发给的是管理员。 */
+        hostStatusNotifyEnabled: z.boolean().optional(),
         telegramTrafficAlertEnabled: z.boolean().optional(),
         trafficAlertThresholdPercent: z.number().int().min(1).max(99).optional(),
         telegramRenewalReminderEnabled: z.boolean().optional(),
@@ -1462,6 +1464,7 @@ export const hostsRouter = router({
           blockHttp: ctx.user.role === "admin" ? !!input.blockHttp : false,
           blockSocks: ctx.user.role === "admin" ? !!input.blockSocks : false,
           blockTls: ctx.user.role === "admin" ? !!input.blockTls : false,
+          hostStatusNotifyEnabled: ctx.user.role === "admin" ? input.hostStatusNotifyEnabled !== false : true,
           userId: ctx.user.id,
         });
         return { id, agentToken };
@@ -1561,6 +1564,8 @@ export const hostsRouter = router({
         flowOffload: z.boolean().optional(),
         /** 整台主机的转发限速（Mbps，0 = 不限）：所有用户加起来共用一个桶。只有管理员能改。 */
         rateLimitMbps: z.number().int().min(0).max(1_000_000).optional(),
+        /** 上下线推送（默认开）。只有管理员能关：通知发给的是管理员。 */
+        hostStatusNotifyEnabled: z.boolean().optional(),
         telegramTrafficAlertEnabled: z.boolean().optional(),
         trafficAlertThresholdPercent: z.number().int().min(1).max(99).optional(),
         telegramRenewalReminderEnabled: z.boolean().optional(),
@@ -1698,6 +1703,9 @@ export const hostsRouter = router({
         }
         if (ctx.user.role !== "admin") {
           for (const field of hostProtocolPolicyFields) delete (data as any)[field];
+          delete (data as any).hostStatusNotifyEnabled;
+        } else if ((data as any).hostStatusNotifyEnabled !== undefined) {
+          (data as any).hostStatusNotifyEnabled = !!(data as any).hostStatusNotifyEnabled;
         }
         const protocolPolicyChanged = hostProtocolPolicyFields.some((key) =>
           (data as any)[key] !== undefined && !!(data as any)[key] !== !!(host as any)[key]

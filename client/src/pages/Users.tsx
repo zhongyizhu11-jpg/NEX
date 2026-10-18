@@ -631,8 +631,8 @@ function UsersContent() {
     onSuccess: (data) => {
       utils.users.listPage.invalidate();
       utils.billing.me.invalidate();
-      utils.billing.ledger.invalidate();
-      utils.billing.listTransactions.invalidate();
+      utils.billing.ledgerPage.invalidate();
+      utils.billing.listTransactionsPage.invalidate();
       toast.success(withRestoredNote("余额已充值", (data as any)?.forwardAccessRestored));
       setShowRecharge(false);
       setRechargeAmount("");
@@ -644,8 +644,8 @@ function UsersContent() {
     onSuccess: (data) => {
       utils.users.listPage.invalidate();
       utils.billing.me.invalidate();
-      utils.billing.ledger.invalidate();
-      utils.billing.listTransactions.invalidate();
+      utils.billing.ledgerPage.invalidate();
+      utils.billing.listTransactionsPage.invalidate();
       toast.success(withRestoredNote(data.changed ? "余额已修改" : "余额未变化", (data as any)?.forwardAccessRestored));
       setShowSetBalance(false);
       setSetBalanceAmount("");

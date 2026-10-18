@@ -141,6 +141,8 @@ export default function Billing() {
   const subscriptionPageRequest = usePersistentPageRequest("forwardx.billing.subscriptions.page");
   const redemptionPageRequest = usePersistentPageRequest("forwardx.billing.redemption.page");
   const discountPageRequest = usePersistentPageRequest("forwardx.billing.discount.page");
+  const ledgerPageRequest = usePersistentPageRequest("forwardx.billing.ledger.page");
+  const transactionPageRequest = usePersistentPageRequest("forwardx.billing.transactions.page");
 
   const { data: billingSummary, isLoading: billingSummaryLoading } = trpc.billing.summary.useQuery(undefined, {
     staleTime: 10_000,
@@ -170,24 +172,21 @@ export default function Billing() {
   });
   const subscriptions = (subscriptionPageQuery.data?.items || []) as any[];
   const subscriptionsLoading = subscriptionPageQuery.isLoading;
-  const {
-    data: transactions = [],
-    isLoading: transactionsLoading,
-    error: transactionsError,
-    isFetching: transactionsFetching,
-    refetch: refetchTransactions,
-  } = trpc.billing.listTransactions.useQuery(
-    { limit: 100 },
+  /*
+    余额流水、账单都在服务端分页（上游 2.3.285）：原来只拿最近 100 / 200 条，更早的记录在面板上翻不到。
+  */
+  const transactionsQuery = trpc.billing.listTransactionsPage.useQuery(
+    { page: transactionPageRequest.page, pageSize: 50 },
     { enabled: activeTab === "balance", staleTime: 10_000, refetchOnWindowFocus: false, placeholderData: (previousData) => previousData },
   );
-  const {
-    data: ledger = [],
-    isLoading: ledgerLoading,
-    error: ledgerError,
-    isFetching: ledgerFetching,
-    refetch: refetchLedger,
-  } = trpc.billing.ledger.useQuery({
-    limit: 200,
+  const transactions = (transactionsQuery.data?.items || []) as any[];
+  const transactionsLoading = transactionsQuery.isLoading;
+  const transactionsError = transactionsQuery.error;
+  const transactionsFetching = transactionsQuery.isFetching;
+  const refetchTransactions = transactionsQuery.refetch;
+  const ledgerQuery = trpc.billing.ledgerPage.useQuery({
+    page: ledgerPageRequest.page,
+    pageSize: 50,
     userId: ledgerUserId === "all" ? undefined : Number(ledgerUserId),
     includeCancelledSubscriptions: showCancelledSubscriptions,
   }, {
@@ -196,12 +195,11 @@ export default function Billing() {
     refetchOnWindowFocus: false,
     placeholderData: (previousData) => previousData,
   });
-  const visibleLedger = useMemo(
-    () => showCancelledSubscriptions
-      ? ledger
-      : ledger.filter((item: any) => item.kind !== "subscription" || item.status !== "cancelled"),
-    [ledger, showCancelledSubscriptions],
-  );
+  const visibleLedger = (ledgerQuery.data?.items || []) as any[];
+  const ledgerLoading = ledgerQuery.isLoading;
+  const ledgerError = ledgerQuery.error;
+  const ledgerFetching = ledgerQuery.isFetching;
+  const refetchLedger = ledgerQuery.refetch;
   const redemptionPageQuery = trpc.billing.listRedemptionCodesPage.useQuery({
     page: redemptionPageRequest.page,
     pageSize: 50,
@@ -239,6 +237,21 @@ export default function Billing() {
     redemptionPageRequest,
     { pageSize: 50, isReady: !redemptionCodesLoading && !!redemptionPageQuery.data },
   );
+  const ledgerPagination = useServerPagination(
+    visibleLedger,
+    Number(ledgerQuery.data?.totalItems || 0),
+    ledgerPageRequest,
+    { pageSize: 50, isReady: !ledgerLoading && !!ledgerQuery.data },
+  );
+  const transactionPagination = useServerPagination(
+    transactions,
+    Number(transactionsQuery.data?.totalItems || 0),
+    transactionPageRequest,
+    { pageSize: 50, isReady: !transactionsLoading && !!transactionsQuery.data },
+  );
+  useEffect(() => {
+    ledgerPageRequest.setPage(1);
+  }, [ledgerUserId, showCancelledSubscriptions, ledgerPageRequest.setPage]);
   const discountPagination = useServerPagination(
     discountCodes,
     Number(discountPageQuery.data?.totalItems || 0),
@@ -282,7 +295,7 @@ export default function Billing() {
   const deleteCancelledSubscription = trpc.plans.deleteCancelledSubscription.useMutation({
     onSuccess: () => {
       toast.success("已取消的订阅记录已删除");
-      utils.billing.ledger.invalidate();
+      utils.billing.ledgerPage.invalidate();
       utils.plans.subscriptionsPage.invalidate();
     },
     onError: (error) => toast.error(error.message || "删除订阅记录失败"),
@@ -710,6 +723,7 @@ export default function Billing() {
                   </TableBody>
                 </Table>
                 </div>
+                <PersistentPagination pagination={ledgerPagination} itemName="条账单" />
                   </>
                 )}
               </CardContent>
@@ -834,6 +848,7 @@ export default function Billing() {
                   </TableBody>
                 </Table>
                 </div>
+                <PersistentPagination pagination={transactionPagination} itemName="条流水" />
                   </>
                 )}
               </CardContent>

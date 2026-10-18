@@ -1,4 +1,5 @@
 import { copyTextToClipboard } from "@/lib/clipboard";
+import { useFaultBundleExport } from "@/components/links/useFaultBundleExport";
 import { FormField } from "@/components/ui/form-field";
 import EmptyState from "@/components/EmptyState";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
@@ -85,11 +86,11 @@ import {
   RULE_TRANSFER_FILE_VERSION,
   RULE_TRANSFER_MAX_FILE_SIZE,
   RULE_TRANSFER_MAX_IMPORT_COUNT,
-  parseRuleTransferFile,
   normalizeFailoverStrategy,
   type RuleTransferFile,
   type RuleTransferFileRule,
 } from "@/lib/ruleTransfer";
+import { parseCompatibleRuleTransferText, validateNyanpassImportTarget, type CompatibleRuleFile, type ImportedRule } from "@/lib/nyanpassImport";
 import {
   filterRuleEntryAddressesForDisplay,
   getEntryAddressFamily as addressFamily,
@@ -197,6 +198,7 @@ import {
   Globe,
   RotateCcw,
   Lock,
+  FileJson,
 } from "lucide-react";
 import type { GlobeMethods } from "react-globe.gl";
 import {
@@ -2012,6 +2014,7 @@ function RulesContent() {
   const search = useSearch();
   const isMobile = useIsMobile();
   const utils = trpc.useUtils();
+  const faultBundle = useFaultBundleExport();
   const [ruleProbeCacheRevision, setRuleProbeCacheRevision] = useState(0);
   const invalidatedRuleProbeIdsRef = useRef(new Set<number>());
   const invalidateRuleProbeStatuses = useCallback((ruleIds: Iterable<number> | undefined) => {
@@ -2287,8 +2290,11 @@ function RulesContent() {
   const [importScopeType, setImportScopeType] = useState<RuleTransferScopeType>("tunnel");
   const [importResourceId, setImportResourceId] = useState("");
   const [importResourceSearch, setImportResourceSearch] = useState("");
-  const [importSourceMode, setImportSourceMode] = useState<"file" | "manual">("file");
-  const [importFile, setImportFile] = useState<RuleTransferFile | null>(null);
+  const [importSourceMode, setImportSourceMode] = useState<"file" | "manual" | "nyanpass">("file");
+  const [importFile, setImportFile] = useState<CompatibleRuleFile | null>(null);
+  /** ny 导出里没有协议，导入时统一选一个（上游 2.3.285，实验性）。 */
+  const [importNyanpassProtocol, setImportNyanpassProtocol] = useState<RuleProtocol>("tcp");
+  const [importNyanpassAcknowledged, setImportNyanpassAcknowledged] = useState(false);
   const [importFileName, setImportFileName] = useState("");
   const [importFileError, setImportFileError] = useState("");
   const [importFileInputKey, setImportFileInputKey] = useState(0);
@@ -5637,8 +5643,31 @@ function RulesContent() {
     return { ok: true, message: `已识别 ${rules.length} 条手动输入规则`, rules };
   }, [defaultForm.forwardType, defaultForm.protocol, importManualText]);
 
-  const importValidation = useMemo<{ ok: boolean; message: string; rules: RuleTransferFileRule[] }>(() => {
+  /*
+    ny / Nyanpass 导入（实验性）：粘贴 ny 导出的逐行 JSON，或者直接选 ny 的导出文件（文件导入会自动认出来）。
+    导进来一律先停用；入口端口冲突就留作失败项，不像普通导入那样改成随机端口 —— 迁移过来的规则
+    对外公布的端口不能悄悄变。
+  */
+  const nyanpassPaste = useMemo(() => (importSourceMode === "nyanpass" && importManualText.trim()
+    ? parseCompatibleRuleTransferText(importManualText)
+    : null), [importSourceMode, importManualText]);
+  const nyanpassFile = importSourceMode === "nyanpass"
+    ? (nyanpassPaste?.ok && (nyanpassPaste.file as CompatibleRuleFile).importSource === "nyanpass" ? nyanpassPaste.file as CompatibleRuleFile : null)
+    : importSourceMode === "file" && importFile?.importSource === "nyanpass" ? importFile : null;
+  const isNyanpassImport = importSourceMode === "nyanpass" || !!nyanpassFile;
+  useEffect(() => { setImportNyanpassAcknowledged(false); }, [importResourceId, importScopeType, importNyanpassProtocol, importManualText]);
+
+  const importValidation = useMemo<{ ok: boolean; message: string; rules: ImportedRule[] }>(() => {
     if (!importResourceId) return { ok: false, message: `请选择${ruleTransferScopeLabels[importScopeType]}`, rules: [] };
+    if (isNyanpassImport) {
+      if (nyanpassPaste && !nyanpassPaste.ok) return { ok: false, message: nyanpassPaste.error, rules: [] };
+      if (!nyanpassFile) return { ok: false, message: "粘贴 ny 导出的规则（一行一条 JSON），或选 ny 的导出文件", rules: [] };
+      const rules = nyanpassFile.rules.map((rule) => ({ ...rule, protocol: importNyanpassProtocol }));
+      const error = validateNyanpassImportTarget(rules, { protocol: importNyanpassProtocol, scope: importScopeType, resource: selectedImportResource, admin: user?.role === "admin" });
+      if (error) return { ok: false, message: error, rules };
+      if (!importNyanpassAcknowledged) return { ok: false, message: "请先勾选下面的实验性导入说明", rules };
+      return { ok: true, message: `ny（实验性）：识别到 ${rules.length} 条规则，导入后先停用，端口冲突的留作失败项`, rules };
+    }
     if (importSourceMode === "manual") {
       if (!manualImportValidation.ok) return manualImportValidation;
       return manualImportValidation;
@@ -5646,7 +5675,7 @@ function RulesContent() {
     if (importFileError) return { ok: false, message: importFileError, rules: [] };
     if (!importFile) return { ok: false, message: "请选择导入文件", rules: [] };
     return { ok: true, message: `已识别 ${importFile.rules.length} 条${ruleTransferScopeLabels[importScopeType]}规则`, rules: importFile.rules };
-  }, [importFile, importFileError, importResourceId, importScopeType, importSourceMode, manualImportValidation]);
+  }, [importFile, importFileError, importResourceId, importScopeType, importSourceMode, manualImportValidation, isNyanpassImport, nyanpassPaste, nyanpassFile, importNyanpassProtocol, importNyanpassAcknowledged, selectedImportResource, user?.role]);
 
   const resetImportDialog = () => {
     setImportFile(null);
@@ -5654,6 +5683,7 @@ function RulesContent() {
     setImportFileError("");
     setImportFileInputKey((key) => key + 1);
     setImportManualText("");
+    setImportNyanpassAcknowledged(false);
   };
 
   const openExportDialog = () => {
@@ -5709,8 +5739,8 @@ function RulesContent() {
     }
     try {
       const rawText = await file.text();
-      const parsed = JSON.parse(rawText);
-      const result = parseRuleTransferFile(parsed);
+      // NEX 自己的导出文件照原来的严格校验；不是的话按 ny 的导出格式试一遍。
+      const result = parseCompatibleRuleTransferText(rawText);
       if (!result.ok) {
         setImportFileError(result.error);
         return;
@@ -5721,7 +5751,7 @@ function RulesContent() {
     }
   };
 
-  const buildImportRulePayload = (rule: RuleTransferFileRule) => {
+  const buildImportRulePayload = (rule: ImportedRule) => {
     const resourceId = Number(importResourceId);
     const selectedTunnel = importScopeType === "tunnel" ? tunnelById.get(resourceId) : null;
     const selectedGroup = importScopeType === "tunnel" ? null : forwardGroupById.get(resourceId);
@@ -5759,6 +5789,8 @@ function RulesContent() {
       failoverSeconds: rule.failoverSeconds,
       recoverSeconds: rule.recoverSeconds,
       autoFailback: rule.autoFailback,
+      // ny 规则自带的限速（只有管理员能设，validateNyanpassImportTarget 已拦过非管理员）。
+      ...(isNyanpassImport && rule.rateLimitMbps && user?.role === "admin" ? { rateLimitMbps: rule.rateLimitMbps } : {}),
     };
   };
 
@@ -5776,7 +5808,8 @@ function RulesContent() {
         try {
           return await importCreateMutation.mutateAsync(payload);
         } catch (error) {
-          if (rule.sourcePort <= 0 || !isBatchPortConflictError(error)) throw error;
+          // ny 迁移过来的入口端口是对外公布过的：冲突就留作失败项，不换随机端口。
+          if (isNyanpassImport || rule.sourcePort <= 0 || !isBatchPortConflictError(error)) throw error;
           return importCreateMutation.mutateAsync({ ...payload, sourcePort: 0 });
         }
       });
@@ -5792,7 +5825,11 @@ function RulesContent() {
       if (showCopyDialog) await fullRulesQuery.refetch();
       if (failures.length > 0) {
         const failedRules = failures.map((result) => result.item);
-        if (importSourceMode === "file") {
+        if (isNyanpassImport && nyanpassFile) {
+          setImportSourceMode("file");
+          setImportManualText("");
+          setImportFile({ ...nyanpassFile, rules: failedRules });
+        } else if (importSourceMode === "file") {
           setImportFile((current) => current ? { ...current, rules: failedRules } : current);
         } else {
           setImportManualText(failedRules
@@ -6888,6 +6925,14 @@ function RulesContent() {
             ariaLabel: `查看 ${rule.name} 的延迟`,
             icon: <Activity className="h-3.5 w-3.5" />,
             onSelect: () => setTrafficDetailRule({ id: rule.id, name: rule.name, isForwardChain: isForwardChainRule, probeMethod }),
+          },
+          {
+            key: "fault-bundle",
+            label: "导出故障包",
+            ariaLabel: `导出 ${rule.name} 的故障包（诊断结论、脱敏配置、沿线主机状态）`,
+            icon: <FileJson className="h-3.5 w-3.5" />,
+            disabled: faultBundle.pending,
+            onSelect: () => { void faultBundle.exportBundle("rule", Number(rule.id)); },
           },
           {
             key: "topology",
@@ -8690,7 +8735,7 @@ function RulesContent() {
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                     <div className="space-y-1">
                       <Label>导入文件</Label>
-                      <div className="text-xs text-muted-foreground">支持从文件导入，或手动输入目标地址与端口后批量导入。</div>
+                      <div className="text-xs text-muted-foreground">支持从文件导入、手动输入目标地址，或粘贴 ny 导出的规则。</div>
                     </div>
                     <div className="inline-flex shrink-0 items-center gap-2 self-start whitespace-nowrap rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
                       <span>待导入</span>
@@ -8698,7 +8743,7 @@ function RulesContent() {
                     </div>
                   </div>
                   <div className={segmentedControlClassName}>
-                    <div className="grid grid-cols-2 gap-1">
+                    <div className="grid grid-cols-3 gap-1">
                       <button
                         type="button"
                         className={routeModeOptionClass(importSourceMode === "file", importingRules)}
@@ -8728,13 +8773,37 @@ function RulesContent() {
                         <Pencil className="h-4 w-4 shrink-0" />
                         <span className="truncate">手动输入</span>
                       </button>
+                      <button
+                        type="button"
+                        className={routeModeOptionClass(importSourceMode === "nyanpass", importingRules)}
+                        aria-pressed={importSourceMode === "nyanpass"}
+                        onClick={() => {
+                          setImportSourceMode("nyanpass");
+                          setImportManualText("");
+                          setImportFile(null);
+                          setImportFileName("");
+                          setImportFileError("");
+                          setImportFileInputKey((key) => key + 1);
+                        }}
+                        disabled={importingRules}
+                      >
+                        <ArrowRightLeft className="h-4 w-4 shrink-0" />
+                        <span className="truncate">ny 迁移</span>
+                      </button>
                     </div>
                   </div>
                   {/* 文件框和手填框只会出现一个，共用一个 FormField 的 id 不会撞。 */}
                   <FormField className="space-y-2">
-                    <Label>{importSourceMode === "file" ? "规则文件" : "目标地址列表"}</Label>
+                    <Label>{importSourceMode === "file" ? "规则文件" : importSourceMode === "nyanpass" ? "ny 导出的规则" : "目标地址列表"}</Label>
                     {importSourceMode === "file" ? (
-                      <Input key={importFileInputKey} type="file" accept=".json,application/json" onChange={handleImportFileChange} />
+                      <Input key={importFileInputKey} type="file" accept=".json,.jsonl,.txt,application/json" onChange={handleImportFileChange} />
+                    ) : importSourceMode === "nyanpass" ? (
+                      <Textarea
+                        value={importManualText}
+                        onChange={(event) => setImportManualText(event.target.value)}
+                        placeholder={'一行一条，例如：\n{"name":"HK","listen_port":10001,"dest":["1.2.3.4:443"]}'}
+                        className="min-h-[7.5rem] resize-y font-mono text-xs"
+                      />
                     ) : (
                       <Textarea
                         value={importManualText}
@@ -8757,6 +8826,22 @@ function RulesContent() {
                       {importValidation.message}
                     </div>
                   )}
+                  {isNyanpassImport ? (
+                    <div className="space-y-2 rounded-md border border-[color-mix(in_srgb,var(--fx-warn)_35%,transparent)] bg-[var(--fx-warn-soft)] p-3 text-xs">
+                      <p className="font-medium text-[var(--fx-warn-text)]">ny / Nyanpass 迁移（实验性）</p>
+                      <p className="leading-5 text-muted-foreground">ny 的导出里没有协议、启停状态和线路拓扑。选一个协议；规则导进来先停用，不迁移历史流量，不覆盖已有规则，入口端口冲突的不换端口、留作失败项。</p>
+                      <Select value={importNyanpassProtocol} onValueChange={(value) => setImportNyanpassProtocol(value as RuleProtocol)} disabled={importingRules}>
+                        <SelectTrigger aria-label="ny 规则的协议" className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {(["tcp", "udp", "both"] as const).map((value) => <SelectItem key={value} value={value}>{formatForwardRuleProtocol(value)}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                      <label className="flex cursor-pointer items-start gap-2 leading-5">
+                        <Checkbox className="mt-0.5" checked={importNyanpassAcknowledged} onCheckedChange={(checked) => setImportNyanpassAcknowledged(!!checked)} disabled={importingRules} />
+                        <span>我已核对导入目标、协议和下面的预览，接受实验性导入的限制</span>
+                      </label>
+                    </div>
+                  ) : null}
                   {importValidation.rules.length > 0 && (
                     <div className="max-h-[24rem] space-y-2 overflow-y-auto rounded-md border border-border/60 p-2">
                       {importValidation.rules.map((rule, index) => (
@@ -8769,6 +8854,16 @@ function RulesContent() {
                           <div className="mt-1 truncate text-xs text-muted-foreground">
                             {rule.sourcePort > 0 ? `:${rule.sourcePort}` : "随机端口"} -&gt; {rule.targetIp}:{rule.targetPort} / {forwardTypeDisplayLabel(rule.forwardType)}
                           </div>
+                          {isNyanpassImport && (rule.failoverEnabled || rule.proxyProtocolReceive || rule.proxyProtocolSend || rule.rateLimitMbps) ? (
+                            <div className="mt-1 break-words text-xs text-muted-foreground">
+                              {[
+                                rule.failoverEnabled ? `另有 ${rule.failoverTargets.length} 个目标 · ${rule.failoverStrategy}` : "",
+                                rule.proxyProtocolReceive || rule.proxyProtocolSend ? `PROXY 收 ${rule.proxyProtocolReceive ? "开" : "关"} · 发 ${rule.proxyProtocolSend ? `v${rule.proxyProtocolVersion}` : "关"}` : "",
+                                rule.rateLimitMbps ? `限速 ${rule.rateLimitMbps} Mbps` : "",
+                                "导入后停用",
+                              ].filter(Boolean).join(" · ")}
+                            </div>
+                          ) : null}
                         </div>
                       ))}
                     </div>

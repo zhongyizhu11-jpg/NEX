@@ -329,6 +329,7 @@ export const hosts = table("hosts", {
   // 内核快速转发（nftables flowtable，agent/flowtable_offload.go）：本机 iptables / nftables 规则和内核直通的
   // 连接建立后走 ingress 快速路径，流量改从 conntrack 计。只有管理员能开，默认关。
   flowOffload: boolean("flowOffload").notNull().default(false),
+  hostStatusNotifyEnabled: boolean("hostStatusNotifyEnabled").notNull().default(true),
   telegramTrafficAlertEnabled: boolean("telegramTrafficAlertEnabled").notNull().default(false),
   trafficAlertThresholdPercent: int("trafficAlertThresholdPercent").notNull().default(20),
   telegramRenewalReminderEnabled: boolean("telegramRenewalReminderEnabled").notNull().default(false),
@@ -735,6 +736,7 @@ export const proxyInbounds = table("proxy_inbounds", {
    * 管理员开的这种入站，有这台主机使用权限的用户都能拿来当出口。
    */
   landingEgress: boolean("landingEgress").notNull().default(false),
+  routingJson: text("routingJson"),
   /**
    * 这个端口自己的额度与用量。
    *
@@ -958,6 +960,8 @@ export const forwardGroupMembers = table("forward_group_members", {
   bandwidthMbps: int("bandwidthMbps").notNull().default(0),
   aggregationWeight: int("aggregationWeight").notNull().default(0),
   isEnabled: boolean("isEnabled").notNull().default(true),
+  activeSchedule: text("activeSchedule"),
+  scheduleSuspended: boolean("scheduleSuspended").notNull().default(false),
   healthStatus: varchar("healthStatus", { length: 32 }).notNull().default("unknown"),
   lastLatencyMs: int("lastLatencyMs"),
   chinaHealthStatus: varchar("chinaHealthStatus", { length: 32 }).notNull().default("unknown"),
@@ -1084,6 +1088,7 @@ export const tunnels = table("tunnels", {
   kernelPassthrough: boolean("kernelPassthrough").notNull().default(false),
   // 复制模式（2.3.449）：中转带宽叠加的隧道上，每一片都从两条中转各发一份，一条线路断了连接也不断。
   multipathReplicate: boolean("multipathReplicate").notNull().default(false),
+  parallelStreams: int("parallelStreams").notNull().default(1),
   blockHttp: boolean("blockHttp").notNull().default(false),
   blockSocks: boolean("blockSocks").notNull().default(false),
   blockTls: boolean("blockTls").notNull().default(false),

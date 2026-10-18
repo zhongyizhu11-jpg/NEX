@@ -9,6 +9,7 @@ import { getConfiguredPanelUrl, resolvePanelUrl } from "./agentPanelUrl";
 import * as db from "./db";
 import { withKeyedTaskLock, withTrafficBillingUserLock } from "./keyedTaskLock";
 import { paymentOrderFailureMessage } from "./paymentFailureMessage";
+import { alipayTimestamp, fetchPaymentText, normalizePaymentLink, verifyAlipayResponse } from "./paymentProtocol";
 import { TRPCError } from "@trpc/server";
 import {
   parseEasyPayOrderQuery,
@@ -300,6 +301,53 @@ async function savePaymentConfig(config: PaymentConfig) {
   await db.setSetting(PAYMENT_CONFIG_KEY, JSON.stringify(config));
 }
 
+/**
+ * 一个渠道的配置够不够下单（上游 2.3.285）。不够的渠道不出现在收银台的付款方式里，
+ * 保存配置时也直接说清楚缺哪一项，而不是等顾客下单才报「配置不完整」。
+ * forExistingOrder：给已有订单查单 / 验回调用 —— 渠道停用了也照查，只要求验签需要的几项。
+ */
+function validateProviderConfig(config: PaymentConfig, provider: PaymentProvider, forExistingOrder = false) {
+  const fail = (message: string): never => { throw new Error(message); };
+  if (!forExistingOrder && !config[provider].enabled) fail("支付渠道未启用");
+  if (provider === "easypay") {
+    if (!config.easypay.apiBase || !config.easypay.pid || !config.easypay.pkey) fail("易支付配置不完整，请填写网关地址、商户 PID 和商户密钥");
+  } else if (provider === "alipay") {
+    if (!config.alipay.appId || !config.alipay.privateKey || !config.alipay.publicKey) fail("支付宝官方配置不完整，请填写应用 ID、应用私钥和支付宝公钥");
+  } else if (provider === "wxpay") {
+    const wx = config.wxpay;
+    if (!wx.appId || !wx.mchId || !wx.privateKey || (!forExistingOrder && !wx.apiV3Key) || !wx.certSerial || !wx.publicKey || !wx.publicKeyId) {
+      fail("微信支付配置不完整，请填写应用 ID、商户号、商户私钥、APIv3 密钥、商户证书序列号、平台公钥和公钥 ID");
+    }
+    if (!forExistingOrder && Buffer.byteLength(wx.apiV3Key, "utf8") !== 32) fail("微信 APIv3 密钥必须为 32 字节，请检查商户平台配置");
+    if (!forExistingOrder && wx.mode === "jsapi") fail("当前不支持微信 JSAPI，请选择 Native 扫码或 H5 支付");
+  } else if (provider === "stripe") {
+    if (!config.stripe.secretKey || !config.stripe.webhookSecret) fail("Stripe 配置不完整，请填写 Secret Key 和 Webhook Secret");
+  } else if (provider === "gmpay") {
+    if (!config.gmpay.apiBase || !config.gmpay.pid || !config.gmpay.secretKey) fail("USDT 支付配置不完整，请填写网关地址、商户 PID 和商户密钥");
+  }
+  if (provider === "easypay" || provider === "alipay" || provider === "gmpay") {
+    const address = provider === "alipay" ? config.alipay.gateway : config[provider].apiBase;
+    try {
+      const url = new URL(address);
+      if (!["https:", "http:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error();
+    } catch { fail("支付网关地址必须是完整的 HTTP/HTTPS 地址，不能带账号密码、查询参数或 #片段"); }
+  }
+}
+
+/** 渠道能不能拿来收钱：配置完整，并且（支付宝 / 微信）密钥真能解析。 */
+function providerUsable(config: PaymentConfig, provider: PaymentProvider) {
+  try {
+    validateProviderConfig(config, provider);
+    if (provider === "alipay" || provider === "wxpay") {
+      importPaymentPrivateKey(config[provider].privateKey, provider);
+      importPaymentPublicKey(config[provider].publicKey, provider);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function normalizeEasyPayBase(apiBase: string) {
   return apiBase.trim().replace(/\/(?:submit|mapi|api)\.php$/i, "").replace(/\/+$/, "");
 }
@@ -363,7 +411,8 @@ function stripeCheckoutExpiresAt(expiresAt: Date, now = Date.now()) {
 }
 
 function getClientIp(req: express.Request) {
-  return req.ip || req.socket.remoteAddress || "";
+  // IPv4 映射地址（::ffff:1.2.3.4）还原成 IPv4：易支付会把 clientip 拿去风控，不认这种写法。
+  return (req.ip || req.socket.remoteAddress || "").replace(/^::ffff:/i, "");
 }
 
 // 密钥格式的兼容和报错见 server/paymentCrypto.ts。
@@ -407,6 +456,8 @@ async function createEasyPayOrder(config: PaymentConfig, order: {
   };
   const cid = order.paymentType === "alipay" ? ep.cidAlipay : ep.cidWxpay;
   if (cid) params.cid = cid;
+  // mapi.php 要求 clientip 也参与签名（以前签完名才塞进去，部分易支付直接报签名错误）。
+  if (ep.mode !== "redirect") params.clientip = order.clientIp || "127.0.0.1";
   // 易支付的 submit.php / mapi.php 没有订单过期参数，过期后到账的钱由回调那边转入余额兜底。
 
   params.sign = easyPaySign(params, ep.pkey);
@@ -420,13 +471,11 @@ async function createEasyPayOrder(config: PaymentConfig, order: {
     };
   }
 
-  const body = new URLSearchParams({ ...params, clientip: order.clientIp || "127.0.0.1" });
-  const res = await fetch(`${apiBase}/mapi.php`, {
+  const { response: res, text } = await fetchPaymentText(`${apiBase}/mapi.php`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body,
+    body: new URLSearchParams(params),
   });
-  const text = await res.text();
   let data: any;
   try {
     data = JSON.parse(text);
@@ -438,8 +487,8 @@ async function createEasyPayOrder(config: PaymentConfig, order: {
   }
   return {
     tradeNo: data.trade_no || null,
-    payUrl: data.payurl || data.payurl2 || data.qrcode || null,
-    qrCode: data.qrcode || null,
+    payUrl: normalizePaymentLink(data.payurl || data.payurl2 || data.qrcode, apiBase),
+    qrCode: normalizePaymentLink(data.qrcode, apiBase),
   };
 }
 
@@ -467,7 +516,7 @@ function normalizeAlipayBaseParams(config: PaymentConfig, method: string, urls: 
     method,
     charset: "utf-8",
     sign_type: "RSA2",
-    timestamp: new Date().toISOString().slice(0, 19).replace("T", " "),
+    timestamp: alipayTimestamp(),
     version: "1.0",
     notify_url: urls.notifyUrl,
     return_url: urls.returnUrl,
@@ -482,18 +531,18 @@ async function callAlipayGateway(
 ) {
   const alipay = config.alipay;
   const gateway = normalizeGateway(alipay.gateway, defaultPaymentConfig.alipay.gateway);
-  if (!alipay.enabled || !alipay.appId || !alipay.privateKey || !alipay.publicKey) throw new Error("支付宝官方配置不完整");
+  // 查单不看「启用」：渠道关掉之前下的单，回调丢了也还要能查回来。
+  if ((!alipay.enabled && method !== "alipay.trade.query") || !alipay.appId || !alipay.privateKey || !alipay.publicKey) throw new Error("支付宝官方配置不完整");
   const params: Record<string, string> = {
     ...normalizeAlipayBaseParams(config, method, urls),
     biz_content: stableJson(bizContent),
   };
   params.sign = alipaySign(params, alipay.privateKey);
-  const res = await fetch(gateway, {
+  const { response: res, text } = await fetchPaymentText(gateway, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded;charset=utf-8" },
     body: new URLSearchParams(params),
   });
-  const text = await res.text();
   let data: any;
   try {
     data = JSON.parse(text);
@@ -505,6 +554,8 @@ async function callAlipayGateway(
   if (!res.ok || !payload || payload.code !== "10000") {
     throw new Error(payload?.sub_msg || payload?.msg || `支付宝请求失败：${res.status}`);
   }
+  // 响应也要验签：查单的「已付」要拿去发货，不能信一段没签过名的 JSON。
+  if (!verifyAlipayResponse(text, responseKey, alipay.publicKey)) throw new Error("支付宝响应签名校验失败");
   return payload;
 }
 
@@ -593,7 +644,7 @@ async function createStripeCheckoutOrder(config: PaymentConfig, order: {
   params.set("payment_intent_data[metadata][outTradeNo]", order.outTradeNo);
   params.set("expires_at", String(stripeCheckoutExpiresAt(order.expiresAt)));
 
-  const res = await fetch("https://api.stripe.com/v1/checkout/sessions", {
+  const { response: res, text: stripeText } = await fetchPaymentText("https://api.stripe.com/v1/checkout/sessions", {
     method: "POST",
     headers: {
       "Authorization": `Bearer ${stripe.secretKey}`,
@@ -602,7 +653,12 @@ async function createStripeCheckoutOrder(config: PaymentConfig, order: {
     },
     body: params,
   });
-  const data = await res.json() as any;
+  let data: any;
+  try {
+    data = JSON.parse(stripeText);
+  } catch {
+    throw new Error(`Stripe 返回格式异常：${res.status}`);
+  }
   if (!res.ok) {
     throw new Error(data?.error?.message || `Stripe 创建订单失败：${res.status}`);
   }
@@ -627,18 +683,19 @@ function wxpayAuthorization(config: WxpayConfig, method: string, urlPathWithQuer
   return `WECHATPAY2-SHA256-RSA2048 mchid="${config.mchId}",nonce_str="${nonce}",timestamp="${timestamp}",serial_no="${config.certSerial}",signature="${signature}"`;
 }
 
-async function wxpayPost(config: WxpayConfig, urlPath: string, payload: Record<string, unknown>) {
-  const body = stableJson(payload);
-  const res = await fetch(`https://api.mch.weixin.qq.com${urlPath}`, {
-    method: "POST",
+async function wxpayRequest(config: WxpayConfig, method: "GET" | "POST", urlPath: string, payload?: Record<string, unknown>) {
+  const body = payload ? stableJson(payload) : "";
+  const { response: res, text } = await fetchPaymentText(`https://api.mch.weixin.qq.com${urlPath}`, {
+    method,
     headers: {
-      "Authorization": wxpayAuthorization(config, "POST", urlPath, body),
+      "Authorization": wxpayAuthorization(config, method, urlPath, body),
+      // 用微信支付公钥模式时要带上公钥 ID，平台才会用对应的私钥给响应签名。
+      "Wechatpay-Serial": config.publicKeyId,
       "Accept": "application/json",
       "Content-Type": "application/json",
     },
-    body,
+    ...(body ? { body } : {}),
   });
-  const text = await res.text();
   let data: any = {};
   if (text) {
     try {
@@ -649,6 +706,11 @@ async function wxpayPost(config: WxpayConfig, urlPath: string, payload: Record<s
   }
   if (!res.ok) {
     throw new Error(data.message || data.code || `微信支付请求失败：${res.status}`);
+  }
+  // 响应同样验签：查单回来的「已支付」要拿去发货。
+  const headers = Object.fromEntries(res.headers.entries());
+  if (!verifyWxpaySerial(headers, config.publicKeyId) || !verifyWxpaySignature(text, headers, config.publicKey)) {
+    throw new Error("微信支付响应签名校验失败");
   }
   return data;
 }
@@ -678,7 +740,8 @@ function verifyWxpaySignature(raw: string, headers: express.Request["headers"], 
 
 function verifyWxpaySerial(headers: express.Request["headers"], expectedPublicKeyId: string) {
   const serial = String(headers["wechatpay-serial"] || "");
-  return !expectedPublicKeyId || serial === expectedPublicKeyId;
+  // 没配公钥 ID 就没法确认是哪把钥匙签的：一律不认（以前是放行）。
+  return !!expectedPublicKeyId && serial === expectedPublicKeyId;
 }
 
 async function createWxpayOrder(config: PaymentConfig, order: {
@@ -714,7 +777,7 @@ async function createWxpayOrder(config: PaymentConfig, order: {
     };
     if (wxpay.h5AppName) (sceneInfo.h5_info as any).app_name = wxpay.h5AppName;
     if (wxpay.h5AppUrl) (sceneInfo.h5_info as any).app_url = wxpay.h5AppUrl;
-    const data = await wxpayPost(wxpay, "/v3/pay/transactions/h5", { ...basePayload, scene_info: sceneInfo });
+    const data = await wxpayRequest(wxpay, "POST", "/v3/pay/transactions/h5", { ...basePayload, scene_info: sceneInfo });
     return {
       tradeNo: order.outTradeNo,
       payUrl: data.h5_url ? appendWxpayH5Redirect(String(data.h5_url), order.returnUrl) : null,
@@ -726,7 +789,7 @@ async function createWxpayOrder(config: PaymentConfig, order: {
     throw new Error("微信 JSAPI 需要用户 OpenID，当前版本暂未开放前台 OAuth 流程");
   }
 
-  const data = await wxpayPost(wxpay, "/v3/pay/transactions/native", basePayload);
+  const data = await wxpayRequest(wxpay, "POST", "/v3/pay/transactions/native", basePayload);
   return {
     tradeNo: order.outTradeNo,
     payUrl: data.code_url || null,
@@ -1029,37 +1092,110 @@ async function queryPaymentOrderAtGateway(
     只有真正走易支付下的单才去易支付查。provider 为 alipay / wxpay 的是官方网关的单
     （config.routes 把支付宝/微信路由到了官方），易支付根本不认识它，会回「查无此单」，
     以前这里就据此把单关掉 —— 用户随后付款，回调看到订单已关闭，钱扣了却不到账。
-    官方网关暂时没接查单接口：不查，等回调或过期。
   */
   if (provider === "easypay") {
     const ep = config.easypay;
     const apiBase = normalizeEasyPayBase(ep.apiBase);
-    if (!ep.enabled || !apiBase || !ep.pid || !ep.pkey) return null;
+    if (!apiBase || !ep.pid || !ep.pkey) return null;
+    // 易支付的查单接口把商户密钥放在查询串里：不是 HTTPS 就不查，免得密钥明文过网（上游 2.3.285）。
+    if (!/^https:/i.test(apiBase)) return null;
     const url = `${apiBase}/api.php?${new URLSearchParams({
       act: "order",
       pid: ep.pid,
       key: ep.pkey,
       out_trade_no: outTradeNo,
     }).toString()}`;
-    const res = await fetch(url, { method: "GET" });
-    if (!res.ok) return null;
-    const parsed = parseEasyPayOrderQuery(await res.json().catch(() => null));
+    let payload: any = null;
+    try {
+      const { response, text } = await fetchPaymentText(url, { method: "GET" });
+      if (!response.ok) return null;
+      payload = JSON.parse(text);
+    } catch {
+      // 地址里有密钥：出错只记一句，不把 URL / 原始错误写进日志。
+      throw new Error("易支付查单请求失败");
+    }
+    // 回来的必须是这一单、这个商户；否则什么都不信。
+    if (payload && ((payload.out_trade_no !== undefined && String(payload.out_trade_no) !== outTradeNo) || (payload.pid !== undefined && String(payload.pid) !== ep.pid))) {
+      throw new Error("易支付查单返回的订单或商户对不上");
+    }
+    const parsed = parseEasyPayOrderQuery(payload);
     // 「查无此单」不等于「这单作废了」：跳转模式下，用户打开收银页之前易支付那边
     // 根本没有这单，他随后照样能付。这里关单的话，付款回调到了只会看到已关闭 ——
     // 钱扣了却不到账。没付的单交给过期清理。
-    return { ...parsed, closed: false };
+    return {
+      ...parsed,
+      closed: false,
+      amountCents: parsed.paid && payload?.money !== undefined ? parseAmountCents(payload.money) : undefined,
+      currency: "CNY",
+    };
+  }
+
+  // 支付宝官方：alipay.trade.query（响应验签在 callAlipayGateway 里）。
+  if (provider === "alipay") {
+    const alipay = config.alipay;
+    if (!alipay.appId || !alipay.privateKey || !alipay.publicKey) return null;
+    let payload: any;
+    try {
+      payload = await callAlipayGateway(config, "alipay.trade.query", { out_trade_no: outTradeNo }, { notifyUrl: "", returnUrl: "" });
+    } catch (error) {
+      // 用户还没扫码时支付宝回「交易不存在」（ACQ.TRADE_NOT_EXIST），这不是故障。
+      if (/TRADE_NOT_EXIST|交易不存在/i.test(error instanceof Error ? error.message : String(error))) return { paid: false, tradeNo: null, closed: false };
+      throw error;
+    }
+    if (String(payload?.out_trade_no || "") !== outTradeNo) throw new Error("支付宝查单返回的订单对不上");
+    const paid = payload.trade_status === "TRADE_SUCCESS" || payload.trade_status === "TRADE_FINISHED";
+    return {
+      paid,
+      tradeNo: payload.trade_no ? String(payload.trade_no) : null,
+      closed: false,
+      amountCents: paid ? parseAmountCents(payload.total_amount) : undefined,
+      currency: "CNY",
+    };
+  }
+
+  // 微信支付官方：按商户订单号查（响应验签在 wxpayRequest 里）。
+  if (provider === "wxpay") {
+    const wxpay = config.wxpay;
+    if (!wxpay.appId || !wxpay.mchId || !wxpay.privateKey || !wxpay.certSerial || !wxpay.publicKey || !wxpay.publicKeyId) return null;
+    const path = `/v3/pay/transactions/out-trade-no/${encodeURIComponent(outTradeNo)}?mchid=${encodeURIComponent(wxpay.mchId)}`;
+    let payload: any;
+    try {
+      payload = await wxpayRequest(wxpay, "GET", path);
+    } catch (error) {
+      if (/ORDER_NOT_EXIST|订单不存在/i.test(error instanceof Error ? error.message : String(error))) return { paid: false, tradeNo: null, closed: false };
+      throw error;
+    }
+    if (payload.out_trade_no !== outTradeNo || payload.appid !== wxpay.appId || payload.mchid !== wxpay.mchId) {
+      throw new Error("微信支付查单返回的订单或商户对不上");
+    }
+    const paid = payload.trade_state === "SUCCESS";
+    return {
+      paid,
+      tradeNo: payload.transaction_id ? String(payload.transaction_id) : null,
+      closed: false,
+      amountCents: paid ? Number(payload.amount?.total) : undefined,
+      currency: payload.amount?.currency || "CNY",
+    };
   }
 
   if (provider === "stripe") {
     const stripe = config.stripe;
     // Stripe 要用会话 id 查，创建时存在 tradeNo 里；没有就查不了。
     const sessionId = String(order.tradeNo || "");
-    if (!stripe.enabled || !stripe.secretKey || !sessionId.startsWith("cs_")) return null;
-    const res = await fetch(`https://api.stripe.com/v1/checkout/sessions/${encodeURIComponent(sessionId)}`, {
+    if (!stripe.secretKey || !sessionId.startsWith("cs_")) return null;
+    const { response, text } = await fetchPaymentText(`https://api.stripe.com/v1/checkout/sessions/${encodeURIComponent(sessionId)}`, {
       headers: { Authorization: `Bearer ${stripe.secretKey}` },
     });
-    if (!res.ok) return null;
-    return parseStripeSessionQuery(await res.json().catch(() => null));
+    if (!response.ok) return null;
+    let payload: any = null;
+    try { payload = JSON.parse(text); } catch { return null; }
+    const parsed = parseStripeSessionQuery(payload);
+    const currency = String(payload?.currency || order.currency || stripe.currency || "").toUpperCase();
+    return {
+      ...parsed,
+      amountCents: parsed.paid && payload?.amount_total !== undefined ? stripeAmountToCents(Number(payload.amount_total), currency) : undefined,
+      currency,
+    };
   }
 
   // gmpay 等其余网关暂时没有查单接口可用：宁可不查，也不要拿一个猜出来的
@@ -1088,11 +1224,12 @@ export async function reconcilePendingPaymentOrders(): Promise<{ checked: number
       }
       if (!result.paid) continue;
       appendPanelLog("info", `[Payment] reconcile found paid order=${order.outTradeNo} provider=${order.provider}`);
+      // 金额、币种用网关查回来的数，和回调一样逐项比对；网关没给（老的解析）才退回订单上的数。
       await processPaidNotification(String(order.outTradeNo), {
         provider: String(order.provider || ""),
         tradeNo: result.tradeNo,
-        amountCents: Number(order.amountCents || 0),
-        currency: String(order.currency || ""),
+        amountCents: result.amountCents ?? Number(order.amountCents || 0),
+        currency: result.currency || String(order.currency || ""),
         rawNotify: JSON.stringify({ source: "reconcile", tradeNo: result.tradeNo }),
       });
       paid += 1;
@@ -1101,6 +1238,47 @@ export async function reconcilePendingPaymentOrders(): Promise<{ checked: number
     }
   }
   return { checked, paid };
+}
+
+/** 顾客在收银台等结果时，同一单最多隔这么久问一次网关。 */
+const USER_TRIGGERED_QUERY_INTERVAL_MS = 15_000;
+const userTriggeredQueryAt = new Map<string, number>();
+
+/**
+ * 顾客那边轮询订单状态时顺手问一次网关（上游 2.3.285 的「主动查单」）。
+ *
+ * 维护任务两分钟一轮、而且不问太新的单；顾客刚扫完码盯着屏幕时，回调慢一步他就只能干等。
+ * 这里不看「太新」，但同一单 15 秒内只问一次，并且和维护任务、回调走同一把锁、同一条入账路径，
+ * 不会因为几处同时确认「已付」而发两次货。
+ */
+export async function checkPaymentOrderNow(outTradeNo: string) {
+  const now = Date.now();
+  const last = userTriggeredQueryAt.get(outTradeNo) || 0;
+  if (now - last < USER_TRIGGERED_QUERY_INTERVAL_MS) return;
+  userTriggeredQueryAt.set(outTradeNo, now);
+  if (userTriggeredQueryAt.size > 2000) {
+    for (const [key, at] of userTriggeredQueryAt) if (now - at > USER_TRIGGERED_QUERY_INTERVAL_MS) userTriggeredQueryAt.delete(key);
+  }
+  await withKeyedTaskLock(`payment-query:${outTradeNo}`, async () => {
+    const order = await db.getPaymentOrderByOutTradeNo(outTradeNo);
+    if (!order || order.status !== "pending") return;
+    if (order.expiresAt && new Date(order.expiresAt as any).getTime() <= Date.now()) return;
+    const config = await getPaymentConfig();
+    try {
+      const result = await queryPaymentOrderAtGateway(config, order);
+      if (!result?.paid) return;
+      appendPanelLog("info", `[Payment] checkout poll found paid order=${outTradeNo} provider=${order.provider}`);
+      await processPaidNotification(outTradeNo, {
+        provider: String(order.provider || ""),
+        tradeNo: result.tradeNo,
+        amountCents: result.amountCents ?? Number(order.amountCents || 0),
+        currency: result.currency || String(order.currency || ""),
+        rawNotify: JSON.stringify({ source: "checkout-poll", tradeNo: result.tradeNo }),
+      });
+    } catch (error) {
+      appendPanelLog("warn", `[Payment] checkout poll query failed order=${outTradeNo}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  });
 }
 
 export async function recoverStaleProcessingPaymentOrders() {
@@ -1194,16 +1372,17 @@ export const paymentRouter = router({
     const methods: Array<{ value: "alipay" | "wxpay" | "stripe" | "usdt"; label: string }> = [];
     const alipayProvider = config.routes.alipay;
     const wxpayProvider = config.routes.wxpay;
-    if ((alipayProvider === "easypay" && config.easypay.enabled) || (alipayProvider === "alipay" && config.alipay.enabled)) {
+    // 配置不全、密钥解析不了的渠道不给顾客选：选了也只会在下单那一步报错。
+    if (providerUsable(config, alipayProvider)) {
       methods.push({ value: "alipay", label: "支付宝" });
     }
-    if ((wxpayProvider === "easypay" && config.easypay.enabled) || (wxpayProvider === "wxpay" && config.wxpay.enabled)) {
+    if (providerUsable(config, wxpayProvider)) {
       methods.push({ value: "wxpay", label: "微信支付" });
     }
-    if (config.stripe.enabled) {
+    if (providerUsable(config, "stripe")) {
       methods.push({ value: "stripe", label: "Stripe" });
     }
-    if (config.gmpay.enabled) {
+    if (providerUsable(config, "gmpay")) {
       methods.push({ value: "usdt", label: "USDT" });
     }
     return methods;
@@ -1251,6 +1430,18 @@ export const paymentRouter = router({
       });
       if (next.gmpay.enabled && (!next.gmpay.apiBase || !next.gmpay.pid || !next.gmpay.secretKey)) {
         throw new Error("启用 USDT 支付前请完整填写网关地址、商户 PID 和商户密钥");
+      }
+      // 启用的渠道保存时就校验完整（上游 2.3.285）；密钥解析失败的说明见 paymentCrypto。
+      try {
+        for (const provider of ["easypay", "alipay", "wxpay", "stripe", "gmpay"] as const) {
+          if (next[provider].enabled) validateProviderConfig(next, provider);
+        }
+        for (const provider of ["alipay", "wxpay"] as const) {
+          if (next[provider].enabled || input[provider].privateKey?.trim()) importPaymentPrivateKey(next[provider].privateKey, provider);
+          if ((next[provider].enabled && next[provider].publicKey) || input[provider].publicKey?.trim()) importPaymentPublicKey(next[provider].publicKey, provider);
+        }
+      } catch (cause) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: cause instanceof Error ? cause.message : String(cause), cause });
       }
       await savePaymentConfig(next);
       appendPanelLog("info", "[Payment] config updated");
@@ -1301,6 +1492,11 @@ export const paymentRouter = router({
     .query(async ({ input, ctx }) => {
       const order = await db.getPaymentOrderByOutTradeNo(input.outTradeNo);
       if (!order || Number(order.userId) !== Number(ctx.user.id)) return null;
+      if (order.status === "pending") {
+        await checkPaymentOrderNow(order.outTradeNo);
+        const latest = await db.getPaymentOrderByOutTradeNo(input.outTradeNo);
+        return { outTradeNo: order.outTradeNo, status: latest?.status || order.status };
+      }
       return {
         outTradeNo: order.outTradeNo,
         status: order.status,
@@ -1385,6 +1581,11 @@ export const paymentRouter = router({
       if (provider === "easypay" && !config.easypay.enabled) throw new Error("易支付未启用");
       if (provider === "stripe" && !config.stripe.enabled) throw new Error("Stripe 未启用");
       if (provider === "gmpay" && !config.gmpay.enabled) throw new Error("USDT 支付未启用");
+      try {
+        validateProviderConfig(config, provider);
+      } catch (cause) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: cause instanceof Error ? cause.message : String(cause), cause });
+      }
 
       const rawAmountCents = Math.round(amount * 100);
       const amountCents = provider === "stripe"
@@ -1523,7 +1724,8 @@ async function handleEasyPayNotification(req: express.Request, res: express.Resp
       res.status(400).send("fail");
       return;
     }
-    if (params.pid && params.pid !== config.easypay.pid) {
+    // 通知里必须带本商户的 pid：缺了也不认（以前缺 pid 会放行）。
+    if (params.pid !== config.easypay.pid) {
       appendPanelLog("warn", `[Payment] EasyPay notify merchant mismatch expected=${config.easypay.pid} got=${params.pid}`);
       res.status(400).send("fail");
       return;
@@ -1653,7 +1855,7 @@ paymentCallbackRouter.post("/api/payment/webhook/alipay", express.raw({ type: "*
     const raw = Buffer.isBuffer(req.body) ? req.body.toString("utf8") : "";
     const params = parseRawForm(raw);
     const sign = params.sign || "";
-    if (!config.alipay.publicKey || !sign || !rsaSha256Verify(alipaySignContent(params), sign, config.alipay.publicKey, "alipay")) {
+    if (!config.alipay.publicKey || params.sign_type !== "RSA2" || !sign || !rsaSha256Verify(alipaySignContent(params), sign, config.alipay.publicKey, "alipay")) {
       appendPanelLog("warn", "[Payment] Alipay notify signature failed");
       res.status(400).send("failure");
       return;
@@ -1712,6 +1914,12 @@ paymentCallbackRouter.post("/api/payment/webhook/wxpay", express.raw({ type: "*/
     }
     const decrypted = wxpayAesDecrypt(config.wxpay.apiV3Key, event.resource);
     const transaction = JSON.parse(decrypted);
+    // 和支付宝的 app_id 同理：解密得出来只说明是发给这个 APIv3 密钥的，应用和商户号还要对上。
+    if (!config.wxpay.appId || !config.wxpay.mchId || transaction.appid !== config.wxpay.appId || transaction.mchid !== config.wxpay.mchId) {
+      appendPanelLog("warn", `[Payment] WeChat Pay notify merchant mismatch order=${transaction.out_trade_no || "unknown"}`);
+      res.status(400).json({ code: "FAIL", message: "merchant mismatch" });
+      return;
+    }
     if (transaction.trade_state !== "SUCCESS") {
       res.status(204).end();
       return;

@@ -265,6 +265,31 @@ export async function latestUnlockSummariesByHostIds(hostIds: number[]) {
   return map;
 }
 
+/**
+ * 分流「自动挑解锁的落地」用：每台主机每个服务最新的检测结论和检测时间。
+ * 几个 family（自动 / IPv4 / IPv6）都有结果时取最近一次测到这个服务的那一份。
+ */
+export async function latestUnlockStatusesByHostIds(hostIds: number[]) {
+  const ids = Array.from(new Set(hostIds.map(Number).filter((id) => id > 0))).slice(0, 1000);
+  const map = new Map<number, Map<string, { status: UnlockServiceResult["status"]; checkedAt: number }>>();
+  if (ids.length === 0) return map;
+  const rows = await queryRaw<any>(
+    `SELECT ${q("hostId")}, ${q("checkedAt")}, ${q("resultsJson")} FROM ${q(TABLE)}
+     WHERE ${q("latest")} = ? AND ${q("hostId")} IN (${ids.map(() => "?").join(", ")})
+     ORDER BY ${q("checkedAt")} DESC, ${q("id")} DESC`,
+    [true, ...ids],
+  );
+  for (const row of rows) {
+    const hostId = Number(row.hostId);
+    const services = map.get(hostId) || new Map();
+    for (const result of parseResults(row.resultsJson)) {
+      if (!services.has(result.service)) services.set(result.service, { status: result.status, checkedAt: Number(row.checkedAt) || 0 });
+    }
+    map.set(hostId, services);
+  }
+  return map;
+}
+
 // ---------------------------------------------------------------- 计划检测
 
 export async function getUnlockSchedule(): Promise<UnlockSchedule> {

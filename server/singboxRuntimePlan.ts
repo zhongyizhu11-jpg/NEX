@@ -10,6 +10,7 @@
  */
 
 import { githubDownloadCandidates, type GithubAcceleratorConfig } from "../shared/githubAccelerator";
+import type { ResolvedInboundRoute } from "../shared/inboundRouting";
 import { buildSingboxConfig, proxyInboundEnumFieldError, type ProxyInbound } from "../shared/proxyInbound";
 import { appendPanelLog } from "./_core/panelLogger";
 import {
@@ -156,6 +157,8 @@ export type SingboxInboundEntry = {
   inbound: ProxyInbound;
   /** sing-box 里的出/入站标识，用入站行 id 保证唯一。 */
   tag: string;
+  /** 分流（面板已经挑好出口，server/inboundRoutingRuntime.ts）。没有就全部直连。 */
+  routes?: readonly ResolvedInboundRoute[];
 };
 
 export type SingboxManagedConfig = {

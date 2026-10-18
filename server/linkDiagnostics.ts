@@ -787,6 +787,25 @@ export async function startLinkDiagnostics(ctx: Ctx, subject: { kind: Diagnostic
   return reportFor(session);
 }
 
+/**
+ * 只要面板这一侧的结论，不给主机派检测任务（故障包、AI 只读接口用）。
+ * 权限和网页上的「诊断」一样；需要主机实测的项只列出来、标成没做。
+ */
+export async function buildPanelOnlyDiagnostics(ctx: Ctx, subject: { kind: DiagnosticSubjectKind; id: number }) {
+  const { plan, name } = await buildPlan(ctx, subject);
+  const items: DiagnosticItem[] = [...plan.hostItems()];
+  for (const slot of plan.slots) if (slot.kind === "panel") items.push(slot.item);
+  const order = new Map(DIAGNOSTIC_GROUPS.map((group, index) => [group, index] as const));
+  items.sort((a, b) => (order.get(a.group)! - order.get(b.group)!));
+  const pendingAgentChecks = plan.slots.filter((slot) => slot.kind === "agent").length;
+  return {
+    name,
+    hostIds: Array.from(plan.hosts.keys()),
+    report: buildDiagnosticsReport({ sessionId: "panel-only", subject: { kind: subject.kind, id: subject.id, name }, startedAt: new Date().toISOString(), items }),
+    pendingAgentChecks,
+  };
+}
+
 export function getLinkDiagnosticsReport(ctx: Ctx, sessionId: string): LinkDiagnosticsReport {
   const session = sessions.get(sessionId);
   if (!session || session.expiresAt <= Date.now()) throw new Error("这次诊断已过期，请重新诊断");

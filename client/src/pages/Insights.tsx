@@ -1,9 +1,10 @@
-import { Activity, Ban, Globe2, ShieldAlert, Siren, Users2 } from "lucide-react";
+import { Activity, Ban, Globe2, LayoutDashboard, ShieldAlert, Siren, Users2 } from "lucide-react";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { SlidingTabsList, type SlidingTabItem } from "@/components/ui/sliding-tabs";
 import { useUrlTab } from "@/hooks/useUrlTab";
 import { useOpsFeatures } from "@/features/ops/useOpsFeatures";
+import OpsBoardTab from "@/features/ops/board/OpsBoardTab";
 import OnlineIpsTab from "@/features/ops/online/OnlineIpsTab";
 import EventsTab from "@/features/ops/events/EventsTab";
 import FaultBoardTab from "@/features/ops/faults/FaultBoardTab";
@@ -14,14 +15,15 @@ import NotFound from "@/pages/NotFound";
 
 /*
   监控（借鉴 Rosélune 的 Monitor + Access 两页）：
-  谁在连、出了什么故障、发生了什么、机器安不安全、挡了谁。一页六个分段，每段一个独立组件，
+  收了多少钱、跑了多少流量（看板），谁在连、出了什么故障、发生了什么、机器安不安全、挡了谁。一页七个分段，每段一个独立组件，
   各自在 client/src/features/ops/ 里。运维功能入口关着时这一页不存在（侧栏没有入口，直接打开是 404），
   开关在 features/ops/useOpsFeatures.ts；2.3.437 起所有主题都开。
 */
-const INSIGHTS_TABS = ["online", "faults", "events", "security", "blocked", "countries"] as const;
+const INSIGHTS_TABS = ["board", "online", "faults", "events", "security", "blocked", "countries"] as const;
 type InsightsTab = typeof INSIGHTS_TABS[number];
 
 const INSIGHTS_TAB_ITEMS: SlidingTabItem<InsightsTab>[] = [
+  { value: "board", label: "看板", icon: LayoutDashboard },
   { value: "online", label: "在线 IP", icon: Users2 },
   { value: "faults", label: "故障", icon: Siren },
   { value: "events", label: "事件", icon: Activity },
@@ -34,7 +36,7 @@ export default function InsightsPage() {
   const enabled = useOpsFeatures();
   const [activeTab, setActiveTab] = useUrlTab<InsightsTab>({
     values: INSIGHTS_TABS,
-    defaultValue: "online",
+    defaultValue: "board",
     storageKey: "forwardx.insights.tab",
   });
   if (!enabled) return <NotFound />;
@@ -43,6 +45,7 @@ export default function InsightsPage() {
       <WorkspaceHeader title="监控" description="谁在连、从哪里来、发生了什么，以及哪些连接被挡在外面。" />
       <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as InsightsTab)}>
         <SlidingTabsList items={INSIGHTS_TAB_ITEMS} activeValue={activeTab} ariaLabel="监控" minItemWidthRem={6.5} />
+        <TabsContent value="board" className="mt-4"><OpsBoardTab /></TabsContent>
         <TabsContent value="online" className="mt-4"><OnlineIpsTab /></TabsContent>
         <TabsContent value="faults" className="mt-4"><FaultBoardTab /></TabsContent>
         <TabsContent value="events" className="mt-4"><EventsTab /></TabsContent>

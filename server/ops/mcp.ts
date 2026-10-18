@@ -262,6 +262,37 @@ export const MCP_TOOLS: McpTool[] = [
     },
   },
   {
+    name: "get_fault_bundle",
+    description: "打包一条规则 / 一条隧道 / 一个转发组的故障信息（只读，不给主机派任务）：面板侧诊断结论、脱敏后的配置、沿线主机状态、最近一次自测、近 24 小时探测统计；管理员还包含沿线主机最近的事件和这个资源的配置变更。排查「某条规则不通」时先调它。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        kind: { type: "string", enum: ["rule", "tunnel", "forwardGroup"], description: "rule = 转发规则，tunnel = 隧道，forwardGroup = 转发组 / 转发链" },
+        id: { type: "integer", minimum: 1, description: "资源 ID" },
+      },
+      required: ["kind", "id"],
+      additionalProperties: false,
+    },
+    args: z.object({ kind: z.enum(["rule", "tunnel", "forwardGroup"]), id: z.number().int().positive() }).strict(),
+    run: async (args, s) => ((await s.invoke("diagnostics.faultBundle", { kind: args.kind, id: args.id })) as any)?.bundle ?? { error: "取不到故障包" },
+  },
+  {
+    name: "get_fault_board",
+    description: "故障看板（仅管理员）：在线主机数、最近告警、自动恢复次数、正在告警的项目（离线主机、资源告警、隧道丢包）。",
+    inputSchema: { type: "object", properties: { hours: { type: "integer", enum: [24, 72, 168], description: "统计最近几小时，默认 24" } }, additionalProperties: false },
+    adminOnly: true,
+    args: z.object({ hours: z.union([z.literal(24), z.literal(72), z.literal(168)]).optional() }).strict(),
+    run: async (args, s) => s.invoke("ops.faultBoard.summary", { hours: args.hours ?? 24 }),
+  },
+  {
+    name: "get_ops_board",
+    description: "运维看板（仅管理员）：今天 / 7 天 / 30 天的实收、订单状态、余额充值与消耗、每天流量、流量最多的规则、来源 IP 排行和地区分布。",
+    inputSchema: { type: "object", properties: { range: { type: "integer", enum: [1, 7, 30], description: "天数，默认 7" } }, additionalProperties: false },
+    adminOnly: true,
+    args: z.object({ range: z.union([z.literal(1), z.literal(7), z.literal(30)]).optional() }).strict(),
+    run: async (args, s) => s.invoke("ops.board.summary", { range: args.range ?? 7 }),
+  },
+  {
     name: "set_rule_enabled",
     description: "启用或停用一条转发规则。停用会立刻断开这条规则上所有正在进行的连接。",
     inputSchema: {

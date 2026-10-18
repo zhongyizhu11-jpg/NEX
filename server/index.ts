@@ -27,6 +27,7 @@ import { authCapRouter } from "./authCaptcha";
 import { isAllowedMobileCorsOrigin } from "./mobileCors";
 import { panelAccessGuard } from "./ops/firewallPanelAccess";
 import { mcpRouter } from "./ops/mcpRoute";
+import { llmsTxtRouter } from "./llmsTxt";
 import { googleAuthRouter } from "./googleAuthRoute";
 import { discordAuthRouter } from "./discordAuthRoute";
 import { databaseRequestErrorHandler, databaseUnavailableApiGuard, registerDatabaseHealthRoutes } from "./databaseHealthRoutes";
@@ -203,6 +204,8 @@ async function startServer() {
   app.use(clientLogoRouter);
   // POST /mcp：AI 客户端用个人 API 令牌接入（server/ops/mcp.ts）。
   app.use(mcpRouter);
+  // GET /llms.txt：给 AI 助手看的说明书（怎么接 MCP、有哪些工具），不含面板数据。
+  app.use(llmsTxtRouter);
   app.use(
     "/api/trpc",
     createExpressMiddleware({

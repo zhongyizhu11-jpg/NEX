@@ -591,6 +591,7 @@ type HostFormData = {
   billingMonth: number;
   billingDay: number;
   expiryHandling: HostExpiryAction;
+  hostStatusNotifyEnabled: boolean;
   telegramTrafficAlertEnabled: boolean;
   trafficAlertThresholdPercent: number;
   telegramRenewalReminderEnabled: boolean;
@@ -631,6 +632,7 @@ const defaultFormData: HostFormData = {
   billingMonth: 1,
   billingDay: 1,
   expiryHandling: "none",
+  hostStatusNotifyEnabled: true,
   telegramTrafficAlertEnabled: false,
   trafficAlertThresholdPercent: 20,
   telegramRenewalReminderEnabled: false,
@@ -2147,6 +2149,7 @@ function HostsContent() {
       billingMonth: clampBillingMonth(host.billingMonth),
       billingDay: clampBillingDay(host.billingDay),
       expiryHandling: normalizeHostExpiryAction(host.expiryHandling),
+      hostStatusNotifyEnabled: host.hostStatusNotifyEnabled !== false,
       telegramTrafficAlertEnabled: !!host.telegramTrafficAlertEnabled,
       trafficAlertThresholdPercent: clampTrafficAlertThresholdPercent(host.trafficAlertThresholdPercent),
       telegramRenewalReminderEnabled: !!host.telegramRenewalReminderEnabled,
@@ -2259,6 +2262,7 @@ function HostsContent() {
           billingMonth: clampBillingMonth(form.billingMonth),
           billingDay: clampBillingDay(form.billingDay),
           expiryHandling: normalizeHostExpiryAction(form.expiryHandling),
+          hostStatusNotifyEnabled: form.hostStatusNotifyEnabled,
           telegramTrafficAlertEnabled: form.telegramTrafficAlertEnabled,
           trafficAlertThresholdPercent,
           telegramRenewalReminderEnabled: form.telegramRenewalReminderEnabled,
@@ -3681,6 +3685,16 @@ function HostsContent() {
                             onCheckedChange={(checked) => setForm({ ...form, trafficFailoverEnabled: checked })}
                           />
                         </div>
+                      </div>
+                      <div className="mt-2.5 flex min-h-9 items-center justify-between gap-3 rounded-md bg-muted/35 px-3 py-2">
+                        <div className="min-w-0 space-y-0.5">
+                          <Label className="text-sm font-medium">上下线通知</Label>
+                          <p className="text-xs text-muted-foreground">这台机器掉线、恢复时推送给管理员。关掉只是不推，离线判定、事件和故障转移照旧。</p>
+                        </div>
+                        <Checkbox aria-label="上下线通知"
+                          checked={form.hostStatusNotifyEnabled}
+                          onCheckedChange={(checked) => setForm({ ...form, hostStatusNotifyEnabled: checked })}
+                        />
                       </div>
                       <div className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
                         <div className="min-w-0 space-y-0.5">

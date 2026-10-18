@@ -15,6 +15,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { usePaymentOrderDialog } from "@/components/PaymentOrderDialog";
+import { PersistentPagination, usePersistentPageRequest, useServerPagination } from "@/components/PersistentPagination";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -64,13 +65,23 @@ export default function Wallet() {
     isFetching: walletFetching,
     refetch: refetchWallet,
   } = trpc.billing.me.useQuery(undefined, { placeholderData: (previousData) => previousData });
-  const {
-    data: ledger = [],
-    isLoading: ledgerLoading,
-    error: ledgerError,
-    isFetching: ledgerFetching,
-    refetch: refetchLedger,
-  } = trpc.billing.ledger.useQuery({ limit: 150 }, { placeholderData: (previousData) => previousData });
+  // 账单服务端分页（上游 2.3.285）：原来只拿最近 150 条，更早的翻不到。
+  const ledgerPageRequest = usePersistentPageRequest("forwardx.wallet.ledger.page");
+  const ledgerQuery = trpc.billing.ledgerPage.useQuery(
+    { page: ledgerPageRequest.page, pageSize: 30 },
+    { placeholderData: (previousData) => previousData },
+  );
+  const ledger = (ledgerQuery.data?.items || []) as any[];
+  const ledgerLoading = ledgerQuery.isLoading;
+  const ledgerError = ledgerQuery.error;
+  const ledgerFetching = ledgerQuery.isFetching;
+  const refetchLedger = ledgerQuery.refetch;
+  const ledgerPagination = useServerPagination(
+    ledger,
+    Number(ledgerQuery.data?.totalItems || 0),
+    ledgerPageRequest,
+    { pageSize: 30, isReady: !ledgerLoading && !!ledgerQuery.data },
+  );
   const { data: billingFeatures } = trpc.billing.featureStatus.useQuery(undefined, { placeholderData: (previousData) => previousData });
   const {
     data: paymentOrders = [],
@@ -90,7 +101,7 @@ export default function Wallet() {
     onPaid: () => {
       utils.payment.myOrders.invalidate();
       utils.billing.me.invalidate();
-      utils.billing.ledger.invalidate();
+      utils.billing.ledgerPage.invalidate();
     },
   });
 
@@ -99,7 +110,7 @@ export default function Wallet() {
       toast.success("充值订单已创建");
       setRechargeOpen(false);
       utils.payment.myOrders.invalidate();
-      utils.billing.ledger.invalidate();
+      utils.billing.ledgerPage.invalidate();
       paymentDialog.launch(order);
     },
     onError: (error) => toast.error(error.message || "创建订单失败"),
@@ -115,7 +126,7 @@ export default function Wallet() {
       toast.success(note ? `已兑换 · ${note}` : "已兑换");
       setRedeemCode("");
       utils.billing.me.invalidate();
-      utils.billing.ledger.invalidate();
+      utils.billing.ledgerPage.invalidate();
       utils.plans.mySubscriptions.invalidate();
     },
     onError: (error) => toast.error(error.message || "兑换失败"),
@@ -289,6 +300,7 @@ export default function Wallet() {
               </TableBody>
             </Table>
             </div>
+            <PersistentPagination pagination={ledgerPagination} itemName="条账单" />
             </>
             )}
           </CardContent>

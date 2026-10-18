@@ -272,6 +272,8 @@ const tables: TableDef[] = [
       c("trafficFailoverExcluded", "bool", { notNull: true, default: false }),
       c("egressShapingMode", "varchar", { length: 16, notNull: true, default: "off" }), c("egressMbps", "int", { notNull: true, default: 0 }),
       c("flowOffload", "bool", { notNull: true, default: false }),
+      // 这台机器上下线要不要推 Telegram / Discord（上游 2.3.285）。只管推送，不影响离线判定、事件和故障转移。
+      c("hostStatusNotifyEnabled", "bool", { notNull: true, default: true }),
       c("telegramTrafficAlertEnabled", "bool", { notNull: true, default: false }), c("trafficAlertThresholdPercent", "int", { notNull: true, default: 20 }),
       c("telegramRenewalReminderEnabled", "bool", { notNull: true, default: false }), c("renewalReminderDays", "int", { notNull: true, default: 3 }),
       c("trafficAutoReset", "bool", { notNull: true, default: false }), c("trafficResetDay", "int", { notNull: true, default: 1 }),
@@ -466,6 +468,8 @@ const tables: TableDef[] = [
       c("hostGrantRequired", "bool", { notNull: true, default: false }),
       // 一键创建的落地出口入站（给规则当 Shadowsocks 出口用，派生节点默认不进订阅）。
       c("landingEgress", "bool", { notNull: true, default: false }),
+      // 分流（shared/inboundRouting.ts）：按服务 / 域名把一部分流量从别的落地出去。空 = 全部直连。
+      c("routingJson", "text"),
       // 端口自己的额度与用量。计数链装在监听端口上，多用户入站分不到人头，所以记在这里。
       c("bandwidthMbps", "int", { notNull: true, default: 0 }),
       c("trafficLimit", "bigint", { notNull: true, default: 0 }), c("trafficUsed", "bigint", { notNull: true, default: 0 }),
@@ -597,6 +601,8 @@ const tables: TableDef[] = [
       // aggregation weight (0 = derive the weight from the strategy).
       c("bandwidthMbps", "int", { notNull: true, default: 0 }), c("aggregationWeight", "int", { notNull: true, default: 0 }),
       c("isEnabled", "bool", { notNull: true, default: true }), c("healthStatus", "varchar", { length: 32, notNull: true, default: "unknown" }),
+      // 线路按时间段启用（shared/memberSchedule.ts）：可用时段，和「是时段让它停的」标记。
+      c("activeSchedule", "text"), c("scheduleSuspended", "bool", { notNull: true, default: false }),
       c("lastLatencyMs", "int"), c("chinaHealthStatus", "varchar", { length: 32, notNull: true, default: "unknown" }), c("chinaHealthLatencyMs", "int"), c("chinaHealthCheckedAt", "epoch"), c("failureSince", "epoch"), c("healthySince", "epoch"), c("lastCheckedAt", "epoch"),
       c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" }),
     ],
@@ -682,6 +688,8 @@ const tables: TableDef[] = [
       // 内核直通：V2 隧道两端都是内核 WireGuard 时，普通规则直接 iptables DNAT 进 nexwg，不经 FXP。默认关。
       c("kernelPassthrough", "bool", { notNull: true, default: false }),
       c("multipathReplicate", "bool", { notNull: true, default: false }),
+      // 单连接多路并发（shared/tunnelParallelStreams.ts）：入口把一条连接拆到 N 条并行连接，出口重组。1 = 单路。
+      c("parallelStreams", "int", { notNull: true, default: 1 }),
       c("blockHttp", "bool", { notNull: true, default: false }), c("blockSocks", "bool", { notNull: true, default: false }),
       c("blockTls", "bool", { notNull: true, default: false }), c("loadBalanceEnabled", "bool", { notNull: true, default: false }),
       c("loadBalanceStrategy", "varchar", { length: 32, notNull: true, default: "round_robin" }),

@@ -751,6 +751,30 @@
 }
 
 @layer components {
+  /*
+    富文本（套餐说明等 Markdown / 过滤后的 HTML）：Tailwind 的 preflight 把列表符号、标题字号
+    都清掉了，这里给一套克制的默认样式。只在容器里生效，不影响页面其它地方。
+  */
+  .fx-rich-text { overflow-wrap: anywhere; line-height: 1.65; }
+  .fx-rich-text > * + * { margin-top: 0.5em; }
+  .fx-rich-text h1, .fx-rich-text h2, .fx-rich-text h3,
+  .fx-rich-text h4, .fx-rich-text h5, .fx-rich-text h6 { color: var(--foreground); font-weight: 600; line-height: 1.35; }
+  .fx-rich-text h1 { font-size: 1.15em; }
+  .fx-rich-text h2 { font-size: 1.1em; }
+  .fx-rich-text h3, .fx-rich-text h4, .fx-rich-text h5, .fx-rich-text h6 { font-size: 1em; }
+  .fx-rich-text ul { list-style: disc; padding-left: 1.25em; }
+  .fx-rich-text ol { list-style: decimal; padding-left: 1.25em; }
+  .fx-rich-text li + li { margin-top: 0.15em; }
+  .fx-rich-text strong { color: var(--foreground); font-weight: 600; }
+  .fx-rich-text a { color: var(--primary); text-decoration: underline; text-underline-offset: 2px; }
+  .fx-rich-text blockquote { border-left: 2px solid var(--border); padding-left: 0.75em; }
+  .fx-rich-text code { border-radius: 4px; background: var(--muted); padding: 0 0.3em; font-size: 0.9em; }
+  .fx-rich-text pre { overflow-x: auto; border-radius: 8px; background: var(--muted); padding: 0.6em 0.75em; }
+  .fx-rich-text pre code { background: transparent; padding: 0; }
+  .fx-rich-text img { max-width: 100%; height: auto; border-radius: 8px; }
+  .fx-rich-text table { width: 100%; border-collapse: collapse; }
+  .fx-rich-text th, .fx-rich-text td { border: 1px solid var(--border); padding: 0.25em 0.5em; text-align: left; }
+
   .standard-card-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(min(100%, 21rem), 1fr));

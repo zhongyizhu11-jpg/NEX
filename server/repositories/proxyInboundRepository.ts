@@ -325,7 +325,7 @@ export async function getProxyInboundTrafficOwnersByIds(
  */
 export async function getEnabledProxyInboundsWithUsersByHost(
   hostId: number,
-): Promise<Array<{ id: number; port: number; protocol: string; inbound: ProxyInbound }>> {
+): Promise<Array<{ id: number; port: number; protocol: string; userId: number; clonedFromInboundId: number; routingJson: string | null; inbound: ProxyInbound }>> {
   const rows = await getEnabledProxyInboundsByHost(hostId);
   if (rows.length === 0) return [];
   const db = await getDb();
@@ -453,7 +453,15 @@ export async function getEnabledProxyInboundsWithUsersByHost(
   return activeRows.map((row) => {
     const inbound = proxyInboundFromRow(row);
     inbound.users = proxyInboundSupportsMultiUser(inbound.protocol) ? (usersByInbound.get(Number(row.id)) || []) : [];
-    return { id: Number(row.id), port: Number(row.port) || 0, protocol: String(row.protocol || ""), inbound };
+    return {
+      id: Number(row.id),
+      port: Number(row.port) || 0,
+      protocol: String(row.protocol || ""),
+      userId: Number(row.userId || 0),
+      clonedFromInboundId: Number(row.clonedFromInboundId || 0),
+      routingJson: row.routingJson ? String(row.routingJson) : null,
+      inbound,
+    };
   });
 }
 

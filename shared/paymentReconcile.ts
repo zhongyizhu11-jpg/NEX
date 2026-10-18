@@ -17,6 +17,10 @@ export type PaymentQueryResult = {
   tradeNo: string | null;
   /** 网关明确说这单不存在 / 已关闭，可以不用再问了。 */
   closed: boolean;
+  /** 网关报的实付金额（分）。有就拿它和订单比对，跟回调走同一套校验。 */
+  amountCents?: number;
+  /** 网关报的币种。 */
+  currency?: string;
 };
 
 const NOT_PAID: PaymentQueryResult = { paid: false, tradeNo: null, closed: false };

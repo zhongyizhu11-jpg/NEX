@@ -1,4 +1,5 @@
 import { FormField } from "@/components/ui/form-field";
+import { PlanDescriptionEditor } from "@/components/plans/PlanDescription";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
 import DataSectionError, { DataTableErrorRow } from "@/components/DataSectionError";
 import { resourceStatusTone } from "@/lib/statusDot";
@@ -6,6 +7,7 @@ import { StatusDot } from "@/lib/statusDot";
 import { forwardGroupModeOf, forwardGroupTypeText, type ForwardGroupMode } from "@shared/forwardTypes";
 import MobileInfoRow from "@/components/MobileInfoRow";
 import { formatQuotaBytes } from "@shared/formatBytes";
+import { planDescriptionSummary } from "@shared/planDescription";
 import { formatMoneyCents as money } from "@shared/formatMoney";
 import DashboardLayout from "@/components/DashboardLayout";
 import EmptyState from "@/components/EmptyState";
@@ -28,7 +30,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { OptimisticSwitch, Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Textarea } from "@/components/ui/textarea";
 import DataSectionLoading from "@/components/DataSectionLoading";
 import { useUrlTab } from "@/hooks/useUrlTab";
 import { getTunnelRouteText } from "@/lib/tunnelDisplay";
@@ -308,7 +309,7 @@ function PlanCard({
             menuLabel={`${plan.name} 的更多操作`}
           />
         </div>
-        <div className="mt-0.5 break-words text-meta text-muted-foreground">{plan.description || "无描述"}</div>
+        <div className="mt-0.5 line-clamp-2 break-words text-meta text-muted-foreground">{planDescriptionSummary(plan.description) || "无描述"}</div>
         <div className="mt-2 flex flex-wrap items-baseline gap-x-1.5">
           <span className="text-metric font-semibold tabular-nums text-foreground">{money(plan.priceCents, plan.currency)}</span>
           <span className="text-meta text-muted-foreground">/ {durationLabel(plan.durationDays)}</span>
@@ -1301,7 +1302,7 @@ export default function Plans() {
                               <TableRow key={plan.id}>
                                 <TableCell>
                                   <div className="font-medium">{plan.name}</div>
-                                  <div className="max-w-md truncate text-xs text-muted-foreground">{plan.description || "无描述"}</div>
+                                  <div className="max-w-md truncate text-xs text-muted-foreground">{planDescriptionSummary(plan.description) || "无描述"}</div>
                                 </TableCell>
                                 <TableCell>{money(plan.priceCents, plan.currency)} / {durationLabel(plan.durationDays)}</TableCell>
                                 <TableCell>
@@ -1657,8 +1658,7 @@ export default function Plans() {
                 </div>
 
                 <FormField className="space-y-2">
-                  <Label>说明</Label>
-                  <Textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="展示给用户看的套餐说明" />
+                  <PlanDescriptionEditor value={form.description} onChange={(description) => setForm({ ...form, description })} />
                 </FormField>
               </TabsContent>
 

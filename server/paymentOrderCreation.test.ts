@@ -30,11 +30,20 @@ function runInDatabase(body: string) {
         if (url.startsWith("https://api.stripe.com/")) {
           return new Response(JSON.stringify({ id: "cs_test_" + requests.length, url: "https://checkout.stripe.com/pay" }), { status: 200 });
         }
+        // 网关响应要带签名（面板会验）：用下面配置进去的同一对密钥签。
         if (url.startsWith("https://openapi.alipay.com/")) {
-          return new Response(JSON.stringify({ alipay_trade_precreate_response: { code: "10000", qr_code: "https://qr.alipay.com/x" } }), { status: 200 });
+          const content = JSON.stringify({ code: "10000", qr_code: "https://qr.alipay.com/x" });
+          const sign = crypto.sign("RSA-SHA256", Buffer.from(content), globalThis.__payKeys.privateKey).toString("base64");
+          return new Response('{"alipay_trade_precreate_response":' + content + ',"sign":"' + sign + '"}', { status: 200 });
         }
         if (url.startsWith("https://api.mch.weixin.qq.com/")) {
-          return new Response(JSON.stringify({ code_url: "weixin://wxpay/x" }), { status: 200 });
+          const text = JSON.stringify({ code_url: "weixin://wxpay/x" });
+          const timestamp = String(Math.floor(Date.now() / 1000));
+          const nonce = "n" + requests.length;
+          const signature = crypto.sign("RSA-SHA256", Buffer.from(timestamp + "\n" + nonce + "\n" + text + "\n"), globalThis.__payKeys.privateKey).toString("base64");
+          return new Response(text, { status: 200, headers: {
+            "wechatpay-serial": "PUB_KEY_ID", "wechatpay-timestamp": timestamp, "wechatpay-nonce": nonce, "wechatpay-signature": signature,
+          } });
         }
         throw new Error("unexpected fetch " + url);
       };
@@ -59,6 +68,7 @@ function runInDatabase(body: string) {
         privateKeyEncoding: { type: "pkcs8", format: "pem" },
         publicKeyEncoding: { type: "spki", format: "pem" },
       });
+      globalThis.__payKeys = keys;
       await settings.setSetting("paymentConfig", JSON.stringify({
         enabled: true,
         minAmount: 0,

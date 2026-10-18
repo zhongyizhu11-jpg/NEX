@@ -22,6 +22,7 @@ import { resourceAlertRouter } from "./resourceAlert";
 import { hostLogsRouter } from "./hostLogs";
 import { faultBoardRouter } from "./faultBoard";
 import { connStatsRouter } from "./connStats";
+import { opsBoardRouter } from "./opsBoard";
 
 export const opsRouter = router({
   events: eventsRouter,
@@ -43,4 +44,5 @@ export const opsRouter = router({
   hostLogs: hostLogsRouter,
   faultBoard: faultBoardRouter,
   connStats: connStatsRouter,
+  board: opsBoardRouter,
 });

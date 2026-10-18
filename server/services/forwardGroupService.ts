@@ -1,4 +1,5 @@
 import * as db from "../db";
+import { groupModeSupportsMemberSchedule, memberEnabledIntent, serializeMemberSchedule } from "../../shared/memberSchedule";
 import { getDdnsSettings } from "../ddns";
 import { appendPanelLog } from "../_core/panelLogger";
 import { pushAgentRefresh } from "../agentEvents";
@@ -35,6 +36,8 @@ export type ForwardGroupMemberRequest = {
   bandwidthMbps?: number | null;
   /** Manual bandwidth aggregation weight. Entry groups only. */
   aggregationWeight?: number | null;
+  /** 可用时段（shared/memberSchedule.ts）。不传 = 不动原来的。 */
+  activeSchedule?: unknown;
 };
 
 export type ForwardGroupInput = {
@@ -124,6 +127,10 @@ export function normalizeForwardGroupMembers(
       // group, so other group modes store zeroes.
       bandwidthMbps: groupMode === "entry" ? normalizeMemberBandwidthMbps(member.bandwidthMbps) : 0,
       aggregationWeight: groupMode === "entry" ? normalizeMemberWeight(member.aggregationWeight) : 0,
+      // 可用时段：没传 = 不动库里原来的；不支持时段的组模式存 null（见 shared/memberSchedule.ts）。
+      activeSchedule: member.activeSchedule === undefined
+        ? undefined
+        : groupModeSupportsMemberSchedule(groupMode) ? serializeMemberSchedule(member.activeSchedule) : null,
     };
   });
 }
@@ -132,7 +139,8 @@ function memberPrioritySignature(members: ForwardGroupMemberRequest[]) {
   return members
     .map((member, index) => ({
       key: `${member.memberType}:${member.memberType === "host" ? Number(member.hostId || 0) : Number(member.tunnelId || 0)}`,
-      enabled: member.isEnabled !== false,
+      // 用户的意思（被时段停掉的也算开着），不然时段一停就被当成「成员改了」。
+      enabled: memberEnabledIntent(member as any) || member.isEnabled === undefined,
       priority: Number(member.priority ?? index),
     }))
     .sort((a, b) => a.priority - b.priority)
@@ -140,20 +148,33 @@ function memberPrioritySignature(members: ForwardGroupMemberRequest[]) {
     .join("|");
 }
 
+/*
+  没传时段的成员（旧客户端、机器人改成员）表示「不动原来的」：比较前先把库里的时段补进去，
+  不然库里的 null 和这里的「不动」对不上，改个名字也会被当成成员改了、重写成员、重启运行时。
+*/
+function withExistingSchedules(members: ForwardGroupMemberRequest[], existing: ForwardGroupMemberRequest[]) {
+  const memberKey = (member: ForwardGroupMemberRequest) => `${member.memberType}:${member.memberType === "host" ? Number(member.hostId || 0) : Number(member.tunnelId || 0)}`;
+  const existingByKey = new Map(existing.map((member) => [memberKey(member), member]));
+  return members.map((member) => (member.activeSchedule !== undefined
+    ? member
+    : { ...member, activeSchedule: existingByKey.get(memberKey(member))?.activeSchedule ?? null }));
+}
+
 function memberRuntimeSignature(members: ForwardGroupMemberRequest[]) {
   return members
     .map((member, index) => ({
       key: `${member.memberType}:${member.memberType === "host" ? Number(member.hostId || 0) : Number(member.tunnelId || 0)}`,
-      enabled: member.isEnabled !== false && Number(member.isEnabled as any) !== 0,
+      enabled: memberEnabledIntent(member as any) || member.isEnabled === undefined,
       priority: Number(member.priority ?? index),
       connectHost: String(member.connectHost || "").trim(),
+      schedule: member.activeSchedule === undefined ? "keep" : serializeMemberSchedule(member.activeSchedule) || "",
       // Bandwidth and weight edits must reach the member rows, so they belong
       // in the signature that decides whether members are rewritten.
       bandwidthMbps: normalizeMemberBandwidthMbps(member.bandwidthMbps),
       aggregationWeight: normalizeMemberWeight(member.aggregationWeight),
     }))
     .sort((a, b) => a.priority - b.priority)
-    .map((member) => `${member.key}:${member.enabled ? 1 : 0}:${member.connectHost}:${member.bandwidthMbps}:${member.aggregationWeight}`)
+    .map((member) => `${member.key}:${member.enabled ? 1 : 0}:${member.connectHost}:${member.bandwidthMbps}:${member.aggregationWeight}:${member.schedule}`)
     .join("|");
 }
 
@@ -298,8 +319,9 @@ export async function updateForwardGroupFromInput(id: number, input: ForwardGrou
   const enabledChanged = !!existing.isEnabled !== desiredEnabled;
   const memberPriorityChanged = memberPrioritySignature((existing?.members || []) as ForwardGroupMemberRequest[])
     !== memberPrioritySignature(normalized.members as ForwardGroupMemberRequest[]);
-  const membersChanged = memberRuntimeSignature((existing?.members || []) as ForwardGroupMemberRequest[])
-    !== memberRuntimeSignature(normalized.members as ForwardGroupMemberRequest[]);
+  const existingMembers = (existing?.members || []) as ForwardGroupMemberRequest[];
+  const membersChanged = memberRuntimeSignature(existingMembers)
+    !== memberRuntimeSignature(withExistingSchedules(normalized.members as ForwardGroupMemberRequest[], existingMembers));
   const rateLimitChanged = Number(existing?.rateLimitMbps || 0) !== Number(normalized.data.rateLimitMbps || 0);
   const previousHostIds = ((existing?.members || []) as ForwardGroupMemberRequest[])
     .filter((member) => member.memberType === "host")
