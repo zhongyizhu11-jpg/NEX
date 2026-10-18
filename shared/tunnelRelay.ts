@@ -1,3 +1,5 @@
+import { LINK_TERM_FAILOVER, LINK_TERM_SPLIT_CONNECTION } from "./linkTerms";
+
 export const TUNNEL_RELAY_MODES = ["chain", "failover", "aggregate"] as const;
 
 export type TunnelRelayMode = (typeof TUNNEL_RELAY_MODES)[number];
@@ -10,10 +12,17 @@ export const AGENT_FORWARDX_RELAY_FAILOVER_VERSION = "2.2.160";
  */
 export const AGENT_FORWARDX_RELAY_AGGREGATE_VERSION = "2.2.194";
 
+/** 中转模式的名字（shared/linkTerms.ts 的三个词）：串成一条链 / 主备 / 单连接叠加。 */
+export const TUNNEL_RELAY_MODE_LABELS: Record<TunnelRelayMode, string> = {
+  chain: "链路中转",
+  failover: LINK_TERM_FAILOVER,
+  aggregate: LINK_TERM_SPLIT_CONNECTION,
+};
+
 export const TUNNEL_RELAY_MODE_HINTS: Record<TunnelRelayMode, string> = {
   chain: "流量按顺序经过每一台中转，最终到达出口。",
-  failover: "入口每次只用一台中转，故障时切换到下一台。",
-  aggregate: "单条连接被拆分到全部中转并行传输，由出口重组，可用带宽接近各中转之和。",
+  failover: "入口每次只用一台中转，坏了才换下一台。",
+  aggregate: "每条连接都被拆开、同时走全部中转，由出口拼回来；单条连接也能用上几台中转的带宽之和。",
 };
 
 export function normalizeTunnelRelayMode(value: unknown): TunnelRelayMode {
@@ -104,7 +113,7 @@ export function tunnelRelayModeAvailability(options: {
       // be wrong when the transport cannot stripe a connection at all.
       available: hasEnoughRelays && !!options.aggregateSupported,
       reason: !options.aggregateSupported
-        ? "仅 NEX 隧道支持中转带宽叠加"
+        ? `仅 NEX 隧道支持${LINK_TERM_SPLIT_CONNECTION}`
         : hasEnoughRelays
           ? ""
           : relayCountReason,

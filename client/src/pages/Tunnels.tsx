@@ -1860,7 +1860,7 @@ function TunnelSelfTestDialog({
         fromMeta: meta[hostDisplayName(entryHost)] || meta[String(firstHostId)] || undefined,
         toMeta: meta[hostDisplayName(primaryExitHost)] || meta[String(lastHostId)] || undefined,
         groupKey: branchGroupKey,
-        groupLabel: "多出口负载",
+        groupLabel: "多出口负载均衡",
       }];
       for (const exit of extraExits) {
         const exitHostId = Number(exit?.hostId || 0);
@@ -1876,7 +1876,7 @@ function TunnelSelfTestDialog({
           fromMeta: meta[hostDisplayName(entryHost)] || meta[String(firstHostId)] || undefined,
           toMeta: meta[hostDisplayName(exitHost)] || meta[String(exitHostId)] || undefined,
           groupKey: branchGroupKey,
-          groupLabel: "多出口负载",
+          groupLabel: "多出口负载均衡",
         });
       }
       plannedSegments = branchSegments.slice(0, 1).filter((segment: LinkTestPlannedSegment) => segment.from && segment.to);

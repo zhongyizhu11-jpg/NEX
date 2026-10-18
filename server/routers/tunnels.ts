@@ -135,7 +135,7 @@ async function requireForwardXRelayAggregateAgentVersions(hostIds: number[]) {
   ));
   if (unsupported.length === 0) return;
   const labels = unsupported.map(({ id, host }) => host?.name || host?.ip || `主机 ${id}`).slice(0, 5);
-  throw new Error(`NEX 中转带宽叠加需要入口、中转和出口 Agent 升级到 v${AGENT_FORWARDX_RELAY_AGGREGATE_VERSION} 或更高版本：${labels.join("、")}`);
+  throw new Error(`NEX 中转「单连接叠加」需要入口、中转和出口 Agent 升级到 v${AGENT_FORWARDX_RELAY_AGGREGATE_VERSION} 或更高版本：${labels.join("、")}`);
 }
 
 function isTunnelProxyProtocolSupported(mode: unknown) {
@@ -1074,7 +1074,7 @@ export const tunnelsRouter = router({
         }
         if (relayMode === "aggregate") {
           if (!hopHostIds || hopHostIds.length < 4) throw new Error("带宽叠加至少需要配置两个中转主机");
-          if (!tunnelRelayAggregateSupported(normalizedMode)) throw new Error("仅 NEX 隧道支持中转带宽叠加");
+          if (!tunnelRelayAggregateSupported(normalizedMode)) throw new Error("仅 NEX 隧道支持中转「单连接叠加」");
         }
         await requireTunnelProtocolEnabled({ ...input, mode: normalizedMode });
         await requireEntryGroupAccess(ctx, input.entryGroupId, true);
@@ -1390,7 +1390,7 @@ export const tunnelsRouter = router({
         }
         if (requestedRelayMode === "aggregate") {
           if (!hopIdsForConnect || hopIdsForConnect.length < 4) throw new Error("带宽叠加至少需要配置两个中转主机");
-          if (!tunnelRelayAggregateSupported(nextModeForRuntime)) throw new Error("仅 NEX 隧道支持中转带宽叠加");
+          if (!tunnelRelayAggregateSupported(nextModeForRuntime)) throw new Error("仅 NEX 隧道支持中转「单连接叠加」");
         }
         const nextRelayMode = requestedRelayMode === "failover" || requestedRelayMode === "aggregate"
           ? requestedRelayMode
@@ -1906,7 +1906,7 @@ export const tunnelsRouter = router({
         return getTunnelDeleteImpact(input.id);
       }),
     /**
-     * 复制模式：只对「中转带宽叠加」的 NEX 隧道有意义。开了以后入口每一片都从两条中转各发一份
+     * 复制模式：只对中转「单连接叠加」的 NEX 隧道有意义。开了以后入口每一片都从两条中转各发一份
      * （出口回程同样，出口 FXP ≥ 2.2.133），用一倍带宽换「一条中转断了连接也不断」。
      */
     setReplicate: protectedProcedure
@@ -1917,7 +1917,7 @@ export const tunnelsRouter = router({
         if (ctx.user.role !== "admin" && tunnel.userId !== ctx.user.id) throw new Error("无权操作此隧道");
         if (input.enabled) {
           const hops = await hopRepo.getTunnelHops(Number(tunnel.id));
-          if (!isTunnelRelayAggregate(tunnel, hops)) throw new Error("复制模式只能用在「中转带宽叠加」的 NEX 隧道上（至少两台中转）");
+          if (!isTunnelRelayAggregate(tunnel, hops)) throw new Error("复制模式只能用在中转「单连接叠加」的 NEX 隧道上（至少两台中转）");
         }
         if (dbBool((tunnel as any).multipathReplicate) !== input.enabled) {
           await db.updateTunnel(input.id, { multipathReplicate: input.enabled } as any);

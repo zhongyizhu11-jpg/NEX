@@ -3403,7 +3403,7 @@ function RulesContent() {
     ? { reason: "使用 Shadowsocks 出口的规则暂不支持线路组：出口本身就是固定的落地。" }
     : selectedForwardGroupIsChain
     ? {
-      reason: "转发链不支持主备线路。想要线路出问题自动换，可以用「转发组」。",
+      reason: "转发链用不了线路组。想要入口坏了自动换，用「转发组」（入口主备）；想要中间的线路坏了自动换，改成隧道转发再开线路组。",
       fix: canUseFailoverGroup && !routeModeLocked ? { label: "改用转发组", run: () => setRouteMode("group") } : undefined,
     }
     : mainBackupUsesTunnelRoute && !mainBackupIsTunnelRoute

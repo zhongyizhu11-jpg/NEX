@@ -44,7 +44,7 @@ test("Clash 订阅：mihomo 客户端按份数展开，其它客户端照旧平�
       { ...({} as any), name: "Po0(500M)", protocol: "shadowsocks", address: "1.1.1.1", port: 1, password: "p", method: "aes-256-gcm" },
       { ...({} as any), name: "po0(300M)", protocol: "shadowsocks", address: "2.2.2.2", port: 2, password: "p", method: "aes-256-gcm" },
     ],
-    groups: [{ name: "落地 带宽叠加", type: "load-balance", members: ["Po0(500M)", "po0(300M)"], weights: [5, 3] }],
+    groups: [{ name: "落地 负载均衡", type: "load-balance", members: ["Po0(500M)", "po0(300M)"], weights: [5, 3] }],
     ruleSets: [],
     rules: [],
   };

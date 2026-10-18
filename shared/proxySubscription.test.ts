@@ -346,15 +346,15 @@ test("sing-box 的自动选路组渲染成 urltest", () => {
   assert.equal(outbounds[2].type, "vless");
 });
 
-test("Clash 的带宽叠加组是轮询的 load-balance", () => {
+test("Clash 的负载均衡组是轮询的 load-balance", () => {
   const document = {
     nodes: [
       node(VLESS_WS, { address: "1.2.3.4", port: 20001, name: "广州1 → HKT" }),
       node(VLESS_WS, { address: "5.6.7.8", port: 20002, name: "广州2 → HKT" }),
     ],
     groups: [
-      { name: "NEX", type: "select" as const, members: ["HKT 带宽叠加"] },
-      { name: "HKT 带宽叠加", type: "load-balance" as const, members: ["广州1 → HKT", "广州2 → HKT"] },
+      { name: "NEX", type: "select" as const, members: ["HKT 负载均衡"] },
+      { name: "HKT 负载均衡", type: "load-balance" as const, members: ["广州1 → HKT", "广州2 → HKT"] },
     ],
     ruleSets: [],
     rules: [],
@@ -372,15 +372,15 @@ test("Clash 的带宽叠加组是轮询的 load-balance", () => {
   assert.equal(groups[1].tolerance, undefined);
 });
 
-test("sing-box 没有负载均衡出站，带宽叠加退成 urltest", () => {
+test("sing-box 没有负载均衡出站，负载均衡退成 urltest", () => {
   const document = {
     nodes: [
       node(VLESS_WS, { address: "1.2.3.4", port: 20001, name: "广州1 → HKT" }),
       node(VLESS_WS, { address: "5.6.7.8", port: 20002, name: "广州2 → HKT" }),
     ],
     groups: [
-      { name: "NEX", type: "select" as const, members: ["HKT 带宽叠加"] },
-      { name: "HKT 带宽叠加", type: "load-balance" as const, members: ["广州1 → HKT", "广州2 → HKT"] },
+      { name: "NEX", type: "select" as const, members: ["HKT 负载均衡"] },
+      { name: "HKT 负载均衡", type: "load-balance" as const, members: ["广州1 → HKT", "广州2 → HKT"] },
     ],
     ruleSets: [],
     rules: [],
@@ -949,7 +949,7 @@ function profileDocument() {
     node(TROJAN, { address: "1.2.3.4", port: 20001, name: "前置A → HKT" }),
     node(TROJAN, { address: "5.6.7.8", port: 20002, name: "前置B → HKT" }),
   ];
-  const lb = { name: "HKT 带宽叠加", type: "load-balance" as const, members: nodes.map((item) => item.name) };
+  const lb = { name: "HKT 负载均衡", type: "load-balance" as const, members: nodes.map((item) => item.name) };
   const selectable = [lb.name, ...nodes.map((item) => item.name)];
   const plan = buildProxyRulePlan({ preset: "balanced", mainGroupName: PROXY_SUBSCRIPTION_GROUP_NAME, selectableMembers: selectable });
   return {
@@ -995,9 +995,9 @@ test("Surge 完整配置：托管地址、叠加组是 load-balance、规则走 
   assert.equal(section(text, "[Proxy]").length, 2);
 
   const groups = section(text, "[Proxy Group]");
-  assert.equal(groups[0], "NEX = select, HKT 带宽叠加, 前置A → HKT, 前置B → HKT");
+  assert.equal(groups[0], "NEX = select, HKT 负载均衡, 前置A → HKT, 前置B → HKT");
   // 不带 persistent：每个请求随机挑，才叠得起来。
-  assert.equal(groups[1], "HKT 带宽叠加 = load-balance, 前置A → HKT, 前置B → HKT");
+  assert.equal(groups[1], "HKT 负载均衡 = load-balance, 前置A → HKT, 前置B → HKT");
 
   const rules = section(text, "[Rule]");
   assert.ok(rules.includes("RULE-SET,https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/OpenAI/OpenAI.list,🤖 AI 服务"));
@@ -1034,10 +1034,10 @@ test("iOS 四家的 AI 组：Claude / Gemini / Copilot 列表齐全，跟不上�
 test("Loon 完整配置：叠加组 Round-Robin，远程规则放 [Remote Rule]", () => {
   const text = renderProxySubscription(profileDocument(), "loon", { profile: true });
   const groups = section(text, "[Proxy Group]");
-  const lb = groups.find((line) => line.startsWith("HKT 带宽叠加 = "));
+  const lb = groups.find((line) => line.startsWith("HKT 负载均衡 = "));
   assert.equal(
     lb,
-    "HKT 带宽叠加 = load-balance,前置A → HKT,前置B → HKT,url = http://www.gstatic.com/generate_204,interval = 300,algorithm = Round-Robin",
+    "HKT 负载均衡 = load-balance,前置A → HKT,前置B → HKT,url = http://www.gstatic.com/generate_204,interval = 300,algorithm = Round-Robin",
   );
   assert.equal(section(text, "[Proxy]").length, 2);
   const remote = section(text, "[Remote Rule]");
@@ -1049,7 +1049,7 @@ test("Loon 完整配置：叠加组 Round-Robin，远程规则放 [Remote Rule]"
 test("Shadowrocket 拉 Loon / Surge 格式的完整配置：叠加组换成 random，别的不动", () => {
   // Shadowrocket 读得懂 Loon / Surge 配置，但它的 load-balance 是同域名钉在一个节点上，
   // 测速、下载全挤在一台，叠不起带宽。来的是 Shadowrocket 就写它认的 random。
-  const randomLine = "HKT 带宽叠加 = random, 前置A → HKT, 前置B → HKT, url=http://www.gstatic.com/generate_204, interval=300";
+  const randomLine = "HKT 负载均衡 = random, 前置A → HKT, 前置B → HKT, url=http://www.gstatic.com/generate_204, interval=300";
   const loon = renderProxySubscription(profileDocument(), "loon", { profile: true, shadowrocketClient: true });
   const loonGroups = section(loon, "[Proxy Group]");
   assert.ok(loonGroups.includes(randomLine));
@@ -1065,7 +1065,7 @@ test("Shadowrocket 拉 Loon / Surge 格式的完整配置：叠加组换成 rand
 test("Quantumult X 完整配置：round-robin、内置策略小写、force-policy 盖掉列表自带的策略", () => {
   const text = renderProxySubscription(profileDocument(), "quantumultx", { profile: true });
   const policies = section(text, "[policy]");
-  assert.ok(policies.includes("round-robin=HKT 带宽叠加, 前置A → HKT, 前置B → HKT"));
+  assert.ok(policies.includes("round-robin=HKT 负载均衡, 前置A → HKT, 前置B → HKT"));
   // 分类组里的 DIRECT 在 QX 里必须是小写 direct。
   const lan = policies.find((line) => line.startsWith("static=🏠 局域网, "));
   assert.match(String(lan), /^static=🏠 局域网, direct, NEX/);
@@ -1085,7 +1085,7 @@ test("Shadowrocket 完整配置：不带节点，叠加用 random，名字和 ba
   assert.ok(section(text, "[General]").includes(`update-url = ${url}`));
   const groups = section(text, "[Proxy Group]");
   // Shadowrocket 的 load-balance 是同域名固定节点，叠加要用 random。
-  assert.ok(groups.includes("HKT 带宽叠加 = random, 前置A → HKT, 前置B → HKT, url=http://www.gstatic.com/generate_204, interval=300"));
+  assert.ok(groups.includes("HKT 负载均衡 = random, 前置A → HKT, 前置B → HKT, url=http://www.gstatic.com/generate_204, interval=300"));
   const rules = section(text, "[Rule]");
   assert.ok(rules.some((line) => line.includes("/rule/Shadowrocket/Telegram/Telegram.list,✈️ 电报消息")));
   assert.equal(rules[rules.length - 1], "FINAL,NEX");

@@ -108,7 +108,7 @@ export type ProxySubscriptionRuleRow = {
 
 export type ProxySubscriptionHostRow = HostEntryAddressSource & {
   id: number;
-  /** 主机总限速 / 出口整形带宽（Mbps）：「带宽叠加」组按它给这台前置多分连接。没查这两列时按主机名里的带宽。 */
+  /** 主机总限速 / 出口整形带宽（Mbps）：「负载均衡」组按它给这台前置多分连接。没查这两列时按主机名里的带宽。 */
   rateLimitMbps?: unknown;
   egressMbps?: unknown;
   /** 最后一次心跳。从来没有 = Agent 还没装上，见 hostNeverConnected。 */
@@ -597,7 +597,7 @@ export function dedupeProxyNodeNames(nodes: readonly ProxyNode[]): ProxyNode[] {
  * off       不生成，只留裸节点
  * url-test      客户端定期测速，自动走最快的那条中转，挂掉自动切
  * fallback      按顺序主备，前一条不通才切下一条
- * load-balance  每条新连接轮流走下一条中转，多条连接的带宽相加（两台 300M 的中转
+ * load-balance  负载均衡：每条新连接轮流走下一条中转，多条连接的带宽相加（两台 300M 的中转
  *               合起来约 600M）。单条连接仍只走一条中转，上限还是一台的带宽。
  *               所有中转最后都从同一台落地出去，出口 IP 不变，所以轮询不会让网站
  *               看到 IP 跳来跳去。
@@ -610,14 +610,14 @@ export const PROXY_NODE_AUTO_GROUP_LABELS: Record<ProxyNodeAutoGroup, string> = 
   off: "不生成",
   "url-test": "自动选最快",
   fallback: "主备切换",
-  "load-balance": "带宽叠加",
+  "load-balance": "负载均衡",
 };
 
 export const PROXY_NODE_AUTO_GROUP_HINTS: Record<ProxyNodeAutoGroup, string> = {
   off: "订阅里只有裸节点，由你自己在客户端里选。",
   "url-test": "客户端定期测速，自动走延迟最低的中转；该条中转故障时自动切换。",
   fallback: "按列表顺序主备，前一条不通才切下一条，适合有明确主力线路时。",
-  "load-balance": "每条新连接轮流走不同中转，多线程下载、多设备同时用时带宽相加（两台 300M 约 600M）；单条连接仍只走一条中转。按各前置的带宽多分少分（主机总限速，或主机名括号里写的带宽，如「Po0(500M)」），Clash / Mihomo 客户端生效。sing-box 按「自动选最快」生成。",
+  "load-balance": "每条新连接轮流走不同中转，多线程下载、多设备同时用时带宽相加（两台 300M 约 600M）；单条连接仍只走一条中转。按各前置的线路带宽多分少分（主机里填的「线路带宽」，没填时看总限速或主机名括号里写的带宽，如「Po0(500M)」），Clash / Mihomo 客户端生效。sing-box 按「自动选最快」生成。",
 };
 
 /**
@@ -644,7 +644,7 @@ export type ProxySubscriptionGroup = {
   /** 组内成员，可能是节点名，也可能是另一个组名（主选择器会引用自动选路组）。 */
   members: string[];
   /**
-   * 「带宽叠加」组每个成员分多少份连接（和 members 一一对应，见 proxyLoadBalanceWeights）。
+   * 「负载均衡」组每个成员分多少份连接（和 members 一一对应，见 proxyLoadBalanceWeights）。
    * 没有 = 平均分。只有确认支持「组里重复列同一个节点」的客户端（mihomo / Clash）才照着展开。
    */
   weights?: number[];
@@ -660,8 +660,8 @@ export type ProxySubscriptionDocument = {
 
 /** 自动选路组的名字，和模板同名会让客户端里两个条目难以区分，所以加后缀。 */
 export function autoGroupNameForTemplate(templateName: string, mode: ProxyNodeAutoGroup = "url-test"): string {
-  // 叠加组单独起名：用户要在客户端里一眼认出「选这个才叠带宽」。
-  return `${text(templateName) || "节点"} ${mode === "load-balance" ? "带宽叠加" : "自动选路"}`;
+  // 负载均衡组单独起名：用户要在客户端里一眼认出「选这个才把连接分到几台前置上」。
+  return `${text(templateName) || "节点"} ${mode === "load-balance" ? "负载均衡" : "自动选路"}`;
 }
 
 /** 一台中转不构成选路，低于这个数量不生成自动组。 */
@@ -726,7 +726,7 @@ export function buildProxySubscriptionDocument(
     const mode = normalizeProxyNodeAutoGroup(template?.autoGroup);
     if (mode === "off") continue;
     /**
-     * 带宽叠加只叠中转，不带落地直连。
+     * 负载均衡只分到中转上，不带落地直连。
      *
      * 直连是另一条完全不同的线路（从国内直连落地往往是最差的一条），混进轮询里
      * 就是每几条连接有一条绕开前置 —— 用户看到的是组里多了个落地、速度忽高忽低。
@@ -734,7 +734,7 @@ export function buildProxySubscriptionDocument(
      */
     const memberNames = mode === "load-balance" ? relayNamesByTemplate.get(templateId) || [] : allNames;
     if (memberNames.length < PROXY_AUTO_GROUP_MIN_MEMBERS) continue;
-    // 带宽叠加按各前置的带宽多分少分：500M 和 300M 两台就是 5:3，而不是一人一半。
+    // 负载均衡按各前置的带宽多分少分：500M 和 300M 两台就是 5:3，而不是一人一半。
     const weights = mode === "load-balance" ? proxyLoadBalanceWeights(relayBandwidthsByTemplate.get(templateId) || []) : null;
     autoGroups.push({
       name: autoGroupNameForTemplate(text(template?.name), mode),
@@ -768,10 +768,10 @@ export function buildProxySubscriptionDocument(
   return { nodes, groups, ruleSets: rulePlan.ruleSets, rules: rulePlan.rules };
 }
 
-/* ── 带宽叠加的加权 ─────────────────────────────────────────────────── */
+/* ── 负载均衡组的加权 ─────────────────────────────────────────────────── */
 
 /**
- * 一台前置的带宽（Mbps），给「带宽叠加」组分连接用。依次看：
+ * 一台前置的带宽（Mbps），给「负载均衡」组分连接用。依次看：
  *   1. 主机总限速（rateLimitMbps）—— 你给这台机器定的上限，最准；
  *   2. 出口整形带宽（egressMbps）；
  *   3. 主机名里括号中的带宽，例如「Po0(500M)」「港机【1G】」—— 很多人就是这么给机器起名的。

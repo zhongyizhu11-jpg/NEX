@@ -148,7 +148,6 @@ import {
   BANDWIDTH_AGGREGATION_STRATEGIES,
   BANDWIDTH_AGGREGATION_STRATEGY_HINTS,
   BANDWIDTH_AGGREGATION_STRATEGY_LABELS,
-  MAX_AGGREGATION_RECORD_SLOTS,
   MAX_MEMBER_BANDWIDTH_MBPS,
   MAX_MEMBER_WEIGHT,
   formatAggregationUtilization,
@@ -2175,7 +2174,7 @@ export function ForwardGroupsContent({
     },
     failover: {
       title: "转发组",
-      description: "管理多入口故障转移与负载分配。",
+      description: "多台入口主备：入口域名始终指向一台健康的入口，坏了自动换。",
       addButtonText: "添加转发组",
       loadingLabel: "正在加载转发组",
       emptyTitle: "暂无转发组",
@@ -2493,10 +2492,11 @@ export function ForwardGroupsContent({
                   <div className="space-y-3 rounded-md border border-border/60 p-3">
                     <label className="flex items-center justify-between gap-3">
                       <span className="space-y-1">
-                        <span className="block text-sm font-medium">多入口带宽加权分流</span>
+                        <span className="block text-sm font-medium">按带宽排序解析</span>
                         <span className="block text-xs text-muted-foreground">
-                          按每台入口 VPS 的上行带宽分配解析份额，带宽大的入口承接更多客户端，整组总吞吐接近各入口之和。
-                          单条连接仍然只走一台入口；要把一条连接拆开并行传输，请用隧道的「中转带宽叠加」。
+                          入口域名照旧解析出全部健康入口，只是把带宽大（或现在更闲）的排在前面。很多客户端优先用排在前面的地址，
+                          所以大带宽的入口通常会接到更多客户端，但 DNS 给不出准确的比例。
+                          要按比例分连接，用订阅里的「负载均衡」组；要把一条连接拆开同时走几台，用隧道中转的「单连接叠加」。
                         </span>
                       </span>
                       <Checkbox
@@ -2507,9 +2507,9 @@ export function ForwardGroupsContent({
 
                     {form.bandwidthAggregationEnabled && (
                       <div className="space-y-3 border-t border-border/60 pt-3">
-                        <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_120px_140px]">
+                        <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_140px]">
                           <FormField className="space-y-2">
-                            <Label>聚合策略</Label>
+                            <Label>排序依据</Label>
                             <Select
                               value={form.bandwidthAggregationStrategy}
                               onValueChange={(value) => setForm({ ...form, bandwidthAggregationStrategy: normalizeBandwidthAggregationStrategy(value) })}
@@ -2525,17 +2525,6 @@ export function ForwardGroupsContent({
                             </Select>
                           </FormField>
                           <FormField className="space-y-2">
-                            <Label>解析条数</Label>
-                            <Input
-                              type="number"
-                              min={1}
-                              max={MAX_AGGREGATION_RECORD_SLOTS}
-                              value={form.bandwidthAggregationSlots}
-                              onChange={(e) => setForm({ ...form, bandwidthAggregationSlots: e.target.value })}
-                              placeholder="8"
-                            />
-                          </FormField>
-                          <FormField className="space-y-2">
                             <Label>最少健康前置</Label>
                             <Input
                               type="number"
@@ -2549,7 +2538,7 @@ export function ForwardGroupsContent({
                         </div>
                         <p className="text-xs text-muted-foreground">
                           {BANDWIDTH_AGGREGATION_STRATEGY_HINTS[form.bandwidthAggregationStrategy]}
-                          {" 健康前置少于下限时自动退回等量分配。"}
+                          {" 健康入口少于下限时不排序。"}
                         </p>
                         {editingId ? (
                           <BandwidthAggregationSummary groupId={editingId} open={showDialog} />
@@ -2832,7 +2821,7 @@ export function ForwardGroupsContent({
                             {showAggregationColumns && (
                               <>
                                 <span>上行 Mbps：该前置的上行带宽，留空或 0 表示未知</span>
-                                <span>权重：手动份额，0 表示按所选聚合策略自动计算</span>
+                                <span>权重：手动排序比重，0 表示按所选排序依据自动计算</span>
                               </>
                             )}
                             {showScheduleColumn && <span>时段：只在设定的时段使用这个成员，时段外自动暂停</span>}

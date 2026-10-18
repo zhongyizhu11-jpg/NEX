@@ -38,7 +38,7 @@ export function BandwidthAggregationSummary({ groupId, open }: Props) {
   if (isLoading && !data) {
     return (
       <div className="rounded-md border border-border/60 p-3 text-xs text-muted-foreground">
-        正在读取带宽聚合状态…
+        正在读取排序状态…
       </div>
     );
   }
@@ -50,7 +50,7 @@ export function BandwidthAggregationSummary({ groupId, open }: Props) {
   return (
     <div className="space-y-3 rounded-md border border-border/60 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="text-sm font-medium">当前聚合状态</span>
+        <span className="text-sm font-medium">当前排序</span>
         <Badge variant={data.degraded ? "outline" : "secondary"}>
           {BANDWIDTH_AGGREGATION_STRATEGY_LABELS[normalizeBandwidthAggregationStrategy(data.strategy)]}
         </Badge>
@@ -58,7 +58,7 @@ export function BandwidthAggregationSummary({ groupId, open }: Props) {
 
       <div className="grid gap-2 sm:grid-cols-3">
         <div>
-          <div className="text-[11px] text-muted-foreground">聚合可用带宽</div>
+          <div className="text-[11px] text-muted-foreground">入口带宽合计</div>
           <div className="text-sm font-medium">{formatBandwidthMbps(data.aggregateCapacityMbps)}</div>
         </div>
         <div>
@@ -99,7 +99,7 @@ export function BandwidthAggregationSummary({ groupId, open }: Props) {
                 <span className={utilizationTone(memberUtilization)} title="该前置的实时占用">
                   {formatAggregationUtilization(memberUtilization)}
                 </span>
-                <span className="font-medium text-foreground" title="分配到的新连接份额">
+                <span className="font-medium text-foreground" title="排序用的比重：越高越靠前（不是准确的连接比例）">
                   {member.healthy ? `${Number(member.weight || 0).toFixed(1)}%` : "-"}
                 </span>
               </span>
@@ -107,7 +107,7 @@ export function BandwidthAggregationSummary({ groupId, open }: Props) {
           );
         })}
         {members.length === 0 && (
-          <p className="text-xs text-muted-foreground">还没有可参与聚合的前置主机。</p>
+          <p className="text-xs text-muted-foreground">还没有可参与排序的入口主机。</p>
         )}
       </div>
     </div>
