@@ -599,6 +599,8 @@ const tables: TableDef[] = [
       // aggregation weight (0 = derive the weight from the strategy).
       c("bandwidthMbps", "int", { notNull: true, default: 0 }), c("aggregationWeight", "int", { notNull: true, default: 0 }),
       c("isEnabled", "bool", { notNull: true, default: true }), c("healthStatus", "varchar", { length: 32, notNull: true, default: "unknown" }),
+      // 线路按时间段启用（shared/memberSchedule.ts）：可用时段，和「是时段让它停的」标记。
+      c("activeSchedule", "text"), c("scheduleSuspended", "bool", { notNull: true, default: false }),
       c("lastLatencyMs", "int"), c("chinaHealthStatus", "varchar", { length: 32, notNull: true, default: "unknown" }), c("chinaHealthLatencyMs", "int"), c("chinaHealthCheckedAt", "epoch"), c("failureSince", "epoch"), c("healthySince", "epoch"), c("lastCheckedAt", "epoch"),
       c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" }),
     ],

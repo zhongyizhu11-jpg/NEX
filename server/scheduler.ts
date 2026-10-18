@@ -1,4 +1,5 @@
 import * as db from "./db";
+import { applyForwardGroupMemberSchedules } from "./forwardGroupMemberSchedule";
 import { formatBytes } from "../shared/formatBytes";
 import { pushAgentRefresh } from "./agentEvents";
 import { appendPanelLog } from "./_core/panelLogger";
@@ -1118,6 +1119,9 @@ export function startScheduler() {
   const sqliteOptimize = createNonOverlappingScheduledTask("SQLite optimize", async () => {
     await optimizeSqliteDatabase();
   });
+  const memberScheduleSweep = createNonOverlappingScheduledTask("forward group member schedule", async () => {
+    await applyForwardGroupMemberSchedules();
+  }, { slowTaskMs: 20_000 });
   const paymentMaintenance = createNonOverlappingScheduledTask("payment order maintenance", async () => {
     /**
      * 先主动查单，再关过期的。
@@ -1156,6 +1160,8 @@ export function startScheduler() {
   };
 
   repeatAfter(hostStatusSweep, 30 * 1000, 5_000);
+  // 线路按时间段启用：每分钟看一次有没有成员进出可用时段。
+  repeatAfter(memberScheduleSweep, 60 * 1000, 25_000);
   repeatAfter(ipChangeTick, 30 * 1000, 12_000);
   repeatAfter(ruleLimitSweep, 30 * 1000, 7_000);
   startSelfTestSweepTimer(async () => { await selfTestTimeoutSweep(); });

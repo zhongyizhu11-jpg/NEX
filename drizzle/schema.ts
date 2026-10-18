@@ -959,6 +959,8 @@ export const forwardGroupMembers = table("forward_group_members", {
   bandwidthMbps: int("bandwidthMbps").notNull().default(0),
   aggregationWeight: int("aggregationWeight").notNull().default(0),
   isEnabled: boolean("isEnabled").notNull().default(true),
+  activeSchedule: text("activeSchedule"),
+  scheduleSuspended: boolean("scheduleSuspended").notNull().default(false),
   healthStatus: varchar("healthStatus", { length: 32 }).notNull().default("unknown"),
   lastLatencyMs: int("lastLatencyMs"),
   chinaHealthStatus: varchar("chinaHealthStatus", { length: 32 }).notNull().default("unknown"),

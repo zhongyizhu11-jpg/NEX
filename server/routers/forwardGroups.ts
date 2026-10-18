@@ -42,6 +42,15 @@ const memberSchema = z.object({
   isEnabled: z.boolean().optional(),
   bandwidthMbps: z.number().int().min(0).max(MAX_MEMBER_BANDWIDTH_MBPS).nullable().optional(),
   aggregationWeight: z.number().int().min(0).max(MAX_MEMBER_WEIGHT).nullable().optional(),
+  /** 可用时段（线路按时间段启用）；null = 不限。只对转发组、入口组、出口组生效。 */
+  activeSchedule: z.object({
+    timezone: z.string().max(64).optional(),
+    windows: z.array(z.object({
+      days: z.array(z.number().int().min(0).max(6)).max(7),
+      from: z.string().max(5),
+      to: z.string().max(5),
+    })).max(8),
+  }).nullable().optional(),
 });
 
 import { getLatencyDailyHistory } from "../repositories/latencyDailyRepository";

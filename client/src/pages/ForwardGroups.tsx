@@ -1,4 +1,6 @@
 import { useLocation } from "wouter";
+import { MemberScheduleButton } from "@/components/links/MemberScheduleButton";
+import { describeMemberSchedule, groupModeSupportsMemberSchedule, memberEnabledIntent, parseMemberSchedule, type MemberActiveSchedule } from "@shared/memberSchedule";
 import { ResourceTrafficLine } from "@/components/links/ResourceTrafficLine";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
 import { NetworkPath } from "@/components/network/NetworkPath";
@@ -91,6 +93,7 @@ import {
   Stethoscope,
   Trash2,
   XCircle,
+  Clock,
 } from "lucide-react";
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useReducedMotion } from "motion/react";
@@ -156,6 +159,9 @@ import {
   type BandwidthAggregationStrategy,
 } from "@shared/bandwidthAggregation";
 
+/** MySQL 会把布尔返回成 0 / 1 或 "0" / "1"。 */
+const dbFlag = (value: unknown) => value === true || value === 1 || value === "1";
+
 type GroupType = "host" | "tunnel";
 type GroupMode = "port" | "failover" | "chain" | "entry" | "exit";
 type FailoverStrategy = "fallback" | "round_robin" | "random" | "ip_hash";
@@ -170,6 +176,8 @@ type MemberForm = {
   bandwidthMbps: string;
   /** Manual bandwidth aggregation weight. Entry groups only. */
   aggregationWeight: string;
+  /** 可用时段（线路按时间段启用）。转发组、入口组、出口组才有。 */
+  activeSchedule?: MemberActiveSchedule | null;
 };
 
 type GroupForm = {
@@ -1117,7 +1125,9 @@ export function ForwardGroupsContent({
           hostId,
           tunnelId: null,
           connectHost: member.connectHost || null,
-          isEnabled: !!member.isEnabled,
+          // 被时段停着的也算「开着」：不然存一次就把时段停用变成了手动停用。
+          isEnabled: memberEnabledIntent(member),
+          activeSchedule: parseMemberSchedule(member.activeSchedule),
           bandwidthMbps: String(Math.max(0, Number(member.bandwidthMbps) || 0)),
           aggregationWeight: String(Math.max(0, Number(member.aggregationWeight) || 0)),
         });
@@ -1135,7 +1145,8 @@ export function ForwardGroupsContent({
         hostId,
         tunnelId: null,
         connectHost: null,
-        isEnabled: !!member.isEnabled,
+        isEnabled: memberEnabledIntent(member),
+        activeSchedule: parseMemberSchedule(member.activeSchedule),
         bandwidthMbps: "0",
         aggregationWeight: "0",
       });
@@ -1351,13 +1362,16 @@ export function ForwardGroupsContent({
   const showAggregationColumns = form.groupMode === "entry"
     && form.bandwidthAggregationEnabled
     && effectiveGroupType === "host";
+  const showScheduleColumn = groupModeSupportsMemberSchedule(form.groupMode);
   const memberRowGridClass = form.groupMode === "port"
     ? "sm:grid-cols-[auto_auto_minmax(8rem,1fr)_36px]"
     : showExitAddressColumns
-    ? "sm:grid-cols-[auto_auto_minmax(8rem,1fr)_56px_56px_52px_36px]"
+    ? "sm:grid-cols-[auto_auto_minmax(8rem,1fr)_56px_56px_44px_52px_36px]"
     : showAggregationColumns
-      ? "sm:grid-cols-[auto_auto_minmax(8rem,1fr)_92px_72px_52px_36px]"
-      : "sm:grid-cols-[auto_auto_minmax(8rem,1fr)_52px_36px]";
+      ? "sm:grid-cols-[auto_auto_minmax(8rem,1fr)_92px_72px_44px_52px_36px]"
+      : showScheduleColumn
+        ? "sm:grid-cols-[auto_auto_minmax(8rem,1fr)_44px_52px_36px]"
+        : "sm:grid-cols-[auto_auto_minmax(8rem,1fr)_52px_36px]";
   const updateMemberField = (key: string, patch: Partial<MemberForm>) => {
     setForm((prev) => ({
       ...prev,
@@ -1626,6 +1640,7 @@ export function ForwardGroupsContent({
         // Bandwidth aggregation is an entry group concept; other modes send 0.
         bandwidthMbps: isEntryGroup ? normalizeMemberBandwidthMbps(member.bandwidthMbps) : 0,
         aggregationWeight: isEntryGroup ? normalizeMemberWeight(member.aggregationWeight) : 0,
+        activeSchedule: groupModeSupportsMemberSchedule(form.groupMode) ? member.activeSchedule || null : null,
       })),
     };
     if (editingId) updateMutation.mutate({ id: editingId, ...payload });
@@ -1732,6 +1747,9 @@ export function ForwardGroupsContent({
     if (member.chinaHealthStatus && member.chinaHealthStatus !== "unknown") {
       parts.push(`国内 ${member.chinaHealthStatus}${member.chinaHealthLatencyMs ? ` / ${member.chinaHealthLatencyMs}ms` : ""}`);
     }
+    if (parseMemberSchedule(member.activeSchedule)) {
+      parts.push(`${dbFlag(member.scheduleSuspended) ? "时段外暂停，" : ""}可用时段 ${describeMemberSchedule(member.activeSchedule)}`);
+    }
     return parts.join(" / ");
   };
 
@@ -1779,6 +1797,8 @@ export function ForwardGroupsContent({
 
   const renderMemberConfigIcon = (group: any, member: any) => {
     if (isGroupMemberActive(group, member)) return <CheckCircle2 className="h-3 w-3 shrink-0" />;
+    // 时段外暂停的成员用时钟，和手动停用（叉）分开：它到点会自己回来。
+    if (dbFlag(member.scheduleSuspended)) return <Clock className="h-3 w-3 shrink-0" />;
     if (member.isEnabled === false) return <XCircle className="h-3 w-3 shrink-0" />;
     return null;
   };
@@ -2804,6 +2824,7 @@ export function ForwardGroupsContent({
                                 <span>权重：手动份额，0 表示按所选聚合策略自动计算</span>
                               </>
                             )}
+                            {showScheduleColumn && <span>时段：只在设定的时段使用这个成员，时段外自动暂停</span>}
                             <span>启用：关闭后该成员不参与当前组</span>
                           </div>}
                           <div className={"hidden items-center gap-1.5 px-2.5 text-[11px] text-muted-foreground sm:grid " + memberRowGridClass}>
@@ -2821,6 +2842,7 @@ export function ForwardGroupsContent({
                                 <span className="text-center">权重</span>
                               </>
                             )}
+                            {showScheduleColumn && <span className="text-center">时段</span>}
                             {form.groupMode !== "port" && <span className="text-center">启用</span>}
                             <span className="text-right">操作</span>
                           </div>
@@ -2899,6 +2921,13 @@ export function ForwardGroupsContent({
                               />
                             </>
                           )}
+                          {showScheduleColumn && <div className="flex h-7 w-[44px] items-center justify-center">
+                            <MemberScheduleButton
+                              value={member.activeSchedule || null}
+                              memberLabel={memberLabel(member)}
+                              onChange={(activeSchedule) => updateMemberField(member.key, { activeSchedule })}
+                            />
+                          </div>}
                           {form.groupMode !== "port" && <div className="flex h-7 w-[52px] items-center justify-center">
                             <Checkbox aria-label={`启用 ${memberLabel(member)}`} checked={member.isEnabled} onCheckedChange={(checked) => {
                               setForm({ ...form, members: form.members.map((m) => m.key === member.key ? { ...m, isEnabled: checked } : m) });

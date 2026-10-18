@@ -1,4 +1,5 @@
 import { isIP } from "node:net";
+import { groupModeSupportsMemberSchedule, resolveMemberScheduleState, serializeMemberSchedule } from "../../shared/memberSchedule";
 import { NO_EGRESS_COLUMNS, ruleEgressColumnsOf } from "../../shared/ssEgress";
 import { forwardGroupModeOf } from "../../shared/forwardTypes";
 import { and, asc, desc, eq, inArray, isNotNull, isNull, notInArray, or, sql } from "drizzle-orm";
@@ -148,7 +149,22 @@ export type ForwardGroupMemberInput = {
   bandwidthMbps?: number | null;
   /** Manual aggregation weight. `0` derives it from the group strategy. */
   aggregationWeight?: number | null;
+  /** 可用时段（shared/memberSchedule.ts）。undefined = 不改原来的；null = 不限时段。 */
+  activeSchedule?: unknown;
 };
+
+/**
+ * 成员写库时的启用状态：isEnabled 传进来的是用户的意思，按可用时段算出此刻实际该不该开，
+ * 并记下是不是时段让它停的（scheduleSuspended）。不支持时段的组模式一律清掉时段。
+ */
+function memberSchedulePayload(groupMode: ForwardGroupMode, member: ForwardGroupMemberInput, existing: any, at = new Date()) {
+  const supported = groupModeSupportsMemberSchedule(groupMode);
+  const schedule = !supported ? null : member.activeSchedule === undefined
+    ? serializeMemberSchedule(existing?.activeSchedule)
+    : serializeMemberSchedule(member.activeSchedule);
+  const state = resolveMemberScheduleState(dbBool(member.isEnabled, true), schedule, at);
+  return { activeSchedule: schedule, isEnabled: state.isEnabled, scheduleSuspended: state.scheduleSuspended };
+}
 
 type ForwardGroupRuleConfig = {
   sourcePort: number;
@@ -1794,6 +1810,11 @@ export async function resetForwardGroupChinaHealth(groupId: number) {
     lastCheckedAt: null,
     updatedAt: nowDate(),
   } as any).where(eq(forwardGroupMembers.groupId, Number(groupId)));
+}
+
+/** 给组外的模块记一条组事件（例如按可用时段切换成员）。 */
+export async function recordForwardGroupEvent(groupId: number, memberId: number | null, type: string, message: string) {
+  return insertForwardGroupEvent(groupId, memberId, type, message);
 }
 
 async function insertForwardGroupEvent(groupId: number, memberId: number | null, type: string, message: string) {
@@ -3809,7 +3830,7 @@ export async function createForwardGroup(data: InsertForwardGroup, members: Forw
       tunnelId: member.memberType === "tunnel" ? member.tunnelId : null,
       connectHost: member.connectHost ?? null,
       priority: member.priority ?? index,
-      isEnabled: dbBool(member.isEnabled, true),
+      ...memberSchedulePayload(groupMode, member, null),
       createdAt: nowDate(),
       updatedAt: nowDate(),
     });
@@ -3934,7 +3955,7 @@ async function assertMemberChangeHasNoSelfForwardLoop(group: any, groupMode: For
 export async function replaceForwardGroupMembers(
   groupId: number,
   members: ForwardGroupMemberInput[],
-  options: { skipSync?: boolean; deferRefresh?: boolean } = {},
+  options: { skipSync?: boolean; deferRefresh?: boolean; scheduleAt?: Date } = {},
 ) {
   const group = await getForwardGroupById(groupId);
   const groupMode = forwardGroupModeOf(group);
@@ -4016,7 +4037,7 @@ export async function replaceForwardGroupMembers(
       && Number(row.memberType === "host" ? row.hostId : row.tunnelId) === Number(member.memberType === "host" ? member.hostId : member.tunnelId));
     const payload: Partial<InsertForwardGroupMember> = {
       priority: member.priority ?? index,
-      isEnabled: dbBool(member.isEnabled, true),
+      ...memberSchedulePayload(groupMode, member, found, options.scheduleAt),
       connectHost: member.connectHost ?? null,
       bandwidthMbps: normalizeMemberBandwidthMbps(member.bandwidthMbps),
       aggregationWeight: normalizeMemberWeight(member.aggregationWeight),
@@ -4033,7 +4054,7 @@ export async function replaceForwardGroupMembers(
         connectHost: member.connectHost ?? null,
         priority: member.priority ?? index,
         // dbBool 来自上游：MySQL 会把布尔返回成字符串 "0"，用 ?? 的话会当成真值。
-        isEnabled: dbBool(member.isEnabled, true),
+        ...memberSchedulePayload(groupMode, member, null, options.scheduleAt),
         bandwidthMbps: normalizeMemberBandwidthMbps(member.bandwidthMbps),
         aggregationWeight: normalizeMemberWeight(member.aggregationWeight),
         createdAt: nowDate(),
