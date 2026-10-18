@@ -997,7 +997,7 @@ test("Surge 完整配置：托管地址、叠加组是 load-balance、规则走 
   const groups = section(text, "[Proxy Group]");
   assert.equal(groups[0], "NEX = select, HKT 负载均衡, 前置A → HKT, 前置B → HKT");
   // 不带 persistent：每个请求随机挑，才叠得起来。
-  assert.equal(groups[1], "HKT 负载均衡 = load-balance, 前置A → HKT, 前置B → HKT");
+  assert.equal(groups[1], "HKT 负载均衡 = load-balance, 前置A → HKT, 前置B → HKT, interval=300");
 
   const rules = section(text, "[Rule]");
   assert.ok(rules.includes("RULE-SET,https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/OpenAI/OpenAI.list,🤖 AI 服务"));

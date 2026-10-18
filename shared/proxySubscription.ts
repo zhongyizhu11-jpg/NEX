@@ -1097,6 +1097,8 @@ function renderSurgeProfile(
     const head = `${group.name} = ${group.type}, ${group.members.join(", ")}`;
     if (group.type === "url-test") lines.push(`${head}, interval=${PROXY_AUTO_GROUP_INTERVAL_SECONDS}, tolerance=${PROXY_AUTO_GROUP_TOLERANCE_MS}`);
     else if (group.type === "fallback") lines.push(`${head}, interval=${PROXY_AUTO_GROUP_INTERVAL_SECONDS}`);
+    // 负载均衡组只在最近一次测试通过的成员里分；不写 interval 就不定时测，挂掉的前置要等到用的时候才发现。
+    else if (group.type === "load-balance") lines.push(`${head}, interval=${PROXY_AUTO_GROUP_INTERVAL_SECONDS}`);
     else lines.push(head);
   }
   lines.push("", "[Rule]", ...surgeStyleRuleLines(rules));
