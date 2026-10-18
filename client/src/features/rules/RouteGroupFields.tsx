@@ -604,20 +604,24 @@ export function RouteGroupFields({
                   </DropdownMenu>
                 ) : null}
                 <span aria-hidden="true" className="text-muted-foreground">→</span>
-                <FormField className="contents">
-                  <Input
-                    value={destText}
-                    onChange={(event) => setDrafts({ ...drafts, [destField]: event.target.value.replace(/\s+/g, "") })}
-                    onFocus={() => setEditingField(destField)}
-                    onBlur={() => { setEditingField(null); commitEndpoint(index, "dest", destText); }}
-                    placeholder={mainAddress ? `落地 ${mainAddress}（同目标）` : "落地 地址:端口，留空同目标"}
-                    aria-label={`路径 ${routePathLetter(index)} 的落地`}
-                    className="h-7 w-52 max-w-full font-mono text-xs"
-                    spellCheck={false}
-                    autoComplete="off"
-                    aria-invalid={destError ? true : undefined}
-                  />
-                </FormField>
+                {/* 「落地」和输入框绑在一起换行：窄屏上不会出现「落地」两个字留在上一行。 */}
+                <span className="flex min-w-[12rem] flex-1 items-center gap-1">
+                  <span className="shrink-0 text-muted-foreground">落地</span>
+                  <FormField className="contents">
+                    <Input
+                      value={destText}
+                      onChange={(event) => setDrafts({ ...drafts, [destField]: event.target.value.replace(/\s+/g, "") })}
+                      onFocus={() => setEditingField(destField)}
+                      onBlur={() => { setEditingField(null); commitEndpoint(index, "dest", destText); }}
+                      placeholder={mainAddress ? `IP:端口，留空走 ${mainAddress}` : "IP:端口，留空同目标"}
+                      aria-label={`路径 ${routePathLetter(index)} 的落地`}
+                      className="h-7 min-w-0 flex-1 font-mono text-xs"
+                      spellCheck={false}
+                      autoComplete="off"
+                      aria-invalid={destError ? true : undefined}
+                    />
+                  </FormField>
+                </span>
               </div>
               {destError ? <p className="text-meta leading-5 text-[var(--fx-warn-text)]">{destError}</p> : null}
               {path.issue ? <p className="text-meta leading-5 text-[var(--fx-warn-text)]">眼下用不了：{describeRouteIssue(path.issue)}</p> : null}

@@ -67,7 +67,7 @@ test("每条路径一行：字母、名字、经过哪几台中转、落地；�
   assert.match(html, /JP relay 02/);
   assert.match(html, /SG relay 03/);
   assert.match(html, /value="10\.95\.0\.11:443"/, "写了落地的路径把落地填在框里");
-  assert.match(html, /placeholder="落地 10\.95\.0\.10:443（同目标）"/, "没写落地的路径说明它走规则自己的目标");
+  assert.match(html, /placeholder="IP:端口，留空走 10\.95\.0\.10:443"/, "没写落地的路径说明可以填 IP:端口、留空走规则自己的目标");
   assert.match(html, /添加路径/);
   assert.match(html, /中转机上的中继由面板自动建/);
 });

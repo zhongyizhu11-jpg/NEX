@@ -2237,7 +2237,7 @@ function RulesContent() {
   /*
     「更多设置」默认收起。
 
-    这四项（规则名称、转发工具、异常提醒、主备线路）都有能用的默认值 —— 不管它们
+    这几项（转发工具、异常提醒、限速等）都有能用的默认值 —— 不管它们
     也能把一条转发建出来。和真正要填的两项并排放着，等于让每个新手都当一次选择题：
     「转发工具这三个我该选哪个？」而正确答案通常是「别动」。
 
@@ -3264,15 +3264,13 @@ function RulesContent() {
     const parts: string[] = [];
     const toolLabel = FORWARD_TYPE_LABELS[effectiveRouteForwardType] || effectiveRouteForwardType;
     if (toolLabel) parts.push(String(toolLabel));
-    const trimmedName = form.name.trim();
-    if (trimmedName) parts.push(trimmedName);
     if (form.telegramErrorNotifyEnabled) parts.push("异常提醒");
     // 专属域名缺省是开的，只有关了才值得写出来。
     if (ruleEntryDomainAvailable && !form.entryDomainEnabled) parts.push("不用专属域名");
     const limits = user?.role === "admin" ? ruleLimitsSummary(form.limits) : null;
     if (limits) parts.push(limits);
     return parts;
-  }, [effectiveRouteForwardType, form.name, form.telegramErrorNotifyEnabled, form.entryDomainEnabled, form.limits, ruleEntryDomainAvailable, user?.role]);
+  }, [effectiveRouteForwardType, form.telegramErrorNotifyEnabled, form.entryDomainEnabled, form.limits, ruleEntryDomainAvailable, user?.role]);
   /** 线路组的入口机器：路径里的中转不能是它自己。隧道转发的入口是隧道的出口机（调度在那儿）。 */
   const routeEntryHostId = useMemo(() => {
     if (form.routeMode === "tunnel" && form.tunnelId) {
@@ -8414,6 +8412,16 @@ function RulesContent() {
                 </div>
               )}
             </section>
+            {/* 规则名称放在外面：改名是常事，折进「更多设置」每次都要先展开才找得到。留空照样自动生成。 */}
+            <FormField className="space-y-2">
+              <Label className="flex items-baseline gap-1.5">规则名称<span className="text-xs font-normal text-muted-foreground">留空自动生成</span></Label>
+              <Input
+                placeholder={autoForwardRuleName(form) || "例如: Web 服务转发"}
+                maxLength={128}
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+              />
+            </FormField>
             {/*
               要填的和可以不管的，不该并排放在同一片方格里。
 
@@ -8440,15 +8448,6 @@ function RulesContent() {
               {advancedOpen && (
               <div className="space-y-3 border-t border-border/60 p-3">
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <FormField className="space-y-2">
-              <Label className="flex items-baseline gap-1.5">规则名称<span className="text-xs font-normal text-muted-foreground">留空自动生成</span></Label>
-              <Input
-              placeholder={autoForwardRuleName(form) || "例如: Web 服务转发"}
-              maxLength={128}
-              value={form.name}
-              onChange={(e) => setForm({ ...form, name: e.target.value })}
-              />
-              </FormField>
               {!isForwardGroupRouteMode && form.routeMode === "local" && (
               <FormField className="space-y-2">
               <Label>转发工具</Label>
