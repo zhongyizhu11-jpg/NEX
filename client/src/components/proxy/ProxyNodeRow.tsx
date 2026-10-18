@@ -87,6 +87,9 @@ const ACCENT_BORDERS: Record<ProxyNodeRowAccent, string> = {
  *
  * 为什么动作收进 ⋯：同样是宽度守恒。行内只留「用量」和开关两个常用的，其余进菜单；
  * 以后再加功能也只是菜单里多一项，不会再挤到名字。
+ *
+ * 名字和第二行都换行而不截断：手机上一行放不下时，被「…」吃掉的恰好是最要看的部分
+ * （地址的端口、归属的账号、名字的后半截）。多占一行比看不全好。
  */
 export function ProxyNodeRow({
   leading,
@@ -105,7 +108,7 @@ export function ProxyNodeRow({
   name: ReactNode;
   /** 名字后面那一个徽章。只放长度有上限的东西，协议名这种。 */
   tag?: ReactNode;
-  /** 第二行：协议、地址、端口、停用、分享人数……一句话说完，超长就截断。 */
+  /** 第二行：协议、地址、端口、停用、分享人数……一句话说完，超长就换行。 */
   meta: ReactNode;
   /** 展开后的补充信息（如套餐用量），跟在第二行下面。 */
   detail?: ReactNode;
@@ -140,11 +143,11 @@ export function ProxyNodeRow({
     >
       {leading}
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1.5">
-          <span className="truncate text-sm font-medium leading-tight">{name}</span>
+        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+          <span className="min-w-0 break-words text-sm font-medium leading-tight [overflow-wrap:anywhere]">{name}</span>
           {tag}
         </div>
-        <p className="truncate text-[11px] leading-tight text-muted-foreground">{meta}</p>
+        <p className="break-words text-[11px] leading-snug text-muted-foreground [overflow-wrap:anywhere]">{meta}</p>
         {detail}
       </div>
       {inline}
