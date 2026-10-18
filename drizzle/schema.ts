@@ -736,6 +736,7 @@ export const proxyInbounds = table("proxy_inbounds", {
    * 管理员开的这种入站，有这台主机使用权限的用户都能拿来当出口。
    */
   landingEgress: boolean("landingEgress").notNull().default(false),
+  routingJson: text("routingJson"),
   /**
    * 这个端口自己的额度与用量。
    *

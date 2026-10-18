@@ -1,3 +1,4 @@
+import { parseInboundRouting } from "../shared/inboundRouting";
 import { Request, Response, Router } from "express";
 import nodeCrypto from "crypto";
 import fs from "fs";
@@ -1324,6 +1325,8 @@ async function prepareImportRow(table: string, source: Record<string, any>, maps
       // 克隆来源指向同一张表的另一行；源没被导进来就退回成「人手建的」，
       // 而不是指向一个不存在的入站 —— 那会让回收逻辑找不到北。
       row.clonedFromInboundId = mapOptionalId(maps, "proxy_inbounds", source.clonedFromInboundId) || 0;
+      // 分流里点名的落地入站可能排在后面，第二遍按映射改写（fixDeferred… 里的 routingJson）。
+      row.routingJson = null;
       return { row };
 
     case "proxy_inbound_users":
@@ -1704,7 +1707,7 @@ const MIGRATION_CASE_UPDATE_BATCH_SIZE = 250;
 async function updateMappedColumn(
   table: string,
   column: string,
-  updates: Array<{ id: number; value: number }>,
+  updates: Array<{ id: number; value: number | string }>,
 ) {
   const deduplicated = new Map(updates.map((item) => [item.id, item.value]));
   const rows = [...deduplicated].map(([id, value]) => ({ id, value }));
@@ -1768,6 +1771,20 @@ async function fixDeferredForwardGroupReferences(snapshot: MigrationSnapshot, ma
     if (defaultRuleId) tlsInboundDefaultRuleUpdates.push({ id: nextId, value: defaultRuleId });
   }
 
+  // 落地分流点名的入站 id 按映射改写；那个入站没导进来就清成 0（运行时按「已被删除」拒绝那部分流量）。
+  const inboundRoutingUpdates: Array<{ id: number; value: string }> = [];
+  for (const inbound of sortedSnapshotRows(snapshot, "proxy_inbounds")) {
+    const nextId = mapId(maps, "proxy_inbounds", inbound.id);
+    const routing = nextId ? parseInboundRouting(inbound.routingJson) : null;
+    if (!nextId || !routing) continue;
+    const remapped = {
+      routes: routing.routes.map((route) => (route.target === "landing"
+        ? { ...route, landingInboundId: Number(deferredOptional("proxy_inbounds", route.landingInboundId) || 0) }
+        : route)),
+    };
+    inboundRoutingUpdates.push({ id: nextId, value: JSON.stringify(remapped) });
+  }
+
   const groupUpdates: Array<{ id: number; value: number }> = [];
   const memberUpdates: Array<{ id: number; value: number }> = [];
   const ruleUpdates: Array<{ id: number; value: number }> = [];
@@ -1819,6 +1836,7 @@ async function fixDeferredForwardGroupReferences(snapshot: MigrationSnapshot, ma
     await updateMappedColumn("proxy_nodes", "frontProxyId", frontProxyUpdates);
     await updateMappedColumn("users", "inviterId", inviterUpdates);
     await updateMappedColumn("host_tls_inbounds", "defaultRuleId", tlsInboundDefaultRuleUpdates);
+    await updateMappedColumn("proxy_inbounds", "routingJson", inboundRoutingUpdates);
   });
   if (errors.length > 0) throw new Error(`${errors.length} 条延迟关联无法恢复；${errors.slice(0, 3).join("；")}`);
 }

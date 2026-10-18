@@ -18,6 +18,7 @@ import { AGENT_VERSION } from "./_core/systemRouter";
 import { clearHostTcpingRequest, hasHostTcpingRequest, isHostMetricsWatching, pushAgentDesiredState, pushAgentRefresh } from "./agentEvents";
 import { getEnabledProxyInboundsWithUsersByHost } from "./repositories/proxyInboundRepository";
 import { buildSingboxRuntimePlan } from "./singboxRuntimePlan";
+import { resolveHostInboundRoutes } from "./inboundRoutingRuntime";
 import {
   PROXY_INBOUND_TRAFFIC_FORWARD_TYPE,
   proxyInboundTrafficProtocol,
@@ -6981,11 +6982,17 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
      * 会按签名去重，所以只会真正下发一次。
      */
     if (!deferActionsForLocalState) {
+      // 分流（按服务 / 域名从别的落地出去）：出口在这里现挑，解锁检测结果变了下次心跳就跟着变。
+      const inboundRoutes = await resolveHostInboundRoutes(Number(host.id), hostProxyInbounds).catch((error) => {
+        appendPanelLog("warn", `[SingboxRouting] resolve failed host=${host.id}: ${error instanceof Error ? error.message : String(error)}`);
+        return new Map<number, any[]>();
+      });
       const singboxPlan = buildSingboxRuntimePlan({
         inbounds: hostProxyInbounds.map((row) => ({
           inbound: row.inbound,
           // 用行 id 做 tag：改名不该让 sing-box 认为这是另一个入站。
           tag: `inbound-${row.id}`,
+          ...(inboundRoutes.has(row.id) ? { routes: inboundRoutes.get(row.id) } : {}),
         })),
         accelerator: await getSingboxAccelerator(),
       });

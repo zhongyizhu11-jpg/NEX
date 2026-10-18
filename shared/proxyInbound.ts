@@ -21,6 +21,7 @@ import {
   type ProxyNodeProtocol,
   type ProxyNodeTransport,
 } from "./proxyNode";
+import { buildSingboxRouting, type ResolvedInboundRoute } from "./inboundRouting";
 
 /** 能作为落地节点开出去的协议。与 PROXY_NODE_PROTOCOLS 一致，因为两头都由 sing-box 承担。 */
 export const PROXY_INBOUND_PROTOCOLS = [
@@ -663,15 +664,23 @@ export function buildSingboxCertificateProviders(
   return Array.from(byTag.values());
 }
 
-/** 落地机上一份完整的 sing-box 配置。入站由面板下发，出站固定直连。 */
-export function buildSingboxConfig(inbounds: readonly { inbound: ProxyInbound; tag: string }[]): string {
+/**
+ * 落地机上一份完整的 sing-box 配置。入站由面板下发，出站默认直连。
+ *
+ * 入站带了分流（shared/inboundRouting.ts，面板已经挑好出口）时多出 route 和几个 SS 出站；
+ * 没有分流就一个字都不多 —— 和以前逐字节一致，老落地不会因为面板升级被重启。
+ */
+export function buildSingboxConfig(
+  inbounds: readonly { inbound: ProxyInbound; tag: string; routes?: readonly ResolvedInboundRoute[] }[],
+): string {
   const providers = buildSingboxCertificateProviders(inbounds);
+  const routing = buildSingboxRouting(inbounds.map((item) => ({ tag: item.tag, routes: item.routes || [] })));
   const config = {
     log: { level: "warn", timestamp: true },
     ...(providers.length > 0 ? { certificate: { providers } } : {}),
     inbounds: inbounds.map((item) => buildSingboxInbound(item.inbound, item.tag)),
-    // 落地机的职责就是把流量放出去，不做分流。
-    outbounds: [{ type: "direct", tag: "direct" }],
+    outbounds: [{ type: "direct", tag: "direct" }, ...(routing?.outbounds || [])],
+    ...(routing ? { route: routing.route } : {}),
   };
   return `${JSON.stringify(config, null, 2)}\n`;
 }

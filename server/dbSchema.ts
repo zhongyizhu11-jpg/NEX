@@ -468,6 +468,8 @@ const tables: TableDef[] = [
       c("hostGrantRequired", "bool", { notNull: true, default: false }),
       // 一键创建的落地出口入站（给规则当 Shadowsocks 出口用，派生节点默认不进订阅）。
       c("landingEgress", "bool", { notNull: true, default: false }),
+      // 分流（shared/inboundRouting.ts）：按服务 / 域名把一部分流量从别的落地出去。空 = 全部直连。
+      c("routingJson", "text"),
       // 端口自己的额度与用量。计数链装在监听端口上，多用户入站分不到人头，所以记在这里。
       c("bandwidthMbps", "int", { notNull: true, default: 0 }),
       c("trafficLimit", "bigint", { notNull: true, default: 0 }), c("trafficUsed", "bigint", { notNull: true, default: 0 }),
