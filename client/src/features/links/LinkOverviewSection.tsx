@@ -49,7 +49,7 @@ export function LinkOverviewSection({ searchQuery = "" }: { searchQuery?: string
         const items = filtered[key];
         return (
           <Card key={key} className="border-border bg-card">
-            <CardContent className="flex flex-col gap-2 p-4">
+            <CardContent className="flex flex-col gap-2 p-4 sm:pt-4">
               <div className="flex items-center justify-between gap-2">
                 <p className="flex items-center gap-1.5 text-sm font-semibold">
                   <Icon className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
