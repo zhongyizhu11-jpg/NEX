@@ -33,6 +33,7 @@ type TcpingChartPoint = {
   isTimeout: boolean;
   probeCount?: number | null;
   probeSuccesses?: number | null;
+  atMs?: number;
 };
 
 type TcpingSeriesDatum = {
@@ -131,6 +132,7 @@ function TcpingDetailDialog({
         isTimeout: counts.isTimeout,
         probeCount: counts.probeCount,
         probeSuccesses: counts.probeSuccesses,
+        atMs: new Date(d.recordedAt).getTime(),
       };
     });
   }, [rangedSeriesData]);

@@ -6,6 +6,8 @@ export type LatencyStabilitySample = {
   isTimeout?: boolean | null;
   probeCount?: number | null;
   probeSuccesses?: number | null;
+  /** 这条样本的时间（毫秒）。都有时可用率按时间算（computeTimeWeightedAvailability）。 */
+  atMs?: number | null;
 };
 
 export type LatencyStabilityRating = {
@@ -60,6 +62,37 @@ export function formatStatPercent(value: number | null | undefined, digits = 2) 
   const clamped = Math.max(0, Math.min(100, value));
   if (Number.isInteger(clamped)) return `${clamped}%`;
   return `${clamped.toFixed(digits)}%`;
+}
+
+/** 按时间算可用率时，一条样本最多代表这么久：稳定成功约 5 分钟报一次，再长就是没数据（Agent 离线之类），不算。 */
+export const AVAILABILITY_MAX_SEGMENT_MS = 10 * 60 * 1000;
+
+/**
+ * 按时间算的可用率（%）：这段时间里链路通着的时间占比。
+ *
+ * 图上的点是状态样本：链路稳定时约 5 分钟才报一次成功，失败却每次都报。按「几个点通了」算，
+ * 失败的点被过度代表，可用率偏低；所以有了累计计数以后干脆不显示它。按时间算就没有这个偏差：
+ * 每个样本的状态一直延续到下一个样本（最多 10 分钟，再长算没数据），通着的时长 ÷ 有数据的时长。
+ * 有样本缺时间就返回 null。
+ */
+export function computeTimeWeightedAvailability(
+  samples: ReadonlyArray<Partial<LatencyStabilitySample>>,
+  nowMs = Date.now(),
+): number | null {
+  if (samples.length === 0) return null;
+  const timed = samples.map((sample) => ({ at: Number(sample.atMs), ok: normalizeLatencyProbeCounts(sample).probeSuccesses > 0 }));
+  if (timed.some((item) => !Number.isFinite(item.at) || item.at <= 0)) return null;
+  timed.sort((a, b) => a.at - b.at);
+  let up = 0;
+  let known = 0;
+  for (let index = 0; index < timed.length; index += 1) {
+    const end = index + 1 < timed.length ? timed[index + 1].at : Math.max(timed[index].at, nowMs);
+    // 最后一个样本到现在也算（链路一直是那个状态），只是同样封顶。至少记 1 秒，免得只有一个样本时没分母。
+    const span = Math.min(AVAILABILITY_MAX_SEGMENT_MS, Math.max(1000, end - timed[index].at));
+    known += span;
+    if (timed[index].ok) up += span;
+  }
+  return known > 0 ? (up / known) * 100 : null;
 }
 
 /**
@@ -254,7 +287,9 @@ export function getLatencyStabilityStats(samples: LatencyStabilitySample[], actu
   // 状态样本里的连续失败不是一串独立的探测（稳定成功被省略、链路复用缓存的跳），
   // 有累计计数时不再拿它扣分；可用率同理按样本算会偏低，此时不显示。
   const maxLossRun = fromCounters ? 0 : getMaxLossRun(samples);
-  const availability = fromCounters ? null : computeLinkAvailability(samples);
+  // 样本都带时间：按时间算，没有偏差，有没有累计计数都能显示。没时间的（老调用方）照旧：有计数时不显示。
+  const timedAvailability = computeTimeWeightedAvailability(samples);
+  const availability = timedAvailability !== null ? timedAvailability : fromCounters ? null : computeLinkAvailability(samples);
   const timeoutRate = availability === null ? 0 : 100 - availability;
   const counterFlag = fromCounters ? { fromCounters: true } : {};
 

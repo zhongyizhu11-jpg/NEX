@@ -530,6 +530,7 @@ type GroupLatencyPoint = {
   isTimeout: boolean;
   probeCount?: number;
   probeSuccesses?: number;
+  atMs?: number;
 };
 
 type GroupLatencySeriesDatum = {
@@ -587,6 +588,7 @@ function ForwardGroupLatencyDialog({
       return {
         label: formatLatencyTimeLabel(d.recordedAt),
         fullLabel: formatLatencyTimeLabel(d.recordedAt),
+        atMs: new Date(d.recordedAt).getTime(),
         latency: counts.isTimeout ? 0 : latency,
         chartLatency: counts.isTimeout ? 0 : clipLatencyForChart(latency),
         isTimeout: counts.isTimeout,
