@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { Check, CircleHelp, X } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
@@ -7,20 +7,19 @@ import { PROXY_NODE_PROTOCOL_LABELS, type ProxyNodeProtocol } from "@shared/prox
 import { PROXY_INBOUND_SECURITY_LABELS, type ProxyInboundSecurity } from "@shared/proxyInbound";
 
 /**
- * 代理入站上的客户端兼容提示（#19）。
- *
- * 行里只放一枚和协议小标同高的小标（「所有客户端」/「8/12 款客户端」），手机上一行
- * 放得下；点开是一张逐家的 ✓ / ✗ / ? 表，✗ 和 ? 都写原因 —— 光说「用不了」没用，
+ * 代理入站上的客户端兼容（#19）：一张逐家的 ✓ / ✗ / ? 表，✗ 和 ? 都写原因 —— 光说「用不了」没用，
  * 用户要知道是协议、传输还是 REALITY 卡住了，才知道该换客户端还是改入站。
+ *
+ * 以前行里放一枚「所有客户端 / 8/12 款客户端」小标，点开是这张表；手机上那枚小标（按钮被撑到 44px 高）
+ * 把节点名挤得只剩一两个字，用户要求拿掉（2026-10-18）。现在从节点行的 ⋯ 菜单「客户端兼容」打开。
  */
-export default function InboundCompatibility({ inbound }: { inbound: any }) {
-  const [open, setOpen] = useState(false);
+export function InboundCompatibilityDialog({ inbound, onClose }: { inbound: any | null; onClose: () => void }) {
+  const open = !!inbound;
   const results = useMemo(
     () => proxyClientCompatibility(inbound || {}),
     [inbound?.protocol, inbound?.transport, inbound?.security, inbound?.flow, inbound?.method, inbound?.snellVersion, inbound?.obfs],
   );
   const summary = useMemo(() => summarizeProxyClientCompatibility(results), [results]);
-  const allOk = summary.okCount === summary.total;
 
   const protocolLabel = PROXY_NODE_PROTOCOL_LABELS[inbound?.protocol as ProxyNodeProtocol] || String(inbound?.protocol || "");
   const securityLabel = inbound?.security && inbound.security !== "none"
@@ -30,29 +29,10 @@ export default function InboundCompatibility({ inbound }: { inbound: any }) {
 
   return (
     <>
-      <button
-        type="button"
-        // 和协议小标同高：触屏上按钮统一撑到 44px（index.css），这枚小标是行里的徽章，撑高了整行都变高、名字被挤没。
-        data-compact-badge=""
-        // 行本身可能可点（展开详情），这里拦住，免得点小标顺带展开了行。
-        onClick={(event) => {
-          event.stopPropagation();
-          setOpen(true);
-        }}
-        className={cn(
-          "inline-flex h-4 shrink-0 items-center rounded-full px-1.5 text-[10px] leading-none whitespace-nowrap",
-          allOk
-            ? "bg-[var(--fx-healthy-soft)] text-[var(--fx-healthy-text)]"
-            : "bg-[var(--fx-l3-control-fill)] text-muted-foreground hover:text-foreground",
-        )}
-        title="哪些客户端能用这个节点"
-      >
-        {summary.label}
-      </button>
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog open={open} onOpenChange={(value) => { if (!value) onClose(); }}>
         <DialogContent className="flex max-h-[92svh] flex-col overflow-hidden sm:max-w-lg" onClick={(event) => event.stopPropagation()}>
           <DialogHeader>
-            <DialogTitle>客户端兼容</DialogTitle>
+            <DialogTitle>客户端兼容{inbound?.name ? ` · ${inbound.name}` : ""}</DialogTitle>
             <DialogDescription>
               {[protocolLabel, transportLabel, securityLabel].filter(Boolean).join(" · ")}
               {" —— "}

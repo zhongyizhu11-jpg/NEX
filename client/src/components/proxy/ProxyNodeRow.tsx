@@ -154,28 +154,21 @@ export function ProxyNodeRow({
         aria-expanded={expanded}
         title={expanded ? undefined : textOf(meta)}
         onClick={(event) => {
-          // 名字里自带可点的东西（客户端兼容小标之类）时，点它不顺带展开。
+          // 名字或徽章里带着可点的东西时，点它不顺带展开。
           if ((event.target as HTMLElement).closest("button, a, input, label")) return;
           setExpanded((value) => !value);
         }}
       >
         <div className={expanded ? "flex flex-wrap items-center gap-x-1.5 gap-y-0.5" : "flex items-center gap-1.5"}>
-          {/*
-            收起时名字优先：名字最多占这一行的一半多一点、不被徽章挤，徽章用剩下的地方，放不下的徽章
-            不显示。原来名字是这一行唯一能压缩的东西，协议 + 客户端兼容两个徽章一来就只剩一个字。
-          */}
           <span
             className={expanded
               ? "min-w-0 break-words text-sm font-medium leading-tight [overflow-wrap:anywhere]"
-              : "max-w-[55%] shrink-0 truncate text-sm font-medium leading-tight"}
+              : "truncate text-sm font-medium leading-tight"}
             title={expanded ? undefined : textOf(name)}
           >
             {name}
           </span>
-          {tag ? (
-            // 放不下的徽章折到第二行再被裁掉：整个不显示，不留半截（点开这行能看到全部）。
-            <span className={expanded ? "contents" : "flex h-4 min-w-0 flex-wrap content-start items-center gap-x-1.5 gap-y-2 overflow-hidden"}>{tag}</span>
-          ) : null}
+          {tag}
         </div>
         <p className={expanded
           ? "break-words text-[11px] leading-snug text-muted-foreground [overflow-wrap:anywhere]"

@@ -1662,11 +1662,6 @@
   button[role="switch"] {
     min-height: 0;
   }
-
-  /* 行内的小徽章按钮（客户端兼容小标）：和旁边的文字徽章同高，撑到 44px 会把整行撑高、名字挤没。 */
-  button[data-compact-badge] {
-    min-height: 0;
-  }
 }
 
 /* 紧凑开关的命中区再补 4px：量下来是 49×40，纵向差一点点。 */
