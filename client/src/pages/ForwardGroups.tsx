@@ -111,6 +111,8 @@ import {
 } from "recharts";
 import { MAX_FORWARD_GROUP_MEMBERS } from "@shared/forwardGroup";
 import { hostBandwidthHintMbps } from "@shared/linkWeights";
+import { LINK_SPREAD_LABELS } from "@shared/linkTerms";
+import { LinkSpreadPicker } from "@/features/links/LinkSpreadPicker";
 import { describeGroupRoutePolicy, type GroupRoutePolicyOptions } from "@shared/routePolicy";
 import { LinkTestProbeView, parseLinkTestMessage, type LinkTestPlannedSegment } from "@/components/LinkTestLatencySummary";
 import { BandwidthAggregationSummary } from "@/components/BandwidthAggregationSummary";
@@ -2428,26 +2430,20 @@ export function ForwardGroupsContent({
               <FormField className="grid gap-2 rounded-md border border-border/60 bg-muted/15 p-3 sm:grid-cols-[120px_minmax(0,1fr)] sm:items-center">
                 <Label>出口策略</Label>
                 <div className="space-y-1.5">
-                  <Select
+                  <LinkSpreadPicker
                     value={form.exitStrategy}
-                    onValueChange={(value) => setForm({ ...form, exitStrategy: normalizeExitGroupStrategy(value) })}
-                  >
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {Object.entries(EXIT_GROUP_STRATEGY_LABELS).map(([value, label]) => (
-                        <SelectItem key={value} value={value}>{label}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <p className="text-xs text-muted-foreground">
-                    {form.exitStrategy === "none"
-                      ? "仅使用顺序第一台已启用主机。"
+                    options={EXIT_GROUP_PICKER_OPTIONS}
+                    labels={EXIT_GROUP_PICKER_LABELS}
+                    onChange={(exitStrategy) => setForm({ ...form, exitStrategy })}
+                    ariaLabel="出口策略"
+                    hint={form.exitStrategy === "none"
+                      ? "只用顺序第一台已启用的出口，其余不参与。"
                       : form.exitStrategy === "fallback"
-                        ? "按顺序优先使用主出口，故障时切换到下一台。"
+                        ? "按顺序优先用第一台，坏了换下一台。"
                         : form.exitStrategy === "weighted"
                           ? exitWeightHint(form.members, hostById)
-                          : "按当前策略为新连接选择已启用的出口主机。"}
-                  </p>
+                          : `${LINK_SPREAD_LABELS[form.exitStrategy].hint}。`}
+                  />
                 </div>
               </FormField>
             )}
@@ -3111,3 +3107,10 @@ function exitWeightHint(members: MemberForm[], hostById: Map<number, any>) {
   const sizes = bandwidths.map((value) => `${value}M`).join(" · ");
   return weights ? `按线路带宽分新连接：${sizes} → ${weights.join(":")}。` : `几台带宽一样（${sizes}），等于轮流。`;
 }
+
+// 出口策略的按钮：常用的排前面，「只用第一个」放最后（它其实是不分）。
+const EXIT_GROUP_PICKER_OPTIONS = ["fallback", "round_robin", "weighted", "random", "ip_hash", "none"] as const satisfies readonly ExitGroupStrategy[];
+const EXIT_GROUP_PICKER_LABELS: Record<ExitGroupStrategy, { label: string }> = {
+  ...LINK_SPREAD_LABELS,
+  none: { label: "只用第一个" },
+};

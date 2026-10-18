@@ -45,6 +45,7 @@ import {
 } from "@shared/routeGroup";
 import { PIN_DURATION_OPTIONS, formatPolicyClock, formatPolicyDuration, type RoutePolicy } from "@shared/routePolicy";
 import { ConditionBlock, PolicyGroup } from "./PolicyBlocks";
+import { LinkSpreadPicker, linkChoiceClass } from "@/features/links/LinkSpreadPicker";
 
 /*
   编辑框里「线路组」勾上之后的那一块：一个入口 + 多条路径 + 一个调度策略。
@@ -93,15 +94,8 @@ export type RouteGroupFieldsProps = {
   protocol?: string;
 };
 
-/** 小块选择：选中是整块反白，和策略面板、主机分组同一套。 */
-function choiceClass(active: boolean) {
-  return cn(
-    "inline-flex h-8 min-w-0 items-center justify-center rounded-[var(--fx-radius-control)] px-2.5 text-xs transition-colors",
-    active
-      ? "bg-[var(--fx-text)] font-semibold text-[var(--fx-text-inverse)]"
-      : "border border-[var(--fx-stroke-weak)] bg-[var(--fx-l1-surface)] text-muted-foreground hover:text-foreground",
-  );
-}
+/** 小块选择：选中是整块反白，和策略面板、主机分组同一套（样式在 features/links/LinkSpreadPicker.tsx）。 */
+const choiceClass = linkChoiceClass;
 
 /** 策略模板 / 旧连接：名字下面带一句它会怎么做，选中同样整块反白。 */
 function templateChoiceClass(active: boolean) {
@@ -686,26 +680,17 @@ export function RouteGroupFields({
           </ConditionBlock>
         ) : null}
         {weighted ? (
-          <div className="flex min-w-0 flex-col gap-1.5">
-            <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label={udpOnly ? "新会话怎么分" : "新连接怎么分"}>
-              {ROUTE_SPREADS.map((spread) => (
-                <button
-                  key={spread}
-                  type="button"
-                  role="radio"
-                  aria-checked={routePolicy.spread === spread}
-                  className={choiceClass(routePolicy.spread === spread)}
-                  onClick={() => setPolicy({ spread })}
-                >
-                  {ROUTE_SPREAD_LABELS[spread].label}
-                </button>
-              ))}
-            </div>
-            <p className="text-meta leading-5 text-muted-foreground">
+          <LinkSpreadPicker
+            value={routePolicy.spread}
+            options={ROUTE_SPREADS}
+            labels={ROUTE_SPREAD_LABELS}
+            onChange={(spread) => setPolicy({ spread })}
+            ariaLabel={udpOnly ? "新会话怎么分" : "新连接怎么分"}
+            hint={<>
               {udpOnly ? ROUTE_SPREAD_SESSION_HINTS[routePolicy.spread] : ROUTE_SPREAD_LABELS[routePolicy.spread].hint}
               {routePolicy.spread === "weighted" ? "；权重在上面每条路径的右边填。" : "。"}
-            </p>
-          </div>
+            </>}
+          />
         ) : null}
       </PolicyGroup>
 
