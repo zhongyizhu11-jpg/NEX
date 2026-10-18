@@ -75,6 +75,8 @@ const baseSchema = z.object({
   zeroCopy: z.boolean().optional(),
   udpOverTcp: z.boolean().optional(),
   udpOverTcpPort: z.number().int().min(0).max(65535).nullable().optional(),
+  // 下面三个是很早以前「组级主备目标」的残留：服务端一律存成 关 / fallback / 空（forwardGroupService），
+  // 线路切换用规则上的线路组。还收着只为不让旧客户端、脚本报错。
   failoverEnabled: z.boolean().optional(),
   failoverStrategy: failoverStrategySchema.optional(),
   failoverTargets: z.array(failoverTargetSchema).max(10).optional(),

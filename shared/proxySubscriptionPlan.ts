@@ -108,7 +108,8 @@ export type ProxySubscriptionRuleRow = {
 
 export type ProxySubscriptionHostRow = HostEntryAddressSource & {
   id: number;
-  /** 主机总限速 / 出口整形带宽（Mbps）：「负载均衡」组按它给这台前置多分连接。没查这两列时按主机名里的带宽。 */
+  /** 线路带宽 / 主机总限速 / 出口整形带宽（Mbps）：「负载均衡」组按它给这台前置多分连接。都没有时按主机名里的带宽。 */
+  lineBandwidthMbps?: unknown;
   rateLimitMbps?: unknown;
   egressMbps?: unknown;
   /** 最后一次心跳。从来没有 = Agent 还没装上，见 hostNeverConnected。 */
@@ -772,14 +773,17 @@ export function buildProxySubscriptionDocument(
 
 /**
  * 一台前置的带宽（Mbps），给「负载均衡」组分连接用。依次看：
- *   1. 主机总限速（rateLimitMbps）—— 你给这台机器定的上限，最准；
- *   2. 出口整形带宽（egressMbps）；
- *   3. 主机名里括号中的带宽，例如「Po0(500M)」「港机【1G】」—— 很多人就是这么给机器起名的。
+ *   1. 线路带宽（lineBandwidthMbps）—— 主机里专门填的这一项；
+ *   2. 主机总限速（rateLimitMbps）—— 你给这台机器定的上限；
+ *   3. 出口整形带宽（egressMbps）；
+ *   4. 主机名里括号中的带宽，例如「Po0(500M)」「港机【1G】」—— 很多人就是这么给机器起名的。
  *      只认括号里的：裸写的「5G」多半是说移动网络，不是带宽。
  * 都没有返回 0（不知道）。
  */
-export function hostBandwidthHintMbps(host: { rateLimitMbps?: unknown; egressMbps?: unknown; name?: unknown } | null | undefined): number {
+export function hostBandwidthHintMbps(host: { lineBandwidthMbps?: unknown; rateLimitMbps?: unknown; egressMbps?: unknown; name?: unknown } | null | undefined): number {
   if (!host) return 0;
+  const line = Math.floor(Number(host.lineBandwidthMbps) || 0);
+  if (line > 0) return line;
   const limit = Math.floor(Number(host.rateLimitMbps) || 0);
   if (limit > 0) return limit;
   const egress = Math.floor(Number(host.egressMbps) || 0);

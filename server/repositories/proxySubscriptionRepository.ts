@@ -1106,6 +1106,7 @@ async function buildProxySubscriptionContextForUser(userId: number): Promise<{
         // 从没收过心跳 = Agent 还没装上，见 hostNeverConnected。
         lastHeartbeat: hosts.lastHeartbeat,
         // 带宽叠加组按前置带宽加权（hostBandwidthHintMbps）。
+        lineBandwidthMbps: hosts.lineBandwidthMbps,
         rateLimitMbps: hosts.rateLimitMbps,
         egressMbps: hosts.egressMbps,
       })

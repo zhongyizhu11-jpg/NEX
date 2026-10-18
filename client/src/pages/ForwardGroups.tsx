@@ -165,7 +165,6 @@ const dbFlag = (value: unknown) => value === true || value === 1 || value === "1
 
 type GroupType = "host" | "tunnel";
 type GroupMode = "port" | "failover" | "chain" | "entry" | "exit";
-type FailoverStrategy = "fallback" | "round_robin" | "random" | "ip_hash";
 type MemberForm = {
   key: string;
   memberType: GroupType;
@@ -196,9 +195,6 @@ type GroupForm = {
   zeroCopy: boolean;
   udpOverTcp: boolean;
   udpOverTcpPort: number;
-  failoverEnabled: boolean;
-  failoverStrategy: FailoverStrategy;
-  failoverTargetsText: string;
   domain: string;
   recordType: "A" | "AAAA" | "CNAME";
   failoverSeconds: string;
@@ -234,9 +230,6 @@ const makeDefaultForm = (): GroupForm => ({
   zeroCopy: false,
   udpOverTcp: false,
   udpOverTcpPort: 0,
-  failoverEnabled: false,
-  failoverStrategy: "fallback",
-  failoverTargetsText: "",
   domain: "",
   recordType: "A",
   failoverSeconds: "60",
@@ -510,7 +503,6 @@ function forwardGroupMatchesSearchQuery(
     group?.forwardType,
     (FORWARD_TYPE_LABELS as Record<string, string>)[String(group?.forwardType || "")],
     group?.groupType,
-    group?.failoverStrategy,
     group?.trafficMultiplier,
     entryGroupText,
     ...(modeLabels[mode] || []),
@@ -1172,9 +1164,6 @@ export function ForwardGroupsContent({
       zeroCopy: false,
       udpOverTcp: !!group.udpOverTcp,
       udpOverTcpPort: Number(group.udpOverTcpPort || 0),
-      failoverEnabled: false,
-      failoverStrategy: "fallback" as const,
-      failoverTargetsText: "",
       domain: group.domain || "",
       recordType: group.recordType || "A",
       failoverSeconds: String(Number(group.failoverSeconds || 60)),
@@ -1619,9 +1608,6 @@ export function ForwardGroupsContent({
       zeroCopy: false,
       udpOverTcp: false,
       udpOverTcpPort: null,
-      failoverEnabled: false,
-      failoverStrategy: "fallback" as const,
-      failoverTargets: [],
       chinaHealthCheckEnabled: supportsChinaHealth && form.chinaHealthCheckEnabled,
       chinaHealthCheckTarget: supportsChinaHealth && form.chinaHealthCheckEnabled ? chinaHealthTarget || null : null,
       chinaHealthCheckMethod: form.chinaHealthCheckMethod,

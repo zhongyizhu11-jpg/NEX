@@ -9,7 +9,8 @@ import {
 } from "./proxySubscriptionPlan";
 import { renderProxySubscription } from "./proxySubscription";
 
-test("前置带宽：总限速 > 出口整形 > 主机名括号里的带宽", () => {
+test("前置带宽：线路带宽 > 总限速 > 出口整形 > 主机名括号里的带宽", () => {
+  assert.equal(hostBandwidthHintMbps({ name: "Po0(500M)", lineBandwidthMbps: 480, rateLimitMbps: 400 }), 480);
   assert.equal(hostBandwidthHintMbps({ name: "Po0(500M)", rateLimitMbps: 400 }), 400);
   assert.equal(hostBandwidthHintMbps({ name: "Po0(500M)", egressMbps: 450 }), 450);
   assert.equal(hostBandwidthHintMbps({ name: "Po0(500M)" }), 500);

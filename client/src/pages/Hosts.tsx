@@ -608,6 +608,8 @@ type HostFormData = {
   egressMbps: number;
   flowOffload: boolean;
   rateLimitMbps: number;
+  /** 线路带宽（Mbps，0 = 没填）：负载均衡按它分连接。 */
+  lineBandwidthMbps: number;
 };
 
 const defaultFormData: HostFormData = {
@@ -649,6 +651,7 @@ const defaultFormData: HostFormData = {
   egressMbps: 0,
   flowOffload: false,
   rateLimitMbps: 0,
+  lineBandwidthMbps: 0,
 };
 
 function clampMonthlyResetDay(value: number) {
@@ -2166,6 +2169,7 @@ function HostsContent() {
       egressMbps: normalizeHostEgressMbpsInput(host.egressMbps),
       flowOffload: !!host.flowOffload,
       rateLimitMbps: Math.max(0, Math.floor(Number(host.rateLimitMbps) || 0)),
+      lineBandwidthMbps: Math.max(0, Math.floor(Number(host.lineBandwidthMbps) || 0)),
     });
     setEditingId(host.id);
     setEditingHostSnapshot(host);
@@ -2305,6 +2309,7 @@ function HostsContent() {
         ...egressShapingPayload,
         ...flowOffloadPayload,
         ...hostRateLimitPayload,
+        lineBandwidthMbps: form.lineBandwidthMbps,
       });
     } else {
       const ip = (form.ip || entry || "unknown").trim();
@@ -2321,6 +2326,7 @@ function HostsContent() {
         ...trafficConfigPayload,
         ...protocolPolicyPayload,
         ...egressShapingPayload,
+        lineBandwidthMbps: form.lineBandwidthMbps,
       });
     }
   };
@@ -3774,6 +3780,25 @@ function HostsContent() {
                         </div>
                       </div>
                       <p className="mt-1.5 px-3 text-xs text-muted-foreground">当月没有该日期时按最后一天重置。</p>
+                      <div className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="min-w-0 space-y-0.5">
+                          <Label className="text-sm font-medium">线路带宽</Label>
+                          <p className="text-xs text-muted-foreground">这台机器能跑多快（商家给的带宽）。只用来分连接：订阅的负载均衡组、出口组「按权重」、入口组排序都按它分，带宽大的多分。不限速；不填时看主机名里括号写的带宽，如「Po0(500M)」。</p>
+                        </div>
+                        <div className="flex h-8 w-36 shrink-0 overflow-hidden rounded-md border border-input bg-background focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2">
+                          <Input aria-label="线路带宽（Mbit/s）"
+                            className="h-8 min-w-0 rounded-none border-0 px-2 text-right tabular-nums focus-visible:ring-0 focus-visible:ring-offset-0"
+                            type="number"
+                            min={0}
+                            max={1000000}
+                            inputMode="numeric"
+                            placeholder="没填"
+                            value={form.lineBandwidthMbps > 0 ? form.lineBandwidthMbps : ""}
+                            onChange={(e) => setForm({ ...form, lineBandwidthMbps: Math.min(1_000_000, Math.max(0, Math.floor(Number(e.target.value) || 0))) })}
+                          />
+                          <span className="flex h-8 shrink-0 items-center border-l border-border/60 bg-muted/50 px-2 text-xs text-muted-foreground">Mbit/s</span>
+                        </div>
+                      </div>
                       {user?.role === "admin" && editingId ? (
                         <div className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
                           <div className="min-w-0 space-y-0.5">

@@ -1393,6 +1393,8 @@ export const hostsRouter = router({
         trafficFailoverThresholdPercent: z.number().int().min(1).max(100).optional(),
         egressShapingMode: hostEgressShapingModeSchema.optional(),
         egressMbps: hostEgressMbpsSchema.optional(),
+        /** 线路带宽（Mbps，0 = 没填）：负载均衡按它分连接。主人和管理员都能填，只是一项说明，不限速。 */
+        lineBandwidthMbps: z.number().int().min(0).max(1_000_000).optional(),
         /** 上下线推送（默认开）。只有管理员能关：通知发给的是管理员。 */
         hostStatusNotifyEnabled: z.boolean().optional(),
         telegramTrafficAlertEnabled: z.boolean().optional(),
@@ -1465,6 +1467,7 @@ export const hostsRouter = router({
           blockSocks: ctx.user.role === "admin" ? !!input.blockSocks : false,
           blockTls: ctx.user.role === "admin" ? !!input.blockTls : false,
           hostStatusNotifyEnabled: ctx.user.role === "admin" ? input.hostStatusNotifyEnabled !== false : true,
+          lineBandwidthMbps: Math.max(0, Math.floor(Number(input.lineBandwidthMbps) || 0)),
           userId: ctx.user.id,
         });
         return { id, agentToken };
@@ -1564,6 +1567,8 @@ export const hostsRouter = router({
         flowOffload: z.boolean().optional(),
         /** 整台主机的转发限速（Mbps，0 = 不限）：所有用户加起来共用一个桶。只有管理员能改。 */
         rateLimitMbps: z.number().int().min(0).max(1_000_000).optional(),
+        /** 线路带宽（Mbps，0 = 没填）：负载均衡按它分连接。主人和管理员都能填，只是一项说明，不限速。 */
+        lineBandwidthMbps: z.number().int().min(0).max(1_000_000).optional(),
         /** 上下线推送（默认开）。只有管理员能关：通知发给的是管理员。 */
         hostStatusNotifyEnabled: z.boolean().optional(),
         telegramTrafficAlertEnabled: z.boolean().optional(),
