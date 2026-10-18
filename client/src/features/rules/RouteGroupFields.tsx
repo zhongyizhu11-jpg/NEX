@@ -613,7 +613,8 @@ export function RouteGroupFields({
                       onChange={(event) => setDrafts({ ...drafts, [destField]: event.target.value.replace(/\s+/g, "") })}
                       onFocus={() => setEditingField(destField)}
                       onBlur={() => { setEditingField(null); commitEndpoint(index, "dest", destText); }}
-                      placeholder={mainAddress ? `IP:端口，留空走 ${mainAddress}` : "IP:端口，留空同目标"}
+                      // 不把目标地址拼进来：手机上一长就被截成半句。目标地址就在上面，写「用目标地址」就够了。
+                      placeholder="填 IP:端口，不填就用目标地址"
                       aria-label={`路径 ${routePathLetter(index)} 的落地`}
                       className="h-7 min-w-0 flex-1 font-mono text-xs"
                       spellCheck={false}
