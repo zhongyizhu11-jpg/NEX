@@ -356,7 +356,8 @@ const defaultForm: RuleFormData = {
   targetIp: "",
   targetPort: 0,
   telegramErrorNotifyEnabled: false,
-  entryDomainEnabled: true,
+  // 新建规则默认不用专属域名，要用再在「更多设置」里打开。
+  entryDomainEnabled: false,
   failoverEnabled: false,
   routeGroup: null,
   entryMode: "port",
@@ -3265,8 +3266,8 @@ function RulesContent() {
     const toolLabel = FORWARD_TYPE_LABELS[effectiveRouteForwardType] || effectiveRouteForwardType;
     if (toolLabel) parts.push(String(toolLabel));
     if (form.telegramErrorNotifyEnabled) parts.push("异常提醒");
-    // 专属域名缺省是开的，只有关了才值得写出来。
-    if (ruleEntryDomainAvailable && !form.entryDomainEnabled) parts.push("不用专属域名");
+    // 专属域名新建时默认关，打开了才值得写出来。
+    if (ruleEntryDomainAvailable && form.entryDomainEnabled) parts.push("专属域名");
     const limits = user?.role === "admin" ? ruleLimitsSummary(form.limits) : null;
     if (limits) parts.push(limits);
     return parts;

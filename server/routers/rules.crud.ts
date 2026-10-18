@@ -2391,7 +2391,8 @@ export const crudRulesRouter = router({
           targetPort: input.targetPort,
           isEnabled: input.isEnabled,
           telegramErrorNotifyEnabled: !!input.telegramErrorNotifyEnabled,
-          entryDomainEnabled: input.entryDomainEnabled ?? true,
+          // 新建默认不用专属域名（面板表单也默认关）；要用的显式传 true。
+          entryDomainEnabled: input.entryDomainEnabled ?? false,
           ...RULE_PROTOCOL_BLOCK_COLUMNS,
           ...normalizeProxyProtocolInput(
             input,
