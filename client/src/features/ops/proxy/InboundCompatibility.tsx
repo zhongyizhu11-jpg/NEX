@@ -32,6 +32,8 @@ export default function InboundCompatibility({ inbound }: { inbound: any }) {
     <>
       <button
         type="button"
+        // 和协议小标同高：触屏上按钮统一撑到 44px（index.css），这枚小标是行里的徽章，撑高了整行都变高、名字被挤没。
+        data-compact-badge=""
         // 行本身可能可点（展开详情），这里拦住，免得点小标顺带展开了行。
         onClick={(event) => {
           event.stopPropagation();

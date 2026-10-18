@@ -88,8 +88,9 @@ const ACCENT_BORDERS: Record<ProxyNodeRowAccent, string> = {
  * 为什么动作收进 ⋯：同样是宽度守恒。行内只留「用量」和开关两个常用的，其余进菜单；
  * 以后再加功能也只是菜单里多一项，不会再挤到名字。
  *
- * 名字和第二行都换行而不截断：手机上一行放不下时，被「…」吃掉的恰好是最要看的部分
- * （地址的端口、归属的账号、名字的后半截）。多占一行比看不全好。
+ * 名字和第二行平时各占一行、放不下就截断，卡片高度不变；可手机上被「…」吃掉的恰好是
+ * 最要看的部分（地址的端口、归属的账号、名字的后半截），所以点一下文字那块就把这一张
+ * 展开成换行显示，再点收起。桌面上悬停也能看到全文（title）。
  */
 export function ProxyNodeRow({
   leading,
@@ -108,7 +109,7 @@ export function ProxyNodeRow({
   name: ReactNode;
   /** 名字后面那一个徽章。只放长度有上限的东西，协议名这种。 */
   tag?: ReactNode;
-  /** 第二行：协议、地址、端口、停用、分享人数……一句话说完，超长就换行。 */
+  /** 第二行：协议、地址、端口、停用、分享人数……一句话说完，超长就截断（点开看全文）。 */
   meta: ReactNode;
   /** 展开后的补充信息（如套餐用量），跟在第二行下面。 */
   detail?: ReactNode;
@@ -134,6 +135,8 @@ export function ProxyNodeRow({
    */
   const [open, setOpen] = useState(false);
   const pending = useRef<null | (() => void)>(null);
+  const [expanded, setExpanded] = useState(false);
+  const textOf = (value: ReactNode) => (typeof value === "string" || typeof value === "number" ? String(value) : undefined);
 
   return (
     <div
@@ -142,12 +145,44 @@ export function ProxyNodeRow({
       } ${muted ? "opacity-60" : ""}`}
     >
       {leading}
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
-          <span className="min-w-0 break-words text-sm font-medium leading-tight [overflow-wrap:anywhere]">{name}</span>
-          {tag}
+      {/*
+        不给 role="button"：触屏上按钮一律撑到 44px 高（index.css），这一块一算按钮，整行就变高了。
+        展开只是看全文的便利，⋯ 菜单和悬停 title 都还在。
+      */}
+      <div
+        className="min-w-0 flex-1 cursor-pointer"
+        aria-expanded={expanded}
+        title={expanded ? undefined : textOf(meta)}
+        onClick={(event) => {
+          // 名字里自带可点的东西（客户端兼容小标之类）时，点它不顺带展开。
+          if ((event.target as HTMLElement).closest("button, a, input, label")) return;
+          setExpanded((value) => !value);
+        }}
+      >
+        <div className={expanded ? "flex flex-wrap items-center gap-x-1.5 gap-y-0.5" : "flex items-center gap-1.5"}>
+          {/*
+            收起时名字优先：名字最多占这一行的一半多一点、不被徽章挤，徽章用剩下的地方，放不下的徽章
+            不显示。原来名字是这一行唯一能压缩的东西，协议 + 客户端兼容两个徽章一来就只剩一个字。
+          */}
+          <span
+            className={expanded
+              ? "min-w-0 break-words text-sm font-medium leading-tight [overflow-wrap:anywhere]"
+              : "max-w-[55%] shrink-0 truncate text-sm font-medium leading-tight"}
+            title={expanded ? undefined : textOf(name)}
+          >
+            {name}
+          </span>
+          {tag ? (
+            // 放不下的徽章折到第二行再被裁掉：整个不显示，不留半截（点开这行能看到全部）。
+            <span className={expanded ? "contents" : "flex h-4 min-w-0 flex-wrap content-start items-center gap-x-1.5 gap-y-2 overflow-hidden"}>{tag}</span>
+          ) : null}
         </div>
-        <p className="break-words text-[11px] leading-snug text-muted-foreground [overflow-wrap:anywhere]">{meta}</p>
+        <p className={expanded
+          ? "break-words text-[11px] leading-snug text-muted-foreground [overflow-wrap:anywhere]"
+          : "truncate text-[11px] leading-tight text-muted-foreground"}
+        >
+          {meta}
+        </p>
         {detail}
       </div>
       {inline}
