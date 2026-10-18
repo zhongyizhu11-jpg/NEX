@@ -1724,9 +1724,7 @@ function HostsContent() {
    * 按**实际配置了什么**说话：两个都没配就直说没有渠道，而不是让人开了开关之后
    * 干等一条永远不会来的提醒。
    */
-  const reminderChannelHint = telegramBotReady
-    ? "会通过 Telegram 和邮件发给这台机器的主人（按各自配置）。"
-    : "会通过邮件发给这台机器的主人；配好 Telegram 机器人后也会走 TG。";
+  const reminderChannelHint = telegramBotReady ? "发 Telegram 和邮件。" : "发邮件。";
   const upgradingHosts = useRef<Map<number, string | null>>(new Map());
 
   const [showDialog, setShowDialog] = useState(false);
@@ -1789,6 +1787,16 @@ function HostsContent() {
     pageVisible && activeManageTab === "hosts",
   );
   const detailHostId = detailHost ? Number(detailHost.id) : null;
+  /*
+    详情框打开时记下的是那一刻的主机。在详情里点编辑、保存之后列表会刷新，可那份快照不会：
+    再点编辑，表单拿旧快照填，刚存的值（比如线路带宽）看着像没存上。所以详情框和它的编辑
+    都用列表里最新的那一份，列表里没有（翻页了）才退回快照。
+  */
+  const liveDetailHost = useMemo(() => {
+    if (!detailHost) return null;
+    const latest = (hosts || []).find((host: any) => Number(host?.id) === Number(detailHost.id));
+    return latest ? { ...detailHost, ...latest } : detailHost;
+  }, [detailHost, hosts]);
   const hostLiveVitalsQuery = trpc.hosts.liveVitals.useQuery({ hostIds: currentPageHostIds, focusHostId: detailHostId }, {
     enabled: !isHostMapView && !needsFullHostList && !!hostLiveVitalsInterval && (currentPageHostIds.length > 0 || !!detailHostId),
     refetchInterval: hostLiveVitalsInterval,
@@ -1992,6 +2000,7 @@ function HostsContent() {
       utils.hosts.listPage.invalidate();
       utils.hosts.mapPoints.invalidate();
       utils.hosts.summary.invalidate();
+      utils.hosts.getById.invalidate();
       setShowDialog(false);
       resetForm();
       toast.success("主机已更新");
@@ -2183,7 +2192,7 @@ function HostsContent() {
     if (!Number.isInteger(hostId) || hostId <= 0 || openingMapHostIds.current.has(hostId)) return;
     openingMapHostIds.current.add(hostId);
     try {
-      const fullHost = await utils.hosts.getById.fetch({ id: hostId });
+      const fullHost = await utils.hosts.getById.fetch({ id: hostId }, { staleTime: 0 });
       if (!fullHost) {
         toast.error("主机不存在或当前账号无权访问");
         return;
@@ -3086,12 +3095,12 @@ function HostsContent() {
       <HostDetailDialog
         open={!!detailHost}
         onOpenChange={(open) => !open && setDetailHost(null)}
-        host={detailHost}
+        host={liveDetailHost}
         metrics={detailHostMetrics}
         traffic={detailHost ? hostTrafficById.get(Number(detailHost.id)) : null}
         canUpgrade={user?.role === "admin"}
         resetTrafficPending={!!detailHost && resetTrafficHostId === detailHost.id && resetHostTrafficMutation.isPending}
-        onEdit={openEdit}
+        onEdit={(host: any) => openEdit(liveDetailHost || host)}
         onDelete={(id) => deleteMutation.mutate({ id })}
         onUpgrade={requestAgentUpgrade}
         onResetTraffic={user?.role === "admin" ? requestResetHostTraffic : undefined}
@@ -3667,9 +3676,9 @@ function HostsContent() {
                             把这台从组里摘出去（转发组、入口组、出口组、多出口隧道），组里换别的成员顶上。
                             只改运行时，成员和端口都不删；流量重置（手动或每月自动）或关掉这个开关就恢复。
                           */}
-                          <p className="text-xs text-muted-foreground">用到套餐流量的这个比例后，暂停这台参与转发组和隧道的入口 / 出口组，组里换别的成员顶上；流量重置或关闭后恢复，不删成员配置。</p>
+                          <p className="text-xs text-muted-foreground">用到这个比例后暂停参与组调度，流量重置后恢复。</p>
                           {editingHostRow && hostTrafficExcluded(editingHostRow) ? (
-                            <p className="text-xs text-[var(--fx-warn-text)]">现在已到阈值，正暂停参与组调度（主机本身照常在线，独立规则不受影响）。</p>
+                            <p className="text-xs text-[var(--fx-warn-text)]">已到阈值，正暂停参与组调度。</p>
                           ) : null}
                         </div>
                         <div className="flex shrink-0 items-center gap-2">
@@ -3695,7 +3704,7 @@ function HostsContent() {
                       <div className="mt-2.5 flex min-h-9 items-center justify-between gap-3 rounded-md bg-muted/35 px-3 py-2">
                         <div className="min-w-0 space-y-0.5">
                           <Label className="text-sm font-medium">上下线通知</Label>
-                          <p className="text-xs text-muted-foreground">这台机器掉线、恢复时推送给管理员。关掉只是不推，离线判定、事件和故障转移照旧。</p>
+                          <p className="text-xs text-muted-foreground">掉线、恢复时推送给管理员。</p>
                         </div>
                         <Checkbox aria-label="上下线通知"
                           checked={form.hostStatusNotifyEnabled}
@@ -3779,11 +3788,10 @@ function HostsContent() {
                           <Checkbox aria-label="每月自动清零" checked={form.trafficAutoReset} onCheckedChange={(checked) => setForm({ ...form, trafficAutoReset: checked })} />
                         </div>
                       </div>
-                      <p className="mt-1.5 px-3 text-xs text-muted-foreground">当月没有该日期时按最后一天重置。</p>
                       <div className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
                         <div className="min-w-0 space-y-0.5">
                           <Label className="text-sm font-medium">线路带宽</Label>
-                          <p className="text-xs text-muted-foreground">这台机器能跑多快（商家给的带宽）。只用来分连接：订阅的负载均衡组、出口组「按权重」、入口组排序都按它分，带宽大的多分。不限速；不填时看主机名里括号写的带宽，如「Po0(500M)」。</p>
+                          <p className="text-xs text-muted-foreground">商家给的带宽，负载均衡按它分，不限速。</p>
                         </div>
                         <div className="flex h-8 w-36 shrink-0 overflow-hidden rounded-md border border-input bg-background focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2">
                           <Input aria-label="线路带宽（Mbit/s）"
@@ -3803,7 +3811,7 @@ function HostsContent() {
                         <div className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
                           <div className="min-w-0 space-y-0.5">
                             <Label className="text-sm font-medium">整台主机转发限速</Label>
-                            <p className="text-xs text-muted-foreground">这台机器上所有用户的转发加起来不超过这个速度，上下行各算。0 = 不限；需要 Agent 2.2.230 以上。</p>
+                            <p className="text-xs text-muted-foreground">所有用户合计上限，0 = 不限。</p>
                           </div>
                           <div className="flex h-8 w-36 shrink-0 overflow-hidden rounded-md border border-input bg-background focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2">
                             <Input aria-label="整台主机转发限速（Mbit/s）"
@@ -3865,7 +3873,7 @@ function HostsContent() {
                           <div className="min-w-0 space-y-0.5">
                             <Label className="text-sm font-medium">内核快速转发</Label>
                             <p className="text-xs text-muted-foreground">
-                              iptables / nftables 规则和内核直通的连接建立后跳过防火墙逐包检查，转发更省 CPU；流量改从 conntrack 计。需要 Linux 6.1 起。
+                              跳过逐包检查，更省 CPU（Linux 6.1 起）。
                             </p>
                             {form.flowOffload && editingHostRow?.flowOffloadStatus ? (
                               <p className="text-xs text-muted-foreground" data-host-flow-offload-status="">
@@ -3918,7 +3926,7 @@ function HostsContent() {
                           />
                         </div>
                         <p className="text-xs text-muted-foreground">
-                          开启后，Agent 上报的对应 IP 发生变化时会自动更新到系统设置中的 DDNS 服务商。
+                          IP 变了自动更新解析。
                         </p>
                       </div>
                     </>
