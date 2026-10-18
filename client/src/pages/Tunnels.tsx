@@ -212,7 +212,7 @@ type TunnelForm = {
   /** 编辑时带进来的 FXP 整形状态（只读，不提交）。 */
   linkShapingStatus: LinkShapingStatus[];
   loadBalanceEnabled: boolean;
-  loadBalanceStrategy: "none" | "round_robin" | "random" | "least_conn" | "ip_hash" | "fallback" | "weighted";
+  loadBalanceStrategy: "none" | "round_robin" | "random" | "least_conn" | "ip_hash" | "fallback" | "weighted" | "least_load";
   loadBalanceExits: Array<{ hostId: number | null; connectHost: string }>;
   exitGroupId: number | null;
   blockHttp: boolean;
@@ -2829,7 +2829,7 @@ function TunnelsContent() {
       udpFec: transportTuningSupported && !!(tunnel as any).udpFec,
       kernelPassthrough: transportTuningSupported && !!(tunnel as any).kernelPassthrough,
       loadBalanceEnabled: exitGroupId ? !!tunnel.loadBalanceEnabled : false,
-      loadBalanceStrategy: (["none", "round_robin", "random", "least_conn", "ip_hash", "fallback", "weighted"].includes(String(tunnel.loadBalanceStrategy || ""))
+      loadBalanceStrategy: (["none", "round_robin", "random", "least_conn", "ip_hash", "fallback", "weighted", "least_load"].includes(String(tunnel.loadBalanceStrategy || ""))
         ? tunnel.loadBalanceStrategy
         : "round_robin") as TunnelForm["loadBalanceStrategy"],
       loadBalanceExits: exitGroupId ? loadBalanceExits : [],

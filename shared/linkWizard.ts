@@ -29,7 +29,7 @@ export const LINK_WIZARD_PLACE_LABELS: Record<LinkWizardPlace, { label: string; 
 };
 
 export type LinkWizardAction =
-  | { type: "group"; mode: "failover" | "entry" | "exit"; exitStrategy?: "fallback" | "weighted" }
+  | { type: "group"; mode: "failover" | "entry" | "exit"; exitStrategy?: "fallback" | "least_load" }
   | { type: "tunnel"; relayMode: "chain" | "failover" | "aggregate"; needsForwardX: boolean }
   | { type: "rule" };
 
@@ -92,10 +92,10 @@ export function linkWizardAdvice(goal: LinkWizardGoal, place: LinkWizardPlace): 
       action: { type: "tunnel", relayMode: "aggregate", needsForwardX: true },
     };
     if (place === "exit") return {
-      title: "出口组（按权重），再给隧道用",
-      explain: "新连接按每台出口的线路带宽分，500M 和 300M 就是 5:3。",
+      title: "出口组（按负载），再给隧道用",
+      explain: "新连接给现在最闲的那台出口：按实时流量、连接数、延迟和线路带宽算，500M 那台自然多接一些。",
       next: "先在主机设置里填好每台的「线路带宽」，再在隧道里选这个出口组。",
-      action: { type: "group", mode: "exit", exitStrategy: "weighted" },
+      action: { type: "group", mode: "exit", exitStrategy: "least_load" },
     };
     if (place === "path") return {
       title: "规则里的线路组（权重负载）",

@@ -155,8 +155,8 @@ import {
   tunnelParallelStreamsAgentsReady,
   tunnelParallelStreamsUnavailableReason,
 } from "@shared/tunnelParallelStreams";
-import { exitGroupWeights, normalizeExitGroupStrategy } from "@shared/exitStrategy";
-import { expandWeightedMembers, hostBandwidthHintMbps } from "@shared/linkWeights";
+import { exitGroupCapacities, exitGroupWeights, LEAST_LOAD_AGENT_VERSION, normalizeExitGroupStrategy } from "@shared/exitStrategy";
+import { hostBandwidthHintMbps } from "@shared/linkWeights";
 import { forwardXExitStrategy, gostExitSelector, shouldUseFastTunnelFailover } from "./tunnelExitStrategy";
 import {
   getMimicLifecycleRevisionSignature,
@@ -3174,7 +3174,10 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         // UDP 按会话调度，TCP+UDP 两个都开（Agent 2.2.199 起，上面已经按版本挡过）。
         protocol,
         // 权重负载按它的分法（按权重 / 轮流 / 随机 / 按访客），其余模式都是主备（fallback）。
-        strategy: routeAgentStrategy(policy),
+        // 「按负载」老 Agent 不认（会退成主备），改发「按权重」。
+        strategy: routeAgentStrategy(policy) === "least_load" && !routeSchedulerAgentAtLeast(rule, LEAST_LOAD_AGENT_VERSION)
+          ? "weighted"
+          : routeAgentStrategy(policy),
         targets,
         failoverSeconds: policy.failoverSeconds,
         recoverSeconds: policy.recoverSeconds,
@@ -3706,14 +3709,17 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
               const endpoint = mimicFilterEndpoint(route.host, route.udpPort);
               if (endpoint) addMimicFilter(`remote=${endpoint}`, hostInterface, [{ resourceType: "tunnel", resourceId: tunnel.id }]);
             }
-            const relayExitWeights = await exitWeightsForHostIds(
-              (tunnel as any).loadBalanceStrategy,
-              [Number(nextHop?.hostId || 0), ...extraRoutes.map((route) => Number(route.hostId || 0))],
-            );
+            const relayExitHostIds = [Number(nextHop?.hostId || 0), ...extraRoutes.map((route) => Number(route.hostId || 0))];
+            const relayExitWeights = await exitWeightsForHostIds((tunnel as any).loadBalanceStrategy, relayExitHostIds);
+            const relayExitCapacities = await exitCapacitiesForHostIds((tunnel as any).loadBalanceStrategy, relayExitHostIds);
             fxpSpec.exits = [
               { host: fxpSpec.relayExitHost, port: fxpSpec.relayExitPort, udpPort: fxpSpec.udpRelayExitPort || fxpSpec.relayExitPort, key: fxpSpec.relayKey, peerId: wireGuardV2 ? String(Number(nextHop?.hostId || 0)) : undefined },
               ...extraRoutes.map((route) => ({ host: route.host, port: route.port, udpPort: wireGuardV2 ? route.port : route.udpPort || 0, key: route.key, peerId: wireGuardV2 ? String(route.hostId) : undefined })),
-            ].map((exit, index) => (relayExitWeights ? { ...exit, weight: relayExitWeights[index] } : exit));
+            ].map((exit, index) => ({
+              ...exit,
+              ...(relayExitWeights ? { weight: relayExitWeights[index] } : {}),
+              ...(relayExitCapacities ? { capacityMbps: relayExitCapacities[index] } : {}),
+            }));
             fxpSpec.exitStrategy = forwardXExitStrategy((tunnel as any).loadBalanceStrategy);
           }
         }
@@ -3771,15 +3777,25 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     };
     // 出口组「按权重」：每个出口主机的线路带宽，一次心跳里同一台只查一次。
     const exitBandwidthCache = new Map<number, number>();
-    const exitWeightsForHostIds = async (strategy: unknown, hostIds: number[]) => {
-      if (normalizeExitGroupStrategy(strategy) !== "weighted" || hostIds.length < 2) return null;
+    const exitBandwidthsForHostIds = async (hostIds: number[]) => {
       const missing = Array.from(new Set(hostIds.filter((id) => id > 0 && !exitBandwidthCache.has(id))));
       if (missing.length > 0) {
         const rows = await db.getHostsByIds(missing) as any[];
         for (const id of missing) exitBandwidthCache.set(id, 0);
         for (const row of rows) exitBandwidthCache.set(Number(row.id), hostBandwidthHintMbps(row));
       }
-      return exitGroupWeights(strategy, hostIds.map((id) => exitBandwidthCache.get(id) || 0));
+      return hostIds.map((id) => exitBandwidthCache.get(id) || 0);
+    };
+    const exitWeightsForHostIds = async (strategy: unknown, hostIds: number[]) => {
+      const normalized = normalizeExitGroupStrategy(strategy);
+      if ((normalized !== "weighted" && normalized !== "least_load") || hostIds.length < 2) return null;
+      return exitGroupWeights(strategy, await exitBandwidthsForHostIds(hostIds));
+    };
+    // 交给 FXP 的线路带宽（「按负载」「按访客固定」用）。
+    const exitCapacitiesForHostIds = async (strategy: unknown, hostIds: number[]) => {
+      const normalized = normalizeExitGroupStrategy(strategy);
+      if ((normalized !== "least_load" && normalized !== "ip_hash") || hostIds.length < 2) return null;
+      return exitGroupCapacities(strategy, await exitBandwidthsForHostIds(hostIds));
     };
     const forwardXEntryRoutes = async (rule: any, tunnel: any) => {
       const routes: Array<{ hostId: number; host: string; port: number; udpPort: number; key: string }> = [];
@@ -4253,16 +4269,11 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         ));
         nodeHostIds.push(endpoint.exitHostId);
       }
-      // 按权重：同一个出口按份数重复列，顺序是平滑加权轮询的（A B A A B …），gost 再轮流选。
+      // 按权重 / 按负载：份数写进节点的 metadata.weight，gost 的 rand 按它加权随机（gostExitSelector）。
+      // 以前是把出口按份数重复列，可每一份各记各的失败：权重 5 的出口挂了要失败 5 次才全部跳过。
       const weights = await exitWeightsForHostIds(tunnel.loadBalanceStrategy, nodeHostIds);
       if (!weights) return nodes;
-      const seen = new Map<number, number>();
-      return expandWeightedMembers(nodes.map((_, index) => String(index)), weights).map((key) => {
-        const index = Number(key);
-        const copy = seen.get(index) || 0;
-        seen.set(index, copy + 1);
-        return copy === 0 ? nodes[index] : { ...nodes[index], name: `${nodes[index].name}-w${copy}` };
-      });
+      return nodes.map((node, index) => ({ ...node, metadata: { ...(node.metadata || {}), weight: weights[index] } }));
     };
     const gostRelayFailoverHopMetadata = { strategy: "fifo", maxFails: 1, failTimeout: "5s" };
     const gostTunnelExitTargetAddr = async (rule: any, tunnel: any) => {
@@ -4319,14 +4330,10 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
             isMultiHopTunnel
             && isCurrentHostTunnelEntry(tunnel);
           const relayFailover = useMultiHopEntry && tunnelRelayUsesParallelRelays(tunnel, tunnelHops);
-          const exitCandidates = tunnel ? tunnelExitEndpointsForRule(r, tunnel) : [];
-          const exitCandidateCount = exitCandidates.length;
-          // 按权重时 gost 里一个出口按份数重复列（buildLoadBalancedExitNodes），挂掉的那台每一份都要能重试过去。
-          const exitWeights = tunnel ? await exitWeightsForHostIds(tunnel.loadBalanceStrategy, exitCandidates.map((endpoint) => endpoint.exitHostId)) : null;
-          const exitNodeCount = exitWeights ? exitWeights.reduce((sum, value) => sum + value, 0) : exitCandidateCount;
+          const exitCandidateCount = tunnel ? tunnelExitEndpointsForRule(r, tunnel).length : 0;
           const routeRetries = Math.max(
             relayFailover ? tunnelRelayCandidates(tunnelHops as any[]).length - 1 : 0,
-            exitNodeCount - 1,
+            exitCandidateCount - 1,
           );
           // Every multi-exit strategy must fail over promptly when a node is
           // blackholed.  The selector already retries the remaining nodes;
@@ -4728,11 +4735,11 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       const strategy = cleanEndpoints.length > 1 ? String(strategyRaw || "round_robin") : "round_robin";
       const lines = [`  upstream ${name} {`];
       if (strategy === "random") lines.push("    random;");
-      else if (strategy === "least_conn") lines.push("    least_conn;");
+      else if (strategy === "least_conn" || strategy === "least_load") lines.push("    least_conn;");
       else if (strategy === "ip_hash") lines.push("    hash $remote_addr consistent;");
       cleanEndpoints.forEach((endpoint, index) => {
         const backup = strategy === "fallback" && index > 0 ? " backup" : "";
-        const weight = strategy === "weighted" && Number(endpoint.weight) > 1 ? ` weight=${Math.floor(Number(endpoint.weight))}` : "";
+        const weight = (strategy === "weighted" || strategy === "least_load") && Number(endpoint.weight) > 1 ? ` weight=${Math.floor(Number(endpoint.weight))}` : "";
         lines.push(`    server ${endpoint.addr}${weight} max_fails=2 fail_timeout=10s${backup};`);
       });
       lines.push("  }");
@@ -6283,9 +6290,10 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
               }
             }
             // 并排中转时 entryRoutes 是几台中转（固定主备），权重只给出口组的出口。
-            const entryExitWeights = tunnelRelayUsesParallelRelays(tunnel, tunnelHopsByTunnelId.get(Number(tunnel.id)) || [])
-              ? null
-              : await exitWeightsForHostIds((tunnel as any).loadBalanceStrategy, entryRoutes.map((route) => Number((route as any).hostId || 0)));
+            const entryExitsAreRelays = tunnelRelayUsesParallelRelays(tunnel, tunnelHopsByTunnelId.get(Number(tunnel.id)) || []);
+            const entryExitHostIds = entryRoutes.map((route) => Number((route as any).hostId || 0));
+            const entryExitWeights = entryExitsAreRelays ? null : await exitWeightsForHostIds((tunnel as any).loadBalanceStrategy, entryExitHostIds);
+            const entryExitCapacities = entryExitsAreRelays ? null : await exitCapacitiesForHostIds((tunnel as any).loadBalanceStrategy, entryExitHostIds);
             const fxpSpec = await applyForwardXTransport({
               role: "entry",
               tunnelId: tunnel.id,
@@ -6307,6 +6315,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
                 key: route.key,
                 peerId: wireGuardV2 ? String(Number((route as any).hostId || 0)) : undefined,
                 ...(entryExitWeights ? { weight: entryExitWeights[index] } : {}),
+                ...(entryExitCapacities ? { capacityMbps: entryExitCapacities[index] } : {}),
               })),
               targetIp: fxpTarget.targetIp,
               targetPort: fxpTarget.targetPort,

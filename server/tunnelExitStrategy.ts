@@ -81,13 +81,16 @@ export function shouldUseFastTunnelFailover(exitCandidateCount: number, relayFai
 }
 
 /**
- * gost 和 nginx 没有一致的按权重选：gost 把出口按份数重复列（平滑加权轮询的顺序），再轮流选；
- * nginx 直接写 weight=N。份数见 shared/exitStrategy.ts 的 exitGroupWeights。
+ * 按权重：gost 用 random，份数写在节点的 metadata.weight（gost 3 的 random 按它加权随机）；nginx 写 weight=N。
+ * 份数见 shared/exitStrategy.ts 的 exitGroupWeights。
+ * 「按负载」gost 看不到实时负载，退成按带宽加权随机；nginx 用 least_conn + 权重。
  */
 export function gostExitSelector(value: unknown) {
   const strategy = normalizeExitGroupStrategy(value);
   return {
-    strategy: strategy === "fallback" ? "fifo" : strategy === "random" ? "random" : strategy === "ip_hash" ? "hash" : "round",
+    strategy: strategy === "fallback" ? "fifo"
+      : strategy === "random" || strategy === "weighted" || strategy === "least_load" ? "random"
+        : strategy === "ip_hash" ? "hash" : "round",
     maxFails: 1,
     failTimeout: strategy === "fallback" ? "5s" : "15s",
   };

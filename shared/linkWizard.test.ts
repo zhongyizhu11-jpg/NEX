@@ -21,7 +21,7 @@ test("稳定优先：入口 → 转发组，中转 → 隧道中转主备，出�
 });
 
 test("多人一起快：出口组按权重；单条连接也要快：拆的只能是中间那段，一律 NEX 隧道", () => {
-  assert.deepEqual(linkWizardAdvice("throughput", "exit").action, { type: "group", mode: "exit", exitStrategy: "weighted" });
+  assert.deepEqual(linkWizardAdvice("throughput", "exit").action, { type: "group", mode: "exit", exitStrategy: "least_load" });
   assert.deepEqual(linkWizardAdvice("throughput", "entry").action, { type: "group", mode: "entry" });
   for (const place of LINK_WIZARD_PLACES) {
     const action = linkWizardAdvice("single", place).action;

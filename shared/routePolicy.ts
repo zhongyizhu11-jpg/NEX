@@ -269,6 +269,7 @@ export function describeRoutePolicy(rule: RoutePolicyRule, options: RoutePolicyO
     const shares = routeWeightShares(paths);
     const spread: Record<RouteSpread, string> = {
       weighted: `按权重分：${paths.map((_, index) => `${label(index)} ${shares[index]}%`).join(" / ")}`,
+      least_load: `给 ${lineCount} 条里现在${perSession ? "会话" : "连接"}最少的那条（按权重折算）`,
       round_robin: `轮流走这 ${lineCount} 条`,
       random: `从 ${lineCount} 条里随机挑一条`,
       ip_hash: perSession ? "按会话固定分到其中一条" : "按来源 IP 固定分到其中一条",

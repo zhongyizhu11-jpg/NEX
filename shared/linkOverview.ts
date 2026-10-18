@@ -141,6 +141,11 @@ export function buildLinkOverview(input: LinkOverviewInput): LinkOverview {
       }
       let how = `出口${LINK_SPREAD_LABELS[strategy].label}`;
       let note = names.length < 2 ? "只有一台出口" : usedNote;
+      if (strategy === "least_load" && names.length >= 2) {
+        const bandwidths = members.map((member) => hostBandwidthHintMbps(hostById.get(Number(member.hostId))));
+        if (bandwidths.some((value) => value <= 0)) note = "有出口没填线路带宽，按一样大算";
+        else how = `出口按负载（${bandwidths.map((value) => `${value}M`).join(" · ")}）`;
+      }
       if (strategy === "weighted" && names.length >= 2) {
         const bandwidths = members.map((member) => hostBandwidthHintMbps(hostById.get(Number(member.hostId))));
         const weights = exitGroupWeights(strategy, bandwidths);

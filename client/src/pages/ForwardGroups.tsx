@@ -222,7 +222,8 @@ type GroupForm = {
 const makeDefaultForm = (): GroupForm => ({
   name: "",
   groupMode: "failover",
-  exitStrategy: "round_robin",
+  // 新建出口组默认「按负载」：按实时流量和线路带宽分，最能把几台一起跑满。
+  exitStrategy: "least_load",
   entryGroupId: null,
   groupType: "host",
   protocol: "both",
@@ -2456,6 +2457,8 @@ export function ForwardGroupsContent({
                         ? "按顺序优先用第一台，坏了换下一台。"
                         : form.exitStrategy === "weighted"
                           ? exitWeightHint(form.members, hostById)
+                          : form.exitStrategy === "least_load"
+                            ? exitLoadHint(form.members, hostById)
                           : `${LINK_SPREAD_LABELS[form.exitStrategy].hint}。`}
                   />
                 </div>
@@ -3122,8 +3125,25 @@ function exitWeightHint(members: MemberForm[], hostById: Map<number, any>) {
   return weights ? `按线路带宽分新连接：${sizes} → ${weights.join(":")}。` : `几台带宽一样（${sizes}），等于轮流。`;
 }
 
+/**
+ * 「按负载」：NEX 隧道里入口按每台出口的实时流量、连接数、握手延迟和线路带宽挑最闲的；
+ * GOST 看不到实时负载，按带宽加权轮流；nginx 用 least_conn。这里把带宽写出来，没填的点名。
+ */
+function exitLoadHint(members: MemberForm[], hostById: Map<number, any>) {
+  const hosts = members
+    .filter((member) => member.isEnabled && Number(member.hostId || 0) > 0)
+    .map((member) => hostById.get(Number(member.hostId)))
+    .filter(Boolean);
+  const base = "NEX 隧道按每台出口的实时流量、连接数、延迟和线路带宽挑最闲的；刚恢复的出口 1 分钟内慢慢加量。";
+  if (hosts.length < 2) return `${base}至少要两台出口。`;
+  const bandwidths = hosts.map((host: any) => hostBandwidthHintMbps(host));
+  const unknown = hosts.filter((_: any, index: number) => bandwidths[index] <= 0).map((host: any) => String(host.name || host.id));
+  if (unknown.length > 0) return `${base}${unknown.join("、")} 还不知道带宽（主机设置里填「线路带宽」），现在当一样大。`;
+  return `${base}线路带宽：${hosts.map((host: any, index: number) => `${String(host.name || host.id)} ${bandwidths[index]}M`).join(" · ")}。`;
+}
+
 // 出口策略的按钮：常用的排前面，「只用第一个」放最后（它其实是不分）。
-const EXIT_GROUP_PICKER_OPTIONS = ["fallback", "round_robin", "weighted", "random", "ip_hash", "none"] as const satisfies readonly ExitGroupStrategy[];
+const EXIT_GROUP_PICKER_OPTIONS = ["least_load", "fallback", "round_robin", "weighted", "random", "ip_hash", "none"] as const satisfies readonly ExitGroupStrategy[];
 const EXIT_GROUP_PICKER_LABELS: Record<ExitGroupStrategy, { label: string }> = {
   ...LINK_SPREAD_LABELS,
   none: { label: "只用第一个" },

@@ -138,7 +138,7 @@ export const ROUTE_MODES = ["failover", "scheduled", "manual", "smart", "hybrid"
 export type RouteMode = (typeof ROUTE_MODES)[number];
 
 /** 权重负载模式下新连接怎么分：按权重、轮流、随机、按访客固定。 */
-export const ROUTE_SPREADS = ["weighted", "round_robin", "random", "ip_hash"] as const;
+export const ROUTE_SPREADS = ["weighted", "least_load", "round_robin", "random", "ip_hash"] as const;
 export type RouteSpread = (typeof ROUTE_SPREADS)[number];
 
 /**
@@ -245,6 +245,7 @@ export const ROUTE_MODE_SHORT: Record<RouteMode, string> = {
 // 名字和出口组的策略同一套（shared/linkTerms.ts），只是这里说的是「路径」。
 export const ROUTE_SPREAD_LABELS: Record<RouteSpread, { label: string; hint: string }> = {
   weighted: { label: LINK_SPREAD_LABELS.weighted.label, hint: "新连接按每条路径的权重分配" },
+  least_load: { label: LINK_SPREAD_LABELS.least_load.label, hint: "新连接给现在挂着连接最少的那条（按权重折算），长连接多时比按权重更均匀" },
   round_robin: { label: LINK_SPREAD_LABELS.round_robin.label, hint: "新连接轮流走每一条" },
   random: { label: LINK_SPREAD_LABELS.random.label, hint: "新连接随机挑一条能用的" },
   ip_hash: { label: LINK_SPREAD_LABELS.ip_hash.label, hint: "同一个来源 IP 总走同一条，适合要保持登录的服务" },
@@ -262,6 +263,7 @@ export const ROUTE_SWITCH_MODE_INFO: Record<RouteSwitchMode, { label: string; hi
 */
 export const ROUTE_SPREAD_SESSION_HINTS: Record<RouteSpread, string> = {
   weighted: "新会话按每条路径的权重分配",
+  least_load: "新会话给现在连接最少的那条（按权重折算）",
   round_robin: "新会话轮流走每一条",
   random: "新会话随机挑一条能用的",
   ip_hash: "UDP 分不出访客：同一个会话一直走同一条，同一个访客的不同会话可能分到不同路径",
