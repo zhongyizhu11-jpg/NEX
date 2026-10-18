@@ -29,6 +29,8 @@ import { addressKey } from "@/lib/multiHopAddress";
 import SectionTransition from "@/components/SectionTransition";
 import { RouteGroupsSection } from "@/features/rules/RouteGroupsSection";
 import { LinkOverviewSection } from "@/features/links/LinkOverviewSection";
+import { LinkWizardDialog } from "@/features/links/LinkWizardDialog";
+import type { LinkWizardAction } from "@shared/linkWizard";
 import { loadReactGlobe, prefetchReactGlobe } from "@/lib/reactGlobeLoader";
 import { escapeTooltipHtml, hostGeoCoordinate } from "@/lib/hostGeo";
 import DashboardLayout from "@/components/DashboardLayout";
@@ -154,6 +156,7 @@ import {
 import {
   EXIT_GROUP_STRATEGY_LABELS,
   normalizeExitGroupStrategy,
+  type ExitGroupStrategy,
 } from "@shared/exitStrategy";
 import { useReducedMotion } from "motion/react";
 import {
@@ -2248,7 +2251,10 @@ function TunnelsContent() {
   const [chainAdvancedOpen, setChainAdvancedOpen] = useState(false);
   const [chainEditRequest, setChainEditRequest] = useState<{ id: number; requestKey: number } | null>(null);
   const [groupEditRequest, setGroupEditRequest] = useState<{ id: number; requestKey: number } | null>(null);
-  const [groupCreateRequest, setGroupCreateRequest] = useState<{ mode: TunnelGroupMode; requestKey: number } | null>(null);
+  const [groupCreateRequest, setGroupCreateRequest] = useState<{ mode: TunnelGroupMode; requestKey: number; exitStrategy?: ExitGroupStrategy } | null>(null);
+  const [linkWizardOpen, setLinkWizardOpen] = useState(false);
+  const [wizardRelayMode, setWizardRelayMode] = useState<"failover" | "aggregate" | null>(null);
+  const [pendingGroupCreate, setPendingGroupCreate] = useState<{ mode: "failover" | "entry" | "exit"; exitStrategy?: ExitGroupStrategy } | null>(null);
   const [deleteTunnel, setDeleteTunnel] = useState<any | null>(null);
   const [connStatsTunnel, setConnStatsTunnel] = useState<{ id: number; name: string } | null>(null);
   const [parallelStreamsTunnel, setParallelStreamsTunnel] = useState<{ id: number; name: string; parallelStreams?: unknown } | null>(null);
@@ -3986,7 +3992,11 @@ function TunnelsContent() {
   const canCreateChain = !!hosts?.length && hosts.length >= 2 && availableChainForwardTypes.length > 0;
   const canCreateGroup = !!hosts?.length && hosts.length >= 1;
   const activeSectionCreatesGroup = activeSection === "ports" || activeSection === "groups" || activeSection === "entries" || activeSection === "exits";
-  const canCreateActive = activeSection === "tunnels"
+  // 「按目标新建」向导默认关（系统设置里开），懂行的人不需要它。
+  const linkWizardEnabled = !!(systemSettings as any)?.linkWizardEnabled;
+  const canCreateActive = activeSection === "routes"
+    ? linkWizardEnabled && canCreateGroup
+    : activeSection === "tunnels"
     ? canCreateTunnel
     : activeSection === "chains"
       ? canCreateChain
@@ -4007,7 +4017,55 @@ function TunnelsContent() {
         ? (availableChainForwardTypes.length === 0 ? "暂无可用转发工具" : "当前主机或转发工具不支持转发链")
         : undefined;
 
+  // 「按目标新建」选好以后：切到对应页签，打开它的新建框，能预填的替用户填好。
+  const handleLinkWizardCreate = (action: LinkWizardAction) => {
+    if (action.type === "rule") {
+      setTopologyLocation("/rules?create=local");
+      return;
+    }
+    if (action.type === "group") {
+      setActiveSection(action.mode === "failover" ? "groups" : action.mode === "entry" ? "entries" : "exits");
+      setPendingGroupCreate({ mode: action.mode, exitStrategy: action.exitStrategy });
+      return;
+    }
+    if (!canCreateTunnel) return;
+    setActiveSection("tunnels");
+    resetTunnelCreateForm();
+    setWizardRelayMode(action.relayMode === "chain" ? null : action.relayMode);
+    setShowDialog(true);
+  };
+  /*
+    向导选的中转方式（主备 / 单连接叠加）要两台中转才选得上，没加中转之前编辑器会把它退回
+    「链路中转」。所以先记着，等加够两台中转再替用户切过去；关掉对话框就忘掉。
+  */
+  useEffect(() => {
+    if (!showDialog) {
+      if (wizardRelayMode) setWizardRelayMode(null);
+      return;
+    }
+    // 中转台数和编辑器（MultiHopEditor 的 relayCount）同一个算法：用入口组 / 出口组时首尾不占位。
+    const relayCount = (form.hopHostIds || []).length - (form.entryGroupId ? 0 : 1) - (form.exitGroupId ? 0 : 1);
+    if (!wizardRelayMode || relayCount < 2) return;
+    if (wizardRelayMode === "aggregate" ? !tunnelRelayAggregateSupported(form.mode) : !tunnelRelayFailoverSupported(form.mode)) return;
+    setForm((prev) => ({ ...prev, relayMode: wizardRelayMode }));
+    setWizardRelayMode(null);
+  }, [showDialog, wizardRelayMode, form.hopHostIds, form.mode, form.entryGroupId, form.exitGroupId]);
+  /*
+    向导要新建组时先切页签，等那个页签的数据读完再发请求：页签内容在「读取中 → 列表」时会按
+    SectionTransition 的 key 重新挂一次，早发的请求打开的框会跟着旧的那份一起被卸掉。
+  */
+  useEffect(() => {
+    if (!pendingGroupCreate || forwardGroupsLoading) return;
+    const section = pendingGroupCreate.mode === "failover" ? "groups" : pendingGroupCreate.mode === "entry" ? "entries" : "exits";
+    if (activeSection !== section) return;
+    setGroupCreateRequest({ ...pendingGroupCreate, requestKey: Date.now() });
+    setPendingGroupCreate(null);
+  }, [pendingGroupCreate, forwardGroupsLoading, activeSection]);
   const openCreateTypeDialog = () => {
+    if (activeSection === "routes") {
+      if (linkWizardEnabled) setLinkWizardOpen(true);
+      return;
+    }
     if (activeSectionCreatesGroup) {
       if (activeSection === "ports" ? !canCreatePort : !canCreateGroup) return;
       setGroupCreateRequest({
@@ -4369,15 +4427,18 @@ function TunnelsContent() {
             {linkSearchStats.filtered} / {linkSearchStats.total} {linkSearchStats.unit}
           </span>
         ) : null}
-        <Button
-          className="fx-row-action ml-auto h-9 shrink-0 gap-1.5 rounded-full px-3.5"
-          disabled={!canCreateActive}
-          title={createDisabledTitle}
-          onClick={openCreateTypeDialog}
-        >
-          <Plus className="h-4 w-4" />
-          新建链路
-        </Button>
+        {/* 「线路总览」本身不新建东西；系统设置里打开了向导才在这里放「按目标新建」。 */}
+        {activeSection === "routes" && !linkWizardEnabled ? null : (
+          <Button
+            className="fx-row-action ml-auto h-9 shrink-0 gap-1.5 rounded-full px-3.5"
+            disabled={!canCreateActive}
+            title={createDisabledTitle}
+            onClick={openCreateTypeDialog}
+          >
+            <Plus className="h-4 w-4" />
+            {activeSection === "routes" ? "按目标新建" : "新建链路"}
+          </Button>
+        )}
       </div>
 
 
@@ -4562,6 +4623,7 @@ function TunnelsContent() {
               hideHeaderActions
               searchQuery={normalizedLinkSearchQuery}
               createRequestKey={groupCreateRequest?.mode === "port" ? groupCreateRequest.requestKey : undefined}
+              onCreateRequestConsumed={() => setGroupCreateRequest(null)}
             />
           </SectionTransition>
         </TabsContent>
@@ -4622,6 +4684,7 @@ function TunnelsContent() {
               hideHeaderActions
               searchQuery={normalizedLinkSearchQuery}
               createRequestKey={groupCreateRequest?.mode === "failover" ? groupCreateRequest.requestKey : undefined}
+              onCreateRequestConsumed={() => setGroupCreateRequest(null)}
             />
           </SectionTransition>
         </TabsContent>
@@ -4638,6 +4701,7 @@ function TunnelsContent() {
               hideHeaderActions
               searchQuery={normalizedLinkSearchQuery}
               createRequestKey={groupCreateRequest?.mode === "entry" ? groupCreateRequest.requestKey : undefined}
+              onCreateRequestConsumed={() => setGroupCreateRequest(null)}
             />
           </SectionTransition>
         </TabsContent>
@@ -4664,6 +4728,8 @@ function TunnelsContent() {
               hideHeaderActions
               searchQuery={normalizedLinkSearchQuery}
               createRequestKey={groupCreateRequest?.mode === "exit" ? groupCreateRequest.requestKey : undefined}
+              onCreateRequestConsumed={() => setGroupCreateRequest(null)}
+              createPreset={groupCreateRequest?.mode === "exit" ? { exitStrategy: groupCreateRequest.exitStrategy } : undefined}
             />
           </SectionTransition>
         </TabsContent>
@@ -4690,6 +4756,12 @@ function TunnelsContent() {
 
       <TunnelConnStatsDialog tunnel={connStatsTunnel} onClose={() => setConnStatsTunnel(null)} />
       <TunnelParallelStreamsDialog tunnel={parallelStreamsTunnel} onClose={() => setParallelStreamsTunnel(null)} />
+      <LinkWizardDialog
+        open={linkWizardOpen}
+        onOpenChange={setLinkWizardOpen}
+        onCreate={handleLinkWizardCreate}
+        forwardXAvailable={forwardProtocolSettings.forwardx !== false}
+      />
       <Dialog open={!!deleteTunnel} onOpenChange={(open) => !open && setDeleteTunnel(null)}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>

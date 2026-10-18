@@ -1926,6 +1926,8 @@ export const systemRouter = router({
       tunnelRuntimeDefault: all.tunnelRuntimeDefault === "gost" ? "gost" : "forwardx",
       ruleSwitchBridgeHours: normalizeRuleSwitchBridgeHours(all[RULE_SWITCH_BRIDGE_HOURS_SETTING]),
       portAccessLimitsEnabled: portAccessLimitsEnabled(all[PORT_ACCESS_LIMITS_ENABLED_SETTING]),
+      // 链路管理「线路总览」里的「按目标新建」向导，默认关：懂行的人不需要它。
+      linkWizardEnabled: all.linkWizardEnabled === "true",
       githubAccelerator: {
         enabled: all.githubAcceleratorEnabled === "true",
         url: all.githubAcceleratorUrl ?? "",
@@ -2161,6 +2163,7 @@ export const systemRouter = router({
         tunnelRuntimeDefault: z.enum(["forwardx", "gost"]).optional(),
         ruleSwitchBridgeHours: z.number().int().min(0).max(MAX_RULE_SWITCH_BRIDGE_HOURS).optional(),
         portAccessLimitsEnabled: z.boolean().optional(),
+        linkWizardEnabled: z.boolean().optional(),
         githubAccelerator: z.object({
           enabled: z.boolean().optional(),
           url: githubAcceleratorUrlSchema.optional(),
@@ -2388,6 +2391,10 @@ export const systemRouter = router({
         // 只影响之后的换隧道；已经留着的桥接按当时定的到期时间走。
         await db.setSetting(RULE_SWITCH_BRIDGE_HOURS_SETTING, String(hours));
         console.info(`[Settings] rule switch bridge hours set to ${hours}`);
+      }
+      if (input.linkWizardEnabled !== undefined) {
+        await db.setSetting("linkWizardEnabled", input.linkWizardEnabled ? "true" : "false");
+        console.info(`[Settings] link wizard ${input.linkWizardEnabled ? "enabled" : "disabled"}`);
       }
       if (input.portAccessLimitsEnabled !== undefined) {
         // 下一轮心跳生效：打开时按用户的单 IP / 连接数下发，关掉时下发空快照撤掉。
