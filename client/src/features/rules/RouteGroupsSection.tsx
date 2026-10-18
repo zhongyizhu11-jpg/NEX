@@ -20,8 +20,8 @@ import { RouteGroupSheet } from "./RouteGroupSheet";
   链路管理页的「线路组」页签：所有开了线路组的转发规则一处看全。
 
   规则页上线路组藏在每条规则的徽标后面，要一条条点；这里一行一条：入口在哪台机、哪种策略、
-  几条路径各经过谁、现在走哪条。点「查看」进的是和规则页同一块线路面板。新建和编辑仍在规则
-  的编辑框里（线路组是规则的一部分，不是独立对象），这里只给一条去那儿的路。
+  几条路径各经过谁、现在走哪条。点「查看」进的是和规则页同一块线路面板。线路组是规则的一部分，
+  不是独立对象，所以「编辑」打开的就是那条规则的编辑框（/rules?edit=<id>），改完回来接着看。
 */
 
 type RouteGroupRow = {
@@ -121,7 +121,8 @@ export function RouteGroupsSection({ searchQuery = "", isAdmin = false }: { sear
                   </li>
                 ))}
               </ul>
-              <div className="flex justify-end">
+              <div className="flex justify-end gap-2">
+                <Button type="button" variant="ghost" size="sm" onClick={() => setLocation(`/rules?edit=${Number(row.rule.id)}`)}>编辑</Button>
                 <Button type="button" variant="outline" size="sm" onClick={() => setOpenRuleId(Number(row.rule.id))}>查看</Button>
               </div>
             </CardContent>
@@ -176,7 +177,10 @@ export function RouteGroupsSection({ searchQuery = "", isAdmin = false }: { sear
                       ) : null}
                     </TableCell>
                     <TableCell className="py-3 text-right">
-                      <Button type="button" variant="outline" size="sm" onClick={() => setOpenRuleId(Number(row.rule.id))}>查看</Button>
+                      <div className="flex justify-end gap-1.5">
+                        <Button type="button" variant="ghost" size="sm" onClick={() => setLocation(`/rules?edit=${Number(row.rule.id)}`)}>编辑</Button>
+                        <Button type="button" variant="outline" size="sm" onClick={() => setOpenRuleId(Number(row.rule.id))}>查看</Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -200,7 +204,7 @@ export function RouteGroupsSection({ searchQuery = "", isAdmin = false }: { sear
           failoverPinnedUntil: pinUntilSeconds(durationSeconds),
         })}
         onUnpin={() => openRule && pinMutation.mutate({ id: Number(openRule.rule.id), failoverPinnedIndex: null, failoverPinnedUntil: null })}
-        onEdit={() => { setOpenRuleId(null); setLocation("/rules"); }}
+        onEdit={() => { const id = openRuleId; setOpenRuleId(null); if (id) setLocation(`/rules?edit=${id}`); }}
       />
     </>
   );

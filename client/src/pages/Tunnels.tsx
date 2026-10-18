@@ -5,7 +5,7 @@ import EmptyState from "@/components/EmptyState";
 import TunnelConnStatsDialog from "@/components/tunnels/TunnelConnStatsDialog";
 import TunnelParallelStreamsDialog from "@/components/tunnels/TunnelParallelStreamsDialog";
 import { describeTunnelParallelStreams, normalizeTunnelParallelStreams, tunnelParallelStreamsUnavailableReason } from "@shared/tunnelParallelStreams";
-import { useLocation } from "wouter";
+import { useLocation, useSearch } from "wouter";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
 import { HeaderStatusChips } from "@/components/HeaderStatusChips";
 import { Sparkline } from "@/components/charts/Sparkline";
@@ -28,6 +28,7 @@ import { hostIpv6Address, hostPrivateAddress, normalizeConnectHostForHost, sameA
 import { addressKey } from "@/lib/multiHopAddress";
 import SectionTransition from "@/components/SectionTransition";
 import { RouteGroupsSection } from "@/features/rules/RouteGroupsSection";
+import { LinkOverviewSection } from "@/features/links/LinkOverviewSection";
 import { loadReactGlobe, prefetchReactGlobe } from "@/lib/reactGlobeLoader";
 import { escapeTooltipHtml, hostGeoCoordinate } from "@/lib/hostGeo";
 import DashboardLayout from "@/components/DashboardLayout";
@@ -819,7 +820,7 @@ const TUNNEL_SECTION_ITEMS = [
   { value: "groups", label: "转发组", icon: ShieldCheck },
   { value: "entries", label: "入口组", icon: LogIn },
   { value: "exits", label: "出口组", icon: LogOut },
-  { value: "routes", label: "线路组", icon: Waypoints },
+  { value: "routes", label: "线路总览", icon: Waypoints },
 ] as const satisfies readonly SlidingTabItem<TunnelSection>[];
 
 const TUNNEL_SECTION_STORAGE_KEY = "forwardx.tunnels.section";
@@ -2240,11 +2241,13 @@ function TunnelsContent() {
     }
   }));
   const [, setTopologyLocation] = useLocation();
+  const linkLocation = useSearch();
   const [showCreateTypeDialog, setShowCreateTypeDialog] = useState(false);
   const [selectedCreateType, setSelectedCreateType] = useState<LinkCreateType>("chain");
   const [chainCreateForm, setChainCreateForm] = useState<ChainCreateForm>(defaultChainCreateForm);
   const [chainAdvancedOpen, setChainAdvancedOpen] = useState(false);
   const [chainEditRequest, setChainEditRequest] = useState<{ id: number; requestKey: number } | null>(null);
+  const [groupEditRequest, setGroupEditRequest] = useState<{ id: number; requestKey: number } | null>(null);
   const [groupCreateRequest, setGroupCreateRequest] = useState<{ mode: TunnelGroupMode; requestKey: number } | null>(null);
   const [deleteTunnel, setDeleteTunnel] = useState<any | null>(null);
   const [connStatsTunnel, setConnStatsTunnel] = useState<{ id: number; name: string } | null>(null);
@@ -2727,6 +2730,30 @@ function TunnelsContent() {
     setListenPortExplicit(false);
     setTunnelAdvancedOpen(false);
   };
+
+  /*
+    /tunnels?tab=tunnels&edit=<隧道 id>：从「线路总览」直接打开这条隧道的编辑框。
+    隧道不一定在当前这一页里，所以按 id 单独取。
+  */
+  useEffect(() => {
+    const groupSection = activeSection === "groups" || activeSection === "entries" || activeSection === "exits";
+    if (activeSection !== "tunnels" && !groupSection) return;
+    const params = new URLSearchParams(window.location.search);
+    const editId = Number(params.get("edit") || 0);
+    if (!Number.isInteger(editId) || editId <= 0 || !hasResolvedHosts) return;
+    params.delete("edit");
+    const nextSearch = params.toString();
+    setTopologyLocation(`/tunnels${nextSearch ? `?${nextSearch}` : ""}`, { replace: true });
+    // 转发组、入口组、出口组交给对应页签里的 ForwardGroupsContent 去开（它有完整的组列表）。
+    if (groupSection) {
+      setGroupEditRequest({ id: editId, requestKey: Date.now() });
+      return;
+    }
+    void utils.tunnels.getById.fetch({ id: editId }).then((tunnel) => {
+      if (tunnel) openEdit(tunnel);
+      else toast.error("这条隧道不存在");
+    }, () => toast.error("读取隧道失败"));
+  }, [activeSection, hasResolvedHosts, linkLocation]);
 
   const openEdit = (tunnel: any) => {
     if (!isTunnelSupported(tunnel)) return;
@@ -4588,6 +4615,8 @@ function TunnelsContent() {
             <ForwardGroupsContent
               mode="failover"
               embedded
+              editRequest={groupEditRequest}
+              onEditRequestConsumed={() => setGroupEditRequest(null)}
               viewMode={groupViewMode}
               onViewModeChange={(nextViewMode) => handleChainViewModeChange(nextViewMode)}
               hideHeaderActions
@@ -4602,6 +4631,8 @@ function TunnelsContent() {
             <ForwardGroupsContent
               mode="entry"
               embedded
+              editRequest={groupEditRequest}
+              onEditRequestConsumed={() => setGroupEditRequest(null)}
               viewMode={groupViewMode}
               onViewModeChange={(nextViewMode) => handleChainViewModeChange(nextViewMode)}
               hideHeaderActions
@@ -4613,7 +4644,11 @@ function TunnelsContent() {
 
         <TabsContent value="routes" className="space-y-4">
           <SectionTransition transitionKey={`routes-${normalizedLinkSearchQuery || "all"}`}>
-            <RouteGroupsSection searchQuery={normalizedLinkSearchQuery} isAdmin={user?.role === "admin"} />
+            <div className="space-y-4">
+              <LinkOverviewSection searchQuery={normalizedLinkSearchQuery} />
+              <h3 className="pt-2 text-sm font-semibold">线路组</h3>
+              <RouteGroupsSection searchQuery={normalizedLinkSearchQuery} isAdmin={user?.role === "admin"} />
+            </div>
           </SectionTransition>
         </TabsContent>
 
@@ -4622,6 +4657,8 @@ function TunnelsContent() {
             <ForwardGroupsContent
               mode="exit"
               embedded
+              editRequest={groupEditRequest}
+              onEditRequestConsumed={() => setGroupEditRequest(null)}
               viewMode={groupViewMode}
               onViewModeChange={(nextViewMode) => handleChainViewModeChange(nextViewMode)}
               hideHeaderActions
