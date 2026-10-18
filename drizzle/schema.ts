@@ -1088,6 +1088,7 @@ export const tunnels = table("tunnels", {
   kernelPassthrough: boolean("kernelPassthrough").notNull().default(false),
   // 复制模式（2.3.449）：中转带宽叠加的隧道上，每一片都从两条中转各发一份，一条线路断了连接也不断。
   multipathReplicate: boolean("multipathReplicate").notNull().default(false),
+  parallelStreams: int("parallelStreams").notNull().default(1),
   blockHttp: boolean("blockHttp").notNull().default(false),
   blockSocks: boolean("blockSocks").notNull().default(false),
   blockTls: boolean("blockTls").notNull().default(false),

@@ -3,6 +3,8 @@ import { useFaultBundleExport } from "@/components/links/useFaultBundleExport";
 import { ResourceTrafficLine } from "@/components/links/ResourceTrafficLine";
 import EmptyState from "@/components/EmptyState";
 import TunnelConnStatsDialog from "@/components/tunnels/TunnelConnStatsDialog";
+import TunnelParallelStreamsDialog from "@/components/tunnels/TunnelParallelStreamsDialog";
+import { describeTunnelParallelStreams, normalizeTunnelParallelStreams, tunnelParallelStreamsUnavailableReason } from "@shared/tunnelParallelStreams";
 import { useLocation } from "wouter";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
 import { HeaderStatusChips } from "@/components/HeaderStatusChips";
@@ -2246,6 +2248,7 @@ function TunnelsContent() {
   const [groupCreateRequest, setGroupCreateRequest] = useState<{ mode: TunnelGroupMode; requestKey: number } | null>(null);
   const [deleteTunnel, setDeleteTunnel] = useState<any | null>(null);
   const [connStatsTunnel, setConnStatsTunnel] = useState<{ id: number; name: string } | null>(null);
+  const [parallelStreamsTunnel, setParallelStreamsTunnel] = useState<{ id: number; name: string; parallelStreams?: unknown } | null>(null);
   const setReplicateMutation = trpc.tunnels.setReplicate.useMutation({
     onSuccess: (result) => {
       void utils.tunnels.list.invalidate();
@@ -4044,6 +4047,15 @@ function TunnelsContent() {
           disabled: setReplicateMutation.isPending,
           onSelect: () => setReplicateMutation.mutate({ id: Number(tunnel.id), enabled: !tunnel.multipathReplicate }),
         }] : []),
+        ...(supported && !tunnelParallelStreamsUnavailableReason(tunnel, getTunnelHopIds(tunnel), getTunnelLoadBalanceExitNames(tunnel, undefined).length > 1 ? 2 : 1) ? [{
+          key: "parallel-streams",
+          label: normalizeTunnelParallelStreams(tunnel.parallelStreams) >= 2
+            ? `多路并发（${describeTunnelParallelStreams(tunnel.parallelStreams)}）`
+            : "多路并发",
+          ariaLabel: `设置隧道 ${tunnel.name} 的单连接多路并发：每条连接拆到几条并行连接上，突破按单条连接的限速`,
+          icon: <ArrowRightLeft className="h-3.5 w-3.5" />,
+          onSelect: () => setParallelStreamsTunnel({ id: Number(tunnel.id), name: String(tunnel.name || ""), parallelStreams: tunnel.parallelStreams }),
+        }] : []),
         {
           key: "fault-bundle",
           label: "导出故障包",
@@ -4640,6 +4652,7 @@ function TunnelsContent() {
       )}
 
       <TunnelConnStatsDialog tunnel={connStatsTunnel} onClose={() => setConnStatsTunnel(null)} />
+      <TunnelParallelStreamsDialog tunnel={parallelStreamsTunnel} onClose={() => setParallelStreamsTunnel(null)} />
       <Dialog open={!!deleteTunnel} onOpenChange={(open) => !open && setDeleteTunnel(null)}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>

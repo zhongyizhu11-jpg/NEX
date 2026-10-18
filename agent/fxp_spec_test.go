@@ -106,3 +106,22 @@ func TestFXPServerSignatureTracksMultipathChanges(t *testing.T) {
 		t.Fatal("replacing a relay front must change the signature")
 	}
 }
+
+// 单连接多路并发：面板把同一个出口重复 N 条腿（via = stream#1..N），入口各开一条连接。
+// 同一地址 + 同一 via 仍然算重复（面板把同一台中转列了两次）。
+func TestNormalizeFXPSpecKeepsParallelStreamLegsToTheSameExit(t *testing.T) {
+	spec := normalizeFXPSpec(fxpSpec{
+		Role:             "entry",
+		Key:              "k",
+		MultipathEnabled: true,
+		MultipathLegs: []fxpMultipathLeg{
+			{Host: "10.0.0.9", Port: 5000, Via: "stream#1"},
+			{Host: "10.0.0.9", Port: 5000, Via: "stream#2"},
+			{Host: "10.0.0.9", Port: 5000, Via: "stream#3"},
+			{Host: "10.0.0.9", Port: 5000, Via: "stream#3"},
+		},
+	})
+	if !spec.MultipathEnabled || len(spec.MultipathLegs) != 3 {
+		t.Fatalf("expected 3 parallel legs to the same exit, got enabled=%v legs=%d", spec.MultipathEnabled, len(spec.MultipathLegs))
+	}
+}

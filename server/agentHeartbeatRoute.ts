@@ -149,6 +149,12 @@ import { agentActionIssueTracker, agentStatusOrderGuard, agentStatusOrderingKey 
 import { forwardGroupProbeTopologyKey, tunnelProbeTopologyKey } from "./probeTopology";
 import { resolveLocalForwardXTransportVersion, resolveRuleTrafficPortForHost } from "./agentRuntimeRuleState";
 import { isTunnelRelayAggregate, isTunnelRelayFailover, tunnelRelayCandidates, tunnelRelayUsesParallelRelays } from "@shared/tunnelRelay";
+import {
+  buildParallelStreamLegs,
+  normalizeTunnelParallelStreams,
+  tunnelParallelStreamsAgentsReady,
+  tunnelParallelStreamsUnavailableReason,
+} from "@shared/tunnelParallelStreams";
 import { normalizeExitGroupStrategy } from "@shared/exitStrategy";
 import { forwardXExitStrategy, gostExitSelector, shouldUseFastTunnelFailover } from "./tunnelExitStrategy";
 import {
@@ -3746,6 +3752,18 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         key: tunnelSecretSeed(tunnel),
       };
     };
+    // 单连接多路并发要看沿线每台主机的 Agent 版本；一次心跳里同一台只查一次。
+    const parallelStreamVersionCache = new Map<number, string>();
+    const parallelStreamAgentVersions = async (hostIds: number[]) => {
+      const ids = Array.from(new Set(hostIds.filter((id) => Number.isInteger(id) && id > 0)));
+      const missing = ids.filter((id) => !parallelStreamVersionCache.has(id));
+      if (missing.length > 0) {
+        const rows = await db.getHostsByIds(missing) as any[];
+        for (const id of missing) parallelStreamVersionCache.set(id, "");
+        for (const row of rows) parallelStreamVersionCache.set(Number(row.id), String(row.agentVersion || ""));
+      }
+      return ids.map((id) => parallelStreamVersionCache.get(id) || "");
+    };
     const forwardXEntryRoutes = async (rule: any, tunnel: any) => {
       const routes: Array<{ hostId: number; host: string; port: number; udpPort: number; key: string }> = [];
       const hops = tunnelHopsByTunnelId.get(Number(tunnel.id));
@@ -6214,6 +6232,19 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
                   via: `relay#${Number((route as any).hostId || 0)}`,
                 }))
               : [];
+            // 单连接多路并发：没有并排中转时，把同一个出口（或链的第一跳）重复 N 条腿。
+            // 沿线有 Agent 太旧就不拆，按单路下发（原来的「每条连接各走各的」）。
+            if (!relayAggregate && normalizeTunnelParallelStreams((tunnel as any).parallelStreams) >= 2) {
+              const hopsForStreams = tunnelHopsByTunnelId.get(Number(tunnel.id)) || [];
+              if (!tunnelParallelStreamsUnavailableReason(tunnel, hopsForStreams, entryRoutes.length)) {
+                const peerIds = [Number(tunnel.exitHostId), ...hopsForStreams.map((hop: any) => Number(hop?.hostId || 0))]
+                  .filter((id) => id !== Number(host.id));
+                const peerVersions = await parallelStreamAgentVersions(peerIds);
+                if (tunnelParallelStreamsAgentsReady(String((host as any).agentVersion || ""), peerVersions)) {
+                  multipathLegs.push(...buildParallelStreamLegs(entryRoute, (tunnel as any).parallelStreams));
+                }
+              }
+            }
             const fxpSpec = await applyForwardXTransport({
               role: "entry",
               tunnelId: tunnel.id,

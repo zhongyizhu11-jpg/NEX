@@ -36,6 +36,13 @@ import {
   tunnelRelayAggregateSupported,
   tunnelRelayFailoverSupported,
 } from "../../shared/tunnelRelay";
+import {
+  normalizeTunnelParallelStreams,
+  TUNNEL_PARALLEL_STREAMS_ENTRY_AGENT_VERSION,
+  TUNNEL_PARALLEL_STREAMS_MAX,
+  TUNNEL_PARALLEL_STREAMS_PEER_AGENT_VERSION,
+  tunnelParallelStreamsUnavailableReason,
+} from "../../shared/tunnelParallelStreams";
 import { normalizeExitGroupStrategy } from "../../shared/exitStrategy";
 import { assertMimicEnvironment } from "../mimicEnvironment";
 import {
@@ -1917,6 +1924,42 @@ export const tunnelsRouter = router({
           await pushTunnelEndpointRefresh({ ...(tunnel as any), multipathReplicate: input.enabled }, "tunnel-replicate-updated", { urgent: true });
         }
         return { id: input.id, multipathReplicate: input.enabled };
+      })),
+
+    /**
+     * 单连接多路并发（shared/tunnelParallelStreams.ts）：直连 / 链式的 NEX V1 隧道，入口把每条客户端连接
+     * 拆到 N 条并行连接上，出口重组 —— 线路按单条 TCP 限速时，一条连接也能跑到 N 倍。
+     * 沿线有 Agent 低于 2.2.194 时照常按单路下发（不报错），升级后自动生效。
+     */
+    setParallelStreams: protectedProcedure
+      .input(z.object({ id: z.number().int().positive(), streams: z.number().int().min(1).max(TUNNEL_PARALLEL_STREAMS_MAX) }))
+      .mutation(async ({ input, ctx }) => withKeyedTaskLock(`tunnel:${input.id}`, async () => {
+        const tunnel = await db.getTunnelById(input.id);
+        if (!tunnel) throw new Error("隧道不存在");
+        if (ctx.user.role !== "admin" && tunnel.userId !== ctx.user.id) throw new Error("无权操作此隧道");
+        const streams = normalizeTunnelParallelStreams(input.streams);
+        if (streams >= 2) {
+          const hops = await hopRepo.getTunnelHops(Number(tunnel.id));
+          const exitNodes = await hopRepo.getTunnelExitNodesByTunnelIds([Number(tunnel.id)]);
+          const reason = tunnelParallelStreamsUnavailableReason(tunnel, hops, 1 + (hops.length < 3 ? (exitNodes as any[]).length : 0));
+          if (reason) throw new Error(reason);
+        }
+        if (normalizeTunnelParallelStreams((tunnel as any).parallelStreams) !== streams) {
+          await db.updateTunnel(input.id, { parallelStreams: streams } as any);
+          await pushTunnelEndpointRefresh({ ...(tunnel as any), parallelStreams: streams }, "tunnel-parallel-streams-updated", { urgent: true });
+        }
+        // 哪几台的 Agent 还太旧（这时照常按单路跑）：给界面提示「升级后生效」。
+        const entryHostId = Number(tunnel.entryHostId);
+        const hostIds = Array.from(new Set([entryHostId, Number(tunnel.exitHostId), ...((await hopRepo.getTunnelHops(Number(tunnel.id))) as any[]).map((hop) => Number(hop.hostId))]))
+          .filter((id) => id > 0);
+        const hosts = await Promise.all(hostIds.map(async (id) => ({ id, host: await db.getHostById(id) as any })));
+        const outdated = hosts
+          .filter(({ id, host }) => !isAgentVersionAtLeast(
+            String(host?.agentVersion || ""),
+            id === entryHostId ? TUNNEL_PARALLEL_STREAMS_ENTRY_AGENT_VERSION : TUNNEL_PARALLEL_STREAMS_PEER_AGENT_VERSION,
+          ))
+          .map(({ id, host }) => String(host?.name || host?.ip || `主机 ${id}`));
+        return { id: input.id, parallelStreams: streams, outdatedHosts: streams >= 2 ? outdated.slice(0, 5) : [] };
       })),
 
     delete: protectedProcedure

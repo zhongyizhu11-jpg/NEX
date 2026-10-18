@@ -688,6 +688,8 @@ const tables: TableDef[] = [
       // 内核直通：V2 隧道两端都是内核 WireGuard 时，普通规则直接 iptables DNAT 进 nexwg，不经 FXP。默认关。
       c("kernelPassthrough", "bool", { notNull: true, default: false }),
       c("multipathReplicate", "bool", { notNull: true, default: false }),
+      // 单连接多路并发（shared/tunnelParallelStreams.ts）：入口把一条连接拆到 N 条并行连接，出口重组。1 = 单路。
+      c("parallelStreams", "int", { notNull: true, default: 1 }),
       c("blockHttp", "bool", { notNull: true, default: false }), c("blockSocks", "bool", { notNull: true, default: false }),
       c("blockTls", "bool", { notNull: true, default: false }), c("loadBalanceEnabled", "bool", { notNull: true, default: false }),
       c("loadBalanceStrategy", "varchar", { length: 32, notNull: true, default: "round_robin" }),

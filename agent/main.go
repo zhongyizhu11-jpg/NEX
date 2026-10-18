@@ -10116,7 +10116,10 @@ func normalizeFXPMultipath(spec fxpSpec) fxpSpec {
 		if strings.TrimSpace(leg.Key) == "" {
 			leg.Key = spec.Key
 		}
-		endpoint := net.JoinHostPort(leg.Host, strconv.Itoa(leg.Port))
+		// 同一地址 + 同一 via 才算重复：单连接多路并发（面板 2.3.452 起）会把同一个出口
+		// 重复几条腿、各带 stream#N，入口对它各开一条连接。老 Agent 按地址去重，
+		// 这几条会收成一条 —— 也就是退回普通单路，不会出错。
+		endpoint := net.JoinHostPort(leg.Host, strconv.Itoa(leg.Port)) + "|" + leg.Via
 		if seen[endpoint] {
 			continue
 		}
