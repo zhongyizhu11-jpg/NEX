@@ -125,3 +125,27 @@ func TestNormalizeFXPSpecKeepsParallelStreamLegsToTheSameExit(t *testing.T) {
 		t.Fatalf("expected 3 parallel legs to the same exit, got enabled=%v legs=%d", spec.MultipathEnabled, len(spec.MultipathLegs))
 	}
 }
+
+// 出口组「按权重」：Agent 不能把 weighted 规整成轮流，权重变了 FXP 要重启拿新配置；
+// 没写权重的规则签名不变，升级 Agent 不会因此重启。
+func TestFXPSpecWeightedExitStrategy(t *testing.T) {
+	base := fxpSpec{
+		Role: "entry", RuleID: 7, ListenPort: 30001, Protocol: "tcp", ExitHost: "203.0.113.1", ExitPort: 40001, Key: "k",
+		ExitStrategy: "weighted",
+		Exits:        []fxpExitEndpoint{{Host: "203.0.113.1", Port: 40001}, {Host: "203.0.113.2", Port: 40001}},
+	}
+	if got := normalizeFXPSpec(base).ExitStrategy; got != "weighted" {
+		t.Fatalf("weighted 被规整成了 %q", got)
+	}
+	plain := fxpServerSignature(normalizeFXPSpec(base))
+	weighted := base
+	weighted.Exits = []fxpExitEndpoint{{Host: "203.0.113.1", Port: 40001, Weight: 5}, {Host: "203.0.113.2", Port: 40001, Weight: 3}}
+	five := fxpServerSignature(normalizeFXPSpec(weighted))
+	if plain == five {
+		t.Fatal("写了权重签名却没变，FXP 拿不到新权重")
+	}
+	weighted.Exits = []fxpExitEndpoint{{Host: "203.0.113.1", Port: 40001, Weight: 5}, {Host: "203.0.113.2", Port: 40001, Weight: 2}}
+	if fxpServerSignature(normalizeFXPSpec(weighted)) == five {
+		t.Fatal("权重变了签名却没变")
+	}
+}

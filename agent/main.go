@@ -2995,6 +2995,8 @@ type fxpExitEndpoint struct {
 	UDPPort int    `json:"udpPort,omitempty"`
 	Key     string `json:"key,omitempty"`
 	PeerID  string `json:"peerId,omitempty"`
+	// Weight 给出口策略 weighted 用，原样交给 FXP；没写按 1 算。
+	Weight int `json:"weight,omitempty"`
 }
 
 type fxpUDPTarget struct {
@@ -10045,7 +10047,7 @@ func normalizeFXPSpec(spec fxpSpec) fxpSpec {
 	spec.ListenHost = strings.TrimSpace(spec.ListenHost)
 	spec.ExitHost = strings.TrimSpace(spec.ExitHost)
 	switch strings.ToLower(strings.TrimSpace(spec.ExitStrategy)) {
-	case "fallback", "random", "ip_hash":
+	case "fallback", "random", "ip_hash", "weighted":
 		spec.ExitStrategy = strings.ToLower(strings.TrimSpace(spec.ExitStrategy))
 	default:
 		spec.ExitStrategy = "round_robin"
@@ -10209,6 +10211,10 @@ func fxpServerSignature(spec fxpSpec) string {
 	}
 	for _, exit := range spec.Exits {
 		parts = append(parts, strings.TrimSpace(exit.Host), strconv.Itoa(exit.Port), strconv.Itoa(exit.UDPPort), strings.TrimSpace(exit.Key), strings.TrimSpace(exit.PeerID))
+		// 权重只在写了时进签名：不用 weighted 的规则签名和旧版一样，升级不重启 FXP。
+		if exit.Weight > 0 {
+			parts = append(parts, "w"+strconv.Itoa(exit.Weight))
+		}
 	}
 	for _, target := range spec.UDPTargets {
 		parts = append(parts, strconv.Itoa(target.RuleID), strings.TrimSpace(target.TargetIP), strconv.Itoa(target.TargetPort))

@@ -110,6 +110,7 @@ import {
   YAxis,
 } from "recharts";
 import { MAX_FORWARD_GROUP_MEMBERS } from "@shared/forwardGroup";
+import { hostBandwidthHintMbps } from "@shared/linkWeights";
 import { describeGroupRoutePolicy, type GroupRoutePolicyOptions } from "@shared/routePolicy";
 import { LinkTestProbeView, parseLinkTestMessage, type LinkTestPlannedSegment } from "@/components/LinkTestLatencySummary";
 import { BandwidthAggregationSummary } from "@/components/BandwidthAggregationSummary";
@@ -131,6 +132,7 @@ import {
 } from "@shared/forwardTypes";
 import {
   EXIT_GROUP_STRATEGY_LABELS,
+  exitGroupWeights,
   normalizeExitGroupStrategy,
   type ExitGroupStrategy,
 } from "@shared/exitStrategy";
@@ -2442,7 +2444,9 @@ export function ForwardGroupsContent({
                       ? "仅使用顺序第一台已启用主机。"
                       : form.exitStrategy === "fallback"
                         ? "按顺序优先使用主出口，故障时切换到下一台。"
-                        : "按当前策略为新连接选择已启用的出口主机。"}
+                        : form.exitStrategy === "weighted"
+                          ? exitWeightHint(form.members, hostById)
+                          : "按当前策略为新连接选择已启用的出口主机。"}
                   </p>
                 </div>
               </FormField>
@@ -3088,4 +3092,22 @@ export default function ForwardGroupsPage() {
       <ForwardGroupsContent />
     </DashboardLayout>
   );
+}
+
+/**
+ * 「按权重」的出口组：把按线路带宽算出来的份数直接写给用户看（500M · 300M → 5:3）。
+ * 算法和下发时同一个（shared/exitStrategy.ts 的 exitGroupWeights），这里看到的就是实际分法。
+ */
+function exitWeightHint(members: MemberForm[], hostById: Map<number, any>) {
+  const hosts = members
+    .filter((member) => member.isEnabled && Number(member.hostId || 0) > 0)
+    .map((member) => hostById.get(Number(member.hostId)))
+    .filter(Boolean);
+  if (hosts.length < 2) return "按每台出口的线路带宽分新连接，带宽大的多分。至少要两台出口。";
+  const bandwidths = hosts.map((host: any) => hostBandwidthHintMbps(host));
+  const unknown = hosts.filter((_: any, index: number) => bandwidths[index] <= 0).map((host: any) => String(host.name || host.id));
+  if (unknown.length > 0) return `${unknown.join("、")} 还不知道带宽（主机设置里填「线路带宽」），现在按平均分。`;
+  const weights = exitGroupWeights("weighted", bandwidths);
+  const sizes = bandwidths.map((value) => `${value}M`).join(" · ");
+  return weights ? `按线路带宽分新连接：${sizes} → ${weights.join(":")}。` : `几台带宽一样（${sizes}），等于轮流。`;
 }

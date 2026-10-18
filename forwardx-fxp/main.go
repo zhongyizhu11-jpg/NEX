@@ -325,7 +325,10 @@ type exitEndpointSelector struct {
 	states   []*fxpEndpointState
 	strategy string
 	next     int
-	mu       sync.Mutex
+	// current 是 weighted 策略的平滑加权轮询计数（nginx 那套）：权重 5:3 时排成
+	// 交错的序列，而不是先连着给 5 个、再连着给 3 个。
+	current []int
+	mu      sync.Mutex
 	// probed 表示有 TCP 探测在盯这些端点；UDP 那条路就不再拿「地址解析成功」
 	// 去覆盖探测得出的健康结论。
 	probed atomic.Bool
@@ -381,7 +384,7 @@ func newListenerConnGates(cfg config) *listenerConnGates {
 // normalizeExitEndpoints 去重、补默认值，丢掉无效端点。选择器和拨号超时都按它算。
 func normalizeExitEndpoints(exits []exitEndpoint, fallback exitEndpoint) []exitEndpoint {
 	endpoints := make([]exitEndpoint, 0, len(exits)+1)
-	seen := map[string]bool{}
+	seen := map[string]int{}
 	add := func(endpoint exitEndpoint) {
 		endpoint.Host = strings.TrimSpace(endpoint.Host)
 		if endpoint.UDPPort <= 0 {
@@ -393,11 +396,18 @@ func normalizeExitEndpoints(exits []exitEndpoint, fallback exitEndpoint) []exitE
 		if endpoint.Host == "" || endpoint.Port <= 0 || endpoint.Port > 65535 || endpoint.UDPPort <= 0 || endpoint.UDPPort > 65535 {
 			return
 		}
+		if endpoint.Weight < 0 {
+			endpoint.Weight = 0
+		}
 		key := endpoint.Host + ":" + strconv.Itoa(endpoint.Port) + ":" + strconv.Itoa(endpoint.UDPPort) + ":" + endpoint.Key
-		if seen[key] {
+		if at, ok := seen[key]; ok {
+			// 面板会把首选出口在 exits 里再列一遍并带上权重；fallback 本身没有权重字段。
+			if endpoints[at].Weight == 0 {
+				endpoints[at].Weight = endpoint.Weight
+			}
 			return
 		}
-		seen[key] = true
+		seen[key] = len(endpoints)
 		endpoints = append(endpoints, endpoint)
 	}
 	add(fallback)
@@ -417,6 +427,7 @@ func newExitEndpointSelector(exits []exitEndpoint, fallback exitEndpoint, strate
 		endpoints: endpoints,
 		states:    states,
 		strategy:  normalizeExitStrategy(strategy),
+		current:   make([]int, len(endpoints)),
 	}
 }
 
@@ -574,9 +585,35 @@ func (s *exitEndpointSelector) pick(excluded map[int]bool, selectionKeys ...stri
 			return s.endpoints[index], index, true
 		}
 	}
+	if s.strategy == "weighted" {
+		index := s.pickWeighted(candidates)
+		return s.endpoints[index], index, true
+	}
 	index := candidates[s.next%len(candidates)]
 	s.next = (s.next + 1) % 1000000
 	return s.endpoints[index], index, true
+}
+
+// pickWeighted 是平滑加权轮询：每个候选的计数加上自己的权重，挑最大的，再把它减去总权重。
+// 只在候选里算：坏了的出口这一轮不加计数，恢复后也不会一口气补发欠它的连接。调用方持锁。
+func (s *exitEndpointSelector) pickWeighted(candidates []int) int {
+	if len(s.current) != len(s.endpoints) {
+		s.current = make([]int, len(s.endpoints))
+	}
+	total, best := 0, -1
+	for _, index := range candidates {
+		weight := s.endpoints[index].Weight
+		if weight <= 0 {
+			weight = 1
+		}
+		total += weight
+		s.current[index] += weight
+		if best < 0 || s.current[index] > s.current[best] {
+			best = index
+		}
+	}
+	s.current[best] -= total
+	return best
 }
 
 func (s *exitEndpointSelector) markFailure(index int, err error) {

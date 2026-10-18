@@ -1,4 +1,5 @@
 import { LINK_SPREAD_LABELS } from "./linkTerms";
+import { proxyLoadBalanceWeights } from "./linkWeights";
 
 export const EXIT_GROUP_STRATEGIES = [
   "none",
@@ -6,6 +7,7 @@ export const EXIT_GROUP_STRATEGIES = [
   "round_robin",
   "random",
   "ip_hash",
+  "weighted",
 ] as const;
 
 export type ExitGroupStrategy = (typeof EXIT_GROUP_STRATEGIES)[number];
@@ -17,6 +19,7 @@ export const EXIT_GROUP_STRATEGY_LABELS: Record<ExitGroupStrategy, string> = {
   round_robin: `${LINK_SPREAD_LABELS.round_robin.label} - ${LINK_SPREAD_LABELS.round_robin.hint}`,
   random: `${LINK_SPREAD_LABELS.random.label} - ${LINK_SPREAD_LABELS.random.hint}`,
   ip_hash: `${LINK_SPREAD_LABELS.ip_hash.label} - ${LINK_SPREAD_LABELS.ip_hash.hint}`,
+  weighted: `${LINK_SPREAD_LABELS.weighted.label} - ${LINK_SPREAD_LABELS.weighted.hint}`,
 };
 
 export function normalizeExitGroupStrategy(value: unknown): ExitGroupStrategy {
@@ -28,4 +31,13 @@ export function normalizeExitGroupStrategy(value: unknown): ExitGroupStrategy {
 
 export function exitGroupUsesMultipleExits(value: unknown) {
   return normalizeExitGroupStrategy(value) !== "none";
+}
+
+/**
+ * 「按权重」时每个出口分几份：按出口主机的线路带宽（hostBandwidthHintMbps）算，500M / 300M → [5, 3]。
+ * 不是 weighted、只有一个出口、有一台不知道带宽或都一样时返回 null —— 这时就是轮流。
+ */
+export function exitGroupWeights(strategy: unknown, bandwidthsMbps: readonly number[]): number[] | null {
+  if (normalizeExitGroupStrategy(strategy) !== "weighted") return null;
+  return proxyLoadBalanceWeights(bandwidthsMbps);
 }

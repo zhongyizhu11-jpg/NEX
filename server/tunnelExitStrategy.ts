@@ -80,6 +80,10 @@ export function shouldUseFastTunnelFailover(exitCandidateCount: number, relayFai
   return relayFailover || Number(exitCandidateCount) > 1;
 }
 
+/**
+ * gost 和 nginx 没有一致的按权重选：gost 把出口按份数重复列（平滑加权轮询的顺序），再轮流选；
+ * nginx 直接写 weight=N。份数见 shared/exitStrategy.ts 的 exitGroupWeights。
+ */
 export function gostExitSelector(value: unknown) {
   const strategy = normalizeExitGroupStrategy(value);
   return {

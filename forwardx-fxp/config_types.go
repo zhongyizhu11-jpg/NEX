@@ -5,6 +5,8 @@ type exitEndpoint struct {
 	Port    int    `json:"port"`
 	UDPPort int    `json:"udpPort,omitempty"`
 	Key     string `json:"key,omitempty"`
+	// Weight 只在出口策略是 weighted 时用：新连接按它分。没写（旧面板）按 1 算。
+	Weight int `json:"weight,omitempty"`
 }
 
 // udpTarget is deliberately configured on the exit runtime. UDP direct packets
