@@ -1,4 +1,5 @@
 import { useLocation } from "wouter";
+import { useFaultBundleExport } from "@/components/links/useFaultBundleExport";
 import { MemberScheduleButton } from "@/components/links/MemberScheduleButton";
 import { describeMemberSchedule, groupModeSupportsMemberSchedule, memberEnabledIntent, parseMemberSchedule, type MemberActiveSchedule } from "@shared/memberSchedule";
 import { ResourceTrafficLine } from "@/components/links/ResourceTrafficLine";
@@ -94,6 +95,7 @@ import {
   Trash2,
   XCircle,
   Clock,
+  FileJson,
 } from "lucide-react";
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useReducedMotion } from "motion/react";
@@ -880,6 +882,7 @@ export function ForwardGroupsContent({
   searchQuery = "",
 }: ForwardGroupsContentProps) {
   const utils = trpc.useUtils();
+  const faultBundle = useFaultBundleExport();
   const [, setTopologyLocation] = useLocation();
   // Keep a same-scope fallback for older/database deployments where the
   // compact options projection can fail. An error should not masquerade as an
@@ -2103,6 +2106,14 @@ export function ForwardGroupsContent({
             icon: <Activity className="h-3.5 w-3.5" />,
             onSelect: () => setLatencyGroup({ id: Number(group.id), name: group.name }),
           }] : []),
+          {
+            key: "fault-bundle",
+            label: "导出故障包",
+            ariaLabel: `导出${resource} ${group.name} 的故障包（诊断结论、脱敏配置、沿线主机状态）`,
+            icon: <FileJson className="h-3.5 w-3.5" />,
+            disabled: faultBundle.pending,
+            onSelect: () => { void faultBundle.exportBundle("forwardGroup", Number(group.id)); },
+          },
           {
             key: "topology",
             label: "查看拓扑",

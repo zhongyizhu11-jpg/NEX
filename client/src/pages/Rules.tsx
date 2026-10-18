@@ -1,4 +1,5 @@
 import { copyTextToClipboard } from "@/lib/clipboard";
+import { useFaultBundleExport } from "@/components/links/useFaultBundleExport";
 import { FormField } from "@/components/ui/form-field";
 import EmptyState from "@/components/EmptyState";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
@@ -197,6 +198,7 @@ import {
   Globe,
   RotateCcw,
   Lock,
+  FileJson,
 } from "lucide-react";
 import type { GlobeMethods } from "react-globe.gl";
 import {
@@ -2012,6 +2014,7 @@ function RulesContent() {
   const search = useSearch();
   const isMobile = useIsMobile();
   const utils = trpc.useUtils();
+  const faultBundle = useFaultBundleExport();
   const [ruleProbeCacheRevision, setRuleProbeCacheRevision] = useState(0);
   const invalidatedRuleProbeIdsRef = useRef(new Set<number>());
   const invalidateRuleProbeStatuses = useCallback((ruleIds: Iterable<number> | undefined) => {
@@ -6922,6 +6925,14 @@ function RulesContent() {
             ariaLabel: `查看 ${rule.name} 的延迟`,
             icon: <Activity className="h-3.5 w-3.5" />,
             onSelect: () => setTrafficDetailRule({ id: rule.id, name: rule.name, isForwardChain: isForwardChainRule, probeMethod }),
+          },
+          {
+            key: "fault-bundle",
+            label: "导出故障包",
+            ariaLabel: `导出 ${rule.name} 的故障包（诊断结论、脱敏配置、沿线主机状态）`,
+            icon: <FileJson className="h-3.5 w-3.5" />,
+            disabled: faultBundle.pending,
+            onSelect: () => { void faultBundle.exportBundle("rule", Number(rule.id)); },
           },
           {
             key: "topology",

@@ -1,4 +1,5 @@
 import { FormField } from "@/components/ui/form-field";
+import { useFaultBundleExport } from "@/components/links/useFaultBundleExport";
 import { ResourceTrafficLine } from "@/components/links/ResourceTrafficLine";
 import EmptyState from "@/components/EmptyState";
 import TunnelConnStatsDialog from "@/components/tunnels/TunnelConnStatsDialog";
@@ -121,6 +122,7 @@ import {
   Trash2,
   Upload,
   XCircle,
+  FileJson,
 } from "lucide-react";
 import type { GlobeMethods } from "react-globe.gl";
 import { Fragment, lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type ReactNode } from "react";
@@ -2168,6 +2170,7 @@ function tunnelMatchesLinkSearch(
 function TunnelsContent() {
   const { user, loading: authLoading } = useAuth();
   const utils = trpc.useUtils();
+  const faultBundle = useFaultBundleExport();
   // 列表视图在手机宽度（Tailwind sm 以下）显示成卡片：只渲染看得见的那套，不再卡片 + 表格各渲染一份再藏一份。
   const isBelowSm = useMediaQuery("(max-width: 639px)");
   // The compact options query is preferred for the editors. Keep the older
@@ -4041,6 +4044,14 @@ function TunnelsContent() {
           disabled: setReplicateMutation.isPending,
           onSelect: () => setReplicateMutation.mutate({ id: Number(tunnel.id), enabled: !tunnel.multipathReplicate }),
         }] : []),
+        {
+          key: "fault-bundle",
+          label: "导出故障包",
+          ariaLabel: `导出隧道 ${tunnel.name} 的故障包（诊断结论、脱敏配置、沿线主机状态）`,
+          icon: <FileJson className="h-3.5 w-3.5" />,
+          disabled: faultBundle.pending,
+          onSelect: () => { void faultBundle.exportBundle("tunnel", Number(tunnel.id)); },
+        },
         {
           key: "topology",
           label: "查看拓扑",
