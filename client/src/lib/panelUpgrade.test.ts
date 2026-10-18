@@ -226,3 +226,24 @@ test("坏掉的标记不认：越界的 step、没有 step 的 progress 行", ()
   assert.equal(bad.label, "检查发布资产"); // 退回老办法（Starting panel 判完第 1 步）
   assert.equal(bad.steps.length, 4);
 });
+
+test("升级完成后的刷新截止时刻跨页面沿用，同一个任务刷过一次就不再刷", async () => {
+  const { resolvePanelUpgradeRefresh, markPanelUpgradeRefreshed, panelUpgradeJobKey, readPanelUpgradeRefresh } = await import("./panelUpgrade");
+  const data = new Map<string, string>();
+  const storage = { getItem: (key: string) => data.get(key) ?? null, setItem: (key: string, value: string) => { data.set(key, value); } };
+  const job = { targetVersion: "2.3.452", startedAt: "2026-10-18T00:00:00Z", mode: "upgrade" };
+  const key = panelUpgradeJobKey(job);
+  const first = resolvePanelUpgradeRefresh(storage, key, 1_000, 8_000);
+  assert.equal(first, 9_000);
+  // 换页：外壳重新挂载，三秒后再排一次，截止时刻不变
+  assert.equal(resolvePanelUpgradeRefresh(storage, key, 4_000, 8_000), 9_000);
+  markPanelUpgradeRefreshed(storage);
+  assert.equal(readPanelUpgradeRefresh(storage)?.completed, true);
+  // 刷新回来同一个任务还是 success：不再刷
+  assert.equal(resolvePanelUpgradeRefresh(storage, key, 20_000, 8_000), null);
+  // 新的任务重新数
+  const next = panelUpgradeJobKey({ ...job, targetVersion: "2.3.453" });
+  assert.equal(resolvePanelUpgradeRefresh(storage, next, 30_000, 8_000), 38_000);
+  // 存储不可用：每次都从现在起算，不报错
+  assert.equal(resolvePanelUpgradeRefresh(null, key, 50_000, 8_000), 58_000);
+});

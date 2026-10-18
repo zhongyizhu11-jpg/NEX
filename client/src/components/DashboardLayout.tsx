@@ -94,7 +94,7 @@ import { mobileAuth } from "@/lib/mobileAuth";
 import { openMobileReleasePage } from "@/lib/mobileNotifications";
 import { useMobileAppUpdateCheck } from "@/lib/mobileAppUpdateCheck";
 import { cn } from "@/lib/utils";
-import { getPanelUpgradeProgress, PANEL_UPGRADE_REFRESH_DELAY_MS, PANEL_UPGRADE_REFRESH_DELAY_SECONDS } from "@/lib/panelUpgrade";
+import { getPanelUpgradeProgress, markPanelUpgradeRefreshed, panelUpgradeJobKey, resolvePanelUpgradeRefresh } from "@/lib/panelUpgrade";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { AvatarPicker } from "@/components/AvatarPicker";
 import { UserAvatar } from "@/components/UserAvatar";
@@ -592,6 +592,7 @@ function DashboardLayoutContent({
   const { mutate: acknowledgeUpgrade } = trpc.system.acknowledgeUpgrade.useMutation();
   const acknowledgedUpgradeRef = useRef(false);
   const upgradeRefreshDeadlineRef = useRef<number | null>(null);
+  const upgradeRefreshMarkRef = useRef<() => void>(() => undefined);
   // 安排刷新那一刻的任务快照：服务端确认后会把任务清成 idle，页面刷新前还要接着显示「升级完成，用时…」。
   const completedUpgradeJobRef = useRef<{ job: NonNullable<typeof upgradeStatus>["job"]; elapsedMs: number | null } | null>(null);
   const [upgradeClock, setUpgradeClock] = useState(() => Date.now());
@@ -615,27 +616,36 @@ function DashboardLayoutContent({
     onError: (error) => toast.error(error.message || "启动升级失败"),
   });
 
-  const scheduleUpgradeRefresh = useCallback(() => {
+  const scheduleUpgradeRefresh = useCallback((jobKey = "") => {
     if (upgradeRefreshTimerRef.current !== null) return;
     clearPanelUpgradeSession();
+    // 截止时刻跨页面记在 sessionStorage（上游 2.3.285）：换页接着数，同一个任务刷过一次就不再刷。
+    let storage: Storage | null = null;
+    try { storage = window.sessionStorage; } catch { storage = null; }
+    const deadline = resolvePanelUpgradeRefresh(storage, jobKey, Date.now());
+    if (deadline === null) return;
+    const reload = () => {
+      markPanelUpgradeRefreshed(storage);
+      window.location.reload();
+    };
     // 倒计时按截止时刻算而不是每秒减一：iOS 把定时器冻住再放开时，直接跳到正确的剩余秒数；
     // 到点了定时器还没触发（被冻住那种），visibilitychange / 下一次轮询会看这个截止时刻直接刷新。
-    const deadline = Date.now() + PANEL_UPGRADE_REFRESH_DELAY_MS;
     upgradeRefreshDeadlineRef.current = deadline;
+    upgradeRefreshMarkRef.current = () => markPanelUpgradeRefreshed(storage);
     setUpgradeRefreshScheduled(true);
-    setUpgradeRefreshCountdown(PANEL_UPGRADE_REFRESH_DELAY_SECONDS);
+    setUpgradeRefreshCountdown(Math.max(0, Math.ceil((deadline - Date.now()) / 1000)));
     upgradeRefreshIntervalRef.current = window.setInterval(() => {
       const remaining = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
       setUpgradeRefreshCountdown(remaining);
-      if (remaining <= 0) window.location.reload();
+      if (remaining <= 0) reload();
     }, 1000);
     upgradeRefreshTimerRef.current = window.setTimeout(() => {
       if (upgradeRefreshIntervalRef.current !== null) {
         window.clearInterval(upgradeRefreshIntervalRef.current);
         upgradeRefreshIntervalRef.current = null;
       }
-      window.location.reload();
-    }, PANEL_UPGRADE_REFRESH_DELAY_MS);
+      reload();
+    }, Math.max(0, deadline - Date.now()));
   }, []);
 
   useEffect(() => {
@@ -778,7 +788,7 @@ function DashboardLayoutContent({
       acknowledgedUpgradeRef.current = true;
       acknowledgeUpgrade({ targetVersion: upgradeStatus.job.targetVersion || undefined });
     }
-    scheduleUpgradeRefresh();
+    scheduleUpgradeRefresh(panelUpgradeJobKey(upgradeStatus.job as any));
   }, [acknowledgeUpgrade, scheduleUpgradeRefresh, upgradeStatus?.elapsedMs, upgradeStatus?.job, upgradeStatus?.restarted]);
 
   useEffect(() => {
@@ -802,10 +812,11 @@ function DashboardLayoutContent({
     setBackgroundUpgrade(null);
     if (upgradeRefreshDeadlineRef.current !== null && Date.now() >= upgradeRefreshDeadlineRef.current) {
       // 倒计时早就该到了（定时器被 iOS 冻住），这次轮询回来直接刷新。
+      upgradeRefreshMarkRef.current();
       window.location.reload();
       return;
     }
-    scheduleUpgradeRefresh();
+    scheduleUpgradeRefresh(`${backgroundUpgrade.mode}:${backgroundUpgrade.targetVersion}:${backgroundUpgrade.startedAt}`);
   }, [
     backgroundUpgrade?.startedAt,
     backgroundUpgrade?.mode,
@@ -1288,6 +1299,7 @@ function DashboardLayoutContent({
       if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
       const deadline = upgradeRefreshDeadlineRef.current;
       if (deadline !== null && Date.now() >= deadline) {
+        upgradeRefreshMarkRef.current();
         window.location.reload();
         return;
       }

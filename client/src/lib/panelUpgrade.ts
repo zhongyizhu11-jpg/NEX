@@ -7,6 +7,67 @@ export const PANEL_UPGRADE_REFRESH_DELAY_SECONDS = 8;
 export const PANEL_UPGRADE_REFRESH_DELAY_MS = PANEL_UPGRADE_REFRESH_DELAY_SECONDS * 1000;
 
 /*
+  升级完成后的「几秒后刷新」要跨页面记住（上游 2.3.285）。
+
+  每个页面自己包一层外壳，倒计时期间换页，外壳重新挂载、定时器跟着没了，回来又从 8 秒重新数；
+  刷新之后同一个任务还是「success」，又排一次刷新。这里把（任务、截止时刻、刷过没有）记在
+  sessionStorage：换页接着原来的截止时刻数，同一个任务刷过一次就不再刷。
+*/
+export const PANEL_UPGRADE_REFRESH_KEY = "forwardx.panel.upgradeRefresh";
+export type PanelUpgradeRefresh = { jobKey: string; deadline: number; completed?: boolean };
+
+export function panelUpgradeJobKey(job: { targetVersion?: string | null; startedAt?: unknown; mode?: string | null } | null | undefined) {
+  if (!job) return "";
+  const started = job.startedAt ? new Date(job.startedAt as any).getTime() : 0;
+  return `${job.mode || "upgrade"}:${job.targetVersion || ""}:${Number.isFinite(started) ? started : 0}`;
+}
+
+export function readPanelUpgradeRefresh(storage: Pick<Storage, "getItem"> | null | undefined): PanelUpgradeRefresh | null {
+  try {
+    const value = JSON.parse(storage?.getItem(PANEL_UPGRADE_REFRESH_KEY) || "null");
+    if (!value || typeof value.jobKey !== "string" || !value.jobKey || !Number.isFinite(value.deadline) || value.deadline <= 0) return null;
+    return { jobKey: value.jobKey, deadline: value.deadline, completed: value.completed === true };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 这个任务该在什么时候刷新。返回 null = 这个任务已经刷过了，不用再刷。
+ * 同一个任务换页回来：沿用原来的截止时刻；新任务：从现在起算。
+ */
+export function resolvePanelUpgradeRefresh(
+  storage: Pick<Storage, "getItem" | "setItem"> | null | undefined,
+  jobKey: string,
+  now: number,
+  delayMs = PANEL_UPGRADE_REFRESH_DELAY_MS,
+): number | null {
+  const saved = readPanelUpgradeRefresh(storage);
+  if (saved && jobKey && saved.jobKey === jobKey) {
+    if (saved.completed) return null;
+    return saved.deadline;
+  }
+  const deadline = now + delayMs;
+  try {
+    storage?.setItem(PANEL_UPGRADE_REFRESH_KEY, JSON.stringify({ jobKey, deadline } satisfies PanelUpgradeRefresh));
+  } catch {
+    // 存不下就退回「这一页里数」：顶多换页时重数一次。
+  }
+  return deadline;
+}
+
+/** 马上要刷新了：记下这个任务已经刷过，刷新回来不再排一次。 */
+export function markPanelUpgradeRefreshed(storage: Pick<Storage, "getItem" | "setItem"> | null | undefined) {
+  const saved = readPanelUpgradeRefresh(storage);
+  if (!saved) return;
+  try {
+    storage?.setItem(PANEL_UPGRADE_REFRESH_KEY, JSON.stringify({ ...saved, completed: true }));
+  } catch {
+    // 忽略：最坏是刷新回来再数一次。
+  }
+}
+
+/*
   面板升级/回退的进度。
 
   原来这段逻辑有**两份**：侧边栏一份（DashboardLayout 的 getLayoutUpgradeProgress），
