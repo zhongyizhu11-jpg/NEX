@@ -1,8 +1,10 @@
 import { useAuth } from "@/_core/hooks/useAuth";
-import OpsProxyInboundExtras from "@/features/ops/slots/ProxyInboundExtras";
+import OpsInboundCompatibilityDialog from "@/features/ops/slots/ProxyInboundExtras";
+import { useOpsFeatures } from "@/features/ops/useOpsFeatures";
 import DataSectionLoading from "@/components/DataSectionLoading";
 import DataSectionError from "@/components/DataSectionError";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -41,6 +43,7 @@ import {
   Eye,
   KeyRound,
   Link2,
+  MonitorSmartphone,
   Pencil,
   Plus,
   RefreshCw,
@@ -244,6 +247,9 @@ export default function ProxyInboundsSection({
     setExpandedQuotaIds((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]));
   };
   const [form, setForm] = useState<InboundForm>(emptyForm());
+  const opsFeatures = useOpsFeatures();
+  // ⋯ 菜单「客户端兼容」打开的那一行。
+  const [compatInbound, setCompatInbound] = useState<any | null>(null);
   // 编辑已有节点时，每条分流现在实际去了哪（列表接口带回来的，新建时为空）。
   const [editingRoutingStatus, setEditingRoutingStatus] = useState<Array<{ note: string; action: string }>>([]);
   /** 折叠着的 REALITY 里设了什么。只写填过的 —— 都留空时说「按默认值」就够了。 */
@@ -300,7 +306,8 @@ export default function ProxyInboundsSection({
   const updateNode = trpc.proxySubscriptions.updateNode.useMutation({
     onError: (error) => toast.error(error.message),
   });
-  const setInSubscription = async (row: any, checked: boolean) => {
+  // 立即生效（直接改派生节点），所以行上用开关；名字别以 set 开头，那是「写草稿」的约定。
+  const toggleInSubscription = async (row: any, checked: boolean) => {
     const ids: number[] = Array.isArray(row.derivedNodeIds) ? row.derivedNodeIds : [];
     if (ids.length === 0) {
       toast.error("这个节点还没派生出客户端节点，通常是主机还没有可用地址");
@@ -577,14 +584,11 @@ export default function ProxyInboundsSection({
     name: row.name,
     protocol: String(row.protocol || ""),
     sortName: String(row.name || ""),
+    // 只放协议小标，和粘贴行一样。客户端兼容挪到 ⋯ 菜单（行里那枚小标在手机上会挤掉名字）。
     tag: (
-      <>
-        <Badge variant="secondary" className="h-4 shrink-0 px-1 text-[10px] font-normal">
-          {PROXY_NODE_PROTOCOL_LABELS[row.protocol as ProxyNodeProtocol] || row.protocol}
-        </Badge>
-        {/* 第五套主题：一枚「8/9 款客户端」小标，点开看哪些客户端用不了、为什么 */}
-        <OpsProxyInboundExtras inbound={row} />
-      </>
+      <Badge variant="secondary" className="h-4 shrink-0 px-1 text-[10px] font-normal">
+        {PROXY_NODE_PROTOCOL_LABELS[row.protocol as ProxyNodeProtocol] || row.protocol}
+      </Badge>
     ),
     muted: !row.isEnabled,
     // 地址排最前：它是这一行里最常要看的，排后面就会被前面的安全层、归属挤到
@@ -625,15 +629,23 @@ export default function ProxyInboundsSection({
         onToggle={() => toggleQuota(Number(row.id))}
       />
     ),
+    // 和粘贴行同一个开关：点了立即生效（进 / 出订阅），本就该是开关；两种行也就一样高、一样宽。
     toggle: (
-      <Checkbox
+      <Switch
+        aria-label={`${row.name} 加进订阅`}
         className="shrink-0 scale-90"
         checked={!!row.includeDirect}
         title={row.includeDirect ? "已在订阅里，关掉就不出现" : "加进订阅"}
-        onCheckedChange={(checked) => void setInSubscription(row, checked)}
+        onCheckedChange={(checked) => void toggleInSubscription(row, checked)}
       />
     ),
     actions: [
+      ...(opsFeatures ? [{
+        key: "compat",
+        label: "客户端兼容",
+        icon: MonitorSmartphone,
+        onSelect: () => setCompatInbound(row),
+      }] : []),
       {
         key: "link",
         label: "复制链接",
@@ -1387,6 +1399,8 @@ export default function ProxyInboundsSection({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <OpsInboundCompatibilityDialog inbound={compatInbound} onClose={() => setCompatInbound(null)} />
 
       <ProxyNodeShareDialog
         open={shareDialogOpen}

@@ -15,9 +15,10 @@ import {
   type ProxyNode,
   type ProxyNodeProtocol,
 } from "./proxyNode";
-import type {
-  ProxySubscriptionDocument,
-  ProxySubscriptionGroup,
+import {
+  expandWeightedMembers,
+  type ProxySubscriptionDocument,
+  type ProxySubscriptionGroup,
 } from "./proxySubscriptionPlan";
 import {
   iosInlineDomainRules,
@@ -303,6 +304,7 @@ function renderClash(
   ruleSets: readonly ProxyRuleSetRef[],
   rules: readonly ProxyRouteRule[],
   notices: readonly string[],
+  weightedLoadBalance = false,
 ): string {
   const lines: string[] = [...notices, nodes.length === 0 ? "proxies: []" : "proxies:"];
   for (const node of nodes) {
@@ -318,7 +320,15 @@ function renderClash(
     for (const group of groups) {
       lines.push(`  - name: ${yamlQuote(group.name)}`);
       lines.push(`    type: ${group.type}`);
-      lines.push(`    proxies: [${group.members.map((member) => yamlQuote(member)).join(", ")}]`);
+      /*
+        带宽叠加组按带宽加权：同一个节点在列表里出现几次就分几份连接（500M / 300M 两台是 5:3）。
+        mihomo 建组时按名字逐个取、不去重（adapter/outboundgroup/parser.go getProxies），
+        round-robin 就自然按份数轮。别的 Clash 系实现（Stash 等）没核实过，不展开、照旧平均分。
+      */
+      const members = weightedLoadBalance && group.type === "load-balance"
+        ? expandWeightedMembers(group.members, group.weights)
+        : group.members;
+      lines.push(`    proxies: [${members.map((member) => yamlQuote(member)).join(", ")}]`);
       if (group.type !== "select") {
         lines.push(`    url: ${yamlQuote(PROXY_AUTO_GROUP_TEST_URL)}`);
         lines.push(`    interval: ${PROXY_AUTO_GROUP_INTERVAL_SECONDS}`);
@@ -1230,6 +1240,11 @@ export type RenderProxySubscriptionOptions = {
    * 这时把负载均衡组改写成它的 random（每条连接各挑各的）。
    */
   shadowrocketClient?: boolean;
+  /**
+   * 来拉的是 mihomo / Clash 内核（看 User-Agent，不含 Stash）：带宽叠加组可以按带宽加权展开。
+   * 其它客户端「组里重复列同一个节点」的行为没核实，平均分。
+   */
+  weightedLoadBalance?: boolean;
 };
 
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f\u2028\u2029]/g;
@@ -1265,7 +1280,7 @@ export function renderProxySubscription(
 ): string {
   const filtered = filterForFormat(sanitizeDocumentForTextFormats(document), format);
   const { nodes, groups, ruleSets, rules, notices } = filtered;
-  if (format === "clash") return renderClash(nodes, groups, ruleSets, rules, notices);
+  if (format === "clash") return renderClash(nodes, groups, ruleSets, rules, notices, !!options.weightedLoadBalance);
   if (format === "singbox") return renderSingbox(nodes, groups, ruleSets, rules);
   if (options.profile && proxySubscriptionFormatHasProfile(format)) {
     return renderIosProfile(filtered, format as IosProfileFormat, options.profileUrl || "", !!options.shadowrocketClient);

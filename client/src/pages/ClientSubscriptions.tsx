@@ -1716,8 +1716,13 @@ export default function ClientSubscriptionsPage() {
                     {preview!.groups.map((group) => (
                       <div key={group.name} className="truncate rounded-md border px-2.5 py-1.5 text-xs text-muted-foreground">
                         <span className="font-medium text-foreground">{group.name}</span>
-                        {group.type === "url-test" ? " · 自动选最快 · " : " · 主备切换 · "}
-                        {group.members.join(" / ")}
+                        {group.type === "url-test" ? " · 自动选最快 · " : group.type === "load-balance" ? " · 带宽叠加 · " : " · 主备切换 · "}
+                        {group.members.map((member, index) => (
+                          group.type === "load-balance" && Array.isArray(group.weights) && group.weights[index]
+                            ? `${member}×${group.weights[index]}`
+                            : member
+                        )).join(" / ")}
+                        {group.type === "load-balance" && Array.isArray(group.weights) ? "（按带宽分连接，Clash / Mihomo 生效）" : ""}
                       </div>
                     ))}
                   </div>

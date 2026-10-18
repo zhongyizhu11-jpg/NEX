@@ -104,6 +104,7 @@ export function MemberScheduleButton({ value, onChange, memberLabel }: {
                     const selected = window.days.includes(day.value);
                     return (
                       <button
+                        data-compact-touch=""
                         key={day.value}
                         type="button"
                         aria-pressed={selected}

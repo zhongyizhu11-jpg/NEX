@@ -9,7 +9,7 @@ import { EventRow, type OpsEventItem } from "./EventRow";
 import { useMinuteNow } from "./useNow";
 
 /*
-  首页「最近动态」（管理员，跟在「需要关注」后面）：最新 8 条事件。
+  首页「最近动态」（管理员，跟在「需要关注」后面）：最新 4 条事件，更多的点「全部」去事件页看。
 
   「需要关注」说的是此刻还没好的事；这里说的是刚刚发生过的事 —— 半夜断了二十分钟又自己好了的
   那台机器，早上在「需要关注」里已经看不到，在这里还看得到。
@@ -18,7 +18,7 @@ import { useMinuteNow } from "./useNow";
 */
 export default function RecentEventsCard(_props: Record<string, never>) {
   const now = useMinuteNow();
-  const query = trpc.ops.events.recent.useQuery({ limit: 8 }, {
+  const query = trpc.ops.events.recent.useQuery({ limit: 4 }, {
     refetchInterval: pollingInterval("slow"),
     staleTime: 15_000,
   });

@@ -108,6 +108,9 @@ export type ProxySubscriptionRuleRow = {
 
 export type ProxySubscriptionHostRow = HostEntryAddressSource & {
   id: number;
+  /** 主机总限速 / 出口整形带宽（Mbps）：「带宽叠加」组按它给这台前置多分连接。没查这两列时按主机名里的带宽。 */
+  rateLimitMbps?: unknown;
+  egressMbps?: unknown;
   /** 最后一次心跳。从来没有 = Agent 还没装上，见 hostNeverConnected。 */
   lastHeartbeat?: unknown;
   name?: unknown;
@@ -149,6 +152,8 @@ export type ProxySubscriptionEntry = {
   frontTemplateId: number;
   /** 绑定已经对不上了（见 warnings）。仍然发出去，但界面上要标出来。 */
   targetMismatch?: boolean;
+  /** 转发入口那台机器的带宽（Mbps，见 hostBandwidthHintMbps）。0 / 没有 = 不知道。 */
+  bandwidthMbps?: number;
   node: ProxyNode;
 };
 
@@ -485,12 +490,14 @@ export function buildProxySubscriptionPlan(input: BuildProxySubscriptionPlanInpu
       });
     }
 
+    const bandwidthMbps = hostBandwidthHintMbps(host);
     entries.push({
       ruleId,
       templateId,
       kind: "relay",
       frontTemplateId: frontIdOf(template),
       ...(targetMismatch ? { targetMismatch: true } : {}),
+      ...(bandwidthMbps > 0 ? { bandwidthMbps } : {}),
       node: relayProxyNode(templateNode, { address, port, name }),
     });
   }
@@ -610,7 +617,7 @@ export const PROXY_NODE_AUTO_GROUP_HINTS: Record<ProxyNodeAutoGroup, string> = {
   off: "订阅里只有裸节点，由你自己在客户端里选。",
   "url-test": "客户端定期测速，自动走延迟最低的中转；该条中转故障时自动切换。",
   fallback: "按列表顺序主备，前一条不通才切下一条，适合有明确主力线路时。",
-  "load-balance": "每条新连接轮流走不同中转，多线程下载、多设备同时用时带宽相加（两台 300M 约 600M）；单条连接仍只走一条中转。只有 Clash / Mihomo 订阅支持，sing-box 按「自动选最快」生成。",
+  "load-balance": "每条新连接轮流走不同中转，多线程下载、多设备同时用时带宽相加（两台 300M 约 600M）；单条连接仍只走一条中转。按各前置的带宽多分少分（主机总限速，或主机名括号里写的带宽，如「Po0(500M)」），Clash / Mihomo 客户端生效。sing-box 按「自动选最快」生成。",
 };
 
 /**
@@ -636,6 +643,11 @@ export type ProxySubscriptionGroup = {
   type: ProxySubscriptionGroupType;
   /** 组内成员，可能是节点名，也可能是另一个组名（主选择器会引用自动选路组）。 */
   members: string[];
+  /**
+   * 「带宽叠加」组每个成员分多少份连接（和 members 一一对应，见 proxyLoadBalanceWeights）。
+   * 没有 = 平均分。只有确认支持「组里重复列同一个节点」的客户端（mihomo / Clash）才照着展开。
+   */
+  weights?: number[];
 };
 
 /** 订阅最终要渲染的内容：节点、策略组、分流规则。 */
@@ -691,6 +703,7 @@ export function buildProxySubscriptionDocument(
   // 去重后的名字按顺序对回各自的模板。
   const namesByTemplate = new Map<number, string[]>();
   const relayNamesByTemplate = new Map<number, string[]>();
+  const relayBandwidthsByTemplate = new Map<number, number[]>();
   plan.entries.forEach((entry, index) => {
     const name = nodes[index]?.name;
     if (!name) return;
@@ -701,6 +714,9 @@ export function buildProxySubscriptionDocument(
       const relays = relayNamesByTemplate.get(entry.templateId) || [];
       relays.push(name);
       relayNamesByTemplate.set(entry.templateId, relays);
+      const bandwidths = relayBandwidthsByTemplate.get(entry.templateId) || [];
+      bandwidths.push(Number(entry.bandwidthMbps || 0));
+      relayBandwidthsByTemplate.set(entry.templateId, bandwidths);
     }
   });
 
@@ -718,10 +734,13 @@ export function buildProxySubscriptionDocument(
      */
     const memberNames = mode === "load-balance" ? relayNamesByTemplate.get(templateId) || [] : allNames;
     if (memberNames.length < PROXY_AUTO_GROUP_MIN_MEMBERS) continue;
+    // 带宽叠加按各前置的带宽多分少分：500M 和 300M 两台就是 5:3，而不是一人一半。
+    const weights = mode === "load-balance" ? proxyLoadBalanceWeights(relayBandwidthsByTemplate.get(templateId) || []) : null;
     autoGroups.push({
       name: autoGroupNameForTemplate(text(template?.name), mode),
       type: mode,
       members: memberNames,
+      ...(weights ? { weights } : {}),
     });
   }
 
@@ -747,4 +766,67 @@ export function buildProxySubscriptionDocument(
   }
 
   return { nodes, groups, ruleSets: rulePlan.ruleSets, rules: rulePlan.rules };
+}
+
+/* ── 带宽叠加的加权 ─────────────────────────────────────────────────── */
+
+/**
+ * 一台前置的带宽（Mbps），给「带宽叠加」组分连接用。依次看：
+ *   1. 主机总限速（rateLimitMbps）—— 你给这台机器定的上限，最准；
+ *   2. 出口整形带宽（egressMbps）；
+ *   3. 主机名里括号中的带宽，例如「Po0(500M)」「港机【1G】」—— 很多人就是这么给机器起名的。
+ *      只认括号里的：裸写的「5G」多半是说移动网络，不是带宽。
+ * 都没有返回 0（不知道）。
+ */
+export function hostBandwidthHintMbps(host: { rateLimitMbps?: unknown; egressMbps?: unknown; name?: unknown } | null | undefined): number {
+  if (!host) return 0;
+  const limit = Math.floor(Number(host.rateLimitMbps) || 0);
+  if (limit > 0) return limit;
+  const egress = Math.floor(Number(host.egressMbps) || 0);
+  if (egress > 0) return egress;
+  const match = /[(（【\[]\s*(\d+(?:\.\d+)?)\s*([MG])(?:bps|b)?\s*[)）】\]]/i.exec(text(host.name));
+  if (!match) return 0;
+  const value = Number(match[1]) * (match[2].toUpperCase() === "G" ? 1000 : 1);
+  return Number.isFinite(value) && value > 0 ? Math.round(value) : 0;
+}
+
+/** 每个成员最多分几份：份数就是它在组里重复出现的次数，太多会让客户端里的列表很长。 */
+export const PROXY_LOAD_BALANCE_MAX_WEIGHT = 10;
+
+/**
+ * 按带宽算每个成员分几份连接。有任何一个不知道带宽、或者都一样，就返回 null（平均分）——
+ * 猜错的权重比平均分更糟。500 / 300 → [5, 3]；1000 / 100 → [10, 1]。
+ */
+export function proxyLoadBalanceWeights(bandwidths: readonly number[]): number[] | null {
+  if (bandwidths.length < 2 || bandwidths.some((value) => !(value > 0))) return null;
+  const min = Math.min(...bandwidths);
+  const ratios = bandwidths.map((value) => value / min);
+  // 最慢的那台先给 3 份（比例细一点），最快的超过上限时整体缩小，而不是只把最快的截掉 —— 那样比例就歪了。
+  const scale = Math.min(3, PROXY_LOAD_BALANCE_MAX_WEIGHT / Math.max(...ratios));
+  let weights = ratios.map((ratio) => Math.max(1, Math.round(ratio * scale)));
+  const gcd = (a: number, b: number): number => (b === 0 ? a : gcd(b, a % b));
+  const divisor = weights.reduce((acc, value) => gcd(acc, value));
+  weights = weights.map((value) => value / divisor);
+  return weights.every((value) => value === weights[0]) ? null : weights;
+}
+
+/**
+ * 按份数把成员展开成轮询顺序（平滑加权轮询，nginx 的做法）：5:3 是 A B A A B A B A，
+ * 而不是 A A A A A B B B —— 后者连着几条新连接都压在同一台上，短时间里另一台闲着。
+ */
+export function expandWeightedMembers(members: readonly string[], weights: readonly number[] | null | undefined): string[] {
+  if (!weights || weights.length !== members.length) return [...members];
+  const total = weights.reduce((sum, value) => sum + value, 0);
+  const current = weights.map(() => 0);
+  const out: string[] = [];
+  for (let round = 0; round < total; round += 1) {
+    let best = 0;
+    for (let i = 0; i < weights.length; i += 1) {
+      current[i] += weights[i];
+      if (current[i] > current[best]) best = i;
+    }
+    current[best] -= total;
+    out.push(members[best]);
+  }
+  return out;
 }

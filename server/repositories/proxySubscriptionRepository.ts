@@ -1105,6 +1105,9 @@ async function buildProxySubscriptionContextForUser(userId: number): Promise<{
         ddnsDomain: hosts.ddnsDomain,
         // 从没收过心跳 = Agent 还没装上，见 hostNeverConnected。
         lastHeartbeat: hosts.lastHeartbeat,
+        // 带宽叠加组按前置带宽加权（hostBandwidthHintMbps）。
+        rateLimitMbps: hosts.rateLimitMbps,
+        egressMbps: hosts.egressMbps,
       })
       .from(hosts)
       .where(inArray(hosts.id, hostIds))
