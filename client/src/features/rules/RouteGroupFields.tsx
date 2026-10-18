@@ -614,7 +614,7 @@ export function RouteGroupFields({
                       onFocus={() => setEditingField(destField)}
                       onBlur={() => { setEditingField(null); commitEndpoint(index, "dest", destText); }}
                       // 越短越好：手机上框很窄，长了就被截成半句。不填就走规则的目标地址（在上面）。
-                      placeholder="选填 IP:端口"
+                      placeholder="IP:端口，留空同目标"
                       aria-label={`路径 ${routePathLetter(index)} 的落地`}
                       className="h-7 min-w-0 flex-1 font-mono text-xs"
                       spellCheck={false}
