@@ -39,6 +39,17 @@ function formatFromUserAgent(userAgent: string): ProxySubscriptionFormat | null 
   return null;
 }
 
+/**
+ * 这个客户端能不能按带宽加权的带宽叠加组（组里重复列同一个节点 = 多分连接）。
+ * 只认 mihomo / Clash 内核（Clash Verge、Mihomo Party、FlClash、ClashMetaForAndroid……），
+ * 代码里核实过不去重；Stash 是另一套实现，没核实，不展开。
+ */
+export function clientSupportsWeightedLoadBalance(userAgent: string): boolean {
+  const ua = userAgent.toLowerCase();
+  if (!ua || ua.includes("stash") || ua.includes("shadowrocket")) return false;
+  return ua.includes("clash") || ua.includes("mihomo");
+}
+
 function clientIp(req: Request): string {
   // 用 req.ip：它按面板的 trust proxy 设置解析 X-Forwarded-For。直接读这个头的话，
   // 谁都能在请求里写一个假 IP，「谁在拉这个订阅」的记录就不可信了。
@@ -129,6 +140,7 @@ proxySubscriptionRouter.get("/api/sub/:token", async (req: Request, res: Respons
       profile,
       profileUrl: panelUrl ? `${panelUrl.replace(/\/+$/, "")}${req.originalUrl}` : "",
       shadowrocketClient: formatFromUserAgent(String(req.headers["user-agent"] || "")) === "shadowrocket",
+      weightedLoadBalance: clientSupportsWeightedLoadBalance(String(req.headers["user-agent"] || "")),
     });
 
     {

@@ -473,7 +473,7 @@ export const proxySubscriptionsRouter = router({
     return {
       groups: document.groups
         .filter((group) => group.type !== "select")
-        .map((group) => ({ name: group.name, type: group.type, members: group.members })),
+        .map((group) => ({ name: group.name, type: group.type, members: group.members, weights: group.weights ?? null })),
       nodes: plan.entries.map((entry) => ({
         ruleId: entry.ruleId,
         templateId: entry.templateId,
