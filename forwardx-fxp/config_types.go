@@ -7,6 +7,8 @@ type exitEndpoint struct {
 	Key     string `json:"key,omitempty"`
 	// Weight 只在出口策略是 weighted 时用：新连接按它分。没写（旧面板）按 1 算。
 	Weight int `json:"weight,omitempty"`
+	// CapacityMbps 是出口主机的线路带宽，「按负载」「按访客固定」按它折算每台该分多少。没写按一样大。
+	CapacityMbps int `json:"capacityMbps,omitempty"`
 }
 
 // udpTarget is deliberately configured on the exit runtime. UDP direct packets

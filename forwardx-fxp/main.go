@@ -14,9 +14,9 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"hash/fnv"
 	"io"
 	"log"
+	"math"
 	"net"
 	"net/netip"
 	"os"
@@ -328,7 +328,10 @@ type exitEndpointSelector struct {
 	// current 是 weighted 策略的平滑加权轮询计数（nginx 那套）：权重 5:3 时排成
 	// 交错的序列，而不是先连着给 5 个、再连着给 3 个。
 	current []int
-	mu      sync.Mutex
+	// loads 是每个端点所在主机的实时负载（exit_load.go），capacities 是每个端点的分量。
+	loads      []*fxpHostLoad
+	capacities []float64
+	mu         sync.Mutex
 	// probed 表示有 TCP 探测在盯这些端点；UDP 那条路就不再拿「地址解析成功」
 	// 去覆盖探测得出的健康结论。
 	probed atomic.Bool
@@ -399,11 +402,17 @@ func normalizeExitEndpoints(exits []exitEndpoint, fallback exitEndpoint) []exitE
 		if endpoint.Weight < 0 {
 			endpoint.Weight = 0
 		}
+		if endpoint.CapacityMbps < 0 {
+			endpoint.CapacityMbps = 0
+		}
 		key := endpoint.Host + ":" + strconv.Itoa(endpoint.Port) + ":" + strconv.Itoa(endpoint.UDPPort) + ":" + endpoint.Key
 		if at, ok := seen[key]; ok {
 			// 面板会把首选出口在 exits 里再列一遍并带上权重；fallback 本身没有权重字段。
 			if endpoints[at].Weight == 0 {
 				endpoints[at].Weight = endpoint.Weight
+			}
+			if endpoints[at].CapacityMbps == 0 {
+				endpoints[at].CapacityMbps = endpoint.CapacityMbps
 			}
 			return
 		}
@@ -420,14 +429,18 @@ func normalizeExitEndpoints(exits []exitEndpoint, fallback exitEndpoint) []exitE
 func newExitEndpointSelector(exits []exitEndpoint, fallback exitEndpoint, strategy string) *exitEndpointSelector {
 	endpoints := normalizeExitEndpoints(exits, fallback)
 	states := make([]*fxpEndpointState, len(endpoints))
+	loads := make([]*fxpHostLoad, len(endpoints))
 	for i, endpoint := range endpoints {
 		states[i] = fxpEndpointStateFor(endpoint)
+		loads[i] = fxpHostLoadFor(endpoint.Host)
 	}
 	return &exitEndpointSelector{
-		endpoints: endpoints,
-		states:    states,
-		strategy:  normalizeExitStrategy(strategy),
-		current:   make([]int, len(endpoints)),
+		endpoints:  endpoints,
+		states:     states,
+		strategy:   normalizeExitStrategy(strategy),
+		current:    make([]int, len(endpoints)),
+		loads:      loads,
+		capacities: endpointCapacities(endpoints),
 	}
 }
 
@@ -579,14 +592,16 @@ func (s *exitEndpointSelector) pick(excluded map[int]bool, selectionKeys ...stri
 			selectionKey = strings.TrimSpace(selectionKeys[0])
 		}
 		if selectionKey != "" {
-			hash := fnv.New64a()
-			_, _ = hash.Write([]byte(selectionKey))
-			index := candidates[int(hash.Sum64()%uint64(len(candidates)))]
+			index := s.pickRendezvous(candidates, selectionKey, now)
 			return s.endpoints[index], index, true
 		}
 	}
 	if s.strategy == "weighted" {
-		index := s.pickWeighted(candidates)
+		index := s.pickWeighted(candidates, now)
+		return s.endpoints[index], index, true
+	}
+	if s.strategy == "least_load" {
+		index := s.pickLeastLoad(candidates, now)
 		return s.endpoints[index], index, true
 	}
 	index := candidates[s.next%len(candidates)]
@@ -596,7 +611,9 @@ func (s *exitEndpointSelector) pick(excluded map[int]bool, selectionKeys ...stri
 
 // pickWeighted 是平滑加权轮询：每个候选的计数加上自己的权重，挑最大的，再把它减去总权重。
 // 只在候选里算：坏了的出口这一轮不加计数，恢复后也不会一口气补发欠它的连接。调用方持锁。
-func (s *exitEndpointSelector) pickWeighted(candidates []int) int {
+// 刚从挂掉恢复的出口在 60 秒里按比例慢慢加到满份（exit_load.go 的慢启动）：权重统一乘 10 再乘系数，
+// 不在慢启动里的时候序列和不乘一模一样。
+func (s *exitEndpointSelector) pickWeighted(candidates []int, now time.Time) int {
 	if len(s.current) != len(s.endpoints) {
 		s.current = make([]int, len(s.endpoints))
 	}
@@ -606,6 +623,9 @@ func (s *exitEndpointSelector) pickWeighted(candidates []int) int {
 		if weight <= 0 {
 			weight = 1
 		}
+		if index < len(s.loads) {
+			weight = int(math.Max(1, math.Round(float64(weight)*10*s.loads[index].snapshot(now).slowStart)))
+		}
 		total += weight
 		s.current[index] += weight
 		if best < 0 || s.current[index] > s.current[best] {
@@ -614,6 +634,14 @@ func (s *exitEndpointSelector) pickWeighted(candidates []int) int {
 	}
 	s.current[best] -= total
 	return best
+}
+
+// observeLatency 记一次到这个端点的握手耗时，「按负载」用它把慢的出口往后放。
+func (s *exitEndpointSelector) observeLatency(index int, d time.Duration) {
+	if s == nil || index < 0 || index >= len(s.loads) {
+		return
+	}
+	s.loads[index].observeLatency(d, time.Now())
 }
 
 func (s *exitEndpointSelector) markFailure(index int, err error) {
