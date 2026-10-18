@@ -375,13 +375,6 @@ type ForwardGroupsContentProps = {
   onViewModeChange?: (viewMode: ForwardGroupViewMode) => void;
   hideHeaderActions?: boolean;
   createRequestKey?: number;
-  /** 跟着 createRequestKey 一起来的预填值（「按目标新建」替用户选好的出口策略）。 */
-  createPreset?: { exitStrategy?: ExitGroupStrategy };
-  /**
-   * 新建框打开以后调用，外面把请求清掉。有了它，页签刚挂载时带着的请求也照样打开
-   * （「按目标新建」是先切页签、再发请求的，这一块是新挂载的）。
-   */
-  onCreateRequestConsumed?: () => void;
   editRequest?: { id: number; requestKey: number } | null;
   onEditRequestConsumed?: () => void;
   searchQuery?: string;
@@ -879,8 +872,6 @@ export function ForwardGroupsContent({
   onViewModeChange,
   hideHeaderActions = false,
   createRequestKey,
-  createPreset,
-  onCreateRequestConsumed,
   editRequest,
   onEditRequestConsumed,
   searchQuery = "",
@@ -919,8 +910,7 @@ export function ForwardGroupsContent({
   // 点开故障转移策略面板的那个组。只存 id：面板跟着列表轮询刷新，不拿一份旧快照。
   const [policyGroupId, setPolicyGroupId] = useState<number | null>(null);
   const [advancedSettingsOpen, setAdvancedSettingsOpen] = useState(false);
-  // 外面会在用完后清掉请求（onCreateRequestConsumed）时，挂载时就带着的请求也要处理；否则沿用老规矩，只认挂载后的新请求。
-  const lastCreateRequestKeyRef = useRef(onCreateRequestConsumed ? 0 : createRequestKey ?? 0);
+  const lastCreateRequestKeyRef = useRef(createRequestKey ?? 0);
   const lastEditRequestKeyRef = useRef(0);
   const closeResetTimerRef = useRef<number | null>(null);
   const activeGroupMode = mode;
@@ -1096,7 +1086,7 @@ export function ForwardGroupsContent({
 
   useEffect(() => () => clearCloseResetTimer(), []);
 
-  const openCreate = (preset?: { exitStrategy?: ExitGroupStrategy }) => {
+  const openCreate = () => {
     clearCloseResetTimer();
     const initial = makeDefaultForm();
     setForm({
@@ -1106,7 +1096,6 @@ export function ForwardGroupsContent({
       forwardType: availableForwardTypes[0] || initial.forwardType,
       domain: activeGroupMode === "failover" || activeGroupMode === "entry" ? initial.domain : "",
       recordType: activeGroupMode === "chain" || activeGroupMode === "exit" ? "A" : initial.recordType,
-      ...(activeGroupMode === "exit" && preset?.exitStrategy ? { exitStrategy: preset.exitStrategy } : {}),
     });
     setEditingId(null);
     setDragMemberKey(null);
@@ -1118,10 +1107,7 @@ export function ForwardGroupsContent({
   useEffect(() => {
     if (createRequestKey === undefined || createRequestKey === lastCreateRequestKeyRef.current) return;
     lastCreateRequestKeyRef.current = createRequestKey;
-    if (createRequestKey > 0) {
-      openCreate(createPreset);
-      onCreateRequestConsumed?.();
-    }
+    if (createRequestKey > 0) openCreate();
   }, [createRequestKey]);
 
   const openEdit = (group: any) => {
@@ -2262,7 +2248,7 @@ export function ForwardGroupsContent({
               <List className="h-4 w-4" />
             </Button>
           </div>
-          <Button onClick={() => openCreate()} className="col-span-2 gap-2 sm:col-span-1">
+          <Button onClick={openCreate} className="col-span-2 gap-2 sm:col-span-1">
             <Plus className="h-4 w-4" />
             {addButtonText}
           </Button>
