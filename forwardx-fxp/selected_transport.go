@@ -45,6 +45,8 @@ type selectedTransport struct {
 	replayBytes int
 	overflow    bool
 	closed      bool
+	// load 是当前端点所在主机的负载记账（exit_load.go）：这条会话算它的一个活动连接，收发的字节记到它头上。
+	load *fxpHostLoad
 }
 
 func newSelectedTransport(selector *exitEndpointSelector, cfg config, selectionKey string) *selectedTransport {
@@ -102,6 +104,9 @@ func (t *selectedTransport) connectLocked() error {
 			if err == nil || !isClosedErr(err) {
 				recordConnStage(t.cfg, t.cfg.TunnelID, t.cfg.RuleID, t.cfg.Role, "handshake", endpointLabel, time.Since(dialStarted), err)
 			}
+			if err == nil {
+				t.selector.observeLatency(ackIndex, time.Since(dialStarted))
+			}
 			t.handleAck(sec, ackIndex, err)
 		}
 		t.useLocked(conn, sec, endpoint, index, false)
@@ -122,6 +127,13 @@ func (t *selectedTransport) useLocked(conn net.Conn, sec *secureConn, endpoint e
 	t.endpoint = endpoint
 	t.index = index
 	t.committed = committed
+	// 换了端点（失败重放）就把活动连接从旧主机挪到新主机。
+	t.load.close()
+	t.load = nil
+	if !t.closed && index >= 0 && index < len(t.selector.loads) {
+		t.load = t.selector.loads[index]
+		t.load.open(time.Now())
+	}
 }
 
 func (t *selectedTransport) handleAck(sec *secureConn, index int, err error) {
@@ -219,13 +231,17 @@ func (t *selectedTransport) writeFrames(frames ...[]byte) error {
 		return net.ErrClosed
 	}
 	sec := t.sec
+	load := t.load
 	buffered := true
+	size := 0
 	for _, plain := range frames {
+		size += len(plain)
 		if !t.bufferLocked(plain) {
 			buffered = false
 		}
 	}
 	t.mu.Unlock()
+	load.addBytes(size)
 	err := sec.writeFrames(frames...)
 	if err != nil && buffered {
 		// 还没确认的连接写失败：读协程会在等确认时发现并切走，这些帧已经在
@@ -256,6 +272,14 @@ func (t *selectedTransport) readFrames(dst [][]byte, max int) ([][]byte, error) 
 		}
 		frames, err := sec.readFrames(dst, max)
 		if err == nil {
+			size := 0
+			for _, frame := range frames[len(dst):] {
+				size += len(frame)
+			}
+			t.mu.Lock()
+			load := t.load
+			t.mu.Unlock()
+			load.addBytes(size)
 			return frames, nil
 		}
 		var ackErr *fxpAckError
@@ -281,6 +305,8 @@ func (t *selectedTransport) closeTransport() {
 	t.closed = true
 	t.replay = nil
 	t.replayBytes = 0
+	t.load.close()
+	t.load = nil
 	if t.conn != nil {
 		_ = t.conn.Close()
 	}

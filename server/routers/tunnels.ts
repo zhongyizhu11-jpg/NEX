@@ -44,6 +44,7 @@ import {
   tunnelParallelStreamsUnavailableReason,
 } from "../../shared/tunnelParallelStreams";
 import { normalizeExitGroupStrategy } from "../../shared/exitStrategy";
+import { buildLinkOverview } from "../../shared/linkOverview";
 import { assertMimicEnvironment } from "../mimicEnvironment";
 import {
   defaultTunnelHostAddress,
@@ -71,7 +72,7 @@ const tunnelNetworkTypeSchema = z.enum(["public", "private"]);
 const tunnelModeSchema = z.enum(["forwardx", "tls", "wss", "tcp", "mtls", "mwss", "mtcp", "nginx_stream"]);
 const forwardXVersionSchema = z.enum(["v1", "v2"]);
 const proxyProtocolVersionSchema = z.union([z.literal(1), z.literal(2)]);
-const tunnelLoadBalanceStrategySchema = z.enum(["none", "round_robin", "random", "least_conn", "ip_hash", "fallback"]);
+const tunnelLoadBalanceStrategySchema = z.enum(["none", "round_robin", "random", "least_conn", "ip_hash", "fallback", "weighted", "least_load"]);
 const tunnelRelayModeSchema = z.enum(["chain", "failover", "aggregate"]);
 const MAX_TUNNEL_HOPS = 10;
 const MAX_EXTRA_TUNNEL_EXITS = 4;
@@ -135,7 +136,7 @@ async function requireForwardXRelayAggregateAgentVersions(hostIds: number[]) {
   ));
   if (unsupported.length === 0) return;
   const labels = unsupported.map(({ id, host }) => host?.name || host?.ip || `主机 ${id}`).slice(0, 5);
-  throw new Error(`NEX 中转带宽叠加需要入口、中转和出口 Agent 升级到 v${AGENT_FORWARDX_RELAY_AGGREGATE_VERSION} 或更高版本：${labels.join("、")}`);
+  throw new Error(`NEX 中转「单连接叠加」需要入口、中转和出口 Agent 升级到 v${AGENT_FORWARDX_RELAY_AGGREGATE_VERSION} 或更高版本：${labels.join("、")}`);
 }
 
 function isTunnelProxyProtocolSupported(mode: unknown) {
@@ -902,7 +903,34 @@ export const tunnelsRouter = router({
         const availabilityIndex = availabilityIndexForHydratedTunnels(hydratedRows);
         const hydrated = attachTunnelAvailability(hydratedRows, availabilityIndex)[0] || null;
         return hydrated ? tunnelForUser(hydrated, accessScope) : null;
-      }),    listAll: adminProcedure.query(async () => {
+      }),
+    /**
+     * 链路管理的「线路总览」：线路组、转发组、入口组、出口组、隧道里所有「多条线路一起用」的，
+     * 按主备 / 负载均衡 / 单连接叠加归好（shared/linkOverview.ts）。只读，改还是去各自那页。
+     */
+    linkOverview: adminProcedure.query(async () => {
+      const [hosts, tunnels, groups, rules] = await Promise.all([
+        db.getHosts(),
+        db.getTunnels(),
+        db.getForwardGroups(),
+        db.getForwardRules(undefined, undefined, { failoverOnly: true }),
+      ]);
+      const tunnelIds = (tunnels as any[]).map((tunnel) => Number(tunnel.id));
+      const [hops, exitNodes] = await Promise.all([
+        db.getTunnelHopsByTunnelIds(tunnelIds),
+        db.getTunnelExitNodesByTunnelIds(tunnelIds),
+      ]);
+      return buildLinkOverview({
+        hosts: hosts as any[],
+        tunnels: tunnels as any[],
+        hops: hops as any[],
+        exitNodes: exitNodes as any[],
+        groups: groups as any[],
+        // 转发组派生出来的子规则跟着组走，不单独算一条线路组。
+        routeRules: (rules as any[]).filter((rule) => !rule.pendingDelete && !Number(rule.forwardGroupRuleId || 0)),
+      });
+    }),
+    listAll: adminProcedure.query(async () => {
       const hydrated = await attachTunnelEndpointHosts(await db.getTunnels() as any[]);
       const availabilityIndex = availabilityIndexForHydratedTunnels(hydrated);
       return attachTunnelAvailability(hydrated, availabilityIndex);
@@ -1074,7 +1102,7 @@ export const tunnelsRouter = router({
         }
         if (relayMode === "aggregate") {
           if (!hopHostIds || hopHostIds.length < 4) throw new Error("带宽叠加至少需要配置两个中转主机");
-          if (!tunnelRelayAggregateSupported(normalizedMode)) throw new Error("仅 NEX 隧道支持中转带宽叠加");
+          if (!tunnelRelayAggregateSupported(normalizedMode)) throw new Error("仅 NEX 隧道支持中转「单连接叠加」");
         }
         await requireTunnelProtocolEnabled({ ...input, mode: normalizedMode });
         await requireEntryGroupAccess(ctx, input.entryGroupId, true);
@@ -1390,7 +1418,7 @@ export const tunnelsRouter = router({
         }
         if (requestedRelayMode === "aggregate") {
           if (!hopIdsForConnect || hopIdsForConnect.length < 4) throw new Error("带宽叠加至少需要配置两个中转主机");
-          if (!tunnelRelayAggregateSupported(nextModeForRuntime)) throw new Error("仅 NEX 隧道支持中转带宽叠加");
+          if (!tunnelRelayAggregateSupported(nextModeForRuntime)) throw new Error("仅 NEX 隧道支持中转「单连接叠加」");
         }
         const nextRelayMode = requestedRelayMode === "failover" || requestedRelayMode === "aggregate"
           ? requestedRelayMode
@@ -1906,7 +1934,7 @@ export const tunnelsRouter = router({
         return getTunnelDeleteImpact(input.id);
       }),
     /**
-     * 复制模式：只对「中转带宽叠加」的 NEX 隧道有意义。开了以后入口每一片都从两条中转各发一份
+     * 复制模式：只对中转「单连接叠加」的 NEX 隧道有意义。开了以后入口每一片都从两条中转各发一份
      * （出口回程同样，出口 FXP ≥ 2.2.133），用一倍带宽换「一条中转断了连接也不断」。
      */
     setReplicate: protectedProcedure
@@ -1917,7 +1945,7 @@ export const tunnelsRouter = router({
         if (ctx.user.role !== "admin" && tunnel.userId !== ctx.user.id) throw new Error("无权操作此隧道");
         if (input.enabled) {
           const hops = await hopRepo.getTunnelHops(Number(tunnel.id));
-          if (!isTunnelRelayAggregate(tunnel, hops)) throw new Error("复制模式只能用在「中转带宽叠加」的 NEX 隧道上（至少两台中转）");
+          if (!isTunnelRelayAggregate(tunnel, hops)) throw new Error("复制模式只能用在中转「单连接叠加」的 NEX 隧道上（至少两台中转）");
         }
         if (dbBool((tunnel as any).multipathReplicate) !== input.enabled) {
           await db.updateTunnel(input.id, { multipathReplicate: input.enabled } as any);

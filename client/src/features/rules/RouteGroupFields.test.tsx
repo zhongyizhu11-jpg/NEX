@@ -145,7 +145,7 @@ test("纯 UDP 的编辑框：分法和旧会话三选一都按会话说，TCP+UD
   const udp = render(group("weighted", { spread: "round_robin" }), true, "udp");
   assert.match(udp, /aria-label="新会话怎么分"/);
   assert.match(udp, /新会话轮流走每一条/);
-  assert.match(udp, /切换时旧会话怎么办[^]*?平滑切换[^]*?已有的会话留在原路径[^]*?快速故障转移[^]*?丢掉它上面的会话[^]*?强制切换/);
+  assert.match(udp, /切换时旧会话怎么办[^]*?平滑切换[^]*?已有的会话留在原路径[^]*?快速切换[^]*?丢掉它上面的会话[^]*?强制切换/);
   assert.match(udp, /data-testid="route-plain"[^>]*>每个新会话轮流走每一条，旧会话不动/);
   assert.match(udp, /负载均衡[^]*?新会话按权重分到各条路径，旧会话不动/);
   assert.doesNotMatch(udp, /切换时旧连接怎么办|新连接轮流走每一条/);
@@ -180,7 +180,7 @@ test("高级策略里按模式给控件：择优门槛只在智能 / 混合，�
   assert.match(hybrid, /计划切换预热/);
   assert.match(hybrid, /预检不过就不切，继续走当前这条/);
   for (const mode of ["failover", "scheduled", "manual", "smart", "hybrid", "weighted"] as RouteMode[]) {
-    assert.match(render(group(mode)), /切换时旧连接怎么办[^]*?平滑切换[^]*?快速故障转移[^]*?强制切换/, `${mode} 少了旧连接三选一`);
+    assert.match(render(group(mode)), /切换时旧连接怎么办[^]*?平滑切换[^]*?快速切换[^]*?强制切换/, `${mode} 少了旧连接三选一`);
   }
 });
 

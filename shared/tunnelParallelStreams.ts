@@ -2,7 +2,7 @@
  * NEX 隧道的「单连接多路并发」（单连接带宽聚合，直连版）。
  *
  * 跨境线路常按单条 TCP 流限速或丢包：一条连接只跑得到几十 Mbit/s，十条连接加起来却能跑满。
- * 「中转带宽叠加」把一条连接拆到几台中转上；这里是没有中转（或者中转串成一条链）时的同一件事：
+ * 中转「单连接叠加」把一条连接拆到几台中转上；这里是没有中转（或者中转串成一条链）时的同一件事：
  * 入口把每条客户端连接拆成 N 片，从 N 条并行的安全连接发到同一个出口，出口按序号重组，
  * 目标看到的字节流和单路一模一样。用的是 FXP 现成的多路会话（multipath），出口上的重组、
  * 丢腿重传、乱序缓冲都是同一套。
@@ -33,13 +33,13 @@ export function normalizeTunnelParallelStreams(value: unknown): number {
 /**
  * 这条隧道能不能开（与 Agent 版本无关的部分），不能开时给出原因。
  * - 只有 NEX V1：V2 是 WireGuard，外面本来就只有一条 UDP 流，里面拆几条 TCP 没有用；
- * - 中转是「故障转移 / 带宽叠加」时不用：那两种已经是并排的中转，叠加模式本来就在拆；
+ * - 中转是「主备 / 单连接叠加」时不用：那两种已经是并排的中转，叠加模式本来就在拆；
  * - 多出口负载均衡的隧道不用：重组必须在同一个出口，拆了就没法按出口分流。
  */
 export function tunnelParallelStreamsUnavailableReason(tunnel: any, hops: readonly any[], exitRouteCount = 1): string {
   if (String(tunnel?.mode || "").trim().toLowerCase() !== "forwardx") return "只有 NEX 隧道支持单连接多路并发";
   if (String(tunnel?.forwardxVersion || "v1").trim().toLowerCase() === "v2") return "NEX V2（WireGuard）隧道外层只有一条 UDP 流，拆成多路没有用";
-  if (tunnelRelayUsesParallelRelays(tunnel, [...hops])) return "中转故障转移 / 带宽叠加的隧道不用再开（叠加模式已经在拆）";
+  if (tunnelRelayUsesParallelRelays(tunnel, [...hops])) return "中转是「主备」或「单连接叠加」的隧道不用再开（单连接叠加已经在拆）";
   if (exitRouteCount > 1) return "多出口负载均衡的隧道不能拆（重组必须在同一个出口）";
   return "";
 }

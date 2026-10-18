@@ -20,6 +20,7 @@ import {
 } from "@/lib/multiHopAddress";
 import {
   TUNNEL_RELAY_MODE_HINTS,
+  TUNNEL_RELAY_MODE_LABELS,
   tunnelRelayModeAvailability,
   type TunnelRelayMode,
 } from "@shared/tunnelRelay";
@@ -331,7 +332,7 @@ export default function MultiHopEditor({
                 onClick={() => onRelayModeChange?.("chain")}
                 title={TUNNEL_RELAY_MODE_HINTS.chain}
               >
-                链路中转
+                {TUNNEL_RELAY_MODE_LABELS.chain}
               </button>
               <button
                 type="button"
@@ -341,7 +342,7 @@ export default function MultiHopEditor({
                 onClick={() => onRelayModeChange?.("failover")}
                 title={failoverDisabledReason || TUNNEL_RELAY_MODE_HINTS.failover}
               >
-                故障转移
+                {TUNNEL_RELAY_MODE_LABELS.failover}
               </button>
               <button
                 type="button"
@@ -351,7 +352,7 @@ export default function MultiHopEditor({
                 onClick={() => onRelayModeChange?.("aggregate")}
                 title={aggregateDisabledReason || TUNNEL_RELAY_MODE_HINTS.aggregate}
               >
-                带宽叠加
+                {TUNNEL_RELAY_MODE_LABELS.aggregate}
               </button>
             </div>
           </div>
@@ -360,8 +361,8 @@ export default function MultiHopEditor({
       {showRelayMode && (
         <p className="text-xs text-muted-foreground">
           {TUNNEL_RELAY_MODE_HINTS[relayMode]}
-          {aggregateDisabledReason ? `　带宽叠加：${aggregateDisabledReason}。` : ""}
-          {!aggregateDisabledReason && failoverDisabledReason ? `　故障转移：${failoverDisabledReason}。` : ""}
+          {aggregateDisabledReason ? `　${TUNNEL_RELAY_MODE_LABELS.aggregate}：${aggregateDisabledReason}。` : ""}
+          {!aggregateDisabledReason && failoverDisabledReason ? `　${TUNNEL_RELAY_MODE_LABELS.failover}：${failoverDisabledReason}。` : ""}
         </p>
       )}
 

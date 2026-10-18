@@ -40,7 +40,7 @@ function formatFromUserAgent(userAgent: string): ProxySubscriptionFormat | null 
 }
 
 /**
- * 这个客户端能不能按带宽加权的带宽叠加组（组里重复列同一个节点 = 多分连接）。
+ * 这个客户端能不能按带宽加权的负载均衡组（组里重复列同一个节点 = 多分连接）。
  * 只认 mihomo / Clash 内核（Clash Verge、Mihomo Party、FlClash、ClashMetaForAndroid……），
  * 代码里核实过不去重；Stash 是另一套实现，没核实，不展开。
  */

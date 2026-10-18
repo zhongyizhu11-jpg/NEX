@@ -45,6 +45,7 @@ export type FailoverLineDisplay = {
 const spreadText: Record<RoutePolicy["strategy"], string> = {
   fallback: "主备",
   weighted: "按权重",
+  least_load: "按负载",
   round_robin: "轮流",
   random: "随机",
   ip_hash: "按访客",

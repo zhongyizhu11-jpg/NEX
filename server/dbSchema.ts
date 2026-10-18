@@ -251,6 +251,8 @@ const tables: TableDef[] = [
     columns: [
       c("id", "id"), c("name", "text", { notNull: true }), c("ip", "text", { notNull: true }),
       c("rateLimitMbps", "int", { notNull: true, default: 0 }),
+      // 线路带宽（Mbps）：这台机器能跑多快。负载均衡按它分连接（订阅的负载均衡组、出口组按权重、入口组排序）。0 = 没填。
+      c("lineBandwidthMbps", "int", { notNull: true, default: 0 }),
       c("ipv4", "text"), c("ipv6", "text"), c("hostType", "varchar", { length: 32, notNull: true, default: "slave" }),
       c("agentToken", "text"), c("entryIp", "text"), c("tunnelEntryIp", "text"), c("osInfo", "text"), c("cpuInfo", "text"),
       c("memoryTotal", "bigint"), c("agentVersion", "text"), c("fxpVersion", "varchar", { length: 64 }),

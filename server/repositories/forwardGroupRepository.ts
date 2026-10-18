@@ -40,7 +40,7 @@ import {
   markForwardRulePendingDelete,
   updateForwardRule,
 } from "./forwardRuleRepository";
-import { getHostById, getHosts, HOST_ONLINE_TTL_MS, isFreshHostHeartbeat } from "./hostRepository";
+import { getHostById, getHosts, getHostsByIds, HOST_ONLINE_TTL_MS, isFreshHostHeartbeat } from "./hostRepository";
 import { getLatestHostMetricSnapshots } from "./metricsRepository";
 import {
   applyAggregationToDdnsValues,
@@ -4154,7 +4154,8 @@ export async function getForwardGroupBandwidthAggregation(groupId: number) {
       hostId: Number(member.hostId || 0),
       value,
       healthy,
-      bandwidthMbps: Number(member.bandwidthMbps || 0),
+      // 成员上没填就用主机的「线路带宽」。
+      bandwidthMbps: Number(member.bandwidthMbps || 0) || Math.max(0, Number(host?.lineBandwidthMbps) || 0),
       aggregationWeight: Number(member.aggregationWeight || 0),
       label: String(host?.name || "").trim() || value,
     });
@@ -4693,6 +4694,17 @@ async function memberThroughputMbps(members: AggregationMemberRow[]) {
  * Returns `null` for groups that did not opt into aggregation so the caller
  * keeps its existing behaviour untouched.
  */
+/** 成员上没填「上行 Mbps」时，用主机上的「线路带宽」（一台机器只填一处）。 */
+async function withHostLineBandwidth<T extends { hostId: number; bandwidthMbps?: number | null }>(members: T[]): Promise<T[]> {
+  const missing = Array.from(new Set(members.filter((member) => !(Number(member.bandwidthMbps) > 0) && member.hostId > 0).map((member) => member.hostId)));
+  if (missing.length === 0) return members;
+  const rows = await getHostsByIds(missing).catch(() => []) as any[];
+  const lineById = new Map(rows.map((row) => [Number(row.id), Math.max(0, Number(row.lineBandwidthMbps) || 0)]));
+  return members.map((member) => (Number(member.bandwidthMbps) > 0 || !lineById.get(member.hostId)
+    ? member
+    : { ...member, bandwidthMbps: lineById.get(member.hostId)! }));
+}
+
 async function resolveEntryGroupAggregation(
   group: any,
   members: AggregationMemberRow[],
@@ -4700,6 +4712,7 @@ async function resolveEntryGroupAggregation(
   recordType: ForwardGroupRecordType,
 ) {
   if (!isBandwidthAggregationGroup(group) || members.length === 0 || values.length === 0) return null;
+  members = await withHostLineBandwidth(members);
   // The adaptive strategy is the only one that needs live throughput, so the
   // extra metric read is skipped for the static strategies.
   const strategy = resolveAggregationSettings(group).strategy;

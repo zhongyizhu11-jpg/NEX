@@ -1,3 +1,4 @@
+import { LINK_SPREAD_LABELS } from "./linkTerms";
 import { readFailoverPin, type FailoverPin } from "./failoverPin";
 import { parseFailoverSchedule, type FailoverSchedule } from "./failoverSchedule";
 import {
@@ -137,13 +138,13 @@ export const ROUTE_MODES = ["failover", "scheduled", "manual", "smart", "hybrid"
 export type RouteMode = (typeof ROUTE_MODES)[number];
 
 /** 权重负载模式下新连接怎么分：按权重、轮流、随机、按访客固定。 */
-export const ROUTE_SPREADS = ["weighted", "round_robin", "random", "ip_hash"] as const;
+export const ROUTE_SPREADS = ["weighted", "least_load", "round_robin", "random", "ip_hash"] as const;
 export type RouteSpread = (typeof ROUTE_SPREADS)[number];
 
 /**
  * 切换时旧连接怎么办：
  *   smooth  平滑：旧连接留在原线路，新连接走新线路（默认）
- *   fast    快速故障转移：线路挂了才断旧连接让客户端重连；按计划、按评分切换仍然平滑
+ *   fast    快速切换：线路挂了才断旧连接让客户端重连；按计划、按评分切换仍然平滑
  *   force   强制：每次切换都断旧连接
  */
 export const ROUTE_SWITCH_MODES = ["smooth", "fast", "force"] as const;
@@ -241,16 +242,18 @@ export const ROUTE_MODE_SHORT: Record<RouteMode, string> = {
   weighted: "负载",
 };
 
+// 名字和出口组的策略同一套（shared/linkTerms.ts），只是这里说的是「路径」。
 export const ROUTE_SPREAD_LABELS: Record<RouteSpread, { label: string; hint: string }> = {
-  weighted: { label: "按权重", hint: "新连接按每条路径的权重分配" },
-  round_robin: { label: "轮流", hint: "新连接轮流走每一条" },
-  random: { label: "随机", hint: "新连接随机挑一条能用的" },
-  ip_hash: { label: "按访客固定", hint: "同一个来源 IP 总走同一条，适合要保持登录的服务" },
+  weighted: { label: LINK_SPREAD_LABELS.weighted.label, hint: "新连接按每条路径的权重分配" },
+  least_load: { label: LINK_SPREAD_LABELS.least_load.label, hint: "新连接给现在挂着连接最少的那条（按权重折算），长连接多时比按权重更均匀" },
+  round_robin: { label: LINK_SPREAD_LABELS.round_robin.label, hint: "新连接轮流走每一条" },
+  random: { label: LINK_SPREAD_LABELS.random.label, hint: "新连接随机挑一条能用的" },
+  ip_hash: { label: LINK_SPREAD_LABELS.ip_hash.label, hint: "同一个来源 IP 总走同一条，适合要保持登录的服务" },
 };
 
 export const ROUTE_SWITCH_MODE_INFO: Record<RouteSwitchMode, { label: string; hint: string }> = {
   smooth: { label: "平滑切换", hint: "旧连接留在原线路，新连接走新线路，基本无感（推荐）" },
-  fast: { label: "快速故障转移", hint: "线路挂了就断开它上面的旧连接，让客户端马上重连到新线路；计划和择优切换仍然平滑" },
+  fast: { label: "快速切换", hint: "线路挂了就断开它上面的旧连接，让客户端马上重连到新线路；计划和择优切换仍然平滑" },
   force: { label: "强制切换", hint: "每次切换都断开旧连接，全部客户端立刻走新线路，可能重连" },
 };
 
@@ -260,6 +263,7 @@ export const ROUTE_SWITCH_MODE_INFO: Record<RouteSwitchMode, { label: string; hi
 */
 export const ROUTE_SPREAD_SESSION_HINTS: Record<RouteSpread, string> = {
   weighted: "新会话按每条路径的权重分配",
+  least_load: "新会话给现在连接最少的那条（按权重折算）",
   round_robin: "新会话轮流走每一条",
   random: "新会话随机挑一条能用的",
   ip_hash: "UDP 分不出访客：同一个会话一直走同一条，同一个访客的不同会话可能分到不同路径",

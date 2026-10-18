@@ -1,5 +1,10 @@
 /**
- * 多入口带宽加权分流 (bandwidth-weighted entry distribution).
+ * 按带宽排序解析 (bandwidth-ranked entry records) —— 入口组的选项，2.3.454 前叫「多入口带宽加权分流」。
+ *
+ * 实际做的事（server/bandwidthAggregation.ts applyAggregationToDdnsValues）：入口域名照旧解析出
+ * 全部健康入口，只是按带宽 / 权重 / 剩余带宽把它们排个先后。很多客户端和运营商 DNS 优先用排在前面的
+ * 地址，所以大带宽的入口通常会接到更多客户端，但 DNS 给不出准确的比例 —— 以前的说法（按带宽分配
+ * 解析份额、总吞吐接近各入口之和）说过头了。下面的英文说明是最初的设计，保留作背景。
  *
  * Not to be confused with the tunnel's relay bandwidth aggregation, which
  * splits a single connection across several relays. This module distributes
@@ -30,17 +35,17 @@ export const BANDWIDTH_AGGREGATION_STRATEGIES = [
 export type BandwidthAggregationStrategy = (typeof BANDWIDTH_AGGREGATION_STRATEGIES)[number];
 
 export const BANDWIDTH_AGGREGATION_STRATEGY_LABELS: Record<BandwidthAggregationStrategy, string> = {
-  weighted: "手动权重 - 按成员权重分配",
-  equal: "均分模式 - 每个入口等量分配",
-  capacity: "带宽比例 - 按上行带宽分配",
-  adaptive: "动态调节 - 按剩余带宽分配",
+  weighted: "按权重 - 权重高的排前面",
+  equal: "不分先后 - 不看带宽",
+  capacity: "按带宽 - 带宽大的排前面",
+  adaptive: "按剩余带宽 - 现在闲的排前面",
 };
 
 export const BANDWIDTH_AGGREGATION_STRATEGY_HINTS: Record<BandwidthAggregationStrategy, string> = {
-  weighted: "完全按照每个入口手动设置的权重分配解析份额。",
-  equal: "忽略带宽差异，所有健康入口获得相同份额，适合同规格机器。",
-  capacity: "按每个入口声明的上行带宽比例分配份额，带宽越大份额越高。",
-  adaptive: "在带宽比例的基础上，扣除实时已用带宽，把新连接导向剩余带宽更多的入口。",
+  weighted: "按每个入口手动设置的权重排先后。",
+  equal: "不看带宽，所有健康入口一视同仁，适合同规格机器。",
+  capacity: "按每个入口的线路带宽排先后，带宽大的在前。",
+  adaptive: "在带宽的基础上扣掉实时已用带宽，现在剩余带宽多的排前面。",
 };
 
 /** Largest weight a single member may carry. Keeps record expansion bounded. */

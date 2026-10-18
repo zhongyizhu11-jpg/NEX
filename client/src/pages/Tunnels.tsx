@@ -5,7 +5,7 @@ import EmptyState from "@/components/EmptyState";
 import TunnelConnStatsDialog from "@/components/tunnels/TunnelConnStatsDialog";
 import TunnelParallelStreamsDialog from "@/components/tunnels/TunnelParallelStreamsDialog";
 import { describeTunnelParallelStreams, normalizeTunnelParallelStreams, tunnelParallelStreamsUnavailableReason } from "@shared/tunnelParallelStreams";
-import { useLocation } from "wouter";
+import { useLocation, useSearch } from "wouter";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
 import { HeaderStatusChips } from "@/components/HeaderStatusChips";
 import { Sparkline } from "@/components/charts/Sparkline";
@@ -28,6 +28,9 @@ import { hostIpv6Address, hostPrivateAddress, normalizeConnectHostForHost, sameA
 import { addressKey } from "@/lib/multiHopAddress";
 import SectionTransition from "@/components/SectionTransition";
 import { RouteGroupsSection } from "@/features/rules/RouteGroupsSection";
+import { LinkOverviewSection } from "@/features/links/LinkOverviewSection";
+import { LinkWizardDialog } from "@/features/links/LinkWizardDialog";
+import type { LinkWizardAction } from "@shared/linkWizard";
 import { loadReactGlobe, prefetchReactGlobe } from "@/lib/reactGlobeLoader";
 import { escapeTooltipHtml, hostGeoCoordinate } from "@/lib/hostGeo";
 import DashboardLayout from "@/components/DashboardLayout";
@@ -153,6 +156,7 @@ import {
 import {
   EXIT_GROUP_STRATEGY_LABELS,
   normalizeExitGroupStrategy,
+  type ExitGroupStrategy,
 } from "@shared/exitStrategy";
 import { useReducedMotion } from "motion/react";
 import {
@@ -208,7 +212,7 @@ type TunnelForm = {
   /** 编辑时带进来的 FXP 整形状态（只读，不提交）。 */
   linkShapingStatus: LinkShapingStatus[];
   loadBalanceEnabled: boolean;
-  loadBalanceStrategy: "none" | "round_robin" | "random" | "least_conn" | "ip_hash" | "fallback";
+  loadBalanceStrategy: "none" | "round_robin" | "random" | "least_conn" | "ip_hash" | "fallback" | "weighted" | "least_load";
   loadBalanceExits: Array<{ hostId: number | null; connectHost: string }>;
   exitGroupId: number | null;
   blockHttp: boolean;
@@ -819,7 +823,7 @@ const TUNNEL_SECTION_ITEMS = [
   { value: "groups", label: "转发组", icon: ShieldCheck },
   { value: "entries", label: "入口组", icon: LogIn },
   { value: "exits", label: "出口组", icon: LogOut },
-  { value: "routes", label: "线路组", icon: Waypoints },
+  { value: "routes", label: "线路总览", icon: Waypoints },
 ] as const satisfies readonly SlidingTabItem<TunnelSection>[];
 
 const TUNNEL_SECTION_STORAGE_KEY = "forwardx.tunnels.section";
@@ -1860,7 +1864,7 @@ function TunnelSelfTestDialog({
         fromMeta: meta[hostDisplayName(entryHost)] || meta[String(firstHostId)] || undefined,
         toMeta: meta[hostDisplayName(primaryExitHost)] || meta[String(lastHostId)] || undefined,
         groupKey: branchGroupKey,
-        groupLabel: "多出口负载",
+        groupLabel: "多出口负载均衡",
       }];
       for (const exit of extraExits) {
         const exitHostId = Number(exit?.hostId || 0);
@@ -1876,7 +1880,7 @@ function TunnelSelfTestDialog({
           fromMeta: meta[hostDisplayName(entryHost)] || meta[String(firstHostId)] || undefined,
           toMeta: meta[hostDisplayName(exitHost)] || meta[String(exitHostId)] || undefined,
           groupKey: branchGroupKey,
-          groupLabel: "多出口负载",
+          groupLabel: "多出口负载均衡",
         });
       }
       plannedSegments = branchSegments.slice(0, 1).filter((segment: LinkTestPlannedSegment) => segment.from && segment.to);
@@ -2240,12 +2244,17 @@ function TunnelsContent() {
     }
   }));
   const [, setTopologyLocation] = useLocation();
+  const linkLocation = useSearch();
   const [showCreateTypeDialog, setShowCreateTypeDialog] = useState(false);
   const [selectedCreateType, setSelectedCreateType] = useState<LinkCreateType>("chain");
   const [chainCreateForm, setChainCreateForm] = useState<ChainCreateForm>(defaultChainCreateForm);
   const [chainAdvancedOpen, setChainAdvancedOpen] = useState(false);
   const [chainEditRequest, setChainEditRequest] = useState<{ id: number; requestKey: number } | null>(null);
-  const [groupCreateRequest, setGroupCreateRequest] = useState<{ mode: TunnelGroupMode; requestKey: number } | null>(null);
+  const [groupEditRequest, setGroupEditRequest] = useState<{ id: number; requestKey: number } | null>(null);
+  const [groupCreateRequest, setGroupCreateRequest] = useState<{ mode: TunnelGroupMode; requestKey: number; exitStrategy?: ExitGroupStrategy } | null>(null);
+  const [linkWizardOpen, setLinkWizardOpen] = useState(false);
+  const [wizardRelayMode, setWizardRelayMode] = useState<"failover" | "aggregate" | null>(null);
+  const [pendingGroupCreate, setPendingGroupCreate] = useState<{ mode: "failover" | "entry" | "exit"; exitStrategy?: ExitGroupStrategy } | null>(null);
   const [deleteTunnel, setDeleteTunnel] = useState<any | null>(null);
   const [connStatsTunnel, setConnStatsTunnel] = useState<{ id: number; name: string } | null>(null);
   const [parallelStreamsTunnel, setParallelStreamsTunnel] = useState<{ id: number; name: string; parallelStreams?: unknown } | null>(null);
@@ -2728,6 +2737,30 @@ function TunnelsContent() {
     setTunnelAdvancedOpen(false);
   };
 
+  /*
+    /tunnels?tab=tunnels&edit=<隧道 id>：从「线路总览」直接打开这条隧道的编辑框。
+    隧道不一定在当前这一页里，所以按 id 单独取。
+  */
+  useEffect(() => {
+    const groupSection = activeSection === "groups" || activeSection === "entries" || activeSection === "exits";
+    if (activeSection !== "tunnels" && !groupSection) return;
+    const params = new URLSearchParams(window.location.search);
+    const editId = Number(params.get("edit") || 0);
+    if (!Number.isInteger(editId) || editId <= 0 || !hasResolvedHosts) return;
+    params.delete("edit");
+    const nextSearch = params.toString();
+    setTopologyLocation(`/tunnels${nextSearch ? `?${nextSearch}` : ""}`, { replace: true });
+    // 转发组、入口组、出口组交给对应页签里的 ForwardGroupsContent 去开（它有完整的组列表）。
+    if (groupSection) {
+      setGroupEditRequest({ id: editId, requestKey: Date.now() });
+      return;
+    }
+    void utils.tunnels.getById.fetch({ id: editId }).then((tunnel) => {
+      if (tunnel) openEdit(tunnel);
+      else toast.error("这条隧道不存在");
+    }, () => toast.error("读取隧道失败"));
+  }, [activeSection, hasResolvedHosts, linkLocation]);
+
   const openEdit = (tunnel: any) => {
     if (!isTunnelSupported(tunnel)) return;
     const hopHostIds = Array.isArray(tunnel.hopHostIds) && tunnel.hopHostIds.length >= 2
@@ -2796,7 +2829,7 @@ function TunnelsContent() {
       udpFec: transportTuningSupported && !!(tunnel as any).udpFec,
       kernelPassthrough: transportTuningSupported && !!(tunnel as any).kernelPassthrough,
       loadBalanceEnabled: exitGroupId ? !!tunnel.loadBalanceEnabled : false,
-      loadBalanceStrategy: (["none", "round_robin", "random", "least_conn", "ip_hash", "fallback"].includes(String(tunnel.loadBalanceStrategy || ""))
+      loadBalanceStrategy: (["none", "round_robin", "random", "least_conn", "ip_hash", "fallback", "weighted", "least_load"].includes(String(tunnel.loadBalanceStrategy || ""))
         ? tunnel.loadBalanceStrategy
         : "round_robin") as TunnelForm["loadBalanceStrategy"],
       loadBalanceExits: exitGroupId ? loadBalanceExits : [],
@@ -3959,7 +3992,11 @@ function TunnelsContent() {
   const canCreateChain = !!hosts?.length && hosts.length >= 2 && availableChainForwardTypes.length > 0;
   const canCreateGroup = !!hosts?.length && hosts.length >= 1;
   const activeSectionCreatesGroup = activeSection === "ports" || activeSection === "groups" || activeSection === "entries" || activeSection === "exits";
-  const canCreateActive = activeSection === "tunnels"
+  // 「按目标新建」向导默认关（系统设置里开），懂行的人不需要它。
+  const linkWizardEnabled = !!(systemSettings as any)?.linkWizardEnabled;
+  const canCreateActive = activeSection === "routes"
+    ? linkWizardEnabled && canCreateGroup
+    : activeSection === "tunnels"
     ? canCreateTunnel
     : activeSection === "chains"
       ? canCreateChain
@@ -3980,7 +4017,55 @@ function TunnelsContent() {
         ? (availableChainForwardTypes.length === 0 ? "暂无可用转发工具" : "当前主机或转发工具不支持转发链")
         : undefined;
 
+  // 「按目标新建」选好以后：切到对应页签，打开它的新建框，能预填的替用户填好。
+  const handleLinkWizardCreate = (action: LinkWizardAction) => {
+    if (action.type === "rule") {
+      setTopologyLocation("/rules?create=local");
+      return;
+    }
+    if (action.type === "group") {
+      setActiveSection(action.mode === "failover" ? "groups" : action.mode === "entry" ? "entries" : "exits");
+      setPendingGroupCreate({ mode: action.mode, exitStrategy: action.exitStrategy });
+      return;
+    }
+    if (!canCreateTunnel) return;
+    setActiveSection("tunnels");
+    resetTunnelCreateForm();
+    setWizardRelayMode(action.relayMode === "chain" ? null : action.relayMode);
+    setShowDialog(true);
+  };
+  /*
+    向导选的中转方式（主备 / 单连接叠加）要两台中转才选得上，没加中转之前编辑器会把它退回
+    「链路中转」。所以先记着，等加够两台中转再替用户切过去；关掉对话框就忘掉。
+  */
+  useEffect(() => {
+    if (!showDialog) {
+      if (wizardRelayMode) setWizardRelayMode(null);
+      return;
+    }
+    // 中转台数和编辑器（MultiHopEditor 的 relayCount）同一个算法：用入口组 / 出口组时首尾不占位。
+    const relayCount = (form.hopHostIds || []).length - (form.entryGroupId ? 0 : 1) - (form.exitGroupId ? 0 : 1);
+    if (!wizardRelayMode || relayCount < 2) return;
+    if (wizardRelayMode === "aggregate" ? !tunnelRelayAggregateSupported(form.mode) : !tunnelRelayFailoverSupported(form.mode)) return;
+    setForm((prev) => ({ ...prev, relayMode: wizardRelayMode }));
+    setWizardRelayMode(null);
+  }, [showDialog, wizardRelayMode, form.hopHostIds, form.mode, form.entryGroupId, form.exitGroupId]);
+  /*
+    向导要新建组时先切页签，等那个页签的数据读完再发请求：页签内容在「读取中 → 列表」时会按
+    SectionTransition 的 key 重新挂一次，早发的请求打开的框会跟着旧的那份一起被卸掉。
+  */
+  useEffect(() => {
+    if (!pendingGroupCreate || forwardGroupsLoading) return;
+    const section = pendingGroupCreate.mode === "failover" ? "groups" : pendingGroupCreate.mode === "entry" ? "entries" : "exits";
+    if (activeSection !== section) return;
+    setGroupCreateRequest({ ...pendingGroupCreate, requestKey: Date.now() });
+    setPendingGroupCreate(null);
+  }, [pendingGroupCreate, forwardGroupsLoading, activeSection]);
   const openCreateTypeDialog = () => {
+    if (activeSection === "routes") {
+      if (linkWizardEnabled) setLinkWizardOpen(true);
+      return;
+    }
     if (activeSectionCreatesGroup) {
       if (activeSection === "ports" ? !canCreatePort : !canCreateGroup) return;
       setGroupCreateRequest({
@@ -4342,15 +4427,18 @@ function TunnelsContent() {
             {linkSearchStats.filtered} / {linkSearchStats.total} {linkSearchStats.unit}
           </span>
         ) : null}
-        <Button
-          className="fx-row-action ml-auto h-9 shrink-0 gap-1.5 rounded-full px-3.5"
-          disabled={!canCreateActive}
-          title={createDisabledTitle}
-          onClick={openCreateTypeDialog}
-        >
-          <Plus className="h-4 w-4" />
-          新建链路
-        </Button>
+        {/* 「线路总览」本身不新建东西；系统设置里打开了向导才在这里放「按目标新建」。 */}
+        {activeSection === "routes" && !linkWizardEnabled ? null : (
+          <Button
+            className="fx-row-action ml-auto h-9 shrink-0 gap-1.5 rounded-full px-3.5"
+            disabled={!canCreateActive}
+            title={createDisabledTitle}
+            onClick={openCreateTypeDialog}
+          >
+            <Plus className="h-4 w-4" />
+            {activeSection === "routes" ? "按目标新建" : "新建链路"}
+          </Button>
+        )}
       </div>
 
 
@@ -4535,6 +4623,7 @@ function TunnelsContent() {
               hideHeaderActions
               searchQuery={normalizedLinkSearchQuery}
               createRequestKey={groupCreateRequest?.mode === "port" ? groupCreateRequest.requestKey : undefined}
+              onCreateRequestConsumed={() => setGroupCreateRequest(null)}
             />
           </SectionTransition>
         </TabsContent>
@@ -4588,11 +4677,14 @@ function TunnelsContent() {
             <ForwardGroupsContent
               mode="failover"
               embedded
+              editRequest={groupEditRequest}
+              onEditRequestConsumed={() => setGroupEditRequest(null)}
               viewMode={groupViewMode}
               onViewModeChange={(nextViewMode) => handleChainViewModeChange(nextViewMode)}
               hideHeaderActions
               searchQuery={normalizedLinkSearchQuery}
               createRequestKey={groupCreateRequest?.mode === "failover" ? groupCreateRequest.requestKey : undefined}
+              onCreateRequestConsumed={() => setGroupCreateRequest(null)}
             />
           </SectionTransition>
         </TabsContent>
@@ -4602,18 +4694,25 @@ function TunnelsContent() {
             <ForwardGroupsContent
               mode="entry"
               embedded
+              editRequest={groupEditRequest}
+              onEditRequestConsumed={() => setGroupEditRequest(null)}
               viewMode={groupViewMode}
               onViewModeChange={(nextViewMode) => handleChainViewModeChange(nextViewMode)}
               hideHeaderActions
               searchQuery={normalizedLinkSearchQuery}
               createRequestKey={groupCreateRequest?.mode === "entry" ? groupCreateRequest.requestKey : undefined}
+              onCreateRequestConsumed={() => setGroupCreateRequest(null)}
             />
           </SectionTransition>
         </TabsContent>
 
         <TabsContent value="routes" className="space-y-4">
           <SectionTransition transitionKey={`routes-${normalizedLinkSearchQuery || "all"}`}>
-            <RouteGroupsSection searchQuery={normalizedLinkSearchQuery} isAdmin={user?.role === "admin"} />
+            <div className="space-y-4">
+              <LinkOverviewSection searchQuery={normalizedLinkSearchQuery} />
+              <h3 className="pt-2 text-sm font-semibold">线路组</h3>
+              <RouteGroupsSection searchQuery={normalizedLinkSearchQuery} isAdmin={user?.role === "admin"} />
+            </div>
           </SectionTransition>
         </TabsContent>
 
@@ -4622,11 +4721,15 @@ function TunnelsContent() {
             <ForwardGroupsContent
               mode="exit"
               embedded
+              editRequest={groupEditRequest}
+              onEditRequestConsumed={() => setGroupEditRequest(null)}
               viewMode={groupViewMode}
               onViewModeChange={(nextViewMode) => handleChainViewModeChange(nextViewMode)}
               hideHeaderActions
               searchQuery={normalizedLinkSearchQuery}
               createRequestKey={groupCreateRequest?.mode === "exit" ? groupCreateRequest.requestKey : undefined}
+              onCreateRequestConsumed={() => setGroupCreateRequest(null)}
+              createPreset={groupCreateRequest?.mode === "exit" ? { exitStrategy: groupCreateRequest.exitStrategy } : undefined}
             />
           </SectionTransition>
         </TabsContent>
@@ -4653,6 +4756,12 @@ function TunnelsContent() {
 
       <TunnelConnStatsDialog tunnel={connStatsTunnel} onClose={() => setConnStatsTunnel(null)} />
       <TunnelParallelStreamsDialog tunnel={parallelStreamsTunnel} onClose={() => setParallelStreamsTunnel(null)} />
+      <LinkWizardDialog
+        open={linkWizardOpen}
+        onOpenChange={setLinkWizardOpen}
+        onCreate={handleLinkWizardCreate}
+        forwardXAvailable={forwardProtocolSettings.forwardx !== false}
+      />
       <Dialog open={!!deleteTunnel} onOpenChange={(open) => !open && setDeleteTunnel(null)}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>

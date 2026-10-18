@@ -110,6 +110,9 @@ import {
   YAxis,
 } from "recharts";
 import { MAX_FORWARD_GROUP_MEMBERS } from "@shared/forwardGroup";
+import { hostBandwidthHintMbps } from "@shared/linkWeights";
+import { LINK_SPREAD_LABELS } from "@shared/linkTerms";
+import { LinkSpreadPicker } from "@/features/links/LinkSpreadPicker";
 import { describeGroupRoutePolicy, type GroupRoutePolicyOptions } from "@shared/routePolicy";
 import { LinkTestProbeView, parseLinkTestMessage, type LinkTestPlannedSegment } from "@/components/LinkTestLatencySummary";
 import { BandwidthAggregationSummary } from "@/components/BandwidthAggregationSummary";
@@ -131,6 +134,7 @@ import {
 } from "@shared/forwardTypes";
 import {
   EXIT_GROUP_STRATEGY_LABELS,
+  exitGroupWeights,
   normalizeExitGroupStrategy,
   type ExitGroupStrategy,
 } from "@shared/exitStrategy";
@@ -148,7 +152,6 @@ import {
   BANDWIDTH_AGGREGATION_STRATEGIES,
   BANDWIDTH_AGGREGATION_STRATEGY_HINTS,
   BANDWIDTH_AGGREGATION_STRATEGY_LABELS,
-  MAX_AGGREGATION_RECORD_SLOTS,
   MAX_MEMBER_BANDWIDTH_MBPS,
   MAX_MEMBER_WEIGHT,
   formatAggregationUtilization,
@@ -166,7 +169,6 @@ const dbFlag = (value: unknown) => value === true || value === 1 || value === "1
 
 type GroupType = "host" | "tunnel";
 type GroupMode = "port" | "failover" | "chain" | "entry" | "exit";
-type FailoverStrategy = "fallback" | "round_robin" | "random" | "ip_hash";
 type MemberForm = {
   key: string;
   memberType: GroupType;
@@ -197,9 +199,6 @@ type GroupForm = {
   zeroCopy: boolean;
   udpOverTcp: boolean;
   udpOverTcpPort: number;
-  failoverEnabled: boolean;
-  failoverStrategy: FailoverStrategy;
-  failoverTargetsText: string;
   domain: string;
   recordType: "A" | "AAAA" | "CNAME";
   failoverSeconds: string;
@@ -223,7 +222,8 @@ type GroupForm = {
 const makeDefaultForm = (): GroupForm => ({
   name: "",
   groupMode: "failover",
-  exitStrategy: "round_robin",
+  // 新建出口组默认「按负载」：按实时流量和线路带宽分，最能把几台一起跑满。
+  exitStrategy: "least_load",
   entryGroupId: null,
   groupType: "host",
   protocol: "both",
@@ -235,9 +235,6 @@ const makeDefaultForm = (): GroupForm => ({
   zeroCopy: false,
   udpOverTcp: false,
   udpOverTcpPort: 0,
-  failoverEnabled: false,
-  failoverStrategy: "fallback",
-  failoverTargetsText: "",
   domain: "",
   recordType: "A",
   failoverSeconds: "60",
@@ -379,6 +376,13 @@ type ForwardGroupsContentProps = {
   onViewModeChange?: (viewMode: ForwardGroupViewMode) => void;
   hideHeaderActions?: boolean;
   createRequestKey?: number;
+  /** 跟着 createRequestKey 一起来的预填值（「按目标新建」替用户选好的出口策略）。 */
+  createPreset?: { exitStrategy?: ExitGroupStrategy };
+  /**
+   * 新建框打开以后调用，外面把请求清掉。有了它，页签刚挂载时带着的请求也照样打开
+   * （「按目标新建」是先切页签、再发请求的，这一块是新挂载的）。
+   */
+  onCreateRequestConsumed?: () => void;
   editRequest?: { id: number; requestKey: number } | null;
   onEditRequestConsumed?: () => void;
   searchQuery?: string;
@@ -511,7 +515,6 @@ function forwardGroupMatchesSearchQuery(
     group?.forwardType,
     (FORWARD_TYPE_LABELS as Record<string, string>)[String(group?.forwardType || "")],
     group?.groupType,
-    group?.failoverStrategy,
     group?.trafficMultiplier,
     entryGroupText,
     ...(modeLabels[mode] || []),
@@ -877,6 +880,8 @@ export function ForwardGroupsContent({
   onViewModeChange,
   hideHeaderActions = false,
   createRequestKey,
+  createPreset,
+  onCreateRequestConsumed,
   editRequest,
   onEditRequestConsumed,
   searchQuery = "",
@@ -915,7 +920,8 @@ export function ForwardGroupsContent({
   // 点开故障转移策略面板的那个组。只存 id：面板跟着列表轮询刷新，不拿一份旧快照。
   const [policyGroupId, setPolicyGroupId] = useState<number | null>(null);
   const [advancedSettingsOpen, setAdvancedSettingsOpen] = useState(false);
-  const lastCreateRequestKeyRef = useRef(createRequestKey ?? 0);
+  // 外面会在用完后清掉请求（onCreateRequestConsumed）时，挂载时就带着的请求也要处理；否则沿用老规矩，只认挂载后的新请求。
+  const lastCreateRequestKeyRef = useRef(onCreateRequestConsumed ? 0 : createRequestKey ?? 0);
   const lastEditRequestKeyRef = useRef(0);
   const closeResetTimerRef = useRef<number | null>(null);
   const activeGroupMode = mode;
@@ -1091,7 +1097,7 @@ export function ForwardGroupsContent({
 
   useEffect(() => () => clearCloseResetTimer(), []);
 
-  const openCreate = () => {
+  const openCreate = (preset?: { exitStrategy?: ExitGroupStrategy }) => {
     clearCloseResetTimer();
     const initial = makeDefaultForm();
     setForm({
@@ -1101,6 +1107,7 @@ export function ForwardGroupsContent({
       forwardType: availableForwardTypes[0] || initial.forwardType,
       domain: activeGroupMode === "failover" || activeGroupMode === "entry" ? initial.domain : "",
       recordType: activeGroupMode === "chain" || activeGroupMode === "exit" ? "A" : initial.recordType,
+      ...(activeGroupMode === "exit" && preset?.exitStrategy ? { exitStrategy: preset.exitStrategy } : {}),
     });
     setEditingId(null);
     setDragMemberKey(null);
@@ -1112,7 +1119,10 @@ export function ForwardGroupsContent({
   useEffect(() => {
     if (createRequestKey === undefined || createRequestKey === lastCreateRequestKeyRef.current) return;
     lastCreateRequestKeyRef.current = createRequestKey;
-    if (createRequestKey > 0) openCreate();
+    if (createRequestKey > 0) {
+      openCreate(createPreset);
+      onCreateRequestConsumed?.();
+    }
   }, [createRequestKey]);
 
   const openEdit = (group: any) => {
@@ -1173,9 +1183,6 @@ export function ForwardGroupsContent({
       zeroCopy: false,
       udpOverTcp: !!group.udpOverTcp,
       udpOverTcpPort: Number(group.udpOverTcpPort || 0),
-      failoverEnabled: false,
-      failoverStrategy: "fallback" as const,
-      failoverTargetsText: "",
       domain: group.domain || "",
       recordType: group.recordType || "A",
       failoverSeconds: String(Number(group.failoverSeconds || 60)),
@@ -1620,9 +1627,6 @@ export function ForwardGroupsContent({
       zeroCopy: false,
       udpOverTcp: false,
       udpOverTcpPort: null,
-      failoverEnabled: false,
-      failoverStrategy: "fallback" as const,
-      failoverTargets: [],
       chinaHealthCheckEnabled: supportsChinaHealth && form.chinaHealthCheckEnabled,
       chinaHealthCheckTarget: supportsChinaHealth && form.chinaHealthCheckEnabled ? chinaHealthTarget || null : null,
       chinaHealthCheckMethod: form.chinaHealthCheckMethod,
@@ -2175,7 +2179,7 @@ export function ForwardGroupsContent({
     },
     failover: {
       title: "转发组",
-      description: "管理多入口故障转移与负载分配。",
+      description: "多台入口主备：入口域名始终指向一台健康的入口，坏了自动换。",
       addButtonText: "添加转发组",
       loadingLabel: "正在加载转发组",
       emptyTitle: "暂无转发组",
@@ -2259,7 +2263,7 @@ export function ForwardGroupsContent({
               <List className="h-4 w-4" />
             </Button>
           </div>
-          <Button onClick={openCreate} className="col-span-2 gap-2 sm:col-span-1">
+          <Button onClick={() => openCreate()} className="col-span-2 gap-2 sm:col-span-1">
             <Plus className="h-4 w-4" />
             {addButtonText}
           </Button>
@@ -2441,24 +2445,22 @@ export function ForwardGroupsContent({
               <FormField className="grid gap-2 rounded-md border border-border/60 bg-muted/15 p-3 sm:grid-cols-[120px_minmax(0,1fr)] sm:items-center">
                 <Label>出口策略</Label>
                 <div className="space-y-1.5">
-                  <Select
+                  <LinkSpreadPicker
                     value={form.exitStrategy}
-                    onValueChange={(value) => setForm({ ...form, exitStrategy: normalizeExitGroupStrategy(value) })}
-                  >
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {Object.entries(EXIT_GROUP_STRATEGY_LABELS).map(([value, label]) => (
-                        <SelectItem key={value} value={value}>{label}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <p className="text-xs text-muted-foreground">
-                    {form.exitStrategy === "none"
-                      ? "仅使用顺序第一台已启用主机。"
+                    options={EXIT_GROUP_PICKER_OPTIONS}
+                    labels={EXIT_GROUP_PICKER_LABELS}
+                    onChange={(exitStrategy) => setForm({ ...form, exitStrategy })}
+                    ariaLabel="出口策略"
+                    hint={form.exitStrategy === "none"
+                      ? "只用顺序第一台已启用的出口，其余不参与。"
                       : form.exitStrategy === "fallback"
-                        ? "按顺序优先使用主出口，故障时切换到下一台。"
-                        : "按当前策略为新连接选择已启用的出口主机。"}
-                  </p>
+                        ? "按顺序优先用第一台，坏了换下一台。"
+                        : form.exitStrategy === "weighted"
+                          ? exitWeightHint(form.members, hostById)
+                          : form.exitStrategy === "least_load"
+                            ? exitLoadHint(form.members, hostById)
+                          : `${LINK_SPREAD_LABELS[form.exitStrategy].hint}。`}
+                  />
                 </div>
               </FormField>
             )}
@@ -2493,10 +2495,11 @@ export function ForwardGroupsContent({
                   <div className="space-y-3 rounded-md border border-border/60 p-3">
                     <label className="flex items-center justify-between gap-3">
                       <span className="space-y-1">
-                        <span className="block text-sm font-medium">多入口带宽加权分流</span>
+                        <span className="block text-sm font-medium">按带宽排序解析</span>
                         <span className="block text-xs text-muted-foreground">
-                          按每台入口 VPS 的上行带宽分配解析份额，带宽大的入口承接更多客户端，整组总吞吐接近各入口之和。
-                          单条连接仍然只走一台入口；要把一条连接拆开并行传输，请用隧道的「中转带宽叠加」。
+                          入口域名照旧解析出全部健康入口，只是把带宽大（或现在更闲）的排在前面。很多客户端优先用排在前面的地址，
+                          所以大带宽的入口通常会接到更多客户端，但 DNS 给不出准确的比例。
+                          要按比例分连接，用订阅里的「负载均衡」组；要把一条连接拆开同时走几台，用隧道中转的「单连接叠加」。
                         </span>
                       </span>
                       <Checkbox
@@ -2507,9 +2510,9 @@ export function ForwardGroupsContent({
 
                     {form.bandwidthAggregationEnabled && (
                       <div className="space-y-3 border-t border-border/60 pt-3">
-                        <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_120px_140px]">
+                        <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_140px]">
                           <FormField className="space-y-2">
-                            <Label>聚合策略</Label>
+                            <Label>排序依据</Label>
                             <Select
                               value={form.bandwidthAggregationStrategy}
                               onValueChange={(value) => setForm({ ...form, bandwidthAggregationStrategy: normalizeBandwidthAggregationStrategy(value) })}
@@ -2525,17 +2528,6 @@ export function ForwardGroupsContent({
                             </Select>
                           </FormField>
                           <FormField className="space-y-2">
-                            <Label>解析条数</Label>
-                            <Input
-                              type="number"
-                              min={1}
-                              max={MAX_AGGREGATION_RECORD_SLOTS}
-                              value={form.bandwidthAggregationSlots}
-                              onChange={(e) => setForm({ ...form, bandwidthAggregationSlots: e.target.value })}
-                              placeholder="8"
-                            />
-                          </FormField>
-                          <FormField className="space-y-2">
                             <Label>最少健康前置</Label>
                             <Input
                               type="number"
@@ -2549,7 +2541,7 @@ export function ForwardGroupsContent({
                         </div>
                         <p className="text-xs text-muted-foreground">
                           {BANDWIDTH_AGGREGATION_STRATEGY_HINTS[form.bandwidthAggregationStrategy]}
-                          {" 健康前置少于下限时自动退回等量分配。"}
+                          {" 健康入口少于下限时不排序。"}
                         </p>
                         {editingId ? (
                           <BandwidthAggregationSummary groupId={editingId} open={showDialog} />
@@ -2832,7 +2824,7 @@ export function ForwardGroupsContent({
                             {showAggregationColumns && (
                               <>
                                 <span>上行 Mbps：该前置的上行带宽，留空或 0 表示未知</span>
-                                <span>权重：手动份额，0 表示按所选聚合策略自动计算</span>
+                                <span>权重：手动排序比重，0 表示按所选排序依据自动计算</span>
                               </>
                             )}
                             {showScheduleColumn && <span>时段：只在设定的时段使用这个成员，时段外自动暂停</span>}
@@ -3114,3 +3106,45 @@ export default function ForwardGroupsPage() {
     </DashboardLayout>
   );
 }
+
+/**
+ * 「按权重」的出口组：把按线路带宽算出来的份数直接写给用户看（500M · 300M → 5:3）。
+ * 算法和下发时同一个（shared/exitStrategy.ts 的 exitGroupWeights），这里看到的就是实际分法。
+ */
+function exitWeightHint(members: MemberForm[], hostById: Map<number, any>) {
+  const hosts = members
+    .filter((member) => member.isEnabled && Number(member.hostId || 0) > 0)
+    .map((member) => hostById.get(Number(member.hostId)))
+    .filter(Boolean);
+  if (hosts.length < 2) return "按每台出口的线路带宽分新连接，带宽大的多分。至少要两台出口。";
+  const bandwidths = hosts.map((host: any) => hostBandwidthHintMbps(host));
+  const unknown = hosts.filter((_: any, index: number) => bandwidths[index] <= 0).map((host: any) => String(host.name || host.id));
+  if (unknown.length > 0) return `${unknown.join("、")} 还不知道带宽（主机设置里填「线路带宽」），现在按平均分。`;
+  const weights = exitGroupWeights("weighted", bandwidths);
+  const sizes = bandwidths.map((value) => `${value}M`).join(" · ");
+  return weights ? `按线路带宽分新连接：${sizes} → ${weights.join(":")}。` : `几台带宽一样（${sizes}），等于轮流。`;
+}
+
+/**
+ * 「按负载」：NEX 隧道里入口按每台出口的实时流量、连接数、握手延迟和线路带宽挑最闲的；
+ * GOST 看不到实时负载，按带宽加权轮流；nginx 用 least_conn。这里把带宽写出来，没填的点名。
+ */
+function exitLoadHint(members: MemberForm[], hostById: Map<number, any>) {
+  const hosts = members
+    .filter((member) => member.isEnabled && Number(member.hostId || 0) > 0)
+    .map((member) => hostById.get(Number(member.hostId)))
+    .filter(Boolean);
+  const base = "NEX 隧道按每台出口的实时流量、连接数、延迟和线路带宽挑最闲的；刚恢复的出口 1 分钟内慢慢加量。";
+  if (hosts.length < 2) return `${base}至少要两台出口。`;
+  const bandwidths = hosts.map((host: any) => hostBandwidthHintMbps(host));
+  const unknown = hosts.filter((_: any, index: number) => bandwidths[index] <= 0).map((host: any) => String(host.name || host.id));
+  if (unknown.length > 0) return `${base}${unknown.join("、")} 还不知道带宽（主机设置里填「线路带宽」），现在当一样大。`;
+  return `${base}线路带宽：${hosts.map((host: any, index: number) => `${String(host.name || host.id)} ${bandwidths[index]}M`).join(" · ")}。`;
+}
+
+// 出口策略的按钮：常用的排前面，「只用第一个」放最后（它其实是不分）。
+const EXIT_GROUP_PICKER_OPTIONS = ["least_load", "fallback", "round_robin", "weighted", "random", "ip_hash", "none"] as const satisfies readonly ExitGroupStrategy[];
+const EXIT_GROUP_PICKER_LABELS: Record<ExitGroupStrategy, { label: string }> = {
+  ...LINK_SPREAD_LABELS,
+  none: { label: "只用第一个" },
+};

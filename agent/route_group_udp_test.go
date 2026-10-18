@@ -447,13 +447,23 @@ func sendThroughFailover(t *testing.T, addr string, payload string) {
 	_ = conn.Close()
 }
 
+// 按访客固定会把这个访客放到哪条路径上（和代理里同一个算法：rendezvous 哈希）。
+func failoverTestHashIndex(targets []failoverTarget, key string) int {
+	p := &failoverProxy{spec: failoverSpec{Targets: targets}}
+	candidates := make([]int, len(targets))
+	for i := range targets {
+		candidates[i] = i
+	}
+	return p.rendezvousPickLocked(candidates, key)
+}
+
 // 两个访客地址，哈希到两条不同的路径上。
-func failoverDistinctVisitors(t *testing.T) (string, string) {
+func failoverDistinctVisitors(t *testing.T, targets []failoverTarget) (string, string) {
 	t.Helper()
 	first := "203.0.113.7"
 	for i := 1; i < 255; i++ {
 		other := "198.51.100." + strconv.Itoa(i)
-		if failoverHashIndex(other, 2) != failoverHashIndex(first, 2) {
+		if failoverTestHashIndex(targets, other) != failoverTestHashIndex(targets, first) {
 			return first, other
 		}
 	}
@@ -482,7 +492,7 @@ func TestIPHashReadsVisitorFromProxyHeader(t *testing.T) {
 				ruleID, sourcePort = 950011, 65011
 			}
 			_, addr := startUDPFailoverForTest(t, ruleID, sourcePort, spec)
-			first, second := failoverDistinctVisitors(t)
+			first, second := failoverDistinctVisitors(t, spec.Targets)
 			headerFirst := "PROXY TCP4 " + first + " 10.0.0.1 40000 443\r\n"
 			headerSecond := "PROXY TCP4 " + second + " 10.0.0.1 40001 443\r\n"
 			sendThroughFailover(t, addr, headerFirst+"hello")
@@ -490,8 +500,8 @@ func TestIPHashReadsVisitorFromProxyHeader(t *testing.T) {
 			sendThroughFailover(t, addr, headerFirst+"again")
 
 			targets := []*failoverRecordingTarget{targetA, targetB}
-			firstTarget := targets[failoverHashIndex(first, 2)]
-			secondTarget := targets[failoverHashIndex(second, 2)]
+			firstTarget := targets[failoverTestHashIndex(spec.Targets, first)]
+			secondTarget := targets[failoverTestHashIndex(spec.Targets, second)]
 			gotFirst := firstTarget.waitFor(t, 2)
 			gotSecond := secondTarget.waitFor(t, 1)
 			wantFirst := []string{headerFirst + "hello", headerFirst + "again"}

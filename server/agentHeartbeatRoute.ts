@@ -155,7 +155,8 @@ import {
   tunnelParallelStreamsAgentsReady,
   tunnelParallelStreamsUnavailableReason,
 } from "@shared/tunnelParallelStreams";
-import { normalizeExitGroupStrategy } from "@shared/exitStrategy";
+import { exitGroupCapacities, exitGroupWeights, LEAST_LOAD_AGENT_VERSION, normalizeExitGroupStrategy } from "@shared/exitStrategy";
+import { hostBandwidthHintMbps } from "@shared/linkWeights";
 import { forwardXExitStrategy, gostExitSelector, shouldUseFastTunnelFailover } from "./tunnelExitStrategy";
 import {
   getMimicLifecycleRevisionSignature,
@@ -3173,7 +3174,10 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         // UDP 按会话调度，TCP+UDP 两个都开（Agent 2.2.199 起，上面已经按版本挡过）。
         protocol,
         // 权重负载按它的分法（按权重 / 轮流 / 随机 / 按访客），其余模式都是主备（fallback）。
-        strategy: routeAgentStrategy(policy),
+        // 「按负载」老 Agent 不认（会退成主备），改发「按权重」。
+        strategy: routeAgentStrategy(policy) === "least_load" && !routeSchedulerAgentAtLeast(rule, LEAST_LOAD_AGENT_VERSION)
+          ? "weighted"
+          : routeAgentStrategy(policy),
         targets,
         failoverSeconds: policy.failoverSeconds,
         recoverSeconds: policy.recoverSeconds,
@@ -3705,10 +3709,17 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
               const endpoint = mimicFilterEndpoint(route.host, route.udpPort);
               if (endpoint) addMimicFilter(`remote=${endpoint}`, hostInterface, [{ resourceType: "tunnel", resourceId: tunnel.id }]);
             }
+            const relayExitHostIds = [Number(nextHop?.hostId || 0), ...extraRoutes.map((route) => Number(route.hostId || 0))];
+            const relayExitWeights = await exitWeightsForHostIds((tunnel as any).loadBalanceStrategy, relayExitHostIds);
+            const relayExitCapacities = await exitCapacitiesForHostIds((tunnel as any).loadBalanceStrategy, relayExitHostIds);
             fxpSpec.exits = [
               { host: fxpSpec.relayExitHost, port: fxpSpec.relayExitPort, udpPort: fxpSpec.udpRelayExitPort || fxpSpec.relayExitPort, key: fxpSpec.relayKey, peerId: wireGuardV2 ? String(Number(nextHop?.hostId || 0)) : undefined },
               ...extraRoutes.map((route) => ({ host: route.host, port: route.port, udpPort: wireGuardV2 ? route.port : route.udpPort || 0, key: route.key, peerId: wireGuardV2 ? String(route.hostId) : undefined })),
-            ];
+            ].map((exit, index) => ({
+              ...exit,
+              ...(relayExitWeights ? { weight: relayExitWeights[index] } : {}),
+              ...(relayExitCapacities ? { capacityMbps: relayExitCapacities[index] } : {}),
+            }));
             fxpSpec.exitStrategy = forwardXExitStrategy((tunnel as any).loadBalanceStrategy);
           }
         }
@@ -3763,6 +3774,28 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         for (const row of rows) parallelStreamVersionCache.set(Number(row.id), String(row.agentVersion || ""));
       }
       return ids.map((id) => parallelStreamVersionCache.get(id) || "");
+    };
+    // 出口组「按权重」：每个出口主机的线路带宽，一次心跳里同一台只查一次。
+    const exitBandwidthCache = new Map<number, number>();
+    const exitBandwidthsForHostIds = async (hostIds: number[]) => {
+      const missing = Array.from(new Set(hostIds.filter((id) => id > 0 && !exitBandwidthCache.has(id))));
+      if (missing.length > 0) {
+        const rows = await db.getHostsByIds(missing) as any[];
+        for (const id of missing) exitBandwidthCache.set(id, 0);
+        for (const row of rows) exitBandwidthCache.set(Number(row.id), hostBandwidthHintMbps(row));
+      }
+      return hostIds.map((id) => exitBandwidthCache.get(id) || 0);
+    };
+    const exitWeightsForHostIds = async (strategy: unknown, hostIds: number[]) => {
+      const normalized = normalizeExitGroupStrategy(strategy);
+      if ((normalized !== "weighted" && normalized !== "least_load") || hostIds.length < 2) return null;
+      return exitGroupWeights(strategy, await exitBandwidthsForHostIds(hostIds));
+    };
+    // 交给 FXP 的线路带宽（「按负载」「按访客固定」用）。
+    const exitCapacitiesForHostIds = async (strategy: unknown, hostIds: number[]) => {
+      const normalized = normalizeExitGroupStrategy(strategy);
+      if ((normalized !== "least_load" && normalized !== "ip_hash") || hostIds.length < 2) return null;
+      return exitGroupCapacities(strategy, await exitBandwidthsForHostIds(hostIds));
     };
     const forwardXEntryRoutes = async (rule: any, tunnel: any) => {
       const routes: Array<{ hostId: number; host: string; port: number; udpPort: number; key: string }> = [];
@@ -4214,6 +4247,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     });
     const buildLoadBalancedExitNodes = async (rule: any, tunnel: any, primaryHostOverride?: string) => {
       const nodes: any[] = [];
+      const nodeHostIds: number[] = [];
       const protocolPlan = planGostTunnelRuleProtocol({
         protocol: rule.protocol,
         tunnelId: Number(tunnel.id),
@@ -4233,8 +4267,13 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
           tunnel,
           protocolPlan.chainConnector,
         ));
+        nodeHostIds.push(endpoint.exitHostId);
       }
-      return nodes;
+      // 按权重 / 按负载：份数写进节点的 metadata.weight，gost 的 rand 按它加权随机（gostExitSelector）。
+      // 以前是把出口按份数重复列，可每一份各记各的失败：权重 5 的出口挂了要失败 5 次才全部跳过。
+      const weights = await exitWeightsForHostIds(tunnel.loadBalanceStrategy, nodeHostIds);
+      if (!weights) return nodes;
+      return nodes.map((node, index) => ({ ...node, metadata: { ...(node.metadata || {}), weight: weights[index] } }));
     };
     const gostRelayFailoverHopMetadata = { strategy: "fifo", maxFails: 1, failTimeout: "5s" };
     const gostTunnelExitTargetAddr = async (rule: any, tunnel: any) => {
@@ -4688,7 +4727,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     };
     const nginxUpstreamBlock = (
       name: string,
-      endpoints: Array<{ addr: string; primary?: boolean }>,
+      endpoints: Array<{ addr: string; primary?: boolean; weight?: number }>,
       strategyRaw?: unknown,
     ) => {
       const cleanEndpoints = endpoints.filter((endpoint) => endpoint.addr);
@@ -4696,11 +4735,12 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       const strategy = cleanEndpoints.length > 1 ? String(strategyRaw || "round_robin") : "round_robin";
       const lines = [`  upstream ${name} {`];
       if (strategy === "random") lines.push("    random;");
-      else if (strategy === "least_conn") lines.push("    least_conn;");
+      else if (strategy === "least_conn" || strategy === "least_load") lines.push("    least_conn;");
       else if (strategy === "ip_hash") lines.push("    hash $remote_addr consistent;");
       cleanEndpoints.forEach((endpoint, index) => {
         const backup = strategy === "fallback" && index > 0 ? " backup" : "";
-        lines.push(`    server ${endpoint.addr} max_fails=2 fail_timeout=10s${backup};`);
+        const weight = (strategy === "weighted" || strategy === "least_load") && Number(endpoint.weight) > 1 ? ` weight=${Math.floor(Number(endpoint.weight))}` : "";
+        lines.push(`    server ${endpoint.addr}${weight} max_fails=2 fail_timeout=10s${backup};`);
       });
       lines.push("  }");
       return lines.join("\n");
@@ -4780,7 +4820,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         }
         return cert;
       };
-      const addUpstreamServer = (name: string, endpoints: Array<{ addr: string; primary?: boolean }>, strategy?: unknown) => {
+      const addUpstreamServer = (name: string, endpoints: Array<{ addr: string; primary?: boolean; weight?: number }>, strategy?: unknown) => {
         const block = nginxUpstreamBlock(name, endpoints, strategy);
         if (!block) return false;
         upstreams.push(block);
@@ -4824,7 +4864,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         if (!tunnel || !runtimeBool(tunnel.isEnabled) || !isNginxTunnelMode(tunnel) || !isCurrentHostTunnelEntry(tunnel)) continue;
         if (!isTunnelProtocolEnabled(forwardProtocolSettings, tunnel) || !isRuleProtocolEnabled(forwardProtocolSettings, rule, tunnel)) continue;
         const tlsClient = buildNginxTunnelTlsClientOptions(tunnel);
-        const endpoints: Array<{ addr: string; primary?: boolean }> = [];
+        const endpoints: Array<{ addr: string; primary?: boolean; weight?: number }> = [];
+        const endpointHostIds: number[] = [];
         for (const endpoint of tunnelExitEndpointsForRule(rule, tunnel)) {
           const exitHost = endpoint.primary
             ? (tunnelExitEndpointById.get(tunnel.id)?.host || await tunnelExitHostAddress(tunnel))
@@ -4832,10 +4873,13 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
           const addr = nginxEndpoint(exitHost, endpoint.listenPort);
           if (addr) {
             endpoints.push({ addr, primary: endpoint.primary });
+            endpointHostIds.push(endpoint.exitHostId);
             continue;
           }
           warnNginxRoute(`[NginxRuntime] missing endpoint host=${host.id} name=${String(host.name || "-")} tunnel=${tunnel.id} rule=${rule.id} exitHost=${endpoint.exitHostId} listenPort=${endpoint.listenPort || "-"} primary=${endpoint.primary}`);
         }
+        const endpointWeights = await exitWeightsForHostIds((tunnel as any).loadBalanceStrategy, endpointHostIds);
+        if (endpointWeights) endpoints.forEach((endpoint, index) => { endpoint.weight = endpointWeights[index]; });
         if (endpoints.length === 0) {
           warnNginxRoute(`[NginxRuntime] skipped tunnel entry host=${host.id} name=${String(host.name || "-")} tunnel=${tunnel.id} rule=${rule.id} reason=no-endpoints`);
           continue;
@@ -6245,6 +6289,11 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
                 }
               }
             }
+            // 并排中转时 entryRoutes 是几台中转（固定主备），权重只给出口组的出口。
+            const entryExitsAreRelays = tunnelRelayUsesParallelRelays(tunnel, tunnelHopsByTunnelId.get(Number(tunnel.id)) || []);
+            const entryExitHostIds = entryRoutes.map((route) => Number((route as any).hostId || 0));
+            const entryExitWeights = entryExitsAreRelays ? null : await exitWeightsForHostIds((tunnel as any).loadBalanceStrategy, entryExitHostIds);
+            const entryExitCapacities = entryExitsAreRelays ? null : await exitCapacitiesForHostIds((tunnel as any).loadBalanceStrategy, entryExitHostIds);
             const fxpSpec = await applyForwardXTransport({
               role: "entry",
               tunnelId: tunnel.id,
@@ -6259,12 +6308,14 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
                 : forwardXExitStrategy((tunnel as any).loadBalanceStrategy),
               exitPeerId: wireGuardV2 ? String(Number((entryRoute as any).hostId || 0)) : undefined,
               ...(!wireGuardV2 && useUdpOverTcp ? { udpExitPort: Number((entryRoute as any).udpPort || 0) } : {}),
-              exits: entryRoutes.map((route) => ({
+              exits: entryRoutes.map((route, index) => ({
                 host: route.host,
                 port: route.port,
                 ...(!wireGuardV2 && useUdpOverTcp ? { udpPort: Number((route as any).udpPort || 0) } : {}),
                 key: route.key,
                 peerId: wireGuardV2 ? String(Number((route as any).hostId || 0)) : undefined,
+                ...(entryExitWeights ? { weight: entryExitWeights[index] } : {}),
+                ...(entryExitCapacities ? { capacityMbps: entryExitCapacities[index] } : {}),
               })),
               targetIp: fxpTarget.targetIp,
               targetPort: fxpTarget.targetPort,

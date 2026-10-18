@@ -3355,6 +3355,24 @@ function RulesContent() {
     openCreate("local");
   }, [search, setLocation, rulePermissionLoading, hostsFetched, systemSettingsFetched, canAdd, canUseLocalForward, canUseSavedLocalForward, canUseBillingHostLocalForward, availablePortForwardGroups, availableTrafficBillingHosts, usableForwardTypes]);
 
+  /*
+    /rules?edit=<规则 id>：从别处（链路管理的线路总览）直接打开这条规则的编辑框。
+    规则不一定在当前这一页里，所以按 id 单独取；取不到（删了、不是自己的）就说一声。
+  */
+  useEffect(() => {
+    const params = new URLSearchParams(search);
+    const editId = Number(params.get("edit") || 0);
+    if (!Number.isInteger(editId) || editId <= 0) return;
+    if (rulePermissionLoading || !hostsFetched || !systemSettingsFetched || !(forwardGroupsFetched || forwardGroupsError)) return;
+    params.delete("edit");
+    const nextSearch = params.toString();
+    setLocation(`/rules${nextSearch ? `?${nextSearch}` : ""}`, { replace: true });
+    void utils.rules.getById.fetch({ id: editId }).then((rule) => {
+      if (rule) openEdit(rule);
+      else toast.error("这条规则不存在，或者你没有权限编辑");
+    }, () => toast.error("读取规则失败"));
+  }, [search, setLocation, rulePermissionLoading, hostsFetched, systemSettingsFetched, forwardGroupsFetched, forwardGroupsError]);
+
   const telegramBotReady = !!systemSettings?.telegram?.enabled && !!systemSettings?.telegram?.configured;
   const selectedForwardGroupIsChain = form.routeMode === "chain" || isForwardChainGroup(selectedForwardGroup);
   const selectedForwardGroupIsPort = forwardGroupModeOf(selectedForwardGroup) === "port";
@@ -3403,7 +3421,7 @@ function RulesContent() {
     ? { reason: "使用 Shadowsocks 出口的规则暂不支持线路组：出口本身就是固定的落地。" }
     : selectedForwardGroupIsChain
     ? {
-      reason: "转发链不支持主备线路。想要线路出问题自动换，可以用「转发组」。",
+      reason: "转发链用不了线路组。想要入口坏了自动换，用「转发组」（入口主备）；想要中间的线路坏了自动换，改成隧道转发再开线路组。",
       fix: canUseFailoverGroup && !routeModeLocked ? { label: "改用转发组", run: () => setRouteMode("group") } : undefined,
     }
     : mainBackupUsesTunnelRoute && !mainBackupIsTunnelRoute

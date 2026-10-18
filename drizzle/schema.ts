@@ -264,6 +264,8 @@ export const hosts = table("hosts", {
   name: text("name").notNull(),
   // 整台主机的转发限速（2.3.449，Mbps，0 = 不限）：这台机器上所有用户的转发加起来共用一个桶。
   rateLimitMbps: int("rateLimitMbps").notNull().default(0),
+  /** 线路带宽（Mbps），负载均衡按它分连接。0 = 没填。 */
+  lineBandwidthMbps: int("lineBandwidthMbps").notNull().default(0),
   ip: text("ip").notNull(),
   ipv4: text("ipv4"),
   ipv6: text("ipv6"),
@@ -630,7 +632,7 @@ export const proxyNodes = table("proxy_nodes", {
   snellMode: text("snellMode"),
   // XHTTP 传输的 mode：auto | stream-one | stream-up | packet-up
   xhttpMode: text("xhttpMode"),
-  // 多台中转指向同一落地节点时，订阅里额外生成的选路组类型：off | url-test | fallback
+  // 多台中转指向同一落地节点时，订阅里额外生成的选路组类型：off | url-test | fallback | load-balance（负载均衡）
   autoGroup: varchar("autoGroup", { length: 16 }).notNull().default("url-test"),
   // 把落地机自己的地址也作为一个节点放进订阅。默认关：开了之后落地 IP 会出现在
   // 每一条订阅地址里，中转机挂了能换，落地机被墙要重搭。
@@ -1054,7 +1056,7 @@ export const tunnels = table("tunnels", {
   entryHostId: int("entryHostId").notNull(),
   exitHostId: int("exitHostId").notNull(),
   mode: varchar("mode", { length: 32 }).notNull().default("tls"), // forwardx | tls | wss | tcp | mtls | mwss | mtcp | nginx_stream
-  relayMode: varchar("relayMode", { length: 16 }).notNull().default("chain"), // chain | failover
+  relayMode: varchar("relayMode", { length: 16 }).notNull().default("chain"), // chain 链路中转 | failover 主备 | aggregate 单连接叠加
   forwardxVersion: varchar("forwardxVersion", { length: 8 }).notNull().default("v1"),
   certDomain: text("certDomain"),
   certPem: text("certPem"),

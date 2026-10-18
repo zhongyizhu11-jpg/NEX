@@ -90,6 +90,7 @@ import {
   Globe,
   ShieldCheck,
   Shield,
+  Route,
   ExternalLink,
   RefreshCw,
   Rocket,
@@ -3233,6 +3234,7 @@ function DeepSeekSettingsCard() {
 }
 type SystemSettingsSaveKey =
   | "networkTest"
+  | "linkWizard"
   | "panelUrl"
   | "registration"
   | "twoFactor"
@@ -4970,6 +4972,7 @@ function SystemInfoSection() {
   const [agentPreferPanelInstall, setAgentPreferPanelInstall] = useState(false);
   const [ruleSwitchBridgeHours, setRuleSwitchBridgeHours] = useState(String(DEFAULT_RULE_SWITCH_BRIDGE_HOURS));
   const [portAccessLimitsEnabled, setPortAccessLimitsEnabled] = useState(false);
+  const [linkWizardEnabled, setLinkWizardEnabled] = useState(false);
   const [ddnsEnabled, setDdnsEnabled] = useState(false);
   const [ddnsProvider, setDdnsProvider] = useState<DdnsProvider>("disabled");
   const [ddnsTtl, setDdnsTtl] = useState("60");
@@ -5046,6 +5049,7 @@ function SystemInfoSection() {
       setAgentPreferPanelInstall(!!settings.agentPreferPanelInstall);
       setRuleSwitchBridgeHours(String(normalizeRuleSwitchBridgeHours((settings as any).ruleSwitchBridgeHours)));
       setPortAccessLimitsEnabled(!!(settings as any).portAccessLimitsEnabled);
+      setLinkWizardEnabled(!!(settings as any).linkWizardEnabled);
       setDdnsEnabled(!!settings.ddns?.enabled);
       setDdnsProvider(isDdnsProvider(settings.ddns?.provider) ? settings.ddns.provider : "disabled");
       const ddnsUnifiedTtl = String(settings.ddns?.ttl || settings.ddns?.huaweicloudTtl || settings.ddns?.aliyunTtl || settings.ddns?.tencentcloudTtl || 60);
@@ -5438,6 +5442,10 @@ function SystemInfoSection() {
     return saveSystemSettings("portAccessLimits", { portAccessLimitsEnabled });
   };
 
+  const handleSaveLinkWizard = () => {
+    return saveSystemSettings("linkWizard", { linkWizardEnabled });
+  };
+
   const resetForwardProtocolDraft = () => {
     setForwardProtocols(normalizeForwardProtocolSettings(settings?.forwardProtocols));
   };
@@ -5550,6 +5558,7 @@ function SystemInfoSection() {
     { id: "networkTest", label: "网络测试", dirty: !!settings && lookingGlassUserEnabled !== (settings.lookingGlassUserEnabled ?? true), save: handleSaveLookingGlass },
     { id: "entryBridge", label: "换线过渡", dirty: !!settings && ruleSwitchBridgeHours !== String(normalizeRuleSwitchBridgeHours((settings as any).ruleSwitchBridgeHours)), save: handleSaveEntryBridge },
     { id: "portAccessLimits", label: "接入限制", dirty: !!settings && portAccessLimitsEnabled !== !!(settings as any).portAccessLimitsEnabled, save: handleSavePortAccessLimits },
+    { id: "linkWizard", label: "新建向导", dirty: !!settings && linkWizardEnabled !== !!(settings as any).linkWizardEnabled, save: handleSaveLinkWizard },
     { id: "registration", label: "注册", dirty: !!settings && (registrationEnabled !== (settings.registrationEnabled ?? true) || authCaptchaEnabled !== (settings.authCaptchaEnabled ?? true)), save: handleSaveRegistration },
     { id: "twoFactor", label: "双重验证", dirty: !!settings && twoFactorEnabled !== !!settings.twoFactorEnabled, save: handleSaveTwoFactor },
     { id: "ddns", label: "DDNS", dirty: JSON.stringify(ddnsDraft) !== JSON.stringify(ddnsSaved), save: handleSaveDdns },
@@ -5910,6 +5919,35 @@ function SystemInfoSection() {
           <div className="flex justify-end">
             <Button data-dock-save onClick={handleSavePortAccessLimits} disabled={isSavingSetting("portAccessLimits")}>
               {isSavingSetting("portAccessLimits") && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              保存
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+      {/* 链路管理「线路总览」里的「按目标新建」向导，默认关（features/links/LinkWizardDialog.tsx）。 */}
+      <Card className="border-border bg-card">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Route className="h-4 w-4 text-primary" />
+            按目标新建向导
+          </CardTitle>
+          <CardDescription>
+            打开后，链路管理的「线路总览」页签右上角多一个「按目标新建」：选想要什么（稳定 / 多人一起快 / 单条连接也要快）和多出来的机器在哪一段，
+            面板推荐该建哪一种，并打开预填好的新建框。熟悉转发组、出口组、隧道中转的话不用开。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <SettingList>
+            <SettingRow
+              asLabel
+              label="显示「按目标新建」"
+              description="只影响界面，不改任何已有的线路。"
+              control={<Checkbox aria-label="显示「按目标新建」" checked={linkWizardEnabled} onCheckedChange={(checked) => setLinkWizardEnabled(checked === true)} />}
+            />
+          </SettingList>
+          <div className="flex justify-end">
+            <Button data-dock-save onClick={handleSaveLinkWizard} disabled={isSavingSetting("linkWizard")}>
+              {isSavingSetting("linkWizard") && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               保存
             </Button>
           </div>

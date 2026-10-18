@@ -284,7 +284,7 @@ export const PROXY_SUBSCRIPTION_KIND_LABELS: Record<ProxySubscriptionKind, strin
 
 export const PROXY_SUBSCRIPTION_KIND_HINTS: Record<ProxySubscriptionKind, string> = {
   nodes: "只有节点，分流规则由你在客户端里自己配。所有客户端都适用。",
-  rules: "一份完整配置：节点、策略组（自动选路、带宽叠加）和分流规则一起给，导入后不用再设置。Clash、sing-box、Surge、Loon、Quantumult X、Shadowrocket 都有；Shadowrocket 的节点仍来自节点订阅。",
+  rules: "一份完整配置：节点、策略组（自动选路、负载均衡）和分流规则一起给，导入后不用再设置。Clash、sing-box、Surge、Loon、Quantumult X、Shadowrocket 都有；Shadowrocket 的节点仍来自节点订阅。",
 };
 
 /**

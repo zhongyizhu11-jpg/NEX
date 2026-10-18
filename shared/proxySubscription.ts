@@ -321,7 +321,7 @@ function renderClash(
       lines.push(`  - name: ${yamlQuote(group.name)}`);
       lines.push(`    type: ${group.type}`);
       /*
-        带宽叠加组按带宽加权：同一个节点在列表里出现几次就分几份连接（500M / 300M 两台是 5:3）。
+        负载均衡组按带宽加权：同一个节点在列表里出现几次就分几份连接（500M / 300M 两台是 5:3）。
         mihomo 建组时按名字逐个取、不去重（adapter/outboundgroup/parser.go getProxies），
         round-robin 就自然按份数轮。别的 Clash 系实现（Stash 等）没核实过，不展开、照旧平均分。
       */
@@ -491,7 +491,7 @@ function singboxGroupOutbound(group: ProxySubscriptionGroup): Record<string, unk
   }
   // sing-box 没有单独的 fallback 类型，两种模式都用 urltest 表达；它本身就带
   // 故障切换，主备与择快的差别只在成员顺序。sing-box 也没有负载均衡出站，
-  // 带宽叠加在这里退成择快 —— 少了叠加，但节点照样能用，不会生成它不认的类型。
+  // 负载均衡在这里退成择快 —— 少了分摊，但节点照样能用，不会生成它不认的类型。
   return {
     type: "urltest",
     tag: group.name,
@@ -948,7 +948,7 @@ function renderQuantumultX(nodes: readonly ProxyNode[], notices: readonly string
 
 /**
  * 节点订阅装不下策略组（见 PROXY_SUBSCRIPTION_FORMATS_WITH_GROUPS），所以
- * 「带宽叠加」「自动选路」这些组在 Surge / Loon / Quantumult X / Shadowrocket
+ * 「负载均衡」「自动选路」这些组在 Surge / Loon / Quantumult X / Shadowrocket
  * 上只能靠一份完整配置带过去。写法逐条对过各家官方手册 / 官方示例配置：
  *
  *   Surge         manual.nssurge.com：select / url-test / fallback / load-balance，
@@ -1097,6 +1097,8 @@ function renderSurgeProfile(
     const head = `${group.name} = ${group.type}, ${group.members.join(", ")}`;
     if (group.type === "url-test") lines.push(`${head}, interval=${PROXY_AUTO_GROUP_INTERVAL_SECONDS}, tolerance=${PROXY_AUTO_GROUP_TOLERANCE_MS}`);
     else if (group.type === "fallback") lines.push(`${head}, interval=${PROXY_AUTO_GROUP_INTERVAL_SECONDS}`);
+    // 负载均衡组只在最近一次测试通过的成员里分；不写 interval 就不定时测，挂掉的前置要等到用的时候才发现。
+    else if (group.type === "load-balance") lines.push(`${head}, interval=${PROXY_AUTO_GROUP_INTERVAL_SECONDS}`);
     else lines.push(head);
   }
   lines.push("", "[Rule]", ...surgeStyleRuleLines(rules));
@@ -1241,7 +1243,7 @@ export type RenderProxySubscriptionOptions = {
    */
   shadowrocketClient?: boolean;
   /**
-   * 来拉的是 mihomo / Clash 内核（看 User-Agent，不含 Stash）：带宽叠加组可以按带宽加权展开。
+   * 来拉的是 mihomo / Clash 内核（看 User-Agent，不含 Stash）：负载均衡组可以按带宽加权展开。
    * 其它客户端「组里重复列同一个节点」的行为没核实，平均分。
    */
   weightedLoadBalance?: boolean;

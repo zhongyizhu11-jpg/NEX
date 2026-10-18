@@ -111,6 +111,7 @@ func fxpEndpointStateFor(endpoint exitEndpoint) *fxpEndpointState {
 // resetFXPEndpointRegistry 丢掉所有端点状态并关掉池里的连接。只给测试用：
 // 状态是整个进程共享的，测试之间不清掉就会互相串。
 func resetFXPEndpointRegistry() {
+	resetFXPHostLoads()
 	fxpEndpoints.mu.Lock()
 	states := fxpEndpoints.states
 	fxpEndpoints.states = map[fxpEndpointID]*fxpEndpointState{}
@@ -197,6 +198,8 @@ func (s *fxpEndpointState) markHealthy() {
 	s.mu.Unlock()
 	if !wasHealthy {
 		log.Printf("exit endpoint recovered endpoint=%s", s.label())
+		// 刚恢复的出口慢慢加量（exit_load.go），别一下子把新连接全塞给它。
+		fxpHostLoadFor(s.id.host).markRecovered(time.Now())
 	}
 }
 
@@ -254,8 +257,11 @@ func (s *fxpEndpointState) releaseProbe() {
 // 不会去连目标，也不会把它当成出错的会话记日志。
 func (s *fxpEndpointState) runProbe(cfg config) {
 	defer s.releaseProbe()
+	started := time.Now()
 	conn, sec, err := dialSecureTCPFresh(s.id.host, s.id.port, cfg)
 	if err == nil {
+		// 探测的握手耗时也算进延迟：闲着的出口没有用户连接，靠它保持样本新鲜。
+		fxpHostLoadFor(s.id.host).observeLatency(time.Since(started), time.Now())
 		err = writeSecureFramesWithDeadline(sec, fxpProbeHello)
 		_ = conn.Close()
 	}
@@ -412,6 +418,7 @@ func fxpEndpointMaintenanceLoop() {
 	ticker := time.NewTicker(fxpEndpointTick)
 	defer ticker.Stop()
 	for now := range ticker.C {
+		sampleFXPHostLoads(now)
 		fxpEndpoints.mu.Lock()
 		states := make([]*fxpEndpointState, 0, len(fxpEndpoints.states))
 		for _, state := range fxpEndpoints.states {

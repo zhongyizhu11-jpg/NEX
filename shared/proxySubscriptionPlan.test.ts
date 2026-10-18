@@ -414,10 +414,10 @@ test("自动选路模式的取值收敛", () => {
 test("组名带后缀，避免和落地节点本身重名", () => {
   assert.equal(autoGroupNameForTemplate("HKT"), "HKT 自动选路");
   assert.equal(autoGroupNameForTemplate(""), "节点 自动选路");
-  assert.equal(autoGroupNameForTemplate("HKT", "load-balance"), "HKT 带宽叠加");
+  assert.equal(autoGroupNameForTemplate("HKT", "load-balance"), "HKT 负载均衡");
 });
 
-test("带宽叠加：同一落地的多条中转进一个 load-balance 组", () => {
+test("负载均衡：同一落地的多条中转进一个 load-balance 组", () => {
   const template = { ...DIRECT_TEMPLATE, includeDirect: false, autoGroup: "load-balance" };
   const plan = buildProxySubscriptionPlan({
     rules: [
@@ -436,8 +436,8 @@ test("带宽叠加：同一落地的多条中转进一个 load-balance 组", () 
   });
 
   const group = document.groups.find((item) => item.type === "load-balance");
-  assert.ok(group, "应该生成带宽叠加组");
-  assert.equal(group.name, "CST/hk 带宽叠加");
+  assert.ok(group, "应该生成负载均衡组");
+  assert.equal(group.name, "CST/hk 负载均衡");
   assert.equal(group.members.length, 2);
   // 主选择器第一项就是叠加组，导入后默认就在叠加。
   assert.equal(document.groups[0].members[0], group.name);
@@ -537,7 +537,7 @@ test("直连与中转进同一个选路组，客户端能自己挑快的", () =>
   assert.equal(auto.members[0], plan.entries[0].node.name, "直连也是组员");
 });
 
-test("带宽叠加组不带落地直连，只叠中转", () => {
+test("负载均衡组不带落地直连，只叠中转", () => {
   // 用户实测：开了直连的落地，叠加组里多出一个「HKT」，三条连接里有一条绕开前置。
   const template = { ...DIRECT_TEMPLATE, includeDirect: true, autoGroup: "load-balance" };
   const plan = buildProxySubscriptionPlan({
