@@ -1333,6 +1333,7 @@ function TunnelLatencyDialog({
       const point = byTime.get(time) || {
         label: formatLatencyTimeLabel(at),
         fullLabel: formatLatencyTimeLabel(at),
+        atMs: time,
       };
       const key = normalizeLatencySeriesKey(item.seriesKey);
       const counts = normalizeLatencyProbeCounts(item);
@@ -1367,6 +1368,7 @@ function TunnelLatencyDialog({
         isTimeout: !!point[meta.timeoutKey],
         probeCount: Number(point[`${meta.key}ProbeCount`] || 1),
         probeSuccesses: Number(point[`${meta.key}ProbeSuccesses`]),
+        atMs: Number(point.atMs),
       }));
   }, [chartData, seriesMeta]);
 

@@ -80,3 +80,30 @@ test("线路组质量历史 → 同一套统计：点数、平均丢包、Agent 
   assert.equal(stats.max, 60);
   assert.equal(routeQualityStats([]).total, 0);
 });
+
+test("可用率按时间算：状态延续到下一个点，有累计计数时也显示", async () => {
+  const { computeTimeWeightedAvailability, getLatencyStabilityStats, AVAILABILITY_MAX_SEGMENT_MS } = await import("./latencyChart");
+  const t0 = Date.UTC(2026, 9, 18, 0, 0, 0);
+  const minute = 60_000;
+  // 0~5 分钟通，5~6 分钟断（每次失败都报，1 分钟一个），6~10 分钟通。
+  const samples = [
+    { latency: 10, atMs: t0 },
+    { latency: 0, isTimeout: true, probeCount: 1, probeSuccesses: 0, atMs: t0 + 5 * minute },
+    { latency: 10, atMs: t0 + 6 * minute },
+  ];
+  const availability = computeTimeWeightedAvailability(samples, t0 + 10 * minute);
+  assert.ok(availability !== null && Math.abs(availability - 90) < 1e-9, String(availability));
+  // 有累计计数：以前不显示可用率，现在按时间算出来。
+  const stats = getLatencyStabilityStats(samples, { total: 600, successes: 599, available: true, observedSince: null, latestAt: null });
+  assert.equal(stats.fromCounters, true);
+  assert.ok(stats.availability !== null && stats.availability > 80);
+  // 中间一大段没数据（Agent 离线）不算进分母。
+  const gap = computeTimeWeightedAvailability([
+    { latency: 10, atMs: t0 },
+    { latency: 0, isTimeout: true, probeCount: 1, probeSuccesses: 0, atMs: t0 + 5 * 60 * minute },
+  ], t0 + 5 * 60 * minute + minute);
+  assert.ok(gap !== null && Math.abs(gap - (AVAILABILITY_MAX_SEGMENT_MS / (AVAILABILITY_MAX_SEGMENT_MS + minute)) * 100) < 1e-9, String(gap));
+  // 缺时间的样本：退回原来的规则。
+  assert.equal(computeTimeWeightedAvailability([{ latency: 10 }]), null);
+  assert.equal(getLatencyStabilityStats([{ latency: 10 }], { total: 10, successes: 10, available: true, observedSince: null, latestAt: null }).availability, null);
+});

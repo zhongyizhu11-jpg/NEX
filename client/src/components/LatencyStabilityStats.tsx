@@ -32,7 +32,7 @@ function formatCounterTime(value: Date | string | null | undefined) {
 */
 export const LATENCY_STAT_HINTS = {
   total: "这段时间里一共记了多少个探测包（一次多包探测按包数算）",
-  availability: "至少通了一次的探测记录占比。和丢包率不同：5 个包丢 1 个算 20% 丢包，但这一次仍然可用。100% 减去它就是超时率",
+  availability: "链路通着的时间占比（每个点的状态延续到下一个点）。和丢包率不同：偶尔丢一个包，链路仍然算通着",
   loss: "没回来的包占全部探测包的比例",
   avg: "所有成功探测的平均延迟",
   p95: "95% 的探测都不超过这个延迟；比平均值更能反映偶尔的卡顿",
