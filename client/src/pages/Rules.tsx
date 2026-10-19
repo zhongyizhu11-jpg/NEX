@@ -111,6 +111,7 @@ import {
   ruleEgressSwitchesForwardType,
   ruleEgressStateTone,
   ruleEgressSummaryText,
+  SS_EGRESS_UDP_SUPPORTED,
   type RuleEgressState,
 } from "@shared/ssEgress";
 import {
@@ -8324,19 +8325,22 @@ function RulesContent() {
               </FormField>
               <FormField className="space-y-1.5">
               <Label>协议</Label>
+              {/*
+                开了出口时协议就决定 UDP 走不走出口：TCP+UDP 时 UDP 也经出口从落地出去，TCP 时只转 TCP
+                （UDP 绝不绕过出口直连，所以没有单独的 UDP）。入口机撑不起 UDP 出口时 TCP+UDP 选不了。
+              */}
               <Select
               value={isSniEntryMode ? "tcp" : egressActive ? (form.egress.egressUdp ? "both" : "tcp") : form.protocol}
-              disabled={isSniEntryMode || egressActive}
-              onValueChange={(v) => setForm({
-              ...form,
-              protocol: v as any,
-              })}
+              disabled={isSniEntryMode}
+              onValueChange={(v) => setForm((prev) => (egressActive
+                ? { ...prev, protocol: v === "both" ? "both" : "tcp", egress: { ...prev.egress, egressUdp: v === "both" } }
+                : { ...prev, protocol: v as any }))}
               >
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
               <SelectItem value="tcp">TCP</SelectItem>
-              <SelectItem value="udp">UDP</SelectItem>
-              <SelectItem value="both">TCP+UDP</SelectItem>
+              {egressActive ? null : <SelectItem value="udp">UDP</SelectItem>}
+              <SelectItem value="both" disabled={egressActive && !form.egress.egressUdp && (!SS_EGRESS_UDP_SUPPORTED || (!egressCapabilities.loading && !egressCapabilities.udp))}>TCP+UDP</SelectItem>
               </SelectContent>
               </Select>
               </FormField>
@@ -8369,7 +8373,7 @@ function RulesContent() {
                 runtimeNote={egressRuntimeNote}
                 onChange={(patch) => setForm((prev) => ({
                   ...prev,
-                  // 「UDP 也走出口」决定协议：勾上是 TCP+UDP，不勾只转 TCP（UDP 绝不绕过出口直连）。
+                  // UDP 走不走出口跟着协议（上面的下拉框）；这里换出口方式时会清掉它，协议跟着回到 TCP。
                   ...(patch.egressUdp !== undefined ? { protocol: patch.egressUdp ? "both" : "tcp" } : {}),
                   egress: { ...prev.egress, ...patch },
                 }))}

@@ -12,17 +12,20 @@ export const AGENT_FORWARDX_RELAY_FAILOVER_VERSION = "2.2.160";
  */
 export const AGENT_FORWARDX_RELAY_AGGREGATE_VERSION = "2.2.194";
 
-/** 中转模式的名字（shared/linkTerms.ts 的三个词）：串成一条链 / 主备 / 单连接叠加。 */
+/**
+ * 隧道编辑框里「中转方式」三个选项的名字：顺序 / 主备 / 叠加（叠加就是 shared/linkTerms.ts 的单连接叠加，
+ * 和链路管理的「叠加」页签同一个东西；选叠加的隧道保存后列在那一栏）。
+ */
 export const TUNNEL_RELAY_MODE_LABELS: Record<TunnelRelayMode, string> = {
-  chain: "链路中转",
+  chain: "顺序",
   failover: LINK_TERM_FAILOVER,
-  aggregate: LINK_TERM_SPLIT_CONNECTION,
+  aggregate: "叠加",
 };
 
 export const TUNNEL_RELAY_MODE_HINTS: Record<TunnelRelayMode, string> = {
   chain: "流量按顺序经过每一台中转，最终到达出口。",
   failover: "入口每次只用一台中转，坏了才换下一台。",
-  aggregate: "每条连接都被拆开、同时走全部中转，由出口拼回来；单条连接也能用上几台中转的带宽之和。",
+  aggregate: "每条连接拆开同时走全部中转，出口拼回来，单条连接也能用上几台中转的带宽之和；保存后列在「叠加」页签。",
 };
 
 export function normalizeTunnelRelayMode(value: unknown): TunnelRelayMode {

@@ -331,7 +331,7 @@ export function ssEgressHostCapabilityError(
   return null;
 }
 
-/** 这条规则的出口要不要 UDP 能力：协议里有 UDP，并且勾了「UDP 也走出口」。 */
+/** 这条规则的出口要不要 UDP 能力：协议里有 UDP，并且 UDP 走出口（egressUdp）。 */
 export function ruleEgressWantsUdp(rule: { protocol?: unknown; egressUdp?: unknown } | null | undefined) {
   const protocol = String(rule?.protocol ?? "both");
   return truthy(rule?.egressUdp) && (protocol === "udp" || protocol === "both");
@@ -416,9 +416,10 @@ export function ruleEgressShapeError(shape: RuleEgressShape): string | null {
     if (wantsUdp || udp) return SS_EGRESS_UDP_UNSUPPORTED_MESSAGE;
     return null;
   }
-  if (protocol === "udp" && !udp) return "协议只有 UDP 时必须开启「UDP 也走出口」";
-  if (protocol === "both" && !udp) return "规则包含 UDP：请开启「UDP 也走出口」，或把协议改成 TCP（否则 UDP 会绕过出口直连目标）";
-  if (protocol === "tcp" && udp) return "协议是 TCP，不需要开启「UDP 也走出口」";
+  // 界面上 UDP 走不走出口跟着协议（TCP+UDP 时走）；这几句给直接调接口、把两个字段写得对不上的。
+  if (protocol === "udp" && !udp) return "协议只有 UDP 时 UDP 必须走出口（egressUdp）";
+  if (protocol === "both" && !udp) return "协议是 TCP+UDP 时 UDP 也要走出口（egressUdp），或者把协议改成 TCP（否则 UDP 会绕过出口直连目标）";
+  if (protocol === "tcp" && udp) return "协议是 TCP，不需要 UDP 走出口";
   return null;
 }
 

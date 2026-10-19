@@ -222,10 +222,8 @@ export default function MultiHopEditor({
   const reachedMaxHops = hops.length >= maxHops;
   const availableHosts = reachedMaxHops ? [] : hosts.filter((host) => !selectedIds.has(host.id) && !excludedIds.has(host.id));
   const relayCount = Math.max(0, hops.length - (externalEntry ? 0 : 1) - (externalExit ? 0 : 1));
-  // The control stays visible even when a mode cannot be picked yet: hiding it
-  // leaves no way to discover the mode exists or what it needs. Each option
-  // carries its own requirement instead.
-  const showRelayMode = relayModeSupported;
+  // 中转不到两台时只有「顺序」一种走法，整行不显示；加到两台才出现「顺序 / 主备 / 叠加」。
+  const showRelayMode = relayModeSupported && relayCount >= 2;
   const relayAvailability = tunnelRelayModeAvailability({
     relayCount,
     aggregateSupported: relayAggregateSupported,
@@ -323,7 +321,7 @@ export default function MultiHopEditor({
         )}
         {showRelayMode && (
           <div className="flex min-w-0 items-center gap-2 sm:ml-auto">
-            <span className="shrink-0 text-xs text-muted-foreground">中转模式</span>
+            <span className="shrink-0 text-xs text-muted-foreground">中转方式</span>
             <div className={`${segmentedControlClassName} grid min-w-0 flex-1 grid-cols-3 gap-1 sm:w-72 sm:flex-none`}>
               <button
                 type="button"
