@@ -45,6 +45,9 @@ type multipathLegConn struct {
 	// healthKey is the endpoint this leg was dialled at, on the entry side,
 	// so its fate feeds multipathLegHealthMemory. Empty at the exit.
 	healthKey string
+	// cfgIndex 是这一路在入口配置（cfg.MultipathLegs）里的位置，断了以后按它重拨。
+	// 和 index 不同：重拨上来的那一路要用一个新的线上编号。出口上是 -1。
+	cfgIndex int
 	// failed guards the alive-leg count: a leg's reader and its writer both
 	// notice the same breakage, and only the first may retire the leg.
 	failed atomic.Bool
@@ -76,7 +79,7 @@ type multipathLegConn struct {
 
 // newMultipathLeg wraps one handshaked connection as a leg.
 func newMultipathLeg(index int, sec *secureConn, label string) *multipathLegConn {
-	return &multipathLegConn{index: index, sec: sec, label: label, dead: make(chan struct{})}
+	return &multipathLegConn{index: index, cfgIndex: -1, sec: sec, label: label, dead: make(chan struct{})}
 }
 
 // retire marks the leg as finished for anyone waiting on it.
@@ -176,6 +179,10 @@ type multipathSession struct {
 	closeOnce sync.Once
 	closed    chan struct{}
 	finOnce   sync.Once
+
+	// redialer 只在入口上有（multipath_redial.go）：一路断了、会话还在，就通知它补拨。
+	// 出口没有，出口从不主动拨。
+	redialer atomic.Pointer[multipathRedialer]
 
 	errMu    sync.Mutex
 	firstErr error
@@ -537,6 +544,9 @@ func (s *multipathSession) legFailed(leg *multipathLegConn, err error) {
 	if alive > 0 {
 		fxpVerbosef("multipath leg %d (%s) lost, %d remaining, %d chunks handed to them: %v",
 			leg.index, leg.label, s.aliveLegCount(), requeued, err)
+		if redialer := s.redialer.Load(); redialer != nil && !s.reorder.finished() {
+			redialer.schedule(leg.cfgIndex)
+		}
 		return
 	}
 	s.setErr(err)
