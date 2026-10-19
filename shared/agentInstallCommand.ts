@@ -28,6 +28,16 @@ export interface AgentScriptCommandOptions {
 export const AGENT_INSTALL_SCRIPT_RAW_URL =
   "https://raw.githubusercontent.com/zhongyizhu11-jpg/NEX/main/scripts/install-agent.sh";
 
+/**
+ * OpenWrt / iStoreOS 默认没有 bash 和 curl（登录 shell 是 busybox ash）：命令最前面先补上。
+ * 别的系统上 /etc/openwrt_release 不存在，这一段什么都不做；ash、bash、zsh 都能解析。
+ * 不能出现 " || "：下面两条管线靠它分隔，测试也按它拆。
+ */
+export const AGENT_OPENWRT_BOOTSTRAP =
+  "if [ -f /etc/openwrt_release ] && ! { command -v bash && command -v curl; } >/dev/null 2>&1; then "
+  + "if command -v opkg >/dev/null 2>&1; then opkg update && opkg install bash curl ca-bundle; "
+  + "else apk update && apk add bash curl ca-bundle; fi; fi; ";
+
 /** 单引号包起来，内部的单引号按 shell 的老办法断开再拼。 */
 export function shellQuoteSingle(value: string) {
   return `'${String(value).replace(/'/g, "'\\''")}'`;
@@ -79,7 +89,7 @@ export function buildAgentScriptCommand(options: AgentScriptCommandOptions): str
     `curl -fsSL ${curlScriptArgs} "${githubScriptUrl}" | PANEL_URL=${shellQuoteSingle(panelUrl)} ${bashPrefix} -s -- ${args}`,
   );
 
-  return options.preferPanelInstall
+  return AGENT_OPENWRT_BOOTSTRAP + (options.preferPanelInstall
     ? `${panelCommand} || ${githubCommand}`
-    : `${githubCommand} || ${panelCommand}`;
+    : `${githubCommand} || ${panelCommand}`);
 }

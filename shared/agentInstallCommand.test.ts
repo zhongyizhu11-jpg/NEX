@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import test from "node:test";
 import {
   AGENT_INSTALL_SCRIPT_RAW_URL,
+  AGENT_OPENWRT_BOOTSTRAP,
   buildAgentScriptCommand,
   normalizeAgentCommandUrl,
   shellQuoteSingle,
@@ -119,11 +120,27 @@ test("外层引号经真 bash 拆开后，token 原样落在管线里", () => {
     action: "install",
     token,
   });
-  const firstPipelineCommand = command.split(" || ")[0].replace(/^bash -c /, "printf %s ");
+  assert.ok(command.startsWith(AGENT_OPENWRT_BOOTSTRAP));
+  const firstPipelineCommand = command.slice(AGENT_OPENWRT_BOOTSTRAP.length).split(" || ")[0].replace(/^bash -c /, "printf %s ");
   const result = spawnSync("bash", ["-c", firstPipelineCommand], { encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
   assert.ok(
     result.stdout.includes(`install ${shellQuoteSingle(token)}`),
     `管线里应带上引好的 token，实际是：${result.stdout}`,
   );
+});
+
+/**
+ * OpenWrt 上登录 shell 是 busybox ash，没有 bash 和 curl：命令最前面先补上。
+ * 前缀本身要在 sh（dash，和 ash 一样是 POSIX sh）里能解析，别的系统上什么都不做。
+ */
+test("OpenWrt 前缀：sh 能解析，没有 openwrt_release 时什么都不做", () => {
+  const command = buildAgentScriptCommand({ panelUrl: "https://panel.example.com", action: "install", token: "tok" });
+  assert.ok(command.startsWith(AGENT_OPENWRT_BOOTSTRAP));
+  assert.ok(!AGENT_OPENWRT_BOOTSTRAP.includes(" || "), "前缀里不能有 \" || \"，两条管线靠它分隔");
+  const parse = spawnSync("sh", ["-n", "-c", command], { encoding: "utf8" });
+  assert.equal(parse.status, 0, parse.stderr);
+  const run = spawnSync("sh", ["-c", `${AGENT_OPENWRT_BOOTSTRAP}echo done`], { encoding: "utf8" });
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout.trim(), "done");
 });

@@ -302,6 +302,8 @@ export function installManagementCommandFunction(): string[] {
     '    chmod 600 "$dir/agent-proxy.sh.new" && mv -f "$dir/agent-proxy.sh.new" "$dir/agent-proxy.sh"',
     `    install -m 755 "$dir/fwxm.new" "${FWXM_PATH}.new" && mv -f "${FWXM_PATH}.new" "${FWXM_PATH}"`,
     '    rm -f "$dir/fwxm.new"',
+    // OpenWrt 的 PATH 里没有 /usr/local/bin：链一份到 /usr/bin，登录上去直接敲 fwxm。
+    `    if [ -f /etc/openwrt_release ]; then ln -sf "${FWXM_PATH}" /usr/bin/fwxm 2>/dev/null || true; fi`,
     '    echo "[信息] SSH 管理命令: fwxm（查看状态、日志、代理设置、升级）"',
     '  else',
     '    rm -f "$dir/agent-proxy.sh.new" "$dir/fwxm.new"',
