@@ -187,7 +187,7 @@ fxp_binary_version() {
   else
     OUT="$("$BIN" -version 2>/dev/null)" || OUT=""
   fi
-  OUT="$(printf '%s\n' "$OUT" | head -n 1 | tr -d '[:space:]')"
+  OUT="$(printf '%s\n' "$OUT" | head -n 1 | tr -d ' \t\n\r')"
   OUT="${"$"}{OUT#v}"
   if printf '%s\n' "$OUT" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
     echo "$OUT"
@@ -736,6 +736,10 @@ export function generateInstallScript(defaultPanelUrl: string, options: AgentIns
     '      journalctl -u "$SERVICE_NAME" -n 50 --no-pager 2>/dev/null || true',
     '      return 1',
     '    fi',
+    '  elif is_openwrt && [ -x "/etc/init.d/$SERVICE_NAME" ]; then',
+    '    # procd 的 restart 在服务还没起过时会报一句 ubus「Not found」，先 stop 再 start 就没有这句。',
+    '    "/etc/init.d/$SERVICE_NAME" stop >/dev/null 2>&1 || true',
+    '    "/etc/init.d/$SERVICE_NAME" start || return 1',
     '  elif command -v rc-service >/dev/null 2>&1; then',
     '    rc-service "$SERVICE_NAME" restart || return 1',
     '  elif [ -x "/etc/init.d/$SERVICE_NAME" ]; then',
@@ -853,7 +857,7 @@ export function generateInstallScript(defaultPanelUrl: string, options: AgentIns
     '',
     'resolve_realm_version() {',
     '  local VERSION="${FORWARDX_REALM_VERSION:-2.9.4}" LATEST_VERSION',
-    '  case "$(printf "%s" "$VERSION" | tr "[:upper:]" "[:lower:]")" in',
+    '  case "$(printf "%s" "$VERSION" | tr "A-Z" "a-z")" in',
     '    latest|auto|"")',
     '      LATEST_VERSION="$(curl -fsSL --connect-timeout "$FORWARDX_CURL_CONNECT_TIMEOUT" --max-time 30 "https://github.com/zhboner/realm/releases" 2>/dev/null | sed -n "s|.*releases/tag/v\\([0-9.]*\\).*|v\\1|p" | head -1)"',
     '      if [ -n "$LATEST_VERSION" ]; then',
@@ -1063,7 +1067,7 @@ export function generateInstallScript(defaultPanelUrl: string, options: AgentIns
     '    file -b "$BIN" 2>/dev/null | grep -q "^ELF " || return 1',
     '  else',
     '    command -v od >/dev/null 2>&1 || return 1',
-    '    MAGIC="$(od -An -tx1 -N4 "$BIN" 2>/dev/null | tr -d "[:space:]")"',
+    '    MAGIC="$(od -An -tx1 -N4 "$BIN" 2>/dev/null | tr -d " \\t\\n\\r")"',
     '    [ "$MAGIC" = "7f454c46" ] || return 1',
     '  fi',
     '  case "$(uname -m 2>/dev/null || true)" in',
@@ -1072,7 +1076,8 @@ export function generateInstallScript(defaultPanelUrl: string, options: AgentIns
     '    *) return 0 ;;',
     '  esac',
     '  command -v od >/dev/null 2>&1 || return 1',
-    '  MACHINE="$(od -An -tx1 -j18 -N2 "$BIN" 2>/dev/null | tr -d "[:space:]")"',
+    '  # 不用 [:space:]：OpenWrt 的 busybox tr 不认字符类，会把 s、p、a、c、e 当字母删掉。',
+    '  MACHINE="$(od -An -tx1 -j18 -N2 "$BIN" 2>/dev/null | tr -d " \\t\\n\\r")"',
     '  [ "$MACHINE" = "$EXPECTED_MACHINE" ]',
     '}',
     '',
@@ -1351,6 +1356,10 @@ export function generateInstallScript(defaultPanelUrl: string, options: AgentIns
     '  done',
     '  echo "[INFO] iptables/ip6tables rules cleaned"',
     '',
+    '  # OpenWrt：上面按名字 disable 过一遍；这里再把指向已删脚本的开机链接扫干净（脚本先被删了时 disable 不到）。',
+    '  if is_openwrt; then',
+    '    for LINK in /etc/rc.d/[SK][0-9][0-9]forwardx-*; do [ -L "$LINK" ] && [ ! -e "$LINK" ] && rm -f "$LINK"; done',
+    '  fi',
     '  echo "[步骤 5/5] 清理日志和状态文件..."',
     '  rm -rf /var/log/forwardx-agent 2>/dev/null || true',
     '  rm -rf /var/lib/forwardx-agent 2>/dev/null || true',
@@ -1386,7 +1395,9 @@ export function generateInstallScript(defaultPanelUrl: string, options: AgentIns
     '    # 一个包一个包装：源里缺哪个都不连累别的。ss、nohup、timeout、od、install、stat -c 是 busybox 没带、',
     '    # 安装脚本和 Agent 要用的。',
     '    openwrt_pkg_update >>"$FORWARDX_DEPS_LOG" 2>&1 || true',
-    '    for P in ca-bundle ca-certificates curl jq socat ip-full ss iptables-nft coreutils-nohup coreutils-timeout coreutils-od coreutils-install coreutils-stat openssl-util; do',
+    '    # base64 是面板下发的脚本里用来落配置的；ip6tables、conntrack、tc、ethtool、fuser（psmisc）给 IPv6 转发、',
+    '    # 连接统计、限速和诊断用，装不上只少这几样功能。',
+    '    for P in ca-bundle ca-certificates curl jq socat ip-full ss iptables-nft ip6tables-nft coreutils-nohup coreutils-timeout coreutils-od coreutils-install coreutils-stat coreutils-base64 openssl-util conntrack tc-tiny ethtool psmisc; do',
     '      openwrt_pkg_install "$P" >>"$FORWARDX_DEPS_LOG" 2>&1 || true',
     '    done',
     '  elif command -v apt-get >/dev/null 2>&1; then',

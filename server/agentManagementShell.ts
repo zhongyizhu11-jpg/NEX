@@ -132,7 +132,7 @@ export function agentProxyShellFunctions(): string[] {
     '# 已装的 Agent 认不认 proxyUrl。老版本没有 -version 参数，会报错退出。',
     'fwx_agent_supports_proxy() {',
     '  local version',
-    '  version="$("$GO_AGENT_BIN" -version 2>/dev/null | head -n 1 | tr -d "[:space:]")" || version=""',
+    '  version="$("$GO_AGENT_BIN" -version 2>/dev/null | head -n 1 | tr -d " \\t\\n\\r")" || version=""',
     '  [ -n "$version" ] && fwx_version_ge "$version" "$FWX_AGENT_PROXY_MIN_VERSION"',
     '}',
     '',

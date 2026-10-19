@@ -40,6 +40,32 @@ curl -fsSL https://panel.example.com/api/agent/install.sh | bash -s -- install Y
 
 安装完成后，进入**主机管理**，主机状态显示为绿色在线，说明 Agent 已正常连接面板。
 
+### 支持的系统 {#系统}
+
+| 系统 | 服务管理 | 说明 |
+|------|----------|------|
+| Debian、Ubuntu、CentOS、Rocky、Fedora、openSUSE、Arch | systemd | 最常见的 VPS 系统 |
+| Alpine | OpenRC | |
+| OpenWrt、iStoreOS、ImmortalWrt（2.3.461 起） | procd | 软路由、家里当叠加入口的机器 |
+
+CPU 架构只支持 **amd64（x86_64）** 和 **arm64（aarch64）**。路由器上执行 `uname -m` 看一下：`x86_64` 或 `aarch64` 能装；`mips`、`armv7l` 这类老硬路由装不了。
+
+### OpenWrt / iStoreOS {#openwrt}
+
+和 VPS 一样，复制面板生成的安装命令，SSH 登录路由器后执行就行。命令最前面会先检查：是 OpenWrt 又没有 bash、curl 时，用 opkg 把它们装上（别的系统上这一段什么都不做），所以路由器要能连上 OpenWrt 的软件源。
+
+安装脚本在 OpenWrt 上会：
+
+- 用 opkg 一个个装依赖（jq、socat、ss、ip-full、iptables-nft，以及 busybox 没带的 nohup、timeout、base64 等），哪个源里没有不影响别的；
+- Agent 和它管理的转发服务都写成 procd 服务：开机自启（`/etc/rc.d/S99forwardx-agent`），进程崩了 procd 自动拉起；
+- SSH 管理命令 `fwxm` 链到 `/usr/bin`，登录上去直接能用。
+
+要注意：
+
+- OpenWrt 的 `/var` 在内存里，日志（`/var/log/forwardx-agent/`）重启后清空，配置在 `/etc/forwardx/agent/`，不受影响。
+- 查看状态：`/etc/init.d/forwardx-agent status`；重启：`/etc/init.d/forwardx-agent restart`。
+- 卸载用面板给的卸载命令，开机链接一起删掉。
+
 ### mimic UDP 混淆（可选）
 
 安装脚本执行过程中会询问是否安装 mimic UDP 混淆环境：
