@@ -134,7 +134,8 @@ import { EntityActions } from "@/components/entity/EntityActions";
 import { IconTile, type IconTileTone } from "@/components/entity/IconTile";
 import { RouteGroupFields, routeGroupPayload, type RouteHostOption } from "@/features/rules/RouteGroupFields";
 import { docsUrl } from "@/lib/docsLinks";
-import { ROUTE_MODE_HINTS } from "@/features/rules/routeModeHints";
+import { ROUTE_MODE_HINTS, type RuleRouteTab } from "@/features/rules/routeModeHints";
+import { isAggregateLinkTunnel } from "@shared/aggregateLink";
 import { describeRoutePolicy, pinUntilSeconds } from "@shared/routePolicy";
 import {
   ROUTE_MODE_SHORT,
@@ -191,6 +192,7 @@ import {
   Network,
   ClipboardCopy,
   Layers3,
+  Combine,
   LayoutGrid,
   List,
   Rows3,
@@ -2525,7 +2527,7 @@ function RulesContent() {
   const [trafficDetailRule, setTrafficDetailRule] = useState<{ id: number; name: string; isForwardChain?: boolean; probeMethod?: "tcping" | "ping" } | null>(null);
   const [selfTestRule, setSelfTestRule] = useState<{ id: number; name: string } | null>(null);
 
-  const setRouteMode = (mode: RuleRouteMode) => {
+  const setRouteMode = (mode: RuleRouteMode, aggregate = false) => {
     if (mode === form.routeMode) return;
     /*
       换了走法，展开着的建线路表单就不再对应了（隧道的表单在「转发链」下
@@ -2542,8 +2544,10 @@ function RulesContent() {
       : mode === "group"
       ? availableFailoverForwardGroups
       : [];
+    // 「隧道转发」「叠加」各从自己那一类隧道里挑。
+    const tunnelPool = aggregate ? aggregateTunnels : plainTunnels;
     const nextTunnel = mode === "tunnel"
-      ? (selectedTunnel || availableTunnels[0] || supportedTunnels[0])
+      ? ((selectedTunnel && tunnelPool.includes(selectedTunnel) ? selectedTunnel : tunnelPool[0]) || null)
       : null;
     const usesForwardGroup = mode === "chain" || mode === "group" || localUsesSavedForward;
     const nextBillingHost = mode === "local" && !localUsesSavedForward
@@ -2581,6 +2585,23 @@ function RulesContent() {
         : (Number(nextBillingHost?.id || 0) || null),
       failoverEnabled: false,
     }));
+  };
+  /** 顶上的标签：「隧道转发」「叠加」都落到隧道转发，在两类隧道之间换只换选中的隧道。 */
+  const selectRouteTab = (tab: RuleRouteTab) => {
+    if (tab !== "tunnel" && tab !== "aggregate") {
+      setRouteMode(tab);
+      return;
+    }
+    const wantAggregate = tab === "aggregate";
+    if (form.routeMode !== "tunnel") {
+      setRouteMode("tunnel", wantAggregate);
+      return;
+    }
+    if (selectedTunnelIsAggregate === wantAggregate && form.tunnelId) return;
+    const next = (wantAggregate ? aggregateTunnels : plainTunnels)[0];
+    if (!next) return;
+    setInlineLinkOpen(false);
+    setForm((prev) => ({ ...prev, tunnelId: Number(next.id), hostId: next.entryHostId }));
   };
   const toggleMutation = trpc.rules.toggle.useMutation({
     onSuccess: async (_data, variables) => {
@@ -2671,8 +2692,9 @@ function RulesContent() {
     const firstLocalForwardType = firstPortGroup ? getForwardGroupRuleForwardType(firstPortGroup, defaultForm.forwardType) : null;
     const firstBillingHost = canUseBillingHostLocalForward ? availableTrafficBillingHosts[0] : null;
     const firstDirectForwardType = usableForwardTypes.includes(defaultForm.forwardType) ? defaultForm.forwardType : usableForwardTypes[0];
+    // 新建默认落在「隧道转发」：先挑普通隧道，只有叠加时才用叠加。
     const firstTunnel = canUseGost
-      ? supportedTunnels[0]
+      ? (plainTunnels[0] || supportedTunnels[0])
       : null;
     const firstChain = canUseForwardChain ? availableForwardChainGroups[0] : null;
     const firstGroup = canUseFailoverGroup ? availableFailoverForwardGroups[0] : null;
@@ -2878,15 +2900,23 @@ function RulesContent() {
     () => (tunnels || []).filter((t: any) => isProtocolEnabled(getTunnelProtocolKey(t))),
     [getTunnelProtocolKey, isProtocolEnabled, tunnels]
   );
-  const availableTunnels = useMemo(() => {
-    if (form.routeMode === "tunnel") return supportedTunnels;
-    if (!form.hostId) return [];
-    return supportedTunnels.filter((t: any) => t.entryHostId === form.hostId);
-  }, [form.hostId, form.routeMode, supportedTunnels]);
+  /*
+    「隧道转发」和「叠加」两个标签底下都是隧道转发（routeMode 都是 tunnel），只是各列各的隧道：
+    叠加列单连接叠加的 NEX 隧道（shared/aggregateLink.ts），隧道转发列其余的。选中的是哪种就在哪个标签。
+  */
+  const plainTunnels = useMemo(() => supportedTunnels.filter((t: any) => !isAggregateLinkTunnel(t)), [supportedTunnels]);
+  const aggregateTunnels = useMemo(() => supportedTunnels.filter((t: any) => isAggregateLinkTunnel(t)), [supportedTunnels]);
   const selectedTunnel = useMemo(() => {
     if (!form.tunnelId || !tunnels) return null;
     return tunnels.find((t: any) => t.id === form.tunnelId) || null;
   }, [form.tunnelId, tunnels]);
+  const selectedTunnelIsAggregate = isAggregateLinkTunnel(selectedTunnel);
+  const routeTab: RuleRouteTab = form.routeMode === "tunnel" && selectedTunnelIsAggregate ? "aggregate" : form.routeMode;
+  const availableTunnels = useMemo(() => {
+    if (form.routeMode === "tunnel") return selectedTunnelIsAggregate ? aggregateTunnels : plainTunnels;
+    if (!form.hostId) return [];
+    return supportedTunnels.filter((t: any) => t.entryHostId === form.hostId);
+  }, [aggregateTunnels, form.hostId, form.routeMode, plainTunnels, selectedTunnelIsAggregate, supportedTunnels]);
   // 允许哪些端口由服务端说了算，界面只负责显示。
   //
   // 这里原来自己照着算了一份：主机策略直接和隧道范围求交。服务端用的是
@@ -3314,7 +3344,7 @@ function RulesContent() {
   }, [form.failoverEnabled, form.routeGroup, form.targetIp, form.targetPort, form.protocol, form.routeMode, form.tunnelId, selectedTunnel, effectiveRouteForwardType, editingStoredRule, routeEntryHostId, hostById]);
   const advancedBlocked = isAdvancedSectionBlocker(submitBlocker);
   const advancedOpen = showAdvanced || advancedBlocked;
-  const routeModeTabItems: SlidingTabItem<RuleRouteMode>[] = [
+  const routeModeTabItems: SlidingTabItem<RuleRouteTab>[] = [
     {
       value: "local",
       label: "端口转发",
@@ -3325,8 +3355,15 @@ function RulesContent() {
       value: "tunnel",
       label: "隧道转发",
       icon: Network,
-      disabled: !canUseGost || (routeModeLocked && form.routeMode !== "tunnel"),
+      disabled: !canUseGost || plainTunnels.length === 0 || (routeModeLocked && form.routeMode !== "tunnel"),
     },
+    // 有叠加才出这个标签，没用到的人界面不变。
+    ...(aggregateTunnels.length > 0 || routeTab === "aggregate" ? [{
+      value: "aggregate" as const,
+      label: "叠加",
+      icon: Combine,
+      disabled: !canUseGost || aggregateTunnels.length === 0 || (routeModeLocked && form.routeMode !== "tunnel"),
+    }] : []),
     {
       value: "chain",
       label: "转发链",
@@ -8019,13 +8056,13 @@ function RulesContent() {
           </DialogHeader>
           <div className="min-h-0 flex-1 scroll-pb-28 space-y-3 overflow-y-auto pb-5 pr-1">
             <Tabs
-              value={form.routeMode}
-              onValueChange={(value) => setRouteMode(value as RuleRouteMode)}
+              value={routeTab}
+              onValueChange={(value) => selectRouteTab(value as RuleRouteTab)}
               className="space-y-3"
             >
               <SlidingTabsList
                 items={routeModeTabItems}
-                activeValue={form.routeMode}
+                activeValue={routeTab}
                 ariaLabel="转发规则类型"
                 minItemWidthRem={5.75}
               />
@@ -8033,7 +8070,7 @@ function RulesContent() {
             {/* 选中的走法一句话说清楚适合什么（features/rules/routeModeHints）。编辑时走法定了，不再说。 */}
             {!editingId && (
               <p className="-mt-1 text-meta leading-5 text-muted-foreground" data-testid="route-mode-hint">
-                {ROUTE_MODE_HINTS[form.routeMode]}
+                {ROUTE_MODE_HINTS[routeTab]}
               </p>
             )}
             {form.routeMode === "local" && (canUseSniInbound || isSniEntryMode) && renderEntryModeSwitch()}
@@ -8050,9 +8087,9 @@ function RulesContent() {
                 <div className="space-y-2">
                     <FormField className="space-y-1.5">
                       <div className="flex min-w-0 items-center justify-between gap-2">
-                        <Label>使用隧道</Label>
-                        {/* 隧道的类型（GOST / NEX）下拉框里已经写着，不再另起一个徽标重复一遍 */}
-                        {renderInlineLinkTrigger("tunnel")}
+                        <Label>{selectedTunnelIsAggregate ? "使用叠加" : "使用隧道"}</Label>
+                        {/* 隧道的类型（GOST / NEX）下拉框里已经写着，不再另起一个徽标重复一遍；叠加在链路管理里建 */}
+                        {selectedTunnelIsAggregate ? null : renderInlineLinkTrigger("tunnel")}
                       </div>
                       <Select
                         value={form.tunnelId ? String(form.tunnelId) : undefined}
@@ -8067,7 +8104,7 @@ function RulesContent() {
                           });
                         }}
                       >
-                        <SelectTrigger><SelectValue placeholder="请选择隧道" /></SelectTrigger>
+                        <SelectTrigger><SelectValue placeholder={selectedTunnelIsAggregate ? "请选择叠加" : "请选择隧道"} /></SelectTrigger>
                         <SelectContent>
                           {availableTunnels.map((t: any) => (
                             <SelectItem key={t.id} value={String(t.id)} textValue={getTunnelSelectText(t)}>

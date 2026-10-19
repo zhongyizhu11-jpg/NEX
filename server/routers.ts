@@ -21,7 +21,6 @@ import { telegramRouter } from "./routers/telegram";
 import { ticketsRouter } from "./routers/tickets";
 import { trafficBillingRouter } from "./routers/trafficBilling";
 import { tunnelsRouter } from "./routers/tunnels";
-import { homeAggregateRouter } from "./routers/homeAggregate";
 import { tlsInboundsRouter } from "./routers/tlsInbounds";
 import { usersRouter } from "./routers/users";
 import { opsRouter } from "./routers/ops";
@@ -48,7 +47,6 @@ export const appRouter = router({
   rules: rulesRouter,
   forwardGroups: forwardGroupsRouter,
   tunnels: tunnelsRouter,
-  homeAggregate: homeAggregateRouter,
   telegram: telegramRouter,
   trafficBilling: trafficBillingRouter,
   agentTokens: agentTokensRouter,

@@ -12,6 +12,7 @@
  * 每一项给一个「去改」的地址，改的地方还是原来那页。
  */
 
+import { isAggregateLinkTunnel } from "./aggregateLink";
 import { exitGroupWeights, normalizeExitGroupStrategy } from "./exitStrategy";
 import { LINK_SPREAD_LABELS, LINK_TERM_FAILOVER, LINK_TERM_LOAD_BALANCE, LINK_TERM_SPLIT_CONNECTION } from "./linkTerms";
 import { hostBandwidthHintMbps } from "./linkWeights";
@@ -19,7 +20,7 @@ import { ROUTE_MODE_INFO, routeGroupOf, type RouteGroupRule } from "./routeGroup
 import { normalizeTunnelParallelStreams, tunnelParallelStreamsUnavailableReason } from "./tunnelParallelStreams";
 import { isTunnelRelayAggregate, isTunnelRelayFailover, tunnelRelayCandidates } from "./tunnelRelay";
 
-export type LinkOverviewKind = "route_group" | "forward_group" | "entry_group" | "exit_group" | "tunnel";
+export type LinkOverviewKind = "route_group" | "forward_group" | "entry_group" | "exit_group" | "tunnel" | "aggregate";
 
 export const LINK_OVERVIEW_KIND_LABELS: Record<LinkOverviewKind, string> = {
   route_group: "线路组",
@@ -27,6 +28,7 @@ export const LINK_OVERVIEW_KIND_LABELS: Record<LinkOverviewKind, string> = {
   entry_group: "入口组",
   exit_group: "出口组",
   tunnel: "隧道",
+  aggregate: "叠加",
 };
 
 export type LinkOverviewItem = {
@@ -168,14 +170,14 @@ export function buildLinkOverview(input: LinkOverviewInput): LinkOverview {
     const id = Number(tunnel.id);
     const name = String(tunnel.name || `隧道 ${id}`);
     const enabled = on(tunnel.isEnabled);
-    const href = `/tunnels?tab=tunnels&edit=${id}`;
+    const href = `/tunnels?tab=${isAggregateLinkTunnel(tunnel) ? "aggregates" : "tunnels"}&edit=${id}`;
     const hops = [...(hopsByTunnel.get(id) || [])].sort((a, b) => Number(a.seq) - Number(b.seq));
     // 和下发用同一套判断（shared/tunnelRelay.ts）：协议不支持、中转不够两台时实际就是普通链路，不列。
     const relays = tunnelRelayCandidates(hops).map((hop) => hostName(hop.hostId));
     if (isTunnelRelayFailover(tunnel, hops)) {
       push("failover", { key: `tunnel:${id}:relay`, kind: "tunnel", id, name, enabled, how: "中转主备", members: relays, href });
     } else if (isTunnelRelayAggregate(tunnel, hops)) {
-      push("splitConnection", { key: `tunnel:${id}:relay`, kind: "tunnel", id, name, enabled, how: `${relays.length} 台中转一起送`, members: relays, href });
+      push("splitConnection", { key: `tunnel:${id}:relay`, kind: "aggregate", id, name, enabled, how: `${relays.length} 台中转一起送`, members: relays, href });
     }
     const extraExits = exitsByTunnel.get(id) || [];
     const multiExit = on(tunnel.loadBalanceEnabled, false) && normalizeExitGroupStrategy(tunnel.loadBalanceStrategy) !== "none" && extraExits.length > 0;

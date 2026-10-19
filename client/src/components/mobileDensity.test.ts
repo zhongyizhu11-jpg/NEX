@@ -29,7 +29,8 @@ test("创建转发对话框里不再有「流量将经过」那块预览", () =>
 
 test("「＋ 新建隧道」在标签那一行，不再自己占一行、也不再套一个描边灰框", () => {
   const rules = read("../pages/Rules.tsx");
-  assert.match(rules, /<Label>使用隧道<\/Label>\s*\{\/\*[^]*?\*\/\}\s*\{renderInlineLinkTrigger\("tunnel"\)\}/);
+  // 选的是叠加时标签写「使用叠加」、不放新建按钮（叠加在链路管理里建），按钮仍在标签那一行。
+  assert.match(rules, /<Label>\{selectedTunnelIsAggregate \? "使用叠加" : "使用隧道"\}<\/Label>\s*\{\/\*[^]*?\*\/\}\s*\{selectedTunnelIsAggregate \? null : renderInlineLinkTrigger\("tunnel"\)\}/);
   assert.doesNotMatch(rules, /space-y-2 rounded-md border border-border bg-muted\/30 p-2\.5/);
 });
 

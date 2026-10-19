@@ -3418,7 +3418,7 @@ function HostsContent() {
                         value={form.entryIp}
                         onChange={(e) => setForm({ ...form, entryIp: e.target.value })}
                       />
-                      {/* 家里的机器当入口（家庭叠加）时，订阅里的地址就是它的内网 IP。 */}
+                      {/* 家里的机器当入口（比如叠加的入口）时，订阅里的地址就是它的内网 IP。 */}
                       {detectedPrivateIpv4 && !form.entryIp.trim() ? (
                         <button
                           type="button"

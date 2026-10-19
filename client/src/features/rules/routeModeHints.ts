@@ -9,9 +9,13 @@ import type { ForwardRuleRouteMode } from "@shared/forwardRuleForm";
 
   说法和 docs/guide/rules.md 的「资源类型」一张表对得上。
 */
-export const ROUTE_MODE_HINTS: Record<ForwardRuleRouteMode, string> = {
+/** 规则编辑框顶上的标签：四种走法，外加「叠加」（单连接叠加的隧道单列一个标签，底下仍是隧道转发）。 */
+export type RuleRouteTab = ForwardRuleRouteMode | "aggregate";
+
+export const ROUTE_MODE_HINTS: Record<RuleRouteTab, string> = {
   local: "最简单：入口机器收到的流量，直接转给目标地址。",
   tunnel: "入口机和出口机之间走一条隧道，再由出口机转给目标。适合跨地区、要换出口的情况。",
+  aggregate: "一条连接拆到几台中转同时送，在落地拼回来，单线程下载也能叠带宽。",
   chain: "按固定顺序经过几台中转机器，一跳接一跳，最后到目标。",
   group: "几台入口机器一起接流量，一台出问题时域名自动解析到别的（需要先配好 DDNS）。",
 };
