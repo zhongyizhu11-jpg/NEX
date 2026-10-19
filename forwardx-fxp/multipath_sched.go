@@ -123,6 +123,23 @@ type legPacing struct {
 	// parked is whether the leg's writer is waiting for work, which makes it
 	// a candidate for chunks another writer would rather leave to it.
 	parked bool
+
+	// hintRate 是面板给的线路带宽（字节/秒），只在还没量出往返时间之前用：
+	// 让带宽大的那一路一开始就多拿、先被挑中，而不是大家都从 1 MiB 起步慢慢试。
+	hintRate float64
+}
+
+// multipathHintRTT 是还没量到往返时间时，按线路带宽估份额用的假定往返。
+const multipathHintRTT = 50 * time.Millisecond
+
+// seedCapacity 用面板给的线路带宽（Mbps）给这一路定初值。实测出来以后 rate 按
+// 「峰值、慢慢衰减」跟上实际（每 100ms 最多降两成），给高了一两秒内就纠正过来。
+func (p *legPacing) seedCapacity(mbps int) {
+	if mbps <= 0 {
+		return
+	}
+	p.hintRate = float64(mbps) * 125000
+	p.rate = p.hintRate
 }
 
 func (p *legPacing) inflight() uint64 {
@@ -137,10 +154,14 @@ func (p *legPacing) inflight() uint64 {
 // shown it can carry in one round trip, which leaves room to grow and keeps the
 // queue in front of the path to roughly one more round trip.
 func (p *legPacing) capacity() uint64 {
-	if p.rate <= 0 || p.minRTT <= 0 {
+	rtt := p.minRTT
+	if rtt <= 0 && p.hintRate > 0 {
+		rtt = multipathHintRTT
+	}
+	if p.rate <= 0 || rtt <= 0 {
 		return multipathLegInitialInflight
 	}
-	bdp := p.rate * p.minRTT.Seconds()
+	bdp := p.rate * rtt.Seconds()
 	limit := uint64(2*bdp) + multipathLegMinInflight
 	if limit > multipathLegMaxInflight {
 		return multipathLegMaxInflight
@@ -164,6 +185,9 @@ func (p *legPacing) expectedDelay(now time.Time) time.Duration {
 	delay := p.srtt
 	if p.minRTT > 0 && p.rate > 0 {
 		delay = p.minRTT + time.Duration(float64(p.inflight())/p.rate*float64(time.Second))
+	} else if delay == 0 && p.hintRate > 0 {
+		// 还没量过：按线路带宽估，这样一开始就能在几路之间比快慢。
+		delay = multipathHintRTT + time.Duration(float64(p.inflight())/p.hintRate*float64(time.Second))
 	}
 	if delay > 0 && p.inflight() > 0 {
 		if stuck := now.Sub(p.progressAt); stuck > delay {

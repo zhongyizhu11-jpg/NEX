@@ -38,6 +38,9 @@ type multipathLeg struct {
 	Key  string `json:"key,omitempty"`
 	// Via labels the leg for logs, e.g. "direct" or a relay host name.
 	Via string `json:"via,omitempty"`
+	// CapacityMbps 是这一路（中转主机）的线路带宽：还没测出快慢之前，按它给各路分份额，
+	// 起速更快；测出来以后以实测为准。没写就和以前一样，从 1 MiB 起步慢慢量。
+	CapacityMbps int `json:"capacityMbps,omitempty"`
 }
 
 type config struct {

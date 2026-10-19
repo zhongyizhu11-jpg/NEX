@@ -2987,6 +2987,8 @@ type fxpMultipathLeg struct {
 	Port int    `json:"port"`
 	Key  string `json:"key,omitempty"`
 	Via  string `json:"via,omitempty"`
+	// CapacityMbps：这一路（中转主机）的线路带宽，FXP 按它给单连接叠加的各路定初始份额。
+	CapacityMbps int `json:"capacityMbps,omitempty"`
 }
 
 type fxpExitEndpoint struct {
@@ -10117,6 +10119,9 @@ func normalizeFXPMultipath(spec fxpSpec) fxpSpec {
 		if leg.Host == "" || leg.Port <= 0 || leg.Port > 65535 {
 			continue
 		}
+		if leg.CapacityMbps < 0 || leg.CapacityMbps > 1_000_000 {
+			leg.CapacityMbps = 0
+		}
 		if strings.TrimSpace(leg.Key) == "" {
 			leg.Key = spec.Key
 		}
@@ -10210,6 +10215,10 @@ func fxpServerSignature(spec fxpSpec) string {
 	}
 	for _, leg := range spec.MultipathLegs {
 		parts = append(parts, strings.TrimSpace(leg.Host), strconv.Itoa(leg.Port), strings.TrimSpace(leg.Key))
+		// 带宽只在写了时进签名：没写的隧道签名和旧版一样，升级不重启 FXP。
+		if leg.CapacityMbps > 0 {
+			parts = append(parts, "c"+strconv.Itoa(leg.CapacityMbps))
+		}
 	}
 	for _, exit := range spec.Exits {
 		parts = append(parts, strings.TrimSpace(exit.Host), strconv.Itoa(exit.Port), strconv.Itoa(exit.UDPPort), strings.TrimSpace(exit.Key), strings.TrimSpace(exit.PeerID))
