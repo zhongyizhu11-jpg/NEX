@@ -8,6 +8,12 @@ type UseUrlTabOptions<T extends string> = {
   storageKey?: string;
   queryKey?: string;
   clearDefaultFromUrl?: boolean;
+  /**
+   * false：不记上次停在哪个 tab —— 刷新、从别的页面点进来都回到默认（第一个）。
+   * 别处带着 ?tab= 跳过来照样打开那一个，打开后把它从地址栏去掉；点 tab 也不往地址栏写，
+   * 免得一刷新又回到那一页（链路管理，用户要求每次进来都是第一个分类）。
+   */
+  remember?: boolean;
 };
 
 /**
@@ -20,6 +26,15 @@ type UseUrlTabOptions<T extends string> = {
 function currentSearch() {
   if (typeof window === "undefined") return "";
   return window.location.search || "";
+}
+
+/** 去掉查询串里的某个键，返回 "?a=1" 或 ""。 */
+function searchWithout(search: string, key: string) {
+  const params = new URLSearchParams(search.startsWith("?") ? search.slice(1) : search);
+  if (!params.has(key)) return search;
+  params.delete(key);
+  const rest = params.toString();
+  return rest ? `?${rest}` : "";
 }
 
 function readStoredTab<T extends string>(storageKey: string | undefined, coerce: (value: unknown) => T | null) {
@@ -46,7 +61,9 @@ export function useUrlTab<T extends string>({
   storageKey,
   queryKey = "tab",
   clearDefaultFromUrl = true,
+  remember = true,
 }: UseUrlTabOptions<T>) {
+  if (!remember) storageKey = undefined;
   const [location, setLocation] = useLocation();
   const valuesKey = values.join("\0");
   const allowedValues = useMemo(() => new Set<T>(values), [valuesKey]);
@@ -74,6 +91,14 @@ export function useUrlTab<T extends string>({
     if (previousSearch === null) {
       // 第一次：地址栏 > 上次存的 > 默认
       next = resolveTab();
+      if (!remember) {
+        const stripped = searchWithout(nowSearch, queryKey);
+        if (stripped !== nowSearch) {
+          // 先记下去掉之后的查询串，下面这次地址变化就不会被当成「tab 被去掉了」而换回默认。
+          lastSearchRef.current = stripped;
+          setLocation(`${location.split("?")[0] || "/"}${stripped}`, { replace: true });
+        }
+      }
     } else {
       next = tabForSearchChange(previousSearch, nowSearch, values, defaultValue, {
         queryKey,
@@ -85,7 +110,7 @@ export function useUrlTab<T extends string>({
     const resolved = next;
     setTabState((current) => (current === resolved ? current : resolved));
     writeStoredTab(storageKey, resolved);
-  }, [clearDefaultFromUrl, coerce, defaultValue, location, queryKey, resolveTab, search, storageKey, valuesKey]);
+  }, [clearDefaultFromUrl, coerce, defaultValue, location, queryKey, remember, resolveTab, search, setLocation, storageKey, valuesKey]);
 
   const setTab = useCallback((nextValue: T | string) => {
     const next = coerce(nextValue) || defaultValue;
@@ -94,6 +119,14 @@ export function useUrlTab<T extends string>({
 
     // 路径从 wouter 拿（它给的就是路径），查询串从地址栏拿。
     const path = location.split("?")[0];
+    if (!remember) {
+      const stripped = searchWithout(currentSearch(), queryKey);
+      if (stripped !== currentSearch()) {
+        lastSearchRef.current = stripped;
+        setLocation(`${path || "/"}${stripped}`, { replace: true });
+      }
+      return;
+    }
     const params = new URLSearchParams(currentSearch());
     if (clearDefaultFromUrl && next === defaultValue) {
       params.delete(queryKey);
@@ -103,7 +136,7 @@ export function useUrlTab<T extends string>({
     const nextQuery = params.toString();
     const nextLocation = `${path || "/"}${nextQuery ? `?${nextQuery}` : ""}`;
     if (nextLocation !== `${path}${currentSearch()}`) setLocation(nextLocation);
-  }, [clearDefaultFromUrl, coerce, defaultValue, location, queryKey, setLocation, storageKey]);
+  }, [clearDefaultFromUrl, coerce, defaultValue, location, queryKey, remember, setLocation, storageKey]);
 
   return [tab, setTab] as const;
 }

@@ -67,3 +67,14 @@ test("不清掉默认值的页面，tab 参数被去掉时退回上次存的", (
     "billing",
   );
 });
+
+test("链路管理每次进来都从第一个分类开始：不记上次的 tab，带 ?tab= 跳过来的也只用一次", async () => {
+  const fs = await import("node:fs");
+  const page = fs.readFileSync("client/src/pages/Tunnels.tsx", "utf8");
+  const call = page.slice(page.indexOf("useUrlTab<TunnelSection>({"), page.indexOf("useUrlTab<TunnelSection>({") + 400);
+  assert.match(call, /remember: false/);
+  const hook = fs.readFileSync("client/src/hooks/useUrlTab.ts", "utf8");
+  // 不记：不读也不写 localStorage；点 tab 不往地址栏写；进来时地址栏里的 tab 用完就去掉。
+  assert.match(hook, /if \(!remember\) storageKey = undefined;/);
+  assert.equal((hook.match(/lastSearchRef\.current = stripped;/g) || []).length, 2, "去掉 ?tab= 之前要先记下新查询串，不然会被当成后退而换回默认");
+});
