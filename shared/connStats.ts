@@ -3,14 +3,36 @@
   阶段叫什么、分档怎么换算成 P50 / P95、汇总行怎么算成功率和平均耗时、导出 CSV。
 */
 
-export type ConnStage = "pool" | "tcp" | "handshake" | "target";
+export type ConnStage = "pool" | "tcp" | "handshake" | "target" | "leg";
 
 export const CONN_STAGES: ReadonlyArray<{ key: ConnStage; label: string; description: string }> = [
   { key: "pool", label: "连接池", description: "从预热好的连接池直接拿到下一跳连接，不用拨号" },
   { key: "tcp", label: "TCP 连接", description: "拨下一跳的 TCP" },
   { key: "handshake", label: "加密握手", description: "和下一跳完成加密握手确认（从开始拨号算起）" },
   { key: "target", label: "连目标", description: "出口拨目标地址" },
+  { key: "leg", label: "每一路", description: "单连接叠加：入口拨每一路并报到，外加这一路实际跑了多少" },
 ];
+
+/** 单连接叠加里的一路：relay#主机 ID（并排中转）或 stream#N（同一条线开几路）。 */
+export function normalizeConnLegVia(value: unknown): string {
+  const text = String(value ?? "").trim();
+  return /^(relay|stream)#\d{1,9}$/.test(text) ? text : "";
+}
+
+/** 字节数换成 Mbps（一位小数）。 */
+export function bytesToMbps(bytes: number, seconds: number) {
+  if (!(seconds > 0) || !(bytes > 0)) return 0;
+  return Math.round(((bytes * 8) / seconds / 1_000_000) * 10) / 10;
+}
+
+export function formatConnBytes(bytes: number) {
+  const value = Math.max(0, Number(bytes) || 0);
+  if (value >= 1024 ** 4) return `${(value / 1024 ** 4).toFixed(2)} TB`;
+  if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(2)} GB`;
+  if (value >= 1024 ** 2) return `${(value / 1024 ** 2).toFixed(1)} MB`;
+  if (value >= 1024) return `${(value / 1024).toFixed(0)} KB`;
+  return `${value} B`;
+}
 
 export function connStageLabel(stage: string) {
   return CONN_STAGES.find((item) => item.key === stage)?.label ?? stage;
@@ -108,13 +130,16 @@ export type ConnStatsExportRow = {
   role: string;
   stage: string;
   endpoint: string;
+  via?: string;
+  bytesUp?: number;
+  bytesDown?: number;
   ruleId: number | null;
   summary: ConnStatsSummary;
   lastError: string | null;
 };
 
 export function connStatsToCsv(rows: readonly ConnStatsExportRow[]) {
-  const header = ["host", "role", "stage", "endpoint", "ruleId", "attempts", "failures", "successRate", "avgMs", "p50Ms", "p95Ms", "maxMs", "lastError"];
+  const header = ["host", "role", "stage", "endpoint", "ruleId", "attempts", "failures", "successRate", "avgMs", "p50Ms", "p95Ms", "maxMs", "lastError", "via", "bytesUp", "bytesDown"];
   const lines = rows.map((row) => [
     row.hostName,
     row.role,
@@ -129,6 +154,9 @@ export function connStatsToCsv(rows: readonly ConnStatsExportRow[]) {
     row.summary.p95Ms ?? "",
     row.summary.maxMs,
     row.lastError ?? "",
+    row.via ?? "",
+    row.bytesUp ?? 0,
+    row.bytesDown ?? 0,
   ].map(csvCell).join(","));
   return `﻿${header.join(",")}\n${lines.join("\n")}${lines.length > 0 ? "\n" : ""}`;
 }

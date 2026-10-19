@@ -28,6 +28,10 @@ export const connStatsTables: TableDef[] = [
       col("b1000", "int", { notNull: true, default: 0 }),
       col("bOver", "int", { notNull: true, default: 0 }),
       col("lastError", "text"),
+      /** 单连接叠加的「每一路」（stage=leg）：哪一路（relay#主机 ID / stream#N）、这一分钟送出 / 收到多少字节。 */
+      col("via", "varchar", { length: 32, notNull: true, default: "" }),
+      col("bytesUp", "bigint", { notNull: true, default: 0 }),
+      col("bytesDown", "bigint", { notNull: true, default: 0 }),
     ],
     indexes: [["tunnelId", "minuteAt"], ["minuteAt"]],
   },

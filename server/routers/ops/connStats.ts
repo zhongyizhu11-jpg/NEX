@@ -14,16 +14,33 @@ const inputSchema = z.object({
   hours: z.number().int().min(1).max(CONN_STATS_RETENTION_HOURS).default(24),
 });
 
+/** relay#3 → 3；不是中转那种就是 0。 */
+function connLegRelayHostId(via: string) {
+  const match = /^relay#(\d+)$/.exec(via);
+  return match ? Number(match[1]) : 0;
+}
+
+/** 每一路给人看的名字：中转的主机名，或者「第 N 路」（同一条线开几路并发）。 */
+function connLegName(via: string, names: Map<number, string>) {
+  const relayId = connLegRelayHostId(via);
+  if (relayId > 0) return names.get(relayId) || `中转 #${relayId}`;
+  const stream = /^stream#(\d+)$/.exec(via);
+  if (stream) return `第 ${stream[1]} 路`;
+  return "";
+}
+
 async function loadWithNames(tunnelId: number, hours: number) {
   const tunnel = await db.getTunnelById(tunnelId);
   if (!tunnel) throw new Error("隧道不存在");
   const stats = await getTunnelConnStats(tunnelId, hours);
-  const hostIds = [...new Set(stats.groups.map((group) => group.hostId))];
+  const relayHostIds = stats.legs.map((leg) => connLegRelayHostId(leg.via)).filter((id) => id > 0);
+  const hostIds = [...new Set([...stats.groups.map((group) => group.hostId), ...stats.legs.map((leg) => leg.hostId), ...relayHostIds])];
   const names = hostIds.length > 0 ? await getHostNamesByIds(hostIds).catch(() => new Map<number, string>()) : new Map<number, string>();
   return {
     tunnel: { id: Number((tunnel as any).id), name: String((tunnel as any).name || `#${tunnelId}`) },
     ...stats,
     groups: stats.groups.map((group) => ({ ...group, hostName: names.get(group.hostId) || `#${group.hostId}` })),
+    legs: stats.legs.map((leg) => ({ ...leg, hostName: names.get(leg.hostId) || `#${leg.hostId}`, legName: connLegName(leg.via, names) })),
   };
 }
 
@@ -40,15 +57,29 @@ export const connStatsRouter = router({
         return {
           filename: `${base}.csv`,
           mime: "text/csv",
-          content: connStatsToCsv(data.groups.map((group) => ({
-            hostName: group.hostName,
-            role: group.role,
-            stage: group.stage,
-            endpoint: group.endpoint,
-            ruleId: null,
-            summary: group.summary,
-            lastError: group.lastError,
-          }))),
+          content: connStatsToCsv([
+            ...data.groups.map((group) => ({
+              hostName: group.hostName,
+              role: group.role,
+              stage: group.stage,
+              endpoint: group.endpoint,
+              ruleId: null,
+              summary: group.summary,
+              lastError: group.lastError,
+            })),
+            ...data.legs.map((leg) => ({
+              hostName: leg.hostName,
+              role: "entry",
+              stage: "leg",
+              endpoint: leg.endpoint,
+              via: leg.legName || leg.via,
+              bytesUp: leg.bytesUp,
+              bytesDown: leg.bytesDown,
+              ruleId: null,
+              summary: leg.summary,
+              lastError: leg.lastError,
+            })),
+          ]),
         };
       }
       return {

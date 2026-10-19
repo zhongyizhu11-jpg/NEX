@@ -131,8 +131,10 @@ func dialMultipathLeg(cfg config, hello helloFrame, sessionID string, cfgIndex, 
 	}
 	label := multipathLegLabel(legCfg)
 	key := multipathLegHealthKey(legCfg)
+	dialStarted := time.Now()
 	conn, sec, err := dialSecureTCP(legCfg.Host, legCfg.Port, dialCfg)
 	if err != nil {
+		recordMultipathLegDial(cfg, legCfg, time.Since(dialStarted), err)
 		return multipathDialResult{key: key, cfgIndex: cfgIndex, err: fmt.Errorf("leg %d (%s): %w", wireIndex, label, err)}
 	}
 	legHello := hello
@@ -145,11 +147,13 @@ func dialMultipathLeg(cfg config, hello helloFrame, sessionID string, cfgIndex, 
 	if err == nil {
 		err = writeSecureHello(sec, frame)
 	}
+	recordMultipathLegDial(cfg, legCfg, time.Since(dialStarted), err)
 	if err != nil {
 		_ = conn.Close()
 		return multipathDialResult{key: key, cfgIndex: cfgIndex, err: fmt.Errorf("leg %d (%s) hello: %w", wireIndex, label, err)}
 	}
 	leg := newMultipathLeg(wireIndex, sec, label)
+	leg.traffic = newMultipathLegTraffic(cfg, legCfg)
 	leg.healthKey = key
 	leg.cfgIndex = cfgIndex
 	leg.pace.seedCapacity(legCfg.CapacityMbps)
@@ -161,6 +165,9 @@ func closeMultipathLegs(legs []*multipathLegConn) {
 	for _, leg := range legs {
 		if leg != nil && leg.sec != nil {
 			_ = leg.sec.conn.Close()
+		}
+		if leg != nil {
+			leg.retire()
 		}
 	}
 }

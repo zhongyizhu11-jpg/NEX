@@ -9,6 +9,9 @@ package main
   - tcp       入口 / 中转拨下一跳的 TCP
   - handshake 入口 / 中转和下一跳的加密握手确认（从开始拨号算起，流水线握手不阻塞数据，但慢了说明下一跳慢）
   - target    出口拨目标
+  - leg       单连接叠加：入口拨每一路（开局、晚到、中途补拨都算），耗时是拨号加报到；
+              这一行还带着这一路实际送出（bytesUp）和收到（bytesDown）的字节数，via 是哪台中转
+              （relay#主机 ID）或第几路并发（stream#N）。FXP 2.2.135 起。
 
 每个（隧道, 规则, 角色, 阶段, 端点）一行：次数、失败次数、耗时总和 / 最大值、按 50 / 100 / 200 / 500 / 1000 ms
 分档的个数、最近一次失败原因。一分钟报一次，报成功了才清零；面板挂了最多攒 10000 行，多了丢最旧的。
@@ -44,6 +47,7 @@ type connStatsKey struct {
 	role     string
 	stage    string
 	endpoint string
+	via      string
 }
 
 type connStatsValue struct {
@@ -53,6 +57,8 @@ type connStatsValue struct {
 	MaxMs     uint64    `json:"maxMs"`
 	Buckets   [6]uint64 `json:"buckets"`
 	LastError string    `json:"lastError,omitempty"`
+	BytesUp   uint64    `json:"bytesUp,omitempty"`
+	BytesDown uint64    `json:"bytesDown,omitempty"`
 }
 
 var connStats = struct {
@@ -102,16 +108,27 @@ func connStatsErrorText(err error) string {
 
 // recordConnStage 记一次阶段结果。cfg 里没有面板地址或 token（本地测试、老配置）就不记。
 func recordConnStage(cfg config, tunnelID, ruleID int, role, stage, endpoint string, elapsed time.Duration, err error) {
+	key, ok := connStatsKeyFor(cfg, tunnelID, ruleID, role, stage, endpoint, "")
+	if !ok {
+		return
+	}
+	recordConnStageKey(key, elapsed, err)
+}
+
+func connStatsKeyFor(cfg config, tunnelID, ruleID int, role, stage, endpoint, via string) (connStatsKey, bool) {
 	panelURL := strings.TrimRight(strings.TrimSpace(cfg.PanelURL), "/")
 	token := strings.TrimSpace(cfg.Token)
 	if panelURL == "" || token == "" || tunnelID <= 0 {
-		return
+		return connStatsKey{}, false
 	}
+	return connStatsKey{panelURL: panelURL, token: token, tunnelID: tunnelID, ruleID: ruleID, role: role, stage: stage, endpoint: endpoint, via: via}, true
+}
+
+func recordConnStageKey(key connStatsKey, elapsed time.Duration, err error) {
 	ms := elapsed.Milliseconds()
 	if ms < 0 {
 		ms = 0
 	}
-	key := connStatsKey{panelURL: panelURL, token: token, tunnelID: tunnelID, ruleID: ruleID, role: role, stage: stage, endpoint: endpoint}
 	connStats.Lock()
 	value := connStats.entries[key]
 	if value == nil {
@@ -155,11 +172,13 @@ type connStatsReportRow struct {
 	Role     string `json:"role"`
 	Stage    string `json:"stage"`
 	Endpoint string `json:"endpoint"`
+	Via      string `json:"via,omitempty"`
 	connStatsValue
 }
 
 // takeConnStats 取出现有的计数并清空；报失败时用 restoreConnStats 放回去。
 func takeConnStats() map[connStatsKey]*connStatsValue {
+	flushMultipathLegTraffic()
 	connStats.Lock()
 	defer connStats.Unlock()
 	taken := connStats.entries
@@ -191,6 +210,8 @@ func restoreConnStats(taken map[connStatsKey]*connStatsValue) {
 		if current.LastError == "" {
 			current.LastError = value.LastError
 		}
+		current.BytesUp += value.BytesUp
+		current.BytesDown += value.BytesDown
 	}
 }
 
@@ -199,7 +220,7 @@ func connStatsRows(taken map[connStatsKey]*connStatsValue) map[connStatsReportGr
 	for key, value := range taken {
 		group := connStatsReportGroup{panelURL: key.panelURL, token: key.token}
 		groups[group] = append(groups[group], connStatsReportRow{
-			TunnelID: key.tunnelID, RuleID: key.ruleID, Role: key.role, Stage: key.stage, Endpoint: key.endpoint,
+			TunnelID: key.tunnelID, RuleID: key.ruleID, Role: key.role, Stage: key.stage, Endpoint: key.endpoint, Via: key.via,
 			connStatsValue: *value,
 		})
 	}
@@ -213,7 +234,10 @@ func connStatsRows(taken map[connStatsKey]*connStatsValue) map[connStatsReportGr
 			if a.Stage != b.Stage {
 				return a.Stage < b.Stage
 			}
-			return a.Endpoint < b.Endpoint
+			if a.Endpoint != b.Endpoint {
+				return a.Endpoint < b.Endpoint
+			}
+			return a.Via < b.Via
 		})
 	}
 	return groups
@@ -242,7 +266,7 @@ func reportConnStats() {
 			if err := postConnStats(group, rows[start:end]); err != nil {
 				logTrafficDiagnostic("conn-stats", "connection stats report failed: %s", safeTrafficReportError(err, group.token))
 				for _, row := range rows[start:end] {
-					key := connStatsKey{panelURL: group.panelURL, token: group.token, tunnelID: row.TunnelID, ruleID: row.RuleID, role: row.Role, stage: row.Stage, endpoint: row.Endpoint}
+					key := connStatsKey{panelURL: group.panelURL, token: group.token, tunnelID: row.TunnelID, ruleID: row.RuleID, role: row.Role, stage: row.Stage, endpoint: row.Endpoint, via: row.Via}
 					value := row.connStatsValue
 					failed[key] = &value
 				}
