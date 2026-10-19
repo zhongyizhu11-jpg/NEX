@@ -67,7 +67,7 @@ export default function TunnelConnStatsDialog({ tunnel, onClose }: Props) {
         <DialogHeader>
           <DialogTitle>连接监控{tunnel ? ` · ${tunnel.name}` : ""}</DialogTitle>
           <DialogDescription>
-            真实连接在每一跳每个阶段的成功率和耗时：连接池、TCP 连接、加密握手是入口 / 中转连下一跳，连目标是出口连目标地址；单连接叠加还列出每一路跑了多少（FXP 2.2.135 起）。留 7 天。
+            真实连接每一跳的成功率和耗时；单连接叠加还列出每一路跑了多少。留 7 天。
           </DialogDescription>
         </DialogHeader>
 

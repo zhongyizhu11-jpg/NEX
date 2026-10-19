@@ -125,7 +125,7 @@ export function linkWizardAdvice(goal: LinkWizardGoal, place: LinkWizardPlace): 
   if (place === "entry") return {
     title: "几台入口没法拆一条连接",
     explain: "手机、电脑一条连接只连一个地址，进不了两台入口。可以换个摆法：一台当入口，其余几台当中转，建 NEX 隧道开「单连接叠加」。",
-    next: "也可以让入口组或订阅的负载均衡组按连接分（多线程时带宽相加）。",
+    next: "家里有常开的 Linux（软路由、NAS）的话，用隧道页的「家庭叠加」：它当入口，这几台当前置。",
     action: { type: "tunnel", relayMode: "aggregate", needsForwardX: true },
   };
   if (place === "exit") return {
