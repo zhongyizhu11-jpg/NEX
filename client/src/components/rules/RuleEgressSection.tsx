@@ -4,17 +4,15 @@
  * 规则（能用哪些方法、UDP / SS2022 要入口机有什么能力、规则形态的限制）都在 shared/ssEgress.ts，
  * 和服务端同一份；这里只负责选和提示。最终以服务端校验为准。
  *
- * 「UDP 也走出口」和 SS2022 出口要每一台入口机都报了能力（Agent 2.2.227 起、gost 运行时 3.2.6-nex3 起）：
- * 撑不起时勾选框不可用、SS2022 入站不可选，并写清楚是哪台机器、要升级什么。
+ * UDP 走出口（规则协议选 TCP+UDP）和 SS2022 出口要每一台入口机都报了能力（Agent 2.2.227 起、gost 运行时
+ * 3.2.6-nex3 起）：撑不起时 TCP+UDP 选不了、SS2022 入站不可选，并写清楚是哪台机器、要升级什么。
  */
 
 import { useMemo } from "react";
 import { toast } from "sonner";
 import { ArrowRightLeft, Globe2, Link2, Loader2, Plus, Server } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import { FormField } from "@/components/ui/form-field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -155,11 +153,9 @@ export function RuleEgressSection({ value, onChange, onEgressEnabled, blockedRea
   };
 
   return (
-    <section className="space-y-2.5 rounded-[var(--fx-radius-card)] bg-[var(--fx-l2-group)] px-3 py-2.5" data-testid="rule-egress-section">
-      <div className="flex min-w-0 items-baseline justify-between gap-2">
-        <Label className="text-sm font-medium">出口</Label>
-        <span className="min-w-0 truncate text-meta text-muted-foreground">目标看到的来源 IP 是谁</span>
-      </div>
+    // 标题和折叠在外面（规则编辑框的 RuleFormCollapsible「出口」），这里只放里面的内容。
+    <section className="space-y-2.5" data-testid="rule-egress-section">
+      <p className="text-meta text-muted-foreground">目标看到的来源 IP 是谁</p>
       <div className={segmentedControlClassName} role="group" aria-label="出口">
         <div className="grid grid-cols-3 gap-1">
           {OPTIONS.map((option) => {
@@ -329,42 +325,27 @@ export function RuleEgressSection({ value, onChange, onEgressEnabled, blockedRea
         </div>
       )}
 
-      {value.egressType !== "none" && (() => {
-        // 勾着但入口机撑不起（例如入口机回滚了运行时）：让人能取消勾选，不能新勾。
-        const udpAvailable = SS_EGRESS_UDP_SUPPORTED && capabilities.udp;
-        const udpChecked = SS_EGRESS_UDP_SUPPORTED && value.egressUdp;
-        const udpDisabled = !udpChecked && !udpAvailable;
-        return (
-          <div className="flex min-w-0 items-start gap-2.5" data-testid="rule-egress-udp">
-            <Checkbox
-              id="rule-egress-udp"
-              checked={udpChecked}
-              disabled={udpDisabled}
-              onCheckedChange={(checked) => onChange({ egressUdp: checked === true })}
-              className="mt-0.5"
-            />
-            <div className="min-w-0 space-y-0.5">
-              <Label htmlFor="rule-egress-udp" className="flex flex-wrap items-center gap-1.5 text-sm">
-                UDP 也走出口
-                {!SS_EGRESS_UDP_SUPPORTED && <Badge variant="outline" className="h-5 px-1.5 text-[10px] font-normal">暂不支持</Badge>}
-                {SS_EGRESS_UDP_SUPPORTED && !udpAvailable && !capabilities.loading && (
-                  <Badge variant="outline" className="h-5 px-1.5 text-[10px] font-normal text-[var(--fx-warn-text)]">需要升级 Agent/运行时</Badge>
-                )}
-              </Label>
-              <p className={`text-meta leading-5 ${udpChecked && !udpAvailable && !capabilities.loading ? "text-[var(--fx-warn-text)]" : "text-muted-foreground"}`}>
-                {!SS_EGRESS_UDP_SUPPORTED
-                  ? "UDP 暂时不能走出口，出口只转 TCP，协议已固定为 TCP。"
-                  : udpAvailable
-                    ? "勾上后协议是 TCP+UDP，UDP 也经 Shadowsocks 从落地出去（DNS、QUIC、游戏都行）；需要落地的 Shadowsocks 服务端开着 UDP。不勾时只转 TCP。"
-                    : capabilities.loading
-                      ? "正在检查入口主机的 Agent / 运行时…"
-                      : udpChecked
-                        ? `${capabilities.udpReason}。这条规则在入口机升级之前按停用下发，UDP 不会绕过出口直连；取消勾选可以只走 TCP。`
-                        : `${capabilities.udpReason}。在那之前出口只转 TCP。`}
-              </p>
-            </div>
-          </div>
-        );
+      {/*
+        UDP 走不走出口由上面的「协议」决定（TCP+UDP 时走，TCP 时只转 TCP），这里不再单放一个勾，
+        只在需要的时候说一句：选了 TCP+UDP 要落地开着 UDP；入口机撑不起时说清楚是哪台、要升级什么。
+      */}
+      {value.egressType !== "none" && SS_EGRESS_UDP_SUPPORTED && (() => {
+        if (capabilities.loading) return null;
+        const udpAvailable = capabilities.udp;
+        if (value.egressUdp) {
+          return (
+            <p
+              data-testid="rule-egress-udp"
+              className={`text-meta leading-5 ${udpAvailable ? "text-muted-foreground" : "text-[var(--fx-warn-text)]"}`}
+            >
+              {udpAvailable
+                ? "TCP+UDP：UDP 也从落地出去，落地的 Shadowsocks 要开着 UDP。"
+                : `${capabilities.udpReason}。升级前这条规则按停用下发；协议改成 TCP 就只转 TCP。`}
+            </p>
+          );
+        }
+        if (udpAvailable) return null;
+        return <p data-testid="rule-egress-udp" className="text-meta leading-5 text-muted-foreground">{capabilities.udpReason}，协议只能选 TCP。</p>;
       })()}
     </section>
   );

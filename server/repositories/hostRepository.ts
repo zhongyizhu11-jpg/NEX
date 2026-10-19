@@ -401,7 +401,7 @@ function compactHostOption(host: any) {
     lastHeartbeat: host?.lastHeartbeat,
     agentVersion: host?.agentVersion,
     fxpVersion: host?.fxpVersion,
-    // 规则编辑器据此判断「UDP 也走出口」/ SS2022 出口能不能选（shared/ssEgress.ts）
+    // 规则编辑器据此判断协议能不能选 TCP+UDP（UDP 走出口）/ SS2022 出口能不能选（shared/ssEgress.ts）
     runtimeVersion: host?.runtimeVersion ?? null,
     agentCapabilities: host?.agentCapabilities ?? null,
     mimicAvailable: host?.mimicAvailable ?? null,

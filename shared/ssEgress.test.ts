@@ -145,14 +145,14 @@ test("规则形态：出口只挂在 gost 的直连 / 端口转发规则上", ()
   assert.match(String(ruleEgressShapeError({ ...base, tlsInboundId: 7 })), /共享 TLS 入站/);
 });
 
-test("UDP 一致性：协议里有 UDP 就必须勾「UDP 也走出口」（UDP 绝不绕过出口直连），只有 TCP 时不能勾", () => {
+test("UDP 一致性：协议里有 UDP 就必须走出口（UDP 绝不绕过出口直连），只有 TCP 时不走", () => {
   assert.equal(SS_EGRESS_UDP_SUPPORTED, true);
   const base = { egressType: "ss_link", forwardType: "gost" };
   assert.equal(ruleEgressShapeError({ ...base, protocol: "tcp" }), null);
   assert.equal(ruleEgressShapeError({ ...base, protocol: "both", egressUdp: true }), null);
   assert.equal(ruleEgressShapeError({ ...base, protocol: "udp", egressUdp: true }), null);
   assert.match(String(ruleEgressShapeError({ ...base, protocol: "both" })), /绕过出口直连/);
-  assert.match(String(ruleEgressShapeError({ ...base, protocol: "udp" })), /必须开启/);
+  assert.match(String(ruleEgressShapeError({ ...base, protocol: "udp" })), /必须走出口/);
   assert.match(String(ruleEgressShapeError({ ...base, protocol: "tcp", egressUdp: true })), /不需要/);
   assert.equal(ruleEgressWantsUdp({ protocol: "both", egressUdp: 1 }), true);
   assert.equal(ruleEgressWantsUdp({ protocol: "udp", egressUdp: true }), true);

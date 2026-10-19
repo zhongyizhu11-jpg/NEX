@@ -48,10 +48,11 @@ test("主备线路不折进「更多设置」—— 它是用户会专门来找�
   const source = fs.readFileSync(rulesPagePath, "utf8");
   const section = collapsedSection(source);
   assert.equal(section.includes("<RouteGroupFields"), false, "线路组的编辑块又被折进「更多设置」了");
-  assert.equal(section.includes('data-testid="failover-section"'), false);
+  // 线路组现在自己是一个折叠框（RuleFormCollapsible，testId 落到 data-testid），在「更多设置」外面、前面。
+  assert.equal(section.includes('testId="failover-section"'), false);
   const dialogStart = source.indexOf("<DialogTitle>{editingId ?");
   const foldAt = source.indexOf("更多设置</span>");
-  const failoverAt = source.indexOf('data-testid="failover-section"');
+  const failoverAt = source.indexOf('testId="failover-section"');
   assert.ok(dialogStart > 0 && failoverAt > dialogStart, "编辑框里找不到主备那一块");
   assert.ok(failoverAt < foldAt, "主备那一块应该在「更多设置」折叠条的前面");
 });
