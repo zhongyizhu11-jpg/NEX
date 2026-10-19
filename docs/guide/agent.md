@@ -47,12 +47,13 @@ curl -fsSL https://panel.example.com/api/agent/install.sh | bash -s -- install Y
 | Debian、Ubuntu、CentOS、Rocky、Fedora、openSUSE、Arch | systemd | 最常见的 VPS 系统 |
 | Alpine | OpenRC | |
 | OpenWrt、iStoreOS、ImmortalWrt（2.3.461 起） | procd | 软路由、家里当叠加入口的机器 |
+| 任何装了 Docker 的系统（2.3.461 起） | 容器 | NAS、Unraid 等，见下面 [Docker](#docker) |
 
 CPU 架构只支持 **amd64（x86_64）** 和 **arm64（aarch64）**。路由器上执行 `uname -m` 看一下：`x86_64` 或 `aarch64` 能装；`mips`、`armv7l` 这类老硬路由装不了。
 
 ### OpenWrt / iStoreOS {#openwrt}
 
-和 VPS 一样，复制面板生成的安装命令，SSH 登录路由器后执行就行。命令最前面会先检查：是 OpenWrt 又没有 bash、curl 时，用 opkg 把它们装上（别的系统上这一段什么都不做），所以路由器要能连上 OpenWrt 的软件源。
+复制安装命令弹窗里「OpenWrt / iStoreOS」那一行，SSH 登录路由器后执行。它和普通安装命令一样，只是最前面先用 opkg 装上 bash、curl（OpenWrt 默认没有），所以路由器要能连上 OpenWrt 的软件源。卸载、升级用普通的那两条命令就行（这时 bash、curl 已经有了）。
 
 安装脚本在 OpenWrt 上会：
 
@@ -65,6 +66,23 @@ CPU 架构只支持 **amd64（x86_64）** 和 **arm64（aarch64）**。路由器
 - OpenWrt 的 `/var` 在内存里，日志（`/var/log/forwardx-agent/`）重启后清空，配置在 `/etc/forwardx/agent/`，不受影响。
 - 查看状态：`/etc/init.d/forwardx-agent status`；重启：`/etc/init.d/forwardx-agent restart`。
 - 卸载用面板给的卸载命令，开机链接一起删掉。
+
+### Docker（NAS、iStoreOS、Unraid）{#docker}
+
+装了 Docker 的设备（群晖、威联通、飞牛、Unraid、带 Docker 的 iStoreOS / OpenWrt）可以用 Docker 版。安装命令弹窗里「Docker」那一行就是现成的命令：
+
+```bash
+docker run -d --name nex-agent --network host --cap-add NET_ADMIN --cap-add NET_RAW \
+  --restart unless-stopped -v nex-agent:/etc/forwardx \
+  -e PANEL_URL='http://你的面板地址:9810' -e AGENT_TOKEN='面板里的 Token' \
+  ghcr.io/zhongyizhu11-jpg/nex-agent:latest
+```
+
+- 必须用宿主机网络（`--network host`）：转发要监听的是这台机器的端口。
+- 镜像只带依赖，Agent 第一次启动时从面板装，版本和面板一致；面板里升级 Agent 照常可用（容器里换好二进制自动重启 Agent）。
+- 配置在卷 `nex-agent` 里：删掉容器重新 `docker run`（换镜像、改参数）不用再给 Token，会按原配置重新装好。
+- 看日志：`docker logs -f nex-agent`；卸载：`docker rm -f nex-agent && docker volume rm nex-agent`，再到面板里删主机。
+- NAS 的图形界面里建容器时，对应填：网络选 host，环境变量填 `PANEL_URL` 和 `AGENT_TOKEN`，挂一个卷到 `/etc/forwardx`，权限里加 `NET_ADMIN`、`NET_RAW`。
 
 ### mimic UDP 混淆（可选）
 

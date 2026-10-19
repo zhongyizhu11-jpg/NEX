@@ -53,3 +53,14 @@ test("面板下发的托管服务：OpenWrt 上写 procd 脚本、enable 再重�
   assert.match(start, /\[ -f \/etc\/openwrt_release \] && \[ -f \/etc\/rc\.common \] && \[ -x \/etc\/init\.d\/forwardx-socat-tcp-24556 \]; then \/etc\/init\.d\/forwardx-socat-tcp-24556 enable >\/dev\/null 2>&1 \|\| true; \/etc\/init\.d\/forwardx-socat-tcp-24556 restart;/);
   assert.ok(start.indexOf("openwrt_release") < start.indexOf("command -v rc-service"));
 });
+
+test("Docker 版（FORWARDX_AGENT_CONTAINER=1）：不跑包管理器、不写系统服务，升级后结束旧进程让入口循环重启", () => {
+  const script = generateInstallScript("https://panel.example.com");
+  assert.match(script, /^is_container_agent\(\) \{\n  \[ "\$\{FORWARDX_AGENT_CONTAINER:-\}" = "1" \]/m);
+  const deps = script.slice(script.indexOf("install_deps() {"));
+  assert.ok(deps.indexOf("if is_container_agent; then") < deps.indexOf("apt-get update"), "容器里不该再跑 apt-get");
+  const write = script.slice(script.indexOf("write_agent_service() {"));
+  assert.match(write, /^write_agent_service\(\) \{\n  mkdir -p \/var\/log\/forwardx-agent\n  if is_container_agent; then\n[^\n]*\n    return 0/);
+  const start = script.slice(script.indexOf("start_agent_service() {"));
+  assert.match(start, /^start_agent_service\(\) \{\n  if is_container_agent; then\n[^\n]*\n    for pid in \$\(pgrep -f "\^\$GO_AGENT_BIN -config"/);
+});
