@@ -153,11 +153,9 @@ export function RuleEgressSection({ value, onChange, onEgressEnabled, blockedRea
   };
 
   return (
-    <section className="space-y-2.5 rounded-[var(--fx-radius-card)] bg-[var(--fx-l2-group)] px-3 py-2.5" data-testid="rule-egress-section">
-      <div className="flex min-w-0 items-baseline justify-between gap-2">
-        <Label className="text-sm font-medium">出口</Label>
-        <span className="min-w-0 truncate text-meta text-muted-foreground">目标看到的来源 IP 是谁</span>
-      </div>
+    // 标题和折叠在外面（规则编辑框的 RuleFormCollapsible「出口」），这里只放里面的内容。
+    <section className="space-y-2.5" data-testid="rule-egress-section">
+      <p className="text-meta text-muted-foreground">目标看到的来源 IP 是谁</p>
       <div className={segmentedControlClassName} role="group" aria-label="出口">
         <div className="grid grid-cols-3 gap-1">
           {OPTIONS.map((option) => {

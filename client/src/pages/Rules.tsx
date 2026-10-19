@@ -101,6 +101,7 @@ import { cn } from "@/lib/utils";
 import { tunnelFxpIssueText } from "@/features/links/TunnelFxpIssueNotice";
 import { autoForwardRuleName, resolveForwardRuleName } from "@shared/forwardRuleName";
 import { DEFAULT_RULE_EGRESS_FORM, RuleEgressSection, useEgressEntryCapabilities, type RuleEgressFormValue } from "@/components/rules/RuleEgressSection";
+import { RuleFormCollapsible } from "@/components/rules/RuleFormCollapsible";
 import { RuleLimitsForm, newRuleLimitsForm, ruleLimitsChanges, ruleLimitsSummary, type RuleLimitsFormValue } from "@/components/rules/RuleLimitsForm";
 import { RuleLimitSummary } from "@/components/rules/RuleLimitSummary";
 import { ADMIN_MANAGED_RULE_MESSAGE, isAdminManagedRule, normalizeRuleLimitReason } from "@shared/ruleLimits";
@@ -111,6 +112,7 @@ import {
   ruleEgressSwitchesForwardType,
   ruleEgressStateTone,
   ruleEgressSummaryText,
+  RULE_EGRESS_TYPE_LABELS,
   SS_EGRESS_UDP_SUPPORTED,
   type RuleEgressState,
 } from "@shared/ssEgress";
@@ -2249,6 +2251,9 @@ function RulesContent() {
     里面的控件时会自动展开 —— 读到一句自己看不见的提示，比什么都不说更糟。
   */
   const [showAdvanced, setShowAdvanced] = useState(false);
+  // 「出口」「线路组」也折起来（RuleFormCollapsible），默认收起，折叠条上写着现在的状态。
+  const [showEgress, setShowEgress] = useState(false);
+  const [showRouteGroup, setShowRouteGroup] = useState(false);
   const [portRangeError, setPortRangeError] = useState<string | null>(null);
   const latestPortCheckRef = useRef(0);
   const [copyRuleIds, setCopyRuleIds] = useState<number[]>([]);
@@ -2850,6 +2855,8 @@ function RulesContent() {
     setLegacyLocalRuleEditId(isLegacyLocalRule ? Number(rule.id) : null);
     setPortStatus("idle");
     setShowAdvanced(false);
+    setShowEgress(false);
+    setShowRouteGroup(false);
     setShowDialog(true);
   };
 
@@ -3345,6 +3352,12 @@ function RulesContent() {
   }, [form.failoverEnabled, form.routeGroup, form.targetIp, form.targetPort, form.protocol, form.routeMode, form.tunnelId, selectedTunnel, effectiveRouteForwardType, editingStoredRule, routeEntryHostId, hostById]);
   const advancedBlocked = isAdvancedSectionBlocker(submitBlocker);
   const advancedOpen = showAdvanced || advancedBlocked;
+  // 出口开着却还缺东西（没选入站、入口机撑不起……）时自己展开：看不见的提示比什么都不说更糟。
+  const egressOpen = showEgress || (egressActive && !!egressBlocker);
+  const egressSummary = egressActive
+    ? `${RULE_EGRESS_TYPE_LABELS[form.egress.egressType]}${form.egress.egressUdp ? " · TCP+UDP" : ""}`
+    : RULE_EGRESS_TYPE_LABELS.none;
+
   const routeModeTabItems: SlidingTabItem<RuleRouteTab>[] = [
     {
       value: "local",
@@ -3470,6 +3483,9 @@ function RulesContent() {
     }
     : { reason: "线路组要用 gost、realm、socat 或 nginx 转发：iptables / nftables 在内核里改写目的地，调度器插不进去。" };
   const mainBackupDisabledText = mainBackupBlock?.reason || "";
+  const routeGroupSummary = form.failoverEnabled && form.routeGroup
+    ? `已开启 · ${form.routeGroup.paths.length} 条路径 · ${ROUTE_MODE_SHORT[form.routeGroup.policy.mode] ?? ""}`
+    : mainBackupBlock ? "用不了" : "未开启";
   const kernelForwardWarning = useMemo(() => buildKernelForwardWarning({
     rule: form,
     host: selectedHost,
@@ -8365,6 +8381,14 @@ function RulesContent() {
               勾是复选框不是开关：要点「保存」才生效（见 switchVsCheckbox.test）。
             */}
             {egressSectionVisible && (
+              <RuleFormCollapsible
+                title="出口"
+                summary={egressActive && egressBlocker ? `${egressSummary} · 还缺设置` : egressSummary}
+                warn={egressActive && !!egressBlocker}
+                open={egressOpen}
+                onOpenChange={setShowEgress}
+                testId="rule-egress-collapsible"
+              >
               <RuleEgressSection
                 value={form.egress}
                 isAdmin={user?.role === "admin"}
@@ -8386,8 +8410,15 @@ function RulesContent() {
                   failoverEnabled: false,
                 }))}
               />
+              </RuleFormCollapsible>
             )}
-            <section className="rounded-[var(--fx-radius-card)] bg-[var(--fx-l2-group)] px-3 py-2.5" data-testid="failover-section">
+            <RuleFormCollapsible
+              title="线路组"
+              summary={routeGroupSummary}
+              open={showRouteGroup}
+              onOpenChange={setShowRouteGroup}
+              testId="failover-section"
+            >
               <div className="flex min-w-0 items-start gap-2.5">
                 <Checkbox
                   id="rule-failover-enabled"
@@ -8408,7 +8439,7 @@ function RulesContent() {
                 />
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-baseline gap-x-2">
-                    <Label htmlFor="rule-failover-enabled" className="text-sm font-medium">线路组</Label>
+                    <Label htmlFor="rule-failover-enabled" className="text-sm font-medium">开启线路组</Label>
                     <a
                       href={docsUrl("/guide/failover")}
                       target="_blank"
@@ -8453,7 +8484,7 @@ function RulesContent() {
                   />
                 </div>
               )}
-            </section>
+            </RuleFormCollapsible>
             {/* 规则名称放在外面：改名是常事，折进「更多设置」每次都要先展开才找得到。留空照样自动生成。 */}
             <FormField className="space-y-2">
               <Label className="flex items-baseline gap-1.5">规则名称<span className="text-xs font-normal text-muted-foreground">留空自动生成</span></Label>
