@@ -2241,6 +2241,8 @@ function TunnelsContent() {
     values: TUNNEL_SECTIONS,
     defaultValue: "tunnels",
     storageKey: TUNNEL_SECTION_STORAGE_KEY,
+    // 每次进来（刷新、从别的页面点过来）都从第一个分类开始，不记上次看的是哪一类。
+    remember: false,
   });
   const [linkSearchQuery, setLinkSearchQuery] = useState((() => {
     // 从别处（网络拓扑的详情面板）带着 ?q= 跳过来：先按它搜一遍。
