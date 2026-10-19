@@ -126,6 +126,11 @@ export type TunnelListQuery = PageRequest & {
   ownerUserId?: number;
   allowedTunnelIds?: number[];
   search?: string;
+  /**
+   * 链路管理里「隧道链路」和「叠加」两个页签各列各的：叠加是中转方式为单连接叠加的 NEX 隧道
+   * （shared/aggregateLink.ts）。不给就是全部。
+   */
+  kind?: "tunnel" | "aggregate";
 };
 
 function normalizeTunnelIds(values: unknown[] | undefined) {
@@ -140,6 +145,10 @@ function escapeTunnelSearchToken(value: string) {
 
 function tunnelListCondition(input: Omit<TunnelListQuery, keyof PageRequest>) {
   const conditions: any[] = [];
+  if (input.kind) {
+    const aggregate = sql`(LOWER(COALESCE(${tunnels.mode}, '')) = 'forwardx' AND LOWER(COALESCE(${tunnels.relayMode}, 'chain')) = 'aggregate')`;
+    conditions.push(input.kind === "aggregate" ? aggregate : sql`NOT ${aggregate}`);
+  }
   if (Number(input.ownerUserId || 0) > 0) {
     const allowedIds = normalizeTunnelIds(input.allowedTunnelIds);
     conditions.push(allowedIds.length > 0
@@ -327,6 +336,7 @@ export async function getTunnelsPage(input: TunnelListQuery) {
   const scopeCondition = tunnelListCondition({
     ownerUserId: input.ownerUserId,
     allowedTunnelIds: input.allowedTunnelIds,
+    kind: input.kind,
   });
   let scopeTotalItems = totalItems;
   if (String(input.search || "").trim()) {

@@ -823,6 +823,7 @@ export const tunnelsRouter = router({
         page: z.number().int().positive().default(1),
         pageSize: z.number().int().min(1).max(100).default(12),
         search: z.string().trim().max(200).optional().default(""),
+        kind: z.enum(["tunnel", "aggregate"]).optional(),
       }))
       .query(async ({ input, ctx }) => {
         const accessScope = await getLinkAccessScope(ctx.user);

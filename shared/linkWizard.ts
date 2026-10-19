@@ -86,9 +86,9 @@ export function linkWizardAdvice(goal: LinkWizardGoal, place: LinkWizardPlace): 
       action: { type: "group", mode: "entry" },
     };
     if (place === "relay") return {
-      title: "隧道，中转选「单连接叠加」",
+      title: "叠加",
       explain: "每条连接都拆到全部中转同时送，在出口拼回来；连接多的时候也一样把几台中转的带宽加起来。",
-      next: "只有 NEX 隧道支持。新建时加两台以上中转。",
+      next: "在「叠加」页签新建：选入口、两台以上中转和落地。",
       action: { type: "tunnel", relayMode: "aggregate", needsForwardX: true },
     };
     if (place === "exit") return {
@@ -111,9 +111,9 @@ export function linkWizardAdvice(goal: LinkWizardGoal, place: LinkWizardPlace): 
   }
   // 单条连接也要快：一条连接只能从一个地址进、一台出口出，能拆的只有中间那段。
   if (place === "relay") return {
-    title: "隧道，中转选「单连接叠加」",
+    title: "叠加",
     explain: "一条连接被拆到全部中转同时送，在出口拼回来，单线程下载、测速也能用上几台中转的带宽之和。",
-    next: "只有 NEX 隧道支持。新建时加两台以上中转。",
+    next: "在「叠加」页签新建：选入口、两台以上中转和落地。",
     action: { type: "tunnel", relayMode: "aggregate", needsForwardX: true },
   };
   if (place === "one") return {
@@ -124,18 +124,18 @@ export function linkWizardAdvice(goal: LinkWizardGoal, place: LinkWizardPlace): 
   };
   if (place === "entry") return {
     title: "几台入口没法拆一条连接",
-    explain: "手机、电脑一条连接只连一个地址，进不了两台入口。可以换个摆法：一台当入口，其余几台当中转，建 NEX 隧道开「单连接叠加」。",
-    next: "家里有常开的 Linux（软路由、NAS）的话，用隧道页的「家庭叠加」：它当入口，这几台当前置。",
+    explain: "手机、电脑一条连接只连一个地址，进不了两台入口。可以换个摆法：一台当入口，其余几台当中转，建一条「叠加」。",
+    next: "家里有常开的 Linux（软路由、NAS）也能当入口：入口只往外拨，不用公网 IP。",
     action: { type: "tunnel", relayMode: "aggregate", needsForwardX: true },
   };
   if (place === "exit") return {
     title: "几台出口没法拆一条连接",
-    explain: "一条连接只能从一台出口出去（目标看到的 IP 必须一致）。能拆的是出口前面那段：加两台中转，建 NEX 隧道开「单连接叠加」。",
+    explain: "一条连接只能从一台出口出去（目标看到的 IP 必须一致）。能拆的是出口前面那段：加两台中转，建一条「叠加」。",
     action: { type: "tunnel", relayMode: "aggregate", needsForwardX: true },
   };
   return {
     title: "线路组拆不了一条连接",
-    explain: "线路组是按连接挑路径。要拆一条连接，得让几条路在出口汇合：建 NEX 隧道，把几条路的中间机器当中转，开「单连接叠加」。",
+    explain: "线路组是按连接挑路径。要拆一条连接，得让几条路在出口汇合：把几条路的中间机器当中转，建一条「叠加」。",
     action: { type: "tunnel", relayMode: "aggregate", needsForwardX: true },
   };
 }

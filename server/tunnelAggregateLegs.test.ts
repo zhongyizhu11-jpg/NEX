@@ -50,6 +50,16 @@ test("单连接叠加：每一路带上中转主机的线路带宽", () => {
       'INSERT INTO forward_rules (id, "hostId", name, "forwardType", protocol, "sourcePort", "targetIp", "targetPort", "userId", "isEnabled", "isRunning", "tunnelId", "tunnelExitPort") VALUES (1, 1, ?, ?, ?, ?, ?, ?, 1, 1, 1, 1, 23001)',
       ["家里叠加", "gost", "tcp", 24001, "203.0.113.40", 8388],
     );
+    // 2：同一条叠加上开线路组（按权重分到两个落地目标）—— 入口照样拆到两台中转，调度器在落地机上。
+    await exec(
+      'INSERT INTO forward_rules (id, "hostId", name, "forwardType", protocol, "sourcePort", "targetIp", "targetPort", "userId", "isEnabled", "isRunning", "tunnelId", "tunnelExitPort",'
+        + ' "failoverEnabled", "failoverStrategy", "failoverTargets", "failoverSeconds", "recoverSeconds", "autoFailback", "routeMode", "routePaths", "routeSwitchMode")'
+        + ' VALUES (2, 1, ?, ?, ?, ?, ?, ?, 1, 1, 1, 1, 23001, 1, ?, ?, 10, 60, 1, ?, ?, ?)',
+      ["叠加加线路组", "gost", "tcp", 24002, "203.0.113.40", 8388, "weighted", "[]", "weighted", JSON.stringify([
+        { key: "a", name: "落地 A", hops: [], dest: null, weight: 50, probe: null, dial: null },
+        { key: "b", name: "落地 B", hops: [], dest: { ip: "203.0.113.41", port: 8388 }, weight: 50, probe: null, dial: null },
+      ]), "smooth"],
+    );
 
     const express = (await import("express")).default;
     const heartbeat = await import(url("server/agentHeartbeatRoute.ts"));
@@ -74,16 +84,19 @@ test("单连接叠加：每一路带上中转主机的线路带宽", () => {
       if (response.status !== 200) throw new Error("心跳没通: " + response.status + " " + JSON.stringify(body));
       return body;
     };
-    for (const token of ["tok4", "tok2", "tok3"]) await beat(token);
+    for (const token of ["tok2", "tok3"]) await beat(token);
+    const exitBody = await beat("tok4");
     const body = await beat("tok1");
     server.close();
     let legs = null;
+    let routed = null;
     for (const action of (body.desiredState && body.desiredState.actions) || []) {
-      if (action && action.fxp && action.op === "apply" && action.fxp.role === "entry" && Number(action.ruleId) === 1) {
-        legs = action.fxp.multipathLegs || [];
-      }
+      if (!action || !action.fxp || action.op !== "apply" || action.fxp.role !== "entry") continue;
+      if (Number(action.ruleId) === 1) legs = action.fxp.multipathLegs || [];
+      if (Number(action.ruleId) === 2) routed = { legs: (action.fxp.multipathLegs || []).map((leg) => leg.via), targetIp: action.fxp.targetIp, targetPort: Number(action.fxp.targetPort) };
     }
-    console.log("OUTCOME " + JSON.stringify({ legs }));
+    const scheduler = (exitBody.runningRules || []).find((rule) => rule.schedulerOnly && Number(rule.ruleId) === 2) || null;
+    console.log("OUTCOME " + JSON.stringify({ legs, routed, schedulerPort: scheduler ? Number(scheduler.sourcePort) : null }));
   `;
   const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
     cwd: path.resolve(import.meta.dirname, ".."),
@@ -94,7 +107,10 @@ test("单连接叠加：每一路带上中转主机的线路带宽", () => {
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
   const line = result.stdout.split("\n").find((row) => row.startsWith("OUTCOME "));
   assert.ok(line, `没拿到结果：\n${result.stdout}\n${result.stderr}`);
-  const { legs } = JSON.parse(line.slice("OUTCOME ".length));
+  const { legs, routed, schedulerPort } = JSON.parse(line.slice("OUTCOME ".length));
   assert.ok(Array.isArray(legs) && legs.length === 2, `应该有两路：${JSON.stringify(legs)}`);
   assert.deepEqual(legs.map((leg: any) => [leg.via, leg.capacityMbps]), [["relay#2", 500], ["relay#3", 300]], JSON.stringify(legs));
+  // 叠加上开线路组：入口照样拆到两台中转，目标换成落地机上的调度器，由它按权重分给两个落地目标。
+  assert.ok(schedulerPort && schedulerPort > 0, `落地机上应该跑着线路组调度器：${JSON.stringify({ routed, schedulerPort })}`);
+  assert.deepEqual(routed, { legs: ["relay#2", "relay#3"], targetIp: "127.0.0.1", targetPort: schedulerPort });
 });

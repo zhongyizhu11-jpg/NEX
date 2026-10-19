@@ -64,5 +64,7 @@ test("单连接叠加：中转叠加、多路并发；不是 NEX 的多路并发
   assert.deepEqual(keys(overview.splitConnection), ["tunnel:11:relay", "tunnel:12:streams", "tunnel:13:streams"]);
   assert.equal(find("tunnel:12:streams")?.note, undefined);
   assert.match(find("tunnel:13:streams")?.note || "", /^没生效：只有 NEX 隧道/);
-  assert.equal(find("tunnel:11:relay")?.href, "/tunnels?tab=tunnels&edit=11");
+  // 单连接叠加在「叠加」页签里改。
+  assert.equal(find("tunnel:11:relay")?.href, "/tunnels?tab=aggregates&edit=11");
+  assert.equal(find("tunnel:11:relay")?.kind, "aggregate");
 });

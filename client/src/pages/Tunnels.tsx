@@ -3,7 +3,8 @@ import { useFaultBundleExport } from "@/components/links/useFaultBundleExport";
 import { ResourceTrafficLine } from "@/components/links/ResourceTrafficLine";
 import EmptyState from "@/components/EmptyState";
 import TunnelConnStatsDialog from "@/components/tunnels/TunnelConnStatsDialog";
-import HomeAggregateDialog from "@/components/tunnels/HomeAggregateDialog";
+import AggregateLinkDialog from "@/components/tunnels/AggregateLinkDialog";
+import { isAggregateLinkTunnel } from "@shared/aggregateLink";
 import TunnelParallelStreamsDialog from "@/components/tunnels/TunnelParallelStreamsDialog";
 import { describeTunnelParallelStreams, normalizeTunnelParallelStreams, tunnelParallelStreamsUnavailableReason } from "@shared/tunnelParallelStreams";
 import { useLocation, useSearch } from "wouter";
@@ -111,7 +112,7 @@ import {
   ChevronRight,
   Filter,
   Globe,
-  Home,
+  Layers,
   LayoutGrid,
   List,
   Loader2,
@@ -814,15 +815,17 @@ function getTunnelModeDisplay(mode: unknown, showNginxLabel = true, forwardxVers
 }
 
 type TunnelViewMode = "card" | "table" | "globe";
-type TunnelSection = "tunnels" | "ports" | "chains" | "groups" | "entries" | "exits" | "routes";
+type TunnelSection = "tunnels" | "ports" | "chains" | "groups" | "aggregates" | "entries" | "exits" | "routes";
 type TunnelGroupMode = "port" | "failover" | "entry" | "exit";
 
-const TUNNEL_SECTIONS = ["tunnels", "ports", "chains", "groups", "entries", "exits", "routes"] as const;
+const TUNNEL_SECTIONS = ["tunnels", "ports", "chains", "groups", "aggregates", "entries", "exits", "routes"] as const;
 const TUNNEL_SECTION_ITEMS = [
   { value: "tunnels", label: "隧道链路", icon: Network },
   { value: "ports", label: "端口转发", icon: ArrowRightLeft },
   { value: "chains", label: "转发链", icon: Route },
   { value: "groups", label: "转发组", icon: ShieldCheck },
+  // 叠加：中转方式为单连接叠加的 NEX 隧道单列一栏（shared/aggregateLink.ts），隧道链路里不再重复列。
+  { value: "aggregates", label: "叠加", icon: Layers },
   { value: "entries", label: "入口组", icon: LogIn },
   { value: "exits", label: "出口组", icon: LogOut },
   { value: "routes", label: "线路总览", icon: Waypoints },
@@ -2250,7 +2253,7 @@ function TunnelsContent() {
   const [, setTopologyLocation] = useLocation();
   const linkLocation = useSearch();
   const [showCreateTypeDialog, setShowCreateTypeDialog] = useState(false);
-  const [homeAggregateOpen, setHomeAggregateOpen] = useState(false);
+  const [aggregateDialog, setAggregateDialog] = useState<{ open: boolean; tunnel: any | null }>({ open: false, tunnel: null });
   const [selectedCreateType, setSelectedCreateType] = useState<LinkCreateType>("chain");
   const [chainCreateForm, setChainCreateForm] = useState<ChainCreateForm>(defaultChainCreateForm);
   const [chainAdvancedOpen, setChainAdvancedOpen] = useState(false);
@@ -2277,7 +2280,10 @@ function TunnelsContent() {
     setNginxCertDragActive(false);
   }, [showCreateTypeDialog, showDialog]);
   const tunnelPageRequest = usePersistentPageRequest("forwardx.tunnels.page");
-  const tunnelPageFilterKey = linkSearchQuery.trim();
+  // 「隧道链路」和「叠加」共用这一份分页列表，按 kind 各列各的；换页签回到第一页。
+  const isTunnelListSection = activeSection === "tunnels" || activeSection === "aggregates";
+  const tunnelListKind = activeSection === "aggregates" ? "aggregate" as const : "tunnel" as const;
+  const tunnelPageFilterKey = `${tunnelListKind}|${linkSearchQuery.trim()}`;
   const previousTunnelPageFilterKey = useRef(tunnelPageFilterKey);
   useEffect(() => {
     if (previousTunnelPageFilterKey.current === tunnelPageFilterKey) return;
@@ -2288,19 +2294,22 @@ function TunnelsContent() {
     page: tunnelPageRequest.page,
     pageSize: 12,
     search: linkSearchQuery,
+    kind: tunnelListKind,
   };
   /*
     列表和下面的 options 都是整份隧道数据，原来 3 秒一轮。状态 10 秒刷一次足够；
     增删改、启停、测试之后都会立刻 invalidate，不用等这一轮。
   */
   const tunnelPageQuery = trpc.tunnels.listPage.useQuery(tunnelPageInput, {
-    enabled: activeSection === "tunnels",
+    enabled: isTunnelListSection,
     refetchInterval: pollingInterval("log"),
     staleTime: 10_000,
     refetchOnWindowFocus: false,
     placeholderData: (previousData) => previousData,
   });
   const isTunnelGlobeView = activeSection === "tunnels" && viewMode === "globe";
+  // 叠加没有地图视图：存的是地图就按卡片显示。
+  const tunnelListViewMode: TunnelViewMode = activeSection === "aggregates" && viewMode === "globe" ? "card" : viewMode;
   const tunnelMapQuery = trpc.tunnels.mapItems.useInfiniteQuery({
     limit: 100,
     search: linkSearchQuery,
@@ -2331,7 +2340,7 @@ function TunnelsContent() {
       if (timeoutHandle !== undefined) globalThis.clearTimeout(timeoutHandle);
     };
   }, [isTunnelGlobeView, tunnelMapQuery.fetchNextPage, tunnelMapQuery.hasNextPage, tunnelMapQuery.isFetchingNextPage]);
-  const needsFullTunnelList = activeSection !== "tunnels";
+  const needsFullTunnelList = !isTunnelListSection;
   const fullTunnelQuery = trpc.tunnels.options.useQuery(undefined, {
     enabled: needsFullTunnelList,
     refetchInterval: pollingInterval("log"),
@@ -2744,11 +2753,11 @@ function TunnelsContent() {
 
   /*
     /tunnels?tab=tunnels&edit=<隧道 id>：从「线路总览」直接打开这条隧道的编辑框。
-    隧道不一定在当前这一页里，所以按 id 单独取。
+    隧道不一定在当前这一页里，所以按 id 单独取。tab=aggregates 一样，开的是叠加的简化编辑框。
   */
   useEffect(() => {
     const groupSection = activeSection === "groups" || activeSection === "entries" || activeSection === "exits";
-    if (activeSection !== "tunnels" && !groupSection) return;
+    if (!isTunnelListSection && !groupSection) return;
     const params = new URLSearchParams(window.location.search);
     const editId = Number(params.get("edit") || 0);
     if (!Number.isInteger(editId) || editId <= 0 || !hasResolvedHosts) return;
@@ -2761,11 +2770,22 @@ function TunnelsContent() {
       return;
     }
     void utils.tunnels.getById.fetch({ id: editId }).then((tunnel) => {
-      if (tunnel) openEdit(tunnel);
+      if (tunnel) openTunnelOrAggregateEdit(tunnel);
       else toast.error("这条隧道不存在");
     }, () => toast.error("读取隧道失败"));
   }, [activeSection, hasResolvedHosts, linkLocation]);
 
+  /*
+    叠加（单连接叠加的 NEX 隧道）先开简化框，那里点「更多设置」再进完整的隧道编辑框。
+    用了入口组 / 出口组的简化框表达不了，直接开完整的。
+  */
+  const openTunnelOrAggregateEdit = (tunnel: any) => {
+    if (isAggregateLinkTunnel(tunnel) && !Number(tunnel.entryGroupId || 0) && !Number(tunnel.exitGroupId || 0) && isTunnelSupported(tunnel)) {
+      setAggregateDialog({ open: true, tunnel });
+      return;
+    }
+    openEdit(tunnel);
+  };
   const openEdit = (tunnel: any) => {
     if (!isTunnelSupported(tunnel)) return;
     const hopHostIds = Array.isArray(tunnel.hopHostIds) && tunnel.hopHostIds.length >= 2
@@ -3000,7 +3020,7 @@ function TunnelsContent() {
   const { data: tunnelSparkRows } = trpc.tunnels.latencySparkBatch.useQuery(
     { tunnelIds: sparkTunnelIds, hours: 24, bucketMinutes: 60 },
     {
-      enabled: activeSection === "tunnels" && viewMode !== "globe" && sparkTunnelIds.length > 0,
+      enabled: isTunnelListSection && tunnelListViewMode !== "globe" && sparkTunnelIds.length > 0,
       refetchInterval: pollingInterval("slow"),
       staleTime: 30_000,
       refetchOnWindowFocus: false,
@@ -3014,7 +3034,7 @@ function TunnelsContent() {
   const { data: tunnelHistoryRows } = trpc.tunnels.latencyHistoryBatch.useQuery(
     { tunnelIds: sparkTunnelIds },
     {
-      enabled: activeSection === "tunnels" && viewMode !== "globe" && sparkTunnelIds.length > 0,
+      enabled: isTunnelListSection && tunnelListViewMode !== "globe" && sparkTunnelIds.length > 0,
       staleTime: 60_000,
       refetchInterval: pollingInterval("slow"),
       refetchOnWindowFocus: false,
@@ -3930,7 +3950,7 @@ function TunnelsContent() {
         ? `entries-${groupViewMode}-${normalizedLinkSearchQuery || "all"}-${forwardGroupsLoading ? "loading" : Number(forwardGroupSummaryQuery.data?.totalItems || 0) > 0 ? "list" : "empty"}`
         : activeSection === "exits"
           ? `exits-${groupViewMode}-${normalizedLinkSearchQuery || "all"}-${forwardGroupsLoading ? "loading" : Number(forwardGroupSummaryQuery.data?.totalItems || 0) > 0 ? "list" : "empty"}`
-          : `tunnels-${viewMode}-${normalizedLinkSearchQuery || "all"}-${isLoading || !tunnels ? "loading" : tunnelItems.length > 0 ? "list" : "empty"}`;
+          : `${activeSection}-${tunnelListViewMode}-${normalizedLinkSearchQuery || "all"}-${isLoading || !tunnels ? "loading" : tunnelItems.length > 0 ? "list" : "empty"}`;
   const headerStat = activeSection === "chains"
     ? { value: `${isChainGlobeView ? activeChainCount : Number(forwardGroupSummaryQuery.data?.enabledItems || 0)} / ${isChainGlobeView ? chainGroups.length : Number(forwardGroupSummaryQuery.data?.totalItems || 0)} ${isChainGlobeView ? "可用" : "已启用"}`, loading: forwardGroupsLoading, cacheKey: "tunnels.header.chainsActive", fallback: isChainGlobeView ? "0 / 0 可用" : "0 / 0 已启用", iconClass: "text-primary" }
     : activeSection === "ports"
@@ -3950,7 +3970,7 @@ function TunnelsContent() {
                   ? Number(tunnelMapQuery.data?.pages[0]?.totalItems || 0)
                   : tunnelPageQuery.data?.totalItems ?? tunnels?.length ?? 0} 可用`,
                 loading: isLoading || !tunnels,
-                cacheKey: "tunnels.header.active",
+                cacheKey: activeSection === "aggregates" ? "tunnels.header.aggregatesActive" : "tunnels.header.active",
                 fallback: "0 / 0 可用",
                 iconClass: "text-chart-2",
               };
@@ -3996,6 +4016,8 @@ function TunnelsContent() {
   const canCreatePort = !!hosts?.length && allowedForwardTypes.some((type) => forwardProtocolSettings[type] !== false);
   const canCreateChain = !!hosts?.length && hosts.length >= 2 && availableChainForwardTypes.length > 0;
   const canCreateGroup = !!hosts?.length && hosts.length >= 1;
+  // 叠加：入口、两台中转、落地，至少四台；NEX 协议开着。
+  const canCreateAggregate = !!hosts?.length && hosts.length >= 4 && !forwardxRuntimeDisabled;
   const activeSectionCreatesGroup = activeSection === "ports" || activeSection === "groups" || activeSection === "entries" || activeSection === "exits";
   // 「按目标新建」向导默认关（系统设置里开），懂行的人不需要它。
   const linkWizardEnabled = !!(systemSettings as any)?.linkWizardEnabled;
@@ -4003,6 +4025,8 @@ function TunnelsContent() {
     ? linkWizardEnabled && canCreateGroup
     : activeSection === "tunnels"
     ? canCreateTunnel
+    : activeSection === "aggregates"
+    ? canCreateAggregate
     : activeSection === "chains"
       ? canCreateChain
       : activeSection === "ports"
@@ -4018,6 +4042,8 @@ function TunnelsContent() {
         ? (activeSection === "ports" ? (!hosts?.length ? "至少需要 1 台主机" : "暂无可用端口转发协议") : activeSectionCreatesGroup ? "至少需要 1 台主机" : "当前页签缺少可用主机或转发协议")
     : !canCreateTunnel && activeSection === "tunnels"
       ? "暂无可用隧道协议"
+    : !canCreateAggregate && activeSection === "aggregates"
+      ? (forwardxRuntimeDisabled ? "NEX 隧道协议已停用" : "至少需要 4 台主机：入口、两台中转、落地")
       : !canCreateChain && activeSection === "chains"
         ? (availableChainForwardTypes.length === 0 ? "暂无可用转发工具" : "当前主机或转发工具不支持转发链")
         : undefined;
@@ -4031,6 +4057,12 @@ function TunnelsContent() {
     if (action.type === "group") {
       setActiveSection(action.mode === "failover" ? "groups" : action.mode === "entry" ? "entries" : "exits");
       setPendingGroupCreate({ mode: action.mode, exitStrategy: action.exitStrategy });
+      return;
+    }
+    // 单连接叠加有自己的页签和简化框。
+    if (action.relayMode === "aggregate") {
+      setActiveSection("aggregates");
+      if (canCreateAggregate) setAggregateDialog({ open: true, tunnel: null });
       return;
     }
     if (!canCreateTunnel) return;
@@ -4085,6 +4117,11 @@ function TunnelsContent() {
       setShowDialog(true);
       return;
     }
+    if (activeSection === "aggregates") {
+      if (!canCreateAggregate) return;
+      setAggregateDialog({ open: true, tunnel: null });
+      return;
+    }
     if (activeSection === "chains") {
       if (!canCreateChain) return;
       setSelectedCreateType("chain");
@@ -4110,7 +4147,7 @@ function TunnelsContent() {
           icon: <Stethoscope className="h-3.5 w-3.5" />,
           onSelect: () => setTestTunnel({ id: tunnel.id, name: tunnel.name }),
         },
-        { key: "edit", label: "编辑", ariaLabel: `编辑隧道 ${tunnel.name}`, icon: <Pencil className="h-3.5 w-3.5" />, onSelect: () => openEdit(tunnel) },
+        { key: "edit", label: "编辑", ariaLabel: `编辑隧道 ${tunnel.name}`, icon: <Pencil className="h-3.5 w-3.5" />, onSelect: () => openTunnelOrAggregateEdit(tunnel) },
       ] : []}
       menu={[
         ...(supported ? [{
@@ -4247,7 +4284,8 @@ function TunnelsContent() {
     const hasEntryGroup = Number(tunnel?.entryGroupId || 0) > 0;
     const subtitle = [
       getTunnelModeDisplay(tunnel.mode, nginxTunnelEnabled, tunnel.forwardxVersion, tunnel.wireGuardPlane),
-      hopCount > 2 ? `${hopCount - 1} 跳` : "直连",
+      // 叠加数的是几台中转一起送，不是几跳。
+      isAggregateLinkTunnel(tunnel) && hopCount > 3 ? `${hopCount - 2} 路叠加` : hopCount > 2 ? `${hopCount - 1} 跳` : "直连",
       statusText,
     ].filter(Boolean).join(" · ");
     // 链路已经不通时，上一次量到的延迟是旧的：不能一边写「连接异常」一边标「22 ms 优秀」。
@@ -4432,23 +4470,10 @@ function TunnelsContent() {
             {linkSearchStats.filtered} / {linkSearchStats.total} {linkSearchStats.unit}
           </span>
         ) : null}
-        {/* 家里一台 Linux 当入口、几台前置叠带宽：建隧道、建规则一步做完（只给管理员，NEX 协议开着时）。 */}
-        {activeSection === "tunnels" && user?.role === "admin" && !forwardxRuntimeDisabled ? (
-          <Button
-            variant="outline"
-            className="fx-row-action ml-auto h-9 shrink-0 gap-1.5 rounded-full px-3.5"
-            disabled={!canCreateTunnel}
-            title={createDisabledTitle}
-            onClick={() => setHomeAggregateOpen(true)}
-          >
-            <Home className="h-4 w-4" />
-            家庭叠加
-          </Button>
-        ) : null}
         {/* 「线路总览」本身不新建东西；系统设置里打开了向导才在这里放「按目标新建」。 */}
         {activeSection === "routes" && !linkWizardEnabled ? null : (
           <Button
-            className={`fx-row-action ${activeSection === "tunnels" && user?.role === "admin" && !forwardxRuntimeDisabled ? "" : "ml-auto "}h-9 shrink-0 gap-1.5 rounded-full px-3.5`}
+            className="fx-row-action ml-auto h-9 shrink-0 gap-1.5 rounded-full px-3.5"
             disabled={!canCreateActive}
             title={createDisabledTitle}
             onClick={openCreateTypeDialog}
@@ -4461,12 +4486,13 @@ function TunnelsContent() {
 
 
 
-        <TabsContent value="tunnels" className="space-y-4">
+        {/* 「隧道链路」和「叠加」是同一份列表按 kind 分开列，共用这一块。 */}
+        <TabsContent value={activeSection === "aggregates" ? "aggregates" : "tunnels"} className="space-y-4">
           <div className="min-w-0">
-            <h2 className="text-lg font-semibold tracking-tight sm:text-xl">隧道链路</h2>
+            <h2 className="text-lg font-semibold tracking-tight sm:text-xl">{activeSection === "aggregates" ? "叠加" : "隧道链路"}</h2>
           </div>
           <SectionTransition transitionKey={activeSectionTransitionKey}>
-      {viewMode === "globe" ? (
+      {tunnelListViewMode === "globe" ? (
         (isLoading || forwardGroupsLoading || !tunnels || !forwardGroups || !hosts) ? (
           <DataSectionLoading label="正在加载全球链路地图" />
         ) : (
@@ -4485,7 +4511,7 @@ function TunnelsContent() {
         <DataSectionLoading label="正在加载隧道数据" />
       ) : tunnels && tunnelItems.length > 0 ? (
         <>
-        {viewMode === "card" ? (
+        {tunnelListViewMode === "card" ? (
           <SortableReorderContext sortable={tunnelSortable} ids={pagedTunnels.map((tunnel: any) => Number(tunnel.id))} strategy="rect">
           <div className="standard-card-grid items-start gap-4">
             {pagedTunnels.map((tunnel: any) => (
@@ -4620,7 +4646,9 @@ function TunnelsContent() {
               有，只是这个词对不上。主机页一直是分开说的，这里补上。
             */
             normalizedLinkSearchQuery ? (
-              <EmptyState icon={<Network />} title="未找到匹配隧道" description="调整搜索内容或清空搜索" />
+              <EmptyState icon={<Network />} title={activeSection === "aggregates" ? "未找到匹配的叠加" : "未找到匹配隧道"} description="调整搜索内容或清空搜索" />
+            ) : activeSection === "aggregates" ? (
+              <EmptyState icon={<Layers />} title="暂无叠加" description="一个入口、两台以上中转、一个落地：一条连接拆到几台中转同时送" />
             ) : (
               <EmptyState icon={<Network />} title="暂无隧道" description="选择两台 Agent 创建第一条隧道" />
             )
@@ -4773,7 +4801,13 @@ function TunnelsContent() {
       )}
 
       <TunnelConnStatsDialog tunnel={connStatsTunnel} onClose={() => setConnStatsTunnel(null)} />
-      <HomeAggregateDialog open={homeAggregateOpen} onOpenChange={setHomeAggregateOpen} />
+      <AggregateLinkDialog
+        open={aggregateDialog.open}
+        tunnel={aggregateDialog.tunnel}
+        hosts={(hosts || []) as any[]}
+        onOpenChange={(open) => setAggregateDialog((previous) => ({ ...previous, open }))}
+        onMoreSettings={(tunnel) => openEdit(tunnel)}
+      />
       <TunnelParallelStreamsDialog tunnel={parallelStreamsTunnel} onClose={() => setParallelStreamsTunnel(null)} />
       <LinkWizardDialog
         open={linkWizardOpen}
