@@ -57,6 +57,15 @@ test("主备线路不折进「更多设置」—— 它是用户会专门来找�
   assert.ok(failoverAt < foldAt, "主备那一块应该在「更多设置」折叠条的前面");
 });
 
+test("线路组用不了就不显示，除非这条规则已经开着线路组", () => {
+  // 转发链、共享 TLS 入站、SS 出口……点不开的折叠框只是噪音；但已经开着的得留着，人才关得掉。
+  const source = fs.readFileSync(rulesPagePath, "utf8");
+  assert.match(source, /const routeGroupSectionVisible = !mainBackupBlock \|\| form\.failoverEnabled;/);
+  const gateAt = source.indexOf("{routeGroupSectionVisible && (");
+  const sectionAt = source.indexOf('testId="failover-section"');
+  assert.ok(gateAt > 0 && gateAt < sectionAt && sectionAt - gateAt < 400, "线路组折叠框外面没有 routeGroupSectionVisible 这道判断");
+});
+
 test("折起来的都是可以不管的 —— 里面不许有必填项", () => {
   const section = collapsedSection(fs.readFileSync(rulesPagePath, "utf8"));
   const required = section.split("\n").filter((line) =>

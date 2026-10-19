@@ -3454,11 +3454,11 @@ function RulesContent() {
   /*
     主备用不了的时候：说人话的原因，能一键改好的给一个按钮。
 
-    主备这一块**永远渲染**，用不了就显示成禁用并写明原因。原来是条件不满足时整块
-    不渲染（包括默认的 iptables 端口转发），于是打开创建转发看到的是「主备这个功能
-    不存在」，而不是「这条规则用不了，因为 X」。后来改成显示原因，但原因写的是
-    「仅支持 GOST 的隧道或转发工具可以使用出站策略」—— 新手读完还是不知道该点哪儿。
-    现在原因只说他听得懂的，出路直接做成按钮。
+    用不了的规则类型（转发链、共享 TLS 入站、用了 SS 出口的……）不显示线路组这一块：
+    一个点不开的折叠框只是噪音（用户反馈「用不了就不显示」）。默认的 iptables 端口转发
+    不算用不了 —— 勾上会自动换成 GOST，照样显示。只有一种例外：这条规则已经开着线路组、
+    但改了别的设置后用不了了，这时还显示，原因和出路写在里面，让人能把它关掉或改回去。
+    原因只说他听得懂的，出路直接做成按钮。
 
     普通用户的判断放在「转发工具不是 GOST」前面：同一条规则两句都成立时，前一句
     才给得出他自己能走的路（改用隧道转发），后一句只会让他去找一个改不了的选项。
@@ -3483,6 +3483,7 @@ function RulesContent() {
     }
     : { reason: "线路组要用 gost、realm、socat 或 nginx 转发：iptables / nftables 在内核里改写目的地，调度器插不进去。" };
   const mainBackupDisabledText = mainBackupBlock?.reason || "";
+  const routeGroupSectionVisible = !mainBackupBlock || form.failoverEnabled;
   const routeGroupSummary = form.failoverEnabled && form.routeGroup
     ? `已开启 · ${form.routeGroup.paths.length} 条路径 · ${ROUTE_MODE_SHORT[form.routeGroup.policy.mode] ?? ""}`
     : mainBackupBlock ? "用不了" : "未开启";
@@ -8412,6 +8413,7 @@ function RulesContent() {
               />
               </RuleFormCollapsible>
             )}
+            {routeGroupSectionVisible && (
             <RuleFormCollapsible
               title="线路组"
               summary={routeGroupSummary}
@@ -8485,6 +8487,7 @@ function RulesContent() {
                 </div>
               )}
             </RuleFormCollapsible>
+            )}
             {/* 规则名称放在外面：改名是常事，折进「更多设置」每次都要先展开才找得到。留空照样自动生成。 */}
             <FormField className="space-y-2">
               <Label className="flex items-baseline gap-1.5">规则名称<span className="text-xs font-normal text-muted-foreground">留空自动生成</span></Label>

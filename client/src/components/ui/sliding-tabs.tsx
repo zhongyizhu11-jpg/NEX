@@ -18,12 +18,23 @@ type SlidingTabsListProps<T extends string> = {
   minItemWidthRem?: number;
 };
 
-function revealActiveTab(element: HTMLDivElement) {
+/**
+ * 把当前分类滚进视野。toStart：页面刚打开（刷新、从别处跳过来）时把它放到最前面 ——
+ * 用户反馈刷新后停在「转发链」，分类条却还是从头排着、要自己找；点分类时只挪到刚好看得见，
+ * 免得点一下整条跳一下。
+ */
+function revealActiveTab(element: HTMLDivElement, toStart = false) {
   if (element.scrollWidth <= element.clientWidth) return;
   const selected = element.querySelector<HTMLElement>('[data-state="active"]');
   if (!selected) return;
   const item = selected.getBoundingClientRect();
   const frame = element.getBoundingClientRect();
+  if (toStart) {
+    // 第一个分类就从头开始；别的让出左边那个 44px 的滚动按钮。
+    const isFirst = selected === element.querySelector<HTMLElement>('[role="tab"]');
+    element.scrollLeft = isFirst ? 0 : element.scrollLeft + item.left - frame.left - 44;
+    return;
+  }
   // Leave room for the 44px touch scroll controls without moving the page.
   if (item.left < frame.left + 44) element.scrollLeft -= frame.left + 44 - item.left;
   else if (item.right > frame.right - 44) element.scrollLeft += item.right - frame.right + 44;
@@ -120,7 +131,13 @@ function ScrollingTabsList<T extends string>({
       const right = element.scrollLeft + element.clientWidth < element.scrollWidth - 2;
       setEdges((prev) => (prev.left === left && prev.right === right ? prev : { left, right }));
     };
-    const observer = new ResizeObserver(() => { revealActiveTab(element); measure(); });
+    // 第一次量到宽度时把当前分类放到最前面；之后（转屏、字体加载完）只保证看得见。
+    let placed = false;
+    const observer = new ResizeObserver(() => {
+      revealActiveTab(element, !placed && element.scrollWidth > element.clientWidth);
+      if (element.scrollWidth > element.clientWidth) placed = true;
+      measure();
+    });
     observer.observe(element);
     if (element.firstElementChild) observer.observe(element.firstElementChild);
     element.addEventListener("scroll", measure, { passive: true });
