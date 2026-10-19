@@ -31,6 +31,7 @@ import { reconcileRuleEntryDomains } from "./ruleEntryDomain";
 import { checkPanelUpdateTask } from "./_core/systemRouter";
 import { createNonOverlappingScheduledTask } from "./scheduledTask";
 import { cleanOldLatencyDailyStats, rollupLatencyDailyStats } from "./repositories/latencyDailyRepository";
+import { cleanOldHostProbeHourlyStats, rollupHostProbeHourlyStats } from "./repositories/hostProbeHourlyRepository";
 import { runIpChangeTick } from "./ipChange/runtime";
 import { optimizeSqliteDatabase } from "./dbRuntime";
 import { healAutoStoppedRules } from "./forwardRuleAutoRecovery";
@@ -369,6 +370,8 @@ export async function runTcpingCleanup() {
     ["host_probe_service_stats", () => db.cleanOldHostProbeServiceStats(72)],
     // 30 天延迟历史的按天汇总（每个对象每天一行），见 shared/latencyHistory.ts。
     ["latency_daily_stats", () => cleanOldLatencyDailyStats()],
+    // 主机探测的按小时汇总留 30 天（服务延迟图表的 7 天 / 30 天），见 hostProbeHourlyRepository.ts。
+    ["host_probe_service_hourly", () => cleanOldHostProbeHourlyStats()],
     ["address_geo_cache", () => cleanOldAddressGeoCache()],
     // 失效超过 7 天的登录会话（过期或已撤销），只有「未撤销且未过期」的行会被读取。
     ["auth_sessions", () => pruneStaleAuthSessions(7)],
@@ -1044,6 +1047,8 @@ export function startScheduler() {
   // 把最近的原始延迟样本按天汇总进 latency_daily_stats（增量、带水位，见 latencyDailyRepository.ts）。
   const latencyDailyRollup = createNonOverlappingScheduledTask("latency daily rollup", async () => {
     await rollupLatencyDailyStats();
+    // 主机探测按小时汇总进 host_probe_service_hourly，同一个节奏。
+    await rollupHostProbeHourlyStats();
   }, { slowTaskMs: 15_000 });
   const forwardingMaintenance = createNonOverlappingScheduledTask("forward-group and DDNS maintenance", async () => {
     await runForwardGroupFailover();

@@ -87,7 +87,7 @@ export default function QuotaModeSection(_props: Record<string, never>) {
         ) : null}
         {current === "cut" && noConntrack.length > 0 ? (
           <p className="text-meta text-[var(--fx-warn-text)]">
-            {names(noConntrack)} 没有装 conntrack（apt install conntrack），这几台上的 iptables / nftables 连接不会被清掉。
+            {names(noConntrack)} 没有装 conntrack，这几台上的 iptables / nftables 连接不会被清掉。把 Agent 升级到最新会自动装上。
           </p>
         ) : null}
       </CardContent>

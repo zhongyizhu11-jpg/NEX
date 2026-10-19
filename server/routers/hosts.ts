@@ -1,4 +1,5 @@
 import { protectedProcedure, adminProcedure, publicProcedure, router } from "../_core/trpc";
+import { getHostProbeServiceHourlySeries, HOST_PROBE_RAW_MAX_HOURS } from "../repositories/hostProbeHourlyRepository";
 import { invalidateAgentStableHeartbeatPlan } from "../agentHeartbeatGate";
 import { normalizeProbeAddressFamily, PROBE_ADDRESS_FAMILIES } from "../../shared/probeFamily";
 import { githubRepoParts } from "@shared/githubAccelerator";
@@ -1264,7 +1265,7 @@ export const hostsRouter = router({
       }));
     }),
     probeServiceSeries: protectedProcedure
-      .input(z.object({ serviceIds: z.array(z.number().int().positive()).max(200).optional(), hostId: z.number().int().positive().optional(), hours: z.number().min(0.5).max(24 * 3).default(24) }).optional())
+      .input(z.object({ serviceIds: z.array(z.number().int().positive()).max(200).optional(), hostId: z.number().int().positive().optional(), hours: z.number().min(0.5).max(24 * 30).default(24) }).optional())
       .query(async ({ input, ctx }) => {
         const isAdmin = ctx.user.role === "admin";
         const visibleServices = await db.getHostProbeServices(isAdmin ? undefined : ctx.user.id);
@@ -1272,7 +1273,10 @@ export const hostsRouter = router({
         const requested = Array.from(new Set((input?.serviceIds || []).map(Number).filter((id) => Number.isInteger(id) && id > 0)));
         const serviceIds = requested.length > 0 ? requested.filter((id) => visibleIds.has(id)) : Array.from(visibleIds);
         if (serviceIds.length === 0) return [];
-        return db.getHostProbeServiceSeries({ serviceIds, hostId: input?.hostId, hours: input?.hours || 24 });
+        const hours = input?.hours || 24;
+        // 72 小时以内读原始样本；7 天、30 天读按小时汇总（原始样本只留 72 小时）。
+        if (hours > HOST_PROBE_RAW_MAX_HOURS) return getHostProbeServiceHourlySeries({ serviceIds, hostId: input?.hostId, hours });
+        return db.getHostProbeServiceSeries({ serviceIds, hostId: input?.hostId, hours });
       }),
     createProbeService: adminProcedure
       .input(hostProbeServiceInputSchema)

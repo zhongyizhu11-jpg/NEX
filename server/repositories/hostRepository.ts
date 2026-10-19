@@ -39,6 +39,7 @@ import { recordConfigAuditEvent, shouldAuditConfigPatch } from "../configAudit";
 import { HOST_ONLINE_TTL_MS } from "../hostHeartbeatPolicy";
 import { invalidateAgentAuthTokenCandidates } from "./tokenRepository";
 import { getSetting, setSetting } from "./settingsRepository";
+import { deleteHostProbeHourlyStats } from "./hostProbeHourlyRepository";
 import {
   removePresenceCapableHost,
 } from "../agentFastLiveness";
@@ -769,6 +770,7 @@ export async function deleteHost(id: number) {
   await db.delete(hostGroupMembers).where(eq(hostGroupMembers.hostId, id));
   await db.delete(hostMetrics).where(eq(hostMetrics.hostId, id));
   await db.delete(hostProbeServiceStats).where(eq(hostProbeServiceStats.hostId, id));
+  await deleteHostProbeHourlyStats({ hostId: id });
   await db.delete(hostTrafficCounters).where(eq(hostTrafficCounters.hostId, id));
   /**
    * 按规则记的那份计数也要删。

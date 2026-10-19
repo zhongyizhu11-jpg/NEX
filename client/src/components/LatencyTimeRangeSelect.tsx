@@ -1,7 +1,7 @@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 
-export type LatencyTimeRangeHours = 24 | 12 | 6 | 3 | 1 | 0.5;
+export type LatencyTimeRangeHours = 720 | 168 | 72 | 24 | 12 | 6 | 3 | 1 | 0.5;
 
 export const DEFAULT_LATENCY_TIME_RANGE_HOURS: LatencyTimeRangeHours = 24;
 
@@ -14,8 +14,19 @@ export const LATENCY_TIME_RANGE_OPTIONS: Array<{ value: string; hours: LatencyTi
   { value: "0.5", hours: 0.5, label: "0.5H" },
 ];
 
+/**
+ * 更长的几档：只有存了按小时汇总的图表能用（主机的服务延迟，见 server/repositories/hostProbeHourlyRepository.ts）；
+ * 规则、隧道、线路组的原始样本只留 72 小时，还用上面那组。
+ */
+export const LATENCY_LONG_TIME_RANGE_OPTIONS: Array<{ value: string; hours: LatencyTimeRangeHours; label: string }> = [
+  { value: "720", hours: 720, label: "30天" },
+  { value: "168", hours: 168, label: "7天" },
+  { value: "72", hours: 72, label: "3天" },
+  ...LATENCY_TIME_RANGE_OPTIONS,
+];
+
 export function latencyTimeRangeLabel(hours: number) {
-  const option = LATENCY_TIME_RANGE_OPTIONS.find((item) => item.hours === hours);
+  const option = LATENCY_LONG_TIME_RANGE_OPTIONS.find((item) => item.hours === hours);
   return option?.label || `${hours}H`;
 }
 
@@ -37,16 +48,20 @@ export function LatencyTimeRangeSelect({
   value,
   onChange,
   className,
+  long = false,
 }: {
   value: LatencyTimeRangeHours;
   onChange: (value: LatencyTimeRangeHours) => void;
   className?: string;
+  /** 加上 3 天 / 7 天 / 30 天。 */
+  long?: boolean;
 }) {
+  const options = long ? LATENCY_LONG_TIME_RANGE_OPTIONS : LATENCY_TIME_RANGE_OPTIONS;
   return (
     <Select
       value={String(value)}
       onValueChange={(next) => {
-        const option = LATENCY_TIME_RANGE_OPTIONS.find((item) => item.value === next);
+        const option = options.find((item) => item.value === next);
         if (option) onChange(option.hours);
       }}
     >
@@ -54,7 +69,7 @@ export function LatencyTimeRangeSelect({
         <SelectValue />
       </SelectTrigger>
       <SelectContent align="end">
-        {LATENCY_TIME_RANGE_OPTIONS.map((option) => (
+        {options.map((option) => (
           <SelectItem key={option.value} value={option.value}>
             {option.label}
           </SelectItem>
