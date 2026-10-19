@@ -3,6 +3,7 @@ import { useFaultBundleExport } from "@/components/links/useFaultBundleExport";
 import { ResourceTrafficLine } from "@/components/links/ResourceTrafficLine";
 import EmptyState from "@/components/EmptyState";
 import TunnelConnStatsDialog from "@/components/tunnels/TunnelConnStatsDialog";
+import HomeAggregateDialog from "@/components/tunnels/HomeAggregateDialog";
 import TunnelParallelStreamsDialog from "@/components/tunnels/TunnelParallelStreamsDialog";
 import { describeTunnelParallelStreams, normalizeTunnelParallelStreams, tunnelParallelStreamsUnavailableReason } from "@shared/tunnelParallelStreams";
 import { useLocation, useSearch } from "wouter";
@@ -110,6 +111,7 @@ import {
   ChevronRight,
   Filter,
   Globe,
+  Home,
   LayoutGrid,
   List,
   Loader2,
@@ -2248,6 +2250,7 @@ function TunnelsContent() {
   const [, setTopologyLocation] = useLocation();
   const linkLocation = useSearch();
   const [showCreateTypeDialog, setShowCreateTypeDialog] = useState(false);
+  const [homeAggregateOpen, setHomeAggregateOpen] = useState(false);
   const [selectedCreateType, setSelectedCreateType] = useState<LinkCreateType>("chain");
   const [chainCreateForm, setChainCreateForm] = useState<ChainCreateForm>(defaultChainCreateForm);
   const [chainAdvancedOpen, setChainAdvancedOpen] = useState(false);
@@ -4429,10 +4432,23 @@ function TunnelsContent() {
             {linkSearchStats.filtered} / {linkSearchStats.total} {linkSearchStats.unit}
           </span>
         ) : null}
+        {/* 家里一台 Linux 当入口、几台前置叠带宽：建隧道、建规则一步做完（只给管理员，NEX 协议开着时）。 */}
+        {activeSection === "tunnels" && user?.role === "admin" && !forwardxRuntimeDisabled ? (
+          <Button
+            variant="outline"
+            className="fx-row-action ml-auto h-9 shrink-0 gap-1.5 rounded-full px-3.5"
+            disabled={!canCreateTunnel}
+            title={createDisabledTitle}
+            onClick={() => setHomeAggregateOpen(true)}
+          >
+            <Home className="h-4 w-4" />
+            家庭叠加
+          </Button>
+        ) : null}
         {/* 「线路总览」本身不新建东西；系统设置里打开了向导才在这里放「按目标新建」。 */}
         {activeSection === "routes" && !linkWizardEnabled ? null : (
           <Button
-            className="fx-row-action ml-auto h-9 shrink-0 gap-1.5 rounded-full px-3.5"
+            className={`fx-row-action ${activeSection === "tunnels" && user?.role === "admin" && !forwardxRuntimeDisabled ? "" : "ml-auto "}h-9 shrink-0 gap-1.5 rounded-full px-3.5`}
             disabled={!canCreateActive}
             title={createDisabledTitle}
             onClick={openCreateTypeDialog}
@@ -4757,6 +4773,7 @@ function TunnelsContent() {
       )}
 
       <TunnelConnStatsDialog tunnel={connStatsTunnel} onClose={() => setConnStatsTunnel(null)} />
+      <HomeAggregateDialog open={homeAggregateOpen} onOpenChange={setHomeAggregateOpen} />
       <TunnelParallelStreamsDialog tunnel={parallelStreamsTunnel} onClose={() => setParallelStreamsTunnel(null)} />
       <LinkWizardDialog
         open={linkWizardOpen}

@@ -4,6 +4,9 @@ import test from "node:test";
 import {
   addConnStats,
   connStatsToCsv,
+  bytesToMbps,
+  formatConnBytes,
+  normalizeConnLegVia,
   emptyConnStatsAggregate,
   estimateConnPercentile,
   normalizeConnEndpoint,
@@ -43,6 +46,16 @@ test("端点只收 host:port", () => {
 test("CSV 带表头", () => {
   const csv = connStatsToCsv([{ hostName: "港-1", role: "entry", stage: "tcp", endpoint: "1.2.3.4:443", ruleId: 3, lastError: "timeout", summary: summarizeConnStats(addConnStats(emptyConnStatsAggregate(), { attempts: 2, failures: 1, sumMs: 40, maxMs: 40, buckets: [1, 0, 0, 0, 0, 0] })) }]);
   const lines = csv.replace(/^﻿/, "").trim().split("\n");
-  assert.equal(lines[0], "host,role,stage,endpoint,ruleId,attempts,failures,successRate,avgMs,p50Ms,p95Ms,maxMs,lastError");
-  assert.equal(lines[1], "港-1,entry,tcp,1.2.3.4:443,3,2,1,50,40,50,50,40,timeout");
+  assert.equal(lines[0], "host,role,stage,endpoint,ruleId,attempts,failures,successRate,avgMs,p50Ms,p95Ms,maxMs,lastError,via,bytesUp,bytesDown");
+  assert.equal(lines[1], "港-1,entry,tcp,1.2.3.4:443,3,2,1,50,40,50,50,40,timeout,,0,0");
+});
+
+test("每一路：via 只认 relay#N / stream#N，速率按 Mbps 算", () => {
+  assert.equal(normalizeConnLegVia("relay#12"), "relay#12");
+  assert.equal(normalizeConnLegVia("stream#3"), "stream#3");
+  assert.equal(normalizeConnLegVia("relay#"), "");
+  assert.equal(normalizeConnLegVia("<b>"), "");
+  assert.equal(bytesToMbps(125_000_000, 1), 1000);
+  assert.equal(bytesToMbps(0, 60), 0);
+  assert.equal(formatConnBytes(5 * 1024 * 1024), "5.0 MB");
 });

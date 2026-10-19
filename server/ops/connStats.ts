@@ -14,8 +14,10 @@ import { appendPanelLog } from "../_core/panelLogger";
 import {
   CONN_STAGES,
   addConnStats,
+  bytesToMbps,
   emptyConnStatsAggregate,
   normalizeConnEndpoint,
+  normalizeConnLegVia,
   summarizeConnStats,
   type ConnStatsAggregate,
   type ConnStatsSummary,
@@ -44,6 +46,10 @@ export type ConnStatsIngestRow = {
   maxMs: number;
   buckets: number[];
   lastError: string | null;
+  /** 只有 stage=leg 有：哪一路、这一分钟送出 / 收到的字节。 */
+  via: string;
+  bytesUp: number;
+  bytesDown: number;
 };
 
 /** 规整 FXP 报上来的一行；认不出来的返回 null。 */
@@ -55,7 +61,11 @@ export function normalizeConnStatsRow(raw: unknown): ConnStatsIngestRow | null {
   const stage = String(row.stage || "").trim().toLowerCase();
   const endpoint = normalizeConnEndpoint(row.endpoint);
   const attempts = count(row.attempts);
-  if (tunnelId <= 0 || !ROLES.has(role) || !STAGES.has(stage as any) || !endpoint || attempts <= 0) return null;
+  const isLeg = stage === "leg";
+  const bytesUp = isLeg ? count(row.bytesUp, Number.MAX_SAFE_INTEGER) : 0;
+  const bytesDown = isLeg ? count(row.bytesDown, Number.MAX_SAFE_INTEGER) : 0;
+  // 每一路那一分钟可能没有新拨号、只有流量：有字节也算一行。
+  if (tunnelId <= 0 || !ROLES.has(role) || !STAGES.has(stage as any) || !endpoint || (attempts <= 0 && bytesUp + bytesDown <= 0)) return null;
   const buckets = Array.isArray(row.buckets) ? row.buckets.slice(0, 6).map((value) => count(value)) : [];
   while (buckets.length < 6) buckets.push(0);
   const lastError = row.lastError ? String(row.lastError).replace(/\s+/g, " ").trim().slice(0, 200) : null;
@@ -71,6 +81,9 @@ export function normalizeConnStatsRow(raw: unknown): ConnStatsIngestRow | null {
     maxMs: count(row.maxMs),
     buckets,
     lastError,
+    via: isLeg ? normalizeConnLegVia(row.via) : "",
+    bytesUp,
+    bytesDown,
   };
 }
 
@@ -106,13 +119,13 @@ export async function recordConnStatsReport(
   if (accepted.length === 0) return 0;
   const minuteAt = Math.floor(nowMs / 60_000) * 60;
   const q = quoteDbIdentifier;
-  const columns = ["hostId", "tunnelId", "ruleId", "role", "stage", "endpoint", "minuteAt", "attempts", "failures", "sumMs", "maxMs", "b50", "b100", "b200", "b500", "b1000", "bOver", "lastError"];
+  const columns = ["hostId", "tunnelId", "ruleId", "role", "stage", "endpoint", "minuteAt", "attempts", "failures", "sumMs", "maxMs", "b50", "b100", "b200", "b500", "b1000", "bOver", "lastError", "via", "bytesUp", "bytesDown"];
   const placeholders = `(${columns.map(() => "?").join(", ")})`;
   for (let start = 0; start < accepted.length; start += 100) {
     const chunk = accepted.slice(start, start + 100);
     const params: unknown[] = [];
     for (const row of chunk) {
-      params.push(hostId, row.tunnelId, row.ruleId, row.role, row.stage, row.endpoint, minuteAt, row.attempts, row.failures, row.sumMs, row.maxMs, ...row.buckets, row.lastError);
+      params.push(hostId, row.tunnelId, row.ruleId, row.role, row.stage, row.endpoint, minuteAt, row.attempts, row.failures, row.sumMs, row.maxMs, ...row.buckets, row.lastError, row.via, row.bytesUp, row.bytesDown);
     }
     await executeRaw(
       `INSERT INTO ${q("connection_stage_stats")} (${columns.map(q).join(", ")}) VALUES ${chunk.map(() => placeholders).join(", ")}`,
@@ -132,6 +145,26 @@ export type ConnStatsGroup = {
   lastError: string | null;
 };
 
+/** 单连接叠加的一路：拨号成功率 / 耗时，外加这段时间和最近几分钟实际跑了多少。 */
+export type ConnStatsLeg = {
+  hostId: number;
+  endpoint: string;
+  /** relay#主机 ID / stream#N；老数据是空。 */
+  via: string;
+  summary: ConnStatsSummary;
+  lastError: string | null;
+  bytesUp: number;
+  bytesDown: number;
+  /** 最近 CONN_LEG_RECENT_SECONDS 秒的平均速率（Mbps，两个方向分开）。 */
+  recentUpMbps: number;
+  recentDownMbps: number;
+  /** 这段时间里这一路占全部路字节数的百分比（0–100，整数）。 */
+  sharePercent: number;
+};
+
+/** 「每一路实时跑多少」按最近 5 分钟平均：FXP 一分钟报一次，再短就只剩一两个点，跳得厉害。 */
+export const CONN_LEG_RECENT_SECONDS = 300;
+
 export type ConnStatsHourly = {
   /** 这一小时的开始（Unix 秒）。 */
   hourAt: number;
@@ -149,22 +182,33 @@ function rowAggregate(row: any): ConnStatsAggregate {
   });
 }
 
-const SUM_COLUMNS = ["attempts", "failures", "sumMs", "b50", "b100", "b200", "b500", "b1000", "bOver"];
+const SUM_COLUMNS = ["attempts", "failures", "sumMs", "b50", "b100", "b200", "b500", "b1000", "bOver", "bytesUp", "bytesDown"];
 
-/** 一条隧道最近 hours 小时：按（主机, 角色, 阶段, 端点）汇总，外加每小时每阶段的走势。 */
+/** 一条隧道最近 hours 小时：按（主机, 角色, 阶段, 端点）汇总，单连接叠加的每一路另列，外加每小时每阶段的走势。 */
 export async function getTunnelConnStats(tunnelId: number, hours: number, nowMs = Date.now()) {
   const q = quoteDbIdentifier;
   const since = Math.floor(nowMs / 1000) - Math.max(1, Math.min(CONN_STATS_RETENTION_HOURS, Math.floor(hours))) * 3600;
   const sums = SUM_COLUMNS.map((column) => `SUM(${q(column)}) AS ${q(column)}`).join(", ");
   const groupRows = await queryRaw<any>(
-    `SELECT ${q("hostId")}, ${q("role")}, ${q("stage")}, ${q("endpoint")}, ${sums}, MAX(${q("maxMs")}) AS ${q("maxMs")}, MAX(${q("minuteAt")}) AS ${q("lastAt")}
+    `SELECT ${q("hostId")}, ${q("role")}, ${q("stage")}, ${q("endpoint")}, ${q("via")}, ${sums}, MAX(${q("maxMs")}) AS ${q("maxMs")}, MAX(${q("minuteAt")}) AS ${q("lastAt")}
        FROM ${q("connection_stage_stats")}
       WHERE ${q("tunnelId")} = ? AND ${q("minuteAt")} >= ?
-      GROUP BY ${q("hostId")}, ${q("role")}, ${q("stage")}, ${q("endpoint")}
+      GROUP BY ${q("hostId")}, ${q("role")}, ${q("stage")}, ${q("endpoint")}, ${q("via")}
       ORDER BY ${q("role")}, ${q("stage")}, ${q("endpoint")}
       LIMIT 500`,
     [tunnelId, since],
   );
+  const recentSince = Math.max(since, Math.floor(nowMs / 1000) - CONN_LEG_RECENT_SECONDS);
+  const recentRows = await queryRaw<any>(
+    `SELECT ${q("hostId")}, ${q("endpoint")}, ${q("via")}, SUM(${q("bytesUp")}) AS ${q("bytesUp")}, SUM(${q("bytesDown")}) AS ${q("bytesDown")}
+       FROM ${q("connection_stage_stats")}
+      WHERE ${q("tunnelId")} = ? AND ${q("stage")} = 'leg' AND ${q("minuteAt")} >= ?
+      GROUP BY ${q("hostId")}, ${q("endpoint")}, ${q("via")}
+      LIMIT 200`,
+    [tunnelId, recentSince],
+  );
+  const recent = new Map<string, { up: number; down: number }>();
+  for (const row of recentRows) recent.set(`${row.hostId}|${row.endpoint}|${row.via ?? ""}`, { up: Number(row.bytesUp) || 0, down: Number(row.bytesDown) || 0 });
   // 每组最近一次失败原因：只查有失败的组，取最新的那行。
   const errorRows = await queryRaw<any>(
     `SELECT ${q("hostId")}, ${q("role")}, ${q("stage")}, ${q("endpoint")}, ${q("lastError")}, ${q("minuteAt")}
@@ -189,7 +233,29 @@ export async function getTunnelConnStats(tunnelId: number, hours: number, nowMs 
       LIMIT 2000`,
     [tunnelId, since],
   );
-  const groups: ConnStatsGroup[] = groupRows.map((row) => ({
+  const recentSeconds = Math.max(1, Math.floor(nowMs / 1000) - recentSince);
+  const legRows = groupRows.filter((row) => String(row.stage) === "leg");
+  const legBytesTotal = legRows.reduce((sum, row) => sum + (Number(row.bytesUp) || 0) + (Number(row.bytesDown) || 0), 0);
+  const legs: ConnStatsLeg[] = legRows.map((row) => {
+    const bytesUp = Number(row.bytesUp) || 0;
+    const bytesDown = Number(row.bytesDown) || 0;
+    const via = String(row.via ?? "");
+    const last = recent.get(`${row.hostId}|${row.endpoint}|${via}`) ?? { up: 0, down: 0 };
+    return {
+      hostId: Number(row.hostId),
+      endpoint: String(row.endpoint),
+      via,
+      summary: summarizeConnStats(rowAggregate(row)),
+      lastError: lastErrors.get(`${row.hostId}|${row.role}|${row.stage}|${row.endpoint}`) ?? null,
+      bytesUp,
+      bytesDown,
+      recentUpMbps: bytesToMbps(last.up, recentSeconds),
+      recentDownMbps: bytesToMbps(last.down, recentSeconds),
+      sharePercent: legBytesTotal > 0 ? Math.round(((bytesUp + bytesDown) / legBytesTotal) * 100) : 0,
+    };
+  });
+  legs.sort((a, b) => a.hostId - b.hostId || a.via.localeCompare(b.via, "en", { numeric: true }) || a.endpoint.localeCompare(b.endpoint));
+  const groups: ConnStatsGroup[] = groupRows.filter((row) => String(row.stage) !== "leg").map((row) => ({
     hostId: Number(row.hostId),
     role: String(row.role),
     stage: String(row.stage),
@@ -211,7 +277,7 @@ export async function getTunnelConnStats(tunnelId: number, hours: number, nowMs 
     stage: String(row.stage),
     summary: summarizeConnStats(rowAggregate(row)),
   }));
-  return { tunnelId, hours, since, groups, hourly };
+  return { tunnelId, hours, since, groups, legs, legRecentSeconds: recentSeconds, hourly };
 }
 
 /** 测试用。 */

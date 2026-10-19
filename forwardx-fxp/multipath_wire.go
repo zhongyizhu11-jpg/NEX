@@ -102,9 +102,10 @@ func multipathLegCandidates(cfg config) []int {
 
 // multipathDialResult is one leg that finished dialling, or why it did not.
 type multipathDialResult struct {
-	leg *multipathLegConn
-	key string
-	err error
+	leg      *multipathLegConn
+	key      string
+	cfgIndex int
+	err      error
 }
 
 // dialMultipathLegs starts dialling the chosen legs in parallel, announcing the
@@ -113,38 +114,50 @@ type multipathDialResult struct {
 func dialMultipathLegs(cfg config, hello helloFrame, sessionID string, indexes []int) <-chan multipathDialResult {
 	results := make(chan multipathDialResult, len(indexes))
 	for _, index := range indexes {
-		go func(index int, legCfg multipathLeg) {
-			dialCfg := cfg
-			if strings.TrimSpace(legCfg.Key) != "" {
-				dialCfg.Key = legCfg.Key
-			}
-			label := multipathLegLabel(legCfg)
-			key := multipathLegHealthKey(legCfg)
-			conn, sec, err := dialSecureTCP(legCfg.Host, legCfg.Port, dialCfg)
-			if err != nil {
-				results <- multipathDialResult{key: key, err: fmt.Errorf("leg %d (%s): %w", index, label, err)}
-				return
-			}
-			legHello := hello
-			legHello.MultipathSessionID = sessionID
-			legHello.MultipathLegIndex = index
-			legHello.MultipathLegCount = len(cfg.MultipathLegs)
-			legHello.MultipathReplicate = cfg.MultipathReplicate
-			frame, err := json.Marshal(legHello)
-			if err == nil {
-				err = writeSecureHello(sec, frame)
-			}
-			if err != nil {
-				_ = conn.Close()
-				results <- multipathDialResult{key: key, err: fmt.Errorf("leg %d (%s) hello: %w", index, label, err)}
-				return
-			}
-			leg := newMultipathLeg(index, sec, label)
-			leg.healthKey = key
-			results <- multipathDialResult{leg: leg, key: key}
-		}(index, cfg.MultipathLegs[index])
+		go func(index int) {
+			results <- dialMultipathLeg(cfg, hello, sessionID, index, index)
+		}(index)
 	}
 	return results
+}
+
+// dialMultipathLeg 拨配置里第 cfgIndex 路，在线上用 wireIndex 这个编号报到。开局时两者相同；
+// 中途重拨的那一路要换一个没用过的编号（出口按编号记每一路的字节数，旧编号会被拒）。
+func dialMultipathLeg(cfg config, hello helloFrame, sessionID string, cfgIndex, wireIndex int) multipathDialResult {
+	legCfg := cfg.MultipathLegs[cfgIndex]
+	dialCfg := cfg
+	if strings.TrimSpace(legCfg.Key) != "" {
+		dialCfg.Key = legCfg.Key
+	}
+	label := multipathLegLabel(legCfg)
+	key := multipathLegHealthKey(legCfg)
+	dialStarted := time.Now()
+	conn, sec, err := dialSecureTCP(legCfg.Host, legCfg.Port, dialCfg)
+	if err != nil {
+		recordMultipathLegDial(cfg, legCfg, time.Since(dialStarted), err)
+		return multipathDialResult{key: key, cfgIndex: cfgIndex, err: fmt.Errorf("leg %d (%s): %w", wireIndex, label, err)}
+	}
+	legHello := hello
+	legHello.MultipathSessionID = sessionID
+	legHello.MultipathLegIndex = wireIndex
+	legHello.MultipathLegCount = len(cfg.MultipathLegs)
+	legHello.MultipathReplicate = cfg.MultipathReplicate
+	legHello.MultipathLegCapacityMbps = legCfg.CapacityMbps
+	frame, err := json.Marshal(legHello)
+	if err == nil {
+		err = writeSecureHello(sec, frame)
+	}
+	recordMultipathLegDial(cfg, legCfg, time.Since(dialStarted), err)
+	if err != nil {
+		_ = conn.Close()
+		return multipathDialResult{key: key, cfgIndex: cfgIndex, err: fmt.Errorf("leg %d (%s) hello: %w", wireIndex, label, err)}
+	}
+	leg := newMultipathLeg(wireIndex, sec, label)
+	leg.traffic = newMultipathLegTraffic(cfg, legCfg)
+	leg.healthKey = key
+	leg.cfgIndex = cfgIndex
+	leg.pace.seedCapacity(legCfg.CapacityMbps)
+	return multipathDialResult{leg: leg, key: key, cfgIndex: cfgIndex}
 }
 
 // closeMultipathLegs tears down legs that will not be used.
@@ -152,6 +165,9 @@ func closeMultipathLegs(legs []*multipathLegConn) {
 	for _, leg := range legs {
 		if leg != nil && leg.sec != nil {
 			_ = leg.sec.conn.Close()
+		}
+		if leg != nil {
+			leg.retire()
 		}
 	}
 }
@@ -241,6 +257,8 @@ func handleExitMultipath(sec *secureConn, hello helloFrame, cfg config) error {
 	}
 	sessionKey := multipathExitSessionKey(cfg.TunnelID, sessionID)
 	leg := newMultipathLeg(hello.MultipathLegIndex, sec, fmt.Sprintf("peer-%s", sec.conn.RemoteAddr()))
+	// 回程（下载）是出口在分：按入口带过来的这一路线路带宽定初值。
+	leg.pace.seedCapacity(hello.MultipathLegCapacityMbps)
 	session, leader, err := exitMultipathSessions.join(sessionKey, leg, multipathPendingLimit(cfg))
 	if err != nil {
 		return err
@@ -283,6 +301,8 @@ func dialEntryMultipath(cfg config, hello helloFrame, client net.Conn) (*multipa
 	var firstErr error
 	var session *multipathSession
 	var first *multipathLegConn
+	// 开局就没拨通、或者在冷却里没去拨的那几路，会话起来以后交给重拨器慢慢补。
+	missing := multipathMissingLegs(cfg, candidates)
 	for session == nil && remaining > 0 {
 		result := <-results
 		remaining--
@@ -292,6 +312,7 @@ func dialEntryMultipath(cfg config, hello helloFrame, client net.Conn) (*multipa
 			if firstErr == nil {
 				firstErr = result.err
 			}
+			missing = append(missing, result.cfgIndex)
 			continue
 		}
 		multipathLegHealthMemory.dialed(result.key)
@@ -305,8 +326,12 @@ func dialEntryMultipath(cfg config, hello helloFrame, client net.Conn) (*multipa
 		}
 		return nil, firstErr
 	}
+	redialer := startMultipathRedialer(cfg, hello, sessionID, session)
+	for _, cfgIndex := range missing {
+		redialer.schedule(cfgIndex)
+	}
 	if remaining > 0 {
-		go joinLateMultipathLegs(session, results, remaining)
+		go joinLateMultipathLegs(session, results, remaining, redialer)
 	}
 	fxpVerbosef(
 		"entry multipath tunnel=%d rule=%d client=%s session=%s first=%s dialing=%d/%d target=%s:%d",
@@ -325,12 +350,13 @@ func dialEntryMultipath(cfg config, hello helloFrame, client net.Conn) (*multipa
 
 // joinLateMultipathLegs adds the legs that finish dialling after the session
 // started.
-func joinLateMultipathLegs(session *multipathSession, results <-chan multipathDialResult, remaining int) {
+func joinLateMultipathLegs(session *multipathSession, results <-chan multipathDialResult, remaining int, redialer *multipathRedialer) {
 	for ; remaining > 0; remaining-- {
 		result := <-results
 		if result.err != nil {
 			multipathLegHealthMemory.failed(result.key)
 			fxpVerbosef("multipath leg dial failed: %v", result.err)
+			redialer.schedule(result.cfgIndex)
 			continue
 		}
 		multipathLegHealthMemory.dialed(result.key)

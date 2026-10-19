@@ -167,3 +167,22 @@ func TestFXPSpecLeastLoadExitStrategy(t *testing.T) {
 		t.Fatal("线路带宽变了签名却没变")
 	}
 }
+
+// 单连接叠加的每一路带上线路带宽：原样交给 FXP，变了要重启拿新值；没写的不影响签名。
+func TestFXPSpecMultipathLegCapacity(t *testing.T) {
+	base := fxpSpec{
+		Role: "entry", RuleID: 9, ListenPort: 30009, Protocol: "tcp", ExitHost: "203.0.113.1", ExitPort: 40001, Key: "k",
+		MultipathEnabled: true,
+		MultipathLegs:    []fxpMultipathLeg{{Host: "198.51.100.1", Port: 41001, Via: "relay#2"}, {Host: "198.51.100.2", Port: 41002, Via: "relay#3"}},
+	}
+	plain := fxpServerSignature(normalizeFXPSpec(base))
+	hinted := base
+	hinted.MultipathLegs = []fxpMultipathLeg{{Host: "198.51.100.1", Port: 41001, Via: "relay#2", CapacityMbps: 500}, {Host: "198.51.100.2", Port: 41002, Via: "relay#3", CapacityMbps: 300}}
+	normalized := normalizeFXPSpec(hinted)
+	if len(normalized.MultipathLegs) != 2 || normalized.MultipathLegs[0].CapacityMbps != 500 {
+		t.Fatalf("线路带宽被丢了：%+v", normalized.MultipathLegs)
+	}
+	if fxpServerSignature(normalized) == plain {
+		t.Fatal("写了带宽签名却没变")
+	}
+}

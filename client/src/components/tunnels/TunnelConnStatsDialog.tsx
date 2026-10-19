@@ -10,7 +10,7 @@ import { segmentedControlClassName, segmentedOptionClassName } from "@/component
 import { downloadTextFile } from "@/lib/fileDownload";
 import { pollingInterval } from "@/lib/polling";
 import { trpc } from "@/lib/trpc";
-import { CONN_STAGES, connRoleLabel, connStageLabel } from "@shared/connStats";
+import { CONN_STAGES, connRoleLabel, connStageLabel, formatConnBytes } from "@shared/connStats";
 
 /*
   隧道 › 连接监控：真实用户连接在每一跳、每个阶段花了多久、成没成（FXP 每分钟报一次，留 7 天）。
@@ -26,6 +26,10 @@ const RANGES = [
 
 function formatMs(value: number | null) {
   return value === null ? "—" : `${value} ms`;
+}
+
+function formatMbps(value: number) {
+  return value >= 1000 ? `${(value / 1000).toFixed(2)} Gbps` : `${value} Mbps`;
 }
 
 function rateClass(rate: number | null) {
@@ -63,7 +67,7 @@ export default function TunnelConnStatsDialog({ tunnel, onClose }: Props) {
         <DialogHeader>
           <DialogTitle>连接监控{tunnel ? ` · ${tunnel.name}` : ""}</DialogTitle>
           <DialogDescription>
-            真实连接在每一跳每个阶段的成功率和耗时：连接池、TCP 连接、加密握手是入口 / 中转连下一跳，连目标是出口连目标地址。需要 FXP 2.2.133 以上，留 7 天。
+            真实连接每一跳的成功率和耗时；单连接叠加还列出每一路跑了多少。留 7 天。
           </DialogDescription>
         </DialogHeader>
 
@@ -97,52 +101,96 @@ export default function TunnelConnStatsDialog({ tunnel, onClose }: Props) {
           <DataSectionLoading label="正在读取连接统计" minHeight="min-h-[160px]" />
         ) : query.isError || !data ? (
           <DataSectionError label="连接统计" error={query.error} onRetry={() => { void query.refetch(); }} retrying={query.isFetching} />
-        ) : data.groups.length === 0 ? (
+        ) : data.groups.length === 0 && data.legs.length === 0 ? (
           <div className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">
             这段时间还没有连接统计。隧道上有流量、FXP 升级到 2.2.133 以上后，一两分钟内就会出现。
           </div>
         ) : (
           <>
-            <div className="overflow-x-auto rounded-md border">
-              <table className="w-full min-w-[720px] text-sm">
-                <thead className="bg-muted/40 text-left text-xs text-muted-foreground">
-                  <tr>
-                    <th className="px-3 py-2 font-medium">主机</th>
-                    <th className="px-3 py-2 font-medium">阶段</th>
-                    <th className="px-3 py-2 font-medium">连向</th>
-                    <th className="px-3 py-2 text-right font-medium">次数</th>
-                    <th className="px-3 py-2 text-right font-medium">成功率</th>
-                    <th className="px-3 py-2 text-right font-medium">平均</th>
-                    <th className="px-3 py-2 text-right font-medium">P50</th>
-                    <th className="px-3 py-2 text-right font-medium">P95</th>
-                    <th className="px-3 py-2 text-right font-medium">最慢</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.groups.map((group) => (
-                    <tr key={`${group.hostId}-${group.role}-${group.stage}-${group.endpoint}`} className="border-t align-top">
-                      <td className="px-3 py-2">
-                        <div className="font-medium">{group.hostName}</div>
-                        <div className="text-xs text-muted-foreground">{connRoleLabel(group.role)}</div>
-                      </td>
-                      <td className="px-3 py-2">{connStageLabel(group.stage)}</td>
-                      <td className="px-3 py-2">
-                        <div className="font-mono text-xs">{group.endpoint}</div>
-                        {group.lastError ? <div className="mt-0.5 text-xs text-[var(--fx-down-text)]">最近失败：{group.lastError}</div> : null}
-                      </td>
-                      <td className="px-3 py-2 text-right tabular-nums">{group.summary.attempts}</td>
-                      <td className={`px-3 py-2 text-right font-medium tabular-nums ${rateClass(group.summary.successRate)}`}>
-                        {group.summary.successRate === null ? "—" : `${group.summary.successRate}%`}
-                      </td>
-                      <td className="px-3 py-2 text-right tabular-nums">{group.stage === "pool" ? "—" : formatMs(group.summary.avgMs)}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{group.stage === "pool" ? "—" : formatMs(group.summary.p50Ms)}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{group.stage === "pool" ? "—" : formatMs(group.summary.p95Ms)}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{group.stage === "pool" ? "—" : formatMs(group.summary.maxMs)}</td>
-                    </tr>
+            {data.legs.length > 0 ? (
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+                  <div className="text-sm font-medium">单连接叠加 · 每一路</div>
+                  <div className="text-xs text-muted-foreground">速率是最近 {Math.round(data.legRecentSeconds / 60)} 分钟平均</div>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {data.legs.map((leg) => (
+                    <div key={`${leg.hostId}-${leg.via}-${leg.endpoint}`} className="space-y-2 rounded-md border p-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="truncate font-medium">{leg.legName || leg.endpoint}</div>
+                          <div className="truncate font-mono text-xs text-muted-foreground">{leg.endpoint}</div>
+                        </div>
+                        <div className="shrink-0 text-right text-sm tabular-nums">
+                          <div>↓ {formatMbps(leg.recentDownMbps)}</div>
+                          <div className="text-xs text-muted-foreground">↑ {formatMbps(leg.recentUpMbps)}</div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-muted" role="img" aria-label={`占 ${leg.sharePercent}%`}>
+                          <div className="h-full rounded-full bg-primary" style={{ width: `${leg.sharePercent}%` }} />
+                        </div>
+                        <div className="w-10 shrink-0 text-right text-xs tabular-nums text-muted-foreground">{leg.sharePercent}%</div>
+                      </div>
+                      <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground tabular-nums">
+                        <span>共 ↓ {formatConnBytes(leg.bytesDown)} ↑ {formatConnBytes(leg.bytesUp)}</span>
+                        {leg.summary.attempts > 0 ? (
+                          <span>
+                            拨 {leg.summary.attempts} 次
+                            {leg.summary.successRate !== null ? <span className={`ml-1 ${rateClass(leg.summary.successRate)}`}>{leg.summary.successRate}%</span> : null}
+                            {leg.summary.avgMs !== null ? `，平均 ${leg.summary.avgMs} ms` : ""}
+                          </span>
+                        ) : null}
+                      </div>
+                      {leg.lastError ? <div className="text-xs text-[var(--fx-down-text)]">最近失败：{leg.lastError}</div> : null}
+                    </div>
                   ))}
-                </tbody>
-              </table>
-            </div>
+                </div>
+              </div>
+            ) : null}
+
+            {data.groups.length > 0 ? (
+              <div className="overflow-x-auto rounded-md border">
+                <table className="w-full min-w-[720px] text-sm">
+                  <thead className="bg-muted/40 text-left text-xs text-muted-foreground">
+                    <tr>
+                      <th className="px-3 py-2 font-medium">主机</th>
+                      <th className="px-3 py-2 font-medium">阶段</th>
+                      <th className="px-3 py-2 font-medium">连向</th>
+                      <th className="px-3 py-2 text-right font-medium">次数</th>
+                      <th className="px-3 py-2 text-right font-medium">成功率</th>
+                      <th className="px-3 py-2 text-right font-medium">平均</th>
+                      <th className="px-3 py-2 text-right font-medium">P50</th>
+                      <th className="px-3 py-2 text-right font-medium">P95</th>
+                      <th className="px-3 py-2 text-right font-medium">最慢</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.groups.map((group) => (
+                      <tr key={`${group.hostId}-${group.role}-${group.stage}-${group.endpoint}`} className="border-t align-top">
+                        <td className="px-3 py-2">
+                          <div className="font-medium">{group.hostName}</div>
+                          <div className="text-xs text-muted-foreground">{connRoleLabel(group.role)}</div>
+                        </td>
+                        <td className="px-3 py-2">{connStageLabel(group.stage)}</td>
+                        <td className="px-3 py-2">
+                          <div className="font-mono text-xs">{group.endpoint}</div>
+                          {group.lastError ? <div className="mt-0.5 text-xs text-[var(--fx-down-text)]">最近失败：{group.lastError}</div> : null}
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums">{group.summary.attempts}</td>
+                        <td className={`px-3 py-2 text-right font-medium tabular-nums ${rateClass(group.summary.successRate)}`}>
+                          {group.summary.successRate === null ? "—" : `${group.summary.successRate}%`}
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums">{group.stage === "pool" ? "—" : formatMs(group.summary.avgMs)}</td>
+                        <td className="px-3 py-2 text-right tabular-nums">{group.stage === "pool" ? "—" : formatMs(group.summary.p50Ms)}</td>
+                        <td className="px-3 py-2 text-right tabular-nums">{group.stage === "pool" ? "—" : formatMs(group.summary.p95Ms)}</td>
+                        <td className="px-3 py-2 text-right tabular-nums">{group.stage === "pool" ? "—" : formatMs(group.summary.maxMs)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
 
             {stagesWithData.length > 0 ? (
               <div className="space-y-2">

@@ -3418,6 +3418,16 @@ function HostsContent() {
                         value={form.entryIp}
                         onChange={(e) => setForm({ ...form, entryIp: e.target.value })}
                       />
+                      {/* 家里的机器当入口（家庭叠加）时，订阅里的地址就是它的内网 IP。 */}
+                      {detectedPrivateIpv4 && !form.entryIp.trim() ? (
+                        <button
+                          type="button"
+                          className="text-left text-xs text-primary hover:underline"
+                          onClick={() => setForm({ ...form, entryIp: detectedPrivateIpv4 })}
+                        >
+                          填内网 IP {detectedPrivateIpv4}
+                        </button>
+                      ) : null}
                     </FormField>
                     <FormField className="space-y-1">
                       <Label className="text-sm">内网地址 <span className="text-xs text-muted-foreground">可选</span></Label>

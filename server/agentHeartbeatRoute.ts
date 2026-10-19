@@ -6266,16 +6266,20 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
             // stripes each client connection over all of them and the exit
             // reassembles it, so one connection can use their combined egress.
             const relayAggregate = isTunnelRelayAggregate(tunnel, tunnelHopsByTunnelId.get(Number(tunnel.id)) || []);
-            const multipathLegs = relayAggregate
-              ? entryRoutes
-                .filter((route) => route.host && Number(route.port) > 0 && route.key)
-                .map((route) => ({
-                  host: route.host,
-                  port: Number(route.port),
-                  key: route.key,
-                  via: `relay#${Number((route as any).hostId || 0)}`,
-                }))
+            const aggregateRoutes = relayAggregate
+              ? entryRoutes.filter((route) => route.host && Number(route.port) > 0 && route.key)
               : [];
+            // 每一路带上那台中转的线路带宽：FXP 一开始就按它给各路分份额，起速更快（实测出来以后以实测为准）。
+            const aggregateBandwidths = aggregateRoutes.length > 0
+              ? await exitBandwidthsForHostIds(aggregateRoutes.map((route) => Number((route as any).hostId || 0)))
+              : [];
+            const multipathLegs: Array<{ host: string; port: number; key: string; via: string; capacityMbps?: number }> = aggregateRoutes.map((route, index) => ({
+              host: route.host,
+              port: Number(route.port),
+              key: route.key,
+              via: `relay#${Number((route as any).hostId || 0)}`,
+              ...(aggregateBandwidths[index] > 0 ? { capacityMbps: aggregateBandwidths[index] } : {}),
+            }));
             // 单连接多路并发：没有并排中转时，把同一个出口（或链的第一跳）重复 N 条腿。
             // 沿线有 Agent 太旧就不拆，按单路下发（原来的「每条连接各走各的」）。
             if (!relayAggregate && normalizeTunnelParallelStreams((tunnel as any).parallelStreams) >= 2) {
