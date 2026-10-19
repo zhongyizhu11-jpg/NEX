@@ -33,6 +33,11 @@ function formatTime(value: string | number | Date) {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
+function formatDay(value: string | number | Date) {
+  const d = new Date(value);
+  return `${d.getMonth() + 1}/${d.getDate()}`;
+}
+
 function formatFullTime(value: string | number | Date) {
   const d = new Date(value);
   return `${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")} ${formatTime(d)}`;
@@ -335,7 +340,7 @@ export default function HostProbeServiceLatencyDialog({
               <DialogDescription>{host?.name ? `${host.name} 最近 ${latencyTimeRangeLabel(timeRangeHours)} 服务探测延迟` : `最近 ${latencyTimeRangeLabel(timeRangeHours)} 服务探测延迟`}</DialogDescription>
             </div>
             <div className="flex flex-wrap items-center gap-2 self-start sm:justify-end">
-              <LatencyTimeRangeSelect value={timeRangeHours} onChange={setTimeRangeHours} />
+              <LatencyTimeRangeSelect value={timeRangeHours} onChange={setTimeRangeHours} long />
               <LatencyPeakCutToggle id={`host-service-peak-cut-${hostId || "current"}`} checked={peakCutEnabled} onCheckedChange={setPeakCutEnabled} className="shrink-0" />
             </div>
           </div>
@@ -397,7 +402,7 @@ export default function HostProbeServiceLatencyDialog({
                   scale="time"
                   domain={chartTimeDomain}
                   tick={{ fontSize: 10 }}
-                  tickFormatter={(value) => formatTime(Number(value))}
+                  tickFormatter={(value) => (timeRangeHours > 24 ? formatDay(Number(value)) : formatTime(Number(value)))}
                   minTickGap={46}
                 />
                 <YAxis tick={{ fontSize: 10 }} tickFormatter={(v) => `${v}ms`} width={52} domain={[0, yMax]} ticks={yTicks} allowDecimals={false} />

@@ -9,6 +9,7 @@ import { executeRaw, getDb, insertAndGetId, nowDate, queryRaw } from "../dbRunti
 import { boolLiteral, bucketExpression, inList, quoteIdentifier } from "../dbCompat";
 import { clampPositiveInt, epochSeconds, reorderRowsBySortOrder } from "./repositoryUtils";
 import { normalizeAgentProbeCounts } from "../../shared/agentDtos";
+import { deleteHostProbeHourlyStats } from "./hostProbeHourlyRepository";
 import { normalizeProbeAddressFamily, type ProbeAddressFamily } from "../../shared/probeFamily";
 
 export type HostProbeMethod = "tcping" | "ping";
@@ -137,6 +138,7 @@ export async function deleteHostProbeService(id: number) {
   const db = await getDb();
   if (!db) return;
   await db.delete(hostProbeServiceStats).where(eq(hostProbeServiceStats.serviceId, id));
+  await deleteHostProbeHourlyStats({ serviceId: id });
   await db.delete(hostProbeServices).where(eq(hostProbeServices.id, id));
 }
 

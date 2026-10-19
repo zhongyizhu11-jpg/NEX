@@ -231,6 +231,7 @@ export const ESSENTIAL_MIGRATION_OMITTED_TABLES = new Set<(typeof MIGRATION_TABL
   "tunnel_latency_stats",
   "forward_group_latency_stats",
   "latency_daily_stats",
+  "host_probe_service_hourly",
   "traffic_stats",
   "traffic_stat_buckets",
   "tcping_stats",
@@ -787,6 +788,7 @@ const IMPORT_TABLE_ORDER = [
   "tunnel_latency_stats",
   "forward_group_latency_stats",
   "latency_daily_stats",
+  "host_probe_service_hourly",
   "traffic_stats",
   "traffic_stat_buckets",
   "agent_traffic_reports",
@@ -851,6 +853,7 @@ const BEST_EFFORT_MIGRATION_TABLES = new Set<MigrationTableName>([
   "tunnel_latency_stats",
   "forward_group_latency_stats",
   "latency_daily_stats",
+  "host_probe_service_hourly",
   "ip_geo_cache",
   "tcping_stats",
   "forward_tests",
@@ -1435,6 +1438,11 @@ async function prepareImportRow(table: string, source: Record<string, any>, maps
       row.targetId = mapRequiredId(maps, targetTable, source.targetId);
       return { row, existingWhere: { targetType: row.targetType, targetId: row.targetId, dayStart: row.dayStart } };
     }
+
+    case "host_probe_service_hourly":
+      row.serviceId = mapRequiredId(maps, "host_probe_services", source.serviceId);
+      row.hostId = mapRequiredId(maps, "hosts", source.hostId);
+      return { row, existingWhere: { serviceId: row.serviceId, hostId: row.hostId, hourStart: row.hourStart } };
 
     case "tcping_stats":
       row.ruleId = mapRequiredId(maps, "forward_rules", source.ruleId);

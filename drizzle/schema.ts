@@ -1338,6 +1338,24 @@ export const latencyDailyStats = table("latency_daily_stats", {
   updatedAt: int("updatedAt").notNull().default(0),
 });
 
+/*
+  主机探测的按小时汇总（server/repositories/hostProbeHourlyRepository.ts）。原始样本只留 72 小时；
+  这张表每个（服务, 主机）每小时一行，留 30 天，服务延迟图表的 7 天 / 30 天读它。
+*/
+export const hostProbeServiceHourly = table("host_probe_service_hourly", {
+  id: serial("id"),
+  serviceId: int("serviceId").notNull(),
+  hostId: int("hostId").notNull(),
+  hourStart: int("hourStart").notNull(),
+  probeCount: bigint("probeCount", { mode: "number" }).notNull().default(0),
+  probeSuccesses: bigint("probeSuccesses", { mode: "number" }).notNull().default(0),
+  latencySum: bigint("latencySum", { mode: "number" }).notNull().default(0),
+  latencyWeight: bigint("latencyWeight", { mode: "number" }).notNull().default(0),
+  minLatencyMs: int("minLatencyMs"),
+  maxLatencyMs: int("maxLatencyMs"),
+  updatedAt: int("updatedAt").notNull().default(0),
+});
+
 export const hostProbeServices = table("host_probe_services", {
   id: serial("id"),
   name: text("name").notNull(),
