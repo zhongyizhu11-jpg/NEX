@@ -372,6 +372,20 @@ test("iperf3 is optional so a node without it still installs", () => {
   assert.ok(deps.indexOf("apt-get install -y -qq iperf3") < deps.indexOf("for B in curl jq iptables od; do"));
 });
 
+test("conntrack 工具单独装：流量用尽「立即断开」靠它清掉内核转发上的连接", () => {
+  const script = generateInstallScript("https://panel.example.com", {});
+  const deps = scriptSection(script, "install_deps() {", '  echo "[信息] 系统依赖就绪"');
+  // 以前只有 OpenWrt 装了，Debian / CentOS 等机器设置页一律报「没有装 conntrack」。
+  for (const manager of ["apt-get install -y -qq conntrack ", "dnf install -y -q conntrack-tools", "yum install -y -q conntrack-tools", "zypper -n install conntrack-tools", "apk add --no-cache conntrack-tools", "pacman -Sy --noconfirm conntrack-tools"]) {
+    assert.ok(deps.includes(manager), manager);
+  }
+  // 和 iperf3 一样不跟核心依赖写在一条命令里，源里没有也不连累 curl / jq。
+  // （OpenWrt 那段是 for 循环一个个装，本来就互不连累。）
+  for (const line of deps.split("\n").filter((item) => /\bjq\b/.test(item) && /(apt-get install|dnf install|yum install|zypper -n install|apk add|pacman -Sy)/.test(item))) {
+    assert.doesNotMatch(line, /conntrack/, line);
+  }
+});
+
 test("dependency install keeps package manager output for diagnosis", () => {
   const script = generateInstallScript("https://panel.example.com", {});
   const deps = scriptSection(script, "install_deps() {", '  echo "[信息] 系统依赖就绪"');
