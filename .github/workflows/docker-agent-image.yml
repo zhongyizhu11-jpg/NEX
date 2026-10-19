@@ -1,0 +1,75 @@
+name: Docker Agent Image
+
+# Docker 版 Agent（docker/agent）：只带依赖和入口脚本，Agent 本身第一次启动时从面板装，
+# 所以镜像很少变；跟着面板发版一起推一份 vX.Y.Z 和 latest，amd64 / arm64 两种。
+on:
+  workflow_call:
+  workflow_dispatch:
+
+env:
+  IMAGE_NAME: ghcr.io/zhongyizhu11-jpg/nex-agent
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: nex-agent-docker-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read package version
+        id: package
+        shell: bash
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./docker/agent/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:v${{ steps.package.outputs.version }}
+            ${{ env.IMAGE_NAME }}:latest
+          labels: |
+            org.opencontainers.image.title=NEX Agent
+            org.opencontainers.image.description=NEX Agent for Docker hosts (NAS, iStoreOS, Unraid)
+            org.opencontainers.image.version=${{ steps.package.outputs.version }}
+          cache-from: type=gha,scope=nex-agent
+          cache-to: type=gha,mode=max,scope=nex-agent
+
+      - name: Verify image
+        shell: bash
+        env:
+          VERSION: ${{ steps.package.outputs.version }}
+        run: |
+          set -euo pipefail
+          for platform in linux/amd64 linux/arm64; do
+            docker run --rm --platform "$platform" --entrypoint bash "${IMAGE_NAME}:v${VERSION}" -c \
+              'set -e; for c in tini curl jq iptables nft ss ip socat pgrep; do command -v "$c" >/dev/null; done; bash -n /usr/local/sbin/nex-agent-entrypoint; echo "ok $(uname -m)"'
+          done
+          # 不给面板地址时要说清楚、退出，而不是空转
+          if docker run --rm "${IMAGE_NAME}:v${VERSION}" 2>err.txt; then echo "::error::missing PANEL_URL should fail"; exit 1; fi
+          grep -q "PANEL_URL" err.txt

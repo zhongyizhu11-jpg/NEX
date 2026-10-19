@@ -132,7 +132,7 @@ export function agentProxyShellFunctions(): string[] {
     '# 已装的 Agent 认不认 proxyUrl。老版本没有 -version 参数，会报错退出。',
     'fwx_agent_supports_proxy() {',
     '  local version',
-    '  version="$("$GO_AGENT_BIN" -version 2>/dev/null | head -n 1 | tr -d "[:space:]")" || version=""',
+    '  version="$("$GO_AGENT_BIN" -version 2>/dev/null | head -n 1 | tr -d " \\t\\n\\r")" || version=""',
     '  [ -n "$version" ] && fwx_version_ge "$version" "$FWX_AGENT_PROXY_MIN_VERSION"',
     '}',
     '',
@@ -302,6 +302,8 @@ export function installManagementCommandFunction(): string[] {
     '    chmod 600 "$dir/agent-proxy.sh.new" && mv -f "$dir/agent-proxy.sh.new" "$dir/agent-proxy.sh"',
     `    install -m 755 "$dir/fwxm.new" "${FWXM_PATH}.new" && mv -f "${FWXM_PATH}.new" "${FWXM_PATH}"`,
     '    rm -f "$dir/fwxm.new"',
+    // OpenWrt 的 PATH 里没有 /usr/local/bin：链一份到 /usr/bin，登录上去直接敲 fwxm。
+    `    if [ -f /etc/openwrt_release ]; then ln -sf "${FWXM_PATH}" /usr/bin/fwxm 2>/dev/null || true; fi`,
     '    echo "[信息] SSH 管理命令: fwxm（查看状态、日志、代理设置、升级）"',
     '  else',
     '    rm -f "$dir/agent-proxy.sh.new" "$dir/fwxm.new"',

@@ -114,6 +114,8 @@ remove_service_by_name() {
   fi
   if [ -x "/etc/init.d/$name" ]; then
     "/etc/init.d/$name" stop 2>/dev/null || true
+    # OpenWrt（procd）：去掉 /etc/rc.d 里的开机链接。
+    if [ -f /etc/openwrt_release ]; then "/etc/init.d/$name" disable >/dev/null 2>&1 || true; fi
   fi
   command -v update-rc.d >/dev/null 2>&1 && update-rc.d -f "$name" remove >/dev/null 2>&1 || true
   command -v chkconfig >/dev/null 2>&1 && chkconfig "$name" off >/dev/null 2>&1 || true

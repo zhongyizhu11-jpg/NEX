@@ -3,6 +3,9 @@ import { spawnSync } from "node:child_process";
 import test from "node:test";
 import {
   AGENT_INSTALL_SCRIPT_RAW_URL,
+  AGENT_DOCKER_IMAGE,
+  AGENT_OPENWRT_BOOTSTRAP,
+  buildAgentDockerCommand,
   buildAgentScriptCommand,
   normalizeAgentCommandUrl,
   shellQuoteSingle,
@@ -126,4 +129,32 @@ test("外层引号经真 bash 拆开后，token 原样落在管线里", () => {
     result.stdout.includes(`install ${shellQuoteSingle(token)}`),
     `管线里应带上引好的 token，实际是：${result.stdout}`,
   );
+});
+
+/**
+ * OpenWrt 上登录 shell 是 busybox ash，没有 bash 和 curl：命令最前面先补上。
+ * 前缀本身要在 sh（dash，和 ash 一样是 POSIX sh）里能解析，别的系统上什么都不做。
+ */
+test("OpenWrt 版：前面补 bash、curl，sh 能解析，没有 openwrt_release 时什么都不做；普通命令不带", () => {
+  const plain = buildAgentScriptCommand({ panelUrl: "https://panel.example.com", action: "install", token: "tok" });
+  assert.ok(plain.startsWith("bash -c "), "普通命令不带 OpenWrt 前缀");
+  const command = buildAgentScriptCommand({ panelUrl: "https://panel.example.com", action: "install", token: "tok", openwrt: true });
+  assert.equal(command, AGENT_OPENWRT_BOOTSTRAP + plain);
+  assert.ok(!AGENT_OPENWRT_BOOTSTRAP.includes(" || "), "前缀里不能有 \" || \"，两条管线靠它分隔");
+  const parse = spawnSync("sh", ["-n", "-c", command], { encoding: "utf8" });
+  assert.equal(parse.status, 0, parse.stderr);
+  const run = spawnSync("sh", ["-c", `${AGENT_OPENWRT_BOOTSTRAP}echo done`], { encoding: "utf8" });
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout.trim(), "done");
+});
+
+test("Docker 版：宿主机网络、配置挂卷、面板地址和 Token 引好，bash 能解析", () => {
+  const command = buildAgentDockerCommand({ panelUrl: "https://panel.example.com/", token: "tok'x" });
+  assert.ok(command.startsWith("docker run -d --name nex-agent --network host"));
+  assert.ok(command.includes("-v nex-agent:/etc/forwardx"));
+  assert.ok(command.includes("-e PANEL_URL='https://panel.example.com'"));
+  assert.ok(command.includes(`-e AGENT_TOKEN=${shellQuoteSingle("tok'x")}`));
+  assert.ok(command.endsWith(AGENT_DOCKER_IMAGE));
+  const parsed = spawnSync("bash", ["-n", "-c", command], { encoding: "utf8" });
+  assert.equal(parsed.status, 0, parsed.stderr);
 });

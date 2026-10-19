@@ -38,7 +38,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.233"
+var Version = "2.2.234"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -8007,6 +8007,27 @@ func writeUnitAndRestart(name, unit string, signature string) bool {
 		}
 		return ok
 	}
+	// OpenWrt / iStoreOS：procd 的 rc.common 脚本，enable 进 /etc/rc.d 开机自启，崩了 procd 拉起来。
+	// 要排在下面的 SysV 之前：OpenWrt 也有 /etc/init.d，但不认 update-rc.d，busybox 也没有 nohup。
+	if isOpenWrtHost() {
+		path := "/etc/init.d/" + name
+		changed, err := writeFileIfChanged(path, []byte(procdServiceScript(name, execStart, systemdUnitLimitNOFILE(unit))), 0755)
+		if err != nil {
+			logf("write procd service %s: %v", name, err)
+			return false
+		}
+		if !changed && managedServiceSignatureMatches(name, signature) && managedServiceActive(name) {
+			logVerbosef("service %s unchanged and active; skip restart", name)
+			return true
+		}
+		_ = runManagedServiceCommand(path, "enable")
+		ok := runManagedServiceCommand(path, "restart")
+		cacheManagedServiceActivity(name, ok)
+		if ok {
+			writeManagedServiceSignature(name, signature)
+		}
+		return ok
+	}
 	if commandExists("rc-service") && commandExists("rc-update") {
 		path := "/etc/init.d/" + name
 		changed, err := writeFileIfChanged(path, []byte(openRCServiceScript(name, execStart, systemdUnitLimitNOFILE(unit))), 0755)
@@ -8456,6 +8477,36 @@ func hardenManagedSystemdUnit(unit string) string {
 	return strings.Join(result, "\n")
 }
 
+// isOpenWrtHost 是 OpenWrt 系（含 iStoreOS、ImmortalWrt）：procd 管服务，/etc/init.d 下是 rc.common 脚本。
+func isOpenWrtHost() bool {
+	if _, err := os.Stat("/etc/openwrt_release"); err != nil {
+		return false
+	}
+	_, err := os.Stat("/etc/rc.common")
+	return err == nil
+}
+
+// procdServiceScript 是 OpenWrt 的服务脚本：procd 起进程、崩了按 respawn 拉起；输出照旧写到 Agent 的日志目录
+// （OpenWrt 的 /var 在内存里，重启就清空）。
+func procdServiceScript(name, execStart, limitNOFILE string) string {
+	cmd := managedServiceNOFILEShell(limitNOFILE) + "ulimit -c 0 2>/dev/null || true; exec " + execStart + " >> /var/log/forwardx-agent/" + name + ".log 2>&1"
+	return strings.Join([]string{
+		"#!/bin/sh /etc/rc.common",
+		"# ForwardX managed service " + name,
+		"USE_PROCD=1",
+		"START=95",
+		"STOP=10",
+		"start_service() {",
+		"  mkdir -p /var/log/forwardx-agent",
+		"  procd_open_instance",
+		"  procd_set_param command /bin/sh -c " + shellQuote(cmd),
+		"  procd_set_param respawn 3600 5 0",
+		"  procd_close_instance",
+		"}",
+		"",
+	}, "\n")
+}
+
 func openRCServiceScript(name, execStart, limitNOFILE string) string {
 	return strings.Join([]string{
 		"#!/sbin/openrc-run",
@@ -8515,6 +8566,8 @@ func managedServiceCleanupShell(name string) string {
 		"if command -v rc-service >/dev/null 2>&1; then rc-service " + q + " stop 2>/dev/null || true; fi; " +
 		"if command -v rc-update >/dev/null 2>&1; then rc-update del " + q + " default 2>/dev/null || true; fi; " +
 		"if [ -x /etc/init.d/" + name + " ]; then /etc/init.d/" + name + " stop 2>/dev/null || true; fi; " +
+		// OpenWrt：去掉 /etc/rc.d 里的开机链接，不然删了脚本还留着悬空链接。
+		"if [ -f /etc/openwrt_release ] && [ -x /etc/init.d/" + name + " ]; then /etc/init.d/" + name + " disable >/dev/null 2>&1 || true; fi; " +
 		"if command -v update-rc.d >/dev/null 2>&1; then update-rc.d -f " + q + " remove >/dev/null 2>&1 || true; fi; " +
 		"if command -v chkconfig >/dev/null 2>&1; then chkconfig " + q + " off >/dev/null 2>&1 || true; fi; " +
 		"rm -f /etc/init.d/" + name + " /var/lib/forwardx-agent/service_" + name + ".signature /var/log/forwardx-agent/" + name + ".log"

@@ -50,7 +50,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { isTokenHostOnline } from "@/lib/agentTokenStatus";
-import { buildAgentScriptCommand, type AgentScriptAction } from "@shared/agentInstallCommand";
+import { buildAgentDockerCommand, buildAgentScriptCommand, type AgentScriptAction } from "@shared/agentInstallCommand";
 import EmptyState from "@/components/EmptyState";
 
 type AgentTokenManagerProps = {
@@ -606,8 +606,9 @@ export default function AgentTokenManager({
    * 这里再抄一遍的话，改了一边忘了另一边，谁也不会发现，直到有人拿着过时的
    * 命令去装机器。
    */
-  const getAgentScriptCommand = (action: AgentScriptAction, token?: string, targetPanelUrl = commandPanelUrl) =>
+  const getAgentScriptCommand = (action: AgentScriptAction, token?: string, targetPanelUrl = commandPanelUrl, openwrt = false) =>
     buildAgentScriptCommand({
+      openwrt,
       panelUrl: normalizeConfigUrl(targetPanelUrl) || panelUrl,
       action,
       token,
@@ -617,6 +618,10 @@ export default function AgentTokenManager({
     });
 
   const getInstallCommand = (token: string) => getAgentScriptCommand("install", token);
+  // OpenWrt / iStoreOS：同一条安装命令，最前面先用 opkg 补上 bash、curl。
+  const getOpenWrtInstallCommand = (token: string) => getAgentScriptCommand("install", token, commandPanelUrl, true);
+  // 装了 Docker 的 NAS、iStoreOS：一行 docker run（docker/agent），Agent 照样从面板装。
+  const getDockerCommand = (token: string) => buildAgentDockerCommand({ panelUrl: normalizeConfigUrl(commandPanelUrl) || panelUrl, token });
   const getUninstallCommand = () => getAgentScriptCommand("uninstall");
   const getUpgradeCommand = () => getAgentScriptCommand("upgrade");
   const openEditToken = (tokenItem: any) => {
@@ -890,6 +895,16 @@ export default function AgentTokenManager({
                 复制安装命令
               </Button>
             </div>
+            <CommandRow
+              label="OpenWrt / iStoreOS"
+              command={getOpenWrtInstallCommand(newToken)}
+              onCopy={() => copyToClipboard(getOpenWrtInstallCommand(newToken))}
+            />
+            <CommandRow
+              label="Docker（NAS 等装了 Docker 的设备）"
+              command={getDockerCommand(newToken)}
+              onCopy={() => copyToClipboard(getDockerCommand(newToken))}
+            />
           </div>
           <DialogFooter>
             <Button onClick={() => setShowNewToken(false)}>确定</Button>
@@ -1005,6 +1020,18 @@ export default function AgentTokenManager({
               command={scriptToken ? getInstallCommand(scriptToken) : ""}
               copyDisabled={!scriptToken}
               onCopy={() => scriptToken && copyToClipboard(getInstallCommand(scriptToken))}
+            />
+            <CommandRow
+              label="OpenWrt / iStoreOS"
+              command={scriptToken ? getOpenWrtInstallCommand(scriptToken) : ""}
+              copyDisabled={!scriptToken}
+              onCopy={() => scriptToken && copyToClipboard(getOpenWrtInstallCommand(scriptToken))}
+            />
+            <CommandRow
+              label="Docker（NAS 等装了 Docker 的设备）"
+              command={scriptToken ? getDockerCommand(scriptToken) : ""}
+              copyDisabled={!scriptToken}
+              onCopy={() => scriptToken && copyToClipboard(getDockerCommand(scriptToken))}
             />
             <CommandRow
               label="卸载命令"

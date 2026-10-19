@@ -676,6 +676,32 @@ function openRcScript(svcName: string, execStart: string) {
   ].join("\n");
 }
 
+/**
+ * OpenWrt / iStoreOS（procd）：rc.common 脚本，procd 起进程、崩了按 respawn 拉起，enable 进 /etc/rc.d 开机自启。
+ * 和 agent/main.go 的 procdServiceScript 同一个样子。
+ */
+function procdScript(svcName: string, execStart: string) {
+  const cmd = `ulimit -c 0 2>/dev/null || true; exec ${execStart} >> /var/log/forwardx-agent/${svcName}.log 2>&1`;
+  return [
+    "#!/bin/sh /etc/rc.common",
+    `# ForwardX managed service ${svcName}`,
+    "USE_PROCD=1",
+    "START=95",
+    "STOP=10",
+    "start_service() {",
+    "  mkdir -p /var/log/forwardx-agent",
+    "  procd_open_instance",
+    `  procd_set_param command /bin/sh -c ${shQuote(cmd)}`,
+    "  procd_set_param respawn 3600 5 0",
+    "  procd_close_instance",
+    "}",
+    "",
+  ].join("\n");
+}
+
+/** 这台是 OpenWrt 系（procd）：放在 systemd 之后、OpenRC / SysV 之前判断。 */
+const OPENWRT_PROCD_TEST = "[ -f /etc/openwrt_release ] && [ -f /etc/rc.common ]";
+
 function sysVScript(svcName: string, execStart: string) {
   return [
     "#!/bin/sh",
@@ -712,13 +738,14 @@ export function writeManagedServiceCmd(svcNameRaw: string, unit: string) {
   const unitB64 = Buffer.from(boundedUnit, "utf8").toString("base64");
   const openRcB64 = Buffer.from(openRcScript(svcName, execStart), "utf8").toString("base64");
   const sysVB64 = Buffer.from(sysVScript(svcName, execStart), "utf8").toString("base64");
-  return `mkdir -p /var/log/forwardx-agent; if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then mkdir -p /etc/systemd/system; unit_path=/etc/systemd/system/${svcName}.service; unit_tmp="$unit_path.forwardx-new.$$"; printf '%s' '${unitB64}' | base64 -d > "$unit_tmp" || { rm -f "$unit_tmp"; exit 1; }; if [ ! -f "$unit_path" ] || ! cmp -s "$unit_tmp" "$unit_path"; then mv -f "$unit_tmp" "$unit_path"; chmod 644 "$unit_path"; systemctl daemon-reload; else rm -f "$unit_tmp"; fi; systemctl reset-failed ${q}.service 2>/dev/null || true; elif command -v rc-service >/dev/null 2>&1 && command -v rc-update >/dev/null 2>&1; then script_path=/etc/init.d/${svcName}; script_tmp="$script_path.forwardx-new.$$"; printf '%s' '${openRcB64}' | base64 -d > "$script_tmp" || { rm -f "$script_tmp"; exit 1; }; if [ ! -f "$script_path" ] || ! cmp -s "$script_tmp" "$script_path"; then mv -f "$script_tmp" "$script_path"; chmod 755 "$script_path"; else rm -f "$script_tmp"; fi; elif [ -d /etc/init.d ]; then script_path=/etc/init.d/${svcName}; script_tmp="$script_path.forwardx-new.$$"; printf '%s' '${sysVB64}' | base64 -d > "$script_tmp" || { rm -f "$script_tmp"; exit 1; }; if [ ! -f "$script_path" ] || ! cmp -s "$script_tmp" "$script_path"; then mv -f "$script_tmp" "$script_path"; chmod 755 "$script_path"; else rm -f "$script_tmp"; fi; else echo "[service] unsupported init system for ${svcName}"; exit 1; fi`;
+  const procdB64 = Buffer.from(procdScript(svcName, execStart), "utf8").toString("base64");
+  return `mkdir -p /var/log/forwardx-agent; if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then mkdir -p /etc/systemd/system; unit_path=/etc/systemd/system/${svcName}.service; unit_tmp="$unit_path.forwardx-new.$$"; printf '%s' '${unitB64}' | base64 -d > "$unit_tmp" || { rm -f "$unit_tmp"; exit 1; }; if [ ! -f "$unit_path" ] || ! cmp -s "$unit_tmp" "$unit_path"; then mv -f "$unit_tmp" "$unit_path"; chmod 644 "$unit_path"; systemctl daemon-reload; else rm -f "$unit_tmp"; fi; systemctl reset-failed ${q}.service 2>/dev/null || true; elif ${OPENWRT_PROCD_TEST}; then script_path=/etc/init.d/${svcName}; script_tmp="$script_path.forwardx-new.$$"; printf '%s' '${procdB64}' | base64 -d > "$script_tmp" || { rm -f "$script_tmp"; exit 1; }; if [ ! -f "$script_path" ] || ! cmp -s "$script_tmp" "$script_path"; then mv -f "$script_tmp" "$script_path"; chmod 755 "$script_path"; else rm -f "$script_tmp"; fi; elif command -v rc-service >/dev/null 2>&1 && command -v rc-update >/dev/null 2>&1; then script_path=/etc/init.d/${svcName}; script_tmp="$script_path.forwardx-new.$$"; printf '%s' '${openRcB64}' | base64 -d > "$script_tmp" || { rm -f "$script_tmp"; exit 1; }; if [ ! -f "$script_path" ] || ! cmp -s "$script_tmp" "$script_path"; then mv -f "$script_tmp" "$script_path"; chmod 755 "$script_path"; else rm -f "$script_tmp"; fi; elif [ -d /etc/init.d ]; then script_path=/etc/init.d/${svcName}; script_tmp="$script_path.forwardx-new.$$"; printf '%s' '${sysVB64}' | base64 -d > "$script_tmp" || { rm -f "$script_tmp"; exit 1; }; if [ ! -f "$script_path" ] || ! cmp -s "$script_tmp" "$script_path"; then mv -f "$script_tmp" "$script_path"; chmod 755 "$script_path"; else rm -f "$script_tmp"; fi; else echo "[service] unsupported init system for ${svcName}"; exit 1; fi`;
 }
 
 export function startManagedServiceCmd(svcNameRaw: string) {
   const svcName = serviceName(svcNameRaw);
   const q = shQuote(svcName);
-  return `if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then systemctl enable ${q}.service 2>/dev/null || true; systemctl restart ${q}.service || { systemctl status ${q}.service --no-pager -l 2>/dev/null || true; journalctl -u ${q}.service -n 80 --no-pager 2>/dev/null || true; exit 1; }; elif command -v rc-service >/dev/null 2>&1 && command -v rc-update >/dev/null 2>&1; then rc-update add ${q} default >/dev/null 2>&1 || true; rc-service ${q} restart || { rc-service ${q} status 2>/dev/null || true; exit 1; }; elif [ -x /etc/init.d/${svcName} ]; then command -v update-rc.d >/dev/null 2>&1 && update-rc.d ${q} defaults >/dev/null 2>&1 || true; command -v chkconfig >/dev/null 2>&1 && chkconfig ${q} on >/dev/null 2>&1 || true; /etc/init.d/${svcName} restart; else echo "[service] missing init script for ${svcName}"; exit 1; fi`;
+  return `if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then systemctl enable ${q}.service 2>/dev/null || true; systemctl restart ${q}.service || { systemctl status ${q}.service --no-pager -l 2>/dev/null || true; journalctl -u ${q}.service -n 80 --no-pager 2>/dev/null || true; exit 1; }; elif ${OPENWRT_PROCD_TEST} && [ -x /etc/init.d/${svcName} ]; then /etc/init.d/${svcName} enable >/dev/null 2>&1 || true; /etc/init.d/${svcName} restart; elif command -v rc-service >/dev/null 2>&1 && command -v rc-update >/dev/null 2>&1; then rc-update add ${q} default >/dev/null 2>&1 || true; rc-service ${q} restart || { rc-service ${q} status 2>/dev/null || true; exit 1; }; elif [ -x /etc/init.d/${svcName} ]; then command -v update-rc.d >/dev/null 2>&1 && update-rc.d ${q} defaults >/dev/null 2>&1 || true; command -v chkconfig >/dev/null 2>&1 && chkconfig ${q} on >/dev/null 2>&1 || true; /etc/init.d/${svcName} restart; else echo "[service] missing init script for ${svcName}"; exit 1; fi`;
 }
 
 export function restartManagedServiceIfConfigChangedCmd(svcNameRaw: string, configPath: string) {
