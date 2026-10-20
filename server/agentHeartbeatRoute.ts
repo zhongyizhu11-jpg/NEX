@@ -2547,7 +2547,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       出口还没报（规则刚建、出口 Agent 太旧、落地失效、撑不起 UDP / SS2022……）时这条规则按停用下发，绝不退回直连：
       退回直连会让流量换一个出口 IP，用户以为在走落地，其实没有。
 
-      停不停用要在下面生成 gostRules 之前定下来；出口机自己的端口要等分完守卫端口才分（见 allocateTunnelEgressHelperPorts）。
+      停不停用要在下面生成 gostRules 之前定下来；出口机自己的端口要等分完守卫端口才分（见下面 failoverProxyPort 之后那一段）。
     */
     await loadTunnelExitPorts();
     type TunnelEgressHelper = { ruleId: number; tunnel: any; runtime: SsEgressRuntime; targetHost: string; targetPort: number; protocol: string; port: number };
@@ -2614,7 +2614,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
           protocol: String(rule.protocol || "both"),
           port: 0,
         });
-        // 本机跑着这条规则的 SS 客户端：目标等分完端口再换（allocateTunnelEgressHelperPorts），不用等别的出口。
+        // 本机跑着这条规则的 SS 客户端：目标等分完端口再换（分守卫端口之后那一段），不用等别的出口。
         continue;
       }
       const pending = dialHostIds.filter((exitHostId) => !hasTunnelExitPort(exitHostId, "egress", ruleId));
