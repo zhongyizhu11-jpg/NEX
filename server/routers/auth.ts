@@ -645,7 +645,6 @@ export const authRouter = router({
       email: z.string().email().max(320).optional(),
       displayRemark: z.string().trim().max(24).nullable().optional(),
       telegramAnnouncementSubscribed: z.boolean().optional(),
-      compactLayout: z.boolean().optional(),
     }))
     .mutation(async ({ input, ctx }) => {
       await db.updateUserProfile(ctx.user.id, {

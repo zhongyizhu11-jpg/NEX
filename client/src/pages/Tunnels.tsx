@@ -78,8 +78,6 @@ import {
 import { OptimisticSwitch, Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { SlidingTabsList, type SlidingTabItem } from "@/components/ui/sliding-tabs";
-import { FilterChips, type FilterChipItem } from "@/components/ui/filter-chips";
-import { useCompactLayout } from "@/hooks/useCompactLayout";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Table,
@@ -832,32 +830,6 @@ const TUNNEL_SECTION_ITEMS = [
   { value: "exits", label: "出口组", icon: LogOut },
   { value: "routes", label: "线路总览", icon: Waypoints },
 ] as const satisfies readonly SlidingTabItem<TunnelSection>[];
-
-/*
-  精简布局（useCompactLayout）：顶上只放 4 个——线路 / 端口转发 / 组 / 总览。「线路」底下一排药丸在
-  隧道、转发链、叠加之间切，「组」底下在转发组、入口组、出口组之间切；切的还是原来那几页，数据和功能不变。
-*/
-const COMPACT_LINE_SECTIONS = [
-  { value: "tunnels", label: "隧道" },
-  { value: "chains", label: "转发链" },
-  { value: "aggregates", label: "叠加" },
-] as const satisfies readonly FilterChipItem<TunnelSection>[];
-const COMPACT_GROUP_SECTIONS = [
-  { value: "groups", label: "转发组" },
-  { value: "entries", label: "入口组" },
-  { value: "exits", label: "出口组" },
-] as const satisfies readonly FilterChipItem<TunnelSection>[];
-
-function compactSectionItems(activeSection: TunnelSection): SlidingTabItem<TunnelSection>[] {
-  const line = COMPACT_LINE_SECTIONS.some((item) => item.value === activeSection) ? activeSection : "tunnels";
-  const group = COMPACT_GROUP_SECTIONS.some((item) => item.value === activeSection) ? activeSection : "groups";
-  return [
-    { value: line, label: "线路", icon: Network },
-    { value: "ports", label: "端口转发", icon: ArrowRightLeft },
-    { value: group, label: "组", icon: ShieldCheck },
-    { value: "routes", label: "总览", icon: Waypoints },
-  ];
-}
 
 const TUNNEL_SECTION_STORAGE_KEY = "forwardx.tunnels.section";
 const TUNNEL_VIEW_MODE_STORAGE_KEY = "forwardx.tunnels.viewMode";
@@ -2265,7 +2237,6 @@ function TunnelsContent() {
   const [testTunnel, setTestTunnel] = useState<{ id: number; name: string } | null>(null);
   const [viewMode, setViewMode] = useState<TunnelViewMode>(() => getStoredTunnelViewMode());
   const [chainViewMode, setChainViewMode] = useState<TunnelViewMode>(() => getStoredChainViewMode());
-  const compactLayout = useCompactLayout();
   const [activeSection, setActiveSection] = useUrlTab<TunnelSection>({
     values: TUNNEL_SECTIONS,
     defaultValue: "tunnels",
@@ -4330,10 +4301,6 @@ function TunnelsContent() {
     // 近 24H 可用率：≥ 99% 绿、≥ 90% 琥珀、更低红
     const availPct = spark?.availabilityPct ?? null;
     const availTone = availPct == null ? null : availPct >= 99 ? "healthy" : availPct >= 90 ? "warn" : "down";
-    // 精简布局：一点数据都没有（没测过、没有走势、没有可用率）的卡片，底下只留一行字，不画空图。
-    const historySummaries = historyByTunnel.get(Number(tunnel.id));
-    const noLatencyData = !hasLatency && !(spark?.values?.length) && availPct == null && !(Array.isArray(historySummaries) && historySummaries.length);
-    const oneLineFoot = compactLayout && noLatencyData;
     return (
       <Card
         {...sortable.itemProps}
@@ -4380,9 +4347,6 @@ function TunnelsContent() {
             {renderTunnelRoute(tunnel, true, hopCount <= 3 && !hasEntryGroup ? "horizontal" : "auto", false)}
           </div>
           <ResourceTrafficLine summary={tunnel.trafficSummary} className="mt-1.5" />
-          {oneLineFoot ? (
-            <div className="mt-1.5 text-[13px] text-muted-foreground">{broken ? "不通" : timeout ? "超时" : "未测试"} · 还没有延迟记录</div>
-          ) : (
           <div className="fx-tunnel-foot">
             {hasLatency ? (
               <div className="fx-rule-num"><b>{Math.round(latencyMs)}</b><small>ms</small></div>
@@ -4410,11 +4374,10 @@ function TunnelsContent() {
               </span>
             </div>
           </div>
-          )}
-          {supported && !oneLineFoot ? (
+          {supported ? (
             <LatencyHistoryDayStrip
               variant="compact"
-              summaries={historySummaries}
+              summaries={historyByTunnel.get(Number(tunnel.id))}
               loading={!tunnelHistoryRows}
               className="mt-2"
             />
@@ -4481,13 +4444,7 @@ function TunnelsContent() {
       </>} />
 
       <Tabs value={activeSection} onValueChange={(value) => setActiveSection(value as TunnelSection)} className="space-y-4">
-        <SlidingTabsList items={compactLayout ? compactSectionItems(activeSection) : TUNNEL_SECTION_ITEMS} activeValue={activeSection} ariaLabel="链路管理" minItemWidthRem={7.75} />
-        {compactLayout && COMPACT_LINE_SECTIONS.some((item) => item.value === activeSection) ? (
-          <FilterChips items={COMPACT_LINE_SECTIONS} value={activeSection} onChange={setActiveSection} ariaLabel="线路类型" />
-        ) : null}
-        {compactLayout && COMPACT_GROUP_SECTIONS.some((item) => item.value === activeSection) ? (
-          <FilterChips items={COMPACT_GROUP_SECTIONS} value={activeSection} onChange={setActiveSection} ariaLabel="组的用途" />
-        ) : null}
+        <SlidingTabsList items={TUNNEL_SECTION_ITEMS} activeValue={activeSection} ariaLabel="链路管理" minItemWidthRem={7.75} />
 
       {/* 搜索栏一行，和主机管理一样：小搜索框在左、「新建链路」在最右；条数只在搜索时出现。 */}
       <div className="flex min-w-0 items-center gap-2">

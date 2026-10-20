@@ -53,8 +53,7 @@ import {
 import { OptimisticSwitch, Switch } from "@/components/ui/switch";
 import { Tabs } from "@/components/ui/tabs";
 import { SlidingTabsList, type SlidingTabItem } from "@/components/ui/sliding-tabs";
-import { FilterChips, type FilterChipItem } from "@/components/ui/filter-chips";
-import { useCompactLayout } from "@/hooks/useCompactLayout";
+import type { FilterChipItem } from "@/components/ui/filter-chips";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Table,
@@ -2018,9 +2017,6 @@ function downloadRuleTransferFiles(
 function RulesContent() {
   const confirmDialog = useConfirmDialog();
   const { user } = useAuth();
-  const compactLayout = useCompactLayout();
-  // 精简布局下规则框不要那几行解释小字（谁开了精简布局都一样）。
-  const hideRuleFormHints = compactLayout;
   const [, setLocation] = useLocation();
   const search = useSearch();
   const isMobile = useIsMobile();
@@ -2217,8 +2213,7 @@ function RulesContent() {
     手机上原来被写死成 standard —— 而 standard 卡在 390px 的屏幕上有 850px 高，
     一屏连一条规则都放不下。紧凑卡本来就是为这种宽度做的，这里改成手机默认紧凑。
   */
-  // 精简布局：桌面上也用紧凑卡片（流量大数字和走势线在卡片里不画，见 renderRuleCard）。
-  const effectiveRuleCardSize: RuleCardSize = isMobile || compactLayout ? "compact" : ruleCardSize;
+  const effectiveRuleCardSize: RuleCardSize = isMobile ? "compact" : ruleCardSize;
   const [rulePageSize, setRulePageSize] = useState<RulePageSize>(() =>
     getStoredRulePageSize(getStoredRuleCardSize() === "compact" ? 24 : 12)
   );
@@ -3410,27 +3405,6 @@ function RulesContent() {
       disabled: !canUseFailoverGroup || (routeModeLocked && form.routeMode !== "group"),
     },
   ];
-  /*
-    精简布局：规则框只放 3 个页签——端口转发 / 线路 / 转发组。「线路」底下一排药丸在隧道、叠加、转发链之间切，
-    切的还是原来那几种（和链路管理的「线路」一样）。
-  */
-  const compactLineTabs = routeModeTabItems.filter((item) => item.value === "tunnel" || item.value === "aggregate" || item.value === "chain");
-  const compactLineChips: FilterChipItem<RuleRouteTab>[] = compactLineTabs.map((item) => ({
-    value: item.value,
-    label: item.value === "tunnel" ? "隧道" : item.value === "aggregate" ? "叠加" : "转发链",
-    disabled: item.disabled,
-  }));
-  const routeTabIsLine = compactLineTabs.some((item) => item.value === routeTab);
-  const compactRouteTabItems: SlidingTabItem<RuleRouteTab>[] = [
-    routeModeTabItems.find((item) => item.value === "local")!,
-    {
-      value: routeTabIsLine ? routeTab : (compactLineTabs.find((item) => !item.disabled)?.value ?? "tunnel"),
-      label: "线路",
-      icon: Network,
-      disabled: compactLineTabs.every((item) => item.disabled),
-    },
-    routeModeTabItems.find((item) => item.value === "group")!,
-  ];
   useEffect(() => {
     const params = new URLSearchParams(search);
     if (params.get("create") !== "local") return;
@@ -4490,26 +4464,10 @@ function RulesContent() {
     { value: "chain", label: desktopRuleTypeLabels.chain, count: ruleCategoryCountsReady ? ruleCategoryCounts.chain : null },
     { value: "group", label: desktopRuleTypeLabels.group, count: ruleCategoryCountsReady ? ruleCategoryCounts.group : null },
   ], [ruleCategoryCounts, ruleCategoryCountsReady]);
-  /*
-    精简布局：分类条是 全部 / 端口转发 / 线路 / 转发组，「线路」= 隧道转发 + 转发链（数字是两者之和），
-    选中「线路」时底下一排药丸在两者之间切 —— 过滤还是原来那两类。
-  */
-  const ruleCategoryIsLine = ruleCategory === "tunnel" || ruleCategory === "chain";
-  const ruleCategoryTabItems = useMemo<SlidingTabItem<RuleCategory>[]>(() => {
-    const full = ruleCategoryItems.map((item) => ({ value: item.value, label: item.label, badge: item.count ?? undefined }));
-    if (!compactLayout) return full;
-    const byValue = new Map(full.map((item) => [item.value, item] as const));
-    const lineCount = ruleCategoryCountsReady ? ruleCategoryCounts.tunnel + ruleCategoryCounts.chain : undefined;
-    return [
-      byValue.get("all")!,
-      byValue.get("local")!,
-      { value: ruleCategoryIsLine ? ruleCategory : "tunnel", label: "线路", badge: lineCount },
-      byValue.get("group")!,
-    ];
-  }, [ruleCategoryItems, compactLayout, ruleCategoryIsLine, ruleCategory, ruleCategoryCounts, ruleCategoryCountsReady]);
-  const ruleLineCategoryChips = useMemo<FilterChipItem<RuleCategory>[]>(() => ruleCategoryItems
-    .filter((item) => item.value === "tunnel" || item.value === "chain")
-    .map((item) => ({ ...item, label: item.value === "tunnel" ? "隧道" : "转发链" })), [ruleCategoryItems]);
+  const ruleCategoryTabItems = useMemo<SlidingTabItem<RuleCategory>[]>(
+    () => ruleCategoryItems.map((item) => ({ value: item.value, label: item.label, badge: item.count ?? undefined })),
+    [ruleCategoryItems],
+  );
   const visibleRuleIdsForMetrics = useMemo(() => (
     Array.from(new Set(filteredRules.map((rule: any) => Number(rule.id)).filter((id: number) => Number.isInteger(id) && id > 0)))
       .sort((a, b) => a - b)
@@ -7488,8 +7446,7 @@ function RulesContent() {
             </div>
           </div>
 
-          {/* 精简布局：累计流量、24 小时走势不在卡片上画，点进规则再看；卡片只剩名字、状态、地址和延迟。 */}
-          {compactLayout ? null : <div className="fx-rule-big">
+          <div className="fx-rule-big">
             <div
               className="fx-rule-num"
               title={total ? `累计入向 ${formatBytes(Number(total.bytesIn || 0))} / 出向 ${formatBytes(Number(total.bytesOut || 0))}` : "还没有流量"}
@@ -7510,7 +7467,7 @@ function RulesContent() {
                 {dailyBytes > 0 ? `↓ ${formatBytes(Number(daily?.bytesIn || 0))} · ↑ ${formatBytes(Number(daily?.bytesOut || 0))}` : "没有流量"}
               </span>
             </div>
-          </div>}
+          </div>
 
           {alerts.length > 0 ? (
             <div className="fx-rule-alerts">{alerts}</div>
@@ -7744,9 +7701,6 @@ function RulesContent() {
               ariaLabel="转发规则分类"
             />
           </Tabs>
-          {compactLayout && ruleCategoryIsLine ? (
-            <FilterChips items={ruleLineCategoryChips} value={ruleCategory} onChange={(value) => handleRuleCategoryChange(value)} ariaLabel="线路类型" />
-          ) : null}
           <FilterToolbar
             activeCount={Number(hasActiveUserFilter) + Number(filterResource !== "all")}
             action={createRuleAction}
@@ -8139,17 +8093,14 @@ function RulesContent() {
               className="space-y-3"
             >
               <SlidingTabsList
-                items={compactLayout ? compactRouteTabItems : routeModeTabItems}
+                items={routeModeTabItems}
                 activeValue={routeTab}
                 ariaLabel="转发规则类型"
                 minItemWidthRem={5.75}
               />
             </Tabs>
-            {compactLayout && routeTabIsLine ? (
-              <FilterChips items={compactLineChips} value={routeTab} onChange={(value) => selectRouteTab(value)} ariaLabel="线路类型" />
-            ) : null}
             {/* 选中的走法一句话说清楚适合什么（features/rules/routeModeHints）。编辑时走法定了，不再说。 */}
-            {!editingId && !hideRuleFormHints && (
+            {!editingId && (
               <p className="-mt-1 text-meta leading-5 text-muted-foreground" data-testid="route-mode-hint">
                 {ROUTE_MODE_HINTS[routeTab]}
               </p>
@@ -8331,23 +8282,18 @@ function RulesContent() {
               源端口
               {sourcePortRequired
               ? <span className="text-destructive">*</span>
-              : hideRuleFormHints ? null : <span className="text-xs font-normal text-muted-foreground">留空随机分配</span>}
+              : <span className="text-xs font-normal text-muted-foreground">留空随机分配</span>}
               </Label>
-              {/* 精简布局：范围写进输入框占位里，超范围时下面一行红字直接说能用哪些。 */}
-              {hideRuleFormHints ? null : (
               <span className="truncate text-xs text-muted-foreground" title={`允许端口范围: ${sourcePortRangeText}`}>
               {sourcePortRangeText}
               </span>
-              )}
               </div>
               <div className="flex gap-2">
               <div className="relative min-w-0 flex-1">
               <Input
               type="text"
               pattern="[0-9]*"
-              placeholder={hideRuleFormHints && sourcePortRangeText !== "不限制"
-                ? `${sourcePortRangeText}${sourcePortRequired ? "" : "，留空随机"}`
-                : sourcePortRequired ? "例如 8080" : "留空随机分配"}
+              placeholder={sourcePortRequired ? "例如 8080" : "留空随机分配"}
               value={form.sourcePort || ""}
               inputMode="numeric"
               onChange={(e) => {
@@ -8386,11 +8332,6 @@ function RulesContent() {
               <Shuffle className="h-4 w-4" />
               </Button>
               </div>
-              {portStatus === "used" && portStatusHint?.title ? (
-              <p className="text-[12px] leading-5 text-destructive" data-testid="source-port-reminder">
-              {portRangeError && sourcePortRangeText !== "不限制" ? `${portStatusHint.title}（可用：${sourcePortRangeText}）` : portStatusHint.title}
-              </p>
-              ) : null}
               </div>
               )}
               <FormField className={isSniEntryMode ? "col-span-2 space-y-1.5" : "col-span-2 space-y-1.5 sm:col-span-1"}>
@@ -8526,7 +8467,7 @@ function RulesContent() {
                       怎么用？
                     </a>
                   </div>
-                  <p className={cn("text-meta leading-5 text-muted-foreground", hideRuleFormHints && "hidden")}>
+                  <p className="text-meta leading-5 text-muted-foreground">
                     一个入口后面挂几条路径（可以经过中转），出问题自动换，也能定时、择优、按权重分流
                     {canAutoSwitchMainBackupToGost && !form.failoverEnabled ? "（勾上后转发工具会换成 GOST，切换要靠它）" : ""}
                   </p>
@@ -8565,7 +8506,7 @@ function RulesContent() {
             )}
             {/* 规则名称放在外面：改名是常事，折进「更多设置」每次都要先展开才找得到。留空照样自动生成。 */}
             <FormField className="space-y-2">
-              <Label className="flex items-baseline gap-1.5">规则名称{hideRuleFormHints ? null : <span className="text-xs font-normal text-muted-foreground">留空自动生成</span>}</Label>
+              <Label className="flex items-baseline gap-1.5">规则名称<span className="text-xs font-normal text-muted-foreground">留空自动生成</span></Label>
               <Input
                 placeholder={autoForwardRuleName(form) || "例如: Web 服务转发"}
                 maxLength={128}
@@ -8633,7 +8574,7 @@ function RulesContent() {
             <FormField className={`flex min-h-10 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between${telegramBotReady ? "" : " opacity-60"}`}>
             <div className="min-w-0 space-y-0.5">
             <Label className="text-sm font-medium">异常TG提醒</Label>
-            <p className={cn("text-xs text-muted-foreground", hideRuleFormHints && telegramBotReady && "hidden")}>
+            <p className="text-xs text-muted-foreground">
             {telegramBotReady ? "规则运行异常时提醒已绑定 Telegram 的管理员。" : "请先在系统设置中配置并启用 TG 机器人。"}
             </p>
             </div>
@@ -8651,7 +8592,7 @@ function RulesContent() {
             <FormField className="flex min-h-10 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0 space-y-0.5">
             <Label className="text-sm font-medium">专属域名</Label>
-            <p className={cn("text-xs text-muted-foreground", hideRuleFormHints && "hidden")}>
+            <p className="text-xs text-muted-foreground">
             开着时订阅里用固定域名 r&lt;规则ID&gt;.&lt;后缀&gt;，换隧道 / 换入口不用刷新订阅；关掉就直接用入口地址。
             </p>
             </div>

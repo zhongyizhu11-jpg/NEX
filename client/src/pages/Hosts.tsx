@@ -94,7 +94,6 @@ import {
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SlidingTabsList, type SlidingTabItem } from "@/components/ui/sliding-tabs";
-import { useCompactLayout } from "@/hooks/useCompactLayout";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import DataSectionLoading from "@/components/DataSectionLoading";
 import DataSectionError from "@/components/DataSectionError";
@@ -611,7 +610,6 @@ type HostFormData = {
   rateLimitMbps: number;
   /** 线路带宽（Mbps，0 = 没填）：负载均衡按它分连接。 */
   lineBandwidthMbps: number;
-  ipWhitelistOnly: boolean;
 };
 
 const defaultFormData: HostFormData = {
@@ -654,7 +652,6 @@ const defaultFormData: HostFormData = {
   flowOffload: false,
   rateLimitMbps: 0,
   lineBandwidthMbps: 0,
-  ipWhitelistOnly: false,
 };
 
 function clampMonthlyResetDay(value: number) {
@@ -1567,7 +1564,6 @@ const HostTableRow = memo(function HostTableRow({
 
 function HostsContent() {
   const { user } = useAuth();
-  const compactLayout = useCompactLayout();
   const confirmDialog = useConfirmDialog();
   const utils = trpc.useUtils();
   const pageVisible = usePageVisible();
@@ -1752,17 +1748,7 @@ function HostsContent() {
   const [tokenViewMode, setTokenViewMode] = useState<AgentTokenViewMode>(() => getStoredAgentTokenViewMode());
   const [serviceViewMode, setServiceViewMode] = useState<HostProbeServiceViewMode>(() => getStoredHostProbeServiceViewMode());
   const [hostGroupViewMode, setHostGroupViewMode] = useState<HostGroupViewMode>(() => getStoredHostGroupViewMode());
-  /*
-    精简布局：管理员顶上只放「主机 / 分组」；Token 管理、服务管理挪进「•••」菜单，正在看哪一个时它临时出现在
-    分类条上（知道自己在哪、点「主机」回去）。
-  */
-  const hostManageTabItems = user?.role !== "admin"
-    ? HOST_MANAGE_TAB_ITEMS_USER
-    : compactLayout
-      ? HOST_MANAGE_TAB_ITEMS_ADMIN
-        .filter((item) => item.value === "hosts" || item.value === "groups" || item.value === activeManageTab)
-        .map((item) => ({ ...item, label: item.value === "hosts" ? "主机" : item.value === "groups" ? "分组" : item.label }))
-      : HOST_MANAGE_TAB_ITEMS_ADMIN;
+  const hostManageTabItems = user?.role === "admin" ? HOST_MANAGE_TAB_ITEMS_ADMIN : HOST_MANAGE_TAB_ITEMS_USER;
   /*
     这一页的实时数据统一一个节奏（原来是几个查询各 2 秒、各自错开地刷）：桌面 3 秒；
     手机上或机器很多时 5 秒。切到后台照旧停。
@@ -2193,7 +2179,6 @@ function HostsContent() {
       flowOffload: !!host.flowOffload,
       rateLimitMbps: Math.max(0, Math.floor(Number(host.rateLimitMbps) || 0)),
       lineBandwidthMbps: Math.max(0, Math.floor(Number(host.lineBandwidthMbps) || 0)),
-      ipWhitelistOnly: !!host.ipWhitelistOnly,
     });
     setEditingId(host.id);
     setEditingHostSnapshot(host);
@@ -2334,7 +2319,6 @@ function HostsContent() {
         ...flowOffloadPayload,
         ...hostRateLimitPayload,
         lineBandwidthMbps: form.lineBandwidthMbps,
-        ipWhitelistOnly: form.ipWhitelistOnly,
       });
     } else {
       const ip = (form.ip || entry || "unknown").trim();
@@ -2352,7 +2336,6 @@ function HostsContent() {
         ...protocolPolicyPayload,
         ...egressShapingPayload,
         lineBandwidthMbps: form.lineBandwidthMbps,
-        ipWhitelistOnly: form.ipWhitelistOnly,
       });
     }
   };
@@ -2659,16 +2642,6 @@ function HostsContent() {
                   <DropdownMenuItem disabled={onlineOutdatedCount === 0 || upgradeAgentsMutation.isPending} onSelect={requestAllAgentUpgrades}>
                     <Download className="h-4 w-4" />升级在线 Agent
                   </DropdownMenuItem>
-                  {compactLayout ? (
-                    <>
-                      <DropdownMenuItem onSelect={() => setActiveManageTab("tokens")}>
-                        <Key className="h-4 w-4" />Token 管理
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onSelect={() => setActiveManageTab("services")}>
-                        <Rows3 className="h-4 w-4" />服务管理
-                      </DropdownMenuItem>
-                    </>
-                  ) : null}
                   <OpsHostsMenuItems />
                 </DropdownMenuContent></DropdownMenu>
               )}
@@ -3843,18 +3816,6 @@ function HostsContent() {
                           />
                           <span className="flex h-8 shrink-0 items-center border-l border-border/60 bg-muted/50 px-2 text-xs text-muted-foreground">Mbit/s</span>
                         </div>
-                      </div>
-                      <div className="mt-2.5 flex min-h-9 items-center justify-between gap-3 rounded-md bg-muted/35 px-3 py-2">
-                        <div className="min-w-0 space-y-0.5">
-                          <Label className="text-sm font-medium">只放行白名单 IP</Label>
-                          {compactLayout ? null : (
-                            <p className="text-xs text-muted-foreground">别的机器连不上它是正常的：诊断不再怪公网 IP 不通，订阅也不会因探测超时自动隐藏它。</p>
-                          )}
-                        </div>
-                        <Checkbox aria-label="只放行白名单 IP"
-                          checked={form.ipWhitelistOnly}
-                          onCheckedChange={(checked) => setForm({ ...form, ipWhitelistOnly: checked })}
-                        />
                       </div>
                       {user?.role === "admin" && editingId ? (
                         <div className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
