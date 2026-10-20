@@ -59,8 +59,10 @@ type Props = {
   blockedReason?: string | null;
   /** 选了出口之后要额外说明的一句（例如这条规则会改用 gost 转发）。 */
   runtimeNote?: string | null;
-  /** 规则在哪些主机上监听：这些主机不能当落地。 */
+  /** 真正去连 SS 落地的主机（直连规则是入口，走隧道的规则是隧道出口机）：这些主机不能当落地。 */
   entryHostIds: number[];
+  /** 规则走隧道：SS 客户端跑在隧道出口机上，说明文字里的「入口机」换成「隧道出口机」。 */
+  viaTunnel?: boolean;
   isAdmin: boolean;
 };
 
@@ -80,7 +82,7 @@ export type EgressEntryCapabilities = {
  * 入口机现在的出口能力（Agent 上报的 ssEgressUdp / ssEgress2022）。规则编辑器的出口一段和保存前的
  * 拦截共用这一个查询（react-query 按 key 合并成一次请求）。
  */
-export function useEgressEntryCapabilities(entryHostIds: number[], enabled: boolean): EgressEntryCapabilities {
+export function useEgressEntryCapabilities(entryHostIds: number[], enabled: boolean, role = "入口主机"): EgressEntryCapabilities {
   const hostIds = useMemo(() => Array.from(new Set(entryHostIds.map(Number).filter((id) => id > 0))).sort((a, b) => a - b), [entryHostIds]);
   const query = trpc.proxyInbounds.egressEntryCapabilities.useQuery({ hostIds }, {
     enabled: enabled && hostIds.length > 0,
@@ -90,7 +92,7 @@ export function useEgressEntryCapabilities(entryHostIds: number[], enabled: bool
   return useMemo(() => {
     const rows = (query.data || []) as Array<{ udp: boolean; ss2022: boolean; udpMessage: string | null; ss2022Message: string | null }>;
     if (!enabled || hostIds.length === 0 || query.isLoading || !query.data) {
-      const reason = hostIds.length === 0 ? "请先选择入口主机" : "正在检查入口主机的 Agent / 运行时…";
+      const reason = hostIds.length === 0 ? `请先选择${role}` : `正在检查${role}的 Agent / 运行时…`;
       return { loading: enabled && hostIds.length > 0 && query.isLoading, udp: false, ss2022: false, udpReason: reason, ss2022Reason: reason };
     }
     const udpMissing = rows.find((row) => !row.udp);
@@ -99,10 +101,10 @@ export function useEgressEntryCapabilities(entryHostIds: number[], enabled: bool
       loading: false,
       udp: SS_EGRESS_UDP_SUPPORTED && rows.length > 0 && !udpMissing,
       ss2022: rows.length > 0 && !ss2022Missing,
-      udpReason: udpMissing ? udpMissing.udpMessage || "入口主机还不支持 UDP 走出口" : null,
-      ss2022Reason: ss2022Missing ? ss2022Missing.ss2022Message || "入口主机还不支持 SS2022 出口" : null,
+      udpReason: udpMissing ? udpMissing.udpMessage || `${role}还不支持 UDP 走出口` : null,
+      ss2022Reason: ss2022Missing ? ss2022Missing.ss2022Message || `${role}还不支持 SS2022 出口` : null,
     };
-  }, [enabled, hostIds.length, query.data, query.isLoading]);
+  }, [enabled, hostIds.length, query.data, query.isLoading, role]);
 }
 
 const OPTIONS: Array<{ type: RuleEgressType; short: string; icon: typeof Server }> = [
@@ -111,7 +113,9 @@ const OPTIONS: Array<{ type: RuleEgressType; short: string; icon: typeof Server 
   { type: "ss_link", short: "外部 SS 链接", icon: Link2 },
 ];
 
-export function RuleEgressSection({ value, onChange, onEgressEnabled, blockedReason, runtimeNote, entryHostIds, isAdmin }: Props) {
+export function RuleEgressSection({ value, onChange, onEgressEnabled, blockedReason, runtimeNote, entryHostIds, viaTunnel = false, isAdmin }: Props) {
+  // 谁去连 SS 落地：直连规则是入口机，走隧道的规则是隧道出口机。
+  const dialer = viaTunnel ? "隧道出口机" : "入口机";
   const utils = trpc.useUtils();
   const optionsQuery = trpc.proxyInbounds.egressLandingOptions.useQuery(undefined, {
     enabled: value.egressType === "ss_host",
@@ -127,7 +131,7 @@ export function RuleEgressSection({ value, onChange, onEgressEnabled, blockedRea
     onError: (error) => toast.error(error.message || "创建落地入站失败"),
   });
 
-  const capabilities = useEgressEntryCapabilities(entryHostIds, value.egressType !== "none");
+  const capabilities = useEgressEntryCapabilities(entryHostIds, value.egressType !== "none", viaTunnel ? "隧道出口机" : "入口主机");
   const entrySet = useMemo(() => new Set(entryHostIds.map(Number)), [entryHostIds]);
   const hosts = useMemo(
     () => ((optionsQuery.data || []) as any[]).filter((host) => !entrySet.has(Number(host.hostId))),
@@ -138,7 +142,7 @@ export function RuleEgressSection({ value, onChange, onEgressEnabled, blockedRea
   const inboundBlockReason = (inbound: any): string | null => {
     if (inbound.methodError) return "不支持做出口";
     if (!inbound.isEnabled) return "已停用";
-    if (isSs2022Method(inbound.method) && !capabilities.ss2022) return "入口机需升级才能用 SS2022";
+    if (isSs2022Method(inbound.method) && !capabilities.ss2022) return `${dialer}需升级才能用 SS2022`;
     return null;
   };
   const usableInbounds = (selectedHost?.inbounds || []).filter((inbound: any) => !inboundBlockReason(inbound));
@@ -183,8 +187,8 @@ export function RuleEgressSection({ value, onChange, onEgressEnabled, blockedRea
       {value.egressType === "none" && (
         <p className="text-meta leading-5 text-muted-foreground">
           {blockedReason
-            ? <>入口机自己连接目标。{blockedReason}</>
-            : <>入口机自己连接目标。选「落地主机」或「外部 SS 链接」后，入口机经 Shadowsocks 让落地去连目标，流量从落地出去。</>}
+            ? <>{dialer}自己连接目标。{blockedReason}</>
+            : <>{dialer}自己连接目标。选「落地主机」或「外部 SS 链接」后，{dialer}经 Shadowsocks 让落地去连目标，流量从落地出去。</>}
         </p>
       )}
 
@@ -277,13 +281,13 @@ export function RuleEgressSection({ value, onChange, onEgressEnabled, blockedRea
           )}
           {!optionsQuery.isLoading && hosts.length === 0 && (
             <p className="text-meta text-muted-foreground">
-              {isAdmin ? "除了入口主机之外还没有别的主机可以当落地。" : "您还没有可以当落地的主机：需要自己的主机，或管理员授权的主机。"}
+              {isAdmin ? `除了${viaTunnel ? "隧道出口机" : "入口主机"}之外还没有别的主机可以当落地。` : "您还没有可以当落地的主机：需要自己的主机，或管理员授权的主机。"}
             </p>
           )}
           <p className="text-meta leading-5 text-muted-foreground">
             {selectedHost && usableInbounds.length === 0
               ? `一键创建的入站用 ${SS_EGRESS_DEFAULT_METHOD}、随机密码，端口从这台主机的端口范围里挑，默认不进订阅。`
-              : "入口机经这个 Shadowsocks 入站让落地去连目标；入站轮换密码、改端口后规则自动跟上。"}
+              : `${dialer}经这个 Shadowsocks 入站让落地去连目标；入站轮换密码、改端口后规则自动跟上。`}
           </p>
         </div>
       )}

@@ -16,7 +16,8 @@ import { getSettingsByPrefix, RUNTIME_CACHE_SETTING_PREFIX, setSetting } from ".
   也不会先变一次再变回来。
 */
 
-export type TunnelExitPortKind = "scheduler" | "guard";
+/** egress：走隧道的规则接 Shadowsocks 出口时，出口机上本机 SS 客户端（gost）的端口（入口把目标换成它）。 */
+export type TunnelExitPortKind = "scheduler" | "guard" | "egress";
 
 export type TunnelExitPortEntry = {
   ruleId: number;
@@ -54,7 +55,7 @@ function normalizeEntries(entries: unknown): TunnelExitPortEntry[] {
   for (const entry of Array.isArray(entries) ? entries as any[] : []) {
     const ruleId = validId(entry?.ruleId);
     const port = validPort(entry?.port);
-    const kind: TunnelExitPortKind | null = entry?.kind === "scheduler" || entry?.kind === "guard" ? entry.kind : null;
+    const kind: TunnelExitPortKind | null = entry?.kind === "scheduler" || entry?.kind === "guard" || entry?.kind === "egress" ? entry.kind : null;
     if (!ruleId || !port || !kind) continue;
     const rawEntryHostIds: unknown[] = Array.isArray(entry.entryHostIds) ? entry.entryHostIds : [];
     const entryHostIds = Array.from(new Set(rawEntryHostIds.map(validId)))

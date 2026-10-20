@@ -186,8 +186,8 @@ import { recordHostRestartEvent } from "./ops/eventHooks";
 import { observeHostHealthCounters, observeHostResourceSample } from "./resourceAlertNotifier";
 import { buildForwardRateTiers, forwardRateTiersForAgent, mbpsToBytesPerSecond, strictestForwardRate } from "../shared/forwardRateLimit";
 import { buildAgentSniInbounds, isSniRuntimeRule, recordTlsInboundRuntimeStatus, sniRuleRuntimeView } from "./tlsInboundRuntime";
-import { buildGostEgressChain, gostEgressChainName, loadEgressRuntimeContext, ruleEgressRuntime, ruleEgressRuntimeView } from "./ssEgress";
-import { parseAgentCapabilities } from "../shared/ssEgress";
+import { buildGostEgressChain, evaluateRuleEgress, gostEgressChainName, loadEgressRuntimeContext, ruleEgressRuntime, ruleEgressRuntimeView, tunnelEgressDialHostIdsOf, type SsEgressRuntime } from "./ssEgress";
+import { normalizeRuleEgressType, parseAgentCapabilities, ruleEgressStateBlocksDelivery } from "../shared/ssEgress";
 import { hostSupportsGostApiSync } from "../shared/gostRuntimeApi";
 
 // DNS 解析缓存：ruleId → 主目标上次解析到的 IPv4 地址。
@@ -2538,6 +2538,98 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     }
     const tunnelDnsGeneration = (tunnel: any) => tunnelDnsRefreshByTunnelId.get(Number(tunnel?.id || 0)) || 0;
     const anyTunnelDnsRefresh = (tunnels: any[]) => tunnels.some((tunnel) => changedTunnelDnsRefreshIds.has(Number(tunnel?.id || 0)));
+    /*
+      走隧道的规则接 Shadowsocks 出口：SS 客户端跑在隧道的出口机上（server/ssEgress 的 tunnelEgressDialHostIdsOf）。
+      出口机的 gost 在 127.0.0.1:端口 上起一个本机服务，经 SS 落地去连真正的目标；入口把目标换成 127.0.0.1:这个端口 ——
+      NEX 隧道写进握手、GOST 隧道写进 relay 请求，出口拨的就是它自己的这个服务，隧道本身什么都不用改。端口由出口自己分、
+      按 server/tunnelExitPorts 报给入口（kind "egress"），和线路组调度器、出口桥守卫同一个机制。
+
+      出口还没报（规则刚建、出口 Agent 太旧、落地失效、撑不起 UDP / SS2022……）时这条规则按停用下发，绝不退回直连：
+      退回直连会让流量换一个出口 IP，用户以为在走落地，其实没有。
+
+      停不停用要在下面生成 gostRules 之前定下来；出口机自己的端口要等分完守卫端口才分（见 allocateTunnelEgressHelperPorts）。
+    */
+    await loadTunnelExitPorts();
+    type TunnelEgressHelper = { ruleId: number; tunnel: any; runtime: SsEgressRuntime; targetHost: string; targetPort: number; protocol: string; port: number };
+    /** 这台是出口机、要在本机跑 SS 客户端的规则。 */
+    const tunnelEgressHelpers = new Map<number, TunnelEgressHelper>();
+    /** 同一条规则在 agentHostRules / agentAllRules 里是不同的对象，改目标、停用要一起改。 */
+    const tunnelEgressRuleObjects = new Map<number, any[]>();
+    for (const rule of [...agentHostRules, ...agentAllRules] as any[]) {
+      if (!rule || Number(rule.tunnelId || 0) <= 0 || normalizeRuleEgressType(rule.egressType) === "none") continue;
+      const list = tunnelEgressRuleObjects.get(Number(rule.id)) || [];
+      list.push(rule);
+      tunnelEgressRuleObjects.set(Number(rule.id), list);
+    }
+    const holdTunnelEgressRule = (objects: any[], state: string) => {
+      for (const rule of objects) {
+        rule.isEnabled = false;
+        rule.egressRuntimeBlocked = state;
+      }
+    };
+    const pointTunnelEgressRule = (objects: any[], port: number) => {
+      for (const rule of objects) {
+        if (!rule._tunnelEgressTarget) {
+          rule._tunnelEgressTarget = { host: String(rule._originalTargetIp || rule.targetIp || ""), port: Number(rule.targetPort || 0) };
+        }
+        rule.targetIp = "127.0.0.1";
+        rule._originalTargetIp = "127.0.0.1";
+        rule.targetPort = port;
+      }
+    };
+    for (const [ruleId, objects] of tunnelEgressRuleObjects) {
+      const rule = objects[0];
+      if (objects.every((item) => runtimeBool(item.pendingDelete) || !runtimeBool(item.isEnabled))) continue;
+      const tunnel = tunnelById.get(Number(rule.tunnelId)) as any;
+      if (!tunnel) {
+        holdTunnelEgressRule(objects, "shape_invalid");
+        continue;
+      }
+      const dialHostIds = tunnelEgressDialHostIdsOf(
+        tunnel,
+        tunnelHopsByTunnelId.get(Number(tunnel.id)) || [],
+        tunnelExitNodesByTunnelId.get(Number(tunnel.id)) || [],
+      );
+      const selfDial = dialHostIds.includes(Number(host.id));
+      if (selfDial) {
+        const evaluation = evaluateRuleEgress(rule, {
+          entryHostId: Number(host.id),
+          entryAgentVersion: effectiveAgentVersion,
+          entryHostName: String((host as any).name || ""),
+          entryAgentCapabilities: (host as any).agentCapabilities,
+          entryRuntimeVersion: (host as any).runtimeVersion,
+          tunnelMode: tunnel.mode,
+          context: egressRuntimeContext,
+        });
+        if (!evaluation || !evaluation.runtime || ruleEgressStateBlocksDelivery(evaluation.state)) {
+          holdTunnelEgressRule(objects, evaluation?.state || "config_invalid");
+          continue;
+        }
+        tunnelEgressHelpers.set(ruleId, {
+          ruleId,
+          tunnel,
+          runtime: evaluation.runtime,
+          targetHost: String(rule._originalTargetIp || rule.targetIp || ""),
+          targetPort: Number(rule.targetPort || 0),
+          protocol: String(rule.protocol || "both"),
+          port: 0,
+        });
+        // 本机跑着这条规则的 SS 客户端：目标等分完端口再换（allocateTunnelEgressHelperPorts），不用等别的出口。
+        continue;
+      }
+      const pending = dialHostIds.filter((exitHostId) => !hasTunnelExitPort(exitHostId, "egress", ruleId));
+      for (const exitHostId of pending) {
+        if (claimTunnelExitReportRequest(exitHostId)) pushAgentRefresh(exitHostId, "tunnel-exit-ports-needed");
+      }
+      const port = dialHostIds.length > 0 && pending.length === 0
+        ? tunnelExitPortFor("egress", ruleId, dialHostIds, 0, { whenRuleMissing: "none" })
+        : null;
+      if (!port) {
+        holdTunnelEgressRule(objects, "pending");
+        continue;
+      }
+      pointTunnelEgressRule(objects, port);
+    }
     const dnsRuntimeRefreshToken = dnsChangedReports.length > 0
       ? `${responseIssuedAt}:${Array.from(dnsChangedScopes).sort().join(",") || Array.from(dnsChangedIpByHost.keys()).sort().join(",")}`
       : "";
@@ -3036,6 +3128,37 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       return plan;
     };
     const failoverProxyPort = (rule: any) => protocolGuardPortsForRule(rule).failoverProxyPort;
+    /*
+      这台出口机上的 Shadowsocks 出口本机服务（见上面 tunnelEgressHelpers）分端口：在守卫、调度器这些端口之后分，
+      避开它们和这台机器上规则、隧道用到的端口。优先 45000 + 规则号，被占了往后顺延；分完把本机这份规则的目标换成它。
+    */
+    if (tunnelEgressHelpers.size > 0) {
+      const usedPorts = new Set<number>(reservedProtocolGuardPorts);
+      for (const plan of protocolGuardPorts.values()) {
+        usedPorts.add(plan.guardListenPort);
+        usedPorts.add(plan.failoverProxyPort);
+        usedPorts.add(plan.guardBackendPort);
+      }
+      for (const rule of [...agentAllRules, ...agentHostRules] as any[]) {
+        for (const value of [rule?.sourcePort, rule?.targetPort, rule?._tunnelEgressTarget?.port]) {
+          const port = Number(value || 0);
+          if (Number.isInteger(port) && port > 0) usedPorts.add(port);
+        }
+      }
+      const poolSize = PROTOCOL_GUARD_PORT_MAX - PROTOCOL_GUARD_PORT_MIN + 1;
+      for (const helper of Array.from(tunnelEgressHelpers.values()).sort((left, right) => left.ruleId - right.ruleId)) {
+        const preferredOffset = 45000 + (helper.ruleId % PROTOCOL_GUARD_LEGACY_SPAN) - PROTOCOL_GUARD_PORT_MIN;
+        for (let offset = 0; offset < poolSize; offset += 1) {
+          const port = PROTOCOL_GUARD_PORT_MIN + ((preferredOffset + offset) % poolSize);
+          if (usedPorts.has(port)) continue;
+          usedPorts.add(port);
+          helper.port = port;
+          break;
+        }
+        if (helper.port > 0) pointTunnelEgressRule(tunnelEgressRuleObjects.get(helper.ruleId) || [], helper.port);
+        else holdTunnelEgressRule(tunnelEgressRuleObjects.get(helper.ruleId) || [], "config_invalid");
+      }
+    }
     /*
       线路组的调度器跑在哪台机上，就看哪台机的 Agent：直连规则是规则所在的机器，隧道规则是
       出口（多出口时每个出口各跑一个）。UDP、TCP+UDP 和 NEX 隧道的调度要 Agent 2.2.199 起
@@ -4420,6 +4543,32 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       })))
       .flat()
       .filter(Boolean);
+    /*
+      走隧道的规则接 Shadowsocks 出口，这台是隧道出口机：本机 127.0.0.1:端口 上一个 gost 转发，handler 挂出口链
+      （和直连规则的出口同一条链），forwarder 是规则真正的目标 —— SS 落地代连。隧道出口拨进来的就是它。
+      计数、限速都在入口那一侧，这里不挂。
+    */
+    for (const helper of tunnelEgressHelpers.values()) {
+      if (!helper.port || !helper.targetHost || !helper.targetPort) continue;
+      for (const proto of forwardRuleProtocols(helper.protocol)) {
+        if (proto === "udp" && !helper.runtime.udp) continue;
+        gostServiceConfig.push({
+          name: `fwx-tegress-${helper.ruleId}-${proto}`,
+          addr: `127.0.0.1:${helper.port}`,
+          handler: { type: proto, chain: gostEgressChainName(helper.ruleId, proto) },
+          listener: buildGostRuleListener(proto),
+          forwarder: {
+            nodes: [{
+              name: `tegress-target-${helper.ruleId}`,
+              addr: endpointHostPort(helper.targetHost, helper.targetPort),
+              connector: { type: proto },
+              dialer: { type: proto },
+            }],
+          },
+        });
+        egressGostChains.push(buildGostEgressChain(helper.ruleId, proto, helper.runtime));
+      }
+    }
     const tunnelGostChains = (await Promise.all(gostRules
       .filter((r: any) => runtimeBool(r.isEnabled) && r.forwardType === "gost" && r.tunnelId)
       .map(async (r: any) => {
@@ -6724,11 +6873,13 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
           && isRuleProtocolEnabled(forwardProtocolSettings, rule, tunnel);
       })
       .map((rule: any) => {
+        // 接了 Shadowsocks 出口：出口机拨的是本机的 SS 客户端，测它没有意义 —— 测出口机到 SS 落地这一段。
+        const egressHelper = tunnelEgressHelpers.get(Number(rule.id));
         const probe = buildTunnelRuleLatencyProbe({
           hostId: host.id,
-          rule,
+          rule: egressHelper ? { ...rule, targetPort: egressHelper.runtime.port } : rule,
           tunnel: tunnelById.get(Number(rule.tunnelId || 0)),
-          targetIp: processTarget(rule),
+          targetIp: egressHelper ? egressHelper.runtime.server : processTarget(rule),
         });
         return probe ? {
           ...probe,
@@ -7425,6 +7576,15 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         kind: "guard",
         port: Number(guardRule.listenPort),
         entryHostIds: tunnelEntryHostIds(tunnel),
+      });
+    }
+    for (const helper of tunnelEgressHelpers.values()) {
+      if (!helper.port) continue;
+      tunnelExitPortEntries.push({
+        ruleId: helper.ruleId,
+        kind: "egress",
+        port: helper.port,
+        entryHostIds: tunnelEntryHostIds(helper.tunnel),
       });
     }
     for (const entryHostId of recordTunnelExitPorts(Number(host.id), tunnelExitPortEntries)) {

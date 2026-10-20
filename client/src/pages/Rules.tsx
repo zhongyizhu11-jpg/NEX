@@ -109,6 +109,7 @@ import {
   normalizeRuleEgressType,
   RULE_EGRESS_STATE_LABELS,
   ruleEgressShapeError,
+  ssEgressTunnelModeSupported,
   ruleEgressSwitchesForwardType,
   ruleEgressStateTone,
   ruleEgressSummaryText,
@@ -3245,31 +3246,44 @@ function RulesContent() {
     选了出口，协议固定 TCP、线路组关掉；直连主机的规则转发工具切到 gost。端口转发资源的工具由资源决定，
     不是 gost 也能选：这一条规则下发时改用 gost 跑（server/ssEgress.ts 的 ruleEgressRuntimeView），库里不变。
   */
-  const egressSectionVisible = form.routeMode === "local" && !isSniEntryMode;
+  /*
+    走隧道（含叠加）也能接出口：SS 客户端跑在隧道的出口机上（入口 → 隧道 → 出口机 → SS 落地 → 目标），
+    Nginx 隧道不行。这时「谁去连落地」是隧道出口机：能力、不能当落地的主机都按它算。
+  */
+  const egressViaTunnel = form.routeMode === "tunnel" && !!selectedTunnel && ssEgressTunnelModeSupported(selectedTunnel.mode);
+  const egressSectionVisible = (form.routeMode === "local" || egressViaTunnel) && !isSniEntryMode;
   const egressActive = egressSectionVisible && form.egress.egressType !== "none";
   const egressEntryHostIds = useMemo(() => {
     const ids = new Set<number>();
+    if (egressViaTunnel) {
+      const hops = Array.isArray(selectedTunnel?.hopHostIds) ? selectedTunnel.hopHostIds : [];
+      for (const id of [selectedTunnel?.exitHostId, hops.length >= 2 ? hops[hops.length - 1] : 0]) {
+        if (Number(id || 0) > 0) ids.add(Number(id));
+      }
+      return Array.from(ids);
+    }
     if (form.hostId) ids.add(Number(form.hostId));
     for (const member of (selectedForwardGroup?.members || []) as any[]) {
       if (Number(member?.hostId || 0) > 0) ids.add(Number(member.hostId));
     }
     return Array.from(ids);
-  }, [form.hostId, selectedForwardGroup]);
+  }, [egressViaTunnel, selectedTunnel, form.hostId, selectedForwardGroup]);
   const egressBlockedReason = useMemo<string | null>(() => {
     if (!egressSectionVisible) return null;
+    if (egressViaTunnel) return null;
     if (isLegacyLocalRuleEdit) return "旧版端口转发规则请先迁移到新版端口转发，再设置出口。";
     // 端口转发资源不是 gost 也能开出口：这一条规则下发时改用 gost（见 egressRuntimeNote）。
     if (isForwardGroupRouteMode) return null;
     if (!usableForwardTypes.includes("gost")) return "出口需要 gost 转发，当前账号不能用 gost。";
     return null;
-  }, [egressSectionVisible, isLegacyLocalRuleEdit, isForwardGroupRouteMode, selectedForwardGroup, effectiveRouteForwardType, usableForwardTypes]);
+  }, [egressSectionVisible, egressViaTunnel, isLegacyLocalRuleEdit, isForwardGroupRouteMode, selectedForwardGroup, effectiveRouteForwardType, usableForwardTypes]);
   const egressRuntimeNote = useMemo<string | null>(() => {
     if (!isForwardGroupRouteMode || !selectedForwardGroup) return null;
     if (!ruleEgressSwitchesForwardType(form.egress.egressType, effectiveRouteForwardType)) return null;
     const label = FORWARD_TYPE_LABELS[effectiveRouteForwardType] || effectiveRouteForwardType;
     return `这个端口转发用的是 ${label}，${label} 不会 Shadowsocks：开了出口的这一条规则改用 gost 转发，端口、计数、限速照旧；其它规则不受影响，改回「直接连接」就恢复成 ${label}。`;
   }, [isForwardGroupRouteMode, selectedForwardGroup, form.egress.egressType, effectiveRouteForwardType]);
-  const egressCapabilities = useEgressEntryCapabilities(egressEntryHostIds, egressActive);
+  const egressCapabilities = useEgressEntryCapabilities(egressEntryHostIds, egressActive, egressViaTunnel ? "隧道出口机" : "入口主机");
   const egressBlocker = useMemo<string | null>(() => {
     if (!egressActive) return null;
     if (egressBlockedReason) return egressBlockedReason;
@@ -8394,6 +8408,7 @@ function RulesContent() {
                 value={form.egress}
                 isAdmin={user?.role === "admin"}
                 entryHostIds={egressEntryHostIds}
+                viaTunnel={egressViaTunnel}
                 blockedReason={egressBlockedReason}
                 runtimeNote={egressRuntimeNote}
                 onChange={(patch) => setForm((prev) => ({
@@ -8405,8 +8420,9 @@ function RulesContent() {
                 onEgressEnabled={() => setForm((prev) => ({
                   ...prev,
                   // 出口是 gost 的转发链做的：直连主机的规则切到 gost；端口转发资源的工具由资源决定，不是 gost 的下发时自动换成 gost。
+                  // 走隧道的规则照旧走这条隧道，SS 客户端在出口机上。
                   forwardType: isForwardGroupRouteMode ? prev.forwardType : "gost",
-                  tunnelId: null,
+                  tunnelId: egressViaTunnel ? prev.tunnelId : null,
                   protocol: "tcp",
                   failoverEnabled: false,
                 }))}

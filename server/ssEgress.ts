@@ -52,6 +52,7 @@ import { isHostConsideredOnline } from "./hostHeartbeatPolicy";
 import { createCredentialCipher, type CredentialCipher } from "./ipChange/secrets";
 import { restrictedForwardTargetClass, restrictedForwardTargetLabel } from "./ruleTargetPolicy";
 import { dbBool } from "./repositories/repositoryUtils";
+import { normalizeExitGroupStrategy } from "../shared/exitStrategy";
 
 /* ── 外部链接的加密 ─────────────────────────────────────────────────── */
 
@@ -96,6 +97,42 @@ export function decryptSsEgressEndpoint(stored: unknown): SsEgressEndpoint | nul
   } catch {
     return null;
   }
+}
+
+/* ── 走隧道的规则：出口在隧道出口机上 ─────────────────────────────────── */
+
+/**
+ * 隧道里真正拨目标（走出口时就是去连 SS 落地）的机器：主出口（多跳时是最后一跳），负载均衡开着时
+ * 再加上开着的出口节点。和心跳里线路组调度器的 forwardXSchedulerHostIds 同一个口径 —— 出口的 SS
+ * 客户端和调度器跑在同一批机器上。
+ */
+export function tunnelEgressDialHostIdsOf(tunnel: any, hops: readonly any[] = [], exitNodes: readonly any[] = []): number[] {
+  if (!tunnel) return [];
+  const lastHop = hops.length >= 2 ? hops[hops.length - 1] : null;
+  const ids = [Number(tunnel.exitHostId || 0), Number(lastHop?.hostId || 0)];
+  if (dbBool(tunnel.loadBalanceEnabled) && normalizeExitGroupStrategy(tunnel.loadBalanceStrategy) !== "none") {
+    for (const node of exitNodes) {
+      if (!dbBool(node?.isEnabled, true) || Number(node?.listenPort || 0) <= 0) continue;
+      ids.push(Number(node?.hostId || 0));
+    }
+  }
+  return Array.from(new Set(ids.filter((id) => id > 0)));
+}
+
+/** 一批隧道各自的模式和出口机（保存、列表显示用；心跳里有现成的表，自己算）。 */
+export async function loadTunnelEgressDialHosts(tunnelIds: readonly number[]) {
+  const ids = Array.from(new Set(tunnelIds.map(Number).filter((id) => id > 0)));
+  const result = new Map<number, { mode: string; hostIds: number[] }>();
+  if (ids.length === 0) return result;
+  const [hops, exitNodes] = await Promise.all([db.getTunnelHopsByTunnelIds(ids), db.getTunnelExitNodesByTunnelIds(ids)]);
+  for (const id of ids) {
+    const tunnel = await db.getTunnelById(id).catch(() => null) as any;
+    if (!tunnel) continue;
+    const tunnelHops = (hops as any[]).filter((hop) => Number(hop.tunnelId) === id);
+    const tunnelExitNodes = (exitNodes as any[]).filter((node) => Number(node.tunnelId) === id);
+    result.set(id, { mode: String(tunnel.mode || ""), hostIds: tunnelEgressDialHostIdsOf(tunnel, tunnelHops, tunnelExitNodes) });
+  }
+  return result;
 }
 
 /* ── 保存规则时 ─────────────────────────────────────────────────────── */
@@ -154,6 +191,13 @@ export type EgressSaveContext = {
   forwardType: string;
   protocol: string;
   tunnelId?: number | null;
+  /** 走隧道时隧道的模式（tunnels.mode），Nginx 隧道不能接出口。 */
+  tunnelMode?: string | null;
+  /**
+   * 真正去连 SS 落地的机器。直连规则就是入口（不传，用 entryHostIds）；走隧道的规则是隧道的出口机
+   * （loadTunnelEgressDialHostIds），Agent 版本、UDP / SS2022 能力、自环都按它们查。
+   */
+  dialHostIds?: number[];
   forwardGroupMode?: string | null;
   failoverEnabled?: boolean;
   tlsInboundId?: number | null;
@@ -179,12 +223,15 @@ export async function resolveRuleEgressColumns(input: RuleEgressInput, context: 
     protocol: context.protocol,
     egressUdp,
     tunnelId: context.tunnelId,
+    tunnelMode: context.tunnelMode,
     forwardGroupMode: context.forwardGroupMode,
     failoverEnabled: context.failoverEnabled,
     tlsInboundId: context.tlsInboundId,
   });
   if (shapeError) throw new Error(shapeError);
-  const entryHostIds = Array.from(new Set(context.entryHostIds.map(Number).filter((id) => id > 0)));
+  const viaTunnel = Number(context.tunnelId || 0) > 0;
+  const entryHostIds = Array.from(new Set((context.dialHostIds ?? context.entryHostIds).map(Number).filter((id) => id > 0)));
+  if (viaTunnel && entryHostIds.length === 0) throw new Error("这条隧道还没有出口机，接不了 Shadowsocks 出口");
   const entryHosts = entryHostIds.length > 0 ? await db.getHostsByIds(entryHostIds) as any[] : [];
   // 新挂 / 换出口时入口机的 Agent 要够新（和共享 TLS 入站一样在保存时就说）；已经挂着的规则改别的不拦，下发时按停用处理。
   const assertEntryAgents = () => {
@@ -219,7 +266,9 @@ export async function resolveRuleEgressColumns(input: RuleEgressInput, context: 
     const landingHost = await db.getHostById(Number(inbound.hostId)) as any;
     if (!landingHost) throw new Error("落地主机不存在");
     if (entryHostIds.includes(Number(landingHost.id))) {
-      throw new Error("落地主机不能是规则的入口主机自己：那样流量绕一圈还是从入口出去");
+      throw new Error(viaTunnel
+        ? "落地主机不能是隧道的出口机自己：那样流量绕一圈还是从出口机出去"
+        : "落地主机不能是规则的入口主机自己：那样流量绕一圈还是从入口出去");
     }
     if (changed) assertEntryAgents();
     assertEntryCapabilities(inbound.method);
@@ -250,7 +299,9 @@ export async function resolveRuleEgressColumns(input: RuleEgressInput, context: 
   assertEntryCapabilities(endpoint.method);
   const server = endpoint.server.toLowerCase();
   if (entryHosts.some((host) => addressTokens(host).has(server))) {
-    throw new Error("外部链接指向的是规则的入口主机自己，这会绕回入口，请换一条链接");
+    throw new Error(viaTunnel
+      ? "外部链接指向的是隧道的出口机自己，这会绕回出口机，请换一条链接"
+      : "外部链接指向的是规则的入口主机自己，这会绕回入口，请换一条链接");
   }
   return { egressType, egressInboundId: null, egressConfigJson: stored, egressUdp };
 }
@@ -280,6 +331,7 @@ export async function getRulesUsingEgressInbound(inboundId: number) {
     pendingDelete: forwardRules.pendingDelete,
     forwardGroupId: forwardRules.forwardGroupId,
     forwardGroupRuleId: forwardRules.forwardGroupRuleId,
+    tunnelId: forwardRules.tunnelId,
   }).from(forwardRules).where(and(eq(forwardRules.egressType, "ss_host"), eq(forwardRules.egressInboundId, Number(inboundId))));
   return (rows as any[]).filter((row) => !dbBool(row.pendingDelete));
 }
@@ -329,6 +381,10 @@ export async function refreshEgressDependents(inboundId: number, reason: string)
   const hostIds = new Set<number>();
   for (const rule of rules) {
     if (Number(rule.hostId || 0) > 0) hostIds.add(Number(rule.hostId));
+  }
+  // 走隧道的规则：SS 客户端在隧道出口机上，它们也要重算。
+  for (const dial of (await loadTunnelEgressDialHosts(rules.map((rule) => Number(rule.tunnelId || 0)))).values()) {
+    for (const id of dial.hostIds) hostIds.add(id);
   }
   for (const hostId of Array.from(hostIds)) pushAgentRefresh(hostId, reason);
   return hostIds.size;
@@ -430,6 +486,11 @@ export async function listEgressEntryCapabilities(actor: Actor, hostIds: readonl
       const memberIds = (await db.getForwardGroupRuleEntryHostIds(Number(groupId)).catch(() => [])) as number[];
       for (const id of memberIds) reachable.add(Number(id));
     }
+    // 走隧道的规则问的是隧道出口机的能力：他能用的隧道的出口机也能问（同样不回名字和版本）。
+    const tunnelIds = (await db.getUserEffectiveAllowedTunnelIds(actor.id).catch(() => [])) as number[];
+    for (const dial of (await loadTunnelEgressDialHosts(tunnelIds)).values()) {
+      for (const id of dial.hostIds) reachable.add(id);
+    }
   }
   return ids.map((hostId) => {
     const row = rows.find((item) => Number(item.id) === hostId) || null;
@@ -506,6 +567,8 @@ export type RuleEgressEntryOptions = {
   entryAgentCapabilities?: unknown;
   /** 入口机上报的运行时版本，只用来写提示。 */
   entryRuntimeVersion?: unknown;
+  /** 走隧道的规则：隧道模式。这时上面的「入口机」指的是隧道的出口机（真正连 SS 落地的那台）。 */
+  tunnelMode?: unknown;
   context: EgressRuntimeContext;
 };
 
@@ -519,6 +582,7 @@ export function evaluateRuleEgress(rule: any, options: RuleEgressEntryOptions): 
     protocol: rule.protocol,
     egressUdp: rule.egressUdp,
     tunnelId: rule.tunnelId,
+    tunnelMode: options.tunnelMode,
     // 子规则 / 模板挂着端口转发资源时 forwardGroupId 有值；不是端口转发的已经在保存时拦了，这里只看隧道等硬条件。
     failoverEnabled: rule.failoverEnabled,
     tlsInboundId: rule.tlsInboundId,
@@ -535,7 +599,9 @@ export function evaluateRuleEgress(rule: any, options: RuleEgressEntryOptions): 
       return { ...base, inbound, landingHost, state: "method_unsupported", message: ssEgressMethodError(inbound.method) || "落地入站不是 Shadowsocks" };
     }
     if (!dbBool(inbound.isEnabled, true)) return { ...base, inbound, landingHost, state: "inbound_disabled", message: `落地入站「${inbound.name}」已停用` };
-    if (Number(landingHost.id) === Number(options.entryHostId)) return { ...base, inbound, landingHost, state: "self_loop", message: "落地主机就是入口主机" };
+    if (Number(landingHost.id) === Number(options.entryHostId)) {
+      return { ...base, inbound, landingHost, state: "self_loop", message: Number(rule?.tunnelId || 0) > 0 ? "落地主机就是隧道的出口机" : "落地主机就是入口主机" };
+    }
     const server = getHostEntryAddress(landingHost);
     if (!server) return { ...base, inbound, landingHost, state: "config_invalid", message: "落地主机没有可用地址" };
     endpoint = { server, port: Number(inbound.port), method: normalizeSsMethod(inbound.method), password: String(inbound.password || "") };
@@ -591,6 +657,8 @@ export function evaluateRuleEgress(rule: any, options: RuleEgressEntryOptions): 
  * 没有出口的规则原样返回（同一个对象）。
  */
 export function ruleEgressRuntimeView<T extends Record<string, any>>(rule: T, options: RuleEgressEntryOptions): T {
+  // 走隧道的规则出口在隧道出口机上，入口照常跑隧道：在心跳里另算（agentHeartbeatRoute 的 tunnelEgress）。
+  if (Number(rule?.tunnelId || 0) > 0) return rule;
   const evaluation = evaluateRuleEgress(rule, options);
   if (!evaluation) return rule;
   const view: Record<string, any> = {
@@ -671,6 +739,9 @@ export async function withRuleEgressDisplay<T>(value: T): Promise<T> {
     const context = await loadEgressRuntimeContext(egressRules);
     const entryHostIds = new Set<number>();
     const templateGroupIds = new Set<number>();
+    // 走隧道的规则按隧道的出口机算（SS 客户端跑在那儿）。
+    const tunnelDialHosts = await loadTunnelEgressDialHosts(egressRules.map((rule) => Number(rule.tunnelId || 0)));
+    for (const dial of tunnelDialHosts.values()) for (const id of dial.hostIds) entryHostIds.add(id);
     for (const rule of egressRules) {
       if (rule.isForwardGroupTemplate && Number(rule.forwardGroupId || 0) > 0) templateGroupIds.add(Number(rule.forwardGroupId));
       else if (Number(rule.hostId || 0) > 0) entryHostIds.add(Number(rule.hostId));
@@ -686,9 +757,12 @@ export async function withRuleEgressDisplay<T>(value: T): Promise<T> {
     decorate = (rule: any) => {
       const plain = strip(rule);
       if (normalizeRuleEgressType(rule?.egressType) === "none") return plain;
-      const hostIds = rule.isForwardGroupTemplate && Number(rule.forwardGroupId || 0) > 0
-        ? groupEntryHosts.get(Number(rule.forwardGroupId)) || []
-        : [Number(rule.hostId)];
+      const tunnelDial = Number(rule.tunnelId || 0) > 0 ? tunnelDialHosts.get(Number(rule.tunnelId)) : undefined;
+      const hostIds = tunnelDial
+        ? tunnelDial.hostIds
+        : rule.isForwardGroupTemplate && Number(rule.forwardGroupId || 0) > 0
+          ? groupEntryHosts.get(Number(rule.forwardGroupId)) || []
+          : [Number(rule.hostId)];
       // 多台入口时取最要紧的那个状态：有一台 Agent 太旧就提示升级。
       let worst: RuleEgressEvaluation | null = null;
       for (const hostId of hostIds.length > 0 ? hostIds : [Number(rule.hostId)]) {
@@ -699,6 +773,7 @@ export async function withRuleEgressDisplay<T>(value: T): Promise<T> {
           entryHostName: host?.name,
           entryAgentCapabilities: host?.agentCapabilities,
           entryRuntimeVersion: host?.runtimeVersion,
+          tunnelMode: tunnelDial?.mode,
           context,
         });
         if (!evaluation) continue;

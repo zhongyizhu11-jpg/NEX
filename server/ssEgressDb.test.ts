@@ -84,7 +84,7 @@ function runInDatabase(body: string) {
         route.registerAgentHeartbeatRoute(app);
         // 每次都要一份完整的计算结果：库是测试直接改的，没有经过会作废缓存的那些路径。
         const gate = await import(url("server/agentHeartbeatGate.ts"));
-        for (const id of [10, 20, 30]) gate.agentStableHeartbeatPlanCache.invalidate(id);
+        for (const id of [10, 20, 30, 40, 41]) gate.agentStableHeartbeatPlanCache.invalidate(id);
         const server = http.createServer(app);
         await new Promise((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
         try {
@@ -504,5 +504,63 @@ test("UDP / SS2022 出口：只有报了能力的入口机能保存、能拿到 
     assert.equal(degraded.chains.some((item) => item.hops[0].nodes[0].connector.type === "ssu"), false);
     assert.ok(degraded.services.some((item) => item.name === "fwx-911-tcp"), "经典 AEAD 的 TCP 出口照旧");
     assert.ok(degraded.chains.some((item) => item.name === "chain-egress-911-tcp"));
+  `);
+});
+
+test("走隧道的规则接出口：SS 客户端跑在隧道出口机上，入口改拨它；出口没报端口时按停用、不直连", () => {
+  runInDatabase(String.raw`
+    await addHost(40, "香港出口", "203.0.113.40", "2.2.235", "tok40");
+    await addHost(41, "没上线的出口", "203.0.113.41", "2.2.235", "tok41");
+    await exec('UPDATE hosts SET "agentVersion" = ? WHERE id = 10', ["2.2.235"]);
+    const { tunnelsRouter } = await import(url("server/routers/tunnels.ts"));
+    const tunnels = tunnelsRouter.createCaller(ctxFor(admin));
+    const nex = await tunnels.create({ name: "NEX 隧道", entryHostId: 10, exitHostId: 40, mode: "forwardx", forwardxVersion: "v1" });
+    const gostTunnel = await tunnels.create({ name: "GOST 隧道", entryHostId: 10, exitHostId: 40, mode: "tcp" });
+    const waiting = await tunnels.create({ name: "出口没报的隧道", entryHostId: 10, exitHostId: 41, mode: "forwardx", forwardxVersion: "v1" });
+    const inboundId = await makeInbound();
+    const viaNex = await rules.create(directRule({ tunnelId: nex.id, egressType: "ss_host", egressInboundId: inboundId }));
+    const viaGost = await rules.create(directRule({ tunnelId: gostTunnel.id, egressType: "ss_link", egressLink: "ss://" + b64url("aes-128-gcm:ext") + "@198.51.100.50:8443" }));
+    const held = await rules.create(directRule({ tunnelId: waiting.id, egressType: "ss_host", egressInboundId: inboundId }));
+
+    // 保存时：落地就是隧道出口机自己不行；出口机 Agent 太旧不行（查的是出口机，不是入口）。Nginx 隧道见 shared/ssEgress.test.ts。
+    const exitLanding = await makeInbound({ hostId: 40, port: 28400, name: "出口机上的 SS" });
+    await assert.rejects(rules.create(directRule({ tunnelId: nex.id, egressType: "ss_host", egressInboundId: exitLanding })), /隧道的出口机自己/);
+    await exec('UPDATE hosts SET "agentVersion" = ? WHERE id = 41', ["2.2.225"]);
+    await assert.rejects(rules.create(directRule({ tunnelId: waiting.id, egressType: "ss_host", egressInboundId: inboundId })), /没上线的出口.*需要升级到 2\.2\.226/);
+    await exec('UPDATE hosts SET "agentVersion" = ? WHERE id = 41', ["2.2.235"]);
+
+    // 出口机：本机 127.0.0.1:端口 上的 gost 服务挂出口链，forwarder 是真正的目标；NEX 出口只放行这个本机端口。
+    const exit = await heartbeat("tok40", "2.2.235");
+    const helperOf = (ruleId) => exit.gost.services.find((item) => item.name === "fwx-tegress-" + ruleId + "-tcp");
+    const nexHelper = helperOf(viaNex.id);
+    assert.ok(nexHelper, "出口机上要有 SS 客户端服务");
+    assert.match(nexHelper.addr, /^127\.0\.0\.1:\d+$/);
+    assert.equal(nexHelper.handler.chain, "chain-egress-" + viaNex.id + "-tcp");
+    assert.equal(nexHelper.forwarder.nodes[0].addr, "198.51.100.7:443");
+    assert.equal(exit.gost.chains.find((item) => item.name === nexHelper.handler.chain).hops[0].nodes[0].addr, "203.0.113.20:28388");
+    const gostHelper = helperOf(viaGost.id);
+    assert.equal(exit.gost.chains.find((item) => item.name === gostHelper.handler.chain).hops[0].nodes[0].addr, "198.51.100.50:8443");
+    assert.equal(exit.gost.services.some((item) => item.name.startsWith("fwx-tegress-" + held.id + "-")), false, "别的出口机的规则不在这台跑");
+    const nexPort = Number(nexHelper.addr.split(":")[1]);
+    const fxpOf = (response) => ((response.body.desiredState && response.body.desiredState.actions) || []).filter((action) => action.fxp).map((action) => action.fxp);
+    const exitSpec = fxpOf(exit).find((spec) => spec.role === "exit" && Number(spec.tunnelId) === Number(nex.id));
+    assert.deepEqual(exitSpec.streamTargets.filter((target) => Number(target.ruleId) === Number(viaNex.id)), [{ ruleId: viaNex.id, targetIp: "127.0.0.1", targetPort: nexPort }], "真正的目标不能出现在出口放行表里，否则能绕过 SS");
+
+    // 入口：NEX 隧道握手里的目标、GOST 隧道 relay 的目标都换成出口机上的那个本机端口。
+    const entry = await heartbeat("tok10", "2.2.235");
+    const entrySpec = fxpOf(entry).find((spec) => spec.role === "entry" && Number(spec.ruleId) === Number(viaNex.id));
+    assert.equal(entrySpec.targetIp, "127.0.0.1");
+    assert.equal(Number(entrySpec.targetPort), nexPort);
+    const gostEntry = entry.gost.services.find((item) => item.name === "fwx-" + viaGost.id + "-tcp");
+    assert.equal(gostEntry.forwarder.nodes[0].addr, gostHelper.addr);
+    assert.equal(gostEntry.handler.chain, "chain-tunnel-" + viaGost.id, "入口照常走隧道，不在入口挂出口链");
+    // 出口还没报端口的规则：入口上整条不下发，绝不退回直连目标。
+    assert.equal(fxpOf(entry).some((spec) => Number(spec.ruleId) === Number(held.id)), false);
+    assert.equal(JSON.stringify(entry.body).includes("198.51.100.7:443"), false, "入口不该拿到真正的目标");
+
+    // 规则卡片：状态按出口机算。
+    const listed = (await rules.list()).find((item) => item.id === viaNex.id);
+    assert.equal(listed.egress.state, "running");
+    assert.equal(listed.egress.landingHostName, "东京落地");
   `);
 });

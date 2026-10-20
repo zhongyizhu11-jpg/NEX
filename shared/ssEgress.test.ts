@@ -138,7 +138,11 @@ test("规则形态：出口只挂在 gost 的直连 / 端口转发规则上", ()
   assert.equal(ruleEgressSwitchesForwardType("ss_host", "nftables"), true);
   assert.equal(ruleEgressSwitchesForwardType("ss_link", "gost"), false);
   assert.equal(ruleEgressSwitchesForwardType("none", "nftables"), false);
-  assert.match(String(ruleEgressShapeError({ ...base, tunnelId: 3 })), /隧道/);
+  // 走隧道：SS 客户端跑在隧道出口机上；NEX、GOST 隧道可以，Nginx 隧道不行；线路组照旧不行。
+  assert.equal(ruleEgressShapeError({ ...base, tunnelId: 3, tunnelMode: "forwardx" }), null);
+  assert.equal(ruleEgressShapeError({ ...base, tunnelId: 3, tunnelMode: "tls" }), null);
+  assert.match(String(ruleEgressShapeError({ ...base, tunnelId: 3, tunnelMode: "nginx_stream" })), /Nginx 隧道/);
+  assert.match(String(ruleEgressShapeError({ ...base, tunnelId: 3, tunnelMode: "forwardx", failoverEnabled: true })), /线路组/);
   assert.match(String(ruleEgressShapeError({ ...base, forwardGroupMode: "chain" })), /转发链/);
   assert.match(String(ruleEgressShapeError({ ...base, forwardGroupMode: "failover" })), /转发组/);
   assert.match(String(ruleEgressShapeError({ ...base, failoverEnabled: 1 })), /线路组/);
