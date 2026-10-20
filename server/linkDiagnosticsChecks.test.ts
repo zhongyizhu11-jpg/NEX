@@ -215,15 +215,3 @@ test("隧道每一段：多跳按 seq 一段段，单跳入口直接拨出口", 
   ]);
   assert.equal(tunnelHopEdges({ ...tunnel, networkType: "private" }, [hops[1], { seq: 1, hostId: 2, listenPort: 31000 }, hops[0]], hosts)[0].address, "10.0.0.2");
 });
-
-test("白名单主机：下一跳开了白名单时，建议先查白名单；诊断计划不再拿公网 IP 测回环", async () => {
-  const fs = await import("node:fs");
-  const hop = agentCheckHints({ id: "c9", kind: "dial", host: "2.2.2.2", port: 8443 }, { role: "hop", whitelistTarget: true });
-  assert.match(hop.hintFail || "", /白名单/);
-  const plain = agentCheckHints({ id: "c9", kind: "dial", host: "2.2.2.2", port: 8443 }, { role: "hop" });
-  assert.doesNotMatch(plain.hintFail || "", /白名单/);
-  const source = fs.readFileSync("server/linkDiagnostics.ts", "utf8");
-  assert.match(source, /publicIp: plan\.hosts\.get\(hostId\)\?\.ipWhitelistOnly \? "" : primaryPublicIp/);
-  const subscription = fs.readFileSync("server/repositories/proxySubscriptionRepository.ts", "utf8");
-  assert.match(subscription, /!whitelistHostIds\.has\(Number\(rule\.hostId \|\| 0\)\)/);
-});

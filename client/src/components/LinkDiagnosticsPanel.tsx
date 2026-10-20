@@ -5,7 +5,6 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
 import { copyTextToClipboard } from "@/lib/clipboard";
-import { useCompactLayout } from "@/hooks/useCompactLayout";
 import { cn } from "@/lib/utils";
 import {
   DIAGNOSTIC_GROUP_LABELS,
@@ -103,15 +102,11 @@ export function LinkDiagnosticsChecklist({
   report,
   expandedKeys,
   onToggle,
-  compact = false,
 }: {
   report: LinkDiagnosticsReport;
   expandedKeys: ReadonlySet<string>;
   onToggle: (key: string) => void;
-  /** 精简布局：有问题的排最前，通过 / 跳过的折成一行。 */
-  compact?: boolean;
 }) {
-  const [passedOpen, setPassedOpen] = useState(false);
   const verdictStatus: DiagnosticStatus = report.verdict === "pending" ? "pending" : report.verdict;
   const VerdictIcon = report.verdict === "pending" ? Loader2 : STATUS_STYLE[verdictStatus].icon;
   return (
@@ -142,44 +137,7 @@ export function LinkDiagnosticsChecklist({
         </div>
       </div>
 
-      {compact ? (() => {
-        const order: Record<DiagnosticStatus, number> = { fail: 0, warn: 1, pending: 2, pass: 3, skip: 4 };
-        const problems = report.items.filter((item) => item.status === "fail" || item.status === "warn" || item.status === "pending")
-          .sort((a, b) => order[a.status] - order[b.status]);
-        const passed = report.items.filter((item) => item.status === "pass" || item.status === "skip");
-        return (
-          <>
-            {problems.length > 0 ? (
-              <ul className="min-w-0" aria-label="有问题的项">
-                {problems.map((item) => (
-                  <DiagnosticRow key={item.key} item={item} expanded={expandedKeys.has(item.key)} onToggle={() => onToggle(item.key)} />
-                ))}
-              </ul>
-            ) : null}
-            {passed.length > 0 ? (
-              <section className="min-w-0">
-                <button
-                  type="button"
-                  className="flex w-full items-center gap-2 py-1.5 text-left text-[13px] text-muted-foreground"
-                  onClick={() => setPassedOpen((open) => !open)}
-                  aria-expanded={passedOpen}
-                >
-                  <CheckCircle2 className="h-4 w-4 text-[var(--fx-healthy-text)]" aria-hidden="true" />
-                  <span>已通过 {passed.length} 项</span>
-                  <ChevronDown className={cn("ml-auto h-4 w-4 transition-transform", passedOpen && "rotate-180")} aria-hidden="true" />
-                </button>
-                {passedOpen ? (
-                  <ul className="min-w-0">
-                    {passed.map((item) => (
-                      <DiagnosticRow key={item.key} item={item} expanded={expandedKeys.has(item.key)} onToggle={() => onToggle(item.key)} />
-                    ))}
-                  </ul>
-                ) : null}
-              </section>
-            ) : null}
-          </>
-        );
-      })() : DIAGNOSTIC_GROUPS.map((group) => {
+      {DIAGNOSTIC_GROUPS.map((group) => {
         const items = report.items.filter((item) => item.group === group);
         if (items.length === 0) return null;
         const bad = items.filter((item) => item.status === "fail").length;
@@ -203,7 +161,6 @@ export function LinkDiagnosticsChecklist({
 
 /** 诊断对话框里的「一键诊断」页：自己发起、自己轮询。 */
 export function LinkDiagnosticsPanel({ kind, id, active }: { kind: DiagnosticSubjectKind; id: number; active: boolean }) {
-  const compactLayout = useCompactLayout();
   const [report, setReport] = useState<LinkDiagnosticsReport | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const startedFor = useRef("");
@@ -274,7 +231,6 @@ export function LinkDiagnosticsPanel({ kind, id, active }: { kind: DiagnosticSub
       {report ? (
         <LinkDiagnosticsChecklist
           report={report}
-          compact={compactLayout}
           expandedKeys={expanded}
           onToggle={(key) => setExpanded((current) => {
             const next = new Set(current);

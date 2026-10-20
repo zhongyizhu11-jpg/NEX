@@ -208,8 +208,6 @@ export const users = table("users", {
   telegramLinkedAt: epoch("telegramLinkedAt"),
   telegramLastSeenAt: epoch("telegramLastSeenAt"),
   telegramAnnouncementSubscribed: boolean("telegramAnnouncementSubscribed").notNull().default(false),
-  /** 精简布局（个人资料里的开关）：只改这个账号自己看到的界面，默认关。见 client/src/hooks/useCompactLayout.ts。 */
-  compactLayout: boolean("compactLayout").notNull().default(false),
   telegramBindCode: text("telegramBindCode").unique(),
   telegramBindCodeExpiresAt: epoch("telegramBindCodeExpiresAt"),
   telegramLoginCode: text("telegramLoginCode").unique(),
@@ -334,7 +332,6 @@ export const hosts = table("hosts", {
   // 连接建立后走 ingress 快速路径，流量改从 conntrack 计。只有管理员能开，默认关。
   flowOffload: boolean("flowOffload").notNull().default(false),
   hostStatusNotifyEnabled: boolean("hostStatusNotifyEnabled").notNull().default(true),
-  ipWhitelistOnly: boolean("ipWhitelistOnly").notNull().default(false),
   telegramTrafficAlertEnabled: boolean("telegramTrafficAlertEnabled").notNull().default(false),
   trafficAlertThresholdPercent: int("trafficAlertThresholdPercent").notNull().default(20),
   telegramRenewalReminderEnabled: boolean("telegramRenewalReminderEnabled").notNull().default(false),

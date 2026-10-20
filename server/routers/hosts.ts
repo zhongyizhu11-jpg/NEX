@@ -1401,8 +1401,6 @@ export const hostsRouter = router({
         lineBandwidthMbps: z.number().int().min(0).max(1_000_000).optional(),
         /** 上下线推送（默认开）。只有管理员能关：通知发给的是管理员。 */
         hostStatusNotifyEnabled: z.boolean().optional(),
-        /** 只放行白名单 IP（主人和管理员都能标）：诊断不再把「连不上公网 IP」当原因，订阅不因探测超时自动隐藏。 */
-        ipWhitelistOnly: z.boolean().optional(),
         telegramTrafficAlertEnabled: z.boolean().optional(),
         trafficAlertThresholdPercent: z.number().int().min(1).max(99).optional(),
         telegramRenewalReminderEnabled: z.boolean().optional(),
@@ -1473,7 +1471,6 @@ export const hostsRouter = router({
           blockSocks: ctx.user.role === "admin" ? !!input.blockSocks : false,
           blockTls: ctx.user.role === "admin" ? !!input.blockTls : false,
           hostStatusNotifyEnabled: ctx.user.role === "admin" ? input.hostStatusNotifyEnabled !== false : true,
-          ipWhitelistOnly: !!input.ipWhitelistOnly,
           lineBandwidthMbps: Math.max(0, Math.floor(Number(input.lineBandwidthMbps) || 0)),
           userId: ctx.user.id,
         });
@@ -1578,8 +1575,6 @@ export const hostsRouter = router({
         lineBandwidthMbps: z.number().int().min(0).max(1_000_000).optional(),
         /** 上下线推送（默认开）。只有管理员能关：通知发给的是管理员。 */
         hostStatusNotifyEnabled: z.boolean().optional(),
-        /** 只放行白名单 IP（主人和管理员都能标）：诊断不再把「连不上公网 IP」当原因，订阅不因探测超时自动隐藏。 */
-        ipWhitelistOnly: z.boolean().optional(),
         telegramTrafficAlertEnabled: z.boolean().optional(),
         trafficAlertThresholdPercent: z.number().int().min(1).max(99).optional(),
         telegramRenewalReminderEnabled: z.boolean().optional(),
@@ -1721,7 +1716,6 @@ export const hostsRouter = router({
         } else if ((data as any).hostStatusNotifyEnabled !== undefined) {
           (data as any).hostStatusNotifyEnabled = !!(data as any).hostStatusNotifyEnabled;
         }
-        if ((data as any).ipWhitelistOnly !== undefined) (data as any).ipWhitelistOnly = !!(data as any).ipWhitelistOnly;
         const protocolPolicyChanged = hostProtocolPolicyFields.some((key) =>
           (data as any)[key] !== undefined && !!(data as any)[key] !== !!(host as any)[key]
         );
