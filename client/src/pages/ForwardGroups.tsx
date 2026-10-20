@@ -2316,7 +2316,7 @@ export function ForwardGroupsContent({
                     <TableRow
                       {...itemProps}
                       className={cn(
-                        "group/sortable h-[72px]",
+                        "group/sortable fx-table-row h-[72px]",
                         isDragging && "opacity-55",
                         isDropTarget && "bg-primary/5",
                       )}

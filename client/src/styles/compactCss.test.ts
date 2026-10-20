@@ -49,8 +49,9 @@ test("说明文字按 data-fx-help 收、data-fx-keep 留住；整块不要的�
   assert.match(code, /\[data-fx-compact-hide\]\s*\{\s*display:\s*none/);
 });
 
-test("精简只改尺寸，不改颜色：没有 color / background 的赋值", () => {
-  assert.doesNotMatch(code, /(^|[;{\s])(color|background|background-color|border-color)\s*:/m);
+test("精简只改尺寸，不改颜色：没有 color / background 的赋值（拿掉一个框的 background: none 不算）", () => {
+  const withoutClearing = code.replace(/background:\s*(none|transparent)\s*;/g, "");
+  assert.doesNotMatch(withoutClearing, /(^|[;{\s])(color|background|background-color|border-color)\s*:/m);
 });
 
 test("触屏上控件不压到 32px：按钮、输入框的高度只在 pointer: fine 里写", () => {

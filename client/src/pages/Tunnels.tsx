@@ -79,6 +79,7 @@ import { OptimisticSwitch, Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { SlidingTabsList, type SlidingTabItem } from "@/components/ui/sliding-tabs";
 import { useCompactLayout } from "@/hooks/useCompactLayout";
+import { useIsMobile } from "@/hooks/useMobile";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Table,
@@ -2239,6 +2240,9 @@ function TunnelsContent() {
   const [viewMode, setViewMode] = useState<TunnelViewMode>(() => getStoredTunnelViewMode());
   const [chainViewMode, setChainViewMode] = useState<TunnelViewMode>(() => getStoredChainViewMode());
   const compactLayout = useCompactLayout();
+  const isMobile = useIsMobile();
+  // 精简布局（桌面）：「新建链路」上到页头右边，分类条和搜索框并排成一行（fx-list-controls）
+  const mergeListControls = compactLayout && !isMobile;
   const [activeSection, setActiveSection] = useUrlTab<TunnelSection>({
     values: TUNNEL_SECTIONS,
     defaultValue: "tunnels",
@@ -4403,6 +4407,18 @@ function TunnelsContent() {
     return [entryGroupLabel ? `入口组 ${entryGroupLabel}` : "", route].filter(Boolean).join(" ｜ ");
   };
 
+  const createLinkAction = activeSection === "routes" && !linkWizardEnabled ? null : (
+    <Button
+      className="fx-row-action ml-auto h-9 shrink-0 gap-1.5 rounded-full px-3.5"
+      disabled={!canCreateActive}
+      title={createDisabledTitle}
+      onClick={openCreateTypeDialog}
+    >
+      <Plus className="h-4 w-4" />
+      {activeSection === "routes" ? "按目标新建" : "新建链路"}
+    </Button>
+  );
+
   return (
     <div className="space-y-6">
       <WorkspaceHeader title="链路管理" description="管理隧道、端口转发和多节点线路" status={
@@ -4451,10 +4467,13 @@ function TunnelsContent() {
               <Globe className="h-4 w-4" />
             </Button>}
           </div>
+          {mergeListControls ? createLinkAction : null}
       </>} />
 
       <Tabs value={activeSection} onValueChange={(value) => setActiveSection(value as TunnelSection)} className="space-y-4">
-        <SlidingTabsList items={TUNNEL_SECTION_ITEMS} activeValue={activeSection} ariaLabel="链路管理" minItemWidthRem={7.75} />
+        {/* fx-list-controls：精简布局（桌面）下分类条和搜索那一行并排，两行变一行（compact.css） */}
+        <div className="fx-list-controls">
+        <SlidingTabsList items={TUNNEL_SECTION_ITEMS} activeValue={activeSection} ariaLabel="链路管理" minItemWidthRem={compactLayout ? 5 : 7.75} />
 
       {/* 搜索栏一行，和主机管理一样：小搜索框在左、「新建链路」在最右；条数只在搜索时出现。 */}
       <div className="flex min-w-0 items-center gap-2">
@@ -4483,18 +4502,9 @@ function TunnelsContent() {
           </span>
         ) : null}
         {/* 「线路总览」本身不新建东西；系统设置里打开了向导才在这里放「按目标新建」。 */}
-        {activeSection === "routes" && !linkWizardEnabled ? null : (
-          <Button
-            className="fx-row-action ml-auto h-9 shrink-0 gap-1.5 rounded-full px-3.5"
-            disabled={!canCreateActive}
-            title={createDisabledTitle}
-            onClick={openCreateTypeDialog}
-          >
-            <Plus className="h-4 w-4" />
-            {activeSection === "routes" ? "按目标新建" : "新建链路"}
-          </Button>
-        )}
+        {mergeListControls ? null : createLinkAction}
       </div>
+        </div>
 
 
 
@@ -4572,7 +4582,7 @@ function TunnelsContent() {
                     <TableRow
                       {...itemProps}
                       className={cn(
-                        "group/sortable h-[72px]",
+                        "group/sortable fx-table-row h-[72px]",
                         !supported && "opacity-70",
                         isDragging && "opacity-55",
                         isDropTarget && "bg-primary/5",

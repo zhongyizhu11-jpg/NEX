@@ -1364,7 +1364,8 @@ function UsersContent() {
       <WorkspaceHeader title={<>用户管理</>} description={<>
             管理系统用户、权限和流量配额
           </>} actions={<>
-          <Badge variant="outline" className="justify-center gap-1.5 px-3 py-1.5 text-xs">
+          {/* 精简布局：下面的统计条已经是这两个数，页头不再重复（data-fx-compact-hide） */}
+          <Badge data-fx-compact-hide="" variant="outline" className="justify-center gap-1.5 px-3 py-1.5 text-xs">
             <ShieldCheck className="h-3 w-3 text-[var(--fx-warn-text)]" />
             <AnimatedStatValue
               value={`${adminCount} 管理员`}
@@ -1373,7 +1374,7 @@ function UsersContent() {
               fallbackValue="0 管理员"
             />
           </Badge>
-          <Badge variant="outline" className="justify-center gap-1.5 px-3 py-1.5 text-xs">
+          <Badge data-fx-compact-hide="" variant="outline" className="justify-center gap-1.5 px-3 py-1.5 text-xs">
             <UsersIcon className="h-3 w-3 text-primary" />
             <AnimatedStatValue
               value={`${userPageQuery.data?.totalItems ?? 0} 用户`}
@@ -1492,7 +1493,7 @@ function UsersContent() {
               <Table className="min-w-[720px] sm:min-w-[860px] md:min-w-[1120px] lg:min-w-[1380px] xl:min-w-[1520px]">
                 <TableHeader>
                   <TableRow className="hover:bg-transparent">
-                    <TableHead className="w-[60px] whitespace-nowrap">ID</TableHead>
+                    <TableHead data-fx-compact-hide="" className="w-[60px] whitespace-nowrap">ID</TableHead>
                     <TableHead className="w-[260px] whitespace-nowrap">用户</TableHead>
                     <TableHead className="w-[210px] whitespace-nowrap">流量使用</TableHead>
                     <TableHead className="hidden w-[140px] whitespace-nowrap xl:table-cell">Telegram</TableHead>
@@ -1515,7 +1516,8 @@ function UsersContent() {
 
                     return (
                       <TableRow key={u.id}>
-                        <TableCell>
+                        {/* 精简布局：ID 列不占位（详情框里有 #id） */}
+                        <TableCell data-fx-compact-hide="">
                           <span className="text-xs text-muted-foreground font-mono">#{u.id}</span>
                         </TableCell>
                         <TableCell className="py-3">
@@ -1524,7 +1526,8 @@ function UsersContent() {
                             <div className="min-w-0 py-0.5">
                               <p className="truncate text-sm font-medium leading-5">{u.username || "未命名"}</p>
                               <div className="mt-1.5 flex min-w-0 items-center gap-1 whitespace-nowrap">
-                                <Badge variant={u.role === "admin" ? "default" : "outline"} className="h-5 w-fit shrink-0 px-1.5 text-[10px] leading-4">
+                                {/* 精简布局：「普通用户」是默认，不标；管理员照标 */}
+                                <Badge data-fx-compact-hide={u.role === "admin" ? undefined : ""} variant={u.role === "admin" ? "default" : "outline"} className="h-5 w-fit shrink-0 px-1.5 text-[10px] leading-4">
                                   {u.role === "admin" ? "管理员" : "普通用户"}
                                 </Badge>
                                 {u.accountEnabled === false && (
@@ -1627,12 +1630,13 @@ function UsersContent() {
                                 onCheckedChangeAsync={(checked) => updateForwardAccessMutation.mutateAsync({ userId: u.id, enabled: checked })}
                                 className="shrink-0"
                               />
+                              {/* 精简布局：开关本身就是状态，旁边那枚「转发启用 / 停用」不再标 */}
                               {u.canAddRules || u.role === "admin" ? (
-                                <Badge variant="outline" className="h-5 w-fit shrink-0 whitespace-nowrap border-chart-2/30 px-2 py-0 text-[10px] text-chart-2">
+                                <Badge data-fx-compact-hide="" variant="outline" className="h-5 w-fit shrink-0 whitespace-nowrap border-chart-2/30 px-2 py-0 text-[10px] text-chart-2">
                                   转发启用
                                 </Badge>
                               ) : (
-                                <Badge variant="outline" className="h-5 w-fit shrink-0 whitespace-nowrap border-muted-foreground/30 px-2 py-0 text-[10px] text-muted-foreground">
+                                <Badge data-fx-compact-hide="" variant="outline" className="h-5 w-fit shrink-0 whitespace-nowrap border-muted-foreground/30 px-2 py-0 text-[10px] text-muted-foreground">
                                   转发停用
                                 </Badge>
                               )}
@@ -1645,7 +1649,8 @@ function UsersContent() {
                           </div>
                         </TableCell>
                         <TableCell className="hidden min-w-[240px] lg:table-cell">
-                          <div className="flex min-w-[220px] flex-wrap items-center gap-1.5 text-[11px] leading-none text-muted-foreground">
+                          {/* fx-quota-chips：精简布局下去掉每个值的小框，排成「规则 10 · 端口 20」一行（compact.css） */}
+                          <div className="fx-quota-chips flex min-w-[220px] flex-wrap items-center gap-1.5 text-[11px] leading-none text-muted-foreground">
                             <span className="inline-flex h-6 items-center whitespace-nowrap rounded-md border border-border/50 bg-muted/20 px-2">规则 {u.maxRules ? `${u.maxRules} 条` : "不限"}</span>
                             <span className="inline-flex h-6 items-center whitespace-nowrap rounded-md border border-border/50 bg-muted/20 px-2">端口 {u.maxPorts ? `${u.maxPorts} 个` : "不限"}</span>
                             <span className="inline-flex h-6 items-center whitespace-nowrap rounded-md border border-border/50 bg-muted/20 px-2">连接 {u.maxConnections ? `${u.maxConnections}` : "不限"}</span>

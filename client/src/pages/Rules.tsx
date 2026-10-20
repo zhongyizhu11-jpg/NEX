@@ -2019,7 +2019,8 @@ function RulesContent() {
   const confirmDialog = useConfirmDialog();
   const { user } = useAuth();
   // 精简布局（compact.css 收的是组件打了 data-fx-help 的说明；规则框里这几行是条件渲染，由这个开关管）。
-  const hideRuleFormHints = useCompactLayout();
+  const compactLayout = useCompactLayout();
+  const hideRuleFormHints = compactLayout;
   const [, setLocation] = useLocation();
   const search = useSearch();
   const isMobile = useIsMobile();
@@ -7576,6 +7577,7 @@ function RulesContent() {
     「新建规则」放在搜索栏那一行的最右边（用户要的位置）：搜索、筛选、新建都是「对这个列表
     做事」，并排一行；页头只剩视图切换和 ···。手机上按钮带字，不缩成一个「＋」。
   */
+  const mergeListControls = compactLayout && !isMobile;
   const createRuleAction = (
         rulePermissionLoading ? (
           <Button disabled className="fx-row-action h-9 shrink-0 gap-1.5 rounded-full px-3.5">
@@ -7603,6 +7605,10 @@ function RulesContent() {
 
   return (
     <div className="space-y-6">
+      {/*
+        精简布局（桌面）：分类条和搜索那一行并排，筛选下拉收进一个按钮；「新建规则」上到页头右边。
+        三行变两行。手机上照旧 —— 页头只有 393px，主操作放不下。
+      */}
       <WorkspaceHeader title="转发规则" status={
           /*
             页头（第三轮样稿）：标题下一行「5 / 5 已启用」，再一行状态点「● 运行 5 · ● 停用 0」；
@@ -7680,6 +7686,7 @@ function RulesContent() {
               <DropdownMenuItem onSelect={() => setResetTrafficTarget({ scope: "all" })} disabled={visibleRuleIdsForMetrics.length === 0 || resetTrafficMutation.isPending}><RotateCcw className="h-4 w-4" />重置数据</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+          {mergeListControls ? createRuleAction : null}
       </>} />
 
       <FreezeWhile frozen={showDialog || showImportDialog || showCopyDialog} render={() => <>
@@ -7691,7 +7698,7 @@ function RulesContent() {
       )}
 
       {(user?.role === "admin" || ruleScopeTotal > 0 || hasActiveRuleFilter || (rules && rules.length > 0)) && (
-        <div className="space-y-3">
+        <div className="fx-list-controls space-y-3">
           {/*
             第一行：分类条，和主机管理、链路管理顶上那条一样的分段条（2026-10-09 用户要统一）；
             第二行：小搜索框、筛选、最右边「新建规则」。
@@ -7706,7 +7713,8 @@ function RulesContent() {
           </Tabs>
           <FilterToolbar
             activeCount={Number(hasActiveUserFilter) + Number(filterResource !== "all")}
-            action={createRuleAction}
+            collapsed={mergeListControls}
+            action={mergeListControls ? undefined : createRuleAction}
             search={
             <div className="relative w-full">
               <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />

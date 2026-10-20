@@ -94,6 +94,7 @@ import {
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SlidingTabsList, type SlidingTabItem } from "@/components/ui/sliding-tabs";
+import { useCompactLayout } from "@/hooks/useCompactLayout";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import DataSectionLoading from "@/components/DataSectionLoading";
 import DataSectionError from "@/components/DataSectionError";
@@ -1750,6 +1751,7 @@ function HostsContent() {
   const [tokenViewMode, setTokenViewMode] = useState<AgentTokenViewMode>(() => getStoredAgentTokenViewMode());
   const [serviceViewMode, setServiceViewMode] = useState<HostProbeServiceViewMode>(() => getStoredHostProbeServiceViewMode());
   const [hostGroupViewMode, setHostGroupViewMode] = useState<HostGroupViewMode>(() => getStoredHostGroupViewMode());
+  const compactLayout = useCompactLayout();
   const hostManageTabItems = user?.role === "admin" ? HOST_MANAGE_TAB_ITEMS_ADMIN : HOST_MANAGE_TAB_ITEMS_USER;
   /*
     这一页的实时数据统一一个节奏（原来是几个查询各 2 秒、各自错开地刷）：桌面 3 秒；
@@ -2796,7 +2798,9 @@ function HostsContent() {
         onValueChange={(value) => setActiveManageTab(value as HostManageTab)}
         className="space-y-4"
       >
-        <SlidingTabsList items={hostManageTabItems} activeValue={activeManageTab} ariaLabel="主机管理" minItemWidthRem={7.5} />
+        {/* fx-list-controls：精简布局（桌面）下分类条和搜索那一行并排（compact.css） */}
+        <div className="fx-list-controls">
+        <SlidingTabsList items={hostManageTabItems} activeValue={activeManageTab} ariaLabel="主机管理" minItemWidthRem={compactLayout ? 6.5 : 7.5} />
       {/* 搜索栏一行：小搜索框在左、「添加主机」在最右（用户要的位置）；分组药丸在下一行。 */}
       <div className="flex items-center gap-2">
         <div className="relative min-w-0 flex-1 sm:max-w-[340px]">
@@ -2847,6 +2851,7 @@ function HostsContent() {
           </Button>
         )}
       </div>
+        </div>
 
         <TabsContent value="hosts" className="space-y-4">
         {user?.role === "admin" && (
@@ -3683,7 +3688,7 @@ function HostsContent() {
                           </Select>
                         </FormField>
                       </div>
-                      <div className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between" data-host-traffic-failover-setting="">
+                      <div data-fx-setting-box="" className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between" data-host-traffic-failover-setting="">
                         <div className="min-w-0 space-y-0.5">
                           <Label className="text-sm font-medium">流量故障转移</Label>
                           {/*
@@ -3691,7 +3696,7 @@ function HostsContent() {
                             把这台从组里摘出去（转发组、入口组、出口组、多出口隧道），组里换别的成员顶上。
                             只改运行时，成员和端口都不删；流量重置（手动或每月自动）或关掉这个开关就恢复。
                           */}
-                          <p className="text-xs text-muted-foreground">用到这个比例后暂停参与组调度，流量重置后恢复。</p>
+                          <p data-fx-help="" className="text-xs text-muted-foreground">用到这个比例后暂停参与组调度，流量重置后恢复。</p>
                           {editingHostRow && hostTrafficExcluded(editingHostRow) ? (
                             <p className="text-xs text-[var(--fx-warn-text)]">已到阈值，正暂停参与组调度。</p>
                           ) : null}
@@ -3716,17 +3721,17 @@ function HostsContent() {
                           />
                         </div>
                       </div>
-                      <div className="mt-2.5 flex min-h-9 items-center justify-between gap-3 rounded-md bg-muted/35 px-3 py-2">
+                      <div data-fx-setting-box="" className="mt-2.5 flex min-h-9 items-center justify-between gap-3 rounded-md bg-muted/35 px-3 py-2">
                         <div className="min-w-0 space-y-0.5">
                           <Label className="text-sm font-medium">上下线通知</Label>
-                          <p className="text-xs text-muted-foreground">掉线、恢复时推送给管理员。</p>
+                          <p data-fx-help="" className="text-xs text-muted-foreground">掉线、恢复时推送给管理员。</p>
                         </div>
                         <Checkbox aria-label="上下线通知"
                           checked={form.hostStatusNotifyEnabled}
                           onCheckedChange={(checked) => setForm({ ...form, hostStatusNotifyEnabled: checked })}
                         />
                       </div>
-                      <div className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+                      <div data-fx-setting-box="" className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
                         <div className="min-w-0 space-y-0.5">
                           <Label className="text-sm font-medium">流量耗尽提醒</Label>
                           {/*
@@ -3756,7 +3761,7 @@ function HostsContent() {
                           />
                         </div>
                       </div>
-                      <div className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+                      <div data-fx-setting-box="" className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
                         <div className="min-w-0 space-y-0.5">
                           <Label className="text-sm font-medium">续费提醒</Label>
                           <p className="text-xs text-muted-foreground">
@@ -3782,7 +3787,7 @@ function HostsContent() {
                           />
                         </div>
                       </div>
-                      <div className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+                      <div data-fx-setting-box="" className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
                         <div className="min-w-0">
                           <Label className="text-sm font-medium">自动重置流量</Label>
                         </div>
@@ -3803,7 +3808,7 @@ function HostsContent() {
                           <Checkbox aria-label="每月自动清零" checked={form.trafficAutoReset} onCheckedChange={(checked) => setForm({ ...form, trafficAutoReset: checked })} />
                         </div>
                       </div>
-                      <div className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+                      <div data-fx-setting-box="" className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
                         <div className="min-w-0 space-y-0.5">
                           <Label className="text-sm font-medium">线路带宽</Label>
                           <p data-fx-help="" className="text-xs text-muted-foreground">商家给的带宽，负载均衡按它分，不限速。</p>
@@ -3822,7 +3827,7 @@ function HostsContent() {
                           <span className="flex h-8 shrink-0 items-center border-l border-border/60 bg-muted/50 px-2 text-xs text-muted-foreground">Mbit/s</span>
                         </div>
                       </div>
-                      <div className="mt-2.5 flex min-h-9 items-center justify-between gap-3 rounded-md bg-muted/35 px-3 py-2">
+                      <div data-fx-setting-box="" className="mt-2.5 flex min-h-9 items-center justify-between gap-3 rounded-md bg-muted/35 px-3 py-2">
                         <div className="min-w-0 space-y-0.5">
                           <Label className="text-sm font-medium">只放行白名单 IP</Label>
                           <p data-fx-help="" className="text-xs text-muted-foreground">别的机器连不上它是正常的：诊断不再怪公网 IP 不通，订阅也不会因探测超时自动隐藏它。</p>
@@ -3833,10 +3838,10 @@ function HostsContent() {
                         />
                       </div>
                       {user?.role === "admin" && editingId ? (
-                        <div className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+                        <div data-fx-setting-box="" className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
                           <div className="min-w-0 space-y-0.5">
                             <Label className="text-sm font-medium">整台主机转发限速</Label>
-                            <p className="text-xs text-muted-foreground">所有用户合计上限，0 = 不限。</p>
+                            <p data-fx-help="" className="text-xs text-muted-foreground">所有用户合计上限，0 = 不限。</p>
                           </div>
                           <div className="flex h-8 w-36 shrink-0 overflow-hidden rounded-md border border-input bg-background focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2">
                             <Input aria-label="整台主机转发限速（Mbit/s）"
@@ -3853,7 +3858,7 @@ function HostsContent() {
                           </div>
                         </div>
                       ) : null}
-                      <div className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+                      <div data-fx-setting-box="" className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
                         <div className="min-w-0 space-y-0.5">
                           <Label className="text-sm font-medium">公网出口整形</Label>
                           {form.egressShapingMode === "auto" ? (
@@ -3894,7 +3899,7 @@ function HostsContent() {
                         </div>
                       </div>
                       {editingId ? (
-                        <div className="mt-2.5 flex min-h-9 items-start justify-between gap-3 rounded-md bg-muted/35 px-3 py-2">
+                        <div data-fx-setting-box="" className="mt-2.5 flex min-h-9 items-start justify-between gap-3 rounded-md bg-muted/35 px-3 py-2">
                           <div className="min-w-0 space-y-0.5">
                             <Label className="text-sm font-medium">内核快速转发</Label>
                             <p className="text-xs text-muted-foreground">
@@ -3913,7 +3918,7 @@ function HostsContent() {
                           />
                         </div>
                       ) : null}
-                      <div className="mt-2.5 space-y-2 rounded-md bg-muted/35 px-3 py-2.5">
+                      <div data-fx-setting-box="" className="mt-2.5 space-y-2 rounded-md bg-muted/35 px-3 py-2.5">
                         <FormField className="flex min-h-8 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                           <div className="flex min-w-0 items-center gap-2">
                             <RadioTower className="h-4 w-4 shrink-0 text-muted-foreground" />
