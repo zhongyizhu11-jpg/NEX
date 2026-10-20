@@ -19,6 +19,7 @@ import { Label } from "@/components/ui/label";
 import { segmentedControlClassName, segmentedOptionClassName } from "@/components/ui/segmented";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { trpc } from "@/lib/trpc";
+import { useCompactLayout } from "@/hooks/useCompactLayout";
 import {
   isSs2022Method,
   parseSsEgressLink,
@@ -116,6 +117,7 @@ const OPTIONS: Array<{ type: RuleEgressType; short: string; icon: typeof Server 
 export function RuleEgressSection({ value, onChange, onEgressEnabled, blockedReason, runtimeNote, entryHostIds, viaTunnel = false, isAdmin }: Props) {
   // 谁去连 SS 落地：直连规则是入口机，走隧道的规则是隧道出口机。
   const dialer = viaTunnel ? "隧道出口机" : "入口机";
+  const compactLayout = useCompactLayout();
   const utils = trpc.useUtils();
   const optionsQuery = trpc.proxyInbounds.egressLandingOptions.useQuery(undefined, {
     enabled: value.egressType === "ss_host",
@@ -159,7 +161,19 @@ export function RuleEgressSection({ value, onChange, onEgressEnabled, blockedRea
   return (
     // 标题和折叠在外面（规则编辑框的 RuleFormCollapsible「出口」），这里只放里面的内容。
     <section className="space-y-2.5" data-testid="rule-egress-section">
-      <p className="text-meta text-muted-foreground">目标看到的来源 IP 是谁</p>
+      {compactLayout ? (
+        /*
+          精简布局：一行画出流量怎么走、目标看到谁的 IP —— 「出口」这两个字本身说不清，
+          画成箭头就不会跟「隧道出口」「落地」绕在一起。
+        */
+        <p className="text-[13px] leading-5 text-foreground" data-testid="rule-egress-flow">
+          {value.egressType === "none"
+            ? <>{dialer} → 目标<span className="text-muted-foreground">（目标看到{dialer}的 IP）</span></>
+            : <>{dialer} → {value.egressType === "ss_host" ? "落地主机" : "SS 服务器"} → 目标<span className="text-muted-foreground">（目标看到{value.egressType === "ss_host" ? "落地" : "SS 服务器"}的 IP）</span></>}
+        </p>
+      ) : (
+        <p className="text-meta text-muted-foreground">目标看到的来源 IP 是谁</p>
+      )}
       <div className={segmentedControlClassName} role="group" aria-label="出口">
         <div className="grid grid-cols-3 gap-1">
           {OPTIONS.map((option) => {
@@ -184,7 +198,7 @@ export function RuleEgressSection({ value, onChange, onEgressEnabled, blockedRea
         </div>
       </div>
 
-      {value.egressType === "none" && (
+      {value.egressType === "none" && (!compactLayout || blockedReason) && (
         <p className="text-meta leading-5 text-muted-foreground">
           {blockedReason
             ? <>{dialer}自己连接目标。{blockedReason}</>
@@ -284,7 +298,7 @@ export function RuleEgressSection({ value, onChange, onEgressEnabled, blockedRea
               {isAdmin ? `除了${viaTunnel ? "隧道出口机" : "入口主机"}之外还没有别的主机可以当落地。` : "您还没有可以当落地的主机：需要自己的主机，或管理员授权的主机。"}
             </p>
           )}
-          <p className="text-meta leading-5 text-muted-foreground">
+          <p className={`text-meta leading-5 text-muted-foreground${compactLayout ? " hidden" : ""}`}>
             {selectedHost && usableInbounds.length === 0
               ? `一键创建的入站用 ${SS_EGRESS_DEFAULT_METHOD}、随机密码，端口从这台主机的端口范围里挑，默认不进订阅。`
               : `${dialer}经这个 Shadowsocks 入站让落地去连目标；入站轮换密码、改端口后规则自动跟上。`}
@@ -323,7 +337,7 @@ export function RuleEgressSection({ value, onChange, onEgressEnabled, blockedRea
           {linkPreview && linkPreview.ok && isSs2022Method(linkPreview.endpoint.method) && !capabilities.ss2022 && !capabilities.loading && (
             <p className="text-meta leading-5 text-[var(--fx-warn-text)]">{capabilities.ss2022Reason}</p>
           )}
-          <p className="text-meta leading-5 text-muted-foreground">
+          <p className={`text-meta leading-5 text-muted-foreground${compactLayout ? " hidden" : ""}`}>
             支持 {SS_EGRESS_METHODS.join(" / ")}，不支持带插件的链接。链接里的密码由面板加密保存，能接触到面板密钥的服务器管理员可以解出它。
           </p>
         </div>

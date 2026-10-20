@@ -1,4 +1,6 @@
 import { Gauge, Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { useCompactLayout } from "@/hooks/useCompactLayout";
 import { toast } from "sonner";
 import DataSectionError from "@/components/DataSectionError";
 import DataSectionLoading from "@/components/DataSectionLoading";
@@ -32,6 +34,16 @@ const OPTIONS: Array<{ value: Mode; label: string; hint: string }> = [
 
 export default function QuotaModeSection(_props: Record<string, never>) {
   const utils = trpc.useUtils();
+  const compactLayout = useCompactLayout();
+  const upgradeMany = trpc.hosts.requestAgentUpgradeMany.useMutation({
+    onSuccess: (data: any) => {
+      void utils.ops.quotaPolicy.get.invalidate();
+      void utils.hosts.list.invalidate();
+      const skipped = Number(data?.skippedOffline || 0);
+      toast.success(`已安排 ${data?.requested || 0} 台升级${skipped ? `，${skipped} 台离线没发` : ""}`);
+    },
+    onError: (error) => toast.error(error.message || "升级没发出去"),
+  });
   const query = trpc.ops.quotaPolicy.get.useQuery(undefined, { refetchOnWindowFocus: false });
   const setMode = trpc.ops.quotaPolicy.set.useMutation({
     onSuccess: () => {
@@ -79,13 +91,30 @@ export default function QuotaModeSection(_props: Record<string, never>) {
             </button>
           ))}
         </div>
-        <p className="text-meta text-muted-foreground">{active.hint}</p>
-        {current === "cut" && outdated.length > 0 ? (
+        {compactLayout ? null : <p className="text-meta text-muted-foreground">{active.hint}</p>}
+        {compactLayout && current === "cut" && (outdated.length > 0 || noConntrack.length > 0) ? (
+          /* 精简布局：两段长提示合成一行，原因不细说，直接给按钮。 */
+          <div className="flex items-center gap-2">
+            <p className="min-w-0 flex-1 truncate text-[13px] text-[var(--fx-warn-text)]" title={[...outdated, ...noConntrack].join("、")}>
+              {(data.upgradeHostIds || []).length || outdated.length + noConntrack.length} 台主机需要升级
+            </p>
+            <Button
+              size="sm"
+              className="shrink-0"
+              disabled={upgradeMany.isPending || !(data.upgradeHostIds || []).length}
+              onClick={() => upgradeMany.mutate({ hostIds: data.upgradeHostIds })}
+            >
+              {upgradeMany.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+              一键升级
+            </Button>
+          </div>
+        ) : null}
+        {!compactLayout && current === "cut" && outdated.length > 0 ? (
           <p className="text-meta text-[var(--fx-warn-text)]">
             {names(outdated)} 的 Agent 低于 2.2.216，这几台上的 iptables / nftables 连接不会被清掉，需要把 Agent 升级到 2.2.216。
           </p>
         ) : null}
-        {current === "cut" && noConntrack.length > 0 ? (
+        {!compactLayout && current === "cut" && noConntrack.length > 0 ? (
           <p className="text-meta text-[var(--fx-warn-text)]">
             {names(noConntrack)} 没有装 conntrack，这几台上的 iptables / nftables 连接不会被清掉。把 Agent 升级到最新会自动装上。
           </p>

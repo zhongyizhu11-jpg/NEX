@@ -1109,14 +1109,25 @@ async function buildProxySubscriptionContextForUser(userId: number): Promise<{
         lineBandwidthMbps: hosts.lineBandwidthMbps,
         rateLimitMbps: hosts.rateLimitMbps,
         egressMbps: hosts.egressMbps,
+        ipWhitelistOnly: hosts.ipWhitelistOnly,
       })
       .from(hosts)
       .where(inArray(hosts.id, hostIds))
     : [];
 
   const { activeSuffix } = await getRuleEntryDomainRuntimeSettings();
+  /*
+    白名单主机（ipWhitelistOnly）只放行名单里的 IP，探测超时不代表用户连不上：入口或落地是这种
+    机器的规则不参与「不通自动隐藏」，免得能用的节点从订阅里消失。
+  */
+  const whitelistHostIds = new Set(hostRows.filter((host: any) => !!host.ipWhitelistOnly).map((host: any) => Number(host.id)));
+  const templateHostById = new Map(templates.map((template: any) => [Number(template.id), Number(template.hostId || 0)]));
   const unreachableRuleIds = await getProxySubHideUnreachable(userId)
-    ? await getUnreachableRuleIds(rules.filter((rule: any) => Number(rule.proxyNodeId || 0) > 0).map((rule: any) => Number(rule.id)))
+    ? await getUnreachableRuleIds(rules.filter((rule: any) => (
+      Number(rule.proxyNodeId || 0) > 0
+      && !whitelistHostIds.has(Number(rule.hostId || 0))
+      && !whitelistHostIds.has(templateHostById.get(Number(rule.proxyNodeId)) || 0)
+    )).map((rule: any) => Number(rule.id)))
     : undefined;
   return {
     plan: buildProxySubscriptionPlan({
