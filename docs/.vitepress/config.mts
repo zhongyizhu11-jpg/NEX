@@ -3,6 +3,8 @@ import { defineConfig } from "vitepress";
 const base = process.env.VITEPRESS_BASE || "/";
 
 export default defineConfig({
+  // docs/dev 是维护者内部文档（立项、重构计划），不进公开站
+  srcExclude: ["dev/**"],
   base,
   lang: "zh-CN",
   title: "NEX",
