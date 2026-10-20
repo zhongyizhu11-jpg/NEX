@@ -29,6 +29,7 @@ import {
   Download,
   ExternalLink,
   KeyRound,
+  LayoutList,
   Link2Off,
   Loader2,
   LogOut,
@@ -124,6 +125,14 @@ function ProfileContent() {
       toast.success(variables.telegramAnnouncementSubscribed ? "已开启公告 TG 推送" : "已关闭公告 TG 推送");
     },
     onError: (error) => toast.error(error.message || "公告 TG 推送设置失败"),
+  });
+
+  const updateCompactLayoutMutation = trpc.auth.updateProfile.useMutation({
+    onSuccess: async (_data, variables) => {
+      await utils.auth.me.invalidate();
+      toast.success(variables.compactLayout ? "已开启精简布局" : "已恢复完整布局");
+    },
+    onError: (error) => toast.error(error.message || "布局设置失败"),
   });
 
   const updateAvatarMutation = trpc.users.updateAvatar.useMutation({
@@ -450,6 +459,29 @@ function ProfileContent() {
                   : `今天还能改 ${avatarQuotaRemaining} / ${avatarQuota?.limit ?? 3} 次头像。`}
               </div>
             ) : null}
+          </CardContent>
+        </Card>
+
+        <Card className="border-border/50 bg-card/70">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <LayoutList className="h-4 w-4 text-primary" />
+              界面
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <SettingList>
+              <SettingRow
+                label="精简布局"
+                description="分类和页签合并、卡片更紧凑，少用的设置收起来。只影响你自己看到的界面，随时可以关回去。"
+                control={(
+                  <OptimisticSwitch aria-label="精简布局"
+                    checked={(user as any)?.compactLayout === true || (user as any)?.compactLayout === 1}
+                    onCheckedChangeAsync={(enabled: boolean) => updateCompactLayoutMutation.mutateAsync({ compactLayout: enabled })}
+                  />
+                )}
+              />
+            </SettingList>
           </CardContent>
         </Card>
 

@@ -499,7 +499,7 @@ export function agentCheckItems(
 
 /* ───────────────────────── 修复建议 ───────────────────────── */
 
-export function agentCheckHints(check: DiagnosticsAgentCheck, context: { role?: "entry" | "hop" | "target" } = {}) {
+export function agentCheckHints(check: DiagnosticsAgentCheck, context: { role?: "entry" | "hop" | "target"; whitelistTarget?: boolean } = {}) {
   const port = Number(check.port || 0);
   const proto = check.protocol === "udp" ? "udp" : check.protocol === "both" ? "tcp/udp" : "tcp";
   switch (check.kind) {
@@ -522,6 +522,12 @@ export function agentCheckHints(check: DiagnosticsAgentCheck, context: { role?: 
     case "dns":
       return { hintFail: "主机解析不了这个域名：检查主机的 /etc/resolv.conf 和域名的解析记录，或把目标改成 IP" };
     case "dial":
+      if (context.role === "hop" && context.whitelistTarget) {
+        return {
+          hintFail: "下一跳开了 IP 白名单：先确认上一跳主机的出口 IP 在它的白名单里；在的话再看隧道是否在运行",
+          hintWarn: "下一跳连接不稳定，看看两台主机之间的线路",
+        };
+      }
       return context.role === "hop"
         ? {
           hintFail: "连不上下一跳：检查下一跳主机上隧道 / 规则是否在运行，以及它的防火墙、云安全组是否放行这个端口",

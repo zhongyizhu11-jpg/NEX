@@ -217,7 +217,7 @@ const tables: TableDef[] = [
       c("expiresAt", "epoch"), c("trafficAutoReset", "bool", { notNull: true, default: false }),
       c("trafficResetDay", "int", { notNull: true, default: 1 }), c("lastTrafficReset", "epoch"), c("lastAutoTrafficReset", "epoch"),
       c("telegramId", "text"), c("telegramUsername", "text"), c("telegramFirstName", "text"), c("telegramLastName", "text"),
-      c("telegramLinkedAt", "epoch"), c("telegramLastSeenAt", "epoch"), c("telegramAnnouncementSubscribed", "bool", { notNull: true, default: false }), c("telegramBindCode", "text"),
+      c("telegramLinkedAt", "epoch"), c("telegramLastSeenAt", "epoch"), c("telegramAnnouncementSubscribed", "bool", { notNull: true, default: false }), c("compactLayout", "bool", { notNull: true, default: false }), c("telegramBindCode", "text"),
       c("telegramBindCodeExpiresAt", "epoch"), c("telegramLoginCode", "text"), c("telegramLoginCodeExpiresAt", "epoch"),
       c("twoFactorEnabled", "bool", { notNull: true, default: false }), c("twoFactorSecret", "text"), c("twoFactorEnabledAt", "epoch"),
       c("googleSub", "varchar", { length: 191 }), c("googleEmail", "text"), c("googleLinkedAt", "epoch"),
@@ -277,6 +277,8 @@ const tables: TableDef[] = [
       c("flowOffload", "bool", { notNull: true, default: false }),
       // 这台机器上下线要不要推 Telegram / Discord（上游 2.3.285）。只管推送，不影响离线判定、事件和故障转移。
       c("hostStatusNotifyEnabled", "bool", { notNull: true, default: true }),
+      // 只放行白名单 IP 的机器：别的机器（包括它自己经公网 IP 绕回来）连不上是正常的，诊断和订阅自动隐藏不拿这个当故障。
+      c("ipWhitelistOnly", "bool", { notNull: true, default: false }),
       c("telegramTrafficAlertEnabled", "bool", { notNull: true, default: false }), c("trafficAlertThresholdPercent", "int", { notNull: true, default: 20 }),
       c("telegramRenewalReminderEnabled", "bool", { notNull: true, default: false }), c("renewalReminderDays", "int", { notNull: true, default: 3 }),
       c("trafficAutoReset", "bool", { notNull: true, default: false }), c("trafficResetDay", "int", { notNull: true, default: 1 }),

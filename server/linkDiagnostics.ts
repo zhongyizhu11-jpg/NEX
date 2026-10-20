@@ -220,12 +220,12 @@ class PlanBuilder {
     this.slots.push({ kind: "panel", item });
   }
 
-  agent(hostId: number, group: DiagnosticGroup, title: string, check: Omit<DiagnosticsAgentCheck, "id">, hintRole?: "entry" | "hop" | "target") {
+  agent(hostId: number, group: DiagnosticGroup, title: string, check: Omit<DiagnosticsAgentCheck, "id">, hintRole?: "entry" | "hop" | "target", hintContext: { whitelistTarget?: boolean } = {}) {
     if (hostId <= 0) return;
     const full: DiagnosticsAgentCheck = { id: `c${++this.seq}`, ...check };
     this.slots.push({
       kind: "agent",
-      planned: { check: full, group, title, hostId, hostName: this.name(hostId), ...agentCheckHints(full, { role: hintRole }) },
+      planned: { check: full, group, title, hostId, hostName: this.name(hostId), ...agentCheckHints(full, { role: hintRole, ...hintContext }) },
     });
   }
 
@@ -308,7 +308,11 @@ function planEntryListener(plan: PlanBuilder, input: {
   }
   plan.agent(hostId, group, `${where}防火墙放行端口 ${port}`, { kind: "firewall", port, protocol, forwardType });
   if (!kernel && protocol !== "udp") {
-    plan.agent(hostId, group, `${where}本机连得上端口 ${port}`, { kind: "loopback", port, protocol: "tcp", publicIp: primaryPublicIp(plan.hosts.get(hostId)) });
+    plan.agent(hostId, group, `${where}本机连得上端口 ${port}`, {
+      kind: "loopback", port, protocol: "tcp",
+      // 白名单主机连自己的公网 IP 本来就不通（自己的出口 IP 不一定在白名单里），只测 127.0.0.1。
+      publicIp: plan.hosts.get(hostId)?.ipWhitelistOnly ? "" : primaryPublicIp(plan.hosts.get(hostId)),
+    });
   }
   const processType = input.tunnel
     ? (isForwardXTunnel(input.tunnel) ? "fxp" : "gost")
@@ -515,7 +519,7 @@ async function planTunnelLinks(plan: PlanBuilder, tunnel: any, hops: any[], opti
       plan.panel({ key: `link.edge:${edge.fromHostId}-${edge.toHostId}`, group: "link", title: `「${plan.name(edge.fromHostId)}」→「${toName}」`, status: "skip", summary: "NEX v2 走 WireGuard（UDP），没法用 TCP 连接测；看「延迟测试」", source: "panel" });
       continue;
     }
-    plan.agent(edge.fromHostId, "link", `「${plan.name(edge.fromHostId)}」→「${toName}」${formatHostPort(edge.address, edge.port)}`, { kind: "dial", host: edge.address, port: edge.port, protocol: "tcp" }, "hop");
+    plan.agent(edge.fromHostId, "link", `「${plan.name(edge.fromHostId)}」→「${toName}」${formatHostPort(edge.address, edge.port)}`, { kind: "dial", host: edge.address, port: edge.port, protocol: "tcp" }, "hop", { whitelistTarget: !!plan.hosts.get(edge.toHostId)?.ipWhitelistOnly });
   }
 }
 
