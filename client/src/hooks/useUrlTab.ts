@@ -9,9 +9,10 @@ type UseUrlTabOptions<T extends string> = {
   queryKey?: string;
   clearDefaultFromUrl?: boolean;
   /**
-   * false：不记上次停在哪个 tab —— 刷新、从别的页面点进来都回到默认（第一个）。
+   * 默认 false：不记上次停在哪个 tab —— 刷新、从别的页面点进来都回到默认（第一个）。
    * 别处带着 ?tab= 跳过来照样打开那一个，打开后把它从地址栏去掉；点 tab 也不往地址栏写，
-   * 免得一刷新又回到那一页（链路管理，用户要求每次进来都是第一个分类）。
+   * 免得一刷新又回到那一页。用户要求所有页面的分类条都这样（2.3.464 先只改了链路管理）。
+   * 传 true 才回到老行为：记在 localStorage + 地址栏。
    */
   remember?: boolean;
 };
@@ -61,7 +62,7 @@ export function useUrlTab<T extends string>({
   storageKey,
   queryKey = "tab",
   clearDefaultFromUrl = true,
-  remember = true,
+  remember = false,
 }: UseUrlTabOptions<T>) {
   if (!remember) storageKey = undefined;
   const [location, setLocation] = useLocation();
@@ -87,18 +88,20 @@ export function useUrlTab<T extends string>({
     const nowSearch = currentSearch();
     const previousSearch = lastSearchRef.current;
     lastSearchRef.current = nowSearch;
+    // 不记的时候，地址栏里的 ?tab= 用完就去掉，免得刷新又回到那一页。
+    const stripTabFromUrl = () => {
+      if (remember) return;
+      const stripped = searchWithout(nowSearch, queryKey);
+      if (stripped === nowSearch) return;
+      // 先记下去掉之后的查询串，下面这次地址变化就不会被当成「tab 被去掉了」而换回默认。
+      lastSearchRef.current = stripped;
+      setLocation(`${location.split("?")[0] || "/"}${stripped}`, { replace: true });
+    };
     let next: T | null;
     if (previousSearch === null) {
       // 第一次：地址栏 > 上次存的 > 默认
       next = resolveTab();
-      if (!remember) {
-        const stripped = searchWithout(nowSearch, queryKey);
-        if (stripped !== nowSearch) {
-          // 先记下去掉之后的查询串，下面这次地址变化就不会被当成「tab 被去掉了」而换回默认。
-          lastSearchRef.current = stripped;
-          setLocation(`${location.split("?")[0] || "/"}${stripped}`, { replace: true });
-        }
-      }
+      stripTabFromUrl();
     } else {
       next = tabForSearchChange(previousSearch, nowSearch, values, defaultValue, {
         queryKey,
@@ -106,6 +109,8 @@ export function useUrlTab<T extends string>({
         storedValue: readStoredTab(storageKey, coerce),
       });
       if (next === null) return;
+      // 已经在这一页时别处又带着 ?tab= 跳过来（比如设置页里点「去邮箱设置」）：一样用一次就去掉。
+      stripTabFromUrl();
     }
     const resolved = next;
     setTabState((current) => (current === resolved ? current : resolved));

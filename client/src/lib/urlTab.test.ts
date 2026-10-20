@@ -68,11 +68,18 @@ test("不清掉默认值的页面，tab 参数被去掉时退回上次存的", (
   );
 });
 
-test("链路管理每次进来都从第一个分类开始：不记上次的 tab，带 ?tab= 跳过来的也只用一次", async () => {
+test("所有分类条每次进来都从第一个分类开始：不记上次的 tab，带 ?tab= 跳过来的也只用一次", async () => {
   const fs = await import("node:fs");
-  const page = fs.readFileSync("client/src/pages/Tunnels.tsx", "utf8");
-  const call = page.slice(page.indexOf("useUrlTab<TunnelSection>({"), page.indexOf("useUrlTab<TunnelSection>({") + 400);
-  assert.match(call, /remember: false/);
+  const path = await import("node:path");
+  const hookSource = fs.readFileSync("client/src/hooks/useUrlTab.ts", "utf8");
+  assert.match(hookSource, /remember = false,/, "默认就是不记");
+  // 没有哪一页偷偷改回「记住」。
+  const pagesDir = "client/src/pages";
+  for (const file of fs.readdirSync(pagesDir)) {
+    if (!file.endsWith(".tsx")) continue;
+    const source = fs.readFileSync(path.join(pagesDir, file), "utf8");
+    assert.doesNotMatch(source, /remember:\s*true/, `${file} 不该再记住上次的分类`);
+  }
   const hook = fs.readFileSync("client/src/hooks/useUrlTab.ts", "utf8");
   // 不记：不读也不写 localStorage；点 tab 不往地址栏写；进来时地址栏里的 tab 用完就去掉。
   assert.match(hook, /if \(!remember\) storageKey = undefined;/);
