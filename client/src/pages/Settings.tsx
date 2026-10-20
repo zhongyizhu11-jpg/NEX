@@ -6587,58 +6587,47 @@ function SystemInfoSection() {
         </CardContent>
       </Card>
 
-      <div className="grid gap-4 @[58rem]:grid-cols-2">
-        <Card className="border-border bg-card">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <ShieldCheck className="h-4 w-4 text-primary" />
-              登录会话配置
-            </CardTitle>
-            <CardDescription>
-              控制同一账户在多台设备上的后台访问策略。
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <SettingList>
-              <SettingRow
-                asLabel
-                label="允许多设备在线"
-                description="关闭时后登录的设备会立即接管，正在使用的旧会话将退出；仅保留 Cookie 但未在使用的设备不会阻止新登录。"
-                control={<Checkbox aria-label="允许多设备在线" checked={allowMultiDeviceLogin} onCheckedChange={setAllowMultiDeviceLogin} />}
-              />
-            </SettingList>
-            <div className="flex justify-end">
-              <Button data-dock-save onClick={handleSaveSessionPolicy} disabled={isSavingSetting("sessionPolicy")}>
-                {isSavingSetting("sessionPolicy") && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                {isSavingSetting("sessionPolicy") ? "保存中..." : "保存登录会话配置"}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="border-border bg-card">
-          <CardHeader className="gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div className="space-y-1.5">
-              <CardTitle className="flex items-center gap-2 text-base">
-                <PanelLeft className="h-4 w-4 text-primary" />
-                左侧导航栏菜单展示设置
-              </CardTitle>
-              <CardDescription>
-                控制左侧导航栏常用入口是否展示。
-              </CardDescription>
-            </div>
-            <Button variant="outline" className="w-full gap-2 sm:w-auto" onClick={openSidebarMenuDialog}>
-              <Settings2 className="h-4 w-4" />
-              管理菜单开关
+      {/* 登录会话、左侧导航栏原来各一张卡、各一行：两张单行卡并成一张（标准布局重构工作包五） */}
+      <Card className="border-border bg-card">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <ShieldCheck className="h-4 w-4 text-primary" />
+            会话与导航
+          </CardTitle>
+          <CardDescription>
+            同一账户多设备在线的策略，以及左侧导航栏常用入口是否展示。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <SettingList>
+            <SettingRow
+              asLabel
+              label="允许多设备在线"
+              description="关闭时后登录的设备会立即接管，正在使用的旧会话将退出；仅保留 Cookie 但未在使用的设备不会阻止新登录。"
+              control={<Checkbox aria-label="允许多设备在线" checked={allowMultiDeviceLogin} onCheckedChange={setAllowMultiDeviceLogin} />}
+            />
+            <SettingRow
+              label="左侧导航栏常用入口"
+              description="控制左侧导航栏常用入口是否展示。"
+              control={(
+                <span className="flex items-center gap-2">
+                  <EnabledCount enabled={sidebarMenuEnabledCount} total={SIDEBAR_MENU_KEYS.length} />
+                  <Button variant="outline" size="sm" className="gap-1.5" onClick={openSidebarMenuDialog}>
+                    <PanelLeft className="h-4 w-4" />
+                    管理
+                  </Button>
+                </span>
+              )}
+            />
+          </SettingList>
+          <div className="flex justify-end">
+            <Button data-dock-save onClick={handleSaveSessionPolicy} disabled={isSavingSetting("sessionPolicy")}>
+              {isSavingSetting("sessionPolicy") && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {isSavingSetting("sessionPolicy") ? "保存中..." : "保存登录会话配置"}
             </Button>
-          </CardHeader>
-          <CardContent>
-            <SettingList>
-              <SettingRow label="常用入口" control={<EnabledCount enabled={sidebarMenuEnabledCount} total={SIDEBAR_MENU_KEYS.length} />} />
-            </SettingList>
-          </CardContent>
-        </Card>
-      </div>
+          </div>
+        </CardContent>
+      </Card>
 
 
       <Dialog
@@ -7007,6 +6996,30 @@ function SystemInfoSection() {
               )}
             </div>
           )}
+          {/* 项目地址、使用教程、联系方式原来是单独一张「开源与联系」卡，和这里的版本号是一回事，并过来 */}
+          <SettingList>
+            {contactLinks.map((item) => {
+              const Icon = item.icon;
+              return (
+                <a
+                  key={item.label}
+                  href={item.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="fx-list-row group flex min-w-0 items-center gap-3 py-3 first:pt-0 last:pb-0"
+                >
+                  <Icon className={`h-4 w-4 shrink-0 ${item.iconClassName}`} aria-hidden="true" />
+                  <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                    <span className="truncate text-secondary-type font-medium text-foreground group-hover:underline">{item.label}</span>
+                    <span className="truncate font-mono text-meta text-muted-foreground">{item.url}</span>
+                    {item.description && <span className="text-meta text-muted-foreground">{item.description}</span>}
+                  </span>
+                  <ExternalLink className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                </a>
+              );
+            })}
+            <SettingRow label="Android APP" control={<span className="font-mono text-secondary-type">v{settings?.androidAppVersion}</span>} />
+          </SettingList>
         </CardContent>
       </Card>
       <Card className="border-border bg-card">
@@ -7316,47 +7329,6 @@ function SystemInfoSection() {
         </DialogContent>
       </Dialog>
 
-      <Card className="border-border bg-card">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Settings2 className="h-4 w-4 text-primary" />
-            开源与联系
-          </CardTitle>
-          <CardDescription>
-            项目地址与联系渠道。
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {/*
-            两个链接原来各是一个描边小框（外面再套一个图标方块），下面两行版本号又是另一种
-            写法。都是「一项 → 一个值」，写成同一组行：链接那两行整行可点。
-          */}
-          <SettingList>
-            {contactLinks.map((item) => {
-              const Icon = item.icon;
-              return (
-                <a
-                  key={item.label}
-                  href={item.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="fx-list-row group flex min-w-0 items-center gap-3 py-3 first:pt-0 last:pb-0"
-                >
-                  <Icon className={`h-4 w-4 shrink-0 ${item.iconClassName}`} aria-hidden="true" />
-                  <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                    <span className="truncate text-secondary-type font-medium text-foreground group-hover:underline">{item.label}</span>
-                    <span className="truncate font-mono text-meta text-muted-foreground">{item.url}</span>
-                    {item.description && <span className="text-meta text-muted-foreground">{item.description}</span>}
-                  </span>
-                  <ExternalLink className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-                </a>
-              );
-            })}
-            <SettingRow label="当前版本" control={<span className="font-mono text-secondary-type">v{settings?.version}</span>} />
-            <SettingRow label="Android APP" control={<span className="font-mono text-secondary-type">v{settings?.androidAppVersion}</span>} />
-          </SettingList>
-        </CardContent>
-      </Card>
     </div>
   );
 }
