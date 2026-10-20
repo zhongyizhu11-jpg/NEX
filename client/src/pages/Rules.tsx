@@ -7154,7 +7154,7 @@ function RulesContent() {
     - 状态点并进「规则」列名字前面；协议、所属人并进名字下面那行小字
     - 「链路」徽章并进「所属资源」
     - 累计 / 24H 合成一列「流量」
-    八列 + 可选的排序手柄，最小宽度 1120px；table-fixed 下 col 的宽度是比例，窗口够宽时按比例放大。
+    八列 + 可选的排序手柄，最小宽度 1000px（1366 宽、侧栏展开时内容区约 1070px，不横滚）；table-fixed 下 col 的宽度是比例，窗口够宽时按比例放大。
   */
   type RuleTableColumn = {
     key: string;
@@ -7893,7 +7893,7 @@ function RulesContent() {
               <Card className="hidden border-border bg-card sm:block">
                 <CardContent className="p-0">
                   <div className="overflow-x-auto">
-                    <Table className="fx-rules-table min-w-[1120px] table-fixed">
+                    <Table className="fx-rules-table min-w-[1000px] table-fixed">
                       <colgroup>
                         {ruleSortingEnabled && <col className="w-[44px]" />}
                         {ruleTableColumns.map((column) => <col key={column.key} style={{ width: column.width }} />)}
