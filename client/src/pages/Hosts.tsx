@@ -970,67 +970,6 @@ function HostListStatusBadge({ host }: { host: any }) {
   );
 }
 
-function HostSummaryCard({
-  title,
-  value,
-  subtitle,
-  icon: Icon,
-  leadingIcon: LeadingIcon,
-  leadingTone = "bg-[var(--fx-healthy)]",
-  iconTone = "bg-chart-2/10 text-chart-2",
-  tone,
-  loading,
-  cacheKey,
-  className,
-}: {
-  title: string;
-  value: string;
-  subtitle?: string;
-  icon: typeof ActivitySquare;
-  leadingIcon?: typeof ActivitySquare;
-  leadingTone?: string;
-  iconTone?: string;
-  tone: string;
-  loading?: boolean;
-  cacheKey: string;
-  className?: string;
-}) {
-  return (
-    <Card className={`group relative h-full overflow-hidden border-border bg-card ${className || ""}`.trim()}>
-      <div className={`absolute inset-0 opacity-[0.035] transition-opacity group-hover:opacity-[0.07] ${tone}`} />
-      <CardContent className="relative flex h-full min-h-[112px] flex-col justify-center p-3.5 sm:min-h-[112px] sm:p-4">
-        <p className="text-xs font-medium text-muted-foreground">{title}</p>
-        <div className={`absolute right-4 top-3.5 hidden h-9 w-9 shrink-0 items-center justify-center rounded-xl shadow-sm sm:flex ${iconTone}`}>
-          <Icon className="h-5 w-5" />
-        </div>
-        <div className="mt-1 flex min-w-0 items-center gap-2.5 pr-12">
-          {LeadingIcon && (
-            <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg shadow-sm ${leadingTone}`}>
-              <LeadingIcon className="h-4 w-4 text-white" />
-            </div>
-          )}
-          <div className="min-w-0">
-            <AnimatedStatValue
-              as="span"
-              value={value}
-              loading={loading}
-              cacheKey={cacheKey}
-              fallbackValue="0"
-              className="block truncate text-2xl font-bold leading-none tracking-tight tabular-nums"
-              title={value}
-            />
-            {subtitle && (
-              <p className="mt-2 truncate text-xs text-muted-foreground" title={subtitle}>
-                {subtitle}
-              </p>
-            )}
-          </div>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
 type HostViewMode = "card" | "compact-card" | "table" | "map" | "flat-map";
 type HostManageTab = "hosts" | "groups" | "services" | "tokens";
 type HostManageFilterStats = { filtered: number; total: number };

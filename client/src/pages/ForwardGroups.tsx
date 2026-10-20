@@ -1762,10 +1762,6 @@ export function ForwardGroupsContent({
     return parts.join(" / ");
   };
 
-  const groupKindBadge = (group: any) => {
-    return null;
-  };
-
   const groupRuntimeBadges = (group: any) => {
     const mode = normalizeGroupMode(group.groupMode);
     if (mode === "exit") {
@@ -2007,7 +2003,6 @@ export function ForwardGroupsContent({
                     <div className="min-w-0">
                       <div className="flex min-w-0 flex-wrap items-center gap-2">
                         <p className="min-w-0 truncate font-medium">{group.name}</p>
-                        {groupKindBadge(group)}
                         {groupStatusBadge(group)}
                       </div>
                       <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{groupStatusMessage(group)}</p>
@@ -2303,7 +2298,8 @@ export function ForwardGroupsContent({
                     <TableHead>名称</TableHead>
                     <TableHead>成员/链路</TableHead>
                     <TableHead className="hidden md:table-cell">{activeGroupMode === "port" ? "入口主机" : activeGroupMode === "exit" ? "出口" : activeGroupMode === "entry" ? "DDNS" : "入口"}</TableHead>
-                    <TableHead className="hidden md:table-cell">{isChainMode ? "链路延迟" : isCollectionMode(activeGroupMode) ? "用途" : "引用规则"}</TableHead>
+                    {/* 入口组 / 出口组没有这一列：原来打印的「固定入口 / 固定出口」就是所在的分类条，说了两遍 */}
+                    {isCollectionMode(activeGroupMode) ? null : <TableHead className="hidden md:table-cell">{isChainMode ? "链路延迟" : "引用规则"}</TableHead>}
                     <TableHead className="text-right">操作</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -2347,7 +2343,9 @@ export function ForwardGroupsContent({
                         <div className="line-clamp-1 text-sm">{normalizeGroupMode(group.groupMode) === "port" ? (Number(group.entryGroupId || 0) > 0 ? `入口组 · ${entryGroupDisplayText(group, groupsByMode)}` : (group.members || []).length > 1 ? `${(group.members || []).length} 台入口主机` : (group.members || []).length ? memberLabel((group.members || [])[0]) : "未选择") : normalizeGroupMode(group.groupMode) === "chain" ? chainEntryText(group) : normalizeGroupMode(group.groupMode) === "exit" ? `${(group.members || []).length} 台出口主机` : group.domain || "未配置域名"}</div>
                         <div className="mt-1 line-clamp-1 text-xs text-muted-foreground">{normalizeGroupMode(group.groupMode) === "port" ? "转发规则中直接选择" : normalizeGroupMode(group.groupMode) === "chain" ? "规则使用时监听入口端口" : normalizeGroupMode(group.groupMode) === "exit" ? "隧道出口组" : group.lastDdnsValue || "未切换"}</div>
                       </TableCell>
-                      <TableCell className="hidden py-3 md:table-cell">{normalizeGroupMode(group.groupMode) === "chain" ? renderChainLatencySummary(group) : isCollectionMode(normalizeGroupMode(group.groupMode)) ? (normalizeGroupMode(group.groupMode) === "entry" ? "固定入口" : "固定出口") : Number(group.templateRuleCount || 0)}</TableCell>
+                      {isCollectionMode(activeGroupMode) ? null : (
+                        <TableCell className="hidden py-3 md:table-cell">{normalizeGroupMode(group.groupMode) === "chain" ? renderChainLatencySummary(group) : Number(group.templateRuleCount || 0)}</TableCell>
+                      )}
                       <TableCell className="py-3 text-right">
                         <div className="flex justify-end">{renderGroupActions(group)}</div>
                       </TableCell>

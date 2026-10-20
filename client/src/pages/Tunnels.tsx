@@ -49,7 +49,6 @@ import {
   LatencyTimeRangeSelect,
   type LatencyTimeRangeHours,
 } from "@/components/LatencyTimeRangeSelect";
-import type { LinkCreateType } from "@/components/LinkCreateTypeSelector";
 import { getLinkTestDetailEndpointIds, LinkTestProbeView, getLinkTestTotalLatency, hasPendingLinkTestDetails, parseLinkTestMessage, type LinkTestPlannedSegment } from "@/components/LinkTestLatencySummary";
 import { PersistentPagination, usePersistentPageRequest, useServerPagination } from "@/components/PersistentPagination";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -2278,7 +2277,6 @@ function TunnelsContent() {
   const linkLocation = useSearch();
   const [showCreateTypeDialog, setShowCreateTypeDialog] = useState(false);
   const [aggregateDialog, setAggregateDialog] = useState<{ open: boolean; tunnel: any | null }>({ open: false, tunnel: null });
-  const [selectedCreateType, setSelectedCreateType] = useState<LinkCreateType>("chain");
   const [chainCreateForm, setChainCreateForm] = useState<ChainCreateForm>(defaultChainCreateForm);
   const [chainAdvancedOpen, setChainAdvancedOpen] = useState(false);
   const [chainEditRequest, setChainEditRequest] = useState<{ id: number; requestKey: number } | null>(null);
@@ -3378,7 +3376,7 @@ function TunnelsContent() {
   };
 
   const isPending = createMutation.isPending || updateMutation.isPending;
-  const isCreateTypePending = selectedCreateType === "chain" ? createChainMutation.isPending : createMutation.isPending;
+  const isCreateTypePending = createChainMutation.isPending;
   const gostRuntimeDisabled = enabledGostTunnelModes.length === 0;
   const forwardxRuntimeDisabled = forwardProtocolSettings.forwardx === false;
   const setChainForwardType = (forwardType: ForwardType) => {
@@ -4148,12 +4146,11 @@ function TunnelsContent() {
     }
     if (activeSection === "chains") {
       if (!canCreateChain) return;
-      setSelectedCreateType("chain");
       resetChainCreateForm();
       setShowCreateTypeDialog(true);
     }
   };
-  const selectedCreateDisabled = selectedCreateType === "tunnel" ? !canCreateTunnel : !canCreateChain;
+  const selectedCreateDisabled = !canCreateChain;
   /*
     隧道卡、表格行上的操作。原来是四个图标（延迟、测试、编辑、删除）常驻 —— 十条隧道就是四十个
     图标，而且得记住听诊器是「测试」、波形是「延迟」。常用的两个带字放外面，其余收进 ···，
@@ -4930,308 +4927,115 @@ function TunnelsContent() {
             <DialogTitle>新增链路</DialogTitle>
           </DialogHeader>
           <div className="dialog-scroll-area min-h-0 flex-1 space-y-2.5 overflow-y-auto overscroll-contain px-3.5 py-2.5 sm:px-4">
-                {selectedCreateType === "tunnel" ? (
-                  <>
+                {/* 新增链路对话框只建转发链：隧道走「新建链路」类型选择 → 编辑对话框（2.3.4xx 起），这里原来还留着一份永远走不到的隧道分支 */}
+                <>
+                  <FormField className="space-y-2">
+                    <Label>转发链名称</Label>
+                    <Input
+                      value={chainCreateForm.name}
+                      onChange={(e) => setChainCreateForm({ ...chainCreateForm, name: e.target.value })}
+                      placeholder="例如: 华东-香港转发链"
+                    />
+                  </FormField>
+                  <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_120px_110px]">
                     <FormField className="space-y-2">
-                      <Label>隧道名称</Label>
-                      <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="例如: 华东-香港隧道" />
-                    </FormField>
-                    <FormField className="space-y-2">
-                      <Label>入口组</Label>
+                      <Label>转发工具</Label>
                       <Select
-                        value={form.entryGroupId ? String(form.entryGroupId) : "none"}
-                        onValueChange={(value) => setForm((prev) => applyEntryGroupToTunnelForm(prev, value === "none" ? null : Number(value)))}
+                        value={chainCreateForm.forwardType}
+                        disabled={availableChainForwardTypes.length === 0}
+                        onValueChange={(value) => setChainForwardType(value as ForwardType)}
                       >
-                        <SelectTrigger>
-                          <SelectValue placeholder="选择已保存入口组" />
-                        </SelectTrigger>
+                        <SelectTrigger><SelectValue placeholder="选择转发工具" /></SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="none">不使用入口组</SelectItem>
-                          {usableEntryGroups.length === 0 ? (
-                            <div className="px-2 py-4 text-center text-xs text-muted-foreground">暂无可用入口组</div>
-                          ) : usableEntryGroups.map((group: any) => (
-                            <SelectItem key={group.id} value={String(group.id)} textValue={group.name}>
-                              <span className="inline-flex min-w-0 flex-col">
-                                <span className="truncate">{group.name}</span>
-                                <span className="truncate text-xs text-muted-foreground">{String(group.domain || "-")}</span>
-                              </span>
-                            </SelectItem>
+                          {availableChainForwardTypes.map((type) => (
+                            <SelectItem key={type} value={type}>{FORWARD_TYPE_LABELS[type]}</SelectItem>
                           ))}
                         </SelectContent>
                       </Select>
-                      <p data-fx-help="" className="text-xs text-muted-foreground">
-                        {form.entryGroupId ? "入口组提供入口，下方主机从中转或出口开始配置。" : "未使用入口组时，下方第一台主机作为入口。"}
-                      </p>
                     </FormField>
-                    <div className="space-y-2">
-                      <MultiHopEditor
-                        hosts={hosts || []}
-                        headerLabel="主机链路"
-                        initialHopIds={form.hopHostIds}
-                        initialHopConnectHosts={form.hopConnectHosts}
-                        maxHops={MAX_TUNNEL_HOPS}
-                        externalEntry={!!form.entryGroupId}
-                        externalExit={!!form.exitGroupId}
-                        relayMode={form.relayMode}
-                        relayModeSupported={tunnelRelayFailoverSupported(form.mode)}
-                        relayAggregateSupported={tunnelRelayAggregateSupported(form.mode)}
-                        onRelayModeChange={(relayMode) => setForm((prev) => ({ ...prev, relayMode }))}
-                        fixedExitHostIds={form.exitGroupId ? exitMembersForGroup(form.exitGroupId).map((member: any) => Number(member.hostId || 0)).filter((id: number) => id > 0) : []}
-                        excludedHostIds={externalTunnelHostIds(form.entryGroupId, form.exitGroupId)}
-                        onChange={(ids) => {
-                          setForm((prev) => {
-                            const normalizedConnectHosts = normalizeHopConnectHostsForHosts(prev.hopConnectHosts, ids, hosts, !!prev.entryGroupId);
-                            const nextEntry = prev.entryGroupId ? prev.entryHostId : (ids[0] ?? null);
-                            const nextExit = prev.exitGroupId ? prev.exitHostId : (ids.length > 1 ? ids[ids.length - 1] : null);
-                            if (
-                              sameNumberArray(prev.hopHostIds, ids)
-                              && prev.entryHostId === nextEntry
-                              && prev.exitHostId === nextExit
-                              && sameNullableStringArray(prev.hopConnectHosts, normalizedConnectHosts)
-                            ) {
-                              return prev;
-                            }
-                            const nextForm = {
-                              ...prev,
-                              hopHostIds: ids,
-                              entryHostId: nextEntry,
-                              exitHostId: nextExit,
-                              hopConnectHosts: normalizedConnectHosts,
-                              loadBalanceExits: prev.exitGroupId ? prev.loadBalanceExits : prev.loadBalanceExits.filter((exit) => !ids.includes(Number(exit.hostId || 0))),
-                            };
-                            return prev.exitGroupId ? applyExitGroupToForm(nextForm, prev.exitGroupId) : nextForm;
-                          });
-                        }}
-                        onConnectHostsChange={(hopConnectHosts) => {
-                          setForm((prev) => {
-                            const normalizedConnectHosts = normalizeHopConnectHostsForHosts(hopConnectHosts, prev.hopHostIds, hosts, !!prev.entryGroupId);
-                            if (sameNullableStringArray(prev.hopConnectHosts, normalizedConnectHosts)) return prev;
-                            const nextForm = { ...prev, hopConnectHosts: normalizedConnectHosts };
-                            return prev.exitGroupId ? applyExitGroupToForm(nextForm, prev.exitGroupId) : nextForm;
-                          });
-                        }}
-                      />
-                    </div>
                     <FormField className="space-y-2">
-                      <Label>出口组</Label>
-                      <Select
-                        value={form.exitGroupId ? String(form.exitGroupId) : "none"}
-                        onValueChange={(value) => setForm((prev) => applyExitGroupToForm(prev, value === "none" ? null : Number(value)))}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="选择已保存出口组" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="none">不使用出口组</SelectItem>
-                          {usableExitGroups.length === 0 ? (
-                            <div className="px-2 py-4 text-center text-xs text-muted-foreground">暂无可用出口组</div>
-                          ) : usableExitGroups.map((group: any) => (
-                            <SelectItem key={group.id} value={String(group.id)} textValue={group.name}>
-                              <span className="inline-flex min-w-0 flex-col">
-                                <span className="truncate">{group.name}</span>
-                                <span className="truncate text-xs text-muted-foreground">{groupHostSummary(group, hosts)}</span>
-                              </span>
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      {form.exitGroupId ? (
-                        <p className="text-xs text-muted-foreground">
-                          出口组固定为隧道出口；策略：{EXIT_GROUP_STRATEGY_LABELS[normalizeExitGroupStrategy(exitGroupById.get(Number(form.exitGroupId))?.exitStrategy)]}。
-                        </p>
-                      ) : (
-                        <p data-fx-help="" className="text-xs text-muted-foreground">按出口组顺序使用成员，首个成员为主出口。</p>
-                      )}
+                      <Label>流量倍率</Label>
+                      <Input type="number" min={0.01} max={50} step={0.01} value={chainCreateForm.trafficMultiplier || ""} onChange={(e) => setChainCreateForm({ ...chainCreateForm, trafficMultiplier: Number(e.target.value) || 1 })} placeholder="1" />
                     </FormField>
-                    <div className="space-y-2">
-                      <Label>隧道类型</Label>
-                      <div className={`${segmentedControlClassName} grid ${nginxTunnelEnabled ? "grid-cols-3" : "grid-cols-2"} gap-1`}>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const nextMode = enabledGostTunnelModes.includes(form.mode) ? form.mode : enabledGostTunnelModes[0];
-                            if (nextMode) setTunnelMode(nextMode);
-                          }}
-                          disabled={gostRuntimeDisabled}
-                          title={enabledGostTunnelModes.length === 0 ? unsupportedProtocolTitle : undefined}
-                          aria-pressed={gostTunnelModes.includes(form.mode)}
-                          className={segmentedOptionClassName(gostTunnelModes.includes(form.mode), gostRuntimeDisabled, "px-2")}
-                        >
-                          <Network className={segmentedIconClassName(gostTunnelModes.includes(form.mode))} />
-                          <span className="truncate">GOST</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setTunnelMode("forwardx")}
-                          disabled={forwardxRuntimeDisabled}
-                          title={forwardProtocolSettings.forwardx === false ? unsupportedProtocolTitle : undefined}
-                          aria-pressed={form.mode === "forwardx"}
-                          className={segmentedOptionClassName(form.mode === "forwardx", forwardxRuntimeDisabled, "px-2")}
-                        >
-                          <ShieldCheck className={segmentedIconClassName(form.mode === "forwardx")} />
-                          <span className="truncate">NEX</span>
-                        </button>
-                        {nginxTunnelEnabled && <button
-                          type="button"
-                          onClick={() => setTunnelMode("nginx_stream")}
-                          aria-pressed={isNginxTunnelModeValue(form.mode)}
-                          className={segmentedOptionClassName(isNginxTunnelModeValue(form.mode), false, "px-2")}
-                        >
-                          <Server className={segmentedIconClassName(isNginxTunnelModeValue(form.mode))} />
-                          <span className="truncate">Nginx</span>
-                        </button>}
-                      </div>
+                    <div className="flex items-end">
+                      <label className="flex h-10 w-full items-center justify-between rounded-md border border-border/60 px-3">
+                        <span className="text-sm">启用</span>
+                        <Checkbox
+                          checked={chainCreateForm.isEnabled}
+                          onCheckedChange={(isEnabled) => setChainCreateForm({ ...chainCreateForm, isEnabled })}
+                        />
+                      </label>
                     </div>
-                    {gostTunnelModes.includes(form.mode) && enabledGostTunnelModes.length === 0 && (
-                      <p className="rounded-lg border border-[color-mix(in_srgb,var(--fx-warn)_30%,transparent)] bg-[var(--fx-warn-soft)] p-3 text-xs text-[var(--fx-warn-text)]">
-                        {unsupportedProtocolTitle}
-                      </p>
-                    )}
-                    {gostTunnelModes.includes(form.mode) && (
-                      <FormField className="space-y-2">
-                        <Label>GOST 协议</Label>
-                        <Select value={form.mode} onValueChange={(v) => setTunnelMode(v as TunnelForm["mode"])}>
-                          <SelectTrigger><SelectValue /></SelectTrigger>
-                          <SelectContent>
-                            {enabledGostTunnelModes.map((mode) => (
-                              <SelectItem key={mode} value={mode}>{tunnelModeLabels[mode]}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        <p data-fx-help="" className="text-xs text-muted-foreground">{gostModeTransportHint(form.mode)}</p>
-                      </FormField>
-                    )}
-                    {nginxTunnelEnabled && isNginxTunnelModeValue(form.mode) && renderNginxCertFields()}
-                    {renderTunnelRuntimeOptions()}
-                    {renderForwardXVersionOptions()}
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                      <FormField className="space-y-2">
-                        <Label>出口监听端口</Label>
-                        <Input type="number" min={0} max={65535} step={1} value={form.listenPort || ""} onChange={(e) => { setListenPortExplicit(true); setForm({ ...form, listenPort: parseInt(e.target.value, 10) || 0 }); }} placeholder="自动分配" />
-                      </FormField>
-                      <FormField className="space-y-2">
-                        <Label>隧道限速 (Mbps)</Label>
-                        <Input type="number" min={0} max={1000000} step={1} value={form.rateLimitMbps || ""} onChange={(e) => setForm({ ...form, rateLimitMbps: Number(e.target.value) || 0 })} placeholder="不限速" />
-                      </FormField>
-                      {/* 流量倍率决定按多少计入流量配额，只有管理员能改（服务端同样强制） */}
-                      {user?.role === "admin" && (
-                        <FormField className="space-y-2">
-                          <Label>流量倍率</Label>
-                          <Input type="number" min={0.01} max={50} step={0.01} value={form.trafficMultiplier || ""} onChange={(e) => setForm({ ...form, trafficMultiplier: Number(e.target.value) || 1 })} placeholder="1" />
-                        </FormField>
-                      )}
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <FormField className="space-y-2">
-                      <Label>转发链名称</Label>
-                      <Input
-                        value={chainCreateForm.name}
-                        onChange={(e) => setChainCreateForm({ ...chainCreateForm, name: e.target.value })}
-                        placeholder="例如: 华东-香港转发链"
-                      />
-                    </FormField>
-                    <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_120px_110px]">
-                      <FormField className="space-y-2">
-                        <Label>转发工具</Label>
-                        <Select
-                          value={chainCreateForm.forwardType}
-                          disabled={availableChainForwardTypes.length === 0}
-                          onValueChange={(value) => setChainForwardType(value as ForwardType)}
-                        >
-                          <SelectTrigger><SelectValue placeholder="选择转发工具" /></SelectTrigger>
-                          <SelectContent>
-                            {availableChainForwardTypes.map((type) => (
-                              <SelectItem key={type} value={type}>{FORWARD_TYPE_LABELS[type]}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </FormField>
-                      <FormField className="space-y-2">
-                        <Label>流量倍率</Label>
-                        <Input type="number" min={0.01} max={50} step={0.01} value={chainCreateForm.trafficMultiplier || ""} onChange={(e) => setChainCreateForm({ ...chainCreateForm, trafficMultiplier: Number(e.target.value) || 1 })} placeholder="1" />
-                      </FormField>
-                      <div className="flex items-end">
-                        <label className="flex h-10 w-full items-center justify-between rounded-md border border-border/60 px-3">
-                          <span className="text-sm">启用</span>
-                          <Checkbox
-                            checked={chainCreateForm.isEnabled}
-                            onCheckedChange={(isEnabled) => setChainCreateForm({ ...chainCreateForm, isEnabled })}
-                          />
-                        </label>
-                      </div>
-                    </div>
-                    {renderChainRuntimeOptions()}
-                    <FormField className="space-y-2">
-                      <Label>入口组</Label>
-                      <Select
-                        value={chainCreateForm.entryGroupId ? String(chainCreateForm.entryGroupId) : "none"}
-                        onValueChange={(value) => setChainCreateForm((prev) => applyEntryGroupToChainCreateForm(prev, value === "none" ? null : Number(value)))}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="选择已保存入口组" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="none">不使用入口组</SelectItem>
-                          {usableEntryGroups.length === 0 ? (
-                            <div className="px-2 py-4 text-center text-xs text-muted-foreground">暂无可用入口组</div>
-                          ) : usableEntryGroups.map((group: any) => (
-                            <SelectItem key={group.id} value={String(group.id)} textValue={group.name}>
-                              <span className="inline-flex min-w-0 flex-col">
-                                <span className="truncate">{group.name}</span>
-                                <span className="truncate text-xs text-muted-foreground">{String(group.domain || "-")}</span>
-                              </span>
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <p data-fx-help="" className="text-xs text-muted-foreground">
-                        {chainCreateForm.entryGroupId ? "入口组提供入口，下方主机从中转或出口开始配置。" : "未使用入口组时，下方第一台主机作为入口。"}
-                      </p>
-                    </FormField>
-                    <div className="space-y-2">
-                      <Label>链路主机顺序</Label>
-                      <MultiHopEditor
-                        hosts={hosts || []}
-                        initialHopIds={chainCreateForm.hopHostIds}
-                        initialHopConnectHosts={chainCreateForm.hopConnectHosts}
-                        maxHops={MAX_FORWARD_GROUP_MEMBERS}
-                        externalEntry={!!chainCreateForm.entryGroupId}
-                        excludedHostIds={externalChainEntryHostIds(chainCreateForm.entryGroupId)}
-                        onChange={(ids) => {
-                          setChainCreateForm((prev) => {
-                            const normalizedConnectHosts = normalizeHopConnectHostsForHosts(prev.hopConnectHosts, ids, hosts, !!prev.entryGroupId);
-                            if (
-                              sameNumberArray(prev.hopHostIds, ids)
-                              && sameNullableStringArray(prev.hopConnectHosts, normalizedConnectHosts)
-                            ) {
-                              return prev;
-                            }
-                            return {
-                              ...prev,
-                              hopHostIds: ids,
-                              hopConnectHosts: normalizedConnectHosts,
-                            };
-                          });
-                        }}
-                        onConnectHostsChange={(hopConnectHosts) => {
-                          setChainCreateForm((prev) => {
-                            const normalizedConnectHosts = normalizeHopConnectHostsForHosts(hopConnectHosts, prev.hopHostIds, hosts, !!prev.entryGroupId);
-                            if (sameNullableStringArray(prev.hopConnectHosts, normalizedConnectHosts)) return prev;
-                            return { ...prev, hopConnectHosts: normalizedConnectHosts };
-                          });
-                        }}
-                      />
-                    </div>
-                  </>
-                )}
+                  </div>
+                  {renderChainRuntimeOptions()}
+                  <FormField className="space-y-2">
+                    <Label>入口组</Label>
+                    <Select
+                      value={chainCreateForm.entryGroupId ? String(chainCreateForm.entryGroupId) : "none"}
+                      onValueChange={(value) => setChainCreateForm((prev) => applyEntryGroupToChainCreateForm(prev, value === "none" ? null : Number(value)))}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="选择已保存入口组" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">不使用入口组</SelectItem>
+                        {usableEntryGroups.length === 0 ? (
+                          <div className="px-2 py-4 text-center text-xs text-muted-foreground">暂无可用入口组</div>
+                        ) : usableEntryGroups.map((group: any) => (
+                          <SelectItem key={group.id} value={String(group.id)} textValue={group.name}>
+                            <span className="inline-flex min-w-0 flex-col">
+                              <span className="truncate">{group.name}</span>
+                              <span className="truncate text-xs text-muted-foreground">{String(group.domain || "-")}</span>
+                            </span>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p data-fx-help="" className="text-xs text-muted-foreground">
+                      {chainCreateForm.entryGroupId ? "入口组提供入口，下方主机从中转或出口开始配置。" : "未使用入口组时，下方第一台主机作为入口。"}
+                    </p>
+                  </FormField>
+                  <div className="space-y-2">
+                    <Label>链路主机顺序</Label>
+                    <MultiHopEditor
+                      hosts={hosts || []}
+                      initialHopIds={chainCreateForm.hopHostIds}
+                      initialHopConnectHosts={chainCreateForm.hopConnectHosts}
+                      maxHops={MAX_FORWARD_GROUP_MEMBERS}
+                      externalEntry={!!chainCreateForm.entryGroupId}
+                      excludedHostIds={externalChainEntryHostIds(chainCreateForm.entryGroupId)}
+                      onChange={(ids) => {
+                        setChainCreateForm((prev) => {
+                          const normalizedConnectHosts = normalizeHopConnectHostsForHosts(prev.hopConnectHosts, ids, hosts, !!prev.entryGroupId);
+                          if (
+                            sameNumberArray(prev.hopHostIds, ids)
+                            && sameNullableStringArray(prev.hopConnectHosts, normalizedConnectHosts)
+                          ) {
+                            return prev;
+                          }
+                          return {
+                            ...prev,
+                            hopHostIds: ids,
+                            hopConnectHosts: normalizedConnectHosts,
+                          };
+                        });
+                      }}
+                      onConnectHostsChange={(hopConnectHosts) => {
+                        setChainCreateForm((prev) => {
+                          const normalizedConnectHosts = normalizeHopConnectHostsForHosts(hopConnectHosts, prev.hopHostIds, hosts, !!prev.entryGroupId);
+                          if (sameNullableStringArray(prev.hopConnectHosts, normalizedConnectHosts)) return prev;
+                          return { ...prev, hopConnectHosts: normalizedConnectHosts };
+                        });
+                      }}
+                    />
+                  </div>
+                </>
           </div>
           <DialogFooter className="shrink-0 gap-2 border-t border-border/60 bg-background/95 px-3.5 py-3 sm:px-4">
             <Button variant="outline" onClick={() => setShowCreateTypeDialog(false)}>取消</Button>
             <Button
-              disabled={selectedCreateDisabled || isCreateTypePending || (selectedCreateType === "tunnel" && !isTunnelSupported(form))}
-              onClick={selectedCreateType === "chain" ? handleChainCreateSubmit : handleSubmit}
+              disabled={selectedCreateDisabled || isCreateTypePending}
+              onClick={handleChainCreateSubmit}
             >
               {isCreateTypePending ? "保存中..." : "创建"}
             </Button>

@@ -2298,8 +2298,6 @@ function RulesContent() {
     targetIp: "",
     targetPort: 0,
   });
-  const [showExportDialog, setShowExportDialog] = useState(false);
-  const [showImportDialog, setShowImportDialog] = useState(false);
   const [exportScopeType, setExportScopeType] = useState<RuleTransferScopeType>("local");
   const [exportResourceId, setExportResourceId] = useState("");
   const [exportResourceSearch, setExportResourceSearch] = useState("");
@@ -2375,9 +2373,7 @@ function RulesContent() {
       if (timeoutHandle !== undefined) globalThis.clearTimeout(timeoutHandle);
     };
   }, [isRuleGlobeView, ruleMapQuery.fetchNextPage, ruleMapQuery.hasNextPage, ruleMapQuery.isFetchingNextPage]);
-  const needsFullRuleList = showCopyDialog
-    || showExportDialog
-    || showImportDialog;
+  const needsFullRuleList = showCopyDialog;
   const fullRulesQuery = trpc.rules.list.useQuery(effectiveRulesQuery as any, {
     enabled: needsFullRuleList,
     refetchInterval: pollingInterval("normal"),
@@ -5778,46 +5774,6 @@ function RulesContent() {
     setImportNyanpassAcknowledged(false);
   };
 
-  const openExportDialog = () => {
-    const preferredType = ruleCategory === "all" ? "local" : ruleCategory;
-    setExportScopeType(preferredType as RuleTransferScopeType);
-    setShowExportDialog(true);
-  };
-
-  const openImportDialog = () => {
-    if (!canAdd) {
-      toast.error("当前没有添加规则权限");
-      return;
-    }
-    const categoryAvailable = ruleCategory === "local"
-      ? canUseSavedLocalForward
-      : ruleCategory === "tunnel"
-        ? canUseGost
-        : ruleCategory === "chain"
-          ? canUseForwardChain
-          : ruleCategory === "group"
-            ? canUseFailoverGroup
-            : false;
-    const preferredType = ruleCategory !== "all" && categoryAvailable
-      ? ruleCategory
-      : canUseSavedLocalForward
-        ? "local"
-        : canUseGost
-          ? "tunnel"
-          : canUseForwardChain
-            ? "chain"
-            : canUseFailoverGroup
-              ? "group"
-              : null;
-    if (!preferredType) {
-      toast.error("请先创建可用端口转发、隧道、转发链或转发组后再导入规则");
-      return;
-    }
-    setImportScopeType(preferredType as RuleTransferScopeType);
-    setImportSourceMode("file");
-    resetImportDialog();
-    setShowImportDialog(true);
-  };
 
   const handleImportFileChange = async (event: any) => {
     const file = event.target.files?.[0];
@@ -5931,7 +5887,6 @@ function RulesContent() {
         toast.error(`批量导入完成：成功 ${importedCount} 条，失败 ${failures.length} 条，已仅保留失败项供重试。${batchOperationErrorMessage(failures[0].reason)}`);
       } else {
         toast.success(`已导入 ${importedCount} 条规则`);
-        setShowImportDialog(false);
         setShowCopyDialog(false);
         resetImportDialog();
       }
@@ -5965,7 +5920,6 @@ function RulesContent() {
       `forwardx-rules-${exportScopeType}-${sanitizeRuleTransferFilePart(resourceLabel)}-${date}`,
     );
     toast.success(`已导出 ${exportableRules.length} 条规则${partCount > 1 ? `，共 ${partCount} 个文件` : ""}`);
-    setShowExportDialog(false);
   };
   const getRuleOwnerName = (rule: any) => {
     const owner = userById.get(Number(rule.userId));
@@ -7694,7 +7648,7 @@ function RulesContent() {
           {mergeListControls ? createRuleAction : null}
       </>} />
 
-      <FreezeWhile frozen={showDialog || showImportDialog || showCopyDialog} render={() => <>
+      <FreezeWhile frozen={showDialog || showCopyDialog} render={() => <>
       {!canAdd && !rulePermissionLoading && (
         <div className="flex items-center gap-2 p-3 rounded-lg bg-[var(--fx-warn-soft)] border border-[color-mix(in_srgb,var(--fx-warn)_20%,transparent)] text-sm text-[var(--fx-warn-text)]">
           <AlertCircle className="h-4 w-4 flex-shrink-0" />
@@ -8686,147 +8640,7 @@ function RulesContent() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={showExportDialog} onOpenChange={setShowExportDialog}>
-        <DialogContent className="sm:max-w-2xl">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Download className="h-5 w-5" />
-              {"导出规则"}
-            </DialogTitle>
-            <DialogDescription>{"选择范围后导出规则"}</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-2">
-            <div className="grid gap-4 sm:grid-cols-[minmax(0,11rem)_minmax(0,1fr)]">
-              <FormField className="space-y-2">
-                <Label>{"类型"}</Label>
-                <Select
-                  value={exportScopeType}
-                  onValueChange={(value) => {
-                    setExportScopeType(value as RuleTransferScopeType);
-                    setExportResourceId("");
-                    setExportResourceSearch("");
-                  }}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {ruleTransferScopeOptions.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>
-                        {option.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </FormField>
-              {renderTransferResourcePicker({
-                type: exportScopeType,
-                resources: exportResources,
-                filteredResources: filteredExportResources,
-                selectedResource: selectedExportResource,
-                selectedId: exportResourceId,
-                search: exportResourceSearch,
-                onSearch: setExportResourceSearch,
-                onSelect: setExportResourceId,
-              })}
-            </div>
-            <div className="rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
-              {exportResourceId
-                ? `将导出 ${exportableRules.length} 条${ruleTransferScopeLabels[exportScopeType]}规则`
-                : `请选择${ruleTransferScopeLabels[exportScopeType]}`}
-            </div>
-          </div>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setShowExportDialog(false)}>
-              {"取消"}
-            </Button>
-            <Button type="button" onClick={handleExportRules} disabled={!exportResourceId || exportableRules.length === 0}>
-              {"确定导出"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
-      <Dialog
-        open={showImportDialog}
-        onOpenChange={(open) => {
-          setShowImportDialog(open);
-          if (!open) resetImportDialog();
-        }}
-      >
-        <DialogContent className="sm:max-w-2xl">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Upload className="h-5 w-5" />
-              {"导入规则"}
-            </DialogTitle>
-            <DialogDescription>{"选择范围和规则文件后导入"}</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-2">
-            <div className="grid gap-4 sm:grid-cols-[minmax(0,11rem)_minmax(0,1fr)]">
-              <FormField className="space-y-2">
-                <Label>{"类型"}</Label>
-                <Select
-                  value={importScopeType}
-                  onValueChange={(value) => {
-                    setImportScopeType(value as RuleTransferScopeType);
-                    setImportResourceId("");
-                    setImportResourceSearch("");
-                    resetImportDialog();
-                  }}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {importRuleTransferScopeOptions.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>
-                        {option.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </FormField>
-              {renderTransferResourcePicker({
-                type: importScopeType,
-                resources: importResources,
-                filteredResources: filteredImportResources,
-                selectedResource: selectedImportResource,
-                selectedId: importResourceId,
-                search: importResourceSearch,
-                onSearch: setImportResourceSearch,
-                onSelect: setImportResourceId,
-                showStatus: true,
-                stackedList: true,
-              })}
-            </div>
-            <FormField className="space-y-2">
-              <Label>{"规则文件"}</Label>
-              <Input key={importFileInputKey} type="file" accept=".json,application/json" onChange={handleImportFileChange} />
-            </FormField>
-            <div
-              className={`rounded-md border px-3 py-2 text-sm ${
-                importValidation.ok
-                  ? "border-[color-mix(in_srgb,var(--fx-healthy)_30%,transparent)] bg-[var(--fx-healthy-soft)] text-[var(--fx-healthy-text)]"
-                  : importFileName || importFileError
-                    ? "border-destructive/30 bg-destructive/10 text-destructive"
-                    : "border-border/60 bg-muted/30 text-muted-foreground"
-              }`}
-            >
-              {importValidation.message}
-            </div>
-          </div>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setShowImportDialog(false)} disabled={importingRules}>
-              {"取消"}
-            </Button>
-            <Button type="button" onClick={handleImportRules} disabled={!importValidation.ok || importingRules}>
-              {importingRules && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              {"导入"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
       <Dialog open={showCopyDialog} onOpenChange={(open) => !copyActionPending && setShowCopyDialog(open)}>
         <DialogContent className="sm:max-w-4xl">
           <DialogHeader>
