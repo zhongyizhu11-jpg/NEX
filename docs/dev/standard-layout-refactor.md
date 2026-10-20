@@ -17,7 +17,7 @@
 | 三 | 视图切换控件统一 | 已完成 | `refactor/standard-layout` |
 | 五 | 页面级的小合并 | 已完成（两项缩减，见下） | `refactor/standard-layout` |
 | 一 | 规则表格重排 | 已完成 | `refactor/standard-layout` |
-| 二 | 用户管理「流量与权限」对话框重排 | 待开始 | |
+| 二 | 用户管理「流量与权限」对话框重排 | 已完成 | `refactor/standard-layout` |
 
 建议顺序：四 → 三 → 五 → 一 → 二。四是零风险的地基清理；三是机械替换；一和二要先出一版截图给维护者看过再动手。
 
