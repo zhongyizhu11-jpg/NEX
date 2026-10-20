@@ -8,7 +8,10 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import type { DiagnosticSubjectKind } from "@shared/linkDiagnostics";
 
-export type DiagnoseTab = "checklist" | "latency";
+export type DiagnoseTab = string;
+
+/** 精简布局下并进诊断框的页：延迟记录、连接监控（见 Rules.tsx / Tunnels.tsx 传进来的）。 */
+export type DiagnoseExtraTab = { key: string; label: string; content: ReactNode };
 
 export type DiagnoseOutcome = "success" | "timeout" | "failed";
 
@@ -44,6 +47,8 @@ export function DiagnoseDialog({
   failureReason,
   onRun,
   checklist,
+  extraTabs,
+  actions,
   children,
 }: {
   open: boolean;
@@ -62,6 +67,13 @@ export function DiagnoseDialog({
   onRun: () => void;
   /** 一键诊断要诊断的对象；不传就只有延迟测试。 */
   checklist?: { kind: DiagnosticSubjectKind; id: number } | null;
+  /**
+   * 精简布局：原来散在卡片菜单里的「延迟记录」「连接监控」并进来当页签（切过去才挂载，挂上就不卸）。
+   * 一条线路的毛病在一个框里看完，不用关了再开。
+   */
+  extraTabs?: DiagnoseExtraTab[];
+  /** 精简布局：「导出故障包」「查看拓扑」这类和诊断同一件事的动作，放在底部、每一页都在。 */
+  actions?: ReactNode;
   /** 路径和每一段的结果（LinkTestProbeView）。 */
   children: ReactNode;
 }) {
@@ -69,14 +81,17 @@ export function DiagnoseDialog({
   const [tab, setTab] = useState<DiagnoseTab>("latency");
   // 一键诊断切过去才跑；跑过一次就一直挂着，来回切不重跑。
   const [checklistVisited, setChecklistVisited] = useState(false);
+  const [visitedExtra, setVisitedExtra] = useState<string[]>([]);
   useEffect(() => {
     if (!open) {
       setTab("latency");
       setChecklistVisited(false);
+      setVisitedExtra([]);
     }
   }, [open]);
   useEffect(() => {
     if (tab === "checklist") setChecklistVisited(true);
+    else if (tab !== "latency") setVisitedExtra((list) => (list.includes(tab) ? list : [...list, tab]));
   }, [tab]);
   // 打开就测一次延迟；正在测就不再发一次。一次打开只自动测一次。
   const onRunRef = useRef(onRun);
@@ -99,9 +114,13 @@ export function DiagnoseDialog({
     return () => clearTimeout(timer);
   }, [open]);
   const hasChecklist = !!checklist && checklist.id > 0;
-  const showLatency = !hasChecklist || tab === "latency";
-  // 清单一行一项，窄了读着累：至少 2xl；延迟测试那页要更宽时（多段）用调用方给的宽度。
-  const contentSize = hasChecklist && !/max-w-(3xl|4xl|5xl|6xl)/.test(sizeClassName || "") ? "sm:max-w-2xl" : sizeClassName;
+  const extras = extraTabs ?? [];
+  const hasTabs = hasChecklist || extras.length > 0;
+  const showLatency = !hasTabs || tab === "latency";
+  // 清单一行一项，窄了读着累：至少 2xl；延迟测试那页要更宽时（多段）用调用方给的宽度。并了延迟记录那种图表页时至少 3xl。
+  const contentSize = extras.length > 0 && !/max-w-(4xl|5xl|6xl)/.test(sizeClassName || "")
+    ? "sm:max-w-3xl"
+    : hasChecklist && !/max-w-(3xl|4xl|5xl|6xl)/.test(sizeClassName || "") ? "sm:max-w-2xl" : sizeClassName;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className={cn(contentSize, "min-w-0")}>
@@ -116,14 +135,21 @@ export function DiagnoseDialog({
           </DialogDescription>
         </DialogHeader>
 
-        {hasChecklist ? (
+        {hasTabs ? (
           <Tabs value={tab} onValueChange={(value) => setTab(value as DiagnoseTab)}>
             <TabsList aria-label="诊断方式" className="w-full sm:w-auto">
               <TabsTrigger value="latency" className="flex-1 sm:flex-none">延迟测试</TabsTrigger>
-              <TabsTrigger value="checklist" className="flex-1 sm:flex-none">一键诊断</TabsTrigger>
+              {hasChecklist ? <TabsTrigger value="checklist" className="flex-1 sm:flex-none">一键诊断</TabsTrigger> : null}
+              {extras.map((item) => <TabsTrigger key={item.key} value={item.key} className="flex-1 sm:flex-none">{item.label}</TabsTrigger>)}
             </TabsList>
           </Tabs>
         ) : null}
+
+        {extras.filter((item) => visitedExtra.includes(item.key)).map((item) => (
+          <div key={item.key} className={cn("min-w-0", tab !== item.key && "hidden")}>
+            {item.content}
+          </div>
+        ))}
 
         {hasChecklist && checklistVisited ? (
           // 切到延迟测试再切回来不重跑：清单一直挂着，只是藏起来。
@@ -139,6 +165,7 @@ export function DiagnoseDialog({
             <DiagnoseStatusLine testing={testing} lastRunAt={ranBefore ? lastRunAt : null} outcome={outcome} failureReason={failureReason} />
 
             <DialogFooter className="gap-2">
+              {actions ? <div className="flex flex-wrap items-center gap-2 sm:mr-auto">{actions}</div> : null}
               <Button onClick={onRun} disabled={testing} className="w-full min-w-0 gap-2 sm:w-auto sm:min-w-[112px]">
                 {testing ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Stethoscope className="h-4 w-4" aria-hidden="true" />}
                 {/* 有「一键诊断」页时这一页叫延迟测试，按钮也跟着叫测试，免得两个「重新诊断」 */}
@@ -148,6 +175,10 @@ export function DiagnoseDialog({
               </Button>
             </DialogFooter>
           </>
+        ) : actions ? (
+          <DialogFooter className="gap-2 sm:justify-start">
+            <div className="flex flex-wrap items-center gap-2">{actions}</div>
+          </DialogFooter>
         ) : null}
       </DialogContent>
     </Dialog>

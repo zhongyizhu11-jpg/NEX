@@ -77,21 +77,23 @@ function TcpingTooltipContent({ active, payload, label }: any) {
   );
 }
 
-function TcpingDetailDialog({
+/*
+  延迟记录的正文（图、稳定性统计、近 30 天色块），没有对话框外壳：
+  标准布局下套在下面的 TcpingDetailDialog 里；精简布局下并进「诊断」框当一页（DiagnoseDialog extraTabs）。
+  active 为 false 时不查询（和原来 open 的作用一样）。
+*/
+export function TcpingDetailBody({
   ruleId,
-  ruleName,
   isForwardChain = false,
   probeMethod = "tcping",
-  open,
-  onOpenChange,
+  active,
 }: {
   ruleId: number;
-  ruleName: string;
   isForwardChain?: boolean;
   probeMethod?: "tcping" | "ping";
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
+  active: boolean;
 }) {
+  const open = active;
   const [peakCutEnabled, setPeakCutEnabled] = useState(false);
   const [timeRangeHours, setTimeRangeHours] = useState<LatencyTimeRangeHours>(DEFAULT_LATENCY_TIME_RANGE_HOURS);
   const methodLabel = probeMethod === "ping" ? "Ping" : "TCPing";
@@ -162,24 +164,14 @@ function TcpingDetailDialog({
   }, [shouldAnimateChart, ruleId]);
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[96svh] w-[calc(100vw-0.75rem)] max-w-[95vw] flex-col gap-3 overflow-hidden p-3 sm:max-w-3xl sm:p-6">
-        <DialogHeader>
-          <div className="flex flex-col gap-2 pr-9 sm:flex-row sm:items-start sm:justify-between sm:pr-10">
-            <div className="min-w-0">
-              <DialogTitle className="truncate text-base sm:text-lg">
-                {isForwardChain ? "转发链路延迟" : `转发链路延迟 (${methodLabel})`} - {ruleName}
-              </DialogTitle>
-              <DialogDescription data-fx-help="" className="text-xs sm:text-sm">
-                {isForwardChain ? `最近 ${latencyTimeRangeLabel(timeRangeHours)} 链路汇总延迟和丢包。` : `最近 ${latencyTimeRangeLabel(timeRangeHours)} 延迟和丢包。`}
-              </DialogDescription>
-            </div>
-            <div className="flex flex-wrap items-center gap-2 self-start sm:justify-end">
-              <LatencyTimeRangeSelect value={timeRangeHours} onChange={setTimeRangeHours} />
-              <LatencyPeakCutToggle id={`tcping-peak-cut-${ruleId}`} checked={peakCutEnabled} onCheckedChange={setPeakCutEnabled} className="shrink-0" />
-            </div>
-          </div>
-        </DialogHeader>
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
+        <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+          <span data-fx-help="" className="mr-auto text-xs text-muted-foreground">
+            {isForwardChain ? `最近 ${latencyTimeRangeLabel(timeRangeHours)} 链路汇总延迟和丢包。` : `最近 ${latencyTimeRangeLabel(timeRangeHours)} 延迟和丢包。`}
+          </span>
+          <LatencyTimeRangeSelect value={timeRangeHours} onChange={setTimeRangeHours} />
+          <LatencyPeakCutToggle id={`tcping-peak-cut-${ruleId}`} checked={peakCutEnabled} onCheckedChange={setPeakCutEnabled} className="shrink-0" />
+        </div>
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain pr-1">
           <div className="h-[42svh] min-h-[220px] w-full sm:h-72">
             {showInitialLoading ? (
@@ -240,6 +232,36 @@ function TcpingDetailDialog({
           />
           <LatencyHistoryDayStrip summaries={history.data} loading={history.isLoading} />
         </div>
+    </div>
+  );
+}
+
+function TcpingDetailDialog({
+  ruleId,
+  ruleName,
+  isForwardChain = false,
+  probeMethod = "tcping",
+  open,
+  onOpenChange,
+}: {
+  ruleId: number;
+  ruleName: string;
+  isForwardChain?: boolean;
+  probeMethod?: "tcping" | "ping";
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+}) {
+  const methodLabel = probeMethod === "ping" ? "Ping" : "TCPing";
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex max-h-[96svh] w-[calc(100vw-0.75rem)] max-w-[95vw] flex-col gap-3 overflow-hidden p-3 sm:max-w-3xl sm:p-6">
+        <DialogHeader>
+          <DialogTitle className="truncate pr-8 text-base sm:text-lg">
+            {isForwardChain ? "转发链路延迟" : `转发链路延迟 (${methodLabel})`} - {ruleName}
+          </DialogTitle>
+          <DialogDescription className="sr-only">延迟和丢包记录</DialogDescription>
+        </DialogHeader>
+        <TcpingDetailBody ruleId={ruleId} isForwardChain={isForwardChain} probeMethod={probeMethod} active={open} />
       </DialogContent>
     </Dialog>
   );

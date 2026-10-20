@@ -2,7 +2,7 @@ import { FormField } from "@/components/ui/form-field";
 import { useFaultBundleExport } from "@/components/links/useFaultBundleExport";
 import { ResourceTrafficLine } from "@/components/links/ResourceTrafficLine";
 import EmptyState from "@/components/EmptyState";
-import TunnelConnStatsDialog from "@/components/tunnels/TunnelConnStatsDialog";
+import TunnelConnStatsDialog, { TunnelConnStatsBody } from "@/components/tunnels/TunnelConnStatsDialog";
 import AggregateLinkDialog from "@/components/tunnels/AggregateLinkDialog";
 import { isAggregateLinkTunnel } from "@shared/aggregateLink";
 import TunnelParallelStreamsDialog from "@/components/tunnels/TunnelParallelStreamsDialog";
@@ -36,7 +36,7 @@ import type { LinkWizardAction } from "@shared/linkWizard";
 import { loadReactGlobe, prefetchReactGlobe } from "@/lib/reactGlobeLoader";
 import { escapeTooltipHtml, hostGeoCoordinate } from "@/lib/hostGeo";
 import DashboardLayout from "@/components/DashboardLayout";
-import { DiagnoseDialog } from "@/components/DiagnoseDialog";
+import { DiagnoseDialog, type DiagnoseExtraTab } from "@/components/DiagnoseDialog";
 import { useAuth } from "@/_core/hooks/useAuth";
 import AnimatedStatValue from "@/components/AnimatedStatValue";
 import { LatencyRating, getLatencyRating } from "@/components/LatencyRating";
@@ -1268,17 +1268,12 @@ function TunnelWorldGlobe({
   );
 }
 
-function TunnelLatencyDialog({
-  tunnelId,
-  tunnelName,
-  open,
-  onOpenChange,
-}: {
-  tunnelId: number;
-  tunnelName: string;
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
-}) {
+/*
+  延迟记录的正文（图、各跳图例、稳定性统计、近 30 天色块），没有对话框外壳：
+  标准布局下套在下面的 TunnelLatencyDialog 里；精简布局下并进「诊断」框当一页（DiagnoseDialog extraTabs）。
+*/
+function TunnelLatencyBody({ tunnelId, active }: { tunnelId: number; active: boolean }) {
+  const open = active;
   const [peakCutEnabled, setPeakCutEnabled] = useState(false);
   const [timeRangeHours, setTimeRangeHours] = useState<LatencyTimeRangeHours>(DEFAULT_LATENCY_TIME_RANGE_HOURS);
   const { data, isLoading, isFetching } = trpc.tunnels.latencySeries.useQuery(
@@ -1400,20 +1395,12 @@ function TunnelLatencyDialog({
   }, [shouldAnimateChart, tunnelId]);
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[96svh] w-[calc(100vw-0.75rem)] max-w-[95vw] flex-col gap-3 overflow-hidden p-3 sm:max-w-3xl sm:p-6">
-        <DialogHeader>
-          <div className="flex flex-col gap-2 pr-9 sm:flex-row sm:items-start sm:justify-between sm:pr-10">
-            <div className="min-w-0">
-              <DialogTitle className="text-base sm:text-lg">隧道链路延迟 - {tunnelName}</DialogTitle>
-              <DialogDescription>{`最近 ${latencyTimeRangeLabel(timeRangeHours)} 延迟和丢包。`}</DialogDescription>
-            </div>
-            <div className="flex flex-wrap items-center gap-2 self-start sm:justify-end">
-              <LatencyTimeRangeSelect value={timeRangeHours} onChange={setTimeRangeHours} />
-              <LatencyPeakCutToggle id={`tunnel-peak-cut-${tunnelId}`} checked={peakCutEnabled} onCheckedChange={setPeakCutEnabled} className="shrink-0" />
-            </div>
-          </div>
-        </DialogHeader>
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
+        <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+          <span data-fx-help="" className="mr-auto text-xs text-muted-foreground">{`最近 ${latencyTimeRangeLabel(timeRangeHours)} 延迟和丢包。`}</span>
+          <LatencyTimeRangeSelect value={timeRangeHours} onChange={setTimeRangeHours} />
+          <LatencyPeakCutToggle id={`tunnel-peak-cut-${tunnelId}`} checked={peakCutEnabled} onCheckedChange={setPeakCutEnabled} className="shrink-0" />
+        </div>
         <div className="dialog-scroll-area min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain pr-1">
         <div className="h-[42svh] min-h-[220px] w-full sm:h-72">
           {showInitialLoading ? (
@@ -1506,6 +1493,28 @@ function TunnelLatencyDialog({
         />
         <LatencyHistoryDayStrip summaries={history.data} loading={history.isLoading} />
         </div>
+    </div>
+  );
+}
+function TunnelLatencyDialog({
+  tunnelId,
+  tunnelName,
+  open,
+  onOpenChange,
+}: {
+  tunnelId: number;
+  tunnelName: string;
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex max-h-[96svh] w-[calc(100vw-0.75rem)] max-w-[95vw] flex-col gap-3 overflow-hidden p-3 sm:max-w-3xl sm:p-6">
+        <DialogHeader>
+          <DialogTitle className="pr-8 text-base sm:text-lg">隧道链路延迟 - {tunnelName}</DialogTitle>
+          <DialogDescription className="sr-only">延迟和丢包记录</DialogDescription>
+        </DialogHeader>
+        <TunnelLatencyBody tunnelId={tunnelId} active={open} />
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>关闭</Button>
         </DialogFooter>
@@ -1520,6 +1529,8 @@ function TunnelSelfTestDialog({
   entryGroups,
   open,
   onOpenChange,
+  extraTabs,
+  actions,
 }: {
   tunnelId: number;
   tunnelName: string;
@@ -1527,6 +1538,9 @@ function TunnelSelfTestDialog({
   entryGroups?: any[];
   open: boolean;
   onOpenChange: (v: boolean) => void;
+  /** 精简布局并进来的页（延迟记录、连接监控）和底部动作（故障包、拓扑），见 DiagnoseDialog。 */
+  extraTabs?: DiagnoseExtraTab[];
+  actions?: ReactNode;
 }) {
   const utils = trpc.useUtils();
   const tunnelQuery = trpc.tunnels.getById.useQuery({ id: tunnelId }, {
@@ -1989,6 +2003,8 @@ function TunnelSelfTestDialog({
       outcome={displaySuccess ? "success" : status === "timeout" ? "timeout" : isFailed ? "failed" : null}
       failureReason={parsedMessage.message}
       checklist={{ kind: "tunnel", id: tunnelId }}
+      extraTabs={extraTabs}
+      actions={actions}
       onRun={() => {
         lastFailureToastKey.current = "";
         manualTestRef.current = true;
@@ -2236,7 +2252,7 @@ function TunnelsContent() {
   const [tunnelProxyPanelOpen, setTunnelProxyPanelOpen] = useState(false);
   const [tunnelAdvancedOpen, setTunnelAdvancedOpen] = useState(false);
   const [latencyTunnel, setLatencyTunnel] = useState<{ id: number; name: string } | null>(null);
-  const [testTunnel, setTestTunnel] = useState<{ id: number; name: string } | null>(null);
+  const [testTunnel, setTestTunnel] = useState<{ id: number; name: string; mode?: string } | null>(null);
   const [viewMode, setViewMode] = useState<TunnelViewMode>(() => getStoredTunnelViewMode());
   const [chainViewMode, setChainViewMode] = useState<TunnelViewMode>(() => getStoredChainViewMode());
   const compactLayout = useCompactLayout();
@@ -4144,6 +4160,8 @@ function TunnelsContent() {
     删除永远在菜单最后、红色、隔一条线（顺序由 partitionEntityActions 保证）。
     协议被停用的隧道只剩删除。
   */
+  // 精简布局：这几项并进了「诊断」框（延迟记录、连接监控页签，底部的故障包 / 拓扑按钮），卡片菜单里不再重复。
+  const DIAGNOSE_MERGED_MENU_KEYS = ["latency", "conn-stats", "fault-bundle", "topology"];
   const renderTunnelActions = (tunnel: any, supported: boolean, menuOnly = false) => (
     <EntityActions
       menuOnly={menuOnly}
@@ -4153,7 +4171,7 @@ function TunnelsContent() {
           label: "诊断",
           ariaLabel: `诊断隧道 ${tunnel.name}：测试入口到出口的延迟`,
           icon: <Stethoscope className="h-3.5 w-3.5" />,
-          onSelect: () => setTestTunnel({ id: tunnel.id, name: tunnel.name }),
+          onSelect: () => setTestTunnel({ id: tunnel.id, name: tunnel.name, mode: String(tunnel.mode || "") }),
         },
         { key: "edit", label: "编辑", ariaLabel: `编辑隧道 ${tunnel.name}`, icon: <Pencil className="h-3.5 w-3.5" />, onSelect: () => openTunnelOrAggregateEdit(tunnel) },
       ] : []}
@@ -4207,7 +4225,7 @@ function TunnelsContent() {
           onSelect: () => setTopologyLocation(`/topology?tunnel=${Number(tunnel.id)}`),
         },
         { key: "delete", label: "删除", ariaLabel: `删除隧道 ${tunnel.name}`, icon: <Trash2 className="h-3.5 w-3.5" />, destructive: true, onSelect: () => setDeleteTunnel(tunnel) },
-      ]}
+      ].filter((item) => !compactLayout || !DIAGNOSE_MERGED_MENU_KEYS.includes(item.key))}
       menuLabel={`隧道 ${tunnel.name} 的更多操作`}
     />
   );
@@ -4820,6 +4838,22 @@ function TunnelsContent() {
           entryGroups={entryGroups}
           open={!!testTunnel}
           onOpenChange={(open) => !open && setTestTunnel(null)}
+          extraTabs={compactLayout ? [
+            { key: "history", label: "延迟记录", content: <TunnelLatencyBody tunnelId={testTunnel.id} active={!!testTunnel} /> },
+            ...(user?.role === "admin" && String(testTunnel.mode || "").toLowerCase() === "forwardx"
+              ? [{ key: "conn", label: "连接监控", content: <TunnelConnStatsBody tunnel={{ id: testTunnel.id, name: testTunnel.name }} /> }]
+              : []),
+          ] : undefined}
+          actions={compactLayout ? (
+            <>
+              <Button type="button" variant="outline" size="sm" className="gap-1.5" disabled={faultBundle.pending} onClick={() => { void faultBundle.exportBundle("tunnel", Number(testTunnel.id)); }}>
+                <FileJson className="h-3.5 w-3.5" />导出故障包
+              </Button>
+              <Button type="button" variant="outline" size="sm" className="gap-1.5" onClick={() => { setTestTunnel(null); setTopologyLocation(`/topology?tunnel=${Number(testTunnel.id)}`); }}>
+                <Network className="h-3.5 w-3.5" />查看拓扑
+              </Button>
+            </>
+          ) : undefined}
         />
       )}
 

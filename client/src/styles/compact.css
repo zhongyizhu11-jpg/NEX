@@ -201,3 +201,14 @@ html[data-layout="compact"] .fx-quota-chips > span { height: auto; padding: 0; b
 
 /* 主机编辑框「其他配置」：十来个灰框改成细线分隔的列表 */
 html[data-layout="compact"] .dialog-panel [data-fx-setting-box] { margin-top: 0; padding: 8px 0; border-radius: 0; background: none; border-top: 1px solid var(--fx-stroke-weak); }
+
+/* ───── 十二、规则编辑框：出口 / 线路组 / 更多设置三个折叠框连成一组（挨着的合并边线、去底色） ───── */
+html[data-layout="compact"] .dialog-panel .fx-rule-collapsible { background: none; }
+html[data-layout="compact"] .dialog-panel .fx-rule-collapsible + .fx-rule-collapsible { margin-top: -1px; border-top-left-radius: 0; border-top-right-radius: 0; }
+html[data-layout="compact"] .dialog-panel .fx-rule-collapsible:has(+ .fx-rule-collapsible) { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+html[data-layout="compact"] .dialog-panel .fx-rule-collapsible > button { padding-block: 6px; }
+
+/* 订阅页：每条订阅链接的「一键订阅」不再整行拉满 */
+@media (min-width: 640px) {
+  html[data-layout="compact"] .fx-token-subscribe { width: auto; }
+}

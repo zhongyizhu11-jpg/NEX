@@ -9,6 +9,8 @@ import { Metric, MetricGroup, ResourceMeter } from "@/components/entity/Metric";
 import { HealthBadge } from "@/components/network/StatusDot";
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useCompactLayout } from "@/hooks/useCompactLayout";
 import { formatCpuPercent, hostAddressText, hostGeoTooltip, hostRegionText } from "./hostDisplay";
 import HostNetProfileSection from "./HostNetProfileSection";
 import { HostOsAvatar, HostOsGlyph, hostOsOf } from "./HostOsBadge";
@@ -103,6 +105,8 @@ export default function HostDetailDialog(props: HostDetailDialogProps) {
   const { host, open, onOpenChange } = props;
   const confirmDialog = useConfirmDialog();
   const { user } = useAuth();
+  // hooks 都在上面这几行；下面有 host 为空的提前 return
+  const compactLayout = useCompactLayout();
   const vitals = useHostVitals(host, {
     metrics: props.metrics,
     traffic: props.traffic,
@@ -135,30 +139,8 @@ export default function HostDetailDialog(props: HostDetailDialogProps) {
   const sizePair = (used: number | null, total: number | null) =>
     used === null && total === null ? "—" : `${orDash(used)} / ${orDash(total)}`;
 
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
-        <DialogHeader>
-          {/* 发行版图标顶替名字左边的状态点，和列表卡一样；状态点挂在图标右下角 */}
-          <div className="flex min-w-0 items-center gap-3">
-            <HostOsAvatar os={os} health={vitals.health} size="lg" />
-            <div className="flex min-w-0 flex-col gap-1.5">
-              <DialogTitle className="min-w-0 truncate">{name}</DialogTitle>
-              <DialogDescription className="flex flex-wrap items-center gap-2">
-                <HealthBadge health={vitals.health} />
-                {/*
-                  上报时间只在离线时给。在线时它每隔几秒变一次，是噪音；
-                  离线时它才是那个关键问题的答案 —— 「它是什么时候没的」。
-                */}
-                {!vitals.isOnline && vitals.lastReportedText ? (
-                  <span className="text-meta text-muted-foreground">最后上报 {vitals.lastReportedText}</span>
-                ) : null}
-              </DialogDescription>
-            </div>
-          </div>
-        </DialogHeader>
-
-        <div className="flex min-w-0 flex-col gap-4">
+  const overviewSections = (
+    <>
           <Section title="概览">
             <Row
               label="系统"
@@ -228,7 +210,10 @@ export default function HostDetailDialog(props: HostDetailDialogProps) {
               />
             ) : null}
           </Section>
-
+    </>
+  );
+  const moreSections = (
+    <>
           {/* 网络画像：双栈出站、运营商、25 端口、DNSBL（Agent 2.2.226 起在主机上测） */}
           <HostNetProfileSection host={host} canManage={user?.role === "admin"} />
 
@@ -248,7 +233,51 @@ export default function HostDetailDialog(props: HostDetailDialogProps) {
 
           <OpsHostDetailExtraSections host={host} isAdmin={user?.role === "admin"} />
           {user?.role === "admin" ? <HostIpChangeSection hostId={Number(host.id)} /> : null}
-        </div>
+    </>
+  );
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          {/* 发行版图标顶替名字左边的状态点，和列表卡一样；状态点挂在图标右下角 */}
+          <div className="flex min-w-0 items-center gap-3">
+            <HostOsAvatar os={os} health={vitals.health} size="lg" />
+            <div className="flex min-w-0 flex-col gap-1.5">
+              <DialogTitle className="min-w-0 truncate">{name}</DialogTitle>
+              <DialogDescription className="flex flex-wrap items-center gap-2">
+                <HealthBadge health={vitals.health} />
+                {/*
+                  上报时间只在离线时给。在线时它每隔几秒变一次，是噪音；
+                  离线时它才是那个关键问题的答案 —— 「它是什么时候没的」。
+                */}
+                {!vitals.isOnline && vitals.lastReportedText ? (
+                  <span className="text-meta text-muted-foreground">最后上报 {vitals.lastReportedText}</span>
+                ) : null}
+              </DialogDescription>
+            </div>
+          </div>
+        </DialogHeader>
+
+        {/*
+          精简布局：七八个分区竖着叠一个 max-w-md 的框太长，分成「概览」（系统 / 资源 / 流量）和
+          「更多」（网络画像、mimic、解锁、TLS 入站、换 IP）两页；标准布局照旧一页到底。
+        */}
+        {compactLayout ? (
+          <Tabs defaultValue="overview" className="flex min-w-0 flex-col gap-3">
+            <TabsList aria-label="主机详情" className="w-full">
+              <TabsTrigger value="overview" className="flex-1">概览</TabsTrigger>
+              <TabsTrigger value="more" className="flex-1">更多</TabsTrigger>
+            </TabsList>
+            <TabsContent value="overview" className="m-0 flex min-w-0 flex-col gap-4">{overviewSections}</TabsContent>
+            <TabsContent value="more" className="m-0 flex min-w-0 flex-col gap-4">{moreSections}</TabsContent>
+          </Tabs>
+        ) : (
+          <div className="flex min-w-0 flex-col gap-4">
+            {overviewSections}
+            {moreSections}
+          </div>
+        )}
 
         <div className="flex items-center justify-end border-t border-[var(--fx-stroke-weak)] pt-3">
           <EntityActions primary={primary} menu={menu} />

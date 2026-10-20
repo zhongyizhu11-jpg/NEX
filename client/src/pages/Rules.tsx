@@ -15,7 +15,7 @@ import { formatBytes } from "@shared/formatBytes";
 import AnimatedStatValue from "@/components/AnimatedStatValue";
 import AutoAnimateContainer from "@/components/AutoAnimateContainer";
 import DashboardLayout from "@/components/DashboardLayout";
-import { DiagnoseDialog } from "@/components/DiagnoseDialog";
+import { DiagnoseDialog, type DiagnoseExtraTab } from "@/components/DiagnoseDialog";
 import { LatencyRating } from "@/components/LatencyRating";
 import { LinkTestProbeView, parseLinkTestMessage, type LinkTestPlannedSegment } from "@/components/LinkTestLatencySummary";
 import { PersistentPagination, usePersistentPageRequest, useServerPagination } from "@/components/PersistentPagination";
@@ -267,6 +267,8 @@ import { formatEntryBridgeNote } from "@shared/ruleEntryBridge";
 const ReactGlobe = lazy(loadReactGlobe) as typeof import("react-globe.gl").default;
 // 延迟详情里的曲线图要用 recharts（约 100 kB gzip）；只有点开某条规则的延迟才需要，不跟规则页一起下
 const TcpingDetailDialog = lazy(() => import("@/components/rules/TcpingDetailDialog").then((module) => ({ default: module.TcpingDetailDialog })));
+// 精简布局：延迟记录并进诊断框当一页
+const TcpingDetailBody = lazy(() => import("@/components/rules/TcpingDetailDialog").then((module) => ({ default: module.TcpingDetailBody })));
 
 /** 换隧道后旧入口还在替这条规则转发（服务端带的 entryBridges）：卡片上说一句，到点自己消失。 */
 function entryBridgeNotes(rule: any): string[] {
@@ -2536,7 +2538,7 @@ function RulesContent() {
   const importCreateMutation = trpc.rules.create.useMutation();
 
   const [trafficDetailRule, setTrafficDetailRule] = useState<{ id: number; name: string; isForwardChain?: boolean; probeMethod?: "tcping" | "ping" } | null>(null);
-  const [selfTestRule, setSelfTestRule] = useState<{ id: number; name: string } | null>(null);
+  const [selfTestRule, setSelfTestRule] = useState<{ id: number; name: string; isForwardChain?: boolean; probeMethod?: "tcping" | "ping" } | null>(null);
 
   const setRouteMode = (mode: RuleRouteMode, aggregate = false) => {
     if (mode === form.routeMode) return;
@@ -6982,6 +6984,8 @@ function RulesContent() {
     原来卡片底部还有一行「诊断 / 编辑 / ···」—— 和右上角的 ··· 是同一组操作画了两遍，
     每张卡为此多 60px，十六条规则要翻九屏。
   */
+  // 精简布局：这几项并进了「诊断」框（延迟记录页签、底部的故障包 / 拓扑按钮），卡片菜单里不再重复。
+  const DIAGNOSE_MERGED_MENU_KEYS = ["latency", "fault-bundle", "topology"];
   const renderRuleActions = (rule: any, menuOnly = false) => {
     const ruleCategory = getRuleCategory(rule, forwardGroupById);
     const isForwardChainRule = ruleCategory === "chain";
@@ -6996,7 +7000,7 @@ function RulesContent() {
             label: "诊断",
             ariaLabel: `诊断 ${rule.name}：转发链路自测`,
             icon: <Stethoscope className="h-3.5 w-3.5" />,
-            onSelect: () => setSelfTestRule({ id: rule.id, name: rule.name }),
+            onSelect: () => setSelfTestRule({ id: rule.id, name: rule.name, isForwardChain: isForwardChainRule, probeMethod }),
           },
         ] : [
           {
@@ -7004,7 +7008,7 @@ function RulesContent() {
             label: "诊断",
             ariaLabel: `诊断 ${rule.name}：转发链路自测`,
             icon: <Stethoscope className="h-3.5 w-3.5" />,
-            onSelect: () => setSelfTestRule({ id: rule.id, name: rule.name }),
+            onSelect: () => setSelfTestRule({ id: rule.id, name: rule.name, isForwardChain: isForwardChainRule, probeMethod }),
           },
           { key: "edit", label: "编辑", ariaLabel: `编辑 ${rule.name}`, icon: <Pencil className="h-3.5 w-3.5" />, onSelect: () => openEdit(rule) },
         ]}
@@ -7040,7 +7044,8 @@ function RulesContent() {
             onSelect: () => setResetTrafficTarget({ scope: "rule", rule }),
           },
           { key: "delete", label: "删除", ariaLabel: `删除 ${rule.name}`, icon: <Trash2 className="h-3.5 w-3.5" />, destructive: true, onSelect: () => setDeleteRule(rule) },
-        ].filter((action) => !readOnly || (action.key !== "reset" && action.key !== "delete"))}
+        ].filter((action) => !readOnly || (action.key !== "reset" && action.key !== "delete"))
+          .filter((action) => !compactLayout || !DIAGNOSE_MERGED_MENU_KEYS.includes(action.key))}
         menuLabel={`${rule.name} 的更多操作`}
         menuOnly={menuOnly}
       />
@@ -8068,6 +8073,25 @@ function RulesContent() {
           plannedSegments={selfTestLinkTestNodeData.plannedSegments}
           open={!!selfTestRule}
           onOpenChange={(v) => { if (!v) setSelfTestRule(null); }}
+          extraTabs={compactLayout ? [{
+            key: "history",
+            label: "延迟记录",
+            content: (
+              <Suspense fallback={<DataSectionLoading />}>
+                <TcpingDetailBody ruleId={selfTestRule.id} isForwardChain={!!selfTestRule.isForwardChain} probeMethod={selfTestRule.probeMethod} active={!!selfTestRule} />
+              </Suspense>
+            ),
+          }] : undefined}
+          actions={compactLayout ? (
+            <>
+              <Button type="button" variant="outline" size="sm" className="gap-1.5" disabled={faultBundle.pending} onClick={() => { void faultBundle.exportBundle("rule", Number(selfTestRule.id)); }}>
+                <FileJson className="h-3.5 w-3.5" />导出故障包
+              </Button>
+              <Button type="button" variant="outline" size="sm" className="gap-1.5" onClick={() => { setSelfTestRule(null); setLocation(`/topology?rule=${Number(selfTestRule.id)}`); }}>
+                <Network className="h-3.5 w-3.5" />查看拓扑
+              </Button>
+            </>
+          ) : undefined}
         />
       )}
 
@@ -8542,7 +8566,7 @@ function RulesContent() {
               能用的默认值，不动也能建出来。分开之后第一屏只剩该填的，而不是让人
               每次都当一次选择题（「转发工具这三个我该选哪个」，而答案通常是别动）。
             */}
-            <div className="rounded-md border border-border/60 bg-muted/15">
+            <div className="fx-rule-collapsible rounded-md border border-border/60 bg-muted/15">
               <button
                 type="button"
                 className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm"
@@ -9621,6 +9645,8 @@ function SelfTestDialog({
   plannedSegments,
   open,
   onOpenChange,
+  extraTabs,
+  actions,
 }: {
   ruleId: number;
   ruleName: string;
@@ -9630,6 +9656,9 @@ function SelfTestDialog({
   plannedSegments?: LinkTestPlannedSegment[];
   open: boolean;
   onOpenChange: (v: boolean) => void;
+  /** 精简布局并进来的页（延迟记录）和底部动作（故障包、拓扑），见 DiagnoseDialog。 */
+  extraTabs?: DiagnoseExtraTab[];
+  actions?: ReactNode;
 }) {
   const utils = trpc.useUtils();
   const [optimisticTesting, setOptimisticTesting] = useState(false);
@@ -9734,6 +9763,8 @@ function SelfTestDialog({
       outcome={isSuccess ? "success" : isTimeout ? "timeout" : isFailed ? "failed" : null}
       failureReason={parsedMessage.message}
       checklist={{ kind: "rule", id: ruleId }}
+      extraTabs={extraTabs}
+      actions={actions}
       onRun={() => {
         manualTestRef.current = true;
         setOptimisticTesting(true);

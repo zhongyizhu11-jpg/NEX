@@ -105,7 +105,10 @@ import {
   Waves,
   Zap,
   type LucideIcon,
+  MoreHorizontal,
 } from "lucide-react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { useCompactLayout } from "@/hooks/useCompactLayout";
 import QRCode from "qrcode";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -469,6 +472,23 @@ export default function ClientSubscriptionsPage() {
     },
     onError: (error) => toast.error(error.message),
   });
+  const compactLayout = useCompactLayout();
+  const rotateTokenConfirmed = async (id: number) => {
+    const ok = await confirm({
+      title: "重置这个订阅地址？",
+      description: "只更换订阅地址本身，不会重置流量。旧地址立即失效，已经导入过的客户端都要重新填写新地址。",
+      confirmText: "重置地址",
+    });
+    if (ok) rotateToken.mutate({ id });
+  };
+  const deleteTokenConfirmed = async (id: number) => {
+    const ok = await confirm({
+      title: "删除这个订阅链接？",
+      description: "使用该地址的客户端将立即无法更新节点。",
+      confirmText: "删除",
+    });
+    if (ok) deleteToken.mutate({ id });
+  };
   const deleteToken = trpc.proxySubscriptions.deleteToken.useMutation({
     onSuccess: () => {
       toast.success("订阅链接已删除");
@@ -1113,44 +1133,50 @@ export default function ClientSubscriptionsPage() {
                         />
                         {/* 光写"重置"配个刷新图标，在订阅面板里只会被读成"重置流量"。
                             补上宾语并换成钥匙图标：这个按钮的代价是所有已导入的客户端都要重填。 */}
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          title="重置订阅地址（不会重置流量）"
-                          onClick={async () => {
-                            const ok = await confirm({
-                              title: "重置这个订阅地址？",
-                              description:
-                                "只更换订阅地址本身，不会重置流量。旧地址立即失效，已经导入过的客户端都要重新填写新地址。",
-                              confirmText: "重置地址",
-                            });
-                            if (ok) rotateToken.mutate({ id: token.id });
-                          }}
-                        >
-                          <KeyRound className="mr-1 h-4 w-4" />
-                          重置地址
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          title="删除订阅链接"
-                          onClick={async () => {
-                            const ok = await confirm({
-                              title: "删除这个订阅链接？",
-                              description: "使用该地址的客户端将立即无法更新节点。",
-                              confirmText: "删除",
-                            });
-                            if (ok) deleteToken.mutate({ id: token.id });
-                          }}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
+                        {/* 精简布局：两个按钮收进一个「···」菜单，一行只剩名字、开关和菜单。 */}
+                        {compactLayout ? (
+                          <DropdownMenu modal={false}>
+                            <DropdownMenuTrigger asChild>
+                              <Button size="sm" variant="ghost" className="h-8 w-8 p-0" aria-label={`${token.name} 的更多操作`}>
+                                <MoreHorizontal className="h-4 w-4" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem onSelect={() => { void rotateTokenConfirmed(token.id); }}>
+                                <KeyRound className="h-4 w-4" />重置地址
+                              </DropdownMenuItem>
+                              <DropdownMenuItem variant="destructive" onSelect={() => { void deleteTokenConfirmed(token.id); }}>
+                                <Trash2 className="h-4 w-4" />删除
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        ) : (
+                          <>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              title="重置订阅地址（不会重置流量）"
+                              onClick={() => { void rotateTokenConfirmed(token.id); }}
+                            >
+                              <KeyRound className="mr-1 h-4 w-4" />
+                              重置地址
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              title="删除订阅链接"
+                              onClick={() => { void deleteTokenConfirmed(token.id); }}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </>
+                        )}
                       </div>
                     </div>
 
                     <Button
                       variant={expanded ? "secondary" : "default"}
-                      className="w-full"
+                      className="fx-token-subscribe w-full"
                       onClick={() => setImportOpenTokenId(expanded ? null : token.id)}
                     >
                       <Zap className="mr-1.5 h-4 w-4" />

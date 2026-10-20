@@ -25,7 +25,7 @@ export function RuleFormCollapsible({
   children: ReactNode;
 }) {
   return (
-    <div className="rounded-md border border-border/60 bg-muted/15" data-testid={testId}>
+    <div className="fx-rule-collapsible rounded-md border border-border/60 bg-muted/15" data-testid={testId}>
       <button
         type="button"
         className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm"
