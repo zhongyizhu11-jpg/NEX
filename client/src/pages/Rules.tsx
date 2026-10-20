@@ -1,4 +1,5 @@
 import { copyTextToClipboard } from "@/lib/clipboard";
+import { readStoredViewMode, writeStoredViewMode } from "@/lib/viewModeStorage";
 import { useFaultBundleExport } from "@/components/links/useFaultBundleExport";
 import { FormField } from "@/components/ui/form-field";
 import EmptyState from "@/components/EmptyState";
@@ -23,6 +24,7 @@ import { SortableDragHandle, SortableItem, SortableReorderContext, useOptimistic
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ViewModeToggle } from "@/components/ui/view-mode-toggle";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
@@ -506,22 +508,11 @@ function ruleCategoryCountsEqual(a: RuleCategoryCounts, b: RuleCategoryCounts) {
 }
 
 function getStoredRuleViewMode(): RuleViewMode {
-  if (typeof window === "undefined") return "card";
-  try {
-    const value = window.localStorage.getItem(RULE_VIEW_MODE_STORAGE_KEY);
-    return value === "table" || value === "globe" ? value : "card";
-  } catch {
-    return "card";
-  }
+  return readStoredViewMode<RuleViewMode>(RULE_VIEW_MODE_STORAGE_KEY, ["table", "globe", "card"], "card");
 }
 
 function storeRuleViewMode(viewMode: RuleViewMode) {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(RULE_VIEW_MODE_STORAGE_KEY, viewMode);
-  } catch {
-    // Ignore storage failures so the page still works in restricted browsers.
-  }
+  writeStoredViewMode(RULE_VIEW_MODE_STORAGE_KEY, viewMode);
 }
 
 function getDefaultRuleCardSize(): RuleCardSize {
@@ -7598,46 +7589,16 @@ function RulesContent() {
               cacheKey={`rules.traffic.${trafficTotalsCacheScope}.daily.bytesOut`} />
           </>} />
       } actions={<>
-          <div className="hidden items-center overflow-hidden rounded-md border border-border/40 md:flex">
-            <Button
-              variant={displayMode === "compact" ? "secondary" : "ghost"}
-              size="icon"
-              className="h-8 w-8 rounded-none"
-              onClick={() => handleDisplayModeChange("compact")}
-              title="精简卡片"
-            >
-              <Rows3 className="h-4 w-4" />
-            </Button>
-            <Button
-              variant={displayMode === "standard" ? "secondary" : "ghost"}
-              size="icon"
-              className="h-8 w-8 rounded-none"
-              onClick={() => handleDisplayModeChange("standard")}
-              title="标准卡片"
-            >
-              <LayoutGrid className="h-4 w-4" />
-            </Button>
-            <Button
-              variant={displayMode === "table" ? "secondary" : "ghost"}
-              size="icon"
-              className="h-8 w-8 rounded-none"
-              onClick={() => handleDisplayModeChange("table")}
-              title="列表"
-            >
-              <List className="h-4 w-4" />
-            </Button>
-            <Button
-              variant={displayMode === "globe" ? "secondary" : "ghost"}
-              size="icon"
-              className="h-8 w-8 rounded-none"
-              onClick={() => handleDisplayModeChange("globe")}
-              onPointerEnter={prefetchReactGlobe}
-              onFocus={prefetchReactGlobe}
-              title="3D 流量转发图"
-            >
-              <Globe className="h-4 w-4" />
-            </Button>
-          </div>
+          <ViewModeToggle className="sm:hidden md:flex"
+            value={displayMode}
+            onChange={handleDisplayModeChange}
+            items={[
+              { value: "compact", label: "精简卡片", icon: Rows3 },
+              { value: "standard", label: "标准卡片", icon: LayoutGrid },
+              { value: "table", label: "列表", icon: List },
+              { value: "globe", label: "3D 流量转发图", icon: Globe, onHover: prefetchReactGlobe },
+            ]}
+          />
           <DropdownMenu>
             <DropdownMenuTrigger asChild><Button variant="outline" size="icon" aria-label="更多规则操作"><span aria-hidden="true">•••</span></Button></DropdownMenuTrigger>
             <DropdownMenuContent align="end">

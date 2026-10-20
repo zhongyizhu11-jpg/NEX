@@ -5,6 +5,7 @@ import {
   type HostEgressShapingMode,
   HOST_EGRESS_MBPS_MAX,
 } from "@/components/hosts/hostEgressShaping";
+import { readStoredViewMode, writeStoredViewMode } from "@/lib/viewModeStorage";
 import { describeHostFlowOffload } from "@/components/hosts/hostFlowOffload";
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { FormField } from "@/components/ui/form-field";
@@ -65,6 +66,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { HOST_TRAFFIC_FAILOVER_DEFAULT_PERCENT, hostTrafficExcluded, normalizeHostTrafficFailoverPercent } from "@shared/hostTrafficPolicy";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ViewModeToggle } from "@/components/ui/view-mode-toggle";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
@@ -1018,60 +1020,27 @@ function defaultHostViewMode(): HostViewMode {
 }
 
 function getStoredHostViewMode(): HostViewMode {
-  if (typeof window === "undefined") return "card";
-  try {
-    const value = window.localStorage.getItem(HOST_VIEW_MODE_STORAGE_KEY);
-    return value === "card" || value === "compact-card" || value === "table" || value === "map" || value === "flat-map" ? value : defaultHostViewMode();
-  } catch {
-    return defaultHostViewMode();
-  }
+  return readStoredViewMode<HostViewMode>(HOST_VIEW_MODE_STORAGE_KEY, ["card", "compact-card", "table", "map", "flat-map"], defaultHostViewMode());
 }
 
 function storeHostViewMode(viewMode: HostViewMode) {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(HOST_VIEW_MODE_STORAGE_KEY, viewMode);
-  } catch {
-    // Ignore storage failures so the page still works in restricted browsers.
-  }
+  writeStoredViewMode(HOST_VIEW_MODE_STORAGE_KEY, viewMode);
 }
 
 function getStoredHostProbeServiceViewMode(): HostProbeServiceViewMode {
-  if (typeof window === "undefined") return "card";
-  try {
-    const value = window.localStorage.getItem(HOST_PROBE_SERVICE_VIEW_MODE_STORAGE_KEY);
-    return value === "table" ? "table" : "card";
-  } catch {
-    return "card";
-  }
+  return readStoredViewMode<HostProbeServiceViewMode>(HOST_PROBE_SERVICE_VIEW_MODE_STORAGE_KEY, ["table", "card"], "card");
 }
 
 function storeHostProbeServiceViewMode(viewMode: HostProbeServiceViewMode) {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(HOST_PROBE_SERVICE_VIEW_MODE_STORAGE_KEY, viewMode);
-  } catch {
-    // Ignore storage failures so the page still works in restricted browsers.
-  }
+  writeStoredViewMode(HOST_PROBE_SERVICE_VIEW_MODE_STORAGE_KEY, viewMode);
 }
 
 function getStoredHostGroupViewMode(): HostGroupViewMode {
-  if (typeof window === "undefined") return "card";
-  try {
-    const value = window.localStorage.getItem(HOST_GROUP_VIEW_MODE_STORAGE_KEY);
-    return value === "table" ? "table" : "card";
-  } catch {
-    return "card";
-  }
+  return readStoredViewMode<HostGroupViewMode>(HOST_GROUP_VIEW_MODE_STORAGE_KEY, ["table", "card"], "card");
 }
 
 function storeHostGroupViewMode(viewMode: HostGroupViewMode) {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(HOST_GROUP_VIEW_MODE_STORAGE_KEY, viewMode);
-  } catch {
-    // Ignore storage failures so the page still works in restricted browsers.
-  }
+  writeStoredViewMode(HOST_GROUP_VIEW_MODE_STORAGE_KEY, viewMode);
 }
 
 function hostGroupHostIds(group: HostGroupView | null | undefined) {
@@ -2591,142 +2560,48 @@ function HostsContent() {
                   <OpsHostsMenuItems />
                 </DropdownMenuContent></DropdownMenu>
               )}
-              <div className="hidden items-center overflow-hidden rounded-md border border-border/40 sm:flex">
-                <Button
-                  variant={viewMode === "compact-card" ? "secondary" : "ghost"}
-                  size="icon"
-                  className="h-8 w-8 rounded-none"
-                  title="精简卡片"
-                  aria-label="精简卡片"
-                  aria-pressed={viewMode === "compact-card"}
-                  onClick={() => handleViewModeChange("compact-card")}
-                >
-                  <Rows3 className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant={viewMode === "card" ? "secondary" : "ghost"}
-                  size="icon"
-                  className="h-8 w-8 rounded-none"
-                  title="标准卡片"
-                  aria-label="标准卡片"
-                  aria-pressed={viewMode === "card"}
-                  onClick={() => handleViewModeChange("card")}
-                >
-                  <LayoutGrid className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant={viewMode === "table" ? "secondary" : "ghost"}
-                  size="icon"
-                  className="h-8 w-8 rounded-none"
-                  title="列表视图"
-                  aria-label="列表视图"
-                  aria-pressed={viewMode === "table"}
-                  onClick={() => handleViewModeChange("table")}
-                >
-                  <List className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant={viewMode === "map" ? "secondary" : "ghost"}
-                  size="icon"
-                  className="hidden h-8 w-8 rounded-none md:inline-flex"
-                  title="3D 地球视图"
-                  aria-label="3D 地球视图"
-                  aria-pressed={viewMode === "map"}
-                  onClick={() => handleViewModeChange("map")}
-                >
-                  <Globe className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant={viewMode === "flat-map" ? "secondary" : "ghost"}
-                  size="icon"
-                  className="hidden h-8 w-8 rounded-none md:inline-flex"
-                  title="平面地图视图"
-                  aria-label="平面地图视图"
-                  aria-pressed={viewMode === "flat-map"}
-                  onClick={() => handleViewModeChange("flat-map")}
-                >
-                  <MapPinned className="h-4 w-4" />
-                </Button>
-              </div>
+              <ViewModeToggle
+                value={viewMode}
+                onChange={handleViewModeChange}
+                items={[
+                  { value: "compact-card", label: "精简卡片", icon: Rows3 },
+                  { value: "card", label: "标准卡片", icon: LayoutGrid },
+                  { value: "table", label: "列表视图", icon: List },
+                  { value: "map", label: "3D 地球视图", icon: Globe, hideBelow: "md" },
+                  { value: "flat-map", label: "平面地图视图", icon: MapPinned, hideBelow: "md" },
+                ]}
+              />
             </>
           )}
           {activeManageTab === "tokens" && user?.role === "admin" && (
-            <div className="hidden items-center overflow-hidden rounded-md border border-border/40 sm:flex">
-              <Button
-                variant={tokenViewMode === "card" ? "secondary" : "ghost"}
-                size="icon"
-                className="h-8 w-8 rounded-none"
-                title="卡片视图"
-                aria-label="卡片视图"
-                aria-pressed={tokenViewMode === "card"}
-                onClick={() => handleTokenViewModeChange("card")}
-              >
-                <LayoutGrid className="h-4 w-4" />
-              </Button>
-              <Button
-                variant={tokenViewMode === "table" ? "secondary" : "ghost"}
-                size="icon"
-                className="h-8 w-8 rounded-none"
-                title="列表视图"
-                aria-label="列表视图"
-                aria-pressed={tokenViewMode === "table"}
-                onClick={() => handleTokenViewModeChange("table")}
-              >
-                <List className="h-4 w-4" />
-              </Button>
-            </div>
+            <ViewModeToggle
+              value={tokenViewMode}
+              onChange={handleTokenViewModeChange}
+              items={[
+                { value: "card", label: "卡片视图", icon: LayoutGrid },
+                { value: "table", label: "列表视图", icon: List },
+              ]}
+            />
           )}
           {activeManageTab === "groups" && user?.role === "admin" && (
-            <div className="hidden items-center overflow-hidden rounded-md border border-border/40 sm:flex">
-              <Button
-                variant={hostGroupViewMode === "card" ? "secondary" : "ghost"}
-                size="icon"
-                className="h-8 w-8 rounded-none"
-                title="卡片视图"
-                aria-label="卡片视图"
-                aria-pressed={hostGroupViewMode === "card"}
-                onClick={() => handleHostGroupViewModeChange("card")}
-              >
-                <LayoutGrid className="h-4 w-4" />
-              </Button>
-              <Button
-                variant={hostGroupViewMode === "table" ? "secondary" : "ghost"}
-                size="icon"
-                className="h-8 w-8 rounded-none"
-                title="列表视图"
-                aria-label="列表视图"
-                aria-pressed={hostGroupViewMode === "table"}
-                onClick={() => handleHostGroupViewModeChange("table")}
-              >
-                <List className="h-4 w-4" />
-              </Button>
-            </div>
+            <ViewModeToggle
+              value={hostGroupViewMode}
+              onChange={handleHostGroupViewModeChange}
+              items={[
+                { value: "card", label: "卡片视图", icon: LayoutGrid },
+                { value: "table", label: "列表视图", icon: List },
+              ]}
+            />
           )}
           {activeManageTab === "services" && user?.role === "admin" && (
-            <div className="hidden items-center overflow-hidden rounded-md border border-border/40 sm:flex">
-              <Button
-                variant={serviceViewMode === "card" ? "secondary" : "ghost"}
-                size="icon"
-                className="h-8 w-8 rounded-none"
-                title="卡片视图"
-                aria-label="卡片视图"
-                aria-pressed={serviceViewMode === "card"}
-                onClick={() => handleServiceViewModeChange("card")}
-              >
-                <LayoutGrid className="h-4 w-4" />
-              </Button>
-              <Button
-                variant={serviceViewMode === "table" ? "secondary" : "ghost"}
-                size="icon"
-                className="h-8 w-8 rounded-none"
-                title="列表视图"
-                aria-label="列表视图"
-                aria-pressed={serviceViewMode === "table"}
-                onClick={() => handleServiceViewModeChange("table")}
-              >
-                <List className="h-4 w-4" />
-              </Button>
-            </div>
+            <ViewModeToggle
+              value={serviceViewMode}
+              onChange={handleServiceViewModeChange}
+              items={[
+                { value: "card", label: "卡片视图", icon: LayoutGrid },
+                { value: "table", label: "列表视图", icon: List },
+              ]}
+            />
           )}
         </>} />
 

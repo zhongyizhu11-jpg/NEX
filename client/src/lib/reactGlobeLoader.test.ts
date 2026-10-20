@@ -21,8 +21,9 @@ for (const page of ["client/src/pages/Rules.tsx", "client/src/pages/Tunnels.tsx"
   test(`${page}：进页面不预取地球，碰到地球按钮才开始下`, () => {
     const source = read(page);
     assert.doesNotMatch(source, /useEffect\(\(\)\s*=>\s*\{\s*prefetchReactGlobe\(\);?\s*\}/);
-    assert.match(source, /onPointerEnter=\{prefetchReactGlobe\}/);
-    assert.match(source, /onFocus=\{prefetchReactGlobe\}/);
+    // 地球那格按钮现在由 ViewModeToggle 画：onHover 同时挂到 onPointerEnter 和 onFocus（见 ui/view-mode-toggle.tsx）
+    assert.match(source, /onPointerEnter=\{prefetchReactGlobe\}|onHover: prefetchReactGlobe/);
+    assert.match(source, /onFocus=\{prefetchReactGlobe\}|onHover: prefetchReactGlobe/);
   });
 }
 

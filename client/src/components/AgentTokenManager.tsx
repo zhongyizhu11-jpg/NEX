@@ -9,6 +9,7 @@ import { SortableDragHandle, SortableItem, SortableReorderContext, useOptimistic
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ViewModeToggle } from "@/components/ui/view-mode-toggle";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
@@ -649,26 +650,14 @@ export default function AgentTokenManager({
           </span>
         </p>
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-          {!hideViewModeToggle && <div className="hidden items-center overflow-hidden rounded-md border border-border/40 sm:flex">
-            <Button
-              variant={viewMode === "card" ? "secondary" : "ghost"}
-              size="icon"
-              className="h-8 w-8 rounded-none"
-              title="卡片视图"
-              onClick={() => handleViewModeChange("card")}
-            >
-              <LayoutGrid className="h-4 w-4" />
-            </Button>
-            <Button
-              variant={viewMode === "table" ? "secondary" : "ghost"}
-              size="icon"
-              className="h-8 w-8 rounded-none"
-              title="列表视图"
-              onClick={() => handleViewModeChange("table")}
-            >
-              <List className="h-4 w-4" />
-            </Button>
-          </div>}
+          {!hideViewModeToggle && <ViewModeToggle
+            value={viewMode}
+            onChange={handleViewModeChange}
+            items={[
+              { value: "card", label: "卡片视图", icon: LayoutGrid },
+              { value: "table", label: "列表视图", icon: List },
+            ]}
+          />}
           {showCreateButton && (
             <Button onClick={openCreateDialog} className="w-full gap-2 sm:w-auto">
               <Plus className="h-4 w-4" />

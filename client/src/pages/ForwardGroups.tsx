@@ -1,4 +1,5 @@
 import { useLocation } from "wouter";
+import { readStoredViewMode, writeStoredViewMode } from "@/lib/viewModeStorage";
 import { useFaultBundleExport } from "@/components/links/useFaultBundleExport";
 import { MemberScheduleButton } from "@/components/links/MemberScheduleButton";
 import { describeMemberSchedule, groupModeSupportsMemberSchedule, memberEnabledIntent, parseMemberSchedule, type MemberActiveSchedule } from "@shared/memberSchedule";
@@ -37,6 +38,7 @@ import { applyLatencyPeakCut, clipLatencyForChart, getLatencyStabilityStats, get
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ViewModeToggle } from "@/components/ui/view-mode-toggle";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
@@ -391,22 +393,11 @@ type ForwardGroupsContentProps = {
 const FORWARD_GROUP_VIEW_MODE_STORAGE_KEY = "forwardx.forwardGroups.viewMode";
 
 function getStoredForwardGroupViewMode(): ForwardGroupViewMode {
-  if (typeof window === "undefined") return "card";
-  try {
-    const value = window.localStorage.getItem(FORWARD_GROUP_VIEW_MODE_STORAGE_KEY);
-    return value === "table" ? "table" : "card";
-  } catch {
-    return "card";
-  }
+  return readStoredViewMode<ForwardGroupViewMode>(FORWARD_GROUP_VIEW_MODE_STORAGE_KEY, ["table", "card"], "card");
 }
 
 function storeForwardGroupViewMode(viewMode: ForwardGroupViewMode) {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(FORWARD_GROUP_VIEW_MODE_STORAGE_KEY, viewMode);
-  } catch {
-    // Ignore storage failures so the page still works in restricted browsers.
-  }
+  writeStoredViewMode(FORWARD_GROUP_VIEW_MODE_STORAGE_KEY, viewMode);
 }
 
 function sameNumberArray(a: number[], b: number[]) {
@@ -2240,28 +2231,14 @@ export function ForwardGroupsContent({
             {runFailoverMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
             {activeGroupMode === "entry" ? "同步" : "检查"}
           </Button>}
-          <div className="hidden items-center overflow-hidden rounded-md border border-border/40 sm:flex">
-            <Button
-              variant={viewMode === "card" ? "secondary" : "ghost"}
-              size="icon"
-              className="h-8 w-8 rounded-none"
-              aria-label="卡片视图"
-              aria-pressed={viewMode === "card"}
-              onClick={() => handleViewModeChange("card")}
-            >
-              <LayoutGrid className="h-4 w-4" />
-            </Button>
-            <Button
-              variant={viewMode === "table" ? "secondary" : "ghost"}
-              size="icon"
-              className="h-8 w-8 rounded-none"
-              aria-label="列表视图"
-              aria-pressed={viewMode === "table"}
-              onClick={() => handleViewModeChange("table")}
-            >
-              <List className="h-4 w-4" />
-            </Button>
-          </div>
+          <ViewModeToggle
+            value={viewMode}
+            onChange={handleViewModeChange}
+            items={[
+              { value: "card", label: "卡片视图", icon: LayoutGrid },
+              { value: "table", label: "列表视图", icon: List },
+            ]}
+          />
           <Button onClick={() => openCreate()} className="col-span-2 gap-2 sm:col-span-1">
             <Plus className="h-4 w-4" />
             {addButtonText}

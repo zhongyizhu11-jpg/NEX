@@ -1,4 +1,5 @@
 import { FormField } from "@/components/ui/form-field";
+import { readStoredViewMode, writeStoredViewMode } from "@/lib/viewModeStorage";
 import { useFaultBundleExport } from "@/components/links/useFaultBundleExport";
 import { ResourceTrafficLine } from "@/components/links/ResourceTrafficLine";
 import EmptyState from "@/components/EmptyState";
@@ -54,6 +55,7 @@ import { PersistentPagination, usePersistentPageRequest, useServerPagination } f
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ViewModeToggle } from "@/components/ui/view-mode-toggle";
 import { Card, CardContent } from "@/components/ui/card";
 import { segmentedControlClassName, segmentedIconClassName, segmentedOptionClassName } from "@/components/ui/segmented";
 import {
@@ -839,41 +841,19 @@ const MAX_TUNNEL_HOPS = 10;
 const MAX_EXTRA_TUNNEL_EXITS = 4;
 
 function getStoredTunnelViewMode(): TunnelViewMode {
-  if (typeof window === "undefined") return "card";
-  try {
-    const value = window.localStorage.getItem(TUNNEL_VIEW_MODE_STORAGE_KEY);
-    return value === "table" || value === "globe" ? value : "card";
-  } catch {
-    return "card";
-  }
+  return readStoredViewMode<TunnelViewMode>(TUNNEL_VIEW_MODE_STORAGE_KEY, ["table", "globe", "card"], "card");
 }
 
 function storeTunnelViewMode(viewMode: TunnelViewMode) {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(TUNNEL_VIEW_MODE_STORAGE_KEY, viewMode);
-  } catch {
-    // Ignore storage failures so the page still works in restricted browsers.
-  }
+  writeStoredViewMode(TUNNEL_VIEW_MODE_STORAGE_KEY, viewMode);
 }
 
 function getStoredChainViewMode(): TunnelViewMode {
-  if (typeof window === "undefined") return "card";
-  try {
-    const value = window.localStorage.getItem(CHAIN_VIEW_MODE_STORAGE_KEY);
-    return value === "table" || value === "globe" ? value : "card";
-  } catch {
-    return "card";
-  }
+  return readStoredViewMode<TunnelViewMode>(CHAIN_VIEW_MODE_STORAGE_KEY, ["table", "globe", "card"], "card");
 }
 
 function storeChainViewMode(viewMode: TunnelViewMode) {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(CHAIN_VIEW_MODE_STORAGE_KEY, viewMode);
-  } catch {
-    // Ignore storage failures so the page still works in restricted browsers.
-  }
+  writeStoredViewMode(CHAIN_VIEW_MODE_STORAGE_KEY, viewMode);
 }
 
 
@@ -4450,41 +4430,15 @@ function TunnelsContent() {
             />
           </span>
       } chips={<HeaderStatusChips items={headerChipItems} />} actions={<>
-          <div className="hidden items-center overflow-hidden rounded-md border border-border/40 sm:flex">
-            <Button
-              variant={activeViewMode === "card" ? "secondary" : "ghost"}
-              size="icon"
-              className="h-8 w-8 rounded-none"
-              aria-label="卡片视图"
-              aria-pressed={activeViewMode === "card"}
-              onClick={() => handleActiveViewModeChange("card")}
-            >
-              <LayoutGrid className="h-4 w-4" />
-            </Button>
-            <Button
-              variant={activeViewMode === "table" ? "secondary" : "ghost"}
-              size="icon"
-              className="h-8 w-8 rounded-none"
-              aria-label="列表视图"
-              aria-pressed={activeViewMode === "table"}
-              onClick={() => handleActiveViewModeChange("table")}
-            >
-              <List className="h-4 w-4" />
-            </Button>
-            {(activeSection === "tunnels" || activeSection === "chains") && <Button
-              variant={activeViewMode === "globe" ? "secondary" : "ghost"}
-              size="icon"
-              className="h-8 w-8 rounded-none"
-              title="3D 地球视图"
-              aria-label="3D 地球视图"
-              aria-pressed={activeViewMode === "globe"}
-              onClick={() => handleActiveViewModeChange("globe")}
-              onPointerEnter={prefetchReactGlobe}
-              onFocus={prefetchReactGlobe}
-            >
-              <Globe className="h-4 w-4" />
-            </Button>}
-          </div>
+          <ViewModeToggle
+            value={activeViewMode}
+            onChange={handleActiveViewModeChange}
+            items={[
+              { value: "card", label: "卡片视图", icon: LayoutGrid },
+              { value: "table", label: "列表视图", icon: List },
+              ...(activeSection === "tunnels" || activeSection === "chains" ? [{ value: "globe" as const, label: "3D 地球视图", icon: Globe, onHover: prefetchReactGlobe }] : []),
+            ]}
+          />
           {mergeListControls ? createLinkAction : null}
       </>} />
 

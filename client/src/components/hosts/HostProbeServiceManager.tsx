@@ -1,4 +1,5 @@
 import DataSectionLoading from "@/components/DataSectionLoading";
+import { readStoredViewMode, writeStoredViewMode } from "@/lib/viewModeStorage";
 import { normalizeProbeAddressFamily, PROBE_ADDRESS_FAMILIES, PROBE_ADDRESS_FAMILY_LABELS, PROBE_FAMILY_MIN_AGENT_VERSION, type ProbeAddressFamily } from "@shared/probeFamily";
 import { EntityActions } from "@/components/entity/EntityActions";
 import { CardActions } from "@/components/entity/EntityCard";
@@ -8,6 +9,7 @@ import HostStatusLabel from "@/components/HostStatusLabel";
 import { SortableDragHandle, SortableItem, SortableReorderContext, useOptimisticSortableOrder, useSortableReorder } from "@/components/SortableDragHandle";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
+import { ViewModeToggle } from "@/components/ui/view-mode-toggle";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -73,22 +75,11 @@ const defaultForm: ServiceForm = {
 };
 
 function getStoredServiceViewMode(): HostProbeServiceViewMode {
-  if (typeof window === "undefined") return "card";
-  try {
-    const value = window.localStorage.getItem(SERVICE_VIEW_MODE_STORAGE_KEY);
-    return value === "table" ? "table" : "card";
-  } catch {
-    return "card";
-  }
+  return readStoredViewMode<HostProbeServiceViewMode>(SERVICE_VIEW_MODE_STORAGE_KEY, ["table", "card"], "card");
 }
 
 function storeServiceViewMode(viewMode: HostProbeServiceViewMode) {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(SERVICE_VIEW_MODE_STORAGE_KEY, viewMode);
-  } catch {
-    // Ignore storage failures so service management remains usable.
-  }
+  writeStoredViewMode(SERVICE_VIEW_MODE_STORAGE_KEY, viewMode);
 }
 
 function serviceTarget(service: any) {
@@ -443,26 +434,14 @@ export default function HostProbeServiceManager({
     <div className="space-y-4">
       {!hideViewModeToggle && (
       <div className="flex justify-end">
-        <div className="hidden items-center overflow-hidden rounded-md border border-border/40 sm:flex">
-          <Button
-            variant={viewMode === "card" ? "secondary" : "ghost"}
-            size="icon"
-            className="h-8 w-8 rounded-none"
-            title="卡片视图"
-            onClick={() => handleViewModeChange("card")}
-          >
-            <LayoutGrid className="h-4 w-4" />
-          </Button>
-          <Button
-            variant={viewMode === "table" ? "secondary" : "ghost"}
-            size="icon"
-            className="h-8 w-8 rounded-none"
-            title="列表视图"
-            onClick={() => handleViewModeChange("table")}
-          >
-            <List className="h-4 w-4" />
-          </Button>
-        </div>
+        <ViewModeToggle
+          value={viewMode}
+          onChange={handleViewModeChange}
+          items={[
+            { value: "card", label: "卡片视图", icon: LayoutGrid },
+            { value: "table", label: "列表视图", icon: List },
+          ]}
+        />
       </div>
       )}
 

@@ -1,4 +1,5 @@
 import { FormField } from "@/components/ui/form-field";
+import { readStoredViewMode, writeStoredViewMode } from "@/lib/viewModeStorage";
 import { PlanDescriptionEditor } from "@/components/plans/PlanDescription";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
 import DataSectionError, { DataTableErrorRow } from "@/components/DataSectionError";
@@ -22,6 +23,7 @@ import AutoAnimateContainer from "@/components/AutoAnimateContainer";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ViewModeToggle } from "@/components/ui/view-mode-toggle";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -151,22 +153,11 @@ const emptyForm: PlanForm = {
 };
 
 function getStoredPlanListViewMode(): PlanListViewMode {
-  if (typeof window === "undefined") return "card";
-  try {
-    const value = window.localStorage.getItem(PLAN_LIST_VIEW_MODE_STORAGE_KEY);
-    return value === "table" ? "table" : "card";
-  } catch {
-    return "card";
-  }
+  return readStoredViewMode<PlanListViewMode>(PLAN_LIST_VIEW_MODE_STORAGE_KEY, ["table", "card"], "card");
 }
 
 function storePlanListViewMode(viewMode: PlanListViewMode) {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(PLAN_LIST_VIEW_MODE_STORAGE_KEY, viewMode);
-  } catch {
-    // View preference is optional.
-  }
+  writeStoredViewMode(PLAN_LIST_VIEW_MODE_STORAGE_KEY, viewMode);
 }
 
 function speed(value?: number | null) {
@@ -1230,26 +1221,14 @@ export default function Plans() {
             */}
             <div className="flex items-center justify-between gap-3">
               <div data-fx-help="" className="min-w-0 text-meta text-muted-foreground">订阅后分配连续端口段。</div>
-                <div className="flex shrink-0 items-center overflow-hidden rounded-md border border-border/40">
-                  <Button
-                    variant={planViewMode === "card" ? "secondary" : "ghost"}
-                    size="icon"
-                    className="h-8 w-8 rounded-none"
-                    title="卡片视图"
-                    onClick={() => handlePlanViewModeChange("card")}
-                  >
-                    <LayoutGrid className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    variant={planViewMode === "table" ? "secondary" : "ghost"}
-                    size="icon"
-                    className="h-8 w-8 rounded-none"
-                    title="列表视图"
-                    onClick={() => handlePlanViewModeChange("table")}
-                  >
-                    <List className="h-4 w-4" />
-                  </Button>
-                </div>
+                <ViewModeToggle className="flex shrink-0 flex"
+                  value={planViewMode}
+                  onChange={handlePlanViewModeChange}
+                  items={[
+                    { value: "card", label: "卡片视图", icon: LayoutGrid },
+                    { value: "table", label: "列表视图", icon: List },
+                  ]}
+                />
             </div>
             <div>
                 {isLoading ? (
