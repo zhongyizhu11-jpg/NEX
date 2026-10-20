@@ -217,7 +217,7 @@ const tables: TableDef[] = [
       c("expiresAt", "epoch"), c("trafficAutoReset", "bool", { notNull: true, default: false }),
       c("trafficResetDay", "int", { notNull: true, default: 1 }), c("lastTrafficReset", "epoch"), c("lastAutoTrafficReset", "epoch"),
       c("telegramId", "text"), c("telegramUsername", "text"), c("telegramFirstName", "text"), c("telegramLastName", "text"),
-      c("telegramLinkedAt", "epoch"), c("telegramLastSeenAt", "epoch"), c("telegramAnnouncementSubscribed", "bool", { notNull: true, default: false }), c("compactLayout", "bool", { notNull: true, default: false }), c("telegramBindCode", "text"),
+      c("telegramLinkedAt", "epoch"), c("telegramLastSeenAt", "epoch"), c("telegramAnnouncementSubscribed", "bool", { notNull: true, default: false }), c("compactLayout", "bool", { notNull: true, default: false }), c("uiLayout", "varchar", { length: 16 }), c("telegramBindCode", "text"),
       c("telegramBindCodeExpiresAt", "epoch"), c("telegramLoginCode", "text"), c("telegramLoginCodeExpiresAt", "epoch"),
       c("twoFactorEnabled", "bool", { notNull: true, default: false }), c("twoFactorSecret", "text"), c("twoFactorEnabledAt", "epoch"),
       c("googleSub", "varchar", { length: 191 }), c("googleEmail", "text"), c("googleLinkedAt", "epoch"),
@@ -844,6 +844,8 @@ const seedSettings = [
   ["personalizationPageTint", "grey"],
   ["personalizationCardStyle", "edge"],
   ["personalizationUiTheme", "classic"],
+  // 布局密度的站点默认（standard / compact），每个账号可在个人资料里覆盖。见 shared/personalization.ts。
+  ["personalizationLayout", "standard"],
   ["lookingGlassUserEnabled", "true"],
   // 工单总开关：关掉后普通用户看不到入口、不能提交 / 回复，管理员照常处理（server/routers/tickets.ts）。
   ["ticketsEnabled", "true"],

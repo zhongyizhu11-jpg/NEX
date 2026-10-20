@@ -208,8 +208,10 @@ export const users = table("users", {
   telegramLinkedAt: epoch("telegramLinkedAt"),
   telegramLastSeenAt: epoch("telegramLastSeenAt"),
   telegramAnnouncementSubscribed: boolean("telegramAnnouncementSubscribed").notNull().default(false),
-  /** 精简布局（个人资料里的开关）：只改这个账号自己看到的界面，默认关。见 client/src/hooks/useCompactLayout.ts。 */
+  /** 2.3.466 的精简布局开关，已被 uiLayout 取代；留着只为了把开过的账号自动算成「精简」（shared/personalization.ts resolveEffectiveLayout）。 */
   compactLayout: boolean("compactLayout").notNull().default(false),
+  /** 布局偏好：null 跟随站点默认（设置 › 个性化 › 布局），"standard" / "compact" 自己定。见 shared/personalization.ts。 */
+  uiLayout: varchar("uiLayout", { length: 16 }),
   telegramBindCode: text("telegramBindCode").unique(),
   telegramBindCodeExpiresAt: epoch("telegramBindCodeExpiresAt"),
   telegramLoginCode: text("telegramLoginCode").unique(),
