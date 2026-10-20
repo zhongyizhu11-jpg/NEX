@@ -93,6 +93,7 @@ import { RULE_EGRESS_TYPES, ruleEgressShapeError, ruleHasEgress } from "@shared/
 import {
   hasEgressInput,
   resolveRuleEgressColumns,
+  loadTunnelEgressDialHosts,
   ruleEgressColumnsOf,
   type RuleEgressColumns,
   type RuleEgressInput,
@@ -1663,6 +1664,7 @@ export async function createDirectForwardRuleForActor(
       forwardType: String(input.forwardType || ""),
       protocol: String(input.protocol || "both"),
       tunnelId,
+      ...await tunnelEgressSaveContext(tunnelId),
       failoverEnabled: !!input.failoverEnabled,
       targetIp: input.targetIp,
     })
@@ -2121,6 +2123,14 @@ type RuleEgressUpdatePlan = { columns: RuleEgressColumns };
  * 主流程成功之后再落库（applyRuleEgressUpdate）。没碰出口、规则也没出口时回 null。
  * 没碰出口但规则带着出口时，只查形态：改成 realm / 挂上隧道之类会让出口失效的改动要拦下来。
  */
+/** 走隧道的规则接出口时：隧道模式和真正连 SS 落地的出口机（server/ssEgress 的 loadTunnelEgressDialHosts）。 */
+async function tunnelEgressSaveContext(tunnelId: number | null | undefined): Promise<{ tunnelMode?: string; dialHostIds?: number[] }> {
+  const id = Number(tunnelId || 0);
+  if (id <= 0) return {};
+  const dial = (await loadTunnelEgressDialHosts([id])).get(id);
+  return dial ? { tunnelMode: dial.mode, dialHostIds: dial.hostIds } : { dialHostIds: [] };
+}
+
 async function planRuleEgressUpdate(actor: { id: number; role: string }, input: any, egress: RuleEgressInput): Promise<RuleEgressUpdatePlan | null> {
   const rule = await db.getForwardRuleById(Number(input.id)) as any;
   if (!rule) return null;
@@ -2139,9 +2149,10 @@ async function planRuleEgressUpdate(actor: { id: number; role: string }, input: 
   const protocol = String(input.protocol ?? rule.protocol);
   const failoverEnabled = input.failoverEnabled !== undefined ? !!input.failoverEnabled : dbBool(rule.failoverEnabled);
   const egressType = egress.egressType ?? rule.egressType;
+  const tunnelContext = await tunnelEgressSaveContext(tunnelId);
   if (!touched) {
     const shapeError = ruleEgressShapeError({
-      egressType, forwardType, protocol, egressUdp: rule.egressUdp, tunnelId, forwardGroupMode: groupMode, failoverEnabled,
+      egressType, forwardType, protocol, egressUdp: rule.egressUdp, tunnelId, tunnelMode: tunnelContext.tunnelMode, forwardGroupMode: groupMode, failoverEnabled,
     });
     if (shapeError) throw new Error(`${shapeError}（这条规则在用 Shadowsocks 出口；要换转发方式请先把出口改成「直接连接」）`);
     return null;
@@ -2155,6 +2166,7 @@ async function planRuleEgressUpdate(actor: { id: number; role: string }, input: 
     forwardType,
     protocol,
     tunnelId,
+    ...tunnelContext,
     forwardGroupMode: groupMode,
     failoverEnabled,
     targetIp: input.targetIp ?? rule.targetIp,
@@ -2179,6 +2191,10 @@ async function applyRuleEgressUpdate(ruleId: number, plan: RuleEgressUpdatePlan)
     await db.syncForwardGroupRules(Number(rule.forwardGroupId));
   } else {
     pushAgentRefresh(Number(rule.hostId), "forward-rule-egress-updated");
+    // 走隧道的规则：出口机上的 SS 客户端换了（或没了），出口机也要马上重算。
+    for (const hostId of (await tunnelEgressSaveContext(Number(rule.tunnelId || 0))).dialHostIds || []) {
+      if (hostId !== Number(rule.hostId)) pushAgentRefresh(hostId, "forward-rule-egress-updated");
+    }
   }
   return true;
 }

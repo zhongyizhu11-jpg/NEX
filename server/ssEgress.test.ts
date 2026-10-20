@@ -107,9 +107,12 @@ test("出口失效的几种情况都按停用下发", () => {
   // 本来就是 gost 的不打这个标记。
   const gostView: any = ruleEgressRuntimeView(rule(), { ...entry, context: context() });
   assert.equal(gostView.egressForwardTypeOverride, undefined);
-  // 规则形态不对（比如挂了隧道）仍然不下发。
-  const tunnel: any = ruleEgressRuntimeView(rule({ tunnelId: 3 }), { ...entry, context: context() });
-  assert.equal(tunnel.egressRuntimeBlocked, "shape_invalid");
+  // 走隧道的规则入口这一侧原样下发（照常跑隧道）：出口在隧道出口机上另算（agentHeartbeatRoute 的 tunnelEgress）。
+  const tunneledRule = rule({ tunnelId: 3 });
+  assert.equal(ruleEgressRuntimeView(tunneledRule, { ...entry, context: context() }), tunneledRule);
+  // 出口机那一侧按隧道模式判：Nginx 隧道不下发，NEX 隧道照常。
+  assert.equal(evaluateRuleEgress(rule({ tunnelId: 3 }), { ...entry, tunnelMode: "nginx_stream", context: context() })?.state, "shape_invalid");
+  assert.equal(evaluateRuleEgress(rule({ tunnelId: 3 }), { ...entry, tunnelMode: "forwardx", context: context() })?.state, "running");
 });
 
 const capable = { entryAgentVersion: "2.2.227", entryAgentCapabilities: JSON.stringify(["ssEgress2022", "ssEgressUdp"]), entryRuntimeVersion: "3.2.6-nex3" };

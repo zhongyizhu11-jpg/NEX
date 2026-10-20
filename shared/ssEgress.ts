@@ -379,6 +379,8 @@ export type RuleEgressShape = {
   protocol: unknown;
   egressUdp?: unknown;
   tunnelId?: unknown;
+  /** 走隧道时隧道的模式（tunnels.mode）：NEX、GOST 隧道能接出口，Nginx 隧道不能。 */
+  tunnelMode?: unknown;
   /** 规则挂的转发组是哪种：port（端口转发资源）/ chain / failover；没挂为空。 */
   forwardGroupMode?: unknown;
   failoverEnabled?: unknown;
@@ -402,10 +404,20 @@ export function ruleEgressSwitchesForwardType(egressType: unknown, forwardType: 
   return normalizeRuleEgressType(egressType) !== "none" && String(forwardType ?? "") !== RULE_EGRESS_RUNTIME_FORWARD_TYPE;
 }
 
+/**
+ * 这种隧道能不能接 Shadowsocks 出口。NEX、GOST 隧道的出口拨的是入口给的目标，出口机上起一个本机的
+ * SS 客户端、让入口把目标换成它就行；Nginx 隧道的出口配置不一样，先不做。不知道模式时（老调用方没传）放行，
+ * 下发时会带上模式再判一次。
+ */
+export function ssEgressTunnelModeSupported(mode: unknown) {
+  return String(mode ?? "").trim().toLowerCase() !== "nginx_stream";
+}
+
 export function ruleEgressShapeError(shape: RuleEgressShape): string | null {
   if (normalizeRuleEgressType(shape.egressType) === "none") return null;
   if (Number(shape.tlsInboundId || 0) > 0) return "共享 TLS 入站上的规则不能使用 Shadowsocks 出口";
-  if (Number(shape.tunnelId || 0) > 0) return "走隧道的规则不能再使用 Shadowsocks 出口：隧道出口本身就是落地，二选一即可";
+  // 走隧道时 SS 客户端跑在隧道的出口机上：入口 → 隧道 → 出口机 → SS 落地 → 目标（server/agentHeartbeatRoute 的 tunnelEgress）。
+  if (Number(shape.tunnelId || 0) > 0 && !ssEgressTunnelModeSupported(shape.tunnelMode)) return "Nginx 隧道不能接 Shadowsocks 出口，请换 NEX 或 GOST 隧道";
   const groupMode = String(shape.forwardGroupMode ?? "").trim();
   if (groupMode && groupMode !== "port") return "转发链 / 转发组上的规则不能使用 Shadowsocks 出口，请用端口转发或直连规则";
   if (truthy(shape.failoverEnabled)) return "使用 Shadowsocks 出口的规则暂不支持线路组 / 主备线路";
