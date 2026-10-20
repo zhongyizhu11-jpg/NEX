@@ -14,6 +14,7 @@ import { AppShell } from "./components/DashboardLayout";
 import { prefetchRoute, routeChunks } from "@/pages/routeChunks";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import PersonalizationLayer from "./components/PersonalizationLayer";
+import LayoutLayer from "./components/LayoutLayer";
 import LiquidGlassBackdrop from "./components/LiquidGlassBackdrop";
 import Live2DWidgetHost from "./components/plugins/Live2DWidgetHost";
 import HomePage from "@/pages/Home";
@@ -339,6 +340,7 @@ function App() {
         <TooltipProvider>
           <ConfirmDialogProvider>
             <PersonalizationLayer />
+            <LayoutLayer />
             <LiquidGlassBackdrop />
             <Live2DWidgetHost />
             <Toaster />

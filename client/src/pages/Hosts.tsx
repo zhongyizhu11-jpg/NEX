@@ -94,7 +94,6 @@ import {
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SlidingTabsList, type SlidingTabItem } from "@/components/ui/sliding-tabs";
-import { useCompactLayout } from "@/hooks/useCompactLayout";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import DataSectionLoading from "@/components/DataSectionLoading";
 import DataSectionError from "@/components/DataSectionError";
@@ -1567,7 +1566,6 @@ const HostTableRow = memo(function HostTableRow({
 
 function HostsContent() {
   const { user } = useAuth();
-  const compactLayout = useCompactLayout();
   const confirmDialog = useConfirmDialog();
   const utils = trpc.useUtils();
   const pageVisible = usePageVisible();
@@ -1752,17 +1750,7 @@ function HostsContent() {
   const [tokenViewMode, setTokenViewMode] = useState<AgentTokenViewMode>(() => getStoredAgentTokenViewMode());
   const [serviceViewMode, setServiceViewMode] = useState<HostProbeServiceViewMode>(() => getStoredHostProbeServiceViewMode());
   const [hostGroupViewMode, setHostGroupViewMode] = useState<HostGroupViewMode>(() => getStoredHostGroupViewMode());
-  /*
-    精简布局：管理员顶上只放「主机 / 分组」；Token 管理、服务管理挪进「•••」菜单，正在看哪一个时它临时出现在
-    分类条上（知道自己在哪、点「主机」回去）。
-  */
-  const hostManageTabItems = user?.role !== "admin"
-    ? HOST_MANAGE_TAB_ITEMS_USER
-    : compactLayout
-      ? HOST_MANAGE_TAB_ITEMS_ADMIN
-        .filter((item) => item.value === "hosts" || item.value === "groups" || item.value === activeManageTab)
-        .map((item) => ({ ...item, label: item.value === "hosts" ? "主机" : item.value === "groups" ? "分组" : item.label }))
-      : HOST_MANAGE_TAB_ITEMS_ADMIN;
+  const hostManageTabItems = user?.role === "admin" ? HOST_MANAGE_TAB_ITEMS_ADMIN : HOST_MANAGE_TAB_ITEMS_USER;
   /*
     这一页的实时数据统一一个节奏（原来是几个查询各 2 秒、各自错开地刷）：桌面 3 秒；
     手机上或机器很多时 5 秒。切到后台照旧停。
@@ -2659,16 +2647,6 @@ function HostsContent() {
                   <DropdownMenuItem disabled={onlineOutdatedCount === 0 || upgradeAgentsMutation.isPending} onSelect={requestAllAgentUpgrades}>
                     <Download className="h-4 w-4" />升级在线 Agent
                   </DropdownMenuItem>
-                  {compactLayout ? (
-                    <>
-                      <DropdownMenuItem onSelect={() => setActiveManageTab("tokens")}>
-                        <Key className="h-4 w-4" />Token 管理
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onSelect={() => setActiveManageTab("services")}>
-                        <Rows3 className="h-4 w-4" />服务管理
-                      </DropdownMenuItem>
-                    </>
-                  ) : null}
                   <OpsHostsMenuItems />
                 </DropdownMenuContent></DropdownMenu>
               )}
@@ -3562,7 +3540,7 @@ function HostsContent() {
                       <Label className="text-sm font-semibold">协议屏蔽</Label>
                       <span className="text-xs text-muted-foreground">访问策略</span>
                     </div>
-                    <p className="rounded-md border border-border/40 bg-muted/30 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+                    <p data-fx-help="" className="rounded-md border border-border/40 bg-muted/30 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
 命中的连接会被拒绝，规则仍保持运行。{nginxFeatureEnabled ? "支持 NEX、Realm、GOST、Socat 和 Nginx；不支持 iptables/nftables。" : "支持 NEX、Realm、GOST 和 Socat；不支持 iptables/nftables。"}
                     </p>
                     <div className="grid gap-2 sm:grid-cols-3">
@@ -3828,7 +3806,7 @@ function HostsContent() {
                       <div className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
                         <div className="min-w-0 space-y-0.5">
                           <Label className="text-sm font-medium">线路带宽</Label>
-                          <p className="text-xs text-muted-foreground">商家给的带宽，负载均衡按它分，不限速。</p>
+                          <p data-fx-help="" className="text-xs text-muted-foreground">商家给的带宽，负载均衡按它分，不限速。</p>
                         </div>
                         <div className="flex h-8 w-36 shrink-0 overflow-hidden rounded-md border border-input bg-background focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2">
                           <Input aria-label="线路带宽（Mbit/s）"
@@ -3847,9 +3825,7 @@ function HostsContent() {
                       <div className="mt-2.5 flex min-h-9 items-center justify-between gap-3 rounded-md bg-muted/35 px-3 py-2">
                         <div className="min-w-0 space-y-0.5">
                           <Label className="text-sm font-medium">只放行白名单 IP</Label>
-                          {compactLayout ? null : (
-                            <p className="text-xs text-muted-foreground">别的机器连不上它是正常的：诊断不再怪公网 IP 不通，订阅也不会因探测超时自动隐藏它。</p>
-                          )}
+                          <p data-fx-help="" className="text-xs text-muted-foreground">别的机器连不上它是正常的：诊断不再怪公网 IP 不通，订阅也不会因探测超时自动隐藏它。</p>
                         </div>
                         <Checkbox aria-label="只放行白名单 IP"
                           checked={form.ipWhitelistOnly}

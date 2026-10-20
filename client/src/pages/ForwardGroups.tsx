@@ -2229,6 +2229,8 @@ export function ForwardGroupsContent({
 
   return (
     <div className="space-y-6">
+      {/* 嵌在链路管理的分类条底下时，这个二级页头和选中的那一格同名：精简布局下整块不要（data-fx-compact-hide） */}
+      <div data-fx-compact-hide={embedded && hideHeaderActions ? "" : undefined}>
       <WorkspaceHeader level={embedded ? 2 : 1} title={pageTitle} description={pageDescription} actions={!hideHeaderActions && <>
           <Badge variant="outline" className="justify-center gap-1.5 px-3 py-1.5 text-xs">
             <Activity className="h-3 w-3 text-current" />
@@ -2270,6 +2272,7 @@ export function ForwardGroupsContent({
             {addButtonText}
           </Button>
         </>} />
+      </div>
 
       <SectionTransition transitionKey={contentTransitionKey}>
         {isLoading ? (
@@ -2498,7 +2501,7 @@ export function ForwardGroupsContent({
                     <label className="flex items-center justify-between gap-3">
                       <span className="space-y-1">
                         <span className="block text-sm font-medium">按带宽排序解析</span>
-                        <span className="block text-xs text-muted-foreground">
+                        <span data-fx-help="" className="block text-xs text-muted-foreground">
                           入口域名照旧解析出全部健康入口，只是把带宽大（或现在更闲）的排在前面。很多客户端优先用排在前面的地址，
                           所以大带宽的入口通常会接到更多客户端，但 DNS 给不出准确的比例。
                           要按比例分连接，用订阅里的「负载均衡」组；要把一条连接拆开同时走几台，用隧道中转的「单连接叠加」。
@@ -2619,7 +2622,7 @@ export function ForwardGroupsContent({
               <FormField className="space-y-2">
                 <Label>{form.groupMode === "port" ? "入口组（可选）" : "入口组"}</Label>
                 {form.groupMode === "port" && (
-                  <p className="text-xs text-muted-foreground">挂上入口组就用组里的主机当入口，隧道 / 转发链共用同一个组，组里加减主机这里自动跟着变；不挂就在下面指定主机。</p>
+                  <p data-fx-help="" className="text-xs text-muted-foreground">挂上入口组就用组里的主机当入口，隧道 / 转发链共用同一个组，组里加减主机这里自动跟着变；不挂就在下面指定主机。</p>
                 )}
                 <Select
                   value={form.entryGroupId ? String(form.entryGroupId) : "none"}
@@ -2649,7 +2652,7 @@ export function ForwardGroupsContent({
               <div className="space-y-2.5 border-t border-border/60 pt-3">
                 <div className="flex items-center justify-between gap-3">
                   <p className="text-sm font-medium">运行配置</p>
-                  <p id="forward-group-rate-limit-help" className="text-xs text-muted-foreground">0 表示不限速</p>
+                  <p data-fx-help="" id="forward-group-rate-limit-help" className="text-xs text-muted-foreground">0 表示不限速</p>
                 </div>
                 <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(132px,160px)_112px] sm:items-end">
                   <FormField className="space-y-2">
@@ -2778,7 +2781,7 @@ export function ForwardGroupsContent({
               <div className={form.groupMode === "chain" ? "space-y-2" : "space-y-3 rounded-lg border border-border/60 p-3"}>
                 <Label>{form.groupMode === "chain" ? "链路主机顺序" : form.groupMode === "port" || form.groupMode === "entry" ? "入口主机" : form.groupMode === "exit" ? "出口主机" : "成员优先级"}</Label>
                 {form.groupMode === "port" && (
-                  <p className="text-xs text-muted-foreground">选一台或多台主机，每台都在规则的入口端口上监听、转到同一个目标；加减主机后已有规则自动跟着下发。</p>
+                  <p data-fx-help="" className="text-xs text-muted-foreground">选一台或多台主机，每台都在规则的入口端口上监听、转到同一个目标；加减主机后已有规则自动跟着下发。</p>
                 )}
                 {form.groupMode === "chain" ? (
                   <MultiHopEditor

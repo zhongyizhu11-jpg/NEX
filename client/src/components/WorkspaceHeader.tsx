@@ -35,11 +35,12 @@ export default function WorkspaceHeader({ title, description, status, actions, c
     <div className="min-w-0">
       <Heading className="workspace-header-title">{title}</Heading>
       {isMobile && level === 1 ? (
-        meta ? <div className="workspace-header-meta">{meta}</div> : null
+        meta ? <div className="workspace-header-meta" data-fx-help={status ? undefined : ""}>{meta}</div> : null
       ) : (status || description) ? (
         <div className="workspace-header-meta">
           {status}
-          {description && <p>{description}</p>}
+          {/* 介绍句是给第一次来的人看的：精简布局下收起（data-fx-help），状态照旧 */}
+          {description && <p data-fx-help="">{description}</p>}
         </div>
       ) : null}
     </div>

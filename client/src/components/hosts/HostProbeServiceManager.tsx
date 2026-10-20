@@ -596,7 +596,7 @@ export default function HostProbeServiceManager({
         <DialogContent className="flex max-h-[88vh] flex-col overflow-hidden sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>{editingId ? "编辑服务" : "添加服务"}</DialogTitle>
-            <DialogDescription>配置主机 Ping / TCPing 探测服务</DialogDescription>
+            <DialogDescription data-fx-help="">配置主机 Ping / TCPing 探测服务</DialogDescription>
           </DialogHeader>
           <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
             <div className="grid gap-3 sm:grid-cols-2">
@@ -615,7 +615,7 @@ export default function HostProbeServiceManager({
                   {PROBE_ADDRESS_FAMILIES.map((family) => <SelectItem key={family} value={family}>{PROBE_ADDRESS_FAMILY_LABELS[family]}</SelectItem>)}
                 </SelectContent>
               </Select>
-              <p className="text-meta text-muted-foreground">目标是域名时才有用：只用这一族的地址测。需要 Agent {PROBE_FAMILY_MIN_AGENT_VERSION} 以上，更旧的 Agent 照旧按「自动」。</p>
+              <p data-fx-help="" className="text-meta text-muted-foreground">目标是域名时才有用：只用这一族的地址测。需要 Agent {PROBE_FAMILY_MIN_AGENT_VERSION} 以上，更旧的 Agent 照旧按「自动」。</p>
             </FormField>
             <div className="grid gap-3 sm:grid-cols-[1fr_140px]">
               <FormField className="space-y-1.5"><Label>选择主机</Label><Select value={form.hostScope} onValueChange={(value) => setForm({ ...form, hostScope: value as ServiceForm["hostScope"] })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">所有主机</SelectItem><SelectItem value="exclude">排除主机</SelectItem><SelectItem value="specific">特定主机</SelectItem></SelectContent></Select></FormField>

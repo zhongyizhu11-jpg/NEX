@@ -67,7 +67,8 @@ import {
   Search,
   Activity,
   Gift,
-  ChevronDown,
+  Check,
+  Rows3,
   type LucideIcon,
 } from "lucide-react";
 import { useOpsFeatures } from "@/features/ops/useOpsFeatures";
@@ -104,7 +105,7 @@ import { buildPanelInstallerCommand } from "@shared/githubAccelerator";
 import { WorkspaceCommand, type WorkspaceDestination } from "@/components/WorkspaceNavigation";
 import PearlNavMarker from "@/components/PearlNavMarker";
 import { useUiTheme } from "@/hooks/useUiTheme";
-import { useCompactLayout } from "@/hooks/useCompactLayout";
+import { useLayoutPreference } from "@/hooks/useCompactLayout";
 import { navigateAfterPrefetch, prefetchRoute, prefetchRoutesWhenIdle } from "@/pages/routeChunks";
 import { docsUrl } from "@/lib/docsLinks";
 
@@ -411,16 +412,8 @@ function DashboardLayoutContent({
   const accountMenuOpenRef = useRef(accountMenuOpen);
   const isDesktopCollapsed = !isMobile && state === "collapsed";
   const isAdmin = user?.role === "admin";
-  const compactLayout = useCompactLayout();
-  const [opsGroupOpen, setOpsGroupOpen] = useState(() => {
-    try { return window.localStorage.getItem("forwardx.sidebar.opsOpen") === "1"; } catch { return false; }
-  });
-  const toggleOpsGroup = () => {
-    setOpsGroupOpen((open) => {
-      try { window.localStorage.setItem("forwardx.sidebar.opsOpen", open ? "0" : "1"); } catch { /* 记不住就每次折着 */ }
-      return !open;
-    });
-  };
+  const layoutPreference = useLayoutPreference();
+  const compactLayout = layoutPreference.effective === "compact";
   /*
     侧栏滚动位置（上游 2.3.285）：每个页面自己包一层外壳，换页时侧栏重新挂载、滚动条跳回顶部。
     按账号 + 侧栏形态记住位置，挂载后还原；用户自己一滚就以他为准。
@@ -1369,17 +1362,13 @@ function DashboardLayoutContent({
     ? [...visibleProfileMenuItems, ...visibleAdminMenuItems]
     : [...(canShowNetworkTest ? [lookingGlassMenuItem] : []), ...visibleProfileMenuItems];
   /*
-    精简布局（管理员）：「管理与账户」拆成「运营」和「系统」两组。运营那几项（收款、套餐、
-    用户、工单）一个月才进几次，默认折起来；正在看其中一页、或者有待处理工单时照样露出来。
-    侧栏收成图标时不折 —— 只剩图标的时候没有地方放组名。
+    精简布局：个人资料、系统设置在右上角账户菜单里已经各有一项，侧栏不再重复放（命令面板里照旧能搜到）。
+    管理与账户那一组少两行，普通用户的「工具与账户」常常就只剩网络测试 / 邀请返利。
   */
-  const OPS_MENU_PATHS = ["/payments", "/billing", "/plans", "/users", ADMIN_TICKETS_PATH];
-  const splitAdminGroups = compactLayout && isAdmin && !isDesktopCollapsed;
-  const opsMenuItems = splitAdminGroups ? managementMenuItems.filter((item) => OPS_MENU_PATHS.includes(item.path)) : [];
-  const systemMenuItems = splitAdminGroups ? managementMenuItems.filter((item) => !OPS_MENU_PATHS.includes(item.path)) : managementMenuItems;
-  const opsActive = opsMenuItems.some((item) => item.path === (location.split("?")[0] || "/"));
-  const opsBadge = opsMenuItems.reduce((sum, item) => sum + (item.badge || 0), 0);
-  const opsVisible = opsGroupOpen || opsActive;
+  const SIDEBAR_DEDUPED_PATHS = ["/profile", "/settings"];
+  const sidebarManagementItems = compactLayout
+    ? managementMenuItems.filter((item) => !SIDEBAR_DEDUPED_PATHS.includes(item.path))
+    : managementMenuItems;
   const commandItems: WorkspaceDestination[] = [
     ...primaryMenuItems.map(item => ({ ...item, group: "工作空间" })),
     ...managementMenuItems.map(item => ({ ...item, group: isAdmin ? "管理与账户" : "工具与账户" })),
@@ -1673,6 +1662,24 @@ function DashboardLayoutContent({
                   <span>系统设置</span>
                 </DropdownMenuItem>
               )}
+              {/*
+                精简布局一键切：记成这个账号的偏好（个人资料 › 界面 里的同一个值）。
+                菜单不关，点完当场看到界面换过去；想回到「跟随站点」去个人资料里选。
+              */}
+              <DropdownMenuItem
+                onSelect={(event) => {
+                  event.preventDefault();
+                  void layoutPreference.setPreference(compactLayout ? "standard" : "compact");
+                }}
+                disabled={layoutPreference.saving}
+                className="cursor-pointer"
+                aria-checked={compactLayout}
+                role="menuitemcheckbox"
+              >
+                <Rows3 />
+                <span>精简布局</span>
+                {compactLayout ? <Check className="ml-auto h-4 w-4 text-primary" aria-hidden="true" /> : null}
+              </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 onClick={handleLogout}
@@ -1803,7 +1810,7 @@ function DashboardLayoutContent({
           {primaryMenuItems.length > 0 && (
             <SidebarGroup className={cn("pb-2 mobile-sidebar-group", mobileAuth.isNative && "pb-1.5")}>
               <SidebarGroupLabel className="text-xs text-muted-foreground uppercase tracking-wider">
-                {splitAdminGroups ? "转发" : "工作空间"}
+                工作空间
               </SidebarGroupLabel>
               <SidebarMenu className={cn("py-1 mobile-sidebar-menu", isDesktopCollapsed ? "items-center px-0" : "px-2")}>
                 {renderSidebarItems(primaryMenuItems)}
@@ -1811,34 +1818,13 @@ function DashboardLayoutContent({
             </SidebarGroup>
           )}
 
-          {opsMenuItems.length > 0 && (
-            <SidebarGroup className={cn("mt-1 shrink-0 pt-2 mobile-sidebar-group mobile-sidebar-admin-group", !mobileAuth.isNative && "border-t border-sidebar-border/50", mobileAuth.isNative && "mt-0 pt-2 border-t border-sidebar-border/50")}>
-              <SidebarGroupLabel asChild className="text-xs text-muted-foreground uppercase tracking-wider">
-                <button type="button" onClick={toggleOpsGroup} aria-expanded={opsVisible} className="flex w-full items-center gap-1">
-                  <span>运营</span>
-                  {!opsVisible && opsBadge > 0 ? (
-                    <span className="min-w-[1.25rem] rounded-full bg-[var(--fx-down-soft)] px-1.5 text-center text-[11px] font-medium leading-5 text-[var(--fx-down-text)] normal-case">
-                      {opsBadge > 99 ? "99+" : opsBadge}
-                    </span>
-                  ) : null}
-                  <ChevronDown className={cn("ml-auto h-3.5 w-3.5 transition-transform", !opsVisible && "-rotate-90")} aria-hidden="true" />
-                </button>
-              </SidebarGroupLabel>
-              {opsVisible ? (
-                <SidebarMenu className="py-1 mobile-sidebar-menu px-2">
-                  {renderSidebarItems(opsMenuItems)}
-                </SidebarMenu>
-              ) : null}
-            </SidebarGroup>
-          )}
-
-          {systemMenuItems.length > 0 && (
+          {sidebarManagementItems.length > 0 && (
             <SidebarGroup className={cn("mt-1 shrink-0 pt-2 mobile-sidebar-group mobile-sidebar-admin-group", !mobileAuth.isNative && "border-t border-sidebar-border/50", mobileAuth.isNative && "mt-0 pt-2 border-t border-sidebar-border/50")}>
               <SidebarGroupLabel className="text-xs text-muted-foreground uppercase tracking-wider">
-                {splitAdminGroups ? "系统" : isAdmin ? "管理与账户" : "工具与账户"}
+                {isAdmin ? "管理与账户" : "工具与账户"}
               </SidebarGroupLabel>
               <SidebarMenu className={cn("py-1 mobile-sidebar-menu", isDesktopCollapsed ? "items-center px-0" : "px-2")}>
-                {renderSidebarItems(systemMenuItems)}
+                {renderSidebarItems(sidebarManagementItems)}
               </SidebarMenu>
             </SidebarGroup>
           )}
@@ -2012,7 +1998,8 @@ function DashboardLayoutContent({
             </MobileNavContext.Provider>
           </div>
         </main>
-        <footer className="hidden pb-4 text-center text-xs text-muted-foreground md:block">
+        {/* 精简布局：页脚那一行链接不占每页的底部（设置 › 关于 里都有） */}
+        <footer data-fx-compact-hide="" className="hidden pb-4 text-center text-xs text-muted-foreground md:block">
           <div className="inline-flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
             <a
               href={publicInfo?.repoUrl || "https://github.com/zhongyizhu11-jpg/NEX"}

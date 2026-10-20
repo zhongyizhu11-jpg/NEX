@@ -1229,7 +1229,7 @@ export default function Plans() {
               规则的卡片一样。表格视图才需要一块白底托住。
             */}
             <div className="flex items-center justify-between gap-3">
-              <div className="min-w-0 text-meta text-muted-foreground">订阅后分配连续端口段。</div>
+              <div data-fx-help="" className="min-w-0 text-meta text-muted-foreground">订阅后分配连续端口段。</div>
                 <div className="flex shrink-0 items-center overflow-hidden rounded-md border border-border/40">
                   <Button
                     variant={planViewMode === "card" ? "secondary" : "ghost"}
@@ -1369,7 +1369,7 @@ export default function Plans() {
         <DialogContent className="flex max-h-[92svh] w-[calc(100vw-1rem)] max-w-[95vw] flex-col overflow-hidden p-0 sm:max-w-2xl">
           <DialogHeader className="px-4 pt-4 sm:px-5 sm:pt-5">
             <DialogTitle>{form.id ? "编辑套餐" : "新增套餐"}</DialogTitle>
-            <DialogDescription>配置套餐限制，并绑定订阅后可用资源。</DialogDescription>
+            <DialogDescription data-fx-help="">配置套餐限制，并绑定订阅后可用资源。</DialogDescription>
           </DialogHeader>
 
           <Tabs value={planDialogTab} onValueChange={(value) => setPlanDialogTab(value as PlanDialogTab)} className="flex min-h-0 flex-1 flex-col px-4 sm:px-5">
@@ -1557,17 +1557,17 @@ export default function Plans() {
             <FormField className="space-y-2">
               <Label>最大落地节点数（0 为不限）</Label>
               <Input type="number" min={0} value={form.maxProxyInbounds} onChange={(e) => setForm({ ...form, maxProxyInbounds: e.target.value })} />
-              <p className="text-xs text-muted-foreground">买了这个套餐能自己开几个落地节点。只在套餐开了客户端订阅时才有意义。</p>
+              <p data-fx-help="" className="text-xs text-muted-foreground">买了这个套餐能自己开几个落地节点。只在套餐开了客户端订阅时才有意义。</p>
             </FormField>
             <FormField className="space-y-2">
               <Label>最大订阅地址数（0 为不限）</Label>
               <Input type="number" min={0} value={form.maxProxySubTokens} onChange={(e) => setForm({ ...form, maxProxySubTokens: e.target.value })} />
-              <p className="text-xs text-muted-foreground">能生成几条订阅地址。同样只在开了客户端订阅时才有意义。</p>
+              <p data-fx-help="" className="text-xs text-muted-foreground">能生成几条订阅地址。同样只在开了客户端订阅时才有意义。</p>
             </FormField>
             <FormField className="space-y-2">
               <Label>最大连接数</Label>
               <Input type="number" min={0} value={form.maxConnections} onChange={(e) => setForm({ ...form, maxConnections: e.target.value })} />
-              <p className="text-xs text-muted-foreground">按主机或隧道聚合。</p>
+              <p data-fx-help="" className="text-xs text-muted-foreground">按主机或隧道聚合。</p>
             </FormField>
             <FormField className="space-y-2">
               <Label>单 IP 接入限制</Label>
@@ -1577,7 +1577,7 @@ export default function Plans() {
               <FormField className="flex items-start justify-between gap-3 rounded-md border p-3">
                 <div className="min-w-0">
                   <Label>附带客户端订阅权限</Label>
-                  <p className="mt-1 text-xs text-muted-foreground">
+                  <p data-fx-help="" className="mt-1 text-xs text-muted-foreground">
                     开启后，购买该套餐的用户即可使用客户端订阅。与转发权限不同，这项不会因为有订阅就自动开启。
                   </p>
                 </div>
@@ -1587,7 +1587,7 @@ export default function Plans() {
                   className="mt-1 shrink-0"
                 />
               </FormField>
-              <p className="text-xs text-muted-foreground">同组规则共享限制。</p>
+              <p data-fx-help="" className="text-xs text-muted-foreground">同组规则共享限制。</p>
             </div>
             <FormField className="space-y-2">
               <Label htmlFor="plan-referral-rate">邀请返利比例（%）</Label>
@@ -1599,7 +1599,7 @@ export default function Plans() {
                 onChange={(e) => setForm({ ...form, referralRate: e.target.value })}
                 aria-invalid={parseRatePercentToBps(form.referralRate) === null}
               />
-              <p className="text-xs text-muted-foreground">
+              <p data-fx-help="" className="text-xs text-muted-foreground">
                 被邀请人买这个套餐（含续费）实付金额的百分之几返给邀请人，0 为不返。0 到 100，最多两位小数。需在「账单与兑换 › 邀请返利」里开启。
               </p>
             </FormField>
@@ -1645,7 +1645,7 @@ export default function Plans() {
                     <div className="flex items-center justify-between gap-3 rounded-md bg-muted/20 px-3 py-2 sm:col-span-2">
                       <div className="min-w-0">
                         <p className="text-sm font-medium">同步已购买用户</p>
-                        <p className="text-xs text-muted-foreground">开启后保存套餐会同步已购买用户的生效权益；关闭后仅影响后续新购或新分配。</p>
+                        <p data-fx-help="" className="text-xs text-muted-foreground">开启后保存套餐会同步已购买用户的生效权益；关闭后仅影响后续新购或新分配。</p>
                       </div>
                       <Checkbox
                         className="shrink-0"
@@ -1884,7 +1884,7 @@ export default function Plans() {
                     <div className="flex items-center justify-between gap-3 rounded-md bg-muted/20 px-3 py-2">
                       <div className="min-w-0">
                         <p className="text-sm font-medium">给每人单开一个端口</p>
-                        <p className="text-xs text-muted-foreground">
+                        <p data-fx-help="" className="text-xs text-muted-foreground">
                           开：面板照着节点在同一台机器上给每位用户克隆一个端口，
                           <span className="font-medium text-foreground">流量能算到人头上</span>，可单独限速，代价是一人占一个端口。
                           关：大家共用原端口、各发一份凭据，省端口，但流量按端口统计、分不开。
@@ -1897,7 +1897,7 @@ export default function Plans() {
                       />
                     </div>
                   ) : null}
-                  <p className="text-xs text-muted-foreground">
+                  <p data-fx-help="" className="text-xs text-muted-foreground">
                     买了（或被分配）这个套餐的人，会在这些节点上<span className="font-medium text-foreground">各拿一份独立凭据</span>，直接出现在他的订阅里；
                     到期、取消、换套餐自动收回，不必手工分。支持一人一份凭据的协议才发得出来
                     （VLESS / VMess / Trojan / Hysteria2 / TUIC / AnyTLS）；
@@ -1909,7 +1909,7 @@ export default function Plans() {
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <Label className="text-sm font-medium">附加流量包</Label>
-                <p className="mt-1 text-xs text-muted-foreground">用户在“我的套餐”内余额购买，仅当前流量周期有效。</p>
+                <p data-fx-help="" className="mt-1 text-xs text-muted-foreground">用户在“我的套餐”内余额购买，仅当前流量周期有效。</p>
               </div>
               <Button type="button" variant="outline" size="sm" onClick={addTrafficAddon}>
                 <Plus className="mr-2 h-4 w-4" /> 添加档位
@@ -2003,7 +2003,7 @@ export default function Plans() {
                     ))}
                   </SelectContent>
                 </Select>
-                <p className="text-xs text-muted-foreground">
+                <p data-fx-help="" className="text-xs text-muted-foreground">
                   套餐挂着的周期都能选；选「永久」不设到期时间。手动分配不扣钱，也不走折扣。
                 </p>
               </FormField>

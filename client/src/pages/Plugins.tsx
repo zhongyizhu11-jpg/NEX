@@ -2357,7 +2357,7 @@ export default function Plugins({ sidebarPluginId }: { sidebarPluginId?: string 
                   <Puzzle className="h-4 w-4 text-primary" />
                   已安装插件
                 </CardTitle>
-                <CardDescription className="mt-1">
+                <CardDescription keep className="mt-1">
                   {plugins.length} 个插件{availablePluginUpdates.length > 0 ? ` · ${availablePluginUpdates.length} 个可更新` : ""}
                 </CardDescription>
               </div>

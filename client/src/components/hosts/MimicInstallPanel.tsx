@@ -289,7 +289,7 @@ export function MimicHostsStatus({ hosts, canManage }: { hosts: MimicHost[]; can
   if (hosts.length === 0) return null;
   return (
     <div className="space-y-1.5 rounded-md border border-border/50 bg-background/60 px-3 py-2">
-      <p className="text-xs text-muted-foreground">参与链路的主机都要有 mimic 环境；缺的可以在这里直接装，装完保存即可。</p>
+      <p data-fx-help="" className="text-xs text-muted-foreground">参与链路的主机都要有 mimic 环境；缺的可以在这里直接装，装完保存即可。</p>
       {hosts.map((host) => (
         <MimicInstallPanel key={host.id} host={host} canManage={canManage} compact />
       ))}

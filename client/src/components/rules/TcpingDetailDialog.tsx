@@ -170,7 +170,7 @@ function TcpingDetailDialog({
               <DialogTitle className="truncate text-base sm:text-lg">
                 {isForwardChain ? "转发链路延迟" : `转发链路延迟 (${methodLabel})`} - {ruleName}
               </DialogTitle>
-              <DialogDescription className="text-xs sm:text-sm">
+              <DialogDescription data-fx-help="" className="text-xs sm:text-sm">
                 {isForwardChain ? `最近 ${latencyTimeRangeLabel(timeRangeHours)} 链路汇总延迟和丢包。` : `最近 ${latencyTimeRangeLabel(timeRangeHours)} 延迟和丢包。`}
               </DialogDescription>
             </div>

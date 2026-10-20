@@ -43,7 +43,7 @@ export default function TunnelParallelStreamsDialog({ tunnel, onClose }: {
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>单连接多路并发{tunnel ? ` · ${tunnel.name}` : ""}</DialogTitle>
-          <DialogDescription>
+          <DialogDescription data-fx-help="">
             入口把每条客户端连接拆成几片，从几条并行连接同时发到出口，出口按顺序拼回去，目标看到的数据和单路一模一样。
             适合按单条 TCP 限速、或者丢包让单条连接跑不快的跨境线路：一条下载也能用上几条连接的带宽。
           </DialogDescription>

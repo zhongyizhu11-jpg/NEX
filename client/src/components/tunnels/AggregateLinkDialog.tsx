@@ -99,7 +99,7 @@ export default function AggregateLinkDialog({ open, onOpenChange, tunnel, hosts,
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>{tunnel ? "编辑叠加" : "新建叠加"}</DialogTitle>
-          <DialogDescription>一条连接拆到几台中转同时送，在落地拼回来。</DialogDescription>
+          <DialogDescription data-fx-help="">一条连接拆到几台中转同时送，在落地拼回来。</DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">

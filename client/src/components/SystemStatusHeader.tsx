@@ -162,7 +162,7 @@ export default function SystemStatusHeader({ health, loading, isAdmin, onRetry, 
         />
         <span className="flex min-w-0 flex-1 flex-col">
           <span className="truncate text-primary-type font-semibold tracking-tight text-foreground">{verdictTitle}</span>
-          {verdictDetail ? <span className="text-meta text-muted-foreground">{verdictDetail}</span> : null}
+          {verdictDetail ? <span data-fx-help="" className="text-meta text-muted-foreground">{verdictDetail}</span> : null}
         </span>
         {!loading && !health && onRetry ? (
           <Button variant="outline" size="sm" className="shrink-0" onClick={onRetry}>重新读取</Button>

@@ -142,7 +142,7 @@ export function RuleLimitsForm({ value, onChange, ownerLabel }: Props) {
     <div className="space-y-3 rounded-md bg-muted/35 px-3 py-2.5" data-testid="rule-limits-section">
       <div className="min-w-0 space-y-0.5">
         <Label className="text-sm font-medium">单条规则限额</Label>
-        <p className="text-xs text-muted-foreground">
+        <p data-fx-help="" className="text-xs text-muted-foreground">
           仅管理员可设，和用户账户的限制同时生效；留空表示不限。设了任何一项，规则主人就只能查看、不能修改。
           {ownerLabel ? ` 新规则归属：${ownerLabel}。` : ""}
         </p>

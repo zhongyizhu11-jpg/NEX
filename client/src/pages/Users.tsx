@@ -1814,7 +1814,7 @@ function UsersContent() {
       <Dialog open={showCreateUser} onOpenChange={setShowCreateUser}>
         <DialogContent className="sm:max-w-md">
           <DialogTitle>添加用户</DialogTitle>
-          <DialogDescription>创建系统用户。</DialogDescription>
+          <DialogDescription data-fx-help="">创建系统用户。</DialogDescription>
           <div className="space-y-4 py-2">
             <div className="space-y-2">
               <Label htmlFor="create-username">用户名</Label>
@@ -1849,7 +1849,7 @@ function UsersContent() {
               <Label>转发总开关</Label>
               <div className="flex items-center justify-between rounded-lg border border-border/40 p-3">
                 <div className="min-w-0 pr-3">
-                  <p className="text-xs text-muted-foreground">关闭后不能创建或启用规则。</p>
+                  <p data-fx-help="" className="text-xs text-muted-foreground">关闭后不能创建或启用规则。</p>
                 </div>
                 <Checkbox
                   checked={newCanAddRules}
@@ -1863,7 +1863,7 @@ function UsersContent() {
               <Label>客户端订阅</Label>
               <div className="flex items-center justify-between rounded-lg border border-border/40 p-3">
                 <div className="min-w-0 pr-3">
-                  <p className="text-xs text-muted-foreground">
+                  <p data-fx-help="" className="text-xs text-muted-foreground">
                     允许生成订阅地址导入客户端。与转发权限互不影响。
                   </p>
                 </div>
@@ -2152,7 +2152,7 @@ function UsersContent() {
                 />
                 <span className="shrink-0 text-sm text-muted-foreground">GB</span>
               </div>
-              <p className="text-xs text-muted-foreground">附加流量会在当前套餐流量周期结束或订阅到期时自动失效。</p>
+              <p data-fx-help="" className="text-xs text-muted-foreground">附加流量会在当前套餐流量周期结束或订阅到期时自动失效。</p>
             </div>
           </div>
           <DialogFooter>
@@ -2183,7 +2183,7 @@ function UsersContent() {
                   永久有效
                 </Button>
               </div>
-              <p className="text-xs text-muted-foreground">留空表示永久有效。</p>
+              <p data-fx-help="" className="text-xs text-muted-foreground">留空表示永久有效。</p>
             </div>
           </div>
           <DialogFooter>
@@ -2240,7 +2240,7 @@ function UsersContent() {
       <Dialog open={showTrafficSettings} onOpenChange={setShowTrafficSettings}>
         <DialogContent className="sm:max-w-lg max-h-[90vh] flex flex-col">
           <DialogTitle>流量与权限设置</DialogTitle>
-          <DialogDescription>
+          <DialogDescription data-fx-help="">
             设置 "{trafficUserName}" 的管理员额外配额和权限；套餐权益在订阅管理中单独体现。
           </DialogDescription>
           <Tabs defaultValue="permission" className="flex-1 min-h-0 flex flex-col">
@@ -2282,7 +2282,7 @@ function UsersContent() {
                     onChange={(e) => setMaxRules(parseInt(e.target.value) || 0)}
                     placeholder="0=不限制"
                   />
-                  <p className="text-xs text-muted-foreground">0 或留空表示不限制</p>
+                  <p data-fx-help="" className="text-xs text-muted-foreground">0 或留空表示不限制</p>
                 </FormField>
                 <FormField className="space-y-2">
                   <Label>最大落地节点数</Label>
@@ -2292,7 +2292,7 @@ function UsersContent() {
                     onChange={(e) => setMaxProxyInbounds(parseInt(e.target.value) || 0)}
                     placeholder="0=不限制"
                   />
-                  <p className="text-xs text-muted-foreground">
+                  <p data-fx-help="" className="text-xs text-muted-foreground">
                     他自己能在被授权的主机上开几个落地节点。管理员替他开的也算在内。0 或留空表示不限制。
                   </p>
                 </FormField>
@@ -2309,7 +2309,7 @@ function UsersContent() {
                     空和 0 刻意分开：这是个数量字段，人填 0 就是想说「一台都不给他」。
                     当成「不限」就把他放开了，当成「跟随全局」就等于根本没法卡死某一个人。
                   */}
-                  <p className="text-xs text-muted-foreground">
+                  <p data-fx-help="" className="text-xs text-muted-foreground">
                     他自己能在「我的机器」里加几台。<strong>留空</strong>＝跟随系统设置里的全局上限；<strong>填 0</strong>＝一台都不许加。
                   </p>
                 </FormField>
@@ -2321,7 +2321,7 @@ function UsersContent() {
                     onChange={(e) => setMaxProxySubTokens(parseInt(e.target.value) || 0)}
                     placeholder="0=不限制"
                   />
-                  <p className="text-xs text-muted-foreground">
+                  <p data-fx-help="" className="text-xs text-muted-foreground">
                     他能生成几条订阅地址。每条都是一份完整凭据，发出去就只能靠吊销那一条收回。0 或留空表示不限制。
                   </p>
                 </FormField>
@@ -2333,7 +2333,7 @@ function UsersContent() {
                     onChange={(e) => setMaxPorts(parseInt(e.target.value) || 0)}
                     placeholder="0=不限制"
                   />
-                  <p className="text-xs text-muted-foreground">0 或留空表示不限制</p>
+                  <p data-fx-help="" className="text-xs text-muted-foreground">0 或留空表示不限制</p>
                 </FormField>
                 <FormField className="space-y-2">
                   <Label>最大连接数</Label>
@@ -2344,7 +2344,7 @@ function UsersContent() {
                     onChange={(e) => setMaxConnections(parseInt(e.target.value) || 0)}
                     placeholder="0=不限制"
                   />
-                  <p className="text-xs text-muted-foreground">按主机或隧道聚合。</p>
+                  <p data-fx-help="" className="text-xs text-muted-foreground">按主机或隧道聚合。</p>
                 </FormField>
                 <FormField className="space-y-2">
                   <Label>单 IP 接入限制</Label>
@@ -2355,14 +2355,14 @@ function UsersContent() {
                     onChange={(e) => setMaxIPs(parseInt(e.target.value) || 0)}
                     placeholder="0=不限制"
                   />
-                  <p className="text-xs text-muted-foreground">限制每个来源 IP 的 TCP 并发连接数，不是 IP 个数。隧道按规则计数；普通转发要在系统设置里打开「普通转发接入限制」才执行，按用户、入口主机共享。UDP 不适用。</p>
+                  <p data-fx-help="" className="text-xs text-muted-foreground">限制每个来源 IP 的 TCP 并发连接数，不是 IP 个数。隧道按规则计数；普通转发要在系统设置里打开「普通转发接入限制」才执行，按用户、入口主机共享。UDP 不适用。</p>
                 </FormField>
               </div>
               <Separator />
               <FormField className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <Label>客户端订阅</Label>
-                  <p className="mt-1 text-xs text-muted-foreground">
+                  <p data-fx-help="" className="mt-1 text-xs text-muted-foreground">
                     允许生成订阅地址导入客户端，与转发权限互不影响。
                     套餐已附带该权限的用户不受这里影响；流量用尽或账号被停时自动收回。
                   </p>
@@ -2376,7 +2376,7 @@ function UsersContent() {
               <Separator />
               <div className="space-y-2">
                 <Label className="text-sm font-medium">允许使用的转发方式</Label>
-                <p className="text-xs text-muted-foreground">全部关闭则禁止转发。</p>
+                <p data-fx-help="" className="text-xs text-muted-foreground">全部关闭则禁止转发。</p>
                 <div className="grid grid-cols-[repeat(auto-fit,minmax(132px,1fr))] gap-2">
                   <div className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-border/40 bg-background/50 px-3 py-2.5">
                     <span className="min-w-0 truncate text-xs font-medium">iptables</span>
@@ -2422,7 +2422,7 @@ function UsersContent() {
                   />
                   <span className="text-sm text-muted-foreground select-none">GB</span>
                 </div>
-                <p className="text-xs text-muted-foreground">
+                <p data-fx-help="" className="text-xs text-muted-foreground">
                   单位 GB，0 表示不限。
                 </p>
               </div>
@@ -2435,7 +2435,7 @@ function UsersContent() {
                     <Gauge className="h-3.5 w-3.5" />
                     转发限速
                   </Label>
-                  <p className="text-xs text-muted-foreground">
+                  <p data-fx-help="" className="text-xs text-muted-foreground">
                     对普通端口转发和隧道入口生效。同一用户在一台主机上的所有规则、所有连接共用这个速度，开多线程也绕不过去。
                   </p>
                 </div>
@@ -2499,7 +2499,7 @@ function UsersContent() {
                     </div>
                   </div>
                 </div>
-                <p className="text-xs text-muted-foreground">
+                <p data-fx-help="" className="text-xs text-muted-foreground">
                   填 0 表示不限速。突发：先按峰值跑这么多秒，用满了降回上面的速度，用得少时额度慢慢回满；峰值不高于上下行速度时不生效。
                   上下行分开和突发需要 Agent 2.2.230 以上，gost 转发和隧道入口只按上下行速度限、不做突发。
                 </p>
@@ -2517,7 +2517,7 @@ function UsersContent() {
                   onChange={setExpiresAtInput}
                   placeholder="永久有效"
                 />
-                <p className="text-xs text-muted-foreground">
+                <p data-fx-help="" className="text-xs text-muted-foreground">
                   留空表示永久有效。
                 </p>
               </div>
@@ -2531,7 +2531,7 @@ function UsersContent() {
                       <RotateCcw className="h-3.5 w-3.5" />
                       启用月度自动重置
                     </p>
-                    <p className="text-xs text-muted-foreground">每月自动清零已用流量。</p>
+                    <p data-fx-help="" className="text-xs text-muted-foreground">每月自动清零已用流量。</p>
                   </div>
                   <Checkbox aria-label="启用月度自动重置"
                     checked={trafficAutoReset}
@@ -2564,7 +2564,7 @@ function UsersContent() {
                         ))}
                       </SelectContent>
                     </Select>
-                    <p className="text-xs text-muted-foreground">
+                    <p data-fx-help="" className="text-xs text-muted-foreground">
                       默认以启用当天作为重置日，可修改为每月 1–{MONTHLY_RESET_MAX_DAY} 号中任意一天；小月在月末重置（如 31 日在 2 月按 28/29 日）
                     </p>
                   </FormField>
@@ -2574,7 +2574,7 @@ function UsersContent() {
 
             {/* 授权标签页 */}
             <TabsContent value="hosts" className="flex-1 min-h-0 overflow-y-auto pr-1 mt-3 space-y-4 data-[state=inactive]:hidden">
-              <p className="text-xs text-muted-foreground">
+              <p data-fx-help="" className="text-xs text-muted-foreground">
                 默认不展开全部资源，按需选择要授权给该用户的端口转发、转发链、转发组、隧道、网络测试主机和计费资源。
               </p>
 
@@ -2730,7 +2730,7 @@ function UsersContent() {
                   <Label className="text-sm font-medium">订阅节点分享</Label>
                   <Badge variant="outline" className="text-[10px]">{sharedProxyNodeIds.length} 个</Badge>
                 </div>
-                <p className="text-xs text-muted-foreground">
+                <p data-fx-help="" className="text-xs text-muted-foreground">
                   选中的节点会直接出现在他的订阅里，节点仍然是原主人的，他改不了也删不掉。
                   流量记在节点主人名下 —— 同一个端口分给几个人用，面板按端口计量，拆不开。
                   {/* 找不到东西在哪儿，是这个功能最常见的「以为没生效」。 */}
@@ -2791,7 +2791,7 @@ function UsersContent() {
                   <Label className="text-sm font-medium">网络测试主机授权</Label>
                   <Badge variant="outline" className="text-[10px]">{allowedHostIds.length} 台</Badge>
                 </div>
-                <p className="text-xs text-muted-foreground">
+                <p data-fx-help="" className="text-xs text-muted-foreground">
                   网络测试会展示用户自己创建、通过主机授权或套餐授权获得的主机；这里用于手动增加授权。端口转发、转发链或转发组的成员主机不会因此单独展示。
                 </p>
                 <Select value={addAllowedHostId} onValueChange={addHostPermission} disabled={!availableAllowedHosts.length}>

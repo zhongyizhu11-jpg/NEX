@@ -53,7 +53,7 @@ import {
 import { OptimisticSwitch, Switch } from "@/components/ui/switch";
 import { Tabs } from "@/components/ui/tabs";
 import { SlidingTabsList, type SlidingTabItem } from "@/components/ui/sliding-tabs";
-import { FilterChips, type FilterChipItem } from "@/components/ui/filter-chips";
+import type { FilterChipItem } from "@/components/ui/filter-chips";
 import { useCompactLayout } from "@/hooks/useCompactLayout";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -2018,9 +2018,8 @@ function downloadRuleTransferFiles(
 function RulesContent() {
   const confirmDialog = useConfirmDialog();
   const { user } = useAuth();
-  const compactLayout = useCompactLayout();
-  // 精简布局下规则框不要那几行解释小字（谁开了精简布局都一样）。
-  const hideRuleFormHints = compactLayout;
+  // 精简布局（compact.css 收的是组件打了 data-fx-help 的说明；规则框里这几行是条件渲染，由这个开关管）。
+  const hideRuleFormHints = useCompactLayout();
   const [, setLocation] = useLocation();
   const search = useSearch();
   const isMobile = useIsMobile();
@@ -2217,8 +2216,7 @@ function RulesContent() {
     手机上原来被写死成 standard —— 而 standard 卡在 390px 的屏幕上有 850px 高，
     一屏连一条规则都放不下。紧凑卡本来就是为这种宽度做的，这里改成手机默认紧凑。
   */
-  // 精简布局：桌面上也用紧凑卡片（流量大数字和走势线在卡片里不画，见 renderRuleCard）。
-  const effectiveRuleCardSize: RuleCardSize = isMobile || compactLayout ? "compact" : ruleCardSize;
+  const effectiveRuleCardSize: RuleCardSize = isMobile ? "compact" : ruleCardSize;
   const [rulePageSize, setRulePageSize] = useState<RulePageSize>(() =>
     getStoredRulePageSize(getStoredRuleCardSize() === "compact" ? 24 : 12)
   );
@@ -3410,27 +3408,6 @@ function RulesContent() {
       disabled: !canUseFailoverGroup || (routeModeLocked && form.routeMode !== "group"),
     },
   ];
-  /*
-    精简布局：规则框只放 3 个页签——端口转发 / 线路 / 转发组。「线路」底下一排药丸在隧道、叠加、转发链之间切，
-    切的还是原来那几种（和链路管理的「线路」一样）。
-  */
-  const compactLineTabs = routeModeTabItems.filter((item) => item.value === "tunnel" || item.value === "aggregate" || item.value === "chain");
-  const compactLineChips: FilterChipItem<RuleRouteTab>[] = compactLineTabs.map((item) => ({
-    value: item.value,
-    label: item.value === "tunnel" ? "隧道" : item.value === "aggregate" ? "叠加" : "转发链",
-    disabled: item.disabled,
-  }));
-  const routeTabIsLine = compactLineTabs.some((item) => item.value === routeTab);
-  const compactRouteTabItems: SlidingTabItem<RuleRouteTab>[] = [
-    routeModeTabItems.find((item) => item.value === "local")!,
-    {
-      value: routeTabIsLine ? routeTab : (compactLineTabs.find((item) => !item.disabled)?.value ?? "tunnel"),
-      label: "线路",
-      icon: Network,
-      disabled: compactLineTabs.every((item) => item.disabled),
-    },
-    routeModeTabItems.find((item) => item.value === "group")!,
-  ];
   useEffect(() => {
     const params = new URLSearchParams(search);
     if (params.get("create") !== "local") return;
@@ -4296,7 +4273,7 @@ function RulesContent() {
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div className="space-y-1">
           <Label>规则筛选</Label>
-          <div className="text-xs text-muted-foreground">先选择规则，再根据上方模式填写对应内容。</div>
+          <div data-fx-help="" className="text-xs text-muted-foreground">先选择规则，再根据上方模式填写对应内容。</div>
         </div>
         <div className="inline-flex items-center gap-2 self-start rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
           <span>已选规则</span>
@@ -4490,26 +4467,10 @@ function RulesContent() {
     { value: "chain", label: desktopRuleTypeLabels.chain, count: ruleCategoryCountsReady ? ruleCategoryCounts.chain : null },
     { value: "group", label: desktopRuleTypeLabels.group, count: ruleCategoryCountsReady ? ruleCategoryCounts.group : null },
   ], [ruleCategoryCounts, ruleCategoryCountsReady]);
-  /*
-    精简布局：分类条是 全部 / 端口转发 / 线路 / 转发组，「线路」= 隧道转发 + 转发链（数字是两者之和），
-    选中「线路」时底下一排药丸在两者之间切 —— 过滤还是原来那两类。
-  */
-  const ruleCategoryIsLine = ruleCategory === "tunnel" || ruleCategory === "chain";
-  const ruleCategoryTabItems = useMemo<SlidingTabItem<RuleCategory>[]>(() => {
-    const full = ruleCategoryItems.map((item) => ({ value: item.value, label: item.label, badge: item.count ?? undefined }));
-    if (!compactLayout) return full;
-    const byValue = new Map(full.map((item) => [item.value, item] as const));
-    const lineCount = ruleCategoryCountsReady ? ruleCategoryCounts.tunnel + ruleCategoryCounts.chain : undefined;
-    return [
-      byValue.get("all")!,
-      byValue.get("local")!,
-      { value: ruleCategoryIsLine ? ruleCategory : "tunnel", label: "线路", badge: lineCount },
-      byValue.get("group")!,
-    ];
-  }, [ruleCategoryItems, compactLayout, ruleCategoryIsLine, ruleCategory, ruleCategoryCounts, ruleCategoryCountsReady]);
-  const ruleLineCategoryChips = useMemo<FilterChipItem<RuleCategory>[]>(() => ruleCategoryItems
-    .filter((item) => item.value === "tunnel" || item.value === "chain")
-    .map((item) => ({ ...item, label: item.value === "tunnel" ? "隧道" : "转发链" })), [ruleCategoryItems]);
+  const ruleCategoryTabItems = useMemo<SlidingTabItem<RuleCategory>[]>(
+    () => ruleCategoryItems.map((item) => ({ value: item.value, label: item.label, badge: item.count ?? undefined })),
+    [ruleCategoryItems],
+  );
   const visibleRuleIdsForMetrics = useMemo(() => (
     Array.from(new Set(filteredRules.map((rule: any) => Number(rule.id)).filter((id: number) => Number.isInteger(id) && id > 0)))
       .sort((a, b) => a - b)
@@ -6472,7 +6433,7 @@ function RulesContent() {
         <FormField className="space-y-1.5">
           <Label className="flex items-baseline gap-1.5">
             SNI 域名 <span className="text-destructive">*</span>
-            <span className="text-xs font-normal text-muted-foreground">一行一个，最多 {TLS_INBOUND_MAX_SNI_PER_RULE} 个，精确匹配</span>
+            <span data-fx-help="" className="text-xs font-normal text-muted-foreground">一行一个，最多 {TLS_INBOUND_MAX_SNI_PER_RULE} 个，精确匹配</span>
           </Label>
           <Textarea
             rows={3}
@@ -6483,7 +6444,7 @@ function RulesContent() {
           />
         </FormField>
         {sniError && form.sniNamesText.trim() ? <p className="text-xs text-destructive">{sniError}</p> : null}
-        <p className="text-meta leading-5 text-muted-foreground">
+        <p data-fx-help="" className="text-meta leading-5 text-muted-foreground">
           客户端用这些域名连接 {selectedTlsInbound ? `${selectedTlsInbound.hostName || "主机"}:${selectedTlsInbound.port}` : "入站端口"}，按 TLS 握手里的 SNI 分到这条规则，原样透传、节点不解密。每个域名的 DNS 都要解析到这台主机。适用于 HTTPS 网站、Trojan / VLESS-TLS 等任何 TLS 服务；协议固定 TCP。
         </p>
       </div>
@@ -7232,7 +7193,7 @@ function RulesContent() {
         {renderRuleTile(group.type, "xs")}
         <span className="truncate text-[15px] font-medium">{group.label}</span>
         <Badge variant="outline" className="h-5 min-w-5 shrink-0 justify-center rounded-full px-1.5 text-[11px] font-normal text-muted-foreground">{group.rules.length}</Badge>
-        {!compact && <span className="min-w-0 truncate text-xs text-muted-foreground">{ruleTypeDescriptions[group.type]}</span>}
+        {!compact && <span data-fx-help="" className="min-w-0 truncate text-xs text-muted-foreground">{ruleTypeDescriptions[group.type]}</span>}
         <ChevronRight className={`ml-auto h-4 w-4 shrink-0 text-muted-foreground/60 transition-transform duration-200 ${collapsed ? "" : "rotate-90"}`} />
       </button>
     );
@@ -7488,8 +7449,7 @@ function RulesContent() {
             </div>
           </div>
 
-          {/* 精简布局：累计流量、24 小时走势不在卡片上画，点进规则再看；卡片只剩名字、状态、地址和延迟。 */}
-          {compactLayout ? null : <div className="fx-rule-big">
+          <div className="fx-rule-big">
             <div
               className="fx-rule-num"
               title={total ? `累计入向 ${formatBytes(Number(total.bytesIn || 0))} / 出向 ${formatBytes(Number(total.bytesOut || 0))}` : "还没有流量"}
@@ -7510,7 +7470,7 @@ function RulesContent() {
                 {dailyBytes > 0 ? `↓ ${formatBytes(Number(daily?.bytesIn || 0))} · ↑ ${formatBytes(Number(daily?.bytesOut || 0))}` : "没有流量"}
               </span>
             </div>
-          </div>}
+          </div>
 
           {alerts.length > 0 ? (
             <div className="fx-rule-alerts">{alerts}</div>
@@ -7744,9 +7704,6 @@ function RulesContent() {
               ariaLabel="转发规则分类"
             />
           </Tabs>
-          {compactLayout && ruleCategoryIsLine ? (
-            <FilterChips items={ruleLineCategoryChips} value={ruleCategory} onChange={(value) => handleRuleCategoryChange(value)} ariaLabel="线路类型" />
-          ) : null}
           <FilterToolbar
             activeCount={Number(hasActiveUserFilter) + Number(filterResource !== "all")}
             action={createRuleAction}
@@ -8139,15 +8096,12 @@ function RulesContent() {
               className="space-y-3"
             >
               <SlidingTabsList
-                items={compactLayout ? compactRouteTabItems : routeModeTabItems}
+                items={routeModeTabItems}
                 activeValue={routeTab}
                 ariaLabel="转发规则类型"
                 minItemWidthRem={5.75}
               />
             </Tabs>
-            {compactLayout && routeTabIsLine ? (
-              <FilterChips items={compactLineChips} value={routeTab} onChange={(value) => selectRouteTab(value)} ariaLabel="线路类型" />
-            ) : null}
             {/* 选中的走法一句话说清楚适合什么（features/rules/routeModeHints）。编辑时走法定了，不再说。 */}
             {!editingId && !hideRuleFormHints && (
               <p className="-mt-1 text-meta leading-5 text-muted-foreground" data-testid="route-mode-hint">
@@ -8848,7 +8802,7 @@ function RulesContent() {
               <ClipboardCopy className="h-5 w-5" />
               批量管理转发规则
             </DialogTitle>
-            <DialogDescription>筛选并选择规则后，可批量复制、编辑、导出或删除。</DialogDescription>
+            <DialogDescription data-fx-help="">筛选并选择规则后，可批量复制、编辑、导出或删除。</DialogDescription>
           </DialogHeader>
           <div className="max-h-[72vh] space-y-4 overflow-y-auto pr-1">
             <div className={segmentedControlClassName}>
@@ -9043,7 +8997,7 @@ function RulesContent() {
                     <div className="rounded-full border border-primary/20 bg-primary/5 p-3 text-primary shadow-sm">
                       <ArrowRight className="h-5 w-5" />
                     </div>
-                    <div className="text-center text-[11px] font-medium leading-4 text-muted-foreground">
+                    <div data-fx-help="" className="text-center text-[11px] font-medium leading-4 text-muted-foreground">
                       导入到右侧目标
                     </div>
                   </div>

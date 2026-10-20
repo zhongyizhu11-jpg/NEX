@@ -895,7 +895,7 @@ export default function ProxyInboundsSection({
               <div className="min-w-0 space-y-1.5">
                 <Label className="text-xs">名称</Label>
                 <Input value={form.name} onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))} placeholder="HK 落地" />
-                <p className="text-xs text-muted-foreground">客户端里显示的节点名，会随订阅发出去。</p>
+                <p data-fx-help="" className="text-xs text-muted-foreground">客户端里显示的节点名，会随订阅发出去。</p>
               </div>
               <div className="min-w-0 space-y-1.5">
                 <Label className="text-xs">备注</Label>
@@ -905,7 +905,7 @@ export default function ProxyInboundsSection({
                   placeholder="给张三的 / 测试用"
                 />
                 {/* 只留在面板里 —— 写进名称的话，客户端里就会出现「给张三的」。 */}
-                <p className="text-xs text-muted-foreground">这个端口是干嘛的，只给你自己看。分享出去的人看不到。</p>
+                <p data-fx-help="" className="text-xs text-muted-foreground">这个端口是干嘛的，只给你自己看。分享出去的人看不到。</p>
               </div>
               <div className="min-w-0 space-y-1.5">
                 <Label className="text-xs">对外标注</Label>
@@ -919,7 +919,7 @@ export default function ProxyInboundsSection({
                   和备注分开：备注是自己的账本（「给张三的」），泄给租户会出事；
                   这一句是线路本身的属性，恰恰是租户最想知道、而只有你说得出的那件事。
                 */}
-                <p className="text-xs text-muted-foreground">线路是什么类型，分享出去的人也看得到。不进订阅。</p>
+                <p data-fx-help="" className="text-xs text-muted-foreground">线路是什么类型，分享出去的人也看得到。不进订阅。</p>
               </div>
               {isAdmin ? (
                 <FormField className="min-w-0 space-y-1.5 sm:col-span-2">
@@ -938,7 +938,7 @@ export default function ProxyInboundsSection({
                       ))}
                     </SelectContent>
                   </Select>
-                  <p className="text-xs text-muted-foreground">
+                  <p data-fx-help="" className="text-xs text-muted-foreground">
                     节点会进这个人的订阅，这个端口的流量也扣他的套餐额度、超额自动停。
                     一台机器上开多个端口分给不同人，各自只看得到自己那份用量。
                     灰掉的用户还没有客户端订阅权限，去「用户管理」里开通后才能选。
@@ -1013,7 +1013,7 @@ export default function ProxyInboundsSection({
                       只在对端客户端太旧、不支持 SS2022 时才用它。
                     </p>
                   ) : (
-                    <p className="text-xs text-muted-foreground">
+                    <p data-fx-help="" className="text-xs text-muted-foreground">
                       AES-128 不比 256 弱（128 位密钥没有可行攻击）而且更快，小机器上差别明显，所以默认它。
                     </p>
                   )}
@@ -1069,7 +1069,7 @@ export default function ProxyInboundsSection({
                         onChange={(event) => setForm((prev) => ({ ...prev, serverName: event.target.value }))}
                         placeholder={optionsQuery.data?.defaultRealityServerName || "dl.google.com"}
                       />
-                      <p className="text-xs text-muted-foreground">
+                      <p data-fx-help="" className="text-xs text-muted-foreground">
                         留空按默认值。REALITY 不需要域名和证书，密钥对由面板生成。
                       </p>
                     </div>
@@ -1095,7 +1095,7 @@ export default function ProxyInboundsSection({
                     onChange={(event) => setForm((prev) => ({ ...prev, serverName: event.target.value }))}
                     placeholder="a.example.com"
                   />
-                  <p className="text-xs text-muted-foreground">
+                  <p data-fx-help="" className="text-xs text-muted-foreground">
                     这个域名要先解析到这台落地机，签证书时会来验。填 IP 签不出来。
                   </p>
                 </div>
@@ -1106,7 +1106,7 @@ export default function ProxyInboundsSection({
                     onChange={(event) => setForm((prev) => ({ ...prev, acmeEmail: event.target.value }))}
                     placeholder="you@example.com"
                   />
-                  <p className="text-xs text-muted-foreground">
+                  <p data-fx-help="" className="text-xs text-muted-foreground">
                     注册 Let's Encrypt 账户用，证书快到期时会发提醒到这里。
                   </p>
                 </div>
@@ -1132,7 +1132,7 @@ export default function ProxyInboundsSection({
                     <Input value={form.keyPath} onChange={(event) => setForm((prev) => ({ ...prev, keyPath: event.target.value }))} placeholder="/etc/ssl/privkey.pem" />
                   </div>
                 </div>
-                <p className="text-xs text-muted-foreground">
+                <p data-fx-help="" className="text-xs text-muted-foreground">
                   路径是落地机上的本地路径，证书要先自己放上去。不想折腾证书就改用 REALITY。
                 </p>
               </div>
@@ -1196,7 +1196,7 @@ export default function ProxyInboundsSection({
                     placeholder="不填 = 客户端用 BBR"
                   />
                 </div>
-                <p className="text-xs text-muted-foreground sm:col-span-2">
+                <p data-fx-help="" className="text-xs text-muted-foreground sm:col-span-2">
                   填了带宽，订阅里的 Hysteria2 节点就带上 up / down（Stash 为 up-speed / down-speed），客户端按声明速率发包，跨境丢包线路上单连接也能跑满；按单个客户端实际能用的速率填。
                 </p>
               </div>
@@ -1260,7 +1260,7 @@ export default function ProxyInboundsSection({
                     </div>
                   );
                 })}
-                <p className="text-xs text-muted-foreground">
+                <p data-fx-help="" className="text-xs text-muted-foreground">
                   同一个端口、同一份配置，只是凭据不同：一份凭据在订阅里是一条单独的节点，名字叫「入站名 · 这里填的标签」。
                   删掉一份，只有拿那份的人连不上，别人照常。
                   <br />
@@ -1268,7 +1268,7 @@ export default function ProxyInboundsSection({
                 </p>
               </div>
             ) : (
-              <p className="text-xs text-muted-foreground">
+              <p data-fx-help="" className="text-xs text-muted-foreground">
                 {PROXY_NODE_PROTOCOL_LABELS[form.protocol as ProxyNodeProtocol]} 这个端口只能发一份凭据，谁拿到都一样。
                 想一人一份、能单独吊销，改用 VLESS / VMess / Trojan / Hysteria2 / TUIC / AnyTLS。
               </p>
@@ -1284,7 +1284,7 @@ export default function ProxyInboundsSection({
               <Label>这个端口的额度</Label>
               {/* 额度是管理员给端口定的账，服务端对非管理员提交的这些字段一律忽略 —— 可编辑的样子只会让人以为改成了。 */}
               {!isAdmin ? (
-                <p className="text-xs text-muted-foreground">额度由管理员设置，这里只读；需要调整请联系管理员。</p>
+                <p data-fx-help="" className="text-xs text-muted-foreground">额度由管理员设置，这里只读；需要调整请联系管理员。</p>
               ) : null}
               <div className="grid grid-cols-2 gap-2">
                 <div className="min-w-0 space-y-1">
@@ -1380,7 +1380,7 @@ export default function ProxyInboundsSection({
             <div className="flex items-center justify-between rounded-md border p-3">
               <div className="min-w-0">
                 <Label className="text-xs">启用</Label>
-                <p className="mt-0.5 text-xs text-muted-foreground">停用后落地机不再监听，订阅里也不会有它。</p>
+                <p data-fx-help="" className="mt-0.5 text-xs text-muted-foreground">停用后落地机不再监听，订阅里也不会有它。</p>
               </div>
               <Checkbox aria-label="启用" checked={form.isEnabled} onCheckedChange={(checked) => setForm((prev) => ({ ...prev, isEnabled: checked }))} />
             </div>

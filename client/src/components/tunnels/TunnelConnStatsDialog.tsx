@@ -66,7 +66,7 @@ export default function TunnelConnStatsDialog({ tunnel, onClose }: Props) {
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-4xl">
         <DialogHeader>
           <DialogTitle>连接监控{tunnel ? ` · ${tunnel.name}` : ""}</DialogTitle>
-          <DialogDescription>
+          <DialogDescription data-fx-help="">
             真实连接每一跳的成功率和耗时；单连接叠加还列出每一路跑了多少。留 7 天。
           </DialogDescription>
         </DialogHeader>

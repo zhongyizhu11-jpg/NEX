@@ -173,7 +173,7 @@ export default function Announcements() {
                           <Badge variant={isPopup ? "default" : "outline"}>{announcementTypeLabel(type)}</Badge>
                         </CardTitle>
                         {!isPopup ? (
-                          <CardDescription className="mt-2">发布时间：{dateText(item.createdAt || item.updatedAt)}</CardDescription>
+                          <CardDescription keep className="mt-2">发布时间：{dateText(item.createdAt || item.updatedAt)}</CardDescription>
                         ) : null}
                       </div>
                       {isAdmin && (

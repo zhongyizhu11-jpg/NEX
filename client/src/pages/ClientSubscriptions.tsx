@@ -1180,7 +1180,7 @@ export default function ClientSubscriptionsPage() {
                             </button>
                           ))}
                         </div>
-                        <p className="text-xs text-muted-foreground">
+                        <p data-fx-help="" className="text-xs text-muted-foreground">
                           {PROXY_SUBSCRIPTION_KIND_HINTS[kind]}
                         </p>
 
@@ -1210,7 +1210,7 @@ export default function ClientSubscriptionsPage() {
                             </Select>
                             </div>
                             {/* 光看"精简/均衡/完整"不知道差在哪，说明得跟着控件走。 */}
-                            <p className="text-xs text-muted-foreground">{PROXY_RULE_PRESET_HINTS[preset]}</p>
+                            <p data-fx-help="" className="text-xs text-muted-foreground">{PROXY_RULE_PRESET_HINTS[preset]}</p>
                           </div>
                         )}
 
@@ -1365,7 +1365,7 @@ export default function ClientSubscriptionsPage() {
                           </div>
                         </div>
                         <div className="space-y-1.5">
-                          <p className="text-xs text-muted-foreground">
+                          <p data-fx-help="" className="text-xs text-muted-foreground">
                             其他客户端用这条地址手动添加。
                           </p>
                           {/* 这个设置只在「客户端标识认不出来」时才生效，所以就放在那句话下面。
@@ -1459,7 +1459,7 @@ export default function ClientSubscriptionsPage() {
             <div className="mb-3 flex items-start justify-between gap-3 rounded-lg border border-border/60 px-3 py-2.5">
               <div className="min-w-0">
                 <p className="text-sm font-medium">自动隐藏不通的节点</p>
-                <p className="mt-0.5 text-xs text-muted-foreground">
+                <p data-fx-help="" className="mt-0.5 text-xs text-muted-foreground">
                   端到端探测连续 3 次不通的转发暂时移出订阅，通了自动回来。客户端更新订阅后生效。
                 </p>
               </div>
@@ -1857,7 +1857,7 @@ export default function ClientSubscriptionsPage() {
                 placeholder="例如 给张三的 / 这条快到期"
                 maxLength={12}
               />
-              <p className="text-xs text-muted-foreground">
+              <p data-fx-help="" className="text-xs text-muted-foreground">
                 只给你自己看。分享出去的节点，对方看不到这一句。
               </p>
             </div>
@@ -1878,7 +1878,7 @@ export default function ClientSubscriptionsPage() {
                 而只有主人说得出的那件事。合成一个字段，两种用途只能二选一：
                 要么泄露账本，要么租户看到的永远是一个没有信息量的「直连」。
               */}
-              <p className="text-xs text-muted-foreground">
+              <p data-fx-help="" className="text-xs text-muted-foreground">
                 会顶掉「订阅内容」里那个「直连」标签，分享出去的人也看得到。不进订阅。
               </p>
             </div>
@@ -2133,7 +2133,7 @@ export default function ClientSubscriptionsPage() {
               autoFocus
             />
             {renaming?.kind === "relay" && (
-              <p className="text-xs text-muted-foreground">
+              <p data-fx-help="" className="text-xs text-muted-foreground">
                 留空恢复默认名（由主机名和转发名自动拼出）。
               </p>
             )}
@@ -2199,7 +2199,7 @@ export default function ClientSubscriptionsPage() {
                 {qrTarget.hint}
               </p>
             ) : (
-              <p className="text-xs text-muted-foreground">
+              <p data-fx-help="" className="text-xs text-muted-foreground">
                 在客户端的「添加订阅」里扫，别用系统相机。
               </p>
             )}

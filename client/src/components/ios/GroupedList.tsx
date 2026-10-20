@@ -66,7 +66,7 @@ export function ListSection({
         {children}
       </div>
       {footer ? (
-        <p className="px-1 pt-1.5 text-meta leading-relaxed text-muted-foreground">{footer}</p>
+        <p data-fx-help="" className="px-1 pt-1.5 text-meta leading-relaxed text-muted-foreground">{footer}</p>
       ) : null}
     </section>
   );
@@ -132,7 +132,7 @@ export function ListRow({
         >
           {label}
         </span>
-        {detail ? <span className="truncate text-meta text-muted-foreground">{detail}</span> : null}
+        {detail ? <span data-fx-help="" className="truncate text-meta text-muted-foreground">{detail}</span> : null}
       </span>
       {value ? (
         <span className="ml-auto shrink-0 truncate text-secondary-type text-muted-foreground">

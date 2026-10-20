@@ -1,0 +1,171 @@
+/*
+  ═══════════════════════════════════════════════════════════════════════
+  精简布局（设置 › 个性化 › 布局 / 个人资料 › 界面）
+  ═══════════════════════════════════════════════════════════════════════
+
+  按 <html data-layout="compact"> 选（client/src/components/LayoutLayer.tsx 写这个属性）。
+  标准布局不带属性，这个文件里的规则一条都不生效 —— 关掉精简就是原样，一行不差。
+
+  这一套只改**尺寸**，不改颜色：字号降一档、卡片和控件更矮、圆角更小、侧栏更窄、
+  说明文字收起来。颜色和画法全由主题（theme-*.css）和卡片风格说了算，所以八套
+  主题都能配精简。
+
+  2.3.466 那版在几页上零散改分类条和页签，用户看不出差别；这一版整个外壳一起换：
+  同一屏多看 30%～40% 的内容，像一套商用后台，而不是一本带讲解的教程。
+
+  ── 说明文字怎么收 ──
+
+  组件给「介绍 / 教学」性质的文字打上 data-fx-help（CardDescription、设置行的说明、
+  分组列表的行说明和脚注、页头的介绍句、空状态的说明），这里一条规则收掉。状态、数值、
+  报错、警告**不打**这个标记，照常显示。某一处的说明其实是状态（「3 台在线」这种），
+  加 data-fx-keep 留住。
+
+  ── 为什么全是尺寸令牌和 data-slot，不按工具类名猜 ──
+
+  workspaceCss.test.ts 定的底线同样适用：要改谁就给谁一个明确的钩子（令牌、data-slot、
+  fx-* 类名）。这里没有一条 [class*=…]。
+*/
+
+/* ───── 一、令牌：字号、间距、圆角、外壳尺寸 ───── */
+html[data-layout="compact"] {
+  --fx-size-display: 26px;
+  --fx-size-metric: 20px;
+  --fx-size-section: 17px;
+  --fx-size-primary: 15px;
+  --fx-size-secondary: 13px;
+  --fx-size-meta: 12px;
+
+  --fx-line-display: 30px;
+  --fx-line-metric: 24px;
+  --fx-line-section: 24px;
+  --fx-line-primary: 20px;
+  --fx-line-secondary: 18px;
+  --fx-line-meta: 16px;
+
+  --fx-gutter: var(--fx-space-3);
+  --fx-card-padding: var(--fx-space-3);
+  --fx-card-gap: var(--fx-space-2);
+  --fx-section-gap: var(--fx-space-4);
+
+  /* 商用后台的方正感：控件 10、卡片 12、大面 14、弹窗 18（标准是 16 / 18 / 22 / 28） */
+  --fx-radius-control: 10px;
+  --fx-radius-card: 12px;
+  --fx-radius-surface: 14px;
+  --fx-radius-modal: 18px;
+  --radius: 0.75rem;
+
+  --fx-header-height: 44px;
+  --fx-sidebar-width: 12rem;
+}
+
+/* ───── 二、说明文字、重复的东西 ───── */
+html[data-layout="compact"] [data-fx-help]:not([data-fx-keep]) { display: none; }
+/*
+  data-fx-compact-hide：精简下整块不要的东西 —— 在别处已经有一份的（页脚链接、个人资料里的
+  退出登录卡、和上方分类条同名的小标题、和状态卡重复的页头计数）。
+*/
+html[data-layout="compact"] [data-fx-compact-hide] { display: none; }
+/* 页头第二、三行（状态点、小走势）：数字在标题行的状态里已经有了，走势是装饰 */
+html[data-layout="compact"] .workspace-header-chips,
+html[data-layout="compact"] .workspace-header-aside { display: none; }
+
+/* ───── 三、外壳：顶栏、侧栏、页面留白 ───── */
+html[data-layout="compact"] .workspace-appbar-inner { padding-inline: 6px 8px; }
+html[data-layout="compact"] .workspace-appbar-icon,
+html[data-layout="compact"] .workspace-appbar-account { width: 32px; height: 32px; }
+html[data-layout="compact"] .workspace-appbar-brand { height: 32px; }
+html[data-layout="compact"] .workspace-appbar-title { font-size: 14px; }
+html[data-layout="compact"] .workspace-appbar-search { height: 32px; padding: 0 10px; font-size: 12.5px; }
+
+html[data-layout="compact"] .workspace-layout [data-sidebar="menu-button"] { min-height: 28px; font-size: 13px; padding-inline: 8px; border-radius: 8px; }
+html[data-layout="compact"] .workspace-layout [data-sidebar="menu-button"] > svg { width: 15px; height: 15px; }
+html[data-layout="compact"] .workspace-layout [data-sidebar="group-label"] { font-size: 10px; letter-spacing: .06em; height: 24px; }
+html[data-layout="compact"] .workspace-layout [data-sidebar="menu"] { gap: 1px; }
+
+/* 页面四周：桌面 24/32 → 16/20，手机不动（12 已经是触控下限附近） */
+@media (min-width: 640px) {
+  html[data-layout="compact"] .workspace-main { padding: 12px 20px 20px; }
+}
+
+/* ───── 四、页头 ───── */
+html[data-layout="compact"] .workspace-main h1 { font-size: 18px; line-height: 24px; }
+html[data-layout="compact"] .workspace-header h2 { font-size: 16px; line-height: 22px; }
+html[data-layout="compact"] .workspace-header { gap: 12px; }
+html[data-layout="compact"] .workspace-header-meta { font-size: 12px; margin-top: 0; }
+html[data-layout="compact"] .workspace-header-actions { gap: 6px; }
+
+/* ───── 五、竖向节奏：区块之间减一档 ───── */
+html[data-layout="compact"] .workspace-main .space-y-6 > :not(:last-child):not(.fx-navbar) { margin-block-end: 14px; }
+html[data-layout="compact"] .workspace-main .space-y-5 > :not(:last-child) { margin-block-end: 12px; }
+html[data-layout="compact"] .workspace-main .space-y-4 > :not(:last-child) { margin-block-end: 10px; }
+html[data-layout="compact"] .workspace-main .space-y-3 > :not(:last-child) { margin-block-end: 8px; }
+html[data-layout="compact"] .workspace-main .gap-6 { gap: 14px; }
+html[data-layout="compact"] .workspace-main .gap-5 { gap: 12px; }
+html[data-layout="compact"] .workspace-main .gap-4 { gap: 10px; }
+html[data-layout="compact"] .workspace-main .gap-3 { gap: 8px; }
+
+/* ───── 六、卡片 ───── */
+html[data-layout="compact"] .workspace-main [data-slot="card-header"] { padding: 10px 12px 0; gap: 2px; }
+html[data-layout="compact"] .workspace-main [data-slot="card-content"] { padding: 10px 12px 12px; }
+html[data-layout="compact"] .workspace-main [data-slot="card-footer"] { padding: 0 12px 12px; }
+html[data-layout="compact"] .workspace-main [data-slot="card-title"] { font-size: 14px; line-height: 20px; }
+html[data-layout="compact"] .workspace-main [data-slot="card-header"] + [data-slot="card-content"] { padding-top: 8px; }
+html[data-layout="compact"] .workspace-main .action-card-content { padding: 10px 12px; }
+html[data-layout="compact"] .fx-entity-card { --fx-card-padding: 12px; }
+html[data-layout="compact"] .fx-summary { padding: 0 10px; }
+html[data-layout="compact"] .fx-summary-value { font-size: 18px; line-height: 22px; }
+/* 首页流量走势：208 → 150px，一屏多放一截列表 */
+@media (min-width: 640px) {
+  html[data-layout="compact"] [data-fx-chart="traffic"] { height: 150px; }
+}
+
+/* 规则卡 / 链路卡：大数字从 22 收到 18，脚部间距减一档，走势线照画 */
+html[data-layout="compact"] .fx-rule-num > b { font-size: 18px; }
+html[data-layout="compact"] .fx-rule-num > small { font-size: 11.5px; }
+html[data-layout="compact"] .fx-rule-big { margin-top: 8px; gap: 10px; }
+html[data-layout="compact"] .fx-tunnel-foot { margin-top: 8px; padding-top: 8px; gap: 8px; }
+
+/* ───── 七、列表、设置行、表格 ───── */
+html[data-layout="compact"] .fx-list-row { padding: 8px 12px; gap: 10px; }
+html[data-layout="compact"] .fx-list-row-inset + .fx-list-row-inset { background-size: calc(100% - 38px) 1px; background-position: 38px 0; }
+html[data-layout="compact"] .fx-list-section-header,
+html[data-layout="compact"] .workspace-main .fx-list-section-header { padding-bottom: 4px; }
+html[data-layout="compact"] .fx-setting-row { padding-block: 8px; gap: 8px; }
+html[data-layout="compact"] .workspace-main [data-slot="table-head"] { padding: 6px 10px; font-size: 12px; height: auto; }
+html[data-layout="compact"] .workspace-main [data-slot="table-cell"] { padding: 6px 10px; font-size: 13px; }
+html[data-layout="compact"] .empty-state { padding: 20px 12px; gap: 8px; }
+html[data-layout="compact"] .empty-state-icon svg { width: 20px; height: 20px; }
+
+/* ───── 八、控件：按钮、输入框、分段控件、药丸 ───── */
+/* 只在有鼠标的设备上压到 32px；触屏保持 36 以上的命中区 */
+@media (pointer: fine) {
+  html[data-layout="compact"] .workspace-main [data-slot="button"]:not([data-icon-button]) { min-height: 0; height: 32px; padding-block: 0; font-size: 13px; }
+  html[data-layout="compact"] .workspace-main [data-slot="button"][data-icon-button] { width: 32px; height: 32px; }
+  html[data-layout="compact"] .workspace-main [data-slot="input"],
+  html[data-layout="compact"] .workspace-main [data-slot="select-trigger"] { height: 32px; font-size: 13px; }
+  html[data-layout="compact"] .dialog-panel [data-slot="input"],
+  html[data-layout="compact"] .dialog-panel [data-slot="select-trigger"] { height: 32px; font-size: 13px; }
+  html[data-layout="compact"] .dialog-panel [data-slot="button"]:not([data-icon-button]) { height: 32px; min-height: 0; padding-block: 0; font-size: 13px; }
+  html[data-layout="compact"] .fx-chip { height: 28px; min-height: 28px; padding: 0 10px; font-size: 12.5px; }
+  html[data-layout="compact"] .workspace-tabs { padding: 2px; }
+  html[data-layout="compact"] .workspace-tabs .workspace-tab { min-height: 26px; padding: 3px 10px; font-size: 13px; }
+}
+html[data-layout="compact"] .workspace-main [data-slot="badge"] { font-size: 11px; }
+html[data-layout="compact"] .workspace-main [data-slot="label"] { font-size: 13px; }
+html[data-layout="compact"] .workspace-filter { gap: 6px; }
+
+/* ───── 八点五、设置页：各卡的保存按钮收进底下的保存栏（SaveDockBar，见 components/settings/SaveDock.tsx） ───── */
+html[data-layout="compact"] .fx-settings-pane [data-dock-save] { display: none; }
+/* 只装着那个保存按钮的那一行（flex justify-end 之类）也一起收，不然卡底留一条空白 */
+html[data-layout="compact"] .fx-settings-pane [data-slot="card-content"] > :has(> [data-dock-save]):not(:has(> :not([data-dock-save]))),
+html[data-layout="compact"] .fx-settings-pane [data-slot="card-footer"]:has(> [data-dock-save]):not(:has(> :not([data-dock-save]))) { display: none; }
+/* 收掉那一行之后，它前面那一项的 space-y 下边距也不要（display:none 的元素仍算 :last-child 之外的一个孩子） */
+html[data-layout="compact"] .fx-settings-pane [data-slot="card-content"] > :has(+ :last-child:has(> [data-dock-save]):not(:has(> :not([data-dock-save])))) { margin-block-end: 0; }
+
+/* ───── 九、对话框 ───── */
+@media (min-width: 640px) {
+  html[data-layout="compact"] .dialog-panel { padding: 18px 20px; gap: 14px; }
+}
+html[data-layout="compact"] .dialog-panel [data-slot="dialog-title"] { font-size: 16px; line-height: 22px; }
+
+/* ───── 十、手机：底部标签栏和顶栏不改，只改页面里的尺寸（上面令牌已经生效） ───── */

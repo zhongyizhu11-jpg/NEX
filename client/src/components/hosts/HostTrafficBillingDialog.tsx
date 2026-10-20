@@ -127,7 +127,7 @@ export default function HostTrafficBillingDialog({
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>按量计费 · {host?.name || `主机 #${host?.id}`}</DialogTitle>
-          <DialogDescription>
+          <DialogDescription data-fx-help="">
             这台机器上的转发按 GB 扣用户余额，不再记进他的套餐流量额度。
           </DialogDescription>
         </DialogHeader>
@@ -183,7 +183,7 @@ export default function HostTrafficBillingDialog({
               onChange={(e) => setPrice(e.target.value)}
               placeholder="例如 2.8"
             />
-            <p className="text-xs text-muted-foreground">
+            <p data-fx-help="" className="text-xs text-muted-foreground">
               这是<strong>兜底价</strong>：这台机器上的转发，凡是没有被它所属的转发组 / 隧道单独计价的，都按这个价走；
               单独配过价的仍然走它们自己的价。
             </p>
@@ -192,7 +192,7 @@ export default function HostTrafficBillingDialog({
           <div className="flex items-center justify-between gap-3 rounded-lg border border-border/50 bg-muted/20 p-3">
             <div className="min-w-0">
               <Label className="text-sm">需要单独授权才能用</Label>
-              <p className="mt-1 text-xs text-muted-foreground">
+              <p data-fx-help="" className="mt-1 text-xs text-muted-foreground">
                 开着：只有你在用户管理里授权过的人能在这台机器上开转发，已经在跑的转发照常计费。
                 关掉：面板上<strong>任何有余额的用户</strong>都能用这台机器。
               </p>

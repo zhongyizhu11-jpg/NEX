@@ -155,7 +155,7 @@ export default function HostTlsInboundManager({ hostId, open, onOpenChange }: { 
       <DialogContent className="flex max-h-[92svh] max-w-xl flex-col gap-3 overflow-hidden">
         <DialogHeader>
           <DialogTitle>共享 TLS 入站</DialogTitle>
-          <DialogDescription>
+          <DialogDescription data-fx-help="">
             一个端口（通常 443）给多条规则共用，按 TLS 握手里的 SNI 分流，原样透传、不解密。适用于 HTTPS 网站、Trojan / VLESS-TLS 等任何 TLS 服务。
           </DialogDescription>
         </DialogHeader>
@@ -235,7 +235,7 @@ export default function HostTlsInboundManager({ hostId, open, onOpenChange }: { 
                   placeholder={"example.com（含所有子域名）\n.example.org（只放子域名）\n留空表示不限"}
                   onChange={(e) => setForm({ ...form, allowedSni: e.target.value })}
                 />
-                <p className="text-meta text-muted-foreground">面板不验证域名归属。共享给多个用户时，请用白名单把每个人限制在自己的域名里。</p>
+                <p data-fx-help="" className="text-meta text-muted-foreground">面板不验证域名归属。共享给多个用户时，请用白名单把每个人限制在自己的域名里。</p>
               </FormField>
               <FormField className="flex items-center justify-between gap-3 rounded-md bg-muted/35 px-3 py-2">
                 <Label>没有 SNI 的连接直接断开</Label>
@@ -266,7 +266,7 @@ export default function HostTlsInboundManager({ hostId, open, onOpenChange }: { 
                   </Select>
                 </FormField>
               </div>
-              <p className="-mt-1 text-meta text-muted-foreground">默认规则只能是挂在这个入站上的管理员规则。属于已暂停规则的 SNI 永远直接断开，不会落到默认规则。</p>
+              <p data-fx-help="" className="-mt-1 text-meta text-muted-foreground">默认规则只能是挂在这个入站上的管理员规则。属于已暂停规则的 SNI 永远直接断开，不会落到默认规则。</p>
               <div className="grid grid-cols-3 gap-3">
                 <FormField className="space-y-1.5">
                   <Label>PROXY 头</Label>

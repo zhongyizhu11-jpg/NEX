@@ -393,7 +393,7 @@ export default function HostGroupManager({
 
   return (
     <div className="space-y-4">
-      <p className="text-xs text-muted-foreground sm:text-sm">
+      <p data-fx-help="" className="text-xs text-muted-foreground sm:text-sm">
         按业务、地区或用途整理主机，分组顺序可直接拖动调整。
       </p>
 
@@ -514,7 +514,7 @@ export default function HostGroupManager({
         <DialogContent className="flex max-h-[88vh] flex-col overflow-hidden sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>{editingId ? "编辑分组" : "添加分组"}</DialogTitle>
-            <DialogDescription>选择需要归入此分组的主机。</DialogDescription>
+            <DialogDescription data-fx-help="">选择需要归入此分组的主机。</DialogDescription>
           </DialogHeader>
           <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
             <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_140px]">

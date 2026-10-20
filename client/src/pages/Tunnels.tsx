@@ -78,7 +78,6 @@ import {
 import { OptimisticSwitch, Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { SlidingTabsList, type SlidingTabItem } from "@/components/ui/sliding-tabs";
-import { FilterChips, type FilterChipItem } from "@/components/ui/filter-chips";
 import { useCompactLayout } from "@/hooks/useCompactLayout";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -832,32 +831,6 @@ const TUNNEL_SECTION_ITEMS = [
   { value: "exits", label: "出口组", icon: LogOut },
   { value: "routes", label: "线路总览", icon: Waypoints },
 ] as const satisfies readonly SlidingTabItem<TunnelSection>[];
-
-/*
-  精简布局（useCompactLayout）：顶上只放 4 个——线路 / 端口转发 / 组 / 总览。「线路」底下一排药丸在
-  隧道、转发链、叠加之间切，「组」底下在转发组、入口组、出口组之间切；切的还是原来那几页，数据和功能不变。
-*/
-const COMPACT_LINE_SECTIONS = [
-  { value: "tunnels", label: "隧道" },
-  { value: "chains", label: "转发链" },
-  { value: "aggregates", label: "叠加" },
-] as const satisfies readonly FilterChipItem<TunnelSection>[];
-const COMPACT_GROUP_SECTIONS = [
-  { value: "groups", label: "转发组" },
-  { value: "entries", label: "入口组" },
-  { value: "exits", label: "出口组" },
-] as const satisfies readonly FilterChipItem<TunnelSection>[];
-
-function compactSectionItems(activeSection: TunnelSection): SlidingTabItem<TunnelSection>[] {
-  const line = COMPACT_LINE_SECTIONS.some((item) => item.value === activeSection) ? activeSection : "tunnels";
-  const group = COMPACT_GROUP_SECTIONS.some((item) => item.value === activeSection) ? activeSection : "groups";
-  return [
-    { value: line, label: "线路", icon: Network },
-    { value: "ports", label: "端口转发", icon: ArrowRightLeft },
-    { value: group, label: "组", icon: ShieldCheck },
-    { value: "routes", label: "总览", icon: Waypoints },
-  ];
-}
 
 const TUNNEL_SECTION_STORAGE_KEY = "forwardx.tunnels.section";
 const TUNNEL_VIEW_MODE_STORAGE_KEY = "forwardx.tunnels.viewMode";
@@ -3526,7 +3499,7 @@ function TunnelsContent() {
         </span>
         <span className="min-w-0">
           <span className="block text-sm font-medium">{nginxCertDragActive ? "松开以读取证书文件" : "拖放或选择证书文件"}</span>
-          <span className="mt-0.5 block text-xs text-muted-foreground">支持 PEM 编码的 .pem、.crt、.cer、.key；证书链与私钥可同时选择</span>
+          <span data-fx-help="" className="mt-0.5 block text-xs text-muted-foreground">支持 PEM 编码的 .pem、.crt、.cer、.key；证书链与私钥可同时选择</span>
         </span>
       </button>
       <div className="grid gap-3 lg:grid-cols-2">
@@ -3756,7 +3729,7 @@ function TunnelsContent() {
         {tunnelProxyPanelOpen && (
           <div className="space-y-2 border-t border-border/45 pt-2">
             <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
-              <span className="text-xs text-muted-foreground">入口和出口独立配置</span>
+              <span data-fx-help="" className="text-xs text-muted-foreground">入口和出口独立配置</span>
               <div className={segmentedControlClassName}>
                 <div className="grid grid-cols-2 gap-1">
                   {([1, 2] as const).map((version) => (
@@ -3896,7 +3869,7 @@ function TunnelsContent() {
           <label className="flex min-h-12 items-center justify-between gap-3 rounded-md border border-primary/25 bg-primary/5 px-3 py-2">
             <span className="min-w-0">
               <span className="block text-sm font-medium">mimic UDP 线路端口</span>
-              <span className="block truncate text-xs text-muted-foreground">留空后由系统随机分配</span>
+              <span data-fx-help="" className="block truncate text-xs text-muted-foreground">留空后由系统随机分配</span>
             </span>
             <Input
               type="number"
@@ -3934,7 +3907,7 @@ function TunnelsContent() {
         >
           <div className="min-w-0">
             <div className="text-sm font-medium">高级设置</div>
-            <div className="text-xs text-muted-foreground">PROXY Protocol、传输优化</div>
+            <div data-fx-help="" className="text-xs text-muted-foreground">PROXY Protocol、传输优化</div>
           </div>
           <div className="flex items-center gap-2">
             <Badge variant={advancedConfigured ? "secondary" : "outline"} className="h-5 px-1.5 text-[10px] font-normal">
@@ -4481,13 +4454,7 @@ function TunnelsContent() {
       </>} />
 
       <Tabs value={activeSection} onValueChange={(value) => setActiveSection(value as TunnelSection)} className="space-y-4">
-        <SlidingTabsList items={compactLayout ? compactSectionItems(activeSection) : TUNNEL_SECTION_ITEMS} activeValue={activeSection} ariaLabel="链路管理" minItemWidthRem={7.75} />
-        {compactLayout && COMPACT_LINE_SECTIONS.some((item) => item.value === activeSection) ? (
-          <FilterChips items={COMPACT_LINE_SECTIONS} value={activeSection} onChange={setActiveSection} ariaLabel="线路类型" />
-        ) : null}
-        {compactLayout && COMPACT_GROUP_SECTIONS.some((item) => item.value === activeSection) ? (
-          <FilterChips items={COMPACT_GROUP_SECTIONS} value={activeSection} onChange={setActiveSection} ariaLabel="组的用途" />
-        ) : null}
+        <SlidingTabsList items={TUNNEL_SECTION_ITEMS} activeValue={activeSection} ariaLabel="链路管理" minItemWidthRem={7.75} />
 
       {/* 搜索栏一行，和主机管理一样：小搜索框在左、「新建链路」在最右；条数只在搜索时出现。 */}
       <div className="flex min-w-0 items-center gap-2">
@@ -4533,7 +4500,8 @@ function TunnelsContent() {
 
         {/* 「隧道链路」和「叠加」是同一份列表按 kind 分开列，共用这一块。 */}
         <TabsContent value={activeSection === "aggregates" ? "aggregates" : "tunnels"} className="space-y-4">
-          <div className="min-w-0">
+          {/* 精简布局：上面分类条选中的那一格已经写着名字，这行小标题不再重复 */}
+          <div className="min-w-0" data-fx-compact-hide="">
             <h2 className="text-lg font-semibold tracking-tight sm:text-xl">{activeSection === "aggregates" ? "叠加" : "隧道链路"}</h2>
           </div>
           <SectionTransition transitionKey={activeSectionTransitionKey}>
@@ -4944,7 +4912,7 @@ function TunnelsContent() {
                           ))}
                         </SelectContent>
                       </Select>
-                      <p className="text-xs text-muted-foreground">
+                      <p data-fx-help="" className="text-xs text-muted-foreground">
                         {form.entryGroupId ? "入口组提供入口，下方主机从中转或出口开始配置。" : "未使用入口组时，下方第一台主机作为入口。"}
                       </p>
                     </FormField>
@@ -5025,7 +4993,7 @@ function TunnelsContent() {
                           出口组固定为隧道出口；策略：{EXIT_GROUP_STRATEGY_LABELS[normalizeExitGroupStrategy(exitGroupById.get(Number(form.exitGroupId))?.exitStrategy)]}。
                         </p>
                       ) : (
-                        <p className="text-xs text-muted-foreground">按出口组顺序使用成员，首个成员为主出口。</p>
+                        <p data-fx-help="" className="text-xs text-muted-foreground">按出口组顺序使用成员，首个成员为主出口。</p>
                       )}
                     </FormField>
                     <div className="space-y-2">
@@ -5083,7 +5051,7 @@ function TunnelsContent() {
                             ))}
                           </SelectContent>
                         </Select>
-                        <p className="text-xs text-muted-foreground">{gostModeTransportHint(form.mode)}</p>
+                        <p data-fx-help="" className="text-xs text-muted-foreground">{gostModeTransportHint(form.mode)}</p>
                       </FormField>
                     )}
                     {nginxTunnelEnabled && isNginxTunnelModeValue(form.mode) && renderNginxCertFields()}
@@ -5171,7 +5139,7 @@ function TunnelsContent() {
                           ))}
                         </SelectContent>
                       </Select>
-                      <p className="text-xs text-muted-foreground">
+                      <p data-fx-help="" className="text-xs text-muted-foreground">
                         {chainCreateForm.entryGroupId ? "入口组提供入口，下方主机从中转或出口开始配置。" : "未使用入口组时，下方第一台主机作为入口。"}
                       </p>
                     </FormField>
@@ -5257,7 +5225,7 @@ function TunnelsContent() {
                   ))}
                 </SelectContent>
               </Select>
-              <p className="text-xs text-muted-foreground">
+              <p data-fx-help="" className="text-xs text-muted-foreground">
                 {form.entryGroupId ? "入口组提供入口，下方主机从中转或出口开始配置。" : "未使用入口组时，下方第一台主机作为入口。"}
               </p>
             </FormField>
@@ -5338,7 +5306,7 @@ function TunnelsContent() {
                   出口组固定为隧道出口；策略：{EXIT_GROUP_STRATEGY_LABELS[normalizeExitGroupStrategy(exitGroupById.get(Number(form.exitGroupId))?.exitStrategy)]}。
                 </p>
               ) : (
-                <p className="text-xs text-muted-foreground">按出口组顺序使用成员，首个成员为主出口。</p>
+                <p data-fx-help="" className="text-xs text-muted-foreground">按出口组顺序使用成员，首个成员为主出口。</p>
               )}
             </FormField>
             <div className="space-y-2">
@@ -5396,7 +5364,7 @@ function TunnelsContent() {
                     ))}
                   </SelectContent>
                 </Select>
-                <p className="text-xs text-muted-foreground">{gostModeTransportHint(form.mode)}</p>
+                <p data-fx-help="" className="text-xs text-muted-foreground">{gostModeTransportHint(form.mode)}</p>
               </FormField>
             )}
             {nginxTunnelEnabled && isNginxTunnelModeValue(form.mode) && renderNginxCertFields()}

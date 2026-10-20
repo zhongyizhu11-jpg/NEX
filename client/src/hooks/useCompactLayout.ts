@@ -1,11 +1,52 @@
+import { useCallback } from "react";
+import { toast } from "sonner";
+
+import { normalizePersonalizationLayout, normalizeUserLayoutPreference, resolveEffectiveLayout, type PersonalizationLayoutId } from "@shared/personalization";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { mobileAuth } from "@/lib/mobileAuth";
+import { trpc } from "@/lib/trpc";
 
 /*
-  精简布局（个人资料 › 界面 › 精简布局）：每个账号自己的开关，默认关，只改这个账号看到的界面。
-  打开后：链路管理 4 个分类、规则框 3 个页签、主机页 2 个页签、规则卡片一行、侧栏分组、
-  诊断问题优先……具体见各处用到这个 hook 的地方。数据和功能一样，只是摆法不同。
+  精简布局（shared/personalization.ts 里的 PERSONALIZATION_LAYOUTS）。
+
+  谁说了算：个人资料 › 界面 里的个人偏好（users.uiLayout）› 2.3.466 的老开关 › 设置 › 个性化 › 布局
+  的站点默认（personalizationLayout）。画法全在 client/src/styles/compact.css 里按 <html data-layout>
+  选（LayoutLayer 负责写这个属性），组件一般不用知道自己在哪套布局 —— 只有形状上要换结构的地方
+  （诊断把有问题的排前面、流量用尽合成一行 + 一键升级、规则框不放解释小字）才读这个 hook。
 */
-export function useCompactLayout(): boolean {
+export function useLayoutPreference() {
   const { user } = useAuth();
-  return (user as any)?.compactLayout === true || (user as any)?.compactLayout === 1;
+  const utils = trpc.useUtils();
+  const { data: publicInfo } = trpc.system.publicInfo.useQuery(undefined, {
+    enabled: !mobileAuth.isNative || mobileAuth.hasPanelUrl(),
+    refetchOnWindowFocus: false,
+    retry: false,
+    staleTime: 60_000,
+  });
+  const siteLayout = normalizePersonalizationLayout((publicInfo as any)?.personalizationLayout);
+  const preference = normalizeUserLayoutPreference((user as any)?.uiLayout);
+  const effective = resolveEffectiveLayout(user as any, siteLayout);
+  const mutation = trpc.auth.updateProfile.useMutation({
+    onError: (error) => toast.error(error.message || "布局设置失败"),
+  });
+  /*
+    先改本地缓存让界面当场换（LayoutLayer 盯着 auth.me），存失败再退回去。
+    uiLayout = null 是「跟随站点」；老开关 compactLayout 一起清掉，不然它会盖过「跟随站点」。
+  */
+  const setPreference = useCallback(async (next: PersonalizationLayoutId | null) => {
+    const previous = utils.auth.me.getData();
+    utils.auth.me.setData(undefined, (old: any) => (old ? { ...old, uiLayout: next, compactLayout: false } : old));
+    try {
+      await mutation.mutateAsync({ uiLayout: next, compactLayout: false });
+      await utils.auth.me.invalidate();
+    } catch {
+      utils.auth.me.setData(undefined, previous as any);
+    }
+  }, [mutation, utils]);
+  return { preference, siteLayout, effective, setPreference, saving: mutation.isPending };
+}
+
+/** 这个账号现在是不是精简布局。没登录 / 还在加载时按站点默认。 */
+export function useCompactLayout(): boolean {
+  return useLayoutPreference().effective === "compact";
 }

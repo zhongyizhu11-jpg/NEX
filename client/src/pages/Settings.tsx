@@ -34,7 +34,7 @@ import { SettingList, SettingRow } from "@/components/SettingRow";
 import { EntityActions } from "@/components/entity/EntityActions";
 import { segmentedControlClassName, segmentedOptionClassName } from "@/components/ui/segmented";
 import { useIsMobile } from "@/hooks/useMobile";
-import { useCompactLayout } from "@/hooks/useCompactLayout";
+import { LayoutDefaultCard } from "@/components/settings/LayoutDefaultCard";
 import DataSectionLoading from "@/components/DataSectionLoading";
 import { pollingInterval } from "@/lib/polling";
 import { mobileAuth } from "@/lib/mobileAuth";
@@ -83,7 +83,6 @@ import {
   Copy,
   CheckCircle2,
   ChevronLeft,
-  ChevronDown,
   Settings2,
   Download,
   Github,
@@ -519,15 +518,6 @@ const settingsGroups = [
 ] as const;
 
 /*
-  精简布局：只留常用的四项在外面，其余收进「高级」，默认折起来。
-  正在看的那一项如果在高级里，高级自动展开 —— 不然选中项会藏在折叠里找不到。
-*/
-const compactSettingsGroups = [
-  { key: "common", header: "常用", items: ["system", "personalization", "telegram", "email"] },
-  { key: "advanced", header: "高级", items: ["advanced", "webhook", "backup", "logs"] },
-] as const;
-
-/*
   每一项管什么。现在宽屏右栏顶上也显示这一句，所以照实际内容写：原来「系统配置」写着
   「数据库」（数据库切换在备份恢复里）、「邮箱设置」写着「邮件模板」（没有模板这回事）。
 */
@@ -717,8 +707,6 @@ function SettingsContent() {
     桌面上这个状态不参与渲染 —— 那边永远是标签条，一次点到位。
   */
   const [mobileSectionOpen, setMobileSectionOpen] = useState(false);
-  const compactLayout = useCompactLayout();
-  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [activeTab, setActiveTab] = useUrlTab<SettingsTab>({
     values: settingsTabs,
     defaultValue: "system",
@@ -769,21 +757,9 @@ function SettingsContent() {
   */
   const renderSectionNav = (mode: "index" | "rail") => (
     <GroupedList className={mode === "rail" ? "gap-[var(--fx-space-4)]" : undefined}>
-      {(compactLayout ? compactSettingsGroups : settingsGroups).map((group) => {
-        const foldable = compactLayout && group.key === "advanced";
-        const open = !foldable || advancedOpen || (group.items as readonly string[]).includes(activeTab);
-        return (
-        <ListSection key={group.key} header={group.header} footer={mode === "index" && !compactLayout ? (group as { footer?: string }).footer : undefined}>
-          {foldable && !open ? (
-            <ListRow
-              icon={<ChevronDown className="h-4 w-4" />}
-              label="展开高级设置"
-              value={`${group.items.length} 项`}
-              chevron={false}
-              onSelect={() => setAdvancedOpen(true)}
-            />
-          ) : null}
-          {open && group.items.map((value) => {
+      {settingsGroups.map((group) => (
+        <ListSection key={group.key} header={group.header} footer={mode === "index" ? (group as { footer?: string }).footer : undefined}>
+          {group.items.map((value) => {
             const item = visibleSettingsTabItems.find((tab) => tab.value === value);
             if (!item) return null;
             const Icon = item.icon;
@@ -792,7 +768,7 @@ function SettingsContent() {
                 key={value}
                 icon={<Icon className="h-4 w-4" />}
                 label={item.label}
-                detail={mode === "index" && !compactLayout ? settingsTabDetail[value] : undefined}
+                detail={mode === "index" ? settingsTabDetail[value] : undefined}
                 selected={mode === "rail" && activeTab === value}
                 chevron={mode === "index"}
                 onSelect={() => {
@@ -803,8 +779,7 @@ function SettingsContent() {
             );
           })}
         </ListSection>
-        );
-      })}
+      ))}
     </GroupedList>
   );
 
@@ -875,7 +850,7 @@ function SettingsContent() {
             {activeItem ? (
               <div className={cn("min-w-0", isMobile ? "block" : "hidden @min-[56rem]/settings:block")}>
                 <h2 className="fx-pane-title">{activeItem.label}</h2>
-                <div className="mt-0.5 text-meta text-muted-foreground">{settingsTabDetail[activeTab]}</div>
+                <div data-fx-help="" className="mt-0.5 text-meta text-muted-foreground">{settingsTabDetail[activeTab]}</div>
               </div>
             ) : null}
 
@@ -2630,7 +2605,7 @@ function TelegramBotSettingsCard() {
               参数（提前几天、阈值多少）跟在那一行下面。
             */}
             <SettingList>
-              <SettingRow
+              <SettingRow keepDescription
                 asLabel
                 label="启用机器人"
                 description={settings?.telegram?.botUsername ? `@${settings.telegram.botUsername}` : "保存 Token 后自动识别机器人"}
@@ -4132,6 +4107,9 @@ function PersonalizationSettingsSection() {
           </div>
         </CardContent>
       </Card>
+
+      {/* 布局密度：站点默认（standard / compact），每个账号可以在个人资料里覆盖。点了就存，不走上面的保存条。 */}
+      <LayoutDefaultCard />
 
       {/*
         液态玻璃的旋钮：只有界面主题是液态玻璃时才看得出效果，但一直露着 —— 先调好再切主题也行。
@@ -6077,7 +6055,7 @@ function SystemInfoSection() {
           </CardHeader>
           <CardContent className="space-y-4">
             <SettingList>
-              <SettingRow
+              <SettingRow keepDescription
                 asLabel
                 label="启用 HTTPS"
                 description={`当前协议：${settings?.panelSsl?.activeProtocol === "https" ? "HTTPS" : "HTTP"}，端口：${webPortDisplay}`}

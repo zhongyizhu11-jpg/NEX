@@ -21,6 +21,7 @@ export function SettingList({ className, children }: { className?: string; child
 export function SettingRow({
   label,
   description,
+  keepDescription = false,
   control,
   asLabel = false,
   className,
@@ -28,6 +29,11 @@ export function SettingRow({
 }: {
   label: ReactNode;
   description?: ReactNode;
+  /**
+   * 说明其实是状态（账号名、绑定时间、当前协议）：精简布局下也要显示。
+   * 默认当「介绍」处理，精简下收起（compact.css 按 data-fx-help 选）。
+   */
+  keepDescription?: boolean;
   /** 右边的控件：开关、复选框、短的选择框或一个按钮。 */
   control?: ReactNode;
   /**
@@ -42,7 +48,7 @@ export function SettingRow({
 }) {
   const Row = asLabel ? "label" : "div";
   return (
-    <div className={cn("fx-list-row flex min-w-0 flex-col gap-3 py-3 first:pt-0 last:pb-0", className)}>
+    <div className={cn("fx-list-row fx-setting-row flex min-w-0 flex-col gap-3 py-3 first:pt-0 last:pb-0", className)}>
       <Row className={cn("flex min-w-0 items-center justify-between gap-3", asLabel && "cursor-pointer")}>
         {/*
           说明用 span 不用 p：手机上 `.workspace-main p` 会给每个段落加上下各 12px 的外边距，
@@ -50,7 +56,8 @@ export function SettingRow({
         */}
         <span className="flex min-w-0 flex-col gap-0.5">
           <span className="text-secondary-type font-medium text-foreground">{label}</span>
-          {description ? <span className="text-meta text-muted-foreground">{description}</span> : null}
+          {/* 说明是「介绍」：精简布局下收起（compact.css 按 data-fx-help 选） */}
+          {description ? <span data-fx-help="" data-fx-keep={keepDescription ? "" : undefined} className="text-meta text-muted-foreground">{description}</span> : null}
         </span>
         {control ? <span className="flex shrink-0 items-center gap-2">{control}</span> : null}
       </Row>
