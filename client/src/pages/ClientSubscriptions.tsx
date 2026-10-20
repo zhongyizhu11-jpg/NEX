@@ -1068,7 +1068,7 @@ export default function ClientSubscriptionsPage() {
               </span>
               订阅链接
               {tokens.length > 0 ? (
-                <span className="text-xs font-normal text-muted-foreground">{tokens.length} 条</span>
+                <span data-fx-compact-hide="" className="text-xs font-normal text-muted-foreground">{tokens.length} 条</span>
               ) : null}
             </CardTitle>
             <Button

@@ -4406,13 +4406,16 @@ function TunnelsContent() {
             </div>
           </div>
           )}
+          {/* 精简布局：卡片上不画近 30 天色块条（诊断框 › 延迟记录 里有同一条），一张卡少 30px */}
           {supported && !oneLineFoot ? (
-            <LatencyHistoryDayStrip
-              variant="compact"
-              summaries={historySummaries}
-              loading={!tunnelHistoryRows}
-              className="mt-2"
-            />
+            <div data-fx-compact-hide="">
+              <LatencyHistoryDayStrip
+                variant="compact"
+                summaries={historySummaries}
+                loading={!tunnelHistoryRows}
+                className="mt-2"
+              />
+            </div>
           ) : null}
         </CardContent>
       </Card>

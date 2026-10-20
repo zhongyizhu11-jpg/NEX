@@ -724,7 +724,7 @@ export default function ProxyInboundsSection({
               </span>
               <CardTitle className="text-sm font-medium text-muted-foreground">我的节点</CardTitle>
               {totalRowCount > 0 ? (
-                <span className="truncate text-xs text-muted-foreground">
+                <span data-fx-compact-hide="" className="truncate text-xs text-muted-foreground">
                   {totalRowCount} 个
                   {onlineCount > 0 ? ` · ${onlineCount} 在线` : ""}
                   {offlineCount > 0 ? ` · ${offlineCount} 离线` : ""}

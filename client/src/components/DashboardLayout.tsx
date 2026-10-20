@@ -1711,8 +1711,9 @@ function DashboardLayoutContent({
           )}
           <div className="workspace-appbar-actions">
             {appbarSearchButton}
-            {appbarThemeButton}
-            <UiThemeQuickSwitch />
+            {/* 精简布局：深浅色切换并进调色盘菜单，顶栏少一枚图标 */}
+            {compactLayout ? null : appbarThemeButton}
+            <UiThemeQuickSwitch darkToggle={compactLayout ? { resolved: resolvedTheme, onToggle: toggleTheme } : undefined} />
             {!isMobile ? <span className="fx-pearl-topbar-user" title={accountDisplayName}>{accountDisplayName}</span> : null}
           </div>
         </div>
@@ -1751,8 +1752,9 @@ function DashboardLayoutContent({
           </button>
           <div className="workspace-appbar-actions">
             {appbarSearchButton}
-            {appbarThemeButton}
-            <UiThemeQuickSwitch />
+            {/* 精简布局：深浅色切换并进调色盘菜单，顶栏少一枚图标 */}
+            {compactLayout ? null : appbarThemeButton}
+            <UiThemeQuickSwitch darkToggle={compactLayout ? { resolved: resolvedTheme, onToggle: toggleTheme } : undefined} />
           <DropdownMenu open={accountMenuOpen} onOpenChange={setAccountMenuOpen} modal={false}>
             <DropdownMenuTrigger asChild>
               <button

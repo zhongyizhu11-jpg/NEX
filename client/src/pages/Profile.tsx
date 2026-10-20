@@ -746,8 +746,9 @@ function ProfileContent() {
         </Card>
       </div>
 
+      {/* 精简布局：账户菜单里就有「软件更新」，这张卡不再占一行 */}
       {mobileAuth.isNative && (
-        <Card className="border-border/50 bg-card/70">
+        <Card data-fx-compact-hide="" className="border-border/50 bg-card/70">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <Download className="h-4 w-4 text-primary" />

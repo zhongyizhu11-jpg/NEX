@@ -1490,7 +1490,7 @@ function UsersContent() {
             </div>
           ) : users && users.length > 0 ? (
             <div className="overflow-x-auto">
-              <Table className="min-w-[720px] sm:min-w-[860px] md:min-w-[1120px] lg:min-w-[1380px] xl:min-w-[1520px]">
+              <Table className="fx-users-table min-w-[720px] sm:min-w-[860px] md:min-w-[1120px] lg:min-w-[1380px] xl:min-w-[1520px]">
                 <TableHeader>
                   <TableRow className="hover:bg-transparent">
                     <TableHead data-fx-compact-hide="" className="w-[60px] whitespace-nowrap">ID</TableHead>
@@ -2622,7 +2622,7 @@ function UsersContent() {
                     ))}
                   </AutoAnimateContainer>
                 ) : (
-                  <p className="rounded-lg border border-dashed border-border/50 px-3 py-2 text-xs text-muted-foreground">
+                  <p className="fx-empty-hint rounded-lg border border-dashed border-border/50 px-3 py-2 text-xs text-muted-foreground">
                     暂未授权端口转发，可从上方选择添加。
                   </p>
                 )}
@@ -2670,7 +2670,7 @@ function UsersContent() {
                     ))}
                   </AutoAnimateContainer>
                 ) : (
-                  <p className="rounded-lg border border-dashed border-border/50 px-3 py-2 text-xs text-muted-foreground">
+                  <p className="fx-empty-hint rounded-lg border border-dashed border-border/50 px-3 py-2 text-xs text-muted-foreground">
                     暂未授权转发链或转发组，可从上方选择添加。
                   </p>
                 )}
@@ -2722,7 +2722,7 @@ function UsersContent() {
                     ))}
                   </AutoAnimateContainer>
                 ) : (
-                  <p className="rounded-lg border border-dashed border-border/50 px-3 py-2 text-xs text-muted-foreground">
+                  <p className="fx-empty-hint rounded-lg border border-dashed border-border/50 px-3 py-2 text-xs text-muted-foreground">
                     暂未授权隧道，可从上方选择添加。
                   </p>
                 )}
@@ -2783,7 +2783,7 @@ function UsersContent() {
                     ))}
                   </AutoAnimateContainer>
                 ) : (
-                  <p className="rounded-lg border border-dashed border-border/50 px-3 py-2 text-xs text-muted-foreground">
+                  <p className="fx-empty-hint rounded-lg border border-dashed border-border/50 px-3 py-2 text-xs text-muted-foreground">
                     暂未分享节点。只租一两个落地、不值得单开端口的用户可以从上方选。
                   </p>
                 )}
@@ -2830,7 +2830,7 @@ function UsersContent() {
                     ))}
                   </AutoAnimateContainer>
                 ) : (
-                  <p className="rounded-lg border border-dashed border-border/50 px-3 py-2 text-xs text-muted-foreground">
+                  <p className="fx-empty-hint rounded-lg border border-dashed border-border/50 px-3 py-2 text-xs text-muted-foreground">
                     暂未额外授权网络测试主机。
                   </p>
                 )}
@@ -2882,7 +2882,7 @@ function UsersContent() {
                     ))}
                   </AutoAnimateContainer>
                 ) : (
-                  <p className="rounded-lg border border-dashed border-border/50 px-3 py-2 text-xs text-muted-foreground">
+                  <p className="fx-empty-hint rounded-lg border border-dashed border-border/50 px-3 py-2 text-xs text-muted-foreground">
                     暂未授权计费转发资源，可从上方选择添加。
                   </p>
                 )}
@@ -2927,7 +2927,7 @@ function UsersContent() {
                     ))}
                   </AutoAnimateContainer>
                 ) : (
-                  <p className="rounded-lg border border-dashed border-border/50 px-3 py-2 text-xs text-muted-foreground">
+                  <p className="fx-empty-hint rounded-lg border border-dashed border-border/50 px-3 py-2 text-xs text-muted-foreground">
                     暂未授权历史计费主机。
                   </p>
                 )}
@@ -2977,7 +2977,7 @@ function UsersContent() {
                     ))}
                   </AutoAnimateContainer>
                 ) : (
-                  <p className="rounded-lg border border-dashed border-border/50 px-3 py-2 text-xs text-muted-foreground">
+                  <p className="fx-empty-hint rounded-lg border border-dashed border-border/50 px-3 py-2 text-xs text-muted-foreground">
                     暂未授权计费隧道，可从上方选择添加。
                   </p>
                 )}

@@ -212,3 +212,16 @@ html[data-layout="compact"] .dialog-panel .fx-rule-collapsible > button { paddin
 @media (min-width: 640px) {
   html[data-layout="compact"] .fx-token-subscribe { width: auto; }
 }
+
+/* ───── 十三、零碎的密度 ───── */
+/* 规则页按类分组的那一行表头：矮一档 */
+html[data-layout="compact"] .fx-rule-group-header { padding-block: 4px; }
+html[data-layout="compact"] .fx-rule-group-header > span:first-of-type { font-size: 14px; }
+/* 空状态、加载、出错块：标准下为了稳住布局给了 220～260px 的最小高度，精简下不必 */
+html[data-layout="compact"] .workspace-main .empty-state { min-height: 140px; }
+/* 用户管理「资源授权」里每类资源下面那个虚线空框：只留那句话 */
+html[data-layout="compact"] .dialog-panel .fx-empty-hint { border: 0; padding: 2px 0; border-radius: 0; }
+/* 用户表：ID 列和两枚标签不画之后，不再要那么宽 */
+@media (min-width: 1280px) {
+  html[data-layout="compact"] .fx-users-table { min-width: 1280px; }
+}
