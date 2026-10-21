@@ -613,7 +613,6 @@ type HostFormData = {
   rateLimitMbps: number;
   /** 线路带宽（Mbps，0 = 没填）：负载均衡按它分连接。 */
   lineBandwidthMbps: number;
-  ipWhitelistOnly: boolean;
 };
 
 const defaultFormData: HostFormData = {
@@ -656,7 +655,6 @@ const defaultFormData: HostFormData = {
   flowOffload: false,
   rateLimitMbps: 0,
   lineBandwidthMbps: 0,
-  ipWhitelistOnly: false,
 };
 
 function clampMonthlyResetDay(value: number) {
@@ -2091,7 +2089,6 @@ function HostsContent() {
       flowOffload: !!host.flowOffload,
       rateLimitMbps: Math.max(0, Math.floor(Number(host.rateLimitMbps) || 0)),
       lineBandwidthMbps: Math.max(0, Math.floor(Number(host.lineBandwidthMbps) || 0)),
-      ipWhitelistOnly: !!host.ipWhitelistOnly,
     });
     setEditingId(host.id);
     setEditingHostSnapshot(host);
@@ -2232,7 +2229,6 @@ function HostsContent() {
         ...flowOffloadPayload,
         ...hostRateLimitPayload,
         lineBandwidthMbps: form.lineBandwidthMbps,
-        ipWhitelistOnly: form.ipWhitelistOnly,
       });
     } else {
       const ip = (form.ip || entry || "unknown").trim();
@@ -2250,7 +2246,6 @@ function HostsContent() {
         ...protocolPolicyPayload,
         ...egressShapingPayload,
         lineBandwidthMbps: form.lineBandwidthMbps,
-        ipWhitelistOnly: form.ipWhitelistOnly,
       });
     }
   };
@@ -3640,16 +3635,6 @@ function HostsContent() {
                           />
                           <span className="flex h-8 shrink-0 items-center border-l border-border/60 bg-muted/50 px-2 text-xs text-muted-foreground">Mbit/s</span>
                         </div>
-                      </div>
-                      <div data-fx-setting-box="" className="mt-2.5 flex min-h-9 items-center justify-between gap-3 rounded-md bg-muted/35 px-3 py-2">
-                        <div className="min-w-0 space-y-0.5">
-                          <Label className="text-sm font-medium">只放行白名单 IP</Label>
-                          <p data-fx-help="" className="text-xs text-muted-foreground">别的机器连不上它是正常的：诊断不再怪公网 IP 不通，订阅也不会因探测超时自动隐藏它。</p>
-                        </div>
-                        <Checkbox aria-label="只放行白名单 IP"
-                          checked={form.ipWhitelistOnly}
-                          onCheckedChange={(checked) => setForm({ ...form, ipWhitelistOnly: checked })}
-                        />
                       </div>
                       {user?.role === "admin" && editingId ? (
                         <div data-fx-setting-box="" className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">

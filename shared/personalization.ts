@@ -665,9 +665,8 @@ export function normalizePersonalizationUiTheme(value: unknown): Personalization
     站点默认  设置 › 个性化 › 布局（personalizationLayout），管理员定，所有人跟着走
     个人偏好  个人资料 › 界面（users.uiLayout）：null 跟随站点，standard / compact 自己定
 
-  精简 = 同样的数据和功能，更密的摆法：控件和卡片更矮、圆角更小、说明文字不占地方、侧栏更窄。
-  2.3.466 那版（users.compactLayout 布尔开关）只在几页上零散改过摆法，用户看不出差别；
-  这一版整个外壳一起换。老开关开着的账号自动算成「精简」，不用再点一次。
+  精简 = 同样的数据和功能，更密的摆法：控件和卡片更矮、圆角更小、说明文字不占地方、侧栏更窄，
+  列表页的控制行、诊断框、主机详情这些也按精简的方式合并。
 */
 export const PERSONALIZATION_LAYOUTS = [
   { id: "standard", name: "标准", description: "现在这套：留白充足、每项带说明，第一次用的人看得明白。" },
@@ -690,16 +689,15 @@ export function normalizeUserLayoutPreference(value: unknown): PersonalizationLa
 }
 
 /**
- * 这个账号最终看到哪一套：个人偏好 › 2.3.466 的老开关 › 站点默认。
+ * 这个账号最终看到哪一套：个人偏好 › 站点默认。
  * user 为空（没登录、还在加载）时按站点默认。
  */
 export function resolveEffectiveLayout(
-  user: { uiLayout?: unknown; compactLayout?: unknown } | null | undefined,
+  user: { uiLayout?: unknown } | null | undefined,
   siteLayout: unknown,
 ): PersonalizationLayoutId {
   const preference = normalizeUserLayoutPreference(user?.uiLayout);
   if (preference) return preference;
-  if (user && (user.compactLayout === true || user.compactLayout === 1)) return "compact";
   return normalizePersonalizationLayout(siteLayout);
 }
 

@@ -217,7 +217,7 @@ const tables: TableDef[] = [
       c("expiresAt", "epoch"), c("trafficAutoReset", "bool", { notNull: true, default: false }),
       c("trafficResetDay", "int", { notNull: true, default: 1 }), c("lastTrafficReset", "epoch"), c("lastAutoTrafficReset", "epoch"),
       c("telegramId", "text"), c("telegramUsername", "text"), c("telegramFirstName", "text"), c("telegramLastName", "text"),
-      c("telegramLinkedAt", "epoch"), c("telegramLastSeenAt", "epoch"), c("telegramAnnouncementSubscribed", "bool", { notNull: true, default: false }), c("compactLayout", "bool", { notNull: true, default: false }), c("uiLayout", "varchar", { length: 16 }), c("telegramBindCode", "text"),
+      c("telegramLinkedAt", "epoch"), c("telegramLastSeenAt", "epoch"), c("telegramAnnouncementSubscribed", "bool", { notNull: true, default: false }), c("uiLayout", "varchar", { length: 16 }), c("telegramBindCode", "text"),
       c("telegramBindCodeExpiresAt", "epoch"), c("telegramLoginCode", "text"), c("telegramLoginCodeExpiresAt", "epoch"),
       c("twoFactorEnabled", "bool", { notNull: true, default: false }), c("twoFactorSecret", "text"), c("twoFactorEnabledAt", "epoch"),
       c("googleSub", "varchar", { length: 191 }), c("googleEmail", "text"), c("googleLinkedAt", "epoch"),

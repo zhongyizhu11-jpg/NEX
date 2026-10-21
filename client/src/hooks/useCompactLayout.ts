@@ -9,8 +9,7 @@ import { trpc } from "@/lib/trpc";
 /*
   精简布局（shared/personalization.ts 里的 PERSONALIZATION_LAYOUTS）。
 
-  谁说了算：个人资料 › 界面 里的个人偏好（users.uiLayout）› 2.3.466 的老开关 › 设置 › 个性化 › 布局
-  的站点默认（personalizationLayout）。画法全在 client/src/styles/compact.css 里按 <html data-layout>
+  谁说了算：个人资料 › 界面 里的个人偏好（users.uiLayout）› 设置 › 个性化 › 布局 的站点默认（personalizationLayout）。画法全在 client/src/styles/compact.css 里按 <html data-layout>
   选（LayoutLayer 负责写这个属性），组件一般不用知道自己在哪套布局 —— 只有形状上要换结构的地方
   （诊断把有问题的排前面、流量用尽合成一行 + 一键升级、规则框不放解释小字）才读这个 hook。
 */
@@ -31,13 +30,13 @@ export function useLayoutPreference() {
   });
   /*
     先改本地缓存让界面当场换（LayoutLayer 盯着 auth.me），存失败再退回去。
-    uiLayout = null 是「跟随站点」；老开关 compactLayout 一起清掉，不然它会盖过「跟随站点」。
+    uiLayout = null 是「跟随站点」。
   */
   const setPreference = useCallback(async (next: PersonalizationLayoutId | null) => {
     const previous = utils.auth.me.getData();
-    utils.auth.me.setData(undefined, (old: any) => (old ? { ...old, uiLayout: next, compactLayout: false } : old));
+    utils.auth.me.setData(undefined, (old: any) => (old ? { ...old, uiLayout: next } : old));
     try {
-      await mutation.mutateAsync({ uiLayout: next, compactLayout: false });
+      await mutation.mutateAsync({ uiLayout: next });
       await utils.auth.me.invalidate();
     } catch {
       utils.auth.me.setData(undefined, previous as any);

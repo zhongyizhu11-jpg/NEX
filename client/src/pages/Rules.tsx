@@ -8408,11 +8408,6 @@ function RulesContent() {
               <Shuffle className="h-4 w-4" />
               </Button>
               </div>
-              {portStatus === "used" && portStatusHint?.title ? (
-              <p className="text-[12px] leading-5 text-destructive" data-testid="source-port-reminder">
-              {portRangeError && sourcePortRangeText !== "不限制" ? `${portStatusHint.title}（可用：${sourcePortRangeText}）` : portStatusHint.title}
-              </p>
-              ) : null}
               </div>
               )}
               <FormField className={isSniEntryMode ? "col-span-2 space-y-1.5" : "col-span-2 space-y-1.5 sm:col-span-1"}>
