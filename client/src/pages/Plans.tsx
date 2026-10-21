@@ -1207,7 +1207,8 @@ export default function Plans() {
               选中的「套餐计费」是同一句话；留下说明和视图切换，卡片直接坐在页面上，和主机、
               规则的卡片一样。表格视图才需要一块白底托住。
             */}
-            <div className="flex items-center justify-between gap-3">
+            {/* 手机 + 精简：说明收起后这一行只剩一个视图切换，手机上卡片就够，整行不画（data-fx-compact-hide-phone） */}
+            <div data-fx-compact-hide-phone="" className="flex items-center justify-between gap-3">
               <div data-fx-help="" className="min-w-0 text-meta text-muted-foreground">订阅后分配连续端口段。</div>
                 <ViewModeToggle className="flex shrink-0"
                   value={planViewMode}

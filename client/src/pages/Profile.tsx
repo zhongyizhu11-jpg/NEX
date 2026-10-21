@@ -435,6 +435,7 @@ function ProfileContent() {
                 onError={(message) => toast.error(message)}
                 controlsClassName="items-center"
                 previewClassName="h-16 w-16"
+                collapsible={layoutPreference.effective === "compact"}
                 gridClassName="grid-cols-5 sm:grid-cols-6 2xl:grid-cols-8"
                 actions={(
                   <Button

@@ -114,6 +114,10 @@
 /* 触屏上全局给按钮 44px，这一排按 34px 画（分类条同高）；在滚动条里不能用 ::after 撑，会让它竖着也能滚 */
 @media (pointer: coarse) { .fx-chip-scroller > button { min-height: 34px; } }
 .workspace-tab-scroll { position: absolute; top: 3px; bottom: 3px; z-index: 1; width: 32px; display: flex; align-items: center; justify-content: center; border: 0; border-radius: calc(var(--fx-radius-control) - 2px); background: var(--fx-raised); color: var(--fx-text); box-shadow: var(--fx-elevation-popover); }
+/* 分类条那一行：手机 + 精简下右边多一枚搜索图标（ListControls.tsx 的 SearchToggle），分类条自己收窄 */
+.fx-tabs-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.fx-tabs-row > :first-child { flex: 1 1 auto; min-width: 0; }
+.fx-search-toggle-dot { position: absolute; top: 7px; right: 7px; width: 6px; height: 6px; border-radius: 999px; background: var(--fx-primary-fill, var(--primary)); }
 .workspace-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
 /* 搜索框不铺满：桌面上最多 340px（用户要它小），新建按钮靠最右 */
 .workspace-filter-search { min-width: 0; flex: 1 1 240px; max-width: 340px; }

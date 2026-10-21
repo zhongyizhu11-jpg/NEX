@@ -7,6 +7,7 @@ import WorkspaceHeader from "@/components/WorkspaceHeader";
 import { InlineLinkCreator } from "@/features/links/InlineLinkCreator";
 import { describeLinkKind, linkKindForRouteMode, linkKindRequiresAdmin } from "@/features/links/inlineLinkDraft";
 import FilterToolbar from "@/components/FilterToolbar";
+import { SearchToggle } from "@/components/ListControls";
 import { useAuth } from "@/_core/hooks/useAuth";
 import SectionTransition from "@/components/SectionTransition";
 import { forwardGroupModeOf } from "@shared/forwardTypes";
@@ -2017,6 +2018,8 @@ function RulesContent() {
   const [, setLocation] = useLocation();
   const search = useSearch();
   const isMobile = useIsMobile();
+  // 手机 + 精简：搜索行收成分类条右边一枚图标（ListControls.tsx），点开才占一行
+  const [phoneSearchOpen, setPhoneSearchOpen] = useState(false);
   const utils = trpc.useUtils();
   const faultBundle = useFaultBundleExport();
   const [ruleProbeCacheRevision, setRuleProbeCacheRevision] = useState(0);
@@ -7569,7 +7572,10 @@ function RulesContent() {
     「新建规则」放在搜索栏那一行的最右边（用户要的位置）：搜索、筛选、新建都是「对这个列表
     做事」，并排一行；页头只剩视图切换和 ···。手机上按钮带字，不缩成一个「＋」。
   */
-  const mergeListControls = compactLayout && !isMobile;
+  // 精简布局：「新建规则」上到页头右边（桌面手机都一样，和用户 / 套餐页一致）；桌面上分类条和筛选行并排（fx-list-controls）
+  const mergeListControls = compactLayout;
+  const collapsePhoneSearch = compactLayout && isMobile;
+  const showSearchRow = !collapsePhoneSearch || phoneSearchOpen || ruleSearchQuery.length > 0;
   const createRuleAction = (
         rulePermissionLoading ? (
           <Button disabled className="fx-row-action h-9 shrink-0 gap-1.5 rounded-full px-3.5">
@@ -7666,6 +7672,7 @@ function RulesContent() {
             第二行：小搜索框、筛选、最右边「新建规则」。
             这里的 Tabs 只管分类条本身，不带 TabsContent：列表下面照旧按 ruleCategory 过滤。
           */}
+          <div className="fx-tabs-row">
           <Tabs value={ruleCategory} onValueChange={handleRuleCategoryChange}>
             <SlidingTabsList
               items={ruleCategoryTabItems}
@@ -7673,6 +7680,15 @@ function RulesContent() {
               ariaLabel="转发规则分类"
             />
           </Tabs>
+          {collapsePhoneSearch ? (
+            <SearchToggle
+              open={phoneSearchOpen}
+              active={ruleSearchQuery.length > 0 || hasActiveUserFilter || filterResource !== "all"}
+              onToggle={() => setPhoneSearchOpen((value) => !value)}
+            />
+          ) : null}
+          </div>
+          {showSearchRow ? (
           <FilterToolbar
             activeCount={Number(hasActiveUserFilter) + Number(filterResource !== "all")}
             collapsed={mergeListControls}
@@ -7808,8 +7824,7 @@ function RulesContent() {
               </SelectContent>
             </Select>
           </FilterToolbar>
-
-
+          ) : null}
         </div>
       )}
 

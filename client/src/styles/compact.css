@@ -168,7 +168,19 @@ html[data-layout="compact"] .fx-settings-pane [data-slot="card-content"] > :has(
 }
 html[data-layout="compact"] .dialog-panel [data-slot="dialog-title"] { font-size: 16px; line-height: 22px; }
 
-/* ───── 十、手机：底部标签栏和顶栏不改，只改页面里的尺寸（上面令牌已经生效） ───── */
+/* ───── 十、手机：底部标签栏和顶栏不改；页面里的尺寸令牌已经生效，这里只收几处手机专有的 ───── */
+@media (max-width: 767px) {
+  /* 精简 + 手机下整块不要的东西（套餐页只剩一个视图切换的那一行） */
+  html[data-layout="compact"] [data-fx-compact-hide-phone] { display: none; }
+  /* 页头右边的按钮：40 → 36（触控下限之上），「新建」现在也在这一行 */
+  html[data-layout="compact"] .workspace-header-actions > [data-slot="button"] { height: 36px; min-height: 36px; }
+  html[data-layout="compact"] .workspace-header-actions > [data-slot="button"][data-icon-button] { width: 36px; }
+  /* 分类条 40 → 36，和搜索框、搜索 / 筛选图标同高 */
+  html[data-layout="compact"] .workspace-tabs { padding: 2px; }
+  html[data-layout="compact"] .workspace-tabs .workspace-tab { min-height: 32px; }
+  html[data-layout="compact"] .workspace-main .fx-filter-pill,
+  html[data-layout="compact"] .workspace-main .fx-search-toggle { width: 36px; height: 36px; min-height: 36px; }
+}
 
 /* ───── 十一、列表页的控制行：分类条和搜索并排，筛选收进一个按钮，表格行更矮 ───── */
 /*

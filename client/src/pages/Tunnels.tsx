@@ -80,6 +80,7 @@ import { OptimisticSwitch, Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { SlidingTabsList, type SlidingTabItem } from "@/components/ui/sliding-tabs";
 import { useCompactLayout } from "@/hooks/useCompactLayout";
+import { SearchToggle } from "@/components/ListControls";
 import { useIsMobile } from "@/hooks/useMobile";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -2236,8 +2237,11 @@ function TunnelsContent() {
   const [chainViewMode, setChainViewMode] = useState<TunnelViewMode>(() => getStoredChainViewMode());
   const compactLayout = useCompactLayout();
   const isMobile = useIsMobile();
-  // 精简布局（桌面）：「新建链路」上到页头右边，分类条和搜索框并排成一行（fx-list-controls）
-  const mergeListControls = compactLayout && !isMobile;
+  // 精简布局：「新建链路」上到页头右边（桌面手机都一样）；桌面上分类条和搜索框并排成一行（fx-list-controls）
+  const mergeListControls = compactLayout;
+  // 手机 + 精简：搜索行收成分类条右边一枚图标（ListControls.tsx），点开才占一行
+  const collapsePhoneSearch = compactLayout && isMobile;
+  const [phoneSearchOpen, setPhoneSearchOpen] = useState(false);
   const [activeSection, setActiveSection] = useUrlTab<TunnelSection>({
     values: TUNNEL_SECTIONS,
     defaultValue: "tunnels",
@@ -4445,9 +4449,15 @@ function TunnelsContent() {
       <Tabs value={activeSection} onValueChange={(value) => setActiveSection(value as TunnelSection)} className="space-y-4">
         {/* fx-list-controls：精简布局（桌面）下分类条和搜索那一行并排，两行变一行（compact.css） */}
         <div className="fx-list-controls space-y-4">
+        <div className="fx-tabs-row">
         <SlidingTabsList items={TUNNEL_SECTION_ITEMS} activeValue={activeSection} ariaLabel="链路管理" minItemWidthRem={compactLayout ? 5 : 7.75} />
+        {collapsePhoneSearch ? (
+          <SearchToggle open={phoneSearchOpen} active={linkSearchQuery.length > 0} onToggle={() => setPhoneSearchOpen((value) => !value)} />
+        ) : null}
+        </div>
 
       {/* 搜索栏一行，和主机管理一样：小搜索框在左、「新建链路」在最右；条数只在搜索时出现。 */}
+      {(!collapsePhoneSearch || phoneSearchOpen || linkSearchQuery.length > 0) ? (
       <div className="flex min-w-0 items-center gap-2">
         <div className="relative min-w-0 flex-1 sm:max-w-[340px]">
           <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -4476,6 +4486,7 @@ function TunnelsContent() {
         {/* 「线路总览」本身不新建东西；系统设置里打开了向导才在这里放「按目标新建」。 */}
         {mergeListControls ? null : createLinkAction}
       </div>
+      ) : null}
         </div>
 
 
