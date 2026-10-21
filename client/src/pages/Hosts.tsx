@@ -1486,9 +1486,16 @@ function HostsContent() {
     地图在 md 以下本来就藏着（切换按钮也藏着），可桌面上记住的「地图」带到手机上，
     就是在看不见的地方跑一个 3D 地球、列表却是空的。手机上按精简卡片显示，记住的选择不动。
   */
+  const compactLayout = useCompactLayout();
+  /*
+    精简布局（桌面）：主机就是一张表（用户 2026-10-21 定的「条状」）；记住的卡片视图不动，
+    回到标准布局还是卡片。地图两种照旧可切。手机上没有表，走两行的列表行（compact.css）。
+  */
   const viewMode: HostViewMode = isBelowMd && (preferredViewMode === "map" || preferredViewMode === "flat-map")
     ? "compact-card"
-    : preferredViewMode;
+    : compactLayout && !isBelowMd && (preferredViewMode === "card" || preferredViewMode === "compact-card")
+      ? "table"
+      : preferredViewMode;
   const [activeManageTab, setActiveManageTab] = useUrlTab<HostManageTab>({
     values: user?.role === "admin" ? HOST_MANAGE_TABS_ADMIN : HOST_MANAGE_TABS_USER,
     defaultValue: "hosts",
@@ -1658,7 +1665,6 @@ function HostsContent() {
   const [tokenViewMode, setTokenViewMode] = useState<AgentTokenViewMode>(() => getStoredAgentTokenViewMode());
   const [serviceViewMode, setServiceViewMode] = useState<HostProbeServiceViewMode>(() => getStoredHostProbeServiceViewMode());
   const [hostGroupViewMode, setHostGroupViewMode] = useState<HostGroupViewMode>(() => getStoredHostGroupViewMode());
-  const compactLayout = useCompactLayout();
   // 精简：「添加主机」上到页头右边（和规则 / 链路页一致）；手机上搜索行收成分类条右边一枚图标。
   // 标准布局下这一页整页按原来的样子（页面根带 data-fx-std-page，compact.css 让出去）。
   const mergeListControls = compactLayout;
@@ -2542,7 +2548,7 @@ function HostsContent() {
   );
 
   return (
-    <div className="space-y-6" data-fx-std-page={compactLayout ? undefined : ""}>
+    <div className="space-y-6" data-fx-std-page={compactLayout ? undefined : ""} data-fx-compact-page={compactLayout ? "" : undefined}>
       {/* data-fx-std-page：标准布局下这一页整页按原来的标准画（compact.css 让出去）；精简下不带，按紧凑的方式画 */}
       {/* Header */}
       <WorkspaceHeader title={<>主机管理</>} status={
@@ -2587,8 +2593,11 @@ function HostsContent() {
                 value={viewMode}
                 onChange={handleViewModeChange}
                 items={[
-                  { value: "compact-card", label: "精简卡片", icon: Rows3 },
-                  { value: "card", label: "标准卡片", icon: LayoutGrid },
+                  /* 精简下桌面只有表和两种地图（卡片那两档是标准布局的） */
+                  ...(compactLayout ? [] : [
+                    { value: "compact-card" as const, label: "精简卡片", icon: Rows3 },
+                    { value: "card" as const, label: "标准卡片", icon: LayoutGrid },
+                  ]),
                   { value: "table", label: "列表视图", icon: List },
                   { value: "map", label: "3D 地球视图", icon: Globe, hideBelow: "md" },
                   { value: "flat-map", label: "平面地图视图", icon: MapPinned, hideBelow: "md" },

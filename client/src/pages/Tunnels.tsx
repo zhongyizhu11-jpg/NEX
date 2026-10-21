@@ -2233,10 +2233,17 @@ function TunnelsContent() {
   const [tunnelAdvancedOpen, setTunnelAdvancedOpen] = useState(false);
   const [latencyTunnel, setLatencyTunnel] = useState<{ id: number; name: string } | null>(null);
   const [testTunnel, setTestTunnel] = useState<{ id: number; name: string; mode?: string } | null>(null);
-  const [viewMode, setViewMode] = useState<TunnelViewMode>(() => getStoredTunnelViewMode());
-  const [chainViewMode, setChainViewMode] = useState<TunnelViewMode>(() => getStoredChainViewMode());
+  const [preferredViewMode, setViewMode] = useState<TunnelViewMode>(() => getStoredTunnelViewMode());
+  const [preferredChainViewMode, setChainViewMode] = useState<TunnelViewMode>(() => getStoredChainViewMode());
   const compactLayout = useCompactLayout();
   const isMobile = useIsMobile();
+  /*
+    精简布局（桌面）：链路页的几个列表都是表（用户 2026-10-21 定的「条状」）；记住的卡片视图不动，
+    回到标准布局还是卡片。3D 图照旧可切。手机上照旧卡片。
+  */
+  const forceTable = compactLayout && !isMobile;
+  const viewMode: TunnelViewMode = forceTable && preferredViewMode === "card" ? "table" : preferredViewMode;
+  const chainViewMode: TunnelViewMode = forceTable && preferredChainViewMode === "card" ? "table" : preferredChainViewMode;
   // 精简：「新建链路」上到页头右边，桌面上分类条和搜索框并排成一行（fx-list-controls）；手机上搜索行收成分类条右边一枚图标。
   // 标准布局下这一页整页按原来的样子（页面根带 data-fx-std-page，compact.css 让出去）。
   const mergeListControls = compactLayout;
@@ -4422,7 +4429,7 @@ function TunnelsContent() {
   );
 
   return (
-    <div className="space-y-6" data-fx-std-page={compactLayout ? undefined : ""}>
+    <div className="space-y-6" data-fx-std-page={compactLayout ? undefined : ""} data-fx-compact-page={compactLayout ? "" : undefined}>
       {/* data-fx-std-page：标准布局下这一页整页按原来的标准画（compact.css 让出去）；精简下不带，按紧凑的方式画 */}
       <WorkspaceHeader title="链路管理" description="管理隧道、端口转发和多节点线路" status={
           <span className="text-meta tabular-nums text-muted-foreground">
@@ -4439,7 +4446,8 @@ function TunnelsContent() {
             value={activeViewMode}
             onChange={handleActiveViewModeChange}
             items={[
-              { value: "card", label: "卡片视图", icon: LayoutGrid },
+              /* 精简下桌面只有表（和 3D 图）；卡片那档是标准布局的 */
+              ...(forceTable ? [] : [{ value: "card" as const, label: "卡片视图", icon: LayoutGrid }]),
               { value: "table", label: "列表视图", icon: List },
               ...(activeSection === "tunnels" || activeSection === "chains" ? [{ value: "globe" as const, label: "3D 地球视图", icon: Globe, onHover: prefetchReactGlobe }] : []),
             ]}

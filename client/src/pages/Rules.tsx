@@ -2208,7 +2208,11 @@ function RulesContent() {
   });
   const [viewMode, setViewMode] = useState<RuleViewMode>(() => getStoredRuleViewMode());
   const [ruleCardSize, setRuleCardSize] = useState<RuleCardSize>(() => getStoredRuleCardSize());
-  const effectiveViewMode: RuleViewMode = isMobile ? "card" : viewMode;
+  /*
+    精简布局（桌面）：规则就是一张表（用户 2026-10-21 定的「条状」，照着老版本的表格样稿）；
+    记住的卡片视图不动，回到标准布局还是卡片。3D 图照旧可切。手机上没有表，走两行的列表行（compact.css）。
+  */
+  const effectiveViewMode: RuleViewMode = isMobile ? "card" : compactLayout && viewMode !== "globe" ? "table" : viewMode;
   /*
     手机上原来被写死成 standard —— 而 standard 卡在 390px 的屏幕上有 850px 高，
     一屏连一条规则都放不下。紧凑卡本来就是为这种宽度做的，这里改成手机默认紧凑。
@@ -6510,7 +6514,7 @@ function RulesContent() {
             title={entry.copyable ? `${entryTitle}${entryAddresses.length > 1 ? ` (${entry.label})` : ""}` : entry.text}
           >
             {entryAddresses.length > 1 && <span className="shrink-0 text-[10px] text-muted-foreground">{entry.label}</span>}
-            <code className="min-w-0 truncate">{entry.text}</code>
+            <code className="fx-table-addr min-w-0 truncate">{entry.text}</code>
             {entry.copyable && <Copy className="h-3 w-3 shrink-0 text-muted-foreground opacity-60 group-hover:opacity-100" />}
           </button>
         ))}
@@ -6522,7 +6526,7 @@ function RulesContent() {
     const { targetAddress, failoverCount, failoverEnabled, routeLabel } = getRuleTransferDisplay(rule);
     return (
       <div className="flex min-w-0 items-center gap-1.5 font-mono text-[12px] leading-5">
-        <code className="min-w-0 truncate" title={targetAddress}>
+        <code className="fx-table-addr min-w-0 truncate" title={targetAddress}>
           {targetAddress}
         </code>
         {failoverEnabled && (
@@ -6932,33 +6936,28 @@ function RulesContent() {
   */
   // 精简布局：这几项并进了「诊断」框（延迟记录页签、底部的故障包 / 拓扑按钮），卡片菜单里不再重复。
   const DIAGNOSE_MERGED_MENU_KEYS = ["latency", "fault-bundle", "topology"];
-  const renderRuleActions = (rule: any, menuOnly = false) => {
+  // tableCompact：精简的表里操作列只放「开关 · 编辑 · ···」（和老版本表格样稿一致），诊断进 ··· 第一项
+  const renderRuleActions = (rule: any, menuOnly = false, tableCompact = false) => {
     const ruleCategory = getRuleCategory(rule, forwardGroupById);
     const isForwardChainRule = ruleCategory === "chain";
     const probeMethod = ruleLatencyProbeMethodForRule(rule);
     const resetting = resetTrafficMutation.isPending && resetTrafficTarget?.scope === "rule" && Number(resetTrafficTarget.rule?.id) === Number(rule.id);
     const readOnly = user?.role !== "admin" && isAdminManagedRule(rule);
+    const testAction = {
+      key: "test",
+      label: "诊断",
+      ariaLabel: `诊断 ${rule.name}：转发链路自测`,
+      icon: <Stethoscope className="h-3.5 w-3.5" />,
+      onSelect: () => setSelfTestRule({ id: rule.id, name: rule.name, isForwardChain: isForwardChainRule, probeMethod }),
+    };
+    const editAction = { key: "edit", label: "编辑", ariaLabel: `编辑 ${rule.name}`, icon: <Pencil className="h-3.5 w-3.5" />, onSelect: () => openEdit(rule) };
     return (
       <EntityActions
-        primary={readOnly ? [
-          {
-            key: "test",
-            label: "诊断",
-            ariaLabel: `诊断 ${rule.name}：转发链路自测`,
-            icon: <Stethoscope className="h-3.5 w-3.5" />,
-            onSelect: () => setSelfTestRule({ id: rule.id, name: rule.name, isForwardChain: isForwardChainRule, probeMethod }),
-          },
-        ] : [
-          {
-            key: "test",
-            label: "诊断",
-            ariaLabel: `诊断 ${rule.name}：转发链路自测`,
-            icon: <Stethoscope className="h-3.5 w-3.5" />,
-            onSelect: () => setSelfTestRule({ id: rule.id, name: rule.name, isForwardChain: isForwardChainRule, probeMethod }),
-          },
-          { key: "edit", label: "编辑", ariaLabel: `编辑 ${rule.name}`, icon: <Pencil className="h-3.5 w-3.5" />, onSelect: () => openEdit(rule) },
-        ]}
+        primary={tableCompact
+          ? (readOnly ? [] : [editAction])
+          : readOnly ? [testAction] : [testAction, editAction]}
         menu={[
+          ...(tableCompact ? [testAction] : []),
           {
             key: "latency",
             label: isForwardChainRule ? "链路延迟" : probeMethod === "ping" ? "Ping 延迟" : "TCPing 延迟",
@@ -7171,12 +7170,13 @@ function RulesContent() {
   const ruleTableColumns: RuleTableColumn[] = [
     {
       key: "rule",
-      width: 200,
+      width: compactLayout ? 190 : 200,
       head: "规则",
       cell: (rule) => {
         const supported = isRuleSupported(rule);
         const protocolKey = getRuleProtocolKey(rule);
-        const subtitle = [formatForwardRuleProtocol(rule.protocol), user?.role === "admin" ? getRuleOwnerName(rule) : ""].filter(Boolean).join(" · ");
+        const owner = user?.role === "admin" ? getRuleOwnerName(rule) : "";
+        const subtitle = [formatForwardRuleProtocol(rule.protocol), owner].filter(Boolean).join(" · ");
         return (
           <div className="flex min-w-0 items-start gap-2">
             <span className="mt-[3px] shrink-0">
@@ -7184,7 +7184,15 @@ function RulesContent() {
             </span>
             <div className="min-w-0 flex-1">
               <span className="block truncate font-medium" title={rule.name}>{rule.name}</span>
-              <span className="block truncate text-[11px] leading-4 text-muted-foreground" title={subtitle}>{subtitle}</span>
+              {compactLayout ? (
+                /* 精简的表：协议自己一列，名字下面挂类型标签（端口转发 / 隧道转发 / 转发链 / 转发组）和所属人 */
+                <span className="mt-0.5 flex min-w-0 items-center gap-1.5">
+                  <Badge variant="secondary" className="h-5 shrink-0 px-1.5 text-[10px] font-normal">{desktopRuleTypeLabels[getRuleDisplayType(rule, forwardGroupById)]}</Badge>
+                  {owner ? <span className="truncate text-[11px] leading-4 text-muted-foreground" title={owner}>{owner}</span> : null}
+                </span>
+              ) : (
+                <span className="block truncate text-[11px] leading-4 text-muted-foreground" title={subtitle}>{subtitle}</span>
+              )}
               {!supported && (
                 <span className="mt-1 block text-[11px] text-destructive">
                   {protocolUnsupportedLabel(protocolKey)} 当前不支持
@@ -7213,7 +7221,7 @@ function RulesContent() {
     },
     {
       key: "resource",
-      width: 150,
+      width: compactLayout ? 130 : 150,
       head: "所属资源",
       cell: (rule) => (
         <div className="min-w-0">
@@ -7228,29 +7236,84 @@ function RulesContent() {
         </div>
       ),
     },
-    { key: "entry", width: 150, head: "转发入口", cell: (rule) => renderTableTransferEntry(rule) },
-    { key: "exit", width: 130, head: "转发出口", cell: (rule) => renderTableTransferExit(rule) },
-    {
-      key: "traffic",
-      width: 110,
-      head: "流量",
-      cellClassName: "overflow-hidden",
-      cell: (rule) => (
-        <div className="flex min-w-0 flex-col gap-0.5">
-          {renderTableRuleTotalTraffic(rule)}
-          {renderTableRuleDailyTraffic(rule)}
-        </div>
-      ),
-    },
+    { key: "entry", width: compactLayout ? 170 : 150, head: "转发入口", cell: (rule) => renderTableTransferEntry(rule) },
+    { key: "exit", width: compactLayout ? 140 : 130, head: "转发出口", cell: (rule) => renderTableTransferExit(rule) },
+    /*
+      精简的表（用户 2026-10-21 照着老版本表格样稿定的「条状」）：协议一列、累计一列（24H 做小字），
+      开关并进「操作」列和「编辑 / ···」排一起。标准照旧：累计 / 24H 合成「流量」，开关自己一列。
+    */
+    ...(compactLayout ? [
+      {
+        key: "protocol",
+        width: 80,
+        head: "协议",
+        headClassName: "text-center",
+        cellClassName: "text-center",
+        cell: (rule: any) => <Badge variant="secondary" className="whitespace-nowrap text-[10px] font-normal">{formatForwardRuleProtocol(rule.protocol)}</Badge>,
+      },
+      {
+        key: "total",
+        width: 110,
+        head: "累计",
+        cellClassName: "overflow-hidden",
+        cell: (rule: any) => {
+          const t = totalTrafficByRule.get(rule.id);
+          const total = t ? Number(t.bytesIn || 0) + Number(t.bytesOut || 0) : null;
+          const isForwardChainRule = getRuleCategory(rule, forwardGroupById) === "chain";
+          return (
+            <div className="flex min-w-0 flex-col gap-0.5">
+              <span className="flex items-center gap-1.5 whitespace-nowrap text-xs tabular-nums">
+                <span className="font-medium text-foreground" title={t ? `累计入向 ${formatBytes(t.bytesIn)} / 出向 ${formatBytes(t.bytesOut)}` : "还没有流量"}>
+                  {total === null ? "—" : formatBytes(total)}
+                </span>
+                <button
+                  type="button"
+                  className="text-[11px] text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-foreground"
+                  onClick={() => setTrafficDetailRule({ id: rule.id, name: rule.name, isForwardChain: isForwardChainRule, probeMethod: ruleLatencyProbeMethodForRule(rule) })}
+                >
+                  详细
+                </button>
+              </span>
+              <div className="fx-table-daily">{renderTableRuleDailyTraffic(rule)}</div>
+            </div>
+          );
+        },
+      },
+    ] satisfies RuleTableColumn[] : [
+      {
+        key: "traffic",
+        width: 110,
+        head: "流量",
+        cellClassName: "overflow-hidden",
+        cell: (rule: any) => (
+          <div className="flex min-w-0 flex-col gap-0.5">
+            {renderTableRuleTotalTraffic(rule)}
+            {renderTableRuleDailyTraffic(rule)}
+          </div>
+        ),
+      },
+    ] satisfies RuleTableColumn[]),
     { key: "latency", width: 84, head: "延迟", cellClassName: "overflow-hidden", cell: (rule) => renderTableRuleLatency(rule) },
-    {
+    ...(compactLayout ? [] : [{
       key: "enabled",
       width: 52,
       head: "开关",
       headClassName: "text-center",
-      cell: (rule) => <div className="flex justify-center">{renderRuleEnabledSwitch(rule)}</div>,
+      cell: (rule: any) => <div className="flex justify-center">{renderRuleEnabledSwitch(rule)}</div>,
+    } satisfies RuleTableColumn]),
+    {
+      key: "actions",
+      width: compactLayout ? 160 : 140,
+      head: "操作",
+      headClassName: "text-right",
+      cellClassName: "text-right",
+      cell: (rule) => compactLayout ? (
+        <div className="flex items-center justify-end gap-2">
+          {renderRuleEnabledSwitch(rule)}
+          {renderRuleActions(rule, false, true)}
+        </div>
+      ) : renderRuleActions(rule),
     },
-    { key: "actions", width: 140, head: "操作", headClassName: "text-right", cellClassName: "text-right", cell: (rule) => renderRuleActions(rule) },
   ];
   const ruleTableColumnCount = ruleTableColumns.length + (ruleSortingEnabled ? 1 : 0);
   const renderRuleTableRow = (rule: any, sortable?: RuleSortableRenderState) => {
@@ -7616,7 +7679,7 @@ function RulesContent() {
   );
 
   return (
-    <div className="space-y-6" data-fx-std-page={compactLayout ? undefined : ""}>
+    <div className="space-y-6" data-fx-std-page={compactLayout ? undefined : ""} data-fx-compact-page={compactLayout ? "" : undefined}>
       {/*
         data-fx-std-page：标准布局下这一页整页按原来的标准画（compact.css 让出去）；精简下不带，
         分类条和搜索那一行并排、筛选下拉收进一个按钮、「新建规则」上到页头右边。
@@ -7655,8 +7718,11 @@ function RulesContent() {
             value={displayMode}
             onChange={handleDisplayModeChange}
             items={[
-              { value: "compact", label: "精简卡片", icon: Rows3 },
-              { value: "standard", label: "标准卡片", icon: LayoutGrid },
+              /* 精简下桌面只有表和 3D 图两种（卡片那两档是标准布局的） */
+              ...(compactLayout ? [] : [
+                { value: "compact" as const, label: "精简卡片", icon: Rows3 },
+                { value: "standard" as const, label: "标准卡片", icon: LayoutGrid },
+              ]),
               { value: "table", label: "列表", icon: List },
               { value: "globe", label: "3D 流量转发图", icon: Globe, onHover: prefetchReactGlobe },
             ]}
