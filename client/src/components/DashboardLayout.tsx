@@ -38,11 +38,11 @@ import {
   Network,
   KeyRound,
   UserRound,
-  Sun,
-  Moon,
   Rocket,
   Route,
   Rss,
+  Sun,
+  Moon,
   Zap,
   CreditCard,
   WalletCards,
@@ -1362,13 +1362,11 @@ function DashboardLayoutContent({
     ? [...visibleProfileMenuItems, ...visibleAdminMenuItems]
     : [...(canShowNetworkTest ? [lookingGlassMenuItem] : []), ...visibleProfileMenuItems];
   /*
-    精简布局：个人资料、系统设置在右上角账户菜单里已经各有一项，侧栏不再重复放（命令面板里照旧能搜到）。
+    个人资料、系统设置在右上角账户菜单里已经各有一项，侧栏不再重复放（命令面板里照旧能搜到）。
     管理与账户那一组少两行，普通用户的「工具与账户」常常就只剩网络测试 / 邀请返利。
   */
   const SIDEBAR_DEDUPED_PATHS = ["/profile", "/settings"];
-  const sidebarManagementItems = compactLayout
-    ? managementMenuItems.filter((item) => !SIDEBAR_DEDUPED_PATHS.includes(item.path))
-    : managementMenuItems;
+  const sidebarManagementItems = managementMenuItems.filter((item) => !SIDEBAR_DEDUPED_PATHS.includes(item.path));
   const commandItems: WorkspaceDestination[] = [
     ...primaryMenuItems.map(item => ({ ...item, group: "工作空间" })),
     ...managementMenuItems.map(item => ({ ...item, group: isAdmin ? "管理与账户" : "工具与账户" })),
@@ -1600,6 +1598,7 @@ function DashboardLayoutContent({
               <kbd className="workspace-appbar-kbd">⌘K</kbd>
             </button>
   );
+  /* 顶栏的深浅色按钮：用户要顶栏 UI 不变（2026-10-21），不并进调色盘菜单 */
   const appbarThemeButton = (
             <button
               type="button"
@@ -1711,9 +1710,8 @@ function DashboardLayoutContent({
           )}
           <div className="workspace-appbar-actions">
             {appbarSearchButton}
-            {/* 精简布局：深浅色切换并进调色盘菜单，顶栏少一枚图标 */}
-            {compactLayout ? null : appbarThemeButton}
-            <UiThemeQuickSwitch darkToggle={compactLayout ? { resolved: resolvedTheme, onToggle: toggleTheme } : undefined} />
+            {appbarThemeButton}
+            <UiThemeQuickSwitch />
             {!isMobile ? <span className="fx-pearl-topbar-user" title={accountDisplayName}>{accountDisplayName}</span> : null}
           </div>
         </div>
@@ -1752,9 +1750,8 @@ function DashboardLayoutContent({
           </button>
           <div className="workspace-appbar-actions">
             {appbarSearchButton}
-            {/* 精简布局：深浅色切换并进调色盘菜单，顶栏少一枚图标 */}
-            {compactLayout ? null : appbarThemeButton}
-            <UiThemeQuickSwitch darkToggle={compactLayout ? { resolved: resolvedTheme, onToggle: toggleTheme } : undefined} />
+            {appbarThemeButton}
+            <UiThemeQuickSwitch />
           <DropdownMenu open={accountMenuOpen} onOpenChange={setAccountMenuOpen} modal={false}>
             <DropdownMenuTrigger asChild>
               <button

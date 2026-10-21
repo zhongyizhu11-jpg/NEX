@@ -7,6 +7,7 @@ import WorkspaceHeader from "@/components/WorkspaceHeader";
 import { InlineLinkCreator } from "@/features/links/InlineLinkCreator";
 import { describeLinkKind, linkKindForRouteMode, linkKindRequiresAdmin } from "@/features/links/inlineLinkDraft";
 import FilterToolbar from "@/components/FilterToolbar";
+import { SearchToggle } from "@/components/ListControls";
 import { useAuth } from "@/_core/hooks/useAuth";
 import SectionTransition from "@/components/SectionTransition";
 import { forwardGroupModeOf } from "@shared/forwardTypes";
@@ -2013,10 +2014,12 @@ function RulesContent() {
   const { user } = useAuth();
   // 精简布局（compact.css 收的是组件打了 data-fx-help 的说明；规则框里这几行是条件渲染，由这个开关管）。
   const compactLayout = useCompactLayout();
-  const hideRuleFormHints = compactLayout;
+  const hideRuleFormHints = true;
   const [, setLocation] = useLocation();
   const search = useSearch();
   const isMobile = useIsMobile();
+  // 手机 + 精简：搜索行收成分类条右边一枚图标（ListControls.tsx），点开才占一行
+  const [phoneSearchOpen, setPhoneSearchOpen] = useState(false);
   const utils = trpc.useUtils();
   const faultBundle = useFaultBundleExport();
   const [ruleProbeCacheRevision, setRuleProbeCacheRevision] = useState(0);
@@ -7165,7 +7168,7 @@ function RulesContent() {
     cellClassName?: string;
     cell: (rule: any) => ReactNode;
   };
-  const ruleTableColumns: RuleTableColumn[] = compactLayout ? [
+  const ruleTableColumns: RuleTableColumn[] = [
     {
       key: "rule",
       width: 200,
@@ -7248,107 +7251,6 @@ function RulesContent() {
       cell: (rule) => <div className="flex justify-center">{renderRuleEnabledSwitch(rule)}</div>,
     },
     { key: "actions", width: 140, head: "操作", headClassName: "text-right", cellClassName: "text-right", cell: (rule) => renderRuleActions(rule) },
-  ] : [
-    /* 标准布局：原来那 13～14 列，一列一件事 */
-    {
-      key: "status",
-      width: 56,
-      head: "状态",
-      headClassName: "text-center",
-      cell: (rule) => (
-        <div className="flex items-center justify-center">
-          {isRuleSupported(rule) ? renderStatusDot(rule) : <StatusDot health="down" size="large" label={unsupportedProtocolTitle} />}
-        </div>
-      ),
-    },
-    {
-      key: "rule",
-      width: 110,
-      head: "规则",
-      cell: (rule) => {
-        const supported = isRuleSupported(rule);
-        const protocolKey = getRuleProtocolKey(rule);
-        return (
-          <>
-            <span className="block truncate font-medium" title={rule.name}>{rule.name}</span>
-            {!supported && (
-              <span className="mt-1 block text-[11px] text-destructive">
-                {protocolUnsupportedLabel(protocolKey)} 当前不支持
-              </span>
-            )}
-            {(rule.protocolBlockReason || rule.resourceAccessAllowed === false) && (
-              <span className="mt-1 block text-[11px] leading-4 text-destructive">
-                {rule.protocolBlockReason || revokedResourceTitle}
-              </span>
-            )}
-            {renderAdminManagedBadge(rule) ? <div className="mt-1">{renderAdminManagedBadge(rule)}</div> : null}
-            <div className="fx-table-row-limits"><RuleLimitSummary rule={rule} /></div>
-            {(() => {
-              const stop = !rule.protocolBlockReason && rule.resourceAccessAllowed !== false ? resolveForwardRuleStopReason(rule) : null;
-              return stop?.autoResume ? (
-                <span className="mt-1 block text-[11px] leading-4 text-muted-foreground">{stop.detail}</span>
-              ) : null;
-            })()}
-            {entryBridgeNotes(rule).map((note) => (
-              <span key={note} className="mt-1 block text-[11px] leading-4 text-muted-foreground">{note}</span>
-            ))}
-          </>
-        );
-      },
-    },
-    ...(user?.role === "admin" ? [{
-      key: "owner",
-      width: 110,
-      head: "用户",
-      cell: (rule: any) => (
-        <span className="block truncate text-sm text-muted-foreground" title={getRuleOwnerName(rule)}>
-          {getRuleOwnerName(rule)}
-        </span>
-      ),
-    } satisfies RuleTableColumn] : []),
-    {
-      key: "resource",
-      width: 100,
-      head: "所属资源",
-      cell: (rule) => (
-        <span className="block truncate text-sm text-muted-foreground" title={getRuleResourceName(rule)}>
-          {getRuleResourceName(rule)}
-        </span>
-      ),
-    },
-    { key: "entry", width: 285, head: "转发入口", cell: (rule) => renderTableTransferEntry(rule) },
-    { key: "exit", width: 190, head: "转发出口", cell: (rule) => renderTableTransferExit(rule) },
-    {
-      key: "route",
-      width: 170,
-      head: "链路",
-      cell: (rule) => (
-        /* 主备那一小块跟着线路走：它说的是「现在走哪条」，点进去是策略。 */
-        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-          {renderRouteBadge(rule, true)}
-          {renderFailoverLineBadge(rule)}
-        </div>
-      ),
-    },
-    {
-      key: "protocol",
-      width: 96,
-      head: "协议",
-      headClassName: "text-center",
-      cellClassName: "text-center",
-      cell: (rule) => <Badge variant="secondary" className="whitespace-nowrap text-[10px]">{formatForwardRuleProtocol(rule.protocol)}</Badge>,
-    },
-    { key: "total", width: 120, head: "累计", cell: (rule) => renderTableRuleTotalTraffic(rule) },
-    { key: "daily", width: 120, head: "24H", cellClassName: "overflow-hidden", cell: (rule) => renderTableRuleDailyTraffic(rule) },
-    { key: "latency", width: 120, head: "延迟", cellClassName: "overflow-hidden", cell: (rule) => renderTableRuleLatency(rule) },
-    {
-      key: "enabled",
-      width: 70,
-      head: "开关",
-      headClassName: "text-center",
-      cell: (rule) => <div className="flex justify-center">{renderRuleEnabledSwitch(rule)}</div>,
-    },
-    { key: "actions", width: 154, head: "操作", headClassName: "text-right", cellClassName: "text-right", cell: (rule) => renderRuleActions(rule) },
   ];
   const ruleTableColumnCount = ruleTableColumns.length + (ruleSortingEnabled ? 1 : 0);
   const renderRuleTableRow = (rule: any, sortable?: RuleSortableRenderState) => {
@@ -7670,7 +7572,13 @@ function RulesContent() {
     「新建规则」放在搜索栏那一行的最右边（用户要的位置）：搜索、筛选、新建都是「对这个列表
     做事」，并排一行；页头只剩视图切换和 ···。手机上按钮带字，不缩成一个「＋」。
   */
-  const mergeListControls = compactLayout && !isMobile;
+  // 精简：「新建规则」上到页头右边，桌面上分类条和筛选行并排（fx-list-controls）；手机上搜索行收成分类条右边一枚图标。
+  // 标准布局下这一页整页按原来的样子（页面根带 data-fx-std-page，compact.css 让出去）。
+  const mergeListControls = compactLayout;
+  const collapsePhoneSearch = compactLayout && isMobile;
+  // 手机 + 标准：页头右边那个「···」压在走势线上不好看（用户圈出来的），挪到下面状态点那一行的右边、不描边
+  const overflowInHeader = mergeListControls || !isMobile;
+  const showSearchRow = !collapsePhoneSearch || phoneSearchOpen || ruleSearchQuery.length > 0;
   const createRuleAction = (
         rulePermissionLoading ? (
           <Button disabled className="fx-row-action h-9 shrink-0 gap-1.5 rounded-full px-3.5">
@@ -7696,11 +7604,22 @@ function RulesContent() {
         )
   );
 
+  /* 页头右边的「···」（批量管理、重置数据）：桌面 / 精简在标题那一行右边，手机 + 标准挪到状态点那一行右边（不描边） */
+  const ruleOverflowMenu = (variant: "outline" | "ghost") => (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild><Button variant={variant} size="icon" aria-label="更多规则操作"><span aria-hidden="true">•••</span></Button></DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onSelect={openCopyDialog} disabled={!transferSourceRules.length && !canAdd}><ClipboardCopy className="h-4 w-4" />批量管理</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setResetTrafficTarget({ scope: "all" })} disabled={visibleRuleIdsForMetrics.length === 0 || resetTrafficMutation.isPending}><RotateCcw className="h-4 w-4" />重置数据</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+  );
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" data-fx-std-page={compactLayout ? undefined : ""}>
       {/*
-        精简布局（桌面）：分类条和搜索那一行并排，筛选下拉收进一个按钮；「新建规则」上到页头右边。
-        三行变两行。手机上照旧 —— 页头只有 393px，主操作放不下。
+        data-fx-std-page：标准布局下这一页整页按原来的标准画（compact.css 让出去）；精简下不带，
+        分类条和搜索那一行并排、筛选下拉收进一个按钮、「新建规则」上到页头右边。
       */}
       <WorkspaceHeader title="转发规则" status={
           /*
@@ -7722,7 +7641,7 @@ function RulesContent() {
             { key: "running", label: "运行", count: activeCount, tone: "healthy" },
             { key: "disabled", label: "停用", count: Math.max(0, filteredRuleTotal - activeCount), tone: "off" },
           ]} />
-      } aside={
+      } chipsAside={overflowInHeader ? undefined : ruleOverflowMenu("ghost")} aside={
           <HeaderSpark values={dailySpark.values} title="近 24 小时流量走势" caption={<>
             {"近 24H ↓ "}
             <AnimatedStatValue as="span" value={formatBytes(dailyTrafficTotals.bytesIn)} loading={dailyTrafficTotalsLoading} fallbackValue="0 B"
@@ -7742,13 +7661,7 @@ function RulesContent() {
               { value: "globe", label: "3D 流量转发图", icon: Globe, onHover: prefetchReactGlobe },
             ]}
           />
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild><Button variant="outline" size="icon" aria-label="更多规则操作"><span aria-hidden="true">•••</span></Button></DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onSelect={openCopyDialog} disabled={!transferSourceRules.length && !canAdd}><ClipboardCopy className="h-4 w-4" />批量管理</DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => setResetTrafficTarget({ scope: "all" })} disabled={visibleRuleIdsForMetrics.length === 0 || resetTrafficMutation.isPending}><RotateCcw className="h-4 w-4" />重置数据</DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          {overflowInHeader ? ruleOverflowMenu("outline") : null}
           {mergeListControls ? createRuleAction : null}
       </>} />
 
@@ -7767,6 +7680,7 @@ function RulesContent() {
             第二行：小搜索框、筛选、最右边「新建规则」。
             这里的 Tabs 只管分类条本身，不带 TabsContent：列表下面照旧按 ruleCategory 过滤。
           */}
+          <div className="fx-tabs-row">
           <Tabs value={ruleCategory} onValueChange={handleRuleCategoryChange}>
             <SlidingTabsList
               items={ruleCategoryTabItems}
@@ -7774,6 +7688,15 @@ function RulesContent() {
               ariaLabel="转发规则分类"
             />
           </Tabs>
+          {collapsePhoneSearch ? (
+            <SearchToggle
+              open={phoneSearchOpen}
+              active={ruleSearchQuery.length > 0 || hasActiveUserFilter || filterResource !== "all"}
+              onToggle={() => setPhoneSearchOpen((value) => !value)}
+            />
+          ) : null}
+          </div>
+          {showSearchRow ? (
           <FilterToolbar
             activeCount={Number(hasActiveUserFilter) + Number(filterResource !== "all")}
             collapsed={mergeListControls}
@@ -7909,8 +7832,7 @@ function RulesContent() {
               </SelectContent>
             </Select>
           </FilterToolbar>
-
-
+          ) : null}
         </div>
       )}
 
@@ -7995,7 +7917,7 @@ function RulesContent() {
               <Card className="hidden border-border bg-card sm:block">
                 <CardContent className="p-0">
                   <div className="overflow-x-auto">
-                    <Table className={cn("fx-rules-table table-fixed", compactLayout ? "min-w-[1000px]" : "min-w-[1610px]")}>
+                    <Table className="fx-rules-table table-fixed min-w-[1000px]">
                       <colgroup>
                         {ruleSortingEnabled && <col className="w-[44px]" />}
                         {ruleTableColumns.map((column) => <col key={column.key} style={{ width: column.width }} />)}

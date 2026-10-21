@@ -1,4 +1,4 @@
-import { ChangeEvent, ReactNode, useRef } from "react";
+import { ChangeEvent, ReactNode, useRef, useState } from "react";
 import { Image, Shuffle, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { UserAvatar } from "@/components/UserAvatar";
@@ -18,6 +18,8 @@ type AvatarPickerProps = {
   controlsClassName?: string;
   gridClassName?: string;
   previewClassName?: string;
+  /** 精简布局：十几个候选头像平时收起来，点「挑一个」才摊开（个人资料页那一张卡原来一半是头像格子） */
+  collapsible?: boolean;
   onError?: (message: string) => void;
 };
 
@@ -34,9 +36,12 @@ export function AvatarPicker({
   controlsClassName,
   gridClassName,
   previewClassName,
+  collapsible = false,
   onError,
 }: AvatarPickerProps) {
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const [galleryOpen, setGalleryOpen] = useState(false);
+  const showGallery = !collapsible || galleryOpen;
 
   const handleUpload = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -71,6 +76,12 @@ export function AvatarPicker({
             <Shuffle className="h-4 w-4" />
             {randomLoading ? "随机中..." : "随机"}
           </Button>
+          {collapsible ? (
+            <Button type="button" variant="outline" size="sm" className="gap-2" aria-expanded={galleryOpen} onClick={() => setGalleryOpen((value) => !value)} disabled={disabled}>
+              <Image className="h-4 w-4" />
+              {galleryOpen ? "收起" : "挑一个"}
+            </Button>
+          ) : null}
           {actions}
         </div>
       </div>
@@ -82,6 +93,7 @@ export function AvatarPicker({
         onChange={handleUpload}
         disabled={disabled}
       />
+      {showGallery ? (
       <div className={cn("grid grid-cols-6 gap-2 sm:grid-cols-8", gridClassName)}>
         {DEFAULT_AVATAR_SEEDS.map((seed) => {
           const preset = avataaarsValue(seed);
@@ -112,6 +124,7 @@ export function AvatarPicker({
           <Image className="h-4 w-4" />
         </button>
       </div>
+      ) : null}
     </div>
   );
 }

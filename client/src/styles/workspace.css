@@ -109,9 +109,15 @@
 .fx-chip-scroller { display: flex; flex-wrap: nowrap; gap: 6px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; overscroll-behavior-x: contain; }
 .fx-chip-scroller::-webkit-scrollbar { display: none; }
 @media (min-width: 640px) { .fx-chip-scroller { flex-wrap: wrap; gap: 8px; overflow: visible; } }
+/* 弹窗里的那一排（用户授权的资源类型）手机上也换行：横滑被弹窗边切掉，看不出还有更多 */
+.fx-chip-scroller.fx-chip-wrap { flex-wrap: wrap; gap: 6px 8px; overflow: visible; }
 /* 触屏上全局给按钮 44px，这一排按 34px 画（分类条同高）；在滚动条里不能用 ::after 撑，会让它竖着也能滚 */
 @media (pointer: coarse) { .fx-chip-scroller > button { min-height: 34px; } }
 .workspace-tab-scroll { position: absolute; top: 3px; bottom: 3px; z-index: 1; width: 32px; display: flex; align-items: center; justify-content: center; border: 0; border-radius: calc(var(--fx-radius-control) - 2px); background: var(--fx-raised); color: var(--fx-text); box-shadow: var(--fx-elevation-popover); }
+/* 分类条那一行：手机 + 精简下右边多一枚搜索图标（ListControls.tsx 的 SearchToggle），分类条自己收窄 */
+.fx-tabs-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.fx-tabs-row > :first-child { flex: 1 1 auto; min-width: 0; }
+.fx-search-toggle-dot { position: absolute; top: 7px; right: 7px; width: 6px; height: 6px; border-radius: 999px; background: var(--fx-primary-fill, var(--primary)); }
 .workspace-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
 /* 搜索框不铺满：桌面上最多 340px（用户要它小），新建按钮靠最右 */
 .workspace-filter-search { min-width: 0; flex: 1 1 240px; max-width: 340px; }
@@ -1037,6 +1043,10 @@ html[data-personalization-background="image"] .auth-divider-label, html[data-per
 .workspace-header-aside { display: flex; flex: none; flex-direction: column; align-items: flex-end; gap: 1px; padding-top: 2px; font-size: 11.5px; line-height: 15px; color: var(--fx-text-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .workspace-header-aside .fx-sparkline { width: 96px; height: 22px; color: var(--fx-text-muted); }
 .workspace-header-chips { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 4px 14px; font-size: 12.5px; line-height: 18px; color: var(--fx-text-secondary); }
+/* 状态点那一行最右边的「···」（手机）：不描边、灰色、28px，像一个小点阵而不是一枚按钮；命中区靠 ::after 撑到 44 */
+.workspace-header-chips-aside { margin-left: auto; display: inline-flex; align-items: center; }
+.workspace-header-chips-aside [data-slot="button"] { position: relative; height: 28px; width: 28px; min-height: 28px; padding: 0; color: var(--fx-text-muted); box-shadow: none; }
+.workspace-header-chips-aside [data-slot="button"]::after { content: ""; position: absolute; inset: -8px; }
 .fx-head-chip { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .fx-head-chip > i { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--fx-standby); box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--fx-standby) 18%, transparent); }
 .fx-head-chip[data-tone="healthy"] > i { background: var(--fx-healthy); box-shadow: 0 0 0 2.5px var(--fx-healthy-soft); }

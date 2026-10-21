@@ -1,3 +1,4 @@
+import { useCompactLayout } from "@/hooks/useCompactLayout";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
 import PearlHeaderBadges from "@/components/PearlHeaderBadges";
 import { useUiTheme } from "@/hooks/useUiTheme";
@@ -55,6 +56,7 @@ function getExpiryStatus(value: string | Date | null | undefined) {
 }
 
 function DashboardContent() {
+  const compactLayout = useCompactLayout();
   const { user } = useAuth();
   // 「珍珠」主题照上游仪表盘：标题右边日期铭牌 + 系统在线，四张统计卡排在地图前面。别的主题顺序和节点都不变。
   const pearl = useUiTheme() === "pearl";
@@ -230,7 +232,8 @@ function DashboardContent() {
   );
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" data-fx-std-page={compactLayout ? undefined : ""}>
+      {/* data-fx-std-page：标准布局下总览整页按原来的标准画（compact.css 让出去）；精简下不带，按紧凑的方式画 */}
       {/*
         标题下面那一行是此刻的数（「4 台主机 · 19 条线路 · 19 条转发」），不是一句说明书。
         「查看运行状态、资源使用和流量趋势」是在解释这一页叫总览 —— 它叫总览就够了。

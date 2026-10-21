@@ -1,4 +1,4 @@
-import { ChevronRight, LogOut, Moon, Search, Sun } from "lucide-react";
+import { ChevronRight, LogOut } from "lucide-react";
 
 import DashboardLayout from "@/components/DashboardLayout";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
@@ -8,6 +8,7 @@ import {
   ListSection,
 } from "@/components/ios/GroupedList";
 import { useMobileNav } from "@/components/ios/navigationContext";
+import { settingsGroups, settingsTabItems } from "./settingsSections";
 
 /**
  * 「更多」页。
@@ -54,8 +55,14 @@ function MoreContent() {
     按 group 分块，保持 DashboardLayout 给的顺序 —— 侧边栏什么顺序，这里就
     什么顺序，不要在这里重新排一遍。
   */
+  /*
+    系统设置不再是一行入口，它的八个分区（通用 / 通知 / 维护）直接列在下面（2026-10-21 用户要的）：
+    手机上少点一层；「偏好」那一组（搜索、深色外观）去掉 —— 顶栏上就有搜索和调色盘。
+  */
+  const canOpenSettings = nav.overflow.some((item) => item.path === "/settings");
   const groups: { name: string; items: typeof nav.overflow }[] = [];
   for (const item of nav.overflow) {
+    if (item.path === "/settings") continue;
     const name = item.group || "功能";
     const last = groups[groups.length - 1];
     if (last && last.name === name) last.items.push(item);
@@ -93,39 +100,23 @@ function MoreContent() {
         </ListSection>
       ))}
 
-      <ListSection header="偏好">
-        <ListRow
-          icon={<Search className="h-5 w-5" aria-hidden="true" />}
-          label="搜索功能"
-          onSelect={nav.onOpenSearch}
-        />
-        <ListRow
-          icon={
-            nav.theme.isDark ? (
-              <Moon className="h-5 w-5" aria-hidden="true" />
-            ) : (
-              <Sun className="h-5 w-5" aria-hidden="true" />
-            )
-          }
-          label="深色外观"
-          /*
-              开关行不画箭头（GroupedList 自己挡住了）：一行里不能既是入口
-              又是开关，否则用户不知道点哪儿。
-            */
-          trailing={
-            <button
-              type="button"
-              role="switch"
-              aria-checked={nav.theme.isDark}
-              aria-label="深色外观"
-              onClick={nav.theme.toggle}
-              className="fx-ios-switch"
-            >
-              <span className="fx-ios-switch-knob" />
-            </button>
-          }
-        />
-      </ListSection>
+      {canOpenSettings ? settingsGroups.map((group) => (
+        <ListSection key={`settings-${group.key}`} header={group.header}>
+          {group.items.map((value) => {
+            const item = settingsTabItems.find((tab) => tab.value === value);
+            if (!item) return null;
+            const Icon = item.icon;
+            return (
+              <ListRow
+                key={value}
+                icon={<Icon className="h-5 w-5" aria-hidden="true" />}
+                label={item.label}
+                onSelect={() => nav.navigate({ path: `/settings?tab=${value}`, label: item.label, icon: Icon })}
+              />
+            );
+          })}
+        </ListSection>
+      )) : null}
 
       <ListSection>
         <ListRow

@@ -5,6 +5,7 @@ import { FormField } from "@/components/ui/form-field";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useUrlTab } from "@/hooks/useUrlTab";
 import { formatBytes } from "@shared/formatBytes";
+import { settingsGroups, settingsTabDetail, settingsTabItems, settingsTabs, type SettingsTab } from "./settingsSections";
 import DashboardLayout from "@/components/DashboardLayout";
 import { EmailSettingsContent } from "./EmailSettings";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -35,7 +36,6 @@ import { EntityActions } from "@/components/entity/EntityActions";
 import { segmentedControlClassName, segmentedOptionClassName } from "@/components/ui/segmented";
 import { useIsMobile } from "@/hooks/useMobile";
 import { LayoutDefaultCard } from "@/components/settings/LayoutDefaultCard";
-import { useCompactLayout } from "@/hooks/useCompactLayout";
 import DataSectionLoading from "@/components/DataSectionLoading";
 import { pollingInterval } from "@/lib/polling";
 import { mobileAuth } from "@/lib/mobileAuth";
@@ -487,62 +487,7 @@ function getMigrationCodeCountdown(code: { expiresAt: number } | null, now: numb
   return Math.max(0, Math.ceil((code.expiresAt - now) / 1000));
 }
 
-const settingsTabs = ["system", "telegram", "email", "personalization", "backup", "logs", "advanced", "webhook"] as const;
-type SettingsTab = typeof settingsTabs[number];
-/**
- * 设置的分组。
- *
- * 六个 tab 原来并排在一条横向标签条上 —— 标签条的容量是固定的，加到第七项
- * 就开始滚动，加到第十项就没人找得到第十项。而设置是**只会越来越多**的那种
- * 页面。
- *
- * 分组列表没有这个上限：加一项就是多一行。而且它天然说得清层级 ——
- * 「Telegram 和邮箱都是通知」这件事，横向标签条表达不了，分组一眼看得出来。
- */
-const settingsGroups = [
-  {
-    key: "general",
-    header: "通用",
-    items: ["system", "personalization", "advanced"],
-  },
-  {
-    key: "notify",
-    header: "通知",
-    footer: "Telegram 和邮箱都用来发告警、到期提醒和流量提醒。",
-    items: ["telegram", "email", "webhook"],
-  },
-  {
-    key: "maintenance",
-    header: "维护",
-    items: ["backup", "logs"],
-  },
-] as const;
-
-/*
-  每一项管什么。现在宽屏右栏顶上也显示这一句，所以照实际内容写：原来「系统配置」写着
-  「数据库」（数据库切换在备份恢复里）、「邮箱设置」写着「邮件模板」（没有模板这回事）。
-*/
-const settingsTabDetail: Record<string, string> = {
-  system: "面板地址、HTTPS、注册登录、DDNS 与版本升级",
-  personalization: "站点名称、Logo、配色、背景与首页",
-  telegram: "机器人推送与 AI 助手",
-  email: "SMTP 发信、注册验证与提醒邮件",
-  backup: "迁移、数据库切换、导出与导入",
-  logs: "运行日志与导出",
-  advanced: "流量用尽时的处理、维护模式、API 令牌与 MCP",
-  webhook: "把告警推到 Discord、Slack 或任意地址",
-};
-
-const settingsTabItems = [
-  { value: "system", label: "系统配置", icon: Settings2 },
-  { value: "telegram", label: "Telegram", icon: Send },
-  { value: "email", label: "邮箱设置", icon: Mail },
-  { value: "personalization", label: "个性化配置", icon: Palette },
-  { value: "backup", label: "备份恢复", icon: Database },
-  { value: "logs", label: "面板日志", icon: FileText },
-  { value: "advanced", label: "进阶", icon: SlidersHorizontal },
-  { value: "webhook", label: "Webhook", icon: Webhook },
-] as const;
+/* 分区定义（settingsTabs / settingsGroups / settingsTabItems / settingsTabDetail）在 ./settingsSections.ts，手机「更多」页也用同一份 */
 type DatabaseType = "sqlite" | "mysql" | "postgresql";
 type BackupSummaryCache = {
   userCount: number;
@@ -707,7 +652,8 @@ function SettingsContent() {
 
     桌面上这个状态不参与渲染 —— 那边永远是标签条，一次点到位。
   */
-  const [mobileSectionOpen, setMobileSectionOpen] = useState(false);
+  // 从「更多」页带着 ?tab= 进来（More.tsx）就直接进那个分区，不先停在索引
+  const [mobileSectionOpen, setMobileSectionOpen] = useState(() => typeof window !== "undefined" && new URLSearchParams(window.location.search).has("tab"));
   const [activeTab, setActiveTab] = useUrlTab<SettingsTab>({
     values: settingsTabs,
     defaultValue: "system",
@@ -4939,7 +4885,6 @@ function PersonalizationSettingsSection() {
 }
 
 function SystemInfoSection() {
-  const compactLayout = useCompactLayout();
   const utils = trpc.useUtils();
   const { data: settings, isLoading } = trpc.system.getSettings.useQuery();
   const settingsData = settings;
@@ -6589,8 +6534,7 @@ function SystemInfoSection() {
         </CardContent>
       </Card>
 
-      {/* 精简布局：登录会话、左侧导航栏两张单行卡并成一张；标准布局照旧两张卡 */}
-      {compactLayout ? (
+      {/* 登录会话、左侧导航栏两张单行卡并成一张（标准布局重构工作包五） */}
       <Card className="border-border bg-card">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
@@ -6631,60 +6575,6 @@ function SystemInfoSection() {
           </div>
         </CardContent>
       </Card>
-      ) : (
-      <div className="grid gap-4 @[58rem]:grid-cols-2">
-        <Card className="border-border bg-card">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <ShieldCheck className="h-4 w-4 text-primary" />
-              登录会话配置
-            </CardTitle>
-            <CardDescription>
-              控制同一账户在多台设备上的后台访问策略。
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <SettingList>
-              <SettingRow
-                asLabel
-                label="允许多设备在线"
-                description="关闭时后登录的设备会立即接管，正在使用的旧会话将退出；仅保留 Cookie 但未在使用的设备不会阻止新登录。"
-                control={<Checkbox aria-label="允许多设备在线" checked={allowMultiDeviceLogin} onCheckedChange={setAllowMultiDeviceLogin} />}
-              />
-            </SettingList>
-            <div className="flex justify-end">
-              <Button data-dock-save onClick={handleSaveSessionPolicy} disabled={isSavingSetting("sessionPolicy")}>
-                {isSavingSetting("sessionPolicy") && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                {isSavingSetting("sessionPolicy") ? "保存中..." : "保存登录会话配置"}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="border-border bg-card">
-          <CardHeader className="gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div className="space-y-1.5">
-              <CardTitle className="flex items-center gap-2 text-base">
-                <PanelLeft className="h-4 w-4 text-primary" />
-                左侧导航栏菜单展示设置
-              </CardTitle>
-              <CardDescription>
-                控制左侧导航栏常用入口是否展示。
-              </CardDescription>
-            </div>
-            <Button variant="outline" className="w-full gap-2 sm:w-auto" onClick={openSidebarMenuDialog}>
-              <Settings2 className="h-4 w-4" />
-              管理菜单开关
-            </Button>
-          </CardHeader>
-          <CardContent>
-            <SettingList>
-              <SettingRow label="常用入口" control={<EnabledCount enabled={sidebarMenuEnabledCount} total={SIDEBAR_MENU_KEYS.length} />} />
-            </SettingList>
-          </CardContent>
-        </Card>
-      </div>
-      )}
 
 
       <Dialog
@@ -7053,9 +6943,7 @@ function SystemInfoSection() {
               )}
             </div>
           )}
-          {compactLayout ? (
-          <>
-          {/* 项目地址、使用教程、联系方式原来是单独一张「开源与联系」卡，和这里的版本号是一回事，并过来 */}
+          {/* 项目地址、使用教程、联系方式原来是单独一张「开源与联系」卡，和这里的版本号是一回事，并过来（标准布局重构工作包五） */}
           <SettingList>
             {contactLinks.map((item) => {
               const Icon = item.icon;
@@ -7079,8 +6967,6 @@ function SystemInfoSection() {
             })}
             <SettingRow label="Android APP" control={<span className="font-mono text-secondary-type">v{settings?.androidAppVersion}</span>} />
           </SettingList>
-          </>
-          ) : null}
         </CardContent>
       </Card>
       <Card className="border-border bg-card">
@@ -7390,49 +7276,6 @@ function SystemInfoSection() {
         </DialogContent>
       </Dialog>
 
-      {compactLayout ? null : (
-      <Card className="border-border bg-card">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Settings2 className="h-4 w-4 text-primary" />
-            开源与联系
-          </CardTitle>
-          <CardDescription>
-            项目地址与联系渠道。
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {/*
-            两个链接原来各是一个描边小框（外面再套一个图标方块），下面两行版本号又是另一种
-            写法。都是「一项 → 一个值」，写成同一组行：链接那两行整行可点。
-          */}
-          <SettingList>
-            {contactLinks.map((item) => {
-              const Icon = item.icon;
-              return (
-                <a
-                  key={item.label}
-                  href={item.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="fx-list-row group flex min-w-0 items-center gap-3 py-3 first:pt-0 last:pb-0"
-                >
-                  <Icon className={`h-4 w-4 shrink-0 ${item.iconClassName}`} aria-hidden="true" />
-                  <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                    <span className="truncate text-secondary-type font-medium text-foreground group-hover:underline">{item.label}</span>
-                    <span className="truncate font-mono text-meta text-muted-foreground">{item.url}</span>
-                    {item.description && <span className="text-meta text-muted-foreground">{item.description}</span>}
-                  </span>
-                  <ExternalLink className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-                </a>
-              );
-            })}
-            <SettingRow label="当前版本" control={<span className="font-mono text-secondary-type">v{settings?.version}</span>} />
-            <SettingRow label="Android APP" control={<span className="font-mono text-secondary-type">v{settings?.androidAppVersion}</span>} />
-          </SettingList>
-        </CardContent>
-      </Card>
-      )}
     </div>
   );
 }

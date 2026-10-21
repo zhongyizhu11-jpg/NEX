@@ -108,7 +108,6 @@ import {
   MoreHorizontal,
 } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { useCompactLayout } from "@/hooks/useCompactLayout";
 import QRCode from "qrcode";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -472,7 +471,6 @@ export default function ClientSubscriptionsPage() {
     },
     onError: (error) => toast.error(error.message),
   });
-  const compactLayout = useCompactLayout();
   const rotateTokenConfirmed = async (id: number) => {
     const ok = await confirm({
       title: "重置这个订阅地址？",
@@ -1133,8 +1131,7 @@ export default function ClientSubscriptionsPage() {
                         />
                         {/* 光写"重置"配个刷新图标，在订阅面板里只会被读成"重置流量"。
                             补上宾语并换成钥匙图标：这个按钮的代价是所有已导入的客户端都要重填。 */}
-                        {/* 精简布局：两个按钮收进一个「···」菜单，一行只剩名字、开关和菜单。 */}
-                        {compactLayout ? (
+                        {/* 两个按钮收进一个「···」菜单，一行只剩名字、开关和菜单。 */}
                           <DropdownMenu modal={false}>
                             <DropdownMenuTrigger asChild>
                               <Button size="sm" variant="ghost" className="h-8 w-8 p-0" aria-label={`${token.name} 的更多操作`}>
@@ -1150,27 +1147,6 @@ export default function ClientSubscriptionsPage() {
                               </DropdownMenuItem>
                             </DropdownMenuContent>
                           </DropdownMenu>
-                        ) : (
-                          <>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              title="重置订阅地址（不会重置流量）"
-                              onClick={() => { void rotateTokenConfirmed(token.id); }}
-                            >
-                              <KeyRound className="mr-1 h-4 w-4" />
-                              重置地址
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              title="删除订阅链接"
-                              onClick={() => { void deleteTokenConfirmed(token.id); }}
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                          </>
-                        )}
                       </div>
                     </div>
 

@@ -15,10 +15,15 @@ import { useIsMobile } from "@/hooks/useMobile";
  * 「我在哪」由底部标签栏的选中格说，页面标题就退回一行 —— 每一页顶上省下 60px，
  * 一屏多看一条规则。搜索也不再挂在标题旁边，它在顶栏上。
  */
-export default function WorkspaceHeader({ title, description, status, actions, chips, aside, level = 1 }: {
+export default function WorkspaceHeader({ title, description, status, actions, chips, chipsAside, aside, level = 1 }: {
   title: ReactNode; description?: ReactNode; status?: ReactNode; actions?: ReactNode;
   /** 标题下面一行状态点（HeaderStatusChips）：「● 运行 5 · ● 停用 0」。 */
   chips?: ReactNode;
+  /**
+   * 状态点那一行的最右边：手机上页头的「···」放这儿（规则 / 主机页）。放标题那一行右边它是一个白方块，
+   * 正压在走势线上（2026-10-21 用户圈出来）；挪到下面一行、去掉描边，就只是一个小灰点阵。
+   */
+  chipsAside?: ReactNode;
   /** 标题那一行的右边：一条小走势 + 一行数（HeaderSpark）。 */
   aside?: ReactNode;
   level?: 1 | 2;
@@ -53,13 +58,18 @@ export default function WorkspaceHeader({ title, description, status, actions, c
   */
   return (
     <header className="workspace-header" data-level={level}>
-      {chips || aside ? (
+      {chips || aside || chipsAside ? (
         <div className="workspace-header-main">
           <div className="workspace-header-row">
             {titleBlock}
             {aside ? <div className="workspace-header-aside">{aside}</div> : null}
           </div>
-          {chips ? <div className="workspace-header-chips">{chips}</div> : null}
+          {chips || chipsAside ? (
+            <div className="workspace-header-chips">
+              {chips}
+              {chipsAside ? <span className="workspace-header-chips-aside">{chipsAside}</span> : null}
+            </div>
+          ) : null}
         </div>
       ) : titleBlock}
       {actions && <div className="workspace-header-actions">{actions}</div>}

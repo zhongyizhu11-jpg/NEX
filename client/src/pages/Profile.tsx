@@ -435,6 +435,7 @@ function ProfileContent() {
                 onError={(message) => toast.error(message)}
                 controlsClassName="items-center"
                 previewClassName="h-16 w-16"
+                collapsible
                 gridClassName="grid-cols-5 sm:grid-cols-6 2xl:grid-cols-8"
                 actions={(
                   <Button
@@ -474,7 +475,7 @@ function ProfileContent() {
               */}
               <SettingRow
                 label="布局"
-                description={`精简：控件和卡片更矮、说明文字收起来、侧栏更窄，一屏多看一截；功能和数据一样。跟随站点现在是「${PERSONALIZATION_LAYOUTS.find((item) => item.id === layoutPreference.siteLayout)?.name ?? "标准"}」。`}
+                description={`只差总览、转发、主机、链路四页：精简下按紧凑的方式画，一屏多看几张；功能和数据一样。跟随站点现在是「${PERSONALIZATION_LAYOUTS.find((item) => item.id === layoutPreference.siteLayout)?.name ?? "标准"}」。`}
                 control={(
                   <div className={cn(segmentedControlClassName, "grid grid-cols-3 gap-1")} role="radiogroup" aria-label="布局">
                     {([{ id: null, name: "跟随站点" }, ...PERSONALIZATION_LAYOUTS] as Array<{ id: PersonalizationLayoutId | null; name: string }>).map((option) => {
@@ -779,8 +780,8 @@ function ProfileContent() {
         </Card>
       )}
 
-      {/* 精简布局：Google / Discord 两张绑定卡并排，和上面 Telegram / 2FA 一样；标准布局照旧各占一行 */}
-      <div className={layoutPreference.effective === "compact" ? "grid gap-4 xl:grid-cols-2" : "contents"}>
+      {/* Google / Discord 两张绑定卡并排，和上面 Telegram / 2FA 一样（标准布局重构工作包五） */}
+      <div className="grid gap-4 xl:grid-cols-2">
       <GoogleAccountSection />
 
       <DiscordAccountSection />
