@@ -18,6 +18,11 @@ test("转发页：精简 + 桌面强制表格（3D 图除外），视图按钮�
   assert.match(source, /data-fx-std-page=\{compactLayout \? undefined : ""\} data-fx-compact-page=\{compactLayout \? "" : undefined\}/);
 });
 
+test("转发页手机行：地址行右端固定是延迟，没测过写「未测试」（标准卡片照旧留空）", () => {
+  const source = read("Rules.tsx");
+  assert.match(source, /if \(!tag && compactLayout\) \{\s*tag = <span className="fx-rule-tag" data-tone="off"[^>]*>未测试<\/span>;/);
+});
+
 test("主机页：精简 + 桌面把两档卡片都换成表，地图照旧；视图按钮只剩表和地图", () => {
   const source = read("Hosts.tsx");
   assert.match(source, /compactLayout && !isBelowMd && \(preferredViewMode === "card" \|\| preferredViewMode === "compact-card"\)\s*\? "table"/);

@@ -7445,6 +7445,10 @@ function RulesContent() {
           tag = <span className="fx-rule-tag" data-tone={ms < 150 ? "ok" : ms < 300 ? "warn" : "down"} title="最近一次测得的延迟">{ms} ms</span>;
         }
       }
+      // 精简的列表行：这个位置固定是延迟（用户 2026-10-21 圈的），没测过也占着，写「未测试」
+      if (!tag && compactLayout) {
+        tag = <span className="fx-rule-tag" data-tone="off" title="还没测过延迟：··· › 诊断 测一次">未测试</span>;
+      }
     }
     const failoverAside = failover && failover.tone === "normal" ? (
       <button
