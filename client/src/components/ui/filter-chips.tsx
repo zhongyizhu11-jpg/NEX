@@ -23,15 +23,18 @@ export function FilterChips<T extends string>({
   onChange,
   ariaLabel,
   className,
+  wrap,
 }: {
   items: readonly FilterChipItem<T>[];
   value: T;
   onChange: (value: T) => void;
   ariaLabel?: string;
   className?: string;
+  /** 手机上也换行、不横滑：放在弹窗里时用（横滑的那一截被弹窗边切掉，看不出还有更多） */
+  wrap?: boolean;
 }) {
   return (
-    <div role="group" aria-label={ariaLabel} className={cn("fx-chip-scroller min-w-0 items-center", className)}>
+    <div role="group" aria-label={ariaLabel} className={cn("fx-chip-scroller min-w-0 items-center", wrap && "fx-chip-wrap", className)}>
       {items.map((item) => {
         const active = item.value === value;
         return (

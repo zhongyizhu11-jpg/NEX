@@ -109,6 +109,8 @@
 .fx-chip-scroller { display: flex; flex-wrap: nowrap; gap: 6px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; overscroll-behavior-x: contain; }
 .fx-chip-scroller::-webkit-scrollbar { display: none; }
 @media (min-width: 640px) { .fx-chip-scroller { flex-wrap: wrap; gap: 8px; overflow: visible; } }
+/* 弹窗里的那一排（用户授权的资源类型）手机上也换行：横滑被弹窗边切掉，看不出还有更多 */
+.fx-chip-scroller.fx-chip-wrap { flex-wrap: wrap; gap: 6px 8px; overflow: visible; }
 /* 触屏上全局给按钮 44px，这一排按 34px 画（分类条同高）；在滚动条里不能用 ::after 撑，会让它竖着也能滚 */
 @media (pointer: coarse) { .fx-chip-scroller > button { min-height: 34px; } }
 .workspace-tab-scroll { position: absolute; top: 3px; bottom: 3px; z-index: 1; width: 32px; display: flex; align-items: center; justify-content: center; border: 0; border-radius: calc(var(--fx-radius-control) - 2px); background: var(--fx-raised); color: var(--fx-text); box-shadow: var(--fx-elevation-popover); }

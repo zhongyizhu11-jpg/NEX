@@ -2608,7 +2608,7 @@ function HostsContent() {
         className="space-y-4"
       >
         {/* fx-list-controls：精简布局（桌面）下分类条和搜索那一行并排（compact.css） */}
-        <div className="fx-list-controls">
+        <div className="fx-list-controls space-y-4">
         <SlidingTabsList items={hostManageTabItems} activeValue={activeManageTab} ariaLabel="主机管理" minItemWidthRem={compactLayout ? 6.5 : 7.5} />
       {/* 搜索栏一行：小搜索框在左、「添加主机」在最右（用户要的位置）；分组药丸在下一行。 */}
       <div className="flex items-center gap-2">

@@ -2630,6 +2630,7 @@ function UsersContent() {
               {compactLayout ? (
               <FilterChips
                 ariaLabel="资源类型"
+                wrap
                 value={resourceGrantKind}
                 onChange={setResourceGrantKind}
                 items={[
@@ -2692,7 +2693,7 @@ function UsersContent() {
               </FormField>
               )}
 
-              <Separator />
+              {!compactLayout && <Separator />}
 
               {(!compactLayout || resourceGrantKind === "group") && (
               <FormField className="space-y-2">
@@ -2742,7 +2743,7 @@ function UsersContent() {
               </FormField>
               )}
 
-              <Separator />
+              {!compactLayout && <Separator />}
 
               {(!compactLayout || resourceGrantKind === "tunnel") && (
               <FormField className="space-y-2">
@@ -2796,7 +2797,7 @@ function UsersContent() {
               </FormField>
               )}
 
-              <Separator />
+              {!compactLayout && <Separator />}
 
               {(!compactLayout || resourceGrantKind === "node") && (
               <FormField className="space-y-2">
@@ -2859,7 +2860,7 @@ function UsersContent() {
               </FormField>
               )}
 
-              <Separator />
+              {!compactLayout && <Separator />}
 
               {(!compactLayout || resourceGrantKind === "lgHost") && (
               <FormField className="space-y-2">
@@ -2908,7 +2909,7 @@ function UsersContent() {
               </FormField>
               )}
 
-              <Separator />
+              {!compactLayout && <Separator />}
 
               {(!compactLayout || resourceGrantKind === "billingGroup") && (
               <FormField className="space-y-2">

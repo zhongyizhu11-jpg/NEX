@@ -4444,7 +4444,7 @@ function TunnelsContent() {
 
       <Tabs value={activeSection} onValueChange={(value) => setActiveSection(value as TunnelSection)} className="space-y-4">
         {/* fx-list-controls：精简布局（桌面）下分类条和搜索那一行并排，两行变一行（compact.css） */}
-        <div className="fx-list-controls">
+        <div className="fx-list-controls space-y-4">
         <SlidingTabsList items={TUNNEL_SECTION_ITEMS} activeValue={activeSection} ariaLabel="链路管理" minItemWidthRem={compactLayout ? 5 : 7.75} />
 
       {/* 搜索栏一行，和主机管理一样：小搜索框在左、「新建链路」在最右；条数只在搜索时出现。 */}
