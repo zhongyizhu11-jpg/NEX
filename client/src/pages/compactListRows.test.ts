@@ -37,11 +37,13 @@ test("主机页精简的表：七列、不冻结、1000 最小宽；行走 dense
   assert.match(source, /<TableHead className="whitespace-nowrap">系统 · Agent<\/TableHead>/);
 });
 
-test("规则表精简：普通单入口规则只写「:端口」，24H 为零不画", () => {
+test("规则表精简：入口地址写全不截（不再只写端口），列宽让给入口；24H 为零不画", () => {
   const source = read("Rules.tsx");
-  assert.match(source, /const portOnly = compactLayout\s*&& entryAddresses\.length === 1\s*&& !rule\.forwardGroupId/);
-  assert.match(source, /\{portOnly \? `:\$\{rule\.sourcePort\}` : entry\.text\}/);
+  assert.doesNotMatch(source, /portOnly/, "用户定的：规则信息要全，不只写端口");
+  assert.match(source, /key: "entry", width: compactLayout \? 200 : 150/);
   assert.match(source, /\{hasDaily \? <div className="fx-table-daily">/);
+  const css = fs.readFileSync(path.resolve(import.meta.dirname, "../styles/compact.css"), "utf8");
+  assert.match(css, /\.fx-table-addr:not\(\[data-fx-std-page\] \*\) \{[^}]*white-space: normal;[^}]*overflow-wrap: anywhere;/, "药丸放不下就换行，不截");
 });
 
 test("链路页：精简 + 桌面隧道和转发链 / 组的卡片都换成表；视图按钮里没有卡片那档", () => {

@@ -297,7 +297,8 @@ html:root .dialog-panel .fx-empty-hint:not([data-fx-std-page] *) { border: 0; pa
    主机行同理：名字 ··· / IP  状态 · 几条转发。 */
 
 /* 表：地址画成药丸（等宽字、浅底），表格行距收一档，24H 做小字 */
-html:root [data-fx-compact-page] .fx-table-addr:not([data-fx-std-page] *) { border: 1px solid var(--fx-stroke-weak); border-radius: 6px; padding: 1px 6px; }
+/* 地址药丸写全不截：放不下就在药丸里换行（规则信息要全，用户定的） */
+html:root [data-fx-compact-page] .fx-table-addr:not([data-fx-std-page] *) { border: 1px solid var(--fx-stroke-weak); border-radius: 6px; padding: 1px 6px; white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; line-height: 18px; }
 html:root [data-fx-compact-page] .fx-rules-table th:not([data-fx-std-page] *), html:root [data-fx-compact-page] .fx-rules-table td:not([data-fx-std-page] *) { padding: 8px 10px; }
 /* 表里的分组表头行（「端口转发 4」）收到 36px */
 html:root [data-fx-compact-page] .fx-rules-table .fx-rule-group-header:not([data-fx-std-page] *) { padding-top: 4px; padding-bottom: 4px; }
