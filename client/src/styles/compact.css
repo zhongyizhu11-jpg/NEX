@@ -298,7 +298,10 @@ html:root .dialog-panel .fx-empty-hint:not([data-fx-std-page] *) { border: 0; pa
 
 /* 表：地址画成药丸（等宽字、浅底），表格行距收一档，24H 做小字 */
 html:root [data-fx-compact-page] .fx-table-addr:not([data-fx-std-page] *) { border: 1px solid var(--fx-stroke-weak); border-radius: 6px; padding: 1px 6px; }
-html:root [data-fx-compact-page] .fx-rules-table th:not([data-fx-std-page] *), html:root [data-fx-compact-page] .fx-rules-table td:not([data-fx-std-page] *) { padding-top: 8px; padding-bottom: 8px; }
+html:root [data-fx-compact-page] .fx-rules-table th:not([data-fx-std-page] *), html:root [data-fx-compact-page] .fx-rules-table td:not([data-fx-std-page] *) { padding: 8px 10px; }
+/* 表里的分组表头行（「端口转发 4」）收到 36px */
+html:root [data-fx-compact-page] .fx-rules-table .fx-rule-group-header:not([data-fx-std-page] *) { padding-top: 4px; padding-bottom: 4px; }
+html:root [data-fx-compact-page] .fx-hosts-table-dense th:not([data-fx-std-page] *) { height: 36px; padding-top: 0; padding-bottom: 0; }
 html:root [data-fx-compact-page] .fx-table-daily:not([data-fx-std-page] *) { font-size: 11px; }
 html:root [data-fx-compact-page] .fx-table-daily > div:not([data-fx-std-page] *) { flex-direction: row; gap: 6px; }
 

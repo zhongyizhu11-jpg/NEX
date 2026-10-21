@@ -6501,6 +6501,17 @@ function RulesContent() {
   */
   const renderTableTransferEntry = (rule: any) => {
     const { entryAddresses, entryTitle } = getRuleTransferDisplay(rule);
+    /*
+      精简的表：普通规则只有一个入口、入口就是「所属资源」那台主机时，只写「:端口」——
+      主机名在旁边一列已经说了，整个 IP 再写一遍只会把药丸截成「203.0.113.10:10…」。
+      悬停、复制都还是完整地址。多入口、转发组、共享 TLS 入站照旧写全。
+    */
+    const portOnly = compactLayout
+      && entryAddresses.length === 1
+      && !rule.forwardGroupId
+      && !(Number(rule?.tlsInboundId || 0) > 0)
+      && Number(rule.sourcePort || 0) > 0
+      && entryAddresses[0].text.endsWith(`:${rule.sourcePort}`);
     // 表里的地址是等宽的裸文字（参考站的模型名那一列），不再套小框；能复制的悬停时才显出底。
     return (
       <div className="flex min-w-0 items-center gap-1 overflow-hidden font-mono text-[12px] leading-5">
@@ -6514,7 +6525,7 @@ function RulesContent() {
             title={entry.copyable ? `${entryTitle}${entryAddresses.length > 1 ? ` (${entry.label})` : ""}` : entry.text}
           >
             {entryAddresses.length > 1 && <span className="shrink-0 text-[10px] text-muted-foreground">{entry.label}</span>}
-            <code className="fx-table-addr min-w-0 truncate">{entry.text}</code>
+            <code className="fx-table-addr min-w-0 truncate">{portOnly ? `:${rule.sourcePort}` : entry.text}</code>
             {entry.copyable && <Copy className="h-3 w-3 shrink-0 text-muted-foreground opacity-60 group-hover:opacity-100" />}
           </button>
         ))}
@@ -7177,7 +7188,7 @@ function RulesContent() {
   const ruleTableColumns: RuleTableColumn[] = [
     {
       key: "rule",
-      width: compactLayout ? 190 : 200,
+      width: compactLayout ? 180 : 200,
       head: "规则",
       cell: (rule) => {
         const supported = isRuleSupported(rule);
@@ -7228,7 +7239,7 @@ function RulesContent() {
     },
     {
       key: "resource",
-      width: compactLayout ? 130 : 150,
+      width: compactLayout ? 120 : 150,
       head: "所属资源",
       cell: (rule) => (
         <div className="min-w-0">
@@ -7243,8 +7254,8 @@ function RulesContent() {
         </div>
       ),
     },
-    { key: "entry", width: compactLayout ? 170 : 150, head: "转发入口", cell: (rule) => renderTableTransferEntry(rule) },
-    { key: "exit", width: compactLayout ? 140 : 130, head: "转发出口", cell: (rule) => renderTableTransferExit(rule) },
+    { key: "entry", width: compactLayout ? 150 : 150, head: "转发入口", cell: (rule) => renderTableTransferEntry(rule) },
+    { key: "exit", width: compactLayout ? 150 : 130, head: "转发出口", cell: (rule) => renderTableTransferExit(rule) },
     /*
       精简的表（用户 2026-10-21 照着老版本表格样稿定的「条状」）：协议一列、累计一列（24H 做小字），
       开关并进「操作」列和「编辑 / ···」排一起。标准照旧：累计 / 24H 合成「流量」，开关自己一列。
@@ -7267,6 +7278,9 @@ function RulesContent() {
           const t = totalTrafficByRule.get(rule.id);
           const total = t ? Number(t.bytesIn || 0) + Number(t.bytesOut || 0) : null;
           const isForwardChainRule = getRuleCategory(rule, forwardGroupById) === "chain";
+          const daily = dailyTrafficByRule.get(rule.id);
+          // 24H 两个方向都是零就不画那一行小字（两个「—」只是噪音）
+          const hasDaily = !!daily && (Number(daily.bytesIn || 0) > 0 || Number(daily.bytesOut || 0) > 0);
           return (
             <div className="flex min-w-0 flex-col gap-0.5">
               <span className="flex items-center gap-1.5 whitespace-nowrap text-xs tabular-nums">
@@ -7281,7 +7295,7 @@ function RulesContent() {
                   详细
                 </button>
               </span>
-              <div className="fx-table-daily">{renderTableRuleDailyTraffic(rule)}</div>
+              {hasDaily ? <div className="fx-table-daily">{renderTableRuleDailyTraffic(rule)}</div> : null}
             </div>
           );
         },

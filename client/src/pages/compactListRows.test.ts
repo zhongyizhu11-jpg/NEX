@@ -30,6 +30,20 @@ test("主机页：精简 + 桌面把两档卡片都换成表，地图照旧；�
   assert.match(source, /data-fx-std-page=\{compactLayout \? undefined : ""\} data-fx-compact-page=\{compactLayout \? "" : undefined\}/);
 });
 
+test("主机页精简的表：七列、不冻结、1000 最小宽；行走 dense", () => {
+  const source = read("Hosts.tsx");
+  assert.match(source, /compactLayout \? "fx-hosts-table-dense min-w-\[1000px\]" : "min-w-\[1340px\]"/);
+  assert.match(source, /dense=\{compactLayout\}/);
+  assert.match(source, /<TableHead className="whitespace-nowrap">系统 · Agent<\/TableHead>/);
+});
+
+test("规则表精简：普通单入口规则只写「:端口」，24H 为零不画", () => {
+  const source = read("Rules.tsx");
+  assert.match(source, /const portOnly = compactLayout\s*&& entryAddresses\.length === 1\s*&& !rule\.forwardGroupId/);
+  assert.match(source, /\{portOnly \? `:\$\{rule\.sourcePort\}` : entry\.text\}/);
+  assert.match(source, /\{hasDaily \? <div className="fx-table-daily">/);
+});
+
 test("链路页：精简 + 桌面隧道和转发链 / 组的卡片都换成表；视图按钮里没有卡片那档", () => {
   const source = read("Tunnels.tsx");
   assert.match(source, /const forceTable = compactLayout && !isMobile;/);
