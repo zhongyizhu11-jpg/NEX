@@ -35,3 +35,13 @@ test("三步都做完、租户、数据还没回来：整块都不出现", () =>
   assert.equal(render(health({ total: 0, online: 0 }, 0), false), "", "租户不装主机，这三步不是他的");
   assert.equal(render(undefined), "", "先闪一下「0 台主机」再变成 20 台，比不显示更糟");
 });
+
+test("精简布局（dense）：折成一行，写着进度和下一步，点了去下一步那一页", () => {
+  const html = renderToStaticMarkup(
+    <QuickStartSection health={health({ total: 1, online: 0 }, 0)} isAdmin onOpen={() => {}} dense />,
+  );
+  assert.match(html, /快速开始 · 已完成 1\/3/);
+  assert.match(html, /等主机上线/);
+  assert.doesNotMatch(html, /不再显示/);
+  assert.doesNotMatch(html, /添加一台主机/, "折起来之后不再把三步都列出来");
+});

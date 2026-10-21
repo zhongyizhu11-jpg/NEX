@@ -256,7 +256,7 @@ function DashboardContent() {
       {pearl ? statusHeader : null}
       <NetworkMapSlot enabled={!health || health.hosts.total > 0} cacheScope={accountCacheScope} onOpen={setLocation} />
       {pearl ? null : statusHeader}
-      <QuickStartSection health={health as SystemHealth | undefined} isAdmin={isAdmin} onOpen={setLocation} />
+      <QuickStartSection health={health as SystemHealth | undefined} isAdmin={isAdmin} onOpen={setLocation} dense={compactLayout} />
       <AttentionSection
         attention={(health as SystemHealth | undefined)?.attention}
         isAdmin={isAdmin}

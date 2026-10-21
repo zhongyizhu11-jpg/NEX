@@ -78,7 +78,7 @@ export function NetworkOverviewSection({ model, forwardLinks, onOpen }: {
       {model.hiddenLinkCount > 0 ? (
         <div className="px-4 pb-3 text-meta tabular-nums text-muted-foreground">{model.hiddenLinkCount} 条隧道经过你看不到的主机，没有画出来</div>
       ) : drawable === 0 ? (
-        <div className="px-4 pb-3 text-meta text-muted-foreground">还没有连线。建一条隧道，或者把转发指向另一台主机，这里就会连起来。</div>
+        <div data-fx-help="" className="px-4 pb-3 text-meta text-muted-foreground">还没有连线。建一条隧道，或者把转发指向另一台主机，这里就会连起来。</div>
       ) : null}
     </section>
   );

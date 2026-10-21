@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { normalizePersonalizationLayout, normalizeUserLayoutPreference, resolveEffectiveLayout, type PersonalizationLayoutId } from "@shared/personalization";
@@ -49,4 +49,22 @@ export function useLayoutPreference() {
 /** 这个账号现在是不是精简布局。没登录 / 还在加载时按站点默认。 */
 export function useCompactLayout(): boolean {
   return useLayoutPreference().effective === "compact";
+}
+
+/**
+ * 只看 <html data-layout>（LayoutLayer 写的那个属性），不碰 trpc / auth：给那些要在 node 里
+ * renderToStaticMarkup 的纯组件用（总览的地图）。页面里一般还是用上面的 useCompactLayout。
+ */
+export function useCompactLayoutAttribute(): boolean {
+  const read = () => typeof document !== "undefined" && document.documentElement.getAttribute("data-layout") === "compact";
+  const [compact, setCompact] = useState<boolean>(read);
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const root = document.documentElement;
+    const observer = new MutationObserver(() => setCompact(read()));
+    observer.observe(root, { attributes: true, attributeFilter: ["data-layout"] });
+    setCompact(read());
+    return () => observer.disconnect();
+  }, []);
+  return compact;
 }
