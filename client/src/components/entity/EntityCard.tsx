@@ -93,7 +93,7 @@ export function EntityHeader({
   return (
     <div
       className={cn(
-        "flex min-w-0 items-start gap-2 px-[var(--fx-card-padding)] pt-[var(--fx-space-3)]",
+        "fx-entity-head flex min-w-0 items-start gap-2 px-[var(--fx-card-padding)] pt-[var(--fx-space-3)]",
         className,
       )}
     >
@@ -139,7 +139,7 @@ export function EntityBody({
   return (
     <div
       className={cn(
-        "flex min-w-0 flex-col px-[var(--fx-card-padding)] py-[var(--fx-space-2)]",
+        "fx-entity-body flex min-w-0 flex-col px-[var(--fx-card-padding)] py-[var(--fx-space-2)]",
         tight ? "gap-[var(--fx-space-1)]" : "gap-[var(--fx-space-2)]",
         /*
           band 原来是一块浅灰底。面全白之后改成上下各一条细线 —— 要表达的本来

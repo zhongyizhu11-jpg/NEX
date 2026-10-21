@@ -295,3 +295,32 @@ html:root .dialog-panel .fx-empty-hint:not([data-fx-std-page] *) { border: 0; pa
   html:root .fx-rule-day:not([data-fx-std-page] *) { flex-direction: row; align-items: baseline; gap: 6px; }
   html:root .fx-rule-big:not([data-fx-std-page] *) { margin-top: 6px; }
 }
+
+/*
+  规则卡（精简）压成两行：第一行「● 名字  副题 ……  ··· 开关」，第二行左边「入口 → 目标」、右边「累计  近 24H」。
+  走势线不画（一张 96px 的小图在两行里只是装饰）；告警 / 限额 / 说明那些行有才出现，各占整行。
+  链路卡（.fx-tunnel-card）结构不一样，不走这一套。
+*/
+html:root .fx-rule-card:not(.fx-tunnel-card) .fx-rule-card-body:not([data-fx-std-page] *) { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: 10px; row-gap: 6px; padding: 8px 12px; }
+html:root .fx-rule-card:not(.fx-tunnel-card) .fx-rule-head:not([data-fx-std-page] *) { grid-column: 1 / -1; }
+html:root .fx-rule-card:not(.fx-tunnel-card) .fx-rule-title:not([data-fx-std-page] *) { display: flex; min-width: 0; align-items: baseline; gap: 6px; }
+html:root .fx-rule-card:not(.fx-tunnel-card) .fx-rule-name:not([data-fx-std-page] *) { flex: 0 1 auto; min-width: 0; }
+html:root .fx-rule-card:not(.fx-tunnel-card) .fx-rule-sub:not([data-fx-std-page] *) { flex: 1 1 48px; min-width: 0; margin-top: 0; }
+html:root .fx-rule-card:not(.fx-tunnel-card) .fx-rule-big:not([data-fx-std-page] *) { grid-column: 2; grid-row: 2; margin: 0; gap: 8px; align-items: baseline; }
+html:root .fx-rule-card:not(.fx-tunnel-card) .fx-rule-spark:not([data-fx-std-page] *) { display: none; }
+html:root .fx-rule-card:not(.fx-tunnel-card) .fx-rule-day:not([data-fx-std-page] *) { flex-direction: row; gap: 4px; }
+html:root .fx-rule-card:not(.fx-tunnel-card) .fx-rule-day > span:first-child:not([data-fx-std-page] *) { display: none; }
+html:root .fx-rule-card:not(.fx-tunnel-card) .fx-rule-path:not([data-fx-std-page] *) { grid-column: 1; grid-row: 2; margin: 0; padding: 0; border: 0; }
+html:root .fx-rule-card:not(.fx-tunnel-card) .fx-rule-card-body > :not(.fx-rule-head):not(.fx-rule-big):not(.fx-rule-path):not([data-fx-std-page] *) { grid-column: 1 / -1; margin-top: 0; }
+
+/* 主机卡（精简）：系统头像不画（名字前的状态点和系统标签已经说完了），头部和卡体贴紧 */
+html:root .fx-host-card .fx-entity-head:not([data-fx-std-page] *) { padding-top: 8px; gap: 8px; }
+html:root .fx-host-card .fx-entity-head > span:first-child:not([data-fx-std-page] *) { display: none; }
+html:root .fx-host-card .fx-entity-body:not([data-fx-std-page] *) { padding-top: 4px; padding-bottom: 8px; }
+html:root .fx-host-foot:not([data-fx-std-page] *) { font-size: 12px; }
+
+/* 桌面卡片栅格：精简下一行多放一张（1366 宽四张） */
+@media (min-width: 1024px) {
+  html:root .standard-card-grid-compact:not([data-fx-std-page] *) { grid-template-columns: repeat(auto-fill, minmax(min(100%, 16.5rem), 1fr)); }
+  html:root .standard-card-grid:not([data-fx-std-page] *) { grid-template-columns: repeat(auto-fill, minmax(min(100%, 18rem), 1fr)); }
+}
