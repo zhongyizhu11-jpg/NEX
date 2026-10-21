@@ -23,7 +23,6 @@ import AutoAnimateContainer from "@/components/AutoAnimateContainer";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { useCompactLayout } from "@/hooks/useCompactLayout";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { ViewModeToggle } from "@/components/ui/view-mode-toggle";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -678,7 +677,6 @@ export default function Plans() {
   const [editing, setEditing] = useState(false);
   const [planDialogTab, setPlanDialogTab] = useState<PlanDialogTab>("settings");
   const [assignOpen, setAssignOpen] = useState(false);
-  const compactLayout = useCompactLayout();
   const [assignUserId, setAssignUserId] = useState("");
   const [assignPlanId, setAssignPlanId] = useState("");
   const [assignDurationDays, setAssignDurationDays] = useState("30");
@@ -885,7 +883,6 @@ export default function Plans() {
     staleTime: 30_000,
   });
   const storeVisiblePlans = Number(planSummary?.storeVisibleItems ?? 0);
-  const storeGateBlocking = !storeStatusLoading && !storeEnabled && storeVisiblePlans > 0;
   const trafficBillingEnabled = !!trafficBillingData?.enabled;
   const trafficBillingConfigs = trafficBillingData?.configs || [];
   const forwardGroupMap = useMemo<Map<number, any>>(() => {
@@ -1140,8 +1137,7 @@ export default function Plans() {
                 <Plus className="mr-2 h-4 w-4" /> 新增套餐
               </Button>
             )}
-            {/* 精简布局：手动分配一个月用不了几次，收进「···」，页头只留一个主操作；标准布局照旧两个按钮 */}
-            {compactLayout ? (
+            {/* 手动分配一个月用不了几次，收进「···」，页头只留一个主操作（标准布局重构工作包五） */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="outline" size="icon" aria-label="更多套餐操作"><span aria-hidden="true">•••</span></Button>
@@ -1152,11 +1148,6 @@ export default function Plans() {
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
-            ) : (
-            <Button variant="outline" onClick={() => setAssignOpen(true)}>
-              <Settings2 className="mr-2 h-4 w-4" /> 手动分配
-            </Button>
-            )}
           </>} />
 
         {/*
@@ -1175,14 +1166,14 @@ export default function Plans() {
               它读的 trafficBilling.configs 查询无条件发，状态是真的 —— 以前带着 enabled: activeTab === "billing"，
               默认 tab 下根本不发，于是永远显示「已关闭」。
             */
-            ...(compactLayout ? [{
+            {
               key: "billing",
               label: "按量计费",
               value: trafficBillingLoading ? "…" : trafficBillingEnabled ? "已开启" : "已关闭",
               hint: trafficBillingEnabled ? `${trafficBillingConfigs.length} 个资源在按 GB 扣余额` : "配了价的资源也不扣",
               icon: Coins,
               onClick: () => setActiveTab("billing"),
-            }] : []),
+            },
           ]}
         />
         <ListSection header="对用户开放">
@@ -1203,46 +1194,8 @@ export default function Plans() {
               />
             )}
           />
-          {compactLayout ? null : (
-            <>
-          {/*
-            按量计费：只读，开关在「流量计费」tab 里统一管，点这一行就过去。
-
-            原来这里也有一个开关，但它读的 trafficBilling.configs 查询带着
-            `enabled: activeTab === "billing"` —— 默认 tab 是「套餐」，查询根本不发，
-            于是这张卡**永远显示「已关闭」**，哪怕库里是开着的。两面都错：以为没在
-            收钱其实在收；想关掉它，看到「已关闭」就不会去动。
-            现在查询无条件发，状态是真的；要改切到「流量计费」tab。
-          */}
-          <ListRow
-            icon={<Coins className="h-4 w-4" />}
-            label="按量计费"
-            detail={trafficBillingEnabled
-              ? `${trafficBillingConfigs.length} 个资源在按 GB 扣余额。`
-              : "关着：配了价的资源一分钱都不扣，流量照旧记进各自的套餐额度。"}
-            value={trafficBillingLoading ? "…" : trafficBillingEnabled ? "已开启" : "已关闭"}
-            onSelect={() => setActiveTab("billing")}
-          />
-            </>
-          )}
         </ListSection>
 
-        {!compactLayout && storeGateBlocking && (
-          <div className="flex flex-col gap-2 rounded-lg border border-[color-mix(in_srgb,var(--fx-warn)_40%,transparent)] bg-[var(--fx-warn-soft)] px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between">
-            <p className="min-w-0">
-              商店总开关是关的：{storeVisiblePlans} 个套餐开了「购买入口」，但用户面板里没有商店，只能管理员后台分配。
-            </p>
-            <Button
-              size="sm"
-              className="shrink-0"
-              disabled={setStoreEnabled.isPending}
-              onClick={() => setStoreEnabled.mutate({ enabled: true })}
-            >
-              {setStoreEnabled.isPending ? <RefreshCw className="mr-2 h-4 w-4 animate-spin" /> : <ShoppingBag className="mr-2 h-4 w-4" />}
-              开启商店
-            </Button>
-          </div>
-        )}
 
 
         <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as PlanManageTab)} className="space-y-4">

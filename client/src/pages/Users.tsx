@@ -32,8 +32,6 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { FilterChips } from "@/components/ui/filter-chips";
-import { useCompactLayout } from "@/hooks/useCompactLayout";
-import { cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   DropdownMenu,
@@ -276,7 +274,6 @@ function UsersContent() {
   type ResourceGrantKind = "port" | "group" | "tunnel" | "node" | "lgHost" | "billingGroup" | "billingHost" | "billingTunnel";
   const [resourceGrantKind, setResourceGrantKind] = useState<ResourceGrantKind>("port");
   // 精简布局：资源授权按类型切换、用户表一行一人、订阅卡按钮收进菜单；标准布局照旧
-  const compactLayout = useCompactLayout();
   const [trafficBillingHostIds, setTrafficBillingHostIds] = useState<number[]>([]);
   const [trafficBillingTunnelIds, setTrafficBillingTunnelIds] = useState<number[]>([]);
   const [trafficBillingForwardGroupIds, setTrafficBillingForwardGroupIds] = useState<number[]>([]);
@@ -1531,10 +1528,10 @@ function UsersContent() {
                           <div className="flex items-center gap-2.5">
                             <UserAvatar user={u} className="h-8 w-8 shrink-0" />
                             <div className="min-w-0 py-0.5">
-                              {/* 精简布局：名字和标签同一行，备注放悬停，一行用户不再叠四行；标准布局照旧名字一行、标签一行 */}
-                              <div className={compactLayout ? "flex min-w-0 items-center gap-1.5 whitespace-nowrap" : "contents"}>
+                              {/* 名字和标签同一行，备注放悬停，一行用户不再叠四行（标准布局重构工作包二） */}
+                              <div className="flex min-w-0 items-center gap-1.5 whitespace-nowrap">
                                 <p className="min-w-0 truncate text-sm font-medium leading-5" title={u.displayRemark ? `${u.username || "未命名"} · ${u.displayRemark}` : undefined}>{u.username || "未命名"}</p>
-                                <span className={compactLayout ? "contents" : "mt-1.5 flex min-w-0 items-center gap-1 whitespace-nowrap"}>
+                                <span className="contents">
                                 {/* 精简布局：「普通用户」是默认，不标；管理员照标 */}
                                 <Badge data-fx-compact-hide={u.role === "admin" ? undefined : ""} variant={u.role === "admin" ? "default" : "outline"} className="h-5 w-fit shrink-0 px-1.5 text-[10px] leading-4">
                                   {u.role === "admin" ? "管理员" : "普通用户"}
@@ -1548,10 +1545,10 @@ function UsersContent() {
                                 </span>
                               </div>
                               {u.displayRemark && (
-                                <p className={cn("truncate text-xs text-muted-foreground", !compactLayout && "mt-0.5")}>{u.displayRemark}</p>
+                                <p className="truncate text-xs text-muted-foreground">{u.displayRemark}</p>
                               )}
                               {u.role !== "admin" && (
-                                <div className={compactLayout ? "mt-1 flex w-fit items-center gap-2 lg:hidden" : "mt-2 flex w-fit items-center gap-2 rounded-md border border-border/50 bg-muted/20 px-2 py-1 lg:hidden"}>
+                                <div className="mt-1 flex w-fit items-center gap-2 lg:hidden">
                                   <OptimisticSwitch aria-label={`允许 ${u.username} 添加转发`}
                                     checked={!!u.canAddRules}
                                     onCheckedChangeAsync={(checked) => updateForwardAccessMutation.mutateAsync({ userId: u.id, enabled: checked })}
@@ -1566,7 +1563,7 @@ function UsersContent() {
                           </div>
                         </TableCell>
                         <TableCell>
-                          <div className={cn("min-w-[190px]", compactLayout ? "space-y-1" : "space-y-2")}>
+                          <div className="min-w-[190px] space-y-1">
                             <div className="flex items-center justify-between gap-2">
                               <span className="shrink-0 text-[10px] text-muted-foreground">套餐/分配</span>
                               <div className="flex min-w-0 items-center justify-end gap-1">
@@ -1584,7 +1581,7 @@ function UsersContent() {
                                 className={`h-1 ${isOverLimit ? "[&>div]:bg-destructive" : ""}`}
                               />
                             )}
-                            <div className={cn("flex items-center justify-between gap-2", !compactLayout && "border-t border-border/40 pt-1.5")}>
+                            <div className="flex items-center justify-between gap-2">
                               <span className="shrink-0 text-[10px] text-muted-foreground">按量计费</span>
                               <span className="truncate text-xs font-medium tabular-nums">{formatBytes(billingUsed)}</span>
                             </div>
@@ -1782,8 +1779,7 @@ function UsersContent() {
                           </div>
                         </div>
 
-                        {/* 精简布局：三个按钮收成「加赠流量 + ···」；标准布局照旧三个按钮 */}
-                        {compactLayout ? (
+                        {/* 三个按钮收成「加赠流量 + ···」，和列表页的「编辑 + ···」一致（标准布局重构工作包二） */}
                         <div className="flex items-center gap-2 pt-1">
                           <Button
                             type="button"
@@ -1811,40 +1807,6 @@ function UsersContent() {
                             </DropdownMenuContent>
                           </DropdownMenu>
                         </div>
-                        ) : (
-                        <div className="flex flex-wrap gap-2 pt-1">
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            className="h-8 flex-1 px-2 text-xs sm:flex-none"
-                            onClick={() => openAddonDialog(sub)}
-                            disabled={!canAddAddon || adminAddTrafficAddonMutation.isPending}
-                          >
-                            加赠流量
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            className="h-8 flex-1 px-2 text-xs sm:flex-none"
-                            onClick={() => openExtendDialog(sub)}
-                            disabled={!canChangeExpiry || extendSubscriptionMutation.isPending}
-                          >
-                            更改到期
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            className="h-8 flex-1 px-2 text-xs text-destructive hover:text-destructive sm:flex-none"
-                            disabled={!active || cancelSubscriptionMutation.isPending}
-                            onClick={() => openCancelSubscriptionDialog(sub)}
-                          >
-                            取消
-                          </Button>
-                        </div>
-                        )}
                       </CardContent>
                     </Card>
                   );
@@ -2625,9 +2587,8 @@ function UsersContent() {
               </p>
               {/*
                 八类资源原来一段接一段竖着排、各带一个表头和空提示，一屏翻不完（标准布局重构工作包二）。
-                现在一排药丸选类型，只列选中的那一类；数字是已授权的个数。
+                现在一排药丸选类型，只列选中的那一类；数字是已授权的个数。两种布局都这样。
               */}
-              {compactLayout ? (
               <FilterChips
                 ariaLabel="资源类型"
                 wrap
@@ -2644,9 +2605,8 @@ function UsersContent() {
                   { value: "billingTunnel", label: "流量计费隧道", count: trafficBillingTunnelIds.length },
                 ]}
               />
-              ) : null}
 
-              {(!compactLayout || resourceGrantKind === "port") && (
+              {resourceGrantKind === "port" && (
               <FormField className="space-y-2">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <Label className="text-sm font-medium">端口转发授权</Label>
@@ -2693,9 +2653,7 @@ function UsersContent() {
               </FormField>
               )}
 
-              {!compactLayout && <Separator />}
-
-              {(!compactLayout || resourceGrantKind === "group") && (
+              {resourceGrantKind === "group" && (
               <FormField className="space-y-2">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <Label className="text-sm font-medium">转发链/转发组授权</Label>
@@ -2743,9 +2701,7 @@ function UsersContent() {
               </FormField>
               )}
 
-              {!compactLayout && <Separator />}
-
-              {(!compactLayout || resourceGrantKind === "tunnel") && (
+              {resourceGrantKind === "tunnel" && (
               <FormField className="space-y-2">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <Label className="text-sm font-medium">隧道转发</Label>
@@ -2797,9 +2753,7 @@ function UsersContent() {
               </FormField>
               )}
 
-              {!compactLayout && <Separator />}
-
-              {(!compactLayout || resourceGrantKind === "node") && (
+              {resourceGrantKind === "node" && (
               <FormField className="space-y-2">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <Label className="text-sm font-medium">订阅节点分享</Label>
@@ -2860,9 +2814,7 @@ function UsersContent() {
               </FormField>
               )}
 
-              {!compactLayout && <Separator />}
-
-              {(!compactLayout || resourceGrantKind === "lgHost") && (
+              {resourceGrantKind === "lgHost" && (
               <FormField className="space-y-2">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <Label className="text-sm font-medium">网络测试主机授权</Label>
@@ -2909,9 +2861,7 @@ function UsersContent() {
               </FormField>
               )}
 
-              {!compactLayout && <Separator />}
-
-              {(!compactLayout || resourceGrantKind === "billingGroup") && (
+              {resourceGrantKind === "billingGroup" && (
               <FormField className="space-y-2">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <Label className="text-sm font-medium">流量计费转发资源</Label>
@@ -2963,7 +2913,7 @@ function UsersContent() {
               </FormField>
               )}
 
-              {(!compactLayout || resourceGrantKind === "billingHost") && (
+              {resourceGrantKind === "billingHost" && (
               <FormField className="space-y-2">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <Label className="text-sm font-medium">历史计费主机</Label>
@@ -3010,7 +2960,7 @@ function UsersContent() {
               </FormField>
               )}
 
-              {(!compactLayout || resourceGrantKind === "billingTunnel") && (
+              {resourceGrantKind === "billingTunnel" && (
               <FormField className="space-y-2">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <Label className="text-sm font-medium">流量计费隧道</Label>

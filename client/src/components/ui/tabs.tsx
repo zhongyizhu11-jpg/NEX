@@ -9,8 +9,12 @@ const TabsList = React.forwardRef<React.ComponentRef<typeof TabsPrimitive.List>,
 ))
 TabsList.displayName = TabsPrimitive.List.displayName
 
+/*
+  选中项和页面上的分类条（workspace.css 的 .workspace-tab）一个样：主色渐变底、主色上的字，跟着「默认配色」换。
+  原来是白底加投影，和分类条摆在同一屏里像两套控件（2026-10-21 用户在手机上圈出来）。
+*/
 const TabsTrigger = React.forwardRef<React.ComponentRef<typeof TabsPrimitive.Trigger>, React.ComponentPropsWithoutRef<typeof TabsPrimitive.Trigger>>(({ className, ...props }, ref) => (
-  <TabsPrimitive.Trigger ref={ref} className={cn("inline-flex h-full items-center justify-center whitespace-nowrap rounded-[6px] px-3 py-1 text-[13px] font-medium transition-all hover:text-foreground focus-visible:outline-none focus-visible:shadow-[var(--fx-focus-ring)] disabled:pointer-events-none disabled:opacity-50 data-[state=active]:bg-[var(--fx-l1-surface)] data-[state=active]:font-semibold data-[state=active]:text-foreground data-[state=active]:shadow-[var(--fx-elevation-control)] dark:data-[state=active]:bg-[var(--fx-hover)] dark:data-[state=active]:shadow-none", className)} {...props} />
+  <TabsPrimitive.Trigger ref={ref} className={cn("inline-flex h-full items-center justify-center whitespace-nowrap rounded-[6px] px-3 py-1 text-[13px] font-medium transition-all hover:text-foreground focus-visible:outline-none focus-visible:shadow-[var(--fx-focus-ring)] disabled:pointer-events-none disabled:opacity-50 data-[state=active]:bg-[image:var(--fx-primary-gradient)] data-[state=active]:font-semibold data-[state=active]:text-[var(--fx-primary-text)] data-[state=active]:hover:text-[var(--fx-primary-text)] data-[state=active]:shadow-none", className)} {...props} />
 ))
 TabsTrigger.displayName = TabsPrimitive.Trigger.displayName
 
