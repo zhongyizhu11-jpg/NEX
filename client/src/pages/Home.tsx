@@ -232,7 +232,7 @@ function DashboardContent() {
   );
 
   return (
-    <div className="space-y-6" data-fx-std-page={compactLayout ? undefined : ""}>
+    <div className="space-y-6" data-fx-std-page={compactLayout ? undefined : ""} data-fx-compact-page={compactLayout ? "" : undefined}>
       {/* data-fx-std-page：标准布局下总览整页按原来的标准画（compact.css 让出去）；精简下不带，按紧凑的方式画 */}
       {/*
         标题下面那一行是此刻的数（「4 台主机 · 19 条线路 · 19 条转发」），不是一句说明书。

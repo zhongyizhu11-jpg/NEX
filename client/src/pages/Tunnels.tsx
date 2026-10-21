@@ -4362,9 +4362,11 @@ function TunnelsContent() {
           <div className="fx-tunnel-route">
             {renderTunnelRoute(tunnel, true, hopCount <= 3 && !hasEntryGroup ? "horizontal" : "auto", false)}
           </div>
-          <ResourceTrafficLine summary={tunnel.trafficSummary} className="mt-1.5" />
+          {/* fx-tunnel-meta：精简手机行上累计和延迟那两行并成一行（compact.css），标准下照旧两行 */}
+          <div className="fx-tunnel-meta">
+          <ResourceTrafficLine summary={tunnel.trafficSummary} className="fx-tunnel-traffic mt-1.5" />
           {oneLineFoot ? (
-            <div className="mt-1.5 text-[13px] text-muted-foreground">{broken ? "不通" : timeout ? "超时" : "未测试"} · 还没有延迟记录</div>
+            <div className="fx-tunnel-foot-line mt-1.5 text-[13px] text-muted-foreground">{broken ? "不通" : timeout ? "超时" : "未测试"} · 还没有延迟记录</div>
           ) : (
           <div className="fx-tunnel-foot">
             {hasLatency ? (
@@ -4394,6 +4396,7 @@ function TunnelsContent() {
             </div>
           </div>
           )}
+          </div>
           {/* 精简布局：卡片上不画近 30 天色块条（诊断框 › 延迟记录 里有同一条），一张卡少 30px */}
           {supported && !oneLineFoot ? (
             <div data-fx-compact-hide="">

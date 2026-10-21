@@ -339,4 +339,15 @@ html:root [data-fx-compact-page] .fx-table-daily > div:not([data-fx-std-page] *)
   html:root [data-fx-compact-page] .fx-host-card .fx-entity-body > .grid:not([data-fx-std-page] *) { grid-column: 1 / -1; }
   html:root [data-fx-compact-page] .fx-host-card .fx-host-foot:not([data-fx-std-page] *) { grid-area: foot; justify-self: end; gap: 6px; font-size: 11.5px; line-height: 16px; }
   html:root [data-fx-compact-page] .fx-host-card .fx-host-foot-links:not([data-fx-std-page] *) { margin-left: 0; }
+  /* 主机行右下角两段灰字之间一根细竖线：原来「还没上报过 还没有转发」连在一起 */
+  html:root [data-fx-compact-page] .fx-host-card .fx-host-foot-links:not([data-fx-std-page] *) { padding-left: 8px; border-left: 1px solid var(--fx-stroke-weak); }
+
+  /* 链路行：「累计 0 B · 0 条规则」和「不通 · 还没有延迟记录」并成一行；有延迟数据的那种脚注自己占一行 */
+  html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-meta:not([data-fx-std-page] *) { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 10px; row-gap: 2px; margin-top: 4px; }
+  html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-traffic:not([data-fx-std-page] *), html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-foot-line:not([data-fx-std-page] *) { margin-top: 0; font-size: 12px; line-height: 18px; }
+  html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-foot:not([data-fx-std-page] *) { flex: 1 1 100%; margin-top: 0; padding-top: 0; border-top: 0; }
+  html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-route:not([data-fx-std-page] *) { margin-top: 6px; }
 }
+
+/* 总览：流量图没数据时不留一大块空白，压成一行 */
+html:root [data-fx-compact-page] [data-fx-chart="traffic"][data-fx-empty]:not([data-fx-std-page] *) { height: 40px; }

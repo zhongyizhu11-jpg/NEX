@@ -89,7 +89,8 @@ export function TrafficSurface({
               </div>
             </div>
 
-            <div className="h-40 w-full sm:h-52" data-fx-chart="traffic">
+            {/* data-fx-empty：没数据时精简下这块压成一行（compact.css），不留一大块空白 */}
+            <div className="h-40 w-full sm:h-52" data-fx-chart="traffic" data-fx-empty={!chartLoading && chartData.length === 0 ? "" : undefined}>
               {chartLoading && chartData.length === 0 ? (
                 <Skeleton className="h-full w-full" />
               ) : chartData.length === 0 ? (

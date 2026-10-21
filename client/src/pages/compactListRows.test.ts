@@ -63,3 +63,13 @@ test("compact.css 的条状只挂在 data-fx-compact-page 下：不碰监控页�
     }
   }
 });
+
+test("剩下的几条：主机行两段灰字之间一根细竖线、链路行累计和延迟并一行、总览空流量图压成一行", () => {
+  const css = fs.readFileSync(path.resolve(import.meta.dirname, "../styles/compact.css"), "utf8");
+  assert.match(css, /\.fx-host-card \.fx-host-foot-links:not\(\[data-fx-std-page\] \*\) \{ padding-left: 8px; border-left: 1px solid var\(--fx-stroke-weak\); \}/);
+  assert.match(css, /\.fx-tunnel-card \.fx-tunnel-meta:not\(\[data-fx-std-page\] \*\) \{ display: flex; flex-wrap: wrap;/);
+  assert.match(css, /\[data-fx-chart="traffic"\]\[data-fx-empty\]:not\(\[data-fx-std-page\] \*\) \{ height: 40px; \}/);
+  assert.match(read("Tunnels.tsx"), /<div className="fx-tunnel-meta">/);
+  assert.match(fs.readFileSync(path.resolve(import.meta.dirname, "../features/dashboard/TrafficSurface.tsx"), "utf8"), /data-fx-empty=\{!chartLoading && chartData\.length === 0 \? "" : undefined\}/);
+  assert.match(read("Home.tsx"), /data-fx-compact-page=\{compactLayout \? "" : undefined\}/);
+});
