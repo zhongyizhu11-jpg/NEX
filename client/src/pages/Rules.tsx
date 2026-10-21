@@ -7210,7 +7210,7 @@ function RulesContent() {
     },
     {
       key: "resource",
-      width: 170,
+      width: 150,
       head: "所属资源",
       cell: (rule) => (
         <div className="min-w-0">
@@ -7247,7 +7247,7 @@ function RulesContent() {
       headClassName: "text-center",
       cell: (rule) => <div className="flex justify-center">{renderRuleEnabledSwitch(rule)}</div>,
     },
-    { key: "actions", width: 120, head: "操作", headClassName: "text-right", cellClassName: "text-right", cell: (rule) => renderRuleActions(rule) },
+    { key: "actions", width: 140, head: "操作", headClassName: "text-right", cellClassName: "text-right", cell: (rule) => renderRuleActions(rule) },
   ] : [
     /* 标准布局：原来那 13～14 列，一列一件事 */
     {
