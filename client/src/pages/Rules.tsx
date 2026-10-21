@@ -6524,11 +6524,18 @@ function RulesContent() {
 
   const renderTableTransferExit = (rule: any) => {
     const { targetAddress, failoverCount, failoverEnabled, routeLabel } = getRuleTransferDisplay(rule);
+    // 出口和入口一样点一下就复制（用户要的）：表里原来只有入口能复制
     return (
       <div className="flex min-w-0 items-center gap-1.5 font-mono text-[12px] leading-5">
-        <code className="fx-table-addr min-w-0 truncate" title={targetAddress}>
-          {targetAddress}
-        </code>
+        <button
+          type="button"
+          onClick={() => copyTargetAddress(targetAddress)}
+          className="group inline-flex min-w-0 max-w-full shrink items-center gap-1 rounded-[6px] px-1 py-0.5 -mx-1 text-left transition-colors hover:bg-[var(--fx-l2-group)]"
+          title={`复制目标地址: ${targetAddress}`}
+        >
+          <code className="fx-table-addr min-w-0 truncate">{targetAddress}</code>
+          <Copy className="h-3 w-3 shrink-0 text-muted-foreground opacity-60 group-hover:opacity-100" />
+        </button>
         {failoverEnabled && (
           <Badge variant="outline" className="h-5 shrink-0 border-[color-mix(in_srgb,var(--fx-warn)_30%,transparent)] px-1.5 text-[10px] text-[var(--fx-warn-text)]">
             {routeLabel} {failoverCount} 条

@@ -308,7 +308,7 @@ html:root [data-fx-compact-page] .fx-table-daily > div:not([data-fx-std-page] *)
   html:root [data-fx-compact-page] .standard-card-grid > *:not([data-fx-std-page] *), html:root [data-fx-compact-page] .standard-card-grid-compact > *:not([data-fx-std-page] *) { border: 0; border-bottom: 1px solid var(--fx-stroke-weak); border-radius: 0; box-shadow: none; }
   html:root [data-fx-compact-page] .standard-card-grid > :last-child:not([data-fx-std-page] *), html:root [data-fx-compact-page] .standard-card-grid-compact > :last-child:not([data-fx-std-page] *) { border-bottom: 0; }
 
-  /* 规则行：两行网格。走势线、「近 24H」、复制小图标不画（行里放不下，详情里有） */
+  /* 规则行：两行网格。走势线、「近 24H」不画（行里放不下，详情里有）；入口 / 出口点一下就复制，复制小图标留着、缩一号 */
   html:root [data-fx-compact-page] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-card-body:not([data-fx-std-page] *) { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto auto; grid-template-areas: "name sub alerts big actions" "path path path path path"; align-items: center; column-gap: 10px; row-gap: 1px; padding: 6px 12px 7px; }
   html:root [data-fx-compact-page] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-head:not([data-fx-std-page] *), html:root [data-fx-compact-page] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-title:not([data-fx-std-page] *) { display: contents; }
   html:root [data-fx-compact-page] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-name:not([data-fx-std-page] *) { grid-area: name; font-size: 14px; line-height: 20px; }
@@ -318,7 +318,8 @@ html:root [data-fx-compact-page] .fx-table-daily > div:not([data-fx-std-page] *)
   html:root [data-fx-compact-page] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-head-actions:not([data-fx-std-page] *) { grid-area: actions; justify-self: end; }
   html:root [data-fx-compact-page] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-path:not([data-fx-std-page] *) { grid-area: path; margin: 0; padding: 0; border: 0; flex-wrap: nowrap; overflow: hidden; font-size: 11.5px; line-height: 16px; }
   html:root [data-fx-compact-page] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-path > *:not([data-fx-std-page] *) { flex: 0 1 auto; min-width: 0; }
-  html:root [data-fx-compact-page] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-spark:not([data-fx-std-page] *), html:root [data-fx-compact-page] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-day:not([data-fx-std-page] *), html:root [data-fx-compact-page] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-addr-copy:not([data-fx-std-page] *) { display: none; }
+  html:root [data-fx-compact-page] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-spark:not([data-fx-std-page] *), html:root [data-fx-compact-page] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-day:not([data-fx-std-page] *) { display: none; }
+  html:root [data-fx-compact-page] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-addr-copy:not([data-fx-std-page] *) { width: 11px; height: 11px; }
   html:root [data-fx-compact-page] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-num > b:not([data-fx-std-page] *) { font-size: 15px; }
   html:root [data-fx-compact-page] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-num > small:not([data-fx-std-page] *) { font-size: 11px; }
   html:root [data-fx-compact-page] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-card-body > :not(.fx-rule-head):not(.fx-rule-alerts):not(.fx-rule-big):not(.fx-rule-path):not([data-fx-std-page] *) { grid-column: 1 / -1; margin: 0; }

@@ -30,6 +30,7 @@ test("一个数组、精简只换几列：标准是流量列 + 开关列；精�
   assert.doesNotMatch(source, /<TableHead[^>]*>状态<\/TableHead>/, "表头不再手写");
 });
 
-test("表里的入口 / 出口地址带 fx-table-addr（精简下画成药丸，compact.css）", () => {
+test("表里的入口 / 出口地址带 fx-table-addr（精简下画成药丸，compact.css），两个都点一下就复制", () => {
   assert.ok((source.match(/className="fx-table-addr min-w-0 truncate"/g) ?? []).length >= 2);
+  assert.match(source, /onClick=\{\(\) => copyTargetAddress\(targetAddress\)\}[^]*?<code className="fx-table-addr min-w-0 truncate">\{targetAddress\}<\/code>/, "出口地址是复制按钮");
 });
