@@ -1659,9 +1659,8 @@ function HostsContent() {
   const [serviceViewMode, setServiceViewMode] = useState<HostProbeServiceViewMode>(() => getStoredHostProbeServiceViewMode());
   const [hostGroupViewMode, setHostGroupViewMode] = useState<HostGroupViewMode>(() => getStoredHostGroupViewMode());
   const compactLayout = useCompactLayout();
-  // 精简布局：「添加主机」上到页头右边（和规则 / 链路页一致）；手机上搜索行收成分类条右边一枚图标
-  const mergeListControls = compactLayout;
-  const collapsePhoneSearch = compactLayout && isMobileViewport;
+  // 「添加主机」在页头右边（和规则 / 链路页一致）；手机上搜索行收成分类条右边一枚图标
+  const collapsePhoneSearch = isMobileViewport;
   const [phoneSearchOpen, setPhoneSearchOpen] = useState(false);
   const hostManageTabItems = user?.role === "admin" ? HOST_MANAGE_TAB_ITEMS_ADMIN : HOST_MANAGE_TAB_ITEMS_USER;
   /*
@@ -2507,7 +2506,7 @@ function HostsContent() {
     viewProbeLatency: setProbeLatencyHost,
   };
 
-  /* 「添加主机 / 分组 / 服务」：标准布局在搜索行最右，精简布局上到页头（两处共用这一个） */
+  /* 「添加主机 / 分组 / 服务」：在页头右边（和规则 / 链路页一致） */
   const createHostAction = (user?.role === "admin" || activeManageTab === "hosts") ? (
           <Button
             onClick={openCreate}
@@ -2524,7 +2523,8 @@ function HostsContent() {
   ) : null;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" data-fx-std-cards={compactLayout ? undefined : ""}>
+      {/* data-fx-std-cards：标准布局下这一页的卡片按原来的标准画（compact.css 让出去）；精简下不带，卡片也紧凑 */}
       {/* Header */}
       <WorkspaceHeader title={<>主机管理</>} status={
           /*
@@ -2619,7 +2619,7 @@ function HostsContent() {
               ]}
             />
           )}
-          {mergeListControls ? createHostAction : null}
+          {createHostAction}
         </>} />
 
 
@@ -2632,12 +2632,12 @@ function HostsContent() {
         {/* fx-list-controls：精简布局（桌面）下分类条和搜索那一行并排（compact.css） */}
         <div className="fx-list-controls space-y-4">
         <div className="fx-tabs-row">
-        <SlidingTabsList items={hostManageTabItems} activeValue={activeManageTab} ariaLabel="主机管理" minItemWidthRem={compactLayout ? 6.5 : 7.5} />
+        <SlidingTabsList items={hostManageTabItems} activeValue={activeManageTab} ariaLabel="主机管理" minItemWidthRem={6.5} />
         {collapsePhoneSearch ? (
           <SearchToggle open={phoneSearchOpen} active={activeManageSearchQuery.length > 0} onToggle={() => setPhoneSearchOpen((value) => !value)} />
         ) : null}
         </div>
-      {/* 搜索栏一行：小搜索框在左、「添加主机」在最右（用户要的位置；精简布局下上到页头）；分组药丸在下一行。 */}
+      {/* 搜索栏一行：小搜索框在左（「添加主机」在页头）；分组药丸在下一行。 */}
       {(!collapsePhoneSearch || phoneSearchOpen || activeManageSearchQuery.length > 0) ? (
       <div className="flex items-center gap-2">
         <div className="relative min-w-0 flex-1 sm:max-w-[340px]">
@@ -2673,7 +2673,6 @@ function HostsContent() {
           额度用满时按钮留着但点不动，并把「几台/上限几台」写在上面：到了上限
           才弹一句错误提示，等于让人白填一遍表单。
         */}
-        {mergeListControls ? null : createHostAction}
       </div>
       ) : null}
         </div>

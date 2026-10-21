@@ -5,6 +5,7 @@ import { FormField } from "@/components/ui/form-field";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useUrlTab } from "@/hooks/useUrlTab";
 import { formatBytes } from "@shared/formatBytes";
+import { settingsGroups, settingsTabDetail, settingsTabItems, settingsTabs, type SettingsTab } from "./settingsSections";
 import DashboardLayout from "@/components/DashboardLayout";
 import { EmailSettingsContent } from "./EmailSettings";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -486,62 +487,7 @@ function getMigrationCodeCountdown(code: { expiresAt: number } | null, now: numb
   return Math.max(0, Math.ceil((code.expiresAt - now) / 1000));
 }
 
-const settingsTabs = ["system", "telegram", "email", "personalization", "backup", "logs", "advanced", "webhook"] as const;
-type SettingsTab = typeof settingsTabs[number];
-/**
- * 设置的分组。
- *
- * 六个 tab 原来并排在一条横向标签条上 —— 标签条的容量是固定的，加到第七项
- * 就开始滚动，加到第十项就没人找得到第十项。而设置是**只会越来越多**的那种
- * 页面。
- *
- * 分组列表没有这个上限：加一项就是多一行。而且它天然说得清层级 ——
- * 「Telegram 和邮箱都是通知」这件事，横向标签条表达不了，分组一眼看得出来。
- */
-const settingsGroups = [
-  {
-    key: "general",
-    header: "通用",
-    items: ["system", "personalization", "advanced"],
-  },
-  {
-    key: "notify",
-    header: "通知",
-    footer: "Telegram 和邮箱都用来发告警、到期提醒和流量提醒。",
-    items: ["telegram", "email", "webhook"],
-  },
-  {
-    key: "maintenance",
-    header: "维护",
-    items: ["backup", "logs"],
-  },
-] as const;
-
-/*
-  每一项管什么。现在宽屏右栏顶上也显示这一句，所以照实际内容写：原来「系统配置」写着
-  「数据库」（数据库切换在备份恢复里）、「邮箱设置」写着「邮件模板」（没有模板这回事）。
-*/
-const settingsTabDetail: Record<string, string> = {
-  system: "面板地址、HTTPS、注册登录、DDNS 与版本升级",
-  personalization: "站点名称、Logo、配色、背景与首页",
-  telegram: "机器人推送与 AI 助手",
-  email: "SMTP 发信、注册验证与提醒邮件",
-  backup: "迁移、数据库切换、导出与导入",
-  logs: "运行日志与导出",
-  advanced: "流量用尽时的处理、维护模式、API 令牌与 MCP",
-  webhook: "把告警推到 Discord、Slack 或任意地址",
-};
-
-const settingsTabItems = [
-  { value: "system", label: "系统配置", icon: Settings2 },
-  { value: "telegram", label: "Telegram", icon: Send },
-  { value: "email", label: "邮箱设置", icon: Mail },
-  { value: "personalization", label: "个性化配置", icon: Palette },
-  { value: "backup", label: "备份恢复", icon: Database },
-  { value: "logs", label: "面板日志", icon: FileText },
-  { value: "advanced", label: "进阶", icon: SlidersHorizontal },
-  { value: "webhook", label: "Webhook", icon: Webhook },
-] as const;
+/* 分区定义（settingsTabs / settingsGroups / settingsTabItems / settingsTabDetail）在 ./settingsSections.ts，手机「更多」页也用同一份 */
 type DatabaseType = "sqlite" | "mysql" | "postgresql";
 type BackupSummaryCache = {
   userCount: number;
@@ -706,7 +652,8 @@ function SettingsContent() {
 
     桌面上这个状态不参与渲染 —— 那边永远是标签条，一次点到位。
   */
-  const [mobileSectionOpen, setMobileSectionOpen] = useState(false);
+  // 从「更多」页带着 ?tab= 进来（More.tsx）就直接进那个分区，不先停在索引
+  const [mobileSectionOpen, setMobileSectionOpen] = useState(() => typeof window !== "undefined" && new URLSearchParams(window.location.search).has("tab"));
   const [activeTab, setActiveTab] = useUrlTab<SettingsTab>({
     values: settingsTabs,
     defaultValue: "system",

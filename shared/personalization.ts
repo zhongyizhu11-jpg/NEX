@@ -665,12 +665,13 @@ export function normalizePersonalizationUiTheme(value: unknown): Personalization
     站点默认  设置 › 个性化 › 布局（personalizationLayout），管理员定，所有人跟着走
     个人偏好  个人资料 › 界面（users.uiLayout）：null 跟随站点，standard / compact 自己定
 
-  精简 = 同样的数据和功能，更密的摆法：控件和卡片更矮、圆角更小、说明文字不占地方、侧栏更窄，
-  列表页的控制行、诊断框、主机详情这些也按精简的方式合并。
+  2026-10-21 起紧凑外壳（原精简布局：控件更矮、圆角更小、说明文字收起、侧栏更窄、列表页控制行并排、
+  诊断框合并……）就是标准布局，两种布局只差一件事：总览 / 转发 / 主机 / 链路四页的卡片 ——
+  标准按原来的尺寸画（页面带 data-fx-std-cards，compact.css 让出去），精简下卡片也紧凑。
 */
 export const PERSONALIZATION_LAYOUTS = [
-  { id: "standard", name: "标准", description: "现在这套：留白充足、每项带说明，第一次用的人看得明白。" },
-  { id: "compact", name: "精简", description: "控件和卡片更矮、圆角更小、说明文字收起来、侧栏更窄，一屏多看一截。功能和数据一样。" },
+  { id: "standard", name: "标准", description: "总览、转发、主机、链路四页的卡片留白充足、字号大一档；其余和精简一样。" },
+  { id: "compact", name: "精简", description: "四个主页面的卡片也更矮更密，一屏多看几张。功能和数据一样。" },
 ] as const;
 
 export type PersonalizationLayoutId = typeof PERSONALIZATION_LAYOUTS[number]["id"];

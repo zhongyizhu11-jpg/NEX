@@ -4,10 +4,11 @@ import path from "node:path";
 import test from "node:test";
 
 /**
- * compact.css（精简布局）的几条底线。
+ * compact.css（紧凑外壳，2026-10-21 起就是标准布局）的几条底线。
  *
- * 一、每条规则都挂在 html[data-layout="compact"] 底下：标准布局不带属性，这个文件一条都不能生效，
- *    关掉精简就是原样。
+ * 一、每条规则都挂在 html:root（两种布局都生效）或 html[data-layout="compact"]（只在精简下）底下，
+ *    不写裸选择器 —— 特指度和 workspace.css、各主题的关系靠这个前缀定住。
+ *    四个主页面的卡片区（data-fx-std-cards）要让出去：令牌先接住再还回去，卡片那几条带 :not。
  * 二、不按类名片段猜 DOM（和 workspaceCss.test.ts 一条规矩）。
  * 三、说明文字靠 data-fx-help 收，data-fx-keep 能留住 —— 状态、数值、报错不打标记，所以不会被收掉。
  */
@@ -30,13 +31,22 @@ function selectors(source: string) {
   return out;
 }
 
-test("每条规则都只在 html[data-layout=\"compact\"] 下生效", () => {
+test("每条规则都挂在 html:root 或 html[data-layout=\"compact\"] 下", () => {
   const list = selectors(code);
   assert.ok(list.length > 30, "规则够多，不是空文件");
   for (const selector of list) {
     for (const part of selector.split(",")) {
-      assert.match(part.trim(), /^html\[data-layout="compact"\]/, `「${part.trim()}」没有挂在精简布局底下`);
+      assert.match(part.trim(), /^html(:root|\[data-layout="compact"\])/, `「${part.trim()}」没有带前缀`);
     }
+  }
+});
+
+test("四个主页面的卡片区让出去：令牌从 html 接住、在 body 上覆盖、在 data-fx-std-cards 里还回去；卡片那几条带 :not", () => {
+  assert.match(code, /html:root \{[^}]*--fx-std-size-primary: var\(--fx-size-primary\)/);
+  assert.match(code, /html:root body \{[^}]*--fx-size-primary: 15px/);
+  assert.match(code, /html:root \[data-fx-std-cards\] \{[^}]*--fx-size-primary: var\(--fx-std-size-primary\)[^}]*--radius: var\(--fx-std-radius\)/);
+  for (const sel of ['[data-slot="card-content"]', ".fx-entity-card", ".fx-rule-num > b", ".fx-tunnel-foot", ".fx-summary-value"]) {
+    assert.ok(code.includes(`${sel}:not([data-fx-std-cards] *) {`), `${sel} 没有让出四页的卡片区`);
   }
 });
 

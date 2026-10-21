@@ -38,8 +38,6 @@ import {
   Network,
   KeyRound,
   UserRound,
-  Sun,
-  Moon,
   Rocket,
   Route,
   Rss,
@@ -1362,13 +1360,11 @@ function DashboardLayoutContent({
     ? [...visibleProfileMenuItems, ...visibleAdminMenuItems]
     : [...(canShowNetworkTest ? [lookingGlassMenuItem] : []), ...visibleProfileMenuItems];
   /*
-    精简布局：个人资料、系统设置在右上角账户菜单里已经各有一项，侧栏不再重复放（命令面板里照旧能搜到）。
+    个人资料、系统设置在右上角账户菜单里已经各有一项，侧栏不再重复放（命令面板里照旧能搜到）。
     管理与账户那一组少两行，普通用户的「工具与账户」常常就只剩网络测试 / 邀请返利。
   */
   const SIDEBAR_DEDUPED_PATHS = ["/profile", "/settings"];
-  const sidebarManagementItems = compactLayout
-    ? managementMenuItems.filter((item) => !SIDEBAR_DEDUPED_PATHS.includes(item.path))
-    : managementMenuItems;
+  const sidebarManagementItems = managementMenuItems.filter((item) => !SIDEBAR_DEDUPED_PATHS.includes(item.path));
   const commandItems: WorkspaceDestination[] = [
     ...primaryMenuItems.map(item => ({ ...item, group: "工作空间" })),
     ...managementMenuItems.map(item => ({ ...item, group: isAdmin ? "管理与账户" : "工具与账户" })),
@@ -1600,17 +1596,6 @@ function DashboardLayoutContent({
               <kbd className="workspace-appbar-kbd">⌘K</kbd>
             </button>
   );
-  const appbarThemeButton = (
-            <button
-              type="button"
-              onClick={toggleTheme}
-              className="workspace-appbar-icon"
-              aria-label={resolvedTheme === "dark" ? "切换浅色主题" : "切换深色主题"}
-              title={resolvedTheme === "dark" ? "切换到白天模式" : "切换到黑夜模式"}
-            >
-              {resolvedTheme === "dark" ? <Sun className="h-4 w-4" aria-hidden="true" /> : <Moon className="h-4 w-4" aria-hidden="true" />}
-            </button>
-  );
   const accountMenuContent = (
             <DropdownMenuContent align="end" className="w-56">
               <div className="px-2 py-1.5">
@@ -1711,9 +1696,8 @@ function DashboardLayoutContent({
           )}
           <div className="workspace-appbar-actions">
             {appbarSearchButton}
-            {/* 精简布局：深浅色切换并进调色盘菜单，顶栏少一枚图标 */}
-            {compactLayout ? null : appbarThemeButton}
-            <UiThemeQuickSwitch darkToggle={compactLayout ? { resolved: resolvedTheme, onToggle: toggleTheme } : undefined} />
+            {/* 深浅色切换并进调色盘菜单，顶栏少一枚图标 */}
+            <UiThemeQuickSwitch darkToggle={{ resolved: resolvedTheme, onToggle: toggleTheme }} />
             {!isMobile ? <span className="fx-pearl-topbar-user" title={accountDisplayName}>{accountDisplayName}</span> : null}
           </div>
         </div>
@@ -1752,9 +1736,8 @@ function DashboardLayoutContent({
           </button>
           <div className="workspace-appbar-actions">
             {appbarSearchButton}
-            {/* 精简布局：深浅色切换并进调色盘菜单，顶栏少一枚图标 */}
-            {compactLayout ? null : appbarThemeButton}
-            <UiThemeQuickSwitch darkToggle={compactLayout ? { resolved: resolvedTheme, onToggle: toggleTheme } : undefined} />
+            {/* 深浅色切换并进调色盘菜单，顶栏少一枚图标 */}
+            <UiThemeQuickSwitch darkToggle={{ resolved: resolvedTheme, onToggle: toggleTheme }} />
           <DropdownMenu open={accountMenuOpen} onOpenChange={setAccountMenuOpen} modal={false}>
             <DropdownMenuTrigger asChild>
               <button

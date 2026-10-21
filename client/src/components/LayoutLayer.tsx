@@ -3,7 +3,8 @@ import { useEffect } from "react";
 import { useLayoutPreference } from "@/hooks/useCompactLayout";
 
 /*
-  把现在生效的布局写到 <html data-layout>：精简是 "compact"，标准不带属性（compact.css 只按这个属性选）。
+  把现在生效的布局写到 <html data-layout>：精简是 "compact"，标准不带属性。compact.css 现在对两种布局都生效
+  （紧凑外壳就是标准），这个属性留给以后只在精简下才做的样式；四页卡片的区别走页面上的 data-fx-std-cards。
   刷新那一下 auth.me 还没回来，先按上次记住的值挂上，免得先画一遍标准再跳成精简。
 */
 export const LAYOUT_STORAGE_KEY = "forwardx.layout";

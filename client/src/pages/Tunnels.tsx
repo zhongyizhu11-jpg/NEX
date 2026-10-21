@@ -2237,10 +2237,9 @@ function TunnelsContent() {
   const [chainViewMode, setChainViewMode] = useState<TunnelViewMode>(() => getStoredChainViewMode());
   const compactLayout = useCompactLayout();
   const isMobile = useIsMobile();
-  // 精简布局：「新建链路」上到页头右边（桌面手机都一样）；桌面上分类条和搜索框并排成一行（fx-list-controls）
-  const mergeListControls = compactLayout;
-  // 手机 + 精简：搜索行收成分类条右边一枚图标（ListControls.tsx），点开才占一行
-  const collapsePhoneSearch = compactLayout && isMobile;
+  // 「新建链路」在页头右边（桌面手机都一样）；桌面上分类条和搜索框并排成一行（fx-list-controls）
+  // 手机：搜索行收成分类条右边一枚图标（ListControls.tsx），点开才占一行
+  const collapsePhoneSearch = isMobile;
   const [phoneSearchOpen, setPhoneSearchOpen] = useState(false);
   const [activeSection, setActiveSection] = useUrlTab<TunnelSection>({
     values: TUNNEL_SECTIONS,
@@ -4206,7 +4205,7 @@ function TunnelsContent() {
           onSelect: () => setTopologyLocation(`/topology?tunnel=${Number(tunnel.id)}`),
         },
         { key: "delete", label: "删除", ariaLabel: `删除隧道 ${tunnel.name}`, icon: <Trash2 className="h-3.5 w-3.5" />, destructive: true, onSelect: () => setDeleteTunnel(tunnel) },
-      ].filter((item) => !compactLayout || !DIAGNOSE_MERGED_MENU_KEYS.includes(item.key))}
+      ].filter((item) => !DIAGNOSE_MERGED_MENU_KEYS.includes(item.key))}
       menuLabel={`隧道 ${tunnel.name} 的更多操作`}
     />
   );
@@ -4422,7 +4421,8 @@ function TunnelsContent() {
   );
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" data-fx-std-cards={compactLayout ? undefined : ""}>
+      {/* data-fx-std-cards：标准布局下这一页的卡片按原来的标准画（compact.css 让出去）；精简下不带，卡片也紧凑 */}
       <WorkspaceHeader title="链路管理" description="管理隧道、端口转发和多节点线路" status={
           <span className="text-meta tabular-nums text-muted-foreground">
             <AnimatedStatValue
@@ -4443,14 +4443,14 @@ function TunnelsContent() {
               ...(activeSection === "tunnels" || activeSection === "chains" ? [{ value: "globe" as const, label: "3D 地球视图", icon: Globe, onHover: prefetchReactGlobe }] : []),
             ]}
           />
-          {mergeListControls ? createLinkAction : null}
+          {createLinkAction}
       </>} />
 
       <Tabs value={activeSection} onValueChange={(value) => setActiveSection(value as TunnelSection)} className="space-y-4">
         {/* fx-list-controls：精简布局（桌面）下分类条和搜索那一行并排，两行变一行（compact.css） */}
         <div className="fx-list-controls space-y-4">
         <div className="fx-tabs-row">
-        <SlidingTabsList items={TUNNEL_SECTION_ITEMS} activeValue={activeSection} ariaLabel="链路管理" minItemWidthRem={compactLayout ? 5 : 7.75} />
+        <SlidingTabsList items={TUNNEL_SECTION_ITEMS} activeValue={activeSection} ariaLabel="链路管理" minItemWidthRem={5} />
         {collapsePhoneSearch ? (
           <SearchToggle open={phoneSearchOpen} active={linkSearchQuery.length > 0} onToggle={() => setPhoneSearchOpen((value) => !value)} />
         ) : null}
@@ -4483,8 +4483,6 @@ function TunnelsContent() {
             {linkSearchStats.filtered} / {linkSearchStats.total} {linkSearchStats.unit}
           </span>
         ) : null}
-        {/* 「线路总览」本身不新建东西；系统设置里打开了向导才在这里放「按目标新建」。 */}
-        {mergeListControls ? null : createLinkAction}
       </div>
       ) : null}
         </div>
@@ -4803,13 +4801,13 @@ function TunnelsContent() {
           entryGroups={entryGroups}
           open={!!testTunnel}
           onOpenChange={(open) => !open && setTestTunnel(null)}
-          extraTabs={compactLayout ? [
+          extraTabs={[
             { key: "history", label: "延迟记录", content: <TunnelLatencyBody tunnelId={testTunnel.id} active={!!testTunnel} /> },
             ...(user?.role === "admin" && String(testTunnel.mode || "").toLowerCase() === "forwardx"
               ? [{ key: "conn", label: "连接监控", content: <TunnelConnStatsBody tunnel={{ id: testTunnel.id, name: testTunnel.name }} /> }]
               : []),
-          ] : undefined}
-          actions={compactLayout ? (
+          ]}
+          actions={(
             <>
               <Button type="button" variant="outline" size="sm" className="gap-1.5" disabled={faultBundle.pending} onClick={() => { void faultBundle.exportBundle("tunnel", Number(testTunnel.id)); }}>
                 <FileJson className="h-3.5 w-3.5" />导出故障包
@@ -4818,7 +4816,7 @@ function TunnelsContent() {
                 <Network className="h-3.5 w-3.5" />查看拓扑
               </Button>
             </>
-          ) : undefined}
+          )}
         />
       )}
 

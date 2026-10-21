@@ -435,7 +435,7 @@ function ProfileContent() {
                 onError={(message) => toast.error(message)}
                 controlsClassName="items-center"
                 previewClassName="h-16 w-16"
-                collapsible={layoutPreference.effective === "compact"}
+                collapsible
                 gridClassName="grid-cols-5 sm:grid-cols-6 2xl:grid-cols-8"
                 actions={(
                   <Button
@@ -475,7 +475,7 @@ function ProfileContent() {
               */}
               <SettingRow
                 label="布局"
-                description={`精简：控件和卡片更矮、说明文字收起来、侧栏更窄，一屏多看一截；功能和数据一样。跟随站点现在是「${PERSONALIZATION_LAYOUTS.find((item) => item.id === layoutPreference.siteLayout)?.name ?? "标准"}」。`}
+                description={`只差总览、转发、主机、链路四页的卡片：精简下更矮更密，一屏多看几张；功能和数据一样。跟随站点现在是「${PERSONALIZATION_LAYOUTS.find((item) => item.id === layoutPreference.siteLayout)?.name ?? "标准"}」。`}
                 control={(
                   <div className={cn(segmentedControlClassName, "grid grid-cols-3 gap-1")} role="radiogroup" aria-label="布局">
                     {([{ id: null, name: "跟随站点" }, ...PERSONALIZATION_LAYOUTS] as Array<{ id: PersonalizationLayoutId | null; name: string }>).map((option) => {

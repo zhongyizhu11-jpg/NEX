@@ -2014,7 +2014,7 @@ function RulesContent() {
   const { user } = useAuth();
   // 精简布局（compact.css 收的是组件打了 data-fx-help 的说明；规则框里这几行是条件渲染，由这个开关管）。
   const compactLayout = useCompactLayout();
-  const hideRuleFormHints = compactLayout;
+  const hideRuleFormHints = true;
   const [, setLocation] = useLocation();
   const search = useSearch();
   const isMobile = useIsMobile();
@@ -6991,7 +6991,7 @@ function RulesContent() {
           },
           { key: "delete", label: "删除", ariaLabel: `删除 ${rule.name}`, icon: <Trash2 className="h-3.5 w-3.5" />, destructive: true, onSelect: () => setDeleteRule(rule) },
         ].filter((action) => !readOnly || (action.key !== "reset" && action.key !== "delete"))
-          .filter((action) => !compactLayout || !DIAGNOSE_MERGED_MENU_KEYS.includes(action.key))}
+          .filter((action) => !DIAGNOSE_MERGED_MENU_KEYS.includes(action.key))}
         menuLabel={`${rule.name} 的更多操作`}
         menuOnly={menuOnly}
       />
@@ -7572,9 +7572,9 @@ function RulesContent() {
     「新建规则」放在搜索栏那一行的最右边（用户要的位置）：搜索、筛选、新建都是「对这个列表
     做事」，并排一行；页头只剩视图切换和 ···。手机上按钮带字，不缩成一个「＋」。
   */
-  // 精简布局：「新建规则」上到页头右边（桌面手机都一样，和用户 / 套餐页一致）；桌面上分类条和筛选行并排（fx-list-controls）
-  const mergeListControls = compactLayout;
-  const collapsePhoneSearch = compactLayout && isMobile;
+  // 「新建规则」在页头右边（桌面手机都一样，和用户 / 套餐页一致）；桌面上分类条和筛选行并排（fx-list-controls）
+  // 手机：搜索行收成分类条右边一枚图标
+  const collapsePhoneSearch = isMobile;
   const showSearchRow = !collapsePhoneSearch || phoneSearchOpen || ruleSearchQuery.length > 0;
   const createRuleAction = (
         rulePermissionLoading ? (
@@ -7602,10 +7602,10 @@ function RulesContent() {
   );
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" data-fx-std-cards={compactLayout ? undefined : ""}>
       {/*
-        精简布局（桌面）：分类条和搜索那一行并排，筛选下拉收进一个按钮；「新建规则」上到页头右边。
-        三行变两行。手机上照旧 —— 页头只有 393px，主操作放不下。
+        data-fx-std-cards：标准布局下这一页的卡片按原来的标准画（compact.css 让出去）；精简下不带，卡片也紧凑。
+        桌面上分类条和搜索那一行并排，筛选下拉收进一个按钮；「新建规则」在页头右边。
       */}
       <WorkspaceHeader title="转发规则" status={
           /*
@@ -7654,7 +7654,7 @@ function RulesContent() {
               <DropdownMenuItem onSelect={() => setResetTrafficTarget({ scope: "all" })} disabled={visibleRuleIdsForMetrics.length === 0 || resetTrafficMutation.isPending}><RotateCcw className="h-4 w-4" />重置数据</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-          {mergeListControls ? createRuleAction : null}
+          {createRuleAction}
       </>} />
 
       <FreezeWhile frozen={showDialog || showCopyDialog} render={() => <>
@@ -7691,8 +7691,7 @@ function RulesContent() {
           {showSearchRow ? (
           <FilterToolbar
             activeCount={Number(hasActiveUserFilter) + Number(filterResource !== "all")}
-            collapsed={mergeListControls}
-            action={mergeListControls ? undefined : createRuleAction}
+            collapsed
             search={
             <div className="relative w-full">
               <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -8023,7 +8022,7 @@ function RulesContent() {
           plannedSegments={selfTestLinkTestNodeData.plannedSegments}
           open={!!selfTestRule}
           onOpenChange={(v) => { if (!v) setSelfTestRule(null); }}
-          extraTabs={compactLayout ? [{
+          extraTabs={[{
             key: "history",
             label: "延迟记录",
             content: (
@@ -8031,8 +8030,8 @@ function RulesContent() {
                 <TcpingDetailBody ruleId={selfTestRule.id} isForwardChain={!!selfTestRule.isForwardChain} probeMethod={selfTestRule.probeMethod} active={!!selfTestRule} />
               </Suspense>
             ),
-          }] : undefined}
-          actions={compactLayout ? (
+          }]}
+          actions={(
             <>
               <Button type="button" variant="outline" size="sm" className="gap-1.5" disabled={faultBundle.pending} onClick={() => { void faultBundle.exportBundle("rule", Number(selfTestRule.id)); }}>
                 <FileJson className="h-3.5 w-3.5" />导出故障包
@@ -8041,7 +8040,7 @@ function RulesContent() {
                 <Network className="h-3.5 w-3.5" />查看拓扑
               </Button>
             </>
-          ) : undefined}
+          )}
         />
       )}
 

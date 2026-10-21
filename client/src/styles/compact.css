@@ -1,10 +1,15 @@
 /*
   ═══════════════════════════════════════════════════════════════════════
-  精简布局（设置 › 个性化 › 布局 / 个人资料 › 界面）
+  紧凑外壳（原「精简布局」，2026-10-21 起就是标准布局）
   ═══════════════════════════════════════════════════════════════════════
 
-  按 <html data-layout="compact"> 选（client/src/components/LayoutLayer.tsx 写这个属性）。
-  标准布局不带属性，这个文件里的规则一条都不生效 —— 关掉精简就是原样，一行不差。
+  用户定的边界：除了总览 / 转发 / 主机 / 链路四个主页面的**卡片**按原来的标准画，精简布局整个
+  就是标准布局。所以这个文件里的规则全部挂在 html:root 下、对两种布局都生效；四页的卡片区
+  （页面根上的 data-fx-std-cards，只在标准布局下带）用 :not([data-fx-std-cards] *) 让出去，
+  令牌在那个子树里退回 design-tokens / 主题给的值（从 html 上接住的那份，见「一、令牌」）。
+
+  现在的「精简」开关只管这一件事：四个主页面的卡片也按紧凑尺寸画（页面不带 data-fx-std-cards）。
+  <html data-layout="compact"> 仍由 LayoutLayer 写，留给以后只在精简下才做的东西。
 
   这一套只改**尺寸**，不改颜色：字号降一档、卡片和控件更矮、圆角更小、侧栏更窄、
   说明文字收起来。颜色和画法全由主题（theme-*.css）和卡片风格说了算，所以八套
@@ -27,7 +32,35 @@
 */
 
 /* ───── 一、令牌：字号、间距、圆角、外壳尺寸 ───── */
-html[data-layout="compact"] {
+/*
+  标准值先在 html 上接一份（design-tokens.css 和各主题都把令牌写在 :root / html[data-ui-theme] 上），
+  紧凑的值写在 body 上；四个主页面的卡片区（data-fx-std-cards）再把接住的那份拿回去 ——
+  这样它们的字号、留白、圆角都是主题自己给的，不用在这里替每套主题各抄一遍。
+*/
+html:root {
+  --fx-std-size-display: var(--fx-size-display);
+  --fx-std-size-metric: var(--fx-size-metric);
+  --fx-std-size-section: var(--fx-size-section);
+  --fx-std-size-primary: var(--fx-size-primary);
+  --fx-std-size-secondary: var(--fx-size-secondary);
+  --fx-std-size-meta: var(--fx-size-meta);
+  --fx-std-line-display: var(--fx-line-display);
+  --fx-std-line-metric: var(--fx-line-metric);
+  --fx-std-line-section: var(--fx-line-section);
+  --fx-std-line-primary: var(--fx-line-primary);
+  --fx-std-line-secondary: var(--fx-line-secondary);
+  --fx-std-line-meta: var(--fx-line-meta);
+  --fx-std-gutter: var(--fx-gutter);
+  --fx-std-card-padding: var(--fx-card-padding);
+  --fx-std-card-gap: var(--fx-card-gap);
+  --fx-std-section-gap: var(--fx-section-gap);
+  --fx-std-radius-control: var(--fx-radius-control);
+  --fx-std-radius-card: var(--fx-radius-card);
+  --fx-std-radius-surface: var(--fx-radius-surface);
+  --fx-std-radius-modal: var(--fx-radius-modal);
+  --fx-std-radius: var(--radius);
+}
+html:root body {
   --fx-size-display: 26px;
   --fx-size-metric: 20px;
   --fx-size-section: 17px;
@@ -57,129 +90,153 @@ html[data-layout="compact"] {
   --fx-header-height: 44px;
   --fx-sidebar-width: 12rem;
 }
+/* 四个主页面的卡片区：令牌退回标准（主题）值。只在标准布局下页面才带这个属性；精简下不带，卡片也按上面的紧凑值画 */
+html:root [data-fx-std-cards] {
+  --fx-size-display: var(--fx-std-size-display);
+  --fx-size-metric: var(--fx-std-size-metric);
+  --fx-size-section: var(--fx-std-size-section);
+  --fx-size-primary: var(--fx-std-size-primary);
+  --fx-size-secondary: var(--fx-std-size-secondary);
+  --fx-size-meta: var(--fx-std-size-meta);
+  --fx-line-display: var(--fx-std-line-display);
+  --fx-line-metric: var(--fx-std-line-metric);
+  --fx-line-section: var(--fx-std-line-section);
+  --fx-line-primary: var(--fx-std-line-primary);
+  --fx-line-secondary: var(--fx-std-line-secondary);
+  --fx-line-meta: var(--fx-std-line-meta);
+  --fx-gutter: var(--fx-std-gutter);
+  --fx-card-padding: var(--fx-std-card-padding);
+  --fx-card-gap: var(--fx-std-card-gap);
+  --fx-section-gap: var(--fx-std-section-gap);
+  --fx-radius-control: var(--fx-std-radius-control);
+  --fx-radius-card: var(--fx-std-radius-card);
+  --fx-radius-surface: var(--fx-std-radius-surface);
+  --fx-radius-modal: var(--fx-std-radius-modal);
+  --radius: var(--fx-std-radius);
+}
 
 /* ───── 二、说明文字、重复的东西 ───── */
-html[data-layout="compact"] [data-fx-help]:not([data-fx-keep]) { display: none; }
+html:root [data-fx-help]:not([data-fx-keep]) { display: none; }
 /*
   data-fx-compact-hide：精简下整块不要的东西 —— 在别处已经有一份的（页脚链接、个人资料里的
   退出登录卡、和上方分类条同名的小标题、和状态卡重复的页头计数）。
 */
-html[data-layout="compact"] [data-fx-compact-hide] { display: none; }
+html:root [data-fx-compact-hide] { display: none; }
 /* 页头第二、三行（状态点、小走势）：数字在标题行的状态里已经有了，走势是装饰 */
-html[data-layout="compact"] .workspace-header-chips,
-html[data-layout="compact"] .workspace-header-aside { display: none; }
+html:root .workspace-header-chips,
+html:root .workspace-header-aside { display: none; }
 
 /* ───── 三、外壳：顶栏、侧栏、页面留白 ───── */
-html[data-layout="compact"] .workspace-appbar-inner { padding-inline: 6px 8px; }
-html[data-layout="compact"] .workspace-appbar-icon,
-html[data-layout="compact"] .workspace-appbar-account { width: 32px; height: 32px; }
-html[data-layout="compact"] .workspace-appbar-brand { height: 32px; }
-html[data-layout="compact"] .workspace-appbar-title { font-size: 14px; }
-html[data-layout="compact"] .workspace-appbar-search { height: 32px; padding: 0 10px; font-size: 12.5px; }
+html:root .workspace-appbar-inner { padding-inline: 6px 8px; }
+html:root .workspace-appbar-icon,
+html:root .workspace-appbar-account { width: 32px; height: 32px; }
+html:root .workspace-appbar-brand { height: 32px; }
+html:root .workspace-appbar-title { font-size: 14px; }
+html:root .workspace-appbar-search { height: 32px; padding: 0 10px; font-size: 12.5px; }
 
-html[data-layout="compact"] .workspace-layout [data-sidebar="menu-button"] { min-height: 28px; font-size: 13px; padding-inline: 8px; border-radius: 8px; }
-html[data-layout="compact"] .workspace-layout [data-sidebar="menu-button"] > svg { width: 15px; height: 15px; }
-html[data-layout="compact"] .workspace-layout [data-sidebar="group-label"] { font-size: 10px; letter-spacing: .06em; height: 24px; }
-html[data-layout="compact"] .workspace-layout [data-sidebar="menu"] { gap: 1px; }
+html:root .workspace-layout [data-sidebar="menu-button"] { min-height: 28px; font-size: 13px; padding-inline: 8px; border-radius: 8px; }
+html:root .workspace-layout [data-sidebar="menu-button"] > svg { width: 15px; height: 15px; }
+html:root .workspace-layout [data-sidebar="group-label"] { font-size: 10px; letter-spacing: .06em; height: 24px; }
+html:root .workspace-layout [data-sidebar="menu"] { gap: 1px; }
 
 /* 页面四周：桌面 24/32 → 16/20，手机不动（12 已经是触控下限附近） */
 @media (min-width: 640px) {
-  html[data-layout="compact"] .workspace-main { padding: 12px 20px 20px; }
+  html:root .workspace-main { padding: 12px 20px 20px; }
 }
 
 /* ───── 四、页头 ───── */
-html[data-layout="compact"] .workspace-main h1 { font-size: 18px; line-height: 24px; }
-html[data-layout="compact"] .workspace-header h2 { font-size: 16px; line-height: 22px; }
-html[data-layout="compact"] .workspace-header { gap: 12px; }
-html[data-layout="compact"] .workspace-header-meta { font-size: 12px; margin-top: 0; }
-html[data-layout="compact"] .workspace-header-actions { gap: 6px; }
+html:root .workspace-main h1 { font-size: 18px; line-height: 24px; }
+html:root .workspace-header h2 { font-size: 16px; line-height: 22px; }
+html:root .workspace-header { gap: 12px; }
+html:root .workspace-header-meta { font-size: 12px; margin-top: 0; }
+html:root .workspace-header-actions { gap: 6px; }
 
 /* ───── 五、竖向节奏：区块之间减一档 ───── */
-html[data-layout="compact"] .workspace-main .space-y-6 > :not(:last-child):not(.fx-navbar) { margin-block-end: 14px; }
-html[data-layout="compact"] .workspace-main .space-y-5 > :not(:last-child) { margin-block-end: 12px; }
-html[data-layout="compact"] .workspace-main .space-y-4 > :not(:last-child) { margin-block-end: 10px; }
-html[data-layout="compact"] .workspace-main .space-y-3 > :not(:last-child) { margin-block-end: 8px; }
-html[data-layout="compact"] .workspace-main .gap-6 { gap: 14px; }
-html[data-layout="compact"] .workspace-main .gap-5 { gap: 12px; }
-html[data-layout="compact"] .workspace-main .gap-4 { gap: 10px; }
-html[data-layout="compact"] .workspace-main .gap-3 { gap: 8px; }
+html:root .workspace-main .space-y-6 > :not(:last-child):not(.fx-navbar) { margin-block-end: 14px; }
+html:root .workspace-main .space-y-5 > :not(:last-child) { margin-block-end: 12px; }
+html:root .workspace-main .space-y-4 > :not(:last-child) { margin-block-end: 10px; }
+html:root .workspace-main .space-y-3 > :not(:last-child) { margin-block-end: 8px; }
+html:root .workspace-main .gap-6 { gap: 14px; }
+html:root .workspace-main .gap-5 { gap: 12px; }
+html:root .workspace-main .gap-4 { gap: 10px; }
+html:root .workspace-main .gap-3 { gap: 8px; }
 
-/* ───── 六、卡片 ───── */
-html[data-layout="compact"] .workspace-main [data-slot="card-header"] { padding: 10px 12px 0; gap: 2px; }
-html[data-layout="compact"] .workspace-main [data-slot="card-content"] { padding: 10px 12px 12px; }
-html[data-layout="compact"] .workspace-main [data-slot="card-footer"] { padding: 0 12px 12px; }
-html[data-layout="compact"] .workspace-main [data-slot="card-title"] { font-size: 14px; line-height: 20px; }
-html[data-layout="compact"] .workspace-main [data-slot="card-header"] + [data-slot="card-content"] { padding-top: 8px; }
-html[data-layout="compact"] .workspace-main .action-card-content { padding: 10px 12px; }
-html[data-layout="compact"] .fx-entity-card { --fx-card-padding: 12px; }
-html[data-layout="compact"] .fx-summary { padding: 0 10px; }
-html[data-layout="compact"] .fx-summary-value { font-size: 18px; line-height: 22px; }
+/* ───── 六、卡片（四个主页面的卡片区让出去：那里按原来的标准画） ───── */
+html:root .workspace-main [data-slot="card-header"]:not([data-fx-std-cards] *) { padding: 10px 12px 0; gap: 2px; }
+html:root .workspace-main [data-slot="card-content"]:not([data-fx-std-cards] *) { padding: 10px 12px 12px; }
+html:root .workspace-main [data-slot="card-footer"]:not([data-fx-std-cards] *) { padding: 0 12px 12px; }
+html:root .workspace-main [data-slot="card-title"]:not([data-fx-std-cards] *) { font-size: 14px; line-height: 20px; }
+html:root .workspace-main [data-slot="card-header"] + [data-slot="card-content"]:not([data-fx-std-cards] *) { padding-top: 8px; }
+html:root .workspace-main .action-card-content:not([data-fx-std-cards] *) { padding: 10px 12px; }
+html:root .fx-entity-card:not([data-fx-std-cards] *) { --fx-card-padding: 12px; }
+html:root .fx-summary:not([data-fx-std-cards] *) { padding: 0 10px; }
+html:root .fx-summary-value:not([data-fx-std-cards] *) { font-size: 18px; line-height: 22px; }
 /* 首页流量走势：208 → 150px，一屏多放一截列表 */
 @media (min-width: 640px) {
-  html[data-layout="compact"] [data-fx-chart="traffic"] { height: 150px; }
+  html:root [data-fx-chart="traffic"]:not([data-fx-std-cards] *) { height: 150px; }
 }
 
 /* 规则卡 / 链路卡：大数字从 22 收到 18，脚部间距减一档，走势线照画 */
-html[data-layout="compact"] .fx-rule-num > b { font-size: 18px; }
-html[data-layout="compact"] .fx-rule-num > small { font-size: 11.5px; }
-html[data-layout="compact"] .fx-rule-big { margin-top: 8px; gap: 10px; }
-html[data-layout="compact"] .fx-tunnel-foot { margin-top: 8px; padding-top: 8px; gap: 8px; }
+html:root .fx-rule-num > b:not([data-fx-std-cards] *) { font-size: 18px; }
+html:root .fx-rule-num > small:not([data-fx-std-cards] *) { font-size: 11.5px; }
+html:root .fx-rule-big:not([data-fx-std-cards] *) { margin-top: 8px; gap: 10px; }
+html:root .fx-tunnel-foot:not([data-fx-std-cards] *) { margin-top: 8px; padding-top: 8px; gap: 8px; }
 
 /* ───── 七、列表、设置行、表格 ───── */
-html[data-layout="compact"] .fx-list-row { padding: 8px 12px; gap: 10px; }
-html[data-layout="compact"] .fx-list-row-inset + .fx-list-row-inset { background-size: calc(100% - 38px) 1px; background-position: 38px 0; }
-html[data-layout="compact"] .fx-list-section-header,
-html[data-layout="compact"] .workspace-main .fx-list-section-header { padding-bottom: 4px; }
-html[data-layout="compact"] .fx-setting-row { padding-block: 8px; gap: 8px; }
-html[data-layout="compact"] .workspace-main [data-slot="table-head"] { padding: 6px 10px; font-size: 12px; height: auto; }
-html[data-layout="compact"] .workspace-main [data-slot="table-cell"] { padding: 6px 10px; font-size: 13px; }
-html[data-layout="compact"] .empty-state { padding: 20px 12px; gap: 8px; }
-html[data-layout="compact"] .empty-state-icon svg { width: 20px; height: 20px; }
+html:root .fx-list-row { padding: 8px 12px; gap: 10px; }
+html:root .fx-list-row-inset + .fx-list-row-inset { background-size: calc(100% - 38px) 1px; background-position: 38px 0; }
+html:root .fx-list-section-header,
+html:root .workspace-main .fx-list-section-header { padding-bottom: 4px; }
+html:root .fx-setting-row { padding-block: 8px; gap: 8px; }
+html:root .workspace-main [data-slot="table-head"] { padding: 6px 10px; font-size: 12px; height: auto; }
+html:root .workspace-main [data-slot="table-cell"] { padding: 6px 10px; font-size: 13px; }
+html:root .empty-state { padding: 20px 12px; gap: 8px; }
+html:root .empty-state-icon svg { width: 20px; height: 20px; }
 
 /* ───── 八、控件：按钮、输入框、分段控件、药丸 ───── */
 /* 只在有鼠标的设备上压到 32px；触屏保持 36 以上的命中区 */
 @media (pointer: fine) {
-  html[data-layout="compact"] .workspace-main [data-slot="button"]:not([data-icon-button]) { min-height: 0; height: 32px; padding-block: 0; font-size: 13px; }
-  html[data-layout="compact"] .workspace-main [data-slot="button"][data-icon-button] { width: 32px; height: 32px; }
-  html[data-layout="compact"] .workspace-main [data-slot="input"],
-  html[data-layout="compact"] .workspace-main [data-slot="select-trigger"] { height: 32px; font-size: 13px; }
-  html[data-layout="compact"] .dialog-panel [data-slot="input"],
-  html[data-layout="compact"] .dialog-panel [data-slot="select-trigger"] { height: 32px; font-size: 13px; }
-  html[data-layout="compact"] .dialog-panel [data-slot="button"]:not([data-icon-button]) { height: 32px; min-height: 0; padding-block: 0; font-size: 13px; }
-  html[data-layout="compact"] .fx-chip { height: 28px; min-height: 28px; padding: 0 10px; font-size: 12.5px; }
-  html[data-layout="compact"] .workspace-tabs { padding: 2px; }
-  html[data-layout="compact"] .workspace-tabs .workspace-tab { min-height: 26px; padding: 3px 10px; font-size: 13px; }
+  html:root .workspace-main [data-slot="button"]:not([data-icon-button]) { min-height: 0; height: 32px; padding-block: 0; font-size: 13px; }
+  html:root .workspace-main [data-slot="button"][data-icon-button] { width: 32px; height: 32px; }
+  html:root .workspace-main [data-slot="input"],
+  html:root .workspace-main [data-slot="select-trigger"] { height: 32px; font-size: 13px; }
+  html:root .dialog-panel [data-slot="input"],
+  html:root .dialog-panel [data-slot="select-trigger"] { height: 32px; font-size: 13px; }
+  html:root .dialog-panel [data-slot="button"]:not([data-icon-button]) { height: 32px; min-height: 0; padding-block: 0; font-size: 13px; }
+  html:root .fx-chip { height: 28px; min-height: 28px; padding: 0 10px; font-size: 12.5px; }
+  html:root .workspace-tabs { padding: 2px; }
+  html:root .workspace-tabs .workspace-tab { min-height: 26px; padding: 3px 10px; font-size: 13px; }
 }
-html[data-layout="compact"] .workspace-main [data-slot="badge"] { font-size: 11px; }
-html[data-layout="compact"] .workspace-main [data-slot="label"] { font-size: 13px; }
-html[data-layout="compact"] .workspace-filter { gap: 6px; }
+html:root .workspace-main [data-slot="badge"] { font-size: 11px; }
+html:root .workspace-main [data-slot="label"] { font-size: 13px; }
+html:root .workspace-filter { gap: 6px; }
 
 /* ───── 八点五、设置页：各卡的保存按钮收进底下的保存栏（SaveDockBar，见 components/settings/SaveDock.tsx） ───── */
-html[data-layout="compact"] .fx-settings-pane [data-dock-save] { display: none; }
+html:root .fx-settings-pane [data-dock-save] { display: none; }
 /* 只装着那个保存按钮的那一行（flex justify-end 之类）也一起收，不然卡底留一条空白 */
-html[data-layout="compact"] .fx-settings-pane [data-slot="card-content"] > :has(> [data-dock-save]):not(:has(> :not([data-dock-save]))),
-html[data-layout="compact"] .fx-settings-pane [data-slot="card-footer"]:has(> [data-dock-save]):not(:has(> :not([data-dock-save]))) { display: none; }
+html:root .fx-settings-pane [data-slot="card-content"] > :has(> [data-dock-save]):not(:has(> :not([data-dock-save]))),
+html:root .fx-settings-pane [data-slot="card-footer"]:has(> [data-dock-save]):not(:has(> :not([data-dock-save]))) { display: none; }
 /* 收掉那一行之后，它前面那一项的 space-y 下边距也不要（display:none 的元素仍算 :last-child 之外的一个孩子） */
-html[data-layout="compact"] .fx-settings-pane [data-slot="card-content"] > :has(+ :last-child:has(> [data-dock-save]):not(:has(> :not([data-dock-save])))) { margin-block-end: 0; }
+html:root .fx-settings-pane [data-slot="card-content"] > :has(+ :last-child:has(> [data-dock-save]):not(:has(> :not([data-dock-save])))) { margin-block-end: 0; }
 
 /* ───── 九、对话框 ───── */
 @media (min-width: 640px) {
-  html[data-layout="compact"] .dialog-panel { padding: 18px 20px; gap: 14px; }
+  html:root .dialog-panel { padding: 18px 20px; gap: 14px; }
 }
-html[data-layout="compact"] .dialog-panel [data-slot="dialog-title"] { font-size: 16px; line-height: 22px; }
+html:root .dialog-panel [data-slot="dialog-title"] { font-size: 16px; line-height: 22px; }
 
 /* ───── 十、手机：底部标签栏和顶栏不改；页面里的尺寸令牌已经生效，这里只收几处手机专有的 ───── */
 @media (max-width: 767px) {
   /* 精简 + 手机下整块不要的东西（套餐页只剩一个视图切换的那一行） */
-  html[data-layout="compact"] [data-fx-compact-hide-phone] { display: none; }
+  html:root [data-fx-compact-hide-phone] { display: none; }
   /* 页头右边的按钮：40 → 36（触控下限之上），「新建」现在也在这一行 */
-  html[data-layout="compact"] .workspace-header-actions > [data-slot="button"] { height: 36px; min-height: 36px; }
-  html[data-layout="compact"] .workspace-header-actions > [data-slot="button"][data-icon-button] { width: 36px; }
+  html:root .workspace-header-actions > [data-slot="button"] { height: 36px; min-height: 36px; }
+  html:root .workspace-header-actions > [data-slot="button"][data-icon-button] { width: 36px; }
   /* 分类条 40 → 36，和搜索框、搜索 / 筛选图标同高 */
-  html[data-layout="compact"] .workspace-tabs { padding: 2px; }
-  html[data-layout="compact"] .workspace-tabs .workspace-tab { min-height: 32px; }
-  html[data-layout="compact"] .workspace-main .fx-filter-pill,
-  html[data-layout="compact"] .workspace-main .fx-search-toggle { width: 36px; height: 36px; min-height: 36px; }
+  html:root .workspace-tabs { padding: 2px; }
+  html:root .workspace-tabs .workspace-tab { min-height: 32px; }
+  html:root .workspace-main .fx-filter-pill,
+  html:root .workspace-main .fx-search-toggle { width: 36px; height: 36px; min-height: 36px; }
 }
 
 /* ───── 十一、列表页的控制行：分类条和搜索并排，筛选收进一个按钮，表格行更矮 ───── */
@@ -190,50 +247,50 @@ html[data-layout="compact"] .dialog-panel [data-slot="dialog-title"] { font-size
 */
 @media (min-width: 1024px) {
   /* 顶对齐：筛选点开后搜索那一列变成两行，分类条留在第一行，不往下掉 */
-  html[data-layout="compact"] .workspace-main .fx-list-controls { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 12px; }
-  html[data-layout="compact"] .workspace-main .fx-list-controls > :first-child { margin-top: 2px; }
-  html[data-layout="compact"] .workspace-main .fx-list-controls > :not(:last-child) { margin-block-end: 0; }
-  html[data-layout="compact"] .workspace-main .fx-list-controls > :first-child { flex: 1 1 360px; min-width: 0; }
-  html[data-layout="compact"] .workspace-main .fx-list-controls > :last-child { flex: 1 1 380px; max-width: 560px; min-width: 0; }
-  html[data-layout="compact"] .workspace-main .fx-list-controls .workspace-filter-search { flex: 1 1 200px; }
-  html[data-layout="compact"] .workspace-main .fx-list-controls .workspace-filter-options { flex-basis: 100%; }
+  html:root .workspace-main .fx-list-controls { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 12px; }
+  html:root .workspace-main .fx-list-controls > :first-child { margin-top: 2px; }
+  html:root .workspace-main .fx-list-controls > :not(:last-child) { margin-block-end: 0; }
+  html:root .workspace-main .fx-list-controls > :first-child { flex: 1 1 360px; min-width: 0; }
+  html:root .workspace-main .fx-list-controls > :last-child { flex: 1 1 380px; max-width: 560px; min-width: 0; }
+  html:root .workspace-main .fx-list-controls .workspace-filter-search { flex: 1 1 200px; }
+  html:root .workspace-main .fx-list-controls .workspace-filter-options { flex-basis: 100%; }
 }
-html[data-layout="compact"] .workspace-filter[data-collapsed] .fx-filter-pill { height: 32px; width: 32px; padding: 0; }
+html:root .workspace-filter[data-collapsed] .fx-filter-pill { height: 32px; width: 32px; padding: 0; }
 /* 分类条上的小图标在桌面上也去掉：文字已经把事说完了，八个分类带图标一行放不下 */
 @media (min-width: 1024px) {
-  html[data-layout="compact"] .workspace-tabs .workspace-tab > svg { display: none; }
+  html:root .workspace-tabs .workspace-tab > svg { display: none; }
 }
 /* 筛选图标按钮：默认尺寸自带 14px 左右内边距，压到 32px 宽时图标会被挤没 */
-html[data-layout="compact"] .workspace-main .fx-filter-pill { padding-inline: 0; }
-html[data-layout="compact"] .fx-table-row { height: 56px; }
+html:root .workspace-main .fx-filter-pill { padding-inline: 0; }
+html:root .fx-table-row { height: 56px; }
 
 /* 用户表：配额那几个小框摊平成一行文字（框本身不说事） */
-html[data-layout="compact"] .fx-quota-chips { gap: 2px 10px; }
-html[data-layout="compact"] .fx-quota-chips > span { height: auto; padding: 0; border: 0; background: none; border-radius: 0; }
+html:root .fx-quota-chips { gap: 2px 10px; }
+html:root .fx-quota-chips > span { height: auto; padding: 0; border: 0; background: none; border-radius: 0; }
 
 /* 主机编辑框「其他配置」：十来个灰框改成细线分隔的列表 */
-html[data-layout="compact"] .dialog-panel [data-fx-setting-box] { margin-top: 0; padding: 8px 0; border-radius: 0; background: none; border-top: 1px solid var(--fx-stroke-weak); }
+html:root .dialog-panel [data-fx-setting-box] { margin-top: 0; padding: 8px 0; border-radius: 0; background: none; border-top: 1px solid var(--fx-stroke-weak); }
 
 /* ───── 十二、规则编辑框：出口 / 线路组 / 更多设置三个折叠框连成一组（挨着的合并边线、去底色） ───── */
-html[data-layout="compact"] .dialog-panel .fx-rule-collapsible { background: none; }
-html[data-layout="compact"] .dialog-panel .fx-rule-collapsible + .fx-rule-collapsible { margin-top: -1px; border-top-left-radius: 0; border-top-right-radius: 0; }
-html[data-layout="compact"] .dialog-panel .fx-rule-collapsible:has(+ .fx-rule-collapsible) { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
-html[data-layout="compact"] .dialog-panel .fx-rule-collapsible > button { padding-block: 6px; }
+html:root .dialog-panel .fx-rule-collapsible { background: none; }
+html:root .dialog-panel .fx-rule-collapsible + .fx-rule-collapsible { margin-top: -1px; border-top-left-radius: 0; border-top-right-radius: 0; }
+html:root .dialog-panel .fx-rule-collapsible:has(+ .fx-rule-collapsible) { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+html:root .dialog-panel .fx-rule-collapsible > button { padding-block: 6px; }
 
 /* 订阅页：每条订阅链接的「一键订阅」不再整行拉满 */
 @media (min-width: 640px) {
-  html[data-layout="compact"] .fx-token-subscribe { width: auto; }
+  html:root .fx-token-subscribe { width: auto; }
 }
 
 /* ───── 十三、零碎的密度 ───── */
 /* 规则页按类分组的那一行表头：矮一档 */
-html[data-layout="compact"] .fx-rule-group-header { padding-block: 4px; }
-html[data-layout="compact"] .fx-rule-group-header > span:first-of-type { font-size: 14px; }
+html:root .fx-rule-group-header { padding-block: 4px; }
+html:root .fx-rule-group-header > span:first-of-type { font-size: 14px; }
 /* 空状态、加载、出错块：标准下为了稳住布局给了 220～260px 的最小高度，精简下不必 */
-html[data-layout="compact"] .workspace-main .empty-state { min-height: 140px; }
+html:root .workspace-main .empty-state { min-height: 140px; }
 /* 用户管理「资源授权」里每类资源下面那个虚线空框：只留那句话 */
-html[data-layout="compact"] .dialog-panel .fx-empty-hint { border: 0; padding: 2px 0; border-radius: 0; }
+html:root .dialog-panel .fx-empty-hint { border: 0; padding: 2px 0; border-radius: 0; }
 /* 用户表：ID 列和两枚标签不画之后，不再要那么宽 */
 @media (min-width: 1280px) {
-  html[data-layout="compact"] .fx-users-table { min-width: 1280px; }
+  html:root .fx-users-table { min-width: 1280px; }
 }
