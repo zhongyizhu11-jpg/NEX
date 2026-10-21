@@ -6991,7 +6991,7 @@ function RulesContent() {
           },
           { key: "delete", label: "删除", ariaLabel: `删除 ${rule.name}`, icon: <Trash2 className="h-3.5 w-3.5" />, destructive: true, onSelect: () => setDeleteRule(rule) },
         ].filter((action) => !readOnly || (action.key !== "reset" && action.key !== "delete"))
-          .filter((action) => !DIAGNOSE_MERGED_MENU_KEYS.includes(action.key))}
+          .filter((action) => !compactLayout || !DIAGNOSE_MERGED_MENU_KEYS.includes(action.key))}
         menuLabel={`${rule.name} 的更多操作`}
         menuOnly={menuOnly}
       />
@@ -7572,9 +7572,12 @@ function RulesContent() {
     「新建规则」放在搜索栏那一行的最右边（用户要的位置）：搜索、筛选、新建都是「对这个列表
     做事」，并排一行；页头只剩视图切换和 ···。手机上按钮带字，不缩成一个「＋」。
   */
-  // 「新建规则」在页头右边（桌面手机都一样，和用户 / 套餐页一致）；桌面上分类条和筛选行并排（fx-list-controls）
-  // 手机：搜索行收成分类条右边一枚图标
-  const collapsePhoneSearch = isMobile;
+  // 精简：「新建规则」上到页头右边，桌面上分类条和筛选行并排（fx-list-controls）；手机上搜索行收成分类条右边一枚图标。
+  // 标准布局下这一页整页按原来的样子（页面根带 data-fx-std-page，compact.css 让出去）。
+  const mergeListControls = compactLayout;
+  const collapsePhoneSearch = compactLayout && isMobile;
+  // 手机 + 标准：页头右边那个「···」压在走势线上不好看（用户圈出来的），挪到下面状态点那一行的右边、不描边
+  const overflowInHeader = mergeListControls || !isMobile;
   const showSearchRow = !collapsePhoneSearch || phoneSearchOpen || ruleSearchQuery.length > 0;
   const createRuleAction = (
         rulePermissionLoading ? (
@@ -7601,11 +7604,22 @@ function RulesContent() {
         )
   );
 
+  /* 页头右边的「···」（批量管理、重置数据）：桌面 / 精简在标题那一行右边，手机 + 标准挪到状态点那一行右边（不描边） */
+  const ruleOverflowMenu = (variant: "outline" | "ghost") => (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild><Button variant={variant} size="icon" aria-label="更多规则操作"><span aria-hidden="true">•••</span></Button></DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onSelect={openCopyDialog} disabled={!transferSourceRules.length && !canAdd}><ClipboardCopy className="h-4 w-4" />批量管理</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setResetTrafficTarget({ scope: "all" })} disabled={visibleRuleIdsForMetrics.length === 0 || resetTrafficMutation.isPending}><RotateCcw className="h-4 w-4" />重置数据</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+  );
+
   return (
-    <div className="space-y-6" data-fx-std-cards={compactLayout ? undefined : ""}>
+    <div className="space-y-6" data-fx-std-page={compactLayout ? undefined : ""}>
       {/*
-        data-fx-std-cards：标准布局下这一页的卡片按原来的标准画（compact.css 让出去）；精简下不带，卡片也紧凑。
-        桌面上分类条和搜索那一行并排，筛选下拉收进一个按钮；「新建规则」在页头右边。
+        data-fx-std-page：标准布局下这一页整页按原来的标准画（compact.css 让出去）；精简下不带，
+        分类条和搜索那一行并排、筛选下拉收进一个按钮、「新建规则」上到页头右边。
       */}
       <WorkspaceHeader title="转发规则" status={
           /*
@@ -7627,7 +7641,7 @@ function RulesContent() {
             { key: "running", label: "运行", count: activeCount, tone: "healthy" },
             { key: "disabled", label: "停用", count: Math.max(0, filteredRuleTotal - activeCount), tone: "off" },
           ]} />
-      } aside={
+      } chipsAside={overflowInHeader ? undefined : ruleOverflowMenu("ghost")} aside={
           <HeaderSpark values={dailySpark.values} title="近 24 小时流量走势" caption={<>
             {"近 24H ↓ "}
             <AnimatedStatValue as="span" value={formatBytes(dailyTrafficTotals.bytesIn)} loading={dailyTrafficTotalsLoading} fallbackValue="0 B"
@@ -7647,14 +7661,8 @@ function RulesContent() {
               { value: "globe", label: "3D 流量转发图", icon: Globe, onHover: prefetchReactGlobe },
             ]}
           />
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild><Button variant="outline" size="icon" aria-label="更多规则操作"><span aria-hidden="true">•••</span></Button></DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onSelect={openCopyDialog} disabled={!transferSourceRules.length && !canAdd}><ClipboardCopy className="h-4 w-4" />批量管理</DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => setResetTrafficTarget({ scope: "all" })} disabled={visibleRuleIdsForMetrics.length === 0 || resetTrafficMutation.isPending}><RotateCcw className="h-4 w-4" />重置数据</DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-          {createRuleAction}
+          {overflowInHeader ? ruleOverflowMenu("outline") : null}
+          {mergeListControls ? createRuleAction : null}
       </>} />
 
       <FreezeWhile frozen={showDialog || showCopyDialog} render={() => <>
@@ -7691,7 +7699,8 @@ function RulesContent() {
           {showSearchRow ? (
           <FilterToolbar
             activeCount={Number(hasActiveUserFilter) + Number(filterResource !== "all")}
-            collapsed
+            collapsed={mergeListControls}
+            action={mergeListControls ? undefined : createRuleAction}
             search={
             <div className="relative w-full">
               <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -8022,7 +8031,7 @@ function RulesContent() {
           plannedSegments={selfTestLinkTestNodeData.plannedSegments}
           open={!!selfTestRule}
           onOpenChange={(v) => { if (!v) setSelfTestRule(null); }}
-          extraTabs={[{
+          extraTabs={compactLayout ? [{
             key: "history",
             label: "延迟记录",
             content: (
@@ -8030,8 +8039,8 @@ function RulesContent() {
                 <TcpingDetailBody ruleId={selfTestRule.id} isForwardChain={!!selfTestRule.isForwardChain} probeMethod={selfTestRule.probeMethod} active={!!selfTestRule} />
               </Suspense>
             ),
-          }]}
-          actions={(
+          }] : undefined}
+          actions={compactLayout ? (
             <>
               <Button type="button" variant="outline" size="sm" className="gap-1.5" disabled={faultBundle.pending} onClick={() => { void faultBundle.exportBundle("rule", Number(selfTestRule.id)); }}>
                 <FileJson className="h-3.5 w-3.5" />导出故障包
@@ -8040,7 +8049,7 @@ function RulesContent() {
                 <Network className="h-3.5 w-3.5" />查看拓扑
               </Button>
             </>
-          )}
+          ) : undefined}
         />
       )}
 

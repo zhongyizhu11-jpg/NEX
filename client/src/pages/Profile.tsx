@@ -475,7 +475,7 @@ function ProfileContent() {
               */}
               <SettingRow
                 label="布局"
-                description={`只差总览、转发、主机、链路四页的卡片：精简下更矮更密，一屏多看几张；功能和数据一样。跟随站点现在是「${PERSONALIZATION_LAYOUTS.find((item) => item.id === layoutPreference.siteLayout)?.name ?? "标准"}」。`}
+                description={`只差总览、转发、主机、链路四页：精简下按紧凑的方式画，一屏多看几张；功能和数据一样。跟随站点现在是「${PERSONALIZATION_LAYOUTS.find((item) => item.id === layoutPreference.siteLayout)?.name ?? "标准"}」。`}
                 control={(
                   <div className={cn(segmentedControlClassName, "grid grid-cols-3 gap-1")} role="radiogroup" aria-label="布局">
                     {([{ id: null, name: "跟随站点" }, ...PERSONALIZATION_LAYOUTS] as Array<{ id: PersonalizationLayoutId | null; name: string }>).map((option) => {

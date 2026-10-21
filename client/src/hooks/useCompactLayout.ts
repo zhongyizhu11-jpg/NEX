@@ -11,8 +11,8 @@ import { trpc } from "@/lib/trpc";
 
   谁说了算：个人资料 › 界面 里的个人偏好（users.uiLayout）› 设置 › 个性化 › 布局 的站点默认（personalizationLayout）。
   2026-10-21 起紧凑外壳就是标准布局（client/src/styles/compact.css 对两种布局都生效），两种只差总览 / 转发 /
-  主机 / 链路四页的卡片：标准下页面根带 data-fx-std-cards 让卡片按原来的尺寸画，精简下不带。所以读这个 hook 的
-  只剩那四页（决定带不带属性）和链路卡的 oneLineFoot。
+  主机 / 链路四页：标准下页面根带 data-fx-std-page 让整页按原来的样子画，精简下不带。所以读这个 hook 的
+  只剩那四页（带不带属性、「新建」放哪、手机上收不收搜索、诊断动作合不合并）。
 */
 export function useLayoutPreference() {
   const { user } = useAuth();

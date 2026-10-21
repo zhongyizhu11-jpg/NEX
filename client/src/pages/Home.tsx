@@ -232,8 +232,8 @@ function DashboardContent() {
   );
 
   return (
-    <div className="space-y-6" data-fx-std-cards={compactLayout ? undefined : ""}>
-      {/* data-fx-std-cards：标准布局下总览的卡片按原来的标准画（compact.css 让出去）；精简下不带，卡片也紧凑 */}
+    <div className="space-y-6" data-fx-std-page={compactLayout ? undefined : ""}>
+      {/* data-fx-std-page：标准布局下总览整页按原来的标准画（compact.css 让出去）；精简下不带，按紧凑的方式画 */}
       {/*
         标题下面那一行是此刻的数（「4 台主机 · 19 条线路 · 19 条转发」），不是一句说明书。
         「查看运行状态、资源使用和流量趋势」是在解释这一页叫总览 —— 它叫总览就够了。

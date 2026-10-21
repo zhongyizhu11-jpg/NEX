@@ -1043,6 +1043,10 @@ html[data-personalization-background="image"] .auth-divider-label, html[data-per
 .workspace-header-aside { display: flex; flex: none; flex-direction: column; align-items: flex-end; gap: 1px; padding-top: 2px; font-size: 11.5px; line-height: 15px; color: var(--fx-text-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .workspace-header-aside .fx-sparkline { width: 96px; height: 22px; color: var(--fx-text-muted); }
 .workspace-header-chips { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 4px 14px; font-size: 12.5px; line-height: 18px; color: var(--fx-text-secondary); }
+/* 状态点那一行最右边的「···」（手机）：不描边、灰色、28px，像一个小点阵而不是一枚按钮；命中区靠 ::after 撑到 44 */
+.workspace-header-chips-aside { margin-left: auto; display: inline-flex; align-items: center; }
+.workspace-header-chips-aside [data-slot="button"] { position: relative; height: 28px; width: 28px; min-height: 28px; padding: 0; color: var(--fx-text-muted); box-shadow: none; }
+.workspace-header-chips-aside [data-slot="button"]::after { content: ""; position: absolute; inset: -8px; }
 .fx-head-chip { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .fx-head-chip > i { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--fx-standby); box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--fx-standby) 18%, transparent); }
 .fx-head-chip[data-tone="healthy"] > i { background: var(--fx-healthy); box-shadow: 0 0 0 2.5px var(--fx-healthy-soft); }

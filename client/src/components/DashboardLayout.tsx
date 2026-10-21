@@ -41,6 +41,8 @@ import {
   Rocket,
   Route,
   Rss,
+  Sun,
+  Moon,
   Zap,
   CreditCard,
   WalletCards,
@@ -1596,6 +1598,18 @@ function DashboardLayoutContent({
               <kbd className="workspace-appbar-kbd">⌘K</kbd>
             </button>
   );
+  /* 顶栏的深浅色按钮：用户要顶栏 UI 不变（2026-10-21），不并进调色盘菜单 */
+  const appbarThemeButton = (
+            <button
+              type="button"
+              onClick={toggleTheme}
+              className="workspace-appbar-icon"
+              aria-label={resolvedTheme === "dark" ? "切换浅色主题" : "切换深色主题"}
+              title={resolvedTheme === "dark" ? "切换到白天模式" : "切换到黑夜模式"}
+            >
+              {resolvedTheme === "dark" ? <Sun className="h-4 w-4" aria-hidden="true" /> : <Moon className="h-4 w-4" aria-hidden="true" />}
+            </button>
+  );
   const accountMenuContent = (
             <DropdownMenuContent align="end" className="w-56">
               <div className="px-2 py-1.5">
@@ -1696,8 +1710,8 @@ function DashboardLayoutContent({
           )}
           <div className="workspace-appbar-actions">
             {appbarSearchButton}
-            {/* 深浅色切换并进调色盘菜单，顶栏少一枚图标 */}
-            <UiThemeQuickSwitch darkToggle={{ resolved: resolvedTheme, onToggle: toggleTheme }} />
+            {appbarThemeButton}
+            <UiThemeQuickSwitch />
             {!isMobile ? <span className="fx-pearl-topbar-user" title={accountDisplayName}>{accountDisplayName}</span> : null}
           </div>
         </div>
@@ -1736,8 +1750,8 @@ function DashboardLayoutContent({
           </button>
           <div className="workspace-appbar-actions">
             {appbarSearchButton}
-            {/* 深浅色切换并进调色盘菜单，顶栏少一枚图标 */}
-            <UiThemeQuickSwitch darkToggle={{ resolved: resolvedTheme, onToggle: toggleTheme }} />
+            {appbarThemeButton}
+            <UiThemeQuickSwitch />
           <DropdownMenu open={accountMenuOpen} onOpenChange={setAccountMenuOpen} modal={false}>
             <DropdownMenuTrigger asChild>
               <button

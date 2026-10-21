@@ -38,7 +38,7 @@ export function LayoutDefaultCard() {
           布局
         </CardTitle>
         <CardDescription>
-          全站默认的布局。两种只差总览、转发、主机、链路四页的卡片：标准留白充足、字号大一档，精简更矮更密。每个账号可以在个人资料里自己选。</CardDescription>
+          全站默认的布局。两种只差总览、转发、主机、链路四页：标准按原来的样子，精简按紧凑的方式画。每个账号可以在个人资料里自己选。</CardDescription>
       </CardHeader>
       <CardContent>
         <div className={cn(segmentedControlClassName, "grid max-w-sm grid-cols-2 gap-1")} role="radiogroup" aria-label="站点默认布局">

@@ -677,6 +677,8 @@ export default function Plans() {
   const [editing, setEditing] = useState(false);
   const [planDialogTab, setPlanDialogTab] = useState<PlanDialogTab>("settings");
   const [assignOpen, setAssignOpen] = useState(false);
+  // 页头的「新增计费资源」：每点一次 +1，TrafficBillingSection 转给计费资源列表开新建弹窗
+  const [billingCreateKey, setBillingCreateKey] = useState(0);
   const [assignUserId, setAssignUserId] = useState("");
   const [assignPlanId, setAssignPlanId] = useState("");
   const [assignDurationDays, setAssignDurationDays] = useState("30");
@@ -1131,8 +1133,12 @@ export default function Plans() {
     <DashboardLayout>
       <div className="space-y-6">
         <WorkspaceHeader title={<>套餐管理</>} description={<>配置套餐、资源和端口。</>} actions={<>
-            {/* 计费 tab 里有它自己的「新增计费资源」，这个按钮只管套餐，别让一个按钮有两种含义。 */}
-            {activeTab === "plans" && (
+            {/* 两个 tab 的「新增」在同一个位置（2026-10-21 用户要的）：套餐计费 → 新增套餐，流量计费 → 新增计费资源 */}
+            {activeTab === "billing" ? (
+              <Button onClick={() => setBillingCreateKey((value) => value + 1)}>
+                <Plus className="mr-2 h-4 w-4" /> 新增计费资源
+              </Button>
+            ) : (
               <Button onClick={openCreate}>
                 <Plus className="mr-2 h-4 w-4" /> 新增套餐
               </Button>
@@ -1328,7 +1334,7 @@ export default function Plans() {
           </TabsContent>
 
           <TabsContent value="billing" className="mt-0">
-            <TrafficBillingSection />
+            <TrafficBillingSection createRequestKey={billingCreateKey} />
           </TabsContent>
         </Tabs>
       </div>

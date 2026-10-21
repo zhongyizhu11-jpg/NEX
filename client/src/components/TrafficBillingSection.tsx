@@ -4,7 +4,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { OptimisticSwitch } from "@/components/ui/switch";
 import { trpc } from "@/lib/trpc";
-import { AlertTriangle, ArrowRight, Check, Coins, Plus, X } from "lucide-react";
+import { AlertTriangle, ArrowRight, Check, ChevronDown, Coins, Plus, X } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
@@ -64,9 +64,17 @@ function SetupStep({
   );
 }
 
-export default function TrafficBillingSection() {
+/**
+ * createRequestKey：套餐管理页把「新增计费资源」放在页头（和「新增套餐」同一个位置，按 tab 换文案），
+ * 每点一次 +1，这里转给下面的 TrafficBillingConfigManager 开新建弹窗。不传就自己带一个按钮。
+ */
+export default function TrafficBillingSection({ createRequestKey: externalCreateRequestKey }: { createRequestKey?: number } = {}) {
   const [, navigate] = useLocation();
-  const [createRequestKey, setCreateRequestKey] = useState(0);
+  const [localCreateRequestKey, setCreateRequestKey] = useState(0);
+  const createRequestKey = externalCreateRequestKey ?? localCreateRequestKey;
+  const ownCreateButton = externalCreateRequestKey === undefined;
+  // 「配到哪一步了」平时折叠成一行（手机上四步展开占一屏，用户圈出来要折叠），点标题展开
+  const [stepsOpen, setStepsOpen] = useState(false);
   const utils = trpc.useUtils();
   const { data: status, isLoading } = trpc.trafficBilling.setupStatus.useQuery();
   const setEnabled = trpc.trafficBilling.setEnabled.useMutation({
@@ -93,6 +101,7 @@ export default function TrafficBillingSection() {
 
   // 第三环：租户到底用不用得上。公开资源谁有余额都能用；只授权的资源得有人被授权过。
   const reachable = open > 0 || authorizedUsers > 0;
+  const stepsDone = [enabled, active > 0, active > 0 && reachable, active > 0 && fundedUsers > 0].filter(Boolean).length;
   const jump = (path: string, label: string) => (
     <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs" onClick={() => navigate(path)}>
       {label} <ArrowRight className="h-3 w-3" />
@@ -120,13 +129,14 @@ export default function TrafficBillingSection() {
             )}
           </div>
           {/*
-            新增按钮留在这一块里。下面那个组件的「新增」长在它自己的 header 里，
-            而这里两个 header 都关掉了（总开关已经在上面，不要两个）—— 不补这一个，
-            这一块就成了只能看不能加。
+            下面那个组件的「新增」长在它自己的 header 里，而这里两个 header 都关掉了（总开关已经在上面，
+            不要两个）。套餐管理页把这个按钮放在页头（createRequestKey 从外面来），只有单独用时才自己带一个。
           */}
-          <Button onClick={() => setCreateRequestKey((value) => value + 1)}>
-            <Plus className="mr-2 h-4 w-4" /> 新增计费资源
-          </Button>
+          {ownCreateButton ? (
+            <Button onClick={() => setCreateRequestKey((value) => value + 1)}>
+              <Plus className="mr-2 h-4 w-4" /> 新增计费资源
+            </Button>
+          ) : null}
         </div>
       </div>
 
@@ -145,12 +155,21 @@ export default function TrafficBillingSection() {
       ) : null}
 
       <Card>
-        <CardContent className="divide-y divide-border/60 p-4 sm:p-5">
-          <div className="flex items-center gap-2 pb-2">
-            <Coins className="h-4 w-4 text-muted-foreground" />
+        <CardContent className={stepsOpen ? "divide-y divide-border/60 p-4 sm:p-5" : "p-4 sm:p-5"}>
+          <button
+            type="button"
+            className={stepsOpen ? "flex w-full items-center gap-2 pb-2 text-left" : "flex w-full items-center gap-2 text-left"}
+            aria-expanded={stepsOpen}
+            onClick={() => setStepsOpen((value) => !value)}
+          >
+            <Coins className="h-4 w-4 shrink-0 text-muted-foreground" />
             <h3 className="text-sm font-semibold">配到哪一步了</h3>
-          </div>
-          {isLoading ? (
+            <span className="ml-auto shrink-0 text-xs tabular-nums text-muted-foreground">
+              {isLoading ? "…" : stepsDone === 4 ? "4 步都配好了" : `${stepsDone} / 4 步`}
+            </span>
+            <ChevronDown className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${stepsOpen ? "rotate-180" : ""}`} aria-hidden="true" />
+          </button>
+          {!stepsOpen ? null : isLoading ? (
             <div className="space-y-3 py-3">
               {[0, 1, 2, 3].map((key) => <Skeleton key={key} className="h-10 w-full" />)}
             </div>

@@ -1659,8 +1659,12 @@ function HostsContent() {
   const [serviceViewMode, setServiceViewMode] = useState<HostProbeServiceViewMode>(() => getStoredHostProbeServiceViewMode());
   const [hostGroupViewMode, setHostGroupViewMode] = useState<HostGroupViewMode>(() => getStoredHostGroupViewMode());
   const compactLayout = useCompactLayout();
-  // 「添加主机」在页头右边（和规则 / 链路页一致）；手机上搜索行收成分类条右边一枚图标
-  const collapsePhoneSearch = isMobileViewport;
+  // 精简：「添加主机」上到页头右边（和规则 / 链路页一致）；手机上搜索行收成分类条右边一枚图标。
+  // 标准布局下这一页整页按原来的样子（页面根带 data-fx-std-page，compact.css 让出去）。
+  const mergeListControls = compactLayout;
+  const collapsePhoneSearch = compactLayout && isMobileViewport;
+  // 手机 + 标准：页头右边那个「···」压在走势线上不好看，挪到下面状态点那一行的右边、不描边
+  const overflowInHeader = mergeListControls || !isMobileViewport;
   const [phoneSearchOpen, setPhoneSearchOpen] = useState(false);
   const hostManageTabItems = user?.role === "admin" ? HOST_MANAGE_TAB_ITEMS_ADMIN : HOST_MANAGE_TAB_ITEMS_USER;
   /*
@@ -2506,7 +2510,7 @@ function HostsContent() {
     viewProbeLatency: setProbeLatencyHost,
   };
 
-  /* 「添加主机 / 分组 / 服务」：在页头右边（和规则 / 链路页一致） */
+  /* 「添加主机 / 分组 / 服务」：标准在搜索行最右，精简上到页头（和规则 / 链路页一致） */
   const createHostAction = (user?.role === "admin" || activeManageTab === "hosts") ? (
           <Button
             onClick={openCreate}
@@ -2522,9 +2526,24 @@ function HostsContent() {
           </Button>
   ) : null;
 
+  /* 页头右边的「···」（检查 / 升级 Agent……，只给管理员）：桌面 / 精简在标题那一行右边，手机 + 标准挪到状态点那一行右边（不描边） */
+  const hostOverflowMenu = (variant: "outline" | "ghost") => (
+                <DropdownMenu><DropdownMenuTrigger asChild>
+                  <Button variant={variant} size="icon" aria-label="主机维护操作"><span aria-hidden="true">•••</span></Button>
+                </DropdownMenuTrigger><DropdownMenuContent align="end">
+                  <DropdownMenuItem disabled={checkingAgentUpdate} onSelect={handleCheckAgentUpdate}>
+                    <RefreshCw className={`h-4 w-4 ${checkingAgentUpdate ? "animate-spin" : ""}`} />检查 Agent 更新
+                  </DropdownMenuItem>
+                  <DropdownMenuItem disabled={onlineOutdatedCount === 0 || upgradeAgentsMutation.isPending} onSelect={requestAllAgentUpgrades}>
+                    <Download className="h-4 w-4" />升级在线 Agent
+                  </DropdownMenuItem>
+                  <OpsHostsMenuItems />
+                </DropdownMenuContent></DropdownMenu>
+  );
+
   return (
-    <div className="space-y-6" data-fx-std-cards={compactLayout ? undefined : ""}>
-      {/* data-fx-std-cards：标准布局下这一页的卡片按原来的标准画（compact.css 让出去）；精简下不带，卡片也紧凑 */}
+    <div className="space-y-6" data-fx-std-page={compactLayout ? undefined : ""}>
+      {/* data-fx-std-page：标准布局下这一页整页按原来的标准画（compact.css 让出去）；精简下不带，按紧凑的方式画 */}
       {/* Header */}
       <WorkspaceHeader title={<>主机管理</>} status={
           /*
@@ -2550,7 +2569,7 @@ function HostsContent() {
             { key: "offline", label: "离线", count: Math.max(0, displayedHostTotal - onlineCount), tone: "down" },
             { key: "outdated", label: "可升级", count: user?.role === "admin" ? updateCount : 0, tone: "warn", onlyWhenPresent: true },
           ]} />
-      } aside={
+      } chipsAside={!overflowInHeader && activeManageTab === "hosts" && user?.role === "admin" ? hostOverflowMenu("ghost") : undefined} aside={
           <HeaderSpark values={dailySpark.values} title="近 24 小时流量走势" caption={onlineCount > 0
             ? formatHeaderRates(effectiveHostSummary?.currentTrafficIn, effectiveHostSummary?.currentTrafficOut)
             : `近 24H ↓ ${formatBytes(dailySpark.bytesIn)} · ↑ ${formatBytes(dailySpark.bytesOut)}`} />
@@ -2563,19 +2582,7 @@ function HostsContent() {
                 对租户就是一句「发现 2 台有新版本」加一条死路 —— Agent 升级从头到尾
                 都是管理员的事。
               */}
-              {user?.role === "admin" && (
-                <DropdownMenu><DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="icon" aria-label="主机维护操作"><span aria-hidden="true">•••</span></Button>
-                </DropdownMenuTrigger><DropdownMenuContent align="end">
-                  <DropdownMenuItem disabled={checkingAgentUpdate} onSelect={handleCheckAgentUpdate}>
-                    <RefreshCw className={`h-4 w-4 ${checkingAgentUpdate ? "animate-spin" : ""}`} />检查 Agent 更新
-                  </DropdownMenuItem>
-                  <DropdownMenuItem disabled={onlineOutdatedCount === 0 || upgradeAgentsMutation.isPending} onSelect={requestAllAgentUpgrades}>
-                    <Download className="h-4 w-4" />升级在线 Agent
-                  </DropdownMenuItem>
-                  <OpsHostsMenuItems />
-                </DropdownMenuContent></DropdownMenu>
-              )}
+              {user?.role === "admin" ? (overflowInHeader ? hostOverflowMenu("outline") : null) : null}
               <ViewModeToggle
                 value={viewMode}
                 onChange={handleViewModeChange}
@@ -2619,7 +2626,7 @@ function HostsContent() {
               ]}
             />
           )}
-          {createHostAction}
+          {mergeListControls ? createHostAction : null}
         </>} />
 
 
@@ -2632,7 +2639,7 @@ function HostsContent() {
         {/* fx-list-controls：精简布局（桌面）下分类条和搜索那一行并排（compact.css） */}
         <div className="fx-list-controls space-y-4">
         <div className="fx-tabs-row">
-        <SlidingTabsList items={hostManageTabItems} activeValue={activeManageTab} ariaLabel="主机管理" minItemWidthRem={6.5} />
+        <SlidingTabsList items={hostManageTabItems} activeValue={activeManageTab} ariaLabel="主机管理" minItemWidthRem={compactLayout ? 6.5 : 7.5} />
         {collapsePhoneSearch ? (
           <SearchToggle open={phoneSearchOpen} active={activeManageSearchQuery.length > 0} onToggle={() => setPhoneSearchOpen((value) => !value)} />
         ) : null}
@@ -2673,6 +2680,7 @@ function HostsContent() {
           额度用满时按钮留着但点不动，并把「几台/上限几台」写在上面：到了上限
           才弹一句错误提示，等于让人白填一遍表单。
         */}
+        {mergeListControls ? null : createHostAction}
       </div>
       ) : null}
         </div>
