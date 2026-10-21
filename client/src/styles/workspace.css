@@ -8,6 +8,16 @@
 */
 .workspace-appbar { position: sticky; top: 0; z-index: var(--fx-z-sticky); flex-shrink: 0; height: calc(var(--fx-header-height) + env(safe-area-inset-top, 0px)); padding-top: env(safe-area-inset-top, 0px); background: var(--fx-glass); -webkit-backdrop-filter: var(--fx-glass-blur); backdrop-filter: var(--fx-glass-blur); border-bottom: 1px solid var(--fx-stroke-weak); }
 /*
+  iOS App（html.capacitor-ios）手机上顶栏往上收（用户 2026-10-21 圈的：状态栏下面空一大截才到顶栏）。
+  安全区只留 83% —— 状态栏文字下面本来就有十来像素空白（灵动岛 / 刘海机型 59px → 49px，老机型 20px → 17px），
+  顶栏本体 44px（各主题原来 48～64）。主题的 --fx-header-height 挂在 html 上，这里在顶栏元素上盖掉，只影响顶栏自己。
+  液态玻璃那条浮着的玻璃条在 iOS 上不再离顶 8px：状态栏那段本来就在它里面。
+*/
+@media (max-width: 767px) {
+  html.capacitor-ios .workspace-appbar { --fx-header-height: 44px; padding-top: calc(env(safe-area-inset-top, 0px) * 0.83); height: calc(44px + env(safe-area-inset-top, 0px) * 0.83); }
+  html.capacitor-ios[data-ui-theme="liquid-glass"] .workspace-appbar { top: 0; margin-top: 0; }
+}
+/*
   毛玻璃（照 iOS 的材质）：固定不动的外壳和浮在内容上面的弹层用 —— 顶栏、底部标签栏、
   分段控件、对话框、抽屉、弹出菜单。内容从它们底下滑过时透出一点颜色，这是「下面还有」的
   信号。**滚动的内容本身不做模糊**：backdrop-filter 在手机上每帧都要重算它盖住的那块，
