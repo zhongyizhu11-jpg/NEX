@@ -11,12 +11,15 @@ const source = fs.readFileSync(path.resolve(import.meta.dirname, "Rules.tsx"), "
 
 test("规则表格的列只在 ruleTableColumns 里定义一遍", () => {
   assert.ok((source.match(/ruleTableColumns\.map\(/g) ?? []).length >= 3, "colgroup、表头、单元格三处都从 ruleTableColumns 出");
-  assert.doesNotMatch(source, /min-w-\[1764px\]|min-w-\[1654px\]|min-w-\[1720px\]|min-w-\[1610px\]/);
+  // 最小宽度只剩两档，按精简开关选；不再按管理员 / 排序各写一个
+  assert.doesNotMatch(source, /min-w-\[1764px\]|min-w-\[1654px\]|min-w-\[1720px\]/);
+  assert.match(source, /compactLayout \? "min-w-\[1000px\]" : "min-w-\[1610px\]"/);
   assert.match(source, /colSpan=\{ruleTableColumnCount\}/, "分组表头那一行的跨列数跟着列数组走");
 });
 
-test("状态点并进规则列，链路徽章并进所属资源列，累计 / 24H 合成流量列", () => {
-  assert.doesNotMatch(source, /<TableHead[^>]*>状态<\/TableHead>/);
-  assert.doesNotMatch(source, /<TableHead[^>]*>链路<\/TableHead>/);
+test("两套摆法同一个数组：精简下累计 / 24H 合成流量列，标准下照旧一列一件事", () => {
+  assert.match(source, /ruleTableColumns: RuleTableColumn\[\] = compactLayout \? \[/);
   assert.match(source, /key: "traffic",\s*width: \d+,\s*head: "流量"/);
+  assert.match(source, /key: "status",\s*width: \d+,\s*head: "状态"/);
+  assert.doesNotMatch(source, /<TableHead[^>]*>状态<\/TableHead>/, "表头不再手写");
 });

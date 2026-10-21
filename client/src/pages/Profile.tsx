@@ -779,8 +779,8 @@ function ProfileContent() {
         </Card>
       )}
 
-      {/* Google / Discord 两张绑定卡并排，和上面 Telegram / 2FA 一样，不再各占一整行 */}
-      <div className="grid gap-4 xl:grid-cols-2">
+      {/* 精简布局：Google / Discord 两张绑定卡并排，和上面 Telegram / 2FA 一样；标准布局照旧各占一行 */}
+      <div className={layoutPreference.effective === "compact" ? "grid gap-4 xl:grid-cols-2" : "contents"}>
       <GoogleAccountSection />
 
       <DiscordAccountSection />

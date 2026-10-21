@@ -10,6 +10,7 @@ import { HealthBadge } from "@/components/network/StatusDot";
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useCompactLayout } from "@/hooks/useCompactLayout";
 import { formatCpuPercent, hostAddressText, hostGeoTooltip, hostRegionText } from "./hostDisplay";
 import HostNetProfileSection from "./HostNetProfileSection";
 import { HostOsAvatar, HostOsGlyph, hostOsOf } from "./HostOsBadge";
@@ -104,6 +105,8 @@ export default function HostDetailDialog(props: HostDetailDialogProps) {
   const { host, open, onOpenChange } = props;
   const confirmDialog = useConfirmDialog();
   const { user } = useAuth();
+  // hooks 都在上面这几行；下面有 host 为空的提前 return
+  const compactLayout = useCompactLayout();
   const vitals = useHostVitals(host, {
     metrics: props.metrics,
     traffic: props.traffic,
@@ -258,17 +261,23 @@ export default function HostDetailDialog(props: HostDetailDialogProps) {
 
         {/*
           七八个分区竖着叠一个 max-w-md 的框太长，分成「概览」（系统 / 资源 / 流量）和
-          「更多」（网络画像、mimic、解锁、TLS 入站、换 IP）两页。先在精简布局下这么做，
-          标准布局重构工作包五起两种布局都这样。
+          「更多」（网络画像、mimic、解锁、TLS 入站、换 IP）两页；标准布局照旧一页到底。
         */}
-        <Tabs defaultValue="overview" className="flex min-w-0 flex-col gap-3">
+        {compactLayout ? (
+          <Tabs defaultValue="overview" className="flex min-w-0 flex-col gap-3">
             <TabsList aria-label="主机详情" className="w-full">
               <TabsTrigger value="overview" className="flex-1">概览</TabsTrigger>
               <TabsTrigger value="more" className="flex-1">更多</TabsTrigger>
             </TabsList>
             <TabsContent value="overview" className="m-0 flex min-w-0 flex-col gap-4">{overviewSections}</TabsContent>
             <TabsContent value="more" className="m-0 flex min-w-0 flex-col gap-4">{moreSections}</TabsContent>
-        </Tabs>
+          </Tabs>
+        ) : (
+          <div className="flex min-w-0 flex-col gap-4">
+            {overviewSections}
+            {moreSections}
+          </div>
+        )}
 
         <div className="flex items-center justify-end border-t border-[var(--fx-stroke-weak)] pt-3">
           <EntityActions primary={primary} menu={menu} />

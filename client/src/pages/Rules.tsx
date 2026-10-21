@@ -7154,7 +7154,8 @@ function RulesContent() {
     - 状态点并进「规则」列名字前面；协议、所属人并进名字下面那行小字
     - 「链路」徽章并进「所属资源」
     - 累计 / 24H 合成一列「流量」
-    八列 + 可选的排序手柄，最小宽度 1000px（1366 宽、侧栏展开时内容区约 1070px，不横滚）；table-fixed 下 col 的宽度是比例，窗口够宽时按比例放大。
+    八列 + 可选的排序手柄，列宽合计 1016px（table-fixed 下列宽之和就是表格的实际宽度），1366 宽、侧栏展开时内容区约 1100px，不横滚；table-fixed 下 col 的宽度是比例，窗口够宽时按比例放大。
+    这套并列只在精简布局下用；标准布局照旧原来那 13～14 列（数组的另一支），一列一件事。
   */
   type RuleTableColumn = {
     key: string;
@@ -7164,10 +7165,10 @@ function RulesContent() {
     cellClassName?: string;
     cell: (rule: any) => ReactNode;
   };
-  const ruleTableColumns: RuleTableColumn[] = [
+  const ruleTableColumns: RuleTableColumn[] = compactLayout ? [
     {
       key: "rule",
-      width: 280,
+      width: 200,
       head: "规则",
       cell: (rule) => {
         const supported = isRuleSupported(rule);
@@ -7209,7 +7210,7 @@ function RulesContent() {
     },
     {
       key: "resource",
-      width: 230,
+      width: 170,
       head: "所属资源",
       cell: (rule) => (
         <div className="min-w-0">
@@ -7224,11 +7225,11 @@ function RulesContent() {
         </div>
       ),
     },
-    { key: "entry", width: 180, head: "转发入口", cell: (rule) => renderTableTransferEntry(rule) },
-    { key: "exit", width: 160, head: "转发出口", cell: (rule) => renderTableTransferExit(rule) },
+    { key: "entry", width: 150, head: "转发入口", cell: (rule) => renderTableTransferEntry(rule) },
+    { key: "exit", width: 130, head: "转发出口", cell: (rule) => renderTableTransferExit(rule) },
     {
       key: "traffic",
-      width: 150,
+      width: 110,
       head: "流量",
       cellClassName: "overflow-hidden",
       cell: (rule) => (
@@ -7238,15 +7239,116 @@ function RulesContent() {
         </div>
       ),
     },
-    { key: "latency", width: 110, head: "延迟", cellClassName: "overflow-hidden", cell: (rule) => renderTableRuleLatency(rule) },
+    { key: "latency", width: 84, head: "延迟", cellClassName: "overflow-hidden", cell: (rule) => renderTableRuleLatency(rule) },
     {
       key: "enabled",
-      width: 64,
+      width: 52,
       head: "开关",
       headClassName: "text-center",
       cell: (rule) => <div className="flex justify-center">{renderRuleEnabledSwitch(rule)}</div>,
     },
-    { key: "actions", width: 150, head: "操作", headClassName: "text-right", cellClassName: "text-right", cell: (rule) => renderRuleActions(rule) },
+    { key: "actions", width: 120, head: "操作", headClassName: "text-right", cellClassName: "text-right", cell: (rule) => renderRuleActions(rule) },
+  ] : [
+    /* 标准布局：原来那 13～14 列，一列一件事 */
+    {
+      key: "status",
+      width: 56,
+      head: "状态",
+      headClassName: "text-center",
+      cell: (rule) => (
+        <div className="flex items-center justify-center">
+          {isRuleSupported(rule) ? renderStatusDot(rule) : <StatusDot health="down" size="large" label={unsupportedProtocolTitle} />}
+        </div>
+      ),
+    },
+    {
+      key: "rule",
+      width: 110,
+      head: "规则",
+      cell: (rule) => {
+        const supported = isRuleSupported(rule);
+        const protocolKey = getRuleProtocolKey(rule);
+        return (
+          <>
+            <span className="block truncate font-medium" title={rule.name}>{rule.name}</span>
+            {!supported && (
+              <span className="mt-1 block text-[11px] text-destructive">
+                {protocolUnsupportedLabel(protocolKey)} 当前不支持
+              </span>
+            )}
+            {(rule.protocolBlockReason || rule.resourceAccessAllowed === false) && (
+              <span className="mt-1 block text-[11px] leading-4 text-destructive">
+                {rule.protocolBlockReason || revokedResourceTitle}
+              </span>
+            )}
+            {renderAdminManagedBadge(rule) ? <div className="mt-1">{renderAdminManagedBadge(rule)}</div> : null}
+            <div className="fx-table-row-limits"><RuleLimitSummary rule={rule} /></div>
+            {(() => {
+              const stop = !rule.protocolBlockReason && rule.resourceAccessAllowed !== false ? resolveForwardRuleStopReason(rule) : null;
+              return stop?.autoResume ? (
+                <span className="mt-1 block text-[11px] leading-4 text-muted-foreground">{stop.detail}</span>
+              ) : null;
+            })()}
+            {entryBridgeNotes(rule).map((note) => (
+              <span key={note} className="mt-1 block text-[11px] leading-4 text-muted-foreground">{note}</span>
+            ))}
+          </>
+        );
+      },
+    },
+    ...(user?.role === "admin" ? [{
+      key: "owner",
+      width: 110,
+      head: "用户",
+      cell: (rule: any) => (
+        <span className="block truncate text-sm text-muted-foreground" title={getRuleOwnerName(rule)}>
+          {getRuleOwnerName(rule)}
+        </span>
+      ),
+    } satisfies RuleTableColumn] : []),
+    {
+      key: "resource",
+      width: 100,
+      head: "所属资源",
+      cell: (rule) => (
+        <span className="block truncate text-sm text-muted-foreground" title={getRuleResourceName(rule)}>
+          {getRuleResourceName(rule)}
+        </span>
+      ),
+    },
+    { key: "entry", width: 285, head: "转发入口", cell: (rule) => renderTableTransferEntry(rule) },
+    { key: "exit", width: 190, head: "转发出口", cell: (rule) => renderTableTransferExit(rule) },
+    {
+      key: "route",
+      width: 170,
+      head: "链路",
+      cell: (rule) => (
+        /* 主备那一小块跟着线路走：它说的是「现在走哪条」，点进去是策略。 */
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+          {renderRouteBadge(rule, true)}
+          {renderFailoverLineBadge(rule)}
+        </div>
+      ),
+    },
+    {
+      key: "protocol",
+      width: 96,
+      head: "协议",
+      headClassName: "text-center",
+      cellClassName: "text-center",
+      cell: (rule) => <Badge variant="secondary" className="whitespace-nowrap text-[10px]">{formatForwardRuleProtocol(rule.protocol)}</Badge>,
+    },
+    { key: "total", width: 120, head: "累计", cell: (rule) => renderTableRuleTotalTraffic(rule) },
+    { key: "daily", width: 120, head: "24H", cellClassName: "overflow-hidden", cell: (rule) => renderTableRuleDailyTraffic(rule) },
+    { key: "latency", width: 120, head: "延迟", cellClassName: "overflow-hidden", cell: (rule) => renderTableRuleLatency(rule) },
+    {
+      key: "enabled",
+      width: 70,
+      head: "开关",
+      headClassName: "text-center",
+      cell: (rule) => <div className="flex justify-center">{renderRuleEnabledSwitch(rule)}</div>,
+    },
+    { key: "actions", width: 154, head: "操作", headClassName: "text-right", cellClassName: "text-right", cell: (rule) => renderRuleActions(rule) },
   ];
   const ruleTableColumnCount = ruleTableColumns.length + (ruleSortingEnabled ? 1 : 0);
   const renderRuleTableRow = (rule: any, sortable?: RuleSortableRenderState) => {
@@ -7893,7 +7995,7 @@ function RulesContent() {
               <Card className="hidden border-border bg-card sm:block">
                 <CardContent className="p-0">
                   <div className="overflow-x-auto">
-                    <Table className="fx-rules-table min-w-[1000px] table-fixed">
+                    <Table className={cn("fx-rules-table table-fixed", compactLayout ? "min-w-[1000px]" : "min-w-[1610px]")}>
                       <colgroup>
                         {ruleSortingEnabled && <col className="w-[44px]" />}
                         {ruleTableColumns.map((column) => <col key={column.key} style={{ width: column.width }} />)}
