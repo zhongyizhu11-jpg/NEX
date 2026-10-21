@@ -113,6 +113,7 @@ import {
   normalizePersonalizationPageTint,
   normalizePersonalizationThemePresetId,
   normalizePersonalizationUiTheme,
+  normalizePersonalizationLayout,
   normalizeLiquidGlassConfig,
   type PersonalizationBackgroundConfig,
 } from "../../shared/personalization";
@@ -1688,6 +1689,7 @@ function publicSystemSettings(all: Record<string, string | null>, activeProtocol
     personalizationPageTint: normalizePersonalizationPageTint(all.personalizationPageTint),
     personalizationCardStyle: normalizePersonalizationCardStyle(all.personalizationCardStyle),
     personalizationUiTheme: normalizePersonalizationUiTheme(all.personalizationUiTheme),
+    personalizationLayout: normalizePersonalizationLayout(all.personalizationLayout),
     personalizationBackground: publicPersonalizationBackground(all),
     personalizationLiquidGlass: readPersonalizationLiquidGlass(all),
     panelPublicUrl: all.panelPublicUrl ?? "",
@@ -1843,6 +1845,7 @@ export const systemRouter = router({
       personalizationPageTint: normalizePersonalizationPageTint(all.personalizationPageTint),
       personalizationCardStyle: normalizePersonalizationCardStyle(all.personalizationCardStyle),
       personalizationUiTheme: normalizePersonalizationUiTheme(all.personalizationUiTheme),
+      personalizationLayout: normalizePersonalizationLayout(all.personalizationLayout),
       personalizationBackground: publicPersonalizationBackground(all),
       personalizationLiquidGlass: readPersonalizationLiquidGlass(all),
       registrationEnabled: all.registrationEnabled !== "false",
@@ -2140,6 +2143,7 @@ export const systemRouter = router({
         personalizationPageTint: z.string().max(16).optional(),
         personalizationCardStyle: z.string().max(16).optional(),
         personalizationUiTheme: z.string().max(16).optional(),
+        personalizationLayout: z.string().max(16).optional(),
         registrationEnabled: z.boolean().optional(),
         authCaptchaEnabled: z.boolean().optional(),
         twoFactorEnabled: z.boolean().optional(),
@@ -2289,6 +2293,11 @@ export const systemRouter = router({
         const uiTheme = normalizePersonalizationUiTheme(input.personalizationUiTheme);
         await db.setSetting("personalizationUiTheme", uiTheme);
         console.info(`[Settings] personalization ui theme updated theme=${uiTheme}`);
+      }
+      if (input.personalizationLayout !== undefined) {
+        const layout = normalizePersonalizationLayout(input.personalizationLayout);
+        await db.setSetting("personalizationLayout", layout);
+        console.info(`[Settings] personalization layout updated layout=${layout}`);
       }
       if (input.registrationEnabled !== undefined) {
         await db.setSetting("registrationEnabled", input.registrationEnabled ? "true" : "false");

@@ -50,7 +50,7 @@ export default function AddSelfServiceHostDialog({
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>加一台机器</DialogTitle>
-          <DialogDescription>
+          <DialogDescription data-fx-help="">
             填个名字和地址就行。加完会给你一条安装命令，在那台机器上执行，它才会连上面板。
           </DialogDescription>
         </DialogHeader>

@@ -645,6 +645,8 @@ export const authRouter = router({
       email: z.string().email().max(320).optional(),
       displayRemark: z.string().trim().max(24).nullable().optional(),
       telegramAnnouncementSubscribed: z.boolean().optional(),
+      /** 布局偏好：null 跟随站点默认。见 shared/personalization.ts。 */
+      uiLayout: z.enum(["standard", "compact"]).nullable().optional(),
     }))
     .mutation(async ({ input, ctx }) => {
       await db.updateUserProfile(ctx.user.id, {

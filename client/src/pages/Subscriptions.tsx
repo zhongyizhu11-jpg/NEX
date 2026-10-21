@@ -443,7 +443,7 @@ export default function Subscriptions() {
                         <Package className="h-5 w-5 shrink-0" />
                         <span className="truncate">{sub.planName || `套餐 #${sub.planId}`}</span>
                       </CardTitle>
-                      <CardDescription className="mt-2">{subscriptionSourceLabel(sub.source)}</CardDescription>
+                      <CardDescription keep className="mt-2">{subscriptionSourceLabel(sub.source)}</CardDescription>
                     </div>
                     <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
                       <Badge variant={isActive ? "default" : "secondary"}>{subscriptionStatusLabel(sub.status)}</Badge>

@@ -3,6 +3,8 @@ import { defineConfig } from "vitepress";
 const base = process.env.VITEPRESS_BASE || "/";
 
 export default defineConfig({
+  // docs/dev 是维护者内部文档（立项、重构计划），不进公开站
+  srcExclude: ["dev/**"],
   base,
   lang: "zh-CN",
   title: "NEX",
@@ -67,6 +69,7 @@ export default defineConfig({
         text: "用户和维护",
         items: [
           { text: "用户、套餐和权限", link: "/guide/users-billing" },
+          { text: "界面与精简布局", link: "/guide/layout" },
           { text: "邀请返利", link: "/guide/referrals" },
           { text: "Telegram 和通知", link: "/guide/notifications" },
           { text: "工单", link: "/guide/tickets" },

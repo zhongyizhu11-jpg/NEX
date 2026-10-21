@@ -31,6 +31,9 @@ import { migrateLegacyAvatarValue } from "@/lib/avatar";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { FilterChips } from "@/components/ui/filter-chips";
+import { useCompactLayout } from "@/hooks/useCompactLayout";
+import { cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   DropdownMenu,
@@ -270,6 +273,10 @@ function UsersContent() {
   const [allowedHostIds, setAllowedHostIds] = useState<number[]>([]);
   const [allowedForwardGroupIds, setAllowedForwardGroupIds] = useState<number[]>([]);
   const [allowedTunnelIds, setAllowedTunnelIds] = useState<number[]>([]);
+  type ResourceGrantKind = "port" | "group" | "tunnel" | "node" | "lgHost" | "billingGroup" | "billingHost" | "billingTunnel";
+  const [resourceGrantKind, setResourceGrantKind] = useState<ResourceGrantKind>("port");
+  // 精简布局：资源授权按类型切换、用户表一行一人、订阅卡按钮收进菜单；标准布局照旧
+  const compactLayout = useCompactLayout();
   const [trafficBillingHostIds, setTrafficBillingHostIds] = useState<number[]>([]);
   const [trafficBillingTunnelIds, setTrafficBillingTunnelIds] = useState<number[]>([]);
   const [trafficBillingForwardGroupIds, setTrafficBillingForwardGroupIds] = useState<number[]>([]);
@@ -1364,7 +1371,8 @@ function UsersContent() {
       <WorkspaceHeader title={<>用户管理</>} description={<>
             管理系统用户、权限和流量配额
           </>} actions={<>
-          <Badge variant="outline" className="justify-center gap-1.5 px-3 py-1.5 text-xs">
+          {/* 精简布局：下面的统计条已经是这两个数，页头不再重复（data-fx-compact-hide） */}
+          <Badge data-fx-compact-hide="" variant="outline" className="justify-center gap-1.5 px-3 py-1.5 text-xs">
             <ShieldCheck className="h-3 w-3 text-[var(--fx-warn-text)]" />
             <AnimatedStatValue
               value={`${adminCount} 管理员`}
@@ -1373,7 +1381,7 @@ function UsersContent() {
               fallbackValue="0 管理员"
             />
           </Badge>
-          <Badge variant="outline" className="justify-center gap-1.5 px-3 py-1.5 text-xs">
+          <Badge data-fx-compact-hide="" variant="outline" className="justify-center gap-1.5 px-3 py-1.5 text-xs">
             <UsersIcon className="h-3 w-3 text-primary" />
             <AnimatedStatValue
               value={`${userPageQuery.data?.totalItems ?? 0} 用户`}
@@ -1489,10 +1497,10 @@ function UsersContent() {
             </div>
           ) : users && users.length > 0 ? (
             <div className="overflow-x-auto">
-              <Table className="min-w-[720px] sm:min-w-[860px] md:min-w-[1120px] lg:min-w-[1380px] xl:min-w-[1520px]">
+              <Table className="fx-users-table min-w-[720px] sm:min-w-[860px] md:min-w-[1120px] lg:min-w-[1380px] xl:min-w-[1520px]">
                 <TableHeader>
                   <TableRow className="hover:bg-transparent">
-                    <TableHead className="w-[60px] whitespace-nowrap">ID</TableHead>
+                    <TableHead data-fx-compact-hide="" className="w-[60px] whitespace-nowrap">ID</TableHead>
                     <TableHead className="w-[260px] whitespace-nowrap">用户</TableHead>
                     <TableHead className="w-[210px] whitespace-nowrap">流量使用</TableHead>
                     <TableHead className="hidden w-[140px] whitespace-nowrap xl:table-cell">Telegram</TableHead>
@@ -1515,16 +1523,20 @@ function UsersContent() {
 
                     return (
                       <TableRow key={u.id}>
-                        <TableCell>
+                        {/* 精简布局：ID 列不占位（详情框里有 #id） */}
+                        <TableCell data-fx-compact-hide="">
                           <span className="text-xs text-muted-foreground font-mono">#{u.id}</span>
                         </TableCell>
                         <TableCell className="py-3">
                           <div className="flex items-center gap-2.5">
                             <UserAvatar user={u} className="h-8 w-8 shrink-0" />
                             <div className="min-w-0 py-0.5">
-                              <p className="truncate text-sm font-medium leading-5">{u.username || "未命名"}</p>
-                              <div className="mt-1.5 flex min-w-0 items-center gap-1 whitespace-nowrap">
-                                <Badge variant={u.role === "admin" ? "default" : "outline"} className="h-5 w-fit shrink-0 px-1.5 text-[10px] leading-4">
+                              {/* 精简布局：名字和标签同一行，备注放悬停，一行用户不再叠四行；标准布局照旧名字一行、标签一行 */}
+                              <div className={compactLayout ? "flex min-w-0 items-center gap-1.5 whitespace-nowrap" : "contents"}>
+                                <p className="min-w-0 truncate text-sm font-medium leading-5" title={u.displayRemark ? `${u.username || "未命名"} · ${u.displayRemark}` : undefined}>{u.username || "未命名"}</p>
+                                <span className={compactLayout ? "contents" : "mt-1.5 flex min-w-0 items-center gap-1 whitespace-nowrap"}>
+                                {/* 精简布局：「普通用户」是默认，不标；管理员照标 */}
+                                <Badge data-fx-compact-hide={u.role === "admin" ? undefined : ""} variant={u.role === "admin" ? "default" : "outline"} className="h-5 w-fit shrink-0 px-1.5 text-[10px] leading-4">
                                   {u.role === "admin" ? "管理员" : "普通用户"}
                                 </Badge>
                                 {u.accountEnabled === false && (
@@ -1533,12 +1545,13 @@ function UsersContent() {
                                 {u.id === currentUser?.id && (
                                   <span className="shrink-0 text-[10px] font-medium leading-4 text-primary">当前登录</span>
                                 )}
+                                </span>
                               </div>
                               {u.displayRemark && (
-                                <p className="mt-0.5 truncate text-xs text-muted-foreground">{u.displayRemark}</p>
+                                <p className={cn("truncate text-xs text-muted-foreground", !compactLayout && "mt-0.5")}>{u.displayRemark}</p>
                               )}
                               {u.role !== "admin" && (
-                                <div className="mt-2 flex w-fit items-center gap-2 rounded-md border border-border/50 bg-muted/20 px-2 py-1 lg:hidden">
+                                <div className={compactLayout ? "mt-1 flex w-fit items-center gap-2 lg:hidden" : "mt-2 flex w-fit items-center gap-2 rounded-md border border-border/50 bg-muted/20 px-2 py-1 lg:hidden"}>
                                   <OptimisticSwitch aria-label={`允许 ${u.username} 添加转发`}
                                     checked={!!u.canAddRules}
                                     onCheckedChangeAsync={(checked) => updateForwardAccessMutation.mutateAsync({ userId: u.id, enabled: checked })}
@@ -1553,7 +1566,7 @@ function UsersContent() {
                           </div>
                         </TableCell>
                         <TableCell>
-                          <div className="min-w-[190px] space-y-2">
+                          <div className={cn("min-w-[190px]", compactLayout ? "space-y-1" : "space-y-2")}>
                             <div className="flex items-center justify-between gap-2">
                               <span className="shrink-0 text-[10px] text-muted-foreground">套餐/分配</span>
                               <div className="flex min-w-0 items-center justify-end gap-1">
@@ -1571,7 +1584,7 @@ function UsersContent() {
                                 className={`h-1 ${isOverLimit ? "[&>div]:bg-destructive" : ""}`}
                               />
                             )}
-                            <div className="flex items-center justify-between gap-2 border-t border-border/40 pt-1.5">
+                            <div className={cn("flex items-center justify-between gap-2", !compactLayout && "border-t border-border/40 pt-1.5")}>
                               <span className="shrink-0 text-[10px] text-muted-foreground">按量计费</span>
                               <span className="truncate text-xs font-medium tabular-nums">{formatBytes(billingUsed)}</span>
                             </div>
@@ -1627,12 +1640,13 @@ function UsersContent() {
                                 onCheckedChangeAsync={(checked) => updateForwardAccessMutation.mutateAsync({ userId: u.id, enabled: checked })}
                                 className="shrink-0"
                               />
+                              {/* 精简布局：开关本身就是状态，旁边那枚「转发启用 / 停用」不再标 */}
                               {u.canAddRules || u.role === "admin" ? (
-                                <Badge variant="outline" className="h-5 w-fit shrink-0 whitespace-nowrap border-chart-2/30 px-2 py-0 text-[10px] text-chart-2">
+                                <Badge data-fx-compact-hide="" variant="outline" className="h-5 w-fit shrink-0 whitespace-nowrap border-chart-2/30 px-2 py-0 text-[10px] text-chart-2">
                                   转发启用
                                 </Badge>
                               ) : (
-                                <Badge variant="outline" className="h-5 w-fit shrink-0 whitespace-nowrap border-muted-foreground/30 px-2 py-0 text-[10px] text-muted-foreground">
+                                <Badge data-fx-compact-hide="" variant="outline" className="h-5 w-fit shrink-0 whitespace-nowrap border-muted-foreground/30 px-2 py-0 text-[10px] text-muted-foreground">
                                   转发停用
                                 </Badge>
                               )}
@@ -1645,7 +1659,8 @@ function UsersContent() {
                           </div>
                         </TableCell>
                         <TableCell className="hidden min-w-[240px] lg:table-cell">
-                          <div className="flex min-w-[220px] flex-wrap items-center gap-1.5 text-[11px] leading-none text-muted-foreground">
+                          {/* fx-quota-chips：精简布局下去掉每个值的小框，排成「规则 10 · 端口 20」一行（compact.css） */}
+                          <div className="fx-quota-chips flex min-w-[220px] flex-wrap items-center gap-1.5 text-[11px] leading-none text-muted-foreground">
                             <span className="inline-flex h-6 items-center whitespace-nowrap rounded-md border border-border/50 bg-muted/20 px-2">规则 {u.maxRules ? `${u.maxRules} 条` : "不限"}</span>
                             <span className="inline-flex h-6 items-center whitespace-nowrap rounded-md border border-border/50 bg-muted/20 px-2">端口 {u.maxPorts ? `${u.maxPorts} 个` : "不限"}</span>
                             <span className="inline-flex h-6 items-center whitespace-nowrap rounded-md border border-border/50 bg-muted/20 px-2">连接 {u.maxConnections ? `${u.maxConnections}` : "不限"}</span>
@@ -1767,6 +1782,36 @@ function UsersContent() {
                           </div>
                         </div>
 
+                        {/* 精简布局：三个按钮收成「加赠流量 + ···」；标准布局照旧三个按钮 */}
+                        {compactLayout ? (
+                        <div className="flex items-center gap-2 pt-1">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="h-8 px-2 text-xs"
+                            onClick={() => openAddonDialog(sub)}
+                            disabled={!canAddAddon || adminAddTrafficAddonMutation.isPending}
+                          >
+                            加赠流量
+                          </Button>
+                          <DropdownMenu modal={false}>
+                            <DropdownMenuTrigger asChild>
+                              <Button type="button" variant="ghost" size="sm" className="h-8 w-8 p-0" aria-label="订阅的更多操作">
+                                <MoreHorizontal className="h-4 w-4" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem disabled={!canChangeExpiry || extendSubscriptionMutation.isPending} onSelect={() => openExtendDialog(sub)}>
+                                更改到期
+                              </DropdownMenuItem>
+                              <DropdownMenuItem variant="destructive" disabled={!active || cancelSubscriptionMutation.isPending} onSelect={() => openCancelSubscriptionDialog(sub)}>
+                                取消订阅
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </div>
+                        ) : (
                         <div className="flex flex-wrap gap-2 pt-1">
                           <Button
                             type="button"
@@ -1799,6 +1844,7 @@ function UsersContent() {
                             取消
                           </Button>
                         </div>
+                        )}
                       </CardContent>
                     </Card>
                   );
@@ -1814,7 +1860,7 @@ function UsersContent() {
       <Dialog open={showCreateUser} onOpenChange={setShowCreateUser}>
         <DialogContent className="sm:max-w-md">
           <DialogTitle>添加用户</DialogTitle>
-          <DialogDescription>创建系统用户。</DialogDescription>
+          <DialogDescription data-fx-help="">创建系统用户。</DialogDescription>
           <div className="space-y-4 py-2">
             <div className="space-y-2">
               <Label htmlFor="create-username">用户名</Label>
@@ -1849,7 +1895,7 @@ function UsersContent() {
               <Label>转发总开关</Label>
               <div className="flex items-center justify-between rounded-lg border border-border/40 p-3">
                 <div className="min-w-0 pr-3">
-                  <p className="text-xs text-muted-foreground">关闭后不能创建或启用规则。</p>
+                  <p data-fx-help="" className="text-xs text-muted-foreground">关闭后不能创建或启用规则。</p>
                 </div>
                 <Checkbox
                   checked={newCanAddRules}
@@ -1863,7 +1909,7 @@ function UsersContent() {
               <Label>客户端订阅</Label>
               <div className="flex items-center justify-between rounded-lg border border-border/40 p-3">
                 <div className="min-w-0 pr-3">
-                  <p className="text-xs text-muted-foreground">
+                  <p data-fx-help="" className="text-xs text-muted-foreground">
                     允许生成订阅地址导入客户端。与转发权限互不影响。
                   </p>
                 </div>
@@ -2152,7 +2198,7 @@ function UsersContent() {
                 />
                 <span className="shrink-0 text-sm text-muted-foreground">GB</span>
               </div>
-              <p className="text-xs text-muted-foreground">附加流量会在当前套餐流量周期结束或订阅到期时自动失效。</p>
+              <p data-fx-help="" className="text-xs text-muted-foreground">附加流量会在当前套餐流量周期结束或订阅到期时自动失效。</p>
             </div>
           </div>
           <DialogFooter>
@@ -2183,7 +2229,7 @@ function UsersContent() {
                   永久有效
                 </Button>
               </div>
-              <p className="text-xs text-muted-foreground">留空表示永久有效。</p>
+              <p data-fx-help="" className="text-xs text-muted-foreground">留空表示永久有效。</p>
             </div>
           </div>
           <DialogFooter>
@@ -2240,7 +2286,7 @@ function UsersContent() {
       <Dialog open={showTrafficSettings} onOpenChange={setShowTrafficSettings}>
         <DialogContent className="sm:max-w-lg max-h-[90vh] flex flex-col">
           <DialogTitle>流量与权限设置</DialogTitle>
-          <DialogDescription>
+          <DialogDescription data-fx-help="">
             设置 "{trafficUserName}" 的管理员额外配额和权限；套餐权益在订阅管理中单独体现。
           </DialogDescription>
           <Tabs defaultValue="permission" className="flex-1 min-h-0 flex flex-col">
@@ -2282,7 +2328,7 @@ function UsersContent() {
                     onChange={(e) => setMaxRules(parseInt(e.target.value) || 0)}
                     placeholder="0=不限制"
                   />
-                  <p className="text-xs text-muted-foreground">0 或留空表示不限制</p>
+                  <p data-fx-help="" className="text-xs text-muted-foreground">0 或留空表示不限制</p>
                 </FormField>
                 <FormField className="space-y-2">
                   <Label>最大落地节点数</Label>
@@ -2292,7 +2338,7 @@ function UsersContent() {
                     onChange={(e) => setMaxProxyInbounds(parseInt(e.target.value) || 0)}
                     placeholder="0=不限制"
                   />
-                  <p className="text-xs text-muted-foreground">
+                  <p data-fx-help="" className="text-xs text-muted-foreground">
                     他自己能在被授权的主机上开几个落地节点。管理员替他开的也算在内。0 或留空表示不限制。
                   </p>
                 </FormField>
@@ -2309,7 +2355,7 @@ function UsersContent() {
                     空和 0 刻意分开：这是个数量字段，人填 0 就是想说「一台都不给他」。
                     当成「不限」就把他放开了，当成「跟随全局」就等于根本没法卡死某一个人。
                   */}
-                  <p className="text-xs text-muted-foreground">
+                  <p data-fx-help="" className="text-xs text-muted-foreground">
                     他自己能在「我的机器」里加几台。<strong>留空</strong>＝跟随系统设置里的全局上限；<strong>填 0</strong>＝一台都不许加。
                   </p>
                 </FormField>
@@ -2321,7 +2367,7 @@ function UsersContent() {
                     onChange={(e) => setMaxProxySubTokens(parseInt(e.target.value) || 0)}
                     placeholder="0=不限制"
                   />
-                  <p className="text-xs text-muted-foreground">
+                  <p data-fx-help="" className="text-xs text-muted-foreground">
                     他能生成几条订阅地址。每条都是一份完整凭据，发出去就只能靠吊销那一条收回。0 或留空表示不限制。
                   </p>
                 </FormField>
@@ -2333,7 +2379,7 @@ function UsersContent() {
                     onChange={(e) => setMaxPorts(parseInt(e.target.value) || 0)}
                     placeholder="0=不限制"
                   />
-                  <p className="text-xs text-muted-foreground">0 或留空表示不限制</p>
+                  <p data-fx-help="" className="text-xs text-muted-foreground">0 或留空表示不限制</p>
                 </FormField>
                 <FormField className="space-y-2">
                   <Label>最大连接数</Label>
@@ -2344,7 +2390,7 @@ function UsersContent() {
                     onChange={(e) => setMaxConnections(parseInt(e.target.value) || 0)}
                     placeholder="0=不限制"
                   />
-                  <p className="text-xs text-muted-foreground">按主机或隧道聚合。</p>
+                  <p data-fx-help="" className="text-xs text-muted-foreground">按主机或隧道聚合。</p>
                 </FormField>
                 <FormField className="space-y-2">
                   <Label>单 IP 接入限制</Label>
@@ -2355,14 +2401,14 @@ function UsersContent() {
                     onChange={(e) => setMaxIPs(parseInt(e.target.value) || 0)}
                     placeholder="0=不限制"
                   />
-                  <p className="text-xs text-muted-foreground">限制每个来源 IP 的 TCP 并发连接数，不是 IP 个数。隧道按规则计数；普通转发要在系统设置里打开「普通转发接入限制」才执行，按用户、入口主机共享。UDP 不适用。</p>
+                  <p data-fx-help="" className="text-xs text-muted-foreground">限制每个来源 IP 的 TCP 并发连接数，不是 IP 个数。隧道按规则计数；普通转发要在系统设置里打开「普通转发接入限制」才执行，按用户、入口主机共享。UDP 不适用。</p>
                 </FormField>
               </div>
               <Separator />
               <FormField className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <Label>客户端订阅</Label>
-                  <p className="mt-1 text-xs text-muted-foreground">
+                  <p data-fx-help="" className="mt-1 text-xs text-muted-foreground">
                     允许生成订阅地址导入客户端，与转发权限互不影响。
                     套餐已附带该权限的用户不受这里影响；流量用尽或账号被停时自动收回。
                   </p>
@@ -2376,7 +2422,7 @@ function UsersContent() {
               <Separator />
               <div className="space-y-2">
                 <Label className="text-sm font-medium">允许使用的转发方式</Label>
-                <p className="text-xs text-muted-foreground">全部关闭则禁止转发。</p>
+                <p data-fx-help="" className="text-xs text-muted-foreground">全部关闭则禁止转发。</p>
                 <div className="grid grid-cols-[repeat(auto-fit,minmax(132px,1fr))] gap-2">
                   <div className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-border/40 bg-background/50 px-3 py-2.5">
                     <span className="min-w-0 truncate text-xs font-medium">iptables</span>
@@ -2422,7 +2468,7 @@ function UsersContent() {
                   />
                   <span className="text-sm text-muted-foreground select-none">GB</span>
                 </div>
-                <p className="text-xs text-muted-foreground">
+                <p data-fx-help="" className="text-xs text-muted-foreground">
                   单位 GB，0 表示不限。
                 </p>
               </div>
@@ -2435,7 +2481,7 @@ function UsersContent() {
                     <Gauge className="h-3.5 w-3.5" />
                     转发限速
                   </Label>
-                  <p className="text-xs text-muted-foreground">
+                  <p data-fx-help="" className="text-xs text-muted-foreground">
                     对普通端口转发和隧道入口生效。同一用户在一台主机上的所有规则、所有连接共用这个速度，开多线程也绕不过去。
                   </p>
                 </div>
@@ -2499,7 +2545,7 @@ function UsersContent() {
                     </div>
                   </div>
                 </div>
-                <p className="text-xs text-muted-foreground">
+                <p data-fx-help="" className="text-xs text-muted-foreground">
                   填 0 表示不限速。突发：先按峰值跑这么多秒，用满了降回上面的速度，用得少时额度慢慢回满；峰值不高于上下行速度时不生效。
                   上下行分开和突发需要 Agent 2.2.230 以上，gost 转发和隧道入口只按上下行速度限、不做突发。
                 </p>
@@ -2517,7 +2563,7 @@ function UsersContent() {
                   onChange={setExpiresAtInput}
                   placeholder="永久有效"
                 />
-                <p className="text-xs text-muted-foreground">
+                <p data-fx-help="" className="text-xs text-muted-foreground">
                   留空表示永久有效。
                 </p>
               </div>
@@ -2531,7 +2577,7 @@ function UsersContent() {
                       <RotateCcw className="h-3.5 w-3.5" />
                       启用月度自动重置
                     </p>
-                    <p className="text-xs text-muted-foreground">每月自动清零已用流量。</p>
+                    <p data-fx-help="" className="text-xs text-muted-foreground">每月自动清零已用流量。</p>
                   </div>
                   <Checkbox aria-label="启用月度自动重置"
                     checked={trafficAutoReset}
@@ -2564,7 +2610,7 @@ function UsersContent() {
                         ))}
                       </SelectContent>
                     </Select>
-                    <p className="text-xs text-muted-foreground">
+                    <p data-fx-help="" className="text-xs text-muted-foreground">
                       默认以启用当天作为重置日，可修改为每月 1–{MONTHLY_RESET_MAX_DAY} 号中任意一天；小月在月末重置（如 31 日在 2 月按 28/29 日）
                     </p>
                   </FormField>
@@ -2574,10 +2620,32 @@ function UsersContent() {
 
             {/* 授权标签页 */}
             <TabsContent value="hosts" className="flex-1 min-h-0 overflow-y-auto pr-1 mt-3 space-y-4 data-[state=inactive]:hidden">
-              <p className="text-xs text-muted-foreground">
+              <p data-fx-help="" className="text-xs text-muted-foreground">
                 默认不展开全部资源，按需选择要授权给该用户的端口转发、转发链、转发组、隧道、网络测试主机和计费资源。
               </p>
+              {/*
+                八类资源原来一段接一段竖着排、各带一个表头和空提示，一屏翻不完（标准布局重构工作包二）。
+                现在一排药丸选类型，只列选中的那一类；数字是已授权的个数。
+              */}
+              {compactLayout ? (
+              <FilterChips
+                ariaLabel="资源类型"
+                value={resourceGrantKind}
+                onChange={setResourceGrantKind}
+                items={[
+                  { value: "port", label: "端口转发", count: selectedAllowedPortForwards.length },
+                  { value: "group", label: "转发链/转发组", count: selectedAllowedChainAndFailoverGroups.length },
+                  { value: "tunnel", label: "隧道转发", count: allowedTunnelIds.length },
+                  { value: "node", label: "订阅节点分享", count: sharedProxyNodeIds.length },
+                  { value: "lgHost", label: "网络测试主机", count: allowedHostIds.length },
+                  { value: "billingGroup", label: "流量计费资源", count: trafficBillingForwardGroupIds.length },
+                  { value: "billingHost", label: "历史计费主机", count: trafficBillingHostIds.length },
+                  { value: "billingTunnel", label: "流量计费隧道", count: trafficBillingTunnelIds.length },
+                ]}
+              />
+              ) : null}
 
+              {(!compactLayout || resourceGrantKind === "port") && (
               <FormField className="space-y-2">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <Label className="text-sm font-medium">端口转发授权</Label>
@@ -2617,14 +2685,16 @@ function UsersContent() {
                     ))}
                   </AutoAnimateContainer>
                 ) : (
-                  <p className="rounded-lg border border-dashed border-border/50 px-3 py-2 text-xs text-muted-foreground">
+                  <p className="fx-empty-hint rounded-lg border border-dashed border-border/50 px-3 py-2 text-xs text-muted-foreground">
                     暂未授权端口转发，可从上方选择添加。
                   </p>
                 )}
               </FormField>
+              )}
 
               <Separator />
 
+              {(!compactLayout || resourceGrantKind === "group") && (
               <FormField className="space-y-2">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <Label className="text-sm font-medium">转发链/转发组授权</Label>
@@ -2665,14 +2735,16 @@ function UsersContent() {
                     ))}
                   </AutoAnimateContainer>
                 ) : (
-                  <p className="rounded-lg border border-dashed border-border/50 px-3 py-2 text-xs text-muted-foreground">
+                  <p className="fx-empty-hint rounded-lg border border-dashed border-border/50 px-3 py-2 text-xs text-muted-foreground">
                     暂未授权转发链或转发组，可从上方选择添加。
                   </p>
                 )}
               </FormField>
+              )}
 
               <Separator />
 
+              {(!compactLayout || resourceGrantKind === "tunnel") && (
               <FormField className="space-y-2">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <Label className="text-sm font-medium">隧道转发</Label>
@@ -2717,20 +2789,22 @@ function UsersContent() {
                     ))}
                   </AutoAnimateContainer>
                 ) : (
-                  <p className="rounded-lg border border-dashed border-border/50 px-3 py-2 text-xs text-muted-foreground">
+                  <p className="fx-empty-hint rounded-lg border border-dashed border-border/50 px-3 py-2 text-xs text-muted-foreground">
                     暂未授权隧道，可从上方选择添加。
                   </p>
                 )}
               </FormField>
+              )}
 
               <Separator />
 
+              {(!compactLayout || resourceGrantKind === "node") && (
               <FormField className="space-y-2">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <Label className="text-sm font-medium">订阅节点分享</Label>
                   <Badge variant="outline" className="text-[10px]">{sharedProxyNodeIds.length} 个</Badge>
                 </div>
-                <p className="text-xs text-muted-foreground">
+                <p data-fx-help="" className="text-xs text-muted-foreground">
                   选中的节点会直接出现在他的订阅里，节点仍然是原主人的，他改不了也删不掉。
                   流量记在节点主人名下 —— 同一个端口分给几个人用，面板按端口计量，拆不开。
                   {/* 找不到东西在哪儿，是这个功能最常见的「以为没生效」。 */}
@@ -2778,20 +2852,22 @@ function UsersContent() {
                     ))}
                   </AutoAnimateContainer>
                 ) : (
-                  <p className="rounded-lg border border-dashed border-border/50 px-3 py-2 text-xs text-muted-foreground">
+                  <p className="fx-empty-hint rounded-lg border border-dashed border-border/50 px-3 py-2 text-xs text-muted-foreground">
                     暂未分享节点。只租一两个落地、不值得单开端口的用户可以从上方选。
                   </p>
                 )}
               </FormField>
+              )}
 
               <Separator />
 
+              {(!compactLayout || resourceGrantKind === "lgHost") && (
               <FormField className="space-y-2">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <Label className="text-sm font-medium">网络测试主机授权</Label>
                   <Badge variant="outline" className="text-[10px]">{allowedHostIds.length} 台</Badge>
                 </div>
-                <p className="text-xs text-muted-foreground">
+                <p data-fx-help="" className="text-xs text-muted-foreground">
                   网络测试会展示用户自己创建、通过主机授权或套餐授权获得的主机；这里用于手动增加授权。端口转发、转发链或转发组的成员主机不会因此单独展示。
                 </p>
                 <Select value={addAllowedHostId} onValueChange={addHostPermission} disabled={!availableAllowedHosts.length}>
@@ -2825,14 +2901,16 @@ function UsersContent() {
                     ))}
                   </AutoAnimateContainer>
                 ) : (
-                  <p className="rounded-lg border border-dashed border-border/50 px-3 py-2 text-xs text-muted-foreground">
+                  <p className="fx-empty-hint rounded-lg border border-dashed border-border/50 px-3 py-2 text-xs text-muted-foreground">
                     暂未额外授权网络测试主机。
                   </p>
                 )}
               </FormField>
+              )}
 
               <Separator />
 
+              {(!compactLayout || resourceGrantKind === "billingGroup") && (
               <FormField className="space-y-2">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <Label className="text-sm font-medium">流量计费转发资源</Label>
@@ -2877,12 +2955,14 @@ function UsersContent() {
                     ))}
                   </AutoAnimateContainer>
                 ) : (
-                  <p className="rounded-lg border border-dashed border-border/50 px-3 py-2 text-xs text-muted-foreground">
+                  <p className="fx-empty-hint rounded-lg border border-dashed border-border/50 px-3 py-2 text-xs text-muted-foreground">
                     暂未授权计费转发资源，可从上方选择添加。
                   </p>
                 )}
               </FormField>
+              )}
 
+              {(!compactLayout || resourceGrantKind === "billingHost") && (
               <FormField className="space-y-2">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <Label className="text-sm font-medium">历史计费主机</Label>
@@ -2922,12 +3002,14 @@ function UsersContent() {
                     ))}
                   </AutoAnimateContainer>
                 ) : (
-                  <p className="rounded-lg border border-dashed border-border/50 px-3 py-2 text-xs text-muted-foreground">
+                  <p className="fx-empty-hint rounded-lg border border-dashed border-border/50 px-3 py-2 text-xs text-muted-foreground">
                     暂未授权历史计费主机。
                   </p>
                 )}
               </FormField>
+              )}
 
+              {(!compactLayout || resourceGrantKind === "billingTunnel") && (
               <FormField className="space-y-2">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <Label className="text-sm font-medium">流量计费隧道</Label>
@@ -2972,11 +3054,12 @@ function UsersContent() {
                     ))}
                   </AutoAnimateContainer>
                 ) : (
-                  <p className="rounded-lg border border-dashed border-border/50 px-3 py-2 text-xs text-muted-foreground">
+                  <p className="fx-empty-hint rounded-lg border border-dashed border-border/50 px-3 py-2 text-xs text-muted-foreground">
                     暂未授权计费隧道，可从上方选择添加。
                   </p>
                 )}
               </FormField>
+              )}
             </TabsContent>
           </Tabs>
           <DialogFooter className="shrink-0">

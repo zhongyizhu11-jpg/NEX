@@ -236,7 +236,8 @@ function DashboardContent() {
         「查看运行状态、资源使用和流量趋势」是在解释这一页叫总览 —— 它叫总览就够了。
       */}
       <WorkspaceHeader title="总览" status={health ? (
-        <span className="tabular-nums">
+        /* 精简布局：下面的状态卡已经是这三个数，标题行不再重复一遍 */
+        <span className="tabular-nums" data-fx-compact-hide="">
           {[
             isAdmin ? `${health.hosts.total} 台主机` : null,
             `${health.links.total} 条线路`,

@@ -1,4 +1,5 @@
 import { useLocation } from "wouter";
+import { readStoredViewMode, writeStoredViewMode } from "@/lib/viewModeStorage";
 import { useFaultBundleExport } from "@/components/links/useFaultBundleExport";
 import { MemberScheduleButton } from "@/components/links/MemberScheduleButton";
 import { describeMemberSchedule, groupModeSupportsMemberSchedule, memberEnabledIntent, parseMemberSchedule, type MemberActiveSchedule } from "@shared/memberSchedule";
@@ -37,6 +38,7 @@ import { applyLatencyPeakCut, clipLatencyForChart, getLatencyStabilityStats, get
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ViewModeToggle } from "@/components/ui/view-mode-toggle";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
@@ -391,22 +393,11 @@ type ForwardGroupsContentProps = {
 const FORWARD_GROUP_VIEW_MODE_STORAGE_KEY = "forwardx.forwardGroups.viewMode";
 
 function getStoredForwardGroupViewMode(): ForwardGroupViewMode {
-  if (typeof window === "undefined") return "card";
-  try {
-    const value = window.localStorage.getItem(FORWARD_GROUP_VIEW_MODE_STORAGE_KEY);
-    return value === "table" ? "table" : "card";
-  } catch {
-    return "card";
-  }
+  return readStoredViewMode<ForwardGroupViewMode>(FORWARD_GROUP_VIEW_MODE_STORAGE_KEY, ["table", "card"], "card");
 }
 
 function storeForwardGroupViewMode(viewMode: ForwardGroupViewMode) {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(FORWARD_GROUP_VIEW_MODE_STORAGE_KEY, viewMode);
-  } catch {
-    // Ignore storage failures so the page still works in restricted browsers.
-  }
+  writeStoredViewMode(FORWARD_GROUP_VIEW_MODE_STORAGE_KEY, viewMode);
 }
 
 function sameNumberArray(a: number[], b: number[]) {
@@ -1762,10 +1753,6 @@ export function ForwardGroupsContent({
     return parts.join(" / ");
   };
 
-  const groupKindBadge = (group: any) => {
-    return null;
-  };
-
   const groupRuntimeBadges = (group: any) => {
     const mode = normalizeGroupMode(group.groupMode);
     if (mode === "exit") {
@@ -2007,7 +1994,6 @@ export function ForwardGroupsContent({
                     <div className="min-w-0">
                       <div className="flex min-w-0 flex-wrap items-center gap-2">
                         <p className="min-w-0 truncate font-medium">{group.name}</p>
-                        {groupKindBadge(group)}
                         {groupStatusBadge(group)}
                       </div>
                       <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{groupStatusMessage(group)}</p>
@@ -2229,6 +2215,8 @@ export function ForwardGroupsContent({
 
   return (
     <div className="space-y-6">
+      {/* 嵌在链路管理的分类条底下时，这个二级页头和选中的那一格同名：精简布局下整块不要（data-fx-compact-hide） */}
+      <div data-fx-compact-hide={embedded && hideHeaderActions ? "" : undefined}>
       <WorkspaceHeader level={embedded ? 2 : 1} title={pageTitle} description={pageDescription} actions={!hideHeaderActions && <>
           <Badge variant="outline" className="justify-center gap-1.5 px-3 py-1.5 text-xs">
             <Activity className="h-3 w-3 text-current" />
@@ -2243,33 +2231,20 @@ export function ForwardGroupsContent({
             {runFailoverMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
             {activeGroupMode === "entry" ? "同步" : "检查"}
           </Button>}
-          <div className="hidden items-center overflow-hidden rounded-md border border-border/40 sm:flex">
-            <Button
-              variant={viewMode === "card" ? "secondary" : "ghost"}
-              size="icon"
-              className="h-8 w-8 rounded-none"
-              aria-label="卡片视图"
-              aria-pressed={viewMode === "card"}
-              onClick={() => handleViewModeChange("card")}
-            >
-              <LayoutGrid className="h-4 w-4" />
-            </Button>
-            <Button
-              variant={viewMode === "table" ? "secondary" : "ghost"}
-              size="icon"
-              className="h-8 w-8 rounded-none"
-              aria-label="列表视图"
-              aria-pressed={viewMode === "table"}
-              onClick={() => handleViewModeChange("table")}
-            >
-              <List className="h-4 w-4" />
-            </Button>
-          </div>
+          <ViewModeToggle
+            value={viewMode}
+            onChange={handleViewModeChange}
+            items={[
+              { value: "card", label: "卡片视图", icon: LayoutGrid },
+              { value: "table", label: "列表视图", icon: List },
+            ]}
+          />
           <Button onClick={() => openCreate()} className="col-span-2 gap-2 sm:col-span-1">
             <Plus className="h-4 w-4" />
             {addButtonText}
           </Button>
         </>} />
+      </div>
 
       <SectionTransition transitionKey={contentTransitionKey}>
         {isLoading ? (
@@ -2300,7 +2275,8 @@ export function ForwardGroupsContent({
                     <TableHead>名称</TableHead>
                     <TableHead>成员/链路</TableHead>
                     <TableHead className="hidden md:table-cell">{activeGroupMode === "port" ? "入口主机" : activeGroupMode === "exit" ? "出口" : activeGroupMode === "entry" ? "DDNS" : "入口"}</TableHead>
-                    <TableHead className="hidden md:table-cell">{isChainMode ? "链路延迟" : isCollectionMode(activeGroupMode) ? "用途" : "引用规则"}</TableHead>
+                    {/* 入口组 / 出口组没有这一列：原来打印的「固定入口 / 固定出口」就是所在的分类条，说了两遍 */}
+                    {isCollectionMode(activeGroupMode) ? null : <TableHead className="hidden md:table-cell">{isChainMode ? "链路延迟" : "引用规则"}</TableHead>}
                     <TableHead className="text-right">操作</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -2313,7 +2289,7 @@ export function ForwardGroupsContent({
                     <TableRow
                       {...itemProps}
                       className={cn(
-                        "group/sortable h-[72px]",
+                        "group/sortable fx-table-row h-[72px]",
                         isDragging && "opacity-55",
                         isDropTarget && "bg-primary/5",
                       )}
@@ -2344,7 +2320,9 @@ export function ForwardGroupsContent({
                         <div className="line-clamp-1 text-sm">{normalizeGroupMode(group.groupMode) === "port" ? (Number(group.entryGroupId || 0) > 0 ? `入口组 · ${entryGroupDisplayText(group, groupsByMode)}` : (group.members || []).length > 1 ? `${(group.members || []).length} 台入口主机` : (group.members || []).length ? memberLabel((group.members || [])[0]) : "未选择") : normalizeGroupMode(group.groupMode) === "chain" ? chainEntryText(group) : normalizeGroupMode(group.groupMode) === "exit" ? `${(group.members || []).length} 台出口主机` : group.domain || "未配置域名"}</div>
                         <div className="mt-1 line-clamp-1 text-xs text-muted-foreground">{normalizeGroupMode(group.groupMode) === "port" ? "转发规则中直接选择" : normalizeGroupMode(group.groupMode) === "chain" ? "规则使用时监听入口端口" : normalizeGroupMode(group.groupMode) === "exit" ? "隧道出口组" : group.lastDdnsValue || "未切换"}</div>
                       </TableCell>
-                      <TableCell className="hidden py-3 md:table-cell">{normalizeGroupMode(group.groupMode) === "chain" ? renderChainLatencySummary(group) : isCollectionMode(normalizeGroupMode(group.groupMode)) ? (normalizeGroupMode(group.groupMode) === "entry" ? "固定入口" : "固定出口") : Number(group.templateRuleCount || 0)}</TableCell>
+                      {isCollectionMode(activeGroupMode) ? null : (
+                        <TableCell className="hidden py-3 md:table-cell">{normalizeGroupMode(group.groupMode) === "chain" ? renderChainLatencySummary(group) : Number(group.templateRuleCount || 0)}</TableCell>
+                      )}
                       <TableCell className="py-3 text-right">
                         <div className="flex justify-end">{renderGroupActions(group)}</div>
                       </TableCell>
@@ -2498,7 +2476,7 @@ export function ForwardGroupsContent({
                     <label className="flex items-center justify-between gap-3">
                       <span className="space-y-1">
                         <span className="block text-sm font-medium">按带宽排序解析</span>
-                        <span className="block text-xs text-muted-foreground">
+                        <span data-fx-help="" className="block text-xs text-muted-foreground">
                           入口域名照旧解析出全部健康入口，只是把带宽大（或现在更闲）的排在前面。很多客户端优先用排在前面的地址，
                           所以大带宽的入口通常会接到更多客户端，但 DNS 给不出准确的比例。
                           要按比例分连接，用订阅里的「负载均衡」组；要把一条连接拆开同时走几台，用隧道中转的「单连接叠加」。
@@ -2619,7 +2597,7 @@ export function ForwardGroupsContent({
               <FormField className="space-y-2">
                 <Label>{form.groupMode === "port" ? "入口组（可选）" : "入口组"}</Label>
                 {form.groupMode === "port" && (
-                  <p className="text-xs text-muted-foreground">挂上入口组就用组里的主机当入口，隧道 / 转发链共用同一个组，组里加减主机这里自动跟着变；不挂就在下面指定主机。</p>
+                  <p data-fx-help="" className="text-xs text-muted-foreground">挂上入口组就用组里的主机当入口，隧道 / 转发链共用同一个组，组里加减主机这里自动跟着变；不挂就在下面指定主机。</p>
                 )}
                 <Select
                   value={form.entryGroupId ? String(form.entryGroupId) : "none"}
@@ -2649,7 +2627,7 @@ export function ForwardGroupsContent({
               <div className="space-y-2.5 border-t border-border/60 pt-3">
                 <div className="flex items-center justify-between gap-3">
                   <p className="text-sm font-medium">运行配置</p>
-                  <p id="forward-group-rate-limit-help" className="text-xs text-muted-foreground">0 表示不限速</p>
+                  <p data-fx-help="" id="forward-group-rate-limit-help" className="text-xs text-muted-foreground">0 表示不限速</p>
                 </div>
                 <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(132px,160px)_112px] sm:items-end">
                   <FormField className="space-y-2">
@@ -2778,7 +2756,7 @@ export function ForwardGroupsContent({
               <div className={form.groupMode === "chain" ? "space-y-2" : "space-y-3 rounded-lg border border-border/60 p-3"}>
                 <Label>{form.groupMode === "chain" ? "链路主机顺序" : form.groupMode === "port" || form.groupMode === "entry" ? "入口主机" : form.groupMode === "exit" ? "出口主机" : "成员优先级"}</Label>
                 {form.groupMode === "port" && (
-                  <p className="text-xs text-muted-foreground">选一台或多台主机，每台都在规则的入口端口上监听、转到同一个目标；加减主机后已有规则自动跟着下发。</p>
+                  <p data-fx-help="" className="text-xs text-muted-foreground">选一台或多台主机，每台都在规则的入口端口上监听、转到同一个目标；加减主机后已有规则自动跟着下发。</p>
                 )}
                 {form.groupMode === "chain" ? (
                   <MultiHopEditor

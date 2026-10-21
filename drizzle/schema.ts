@@ -208,6 +208,8 @@ export const users = table("users", {
   telegramLinkedAt: epoch("telegramLinkedAt"),
   telegramLastSeenAt: epoch("telegramLastSeenAt"),
   telegramAnnouncementSubscribed: boolean("telegramAnnouncementSubscribed").notNull().default(false),
+  /** 布局偏好：null 跟随站点默认（设置 › 个性化 › 布局），"standard" / "compact" 自己定。见 shared/personalization.ts。 */
+  uiLayout: varchar("uiLayout", { length: 16 }),
   telegramBindCode: text("telegramBindCode").unique(),
   telegramBindCodeExpiresAt: epoch("telegramBindCodeExpiresAt"),
   telegramLoginCode: text("telegramLoginCode").unique(),
@@ -332,6 +334,7 @@ export const hosts = table("hosts", {
   // 连接建立后走 ingress 快速路径，流量改从 conntrack 计。只有管理员能开，默认关。
   flowOffload: boolean("flowOffload").notNull().default(false),
   hostStatusNotifyEnabled: boolean("hostStatusNotifyEnabled").notNull().default(true),
+  ipWhitelistOnly: boolean("ipWhitelistOnly").notNull().default(false),
   telegramTrafficAlertEnabled: boolean("telegramTrafficAlertEnabled").notNull().default(false),
   trafficAlertThresholdPercent: int("trafficAlertThresholdPercent").notNull().default(20),
   telegramRenewalReminderEnabled: boolean("telegramRenewalReminderEnabled").notNull().default(false),

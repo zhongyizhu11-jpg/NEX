@@ -659,6 +659,49 @@ export function normalizePersonalizationUiTheme(value: unknown): Personalization
 }
 
 /*
+  布局密度（精简布局）。画法全在 client/src/styles/compact.css 里按 <html data-layout="compact"> 选，
+  这里只管 id、文案和「谁说了算」：
+
+    站点默认  设置 › 个性化 › 布局（personalizationLayout），管理员定，所有人跟着走
+    个人偏好  个人资料 › 界面（users.uiLayout）：null 跟随站点，standard / compact 自己定
+
+  精简 = 同样的数据和功能，更密的摆法：控件和卡片更矮、圆角更小、说明文字不占地方、侧栏更窄，
+  列表页的控制行、诊断框、主机详情这些也按精简的方式合并。
+*/
+export const PERSONALIZATION_LAYOUTS = [
+  { id: "standard", name: "标准", description: "现在这套：留白充足、每项带说明，第一次用的人看得明白。" },
+  { id: "compact", name: "精简", description: "控件和卡片更矮、圆角更小、说明文字收起来、侧栏更窄，一屏多看一截。功能和数据一样。" },
+] as const;
+
+export type PersonalizationLayoutId = typeof PERSONALIZATION_LAYOUTS[number]["id"];
+
+export function normalizePersonalizationLayout(value: unknown): PersonalizationLayoutId {
+  const text = String(value || "").trim();
+  return PERSONALIZATION_LAYOUTS.some((layout) => layout.id === text)
+    ? text as PersonalizationLayoutId
+    : "standard";
+}
+
+/** 个人偏好：null = 跟随站点默认。 */
+export function normalizeUserLayoutPreference(value: unknown): PersonalizationLayoutId | null {
+  const text = String(value || "").trim();
+  return PERSONALIZATION_LAYOUTS.some((layout) => layout.id === text) ? text as PersonalizationLayoutId : null;
+}
+
+/**
+ * 这个账号最终看到哪一套：个人偏好 › 站点默认。
+ * user 为空（没登录、还在加载）时按站点默认。
+ */
+export function resolveEffectiveLayout(
+  user: { uiLayout?: unknown } | null | undefined,
+  siteLayout: unknown,
+): PersonalizationLayoutId {
+  const preference = normalizeUserLayoutPreference(user?.uiLayout);
+  if (preference) return preference;
+  return normalizePersonalizationLayout(siteLayout);
+}
+
+/*
   「液态玻璃」主题的几个旋钮（设置 › 个性化 › 液态玻璃）。只在界面主题是 liquid-glass 时生效，
   存成一段 JSON（personalizationLiquidGlass），画法在 client/src/styles/theme-liquid-glass.css，
   照片和光标跟随在 client/src/components/LiquidGlassBackdrop.tsx。

@@ -758,7 +758,7 @@ export default function Payments() {
                 </Field>
                 {/* 网关检测和下面两个回调地址是同一组「接好了没有」，一起写成行。 */}
                 <SettingList className="md:col-span-2">
-                  <SettingRow
+                  <SettingRow keepDescription
                     label="网关检测"
                     description={testGmPayGateway.data ? (
                       <span className="flex min-w-0 flex-wrap items-center gap-2">

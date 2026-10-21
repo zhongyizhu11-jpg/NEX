@@ -5,6 +5,7 @@ import {
   type HostEgressShapingMode,
   HOST_EGRESS_MBPS_MAX,
 } from "@/components/hosts/hostEgressShaping";
+import { readStoredViewMode, writeStoredViewMode } from "@/lib/viewModeStorage";
 import { describeHostFlowOffload } from "@/components/hosts/hostFlowOffload";
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { FormField } from "@/components/ui/form-field";
@@ -65,6 +66,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { HOST_TRAFFIC_FAILOVER_DEFAULT_PERCENT, hostTrafficExcluded, normalizeHostTrafficFailoverPercent } from "@shared/hostTrafficPolicy";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ViewModeToggle } from "@/components/ui/view-mode-toggle";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
@@ -94,6 +96,7 @@ import {
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SlidingTabsList, type SlidingTabItem } from "@/components/ui/sliding-tabs";
+import { useCompactLayout } from "@/hooks/useCompactLayout";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import DataSectionLoading from "@/components/DataSectionLoading";
 import DataSectionError from "@/components/DataSectionError";
@@ -967,67 +970,6 @@ function HostListStatusBadge({ host }: { host: any }) {
   );
 }
 
-function HostSummaryCard({
-  title,
-  value,
-  subtitle,
-  icon: Icon,
-  leadingIcon: LeadingIcon,
-  leadingTone = "bg-[var(--fx-healthy)]",
-  iconTone = "bg-chart-2/10 text-chart-2",
-  tone,
-  loading,
-  cacheKey,
-  className,
-}: {
-  title: string;
-  value: string;
-  subtitle?: string;
-  icon: typeof ActivitySquare;
-  leadingIcon?: typeof ActivitySquare;
-  leadingTone?: string;
-  iconTone?: string;
-  tone: string;
-  loading?: boolean;
-  cacheKey: string;
-  className?: string;
-}) {
-  return (
-    <Card className={`group relative h-full overflow-hidden border-border bg-card ${className || ""}`.trim()}>
-      <div className={`absolute inset-0 opacity-[0.035] transition-opacity group-hover:opacity-[0.07] ${tone}`} />
-      <CardContent className="relative flex h-full min-h-[112px] flex-col justify-center p-3.5 sm:min-h-[112px] sm:p-4">
-        <p className="text-xs font-medium text-muted-foreground">{title}</p>
-        <div className={`absolute right-4 top-3.5 hidden h-9 w-9 shrink-0 items-center justify-center rounded-xl shadow-sm sm:flex ${iconTone}`}>
-          <Icon className="h-5 w-5" />
-        </div>
-        <div className="mt-1 flex min-w-0 items-center gap-2.5 pr-12">
-          {LeadingIcon && (
-            <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg shadow-sm ${leadingTone}`}>
-              <LeadingIcon className="h-4 w-4 text-white" />
-            </div>
-          )}
-          <div className="min-w-0">
-            <AnimatedStatValue
-              as="span"
-              value={value}
-              loading={loading}
-              cacheKey={cacheKey}
-              fallbackValue="0"
-              className="block truncate text-2xl font-bold leading-none tracking-tight tabular-nums"
-              title={value}
-            />
-            {subtitle && (
-              <p className="mt-2 truncate text-xs text-muted-foreground" title={subtitle}>
-                {subtitle}
-              </p>
-            )}
-          </div>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
 type HostViewMode = "card" | "compact-card" | "table" | "map" | "flat-map";
 type HostManageTab = "hosts" | "groups" | "services" | "tokens";
 type HostManageFilterStats = { filtered: number; total: number };
@@ -1076,60 +1018,27 @@ function defaultHostViewMode(): HostViewMode {
 }
 
 function getStoredHostViewMode(): HostViewMode {
-  if (typeof window === "undefined") return "card";
-  try {
-    const value = window.localStorage.getItem(HOST_VIEW_MODE_STORAGE_KEY);
-    return value === "card" || value === "compact-card" || value === "table" || value === "map" || value === "flat-map" ? value : defaultHostViewMode();
-  } catch {
-    return defaultHostViewMode();
-  }
+  return readStoredViewMode<HostViewMode>(HOST_VIEW_MODE_STORAGE_KEY, ["card", "compact-card", "table", "map", "flat-map"], defaultHostViewMode());
 }
 
 function storeHostViewMode(viewMode: HostViewMode) {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(HOST_VIEW_MODE_STORAGE_KEY, viewMode);
-  } catch {
-    // Ignore storage failures so the page still works in restricted browsers.
-  }
+  writeStoredViewMode(HOST_VIEW_MODE_STORAGE_KEY, viewMode);
 }
 
 function getStoredHostProbeServiceViewMode(): HostProbeServiceViewMode {
-  if (typeof window === "undefined") return "card";
-  try {
-    const value = window.localStorage.getItem(HOST_PROBE_SERVICE_VIEW_MODE_STORAGE_KEY);
-    return value === "table" ? "table" : "card";
-  } catch {
-    return "card";
-  }
+  return readStoredViewMode<HostProbeServiceViewMode>(HOST_PROBE_SERVICE_VIEW_MODE_STORAGE_KEY, ["table", "card"], "card");
 }
 
 function storeHostProbeServiceViewMode(viewMode: HostProbeServiceViewMode) {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(HOST_PROBE_SERVICE_VIEW_MODE_STORAGE_KEY, viewMode);
-  } catch {
-    // Ignore storage failures so the page still works in restricted browsers.
-  }
+  writeStoredViewMode(HOST_PROBE_SERVICE_VIEW_MODE_STORAGE_KEY, viewMode);
 }
 
 function getStoredHostGroupViewMode(): HostGroupViewMode {
-  if (typeof window === "undefined") return "card";
-  try {
-    const value = window.localStorage.getItem(HOST_GROUP_VIEW_MODE_STORAGE_KEY);
-    return value === "table" ? "table" : "card";
-  } catch {
-    return "card";
-  }
+  return readStoredViewMode<HostGroupViewMode>(HOST_GROUP_VIEW_MODE_STORAGE_KEY, ["table", "card"], "card");
 }
 
 function storeHostGroupViewMode(viewMode: HostGroupViewMode) {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(HOST_GROUP_VIEW_MODE_STORAGE_KEY, viewMode);
-  } catch {
-    // Ignore storage failures so the page still works in restricted browsers.
-  }
+  writeStoredViewMode(HOST_GROUP_VIEW_MODE_STORAGE_KEY, viewMode);
 }
 
 function hostGroupHostIds(group: HostGroupView | null | undefined) {
@@ -1748,6 +1657,7 @@ function HostsContent() {
   const [tokenViewMode, setTokenViewMode] = useState<AgentTokenViewMode>(() => getStoredAgentTokenViewMode());
   const [serviceViewMode, setServiceViewMode] = useState<HostProbeServiceViewMode>(() => getStoredHostProbeServiceViewMode());
   const [hostGroupViewMode, setHostGroupViewMode] = useState<HostGroupViewMode>(() => getStoredHostGroupViewMode());
+  const compactLayout = useCompactLayout();
   const hostManageTabItems = user?.role === "admin" ? HOST_MANAGE_TAB_ITEMS_ADMIN : HOST_MANAGE_TAB_ITEMS_USER;
   /*
     这一页的实时数据统一一个节奏（原来是几个查询各 2 秒、各自错开地刷）：桌面 3 秒；
@@ -2645,142 +2555,48 @@ function HostsContent() {
                   <OpsHostsMenuItems />
                 </DropdownMenuContent></DropdownMenu>
               )}
-              <div className="hidden items-center overflow-hidden rounded-md border border-border/40 sm:flex">
-                <Button
-                  variant={viewMode === "compact-card" ? "secondary" : "ghost"}
-                  size="icon"
-                  className="h-8 w-8 rounded-none"
-                  title="精简卡片"
-                  aria-label="精简卡片"
-                  aria-pressed={viewMode === "compact-card"}
-                  onClick={() => handleViewModeChange("compact-card")}
-                >
-                  <Rows3 className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant={viewMode === "card" ? "secondary" : "ghost"}
-                  size="icon"
-                  className="h-8 w-8 rounded-none"
-                  title="标准卡片"
-                  aria-label="标准卡片"
-                  aria-pressed={viewMode === "card"}
-                  onClick={() => handleViewModeChange("card")}
-                >
-                  <LayoutGrid className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant={viewMode === "table" ? "secondary" : "ghost"}
-                  size="icon"
-                  className="h-8 w-8 rounded-none"
-                  title="列表视图"
-                  aria-label="列表视图"
-                  aria-pressed={viewMode === "table"}
-                  onClick={() => handleViewModeChange("table")}
-                >
-                  <List className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant={viewMode === "map" ? "secondary" : "ghost"}
-                  size="icon"
-                  className="hidden h-8 w-8 rounded-none md:inline-flex"
-                  title="3D 地球视图"
-                  aria-label="3D 地球视图"
-                  aria-pressed={viewMode === "map"}
-                  onClick={() => handleViewModeChange("map")}
-                >
-                  <Globe className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant={viewMode === "flat-map" ? "secondary" : "ghost"}
-                  size="icon"
-                  className="hidden h-8 w-8 rounded-none md:inline-flex"
-                  title="平面地图视图"
-                  aria-label="平面地图视图"
-                  aria-pressed={viewMode === "flat-map"}
-                  onClick={() => handleViewModeChange("flat-map")}
-                >
-                  <MapPinned className="h-4 w-4" />
-                </Button>
-              </div>
+              <ViewModeToggle
+                value={viewMode}
+                onChange={handleViewModeChange}
+                items={[
+                  { value: "compact-card", label: "精简卡片", icon: Rows3 },
+                  { value: "card", label: "标准卡片", icon: LayoutGrid },
+                  { value: "table", label: "列表视图", icon: List },
+                  { value: "map", label: "3D 地球视图", icon: Globe, hideBelow: "md" },
+                  { value: "flat-map", label: "平面地图视图", icon: MapPinned, hideBelow: "md" },
+                ]}
+              />
             </>
           )}
           {activeManageTab === "tokens" && user?.role === "admin" && (
-            <div className="hidden items-center overflow-hidden rounded-md border border-border/40 sm:flex">
-              <Button
-                variant={tokenViewMode === "card" ? "secondary" : "ghost"}
-                size="icon"
-                className="h-8 w-8 rounded-none"
-                title="卡片视图"
-                aria-label="卡片视图"
-                aria-pressed={tokenViewMode === "card"}
-                onClick={() => handleTokenViewModeChange("card")}
-              >
-                <LayoutGrid className="h-4 w-4" />
-              </Button>
-              <Button
-                variant={tokenViewMode === "table" ? "secondary" : "ghost"}
-                size="icon"
-                className="h-8 w-8 rounded-none"
-                title="列表视图"
-                aria-label="列表视图"
-                aria-pressed={tokenViewMode === "table"}
-                onClick={() => handleTokenViewModeChange("table")}
-              >
-                <List className="h-4 w-4" />
-              </Button>
-            </div>
+            <ViewModeToggle
+              value={tokenViewMode}
+              onChange={handleTokenViewModeChange}
+              items={[
+                { value: "card", label: "卡片视图", icon: LayoutGrid },
+                { value: "table", label: "列表视图", icon: List },
+              ]}
+            />
           )}
           {activeManageTab === "groups" && user?.role === "admin" && (
-            <div className="hidden items-center overflow-hidden rounded-md border border-border/40 sm:flex">
-              <Button
-                variant={hostGroupViewMode === "card" ? "secondary" : "ghost"}
-                size="icon"
-                className="h-8 w-8 rounded-none"
-                title="卡片视图"
-                aria-label="卡片视图"
-                aria-pressed={hostGroupViewMode === "card"}
-                onClick={() => handleHostGroupViewModeChange("card")}
-              >
-                <LayoutGrid className="h-4 w-4" />
-              </Button>
-              <Button
-                variant={hostGroupViewMode === "table" ? "secondary" : "ghost"}
-                size="icon"
-                className="h-8 w-8 rounded-none"
-                title="列表视图"
-                aria-label="列表视图"
-                aria-pressed={hostGroupViewMode === "table"}
-                onClick={() => handleHostGroupViewModeChange("table")}
-              >
-                <List className="h-4 w-4" />
-              </Button>
-            </div>
+            <ViewModeToggle
+              value={hostGroupViewMode}
+              onChange={handleHostGroupViewModeChange}
+              items={[
+                { value: "card", label: "卡片视图", icon: LayoutGrid },
+                { value: "table", label: "列表视图", icon: List },
+              ]}
+            />
           )}
           {activeManageTab === "services" && user?.role === "admin" && (
-            <div className="hidden items-center overflow-hidden rounded-md border border-border/40 sm:flex">
-              <Button
-                variant={serviceViewMode === "card" ? "secondary" : "ghost"}
-                size="icon"
-                className="h-8 w-8 rounded-none"
-                title="卡片视图"
-                aria-label="卡片视图"
-                aria-pressed={serviceViewMode === "card"}
-                onClick={() => handleServiceViewModeChange("card")}
-              >
-                <LayoutGrid className="h-4 w-4" />
-              </Button>
-              <Button
-                variant={serviceViewMode === "table" ? "secondary" : "ghost"}
-                size="icon"
-                className="h-8 w-8 rounded-none"
-                title="列表视图"
-                aria-label="列表视图"
-                aria-pressed={serviceViewMode === "table"}
-                onClick={() => handleServiceViewModeChange("table")}
-              >
-                <List className="h-4 w-4" />
-              </Button>
-            </div>
+            <ViewModeToggle
+              value={serviceViewMode}
+              onChange={handleServiceViewModeChange}
+              items={[
+                { value: "card", label: "卡片视图", icon: LayoutGrid },
+                { value: "table", label: "列表视图", icon: List },
+              ]}
+            />
           )}
         </>} />
 
@@ -2791,7 +2607,9 @@ function HostsContent() {
         onValueChange={(value) => setActiveManageTab(value as HostManageTab)}
         className="space-y-4"
       >
-        <SlidingTabsList items={hostManageTabItems} activeValue={activeManageTab} ariaLabel="主机管理" minItemWidthRem={7.5} />
+        {/* fx-list-controls：精简布局（桌面）下分类条和搜索那一行并排（compact.css） */}
+        <div className="fx-list-controls">
+        <SlidingTabsList items={hostManageTabItems} activeValue={activeManageTab} ariaLabel="主机管理" minItemWidthRem={compactLayout ? 6.5 : 7.5} />
       {/* 搜索栏一行：小搜索框在左、「添加主机」在最右（用户要的位置）；分组药丸在下一行。 */}
       <div className="flex items-center gap-2">
         <div className="relative min-w-0 flex-1 sm:max-w-[340px]">
@@ -2842,6 +2660,7 @@ function HostsContent() {
           </Button>
         )}
       </div>
+        </div>
 
         <TabsContent value="hosts" className="space-y-4">
         {user?.role === "admin" && (
@@ -3535,7 +3354,7 @@ function HostsContent() {
                       <Label className="text-sm font-semibold">协议屏蔽</Label>
                       <span className="text-xs text-muted-foreground">访问策略</span>
                     </div>
-                    <p className="rounded-md border border-border/40 bg-muted/30 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+                    <p data-fx-help="" className="rounded-md border border-border/40 bg-muted/30 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
 命中的连接会被拒绝，规则仍保持运行。{nginxFeatureEnabled ? "支持 NEX、Realm、GOST、Socat 和 Nginx；不支持 iptables/nftables。" : "支持 NEX、Realm、GOST 和 Socat；不支持 iptables/nftables。"}
                     </p>
                     <div className="grid gap-2 sm:grid-cols-3">
@@ -3678,7 +3497,7 @@ function HostsContent() {
                           </Select>
                         </FormField>
                       </div>
-                      <div className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between" data-host-traffic-failover-setting="">
+                      <div data-fx-setting-box="" className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between" data-host-traffic-failover-setting="">
                         <div className="min-w-0 space-y-0.5">
                           <Label className="text-sm font-medium">流量故障转移</Label>
                           {/*
@@ -3686,7 +3505,7 @@ function HostsContent() {
                             把这台从组里摘出去（转发组、入口组、出口组、多出口隧道），组里换别的成员顶上。
                             只改运行时，成员和端口都不删；流量重置（手动或每月自动）或关掉这个开关就恢复。
                           */}
-                          <p className="text-xs text-muted-foreground">用到这个比例后暂停参与组调度，流量重置后恢复。</p>
+                          <p data-fx-help="" className="text-xs text-muted-foreground">用到这个比例后暂停参与组调度，流量重置后恢复。</p>
                           {editingHostRow && hostTrafficExcluded(editingHostRow) ? (
                             <p className="text-xs text-[var(--fx-warn-text)]">已到阈值，正暂停参与组调度。</p>
                           ) : null}
@@ -3711,17 +3530,17 @@ function HostsContent() {
                           />
                         </div>
                       </div>
-                      <div className="mt-2.5 flex min-h-9 items-center justify-between gap-3 rounded-md bg-muted/35 px-3 py-2">
+                      <div data-fx-setting-box="" className="mt-2.5 flex min-h-9 items-center justify-between gap-3 rounded-md bg-muted/35 px-3 py-2">
                         <div className="min-w-0 space-y-0.5">
                           <Label className="text-sm font-medium">上下线通知</Label>
-                          <p className="text-xs text-muted-foreground">掉线、恢复时推送给管理员。</p>
+                          <p data-fx-help="" className="text-xs text-muted-foreground">掉线、恢复时推送给管理员。</p>
                         </div>
                         <Checkbox aria-label="上下线通知"
                           checked={form.hostStatusNotifyEnabled}
                           onCheckedChange={(checked) => setForm({ ...form, hostStatusNotifyEnabled: checked })}
                         />
                       </div>
-                      <div className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+                      <div data-fx-setting-box="" className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
                         <div className="min-w-0 space-y-0.5">
                           <Label className="text-sm font-medium">流量耗尽提醒</Label>
                           {/*
@@ -3751,7 +3570,7 @@ function HostsContent() {
                           />
                         </div>
                       </div>
-                      <div className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+                      <div data-fx-setting-box="" className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
                         <div className="min-w-0 space-y-0.5">
                           <Label className="text-sm font-medium">续费提醒</Label>
                           <p className="text-xs text-muted-foreground">
@@ -3777,7 +3596,7 @@ function HostsContent() {
                           />
                         </div>
                       </div>
-                      <div className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+                      <div data-fx-setting-box="" className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
                         <div className="min-w-0">
                           <Label className="text-sm font-medium">自动重置流量</Label>
                         </div>
@@ -3798,10 +3617,10 @@ function HostsContent() {
                           <Checkbox aria-label="每月自动清零" checked={form.trafficAutoReset} onCheckedChange={(checked) => setForm({ ...form, trafficAutoReset: checked })} />
                         </div>
                       </div>
-                      <div className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+                      <div data-fx-setting-box="" className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
                         <div className="min-w-0 space-y-0.5">
                           <Label className="text-sm font-medium">线路带宽</Label>
-                          <p className="text-xs text-muted-foreground">商家给的带宽，负载均衡按它分，不限速。</p>
+                          <p data-fx-help="" className="text-xs text-muted-foreground">商家给的带宽，负载均衡按它分，不限速。</p>
                         </div>
                         <div className="flex h-8 w-36 shrink-0 overflow-hidden rounded-md border border-input bg-background focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2">
                           <Input aria-label="线路带宽（Mbit/s）"
@@ -3818,10 +3637,10 @@ function HostsContent() {
                         </div>
                       </div>
                       {user?.role === "admin" && editingId ? (
-                        <div className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+                        <div data-fx-setting-box="" className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
                           <div className="min-w-0 space-y-0.5">
                             <Label className="text-sm font-medium">整台主机转发限速</Label>
-                            <p className="text-xs text-muted-foreground">所有用户合计上限，0 = 不限。</p>
+                            <p data-fx-help="" className="text-xs text-muted-foreground">所有用户合计上限，0 = 不限。</p>
                           </div>
                           <div className="flex h-8 w-36 shrink-0 overflow-hidden rounded-md border border-input bg-background focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2">
                             <Input aria-label="整台主机转发限速（Mbit/s）"
@@ -3838,7 +3657,7 @@ function HostsContent() {
                           </div>
                         </div>
                       ) : null}
-                      <div className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+                      <div data-fx-setting-box="" className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
                         <div className="min-w-0 space-y-0.5">
                           <Label className="text-sm font-medium">公网出口整形</Label>
                           {form.egressShapingMode === "auto" ? (
@@ -3879,7 +3698,7 @@ function HostsContent() {
                         </div>
                       </div>
                       {editingId ? (
-                        <div className="mt-2.5 flex min-h-9 items-start justify-between gap-3 rounded-md bg-muted/35 px-3 py-2">
+                        <div data-fx-setting-box="" className="mt-2.5 flex min-h-9 items-start justify-between gap-3 rounded-md bg-muted/35 px-3 py-2">
                           <div className="min-w-0 space-y-0.5">
                             <Label className="text-sm font-medium">内核快速转发</Label>
                             <p className="text-xs text-muted-foreground">
@@ -3898,7 +3717,7 @@ function HostsContent() {
                           />
                         </div>
                       ) : null}
-                      <div className="mt-2.5 space-y-2 rounded-md bg-muted/35 px-3 py-2.5">
+                      <div data-fx-setting-box="" className="mt-2.5 space-y-2 rounded-md bg-muted/35 px-3 py-2.5">
                         <FormField className="flex min-h-8 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                           <div className="flex min-w-0 items-center gap-2">
                             <RadioTower className="h-4 w-4 shrink-0 text-muted-foreground" />

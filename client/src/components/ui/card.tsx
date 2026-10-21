@@ -57,8 +57,12 @@ const CardTitle = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivE
 ))
 CardTitle.displayName = "CardTitle"
 
-const CardDescription = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(({ className, ...props }, ref) => (
-  <div data-slot="card-description" ref={ref} className={cn("text-[12.5px] leading-relaxed text-muted-foreground sm:text-[13px]", className)} {...props} />
+/*
+  卡片副标题默认当「介绍 / 教学」文字：精简布局（compact.css）下整体收起。它写的其实是状态
+  （「3 台在线」「上次备份 5 分钟前」）时传 keep，精简下照常显示。
+*/
+const CardDescription = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement> & { keep?: boolean }>(({ className, keep, ...props }, ref) => (
+  <div data-slot="card-description" data-fx-help="" data-fx-keep={keep ? "" : undefined} ref={ref} className={cn("text-[12.5px] leading-relaxed text-muted-foreground sm:text-[13px]", className)} {...props} />
 ))
 CardDescription.displayName = "CardDescription"
 

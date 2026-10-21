@@ -49,6 +49,26 @@ function rateBarClass(rate: number | null) {
 type Props = { tunnel: { id: number; name: string } | null; onClose: () => void };
 
 export default function TunnelConnStatsDialog({ tunnel, onClose }: Props) {
+  return (
+    <Dialog open={!!tunnel} onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-4xl">
+        <DialogHeader>
+          <DialogTitle>连接监控{tunnel ? ` · ${tunnel.name}` : ""}</DialogTitle>
+          <DialogDescription data-fx-help="">
+            真实连接每一跳的成功率和耗时；单连接叠加还列出每一路跑了多少。留 7 天。
+          </DialogDescription>
+        </DialogHeader>
+        <TunnelConnStatsBody tunnel={tunnel} />
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/*
+  连接监控的正文，没有对话框外壳：标准布局下套在上面的对话框里；精简布局下并进「诊断」框当一页
+  （Tunnels.tsx 传给 DiagnoseDialog 的 extraTabs）。
+*/
+export function TunnelConnStatsBody({ tunnel }: { tunnel: { id: number; name: string } | null }) {
   const [hours, setHours] = useState<number>(24);
   const query = trpc.ops.connStats.tunnel.useQuery(
     { tunnelId: tunnel?.id ?? 0, hours },
@@ -62,15 +82,7 @@ export default function TunnelConnStatsDialog({ tunnel, onClose }: Props) {
   const stagesWithData = CONN_STAGES.filter((stage) => data?.hourly.some((row) => row.stage === stage.key && row.summary.attempts > 0));
 
   return (
-    <Dialog open={!!tunnel} onOpenChange={(open) => { if (!open) onClose(); }}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-4xl">
-        <DialogHeader>
-          <DialogTitle>连接监控{tunnel ? ` · ${tunnel.name}` : ""}</DialogTitle>
-          <DialogDescription>
-            真实连接每一跳的成功率和耗时；单连接叠加还列出每一路跑了多少。留 7 天。
-          </DialogDescription>
-        </DialogHeader>
-
+    <div className="flex min-w-0 flex-col gap-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className={segmentedControlClassName} role="group" aria-label="时间范围">
             <div className="grid grid-cols-3 gap-1">
@@ -216,7 +228,6 @@ export default function TunnelConnStatsDialog({ tunnel, onClose }: Props) {
             ) : null}
           </>
         )}
-      </DialogContent>
-    </Dialog>
+    </div>
   );
 }

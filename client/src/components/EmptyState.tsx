@@ -30,7 +30,7 @@ export default function EmptyState({
       {icon ? <div className="empty-state-icon" aria-hidden="true">{icon}</div> : null}
       <div className="flex flex-col items-center gap-1">
         <h2>{title}</h2>
-        {description ? <p>{description}</p> : null}
+        {description ? <p data-fx-help="">{description}</p> : null}
       </div>
       {actions ? <div className="flex flex-wrap justify-center gap-2">{actions}</div> : null}
     </div>

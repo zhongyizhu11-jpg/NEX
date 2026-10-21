@@ -89,7 +89,7 @@ export function TrafficSurface({
               </div>
             </div>
 
-            <div className="h-40 w-full sm:h-52">
+            <div className="h-40 w-full sm:h-52" data-fx-chart="traffic">
               {chartLoading && chartData.length === 0 ? (
                 <Skeleton className="h-full w-full" />
               ) : chartData.length === 0 ? (

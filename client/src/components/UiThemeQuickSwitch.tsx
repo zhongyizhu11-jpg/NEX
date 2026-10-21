@@ -1,4 +1,4 @@
-import { Check, Palette } from "lucide-react";
+import { Check, Moon, Palette, Sun } from "lucide-react";
 
 import { toast } from "sonner";
 
@@ -39,7 +39,24 @@ export function UiThemeDot({ id }: { id: string }) {
   return <span className="fx-theme-dot" style={{ ["--sw-a" as any]: dot.a, ["--sw-b" as any]: dot.b }} aria-hidden="true" />;
 }
 
-export function UiThemeQuickSwitch({ className }: { className?: string }) {
+/*
+  精简布局：顶栏的深浅色按钮并进这个菜单（darkToggle），顶栏少一枚图标。
+*/
+function DarkModeItem({ darkToggle }: { darkToggle?: { resolved: "dark" | "light"; onToggle: () => void } }) {
+  if (!darkToggle) return null;
+  const dark = darkToggle.resolved === "dark";
+  return (
+    <>
+      <DropdownMenuItem onSelect={darkToggle.onToggle} className="gap-2.5">
+        {dark ? <Sun className="h-4 w-4" aria-hidden="true" /> : <Moon className="h-4 w-4" aria-hidden="true" />}
+        <span className="flex-1">{dark ? "切换到浅色" : "切换到深色"}</span>
+      </DropdownMenuItem>
+      <DropdownMenuSeparator />
+    </>
+  );
+}
+
+export function UiThemeQuickSwitch({ className, darkToggle }: { className?: string; darkToggle?: { resolved: "dark" | "light"; onToggle: () => void } }) {
   const override = useUiThemeOverride();
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
@@ -87,6 +104,7 @@ export function UiThemeQuickSwitch({ className }: { className?: string }) {
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-52">
+          <DarkModeItem darkToggle={darkToggle} />
           <DropdownMenuLabel className="text-xs font-medium text-muted-foreground">界面主题（全站，和设置同步）</DropdownMenuLabel>
           {PERSONALIZATION_UI_THEMES.map((theme) => (
             <DropdownMenuItem key={theme.id} onSelect={() => selectSiteTheme(theme.id)} disabled={saveSiteTheme.isPending} className="gap-2.5">
@@ -109,6 +127,7 @@ export function UiThemeQuickSwitch({ className }: { className?: string }) {
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-52">
+        <DarkModeItem darkToggle={darkToggle} />
         <DropdownMenuLabel className="text-xs font-medium text-muted-foreground">界面主题（只在这台设备）</DropdownMenuLabel>
         <DropdownMenuItem onSelect={() => setUiThemeOverride(null)} className="gap-2.5">
           <span className="fx-theme-dot fx-theme-dot-auto" aria-hidden="true" />

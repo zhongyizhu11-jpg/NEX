@@ -1,4 +1,5 @@
 import WorkspaceHeader from "@/components/WorkspaceHeader";
+import { readStoredViewMode, writeStoredViewMode } from "@/lib/viewModeStorage";
 import AnimatedStatValue from "@/components/AnimatedStatValue";
 import { resourceStatusTone } from "@/lib/statusDot";
 import { MILLI_CENTS_PER_CENT, pricePerGbMilliCentsOf } from "@shared/trafficBillingPrice";
@@ -13,6 +14,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ViewModeToggle } from "@/components/ui/view-mode-toggle";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { FormField } from "@/components/ui/form-field";
@@ -69,22 +71,11 @@ const BILLING_RESOURCE_CATEGORY_ITEMS: Array<{ value: BillingResourceCategory; l
 ];
 
 function getStoredBillingConfigViewMode(): BillingConfigViewMode {
-  if (typeof window === "undefined") return "card";
-  try {
-    const value = window.localStorage.getItem(BILLING_CONFIG_VIEW_MODE_STORAGE_KEY);
-    return value === "table" ? "table" : "card";
-  } catch {
-    return "card";
-  }
+  return readStoredViewMode<BillingConfigViewMode>(BILLING_CONFIG_VIEW_MODE_STORAGE_KEY, ["table", "card"], "card");
 }
 
 function storeBillingConfigViewMode(viewMode: BillingConfigViewMode) {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(BILLING_CONFIG_VIEW_MODE_STORAGE_KEY, viewMode);
-  } catch {
-    // View preference is optional.
-  }
+  writeStoredViewMode(BILLING_CONFIG_VIEW_MODE_STORAGE_KEY, viewMode);
 }
 
 type BillingConfigForm = {
@@ -434,26 +425,14 @@ export default function TrafficBillingConfigManager({
             <CardTitle>计费配置</CardTitle>
             <CardDescription>按 GB 计费，可单独要求授权。</CardDescription>
           </div>
-          <div className="flex items-center overflow-hidden rounded-md border border-border/40">
-            <Button
-              variant={configViewMode === "card" ? "secondary" : "ghost"}
-              size="icon"
-              className="h-8 w-8 rounded-none"
-              title="卡片视图"
-              onClick={() => handleConfigViewModeChange("card")}
-            >
-              <LayoutGrid className="h-4 w-4" />
-            </Button>
-            <Button
-              variant={configViewMode === "table" ? "secondary" : "ghost"}
-              size="icon"
-              className="h-8 w-8 rounded-none"
-              title="列表视图"
-              onClick={() => handleConfigViewModeChange("table")}
-            >
-              <List className="h-4 w-4" />
-            </Button>
-          </div>
+          <ViewModeToggle className="flex flex"
+            value={configViewMode}
+            onChange={handleConfigViewModeChange}
+            items={[
+              { value: "card", label: "卡片视图", icon: LayoutGrid },
+              { value: "table", label: "列表视图", icon: List },
+            ]}
+          />
         </CardHeader>
         <CardContent>
           {configsLoading ? (

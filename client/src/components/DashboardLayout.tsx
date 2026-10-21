@@ -67,6 +67,8 @@ import {
   Search,
   Activity,
   Gift,
+  Check,
+  Rows3,
   type LucideIcon,
 } from "lucide-react";
 import { useOpsFeatures } from "@/features/ops/useOpsFeatures";
@@ -103,6 +105,7 @@ import { buildPanelInstallerCommand } from "@shared/githubAccelerator";
 import { WorkspaceCommand, type WorkspaceDestination } from "@/components/WorkspaceNavigation";
 import PearlNavMarker from "@/components/PearlNavMarker";
 import { useUiTheme } from "@/hooks/useUiTheme";
+import { useLayoutPreference } from "@/hooks/useCompactLayout";
 import { navigateAfterPrefetch, prefetchRoute, prefetchRoutesWhenIdle } from "@/pages/routeChunks";
 import { docsUrl } from "@/lib/docsLinks";
 
@@ -409,6 +412,8 @@ function DashboardLayoutContent({
   const accountMenuOpenRef = useRef(accountMenuOpen);
   const isDesktopCollapsed = !isMobile && state === "collapsed";
   const isAdmin = user?.role === "admin";
+  const layoutPreference = useLayoutPreference();
+  const compactLayout = layoutPreference.effective === "compact";
   /*
     侧栏滚动位置（上游 2.3.285）：每个页面自己包一层外壳，换页时侧栏重新挂载、滚动条跳回顶部。
     按账号 + 侧栏形态记住位置，挂载后还原；用户自己一滚就以他为准。
@@ -1356,6 +1361,14 @@ function DashboardLayoutContent({
   const managementMenuItems: SidebarNavItem[] = isAdmin
     ? [...visibleProfileMenuItems, ...visibleAdminMenuItems]
     : [...(canShowNetworkTest ? [lookingGlassMenuItem] : []), ...visibleProfileMenuItems];
+  /*
+    精简布局：个人资料、系统设置在右上角账户菜单里已经各有一项，侧栏不再重复放（命令面板里照旧能搜到）。
+    管理与账户那一组少两行，普通用户的「工具与账户」常常就只剩网络测试 / 邀请返利。
+  */
+  const SIDEBAR_DEDUPED_PATHS = ["/profile", "/settings"];
+  const sidebarManagementItems = compactLayout
+    ? managementMenuItems.filter((item) => !SIDEBAR_DEDUPED_PATHS.includes(item.path))
+    : managementMenuItems;
   const commandItems: WorkspaceDestination[] = [
     ...primaryMenuItems.map(item => ({ ...item, group: "工作空间" })),
     ...managementMenuItems.map(item => ({ ...item, group: isAdmin ? "管理与账户" : "工具与账户" })),
@@ -1649,6 +1662,24 @@ function DashboardLayoutContent({
                   <span>系统设置</span>
                 </DropdownMenuItem>
               )}
+              {/*
+                精简布局一键切：记成这个账号的偏好（个人资料 › 界面 里的同一个值）。
+                菜单不关，点完当场看到界面换过去；想回到「跟随站点」去个人资料里选。
+              */}
+              <DropdownMenuItem
+                onSelect={(event) => {
+                  event.preventDefault();
+                  void layoutPreference.setPreference(compactLayout ? "standard" : "compact");
+                }}
+                disabled={layoutPreference.saving}
+                className="cursor-pointer"
+                aria-checked={compactLayout}
+                role="menuitemcheckbox"
+              >
+                <Rows3 />
+                <span>精简布局</span>
+                {compactLayout ? <Check className="ml-auto h-4 w-4 text-primary" aria-hidden="true" /> : null}
+              </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 onClick={handleLogout}
@@ -1680,8 +1711,9 @@ function DashboardLayoutContent({
           )}
           <div className="workspace-appbar-actions">
             {appbarSearchButton}
-            {appbarThemeButton}
-            <UiThemeQuickSwitch />
+            {/* 精简布局：深浅色切换并进调色盘菜单，顶栏少一枚图标 */}
+            {compactLayout ? null : appbarThemeButton}
+            <UiThemeQuickSwitch darkToggle={compactLayout ? { resolved: resolvedTheme, onToggle: toggleTheme } : undefined} />
             {!isMobile ? <span className="fx-pearl-topbar-user" title={accountDisplayName}>{accountDisplayName}</span> : null}
           </div>
         </div>
@@ -1720,8 +1752,9 @@ function DashboardLayoutContent({
           </button>
           <div className="workspace-appbar-actions">
             {appbarSearchButton}
-            {appbarThemeButton}
-            <UiThemeQuickSwitch />
+            {/* 精简布局：深浅色切换并进调色盘菜单，顶栏少一枚图标 */}
+            {compactLayout ? null : appbarThemeButton}
+            <UiThemeQuickSwitch darkToggle={compactLayout ? { resolved: resolvedTheme, onToggle: toggleTheme } : undefined} />
           <DropdownMenu open={accountMenuOpen} onOpenChange={setAccountMenuOpen} modal={false}>
             <DropdownMenuTrigger asChild>
               <button
@@ -1787,13 +1820,13 @@ function DashboardLayoutContent({
             </SidebarGroup>
           )}
 
-          {managementMenuItems.length > 0 && (
+          {sidebarManagementItems.length > 0 && (
             <SidebarGroup className={cn("mt-1 shrink-0 pt-2 mobile-sidebar-group mobile-sidebar-admin-group", !mobileAuth.isNative && "border-t border-sidebar-border/50", mobileAuth.isNative && "mt-0 pt-2 border-t border-sidebar-border/50")}>
               <SidebarGroupLabel className="text-xs text-muted-foreground uppercase tracking-wider">
                 {isAdmin ? "管理与账户" : "工具与账户"}
               </SidebarGroupLabel>
               <SidebarMenu className={cn("py-1 mobile-sidebar-menu", isDesktopCollapsed ? "items-center px-0" : "px-2")}>
-                {renderSidebarItems(managementMenuItems)}
+                {renderSidebarItems(sidebarManagementItems)}
               </SidebarMenu>
             </SidebarGroup>
           )}
@@ -1967,7 +2000,8 @@ function DashboardLayoutContent({
             </MobileNavContext.Provider>
           </div>
         </main>
-        <footer className="hidden pb-4 text-center text-xs text-muted-foreground md:block">
+        {/* 精简布局：页脚那一行链接不占每页的底部（设置 › 关于 里都有） */}
+        <footer data-fx-compact-hide="" className="hidden pb-4 text-center text-xs text-muted-foreground md:block">
           <div className="inline-flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
             <a
               href={publicInfo?.repoUrl || "https://github.com/zhongyizhu11-jpg/NEX"}

@@ -133,7 +133,7 @@ export default function AdminReferralPanel() {
         <CardHeader className="gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <CardTitle className="flex items-center gap-2"><Gift className="h-5 w-5" /> 返利记录</CardTitle>
-            <CardDescription>
+            <CardDescription keep>
               {commissionsQuery.data
                 ? `共 ${Number(commissionsQuery.data.totalItems || 0)} 笔，合计 ${money(commissionsQuery.data.totalCommissionCents || 0)}`
                 : "所有邀请人的返利。"}

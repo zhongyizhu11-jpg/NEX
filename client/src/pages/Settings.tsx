@@ -34,6 +34,8 @@ import { SettingList, SettingRow } from "@/components/SettingRow";
 import { EntityActions } from "@/components/entity/EntityActions";
 import { segmentedControlClassName, segmentedOptionClassName } from "@/components/ui/segmented";
 import { useIsMobile } from "@/hooks/useMobile";
+import { LayoutDefaultCard } from "@/components/settings/LayoutDefaultCard";
+import { useCompactLayout } from "@/hooks/useCompactLayout";
 import DataSectionLoading from "@/components/DataSectionLoading";
 import { pollingInterval } from "@/lib/polling";
 import { mobileAuth } from "@/lib/mobileAuth";
@@ -849,7 +851,7 @@ function SettingsContent() {
             {activeItem ? (
               <div className={cn("min-w-0", isMobile ? "block" : "hidden @min-[56rem]/settings:block")}>
                 <h2 className="fx-pane-title">{activeItem.label}</h2>
-                <div className="mt-0.5 text-meta text-muted-foreground">{settingsTabDetail[activeTab]}</div>
+                <div data-fx-help="" className="mt-0.5 text-meta text-muted-foreground">{settingsTabDetail[activeTab]}</div>
               </div>
             ) : null}
 
@@ -2604,7 +2606,7 @@ function TelegramBotSettingsCard() {
               参数（提前几天、阈值多少）跟在那一行下面。
             */}
             <SettingList>
-              <SettingRow
+              <SettingRow keepDescription
                 asLabel
                 label="启用机器人"
                 description={settings?.telegram?.botUsername ? `@${settings.telegram.botUsername}` : "保存 Token 后自动识别机器人"}
@@ -4107,6 +4109,9 @@ function PersonalizationSettingsSection() {
         </CardContent>
       </Card>
 
+      {/* 布局密度：站点默认（standard / compact），每个账号可以在个人资料里覆盖。点了就存，不走上面的保存条。 */}
+      <LayoutDefaultCard />
+
       {/*
         液态玻璃的旋钮：只有界面主题是液态玻璃时才看得出效果，但一直露着 —— 先调好再切主题也行。
         拨了就在这一页试看（setLiquidGlassPreview），保存后才对所有人生效。
@@ -4934,6 +4939,7 @@ function PersonalizationSettingsSection() {
 }
 
 function SystemInfoSection() {
+  const compactLayout = useCompactLayout();
   const utils = trpc.useUtils();
   const { data: settings, isLoading } = trpc.system.getSettings.useQuery();
   const settingsData = settings;
@@ -6051,7 +6057,7 @@ function SystemInfoSection() {
           </CardHeader>
           <CardContent className="space-y-4">
             <SettingList>
-              <SettingRow
+              <SettingRow keepDescription
                 asLabel
                 label="启用 HTTPS"
                 description={`当前协议：${settings?.panelSsl?.activeProtocol === "https" ? "HTTPS" : "HTTP"}，端口：${webPortDisplay}`}
@@ -6583,6 +6589,49 @@ function SystemInfoSection() {
         </CardContent>
       </Card>
 
+      {/* 精简布局：登录会话、左侧导航栏两张单行卡并成一张；标准布局照旧两张卡 */}
+      {compactLayout ? (
+      <Card className="border-border bg-card">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <ShieldCheck className="h-4 w-4 text-primary" />
+            会话与导航
+          </CardTitle>
+          <CardDescription>
+            同一账户多设备在线的策略，以及左侧导航栏常用入口是否展示。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <SettingList>
+            <SettingRow
+              asLabel
+              label="允许多设备在线"
+              description="关闭时后登录的设备会立即接管，正在使用的旧会话将退出；仅保留 Cookie 但未在使用的设备不会阻止新登录。"
+              control={<Checkbox aria-label="允许多设备在线" checked={allowMultiDeviceLogin} onCheckedChange={setAllowMultiDeviceLogin} />}
+            />
+            <SettingRow
+              label="左侧导航栏常用入口"
+              description="控制左侧导航栏常用入口是否展示。"
+              control={(
+                <span className="flex items-center gap-2">
+                  <EnabledCount enabled={sidebarMenuEnabledCount} total={SIDEBAR_MENU_KEYS.length} />
+                  <Button variant="outline" size="sm" className="gap-1.5" onClick={openSidebarMenuDialog}>
+                    <PanelLeft className="h-4 w-4" />
+                    管理
+                  </Button>
+                </span>
+              )}
+            />
+          </SettingList>
+          <div className="flex justify-end">
+            <Button data-dock-save onClick={handleSaveSessionPolicy} disabled={isSavingSetting("sessionPolicy")}>
+              {isSavingSetting("sessionPolicy") && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {isSavingSetting("sessionPolicy") ? "保存中..." : "保存登录会话配置"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+      ) : (
       <div className="grid gap-4 @[58rem]:grid-cols-2">
         <Card className="border-border bg-card">
           <CardHeader>
@@ -6635,6 +6684,7 @@ function SystemInfoSection() {
           </CardContent>
         </Card>
       </div>
+      )}
 
 
       <Dialog
@@ -7003,6 +7053,34 @@ function SystemInfoSection() {
               )}
             </div>
           )}
+          {compactLayout ? (
+          <>
+          {/* 项目地址、使用教程、联系方式原来是单独一张「开源与联系」卡，和这里的版本号是一回事，并过来 */}
+          <SettingList>
+            {contactLinks.map((item) => {
+              const Icon = item.icon;
+              return (
+                <a
+                  key={item.label}
+                  href={item.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="fx-list-row group flex min-w-0 items-center gap-3 py-3 first:pt-0 last:pb-0"
+                >
+                  <Icon className={`h-4 w-4 shrink-0 ${item.iconClassName}`} aria-hidden="true" />
+                  <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                    <span className="truncate text-secondary-type font-medium text-foreground group-hover:underline">{item.label}</span>
+                    <span className="truncate font-mono text-meta text-muted-foreground">{item.url}</span>
+                    {item.description && <span className="text-meta text-muted-foreground">{item.description}</span>}
+                  </span>
+                  <ExternalLink className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                </a>
+              );
+            })}
+            <SettingRow label="Android APP" control={<span className="font-mono text-secondary-type">v{settings?.androidAppVersion}</span>} />
+          </SettingList>
+          </>
+          ) : null}
         </CardContent>
       </Card>
       <Card className="border-border bg-card">
@@ -7312,6 +7390,7 @@ function SystemInfoSection() {
         </DialogContent>
       </Dialog>
 
+      {compactLayout ? null : (
       <Card className="border-border bg-card">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
@@ -7353,6 +7432,7 @@ function SystemInfoSection() {
           </SettingList>
         </CardContent>
       </Card>
+      )}
     </div>
   );
 }

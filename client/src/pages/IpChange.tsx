@@ -217,7 +217,7 @@ function AccountsSection() {
                 <div className="flex min-w-0 items-start justify-between gap-3">
                   <div className="min-w-0">
                     <CardTitle className="truncate text-base">{account.name}</CardTitle>
-                    <CardDescription>{account.providerLabel}{account.providerAvailable ? "" : "（这个版本不可用）"}</CardDescription>
+                    <CardDescription keep>{account.providerLabel}{account.providerAvailable ? "" : "（这个版本不可用）"}</CardDescription>
                   </div>
                   <div className="flex shrink-0 gap-1">
                     <Button
@@ -512,7 +512,7 @@ function HostsSection() {
                         <IpChangeStateBadge state={state} />
                         {!config.hostOnline ? <Badge variant="secondary">离线</Badge> : null}
                       </CardTitle>
-                      <CardDescription className="truncate">
+                      <CardDescription keep className="truncate">
                         {config.hostAddress || "—"} · {config.accountName ? `${config.accountName}（${config.providerLabel}）` : "未选云账号"}
                       </CardDescription>
                     </div>

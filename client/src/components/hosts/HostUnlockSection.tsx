@@ -254,7 +254,7 @@ function HostUnlockBody({ hostId }: { hostId: number }) {
         </div>
       ) : null}
 
-      <p className="text-meta text-muted-foreground">
+      <p data-fx-help="" className="text-meta text-muted-foreground">
         结果按各服务页面上的标记推断，服务改版后可能不准；检测会从这台主机向这些服务发起请求。
       </p>
 

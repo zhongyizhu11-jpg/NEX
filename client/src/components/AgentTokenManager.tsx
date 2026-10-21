@@ -9,6 +9,7 @@ import { SortableDragHandle, SortableItem, SortableReorderContext, useOptimistic
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ViewModeToggle } from "@/components/ui/view-mode-toggle";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
@@ -348,7 +349,7 @@ function InstallAddressSelector({
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
           <p className="text-sm font-medium">安装连接地址</p>
-          <p className="text-xs text-muted-foreground">
+          <p data-fx-help="" className="text-xs text-muted-foreground">
             需要直连 IP 和端口时，请选择“当前访问地址”。
           </p>
         </div>
@@ -640,7 +641,7 @@ export default function AgentTokenManager({
           「通讯已加密」原来是说明下面单独一个整宽的绿色提示框（手机上 44px 高、上下再各隔 16px），
           而它只是一句不会变的说明。并进这一行的行尾，颜色还是「正常」绿。
         */}
-        <p className="text-sm text-muted-foreground">
+        <p data-fx-help="" className="text-sm text-muted-foreground">
           生成 Agent 安装命令；上线后自动绑定到面板。{" "}
           {/* 用空格不用左外边距：窄屏上折到第二行时，左外边距会让它缩进一截 */}
           <span className="inline-flex items-center gap-1 whitespace-nowrap text-[var(--fx-healthy-text)]">
@@ -649,26 +650,14 @@ export default function AgentTokenManager({
           </span>
         </p>
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-          {!hideViewModeToggle && <div className="hidden items-center overflow-hidden rounded-md border border-border/40 sm:flex">
-            <Button
-              variant={viewMode === "card" ? "secondary" : "ghost"}
-              size="icon"
-              className="h-8 w-8 rounded-none"
-              title="卡片视图"
-              onClick={() => handleViewModeChange("card")}
-            >
-              <LayoutGrid className="h-4 w-4" />
-            </Button>
-            <Button
-              variant={viewMode === "table" ? "secondary" : "ghost"}
-              size="icon"
-              className="h-8 w-8 rounded-none"
-              title="列表视图"
-              onClick={() => handleViewModeChange("table")}
-            >
-              <List className="h-4 w-4" />
-            </Button>
-          </div>}
+          {!hideViewModeToggle && <ViewModeToggle
+            value={viewMode}
+            onChange={handleViewModeChange}
+            items={[
+              { value: "card", label: "卡片视图", icon: LayoutGrid },
+              { value: "table", label: "列表视图", icon: List },
+            ]}
+          />}
           {showCreateButton && (
             <Button onClick={openCreateDialog} className="w-full gap-2 sm:w-auto">
               <Plus className="h-4 w-4" />
@@ -824,7 +813,7 @@ export default function AgentTokenManager({
         <DialogContent>
           <DialogHeader>
             <DialogTitle>添加主机</DialogTitle>
-            <DialogDescription>
+            <DialogDescription data-fx-help="">
               先生成 Agent 安装 Token，再复制命令到目标主机执行。
             </DialogDescription>
           </DialogHeader>

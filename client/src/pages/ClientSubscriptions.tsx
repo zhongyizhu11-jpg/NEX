@@ -105,7 +105,10 @@ import {
   Waves,
   Zap,
   type LucideIcon,
+  MoreHorizontal,
 } from "lucide-react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { useCompactLayout } from "@/hooks/useCompactLayout";
 import QRCode from "qrcode";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -469,6 +472,23 @@ export default function ClientSubscriptionsPage() {
     },
     onError: (error) => toast.error(error.message),
   });
+  const compactLayout = useCompactLayout();
+  const rotateTokenConfirmed = async (id: number) => {
+    const ok = await confirm({
+      title: "重置这个订阅地址？",
+      description: "只更换订阅地址本身，不会重置流量。旧地址立即失效，已经导入过的客户端都要重新填写新地址。",
+      confirmText: "重置地址",
+    });
+    if (ok) rotateToken.mutate({ id });
+  };
+  const deleteTokenConfirmed = async (id: number) => {
+    const ok = await confirm({
+      title: "删除这个订阅链接？",
+      description: "使用该地址的客户端将立即无法更新节点。",
+      confirmText: "删除",
+    });
+    if (ok) deleteToken.mutate({ id });
+  };
   const deleteToken = trpc.proxySubscriptions.deleteToken.useMutation({
     onSuccess: () => {
       toast.success("订阅链接已删除");
@@ -1048,7 +1068,7 @@ export default function ClientSubscriptionsPage() {
               </span>
               订阅链接
               {tokens.length > 0 ? (
-                <span className="text-xs font-normal text-muted-foreground">{tokens.length} 条</span>
+                <span data-fx-compact-hide="" className="text-xs font-normal text-muted-foreground">{tokens.length} 条</span>
               ) : null}
             </CardTitle>
             <Button
@@ -1113,44 +1133,50 @@ export default function ClientSubscriptionsPage() {
                         />
                         {/* 光写"重置"配个刷新图标，在订阅面板里只会被读成"重置流量"。
                             补上宾语并换成钥匙图标：这个按钮的代价是所有已导入的客户端都要重填。 */}
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          title="重置订阅地址（不会重置流量）"
-                          onClick={async () => {
-                            const ok = await confirm({
-                              title: "重置这个订阅地址？",
-                              description:
-                                "只更换订阅地址本身，不会重置流量。旧地址立即失效，已经导入过的客户端都要重新填写新地址。",
-                              confirmText: "重置地址",
-                            });
-                            if (ok) rotateToken.mutate({ id: token.id });
-                          }}
-                        >
-                          <KeyRound className="mr-1 h-4 w-4" />
-                          重置地址
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          title="删除订阅链接"
-                          onClick={async () => {
-                            const ok = await confirm({
-                              title: "删除这个订阅链接？",
-                              description: "使用该地址的客户端将立即无法更新节点。",
-                              confirmText: "删除",
-                            });
-                            if (ok) deleteToken.mutate({ id: token.id });
-                          }}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
+                        {/* 精简布局：两个按钮收进一个「···」菜单，一行只剩名字、开关和菜单。 */}
+                        {compactLayout ? (
+                          <DropdownMenu modal={false}>
+                            <DropdownMenuTrigger asChild>
+                              <Button size="sm" variant="ghost" className="h-8 w-8 p-0" aria-label={`${token.name} 的更多操作`}>
+                                <MoreHorizontal className="h-4 w-4" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem onSelect={() => { void rotateTokenConfirmed(token.id); }}>
+                                <KeyRound className="h-4 w-4" />重置地址
+                              </DropdownMenuItem>
+                              <DropdownMenuItem variant="destructive" onSelect={() => { void deleteTokenConfirmed(token.id); }}>
+                                <Trash2 className="h-4 w-4" />删除
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        ) : (
+                          <>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              title="重置订阅地址（不会重置流量）"
+                              onClick={() => { void rotateTokenConfirmed(token.id); }}
+                            >
+                              <KeyRound className="mr-1 h-4 w-4" />
+                              重置地址
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              title="删除订阅链接"
+                              onClick={() => { void deleteTokenConfirmed(token.id); }}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </>
+                        )}
                       </div>
                     </div>
 
                     <Button
                       variant={expanded ? "secondary" : "default"}
-                      className="w-full"
+                      className="fx-token-subscribe w-full"
                       onClick={() => setImportOpenTokenId(expanded ? null : token.id)}
                     >
                       <Zap className="mr-1.5 h-4 w-4" />
@@ -1180,7 +1206,7 @@ export default function ClientSubscriptionsPage() {
                             </button>
                           ))}
                         </div>
-                        <p className="text-xs text-muted-foreground">
+                        <p data-fx-help="" className="text-xs text-muted-foreground">
                           {PROXY_SUBSCRIPTION_KIND_HINTS[kind]}
                         </p>
 
@@ -1210,7 +1236,7 @@ export default function ClientSubscriptionsPage() {
                             </Select>
                             </div>
                             {/* 光看"精简/均衡/完整"不知道差在哪，说明得跟着控件走。 */}
-                            <p className="text-xs text-muted-foreground">{PROXY_RULE_PRESET_HINTS[preset]}</p>
+                            <p data-fx-help="" className="text-xs text-muted-foreground">{PROXY_RULE_PRESET_HINTS[preset]}</p>
                           </div>
                         )}
 
@@ -1365,7 +1391,7 @@ export default function ClientSubscriptionsPage() {
                           </div>
                         </div>
                         <div className="space-y-1.5">
-                          <p className="text-xs text-muted-foreground">
+                          <p data-fx-help="" className="text-xs text-muted-foreground">
                             其他客户端用这条地址手动添加。
                           </p>
                           {/* 这个设置只在「客户端标识认不出来」时才生效，所以就放在那句话下面。
@@ -1459,7 +1485,7 @@ export default function ClientSubscriptionsPage() {
             <div className="mb-3 flex items-start justify-between gap-3 rounded-lg border border-border/60 px-3 py-2.5">
               <div className="min-w-0">
                 <p className="text-sm font-medium">自动隐藏不通的节点</p>
-                <p className="mt-0.5 text-xs text-muted-foreground">
+                <p data-fx-help="" className="mt-0.5 text-xs text-muted-foreground">
                   端到端探测连续 3 次不通的转发暂时移出订阅，通了自动回来。客户端更新订阅后生效。
                 </p>
               </div>
@@ -1857,7 +1883,7 @@ export default function ClientSubscriptionsPage() {
                 placeholder="例如 给张三的 / 这条快到期"
                 maxLength={12}
               />
-              <p className="text-xs text-muted-foreground">
+              <p data-fx-help="" className="text-xs text-muted-foreground">
                 只给你自己看。分享出去的节点，对方看不到这一句。
               </p>
             </div>
@@ -1878,7 +1904,7 @@ export default function ClientSubscriptionsPage() {
                 而只有主人说得出的那件事。合成一个字段，两种用途只能二选一：
                 要么泄露账本，要么租户看到的永远是一个没有信息量的「直连」。
               */}
-              <p className="text-xs text-muted-foreground">
+              <p data-fx-help="" className="text-xs text-muted-foreground">
                 会顶掉「订阅内容」里那个「直连」标签，分享出去的人也看得到。不进订阅。
               </p>
             </div>
@@ -2133,7 +2159,7 @@ export default function ClientSubscriptionsPage() {
               autoFocus
             />
             {renaming?.kind === "relay" && (
-              <p className="text-xs text-muted-foreground">
+              <p data-fx-help="" className="text-xs text-muted-foreground">
                 留空恢复默认名（由主机名和转发名自动拼出）。
               </p>
             )}
@@ -2199,7 +2225,7 @@ export default function ClientSubscriptionsPage() {
                 {qrTarget.hint}
               </p>
             ) : (
-              <p className="text-xs text-muted-foreground">
+              <p data-fx-help="" className="text-xs text-muted-foreground">
                 在客户端的「添加订阅」里扫，别用系统相机。
               </p>
             )}

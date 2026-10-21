@@ -10,6 +10,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { SettingList, SettingRow } from "@/components/SettingRow";
+import { segmentedControlClassName, segmentedOptionClassName } from "@/components/ui/segmented";
+import { useLayoutPreference } from "@/hooks/useCompactLayout";
+import { PERSONALIZATION_LAYOUTS, type PersonalizationLayoutId } from "@shared/personalization";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "@/components/ui/dialog";
 import { PasswordInput } from "@/components/ui/password-input";
@@ -29,6 +32,7 @@ import {
   Download,
   ExternalLink,
   KeyRound,
+  LayoutList,
   Link2Off,
   Loader2,
   LogOut,
@@ -125,6 +129,8 @@ function ProfileContent() {
     },
     onError: (error) => toast.error(error.message || "公告 TG 推送设置失败"),
   });
+
+  const layoutPreference = useLayoutPreference();
 
   const updateAvatarMutation = trpc.users.updateAvatar.useMutation({
     onSuccess: (data) => {
@@ -394,7 +400,7 @@ function ProfileContent() {
               一个框。账号和名字写成设置行；「今日剩余」说的是头像，挪到头像那一块下面。
             */}
             <SettingList>
-              <SettingRow label="账号" description={<span className="break-all">{user?.username || "-"}</span>} />
+              <SettingRow keepDescription label="账号" description={<span className="break-all">{user?.username || "-"}</span>} />
               <SettingRow label="显示名称">
                 <div className="flex flex-col gap-2 sm:flex-row">
                   <Input
@@ -450,6 +456,47 @@ function ProfileContent() {
                   : `今天还能改 ${avatarQuotaRemaining} / ${avatarQuota?.limit ?? 3} 次头像。`}
               </div>
             ) : null}
+          </CardContent>
+        </Card>
+
+        <Card className="border-border/50 bg-card/70">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <LayoutList className="h-4 w-4 text-primary" />
+              界面
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <SettingList>
+              {/*
+                布局密度：跟随站点（管理员在设置 › 个性化 › 布局 定的）/ 标准 / 精简。只改这个账号看到的界面。
+                画法见 client/src/styles/compact.css。
+              */}
+              <SettingRow
+                label="布局"
+                description={`精简：控件和卡片更矮、说明文字收起来、侧栏更窄，一屏多看一截；功能和数据一样。跟随站点现在是「${PERSONALIZATION_LAYOUTS.find((item) => item.id === layoutPreference.siteLayout)?.name ?? "标准"}」。`}
+                control={(
+                  <div className={cn(segmentedControlClassName, "grid grid-cols-3 gap-1")} role="radiogroup" aria-label="布局">
+                    {([{ id: null, name: "跟随站点" }, ...PERSONALIZATION_LAYOUTS] as Array<{ id: PersonalizationLayoutId | null; name: string }>).map((option) => {
+                      const active = layoutPreference.preference === option.id;
+                      return (
+                        <button
+                          key={option.id ?? "site"}
+                          type="button"
+                          role="radio"
+                          aria-checked={active}
+                          disabled={layoutPreference.saving}
+                          onClick={() => { if (!active) void layoutPreference.setPreference(option.id); }}
+                          className={segmentedOptionClassName(active, layoutPreference.saving, "px-2.5")}
+                        >
+                          {option.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              />
+            </SettingList>
           </CardContent>
         </Card>
 
@@ -513,7 +560,7 @@ function ProfileContent() {
             </SettingList>
             {telegramStatus?.bound ? (
               <SettingList>
-                <SettingRow
+                <SettingRow keepDescription
                   label="Telegram"
                   description={telegramStatus.account?.linkedAt ? `${new Date(telegramStatus.account.linkedAt).toLocaleString()} 绑定` : undefined}
                   control={(
@@ -560,7 +607,8 @@ function ProfileContent() {
                           {telegramBindExpired ? "已过期" : `${telegramBindRemainingLabel} 后过期`}
                         </Badge>
                       </div>
-                      <p className="mt-2 text-xs text-muted-foreground">
+                      {/* 「已过期」是状态，精简布局下也要看到；「5 分钟内有效」那句才是说明 */}
+                      <p data-fx-help={telegramBindExpired ? undefined : ""} className="mt-2 text-xs text-muted-foreground">
                         {telegramBindExpired ? "绑定码已过期，请重新生成。" : "5 分钟内有效，可复制备用，也可以直接打开 Telegram 完成绑定。"}
                       </p>
                     </div>
@@ -698,8 +746,9 @@ function ProfileContent() {
         </Card>
       </div>
 
+      {/* 精简布局：账户菜单里就有「软件更新」，这张卡不再占一行 */}
       {mobileAuth.isNative && (
-        <Card className="border-border/50 bg-card/70">
+        <Card data-fx-compact-hide="" className="border-border/50 bg-card/70">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <Download className="h-4 w-4 text-primary" />
@@ -730,13 +779,17 @@ function ProfileContent() {
         </Card>
       )}
 
+      {/* 精简布局：Google / Discord 两张绑定卡并排，和上面 Telegram / 2FA 一样；标准布局照旧各占一行 */}
+      <div className={layoutPreference.effective === "compact" ? "grid gap-4 xl:grid-cols-2" : "contents"}>
       <GoogleAccountSection />
 
       <DiscordAccountSection />
+      </div>
 
       <OpsProfileExtraSections />
 
-      <div className="grid gap-4 lg:grid-cols-2">
+      {/* 精简布局：右上角账户菜单里就有退出登录，这张卡不再占一行 */}
+      <div className="grid gap-4 lg:grid-cols-2" data-fx-compact-hide="">
         <Card className="border-border/50 bg-card/70">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">

@@ -1,4 +1,5 @@
 import { copyTextToClipboard } from "@/lib/clipboard";
+import { readStoredViewMode, writeStoredViewMode } from "@/lib/viewModeStorage";
 import { useFaultBundleExport } from "@/components/links/useFaultBundleExport";
 import { FormField } from "@/components/ui/form-field";
 import EmptyState from "@/components/EmptyState";
@@ -15,7 +16,7 @@ import { formatBytes } from "@shared/formatBytes";
 import AnimatedStatValue from "@/components/AnimatedStatValue";
 import AutoAnimateContainer from "@/components/AutoAnimateContainer";
 import DashboardLayout from "@/components/DashboardLayout";
-import { DiagnoseDialog } from "@/components/DiagnoseDialog";
+import { DiagnoseDialog, type DiagnoseExtraTab } from "@/components/DiagnoseDialog";
 import { LatencyRating } from "@/components/LatencyRating";
 import { LinkTestProbeView, parseLinkTestMessage, type LinkTestPlannedSegment } from "@/components/LinkTestLatencySummary";
 import { PersistentPagination, usePersistentPageRequest, useServerPagination } from "@/components/PersistentPagination";
@@ -23,6 +24,7 @@ import { SortableDragHandle, SortableItem, SortableReorderContext, useOptimistic
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ViewModeToggle } from "@/components/ui/view-mode-toggle";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
@@ -54,6 +56,7 @@ import { OptimisticSwitch, Switch } from "@/components/ui/switch";
 import { Tabs } from "@/components/ui/tabs";
 import { SlidingTabsList, type SlidingTabItem } from "@/components/ui/sliding-tabs";
 import type { FilterChipItem } from "@/components/ui/filter-chips";
+import { useCompactLayout } from "@/hooks/useCompactLayout";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Table,
@@ -266,6 +269,8 @@ import { formatEntryBridgeNote } from "@shared/ruleEntryBridge";
 const ReactGlobe = lazy(loadReactGlobe) as typeof import("react-globe.gl").default;
 // 延迟详情里的曲线图要用 recharts（约 100 kB gzip）；只有点开某条规则的延迟才需要，不跟规则页一起下
 const TcpingDetailDialog = lazy(() => import("@/components/rules/TcpingDetailDialog").then((module) => ({ default: module.TcpingDetailDialog })));
+// 精简布局：延迟记录并进诊断框当一页
+const TcpingDetailBody = lazy(() => import("@/components/rules/TcpingDetailDialog").then((module) => ({ default: module.TcpingDetailBody })));
 
 /** 换隧道后旧入口还在替这条规则转发（服务端带的 entryBridges）：卡片上说一句，到点自己消失。 */
 function entryBridgeNotes(rule: any): string[] {
@@ -503,22 +508,11 @@ function ruleCategoryCountsEqual(a: RuleCategoryCounts, b: RuleCategoryCounts) {
 }
 
 function getStoredRuleViewMode(): RuleViewMode {
-  if (typeof window === "undefined") return "card";
-  try {
-    const value = window.localStorage.getItem(RULE_VIEW_MODE_STORAGE_KEY);
-    return value === "table" || value === "globe" ? value : "card";
-  } catch {
-    return "card";
-  }
+  return readStoredViewMode<RuleViewMode>(RULE_VIEW_MODE_STORAGE_KEY, ["table", "globe", "card"], "card");
 }
 
 function storeRuleViewMode(viewMode: RuleViewMode) {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(RULE_VIEW_MODE_STORAGE_KEY, viewMode);
-  } catch {
-    // Ignore storage failures so the page still works in restricted browsers.
-  }
+  writeStoredViewMode(RULE_VIEW_MODE_STORAGE_KEY, viewMode);
 }
 
 function getDefaultRuleCardSize(): RuleCardSize {
@@ -2017,6 +2011,9 @@ function downloadRuleTransferFiles(
 function RulesContent() {
   const confirmDialog = useConfirmDialog();
   const { user } = useAuth();
+  // 精简布局（compact.css 收的是组件打了 data-fx-help 的说明；规则框里这几行是条件渲染，由这个开关管）。
+  const compactLayout = useCompactLayout();
+  const hideRuleFormHints = compactLayout;
   const [, setLocation] = useLocation();
   const search = useSearch();
   const isMobile = useIsMobile();
@@ -2292,8 +2289,6 @@ function RulesContent() {
     targetIp: "",
     targetPort: 0,
   });
-  const [showExportDialog, setShowExportDialog] = useState(false);
-  const [showImportDialog, setShowImportDialog] = useState(false);
   const [exportScopeType, setExportScopeType] = useState<RuleTransferScopeType>("local");
   const [exportResourceId, setExportResourceId] = useState("");
   const [exportResourceSearch, setExportResourceSearch] = useState("");
@@ -2369,9 +2364,7 @@ function RulesContent() {
       if (timeoutHandle !== undefined) globalThis.clearTimeout(timeoutHandle);
     };
   }, [isRuleGlobeView, ruleMapQuery.fetchNextPage, ruleMapQuery.hasNextPage, ruleMapQuery.isFetchingNextPage]);
-  const needsFullRuleList = showCopyDialog
-    || showExportDialog
-    || showImportDialog;
+  const needsFullRuleList = showCopyDialog;
   const fullRulesQuery = trpc.rules.list.useQuery(effectiveRulesQuery as any, {
     enabled: needsFullRuleList,
     refetchInterval: pollingInterval("normal"),
@@ -2532,7 +2525,7 @@ function RulesContent() {
   const importCreateMutation = trpc.rules.create.useMutation();
 
   const [trafficDetailRule, setTrafficDetailRule] = useState<{ id: number; name: string; isForwardChain?: boolean; probeMethod?: "tcping" | "ping" } | null>(null);
-  const [selfTestRule, setSelfTestRule] = useState<{ id: number; name: string } | null>(null);
+  const [selfTestRule, setSelfTestRule] = useState<{ id: number; name: string; isForwardChain?: boolean; probeMethod?: "tcping" | "ping" } | null>(null);
 
   const setRouteMode = (mode: RuleRouteMode, aggregate = false) => {
     if (mode === form.routeMode) return;
@@ -4270,7 +4263,7 @@ function RulesContent() {
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div className="space-y-1">
           <Label>规则筛选</Label>
-          <div className="text-xs text-muted-foreground">先选择规则，再根据上方模式填写对应内容。</div>
+          <div data-fx-help="" className="text-xs text-muted-foreground">先选择规则，再根据上方模式填写对应内容。</div>
         </div>
         <div className="inline-flex items-center gap-2 self-start rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
           <span>已选规则</span>
@@ -4513,8 +4506,6 @@ function RulesContent() {
     return map;
   }, [ruleTargetGeoRows]);
   const trafficRangeLabel = "近 24h";
-  const trafficMetricHeaderLabels = ["累计", "24H", "延迟"];
-
   const { data: totalTrafficSummary } = trpc.rules.trafficSummary.useQuery(
     { hours: 24, range: "total", ruleIds: visibleRuleIdsForMetrics },
     {
@@ -5772,46 +5763,6 @@ function RulesContent() {
     setImportNyanpassAcknowledged(false);
   };
 
-  const openExportDialog = () => {
-    const preferredType = ruleCategory === "all" ? "local" : ruleCategory;
-    setExportScopeType(preferredType as RuleTransferScopeType);
-    setShowExportDialog(true);
-  };
-
-  const openImportDialog = () => {
-    if (!canAdd) {
-      toast.error("当前没有添加规则权限");
-      return;
-    }
-    const categoryAvailable = ruleCategory === "local"
-      ? canUseSavedLocalForward
-      : ruleCategory === "tunnel"
-        ? canUseGost
-        : ruleCategory === "chain"
-          ? canUseForwardChain
-          : ruleCategory === "group"
-            ? canUseFailoverGroup
-            : false;
-    const preferredType = ruleCategory !== "all" && categoryAvailable
-      ? ruleCategory
-      : canUseSavedLocalForward
-        ? "local"
-        : canUseGost
-          ? "tunnel"
-          : canUseForwardChain
-            ? "chain"
-            : canUseFailoverGroup
-              ? "group"
-              : null;
-    if (!preferredType) {
-      toast.error("请先创建可用端口转发、隧道、转发链或转发组后再导入规则");
-      return;
-    }
-    setImportScopeType(preferredType as RuleTransferScopeType);
-    setImportSourceMode("file");
-    resetImportDialog();
-    setShowImportDialog(true);
-  };
 
   const handleImportFileChange = async (event: any) => {
     const file = event.target.files?.[0];
@@ -5925,7 +5876,6 @@ function RulesContent() {
         toast.error(`批量导入完成：成功 ${importedCount} 条，失败 ${failures.length} 条，已仅保留失败项供重试。${batchOperationErrorMessage(failures[0].reason)}`);
       } else {
         toast.success(`已导入 ${importedCount} 条规则`);
-        setShowImportDialog(false);
         setShowCopyDialog(false);
         resetImportDialog();
       }
@@ -5959,7 +5909,6 @@ function RulesContent() {
       `forwardx-rules-${exportScopeType}-${sanitizeRuleTransferFilePart(resourceLabel)}-${date}`,
     );
     toast.success(`已导出 ${exportableRules.length} 条规则${partCount > 1 ? `，共 ${partCount} 个文件` : ""}`);
-    setShowExportDialog(false);
   };
   const getRuleOwnerName = (rule: any) => {
     const owner = userById.get(Number(rule.userId));
@@ -6430,7 +6379,7 @@ function RulesContent() {
         <FormField className="space-y-1.5">
           <Label className="flex items-baseline gap-1.5">
             SNI 域名 <span className="text-destructive">*</span>
-            <span className="text-xs font-normal text-muted-foreground">一行一个，最多 {TLS_INBOUND_MAX_SNI_PER_RULE} 个，精确匹配</span>
+            <span data-fx-help="" className="text-xs font-normal text-muted-foreground">一行一个，最多 {TLS_INBOUND_MAX_SNI_PER_RULE} 个，精确匹配</span>
           </Label>
           <Textarea
             rows={3}
@@ -6441,7 +6390,7 @@ function RulesContent() {
           />
         </FormField>
         {sniError && form.sniNamesText.trim() ? <p className="text-xs text-destructive">{sniError}</p> : null}
-        <p className="text-meta leading-5 text-muted-foreground">
+        <p data-fx-help="" className="text-meta leading-5 text-muted-foreground">
           客户端用这些域名连接 {selectedTlsInbound ? `${selectedTlsInbound.hostName || "主机"}:${selectedTlsInbound.port}` : "入站端口"}，按 TLS 握手里的 SNI 分到这条规则，原样透传、节点不解密。每个域名的 DNS 都要解析到这台主机。适用于 HTTPS 网站、Trojan / VLESS-TLS 等任何 TLS 服务；协议固定 TCP。
         </p>
       </div>
@@ -6978,6 +6927,8 @@ function RulesContent() {
     原来卡片底部还有一行「诊断 / 编辑 / ···」—— 和右上角的 ··· 是同一组操作画了两遍，
     每张卡为此多 60px，十六条规则要翻九屏。
   */
+  // 精简布局：这几项并进了「诊断」框（延迟记录页签、底部的故障包 / 拓扑按钮），卡片菜单里不再重复。
+  const DIAGNOSE_MERGED_MENU_KEYS = ["latency", "fault-bundle", "topology"];
   const renderRuleActions = (rule: any, menuOnly = false) => {
     const ruleCategory = getRuleCategory(rule, forwardGroupById);
     const isForwardChainRule = ruleCategory === "chain";
@@ -6992,7 +6943,7 @@ function RulesContent() {
             label: "诊断",
             ariaLabel: `诊断 ${rule.name}：转发链路自测`,
             icon: <Stethoscope className="h-3.5 w-3.5" />,
-            onSelect: () => setSelfTestRule({ id: rule.id, name: rule.name }),
+            onSelect: () => setSelfTestRule({ id: rule.id, name: rule.name, isForwardChain: isForwardChainRule, probeMethod }),
           },
         ] : [
           {
@@ -7000,7 +6951,7 @@ function RulesContent() {
             label: "诊断",
             ariaLabel: `诊断 ${rule.name}：转发链路自测`,
             icon: <Stethoscope className="h-3.5 w-3.5" />,
-            onSelect: () => setSelfTestRule({ id: rule.id, name: rule.name }),
+            onSelect: () => setSelfTestRule({ id: rule.id, name: rule.name, isForwardChain: isForwardChainRule, probeMethod }),
           },
           { key: "edit", label: "编辑", ariaLabel: `编辑 ${rule.name}`, icon: <Pencil className="h-3.5 w-3.5" />, onSelect: () => openEdit(rule) },
         ]}
@@ -7036,7 +6987,8 @@ function RulesContent() {
             onSelect: () => setResetTrafficTarget({ scope: "rule", rule }),
           },
           { key: "delete", label: "删除", ariaLabel: `删除 ${rule.name}`, icon: <Trash2 className="h-3.5 w-3.5" />, destructive: true, onSelect: () => setDeleteRule(rule) },
-        ].filter((action) => !readOnly || (action.key !== "reset" && action.key !== "delete"))}
+        ].filter((action) => !readOnly || (action.key !== "reset" && action.key !== "delete"))
+          .filter((action) => !compactLayout || !DIAGNOSE_MERGED_MENU_KEYS.includes(action.key))}
         menuLabel={`${rule.name} 的更多操作`}
         menuOnly={menuOnly}
       />
@@ -7190,15 +7142,217 @@ function RulesContent() {
         {renderRuleTile(group.type, "xs")}
         <span className="truncate text-[15px] font-medium">{group.label}</span>
         <Badge variant="outline" className="h-5 min-w-5 shrink-0 justify-center rounded-full px-1.5 text-[11px] font-normal text-muted-foreground">{group.rules.length}</Badge>
-        {!compact && <span className="min-w-0 truncate text-xs text-muted-foreground">{ruleTypeDescriptions[group.type]}</span>}
+        {!compact && <span data-fx-help="" className="min-w-0 truncate text-xs text-muted-foreground">{ruleTypeDescriptions[group.type]}</span>}
         <ChevronRight className={`ml-auto h-4 w-4 shrink-0 text-muted-foreground/60 transition-transform duration-200 ${collapsed ? "" : "rotate-90"}`} />
       </button>
     );
   };
 
+  /*
+    表格的列定义只写一遍（标准布局重构工作包一）：colgroup、表头、单元格三处都从这一个数组出。
+    原来 13～14 列手写三遍、最小宽度 1610～1764px，1366 宽的屏幕必定横滚。现在：
+    - 状态点并进「规则」列名字前面；协议、所属人并进名字下面那行小字
+    - 「链路」徽章并进「所属资源」
+    - 累计 / 24H 合成一列「流量」
+    八列 + 可选的排序手柄，列宽合计 1016px（table-fixed 下列宽之和就是表格的实际宽度），1366 宽、侧栏展开时内容区约 1100px，不横滚；table-fixed 下 col 的宽度是比例，窗口够宽时按比例放大。
+    这套并列只在精简布局下用；标准布局照旧原来那 13～14 列（数组的另一支），一列一件事。
+  */
+  type RuleTableColumn = {
+    key: string;
+    width: number;
+    head: ReactNode;
+    headClassName?: string;
+    cellClassName?: string;
+    cell: (rule: any) => ReactNode;
+  };
+  const ruleTableColumns: RuleTableColumn[] = compactLayout ? [
+    {
+      key: "rule",
+      width: 200,
+      head: "规则",
+      cell: (rule) => {
+        const supported = isRuleSupported(rule);
+        const protocolKey = getRuleProtocolKey(rule);
+        const subtitle = [formatForwardRuleProtocol(rule.protocol), user?.role === "admin" ? getRuleOwnerName(rule) : ""].filter(Boolean).join(" · ");
+        return (
+          <div className="flex min-w-0 items-start gap-2">
+            <span className="mt-[3px] shrink-0">
+              {supported ? renderStatusDot(rule) : <StatusDot health="down" size="large" label={unsupportedProtocolTitle} />}
+            </span>
+            <div className="min-w-0 flex-1">
+              <span className="block truncate font-medium" title={rule.name}>{rule.name}</span>
+              <span className="block truncate text-[11px] leading-4 text-muted-foreground" title={subtitle}>{subtitle}</span>
+              {!supported && (
+                <span className="mt-1 block text-[11px] text-destructive">
+                  {protocolUnsupportedLabel(protocolKey)} 当前不支持
+                </span>
+              )}
+              {(rule.protocolBlockReason || rule.resourceAccessAllowed === false) && (
+                <span className="mt-1 block text-[11px] leading-4 text-destructive">
+                  {rule.protocolBlockReason || revokedResourceTitle}
+                </span>
+              )}
+              {renderAdminManagedBadge(rule) ? <div className="mt-1">{renderAdminManagedBadge(rule)}</div> : null}
+              <div className="fx-table-row-limits"><RuleLimitSummary rule={rule} /></div>
+              {(() => {
+                const stop = !rule.protocolBlockReason && rule.resourceAccessAllowed !== false ? resolveForwardRuleStopReason(rule) : null;
+                return stop?.autoResume ? (
+                  <span className="mt-1 block text-[11px] leading-4 text-muted-foreground">{stop.detail}</span>
+                ) : null;
+              })()}
+              {entryBridgeNotes(rule).map((note) => (
+                <span key={note} className="mt-1 block text-[11px] leading-4 text-muted-foreground">{note}</span>
+              ))}
+            </div>
+          </div>
+        );
+      },
+    },
+    {
+      key: "resource",
+      width: 150,
+      head: "所属资源",
+      cell: (rule) => (
+        <div className="min-w-0">
+          <span className="block truncate text-sm text-muted-foreground" title={getRuleResourceName(rule)}>
+            {getRuleResourceName(rule)}
+          </span>
+          {/* 主备那一小块跟着线路走：它说的是「现在走哪条」，点进去是策略。 */}
+          <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5">
+            {renderRouteBadge(rule, true)}
+            {renderFailoverLineBadge(rule)}
+          </div>
+        </div>
+      ),
+    },
+    { key: "entry", width: 150, head: "转发入口", cell: (rule) => renderTableTransferEntry(rule) },
+    { key: "exit", width: 130, head: "转发出口", cell: (rule) => renderTableTransferExit(rule) },
+    {
+      key: "traffic",
+      width: 110,
+      head: "流量",
+      cellClassName: "overflow-hidden",
+      cell: (rule) => (
+        <div className="flex min-w-0 flex-col gap-0.5">
+          {renderTableRuleTotalTraffic(rule)}
+          {renderTableRuleDailyTraffic(rule)}
+        </div>
+      ),
+    },
+    { key: "latency", width: 84, head: "延迟", cellClassName: "overflow-hidden", cell: (rule) => renderTableRuleLatency(rule) },
+    {
+      key: "enabled",
+      width: 52,
+      head: "开关",
+      headClassName: "text-center",
+      cell: (rule) => <div className="flex justify-center">{renderRuleEnabledSwitch(rule)}</div>,
+    },
+    { key: "actions", width: 140, head: "操作", headClassName: "text-right", cellClassName: "text-right", cell: (rule) => renderRuleActions(rule) },
+  ] : [
+    /* 标准布局：原来那 13～14 列，一列一件事 */
+    {
+      key: "status",
+      width: 56,
+      head: "状态",
+      headClassName: "text-center",
+      cell: (rule) => (
+        <div className="flex items-center justify-center">
+          {isRuleSupported(rule) ? renderStatusDot(rule) : <StatusDot health="down" size="large" label={unsupportedProtocolTitle} />}
+        </div>
+      ),
+    },
+    {
+      key: "rule",
+      width: 110,
+      head: "规则",
+      cell: (rule) => {
+        const supported = isRuleSupported(rule);
+        const protocolKey = getRuleProtocolKey(rule);
+        return (
+          <>
+            <span className="block truncate font-medium" title={rule.name}>{rule.name}</span>
+            {!supported && (
+              <span className="mt-1 block text-[11px] text-destructive">
+                {protocolUnsupportedLabel(protocolKey)} 当前不支持
+              </span>
+            )}
+            {(rule.protocolBlockReason || rule.resourceAccessAllowed === false) && (
+              <span className="mt-1 block text-[11px] leading-4 text-destructive">
+                {rule.protocolBlockReason || revokedResourceTitle}
+              </span>
+            )}
+            {renderAdminManagedBadge(rule) ? <div className="mt-1">{renderAdminManagedBadge(rule)}</div> : null}
+            <div className="fx-table-row-limits"><RuleLimitSummary rule={rule} /></div>
+            {(() => {
+              const stop = !rule.protocolBlockReason && rule.resourceAccessAllowed !== false ? resolveForwardRuleStopReason(rule) : null;
+              return stop?.autoResume ? (
+                <span className="mt-1 block text-[11px] leading-4 text-muted-foreground">{stop.detail}</span>
+              ) : null;
+            })()}
+            {entryBridgeNotes(rule).map((note) => (
+              <span key={note} className="mt-1 block text-[11px] leading-4 text-muted-foreground">{note}</span>
+            ))}
+          </>
+        );
+      },
+    },
+    ...(user?.role === "admin" ? [{
+      key: "owner",
+      width: 110,
+      head: "用户",
+      cell: (rule: any) => (
+        <span className="block truncate text-sm text-muted-foreground" title={getRuleOwnerName(rule)}>
+          {getRuleOwnerName(rule)}
+        </span>
+      ),
+    } satisfies RuleTableColumn] : []),
+    {
+      key: "resource",
+      width: 100,
+      head: "所属资源",
+      cell: (rule) => (
+        <span className="block truncate text-sm text-muted-foreground" title={getRuleResourceName(rule)}>
+          {getRuleResourceName(rule)}
+        </span>
+      ),
+    },
+    { key: "entry", width: 285, head: "转发入口", cell: (rule) => renderTableTransferEntry(rule) },
+    { key: "exit", width: 190, head: "转发出口", cell: (rule) => renderTableTransferExit(rule) },
+    {
+      key: "route",
+      width: 170,
+      head: "链路",
+      cell: (rule) => (
+        /* 主备那一小块跟着线路走：它说的是「现在走哪条」，点进去是策略。 */
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+          {renderRouteBadge(rule, true)}
+          {renderFailoverLineBadge(rule)}
+        </div>
+      ),
+    },
+    {
+      key: "protocol",
+      width: 96,
+      head: "协议",
+      headClassName: "text-center",
+      cellClassName: "text-center",
+      cell: (rule) => <Badge variant="secondary" className="whitespace-nowrap text-[10px]">{formatForwardRuleProtocol(rule.protocol)}</Badge>,
+    },
+    { key: "total", width: 120, head: "累计", cell: (rule) => renderTableRuleTotalTraffic(rule) },
+    { key: "daily", width: 120, head: "24H", cellClassName: "overflow-hidden", cell: (rule) => renderTableRuleDailyTraffic(rule) },
+    { key: "latency", width: 120, head: "延迟", cellClassName: "overflow-hidden", cell: (rule) => renderTableRuleLatency(rule) },
+    {
+      key: "enabled",
+      width: 70,
+      head: "开关",
+      headClassName: "text-center",
+      cell: (rule) => <div className="flex justify-center">{renderRuleEnabledSwitch(rule)}</div>,
+    },
+    { key: "actions", width: 154, head: "操作", headClassName: "text-right", cellClassName: "text-right", cell: (rule) => renderRuleActions(rule) },
+  ];
+  const ruleTableColumnCount = ruleTableColumns.length + (ruleSortingEnabled ? 1 : 0);
   const renderRuleTableRow = (rule: any, sortable?: RuleSortableRenderState) => {
     const supported = isRuleSupported(rule);
-    const protocolKey = getRuleProtocolKey(rule);
     return (
       <TableRow
         key={rule.id}
@@ -7221,68 +7375,11 @@ function RulesContent() {
             />
           </TableCell>
         )}
-        <TableCell className="px-3 py-2">
-          <div className="flex items-center justify-center">
-            {supported ? renderStatusDot(rule) : <StatusDot health="down" size="large" label={unsupportedProtocolTitle} />}
-          </div>
-        </TableCell>
-        <TableCell className="px-3 py-2">
-          <span className="block truncate font-medium" title={rule.name}>{rule.name}</span>
-          {!supported && (
-            <span className="mt-1 block text-[11px] text-destructive">
-              {protocolUnsupportedLabel(protocolKey)} 当前不支持
-            </span>
-          )}
-          {(rule.protocolBlockReason || rule.resourceAccessAllowed === false) && (
-            <span className="mt-1 block text-[11px] leading-4 text-destructive">
-              {rule.protocolBlockReason || revokedResourceTitle}
-            </span>
-          )}
-          {renderAdminManagedBadge(rule) ? <div className="mt-1">{renderAdminManagedBadge(rule)}</div> : null}
-          <div className="fx-table-row-limits"><RuleLimitSummary rule={rule} /></div>
-          {(() => {
-            const stop = !rule.protocolBlockReason && rule.resourceAccessAllowed !== false ? resolveForwardRuleStopReason(rule) : null;
-            return stop?.autoResume ? (
-              <span className="mt-1 block text-[11px] leading-4 text-muted-foreground">{stop.detail}</span>
-            ) : null;
-          })()}
-          {entryBridgeNotes(rule).map((note) => (
-            <span key={note} className="mt-1 block text-[11px] leading-4 text-muted-foreground">{note}</span>
-          ))}
-        </TableCell>
-        {user?.role === "admin" && (
-          <TableCell className="px-3 py-2">
-            <span className="block truncate text-sm text-muted-foreground" title={getRuleOwnerName(rule)}>
-              {getRuleOwnerName(rule)}
-            </span>
+        {ruleTableColumns.map((column) => (
+          <TableCell key={column.key} className={cn("px-3 py-2", column.cellClassName)}>
+            {column.cell(rule)}
           </TableCell>
-        )}
-        <TableCell className="px-3 py-2">
-          <span className="block truncate text-sm text-muted-foreground" title={getRuleResourceName(rule)}>
-            {getRuleResourceName(rule)}
-          </span>
-        </TableCell>
-        <TableCell className="px-3 py-2">{renderTableTransferEntry(rule)}</TableCell>
-        <TableCell className="px-3 py-2">{renderTableTransferExit(rule)}</TableCell>
-        <TableCell className="px-3 py-2">
-          {/* 主备那一小块跟着线路走：它说的是「现在走哪条」，点进去是策略。 */}
-          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-            {renderRouteBadge(rule, true)}
-            {renderFailoverLineBadge(rule)}
-          </div>
-        </TableCell>
-        <TableCell className="px-3 py-2 text-center">
-          <Badge variant="secondary" className="whitespace-nowrap text-[10px]">{formatForwardRuleProtocol(rule.protocol)}</Badge>
-        </TableCell>
-        <TableCell className="px-3 py-2">{renderTableRuleTotalTraffic(rule)}</TableCell>
-        <TableCell className="overflow-hidden px-3 py-2">{renderTableRuleDailyTraffic(rule)}</TableCell>
-        <TableCell className="overflow-hidden px-3 py-2">{renderTableRuleLatency(rule)}</TableCell>
-        <TableCell className="px-3 py-2">
-          <div className="flex justify-center">
-            {renderRuleEnabledSwitch(rule)}
-          </div>
-        </TableCell>
-        <TableCell className="px-3 py-2 text-right">{renderRuleActions(rule)}</TableCell>
+        ))}
       </TableRow>
     );
   };
@@ -7573,6 +7670,7 @@ function RulesContent() {
     「新建规则」放在搜索栏那一行的最右边（用户要的位置）：搜索、筛选、新建都是「对这个列表
     做事」，并排一行；页头只剩视图切换和 ···。手机上按钮带字，不缩成一个「＋」。
   */
+  const mergeListControls = compactLayout && !isMobile;
   const createRuleAction = (
         rulePermissionLoading ? (
           <Button disabled className="fx-row-action h-9 shrink-0 gap-1.5 rounded-full px-3.5">
@@ -7600,6 +7698,10 @@ function RulesContent() {
 
   return (
     <div className="space-y-6">
+      {/*
+        精简布局（桌面）：分类条和搜索那一行并排，筛选下拉收进一个按钮；「新建规则」上到页头右边。
+        三行变两行。手机上照旧 —— 页头只有 393px，主操作放不下。
+      */}
       <WorkspaceHeader title="转发规则" status={
           /*
             页头（第三轮样稿）：标题下一行「5 / 5 已启用」，再一行状态点「● 运行 5 · ● 停用 0」；
@@ -7630,46 +7732,16 @@ function RulesContent() {
               cacheKey={`rules.traffic.${trafficTotalsCacheScope}.daily.bytesOut`} />
           </>} />
       } actions={<>
-          <div className="hidden items-center overflow-hidden rounded-md border border-border/40 md:flex">
-            <Button
-              variant={displayMode === "compact" ? "secondary" : "ghost"}
-              size="icon"
-              className="h-8 w-8 rounded-none"
-              onClick={() => handleDisplayModeChange("compact")}
-              title="精简卡片"
-            >
-              <Rows3 className="h-4 w-4" />
-            </Button>
-            <Button
-              variant={displayMode === "standard" ? "secondary" : "ghost"}
-              size="icon"
-              className="h-8 w-8 rounded-none"
-              onClick={() => handleDisplayModeChange("standard")}
-              title="标准卡片"
-            >
-              <LayoutGrid className="h-4 w-4" />
-            </Button>
-            <Button
-              variant={displayMode === "table" ? "secondary" : "ghost"}
-              size="icon"
-              className="h-8 w-8 rounded-none"
-              onClick={() => handleDisplayModeChange("table")}
-              title="列表"
-            >
-              <List className="h-4 w-4" />
-            </Button>
-            <Button
-              variant={displayMode === "globe" ? "secondary" : "ghost"}
-              size="icon"
-              className="h-8 w-8 rounded-none"
-              onClick={() => handleDisplayModeChange("globe")}
-              onPointerEnter={prefetchReactGlobe}
-              onFocus={prefetchReactGlobe}
-              title="3D 流量转发图"
-            >
-              <Globe className="h-4 w-4" />
-            </Button>
-          </div>
+          <ViewModeToggle className="sm:hidden md:flex"
+            value={displayMode}
+            onChange={handleDisplayModeChange}
+            items={[
+              { value: "compact", label: "精简卡片", icon: Rows3 },
+              { value: "standard", label: "标准卡片", icon: LayoutGrid },
+              { value: "table", label: "列表", icon: List },
+              { value: "globe", label: "3D 流量转发图", icon: Globe, onHover: prefetchReactGlobe },
+            ]}
+          />
           <DropdownMenu>
             <DropdownMenuTrigger asChild><Button variant="outline" size="icon" aria-label="更多规则操作"><span aria-hidden="true">•••</span></Button></DropdownMenuTrigger>
             <DropdownMenuContent align="end">
@@ -7677,9 +7749,10 @@ function RulesContent() {
               <DropdownMenuItem onSelect={() => setResetTrafficTarget({ scope: "all" })} disabled={visibleRuleIdsForMetrics.length === 0 || resetTrafficMutation.isPending}><RotateCcw className="h-4 w-4" />重置数据</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+          {mergeListControls ? createRuleAction : null}
       </>} />
 
-      <FreezeWhile frozen={showDialog || showImportDialog || showCopyDialog} render={() => <>
+      <FreezeWhile frozen={showDialog || showCopyDialog} render={() => <>
       {!canAdd && !rulePermissionLoading && (
         <div className="flex items-center gap-2 p-3 rounded-lg bg-[var(--fx-warn-soft)] border border-[color-mix(in_srgb,var(--fx-warn)_20%,transparent)] text-sm text-[var(--fx-warn-text)]">
           <AlertCircle className="h-4 w-4 flex-shrink-0" />
@@ -7688,7 +7761,7 @@ function RulesContent() {
       )}
 
       {(user?.role === "admin" || ruleScopeTotal > 0 || hasActiveRuleFilter || (rules && rules.length > 0)) && (
-        <div className="space-y-3">
+        <div className="fx-list-controls space-y-3">
           {/*
             第一行：分类条，和主机管理、链路管理顶上那条一样的分段条（2026-10-09 用户要统一）；
             第二行：小搜索框、筛选、最右边「新建规则」。
@@ -7703,7 +7776,8 @@ function RulesContent() {
           </Tabs>
           <FilterToolbar
             activeCount={Number(hasActiveUserFilter) + Number(filterResource !== "all")}
-            action={createRuleAction}
+            collapsed={mergeListControls}
+            action={mergeListControls ? undefined : createRuleAction}
             search={
             <div className="relative w-full">
               <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -7921,39 +7995,17 @@ function RulesContent() {
               <Card className="hidden border-border bg-card sm:block">
                 <CardContent className="p-0">
                   <div className="overflow-x-auto">
-                    <Table className={cn(ruleSortingEnabled ? (user?.role === "admin" ? "min-w-[1764px]" : "min-w-[1654px]") : (user?.role === "admin" ? "min-w-[1720px]" : "min-w-[1610px]"), "table-fixed")}>
+                    <Table className={cn("fx-rules-table table-fixed", compactLayout ? "min-w-[1000px]" : "min-w-[1610px]")}>
                       <colgroup>
                         {ruleSortingEnabled && <col className="w-[44px]" />}
-                        <col className="w-[56px]" />
-                        <col className="w-[110px]" />
-                        {user?.role === "admin" && <col className="w-[110px]" />}
-                        <col className="w-[100px]" />
-                        <col className="w-[285px]" />
-                        <col className="w-[190px]" />
-                        <col className="w-[170px]" />
-                        <col className="w-[96px]" />
-                        <col className="w-[120px]" />
-                        <col className="w-[120px]" />
-                        <col className="w-[120px]" />
-                        <col className="w-[70px]" />
-                        <col className="w-[154px]" />
+                        {ruleTableColumns.map((column) => <col key={column.key} style={{ width: column.width }} />)}
                       </colgroup>
                       <TableHeader>
                         <TableRow className="hover:bg-transparent">
                           {ruleSortingEnabled && <TableHead className="w-[44px] px-2" aria-label="排序" />}
-                          <TableHead className="whitespace-nowrap text-center">状态</TableHead>
-                          <TableHead>规则</TableHead>
-                          {user?.role === "admin" && <TableHead>用户</TableHead>}
-                          <TableHead>所属资源</TableHead>
-                          <TableHead>转发入口</TableHead>
-                          <TableHead>转发出口</TableHead>
-                          <TableHead>链路</TableHead>
-                          <TableHead className="text-center">协议</TableHead>
-                          {trafficMetricHeaderLabels.map((label) => (
-                            <TableHead key={label} className="whitespace-nowrap">{label}</TableHead>
+                          {ruleTableColumns.map((column) => (
+                            <TableHead key={column.key} className={cn("whitespace-nowrap", column.headClassName)}>{column.head}</TableHead>
                           ))}
-                          <TableHead className="text-center">开关</TableHead>
-                          <TableHead className="text-right">操作</TableHead>
                         </TableRow>
                       </TableHeader>
                       {shouldGroupRuleCards ? (
@@ -7963,7 +8015,7 @@ function RulesContent() {
                             return (
                               <Fragment key={group.type}>
                                 <TableRow className="border-border/40 bg-muted/35 hover:bg-muted/50">
-                                  <TableCell colSpan={user?.role === "admin" ? 13 : 12} className="p-1">
+                                  <TableCell colSpan={ruleTableColumnCount} className="p-1">
                                     {renderRuleGroupHeader(group, true)}
                                   </TableCell>
                                 </TableRow>
@@ -8057,6 +8109,25 @@ function RulesContent() {
           plannedSegments={selfTestLinkTestNodeData.plannedSegments}
           open={!!selfTestRule}
           onOpenChange={(v) => { if (!v) setSelfTestRule(null); }}
+          extraTabs={compactLayout ? [{
+            key: "history",
+            label: "延迟记录",
+            content: (
+              <Suspense fallback={<DataSectionLoading />}>
+                <TcpingDetailBody ruleId={selfTestRule.id} isForwardChain={!!selfTestRule.isForwardChain} probeMethod={selfTestRule.probeMethod} active={!!selfTestRule} />
+              </Suspense>
+            ),
+          }] : undefined}
+          actions={compactLayout ? (
+            <>
+              <Button type="button" variant="outline" size="sm" className="gap-1.5" disabled={faultBundle.pending} onClick={() => { void faultBundle.exportBundle("rule", Number(selfTestRule.id)); }}>
+                <FileJson className="h-3.5 w-3.5" />导出故障包
+              </Button>
+              <Button type="button" variant="outline" size="sm" className="gap-1.5" onClick={() => { setSelfTestRule(null); setLocation(`/topology?rule=${Number(selfTestRule.id)}`); }}>
+                <Network className="h-3.5 w-3.5" />查看拓扑
+              </Button>
+            </>
+          ) : undefined}
         />
       )}
 
@@ -8100,7 +8171,7 @@ function RulesContent() {
               />
             </Tabs>
             {/* 选中的走法一句话说清楚适合什么（features/rules/routeModeHints）。编辑时走法定了，不再说。 */}
-            {!editingId && (
+            {!editingId && !hideRuleFormHints && (
               <p className="-mt-1 text-meta leading-5 text-muted-foreground" data-testid="route-mode-hint">
                 {ROUTE_MODE_HINTS[routeTab]}
               </p>
@@ -8282,18 +8353,23 @@ function RulesContent() {
               源端口
               {sourcePortRequired
               ? <span className="text-destructive">*</span>
-              : <span className="text-xs font-normal text-muted-foreground">留空随机分配</span>}
+              : hideRuleFormHints ? null : <span className="text-xs font-normal text-muted-foreground">留空随机分配</span>}
               </Label>
+              {/* 精简布局：范围写进输入框占位里，超范围时下面一行红字直接说能用哪些。 */}
+              {hideRuleFormHints ? null : (
               <span className="truncate text-xs text-muted-foreground" title={`允许端口范围: ${sourcePortRangeText}`}>
               {sourcePortRangeText}
               </span>
+              )}
               </div>
               <div className="flex gap-2">
               <div className="relative min-w-0 flex-1">
               <Input
               type="text"
               pattern="[0-9]*"
-              placeholder={sourcePortRequired ? "例如 8080" : "留空随机分配"}
+              placeholder={hideRuleFormHints && sourcePortRangeText !== "不限制"
+                ? `${sourcePortRangeText}${sourcePortRequired ? "" : "，留空随机"}`
+                : sourcePortRequired ? "例如 8080" : "留空随机分配"}
               value={form.sourcePort || ""}
               inputMode="numeric"
               onChange={(e) => {
@@ -8467,7 +8543,7 @@ function RulesContent() {
                       怎么用？
                     </a>
                   </div>
-                  <p className="text-meta leading-5 text-muted-foreground">
+                  <p className={cn("text-meta leading-5 text-muted-foreground", hideRuleFormHints && "hidden")}>
                     一个入口后面挂几条路径（可以经过中转），出问题自动换，也能定时、择优、按权重分流
                     {canAutoSwitchMainBackupToGost && !form.failoverEnabled ? "（勾上后转发工具会换成 GOST，切换要靠它）" : ""}
                   </p>
@@ -8506,7 +8582,7 @@ function RulesContent() {
             )}
             {/* 规则名称放在外面：改名是常事，折进「更多设置」每次都要先展开才找得到。留空照样自动生成。 */}
             <FormField className="space-y-2">
-              <Label className="flex items-baseline gap-1.5">规则名称<span className="text-xs font-normal text-muted-foreground">留空自动生成</span></Label>
+              <Label className="flex items-baseline gap-1.5">规则名称{hideRuleFormHints ? null : <span className="text-xs font-normal text-muted-foreground">留空自动生成</span>}</Label>
               <Input
                 placeholder={autoForwardRuleName(form) || "例如: Web 服务转发"}
                 maxLength={128}
@@ -8521,7 +8597,7 @@ function RulesContent() {
               能用的默认值，不动也能建出来。分开之后第一屏只剩该填的，而不是让人
               每次都当一次选择题（「转发工具这三个我该选哪个」，而答案通常是别动）。
             */}
-            <div className="rounded-md border border-border/60 bg-muted/15">
+            <div className="fx-rule-collapsible rounded-md border border-border/60 bg-muted/15">
               <button
                 type="button"
                 className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm"
@@ -8574,7 +8650,7 @@ function RulesContent() {
             <FormField className={`flex min-h-10 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between${telegramBotReady ? "" : " opacity-60"}`}>
             <div className="min-w-0 space-y-0.5">
             <Label className="text-sm font-medium">异常TG提醒</Label>
-            <p className="text-xs text-muted-foreground">
+            <p className={cn("text-xs text-muted-foreground", hideRuleFormHints && telegramBotReady && "hidden")}>
             {telegramBotReady ? "规则运行异常时提醒已绑定 Telegram 的管理员。" : "请先在系统设置中配置并启用 TG 机器人。"}
             </p>
             </div>
@@ -8592,7 +8668,7 @@ function RulesContent() {
             <FormField className="flex min-h-10 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0 space-y-0.5">
             <Label className="text-sm font-medium">专属域名</Label>
-            <p className="text-xs text-muted-foreground">
+            <p className={cn("text-xs text-muted-foreground", hideRuleFormHints && "hidden")}>
             开着时订阅里用固定域名 r&lt;规则ID&gt;.&lt;后缀&gt;，换隧道 / 换入口不用刷新订阅；关掉就直接用入口地址。
             </p>
             </div>
@@ -8641,147 +8717,7 @@ function RulesContent() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={showExportDialog} onOpenChange={setShowExportDialog}>
-        <DialogContent className="sm:max-w-2xl">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Download className="h-5 w-5" />
-              {"导出规则"}
-            </DialogTitle>
-            <DialogDescription>{"选择范围后导出规则"}</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-2">
-            <div className="grid gap-4 sm:grid-cols-[minmax(0,11rem)_minmax(0,1fr)]">
-              <FormField className="space-y-2">
-                <Label>{"类型"}</Label>
-                <Select
-                  value={exportScopeType}
-                  onValueChange={(value) => {
-                    setExportScopeType(value as RuleTransferScopeType);
-                    setExportResourceId("");
-                    setExportResourceSearch("");
-                  }}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {ruleTransferScopeOptions.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>
-                        {option.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </FormField>
-              {renderTransferResourcePicker({
-                type: exportScopeType,
-                resources: exportResources,
-                filteredResources: filteredExportResources,
-                selectedResource: selectedExportResource,
-                selectedId: exportResourceId,
-                search: exportResourceSearch,
-                onSearch: setExportResourceSearch,
-                onSelect: setExportResourceId,
-              })}
-            </div>
-            <div className="rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
-              {exportResourceId
-                ? `将导出 ${exportableRules.length} 条${ruleTransferScopeLabels[exportScopeType]}规则`
-                : `请选择${ruleTransferScopeLabels[exportScopeType]}`}
-            </div>
-          </div>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setShowExportDialog(false)}>
-              {"取消"}
-            </Button>
-            <Button type="button" onClick={handleExportRules} disabled={!exportResourceId || exportableRules.length === 0}>
-              {"确定导出"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
-      <Dialog
-        open={showImportDialog}
-        onOpenChange={(open) => {
-          setShowImportDialog(open);
-          if (!open) resetImportDialog();
-        }}
-      >
-        <DialogContent className="sm:max-w-2xl">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Upload className="h-5 w-5" />
-              {"导入规则"}
-            </DialogTitle>
-            <DialogDescription>{"选择范围和规则文件后导入"}</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-2">
-            <div className="grid gap-4 sm:grid-cols-[minmax(0,11rem)_minmax(0,1fr)]">
-              <FormField className="space-y-2">
-                <Label>{"类型"}</Label>
-                <Select
-                  value={importScopeType}
-                  onValueChange={(value) => {
-                    setImportScopeType(value as RuleTransferScopeType);
-                    setImportResourceId("");
-                    setImportResourceSearch("");
-                    resetImportDialog();
-                  }}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {importRuleTransferScopeOptions.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>
-                        {option.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </FormField>
-              {renderTransferResourcePicker({
-                type: importScopeType,
-                resources: importResources,
-                filteredResources: filteredImportResources,
-                selectedResource: selectedImportResource,
-                selectedId: importResourceId,
-                search: importResourceSearch,
-                onSearch: setImportResourceSearch,
-                onSelect: setImportResourceId,
-                showStatus: true,
-                stackedList: true,
-              })}
-            </div>
-            <FormField className="space-y-2">
-              <Label>{"规则文件"}</Label>
-              <Input key={importFileInputKey} type="file" accept=".json,application/json" onChange={handleImportFileChange} />
-            </FormField>
-            <div
-              className={`rounded-md border px-3 py-2 text-sm ${
-                importValidation.ok
-                  ? "border-[color-mix(in_srgb,var(--fx-healthy)_30%,transparent)] bg-[var(--fx-healthy-soft)] text-[var(--fx-healthy-text)]"
-                  : importFileName || importFileError
-                    ? "border-destructive/30 bg-destructive/10 text-destructive"
-                    : "border-border/60 bg-muted/30 text-muted-foreground"
-              }`}
-            >
-              {importValidation.message}
-            </div>
-          </div>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setShowImportDialog(false)} disabled={importingRules}>
-              {"取消"}
-            </Button>
-            <Button type="button" onClick={handleImportRules} disabled={!importValidation.ok || importingRules}>
-              {importingRules && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              {"导入"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
       <Dialog open={showCopyDialog} onOpenChange={(open) => !copyActionPending && setShowCopyDialog(open)}>
         <DialogContent className="sm:max-w-4xl">
           <DialogHeader>
@@ -8789,7 +8725,7 @@ function RulesContent() {
               <ClipboardCopy className="h-5 w-5" />
               批量管理转发规则
             </DialogTitle>
-            <DialogDescription>筛选并选择规则后，可批量复制、编辑、导出或删除。</DialogDescription>
+            <DialogDescription data-fx-help="">筛选并选择规则后，可批量复制、编辑、导出或删除。</DialogDescription>
           </DialogHeader>
           <div className="max-h-[72vh] space-y-4 overflow-y-auto pr-1">
             <div className={segmentedControlClassName}>
@@ -8984,7 +8920,7 @@ function RulesContent() {
                     <div className="rounded-full border border-primary/20 bg-primary/5 p-3 text-primary shadow-sm">
                       <ArrowRight className="h-5 w-5" />
                     </div>
-                    <div className="text-center text-[11px] font-medium leading-4 text-muted-foreground">
+                    <div data-fx-help="" className="text-center text-[11px] font-medium leading-4 text-muted-foreground">
                       导入到右侧目标
                     </div>
                   </div>
@@ -9600,6 +9536,8 @@ function SelfTestDialog({
   plannedSegments,
   open,
   onOpenChange,
+  extraTabs,
+  actions,
 }: {
   ruleId: number;
   ruleName: string;
@@ -9609,6 +9547,9 @@ function SelfTestDialog({
   plannedSegments?: LinkTestPlannedSegment[];
   open: boolean;
   onOpenChange: (v: boolean) => void;
+  /** 精简布局并进来的页（延迟记录）和底部动作（故障包、拓扑），见 DiagnoseDialog。 */
+  extraTabs?: DiagnoseExtraTab[];
+  actions?: ReactNode;
 }) {
   const utils = trpc.useUtils();
   const [optimisticTesting, setOptimisticTesting] = useState(false);
@@ -9713,6 +9654,8 @@ function SelfTestDialog({
       outcome={isSuccess ? "success" : isTimeout ? "timeout" : isFailed ? "failed" : null}
       failureReason={parsedMessage.message}
       checklist={{ kind: "rule", id: ruleId }}
+      extraTabs={extraTabs}
+      actions={actions}
       onRun={() => {
         manualTestRef.current = true;
         setOptimisticTesting(true);

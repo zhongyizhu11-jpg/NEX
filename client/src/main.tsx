@@ -9,8 +9,12 @@ import App from "./App";
 import { mobileAuth } from "./lib/mobileAuth";
 import { clearPersistedQueryCache, restorePersistedQueryCache, startQueryCachePersistence } from "./lib/queryPersistence";
 import "./index.css";
+import { applyRememberedLayout } from "./components/LayoutLayer";
 import { DATABASE_UNAVAILABLE_MESSAGE } from "@shared/databaseHealth";
 import { DATABASE_HEALTH_QUERY_KEY } from "./components/DatabaseHealthGate";
+
+// 精简布局：刷新时先按上次记住的挂上，auth.me 回来后 LayoutLayer 再校正
+applyRememberedLayout();
 
 const LOGIN_EXPIRED_NOTICE = "登录状态已失效，请重新登录";
 

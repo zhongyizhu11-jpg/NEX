@@ -3,8 +3,10 @@ import { SlidersHorizontal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-export default function FilterToolbar({ search, children, activeCount = 0, action }: {
+export default function FilterToolbar({ search, children, activeCount = 0, action, collapsed = false }: {
   search: ReactNode; children?: ReactNode; activeCount?: number;
+  /** 桌面上也只留筛选图标、点开才展开那几个下拉（精简布局：分类条和这一行并排，放不下三个下拉）。 */
+  collapsed?: boolean;
   /**
    * 这一页的主操作（「新建规则」这类）。
    *
@@ -17,7 +19,7 @@ export default function FilterToolbar({ search, children, activeCount = 0, actio
   const [open, setOpen] = useState(false);
   const id = useId();
   return (
-    <div className="workspace-filter">
+    <div className="workspace-filter" data-collapsed={collapsed ? "" : undefined}>
       <div className="workspace-filter-search">{search}</div>
       {children && <>
         {/*
@@ -26,12 +28,12 @@ export default function FilterToolbar({ search, children, activeCount = 0, actio
           三样并排一行 34px；按钮的名字还在 aria-label 里，读屏照样念得出来。
         */}
         <Button type="button" variant={open || activeCount > 0 ? "secondary" : "outline"}
-          className="fx-filter-pill h-10 w-10 shrink-0 gap-1 rounded-full sm:hidden" aria-expanded={open} aria-controls={id}
+          className={cn("fx-filter-pill h-10 w-10 shrink-0 gap-1 rounded-full", !collapsed && "sm:hidden")} aria-expanded={open} aria-controls={id}
           aria-label={activeCount > 0 ? `筛选（已设 ${activeCount} 项）` : "筛选"} title="筛选"
           onClick={() => setOpen(!open)}>
           <SlidersHorizontal className="h-4 w-4" />{activeCount > 0 && <span className="tabular-nums">{activeCount}</span>}
         </Button>
-        <div id={id} className={cn("workspace-filter-options", open ? "flex" : "hidden sm:flex")}>
+        <div id={id} className={cn("workspace-filter-options", open ? "flex" : collapsed ? "hidden" : "hidden sm:flex")}>
           {children}
         </div>
       </>}

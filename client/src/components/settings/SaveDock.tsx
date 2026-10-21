@@ -3,6 +3,7 @@ import { Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { useUiTheme } from "@/hooks/useUiTheme";
+import { useCompactLayout } from "@/hooks/useCompactLayout";
 
 /*
   设置页的「贴底保存栏」（界面主题「玫瑰」下才出现，2026-10-11 用户要的）。
@@ -83,7 +84,9 @@ export function useSaveDockItem(item: SaveDockItem) {
 /** 这条栏现在画不画：只在玫瑰和朱砂两套主题下（两套的设置页都是编号分节）。卡片据此决定要不要把自己的保存按钮交出去。 */
 export function useSaveDockActive() {
   const uiTheme = useUiTheme();
-  return uiTheme === "rose" || uiTheme === "cinnabar";
+  // 精简布局也走这条栏：二十来张卡各自一个「保存」按钮占一行，收进底下一条（compact.css 藏 data-dock-save）
+  const compactLayout = useCompactLayout();
+  return compactLayout || uiTheme === "rose" || uiTheme === "cinnabar";
 }
 
 /** 存完之后那句「改动都已保存」在屏幕上留多久（毫秒）。 */

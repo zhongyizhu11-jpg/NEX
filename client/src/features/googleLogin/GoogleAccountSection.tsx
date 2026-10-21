@@ -132,7 +132,7 @@ export default function GoogleAccountSection() {
         ) : null}
         {status.linked ? (
           <SettingList>
-            <SettingRow
+            <SettingRow keepDescription
               label="Google 账号"
               description={status.linkedAt ? `${new Date(status.linkedAt).toLocaleString()} 绑定` : undefined}
               control={<span className="max-w-[12rem] truncate text-secondary-type font-medium sm:max-w-xs">{status.email || "-"}</span>}

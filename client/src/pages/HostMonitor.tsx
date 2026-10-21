@@ -1,10 +1,12 @@
 import { resolveSiteTitle } from "@shared/brand";
+import { readStoredViewMode, writeStoredViewMode } from "@/lib/viewModeStorage";
 import OpsPublicMonitorExtras from "@/features/ops/slots/PublicMonitorExtras";
 import DataSectionLoading from "@/components/DataSectionLoading";
 import { formatMetricSizeDetail } from "@/lib/formatMetricSize";
 import { LatencyPeakCutToggle } from "@/components/LatencyPeakCutToggle";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ViewModeToggle } from "@/components/ui/view-mode-toggle";
 import { Card, CardContent } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { pollingInterval } from "@/lib/polling";
@@ -61,22 +63,11 @@ const HOST_MONITOR_VIEW_MODE_STORAGE_KEY = "forwardx.publicHostMonitor.viewMode"
 const serviceChartColors = ["var(--color-primary)", "#16a34a", "#d97706", "#dc2626", "#0d9488", "#be123c", "#f97316", "#64748b"];
 
 function getStoredHostMonitorViewMode(): HostMonitorViewMode {
-  if (typeof window === "undefined") return "card";
-  try {
-    const value = window.localStorage.getItem(HOST_MONITOR_VIEW_MODE_STORAGE_KEY);
-    return value === "compact-card" || value === "table" ? value : "card";
-  } catch {
-    return "card";
-  }
+  return readStoredViewMode<HostMonitorViewMode>(HOST_MONITOR_VIEW_MODE_STORAGE_KEY, ["compact-card", "table", "card"], "card");
 }
 
 function storeHostMonitorViewMode(viewMode: HostMonitorViewMode) {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(HOST_MONITOR_VIEW_MODE_STORAGE_KEY, viewMode);
-  } catch {
-    // View preference is optional.
-  }
+  writeStoredViewMode(HOST_MONITOR_VIEW_MODE_STORAGE_KEY, viewMode);
 }
 
 function formatNetworkSpeed(value: number | null | undefined) {
@@ -828,35 +819,15 @@ export default function HostMonitor() {
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            {!selectedHost && <div className="flex items-center overflow-hidden rounded-md border border-border/40">
-              <Button
-                variant={viewMode === "compact-card" ? "secondary" : "ghost"}
-                size="icon"
-                className="h-8 w-8 rounded-none"
-                title="精简卡片"
-                onClick={() => handleViewModeChange("compact-card")}
-              >
-                <Rows3 className="h-4 w-4" />
-              </Button>
-              <Button
-                variant={viewMode === "card" ? "secondary" : "ghost"}
-                size="icon"
-                className="h-8 w-8 rounded-none"
-                title="标准卡片"
-                onClick={() => handleViewModeChange("card")}
-              >
-                <LayoutGrid className="h-4 w-4" />
-              </Button>
-              <Button
-                variant={viewMode === "table" ? "secondary" : "ghost"}
-                size="icon"
-                className="h-8 w-8 rounded-none"
-                title="列表视图"
-                onClick={() => handleViewModeChange("table")}
-              >
-                <List className="h-4 w-4" />
-              </Button>
-            </div>}
+            {!selectedHost && <ViewModeToggle className="flex"
+              value={viewMode}
+              onChange={handleViewModeChange}
+              items={[
+                { value: "compact-card", label: "精简卡片", icon: Rows3 },
+                { value: "card", label: "标准卡片", icon: LayoutGrid },
+                { value: "table", label: "列表视图", icon: List },
+              ]}
+            />}
             <Button asChild size="sm" className="gap-2">
               <Link href={isLoggedIn ? "/hosts" : "/login"}>
                 <LayoutDashboard className="h-4 w-4" />

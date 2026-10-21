@@ -1,4 +1,5 @@
 import { FormField } from "@/components/ui/form-field";
+import { readStoredViewMode, writeStoredViewMode } from "@/lib/viewModeStorage";
 import { PlanDescriptionEditor } from "@/components/plans/PlanDescription";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
 import DataSectionError, { DataTableErrorRow } from "@/components/DataSectionError";
@@ -22,6 +23,9 @@ import AutoAnimateContainer from "@/components/AutoAnimateContainer";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { useCompactLayout } from "@/hooks/useCompactLayout";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { ViewModeToggle } from "@/components/ui/view-mode-toggle";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -151,22 +155,11 @@ const emptyForm: PlanForm = {
 };
 
 function getStoredPlanListViewMode(): PlanListViewMode {
-  if (typeof window === "undefined") return "card";
-  try {
-    const value = window.localStorage.getItem(PLAN_LIST_VIEW_MODE_STORAGE_KEY);
-    return value === "table" ? "table" : "card";
-  } catch {
-    return "card";
-  }
+  return readStoredViewMode<PlanListViewMode>(PLAN_LIST_VIEW_MODE_STORAGE_KEY, ["table", "card"], "card");
 }
 
 function storePlanListViewMode(viewMode: PlanListViewMode) {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(PLAN_LIST_VIEW_MODE_STORAGE_KEY, viewMode);
-  } catch {
-    // View preference is optional.
-  }
+  writeStoredViewMode(PLAN_LIST_VIEW_MODE_STORAGE_KEY, viewMode);
 }
 
 function speed(value?: number | null) {
@@ -685,6 +678,7 @@ export default function Plans() {
   const [editing, setEditing] = useState(false);
   const [planDialogTab, setPlanDialogTab] = useState<PlanDialogTab>("settings");
   const [assignOpen, setAssignOpen] = useState(false);
+  const compactLayout = useCompactLayout();
   const [assignUserId, setAssignUserId] = useState("");
   const [assignPlanId, setAssignPlanId] = useState("");
   const [assignDurationDays, setAssignDurationDays] = useState("30");
@@ -1140,14 +1134,28 @@ export default function Plans() {
     <DashboardLayout>
       <div className="space-y-6">
         <WorkspaceHeader title={<>套餐管理</>} description={<>配置套餐、资源和端口。</>} actions={<>
-            <Button variant="outline" onClick={() => setAssignOpen(true)}>
-              <Settings2 className="mr-2 h-4 w-4" /> 手动分配
-            </Button>
             {/* 计费 tab 里有它自己的「新增计费资源」，这个按钮只管套餐，别让一个按钮有两种含义。 */}
             {activeTab === "plans" && (
               <Button onClick={openCreate}>
                 <Plus className="mr-2 h-4 w-4" /> 新增套餐
               </Button>
+            )}
+            {/* 精简布局：手动分配一个月用不了几次，收进「···」，页头只留一个主操作；标准布局照旧两个按钮 */}
+            {compactLayout ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="icon" aria-label="更多套餐操作"><span aria-hidden="true">•••</span></Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onSelect={() => setAssignOpen(true)}>
+                  <Settings2 className="h-4 w-4" />手动分配
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            ) : (
+            <Button variant="outline" onClick={() => setAssignOpen(true)}>
+              <Settings2 className="mr-2 h-4 w-4" /> 手动分配
+            </Button>
             )}
           </>} />
 
@@ -1162,6 +1170,19 @@ export default function Plans() {
           items={[
             { key: "plans", label: "套餐", value: Number(planSummary?.totalItems || 0), hint: `${activePlans} 个已启用`, cacheKey: "plans.count", fallbackValue: 0 },
             { key: "resources", label: "套餐资源", value: planResourceTotal, hint: planResourceBreakdown || "还没有资源", title: planResourceBreakdown || undefined, cacheKey: "plans.resourceTotal", fallbackValue: 0 },
+            /*
+              按量计费：只读，开关在「流量计费」tab 里统一管，点这一格就过去（原来是「对用户开放」里的一行）。
+              它读的 trafficBilling.configs 查询无条件发，状态是真的 —— 以前带着 enabled: activeTab === "billing"，
+              默认 tab 下根本不发，于是永远显示「已关闭」。
+            */
+            ...(compactLayout ? [{
+              key: "billing",
+              label: "按量计费",
+              value: trafficBillingLoading ? "…" : trafficBillingEnabled ? "已开启" : "已关闭",
+              hint: trafficBillingEnabled ? `${trafficBillingConfigs.length} 个资源在按 GB 扣余额` : "配了价的资源也不扣",
+              icon: Coins,
+              onClick: () => setActiveTab("billing"),
+            }] : []),
           ]}
         />
         <ListSection header="对用户开放">
@@ -1182,6 +1203,8 @@ export default function Plans() {
               />
             )}
           />
+          {compactLayout ? null : (
+            <>
           {/*
             按量计费：只读，开关在「流量计费」tab 里统一管，点这一行就过去。
 
@@ -1200,9 +1223,11 @@ export default function Plans() {
             value={trafficBillingLoading ? "…" : trafficBillingEnabled ? "已开启" : "已关闭"}
             onSelect={() => setActiveTab("billing")}
           />
+            </>
+          )}
         </ListSection>
 
-        {storeGateBlocking && (
+        {!compactLayout && storeGateBlocking && (
           <div className="flex flex-col gap-2 rounded-lg border border-[color-mix(in_srgb,var(--fx-warn)_40%,transparent)] bg-[var(--fx-warn-soft)] px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between">
             <p className="min-w-0">
               商店总开关是关的：{storeVisiblePlans} 个套餐开了「购买入口」，但用户面板里没有商店，只能管理员后台分配。
@@ -1219,6 +1244,7 @@ export default function Plans() {
           </div>
         )}
 
+
         <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as PlanManageTab)} className="space-y-4">
           <SlidingTabsList items={PLAN_MANAGE_TAB_ITEMS} activeValue={activeTab} ariaLabel="套餐管理" minItemWidthRem={9.5} />
 
@@ -1229,27 +1255,15 @@ export default function Plans() {
               规则的卡片一样。表格视图才需要一块白底托住。
             */}
             <div className="flex items-center justify-between gap-3">
-              <div className="min-w-0 text-meta text-muted-foreground">订阅后分配连续端口段。</div>
-                <div className="flex shrink-0 items-center overflow-hidden rounded-md border border-border/40">
-                  <Button
-                    variant={planViewMode === "card" ? "secondary" : "ghost"}
-                    size="icon"
-                    className="h-8 w-8 rounded-none"
-                    title="卡片视图"
-                    onClick={() => handlePlanViewModeChange("card")}
-                  >
-                    <LayoutGrid className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    variant={planViewMode === "table" ? "secondary" : "ghost"}
-                    size="icon"
-                    className="h-8 w-8 rounded-none"
-                    title="列表视图"
-                    onClick={() => handlePlanViewModeChange("table")}
-                  >
-                    <List className="h-4 w-4" />
-                  </Button>
-                </div>
+              <div data-fx-help="" className="min-w-0 text-meta text-muted-foreground">订阅后分配连续端口段。</div>
+                <ViewModeToggle className="flex shrink-0"
+                  value={planViewMode}
+                  onChange={handlePlanViewModeChange}
+                  items={[
+                    { value: "card", label: "卡片视图", icon: LayoutGrid },
+                    { value: "table", label: "列表视图", icon: List },
+                  ]}
+                />
             </div>
             <div>
                 {isLoading ? (
@@ -1369,7 +1383,7 @@ export default function Plans() {
         <DialogContent className="flex max-h-[92svh] w-[calc(100vw-1rem)] max-w-[95vw] flex-col overflow-hidden p-0 sm:max-w-2xl">
           <DialogHeader className="px-4 pt-4 sm:px-5 sm:pt-5">
             <DialogTitle>{form.id ? "编辑套餐" : "新增套餐"}</DialogTitle>
-            <DialogDescription>配置套餐限制，并绑定订阅后可用资源。</DialogDescription>
+            <DialogDescription data-fx-help="">配置套餐限制，并绑定订阅后可用资源。</DialogDescription>
           </DialogHeader>
 
           <Tabs value={planDialogTab} onValueChange={(value) => setPlanDialogTab(value as PlanDialogTab)} className="flex min-h-0 flex-1 flex-col px-4 sm:px-5">
@@ -1557,17 +1571,17 @@ export default function Plans() {
             <FormField className="space-y-2">
               <Label>最大落地节点数（0 为不限）</Label>
               <Input type="number" min={0} value={form.maxProxyInbounds} onChange={(e) => setForm({ ...form, maxProxyInbounds: e.target.value })} />
-              <p className="text-xs text-muted-foreground">买了这个套餐能自己开几个落地节点。只在套餐开了客户端订阅时才有意义。</p>
+              <p data-fx-help="" className="text-xs text-muted-foreground">买了这个套餐能自己开几个落地节点。只在套餐开了客户端订阅时才有意义。</p>
             </FormField>
             <FormField className="space-y-2">
               <Label>最大订阅地址数（0 为不限）</Label>
               <Input type="number" min={0} value={form.maxProxySubTokens} onChange={(e) => setForm({ ...form, maxProxySubTokens: e.target.value })} />
-              <p className="text-xs text-muted-foreground">能生成几条订阅地址。同样只在开了客户端订阅时才有意义。</p>
+              <p data-fx-help="" className="text-xs text-muted-foreground">能生成几条订阅地址。同样只在开了客户端订阅时才有意义。</p>
             </FormField>
             <FormField className="space-y-2">
               <Label>最大连接数</Label>
               <Input type="number" min={0} value={form.maxConnections} onChange={(e) => setForm({ ...form, maxConnections: e.target.value })} />
-              <p className="text-xs text-muted-foreground">按主机或隧道聚合。</p>
+              <p data-fx-help="" className="text-xs text-muted-foreground">按主机或隧道聚合。</p>
             </FormField>
             <FormField className="space-y-2">
               <Label>单 IP 接入限制</Label>
@@ -1577,7 +1591,7 @@ export default function Plans() {
               <FormField className="flex items-start justify-between gap-3 rounded-md border p-3">
                 <div className="min-w-0">
                   <Label>附带客户端订阅权限</Label>
-                  <p className="mt-1 text-xs text-muted-foreground">
+                  <p data-fx-help="" className="mt-1 text-xs text-muted-foreground">
                     开启后，购买该套餐的用户即可使用客户端订阅。与转发权限不同，这项不会因为有订阅就自动开启。
                   </p>
                 </div>
@@ -1587,7 +1601,7 @@ export default function Plans() {
                   className="mt-1 shrink-0"
                 />
               </FormField>
-              <p className="text-xs text-muted-foreground">同组规则共享限制。</p>
+              <p data-fx-help="" className="text-xs text-muted-foreground">同组规则共享限制。</p>
             </div>
             <FormField className="space-y-2">
               <Label htmlFor="plan-referral-rate">邀请返利比例（%）</Label>
@@ -1599,7 +1613,7 @@ export default function Plans() {
                 onChange={(e) => setForm({ ...form, referralRate: e.target.value })}
                 aria-invalid={parseRatePercentToBps(form.referralRate) === null}
               />
-              <p className="text-xs text-muted-foreground">
+              <p data-fx-help="" className="text-xs text-muted-foreground">
                 被邀请人买这个套餐（含续费）实付金额的百分之几返给邀请人，0 为不返。0 到 100，最多两位小数。需在「账单与兑换 › 邀请返利」里开启。
               </p>
             </FormField>
@@ -1645,7 +1659,7 @@ export default function Plans() {
                     <div className="flex items-center justify-between gap-3 rounded-md bg-muted/20 px-3 py-2 sm:col-span-2">
                       <div className="min-w-0">
                         <p className="text-sm font-medium">同步已购买用户</p>
-                        <p className="text-xs text-muted-foreground">开启后保存套餐会同步已购买用户的生效权益；关闭后仅影响后续新购或新分配。</p>
+                        <p data-fx-help="" className="text-xs text-muted-foreground">开启后保存套餐会同步已购买用户的生效权益；关闭后仅影响后续新购或新分配。</p>
                       </div>
                       <Checkbox
                         className="shrink-0"
@@ -1884,7 +1898,7 @@ export default function Plans() {
                     <div className="flex items-center justify-between gap-3 rounded-md bg-muted/20 px-3 py-2">
                       <div className="min-w-0">
                         <p className="text-sm font-medium">给每人单开一个端口</p>
-                        <p className="text-xs text-muted-foreground">
+                        <p data-fx-help="" className="text-xs text-muted-foreground">
                           开：面板照着节点在同一台机器上给每位用户克隆一个端口，
                           <span className="font-medium text-foreground">流量能算到人头上</span>，可单独限速，代价是一人占一个端口。
                           关：大家共用原端口、各发一份凭据，省端口，但流量按端口统计、分不开。
@@ -1897,7 +1911,7 @@ export default function Plans() {
                       />
                     </div>
                   ) : null}
-                  <p className="text-xs text-muted-foreground">
+                  <p data-fx-help="" className="text-xs text-muted-foreground">
                     买了（或被分配）这个套餐的人，会在这些节点上<span className="font-medium text-foreground">各拿一份独立凭据</span>，直接出现在他的订阅里；
                     到期、取消、换套餐自动收回，不必手工分。支持一人一份凭据的协议才发得出来
                     （VLESS / VMess / Trojan / Hysteria2 / TUIC / AnyTLS）；
@@ -1909,7 +1923,7 @@ export default function Plans() {
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <Label className="text-sm font-medium">附加流量包</Label>
-                <p className="mt-1 text-xs text-muted-foreground">用户在“我的套餐”内余额购买，仅当前流量周期有效。</p>
+                <p data-fx-help="" className="mt-1 text-xs text-muted-foreground">用户在“我的套餐”内余额购买，仅当前流量周期有效。</p>
               </div>
               <Button type="button" variant="outline" size="sm" onClick={addTrafficAddon}>
                 <Plus className="mr-2 h-4 w-4" /> 添加档位
@@ -2003,7 +2017,7 @@ export default function Plans() {
                     ))}
                   </SelectContent>
                 </Select>
-                <p className="text-xs text-muted-foreground">
+                <p data-fx-help="" className="text-xs text-muted-foreground">
                   套餐挂着的周期都能选；选「永久」不设到期时间。手动分配不扣钱，也不走折扣。
                 </p>
               </FormField>

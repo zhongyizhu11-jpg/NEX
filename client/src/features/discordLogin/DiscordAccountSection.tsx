@@ -155,7 +155,7 @@ export default function DiscordAccountSection() {
 
         {status.linked ? (
           <SettingList>
-            <SettingRow
+            <SettingRow keepDescription
               label="Discord 账号"
               description={status.linkedAt ? `${new Date(status.linkedAt).toLocaleString()} 绑定` : undefined}
               control={(
