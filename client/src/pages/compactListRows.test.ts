@@ -1,0 +1,77 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import test from "node:test";
+
+/**
+ * 精简布局的「条状」（用户 2026-10-21 照着老版本表格样稿定的）：
+ * 桌面上规则 / 主机 / 链路三个列表页就是一张表 —— 记住的卡片视图不动、回标准布局还是卡片；
+ * 视图切换按钮里卡片那几档不出现。手机上没有表，页面根带 data-fx-compact-page，compact.css 把卡片栅格画成两行的列表行。
+ * 守在源码上。
+ */
+const read = (name: string) => fs.readFileSync(path.resolve(import.meta.dirname, name), "utf8");
+
+test("转发页：精简 + 桌面强制表格（3D 图除外），视图按钮只剩表和 3D 图", () => {
+  const source = read("Rules.tsx");
+  assert.match(source, /const effectiveViewMode: RuleViewMode = isMobile \? "card" : compactLayout && viewMode !== "globe" \? "table" : viewMode;/);
+  assert.match(source, /\.\.\.\(compactLayout \? \[\] : \[\s*\{ value: "compact" as const, label: "精简卡片"/);
+  assert.match(source, /data-fx-std-page=\{compactLayout \? undefined : ""\} data-fx-compact-page=\{compactLayout \? "" : undefined\}/);
+});
+
+test("转发页手机行：地址行右端固定是延迟，没测过写「未测试」（标准卡片照旧留空）", () => {
+  const source = read("Rules.tsx");
+  assert.match(source, /if \(!tag && compactLayout\) \{\s*tag = <span className="fx-rule-tag" data-tone="off"[^>]*>未测试<\/span>;/);
+});
+
+test("主机页：精简 + 桌面把两档卡片都换成表，地图照旧；视图按钮只剩表和地图", () => {
+  const source = read("Hosts.tsx");
+  assert.match(source, /compactLayout && !isBelowMd && \(preferredViewMode === "card" \|\| preferredViewMode === "compact-card"\)\s*\? "table"/);
+  assert.match(source, /\.\.\.\(compactLayout \? \[\] : \[\s*\{ value: "compact-card" as const, label: "精简卡片"/);
+  assert.match(source, /data-fx-std-page=\{compactLayout \? undefined : ""\} data-fx-compact-page=\{compactLayout \? "" : undefined\}/);
+});
+
+test("主机页精简的表：七列、不冻结、1000 最小宽；行走 dense", () => {
+  const source = read("Hosts.tsx");
+  assert.match(source, /compactLayout \? "fx-hosts-table-dense min-w-\[1000px\]" : "min-w-\[1340px\]"/);
+  assert.match(source, /dense=\{compactLayout\}/);
+  assert.match(source, /<TableHead className="whitespace-nowrap">系统 · Agent<\/TableHead>/);
+});
+
+test("规则表精简：入口地址写全不截（不再只写端口），列宽让给入口；24H 为零不画", () => {
+  const source = read("Rules.tsx");
+  assert.doesNotMatch(source, /portOnly/, "用户定的：规则信息要全，不只写端口");
+  assert.match(source, /key: "entry", width: compactLayout \? 200 : 150/);
+  assert.match(source, /\{hasDaily \? <div className="fx-table-daily">/);
+  const css = fs.readFileSync(path.resolve(import.meta.dirname, "../styles/compact.css"), "utf8");
+  assert.match(css, /\.fx-table-addr:not\(\[data-fx-std-page\] \*\) \{[^}]*white-space: normal;[^}]*overflow-wrap: anywhere;/, "药丸放不下就换行，不截");
+});
+
+test("链路页：精简 + 桌面隧道和转发链 / 组的卡片都换成表；视图按钮里没有卡片那档", () => {
+  const source = read("Tunnels.tsx");
+  assert.match(source, /const forceTable = compactLayout && !isMobile;/);
+  assert.match(source, /const viewMode: TunnelViewMode = forceTable && preferredViewMode === "card" \? "table" : preferredViewMode;/);
+  assert.match(source, /const chainViewMode: TunnelViewMode = forceTable && preferredChainViewMode === "card" \? "table" : preferredChainViewMode;/);
+  assert.match(source, /\.\.\.\(forceTable \? \[\] : \[\{ value: "card" as const, label: "卡片视图"/);
+  assert.match(source, /data-fx-std-page=\{compactLayout \? undefined : ""\} data-fx-compact-page=\{compactLayout \? "" : undefined\}/);
+});
+
+test("compact.css 的条状只挂在 data-fx-compact-page 下：不碰监控页等别处的主机卡 / 卡片栅格", () => {
+  const css = fs.readFileSync(path.resolve(import.meta.dirname, "../styles/compact.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  for (const hook of [".fx-rule-card", ".fx-host-card", ".standard-card-grid", ".fx-table-addr", ".fx-rules-table"]) {
+    for (const line of css.split("\n").filter((row) => row.includes(hook) && row.includes("{"))) {
+      assert.match(line, /html:root \[data-fx-compact-page\]/, `「${line.trim().slice(0, 80)}」没有挂在 data-fx-compact-page 下`);
+    }
+  }
+});
+
+test("剩下的几条：主机行两段灰字之间一根细竖线、链路行照转发行排成两行、总览空流量图压成一行", () => {
+  const css = fs.readFileSync(path.resolve(import.meta.dirname, "../styles/compact.css"), "utf8");
+  assert.match(css, /\.fx-host-card \.fx-host-foot-links:not\(\[data-fx-std-page\] \*\) \{ padding-left: 8px; border-left: 1px solid var\(--fx-stroke-weak\); \}/);
+  assert.match(css, /\.fx-tunnel-card \.fx-rule-card-body:not\(\[data-fx-std-page\] \*\) \{ display: grid; grid-template-columns: auto minmax\(0, 1fr\) auto auto; grid-template-areas: "name sub traffic actions" "route route rules tag";/, "链路行和转发行同一个两行网格");
+  assert.match(read("Tunnels.tsx"), /className="fx-rule-tag fx-tunnel-latency-tag"/);
+  assert.match(read("Tunnels.tsx"), /className="fx-tunnel-bytes fx-rule-num"/);
+  assert.match(css, /\[data-fx-chart="traffic"\]\[data-fx-empty\]:not\(\[data-fx-std-page\] \*\) \{ height: 40px; \}/);
+  assert.match(read("Tunnels.tsx"), /<div className="fx-tunnel-meta">/);
+  assert.match(fs.readFileSync(path.resolve(import.meta.dirname, "../features/dashboard/TrafficSurface.tsx"), "utf8"), /data-fx-empty=\{!chartLoading && chartData\.length === 0 \? "" : undefined\}/);
+  assert.match(read("Home.tsx"), /data-fx-compact-page=\{compactLayout \? "" : undefined\}/);
+});

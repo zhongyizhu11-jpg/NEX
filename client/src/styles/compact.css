@@ -288,3 +288,78 @@ html:root .dialog-panel .fx-empty-hint:not([data-fx-std-page] *) { border: 0; pa
 @media (min-width: 1280px) {
   html:root .fx-users-table:not([data-fx-std-page] *) { min-width: 1280px; }
 }
+
+/* ───── 十四、三个列表主页的精简形态「条状」（页面根带 data-fx-compact-page；标准下带 data-fx-std-page，全让出去） ─────
+   用户 2026-10-21 照着老版本的表格样稿定的：桌面上规则 / 主机 / 链路就是一张表（视图在页面里切成 table，这里只管表里的
+   地址药丸和行距）；手机上没有表，卡片栅格改成一个圆角容器里的两行列表行：
+     ● 名字  主机 · 工具 · 协议        0 B   ···  开关
+     入口 → 出口                                  超时
+   主机行同理：名字 ··· / IP  状态 · 几条转发。 */
+
+/* 表：地址画成药丸（等宽字、浅底），表格行距收一档，24H 做小字 */
+/* 地址药丸写全不截：放不下就在药丸里换行（规则信息要全，用户定的） */
+html:root [data-fx-compact-page] .fx-table-addr:not([data-fx-std-page] *) { border: 1px solid var(--fx-stroke-weak); border-radius: 6px; padding: 1px 6px; white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; line-height: 18px; }
+html:root [data-fx-compact-page] .fx-rules-table th:not([data-fx-std-page] *), html:root [data-fx-compact-page] .fx-rules-table td:not([data-fx-std-page] *) { padding: 8px 10px; }
+/* 表里的分组表头行（「端口转发 4」）收到 36px */
+html:root [data-fx-compact-page] .fx-rules-table .fx-rule-group-header:not([data-fx-std-page] *) { padding-top: 4px; padding-bottom: 4px; }
+html:root [data-fx-compact-page] .fx-hosts-table-dense th:not([data-fx-std-page] *) { height: 36px; padding-top: 0; padding-bottom: 0; }
+html:root [data-fx-compact-page] .fx-table-daily:not([data-fx-std-page] *) { font-size: 11px; }
+html:root [data-fx-compact-page] .fx-table-daily > div:not([data-fx-std-page] *) { flex-direction: row; gap: 6px; }
+
+/* 手机：卡片栅格变成一个圆角容器里的列表，行间一根细线 */
+@media (max-width: 767px) {
+  html:root [data-fx-compact-page] .standard-card-grid:not([data-fx-std-page] *), html:root [data-fx-compact-page] .standard-card-grid-compact:not([data-fx-std-page] *) { grid-template-columns: minmax(0, 1fr); gap: 0; margin-top: 0; padding-top: 0; border: 1px solid var(--fx-stroke-weak); border-radius: var(--fx-radius-surface); overflow: hidden; }
+  html:root [data-fx-compact-page] .standard-card-grid > *:not([data-fx-std-page] *), html:root [data-fx-compact-page] .standard-card-grid-compact > *:not([data-fx-std-page] *) { border: 0; border-bottom: 1px solid var(--fx-stroke-weak); border-radius: 0; box-shadow: none; }
+  html:root [data-fx-compact-page] .standard-card-grid > :last-child:not([data-fx-std-page] *), html:root [data-fx-compact-page] .standard-card-grid-compact > :last-child:not([data-fx-std-page] *) { border-bottom: 0; }
+
+  /* 规则行：两行网格。走势线、「近 24H」不画（行里放不下，详情里有）；入口 / 出口点一下就复制，复制小图标留着、缩一号 */
+  html:root [data-fx-compact-page] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-card-body:not([data-fx-std-page] *) { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto auto; grid-template-areas: "name sub alerts big actions" "path path path path path"; align-items: center; column-gap: 10px; row-gap: 1px; padding: 6px 12px 7px; }
+  html:root [data-fx-compact-page] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-head:not([data-fx-std-page] *), html:root [data-fx-compact-page] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-title:not([data-fx-std-page] *) { display: contents; }
+  html:root [data-fx-compact-page] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-name:not([data-fx-std-page] *) { grid-area: name; font-size: 14px; line-height: 20px; }
+  html:root [data-fx-compact-page] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-sub:not([data-fx-std-page] *) { grid-area: sub; min-width: 0; margin: 0; font-size: 11px; line-height: 16px; }
+  html:root [data-fx-compact-page] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-alerts:not([data-fx-std-page] *) { grid-area: alerts; margin: 0; }
+  html:root [data-fx-compact-page] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-big:not([data-fx-std-page] *) { grid-area: big; margin: 0; }
+  html:root [data-fx-compact-page] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-head-actions:not([data-fx-std-page] *) { grid-area: actions; justify-self: end; }
+  html:root [data-fx-compact-page] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-path:not([data-fx-std-page] *) { grid-area: path; margin: 0; padding: 0; border: 0; flex-wrap: nowrap; overflow: hidden; font-size: 11.5px; line-height: 16px; }
+  html:root [data-fx-compact-page] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-path > *:not([data-fx-std-page] *) { flex: 0 1 auto; min-width: 0; }
+  html:root [data-fx-compact-page] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-spark:not([data-fx-std-page] *), html:root [data-fx-compact-page] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-day:not([data-fx-std-page] *) { display: none; }
+  html:root [data-fx-compact-page] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-addr-copy:not([data-fx-std-page] *) { width: 11px; height: 11px; }
+  html:root [data-fx-compact-page] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-num > b:not([data-fx-std-page] *) { font-size: 15px; }
+  html:root [data-fx-compact-page] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-num > small:not([data-fx-std-page] *) { font-size: 11px; }
+  html:root [data-fx-compact-page] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-card-body > :not(.fx-rule-head):not(.fx-rule-alerts):not(.fx-rule-big):not(.fx-rule-path):not([data-fx-std-page] *) { grid-column: 1 / -1; margin: 0; }
+
+  /* 主机行：两行网格。系统头像不画；在线时的 CPU / 内存 / 磁盘三条占整行 */
+  html:root [data-fx-compact-page] .fx-host-card:not([data-fx-std-page] *) { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "name actions" "sub foot"; align-items: center; column-gap: 10px; row-gap: 1px; padding: 6px 12px 7px; }
+  html:root [data-fx-compact-page] .fx-host-card .fx-entity-head:not([data-fx-std-page] *), html:root [data-fx-compact-page] .fx-host-card .fx-entity-body:not([data-fx-std-page] *) { display: contents; }
+  html:root [data-fx-compact-page] .fx-host-card .fx-entity-head > span:first-child:not([data-fx-std-page] *) { display: none; }
+  html:root [data-fx-compact-page] .fx-host-card .fx-entity-head > div:not(:last-child):not([data-fx-std-page] *) { display: contents; }
+  html:root [data-fx-compact-page] .fx-host-card .fx-entity-head > div > div:first-child:not([data-fx-std-page] *) { grid-area: name; }
+  html:root [data-fx-compact-page] .fx-host-card .fx-entity-head > div > span:not([data-fx-std-page] *) { grid-area: sub; font-size: 11.5px; line-height: 16px; }
+  html:root [data-fx-compact-page] .fx-host-card .fx-entity-head > div:last-child:not([data-fx-std-page] *) { grid-area: actions; justify-self: end; }
+  html:root [data-fx-compact-page] .fx-host-card .fx-entity-body > .grid:not([data-fx-std-page] *) { grid-column: 1 / -1; }
+  html:root [data-fx-compact-page] .fx-host-card .fx-host-foot:not([data-fx-std-page] *) { grid-area: foot; justify-self: end; gap: 6px; font-size: 11.5px; line-height: 16px; }
+  html:root [data-fx-compact-page] .fx-host-card .fx-host-foot-links:not([data-fx-std-page] *) { margin-left: 0; }
+  /* 主机行右下角两段灰字之间一根细竖线：原来「还没上报过 还没有转发」连在一起 */
+  html:root [data-fx-compact-page] .fx-host-card .fx-host-foot-links:not([data-fx-std-page] *) { padding-left: 8px; border-left: 1px solid var(--fx-stroke-weak); }
+
+  /* 链路行：和转发行同一个样子（用户 2026-10-22 定的）。第一行「● 名字  副题 ……  累计 0 B · 0 条规则  ···  开关」，
+     第二行左边路线、右端延迟标签。脚注那一块（延迟大数字、走势、24H）和拖拽手柄不画，详情里有 */
+  html:root [data-fx-compact-page] .fx-tunnel-card .fx-rule-card-body:not([data-fx-std-page] *) { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; grid-template-areas: "name sub traffic actions" "route route rules tag"; align-items: center; column-gap: 8px; row-gap: 1px; padding: 6px 12px 7px; }
+  html:root [data-fx-compact-page] .fx-tunnel-card .fx-rule-head:not([data-fx-std-page] *), html:root [data-fx-compact-page] .fx-tunnel-card .fx-rule-title:not([data-fx-std-page] *), html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-meta:not([data-fx-std-page] *) { display: contents; }
+  html:root [data-fx-compact-page] .fx-tunnel-card .fx-rule-name:not([data-fx-std-page] *) { grid-area: name; font-size: 14px; line-height: 20px; }
+  html:root [data-fx-compact-page] .fx-tunnel-card .fx-rule-sub:not([data-fx-std-page] *) { grid-area: sub; min-width: 0; margin: 0; font-size: 11px; line-height: 16px; }
+  /* 累计是第一行的那个数（和转发行一样大小），规则数在第二行延迟标签左边 */
+  html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-bytes:not([data-fx-std-page] *) { grid-area: traffic; }
+  html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-bytes > b:not([data-fx-std-page] *) { font-size: 15px; }
+  html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-bytes > small:not([data-fx-std-page] *) { font-size: 11px; }
+  html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-rules:not([data-fx-std-page] *) { grid-area: rules; justify-self: end; font-size: 11px; line-height: 16px; white-space: nowrap; }
+  html:root [data-fx-compact-page] .fx-tunnel-card .fx-rule-head-actions:not([data-fx-std-page] *) { grid-area: actions; justify-self: end; }
+  html:root [data-fx-compact-page] .fx-tunnel-card .fx-rule-head-actions > button:first-child:not(:last-child):not([data-fx-std-page] *) { display: none; }
+  html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-route:not([data-fx-std-page] *) { grid-area: route; margin-top: 2px; }
+  html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-latency-tag:not([data-fx-std-page] *) { grid-area: tag; justify-self: end; }
+  html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-foot:not([data-fx-std-page] *), html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-foot-line:not([data-fx-std-page] *) { display: none; }
+  html:root [data-fx-compact-page] .fx-tunnel-card .fx-rule-card-body > :not(.fx-rule-head):not(.fx-tunnel-route):not(.fx-tunnel-meta):not([data-fx-std-page] *), html:root [data-fx-compact-page] .fx-tunnel-card .fx-rule-title > :not(.fx-rule-name):not(.fx-rule-sub):not([data-fx-std-page] *) { grid-column: 1 / -1; margin: 0; }
+}
+
+/* 总览：流量图没数据时不留一大块空白，压成一行 */
+html:root [data-fx-compact-page] [data-fx-chart="traffic"][data-fx-empty]:not([data-fx-std-page] *) { height: 40px; }
