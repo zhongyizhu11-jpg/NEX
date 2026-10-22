@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { queryFailureBannerText, shouldShowQueryFailureBanner } from "./queryFailureBanner";
+import { queryFailureBannerText, queryFailureDetailText, queryKeyPath, shouldShowQueryFailureBanner } from "./queryFailureBanner";
 
 const base = { failureCount: 0, failingSinceMs: 0, dismissedAtCount: 0, now: 100_000 };
 
@@ -38,4 +38,18 @@ test("文案把数量说清楚", () => {
   assert.match(queryFailureBannerText(5), /有 5 项/);
   // 计数出了偏差也不能写成「有 0 项」。
   assert.match(queryFailureBannerText(0), /有 1 项/);
+});
+
+test("第二行写清是哪几项、报的什么错", () => {
+  assert.equal(queryKeyPath([["tunnels", "listPage"], { input: {}, type: "query" }]), "tunnels.listPage");
+  assert.equal(queryKeyPath(["database-health"]), "database-health");
+  assert.equal(queryKeyPath([]), "");
+  assert.equal(
+    queryFailureDetailText([{ path: "tunnels.listPage", message: "Failed to fetch" }, { path: "hosts.list", message: "" }]),
+    "没读到：tunnels.listPage、hosts.list（Failed to fetch）",
+  );
+  assert.equal(queryFailureDetailText([]), "");
+  // 同一路径不同入参只写一次；太长的错误截断
+  const long = queryFailureDetailText([{ path: "a.b", message: "x".repeat(200) }, { path: "a.b", message: "y" }]);
+  assert.match(long, /^没读到：a\.b（x{120}…）$/);
 });

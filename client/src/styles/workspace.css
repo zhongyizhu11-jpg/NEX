@@ -9,12 +9,12 @@
 .workspace-appbar { position: sticky; top: 0; z-index: var(--fx-z-sticky); flex-shrink: 0; height: calc(var(--fx-header-height) + env(safe-area-inset-top, 0px)); padding-top: env(safe-area-inset-top, 0px); background: var(--fx-glass); -webkit-backdrop-filter: var(--fx-glass-blur); backdrop-filter: var(--fx-glass-blur); border-bottom: 1px solid var(--fx-stroke-weak); }
 /*
   iOS App（html.capacitor-ios）手机上顶栏往上收（用户 2026-10-21 圈的：状态栏下面空一大截才到顶栏）。
-  安全区只留 83% —— 状态栏文字下面本来就有十来像素空白（灵动岛 / 刘海机型 59px → 49px，老机型 20px → 17px），
+  安全区只留 72%、最少 20px —— 状态栏文字下面本来就有一段空白（灵动岛 59px → 42px，刘海 47px → 34px，老机型 20px 不动），用户看了第一版说还要再往上；
   顶栏本体 44px（各主题原来 48～64）。主题的 --fx-header-height 挂在 html 上，这里在顶栏元素上盖掉，只影响顶栏自己。
   液态玻璃那条浮着的玻璃条在 iOS 上不再离顶 8px：状态栏那段本来就在它里面。
 */
 @media (max-width: 767px) {
-  html.capacitor-ios .workspace-appbar { --fx-header-height: 44px; padding-top: calc(env(safe-area-inset-top, 0px) * 0.83); height: calc(44px + env(safe-area-inset-top, 0px) * 0.83); }
+  html.capacitor-ios .workspace-appbar { --fx-header-height: 44px; padding-top: max(20px, calc(env(safe-area-inset-top, 0px) * 0.72)); height: calc(44px + max(20px, calc(env(safe-area-inset-top, 0px) * 0.72))); }
   html.capacitor-ios[data-ui-theme="liquid-glass"] .workspace-appbar { top: 0; margin-top: 0; }
 }
 /*

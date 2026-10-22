@@ -1,7 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { shouldShowQueryFailureBanner } from "@/lib/queryFailureBanner";
+import { queryKeyPath, shouldShowQueryFailureBanner, type QueryFailureItem } from "@/lib/queryFailureBanner";
 
 /**
  * 这一页现在有几项数据没读到。
@@ -14,6 +14,7 @@ import { shouldShowQueryFailureBanner } from "@/lib/queryFailureBanner";
 export function useQueryFailureSignal() {
   const queryClient = useQueryClient();
   const [failureCount, setFailureCount] = useState(0);
+  const [failures, setFailures] = useState<QueryFailureItem[]>([]);
   const [failingSinceMs, setFailingSinceMs] = useState(0);
   const [dismissedAtCount, setDismissedAtCount] = useState(0);
   const [now, setNow] = useState(() => Date.now());
@@ -22,13 +23,15 @@ export function useQueryFailureSignal() {
   useEffect(() => {
     const cache = queryClient.getQueryCache();
     const recount = () => {
-      const count = cache.getAll().filter((query) => (
+      const failing = cache.getAll().filter((query) => (
         query.state.status === "error" && query.getObserversCount() > 0
-      )).length;
+      ));
+      const count = failing.length;
       if (count <= 0) {
         sinceRef.current = 0;
         setFailingSinceMs(0);
         setFailureCount(0);
+        setFailures([]);
         // 恢复之后把「关过」也清掉：下一次是新的一批失败，该说还得说。
         setDismissedAtCount(0);
         return;
@@ -38,6 +41,10 @@ export function useQueryFailureSignal() {
         setFailingSinceMs(sinceRef.current);
       }
       setFailureCount(count);
+      setFailures(failing.map((query) => ({
+        path: queryKeyPath(query.queryKey),
+        message: String((query.state.error as { message?: unknown } | null)?.message ?? ""),
+      })));
     };
     recount();
     /*
@@ -84,6 +91,7 @@ export function useQueryFailureSignal() {
   return {
     visible,
     failureCount,
+    failures,
     dismiss: () => setDismissedAtCount(failureCount),
     retry: () => {
       void queryClient.refetchQueries({ type: "active", stale: false });

@@ -41,3 +41,32 @@ export function queryFailureBannerText(failureCount: number): string {
     ? "有 1 项数据没读到，这一页显示的可能不全。"
     : `有 ${count} 项数据没读到，这一页显示的可能不全。`;
 }
+
+export type QueryFailureItem = {
+  /** tRPC 路径（tunnels.listPage 这种）；非 tRPC 的查询给键的字符串形式 */
+  path: string;
+  message: string;
+};
+
+/**
+ * 横幅第二行：到底是哪几项没读到、报的什么错。
+ *
+ * 原来只写「有 1 项数据没读到」，用户在 App 里一直看到它却说不出是哪一项，
+ * 我们这边也没法查。路径和错误信息直接写出来，截图就能定位。
+ */
+export function queryFailureDetailText(items: QueryFailureItem[]): string {
+  const paths = Array.from(new Set(items.map((item) => item.path).filter(Boolean)));
+  if (paths.length === 0) return "";
+  const message = items.map((item) => String(item.message || "").trim()).find(Boolean) || "";
+  const shortMessage = message.length > 120 ? `${message.slice(0, 120)}…` : message;
+  return `没读到：${paths.join("、")}${shortMessage ? `（${shortMessage}）` : ""}`;
+}
+
+/** 从 react-query 的 queryKey 里取出 tRPC 路径：[["tunnels","listPage"], {...}] → tunnels.listPage */
+export function queryKeyPath(queryKey: unknown): string {
+  if (!Array.isArray(queryKey) || queryKey.length === 0) return "";
+  const head = queryKey[0];
+  if (Array.isArray(head)) return head.map((part) => String(part)).join(".");
+  if (typeof head === "string") return head;
+  try { return JSON.stringify(head); } catch { return ""; }
+}
