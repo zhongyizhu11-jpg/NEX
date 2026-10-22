@@ -546,6 +546,18 @@ export default function ClientSubscriptionsPage() {
   }, [qrTarget]);
 
   const nodes = nodesQuery.data ?? [];
+  /**
+   * 预览里直连条目的开关写的是节点模板的「直连也放进订阅」（includeDirect）。
+   * 只有自己的节点能改；被别的节点当前置代理引用的，订阅里必须出现，不给关。
+   */
+  const ownNodeById = useMemo(
+    () => new Map((nodes as any[]).filter((node) => !node.sharedFrom).map((node) => [Number(node.id), node])),
+    [nodes],
+  );
+  const frontReferencedNodeIds = useMemo(
+    () => new Set((nodes as any[]).map((node) => Number(node.frontProxyId || 0)).filter((id) => id > 0)),
+    [nodes],
+  );
   /** 一个节点都没有的时候，订阅链接那张卡要改口告诉他先去加节点。 */
   const nodeCount = (nodes as any[]).length;
   const tokens = tokensQuery.data ?? [];
@@ -771,6 +783,7 @@ export default function ClientSubscriptionsPage() {
         <Switch aria-label={`${node.name} 启用`}
           className="shrink-0 scale-90"
           checked={!!node.isEnabled}
+          title="停用后它的直连和经它中转的线路都不进订阅；只想藏直连，去「预览订阅」里关那一条"
           onCheckedChange={(checked) => updateNode.mutate({ id: node.id, isEnabled: checked })}
         />
       ),
@@ -1648,15 +1661,31 @@ export default function ClientSubscriptionsPage() {
                           >
                             <Pencil className="h-3.5 w-3.5" />
                           </Button>
-                          {/* 直连条目的显隐在节点模板上，这里不给开关，免得点了没反应。 */}
-                          {!direct && (
+                          {/*
+                            中转条目的开关是这条转发的「进不进订阅」；直连条目的开关是节点模板的
+                            「直连也放进订阅」—— 关掉只藏直连，经它中转的线路照常在。
+                            分享来的节点改不了；被当前置代理引用的必须在订阅里，开关锁住。
+                          */}
+                          {!direct ? (
                             <Switch
+                              aria-label={`${node.name} 进订阅`}
                               className="scale-90"
                               checked
                               title="关掉只是不进订阅，转发照常运行"
                               onCheckedChange={() => setRuleVisible.mutate({ ruleId: node.ruleId, visible: false })}
                             />
-                          )}
+                          ) : ownNodeById.has(Number(node.templateId)) ? (
+                            <Switch
+                              aria-label={`${node.name} 直连放进订阅`}
+                              className="scale-90"
+                              checked
+                              disabled={frontReferencedNodeIds.has(Number(node.templateId)) || updateNode.isPending}
+                              title={frontReferencedNodeIds.has(Number(node.templateId))
+                                ? "它是别的节点的前置代理，订阅里必须有它"
+                                : "关掉只藏这条直连，经它中转的线路照常在订阅里"}
+                              onCheckedChange={() => updateNode.mutate({ id: Number(node.templateId), includeDirect: false })}
+                            />
+                          ) : null}
                         </div>
                       </div>
                       );
@@ -1698,7 +1727,7 @@ export default function ClientSubscriptionsPage() {
                     <SectionLabel count={unusedNodes.length}>这些节点还没进订阅</SectionLabel>
                     <p className="text-xs leading-relaxed text-muted-foreground">
                       它们没开直连，也没有任何转发指向它们 —— 客户端里看不到。
-                      给它建一条转发（目标填它的地址端口，会自动认出来），或者在节点上打开「直连也放进订阅」。
+                      给它建一条转发（目标填它的地址端口，会自动认出来），或者打开右边的开关让直连进订阅。
                     </p>
                     {unusedNodes.map((item: any) => (
                       <div
@@ -1708,6 +1737,16 @@ export default function ClientSubscriptionsPage() {
                         <Plug className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                         <span className="min-w-0 flex-1 truncate text-sm">{item.nodeName}</span>
                         <span className="shrink-0 truncate font-mono text-[11px] text-muted-foreground">{item.nodeText}</span>
+                        {ownNodeById.has(Number(item.nodeId)) ? (
+                          <Switch
+                            aria-label={`${item.nodeName} 直连放进订阅`}
+                            className="shrink-0 scale-90"
+                            checked={false}
+                            disabled={updateNode.isPending}
+                            title="打开后订阅里多一条它自己的地址"
+                            onCheckedChange={() => updateNode.mutate({ id: Number(item.nodeId), includeDirect: true })}
+                          />
+                        ) : null}
                       </div>
                     ))}
                   </div>
@@ -1980,10 +2019,10 @@ export default function ClientSubscriptionsPage() {
               </p>
             </div>
             <FormField className="space-y-2">
-              <Label>加进订阅</Label>
+              <Label>直连也放进订阅</Label>
               <div className="flex items-start justify-between gap-3 rounded-lg border p-3">
                 <p className="min-w-0 text-xs text-muted-foreground">
-                  订阅里额外给出这个节点自己的地址。
+                  订阅里额外给出这个节点自己的地址；关掉只藏直连，经它中转的线路照常在。
                   {nodeIncludeDirect ? (
                     <span className="mt-1 block text-[var(--fx-warn-text)]">
                       该节点 IP 会出现在每条订阅地址里。
