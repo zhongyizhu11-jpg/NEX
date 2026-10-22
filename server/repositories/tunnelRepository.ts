@@ -33,6 +33,7 @@ import { pageResult, pageWindowForTotal, type PageRequest } from "../../shared/p
 import { normalizeExitGroupStrategy } from "../../shared/exitStrategy";
 import { recordConfigAuditEvent, shouldAuditConfigPatch } from "../configAudit";
 import { appendPanelLog } from "../_core/panelLogger";
+import { invalidateProxySubCacheAll } from "../proxySubCache";
 import {
   planExitGroupTunnelEndpoints,
   type ExitGroupTunnelMember,
@@ -492,6 +493,8 @@ export async function updateTunnel(id: number, data: Partial<InsertTunnel>) {
   const audit = shouldAuditConfigPatch(data as any);
   const before = audit ? await getTunnelById(id).catch(() => undefined) : undefined;
   await db.update(tunnels).set({ ...data, updatedAt: nowDate() }).where(eq(tunnels.id, id));
+  // 隧道上的规则按隧道当前入口出订阅：入口一换，缓存里的旧地址要立刻作废。隧道可能被多个用户的规则共用，整体清。
+  invalidateProxySubCacheAll();
   if (audit && before) {
     const after = await getTunnelById(id).catch(() => undefined);
     await recordConfigAuditEvent({ resourceType: "tunnel", resourceId: id, hostId: Number((after as any)?.entryHostId || (before as any).entryHostId || 0), action: "update", before, after });
@@ -644,6 +647,7 @@ export async function deleteTunnel(id: number) {
     protocolBlockReason: TUNNEL_DELETED_RULE_BLOCK_REASON,
     updatedAt: nowDate(),
   } as any).where(eq(forwardRules.tunnelId, id));
+  invalidateProxySubCacheAll();
   await db.delete(forwardRuleTunnelExits).where(eq(forwardRuleTunnelExits.tunnelId, id));
   await db.delete(tunnelExitNodes).where(eq(tunnelExitNodes.tunnelId, id));
   await db.delete(tunnelHops).where(eq(tunnelHops.tunnelId, id));

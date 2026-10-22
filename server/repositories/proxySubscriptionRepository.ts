@@ -1,6 +1,7 @@
 import { and, asc, eq, gt, inArray, sql } from "drizzle-orm";
 
 import {
+  forwardGroupMembers,
   forwardRules,
   hosts,
   proxyInbounds,
@@ -8,6 +9,7 @@ import {
   proxyNodeShares,
   proxySubTokens,
   subscriptionPlanProxyNodes,
+  tunnels,
   type InsertProxyNode,
   type InsertProxySubToken,
 } from "../../drizzle/schema";
@@ -1059,6 +1061,62 @@ export async function recordProxySubTokenFailure(
  * 主机不按 userId 过滤：转发可以建在共享主机上，那台主机未必属于这个用户，
  * 但入口地址仍然是它的。规则本身已按 userId 限定，不会越权。
  */
+
+/**
+ * 把每条转发的 hostId 换成**此刻真正的入口机器**。
+ *
+ * 规则行上的 hostId 是建规则时写下的入口。之后在链路里把入口换成另一台机器，
+ * 运行、列表、诊断都按隧道当前的 entryHostId 走（forwardRuleEntryHostSql 同一个口径：
+ * 转发组第一个启用的成员 → 隧道入口 → 规则自己的主机），规则行却没人改。订阅原来
+ * 只读规则行，于是客户端拿到的还是老机器的地址和名字，换完链路节点全部超时，
+ * 要把每条转发重新保存一遍才好。这里按同一口径算一遍，订阅就跟着链路走。
+ */
+async function applyEffectiveEntryHosts(db: Awaited<ReturnType<typeof getDb>>, rules: any[]) {
+  if (!db || rules.length === 0) return;
+  const groupIds = Array.from(new Set(rules.map((rule) => Number(rule.forwardGroupId || 0)).filter((id) => id > 0)));
+  const entryByGroup = new Map<number, { hostId: number; tunnelId: number }>();
+  if (groupIds.length > 0) {
+    const members = await db
+      .select({
+        groupId: forwardGroupMembers.groupId,
+        hostId: forwardGroupMembers.hostId,
+        tunnelId: forwardGroupMembers.tunnelId,
+      })
+      .from(forwardGroupMembers)
+      .where(and(inArray(forwardGroupMembers.groupId, groupIds), eq(forwardGroupMembers.isEnabled, true)))
+      .orderBy(asc(forwardGroupMembers.priority), asc(forwardGroupMembers.id));
+    for (const member of members as any[]) {
+      const groupId = Number(member.groupId);
+      const hostId = Number(member.hostId || 0);
+      const tunnelId = Number(member.tunnelId || 0);
+      if (entryByGroup.has(groupId) || (hostId <= 0 && tunnelId <= 0)) continue;
+      entryByGroup.set(groupId, { hostId, tunnelId });
+    }
+  }
+  const tunnelIds = Array.from(new Set([
+    ...rules.map((rule) => Number(rule.tunnelId || 0)),
+    ...Array.from(entryByGroup.values()).map((entry) => entry.tunnelId),
+  ].filter((id) => id > 0)));
+  const entryHostByTunnel = new Map<number, number>();
+  if (tunnelIds.length > 0) {
+    const tunnelRows = await db
+      .select({ id: tunnels.id, entryHostId: tunnels.entryHostId })
+      .from(tunnels)
+      .where(inArray(tunnels.id, tunnelIds));
+    for (const row of tunnelRows as any[]) entryHostByTunnel.set(Number(row.id), Number(row.entryHostId || 0));
+  }
+  for (const rule of rules) {
+    const groupEntry = entryByGroup.get(Number(rule.forwardGroupId || 0));
+    let effective = 0;
+    if (groupEntry) {
+      effective = groupEntry.hostId > 0 ? groupEntry.hostId : entryHostByTunnel.get(groupEntry.tunnelId) || 0;
+    } else if (Number(rule.tunnelId || 0) > 0) {
+      effective = entryHostByTunnel.get(Number(rule.tunnelId)) || 0;
+    }
+    if (effective > 0) rule.hostId = effective;
+  }
+}
+
 /**
  * 组装订阅要的两样东西：算好的 plan，和它用到的那份节点模板。
  *
@@ -1099,10 +1157,14 @@ export async function buildProxySubscriptionContextForUser(userId: number, optio
       forwardGroupRuleId: forwardRules.forwardGroupRuleId,
       isForwardGroupTemplate: forwardRules.isForwardGroupTemplate,
       routeParentRuleId: forwardRules.routeParentRuleId,
+      // 入口机器以隧道 / 转发组当前的为准，见 applyEffectiveEntryHosts。
+      tunnelId: forwardRules.tunnelId,
+      forwardGroupId: forwardRules.forwardGroupId,
     })
     .from(forwardRules)
     .where(and(eq(forwardRules.userId, userId), eq(forwardRules.pendingDelete, false)))
     .orderBy(asc(forwardRules.sortOrder), asc(forwardRules.id));
+  await applyEffectiveEntryHosts(db, rules as any[]);
 
   const templates = await getProxyNodesForSubscription(userId) as any[];
 
