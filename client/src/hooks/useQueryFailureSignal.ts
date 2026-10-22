@@ -1,7 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { queryKeyPath, shouldShowQueryFailureBanner, type QueryFailureItem } from "@/lib/queryFailureBanner";
+import { NO_QUERY_FAILURES, nextQueryFailures, queryKeyPath, shouldShowQueryFailureBanner, type QueryFailureItem } from "@/lib/queryFailureBanner";
 
 /**
  * 这一页现在有几项数据没读到。
@@ -14,7 +14,7 @@ import { queryKeyPath, shouldShowQueryFailureBanner, type QueryFailureItem } fro
 export function useQueryFailureSignal() {
   const queryClient = useQueryClient();
   const [failureCount, setFailureCount] = useState(0);
-  const [failures, setFailures] = useState<QueryFailureItem[]>([]);
+  const [failures, setFailures] = useState<readonly QueryFailureItem[]>(NO_QUERY_FAILURES);
   const [failingSinceMs, setFailingSinceMs] = useState(0);
   const [dismissedAtCount, setDismissedAtCount] = useState(0);
   const [now, setNow] = useState(() => Date.now());
@@ -31,7 +31,9 @@ export function useQueryFailureSignal() {
         sinceRef.current = 0;
         setFailingSinceMs(0);
         setFailureCount(0);
-        setFailures([]);
+        // 引用不变 React 就不重渲染；每次 set 一个新的 [] 会让布局在每次缓存通知后都重渲染，
+        // 渲染又触发缓存通知，几十个来回就撞上更新深度上限（2.3.473 白屏）。
+        setFailures((previous) => nextQueryFailures(previous, NO_QUERY_FAILURES));
         // 恢复之后把「关过」也清掉：下一次是新的一批失败，该说还得说。
         setDismissedAtCount(0);
         return;
@@ -41,10 +43,11 @@ export function useQueryFailureSignal() {
         setFailingSinceMs(sinceRef.current);
       }
       setFailureCount(count);
-      setFailures(failing.map((query) => ({
+      const next = failing.map((query) => ({
         path: queryKeyPath(query.queryKey),
         message: String((query.state.error as { message?: unknown } | null)?.message ?? ""),
-      })));
+      }));
+      setFailures((previous) => nextQueryFailures(previous, next));
     };
     recount();
     /*

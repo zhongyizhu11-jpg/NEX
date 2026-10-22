@@ -54,7 +54,7 @@ export type QueryFailureItem = {
  * 原来只写「有 1 项数据没读到」，用户在 App 里一直看到它却说不出是哪一项，
  * 我们这边也没法查。路径和错误信息直接写出来，截图就能定位。
  */
-export function queryFailureDetailText(items: QueryFailureItem[]): string {
+export function queryFailureDetailText(items: readonly QueryFailureItem[]): string {
   const paths = Array.from(new Set(items.map((item) => item.path).filter(Boolean)));
   if (paths.length === 0) return "";
   const message = items.map((item) => String(item.message || "").trim()).find(Boolean) || "";
@@ -69,4 +69,31 @@ export function queryKeyPath(queryKey: unknown): string {
   if (Array.isArray(head)) return head.map((part) => String(part)).join(".");
   if (typeof head === "string") return head;
   try { return JSON.stringify(head); } catch { return ""; }
+}
+
+/** 稳定的空列表：没有失败时每次都返回同一个引用，setState 才会判定「没变」而不触发重渲染。 */
+export const NO_QUERY_FAILURES: readonly QueryFailureItem[] = Object.freeze([]);
+
+/**
+ * 两批失败是不是同一回事（路径和错误逐项相同）。
+ *
+ * useQueryFailureSignal 每收到一次查询缓存通知就重新数一遍。原来数完直接
+ * setFailures(新数组)，内容没变引用也变了，React 当成新状态重渲染整个布局；
+ * 布局一渲染，页面里的 useQuery 又挂上 / 卸下观察者，缓存再发通知，这里再数再
+ * set …… 几十个来回就撞上 React 的更新深度上限（2.3.473 一打开面板就白屏）。
+ * 内容相同就沿用旧引用，这条链在这里断掉。
+ */
+export function sameQueryFailures(left: readonly QueryFailureItem[], right: readonly QueryFailureItem[]): boolean {
+  if (left === right) return true;
+  if (left.length !== right.length) return false;
+  for (let i = 0; i < left.length; i += 1) {
+    if (left[i].path !== right[i].path || left[i].message !== right[i].message) return false;
+  }
+  return true;
+}
+
+/** 给 setState 用：内容没变就返回上一次的引用（React 据此跳过重渲染），变了才换新的。 */
+export function nextQueryFailures(previous: readonly QueryFailureItem[], next: readonly QueryFailureItem[]): readonly QueryFailureItem[] {
+  if (next.length === 0) return previous.length === 0 ? previous : NO_QUERY_FAILURES;
+  return sameQueryFailures(previous, next) ? previous : next;
 }

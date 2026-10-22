@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { queryFailureBannerText, queryFailureDetailText, queryKeyPath, shouldShowQueryFailureBanner } from "./queryFailureBanner";
+import { NO_QUERY_FAILURES, nextQueryFailures, queryFailureBannerText, queryFailureDetailText, queryKeyPath, sameQueryFailures, shouldShowQueryFailureBanner } from "./queryFailureBanner";
 
 const base = { failureCount: 0, failingSinceMs: 0, dismissedAtCount: 0, now: 100_000 };
 
@@ -52,4 +52,21 @@ test("第二行写清是哪几项、报的什么错", () => {
   // 同一路径不同入参只写一次；太长的错误截断
   const long = queryFailureDetailText([{ path: "a.b", message: "x".repeat(200) }, { path: "a.b", message: "y" }]);
   assert.match(long, /^没读到：a\.b（x{120}…）$/);
+});
+
+test("失败列表内容没变就沿用旧引用，不然布局每次缓存通知都重渲染（2.3.473 白屏）", () => {
+  const a = [{ path: "tunnels.listPage", message: "Failed to fetch" }];
+  const same = [{ path: "tunnels.listPage", message: "Failed to fetch" }];
+  const different = [{ path: "tunnels.listPage", message: "500" }];
+  assert.equal(sameQueryFailures(a, same), true);
+  assert.equal(sameQueryFailures(a, different), false);
+  assert.equal(sameQueryFailures(a, []), false);
+  // 内容相同 → 还是原来的那个数组（React 据此跳过重渲染）；内容变了 → 新数组
+  assert.equal(nextQueryFailures(a, same), a);
+  assert.equal(nextQueryFailures(a, different), different);
+  // 没有失败时永远是同一个空列表：空 → 空 不换引用，有 → 空 换成共享的空列表
+  assert.equal(nextQueryFailures(NO_QUERY_FAILURES, []), NO_QUERY_FAILURES);
+  assert.equal(nextQueryFailures(a, []), NO_QUERY_FAILURES);
+  const empty = nextQueryFailures(NO_QUERY_FAILURES, []);
+  assert.equal(nextQueryFailures(empty, []), empty);
 });
