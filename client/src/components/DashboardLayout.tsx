@@ -155,6 +155,8 @@ const adminMenuItems: SidebarNavItem[] = [
   { icon: WalletCards, label: "账单与兑换", path: "/billing", menuKey: "billing" },
   { icon: Package, label: "套餐管理", path: "/plans", menuKey: "plans" },
   { icon: Users, label: "用户管理", path: "/users", menuKey: "users" },
+  // 订阅运营：全站令牌、拉取统计、模板、设置。用户自己的订阅在主菜单的「订阅管理」。
+  { icon: Rss, label: "订阅运营", path: "/admin/subscriptions" },
   { icon: LifeBuoy, label: "工单管理", path: ADMIN_TICKETS_PATH, menuKey: "tickets" },
   lookingGlassMenuItem,
   { icon: Settings, label: "系统设置", path: "/settings", menuKey: "settings" },

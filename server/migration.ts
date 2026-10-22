@@ -764,10 +764,16 @@ const IMPORT_TABLE_ORDER = [
   // 先有入站和入站用户才映射得出来。
   "proxy_inbounds",
   "proxy_inbound_users",
+  // 外部订阅排在 proxy_nodes 前面：节点的 sourceId 指向它。模板没有依赖，随便放。
+  "proxy_sub_templates",
+  "proxy_sub_sources",
   "proxy_nodes",
   // 排在 proxy_nodes 之后：分享记录同时指向节点与用户，两边的 id 都得先映射好。
   "proxy_node_shares",
   "proxy_sub_tokens",
+  // 设备和拉取日志指向令牌与用户。
+  "proxy_sub_devices",
+  "proxy_sub_access_logs",
   // 共享 TLS 入站排在规则前面：规则的 tlsInboundId 指向它；它的 defaultRuleId 指回规则，第二遍再补。
   "host_tls_inbounds",
   "forward_rules",
@@ -1345,6 +1351,8 @@ async function prepareImportRow(table: string, source: Record<string, any>, maps
       // 这一列是 notNull default 0，而 mapOptionalId 对「没有」返回的是 null。
       row.inboundId = mapOptionalId(maps, "proxy_inbounds", source.inboundId) || 0;
       row.inboundUserId = mapOptionalId(maps, "proxy_inbound_users", source.inboundUserId) || 0;
+      // 外部订阅同步来的节点跟着来源走；来源没导入的话就当手工节点留着。
+      row.sourceId = mapOptionalId(maps, "proxy_sub_sources", source.sourceId) || 0;
       // 前置代理指向同表另一行，这一遍它可能还没导入；先退回「不经由」（列是 notNull default 0），
       // 第二遍再按映射补上。
       row.frontProxyId = 0;
@@ -1358,8 +1366,26 @@ async function prepareImportRow(table: string, source: Record<string, any>, maps
 
     case "proxy_sub_tokens":
       row.userId = mapRequiredId(maps, "users", source.userId);
+      row.templateId = mapOptionalId(maps, "proxy_sub_templates", source.templateId) || 0;
       // 令牌全局唯一，冲突时按令牌值找已存在的行而不是插入重复。
       return { row, existingWhere: { token: row.token } };
+
+    case "proxy_sub_templates":
+      return { row };
+
+    case "proxy_sub_sources":
+      row.userId = mapRequiredId(maps, "users", source.userId);
+      return { row };
+
+    case "proxy_sub_devices":
+      row.tokenId = mapRequiredId(maps, "proxy_sub_tokens", source.tokenId);
+      row.userId = mapRequiredId(maps, "users", source.userId);
+      return { row, existingWhere: { tokenId: row.tokenId, hwid: row.hwid } };
+
+    case "proxy_sub_access_logs":
+      row.tokenId = mapRequiredId(maps, "proxy_sub_tokens", source.tokenId);
+      row.userId = mapRequiredId(maps, "users", source.userId);
+      return { row };
 
     case "forward_rule_tunnel_exits":
       row.ruleId = mapRequiredId(maps, "forward_rules", source.ruleId);

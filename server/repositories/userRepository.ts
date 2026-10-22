@@ -1,6 +1,7 @@
 import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import { InsertUser, users, forwardRules, forwardGroups, hosts, tunnels, trafficBillingUsage, userSubscriptions } from "../../drizzle/schema";
 import { executeRaw, getDatabaseKind, getDb, insertAndGetId, nowDate, queryRaw, quoteDbIdentifier, rawAffectedRows, withDatabaseTransaction } from "../dbRuntime";
+import { invalidateProxySubCacheForUser } from "../proxySubCache";
 import { createUnusablePasswordHash, hashPassword, verifyPassword, verifyPasswordAgainstDummy } from "../password";
 import { getSessionKindField, type SessionKind } from "../session";
 import { revokeUserAuthSessions } from "./sessionRepository";
@@ -853,6 +854,7 @@ export async function updateUserTrafficSettings(userId: number, data: {
   maxRules?: number;
   maxProxyInbounds?: number;
   maxProxySubTokens?: number;
+  maxProxyDevices?: number;
   maxPorts?: number;
   maxConnections?: number;
   maxIPs?: number;
@@ -860,6 +862,7 @@ export async function updateUserTrafficSettings(userId: number, data: {
   manualMaxRules?: number;
   manualMaxProxyInbounds?: number;
   manualMaxProxySubTokens?: number;
+  manualMaxProxyDevices?: number;
   manualMaxPorts?: number;
   manualMaxConnections?: number;
   manualMaxIPs?: number;
@@ -989,6 +992,7 @@ export async function setUserForwardAccess(userId: number, enabled: boolean, rea
       eq(forwardRules.isEnabled, true),
       eq(forwardRules.pendingDelete, false),
     ));
+    invalidateProxySubCacheForUser(userId);
     if (accessChanged) recordUserAccessPausedEvent(userId, reason); // 事件时间线：流量用完 / 到期（只记这两种自动暂停）
     return accessChanged || stoppedRules > 0;
   }
@@ -1022,6 +1026,7 @@ export async function setUserAccountEnabled(userId: number, enabled: boolean) {
         eq(forwardRules.isEnabled, true),
         eq(forwardRules.pendingDelete, false),
       ));
+      invalidateProxySubCacheForUser(userId);
     }
   });
 }
@@ -1164,6 +1169,7 @@ export async function disableAllUserRules(userId: number, options: { manual?: bo
     eq(forwardRules.isEnabled, true),
     eq(forwardRules.pendingDelete, false),
   ));
+  invalidateProxySubCacheForUser(userId);
 }
 
 /** 获取用户流量汇总信息（用于仪表盘展示） */

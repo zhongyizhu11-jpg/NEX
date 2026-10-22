@@ -92,6 +92,16 @@ const SINGBOX_CORE_VIA_LINKS: ClientFacts = {
   transports: { tcp: Y, ws: Y, grpc: Y, http: U, httpupgrade: U },
 };
 
+/** Xray 内核、走通用 Base64 / Xray JSON 订阅的客户端（Happ / v2RayTun / Streisand）。 */
+const XRAY_CORE_VIA_LINKS: ClientFacts = {
+  protocols: { ...ALL_PROTOCOLS_YES, hysteria2: U, tuic: U, anytls: U, snell: N },
+  reality: Y,
+  vision: Y,
+  ss2022: Y,
+  snellVersions: [],
+  transports: { tcp: Y, ws: Y, grpc: Y, httpupgrade: Y, http: U },
+};
+
 export const PROXY_CLIENT_FAMILIES: readonly ProxyClientFamily[] = [
   {
     id: "mihomo",
@@ -254,6 +264,36 @@ export const PROXY_CLIENT_FAMILIES: readonly ProxyClientFamily[] = [
     format: "base64",
     importTargets: ["nekobox", "nekoray"],
     facts: SINGBOX_CORE_VIA_LINKS,
+  },
+  {
+    id: "karing",
+    label: "Karing",
+    format: "singbox",
+    importTargets: ["karing"],
+    // sing-box 内核，吃 sing-box 配置；AnyTLS 跟内核版本走，没核实。
+    facts: { ...SINGBOX_CORE_VIA_LINKS, protocols: { ...ALL_PROTOCOLS_YES, anytls: U, snell: U }, snellVersions: null, transports: { tcp: Y, ws: Y, grpc: Y, http: Y, httpupgrade: Y } },
+  },
+  {
+    id: "happ",
+    label: "Happ",
+    format: "base64",
+    importTargets: ["happ"],
+    // Xray 内核（和 v2rayN 一样），新版吃 Xray JSON；QUIC 系协议靠另挂内核，没核实。
+    facts: XRAY_CORE_VIA_LINKS,
+  },
+  {
+    id: "v2raytun",
+    label: "v2RayTun",
+    format: "base64",
+    importTargets: ["v2raytun"],
+    facts: XRAY_CORE_VIA_LINKS,
+  },
+  {
+    id: "streisand",
+    label: "Streisand",
+    format: "base64",
+    importTargets: ["streisand"],
+    facts: XRAY_CORE_VIA_LINKS,
   },
 ];
 

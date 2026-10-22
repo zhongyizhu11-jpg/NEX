@@ -30,6 +30,8 @@ const EPHEMERAL_SETTING_PREFIXES = [
   "emailReminder:",
   "telegramReminder:",
   "autoRenew:",
+  // 订阅拉取事件的通知去重（server/proxySubNotify.ts）。
+  "proxySubNotify:",
 ] as const;
 
 /**

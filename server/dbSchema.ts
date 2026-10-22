@@ -48,6 +48,10 @@ export const MIGRATION_TABLES = [
   "rule_sni_names",
   "proxy_sub_tokens",
   "proxy_node_shares",
+  "proxy_sub_access_logs",
+  "proxy_sub_devices",
+  "proxy_sub_templates",
+  "proxy_sub_sources",
   "host_metrics",
   "host_traffic_counters",
   "user_traffic_counters",
@@ -209,6 +213,9 @@ const tables: TableDef[] = [
       c("manualMaxProxyInbounds", "int", { notNull: true, default: 0 }), c("manualMaxProxySubTokens", "int", { notNull: true, default: 0 }),
       c("manualMaxPorts", "int", { notNull: true, default: 0 }), c("manualMaxConnections", "int", { notNull: true, default: 0 }),
       c("manualMaxIPs", "int", { notNull: true, default: 0 }), c("manualAllowForwardXTunnel", "bool", { notNull: true, default: false }), c("manualAllowProxySubscription", "bool", { notNull: true, default: false }),
+      // 订阅设备数上限、指定模板、按用户的自定义规则（见 drizzle/schema.ts）。
+      c("maxProxyDevices", "int", { notNull: true, default: 0 }), c("manualMaxProxyDevices", "int", { notNull: true, default: 0 }),
+      c("proxySubTemplateId", "int", { notNull: true, default: 0 }), c("proxySubCustomRules", "longtext"),
       c("manualGostRateLimitIn", "int", { notNull: true, default: 0 }), c("manualGostRateLimitOut", "int", { notNull: true, default: 0 }),
       c("forwardBurstMbps", "int", { notNull: true, default: 0 }), c("forwardBurstSeconds", "int", { notNull: true, default: 0 }),
       c("manualTrafficLimit", "bigint", { notNull: true, default: 0 }), c("manualExpiresAt", "epoch"),
@@ -440,6 +447,8 @@ const tables: TableDef[] = [
       c("trafficResetDay", "int", { notNull: true, default: 1 }),
       c("lastTrafficReset", "epoch"),
       c("isEnabled", "bool", { notNull: true, default: true }), c("sortOrder", "int", { notNull: true, default: 0 }),
+      // 外部订阅同步来的节点：来源与身份；手工填的地区。
+      c("sourceId", "int", { notNull: true, default: 0 }), c("sourceKey", "text"), c("countryCode", "varchar", { length: 8 }),
       c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" }),
     ],
     /*
@@ -447,7 +456,7 @@ const tables: TableDef[] = [
       删除入站、主机换地址后重算、界面上列出某个端口派生了哪几条。原来没有索引，
       这些全都是整表扫描，而一个商家几百上千行节点时，删一个入站要扫一遍全表。
     */
-    indexes: [["userId"], ["userId", "sortOrder"], ["trafficAutoReset"], ["inboundId"]],
+    indexes: [["userId"], ["userId", "sortOrder"], ["trafficAutoReset"], ["inboundId"], ["sourceId"]],
   },
   {
     // 落地入站：面板在自己管的主机上开出来的节点。Reality 私钥只存在这张表。
@@ -544,10 +553,64 @@ const tables: TableDef[] = [
       c("lastAccessIp", "text"), c("lastAccessUserAgent", "text"), c("expiresAt", "epoch"),
       // 被拒的那一次：光记成功回答不了「客户说更新不了」。
       c("lastFailureAt", "epoch"), c("lastFailureReason", "varchar", { length: 32 }),
+      // 短链、作用域、外观选项、备注、设备数上限、模板、最近客户端（见 drizzle/schema.ts）。
+      c("alias", "varchar", { length: 32 }), c("scopeJson", "longtext"), c("optionsJson", "longtext"), c("remark", "text"),
+      c("maxDevices", "int", { notNull: true, default: 0 }), c("templateId", "int", { notNull: true, default: 0 }),
+      c("lastClientFamily", "varchar", { length: 32 }), c("lastClientVersion", "varchar", { length: 32 }),
       c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" }),
     ],
-    unique: [["token"]],
+    unique: [["token"], ["alias"]],
     indexes: [["userId"]],
+  },
+  {
+    // 订阅拉取日志：每次一行，按保留天数清理。
+    name: "proxy_sub_access_logs",
+    columns: [
+      c("id", "id"), c("tokenId", "int", { notNull: true }), c("userId", "int", { notNull: true }),
+      c("at", "epoch", { notNull: true, default: "now" }), c("ip", "text"), c("userAgent", "text"),
+      c("clientFamily", "varchar", { length: 32 }), c("clientVersion", "varchar", { length: 32 }),
+      c("format", "varchar", { length: 16 }), c("profile", "bool", { notNull: true, default: false }),
+      c("result", "varchar", { length: 32, notNull: true, default: "ok" }), c("hwid", "varchar", { length: 80 }),
+      c("bytes", "int", { notNull: true, default: 0 }),
+    ],
+    indexes: [["tokenId", "at"], ["userId", "at"], ["at"]],
+  },
+  {
+    // 订阅设备：(令牌, hwid) 唯一。
+    name: "proxy_sub_devices",
+    columns: [
+      c("id", "id"), c("tokenId", "int", { notNull: true }), c("userId", "int", { notNull: true }),
+      c("hwid", "varchar", { length: 80, notNull: true }), c("deviceOs", "varchar", { length: 64 }),
+      c("osVersion", "varchar", { length: 64 }), c("model", "varchar", { length: 120 }),
+      c("firstSeenAt", "epoch", { notNull: true, default: "now" }), c("lastSeenAt", "epoch", { notNull: true, default: "now" }),
+      c("lastIp", "text"), c("userAgent", "text"), c("createdAt", "epoch", { notNull: true, default: "now" }),
+    ],
+    unique: [["tokenId", "hwid"]],
+    indexes: [["userId"], ["tokenId", "lastSeenAt"]],
+  },
+  {
+    // 订阅模板：开头部分可能很长（MySQL 上要 LONGTEXT）。
+    name: "proxy_sub_templates",
+    columns: [
+      c("id", "id"), c("name", "text", { notNull: true }), c("target", "varchar", { length: 16, notNull: true }),
+      c("prelude", "longtext", { notNull: true, default: "" }), c("customGroupsJson", "longtext"),
+      c("isDefault", "bool", { notNull: true, default: false }),
+      c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" }),
+    ],
+    indexes: [["target"]],
+  },
+  {
+    // 外部订阅来源。
+    name: "proxy_sub_sources",
+    columns: [
+      c("id", "id"), c("userId", "int", { notNull: true }), c("name", "text", { notNull: true }), c("url", "text", { notNull: true }),
+      c("userAgent", "text"), c("intervalSec", "int", { notNull: true, default: 21600 }),
+      c("mode", "varchar", { length: 16, notNull: true, default: "import" }), c("isEnabled", "bool", { notNull: true, default: true }),
+      c("lastFetchAt", "epoch"), c("lastStatus", "varchar", { length: 16, notNull: true, default: "never" }), c("lastError", "text"),
+      c("upstreamUserinfo", "text"), c("nodeCount", "int", { notNull: true, default: 0 }), c("lastContentHash", "varchar", { length: 64 }),
+      c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" }),
+    ],
+    indexes: [["userId"], ["isEnabled", "lastFetchAt"]],
   },
   {
     // 节点分享：同一个节点出现在别人的订阅里，所有权不变。
@@ -771,7 +834,7 @@ const tables: TableDef[] = [
   { name: "user_forward_group_permissions", columns: [c("id", "id"), c("userId", "int", { notNull: true }), c("forwardGroupId", "int", { notNull: true }), c("createdAt", "epoch", { notNull: true, default: "now" })], unique: [["userId", "forwardGroupId"]], indexes: [["forwardGroupId"]] },
   { name: "system_settings", columns: [c("key", "varchar", { length: 191, notNull: true }), c("value", "longtext"), c("updatedAt", "epoch", { notNull: true, default: "now" })], unique: [["key"]] },
   { name: "payment_orders", columns: [c("id", "id"), c("outTradeNo", "text", { notNull: true }), c("userId", "int", { notNull: true }), c("provider", "varchar", { length: 32, notNull: true }), c("paymentType", "varchar", { length: 32, notNull: true }), c("status", "varchar", { length: 32, notNull: true, default: "pending" }), c("subject", "text", { notNull: true }), c("amountCents", "bigint", { notNull: true }), c("currency", "varchar", { length: 16, notNull: true, default: "CNY" }), c("tradeNo", "text"), c("payUrl", "text"), c("qrCode", "text"), c("orderType", "varchar", { length: 32, notNull: true, default: "balance" }), c("planId", "int"), c("planDurationDays", "int"), c("subscriptionId", "int"), c("discountCodeId", "int"), c("discountConsumed", "bool", { notNull: true, default: false }), c("discountAmountCents", "bigint", { notNull: true, default: 0 }), c("clientIp", "text"), c("rawNotify", "text"), c("expiresAt", "epoch"), c("paidAt", "epoch"), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], unique: [["outTradeNo"]], indexes: [["userId", "createdAt"], ["status", "createdAt"]] },
-  { name: "subscription_plans", columns: [c("id", "id"), c("name", "text", { notNull: true }), c("description", "text"), c("priceCents", "bigint", { notNull: true, default: 0 }), c("currency", "varchar", { length: 16, notNull: true, default: "CNY" }), c("durationDays", "int", { notNull: true, default: 30 }), c("portCount", "int", { notNull: true, default: 20 }), c("trafficLimit", "bigint", { notNull: true, default: 0 }), c("rateLimitMbps", "int", { notNull: true, default: 0 }), c("maxRules", "int", { notNull: true, default: 20 }), c("maxProxyInbounds", "int", { notNull: true, default: 0 }), c("maxProxySubTokens", "int", { notNull: true, default: 0 }), c("maxConnections", "int", { notNull: true, default: 2000 }), c("maxIPs", "int", { notNull: true, default: 10 }), c("allowProxySubscription", "bool", { notNull: true, default: false }), c("isActive", "bool", { notNull: true, default: true }), c("isStoreVisible", "bool", { notNull: true, default: true }), c("dedicatedProxyPort", "bool", { notNull: true, default: false }), c("sortOrder", "int", { notNull: true, default: 0 }), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" }), c("referralRateBps", "int", { notNull: true, default: 0 })] },
+  { name: "subscription_plans", columns: [c("id", "id"), c("name", "text", { notNull: true }), c("description", "text"), c("priceCents", "bigint", { notNull: true, default: 0 }), c("currency", "varchar", { length: 16, notNull: true, default: "CNY" }), c("durationDays", "int", { notNull: true, default: 30 }), c("portCount", "int", { notNull: true, default: 20 }), c("trafficLimit", "bigint", { notNull: true, default: 0 }), c("rateLimitMbps", "int", { notNull: true, default: 0 }), c("maxRules", "int", { notNull: true, default: 20 }), c("maxProxyInbounds", "int", { notNull: true, default: 0 }), c("maxProxySubTokens", "int", { notNull: true, default: 0 }), c("maxConnections", "int", { notNull: true, default: 2000 }), c("maxIPs", "int", { notNull: true, default: 10 }), c("allowProxySubscription", "bool", { notNull: true, default: false }), c("isActive", "bool", { notNull: true, default: true }), c("isStoreVisible", "bool", { notNull: true, default: true }), c("dedicatedProxyPort", "bool", { notNull: true, default: false }), c("sortOrder", "int", { notNull: true, default: 0 }), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" }), c("referralRateBps", "int", { notNull: true, default: 0 }), c("maxProxyDevices", "int", { notNull: true, default: 0 }), c("proxySubTemplateId", "int", { notNull: true, default: 0 }), c("allowExternalSubSources", "bool", { notNull: true, default: false }), c("showSubInfoNodes", "bool", { notNull: true, default: false })] },
   // 套餐的多周期定价：一个套餐挂一组「周期 → 价格」。空表示这个套餐只有它自己
   // 那一档（存量数据全是这样），所以升级不需要迁移任何东西。
   { name: "subscription_plan_prices", columns: [c("id", "id"), c("planId", "int", { notNull: true }), c("durationDays", "int", { notNull: true }), c("priceCents", "bigint", { notNull: true, default: 0 }), c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" })], unique: [["planId", "durationDays"]], indexes: [["planId"]] },

@@ -25,8 +25,10 @@ import { proxyInboundSupportsMultiUser } from "../../shared/proxyInbound";
 import { type ProxySubTokenFailureReason } from "../../shared/proxySubTokenStatus";
 import { getRuleEntryDomainRuntimeSettings } from "./ruleEntryDomainRepository";
 import { getSetting, setSetting } from "./settingsRepository";
-import { getUnreachableRuleIds } from "./metricsRepository";
+import { getTrafficSummaryByRule, getUnreachableRuleIds } from "./metricsRepository";
 import { signalRuleEntryDomainChanged } from "../ruleEntryDomainSignals";
+import { invalidateProxySubCacheForUser } from "../proxySubCache";
+import { buildProxySubPipelineDocument, type ProxySubPipelineDocument, type ProxySubPipelineInput } from "../../shared/proxySubscriptionPipeline";
 
 // ==================== 客户端订阅：节点模板 ====================
 
@@ -75,13 +77,35 @@ export async function getProxyNodeById(id: number) {
 export async function createProxyNode(data: InsertProxyNode) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  return insertAndGetId("proxy_nodes", data as any);
+  const id = await insertAndGetId("proxy_nodes", data as any);
+  invalidateProxySubCacheForUser(Number((data as any).userId || 0));
+  return id;
 }
 
 export async function updateProxyNode(id: number, data: Partial<InsertProxyNode>) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   await db.update(proxyNodes).set({ ...data, updatedAt: nowDate() } as any).where(eq(proxyNodes.id, id));
+  // 分享出去的节点也在别人的订阅里：主人改了，收件人的缓存同样作废。
+  const owner = await getProxyNodeById(id);
+  invalidateProxySubCacheForUser(Number((owner as any)?.userId || 0));
+  for (const recipient of (await getProxyNodeShareUserIds([Number(id)])).get(Number(id)) || []) invalidateProxySubCacheForUser(recipient);
+}
+
+/** 节点在面板里的顺序（订阅默认按它排）。只动自己的节点。 */
+export async function reorderProxyNodes(userId: number, orderedIds: readonly number[]) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const ids = orderedIds.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0);
+  const own = await db.select({ id: proxyNodes.id }).from(proxyNodes).where(eq(proxyNodes.userId, Number(userId)));
+  const ownIds = new Set((own as any[]).map((row) => Number(row.id)));
+  let position = 0;
+  for (const id of ids) {
+    if (!ownIds.has(id)) continue;
+    position += 1;
+    await db.update(proxyNodes).set({ sortOrder: position, updatedAt: nowDate() } as any).where(eq(proxyNodes.id, id));
+  }
+  invalidateProxySubCacheForUser(userId);
 }
 
 /**
@@ -113,7 +137,11 @@ export async function deleteProxyNode(id: number) {
    * 删的，节点这一路当初漏了。
    */
   await db.delete(subscriptionPlanProxyNodes).where(eq(subscriptionPlanProxyNodes.nodeId, id));
+  const owner = await getProxyNodeById(id);
+  const recipients = (await getProxyNodeShareUserIds([Number(id)])).get(Number(id)) || [];
   await db.delete(proxyNodes).where(eq(proxyNodes.id, id));
+  invalidateProxySubCacheForUser(Number((owner as any)?.userId || 0));
+  for (const recipient of recipients) invalidateProxySubCacheForUser(recipient);
 }
 
 /**
@@ -570,6 +598,7 @@ export async function reconcileProxyNodeSharesForUser(
   await db.delete(proxyNodeShares).where(eq(proxyNodeShares.userId, recipient));
   const values = Array.from(resolved.entries()).map(([nodeId, source]) => ({ nodeId, userId: recipient, source }));
   if (values.length > 0) await db.insert(proxyNodeShares).values(values as any);
+  invalidateProxySubCacheForUser(recipient);
   return { hostIds: Array.from(hostIds).filter((hostId) => hostId > 0), skipped, sharedOwnerCredential };
 }
 
@@ -681,10 +710,12 @@ export async function setProxyNodeShareUsers(
     .filter((value) => Number.isInteger(value) && value > 0 && value !== Number((node as any).userId));
 
   if (scope.kind === "node") {
+    const previous = (await getProxyNodeShareUserIds([id])).get(id) || [];
     await db.delete(proxyNodeShares).where(eq(proxyNodeShares.nodeId, id));
     if (wanted.length > 0) {
       await db.insert(proxyNodeShares).values(wanted.map((userId) => ({ nodeId: id, userId })) as any);
     }
+    for (const recipient of new Set([...previous, ...wanted])) invalidateProxySubCacheForUser(recipient);
     return { hostIds: [] };
   }
 
@@ -721,6 +752,7 @@ export async function setProxyNodeShareUsers(
    * 而不是主人这一份。老版本留下的记录也在这里被顺手纠正。
    */
   await db.delete(proxyNodeShares).where(eq(proxyNodeShares.nodeId, id));
+  for (const recipient of new Set([...current.keys(), ...target])) invalidateProxySubCacheForUser(recipient);
   return { hostIds: Array.from(hostIds).filter((hostId) => hostId > 0) };
 }
 
@@ -935,12 +967,28 @@ export async function updateProxySubToken(id: number, data: Partial<InsertProxyS
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   await db.update(proxySubTokens).set({ ...data, updatedAt: nowDate() } as any).where(eq(proxySubTokens.id, id));
+  const row = await getProxySubTokenById(id);
+  invalidateProxySubCacheForUser(Number((row as any)?.userId || 0));
+}
+
+/** 最近一次拉取认出来的客户端，令牌行上展示用。 */
+export async function updateProxySubTokenClient(id: number, family: string, version: string) {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .update(proxySubTokens)
+    .set({ lastClientFamily: String(family || "").slice(0, 32) || null, lastClientVersion: String(version || "").slice(0, 32) || null } as any)
+    .where(eq(proxySubTokens.id, id));
 }
 
 export async function deleteProxySubToken(id: number) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
+  const row = await getProxySubTokenById(id);
   await db.delete(proxySubTokens).where(eq(proxySubTokens.id, id));
+  const { clearProxySubDevices } = await import("./proxySubExtraRepository");
+  await clearProxySubDevices(id);
+  invalidateProxySubCacheForUser(Number((row as any)?.userId || 0));
 }
 
 /**
@@ -1019,7 +1067,7 @@ export async function recordProxySubTokenFailure(
  * 一次订阅拉取白跑三条。客户端十二小时刷一次不觉得，可有人把间隔调到几分钟、
  * 一个商家几百个租户时，白跑的就是几百倍。
  */
-async function buildProxySubscriptionContextForUser(userId: number): Promise<{
+export async function buildProxySubscriptionContextForUser(userId: number, options: { withLatency?: boolean } = {}): Promise<{
   plan: ProxySubscriptionPlan;
   templates: any[];
 }> {
@@ -1109,15 +1157,32 @@ async function buildProxySubscriptionContextForUser(userId: number): Promise<{
         lineBandwidthMbps: hosts.lineBandwidthMbps,
         rateLimitMbps: hosts.rateLimitMbps,
         egressMbps: hosts.egressMbps,
+        // 落地机器所在国家：节点地区（国旗、地区组）看它。
+        geoCountryCode: hosts.geoCountryCode,
       })
       .from(hosts)
       .where(inArray(hosts.id, hostIds))
     : [];
 
   const { activeSuffix } = await getRuleEntryDomainRuntimeSettings();
+  const boundRuleIds = rules.filter((rule: any) => Number(rule.proxyNodeId || 0) > 0).map((rule: any) => Number(rule.id));
   const unreachableRuleIds = await getProxySubHideUnreachable(userId)
-    ? await getUnreachableRuleIds(rules.filter((rule: any) => Number(rule.proxyNodeId || 0) > 0).map((rule: any) => Number(rule.id)))
+    ? await getUnreachableRuleIds(boundRuleIds)
     : undefined;
+  /**
+   * 「按延迟排序」要每条转发最近一次探测的延迟。只在令牌真选了这个排序时查 ——
+   * 它走的是流量汇总那条查询，比订阅本身的几条都重。
+   */
+  let latencyByRuleId: Map<number, number | null> | undefined;
+  if (options.withLatency && boundRuleIds.length > 0) {
+    latencyByRuleId = new Map();
+    const summary = await getTrafficSummaryByRule({ userId, ruleIds: boundRuleIds, includeLatency: true }).catch(() => []);
+    for (const row of summary as any[]) {
+      const ruleId = Number(row.ruleId);
+      const latency = row.latestLatencyIsTimeout || row.latestLatencyMs === null || row.latestLatencyMs === undefined ? null : Number(row.latestLatencyMs);
+      latencyByRuleId.set(ruleId, latency);
+    }
+  }
   return {
     plan: buildProxySubscriptionPlan({
       rules: rules as any,
@@ -1125,6 +1190,7 @@ async function buildProxySubscriptionContextForUser(userId: number): Promise<{
       hosts: hostRows as any,
       ruleEntryDomainSuffix: activeSuffix,
       unreachableRuleIds,
+      latencyByRuleId,
     }),
     templates,
   };
@@ -1185,4 +1251,21 @@ export async function getProxySubscriptionPreviewForUser(
     rulePreset: normalizeProxyRulePreset(options.rulePreset),
   });
   return { plan, document };
+}
+
+/**
+ * 按某条令牌的作用域、外观选项、模板、全局设置走完整条流水线（shared/proxySubscriptionPipeline.ts）。
+ * 订阅路由和「按这条令牌预览」都用它，两边看到的是同一份。
+ */
+export async function buildProxySubscriptionForToken(
+  userId: number,
+  input: Omit<ProxySubPipelineInput, "plan" | "templates" | "providers">,
+): Promise<ProxySubPipelineDocument> {
+  const { plan, templates } = await buildProxySubscriptionContextForUser(userId, { withLatency: input.options.sortMode === "latency" });
+  // 透传模式的外部订阅：不存节点，写成 proxy-providers 让客户端自己拉。
+  const { listProxySubSourcesByUser } = await import("./proxySubExtraRepository");
+  const providers = (await listProxySubSourcesByUser(userId) as any[])
+    .filter((source) => source.isEnabled && String(source.mode) === "provider")
+    .map((source) => ({ name: String(source.name || `订阅 #${source.id}`), url: String(source.url), intervalSec: Number(source.intervalSec || 21600) }));
+  return buildProxySubPipelineDocument({ ...input, plan, templates: templates as any, providers });
 }

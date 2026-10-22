@@ -3,6 +3,7 @@ import { forwardRules, hosts, ruleEntryDomainCleanups } from "../../drizzle/sche
 import { getDb, nowDate } from "../dbRuntime";
 import { normalizeRuleEntryDomainSuffix, ruleEntryDomainRecordType } from "@shared/ruleEntryDomain";
 import { getAllSettings } from "./settingsRepository";
+import { invalidateProxySubCacheAll } from "../proxySubCache";
 
 /*
   规则专属域名的读写（同步逻辑见 server/ruleEntryDomain.ts）。
@@ -129,6 +130,8 @@ export async function markRuleEntryDomainPublished(ruleId: number, domain: strin
     entryDomainAt: nowDate(),
     entryDomainError: null,
   } as any).where(eq(forwardRules.id, ruleId));
+  // 这里绕开了 forwardRuleRepository，订阅缓存得自己清；这类写入很少，整体清掉即可。
+  invalidateProxySubCacheAll();
 }
 
 /**
@@ -146,6 +149,7 @@ export async function markRuleEntryDomainFailed(ruleId: number, message: string,
   if (claimDomain) {
     await db.update(forwardRules).set({ entryDomain: claimDomain, entryDomainValue: null } as any)
       .where(and(eq(forwardRules.id, ruleId), isNull(forwardRules.entryDomain)));
+    invalidateProxySubCacheAll();
   }
 }
 
@@ -204,6 +208,7 @@ export async function retireRuleEntryDomain(ruleId: number, domain: string, valu
     entryDomainAt: null,
     entryDomainError: null,
   } as any).where(and(eq(forwardRules.id, ruleId), eq(forwardRules.entryDomain, domain)));
+  invalidateProxySubCacheAll();
 }
 
 /**

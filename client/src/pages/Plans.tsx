@@ -68,6 +68,11 @@ type PlanForm = {
   maxRules: string;
   maxProxyInbounds: string;
   maxProxySubTokens: string;
+  /** 订阅设备数上限（0 = 不限）、指定模板（0 = 默认）、外部订阅、信息节点。 */
+  maxProxyDevices: string;
+  proxySubTemplateId: string;
+  allowExternalSubSources: boolean;
+  showSubInfoNodes: boolean;
   maxConnections: string;
   maxIPs: string;
   allowProxySubscription: boolean;
@@ -136,6 +141,10 @@ const emptyForm: PlanForm = {
   maxRules: "20",
   maxProxyInbounds: "0",
   maxProxySubTokens: "0",
+  maxProxyDevices: "0",
+  proxySubTemplateId: "0",
+  allowExternalSubSources: false,
+  showSubInfoNodes: false,
   maxConnections: "2000",
   maxIPs: "10",
   allowProxySubscription: false,
@@ -601,6 +610,10 @@ function toForm(plan: any): PlanForm {
     maxRules: String(plan.maxRules ?? 20),
     maxProxyInbounds: String(plan.maxProxyInbounds ?? 0),
     maxProxySubTokens: String(plan.maxProxySubTokens ?? 0),
+    maxProxyDevices: String(plan.maxProxyDevices ?? 0),
+    proxySubTemplateId: String(plan.proxySubTemplateId ?? 0),
+    allowExternalSubSources: !!plan.allowExternalSubSources,
+    showSubInfoNodes: !!plan.showSubInfoNodes,
     maxConnections: String(plan.maxConnections ?? 2000),
     maxIPs: String(plan.maxIPs ?? 10),
     allowProxySubscription: !!plan.allowProxySubscription,
@@ -641,6 +654,10 @@ function payload(form: PlanForm) {
     maxRules: Math.max(0, Math.floor(Number(form.maxRules || 0))),
     maxProxyInbounds: Math.max(0, Math.floor(Number(form.maxProxyInbounds || 0))),
     maxProxySubTokens: Math.max(0, Math.floor(Number(form.maxProxySubTokens || 0))),
+    maxProxyDevices: Math.max(0, Math.floor(Number(form.maxProxyDevices || 0))),
+    proxySubTemplateId: Math.max(0, Math.floor(Number(form.proxySubTemplateId || 0))),
+    allowExternalSubSources: form.allowExternalSubSources,
+    showSubInfoNodes: form.showSubInfoNodes,
     maxConnections: Math.max(0, Math.floor(Number(form.maxConnections || 0))),
     maxIPs: Math.max(0, Math.floor(Number(form.maxIPs || 0))),
     allowProxySubscription: form.allowProxySubscription,
@@ -674,6 +691,7 @@ function payload(form: PlanForm) {
 export default function Plans() {
   const utils = trpc.useUtils();
   const [form, setForm] = useState<PlanForm>(emptyForm);
+  const subTemplatesQuery = trpc.proxySubscriptions.adminListTemplates.useQuery();
   const [editing, setEditing] = useState(false);
   const [planDialogTab, setPlanDialogTab] = useState<PlanDialogTab>("settings");
   const [assignOpen, setAssignOpen] = useState(false);
@@ -1538,6 +1556,40 @@ export default function Plans() {
               <Input type="number" min={0} value={form.maxProxySubTokens} onChange={(e) => setForm({ ...form, maxProxySubTokens: e.target.value })} />
               <p data-fx-help="" className="text-xs text-muted-foreground">能生成几条订阅地址。同样只在开了客户端订阅时才有意义。</p>
             </FormField>
+            <FormField className="space-y-2">
+              <Label>订阅设备数（0 为不限）</Label>
+              <Input type="number" min={0} value={form.maxProxyDevices} onChange={(e) => setForm({ ...form, maxProxyDevices: e.target.value })} />
+              <p data-fx-help="" className="text-xs text-muted-foreground">一条订阅地址最多在几台设备上用。要在「订阅运营 → 设置」里开了设备数限制才生效。</p>
+            </FormField>
+            <FormField className="space-y-2">
+              <Label>订阅模板</Label>
+              <Select value={form.proxySubTemplateId} onValueChange={(value) => setForm({ ...form, proxySubTemplateId: value })}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="0">全局默认</SelectItem>
+                  {(subTemplatesQuery.data?.templates || []).map((template) => (
+                    <SelectItem key={template.id} value={String(template.id)}>{template.name}（{template.target}）</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p data-fx-help="" className="text-xs text-muted-foreground">买了这个套餐的人，规则订阅用哪份模板（「订阅运营 → 模板」里建）。</p>
+            </FormField>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <FormField className="flex items-center justify-between gap-3 rounded-md border px-3 py-2">
+                <div>
+                  <Label className="text-sm">允许添加外部订阅</Label>
+                  <p data-fx-help="" className="text-xs text-muted-foreground">还要在订阅运营里开总开关。</p>
+                </div>
+                <Checkbox aria-label="允许添加外部订阅" className="shrink-0" checked={form.allowExternalSubSources} onCheckedChange={(checked) => setForm({ ...form, allowExternalSubSources: checked === true })} />
+              </FormField>
+              <FormField className="flex items-center justify-between gap-3 rounded-md border px-3 py-2">
+                <div>
+                  <Label className="text-sm">订阅里插信息节点</Label>
+                  <p data-fx-help="" className="text-xs text-muted-foreground">剩余流量、到期日、公告。</p>
+                </div>
+                <Checkbox aria-label="订阅里插信息节点" className="shrink-0" checked={form.showSubInfoNodes} onCheckedChange={(checked) => setForm({ ...form, showSubInfoNodes: checked === true })} />
+              </FormField>
+            </div>
             <FormField className="space-y-2">
               <Label>最大连接数</Label>
               <Input type="number" min={0} value={form.maxConnections} onChange={(e) => setForm({ ...form, maxConnections: e.target.value })} />

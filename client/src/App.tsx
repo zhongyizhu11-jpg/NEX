@@ -60,6 +60,7 @@ const SettingsPage = lazy(routeChunks["/settings"] as () => Promise<{ default: C
 const StorePage = lazy(routeChunks["/store"] as () => Promise<{ default: ComponentType<any> }>);
 const SubscriptionsPage = lazy(routeChunks["/subscriptions"] as () => Promise<{ default: ComponentType<any> }>);
 const ClientSubscriptionsPage = lazy(routeChunks["/client-subscriptions"] as () => Promise<{ default: ComponentType<any> }>);
+const AdminSubscriptionsPage = lazy(routeChunks["/admin/subscriptions"] as () => Promise<{ default: ComponentType<any> }>);
 const ProxyInboundsPage = lazy(routeChunks["/proxy-inbounds"] as () => Promise<{ default: ComponentType<any> }>);
 const TrafficBillingPage = lazy(routeChunks["/traffic-billing"] as () => Promise<{ default: ComponentType<any> }>);
 const TunnelsPage = lazy(routeChunks["/tunnels"] as () => Promise<{ default: ComponentType<any> }>);
@@ -183,6 +184,7 @@ function Routes() {
       <Route path="/store">{routeComponent(StorePage)}</Route>
       <Route path="/subscriptions">{routeComponent(SubscriptionsPage)}</Route>
       <Route path="/client-subscriptions">{routeComponent(ClientSubscriptionsPage)}</Route>
+      <Route path="/admin/subscriptions">{() => <AdminRoute component={AdminSubscriptionsPage} />}</Route>
       <Route path="/proxy-inbounds">{routeComponent(ProxyInboundsPage)}</Route>
       <Route path="/wallet">{routeComponent(WalletPage)}</Route>
       {/* 邀请返利：返利没开时页面自己说「未开启」，侧边栏也不显示入口。 */}
