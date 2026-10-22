@@ -51,6 +51,9 @@ import { startStatusAvailabilityJob } from "./ops/statusAvailabilityJob";
 import { startOffsiteBackupJob } from "./ops/offsiteBackupJob";
 import { startUnlockScheduleJob } from "./ops/unlock";
 import { applyLinkShapingDefaultOffOnce } from "./linkShapingDefaultOff";
+import { runProxySubSourceSync } from "./proxySubSourceSync";
+import { loadProxySubSettings } from "./proxySubSettings";
+import { pruneProxySubRateLimit } from "./proxySubRateLimit";
 
 type TimedOutForwardTest = {
   id: number;
@@ -1043,7 +1046,24 @@ export function startScheduler() {
       return 0;
     });
     if (pruned > 0) console.log(`[Scheduler] Pruned ${pruned} stale reminder marker(s)`);
+    // 订阅拉取日志按保留天数清；退化模式下的 IP 设备按窗口清。
+    try {
+      const subSettings = await loadProxySubSettings();
+      const prunedLogs = await db.pruneProxySubAccessLogs(subSettings.accessLogRetentionDays);
+      if (prunedLogs > 0) console.log(`[Scheduler] Pruned ${prunedLogs} proxy subscription access log(s)`);
+      await db.pruneStaleIpDevices(subSettings.deviceIpWindowHours);
+      pruneProxySubRateLimit();
+    } catch (error) {
+      console.warn("[Scheduler] Proxy subscription cleanup failed:", error instanceof Error ? error.message : error);
+    }
   }, { slowTaskMs: 15_000 });
+  // 外部订阅：到点的拉一遍（间隔按每条来源自己的设置，最短 10 分钟）。
+  const proxySubSourceSync = createNonOverlappingScheduledTask("proxy subscription source sync", async () => {
+    const settings = await loadProxySubSettings();
+    if (!settings.externalSourcesEnabled) return;
+    const synced = await runProxySubSourceSync();
+    if (synced > 0) console.log(`[Scheduler] Proxy subscription sources synced: ${synced}`);
+  }, { slowTaskMs: 60_000 });
   // 把最近的原始延迟样本按天汇总进 latency_daily_stats（增量、带水位，见 latencyDailyRepository.ts）。
   const latencyDailyRollup = createNonOverlappingScheduledTask("latency daily rollup", async () => {
     await rollupLatencyDailyStats();
@@ -1169,6 +1189,7 @@ export function startScheduler() {
   repeatAfter(memberScheduleSweep, 60 * 1000, 25_000);
   repeatAfter(ipChangeTick, 30 * 1000, 12_000);
   repeatAfter(ruleLimitSweep, 30 * 1000, 7_000);
+  repeatAfter(proxySubSourceSync, 5 * 60 * 1000, 45_000);
   startSelfTestSweepTimer(async () => { await selfTestTimeoutSweep(); });
   void recoverPendingSelfTestSweep();
   // Agent probe reports and host state transitions trigger failover work.

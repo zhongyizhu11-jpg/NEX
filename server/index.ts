@@ -15,6 +15,7 @@ import { paymentCallbackRouter } from "./payment";
 import { migrationRouter } from "./migration";
 import { clientLogoRouter } from "./clientLogoRoute";
 import { proxySubscriptionRouter } from "./proxySubscriptionRoute";
+import { proxySubRulesetRouter } from "./proxySubRulesetMirror";
 import { initDatabase } from "./db";
 import { installPanelLogger } from "./_core/panelLogger";
 import { loadPanelSslRuntimeConfig, startPanelSslAutoReload } from "./panelSsl";
@@ -200,6 +201,8 @@ async function startServer() {
   app.use(discordAuthRouter);
   app.use(agentRouter);
   app.use(migrationRouter);
+  // 规则集镜像要排在订阅路由前面：/api/sub/ruleset/… 会被 /api/sub/:token/:format 抢走。
+  app.use(proxySubRulesetRouter);
   app.use(proxySubscriptionRouter);
   app.use(clientLogoRouter);
   // POST /mcp：AI 客户端用个人 API 令牌接入（server/ops/mcp.ts）。

@@ -28,6 +28,14 @@ const planInput = z.object({
   maxProxyInbounds: z.number().int().min(0).default(0),
   /** 套餐附带的订阅地址条数，0 = 不限。 */
   maxProxySubTokens: z.number().int().min(0).default(0),
+  /** 套餐附带的订阅设备数，0 = 不限。 */
+  maxProxyDevices: z.number().int().min(0).max(1000).default(0),
+  /** 套餐指定的订阅模板（proxy_sub_templates.id），0 = 全局默认。 */
+  proxySubTemplateId: z.number().int().min(0).default(0),
+  /** 套餐允许用户添加外部订阅。 */
+  allowExternalSubSources: z.boolean().default(false),
+  /** 套餐默认在订阅里插信息节点（剩余流量 / 到期）。 */
+  showSubInfoNodes: z.boolean().default(false),
   maxConnections: z.number().int().min(0).max(1_000_000).default(2000),
   maxIPs: z.number().int().min(0).max(100_000).default(10),
   allowProxySubscription: z.boolean().default(false),

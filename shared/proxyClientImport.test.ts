@@ -187,6 +187,9 @@ test("每个客户端都对应一个真实存在的订阅格式", () => {
 
 test("每种订阅格式都至少有一个可一键导入的客户端", () => {
   for (const format of PROXY_SUBSCRIPTION_FORMATS) {
+    // Xray JSON 从不钉在地址上：v2rayN / v2rayNG / Happ 的新版本由 UA 协商拿到它，
+    // 老版本拿 base64。所以没有哪个客户端图标专门指向它。
+    if (format === "v2rayjson") continue;
     const targets = proxyClientTargetsForFormat(format);
     assert.ok(targets.length > 0, `${format} 没有对应的客户端，界面上会只剩复制按钮`);
   }
@@ -239,19 +242,19 @@ test("按平台筛出来的都是该平台真能装的", () => {
   // deep link 只有装了 App 的设备点得动，筛错了就是一格死按钮。
   assert.deepEqual(
     proxyClientTargetsForPlatform("windows").map((item) => item.id).sort(),
-    ["clash", "hiddify", "nekoray", "singbox", "v2rayn"],
+    ["clash", "happ", "hiddify", "karing", "nekoray", "singbox", "v2rayn", "v2raytun"],
   );
   assert.deepEqual(
     proxyClientTargetsForPlatform("android").map((item) => item.id).sort(),
-    ["clash", "hiddify", "nekobox", "singbox", "surfboard", "v2rayng"],
+    ["clash", "happ", "hiddify", "karing", "nekobox", "singbox", "surfboard", "v2rayng", "v2raytun"],
   );
   assert.deepEqual(
     proxyClientTargetsForPlatform("macos").map((item) => item.id).sort(),
-    ["clash", "hiddify", "singbox", "stash", "surge"],
+    ["clash", "happ", "hiddify", "karing", "singbox", "stash", "streisand", "surge", "v2raytun"],
   );
   assert.deepEqual(
     proxyClientTargetsForPlatform("ios").map((item) => item.id).sort(),
-    ["clash", "hiddify", "loon", "quantumultx", "shadowrocket", "singbox", "stash", "surge"],
+    ["clash", "happ", "hiddify", "karing", "loon", "quantumultx", "shadowrocket", "singbox", "stash", "streisand", "surge", "v2raytun"],
   );
 });
 
@@ -327,7 +330,7 @@ test("节点订阅下全部客户端可用，规则订阅下只剩能出完整�
   // 其余客户端在界面上置灰而不是隐藏，所以这里断言的是"可用数量"，不是"展示数量"。
   assert.deepEqual(
     usable("rules").map((target) => target.id).sort(),
-    ["clash", "loon", "quantumultx", "shadowrocket", "singbox", "stash", "surfboard", "surge"],
+    ["clash", "karing", "loon", "quantumultx", "shadowrocket", "singbox", "stash", "surfboard", "surge"],
   );
 });
 

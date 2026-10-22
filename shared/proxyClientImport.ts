@@ -179,11 +179,48 @@ export const PROXY_CLIENT_TARGETS: readonly ProxyClientTarget[] = [
     label: "v2rayNG",
     shortLabel: "v2rayNG",
     platforms: ["android"],
+    // 不钉格式：v2rayNG 1.8.29 起 UA 协商会给它 Xray JSON（参数更全），老版本照旧 base64。
     format: "base64",
     // install-sub 是订阅（会保留自动更新），install-config 是单条配置，这里要前者。
     // name 参数在部分版本上不生效（2dust/v2rayNG#3470），但地址照样导入成功，
     // 顶多是分组名要自己改一次 —— 不影响能不能用。
     buildImportUrl: (url, name) => `v2rayng://install-sub?url=${q(url)}&name=${q(name)}`,
+  },
+  {
+    id: "happ",
+    label: "Happ",
+    shortLabel: "Happ",
+    platforms: ["ios", "android", "windows", "macos"],
+    // Happ 1.63 起吃 Xray JSON；订阅地址不钉格式，由 UA 协商。
+    format: "base64",
+    // 官方文档：happ://add/<订阅地址>。
+    buildImportUrl: (url) => `happ://add/${url}`,
+  },
+  {
+    id: "v2raytun",
+    label: "v2RayTun",
+    shortLabel: "v2RayTun",
+    platforms: ["ios", "android", "windows", "macos"],
+    format: "base64",
+    // 官方文档：v2raytun://import/<订阅地址>。
+    buildImportUrl: (url) => `v2raytun://import/${url}`,
+  },
+  {
+    id: "streisand",
+    label: "Streisand",
+    shortLabel: "Streisand",
+    platforms: ["ios", "macos"],
+    format: "base64",
+    buildImportUrl: (url) => `streisand://import/${url}`,
+  },
+  {
+    id: "karing",
+    label: "Karing",
+    shortLabel: "Karing",
+    platforms: ALL_PLATFORMS,
+    format: "singbox",
+    // Karing 的文档：karing://install-config?url=…&name=…
+    buildImportUrl: (url, name) => `karing://install-config?url=${q(url)}&name=${q(name)}`,
   },
   {
     id: "surfboard",
@@ -219,7 +256,7 @@ export const PROXY_CLIENT_TARGETS: readonly ProxyClientTarget[] = [
     shortLabel: "v2rayN",
     platforms: ["windows"],
     format: "base64",
-    manualHint: "订阅 → 订阅分组设置 → 添加 → 粘贴这条地址 → 再点「更新订阅」",
+    manualHint: "订阅 → 订阅分组设置 → 添加 → 粘贴这条地址 → 再点「更新订阅」（6.40 起会自动拿到 Xray JSON 配置）",
   },
 ];
 
@@ -339,12 +376,38 @@ export function buildProxySubscriptionUrl(options: {
   return `${options.origin.replace(/\/+$/, "")}/api/sub/${options.token}${query ? `?${query}` : ""}`;
 }
 
+/**
+ * 同一条订阅的全部地址：主地址加上管理员配的备用域名。
+ *
+ * 一键导入面板上每个客户端都列出来，主域名被墙时用户换一条就行，不用回面板重新签发。
+ */
+export function buildProxySubscriptionUrls(options: {
+  origins: readonly string[];
+  token: string;
+  format: ProxySubscriptionFormat;
+  kind: ProxySubscriptionKind;
+  pinFormat?: boolean;
+  /** 短链别名：有就用 /s/<alias> 代替 /api/sub/<token>。 */
+  alias?: string;
+}): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const origin of options.origins) {
+    const clean = String(origin || "").replace(/\/+$/, "");
+    if (!clean || seen.has(clean)) continue;
+    seen.add(clean);
+    const url = buildProxySubscriptionUrl({ origin: clean, token: options.token, format: options.format, kind: options.kind, pinFormat: options.pinFormat });
+    out.push(options.alias ? url.replace(`/api/sub/${options.token}`, `/s/${options.alias}`) : url);
+  }
+  return out;
+}
+
 /** 该格式是否真的能表达分流规则；不能的话没必要展示规则订阅地址。 */
 export function proxySubscriptionKindSupported(
   format: ProxySubscriptionFormat,
   kind: ProxySubscriptionKind,
 ): boolean {
   if (kind === "nodes") return true;
-  return format === "clash" || format === "singbox" || proxySubscriptionFormatHasProfile(format);
+  return format === "clash" || format === "singbox" || format === "v2rayjson" || proxySubscriptionFormatHasProfile(format);
 }
 

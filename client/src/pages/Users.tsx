@@ -1,4 +1,5 @@
 import { FormField } from "@/components/ui/form-field";
+import UserProxySubConfig from "@/components/proxy/UserProxySubConfig";
 import OpsUserMenuItems from "@/features/ops/slots/UserMenuItems";
 import { UserOnlineIpsDialogHost } from "@/features/ops/online/UserOnlineIpsMenuItem";
 import EmptyState from "@/components/EmptyState";
@@ -256,6 +257,7 @@ function UsersContent() {
   const [maxSelfServiceHosts, setMaxSelfServiceHosts] = useState("");
   /** 订阅地址条数上限。0 = 不限。 */
   const [maxProxySubTokens, setMaxProxySubTokens] = useState(0);
+  const [maxProxyDevices, setMaxProxyDevices] = useState(0);
   const [maxPorts, setMaxPorts] = useState(0);
   const [maxConnections, setMaxConnections] = useState(0);
   const [allowProxySubscription, setAllowProxySubscription] = useState(false);
@@ -527,6 +529,7 @@ function UsersContent() {
         manualMaxRules: variables.maxRules,
         manualMaxProxyInbounds: variables.maxProxyInbounds,
         manualMaxProxySubTokens: variables.maxProxySubTokens,
+        manualMaxProxyDevices: variables.maxProxyDevices,
         manualMaxPorts: variables.maxPorts,
         manualMaxConnections: variables.maxConnections,
         manualMaxIPs: variables.maxIPs,
@@ -910,6 +913,7 @@ function UsersContent() {
     setMaxProxyInbounds(u.manualMaxProxyInbounds || 0);
     setMaxSelfServiceHosts(u.maxSelfServiceHosts == null ? "" : String(u.maxSelfServiceHosts));
     setMaxProxySubTokens(u.manualMaxProxySubTokens || 0);
+    setMaxProxyDevices(u.manualMaxProxyDevices || 0);
     setMaxPorts(u.manualMaxPorts || 0);
     setMaxConnections(u.manualMaxConnections || 0);
     setAllowProxySubscription(!!u.manualAllowProxySubscription);
@@ -974,6 +978,7 @@ function UsersContent() {
       // 空串要送 null（跟随全局），不能送 0 —— 0 是「一台都不许加」。
       maxSelfServiceHosts: maxSelfServiceHosts.trim() === "" ? null : Math.max(0, parseInt(maxSelfServiceHosts, 10) || 0),
       maxProxySubTokens,
+      maxProxyDevices,
       maxPorts,
       maxConnections,
       maxIPs,
@@ -2333,6 +2338,21 @@ function UsersContent() {
                     他能生成几条订阅地址。每条都是一份完整凭据，发出去就只能靠吊销那一条收回。0 或留空表示不限制。
                   </p>
                 </FormField>
+                <FormField className="space-y-2">
+                  <Label>订阅设备数上限</Label>
+                  <Input
+                    type="number"
+                    value={maxProxyDevices || ""}
+                    onChange={(e) => setMaxProxyDevices(parseInt(e.target.value) || 0)}
+                    placeholder="0=不限制"
+                  />
+                  <p data-fx-help="" className="text-xs text-muted-foreground">
+                    一条订阅地址最多在几台设备上用。要在「订阅运营 → 设置」里开了设备数限制才生效；和套餐、令牌上的上限取最严。0 或留空表示不限制。
+                  </p>
+                </FormField>
+                <div className="sm:col-span-2">
+                  <UserProxySubConfig userId={trafficUserId} />
+                </div>
                 <FormField className="space-y-2">
                   <Label>最大端口数</Label>
                   <Input

@@ -11,6 +11,7 @@ import { getHostEntryAddress, getHostEntryAddresses, hostAutoIpv4, hostAutoIpv6,
 import { publishedRuleEntryDomain } from "./ruleEntryDomain";
 import { expandWeightedMembers, hostBandwidthHintMbps, PROXY_LOAD_BALANCE_MAX_WEIGHT, proxyLoadBalanceWeights } from "./linkWeights";
 import { proxyNodeBindingTruth } from "./proxyNodeAutoBind";
+import { proxySubRegionLabel } from "./proxySubRegion";
 import {
   buildProxyRulePlan,
   normalizeProxyRulePreset,
@@ -74,6 +75,8 @@ export type ProxyNodeTemplateRow = {
   xhttpMode?: unknown;
   isEnabled?: unknown;
   autoGroup?: unknown;
+  /** 手工填的地区（国家码）；空则看落地机器的 geo，再猜名字。 */
+  countryCode?: unknown;
 };
 
 /** forward_rules 表里订阅需要用到的字段。 */
@@ -116,6 +119,8 @@ export type ProxySubscriptionHostRow = HostEntryAddressSource & {
   /** 最后一次心跳。从来没有 = Agent 还没装上，见 hostNeverConnected。 */
   lastHeartbeat?: unknown;
   name?: unknown;
+  /** 面板查到的机器所在国家码（hosts.geoCountryCode）；落地机器的给节点当地区。 */
+  geoCountryCode?: unknown;
 };
 
 /** 一条转发没能进订阅的原因，用于在界面上解释而不是让节点无声消失。 */
@@ -156,7 +161,19 @@ export type ProxySubscriptionEntry = {
   targetMismatch?: boolean;
   /** 转发入口那台机器的带宽（Mbps，见 hostBandwidthHintMbps）。0 / 没有 = 不知道。 */
   bandwidthMbps?: number;
+  /** 命名、地区、排序要用的元信息（shared/proxySubProcessors.ts）。老调用方可能不填。 */
+  meta?: ProxySubEntryMeta;
   node: ProxyNode;
+};
+
+/** 和 shared/proxySubProcessors.ts 里的同名类型一致；放这儿是为了不让两个文件互相 import。 */
+export type ProxySubEntryMeta = {
+  hostName: string;
+  templateName: string;
+  ruleName: string;
+  customName: boolean;
+  regionCode: string;
+  latencyMs?: number | null;
 };
 
 export type ProxySubscriptionSkip = {
@@ -260,6 +277,15 @@ export function proxyNodeFromTemplateRow(row: ProxyNodeTemplateRow): ProxyNode {
   return node;
 }
 
+/** 模板的地区：手工填的国家码 → 落地机器的 geo → 空。 */
+function templateRegionCode(template: ProxyNodeTemplateRow, hostsById: Map<number, ProxySubscriptionHostRow>): string {
+  const manual = text(template.countryCode).toUpperCase();
+  if (/^[A-Z]{2}$/.test(manual)) return manual;
+  const host = hostsById.get(Number(template.hostId || 0));
+  const geo = text(host?.geoCountryCode).toUpperCase();
+  return /^[A-Z]{2}$/.test(geo) ? geo : "";
+}
+
 /** 订阅里显示的节点名：优先用户自定义，否则「入口主机 → 模板名」。 */
 export function defaultProxySubscriptionNodeName(options: {
   hostName: string;
@@ -287,6 +313,8 @@ export type BuildProxySubscriptionPlanInput = {
    * 分给它。暂时不放进订阅，探测通了就回来。
    */
   unreachableRuleIds?: ReadonlySet<number>;
+  /** 每条转发最近一次探测的延迟（毫秒，null = 不通）。「按延迟排序」用。 */
+  latencyByRuleId?: ReadonlyMap<number, number | null>;
 };
 
 /**
@@ -368,7 +396,14 @@ export function buildProxySubscriptionPlan(input: BuildProxySubscriptionPlanInpu
     if (template.isEnabled !== undefined && !bool(template.isEnabled)) continue;
     const node = proxyNodeFromTemplateRow(template);
     if (!node.address || !node.port) continue;
-    directEntries.push({ ruleId: 0, templateId, kind: "direct", frontTemplateId: 0, node });
+    directEntries.push({
+      ruleId: 0,
+      templateId,
+      kind: "direct",
+      frontTemplateId: 0,
+      meta: { hostName: "", templateName: node.name, ruleName: "", customName: false, regionCode: templateRegionCode(template, hostsById) },
+      node,
+    });
   }
 
   /** 前置节点自己没能进订阅时就不挂引用 —— 宁可少一层，也不要一份坏配置。 */
@@ -500,6 +535,15 @@ export function buildProxySubscriptionPlan(input: BuildProxySubscriptionPlanInpu
       frontTemplateId: frontIdOf(template),
       ...(targetMismatch ? { targetMismatch: true } : {}),
       ...(bandwidthMbps > 0 ? { bandwidthMbps } : {}),
+      meta: {
+        hostName: text(host?.name),
+        templateName: templateNode.name,
+        ruleName,
+        customName: !!text(rule.proxyNodeName),
+        // 地区看落地（模板），不看入口：客户端里要认的是「出口在哪」。
+        regionCode: templateRegionCode(template, hostsById),
+        ...(input.latencyByRuleId?.has(ruleId) ? { latencyMs: input.latencyByRuleId.get(ruleId) ?? null } : {}),
+      },
       node: relayProxyNode(templateNode, { address, port, name }),
     });
   }
@@ -645,11 +689,20 @@ export type ProxySubscriptionGroup = {
   type: ProxySubscriptionGroupType;
   /** 组内成员，可能是节点名，也可能是另一个组名（主选择器会引用自动选路组）。 */
   members: string[];
+  /** 透传的外部订阅（mihomo / Stash 的 proxy-providers 名），只有 Clash 格式渲染它。 */
+  use?: string[];
   /**
    * 「负载均衡」组每个成员分多少份连接（和 members 一一对应，见 proxyLoadBalanceWeights）。
    * 没有 = 平均分。只有确认支持「组里重复列同一个节点」的客户端（mihomo / Clash）才照着展开。
    */
   weights?: number[];
+};
+
+/** 透传给客户端的外部订阅（shared/proxySubSource.ts 的 provider 模式）。 */
+export type ProxySubProvider = {
+  name: string;
+  url: string;
+  intervalSec: number;
 };
 
 /** 订阅最终要渲染的内容：节点、策略组、分流规则。 */
@@ -658,6 +711,8 @@ export type ProxySubscriptionDocument = {
   groups: ProxySubscriptionGroup[];
   ruleSets: ProxyRuleSetRef[];
   rules: ProxyRouteRule[];
+  /** 透传的外部订阅；只有 mihomo / Stash 认，别的格式忽略。 */
+  providers?: ProxySubProvider[];
 };
 
 /** 自动选路组的名字，和模板同名会让客户端里两个条目难以区分，所以加后缀。 */
@@ -675,10 +730,77 @@ export const PROXY_AUTO_GROUP_MIN_MEMBERS = 2;
  * 分组必须在节点重名处理之后生成：组是按名称引用成员的，用去重前的名字会让
  * 客户端找不到节点。
  */
+/** 模板里定义的自定义策略组：按正则从节点名里挑成员（Xboard 的做法）。 */
+export type ProxySubCustomGroup = {
+  name: string;
+  type: ProxySubscriptionGroupType;
+  /** 节点名正则；空 = 全部节点。非法正则按子串。 */
+  filter: string;
+  /** 成员里也带上自动组和地区组。 */
+  includeGroups?: boolean;
+};
+
+export type BuildProxySubscriptionDocumentOptions = {
+  mainGroupName: string;
+  rulePreset?: ProxyRulePreset;
+  /** 按地区（节点上的 regionCode）各建一个 url-test 组。 */
+  regionGroups?: boolean;
+  /** 模板里的自定义组。 */
+  customGroups?: readonly ProxySubCustomGroup[];
+  /** 分类去向覆盖：分类 key → DIRECT / REJECT / PROXY / 组名。 */
+  categoryTargets?: Record<string, string>;
+  /** 透传的外部订阅：主选择器和各分类组用 `use` 引用它们。 */
+  providers?: readonly ProxySubProvider[];
+};
+
+function regionGroupsFor(nodes: readonly ProxyNode[]): ProxySubscriptionGroup[] {
+  const byRegion = new Map<string, string[]>();
+  for (const node of nodes) {
+    const code = String(node.regionCode || "").toUpperCase();
+    if (!/^[A-Z]{2}$/.test(code)) continue;
+    const list = byRegion.get(code) || [];
+    list.push(node.name);
+    byRegion.set(code, list);
+  }
+  const groups: ProxySubscriptionGroup[] = [];
+  for (const [code, members] of Array.from(byRegion.entries()).sort((a, b) => a[0].localeCompare(b[0]))) {
+    const label = proxySubRegionLabel(code);
+    if (!label) continue;
+    groups.push({ name: label, type: "url-test", members });
+  }
+  return groups;
+}
+
+function customGroupsFor(custom: readonly ProxySubCustomGroup[], nodeNames: readonly string[], groupNames: readonly string[]): ProxySubscriptionGroup[] {
+  const out: ProxySubscriptionGroup[] = [];
+  for (const group of custom) {
+    const name = text(group.name);
+    if (!name) continue;
+    let matcher: (value: string) => boolean = () => true;
+    const filter = text(group.filter);
+    if (filter) {
+      try {
+        const regex = new RegExp(filter, "i");
+        matcher = (value) => regex.test(value);
+      } catch {
+        const lower = filter.toLowerCase();
+        matcher = (value) => value.toLowerCase().includes(lower);
+      }
+    }
+    const members = [
+      ...(group.includeGroups ? groupNames : []),
+      ...nodeNames.filter(matcher),
+    ];
+    if (members.length === 0) continue;
+    out.push({ name, type: group.type, members });
+  }
+  return out;
+}
+
 export function buildProxySubscriptionDocument(
   plan: ProxySubscriptionPlan,
   templates: readonly ProxyNodeTemplateRow[],
-  options: { mainGroupName: string; rulePreset?: ProxyRulePreset },
+  options: BuildProxySubscriptionDocumentOptions,
 ): ProxySubscriptionDocument {
   const deduped = dedupeProxyNodeNames(plan.entries.map((entry) => entry.node));
 
@@ -746,28 +868,48 @@ export function buildProxySubscriptionDocument(
     });
   }
 
+  // 地区组：同一地区的节点（直连和中转都算）放一个 url-test 组。
+  const regionGroups = options.regionGroups ? regionGroupsFor(nodes) : [];
+  // 自定义组：模板里按正则定义的；名字和自动组 / 地区组撞了的以自定义为准（后写的覆盖）。
+  const customGroups = customGroupsFor(
+    options.customGroups || [],
+    nodes.map((node) => node.name),
+    [...autoGroups, ...regionGroups].map((group) => group.name),
+  );
+  const customNames = new Set(customGroups.map((group) => group.name));
+  const builtGroups = [...autoGroups, ...regionGroups].filter((group) => !customNames.has(group.name));
+
   const groups: ProxySubscriptionGroup[] = [];
-  const selectableMembers = [...autoGroups.map((group) => group.name), ...nodes.map((node) => node.name)];
-  if (nodes.length > 0) {
+  const selectableMembers = [
+    ...customGroups.map((group) => group.name),
+    ...builtGroups.map((group) => group.name),
+    ...nodes.map((node) => node.name),
+  ];
+  const providers = (options.providers || []).filter((item) => item.name && item.url);
+  const providerNames = providers.map((item) => item.name);
+  // 一个节点都没有、但有透传的外部订阅时，主选择器照样建：成员全部来自 provider。
+  const hasContent = nodes.length > 0 || providerNames.length > 0;
+  if (hasContent) {
     // 自动选路组排在裸节点前面，用户打开客户端第一眼就是「自动」。
-    groups.push({ name: options.mainGroupName, type: "select", members: selectableMembers });
-    groups.push(...autoGroups);
+    groups.push({ name: options.mainGroupName, type: "select", members: selectableMembers, ...(providerNames.length ? { use: providerNames } : {}) });
+    groups.push(...customGroups, ...builtGroups);
   }
 
   // 没有节点时不生成规则：规则会指向不存在的策略组，客户端直接拒绝整份配置。
-  const rulePlan = nodes.length > 0
+  const rulePlan = hasContent
     ? buildProxyRulePlan({
       preset: normalizeProxyRulePreset(options.rulePreset),
       mainGroupName: options.mainGroupName,
       selectableMembers,
+      categoryTargets: options.categoryTargets,
     })
     : { ruleSets: [], categoryGroups: [], rules: [] };
 
   for (const group of rulePlan.categoryGroups) {
-    groups.push({ name: group.name, type: "select", members: group.members });
+    groups.push({ name: group.name, type: "select", members: group.members, ...(providerNames.length ? { use: providerNames } : {}) });
   }
 
-  return { nodes, groups, ruleSets: rulePlan.ruleSets, rules: rulePlan.rules };
+  return { nodes, groups, ruleSets: rulePlan.ruleSets, rules: rulePlan.rules, ...(providers.length ? { providers: [...providers] } : {}) };
 }
 
 /* ── 负载均衡组的加权 ─────────────────────────────────────────────────── */

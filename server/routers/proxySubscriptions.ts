@@ -22,6 +22,32 @@ import { resolveProxyNodeHealth, type ProxyNodeProbeSample } from "../../shared/
 import { normalizeProxyNodeResetDay } from "../../shared/proxyNodeQuota";
 import { redactSharedProxyNodeRow } from "../../shared/proxyNodeShare";
 import { pushAgentRefresh } from "../agentEvents";
+import {
+  normalizeProxySubAlias,
+  normalizeProxySubTokenOptions,
+  normalizeProxySubTokenScope,
+  parseProxySubTokenOptions,
+  parseProxySubTokenScope,
+  PROXY_SUB_DEFAULT_TOKEN_OPTIONS,
+  PROXY_SUB_EMPTY_SCOPE,
+  serializeProxySubTokenOptions,
+  serializeProxySubTokenScope,
+} from "../../shared/proxySubTokenScope";
+import { parseProxyCustomRules } from "../../shared/proxySubCustomRules";
+import { normalizeProxySubSettings, PROXY_SUB_DEFAULT_SETTINGS, type ProxySubSettings } from "../../shared/proxySubSettings";
+import {
+  normalizeProxySubCustomGroups,
+  PROXY_SUB_BUILTIN_PRELUDES,
+  PROXY_SUB_TEMPLATE_TARGETS,
+  validateProxySubTemplate,
+} from "../../shared/proxySubTemplates";
+import { normalizeProxySubSourceInterval, normalizeProxySubSourceUrl, PROXY_SUB_SOURCE_MODES } from "../../shared/proxySubSource";
+import { PROXY_CLIENT_FAMILY_LABELS } from "../../shared/proxyClientUserAgent";
+import { PROXY_SUBSCRIPTION_SKIP_LABELS as SKIP_LABELS } from "../../shared/proxySubscriptionPlan";
+import { loadProxySubSettings, saveProxySubSettings } from "../proxySubSettings";
+import { infoNodesWanted, loadProxySubTokenContext, resolveTemplateForToken } from "../proxySubBundle";
+import { syncProxySubSource } from "../proxySubSourceSync";
+import { invalidateProxySubCacheForUser } from "../proxySubCache";
 
 /**
  * 订阅令牌够长才安全：地址里带着全部节点凭据，一旦可猜就等于把节点送人。
@@ -142,6 +168,83 @@ async function adoptRulesForNewProxyNode(
     console.warn("[Subscription] adopt rules failed:", error instanceof Error ? error.message : error);
     return 0;
   }
+}
+
+/** 令牌上可以改的新东西：作用域、外观选项、别名、备注、到期、设备数、模板。create / update 共用。 */
+const tokenExtraInput = {
+  alias: z.string().trim().max(32).nullable().optional(),
+  remark: z.string().trim().max(200).nullable().optional(),
+  /** ISO 时间或 null（= 不过期）。 */
+  expiresAt: z.string().max(64).nullable().optional(),
+  maxDevices: z.number().int().min(0).max(1000).optional(),
+  templateId: z.number().int().min(0).optional(),
+  scope: z.any().optional(),
+  options: z.any().optional(),
+};
+
+async function normalizeTokenExtra(input: Record<string, any>, exceptTokenId: number): Promise<Record<string, unknown>> {
+  const data: Record<string, unknown> = {};
+  if (input.alias !== undefined) {
+    if (!input.alias) data.alias = null;
+    else {
+      const alias = normalizeProxySubAlias(input.alias);
+      if (!alias) throw new Error("短链别名只能用 4–32 位小写字母、数字和连字符，首尾不能是连字符");
+      if (await db.proxySubAliasInUse(alias, exceptTokenId)) throw new Error("这个短链别名已经被用了");
+      data.alias = alias;
+    }
+  }
+  if (input.remark !== undefined) data.remark = input.remark || null;
+  if (input.expiresAt !== undefined) {
+    if (!input.expiresAt) data.expiresAt = null;
+    else {
+      const date = new Date(input.expiresAt);
+      if (!Number.isFinite(date.getTime())) throw new Error("到期时间格式不对");
+      data.expiresAt = date;
+    }
+  }
+  if (input.maxDevices !== undefined) data.maxDevices = input.maxDevices;
+  if (input.templateId !== undefined) {
+    if (input.templateId > 0 && !(await db.getProxySubTemplateById(input.templateId))) throw new Error("模板不存在");
+    data.templateId = input.templateId;
+  }
+  if (input.scope !== undefined) data.scopeJson = serializeProxySubTokenScope(normalizeProxySubTokenScope(input.scope ?? PROXY_SUB_EMPTY_SCOPE));
+  if (input.options !== undefined) {
+    const options = normalizeProxySubTokenOptions(input.options ?? PROXY_SUB_DEFAULT_TOKEN_OPTIONS);
+    const parsed = parseProxyCustomRules(options.customRules);
+    if (parsed.errors.length > 0) throw new Error(`自定义规则第 ${parsed.errors[0].line} 行：${parsed.errors[0].message}`);
+    data.optionsJson = serializeProxySubTokenOptions(options);
+  }
+  return data;
+}
+
+function normalizeProxyRulePresetSafe(value: unknown) {
+  const raw = String(value ?? "").trim().toLowerCase();
+  return (PROXY_RULE_PRESETS as readonly string[]).includes(raw) ? raw as (typeof PROXY_RULE_PRESETS)[number] : "balanced";
+}
+
+function safeJson(value: unknown) {
+  if (!value || typeof value !== "string") return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+async function assertOwnedSource(id: number, ctx: any) {
+  const source = await db.getProxySubSourceById(id);
+  if (!source) throw new Error("外部订阅不存在");
+  if (ctx.user.role !== "admin" && Number((source as any).userId) !== ctx.user.id) throw new Error("无权操作该外部订阅");
+  return source;
+}
+
+/** 外部订阅：全局开关开着，且（管理员，或套餐允许）。 */
+async function assertExternalSourcesAllowed(ctx: any) {
+  const settings = await loadProxySubSettings();
+  if (!settings.externalSourcesEnabled) throw new Error("管理员没有开放外部订阅");
+  if (ctx.user.role === "admin") return;
+  const plan = await db.getUserPlanSubscriptionInfo(ctx.user.id);
+  if (!plan.allowExternalSubSources) throw new Error("当前套餐不包含外部订阅，请联系管理员");
 }
 
 export const proxySubscriptionsRouter = router({
@@ -294,16 +397,21 @@ export const proxySubscriptionsRouter = router({
       trafficLimit: z.number().int().min(0).optional(),
       trafficAutoReset: z.boolean().optional(),
       trafficResetDay: z.number().int().min(1).max(31).optional(),
+      /** 手工指定地区（国家码）。 */
+      countryCode: z.string().trim().max(8).nullable().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       await assertProxySubscriptionAllowed(ctx);
       const parsed = parseProxyNodeLink(input.link);
       if (!parsed.ok) throw new Error(parsed.error);
+      const countryCode = String(input.countryCode || "").trim().toUpperCase();
+      if (countryCode && !/^[A-Z]{2}$/.test(countryCode)) throw new Error("地区要填两位国家码，比如 HK、JP");
       const id = await db.createProxyNode({
         userId: ctx.user.id,
         name: input.name,
         remark: input.remark || null,
         publicLabel: input.publicLabel || null,
+        countryCode: countryCode || null,
         ...(input.autoGroup ? { autoGroup: input.autoGroup } : {}),
         ...(input.includeDirect !== undefined ? { includeDirect: input.includeDirect } : {}),
         ...(input.frontProxyId !== undefined ? { frontProxyId: input.frontProxyId } : {}),
@@ -339,11 +447,18 @@ export const proxySubscriptionsRouter = router({
       trafficResetDay: z.number().int().min(1).max(31).optional(),
       /** 手工校准已用量，用来跟机房账单对齐。之后仍然继续累加。 */
       trafficUsed: z.number().int().min(0).optional(),
+      /** 手工指定地区（国家码），空字符串 = 清掉、按机器 geo / 名字猜。 */
+      countryCode: z.string().trim().max(8).nullable().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       await assertProxySubscriptionAllowed(ctx);
       await assertOwnedNode(input.id, ctx);
       const data: Record<string, unknown> = {};
+      if (input.countryCode !== undefined) {
+        const code = String(input.countryCode || "").trim().toUpperCase();
+        if (code && !/^[A-Z]{2}$/.test(code)) throw new Error("地区要填两位国家码，比如 HK、JP");
+        data.countryCode = code || null;
+      }
       if (input.bandwidthMbps !== undefined) data.bandwidthMbps = input.bandwidthMbps;
       if (input.trafficLimit !== undefined) data.trafficLimit = input.trafficLimit;
       if (input.trafficAutoReset !== undefined) data.trafficAutoReset = input.trafficAutoReset;
@@ -513,7 +628,34 @@ export const proxySubscriptionsRouter = router({
 
   listTokens: protectedProcedure.query(async ({ ctx }) => {
     if (!await hasProxySubscriptionPermission(ctx)) return [];
-    return db.getProxySubTokensByUser(ctx.user.id);
+    const rows = await db.getProxySubTokensByUser(ctx.user.id);
+    return Promise.all((rows as any[]).map(async (row) => ({
+      ...row,
+      scope: parseProxySubTokenScope(row.scopeJson),
+      options: parseProxySubTokenOptions(row.optionsJson),
+      deviceCount: await db.countProxySubDevices(Number(row.id)),
+      lastClientLabel: row.lastClientFamily ? (PROXY_CLIENT_FAMILY_LABELS as any)[row.lastClientFamily] || row.lastClientFamily : "",
+    })));
+  }),
+
+  /** 用户看得到的那部分订阅设置：备用域名、默认外观、能不能加外部订阅…… */
+  settingsPublic: protectedProcedure.query(async ({ ctx }) => {
+    const settings = await loadProxySubSettings();
+    const plan = ctx.user.role === "admin" ? null : await db.getUserPlanSubscriptionInfo(ctx.user.id);
+    return {
+      domains: settings.domains,
+      landingPageEnabled: settings.landingPageEnabled,
+      infoNodesDefault: settings.infoNodesDefault || !!plan?.showSubInfoNodes,
+      nameTemplateDefault: settings.nameTemplateDefault,
+      flagEmojiDefault: settings.flagEmojiDefault,
+      regionGroupsDefault: settings.regionGroupsDefault,
+      protocolPrefixDefault: settings.protocolPrefixDefault,
+      deviceLimitEnabled: settings.deviceLimitEnabled,
+      deviceLimitStrict: settings.deviceLimitStrict,
+      externalSourcesAllowed: settings.externalSourcesEnabled && (ctx.user.role === "admin" || !!plan?.allowExternalSubSources),
+      externalSourceMaxPerUser: settings.externalSourceMaxPerUser,
+      updateIntervalHours: settings.updateIntervalHours,
+    };
   }),
 
   createToken: protectedProcedure
@@ -521,9 +663,11 @@ export const proxySubscriptionsRouter = router({
       name: z.string().trim().min(1).max(64),
       defaultFormat: z.enum(PROXY_SUBSCRIPTION_FORMATS).default("base64"),
       rulePreset: z.enum(PROXY_RULE_PRESETS).default("balanced"),
+      ...tokenExtraInput,
     }))
     .mutation(async ({ ctx, input }) => {
       await assertProxySubscriptionAllowed(ctx);
+      const extra = await normalizeTokenExtra(input, 0);
       /**
        * 订阅地址条数也有上限。
        *
@@ -548,6 +692,7 @@ export const proxySubscriptionsRouter = router({
         token,
         defaultFormat: input.defaultFormat,
         rulePreset: input.rulePreset,
+        ...extra,
       } as any);
       return { id, token };
     }),
@@ -559,29 +704,403 @@ export const proxySubscriptionsRouter = router({
       defaultFormat: z.enum(PROXY_SUBSCRIPTION_FORMATS).optional(),
       rulePreset: z.enum(PROXY_RULE_PRESETS).optional(),
       isEnabled: z.boolean().optional(),
+      ...tokenExtraInput,
     }))
     .mutation(async ({ ctx, input }) => {
       await assertProxySubscriptionAllowed(ctx);
       await assertOwnedToken(input.id, ctx);
-      const data: Record<string, unknown> = {};
+      const data: Record<string, unknown> = { ...(await normalizeTokenExtra(input, input.id)) };
       if (input.name !== undefined) data.name = input.name;
       if (input.defaultFormat !== undefined) data.defaultFormat = input.defaultFormat;
       if (input.rulePreset !== undefined) data.rulePreset = input.rulePreset;
       if (input.isEnabled !== undefined) data.isEnabled = input.isEnabled;
+      // 模板只有管理员能指定：模板是全站资源，用户不该能挑别人的。
+      if (input.templateId !== undefined && ctx.user.role !== "admin") delete data.templateId;
       if (Object.keys(data).length === 0) return { success: true };
       await db.updateProxySubToken(input.id, data as any);
       return { success: true };
     }),
 
-  /** 重置令牌：旧地址立刻失效，用于设备丢失。 */
+  /** 重置令牌：旧地址立刻失效，用于设备丢失。设备列表一并清空 —— 旧地址上的设备和新地址没关系。 */
   rotateToken: protectedProcedure
     .input(z.object({ id: z.number().int().positive() }))
     .mutation(async ({ ctx, input }) => {
       await assertProxySubscriptionAllowed(ctx);
       await assertOwnedToken(input.id, ctx);
       const token = nanoid(SUBSCRIPTION_TOKEN_LENGTH);
-      await db.updateProxySubToken(input.id, { token, accessCount: 0 } as any);
+      await db.updateProxySubToken(input.id, { token, accessCount: 0, lastClientFamily: null, lastClientVersion: null } as any);
+      await db.clearProxySubDevices(input.id);
       return { token };
+    }),
+
+  /** 这条令牌实际会发出去的内容：处理器跑完之后的节点名、组、信息节点、自定义规则报错。 */
+  tokenPreview: protectedProcedure
+    .input(z.object({ id: z.number().int().positive(), format: z.enum(PROXY_SUBSCRIPTION_FORMATS).optional() }))
+    .query(async ({ ctx, input }) => {
+      await assertProxySubscriptionAllowed(ctx);
+      const token = await assertOwnedToken(input.id, ctx);
+      const context = await loadProxySubTokenContext(token);
+      if (!context) throw new Error("令牌主人不存在");
+      const template = await resolveTemplateForToken(context, input.format || "clash");
+      const built = await db.buildProxySubscriptionForToken(Number(token.userId), {
+        rulePreset: normalizeProxyRulePresetSafe(token.rulePreset),
+        scope: context.scope,
+        options: context.options,
+        settings: context.settings,
+        userCustomRules: String(context.owner.proxySubCustomRules || ""),
+        template,
+        info: infoNodesWanted(context) ? context.info : null,
+        vars: { appName: context.appName, panelUrl: "", subUrl: "", username: context.username },
+      });
+      return {
+        nodes: built.document.nodes.map((node) => ({ name: node.name, protocol: node.protocol, address: node.address, port: node.port, regionCode: node.regionCode || "" })),
+        groups: built.document.groups.map((group) => ({ name: group.name, type: group.type, members: group.members })),
+        infoNodes: built.infoNodes.map((node) => node.name),
+        skipped: built.plan.skipped.map((item) => ({ ...item, label: SKIP_LABELS[item.reason] })),
+        customRuleErrors: built.customRuleErrors,
+        templateName: template?.name || "",
+        deviceLimit: context.deviceLimit,
+      };
+    }),
+
+  /** 这条令牌最近的拉取记录。 */
+  tokenAccessLogs: protectedProcedure
+    .input(z.object({ id: z.number().int().positive(), limit: z.number().int().min(1).max(200).default(50), beforeMs: z.number().int().positive().optional() }))
+    .query(async ({ ctx, input }) => {
+      await assertProxySubscriptionAllowed(ctx);
+      await assertOwnedToken(input.id, ctx);
+      const rows = await db.listProxySubAccessLogs({ tokenId: input.id, limit: input.limit, beforeMs: input.beforeMs });
+      return (rows as any[]).map((row) => ({ ...row, clientLabel: row.clientFamily ? (PROXY_CLIENT_FAMILY_LABELS as any)[row.clientFamily] || row.clientFamily : "" }));
+    }),
+
+  /** 自己名下最近 N 天的拉取统计。 */
+  accessStats: protectedProcedure
+    .input(z.object({ days: z.number().int().min(1).max(90).default(7) }).optional())
+    .query(async ({ ctx, input }) => {
+      if (!await hasProxySubscriptionPermission(ctx)) return { byResult: [], byFamily: [], total: 0, distinctIps: 0 };
+      return db.proxySubAccessStats({ userId: ctx.user.id, days: input?.days || 7 });
+    }),
+
+  tokenDevices: protectedProcedure
+    .input(z.object({ id: z.number().int().positive() }))
+    .query(async ({ ctx, input }) => {
+      await assertProxySubscriptionAllowed(ctx);
+      await assertOwnedToken(input.id, ctx);
+      return db.listProxySubDevicesByToken(input.id);
+    }),
+
+  deleteDevice: protectedProcedure
+    .input(z.object({ id: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      await assertProxySubscriptionAllowed(ctx);
+      const device = await db.getProxySubDeviceById(input.id);
+      if (!device) throw new Error("设备记录不存在");
+      if (ctx.user.role !== "admin" && Number((device as any).userId) !== ctx.user.id) throw new Error("无权操作该设备");
+      await db.deleteProxySubDevice(input.id);
+      return { success: true };
+    }),
+
+  /** 校验一段自定义规则文本，界面上边写边报错。 */
+  validateCustomRules: protectedProcedure
+    .input(z.object({ text: z.string().max(20000) }))
+    .query(({ input }) => {
+      const parsed = parseProxyCustomRules(input.text);
+      return { count: parsed.rules.length, errors: parsed.errors };
+    }),
+
+  /** 节点在面板里的顺序（订阅默认按它排）。 */
+  reorderNodes: protectedProcedure
+    .input(z.object({ ids: z.array(z.number().int().positive()).max(1000) }))
+    .mutation(async ({ ctx, input }) => {
+      await assertProxySubscriptionAllowed(ctx);
+      await db.reorderProxyNodes(ctx.user.id, input.ids);
+      return { success: true };
+    }),
+
+  // ==================== 外部订阅 ====================
+
+  listSources: protectedProcedure.query(async ({ ctx }) => {
+    if (!await hasProxySubscriptionPermission(ctx)) return [];
+    const rows = await db.listProxySubSourcesByUser(ctx.user.id);
+    return (rows as any[]).map((row) => ({
+      ...row,
+      upstream: safeJson(row.upstreamUserinfo),
+    }));
+  }),
+
+  createSource: protectedProcedure
+    .input(z.object({
+      name: z.string().trim().min(1).max(64),
+      url: z.string().trim().min(1).max(2048),
+      userAgent: z.string().trim().max(200).optional(),
+      intervalSec: z.number().int().min(600).max(7 * 86400).optional(),
+      mode: z.enum(PROXY_SUB_SOURCE_MODES).default("import"),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      await assertProxySubscriptionAllowed(ctx);
+      await assertExternalSourcesAllowed(ctx);
+      const url = normalizeProxySubSourceUrl(input.url);
+      if (!url) throw new Error("订阅地址要是 http(s) 开头的完整地址");
+      const settings = await loadProxySubSettings();
+      if (ctx.user.role !== "admin" && settings.externalSourceMaxPerUser > 0) {
+        const used = await db.countProxySubSourcesByUser(ctx.user.id);
+        if (used >= settings.externalSourceMaxPerUser) throw new Error(`外部订阅已达上限（${used}/${settings.externalSourceMaxPerUser}）`);
+      }
+      const id = await db.createProxySubSource({
+        userId: ctx.user.id,
+        name: input.name,
+        url,
+        userAgent: input.userAgent || null,
+        intervalSec: normalizeProxySubSourceInterval(input.intervalSec),
+        mode: input.mode,
+        isEnabled: true,
+      } as any);
+      // 建完立刻拉一次：填错了地址当场就知道。
+      const result = await syncProxySubSource(Number(id), { force: true });
+      return { id, sync: result };
+    }),
+
+  updateSource: protectedProcedure
+    .input(z.object({
+      id: z.number().int().positive(),
+      name: z.string().trim().min(1).max(64).optional(),
+      url: z.string().trim().min(1).max(2048).optional(),
+      userAgent: z.string().trim().max(200).nullable().optional(),
+      intervalSec: z.number().int().min(600).max(7 * 86400).optional(),
+      mode: z.enum(PROXY_SUB_SOURCE_MODES).optional(),
+      isEnabled: z.boolean().optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      await assertProxySubscriptionAllowed(ctx);
+      await assertOwnedSource(input.id, ctx);
+      const data: Record<string, unknown> = {};
+      if (input.name !== undefined) data.name = input.name;
+      if (input.url !== undefined) {
+        const url = normalizeProxySubSourceUrl(input.url);
+        if (!url) throw new Error("订阅地址要是 http(s) 开头的完整地址");
+        data.url = url;
+        data.lastContentHash = null;
+      }
+      if (input.userAgent !== undefined) data.userAgent = input.userAgent || null;
+      if (input.intervalSec !== undefined) data.intervalSec = normalizeProxySubSourceInterval(input.intervalSec);
+      if (input.mode !== undefined) data.mode = input.mode;
+      if (input.isEnabled !== undefined) data.isEnabled = input.isEnabled;
+      if (Object.keys(data).length > 0) await db.updateProxySubSource(input.id, data as any);
+      invalidateProxySubCacheForUser(ctx.user.id);
+      return { success: true };
+    }),
+
+  deleteSource: protectedProcedure
+    .input(z.object({ id: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      await assertProxySubscriptionAllowed(ctx);
+      await assertOwnedSource(input.id, ctx);
+      await db.deleteProxySubSource(input.id);
+      return { success: true };
+    }),
+
+  syncSource: protectedProcedure
+    .input(z.object({ id: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      await assertProxySubscriptionAllowed(ctx);
+      await assertOwnedSource(input.id, ctx);
+      return syncProxySubSource(input.id, { force: true });
+    }),
+
+  // ==================== 管理员 ====================
+
+  adminListTokens: adminProcedure
+    .input(z.object({
+      search: z.string().trim().max(64).optional(),
+      userId: z.number().int().positive().optional(),
+      page: z.number().int().positive().default(1),
+      pageSize: z.number().int().min(1).max(100).default(20),
+    }))
+    .query(async ({ input }) => {
+      const result = await db.listAllProxySubTokens(input);
+      return {
+        total: result.total,
+        items: (result.items as any[]).map((row) => ({
+          ...row,
+          lastClientLabel: row.lastClientFamily ? (PROXY_CLIENT_FAMILY_LABELS as any)[row.lastClientFamily] || row.lastClientFamily : "",
+          scoped: !!row.scopeJson,
+        })),
+      };
+    }),
+
+  adminAccessStats: adminProcedure
+    .input(z.object({ days: z.number().int().min(1).max(365).default(7), userId: z.number().int().positive().optional() }).optional())
+    .query(async ({ input }) => {
+      const stats = await db.proxySubAccessStats({ days: input?.days || 7, userId: input?.userId });
+      return {
+        ...stats,
+        byFamily: stats.byFamily.map((item) => ({ ...item, label: (PROXY_CLIENT_FAMILY_LABELS as any)[item.family] || item.family })),
+      };
+    }),
+
+  adminAccessLogs: adminProcedure
+    .input(z.object({
+      tokenId: z.number().int().positive().optional(),
+      userId: z.number().int().positive().optional(),
+      limit: z.number().int().min(1).max(500).default(100),
+      beforeMs: z.number().int().positive().optional(),
+    }))
+    .query(async ({ input }) => {
+      const rows = await db.listProxySubAccessLogs(input);
+      return (rows as any[]).map((row) => ({ ...row, clientLabel: row.clientFamily ? (PROXY_CLIENT_FAMILY_LABELS as any)[row.clientFamily] || row.clientFamily : "" }));
+    }),
+
+  adminTokenDevices: adminProcedure
+    .input(z.object({ tokenId: z.number().int().positive() }))
+    .query(async ({ input }) => db.listProxySubDevicesByToken(input.tokenId)),
+
+  adminGetSettings: adminProcedure.query(async () => loadProxySubSettings()),
+
+  adminUpdateSettings: adminProcedure
+    .input(z.object({
+      updateIntervalHours: z.number().int().min(1).max(720).optional(),
+      testUrl: z.string().trim().max(256).optional(),
+      testIntervalSec: z.number().int().min(30).max(86400).optional(),
+      toleranceMs: z.number().int().min(0).max(5000).optional(),
+      rulesetIntervalSec: z.number().int().min(3600).max(86400 * 30).optional(),
+      rulesetMirror: z.string().trim().max(256).optional(),
+      announce: z.string().max(1000).optional(),
+      supportUrl: z.string().trim().max(256).optional(),
+      domains: z.array(z.string().trim().max(256)).max(10).optional(),
+      rateLimitPerMinute: z.number().int().min(0).max(100000).optional(),
+      ipRateLimitPerMinute: z.number().int().min(0).max(100000).optional(),
+      cacheTtlSec: z.number().int().min(0).max(3600).optional(),
+      deviceLimitEnabled: z.boolean().optional(),
+      deviceLimitStrict: z.boolean().optional(),
+      deviceLimitFallback: z.number().int().min(0).max(1000).optional(),
+      deviceIpWindowHours: z.number().int().min(1).max(720).optional(),
+      infoNodesDefault: z.boolean().optional(),
+      nameTemplateDefault: z.string().trim().max(120).optional(),
+      flagEmojiDefault: z.boolean().optional(),
+      regionGroupsDefault: z.boolean().optional(),
+      protocolPrefixDefault: z.boolean().optional(),
+      accessLogRetentionDays: z.number().int().min(0).max(365).optional(),
+      externalSourcesEnabled: z.boolean().optional(),
+      externalSourceMaxPerUser: z.number().int().min(0).max(100).optional(),
+      landingPageEnabled: z.boolean().optional(),
+      notifyFirstAccess: z.boolean().optional(),
+      notifyNewDevice: z.boolean().optional(),
+      notifyDeviceLimit: z.boolean().optional(),
+      notifyFailures: z.boolean().optional(),
+      customRulesPrepend: z.string().max(20000).optional(),
+      customRulesAppend: z.string().max(20000).optional(),
+    }))
+    .mutation(async ({ input }) => {
+      for (const key of ["customRulesPrepend", "customRulesAppend"] as const) {
+        const text = input[key];
+        if (text === undefined) continue;
+        const parsed = parseProxyCustomRules(text);
+        if (parsed.errors.length > 0) throw new Error(`${key === "customRulesPrepend" ? "前置" : "后置"}规则第 ${parsed.errors[0].line} 行：${parsed.errors[0].message}`);
+      }
+      if (input.nameTemplateDefault !== undefined && !input.nameTemplateDefault.trim()) input.nameTemplateDefault = PROXY_SUB_DEFAULT_SETTINGS.nameTemplateDefault;
+      const normalized = normalizeProxySubSettings({ ...(await loadProxySubSettings()), ...input } as Partial<ProxySubSettings>);
+      return saveProxySubSettings(normalized);
+    }),
+
+  adminListTemplates: adminProcedure.query(async () => ({
+    templates: await db.listProxySubTemplates(),
+    builtin: PROXY_SUB_BUILTIN_PRELUDES,
+    targets: PROXY_SUB_TEMPLATE_TARGETS,
+  })),
+
+  adminCreateTemplate: adminProcedure
+    .input(z.object({
+      name: z.string().trim().min(1).max(64),
+      target: z.enum(PROXY_SUB_TEMPLATE_TARGETS),
+      prelude: z.string().max(60000),
+      customGroups: z.array(z.object({
+        name: z.string().trim().max(64),
+        type: z.enum(["select", "url-test", "fallback", "load-balance"]),
+        filter: z.string().trim().max(200).default(""),
+        includeGroups: z.boolean().default(false),
+      })).max(30).default([]),
+      isDefault: z.boolean().default(false),
+    }))
+    .mutation(async ({ input }) => {
+      const customGroups = normalizeProxySubCustomGroups(input.customGroups);
+      const verdict = validateProxySubTemplate({ target: input.target, prelude: input.prelude, customGroups });
+      if (!verdict.ok) throw new Error(verdict.error);
+      const id = await db.createProxySubTemplate({
+        name: input.name,
+        target: input.target,
+        prelude: input.prelude,
+        customGroupsJson: customGroups.length > 0 ? JSON.stringify(customGroups) : null,
+        isDefault: input.isDefault,
+      });
+      return { id };
+    }),
+
+  adminUpdateTemplate: adminProcedure
+    .input(z.object({
+      id: z.number().int().positive(),
+      name: z.string().trim().min(1).max(64).optional(),
+      prelude: z.string().max(60000).optional(),
+      customGroups: z.array(z.object({
+        name: z.string().trim().max(64),
+        type: z.enum(["select", "url-test", "fallback", "load-balance"]),
+        filter: z.string().trim().max(200).default(""),
+        includeGroups: z.boolean().default(false),
+      })).max(30).optional(),
+      isDefault: z.boolean().optional(),
+    }))
+    .mutation(async ({ input }) => {
+      const existing = await db.getProxySubTemplateById(input.id);
+      if (!existing) throw new Error("模板不存在");
+      const customGroups = input.customGroups !== undefined ? normalizeProxySubCustomGroups(input.customGroups) : existing.customGroups;
+      const verdict = validateProxySubTemplate({ target: existing.target, prelude: input.prelude ?? existing.prelude, customGroups });
+      if (!verdict.ok) throw new Error(verdict.error);
+      await db.updateProxySubTemplate(input.id, {
+        ...(input.name !== undefined ? { name: input.name } : {}),
+        ...(input.prelude !== undefined ? { prelude: input.prelude } : {}),
+        ...(input.customGroups !== undefined ? { customGroupsJson: customGroups.length > 0 ? JSON.stringify(customGroups) : null } : {}),
+        ...(input.isDefault !== undefined ? { isDefault: input.isDefault } : {}),
+      });
+      return { success: true };
+    }),
+
+  adminDeleteTemplate: adminProcedure
+    .input(z.object({ id: z.number().int().positive() }))
+    .mutation(async ({ input }) => {
+      await db.deleteProxySubTemplate(input.id);
+      return { success: true };
+    }),
+
+  /** 某个用户的订阅侧配置：自定义规则、指定模板、设备数。管理员在用户页上改。 */
+  adminGetUserConfig: adminProcedure
+    .input(z.object({ userId: z.number().int().positive() }))
+    .query(async ({ input }) => {
+      const user = await db.getUserById(input.userId) as any;
+      if (!user) throw new Error("用户不存在");
+      return {
+        customRules: String(user.proxySubCustomRules || ""),
+        templateId: Number(user.proxySubTemplateId || 0),
+        maxProxyDevices: Number(user.maxProxyDevices || 0),
+        manualMaxProxyDevices: Number(user.manualMaxProxyDevices || 0),
+      };
+    }),
+
+  adminSetUserConfig: adminProcedure
+    .input(z.object({
+      userId: z.number().int().positive(),
+      customRules: z.string().max(20000).optional(),
+      templateId: z.number().int().min(0).optional(),
+    }))
+    .mutation(async ({ input }) => {
+      if (input.customRules !== undefined) {
+        const parsed = parseProxyCustomRules(input.customRules);
+        if (parsed.errors.length > 0) throw new Error(`第 ${parsed.errors[0].line} 行：${parsed.errors[0].message}`);
+        await db.setUserProxySubCustomRules(input.userId, input.customRules.trim() || null);
+      }
+      if (input.templateId !== undefined) {
+        if (input.templateId > 0 && !(await db.getProxySubTemplateById(input.templateId))) throw new Error("模板不存在");
+        await db.setUserProxySubTemplate(input.userId, input.templateId);
+      }
+      return { success: true };
     }),
 
   deleteToken: protectedProcedure
