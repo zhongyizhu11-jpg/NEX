@@ -68,10 +68,13 @@ export function QuickStartSection({
   health,
   isAdmin,
   onOpen,
+  dense = false,
 }: {
   health: SystemHealth | undefined;
   isAdmin: boolean;
   onOpen: (href: string) => void;
+  /** 精简布局：三步折成一行「快速开始 · 已完成 n/3 ｜ 下一步 ›」，点了去下一步 */
+  dense?: boolean;
 }) {
   const [dismissed, setDismissed] = useState(readDismissed);
   // 数据没回来时不画：先闪一下「0 台主机，快去添加」，再发现其实有 20 台，最糟。
@@ -89,6 +92,24 @@ export function QuickStartSection({
       // 存不下就只在这一次打开里藏起来
     }
   };
+
+  if (dense && current) {
+    const currentIndex = steps.indexOf(current) + 1;
+    return (
+      <ListSection>
+        <ListRow
+          icon={(
+            <span aria-hidden="true" className="flex h-5 w-5 items-center justify-center rounded-full border border-foreground text-[11px] font-semibold tabular-nums text-foreground">
+              {currentIndex}
+            </span>
+          )}
+          label={`快速开始 · 已完成 ${doneCount}/${steps.length}`}
+          value={current.title}
+          onSelect={() => onOpen(current.href)}
+        />
+      </ListSection>
+    );
+  }
 
   return (
     <ListSection

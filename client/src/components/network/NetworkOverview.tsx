@@ -13,6 +13,7 @@ import {
   type OverviewCluster,
   type OverviewEdgeTone,
 } from "@/features/network/networkOverview";
+import { useCompactLayoutAttribute } from "@/hooks/useCompactLayout";
 import type { NetworkMapModel } from "@/features/network/networkMapModel";
 import { WORLD_GEO_UNIT, worldBordersPath, worldLandPath, worldShorePath } from "@/features/network/worldGeo";
 import { describeNetworkHealth, networkHealthPriority, type NetworkHealth } from "@shared/networkHealth";
@@ -88,7 +89,9 @@ function useMeasuredWidth(fallback: number) {
 }
 
 /** 画布高度：手机上接近 3:2，桌面封顶，和 NetworkMapCardPlaceholder 的占位一致 */
-export function overviewHeight(width: number) {
+/** 画布高度随宽度走；精简布局（dense）下矮一档：首页第一屏多放下一截状态卡和列表 */
+export function overviewHeight(width: number, dense = false) {
+  if (dense) return Math.round(Math.min(220, Math.max(150, width * 0.42)));
   return Math.round(Math.min(320, Math.max(220, width * 0.66)));
 }
 
@@ -130,7 +133,8 @@ export function NetworkOverview({ model, forwardLinks, onOpen, initialWidth = 72
   initialWidth?: number;
 }) {
   const { ref, width } = useMeasuredWidth(initialWidth);
-  const height = overviewHeight(width);
+  const dense = useCompactLayoutAttribute();
+  const height = overviewHeight(width, dense);
   const [openId, setOpenId] = useState<number | null>(null);
   const viewport = useMemo(() => overviewViewport(model.nodes, width, height), [model.nodes, width, height]);
   const placed = useMemo(() => layoutOverview(model.nodes, width, height), [model.nodes, width, height]);

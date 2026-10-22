@@ -1314,6 +1314,7 @@ const HostTableRow = memo(function HostTableRow({
   sortingEnabled,
   sortDisabled,
   sortBusy,
+  dense = false,
 }: {
   host: any;
   latestMetric: any;
@@ -1327,6 +1328,8 @@ const HostTableRow = memo(function HostTableRow({
   sortBusy: boolean;
   // 同卡片：只参与 memo 比较。
   clockMinute: number;
+  /** 精简布局的表：一行 40px 左右，七列，不冻结、不横滚（和规则表同一密度） */
+  dense?: boolean;
 }) {
   const agentUpgradeTimedOut = isAgentUpgradeTimedOut(host);
   const agentNeedsUpdate = isAgentVersionBehind(host.agentVersion, latestAgentVersion);
@@ -1350,9 +1353,91 @@ const HostTableRow = memo(function HostTableRow({
     host.mimicRuntimeStatus ? `Mimic: ${host.mimicRuntimeStatus}` : "",
     host.mimicRuntimeMessage ? String(host.mimicRuntimeMessage) : "",
   ].filter(Boolean).join("\n");
+  const pct = (value: unknown) => (host.isOnline && typeof value === "number" && Number.isFinite(value) ? `${Math.round(value)}%` : "--");
+  const pctClass = (value: unknown) => (host.isOnline && typeof value === "number" && value >= 90 ? "text-[var(--fx-down-text)]" : host.isOnline && typeof value === "number" && value >= 70 ? "text-[var(--fx-warn-text)]" : "");
   return (
     <SortableItem id={Number(host.id)} disabled={sortDisabled} itemKind="row">
-      {({ itemProps, handleProps, isDragging, isDropTarget }) => (
+      {({ itemProps, handleProps, isDragging, isDropTarget }) => dense ? (
+    /*
+      精简的表（用户 2026-10-21 要的「条状」）：名称 + IP · 地区 / 系统 · Agent / 在线 · 到期 / CPU · 内存 · 磁盘 /
+      累计 / 实时 / 操作，一行 40px 左右。系统累计、头像进详情。
+    */
+    <TableRow
+      {...itemProps}
+      className={cn(
+        "group/sortable host-table-row align-middle hover:bg-transparent",
+        isDragging && "opacity-55 ring-1 ring-primary/35",
+        isDropTarget && "ring-1 ring-primary/45",
+      )}
+    >
+      <TableCell className="px-3 py-2">
+        <div className="flex min-w-0 items-center gap-2">
+          {sortingEnabled && (
+            <SortableDragHandle dragHandleProps={handleProps} visible={isDragging} busy={sortBusy} className="shrink-0" />
+          )}
+          <div className="min-w-0 flex-1">
+            <div className="flex min-w-0 items-center gap-1.5">
+              <HostListStatusBadge host={host} />
+              <span className="min-w-0 truncate font-medium" title={hostRuntimeTitle}>{host.name}</span>
+            </div>
+            <div className="flex min-w-0 items-center gap-1.5 text-[11px] leading-4 text-muted-foreground" title={primaryAddressText}>
+              <span className="min-w-0 truncate font-mono">{primaryAddressText}</span>
+              <HostRegionBadge host={host} compact />
+            </div>
+          </div>
+        </div>
+      </TableCell>
+      <TableCell className="px-3 py-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-1 text-[11px] text-muted-foreground">
+          {hostOs.label ? <span className="truncate" title={hostOs.full}>{hostOs.label}</span> : <span>--</span>}
+          {host.agentVersion && <span className="font-mono" title="Agent 版本">v{host.agentVersion}</span>}
+          {agentNeedsUpdate && <span className="text-[var(--fx-warn-text)]">新版本</span>}
+          <FxpRuntimeBadge host={host} className="h-4 px-1 text-[9px] leading-none" />
+          {host.agentUpgradeRequested && (
+            <span className={agentUpgradeTimedOut ? "text-destructive" : "text-primary"}>{agentUpgradeTimedOut ? "升级失败" : "升级中"}</span>
+          )}
+        </div>
+      </TableCell>
+      <TableCell className="whitespace-nowrap px-3 py-2 text-[11px] tabular-nums text-muted-foreground">
+        <span title={uptimeTitle}>{uptimeText}</span>
+        <span className="mx-1 opacity-50">·</span>
+        <span className={hostRemainingClass(remainingDays)} title={expiryTitle}>{remainingDays}</span>
+      </TableCell>
+      <TableCell className="whitespace-nowrap px-3 py-2 text-[11px] tabular-nums">
+        <span className="text-muted-foreground">CPU </span><span className={pctClass(latestMetric?.cpuUsage)} title={host.cpuInfo ? String(host.cpuInfo) : undefined}>{pct(latestMetric?.cpuUsage)}</span>
+        <span className="mx-1.5 text-muted-foreground opacity-50">·</span>
+        <span className="text-muted-foreground">内存 </span><span className={pctClass(latestMetric?.memoryUsage)} title={memoryDetail}>{pct(latestMetric?.memoryUsage)}</span>
+        <span className="mx-1.5 text-muted-foreground opacity-50">·</span>
+        <span className="text-muted-foreground">磁盘 </span><span className={pctClass(latestMetric?.diskUsage)} title={diskDetail}>{pct(latestMetric?.diskUsage)}</span>
+      </TableCell>
+      <TableCell className="whitespace-nowrap px-3 py-2 text-[11px] tabular-nums">
+        <span className="text-[var(--fx-flow-in)]" title={`累计入向：${formatBytes(Number(traffic?.bytesIn || 0))}`}>↓ {formatBytes(Number(traffic?.bytesIn || 0))}</span>
+        <span className="mx-1.5 text-muted-foreground opacity-50">·</span>
+        <span className="text-[var(--fx-flow-out)]" title={`累计出向：${formatBytes(Number(traffic?.bytesOut || 0))}`}>↑ {formatBytes(Number(traffic?.bytesOut || 0))}</span>
+      </TableCell>
+      <TableCell className="whitespace-nowrap px-3 py-2 text-[11px] tabular-nums text-muted-foreground">
+        <span title="实时入向">↓ {formatOptionalBytesPerSecond(latestMetric?.networkSpeedIn)}</span>
+        <span className="mx-1.5 opacity-50">·</span>
+        <span title="实时出向">↑ {formatOptionalBytesPerSecond(latestMetric?.networkSpeedOut)}</span>
+      </TableCell>
+      <TableCell className="px-2 py-2 text-right">
+        <HostActionButtons
+          host={host}
+          onEdit={actions.edit}
+          onDelete={actions.remove}
+          onUpgrade={actions.upgrade}
+          onResetTraffic={isAdmin ? actions.resetTraffic : undefined}
+          onCorrectTraffic={isAdmin ? actions.correctTraffic : undefined}
+          onEditBilling={isAdmin ? actions.editBilling : undefined}
+          onViewProbeLatency={actions.viewProbeLatency}
+          resetTrafficPending={resetTrafficPending}
+          canUpgrade={isAdmin}
+          className="flex items-center justify-end gap-0.5"
+          buttonClassName="h-7 w-7"
+        />
+      </TableCell>
+    </TableRow>
+      ) : (
     <TableRow
       {...itemProps}
       className={cn(
@@ -1486,9 +1571,16 @@ function HostsContent() {
     地图在 md 以下本来就藏着（切换按钮也藏着），可桌面上记住的「地图」带到手机上，
     就是在看不见的地方跑一个 3D 地球、列表却是空的。手机上按精简卡片显示，记住的选择不动。
   */
+  const compactLayout = useCompactLayout();
+  /*
+    精简布局（桌面）：主机就是一张表（用户 2026-10-21 定的「条状」）；记住的卡片视图不动，
+    回到标准布局还是卡片。地图两种照旧可切。手机上没有表，走两行的列表行（compact.css）。
+  */
   const viewMode: HostViewMode = isBelowMd && (preferredViewMode === "map" || preferredViewMode === "flat-map")
     ? "compact-card"
-    : preferredViewMode;
+    : compactLayout && !isBelowMd && (preferredViewMode === "card" || preferredViewMode === "compact-card")
+      ? "table"
+      : preferredViewMode;
   const [activeManageTab, setActiveManageTab] = useUrlTab<HostManageTab>({
     values: user?.role === "admin" ? HOST_MANAGE_TABS_ADMIN : HOST_MANAGE_TABS_USER,
     defaultValue: "hosts",
@@ -1658,7 +1750,6 @@ function HostsContent() {
   const [tokenViewMode, setTokenViewMode] = useState<AgentTokenViewMode>(() => getStoredAgentTokenViewMode());
   const [serviceViewMode, setServiceViewMode] = useState<HostProbeServiceViewMode>(() => getStoredHostProbeServiceViewMode());
   const [hostGroupViewMode, setHostGroupViewMode] = useState<HostGroupViewMode>(() => getStoredHostGroupViewMode());
-  const compactLayout = useCompactLayout();
   // 精简：「添加主机」上到页头右边（和规则 / 链路页一致）；手机上搜索行收成分类条右边一枚图标。
   // 标准布局下这一页整页按原来的样子（页面根带 data-fx-std-page，compact.css 让出去）。
   const mergeListControls = compactLayout;
@@ -2542,7 +2633,7 @@ function HostsContent() {
   );
 
   return (
-    <div className="space-y-6" data-fx-std-page={compactLayout ? undefined : ""}>
+    <div className="space-y-6" data-fx-std-page={compactLayout ? undefined : ""} data-fx-compact-page={compactLayout ? "" : undefined}>
       {/* data-fx-std-page：标准布局下这一页整页按原来的标准画（compact.css 让出去）；精简下不带，按紧凑的方式画 */}
       {/* Header */}
       <WorkspaceHeader title={<>主机管理</>} status={
@@ -2587,8 +2678,11 @@ function HostsContent() {
                 value={viewMode}
                 onChange={handleViewModeChange}
                 items={[
-                  { value: "compact-card", label: "精简卡片", icon: Rows3 },
-                  { value: "card", label: "标准卡片", icon: LayoutGrid },
+                  /* 精简下桌面只有表和两种地图（卡片那两档是标准布局的） */
+                  ...(compactLayout ? [] : [
+                    { value: "compact-card" as const, label: "精简卡片", icon: Rows3 },
+                    { value: "card" as const, label: "标准卡片", icon: LayoutGrid },
+                  ]),
                   { value: "table", label: "列表视图", icon: List },
                   { value: "map", label: "3D 地球视图", icon: Globe, hideBelow: "md" },
                   { value: "flat-map", label: "平面地图视图", icon: MapPinned, hideBelow: "md" },
@@ -2796,7 +2890,19 @@ function HostsContent() {
           ) : (
             <Card className="host-table-shell hidden overflow-hidden border-border bg-card sm:block">
               <CardContent className="p-0">
-                <Table className="host-management-table w-full min-w-[1340px] table-fixed">
+                <Table className={cn("host-management-table w-full table-fixed", compactLayout ? "fx-hosts-table-dense min-w-[1000px]" : "min-w-[1340px]")}>
+                  {compactLayout ? (
+                    /* 精简的表：七列合计 1130，table-fixed 下按比例缩放，1366 宽不横滚 */
+                    <colgroup>
+                      <col style={{ width: 240 }} />
+                      <col style={{ width: 140 }} />
+                      <col style={{ width: 120 }} />
+                      <col style={{ width: 200 }} />
+                      <col style={{ width: 150 }} />
+                      <col style={{ width: 130 }} />
+                      <col style={{ width: 150 }} />
+                    </colgroup>
+                  ) : (
                   <colgroup>
                     <col className="w-[320px]" />
                     <col className="w-[128px]" />
@@ -2807,7 +2913,19 @@ function HostsContent() {
                     <col style={{ width: "calc(25% - 191px)" }} />
                     <col className="w-[120px]" />
                   </colgroup>
+                  )}
                   <TableHeader>
+                    {compactLayout ? (
+                      <TableRow className="hover:bg-transparent">
+                        <TableHead className="whitespace-nowrap">主机</TableHead>
+                        <TableHead className="whitespace-nowrap">系统 · Agent</TableHead>
+                        <TableHead className="whitespace-nowrap">在线 · 到期</TableHead>
+                        <TableHead className="whitespace-nowrap">资源</TableHead>
+                        <TableHead className="whitespace-nowrap">累计流量</TableHead>
+                        <TableHead className="whitespace-nowrap">实时网络</TableHead>
+                        <TableHead className="px-2 text-right">操作</TableHead>
+                      </TableRow>
+                    ) : (
                     <TableRow className="hover:bg-transparent">
                       <TableHead className="host-table-frozen-cell host-table-frozen-left sticky left-0 z-30 w-[320px] min-w-[320px] max-w-[320px] border-r border-border/60 bg-card">
                         设备名称
@@ -2829,6 +2947,7 @@ function HostsContent() {
                         操作
                       </TableHead>
                     </TableRow>
+                    )}
                   </TableHeader>
                   <SortableReorderContext sortable={hostSortable} ids={pagedHostIds} strategy="vertical" restrictToList>
                   <TableBody>
@@ -2846,6 +2965,7 @@ function HostsContent() {
                         sortDisabled={hostSortable.disabled}
                         sortBusy={hostReorderPending}
                         clockMinute={clockMinute}
+                        dense={compactLayout}
                       />
                     ))}
                   </TableBody>

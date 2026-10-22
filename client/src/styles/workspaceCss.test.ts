@@ -93,3 +93,8 @@ test("输入框字号低于 16px 的前提：viewport 里有 maximum-scale=1", (
     assert.match(html, /name="viewport"[\s\S]*?maximum-scale=1/);
   }
 });
+
+test("iOS App 手机顶栏往上收：安全区只留 83%、顶栏 44px；液态玻璃的浮条不再离顶 8px", () => {
+  assert.match(css, /html\.capacitor-ios \.workspace-appbar \{ --fx-header-height: 44px; padding-top: calc\(env\(safe-area-inset-top, 0px\) \* 0\.83\); height: calc\(44px \+ env\(safe-area-inset-top, 0px\) \* 0\.83\); \}/);
+  assert.match(css, /html\.capacitor-ios\[data-ui-theme="liquid-glass"\] \.workspace-appbar \{ top: 0; margin-top: 0; \}/);
+});
