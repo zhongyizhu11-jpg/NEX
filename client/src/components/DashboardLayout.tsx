@@ -87,7 +87,7 @@ import { PasswordInput } from "./ui/password-input";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { useQueryFailureSignal } from "@/hooks/useQueryFailureSignal";
-import { queryFailureBannerText } from "@/lib/queryFailureBanner";
+import { queryFailureBannerText, queryFailureDetailText } from "@/lib/queryFailureBanner";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
 import { authErrorMessage } from "@/lib/authErrorMessage";
@@ -1962,7 +1962,11 @@ function DashboardLayoutContent({
           */}
           {queryFailure.visible ? (
             <div className="mb-4 flex flex-col gap-2 rounded-lg border border-destructive/30 bg-destructive/[0.06] px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between">
-              <p className="min-w-0">{queryFailureBannerText(queryFailure.failureCount)}</p>
+              <div className="min-w-0">
+                <p>{queryFailureBannerText(queryFailure.failureCount)}</p>
+                {/* 第二行写清是哪几项、报的什么错 —— 用户截图就能定位，不用再猜 */}
+                <p className="mt-1 break-all text-xs text-muted-foreground">{queryFailureDetailText(queryFailure.failures)}</p>
+              </div>
               <div className="flex shrink-0 items-center gap-2">
                 <Button size="sm" variant="outline" onClick={queryFailure.retry}>
                   全部重试
