@@ -69,6 +69,7 @@ export default defineConfig({
         text: "用户和维护",
         items: [
           { text: "用户、套餐和权限", link: "/guide/users-billing" },
+          { text: "客户端订阅", link: "/guide/subscriptions" },
           { text: "界面与精简布局", link: "/guide/layout" },
           { text: "邀请返利", link: "/guide/referrals" },
           { text: "Telegram 和通知", link: "/guide/notifications" },

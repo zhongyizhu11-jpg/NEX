@@ -53,6 +53,7 @@ export * from "./repositories/hostProbeServiceRepository";
 export * from "./repositories/hostGroupRepository";
 export * from "./repositories/pluginRepository";
 export * from "./repositories/proxySubscriptionRepository";
+export * from "./repositories/proxySubExtraRepository";
 export * from "./repositories/proxyInboundRepository";
 export * from "./repositories/ruleEntryBridgeRepository";
 export * from "./repositories/referralRepository";

@@ -40,7 +40,7 @@ export function isPanelAccessExemptPath(path: string, rule: Pick<PanelAccessRule
   if (p === "/api/stream" || p.startsWith("/api/stream/")) return true;
   if (p.startsWith("/api/payment/webhook")) return true;
   if (p.startsWith("/api/migration/")) return true;
-  if (p.startsWith("/api/sub/") && !rule.includeSubscription) return true;
+  if ((p.startsWith("/api/sub/") || p.startsWith("/s/")) && !rule.includeSubscription) return true;
   return false;
 }
 

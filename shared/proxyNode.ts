@@ -141,6 +141,11 @@ export type ProxyNode = {
    * Loon 与 Quantumult X 的订阅格式没有这个位置，那边只能在客户端里手连一次。
    */
   frontProxyName?: string;
+  /**
+   * 地区（ISO 国家码），由订阅处理器填：加国旗、建地区组、按地区排序都看它。
+   * 解析链接时不填 —— 链接里没有这个信息，名字里的关键字由处理器自己猜。
+   */
+  regionCode?: string;
 };
 
 export function createEmptyProxyNode(): ProxyNode {

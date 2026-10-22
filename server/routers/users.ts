@@ -404,6 +404,8 @@ export const usersRouter = router({
         maxSelfServiceHosts: z.number().int().min(0).max(10000).nullable().optional(),
         /** 订阅地址条数上限，0 = 不限。 */
         maxProxySubTokens: z.number().int().min(0).max(INT32_MAX).optional(),
+        /** 订阅设备数上限，0 = 不限（走 manual 那一列，和套餐合并）。 */
+        maxProxyDevices: z.number().int().min(0).max(INT32_MAX).optional(),
         maxPorts: z.number().int().min(0).max(INT32_MAX).optional(),
         maxConnections: z.number().int().min(0).max(INT32_MAX).optional(),
         maxIPs: z.number().int().min(0).max(INT32_MAX).optional(),
@@ -430,6 +432,10 @@ export const usersRouter = router({
         if (data.maxProxySubTokens !== undefined) {
           data.manualMaxProxySubTokens = Math.max(0, Math.floor(Number(data.maxProxySubTokens) || 0));
           delete data.maxProxySubTokens;
+        }
+        if (data.maxProxyDevices !== undefined) {
+          data.manualMaxProxyDevices = Math.max(0, Math.floor(Number(data.maxProxyDevices) || 0));
+          delete data.maxProxyDevices;
         }
         if (data.maxProxyInbounds !== undefined) {
           data.manualMaxProxyInbounds = Math.max(0, Math.floor(Number(data.maxProxyInbounds) || 0));

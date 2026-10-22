@@ -31,12 +31,22 @@ import {
   PROXY_PRIVATE_IP_CIDRS,
   PROXY_RULE_TARGET_DIRECT,
   PROXY_RULE_TARGET_REJECT,
+  SINGBOX_GEOIP_BASE,
+  SINGBOX_GEOSITE_BASE,
   type IosRuleClient,
   type ProxyRouteRule,
   type ProxyRuleSetRef,
 } from "./proxyRuleset";
+import { applyRulesetMirror } from "./proxySubSettings";
+import {
+  clientCapabilityReason,
+  clientFamilyUnsupportedReason,
+  type DetectedProxyClient,
+  type ProxyClientCapability,
+} from "./proxyClientUserAgent";
+import { renderV2rayJsonSubscription } from "./proxySubscriptionV2rayJson";
 
-export const PROXY_SUBSCRIPTION_FORMATS = ["base64", "clash", "singbox", "loon", "surge", "quantumultx", "shadowrocket"] as const;
+export const PROXY_SUBSCRIPTION_FORMATS = ["base64", "clash", "singbox", "v2rayjson", "loon", "surge", "quantumultx", "shadowrocket"] as const;
 
 export type ProxySubscriptionFormat = (typeof PROXY_SUBSCRIPTION_FORMATS)[number];
 
@@ -44,6 +54,7 @@ export const PROXY_SUBSCRIPTION_FORMAT_LABELS: Record<ProxySubscriptionFormat, s
   base64: "通用 Base64",
   clash: "Clash / mihomo",
   singbox: "sing-box",
+  v2rayjson: "Xray JSON（v2rayN / v2rayNG）",
   loon: "Loon",
   surge: "Surge / Surfboard",
   quantumultx: "Quantumult X",
@@ -54,6 +65,7 @@ export const PROXY_SUBSCRIPTION_FORMAT_HINTS: Record<ProxySubscriptionFormat, st
   base64: "v2rayN、v2rayNG、Shadowrocket 等通用客户端。不支持 Snell（该协议没有分享链接）。",
   clash: "Clash、Clash.Meta、mihomo、Stash。协议最全，Snell 到 v5。",
   singbox: "sing-box 及基于它的客户端。协议最全，不支持 XHTTP 传输。",
+  v2rayjson: "v2rayN 6.40+、v2rayNG 1.8.29+、Happ 的完整 Xray 配置订阅，每个节点一份配置，分流规则一起带。只有 Xray 内核有的协议（VLESS / VMess / Trojan / Shadowsocks / SOCKS）。",
   loon: "Loon（iOS）。不支持 TUIC、Snell、XHTTP。",
   surge: "Surge（iOS/Mac）与 Surfboard（Android）。不支持 VLESS、REALITY、XHTTP。",
   quantumultx: "Quantumult X（iOS）。不支持 Hysteria2 / TUIC / AnyTLS / Snell / REALITY / XHTTP。",
@@ -64,6 +76,7 @@ export const PROXY_SUBSCRIPTION_FORMAT_CONTENT_TYPES: Record<ProxySubscriptionFo
   base64: "text/plain; charset=utf-8",
   clash: "text/yaml; charset=utf-8",
   singbox: "application/json; charset=utf-8",
+  v2rayjson: "application/json; charset=utf-8",
   loon: "text/plain; charset=utf-8",
   surge: "text/plain; charset=utf-8",
   quantumultx: "text/plain; charset=utf-8",
@@ -74,6 +87,7 @@ export function normalizeProxySubscriptionFormat(value: unknown): ProxySubscript
   const raw = String(value ?? "").trim().toLowerCase();
   if (raw === "clash" || raw === "meta" || raw === "mihomo" || raw === "stash") return "clash";
   if (raw === "singbox" || raw === "sing-box") return "singbox";
+  if (raw === "v2rayjson" || raw === "v2ray-json" || raw === "xray" || raw === "xray-json" || raw === "json") return "v2rayjson";
   if (raw === "loon") return "loon";
   // Surfboard 用的就是 Surge 的配置格式。
   if (raw === "surge" || raw === "surfboard") return "surge";
@@ -289,14 +303,41 @@ function clashProxyLines(node: ProxyNode): YamlLine[] {
   return lines;
 }
 
-/** 自动选路组的测速地址与节奏，Clash 与 sing-box 共用。 */
-const PROXY_AUTO_GROUP_TEST_URL = "http://www.gstatic.com/generate_204";
-const PROXY_AUTO_GROUP_INTERVAL_SECONDS = 300;
-const PROXY_AUTO_GROUP_TOLERANCE_MS = 50;
+/**
+ * 渲染时能调的几个数：测速地址与节奏、规则集更新间隔与镜像、托管配置的更新间隔。
+ * 默认值就是原来写死的那几个；管理员在「订阅设置」里改（shared/proxySubSettings.ts）。
+ */
+export type ProxySubRenderSettings = {
+  testUrl: string;
+  testIntervalSec: number;
+  toleranceMs: number;
+  rulesetIntervalSec: number;
+  rulesetMirror: string;
+  updateIntervalHours: number;
+};
 
-/** 规则文件的本地缓存与更新间隔，各分类共用。 */
+export const PROXY_SUB_RENDER_DEFAULTS: ProxySubRenderSettings = {
+  testUrl: "http://www.gstatic.com/generate_204",
+  testIntervalSec: 300,
+  toleranceMs: 50,
+  rulesetIntervalSec: 86400,
+  rulesetMirror: "",
+  updateIntervalHours: 12,
+};
+
+/**
+ * 当前这一次渲染用的设置。渲染是同步的、一次只有一份，所以放模块级而不是在十几个
+ * 渲染函数之间层层传参。renderProxySubscription 进来时设、出去时不用清。
+ */
+let currentSettings: ProxySubRenderSettings = PROXY_SUB_RENDER_DEFAULTS;
+
+/** 规则集地址按镜像设置改写。"panel" 由服务端在知道面板地址时换，这里原样。 */
+function mirrored(url: string): string {
+  return applyRulesetMirror(url, currentSettings.rulesetMirror);
+}
+
+/** 规则文件的本地缓存目录，各分类共用。 */
 const PROXY_RULESET_CACHE_DIR = "./ruleset";
-const PROXY_RULESET_INTERVAL_SECONDS = 86400;
 
 function renderClash(
   nodes: readonly ProxyNode[],
@@ -305,11 +346,36 @@ function renderClash(
   rules: readonly ProxyRouteRule[],
   notices: readonly string[],
   weightedLoadBalance = false,
+  prelude = "",
+  providers: readonly { name: string; url: string; intervalSec: number }[] = [],
 ): string {
-  const lines: string[] = [...notices, nodes.length === 0 ? "proxies: []" : "proxies:"];
+  const lines: string[] = [...notices];
+  // 模板的开头部分（端口、dns、tun……）原样放在前面；它不该含 proxies / proxy-groups / rules 这几个键。
+  const preludeLines = prelude.split("\n").map((line) => line.replace(/\s+$/, "")).filter((line, index, all) => line || (index > 0 && all[index - 1]));
+  if (preludeLines.length > 0) lines.push(...preludeLines);
+  lines.push(nodes.length === 0 ? "proxies: []" : "proxies:");
   for (const node of nodes) {
     for (const line of clashProxyLines(node)) {
       lines.push(`${" ".repeat(line.indent)}${line.text}`);
+    }
+  }
+
+  /*
+    透传的外部订阅：写成 proxy-providers，客户端自己去拉（SubConverter-Extended 的做法）。
+    面板不存这些节点，所以它们不参与自动组、地区组；主选择器和分类组通过 use 引用。
+  */
+  if (providers.length > 0) {
+    lines.push("proxy-providers:");
+    for (const provider of providers) {
+      lines.push(`  ${yamlQuote(provider.name)}:`);
+      lines.push("    type: http");
+      lines.push(`    url: ${yamlQuote(provider.url)}`);
+      lines.push(`    interval: ${Math.max(600, Math.floor(provider.intervalSec || 21600))}`);
+      lines.push(`    path: ${yamlQuote(`./providers/${provider.name.replace(/[^\w.-]+/g, "_")}.yaml`)}`);
+      lines.push("    health-check:");
+      lines.push("      enable: true");
+      lines.push(`      url: ${yamlQuote(currentSettings.testUrl)}`);
+      lines.push(`      interval: ${currentSettings.testIntervalSec}`);
     }
   }
 
@@ -320,6 +386,9 @@ function renderClash(
     for (const group of groups) {
       lines.push(`  - name: ${yamlQuote(group.name)}`);
       lines.push(`    type: ${group.type}`);
+      if (group.use && group.use.length > 0 && providers.length > 0) {
+        lines.push(`    use: [${group.use.map((name) => yamlQuote(name)).join(", ")}]`);
+      }
       /*
         负载均衡组按带宽加权：同一个节点在列表里出现几次就分几份连接（500M / 300M 两台是 5:3）。
         mihomo 建组时按名字逐个取、不去重（adapter/outboundgroup/parser.go getProxies），
@@ -330,10 +399,10 @@ function renderClash(
         : group.members;
       lines.push(`    proxies: [${members.map((member) => yamlQuote(member)).join(", ")}]`);
       if (group.type !== "select") {
-        lines.push(`    url: ${yamlQuote(PROXY_AUTO_GROUP_TEST_URL)}`);
-        lines.push(`    interval: ${PROXY_AUTO_GROUP_INTERVAL_SECONDS}`);
+        lines.push(`    url: ${yamlQuote(currentSettings.testUrl)}`);
+        lines.push(`    interval: ${currentSettings.testIntervalSec}`);
         // 容差避免两条中转延迟接近时来回横跳，每次切换都会断开正在进行的连接。
-        if (group.type === "url-test") lines.push(`    tolerance: ${PROXY_AUTO_GROUP_TOLERANCE_MS}`);
+        if (group.type === "url-test") lines.push(`    tolerance: ${currentSettings.toleranceMs}`);
         // 轮询而不是一致性哈希：一致性哈希按目标域名固定中转，测速和单站多线程下载
         // 全落在同一台上，叠加不起来。落地是同一台，出口 IP 不会因为轮询而变。
         if (group.type === "load-balance") lines.push("    strategy: round-robin");
@@ -348,9 +417,9 @@ function renderClash(
       lines.push(`    behavior: ${ref.behavior}`);
       // mrs 是 mihomo 的二进制规则格式，体积和加载都比 yaml 省。
       lines.push("    format: mrs");
-      lines.push(`    url: ${yamlQuote(mihomoRuleSetUrl(ref))}`);
+      lines.push(`    url: ${yamlQuote(mirrored(mihomoRuleSetUrl(ref)))}`);
       lines.push(`    path: ${yamlQuote(`${PROXY_RULESET_CACHE_DIR}/${ref.name}.mrs`)}`);
-      lines.push(`    interval: ${PROXY_RULESET_INTERVAL_SECONDS}`);
+      lines.push(`    interval: ${currentSettings.rulesetIntervalSec}`);
     }
   }
 
@@ -363,7 +432,16 @@ function renderClash(
         // 直接列网段而不是引用外部规则集：局域网判断不该依赖一次网络下载。
         for (const cidr of PROXY_PRIVATE_IP_CIDRS) lines.push(`  - IP-CIDR,${cidr},${rule.target},no-resolve`);
         for (const cidr of PROXY_PRIVATE_IP6_CIDRS) lines.push(`  - IP-CIDR6,${cidr},${rule.target},no-resolve`);
-      } else {
+      } else if (rule.type === "domain") {
+        const keyword = rule.match === "exact" ? "DOMAIN" : rule.match === "suffix" ? "DOMAIN-SUFFIX" : "DOMAIN-KEYWORD";
+        lines.push(`  - ${keyword},${rule.value},${rule.target}`);
+      } else if (rule.type === "ip-cidr") {
+        lines.push(`  - ${rule.v6 ? "IP-CIDR6" : "IP-CIDR"},${rule.value},${rule.target}${rule.noResolve ? ",no-resolve" : ""}`);
+      } else if (rule.type === "geoip") {
+        lines.push(`  - GEOIP,${rule.code},${rule.target}${rule.noResolve ? ",no-resolve" : ""}`);
+      } else if (rule.type === "geosite") {
+        lines.push(`  - GEOSITE,${rule.key},${rule.target}`);
+      } else if (rule.type === "match") {
         lines.push(`  - MATCH,${rule.target}`);
       }
     }
@@ -496,9 +574,9 @@ function singboxGroupOutbound(group: ProxySubscriptionGroup): Record<string, unk
     type: "urltest",
     tag: group.name,
     outbounds: [...group.members],
-    url: PROXY_AUTO_GROUP_TEST_URL,
-    interval: `${PROXY_AUTO_GROUP_INTERVAL_SECONDS}s`,
-    ...(group.type === "fallback" ? {} : { tolerance: PROXY_AUTO_GROUP_TOLERANCE_MS }),
+    url: currentSettings.testUrl,
+    interval: `${currentSettings.testIntervalSec}s`,
+    ...(group.type === "fallback" ? {} : { tolerance: currentSettings.toleranceMs }),
   };
 }
 
@@ -509,44 +587,93 @@ function singboxRouteTarget(target: string): Record<string, unknown> {
   return { outbound: target };
 }
 
+/** 模板的开头部分：合法 JSON 对象就并进来，不是就当没有（不让一份写坏的模板把订阅弄成 500）。 */
+function parsePreludeObject(prelude: string): Record<string, unknown> {
+  const raw = String(prelude || "").trim();
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
 function renderSingbox(
   nodes: readonly ProxyNode[],
   groups: readonly ProxySubscriptionGroup[],
   ruleSets: readonly ProxyRuleSetRef[],
   rules: readonly ProxyRouteRule[],
+  prelude = "",
 ): string {
+  const base = parsePreludeObject(prelude);
+  const baseRoute = (base.route && typeof base.route === "object" ? base.route : {}) as Record<string, unknown>;
+  // 模板里自己写的 outbounds（比如 block）保留在我们的后面；同名 tag 的以我们为准。
+  const ours = new Set([...groups.map((group) => group.name), ...nodes.map((node) => node.name), "direct"]);
+  const extraOutbounds = Array.isArray(base.outbounds)
+    ? (base.outbounds as any[]).filter((item) => item && typeof item === "object" && !ours.has(String(item.tag || "")))
+    : [];
   const config: Record<string, unknown> = {
+    ...base,
     outbounds: [
       ...groups.map(singboxGroupOutbound),
       ...nodes.map(singboxOutbound),
       { type: "direct", tag: "direct" },
+      ...extraOutbounds,
     ],
   };
+  delete config.route;
 
-  if (ruleSets.length > 0 || rules.length > 0) {
+  if (ruleSets.length > 0 || rules.length > 0 || Object.keys(baseRoute).length > 0) {
     // sing-geoip 只按国家代码发布，非国家的 IP 集在那边不存在，引用了会 404。
     const usableRuleSets = ruleSets.filter((ref) => !ref.mihomoOnly);
     const usableNames = new Set(usableRuleSets.map((ref) => ref.name));
 
     const routeRules: Record<string, unknown>[] = [];
+    // 模板里的路由规则（sniff / hijack-dns 之类）排最前。
+    if (Array.isArray(baseRoute.rules)) routeRules.push(...(baseRoute.rules as Record<string, unknown>[]));
+    const extraRuleSets = new Map<string, Record<string, unknown>>();
+    const remoteRef = (tag: string, url: string) => {
+      if (!extraRuleSets.has(tag)) extraRuleSets.set(tag, { type: "remote", tag, format: "binary", url: mirrored(url), download_detour: "direct" });
+      return tag;
+    };
     for (const rule of rules) {
       if (rule.type === "ip-private") {
         // sing-box 自带私有网段判断，不需要外部规则集。
         routeRules.push({ ip_is_private: true, ...singboxRouteTarget(rule.target) });
       } else if (rule.type === "rule-set" && usableNames.has(rule.ruleSet)) {
         routeRules.push({ rule_set: rule.ruleSet, ...singboxRouteTarget(rule.target) });
+      } else if (rule.type === "domain") {
+        const key = rule.match === "exact" ? "domain" : rule.match === "suffix" ? "domain_suffix" : "domain_keyword";
+        routeRules.push({ [key]: rule.value, ...singboxRouteTarget(rule.target) });
+      } else if (rule.type === "ip-cidr") {
+        routeRules.push({ ip_cidr: rule.value, ...singboxRouteTarget(rule.target) });
+      } else if (rule.type === "geoip") {
+        if (rule.code === "PRIVATE") routeRules.push({ ip_is_private: true, ...singboxRouteTarget(rule.target) });
+        else {
+          const code = rule.code.toLowerCase();
+          routeRules.push({ rule_set: remoteRef(`geoip-${code}`, `${SINGBOX_GEOIP_BASE}/geoip-${code}.srs`), ...singboxRouteTarget(rule.target) });
+        }
+      } else if (rule.type === "geosite") {
+        routeRules.push({ rule_set: remoteRef(`geosite-${rule.key}`, `${SINGBOX_GEOSITE_BASE}/geosite-${rule.key}.srs`), ...singboxRouteTarget(rule.target) });
       }
     }
 
-    const remoteRuleSets = usableRuleSets.map((ref) => ({
-      type: "remote",
-      tag: ref.name,
-      format: "binary",
-      url: singboxRuleSetUrl(ref),
-      // 规则文件本身不该绕进代理，否则首次启动时代理还没就绪就取不到。
-      download_detour: "direct",
-    }));
+    const remoteRuleSets = [
+      ...usableRuleSets.map((ref) => ({
+        type: "remote",
+        tag: ref.name,
+        format: "binary",
+        url: mirrored(singboxRuleSetUrl(ref)),
+        // 规则文件本身不该绕进代理，否则首次启动时代理还没就绪就取不到。
+        download_detour: "direct",
+      })),
+      ...Array.from(extraRuleSets.values()),
+      ...(Array.isArray(baseRoute.rule_set) ? (baseRoute.rule_set as Record<string, unknown>[]) : []),
+    ];
+    const { rules: _baseRules, rule_set: _baseRuleSet, final: _baseFinal, ...restRoute } = baseRoute;
     config.route = {
+      ...restRoute,
       // sing-box 没有「只给节点」的格式，节点订阅同样是完整 profile，
       // 所以即使没有分流规则也要给出 final，否则客户端会退回用第一个出站。
       ...(routeRules.length > 0 ? { rules: routeRules } : {}),
@@ -576,6 +703,8 @@ const FORMAT_UNSUPPORTED_PROTOCOLS: Record<ProxySubscriptionFormat, readonly Pro
   base64: ["snell"],
   clash: [],
   singbox: [],
+  // Xray 内核没有 QUIC 系协议，也没有 AnyTLS 和 Snell。
+  v2rayjson: ["hysteria2", "tuic", "anytls", "snell"],
   loon: ["tuic", "snell"],
   surge: ["vless"],
   quantumultx: ["hysteria2", "tuic", "anytls", "snell"],
@@ -584,10 +713,10 @@ const FORMAT_UNSUPPORTED_PROTOCOLS: Record<ProxySubscriptionFormat, readonly Pro
 };
 
 /** 能表达 REALITY 的格式。Surge 与 Quantumult X 的手册里根本没有这一层。 */
-const FORMATS_WITH_REALITY: readonly ProxySubscriptionFormat[] = ["base64", "clash", "singbox", "loon", "shadowrocket"];
+const FORMATS_WITH_REALITY: readonly ProxySubscriptionFormat[] = ["base64", "clash", "singbox", "v2rayjson", "loon", "shadowrocket"];
 
 /** 能表达 XHTTP 传输的格式。这是 Xray 的传输，只有 mihomo 跟进了。 */
-const FORMATS_WITH_XHTTP: readonly ProxySubscriptionFormat[] = ["base64", "clash", "shadowrocket"];
+const FORMATS_WITH_XHTTP: readonly ProxySubscriptionFormat[] = ["base64", "clash", "v2rayjson", "shadowrocket"];
 
 /**
  * 认得 HTTPUpgrade 的格式。
@@ -596,7 +725,7 @@ const FORMATS_WITH_XHTTP: readonly ProxySubscriptionFormat[] = ["base64", "clash
  * v2rayN 系的链接写 `type=httpupgrade`。Loon / Surge / QX 没有这个传输，
  * 照常渲染的话会得到一个协议对、传输错的节点 —— 能导入、握手必失败。
  */
-const FORMATS_WITH_HTTPUPGRADE: readonly ProxySubscriptionFormat[] = ["base64", "clash", "singbox", "shadowrocket"];
+const FORMATS_WITH_HTTPUPGRADE: readonly ProxySubscriptionFormat[] = ["base64", "clash", "singbox", "v2rayjson", "shadowrocket"];
 
 /**
  * 这个格式支持这个 Snell 版本吗？
@@ -664,11 +793,36 @@ type SupportPartition = {
   skipped: { node: ProxyNode; reason: string }[];
 };
 
-function partitionBySupport(nodes: readonly ProxyNode[], format: ProxySubscriptionFormat): SupportPartition {
+/** 这个节点用到了哪些「客户端可能没有」的能力，交给按客户端家族 / 版本的门控。 */
+function nodeCapabilities(node: ProxyNode): ProxyClientCapability[] {
+  const out: ProxyClientCapability[] = [];
+  if (node.protocol === "vless") out.push("vless");
+  if (node.protocol === "hysteria2") out.push("hysteria2");
+  if (node.protocol === "tuic") out.push("tuic");
+  if (node.protocol === "anytls") out.push("anytls");
+  if (node.realityPublicKey) out.push("reality");
+  if (node.transport === "xhttp") out.push("xhttp");
+  if (node.transport === "httpupgrade") out.push("httpupgrade");
+  return out;
+}
+
+/** 客户端这一层挡不挡：家族不支持，或者版本太低。 */
+function clientUnsupportedReason(node: ProxyNode, client: DetectedProxyClient | undefined): string {
+  if (!client) return "";
+  for (const capability of nodeCapabilities(node)) {
+    const familyReason = clientFamilyUnsupportedReason(client, capability);
+    if (familyReason) return familyReason;
+    const versionReason = clientCapabilityReason(client, capability);
+    if (versionReason) return versionReason;
+  }
+  return "";
+}
+
+function partitionBySupport(nodes: readonly ProxyNode[], format: ProxySubscriptionFormat, client?: DetectedProxyClient): SupportPartition {
   const supported: ProxyNode[] = [];
   const skipped: { node: ProxyNode; reason: string }[] = [];
   for (const node of nodes) {
-    const reason = unsupportedReason(node, format);
+    const reason = unsupportedReason(node, format) || clientUnsupportedReason(node, client);
     if (reason) skipped.push({ node, reason });
     else supported.push(node);
   }
@@ -699,13 +853,21 @@ type FilteredDocument = ProxySubscriptionDocument & {
 function filterForFormat(
   document: ProxySubscriptionDocument,
   format: ProxySubscriptionFormat,
+  client?: DetectedProxyClient,
 ): FilteredDocument {
-  const { supported, skipped } = partitionBySupport(document.nodes, format);
+  const { supported, skipped } = partitionBySupport(document.nodes, format, client);
+  const removed0 = new Set(skipped.map(({ node }) => node.name));
   // JSON 没有注释语法；base64 是一整块编码，塞注释有可能让客户端整份解析失败。
-  const notices = format === "singbox" || format === "base64" ? [] : skipNoticeLines(skipped);
+  const notices = format === "singbox" || format === "base64" || format === "v2rayjson" ? [] : skipNoticeLines(skipped);
   if (skipped.length === 0) return { ...document, notices };
   // 一个都不剩时连规则一起清掉：规则会指向不存在的策略组，客户端直接拒绝整份配置。
-  if (supported.length === 0) return { nodes: [], groups: [], ruleSets: [], rules: [], notices };
+  // 透传的外部订阅留着：它们的节点不经面板，和这里的过滤无关。
+  if (supported.length === 0) {
+    const providers = document.providers || [];
+    if (providers.length === 0) return { nodes: [], groups: [], ruleSets: [], rules: [], notices };
+    const groups = document.groups.map((group) => ({ ...group, members: group.members.filter((member) => !removed0.has(member)) })).filter((group) => group.members.length > 0 || (group.use && group.use.length > 0));
+    return { nodes: [], groups, ruleSets: document.ruleSets, rules: document.rules, notices, providers };
+  }
 
   const removed = new Set(skipped.map(({ node }) => node.name));
   let groups = document.groups;
@@ -988,8 +1150,10 @@ function profileSafeName(name: string): string {
 type ProfileRule =
   | { kind: "list"; url: string; tag: string; target: string }
   | { kind: "domain"; suffix: boolean; domain: string; target: string }
+  | { kind: "keyword"; keyword: string; target: string }
   | { kind: "cidr"; cidr: string; v6: boolean; target: string }
   | { kind: "geoip-cn"; target: string }
+  | { kind: "geoip"; code: string; target: string }
   | { kind: "final"; target: string };
 
 /** 把分流计划展开成四家共用的中间形态：远程列表、私有网段、GEOIP,CN、兜底。 */
@@ -1008,6 +1172,18 @@ function iosProfileRules(
     } else if (rule.type === "ip-private") {
       for (const cidr of PROXY_PRIVATE_IP_CIDRS) out.push({ kind: "cidr", cidr, v6: false, target });
       for (const cidr of PROXY_PRIVATE_IP6_CIDRS) out.push({ kind: "cidr", cidr, v6: true, target });
+    } else if (rule.type === "domain") {
+      if (rule.match === "keyword") out.push({ kind: "keyword", keyword: rule.value, target });
+      else out.push({ kind: "domain", suffix: rule.match === "suffix", domain: rule.value, target });
+    } else if (rule.type === "ip-cidr") {
+      out.push({ kind: "cidr", cidr: rule.value, v6: rule.v6, target });
+    } else if (rule.type === "geoip") {
+      if (rule.code === "PRIVATE") {
+        for (const cidr of PROXY_PRIVATE_IP_CIDRS) out.push({ kind: "cidr", cidr, v6: false, target });
+      } else if (rule.code === "CN") out.push({ kind: "geoip-cn", target });
+      else out.push({ kind: "geoip", code: rule.code, target });
+    } else if (rule.type === "geosite") {
+      // 四家 iOS 客户端没有 GEOSITE，这条只能跳过（面板上的说明里写了）。
     } else {
       const ref = refs.get(rule.ruleSet);
       if (!ref) continue;
@@ -1016,7 +1192,7 @@ function iosProfileRules(
         continue;
       }
       for (const listName of iosRuleListNames(ref)) {
-        out.push({ kind: "list", url: iosRuleListUrl(client, listName), tag: `${ref.name}-${listName}`, target });
+        out.push({ kind: "list", url: mirrored(iosRuleListUrl(client, listName)), tag: `${ref.name}-${listName}`, target });
       }
       for (const extra of iosInlineDomainRules(ref)) {
         out.push({ kind: "domain", suffix: extra.match === "suffix", domain: extra.domain, target });
@@ -1028,7 +1204,7 @@ function iosProfileRules(
   return out;
 }
 
-function renderIosProfile(document: FilteredDocument, format: IosProfileFormat, profileUrl: string, shadowrocketClient = false): string {
+function renderIosProfile(document: FilteredDocument, format: IosProfileFormat, profileUrl: string, shadowrocketClient = false, prelude = ""): string {
   /**
    * 名字统一收拾一次再渲染：节点行、组行、规则行都按名字引用，三处必须一字不差。
    * Loon / QX / Shadowrocket 没有前置代理的位置，节点名上要带「需手动接」的标记
@@ -1052,10 +1228,12 @@ function renderIosProfile(document: FilteredDocument, format: IosProfileFormat, 
 
   const header = [...document.notices];
   const asShadowrocket = shadowrocketClient && (format === "surge" || format === "loon");
-  if (format === "surge") return renderSurgeProfile(nodes, groups, rules, header, profileUrl, asShadowrocket);
-  if (format === "loon") return renderLoonProfile(nodes, groups, rules, header, asShadowrocket);
-  if (format === "quantumultx") return renderQuantumultXProfile(nodes, groups, rules, header);
-  return renderShadowrocketProfile(groups, rules, header, profileUrl);
+  // 模板的 [General] 段：有就整段替换内置的那几行（模板文本自带 [General] 这一行）。
+  const general = prelude.trim() ? prelude.trim().split("\n").map((line) => line.replace(/\s+$/, "")) : null;
+  if (format === "surge") return renderSurgeProfile(nodes, groups, rules, header, profileUrl, asShadowrocket, general);
+  if (format === "loon") return renderLoonProfile(nodes, groups, rules, header, asShadowrocket, general);
+  if (format === "quantumultx") return renderQuantumultXProfile(nodes, groups, rules, header, general);
+  return renderShadowrocketProfile(groups, rules, header, profileUrl, general);
 }
 
 /** Surge / Shadowrocket 的规则行写法相同。 */
@@ -1063,8 +1241,10 @@ function surgeStyleRuleLines(rules: readonly ProfileRule[]): string[] {
   return rules.map((rule) => {
     if (rule.kind === "list") return `RULE-SET,${rule.url},${rule.target}`;
     if (rule.kind === "domain") return `${rule.suffix ? "DOMAIN-SUFFIX" : "DOMAIN"},${rule.domain},${rule.target}`;
+    if (rule.kind === "keyword") return `DOMAIN-KEYWORD,${rule.keyword},${rule.target}`;
     if (rule.kind === "cidr") return `${rule.v6 ? "IP-CIDR6" : "IP-CIDR"},${rule.cidr},${rule.target},no-resolve`;
     if (rule.kind === "geoip-cn") return `GEOIP,CN,${rule.target}`;
+    if (rule.kind === "geoip") return `GEOIP,${rule.code},${rule.target}`;
     return `FINAL,${rule.target}`;
   });
 }
@@ -1076,17 +1256,21 @@ function renderSurgeProfile(
   header: readonly string[],
   profileUrl: string,
   shadowrocketClient = false,
+  general: readonly string[] | null = null,
 ): string {
   const lines: string[] = [];
   // 托管配置：Surge 按这一行定时重新下载，必须是文件第一行。
-  if (profileUrl) lines.push(`#!MANAGED-CONFIG ${profileUrl} interval=43200 strict=false`);
+  if (profileUrl) lines.push(`#!MANAGED-CONFIG ${profileUrl} interval=${currentSettings.updateIntervalHours * 3600} strict=false`);
   lines.push(...header);
-  lines.push("[General]");
-  lines.push("loglevel = notify");
-  lines.push(`skip-proxy = ${PROFILE_SKIP_PROXY}`);
-  lines.push("dns-server = system, 223.5.5.5, 119.29.29.29");
-  lines.push(`internet-test-url = ${PROXY_AUTO_GROUP_TEST_URL}`);
-  lines.push(`proxy-test-url = ${PROXY_AUTO_GROUP_TEST_URL}`);
+  if (general) lines.push(...general);
+  else {
+    lines.push("[General]");
+    lines.push("loglevel = notify");
+    lines.push(`skip-proxy = ${PROFILE_SKIP_PROXY}`);
+    lines.push("dns-server = system, 223.5.5.5, 119.29.29.29");
+    lines.push(`internet-test-url = ${currentSettings.testUrl}`);
+    lines.push(`proxy-test-url = ${currentSettings.testUrl}`);
+  }
   lines.push("", "[Proxy]", ...nodes.map(surgeNodeLine));
   lines.push("", "[Proxy Group]");
   for (const group of groups) {
@@ -1095,10 +1279,10 @@ function renderSurgeProfile(
       continue;
     }
     const head = `${group.name} = ${group.type}, ${group.members.join(", ")}`;
-    if (group.type === "url-test") lines.push(`${head}, interval=${PROXY_AUTO_GROUP_INTERVAL_SECONDS}, tolerance=${PROXY_AUTO_GROUP_TOLERANCE_MS}`);
-    else if (group.type === "fallback") lines.push(`${head}, interval=${PROXY_AUTO_GROUP_INTERVAL_SECONDS}`);
+    if (group.type === "url-test") lines.push(`${head}, interval=${currentSettings.testIntervalSec}, tolerance=${currentSettings.toleranceMs}`);
+    else if (group.type === "fallback") lines.push(`${head}, interval=${currentSettings.testIntervalSec}`);
     // 负载均衡组只在最近一次测试通过的成员里分；不写 interval 就不定时测，挂掉的前置要等到用的时候才发现。
-    else if (group.type === "load-balance") lines.push(`${head}, interval=${PROXY_AUTO_GROUP_INTERVAL_SECONDS}`);
+    else if (group.type === "load-balance") lines.push(`${head}, interval=${currentSettings.testIntervalSec}`);
     else lines.push(head);
   }
   lines.push("", "[Rule]", ...surgeStyleRuleLines(rules));
@@ -1111,23 +1295,27 @@ function renderLoonProfile(
   rules: readonly ProfileRule[],
   header: readonly string[],
   shadowrocketClient = false,
+  general: readonly string[] | null = null,
 ): string {
   const lines: string[] = [...header];
-  lines.push("[General]");
-  lines.push(`skip-proxy = ${PROFILE_SKIP_PROXY.replace(/, /g, ",")}`);
-  lines.push("dns-server = system,223.5.5.5,119.29.29.29");
-  lines.push(`proxy-test-url = ${PROXY_AUTO_GROUP_TEST_URL}`);
-  lines.push(`internet-test-url = ${PROXY_AUTO_GROUP_TEST_URL}`);
+  if (general) lines.push(...general);
+  else {
+    lines.push("[General]");
+    lines.push(`skip-proxy = ${PROFILE_SKIP_PROXY.replace(/, /g, ",")}`);
+    lines.push("dns-server = system,223.5.5.5,119.29.29.29");
+    lines.push(`proxy-test-url = ${currentSettings.testUrl}`);
+    lines.push(`internet-test-url = ${currentSettings.testUrl}`);
+  }
   lines.push("", "[Proxy]", ...nodes.map(loonNodeLine));
   lines.push("", "[Proxy Group]");
-  const probe = `url = ${PROXY_AUTO_GROUP_TEST_URL},interval = ${PROXY_AUTO_GROUP_INTERVAL_SECONDS}`;
+  const probe = `url = ${currentSettings.testUrl},interval = ${currentSettings.testIntervalSec}`;
   for (const group of groups) {
     if (shadowrocketClient && group.type === "load-balance") {
       lines.push(shadowrocketRandomGroupLine(group));
       continue;
     }
     const head = `${group.name} = ${group.type},${group.members.join(",")}`;
-    if (group.type === "url-test") lines.push(`${head},${probe},tolerance = ${PROXY_AUTO_GROUP_TOLERANCE_MS}`);
+    if (group.type === "url-test") lines.push(`${head},${probe},tolerance = ${currentSettings.toleranceMs}`);
     else if (group.type === "fallback") lines.push(`${head},${probe}`);
     // Round-Robin：每条新连接换下一个成员，这才叠得起带宽；PCC 会把同一目标钉在一台上。
     else if (group.type === "load-balance") lines.push(`${head},${probe},algorithm = Round-Robin`);
@@ -1136,8 +1324,10 @@ function renderLoonProfile(
   lines.push("", "[Rule]");
   for (const rule of rules) {
     if (rule.kind === "domain") lines.push(`${rule.suffix ? "DOMAIN-SUFFIX" : "DOMAIN"},${rule.domain},${rule.target}`);
+    else if (rule.kind === "keyword") lines.push(`DOMAIN-KEYWORD,${rule.keyword},${rule.target}`);
     else if (rule.kind === "cidr") lines.push(`${rule.v6 ? "IP-CIDR6" : "IP-CIDR"},${rule.cidr},${rule.target},no-resolve`);
     else if (rule.kind === "geoip-cn") lines.push(`GEOIP,CN,${rule.target}`);
+    else if (rule.kind === "geoip") lines.push(`GEOIP,${rule.code},${rule.target}`);
     else if (rule.kind === "final") lines.push(`FINAL,${rule.target}`);
   }
   lines.push("", "[Remote Rule]");
@@ -1161,15 +1351,19 @@ function renderQuantumultXProfile(
   groups: readonly ProxySubscriptionGroup[],
   rules: readonly ProfileRule[],
   header: readonly string[],
+  general: readonly string[] | null = null,
 ): string {
   const lines: string[] = [...header];
-  lines.push("[general]");
-  lines.push(`server_check_url=${PROXY_AUTO_GROUP_TEST_URL}`);
+  if (general) lines.push(...general);
+  else {
+    lines.push("[general]");
+    lines.push(`server_check_url=${currentSettings.testUrl}`);
+  }
   lines.push("", "[policy]");
   for (const group of groups) {
     const head = `${QX_POLICY_TYPES[group.type]}=${group.name}, ${group.members.join(", ")}`;
     lines.push(group.type === "url-test"
-      ? `${head}, check-interval=${PROXY_AUTO_GROUP_INTERVAL_SECONDS}, tolerance=${PROXY_AUTO_GROUP_TOLERANCE_MS}`
+      ? `${head}, check-interval=${currentSettings.testIntervalSec}, tolerance=${currentSettings.toleranceMs}`
       : head);
   }
   lines.push("", "[server_local]", ...nodes.map(quantumultxNodeLine));
@@ -1182,8 +1376,10 @@ function renderQuantumultXProfile(
   lines.push("", "[filter_local]");
   for (const rule of rules) {
     if (rule.kind === "domain") lines.push(`${rule.suffix ? "host-suffix" : "host"}, ${rule.domain}, ${rule.target}`);
+    else if (rule.kind === "keyword") lines.push(`host-keyword, ${rule.keyword}, ${rule.target}`);
     else if (rule.kind === "cidr") lines.push(`${rule.v6 ? "ip6-cidr" : "ip-cidr"}, ${rule.cidr}, ${rule.target}`);
     else if (rule.kind === "geoip-cn") lines.push(`geoip, cn, ${rule.target}`);
+    else if (rule.kind === "geoip") lines.push(`geoip, ${rule.code.toLowerCase()}, ${rule.target}`);
     else if (rule.kind === "final") lines.push(`final, ${rule.target}`);
   }
   return `${lines.join("\n")}\n`;
@@ -1191,7 +1387,7 @@ function renderQuantumultXProfile(
 
 /** Shadowrocket 的 load-balance 是同域名固定节点，random 才是每条连接各挑各的，带宽才叠得起来。 */
 function shadowrocketRandomGroupLine(group: ProxySubscriptionGroup): string {
-  return `${group.name} = random, ${group.members.join(", ")}, url=${PROXY_AUTO_GROUP_TEST_URL}, interval=${PROXY_AUTO_GROUP_INTERVAL_SECONDS}`;
+  return `${group.name} = random, ${group.members.join(", ")}, url=${currentSettings.testUrl}, interval=${currentSettings.testIntervalSec}`;
 }
 
 function renderShadowrocketProfile(
@@ -1199,26 +1395,29 @@ function renderShadowrocketProfile(
   rules: readonly ProfileRule[],
   header: readonly string[],
   profileUrl: string,
+  general: readonly string[] | null = null,
 ): string {
   const lines: string[] = [
     "# 节点不在这份配置里：先在 Shadowrocket 里导入同一条订阅的「节点订阅」，",
     "# 下面的策略组按节点名引用它们。",
     ...header,
-    "[General]",
-    "bypass-system = true",
-    `skip-proxy = ${PROFILE_SKIP_PROXY}`,
-    "dns-server = system",
+    ...(general || [
+      "[General]",
+      "bypass-system = true",
+      `skip-proxy = ${PROFILE_SKIP_PROXY}`,
+      "dns-server = system",
+    ]),
   ];
   if (profileUrl) lines.push(`update-url = ${profileUrl}`);
   lines.push("", "[Proxy Group]");
-  const probe = `url=${PROXY_AUTO_GROUP_TEST_URL}, interval=${PROXY_AUTO_GROUP_INTERVAL_SECONDS}`;
+  const probe = `url=${currentSettings.testUrl}, interval=${currentSettings.testIntervalSec}`;
   for (const group of groups) {
     if (group.type === "load-balance") {
       lines.push(shadowrocketRandomGroupLine(group));
       continue;
     }
     const head = `${group.name} = ${group.type}, ${group.members.join(", ")}`;
-    if (group.type === "url-test") lines.push(`${head}, ${probe}, tolerance=${PROXY_AUTO_GROUP_TOLERANCE_MS}`);
+    if (group.type === "url-test") lines.push(`${head}, ${probe}, tolerance=${currentSettings.toleranceMs}`);
     else if (group.type === "select") lines.push(head);
     else lines.push(`${head}, ${probe}`);
   }
@@ -1247,6 +1446,17 @@ export type RenderProxySubscriptionOptions = {
    * 其它客户端「组里重复列同一个节点」的行为没核实，平均分。
    */
   weightedLoadBalance?: boolean;
+  /** 管理员改过的那几个数（测速、规则集间隔、镜像、更新间隔）。缺的用默认。 */
+  settings?: Partial<ProxySubRenderSettings>;
+  /**
+   * 模板的开头部分，占位符已经替换好。Clash 是放在 proxies 前面的 YAML 文本，
+   * sing-box 是要并进去的 JSON 对象文本，Surge / Loon / QX / Shadowrocket 是整段 [General]。
+   */
+  prelude?: string;
+  /** 信息节点（剩余流量 / 到期 / 公告）：放在节点列表最前面，不进任何策略组。 */
+  infoNodes?: readonly ProxyNode[];
+  /** 认出来的客户端：按家族和版本再挡一层节点（REALITY / Hy2 / XHTTP……）。 */
+  client?: DetectedProxyClient;
 };
 
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f\u2028\u2029]/g;
@@ -1280,12 +1490,20 @@ export function renderProxySubscription(
   format: ProxySubscriptionFormat,
   options: RenderProxySubscriptionOptions = {},
 ): string {
-  const filtered = filterForFormat(sanitizeDocumentForTextFormats(document), format);
-  const { nodes, groups, ruleSets, rules, notices } = filtered;
-  if (format === "clash") return renderClash(nodes, groups, ruleSets, rules, notices, !!options.weightedLoadBalance);
-  if (format === "singbox") return renderSingbox(nodes, groups, ruleSets, rules);
+  currentSettings = { ...PROXY_SUB_RENDER_DEFAULTS, ...(options.settings || {}) };
+  const filtered = filterForFormat(sanitizeDocumentForTextFormats(document), format, options.client);
+  // 信息节点在最前：客户端列表第一眼就是「剩余 x GB」。它们不进组，所以不参与去重和引用检查。
+  const infoNodes = sanitizeDocumentForTextFormats({ nodes: [...(options.infoNodes || [])], groups: [], ruleSets: [], rules: [] }).nodes;
+  const nodes = infoNodes.length > 0 ? [...infoNodes, ...filtered.nodes] : filtered.nodes;
+  const { groups, ruleSets, rules, notices } = filtered;
+  const prelude = String(options.prelude || "");
+  if (format === "clash") return renderClash(nodes, groups, ruleSets, rules, notices, !!options.weightedLoadBalance, prelude, document.providers || []);
+  if (format === "singbox") return renderSingbox(nodes, groups, ruleSets, rules, prelude);
+  if (format === "v2rayjson") {
+    return renderV2rayJsonSubscription(nodes, rules, { testUrl: currentSettings.testUrl }, new Map(ruleSets.map((ref) => [ref.name, { geoKey: ref.geoKey, behavior: ref.behavior }])));
+  }
   if (options.profile && proxySubscriptionFormatHasProfile(format)) {
-    return renderIosProfile(filtered, format as IosProfileFormat, options.profileUrl || "", !!options.shadowrocketClient);
+    return renderIosProfile({ ...filtered, nodes }, format as IosProfileFormat, options.profileUrl || "", !!options.shadowrocketClient, prelude);
   }
   if (format === "loon") return renderLoon(nodes, notices);
   if (format === "surge") return renderSurge(nodes, notices);

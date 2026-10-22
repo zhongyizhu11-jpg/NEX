@@ -1,4 +1,5 @@
 ﻿import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { invalidateProxySubCacheForUser } from "../proxySubCache";
 import { forwardGroupMembers, forwardGroups, forwardRuleRouteEvents, forwardRuleTunnelExits, forwardRules, InsertForwardRule, tunnels } from "../../drizzle/schema";
 import { executeRaw, getDb, insertAndGetId, nowDate } from "../dbRuntime";
 import { queryRaw } from "../dbRuntime";
@@ -1158,6 +1159,7 @@ export async function createForwardRule(rule: InsertForwardRule) {
   const created = await getForwardRuleById(id).catch(() => undefined);
   await recordConfigAuditEvent({ resourceType: "forward_rule", resourceId: id, hostId: Number((created as any)?.hostId || 0), action: "create", after: created });
   if (Number(payload.proxyNodeId || 0) > 0) signalRuleEntryDomainChanged(id, "rule-created");
+  invalidateProxySubCacheForUser(Number(payload.userId || 0));
   return id;
 }
 
@@ -1355,7 +1357,17 @@ export async function updateForwardRule(id: number, data: Partial<InsertForwardR
     await recordConfigAuditEvent({ resourceType: "forward_rule", resourceId: id, hostId: Number((after as any)?.hostId || (before as any)?.hostId || 0), action: "update", before, after });
   }
   if (RULE_ENTRY_DOMAIN_FIELDS.some((key) => (data as any)?.[key] !== undefined)) signalRuleEntryDomainChanged(id, "rule-updated");
+  // 订阅内容依赖的那几列变了，这个用户缓存的订阅正文作废（isRunning 这种瞬时状态不算）。
+  if (PROXY_SUB_RULE_FIELDS.some((key) => (data as any)?.[key] !== undefined)) {
+    const owner = before || await getForwardRuleById(id).catch(() => undefined);
+    invalidateProxySubCacheForUser(Number((owner as any)?.userId || 0));
+  }
 }
+
+const PROXY_SUB_RULE_FIELDS = [
+  "proxyNodeId", "proxyNodeVisible", "proxyNodeName", "isEnabled", "pendingDelete", "sourcePort", "hostId", "name",
+  "targetIp", "targetPort", "protocol", "sortOrder", "entryDomainEnabled", "entryDomain", "entryDomainValue", "userId",
+] as const;
 
 export async function resetForwardRulesForUserSync(userId: number) {
   const db = await getDb();
@@ -1499,6 +1511,7 @@ export async function deleteForwardRule(id: number) {
   }).where(eq(forwardRules.id, id));
   if (before) await recordConfigAuditEvent({ resourceType: "forward_rule", resourceId: id, hostId: Number((before as any).hostId || 0), action: "delete", before });
   signalRuleEntryDomainChanged(id, "rule-deleted");
+  invalidateProxySubCacheForUser(Number((before as any)?.userId || 0));
 }
 
 export async function markForwardRulePendingDelete(id: number) {

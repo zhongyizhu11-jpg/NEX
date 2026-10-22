@@ -2,6 +2,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { forwardGroupMembers, forwardGroups, forwardRules } from "../../drizzle/schema";
 import { pushAgentRefresh } from "../agentEvents";
 import { afterDatabaseCommit, getDb, nowDate } from "../dbRuntime";
+import { invalidateProxySubCacheForUser } from "../proxySubCache";
 import { keyedTaskDepth, runWithTrafficBillingUserLockHeld, trafficBillingUserLockKey, withKeyedTaskLock } from "../keyedTaskLock";
 import { getForwardRulesForUserSync } from "./forwardRuleRepository";
 import { runForwardGroupFailover, syncForwardGroupRules } from "./forwardGroupRepository";
@@ -153,6 +154,7 @@ export async function restoreUserForwardRulesAfterAccessRecovery(userId: number)
     eq(forwardRules.disabledByUser, true),
     eq(forwardRules.pendingDelete, false),
   ));
+  invalidateProxySubCacheForUser(userId);
 
   const groupCache = new Map<number, RuntimeGroupState | null>();
   const enabledRuleIds: number[] = [];

@@ -181,6 +181,13 @@ export const users = table("users", {
   manualMaxIPs: int("manualMaxIPs").notNull().default(0),
   manualAllowForwardXTunnel: boolean("manualAllowForwardXTunnel").notNull().default(false),
   manualAllowProxySubscription: boolean("manualAllowProxySubscription").notNull().default(false),
+  // 订阅设备数上限（有效值 / 手动值），0 = 不限。见 shared/proxySubDeviceLimit.ts。
+  maxProxyDevices: int("maxProxyDevices").notNull().default(0),
+  manualMaxProxyDevices: int("manualMaxProxyDevices").notNull().default(0),
+  // 这个用户用哪份订阅模板（proxy_sub_templates.id）；0 = 看套餐，再看全局默认。
+  proxySubTemplateId: int("proxySubTemplateId").notNull().default(0),
+  // 管理员给这个用户写的自定义分流规则（前置），写法见 shared/proxySubCustomRules.ts。
+  proxySubCustomRules: text("proxySubCustomRules"),
   manualGostRateLimitIn: int("manualGostRateLimitIn").notNull().default(0),
   manualGostRateLimitOut: int("manualGostRateLimitOut").notNull().default(0),
   // 转发突发（2.3.449）：峰值 Mbps 和能按峰值跑多少秒，0 = 不开。只在用户上手动设，见 shared/forwardRateLimit.ts。
@@ -663,6 +670,11 @@ export const proxyNodes = table("proxy_nodes", {
   lastTrafficReset: epoch("lastTrafficReset"),
   isEnabled: boolean("isEnabled").notNull().default(true),
   sortOrder: int("sortOrder").notNull().default(0),
+  // 从哪个外部订阅同步来的（proxy_sub_sources.id），0 = 不是。sourceKey 是在那份订阅里的身份，再次同步时按它对账。
+  sourceId: int("sourceId").notNull().default(0),
+  sourceKey: text("sourceKey"),
+  // 手工填的地区（ISO 国家码）；空则看落地机器的 geo，再猜名字。订阅处理器用。
+  countryCode: varchar("countryCode", { length: 8 }),
   createdAt: epoch("createdAt").notNull().default(nowDefault()),
   updatedAt: epoch("updatedAt").notNull().default(nowDefault()),
 });
@@ -853,6 +865,19 @@ export const proxySubTokens = table("proxy_sub_tokens", {
   lastFailureAt: epoch("lastFailureAt"),
   lastFailureReason: varchar("lastFailureReason", { length: 32 }),
   expiresAt: epoch("expiresAt"),
+  // 短链别名：/s/<alias>。唯一；空 = 没开。
+  alias: varchar("alias", { length: 32 }),
+  // 作用域（只给哪些节点）和外观选项，JSON 文本，见 shared/proxySubTokenScope.ts。空 = 默认。
+  scopeJson: text("scopeJson"),
+  optionsJson: text("optionsJson"),
+  remark: text("remark"),
+  // 这条地址自己的设备数上限，0 = 看用户 / 全局。
+  maxDevices: int("maxDevices").notNull().default(0),
+  // 指定模板（proxy_sub_templates.id），0 = 看用户 / 套餐 / 全局默认。
+  templateId: int("templateId").notNull().default(0),
+  // 最近一次拉取认出来的客户端。
+  lastClientFamily: varchar("lastClientFamily", { length: 32 }),
+  lastClientVersion: varchar("lastClientVersion", { length: 32 }),
   createdAt: epoch("createdAt").notNull().default(nowDefault()),
   updatedAt: epoch("updatedAt").notNull().default(nowDefault()),
 });
@@ -886,6 +911,94 @@ export const proxyNodeShares = table("proxy_node_shares", {
 });
 export type ProxyNodeShare = typeof proxyNodeShares.$inferSelect;
 export type InsertProxyNodeShare = typeof proxyNodeShares.$inferInsert;
+
+/**
+ * 订阅拉取日志：每次拉取（成功或被拒）一行。
+ *
+ * 令牌行上只留「最后一次」，回答不了「这条地址这周被几个客户端拉过」「哪个 IP 在狂刷」。
+ * 保留天数在订阅设置里（默认 30 天），定时清理。
+ */
+export const proxySubAccessLogs = table("proxy_sub_access_logs", {
+  id: serial("id"),
+  tokenId: int("tokenId").notNull(),
+  userId: int("userId").notNull(),
+  at: epoch("at").notNull().default(nowDefault()),
+  ip: text("ip"),
+  userAgent: text("userAgent"),
+  clientFamily: varchar("clientFamily", { length: 32 }),
+  clientVersion: varchar("clientVersion", { length: 32 }),
+  format: varchar("format", { length: 16 }),
+  profile: boolean("profile").notNull().default(false),
+  // ok | page | disabled | token-expired | not-eligible | rate-limited | device-limit | hwid-required | error
+  result: varchar("result", { length: 32 }).notNull().default("ok"),
+  hwid: varchar("hwid", { length: 80 }),
+  bytes: int("bytes").notNull().default(0),
+});
+export type ProxySubAccessLog = typeof proxySubAccessLogs.$inferSelect;
+export type InsertProxySubAccessLog = typeof proxySubAccessLogs.$inferInsert;
+
+/**
+ * 订阅设备：一条地址在哪些设备上。hwid 是客户端发的 x-hwid，退化模式下是 `ip:<地址>`。
+ */
+export const proxySubDevices = table("proxy_sub_devices", {
+  id: serial("id"),
+  tokenId: int("tokenId").notNull(),
+  userId: int("userId").notNull(),
+  hwid: varchar("hwid", { length: 80 }).notNull(),
+  deviceOs: varchar("deviceOs", { length: 64 }),
+  osVersion: varchar("osVersion", { length: 64 }),
+  model: varchar("model", { length: 120 }),
+  firstSeenAt: epoch("firstSeenAt").notNull().default(nowDefault()),
+  lastSeenAt: epoch("lastSeenAt").notNull().default(nowDefault()),
+  lastIp: text("lastIp"),
+  userAgent: text("userAgent"),
+  createdAt: epoch("createdAt").notNull().default(nowDefault()),
+});
+export type ProxySubDevice = typeof proxySubDevices.$inferSelect;
+export type InsertProxySubDevice = typeof proxySubDevices.$inferInsert;
+
+/**
+ * 订阅模板：每种目标格式的「开头部分」加自定义策略组，见 shared/proxySubTemplates.ts。
+ * isDefault = 这种目标格式没被用户 / 套餐 / 令牌指定模板时用这份。
+ */
+export const proxySubTemplates = table("proxy_sub_templates", {
+  id: serial("id"),
+  name: text("name").notNull(),
+  target: varchar("target", { length: 16 }).notNull(),
+  prelude: text("prelude").notNull().default(""),
+  customGroupsJson: text("customGroupsJson"),
+  isDefault: boolean("isDefault").notNull().default(false),
+  createdAt: epoch("createdAt").notNull().default(nowDefault()),
+  updatedAt: epoch("updatedAt").notNull().default(nowDefault()),
+});
+export type ProxySubTemplate = typeof proxySubTemplates.$inferSelect;
+export type InsertProxySubTemplate = typeof proxySubTemplates.$inferInsert;
+
+/**
+ * 外部订阅：用户填一条别处的订阅地址，面板定时拉取、解析、并进他的订阅（import），
+ * 或者原样透传给 mihomo / Stash 当 proxy-provider（provider）。见 shared/proxySubSource.ts。
+ */
+export const proxySubSources = table("proxy_sub_sources", {
+  id: serial("id"),
+  userId: int("userId").notNull(),
+  name: text("name").notNull(),
+  url: text("url").notNull(),
+  userAgent: text("userAgent"),
+  intervalSec: int("intervalSec").notNull().default(21600),
+  mode: varchar("mode", { length: 16 }).notNull().default("import"),
+  isEnabled: boolean("isEnabled").notNull().default(true),
+  lastFetchAt: epoch("lastFetchAt"),
+  // ok | error | never
+  lastStatus: varchar("lastStatus", { length: 16 }).notNull().default("never"),
+  lastError: text("lastError"),
+  upstreamUserinfo: text("upstreamUserinfo"),
+  nodeCount: int("nodeCount").notNull().default(0),
+  lastContentHash: varchar("lastContentHash", { length: 64 }),
+  createdAt: epoch("createdAt").notNull().default(nowDefault()),
+  updatedAt: epoch("updatedAt").notNull().default(nowDefault()),
+});
+export type ProxySubSource = typeof proxySubSources.$inferSelect;
+export type InsertProxySubSource = typeof proxySubSources.$inferInsert;
 
 export const forwardGroups = table("forward_groups", {
   id: serial("id"),
@@ -1544,6 +1657,11 @@ export const subscriptionPlans = table("subscription_plans", {
    * 监听端口计数。想按量收费就只能一人一个端口。
    */
   dedicatedProxyPort: boolean("dedicatedProxyPort").notNull().default(false),
+  // 订阅那一套的套餐权益：设备数上限（0 = 不限）、指定模板（0 = 全局默认）、能不能加外部订阅、信息节点默认开不开。
+  maxProxyDevices: int("maxProxyDevices").notNull().default(0),
+  proxySubTemplateId: int("proxySubTemplateId").notNull().default(0),
+  allowExternalSubSources: boolean("allowExternalSubSources").notNull().default(false),
+  showSubInfoNodes: boolean("showSubInfoNodes").notNull().default(false),
   sortOrder: int("sortOrder").notNull().default(0),
   createdAt: epoch("createdAt").notNull().default(nowDefault()),
   updatedAt: epoch("updatedAt").notNull().default(nowDefault()),

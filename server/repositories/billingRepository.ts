@@ -380,6 +380,7 @@ function buildPlanSnapshot(plan: any) {
      */
     maxProxyInbounds: Number(plan?.maxProxyInbounds || 0),
     maxProxySubTokens: Number(plan?.maxProxySubTokens || 0),
+    maxProxyDevices: Number(plan?.maxProxyDevices || 0),
     maxConnections: Number(plan?.maxConnections ?? 2000),
     maxIPs: Number(plan?.maxIPs ?? 10),
     hostIds: normalizeNumericIds(plan?.hostIds || []),
@@ -414,6 +415,7 @@ function parsePlanSnapshot(value: unknown) {
        */
       maxProxyInbounds: parsed.maxProxyInbounds === undefined ? undefined : Number(parsed.maxProxyInbounds || 0),
       maxProxySubTokens: parsed.maxProxySubTokens === undefined ? undefined : Number(parsed.maxProxySubTokens || 0),
+      maxProxyDevices: parsed.maxProxyDevices === undefined ? undefined : Number(parsed.maxProxyDevices || 0),
       maxConnections: Number(parsed.maxConnections ?? 2000),
       maxIPs: Number(parsed.maxIPs ?? 10),
       hostIds: normalizeNumericIds(Array.isArray(parsed.hostIds) ? parsed.hostIds : []),
@@ -451,6 +453,7 @@ async function attachSubscriptionSnapshots<T extends { planId: number; planSnaps
       maxRules: snapshot?.maxRules ?? subscription.maxRules,
       maxProxyInbounds: snapshot?.maxProxyInbounds ?? subscription.maxProxyInbounds,
       maxProxySubTokens: snapshot?.maxProxySubTokens ?? subscription.maxProxySubTokens,
+      maxProxyDevices: snapshot?.maxProxyDevices ?? subscription.maxProxyDevices,
       maxConnections: snapshot?.maxConnections ?? subscription.maxConnections,
       maxIPs: snapshot?.maxIPs ?? subscription.maxIPs,
       hostIds: snapshot ? snapshot.hostIds : await getPlanHostIds(Number(subscription.planId)),
@@ -959,6 +962,7 @@ function userSubscriptionsListQuery(db: any) {
       maxRules: subscriptionPlans.maxRules,
       maxProxyInbounds: subscriptionPlans.maxProxyInbounds,
       maxProxySubTokens: subscriptionPlans.maxProxySubTokens,
+      maxProxyDevices: subscriptionPlans.maxProxyDevices,
       maxConnections: subscriptionPlans.maxConnections,
       maxIPs: subscriptionPlans.maxIPs,
       status: userSubscriptions.status,
@@ -1187,6 +1191,7 @@ export async function getActiveUserSubscriptions(userId?: number) {
         // 套餐上填的自建节点数和订阅地址数等于白填。
         maxProxyInbounds: subscriptionPlans.maxProxyInbounds,
         maxProxySubTokens: subscriptionPlans.maxProxySubTokens,
+        maxProxyDevices: subscriptionPlans.maxProxyDevices,
         maxConnections: subscriptionPlans.maxConnections,
         maxIPs: subscriptionPlans.maxIPs,
         allowProxySubscription: subscriptionPlans.allowProxySubscription,
@@ -1935,6 +1940,7 @@ export async function getEffectiveUserPlanLimits(userId: number) {
       maxRules: 0,
       maxProxyInbounds: 0,
       maxProxySubTokens: 0,
+      maxProxyDevices: 0,
       maxConnections: 0,
       maxIPs: 0,
       baseTrafficLimit: 0,
@@ -1976,6 +1982,7 @@ export async function getEffectiveUserPlanLimits(userId: number) {
     maxRules: sumWithUnlimited("maxRules"),
     maxProxyInbounds: sumWithUnlimited("maxProxyInbounds"),
     maxProxySubTokens: sumWithUnlimited("maxProxySubTokens"),
+    maxProxyDevices: sumWithUnlimited("maxProxyDevices"),
     maxConnections: sumWithUnlimited("maxConnections"),
     maxIPs: sumWithUnlimited("maxIPs"),
     baseTrafficLimit,
@@ -2044,6 +2051,7 @@ export function mergeManualAndPlanLimits(user: any, planLimits: any) {
   const manualMaxRules = positiveInt(user?.manualMaxRules);
   const manualMaxProxyInbounds = positiveInt(user?.manualMaxProxyInbounds);
   const manualMaxProxySubTokens = positiveInt(user?.manualMaxProxySubTokens);
+  const manualMaxProxyDevices = positiveInt(user?.manualMaxProxyDevices);
   const manualMaxPorts = positiveInt(user?.manualMaxPorts);
   const manualMaxConnections = positiveInt(user?.manualMaxConnections);
   const manualMaxIPs = positiveInt(user?.manualMaxIPs);
@@ -2086,6 +2094,10 @@ export function mergeManualAndPlanLimits(user: any, planLimits: any) {
     maxProxySubTokens: mergeLimitValue([
       { active: planAllowProxySubscription, value: planLimits?.maxProxySubTokens },
       { active: manualMaxProxySubTokens > 0, value: manualMaxProxySubTokens },
+    ]),
+    maxProxyDevices: mergeLimitValue([
+      { active: planAllowProxySubscription, value: planLimits?.maxProxyDevices },
+      { active: manualMaxProxyDevices > 0, value: manualMaxProxyDevices },
     ]),
     maxConnections: mergeLimitValue([
       { active: planCanAddRules, value: planLimits?.maxConnections },

@@ -106,8 +106,21 @@ import {
   Zap,
   type LucideIcon,
   MoreHorizontal,
+  History,
+  ListOrdered,
+  Smartphone,
 } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import {
+  ProxySubTokenDevicesDialog,
+  ProxySubTokenEditDialog,
+  ProxySubTokenLogsDialog,
+  ProxySubTokenPreviewDialog,
+  type ProxySubTokenLike,
+} from "@/components/proxy/ProxySubTokenDialogs";
+import ProxySubSourcesSection from "@/components/proxy/ProxySubSourcesSection";
+import ProxyNodeReorderDialog from "@/components/proxy/ProxyNodeReorderDialog";
+import { proxySubRegionLabel } from "@shared/proxySubRegion";
 import QRCode from "qrcode";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -314,6 +327,8 @@ export default function ClientSubscriptionsPage() {
     refetchOnWindowFocus: true,
   });
   const tokensQuery = trpc.proxySubscriptions.listTokens.useQuery();
+  // 用户看得到的订阅设置：备用域名、默认外观、能不能加外部订阅。
+  const subSettingsQuery = trpc.proxySubscriptions.settingsPublic.useQuery();
   const previewQuery = trpc.proxySubscriptions.preview.useQuery();
   const hideUnreachableQuery = trpc.proxySubscriptions.hideUnreachable.useQuery();
   const setHideUnreachableMutation = trpc.proxySubscriptions.setHideUnreachable.useMutation({
@@ -541,6 +556,14 @@ export default function ClientSubscriptionsPage() {
   const [shareNode, setShareNode] = useState<{ id: number; name: string } | null>(null);
   const [nodeAdvancedOpen, setNodeAdvancedOpen] = useState(false);
   const [nodeRemark, setNodeRemark] = useState("");
+  /** 手工指定的地区（国家码）；空 = 按机器位置 / 名字猜。 */
+  const [nodeCountryCode, setNodeCountryCode] = useState("");
+  // 令牌的几个弹窗：编辑、预览、拉取记录、设备；节点排序。
+  const [editingToken, setEditingToken] = useState<ProxySubTokenLike | null>(null);
+  const [previewToken, setPreviewToken] = useState<{ id: number; name: string } | null>(null);
+  const [logsToken, setLogsToken] = useState<{ id: number; name: string } | null>(null);
+  const [devicesToken, setDevicesToken] = useState<{ id: number; name: string } | null>(null);
+  const [reorderOpen, setReorderOpen] = useState(false);
   /** 对外标注：分享出去时对方看得到的那一句。备注是自己看的，两回事。 */
   const [nodePublicLabel, setNodePublicLabel] = useState("");
 
@@ -868,6 +891,7 @@ export default function ClientSubscriptionsPage() {
     setEditingNodeId(null);
     setNodeName("");
     setNodeRemark("");
+    setNodeCountryCode("");
     setNodePublicLabel("");
     setNodeLink("");
     setNodeAutoGroup(PROXY_NODE_DEFAULT_AUTO_GROUP);
@@ -886,6 +910,7 @@ export default function ClientSubscriptionsPage() {
     setEditingNodeId(node.id);
     setNodeName(String(node.name || ""));
     setNodeRemark(String(node.remark || ""));
+    setNodeCountryCode(String(node.countryCode || ""));
     setNodePublicLabel(String(node.publicLabel || ""));
     setNodeLink(String(node.sourceLink || ""));
     setNodeAutoGroup(normalizeProxyNodeAutoGroup(node.autoGroup));
@@ -925,6 +950,7 @@ export default function ClientSubscriptionsPage() {
       name,
       remark: nodeRemark.trim() || null,
       publicLabel: nodePublicLabel.trim() || null,
+      countryCode: nodeCountryCode.trim().toUpperCase() || null,
       link,
       autoGroup: nodeAutoGroup,
       includeDirect: nodeIncludeDirect,
@@ -1123,6 +1149,15 @@ export default function ClientSubscriptionsPage() {
                           分不出他到底试没试、被挡在哪一步。
                         */}
                         {renderTokenFailure(token)}
+                        {token.alias ? <Badge variant="outline" className="font-mono">/s/{token.alias}</Badge> : null}
+                        {token.expiresAt ? (
+                          <span className={`text-xs ${new Date(token.expiresAt).getTime() < Date.now() ? "text-[var(--fx-down-text)]" : "text-muted-foreground"}`}>
+                            {new Date(token.expiresAt).getTime() < Date.now() ? "已过期" : `${new Date(token.expiresAt).toLocaleDateString("zh-CN")} 到期`}
+                          </span>
+                        ) : null}
+                        {token.lastClientLabel ? <span className="text-xs text-muted-foreground">最近 {token.lastClientLabel}</span> : null}
+                        {Number(token.deviceCount || 0) > 0 ? <span className="text-xs text-muted-foreground">{token.deviceCount} 台设备</span> : null}
+                        {token.remark ? <span className="text-xs text-muted-foreground">· {token.remark}</span> : null}
                       </div>
                       <div className="flex items-center gap-2">
                         <Switch aria-label={`${token.name} 启用`}
@@ -1139,6 +1174,18 @@ export default function ClientSubscriptionsPage() {
                               </Button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
+                              <DropdownMenuItem onSelect={() => setEditingToken(token)}>
+                                <Pencil className="h-4 w-4" />编辑（范围 / 外观）
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onSelect={() => setPreviewToken({ id: token.id, name: token.name })}>
+                                <Eye className="h-4 w-4" />预览内容
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onSelect={() => setLogsToken({ id: token.id, name: token.name })}>
+                                <History className="h-4 w-4" />拉取记录
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onSelect={() => setDevicesToken({ id: token.id, name: token.name })}>
+                                <Smartphone className="h-4 w-4" />设备
+                              </DropdownMenuItem>
                               <DropdownMenuItem onSelect={() => { void rotateTokenConfirmed(token.id); }}>
                                 <KeyRound className="h-4 w-4" />重置地址
                               </DropdownMenuItem>
@@ -1366,6 +1413,27 @@ export default function ClientSubscriptionsPage() {
                             </Button>
                           </div>
                         </div>
+                        {(token.alias || (subSettingsQuery.data?.domains.length ?? 0) > 0) ? (
+                          <div className="space-y-1">
+                            {token.alias ? (
+                              <div className="flex items-center gap-2">
+                                <span className="shrink-0 text-xs text-muted-foreground">短链</span>
+                                <code className="min-w-0 flex-1 truncate rounded bg-background px-2 py-1 text-xs">{manualUrl.replace(`/api/sub/${token.token}`, `/s/${token.alias}`)}</code>
+                                <Button size="sm" variant="ghost" className="h-7 px-2" aria-label="复制短链" onClick={() => copyText(manualUrl.replace(`/api/sub/${token.token}`, `/s/${token.alias}`), "短链已复制")}><Copy className="h-3.5 w-3.5" /></Button>
+                              </div>
+                            ) : null}
+                            {(subSettingsQuery.data?.domains || []).map((origin) => {
+                              const alt = subscriptionUrl(token.token, "base64", kind).replace(/^https?:\/\/[^/]+/, origin);
+                              return (
+                                <div key={origin} className="flex items-center gap-2">
+                                  <span className="shrink-0 text-xs text-muted-foreground">备用</span>
+                                  <code className="min-w-0 flex-1 truncate rounded bg-background px-2 py-1 text-xs">{alt}</code>
+                                  <Button size="sm" variant="ghost" className="h-7 px-2" aria-label={`复制 ${origin} 的备用地址`} onClick={() => copyText(alt, "备用地址已复制")}><Copy className="h-3.5 w-3.5" /></Button>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : null}
                         <div className="space-y-1.5">
                           <p data-fx-help="" className="text-xs text-muted-foreground">
                             其他客户端用这条地址手动添加。
@@ -1429,7 +1497,34 @@ export default function ClientSubscriptionsPage() {
           offlineCount={offlineNodeCount}
         />
 
+        {nodes.some((node: any) => !node.sharedFrom) ? (
+          <div className="flex justify-end">
+            <Button size="sm" variant="outline" onClick={() => setReorderOpen(true)}>
+              <ListOrdered className="mr-1 h-4 w-4" />节点顺序
+            </Button>
+          </div>
+        ) : null}
+
+        <ProxySubSourcesSection
+          allowed={!!subSettingsQuery.data?.externalSourcesAllowed}
+          maxPerUser={subSettingsQuery.data?.externalSourceMaxPerUser || 0}
+          onChanged={refresh}
+        />
       </div>
+
+      <ProxySubTokenEditDialog
+        open={!!editingToken}
+        onOpenChange={(open) => { if (!open) setEditingToken(null); }}
+        token={editingToken}
+        nodes={nodes as any[]}
+        settings={subSettingsQuery.data || null}
+        isAdmin={isAdmin}
+        onSaved={refresh}
+      />
+      <ProxySubTokenPreviewDialog open={!!previewToken} onOpenChange={(open) => { if (!open) setPreviewToken(null); }} tokenId={previewToken?.id || null} tokenName={previewToken?.name || ""} />
+      <ProxySubTokenLogsDialog open={!!logsToken} onOpenChange={(open) => { if (!open) setLogsToken(null); }} tokenId={logsToken?.id || null} tokenName={logsToken?.name || ""} />
+      <ProxySubTokenDevicesDialog open={!!devicesToken} onOpenChange={(open) => { if (!open) setDevicesToken(null); }} tokenId={devicesToken?.id || null} tokenName={devicesToken?.name || ""} />
+      <ProxyNodeReorderDialog open={reorderOpen} onOpenChange={setReorderOpen} nodes={nodes as any[]} onSaved={refresh} />
 
       {/*
         订阅内容：从常驻卡片改成弹窗。
@@ -1996,6 +2091,20 @@ export default function ClientSubscriptionsPage() {
               </button>
               {nodeAdvancedOpen ? (
                 <div className="space-y-4 pt-1">
+                  <FormField className="space-y-2">
+                    <Label>地区</Label>
+                    <Input
+                      value={nodeCountryCode}
+                      onChange={(event) => setNodeCountryCode(event.target.value)}
+                      maxLength={2}
+                      placeholder="国家码，如 HK、JP；留空自动猜"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      {nodeCountryCode.trim().length === 2
+                        ? proxySubRegionLabel(nodeCountryCode.trim().toUpperCase()) || "不认识这个国家码"
+                        : "订阅里的国旗、地区组、按地区排序都看它。留空时按机器位置或名字里的关键字（香港 / HK / 🇭🇰）猜。"}
+                    </p>
+                  </FormField>
                   <FormField className="space-y-2">
                     <Label>自动选路</Label>
                     <Select

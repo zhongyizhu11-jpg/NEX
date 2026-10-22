@@ -255,6 +255,16 @@ export type ProxyRouteRule =
    * sing-box 用内置的 ip_is_private。少一个下载依赖，也少一个 404 的可能。
    */
   | { type: "ip-private"; target: string }
+  /**
+   * 下面四种来自自定义规则（shared/proxySubCustomRules.ts）。预设规则只用上面几种；
+   * 这几种各家都有原生写法：Clash 的 DOMAIN / DOMAIN-SUFFIX / DOMAIN-KEYWORD / IP-CIDR /
+   * GEOIP / GEOSITE，sing-box 的 domain / domain_suffix / domain_keyword / ip_cidr /
+   * rule_set（geoip-xx / geosite-xx 远程规则集），iOS 四家的 DOMAIN… / IP-CIDR / GEOIP。
+   */
+  | { type: "domain"; match: "exact" | "suffix" | "keyword"; value: string; target: string }
+  | { type: "ip-cidr"; value: string; v6: boolean; target: string; noResolve?: boolean }
+  | { type: "geoip"; code: string; target: string; noResolve?: boolean }
+  | { type: "geosite"; key: string; target: string }
   | { type: "match"; target: string };
 
 export const PROXY_RULE_TARGET_DIRECT = "DIRECT";
@@ -397,6 +407,11 @@ export type BuildProxyRulePlanOptions = {
   mainGroupName: string;
   /** 可供分类组选择的其他成员：自动选路组和各节点 */
   selectableMembers: readonly string[];
+  /**
+   * 分类去向覆盖（按令牌）：分类 key → DIRECT / REJECT / PROXY / 某个可选成员名。
+   * 覆盖的是「默认去向」—— 组还是建，用户在客户端里照样能改；REJECT 则不建组。
+   */
+  categoryTargets?: Record<string, string>;
 };
 
 /**
@@ -412,20 +427,29 @@ export function buildProxyRulePlan(options: BuildProxyRulePlanOptions): ProxyRul
   const categoryGroups: { name: string; members: string[] }[] = [];
   const rules: ProxyRouteRule[] = [];
 
+  const selectable = new Set(options.selectableMembers);
   for (const category of categories) {
     const groupName = proxyRuleCategoryGroupName(category);
     let target: string;
-    if (category.outbound === "reject") {
+    // 令牌上的覆盖：认 DIRECT / REJECT / PROXY 和可选成员名，别的当没写。
+    const overrideRaw = String(options.categoryTargets?.[category.key] || "").trim();
+    const override = overrideRaw.toUpperCase() === "DIRECT" || overrideRaw.toUpperCase() === "REJECT" || overrideRaw.toUpperCase() === "PROXY"
+      ? overrideRaw.toUpperCase()
+      : selectable.has(overrideRaw) ? overrideRaw : "";
+    const outbound: ProxyRuleOutbound = override === "DIRECT" ? "direct" : override === "REJECT" ? "reject" : override ? "proxy" : category.outbound;
+    if (outbound === "reject") {
       target = PROXY_RULE_TARGET_REJECT;
     } else {
       target = groupName;
       // 首选项即默认去向，用户在客户端里可以随时改成别的。
-      const preferred = category.outbound === "direct"
-        ? [PROXY_RULE_TARGET_DIRECT, options.mainGroupName]
-        : [options.mainGroupName, PROXY_RULE_TARGET_DIRECT];
+      const preferred = override && override !== "DIRECT" && override !== "PROXY"
+        ? [override, options.mainGroupName, PROXY_RULE_TARGET_DIRECT]
+        : outbound === "direct"
+          ? [PROXY_RULE_TARGET_DIRECT, options.mainGroupName]
+          : [options.mainGroupName, PROXY_RULE_TARGET_DIRECT];
       categoryGroups.push({
         name: groupName,
-        members: [...preferred, ...options.selectableMembers],
+        members: [...preferred, ...options.selectableMembers.filter((member) => !preferred.includes(member))],
       });
     }
 

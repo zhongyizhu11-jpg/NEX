@@ -5,6 +5,26 @@
 > `server/routers/proxySubscriptions.ts`、`server/repositories/proxySubscriptionRepository.ts`、
 > `client/src/pages/ClientSubscriptions.tsx`）的审计，加上对 GitHub 上主流订阅 / 面板项目的对比调研。
 
+## 实施记录
+
+> 2026-10-22：十个工作包一次做完（分支 `docs/subscription-upgrade-plan` 之后的实现提交）。
+>
+> | 工作包 | 落点 |
+> | --- | --- |
+> | WP0 | `shared/proxySubscriptionPipeline.ts`、`server/proxySubCache.ts`、`server/proxySubRateLimit.ts`、`server/proxySubSettings.ts`、`shared/proxySubSettings.ts` |
+> | WP1 | `shared/proxySubTokenScope.ts`、`proxy_sub_tokens` 新列（alias / scopeJson / optionsJson / remark / maxDevices / templateId / lastClient*）、`/s/:alias`、`client/src/components/proxy/ProxySubTokenDialogs.tsx`、`client/src/pages/AdminSubscriptions.tsx` |
+> | WP2 | `shared/proxyClientUserAgent.ts`（识别表 + 版本门控）、`shared/proxySubscriptionV2rayJson.ts`、`/api/sub/:token/:format`、`/api/sub/:token/info` |
+> | WP3 | `proxy_sub_access_logs`、`proxy_sub_devices`、`shared/proxySubDeviceLimit.ts`、`server/proxySubNotify.ts`、`server/repositories/proxySubExtraRepository.ts` |
+> | WP4 | `shared/proxySubTemplates.ts`、`shared/proxySubCustomRules.ts`、`proxy_sub_templates`、`users.proxySubCustomRules`、`server/proxySubRulesetMirror.ts` |
+> | WP5 | `shared/proxySubProcessors.ts`、`shared/proxySubRegion.ts`、`proxy_nodes.countryCode`、`reorderProxyNodes` |
+> | WP6 | `shared/proxySubSource.ts`、`shared/miniYaml.ts`、`server/proxySubSourceSync.ts`、`proxy_sub_sources`、`client/src/components/proxy/ProxySubSourcesSection.tsx` |
+> | WP7 | `server/proxySubPage.ts`，`profile-web-page-url` / `support-url` / `announce` 响应头 |
+> | WP8 | `subscription_plans` 新列（maxProxyDevices / proxySubTemplateId / allowExternalSubSources / showSubInfoNodes）、`users.maxProxyDevices`，`mergeManualAndPlanLimits` 与套餐快照 |
+> | WP9 | `docs/guide/subscriptions.md`，`package.json` 测试清单 |
+>
+> 与方案的差异：模板的开头部分只进**规则订阅**（节点订阅保持原样，见 `shared/proxySubscriptionPipeline.ts` 的说明）；
+> `provider` 透传模式只在 Clash / mihomo / Stash 格式里产出 `proxy-providers`（别的格式没有这个概念，忽略）；节点排序用上下按钮，没做拖拽。
+
 ## 一、调研了哪些项目
 
 | 项目 | Star | 和订阅相关的看点 |

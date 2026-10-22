@@ -19,6 +19,9 @@ export type ProxySubTokenFailureReason =
   | "disabled"
   | "token-expired"
   | "not-eligible"
+  | "rate-limited"
+  | "device-limit"
+  | "hwid-required"
   | "error";
 
 export const PROXY_SUB_TOKEN_FAILURE_LABELS: Record<ProxySubTokenFailureReason, string> = {
@@ -26,6 +29,9 @@ export const PROXY_SUB_TOKEN_FAILURE_LABELS: Record<ProxySubTokenFailureReason, 
   "token-expired": "这条地址已过期",
   // 到期、超流量、被收回权限，落到客户端都是同一件事：拉不到。
   "not-eligible": "账号没有订阅资格（到期、超流量或权限被收回）",
+  "rate-limited": "拉得太频繁，被限流了",
+  "device-limit": "设备数已达上限",
+  "hwid-required": "客户端没带设备标识（严格模式下不放行）",
   error: "服务端生成订阅时出错",
 };
 
