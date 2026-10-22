@@ -17,6 +17,7 @@ import {
 } from "../../drizzle/schema";
 import { pushAgentRefresh } from "../agentEvents";
 import { appendPanelLog } from "../_core/panelLogger";
+import { invalidateProxySubCacheAll } from "../proxySubCache";
 import { DEFAULT_DDNS_TTL, getDdnsSettings, updateDdnsRecordValues } from "../ddns";
 import { afterDatabaseCommit, afterDatabaseTransactionSettled, executeRaw, getDb, insertAndGetId, isDatabaseTransactionActive, nowDate, queryRaw, rawEpochToDate, withDatabaseTransaction } from "../dbRuntime";
 import { withForwardTestDates } from "./forwardTestRepository";
@@ -4062,6 +4063,8 @@ export async function replaceForwardGroupMembers(
       });
     }
   }
+  // 组的第一个成员就是订阅里的入口机器，成员一变订阅缓存就得作废。
+  invalidateProxySubCacheAll();
   if (options.skipSync) return;
   if (isCollectionGroupMode(groupMode)) {
     await runForwardGroupFailover(groupId, { forceSync: true, manual: true });
@@ -4203,6 +4206,7 @@ export async function reorderForwardGroupMembers(groupId: number, memberIds: num
     }
     await insertForwardGroupEvent(groupId, null, "reorder", "Member priority updated.");
   });
+  invalidateProxySubCacheAll();
 }
 
 export async function syncForwardChainsForHost(hostId: number, previousHost?: any) {
