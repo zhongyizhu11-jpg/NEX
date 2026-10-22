@@ -1,3 +1,4 @@
+import { formatBytes } from "@shared/formatBytes";
 import { FormField } from "@/components/ui/form-field";
 import { readStoredViewMode, writeStoredViewMode } from "@/lib/viewModeStorage";
 import { useFaultBundleExport } from "@/components/links/useFaultBundleExport";
@@ -4296,11 +4297,13 @@ function TunnelsContent() {
       : ({ available: "运行正常", degraded: "部分可用", pending: "等待检测", unavailable: "连接异常", disabled: "已停用" } as Record<string, string>)[tunnelAvailabilityById.get(Number(tunnel.id))?.status || "disabled"];
     const hopCount = getTunnelHopIds(tunnel).length;
     const hasEntryGroup = Number(tunnel?.entryGroupId || 0) > 0;
+    const availabilityStatus = tunnelAvailabilityById.get(Number(tunnel.id))?.status || "disabled";
     const subtitle = [
       getTunnelModeDisplay(tunnel.mode, nginxTunnelEnabled, tunnel.forwardxVersion, tunnel.wireGuardPlane),
       // 叠加数的是几台中转一起送，不是几跳。
       isAggregateLinkTunnel(tunnel) && hopCount > 3 ? `${hopCount - 2} 路叠加` : hopCount > 2 ? `${hopCount - 1} 跳` : "直连",
-      statusText,
+      // 精简手机行：没有延迟数时右端那枚标签写的就是这个状态（连接异常 / 已停用 / 等待检测），副题里不重复一遍，省下的宽度给前两段
+      compactLayout && !(tunnelDisplayLatencyMs(tunnel) != null && tone !== "down") ? "" : statusText,
     ].filter(Boolean).join(" · ");
     // 链路已经不通时，上一次量到的延迟是旧的：不能一边写「连接异常」一边标「22 ms 优秀」。
     const broken = tone === "down";
@@ -4364,7 +4367,17 @@ function TunnelsContent() {
           </div>
           {/* fx-tunnel-meta：精简手机行上累计和延迟那两行并成一行（compact.css），标准下照旧两行 */}
           <div className="fx-tunnel-meta">
-          <ResourceTrafficLine summary={tunnel.trafficSummary} className="fx-tunnel-traffic mt-1.5" />
+          {compactLayout && tunnel.trafficSummary ? (
+            /* 精简手机行：累计是第一行的那个数（和转发行一样），规则数在第二行延迟标签左边；标准照旧一行灰字 */
+            <>
+              <span className="fx-tunnel-bytes fx-rule-num" title={`累计 ${formatBytes(tunnel.trafficSummary.totalBytes)} · 入向 ${formatBytes(tunnel.trafficSummary.bytesIn)} · 出向 ${formatBytes(tunnel.trafficSummary.bytesOut)}`}>
+                <b>{formatBytes(tunnel.trafficSummary.totalBytes).replace(/\s*[A-Za-z]+$/, "")}</b><small>{(formatBytes(tunnel.trafficSummary.totalBytes).match(/[A-Za-z]+$/) || [""])[0]}</small>
+              </span>
+              <span className="fx-tunnel-rules text-meta text-muted-foreground">{tunnel.trafficSummary.ruleCount} 条规则</span>
+            </>
+          ) : (
+            <ResourceTrafficLine summary={tunnel.trafficSummary} className="fx-tunnel-traffic mt-1.5" />
+          )}
           {oneLineFoot ? (
             <div className="fx-tunnel-foot-line mt-1.5 text-[13px] text-muted-foreground">{broken ? "不通" : timeout ? "超时" : "未测试"} · 还没有延迟记录</div>
           ) : (
@@ -4396,6 +4409,20 @@ function TunnelsContent() {
             </div>
           </div>
           )}
+          {/* 精简手机行：地址行右端固定一枚延迟标签（和转发行同一位置、同一长相），脚注那一整块不画（compact.css） */}
+          {compactLayout ? (
+            <span
+              className="fx-rule-tag fx-tunnel-latency-tag"
+              data-tone={hasLatency ? ratingTone : availabilityStatus === "unavailable" || timeout ? "down" : availabilityStatus === "degraded" ? "warn" : "off"}
+              title={hasLatency ? "最近一次测得的延迟" : timeout ? "最近一次测试超时" : statusText}
+            >
+              {hasLatency
+                ? `${Math.round(latencyMs)} ms`
+                : !supported || availabilityStatus === "unavailable" || availabilityStatus === "disabled" || availabilityStatus === "degraded"
+                  ? statusText
+                  : timeout ? "超时" : availabilityStatus === "pending" ? "等待检测" : "未测试"}
+            </span>
+          ) : null}
           </div>
           {/* 精简布局：卡片上不画近 30 天色块条（诊断框 › 延迟记录 里有同一条），一张卡少 30px */}
           {supported && !oneLineFoot ? (

@@ -342,11 +342,23 @@ html:root [data-fx-compact-page] .fx-table-daily > div:not([data-fx-std-page] *)
   /* 主机行右下角两段灰字之间一根细竖线：原来「还没上报过 还没有转发」连在一起 */
   html:root [data-fx-compact-page] .fx-host-card .fx-host-foot-links:not([data-fx-std-page] *) { padding-left: 8px; border-left: 1px solid var(--fx-stroke-weak); }
 
-  /* 链路行：「累计 0 B · 0 条规则」和「不通 · 还没有延迟记录」并成一行；有延迟数据的那种脚注自己占一行 */
-  html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-meta:not([data-fx-std-page] *) { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 10px; row-gap: 2px; margin-top: 4px; }
-  html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-traffic:not([data-fx-std-page] *), html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-foot-line:not([data-fx-std-page] *) { margin-top: 0; font-size: 12px; line-height: 18px; }
-  html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-foot:not([data-fx-std-page] *) { flex: 1 1 100%; margin-top: 0; padding-top: 0; border-top: 0; }
-  html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-route:not([data-fx-std-page] *) { margin-top: 6px; }
+  /* 链路行：和转发行同一个样子（用户 2026-10-22 定的）。第一行「● 名字  副题 ……  累计 0 B · 0 条规则  ···  开关」，
+     第二行左边路线、右端延迟标签。脚注那一块（延迟大数字、走势、24H）和拖拽手柄不画，详情里有 */
+  html:root [data-fx-compact-page] .fx-tunnel-card .fx-rule-card-body:not([data-fx-std-page] *) { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; grid-template-areas: "name sub traffic actions" "route route rules tag"; align-items: center; column-gap: 8px; row-gap: 1px; padding: 6px 12px 7px; }
+  html:root [data-fx-compact-page] .fx-tunnel-card .fx-rule-head:not([data-fx-std-page] *), html:root [data-fx-compact-page] .fx-tunnel-card .fx-rule-title:not([data-fx-std-page] *), html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-meta:not([data-fx-std-page] *) { display: contents; }
+  html:root [data-fx-compact-page] .fx-tunnel-card .fx-rule-name:not([data-fx-std-page] *) { grid-area: name; font-size: 14px; line-height: 20px; }
+  html:root [data-fx-compact-page] .fx-tunnel-card .fx-rule-sub:not([data-fx-std-page] *) { grid-area: sub; min-width: 0; margin: 0; font-size: 11px; line-height: 16px; }
+  /* 累计是第一行的那个数（和转发行一样大小），规则数在第二行延迟标签左边 */
+  html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-bytes:not([data-fx-std-page] *) { grid-area: traffic; }
+  html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-bytes > b:not([data-fx-std-page] *) { font-size: 15px; }
+  html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-bytes > small:not([data-fx-std-page] *) { font-size: 11px; }
+  html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-rules:not([data-fx-std-page] *) { grid-area: rules; justify-self: end; font-size: 11px; line-height: 16px; white-space: nowrap; }
+  html:root [data-fx-compact-page] .fx-tunnel-card .fx-rule-head-actions:not([data-fx-std-page] *) { grid-area: actions; justify-self: end; }
+  html:root [data-fx-compact-page] .fx-tunnel-card .fx-rule-head-actions > button:first-child:not(:last-child):not([data-fx-std-page] *) { display: none; }
+  html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-route:not([data-fx-std-page] *) { grid-area: route; margin-top: 2px; }
+  html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-latency-tag:not([data-fx-std-page] *) { grid-area: tag; justify-self: end; }
+  html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-foot:not([data-fx-std-page] *), html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-foot-line:not([data-fx-std-page] *) { display: none; }
+  html:root [data-fx-compact-page] .fx-tunnel-card .fx-rule-card-body > :not(.fx-rule-head):not(.fx-tunnel-route):not(.fx-tunnel-meta):not([data-fx-std-page] *), html:root [data-fx-compact-page] .fx-tunnel-card .fx-rule-title > :not(.fx-rule-name):not(.fx-rule-sub):not([data-fx-std-page] *) { grid-column: 1 / -1; margin: 0; }
 }
 
 /* 总览：流量图没数据时不留一大块空白，压成一行 */
