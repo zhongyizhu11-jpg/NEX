@@ -308,13 +308,10 @@ html:root [data-fx-compact-page] .fx-table-daily > div:not([data-fx-std-page] *)
 
 /* 手机：卡片栅格变成一个圆角容器里的列表，行间一根细线 */
 @media (max-width: 767px) {
-  html:root [data-fx-compact-page] .standard-card-grid:not([data-fx-std-page] *), html:root [data-fx-compact-page] .standard-card-grid-compact:not([data-fx-std-page] *) { grid-template-columns: minmax(0, 1fr); gap: 0; margin-top: 0; padding-top: 0; border: 1px solid var(--fx-stroke-weak); border-radius: var(--fx-radius-surface); overflow: hidden; }
-  html:root [data-fx-compact-page] .standard-card-grid > *:not([data-fx-std-page] *), html:root [data-fx-compact-page] .standard-card-grid-compact > *:not([data-fx-std-page] *) { border: 0; border-bottom: 1px solid var(--fx-stroke-weak); border-radius: 0; box-shadow: none; }
-  html:root [data-fx-compact-page] .standard-card-grid > :last-child:not([data-fx-std-page] *), html:root [data-fx-compact-page] .standard-card-grid-compact > :last-child:not([data-fx-std-page] *) { border-bottom: 0; }
-  /* 链路列表：每条链路一张小卡、之间留 6px（用户 2026-10-23 定的）。整张拼成一块时细分隔线压在壁纸上几乎看不见，
-     四条链路读起来像一张大卡片。转发 / 主机列表照旧拼成一块 */
-  html:root [data-fx-compact-page] .standard-card-grid:has(> .fx-tunnel-card):not([data-fx-std-page] *) { gap: 6px; border: 0; border-radius: 0; overflow: visible; }
-  html:root [data-fx-compact-page] .standard-card-grid:has(> .fx-tunnel-card) > .fx-tunnel-card:not([data-fx-std-page] *) { border: 1px solid var(--fx-stroke-weak); border-radius: var(--fx-radius-card); overflow: hidden; }
+  /* 每一行一张小卡、之间留 6px（用户 2026-10-23 定的）。原来拼成一整块、只靠一根细分隔线，压在壁纸上几乎看不见，
+     一屏读起来像一张大卡片。转发、主机、链路三个列表同一个样子 */
+  html:root [data-fx-compact-page] .standard-card-grid:not([data-fx-std-page] *), html:root [data-fx-compact-page] .standard-card-grid-compact:not([data-fx-std-page] *) { grid-template-columns: minmax(0, 1fr); gap: 6px; margin-top: 0; padding-top: 0; }
+  html:root [data-fx-compact-page] .standard-card-grid > *:not([data-fx-std-page] *), html:root [data-fx-compact-page] .standard-card-grid-compact > *:not([data-fx-std-page] *) { border: 1px solid var(--fx-stroke-weak); border-radius: var(--fx-radius-card); box-shadow: none; overflow: hidden; }
 
   /* 规则行：两行网格。走势线、「近 24H」不画（行里放不下，详情里有）；入口 / 出口点一下就复制，复制小图标留着、缩一号 */
   html:root [data-fx-compact-page] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-card-body:not([data-fx-std-page] *) { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto auto; grid-template-areas: "name sub alerts big actions" "path path path path path"; align-items: center; column-gap: 10px; row-gap: 1px; padding: 6px 12px 7px; }
@@ -333,7 +330,9 @@ html:root [data-fx-compact-page] .fx-table-daily > div:not([data-fx-std-page] *)
   html:root [data-fx-compact-page] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-card-body > :not(.fx-rule-head):not(.fx-rule-alerts):not(.fx-rule-big):not(.fx-rule-path):not([data-fx-std-page] *) { grid-column: 1 / -1; margin: 0; }
 
   /* 主机行：两行网格。系统头像不画；在线时的 CPU / 内存 / 磁盘三条占整行 */
-  html:root [data-fx-compact-page] .fx-host-card:not([data-fx-std-page] *) { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "name actions" "sub foot"; align-items: center; column-gap: 10px; row-gap: 1px; padding: 6px 12px 7px; }
+  /* 三列：名字跨前两列、只给右上角的 ··· 让位（用户 2026-10-23 报的）。原来两列时第二行的速率 + 「3 条转发 · 1 条线路经过」
+     决定了右边那一列的宽度，名字被挤在剩下的半行里，窄屏上只剩一两个字 */
+  html:root [data-fx-compact-page] .fx-host-card:not([data-fx-std-page] *) { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; grid-template-areas: "name name actions" "sub foot foot"; align-items: center; column-gap: 10px; row-gap: 1px; padding: 6px 12px 7px; }
   html:root [data-fx-compact-page] .fx-host-card .fx-entity-head:not([data-fx-std-page] *), html:root [data-fx-compact-page] .fx-host-card .fx-entity-body:not([data-fx-std-page] *) { display: contents; }
   html:root [data-fx-compact-page] .fx-host-card .fx-entity-head > span:first-child:not([data-fx-std-page] *) { display: none; }
   html:root [data-fx-compact-page] .fx-host-card .fx-entity-head > div:not(:last-child):not([data-fx-std-page] *) { display: contents; }
@@ -343,8 +342,8 @@ html:root [data-fx-compact-page] .fx-table-daily > div:not([data-fx-std-page] *)
   html:root [data-fx-compact-page] .fx-host-card .fx-entity-body > .grid:not([data-fx-std-page] *) { grid-column: 1 / -1; }
   html:root [data-fx-compact-page] .fx-host-card .fx-host-foot:not([data-fx-std-page] *) { grid-area: foot; justify-self: end; gap: 6px; font-size: 11.5px; line-height: 16px; }
   html:root [data-fx-compact-page] .fx-host-card .fx-host-foot-links:not([data-fx-std-page] *) { margin-left: 0; }
-  /* 主机行右下角两段灰字之间一根细竖线：原来「还没上报过 还没有转发」连在一起 */
-  html:root [data-fx-compact-page] .fx-host-card .fx-host-foot-links:not([data-fx-std-page] *) { padding-left: 8px; border-left: 1px solid var(--fx-stroke-weak); }
+  /* 主机行不写「N 条转发 · N 条线路经过」（用户 2026-10-23 定的），第二行只留地区 · IP 和速率 / 在线状态；详情里有 */
+  html:root [data-fx-compact-page] .fx-host-card .fx-host-foot-links:not([data-fx-std-page] *) { display: none; }
 
   /* 链路行：和转发行同一个样子（用户 2026-10-22 定的）。第一行「● 名字  副题 ……  累计 0 B · 0 条规则  ···  开关」，
      第二行左边路线、右端延迟标签。脚注那一块（延迟大数字、走势、24H）和拖拽手柄不画，详情里有 */

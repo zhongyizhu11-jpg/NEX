@@ -206,12 +206,20 @@ function hostCardTone(health: HostVitals["health"]): "ok" | "warn" | "down" | "o
 
 export function ResourceRow({ vitals }: { vitals: HostVitals }) {
   const pct = (value: number | null) => (value === null ? "—" : `${Math.round(value)}%`);
-  const unknown = vitals.cpuPercent === null;
+  /*
+    离线 / 没上报过也画这一行，只是全写「—」（用户 2026-10-23 定的：主机卡高度统一）。
+    不拿离线前最后一次的数字：那会让一台掉线的机器看起来 CPU 还在 30%。
+  */
+  const offline = !vitals.isOnline;
+  const cpu = offline ? null : vitals.cpuPercent;
+  const memory = offline ? null : vitals.memoryPercent;
+  const disk = offline ? null : vitals.diskPercent;
+  const unknown = cpu === null;
   return (
-    <div className="grid min-w-0 grid-cols-3 gap-2">
-      <SpecBlock label="CPU" value={formatCpuPercent(vitals.cpuPercent, vitals.isOnline)} percent={vitals.cpuPercent} tone={usageTone(vitals.cpuPercent)} muted={unknown} />
-      <SpecBlock label="内存" value={pct(vitals.memoryPercent)} percent={vitals.memoryPercent} tone={usageTone(vitals.memoryPercent)} muted={unknown} />
-      <SpecBlock label="磁盘" value={pct(vitals.diskPercent)} percent={vitals.diskPercent} tone={usageTone(vitals.diskPercent)} muted={unknown} />
+    <div className="grid min-w-0 grid-cols-3 gap-2" data-fx-host-resources={offline ? "offline" : undefined}>
+      <SpecBlock label="CPU" value={formatCpuPercent(cpu, vitals.isOnline)} percent={cpu} tone={usageTone(cpu)} muted={unknown} />
+      <SpecBlock label="内存" value={pct(memory)} percent={memory} tone={usageTone(memory)} muted={unknown} />
+      <SpecBlock label="磁盘" value={pct(disk)} percent={disk} tone={usageTone(disk)} muted={unknown} />
     </div>
   );
 }
@@ -333,7 +341,8 @@ export default function HostSummaryCard(props: HostSummaryCardProps) {
           标签只有一枚就不会把名字挤成「Tokyo-II…」。
         */
         badges={os.label ? (
-          <EntityTag className="max-w-[45%] font-medium text-muted-foreground">
+          // 系统标签比名字先缩：窄的时候宁可标签变「Deb…」，也不让名字只剩一个字
+          <EntityTag className="max-w-[45%] shrink-[4] font-medium text-muted-foreground">
             <span className="truncate" title={os.full}>{os.label}</span>
           </EntityTag>
         ) : null}
@@ -374,7 +383,7 @@ export default function HostSummaryCard(props: HostSummaryCardProps) {
         「要不要点进去」这个问题，而列表上的每一行都要为这个问题服务。
       */}
       <EntityBody tight>
-        {vitals.isOnline ? <ResourceRow vitals={vitals} /> : null}
+        <ResourceRow vitals={vitals} />
         <HostFootRow host={host} vitals={vitals} now={now} />
       </EntityBody>
 
