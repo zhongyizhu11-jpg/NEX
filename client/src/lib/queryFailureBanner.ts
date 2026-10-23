@@ -55,8 +55,9 @@ export type QueryFailureItem = {
  * 我们这边也没法查。路径和错误信息直接写出来，截图就能定位。
  */
 export function queryFailureDetailText(items: readonly QueryFailureItem[]): string {
-  const paths = Array.from(new Set(items.map((item) => item.path).filter(Boolean)));
-  if (paths.length === 0) return "";
+  if (items.length === 0) return "";
+  // 认不出路径也要说点什么：一行空白等于又回到「说不出是哪一项」。
+  const paths = Array.from(new Set(items.map((item) => item.path || "未知查询")));
   const message = items.map((item) => String(item.message || "").trim()).find(Boolean) || "";
   const shortMessage = message.length > 120 ? `${message.slice(0, 120)}…` : message;
   return `没读到：${paths.join("、")}${shortMessage ? `（${shortMessage}）` : ""}`;
@@ -96,4 +97,45 @@ export function sameQueryFailures(left: readonly QueryFailureItem[], right: read
 export function nextQueryFailures(previous: readonly QueryFailureItem[], next: readonly QueryFailureItem[]): readonly QueryFailureItem[] {
   if (next.length === 0) return previous.length === 0 ? previous : NO_QUERY_FAILURES;
   return sameQueryFailures(previous, next) ? previous : next;
+}
+
+/**
+ * 「知道了」要记住的是**哪几项**，不是「几项」。
+ *
+ * 原来记的是关掉时的失败数，数据一恢复就清零。换页时这一页的查询卸掉、下一页的还没
+ * 挂上，失败数短暂归零 —— 「关过」就被清掉了，到下一页同一个失败的查询又弹一次，
+ * 用户每翻一页看一次横幅。现在按路径记：关掉过的路径，在它**真正读到数据**之前不再
+ * 提示；新的路径失败了照样提示。
+ *
+ * 返回值内容没变时沿用传入的那个 Set（引用不变，调用方据此跳过重渲染）。
+ */
+export function nextDismissedQueryPaths(
+  dismissed: ReadonlySet<string>,
+  recoveredPaths: Iterable<string>,
+  newlyDismissedPaths: Iterable<string> = [],
+): ReadonlySet<string> {
+  let next: Set<string> | null = null;
+  for (const path of recoveredPaths) {
+    if (!dismissed.has(path) && !(next && next.has(path))) continue;
+    next = next ?? new Set(dismissed);
+    next.delete(path);
+  }
+  for (const path of newlyDismissedPaths) {
+    if (!path || (next ? next.has(path) : dismissed.has(path))) continue;
+    next = next ?? new Set(dismissed);
+    next.add(path);
+  }
+  return next ?? dismissed;
+}
+
+/** 还没被「知道了」压下去的那几项。 */
+export function undismissedQueryFailures(items: readonly QueryFailureItem[], dismissed: ReadonlySet<string>): readonly QueryFailureItem[] {
+  if (dismissed.size === 0) return items;
+  const kept = items.filter((item) => !dismissed.has(item.path || "未知查询"));
+  return kept.length === items.length ? items : kept;
+}
+
+/** 查询自己声明「失败了别拉横幅」（useQuery 的 meta.silentFailure）：检查更新、公告弹窗这类锦上添花的。 */
+export function isSilentFailureQuery(meta: unknown): boolean {
+  return !!(meta as { silentFailure?: unknown } | null | undefined)?.silentFailure;
 }

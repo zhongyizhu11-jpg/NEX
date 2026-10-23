@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { NO_QUERY_FAILURES, nextQueryFailures, queryFailureBannerText, queryFailureDetailText, queryKeyPath, sameQueryFailures, shouldShowQueryFailureBanner } from "./queryFailureBanner";
+import { NO_QUERY_FAILURES, isSilentFailureQuery, nextDismissedQueryPaths, nextQueryFailures, queryFailureBannerText, queryFailureDetailText, queryKeyPath, sameQueryFailures, shouldShowQueryFailureBanner, undismissedQueryFailures } from "./queryFailureBanner";
 
 const base = { failureCount: 0, failingSinceMs: 0, dismissedAtCount: 0, now: 100_000 };
 
@@ -69,4 +69,32 @@ test("失败列表内容没变就沿用旧引用，不然布局每次缓存通�
   assert.equal(nextQueryFailures(a, []), NO_QUERY_FAILURES);
   const empty = nextQueryFailures(NO_QUERY_FAILURES, []);
   assert.equal(nextQueryFailures(empty, []), empty);
+});
+
+test("「知道了」按路径记住，读到数据之前不再弹；新路径照样弹", () => {
+  const none: ReadonlySet<string> = new Set();
+  const a = { path: "tunnels.listPage", message: "Failed to fetch" };
+  const b = { path: "hosts.list", message: "500" };
+  // 关掉 a
+  const dismissed = nextDismissedQueryPaths(none, [], [a.path]);
+  assert.deepEqual(Array.from(dismissed), ["tunnels.listPage"]);
+  // 换页后 a 还在失败：不弹；b 新失败：弹，且只列 b
+  assert.deepEqual(undismissedQueryFailures([a], dismissed), []);
+  assert.deepEqual(undismissedQueryFailures([a, b], dismissed), [b]);
+  // a 真正读到数据 → 从「关过」里拿掉，下次再失败会再提示
+  const afterRecover = nextDismissedQueryPaths(dismissed, ["tunnels.listPage"]);
+  assert.equal(afterRecover.size, 0);
+  // 没变化就沿用同一个 Set（调用方据此跳过重渲染）
+  assert.equal(nextDismissedQueryPaths(dismissed, ["hosts.list"]), dismissed);
+  assert.equal(nextDismissedQueryPaths(dismissed, [], ["tunnels.listPage"]), dismissed);
+  assert.equal(undismissedQueryFailures([b], dismissed).length, 1);
+  const items = [b];
+  assert.equal(undismissedQueryFailures(items, none), items);
+});
+
+test("认不出路径也要写出来；壳层查询标了 silentFailure 就不算", () => {
+  assert.equal(queryFailureDetailText([{ path: "", message: "boom" }]), "没读到：未知查询（boom）");
+  assert.equal(isSilentFailureQuery({ silentFailure: true }), true);
+  assert.equal(isSilentFailureQuery({}), false);
+  assert.equal(isSilentFailureQuery(undefined), false);
 });

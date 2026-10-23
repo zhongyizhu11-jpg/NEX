@@ -133,3 +133,15 @@ test("Review 预览永远竖排，一行一个节点像一份清单", () => {
   const html = renderToStaticMarkup(<PathPreview nodes={[po0, jinx]} />);
   assert.doesNotMatch(html, /flex-row items-start gap-3/);
 });
+
+test("横排时名字可以缩、线有最小宽度 —— 手机上两个长名字不叠在一起", () => {
+  // 2.3.471 的条状列表里「Po0(200M)1188 ── Jinx(29.9y)」把线挤成零宽，右边名字压在左边名字上。
+  const html = renderToStaticMarkup(
+    <NetworkPath nodes={[{ ...po0, name: "Po0(200M)1188" }, { ...jinx, name: "Jinx(29.9y)" }]} edges={[{ latencyMs: 7 }]} orientation="horizontal" />,
+  );
+  // 节点不再是 flex-none（不许缩），线保底 48px
+  assert.doesNotMatch(html, /flex-none/);
+  assert.match(html, /min-w-12/);
+  // 点、线、点是同一行的兄弟，不再每个节点套一层 flex-1 的壳
+  assert.equal((html.match(/flex-1/g) || []).length, 1);
+});
