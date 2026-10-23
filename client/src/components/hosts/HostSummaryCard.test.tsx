@@ -64,3 +64,12 @@ test("流量到阈值被暂停参与组调度：注脚里标「组调度已暂�
   assert.doesNotMatch(render({ ...base, trafficFailoverExcluded: false }), /组调度已暂停/);
   assert.doesNotMatch(render({ ...base, trafficFailoverEnabled: false, trafficFailoverExcluded: true }), /组调度已暂停/);
 });
+
+test("离线主机也画资源那一行（卡片高度统一），但不拿离线前的旧数字", () => {
+  const host = { id: 9, name: "US backup 04", isOnline: false, lastHeartbeat: now - 30 * 60_000 };
+  const stale = { cpuUsage: 30, memoryUsage: 55, diskUsage: 70, createdAt: new Date(now - 31 * 60_000).toISOString() };
+  const html = renderToStaticMarkup(<ResourceRow vitals={deriveHostVitals(host, [stale] as any)} />);
+  assert.match(html, /data-fx-host-resources="offline"/);
+  assert.match(html, /CPU/);
+  assert.doesNotMatch(html, /30%|55%|70%/);
+});
