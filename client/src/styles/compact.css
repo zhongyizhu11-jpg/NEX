@@ -311,6 +311,10 @@ html:root [data-fx-compact-page] .fx-table-daily > div:not([data-fx-std-page] *)
   html:root [data-fx-compact-page] .standard-card-grid:not([data-fx-std-page] *), html:root [data-fx-compact-page] .standard-card-grid-compact:not([data-fx-std-page] *) { grid-template-columns: minmax(0, 1fr); gap: 0; margin-top: 0; padding-top: 0; border: 1px solid var(--fx-stroke-weak); border-radius: var(--fx-radius-surface); overflow: hidden; }
   html:root [data-fx-compact-page] .standard-card-grid > *:not([data-fx-std-page] *), html:root [data-fx-compact-page] .standard-card-grid-compact > *:not([data-fx-std-page] *) { border: 0; border-bottom: 1px solid var(--fx-stroke-weak); border-radius: 0; box-shadow: none; }
   html:root [data-fx-compact-page] .standard-card-grid > :last-child:not([data-fx-std-page] *), html:root [data-fx-compact-page] .standard-card-grid-compact > :last-child:not([data-fx-std-page] *) { border-bottom: 0; }
+  /* 链路列表：每条链路一张小卡、之间留 6px（用户 2026-10-23 定的）。整张拼成一块时细分隔线压在壁纸上几乎看不见，
+     四条链路读起来像一张大卡片。转发 / 主机列表照旧拼成一块 */
+  html:root [data-fx-compact-page] .standard-card-grid:has(> .fx-tunnel-card):not([data-fx-std-page] *) { gap: 6px; border: 0; border-radius: 0; overflow: visible; }
+  html:root [data-fx-compact-page] .standard-card-grid:has(> .fx-tunnel-card) > .fx-tunnel-card:not([data-fx-std-page] *) { border: 1px solid var(--fx-stroke-weak); border-radius: var(--fx-radius-card); overflow: hidden; }
 
   /* 规则行：两行网格。走势线、「近 24H」不画（行里放不下，详情里有）；入口 / 出口点一下就复制，复制小图标留着、缩一号 */
   html:root [data-fx-compact-page] .fx-rule-card:not(.fx-tunnel-card) .fx-rule-card-body:not([data-fx-std-page] *) { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto auto; grid-template-areas: "name sub alerts big actions" "path path path path path"; align-items: center; column-gap: 10px; row-gap: 1px; padding: 6px 12px 7px; }
