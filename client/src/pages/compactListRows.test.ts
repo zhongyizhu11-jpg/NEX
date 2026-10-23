@@ -68,8 +68,8 @@ test("剩下的几条：主机行不写几条转发、链路行照转发行排�
   const css = fs.readFileSync(path.resolve(import.meta.dirname, "../styles/compact.css"), "utf8");
   assert.match(css, /\.fx-host-card:not\(\[data-fx-std-page\] \*\) \{ display: grid; grid-template-columns: minmax\(0, 1fr\) auto auto; grid-template-areas: "name name actions" "sub foot foot";/, "主机名跨两列，不被第二行的速率和转发数挤窄");
   assert.match(css, /\.fx-host-card \.fx-host-foot-links:not\(\[data-fx-std-page\] \*\) \{ display: none; \}/, "主机行不写几条转发");
-  assert.match(css, /\.fx-tunnel-card \.fx-rule-card-body:not\(\[data-fx-std-page\] \*\) \{ display: grid; grid-template-columns: auto minmax\(0, 1fr\) auto auto; grid-template-areas: "name sub traffic actions" "route route route tag";/, "链路行和转发行同一个两行网格：第二行整行给路线，右端只留延迟标签");
-  assert.match(css, /\.fx-tunnel-route \[data-fx-path-edge\]:not\(\[data-fx-std-page\] \*\) \{ flex: 0 0 56px;/, "精简链路行的连线固定一小段，不铺满");
+  assert.match(css, /\.fx-tunnel-card \.fx-rule-card-body:not\(\[data-fx-std-page\] \*\) \{ display: grid; grid-template-columns: auto minmax\(0, 1fr\) auto auto auto; grid-template-areas: "name sub traffic actions actions" "route route route route tag";/, "链路行和转发行同一个两行网格：第二行整行给路线，右端只留延迟标签");
+  assert.match(css, /\.fx-tunnel-route \[data-fx-path-edge\]:not\(\[data-fx-std-page\] \*\) \{ flex: 0 0 40px;/, "精简链路行的连线固定一小段，不铺满");
   assert.match(css, /\.standard-card-grid-compact:not\(\[data-fx-std-page\] \*\) \{ grid-template-columns: minmax\(0, 1fr\); gap: 6px;/, "转发、主机、链路列表每行一张小卡，之间留缝");
   assert.match(css, /\.standard-card-grid-compact > \*:not\(\[data-fx-std-page\] \*\) \{ border: 1px solid var\(--fx-stroke-weak\); border-radius: var\(--fx-radius-card\);/);
   assert.match(read("Tunnels.tsx"), /className="fx-rule-tag fx-tunnel-latency-tag"/);
