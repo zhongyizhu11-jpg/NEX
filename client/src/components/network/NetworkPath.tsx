@@ -146,7 +146,7 @@ export function NetworkEdge({
       名字就叠在一起，底下的「7 ms」也没地方放。线有底线，名字自己去截断（见 NetworkPath）。
     */
     return (
-      <span className={cn("flex min-w-12 flex-1 flex-col items-center gap-1", className)}>
+      <span data-fx-path-edge="" className={cn("flex min-w-12 flex-1 flex-col items-center gap-1", className)}>
         {line}
         {label}
       </span>

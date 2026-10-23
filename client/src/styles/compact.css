@@ -358,6 +358,8 @@ html:root [data-fx-compact-page] .fx-table-daily > div:not([data-fx-std-page] *)
   html:root [data-fx-compact-page] .fx-tunnel-card .fx-rule-head-actions > button:first-child:not(:last-child):not([data-fx-std-page] *) { display: none; }
   /* min-width: 0：路线是网格项，默认不肯比内容窄，两个长名字会把格子撑出去叠在一起；放开后由 NetworkPath 自己截断 */
   html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-route:not([data-fx-std-page] *) { grid-area: route; margin-top: 2px; min-width: 0; }
+  /* 连线不铺满整行（用户 2026-10-23 定的）：固定一小段，两个名字靠拢，右边留白 */
+  html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-route [data-fx-path-edge]:not([data-fx-std-page] *) { flex: 0 0 56px; min-width: 56px; max-width: 56px; }
   html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-latency-tag:not([data-fx-std-page] *) { grid-area: tag; justify-self: end; }
   html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-foot:not([data-fx-std-page] *), html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-foot-line:not([data-fx-std-page] *) { display: none; }
   html:root [data-fx-compact-page] .fx-tunnel-card .fx-rule-card-body > :not(.fx-rule-head):not(.fx-tunnel-route):not(.fx-tunnel-meta):not([data-fx-std-page] *), html:root [data-fx-compact-page] .fx-tunnel-card .fx-rule-title > :not(.fx-rule-name):not(.fx-rule-sub):not([data-fx-std-page] *) { grid-column: 1 / -1; margin: 0; }

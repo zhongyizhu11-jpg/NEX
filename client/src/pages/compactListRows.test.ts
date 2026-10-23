@@ -68,6 +68,7 @@ test("剩下的几条：主机行两段灰字之间一根细竖线、链路行�
   const css = fs.readFileSync(path.resolve(import.meta.dirname, "../styles/compact.css"), "utf8");
   assert.match(css, /\.fx-host-card \.fx-host-foot-links:not\(\[data-fx-std-page\] \*\) \{ padding-left: 8px; border-left: 1px solid var\(--fx-stroke-weak\); \}/);
   assert.match(css, /\.fx-tunnel-card \.fx-rule-card-body:not\(\[data-fx-std-page\] \*\) \{ display: grid; grid-template-columns: auto minmax\(0, 1fr\) auto auto; grid-template-areas: "name sub traffic actions" "route route route tag";/, "链路行和转发行同一个两行网格：第二行整行给路线，右端只留延迟标签");
+  assert.match(css, /\.fx-tunnel-route \[data-fx-path-edge\]:not\(\[data-fx-std-page\] \*\) \{ flex: 0 0 56px;/, "精简链路行的连线固定一小段，不铺满");
   assert.match(read("Tunnels.tsx"), /className="fx-rule-tag fx-tunnel-latency-tag"/);
   assert.match(read("Tunnels.tsx"), /className="fx-tunnel-bytes fx-rule-num"/);
   assert.match(css, /\[data-fx-chart="traffic"\]\[data-fx-empty\]:not\(\[data-fx-std-page\] \*\) \{ height: 40px; \}/);
