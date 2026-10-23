@@ -473,6 +473,7 @@ function DashboardLayoutContent({
   const updateAutoCheckReady = !isAdmin || !!publicInfo;
   const updateAutoCheckEnabled = publicInfo?.updateAutoCheckEnabled !== false;
   const { data: updateInfo } = trpc.system.checkUpdate.useQuery(undefined, {
+    meta: { silentFailure: true },
     enabled: isAdmin && !deferBackgroundQueries && updateAutoCheckReady && updateAutoCheckEnabled,
     refetchInterval: updateAutoCheckEnabled ? UPDATE_AUTO_CHECK_REFETCH_MS : false,
     refetchOnWindowFocus: false,
@@ -480,6 +481,7 @@ function DashboardLayoutContent({
     staleTime: 60 * 1000,
   });
   const { data: storeStatus } = trpc.plans.storeStatus.useQuery(undefined, {
+    meta: { silentFailure: true },
     staleTime: SHELL_META_STALE_MS,
     enabled: !!user && !isAdmin,
     refetchOnWindowFocus: false,
@@ -492,6 +494,7 @@ function DashboardLayoutContent({
    * 发现，而那时续费还要走一遍支付。这条谁都看得见。
    */
   const { data: expiryNotice } = trpc.plans.myExpiryNotice.useQuery(undefined, {
+    meta: { silentFailure: true },
     enabled: !!user && !isAdmin,
     refetchOnWindowFocus: false,
     retry: false,
@@ -506,18 +509,21 @@ function DashboardLayoutContent({
     && expiryDaysLeft >= 0
     && expiryDaysLeft <= Math.max(0, ...(expiryNotice?.reminderDays || [7]));
   const { data: popupAnnouncement } = trpc.announcements.popup.useQuery(undefined, {
+    meta: { silentFailure: true },
     staleTime: SHELL_META_STALE_MS,
     enabled: !!user,
     refetchOnWindowFocus: false,
     retry: false,
   });
   const { data: upgradeAnnouncement, isFetched: upgradeAnnouncementFetched } = trpc.announcements.upgradePopup.useQuery(undefined, {
+    meta: { silentFailure: true },
     staleTime: SHELL_META_STALE_MS,
     enabled: !!user && isAdmin,
     refetchOnWindowFocus: false,
     retry: false,
   });
   const { data: telegramStatus } = trpc.telegram.status.useQuery(undefined, {
+    meta: { silentFailure: true },
     staleTime: SHELL_META_STALE_MS,
     enabled: !!user,
     refetchInterval: (query) => {
@@ -586,6 +592,7 @@ function DashboardLayoutContent({
     - refetchIntervalInBackground 让标签页在后台（桌面端切到别的标签）也继续轮询。
   */
   const upgradeStatusQuery = trpc.system.upgradeStatus.useQuery(undefined, {
+    meta: { silentFailure: true },
     enabled: isAdmin,
     refetchInterval: (query) => {
       const status = (query.state.data as any)?.job?.status;
@@ -901,6 +908,7 @@ function DashboardLayoutContent({
   });
 
   const { data: avatarQuota } = trpc.users.avatarQuota.useQuery(undefined, {
+    meta: { silentFailure: true },
     staleTime: SHELL_META_STALE_MS,
     enabled: !!user,
     refetchOnWindowFocus: false,
@@ -997,6 +1005,7 @@ function DashboardLayoutContent({
   };
 
   const { data: twoFactorStatus } = trpc.auth.twoFactorStatus.useQuery(undefined, {
+    meta: { silentFailure: true },
     staleTime: SHELL_META_STALE_MS,
     enabled: !!user,
     refetchOnWindowFocus: false,
@@ -1207,6 +1216,7 @@ function DashboardLayoutContent({
     : [];
   // 管理员侧栏「工单管理」上的待处理数，一分钟问一次（只数一下，很便宜）。
   const { data: ticketCounts } = trpc.tickets.adminCounts.useQuery(undefined, {
+    meta: { silentFailure: true },
     enabled: isAdmin && sidebarMenuSettings.tickets !== false,
     refetchInterval: ADMIN_TICKET_COUNTS_POLL_MS,
     refetchOnWindowFocus: false,
@@ -1962,6 +1972,7 @@ function DashboardLayoutContent({
             面板重启或者网络抖动时好几个会一起失败。这条横幅让人知道「现在看到的不完整」，
             而不是把空白当成事实。只在持续失败几秒后才出现，免得轮询抖一下就闪。
           */}
+          {/* 壳层那几项（检查更新、公告、Telegram 状态……）读不到不拉横幅：它们标了 meta.silentFailure */}
           {queryFailure.visible ? (
             <div className="mb-4 flex flex-col gap-2 rounded-lg border border-destructive/30 bg-destructive/[0.06] px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between">
               <div className="min-w-0">

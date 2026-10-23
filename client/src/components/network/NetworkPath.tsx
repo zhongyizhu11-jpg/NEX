@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
 
 import { cn } from "@/lib/utils";
 import { describeNetworkHealth, type NetworkHealth, type NetworkLineStyle } from "@shared/networkHealth";
@@ -141,8 +141,12 @@ export function NetworkEdge({
   );
 
   if (orientation === "horizontal") {
+    /*
+      横排的线至少留 48px：手机上两个长名字（Po0(200M)1188、Jinx(29.9y)）把线挤成零宽，
+      名字就叠在一起，底下的「7 ms」也没地方放。线有底线，名字自己去截断（见 NetworkPath）。
+    */
     return (
-      <span className={cn("flex min-w-0 flex-1 flex-col items-center gap-1", className)}>
+      <span className={cn("flex min-w-12 flex-1 flex-col items-center gap-1", className)}>
         {line}
         {label}
       </span>
@@ -194,11 +198,34 @@ export function NetworkPath({
     return <NetworkNode node={nodes[0]} orientation={direction} className={className} />;
   }
 
+  /*
+    横排不再给每个「节点 + 线」套一层 flex-1 的壳。
+
+    套壳时两个壳平分宽度：左壳装名字加线，右壳只装名字，名字又是 flex-none 不许缩 ——
+    手机上一个长名字就把左壳撑爆，右边的名字直接压在它上面，线缩成零宽，「7 ms」悬在
+    两个名字中间。现在点、线、点是同一行里的兄弟：线拿走全部富余宽度（至少 48px），
+    名字只在放不下时才缩、缩了就打省略号，谁也不叠谁。
+  */
+  if (direction === "horizontal") {
+    return (
+      <div className={cn("flex min-w-0 flex-row items-start gap-3", className)}>
+        {nodes.map((node, index) => {
+          const edge = index < nodes.length - 1 ? (edges[index] || {}) : null;
+          return (
+            <Fragment key={node.id}>
+              <NetworkNode node={node} orientation="horizontal" className="min-w-0 shrink" />
+              {edge ? <NetworkEdge edge={edge} orientation="horizontal" className="mt-[10px]" /> : null}
+            </Fragment>
+          );
+        })}
+      </div>
+    );
+  }
+
   return (
     <div
       className={cn(
-        "flex min-w-0",
-        direction === "horizontal" ? "flex-row items-start gap-3" : "flex-col gap-0",
+        "flex min-w-0 flex-col gap-0",
         className,
       )}
     >
@@ -207,33 +234,19 @@ export function NetworkPath({
         return (
           <div
             key={node.id}
-            className={cn(
-              "flex min-w-0",
-              direction === "horizontal" ? "flex-1 flex-row items-start gap-3" : "flex-col",
-            )}
+            className="flex min-w-0 flex-col"
           >
-            <NetworkNode
-              node={node}
-              orientation={direction}
-              className={direction === "horizontal" ? "flex-none" : undefined}
-            />
+            <NetworkNode node={node} orientation={direction} />
             {edge ? (
               <NetworkEdge
                 edge={edge}
                 orientation={direction}
                 /*
-                  线要落在状态点的圆心上，横竖两个方向都是。
-
-                  横排：点现在和名字同一行，圆心在 11px 处，所以 mt-[10px]（1px 的线压在 10–11px 上）。
-                  竖排：点宽 8px 从 x=0 起，圆心在 x=4；边自己的 w-2 容器已经把
-                  线居中到 4px 了，所以**不能再加左边距** —— 之前那个 ml-1 把线
-                  推到 x=8，比圆心右了 4px，一条三跳的路径看上去就是线和点各走
-                  各的，根本没连起来。
-
-                  差几个像素在这里不是审美问题：Path 的全部意义就是「这两个点
-                  是连着的」，线没接上点，这句话就没说出来。
+                  线要落在状态点的圆心上：点宽 8px 从 x=0 起，圆心在 x=4；边自己的 w-2 容器已经
+                  把线居中到 4px 了，所以**不能再加左边距** —— 之前那个 ml-1 把线推到 x=8，比圆心
+                  右了 4px，一条三跳的路径看上去就是线和点各走各的，根本没连起来。
+                  差几个像素在这里不是审美问题：Path 的全部意义就是「这两个点是连着的」。
                 */
-                className={direction === "horizontal" ? "mt-[10px]" : undefined}
               />
             ) : null}
           </div>

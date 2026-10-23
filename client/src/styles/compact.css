@@ -355,7 +355,8 @@ html:root [data-fx-compact-page] .fx-table-daily > div:not([data-fx-std-page] *)
   html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-rules:not([data-fx-std-page] *) { grid-area: rules; justify-self: end; font-size: 11px; line-height: 16px; white-space: nowrap; }
   html:root [data-fx-compact-page] .fx-tunnel-card .fx-rule-head-actions:not([data-fx-std-page] *) { grid-area: actions; justify-self: end; }
   html:root [data-fx-compact-page] .fx-tunnel-card .fx-rule-head-actions > button:first-child:not(:last-child):not([data-fx-std-page] *) { display: none; }
-  html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-route:not([data-fx-std-page] *) { grid-area: route; margin-top: 2px; }
+  /* min-width: 0：路线是网格项，默认不肯比内容窄，两个长名字会把格子撑出去叠在一起；放开后由 NetworkPath 自己截断 */
+  html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-route:not([data-fx-std-page] *) { grid-area: route; margin-top: 2px; min-width: 0; }
   html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-latency-tag:not([data-fx-std-page] *) { grid-area: tag; justify-self: end; }
   html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-foot:not([data-fx-std-page] *), html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-foot-line:not([data-fx-std-page] *) { display: none; }
   html:root [data-fx-compact-page] .fx-tunnel-card .fx-rule-card-body > :not(.fx-rule-head):not(.fx-tunnel-route):not(.fx-tunnel-meta):not([data-fx-std-page] *), html:root [data-fx-compact-page] .fx-tunnel-card .fx-rule-title > :not(.fx-rule-name):not(.fx-rule-sub):not([data-fx-std-page] *) { grid-column: 1 / -1; margin: 0; }
