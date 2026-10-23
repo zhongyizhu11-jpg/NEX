@@ -2703,7 +2703,7 @@ function TunnelsContent() {
     const { health, message } = tunnelHealthOf(tunnel, supported);
     return <StatusDot health={health} size="large" label={message} />;
   };
-  const renderTunnelRoute = (tunnel: any, compact = false, orientation?: "auto" | "horizontal" | "vertical", showVia = true) => {
+  const renderTunnelRoute = (tunnel: any, compact = false, orientation?: "auto" | "horizontal" | "vertical", showVia = true, showLatency = true) => {
     const entryGroup = Number(tunnel?.entryGroupId || 0) > 0 ? entryGroupById.get(Number(tunnel.entryGroupId)) : null;
     /*
       换成 Path 语言：位置本身说明谁是入口谁是出口，不再给每个节点贴
@@ -2721,7 +2721,8 @@ function TunnelsContent() {
         ? entryMembersForGroup(Number(entryGroup.id)).map((member: any) => Number(member.hostId || 0))
         : [],
       health,
-      latencyMs: typeof tunnel?.lastLatencyMs === "number" ? tunnel.lastLatencyMs : null,
+      // 精简手机行右端已经有延迟标签，线底下不再写一遍（用户 2026-10-23 定的），省下的宽度给名字
+      latencyMs: showLatency && typeof tunnel?.lastLatencyMs === "number" ? tunnel.lastLatencyMs : null,
       // 链路卡的副标题已经写了模式（「GOST TLS · 直连」），线旁边不再重复一遍，路径就是一行
       via: showVia ? getTunnelModeDisplay(tunnel?.mode, true, tunnel?.forwardxVersion) : undefined,
     });
@@ -4363,7 +4364,7 @@ function TunnelsContent() {
             </div>
           </div>
           <div className="fx-tunnel-route">
-            {renderTunnelRoute(tunnel, true, hopCount <= 3 && !hasEntryGroup ? "horizontal" : "auto", false)}
+            {renderTunnelRoute(tunnel, true, hopCount <= 3 && !hasEntryGroup ? "horizontal" : "auto", false, !compactLayout)}
           </div>
           {/* fx-tunnel-meta：精简手机行上累计和延迟那两行并成一行（compact.css），标准下照旧两行 */}
           <div className="fx-tunnel-meta">

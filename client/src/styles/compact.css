@@ -344,7 +344,7 @@ html:root [data-fx-compact-page] .fx-table-daily > div:not([data-fx-std-page] *)
 
   /* 链路行：和转发行同一个样子（用户 2026-10-22 定的）。第一行「● 名字  副题 ……  累计 0 B · 0 条规则  ···  开关」，
      第二行左边路线、右端延迟标签。脚注那一块（延迟大数字、走势、24H）和拖拽手柄不画，详情里有 */
-  html:root [data-fx-compact-page] .fx-tunnel-card .fx-rule-card-body:not([data-fx-std-page] *) { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; grid-template-areas: "name sub traffic actions" "route route rules tag"; align-items: center; column-gap: 8px; row-gap: 1px; padding: 6px 12px 7px; }
+  html:root [data-fx-compact-page] .fx-tunnel-card .fx-rule-card-body:not([data-fx-std-page] *) { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; grid-template-areas: "name sub traffic actions" "route route route tag"; align-items: center; column-gap: 8px; row-gap: 1px; padding: 6px 12px 7px; }
   html:root [data-fx-compact-page] .fx-tunnel-card .fx-rule-head:not([data-fx-std-page] *), html:root [data-fx-compact-page] .fx-tunnel-card .fx-rule-title:not([data-fx-std-page] *), html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-meta:not([data-fx-std-page] *) { display: contents; }
   html:root [data-fx-compact-page] .fx-tunnel-card .fx-rule-name:not([data-fx-std-page] *) { grid-area: name; font-size: 14px; line-height: 20px; }
   html:root [data-fx-compact-page] .fx-tunnel-card .fx-rule-sub:not([data-fx-std-page] *) { grid-area: sub; min-width: 0; margin: 0; font-size: 11px; line-height: 16px; }
@@ -352,7 +352,8 @@ html:root [data-fx-compact-page] .fx-table-daily > div:not([data-fx-std-page] *)
   html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-bytes:not([data-fx-std-page] *) { grid-area: traffic; }
   html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-bytes > b:not([data-fx-std-page] *) { font-size: 15px; }
   html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-bytes > small:not([data-fx-std-page] *) { font-size: 11px; }
-  html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-rules:not([data-fx-std-page] *) { grid-area: rules; justify-self: end; font-size: 11px; line-height: 16px; white-space: nowrap; }
+  /* 规则数不画（用户 2026-10-23 定的）：第二行整行给路线，右端只留延迟标签；规则数详情里有 */
+  html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-rules:not([data-fx-std-page] *) { display: none; }
   html:root [data-fx-compact-page] .fx-tunnel-card .fx-rule-head-actions:not([data-fx-std-page] *) { grid-area: actions; justify-self: end; }
   html:root [data-fx-compact-page] .fx-tunnel-card .fx-rule-head-actions > button:first-child:not(:last-child):not([data-fx-std-page] *) { display: none; }
   /* min-width: 0：路线是网格项，默认不肯比内容窄，两个长名字会把格子撑出去叠在一起；放开后由 NetworkPath 自己截断 */
