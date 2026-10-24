@@ -11,29 +11,22 @@ import {
   shellQuoteSingle,
 } from "./agentInstallCommand";
 
-test("默认先走 GitHub 脚本，失败再回落面板自带的那份", () => {
-  const command = buildAgentScriptCommand({
-    panelUrl: "https://panel.example.com",
-    action: "install",
-    token: "tok123",
-  });
-  const github = command.indexOf(AGENT_INSTALL_SCRIPT_RAW_URL);
-  const panel = command.indexOf("/api/agent/install.sh");
-  assert.ok(github >= 0 && panel >= 0);
-  assert.ok(github < panel, "GitHub 那条应该排在前面");
-  assert.equal(command.split(" || ").length, 2);
-  assert.ok(command.includes("install '\\''tok123'\\''"), command);
-});
-
-test("preferPanelInstall 把顺序倒过来，并带上 FORWARDX_AGENT_PANEL_FIRST", () => {
-  const command = buildAgentScriptCommand({
-    panelUrl: "https://panel.example.com",
-    action: "install",
-    token: "tok123",
-    preferPanelInstall: true,
-  });
-  assert.ok(command.indexOf("/api/agent/install.sh") < command.indexOf(AGENT_INSTALL_SCRIPT_RAW_URL));
-  assert.ok(command.includes("FORWARDX_AGENT_PANEL_FIRST=true"));
+test("安装脚本总是先从面板拉，GitHub 那条兜底", () => {
+  for (const preferPanelInstall of [false, true]) {
+    const command = buildAgentScriptCommand({
+      panelUrl: "https://panel.example.com",
+      action: "install",
+      token: "tok123",
+      preferPanelInstall,
+    });
+    const github = command.indexOf(AGENT_INSTALL_SCRIPT_RAW_URL);
+    const panel = command.indexOf("/api/agent/install.sh");
+    assert.ok(github >= 0 && panel >= 0);
+    assert.ok(panel < github, "面板那条应该排在前面");
+    assert.equal(command.split(" || ").length, 2);
+    assert.ok(command.includes("install '\\''tok123'\\''"), command);
+    assert.equal(command.includes("FORWARDX_AGENT_PANEL_FIRST=true"), preferPanelInstall);
+  }
 });
 
 test("加速器是拼在原始地址前面的前缀，不是替换", () => {

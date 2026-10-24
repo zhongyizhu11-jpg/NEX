@@ -87,6 +87,9 @@ test("a binary from either trusted build passes: panel-bundled hash or GitHub SH
       shellFunction(script, "expected_release_sha256"),
       shellFunction(script, "file_sha256"),
       shellFunction(script, "verify_release_checksum"),
+      // 当作 GitHub 通：这一组要的是 SHA256SUMS 那条路。
+      "GITHUB_REACHABLE=1",
+      shellFunction(script, "github_reachable"),
       `curl() { ${curlBody}; }`,
     ].join("\n");
     const run = (script: string, curlBody: string, body: string) => spawnSync("bash", ["-c", `${prelude(script, curlBody)}\n${body}`], { encoding: "utf8" });

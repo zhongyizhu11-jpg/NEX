@@ -36,9 +36,6 @@ FORWARDX_CURL_CONNECT_TIMEOUT="${FORWARDX_CURL_CONNECT_TIMEOUT:-15}"
 FORWARDX_CURL_LOW_SPEED_LIMIT="${FORWARDX_CURL_LOW_SPEED_LIMIT:-1024}"
 FORWARDX_CURL_LOW_SPEED_TIME="${FORWARDX_CURL_LOW_SPEED_TIME:-60}"
 
-FORWARDX_INSTALL_MIMIC="${FORWARDX_INSTALL_MIMIC:-ask}"
-FORWARDX_MIMIC_INSTALLER_URL="${FORWARDX_MIMIC_INSTALLER_URL:-https://raw.githubusercontent.com/zhongyizhu11-jpg/NEX/main/scripts/install-mimic.sh}"
-FORWARDX_MIMIC_VERSION="${FORWARDX_MIMIC_VERSION:-0.7.1}"
 # Keep Realm on the glibc-compatible release by default. Set this explicitly
 # to opt into another Realm release, for example 2.9.6.
 FORWARDX_REALM_VERSION_EXPLICIT="false"
@@ -83,7 +80,7 @@ show_help() {
   --no-proxy         保存为直连；升级默认沿用配置里的代理
 
 说明:
-  安装过程中会询问是否安装 mimic UDP 混淆环境，默认 n，只有输入 Y 才会安装。
+  不安装 mimic UDP 混淆环境；需要时在面板「主机详情 › mimic UDP 混淆」里一键安装。
 EOF
 }
 
@@ -196,9 +193,6 @@ run_panel_installer() {
     GITHUB_ACCELERATOR_ENABLED="$GITHUB_ACCELERATOR_ENABLED" \
     GITHUB_ACCELERATOR_URL="$GITHUB_ACCELERATOR_URL" \
     FORWARDX_AGENT_PANEL_FIRST="$FORWARDX_AGENT_PANEL_FIRST" \
-    FORWARDX_INSTALL_MIMIC="$FORWARDX_INSTALL_MIMIC" \
-    FORWARDX_MIMIC_INSTALLER_URL="$FORWARDX_MIMIC_INSTALLER_URL" \
-    FORWARDX_MIMIC_VERSION="$FORWARDX_MIMIC_VERSION" \
     FORWARDX_REALM_VERSION_EXPLICIT="$FORWARDX_REALM_VERSION_EXPLICIT" \
     FORWARDX_REALM_VERSION="$FORWARDX_REALM_VERSION" \
     bash "$tmp_script" "$mode" "$token" </dev/null; then

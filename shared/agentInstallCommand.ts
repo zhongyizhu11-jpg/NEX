@@ -20,7 +20,7 @@ export interface AgentScriptCommandOptions {
   token?: string;
   githubAcceleratorUrl?: string;
   githubAcceleratorEnabled?: boolean;
-  /** true = 先试面板自带的脚本，失败再回落 GitHub；false = 反过来。 */
+  /** true = Agent 程序先从面板下（FORWARDX_AGENT_PANEL_FIRST）；安装脚本不管它，总是先从面板拉。 */
   preferPanelInstall?: boolean;
   /** OpenWrt / iStoreOS 版：最前面先补 bash、curl（AGENT_OPENWRT_BOOTSTRAP）。普通命令不带，免得 VPS 上看着吓人。 */
   openwrt?: boolean;
@@ -91,9 +91,10 @@ export function buildAgentScriptCommand(options: AgentScriptCommandOptions): str
     `curl -fsSL ${curlScriptArgs} "${githubScriptUrl}" | PANEL_URL=${shellQuoteSingle(panelUrl)} ${bashPrefix} -s -- ${args}`,
   );
 
-  const pipelines = options.preferPanelInstall
-    ? `${panelCommand} || ${githubCommand}`
-    : `${githubCommand} || ${panelCommand}`;
+  // 面板那条总在前面：GitHub 入口脚本自己也是去面板拉同一份 install.sh，先走 GitHub 只是多绕一道 ——
+  // 国内机上 raw.githubusercontent.com 不通时还要先白等 15 秒连接超时。面板 Agent 本来就得连得上。
+  // GitHub 那条留着兜底（面板反代把 /api/agent/install.sh 挡掉之类）。
+  const pipelines = `${panelCommand} || ${githubCommand}`;
   return options.openwrt ? AGENT_OPENWRT_BOOTSTRAP + pipelines : pipelines;
 }
 

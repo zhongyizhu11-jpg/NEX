@@ -7,6 +7,14 @@ import test from "node:test";
 import { generateInstallScript } from "./agentInstallScripts";
 import { hardenManagedServiceUnit } from "./agentActionCommands";
 
+/** 取脚本里一个 shell 函数的函数体（从「name() {」到下一行顶格的「}」）。 */
+function shellFunction(script: string, name: string) {
+  const start = script.indexOf(`\n${name}() {\n`);
+  assert.notEqual(start, -1, `missing shell function: ${name}`);
+  const end = script.indexOf("\n}\n", start + 1);
+  return script.slice(start + 1, end + 2);
+}
+
 function scriptSection(script: string, start: string, end: string) {
   const startIndex = script.indexOf(start);
   const endIndex = script.indexOf(end, startIndex + start.length);
@@ -15,7 +23,7 @@ function scriptSection(script: string, start: string, end: string) {
   return script.slice(startIndex, endIndex);
 }
 
-test("panel GitHub accelerator settings reach the Mimic installer", () => {
+test("panel GitHub accelerator settings are embedded in the install script", () => {
   const script = generateInstallScript("https://panel.example.com", {
     githubAcceleratorEnabled: true,
     githubAcceleratorUrl: "https://proxy.example.com/",
@@ -23,10 +31,43 @@ test("panel GitHub accelerator settings reach the Mimic installer", () => {
 
   assert.match(script, /GITHUB_ACCELERATOR_DEFAULT_ENABLED="true"/);
   assert.match(script, /GITHUB_ACCELERATOR_DEFAULT_URL='https:\/\/proxy\.example\.com'/);
-  assert.match(
-    script,
-    /GITHUB_ACCELERATOR_ENABLED="\$GITHUB_ACCELERATOR_ENABLED" GITHUB_ACCELERATOR_URL="\$GITHUB_ACCELERATOR_URL" FORWARDX_MIMIC_VERSION=/,
-  );
+});
+
+test("Agent 安装脚本不装 mimic：mimic 只在面板主机详情里一键安装", () => {
+  const script = generateInstallScript("https://panel.example.com");
+  const entry = fs.readFileSync(path.join(process.cwd(), "scripts/install-agent.sh"), "utf8");
+  for (const text of [script, entry]) {
+    assert.doesNotMatch(text, /FORWARDX_INSTALL_MIMIC|install-mimic\.sh|prompt_install_mimic|install_mimic_optional/);
+  }
+});
+
+test("连不上 GitHub 时先探测一次，之后下载都走面板、GitHub 上才有的直接跳过", () => {
+  const script = generateInstallScript("https://panel.example.com");
+  assert.match(script, /^GITHUB_REACHABLE="\$\{FORWARDX_GITHUB_REACHABLE:-\}"$/m);
+  assert.match(script, /curl -sS -o \/dev\/null --connect-timeout 5 --max-time 8 "\$PROBE"/);
+  const detect = shellFunction(script, "detect_github_access");
+  assert.match(detect, /FORWARDX_AGENT_PANEL_FIRST=true/);
+  for (const name of ["download_github_binary", "install_runtime_from_github"]) {
+    assert.match(shellFunction(script, name), /if ! github_reachable; then/, name);
+  }
+  assert.match(shellFunction(script, "do_install"), /install_deps\n\s*detect_github_access/);
+  assert.match(shellFunction(script, "do_upgrade"), /detect_github_access\n[^\n]*\n\s*if upgrade_agent_and_fxp_binaries; then/);
+});
+
+test("realm 先从 GitHub 装，装不上（或连不上 GitHub）才从面板下", () => {
+  const realm = shellFunction(generateInstallScript("https://panel.example.com"), "install_realm");
+  const github = realm.indexOf('try_realm_asset "$REALM_RAW_URL" "default"');
+  const panel = realm.indexOf('install_realm_from_url "$REALM_PANEL_URL"');
+  assert.ok(github > 0 && panel > github, "面板那次要排在 GitHub 后面");
+  assert.match(realm, /if github_reachable; then\n\s*REALM_RAW_URL=/);
+  assert.match(realm, /REALM_PANEL_URL="\$\{PANEL_URL%\/\}\/api\/agent\/realm-assets\/\$REALM_VERSION\/realm-\$REALM_ARCH\.tar\.gz"/);
+});
+
+test("依赖都在就不跑包管理器（重装、升级不再 apt-get update）", () => {
+  const script = generateInstallScript("https://panel.example.com");
+  const deps = shellFunction(script, "install_deps");
+  assert.ok(deps.indexOf("deps_all_present") < deps.indexOf("apt-get update"));
+  assert.match(shellFunction(script, "deps_all_present"), /for B in curl jq socat iptables nft ip ss od openssl conntrack iperf3; do/);
 });
 
 test("GitHub entry script preserves panel defaults unless explicitly overridden", () => {

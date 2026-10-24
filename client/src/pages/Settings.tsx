@@ -6990,7 +6990,7 @@ function SystemInfoSection() {
             <SettingRow
               asLabel
               label="优先连接面板安装 Agent"
-              description="开启后先从面板拉取安装脚本和 Agent 程序，失败后回退 GitHub。"
+              description="开启后 Agent 程序先从面板下载，失败后回退 GitHub。安装脚本总是先从面板拉；主机连不上 GitHub 时会自动走面板。"
               control={<Checkbox aria-label="优先连接面板安装 Agent" checked={agentPreferPanelInstall} onCheckedChange={setAgentPreferPanelInstall} />}
             />
             <SettingRow
