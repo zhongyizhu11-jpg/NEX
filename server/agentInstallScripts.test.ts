@@ -66,10 +66,15 @@ test("realm 先从 GitHub 装，装不上（或连不上 GitHub）才从面板�
 test("没有能用的 nginx 时用包管理器装 nginx + stream 模块，不让系统 nginx 起来占 80 端口", () => {
   const script = generateInstallScript("https://panel.example.com", { installNginx: true });
   const runtime = shellFunction(script, "install_nginx_runtime");
-  assert.match(runtime, /for ATTEMPT in existing packages; do/);
-  assert.match(runtime, /install_nginx_packages \|\| break/);
+  // 现成的能用就直接用；要装包就放到后台，安装脚本不等它（装包十几秒，撞上开机自动更新还要等 apt 锁）。
+  assert.ok(runtime.indexOf("install_nginx_from_existing") < runtime.indexOf("start_nginx_install_background"));
+  const background = shellFunction(script, "start_nginx_install_background");
+  assert.match(background, /declare -f [^\n]*install_nginx_packages install_nginx_from_existing/);
+  assert.match(background, /systemd-run --quiet --unit "forwardx-nginx-install-/);
+  assert.match(background, /nohup setsid \/bin\/bash "\$JOB"/);
+  assert.match(background, /if is_container_agent \|\| is_openwrt; then\n\s*return 1/);
   const packages = shellFunction(script, "install_nginx_packages");
-  assert.match(packages, /apt-get install -y -qq nginx libnginx-mod-stream/);
+  assert.match(packages, /apt-get \$APT_LOCK_WAIT install -y -qq nginx libnginx-mod-stream/);
   assert.match(packages, /dnf install -y -q nginx nginx-mod-stream/);
   assert.match(packages, /apk add --no-cache nginx nginx-mod-stream/);
   // 原来没有 nginx：装的时候用 policy-rc.d 拦住启动，装完关掉开机自启；装完删掉自己建的 policy-rc.d。
@@ -78,10 +83,20 @@ test("没有能用的 nginx 时用包管理器装 nginx + stream 模块，不让
   assert.match(packages, /if \[ "\$HAD_NGINX" = "0" \] && is_systemd_host; then\n\s*systemctl disable --now nginx/);
 });
 
+test("apt 被开机自动更新占着时等锁，不直接失败", () => {
+  const script = generateInstallScript("https://panel.example.com", { installNginx: true });
+  assert.match(script, /^APT_LOCK_WAIT="-o DPkg::Lock::Timeout=\$\{FORWARDX_APT_LOCK_TIMEOUT:-180\}"$/m);
+  const calls = script.split("\n").filter((line) => /apt-get (?:\$APT_LOCK_WAIT )?(?:update|install)/.test(line) && !/^\s*#/.test(line));
+  assert.ok(calls.length >= 5);
+  for (const line of calls) {
+    for (const call of line.match(/apt-get [^;&|>]*/g) || []) assert.match(call, /^apt-get \$APT_LOCK_WAIT /, line);
+  }
+});
+
 test("依赖都在就不跑包管理器（重装、升级不再 apt-get update）", () => {
   const script = generateInstallScript("https://panel.example.com");
   const deps = shellFunction(script, "install_deps");
-  assert.ok(deps.indexOf("deps_all_present") < deps.indexOf("apt-get update"));
+  assert.ok(deps.indexOf("deps_all_present") < deps.indexOf("apt-get $APT_LOCK_WAIT update"));
   assert.match(shellFunction(script, "deps_all_present"), /for B in curl jq socat iptables nft ip ss od openssl conntrack iperf3; do/);
 });
 
@@ -308,7 +323,7 @@ test("GitHub Agent entry script forwards the Realm version override", () => {
 
 test("nginx installer validates a staged candidate and preserves the existing runtime on failure", () => {
   const script = generateInstallScript("https://panel.example.com");
-  const nginx = scriptSection(script, "install_nginx_runtime() {", "install_runtime_from_panel() {");
+  const nginx = scriptSection(script, "install_nginx_from_existing() {", "start_nginx_install_background() {");
   const commit = scriptSection(script, "commit_nginx_candidate() {", "install_nginx_runtime() {");
 
   assert.match(nginx, /mktemp "\$\{NGINX_BIN\}\.candidate\.XXXXXX"/);
@@ -414,25 +429,25 @@ test("iperf3 is optional so a node without it still installs", () => {
   assert.match(deps, /\[WARN\] 可选依赖未安装: iperf3/);
 
   // 仍然安装它，只是失败不致命。
-  assert.match(deps, /apt-get install -y -qq .*iperf3/);
+  assert.match(deps, /apt-get \$APT_LOCK_WAIT install -y -qq .*iperf3/);
 
   // 而且是单独一条命令：apt / dnf 一条事务里有一个包找不到就整条不装，
   // iperf3 和 curl / jq 写在一起时，源里没有 iperf3 会让 curl / jq 也装不上（上游 v2.3.281）。
   for (const line of deps.split("\n").filter((item) => /(apt-get install|dnf install|yum install|zypper -n install|apk add|pacman -Sy)/.test(item))) {
     if (/\bjq\b/.test(line)) assert.doesNotMatch(line, /iperf3/, line);
   }
-  for (const manager of ["apt-get install -y -qq iperf3", "dnf install -y -q iperf3", "yum install -y -q iperf3", "zypper -n install iperf3", "apk add --no-cache iperf3", "pacman -Sy --noconfirm iperf3"]) {
+  for (const manager of ["apt-get $APT_LOCK_WAIT install -y -qq iperf3", "dnf install -y -q iperf3", "yum install -y -q iperf3", "zypper -n install iperf3", "apk add --no-cache iperf3", "pacman -Sy --noconfirm iperf3"]) {
     assert.ok(deps.includes(manager), manager);
   }
   // 单独那一步排在核心依赖之后、校验之前。
-  assert.ok(deps.indexOf("apt-get install -y -qq iperf3") < deps.indexOf("for B in curl jq iptables od; do"));
+  assert.ok(deps.indexOf("apt-get $APT_LOCK_WAIT install -y -qq iperf3") < deps.indexOf("for B in curl jq iptables od; do"));
 });
 
 test("conntrack 工具单独装：流量用尽「立即断开」靠它清掉内核转发上的连接", () => {
   const script = generateInstallScript("https://panel.example.com", {});
   const deps = scriptSection(script, "install_deps() {", '  echo "[信息] 系统依赖就绪"');
   // 以前只有 OpenWrt 装了，Debian / CentOS 等机器设置页一律报「没有装 conntrack」。
-  for (const manager of ["apt-get install -y -qq conntrack ", "dnf install -y -q conntrack-tools", "yum install -y -q conntrack-tools", "zypper -n install conntrack-tools", "apk add --no-cache conntrack-tools", "pacman -Sy --noconfirm conntrack-tools"]) {
+  for (const manager of ["apt-get $APT_LOCK_WAIT install -y -qq conntrack ", "dnf install -y -q conntrack-tools", "yum install -y -q conntrack-tools", "zypper -n install conntrack-tools", "apk add --no-cache conntrack-tools", "pacman -Sy --noconfirm conntrack-tools"]) {
     assert.ok(deps.includes(manager), manager);
   }
   // 和 iperf3 一样不跟核心依赖写在一条命令里，源里没有也不连累 curl / jq。
@@ -448,9 +463,9 @@ test("dependency install keeps package manager output for diagnosis", () => {
 
   // 以前所有包管理器输出都丢进 /dev/null，依赖缺失时只剩一句
   // 「未能安装依赖: X」，无法判断是源不可达还是包名不存在。
-  assert.doesNotMatch(deps, /apt-get install[^\n]*>\/dev\/null 2>&1/);
+  assert.doesNotMatch(deps, /apt-get \$APT_LOCK_WAIT install[^\n]*>\/dev\/null 2>&1/);
   assert.match(deps, /FORWARDX_DEPS_LOG="\$\{TMPDIR:-\/tmp\}\/forwardx-agent-deps\.log"/);
-  assert.match(deps, /apt-get install[^\n]*; \} >>"\$FORWARDX_DEPS_LOG" 2>&1 \|\| true/);
+  assert.match(deps, /apt-get \$APT_LOCK_WAIT install[^\n]*; \} >>"\$FORWARDX_DEPS_LOG" 2>&1 \|\| true/);
   assert.match(deps, /tail -n 20 "\$FORWARDX_DEPS_LOG"/);
   assert.match(deps, /dump_deps_log "\[错误\]"/);
 });
