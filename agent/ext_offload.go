@@ -24,9 +24,8 @@ type flowOffloadDirective struct {
 }
 
 type flowOffloadModule struct {
-	manager *flowOffloadManager
-	wake    chan struct{}
-	once    sync.Once
+	wake chan struct{}
+	once sync.Once
 }
 
 var (

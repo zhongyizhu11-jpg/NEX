@@ -15,8 +15,6 @@ export type ExpectedScope = "host" | "all";
 export type FindingDecision = "acknowledge" | "expected" | "reopen";
 
 export const SEVERITY_RANK: Record<FindingSeverity, number> = { low: 0, medium: 1, high: 2, critical: 3 };
-export const SEVERITIES: FindingSeverity[] = ["low", "medium", "high", "critical"];
-
 export type IncomingFinding = {
   fingerprint: string;
   kind: string;
@@ -198,8 +196,4 @@ export function availableActions(kind: string, evidence: Record<string, unknown>
   if (quarantined) actions.push("restore");
   else if (isProcess && String(evidence.exe || "").startsWith("/") && String(evidence.sha256 || "")) actions.push("quarantine");
   return actions;
-}
-
-export function severityAtLeast(severity: FindingSeverity, min: FindingSeverity) {
-  return SEVERITY_RANK[severity] >= SEVERITY_RANK[min];
 }

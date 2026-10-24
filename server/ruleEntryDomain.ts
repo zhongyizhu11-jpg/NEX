@@ -333,11 +333,6 @@ async function executeRuleEntryDomainSync(ruleId: number, reason: string, option
   }
 }
 
-/** 立刻同步一条规则并等它做完（不走防抖）。 */
-export async function syncRuleEntryDomainNow(ruleId: number, reason: string, options: { force?: boolean } = {}) {
-  await track(runRuleEntryDomainSync(ruleId, reason, options));
-}
-
 // ===== 对账 =====
 
 /** 删到期的待删域名。DNS 不可用时什么也不做（删不了），等它恢复。 */

@@ -478,18 +478,3 @@ export function getFiringLossAlerts(): Array<{ hostId: number; tunnelId: number;
   }
   return out;
 }
-
-/** 主机删掉时清掉它的状态。 */
-export function forgetHostResourceAlertState(hostId: number) {
-  const id = Number(hostId);
-  hostStates.delete(id);
-  counterStates.delete(id);
-  for (const key of [...lossStates.keys()]) if (key.startsWith(`${id}:`)) lossStates.delete(key);
-}
-
-/** 测试用。 */
-export function resetResourceAlertMemory() {
-  hostStates.clear();
-  counterStates.clear();
-  lossStates.clear();
-}

@@ -91,7 +91,6 @@ import {
   RULE_TRANSFER_MAX_FILE_SIZE,
   RULE_TRANSFER_MAX_IMPORT_COUNT,
   normalizeFailoverStrategy,
-  type RuleTransferFile,
   type RuleTransferFileRule,
 } from "@/lib/ruleTransfer";
 import { parseCompatibleRuleTransferText, validateNyanpassImportTarget, type CompatibleRuleFile, type ImportedRule } from "@/lib/nyanpassImport";
@@ -170,7 +169,7 @@ import {
   服务端说「不限制」，这边说「1-65535」—— 听着像有限制。合并那一步这边还是
   逐个端口试 1..65535，实测 2.042ms，服务端的区间求交是 0.007ms。
 */
-import { describePortPolicy, portPolicyFrom, type PortPolicy } from "@shared/portPolicy";
+import { describePortPolicy, portPolicyFrom } from "@shared/portPolicy";
 import {
   Plus,
   Trash2,
@@ -225,7 +224,6 @@ import {
   formatHostAddressWithPort,
   getHostEntryAddress,
   getHostEntryAddresses,
-  getHostEntryAddressText,
   hostAutoIpv4,
   hostAutoIpv6,
   hostDdnsDomain,
@@ -1319,7 +1317,6 @@ function createRuleGlobeSegmentCoords(
   const dLat = end.lat - start.lat;
   const dLng = longitudeDeltaDegrees(start.lng, end.lng);
   const midLat = (start.lat + end.lat) / 2;
-  const midLng = normalizeLongitude(start.lng + dLng / 2);
   const lngScale = Math.max(0.35, Math.cos((midLat * Math.PI) / 180));
   const projectedLng = dLng * lngScale;
   const distance = Math.sqrt(dLat * dLat + projectedLng * projectedLng);
@@ -1523,11 +1520,6 @@ function buildRuleGlobeData(
   let skipped = 0;
 
   (rules || []).forEach((rule: any) => {
-    const chainGroup = rule.forwardGroupId ? forwardGroupById.get(Number(rule.forwardGroupId)) : null;
-    const chainEntryGroup = chainGroup && isForwardChainGroup(chainGroup) && Number(chainGroup.entryGroupId || 0) > 0
-      ? forwardGroupById.get(Number(chainGroup.entryGroupId))
-      : null;
-    const chainEntryMembers = chainEntryGroup && forwardGroupModeOf(chainEntryGroup) === "entry" ? enabledHostMembers(chainEntryGroup) : [];
     const routeHostIds = ruleGlobeRouteHostIds(rule, tunnelById, forwardGroupById);
     const routePoints = routeHostIds.map((hostId: number) => pointForHostId(hostId)).filter(Boolean) as RuleGlobePoint[];
     if (routePoints.length === 0) {
@@ -1936,16 +1928,6 @@ function normalizeRuleTransferSeconds(value: unknown, fallback: number) {
   return Number.isFinite(parsed) ? Math.min(3600, Math.max(10, Math.round(parsed))) : fallback;
 }
 
-function sanitizeRuleTransferFilePart(value: string) {
-  return value
-    .trim()
-    .replace(/[\\/:*?"<>|]+/g, "-")
-    .replace(/\s+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "")
-    .slice(0, 48) || "rules";
-}
-
 function normalizeProxyProtocolVersion(value: unknown): ProxyProtocolVersion {
   return Number(value) === 2 ? 2 : 1;
 }
@@ -2293,9 +2275,8 @@ function RulesContent() {
     targetIp: "",
     targetPort: 0,
   });
-  const [exportScopeType, setExportScopeType] = useState<RuleTransferScopeType>("local");
+  const [exportScopeType] = useState<RuleTransferScopeType>("local");
   const [exportResourceId, setExportResourceId] = useState("");
-  const [exportResourceSearch, setExportResourceSearch] = useState("");
   const [importScopeType, setImportScopeType] = useState<RuleTransferScopeType>("tunnel");
   const [importResourceId, setImportResourceId] = useState("");
   const [importResourceSearch, setImportResourceSearch] = useState("");
@@ -4721,20 +4702,8 @@ function RulesContent() {
     });
     return { bytesIn, bytesOut, connections };
   }, [dailyTrafficSummaryRows]);
-  const pageTotalTrafficTotals = useMemo(() => {
-    let bytesIn = 0;
-    let bytesOut = 0;
-    let connections = 0;
-    totalTrafficSummaryRows.forEach((t: any) => {
-      bytesIn += Number(t.bytesIn) || 0;
-      bytesOut += Number(t.bytesOut) || 0;
-      connections += Number(t.connections) || 0;
-    });
-    return { bytesIn, bytesOut, connections };
-  }, [totalTrafficSummaryRows]);
   const effectiveRuleListSummary = ruleListSummary ?? stableRuleListSummary;
   const dailyTrafficTotals = effectiveRuleListSummary?.dailyTraffic || pageDailyTrafficTotals;
-  const totalTrafficTotals = effectiveRuleListSummary?.totalTraffic || pageTotalTrafficTotals;
   const compareRulesBySavedOrder = useCallback((a: any, b: any) => {
     const aCategory = getRuleCategory(a, forwardGroupById);
     const bCategory = getRuleCategory(b, forwardGroupById);
@@ -4766,13 +4735,9 @@ function RulesContent() {
     ].join("."),
     [filterResource, ruleCategory, ruleFilterCacheScope, ruleSearchQuery],
   );
-  const trafficTotalsLastCacheScope = user?.role === "admin"
-    ? `admin-${user?.id || "self"}`
-    : `user-${user?.id || "self"}`;
   const hasActiveUserFilter = user?.role === "admin" && filterUser !== "self";
   const hasActiveRuleFilter = hasActiveUserFilter || filterResource !== "all" || ruleCategory !== "all" || ruleSearchQuery.trim().length > 0;
   const rulesHeaderLoading = isLoading || !rules || !scopedRulesReady || !filteredRulesPrimed;
-  const totalTrafficTotalsLoading = rulesHeaderLoading || !secondaryQueriesReady || ruleListSummaryLoading;
   const dailyTrafficTotalsLoading = rulesHeaderLoading || !secondaryQueriesReady || ruleListSummaryLoading;
   const [stableRulePageMeta, setStableRulePageMeta] = useState({ activeItems: 0, totalItems: 0, scopeTotalItems: 0 });
   useEffect(() => {
@@ -5426,22 +5391,10 @@ function RulesContent() {
     if (!keyword) return resources;
     return resources.filter((resource: any) => getTransferResourceSearchText(type, resource).toLowerCase().includes(keyword));
   }, [getTransferResourceSearchText]);
-
-  const filteredExportResources = useMemo(
-    () => filterTransferResources(exportResources, exportScopeType, exportResourceSearch),
-    [exportResourceSearch, exportResources, exportScopeType, filterTransferResources]
-  );
-
   const filteredImportResources = useMemo(
     () => filterTransferResources(importResources, importScopeType, importResourceSearch),
     [filterTransferResources, importResourceSearch, importResources, importScopeType]
   );
-
-  const selectedExportResource = useMemo(
-    () => exportResources.find((resource: any) => String(resource.id) === exportResourceId) || null,
-    [exportResourceId, exportResources]
-  );
-
   const selectedImportResource = useMemo(
     () => importResources.find((resource: any) => String(resource.id) === importResourceId) || null,
     [importResourceId, importResources]
@@ -5541,135 +5494,6 @@ function RulesContent() {
       </span>
     );
   };
-
-  const renderTransferResourcePicker = ({
-    type,
-    resources,
-    filteredResources,
-    selectedResource,
-    selectedId,
-    search,
-    onSearch,
-    onSelect,
-    showStatus = false,
-    cardList = false,
-    stackedList = false,
-  }: {
-    type: RuleTransferScopeType;
-    resources: any[];
-    filteredResources: any[];
-    selectedResource: any;
-    selectedId: string;
-    search: string;
-    onSearch: (value: string) => void;
-    onSelect: (value: string) => void;
-    showStatus?: boolean;
-    cardList?: boolean;
-    stackedList?: boolean;
-  }) => {
-    const label = ruleTransferScopeLabels[type];
-    const selectedVisible = filteredResources.some((resource: any) => String(resource.id) === selectedId);
-    return (
-      <div className="space-y-2">
-        <div className="flex items-center justify-between gap-3">
-          <Label>{label}</Label>
-          <span className="text-xs text-muted-foreground">{filteredResources.length}/{resources.length}</span>
-        </div>
-        <div className="overflow-hidden rounded-md border border-border/70 bg-background">
-          <div className="relative border-b border-border/60">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              value={search}
-              onChange={(event) => onSearch(event.target.value)}
-              disabled={resources.length === 0}
-              placeholder={`搜索${label}`}
-              className="h-9 border-0 pl-9 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
-            />
-          </div>
-          <div className="max-h-56 overflow-y-auto p-1">
-            {filteredResources.length > 0 ? (
-              filteredResources.map((resource: any) => {
-                const id = String(resource.id);
-                const selected = id === selectedId;
-                if (cardList) {
-                  return (
-                    <button
-                      key={id}
-                      type="button"
-                      title={getTransferResourceLabel(type, resource)}
-                      aria-pressed={selected}
-                      onClick={() => onSelect(id)}
-                      className={`flex w-full min-w-0 items-start gap-3 rounded-md border px-3 py-2 text-left transition-colors hover:bg-muted/40 ${
-                        selected
-                          ? "border-primary/50 bg-primary/5 shadow-sm"
-                          : "border-border/40 bg-background/70"
-                      }`}
-                    >
-                      {selected ? (
-                        <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
-                      ) : (
-                        <span className="mt-0.5 h-4 w-4 shrink-0 rounded-full border border-border/70 bg-background" aria-hidden="true" />
-                      )}
-                      <div className="min-w-0 flex-1">{renderTransferResourceOption(type, resource, { showStatus })}</div>
-                    </button>
-                  );
-                }
-                return (
-                  <button
-                    key={id}
-                    type="button"
-                    title={getTransferResourceLabel(type, resource)}
-                    aria-pressed={selected}
-                    onClick={() => onSelect(id)}
-                    className={`flex w-full min-w-0 gap-2 rounded-sm px-3 text-left text-sm transition-colors hover:bg-muted ${
-                      stackedList ? "min-h-[3.25rem] items-start py-2" : "h-10 items-center"
-                    } ${
-                      selected ? "bg-muted text-foreground" : "text-foreground"
-                    }`}
-                  >
-                    {selected ? (
-                      <CheckCircle2 className={`${stackedList ? "mt-0.5" : ""} h-4 w-4 shrink-0 text-primary`} />
-                    ) : (
-                      <span className={`${stackedList ? "mt-0.5" : ""} h-4 w-4 shrink-0`} aria-hidden="true" />
-                    )}
-                    <div className="min-w-0 flex-1">{renderTransferResourceOption(type, resource, { showStatus })}</div>
-                  </button>
-                );
-              })
-            ) : (
-              <div className="px-3 py-8 text-center text-sm text-muted-foreground">
-                {resources.length === 0 ? `暂无可选择的${label}` : `没有匹配的${label}`}
-              </div>
-            )}
-          </div>
-        </div>
-        {selectedResource && !selectedVisible ? (
-          <div className="rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-            {"已选择："}{getTransferResourceLabel(type, selectedResource)}
-          </div>
-        ) : null}
-      </div>
-    );
-  };
-  const getRulesForTransferScope = useCallback((type: RuleTransferScopeType, resourceId: string) => {
-    const id = Number(resourceId);
-    if (!Number.isFinite(id) || id <= 0) return [];
-    return transferSourceRules.filter((rule: any) => {
-      if (rule.forwardGroupRuleId || rule.forwardGroupMemberId) return false;
-      const category = getRuleCategory(rule, forwardGroupById);
-      if (category !== type) return false;
-      if (type === "local") return Number(rule.forwardGroupId) === id;
-      if (type === "tunnel") return Number(rule.tunnelId) === id;
-      return Number(rule.forwardGroupId) === id;
-    });
-  }, [forwardGroupById, transferSourceRules]);
-
-  const exportableRules = useMemo(
-    // 共享 TLS 入站上的规则不导出：它们的 sourcePort 是本机回环端口，导到别处没有意义。
-    () => getRulesForTransferScope(exportScopeType, exportResourceId).filter((rule: any) => !(Number(rule?.tlsInboundId || 0) > 0)),
-    [exportScopeType, exportResourceId, getRulesForTransferScope]
-  );
-
   const manualImportValidation = useMemo<{ ok: boolean; message: string; rules: RuleTransferFileRule[] }>(() => {
     const lines = String(importManualText || "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
     if (lines.length === 0) {
@@ -5890,30 +5714,6 @@ function RulesContent() {
       setImportingRules(false);
     }
   };
-
-  const handleExportRules = () => {
-    const resource = exportResources.find((item: any) => String(item.id) === exportResourceId);
-    if (!resource) {
-      toast.error(`请选择${ruleTransferScopeLabels[exportScopeType]}`);
-      return;
-    }
-    if (exportableRules.length === 0) {
-      toast.error("当前选择没有可导出的规则");
-      return;
-    }
-    const resourceLabel = getTransferResourceLabel(exportScopeType, resource);
-    const date = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-    const partCount = downloadRuleTransferFiles(
-      exportableRules,
-      {
-        type: exportScopeType,
-        id: Number(exportResourceId),
-        name: resourceLabel,
-      },
-      `forwardx-rules-${exportScopeType}-${sanitizeRuleTransferFilePart(resourceLabel)}-${date}`,
-    );
-    toast.success(`已导出 ${exportableRules.length} 条规则${partCount > 1 ? `，共 ${partCount} 个文件` : ""}`);
-  };
   const getRuleOwnerName = (rule: any) => {
     const owner = userById.get(Number(rule.userId));
     return owner?.name || owner?.username || `用户 #${rule.userId}`;
@@ -5942,12 +5742,6 @@ function RulesContent() {
     const tunnel = member.tunnelId ? tunnelById.get(Number(member.tunnelId)) : null;
     return tunnel ? `${tunnel.name} / ${getTunnelRouteText(tunnel, hosts)}` : member.tunnelId ? `隧道 #${member.tunnelId}` : "隧道成员";
   };
-
-  const getHostEntry = (hostId: number): string => {
-    const h: any = hosts?.find((x: any) => x.id === hostId);
-    return getHostEntryAddress(h);
-  };
-
   const entryDomainForForwardGroup = (group: any | null | undefined) => {
     if (!group) return "";
     if (isForwardChainGroup(group) && group.entryGroupId) {
@@ -6848,28 +6642,9 @@ function RulesContent() {
       </span>
     );
   };
-
-  const renderRuleTrafficValue = (rule: any, direction: "in" | "out") => (
-    renderTrafficBytesValue(trafficByRule.get(rule.id), direction)
-  );
-
   const renderRuleDailyTrafficValue = (rule: any, direction: "in" | "out") => (
     renderTrafficBytesValue(dailyTrafficByRule.get(rule.id), direction)
   );
-
-  const renderRuleTraffic = (rule: any) => {
-    const t = dailyTrafficByRule.get(rule.id);
-    if (!t || (t.bytesIn === 0 && t.bytesOut === 0)) {
-      return <span className="text-xs text-muted-foreground">—</span>;
-    }
-    return (
-      <div className="flex flex-col gap-0.5 text-xs leading-5">
-        {renderRuleDailyTrafficValue(rule, "in")}
-        {renderRuleDailyTrafficValue(rule, "out")}
-      </div>
-    );
-  };
-
   const renderRuleTotalTraffic = (rule: any) => {
     const t = totalTrafficByRule.get(rule.id);
     if (!t) {
@@ -6886,18 +6661,6 @@ function RulesContent() {
       </span>
     );
   };
-
-  const renderRuleCombinedTraffic = (rule: any) => (
-    <div className="space-y-1 whitespace-nowrap">
-      {renderRuleTotalTraffic(rule)}
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-        <span className="text-xs text-muted-foreground">24H</span>
-        {renderRuleTraffic(rule)}
-      </div>
-      {renderLatestLatency(rule)}
-    </div>
-  );
-
   const renderTableRuleTotalTraffic = (rule: any) => (
     <div className="min-w-0 whitespace-nowrap text-xs">
       {renderRuleTotalTraffic(rule)}

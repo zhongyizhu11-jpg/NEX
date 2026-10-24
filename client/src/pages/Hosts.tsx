@@ -21,7 +21,7 @@ import { formatMetricSizeDetail } from "@/lib/formatMetricSize";
 import { usePageVisible } from "@/hooks/usePageVisible";
 import { useIsMobile } from "@/hooks/useMobile";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
-import { escapeTooltipHtml, hostGeoCoordinate, hostMapClusterDistance, longitudeDistanceDegrees } from "@/lib/hostGeo";
+import { escapeTooltipHtml, hostGeoCoordinate, hostMapClusterDistance } from "@/lib/hostGeo";
 import AnimatedStatValue from "@/components/AnimatedStatValue";
 import AgentTokenManager from "@/components/AgentTokenManager";
 import AutoAnimateContainer from "@/components/AutoAnimateContainer";
@@ -113,7 +113,6 @@ import {
   ArrowUp,
   ArrowRightLeft,
   CalendarDays,
-  CircleCheck,
   Clock,
   Cpu,
   Plus,
@@ -126,9 +125,6 @@ import {
   MapPinned,
   Download,
   Gauge,
-  Database,
-  AlertTriangle,
-  Filter,
   Loader2,
   MemoryStick,
   RefreshCw,
@@ -832,13 +828,6 @@ function hostRemainingClass(value: string) {
   if (value === "不足1天") return "text-[var(--fx-warn-text)]";
   if (value === "--") return "text-muted-foreground";
   return "text-[var(--fx-healthy-text)]";
-}
-
-function compactHostOsInfo(value: unknown) {
-  return String(value || "")
-    .replace(/\s*\([^)]*\)\s*/g, " ")
-    .replace(/\s+/g, " ")
-    .trim() || "-";
 }
 
 function HostListResourceRow({
@@ -1932,7 +1921,7 @@ function HostsContent() {
     : manageFilterStats[activeManageTab];
   const hasFilteredDisplayHosts = filteredDisplayHosts.length > 0;
   const isHostGroupFiltered = selectedHostGroupId !== "all";
-  const { data: hostSummary, isLoading: isHostSummaryLoading } = trpc.hosts.summary.useQuery({
+  const { data: hostSummary } = trpc.hosts.summary.useQuery({
     search: hostSearchQuery,
     groupId: selectedHostGroupId === "all" ? null : Number(selectedHostGroupId),
   }, {
@@ -1941,7 +1930,6 @@ function HostsContent() {
     placeholderData: (previousData) => previousData,
   });
   const effectiveHostSummary = hostSummary;
-  const isEffectiveHostSummaryLoading = isHostSummaryLoading;
   // 页头右上角那条近 24H 小走势（和首页图表同一条数据，服务端按用户缓存）
   const dailySpark = useDailyTrafficSpark(activeManageTab === "hosts");
   const [tokenCreateSignal, setTokenCreateSignal] = useState(0);

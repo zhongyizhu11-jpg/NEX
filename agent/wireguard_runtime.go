@@ -916,31 +916,6 @@ func isLoopbackFXPHost(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-func waitForWireGuardRuntime(tunnelID int, timeout time.Duration) (*wireGuardRuntime, error) {
-	if timeout <= 0 {
-		timeout = wireGuardRuntimeWaitTimeout
-	}
-	deadline := time.Now().Add(timeout)
-	for {
-		wireGuardRuntimesMu.RLock()
-		runtime := wireGuardRuntimes[tunnelID]
-		ready := false
-		if runtime != nil {
-			runtime.mu.RLock()
-			ready = !runtime.closed
-			runtime.mu.RUnlock()
-		}
-		wireGuardRuntimesMu.RUnlock()
-		if ready {
-			return runtime, nil
-		}
-		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("wireguard runtime tunnel=%d is not ready", tunnelID)
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-}
-
 func tryAcquireWireGuardRuntimeRef(tunnelID int, refID string) (*wireGuardRuntime, bool, error) {
 	refID = strings.TrimSpace(refID)
 	if refID == "" {

@@ -23,7 +23,6 @@ import {
   Loader2,
   RadioTower,
   Route,
-  ShieldCheck,
   Terminal,
   Wifi,
 } from "lucide-react";

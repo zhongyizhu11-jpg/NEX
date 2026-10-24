@@ -117,8 +117,3 @@ export async function notifyRouteSwitch(payload: RouteSwitchNotifyPayload) {
   }
   if (discordReady) await notifyDiscordAdmins(text, { category: "route", label: `route-switch rule=${ruleId}` });
 }
-
-/** 测试用。 */
-export function resetRouteSwitchNotifyMemory() {
-  lastNotifyAt.clear();
-}

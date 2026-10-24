@@ -2054,17 +2054,6 @@ func validateFXPUDPPacket(packet fxpUDPPacket) error {
 	return nil
 }
 
-func fxpUDPHeader(packet fxpUDPPacket) ([]byte, error) {
-	if err := validateFXPUDPPacket(packet); err != nil {
-		return nil, err
-	}
-	header := make([]byte, fxpUDPHeaderSize)
-	if err := writeFXPUDPHeader(header, packet); err != nil {
-		return nil, err
-	}
-	return header, nil
-}
-
 func writeFXPUDPHeader(header []byte, packet fxpUDPPacket) error {
 	if len(header) < fxpUDPHeaderSize {
 		return errors.New("udp header buffer too small")

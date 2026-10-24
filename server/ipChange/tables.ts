@@ -70,6 +70,3 @@ export const IP_CHANGE_TABLE_DEFS: TableDef[] = [
     indexes: [["hostId", "id"], ["startedAt"], ["status"]],
   },
 ];
-
-/** 跟着备份 / 迁移 / 切换数据库走的表。事件是历史记录，精简迁移时不带（见 migration.ts）。 */
-export const IP_CHANGE_MIGRATION_TABLES = ["ip_change_cloud_accounts", "ip_change_host_configs", "ip_change_events"] as const;

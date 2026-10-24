@@ -2,14 +2,14 @@ import WorkspaceHeader from "@/components/WorkspaceHeader";
 import { PlanDescriptionView } from "@/components/plans/PlanDescription";
 import DashboardLayout from "@/components/DashboardLayout";
 import EmptyState from "@/components/EmptyState";
-import { MILLI_CENTS_PER_CENT, pricePerGbMilliCentsOf } from "@shared/trafficBillingPrice";
+import { pricePerGbMilliCentsOf } from "@shared/trafficBillingPrice";
 import { formatQuotaBytes } from "@shared/formatBytes";
 import { formatMoneyCents as money, formatMoneyMilliCents as moneyFromMilliCents } from "@shared/formatMoney";
 import AnimatedStatValue from "@/components/AnimatedStatValue";
 import AutoAnimateContainer from "@/components/AutoAnimateContainer";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -33,8 +33,6 @@ import { Check, CheckCircle2, Coins, CreditCard, Lock, Package, RefreshCw, Route
 import { useMemo, useState } from "react";
 import { usePaymentOrderDialog } from "@/components/PaymentOrderDialog";
 import { toast } from "sonner";
-
-const MILLI_CENTS_PER_YUAN = 100000;
 
 function speed(value?: number | null) {
   const num = Number(value || 0);

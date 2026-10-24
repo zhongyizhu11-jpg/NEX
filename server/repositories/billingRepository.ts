@@ -3993,13 +3993,6 @@ export async function listDiscountCodesPage(input: PageRequest) {
   return pageResult(await attachDiscountPlans(rows), totalItems, window, 50);
 }
 
-async function getDiscountPlanIds(discountCodeId: number): Promise<number[]> {
-  const db = await getDb();
-  if (!db) return [];
-  const rows = await db.select({ planId: discountCodePlans.planId }).from(discountCodePlans).where(eq(discountCodePlans.discountCodeId, discountCodeId));
-  return rows.map((row: any) => Number(row.planId)).filter(Boolean);
-}
-
 async function attachDiscountPlans<T extends { id: number }>(codes: T[]) {
   const db = await getDb();
   if (!db || codes.length === 0) return codes.map((code) => ({ ...code, planIds: [] as number[] }));

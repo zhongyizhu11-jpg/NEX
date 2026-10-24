@@ -20,9 +20,8 @@ import { recoverManualTunnelProbeBatches, settleManualTunnelProbeBatch } from ".
 import { recoverManualForwardChainBatches, settleManualForwardChainBatch } from "./forwardChainManualProbe";
 import { forwardTestRequestMessage, isDurableForwardTestBatchId, TUNNEL_PROBE_BATCH_PREFIX } from "./repositories/forwardTestRepository";
 import { primeHostStatusNotifier, sweepOfflineHostsAndNotify } from "./hostStatusNotifier";
-import { normalizeLinkProbeMethod } from "@shared/latencyProbe";
 import { clearRuleLatencyQueryCache } from "./ruleLatencyQueryCache";
-import { structuredLinkTestMessage, tunnelHopLatencyMode, tunnelHopModeText } from "./linkTestMessages";
+import { tunnelHopLatencyMode, tunnelHopModeText } from "./linkTestMessages";
 import { cleanOldAddressGeoCache, runHostGeoSweep } from "./hostGeo";
 import { pruneStaleAuthSessions } from "./repositories/sessionRepository";
 import { pruneDispatchConfigAuditEvents } from "./configAudit";

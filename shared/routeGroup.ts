@@ -524,11 +524,6 @@ export function routePathDial(path: RoutePath, rule: Pick<RouteGroupRule, "targe
   return dest.ip && dest.port > 0 ? dest : null;
 }
 
-export function routePathEndpointText(path: RoutePath, rule: Pick<RouteGroupRule, "targetIp" | "targetPort">): string {
-  const dial = routePathDial(path, rule);
-  return dial ? formatFailoverEndpoint(dial.ip, dial.port) : "";
-}
-
 /**
  * 老 failover* 列的读法，和上一版一样；只是「模式」这个概念在老数据里要推：
  * 分配方式不是主备的就是权重负载（轮流 / 随机 / 按访客），开了自动择优就是智能择优，

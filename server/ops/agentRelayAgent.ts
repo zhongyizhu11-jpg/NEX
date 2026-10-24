@@ -174,11 +174,6 @@ function cleanReport(raw: unknown): RelayReport | null {
   };
 }
 
-async function hostName(hostId: number) {
-  const names = await db.getHostNamesByIds([hostId]).catch(() => new Map<number, string>());
-  return names.get(hostId) || `#${hostId}`;
-}
-
 async function ingestRelayReport(host: AgentExtHost, raw: unknown) {
   const report = cleanReport(raw);
   if (!report) return;

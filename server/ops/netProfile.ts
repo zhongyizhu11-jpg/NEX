@@ -257,10 +257,3 @@ export async function ingestNetProfileReport(host: AgentExtHost, raw: unknown) {
 export function netProfileIntervalFor(host: AgentExtHost) {
   return netProfileRunState(Number(host.id)).pending ? 5 : undefined;
 }
-
-/** 只给测试用。 */
-export function resetNetProfileStateForTest() {
-  pendingRuns.clear();
-  agentCheckedAtCache.clear();
-  lastResultIds.clear();
-}

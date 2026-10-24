@@ -517,8 +517,3 @@ export async function requestRebaseline(hostId: number) {
   await setSetting(STATUS_SETTING_PREFIX + hostId, null).catch(() => undefined);
   wakeAgentExt(hostId, "security-rebaseline");
 }
-
-export function resetHostSecurityStateForTests() {
-  hostStatus.clear();
-  managedPortCache.clear();
-}

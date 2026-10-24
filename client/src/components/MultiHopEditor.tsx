@@ -388,7 +388,6 @@ export default function MultiHopEditor({
           {hops.map((hop, idx) => {
             const role = getRole(idx, hops.length);
             const isFirst = role === "entry";
-            const isLast = role === "exit";
             const host = hostById.get(hop.hostId);
             const tunnelEntryIp = String(host?.tunnelEntryIp || "").trim();
             const hasTunnelEntryIp = !!tunnelEntryIp;

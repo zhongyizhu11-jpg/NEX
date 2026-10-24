@@ -266,12 +266,6 @@ export async function listDueRuleEntryDomainCleanups(options: { limit?: number; 
   return rows as RuleEntryDomainCleanupRow[];
 }
 
-export async function listRuleEntryDomainCleanups(): Promise<RuleEntryDomainCleanupRow[]> {
-  const db = await getDb();
-  if (!db) return [];
-  return await db.select().from(ruleEntryDomainCleanups).orderBy(asc(ruleEntryDomainCleanups.id)) as RuleEntryDomainCleanupRow[];
-}
-
 export async function deleteRuleEntryDomainCleanup(domain: string) {
   const db = await getDb();
   if (!db) return;

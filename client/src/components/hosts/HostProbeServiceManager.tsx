@@ -4,7 +4,7 @@ import { normalizeProbeAddressFamily, PROBE_ADDRESS_FAMILIES, PROBE_ADDRESS_FAMI
 import { EntityActions } from "@/components/entity/EntityActions";
 import { CardActions } from "@/components/entity/EntityCard";
 import { useEffect, useMemo, useState } from "react";
-import { Activity, LayoutGrid, List, Loader2, Pencil, RadioTower, Trash2 } from "lucide-react";
+import { Activity, LayoutGrid, List, Pencil, RadioTower, Trash2 } from "lucide-react";
 import HostStatusLabel from "@/components/HostStatusLabel";
 import { SortableDragHandle, SortableItem, SortableReorderContext, useOptimisticSortableOrder, useSortableReorder } from "@/components/SortableDragHandle";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -18,7 +18,7 @@ import { FormField } from "@/components/ui/form-field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { OptimisticSwitch, Switch } from "@/components/ui/switch";
+import { OptimisticSwitch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { pollingInterval } from "@/lib/polling";
 import { trpc } from "@/lib/trpc";

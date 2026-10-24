@@ -33,7 +33,11 @@ test("网页发起地址只带相对路径", () => {
 test("登录页只在开启时显示 Google 按钮；App 里用系统浏览器打开", () => {
   const login = fs.readFileSync(path.resolve(import.meta.dirname, "../../pages/Login.tsx"), "utf8");
   assert.match(login, /googleLoginEnabled && hasMobilePanelUrl \? \(\s*<GoogleLoginButton/);
+  // 两家共用 OAuthLoginButton：App 里用系统浏览器打开授权页，按钮写「使用 <名字> 登录」。
+  const shared = fs.readFileSync(path.resolve(import.meta.dirname, "../oauthLogin/OAuthLoginButton.tsx"), "utf8");
+  assert.match(shared, /Browser\.open\(\{ url: flow\.startUrl \}\)/);
+  assert.match(shared, /`使用 \$\{label\} 登录`/);
   const button = fs.readFileSync(path.resolve(import.meta.dirname, "GoogleLoginButton.tsx"), "utf8");
-  assert.match(button, /Browser\.open\(\{ url: flow\.startUrl \}\)/);
-  assert.match(button, /使用 Google 登录/);
+  assert.match(button, /label: "Google"/);
+  assert.match(button, /trpc\.googleAuth\.appStatus/);
 });

@@ -27,7 +27,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { OptimisticSwitch, Switch } from "@/components/ui/switch";
+import { OptimisticSwitch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SlidingTabsList } from "@/components/ui/sliding-tabs";
 import { GroupedList, ListRow, ListSection } from "@/components/ios/GroupedList";
@@ -87,7 +87,6 @@ import {
   Settings2,
   Download,
   Github,
-  Mail,
   Send,
   Globe,
   ShieldCheck,
@@ -112,9 +111,7 @@ import {
   Monitor,
   PanelLeft,
   Pencil,
-  Plus,
-  SlidersHorizontal,
-  Webhook,
+  Plus
 } from "lucide-react";
 import { OpsAdvancedSettingsPane, OpsBackupExtraSections, OpsTelegramExtraSections, OpsWebhookSettingsPane } from "@/features/ops/slots/SettingsPanes";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -674,25 +671,6 @@ function SettingsContent() {
   const { data: systemSettings } = trpc.system.getSettings.useQuery();
   const panelUrl = (systemSettings?.panelPublicUrl && systemSettings.panelPublicUrl.trim())
     || mobileAuth.panelOrigin();
-
-  const copyToClipboard = async (text: string) => {
-    /*
-      走共享实现，不再在这里自己拼一遍 textarea。
-
-      共享那份的注释写明了为什么：textarea 那条路 Chromium 会返回 true 其实复制了个空，
-      iOS 直接不认 —— 它改用了 contenteditable + Range。这里原来抄的正是被换掉的旧写法。
-    */
-    if (await copyTextToClipboard(text)) {
-      toast.success("已复制到剪贴板");
-      return;
-    }
-    toast.error(
-      clipboardNeedsManualCopy()
-        ? "当前是 http 访问，浏览器限制了剪贴板，请长按选中内容复制"
-        : "复制失败，请手动复制",
-    );
-  };
-
   if (user?.role !== "admin") return null;
 
   const activeItem = settingsTabItems.find((tab) => tab.value === activeTab);
@@ -5222,28 +5200,6 @@ function SystemInfoSection() {
     }
     updateWebPortMutation.mutate({ port: Math.floor(Number(webPortInput)), confirmed: true });
   };
-
-  const openPanelSslConfirm = () => {
-    if (panelSslEnabled && (!panelSslCertPath.trim() || !panelSslKeyPath.trim())) {
-      toast.error("开启面板 SSL 需要填写证书文件和私钥文件路径");
-      return;
-    }
-    setShowPanelSslConfirm(true);
-  };
-
-  const confirmPanelSslChange = () => {
-    if (panelSslEnabled && (!panelSslCertPath.trim() || !panelSslKeyPath.trim())) {
-      toast.error("开启面板 SSL 需要填写证书文件和私钥文件路径");
-      return;
-    }
-    updatePanelSslMutation.mutate({
-      enabled: panelSslEnabled,
-      certPath: panelSslCertPath.trim(),
-      keyPath: panelSslKeyPath.trim(),
-      confirmed: true,
-    });
-  };
-
   const validatePanelSslDraft = () => {
     if (!panelSslEnabled) return true;
     if (panelSslMode === "path") {
@@ -5732,12 +5688,8 @@ function SystemInfoSection() {
   const upgradeErrorLogs = (upgradeStatus?.job?.logs || []).slice(-80).join("\n");
   const directProtocolEnabledCount = directForwardProtocolKeys.filter((key) => forwardProtocols[key]).length;
   const tunnelProtocolEnabledCount = tunnelForwardProtocolKeys.filter((key) => forwardProtocols[key]).length;
-  const totalProtocolEnabledCount = directProtocolEnabledCount + tunnelProtocolEnabledCount;
-  const totalProtocolCount = directForwardProtocolKeys.length + tunnelForwardProtocolKeys.length;
   const sidebarMenuEnabledCount = SIDEBAR_MENU_KEYS.filter((key) => sidebarMenu[key]).length;
-  const panelSslSourceLabel = panelSslMode === "pem" ? "粘贴 PEM 内容" : "服务器文件路径";
   const panelSslPathActive = panelSslMode === "path";
-  const panelSslPemActive = panelSslMode === "pem";
   const panelSslPathConfigured = !!panelSslCertPath.trim() && !!panelSslKeyPath.trim();
   const panelSslPemConfigured = !!panelSslCertPem.trim() && !!panelSslKeyPem.trim();
 

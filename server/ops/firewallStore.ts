@@ -85,14 +85,6 @@ export async function listHostPolicies(): Promise<Map<number, HostPolicyRow>> {
   return map;
 }
 
-export async function getHostPolicy(hostId: number): Promise<HostPolicyRow> {
-  const rows = await queryRaw(
-    `SELECT ${q("hostId")}, ${q("policy")}, ${q("mode")}, ${q("countries")} FROM ${q("firewall_host_policies")} WHERE ${q("hostId")} = ?`,
-    [hostId],
-  );
-  return rows[0] ? rowToHostPolicy(rows[0]) : { hostId, policy: "follow", rule: { mode: "off", countries: [] } };
-}
-
 export async function saveHostPolicy(hostId: number, policy: FirewallHostPolicy, rule: CountryRule) {
   const normalized = normalizeCountryRule(rule);
   const now = Math.floor(Date.now() / 1000);

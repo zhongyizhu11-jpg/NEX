@@ -60,8 +60,7 @@ import {
   renderOAuthAppPage,
   requestMatchesPanelHost,
   withQuery,
-  type OAuthAppPage,
-  type OAuthTwoFactorRequired,
+  type OAuthAppPage
 } from "./oauthRouteHelpers";
 
 // 这几样和 Discord 登录共用（server/oauthRouteHelpers.ts），这里保留原来的名字。
@@ -117,8 +116,6 @@ function appFailurePage(res: Response, flowId: string | null, code: GoogleLoginE
   if (flowId) googleAppFlows.fail(flowId, code);
   sendAppPage(res, 400, { title: "Google 登录没有完成", message: `${googleLoginErrorMessage(code)}\n请回到 NEX App 重试。`, tone: "error" });
 }
-
-export type GoogleTwoFactorRequired = OAuthTwoFactorRequired;
 
 /**
  * Google 认出人之后：要 2FA 就发挑战，否则发会话（和密码登录同一个 createLoginSession）。

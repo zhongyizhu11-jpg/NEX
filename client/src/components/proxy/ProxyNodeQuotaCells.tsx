@@ -5,7 +5,6 @@ import { formatBytes } from "@shared/formatBytes";
 import {
   formatProxyNodeQuotaLabeled,
   formatProxyNodeQuotaUsedFirst,
-  formatQuotaBytes,
   hasProxyNodeQuota,
   proxyNodeQuotaState,
 } from "@shared/proxyNodeQuota";

@@ -17,12 +17,8 @@ import type { GoogleIdTokenClaims } from "./googleOidc";
 import {
   allocateUsername,
   deriveUsernameBase,
-  OAUTH_APP_FLOW_TTL_MS,
   OAuthAppFlowStore,
-  resolveOAuthSignIn,
-  type OAuthAppFlow,
-  type OAuthAppFlowStatus,
-  type OAuthAppPollResult,
+  resolveOAuthSignIn
 } from "./oauthSignIn";
 
 // 规则本身在 server/oauthSignIn.ts（Google 和 Discord 共用一份），这里只把 Google 的列名翻译过去。
@@ -111,12 +107,6 @@ export async function resolveGoogleSignIn<U extends GoogleUserLike>(
 
 // ---------- App 里的 Google 登录（系统浏览器 + 轮询） ----------
 // 流程说明见 server/oauthSignIn.ts 的 OAuthAppFlowStore（Google 和 Discord 共用）。
-
-export const GOOGLE_APP_FLOW_TTL_MS = OAUTH_APP_FLOW_TTL_MS;
-
-export type GoogleAppFlowStatus = OAuthAppFlowStatus;
-export type GoogleAppFlow = OAuthAppFlow<GoogleLoginErrorCode>;
-export type GoogleAppPollResult = OAuthAppPollResult<GoogleLoginErrorCode>;
 
 export class GoogleAppFlowStore extends OAuthAppFlowStore<GoogleLoginErrorCode> {
   constructor(options: { ttlMs?: number; maxEntries?: number; now?: () => number } = {}) {

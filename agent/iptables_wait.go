@@ -130,9 +130,3 @@ func runIptablesShellQuiet(command string) bool {
 	defer iptablesExecMu.Unlock()
 	return runShellQuiet(command)
 }
-
-func runIptablesShell(command string) bool {
-	iptablesExecMu.Lock()
-	defer iptablesExecMu.Unlock()
-	return runShell(command)
-}

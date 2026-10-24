@@ -15,7 +15,6 @@ import { HeaderStatusChips } from "@/components/HeaderStatusChips";
 import { Sparkline } from "@/components/charts/Sparkline";
 import { hourlySlots } from "@/lib/hourlySlots";
 import { describeNetworkHealth } from "@shared/networkHealth";
-import ConnectionPath from "@/components/ConnectionPath";
 import { NetworkPath } from "@/components/network/NetworkPath";
 import { StatusDot } from "@/components/network/StatusDot";
 import { MimicHostsStatus } from "@/components/hosts/MimicInstallPanel";
@@ -29,7 +28,6 @@ import { normalizeLatencySeriesKey } from "@shared/latencyProbe";
 import { hostSearchParts } from "@/lib/hostSearchParts";
 import { formatLatencyTimeLabel } from "@/lib/latencyTimeLabel";
 import { hostIpv6Address, hostPrivateAddress, normalizeConnectHostForHost, sameAddress } from "@/lib/multiHopAddress";
-import { addressKey } from "@/lib/multiHopAddress";
 import SectionTransition from "@/components/SectionTransition";
 import { RouteGroupsSection } from "@/features/rules/RouteGroupsSection";
 import { LinkOverviewSection } from "@/features/links/LinkOverviewSection";
@@ -104,16 +102,14 @@ import { buildLinkAvailabilityIndex, type LinkAvailabilityResult } from "@shared
 import { MAX_NGINX_PEM_FILES, MAX_NGINX_PEM_UPLOAD_BYTES, parseNginxPemFiles } from "@/lib/nginxPemFiles";
 import { pollingInterval } from "@/lib/polling";
 import { hasQuerySnapshotAfter } from "@/lib/manualTestCache";
-import { getTunnelExitNames, getTunnelHopIds, getTunnelLoadBalanceExitNames, getTunnelRouteText, tunnelHopHostName, tunnelTestIndicatesTimeout } from "@/lib/tunnelDisplay";
+import { getTunnelHopIds, getTunnelLoadBalanceExitNames, getTunnelRouteText, tunnelHopHostName, tunnelTestIndicatesTimeout } from "@/lib/tunnelDisplay";
 import { trpc } from "@/lib/trpc";
 import { MAX_FORWARD_GROUP_MEMBERS } from "@shared/forwardGroup";
 import { cn } from "@/lib/utils";
 import {
   Copy,
-  ArrowRight,
   ArrowRightLeft,
   ChevronRight,
-  Filter,
   Globe,
   Layers,
   LayoutGrid,
@@ -136,7 +132,7 @@ import {
   FileJson,
 } from "lucide-react";
 import type { GlobeMethods } from "react-globe.gl";
-import { Fragment, lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type ReactNode } from "react";
 import { toast } from "sonner";
 import {
   FORWARD_PROTOCOL_LABELS,
@@ -164,7 +160,6 @@ import {
   normalizeExitGroupStrategy,
   type ExitGroupStrategy,
 } from "@shared/exitStrategy";
-import { useReducedMotion } from "motion/react";
 import {
   CartesianGrid,
   Line,
@@ -2443,9 +2438,7 @@ function TunnelsContent() {
       ? "forwardx"
       : (enabledGostTunnelModes[0] || enabledNginxTunnelModes[0] || "forwardx");
   };
-  const portGroups = useMemo(() => (forwardGroups || []).filter((group: any) => normalizeForwardGroupMode(group.groupMode) === "port"), [forwardGroups]);
   const chainGroups = useMemo(() => (forwardGroups || []).filter((group: any) => normalizeForwardGroupMode(group.groupMode) === "chain"), [forwardGroups]);
-  const failoverGroups = useMemo(() => (forwardGroups || []).filter((group: any) => normalizeForwardGroupMode(group.groupMode) === "failover"), [forwardGroups]);
   const entryGroups = useMemo(() => (forwardGroups || []).filter((group: any) => normalizeForwardGroupMode(group.groupMode) === "entry"), [forwardGroups]);
   const exitGroups = useMemo(() => (forwardGroups || []).filter((group: any) => normalizeForwardGroupMode(group.groupMode) === "exit"), [forwardGroups]);
   const usableEntryGroups = useMemo(() => entryGroups.filter((group: any) => group.isEnabled && String(group.domain || "").trim()), [entryGroups]);
@@ -2469,11 +2462,7 @@ function TunnelsContent() {
     () => (tunnels || []).filter((tunnel: any) => isAvailableState(tunnelAvailabilityById.get(Number(tunnel.id)))).length,
     [tunnelAvailabilityById, tunnels],
   );
-  const activePortCount = useMemo(() => portGroups.filter((group: any) => isAvailableState(groupAvailabilityById.get(Number(group.id)))).length, [groupAvailabilityById, portGroups]);
   const activeChainCount = useMemo(() => chainGroups.filter((group: any) => isAvailableState(groupAvailabilityById.get(Number(group.id)))).length, [chainGroups, groupAvailabilityById]);
-  const activeFailoverGroupCount = useMemo(() => failoverGroups.filter((group: any) => isAvailableState(groupAvailabilityById.get(Number(group.id)))).length, [failoverGroups, groupAvailabilityById]);
-  const activeEntryGroupCount = useMemo(() => entryGroups.filter((group: any) => isAvailableState(groupAvailabilityById.get(Number(group.id)))).length, [entryGroups, groupAvailabilityById]);
-  const activeExitGroupCount = useMemo(() => exitGroups.filter((group: any) => isAvailableState(groupAvailabilityById.get(Number(group.id)))).length, [exitGroups, groupAvailabilityById]);
   const entryMembersForGroup = (groupId: number | null | undefined) => {
     const group = groupId ? entryGroupById.get(Number(groupId)) : null;
     return enabledHostGroupMembers(group);
@@ -2612,26 +2601,10 @@ function TunnelsContent() {
     getId: (tunnel: any) => Number(tunnel.id),
   });
   const orderedTunnelItems = tunnelOrder.items;
-  const filteredPortGroups = useMemo(() => {
-    if (!normalizedLinkSearchQuery) return portGroups;
-    return portGroups.filter((group: any) => linkForwardGroupMatchesSearch(group, normalizedLinkSearchQuery, hosts, tunnels, entryGroupById));
-  }, [entryGroupById, hosts, normalizedLinkSearchQuery, portGroups, tunnels]);
   const filteredChainGroups = useMemo(() => {
     if (!normalizedLinkSearchQuery) return chainGroups;
     return chainGroups.filter((group: any) => linkForwardGroupMatchesSearch(group, normalizedLinkSearchQuery, hosts, tunnels, entryGroupById));
   }, [chainGroups, entryGroupById, hosts, normalizedLinkSearchQuery, tunnels]);
-  const filteredFailoverGroups = useMemo(() => {
-    if (!normalizedLinkSearchQuery) return failoverGroups;
-    return failoverGroups.filter((group: any) => linkForwardGroupMatchesSearch(group, normalizedLinkSearchQuery, hosts, tunnels, entryGroupById));
-  }, [entryGroupById, failoverGroups, hosts, normalizedLinkSearchQuery, tunnels]);
-  const filteredEntryGroups = useMemo(() => {
-    if (!normalizedLinkSearchQuery) return entryGroups;
-    return entryGroups.filter((group: any) => linkForwardGroupMatchesSearch(group, normalizedLinkSearchQuery, hosts, tunnels, entryGroupById));
-  }, [entryGroupById, entryGroups, hosts, normalizedLinkSearchQuery, tunnels]);
-  const filteredExitGroups = useMemo(() => {
-    if (!normalizedLinkSearchQuery) return exitGroups;
-    return exitGroups.filter((group: any) => linkForwardGroupMatchesSearch(group, normalizedLinkSearchQuery, hosts, tunnels, entryGroupById));
-  }, [entryGroupById, exitGroups, hosts, normalizedLinkSearchQuery, tunnels]);
   const tunnelPagination = useServerPagination(
     needsFullTunnelList || isTunnelGlobeView ? [] : orderedTunnelItems,
     Number(tunnelPageQuery.data?.totalItems || 0),
@@ -2642,10 +2615,6 @@ function TunnelsContent() {
     },
   );
   const pagedTunnels = tunnelPagination.items;
-  const editingTunnel = useMemo(
-    () => editingId ? (tunnels || []).find((tunnel: any) => Number(tunnel.id) === Number(editingId)) || null : null,
-    [editingId, tunnels]
-  );
   /**
    * 链路状态点。
    *
@@ -4168,20 +4137,6 @@ function TunnelsContent() {
       </Tooltip>
     </TooltipProvider>
   );
-  const renderTunnelLatencyLabel = (tunnel: any, compact = false) => {
-    const latencyValue = tunnelDisplayLatencyMs(tunnel);
-    const latency = typeof latencyValue === "number" && Number.isFinite(latencyValue)
-      ? latencyValue
-      : null;
-    if (latency !== null) {
-      return <LatencyRating latencyMs={latency} className={compact ? "text-xs" : undefined} />;
-    }
-    if (tunnelLatencyIsTimeout(tunnel)) {
-      return <LatencyRating isTimeout timeoutText="超时" className={compact ? "text-xs" : undefined} />;
-    }
-    return <span className={compact ? "text-xs text-muted-foreground" : "text-muted-foreground"}>未测试</span>;
-  };
-
   const renderTunnelLatencyBreakdown = (tunnel: any, compact = false, maxItems?: number) => {
     const items = tunnelDisplayLatencyList(tunnel);
     if (items.length === 0) {

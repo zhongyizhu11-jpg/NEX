@@ -4,8 +4,8 @@ import { isLinkProbeFresh } from "../shared/linkProbePolicy";
 import { createDirectForwardRuleForActor, deleteForwardRuleForActor, toggleForwardRuleForActor } from "./routers/rules.crud";
 import { ENV } from "./env";
 import { ACCOUNT_DISABLED_ERR_MSG } from "../shared/const";
-import { pushAgentRefresh, pushAgentUpgrade } from "./agentEvents";
-import { pushTunnelEndpointRefresh, refreshUserForwardEndpoints } from "./routers/helpers";
+import { pushAgentUpgrade } from "./agentEvents";
+import { refreshUserForwardEndpoints } from "./routers/helpers";
 import { addMonthsClamped } from "./repositories/repositoryUtils";
 import { clearMobileTelegramLoginChallenge, hasMobileTelegramLoginChallenge } from "./telegramMobileLogin";
 import { createTelegramWebAppLoginChallenge } from "./telegramWebAppLogin";
@@ -317,12 +317,6 @@ function formatDateTime(value: unknown) {
   if (!value) return "永久有效";
   const date = new Date(value as any);
   return Number.isNaN(date.getTime()) ? "永久有效" : date.toLocaleString("zh-CN");
-}
-
-function formatTelegramName(from?: TelegramUser) {
-  const parts = [from?.first_name, from?.last_name].filter(Boolean);
-  if (parts.length) return parts.join(" ");
-  return from?.username ? `@${from.username}` : String(from?.id || "");
 }
 
 function clampPage(page: number, total: number, pageSize: number) {
@@ -1203,23 +1197,6 @@ async function usageText(user: any) {
   ].filter(Boolean).join("\n");
 }
 
-async function rulesText(user: any) {
-  const rules = await visibleRulesForTelegramUser(user);
-  const visible = user.role === "admin" ? rules.slice(0, 10) : rules.slice(0, 15);
-  if (visible.length === 0) return "<b>转发规则</b>\n\n暂无转发规则。";
-  const trafficByRuleId = await aiRuleTrafficSummaryMap(user, visible.map((rule: any) => Number(rule.id)), { includeLatency: true });
-  const lines = visible.map((rule: any) => {
-    const status = effectiveRuleStatusText(rule, trafficByRuleId.get(Number(rule.id)));
-    return [
-      `#${rule.id} <b>${escapeHtml(rule.name)}</b>`,
-      `${status} · ${escapeHtml(rule.forwardType)} ${escapeHtml(formatForwardRuleProtocol(rule.protocol))}`,
-      `:${rule.sourcePort} → ${escapeHtml(rule.targetIp)}:${rule.targetPort}`,
-    ].join("\n");
-  });
-  const more = rules.length > visible.length ? `\n\n还有 ${rules.length - visible.length} 条规则未展示，可发送 /rules 查看更多。` : "";
-  return `<b>转发规则</b>\n\n${lines.join("\n\n")}${more}`;
-}
-
 async function rulesView(user: any, page = 0) {
   const rules = await visibleRulesForTelegramUser(user);
   const { page: safePage, totalPages } = clampPage(page, rules.length, RULE_PAGE_SIZE);
@@ -1274,16 +1251,6 @@ async function ruleDetailText(ruleId: number, user: any) {
     `主机 ID：${rule.hostId}`,
     rule.tunnelId ? `隧道 ID：${rule.tunnelId}` : "",
   ].filter(Boolean).join("\n");
-}
-
-async function usersText() {
-  const users = await db.getUserTrafficSummaries();
-  if (users.length === 0) return "<b>用户概览</b>\n\n暂无用户。";
-  const lines = users.slice(0, 20).map((user: any) => {
-    const limit = Number(user.trafficLimit) || 0;
-    return `#${user.id} ${escapeHtml(user.name || user.username)} ${escapeHtml(formatBytes(user.trafficUsed))}/${limit > 0 ? escapeHtml(formatBytes(limit)) : "不限"}`;
-  });
-  return `<b>用户概览</b>\n\n${lines.join("\n")}`;
 }
 
 async function usersView(page = 0) {
@@ -4619,24 +4586,6 @@ function forwardGroupSearchValues(group: any) {
   ];
 }
 
-function ruleStatusText(rule: any) {
-  return effectiveRuleStatusText(rule);
-}
-
-function aiRuleStatusFilterLabel(status: AiRuleStatusFilter) {
-  if (status === "running") return "运行中";
-  if (status === "pending") return "等待 Agent 应用";
-  if (status === "disabled") return "已停用";
-  return "异常/不可用";
-}
-
-function ruleMatchesStatusFilter(rule: any, status: AiRuleStatusFilter) {
-  if (status === "running") return !!rule.isEnabled && !!rule.isRunning;
-  if (status === "pending") return !!rule.isEnabled && !rule.isRunning;
-  if (status === "disabled") return !rule.isEnabled;
-  return !rule.isEnabled || !rule.isRunning;
-}
-
 type AiEffectiveRuleStatusKind = "running" | "pending" | "disabled" | "abnormal";
 
 function isForwardGroupSurfaceRule(rule: any) {
@@ -5276,18 +5225,6 @@ async function aiQueryText(user: any, rawText: string) {
     default:
       return aiQueryHelpText();
   }
-}
-
-async function handleAiQuery(message: TelegramMessage, user: any, rawText: string) {
-  let text: string;
-  try {
-    text = await aiQueryText(user, rawText);
-  } catch (error: any) {
-    console.warn("[TelegramBot] AI query failed:", error);
-    text = `查询失败：${escapeHtml(error?.message || "请稍后重试")}`;
-  }
-  const sent = await sendMessage(message.chat.id, text);
-  await scheduleAiMessageAutoRecall(message.chat.id, message.message_id, sent);
 }
 
 async function handleAiInteraction(message: TelegramMessage, user: any, rawText: string) {

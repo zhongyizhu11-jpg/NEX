@@ -1,7 +1,7 @@
 import DeckGL from "@deck.gl/react";
 import { renderHostMapTooltip } from "@/lib/hostMapTooltip";
 import { hostRegionText } from "@/components/hosts/hostDisplay";
-import { escapeTooltipHtml, hostGeoCoordinate, hostMapClusterDistance, longitudeDistanceDegrees } from "@/lib/hostGeo";
+import { hostGeoCoordinate, hostMapClusterDistance } from "@/lib/hostGeo";
 import { GeoJsonLayer, LineLayer, ScatterplotLayer, TextLayer } from "@deck.gl/layers";
 import MapLibreMap from "react-map-gl/maplibre";
 import "maplibre-gl/dist/maplibre-gl.css";

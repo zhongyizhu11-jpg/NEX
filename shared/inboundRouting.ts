@@ -50,11 +50,6 @@ export const INBOUND_ROUTE_PRESETS: readonly InboundRoutePreset[] = UNLOCK_SERVI
   .map((service) => ({ id: service.id, name: service.name, domains: PRESET_DOMAINS[service.id] }));
 
 const PRESET_BY_ID = new Map(INBOUND_ROUTE_PRESETS.map((preset) => [preset.id, preset]));
-
-export function inboundRoutePreset(id: string) {
-  return PRESET_BY_ID.get(id);
-}
-
 export const INBOUND_ROUTE_TARGETS = ["direct", "block", "landing", "auto_unlock"] as const;
 export type InboundRouteTargetType = (typeof INBOUND_ROUTE_TARGETS)[number];
 

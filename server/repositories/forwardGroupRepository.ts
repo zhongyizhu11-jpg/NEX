@@ -21,7 +21,7 @@ import { invalidateProxySubCacheAll } from "../proxySubCache";
 import { DEFAULT_DDNS_TTL, getDdnsSettings, updateDdnsRecordValues } from "../ddns";
 import { afterDatabaseCommit, afterDatabaseTransactionSettled, executeRaw, getDb, insertAndGetId, isDatabaseTransactionActive, nowDate, queryRaw, rawEpochToDate, withDatabaseTransaction } from "../dbRuntime";
 import { withForwardTestDates } from "./forwardTestRepository";
-import { boolValue, countAll, inList, quoteIdentifier } from "../dbCompat";
+import { inList, quoteIdentifier } from "../dbCompat";
 import { pageResult, pageWindowForTotal, type PageRequest } from "../../shared/pagination";
 import {
   defaultHealthCheckTarget,
@@ -59,7 +59,6 @@ import {
   disableForwardRulesByTunnel,
   ensureTunnelListenerPortPolicy,
   findAvailablePort,
-  findAvailableTunnelExitPort,
   getUsedPortsOnHost,
   getTunnelById,
   getTunnelExitNodes,
@@ -94,7 +93,7 @@ import {
 } from "../forwardGroupHealthRecheck";
 import { notifyForwardGroupSwitch } from "../forwardGroupSwitchNotifier";
 import { recordForwardGroupSwitchEvent } from "../ops/eventHooks";
-import { trafficBillingUserLockKey, withKeyedTaskLock, withTrafficBillingUserLock } from "../keyedTaskLock";
+import { withKeyedTaskLock, withTrafficBillingUserLock } from "../keyedTaskLock";
 import {
   isHostPortReservationHeldByCaller,
   releaseHostPortReservations,
@@ -323,7 +322,6 @@ export async function primeForwardGroupHostLivenessDeadlines() {
   return primePresenceCapableHosts(await getHosts() as any[]);
 }
 
-const DEFAULT_CHINA_HEALTH_TARGET = "www.189.cn:80";
 const lastDdnsEventByKey = new Map<string, string>();
 const exactDdnsReconciledGroups = new Map<number, string>();
 
@@ -1837,20 +1835,6 @@ async function insertForwardGroupEvent(groupId: number, memberId: number | null,
     message: message.slice(0, 500),
     createdAt: nowDate(),
   });
-}
-
-async function memberEntryAddress(member: any) {
-  if (member.memberType === "host") {
-    const host = await getHostById(Number(member.hostId));
-    return entryAddressForHost(host);
-  }
-  if (member.memberType === "tunnel") {
-    const tunnel = await getTunnelById(Number(member.tunnelId));
-    if (!tunnel) return "";
-    const entry = await getHostById(Number(tunnel.entryHostId));
-    return entryAddressForHost(entry);
-  }
-  return "";
 }
 
 /**
@@ -4231,7 +4215,6 @@ export async function syncForwardChainsForHost(hostId: number, previousHost?: an
       const members = sortedMembers(group) as any[];
       const entryMembers = await chainEntryMembers(group);
       const hasExternalEntry = entryMembers.length > 0;
-      const currentPublic = entryAddressForHost(currentHost);
       const currentPrivate = privateAddressForHost(currentHost);
       const currentIpv6 = ipv6AddressForConnectHost(currentHost);
       const previousPublic = entryAddressForHost(previousHost);
@@ -5218,7 +5201,6 @@ async function runForwardGroupFailoverForGroups(
 ) {
   const db = await getDb();
   const ddnsSettings = context?.ddnsSettings ?? await getDdnsSettings();
-  const hostById = context?.hostById ?? new Map((await getHosts() as any[]).map((host: any) => [Number(host.id), host]));
   for (const group of groups as any[]) {
     if (!dbBool(group?.isEnabled)) continue;
     const mode = forwardGroupModeOf(group);

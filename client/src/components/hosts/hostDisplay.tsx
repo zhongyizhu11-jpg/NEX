@@ -90,10 +90,6 @@ export function hostPrimaryAddressLines(host: any) {
   return rows;
 }
 
-export function agentDetectedIpText(host: any) {
-  return hostAddressText(host);
-}
-
 /** 编辑框里「Agent 检测 IP」那一栏的可改写法：「1.2.3.4, 2001:db8::1」（shared/hostManualAddress 能原样读回去） */
 export function editableDetectedAddress(host: any) {
   const parts = [host?.ipv4, host?.ipv6].map((value) => String(value || "").trim()).filter(Boolean);

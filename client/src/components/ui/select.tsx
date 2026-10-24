@@ -1,7 +1,7 @@
 import { useFormFieldId } from "@/components/ui/form-field";
 import * as React from "react"
 import * as SelectPrimitive from "@radix-ui/react-select"
-import { Check, ChevronDown, ChevronUp } from "lucide-react"
+import { Check, ChevronDown } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useOverlayContainer } from "@/components/ui/overlay-root"
 
@@ -70,7 +70,7 @@ SelectPortal.displayName = SelectPrimitive.Portal.displayName
 
   手机上底部还有一条悬浮的标签栏，列表往下弹时给它让出 96px，免得最后几项被盖住。
 */
-const SELECT_LIST_MAX_H = "min(24rem,var(--radix-select-content-available-height,24rem))"
+
 function defaultCollisionPadding() {
   if (typeof window === "undefined" || typeof window.matchMedia !== "function") return 8
   return window.matchMedia("(max-width: 767px)").matches ? { top: 8, right: 8, bottom: 96, left: 8 } : 8

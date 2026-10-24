@@ -1,5 +1,5 @@
 import { and, asc, desc, eq, inArray, isNotNull, or, sql, type SQLWrapper } from "drizzle-orm";
-import { isFreshHostHeartbeat, isHostConsideredOnline } from "../hostHeartbeatPolicy";
+import { isHostConsideredOnline } from "../hostHeartbeatPolicy";
 export { isFreshHostHeartbeat } from "../hostHeartbeatPolicy";
 import {
   agentTokens,

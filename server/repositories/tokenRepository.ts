@@ -3,8 +3,6 @@ import { agentTokens, hosts, InsertAgentToken } from "../../drizzle/schema";
 import { isFreshHostHeartbeat } from "../hostHeartbeatPolicy";
 import { executeRaw, getDb, insertAndGetId, nowDate, queryRaw } from "../dbRuntime";
 import { inList, quoteIdentifier } from "../dbCompat";
-import { HOST_ONLINE_TTL_MS } from "../hostHeartbeatPolicy";
-
 // ==================== Agent Token Queries ====================
 
 export const AGENT_AUTH_TOKEN_CACHE_TTL_MS = 60_000;

@@ -143,15 +143,14 @@ type tcpListenPlan struct {
 }
 
 type udpServePlan struct {
-	key         string
-	label       string
-	role        string
-	host        string
-	port        int
-	sig         string
-	cfg         config
-	serve       func(conn *net.UDPConn) error
-	releaseFunc func()
+	key   string
+	label string
+	role  string
+	host  string
+	port  int
+	sig   string
+	cfg   config
+	serve func(conn *net.UDPConn) error
 }
 
 type fxpRuntimeManager struct {

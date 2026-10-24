@@ -679,28 +679,6 @@ func desiredManagedServiceReady(a action, serviceName string, unit string) bool 
 	return true
 }
 
-func desiredRuntimeServicesHealthy() bool {
-	services := requiredRuntimeServicesFromLocalConfig()
-	if len(services) == 0 {
-		return false
-	}
-	for _, name := range services {
-		if strings.HasPrefix(name, "mimic@") {
-			if !mimicRuntimeServiceHealthy(name) {
-				return false
-			}
-			continue
-		}
-		if !managedServiceActive(name) {
-			if shouldLogAgentReport("desired-runtime-service-inactive:"+name, agentReportLogInterval) {
-				logf("desired runtime service inactive service=%s", name)
-			}
-			return false
-		}
-	}
-	return true
-}
-
 func desiredNginxRuntimeReady(port int, protocol string) bool {
 	return cachedDesiredRuntimeReady(desiredNginxRuntimeReadyCache, port, protocol, func() bool {
 		readiness := readLocalRuntimeReadinessCached()
@@ -868,18 +846,6 @@ func primeDesiredRuntimeReadyCacheForActions(actions []action) {
 		(*r.cache)[r.key] = desiredRuntimeReadyCacheEntry{value: r.value, checkedAt: now}
 	}
 	desiredRuntimeReadyMu.Unlock()
-}
-
-func desiredRuntimeConfigUsesPort(port int) bool {
-	if port <= 0 {
-		return false
-	}
-	for _, item := range managedRuntimeConfigs() {
-		if managedRuntimeConfigUsesPort(item.path, port) {
-			return true
-		}
-	}
-	return false
 }
 
 func desiredForwardTypeCompatible(local string, desired string) bool {

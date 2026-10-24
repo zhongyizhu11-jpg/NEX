@@ -16,8 +16,6 @@ import {
 
 const ADMIN = 1;
 const ALICE = 2;
-const BOB = 3;
-
 const hosts = [
   { id: 1, name: "HK 入口", userId: ADMIN, ip: "10.0.0.1", isOnline: true, geoCountryCode: "hk" },
   { id: 2, name: "JP 出口", userId: ADMIN, ip: "10.0.0.2", entryIp: "jp.example.com", isOnline: true, geoCountryCode: "jp" },

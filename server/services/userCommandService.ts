@@ -1,7 +1,7 @@
 import { appendPanelLog } from "../_core/panelLogger";
 import * as db from "../db";
 import { refreshUserForwardEndpoints } from "../routers/helpers";
-import { trafficBillingUserLockKey, withKeyedTaskLock, withTrafficBillingUserLock } from "../keyedTaskLock";
+import { withTrafficBillingUserLock } from "../keyedTaskLock";
 import type { ForwardAccessPauseReason } from "../repositories/userRepository";
 
 type CommandActor = { id: number; role?: string };

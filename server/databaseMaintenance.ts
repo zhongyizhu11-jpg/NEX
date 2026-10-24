@@ -18,22 +18,15 @@
 export const DATABASE_MAINTENANCE_MESSAGE = "数据库迁移中，请稍后再试";
 
 let activeReason: string | null = null;
-let activeSince = 0;
 
 export function beginDatabaseMaintenance(reason: string) {
   activeReason = reason || "database-maintenance";
-  activeSince = Date.now();
 }
 
 export function endDatabaseMaintenance() {
   activeReason = null;
-  activeSince = 0;
 }
 
 export function isDatabaseMaintenanceActive() {
   return activeReason !== null;
-}
-
-export function databaseMaintenanceState() {
-  return { active: activeReason !== null, reason: activeReason, since: activeSince || null };
 }

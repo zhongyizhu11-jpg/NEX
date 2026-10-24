@@ -11,7 +11,7 @@ import {
 import { StatusDot } from "@/components/network/StatusDot";
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 import { formatAgo } from "@shared/dashboardAttention";
-import { formatCpuPercent, isAgentUpgradeTimedOut } from "./hostDisplay";
+import { formatCpuPercent } from "./hostDisplay";
 import { hostGeoTooltip, hostPrimaryAddressLines, hostRegionText } from "./hostDisplay";
 import { HostOsAvatar, hostOsOf } from "./HostOsBadge";
 import { deriveHostVitals, type HostVitals } from "./useHostVitals";
@@ -83,8 +83,6 @@ export function buildHostActions(
   const isOnline = !!host?.isOnline;
   // 服务端没给这个字段时按「能管」算：管理员那一侧本来就都能管。
   const manageable = host?.manageable !== false;
-  const upgradeTimedOut = isAgentUpgradeTimedOut(host);
-
   const primary: EntityAction[] = [];
   if (props.onViewProbeLatency) {
     primary.push({

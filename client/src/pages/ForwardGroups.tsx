@@ -14,10 +14,8 @@ import { FAILOVER_TONE_CLASS, describeGroupPolicyDisplay } from "@/lib/failoverL
 import { FormField } from "@/components/ui/form-field";
 import DataSectionError from "@/components/DataSectionError";
 import { sameNullableStringArray } from "@/lib/multiHopAddress";
-import { hostSearchParts } from "@/lib/hostSearchParts";
 import { formatLatencyTimeLabel } from "@/lib/latencyTimeLabel";
 import { hostIpv6Address, hostPrivateAddress, normalizeConnectHostForHost, sameAddress } from "@/lib/multiHopAddress";
-import { addressKey } from "@/lib/multiHopAddress";
 import SectionTransition from "@/components/SectionTransition";
 import DashboardLayout from "@/components/DashboardLayout";
 import { DiagnoseDialog } from "@/components/DiagnoseDialog";
@@ -57,7 +55,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { OptimisticSwitch, Switch } from "@/components/ui/switch";
+import { OptimisticSwitch } from "@/components/ui/switch";
 import {
   Table,
   TableBody,
@@ -78,8 +76,6 @@ import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import {
   Activity,
-  ArrowRightLeft,
-  AlertCircle,
   CheckCircle2,
   ChevronRight,
   Globe,
@@ -100,7 +96,6 @@ import {
   FileJson,
 } from "lucide-react";
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useReducedMotion } from "motion/react";
 import { toast } from "sonner";
 import {
   Area,
@@ -125,7 +120,6 @@ import {
   trafficMultiplierToInputValue,
 } from "@shared/trafficMultiplier";
 import {
-  FORWARD_RULE_PROTOCOL_LABELS,
   FORWARD_TYPE_LABELS,
   FORWARD_TYPES,
   TUNNEL_PROTOCOLS,
@@ -156,8 +150,6 @@ import {
   BANDWIDTH_AGGREGATION_STRATEGY_LABELS,
   MAX_MEMBER_BANDWIDTH_MBPS,
   MAX_MEMBER_WEIGHT,
-  formatAggregationUtilization,
-  formatBandwidthMbps,
   normalizeAggregationMinMembers,
   normalizeAggregationRecordSlots,
   normalizeBandwidthAggregationStrategy,
@@ -438,79 +430,6 @@ function entryGroupDisplayText(group: any, groupsByMode: Record<GroupMode, any[]
   const entryGroup = groupsByMode.entry.find((item: any) => Number(item.id) === entryGroupId);
   if (!entryGroup) return `入口组 #${entryGroupId}`;
   return String(entryGroup.domain || entryGroup.name || `入口组 #${entryGroupId}`).trim();
-}
-
-function normalizeForwardGroupSearchText(value: unknown) {
-  return String(value ?? "").trim().toLowerCase();
-}
-
-function forwardGroupSearchMatches(parts: unknown[], query: string) {
-  const needle = normalizeForwardGroupSearchText(query);
-  if (!needle) return true;
-  return parts.some((part) => normalizeForwardGroupSearchText(part).includes(needle));
-}
-
-function forwardGroupMatchesSearchQuery(
-  group: any,
-  query: string,
-  hosts: any[] | undefined,
-  tunnels: any[] | undefined,
-  groupsByMode: Record<GroupMode, any[]>,
-) {
-  const hostById = new Map((hosts || []).map((host: any) => [Number(host.id), host]));
-  const tunnelById = new Map((tunnels || []).map((tunnel: any) => [Number(tunnel.id), tunnel]));
-  const mode = normalizeGroupMode(group?.groupMode);
-  const entryGroupText = entryGroupDisplayText(group, groupsByMode);
-  const modeLabels: Record<GroupMode, string[]> = {
-    port: ["端口转发", "port"],
-    chain: ["转发链", "端口转发链", "chain"],
-    failover: ["转发组", "故障转移", "failover"],
-    entry: ["入口组", "entry"],
-    exit: ["出口组", "exit"],
-  };
-  const memberParts = (Array.isArray(group?.members) ? group.members : []).flatMap((member: any) => {
-    if (member?.memberType === "tunnel") {
-      const tunnel = tunnelById.get(Number(member.tunnelId || 0));
-      return [
-        member.id,
-        member.tunnelId,
-        member.entryAddress,
-        member.connectHost,
-        tunnel?.id,
-        tunnel?.name,
-        tunnel?.listenPort,
-        tunnel?.mode,
-        getTunnelRouteText(tunnel, hosts),
-      ];
-    }
-    const host = hostById.get(Number(member?.hostId || 0));
-    return [
-      member?.id,
-      member?.hostId,
-      member?.entryAddress,
-      member?.connectHost,
-      host?.name || (member?.hostId ? `host #${member.hostId}` : ""),
-      ...hostSearchParts(host),
-    ];
-  });
-  return forwardGroupSearchMatches([
-    group?.id,
-    group?.name,
-    group?.domain,
-    group?.recordType,
-    group?.lastDdnsValue,
-    group?.lastStatus,
-    group?.lastMessage,
-    group?.protocol,
-    FORWARD_RULE_PROTOCOL_LABELS[normalizeForwardRuleProtocol(group?.protocol, "both")],
-    group?.forwardType,
-    (FORWARD_TYPE_LABELS as Record<string, string>)[String(group?.forwardType || "")],
-    group?.groupType,
-    group?.trafficMultiplier,
-    entryGroupText,
-    ...(modeLabels[mode] || []),
-    ...memberParts,
-  ], query);
 }
 
 type GroupLatencyPoint = {

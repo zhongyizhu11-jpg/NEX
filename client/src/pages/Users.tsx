@@ -33,7 +33,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { FilterChips } from "@/components/ui/filter-chips";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -67,7 +67,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { OptimisticSwitch, Switch } from "@/components/ui/switch";
+import { OptimisticSwitch } from "@/components/ui/switch";
 import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -89,7 +89,6 @@ import {
   Trash2,
   User,
   Users as UsersIcon,
-  Settings,
   RotateCcw,
   CalendarClock,
   Database,
@@ -1140,8 +1139,6 @@ function UsersContent() {
     if (!cancelSubscriptionId) return;
     cancelSubscriptionMutation.mutate({ id: cancelSubscriptionId });
   };
-
-  const hostNameById = (hostId: number) => allHosts?.find((h: any) => h.id === hostId)?.name || `#${hostId}`;
   const tunnelRouteText = (tunnel: any) => getTunnelRouteText(tunnel, allHosts);
   const billableHostIds = new Set((trafficBillingConfigs?.configs || []).filter((item: any) => item.resourceType === "host" && item.enabled && item.requiresPermission).map((item: any) => Number(item.resourceId)));
   const billableTunnelIds = new Set((trafficBillingConfigs?.configs || []).filter((item: any) => item.resourceType === "tunnel" && item.enabled && item.requiresPermission).map((item: any) => Number(item.resourceId)));

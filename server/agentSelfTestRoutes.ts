@@ -7,7 +7,7 @@ import { forwardTestRequestMessage, isDurableForwardTestBatchId, TUNNEL_PROBE_BA
 import { appendPanelLog } from "./_core/panelLogger";
 import { getAgentHostIdentityFromRequest } from "./agentAuth";
 import { normalizeLinkProbeMethod } from "@shared/latencyProbe";
-import { structuredLinkTestMessage, tunnelHopLatencyMode, tunnelHopModeText } from "./linkTestMessages";
+import { structuredLinkTestMessage } from "./linkTestMessages";
 import {
   canReuseRecentTunnelLatencySample,
   combineTunnelRuleLatencySample,
@@ -31,16 +31,6 @@ import { FORWARD_TUNNEL_LATENCY_WAIT_MS } from "./selfTestTiming";
 
 async function resolveSelfTestTarget(rule: any) {
   return rule?.targetIp;
-}
-
-function tunnelSeriesKey(value: unknown, fallback: string) {
-  const key = String(value || fallback).trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
-  return (key || fallback).slice(0, 64);
-}
-
-function tunnelSeriesLabel(value: unknown, fallback: string) {
-  const label = String(value || fallback).trim().replace(/[\r\n\t]+/g, " ").replace(/\s{2,}/g, " ");
-  return (label || fallback).slice(0, 96);
 }
 
 async function isTunnelDetailsCurrent(tunnel: any, details: any[]) {
@@ -410,7 +400,6 @@ agentRouter.post("/api/agent/selftest-result", async (req: Request, res: Respons
       const entryTarget = `${meta.entryIp || "-"}:${meta.entrySourcePort || "-"}`;
       const finalTarget = `${meta.targetIp || "-"}:${meta.targetPort || "-"}`;
       const hopLabel = String((meta as any).hopLabel || "");
-      const routeLabel = typeof (meta as any).routeLabel === "string" ? (meta as any).routeLabel : null;
       if (hopLabel) {
         // Only rows created before durable batches reach here; the row itself
         // already holds the hop result, the lost in-memory batch cannot be summarized.

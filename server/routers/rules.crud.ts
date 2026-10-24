@@ -70,7 +70,7 @@ import {
   type HostPortReservation,
 } from "../portReservations";
 import { ensureTunnelListenerPortPolicy, reserveTunnelExitPort, usesSharedTunnelPrimaryListener } from "../repositories/tunnelRepository";
-import { trafficBillingUserLockKey, withKeyedTaskLock, withTrafficBillingUserLock } from "../keyedTaskLock";
+import { withKeyedTaskLock, withTrafficBillingUserLock } from "../keyedTaskLock";
 import { mapWithConcurrency } from "../asyncPool";
 import { reserveRuleCreateQuota, type RuleQuotaReservation } from "../ruleQuotaReservations";
 import { assertRuleTargetsAllowedForActor } from "../ruleTargetPolicy";
@@ -3055,7 +3055,6 @@ export const crudRulesRouter = router({
           excludeTemplateRuleId: rule.id,
         });
         const isForwardChain = (group as any).groupMode === "chain";
-        const isPortGroup = (group as any).groupMode === "port";
         if (ctx.user.role !== "admin" && (input.isEnabled === true || dbBool((rule as any).isEnabled))) {
           await requireTrafficBillingBalanceForRule(ctx.user.id, groupAccess.isTrafficBillingResource);
         }
@@ -3169,7 +3168,6 @@ export const crudRulesRouter = router({
           }
         }
       }
-      const nextIsTunnelForward = nextForwardTypeForRule === "gost" && Number(nextTunnelIdForRule || 0) > 0;
       const routeChanged = String(nextForwardTypeForRule) !== String((rule as any).forwardType) || Number(nextTunnelIdForRule || 0) !== Number((rule as any).tunnelId || 0);
       const directRouteChanged = routeChanged || Number(nextHostIdForRule) !== Number((rule as any).hostId);
       if (directRouteChanged) {

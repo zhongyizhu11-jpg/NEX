@@ -5,8 +5,6 @@ import { Button } from "@/components/ui/button";
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 import { hostDeleteNeedsOfflineConfirmation, offlineCleanupConfirmOptions } from "@/components/hosts/hostDeletion";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { formatBytes, formatCpuPercent, formatUptime } from "@/components/hosts/hostDisplay";
 import { ProxyNodeRow, proxyNodeMetaText } from "@/components/proxy/ProxyNodeRow";
 import { clipboardNeedsManualCopy, copyTextFromElement } from "@/lib/clipboard";

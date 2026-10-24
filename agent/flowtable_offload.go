@@ -62,8 +62,6 @@ type flowOffloadPlan struct {
 	UDPPorts []int
 }
 
-func (p flowOffloadPlan) empty() bool { return len(p.TCPPorts) == 0 && len(p.UDPPorts) == 0 }
-
 func flowOffloadPortList(ports []int) string {
 	parts := make([]string, 0, len(ports))
 	for _, port := range ports {

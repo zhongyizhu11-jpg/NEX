@@ -2553,11 +2553,6 @@ func clampProbeSuccesses(successes, count int, reachable bool) int {
 	return successes
 }
 
-func nativePingLatencyWithCount(target string, timeout time.Duration, count int) (int, bool, string, error) {
-	latency, ok, detail, _, _, err := nativePingLatencyDetailed(target, timeout, count)
-	return latency, ok, detail, err
-}
-
 func nativePingLatencyDetailed(target string, timeout time.Duration, count int) (int, bool, string, int, int, error) {
 	if count < 1 {
 		count = 1
@@ -2617,11 +2612,6 @@ func nativePingLatencyDetailed(target string, timeout time.Duration, count int) 
 		return 0, false, "", count, 0, lastErr
 	}
 	return 0, false, "timeout", count, 0, nil
-}
-
-func nativePingIP(ip net.IP, timeout time.Duration, count int) (int, bool, error) {
-	latency, ok, err, _, _ := nativePingIPDetailed(ip, timeout, count)
-	return latency, ok, err
 }
 
 // nativePingListenRaw / nativePingListenDatagram 测试里替换，用来验证回退顺序。
@@ -2878,11 +2868,6 @@ func roundPositiveLatency(value string) int {
 	return latency
 }
 
-func iptablesCounterSnapshot() map[string]trafficCounters {
-	counters, _ := iptablesCounterSnapshotWithDiagnostics()
-	return counters
-}
-
 func iptablesCounterSnapshotWithDiagnostics() (map[string]trafficCounters, trafficDiagnosticsSnapshot) {
 	chainCounters := map[string]map[string]uint64{}
 	diagnostics := trafficDiagnosticsSnapshot{
@@ -3052,11 +3037,6 @@ func parseIptablesCounterText(text string, chainCounters map[string]map[string]u
 		}
 		chainCounters[key.marker][key.chain] += values[key]
 	}
-}
-
-func nftablesCounterSnapshot() map[int]trafficCounters {
-	counters, _ := nftablesCounterSnapshotWithDiagnostics()
-	return counters
 }
 
 func nftablesCounterSnapshotWithDiagnostics() (map[int]trafficCounters, map[int]bool) {
@@ -3448,107 +3428,6 @@ var (
 
 func isConntrackSpace(c byte) bool {
 	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f'
-}
-
-func conntrackConnections(port string) uint64 {
-	cmd := fmt.Sprintf(`awk -v p="dport=%s" 'index($0,p" ")>0 {c++} END{print c+0}' /proc/net/nf_conntrack 2>/dev/null`, port)
-	out, err := commandOutputWithTimeout(5*time.Second, "sh", "-c", cmd)
-	if err != nil {
-		return 0
-	}
-	v, _ := strconv.ParseUint(strings.TrimSpace(string(out)), 10, 64)
-	return v
-}
-
-func iptablesBytes(port string, direction string) uint64 {
-	counters := iptablesCounterSnapshot()[port]
-	if direction == "out" {
-		if counters.Out > 0 {
-			return counters.Out
-		}
-	} else if counters.In > 0 {
-		return counters.In
-	}
-	legacyChain := "FWX_IN_" + port
-	if direction == "out" {
-		legacyChain = "FWX_OUT_" + port
-	}
-	return iptablesLegacyBytes(legacyChain)
-}
-
-func iptablesLegacyBytes(chain string) uint64 {
-	parentChains := []string{"PREROUTING", "INPUT", "FORWARD", "OUTPUT", "POSTROUTING"}
-	byChain := map[string]uint64{}
-	for _, binary := range []string{"iptables", "ip6tables"} {
-		for _, parent := range parentChains {
-			raw, err := iptablesCommandOutput(binary, "-t", "mangle", "-nvxL", parent)
-			if err != nil {
-				continue
-			}
-			for _, line := range strings.Split(string(raw), "\n") {
-				if !strings.Contains(line, chain) {
-					continue
-				}
-				fields := strings.Fields(line)
-				if len(fields) < 2 {
-					continue
-				}
-				value, err := strconv.ParseUint(fields[1], 10, 64)
-				if err != nil {
-					continue
-				}
-				byChain[parent] += value
-			}
-		}
-	}
-	maxBytes := uint64(0)
-	for _, value := range byChain {
-		if value > maxBytes {
-			maxBytes = value
-		}
-	}
-	return maxBytes
-}
-
-func nftablesBytes(ruleID int, port string) (uint64, uint64) {
-	in := nftablesRuleBytes("traffic_forward", ruleID, "in")
-	out := nftablesRuleBytes("traffic_forward", ruleID, "out")
-	if in == 0 {
-		in = nftablesRuleBytes("traffic_prerouting", ruleID, "in")
-	}
-	if out == 0 {
-		out = nftablesRuleBytes("traffic_postrouting", ruleID, "out")
-	}
-	// Older generated nftables rules stored counters in per-rule chains.
-	if in == 0 {
-		in = nftablesChainBytes("in_" + strconv.Itoa(ruleID))
-	}
-	if out == 0 {
-		out = nftablesChainBytes("out_" + strconv.Itoa(ruleID))
-	}
-	return in, out
-}
-
-func nftablesRuleBytes(chain string, ruleID int, direction string) uint64 {
-	colonMarker := fmt.Sprintf("fwx-rule-%d:%s", ruleID, direction)
-	dashMarker := fmt.Sprintf("fwx-rule-%d-%s", ruleID, direction)
-	cmd := fmt.Sprintf(`nft -a list chain inet forwardx %s 2>/dev/null | awk -v colon=%s -v dash=%s '(index($0, colon) || index($0, dash)) && /counter packets/ {for(i=1;i<=NF;i++) if($i=="bytes") {s+=$(i+1)}} END{print s+0}'`, shellQuote(chain), shellQuote(colonMarker), shellQuote(dashMarker))
-	out, err := commandOutputWithTimeout(5*time.Second, "sh", "-c", cmd)
-	if err != nil {
-		return 0
-	}
-	v, _ := strconv.ParseUint(strings.TrimSpace(string(out)), 10, 64)
-	return v
-}
-
-func nftablesChainBytes(chain string) uint64 {
-	cmd := fmt.Sprintf(`nft -a list chain inet forwardx %s 2>/dev/null | awk '/counter packets/ {for(i=1;i<=NF;i++) if($i=="bytes") {s+=$(i+1)}} END{print s+0}'`, shellQuote(chain))
-	out, err := commandOutputWithTimeout(5*time.Second, "sh", "-c", cmd)
-	if err != nil {
-		return 0
-	}
-	v, _ := strconv.ParseUint(strings.TrimSpace(string(out)), 10, 64)
-	return v
 }
 
 func readPrevState(port string) trafficPrevState {

@@ -170,8 +170,3 @@ export async function getLatencyDailyHistory(targetType: LatencyHistoryTargetTyp
   }
   return result;
 }
-
-/** 对象删掉时顺手清掉它的历史（不清也会在 30 天后自然过期）。 */
-export async function deleteLatencyDailyHistory(targetType: LatencyHistoryTargetType, targetId: number) {
-  await executeRaw(`DELETE FROM ${q(LATENCY_DAILY_TABLE)} WHERE ${q("targetType")} = ? AND ${q("targetId")} = ?`, [targetType, Number(targetId)]);
-}

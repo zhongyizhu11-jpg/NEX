@@ -232,7 +232,3 @@ export function getNetworkTopology(viewer: TopologyViewer, options: { userId?: n
   const key = isAdmin ? `admin:${filterUserId ?? "all"}` : `user:${Number(viewer.id)}`;
   return topologyCache.get(key, { ttlMs: 10_000, staleMs: 20_000 }, () => loadTopology(viewer, filterUserId));
 }
-
-export function clearNetworkTopologyCache() {
-  topologyCache.clear();
-}

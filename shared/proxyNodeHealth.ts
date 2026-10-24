@@ -12,7 +12,7 @@
  *    「离线」是错的 —— 那会把一个好端端的节点标成红的。
  */
 
-import { LINK_PROBE_FRESH_MS, isLinkProbeFresh } from "./linkProbePolicy";
+import { isLinkProbeFresh } from "./linkProbePolicy";
 
 /**
  * 节点流量的统计窗口。

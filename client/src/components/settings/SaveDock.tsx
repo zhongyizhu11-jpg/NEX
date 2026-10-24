@@ -2,9 +2,6 @@ import { createContext, useCallback, useContext, useEffect, useLayoutEffect, use
 import { Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { useUiTheme } from "@/hooks/useUiTheme";
-import { useCompactLayout } from "@/hooks/useCompactLayout";
-
 /*
   设置页的「贴底保存栏」（界面主题「玫瑰」下才出现，2026-10-11 用户要的）。
 

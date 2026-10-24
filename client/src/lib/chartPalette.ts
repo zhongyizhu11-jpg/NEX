@@ -26,29 +26,6 @@ export const CHART_SERIES_COLORS = [
   "var(--fx-chart-9)",
   "var(--fx-chart-10)",
 ] as const;
-
-export function chartSeriesColor(index: number): string {
-  const size = CHART_SERIES_COLORS.length;
-  const safe = Number.isFinite(index) ? Math.abs(Math.trunc(index)) : 0;
-  return CHART_SERIES_COLORS[safe % size];
-}
-
-/**
- * 有语义的那几个，按状态取。
- *
- * 图表要表达「健康 / 警告 / 故障 / 待命」时用这组，不要去 CHART_SERIES_COLORS
- * 里挑一个看着像的 —— 挑出来的那个和列表里的状态点不是同一个颜色。
- */
-export const CHART_SEMANTIC_COLORS = {
-  healthy: "var(--fx-health-good)",
-  warning: "var(--fx-health-warning)",
-  critical: "var(--fx-health-critical)",
-  standby: "var(--fx-network-standby)",
-  /** 网络路径 / 主数据系列。NEX 的识别色 */
-  path: "var(--fx-network-path)",
-  delivery: "var(--fx-delivery)",
-} as const;
-
 /**
  * 流量走势的两条线：入站 / 出站。
  *

@@ -208,14 +208,6 @@ export type TopologyInput = {
   routeStats?: (ruleId: number) => TopologyRouteStats | null;
   scope?: TopologyScope | null;
 };
-
-export const TOPOLOGY_ROLE_LABELS: Record<TopologyRole, string> = {
-  entry: "入口",
-  relay: "中转",
-  exit: "出口",
-  landing: "落地",
-};
-
 export const TOPOLOGY_EDGE_KIND_LABELS: Record<TopologyEdgeKind, string> = {
   rule: "转发规则",
   tunnel: "隧道",

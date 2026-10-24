@@ -179,9 +179,3 @@ export async function lookupOfflineIpRegion(address: string): Promise<OfflineIpR
   if (!content) return null;
   return parseOfflineIpRegion(searchRegion(key.family, content, key.bytes));
 }
-
-/** 测试用：丢掉已加载的库，下次重新读文件。 */
-export function resetOfflineIpRegionForTests() {
-  databases.clear();
-  lastWarningAt = 0;
-}

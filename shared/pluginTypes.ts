@@ -1,4 +1,3 @@
-export const PLUGIN_MENU_KEY = "plugins" as const;
 export const PLUGIN_MANIFEST_VERSION = 1 as const;
 
 export const PLUGIN_PERMISSION_KEYS = [
@@ -567,20 +566,6 @@ export type PluginStoreItem = {
   storeSourceId?: number;
   storeSourceName?: string;
 };
-
-export type PluginStoreSource = {
-  id: number;
-  name: string;
-  repository: string;
-  branch: string;
-  catalogPath: string;
-  pluginCount: number;
-  lastSyncedAt?: Date | string | null;
-  lastError?: string | null;
-  createdAt?: Date | string | null;
-  updatedAt?: Date | string | null;
-};
-
 export const BUILTIN_PLUGIN_STORE_ITEMS: PluginStoreItem[] = [
   {
     id: "china-region-whitelist",
