@@ -347,7 +347,9 @@ html:root [data-fx-compact-page] .fx-table-daily > div:not([data-fx-std-page] *)
 
   /* 链路行：和转发行同一个样子（用户 2026-10-22 定的）。第一行「● 名字  副题 ……  累计 0 B · 0 条规则  ···  开关」，
      第二行左边路线、右端延迟标签。脚注那一块（延迟大数字、走势、24H）和拖拽手柄不画，详情里有 */
-  html:root [data-fx-compact-page] .fx-tunnel-card .fx-rule-card-body:not([data-fx-std-page] *) { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; grid-template-areas: "name sub traffic actions" "route route route tag"; align-items: center; column-gap: 8px; row-gap: 1px; padding: 6px 12px 7px; }
+  /* 五列：第一行的「··· + 开关」跨最后两列，第二行的延迟标签只占最后一列 —— 路线就能伸到 ··· 底下。
+     原来四列时标签和「··· + 开关」共用一列，那一列按开关算宽，路线右边空着一大块、名字却被截断 */
+  html:root [data-fx-compact-page] .fx-tunnel-card .fx-rule-card-body:not([data-fx-std-page] *) { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto auto; grid-template-areas: "name sub traffic actions actions" "route route route route tag"; align-items: center; column-gap: 8px; row-gap: 1px; padding: 6px 12px 7px; }
   html:root [data-fx-compact-page] .fx-tunnel-card .fx-rule-head:not([data-fx-std-page] *), html:root [data-fx-compact-page] .fx-tunnel-card .fx-rule-title:not([data-fx-std-page] *), html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-meta:not([data-fx-std-page] *) { display: contents; }
   html:root [data-fx-compact-page] .fx-tunnel-card .fx-rule-name:not([data-fx-std-page] *) { grid-area: name; font-size: 14px; line-height: 20px; }
   html:root [data-fx-compact-page] .fx-tunnel-card .fx-rule-sub:not([data-fx-std-page] *) { grid-area: sub; min-width: 0; margin: 0; font-size: 11px; line-height: 16px; }
@@ -362,7 +364,9 @@ html:root [data-fx-compact-page] .fx-table-daily > div:not([data-fx-std-page] *)
   /* min-width: 0：路线是网格项，默认不肯比内容窄，两个长名字会把格子撑出去叠在一起；放开后由 NetworkPath 自己截断 */
   html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-route:not([data-fx-std-page] *) { grid-area: route; margin-top: 2px; min-width: 0; }
   /* 连线不铺满整行（用户 2026-10-23 定的）：固定一小段，两个名字靠拢，右边留白 */
-  html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-route [data-fx-path-edge]:not([data-fx-std-page] *) { flex: 0 0 56px; min-width: 56px; max-width: 56px; }
+  html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-route [data-fx-path-edge]:not([data-fx-std-page] *) { flex: 0 0 24px; min-width: 24px; max-width: 24px; }
+  /* 三个点以上（两段线）每段缩到 16px：名字比线要紧，原来「P… ── j… ── D.」只剩首字母 */
+  html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-route:has([data-fx-path-edge] ~ [data-fx-path-edge]) [data-fx-path-edge]:not([data-fx-std-page] *) { flex-basis: 16px; min-width: 16px; max-width: 16px; }
   html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-latency-tag:not([data-fx-std-page] *) { grid-area: tag; justify-self: end; }
   html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-foot:not([data-fx-std-page] *), html:root [data-fx-compact-page] .fx-tunnel-card .fx-tunnel-foot-line:not([data-fx-std-page] *) { display: none; }
   html:root [data-fx-compact-page] .fx-tunnel-card .fx-rule-card-body > :not(.fx-rule-head):not(.fx-tunnel-route):not(.fx-tunnel-meta):not([data-fx-std-page] *), html:root [data-fx-compact-page] .fx-tunnel-card .fx-rule-title > :not(.fx-rule-name):not(.fx-rule-sub):not([data-fx-std-page] *) { grid-column: 1 / -1; margin: 0; }

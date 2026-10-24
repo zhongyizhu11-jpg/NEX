@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { formatLatencyTimeLabel } from "@/lib/latencyTimeLabel";
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from "recharts";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { LatencyPeakCutToggle } from "@/components/LatencyPeakCutToggle";
 import {
   DEFAULT_LATENCY_TIME_RANGE_HOURS,
@@ -79,7 +78,7 @@ function TcpingTooltipContent({ active, payload, label }: any) {
 
 /*
   延迟记录的正文（图、稳定性统计、近 30 天色块），没有对话框外壳：
-  标准布局下套在下面的 TcpingDetailDialog 里；精简布局下并进「诊断」框当一页（DiagnoseDialog extraTabs）。
+  并进转发的「诊断」框当一页（Rules.tsx 传给 DiagnoseDialog 的 extraTabs）。
   active 为 false 时不查询（和原来 open 的作用一样）。
 */
 export function TcpingDetailBody({
@@ -235,36 +234,3 @@ export function TcpingDetailBody({
     </div>
   );
 }
-
-function TcpingDetailDialog({
-  ruleId,
-  ruleName,
-  isForwardChain = false,
-  probeMethod = "tcping",
-  open,
-  onOpenChange,
-}: {
-  ruleId: number;
-  ruleName: string;
-  isForwardChain?: boolean;
-  probeMethod?: "tcping" | "ping";
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
-}) {
-  const methodLabel = probeMethod === "ping" ? "Ping" : "TCPing";
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[96svh] w-[calc(100vw-0.75rem)] max-w-[95vw] flex-col gap-3 overflow-hidden p-3 sm:max-w-3xl sm:p-6">
-        <DialogHeader>
-          <DialogTitle className="truncate pr-8 text-base sm:text-lg">
-            {isForwardChain ? "转发链路延迟" : `转发链路延迟 (${methodLabel})`} - {ruleName}
-          </DialogTitle>
-          <DialogDescription className="sr-only">延迟和丢包记录</DialogDescription>
-        </DialogHeader>
-        <TcpingDetailBody ruleId={ruleId} isForwardChain={isForwardChain} probeMethod={probeMethod} active={open} />
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-export { TcpingDetailDialog };

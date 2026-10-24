@@ -5,7 +5,6 @@ import { toast } from "sonner";
 import DataSectionError from "@/components/DataSectionError";
 import DataSectionLoading from "@/components/DataSectionLoading";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { segmentedControlClassName, segmentedOptionClassName } from "@/components/ui/segmented";
 import { downloadTextFile } from "@/lib/fileDownload";
 import { pollingInterval } from "@/lib/polling";
@@ -46,27 +45,8 @@ function rateBarClass(rate: number | null) {
   return "bg-[var(--fx-down)]";
 }
 
-type Props = { tunnel: { id: number; name: string } | null; onClose: () => void };
-
-export default function TunnelConnStatsDialog({ tunnel, onClose }: Props) {
-  return (
-    <Dialog open={!!tunnel} onOpenChange={(open) => { if (!open) onClose(); }}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-4xl">
-        <DialogHeader>
-          <DialogTitle>连接监控{tunnel ? ` · ${tunnel.name}` : ""}</DialogTitle>
-          <DialogDescription data-fx-help="">
-            真实连接每一跳的成功率和耗时；单连接叠加还列出每一路跑了多少。留 7 天。
-          </DialogDescription>
-        </DialogHeader>
-        <TunnelConnStatsBody tunnel={tunnel} />
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 /*
-  连接监控的正文，没有对话框外壳：标准布局下套在上面的对话框里；精简布局下并进「诊断」框当一页
-  （Tunnels.tsx 传给 DiagnoseDialog 的 extraTabs）。
+  连接监控的正文，没有对话框外壳：并进链路的「诊断」框当一页（Tunnels.tsx 传给 DiagnoseDialog 的 extraTabs）。
 */
 export function TunnelConnStatsBody({ tunnel }: { tunnel: { id: number; name: string } | null }) {
   const [hours, setHours] = useState<number>(24);

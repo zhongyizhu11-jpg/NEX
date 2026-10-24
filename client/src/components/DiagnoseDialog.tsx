@@ -48,6 +48,7 @@ export function DiagnoseDialog({
   onRun,
   checklist,
   extraTabs,
+  initialTab,
   actions,
   children,
 }: {
@@ -72,28 +73,33 @@ export function DiagnoseDialog({
    * 一条线路的毛病在一个框里看完，不用关了再开。
    */
   extraTabs?: DiagnoseExtraTab[];
+  /** 打开时先停在哪一页（比如表格里点「详细」直接看延迟记录）。不给就是延迟测试 */
+  initialTab?: DiagnoseTab;
   /** 精简布局：「导出故障包」「查看拓扑」这类和诊断同一件事的动作，放在底部、每一页都在。 */
   actions?: ReactNode;
   /** 路径和每一段的结果（LinkTestProbeView）。 */
   children: ReactNode;
 }) {
   const ranBefore = !!lastRunAt && !Number.isNaN(new Date(lastRunAt).getTime());
-  const [tab, setTab] = useState<DiagnoseTab>("latency");
+  const [tab, setTab] = useState<DiagnoseTab>(initialTab || "latency");
   // 一键诊断切过去才跑；跑过一次就一直挂着，来回切不重跑。
   const [checklistVisited, setChecklistVisited] = useState(false);
   const [visitedExtra, setVisitedExtra] = useState<string[]>([]);
   useEffect(() => {
-    if (!open) {
+    if (open) {
+      setTab(initialTab || "latency");
+    } else {
       setTab("latency");
       setChecklistVisited(false);
       setVisitedExtra([]);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
   useEffect(() => {
     if (tab === "checklist") setChecklistVisited(true);
     else if (tab !== "latency") setVisitedExtra((list) => (list.includes(tab) ? list : [...list, tab]));
   }, [tab]);
-  // 打开就测一次延迟；正在测就不再发一次。一次打开只自动测一次。
+  // 延迟测试那一页第一次露面时测一次（直接打开在别的页就等切过来再测）；正在测就不再发一次。一次打开只自动测一次。
   const onRunRef = useRef(onRun);
   onRunRef.current = onRun;
   const testingRef = useRef(testing);
@@ -104,7 +110,7 @@ export function DiagnoseDialog({
       autoRanRef.current = false;
       return;
     }
-    if (autoRanRef.current) return;
+    if (autoRanRef.current || tab !== "latency") return;
     // 子组件的 effect 先于父组件跑：隧道那边打开时会重置「手动测试」的记录，这里等那一轮
     // effect 都跑完再发，免得刚记下的测试状态被清掉。
     const timer = setTimeout(() => {
@@ -112,7 +118,7 @@ export function DiagnoseDialog({
       if (!testingRef.current) onRunRef.current();
     }, 0);
     return () => clearTimeout(timer);
-  }, [open]);
+  }, [open, tab]);
   const hasChecklist = !!checklist && checklist.id > 0;
   const extras = extraTabs ?? [];
   const hasTabs = hasChecklist || extras.length > 0;
