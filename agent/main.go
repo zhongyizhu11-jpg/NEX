@@ -497,23 +497,19 @@ func broadcastManagedRuntimeListenReady() {
 }
 
 type actionJob struct {
-	cfg                      Config
-	action                   action
-	previousRuntime          localActionRuntimeSnapshot
-	done                     chan struct{}
-	result                   *actionJobResult
-	resultOK                 bool
-	resultReady              bool
-	dependentResultOK        bool
-	dependentResultReady     bool
-	handoffFinalizedByResult bool
-	desiredKey               string
-	desiredSignature         string
-	enqueuedAt               time.Time
-	protectedPort            string
-	prerequisites            []<-chan struct{}
-	resultPrereqs            []*actionJobResult
-	dependentResults         []*actionJobResult
+	cfg              Config
+	action           action
+	previousRuntime  localActionRuntimeSnapshot
+	done             chan struct{}
+	result           *actionJobResult
+	resultOK         bool
+	resultReady      bool
+	desiredKey       string
+	desiredSignature string
+	enqueuedAt       time.Time
+	protectedPort    string
+	prerequisites    []<-chan struct{}
+	resultPrereqs    []*actionJobResult
 }
 
 type localActionRuntimeSnapshot struct {
@@ -888,20 +884,6 @@ func (result *actionJobResult) resolveDependent(ok bool) {
 		}
 		if commit != nil {
 			commit()
-		}
-	})
-}
-
-func (result *actionJobResult) rollback() {
-	if result == nil {
-		return
-	}
-	result.finalizerMu.Lock()
-	rollback := result.rollbackFn
-	result.finalizerMu.Unlock()
-	result.finalizerOnce.Do(func() {
-		if rollback != nil {
-			rollback()
 		}
 	})
 }
@@ -1356,13 +1338,6 @@ func runtimePortProtocolConfigured(ports map[int]map[string]bool, port int, prot
 		}
 	}
 	return true
-}
-
-func (r *localRuntimeReadiness) gostReadyForPort(port int, protocol string) bool {
-	if r == nil || port <= 0 {
-		return false
-	}
-	return r.gostMainReadyForPort(port, protocol) || r.gostTunnelReadyForPort(port, protocol)
 }
 
 func (r *localRuntimeReadiness) gostMainReadyForPort(port int, protocol string) bool {
@@ -5428,10 +5403,6 @@ func newAgentEventStreamScanner(r io.Reader) *bufio.Scanner {
 	return scanner
 }
 
-func decodeEventData(raw string, token string, out any) error {
-	return decodeEventDataForPanel(raw, token, "", "", out)
-}
-
 func decodeEventDataForPanel(raw string, token string, panelURL string, serverTimeHeader string, out any) error {
 	var env envelope
 	if err := json.Unmarshal([]byte(raw), &env); err != nil {
@@ -6324,12 +6295,6 @@ func mimicRuntimeDiagnostics() string {
 	return compactLogOutput(strings.Join(parts, " | "))
 }
 
-func requiredRuntimeServicesFromLocalConfig() []string {
-	services := requiredSharedRuntimeServicesFromLocalConfig()
-	services = append(services, managedMimicServicesFromLocalConfig()...)
-	return services
-}
-
 func requiredSharedRuntimeServicesFromLocalConfig() []string {
 	services := requiredGostRuntimeServicesFromLocalConfig()
 	services = append(services, requiredNginxRuntimeServicesFromLocalConfig()...)
@@ -6390,11 +6355,6 @@ func managedMimicServicesFromConfigDir(configDir string) []string {
 	}
 	sort.Strings(services)
 	return services
-}
-
-func mimicRuntimeServiceHealthy(name string) bool {
-	ok, _ := mimicRuntimeServiceHealth(name)
-	return ok
 }
 
 func mimicConnectionState(output string) string {
@@ -7486,21 +7446,6 @@ func addrUsesPort(addr string, port int) bool {
 	return err == nil && value == port
 }
 
-func managedGostConfigPathsForListenPort(port int) []string {
-	paths := map[string]bool{}
-	for _, protocol := range []string{"tcp", "udp"} {
-		for _, path := range managedGostConfigPathsForListenPortProtocol(port, protocol) {
-			paths[path] = true
-		}
-	}
-	result := make([]string, 0, len(paths))
-	for path := range paths {
-		result = append(result, path)
-	}
-	sort.Strings(result)
-	return result
-}
-
 func managedGostConfigPathsForListenPortProtocol(port int, protocol string) []string {
 	paths := map[string]bool{}
 	for _, pid := range listenPortOwnerPIDsForProtocol(port, protocol) {
@@ -7552,21 +7497,6 @@ func managedRuntimeConfigs() []struct {
 
 func shouldReportActionStatus(a action) bool {
 	return a.ReportStatus == nil || *a.ReportStatus
-}
-
-func listenPortOwnerPIDs(port int) []int {
-	seen := map[int]bool{}
-	for _, protocol := range []string{"tcp", "udp"} {
-		for _, pid := range listenPortOwnerPIDsForProtocol(port, protocol) {
-			seen[pid] = true
-		}
-	}
-	pids := make([]int, 0, len(seen))
-	for pid := range seen {
-		pids = append(pids, pid)
-	}
-	sort.Ints(pids)
-	return pids
 }
 
 func listenPortOwnerPIDsForProtocol(port int, protocol string) []int {
@@ -9400,10 +9330,6 @@ func countingRuleCleanupCmds(port int) []string {
 	return commands
 }
 
-func ensureCountingChains(rule runningRule) bool {
-	return ensureCountingChainsWithCleanup(rule, true)
-}
-
 func ensureCountingChainsWithCleanup(rule runningRule, cleanup bool) bool {
 	if rule.SourcePort <= 0 {
 		return true
@@ -10860,14 +10786,6 @@ func fxpSpecsListenConflict(left fxpSpec, right fxpSpec) bool {
 	return false
 }
 
-func stopConflictingFXP(spec fxpSpec) {
-	for _, conflicting := range stopConflictingFXPRuntime(spec) {
-		if !isFXPEntryGroup(spec) || !fxpEntryGroupContains(spec, conflicting) {
-			removePersistedFXPSpec(conflicting)
-		}
-	}
-}
-
 // stopConflictingFXPRuntime removes listeners that would block a replacement,
 // but leaves their last-known-good snapshots intact until the replacement has
 // passed its startup check. A failed apply must remain recoverable after an
@@ -11482,13 +11400,6 @@ func fxpSpecUsesListenEndpoint(spec fxpSpec, listenPort int, protocol string) bo
 		}
 	}
 	return false
-}
-
-func stopFXPByPort(tunnelID int, listenPort int, protocol string) bool {
-	if tunnelID <= 0 {
-		return true
-	}
-	return stopFXPBySelector(fxpRuntimeSelector{tunnelID: tunnelID, listenPort: listenPort, protocol: protocol})
 }
 
 func stopFXPByListenEndpoint(listenPort int, protocol string) bool {
@@ -12178,10 +12089,6 @@ func normalizeProtocolGuardRateLimitScope(scope string, ruleID, listenPort int) 
 	// Empty scopes must not accidentally pool unrelated rules. Rule IDs are
 	// stable across heartbeats and therefore provide a deterministic fallback.
 	return fmt.Sprintf("guard:%d:%d", ruleID, listenPort)
-}
-
-func (l *protocolGuardSharedRateLimiter) setRate(bytesPerSecond int64) {
-	l.setRateWithBurst(bytesPerSecond, 0)
 }
 
 // setRateWithBurst：burstBytes > 0 时用它当桶深（「先放一段突发、跑久了再降速」那一级），
@@ -14028,12 +13935,6 @@ func protocolGuardRuleStateReady(state localRuleState, readiness *localRuntimeRe
 		return false
 	}
 	return protocolGuardBackendReady(server.rule, readiness)
-}
-
-// guardSignature is retained for tests and callers that only need the stable
-// route identity. Rate configuration is intentionally hot-swappable.
-func guardSignature(rule guardRule) string {
-	return guardRoutingSignature(rule)
 }
 
 func guardTCPEnabled(rule guardRule) bool {
@@ -16807,12 +16708,6 @@ func usagePercent(used, total uint64) int {
 }
 
 func memTotal() uint64 { return memTotalFrom(readMeminfo()) }
-func memUsed() uint64 {
-	return memUsedFrom(readMeminfo())
-}
-func memUsagePercent() int {
-	return usagePercent(memUsed(), memTotal())
-}
 
 func uptime() int64 {
 	b, _ := os.ReadFile("/proc/uptime")

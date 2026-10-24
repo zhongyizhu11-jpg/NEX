@@ -57,7 +57,6 @@ var (
 
 	wireGuardKernelStateMu     sync.Mutex
 	wireGuardKernelUnavailable time.Time
-	wireGuardKernelLastReason  string
 )
 
 func wireGuardKernelEnabledByEnv() bool {
@@ -85,14 +84,12 @@ func wireGuardKernelShouldTry() bool {
 func markWireGuardKernelUnavailable(reason string) {
 	wireGuardKernelStateMu.Lock()
 	wireGuardKernelUnavailable = time.Now()
-	wireGuardKernelLastReason = reason
 	wireGuardKernelStateMu.Unlock()
 }
 
 func markWireGuardKernelAvailable() {
 	wireGuardKernelStateMu.Lock()
 	wireGuardKernelUnavailable = time.Time{}
-	wireGuardKernelLastReason = ""
 	wireGuardKernelStateMu.Unlock()
 }
 

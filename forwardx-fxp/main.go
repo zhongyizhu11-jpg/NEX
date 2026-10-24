@@ -18,7 +18,6 @@ import (
 	"log"
 	"math"
 	"net"
-	"net/netip"
 	"os"
 	"os/signal"
 	"strconv"
@@ -668,40 +667,6 @@ func (s *exitEndpointSelector) markResolved(index int) {
 		return
 	}
 	s.markHealthy(index)
-}
-
-// dialSelectedSecureTCP 按选择器挑端点，返回一条确认过握手的连接（池里有就用
-// 池里的）。只剩 UDP-over-TCP 的旧会话在用；TCP 会话走 selectedTransport，
-// 那里不等确认、失败了还能重放。
-func dialSelectedSecureTCP(selector *exitEndpointSelector, cfg config, selectionKey string) (net.Conn, *secureConn, exitEndpoint, error) {
-	if selector == nil || selector.count() == 0 {
-		return nil, nil, exitEndpoint{}, errors.New("no exit endpoints")
-	}
-	attempted := map[int]bool{}
-	var lastErr error
-	for len(attempted) < selector.count() {
-		endpoint, index, ok := selector.pick(attempted, selectionKey)
-		if !ok {
-			break
-		}
-		attempted[index] = true
-		dialCfg := cfg
-		if endpoint.Key != "" {
-			dialCfg.Key = endpoint.Key
-		}
-		conn, sec, err := dialSecureTCP(endpoint.Host, endpoint.Port, dialCfg)
-		if err == nil {
-			selector.markHealthy(index)
-			selector.probeFailedEndpoint(cfg)
-			return conn, sec, endpoint, nil
-		}
-		lastErr = err
-		selector.markFailure(index, err)
-	}
-	if lastErr == nil {
-		lastErr = errors.New("no exit endpoint available")
-	}
-	return nil, nil, exitEndpoint{}, lastErr
 }
 
 func endpointSelectionSource(address string) string {
@@ -1648,338 +1613,6 @@ func formatProxyProtocolV1(hello helloFrame) string {
 	return fmt.Sprintf("PROXY %s %s %s %d %d\r\n", family, sourceIP, destIP, sourcePort, destPort)
 }
 
-type udpEntrySession struct {
-	key          netip.AddrPort
-	sourceIP     netip.Addr
-	clientAddr   *net.UDPAddr
-	conn         *net.UDPConn
-	exit         net.Conn
-	sec          *secureConn
-	cfg          config
-	endpoint     exitEndpoint
-	inLimiter    *limiter
-	outLimiter   *limiter
-	counter      *trafficCounter
-	send         *fxpUDPQueue
-	done         chan struct{}
-	closeOnce    sync.Once
-	lastActivity atomic.Int64
-	inFlight     atomic.Int64
-	remove       func(*udpEntrySession)
-}
-
-func udpEntrySessionSnapshot(session *udpEntrySession) fxpUDPSessionSnapshot {
-	state := fxpUDPSessionSnapshot{}
-	if session == nil {
-		return state
-	}
-	if session.clientAddr != nil {
-		state.sourceIP = session.clientAddr.IP.String()
-	}
-	state.lastActivity = session.lastActivity.Load()
-	if session.send != nil {
-		state.pending = session.send.pending()
-	}
-	state.pending += int(session.inFlight.Load())
-	return state
-}
-
-func serveEntryUDP(conn *net.UDPConn, cfg config, selector *exitEndpointSelector, inLimiter, outLimiter *limiter) error {
-	// 和 UDP 直连入口一样按 netip 地址找会话，读循环里不再每包格式化地址。
-	sessions := map[netip.AddrPort]*udpEntrySession{}
-	sessionsPerIP := map[netip.Addr]int{}
-	policy := defaultFXPUDPSessionPolicy()
-	var sessionsMu sync.Mutex
-	var workerWG sync.WaitGroup
-	counter := &trafficCounter{}
-	stopReporting := startTrafficReporter(cfg, counter)
-	defer stopReporting()
-	queueBudget := newDefaultFXPUDPQueueRuleBudget()
-	detachSessionLocked := func(session *udpEntrySession) bool {
-		if session == nil || sessions[session.key] != session {
-			return false
-		}
-		delete(sessions, session.key)
-		if session.sourceIP.IsValid() {
-			if sessionsPerIP[session.sourceIP] <= 1 {
-				delete(sessionsPerIP, session.sourceIP)
-			} else {
-				sessionsPerIP[session.sourceIP]--
-			}
-		}
-		return true
-	}
-	removeSession := func(session *udpEntrySession) {
-		sessionsMu.Lock()
-		detachSessionLocked(session)
-		sessionsMu.Unlock()
-	}
-	stopSweeper, wakeSweeper := startFXPUDPSessionSweeper(func(now time.Time) {
-		var expired []*udpEntrySession
-		var reclaimed []*udpEntrySession
-		sessionsMu.Lock()
-		for key, session := range sessions {
-			state := udpEntrySessionSnapshot(session)
-			if session != nil && fxpUDPSessionExpiredAt(now, state.lastActivity, state.pending) {
-				if sessions[key] == session && detachSessionLocked(session) {
-					expired = append(expired, session)
-				}
-			}
-		}
-		for _, victim := range planFXPUDPPressureReclamation(now, sessions, policy, udpEntrySessionSnapshot) {
-			if sessions[victim.key] == victim.session && detachSessionLocked(victim.session) {
-				reclaimed = append(reclaimed, victim.session)
-			}
-		}
-		sessionsMu.Unlock()
-		for _, session := range expired {
-			fxpVerbosef("entry udp session idle timeout tunnel=%d rule=%d client=%s", session.cfg.TunnelID, session.cfg.RuleID, session.clientAddr)
-			session.close()
-		}
-		for _, session := range reclaimed {
-			session.close()
-			fxpUDPDropLog.Printf("entry udp stream reclaimed idle session tunnel=%d rule=%d client=%s reason=capacity-pressure", session.cfg.TunnelID, session.cfg.RuleID, session.clientAddr)
-		}
-	})
-	defer stopSweeper()
-	buf := make([]byte, 65535)
-	for {
-		n, clientAddrPort, err := conn.ReadFromUDPAddrPort(buf)
-		if err != nil {
-			var closing []*udpEntrySession
-			sessionsMu.Lock()
-			for _, session := range sessions {
-				closing = append(closing, session)
-			}
-			sessionsMu.Unlock()
-			for _, session := range closing {
-				session.close()
-			}
-			workerWG.Wait()
-			return err
-		}
-		clientAddrPort = fxpUDPNormalizeAddrPort(clientAddrPort)
-		key := clientAddrPort
-		sourceIP := fxpUDPSourceIP(clientAddrPort)
-		sessionsMu.Lock()
-		session := sessions[key]
-		if session != nil {
-			session.touch()
-		}
-		preflight := fxpUDPAdmission{allow: true}
-		if session == nil {
-			preflight = checkFXPUDPSessionCapacity(len(sessions), sessionsPerIP[sourceIP], sourceIP.String(), policy)
-		}
-		sessionsMu.Unlock()
-		if !preflight.allow {
-			wakeSweeper()
-			fxpUDPDropLog.Printf("entry udp stream rejected new session tunnel=%d rule=%d client=%s reason=%s sessions=%d perIP=%d hardSessions=%d hardPerIP=%d", cfg.TunnelID, cfg.RuleID, clientAddrPort, preflight.reason, preflight.total, preflight.perIP, policy.hardSessions, policy.hardPerIP)
-			continue
-		}
-		startSession := false
-		if session == nil {
-			clientAddr := net.UDPAddrFromAddrPort(clientAddrPort)
-			sourceIPLabel := sourceIP.String()
-			created, err := newUDPEntrySession(conn, clientAddr, cfg, selector, inLimiter, outLimiter, counter, queueBudget, removeSession)
-			if err != nil {
-				if !isClosedErr(err) {
-					log.Printf("entry udp session create failed tunnel=%d rule=%d client=%s: %v", cfg.TunnelID, cfg.RuleID, clientAddr, err)
-				}
-				continue
-			}
-			var closeCreated *udpEntrySession
-			var admission fxpUDPAdmission
-			rejected := false
-			pressure := false
-			sessionsMu.Lock()
-			if existing := sessions[key]; existing != nil {
-				session = existing
-				session.touch()
-				closeCreated = created
-			} else {
-				admission = checkFXPUDPSessionCapacity(len(sessions), sessionsPerIP[sourceIP], sourceIPLabel, policy)
-				if !admission.allow {
-					closeCreated = created
-					rejected = true
-				} else {
-					sessions[key] = created
-					sessionsPerIP[sourceIP]++
-					session = created
-					startSession = true
-					pressure = fxpUDPSessionPressure(len(sessions), sessionsPerIP[sourceIP], sourceIPLabel, policy)
-				}
-			}
-			sessionsMu.Unlock()
-			if closeCreated != nil {
-				closeCreated.close()
-			}
-			if rejected {
-				wakeSweeper()
-				fxpUDPDropLog.Printf("entry udp stream rejected new session tunnel=%d rule=%d client=%s reason=%s sessions=%d perIP=%d hardSessions=%d hardPerIP=%d", cfg.TunnelID, cfg.RuleID, clientAddr, admission.reason, admission.total, admission.perIP, policy.hardSessions, policy.hardPerIP)
-				continue
-			}
-			if pressure {
-				wakeSweeper()
-			}
-		}
-		if startSession {
-			session.counter.connections.Add(1)
-			session.start(&workerWG)
-		}
-		// 明文拷进借来的缓冲，连同所有权交给发送队列，写出去之后还回池里。
-		payload := getFXPByteBuffer(n)
-		copy(payload, buf[:n])
-		session.enqueue(payload, true)
-	}
-}
-
-func newUDPEntrySession(conn *net.UDPConn, clientAddr *net.UDPAddr, cfg config, selector *exitEndpointSelector, inLimiter, outLimiter *limiter, counter *trafficCounter, queueBudget *fxpUDPQueueRuleBudget, remove func(*udpEntrySession)) (*udpEntrySession, error) {
-	selectionKey := clientAddr.IP.String()
-	exit, sec, endpoint, err := dialSelectedSecureTCP(selector, cfg, selectionKey)
-	if err != nil {
-		return nil, err
-	}
-	hello, _ := json.Marshal(helloFrame{
-		Network:      "udp",
-		TargetIP:     cfg.TargetIP,
-		TargetPort:   cfg.TargetPort,
-		TunnelID:     cfg.TunnelID,
-		RuleID:       cfg.RuleID,
-		SelectionKey: selectionKey,
-	})
-	if err := writeSecureHello(sec, hello); err != nil {
-		_ = exit.Close()
-		return nil, err
-	}
-	if counter == nil {
-		counter = &trafficCounter{}
-	}
-	clientAddrPort := fxpUDPAddrPortOf(clientAddr)
-	session := &udpEntrySession{
-		key:        clientAddrPort,
-		sourceIP:   fxpUDPSourceIP(clientAddrPort),
-		clientAddr: clientAddr,
-		conn:       conn,
-		exit:       exit,
-		sec:        sec,
-		cfg:        cfg,
-		endpoint:   endpoint,
-		inLimiter:  inLimiter,
-		outLimiter: outLimiter,
-		counter:    counter,
-		send:       newFXPUDPQueueWithBudget(fxpUDPStreamQueueSize, fxpUDPQueueMaxBytes, queueBudget),
-		done:       make(chan struct{}),
-		remove:     remove,
-	}
-	session.touch()
-	return session, nil
-}
-
-func (s *udpEntrySession) touch() {
-	s.lastActivity.Store(time.Now().UnixNano())
-}
-
-func (s *udpEntrySession) start(workerWG *sync.WaitGroup) {
-	startFXPUDPSessionWorker(workerWG, s.writeLoop)
-	startFXPUDPSessionWorker(workerWG, s.readLoop)
-	fxpVerbosef("entry udp session started tunnel=%d rule=%d client=%s exit=%s:%d target=%s:%d", s.cfg.TunnelID, s.cfg.RuleID, s.clientAddr, s.endpoint.Host, s.endpoint.Port, s.cfg.TargetIP, s.cfg.TargetPort)
-}
-
-// enqueue 把客户端发来的一个包放进发送队列。pooled 时 payload 的所有权一并交出。
-func (s *udpEntrySession) enqueue(payload []byte, pooled bool) {
-	s.touch()
-	select {
-	case <-s.done:
-		recycleFXPUDPPayload(payload, pooled)
-		return
-	default:
-		if s.send.enqueueOwned(payload, pooled) {
-			fxpUDPDropLog.Printf("entry udp session queue congested tunnel=%d rule=%d client=%s; packet dropped", s.cfg.TunnelID, s.cfg.RuleID, s.clientAddr)
-		}
-	}
-}
-
-func (s *udpEntrySession) writeLoop() {
-	for {
-		packet, ok := s.send.nextTracked(s.done, &s.inFlight)
-		if !ok {
-			return
-		}
-		if packet.superseded(time.Now(), s.send.pending()) {
-			fxpUDPDropLog.Printf("entry udp queued packet expired tunnel=%d rule=%d client=%s; dropping stale packet", s.cfg.TunnelID, s.cfg.RuleID, s.clientAddr)
-			packet.done()
-			continue
-		}
-		payload := packet.payload
-		s.touch()
-		if !s.inLimiter.waitDone(s.done, len(payload)) {
-			packet.done()
-			return
-		}
-		if packet.superseded(time.Now(), s.send.pending()) {
-			fxpUDPDropLog.Printf("entry udp queued packet expired after wait tunnel=%d rule=%d client=%s; dropping stale packet", s.cfg.TunnelID, s.cfg.RuleID, s.clientAddr)
-			packet.done()
-			continue
-		}
-		if err := s.sec.writeFrame(payload); err != nil {
-			if !isClosedErr(err) {
-				log.Printf("entry udp write failed tunnel=%d rule=%d client=%s: %v", s.cfg.TunnelID, s.cfg.RuleID, s.clientAddr, err)
-			}
-			packet.done()
-			s.close()
-			return
-		}
-		s.counter.in.Add(uint64(len(payload)))
-		packet.done()
-	}
-}
-
-func (s *udpEntrySession) readLoop() {
-	for {
-		frame, err := s.sec.readFrame()
-		if err != nil {
-			if !isClosedErr(err) {
-				log.Printf("entry udp read failed tunnel=%d rule=%d client=%s: %v", s.cfg.TunnelID, s.cfg.RuleID, s.clientAddr, err)
-			}
-			s.close()
-			return
-		}
-		if len(frame) == 0 {
-			s.close()
-			return
-		}
-		s.touch()
-		s.inFlight.Add(1)
-		if !s.outLimiter.waitDone(s.done, len(frame)) {
-			s.inFlight.Add(-1)
-			return
-		}
-		linkShaperEgress().wait(len(frame))
-		if _, err := s.conn.WriteToUDP(frame, s.clientAddr); err != nil {
-			if !isClosedErr(err) {
-				log.Printf("entry udp client write failed tunnel=%d rule=%d client=%s: %v", s.cfg.TunnelID, s.cfg.RuleID, s.clientAddr, err)
-			}
-			s.inFlight.Add(-1)
-			s.close()
-			return
-		}
-		s.counter.out.Add(uint64(len(frame)))
-		s.touch()
-		s.inFlight.Add(-1)
-	}
-}
-
-func (s *udpEntrySession) close() {
-	s.closeOnce.Do(func() {
-		close(s.done)
-		s.send.close()
-		if s.remove != nil {
-			s.remove(s)
-		}
-		_ = s.exit.Close()
-	})
-}
-
 func runExit(done <-chan struct{}, cfg config) error {
 	return runManaged(done, cfg, nil)
 }
@@ -2186,10 +1819,6 @@ func runRelay(done <-chan struct{}, cfg config) error {
 	return runManaged(done, cfg, nil)
 }
 
-func handleRelaySession(upConn net.Conn, cfg config, selector *exitEndpointSelector) error {
-	return handleRelaySessionWithStartup(upConn, cfg, selector, nil)
-}
-
 func handleRelaySessionWithStartup(upConn net.Conn, cfg config, selector *exitEndpointSelector, in *fxpInbound) error {
 	defer upConn.Close()
 	// Accept upstream encrypted connection (like exit)
@@ -2296,10 +1925,6 @@ func relayCopy(src, dst frameConn) error {
 	}
 }
 
-func proxyPlainSecure(plain net.Conn, sec frameConn, inLimiter, outLimiter *limiter, counter *trafficCounter) error {
-	return proxyPlainSecureWithPolicy(plain, sec, inLimiter, outLimiter, counter, protocolPolicy{}, nil, nil)
-}
-
 func proxyPlainSecureWithPolicy(plain net.Conn, sec frameConn, inLimiter, outLimiter *limiter, counter *trafficCounter, policy protocolPolicy, onBlock func(string), initialSample []byte) error {
 	var inCounter, outCounter *atomic.Uint64
 	if counter != nil {
@@ -2367,10 +1992,6 @@ func waitBidirectionalWithLinger(errCh <-chan error, closeAll func(), halfCloseL
 }
 
 var errSecurePeerVanished = errors.New("fxp peer closed without end-of-stream")
-
-func copyPlainToSecure(dst frameConn, src net.Conn, limiter *limiter, counter *atomic.Uint64) error {
-	return copyPlainToSecureWithPolicy(dst, src, limiter, counter, protocolPolicy{}, nil, nil)
-}
 
 func copyPlainToSecureWithPolicy(dst frameConn, src net.Conn, limiter *limiter, counter *atomic.Uint64, policy protocolPolicy, onBlock func(string), initialSample []byte) error {
 	// 一次读两帧的量：内核里攒着的有多少拿多少，读到多少立刻封帧写出，超过一帧
@@ -2583,15 +2204,6 @@ func newAEAD(key []byte) (cipher.AEAD, error) {
 		return nil, err
 	}
 	return cipher.NewGCM(block)
-}
-
-func newEntrySecureConn(conn net.Conn, cfg config) (*secureConn, error) {
-	sec, err := newClientSecureConn(conn, cfg)
-	if err == nil {
-		return sec, nil
-	}
-	_ = conn.Close()
-	return nil, err
 }
 
 func newExitSecureConn(conn net.Conn, cfg config) (*secureConn, error) {
@@ -3317,12 +2929,6 @@ func (c *secureConn) decryptFrameData(counter uint64, dataCipher []byte) ([]byte
 	return c.dataReadAEAD.Open(nil, nonce[:], dataCipher, c.payloadAD)
 }
 
-func fxpNonce(direction uint32, counter uint64, kind byte) []byte {
-	nonce := make([]byte, 12)
-	fillFXPNonce(nonce, direction, counter, kind)
-	return nonce
-}
-
 func fillFXPNonce(nonce []byte, direction uint32, counter uint64, kind byte) {
 	if len(nonce) < 12 {
 		return
@@ -3346,10 +2952,6 @@ func newStampedReplayCache(ttl time.Duration, max int, floor int64) *replayCache
 	cache := newReplayCache(ttl, max)
 	cache.floor = floor
 	return cache
-}
-
-func (c *replayCache) Add(key string) bool {
-	return c.addAt(key, time.Now())
 }
 
 func (c *replayCache) addAt(key string, now time.Time) bool {

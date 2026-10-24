@@ -435,3 +435,28 @@ func TestExitUDPDirectSameSessionIDDifferentRulesPreservesOldSession(t *testing.
 		t.Fatalf("unexpected old-session reply: type=%d rule=%d session=%d payload=%q", packet.packetType, packet.ruleID, packet.sessionID, packet.payload)
 	}
 }
+
+// udpEntrySession 是老的入口 UDP 会话（现在入口 UDP 走 udp_direct.go 的 serveEntryUDPDirect），只留下回收规划要看的几个字段，
+// 用来测 planFXPUDPPressureReclamation 的挑选逻辑。
+type udpEntrySession struct {
+	clientAddr   *net.UDPAddr
+	send         *fxpUDPQueue
+	lastActivity atomic.Int64
+	inFlight     atomic.Int64
+}
+
+func udpEntrySessionSnapshot(session *udpEntrySession) fxpUDPSessionSnapshot {
+	state := fxpUDPSessionSnapshot{}
+	if session == nil {
+		return state
+	}
+	if session.clientAddr != nil {
+		state.sourceIP = session.clientAddr.IP.String()
+	}
+	state.lastActivity = session.lastActivity.Load()
+	if session.send != nil {
+		state.pending = session.send.pending()
+	}
+	state.pending += int(session.inFlight.Load())
+	return state
+}

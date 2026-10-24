@@ -148,10 +148,6 @@ func updateDNSWatch(items []dnsWatchItem) bool {
 	return updateDNSWatchWithLookupAt(items, lookupDNSWatchIPs, time.Now())
 }
 
-func updateDNSWatchWithLookup(items []dnsWatchItem, lookup func(string) []string) bool {
-	return updateDNSWatchWithLookupAt(items, lookup, time.Now())
-}
-
 func updateDNSWatchWithLookupAt(items []dnsWatchItem, lookup func(string) []string, now time.Time) bool {
 	dnsWatchScanMu.Lock()
 	defer dnsWatchScanMu.Unlock()

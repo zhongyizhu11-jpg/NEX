@@ -578,18 +578,6 @@ func sniInboundStatusSnapshot() []sniInboundStatus {
 	return out
 }
 
-// sniInboundOwnsPort：本机这个端口是不是共享入站自己在听（别的清理逻辑不该去动它）。
-func sniInboundOwnsPort(port int) bool {
-	sniInboundMu.Lock()
-	defer sniInboundMu.Unlock()
-	for _, server := range sniInboundServers {
-		if server.port == port {
-			return true
-		}
-	}
-	return false
-}
-
 func (s *sniInboundServer) close() {
 	s.once.Do(func() {
 		close(s.done)

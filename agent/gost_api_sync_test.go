@@ -367,17 +367,6 @@ func (f *fakeGostAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (f *fakeGostAPI) names(collection string) []string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	var out []string
-	items, _ := f.config[collection].([]any)
-	for _, item := range items {
-		out = append(out, item.(map[string]any)["name"].(string))
-	}
-	return out
-}
-
 func (f *fakeGostAPI) object(collection, name string) map[string]any {
 	f.mu.Lock()
 	defer f.mu.Unlock()

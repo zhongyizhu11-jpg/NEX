@@ -29,8 +29,7 @@ type frameConn interface {
 }
 
 var (
-	errMultipathLegSilent    = errors.New("multipath leg stopped delivering while its siblings kept going")
-	errMultipathDuplicateLeg = errors.New("multipath session already has a leg with this id")
+	errMultipathLegSilent = errors.New("multipath leg stopped delivering while its siblings kept going")
 )
 
 // multipathLegConn is one secure link of a multipath session.
