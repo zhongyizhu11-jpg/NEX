@@ -180,11 +180,9 @@ import {
   Zap,
   Shield,
   Filter,
-  Activity,
   ArrowDownToLine,
   ArrowUpFromLine,
   Stethoscope,
-  Gauge,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -269,7 +267,6 @@ import { formatEntryBridgeNote } from "@shared/ruleEntryBridge";
 
 const ReactGlobe = lazy(loadReactGlobe) as typeof import("react-globe.gl").default;
 // 延迟详情里的曲线图要用 recharts（约 100 kB gzip）；只有点开某条规则的延迟才需要，不跟规则页一起下
-const TcpingDetailDialog = lazy(() => import("@/components/rules/TcpingDetailDialog").then((module) => ({ default: module.TcpingDetailDialog })));
 // 精简布局：延迟记录并进诊断框当一页
 const TcpingDetailBody = lazy(() => import("@/components/rules/TcpingDetailDialog").then((module) => ({ default: module.TcpingDetailBody })));
 
@@ -2531,8 +2528,8 @@ function RulesContent() {
 
   const importCreateMutation = trpc.rules.create.useMutation();
 
-  const [trafficDetailRule, setTrafficDetailRule] = useState<{ id: number; name: string; isForwardChain?: boolean; probeMethod?: "tcping" | "ping" } | null>(null);
-  const [selfTestRule, setSelfTestRule] = useState<{ id: number; name: string; isForwardChain?: boolean; probeMethod?: "tcping" | "ping" } | null>(null);
+  // tab：打开时先停在哪一页（表格里点「详细」直接看延迟记录）
+  const [selfTestRule, setSelfTestRule] = useState<{ id: number; name: string; isForwardChain?: boolean; probeMethod?: "tcping" | "ping"; tab?: string } | null>(null);
 
   const setRouteMode = (mode: RuleRouteMode, aggregate = false) => {
     if (mode === form.routeMode) return;
@@ -6942,8 +6939,7 @@ function RulesContent() {
     原来卡片底部还有一行「诊断 / 编辑 / ···」—— 和右上角的 ··· 是同一组操作画了两遍，
     每张卡为此多 60px，十六条规则要翻九屏。
   */
-  // 精简布局：这几项并进了「诊断」框（延迟记录页签、底部的故障包 / 拓扑按钮），卡片菜单里不再重复。
-  const DIAGNOSE_MERGED_MENU_KEYS = ["latency", "fault-bundle", "topology"];
+  // 延迟记录、导出故障包、查看拓扑都在「诊断」框里（页签和底部按钮），菜单里不再单列。
   // tableCompact：精简的表里操作列只放「开关 · 编辑 · ···」（和老版本表格样稿一致），诊断进 ··· 第一项
   const renderRuleActions = (rule: any, menuOnly = false, tableCompact = false) => {
     const ruleCategory = getRuleCategory(rule, forwardGroupById);
@@ -6967,28 +6963,6 @@ function RulesContent() {
         menu={[
           ...(tableCompact ? [testAction] : []),
           {
-            key: "latency",
-            label: isForwardChainRule ? "链路延迟" : probeMethod === "ping" ? "Ping 延迟" : "TCPing 延迟",
-            ariaLabel: `查看 ${rule.name} 的延迟`,
-            icon: <Activity className="h-3.5 w-3.5" />,
-            onSelect: () => setTrafficDetailRule({ id: rule.id, name: rule.name, isForwardChain: isForwardChainRule, probeMethod }),
-          },
-          {
-            key: "fault-bundle",
-            label: "导出故障包",
-            ariaLabel: `导出 ${rule.name} 的故障包（诊断结论、脱敏配置、沿线主机状态）`,
-            icon: <FileJson className="h-3.5 w-3.5" />,
-            disabled: faultBundle.pending,
-            onSelect: () => { void faultBundle.exportBundle("rule", Number(rule.id)); },
-          },
-          {
-            key: "topology",
-            label: "查看拓扑",
-            ariaLabel: `在网络拓扑里查看 ${rule.name} 的路径`,
-            icon: <Network className="h-3.5 w-3.5" />,
-            onSelect: () => setLocation(`/topology?rule=${Number(rule.id)}`),
-          },
-          {
             key: "reset",
             label: resetting ? "正在重置统计" : "重置统计",
             ariaLabel: `重置 ${rule.name} 的统计数据`,
@@ -6997,8 +6971,7 @@ function RulesContent() {
             onSelect: () => setResetTrafficTarget({ scope: "rule", rule }),
           },
           { key: "delete", label: "删除", ariaLabel: `删除 ${rule.name}`, icon: <Trash2 className="h-3.5 w-3.5" />, destructive: true, onSelect: () => setDeleteRule(rule) },
-        ].filter((action) => !readOnly || (action.key !== "reset" && action.key !== "delete"))
-          .filter((action) => !compactLayout || !DIAGNOSE_MERGED_MENU_KEYS.includes(action.key))}
+        ].filter((action) => !readOnly || (action.key !== "reset" && action.key !== "delete"))}
         menuLabel={`${rule.name} 的更多操作`}
         menuOnly={menuOnly}
       />
@@ -7280,7 +7253,7 @@ function RulesContent() {
                 <button
                   type="button"
                   className="text-[11px] text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-foreground"
-                  onClick={() => setTrafficDetailRule({ id: rule.id, name: rule.name, isForwardChain: isForwardChainRule, probeMethod: ruleLatencyProbeMethodForRule(rule) })}
+                  onClick={() => setSelfTestRule({ id: rule.id, name: rule.name, isForwardChain: isForwardChainRule, probeMethod: ruleLatencyProbeMethodForRule(rule), tab: "history" })}
                 >
                   详细
                 </button>
@@ -8087,21 +8060,6 @@ function RulesContent() {
       </SectionTransition>
       </>} />
 
-      {trafficDetailRule && (
-        <Suspense fallback={null}>
-          <TcpingDetailDialog
-            ruleId={trafficDetailRule.id}
-            ruleName={trafficDetailRule.name}
-            isForwardChain={!!trafficDetailRule.isForwardChain}
-            probeMethod={trafficDetailRule.probeMethod}
-            open={!!trafficDetailRule}
-            onOpenChange={(v) => {
-              if (!v) setTrafficDetailRule(null);
-            }}
-          />
-        </Suspense>
-      )}
-
       {selfTestRule && (
         <SelfTestDialog
           ruleId={selfTestRule.id}
@@ -8112,7 +8070,8 @@ function RulesContent() {
           plannedSegments={selfTestLinkTestNodeData.plannedSegments}
           open={!!selfTestRule}
           onOpenChange={(v) => { if (!v) setSelfTestRule(null); }}
-          extraTabs={compactLayout ? [{
+          initialTab={selfTestRule.tab}
+          extraTabs={[{
             key: "history",
             label: "延迟记录",
             content: (
@@ -8120,8 +8079,8 @@ function RulesContent() {
                 <TcpingDetailBody ruleId={selfTestRule.id} isForwardChain={!!selfTestRule.isForwardChain} probeMethod={selfTestRule.probeMethod} active={!!selfTestRule} />
               </Suspense>
             ),
-          }] : undefined}
-          actions={compactLayout ? (
+          }]}
+          actions={(
             <>
               <Button type="button" variant="outline" size="sm" className="gap-1.5" disabled={faultBundle.pending} onClick={() => { void faultBundle.exportBundle("rule", Number(selfTestRule.id)); }}>
                 <FileJson className="h-3.5 w-3.5" />导出故障包
@@ -8130,7 +8089,7 @@ function RulesContent() {
                 <Network className="h-3.5 w-3.5" />查看拓扑
               </Button>
             </>
-          ) : undefined}
+          )}
         />
       )}
 
@@ -9541,6 +9500,7 @@ function SelfTestDialog({
   onOpenChange,
   extraTabs,
   actions,
+  initialTab,
 }: {
   ruleId: number;
   ruleName: string;
@@ -9550,9 +9510,10 @@ function SelfTestDialog({
   plannedSegments?: LinkTestPlannedSegment[];
   open: boolean;
   onOpenChange: (v: boolean) => void;
-  /** 精简布局并进来的页（延迟记录）和底部动作（故障包、拓扑），见 DiagnoseDialog。 */
+  /** 并进来的页（延迟记录）和底部动作（故障包、拓扑），见 DiagnoseDialog。 */
   extraTabs?: DiagnoseExtraTab[];
   actions?: ReactNode;
+  initialTab?: string;
 }) {
   const utils = trpc.useUtils();
   const [optimisticTesting, setOptimisticTesting] = useState(false);
@@ -9658,6 +9619,7 @@ function SelfTestDialog({
       failureReason={parsedMessage.message}
       checklist={{ kind: "rule", id: ruleId }}
       extraTabs={extraTabs}
+      initialTab={initialTab}
       actions={actions}
       onRun={() => {
         manualTestRef.current = true;

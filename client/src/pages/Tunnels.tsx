@@ -4,7 +4,7 @@ import { readStoredViewMode, writeStoredViewMode } from "@/lib/viewModeStorage";
 import { useFaultBundleExport } from "@/components/links/useFaultBundleExport";
 import { ResourceTrafficLine } from "@/components/links/ResourceTrafficLine";
 import EmptyState from "@/components/EmptyState";
-import TunnelConnStatsDialog, { TunnelConnStatsBody } from "@/components/tunnels/TunnelConnStatsDialog";
+import { TunnelConnStatsBody } from "@/components/tunnels/TunnelConnStatsDialog";
 import AggregateLinkDialog from "@/components/tunnels/AggregateLinkDialog";
 import { isAggregateLinkTunnel } from "@shared/aggregateLink";
 import TunnelParallelStreamsDialog from "@/components/tunnels/TunnelParallelStreamsDialog";
@@ -109,8 +109,6 @@ import { trpc } from "@/lib/trpc";
 import { MAX_FORWARD_GROUP_MEMBERS } from "@shared/forwardGroup";
 import { cn } from "@/lib/utils";
 import {
-  Activity,
-  Gauge,
   Copy,
   ArrowRight,
   ArrowRightLeft,
@@ -1251,7 +1249,7 @@ function TunnelWorldGlobe({
 
 /*
   延迟记录的正文（图、各跳图例、稳定性统计、近 30 天色块），没有对话框外壳：
-  标准布局下套在下面的 TunnelLatencyDialog 里；精简布局下并进「诊断」框当一页（DiagnoseDialog extraTabs）。
+  并进「诊断」框当一页（DiagnoseDialog extraTabs）。
 */
 function TunnelLatencyBody({ tunnelId, active }: { tunnelId: number; active: boolean }) {
   const open = active;
@@ -1477,32 +1475,6 @@ function TunnelLatencyBody({ tunnelId, active }: { tunnelId: number; active: boo
     </div>
   );
 }
-function TunnelLatencyDialog({
-  tunnelId,
-  tunnelName,
-  open,
-  onOpenChange,
-}: {
-  tunnelId: number;
-  tunnelName: string;
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
-}) {
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[96svh] w-[calc(100vw-0.75rem)] max-w-[95vw] flex-col gap-3 overflow-hidden p-3 sm:max-w-3xl sm:p-6">
-        <DialogHeader>
-          <DialogTitle className="pr-8 text-base sm:text-lg">隧道链路延迟 - {tunnelName}</DialogTitle>
-          <DialogDescription className="sr-only">延迟和丢包记录</DialogDescription>
-        </DialogHeader>
-        <TunnelLatencyBody tunnelId={tunnelId} active={open} />
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>关闭</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
 function TunnelSelfTestDialog({
   tunnelId,
   tunnelName,
@@ -1519,7 +1491,7 @@ function TunnelSelfTestDialog({
   entryGroups?: any[];
   open: boolean;
   onOpenChange: (v: boolean) => void;
-  /** 精简布局并进来的页（延迟记录、连接监控）和底部动作（故障包、拓扑），见 DiagnoseDialog。 */
+  /** 并进来的页（延迟记录、连接监控）和底部动作（故障包、拓扑），见 DiagnoseDialog。 */
   extraTabs?: DiagnoseExtraTab[];
   actions?: ReactNode;
 }) {
@@ -2232,7 +2204,6 @@ function TunnelsContent() {
   const [nginxCertDragActive, setNginxCertDragActive] = useState(false);
   const [tunnelProxyPanelOpen, setTunnelProxyPanelOpen] = useState(false);
   const [tunnelAdvancedOpen, setTunnelAdvancedOpen] = useState(false);
-  const [latencyTunnel, setLatencyTunnel] = useState<{ id: number; name: string } | null>(null);
   const [testTunnel, setTestTunnel] = useState<{ id: number; name: string; mode?: string } | null>(null);
   const [preferredViewMode, setViewMode] = useState<TunnelViewMode>(() => getStoredTunnelViewMode());
   const [preferredChainViewMode, setChainViewMode] = useState<TunnelViewMode>(() => getStoredChainViewMode());
@@ -2278,7 +2249,6 @@ function TunnelsContent() {
   const [wizardRelayMode, setWizardRelayMode] = useState<"failover" | "aggregate" | null>(null);
   const [pendingGroupCreate, setPendingGroupCreate] = useState<{ mode: "failover" | "entry" | "exit"; exitStrategy?: ExitGroupStrategy } | null>(null);
   const [deleteTunnel, setDeleteTunnel] = useState<any | null>(null);
-  const [connStatsTunnel, setConnStatsTunnel] = useState<{ id: number; name: string } | null>(null);
   const [parallelStreamsTunnel, setParallelStreamsTunnel] = useState<{ id: number; name: string; parallelStreams?: unknown } | null>(null);
   const setReplicateMutation = trpc.tunnels.setReplicate.useMutation({
     onSuccess: (result) => {
@@ -4150,8 +4120,7 @@ function TunnelsContent() {
     删除永远在菜单最后、红色、隔一条线（顺序由 partitionEntityActions 保证）。
     协议被停用的隧道只剩删除。
   */
-  // 精简布局：这几项并进了「诊断」框（延迟记录、连接监控页签，底部的故障包 / 拓扑按钮），卡片菜单里不再重复。
-  const DIAGNOSE_MERGED_MENU_KEYS = ["latency", "conn-stats", "fault-bundle", "topology"];
+  // 延迟记录、连接监控、导出故障包、查看拓扑都在「诊断」框里（页签和底部按钮），菜单里不再单列。
   const renderTunnelActions = (tunnel: any, supported: boolean, menuOnly = false) => (
     <EntityActions
       menuOnly={menuOnly}
@@ -4166,20 +4135,6 @@ function TunnelsContent() {
         { key: "edit", label: "编辑", ariaLabel: `编辑隧道 ${tunnel.name}`, icon: <Pencil className="h-3.5 w-3.5" />, onSelect: () => openTunnelOrAggregateEdit(tunnel) },
       ] : []}
       menu={[
-        ...(supported ? [{
-          key: "latency",
-          label: "延迟记录",
-          ariaLabel: `查看隧道 ${tunnel.name} 的延迟`,
-          icon: <Activity className="h-3.5 w-3.5" />,
-          onSelect: () => setLatencyTunnel({ id: tunnel.id, name: tunnel.name }),
-        }] : []),
-        ...(supported && user?.role === "admin" && String(tunnel.mode || "").toLowerCase() === "forwardx" ? [{
-          key: "conn-stats",
-          label: "连接监控",
-          ariaLabel: `查看隧道 ${tunnel.name} 每一跳的连接成功率和耗时`,
-          icon: <Gauge className="h-3.5 w-3.5" />,
-          onSelect: () => setConnStatsTunnel({ id: Number(tunnel.id), name: String(tunnel.name || "") }),
-        }] : []),
         ...(supported && String(tunnel.mode || "").toLowerCase() === "forwardx" && String(tunnel.relayMode || "") === "aggregate" ? [{
           key: "replicate",
           label: tunnel.multipathReplicate ? "关闭复制模式" : "开启复制模式",
@@ -4199,23 +4154,8 @@ function TunnelsContent() {
           icon: <ArrowRightLeft className="h-3.5 w-3.5" />,
           onSelect: () => setParallelStreamsTunnel({ id: Number(tunnel.id), name: String(tunnel.name || ""), parallelStreams: tunnel.parallelStreams }),
         }] : []),
-        {
-          key: "fault-bundle",
-          label: "导出故障包",
-          ariaLabel: `导出隧道 ${tunnel.name} 的故障包（诊断结论、脱敏配置、沿线主机状态）`,
-          icon: <FileJson className="h-3.5 w-3.5" />,
-          disabled: faultBundle.pending,
-          onSelect: () => { void faultBundle.exportBundle("tunnel", Number(tunnel.id)); },
-        },
-        {
-          key: "topology",
-          label: "查看拓扑",
-          ariaLabel: `在网络拓扑里查看隧道 ${tunnel.name}`,
-          icon: <Network className="h-3.5 w-3.5" />,
-          onSelect: () => setTopologyLocation(`/topology?tunnel=${Number(tunnel.id)}`),
-        },
         { key: "delete", label: "删除", ariaLabel: `删除隧道 ${tunnel.name}`, icon: <Trash2 className="h-3.5 w-3.5" />, destructive: true, onSelect: () => setDeleteTunnel(tunnel) },
-      ].filter((item) => !compactLayout || !DIAGNOSE_MERGED_MENU_KEYS.includes(item.key))}
+      ]}
       menuLabel={`隧道 ${tunnel.name} 的更多操作`}
     />
   );
@@ -4827,14 +4767,6 @@ function TunnelsContent() {
         </TabsContent>
       </Tabs>
 
-      {latencyTunnel && (
-        <TunnelLatencyDialog
-          tunnelId={latencyTunnel.id}
-          tunnelName={latencyTunnel.name}
-          open={!!latencyTunnel}
-          onOpenChange={(open) => !open && setLatencyTunnel(null)}
-        />
-      )}
       {testTunnel && (
         <TunnelSelfTestDialog
           tunnelId={testTunnel.id}
@@ -4843,13 +4775,13 @@ function TunnelsContent() {
           entryGroups={entryGroups}
           open={!!testTunnel}
           onOpenChange={(open) => !open && setTestTunnel(null)}
-          extraTabs={compactLayout ? [
+          extraTabs={[
             { key: "history", label: "延迟记录", content: <TunnelLatencyBody tunnelId={testTunnel.id} active={!!testTunnel} /> },
             ...(user?.role === "admin" && String(testTunnel.mode || "").toLowerCase() === "forwardx"
               ? [{ key: "conn", label: "连接监控", content: <TunnelConnStatsBody tunnel={{ id: testTunnel.id, name: testTunnel.name }} /> }]
               : []),
-          ] : undefined}
-          actions={compactLayout ? (
+          ]}
+          actions={(
             <>
               <Button type="button" variant="outline" size="sm" className="gap-1.5" disabled={faultBundle.pending} onClick={() => { void faultBundle.exportBundle("tunnel", Number(testTunnel.id)); }}>
                 <FileJson className="h-3.5 w-3.5" />导出故障包
@@ -4858,11 +4790,10 @@ function TunnelsContent() {
                 <Network className="h-3.5 w-3.5" />查看拓扑
               </Button>
             </>
-          ) : undefined}
+          )}
         />
       )}
 
-      <TunnelConnStatsDialog tunnel={connStatsTunnel} onClose={() => setConnStatsTunnel(null)} />
       <AggregateLinkDialog
         open={aggregateDialog.open}
         tunnel={aggregateDialog.tunnel}
