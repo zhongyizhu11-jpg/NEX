@@ -47,11 +47,20 @@ test("连不上 GitHub 时先探测一次，之后下载都走面板、GitHub �
   assert.match(script, /curl -sS -o \/dev\/null --connect-timeout 5 --max-time 8 "\$PROBE"/);
   const detect = shellFunction(script, "detect_github_access");
   assert.match(detect, /FORWARDX_AGENT_PANEL_FIRST=true/);
-  for (const name of ["download_github_binary", "install_runtime_from_github", "install_realm"]) {
+  for (const name of ["download_github_binary", "install_runtime_from_github"]) {
     assert.match(shellFunction(script, name), /if ! github_reachable; then/, name);
   }
   assert.match(shellFunction(script, "do_install"), /install_deps\n\s*detect_github_access/);
   assert.match(shellFunction(script, "do_upgrade"), /detect_github_access\n[^\n]*\n\s*if upgrade_agent_and_fxp_binaries; then/);
+});
+
+test("realm 先从 GitHub 装，装不上（或连不上 GitHub）才从面板下", () => {
+  const realm = shellFunction(generateInstallScript("https://panel.example.com"), "install_realm");
+  const github = realm.indexOf('try_realm_asset "$REALM_RAW_URL" "default"');
+  const panel = realm.indexOf('install_realm_from_url "$REALM_PANEL_URL"');
+  assert.ok(github > 0 && panel > github, "面板那次要排在 GitHub 后面");
+  assert.match(realm, /if github_reachable; then\n\s*REALM_RAW_URL=/);
+  assert.match(realm, /REALM_PANEL_URL="\$\{PANEL_URL%\/\}\/api\/agent\/realm-assets\/\$REALM_VERSION\/realm-\$REALM_ARCH\.tar\.gz"/);
 });
 
 test("依赖都在就不跑包管理器（重装、升级不再 apt-get update）", () => {

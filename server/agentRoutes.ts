@@ -11,6 +11,7 @@ import { agentEncryptionMiddleware, getAgentTunneledPath } from "./agentEncrypti
 import { AGENT_PANEL_MIGRATION_VERSION, hasAgentVersionChanged, isAgentUpgradeCompleted, isAgentVersionAtLeast, normalizeReportedFxpVersion } from "./agentRouteUtils";
 import { resolvePanelUrl } from "./agentPanelUrl";
 import { registerMimicAssetRoutes } from "./mimicAssets";
+import { registerRealmAssetRoutes } from "./realmAssets";
 import { decryptPayload, encryptPayload, isEncryptedEnvelope } from "./agentCrypto";
 import { assertCanAddSelfServiceHost } from "./selfServiceHostLimit";
 import {
@@ -536,6 +537,8 @@ agentRouter.get("/api/agent/install.sh", async (req: Request, res: Response) => 
 
 // GET /api/agent/mimic-assets/v<版本>/<包名>、/api/agent/mimic-install.sh：面板替连不上 GitHub 的主机转发 mimic 包
 registerMimicAssetRoutes(agentRouter);
+// GET /api/agent/realm-assets/v<版本>/<包名>：主机从 GitHub 装不上 realm 时从这里下
+registerRealmAssetRoutes(agentRouter);
 
 agentRouter.get("/api/agent/assets/:version/:asset", async (req: Request, res: Response) => {
   const version = String(req.params.version || "").trim().replace(/^v/i, "");
