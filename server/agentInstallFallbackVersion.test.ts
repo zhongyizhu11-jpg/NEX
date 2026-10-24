@@ -17,13 +17,17 @@ import { APP_VERSION } from "@shared/versions";
  * 抠出来在 bash 里跑，curl 用桩替掉 —— 只比字符串等于没有意义，这段逻辑的价值全在
  * 「查得到用查到的、查不到退回猜的、用户指定过谁都别覆盖」这三条分支上。
  */
-function runResolver(options: { curlOutput: string; curlExit?: number; preset?: string }) {
+function runResolver(options: { curlOutput: string; curlExit?: number; preset?: string; githubReachable?: boolean }) {
   const script = generateInstallScript("https://panel.example.com");
   const start = script.indexOf("resolve_fallback_release_version() {");
   const end = script.indexOf("\ndownload_release_binary() {", start);
   assert.notEqual(start, -1, "脚本里应该有 resolve_fallback_release_version");
   assert.notEqual(end, -1);
   const fn = script.slice(start, end);
+
+  const probeStart = script.indexOf("github_reachable() {");
+  const probe = script.slice(probeStart, script.indexOf("\n}\n", probeStart) + 2);
+  assert.notEqual(probeStart, -1, "脚本里应该有 github_reachable");
 
   const hintMatch = script.match(/FALLBACK_RELEASE_VERSION_HINT="([^"]*)"/);
   assert.ok(hintMatch, "脚本里应该保留一个猜测值作为最后兜底");
@@ -33,7 +37,10 @@ function runResolver(options: { curlOutput: string; curlExit?: number; preset?: 
     `FALLBACK_RELEASE_VERSION="${options.preset ?? ""}"`,
     `FALLBACK_RELEASE_VERSION_HINT="${hintMatch[1]}"`,
     "FALLBACK_RELEASE_RESOLVED=0",
+    `GITHUB_REACHABLE="${options.githubReachable === false ? 0 : 1}"`,
+    probe,
     "curl() {",
+    '  echo "CURL_CALLED" >&2',
     `  cat <<'CURL_STUB_EOF'`,
     options.curlOutput,
     "CURL_STUB_EOF",
@@ -52,7 +59,7 @@ function runResolver(options: { curlOutput: string; curlExit?: number; preset?: 
   const resolved = /RESOLVED=(.*)/.exec(result.stdout)?.[1] ?? "";
   const again = /AGAIN=(.*)/.exec(result.stdout)?.[1] ?? "";
   assert.equal(resolved, again, "重复调用不该改变结果");
-  return { resolved, hint: hintMatch[1] };
+  return { resolved, hint: hintMatch[1], curlCalled: result.stderr.includes("CURL_CALLED") };
 }
 
 test("查得到就用真正发布过的那一版，而不是补丁号减一", () => {
@@ -61,6 +68,12 @@ test("查得到就用真正发布过的那一版，而不是补丁号减一", ()
   });
   assert.equal(resolved, "2.3.340");
   assert.notEqual(resolved, hint, "整个改动就是为了不再用那个猜出来的版本号");
+});
+
+test("连不上 GitHub 时不去查，直接用猜测值", () => {
+  const { resolved, hint, curlCalled } = runResolver({ curlOutput: '{"tag_name":"v2.3.340"}', githubReachable: false });
+  assert.equal(resolved, hint);
+  assert.equal(curlCalled, false);
 });
 
 test("tag 没有 v 前缀也认", () => {

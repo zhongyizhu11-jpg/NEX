@@ -11,7 +11,6 @@ set -u
 CONFIG=/etc/forwardx/agent/config.json
 BIN=/usr/local/bin/forwardx-agent
 export FORWARDX_AGENT_CONTAINER=1
-export FORWARDX_INSTALL_MIMIC="${FORWARDX_INSTALL_MIMIC:-n}"
 
 panel_url="${PANEL_URL:-}"
 if [ -z "$panel_url" ] && [ -f "$CONFIG" ]; then
