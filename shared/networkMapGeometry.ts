@@ -194,11 +194,6 @@ export function boxOverlapArea(a: PixelBox, b: PixelBox): number {
   return w > 0 && h > 0 ? w * h : 0;
 }
 
-/** 盒子露在区域外面的面积 */
-export function boxOutsideArea(box: PixelBox, area: PixelBox): number {
-  return box.w * box.h - boxOverlapArea(box, area);
-}
-
 export function unionBox(boxes: readonly PixelBox[]): PixelBox | null {
   if (boxes.length === 0) return null;
   let minX = Infinity;

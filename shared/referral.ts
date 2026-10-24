@@ -152,20 +152,6 @@ export type ReferralSkipReason =
   | "first_only"
   | "before_binding"
   | "zero_commission";
-
-export const REFERRAL_SKIP_REASON_LABELS: Record<ReferralSkipReason, string> = {
-  disabled: "邀请返利未开启",
-  no_inviter: "没有邀请人",
-  self: "邀请人是自己",
-  inviter_inactive: "邀请人已停用或已删除",
-  rate_zero: "该套餐不返利",
-  free: "免费订单",
-  non_cny: "非人民币订单",
-  first_only: "仅首单返利，之前已经付过套餐单",
-  before_binding: "下单时还没绑定这个邀请人",
-  zero_commission: "返利金额不足一分",
-};
-
 export type ReferralCommissionInput = {
   enabled: boolean;
   mode: ReferralMode;

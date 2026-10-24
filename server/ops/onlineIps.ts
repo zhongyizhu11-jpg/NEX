@@ -398,14 +398,3 @@ export async function ingestOnlineReport(host: AgentExtHost, raw: unknown) {
   void enqueueWrite(() => persistSightings(rows, nowMs));
   void checkIpLimits(nowMs).catch(() => undefined);
 }
-
-/** 测试 / 删主机时用。 */
-export function resetOnlineIpsStateForTests() {
-  onlineSnapshots.clear();
-  ownerCache.clear();
-  userCache.clear();
-  sightingState.clear();
-  ipLimitEventAt.clear();
-  hostAddrCache = null;
-  watchUntil = 0;
-}

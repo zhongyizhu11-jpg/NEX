@@ -128,12 +128,6 @@ export async function listProxySubDevicesByToken(tokenId: number) {
   return db.select().from(proxySubDevices).where(eq(proxySubDevices.tokenId, Number(tokenId))).orderBy(desc(proxySubDevices.lastSeenAt));
 }
 
-export async function listProxySubDevicesByUser(userId: number) {
-  const db = await getDb();
-  if (!db) return [];
-  return db.select().from(proxySubDevices).where(eq(proxySubDevices.userId, Number(userId))).orderBy(desc(proxySubDevices.lastSeenAt));
-}
-
 export async function countProxySubDevices(tokenId: number) {
   const db = await getDb();
   if (!db) return 0;

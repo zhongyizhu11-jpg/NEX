@@ -32,5 +32,3 @@ export const LINK_SPREAD_LABELS = {
   ip_hash: { label: "按访客固定", hint: "同一个来源 IP 总走同一个，适合要保持登录的服务" },
   weighted: { label: "按权重", hint: "新连接按权重分，带宽大的多分一些" },
 } as const;
-
-export type LinkSpread = keyof typeof LINK_SPREAD_LABELS;

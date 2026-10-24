@@ -268,7 +268,3 @@ export async function runProxySubSourceSync(now = Date.now()): Promise<number> {
   await Promise.all([worker(), worker(), worker()]);
   return done;
 }
-
-export function proxySubSourceSyncRunningForTests() {
-  return running;
-}

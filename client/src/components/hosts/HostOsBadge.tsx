@@ -3,7 +3,6 @@ import { Server } from "lucide-react";
 
 import { describeNetworkHealth, type NetworkHealth } from "@shared/networkHealth";
 import { parseHostOs, type HostOsIdentity } from "@shared/hostOs";
-import { EntityTag } from "@/components/entity/EntityCard";
 import { cn } from "@/lib/utils";
 import { OS_LOGOS } from "./osLogos";
 
@@ -95,37 +94,6 @@ export function HostOsAvatar({
           )}
           style={{ backgroundColor: `var(--fx-${descriptor.token})` }}
         />
-      ) : null}
-    </span>
-  );
-}
-
-/**
- * 名字下面那一行标识：「Debian 12」「Agent v2.2.196」。
- * 两样都没上报就整行不画（新加、还没连上的主机）。
- */
-export function HostIdentityTags({
-  os,
-  agentVersion,
-  className,
-}: {
-  os: HostOsIdentity;
-  agentVersion?: unknown;
-  className?: string;
-}) {
-  const version = String(agentVersion ?? "").trim();
-  if (!os.label && !version) return null;
-  return (
-    <span className={cn("flex min-w-0 flex-wrap items-center gap-1.5", className)}>
-      {os.label ? (
-        <EntityTag className="max-w-full font-medium text-foreground">
-          <span className="truncate" title={os.full}>{os.label}</span>
-        </EntityTag>
-      ) : null}
-      {version ? (
-        <EntityTag className="text-muted-foreground">
-          <span className="truncate">Agent v{version.replace(/^v/i, "")}</span>
-        </EntityTag>
       ) : null}
     </span>
   );

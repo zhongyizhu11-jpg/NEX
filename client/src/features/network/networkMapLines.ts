@@ -17,9 +17,6 @@ import type { NetworkMapModel } from "./networkMapModel";
  * 纯函数，在 node 里测。
  */
 export type LineKind = "main" | "backup" | "degraded" | "down";
-
-export const LINE_KINDS: LineKind[] = ["main", "backup", "degraded", "down"];
-
 /** 图例上的名字 */
 export const LINE_KIND_SHORT: Record<LineKind, string> = {
   main: "主线路",

@@ -23,7 +23,6 @@ import { pickAvailablePort, portPolicyFrom } from "../shared/portPolicy";
 import {
   isTlsInboundAgentSupported,
   normalizeSniAllowlist,
-  normalizeSniName,
   normalizeSniNameList,
   normalizeTlsInboundHandshakeTimeout,
   normalizeTlsInboundMaxHandshakes,
@@ -41,10 +40,6 @@ import type { TlsInboundRow } from "./repositories/tlsInboundRepository";
 /** node:url 的 IDNA。失败时回空串，上层报「域名格式无效」。 */
 export function sniToAscii(value: string) {
   return domainToASCII(value);
-}
-
-export function normalizeServerSniName(raw: unknown) {
-  return normalizeSniName(raw, sniToAscii);
 }
 
 export function normalizeServerSniNameList(raw: unknown) {

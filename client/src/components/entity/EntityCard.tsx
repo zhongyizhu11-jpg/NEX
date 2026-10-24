@@ -155,20 +155,6 @@ export function EntityBody({
 }
 
 /**
- * 卡内分隔线。
- *
- * 替代「再套一个卡片」。左右拉满到卡片边缘（负边距），因为一条缩进的线看起来
- * 像装饰，拉满的线才像「这里分成了两段」。
- */
-export function EntityDivider({ className }: { className?: string }) {
-  return (
-    <div
-      className={cn("mx-[var(--fx-card-padding)] h-px shrink-0 bg-[var(--fx-stroke-weak)]", className)}
-    />
-  );
-}
-
-/**
  * 卡脚：操作区。
  *
  * 一级操作最多 2 个，其余收进 ActionMenu —— 规则写在 EntityActions 里。
@@ -183,27 +169,6 @@ export function EntityDivider({ className }: { className?: string }) {
 export function CardActions({ className, children }: { className?: string; children: ReactNode }) {
   return (
     <div className={cn("fx-card-actions mt-auto flex min-w-0 items-center justify-end border-t border-[var(--fx-stroke-weak)] pt-1", className)}>
-      {children}
-    </div>
-  );
-}
-
-export function EntityFooter({
-  className,
-  children,
-  ...rest
-}: {
-  className?: string;
-  children: ReactNode;
-} & Omit<React.HTMLAttributes<HTMLDivElement>, "children">) {
-  return (
-    <div
-      className={cn(
-        "fx-entity-footer mt-auto flex min-w-0 items-center justify-end gap-2 border-t border-[var(--fx-stroke-weak)] px-[var(--fx-space-2)] py-[var(--fx-space-1)]",
-        className,
-      )}
-      {...rest}
-    >
       {children}
     </div>
   );

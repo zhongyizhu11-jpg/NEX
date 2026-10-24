@@ -49,10 +49,6 @@ export function registerAgentExtModule(module: AgentExtModule) {
   modules.set(name, { ...module, name });
 }
 
-export function listAgentExtModules(): AgentExtModule[] {
-  return Array.from(modules.values());
-}
-
 export function hostSupportsAgentExt(host: { agentVersion?: string | null } | null | undefined) {
   return !!host && isAgentVersionAtLeast(String(host.agentVersion || ""), AGENT_EXT_MIN_VERSION);
 }

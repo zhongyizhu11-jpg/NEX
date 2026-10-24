@@ -6,7 +6,6 @@ import {
   formatProxyNodeQuotaDetail,
   formatProxyNodeQuotaLabeled,
   formatProxyNodeQuotaUsedFirst,
-  hasProxyNodeQuota,
   formatQuotaBytes,
   normalizeProxyNodeResetDay,
   proxyNodeQuotaPercent,

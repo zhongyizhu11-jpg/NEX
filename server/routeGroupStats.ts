@@ -1,5 +1,5 @@
 import { normalizeAgentText } from "./agentInputValidation";
-import { routePathLabel, type RoutePath } from "../shared/routeGroup";
+import { type RoutePath } from "../shared/routeGroup";
 
 /*
   线路组的「现在怎么样」：两路数据，都只留在内存里。
@@ -257,20 +257,6 @@ export function getRouteStatus(ruleId: number, nowMs = Date.now()) {
     staleAgent: agent && nowMs - agent.reportedAt > ROUTE_STATS_STALE_MS ? agent : null,
     hops,
   };
-}
-
-/** 一条路径的评分和文案要用到的那几样，给列表徽标用（不必把整份快照发给前端）。 */
-export function routeTargetStatFor(ruleId: number, index: number, nowMs = Date.now()) {
-  const status = getRouteStatus(ruleId, nowMs);
-  const stats = status.agent;
-  if (!stats) return null;
-  return stats.targets.find((target) => target.index === index) || null;
-}
-
-export function describeRouteHopProbe(probe: RouteHopProbe, paths: readonly RoutePath[]) {
-  const index = paths.findIndex((path) => path.key === probe.pathKey);
-  const label = index >= 0 ? routePathLabel(paths[index], index) : probe.pathKey;
-  return `${label} 第 ${probe.hopIndex + 1} 跳 ${probe.hostName} → ${probe.nextLabel}`;
 }
 
 export function forgetRouteStats(ruleId: number) {

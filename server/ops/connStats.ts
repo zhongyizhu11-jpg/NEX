@@ -279,8 +279,3 @@ export async function getTunnelConnStats(tunnelId: number, hours: number, nowMs 
   }));
   return { tunnelId, hours, since, groups, legs, legRecentSeconds: recentSeconds, hourly };
 }
-
-/** 测试用。 */
-export function resetConnStatsPruneClock() {
-  lastPruneAt = 0;
-}

@@ -83,14 +83,3 @@ export async function getDiscordAdminRecipients(): Promise<DiscordRecipient[]> {
     .where(and(eq(users.accountEnabled, true), eq(users.role, "admin"), sql`${users.discordId} IS NOT NULL`));
   return rows as DiscordRecipient[];
 }
-
-/** 绑定了 Discord、没停用的所有用户（提醒用）。 */
-export async function getDiscordLinkedUsers(): Promise<DiscordRecipient[]> {
-  const db = await getDb();
-  if (!db) return [];
-  const rows = await db
-    .select(recipientColumns)
-    .from(users)
-    .where(and(eq(users.accountEnabled, true), sql`${users.discordId} IS NOT NULL`));
-  return rows as DiscordRecipient[];
-}

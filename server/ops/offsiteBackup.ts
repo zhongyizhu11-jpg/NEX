@@ -27,14 +27,6 @@ import { basicAuthHeader, parseWebdavPropfind, WEBDAV_PROPFIND_BODY, webdavFileU
 
 export const OFFSITE_BACKUP_DESTINATIONS = ["off", "webdav", "s3", "telegram"] as const;
 export type OffsiteBackupDestination = (typeof OFFSITE_BACKUP_DESTINATIONS)[number];
-
-export const OFFSITE_BACKUP_DESTINATION_LABELS: Record<OffsiteBackupDestination, string> = {
-  off: "关闭",
-  webdav: "WebDAV",
-  s3: "S3",
-  telegram: "Telegram",
-};
-
 const PREFIX = "ops.backup.";
 const K = {
   destination: `${PREFIX}destination`,

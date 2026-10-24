@@ -85,8 +85,3 @@ export function cometPeriodMs(screenLengthPx: number): number {
   const raw = (screenLengthPx / COMET_SPEED_PX_PER_S) * 1000;
   return Math.max(COMET_MIN_PERIOD_MS, Math.min(COMET_MAX_PERIOD_MS, Number.isFinite(raw) ? raw : COMET_MIN_PERIOD_MS));
 }
-
-/** 墨卡托单位 ↔ 屏幕像素 */
-export function mercatorUnitsPerPixel(zoom: number): number {
-  return 1 / (512 * 2 ** zoom);
-}

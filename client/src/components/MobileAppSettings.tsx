@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Bell, Smartphone } from "lucide-react";
 import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { FormField } from "@/components/ui/form-field";
 import { Input } from "@/components/ui/input";

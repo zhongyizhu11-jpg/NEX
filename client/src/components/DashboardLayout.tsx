@@ -36,7 +36,6 @@ import {
   Settings,
   Shield,
   Network,
-  KeyRound,
   UserRound,
   Rocket,
   Route,
@@ -60,7 +59,6 @@ import {
   Download,
   RefreshCw,
   ExternalLink,
-  Image,
   Globe2,
   BellOff,
   Puzzle,
@@ -925,13 +923,6 @@ function DashboardLayoutContent({
     },
     onError: (error) => toast.error(error.message || "头像更新失败"),
   });
-
-  const openAvatarDialog = () => {
-    setAvatarDraft(String((user as any)?.avatar || ""));
-    setShowAvatarDialog(true);
-    setAccountMenuOpen(false);
-  };
-
   const handleSaveAvatar = () => {
     if (!avatarDraft) {
       toast.error("请选择头像");
@@ -990,20 +981,6 @@ function DashboardLayoutContent({
     if (copied) toast.success("已复制到剪贴板");
     else toast.error("复制失败，请长按或手动选中复制");
   };
-
-  const openTelegramDialog = () => {
-    if (telegramStatus?.bound) {
-      setShowTelegramDialog(true);
-      return;
-    }
-    if (telegramStatus?.configured === false) {
-      setTelegramBind(null);
-      setShowTelegramDialog(true);
-      return;
-    }
-    createTelegramBindMutation.mutate();
-  };
-
   const { data: twoFactorStatus } = trpc.auth.twoFactorStatus.useQuery(undefined, {
     meta: { silentFailure: true },
     staleTime: SHELL_META_STALE_MS,
@@ -1098,17 +1075,6 @@ function DashboardLayoutContent({
   const telegramBindRemaining = telegramBindExpiresAt ? Math.max(0, Math.ceil((telegramBindExpiresAt - telegramBindTick) / 1000)) : 0;
   const telegramBindExpired = !!telegramBind && telegramBindRemaining <= 0;
   const telegramBindRemainingLabel = `${Math.floor(telegramBindRemaining / 60)}:${String(telegramBindRemaining % 60).padStart(2, "0")}`;
-
-  const openTwoFactorDialog = () => {
-    setShowTwoFactorDialog(true);
-    setTwoFactorPassword("");
-    setTwoFactorCode("");
-    setTwoFactorQrCode("");
-    if (!twoFactorStatus?.enabled && twoFactorStatus?.globalEnabled) {
-      beginTwoFactorSetupMutation.mutate();
-    }
-  };
-
   const handleEnableTwoFactor = () => {
     if (!twoFactorSetup) {
       beginTwoFactorSetupMutation.mutate();

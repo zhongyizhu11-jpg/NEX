@@ -1,5 +1,5 @@
 import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
-import { InsertUser, users, forwardRules, forwardGroups, hosts, tunnels, trafficBillingUsage, userSubscriptions } from "../../drizzle/schema";
+import { users, forwardRules, forwardGroups, hosts, tunnels, trafficBillingUsage, userSubscriptions } from "../../drizzle/schema";
 import { executeRaw, getDatabaseKind, getDb, insertAndGetId, nowDate, queryRaw, quoteDbIdentifier, rawAffectedRows, withDatabaseTransaction } from "../dbRuntime";
 import { invalidateProxySubCacheForUser } from "../proxySubCache";
 import { createUnusablePasswordHash, hashPassword, verifyPassword, verifyPasswordAgainstDummy } from "../password";

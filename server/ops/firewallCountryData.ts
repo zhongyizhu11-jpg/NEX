@@ -156,10 +156,6 @@ export function onCountryDataChanged(listener: () => void) {
   return () => generationListeners.delete(listener);
 }
 
-export function countryDataGeneration() {
-  return dataGeneration;
-}
-
 function bumpGeneration() {
   dataGeneration += 1;
   for (const listener of generationListeners) {
@@ -308,11 +304,6 @@ export async function countryDataStatus(countries: string[]): Promise<CountryDat
   });
 }
 
-/** 这些国家是不是都下载过了（0 条也算下载过）。 */
-export function countryDataReady(data: Map<string, CountryDataRow>, countries: string[]) {
-  return countries.every((code) => !!data.get(code)?.fetchedAt);
-}
-
 // ── 合并后的国家段（给 Agent） ────────────────────────────
 
 export type CombinedGeo = { hash: string; v4: string[]; v6: string[]; ready: boolean; missing: string[] };
@@ -374,12 +365,4 @@ export async function lookupCachedCountry(ip: string): Promise<string | null> {
     if (matcher?.contains(ip)) return code;
   }
   return null;
-}
-
-export function resetCountryDataMemoForTests() {
-  memo.clear();
-  combinedMemo.clear();
-  matcherMemo.clear();
-  inflight.clear();
-  lastStaleSweep = 0;
 }

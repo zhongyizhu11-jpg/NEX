@@ -7,7 +7,6 @@
  */
 
 import {
-  PROXY_SUBSCRIPTION_FORMAT_LABELS,
   proxySubscriptionFormatHasProfile,
   type ProxySubscriptionFormat,
 } from "./proxySubscription";
@@ -374,32 +373,6 @@ export function buildProxySubscriptionUrl(options: {
   if (options.kind === "rules") params.set("rules", "1");
   const query = params.toString();
   return `${options.origin.replace(/\/+$/, "")}/api/sub/${options.token}${query ? `?${query}` : ""}`;
-}
-
-/**
- * 同一条订阅的全部地址：主地址加上管理员配的备用域名。
- *
- * 一键导入面板上每个客户端都列出来，主域名被墙时用户换一条就行，不用回面板重新签发。
- */
-export function buildProxySubscriptionUrls(options: {
-  origins: readonly string[];
-  token: string;
-  format: ProxySubscriptionFormat;
-  kind: ProxySubscriptionKind;
-  pinFormat?: boolean;
-  /** 短链别名：有就用 /s/<alias> 代替 /api/sub/<token>。 */
-  alias?: string;
-}): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const origin of options.origins) {
-    const clean = String(origin || "").replace(/\/+$/, "");
-    if (!clean || seen.has(clean)) continue;
-    seen.add(clean);
-    const url = buildProxySubscriptionUrl({ origin: clean, token: options.token, format: options.format, kind: options.kind, pinFormat: options.pinFormat });
-    out.push(options.alias ? url.replace(`/api/sub/${options.token}`, `/s/${options.alias}`) : url);
-  }
-  return out;
 }
 
 /** 该格式是否真的能表达分流规则；不能的话没必要展示规则订阅地址。 */

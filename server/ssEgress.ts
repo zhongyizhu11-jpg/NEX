@@ -10,7 +10,7 @@
  *   - 落地入站被删 / 改时的保护：正在被当作出口的入站不能删、不能改成别的协议或不支持的方法。
  */
 
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 import { forwardRules } from "../drizzle/schema";
 import { getHostEntryAddress } from "../shared/hostEntryAddress";
@@ -148,12 +148,6 @@ export type RuleEgressInput = {
 export function hasEgressInput(input: RuleEgressInput | null | undefined) {
   return !!input && (input.egressType !== undefined || input.egressInboundId !== undefined
     || input.egressLink !== undefined || input.egressUdp !== undefined);
-}
-
-/** 从 tRPC 入参里拿出出口那几项，剩下的原样交给原来的规则流程（它会把入参直接展开进 createForwardRule）。 */
-export function splitEgressInput<T extends Record<string, any>>(input: T): { egress: RuleEgressInput; rest: Omit<T, keyof RuleEgressInput> } {
-  const { egressType, egressInboundId, egressLink, egressUdp, ...rest } = input as any;
-  return { egress: { egressType, egressInboundId, egressLink, egressUdp }, rest };
 }
 
 type Actor = { id: number; role: string };
@@ -803,15 +797,4 @@ export async function withRuleEgressDisplay<T>(value: T): Promise<T> {
   if (Array.isArray(value)) return value.map(decorate) as T;
   if (value && Array.isArray((value as any).items)) return { ...value, items: (value as any).items.map(decorate) } as T;
   return (value ? decorate(value) : value) as T;
-}
-
-/** 测试与心跳共用：哪些规则 id 用了这个入站（含子规则）。 */
-export async function getRuleIdsUsingEgressInbounds(inboundIds: readonly number[]) {
-  const ids = Array.from(new Set(inboundIds.map(Number).filter((id) => id > 0)));
-  if (ids.length === 0) return [] as number[];
-  const database = await getDb();
-  if (!database) return [];
-  const rows = await database.select({ id: forwardRules.id }).from(forwardRules)
-    .where(and(eq(forwardRules.egressType, "ss_host"), inArray(forwardRules.egressInboundId, ids)));
-  return (rows as any[]).map((row) => Number(row.id));
 }

@@ -392,12 +392,6 @@ export function resourceSuffix(ctx: IpChangeContext): string {
   return `${stamp}-${randomBytes(2).toString("hex")}`;
 }
 
-export function asArray<T = any>(value: unknown): T[] {
-  if (Array.isArray(value)) return value as T[];
-  if (value === null || value === undefined) return [];
-  return [value as T];
-}
-
 export function formEncode(params: Record<string, string>, encode: (value: string) => string): string {
   return Object.entries(params)
     .map(([key, value]) => `${encode(key)}=${encode(value)}`)

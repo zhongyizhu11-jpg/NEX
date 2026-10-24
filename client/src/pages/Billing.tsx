@@ -10,7 +10,6 @@ import { formatMoneyCents as money } from "@shared/formatMoney";
 import DashboardLayout from "@/components/DashboardLayout";
 import EmptyState from "@/components/EmptyState";
 import { PersistentPagination, usePersistentPageRequest, useServerPagination } from "@/components/PersistentPagination";
-import AnimatedStatValue from "@/components/AnimatedStatValue";
 import DataSectionLoading from "@/components/DataSectionLoading";
 import DatePickerInput, { parseDateInputValue } from "@/components/DatePickerInput";
 import { Badge } from "@/components/ui/badge";
@@ -20,7 +19,7 @@ import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { OptimisticSwitch, Switch } from "@/components/ui/switch";
+import { OptimisticSwitch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { SlidingTabsList, type SlidingTabItem } from "@/components/ui/sliding-tabs";
@@ -28,7 +27,7 @@ import { useUrlTab } from "@/hooks/useUrlTab";
 import AdminReferralPanel from "@/components/referral/AdminReferralPanel";
 import { trpc } from "@/lib/trpc";
 import { CreditCard, Download, Eye, EyeOff, Gift, Package, ReceiptText, Shuffle, TicketPercent, Trash2, WalletCards } from "lucide-react";
-import { useEffect, useMemo, useState, type ElementType, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ElementType } from "react";
 import { toast } from "sonner";
 
 const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -149,7 +148,7 @@ export default function Billing() {
     refetchOnWindowFocus: false,
     placeholderData: (previousData) => previousData,
   });
-  const { data: users = [], isLoading: usersLoading } = trpc.users.options.useQuery(undefined, {
+  const { data: users = [] } = trpc.users.options.useQuery(undefined, {
     enabled: activeTab === "ledger",
     staleTime: 30_000,
     refetchOnWindowFocus: false,

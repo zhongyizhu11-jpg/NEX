@@ -77,10 +77,6 @@ export function intersectIntervals(a: readonly Interval[], b: readonly Interval[
   return out;
 }
 
-export function intervalsTotal(intervals: readonly Interval[]): number {
-  return intervals.reduce((sum, [a, b]) => sum + Math.max(0, b - a), 0);
-}
-
 /** 区间落在 [from, to) 里的秒数。 */
 export function overlapSeconds(interval: Interval, from: number, to: number): number {
   return Math.max(0, Math.min(interval[1], to) - Math.max(interval[0], from));

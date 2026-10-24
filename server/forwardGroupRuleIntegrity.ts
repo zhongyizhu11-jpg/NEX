@@ -10,7 +10,7 @@ import {
   withDatabaseTransaction,
 } from "./dbRuntime";
 import { recordConfigAuditEvent } from "./configAudit";
-import { trafficBillingUserLockKey, withKeyedTaskLock, withTrafficBillingUserLock } from "./keyedTaskLock";
+import { withKeyedTaskLock, withTrafficBillingUserLock } from "./keyedTaskLock";
 import {
   getForwardRuleById,
   markOrphanedForwardGroupTemplatesPendingDelete,

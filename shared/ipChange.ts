@@ -162,11 +162,6 @@ export function parseIpChangeCheckTargets(text: unknown, method: IpChangeCheckMe
   return { targets: targets.slice(0, IP_CHANGE_LIMITS.maxTargets), errors };
 }
 
-export function formatIpChangeCheckTarget(target: IpChangeCheckTarget, method: IpChangeCheckMethod) {
-  if (method === "ping" || !target.port) return target.host;
-  return target.host.includes(":") ? `[${target.host}]:${target.port}` : `${target.host}:${target.port}`;
-}
-
 function clampInt(value: unknown, fallback: number, range: { min: number; max: number }) {
   const n = Math.floor(Number(value));
   if (!Number.isFinite(n)) return fallback;

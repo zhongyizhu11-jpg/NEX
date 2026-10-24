@@ -60,7 +60,7 @@ import { hasQueuedIperf3AgentTasks, takeIperf3AgentTasks } from "./iperf3AgentTa
 import { hasQueuedPluginAgentTasks, takePluginAgentTasks } from "./pluginAgentTasks";
 import { hasPendingMimicInstallTask, hasQueuedMimicInstallTask, takeMimicInstallTask } from "./mimicInstallTasks";
 import { getAgentPluginInventory, updateAgentPluginInventory } from "./agentPluginInventory";
-import { getAgentHostFromRequest, getAgentHostIdentityFromRequest, getAgentPresenceHostFromRequest, getResolvedAgentToken } from "./agentAuth";
+import { getAgentHostFromRequest, getAgentHostIdentityFromRequest, getAgentPresenceHostFromRequest } from "./agentAuth";
 import { liveMetricsIntervalFor, liveSampleFromCompactMetrics, recordHostLiveSample } from "./hostLiveMetrics";
 import { normalizeAgentText, normalizeNetworkInterface } from "./agentInputValidation";
 import { pruneMapEntries, setBoundedMapValue } from "./boundedCache";
@@ -86,12 +86,10 @@ import {
   buildKernelForwardTransitionCleanupCmds,
   buildEntryBridgeConntrackFlushCmds,
   buildIptablesForwardCleanupCmds,
-  buildIptablesForwardCmds,
   buildIptablesTransitionCleanupCmds,
   buildManagedPortCleanupCmds,
   buildNftCleanupCmds,
   buildKernelForwardCmds,
-  buildNftForwardCmds,
   buildNftTransitionCleanupCmds,
   IPTABLES_WAIT_ARG,
   iptablesEnsureShell,
@@ -121,7 +119,6 @@ import {
   realmConfigPathForPort,
   realmServiceNameForPort,
   realmTomlString,
-  serviceProtocolSuffix,
   SOCAT_TRANSFER_BUFFER_FLAG,
   socatDialAddress,
   socatSocketOptions,
@@ -129,7 +126,6 @@ import {
 } from "./forwardRuntimeConfigs";
 import { handleHostAddressChanged, hostIngressAddress, refreshAgentsAffectedByHostAddress } from "./hostAddressRuntime";
 import { isHostStatusOnline, notifyHostOnlineIfNeeded } from "./hostStatusNotifier";
-import { normalizeLinkProbeMethod } from "@shared/latencyProbe";
 import { buildPluginHostAssetSyncActions } from "./repositories/pluginRepository";
 import {
   forwardRuleProtocols,
@@ -1490,7 +1486,6 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
   let logHostName = "";
   let releaseHeartbeatReconciliation: (() => void) | null = null;
   try {
-    const token = getResolvedAgentToken(req);
     const host = await getAgentHostFromRequest(req, { recordActivity: false });
     if (!host) {
       const migratedTo = await db.getSetting("migratedToPanelUrl");
@@ -4447,7 +4442,6 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         const protos = tunnel ? tunnelForwardProtos(r.protocol) : forwardRuleProtocols(r.protocol);
         return Promise.all(protos.map(async (proto) => {
           const tunnelHops = tunnel ? tunnelHopsByTunnelId.get(Number(tunnel.id)) : null;
-          const firstHop = Array.isArray(tunnelHops) && tunnelHops.length >= 2 ? (tunnelHops[0] as any) : null;
           const isMultiHopTunnel = Array.isArray(tunnelHops) && tunnelHops.length >= 3;
           const useMultiHopEntry =
             isMultiHopTunnel

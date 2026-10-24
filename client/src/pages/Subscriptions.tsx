@@ -19,7 +19,7 @@ import DataSectionError from "@/components/DataSectionError";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { planResourceText } from "@/lib/planDisplay";
 import { pollingInterval } from "@/lib/polling";
-import { trafficQuotaBreakdown, type TrafficQuotaSourceKind } from "@/lib/trafficQuota";
+import { trafficQuotaBreakdown } from "@/lib/trafficQuota";
 import { trpc } from "@/lib/trpc";
 import { formatTrafficPricePerGb } from "@shared/trafficBillingPrice";
 import { AlertTriangle, CalendarClock, CheckCircle2, Coins, CreditCard, Eye, EyeOff, Gauge, Package, RefreshCw, ShoppingBag, TicketPercent, Trash2, WalletCards } from "lucide-react";

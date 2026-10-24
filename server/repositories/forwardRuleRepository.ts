@@ -1657,20 +1657,6 @@ export async function markForwardRulesNotRunning(ids: number[]) {
   return ruleIds.length;
 }
 
-export async function markForwardRulesRunning(ids: number[]) {
-  const db = await getDb();
-  if (!db) return 0;
-  const ruleIds = Array.from(new Set(ids
-    .map((id) => Number(id))
-    .filter((id) => Number.isInteger(id) && id > 0)));
-  if (ruleIds.length === 0) return 0;
-  await db.update(forwardRules).set({ isRunning: true, updatedAt: nowDate() }).where(and(
-    inArray(forwardRules.id, ruleIds),
-    eq(forwardRules.pendingDelete, false),
-  ));
-  return ruleIds.length;
-}
-
 export async function disableForwardRulesOutsideHostPortRange(
   hostId: number,
   policySource?: PortPolicySource | null,

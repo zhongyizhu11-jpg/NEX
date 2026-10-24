@@ -1,14 +1,11 @@
 import { and, asc, desc, eq, isNull, notInArray, or, sql } from "drizzle-orm";
 import { normalizeLatencySeriesKey } from "../../shared/latencyProbe";
 import {
-  hostMetrics, InsertHostMetric,
-  trafficStats, InsertTrafficStat,
+  hostMetrics, InsertHostMetric, InsertTrafficStat,
   forwardRules,
   forwardGroups,
   forwardGroupMembers,
-  hosts,
   tunnels,
-  forwardTests, InsertForwardTest,
   tcpingStats, InsertTcpingStat,
   tunnelLatencyStats, InsertTunnelLatencyStat,
   forwardGroupLatencyStats, InsertForwardGroupLatencyStat,
@@ -1238,18 +1235,6 @@ async function getRuleWithCreatedAt(ruleId: number): Promise<{ id: number; creat
     .limit(1);
   const row = rows[0] as any;
   return row ? { id: Number(row.id), createdAt: row.createdAt } : null;
-}
-
-async function getRuleUserId(ruleId: number) {
-  const q = quoteIdentifier;
-  const rows = await queryRaw<{ userId: number }>(
-    `SELECT COALESCE(parent.${q("userId")}, fr.${q("userId")}) AS ${q("userId")}
-       FROM ${q("forward_rules")} fr
-       ${managedParentRuleJoin("fr")}
-      WHERE fr.${q("id")} = ?`,
-    [ruleId],
-  );
-  return Number((rows[0] as any)?.userId || 0);
 }
 
 let trafficBucketsReadyState: boolean | null = null;

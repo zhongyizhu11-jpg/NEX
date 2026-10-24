@@ -64,12 +64,6 @@ export type UnlockServiceResult = {
   ms: number | null;
 };
 
-export type UnlockRunView = {
-  family: UnlockFamily;
-  checkedAt: number;
-  results: UnlockServiceResult[];
-};
-
 export function normalizeUnlockFamily(value: unknown): UnlockFamily {
   return (UNLOCK_FAMILIES as readonly string[]).includes(String(value)) ? (value as UnlockFamily) : "auto";
 }

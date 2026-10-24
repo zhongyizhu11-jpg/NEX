@@ -2,7 +2,6 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import {
   forwardRules,
   forwardGroups,
-  hosts,
   proxyNodeShares,
   tunnels,
   userForwardGroupPermissions,

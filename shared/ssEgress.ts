@@ -41,19 +41,6 @@ export const RULE_EGRESS_TYPE_LABELS: Record<RuleEgressType, string> = {
   ss_host: "落地主机（Shadowsocks）",
   ss_link: "外部 Shadowsocks 链接",
 };
-
-/**
- * gost 运行时认得的全部 Shadowsocks 方法（go-gost/go-shadowsocks2 v0.1.1 的 SupportedMethods）。
- * 2022-blake3-chacha20-poly1305 在那份表里是注释掉的。Agent 的配置校验用的是这一张（和 agent/gost_ss_egress.go 一致）。
- */
-export const GOST_RUNTIME_SS_METHODS = [
-  "aes-128-gcm",
-  "aes-256-gcm",
-  "chacha20-ietf-poly1305",
-  "2022-blake3-aes-128-gcm",
-  "2022-blake3-aes-256-gcm",
-] as const;
-
 /** 经典 AEAD：所有支持出口的 Agent（2.2.226 起）上 TCP 都能用。 */
 export const SS_EGRESS_CLASSIC_METHODS = ["aes-256-gcm", "aes-128-gcm", "chacha20-ietf-poly1305"] as const;
 

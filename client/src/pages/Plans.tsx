@@ -5,8 +5,7 @@ import WorkspaceHeader from "@/components/WorkspaceHeader";
 import DataSectionError, { DataTableErrorRow } from "@/components/DataSectionError";
 import { resourceStatusTone } from "@/lib/statusDot";
 import { StatusDot } from "@/lib/statusDot";
-import { forwardGroupModeOf, forwardGroupTypeText, type ForwardGroupMode } from "@shared/forwardTypes";
-import MobileInfoRow from "@/components/MobileInfoRow";
+import { forwardGroupModeOf, forwardGroupTypeText } from "@shared/forwardTypes";
 import { formatQuotaBytes } from "@shared/formatBytes";
 import { planDescriptionSummary } from "@shared/planDescription";
 import { formatMoneyCents as money } from "@shared/formatMoney";
@@ -25,7 +24,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { ViewModeToggle } from "@/components/ui/view-mode-toggle";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -37,10 +35,8 @@ import DataSectionLoading from "@/components/DataSectionLoading";
 import { useUrlTab } from "@/hooks/useUrlTab";
 import { getTunnelRouteText } from "@/lib/tunnelDisplay";
 import { trpc } from "@/lib/trpc";
-import { useLocation } from "wouter";
 import { SlidingTabsList, type SlidingTabItem } from "@/components/ui/sliding-tabs";
 import TrafficBillingSection from "@/components/TrafficBillingSection";
-import { cn } from "@/lib/utils";
 import { formatTrafficMultiplier } from "@shared/trafficMultiplier";
 import {
   defaultPricingOption,
@@ -705,7 +701,6 @@ export default function Plans() {
     defaultValue: "plans",
     storageKey: PLAN_MANAGE_TAB_STORAGE_KEY,
   });
-  const [, navigate] = useLocation();
   const [planViewMode, setPlanViewMode] = useState<PlanListViewMode>(() => getStoredPlanListViewMode());
   const [statusUpdatingPlanId, setStatusUpdatingPlanId] = useState<number | null>(null);
 
@@ -742,7 +737,7 @@ export default function Plans() {
 
   const { data: storeStatus, isLoading: storeStatusLoading } = trpc.plans.storeStatus.useQuery();
   const needsPlanResourceOptions = editing && planDialogTab === "resources";
-  const { data: hosts = [], isLoading: hostsLoading } = trpc.hosts.options.useQuery(undefined, {
+  const { data: hosts = [] } = trpc.hosts.options.useQuery(undefined, {
     enabled: needsPlanResourceOptions,
     staleTime: 30_000,
   });

@@ -310,22 +310,3 @@ export function decryptPayload(
   const plaintext = Buffer.concat([decipher.update(ct), decipher.final()]);
   return JSON.parse(plaintext.toString("utf8"));
 }
-
-export function decryptPayloadWithCandidates(
-  envelope: EncryptedEnvelope,
-  tokens: string[],
-  options: { validateTimestamp?: boolean; nowMs?: number } = {},
-) {
-  let lastError: Error | null = null;
-  for (const token of tokens) {
-    try {
-      return {
-        token,
-        payload: decryptPayload(envelope, token, { ...options, rememberReplay: false }),
-      };
-    } catch (error: any) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-    }
-  }
-  throw lastError || new Error("No token candidates available");
-}

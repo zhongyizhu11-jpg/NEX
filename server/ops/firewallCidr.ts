@@ -239,11 +239,3 @@ export class CidrMatcher {
     return false;
   }
 }
-
-/** 两段 CIDR 是否有交集（封禁时提示「已经封过一个更大的段」用）。 */
-export function cidrsOverlap(a: ParsedCidr, b: ParsedCidr): boolean {
-  if (a.family !== b.family) return false;
-  const [as, ae] = cidrRange(a);
-  const [bs, be] = cidrRange(b);
-  return as <= be && bs <= ae;
-}

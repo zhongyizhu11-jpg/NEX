@@ -191,8 +191,6 @@ function rowView(row: any) {
   };
 }
 
-export type UnlockRunRow = ReturnType<typeof rowView>;
-
 export async function recordUnlockRun(record: UnlockRunRecord) {
   const existing = await queryRaw<any>(`SELECT ${q("id")} FROM ${q(TABLE)} WHERE ${q("runId")} = ? LIMIT 1`, [record.runId]);
   if (existing.length > 0) return;

@@ -83,11 +83,6 @@ export async function getFirewallContext(): Promise<FirewallContext> {
   return contextLoad;
 }
 
-/** 所有被选中的国家（主机全局规则、各主机单独规则、面板访问规则的并集）。 */
-export async function selectedFirewallCountries() {
-  return (await getFirewallContext()).selectedCountries;
-}
-
 type ReportedState = { countryHash: string };
 const lastReports = new Map<number, ReportedState>();
 const stateCache = new Map<number, HostFirewallState>();

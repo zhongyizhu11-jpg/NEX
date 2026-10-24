@@ -10,7 +10,7 @@ import * as db from "../db";
 import { appendPanelLog } from "../_core/panelLogger";
 import { markHostMetricsWatching, pushAgentRefresh, pushAgentUpgrade } from "../agentEvents";
 import { ensureHostLiveStream, getHostLiveMetric, markHostLiveFocus } from "../hostLiveMetrics";
-import { AGENT_ASSET_NAMES, getMissingBundledAgentAssets } from "../agentAssets";
+import { getMissingBundledAgentAssets } from "../agentAssets";
 import { pushTunnelEndpointRefresh, requireHostAccess, requireHostsAccess } from "./helpers";
 import { AGENT_VERSION, APP_VERSION, REPO_URL } from "../_core/systemRouter";
 import { isAgentUpgradeCompleted, isHostAgentUpgradeUnnecessary } from "../agentRouteUtils";
@@ -550,57 +550,6 @@ async function withHostEgressShapingStatus<T extends { id?: unknown }>(hostRows:
 /** 带上 Agent 上报的内网 IPv4，编辑框里「内网地址」拿它做建议（见 agentPrivateAddress） */
 function withDetectedPrivateIpv4<T extends Record<string, any>>(host: T): T & { detectedPrivateIpv4: string | null } {
   return { ...host, detectedPrivateIpv4: agentPrivateIpv4(host?.id) };
-}
-
-function hostMatchesListSearch(host: any, search: string) {
-  const tokens = String(search || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
-  if (tokens.length === 0) return true;
-  const text = [
-    host?.id,
-    host?.name,
-    host?.ip,
-    host?.ipv4,
-    host?.ipv6,
-    host?.entryIp,
-    host?.tunnelEntryIp,
-    host?.osInfo,
-    host?.cpuInfo,
-    host?.agentVersion,
-    host?.hostType,
-  ].map((value) => String(value || "").toLowerCase()).join(" ");
-  return tokens.every((token) => text.includes(token));
-}
-
-function orderHostsByGroups(hostRows: any[], groups: any[], selectedGroupId?: number | null) {
-  const hostById = new Map(hostRows.map((host) => [Number(host.id), host]));
-  const enabledGroups = [...groups]
-    .filter((group) => group?.isEnabled !== false)
-    .sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0) || Number(a.id || 0) - Number(b.id || 0));
-  if (selectedGroupId) {
-    const selected = enabledGroups.find((group) => Number(group.id) === Number(selectedGroupId));
-    return (selected?.hostIds || selected?.members?.map((member: any) => member.hostId) || [])
-      .map((hostId: unknown) => hostById.get(Number(hostId)))
-      .filter(Boolean);
-  }
-  if (enabledGroups.length === 0) return hostRows;
-
-  const ordered: any[] = [];
-  const used = new Set<number>();
-  for (const group of enabledGroups) {
-    const hostIds = group?.hostIds || group?.members?.map((member: any) => member.hostId) || [];
-    for (const value of hostIds) {
-      const hostId = Number(value || 0);
-      const host = hostById.get(hostId);
-      if (!host || used.has(hostId)) continue;
-      used.add(hostId);
-      ordered.push(host);
-    }
-  }
-  for (const host of hostRows) {
-    const hostId = Number(host.id || 0);
-    if (!used.has(hostId)) ordered.push(host);
-  }
-  return ordered;
 }
 
 function compactHostStatus(host: any) {

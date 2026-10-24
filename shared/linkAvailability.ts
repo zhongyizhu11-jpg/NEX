@@ -1,5 +1,4 @@
 import { normalizeExitGroupStrategy } from "./exitStrategy";
-import { timestampMillis } from "./timestamp";
 import { isLinkProbeFresh } from "./linkProbePolicy";
 
 export { LINK_PROBE_FRESH_MS } from "./linkProbePolicy";
