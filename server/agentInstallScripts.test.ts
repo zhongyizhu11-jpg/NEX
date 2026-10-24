@@ -63,6 +63,21 @@ test("realm 先从 GitHub 装，装不上（或连不上 GitHub）才从面板�
   assert.match(realm, /REALM_PANEL_URL="\$\{PANEL_URL%\/\}\/api\/agent\/realm-assets\/\$REALM_VERSION\/realm-\$REALM_ARCH\.tar\.gz"/);
 });
 
+test("没有能用的 nginx 时用包管理器装 nginx + stream 模块，不让系统 nginx 起来占 80 端口", () => {
+  const script = generateInstallScript("https://panel.example.com", { installNginx: true });
+  const runtime = shellFunction(script, "install_nginx_runtime");
+  assert.match(runtime, /for ATTEMPT in existing packages; do/);
+  assert.match(runtime, /install_nginx_packages \|\| break/);
+  const packages = shellFunction(script, "install_nginx_packages");
+  assert.match(packages, /apt-get install -y -qq nginx libnginx-mod-stream/);
+  assert.match(packages, /dnf install -y -q nginx nginx-mod-stream/);
+  assert.match(packages, /apk add --no-cache nginx nginx-mod-stream/);
+  // 原来没有 nginx：装的时候用 policy-rc.d 拦住启动，装完关掉开机自启；装完删掉自己建的 policy-rc.d。
+  assert.match(packages, /if \[ "\$HAD_NGINX" = "0" \] && \[ ! -e \/usr\/sbin\/policy-rc\.d \]; then/);
+  assert.match(packages, /\[ "\$POLICY_CREATED" = "1" \] && rm -f \/usr\/sbin\/policy-rc\.d/);
+  assert.match(packages, /if \[ "\$HAD_NGINX" = "0" \] && is_systemd_host; then\n\s*systemctl disable --now nginx/);
+});
+
 test("依赖都在就不跑包管理器（重装、升级不再 apt-get update）", () => {
   const script = generateInstallScript("https://panel.example.com");
   const deps = shellFunction(script, "install_deps");
