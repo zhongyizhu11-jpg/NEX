@@ -33,9 +33,12 @@ test("登录页只在开启时显示 Discord 按钮；App 里用系统浏览器�
   const login = fs.readFileSync(path.resolve(import.meta.dirname, "../../pages/Login.tsx"), "utf8");
   assert.match(login, /discordLoginEnabled && hasMobilePanelUrl \? \(\s*<DiscordLoginButton/);
   assert.match(login, /publicInfo\?\.discordLoginEnabled === true/);
+  // 两家共用 OAuthLoginButton：App 里用系统浏览器打开授权页，按钮写「使用 <名字> 登录」。
+  const shared = fs.readFileSync(path.resolve(import.meta.dirname, "../oauthLogin/OAuthLoginButton.tsx"), "utf8");
+  assert.match(shared, /Browser\.open\(\{ url: flow\.startUrl \}\)/);
+  assert.match(shared, /`使用 \$\{label\} 登录`/);
   const button = fs.readFileSync(path.resolve(import.meta.dirname, "DiscordLoginButton.tsx"), "utf8");
-  assert.match(button, /Browser\.open\(\{ url: flow\.startUrl \}\)/);
-  assert.match(button, /使用 Discord 登录/);
+  assert.match(button, /label: "Discord"/);
   assert.match(button, /trpc\.discordAuth\.appStatus/);
   const mark = fs.readFileSync(path.resolve(import.meta.dirname, "DiscordMark.tsx"), "utf8");
   assert.match(mark, /#5865F2/);
