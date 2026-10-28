@@ -71,6 +71,9 @@ import DataSectionLoading from "@/components/DataSectionLoading";
 import DataSectionError from "@/components/DataSectionError";
 import { trpc } from "@/lib/trpc";
 import { pollingInterval } from "@/lib/polling";
+import { isLinkProbeFresh } from "@shared/linkProbePolicy";
+import { timestampMillis } from "@shared/timestamp";
+import { formatAgo } from "@shared/dashboardAttention";
 import { handoffManualTestResult } from "@/lib/manualTestCache";
 import {
   buildStableRuleProbeMap,
@@ -262,6 +265,9 @@ import { buildLinkAvailabilityIndex } from "@shared/linkAvailability";
 import { useUrlTab } from "@/hooks/useUrlTab";
 import { useIsMobile } from "@/hooks/useMobile";
 import { formatEntryBridgeNote } from "@shared/ruleEntryBridge";
+
+/** 探测是多久以前的：「18 分钟前」。 */
+const formatProbeAge = (at: unknown) => formatAgo(Date.now() - timestampMillis(at));
 
 const ReactGlobe = lazy(loadReactGlobe) as typeof import("react-globe.gl").default;
 // 延迟详情里的曲线图要用 recharts（约 100 kB gzip）；只有点开某条规则的延迟才需要，不跟规则页一起下
@@ -2020,7 +2026,9 @@ function RulesContent() {
     return () => window.clearTimeout(timer);
   }, []);
   const { data: hosts, isFetched: hostsFetched } = trpc.hosts.options.useQuery(undefined, {
-    staleTime: 60000,
+    // 规则的状态要跟着机器在不在线走：掉线了这一页得在半分钟内看得到。
+    refetchInterval: pollingInterval("slow"),
+    staleTime: 10000,
     refetchOnWindowFocus: false,
   });
   // 共享 TLS 入站（SNI 分流）：能挂规则的（usable）加上自己规则挂着的（只用来显示）。
@@ -2978,6 +2986,16 @@ function RulesContent() {
     staleTime: 60_000,
     refetchOnWindowFocus: false,
   });
+  /** 规则表单「选我的节点」：自己的、启用着、有地址和端口的节点。 */
+  const targetNodeOptions = useMemo(() => ((proxyNodesQuery.data || []) as any[])
+    .filter((node) => node.isEnabled !== false && node.isEnabled !== 0 && String(node.address || "").trim() && Number(node.port) > 0)
+    .map((node) => ({
+      id: Number(node.id),
+      name: String(node.name || `节点 #${node.id}`),
+      protocol: String(node.protocol || "").toUpperCase(),
+      address: String(node.address).trim(),
+      port: Number(node.port),
+    })), [proxyNodesQuery.data]);
   const proxyNodeNameById = useMemo(() => {
     const map = new Map<number, string>();
     for (const node of (proxyNodesQuery.data || []) as any[]) {
@@ -4946,6 +4964,7 @@ function RulesContent() {
         latestLatencyMs: latest?.latestLatencyMs,
         latestLatencyIsTimeout: latest?.latestLatencyIsTimeout,
         latestLatencyAt: latest?.latestLatencyAt,
+        offlineHostNames: getRuleOfflineHostNames(rule),
       });
     }
     return resolveForwardRuleVisualStatus({
@@ -4957,8 +4976,10 @@ function RulesContent() {
       latestLatencyMs: latest?.latestLatencyMs,
       latestLatencyIsTimeout: latest?.latestLatencyIsTimeout,
       latestLatencyAt: latest?.latestLatencyAt,
+      offlineHostNames: getRuleOfflineHostNames(rule),
     });
-  }, [forwardGroupById, forwardGroupsError, forwardGroupsFetched, getForwardGroupConfigStatus, stableProbeByRule]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [forwardGroupById, forwardGroupsError, forwardGroupsFetched, getForwardGroupConfigStatus, stableProbeByRule, hosts, tunnels]);
   const ruleVisualStatuses = useMemo(() => {
     const statuses = new Map<number, {
       current: ReturnType<typeof resolveForwardRuleVisualStatus>;
@@ -6263,6 +6284,30 @@ function RulesContent() {
    * 隧道取它的跳点名，转发链取链上的主机名，转发组取组名 —— 组内部谁在跑是
    * 组自己的事，规则这一层只需要说明「走的是这个组」。
    */
+  /**
+   * 这条规则经过的机器里掉线了的（名字）。入口机自己、隧道从入口到出口的每一跳、转发链的每台成员。
+   * 转发组（多入口）不在这里管：组的运行状态已经按「几台在跑」分档了。
+   */
+  const getRuleOfflineHostNames = (rule: any): string[] => {
+    const category = getRuleCategory(rule, forwardGroupById);
+    const ids: number[] = [];
+    if (category === "tunnel") {
+      const tunnel = tunnelById.get(Number(rule?.tunnelId || 0));
+      if (tunnel) ids.push(...getTunnelHopIds(tunnel));
+    } else if (category === "chain") {
+      const group = forwardGroupById.get(Number(rule?.forwardGroupId || 0));
+      for (const member of (Array.isArray(group?.members) ? group.members : [])) ids.push(Number(member?.hostId || 0));
+    } else if (!rule?.forwardGroupId) {
+      ids.push(Number(rule?.hostId || 0));
+    }
+    const names: string[] = [];
+    for (const id of new Set(ids.filter((id) => id > 0))) {
+      const host = hostById.get(id);
+      if (host && host.isOnline === false) names.push(String(host.name || `主机 #${id}`));
+    }
+    return names;
+  };
+
   const getRuleHopNames = (rule: any): string[] => {
     const category = getRuleCategory(rule, forwardGroupById);
     if (category === "tunnel") {
@@ -6683,6 +6728,14 @@ function RulesContent() {
   const renderLatestLatency = (rule: any) => {
     const t = stableProbeByRule.get(Number(rule.id));
     if (!t?.latestLatencyAt) return <span className="whitespace-nowrap text-xs text-muted-foreground">未测试</span>;
+    // 过了新鲜期的探测只能说明「当时」：数字灰掉、写明多久以前，不再冒充现在的延迟。
+    if (!isLinkProbeFresh(t.latestLatencyAt)) {
+      return (
+        <span className="whitespace-nowrap text-xs text-muted-foreground" title={`${formatProbeAge(t.latestLatencyAt)}测的，已过期；··· › 诊断 重新测`}>
+          {t.latestLatencyIsTimeout ? "超时" : typeof t.latestLatencyMs === "number" && Number.isFinite(t.latestLatencyMs) ? `${Math.round(t.latestLatencyMs)} ms` : "未测试"} · {formatProbeAge(t.latestLatencyAt)}
+        </span>
+      );
+    }
     if (t.latestLatencyIsTimeout) {
       return <LatencyRating isTimeout timeoutText="超时" className="whitespace-nowrap" />;
     }
@@ -7177,7 +7230,11 @@ function RulesContent() {
       tag = <span className="fx-rule-tag" data-tone="off" title={stop?.detail || "规则已停用"}>{stop?.label || "已停用"}</span>;
     } else {
       const probe = stableProbeByRule.get(Number(rule.id));
-      if (probe?.latestLatencyAt) {
+      if (probe?.latestLatencyAt && !isLinkProbeFresh(probe.latestLatencyAt)) {
+        // 过期的探测：灰掉并写明多久以前，不再把三天前的 12 ms 画成绿的。
+        const text = probe.latestLatencyIsTimeout ? "超时" : typeof probe.latestLatencyMs === "number" && Number.isFinite(probe.latestLatencyMs) ? `${Math.round(probe.latestLatencyMs)} ms` : "";
+        if (text) tag = <span className="fx-rule-tag" data-tone="off" title={`${formatProbeAge(probe.latestLatencyAt)}测的，已过期；··· › 诊断 重新测`}>{text} · {formatProbeAge(probe.latestLatencyAt)}</span>;
+      } else if (probe?.latestLatencyAt) {
         if (probe.latestLatencyIsTimeout) {
           tag = <span className="fx-rule-tag" data-tone="down" title="最近一次测试超时">超时</span>;
         } else if (typeof probe.latestLatencyMs === "number" && Number.isFinite(probe.latestLatencyMs)) {
@@ -8136,7 +8193,33 @@ function RulesContent() {
               </div>
               )}
               <FormField className={isSniEntryMode ? "col-span-2 space-y-1.5" : "col-span-2 space-y-1.5 sm:col-span-1"}>
+              <div className="flex items-center justify-between gap-2">
               <Label>目标地址 <span className="text-destructive">*</span></Label>
+              {/*
+                转发到自己的节点：原来要先去节点页抄地址和端口再回来填。这里直接列出来，选一个就把
+                目标地址 / 端口填好（地址用的是节点对外的入口地址，和自动绑定节点用的是同一个值）。
+              */}
+              {!isSniEntryMode && targetNodeOptions.length > 0 ? (
+              <Select
+              value=""
+              onValueChange={(value) => {
+                const node = targetNodeOptions.find((item) => String(item.id) === value);
+                if (node) setForm((prev) => ({ ...prev, targetIp: node.address, targetPort: node.port }));
+              }}
+              >
+              <SelectTrigger className="h-7 w-auto gap-1 border-dashed px-2 text-meta" aria-label="选我的节点作为目标">
+              <SelectValue placeholder="选我的节点" />
+              </SelectTrigger>
+              <SelectContent align="end">
+              {targetNodeOptions.map((node) => (
+              <SelectItem key={node.id} value={String(node.id)}>
+              {node.name} · {node.protocol} · {node.address}:{node.port}
+              </SelectItem>
+              ))}
+              </SelectContent>
+              </Select>
+              ) : null}
+              </div>
               <Input
               placeholder="例如: 10.0.0.1 或 example.com"
               value={form.targetIp}

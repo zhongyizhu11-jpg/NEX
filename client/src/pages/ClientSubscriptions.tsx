@@ -480,8 +480,9 @@ export default function ClientSubscriptionsPage() {
     onError: (error) => toast.error(error.message),
   });
   const rotateToken = trpc.proxySubscriptions.rotateToken.useMutation({
-    onSuccess: () => {
-      toast.success("订阅地址已重置，旧地址立即失效");
+    onSuccess: (result) => {
+      if (result.warning) toast.warning(result.warning);
+      else toast.success("订阅地址已重置，旧地址和短链接立即失效");
       refresh();
     },
     onError: (error) => toast.error(error.message),
@@ -489,7 +490,7 @@ export default function ClientSubscriptionsPage() {
   const rotateTokenConfirmed = async (id: number) => {
     const ok = await confirm({
       title: "重置这个订阅地址？",
-      description: "只更换订阅地址本身，不会重置流量。旧地址立即失效，已经导入过的客户端都要重新填写新地址。",
+      description: "只更换订阅地址本身，不会重置流量。旧地址和短链接立即失效，已经导入过的客户端都要重新填写新地址。",
       confirmText: "重置地址",
     });
     if (ok) rotateToken.mutate({ id });

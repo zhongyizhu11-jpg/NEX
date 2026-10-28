@@ -12,6 +12,7 @@ import { AGENT_PANEL_MIGRATION_VERSION, hasAgentVersionChanged, isAgentUpgradeCo
 import { resolvePanelUrl } from "./agentPanelUrl";
 import { registerMimicAssetRoutes } from "./mimicAssets";
 import { registerRealmAssetRoutes } from "./realmAssets";
+import { registerSingboxAssetRoutes } from "./singboxAssets";
 import { decryptPayload, encryptPayload, isEncryptedEnvelope } from "./agentCrypto";
 import { assertCanAddSelfServiceHost } from "./selfServiceHostLimit";
 import {
@@ -539,6 +540,8 @@ agentRouter.get("/api/agent/install.sh", async (req: Request, res: Response) => 
 registerMimicAssetRoutes(agentRouter);
 // GET /api/agent/realm-assets/v<版本>/<包名>：主机从 GitHub 装不上 realm 时从这里下
 registerRealmAssetRoutes(agentRouter);
+// GET /api/agent/singbox-assets/v<版本>/<包名>：落地机从 GitHub 下不到 sing-box 时从这里下
+registerSingboxAssetRoutes(agentRouter);
 
 agentRouter.get("/api/agent/assets/:version/:asset", async (req: Request, res: Response) => {
   const version = String(req.params.version || "").trim().replace(/^v/i, "");

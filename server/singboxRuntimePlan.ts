@@ -82,6 +82,8 @@ export function buildSingboxServiceUnit(): string {
 export function ensureSingboxBinaryCmd(options: {
   version?: string;
   accelerator?: GithubAcceleratorConfig | null;
+  /** 面板转发地址（…/api/agent/singbox-assets）：GitHub 和加速都下不到时最后试它。 */
+  panelRelayBase?: string;
 } = {}): string {
   const version = String(options.version || SINGBOX_VERSION).replace(/^v/, "");
   const bin = shQuote(SINGBOX_BIN);
@@ -95,7 +97,10 @@ export function ensureSingboxBinaryCmd(options: {
    * 那样 shQuote 加的引号会变成 URL 的一部分。
    */
   const archCases = SINGBOX_ARCHES.map((entry) => {
-    const urls = githubDownloadCandidates(singboxAssetUrl(version, entry.asset), options.accelerator)
+    const relay = options.panelRelayBase
+      ? [`${options.panelRelayBase.replace(/\/+$/, "")}/v${version}/sing-box-${version}-linux-${entry.asset}.tar.gz`]
+      : [];
+    const urls = [...githubDownloadCandidates(singboxAssetUrl(version, entry.asset), options.accelerator), ...relay]
       .map(shQuote)
       .join(" ");
     return `    ${entry.unames.join("|")}) set -- ${urls} ;;`;
@@ -173,6 +178,12 @@ export type SingboxManagedConfig = {
 export type SingboxRuntimePlan = {
   /** 这台机器上有没有启用中的入站。没有时走 retirement 那条路。 */
   active: boolean;
+  /**
+   * 写配置之前跑：装二进制。Agent 的顺序是 preCommands → managedConfigs（带 sing-box check 校验）
+   * → commands。装二进制原来放在 commands 里，从没装过 sing-box 的机器上校验时程序还不存在，
+   * 校验必挂、整个动作中止，安装那一步永远轮不到 —— 新机器上建的节点永远起不来。nginx 也是这么排的。
+   */
+  preCommands: string[];
   managedConfigs: SingboxManagedConfig[];
   commands: string[];
 };
@@ -215,6 +226,7 @@ export function buildSingboxRuntimePlan(options: {
   inbounds: readonly SingboxInboundEntry[];
   version?: string;
   accelerator?: GithubAcceleratorConfig | null;
+  panelRelayBase?: string;
 }): SingboxRuntimePlan {
   const entries = options.inbounds.filter((entry) => entry && entry.inbound && !invalidSingboxInboundReason(entry));
   if (entries.length === 0) return buildSingboxRetirementPlan();
@@ -222,6 +234,7 @@ export function buildSingboxRuntimePlan(options: {
   const config = buildSingboxConfig(entries);
   return {
     active: true,
+    preCommands: [ensureSingboxBinaryCmd({ version: options.version, accelerator: options.accelerator, panelRelayBase: options.panelRelayBase })],
     managedConfigs: [{
       path: SINGBOX_CONFIG_PATH,
       contentBase64: Buffer.from(config, "utf8").toString("base64"),
@@ -230,7 +243,6 @@ export function buildSingboxRuntimePlan(options: {
       serviceName: SINGBOX_SERVICE_NAME,
     }],
     commands: [
-      ensureSingboxBinaryCmd({ version: options.version, accelerator: options.accelerator }),
       writeManagedServiceCmd(SINGBOX_SERVICE_NAME, buildSingboxServiceUnit()),
       startManagedServiceCmd(SINGBOX_SERVICE_NAME),
     ],
@@ -246,6 +258,7 @@ export function buildSingboxRuntimePlan(options: {
 export function buildSingboxRetirementPlan(): SingboxRuntimePlan {
   return {
     active: false,
+    preCommands: [],
     managedConfigs: [],
     commands: [
       stopManagedServiceCmd(SINGBOX_SERVICE_NAME),

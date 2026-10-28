@@ -32,6 +32,8 @@ type selectedTransport struct {
 	selector     *exitEndpointSelector
 	cfg          config
 	selectionKey string
+	// sessionAffinity：叠加会话 id。非空时按它挑出口，保证同一会话的各条腿落在同一台出口上。
+	sessionAffinity string
 
 	mu        sync.Mutex
 	conn      net.Conn
@@ -66,7 +68,16 @@ func (t *selectedTransport) connectLocked() error {
 	}
 	var lastErr error
 	for len(t.attempted) < t.selector.count() {
-		endpoint, index, ok := t.selector.pick(t.attempted, t.selectionKey)
+		var (
+			endpoint exitEndpoint
+			index    int
+			ok       bool
+		)
+		if t.sessionAffinity != "" {
+			endpoint, index, ok = t.selector.pickSessionAffinity(t.attempted, t.sessionAffinity)
+		} else {
+			endpoint, index, ok = t.selector.pick(t.attempted, t.selectionKey)
+		}
 		if !ok {
 			break
 		}

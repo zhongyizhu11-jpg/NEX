@@ -15,7 +15,7 @@ import { detectProxyClient, type DetectedProxyClient } from "../shared/proxyClie
 import { proxySubTemplateUserVars, renderProxySubPipeline } from "../shared/proxySubscriptionPipeline";
 import { normalizeProxySubHwid, evaluateProxySubDeviceAccess } from "../shared/proxySubDeviceLimit";
 import { normalizeProxySubAlias } from "../shared/proxySubTokenScope";
-import type { ProxySubTokenFailureReason } from "../shared/proxySubTokenStatus";
+import { PROXY_SUB_TOKEN_FAILURE_LABELS, type ProxySubTokenFailureReason } from "../shared/proxySubTokenStatus";
 import { proxyCredentialRecipientActive } from "./repositories/proxyInboundRepository";
 import { infoNodesWanted, loadProxySubTokenContext, resolveTemplateForToken, type ProxySubTokenContext } from "./proxySubBundle";
 import { getProxySubCached, proxySubCacheKey, setProxySubCached } from "./proxySubCache";
@@ -106,6 +106,15 @@ function notFound(res: Response) {
   res.status(404).type("text/plain").send("订阅不存在");
 }
 
+/**
+ * 令牌在、但这次不放行：403 + 原因。原来一律 404「订阅不存在」，设备满了、账号到期、地址停用
+ * 在客户端上都像地址没了，用户只能去重置 —— 重置又解决不了到期之类的问题，换了地址照样 404。
+ * 令牌是 40 位随机串，拿得到它的就是订阅的主人，告诉他为什么拉不到不算泄露。
+ */
+function rejected(res: Response, reason: ProxySubTokenFailureReason) {
+  res.status(403).type("text/plain").send(`订阅暂时拉不到：${PROXY_SUB_TOKEN_FAILURE_LABELS[reason] || "被拒绝"}`);
+}
+
 async function findToken(param: string, byAlias: boolean) {
   const value = String(param || "").trim();
   if (!value) return undefined;
@@ -124,7 +133,7 @@ function requestedFormat(req: Request, pathFormat?: string): ProxySubscriptionFo
 
 /**
  * 三步资格检查：令牌存在且启用、令牌没过期、主人有资格。
- * 任何一步不过都 404，不泄露「存在但没资格」；但面板这边要记下来是哪一步。
+ * 不过的回 403 并写明是哪一步（见 rejected），面板这边也记下来。
  */
 async function gate(req: Request, token: any, client: DetectedProxyClient): Promise<{ ok: true; context: ProxySubTokenContext } | { ok: false; reason: ProxySubTokenFailureReason; context: ProxySubTokenContext | null }> {
   const context = await loadProxySubTokenContext(token);
@@ -233,7 +242,7 @@ async function handleSubscription(req: Request, res: Response, options: { param:
       if (context && gated.reason !== "disabled") {
         void notifyProxySubEvent({ kind: "failure", tokenId: Number(record.id), tokenName: String(record.name || ""), userId: Number(record.userId), detail: `原因：${gated.reason}，来自 ${clientIp(req) || "未知 IP"}（${client.label}）` });
       }
-      notFound(res);
+      rejected(res, gated.reason);
       return;
     }
     const { settings, token } = gated.context;
@@ -270,7 +279,7 @@ async function handleSubscription(req: Request, res: Response, options: { param:
     for (const [name, value] of Object.entries(device.headers)) res.setHeader(name, value);
     if (!device.allowed) {
       logAccess(req, context, client, { format: "", profile: false, result: device.reason || "device-limit", hwid: device.hwid, bytes: 0 });
-      notFound(res);
+      rejected(res, device.reason || "device-limit");
       return;
     }
 

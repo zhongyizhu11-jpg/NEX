@@ -62,7 +62,7 @@ function TokensTab() {
   const [devicesOf, setDevicesOf] = useState<{ id: number; name: string } | null>(null);
   const refresh = () => { void utils.proxySubscriptions.adminListTokens.invalidate(); };
   const updateToken = trpc.proxySubscriptions.updateToken.useMutation({ onSuccess: refresh, onError: (error) => toast.error(error.message) });
-  const rotateToken = trpc.proxySubscriptions.rotateToken.useMutation({ onSuccess: () => { toast.success("已重置，旧地址失效"); refresh(); }, onError: (error) => toast.error(error.message) });
+  const rotateToken = trpc.proxySubscriptions.rotateToken.useMutation({ onSuccess: (result) => { if (result.warning) toast.warning(result.warning); else toast.success("已重置，旧地址和短链接失效"); refresh(); }, onError: (error) => toast.error(error.message) });
   const deleteToken = trpc.proxySubscriptions.deleteToken.useMutation({ onSuccess: () => { toast.success("已删除"); refresh(); }, onError: (error) => toast.error(error.message) });
   const items = (query.data?.items || []) as any[];
   const total = query.data?.total || 0;
@@ -117,7 +117,7 @@ function TokensTab() {
                       <Button size="sm" variant="ghost" onClick={() => setLogsOf({ id: row.id, name: row.name })}>记录</Button>
                       <Button size="sm" variant="ghost" onClick={() => setDevicesOf({ id: row.id, name: row.name })}>设备</Button>
                       <Button size="sm" variant="ghost" onClick={() => updateToken.mutate({ id: row.id, isEnabled: !row.isEnabled })}>{row.isEnabled ? "停用" : "启用"}</Button>
-                      <Button size="sm" variant="ghost" onClick={async () => { if (await confirm({ title: "重置这条地址？", description: "旧地址立即失效，设备列表清空。", confirmText: "重置" })) rotateToken.mutate({ id: row.id }); }}>重置</Button>
+                      <Button size="sm" variant="ghost" onClick={async () => { if (await confirm({ title: "重置这条地址？", description: "旧地址和短链接立即失效，设备列表清空。", confirmText: "重置" })) rotateToken.mutate({ id: row.id }); }}>重置</Button>
                       <Button size="sm" variant="ghost" className="text-[var(--fx-down-text)]" onClick={async () => { if (await confirm({ title: "删除这条地址？", description: "用它的客户端立即拉不到。", confirmText: "删除" })) deleteToken.mutate({ id: row.id }); }}>删除</Button>
                     </TableCell>
                   </TableRow>

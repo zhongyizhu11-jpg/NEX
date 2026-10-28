@@ -53,6 +53,11 @@ export function pruneProxySubRateLimit(now = Date.now()) {
   pruneMapEntries(ipHits, (list) => !list.some((at) => at > since));
 }
 
+/** 重置订阅地址时清掉这条令牌的计数：计数按令牌 id 记，不清的话新地址一导入就被限流。 */
+export function clearProxySubRateLimitForToken(tokenId: number) {
+  tokenHits.delete(String(tokenId));
+}
+
 export function clearProxySubRateLimitForTests() {
   tokenHits.clear();
   ipHits.clear();

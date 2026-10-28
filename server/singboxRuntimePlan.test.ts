@@ -185,3 +185,28 @@ test("枚举字段不合法的入站被单独剔掉，不拖累同机其他入�
   const decoded = JSON.parse(Buffer.from(plan.managedConfigs[0].contentBase64, "base64").toString("utf-8"));
   assert.deepEqual(decoded.inbounds.map((item: any) => item.tag), ["in-1"]);
 });
+
+test("装 sing-box 要排在配置校验之前：新机器上校验时程序得已经在", () => {
+  // Agent 的顺序：preCommands → managedConfigs（跑 validateCommand 校验）→ commands。
+  // 装二进制原来在 commands 里：从没装过 sing-box 的机器上 `forwardx-singbox check` 找不到程序，
+  // 校验失败、动作中止，安装永远轮不到 —— 新机器上建的落地节点永远起不来。
+  const plan = buildSingboxRuntimePlan({ inbounds: [{ inbound: VLESS_REALITY, tag: "inbound-1" }] });
+  const install = ensureSingboxBinaryCmd();
+  assert.deepEqual(plan.preCommands, [install]);
+  assert.ok(!plan.commands.includes(install), "commands 里不能再装二进制（那时校验已经跑完了）");
+  assert.match(plan.managedConfigs[0].validateCommand, new RegExp(`^${SINGBOX_BIN.replace(/[/.]/g, "\\$&")} check `));
+  assert.deepEqual(buildSingboxRetirementPlan().preCommands, []);
+});
+
+test("GitHub 和加速都下不到时最后从面板下 sing-box", () => {
+  const command = ensureSingboxBinaryCmd({
+    accelerator: { enabled: true, url: "https://gh.example.com" },
+    panelRelayBase: "http://panel.example.com:9810/api/agent/singbox-assets",
+  });
+  assertShellParses(command, "带面板转发的安装命令");
+  const amd64 = command.split("\n").find((line) => line.includes("x86_64|amd64)")) || "";
+  const github = amd64.indexOf(singboxAssetUrl(SINGBOX_VERSION, "amd64"));
+  const relay = amd64.indexOf(`http://panel.example.com:9810/api/agent/singbox-assets/v${SINGBOX_VERSION}/sing-box-${SINGBOX_VERSION}-linux-amd64.tar.gz`);
+  assert.ok(github > 0 && relay > github, "面板那一个要排在 GitHub 原地址后面");
+  assert.ok(!ensureSingboxBinaryCmd().includes("singbox-assets"), "没给面板地址就不加");
+});
