@@ -67,6 +67,7 @@ import { normalizeAgentText, normalizeNetworkInterface } from "./agentInputValid
 import { pruneMapEntries, setBoundedMapValue } from "./boundedCache";
 import { isValidTlsServerName } from "./nginxTlsInput";
 import { mergeAgentReportedAddress, observedAgentAddress } from "./agentAddressState";
+import { recordHostObservedAddress } from "./hostObservedAddress";
 import { noteAgentPrivateIpv4 } from "./agentPrivateAddress";
 import {
   gostTunnelTransportType,
@@ -1623,7 +1624,10 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     const agentLastAppliedHash = normalizeAgentText(req.body?.agentLastAppliedHash, 64);
     const reportedDefaultNetworkInterface = normalizeNetworkInterface(req.body?.defaultNetworkInterface);
     const previousHost = { ...(host as any) };
-    const reportedAddress = mergeAgentReportedAddress(req.body, host, observedAgentAddress(req));
+    const observedAddress = observedAgentAddress(req);
+    const reportedAddress = mergeAgentReportedAddress(req.body, host, observedAddress);
+    // 出口 IP 核对（hostObservedAddress）：面板看到的对端地址和登记的 IP 不一样时主机卡上提示。
+    recordHostObservedAddress(Number(host.id), observedAddress);
     noteAgentPrivateIpv4(host.id, req.body?.privateIpv4);
     const dnsChangedReports = Array.isArray(req.body?.dnsChanged) ? req.body.dnsChanged : [];
     const agentStateSignatures = normalizeAgentStateSignatures(req.body?.stateSignatures);
