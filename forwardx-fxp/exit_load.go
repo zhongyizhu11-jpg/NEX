@@ -333,6 +333,16 @@ func (s *exitEndpointSelector) pickByCapacity(candidates []int, skip int) int {
 	return candidates[0]
 }
 
+// rendezvousScore：加权 rendezvous 哈希的分数，只由「键 + 出口地址 + 容量」决定，哪台机器算都一样。调用方持锁。
+func (s *exitEndpointSelector) rendezvousScore(index int, key string) float64 {
+	hash := fnv.New64a()
+	_, _ = hash.Write([]byte(key))
+	_, _ = hash.Write([]byte{0})
+	_, _ = hash.Write([]byte(s.endpoints[index].Host + ":" + strconv.Itoa(s.endpoints[index].Port)))
+	u := (float64(hash.Sum64()>>11) + 0.5) / float64(uint64(1)<<53)
+	return -s.capacities[index] / math.Log(u)
+}
+
 // pickRendezvous：「按访客固定」。加权的最高随机权重哈希（rendezvous hashing）：每个出口按
 // 「访客 + 出口」算一个分，分最高的拿走。一台出口挂了只有原来落在它上面的访客要换，其余人不动
 // （以前是「哈希 % 健康的个数」，挂一台几乎所有人都换出口，要保持登录的服务全掉线）。
@@ -346,12 +356,7 @@ func (s *exitEndpointSelector) pickRendezvous(candidates []int, key string, now 
 	order := make([]scored, 0, len(candidates))
 	totalActive, totalCap := 0.0, 0.0
 	for _, index := range candidates {
-		hash := fnv.New64a()
-		_, _ = hash.Write([]byte(key))
-		_, _ = hash.Write([]byte{0})
-		_, _ = hash.Write([]byte(s.endpoints[index].Host + ":" + strconv.Itoa(s.endpoints[index].Port)))
-		u := (float64(hash.Sum64()>>11) + 0.5) / float64(uint64(1)<<53)
-		order = append(order, scored{index: index, score: -s.capacities[index] / math.Log(u)})
+		order = append(order, scored{index: index, score: s.rendezvousScore(index, key)})
 		totalActive += float64(s.loads[index].active.Load())
 		totalCap += s.capacities[index]
 	}

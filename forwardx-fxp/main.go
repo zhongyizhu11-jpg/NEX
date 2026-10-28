@@ -224,7 +224,7 @@ const (
 	fxpUDPIdleTimeout    = 5 * time.Minute
 	fxpProtocolSampleMax = 512
 	fxpMasterContext     = "forwardx-fxp-v2 master"
-	fxpRuntimeVersion    = "2.2.135"
+	fxpRuntimeVersion    = "2.2.136"
 	fxpFallbackRetry     = 5 * time.Second
 	// A node that stays down is re-probed on a growing delay, because probing a
 	// peer that accepts but never answers costs a whole handshake timeout.
@@ -568,17 +568,7 @@ func (s *exitEndpointSelector) pick(excluded map[int]bool, selectionKeys ...stri
 		}
 		return exitEndpoint{}, -1, false
 	}
-	candidates := make([]int, 0, len(s.endpoints))
-	for wanted := 1; wanted <= 3 && len(candidates) == 0; wanted++ {
-		for i := range s.endpoints {
-			if excluded != nil && excluded[i] {
-				continue
-			}
-			if wanted == 3 || tier(i) == wanted {
-				candidates = append(candidates, i)
-			}
-		}
-	}
+	candidates := s.candidatesLocked(excluded, tiers)
 	if len(candidates) == 0 {
 		return exitEndpoint{}, -1, false
 	}
@@ -609,6 +599,57 @@ func (s *exitEndpointSelector) pick(excluded map[int]bool, selectionKeys ...stri
 	index := candidates[s.next%len(candidates)]
 	s.next = (s.next + 1) % 1000000
 	return s.endpoints[index], index, true
+}
+
+// candidatesLocked：最好的那一档里没被排除的出口（档位见 pick 里的说明）。调用方持锁。
+func (s *exitEndpointSelector) candidatesLocked(excluded map[int]bool, tiers []int) []int {
+	candidates := make([]int, 0, len(s.endpoints))
+	for wanted := 1; wanted <= 3 && len(candidates) == 0; wanted++ {
+		for i := range s.endpoints {
+			if excluded != nil && excluded[i] {
+				continue
+			}
+			if wanted == 3 || tiers[i] == wanted {
+				candidates = append(candidates, i)
+			}
+		}
+	}
+	return candidates
+}
+
+// pickSessionAffinity：叠加（多路径）连接的各条腿走不同的中继，每台中继都要替自己那条腿挑出口。
+// 各挑各的（轮询计数、负载都是本机视角）会把同一个会话的腿分到不同出口上 —— 出口各自只收到一部分
+// 分片，拼不回来，连接卡住直到超时重置。这里按会话 id 做纯 rendezvous 哈希（只看容量，不看本机负载），
+// 每台中继拿到的出口列表一样，同一个会话就落在同一台出口上；不同会话仍按容量分散到各台出口。
+// 主备（fallback）本来各台中继就挑同一个，照旧。调用方不持锁。
+func (s *exitEndpointSelector) pickSessionAffinity(excluded map[int]bool, sessionID string) (exitEndpoint, int, bool) {
+	if s == nil {
+		return exitEndpoint{}, -1, false
+	}
+	if s.strategy == "fallback" || strings.TrimSpace(sessionID) == "" {
+		return s.pick(excluded, sessionID)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.endpoints) == 0 {
+		return exitEndpoint{}, -1, false
+	}
+	now := time.Now()
+	tiers := make([]int, len(s.states))
+	for i, state := range s.states {
+		tiers[i] = state.tier(now)
+	}
+	candidates := s.candidatesLocked(excluded, tiers)
+	if len(candidates) == 0 {
+		return exitEndpoint{}, -1, false
+	}
+	best, bestScore := candidates[0], math.Inf(-1)
+	for _, index := range candidates {
+		if score := s.rendezvousScore(index, sessionID); score > bestScore {
+			best, bestScore = index, score
+		}
+	}
+	return s.endpoints[best], best, true
 }
 
 // pickWeighted 是平滑加权轮询：每个候选的计数加上自己的权重，挑最大的，再把它减去总权重。
@@ -1873,6 +1914,8 @@ func handleRelaySessionWithStartup(upConn net.Conn, cfg config, selector *exitEn
 		selectionKey = endpointSelectionSource(upConn.RemoteAddr().String())
 	}
 	down := newSelectedTransport(selector, downCfg, selectionKey)
+	// 叠加连接的一条腿：同一个会话的各条腿必须落在同一台出口上（见 pickSessionAffinity）。
+	down.sessionAffinity = strings.TrimSpace(hello.MultipathSessionID)
 	if err := down.connect(); err != nil {
 		down.closeTransport()
 		log.Printf("relay dial downstream %s:%d: %v", cfg.RelayExitHost, cfg.RelayExitPort, err)
