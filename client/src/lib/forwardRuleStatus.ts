@@ -42,12 +42,22 @@ export function resolveForwardRuleVisualStatus(input: {
   latestLatencyMs?: number | null;
   latestLatencyIsTimeout?: boolean;
   latestLatencyAt?: Date | string | number | null;
+  /**
+   * 这条规则经过的机器里掉线了的（入口、隧道的出口和中继、转发链的每一跳）。
+   * 机器掉线是实时通道确认过的事实，比几分钟前那次探测成功、比入口机「我的监听还在」都硬：
+   * 出口机没了，入口机照样报自己在运行，探测也没人去做，规则会一直绿着。
+   */
+  offlineHostNames?: readonly string[];
 }, now = Date.now()): ForwardRuleVisualStatus {
   if (input.resourceAccessAllowed === false) {
     return { state: "error", title: "资源授权失效" };
   }
   if (!input.ruleEnabled || !input.groupEnabled || input.groupConfigStatus === "disabled") {
     return { state: "disabled", title: "规则已停用" };
+  }
+  const offline = (input.offlineHostNames || []).map((name) => String(name || "").trim()).filter(Boolean);
+  if (offline.length > 0) {
+    return { state: "error", title: `主机离线：${offline.join(" / ")}` };
   }
 
   const runtimeStatus = String(input.runtimeStatus || "").toLowerCase();

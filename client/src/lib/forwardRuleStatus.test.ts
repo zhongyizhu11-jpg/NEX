@@ -203,3 +203,46 @@ test("rules stopped by their own limit say why and that they resume on their own
   assert.equal(resolveForwardRuleStopReason({ isEnabled: false, ruleLimitReason: "expired" })?.label, "已停用");
   assert.equal(resolveForwardRuleStopReason({ isEnabled: true, ruleLimitReason: null }), null);
 });
+
+test("路径上有机器掉线：哪怕几分钟前探测成功、入口机说自己在跑，也按掉线报红", () => {
+  // 出口机没了，入口机照样报「监听在跑」，探测也没人去做 —— 原来这条规则会一直绿着。
+  const fresh = new Date(now - 30_000);
+  const offline = resolveForwardRuleVisualStatus({
+    ...base,
+    runtimeStatus: "running",
+    ruleRunning: true,
+    latestLatencyMs: 12,
+    latestLatencyIsTimeout: false,
+    latestLatencyAt: fresh,
+    offlineHostNames: ["jinx(39.9y)"],
+  }, now);
+  assert.equal(offline.state, "error");
+  assert.match(offline.title, /主机离线：jinx\(39\.9y\)/);
+  // 没掉线的照旧：探测新鲜就按探测说。
+  const online = resolveForwardRuleVisualStatus({
+    ...base,
+    runtimeStatus: "running",
+    ruleRunning: true,
+    latestLatencyMs: 12,
+    latestLatencyAt: fresh,
+    offlineHostNames: [],
+  }, now);
+  assert.equal(online.state, "running");
+  // 停用优先于掉线：停着的规则不该因为机器掉线显示成出错。
+  const disabled = resolveForwardRuleVisualStatus({ ...base, ruleEnabled: false, offlineHostNames: ["x"] }, now);
+  assert.equal(disabled.state, "disabled");
+});
+
+test("规则页把路径上的机器在线状态喂给状态判定，过期的延迟灰掉", async () => {
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const source = fs.readFileSync(path.resolve(import.meta.dirname, "../pages/Rules.tsx"), "utf8");
+  assert.equal((source.match(/offlineHostNames: getRuleOfflineHostNames\(rule\)/g) || []).length, 2, "两处 resolveForwardRuleVisualStatus 都要带上掉线的机器");
+  assert.match(source, /const getRuleOfflineHostNames = \(rule: any\): string\[\] => \{/);
+  assert.match(source, /getTunnelHopIds\(tunnel\)\)[\s\S]{0,800}host\.isOnline === false/);
+  // 主机列表要定时刷新，掉线才能在这一页上看到。
+  assert.match(source, /trpc\.hosts\.options\.useQuery\(undefined, \{\s*\n\s*\/\/[^\n]*\n\s*refetchInterval: pollingInterval\("slow"\)/);
+  // 过了新鲜期的探测：精简行的标签和表格的延迟列都不再画成绿色数字。
+  assert.match(source, /probe\?\.latestLatencyAt && !isLinkProbeFresh\(probe\.latestLatencyAt\)/);
+  assert.match(source, /if \(!isLinkProbeFresh\(t\.latestLatencyAt\)\) \{/);
+});

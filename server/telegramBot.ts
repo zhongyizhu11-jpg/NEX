@@ -1237,8 +1237,9 @@ async function ruleDetailText(ruleId: number, user: any) {
   const rule = (await visibleRulesForTelegramUser(user)).find((item: any) => Number(item.id) === Number(ruleId));
   if (!rule || (user.role !== "admin" && rule.userId !== user.id)) return "规则不存在或无权查看。";
   const traffic = (await aiRuleTrafficSummaryMap(user, [Number(rule.id)], { includeLatency: true })).get(Number(rule.id));
-  const statusInfo = effectiveRuleStatusInfo(rule, traffic);
-  const status = effectiveRuleStatusText(rule, traffic);
+  const offlineNames = (await offlineHostNamesByRule([rule])).get(Number(rule.id));
+  const statusInfo = effectiveRuleStatusInfo(rule, traffic, offlineNames);
+  const status = effectiveRuleStatusText(rule, traffic, offlineNames);
   return [
     `<b>规则 #${rule.id}</b>`,
     "",
@@ -2016,8 +2017,9 @@ async function last24hTrafficBytes(userId?: number) {
 async function abnormalRulesForDigest(user: any) {
   const rules = (await visibleRulesForTelegramUser(user)).filter((rule: any) => !rule.routeParentRuleId);
   const summaries = await aiRuleTrafficSummaryMap(user, rules.map((rule: any) => Number(rule.id)), { includeLatency: true });
-  const abnormal = rules.filter((rule: any) => effectiveRuleStatusInfo(rule, summaries.get(Number(rule.id))).kind === "abnormal");
-  return { total: rules.length, abnormal, summaries };
+  const offlineNames = await offlineHostNamesByRule(rules);
+  const abnormal = rules.filter((rule: any) => effectiveRuleStatusInfo(rule, summaries.get(Number(rule.id)), offlineNames.get(Number(rule.id))).kind === "abnormal");
+  return { total: rules.length, abnormal, summaries, offlineNames };
 }
 
 function daysUntil(value: unknown, now = Date.now()) {
@@ -2029,8 +2031,8 @@ function daysUntil(value: unknown, now = Date.now()) {
 
 export async function buildTelegramDigestText(user: any, now = Date.now()) {
   const lines: string[] = [`<b>📰 NEX 每日简报</b> · ${billingDateLabel(now)}`, ""];
-  const { total, abnormal, summaries } = await abnormalRulesForDigest(user);
-  const abnormalLines = abnormal.slice(0, 5).map((rule: any) => `  · #${rule.id} ${escapeHtml(shortText(rule.name, 18))}：${escapeHtml(effectiveRuleStatusInfo(rule, summaries.get(Number(rule.id))).label)}`);
+  const { total, abnormal, summaries, offlineNames } = await abnormalRulesForDigest(user);
+  const abnormalLines = abnormal.slice(0, 5).map((rule: any) => `  · #${rule.id} ${escapeHtml(shortText(rule.name, 18))}：${escapeHtml(effectiveRuleStatusInfo(rule, summaries.get(Number(rule.id)), offlineNames.get(Number(rule.id))).label)}`);
   if (user.role === "admin") {
     const hosts = await db.getHosts() as any[];
     const online = hosts.filter((host) => telegramHostState(host) === "online").length;
@@ -4603,7 +4605,7 @@ function hasRuleTraffic(summary?: AiRuleTrafficSummary) {
   return Math.max(0, Number(summary?.bytesIn || 0)) + Math.max(0, Number(summary?.bytesOut || 0)) > 0;
 }
 
-export function effectiveRuleStatusInfo(rule: any, summary?: AiRuleTrafficSummary): { kind: AiEffectiveRuleStatusKind; label: string; detail?: string } {
+export function effectiveRuleStatusInfo(rule: any, summary?: AiRuleTrafficSummary, offlineHostNames?: readonly string[]): { kind: AiEffectiveRuleStatusKind; label: string; detail?: string } {
   /**
    * 探测结果过了新鲜期就当作没探测过 —— 和面板同一把尺子（isLinkProbeFresh）。
    *
@@ -4633,6 +4635,14 @@ export function effectiveRuleStatusInfo(rule: any, summary?: AiRuleTrafficSummar
     if (rule?.disabledByGroup) return { kind: "disabled", label: "转发资源停用" };
     return { kind: "disabled", label: "已停用" };
   }
+  /*
+    路径上有机器掉线（入口、隧道的出口和中继）：和面板 resolveForwardRuleVisualStatus 同一个口径 ——
+    机器掉线是实时通道确认过的，比几分钟前那次探测成功、比入口机「我的监听还在」都硬。
+  */
+  const offline = (offlineHostNames || []).map((name) => String(name || "").trim()).filter(Boolean);
+  if (offline.length > 0) {
+    return { kind: "abnormal", label: "主机离线", detail: offline.join(" / ") };
+  }
   if (probeIsFresh && summary?.latestLatencyIsTimeout) {
     return {
       kind: "abnormal",
@@ -4658,8 +4668,51 @@ export function effectiveRuleStatusInfo(rule: any, summary?: AiRuleTrafficSummar
   };
 }
 
-function effectiveRuleStatusText(rule: any, summary?: AiRuleTrafficSummary) {
-  return effectiveRuleStatusInfo(rule, summary).label;
+function effectiveRuleStatusText(rule: any, summary?: AiRuleTrafficSummary, offlineHostNames?: readonly string[]) {
+  return effectiveRuleStatusInfo(rule, summary, offlineHostNames).label;
+}
+
+/**
+ * 每条规则经过的机器里掉线了的（名字）：入口机，隧道的话再加上从入口到出口的每一跳。
+ * 主机在不在线按 getHostsByIds 的口径算（和主机列表、状态通知同一套）。
+ */
+export async function offlineHostNamesByRule(rules: readonly any[]): Promise<Map<number, string[]>> {
+  const result = new Map<number, string[]>();
+  const list = (rules || []).filter((rule) => rule && Number(rule.id) > 0);
+  if (list.length === 0) return result;
+  const tunnelIds = Array.from(new Set(list.map((rule) => Number(rule.tunnelId || 0)).filter((id) => id > 0)));
+  const [tunnels, hops] = tunnelIds.length > 0
+    ? await Promise.all([
+      db.getTunnelsByIds(tunnelIds).catch(() => [] as any[]),
+      db.getTunnelHopsByTunnelIds(tunnelIds).catch(() => [] as any[]),
+    ])
+    : [[], []];
+  const hostIdsByTunnel = new Map<number, number[]>();
+  for (const tunnel of tunnels as any[]) {
+    hostIdsByTunnel.set(Number(tunnel.id), [Number(tunnel.entryHostId || 0), Number(tunnel.exitHostId || 0)]);
+  }
+  for (const hop of hops as any[]) {
+    const ids = hostIdsByTunnel.get(Number(hop.tunnelId)) || [];
+    ids.push(Number(hop.hostId || 0));
+    hostIdsByTunnel.set(Number(hop.tunnelId), ids);
+  }
+  const hostIdsByRule = new Map<number, number[]>();
+  const allHostIds = new Set<number>();
+  for (const rule of list) {
+    const ids = [Number(rule.hostId || 0), ...(hostIdsByTunnel.get(Number(rule.tunnelId || 0)) || [])].filter((id) => id > 0);
+    hostIdsByRule.set(Number(rule.id), Array.from(new Set(ids)));
+    ids.forEach((id) => allHostIds.add(id));
+  }
+  const hosts = allHostIds.size > 0 ? await db.getHostsByIds(Array.from(allHostIds)).catch(() => [] as any[]) : [];
+  const hostById = new Map<number, any>((hosts as any[]).map((host) => [Number(host.id), host]));
+  for (const [ruleId, ids] of hostIdsByRule) {
+    const names = ids
+      .map((id) => hostById.get(id))
+      .filter((host) => host && !host.isOnline)
+      .map((host) => String(host.name || `主机 #${host.id}`));
+    if (names.length > 0) result.set(ruleId, names);
+  }
+  return result;
 }
 
 function effectiveRuleStatusFilterLabel(status: AiRuleStatusFilter) {

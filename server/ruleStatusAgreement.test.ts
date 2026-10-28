@@ -99,3 +99,31 @@ test("完全没探测过时，两边都按 Agent 上报的运行状态说话", (
   assert.equal(panel.state, "running");
   assert.equal(telegram.kind, "running");
 });
+
+test("路径上的机器掉线：两边都要说「主机离线」，不能拿刚才还通的探测说运行中", () => {
+  const now = Date.now();
+  const latestLatencyAt = now - 30_000;
+
+  const panel = resolveForwardRuleVisualStatus({
+    ruleEnabled: true,
+    ruleRunning: true,
+    groupEnabled: true,
+    groupConfigStatus: "available",
+    latestLatencyIsTimeout: false,
+    latestLatencyMs: 42,
+    latestLatencyAt,
+    offlineHostNames: ["中转-1"],
+  }, now);
+  const telegram = effectiveRuleStatusInfo(rule, {
+    ...emptyTraffic,
+    latestLatencyIsTimeout: false,
+    latestLatencyMs: 42,
+    latestLatencyAt,
+  }, ["中转-1"]);
+
+  assert.equal(panel.state, "error");
+  assert.match(panel.title, /主机离线/);
+  assert.equal(telegram.kind, "abnormal");
+  assert.equal(telegram.label, "主机离线");
+  assert.equal(telegram.detail, "中转-1");
+});
