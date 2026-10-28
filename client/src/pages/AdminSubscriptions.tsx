@@ -350,7 +350,7 @@ function TemplatesTab() {
               </div>
               <p data-fx-help="" className="text-xs text-muted-foreground">按节点名挑成员（留空 = 全部），订阅刷新进来的新节点自动归组。会出现在主选择器和各分类组里。</p>
               {groups.map((group, index) => (
-                <div key={index} className="grid gap-2 rounded-md border p-2 sm:grid-cols-[1fr_8rem_7rem_1fr_auto_auto]">
+                <div key={index} className="grid gap-2 rounded-md border p-2 sm:grid-cols-[1fr_8rem_8.5rem_1fr_auto_auto]">
                   <Input value={group.name} placeholder="组名，如 🇭🇰 香港" onChange={(event) => setGroups((prev) => prev.map((item, i) => (i === index ? { ...item, name: event.target.value } : item)))} />
                   <Select value={group.type} onValueChange={(value) => setGroups((prev) => prev.map((item, i) => (i === index ? { ...item, type: value as GroupForm["type"] } : item)))}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
