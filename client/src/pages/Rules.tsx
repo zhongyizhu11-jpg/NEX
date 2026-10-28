@@ -2978,6 +2978,16 @@ function RulesContent() {
     staleTime: 60_000,
     refetchOnWindowFocus: false,
   });
+  /** 规则表单「选我的节点」：自己的、启用着、有地址和端口的节点。 */
+  const targetNodeOptions = useMemo(() => ((proxyNodesQuery.data || []) as any[])
+    .filter((node) => node.isEnabled !== false && node.isEnabled !== 0 && String(node.address || "").trim() && Number(node.port) > 0)
+    .map((node) => ({
+      id: Number(node.id),
+      name: String(node.name || `节点 #${node.id}`),
+      protocol: String(node.protocol || "").toUpperCase(),
+      address: String(node.address).trim(),
+      port: Number(node.port),
+    })), [proxyNodesQuery.data]);
   const proxyNodeNameById = useMemo(() => {
     const map = new Map<number, string>();
     for (const node of (proxyNodesQuery.data || []) as any[]) {
@@ -8136,7 +8146,33 @@ function RulesContent() {
               </div>
               )}
               <FormField className={isSniEntryMode ? "col-span-2 space-y-1.5" : "col-span-2 space-y-1.5 sm:col-span-1"}>
+              <div className="flex items-center justify-between gap-2">
               <Label>目标地址 <span className="text-destructive">*</span></Label>
+              {/*
+                转发到自己的节点：原来要先去节点页抄地址和端口再回来填。这里直接列出来，选一个就把
+                目标地址 / 端口填好（地址用的是节点对外的入口地址，和自动绑定节点用的是同一个值）。
+              */}
+              {!isSniEntryMode && targetNodeOptions.length > 0 ? (
+              <Select
+              value=""
+              onValueChange={(value) => {
+                const node = targetNodeOptions.find((item) => String(item.id) === value);
+                if (node) setForm((prev) => ({ ...prev, targetIp: node.address, targetPort: node.port }));
+              }}
+              >
+              <SelectTrigger className="h-7 w-auto gap-1 border-dashed px-2 text-meta" aria-label="选我的节点作为目标">
+              <SelectValue placeholder="选我的节点" />
+              </SelectTrigger>
+              <SelectContent align="end">
+              {targetNodeOptions.map((node) => (
+              <SelectItem key={node.id} value={String(node.id)}>
+              {node.name} · {node.protocol} · {node.address}:{node.port}
+              </SelectItem>
+              ))}
+              </SelectContent>
+              </Select>
+              ) : null}
+              </div>
               <Input
               placeholder="例如: 10.0.0.1 或 example.com"
               value={form.targetIp}

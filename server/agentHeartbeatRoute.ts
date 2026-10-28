@@ -18,6 +18,7 @@ import { AGENT_VERSION } from "./_core/systemRouter";
 import { clearHostTcpingRequest, hasHostTcpingRequest, isHostMetricsWatching, pushAgentDesiredState, pushAgentRefresh } from "./agentEvents";
 import { getEnabledProxyInboundsWithUsersByHost } from "./repositories/proxyInboundRepository";
 import { buildSingboxRuntimePlan } from "./singboxRuntimePlan";
+import { singboxAssetRelayBase } from "./singboxAssets";
 import { resolveHostInboundRoutes } from "./inboundRoutingRuntime";
 import {
   PROXY_INBOUND_TRAFFIC_FORWARD_TYPE,
@@ -7226,6 +7227,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
           ...(inboundRoutes.has(row.id) ? { routes: inboundRoutes.get(row.id) } : {}),
         })),
         accelerator: await getSingboxAccelerator(),
+        panelRelayBase: singboxAssetRelayBase(panelUrl),
       });
       const singboxAction = {
         statusType: "runtime",
@@ -7239,6 +7241,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         protocol: "tcp",
         knownRunning: false,
         forceRuntimeSync: true,
+        preCommands: singboxPlan.preCommands,
         commands: singboxPlan.commands,
         managedConfigs: singboxPlan.managedConfigs,
       } as any;
