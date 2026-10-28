@@ -38,7 +38,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.235"
+var Version = "2.2.236"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -289,7 +289,7 @@ var failoverEventQueue []failoverProxyEvent
 type failoverProxyEvent struct {
 	RuleID     int `json:"ruleId"`
 	SourcePort int `json:"sourcePort"`
-	// switch / unhealthy / recovered / prewarm / precheck_failed / unpinned
+	// switch / unhealthy / recovered / prewarm / precheck_failed / unpinned / flap_hold
 	Kind       string `json:"kind"`
 	FromTarget string `json:"fromTarget,omitempty"`
 	ToTarget   string `json:"toTarget"`
@@ -12867,6 +12867,10 @@ type failoverProxy struct {
 	// 自动择优的候选，以及它从什么时候开始一直是候选。
 	fastestCandidate int
 	fastestSince     time.Time
+	// 最近一小时里自动切换（不含人工指定）的时刻：切得太勤就把驻留拉长（flapHoldLocked）。
+	autoSwitchTimes []time.Time
+	// 这一轮驻留里「抖动抑制」事件报过了没有（每次切换之后重新算）。
+	flapHoldReported bool
 	// 计划切换：正在预热的那条、预检没过的那条（-1 = 没有）。
 	prewarmIndex        int
 	precheckFailedIndex int
@@ -13305,6 +13309,10 @@ func (p *failoverProxy) setActiveLocked(index int, reason string) {
 	p.lastSwitchAt = time.Now()
 	p.activeSince = p.lastSwitchAt
 	p.precheckFailedIndex = -1
+	p.flapHoldReported = false
+	if reason != "pin" {
+		p.noteAutoSwitchLocked(p.lastSwitchAt)
+	}
 	next := p.spec.Targets[index]
 	logf("failover switch rule=%d source=%d %d->%d target=%s:%d reason=%s", p.ruleID, p.sourcePort, old, index, next.TargetIP, next.TargetPort, reason)
 	from := ""
@@ -13479,12 +13487,79 @@ func (p *failoverProxy) fastestIndexLocked(now time.Time) int {
 	return best
 }
 
-// 刚切过去，还在最短驻留时间里。
+/*
+抖动抑制：一小时内自动切了三次以上，就把「刚切过去不许马上再切」的驻留拉长。
+
+切换保护（连续失败次数、评分分差、持续时间）挡的是**单次**误判；两条线路质量接近、
+轮流领先时，每一次切换都各自合规，合起来却是来回漂 —— honk 把这叫 switchFlap。对付它
+不能再加一道单次门槛，得看频率：切得越勤，下一次等得越久。三次起 5 分钟，之后每多一次
+翻一倍，最多一小时。人工指定不算（人说了算），当前线路挂了的逃生也不受它限制。
+*/
+const flapHoldWindow = time.Hour
+const flapHoldSwitches = 3
+const flapHoldBase = 5 * time.Minute
+const flapHoldMax = time.Hour
+
+func (p *failoverProxy) noteAutoSwitchLocked(at time.Time) {
+	kept := p.autoSwitchTimes[:0]
+	for _, t := range p.autoSwitchTimes {
+		if at.Sub(t) < flapHoldWindow {
+			kept = append(kept, t)
+		}
+	}
+	p.autoSwitchTimes = append(kept, at)
+}
+
+// 一小时内自动切了几次。
+func (p *failoverProxy) recentAutoSwitchesLocked(now time.Time) int {
+	count := 0
+	for _, t := range p.autoSwitchTimes {
+		if now.Sub(t) < flapHoldWindow {
+			count++
+		}
+	}
+	return count
+}
+
+// 抖动抑制要求的驻留；没在抖是 0。
+func (p *failoverProxy) flapHoldLocked(now time.Time) time.Duration {
+	count := p.recentAutoSwitchesLocked(now)
+	if count < flapHoldSwitches {
+		return 0
+	}
+	hold := flapHoldBase << uint(count-flapHoldSwitches)
+	if hold > flapHoldMax || hold <= 0 {
+		hold = flapHoldMax
+	}
+	return hold
+}
+
+// 刚切过去，还在最短驻留时间里（配置的最短驻留和抖动抑制取长的那个）。
 func (p *failoverProxy) holdingLocked(now time.Time) bool {
-	if p.spec.MinHoldSeconds <= 0 || p.lastSwitchAt.IsZero() {
+	if p.lastSwitchAt.IsZero() {
 		return false
 	}
-	return now.Sub(p.lastSwitchAt) < time.Duration(p.spec.MinHoldSeconds)*time.Second
+	hold := time.Duration(p.spec.MinHoldSeconds) * time.Second
+	if flap := p.flapHoldLocked(now); flap > hold {
+		hold = flap
+		if now.Sub(p.lastSwitchAt) < hold && !p.flapHoldReported {
+			// 报一次就够：面板的「最近切换」里写明为什么这会儿不切。
+			p.flapHoldReported = true
+			until := p.lastSwitchAt.Add(hold)
+			logf("failover flap hold rule=%d source=%d switches=%d hold=%s", p.ruleID, p.sourcePort, p.recentAutoSwitchesLocked(now), hold)
+			recordFailoverProxyEvent(failoverProxyEvent{
+				RuleID: p.ruleID, SourcePort: p.sourcePort, Kind: "flap_hold",
+				ToTarget: failoverTargetLabel(p.spec.Targets[p.activeIndex]),
+				FromIndex: -1, ToIndex: p.activeIndex,
+				Reason:    "flap: " + strconv.Itoa(p.recentAutoSwitchesLocked(now)) + " switches in 1h, hold " + strconv.Itoa(int(hold/time.Minute)) + "m until " + until.UTC().Format(time.RFC3339),
+				LatencyMs: p.latencyMsLocked(p.activeIndex), Score: p.scoreValueLocked(p.activeIndex),
+			})
+		}
+	}
+	if hold <= 0 {
+		return false
+	}
+	return now.Sub(p.lastSwitchAt) < hold
 }
 
 func (p *failoverProxy) updateFallbackActiveLocked(reason string) {

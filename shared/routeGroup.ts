@@ -698,7 +698,7 @@ export function describeRoutePath(
   return stops.join(" → ");
 }
 
-export const ROUTE_EVENT_KINDS = ["switch", "unhealthy", "recovered", "precheck_failed", "prewarm", "pinned", "unpinned", "issue"] as const;
+export const ROUTE_EVENT_KINDS = ["switch", "unhealthy", "recovered", "precheck_failed", "prewarm", "pinned", "unpinned", "issue", "flap_hold"] as const;
 export type RouteEventKind = (typeof ROUTE_EVENT_KINDS)[number];
 
 export const ROUTE_EVENT_KIND_LABELS: Record<RouteEventKind, string> = {
@@ -710,6 +710,7 @@ export const ROUTE_EVENT_KIND_LABELS: Record<RouteEventKind, string> = {
   pinned: "人工指定",
   unpinned: "交回自动",
   issue: "路径不可用",
+  flap_hold: "抖动抑制",
 };
 
 export function normalizeRouteEventKind(value: unknown): RouteEventKind | null {
@@ -740,6 +741,9 @@ export function describeRouteReason(reason: unknown): string {
   if (lower.startsWith("precheck:")) return `预检未通过：${describeRouteIssue(text.slice("precheck:".length))}`;
   if (lower.startsWith("relay down")) return describeRouteIssue(text);
   if (lower.startsWith("panel:")) return text.slice("panel:".length).trim();
+  // Agent 的抖动抑制：flap: 3 switches in 1h, hold 5m until 2026-…
+  const flap = /^flap:\s*(\d+)\s+switches in 1h,\s*hold\s+(\d+)m/i.exec(text);
+  if (flap) return `一小时内自动切了 ${flap[1]} 次，线路在来回漂：暂停自动切换 ${flap[2]} 分钟（当前线路挂了照样切）`;
   return text;
 }
 
