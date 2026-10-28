@@ -150,8 +150,8 @@ test("订阅路由的新能力", () => {
     const notPage = await get("/api/sub/tok-all", { "user-agent": "clash-verge/v1.7.7", accept: "text/html" });
     assert.ok(notPage.body.startsWith("proxies:"), notPage.body.slice(0, 60));
 
-    // 令牌到期 → 404 并记 token-expired。
-    assert.equal((await get("/api/sub/tok-expired")).status, 404);
+    // 令牌到期 → 403 并记 token-expired。
+    assert.equal((await get("/api/sub/tok-expired")).status, 403);
     await new Promise((resolve) => setTimeout(resolve, 150));
     const expiredRow = (await query("SELECT lastFailureReason FROM proxy_sub_tokens WHERE id = 3"))[0];
     assert.equal(expiredRow.lastFailureReason, "token-expired");
@@ -168,14 +168,14 @@ test("订阅路由的新能力", () => {
     subSettings.invalidateProxySubSettingsCache();
     cache.invalidateProxySubCacheAll();
     const noHwid = await get("/api/sub/tok-all", { "user-agent": "Happ/1.63.1" });
-    assert.equal(noHwid.status, 404);
+    assert.equal(noHwid.status, 403);
     assert.equal(noHwid.headers["x-hwid-not-supported"], "true");
     const first = await get("/api/sub/tok-all", { "user-agent": "Happ/1.63.1", "x-hwid": "DEVICE-0001-ABCDEF", "x-device-os": "iOS" });
     assert.equal(first.status, 200);
     assert.equal(first.headers["x-hwid-active"], "true");
     await new Promise((resolve) => setTimeout(resolve, 150));
     const second = await get("/api/sub/tok-all", { "user-agent": "Happ/1.63.1", "x-hwid": "DEVICE-0002-ABCDEF" });
-    assert.equal(second.status, 404);
+    assert.equal(second.status, 403);
     assert.equal(second.headers["x-hwid-max-devices-reached"], "true");
     const again = await get("/api/sub/tok-all", { "user-agent": "Happ/1.63.1", "x-hwid": "DEVICE-0001-ABCDEF" });
     assert.equal(again.status, 200, "已登记的设备照样能拉");

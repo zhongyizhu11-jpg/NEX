@@ -12,8 +12,8 @@ import test from "node:test";
  * 长得一模一样 —— 客户根本没试 / 地址被停用 / 账号没资格了 / 服务端出错。第三种要做的
  * 是去续费，第一种是让客户重新导入，做错方向就是白折腾一晚上。
  *
- * 所以失败也要记，并且记下为什么。给客户端的回应仍然一律是含糊的 404（不能泄露
- * 「这个令牌存在但没资格」），但面板自己这边要留下线索。
+ * 所以失败也要记，并且记下为什么。给客户端的回应：令牌在但被拒是 403 并写明原因（拿得到 40 位令牌的就是主人），令牌不存在才 404；
+ * 面板自己这边也要留下线索。
  */
 test("SQLite 被拒的拉取要记下原因，成功之后不再挂着", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-sub-failure-"));
@@ -61,21 +61,21 @@ test("SQLite 被拒的拉取要记下原因，成功之后不再挂着", () => {
     // 记录是 void 出去的，给它一拍时间落库。
     const settle = () => new Promise((resolve) => setTimeout(resolve, 120));
 
-    // 1. 被停用的地址：客户端仍然只看到含糊的 404，但面板记下了原因。
-    assert.equal((await get("/api/sub/tok-off")).status, 404);
+    // 1. 被停用的地址：客户端看到 403 和原因，但面板记下了原因。
+    assert.equal((await get("/api/sub/tok-off")).status, 403);
     await settle();
     let row = await tokenRow(2);
     assert.equal(row.lastFailureReason, "disabled");
     assert.equal(proxySubTokenStatus(row).kind, "failed");
 
     // 2. 过期的地址
-    assert.equal((await get("/api/sub/tok-exp")).status, 404);
+    assert.equal((await get("/api/sub/tok-exp")).status, 403);
     await settle();
     assert.equal((await tokenRow(3)).lastFailureReason, "token-expired");
 
     // 3. 账号没资格了（到期）—— 商家最需要看到的就是这一条
     await exec("UPDATE users SET expiresAt = ? WHERE id = 1", [Math.floor(Date.now() / 1000) - 3600]);
-    assert.equal((await get("/api/sub/tok-live")).status, 404);
+    assert.equal((await get("/api/sub/tok-live")).status, 403);
     await settle();
     row = await tokenRow(1);
     assert.equal(row.lastFailureReason, "not-eligible");

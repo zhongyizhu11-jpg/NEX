@@ -48,6 +48,7 @@ import { loadProxySubSettings, saveProxySubSettings } from "../proxySubSettings"
 import { infoNodesWanted, loadProxySubTokenContext, resolveTemplateForToken } from "../proxySubBundle";
 import { syncProxySubSource } from "../proxySubSourceSync";
 import { invalidateProxySubCacheForUser } from "../proxySubCache";
+import { clearProxySubRateLimitForToken } from "../proxySubRateLimit";
 
 /**
  * 订阅令牌够长才安全：地址里带着全部节点凭据，一旦可猜就等于把节点送人。
@@ -721,16 +722,34 @@ export const proxySubscriptionsRouter = router({
       return { success: true };
     }),
 
-  /** 重置令牌：旧地址立刻失效，用于设备丢失。设备列表一并清空 —— 旧地址上的设备和新地址没关系。 */
+  /**
+   * 重置令牌：旧地址立刻失效，用于设备丢失。设备列表一并清空 —— 旧地址上的设备和新地址没关系。
+   * 短链（/s/<别名>）指的是同一条令牌，不清掉的话旧短链照样能拉；「最近一次没拉到」的记录、
+   * 限流计数（按令牌 id 记）也一并清掉，免得新地址一导入就是 429。
+   * 主人本身没资格（到期、超流量、权限收回）时换地址解决不了，照样重置，但把原因带回去。
+   */
   rotateToken: protectedProcedure
     .input(z.object({ id: z.number().int().positive() }))
     .mutation(async ({ ctx, input }) => {
       await assertProxySubscriptionAllowed(ctx);
-      await assertOwnedToken(input.id, ctx);
+      const existing = await assertOwnedToken(input.id, ctx);
       const token = nanoid(SUBSCRIPTION_TOKEN_LENGTH);
-      await db.updateProxySubToken(input.id, { token, accessCount: 0, lastClientFamily: null, lastClientVersion: null } as any);
+      await db.updateProxySubToken(input.id, {
+        token,
+        alias: null,
+        accessCount: 0,
+        lastClientFamily: null,
+        lastClientVersion: null,
+        lastFailureAt: null,
+        lastFailureReason: null,
+      } as any);
       await db.clearProxySubDevices(input.id);
-      return { token };
+      clearProxySubRateLimitForToken(input.id);
+      const owner = await db.getUserById(Number(existing.userId));
+      const warning = db.proxyCredentialRecipientActive(owner as any)
+        ? null
+        : "地址已重置，但账号目前没有订阅资格（到期、超流量或权限被收回），新地址也拉不到，先续费或联系管理员";
+      return { token, warning };
     }),
 
   /** 这条令牌实际会发出去的内容：处理器跑完之后的节点名、组、信息节点、自定义规则报错。 */

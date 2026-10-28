@@ -173,9 +173,9 @@ test("订阅地址按 token 返回节点，并按客户端 UA 选择格式", () 
     const forced = await get("/api/sub/token-live?format=clash", { "user-agent": "Loon/700" });
     assert.ok(forced.body.startsWith("proxies:"));
 
-    // 无效令牌与被停用的令牌都返回 404，不泄露令牌是否存在。
+    // 令牌不存在 404；令牌在但被停用 403（拿得到 40 位令牌的就是主人，告诉他原因）。
     assert.equal((await get("/api/sub/does-not-exist")).status, 404);
-    assert.equal((await get("/api/sub/token-off")).status, 404);
+    assert.equal((await get("/api/sub/token-off")).status, 403);
 
     // 访问会被记录下来，便于用户发现订阅地址被别人用了。
     await new Promise((resolve) => setTimeout(resolve, 150));
@@ -275,7 +275,7 @@ test("订阅只包含令牌所属用户的节点", () => {
 });
 
 
-test("没有客户端订阅权限时订阅地址一律 404", () => {
+test("没有客户端订阅权限时订阅地址一律被拒（403）", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-proxy-sub-perm-"));
   const databasePath = path.join(directory, "sub-perm.db");
   const script = String.raw`
@@ -329,13 +329,13 @@ test("没有客户端订阅权限时订阅地址一律 404", () => {
     });
 
     assert.equal(await status("token-1"), 200, "有权限的用户应能拉到订阅");
-    // 与令牌无效同样 404，不泄露「这个令牌存在但没权限」。
-    assert.equal(await status("token-2"), 404, "无权限的用户不该拉到订阅");
+    // 令牌在但没资格：403，并写明原因。
+    assert.equal(await status("token-2"), 403, "无权限的用户不该拉到订阅");
     assert.equal(await status("token-3"), 200, "管理员不受该权限限制");
 
     // 收回权限后立刻失效，不需要吊销令牌。
     await exec("UPDATE users SET allowProxySubscription = 0 WHERE id = 1");
-    assert.equal(await status("token-1"), 404, "收回权限后订阅应立即失效");
+    assert.equal(await status("token-1"), 403, "收回权限后订阅应立即失效");
 
     /**
      * 到期与停用也要立刻失效 —— 和落地机那边同一把尺子。
@@ -348,17 +348,17 @@ test("没有客户端订阅权限时订阅地址一律 404", () => {
     assert.equal(await status("token-1"), 200, "恢复权限后应当又能拉到");
 
     await exec("UPDATE users SET expiresAt = ? WHERE id = 1", [Math.floor(Date.now() / 1000) - 3600]);
-    assert.equal(await status("token-1"), 404, "账号到期后订阅应立即失效");
+    assert.equal(await status("token-1"), 403, "账号到期后订阅应立即失效");
     await exec("UPDATE users SET expiresAt = NULL WHERE id = 1");
     assert.equal(await status("token-1"), 200, "续期之后要自己回来");
 
     await exec("UPDATE users SET accountEnabled = 0 WHERE id = 1");
-    assert.equal(await status("token-1"), 404, "账号被停用后订阅应立即失效");
+    assert.equal(await status("token-1"), 403, "账号被停用后订阅应立即失效");
     await exec("UPDATE users SET accountEnabled = 1 WHERE id = 1");
 
     // 管理员同样受停用影响（资格判定里只对「订阅权限」这一条放行）。
     await exec("UPDATE users SET accountEnabled = 0 WHERE id = 3");
-    assert.equal(await status("token-3"), 404, "被停用的管理员也不该再拉到订阅");
+    assert.equal(await status("token-3"), 403, "被停用的管理员也不该再拉到订阅");
 
     await new Promise((resolve) => server.close(resolve));
     console.log("ok");
