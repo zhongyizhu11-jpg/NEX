@@ -40,6 +40,7 @@ import { completePluginAgentTask } from "./pluginAgentTasks";
 import { reportMimicInstallResult } from "./mimicInstallTasks";
 import { getAgentHostIdentityFromRequest } from "./agentAuth";
 import { ingestRouteHopProbeReports } from "./routeGroups";
+import { recordRuleTrafficSample } from "./ruleLiveRates";
 import { applyTrafficMultiplier, normalizeTrafficMultiplier } from "../shared/trafficMultiplier";
 import { normalizeTrafficCounterBytes, normalizeTrafficCounterConnections } from "../shared/trafficCounterBytes";
 import { mapWithConcurrency } from "./asyncPool";
@@ -1149,6 +1150,8 @@ agentRouter.post("/api/agent/traffic", async (req: Request, res: Response) => {
         continue;
       }
       const { rule, tunnel, group } = context;
+      // 此刻的速率只给界面看（线路板上每一跳的 ↓↑），不进账：记在谁名下、记不记都不影响它。
+      recordRuleTrafficSample({ ruleId: Number(stat.ruleId), hostId: Number(host.id), bytesIn, bytesOut, connections: normalizeTrafficCounterConnections(stat.connections), nowMs: requestStartedAt });
       if ((rule as any).pendingDelete || !(rule as any).isEnabled) {
         ignoredStatCount += 1;
         continue;

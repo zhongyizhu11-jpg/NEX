@@ -108,31 +108,39 @@ function render(options: { status?: RouteStatus | null; events?: RouteEvent[]; c
   );
 }
 
-test("四段都在：当前路径、备用路径、调度计划、最近切换；最后是应急人工指定", () => {
+test("四段都在：路径、调度计划、最近切换；最后是应急人工指定", () => {
   const html = render();
-  const order = ["当前路径", "备用路径", "调度计划", "最近切换", "应急人工指定"].map((header) => html.indexOf(`>${header}<`));
+  const order = ["路径", "调度计划", "最近切换", "应急人工指定"].map((header) => html.indexOf(`>${header}<`));
   assert.ok(order.every((position) => position > 0), `少了一段：${order.join(",")}`);
   assert.deepEqual([...order].sort((left, right) => left - right), order, "顺序就是从上往下");
   assert.match(html, /现在走 备用线路，18:00 起/);
 });
 
-test("当前路径逐跳列出延迟和中继端口，整条路有评分和四个指标", () => {
+test("路径画成链：在走的排最前，段上写每一跳的延迟、整链相加，节点下写中继端口；评分和连接数在卡头", () => {
   const html = render();
-  assert.match(html, /B 备用线路/);
-  assert.match(html, /第 1 跳 · SG relay 03[^]*?中继 :25310[^]*?18ms/);
-  assert.match(html, /第 2 跳 · JP relay 02[^]*?中继 :25311[^]*?28ms/);
-  assert.match(html, /data-testid="route-score"[^>]*>81 良</);
-  assert.match(html, /data-testid="path-metrics"[^]*?延迟[^]*?61ms[^]*?丢包[^]*?0\.4%[^]*?抖动[^]*?5ms[^]*?可用率[^]*?99\.8%/);
-  assert.match(html, /12 连接/);
+  const cards = html.split('data-testid="route-path-card"');
+  assert.equal(cards.length, 3, "两条路径两张卡");
+  const active = cards[1];
+  assert.match(active, /备用线路/);
+  assert.match(active, />在走</);
+  // 入口探第一跳 61ms，SG 探 JP 18ms，JP 探落地 28ms：整链 107。
+  assert.match(active, /61 ms[^]*?SG relay 03[^]*?中继 <span[^>]*>:25310<[^]*?18 ms[^]*?JP relay 02[^]*?中继 <span[^>]*>:25311<[^]*?28 ms[^]*?落地/);
+  assert.match(active, /整链 107 ms/);
+  assert.match(active, /data-testid="route-score"[^>]*>81 良</);
+  assert.match(active, /12 连接/);
+  assert.match(cards[2], /主线路/);
+  assert.match(cards[2], />备用</);
 });
 
-test("备用路径带评分、首选标记和用不了的原因", () => {
+test("断了的路径写明原因，没测到的段标「未测」而不是当成通", () => {
   const html = render({ status: status({}, [path(0, { down: true, downReason: "中转异常：JP relay 02 → 落地", healthy: false, score: 0 }), path(1)]) });
-  assert.match(html, /A 主线路/);
-  assert.match(html, /中转异常：JP relay 02 → 落地/);
+  assert.match(html, /断了 · 中转异常：JP relay 02 → 落地/);
   assert.match(html, /用不了的路径会被跳过/);
   // 20:00 在时段里，首选是按时段表的 B，所以 A 不带「首选」。
   assert.doesNotMatch(html, />首选</);
+  const untested = render({ status: status({}, [path(0), path(1, { hops: path(1).hops.map((hop, index) => (index === 0 ? { ...hop, ok: null, latencyMs: null } : hop)) })]) });
+  assert.match(untested, /data-state="unknown"[^>]*>[^]*?未测/);
+  assert.match(untested, /整链 ≥ 89 ms/, "没测的那段不算进去，写成「≥」");
 });
 
 test("调度计划：策略模板、此刻起作用的那一行、切换保护、预热、旧连接", () => {

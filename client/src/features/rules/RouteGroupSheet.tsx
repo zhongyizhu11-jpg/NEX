@@ -1,7 +1,6 @@
 import { useRef, type ReactNode } from "react";
 import { useLocation } from "wouter";
 
-import { EntityTag } from "@/components/entity/EntityCard";
 import { GroupedList, ListRow, ListSection } from "@/components/ios/GroupedList";
 import { StatusDot } from "@/components/network/StatusDot";
 import { Button } from "@/components/ui/button";
@@ -9,7 +8,6 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { formatAgo } from "@shared/dashboardAttention";
-import { formatFailoverEndpoint } from "@shared/failoverTargets";
 import type { NetworkHealth } from "@shared/networkHealth";
 import {
   ROUTE_EVENT_KIND_LABELS,
@@ -19,13 +17,14 @@ import {
   normalizeRouteEventKind,
   routeModeHint,
   routePathLetter,
-  routeWeightShares,
   type RouteEndpoint,
   type RouteGroupPolicy,
 } from "@shared/routeGroup";
 import { describeRoutePolicyReport, formatPolicyClock, type RoutePolicy } from "@shared/routePolicy";
-import { formatRouteScore, routeScoreGrade } from "@shared/routeScore";
+import { formatRouteScore } from "@shared/routeScore";
+import type { RouteSwitchSummary } from "@shared/routeSwitchSummary";
 import { isAgentVersionBehind } from "@shared/version";
+import { RoutePathCards, RouteSwitchChip, type RouteBoardEntry, type RouteBoardRate } from "./RouteBoard";
 import { ConditionRow, PinSection, SentenceRow } from "./RoutePolicySheet";
 import { RouteQualityHistory } from "./RouteQualityHistory";
 
@@ -55,6 +54,8 @@ export type RouteStatusHop = {
   consecutiveFailures: number;
   probedAt: number | null;
   nextLabel: string | null;
+  /** 这一跳的中继规则此刻的速率；流量没走到这一跳时为空。 */
+  rate?: RouteBoardRate;
 };
 
 export type RouteStatusPath = {
@@ -81,6 +82,8 @@ export type RouteStatusPath = {
   samples: number;
   active: boolean;
   prewarming: boolean;
+  /** 入口 Agent 最近一次探这条路径（Unix 毫秒）。 */
+  probedAt?: number | null;
 };
 
 export type RouteStatus = {
@@ -101,6 +104,10 @@ export type RouteStatus = {
   /** tcp / udp / both */
   protocol?: string;
   requiredAgentVersion: string;
+  /** 这条规则（入口）此刻的速率。 */
+  rate?: RouteBoardRate;
+  switches?: RouteSwitchSummary | null;
+  entry?: RouteBoardEntry | null;
 };
 
 export type RouteEvent = {
@@ -124,92 +131,6 @@ const reportHealth: Record<ReturnType<typeof describeRoutePolicyReport>["tone"],
   muted: "unknown",
 };
 
-/** 评分等级的颜色，和状态点一套：优良绿、较差黄、不可用红；还没评分不染色。 */
-const gradeClass: Record<ReturnType<typeof routeScoreGrade>["tone"], string> = {
-  healthy: "text-[var(--fx-healthy-text)]",
-  warn: "text-[var(--fx-warn-text)]",
-  down: "text-destructive",
-  standby: "text-muted-foreground",
-};
-
-function ScoreTag({ score }: { score: number | null }) {
-  return (
-    <span className={cn("shrink-0 font-mono text-xs font-semibold tabular-nums", gradeClass[routeScoreGrade(score).tone])} data-testid="route-score">
-      {formatRouteScore(score)}
-    </span>
-  );
-}
-
-function pathHealth(path: RouteStatusPath): NetworkHealth {
-  if (path.down) return "down";
-  if (path.prewarming) return "switching";
-  if (path.healthy === null) return path.active ? "healthy" : "unknown";
-  if (!path.healthy) return "degraded";
-  return path.active ? "healthy" : "standby";
-}
-
-function hopHealth(hop: RouteStatusHop): NetworkHealth {
-  if (hop.enabled === false || hop.running === false) return "down";
-  if (hop.ok === false) return hop.consecutiveFailures >= 3 ? "down" : "degraded";
-  if (hop.ok === true) return "healthy";
-  return "unknown";
-}
-
-/** 「入口 → HK01 → JP01 → 10.95.0.10:443」 */
-function pathChain(path: RouteStatusPath): string {
-  return ["入口", ...path.hops.map((hop) => hop.name), formatFailoverEndpoint(path.dest.ip, path.dest.port) || "落地"].join(" → ");
-}
-
-function metric(label: string, value: string | null) {
-  return (
-    <span className="flex min-w-0 flex-col">
-      <span className="text-meta text-muted-foreground">{label}</span>
-      <span className="font-mono text-sm tabular-nums text-foreground">{value ?? "—"}</span>
-    </span>
-  );
-}
-
-function PathMetrics({ path }: { path: RouteStatusPath }) {
-  return (
-    <div className="fx-list-row grid grid-cols-4 gap-2 px-4 py-3" data-testid="path-metrics">
-      {metric("延迟", path.latencyMs === null ? null : `${Math.round(path.latencyMs)}ms`)}
-      {metric("丢包", path.lossPct === null ? null : `${path.lossPct.toFixed(1)}%`)}
-      {metric("抖动", path.jitterMs === null ? null : `${Math.round(path.jitterMs)}ms`)}
-      {metric("可用率", path.availabilityPct === null ? null : `${path.availabilityPct.toFixed(1)}%`)}
-    </div>
-  );
-}
-
-function HopRows({ path }: { path: RouteStatusPath }) {
-  return (
-    <>
-      {path.hops.map((hop, index) => (
-        <ListRow
-          key={`${hop.hostId}-${index}`}
-          icon={<StatusDot health={hopHealth(hop)} />}
-          label={`第 ${index + 1} 跳 · ${hop.name}`}
-          detail={(
-            <>
-              {hop.port ? <span className="font-mono">中继 :{hop.port}</span> : "中继还没建好"}
-              {hop.running === false && hop.enabled !== false ? " · 中继没在跑" : null}
-              {hop.enabled === false ? " · 中继已停用" : null}
-              {hop.ok === false ? ` · 到${hop.nextLabel || "下一跳"}连续 ${hop.consecutiveFailures} 次不通` : null}
-              {hop.ok === true && hop.nextLabel ? ` · 到${hop.nextLabel}` : null}
-            </>
-          )}
-          value={hop.latencyMs === null ? (hop.ok === null ? "等探测" : "—") : `${Math.round(hop.latencyMs)}ms`}
-        />
-      ))}
-      <ListRow
-        icon={<StatusDot health={path.down ? "down" : path.healthy === false ? "degraded" : path.healthy ? "healthy" : "unknown"} />}
-        label={path.hops.length > 0 ? "落地" : "直连落地"}
-        detail={<span className="font-mono">{formatFailoverEndpoint(path.dest.ip, path.dest.port) || "同规则目标"}</span>}
-        value={path.latencyMs === null ? "—" : `${Math.round(path.latencyMs)}ms`}
-      />
-    </>
-  );
-}
-
 export type RouteGroupPanelProps = {
   policy: RoutePolicy;
   status: RouteStatus | null;
@@ -229,7 +150,6 @@ export function RouteGroupPanel({ policy, status, events, canEdit, pending = fal
   const activePath = paths.find((path) => path.active) || null;
   const others = paths.filter((path) => !path.active);
   const weighted = policy.mode === "weighted";
-  const shares = routeWeightShares(paths);
   const modeInfo = ROUTE_MODE_INFO[policy.mode];
 
   return (
@@ -275,80 +195,26 @@ export function RouteGroupPanel({ policy, status, events, canEdit, pending = fal
           </p>
         ) : null}
 
-      <GroupedList>
-        <ListSection
-          header={weighted ? "路径" : "当前路径"}
-          footer={weighted ? "权重负载没有「当前」：每条新连接各走各的。" : activePath && activePath.hops.length > 0 ? "每一跳的延迟是那台中转探它下一跳的结果；整条路的延迟是入口探到底的结果。" : undefined}
-        >
-          {!status ? (
-            <ListRow label="在读线路状态" detail="稍等" />
-          ) : weighted ? (
-            paths.map((path) => (
-              <ListRow
-                key={path.key}
-                icon={<StatusDot health={pathHealth(path)} />}
-                label={`${path.letter} ${path.name}`}
-                detail={<>{pathChain(path)}{path.down && path.downReason ? <span className="text-[var(--fx-warn-text)]"> · {path.downReason}</span> : null}</>}
-                value={<span className="flex items-center gap-2"><span className="text-meta text-muted-foreground">{policy.strategy === "weighted" ? `${shares[path.index]}%` : ""}</span><ScoreTag score={path.score} /></span>}
-              />
-            ))
-          ) : activePath ? (
-            <>
-              <ListRow
-                icon={<StatusDot health={pathHealth(activePath)} />}
-                label={`${activePath.letter} ${activePath.name}`}
-                detail={pathChain(activePath)}
-                trailing={(
-                  <span className="flex items-center gap-2">
-                    {activePath.connections !== null && activePath.connections > 0 ? <span className="text-meta text-muted-foreground">{activePath.connections} 连接</span> : null}
-                    <ScoreTag score={activePath.score} />
-                  </span>
-                )}
-              />
-              <HopRows path={activePath} />
-              <PathMetrics path={activePath} />
-            </>
-          ) : (
-            <ListRow icon={<StatusDot health="unknown" />} label="还不知道现在走哪条" detail={report.text} />
-          )}
-        </ListSection>
-
-        {!weighted ? (
-          <ListSection header="备用路径" footer={others.some((path) => path.down) ? "用不了的路径会被跳过，恢复并稳定一阵后重新参与。" : undefined}>
-            {!status ? (
-              <ListRow label="在读线路状态" />
-            ) : others.length === 0 ? (
-              <ListRow label="没有别的路径" detail="线路组里只剩这一条" />
-            ) : (
-              others.map((path) => {
-                const line = policy.lines[path.index];
-                return (
-                  <ListRow
-                    key={path.key}
-                    icon={<StatusDot health={pathHealth(path)} />}
-                    label={`${path.letter} ${path.name}`}
-                    detail={(
-                      <>
-                        {pathChain(path)}
-                        {path.down && path.downReason ? <span className="text-[var(--fx-warn-text)]"> · {path.downReason}</span> : null}
-                        {!path.down && path.latencyMs !== null ? ` · ${Math.round(path.latencyMs)}ms` : null}
-                        {!path.down && path.lossPct !== null && path.lossPct > 0 ? ` · 丢包 ${path.lossPct.toFixed(1)}%` : null}
-                      </>
-                    )}
-                    trailing={(
-                      <span className="flex items-center gap-1.5">
-                        {line?.preferred ? <EntityTag>首选</EntityTag> : null}
-                        {path.prewarming ? <EntityTag tone="path">预热中</EntityTag> : null}
-                        <ScoreTag score={path.score} />
-                      </span>
-                    )}
-                  />
-                );
-              })
-            )}
-          </ListSection>
+      {/* 路径卡：一条路径一张，在走的排最前；每张是一条链，段上写延迟，节点下写速率。 */}
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center justify-between gap-2 px-1">
+          <span className="text-meta font-semibold text-muted-foreground">{weighted ? "路径（每条都在走）" : "路径"}</span>
+          {status?.switches ? <RouteSwitchChip switches={status.switches} /> : null}
+        </div>
+        {!status ? (
+          <p className="px-1 text-meta text-muted-foreground">在读线路状态…</p>
+        ) : (
+          <RoutePathCards status={status} policy={policy} />
+        )}
+        {status && activePath && activePath.hops.length > 0 ? (
+          <p className="px-1 text-meta text-muted-foreground">每一段的延迟是上一个节点探它下一跳的结果；「未测」是那台中转还没报、不是通。整链是各段相加。</p>
         ) : null}
+        {status && others.some((path) => path.down) ? (
+          <p className="px-1 text-meta text-muted-foreground">用不了的路径会被跳过，恢复并稳定一阵后重新参与。</p>
+        ) : null}
+      </div>
 
+      <GroupedList>
         <ListSection
           header="调度计划"
           footer={weighted ? undefined : "从上往下，先对上的那一条说了算。它指的那条挂了，照样往下找 —— 选路和健康检查是两件事。"}
@@ -450,7 +316,7 @@ export function RouteGroupSheet({
   return (
     <Dialog open={open && !!policy} onOpenChange={onOpenChange}>
       {shown ? (
-        <DialogContent className="bg-[var(--fx-l0-page)] sm:max-w-lg">
+        <DialogContent className="bg-[var(--fx-l0-page)] sm:max-w-3xl">
           <DialogHeader>
             <DialogTitle>线路组</DialogTitle>
             <DialogDescription className="truncate">{shown.subjectName}</DialogDescription>

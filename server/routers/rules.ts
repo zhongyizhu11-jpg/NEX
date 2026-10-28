@@ -2,7 +2,7 @@ import { protectedProcedure, router } from "../_core/trpc";
 import { withRuleEgressDisplay } from "../ssEgress";
 import { z } from "zod";
 import * as db from "../db";
-import { crudRulesRouter, routeSchedulerHostIds } from "./rules.crud";
+import { crudRulesRouter } from "./rules.crud";
 import { portsRulesRouter } from "./rules.ports";
 import { selfTestRulesRouter } from "./rules.selfTest";
 import { trafficRulesRouter } from "./rules.traffic";
@@ -15,26 +15,16 @@ import {
   isUserspaceForwardType,
   normalizeForwardRuleProtocol,
 } from "@shared/forwardTypes";
-import { describeFailoverActiveLine } from "@shared/failoverActiveLine";
 import {
-  ROUTE_GROUP_AGENT_VERSION,
-  describeRouteIssue,
   describeRouteReason,
   routeEventMillis,
-  routeGroupIsForwardXTunnel,
   routeGroupOf,
-  routeGroupSchedulerAgentVersion,
-  routePathDestination,
-  routePathDial,
   routePathLabel,
   routePathLetter,
 } from "@shared/routeGroup";
-import { routeScoreGrade } from "@shared/routeScore";
-import { isAgentVersionBehind } from "@shared/version";
-import { getRouteStatus, routeHopDownHints } from "../routeGroupStats";
+import { buildRouteBoard, buildRouteStatus } from "../routeStatusView";
 import { bucketRouteQualityRows, routeQualityBucketMs } from "../routePathQualityHistory";
 import { ROUTE_PATH_QUALITY_RETENTION_HOURS } from "../repositories/routePathQualityRepository";
-import { routeRelayRulesByKey } from "../routeGroups";
 import { dbBool } from "../repositories/repositoryUtils";
 import { ruleTrafficQueryCache } from "../ruleLatencyQueryCache";
 import { idSetFingerprint } from "../queryCache";
@@ -47,18 +37,7 @@ async function requireRuleVisible(user: { id: number; role: string }, ruleId: nu
   return rule;
 }
 
-/**
- * 几台调度机里最旧的 Agent 版本。有一台读不到版本就返回空串：说不准它认不认，按不支持算，
- * 和心跳那边 isAgentVersionAtLeast("", …) 为假一致。
- */
-export function oldestAgentVersion(versions: readonly string[]): string {
-  let oldest = "";
-  for (const version of versions) {
-    if (!version) return "";
-    if (!oldest || isAgentVersionBehind(version, oldest)) oldest = version;
-  }
-  return oldest;
-}
+export { oldestAgentVersion } from "../routeStatusView";
 
 async function withRuleResourceAccess<T extends any>(value: T, user: { id: number; role: string }): Promise<T> {
   if (user.role === "admin") return value;
@@ -216,105 +195,19 @@ export const rulesRouter = router({
     .input(z.object({ ruleId: z.number().int().positive() }))
     .query(async ({ input, ctx }) => {
       const rule = await requireRuleVisible(ctx.user, input.ruleId);
-      const group = routeGroupOf(rule);
-      if (!group) return null;
-      const { paths, policy } = group;
-      const status = getRouteStatus(Number(rule.id));
-      const agent = status.agent || status.staleAgent;
-      const hints = routeHopDownHints(Number(rule.id), paths);
-      const hopIds = Array.from(new Set(paths.flatMap((path) => path.hops)));
-      /*
-        评分和预热跑在调度层那台机器上 —— GOST 隧道规则是隧道的出口机，不是规则的入口机。
-        版本读错机器的话，界面会说「支持评分」而真正跑调度的那台 Agent 还是旧的（或者反过来）。
-        负载均衡的隧道每个出口各跑一个调度器，心跳要每一台都够版本才下发 UDP 调度，所以这里
-        按最旧的那台说（routeSchedulerHostIds 和心跳是同一个口径）。
-      */
-      const routeTunnel = Number((rule as any).tunnelId || 0) > 0
-        ? await (db.getTunnelById(Number((rule as any).tunnelId)) as Promise<any>).catch(() => null)
-        : null;
-      const routeExitNodes = routeTunnel ? await db.getTunnelExitNodes(Number(routeTunnel.id)).catch(() => []) : [];
-      const schedulerHostIds = routeSchedulerHostIds(Number(rule.hostId), routeTunnel, routeExitNodes);
-      const [names, relays, schedulerHosts] = await Promise.all([
-        hopIds.length > 0 ? db.getHostNamesByIds(hopIds) : Promise.resolve(new Map<number, string>()),
-        routeRelayRulesByKey(Number(rule.id)),
-        Promise.all(schedulerHostIds.map((hostId) => (db.getHostById(hostId) as Promise<any>).catch(() => null))),
-      ]);
-      const active = describeFailoverActiveLine(rule);
-      const activeIndex = status.agent && status.agent.activeIndex >= 0 ? status.agent.activeIndex : (active ? active.index : -1);
-      const rows = paths.map((path, index) => {
-        const target = agent?.targets.find((item) => item.index === index) || null;
-        const hint = hints.get(path.key) || null;
-        const hops = path.hops.map((hostId, hopIndex) => {
-          const probe = status.hops.find((item) => item.pathKey === path.key && item.hopIndex === hopIndex) || null;
-          const relay = relays.get(`${path.key}:${hopIndex}`) as any;
-          return {
-            hostId,
-            name: names.get(hostId) || `主机 ${hostId}`,
-            port: relay ? Number(relay.sourcePort) : null,
-            running: relay ? dbBool(relay.isRunning) : null,
-            enabled: relay ? dbBool(relay.isEnabled) : null,
-            ok: probe ? probe.ok : null,
-            latencyMs: probe?.latencyMs ?? null,
-            consecutiveFailures: probe?.consecutiveFailures ?? 0,
-            probedAt: probe?.at ?? null,
-            nextLabel: probe?.nextLabel ?? null,
-          };
-        });
-        const down = !!target?.down || !!hint || !!path.issue;
-        const downReason = path.issue || (hint ? hint.reason : target?.downReason || "");
-        return {
-          key: path.key,
-          index,
-          letter: routePathLetter(index),
-          name: routePathLabel(path, index),
-          hops,
-          dest: routePathDestination(path, rule),
-          dial: routePathDial(path, rule),
-          issue: path.issue,
-          weight: path.weight,
-          probe: path.probe,
-          score: target?.score ?? null,
-          grade: routeScoreGrade(target?.score ?? null),
-          latencyMs: target?.latencyMs ?? null,
-          lossPct: target?.lossPct ?? null,
-          jitterMs: target?.jitterMs ?? null,
-          availabilityPct: target?.availabilityPct ?? null,
-          healthy: target ? target.healthy && !down : null,
-          down,
-          downReason: describeRouteIssue(downReason),
-          connections: target?.connections ?? null,
-          samples: target?.samples ?? 0,
-          active: activeIndex === index,
-          prewarming: !!agent && agent.prewarmIndex === index,
-        };
-      });
-      const agentVersion = oldestAgentVersion(schedulerHosts.map((schedulerHost) => String(schedulerHost?.agentVersion || "").trim()));
-      /*
-        UDP、TCP+UDP 和 NEX 隧道的线路组要 Agent 2.2.199 起才调度；更老的时候面板不下发
-        调度，流量走路径 A、不切换（server/agentHeartbeatRoute.ts 的 routePrimaryEndpoint）。
-        界面据 agentSupportsProtocol 把这件事说出来，别让人以为配了就生效；schedulerNeed 说是
-        哪一样要新 Agent，界面的说法跟着换。
-      */
-      const protocol = normalizeForwardRuleProtocol((rule as any).protocol);
-      const schedulerAgentVersion = routeGroupSchedulerAgentVersion(protocol, routeTunnel?.mode);
-      const schedulerNeed = routeGroupIsForwardXTunnel(routeTunnel?.mode) ? "forwardx" : protocol !== "tcp" ? "udp" : null;
-      return {
-        ruleId: Number(rule.id),
-        protocol,
-        policy,
-        paths: rows,
-        activeIndex,
-        activeSince: status.agent?.activeSince || (active?.since ? active.since * 1000 : null),
-        prewarmIndex: agent?.prewarmIndex ?? -1,
-        agentReportedAt: agent?.reportedAt ?? null,
-        agentStale: !status.agent && !!status.staleAgent,
-        agentVersion: agentVersion || null,
-        agentSupportsScores: !!agentVersion && !isAgentVersionBehind(agentVersion, ROUTE_GROUP_AGENT_VERSION),
-        agentSupportsProtocol: !schedulerAgentVersion || (!!agentVersion && !isAgentVersionBehind(agentVersion, schedulerAgentVersion)),
-        requiredAgentVersion: schedulerAgentVersion || ROUTE_GROUP_AGENT_VERSION,
-        schedulerNeed,
-        tunnelMode: routeTunnel ? String(routeTunnel.mode || "") : null,
-      };
+      return buildRouteStatus(rule);
+    }),
+  /**
+   * 线路板：所有开了线路组的规则一次拿全（链路管理页的「线路组」页签）。每条的内容和
+   * routeStatus 一样，外加入口机的名字和在不在线 —— 卡片的左端要写它。
+   */
+  routeBoard: protectedProcedure
+    .input(z.object({ scope: z.enum(["self", "all"]).optional(), userId: z.number().optional() }).optional())
+    .query(async ({ input, ctx }) => {
+      const isAdmin = ctx.user.role === "admin";
+      const requestedUserId = isAdmin ? (input?.scope === "all" ? undefined : input?.userId ?? ctx.user.id) : ctx.user.id;
+      const rules = await db.getForwardRules(requestedUserId, undefined, { failoverOnly: true });
+      return buildRouteBoard(rules as any[]);
     }),
   list: protectedProcedure
     .input(z.object({
