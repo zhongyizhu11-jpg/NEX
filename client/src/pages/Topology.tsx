@@ -29,6 +29,7 @@ import {
 } from "@shared/networkTopology";
 import { TOPOLOGY_KIND_COLORS, TopologyCanvas, type TopologyCanvasHandle } from "@/features/topology/TopologyCanvas";
 import { layoutTopology, topologyColumnLabels } from "@/features/topology/topologyLayout";
+import { RouteBoardList } from "@/features/rules/RouteBoardList";
 import {
   TOPOLOGY_EDGE_KINDS,
   filterTopology,
@@ -52,6 +53,18 @@ import {
 
 const KIND_STORAGE_KEY = "forwardx.topology.kinds";
 const TARGETS_STORAGE_KEY = "forwardx.topology.showTargets";
+/* 两种看法：拓扑图按节点和连线画整个面板；线路板按线路组一条条画链（features/rules/RouteBoardList）。 */
+const VIEW_STORAGE_KEY = "forwardx.topology.view";
+type TopologyView = "graph" | "board";
+const TOPOLOGY_VIEWS: Array<{ value: TopologyView; label: string }> = [{ value: "graph", label: "拓扑图" }, { value: "board", label: "线路板" }];
+
+function readStoredView(): TopologyView {
+  try {
+    return window.localStorage.getItem(VIEW_STORAGE_KEY) === "board" ? "board" : "graph";
+  } catch {
+    return "graph";
+  }
+}
 
 const STATUS_DOT: Record<TopologyStatus, string> = {
   running: "bg-[var(--fx-healthy-text)]",
@@ -151,6 +164,12 @@ export default function TopologyPage() {
   const [showTargets, setShowTargets] = useState(() => readStoredBool(TARGETS_STORAGE_KEY, true));
   const [query, setQuery] = useState("");
   const [selection, setSelection] = useState<Selection>(null);
+  // 深链接（?rule= / ?tunnel= / ?group=）是来看图上那一条的，进来就是拓扑图；没聚焦时按上次的看法。
+  const [view, setView] = useState<TopologyView>(() => (parseTopologyFocus(window.location.search) ? "graph" : readStoredView()));
+  const changeView = (next: TopologyView) => {
+    setView(next);
+    store(VIEW_STORAGE_KEY, next);
+  };
   const canvasRef = useRef<TopologyCanvasHandle | null>(null);
 
   const graphQuery = trpc.topology.graph.useQuery(
@@ -319,12 +338,21 @@ export default function TopologyPage() {
     <div className="flex min-w-0 flex-col gap-4">
       <WorkspaceHeader
         title="网络拓扑"
-        description="入口 → 中转 → 出口 / 落地 → 目标。滚轮缩放、拖动平移，点节点或连线看哪些规则、隧道、转发链在用它。"
-        status={graph ? `${visible.nodes.length} 个节点 · ${visible.edges.length} 条连线${counts.failed + counts.degraded > 0 ? ` · ${counts.failed + counts.degraded} 条异常` : ""}` : undefined}
+        description={view === "board"
+          ? "每条线路组一张卡：入口 ─ 中转 ─ 落地，段上写延迟、节点下写速率，在走的那条亮着。"
+          : "入口 → 中转 → 出口 / 落地 → 目标。滚轮缩放、拖动平移，点节点或连线看哪些规则、隧道、转发链在用它。"}
+        status={view === "graph" && graph ? `${visible.nodes.length} 个节点 · ${visible.edges.length} 条连线${counts.failed + counts.degraded > 0 ? ` · ${counts.failed + counts.degraded} 条异常` : ""}` : undefined}
       />
 
       <div className="flex flex-col gap-2" data-testid="topology-toolbar">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <div className="flex shrink-0 items-center gap-1.5" role="group" aria-label="看法">
+            {TOPOLOGY_VIEWS.map((item) => (
+              <button key={item.value} type="button" aria-pressed={view === item.value} className={cn("fx-chip", view === item.value && "fx-chip-on")} onClick={() => changeView(item.value)}>
+                {item.label}
+              </button>
+            ))}
+          </div>
           <div className="relative min-w-0 flex-1">
             <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -340,7 +368,7 @@ export default function TopologyPage() {
               </button>
             ) : null}
           </div>
-          <div className="flex items-center gap-3">
+          {view === "graph" ? <div className="flex items-center gap-3">
             {isAdmin ? (
               <Select value={ownerFilter} onValueChange={(value) => { setOwnerFilter(value); setSelection(null); }}>
                 <SelectTrigger aria-label="按用户筛选" className="h-8 w-full text-xs sm:w-[170px]">
@@ -363,8 +391,9 @@ export default function TopologyPage() {
               />
               外部目标
             </label>
-          </div>
+          </div> : null}
         </div>
+        {view === "board" ? null : (<>
         <div className="fx-chip-scroller min-w-0 items-center" role="group" aria-label="连线种类">
           {TOPOLOGY_EDGE_KINDS.map((kind) => {
             const active = kinds.has(kind);
@@ -386,8 +415,12 @@ export default function TopologyPage() {
             <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => setFocus(null)}>取消聚焦</Button>
           </div>
         ) : null}
+        </>)}
       </div>
 
+      {view === "board" ? (
+        <RouteBoardList searchQuery={query.trim()} isAdmin={!!isAdmin} />
+      ) : (
       <div className="flex min-w-0 flex-col gap-3 lg:flex-row">
         <div className="relative min-w-0 flex-1 overflow-hidden rounded-[var(--fx-radius-card,12px)] border border-border bg-[var(--fx-l1-surface,var(--color-card))]">
           {graphQuery.isError && !graph ? (
@@ -440,8 +473,9 @@ export default function TopologyPage() {
           </aside>
         ) : null}
       </div>
+      )}
 
-      {panel && isMobile ? (
+      {panel && view === "graph" && isMobile ? (
         <div
           className="fixed inset-x-0 z-40 flex max-h-[55svh] flex-col rounded-t-2xl border-t border-border bg-card px-2 pb-3 pt-2 shadow-[0_-8px_24px_rgba(0,0,0,0.12)]"
           style={{ bottom: "var(--forwardx-mobile-bottom-inset, 0px)" }}

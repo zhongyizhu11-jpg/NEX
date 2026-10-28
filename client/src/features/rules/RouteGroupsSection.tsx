@@ -1,31 +1,36 @@
 import { useMemo, useState } from "react";
-import { Route } from "lucide-react";
+import { GitBranch, Route } from "lucide-react";
 import { useLocation } from "wouter";
 
 import EmptyState from "@/components/EmptyState";
+import { StatusDot } from "@/components/network/StatusDot";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { pollingInterval } from "@/lib/polling";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { FAILOVER_TONE_CLASS, describeFailoverLineDisplay } from "@/lib/failoverLineDisplay";
 import { trpc } from "@/lib/trpc";
+import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-import { routeGroupOf, routePathLetter, type RouteGroup } from "@shared/routeGroup";
-import { describeRoutePolicy, pinUntilSeconds, type RoutePolicy } from "@shared/routePolicy";
-import { RouteBoardCard } from "./RouteBoard";
-import { RouteGroupSheet, type RouteStatus } from "./RouteGroupSheet";
+import { ROUTE_MODE_INFO, describeRoutePath, routeGroupOf, routePathLetter, type RouteGroup } from "@shared/routeGroup";
+import { describeRoutePolicy, pinUntilSeconds } from "@shared/routePolicy";
+import { RouteGroupSheet } from "./RouteGroupSheet";
 
 /*
-  链路管理页的「线路组」页签 —— 线路板：所有开了线路组的转发规则一处看全，每条一张卡，
-  卡里一条路径一条链：入口 ─ 中转… ─ 落地，段上写延迟、节点下写速率、在走的那条流着小点。
+  链路管理页的「线路组」页签：所有开了线路组的转发规则一处看全。
 
-  原来这里是一张表（规则 / 入口 / 策略 / 路径 / 现在走），一眼看得出有几条、看不出哪段慢。
-  Open-Box 的「代理 · 策略」页把每个策略画成一条链，用户看了说「很明白」，就按那个意思画。
-
-  数字来自 rules.routeBoard（和规则卡上线路面板读的 rules.routeStatus 是同一份，只是一次拿全），
-  策略（首选、时段、人工指定）仍从规则本身算（shared/routePolicy）。线路组是规则的一部分，
-  「编辑」打开的就是那条规则的编辑框（/rules?edit=<id>）。
+  规则页上线路组藏在每条规则的徽标后面，要一条条点；这里一行一条：入口在哪台机、哪种策略、
+  几条路径各经过谁、现在走哪条。点「查看」进的是和规则页同一块线路面板。线路组是规则的一部分，
+  不是独立对象，所以「编辑」打开的就是那条规则的编辑框（/rules?edit=<id>），改完回来接着看。
 */
 
-type RouteBoardRow = { rule: any; group: RouteGroup; policy: RoutePolicy; host: any };
+type RouteGroupRow = {
+  rule: any;
+  group: RouteGroup;
+  hostName: string;
+  entry: string;
+  display: ReturnType<typeof describeFailoverLineDisplay>;
+};
 
 export function RouteGroupsSection({ searchQuery = "", isAdmin = false }: { searchQuery?: string; isAdmin?: boolean }) {
   const [, setLocation] = useLocation();
@@ -33,12 +38,6 @@ export function RouteGroupsSection({ searchQuery = "", isAdmin = false }: { sear
   // 只拉开了主备的规则：以前拉全部规则再在这里按 failoverEnabled 丢掉绝大多数。
   const rulesQuery = trpc.rules.list.useQuery(isAdmin ? { scope: "all", failoverOnly: true } : { failoverOnly: true }, { staleTime: 15_000 });
   const hostsQuery = trpc.hosts.options.useQuery(undefined, { staleTime: 60_000 });
-  // 线路板的数字几秒就变（速率、评分），十秒刷一次；每条规则要查几张表，再快就是白打库。
-  const boardQuery = trpc.rules.routeBoard.useQuery(isAdmin ? { scope: "all" } : undefined, {
-    refetchInterval: pollingInterval("log"),
-    staleTime: 5_000,
-    placeholderData: (previous) => previous,
-  });
   const [openRuleId, setOpenRuleId] = useState<number | null>(null);
   const hostById = useMemo(() => new Map<number, any>((hostsQuery.data || []).map((host: any) => [Number(host.id), host])), [hostsQuery.data]);
   const hostName = (hostId: number) => String(hostById.get(hostId)?.name || `主机 ${hostId}`);
@@ -49,7 +48,6 @@ export function RouteGroupsSection({ searchQuery = "", isAdmin = false }: { sear
       utils.rules.listPage.invalidate();
       utils.rules.routeStatus.invalidate({ ruleId: Number(variables.id) });
       utils.rules.routeEvents.invalidate({ ruleId: Number(variables.id) });
-      utils.rules.routeBoard.invalidate();
       toast.success(variables.failoverPinnedIndex === null || variables.failoverPinnedIndex === undefined
         ? "已交回自动"
         : `已强制走路径 ${routePathLetter(variables.failoverPinnedIndex)}`);
@@ -57,24 +55,22 @@ export function RouteGroupsSection({ searchQuery = "", isAdmin = false }: { sear
     onError: (error) => toast.error(error.message || "操作失败"),
   });
 
-  const boardByRule = useMemo(() => new Map<number, any>(((boardQuery.data as any[]) || []).map((item) => [Number(item.ruleId), item])), [boardQuery.data]);
-
-  const rows = useMemo<RouteBoardRow[]>(() => {
+  const rows = useMemo<RouteGroupRow[]>(() => {
     const query = searchQuery.trim().toLowerCase();
-    return (rulesQuery.data || []).flatMap((rule: any): RouteBoardRow[] => {
+    return (rulesQuery.data || []).flatMap((rule: any) => {
       const group = routeGroupOf(rule);
       if (!group) return [];
       const host = hostById.get(Number(rule.hostId));
       const name = String(host?.name || `主机 ${rule.hostId}`);
+      const entry = `${name}:${rule.sourcePort}`;
       const haystack = [rule.name, name, ...group.paths.flatMap((path) => [path.name, ...path.hops.map(hostName)])].join(" ").toLowerCase();
       if (query && !haystack.includes(query)) return [];
-      const policy = describeRoutePolicy(rule, { host });
-      if (!policy) return [];
-      return [{ rule, group, policy, host }];
+      return [{ rule, group, hostName: name, entry, display: describeFailoverLineDisplay(rule, host) }];
     });
   }, [rulesQuery.data, hostById, searchQuery]);
 
   const openRule = rows.find((row) => Number(row.rule.id) === openRuleId) || null;
+  const openPolicy = openRule ? describeRoutePolicy(openRule.rule, { host: hostById.get(Number(openRule.rule.hostId)) }) : null;
 
   if (rulesQuery.isLoading) {
     return (
@@ -94,42 +90,112 @@ export function RouteGroupsSection({ searchQuery = "", isAdmin = false }: { sear
     );
   }
 
+  const pathText = (row: RouteGroupRow, index: number) => describeRoutePath(row.group.paths[index], row.rule, hostName);
+
   return (
     <>
-      <div className="flex flex-col gap-3" data-testid="route-board">
-        {rows.map((row) => {
-          const board = boardByRule.get(Number(row.rule.id));
-          const status = (board?.status as RouteStatus | undefined) || null;
-          return status ? (
-            <RouteBoardCard
-              key={row.rule.id}
-              name={String(row.rule.name || "")}
-              owner={isAdmin && row.rule.userName ? String(row.rule.userName) : null}
-              status={status}
-              policy={row.policy}
-              onOpen={() => setOpenRuleId(Number(row.rule.id))}
-              onEdit={() => setLocation(`/rules?edit=${Number(row.rule.id)}`)}
-            />
-          ) : (
-            <Card key={row.rule.id} className="border-border bg-card">
-              <CardContent className="flex items-center justify-between gap-3 p-4">
+      {/* 手机上一张卡一条；桌面是一张表。同一份数据两种排法，不是两份数据。 */}
+      <div className="flex flex-col gap-3 sm:hidden">
+        {rows.map((row) => (
+          <Card key={row.rule.id} className="border-border bg-card">
+            <CardContent className="flex flex-col gap-2 p-4">
+              <div className="flex min-w-0 items-start justify-between gap-2">
                 <div className="min-w-0">
                   <p className="truncate text-sm font-medium">{row.rule.name}</p>
-                  <p className="truncate text-meta text-muted-foreground">{boardQuery.isLoading ? "在读线路状态…" : "读不到线路状态"}</p>
+                  <p className="truncate font-mono text-xs text-muted-foreground">{row.entry}</p>
                 </div>
+                {row.display ? (
+                  <Badge variant="outline" className={cn("h-5 shrink-0 gap-1 px-1.5 text-[10px] font-medium", FAILOVER_TONE_CLASS[row.display.tone])}>
+                    <GitBranch className="h-3 w-3" aria-hidden="true" />
+                    {row.display.text}
+                  </Badge>
+                ) : null}
+              </div>
+              <p className="text-xs text-muted-foreground">{ROUTE_MODE_INFO[row.group.policy.mode].template} · {ROUTE_MODE_INFO[row.group.policy.mode].label}</p>
+              <ul className="flex flex-col gap-1 text-xs">
+                {row.group.paths.map((path, index) => (
+                  <li key={path.key} className="flex min-w-0 items-center gap-2">
+                    <StatusDot health={path.issue ? "down" : row.display?.policy.lines[index]?.active ? "healthy" : "standby"} />
+                    <span className="shrink-0 font-semibold">{routePathLetter(index)}</span>
+                    <span className="min-w-0 truncate">{path.name} · {pathText(row, index)}</span>
+                  </li>
+                ))}
+              </ul>
+              <div className="flex justify-end gap-2">
+                <Button type="button" variant="ghost" size="sm" onClick={() => setLocation(`/rules?edit=${Number(row.rule.id)}`)}>编辑</Button>
                 <Button type="button" variant="outline" size="sm" onClick={() => setOpenRuleId(Number(row.rule.id))}>查看</Button>
-              </CardContent>
-            </Card>
-          );
-        })}
+              </div>
+            </CardContent>
+          </Card>
+        ))}
       </div>
+
+      <Card className="hidden border-border bg-card sm:block">
+        <CardContent className="p-0">
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead>规则</TableHead>
+                  <TableHead>入口</TableHead>
+                  <TableHead className="hidden md:table-cell">策略</TableHead>
+                  <TableHead>路径</TableHead>
+                  <TableHead>现在走</TableHead>
+                  <TableHead className="text-right">操作</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {rows.map((row) => (
+                  <TableRow key={row.rule.id} className="h-[60px]">
+                    <TableCell className="py-3">
+                      <span className="block max-w-[14rem] truncate text-sm font-medium">{row.rule.name}</span>
+                      {isAdmin && row.rule.userName ? <span className="block text-xs text-muted-foreground">{row.rule.userName}</span> : null}
+                    </TableCell>
+                    <TableCell className="py-3 font-mono text-xs">{row.entry}</TableCell>
+                    <TableCell className="hidden py-3 text-xs md:table-cell">
+                      <span className="block">{ROUTE_MODE_INFO[row.group.policy.mode].template}</span>
+                      <span className="block text-muted-foreground">{ROUTE_MODE_INFO[row.group.policy.mode].label}</span>
+                    </TableCell>
+                    <TableCell className="py-3">
+                      <ul className="flex flex-col gap-0.5 text-xs">
+                        {row.group.paths.map((path, index) => (
+                          <li key={path.key} className="flex min-w-0 items-center gap-1.5">
+                            <span className={cn("w-3 shrink-0 font-semibold", path.issue && "text-destructive")}>{routePathLetter(index)}</span>
+                            <span className="max-w-[22rem] truncate" title={pathText(row, index)}>{pathText(row, index)}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </TableCell>
+                    <TableCell className="py-3">
+                      {row.display ? (
+                        <button type="button" className="rounded-[var(--fx-radius-control)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => setOpenRuleId(Number(row.rule.id))} title={row.display.title}>
+                          <Badge variant="outline" className={cn("h-5 cursor-pointer gap-1 px-1.5 text-[10px] font-medium", FAILOVER_TONE_CLASS[row.display.tone])}>
+                            <GitBranch className="h-3 w-3" aria-hidden="true" />
+                            {row.display.text}
+                          </Badge>
+                        </button>
+                      ) : null}
+                    </TableCell>
+                    <TableCell className="py-3 text-right">
+                      <div className="flex justify-end gap-1.5">
+                        <Button type="button" variant="ghost" size="sm" onClick={() => setLocation(`/rules?edit=${Number(row.rule.id)}`)}>编辑</Button>
+                        <Button type="button" variant="outline" size="sm" onClick={() => setOpenRuleId(Number(row.rule.id))}>查看</Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </CardContent>
+      </Card>
 
       <RouteGroupSheet
         open={openRuleId !== null}
         onOpenChange={(open) => !open && setOpenRuleId(null)}
         ruleId={openRuleId}
         subjectName={String(openRule?.rule.name || "")}
-        policy={openRule?.policy ?? null}
+        policy={openPolicy}
         canEdit
         pending={pinMutation.isPending}
         onPin={(index, durationSeconds) => openRule && pinMutation.mutate({
