@@ -1,4 +1,5 @@
 import { isLinkProbeFresh } from "@shared/linkProbePolicy";
+import { PROBE_FAILURE_LABELS, normalizeProbeFailure } from "@shared/probeFailure";
 import { TRAFFIC_BILLING_BALANCE_BLOCK_REASON } from "@shared/const";
 import { normalizeRuleLimitReason } from "@shared/ruleLimits";
 
@@ -42,6 +43,8 @@ export function resolveForwardRuleVisualStatus(input: {
   latestLatencyMs?: number | null;
   latestLatencyIsTimeout?: boolean;
   latestLatencyAt?: Date | string | number | null;
+  /** 最近一次探测不通的种类（shared/probeFailure）；老 Agent 没有，照旧说「超时」。 */
+  latestProbeFailure?: string | null;
   /**
    * 这条规则经过的机器里掉线了的（入口、隧道的出口和中继、转发链的每一跳）。
    * 机器掉线是实时通道确认过的事实，比几分钟前那次探测成功、比入口机「我的监听还在」都硬：
@@ -66,7 +69,8 @@ export function resolveForwardRuleVisualStatus(input: {
   }
   const probeIsRecent = isLinkProbeFresh(input.latestLatencyAt, now);
   if (probeIsRecent && input.latestLatencyIsTimeout) {
-    return { state: "error", title: "最近一次端到端探测超时" };
+    const kind = normalizeProbeFailure(input.latestProbeFailure);
+    return { state: "error", title: kind && kind !== "timeout" ? `最近一次端到端探测失败：${PROBE_FAILURE_LABELS[kind]}` : "最近一次端到端探测超时" };
   }
   if (input.groupConfigStatus === "error" || input.groupConfigStatus === "unavailable") {
     return { state: "error", title: "转发资源配置不可用" };

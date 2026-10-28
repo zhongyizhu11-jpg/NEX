@@ -41,6 +41,7 @@ import { reportMimicInstallResult } from "./mimicInstallTasks";
 import { getAgentHostIdentityFromRequest } from "./agentAuth";
 import { ingestRouteHopProbeReports } from "./routeGroups";
 import { recordRuleTrafficSample } from "./ruleLiveRates";
+import { recordRuleProbeFailure } from "./ruleProbeFailure";
 import { applyTrafficMultiplier, normalizeTrafficMultiplier } from "../shared/trafficMultiplier";
 import { normalizeTrafficCounterBytes, normalizeTrafficCounterConnections } from "../shared/trafficCounterBytes";
 import { mapWithConcurrency } from "./asyncPool";
@@ -1857,6 +1858,7 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
         collectCounter("rule", ruleId, report);
         const isTimeout = !!report.isTimeout || baseLatency === null;
         const latencyMs = isTimeout ? null : baseLatency;
+        recordRuleProbeFailure(ruleId, isTimeout ? report.failure || "timeout" : null);
         return {
           stat: {
             ruleId,
@@ -1890,6 +1892,8 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
       });
       if (!combined) return null;
       const tunnelIntroducedTimeout = combined.isTimeout && !report.isTimeout;
+      // 隧道那一段不通时没有种类可说（隧道探测另有一路），只在出口到目标不通时记种类。
+      recordRuleProbeFailure(ruleId, combined.isTimeout ? (report.isTimeout ? report.failure || "timeout" : "unreachable") : null);
       // Compose target and tunnel counters. If the tunnel path timed out,
       // no end-to-end packet can be considered successful; otherwise retain
       // the lower success ratio from either segment.

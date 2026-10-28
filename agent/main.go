@@ -13549,7 +13549,7 @@ func (p *failoverProxy) holdingLocked(now time.Time) bool {
 			logf("failover flap hold rule=%d source=%d switches=%d hold=%s", p.ruleID, p.sourcePort, p.recentAutoSwitchesLocked(now), hold)
 			recordFailoverProxyEvent(failoverProxyEvent{
 				RuleID: p.ruleID, SourcePort: p.sourcePort, Kind: "flap_hold",
-				ToTarget: failoverTargetLabel(p.spec.Targets[p.activeIndex]),
+				ToTarget:  failoverTargetLabel(p.spec.Targets[p.activeIndex]),
 				FromIndex: -1, ToIndex: p.activeIndex,
 				Reason:    "flap: " + strconv.Itoa(p.recentAutoSwitchesLocked(now)) + " switches in 1h, hold " + strconv.Itoa(int(hold/time.Minute)) + "m until " + until.UTC().Format(time.RFC3339),
 				LatencyMs: p.latencyMsLocked(p.activeIndex), Score: p.scoreValueLocked(p.activeIndex),

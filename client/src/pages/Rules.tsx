@@ -21,6 +21,7 @@ import { DiagnoseDialog, type DiagnoseExtraTab } from "@/components/DiagnoseDial
 import { LatencyRating } from "@/components/LatencyRating";
 import { LinkTestProbeView, parseLinkTestMessage, type LinkTestPlannedSegment } from "@/components/LinkTestLatencySummary";
 import { LinkTestCompareView } from "@/components/LinkTestCompareView";
+import { describeProbeFailureShort } from "@shared/probeFailure";
 import { PersistentPagination, usePersistentPageRequest, useServerPagination } from "@/components/PersistentPagination";
 import { SortableDragHandle, SortableItem, SortableReorderContext, useOptimisticSortableOrder, useSortableReorder } from "@/components/SortableDragHandle";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -4584,6 +4585,7 @@ function RulesContent() {
       latestLatencyMs: number | null;
       latestLatencyIsTimeout: boolean;
       latestLatencyAt: Date | string | null;
+      latestProbeFailure: string | null;
     }>();
     dailyTrafficSummaryRows.forEach((t: any) => {
       const rid = Number(t.ruleId);
@@ -4598,6 +4600,7 @@ function RulesContent() {
           prev.latestLatencyMs = t.latestLatencyMs === null || t.latestLatencyMs === undefined ? null : Number(t.latestLatencyMs);
           prev.latestLatencyIsTimeout = !!t.latestLatencyIsTimeout;
           prev.latestLatencyAt = t.latestLatencyAt || null;
+          prev.latestProbeFailure = t.latestProbeFailure || null;
         }
       } else {
         m.set(rid, {
@@ -4607,6 +4610,7 @@ function RulesContent() {
           latestLatencyMs: t.latestLatencyMs === null || t.latestLatencyMs === undefined ? null : Number(t.latestLatencyMs),
           latestLatencyIsTimeout: !!t.latestLatencyIsTimeout,
           latestLatencyAt: t.latestLatencyAt || null,
+          latestProbeFailure: t.latestProbeFailure || null,
         });
       }
     });
@@ -4965,6 +4969,7 @@ function RulesContent() {
         latestLatencyMs: latest?.latestLatencyMs,
         latestLatencyIsTimeout: latest?.latestLatencyIsTimeout,
         latestLatencyAt: latest?.latestLatencyAt,
+        latestProbeFailure: latest?.latestProbeFailure,
         offlineHostNames: getRuleOfflineHostNames(rule),
       });
     }
@@ -4977,6 +4982,7 @@ function RulesContent() {
       latestLatencyMs: latest?.latestLatencyMs,
       latestLatencyIsTimeout: latest?.latestLatencyIsTimeout,
       latestLatencyAt: latest?.latestLatencyAt,
+      latestProbeFailure: latest?.latestProbeFailure,
       offlineHostNames: getRuleOfflineHostNames(rule),
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -6733,7 +6739,7 @@ function RulesContent() {
     if (!isLinkProbeFresh(t.latestLatencyAt)) {
       return (
         <span className="whitespace-nowrap text-xs text-muted-foreground" title={`${formatProbeAge(t.latestLatencyAt)}测的，已过期；··· › 诊断 重新测`}>
-          {t.latestLatencyIsTimeout ? "超时" : typeof t.latestLatencyMs === "number" && Number.isFinite(t.latestLatencyMs) ? `${Math.round(t.latestLatencyMs)} ms` : "未测试"} · {formatProbeAge(t.latestLatencyAt)}
+          {t.latestLatencyIsTimeout ? describeProbeFailureShort(t.latestProbeFailure) : typeof t.latestLatencyMs === "number" && Number.isFinite(t.latestLatencyMs) ? `${Math.round(t.latestLatencyMs)} ms` : "未测试"} · {formatProbeAge(t.latestLatencyAt)}
         </span>
       );
     }
