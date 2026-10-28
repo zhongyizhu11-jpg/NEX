@@ -426,3 +426,10 @@ test("hysteria2 的带宽：mihomo 的 up/down 带单位、Stash 的 up-speed/do
   assert.equal(none.node.upMbps, 0);
   assert.equal(none.node.downMbps, 0);
 });
+
+test("Clash 条目的 fingerprint 是证书钉扎，和 client-fingerprint（uTLS）分开存", () => {
+  const pin = "cd".repeat(32);
+  const { node } = ok(JSON.stringify({ name: "hy", type: "hysteria2", server: "h.example.com", port: 443, password: "p", fingerprint: pin, "client-fingerprint": "chrome", sni: "h.example.com" }));
+  assert.equal(node.certSha256, pin.toUpperCase().match(/.{2}/g)!.join(":"));
+  assert.equal(node.fingerprint, "chrome");
+});

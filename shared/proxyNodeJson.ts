@@ -21,6 +21,7 @@ import {
   type ProxyNode,
   type ProxyNodeProtocol,
   type ProxyNodeTransport,
+  normalizeCertSha256,
 } from "./proxyNode";
 
 export type ParseProxyNodeJsonResult =
@@ -233,6 +234,8 @@ function fromClashProxy(raw: Record<string, unknown>): ProxyNode | null {
   node.alpn = toAlpn(raw.alpn);
   node.allowInsecure = toBool(raw["skip-cert-verify"]);
   node.fingerprint = text(raw["client-fingerprint"]);
+  // Clash 的 fingerprint 是证书 SHA-256 钉扎，不是 uTLS（那个叫 client-fingerprint）。
+  node.certSha256 = normalizeCertSha256(raw.fingerprint);
 
   const reality = raw["reality-opts"] as Record<string, unknown> | undefined;
   if (reality && typeof reality === "object") {

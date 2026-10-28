@@ -19,6 +19,7 @@
  */
 
 import type { ProxySubCustomGroup } from "./proxySubscriptionPlan";
+import { normalizeProxySubGroupMatch, validateProxySubGroupFilter } from "./proxySubGroupFilter";
 import type { ProxySubscriptionFormat } from "./proxySubscription";
 
 export const PROXY_SUB_TEMPLATE_TARGETS = ["clash", "singbox", "surge", "loon", "quantumultx", "shadowrocket"] as const;
@@ -210,6 +211,8 @@ export function validateProxySubTemplate(template: Pick<ProxySubTemplate, "targe
     if (name.length > 64 || /[,=\u0000-\u001f]/.test(name)) return { ok: false, error: `策略组名「${name}」不合法（不能含逗号、等号）` };
     if (!["select", "url-test", "fallback", "load-balance"].includes(group.type)) return { ok: false, error: `策略组「${name}」的类型不认识` };
     if (String(group.filter || "").length > 200) return { ok: false, error: `策略组「${name}」的筛选表达式太长` };
+    const problem = validateProxySubGroupFilter(String(group.filter || ""), normalizeProxySubGroupMatch(group.match));
+    if (problem) return { ok: false, error: `策略组「${name}」的筛选表达式有问题：${problem}` };
   }
   return { ok: true };
 }
@@ -221,6 +224,7 @@ export function normalizeProxySubCustomGroups(input: unknown): ProxySubCustomGro
       name: String(item?.name || "").trim().slice(0, 64),
       type: (["select", "url-test", "fallback", "load-balance"].includes(item?.type) ? item.type : "select") as ProxySubCustomGroup["type"],
       filter: String(item?.filter || "").trim().slice(0, 200),
+      match: normalizeProxySubGroupMatch(item?.match),
       includeGroups: item?.includeGroups === true,
     }))
     .filter((item) => item.name)

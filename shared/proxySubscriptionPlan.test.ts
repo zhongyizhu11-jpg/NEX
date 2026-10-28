@@ -294,6 +294,7 @@ test("节点名在主机名或模板名缺失时仍有可用回退", () => {
 import {
   autoGroupNameForTemplate,
   buildProxySubscriptionDocument,
+  customGroupsFor,
   normalizeProxyNodeAutoGroup,
 } from "./proxySubscriptionPlan";
 
@@ -797,4 +798,19 @@ test("数据库行还原出 Snell 与 XHTTP 的字段", () => {
   });
   assert.equal(xhttp.transport, "xhttp");
   assert.equal(xhttp.xhttpMode, "stream-one");
+});
+
+test("自定义组按关键词挑成员：任一 / 全部 / 排除，订阅里新来的节点自动归组", () => {
+  const names = ["🇭🇰 香港 01", "🇭🇰 香港 IPLC 02", "🇯🇵 日本 01"];
+  const groups = customGroupsFor([
+    { name: "港日", type: "url-test", filter: "香港, 日本", match: "any" },
+    { name: "香港非专线", type: "select", filter: "香港, !IPLC", match: "all" },
+    { name: "老写法", type: "select", filter: "港|日" },
+    { name: "空组被丢掉", type: "select", filter: "美国", match: "any" },
+  ], names, ["自动"]);
+  const byName = new Map(groups.map((group) => [group.name, group.members]));
+  assert.deepEqual(byName.get("港日"), ["🇭🇰 香港 01", "🇭🇰 香港 IPLC 02", "🇯🇵 日本 01"]);
+  assert.deepEqual(byName.get("香港非专线"), ["🇭🇰 香港 01"]);
+  assert.deepEqual(byName.get("老写法"), names);
+  assert.equal(byName.has("空组被丢掉"), false);
 });
