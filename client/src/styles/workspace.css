@@ -1761,6 +1761,33 @@ html[data-personalization-background="image"] .auth-divider-label, html[data-per
   .fx-rb-flow { display: none; }
 }
 
+/* 诊断对话框的「推算 vs 实测」（components/LinkTestCompareView）：一段一行，四列，对不上的行整行标出。 */
+.fx-cmp { display: flex; flex-direction: column; gap: 6px; container-type: inline-size; }
+.fx-cmp-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.fx-cmp-cols, .fx-cmp-row { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr) minmax(0, 1fr) 72px; align-items: center; gap: 8px; }
+.fx-cmp-cols { padding: 0 10px; font-size: 11px; color: var(--fx-text-muted); }
+.fx-cmp-rows { display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--fx-stroke-weak); border-radius: var(--fx-radius-card, 12px); background: var(--fx-l1-surface); }
+.fx-cmp-row { padding: 8px 10px; font-size: 12.5px; border-top: 1px solid var(--fx-stroke-weak); }
+.fx-cmp-row:first-child { border-top: 0; }
+.fx-cmp-row[data-mismatch] { background: var(--fx-warn-soft); box-shadow: inset 3px 0 0 var(--fx-warn); }
+.fx-cmp-row-total { font-weight: 600; background: var(--fx-l0-page); }
+.fx-cmp-seg { display: flex; min-width: 0; align-items: center; gap: 6px; color: var(--fx-text); }
+.fx-cmp-seg > b { min-width: 0; font-weight: 500; }
+.fx-cmp-seg > span { color: var(--fx-text-muted); }
+.fx-cmp-cell { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; color: var(--fx-text); }
+.fx-cmp-cell-timeout { color: var(--fx-down-text); }
+.fx-cmp-cell-missing { color: var(--fx-text-muted); }
+.fx-cmp-when { font-size: 11px; color: var(--fx-text-muted); }
+.fx-cmp-delta { text-align: right; color: var(--fx-text-muted); }
+.fx-cmp-delta-bad { color: var(--fx-warn-text); font-weight: 600; }
+.fx-cmp-note { grid-column: 1 / -1; font-size: 11.5px; color: var(--fx-warn-text); }
+.fx-cmp-foot { font-size: 11px; line-height: 15px; color: var(--fx-text-muted); }
+@container (max-width: 520px) {
+  .fx-cmp-cols { display: none; }
+  .fx-cmp-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 60px; }
+  .fx-cmp-seg { grid-column: 1 / -1; }
+}
+
 /* 列表行里的一小段线：「HK entry 01 ──── SG relay 03」 */
 .fx-pathline { display: inline-flex; min-width: 0; align-items: center; gap: 6px; }
 .fx-pathline-ln { position: relative; flex: 1 1 18px; min-width: 18px; height: 2px; border-radius: 2px; background: var(--fx-pathline-color, var(--fx-accent)); }

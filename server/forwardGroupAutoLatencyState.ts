@@ -103,3 +103,36 @@ export function recordForwardGroupAutoHopLatency(input: {
   }
   return aggregate;
 }
+
+export type ForwardGroupAutoHopDetail = {
+  hopIndex: number;
+  hopCount: number;
+  latencyMs: number | null;
+  isTimeout: boolean;
+  probeCount: number;
+  probeSuccesses: number;
+  recordedAt: number;
+};
+
+/**
+ * 转发链最近一轮后台探测里每一跳的样本（六分钟内的）。不要求每一跳都齐：诊断的
+ * 「推算」一列有几段写几段，缺的写「没测到」，比整段空着有用。
+ */
+export function getForwardGroupAutoHopDetails(groupId: number, nowMs = Date.now()): ForwardGroupAutoHopDetail[] {
+  const hops = byGroup.get(Number(groupId));
+  if (!hops) return [];
+  const details: ForwardGroupAutoHopDetail[] = [];
+  for (const [hopIndex, result] of hops.entries()) {
+    if (nowMs - result.recordedAt > AUTO_HOP_TTL_MS) continue;
+    details.push({
+      hopIndex,
+      hopCount: result.hopCount,
+      latencyMs: result.latencyMs,
+      isTimeout: result.isTimeout,
+      probeCount: result.probeCount,
+      probeSuccesses: result.probeSuccesses,
+      recordedAt: result.recordedAt,
+    });
+  }
+  return details.sort((left, right) => left.hopIndex - right.hopIndex);
+}

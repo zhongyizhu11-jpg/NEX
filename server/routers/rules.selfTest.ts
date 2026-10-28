@@ -6,6 +6,7 @@ import { pushAgentRefresh } from "../agentEvents";
 import { pushTunnelEndpointRefresh } from "./helpers";
 import { requireRuleProtocolEnabled } from "../forwardProtocolSettings";
 import { newForwardChainBatchId } from "../forwardChainManualProbe";
+import { buildRuleExpectedLatency } from "../ruleExpectedLatency";
 import { linkProbeMethodForRule } from "@shared/latencyProbe";
 import { ruleLatencySeriesQueryCache as selfTestQueryCache } from "../ruleLatencyQueryCache";
 import * as hopRepo from "../repositories/tunnelRepository";
@@ -237,6 +238,18 @@ export const selfTestRulesRouter = router({
       return { id };
     }),
 
+  /**
+   * 诊断对话框的「推算」一列：后台探测以为这条链各段是多少（server/ruleExpectedLatency）。
+   * 和这次诊断的实测并排看，不一致的那段才是真正出了事的那段。
+   */
+  expectedLatency: protectedProcedure
+    .input(z.object({ ruleId: z.number() }))
+    .query(async ({ input, ctx }) => {
+      const rule = await db.getForwardRuleById(input.ruleId);
+      if (!rule) return null;
+      if (ctx.user.role !== "admin" && rule.userId !== ctx.user.id) return null;
+      return buildRuleExpectedLatency(rule);
+    }),
   latestTest: protectedProcedure
     .input(z.object({ ruleId: z.number(), includeActive: z.boolean().optional().default(true) }))
     .query(async ({ input, ctx }) => {

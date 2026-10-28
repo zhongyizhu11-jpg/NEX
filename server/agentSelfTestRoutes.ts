@@ -61,7 +61,7 @@ async function tunnelEntryHostIdList(tunnel: any) {
   return Array.from(ids).sort((left, right) => left - right);
 }
 
-async function loadFreshTunnelAutoDetails(tunnel: any, latestLatency: any) {
+export async function loadFreshTunnelAutoDetails(tunnel: any, latestLatency: any) {
   const tunnelId = Number(tunnel?.id || 0);
   if (!tunnelId) return [];
   const [hops, exitNodes, entryHostIds] = await Promise.all([
