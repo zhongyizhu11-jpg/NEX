@@ -16,8 +16,11 @@ export function Sparkline({
   stroke = "var(--fx-primary-fill)",
   className,
   title,
+  minScale = 0,
 }: {
   values: number[];
+  /** 纵轴顶至少到这个值：数都很小时（3ms 的延迟抖 2ms）不把小波动撑满整个高度。 */
+  minScale?: number;
   width?: number;
   height?: number;
   /** 线色，CSS 颜色或 var() */
@@ -27,7 +30,8 @@ export function Sparkline({
 }) {
   const gradientId = useId();
   const points = values.map((value) => (Number.isFinite(value) && value > 0 ? value : 0));
-  const max = points.reduce((acc, value) => Math.max(acc, value), 0);
+  const peak = points.reduce((acc, value) => Math.max(acc, value), 0);
+  const max = peak > 0 ? Math.max(peak, minScale) : 0;
   const empty = points.length < 2 || max <= 0;
   const padY = 2;
   const usableH = height - padY * 2;
