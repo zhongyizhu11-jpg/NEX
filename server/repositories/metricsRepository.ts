@@ -1,5 +1,7 @@
 import { and, asc, desc, eq, isNull, notInArray, or, sql } from "drizzle-orm";
 import { normalizeLatencySeriesKey } from "../../shared/latencyProbe";
+import { isUserspaceForwardType } from "../../shared/forwardTypes";
+import type { ProbeStatistics } from "../../shared/probeStatistics";
 import {
   hostMetrics, InsertHostMetric, InsertTrafficStat,
   forwardRules,
@@ -1693,6 +1695,95 @@ async function getChainGroupIdForTemplateRule(ruleId: number) {
   return groupId > 0 ? groupId : null;
 }
 
+/**
+ * 转发链的延迟该怎么从子规则算，取决于链是内核转发还是用户态转发：
+ *
+ *   · 内核（iptables / nftables）是透传的 DNAT：入口机对第一跳端口的一次 TCP 探测，SYN 会一路
+ *     转到目标才握得上手 —— 它本身就是「入口 → 目标」的端到端，中间各跳子规则的探测也各是
+ *     「那台 → 目标」。把几跳加起来会把同一段路算两三遍（用户看到 306ms，实际 150ms）。
+ *     所以只取入口那条子规则，不加。
+ *   · 用户态（gost / realm / socat …）每一跳都在本机接下连接，子规则的探测只量到下一跳，
+ *     端到端 = 各跳相加（原来的算法）。
+ *
+ * 入口子规则：挂了入口组的链，是入口组主机上的那几条（memberId 记的是第一个成员，hostId 不在
+ * 链成员里）；没挂的，就是第一个成员机上的那条。
+ */
+export type ChainLatencyShape = {
+  kernel: boolean;
+  firstMemberId: number;
+  memberHostIds: Set<number>;
+  hasEntryGroup: boolean;
+};
+
+async function getChainLatencyShape(groupId: number, templateRuleId = 0): Promise<ChainLatencyShape | null> {
+  const db = await getDb();
+  const id = Number(groupId || 0);
+  if (!db || !Number.isInteger(id) || id <= 0) return null;
+  const groupRows = await db
+    .select({ forwardType: forwardGroups.forwardType, entryGroupId: forwardGroups.entryGroupId })
+    .from(forwardGroups)
+    .where(eq(forwardGroups.id, id))
+    .limit(1);
+  const group = (groupRows as any[])[0];
+  if (!group) return null;
+  let forwardType = String(group.forwardType || "").trim().toLowerCase();
+  if (!forwardType && Number(templateRuleId) > 0) {
+    const templateRows = await db
+      .select({ forwardType: forwardRules.forwardType })
+      .from(forwardRules)
+      .where(eq(forwardRules.id, Number(templateRuleId)))
+      .limit(1);
+    forwardType = String((templateRows as any[])[0]?.forwardType || "").trim().toLowerCase();
+  }
+  const memberRows = await db
+    .select({ id: forwardGroupMembers.id, hostId: forwardGroupMembers.hostId, priority: forwardGroupMembers.priority, isEnabled: forwardGroupMembers.isEnabled })
+    .from(forwardGroupMembers)
+    .where(eq(forwardGroupMembers.groupId, id))
+    .orderBy(asc(forwardGroupMembers.priority), asc(forwardGroupMembers.id));
+  const enabled = (memberRows as any[]).filter((row) => rowBool(row.isEnabled));
+  const first = enabled[0] || (memberRows as any[])[0];
+  return {
+    kernel: !isUserspaceForwardType(forwardType || "iptables"),
+    firstMemberId: Number(first?.id || 0),
+    memberHostIds: new Set((memberRows as any[]).map((row) => Number(row.hostId || 0)).filter((hostId) => hostId > 0)),
+    hasEntryGroup: Number(group.entryGroupId || 0) > 0,
+  };
+}
+
+function isChainEntryChild(shape: ChainLatencyShape, child: { memberId: number; hostId: number }) {
+  if (Number(child.memberId) !== shape.firstMemberId) return false;
+  return shape.hasEntryGroup ? !shape.memberHostIds.has(Number(child.hostId)) : true;
+}
+
+/**
+ * 几段串起来的探测计数合成一份：总次数取各段里最多的那段（各段探得差不多勤），成功率是各段
+ * 成功率的乘积（一个包要每一段都过才算到）。没有计数的段跳过，不能拿它拉低别人。
+ */
+export function combineSerialProbeStatistics(segments: ProbeStatistics[]): ProbeStatistics {
+  const usable = segments.filter((segment) => segment && segment.available && segment.total > 0);
+  const empty: ProbeStatistics = { total: 0, successes: 0, available: false, observedSince: null, latestAt: null };
+  if (usable.length === 0) return empty;
+  const total = Math.max(...usable.map((segment) => segment.total));
+  const ratio = usable.reduce((product, segment) => product * (Math.min(segment.total, segment.successes) / segment.total), 1);
+  const observedSince = usable.map((segment) => segment.observedSince).filter((at): at is Date => !!at).sort((a, b) => a.getTime() - b.getTime())[0] || null;
+  const latestAt = usable.map((segment) => segment.latestAt).filter((at): at is Date => !!at).sort((a, b) => b.getTime() - a.getTime())[0] || null;
+  return { total, successes: Math.max(0, Math.min(total, Math.round(total * ratio))), available: true, observedSince, latestAt };
+}
+
+/** 几条并排的入口各自探到目标：次数、成功数直接相加。 */
+export function combineParallelProbeStatistics(segments: ProbeStatistics[]): ProbeStatistics {
+  const empty: ProbeStatistics = { total: 0, successes: 0, available: false, observedSince: null, latestAt: null };
+  for (const segment of segments) {
+    if (!segment?.available) continue;
+    empty.total += segment.total;
+    empty.successes += segment.successes;
+    empty.available = true;
+    if (segment.observedSince && (!empty.observedSince || segment.observedSince < empty.observedSince)) empty.observedSince = segment.observedSince;
+    if (segment.latestAt && (!empty.latestAt || segment.latestAt > empty.latestAt)) empty.latestAt = segment.latestAt;
+  }
+  return empty;
+}
+
 type ForwardGroupTrafficChildRow = {
   id: number;
   parentId: number;
@@ -2301,6 +2392,7 @@ export async function getTrafficSummaryByRule(opts: {
     ? await db
       .select({
         id: forwardRules.id,
+        hostId: forwardRules.hostId,
         groupId: forwardRules.forwardGroupId,
         parentId: forwardRules.forwardGroupRuleId,
         memberId: forwardRules.forwardGroupMemberId,
@@ -2310,6 +2402,7 @@ export async function getTrafficSummaryByRule(opts: {
     : [];
   const latencyGroupModeById = await getForwardGroupModeMap((childLatencyRows as any[]).map((row: any) => Number(row.groupId || 0)));
   const parentChainChildren = new Map<number, number[]>();
+  const parentChainChildRows = new Map<number, Array<{ id: number; hostId: number; memberId: number; groupId: number }>>();
   const parentFailoverChildren = new Map<number, number[]>();
   const parentFailoverChildRows = new Map<number, ForwardGroupLatencyChildRow[]>();
   const parentByChildRule = new Map<number, number>();
@@ -2325,6 +2418,9 @@ export async function getTrafficSummaryByRule(opts: {
       const children = parentChainChildren.get(parentId) || [];
       children.push(childId);
       parentChainChildren.set(parentId, children);
+      const rowsForParent = parentChainChildRows.get(parentId) || [];
+      rowsForParent.push({ id: childId, hostId: Number(row.hostId || 0), memberId, groupId });
+      parentChainChildRows.set(parentId, rowsForParent);
       continue;
     }
     parentByChildRule.set(childId, parentId);
@@ -2405,7 +2501,29 @@ export async function getTrafficSummaryByRule(opts: {
       latestByRule.delete(parentId);
     }
   }
-  for (const [parentId, childIds] of parentChainChildren.entries()) {
+  const chainShapeByGroup = new Map<number, ChainLatencyShape | null>();
+  for (const [parentId, allChildIds] of parentChainChildren.entries()) {
+    // 内核链：入口子规则的探测就是端到端，取最新的那条；用户态链：各跳相加（见 getChainLatencyShape）。
+    const rowsForParent = parentChainChildRows.get(parentId) || [];
+    const groupId = Number(rowsForParent.find((row) => row.groupId > 0)?.groupId || 0);
+    if (groupId > 0 && !chainShapeByGroup.has(groupId)) chainShapeByGroup.set(groupId, await getChainLatencyShape(groupId, parentId));
+    const shape = chainShapeByGroup.get(groupId) || null;
+    if (shape?.kernel) {
+      const entryChildren = rowsForParent.filter((row) => isChainEntryChild(shape, row));
+      const candidates = (entryChildren.length > 0 ? entryChildren : rowsForParent)
+        .map((row) => latestByRawRule.get(row.id))
+        .filter(Boolean)
+        .sort((a, b) => new Date(b.recordedAt).getTime() - new Date(a.recordedAt).getTime());
+      const latest = candidates[0];
+      latestByRule.set(parentId, {
+        ruleId: parentId,
+        latencyMs: latest && !latest.isTimeout && latest.latencyMs !== null && latest.latencyMs !== undefined ? Number(latest.latencyMs) : null,
+        isTimeout: !latest || !!latest.isTimeout,
+        recordedAt: latest?.recordedAt ?? null,
+      });
+      continue;
+    }
+    const childIds = allChildIds;
     let latencySum = 0;
     let recordedAt: Date | null = null;
     let isTimeout = childIds.length === 0;
@@ -3102,13 +3220,10 @@ export async function getTcpingSeriesByRule(
   const q = quoteIdentifier;
   let seriesRuleId = ruleId;
   const chainGroupId = await getChainGroupIdForTemplateRule(ruleId);
-  if (chainGroupId) {
-    const groupSeries = await getForwardGroupLatencySeries(chainGroupId, { since, limit });
-    if (groupSeries.length > 0) return groupSeries;
-  }
   const childRows = await db
     .select({
       id: forwardRules.id,
+      hostId: forwardRules.hostId,
       groupId: forwardRules.forwardGroupId,
       parentId: forwardRules.forwardGroupRuleId,
       memberId: forwardRules.forwardGroupMemberId,
@@ -3116,9 +3231,20 @@ export async function getTcpingSeriesByRule(
     .from(forwardRules)
     .where(and(eq(forwardRules.forwardGroupRuleId, ruleId), eq(forwardRules.pendingDelete, false)))
     .orderBy(asc(forwardRules.id));
+  if (childRows.length === 0 && chainGroupId) {
+    const groupSeries = await getForwardGroupLatencySeries(chainGroupId, { since, limit });
+    if (groupSeries.length > 0) return groupSeries;
+  }
   if (childRows.length > 0) {
     const groupModeById = await getForwardGroupModeMap((childRows as any[]).map((row: any) => Number(row.groupId || 0)));
-    const chainChildren = (childRows as any[]).filter((row: any) => groupModeById.get(Number(row.groupId || 0)) === "chain");
+    let chainChildren = (childRows as any[]).filter((row: any) => groupModeById.get(Number(row.groupId || 0)) === "chain");
+    // 内核链：只看入口子规则（它的探测就是端到端），各入口并排时取平均；用户态链：各跳相加。
+    const chainShape = chainChildren.length > 0 ? await getChainLatencyShape(Number(chainChildren[0].groupId), ruleId) : null;
+    const kernelChain = !!chainShape?.kernel;
+    if (chainShape?.kernel) {
+      const entryChildren = chainChildren.filter((row: any) => isChainEntryChild(chainShape, { memberId: Number(row.memberId || 0), hostId: Number(row.hostId || 0) }));
+      if (entryChildren.length > 0) chainChildren = entryChildren;
+    }
     if (chainChildren.length > 0) {
       const childIds = chainChildren.map((row: any) => Number(row.id)).filter((id: number) => id > 0);
       const page = limitOffset(Math.max(limit * childIds.length, limit));
@@ -3134,6 +3260,7 @@ export async function getTcpingSeriesByRule(
       const bucketMs = 30_000;
       const byBucket = new Map<number, {
         latencyMs: number;
+        latencyCount: number;
         timeoutCount: number;
         count: number;
         probeCount: number;
@@ -3145,6 +3272,7 @@ export async function getTcpingSeriesByRule(
         const key = Math.floor(at.getTime() / bucketMs) * bucketMs;
         const prev = byBucket.get(key) || {
           latencyMs: 0,
+          latencyCount: 0,
           timeoutCount: 0,
           count: 0,
           probeCount: 0,
@@ -3172,32 +3300,40 @@ export async function getTcpingSeriesByRule(
           prev.timeoutCount += probeCount;
         } else {
           prev.latencyMs += Number(row.latencyMs) || 0;
+          prev.latencyCount += 1;
         }
         prev.count += 1;
         if (at.getTime() > new Date(prev.recordedAt).getTime()) prev.recordedAt = at;
         byBucket.set(key, prev);
       }
-      return Array.from(byBucket.entries())
+      const chainSeries = Array.from(byBucket.entries())
         .sort((a, b) => a[0] - b[0])
         .slice(-limit)
         .map(([, bucket]) => {
           // A bucket is a timeout only when every represented packet failed.
           // Partial packet loss must remain a valid latency sample so the
           // chart can calculate a non-zero loss rate from the counters.
-          // A child that did not report in this bucket is retained as one
-          // failed attempt, matching the pre-counter chain semantics.
-          const missingChildAttempts = Math.max(0, childIds.length - bucket.count);
+          // 用户态链：某一跳这一桶没报，按一次失败算（和没有计数时的老口径一样）；
+          // 内核链：几条入口各是独立的端到端探测，哪条这一桶没报就是没样本，不算失败。
+          const missingChildAttempts = kernelChain ? 0 : Math.max(0, childIds.length - bucket.count);
           const totalProbeCount = Math.max(1, bucket.probeCount + missingChildAttempts);
           const probeSuccesses = Math.max(0, Math.min(totalProbeCount, bucket.probeSuccesses));
           const isTimeout = probeSuccesses <= 0;
+          const latencyMs = kernelChain && bucket.latencyCount > 0 ? bucket.latencyMs / bucket.latencyCount : bucket.latencyMs;
           return {
-            latencyMs: isTimeout ? null : bucket.latencyMs,
+            latencyMs: isTimeout ? null : latencyMs,
             isTimeout,
             probeCount: totalProbeCount,
             probeSuccesses,
             recordedAt: bucket.recordedAt,
           };
         });
+      if (chainSeries.length > 0) return chainSeries;
+    }
+    // 子规则还没探过（刚建、Agent 太老）：退回链本身各跳的后台探测汇总。
+    if (chainGroupId) {
+      const groupSeries = await getForwardGroupLatencySeries(chainGroupId, { since, limit });
+      if (groupSeries.length > 0) return groupSeries;
     }
     const nonChainChildren = (childRows as any[])
       .map((row: any) => ({
@@ -3332,16 +3468,19 @@ export async function getTcpingProbeStatisticsByRule(ruleId: number, since: Date
   const db = await getDb();
   if (!db) return getProbeCounterStatistics("rule", [], since);
   const chainGroupId = await getChainGroupIdForTemplateRule(ruleId);
-  if (chainGroupId) return getProbeCounterStatistics("forwardGroup", chainGroupId, since);
   const children = await db.select({
-    id: forwardRules.id, groupId: forwardRules.forwardGroupId,
+    id: forwardRules.id, hostId: forwardRules.hostId, groupId: forwardRules.forwardGroupId,
     parentId: forwardRules.forwardGroupRuleId, memberId: forwardRules.forwardGroupMemberId,
   }).from(forwardRules).where(and(eq(forwardRules.forwardGroupRuleId, ruleId), eq(forwardRules.pendingDelete, false)))
     .orderBy(asc(forwardRules.id));
-  if (!children.length) return getProbeCounterStatistics("rule", ruleId, since);
+  if (!children.length) {
+    // 链模板还没有子规则：只有链各跳的后台探测可看。
+    if (chainGroupId) return getProbeCounterStatistics("forwardGroup", chainGroupId, since);
+    return getProbeCounterStatistics("rule", ruleId, since);
+  }
   const modes = await getForwardGroupModeMap(children.map((row: any) => Number(row.groupId || 0)));
   const chain = children.filter((row: any) => modes.get(Number(row.groupId)) === "chain");
-  if (chain.length) return getProbeCounterStatistics("forwardGroup", Number(chain[0].groupId), since);
+  if (chain.length) return getChainTemplateProbeStatistics(ruleId, Number(chain[0].groupId), chain as any[], since);
   const groupId = Number(children[0].groupId);
   const [active, first] = await Promise.all([getActiveMemberByGroup([groupId]), getFirstEnabledMemberByGroup([groupId])]);
   const selected = selectPreferredForwardGroupLatencyChild(children
@@ -3349,6 +3488,40 @@ export async function getTcpingProbeStatisticsByRule(ruleId: number, since: Date
     .map((row: any) => ({ id: Number(row.id), groupId: Number(row.groupId), memberId: Number(row.memberId) })),
   [Number(active.get(groupId) || 0), Number(first.get(groupId)?.id || 0)]);
   return getProbeCounterStatistics("rule", selected?.id || ruleId, since);
+}
+
+/**
+ * 转发链模板的累计探测计数：按子规则算，不按链各跳的 ICMP 探测算（见 getChainLatencyShape）。
+ * 内核链：入口子规则的 TCP 探测就是端到端，几条入口相加；用户态链：按成员一跳一段，串起来乘。
+ * 子规则一个计数都没有（Agent 太老）时退回链各跳的计数。
+ */
+async function getChainTemplateProbeStatistics(
+  templateRuleId: number,
+  groupId: number,
+  children: Array<{ id: number; hostId: number; memberId: number }>,
+  since: Date,
+): Promise<ProbeStatistics> {
+  const shape = await getChainLatencyShape(groupId, templateRuleId);
+  if (!shape) return getProbeCounterStatistics("forwardGroup", groupId, since);
+  const stats = new Map<number, ProbeStatistics>();
+  await Promise.all(children.map(async (child) => {
+    stats.set(Number(child.id), await getProbeCounterStatistics("rule", Number(child.id), since));
+  }));
+  let combined: ProbeStatistics;
+  if (shape.kernel) {
+    const entries = children.filter((child) => isChainEntryChild(shape, { memberId: Number(child.memberId || 0), hostId: Number(child.hostId || 0) }));
+    combined = combineParallelProbeStatistics((entries.length > 0 ? entries : children).map((child) => stats.get(Number(child.id))!));
+  } else {
+    const byMember = new Map<number, ProbeStatistics[]>();
+    for (const child of children) {
+      const list = byMember.get(Number(child.memberId || 0)) || [];
+      list.push(stats.get(Number(child.id))!);
+      byMember.set(Number(child.memberId || 0), list);
+    }
+    combined = combineSerialProbeStatistics(Array.from(byMember.values()).map((list) => combineParallelProbeStatistics(list)));
+  }
+  if (combined.available) return combined;
+  return getProbeCounterStatistics("forwardGroup", groupId, since);
 }
 
 /** Clean expired TCPing data, keeping the most recent N hours. */

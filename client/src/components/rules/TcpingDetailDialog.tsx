@@ -84,11 +84,14 @@ function TcpingTooltipContent({ active, payload, label }: any) {
 export function TcpingDetailBody({
   ruleId,
   isForwardChain = false,
+  chainKernel = false,
   probeMethod = "tcping",
   active,
 }: {
   ruleId: number;
   isForwardChain?: boolean;
+  /** 内核（iptables / nftables）转发链：入口机的一次探测就是端到端；用户态链是各跳相加。 */
+  chainKernel?: boolean;
   probeMethod?: "tcping" | "ping";
   active: boolean;
 }) {
@@ -166,7 +169,11 @@ export function TcpingDetailBody({
     <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
         <div className="flex flex-wrap items-center gap-2 sm:justify-end">
           <span data-fx-help="" className="mr-auto text-xs text-muted-foreground">
-            {isForwardChain ? `最近 ${latencyTimeRangeLabel(timeRangeHours)} 链路汇总延迟和丢包。` : `最近 ${latencyTimeRangeLabel(timeRangeHours)} 延迟和丢包。`}
+            {isForwardChain
+              ? chainKernel
+                ? `最近 ${latencyTimeRangeLabel(timeRangeHours)}：入口机沿这条链到目标的端到端延迟和丢包。`
+                : `最近 ${latencyTimeRangeLabel(timeRangeHours)}：链上各跳探测相加的端到端延迟和丢包。`
+              : `最近 ${latencyTimeRangeLabel(timeRangeHours)} 延迟和丢包。`}
           </span>
           <LatencyTimeRangeSelect value={timeRangeHours} onChange={setTimeRangeHours} />
           <LatencyPeakCutToggle id={`tcping-peak-cut-${ruleId}`} checked={peakCutEnabled} onCheckedChange={setPeakCutEnabled} className="shrink-0" />
@@ -226,7 +233,9 @@ export function TcpingDetailBody({
             stats={tcpingStats}
             counterStatistics={counterStatistics ?? null}
             description={isForwardChain
-              ? "转发链按各跳的实际探测计数，不等于端到端业务丢包。"
+              ? chainKernel
+                ? "内核转发链是透传的：入口机对第一跳的每次 TCP 探测都要走完整条链才算通，统计的就是这条转发自己的端到端探测，不代表业务丢包。"
+                : "用户态转发链每跳各自探下一跳，这里按各跳串起来算（一个包要每跳都过）；不代表业务丢包。"
               : "统计的是当前目标的实际探测，不代表业务丢包。"}
           />
           <LatencyHistoryDayStrip summaries={history.data} loading={history.isLoading} />

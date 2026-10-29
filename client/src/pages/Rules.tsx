@@ -10,7 +10,7 @@ import FilterToolbar from "@/components/FilterToolbar";
 import { SearchToggle } from "@/components/ListControls";
 import { useAuth } from "@/_core/hooks/useAuth";
 import SectionTransition from "@/components/SectionTransition";
-import { forwardGroupModeOf } from "@shared/forwardTypes";
+import { forwardGroupModeOf, isUserspaceForwardType } from "@shared/forwardTypes";
 import { loadReactGlobe, prefetchReactGlobe } from "@/lib/reactGlobeLoader";
 import { escapeTooltipHtml, hostGeoCoordinate } from "@/lib/hostGeo";
 import { formatBytes } from "@shared/formatBytes";
@@ -2541,7 +2541,7 @@ function RulesContent() {
   const importCreateMutation = trpc.rules.create.useMutation();
 
   // tab：打开时先停在哪一页（表格里点「详细」直接看延迟记录）
-  const [selfTestRule, setSelfTestRule] = useState<{ id: number; name: string; isForwardChain?: boolean; probeMethod?: "tcping" | "ping"; tab?: string } | null>(null);
+  const [selfTestRule, setSelfTestRule] = useState<{ id: number; name: string; isForwardChain?: boolean; chainKernel?: boolean; probeMethod?: "tcping" | "ping"; tab?: string } | null>(null);
 
   const setRouteMode = (mode: RuleRouteMode, aggregate = false) => {
     if (mode === form.routeMode) return;
@@ -6799,7 +6799,7 @@ function RulesContent() {
       label: "诊断",
       ariaLabel: `诊断 ${rule.name}：转发链路自测`,
       icon: <Stethoscope className="h-3.5 w-3.5" />,
-      onSelect: () => setSelfTestRule({ id: rule.id, name: rule.name, isForwardChain: isForwardChainRule, probeMethod }),
+      onSelect: () => setSelfTestRule({ id: rule.id, name: rule.name, isForwardChain: isForwardChainRule, chainKernel: !isUserspaceForwardType(rule.forwardType), probeMethod }),
     };
     const editAction = { key: "edit", label: "编辑", ariaLabel: `编辑 ${rule.name}`, icon: <Pencil className="h-3.5 w-3.5" />, onSelect: () => openEdit(rule) };
     return (
@@ -7100,7 +7100,7 @@ function RulesContent() {
                 <button
                   type="button"
                   className="text-[11px] text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-foreground"
-                  onClick={() => setSelfTestRule({ id: rule.id, name: rule.name, isForwardChain: isForwardChainRule, probeMethod: ruleLatencyProbeMethodForRule(rule), tab: "history" })}
+                  onClick={() => setSelfTestRule({ id: rule.id, name: rule.name, isForwardChain: isForwardChainRule, chainKernel: !isUserspaceForwardType(rule.forwardType), probeMethod: ruleLatencyProbeMethodForRule(rule), tab: "history" })}
                 >
                   详细
                 </button>
@@ -7935,7 +7935,7 @@ function RulesContent() {
             label: "延迟记录",
             content: (
               <Suspense fallback={<DataSectionLoading />}>
-                <TcpingDetailBody ruleId={selfTestRule.id} isForwardChain={!!selfTestRule.isForwardChain} probeMethod={selfTestRule.probeMethod} active={!!selfTestRule} />
+                <TcpingDetailBody ruleId={selfTestRule.id} isForwardChain={!!selfTestRule.isForwardChain} chainKernel={!!selfTestRule.chainKernel} probeMethod={selfTestRule.probeMethod} active={!!selfTestRule} />
               </Suspense>
             ),
           }, {
