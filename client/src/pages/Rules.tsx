@@ -4968,6 +4968,31 @@ function RulesContent() {
   const getForwardGroupConfigStatus = useCallback((group: any): "available" | "degraded" | "pending" | "unavailable" | "disabled" => (
     groupAvailabilityById.get(Number(group?.id || 0))?.status || "unavailable"
   ), [groupAvailabilityById]);
+  // 下面 resolveRuleVisualStatus 在 ruleVisualStatuses 的 useMemo 里渲染时就会被调用，
+  // 这个 const 必须定义在它前面：放在后面就是「Cannot access ... before initialization」（2.3.488 整页白屏）。
+  /**
+   * 这条规则经过的机器里掉线了的（名字）。入口机自己、隧道从入口到出口的每一跳、转发链的每台成员。
+   * 转发组（多入口）不在这里管：组的运行状态已经按「几台在跑」分档了。
+   */
+  const getRuleOfflineHostNames = (rule: any): string[] => {
+    const category = getRuleCategory(rule, forwardGroupById);
+    const ids: number[] = [];
+    if (category === "tunnel") {
+      const tunnel = tunnelById.get(Number(rule?.tunnelId || 0));
+      if (tunnel) ids.push(...getTunnelHopIds(tunnel));
+    } else if (category === "chain") {
+      const group = forwardGroupById.get(Number(rule?.forwardGroupId || 0));
+      for (const member of (Array.isArray(group?.members) ? group.members : [])) ids.push(Number(member?.hostId || 0));
+    } else if (!rule?.forwardGroupId) {
+      ids.push(Number(rule?.hostId || 0));
+    }
+    const names: string[] = [];
+    for (const id of new Set(ids.filter((id) => id > 0))) {
+      const host = hostById.get(id);
+      if (host && host.isOnline === false) names.push(String(host.name || `主机 #${id}`));
+    }
+    return names;
+  };
   const resolveRuleVisualStatus = useCallback((rule: any): ReturnType<typeof resolveForwardRuleVisualStatus> => {
     const latest = stableProbeByRule.get(Number(rule.id));
     if (rule.forwardGroupId) {
@@ -6315,29 +6340,6 @@ function RulesContent() {
    * 隧道取它的跳点名，转发链取链上的主机名，转发组取组名 —— 组内部谁在跑是
    * 组自己的事，规则这一层只需要说明「走的是这个组」。
    */
-  /**
-   * 这条规则经过的机器里掉线了的（名字）。入口机自己、隧道从入口到出口的每一跳、转发链的每台成员。
-   * 转发组（多入口）不在这里管：组的运行状态已经按「几台在跑」分档了。
-   */
-  const getRuleOfflineHostNames = (rule: any): string[] => {
-    const category = getRuleCategory(rule, forwardGroupById);
-    const ids: number[] = [];
-    if (category === "tunnel") {
-      const tunnel = tunnelById.get(Number(rule?.tunnelId || 0));
-      if (tunnel) ids.push(...getTunnelHopIds(tunnel));
-    } else if (category === "chain") {
-      const group = forwardGroupById.get(Number(rule?.forwardGroupId || 0));
-      for (const member of (Array.isArray(group?.members) ? group.members : [])) ids.push(Number(member?.hostId || 0));
-    } else if (!rule?.forwardGroupId) {
-      ids.push(Number(rule?.hostId || 0));
-    }
-    const names: string[] = [];
-    for (const id of new Set(ids.filter((id) => id > 0))) {
-      const host = hostById.get(id);
-      if (host && host.isOnline === false) names.push(String(host.name || `主机 #${id}`));
-    }
-    return names;
-  };
 
   const getRuleHopNames = (rule: any): string[] => {
     const category = getRuleCategory(rule, forwardGroupById);
