@@ -1003,6 +1003,7 @@ export const proxySubscriptionsRouter = router({
       externalSourcesEnabled: z.boolean().optional(),
       externalSourceMaxPerUser: z.number().int().min(0).max(100).optional(),
       landingPageEnabled: z.boolean().optional(),
+      xboardCompatEnabled: z.boolean().optional(),
       notifyFirstAccess: z.boolean().optional(),
       notifyNewDevice: z.boolean().optional(),
       notifyDeviceLimit: z.boolean().optional(),

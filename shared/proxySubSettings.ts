@@ -63,6 +63,11 @@ export type ProxySubSettings = {
   externalSourceMaxPerUser: number;
   /** 浏览器打开订阅地址时给落地页。 */
   landingPageEnabled: boolean;
+  /**
+   * Xboard / V2Board 兼容接口（/api/v1/passport/auth/login、/api/v1/user/getSubscribe 等）：
+   * 支持「用 Xboard 账号登录」的客户端可以直接填面板地址 + 邮箱密码拉订阅。默认关。
+   */
+  xboardCompatEnabled: boolean;
   /** 通知：首次拉取 / 新设备 / 超设备数 / 连续失败。 */
   notifyFirstAccess: boolean;
   notifyNewDevice: boolean;
@@ -99,6 +104,7 @@ export const PROXY_SUB_DEFAULT_SETTINGS: ProxySubSettings = {
   externalSourcesEnabled: false,
   externalSourceMaxPerUser: 5,
   landingPageEnabled: true,
+  xboardCompatEnabled: false,
   notifyFirstAccess: false,
   notifyNewDevice: false,
   notifyDeviceLimit: true,
@@ -135,6 +141,7 @@ const FIELD_KINDS: Record<keyof ProxySubSettings, Kind> = {
   externalSourcesEnabled: "bool",
   externalSourceMaxPerUser: "int",
   landingPageEnabled: "bool",
+  xboardCompatEnabled: "bool",
   notifyFirstAccess: "bool",
   notifyNewDevice: "bool",
   notifyDeviceLimit: "bool",

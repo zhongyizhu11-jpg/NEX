@@ -436,6 +436,7 @@ function SettingsTab() {
         </FormField>
         {number("updateIntervalHours", "客户端更新间隔（小时）", "Profile-Update-Interval 响应头，Surge 托管配置也按它。", 1)}
         {toggle("landingPageEnabled", "浏览器打开订阅地址给落地页", "用量、到期、一键导入按钮、二维码；不列节点。")}
+        {toggle("xboardCompatEnabled", "兼容 Xboard / V2Board 账号登录", "支持「Xboard 账号登录」的客户端填面板地址 + 邮箱密码就能拉订阅。登录照样限流；开了两步验证、或需要验证码时会被拒绝，请改用订阅地址。")}
         <FormField className="space-y-1.5"><Label>帮助地址（support-url）</Label><Input value={form.supportUrl} onChange={(event) => set("supportUrl", event.target.value)} placeholder="https://…" /></FormField>
         <FormField className="space-y-1.5 sm:col-span-2"><Label>公告</Label><Textarea value={form.announce} onChange={(event) => set("announce", event.target.value)} rows={2} /><p data-fx-help="" className="text-xs text-muted-foreground">写进 announce 响应头（Happ / v2RayTun 会显示）、落地页，信息节点开着时也插一条。</p></FormField>
       </>)}

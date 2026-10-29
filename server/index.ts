@@ -15,6 +15,7 @@ import { paymentCallbackRouter } from "./payment";
 import { migrationRouter } from "./migration";
 import { clientLogoRouter } from "./clientLogoRoute";
 import { proxySubscriptionRouter } from "./proxySubscriptionRoute";
+import { xboardCompatRouter } from "./xboardCompatRoute";
 import { proxySubRulesetRouter } from "./proxySubRulesetMirror";
 import { initDatabase } from "./db";
 import { installPanelLogger } from "./_core/panelLogger";
@@ -204,6 +205,8 @@ async function startServer() {
   // 规则集镜像要排在订阅路由前面：/api/sub/ruleset/… 会被 /api/sub/:token/:format 抢走。
   app.use(proxySubRulesetRouter);
   app.use(proxySubscriptionRouter);
+  // Xboard / V2Board 兼容的几个用户端接口（默认关，设置 › 订阅里开）：server/xboardCompatRoute.ts。
+  app.use(xboardCompatRouter);
   app.use(clientLogoRouter);
   // POST /mcp：AI 客户端用个人 API 令牌接入（server/ops/mcp.ts）。
   app.use(mcpRouter);
