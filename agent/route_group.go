@@ -91,7 +91,7 @@ type routeTargetStats struct {
 真实连接也算票（honk 的思路）：探测 5 秒一次、探的是一个固定端点，而真实连接每时每刻都在
 拨，拨的就是业务要走的地址。拨不通本来就记一次失败；这里再补上「拨得慢」—— 连续
 routeSlowDialStreak 次比探测延迟慢 routeSlowDialFactor 倍（且不低于 routeSlowDialMinMs），
-当作一次失败并立刻探一轮，而不是等下一个 5 秒。一次正常的拨号成功则把连续失败清零：
+立刻探一轮，而不是等下一个 5 秒；慢本身不记失败（2.2.240 起），坏没坏由探测说。一次正常的拨号成功则把连续失败清零：
 业务连接都通了，比探测更有说服力。
 
 拨号记录不进探测样本窗口：它不是按固定间隔来的，混进去丢包率和抖动就不准了。
@@ -126,7 +126,7 @@ func routeDialIsSlow(durationMs int, probeLatencyMs int) bool {
 	return durationMs >= threshold
 }
 
-// recordDial 记一次真实拨号。返回 true 表示这次凑够了连续慢拨，调用方该报事件并立刻探测。
+// recordDial 记一次真实拨号。返回 true 表示这次凑够了连续慢拨，调用方该报事件并立刻探测（不算失败）。
 func (s *routeTargetStats) recordDial(ok bool, durationMs int, at time.Time, probeLatencyMs int) bool {
 	if durationMs < 0 {
 		durationMs = 0
@@ -147,8 +147,10 @@ func (s *routeTargetStats) recordDial(ok bool, durationMs int, at time.Time, pro
 		if sample.slow {
 			s.consecutiveSlow++
 			if s.consecutiveSlow >= routeSlowDialStreak {
+				// 只要求立刻探一轮，不记失败：拨得慢多半是这一刻线路或中转忙（测速时几十条连接一起拨），
+				// 当失败记的话，正在跑满的那条线会被判坏、切走，再被抖动抑制钉在差的那条上。
+				// 线路是不是真坏了由那一轮探测说了算（2.2.237 记成了失败，和设计说明相反）。
 				s.consecutiveSlow = 0
-				s.consecutiveFailures++
 				streak = true
 			}
 		} else {
