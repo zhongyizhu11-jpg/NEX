@@ -498,7 +498,9 @@ export default function ClientSubscriptionsPage() {
   const deleteTokenConfirmed = async (id: number) => {
     const ok = await confirm({
       title: "删除这个订阅链接？",
-      description: "使用该地址的客户端将立即无法更新节点。",
+      // 删的只是「下载入口」：节点凭据是按入站发的，已导入的客户端照常能连。
+      // 不说清这一点，用户会以为删了地址就等于断网。
+      description: "只是这条地址失效：用它的客户端拉不到更新，但已经导入的节点照常能连。要让某台设备彻底断开，去落地节点上「重置凭据」（其他设备要重新拉订阅）。",
       confirmText: "删除",
     });
     if (ok) deleteToken.mutate({ id });
@@ -1534,6 +1536,7 @@ export default function ClientSubscriptionsPage() {
         settings={subSettingsQuery.data || null}
         isAdmin={isAdmin}
         onSaved={refresh}
+        onPreview={setPreviewToken}
       />
       <ProxySubTokenPreviewDialog open={!!previewToken} onOpenChange={(open) => { if (!open) setPreviewToken(null); }} tokenId={previewToken?.id || null} tokenName={previewToken?.name || ""} />
       <ProxySubTokenLogsDialog open={!!logsToken} onOpenChange={(open) => { if (!open) setLogsToken(null); }} tokenId={logsToken?.id || null} tokenName={logsToken?.name || ""} />

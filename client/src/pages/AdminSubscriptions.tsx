@@ -119,7 +119,7 @@ function TokensTab() {
                       <Button size="sm" variant="ghost" onClick={() => setDevicesOf({ id: row.id, name: row.name })}>设备</Button>
                       <Button size="sm" variant="ghost" onClick={() => updateToken.mutate({ id: row.id, isEnabled: !row.isEnabled })}>{row.isEnabled ? "停用" : "启用"}</Button>
                       <Button size="sm" variant="ghost" onClick={async () => { if (await confirm({ title: "重置这条地址？", description: "旧地址和短链接立即失效，设备列表清空。", confirmText: "重置" })) rotateToken.mutate({ id: row.id }); }}>重置</Button>
-                      <Button size="sm" variant="ghost" className="text-[var(--fx-down-text)]" onClick={async () => { if (await confirm({ title: "删除这条地址？", description: "用它的客户端立即拉不到。", confirmText: "删除" })) deleteToken.mutate({ id: row.id }); }}>删除</Button>
+                      <Button size="sm" variant="ghost" className="text-[var(--fx-down-text)]" onClick={async () => { if (await confirm({ title: "删除这条地址？", description: "只是这条地址失效：用它的客户端拉不到更新，已导入的节点照常能连。要断开设备得在落地节点上重置凭据。", confirmText: "删除" })) deleteToken.mutate({ id: row.id }); }}>删除</Button>
                     </TableCell>
                   </TableRow>
                 );

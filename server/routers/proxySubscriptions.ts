@@ -1139,6 +1139,8 @@ export const proxySubscriptionsRouter = router({
       await assertProxySubscriptionAllowed(ctx);
       await assertOwnedToken(input.id, ctx);
       await db.deleteProxySubToken(input.id);
+      // 和重置一样：按令牌 id 记的限流计数一起清，别让残留的计数挂在一个不存在的令牌上。
+      clearProxySubRateLimitForToken(input.id);
       return { success: true };
     }),
 });
