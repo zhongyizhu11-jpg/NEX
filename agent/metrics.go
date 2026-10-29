@@ -2783,24 +2783,59 @@ func nativePingIPDetailed(ip net.IP, timeout time.Duration, count int) (int, boo
 	return nativePingExchange(dgram, &net.UDPAddr{IP: ipv6}, ipv6, 128, 129, false, timeout, count)
 }
 
-// nativePingExchange 发 count 个回显请求、收回显应答。原始 IPv4 套接字收到的包带 IP
-// 头，数据报套接字不带；stripIPv4Header 只在开头真是 IPv4 头时才剥（ICMP 应答类型 0/129
-// 的首字节不会被误认成 IPv4 头）。
+// nativePingInterval 是两个回显请求之间的间隔。原来 5 个一口气发出去：不少主机的 ICMP 限速
+// （加固脚本常见的 iptables -m limit 1/s、云防火墙的 ICMP 限频）会把后面几个丢掉，面板看到的
+// 就是「丢包 3/5」「丢包率 45%」，而链路本身一个包都没丢。系统 ping 默认 1 秒一个；这里按
+// ping -i 0.2 的最小间隔，5 个包多花 0.8 秒，换来的是丢包率说的是线路、不是限速器。
+const nativePingInterval = 200 * time.Millisecond
+
+// nativePingExchange 发 count 个回显请求（按 nativePingInterval 间隔）、收回显应答。原始 IPv4
+// 套接字收到的包带 IP 头，数据报套接字不带；stripIPv4Header 只在开头真是 IPv4 头时才剥（ICMP
+// 应答类型 0/129 的首字节不会被误认成 IPv4 头）。收和发并行：第一个应答回来时后面的还在发。
 func nativePingExchange(conn net.PacketConn, dst net.Addr, peer net.IP, echoType byte, replyType byte, matchID bool, timeout time.Duration, count int) (int, bool, error, int, int) {
-	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
+	if count < 1 {
+		count = 1
+	}
+	interval := nativePingInterval
+	if count <= 1 {
+		interval = 0
+	}
+	if err := conn.SetDeadline(time.Now().Add(timeout + interval*time.Duration(count-1))); err != nil {
 		return 0, false, err, 0, 0
 	}
 	id := os.Getpid() & 0xffff
 	baseSeq := int(time.Now().UnixNano()) & 0xffff
+	var mu sync.Mutex
 	sentAt := map[int]time.Time{}
-	for i := 0; i < count; i++ {
-		seq := (baseSeq + i) & 0xffff
-		packet := buildICMPEchoRequest(echoType, id, seq)
-		sentAt[seq] = time.Now()
-		if _, err := conn.WriteTo(packet, dst); err != nil {
-			return 0, false, err, len(sentAt), 0
+	sent := 0
+	stop := make(chan struct{})
+	var stopOnce sync.Once
+	stopSending := func() { stopOnce.Do(func() { close(stop) }) }
+	defer stopSending()
+	sendErr := make(chan error, 1)
+	go func() {
+		for i := 0; i < count; i++ {
+			if i > 0 {
+				select {
+				case <-time.After(interval):
+				case <-stop:
+					sendErr <- nil
+					return
+				}
+			}
+			seq := (baseSeq + i) & 0xffff
+			packet := buildICMPEchoRequest(echoType, id, seq)
+			mu.Lock()
+			sentAt[seq] = time.Now()
+			sent++
+			mu.Unlock()
+			if _, err := conn.WriteTo(packet, dst); err != nil {
+				sendErr <- err
+				return
+			}
 		}
-	}
+		sendErr <- nil
+	}()
 	buf := make([]byte, 1500)
 	totalLatency := 0
 	successes := 0
@@ -2823,11 +2858,15 @@ func nativePingExchange(conn net.PacketConn, dst net.Addr, peer net.IP, echoType
 			continue
 		}
 		seq := int(binary.BigEndian.Uint16(msg[6:8]))
+		mu.Lock()
 		started, ok := sentAt[seq]
+		if ok {
+			delete(sentAt, seq)
+		}
+		mu.Unlock()
 		if !ok {
 			continue
 		}
-		delete(sentAt, seq)
 		latency := int(time.Since(started).Milliseconds())
 		if latency < 1 {
 			latency = 1
@@ -2838,8 +2877,19 @@ func nativePingExchange(conn net.PacketConn, dst net.Addr, peer net.IP, echoType
 			break
 		}
 	}
+	stopSending()
+	writeErr := <-sendErr
+	mu.Lock()
+	sentCount := sent
+	mu.Unlock()
+	if sentCount < 1 {
+		sentCount = 1
+	}
 	if successes == 0 {
-		return 0, false, nil, count, 0
+		if writeErr != nil {
+			return 0, false, writeErr, sentCount, 0
+		}
+		return 0, false, nil, sentCount, 0
 	}
 	latency := totalLatency / successes
 	if latency < 1 {
@@ -2847,7 +2897,7 @@ func nativePingExchange(conn net.PacketConn, dst net.Addr, peer net.IP, echoType
 		// zero: the panel treats a non-positive latency as an invalid sample.
 		latency = 1
 	}
-	return latency, true, nil, count, successes
+	return latency, true, nil, sentCount, successes
 }
 
 func nativePingSourceIP(addr net.Addr) net.IP {

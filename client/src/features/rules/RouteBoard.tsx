@@ -147,6 +147,12 @@ export function summarizeRouteChain(path: Pick<RouteBoardPath, "hops" | "latency
   return { segments, totalMs, partial, broken };
 }
 
+/** 当前在走的那条路径的整链摘要（规则卡上的延迟标签用），没有线路板数据或没有在走的路径时为 null。 */
+export function routeBoardActiveChain(status: RouteBoardStatus | null | undefined): RouteChainSummary | null {
+  const active = status?.paths?.find((path) => path.active) || null;
+  return active ? summarizeRouteChain(active) : null;
+}
+
 export function formatRate(bps: number) {
   return `${formatBytes(Math.max(0, bps))}/s`;
 }
