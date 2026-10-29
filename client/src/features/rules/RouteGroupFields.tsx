@@ -92,7 +92,11 @@ export type RouteGroupFieldsProps = {
   defaultAdvancedOpen?: boolean;
   /** 规则的协议（tcp / udp / both）：只转 UDP 的路径没有握手可探，健康检查的说法不一样。 */
   protocol?: string;
+  /** 「我的节点」：路径的落地可以直接选一个，地址端口由面板从节点解析、节点地址变了跟着改。 */
+  nodeOptions?: RouteNodeOption[];
 };
+
+export type RouteNodeOption = { id: number; name: string; address: string; port: number; protocol?: string };
 
 /** 小块选择：选中是整块反白，和策略面板、主机分组同一套（样式在 features/links/LinkSpreadPicker.tsx）。 */
 const choiceClass = linkChoiceClass;
@@ -318,6 +322,7 @@ export function RouteGroupFields({
   timeZone,
   defaultAdvancedOpen,
   protocol = "tcp",
+  nodeOptions = [],
 }: RouteGroupFieldsProps) {
   const now = nowMs ?? Date.now();
   const udpOnly = normalizeForwardRuleProtocol(protocol) === "udp";
@@ -607,21 +612,60 @@ export function RouteGroupFields({
                 {/* 「落地」和输入框绑在一起换行：窄屏上不会出现「落地」两个字留在上一行。 */}
                 <span className="flex min-w-[12rem] flex-1 items-center gap-1">
                   <span className="shrink-0 text-muted-foreground">落地</span>
-                  <FormField className="contents">
-                    <Input
-                      value={destText}
-                      onChange={(event) => setDrafts({ ...drafts, [destField]: event.target.value.replace(/\s+/g, "") })}
-                      onFocus={() => setEditingField(destField)}
-                      onBlur={() => { setEditingField(null); commitEndpoint(index, "dest", destText); }}
-                      // 越短越好：手机上框很窄，长了就被截成半句。不填就走规则的目标地址（在上面）。
-                      placeholder="IP:端口，留空同目标"
-                      aria-label={`路径 ${routePathLetter(index)} 的落地`}
-                      className="h-7 min-w-0 flex-1 font-mono text-xs"
-                      spellCheck={false}
-                      autoComplete="off"
-                      aria-invalid={destError ? true : undefined}
-                    />
-                  </FormField>
+                  {path.destNodeId ? (
+                    /* 选的是我的节点：画成一块，地址只读；× 回到手填。 */
+                    <span className="inline-flex h-7 min-w-0 items-center gap-1 rounded-[var(--fx-radius-control)] bg-[var(--fx-healthy-soft)] pl-2 pr-1 text-xs text-[var(--fx-healthy-text)]" data-testid="route-dest-node">
+                      <span className="truncate">{nodeOptions.find((node) => node.id === path.destNodeId)?.name || `节点 #${path.destNodeId}`}</span>
+                      {path.dest ? <span className="truncate font-mono opacity-75">{formatFailoverEndpoint(path.dest.ip, path.dest.port)}</span> : null}
+                      <button
+                        type="button"
+                        className="rounded-full p-0.5 hover:bg-black/10"
+                        aria-label={`路径 ${routePathLetter(index)} 的落地不再跟随节点`}
+                        onClick={() => { const { [destField]: _dropped, ...rest } = drafts; setDrafts(rest); patchPath(index, { destNodeId: null, dest: null }); }}
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </span>
+                  ) : (
+                    <FormField className="contents">
+                      <Input
+                        value={destText}
+                        onChange={(event) => setDrafts({ ...drafts, [destField]: event.target.value.replace(/\s+/g, "") })}
+                        onFocus={() => setEditingField(destField)}
+                        onBlur={() => { setEditingField(null); commitEndpoint(index, "dest", destText); }}
+                        // 越短越好：手机上框很窄，长了就被截成半句。不填就走规则的目标地址（在上面）。
+                        placeholder="IP:端口，留空同目标"
+                        aria-label={`路径 ${routePathLetter(index)} 的落地`}
+                        className="h-7 min-w-0 flex-1 font-mono text-xs"
+                        spellCheck={false}
+                        autoComplete="off"
+                        aria-invalid={destError ? true : undefined}
+                      />
+                    </FormField>
+                  )}
+                  {!path.destNodeId && nodeOptions.length > 0 ? (
+                    <Select
+                      value=""
+                      onValueChange={(selected) => {
+                        const node = nodeOptions.find((item) => String(item.id) === selected);
+                        if (!node) return;
+                        const { [destField]: _dropped, ...rest } = drafts;
+                        setDrafts(rest);
+                        patchPath(index, { destNodeId: node.id, dest: { ip: node.address, port: node.port } });
+                      }}
+                    >
+                      <SelectTrigger className="h-7 w-auto shrink-0 gap-1 border-dashed px-2 text-xs" aria-label={`路径 ${routePathLetter(index)} 的落地选我的节点`}>
+                        <SelectValue placeholder="选节点" />
+                      </SelectTrigger>
+                      <SelectContent align="end">
+                        {nodeOptions.map((node) => (
+                          <SelectItem key={node.id} value={String(node.id)}>
+                            {node.name}{node.protocol ? ` · ${node.protocol}` : ""} · {node.address}:{node.port}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  ) : null}
                 </span>
               </div>
               {destError ? <p className="text-meta leading-5 text-[var(--fx-warn-text)]">{destError}</p> : null}

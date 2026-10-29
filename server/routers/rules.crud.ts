@@ -71,6 +71,7 @@ import {
 } from "../portReservations";
 import { ensureTunnelListenerPortPolicy, reserveTunnelExitPort, usesSharedTunnelPrimaryListener } from "../repositories/tunnelRepository";
 import { withKeyedTaskLock, withTrafficBillingUserLock } from "../keyedTaskLock";
+import { assertRuleEgressNotDoubleLanding } from "../landingConflicts";
 import { mapWithConcurrency } from "../asyncPool";
 import { reserveRuleCreateQuota, type RuleQuotaReservation } from "../ruleQuotaReservations";
 import { assertRuleTargetsAllowedForActor } from "../ruleTargetPolicy";
@@ -174,6 +175,8 @@ const routePathInputSchema = z.object({
   name: z.string().max(40).optional(),
   hops: z.array(z.number().int().positive()).max(MAX_ROUTE_HOPS).optional(),
   dest: routeEndpointInputSchema.nullable().optional(),
+  /** 落地选的是「我的节点」：面板按节点解析 dest，节点地址变了跟着改。 */
+  destNodeId: z.number().int().positive().nullable().optional(),
   weight: z.number().int().min(ROUTE_GUARD_LIMITS.weight.min).max(ROUTE_GUARD_LIMITS.weight.max).optional(),
   probe: routeEndpointInputSchema.nullable().optional(),
 });
@@ -482,16 +485,19 @@ function normalizeRouteGroupInput(input: FailoverInput, context: NormalizeFailov
       usedKeys.add(key);
       const hops = Array.from(new Set((raw.hops || []).map((hop) => Math.floor(Number(hop))).filter((hop) => hop > 0)));
       const dest = raw.dest ? { ip: String(raw.dest.ip).trim(), port: Number(raw.dest.port) } : null;
+      const destNodeId = Number((raw as any).destNodeId || 0) > 0 ? Math.floor(Number((raw as any).destNodeId)) : null;
       const stored = storedByKey.get(key);
       const unchanged = !!stored
         && stored.hops.length === hops.length
         && stored.hops.every((hop, index) => hop === hops[index])
-        && sameEndpoint(stored.dest, dest);
+        && sameEndpoint(stored.dest, dest)
+        && (stored.destNodeId || null) === destNodeId;
       return {
         key,
         name: String(raw.name || "").trim().slice(0, 40),
         hops,
         dest,
+        destNodeId,
         weight: raw.weight ?? stored?.weight ?? 50,
         probe: raw.probe ? { ip: String(raw.probe.ip).trim(), port: Number(raw.probe.port) } : null,
         // 拨号地址由保存后的同步解析；中转和落地没动的路径先沿用上次的，Agent 不用等一轮。
@@ -1669,6 +1675,9 @@ export async function createDirectForwardRuleForActor(
       targetIp: input.targetIp,
     })
     : null;
+  if (egressColumns && egressColumns.egressType !== "none") {
+    await assertRuleEgressNotDoubleLanding({ userId: actor.id, targetIp: input.targetIp, targetPort: input.targetPort, egressType: egressColumns.egressType });
+  }
   if (!isTrafficBillingRule && Number((currentUser as any)?.trafficLimit || 0) > 0 && Number((currentUser as any)?.trafficUsed || 0) >= Number((currentUser as any)?.trafficLimit || 0)) {
     throw new Error("您的流量已用完，无法添加规则");
   }
@@ -2220,6 +2229,8 @@ export const crudRulesRouter = router({
         "请输入有效的 IP 地址或域名"
       ),
       targetPort: z.number().int().min(1).max(65535),
+      /** 目标选的是「我的节点」：显式绑定，节点地址变了目标跟着改（server/proxyNodeFollow.ts）。 */
+      proxyNodeId: z.number().int().positive().nullable().optional(),
       isEnabled: z.boolean().optional().default(true),
       telegramErrorNotifyEnabled: z.boolean().optional().default(false),
       // 规则专属域名开关（shared/ruleEntryDomain.ts）：不传按列缺省开着。
@@ -2475,6 +2486,7 @@ export const crudRulesRouter = router({
         "请输入有效的 IP 地址或域名"
       ).optional(),
       targetPort: z.number().int().min(1).max(65535).optional(),
+      proxyNodeId: z.number().int().positive().nullable().optional(),
       telegramErrorNotifyEnabled: z.boolean().optional(),
       // 规则专属域名开关：改了由仓库层通知同步（关 → 域名进待删表、订阅立刻退回入口地址；开 → 重新发布）。
       entryDomainEnabled: z.boolean().optional(),
@@ -2514,6 +2526,14 @@ export const crudRulesRouter = router({
       const egressInput = takeEgressInput(input as any);
       const egressPlan = await planRuleEgressUpdate(ctx.user, input, egressInput);
       const egressActiveAfterSave = egressPlan ? egressPlan.columns.egressType !== "none" : ruleHasEgress(await db.getForwardRuleById(input.id));
+      if (egressActiveAfterSave && ruleBeforeUpdate) {
+        await assertRuleEgressNotDoubleLanding({
+          userId: Number((ruleBeforeUpdate as any).userId || ctx.user.id),
+          targetIp: input.targetIp ?? (ruleBeforeUpdate as any).targetIp,
+          targetPort: input.targetPort ?? (ruleBeforeUpdate as any).targetPort,
+          egressType: egressPlan ? egressPlan.columns.egressType : (ruleBeforeUpdate as any).egressType,
+        });
+      }
       const updateResult = await withKeyedTaskLock(`rule:${input.id}`, async () => {
       const heldReservations: HostPortReservation[] = [];
       // Keep the primary tunnel-exit reservation separate from source-port
@@ -3571,12 +3591,17 @@ export const crudRulesRouter = router({
        * 所以不会被面板又绑回去；已经绑着别的节点的更不动，那是他明确选过的。
        */
       // 走 Shadowsocks 出口的规则不自动绑订阅：它的目标不是「我的某个落地节点」，绑上去订阅里就是一条错的线路。
+      // 表单里明确选了「我的节点」：直接绑它（自动认只在没选的时候起作用）。
+      const explicitNodeId = Number((input as any).proxyNodeId || 0);
+      if (explicitNodeId > 0 && !egressActiveAfterSave && explicitNodeId !== Number((rule as any).proxyNodeId || 0)) {
+        await db.updateForwardRule(id, { proxyNodeId: explicitNodeId, proxyNodeVisible: true } as any);
+      }
       const bindingChange = egressActiveAfterSave ? null : await autoBindProxyNodeForRule({
         ruleId: Number(id),
         userId: Number((rule as any).userId || ctx.user.id),
         targetIp: data.targetIp ?? (rule as any).targetIp,
         targetPort: Number(data.targetPort ?? (rule as any).targetPort),
-        boundNodeId: Number((rule as any).proxyNodeId || 0),
+        boundNodeId: explicitNodeId > 0 ? explicitNodeId : Number((rule as any).proxyNodeId || 0),
         isCreate: false,
         previousTargetIp: (rule as any).targetIp,
         previousTargetPort: (rule as any).targetPort,

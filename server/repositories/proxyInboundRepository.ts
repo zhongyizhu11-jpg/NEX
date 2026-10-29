@@ -1052,9 +1052,17 @@ export async function syncProxyNodeFromInbound(inboundId: number): Promise<numbe
     };
     const current = byUserId.get(inboundUserId);
     if (current) {
+      const moved = String(current.address || "") !== String(data.address || "") || Number(current.port) !== Number(data.port);
       await db.update(proxyNodes).set({ ...data, updatedAt: nowDate() } as any).where(eq(proxyNodes.id, current.id));
       kept.add(Number(current.id));
       ids.push(Number(current.id));
+      if (moved) {
+        // 节点地址 / 端口变了：绑着它的转发、落地选它的线路组跟着改（server/proxyNodeFollow.ts）。
+        const { followBoundRulesToNode } = await import("../proxyNodeFollow");
+        await followBoundRulesToNode(Number(current.id), `proxy-node-moved-${current.id}`).catch((error) => {
+          console.warn(`[ProxyNode] 跟随节点地址失败 node=${current.id}: ${error instanceof Error ? error.message : String(error)}`);
+        });
+      }
     } else {
       /**
        * 新派生的节点默认「加进订阅」。

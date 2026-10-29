@@ -211,6 +211,7 @@ import {
   RotateCcw,
   Lock,
   FileJson,
+  X,
 } from "lucide-react";
 import type { GlobeMethods } from "react-globe.gl";
 import {
@@ -332,6 +333,11 @@ type RuleFormData = {
   sourcePort: number;
   targetIp: string;
   targetPort: number;
+  /**
+   * 目标选的是「我的节点」：记节点 id，保存时作为 proxyNodeId 显式绑定；节点地址变了，
+   * 面板把目标改过去（server/proxyNodeFollow.ts）。手改目标地址就解开。
+   */
+  targetNodeId: number | null;
   telegramErrorNotifyEnabled: boolean;
   /** 规则专属域名开关（shared/ruleEntryDomain.ts）：关掉订阅直接用入口地址。缺省开。 */
   entryDomainEnabled: boolean;
@@ -371,6 +377,7 @@ const defaultForm: RuleFormData = {
   sourcePort: 0,
   targetIp: "",
   targetPort: 0,
+  targetNodeId: null,
   telegramErrorNotifyEnabled: false,
   // 新建规则默认不用专属域名，要用再在「更多设置」里打开。
   entryDomainEnabled: false,
@@ -2819,6 +2826,7 @@ function RulesContent() {
       sourcePort: rule.sourcePort,
       targetIp: rule.targetIp,
       targetPort: rule.targetPort,
+      targetNodeId: Number(rule.proxyNodeId || 0) > 0 ? Number(rule.proxyNodeId) : null,
       telegramErrorNotifyEnabled: !!rule.telegramErrorNotifyEnabled,
       entryDomainEnabled: rule.entryDomainEnabled !== false,
       failoverEnabled: !!rule.failoverEnabled,
@@ -4131,6 +4139,7 @@ function RulesContent() {
         isEnabled: portStatus === "available" ? true : undefined,
         targetIp: form.targetIp,
         targetPort: form.targetPort,
+        ...(form.targetNodeId ? { proxyNodeId: form.targetNodeId } : {}),
         telegramErrorNotifyEnabled: form.telegramErrorNotifyEnabled,
         entryDomainEnabled: form.entryDomainEnabled,
         ...failoverPayload,
@@ -4152,6 +4161,7 @@ function RulesContent() {
         sourcePort: form.sourcePort,
         targetIp: form.targetIp,
         targetPort: form.targetPort,
+        ...(form.targetNodeId ? { proxyNodeId: form.targetNodeId } : {}),
         telegramErrorNotifyEnabled: form.telegramErrorNotifyEnabled,
         entryDomainEnabled: form.entryDomainEnabled,
         ...failoverPayload,
@@ -8220,7 +8230,7 @@ function RulesContent() {
               value=""
               onValueChange={(value) => {
                 const node = targetNodeOptions.find((item) => String(item.id) === value);
-                if (node) setForm((prev) => ({ ...prev, targetIp: node.address, targetPort: node.port }));
+                if (node) setForm((prev) => ({ ...prev, targetIp: node.address, targetPort: node.port, targetNodeId: node.id }));
               }}
               >
               <SelectTrigger className="h-7 w-auto gap-1 border-dashed px-2 text-meta" aria-label="选我的节点作为目标">
@@ -8239,8 +8249,19 @@ function RulesContent() {
               <Input
               placeholder="例如: 10.0.0.1 或 example.com"
               value={form.targetIp}
-              onChange={(e) => setForm({ ...form, targetIp: e.target.value })}
+              onChange={(e) => setForm({ ...form, targetIp: e.target.value, targetNodeId: null })}
               />
+              {form.targetNodeId ? (
+              <p className="flex min-w-0 items-center gap-1.5 text-meta text-muted-foreground" data-testid="target-node-chip">
+              <span className="inline-flex min-w-0 items-center gap-1 rounded-[var(--fx-radius-control)] bg-[var(--fx-healthy-soft)] px-1.5 py-0.5 text-[var(--fx-healthy-text)]">
+              <span className="truncate">目标是我的节点「{proxyNodeNameById.get(form.targetNodeId) || `#${form.targetNodeId}`}」</span>
+              <button type="button" className="rounded-full p-0.5 hover:bg-black/10" aria-label="不再跟随节点" onClick={() => setForm({ ...form, targetNodeId: null })}>
+              <X className="h-3 w-3" />
+              </button>
+              </span>
+              <span className="min-w-0 truncate">节点地址变了，目标自动跟着改，订阅里就是这条</span>
+              </p>
+              ) : null}
               </FormField>
               <FormField className="space-y-1.5">
               <Label>目标端口 <span className="text-destructive">*</span></Label>
@@ -8251,7 +8272,7 @@ function RulesContent() {
               step={1}
               placeholder="例如: 80"
               value={form.targetPort || ""}
-              onChange={(e) => setForm({ ...form, targetPort: parseInt(e.target.value) || 0 })}
+              onChange={(e) => setForm({ ...form, targetPort: parseInt(e.target.value) || 0, targetNodeId: null })}
               />
               </FormField>
               <FormField className="space-y-1.5">
@@ -8399,6 +8420,7 @@ function RulesContent() {
                     policy={formRoutePolicy}
                     scheduleTimeZone={BILLING_TIME_ZONE}
                     protocol={form.protocol}
+                    nodeOptions={targetNodeOptions}
                   />
                 </div>
               )}

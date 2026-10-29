@@ -30,7 +30,7 @@ import {
  */
 
 const path = (overrides: Partial<RoutePath>): RoutePath => ({
-  key: "p", name: "", hops: [], dest: null, weight: 50, probe: null, dial: null, issue: null, ...overrides,
+  key: "p", name: "", hops: [], dest: null, destNodeId: null, weight: 50, probe: null, dial: null, issue: null, ...overrides,
 });
 
 const rule = { targetIp: "198.51.100.7", targetPort: 443 };

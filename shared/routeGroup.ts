@@ -121,6 +121,11 @@ export type RoutePath = {
   hops: number[];
   /** 落地；null = 这条规则自己的目标（同一落地）。 */
   dest: RouteEndpoint | null;
+  /**
+   * 落地选的是「我的节点」时记节点 id：地址端口由面板从节点解析进 dest，节点地址变了跟着改
+   * （server/proxyNodeFollow.ts）。null = 手填的 dest 或同目标。
+   */
+  destNodeId: number | null;
   /** 权重（权重负载模式按它分新连接），1–100。 */
   weight: number;
   /** 自定探测目标；null = 探拨号地址本身。 */
@@ -376,6 +381,7 @@ function sanitizePath(raw: any, index: number): RoutePath | null {
     name: String(raw.name ?? "").trim().slice(0, 40),
     hops,
     dest: sanitizeEndpoint(raw.dest),
+    destNodeId: Number.isInteger(Number(raw.destNodeId)) && Number(raw.destNodeId) > 0 ? Math.floor(Number(raw.destNodeId)) : null,
     weight: clampInt(raw.weight, ROUTE_GUARD_LIMITS.weight.min, ROUTE_GUARD_LIMITS.weight.max, 50),
     probe: sanitizeEndpoint(raw.probe),
     dial: sanitizeEndpoint(raw.dial),
@@ -410,6 +416,7 @@ export function serializeRoutePaths(paths: RoutePath[] | null | undefined): stri
     name: path.name,
     hops: path.hops,
     dest: path.dest,
+    ...(path.destNodeId ? { destNodeId: path.destNodeId } : {}),
     weight: path.weight,
     probe: path.probe,
     dial: path.dial,
@@ -481,6 +488,7 @@ export function legacyRoutePaths(rule: RouteGroupRule): RoutePath[] {
     name: "",
     hops: [],
     dest: null,
+    destNodeId: null,
     weight: 50,
     probe: mainProbe && !("error" in mainProbe) ? { ip: mainProbe.host, port: mainProbe.port } : null,
     dial: null,
@@ -490,6 +498,7 @@ export function legacyRoutePaths(rule: RouteGroupRule): RoutePath[] {
     key: `backup-${index + 1}`,
     name: "",
     hops: [],
+    destNodeId: null,
     dest: endpointOfFailoverTarget(target),
     weight: 50,
     probe: probeOfFailoverTarget(target),
@@ -627,7 +636,7 @@ export function routeGroupRuleFields(group: RouteGroup, rule: Pick<RouteGroupRul
 
 /** 一条新的路径：还没有中转、落地同规则目标、权重和别的路径一样。 */
 export function newRoutePath(index: number, patch: Partial<RoutePath> = {}): RoutePath {
-  return { key: newRoutePathKey(), name: defaultRoutePathName(index), hops: [], dest: null, weight: 50, probe: null, dial: null, issue: null, ...patch };
+  return { key: newRoutePathKey(), name: defaultRoutePathName(index), hops: [], dest: null, destNodeId: null, weight: 50, probe: null, dial: null, issue: null, ...patch };
 }
 
 /** 勾上「线路组」那一刻的草稿：主线路 + 一条空的备用，稳定优先模板。 */

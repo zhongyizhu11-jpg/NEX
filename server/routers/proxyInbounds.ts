@@ -9,6 +9,7 @@
  * 就多了一条泄漏路径，而用户也没有理由要自己指定它们。
  */
 
+import { assertInboundRoutingNotDoubleLanding } from "../landingConflicts";
 import { z } from "zod";
 
 import { pushAgentRefresh } from "../agentEvents";
@@ -47,6 +48,7 @@ import {
   refreshInboundRoutingDependents,
   validateInboundRoutingForSave,
 } from "../inboundRoutingRuntime";
+import { listLandingOptions } from "../landingOptions";
 import {
   assertProxyInboundEgressCompatibleChange,
   assertProxyInboundNotUsedAsEgress,
@@ -594,6 +596,13 @@ export const proxyInboundsRouter = router({
   }),
 
   /**
+   * 落地选择器（规则编辑器的「出口」和节点编辑器的「分流」共用）：按主机分组的 Shadowsocks 落地入站，
+   * 带方法、启停、能不能做出口、所在主机最新一次解锁检测各服务的结论。
+   * 权限同 egressLandingOptions（不要求客户端订阅权限）。
+   */
+  landingOptions: protectedProcedure.query(async ({ ctx }) => listLandingOptions(ctx.user)),
+
+  /**
    * 规则编辑器问：这几台入口机现在能不能让 UDP 走出口、能不能用 SS2022 出口（看 Agent 上报的能力）。
    * 只回能力和给人看的原因；看不到的主机不回名字。保存时服务端还会再按同一套规则查一遍。
    */
@@ -709,6 +718,7 @@ export const proxyInboundsRouter = router({
       const routing = routingChanged
         ? await validateInboundRoutingForSave(input.routing, { ownerId, hostId })
         : undefined;
+      if (routing) await assertInboundRoutingNotDoubleLanding(input.id, serializeInboundRouting(routing));
 
       await db.updateProxyInbound(input.id, {
         hostId,

@@ -219,3 +219,16 @@ test("摘要只列和模板不一样的", () => {
   assert.deepEqual(routeTemplateGuards("failover").minHoldSeconds, 600);
   assert.deepEqual(summarizeRouteAdvanced({ policy: { ...policy, minHoldSeconds: 0, autoFailback: false }, probes: 2 }), ["不限驻留", "恢复后不切回", "探测地址 2 条"]);
 });
+
+test("落地选了我的节点：画成一块带地址，不再是输入框；没选的路径旁边有「选节点」", () => {
+  const value = group();
+  value.paths[0] = { ...value.paths[0], destNodeId: 7, dest: { ip: "203.0.113.7", port: 443 } };
+  const policy = describeRoutePolicy({ failoverEnabled: true, targetIp: "10.95.0.10", targetPort: 443, protocol: "tcp", ...routeGroupRuleFields(value, { targetIp: "10.95.0.10", targetPort: 443 }) }, { nowMs: NOW, timeZone: TZ });
+  const html = renderToStaticMarkup(
+    <RouteGroupFields value={value} onChange={() => {}} hosts={hosts} entryHostId={1} mainAddress="10.95.0.10:443" policy={policy} scheduleTimeZone={TZ} nowMs={NOW} timeZone={TZ} nodeOptions={[{ id: 7, name: "HK 落地", address: "203.0.113.7", port: 443, protocol: "VLESS" }]} />,
+  );
+  assert.equal((html.match(/data-testid="route-dest-node"/g) || []).length, 1);
+  assert.match(html, /HK 落地/);
+  assert.match(html, /203\.0\.113\.7:443/);
+  assert.equal((html.match(/选我的节点/g) || []).length, 1, "只有手填的那条旁边有选节点");
+});

@@ -49,6 +49,7 @@ import * as db from "./db";
 import { getDb } from "./dbRuntime";
 import { ENV } from "./env";
 import { isHostConsideredOnline } from "./hostHeartbeatPolicy";
+import { listLandingOptions } from "./landingOptions";
 import { createCredentialCipher, type CredentialCipher } from "./ipChange/secrets";
 import { restrictedForwardTargetClass, restrictedForwardTargetLabel } from "./ruleTargetPolicy";
 import { dbBool } from "./repositories/repositoryUtils";
@@ -405,54 +406,17 @@ export const LANDING_EGRESS_INBOUND_DEFAULTS = {
 
 /* ── 给规则编辑器的落地主机清单 ─────────────────────────────────────── */
 
+/**
+ * 旧形状（hostName / online），内容来自统一的落地选择器清单 server/landingOptions.ts；
+ * 新界面直接用 proxyInbounds.landingOptions，这个留给还在用旧接口的调用方。
+ */
 export async function listEgressLandingOptions(actor: Actor) {
-  const isAdmin = actor.role === "admin";
-  const hosts = (isAdmin
-    ? await db.getHosts()
-    : await (async () => {
-      const own = await db.getHosts(actor.id) as any[];
-      const allowedIds = (await db.getUserEffectiveAllowedHostIds(actor.id)).map(Number);
-      const others = allowedIds.length > 0 ? await db.getHostsByIds(allowedIds) as any[] : [];
-      const byId = new Map<number, any>();
-      for (const host of [...own, ...others]) byId.set(Number(host.id), host);
-      return Array.from(byId.values());
-    })()) as any[];
-  const inbounds = (isAdmin ? await db.getAllProxyInbounds() : await (async () => {
-    const hostIds = hosts.map((host) => Number(host.id));
-    const rows: any[] = [];
-    for (const hostId of hostIds) rows.push(...await db.getProxyInboundsByHost(hostId) as any[]);
-    return rows;
-  })()) as any[];
-  const byHost = new Map<number, any[]>();
-  for (const inbound of inbounds) {
-    if (String(inbound.protocol) !== "shadowsocks") continue;
-    const usable = isAdmin || Number(inbound.userId) === Number(actor.id) || dbBool(inbound.landingEgress);
-    if (!usable) continue;
-    const list = byHost.get(Number(inbound.hostId)) || [];
-    list.push({
-      id: Number(inbound.id),
-      name: String(inbound.name || ""),
-      port: Number(inbound.port),
-      method: normalizeSsMethod(inbound.method),
-      methodError: ssEgressMethodError(inbound.method),
-      isEnabled: dbBool(inbound.isEnabled, true),
-      landingEgress: dbBool(inbound.landingEgress),
-    });
-    byHost.set(Number(inbound.hostId), list);
-  }
-  return hosts
-    .filter((host) => String(host.hostType || "slave") !== "master" || isAdmin)
-    .map((host) => ({
-      hostId: Number(host.id),
-      hostName: String(host.name || `#${host.id}`),
-      online: isHostConsideredOnline(host),
-      hasAddress: !!getHostEntryAddress(host),
-      ownHost: Number(host.userId) === Number(actor.id),
-      // 一键创建要能在这台机器上开落地节点：管理员，或者机器是自己的（细的权限 / 额度检查在创建时做）。
-      canCreateInbound: isAdmin || Number(host.userId) === Number(actor.id),
-      inbounds: (byHost.get(Number(host.id)) || []).sort((a, b) => a.port - b.port),
-    }))
-    .sort((a, b) => Number(b.inbounds.length > 0) - Number(a.inbounds.length > 0) || a.hostName.localeCompare(b.hostName));
+  return (await listLandingOptions(actor)).map(({ name, isOnline, inbounds, ...host }) => ({
+    ...host,
+    hostName: name,
+    online: isOnline,
+    inbounds: inbounds.map(({ unlock: _unlock, unlockCheckedAt: _checkedAt, ...inbound }) => inbound),
+  }));
 }
 
 /* ── 给规则编辑器的入口机能力 ───────────────────────────────────────── */
