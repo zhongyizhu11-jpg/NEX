@@ -6,7 +6,6 @@ import { pushAgentRefresh } from "../agentEvents";
 import { pushTunnelEndpointRefresh } from "./helpers";
 import { requireRuleProtocolEnabled } from "../forwardProtocolSettings";
 import { newForwardChainBatchId } from "../forwardChainManualProbe";
-import { buildRuleExpectedLatency } from "../ruleExpectedLatency";
 import { enqueueRuleConnectionsTask, getRuleConnectionsTaskStatus } from "../ruleConnectionsAgentTasks";
 import { RULE_CONNECTIONS_AGENT_VERSION } from "@shared/ruleConnections";
 import { isAgentVersionBehind } from "@shared/version";
@@ -242,18 +241,6 @@ export const selfTestRulesRouter = router({
       return { id };
     }),
 
-  /**
-   * 诊断对话框的「推算」一列：后台探测以为这条链各段是多少（server/ruleExpectedLatency）。
-   * 和这次诊断的实测并排看，不一致的那段才是真正出了事的那段。
-   */
-  expectedLatency: protectedProcedure
-    .input(z.object({ ruleId: z.number() }))
-    .query(async ({ input, ctx }) => {
-      const rule = await db.getForwardRuleById(input.ruleId);
-      if (!rule) return null;
-      if (ctx.user.role !== "admin" && rule.userId !== ctx.user.id) return null;
-      return buildRuleExpectedLatency(rule);
-    }),
   /**
    * 「连接」页签：排一个任务让入口机的 Agent 现场读一遍这条规则此刻的连接（shared/ruleConnections）。
    * 走隧道的规则看的是入口那一段（客户端连进来的那头）。

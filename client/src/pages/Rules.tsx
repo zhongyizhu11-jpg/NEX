@@ -20,7 +20,6 @@ import DashboardLayout from "@/components/DashboardLayout";
 import { DiagnoseDialog, type DiagnoseExtraTab } from "@/components/DiagnoseDialog";
 import { LatencyRating } from "@/components/LatencyRating";
 import { LinkTestProbeView, parseLinkTestMessage, type LinkTestPlannedSegment } from "@/components/LinkTestLatencySummary";
-import { LinkTestCompareView } from "@/components/LinkTestCompareView";
 import { describeProbeFailureShort } from "@shared/probeFailure";
 import { PersistentPagination, usePersistentPageRequest, useServerPagination } from "@/components/PersistentPagination";
 import { SortableDragHandle, SortableItem, SortableReorderContext, useOptimisticSortableOrder, useSortableReorder } from "@/components/SortableDragHandle";
@@ -9505,8 +9504,6 @@ function SelfTestDialog({
   const isTimeout = status === "timeout";
   const isFailed = !!latest && !isTesting && !isSuccess && !isTimeout;
   const parsedMessage = useMemo(() => parseLinkTestMessage(latest?.message), [latest?.message]);
-  // 「推算」一列：后台探测以为这条链各段是多少。打开时取一次，诊断跑完再取一次（后台可能刚好也探了）。
-  const expectedQuery = trpc.rules.expectedLatency.useQuery({ ruleId }, { enabled: open, staleTime: 10_000, refetchOnWindowFocus: false });
   const plannedSegmentCount = plannedSegments?.length || 0;
   const probeDialogSizeClass = plannedSegmentCount >= 3 ? "sm:max-w-4xl" : plannedSegmentCount >= 2 ? "sm:max-w-3xl" : "sm:max-w-xl";
   const lastFailureToastKey = useRef("");
@@ -9561,14 +9558,6 @@ function SelfTestDialog({
         roomyNodes
         mobileStacked
         wrapDesktopRows
-      />
-      <LinkTestCompareView
-        planned={plannedSegments}
-        parsed={parsedMessage}
-        expected={expectedQuery.data ?? null}
-        measuredAt={latest?.updatedAt ? timestampMillis(latest.updatedAt) : null}
-        isTesting={isTesting}
-        className="mt-3"
       />
     </DiagnoseDialog>
   );
