@@ -28,6 +28,7 @@ import {
   type TopologyTunnelRef,
 } from "@shared/networkTopology";
 import { TOPOLOGY_KIND_COLORS, TopologyCanvas, type TopologyCanvasHandle } from "@/features/topology/TopologyCanvas";
+import { MyLinesSection } from "@/features/links/MyLinesSection";
 import { layoutTopology, topologyColumnLabels } from "@/features/topology/topologyLayout";
 import {
   TOPOLOGY_EDGE_KINDS,
@@ -52,6 +53,17 @@ import {
 
 const KIND_STORAGE_KEY = "forwardx.topology.kinds";
 const TARGETS_STORAGE_KEY = "forwardx.topology.showTargets";
+/** 两种看法：拓扑图（所有节点画在一张图上）/ 我的线路（每条转发一条链）。记住上次选的。 */
+const VIEW_STORAGE_KEY = "forwardx.topology.view";
+type TopologyView = "graph" | "lines";
+
+function readStoredView(): TopologyView {
+  try {
+    return window.localStorage.getItem(VIEW_STORAGE_KEY) === "lines" ? "lines" : "graph";
+  } catch {
+    return "graph";
+  }
+}
 
 const STATUS_DOT: Record<TopologyStatus, string> = {
   running: "bg-[var(--fx-healthy-text)]",
@@ -152,10 +164,20 @@ export default function TopologyPage() {
   const [query, setQuery] = useState("");
   const [selection, setSelection] = useState<Selection>(null);
   const canvasRef = useRef<TopologyCanvasHandle | null>(null);
+  const [view, setViewState] = useState<TopologyView>(readStoredView);
+  const setView = (next: TopologyView) => {
+    setViewState(next);
+    setSelection(null);
+    try {
+      window.localStorage.setItem(VIEW_STORAGE_KEY, next);
+    } catch {
+      // 存不了就只在这次有效
+    }
+  };
 
   const graphQuery = trpc.topology.graph.useQuery(
     isAdmin && ownerFilter !== "all" ? { userId: Number(ownerFilter) } : undefined,
-    { refetchInterval: pollingInterval("slow"), staleTime: 10_000, placeholderData: (previous) => previous },
+    { enabled: view === "graph", refetchInterval: pollingInterval("slow"), staleTime: 10_000, placeholderData: (previous) => previous },
   );
   const graph = graphQuery.data as (TopologyGraph & { owners: Array<{ id: number; label: string }> }) | undefined;
 
@@ -320,8 +342,48 @@ export default function TopologyPage() {
       <WorkspaceHeader
         title="网络拓扑"
         description="入口 → 中转 → 出口 / 落地 → 目标。滚轮缩放、拖动平移，点节点或连线看哪些规则、隧道、转发链在用它。"
-        status={graph ? `${visible.nodes.length} 个节点 · ${visible.edges.length} 条连线${counts.failed + counts.degraded > 0 ? ` · ${counts.failed + counts.degraded} 条异常` : ""}` : undefined}
+        status={view === "graph" && graph ? `${visible.nodes.length} 个节点 · ${visible.edges.length} 条连线${counts.failed + counts.degraded > 0 ? ` · ${counts.failed + counts.degraded} 条异常` : ""}` : undefined}
       />
+
+      <div className="inline-flex h-9 w-full items-center gap-0.5 self-start rounded-md bg-[var(--fx-l3-control-fill)] p-[3px] sm:w-auto" role="tablist" aria-label="怎么看" data-testid="topology-view-switch">
+        {([["graph", "拓扑图"], ["lines", "我的线路"]] as const).map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            role="tab"
+            aria-selected={view === value}
+            onClick={() => setView(value)}
+            className={cn(
+              "inline-flex h-full flex-1 items-center justify-center whitespace-nowrap rounded-[6px] px-4 text-[13px] font-medium text-muted-foreground transition-all hover:text-foreground sm:flex-none",
+              view === value && "bg-[image:var(--fx-primary-gradient)] font-semibold text-[var(--fx-primary-text)] hover:text-[var(--fx-primary-text)]",
+            )}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {view === "lines" ? (
+        <div className="flex flex-col gap-3">
+          <div className="relative min-w-0">
+            <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              aria-label="搜索线路"
+              placeholder="搜索规则名、主机、地址、落地节点"
+              className="fx-search-pill w-full pr-9"
+            />
+            {query ? (
+              <button type="button" aria-label="清空搜索" className="absolute right-2 top-1/2 inline-flex h-4 w-4 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:text-foreground" onClick={() => setQuery("")}>
+                <XCircle className="h-3.5 w-3.5" />
+              </button>
+            ) : null}
+          </div>
+          <MyLinesSection searchQuery={query.trim().toLowerCase()} isAdmin={isAdmin} />
+        </div>
+      ) : (
+      <>
 
       <div className="flex flex-col gap-2" data-testid="topology-toolbar">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -452,6 +514,8 @@ export default function TopologyPage() {
           {panel}
         </div>
       ) : null}
+      </>
+      )}
     </div>
   );
 }

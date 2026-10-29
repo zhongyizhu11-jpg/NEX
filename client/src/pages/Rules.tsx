@@ -3456,6 +3456,33 @@ function RulesContent() {
     }, () => toast.error("读取规则失败"));
   }, [search, setLocation, rulePermissionLoading, hostsFetched, systemSettingsFetched, forwardGroupsFetched, forwardGroupsError]);
 
+  /*
+    /rules?diagnose=<规则 id>：从「我的线路」直接打开这条规则的诊断框（延迟测试那一页）。
+  */
+  useEffect(() => {
+    const params = new URLSearchParams(search);
+    const diagnoseId = Number(params.get("diagnose") || 0);
+    if (!Number.isInteger(diagnoseId) || diagnoseId <= 0) return;
+    if (rulePermissionLoading || !hostsFetched || !systemSettingsFetched || !(forwardGroupsFetched || forwardGroupsError)) return;
+    params.delete("diagnose");
+    const nextSearch = params.toString();
+    setLocation(`/rules${nextSearch ? `?${nextSearch}` : ""}`, { replace: true });
+    void utils.rules.getById.fetch({ id: diagnoseId }).then((rule) => {
+      if (!rule) {
+        toast.error("这条规则不存在，或者你没有权限查看");
+        return;
+      }
+      setSelfTestRule({
+        id: Number(rule.id),
+        name: String(rule.name || ""),
+        isForwardChain: getRuleCategory(rule, forwardGroupById) === "chain",
+        chainKernel: !isUserspaceForwardType((rule as any).forwardType),
+        probeMethod: ruleLatencyProbeMethodForRule(rule),
+      });
+    }, () => toast.error("读取规则失败"));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search, setLocation, rulePermissionLoading, hostsFetched, systemSettingsFetched, forwardGroupsFetched, forwardGroupsError]);
+
   const telegramBotReady = !!systemSettings?.telegram?.enabled && !!systemSettings?.telegram?.configured;
   const selectedForwardGroupIsChain = form.routeMode === "chain" || isForwardChainGroup(selectedForwardGroup);
   const selectedForwardGroupIsPort = forwardGroupModeOf(selectedForwardGroup) === "port";

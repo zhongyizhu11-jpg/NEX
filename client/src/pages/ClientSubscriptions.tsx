@@ -86,6 +86,7 @@ import {
   Copy,
   Eye,
   EyeOff,
+  Globe,
   KeyRound,
   Layers,
   Link2,
@@ -111,6 +112,8 @@ import {
   Smartphone,
 } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { NodeExitDialog, type ExitCheckSubject } from "@/components/proxy/ExitQualityView";
+import { PreviewRouteDetail } from "@/components/proxy/PreviewRouteDetail";
 import {
   ProxySubTokenDevicesDialog,
   ProxySubTokenEditDialog,
@@ -576,6 +579,11 @@ export default function ClientSubscriptionsPage() {
   // 令牌的几个弹窗：编辑、预览、拉取记录、设备；节点排序。
   const [editingToken, setEditingToken] = useState<ProxySubTokenLike | null>(null);
   const [previewToken, setPreviewToken] = useState<{ id: number; name: string } | null>(null);
+  // 节点菜单「出口检测」：自建传入站 id，粘贴传节点 id。
+  const [exitCheck, setExitCheck] = useState<{ subject: ExitCheckSubject; name: string } | null>(null);
+  // 订阅内容里展开看线路的那一条（rule-<id> / direct-<模板 id>）。
+  const [expandedPreviewKey, setExpandedPreviewKey] = useState<string | null>(null);
+  const openInboundExitCheck = useCallback((inboundId: number, name: string) => setExitCheck({ subject: { inboundId }, name }), []);
   const [logsToken, setLogsToken] = useState<{ id: number; name: string } | null>(null);
   const [devicesToken, setDevicesToken] = useState<{ id: number; name: string } | null>(null);
   const [reorderOpen, setReorderOpen] = useState(false);
@@ -801,6 +809,7 @@ export default function ClientSubscriptionsPage() {
             onSelect: () => setShareNode({ id: Number(node.id), name: String(node.name || "") }),
           }]
           : []),
+        { key: "exit", label: "出口检测", icon: Globe, onSelect: () => setExitCheck({ subject: { nodeId: Number(node.id) }, name: String(node.name || "") }) },
         { key: "edit", label: "编辑", icon: Pencil, onSelect: () => openEditNode(node) },
         {
           key: "delete",
@@ -1511,6 +1520,7 @@ export default function ClientSubscriptionsPage() {
           onOpenHosts={isAdmin ? undefined : () => setHostsOpen(true)}
           onlineCount={onlineNodeCount}
           offlineCount={offlineNodeCount}
+          onExitCheck={openInboundExitCheck}
         />
 
         {nodes.some((node: any) => !node.sharedFrom) ? (
@@ -1538,6 +1548,7 @@ export default function ClientSubscriptionsPage() {
         onSaved={refresh}
         onPreview={setPreviewToken}
       />
+      <NodeExitDialog subject={exitCheck?.subject ?? null} name={exitCheck?.name || ""} onOpenChange={(open) => { if (!open) setExitCheck(null); }} />
       <ProxySubTokenPreviewDialog open={!!previewToken} onOpenChange={(open) => { if (!open) setPreviewToken(null); }} tokenId={previewToken?.id || null} tokenName={previewToken?.name || ""} />
       <ProxySubTokenLogsDialog open={!!logsToken} onOpenChange={(open) => { if (!open) setLogsToken(null); }} tokenId={logsToken?.id || null} tokenName={logsToken?.name || ""} />
       <ProxySubTokenDevicesDialog open={!!devicesToken} onOpenChange={(open) => { if (!open) setDevicesToken(null); }} tokenId={devicesToken?.id || null} tokenName={devicesToken?.name || ""} />
@@ -1625,11 +1636,20 @@ export default function ClientSubscriptionsPage() {
                       // 直连条目不来自转发规则，ruleId 都是 0 —— 拿它当 key 会互相撞。
                       const direct = node.kind === "direct";
                       return (
-                      <div
-                        key={direct ? `direct-${node.templateId}` : `rule-${node.ruleId}`}
-                        className="flex items-center gap-2 rounded-md border px-2.5 py-1.5"
-                      >
-                        <Eye className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      <div key={direct ? `direct-${node.templateId}` : `rule-${node.ruleId}`} className="overflow-hidden rounded-md border">
+                      <div className="flex items-center gap-2 px-2.5 py-1.5">
+                        {/* 点名字那一块展开这条线路：入口 → 中转 → 落地，和落地出口（PreviewRouteDetail）。 */}
+                        <button
+                          type="button"
+                          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                          aria-expanded={expandedPreviewKey === (direct ? `direct-${node.templateId}` : `rule-${node.ruleId}`)}
+                          title="看这条线路怎么走"
+                          onClick={() => {
+                            const key = direct ? `direct-${node.templateId}` : `rule-${node.ruleId}`;
+                            setExpandedPreviewKey((current) => (current === key ? null : key));
+                          }}
+                        >
+                        <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform ${expandedPreviewKey === (direct ? `direct-${node.templateId}` : `rule-${node.ruleId}`) ? "" : "-rotate-90"}`} />
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-1.5">
                             <span className="truncate text-sm font-medium leading-tight">{node.name}</span>
@@ -1647,6 +1667,7 @@ export default function ClientSubscriptionsPage() {
                             {node.address}:{node.port}
                           </p>
                         </div>
+                        </button>
                         <div className="flex shrink-0 items-center gap-1">
                           <Button
                             size="icon"
@@ -1691,6 +1712,10 @@ export default function ClientSubscriptionsPage() {
                             />
                           ) : null}
                         </div>
+                      </div>
+                      {expandedPreviewKey === (direct ? `direct-${node.templateId}` : `rule-${node.ruleId}`) ? (
+                        <PreviewRouteDetail ruleId={Number(node.ruleId || 0)} nodeId={Number(node.templateId || 0)} direct={direct} address={`${node.address}:${node.port}`} />
+                      ) : null}
                       </div>
                       );
                               })}

@@ -109,7 +109,7 @@ import { dbBool, sqlBool } from "./repositoryUtils";
 import { reorderWithinSortOrderScope } from "./sortOrderSlots";
 import { normalizeExitGroupStrategy } from "@shared/exitStrategy";
 import { MAX_FORWARD_GROUP_MEMBERS, forwardGroupRouteMembers } from "../../shared/forwardGroup";
-import { routeGroupForwardTypeSupported, routeGroupTunnelModeSupported } from "../../shared/routeGroup";
+import { parseRoutePaths, routeGroupForwardTypeSupported, routeGroupTunnelModeSupported, serializeRoutePaths, type RoutePath } from "../../shared/routeGroup";
 import { getLastAuthenticatedAgentActivity } from "../agentActivity";
 import { HOST_TRAFFIC_FAILOVER_EXCLUDED_MESSAGE, hostTrafficExcluded } from "../../shared/hostTrafficPolicy";
 import { getTrafficExcludedHostIds } from "../hostTrafficPolicy";
@@ -264,10 +264,76 @@ function canPreserveChildRuleRuntime(existing: any, payload: any, options: SyncF
     && nullableNumber(existingEgress.egressInboundId) === nullableNumber(payloadEgress.egressInboundId)
     && nullableString(existingEgress.egressConfigJson) === nullableString(payloadEgress.egressConfigJson)
     && existingEgress.egressUdp === payloadEgress.egressUdp;
+  // 线路组带中转时子规则照抄模板的路径和策略（childRouteColumns）；没抄的时候 payload 里没有这几列，不比。
+  const routeSame = !("routePaths" in (payload || {}))
+    || (nullableString(normalizedRoutePaths(existing?.routePaths)) === nullableString(normalizedRoutePaths(payload?.routePaths))
+      && nullableString(existing?.routeMode) === nullableString(payload?.routeMode)
+      && (payload?.routeMode == null || (
+        nullableString(existing?.routeSwitchMode) === nullableString(payload?.routeSwitchMode)
+        && ["routeFailureThreshold", "routeScoreMargin", "routeScoreHoldSeconds", "routePrewarmSeconds"].every((key) => nullableNumber(existing?.[key]) === nullableNumber(payload?.[key]))
+      )));
   return egressSame
+    && routeSame
     && numberKeys.every((key) => nullableNumber(existing?.[key]) === nullableNumber(payload?.[key]))
     && stringKeys.every((key) => nullableString(existing?.[key]) === nullableString(payload?.[key]))
     && boolKeys.every((key) => dbBool(existing?.[key]) === dbBool(payload?.[key]));
+}
+
+function normalizedRoutePaths(raw: unknown): string | null {
+  return serializeRoutePaths(parseRoutePaths(raw));
+}
+
+function routePathDefinition(path: RoutePath) {
+  return JSON.stringify([path.key, path.name, path.hops, path.dest, path.destNodeId || null, path.weight, path.probe]);
+}
+
+/**
+ * 线路组带中转时，子规则要照抄模板的路径和策略：模板不跑，跑的是每台成员机上的子规则，中继由
+ * 子规则各自按自己的入口机在中转机上建（routeGroups.syncRouteRelayRulesForRule）。
+ *
+ * 中继解析出来的 dial / issue 是子规则自己的（每台入口拨的是自己那套中继的端口），路径定义没变
+ * 就保留子规则上已有的，否则每次组同步都会把它冲掉、又触发一轮重建。failoverTargets 同理：
+ * 中继同步会按 dial 重写它，组同步不再拿模板的去盖。
+ *
+ * 模板没有中转：不碰这几列（老样子，子规则按 failover* 列跑）；子规则上还留着以前抄来的路径就清掉。
+ * 返回 null = 什么都不用改。
+ */
+function childRouteColumns(templateRule: any, existing: any, childFailoverEnabled: boolean, member: any): Record<string, unknown> | null {
+  const templatePaths = parseRoutePaths(templateRule?.routePaths);
+  const templateHasHops = templatePaths.some((path) => path.hops.length > 0);
+  if (childFailoverEnabled && member?.memberType !== "tunnel" && templateHasHops) {
+    const existingPaths = parseRoutePaths(existing?.routePaths);
+    const merged = templatePaths.map((path) => {
+      const previous = existingPaths.find((item) => item.key === path.key && routePathDefinition(item) === routePathDefinition(path));
+      if (previous) return { ...path, dial: previous.dial, issue: previous.issue };
+      return path.hops.length > 0 ? { ...path, dial: null, issue: null } : path;
+    });
+    return {
+      routePaths: serializeRoutePaths(merged),
+      routeMode: templateRule.routeMode || "failover",
+      routeSwitchMode: templateRule.routeSwitchMode || "smooth",
+      routeFailureThreshold: Number(templateRule.routeFailureThreshold ?? 3),
+      routeScoreMargin: Number(templateRule.routeScoreMargin ?? 10),
+      routeScoreHoldSeconds: Number(templateRule.routeScoreHoldSeconds ?? 180),
+      routePrewarmSeconds: Number(templateRule.routePrewarmSeconds ?? 300),
+      ...(existing ? { failoverTargets: existing.failoverTargets ?? templateRule.failoverTargets ?? null } : {}),
+    };
+  }
+  if (existing && (existing.routePaths || existing.routeMode)) return { routePaths: null, routeMode: null };
+  return null;
+}
+
+/** 子规则的路径带着中转（或者刚把中转去掉）：把中转机上的中继落实下来 / 收掉。 */
+async function syncChildRouteRelays(ruleId: number, routeColumns: Record<string, unknown> | null, reason: string) {
+  if (!routeColumns) return;
+  const { retireRouteRelayRulesForRule, syncRouteRelayRulesForRule } = await import("../routeGroups");
+  // 去掉了中转：只收中继，不跑完整同步（完整同步会把老式主备列推导成路径写回来）。
+  const run = routeColumns.routePaths == null
+    ? retireRouteRelayRulesForRule(ruleId, { reason, dropEvents: false })
+    : syncRouteRelayRulesForRule(ruleId, { reason });
+  await run.catch((error) => {
+    console.warn(`[ForwardGroup] route relay sync for child rule ${ruleId} failed: ${error instanceof Error ? error.message : String(error)}`);
+  });
 }
 
 async function syncPreservedChildRuleMetadata(existing: any, payload: any) {
@@ -3245,6 +3311,9 @@ async function ensureMemberRuleForTemplate(group: any, templateRule: any, member
     ...(isPortGroup && member.memberType !== "tunnel" ? ruleEgressColumnsOf(templateRule) : { ...NO_EGRESS_COLUMNS }),
   };
 
+  const routeColumns = childRouteColumns(templateRule, existing, childFailoverEnabled, member);
+  if (routeColumns) Object.assign(payload, routeColumns);
+
   // A 2.3.278 background sync could have copied group-level runtime fields
   // into legacy failover children. Keep those fields stable while the group
   // remains in compatibility mode; an explicit group save opts into the new
@@ -3287,6 +3356,7 @@ async function ensureMemberRuleForTemplate(group: any, templateRule: any, member
       if (tunnel) await reconcileForwardRuleTunnelExits({ ...existing, ...payload, id: existing.id }, tunnel);
     }
     await refreshRuleEndpoints({ ...existing, ...payload, id: existing.id }, "forward-group-child-updated");
+    await syncChildRouteRelays(Number(existing.id), routeColumns, "forward-group-child-updated");
     return Number(existing.id);
   }
 
@@ -3298,6 +3368,7 @@ async function ensureMemberRuleForTemplate(group: any, templateRule: any, member
     if (tunnel) await reconcileForwardRuleTunnelExits({ ...payload, id: ruleId }, tunnel);
   }
   await refreshRuleEndpoints({ ...payload, id: ruleId }, "forward-group-child-created");
+  await syncChildRouteRelays(ruleId, routeColumns, "forward-group-child-created");
   return ruleId;
   } finally {
     tunnelExitPortReservation?.release();
@@ -3507,6 +3578,11 @@ async function removeManagedRule(
   // 已经在删除流程里（等 Agent 确认）：不再重复结算、重复标记。以前每次同步都会对它
   // 再来一遍，既多拿一次计费锁，又会把 Agent 已确认的删除状态重新打回「待删」。
   if (dbBool((rule as any).pendingDelete)) return;
+  // 子规则带着线路组中转（模板的路径有中转时）：中转机上那几条中继跟着收掉，别等面板重启才清。
+  if (parseRoutePaths((rule as any).routePaths).some((path) => path.hops.length > 0)) {
+    const { retireRouteRelayRulesForRule } = await import("../routeGroups");
+    await retireRouteRelayRulesForRule(Number(rule.id), { reason: "forward-group-child-removed" }).catch(() => undefined);
+  }
   const billingResource = await findTrafficBillingResourceForRule(rule);
   const fallback = trafficBillingResourceCandidatesForRule(rule)[0];
   const resource = billingResource || fallback;

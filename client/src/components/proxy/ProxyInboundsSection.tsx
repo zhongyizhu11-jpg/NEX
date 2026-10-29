@@ -41,6 +41,7 @@ import {
   ChevronDown,
   Copy,
   Eye,
+  Globe,
   KeyRound,
   Link2,
   MonitorSmartphone,
@@ -189,6 +190,7 @@ export default function ProxyInboundsSection({
   onOpenHosts,
   onlineCount = 0,
   offlineCount = 0,
+  onExitCheck,
 }: {
   /** 粘贴进来的、以及别人分享来的节点，由「订阅管理」那一页组装。 */
   extraRows?: ProxyNodeRowSpec[];
@@ -229,6 +231,8 @@ export default function ProxyInboundsSection({
   onOpenHosts?: () => void;
   onlineCount?: number;
   offlineCount?: number;
+  /** 节点菜单「出口检测」：看这台落地出去以后连不连得上、解锁了什么（ExitQualityView）。 */
+  onExitCheck?: (inboundId: number, name: string) => void;
 } = {}) {
   const { user: me } = useAuth();
   const isAdmin = me?.role === "admin";
@@ -646,6 +650,12 @@ export default function ProxyInboundsSection({
         icon: MonitorSmartphone,
         onSelect: () => setCompatInbound(row),
       }] : []),
+      ...(onExitCheck ? [{
+        key: "exit",
+        label: "出口检测",
+        icon: Globe,
+        onSelect: () => onExitCheck(Number(row.id), String(row.name || "")),
+      }] : []),
       {
         key: "link",
         label: "复制链接",
@@ -670,7 +680,7 @@ export default function ProxyInboundsSection({
           { key: "delete", label: "删除", icon: Trash2, destructive: true, onSelect: () => void askDelete(row) },
         ]),
     ],
-  })), [rows, hosts, userOptions, isAdmin, linkLoadingId, inboundLeading, notInSubscriptionInboundIds, hostNeverOnlineInboundIds, expandedQuotaIds]);
+  })), [rows, hosts, userOptions, isAdmin, linkLoadingId, inboundLeading, notInSubscriptionInboundIds, hostNeverOnlineInboundIds, expandedQuotaIds, onExitCheck]);
 
   /** 三类合成一个列表：自建在前（它们是这一页的起点），然后是粘贴和分享来的。 */
   const allRowSpecs = useMemo(() => [...inboundRowSpecs, ...extraRows], [inboundRowSpecs, extraRows]);

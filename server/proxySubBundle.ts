@@ -5,7 +5,7 @@
 
 import * as db from "./db";
 import { loadProxySubSettings } from "./proxySubSettings";
-import { parseProxySubTokenOptions, parseProxySubTokenScope, type ProxySubTokenOptions, type ProxySubTokenScope } from "../shared/proxySubTokenScope";
+import { effectiveProxySubExpiry, parseProxySubTokenOptions, parseProxySubTokenScope, type ProxySubTokenOptions, type ProxySubTokenScope } from "../shared/proxySubTokenScope";
 import { proxySubTemplateTargetForFormat, type ProxySubTemplate } from "../shared/proxySubTemplates";
 import type { ProxySubscriptionFormat } from "../shared/proxySubscription";
 import type { ProxySubSettings } from "../shared/proxySubSettings";
@@ -37,7 +37,8 @@ export async function loadProxySubTokenContext(token: any): Promise<ProxySubToke
     db.getUserPlanSubscriptionInfo(Number(token.userId)),
     db.getAllSettings(),
   ]);
-  const expiresAt = (owner as any).expiresAt ? new Date((owner as any).expiresAt).getTime() : 0;
+  // 账号到期和这条链接的到期取更早的那个（链接设了到期，信息节点要写出来）。
+  const expiresAt = effectiveProxySubExpiry(token.expiresAt, (owner as any).expiresAt);
   return {
     token,
     owner,

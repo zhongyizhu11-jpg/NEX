@@ -359,7 +359,8 @@ export async function syncRouteRelayRulesForRule(ruleId: number, options: SyncRo
     const touched = new Set<number>();
     const result: SyncRouteRelayResult = { ruleId: id, paths: null, created: 0, updated: 0, retired: 0, touchedHostIds: [] };
 
-    const group = rule && !dbBool(rule.pendingDelete) ? routeGroupOf(rule as RouteGroupRule) : null;
+    // 转发组模板不跑在任何机器上：中继由它的子规则各自建（子规则照抄模板的路径），模板自己一条不留。
+    const group = rule && !dbBool(rule.pendingDelete) && !dbBool(rule.isForwardGroupTemplate) ? routeGroupOf(rule as RouteGroupRule) : null;
     if (!group) {
       result.retired = await retireRelayRows(live, touched);
       if (result.retired > 0 && !options.deferRefresh) await refreshTouchedHosts(rule, touched, `${reason}-retired`);
