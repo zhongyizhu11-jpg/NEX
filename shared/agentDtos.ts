@@ -48,6 +48,8 @@ export type AgentTcpingResult = AgentProbeCounter & {
   probeSuccesses?: number;
   healthStatus?: "unknown" | "healthy" | "unhealthy";
   healthPending?: boolean;
+  /** 探不通时是哪一种不通（shared/probeFailure）；Agent 2.2.236 起。 */
+  failure?: string;
 };
 
 export type AgentTunnelTcpingResult = AgentProbeCounter & {

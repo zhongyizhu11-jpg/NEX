@@ -221,6 +221,7 @@ function clashProxyLines(node: ProxyNode): YamlLine[] {
       field("udp", node.udp ? "true" : "false");
     }
     if (node.sni) field("sni", yamlQuote(node.sni));
+    if (node.certSha256) field("fingerprint", yamlQuote(node.certSha256));
     if (node.alpn.length) field("alpn", `[${node.alpn.map((item) => yamlQuote(item)).join(", ")}]`);
     if (node.allowInsecure) field("skip-cert-verify", "true");
     if (node.frontProxyName) field("dialer-proxy", yamlQuote(node.frontProxyName));
@@ -254,6 +255,7 @@ function clashProxyLines(node: ProxyNode): YamlLine[] {
     // Clash 的 trojan 用 sni，vless/vmess 用 servername，不能互换。
     if (node.protocol === "trojan") {
       if (node.sni) field("sni", yamlQuote(node.sni));
+    if (node.certSha256) field("fingerprint", yamlQuote(node.certSha256));
     } else {
       field("tls", "true");
       if (node.sni) field("servername", yamlQuote(node.sni));

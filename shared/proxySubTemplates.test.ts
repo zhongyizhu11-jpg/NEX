@@ -41,7 +41,12 @@ test("校验：Clash 不能带 proxies 等键；sing-box 必须是 JSON 对象�
 test("自定义组的归一化", () => {
   const groups = normalizeProxySubCustomGroups([{ name: " 香港 ", type: "url-test", filter: "hk|港", includeGroups: "yes" }, { name: "", type: "select" }, { name: "x", type: "bogus" }]);
   assert.deepEqual(groups, [
-    { name: "香港", type: "url-test", filter: "hk|港", includeGroups: false },
-    { name: "x", type: "select", filter: "", includeGroups: false },
+    { name: "香港", type: "url-test", filter: "hk|港", match: "regex", includeGroups: false },
+    { name: "x", type: "select", filter: "", match: "regex", includeGroups: false },
   ]);
+  // 关键词模式：认得的留下，认不得的回到正则（老模板没这个字段）。
+  assert.equal(normalizeProxySubCustomGroups([{ name: "a", type: "select", match: "all" }])[0].match, "all");
+  assert.equal(normalizeProxySubCustomGroups([{ name: "a", type: "select", match: "bogus" }])[0].match, "regex");
+  assert.equal(validateProxySubTemplate({ target: "clash", prelude: "", customGroups: [{ name: "a", type: "select", filter: "regex:(", match: "any" }] }).ok, false, "关键词模式里的正则要合法");
+  assert.equal(validateProxySubTemplate({ target: "clash", prelude: "", customGroups: [{ name: "a", type: "select", filter: "香港, !IPLC", match: "all" }] }).ok, true);
 });

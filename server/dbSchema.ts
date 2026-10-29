@@ -428,6 +428,7 @@ const tables: TableDef[] = [
       c("alterId", "int", { notNull: true, default: 0 }), c("flow", "text"),
       c("transport", "varchar", { length: 16, notNull: true, default: "tcp" }), c("path", "text"), c("host", "text"),
       c("tls", "bool", { notNull: true, default: false }), c("sni", "text"), c("alpn", "text"), c("fingerprint", "text"),
+      c("certSha256", "text"),
       c("allowInsecure", "bool", { notNull: true, default: false }),
       c("realityPublicKey", "text"), c("realityShortId", "text"),
       c("udp", "bool", { notNull: true, default: true }),

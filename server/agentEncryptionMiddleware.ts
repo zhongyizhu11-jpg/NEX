@@ -25,6 +25,8 @@ export const AGENT_TUNNEL_PATHS = new Set([
   "/api/agent/looking-glass-progress",
   // 一键链路诊断的结果（Agent 2.2.226 起）
   "/api/agent/diagnostics-result",
+  // 规则的「连接」清单（Agent 2.2.237 起）
+  "/api/agent/rule-connections-result",
   "/api/agent/iperf3-result",
   "/api/agent/plugin-action-result",
   // 「安装 / 修复 mimic」的进度和结果（2.3.441 前漏了这条：Agent 的上报全被 /api/sync 拒掉，页面一直「安装中」）

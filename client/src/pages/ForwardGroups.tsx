@@ -144,6 +144,7 @@ import {
   type ForwardGroupHealthCheckMethod,
 } from "@shared/forwardGroupHealthCheck";
 import { LatencyHistoryDayStrip } from "@/components/LatencyHistoryDays";
+import { describeMemberLive, summarizeGroupLive, type MemberLiveTone } from "@/lib/forwardGroupMemberLive";
 import {
   BANDWIDTH_AGGREGATION_STRATEGIES,
   BANDWIDTH_AGGREGATION_STRATEGY_HINTS,
@@ -415,6 +416,26 @@ function normalizeChainConnectHostsForHosts(
     const host = hostById.get(Number(hostIds[index] || 0));
     return normalizeConnectHostForHost(value, host, null);
   });
+}
+
+const MEMBER_LIVE_DOT_COLOR: Record<MemberLiveTone, string> = {
+  healthy: "var(--fx-healthy)",
+  degraded: "var(--fx-warn)",
+  down: "var(--fx-down)",
+  off: "var(--fx-stroke-strong, var(--fx-text-muted))",
+  unknown: "var(--fx-text-muted)",
+};
+
+/** 成员胶囊前那颗点：此刻怎么样（forwardGroupMemberLive）。 */
+function MemberLiveDot({ tone }: { tone: MemberLiveTone }) {
+  return (
+    <i
+      aria-hidden="true"
+      data-tone={tone}
+      className="inline-block h-1.5 w-1.5 shrink-0 rounded-full"
+      style={{ backgroundColor: MEMBER_LIVE_DOT_COLOR[tone], opacity: tone === "off" ? 0.55 : 1 }}
+    />
+  );
 }
 
 function chainRoleLabel(index: number, total: number, hasExternalEntry = false) {
@@ -1660,12 +1681,40 @@ export function ForwardGroupsContent({
     );
   };
 
+  /** 转发组的域名此刻解析到的成员（describeGroupPolicyDisplay 说的那个）；不是转发组或还没解析是 0。 */
+  const resolvedMemberId = (group: any) => {
+    if (normalizeGroupMode(group.groupMode) !== "failover") return 0;
+    const display = describeGroupPolicyDisplay(group, groupPolicyOptions);
+    return display && display.policy.report.kind === "resolved" ? Number(group.activeMemberId || 0) : 0;
+  };
+
+  /** 胶囊里的内容：点（或停用 / 时段外图标）、名字、延迟或状态短字、「解析」标。 */
+  const renderMemberPillInner = (group: any, member: any, label: string) => {
+    const live = describeMemberLive(group, member);
+    const resolved = resolvedMemberId(group) === Number(member.id);
+    return (
+      <>
+        {live && live.tone !== "off" ? <MemberLiveDot tone={live.tone} /> : renderMemberConfigIcon(group, member)}
+        <span className="truncate">{label}</span>
+        {live?.note ? <span className="shrink-0 font-mono text-[10.5px] tabular-nums opacity-80">{live.note}</span> : null}
+        {resolved ? <span className="shrink-0 rounded-sm bg-[var(--fx-healthy)] px-1 text-[10px] font-semibold leading-4 text-white" data-testid="member-resolved">解析</span> : null}
+      </>
+    );
+  };
+
+  const renderGroupLiveSummary = (group: any) => {
+    const summary = summarizeGroupLive(group, Array.isArray(group.members) ? group.members : []);
+    if (!summary) return null;
+    const color = summary.tone === "ok" ? "var(--fx-healthy-text)" : summary.tone === "warn" ? "var(--fx-warn-text)" : "var(--fx-down-text)";
+    return <span className="shrink-0 text-meta font-medium tabular-nums" style={{ color }} title={summary.title} data-testid="group-live-summary">{summary.text}</span>;
+  };
+
   const memberHealthTitle = (group: any, member: any) => {
     const active = isGroupMemberActive(group, member);
-    const parts = [active ? "当前成员可用" : "当前成员不可用"];
-    if (member.chinaHealthStatus && member.chinaHealthStatus !== "unknown") {
-      parts.push(`国内 ${member.chinaHealthStatus}${member.chinaHealthLatencyMs ? ` / ${member.chinaHealthLatencyMs}ms` : ""}`);
-    }
+    const live = describeMemberLive(group, member);
+    const parts = [active ? "配置可用" : "配置不可用"];
+    if (live) parts.push(`此刻：${live.title}`);
+    if (resolvedMemberId(group) === Number(member.id)) parts.push("域名正解析到它");
     if (parseMemberSchedule(member.activeSchedule)) {
       parts.push(`${dbFlag(member.scheduleSuspended) ? "时段外暂停，" : ""}可用时段 ${describeMemberSchedule(member.activeSchedule)}`);
     }
@@ -1826,8 +1875,7 @@ export function ForwardGroupsContent({
                     : { color: "var(--fx-text-secondary)", backgroundColor: "transparent", borderColor: "var(--fx-stroke-base)" }}
                   title={memberHealthTitle(entryGroup, member)}
                 >
-                  {renderMemberConfigIcon(entryGroup, member)}
-                  <span className="truncate">{index + 1}. {memberLabel(member)}</span>
+                  {renderMemberPillInner(entryGroup, member, `${index + 1}. ${memberLabel(member)}`)}
                 </span>
               ))}
             </div>
@@ -1888,8 +1936,7 @@ export function ForwardGroupsContent({
               }
               title={memberHealthTitle(group, member)}
             >
-              {renderMemberConfigIcon(group, member)}
-              <span className="truncate">{memberDecoratedLabel(group, member, index)}</span>
+              {renderMemberPillInner(group, member, memberDecoratedLabel(group, member, index))}
             </span>
           );
         })}
@@ -1937,7 +1984,10 @@ export function ForwardGroupsContent({
                       44px 的按钮高度撑出一大块空白。
                     */}
                     <div className="flex min-w-0 items-center justify-between gap-2">
-                      <div className="shrink-0 text-meta text-muted-foreground">{groupMemberTitle(group)}</div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <span className="text-meta text-muted-foreground">{groupMemberTitle(group)}</span>
+                        {normalizeGroupMode(group.groupMode) !== "chain" ? renderGroupLiveSummary(group) : null}
+                      </div>
                       {renderGroupPolicyBadge(group)}
                     </div>
                     {renderGroupMembers(group)}
@@ -1968,8 +2018,7 @@ export function ForwardGroupsContent({
             }`}
             title={memberHealthTitle(group, member)}
           >
-            {renderMemberConfigIcon(group, member)}
-            <span className="truncate">{memberDecoratedLabel(group, member, index)}</span>
+            {renderMemberPillInner(group, member, memberDecoratedLabel(group, member, index))}
           </span>
         ))}
         {hiddenCount > 0 && (

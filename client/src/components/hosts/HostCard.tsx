@@ -519,6 +519,16 @@ export default function HostCard({
         {/* 排障第一件事就是复制这个地址，所以它要从 select-guard 里单独放出来。 */}
         <span className="selectable">{hostPrimaryAddressText(host)}</span>
       </p>
+      {/*
+        出口 IP 核对：面板每次心跳看到的对端地址，和登记的 IP 不是同一个。落地的 IP 被机房换了、
+        机器上多了一层代理、手填的地址早就不是这台机器 —— 都是「以为在走 A，其实在走 B」。
+      */}
+      {host.exitIpMismatch && host.observedIp ? (
+        <p className="min-w-0 truncate font-mono text-xs leading-5" title={`面板看到这台机器连过来的地址是 ${host.observedIp}，和登记的不一样。地址被换过、机器前面多了一层代理，或者手填的地址已经不是这台机器。`}>
+          <span className="mr-1.5 rounded bg-[var(--fx-warn-soft)] px-1.5 py-0.5 text-[11px] font-medium text-[var(--fx-warn-text)]">出口 IP 不符</span>
+          <span className="selectable">{host.observedIp}</span>
+        </p>
+      ) : null}
       <div className="flex min-w-0 items-center gap-1.5 text-xs leading-5">
         <span className="shrink-0 text-muted-foreground">国家/地区：</span>
         <HostRegionBadge host={host} compact={regionCompact} />

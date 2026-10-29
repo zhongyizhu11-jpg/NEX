@@ -1,7 +1,8 @@
-import { protectedProcedure, router } from "../_core/trpc";
+import { adminProcedure, protectedProcedure, router } from "../_core/trpc";
 import { z } from "zod";
 import * as db from "../db";
 import { createQueryCache } from "../queryCache";
+import { buildExitQuality } from "../exitQualityView";
 
 const dashboardCache = createQueryCache(250);
 
@@ -166,4 +167,9 @@ export const dashboardRouter = router({
         trafficResetDay: user.trafficResetDay,
       }];
     })),
+    /**
+     * 概览「出口质量」：每台主机到几个固定站点的握手延迟走势 + 最近一次解锁检测的摘要。
+     * 只给管理员：主机的出口质量是运维视角，租户的首页不放。
+     */
+    exitQuality: adminProcedure.query(() => cachedDashboardQuery("exitQuality", 10_000, 60_000, () => buildExitQuality())),
   });

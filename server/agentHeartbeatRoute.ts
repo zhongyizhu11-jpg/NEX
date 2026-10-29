@@ -56,6 +56,8 @@ import { isIP } from "net";
 import { resolve4, resolve6 } from "dns/promises";
 import { hasQueuedLookingGlassAgentTasks, takeLookingGlassAgentTasks } from "./lookingGlassAgentTasks";
 import { hasQueuedDiagnosticsAgentTasks, hasRunningDiagnosticsAgentTasks, takeDiagnosticsAgentTasks } from "./diagnosticsAgentTasks";
+import { hasQueuedRuleConnectionsTasks, hasRunningRuleConnectionsTasks, takeRuleConnectionsTasks } from "./ruleConnectionsAgentTasks";
+import { RULE_CONNECTIONS_AGENT_VERSION } from "../shared/ruleConnections";
 import { LINK_DIAGNOSTICS_AGENT_VERSION } from "../shared/linkDiagnostics";
 import { hasQueuedIperf3AgentTasks, takeIperf3AgentTasks } from "./iperf3AgentTasks";
 import { hasQueuedPluginAgentTasks, takePluginAgentTasks } from "./pluginAgentTasks";
@@ -67,6 +69,7 @@ import { normalizeAgentText, normalizeNetworkInterface } from "./agentInputValid
 import { pruneMapEntries, setBoundedMapValue } from "./boundedCache";
 import { isValidTlsServerName } from "./nginxTlsInput";
 import { mergeAgentReportedAddress, observedAgentAddress } from "./agentAddressState";
+import { recordHostObservedAddress } from "./hostObservedAddress";
 import { noteAgentPrivateIpv4 } from "./agentPrivateAddress";
 import {
   gostTunnelTransportType,
@@ -1623,7 +1626,10 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     const agentLastAppliedHash = normalizeAgentText(req.body?.agentLastAppliedHash, 64);
     const reportedDefaultNetworkInterface = normalizeNetworkInterface(req.body?.defaultNetworkInterface);
     const previousHost = { ...(host as any) };
-    const reportedAddress = mergeAgentReportedAddress(req.body, host, observedAgentAddress(req));
+    const observedAddress = observedAgentAddress(req);
+    const reportedAddress = mergeAgentReportedAddress(req.body, host, observedAddress);
+    // 出口 IP 核对（hostObservedAddress）：面板看到的对端地址和登记的 IP 不一样时主机卡上提示。
+    recordHostObservedAddress(Number(host.id), observedAddress);
     noteAgentPrivateIpv4(host.id, req.body?.privateIpv4);
     const dnsChangedReports = Array.isArray(req.body?.dnsChanged) ? req.body.dnsChanged : [];
     const agentStateSignatures = normalizeAgentStateSignatures(req.body?.stateSignatures);
@@ -1945,6 +1951,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         || hasQueuedLookingGlassAgentTasks(host.id)
         // 一键链路诊断（2.3.444）：排着的任务只在完整心跳里下发
         || hasQueuedDiagnosticsAgentTasks(host.id)
+        || hasQueuedRuleConnectionsTasks(host.id)
         || hasQueuedIperf3AgentTasks(host.id)
         || hasQueuedPluginAgentTasks(host.id)
         // 排着的 mimic 安装任务只在完整心跳里下发（2.3.441 前漏了这条：配置不变的主机任务永远发不下去）
@@ -1992,6 +1999,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         selfTests: [],
         lookingGlassTests: [],
         diagnosticsTasks: [],
+        ruleConnectionTasks: [],
         iperf3Tasks: [],
         pluginTasks: [],
         agentUpgrade: null,
@@ -7502,6 +7510,10 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     const diagnosticsTasks = isAgentVersionAtLeast(effectiveAgentVersion, LINK_DIAGNOSTICS_AGENT_VERSION)
       ? takeDiagnosticsAgentTasks(host.id)
       : [];
+    // 规则的「连接」清单（Agent 2.2.237 起）；老 Agent 不下发，任务到点自己记超时。
+    const ruleConnectionTasks = isAgentVersionAtLeast(effectiveAgentVersion, RULE_CONNECTIONS_AGENT_VERSION)
+      ? takeRuleConnectionsTasks(host.id)
+      : [];
     const iperf3Tasks = takeIperf3AgentTasks(host.id);
     const pluginsAwaitingSync = new Set(pluginSyncTasks.map((task) => task.pluginId));
     const pluginTasks = supportsPluginTasks && reportedPluginInventory && !pluginSyncActionQueued
@@ -7516,6 +7528,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     const hasInteractiveTasks = lookingGlassTests.length > 0
       || diagnosticsTasks.length > 0
       || hasRunningDiagnosticsAgentTasks(host.id)
+      || ruleConnectionTasks.length > 0
+      || hasRunningRuleConnectionsTasks(host.id)
       || iperf3Tasks.length > 0
       || pluginTasks.length > 0
       || hasPendingPluginTasks
@@ -7640,6 +7654,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       && selfTests.length === 0
       && lookingGlassTests.length === 0
       && diagnosticsTasks.length === 0
+      && ruleConnectionTasks.length === 0
       && iperf3Tasks.length === 0
       && pluginTasks.length === 0
       && !hasPendingPluginTasks
@@ -7692,6 +7707,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       interactiveTasks: hasInteractiveTasks ? (
         lookingGlassTests.length
         + diagnosticsTasks.length
+        + ruleConnectionTasks.length
         + iperf3Tasks.length
         + pluginTasks.length
         + (hasPendingPluginTasks ? 1 : 0)
@@ -7708,6 +7724,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       stateSignatures: stateSections.signatures,
       lookingGlassTests,
       ...(diagnosticsTasks.length > 0 ? { diagnosticsTasks } : {}),
+      ...(ruleConnectionTasks.length > 0 ? { ruleConnectionTasks } : {}),
       iperf3Tasks,
       pluginTasks,
       ...(mimicInstallTask ? { mimicInstallTask } : {}),

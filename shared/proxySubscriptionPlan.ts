@@ -8,6 +8,7 @@
  */
 
 import { getHostEntryAddress, getHostEntryAddresses, hostAutoIpv4, hostAutoIpv6, hostNeverConnected, type HostEntryAddressSource } from "./hostEntryAddress";
+import { compileProxySubGroupFilter, type ProxySubGroupMatch } from "./proxySubGroupFilter";
 import { publishedRuleEntryDomain } from "./ruleEntryDomain";
 import { expandWeightedMembers, hostBandwidthHintMbps, PROXY_LOAD_BALANCE_MAX_WEIGHT, proxyLoadBalanceWeights } from "./linkWeights";
 import { proxyNodeBindingTruth } from "./proxyNodeAutoBind";
@@ -29,6 +30,7 @@ import {
   type ProxyNode,
   type ProxyNodeProtocol,
   type ProxyNodeTransport,
+  normalizeCertSha256,
 } from "./proxyNode";
 
 /** proxy_nodes 表的一行，字段名与数据库一致。 */
@@ -59,6 +61,7 @@ export type ProxyNodeTemplateRow = {
   sni?: unknown;
   alpn?: unknown;
   fingerprint?: unknown;
+  certSha256?: unknown;
   allowInsecure?: unknown;
   realityPublicKey?: unknown;
   realityShortId?: unknown;
@@ -258,6 +261,7 @@ export function proxyNodeFromTemplateRow(row: ProxyNodeTemplateRow): ProxyNode {
   node.sni = text(row.sni);
   node.alpn = text(row.alpn).split(",").map((item) => item.trim()).filter(Boolean);
   node.fingerprint = text(row.fingerprint);
+  node.certSha256 = normalizeCertSha256(row.certSha256);
   node.allowInsecure = bool(row.allowInsecure);
   node.realityPublicKey = text(row.realityPublicKey);
   node.realityShortId = text(row.realityShortId);
@@ -734,8 +738,10 @@ export const PROXY_AUTO_GROUP_MIN_MEMBERS = 2;
 export type ProxySubCustomGroup = {
   name: string;
   type: ProxySubscriptionGroupType;
-  /** 节点名正则；空 = 全部节点。非法正则按子串。 */
+  /** 节点名筛选表达式；空 = 全部节点。怎么解释由 match 定（shared/proxySubGroupFilter）。 */
   filter: string;
+  /** regex（默认，老模板）/ any 任一关键词 / all 全部关键词。 */
+  match?: ProxySubGroupMatch;
   /** 成员里也带上自动组和地区组。 */
   includeGroups?: boolean;
 };
@@ -771,22 +777,12 @@ function regionGroupsFor(nodes: readonly ProxyNode[]): ProxySubscriptionGroup[] 
   return groups;
 }
 
-function customGroupsFor(custom: readonly ProxySubCustomGroup[], nodeNames: readonly string[], groupNames: readonly string[]): ProxySubscriptionGroup[] {
+export function customGroupsFor(custom: readonly ProxySubCustomGroup[], nodeNames: readonly string[], groupNames: readonly string[]): ProxySubscriptionGroup[] {
   const out: ProxySubscriptionGroup[] = [];
   for (const group of custom) {
     const name = text(group.name);
     if (!name) continue;
-    let matcher: (value: string) => boolean = () => true;
-    const filter = text(group.filter);
-    if (filter) {
-      try {
-        const regex = new RegExp(filter, "i");
-        matcher = (value) => regex.test(value);
-      } catch {
-        const lower = filter.toLowerCase();
-        matcher = (value) => value.toLowerCase().includes(lower);
-      }
-    }
+    const matcher = compileProxySubGroupFilter(text(group.filter), group.match);
     const members = [
       ...(group.includeGroups ? groupNames : []),
       ...nodeNames.filter(matcher),

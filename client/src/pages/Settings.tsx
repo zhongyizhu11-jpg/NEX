@@ -1093,6 +1093,8 @@ function BackupRestoreSection({ panelUrl }: { panelUrl: string }) {
   } | null>(null);
   const [migrationCodeTick, setMigrationCodeTick] = useState(Date.now());
   const [backupPassword, setBackupPassword] = useState("");
+  // 带不带订阅与代理节点：只想把转发、隧道、转发组迁到新面板时可以不带。
+  const [backupIncludeProxy, setBackupIncludeProxy] = useState(true);
   const [backupPasswordConfirm, setBackupPasswordConfirm] = useState("");
   const [importPassword, setImportPassword] = useState("");
   const [importContent, setImportContent] = useState("");
@@ -1350,6 +1352,7 @@ function BackupRestoreSection({ panelUrl }: { panelUrl: string }) {
           status: "success",
         });
         toast.success("备份文件已生成");
+        for (const warning of data.warnings || []) toast.warning(warning);
       } catch {
         finishExportProgress({
           percent: 100,
@@ -1540,7 +1543,7 @@ function BackupRestoreSection({ panelUrl }: { panelUrl: string }) {
         ? { percent: 68, step: "正在加密备份内容", detail: "备份文件会使用当前输入的密码加密保存。", status: "running" }
         : current);
     }, 1600);
-    exportBackupMutation.mutate({ password: backupPassword });
+    exportBackupMutation.mutate({ password: backupPassword, includeProxy: backupIncludeProxy });
   };
 
   const handleRetryBackupDownload = () => {
@@ -2164,6 +2167,16 @@ function BackupRestoreSection({ panelUrl }: { panelUrl: string }) {
                 <PasswordInput value={backupPasswordConfirm} onChange={(e) => setBackupPasswordConfirm(e.target.value)} />
               </FormField>
             </div>
+            <label className="flex items-start gap-2 text-sm">
+              <Checkbox checked={backupIncludeProxy} onCheckedChange={(checked) => setBackupIncludeProxy(checked === true)} className="mt-0.5" />
+              <span className="min-w-0">
+                包含订阅与代理节点
+                <span className="block text-meta text-muted-foreground">
+                  始终包含主机、转发规则、隧道、转发组、用户与套餐、系统设置；不含流量历史、延迟记录和日志（新面板会重新积累）。
+                  只迁转发时可以取消勾选：节点自动绑定的转发导入后变成普通转发。
+                </span>
+              </span>
+            </label>
             <Alert>
               <Lock className="h-4 w-4" />
               <AlertTitle>请妥善保存备份密码</AlertTitle>

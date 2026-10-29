@@ -62,3 +62,13 @@ test("连线粗细随规则数变粗、有上限", () => {
   assert.ok(topologyEdgeWidth(3) > topologyEdgeWidth(1));
   assert.ok(topologyEdgeWidth(10_000) <= 6);
 });
+
+test("边上的药丸：有延迟写延迟，没延迟有流量写速率，停用不画", async () => {
+  const { topologyEdgeBadge, formatEdgeRate } = await import("./TopologyCanvas");
+  assert.equal(topologyEdgeBadge({ latencyMs: 23.4, rateBps: 5000, status: "running" }), "23 ms");
+  assert.equal(topologyEdgeBadge({ latencyMs: null, rateBps: 15_000, status: "running" }), "15 KB/s");
+  assert.equal(topologyEdgeBadge({ latencyMs: null, rateBps: 0, status: "running" }), null);
+  assert.equal(topologyEdgeBadge({ latencyMs: 10, rateBps: null, status: "stopped" }), null);
+  assert.equal(formatEdgeRate(1.5 * 1024 * 1024), "1.5 MB/s");
+  assert.equal(formatEdgeRate(900), "900 B/s");
+});

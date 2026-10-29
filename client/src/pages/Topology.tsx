@@ -430,7 +430,7 @@ export default function TopologyPage() {
               <span><span className="mr-1 inline-block h-2 w-2 rounded-full bg-[#7c3aed]" />中转</span>
               <span><span className="mr-1 inline-block h-2 w-2 rounded-full bg-[#d97706]" />出口</span>
               <span><span className="mr-1 inline-block h-2 w-2 rounded-full bg-[#059669]" />落地</span>
-              <span>虚线 = 已停用 · 红 = 异常 · 橙 = 部分异常 · 越粗规则越多</span>
+              <span>虚线 = 已停用 · 细虚线 = 线路组备用路径 · 流动 = 此刻有流量 · 红 = 异常 · 橙 = 部分异常 · 越粗规则越多</span>
             </div>
           ) : null}
         </div>

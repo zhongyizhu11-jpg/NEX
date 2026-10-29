@@ -1033,6 +1033,7 @@ export async function syncProxyNodeFromInbound(inboundId: number): Promise<numbe
       sni: node.sni || null,
       alpn: node.alpn.length ? node.alpn.join(",") : null,
       fingerprint: node.fingerprint || null,
+    certSha256: node.certSha256 || null,
       allowInsecure: node.allowInsecure,
       realityPublicKey: node.realityPublicKey || null,
       realityShortId: node.realityShortId || null,

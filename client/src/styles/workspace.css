@@ -1686,6 +1686,108 @@ html[data-personalization-background="image"] .auth-divider-label, html[data-per
   .fx-pathstrip-wire { min-width: 48px; padding-inline: 10px; }
 }
 
+/* ═══════════════════════════════════════════════════════════════════════
+   线路板：一条路径一张卡，卡里是一条链 —— 入口 ─ 中转… ─ 落地（features/rules/RouteBoard.tsx）
+   ═══════════════════════════════════════════════════════════════════════ */
+.fx-rb-card { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px 16px; border: 1px solid var(--fx-stroke-weak); border-radius: var(--fx-radius-card, 12px); background: var(--fx-l1-surface); }
+.fx-rb-card-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 8px 12px; }
+.fx-rb-card-title { display: flex; min-width: 0; flex: 1 1 240px; flex-direction: column; gap: 2px; }
+.fx-rb-card-title > b { font-size: 15px; font-weight: 600; line-height: 20px; color: var(--fx-text); }
+.fx-rb-card-sub { font-size: 12px; line-height: 16px; color: var(--fx-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fx-rb-card-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.fx-rb-chip { display: inline-flex; height: 22px; align-items: center; gap: 4px; padding: 0 9px; border-radius: 999px; border: 1px solid var(--fx-stroke-weak); background: var(--fx-l1-surface); font-size: 11.5px; font-weight: 600; line-height: 1; white-space: nowrap; color: var(--fx-text-secondary); font-variant-numeric: tabular-nums; }
+.fx-rb-chip[data-tone="ok"] { border-color: transparent; background: var(--fx-healthy-soft); color: var(--fx-healthy-text); }
+.fx-rb-chip[data-tone="warn"] { border-color: transparent; background: var(--fx-warn-soft); color: var(--fx-warn-text); }
+.fx-rb-chip[data-tone="down"] { border-color: transparent; background: var(--fx-down-soft); color: var(--fx-down-text); }
+.fx-rb-chip[data-tone="off"] { color: var(--fx-text-muted); }
+.fx-rb-open { display: inline-flex; height: 22px; align-items: center; padding: 0 9px; border-radius: 999px; border: 1px solid var(--fx-stroke-weak); background: transparent; font-size: 11.5px; font-weight: 600; color: var(--fx-accent); cursor: pointer; }
+.fx-rb-open:hover { background: color-mix(in srgb, var(--fx-primary-fill) 10%, transparent); }
+
+.fx-rb-paths { display: flex; flex-direction: column; gap: 8px; }
+.fx-rb-path { container-type: inline-size; display: flex; flex-direction: column; gap: 10px; padding: 10px 12px 12px; border: 1px solid var(--fx-stroke-weak); border-radius: var(--fx-radius-card, 12px); background: var(--fx-l0-page); }
+.fx-rb-path[data-active] { border-color: color-mix(in srgb, var(--fx-path) 45%, var(--fx-stroke-weak)); box-shadow: inset 3px 0 0 var(--fx-path); }
+.fx-rb-path[data-health="down"] { border-color: color-mix(in srgb, var(--fx-down) 40%, var(--fx-stroke-weak)); }
+.fx-rb-path-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 10px; }
+.fx-rb-path-title { display: flex; min-width: 0; flex: 1 1 200px; align-items: center; gap: 6px; }
+.fx-rb-path-title > b { min-width: 0; font-size: 13.5px; font-weight: 600; color: var(--fx-text); }
+.fx-rb-letter { display: inline-flex; width: 20px; height: 20px; flex: none; align-items: center; justify-content: center; border-radius: 6px; background: var(--fx-l3-control-fill); font-family: var(--fx-font-mono); font-size: 11px; font-weight: 700; color: var(--fx-text-secondary); }
+.fx-rb-path[data-active] .fx-rb-letter { background: var(--fx-path); color: #fff; }
+.fx-rb-path-stats { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.fx-rb-score { font-family: var(--fx-font-mono); font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.fx-rb-score-healthy { color: var(--fx-healthy-text); }
+.fx-rb-score-warn { color: var(--fx-warn-text); }
+.fx-rb-score-down { color: var(--fx-down-text); }
+.fx-rb-score-standby { color: var(--fx-text-muted); }
+.fx-rb-meta { font-size: 11.5px; color: var(--fx-text-muted); font-variant-numeric: tabular-nums; }
+
+/* 链：节点 ─ 段 ─ 节点。节点等宽分摊，段固定一段长度，药丸骑在线中间。 */
+.fx-rb-chain { display: flex; align-items: stretch; min-width: 0; }
+.fx-rb-node { display: flex; min-width: 0; flex: 1 1 0; flex-direction: column; gap: 3px; padding: 9px 11px; border: 1px solid var(--fx-stroke-weak); border-radius: 10px; background: var(--fx-l1-surface); }
+.fx-rb-node-head { display: flex; min-width: 0; align-items: center; gap: 6px; }
+.fx-rb-node-head > i { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--fx-standby); box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--fx-standby) 18%, transparent); }
+.fx-rb-node[data-health="healthy"] .fx-rb-node-head > i { background: var(--fx-healthy); box-shadow: 0 0 0 2.5px var(--fx-healthy-soft); }
+.fx-rb-node[data-health="degraded"] .fx-rb-node-head > i, .fx-rb-node[data-health="switching"] .fx-rb-node-head > i { background: var(--fx-warn); box-shadow: 0 0 0 2.5px var(--fx-warn-soft); }
+.fx-rb-node[data-health="down"] .fx-rb-node-head > i { background: var(--fx-down); box-shadow: 0 0 0 2.5px var(--fx-down-soft); }
+.fx-rb-node-head > b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; line-height: 18px; color: var(--fx-text); }
+.fx-rb-node-caption { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; line-height: 15px; color: var(--fx-text-muted); }
+.fx-rb-rate { display: flex; flex-wrap: wrap; gap: 2px 10px; font-family: var(--fx-font-mono); font-size: 11px; line-height: 15px; color: var(--fx-text-secondary); font-variant-numeric: tabular-nums; }
+.fx-rb-rate-idle { color: var(--fx-text-muted); font-family: inherit; }
+.fx-rb-link { position: relative; display: flex; flex: 0 0 auto; width: 84px; align-items: center; justify-content: center; }
+.fx-rb-link::before { content: ""; position: absolute; inset-inline: 0; top: 50%; height: 2px; margin-top: -1px; border-radius: 2px; background: var(--fx-standby); opacity: .6; }
+.fx-rb-link[data-state="measured"]::before { background: var(--fx-healthy); opacity: .85; }
+.fx-rb-link[data-flowing]::before { background: var(--fx-primary-gradient); opacity: 1; }
+.fx-rb-link[data-state="unknown"]::before { background: repeating-linear-gradient(90deg, var(--fx-warn) 0 6px, transparent 6px 10px); opacity: .9; }
+.fx-rb-link[data-state="failed"]::before { background: repeating-linear-gradient(90deg, var(--fx-down) 0 6px, transparent 6px 10px); opacity: 1; }
+.fx-rb-badge { position: relative; z-index: 1; display: inline-flex; height: 20px; align-items: center; padding: 0 8px; border-radius: 999px; border: 1px solid var(--fx-stroke-weak); background: var(--fx-l1-surface); font-family: var(--fx-font-mono); font-size: 11px; font-weight: 600; white-space: nowrap; color: var(--fx-text-secondary); font-variant-numeric: tabular-nums; }
+/* 药丸要盖住线：状态色是半透明的，先垫一层面板底色再铺它。 */
+.fx-rb-link[data-state="unknown"] .fx-rb-badge { border-color: transparent; background: linear-gradient(var(--fx-warn-soft), var(--fx-warn-soft)), var(--fx-l1-surface); color: var(--fx-warn-text); font-family: inherit; }
+.fx-rb-link[data-state="failed"] .fx-rb-badge { border-color: transparent; background: linear-gradient(var(--fx-down-soft), var(--fx-down-soft)), var(--fx-l1-surface); color: var(--fx-down-text); font-family: inherit; }
+.fx-rb-flow { position: absolute; top: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: 999px; background: var(--fx-l1-surface); border: 2px solid var(--fx-primary-fill); left: 8%; animation: fx-pathstrip-flow 2.6s linear infinite; }
+.fx-rb-flow + .fx-rb-flow { animation-delay: -1.3s; }
+@media (prefers-reduced-motion: reduce) { .fx-rb-flow { animation: none; } .fx-rb-flow + .fx-rb-flow { left: 88%; } }
+/* 对话框那种中等宽度：段短一点、节点紧一点，四个节点的链还能横着放下。 */
+@container (max-width: 760px) {
+  .fx-rb-link { width: 62px; }
+  .fx-rb-node { padding: 8px 9px; }
+}
+/* 窄处（手机、对话框）链竖着排：段变成短竖线，药丸还骑在中间。 */
+@container (max-width: 560px) {
+  .fx-rb-chain { flex-direction: column; }
+  .fx-rb-node { flex: 0 0 auto; }
+  .fx-rb-link { width: auto; height: 36px; }
+  .fx-rb-link::before { inset-inline: auto; inset-block: 0; left: 50%; top: 0; width: 2px; height: auto; margin: 0 0 0 -1px; }
+  .fx-rb-link[data-state="unknown"]::before { background: repeating-linear-gradient(180deg, var(--fx-warn) 0 6px, transparent 6px 10px); }
+  .fx-rb-link[data-state="failed"]::before { background: repeating-linear-gradient(180deg, var(--fx-down) 0 6px, transparent 6px 10px); }
+  .fx-rb-flow { display: none; }
+}
+
+/* 诊断对话框的「推算 vs 实测」（components/LinkTestCompareView）：一段一行，四列，对不上的行整行标出。 */
+.fx-cmp { display: flex; flex-direction: column; gap: 6px; container-type: inline-size; }
+.fx-cmp-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.fx-cmp-cols, .fx-cmp-row { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr) minmax(0, 1fr) 72px; align-items: center; gap: 8px; }
+.fx-cmp-cols { padding: 0 10px; font-size: 11px; color: var(--fx-text-muted); }
+.fx-cmp-rows { display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--fx-stroke-weak); border-radius: var(--fx-radius-card, 12px); background: var(--fx-l1-surface); }
+.fx-cmp-row { padding: 8px 10px; font-size: 12.5px; border-top: 1px solid var(--fx-stroke-weak); }
+.fx-cmp-row:first-child { border-top: 0; }
+.fx-cmp-row[data-mismatch] { background: var(--fx-warn-soft); box-shadow: inset 3px 0 0 var(--fx-warn); }
+.fx-cmp-row-total { font-weight: 600; background: var(--fx-l0-page); }
+.fx-cmp-seg { display: flex; min-width: 0; align-items: center; gap: 6px; color: var(--fx-text); }
+.fx-cmp-seg > b { min-width: 0; font-weight: 500; }
+.fx-cmp-seg > span { color: var(--fx-text-muted); }
+.fx-cmp-cell { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; color: var(--fx-text); }
+.fx-cmp-cell-timeout { color: var(--fx-down-text); }
+.fx-cmp-cell-missing { color: var(--fx-text-muted); }
+.fx-cmp-when { font-size: 11px; color: var(--fx-text-muted); }
+.fx-cmp-delta { text-align: right; color: var(--fx-text-muted); }
+.fx-cmp-delta-bad { color: var(--fx-warn-text); font-weight: 600; }
+.fx-cmp-note { grid-column: 1 / -1; font-size: 11.5px; color: var(--fx-warn-text); }
+.fx-cmp-foot { font-size: 11px; line-height: 15px; color: var(--fx-text-muted); }
+@container (max-width: 520px) {
+  .fx-cmp-cols { display: none; }
+  .fx-cmp-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 60px; }
+  .fx-cmp-seg { grid-column: 1 / -1; }
+}
+
 /* 列表行里的一小段线：「HK entry 01 ──── SG relay 03」 */
 .fx-pathline { display: inline-flex; min-width: 0; align-items: center; gap: 6px; }
 .fx-pathline-ln { position: relative; flex: 1 1 18px; min-width: 18px; height: 2px; border-radius: 2px; background: var(--fx-pathline-color, var(--fx-accent)); }

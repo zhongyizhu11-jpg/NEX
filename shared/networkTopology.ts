@@ -71,6 +71,13 @@ export type TopologyEdge = {
   status: TopologyStatus;
   latencyMs: number | null;
   label: string | null;
+  /**
+   * 线路组的路径边：true 这条边在当前走的路径上，false 只在备用路径上；别的边是 null。
+   * 画图时备用画成细虚线，当前那条照常 —— 一眼看出流量此刻走哪条。
+   */
+  activePath: boolean | null;
+  /** 此刻经过这条边的速率（字节/秒，进出相加）；面板在内存里按规则算（server/ruleLiveRates），没有是 null。 */
+  rateBps: number | null;
 };
 
 export type TopologyRuleKind = "direct" | "tunnel" | "chain" | "group" | "route";
@@ -87,6 +94,8 @@ export type TopologyRuleRef = {
   protocol: string | null;
   target: string;
   pathCount: number;
+  /** 线路组此刻走的路径 key（Agent 报的；没报就是 null）。 */
+  activePathKey: string | null;
 };
 
 export type TopologyTunnelRef = { id: number; name: string; userId: number; mode: string; status: TopologyStatus; latencyMs: number | null };
@@ -182,6 +191,8 @@ export type TopologyInboundRow = {
 };
 
 export type TopologyRouteStats = {
+  /** Agent 报的此刻走第几条（-1 / 省略 = 不知道）。 */
+  activeIndex?: number;
   targets: Array<{ index: number; latencyMs: number | null; healthy: boolean }>;
   hops: Array<{ pathKey: string; hopIndex: number; ok: boolean; latencyMs: number | null; consecutiveFailures: number }>;
 };
@@ -305,6 +316,8 @@ type Contribution = {
   port?: number | null;
   pathKey?: string;
   label?: string | null;
+  /** 线路组：这一段在当前走的路径上。 */
+  activePath?: boolean;
 };
 
 type EdgeDraft = {
@@ -321,6 +334,8 @@ type EdgeDraft = {
   protocols: Set<string>;
   ports: Set<number>;
   labels: Set<string>;
+  /** 线路组路径边：收到过 active / 非 active 的贡献各记一下。 */
+  activeVotes: { active: number; standby: number };
 };
 
 function emptyRoles(): TopologyRoles {
@@ -432,9 +447,11 @@ export function buildNetworkTopology(input: TopologyInput): TopologyGraph {
     const id = `${kind}|${from}|${to}|${tunnelId ?? ""}|${groupId ?? ""}`;
     let edge = edges.get(id);
     if (!edge) {
-      edge = { id, from, to, kind, tunnelId, groupId, ruleIds: new Set(), pathKeys: new Set(), statuses: [], latencies: [], protocols: new Set(), ports: new Set(), labels: new Set() };
+      edge = { id, from, to, kind, tunnelId, groupId, ruleIds: new Set(), pathKeys: new Set(), statuses: [], latencies: [], protocols: new Set(), ports: new Set(), labels: new Set(), activeVotes: { active: 0, standby: 0 } };
       edges.set(id, edge);
     }
+    if (contribution.activePath === true) edge.activeVotes.active += 1;
+    else if (contribution.activePath === false) edge.activeVotes.standby += 1;
     if (contribution.status) edge.statuses.push(contribution.status);
     if (contribution.ruleId) edge.ruleIds.add(contribution.ruleId);
     if (contribution.pathKey) edge.pathKeys.add(contribution.pathKey);
@@ -563,6 +580,7 @@ export function buildNetworkTopology(input: TopologyInput): TopologyGraph {
         protocol: normalizeProtocol(template.protocol),
         target: formatFailoverEndpoint(text(template.targetIp), template.targetPort),
         pathCount: 0,
+        activePathKey: null,
         statuses: [],
         ...extra,
       };
@@ -642,9 +660,15 @@ export function buildNetworkTopology(input: TopologyInput): TopologyGraph {
     if (routeGroup) {
       const stats = input.routeStats?.(logicalId) || null;
       const relays = relayByParent.get(ruleId) || new Map<string, TopologyRuleRow>();
+      const activeIndex = typeof stats?.activeIndex === "number" && stats.activeIndex >= 0 ? stats.activeIndex : -1;
+      const activeKey = activeIndex >= 0 ? routeGroup.paths[activeIndex]?.key || null : null;
+      // touchRuleRef 只在第一次建引用时收 extra；这条引用上面已经建过，直接写。
+      touchRuleRef(logicalId, rule, "route", status).activePathKey = activeKey;
       routeGroup.paths.forEach((path, index) => {
         const label = routePathLabel(path, index);
         const agentTarget = stats?.targets.find((target) => target.index === index) || null;
+        // 不知道走哪条时谁都不算备用（都画成正常的）；知道了就只有那一条是当前。
+        const activePath = activeIndex >= 0 ? index === activeIndex : undefined;
         const base: TopologyStatus = lastStatus === "stopped" ? "stopped" : path.issue ? "failed" : lastStatus;
         let previous = starts;
         const nodesInPath = path.hops.map((hop) => hostNode(hop));
@@ -664,7 +688,7 @@ export function buildNetworkTopology(input: TopologyInput): TopologyGraph {
             ? agentTarget?.latencyMs ?? null
             : stats?.hops.find((item) => item.pathKey === path.key && item.hopIndex === hopIndex - 1)?.latencyMs ?? null;
           for (const from of previous) {
-            addEdge("routePath", from, nodeId, {}, { ruleId: logicalId, status: segment, pathKey: path.key, protocol, port: relay ? positiveInt(relay.sourcePort) || null : null, latencyMs: latency, label });
+            addEdge("routePath", from, nodeId, {}, { ruleId: logicalId, status: segment, pathKey: path.key, protocol, port: relay ? positiveInt(relay.sourcePort) || null : null, latencyMs: latency, label, activePath });
           }
           previous = [nodeId];
         });
@@ -690,7 +714,7 @@ export function buildNetworkTopology(input: TopologyInput): TopologyGraph {
             const inboundId = inboundIdByHostPort.get(`${target.hostId}:${dest.port}`);
             if (inboundId) landingRulesByInbound.set(inboundId, (landingRulesByInbound.get(inboundId) || new Set()).add(logicalId));
           }
-          addEdge("routePath", from, target.id, {}, { ruleId: logicalId, status: finalStatus, pathKey: path.key, protocol, port: dest.port || null, latencyMs: finalLatency, label });
+          addEdge("routePath", from, target.id, {}, { ruleId: logicalId, status: finalStatus, pathKey: path.key, protocol, port: dest.port || null, latencyMs: finalLatency, label, activePath });
         }
       });
     } else {
@@ -840,6 +864,9 @@ export function buildNetworkTopology(input: TopologyInput): TopologyGraph {
         status: mergeTopologyStatuses(edge.statuses),
         latencyMs: latency,
         label: edge.labels.size > 0 ? Array.from(edge.labels).sort().join(" / ") : null,
+        // 几条路径共用一段时，只要有一条在走就算在走。
+        activePath: edge.activeVotes.active > 0 ? true : edge.activeVotes.standby > 0 ? false : null,
+        rateBps: null,
       };
     })
     .sort((left, right) => left.id.localeCompare(right.id));

@@ -246,3 +246,13 @@ test("规则页把路径上的机器在线状态喂给状态判定，过期的�
   assert.match(source, /probe\?\.latestLatencyAt && !isLinkProbeFresh\(probe\.latestLatencyAt\)/);
   assert.match(source, /if \(!isLinkProbeFresh\(t\.latestLatencyAt\)\) \{/);
 });
+
+test("探测不通时说清是哪一种不通：被拒、解析失败各有各的话，老 Agent 没报种类照旧说超时", () => {
+  const now = Date.now();
+  const base = { ruleEnabled: true, ruleRunning: true, groupEnabled: true, groupConfigStatus: "available" as const, latestLatencyIsTimeout: true, latestLatencyMs: null, latestLatencyAt: now - 10_000 };
+  assert.equal(resolveForwardRuleVisualStatus({ ...base, latestProbeFailure: "refused" }, now).title, "最近一次端到端探测失败：连接被拒绝（对端端口没开，或被防火墙拒绝）");
+  assert.equal(resolveForwardRuleVisualStatus({ ...base, latestProbeFailure: "dns" }, now).title, "最近一次端到端探测失败：域名解析失败");
+  assert.equal(resolveForwardRuleVisualStatus({ ...base, latestProbeFailure: "timeout" }, now).title, "最近一次端到端探测超时");
+  assert.equal(resolveForwardRuleVisualStatus({ ...base, latestProbeFailure: null }, now).title, "最近一次端到端探测超时");
+  assert.equal(resolveForwardRuleVisualStatus({ ...base, latestProbeFailure: "weird" }, now).title, "最近一次端到端探测超时");
+});

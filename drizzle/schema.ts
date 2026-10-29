@@ -622,6 +622,8 @@ export const proxyNodes = table("proxy_nodes", {
   sni: text("sni"),
   alpn: text("alpn"),
   fingerprint: text("fingerprint"),
+  // 服务端证书的 SHA-256 钉扎（Hysteria2 链接的 pinSHA256、Clash 的 fingerprint）
+  certSha256: text("certSha256"),
   allowInsecure: boolean("allowInsecure").notNull().default(false),
   realityPublicKey: text("realityPublicKey"),
   realityShortId: text("realityShortId"),

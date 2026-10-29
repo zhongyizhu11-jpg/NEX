@@ -33,6 +33,7 @@ import { getTunnelAutoHopAggregate, recordTunnelAutoHopLatency } from "./tunnelA
 import { getTunnelMultiEntryLatency, recordTunnelMultiEntryLatency } from "./tunnelMultiEntryLatencyState";
 import { completeLookingGlassAgentTask, updateLookingGlassAgentTaskProgress, type LookingGlassMethod } from "./lookingGlassAgentTasks";
 import { completeDiagnosticsAgentTask } from "./diagnosticsAgentTasks";
+import { completeRuleConnectionsTask } from "./ruleConnectionsAgentTasks";
 import { observeTunnelProbeLoss } from "./resourceAlertNotifier";
 import { recordConnStatsReport } from "./ops/connStats";
 import { completeIperf3AgentTask } from "./iperf3AgentTasks";
@@ -40,6 +41,8 @@ import { completePluginAgentTask } from "./pluginAgentTasks";
 import { reportMimicInstallResult } from "./mimicInstallTasks";
 import { getAgentHostIdentityFromRequest } from "./agentAuth";
 import { ingestRouteHopProbeReports } from "./routeGroups";
+import { recordRuleTrafficSample } from "./ruleLiveRates";
+import { recordRuleProbeFailure } from "./ruleProbeFailure";
 import { applyTrafficMultiplier, normalizeTrafficMultiplier } from "../shared/trafficMultiplier";
 import { normalizeTrafficCounterBytes, normalizeTrafficCounterConnections } from "../shared/trafficCounterBytes";
 import { mapWithConcurrency } from "./asyncPool";
@@ -631,6 +634,33 @@ agentRouter.post("/api/agent/looking-glass-result", async (req: Request, res: Re
   }
 });
 
+agentRouter.post("/api/agent/rule-connections-result", async (req: Request, res: Response) => {
+  try {
+    const host = await getAgentHostIdentityFromRequest(req);
+    if (!host) {
+      res.status(401).json({ error: "Invalid token" });
+      return;
+    }
+    const result = req.body?.result;
+    if (!result?.taskId) {
+      res.status(400).json({ error: "result.taskId is required" });
+      return;
+    }
+    const ok = completeRuleConnectionsTask(host.id, {
+      taskId: String(result.taskId),
+      rows: result.rows,
+      total: result.total,
+      truncated: result.truncated,
+      source: result.source,
+      error: result.error,
+    });
+    res.json({ success: ok });
+  } catch (error) {
+    console.error("[Agent RuleConnections] Error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 agentRouter.post("/api/agent/diagnostics-result", async (req: Request, res: Response) => {
   try {
     const host = await getAgentHostIdentityFromRequest(req);
@@ -1149,6 +1179,8 @@ agentRouter.post("/api/agent/traffic", async (req: Request, res: Response) => {
         continue;
       }
       const { rule, tunnel, group } = context;
+      // 此刻的速率只给界面看（线路板上每一跳的 ↓↑），不进账：记在谁名下、记不记都不影响它。
+      recordRuleTrafficSample({ ruleId: Number(stat.ruleId), hostId: Number(host.id), bytesIn, bytesOut, connections: normalizeTrafficCounterConnections(stat.connections), nowMs: requestStartedAt });
       if ((rule as any).pendingDelete || !(rule as any).isEnabled) {
         ignoredStatCount += 1;
         continue;
@@ -1854,6 +1886,7 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
         collectCounter("rule", ruleId, report);
         const isTimeout = !!report.isTimeout || baseLatency === null;
         const latencyMs = isTimeout ? null : baseLatency;
+        recordRuleProbeFailure(ruleId, isTimeout ? report.failure || "timeout" : null);
         return {
           stat: {
             ruleId,
@@ -1887,6 +1920,8 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
       });
       if (!combined) return null;
       const tunnelIntroducedTimeout = combined.isTimeout && !report.isTimeout;
+      // 隧道那一段不通时没有种类可说（隧道探测另有一路），只在出口到目标不通时记种类。
+      recordRuleProbeFailure(ruleId, combined.isTimeout ? (report.isTimeout ? report.failure || "timeout" : "unreachable") : null);
       // Compose target and tunnel counters. If the tunnel path timed out,
       // no end-to-end packet can be considered successful; otherwise retain
       // the lower success ratio from either segment.

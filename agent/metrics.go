@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -22,6 +23,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -575,6 +577,59 @@ type probeMeasurement struct {
 	Detail         string
 	ProbeCount     int
 	ProbeSuccesses int
+	// 探不通时是哪一种不通（shared/probeFailure）：dns / refused / unreachable / timeout / resource / error。
+	Failure string
+}
+
+/*
+把拨号错误分成几种。以前全报成「超时」，可它们该做的事完全不同：被拒是对端端口没开，
+解析失败是域名的事，句柄用完是本机的事，只有真超时才是链路的事。
+*/
+func classifyProbeDialError(err error) string {
+	if err == nil {
+		return ""
+	}
+	if errors.Is(err, syscall.EMFILE) || errors.Is(err, syscall.ENFILE) || errors.Is(err, syscall.EADDRNOTAVAIL) {
+		return "resource"
+	}
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return "refused"
+	}
+	if errors.Is(err, syscall.EHOSTUNREACH) || errors.Is(err, syscall.ENETUNREACH) {
+		return "unreachable"
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return "timeout"
+	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return "dns"
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "too many open files"), strings.Contains(msg, "cannot assign requested address"):
+		return "resource"
+	case strings.Contains(msg, "no such host"), strings.Contains(msg, "server misbehaving"):
+		return "dns"
+	case strings.Contains(msg, "connection refused"):
+		return "refused"
+	case strings.Contains(msg, "unreachable"):
+		return "unreachable"
+	case strings.Contains(msg, "timeout"), strings.Contains(msg, "timed out"):
+		return "timeout"
+	}
+	return "error"
+}
+
+// 几次尝试各有各的失败时报最说明问题的那种：本机资源 > 解析 > 被拒 > 不可达 > 超时 > 其它。
+var probeFailureRank = map[string]int{"resource": 6, "dns": 5, "refused": 4, "unreachable": 3, "timeout": 2, "error": 1}
+
+func worseProbeFailure(current string, next string) string {
+	if probeFailureRank[next] > probeFailureRank[current] {
+		return next
+	}
+	return current
 }
 
 func compactTrafficStat(stat map[string]any) []any {
@@ -1595,6 +1650,8 @@ func collectTCPing(cfg Config, ruleProbes []ruleLatencyProbe, probes []tunnelPro
 	if force {
 		ruleLimit = len(ordinaryRuleTasks)
 		serviceLimit = len(serviceTasks)
+	} else {
+		ruleLimit = tcpingBorrowedRuleLimit(ruleLimit, len(ordinaryRuleTasks), 256)
 	}
 	tunnelProbeLimit := len(tunnelTasks)
 	tcpingCursorMu.Lock()
@@ -1926,16 +1983,69 @@ func rotateTCPingTasks(tasks []tcpingTask, cursor *int, limit int) []tcpingTask 
 	return selected
 }
 
+/*
+后台探测借手动测速的空闲名额（Open-Box 的做法）。
+
+手动测速有自己的 selfTestWorkerConcurrency 个工作协程，大部分时间空着；后台探测每轮最多
+tcpingMaxConcurrency 个并发，规则多（几百条）时一轮只轮到一部分，排队的要等下一轮。手动
+测速闲着（没有在跑的、10 秒内也没来过）而且后台这轮的活比自己的名额多时，借这些空名额多开
+几个协程，一轮也多选一些规则（tcpingBorrowedRuleLimit）。
+
+手动和紧急复查仍优先：借来的协程每拿一条之前看一眼，手动测速来了就做完手上这条退出，
+剩下的由自己的协程做完。
+*/
+func tcpingBorrowableWorkers(taskCount int, base int) int {
+	if taskCount <= base || base <= 0 {
+		return 0
+	}
+	if atomic.LoadInt64(&actionPendingCount) > 0 || selfTestBusy() {
+		return 0
+	}
+	borrow := selfTestWorkerConcurrency
+	if borrow > taskCount-base {
+		borrow = taskCount - base
+	}
+	return borrow
+}
+
+// 能借到名额时一轮多选几条普通规则：按借到后的并发等比放大，不超过上限。
+func tcpingBorrowedRuleLimit(limit int, total int, maximum int) int {
+	if limit <= 0 || limit >= total {
+		return limit
+	}
+	borrow := tcpingBorrowableWorkers(total, limit)
+	if borrow <= 0 {
+		return limit
+	}
+	scaled := limit * (tcpingMaxConcurrency + borrow) / tcpingMaxConcurrency
+	if maximum > 0 && scaled > maximum {
+		scaled = maximum
+	}
+	if scaled > total {
+		scaled = total
+	}
+	return scaled
+}
+
 func runTCPingTasks(tasks []tcpingTask) ([]map[string]any, []map[string]any, []map[string]any, []map[string]any) {
 	workerCount := tcpingTaskConcurrency(len(tasks))
+	borrowed := tcpingBorrowableWorkers(len(tasks), workerCount)
 	out := make(chan tcpingTaskResult, len(tasks))
-	jobs := make(chan tcpingTask, workerCount)
+	jobs := make(chan tcpingTask, workerCount+borrowed)
 	var wg sync.WaitGroup
-	for worker := 0; worker < workerCount; worker++ {
+	for worker := 0; worker < workerCount+borrowed; worker++ {
 		wg.Add(1)
+		isBorrowed := worker >= workerCount
 		go func() {
 			defer wg.Done()
-			for task := range jobs {
+			for {
+				if isBorrowed && selfTestBusy() {
+					return
+				}
+				task, ok := <-jobs
+				if !ok {
+					return
+				}
 				out <- executeTCPingTask(task)
 			}
 		}()
@@ -2109,6 +2219,9 @@ func executeTCPingTaskWithProbes(
 	} else {
 		payload["latencyMs"] = 0
 		payload["isTimeout"] = true
+		if measurement.Failure != "" {
+			payload["failure"] = measurement.Failure
+		}
 	}
 	applyForwardGroupHealthDecision(task, measurement.Reachable, payload, time.Now())
 	return tcpingTaskResult{Kind: task.Kind, Payload: payload}
@@ -2137,6 +2250,7 @@ func tcpLatencyWithProbes(host string, port int, timeout time.Duration, count in
 	type result struct {
 		latency   int
 		reachable bool
+		failure   string
 	}
 	results := make(chan result, count)
 	deadline := time.Now().Add(timeout)
@@ -2147,19 +2261,21 @@ func tcpLatencyWithProbes(host string, port int, timeout time.Duration, count in
 			defer wg.Done()
 			remaining := time.Until(deadline)
 			if remaining <= 0 {
-				results <- result{}
+				results <- result{failure: "timeout"}
 				return
 			}
-			latency, reachable, _ := tcpLatencyResolved(host, port, remaining)
-			results <- result{latency: latency, reachable: reachable}
+			latency, reachable, _, failure := tcpLatencyResolvedWithFailure(host, port, remaining)
+			results <- result{latency: latency, reachable: reachable, failure: failure}
 		}()
 	}
 	wg.Wait()
 	close(results)
 
 	latencies := make([]int, 0, count)
+	failure := ""
 	for item := range results {
 		if !item.reachable {
+			failure = worseProbeFailure(failure, item.failure)
 			continue
 		}
 		latencies = append(latencies, item.latency)
@@ -2169,6 +2285,7 @@ func tcpLatencyWithProbes(host string, port int, timeout time.Duration, count in
 		ProbeCount:     count,
 		ProbeSuccesses: successes,
 		Reachable:      successes > 0,
+		Failure:        failure,
 	}
 	if successes > 0 {
 		// 取中间值而不是平均：几次里偶尔一次赶上本机忙（调度、GC、转发正忙），
@@ -2183,13 +2300,14 @@ func tcpLatencyWithProbes(host string, port int, timeout time.Duration, count in
 	// 一批同时失败，多半不是网络丢包：握手丢一个包内核一秒后就会重发，两秒窗口里
 	// 几次全失败，更常见的是这一刻域名解析超时、本机卡了一下。马上单独再测一次，
 	// 它也失败才算这一轮超时；成功就按这一次记，不算丢包。
-	latency, reachable, _ := tcpLatencyResolved(host, port, timeout)
+	latency, reachable, _, retryFailure := tcpLatencyResolvedWithFailure(host, port, timeout)
 	if reachable {
 		if latency < 1 {
 			latency = 1
 		}
 		return probeMeasurement{ProbeCount: 1, ProbeSuccesses: 1, Reachable: true, LatencyMs: latency}
 	}
+	measurement.Failure = worseProbeFailure(measurement.Failure, retryFailure)
 	return measurement
 }
 
@@ -2217,9 +2335,15 @@ func tcpLatency(ip string, port int, timeout time.Duration) (int, bool) {
 }
 
 func tcpLatencyResolved(host string, port int, timeout time.Duration) (int, bool, string) {
+	latency, ok, dialHost, _ := tcpLatencyResolvedWithFailure(host, port, timeout)
+	return latency, ok, dialHost
+}
+
+// 第四个返回值是不通的种类（classifyDialError）；通了是空串。
+func tcpLatencyResolvedWithFailure(host string, port int, timeout time.Duration) (int, bool, string, string) {
 	target := normalizeNetworkTargetHost(host)
 	if target == "" || port <= 0 {
-		return 0, false, ""
+		return 0, false, "", "error"
 	}
 	if timeout <= 0 {
 		timeout = 3 * time.Second
@@ -2229,18 +2353,21 @@ func tcpLatencyResolved(host string, port int, timeout time.Duration) (int, bool
 	if net.ParseIP(target) == nil {
 		resolved := resolveNetworkTargetIPs(target, time.Until(deadline))
 		if len(resolved) == 0 {
-			return 0, false, ""
+			return 0, false, "", "dns"
 		}
 		targets = resolved
 	}
+	failure := ""
 	for _, dialHost := range targets {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
+			failure = worseProbeFailure(failure, "timeout")
 			break
 		}
 		start := time.Now()
 		conn, err := dialNetworkTimeout("tcp", net.JoinHostPort(dialHost, strconv.Itoa(port)), remaining)
 		if err != nil {
+			failure = worseProbeFailure(failure, classifyProbeDialError(err))
 			continue
 		}
 		_ = conn.Close()
@@ -2248,9 +2375,12 @@ func tcpLatencyResolved(host string, port int, timeout time.Duration) (int, bool
 		if latency < 1 {
 			latency = 1
 		}
-		return latency, true, dialHost
+		return latency, true, dialHost, ""
 	}
-	return 0, false, ""
+	if failure == "" {
+		failure = "error"
+	}
+	return 0, false, "", failure
 }
 
 func resolveNetworkTargetIPs(host string, timeout time.Duration) []string {

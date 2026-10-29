@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   formatProxyNodeLink,
+  normalizeCertSha256,
   parseProxyNodeLink,
   relayProxyNode,
   encodeBase64Utf8,
@@ -422,4 +423,15 @@ test("中转改写地址时，HTTPUpgrade 的 Host 头留着原落地域名", ()
   const relayed = relayProxyNode(parsed.node, { address: "1.2.3.4", port: 20001, name: "中转" });
   assert.equal(relayed.address, "1.2.3.4");
   assert.equal(relayed.host, "land.example.com");
+});
+
+test("Hysteria2 的证书指纹（pinSHA256）导入导出不丢，冒号写法也认", () => {
+  const pin = "ab".repeat(32);
+  const node = parseOrThrow(`hysteria2://pw@hk.example.com:8443/?sni=a.com&insecure=1&pinSHA256=${pin}#HY2`);
+  assert.equal(node.certSha256, pin.toUpperCase().match(/.{2}/g)!.join(":"));
+  const link = formatProxyNodeLink(node);
+  assert.match(link, /pinSHA256=AB%3AAB/);
+  assert.equal(parseOrThrow(link).certSha256, node.certSha256);
+  assert.equal(normalizeCertSha256("not a hash"), "", "认不出来当没有");
+  assert.equal(normalizeCertSha256("AB:CD"), "");
 });

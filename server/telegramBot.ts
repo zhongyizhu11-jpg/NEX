@@ -1,6 +1,7 @@
 import * as db from "./db";
 import { formatBytes } from "../shared/formatBytes";
 import { isLinkProbeFresh } from "../shared/linkProbePolicy";
+import { PROBE_FAILURE_LABELS, normalizeProbeFailure } from "../shared/probeFailure";
 import { createDirectForwardRuleForActor, deleteForwardRuleForActor, toggleForwardRuleForActor } from "./routers/rules.crud";
 import { ENV } from "./env";
 import { ACCOUNT_DISABLED_ERR_MSG } from "../shared/const";
@@ -4644,11 +4645,14 @@ export function effectiveRuleStatusInfo(rule: any, summary?: AiRuleTrafficSummar
     return { kind: "abnormal", label: "主机离线", detail: offline.join(" / ") };
   }
   if (probeIsFresh && summary?.latestLatencyIsTimeout) {
-    return {
-      kind: "abnormal",
-      label: "目标探测超时",
-      detail: "最近一次探测失败，可能是目标不可达、端口未监听或链路不可用。",
-    };
+    const failure = normalizeProbeFailure((summary as any)?.latestProbeFailure);
+    return failure && failure !== "timeout"
+      ? { kind: "abnormal", label: "目标探测失败", detail: PROBE_FAILURE_LABELS[failure] }
+      : {
+        kind: "abnormal",
+        label: "目标探测超时",
+        detail: "最近一次探测失败，可能是目标不可达、端口未监听或链路不可用。",
+      };
   }
   if (rule?.isRunning) {
     return hasLatency

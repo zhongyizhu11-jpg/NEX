@@ -97,7 +97,14 @@ export type ProxyNode = {
   tls: boolean;
   sni: string;
   alpn: string[];
+  /** uTLS 指纹伪装（chrome / firefox…），和证书指纹不是一回事。 */
   fingerprint: string;
+  /**
+   * 服务端证书的 SHA-256 指纹（证书钉扎）：自签证书 + insecure 的节点靠它校验身份。
+   * Hysteria2 链接的 pinSHA256、Clash 的 fingerprint 字段。导入时丢了它，客户端要么拒连、
+   * 要么只能关校验。
+   */
+  certSha256: string;
   allowInsecure: boolean;
   /** Reality 公钥，非空表示该节点用 Reality 而非普通 TLS */
   realityPublicKey: string;
@@ -167,6 +174,7 @@ export function createEmptyProxyNode(): ProxyNode {
     sni: "",
     alpn: [],
     fingerprint: "",
+    certSha256: "",
     allowInsecure: false,
     realityPublicKey: "",
     realityShortId: "",
@@ -477,6 +485,15 @@ function parseShadowsocksLink(link: string): ProxyNode | null {
  * 端口可以省，省略时按官方默认的 443 算；auth 整段就是密码（部分面板会发
  * `用户:密码` 的形式，那也是一整个字符串，不能在冒号处劈开）。
  */
+/** 证书指纹：64 位十六进制，冒号分隔的写法（AB:CD:…）也认；认不出来当没有。 */
+export function normalizeCertSha256(value: unknown): string {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  const hex = raw.replace(/:/g, "").toUpperCase();
+  if (!/^[0-9A-F]{64}$/.test(hex)) return "";
+  return hex.match(/.{2}/g)!.join(":");
+}
+
 function parseHysteria2Link(link: string, scheme: string): ProxyNode | null {
   const { body, query, name } = splitLink(stripScheme(link, scheme));
   const at = body.lastIndexOf("@");
@@ -497,6 +514,7 @@ function parseHysteria2Link(link: string, scheme: string): ProxyNode | null {
   node.allowInsecure = isTruthyFlag(query.get("insecure")) || isTruthyFlag(query.get("allowInsecure"));
   node.obfs = text(query.get("obfs")).toLowerCase();
   node.obfsPassword = text(query.get("obfs-password")) || text(query.get("obfsPassword"));
+  node.certSha256 = normalizeCertSha256(query.get("pinSHA256") || query.get("pinsha256"));
   return node;
 }
 
@@ -809,6 +827,7 @@ export function formatProxyNodeLink(node: ProxyNode): string {
     appendQuery(params, "obfs", node.obfs);
     appendQuery(params, "obfs-password", node.obfsPassword);
     if (node.allowInsecure) params.set("insecure", "1");
+    appendQuery(params, "pinSHA256", node.certSha256);
     const query = params.toString();
     // 官方 URI 里主机与查询串之间带一个 /，照写以免个别客户端的解析器挑剔。
     return `hysteria2://${encodeURIComponent(node.password)}@${host}:${node.port}/${query ? `?${query}` : ""}${fragment}`;

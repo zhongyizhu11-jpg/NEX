@@ -4,6 +4,8 @@ export type RuleProbeSummary = {
   latestLatencyMs?: number | null;
   latestLatencyIsTimeout?: boolean;
   latestLatencyAt?: Date | string | number | null;
+  /** 最近一次不通的种类（shared/probeFailure）；只在 latestLatencyIsTimeout 时有。 */
+  latestProbeFailure?: string | null;
 };
 
 type InvalidationBoundary = {

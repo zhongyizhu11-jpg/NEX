@@ -1170,3 +1170,10 @@ test("Hysteria2 的带宽在 sing-box 里是 up_mbps / down_mbps，在 Surge 里
   const trojanClash = parseYamlSubset(renderProxySubscription(trojan, "clash"));
   assert.equal((trojanClash.proxies as Record<string, unknown>[])[0].up, undefined);
 });
+
+test("证书钉扎写进 Clash 的 fingerprint：Hysteria2 和 Trojan 都带", () => {
+  const pin = "ef".repeat(32);
+  const hy2 = parseYamlSubset(renderProxySubscription(only(`${HY2}`.replace("#HY2", `&pinSHA256=${pin}#HY2`), "HY2 pin"), "clash"));
+  const hy2Proxy = (hy2.proxies as Record<string, unknown>[])[0];
+  assert.equal(hy2Proxy.fingerprint, pin.toUpperCase().match(/.{2}/g)!.join(":"));
+});

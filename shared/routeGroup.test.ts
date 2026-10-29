@@ -186,6 +186,8 @@ test("路径怎么走的一句话，和原因的翻译", () => {
   assert.equal(describeRouteReason("health check"), "连续探测不通");
   assert.equal(describeRouteReason("relay down: 东京中转 01"), "中转异常：东京中转 01");
   assert.equal(describeRouteReason("precheck: 丢包 15%"), "预检未通过：丢包 15%");
+  assert.equal(describeRouteReason("slow dial: 820ms x3, probe 40ms"), "新连接连续 3 次拨得慢（拨号约 820ms，探测 40ms）：记一次失败，立刻复查");
+  assert.equal(describeRouteReason("slow dial: 600ms x3, probe 0ms"), "新连接连续 3 次拨得慢（拨号约 600ms）：记一次失败，立刻复查");
   assert.equal(describeRouteReason("something else"), "something else");
   assert.deepEqual(routeWeightShares([{ weight: 70 }, { weight: 30 }]), [70, 30]);
   assert.deepEqual(routeWeightShares([{ weight: 0 }, { weight: 0 }]), [50, 50]);

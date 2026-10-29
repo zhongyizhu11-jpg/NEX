@@ -156,6 +156,14 @@ export default function HostDetailDialog(props: HostDetailDialogProps) {
             <Row label="Agent" value={host.agentVersion ? `v${host.agentVersion}` : "—"} />
             <Row label="FXP" value={<span title={fxpRuntimeBadgeTitle(host)}>{fxpRuntimeDetailText(host)}</span>} />
             <Row label="地址" value={hostAddressText(host) || "—"} />
+            {host.observedIp ? (
+              <Row
+                label="面板看到的出口 IP"
+                value={host.exitIpMismatch
+                  ? <span className="text-[var(--fx-warn-text)]" title="和登记的地址不是同一个：地址被换过、机器前面多了一层代理，或者手填的地址已经不是这台机器。">{host.observedIp} · 和登记的不符</span>
+                  : <span>{host.observedIp} · 和登记的一致</span>}
+              />
+            ) : null}
             {/* 运营商 / ASN 在下面「网络画像」那一节，这里悬停给 */}
             <Row label="地区" value={<span title={hostGeoTooltip(host) || undefined}>{hostRegionText(host) || "—"}</span>} />
             <Row label={vitals.uptimeLabel} value={vitals.uptimeText} />

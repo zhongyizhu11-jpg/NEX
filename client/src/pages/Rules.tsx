@@ -20,6 +20,8 @@ import DashboardLayout from "@/components/DashboardLayout";
 import { DiagnoseDialog, type DiagnoseExtraTab } from "@/components/DiagnoseDialog";
 import { LatencyRating } from "@/components/LatencyRating";
 import { LinkTestProbeView, parseLinkTestMessage, type LinkTestPlannedSegment } from "@/components/LinkTestLatencySummary";
+import { LinkTestCompareView } from "@/components/LinkTestCompareView";
+import { describeProbeFailureShort } from "@shared/probeFailure";
 import { PersistentPagination, usePersistentPageRequest, useServerPagination } from "@/components/PersistentPagination";
 import { SortableDragHandle, SortableItem, SortableReorderContext, useOptimisticSortableOrder, useSortableReorder } from "@/components/SortableDragHandle";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -273,6 +275,7 @@ const ReactGlobe = lazy(loadReactGlobe) as typeof import("react-globe.gl").defau
 // 延迟详情里的曲线图要用 recharts（约 100 kB gzip）；只有点开某条规则的延迟才需要，不跟规则页一起下
 // 精简布局：延迟记录并进诊断框当一页
 const TcpingDetailBody = lazy(() => import("@/components/rules/TcpingDetailDialog").then((module) => ({ default: module.TcpingDetailBody })));
+const RuleConnectionsBody = lazy(() => import("@/components/rules/RuleConnectionsBody").then((module) => ({ default: module.RuleConnectionsBody })));
 
 /** 换隧道后旧入口还在替这条规则转发（服务端带的 entryBridges）：卡片上说一句，到点自己消失。 */
 function entryBridgeNotes(rule: any): string[] {
@@ -4583,6 +4586,7 @@ function RulesContent() {
       latestLatencyMs: number | null;
       latestLatencyIsTimeout: boolean;
       latestLatencyAt: Date | string | null;
+      latestProbeFailure: string | null;
     }>();
     dailyTrafficSummaryRows.forEach((t: any) => {
       const rid = Number(t.ruleId);
@@ -4597,6 +4601,7 @@ function RulesContent() {
           prev.latestLatencyMs = t.latestLatencyMs === null || t.latestLatencyMs === undefined ? null : Number(t.latestLatencyMs);
           prev.latestLatencyIsTimeout = !!t.latestLatencyIsTimeout;
           prev.latestLatencyAt = t.latestLatencyAt || null;
+          prev.latestProbeFailure = t.latestProbeFailure || null;
         }
       } else {
         m.set(rid, {
@@ -4606,6 +4611,7 @@ function RulesContent() {
           latestLatencyMs: t.latestLatencyMs === null || t.latestLatencyMs === undefined ? null : Number(t.latestLatencyMs),
           latestLatencyIsTimeout: !!t.latestLatencyIsTimeout,
           latestLatencyAt: t.latestLatencyAt || null,
+          latestProbeFailure: t.latestProbeFailure || null,
         });
       }
     });
@@ -4964,6 +4970,7 @@ function RulesContent() {
         latestLatencyMs: latest?.latestLatencyMs,
         latestLatencyIsTimeout: latest?.latestLatencyIsTimeout,
         latestLatencyAt: latest?.latestLatencyAt,
+        latestProbeFailure: latest?.latestProbeFailure,
         offlineHostNames: getRuleOfflineHostNames(rule),
       });
     }
@@ -4976,6 +4983,7 @@ function RulesContent() {
       latestLatencyMs: latest?.latestLatencyMs,
       latestLatencyIsTimeout: latest?.latestLatencyIsTimeout,
       latestLatencyAt: latest?.latestLatencyAt,
+      latestProbeFailure: latest?.latestProbeFailure,
       offlineHostNames: getRuleOfflineHostNames(rule),
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -6732,7 +6740,7 @@ function RulesContent() {
     if (!isLinkProbeFresh(t.latestLatencyAt)) {
       return (
         <span className="whitespace-nowrap text-xs text-muted-foreground" title={`${formatProbeAge(t.latestLatencyAt)}测的，已过期；··· › 诊断 重新测`}>
-          {t.latestLatencyIsTimeout ? "超时" : typeof t.latestLatencyMs === "number" && Number.isFinite(t.latestLatencyMs) ? `${Math.round(t.latestLatencyMs)} ms` : "未测试"} · {formatProbeAge(t.latestLatencyAt)}
+          {t.latestLatencyIsTimeout ? describeProbeFailureShort(t.latestProbeFailure) : typeof t.latestLatencyMs === "number" && Number.isFinite(t.latestLatencyMs) ? `${Math.round(t.latestLatencyMs)} ms` : "未测试"} · {formatProbeAge(t.latestLatencyAt)}
         </span>
       );
     }
@@ -7897,6 +7905,14 @@ function RulesContent() {
             content: (
               <Suspense fallback={<DataSectionLoading />}>
                 <TcpingDetailBody ruleId={selfTestRule.id} isForwardChain={!!selfTestRule.isForwardChain} probeMethod={selfTestRule.probeMethod} active={!!selfTestRule} />
+              </Suspense>
+            ),
+          }, {
+            key: "connections",
+            label: "连接",
+            content: (
+              <Suspense fallback={<DataSectionLoading />}>
+                <RuleConnectionsBody ruleId={selfTestRule.id} active={!!selfTestRule} />
               </Suspense>
             ),
           }]}
@@ -9434,6 +9450,8 @@ function SelfTestDialog({
   const isTimeout = status === "timeout";
   const isFailed = !!latest && !isTesting && !isSuccess && !isTimeout;
   const parsedMessage = useMemo(() => parseLinkTestMessage(latest?.message), [latest?.message]);
+  // 「推算」一列：后台探测以为这条链各段是多少。打开时取一次，诊断跑完再取一次（后台可能刚好也探了）。
+  const expectedQuery = trpc.rules.expectedLatency.useQuery({ ruleId }, { enabled: open, staleTime: 10_000, refetchOnWindowFocus: false });
   const plannedSegmentCount = plannedSegments?.length || 0;
   const probeDialogSizeClass = plannedSegmentCount >= 3 ? "sm:max-w-4xl" : plannedSegmentCount >= 2 ? "sm:max-w-3xl" : "sm:max-w-xl";
   const lastFailureToastKey = useRef("");
@@ -9488,6 +9506,14 @@ function SelfTestDialog({
         roomyNodes
         mobileStacked
         wrapDesktopRows
+      />
+      <LinkTestCompareView
+        planned={plannedSegments}
+        parsed={parsedMessage}
+        expected={expectedQuery.data ?? null}
+        measuredAt={latest?.updatedAt ? timestampMillis(latest.updatedAt) : null}
+        isTesting={isTesting}
+        className="mt-3"
       />
     </DiagnoseDialog>
   );

@@ -6,6 +6,7 @@
  */
 
 import DashboardLayout from "@/components/DashboardLayout";
+import { PROXY_SUB_GROUP_MATCHES, PROXY_SUB_GROUP_MATCH_LABELS, normalizeProxySubGroupMatch, type ProxySubGroupMatch } from "@shared/proxySubGroupFilter";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
 import { ProxySubTokenDevicesDialog, ProxySubTokenEditDialog, ProxySubTokenLogsDialog, type ProxySubTokenLike } from "@/components/proxy/ProxySubTokenDialogs";
 import { Badge } from "@/components/ui/badge";
@@ -227,7 +228,7 @@ function StatsTab() {
 
 // ==================== 模板 ====================
 
-type GroupForm = { name: string; type: "select" | "url-test" | "fallback" | "load-balance"; filter: string; includeGroups: boolean };
+type GroupForm = { name: string; type: "select" | "url-test" | "fallback" | "load-balance"; filter: string; match: ProxySubGroupMatch; includeGroups: boolean };
 
 function TemplatesTab() {
   const utils = trpc.useUtils();
@@ -260,7 +261,7 @@ function TemplatesTab() {
     setName(template.name);
     setTarget(template.target);
     setPrelude(template.prelude);
-    setGroups(template.customGroups.map((group) => ({ name: group.name, type: group.type, filter: group.filter, includeGroups: !!group.includeGroups })));
+    setGroups(template.customGroups.map((group) => ({ name: group.name, type: group.type, filter: group.filter, match: normalizeProxySubGroupMatch(group.match), includeGroups: !!group.includeGroups })));
     setIsDefault(!!template.isDefault);
     setDialogOpen(true);
   };
@@ -345,11 +346,11 @@ function TemplatesTab() {
             <FormField className="space-y-2">
               <div className="flex items-center justify-between">
                 <Label>自定义策略组</Label>
-                <Button size="sm" variant="outline" onClick={() => setGroups((prev) => [...prev, { name: "", type: "url-test", filter: "", includeGroups: false }])}><Plus className="mr-1 h-3.5 w-3.5" />加一组</Button>
+                <Button size="sm" variant="outline" onClick={() => setGroups((prev) => [...prev, { name: "", type: "url-test", filter: "", match: "any", includeGroups: false }])}><Plus className="mr-1 h-3.5 w-3.5" />加一组</Button>
               </div>
-              <p data-fx-help="" className="text-xs text-muted-foreground">按正则从节点名里挑成员（留空 = 全部）。会出现在主选择器和各分类组里。</p>
+              <p data-fx-help="" className="text-xs text-muted-foreground">按节点名挑成员（留空 = 全部），订阅刷新进来的新节点自动归组。会出现在主选择器和各分类组里。</p>
               {groups.map((group, index) => (
-                <div key={index} className="grid gap-2 rounded-md border p-2 sm:grid-cols-[1fr_8rem_1fr_auto_auto]">
+                <div key={index} className="grid gap-2 rounded-md border p-2 sm:grid-cols-[1fr_8rem_8.5rem_1fr_auto_auto]">
                   <Input value={group.name} placeholder="组名，如 🇭🇰 香港" onChange={(event) => setGroups((prev) => prev.map((item, i) => (i === index ? { ...item, name: event.target.value } : item)))} />
                   <Select value={group.type} onValueChange={(value) => setGroups((prev) => prev.map((item, i) => (i === index ? { ...item, type: value as GroupForm["type"] } : item)))}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
@@ -360,7 +361,13 @@ function TemplatesTab() {
                       <SelectItem value="load-balance">负载均衡</SelectItem>
                     </SelectContent>
                   </Select>
-                  <Input value={group.filter} placeholder="正则，如 港|HK" onChange={(event) => setGroups((prev) => prev.map((item, i) => (i === index ? { ...item, filter: event.target.value } : item)))} />
+                  <Select value={group.match} onValueChange={(value) => setGroups((prev) => prev.map((item, i) => (i === index ? { ...item, match: normalizeProxySubGroupMatch(value) } : item)))}>
+                    <SelectTrigger aria-label="匹配方式"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {PROXY_SUB_GROUP_MATCHES.map((match) => <SelectItem key={match} value={match}>{PROXY_SUB_GROUP_MATCH_LABELS[match].label}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  <Input value={group.filter} placeholder={PROXY_SUB_GROUP_MATCH_LABELS[group.match].placeholder} title={PROXY_SUB_GROUP_MATCH_LABELS[group.match].hint} onChange={(event) => setGroups((prev) => prev.map((item, i) => (i === index ? { ...item, filter: event.target.value } : item)))} />
                   <label className="flex items-center gap-1 text-xs"><Checkbox checked={group.includeGroups} onCheckedChange={(checked) => setGroups((prev) => prev.map((item, i) => (i === index ? { ...item, includeGroups: checked === true } : item)))} />含自动组</label>
                   <Button size="sm" variant="ghost" onClick={() => setGroups((prev) => prev.filter((_item, i) => i !== index))}>删</Button>
                 </div>
@@ -429,6 +436,7 @@ function SettingsTab() {
         </FormField>
         {number("updateIntervalHours", "客户端更新间隔（小时）", "Profile-Update-Interval 响应头，Surge 托管配置也按它。", 1)}
         {toggle("landingPageEnabled", "浏览器打开订阅地址给落地页", "用量、到期、一键导入按钮、二维码；不列节点。")}
+        {toggle("xboardCompatEnabled", "兼容 Xboard / V2Board 账号登录", "支持「Xboard 账号登录」的客户端填面板地址 + 邮箱密码就能拉订阅。登录照样限流；开了两步验证、或需要验证码时会被拒绝，请改用订阅地址。")}
         <FormField className="space-y-1.5"><Label>帮助地址（support-url）</Label><Input value={form.supportUrl} onChange={(event) => set("supportUrl", event.target.value)} placeholder="https://…" /></FormField>
         <FormField className="space-y-1.5 sm:col-span-2"><Label>公告</Label><Textarea value={form.announce} onChange={(event) => set("announce", event.target.value)} rows={2} /><p data-fx-help="" className="text-xs text-muted-foreground">写进 announce 响应头（Happ / v2RayTun 会显示）、落地页，信息节点开着时也插一条。</p></FormField>
       </>)}

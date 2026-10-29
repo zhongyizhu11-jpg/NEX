@@ -530,6 +530,7 @@ load_existing_env() {
   fi
   if [ -n "${port_source:-}" ]; then
     echo "[INFO] Reusing Docker public port from ${port_source}: ${PORT}"
+    [ "$port_source" = "environment" ] || PORT_REUSED=1
   fi
 
   value="$(get_env_value FORWARDX_IMAGE || true)"
@@ -915,11 +916,64 @@ start_panel() {
   cleanup_old_panel_images "$image"
 }
 
+# 这个端口上谁在监听：打印「进程名(pid)」，没人监听打印空。没有 ss / netstat 时当没人（不拦）。
+port_listener_info() {
+  local port="$1" out=""
+  if command -v ss >/dev/null 2>&1; then
+    out="$(ss -H -ltnp "sport = :$port" 2>/dev/null | head -n 1)"
+    [ -n "$out" ] || return 0
+    printf "%s\n" "$out" | grep -o 'users:(("[^"]*",pid=[0-9]*' | head -n 1 | sed 's/users:(("//; s/",pid=/(/; s/$/)/' | grep . || echo "未知进程"
+    return 0
+  fi
+  if command -v netstat >/dev/null 2>&1; then
+    out="$(netstat -ltnp 2>/dev/null | awk -v p=":$port" '$4 ~ p"$" {print $7; exit}')"
+    [ -n "$out" ] && echo "$out"
+  fi
+  return 0
+}
+
+# 端口能不能给面板用：没人用，或者用它的就是 NEX 面板自己（重装 / 迁移时）都算能用。
+install_port_available() {
+  local port="$1" info=""
+  info="$(port_listener_info "$port")"
+  [ -z "$info" ] && return 0
+  case "$info" in
+    *node*|*forwardx*|*nex*|*docker-proxy*)
+      echo "[INFO] Port $port is in use by $info (looks like an existing NEX panel), keep using it."
+      return 0
+      ;;
+  esac
+  echo "[WARN] Port $port is already in use by $info."
+  return 1
+}
+
+# 全新安装（没有在跑的容器、也没有旧配置里的端口）时检查端口；被别的程序占着就换一个。
+ensure_install_port_free() {
+  local input=""
+  [ -n "${PORT_REUSED:-}" ] && return 0
+  install_port_available "$PORT" && return 0
+  if [ ! -r /dev/tty ] || [ ! -w /dev/tty ]; then
+    echo "[WARN] The panel container will fail to start until port $PORT is free; rerun with PORT=<another port> to pick one."
+    return 0
+  fi
+  while true; do
+    printf "Port %s is taken, enter another web port: " "$PORT" > /dev/tty
+    IFS= read -r input < /dev/tty || input=""
+    input="${input//[[:space:]]/}"
+    if valid_port "$input" && install_port_available "$input" > /dev/tty; then
+      PORT="$input"
+      return 0
+    fi
+    echo "[ERROR] Port must be a free number in 1-65535, please retry." > /dev/tty
+  done
+}
+
 install_panel() {
   local image
   require_root
   install_docker
   load_existing_env
+  ensure_install_port_free
   resolve_github_accelerator
   read_database_config_json
   panel_step 1 "检查镜像"

@@ -36,6 +36,7 @@ import { mimicAssetRelayBase } from "../mimicAssets";
 import { normalizeMimicDownloadProxy } from "@shared/mimicAssets";
 import { hostEgressShaping, normalizeHostEgressShapingMode, TUNNEL_LINK_MBPS_MAX } from "../tunnelFxpRuntime";
 import { hostEgressShapingStatusView } from "../tunnelLinkShapingView";
+import { withHostObservedAddress } from "../hostObservedAddress";
 import { parseManualHostAddress } from "@shared/hostManualAddress";
 import { wakeAgentExt } from "../ops/agentExt";
 import { flowOffloadStatusView } from "../ops/flowOffloadStatus";
@@ -862,7 +863,7 @@ export const hostsRouter = router({
         scheduleOrphanedAgentHostCleanup();
       }
       const hosts = await getVisibleHostsForUser(ctx.user);
-      return withHostEgressShapingStatus(hosts.map(compactHostForList));
+      return withHostObservedAddress(await withHostEgressShapingStatus(hosts.map(compactHostForList)));
     }),
     options: protectedProcedure.query(async ({ ctx }) => {
       const scope = await visibleHostQueryScope(ctx.user);
@@ -1027,7 +1028,7 @@ export const hostsRouter = router({
         ]));
         return {
           ...pageData,
-          items: withOwners.map(compactHostForList),
+          items: withHostObservedAddress(withOwners.map(compactHostForList)),
           versionCounts: undefined,
           outdatedItems,
           onlineOutdatedItems,
