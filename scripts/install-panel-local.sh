@@ -295,6 +295,37 @@ download_github_archive() {
   printf "%s\n" "$http_code"
 }
 
+# 这个端口上谁在监听：打印「进程名(pid)」，没人监听打印空。没有 ss / netstat 时当没人（不拦）。
+port_listener_info() {
+  local port="$1" out=""
+  if command -v ss >/dev/null 2>&1; then
+    out="$(ss -H -ltnp "sport = :$port" 2>/dev/null | head -n 1)"
+    [ -n "$out" ] || return 0
+    printf "%s\n" "$out" | grep -o 'users:(("[^"]*",pid=[0-9]*' | head -n 1 | sed 's/users:(("//; s/",pid=/(/; s/$/)/' | grep . || echo "未知进程"
+    return 0
+  fi
+  if command -v netstat >/dev/null 2>&1; then
+    out="$(netstat -ltnp 2>/dev/null | awk -v p=":$port" '$4 ~ p"$" {print $7; exit}')"
+    [ -n "$out" ] && echo "$out"
+  fi
+  return 0
+}
+
+# 端口能不能给面板用：没人用，或者用它的就是 NEX 面板自己（重装 / 迁移时）都算能用。
+install_port_available() {
+  local port="$1" info=""
+  info="$(port_listener_info "$port")"
+  [ -z "$info" ] && return 0
+  case "$info" in
+    *node*|*forwardx*|*nex*|*docker-proxy*)
+      echo "[INFO] Port $port is in use by $info (looks like an existing NEX panel), keep using it."
+      return 0
+      ;;
+  esac
+  echo "[WARN] Port $port is already in use by $info."
+  return 1
+}
+
 read_install_port() {
   local default_port="${PORT:-9810}"
   local input=""
@@ -306,6 +337,7 @@ read_install_port() {
   if [ ! -r /dev/tty ] || [ ! -w /dev/tty ]; then
     PORT="$default_port"
     echo "[INFO] Non-interactive environment, use default web port: $PORT"
+    install_port_available "$PORT" || echo "[WARN] The panel will fail to start until port $PORT is free; rerun with PORT=<another port> to pick one."
     return
   fi
 
@@ -314,14 +346,17 @@ read_install_port() {
     IFS= read -r input < /dev/tty || input=""
     input="${input//[[:space:]]/}"
     if [ -z "$input" ]; then
-      PORT="$default_port"
-      return
+      input="$default_port"
     fi
-    if valid_port "$input"; then
+    if ! valid_port "$input"; then
+      echo "[ERROR] Port must be a number in 1-65535, please retry." > /dev/tty
+      continue
+    fi
+    if install_port_available "$input" > /dev/tty; then
       PORT="$input"
       return
     fi
-    echo "[ERROR] Port must be a number in 1-65535, please retry." > /dev/tty
+    echo "[ERROR] Pick another port." > /dev/tty
   done
 }
 

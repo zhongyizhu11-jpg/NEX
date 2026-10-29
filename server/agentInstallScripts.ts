@@ -141,9 +141,32 @@ download_release_binary_with_retry() {
   done
 }
 
+# 装着的二进制已经就是这一版（哈希和面板嵌进来的期望值一致）：不用再下一遍。
+# 只认面板嵌进来的哈希，不为这一步去连 GitHub —— 连不上时照常下载，不会更慢。
+installed_binary_matches_release() {
+  local ASSET="$1" DST="$2" VERSION="$3" EXPECTED="" ACTUAL="" HASH=""
+  [ -s "$DST" ] && [ -n "$VERSION" ] || return 1
+  EXPECTED="$(expected_release_sha256 "$VERSION" "$ASSET")"
+  [ -n "$EXPECTED" ] || return 1
+  ACTUAL="$(file_sha256 "$DST")"
+  [ -n "$ACTUAL" ] || return 1
+  for HASH in $EXPECTED; do
+    [ "$ACTUAL" = "$HASH" ] && return 0
+  done
+  return 1
+}
+
 # 下到 DST 旁边的 DST.forwardx-new（同目录，替换时 mv 是原子的），校验通过才算成功。
+# 装着的已经是这一版时直接拿它当新文件（复制一份），省一次下载。
 stage_release_binary() {
   local ASSET="$1" DST="$2" LABEL="$3" ALLOW_FALLBACK="${"$"}{4:-0}" STAGE="$2.forwardx-new"
+  rm -f "$STAGE"
+  if installed_binary_matches_release "$ASSET" "$DST" "$RELEASE_VERSION" && cp -p "$DST" "$STAGE" 2>/dev/null; then
+    DOWNLOADED_RELEASE_VERSION="$RELEASE_VERSION"
+    chmod 0755 "$STAGE" 2>/dev/null || true
+    echo "[信息] $LABEL 已是 v${"$"}{RELEASE_VERSION}（校验一致），跳过下载"
+    return 0
+  fi
   rm -f "$STAGE"
   if download_release_binary_with_retry "$ASSET" "$STAGE" "$LABEL" "$ALLOW_FALLBACK" && [ -s "$STAGE" ]; then
     chmod 0755 "$STAGE" 2>/dev/null || true
@@ -2043,7 +2066,11 @@ export function generateInstallScript(defaultPanelUrl: string, options: AgentIns
     '',
     '  echo "[步骤 3/6] 安装 Go Agent（Release v${RELEASE_VERSION}）..."',
     '  DOWNLOADED_RELEASE_VERSION=""',
-    '  if ! download_release_binary "forwardx-agent-linux-${GO_ARCH}" "$GO_AGENT_BIN" "Go Agent" "1"; then',
+    // 重装到同一版本：装着的 Agent 哈希一致就不再下载（升级走 stage_release_binary，同样会跳过）。
+    '  if installed_binary_matches_release "forwardx-agent-linux-${GO_ARCH}" "$GO_AGENT_BIN" "$RELEASE_VERSION"; then',
+    '    DOWNLOADED_RELEASE_VERSION="$RELEASE_VERSION"',
+    '    echo "[信息] Go Agent 已是 v${RELEASE_VERSION}（校验一致），跳过下载"',
+    '  elif ! download_release_binary "forwardx-agent-linux-${GO_ARCH}" "$GO_AGENT_BIN" "Go Agent" "1"; then',
     '    echo "[错误] Go Agent 二进制下载失败，请检查网络或 Release 资产是否已构建完成"',
     '    return 1',
     '  fi',

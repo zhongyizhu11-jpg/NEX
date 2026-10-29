@@ -123,3 +123,17 @@ test("the environment example does not advertise the removed ADMIN_PASSWORD beha
   assert.doesNotMatch(envExample, /^ADMIN_PASSWORD=/m);
   assert.match(envExample, /不支持通过 ADMIN_PASSWORD 重置管理员密码/);
 });
+
+test("面板安装：选端口前看有没有被别的程序占着；被现有面板占着算能用；老配置里的端口不再检查", () => {
+  for (const file of ["scripts/install-panel-local.sh", "scripts/install-panel-docker.sh"]) {
+    const script = fs.readFileSync(file, "utf8");
+    assert.match(script, /port_listener_info\(\) \{/, `${file} 缺 port_listener_info`);
+    assert.match(script, /install_port_available\(\) \{/, `${file} 缺 install_port_available`);
+    assert.match(script, /\*node\*\|\*forwardx\*\|\*nex\*\|\*docker-proxy\*\)/, `${file} 现有面板占着的端口要放行`);
+  }
+  const docker = fs.readFileSync("scripts/install-panel-docker.sh", "utf8");
+  assert.match(docker, /load_existing_env\n  ensure_install_port_free\n/, "Docker 全新安装在读完旧配置后检查端口");
+  assert.match(docker, /PORT_REUSED=1/, "沿用旧容器 / 旧配置里的端口时不检查");
+  const local = fs.readFileSync("scripts/install-panel-local.sh", "utf8");
+  assert.match(local, /if install_port_available "\$input" > \/dev\/tty; then/, "本地安装交互输入时被占就要求换一个");
+});

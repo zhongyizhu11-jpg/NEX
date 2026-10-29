@@ -134,3 +134,41 @@ test("SHA256SUMS parsing keeps only known agent assets", () => {
     "forwardx-fxp-linux-arm64": "b".repeat(64),
   });
 });
+
+test("升级前先看装着的：哈希和这一版一致就不再下载，不一致照常下载", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-install-reuse-"));
+  try {
+    const installed = path.join(directory, "forwardx-agent");
+    fs.writeFileSync(installed, "agent v9.9.9");
+    const hash = createHash("sha256").update("agent v9.9.9").digest("hex");
+    const script = generateInstallScript("https://panel.example", {
+      releaseChecksums: { "9.9.9": { "forwardx-agent-linux-amd64": hash } },
+    });
+    const prelude = [
+      shellFunction(script, "expected_release_sha256"),
+      shellFunction(script, "file_sha256"),
+      shellFunction(script, "installed_binary_matches_release"),
+      shellFunction(script, "stage_release_binary"),
+      // 真下载时留个记号，看有没有走到。
+      `download_release_binary_with_retry() { echo DOWNLOADED; printf 'fresh' > "$2"; return 0; }`,
+    ].join("\n");
+    const run = (body: string) => spawnSync("bash", ["-c", `${prelude}\n${body}`], { encoding: "utf8" });
+
+    const same = run(`RELEASE_VERSION=9.9.9; stage_release_binary forwardx-agent-linux-amd64 ${installed} "Go Agent" 0 && echo "v=$DOWNLOADED_RELEASE_VERSION"`);
+    assert.equal(same.status, 0, same.stdout + same.stderr);
+    assert.match(same.stdout, /已是 v9\.9\.9（校验一致），跳过下载/);
+    assert.doesNotMatch(same.stdout, /DOWNLOADED/);
+    assert.match(same.stdout, /v=9\.9\.9/);
+    assert.equal(fs.readFileSync(`${installed}.forwardx-new`, "utf8"), "agent v9.9.9", "拿装着的那份当新文件");
+
+    const newer = run(`RELEASE_VERSION=9.9.10; stage_release_binary forwardx-agent-linux-amd64 ${installed} "Go Agent" 0`);
+    assert.equal(newer.status, 0);
+    assert.match(newer.stdout, /DOWNLOADED/, "目标版本没有嵌进来的哈希：照常下载");
+
+    fs.writeFileSync(installed, "tampered");
+    const changed = run(`RELEASE_VERSION=9.9.9; stage_release_binary forwardx-agent-linux-amd64 ${installed} "Go Agent" 0`);
+    assert.match(changed.stdout, /DOWNLOADED/, "装着的被改过：照常下载");
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
