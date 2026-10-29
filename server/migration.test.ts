@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   buildMigrationRuntimeExpectations,
   pruneMigrationSnapshotForPanelBackup,
+  stripProxyDataFromSnapshot,
   remapRoutePathHosts,
   type MigrationImportedIds,
   type MigrationSnapshot,
@@ -719,4 +720,32 @@ test("设置页反复拉数据概况时，同一个连接只补一次表结构�
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("不带订阅与代理节点导出：整组表去掉，规则上的节点绑定清空，SS 出口数出来提醒", () => {
+  const { snapshot: stripped, warnings } = stripProxyDataFromSnapshot(snapshot({
+    users: [{ id: 1, username: "admin" }],
+    forward_rules: [
+      { id: 2, userId: 1, proxyNodeId: 7 },
+      { id: 3, userId: 1, egressType: "ss_host", egressInboundId: 9 },
+      { id: 4, userId: 1 },
+    ],
+    proxy_nodes: [{ id: 7 }],
+    proxy_inbounds: [{ id: 9 }],
+    proxy_sub_tokens: [{ id: 11 }],
+    subscription_plan_proxy_nodes: [{ id: 12, nodeId: 7 }],
+  }));
+  assert.equal(stripped.tables.proxy_nodes, undefined);
+  assert.equal(stripped.tables.proxy_inbounds, undefined);
+  assert.equal(stripped.tables.proxy_sub_tokens, undefined);
+  assert.equal(stripped.tables.subscription_plan_proxy_nodes, undefined);
+  assert.equal(stripped.tables.users.length, 1);
+  assert.equal(stripped.tables.forward_rules.length, 3, "规则一条不少");
+  assert.equal(stripped.tables.forward_rules[0].proxyNodeId, null, "节点绑定清空，导入时不会因为依赖缺失失败");
+  assert.equal(stripped.tables.forward_rules[1].egressInboundId, 9, "出口入站 id 留着，导入那边按直接连接落库");
+  assert.deepEqual(warnings, [
+    "1 条节点自动绑定的转发去掉了节点关联，导入后是普通转发",
+    "1 条规则的 Shadowsocks 出口指向没导出的落地入站，导入后改为直接连接",
+  ]);
+  assert.deepEqual(stripProxyDataFromSnapshot(snapshot({ users: [{ id: 1 }] })).warnings, []);
 });

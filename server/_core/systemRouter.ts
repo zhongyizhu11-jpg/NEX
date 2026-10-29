@@ -35,6 +35,7 @@ import {
   getPanelDataSummary,
   importMigrationSnapshot,
   pruneMigrationSnapshotForPanelBackup,
+  stripProxyDataFromSnapshot,
   summarizeMigrationSnapshot,
   startPanelMigration as beginPanelMigration,
 } from "../migration";
@@ -2768,11 +2769,15 @@ export const systemRouter = router({
   exportPanelBackup: adminProcedure
     .input(z.object({
       password: z.string().min(8, "备份密码至少需要 8 位").max(256),
+      /** 带不带订阅与代理节点（PROXY_BACKUP_TABLES）；不带时只迁转发、隧道、转发组、用户和设置。 */
+      includeProxy: z.boolean().optional().default(true),
     }))
     .mutation(async ({ input }) => {
       const settings = await db.getAllSettings();
       const snapshot = await exportMigrationSnapshot(settings.panelPublicUrl || undefined);
-      const backupSnapshot = pruneMigrationSnapshotForPanelBackup(snapshot);
+      const pruned = pruneMigrationSnapshotForPanelBackup(snapshot);
+      const stripped = input.includeProxy ? { snapshot: pruned, warnings: [] as string[] } : stripProxyDataFromSnapshot(pruned);
+      const backupSnapshot = stripped.snapshot;
       const backup = encryptMigrationSnapshot(backupSnapshot, input.password);
       const timestamp = new Date(snapshot.exportedAt).toISOString().slice(0, 19).replace(/[:T]/g, "-");
       console.info(`[Backup] Exported encrypted panel backup users=${backupSnapshot.tables.users?.length || 0} hosts=${backupSnapshot.tables.hosts?.length || 0}`);
@@ -2781,6 +2786,8 @@ export const systemRouter = router({
         mimeType: "application/json;charset=utf-8",
         content: JSON.stringify(backup, null, 2),
         summary: summarizeMigrationSnapshot(backupSnapshot),
+        includeProxy: input.includeProxy,
+        warnings: stripped.warnings,
       };
     }),
 

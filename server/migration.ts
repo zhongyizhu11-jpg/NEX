@@ -457,6 +457,56 @@ export function pruneMigrationSnapshotForPanelBackup(snapshot: MigrationSnapshot
   return { ...snapshot, tables };
 }
 
+/**
+ * 「订阅与代理节点」这一组表：导出备份时可以不带（只迁转发、隧道、转发组的时候）。
+ * 这一组之间互相引用，组外只有转发规则引用它们（proxyNodeId、egressInboundId），
+ * 套餐挂的节点（subscription_plan_proxy_nodes）也在组里。
+ */
+export const PROXY_BACKUP_TABLES = new Set<MigrationTableName>([
+  "proxy_nodes",
+  "proxy_inbounds",
+  "proxy_inbound_users",
+  "proxy_node_shares",
+  "proxy_sub_tokens",
+  "proxy_sub_templates",
+  "proxy_sub_sources",
+  "proxy_sub_devices",
+  "proxy_sub_access_logs",
+  "subscription_plan_proxy_nodes",
+]);
+
+/**
+ * 去掉订阅与代理节点。组外的引用跟着处理，导入时不会因为「依赖数据缺失」整行失败：
+ *   - 规则上的 proxyNodeId（节点自动绑定的转发）清空：导入后是一条普通转发，目标不变；
+ *   - 规则的 Shadowsocks 出口（egressInboundId）指向的落地入站不在文件里：导入时会按「直接连接」
+ *     落库（导入那边本来就这么处理），这里数出来写进 warnings，导出时告诉人。
+ */
+export function stripProxyDataFromSnapshot(snapshot: MigrationSnapshot): { snapshot: MigrationSnapshot; warnings: string[] } {
+  const tables: MigrationSnapshot["tables"] = {};
+  for (const [table, rows] of Object.entries(snapshot.tables || {})) {
+    if (PROXY_BACKUP_TABLES.has(table as MigrationTableName)) continue;
+    tables[table as MigrationTableName] = rows as any[];
+  }
+  let unbound = 0;
+  let egress = 0;
+  const rules = Array.isArray(tables.forward_rules) ? tables.forward_rules : null;
+  if (rules) {
+    tables.forward_rules = rules.map((rule: any) => {
+      let next = rule;
+      if (Number(rule?.proxyNodeId || 0) > 0) {
+        unbound += 1;
+        next = { ...next, proxyNodeId: null };
+      }
+      if (Number(rule?.egressInboundId || 0) > 0) egress += 1;
+      return next;
+    });
+  }
+  const warnings: string[] = [];
+  if (unbound > 0) warnings.push(`${unbound} 条节点自动绑定的转发去掉了节点关联，导入后是普通转发`);
+  if (egress > 0) warnings.push(`${egress} 条规则的 Shadowsocks 出口指向没导出的落地入站，导入后改为直接连接`);
+  return { snapshot: { ...snapshot, tables }, warnings };
+}
+
 function quote(name: string) {
   return quoteIdentifier(name);
 }
