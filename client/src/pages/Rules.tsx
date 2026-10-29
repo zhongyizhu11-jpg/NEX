@@ -275,6 +275,7 @@ const ReactGlobe = lazy(loadReactGlobe) as typeof import("react-globe.gl").defau
 // 延迟详情里的曲线图要用 recharts（约 100 kB gzip）；只有点开某条规则的延迟才需要，不跟规则页一起下
 // 精简布局：延迟记录并进诊断框当一页
 const TcpingDetailBody = lazy(() => import("@/components/rules/TcpingDetailDialog").then((module) => ({ default: module.TcpingDetailBody })));
+const RuleConnectionsBody = lazy(() => import("@/components/rules/RuleConnectionsBody").then((module) => ({ default: module.RuleConnectionsBody })));
 
 /** 换隧道后旧入口还在替这条规则转发（服务端带的 entryBridges）：卡片上说一句，到点自己消失。 */
 function entryBridgeNotes(rule: any): string[] {
@@ -7904,6 +7905,14 @@ function RulesContent() {
             content: (
               <Suspense fallback={<DataSectionLoading />}>
                 <TcpingDetailBody ruleId={selfTestRule.id} isForwardChain={!!selfTestRule.isForwardChain} probeMethod={selfTestRule.probeMethod} active={!!selfTestRule} />
+              </Suspense>
+            ),
+          }, {
+            key: "connections",
+            label: "连接",
+            content: (
+              <Suspense fallback={<DataSectionLoading />}>
+                <RuleConnectionsBody ruleId={selfTestRule.id} active={!!selfTestRule} />
               </Suspense>
             ),
           }]}

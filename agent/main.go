@@ -38,7 +38,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.236"
+var Version = "2.2.237"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -969,6 +969,7 @@ type heartbeatResp struct {
 	DNSWatch                []dnsWatchItem           `json:"dnsWatch"`
 	LookingGlassTests       []lookingGlassTask       `json:"lookingGlassTests"`
 	DiagnosticsTasks        []diagnosticsTask        `json:"diagnosticsTasks,omitempty"`
+	RuleConnectionTasks     []ruleConnectionsTask    `json:"ruleConnectionTasks,omitempty"`
 	Iperf3Tasks             []iperf3Task             `json:"iperf3Tasks"`
 	PluginTasks             []pluginAgentTask        `json:"pluginTasks"`
 	MimicInstallTask        *mimicInstallTask        `json:"mimicInstallTask,omitempty"`
@@ -3843,7 +3844,7 @@ func logHeartbeatResponse(mode string, resp *heartbeatResp, duration time.Durati
 	anomalous = anomalous || resp.AgentUpgrade != nil || resp.PanelMigration != nil
 	anomalous = anomalous || len(resp.Actions) > 0 || len(resp.SelfTests) > 0
 	anomalous = anomalous || len(resp.LookingGlassTests) > 0 || len(resp.Iperf3Tasks) > 0 || len(resp.PluginTasks) > 0
-	anomalous = anomalous || len(resp.DiagnosticsTasks) > 0
+	anomalous = anomalous || len(resp.DiagnosticsTasks) > 0 || len(resp.RuleConnectionTasks) > 0
 	interval := agentHeartbeatSummaryLogInterval
 	if anomalous {
 		interval = agentReportLogInterval
@@ -4287,6 +4288,10 @@ func heartbeat(cfg Config, forceReconcile ...bool) (heartbeatResult, error) {
 	// 一键链路诊断（2.2.226 起）：每个任务一组检查，并发跑完整包回报。
 	for _, task := range resp.DiagnosticsTasks {
 		go handleDiagnosticsTask(cfg, task)
+	}
+	// 规则的「连接」清单（2.2.237 起）：现场读一遍 /proc 或 conntrack 回给面板。
+	for _, task := range resp.RuleConnectionTasks {
+		go handleRuleConnectionsTask(cfg, task)
 	}
 	for _, task := range resp.Iperf3Tasks {
 		go handleIperf3Task(cfg, task)

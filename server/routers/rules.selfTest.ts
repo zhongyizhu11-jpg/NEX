@@ -7,6 +7,10 @@ import { pushTunnelEndpointRefresh } from "./helpers";
 import { requireRuleProtocolEnabled } from "../forwardProtocolSettings";
 import { newForwardChainBatchId } from "../forwardChainManualProbe";
 import { buildRuleExpectedLatency } from "../ruleExpectedLatency";
+import { enqueueRuleConnectionsTask, getRuleConnectionsTaskStatus } from "../ruleConnectionsAgentTasks";
+import { RULE_CONNECTIONS_AGENT_VERSION } from "@shared/ruleConnections";
+import { isAgentVersionBehind } from "@shared/version";
+import { isUserspaceForwardType, normalizeForwardRuleProtocol } from "@shared/forwardTypes";
 import { linkProbeMethodForRule } from "@shared/latencyProbe";
 import { ruleLatencySeriesQueryCache as selfTestQueryCache } from "../ruleLatencyQueryCache";
 import * as hopRepo from "../repositories/tunnelRepository";
@@ -249,6 +253,41 @@ export const selfTestRulesRouter = router({
       if (!rule) return null;
       if (ctx.user.role !== "admin" && rule.userId !== ctx.user.id) return null;
       return buildRuleExpectedLatency(rule);
+    }),
+  /**
+   * 「连接」页签：排一个任务让入口机的 Agent 现场读一遍这条规则此刻的连接（shared/ruleConnections）。
+   * 走隧道的规则看的是入口那一段（客户端连进来的那头）。
+   */
+  connectionsStart: protectedProcedure
+    .input(z.object({ ruleId: z.number().int().positive() }))
+    .mutation(async ({ input, ctx }) => {
+      const rule = await db.getForwardRuleById(input.ruleId) as any;
+      if (!rule) throw new Error("规则不存在");
+      if (ctx.user.role !== "admin" && rule.userId !== ctx.user.id) throw new Error("无权查看此规则");
+      const hostId = Number(rule.hostId);
+      const host = await db.getHostById(hostId) as any;
+      if (!host) throw new Error("规则所在的机器不存在");
+      if (!host.isOnline) throw new Error("机器离线，取不到连接清单");
+      if (host.agentVersion && isAgentVersionBehind(String(host.agentVersion), RULE_CONNECTIONS_AGENT_VERSION)) {
+        throw new Error(`这台机器的 Agent（${host.agentVersion}）早于 ${RULE_CONNECTIONS_AGENT_VERSION}，升级后才能看连接清单`);
+      }
+      const task = enqueueRuleConnectionsTask(hostId, {
+        ruleId: Number(rule.id),
+        port: Number(rule.sourcePort),
+        protocol: normalizeForwardRuleProtocol(rule.protocol),
+        dnat: !isUserspaceForwardType(rule.forwardType),
+      });
+      pushAgentRefresh(hostId, "rule-connections", { urgent: true });
+      return { taskId: task.taskId };
+    }),
+  connectionsStatus: protectedProcedure
+    .input(z.object({ taskId: z.string().min(8).max(64) }))
+    .query(async ({ input, ctx }) => {
+      const status = getRuleConnectionsTaskStatus(input.taskId);
+      if (!status) return null;
+      const rule = await db.getForwardRuleById(status.ruleId) as any;
+      if (!rule || (ctx.user.role !== "admin" && rule.userId !== ctx.user.id)) return null;
+      return status;
     }),
   latestTest: protectedProcedure
     .input(z.object({ ruleId: z.number(), includeActive: z.boolean().optional().default(true) }))

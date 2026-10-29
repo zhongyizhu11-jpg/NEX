@@ -33,6 +33,7 @@ import { getTunnelAutoHopAggregate, recordTunnelAutoHopLatency } from "./tunnelA
 import { getTunnelMultiEntryLatency, recordTunnelMultiEntryLatency } from "./tunnelMultiEntryLatencyState";
 import { completeLookingGlassAgentTask, updateLookingGlassAgentTaskProgress, type LookingGlassMethod } from "./lookingGlassAgentTasks";
 import { completeDiagnosticsAgentTask } from "./diagnosticsAgentTasks";
+import { completeRuleConnectionsTask } from "./ruleConnectionsAgentTasks";
 import { observeTunnelProbeLoss } from "./resourceAlertNotifier";
 import { recordConnStatsReport } from "./ops/connStats";
 import { completeIperf3AgentTask } from "./iperf3AgentTasks";
@@ -629,6 +630,33 @@ agentRouter.post("/api/agent/looking-glass-result", async (req: Request, res: Re
     res.json({ success: ok });
   } catch (error) {
     console.error("[Agent LookingGlass] Error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+agentRouter.post("/api/agent/rule-connections-result", async (req: Request, res: Response) => {
+  try {
+    const host = await getAgentHostIdentityFromRequest(req);
+    if (!host) {
+      res.status(401).json({ error: "Invalid token" });
+      return;
+    }
+    const result = req.body?.result;
+    if (!result?.taskId) {
+      res.status(400).json({ error: "result.taskId is required" });
+      return;
+    }
+    const ok = completeRuleConnectionsTask(host.id, {
+      taskId: String(result.taskId),
+      rows: result.rows,
+      total: result.total,
+      truncated: result.truncated,
+      source: result.source,
+      error: result.error,
+    });
+    res.json({ success: ok });
+  } catch (error) {
+    console.error("[Agent RuleConnections] Error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
