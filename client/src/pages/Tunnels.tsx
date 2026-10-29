@@ -789,6 +789,7 @@ function isTunnelTransportTuningSupported(mode: unknown) {
 function relayModeForSubmit(mode: unknown, relayMode: TunnelRelayMode, hopCount: number): TunnelRelayMode {
   if (hopCount < 4) return "chain";
   if (relayMode === "aggregate") return tunnelRelayAggregateSupported(mode) ? "aggregate" : "chain";
+  if (relayMode === "hot_standby") return tunnelRelayAggregateSupported(mode) ? "hot_standby" : "chain";
   if (relayMode === "failover") return tunnelRelayFailoverSupported(mode) ? "failover" : "chain";
   return "chain";
 }
@@ -2241,7 +2242,7 @@ function TunnelsContent() {
   const [groupEditRequest, setGroupEditRequest] = useState<{ id: number; requestKey: number } | null>(null);
   const [groupCreateRequest, setGroupCreateRequest] = useState<{ mode: TunnelGroupMode; requestKey: number; exitStrategy?: ExitGroupStrategy } | null>(null);
   const [linkWizardOpen, setLinkWizardOpen] = useState(false);
-  const [wizardRelayMode, setWizardRelayMode] = useState<"failover" | "aggregate" | null>(null);
+  const [wizardRelayMode, setWizardRelayMode] = useState<"failover" | "aggregate" | "hot_standby" | null>(null);
   const [pendingGroupCreate, setPendingGroupCreate] = useState<{ mode: "failover" | "entry" | "exit"; exitStrategy?: ExitGroupStrategy } | null>(null);
   const [deleteTunnel, setDeleteTunnel] = useState<any | null>(null);
   const [parallelStreamsTunnel, setParallelStreamsTunnel] = useState<{ id: number; name: string; parallelStreams?: unknown } | null>(null);
@@ -4037,7 +4038,7 @@ function TunnelsContent() {
     // 中转台数和编辑器（MultiHopEditor 的 relayCount）同一个算法：用入口组 / 出口组时首尾不占位。
     const relayCount = (form.hopHostIds || []).length - (form.entryGroupId ? 0 : 1) - (form.exitGroupId ? 0 : 1);
     if (!wizardRelayMode || relayCount < 2) return;
-    if (wizardRelayMode === "aggregate" ? !tunnelRelayAggregateSupported(form.mode) : !tunnelRelayFailoverSupported(form.mode)) return;
+    if (wizardRelayMode === "aggregate" || wizardRelayMode === "hot_standby" ? !tunnelRelayAggregateSupported(form.mode) : !tunnelRelayFailoverSupported(form.mode)) return;
     setForm((prev) => ({ ...prev, relayMode: wizardRelayMode }));
     setWizardRelayMode(null);
   }, [showDialog, wizardRelayMode, form.hopHostIds, form.mode, form.entryGroupId, form.exitGroupId]);

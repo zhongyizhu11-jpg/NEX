@@ -1,6 +1,6 @@
 import { LINK_TERM_FAILOVER, LINK_TERM_SPLIT_CONNECTION } from "./linkTerms";
 
-export const TUNNEL_RELAY_MODES = ["chain", "failover", "aggregate"] as const;
+export const TUNNEL_RELAY_MODES = ["chain", "failover", "aggregate", "hot_standby"] as const;
 
 export type TunnelRelayMode = (typeof TUNNEL_RELAY_MODES)[number];
 
@@ -13,6 +13,13 @@ export const AGENT_FORWARDX_RELAY_FAILOVER_VERSION = "2.2.160";
 export const AGENT_FORWARDX_RELAY_AGGREGATE_VERSION = "2.2.194";
 
 /**
+ * 热备（hot_standby）：每条连接同时连上全部中转，平时只走第一台，其余几条腿连着不送；
+ * 第一台停住几百毫秒内就由下一台接手，连接不断。腿上的 standby 标记要 Agent / FXP 认得
+ * 才有用（老的会把它当叠加腿一起送 —— 也能通，只是不省流量）。
+ */
+export const AGENT_FORWARDX_RELAY_HOT_STANDBY_VERSION = "2.2.238";
+
+/**
  * 隧道编辑框里「中转方式」三个选项的名字：顺序 / 主备 / 叠加（叠加就是 shared/linkTerms.ts 的单连接叠加，
  * 和链路管理的「叠加」页签同一个东西；选叠加的隧道保存后列在那一栏）。
  */
@@ -20,12 +27,14 @@ export const TUNNEL_RELAY_MODE_LABELS: Record<TunnelRelayMode, string> = {
   chain: "顺序",
   failover: LINK_TERM_FAILOVER,
   aggregate: "叠加",
+  hot_standby: "热备",
 };
 
 export const TUNNEL_RELAY_MODE_HINTS: Record<TunnelRelayMode, string> = {
   chain: "流量按顺序经过每一台中转，最终到达出口。",
   failover: "入口每次只用一台中转，坏了才换下一台。",
   aggregate: "每条连接拆开同时走全部中转，出口拼回来，单条连接也能用上几台中转的带宽之和；保存后列在「叠加」页签。",
+  hot_standby: "每条连接同时连上全部中转，平时只走第一台，其余连着不送；第一台停住几百毫秒内就由下一台接手，连接不断、不用重连。",
 };
 
 export function normalizeTunnelRelayMode(value: unknown): TunnelRelayMode {
@@ -47,6 +56,11 @@ export function tunnelRelayFailoverSupported(mode: unknown) {
  */
 export function tunnelRelayAggregateSupported(mode: unknown) {
   return String(mode || "").trim().toLowerCase() === "forwardx";
+}
+
+/** 热备和叠加走同一套单连接多腿机制，所以也只有 NEX 隧道支持。 */
+export function tunnelRelayHotStandbySupported(mode: unknown) {
+  return tunnelRelayAggregateSupported(mode);
 }
 
 export function tunnelRelayCandidates<T>(hops: T[]) {
@@ -80,7 +94,26 @@ export function isTunnelRelayAggregate(tunnel: any, hops: any[]) {
  * once.
  */
 export function tunnelRelayUsesParallelRelays(tunnel: any, hops: any[]) {
-  return isTunnelRelayFailover(tunnel, hops) || isTunnelRelayAggregate(tunnel, hops);
+  return isTunnelRelayFailover(tunnel, hops) || isTunnelRelayAggregate(tunnel, hops) || isTunnelRelayHotStandby(tunnel, hops);
+}
+
+/**
+ * True when this tunnel keeps every relay connected per client connection but
+ * sends on the first one only, the rest standing by to take over in place.
+ */
+export function isTunnelRelayHotStandby(tunnel: any, hops: any[]) {
+  return normalizeTunnelRelayMode(tunnel?.relayMode) === "hot_standby"
+    && tunnelRelayHotStandbySupported(tunnel?.mode)
+    && tunnelRelayCandidates(hops).length >= 2;
+}
+
+/**
+ * True when the entry opens one FXP leg per relay for each client connection,
+ * whether to stripe over them (aggregate) or to hold the spares warm (hot
+ * standby). Both need the same hello / leg support along the way.
+ */
+export function isTunnelRelayMultiLeg(tunnel: any, hops: any[]) {
+  return isTunnelRelayAggregate(tunnel, hops) || isTunnelRelayHotStandby(tunnel, hops);
 }
 
 /** Minimum relays before a side-by-side relay mode has anything to work with. */
@@ -102,11 +135,22 @@ export type TunnelRelayModeAvailability = {
 export function tunnelRelayModeAvailability(options: {
   relayCount: number;
   aggregateSupported: boolean;
-}): { failover: TunnelRelayModeAvailability; aggregate: TunnelRelayModeAvailability } {
+}): { failover: TunnelRelayModeAvailability; aggregate: TunnelRelayModeAvailability; hot_standby: TunnelRelayModeAvailability } {
   const relayCount = Math.max(0, Math.floor(Number(options.relayCount) || 0));
   const hasEnoughRelays = relayCount >= TUNNEL_RELAY_PARALLEL_MIN_RELAYS;
   const relayCountReason = `需要至少 ${TUNNEL_RELAY_PARALLEL_MIN_RELAYS} 台中转，当前 ${relayCount} 台`;
+  const multiLeg: TunnelRelayModeAvailability = {
+    // The protocol check comes first: telling an operator to add relays would
+    // be wrong when the transport cannot open several legs at all.
+    available: hasEnoughRelays && !!options.aggregateSupported,
+    reason: !options.aggregateSupported
+      ? "仅 NEX 隧道支持"
+      : hasEnoughRelays
+        ? ""
+        : relayCountReason,
+  };
   return {
+    hot_standby: multiLeg,
     failover: {
       available: hasEnoughRelays,
       reason: hasEnoughRelays ? "" : relayCountReason,

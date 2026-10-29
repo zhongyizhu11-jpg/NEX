@@ -143,6 +143,7 @@ func dialMultipathLeg(cfg config, hello helloFrame, sessionID string, cfgIndex, 
 	legHello.MultipathLegCount = len(cfg.MultipathLegs)
 	legHello.MultipathReplicate = cfg.MultipathReplicate
 	legHello.MultipathLegCapacityMbps = legCfg.CapacityMbps
+	legHello.MultipathLegStandby = legCfg.Standby
 	frame, err := json.Marshal(legHello)
 	if err == nil {
 		err = writeSecureHello(sec, frame)
@@ -156,6 +157,7 @@ func dialMultipathLeg(cfg config, hello helloFrame, sessionID string, cfgIndex, 
 	leg.traffic = newMultipathLegTraffic(cfg, legCfg)
 	leg.healthKey = key
 	leg.cfgIndex = cfgIndex
+	leg.standby = legCfg.Standby
 	leg.pace.seedCapacity(legCfg.CapacityMbps)
 	return multipathDialResult{leg: leg, key: key, cfgIndex: cfgIndex}
 }
@@ -259,6 +261,7 @@ func handleExitMultipath(sec *secureConn, hello helloFrame, cfg config) error {
 	leg := newMultipathLeg(hello.MultipathLegIndex, sec, fmt.Sprintf("peer-%s", sec.conn.RemoteAddr()))
 	// 回程（下载）是出口在分：按入口带过来的这一路线路带宽定初值。
 	leg.pace.seedCapacity(hello.MultipathLegCapacityMbps)
+	leg.standby = hello.MultipathLegStandby
 	session, leader, err := exitMultipathSessions.join(sessionKey, leg, multipathPendingLimit(cfg))
 	if err != nil {
 		return err

@@ -63,12 +63,12 @@ export function getTunnelRouteText(
   if (normalizedExitGroupName) {
     hopNames[hopNames.length - 1] = normalizedExitGroupName;
     const exitNames = getTunnelExitNames(tunnel, hosts);
-    const routeText = String(tunnel?.relayMode || "").toLowerCase() === "failover" && hopNames.length >= 4
+    const routeText = ["failover", "hot_standby"].includes(String(tunnel?.relayMode || "").toLowerCase()) && hopNames.length >= 4
       ? `${hopNames[0]} -> 中转：${hopNames.slice(1, -1).join(" / ")} -> ${hopNames[hopNames.length - 1]}`
       : hopNames.join(" -> ");
     return `${routeText}${exitNames.length > 0 ? `\uFF1B\u51FA\u53E3\uFF1A${exitNames.join(" / ")}` : ""}`;
   }
-  const routeText = String(tunnel?.relayMode || "").toLowerCase() === "failover" && hopNames.length >= 4
+  const routeText = ["failover", "hot_standby"].includes(String(tunnel?.relayMode || "").toLowerCase()) && hopNames.length >= 4
     ? `${hopNames[0]} -> 中转：${hopNames.slice(1, -1).join(" / ")} -> ${hopNames[hopNames.length - 1]}`
     : hopNames.join(" -> ");
   const extraExitNames = getTunnelLoadBalanceExitNames(tunnel, hosts)

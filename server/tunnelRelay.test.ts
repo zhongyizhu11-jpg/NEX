@@ -3,6 +3,8 @@ import test from "node:test";
 import {
   isTunnelRelayAggregate,
   isTunnelRelayFailover,
+  isTunnelRelayHotStandby,
+  isTunnelRelayMultiLeg,
   normalizeTunnelRelayMode,
   tunnelRelayAggregateSupported,
   tunnelRelayCandidates,
@@ -102,4 +104,19 @@ test("a malformed relay count is treated as zero rather than throwing", () => {
   assert.match(bad.failover.reason, /当前 0 台/);
   const negative = tunnelRelayModeAvailability({ relayCount: -3, aggregateSupported: true });
   assert.match(negative.aggregate.reason, /当前 0 台/);
+});
+
+test("hot standby is a multi-leg NEX-only mode that shares the side-by-side topology", () => {
+  const hops = [{ id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }];
+  assert.equal(normalizeTunnelRelayMode("hot_standby"), "hot_standby");
+  assert.equal(isTunnelRelayHotStandby({ relayMode: "hot_standby", mode: "forwardx" }, hops), true);
+  assert.equal(isTunnelRelayHotStandby({ relayMode: "hot_standby", mode: "tls" }, hops), false);
+  assert.equal(isTunnelRelayHotStandby({ relayMode: "hot_standby", mode: "forwardx" }, hops.slice(0, 3)), false);
+  assert.equal(isTunnelRelayAggregate({ relayMode: "hot_standby", mode: "forwardx" }, hops), false);
+  assert.equal(isTunnelRelayMultiLeg({ relayMode: "hot_standby", mode: "forwardx" }, hops), true);
+  assert.equal(tunnelRelayUsesParallelRelays({ relayMode: "hot_standby", mode: "forwardx" }, hops), true);
+  const availability = tunnelRelayModeAvailability({ relayCount: 2, aggregateSupported: false });
+  assert.equal(availability.hot_standby.available, false);
+  assert.match(availability.hot_standby.reason, /NEX/);
+  assert.equal(tunnelRelayModeAvailability({ relayCount: 2, aggregateSupported: true }).hot_standby.available, true);
 });

@@ -41,6 +41,11 @@ type multipathLeg struct {
 	// CapacityMbps 是这一路（中转主机）的线路带宽：还没测出快慢之前，按它给各路分份额，
 	// 起速更快；测出来以后以实测为准。没写就和以前一样，从 1 MiB 起步慢慢量。
 	CapacityMbps int `json:"capacityMbps,omitempty"`
+	// Standby（2.2.137 起）：热备腿。连上、握好手、一直挂着，但只要还有一条非热备的腿活着
+	// 而且在往前走，它就不分片；主腿断了、或者压着数据几百毫秒没见回执，热备腿立刻接
+	// 上 —— 连接不断，客户端最多感觉到一下顿。主腿回来了就又让回去。老 FXP 不认识这个
+	// 字段，把它当普通的叠加腿用，照样能通。
+	Standby bool `json:"standby,omitempty"`
 }
 
 type config struct {

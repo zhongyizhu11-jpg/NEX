@@ -761,6 +761,9 @@ export function RouteGroupFields({
       <p className="text-secondary-type leading-relaxed text-foreground" data-testid="route-plain" aria-live="polite">
         {describeRouteGroupPlainly(value, { perSession: udpOnly })}
       </p>
+      <p className="text-xs leading-5 text-muted-foreground" data-testid="route-seamless-tip">
+        线路组是按连接换路径，换的时候旧连接按上面说的处理。要连接不断的毫秒级切换：建一条 NEX 隧道，把几台中转的中转方式设成「热备」，每条连接同时连着全部中转，主的停了备用立刻接手。
+      </p>
       {(policy?.warnings || []).map((warning) => (
         <p key={warning} className="rounded-[var(--fx-radius-control)] bg-[var(--fx-warn-soft)] px-3 py-2 text-xs leading-5 text-[var(--fx-warn-text)]">
           {warning}

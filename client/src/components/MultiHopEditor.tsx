@@ -230,15 +230,18 @@ export default function MultiHopEditor({
   });
   const failoverAvailable = relayAvailability.failover.available;
   const aggregateAvailable = relayAvailability.aggregate.available;
+  const hotStandbyAvailable = relayAvailability.hot_standby.available;
   const failoverDisabledReason = relayAvailability.failover.reason;
   const aggregateDisabledReason = relayAvailability.aggregate.reason;
+  const hotStandbyDisabledReason = relayAvailability.hot_standby.reason;
 
   useEffect(() => {
     if (!failoverAvailable && relayMode === "failover") onRelayModeChange?.("chain");
     // Aggregation cannot survive a switch to a protocol that does not implement
     // it, or a hop list that no longer has two relays to combine.
     if (!aggregateAvailable && relayMode === "aggregate") onRelayModeChange?.("chain");
-  }, [aggregateAvailable, failoverAvailable, onRelayModeChange, relayMode]);
+    if (!hotStandbyAvailable && relayMode === "hot_standby") onRelayModeChange?.("chain");
+  }, [aggregateAvailable, failoverAvailable, hotStandbyAvailable, onRelayModeChange, relayMode]);
 
   useEffect(() => {
     if (excludedIds.size === 0) return;
@@ -322,7 +325,7 @@ export default function MultiHopEditor({
         {showRelayMode && (
           <div className="flex min-w-0 items-center gap-2 sm:ml-auto">
             <span className="shrink-0 text-xs text-muted-foreground">中转方式</span>
-            <div className={`${segmentedControlClassName} grid min-w-0 flex-1 grid-cols-3 gap-1 sm:w-72 sm:flex-none`}>
+            <div className={`${segmentedControlClassName} grid min-w-0 flex-1 grid-cols-4 gap-1 sm:w-80 sm:flex-none`}>
               <button
                 type="button"
                 aria-pressed={relayMode === "chain"}
@@ -351,6 +354,16 @@ export default function MultiHopEditor({
                 title={aggregateDisabledReason || TUNNEL_RELAY_MODE_HINTS.aggregate}
               >
                 {TUNNEL_RELAY_MODE_LABELS.aggregate}
+              </button>
+              <button
+                type="button"
+                aria-pressed={relayMode === "hot_standby"}
+                disabled={!hotStandbyAvailable}
+                className={segmentedOptionClassName(relayMode === "hot_standby", !hotStandbyAvailable, "h-7 px-2 text-xs")}
+                onClick={() => onRelayModeChange?.("hot_standby")}
+                title={hotStandbyDisabledReason || TUNNEL_RELAY_MODE_HINTS.hot_standby}
+              >
+                {TUNNEL_RELAY_MODE_LABELS.hot_standby}
               </button>
             </div>
           </div>

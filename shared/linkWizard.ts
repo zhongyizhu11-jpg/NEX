@@ -30,7 +30,7 @@ export const LINK_WIZARD_PLACE_LABELS: Record<LinkWizardPlace, { label: string; 
 
 export type LinkWizardAction =
   | { type: "group"; mode: "failover" | "entry" | "exit"; exitStrategy?: "fallback" | "least_load" }
-  | { type: "tunnel"; relayMode: "chain" | "failover" | "aggregate"; needsForwardX: boolean }
+  | { type: "tunnel"; relayMode: "chain" | "failover" | "aggregate" | "hot_standby"; needsForwardX: boolean }
   | { type: "rule" };
 
 export type LinkWizardAdvice = {
@@ -55,10 +55,10 @@ export function linkWizardAdvice(goal: LinkWizardGoal, place: LinkWizardPlace): 
       action: { type: "group", mode: "failover" },
     };
     if (place === "relay") return {
-      title: "隧道，中转选「主备」",
-      explain: "入口平时走第一台中转，它坏了马上换下一台，连接不用等 DNS。",
-      next: "新建隧道时加两台以上中转，中转方式选「主备」。",
-      action: { type: "tunnel", relayMode: "failover", needsForwardX: false },
+      title: "隧道，中转选「热备」",
+      explain: "每条连接同时连上全部中转，平时只走第一台；它停住几百毫秒内下一台就接手，连接不断、不用重连。",
+      next: "新建 NEX 隧道时加两台以上中转，中转方式选「热备」；不是 NEX 隧道就选「主备」（坏了换下一台，新连接走新的）。",
+      action: { type: "tunnel", relayMode: "hot_standby", needsForwardX: true },
     };
     if (place === "exit") return {
       title: "出口组（主备），再给隧道用",
