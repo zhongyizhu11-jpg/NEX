@@ -90,6 +90,7 @@ function fixture(overrides: Partial<TopologyInput> = {}): TopologyInput {
     inbounds,
     ruleLatencyMs: new Map([[100, 12], [110, 50]]),
     routeStats: (ruleId) => ruleId === 130 ? {
+      activeIndex: 0,
       targets: [{ index: 0, latencyMs: 38, healthy: true }, { index: 1, latencyMs: 74, healthy: true }],
       hops: [{ pathKey: "backup", hopIndex: 0, ok: true, latencyMs: 41, consecutiveFailures: 0 }],
     } : null,
@@ -178,6 +179,13 @@ test("线路组：每条路径各自经过中转到各自的落地，中继规�
   assert.equal(backup2!.latencyMs, 41, "SG 探 US 的那一跳");
   assert.equal(backupLast!.status, "failed", "US 上的中继没在跑");
   assert.equal(graph.rules.find((rule) => rule.id === 130)!.pathCount, 2);
+  // Agent 说此刻走主线路：主线路的段是「在走」，备用的段是「备用」；规则上记着当前路径 key。
+  assert.equal(mainFirst!.activePath, true);
+  assert.equal(backup1!.activePath, false);
+  assert.equal(graph.rules.find((rule) => rule.id === 130)!.activePathKey, "main");
+  assert.equal(edge(graph, "rule", "host:1", "host:2")?.activePath ?? null, null, "不是线路组的边不说在走不在走");
+  const unknown = buildNetworkTopology(fixture({ routeStats: () => null }));
+  assert.equal(edge(unknown, "routePath", "host:1", "host:3")!.activePath, null, "不知道走哪条时谁都不算备用");
   assert.equal(graph.rules.some((rule) => rule.id === 131 || rule.id === 132), false);
   assert.equal(graph.edges.some((item) => item.ruleIds.includes(131)), false);
 });

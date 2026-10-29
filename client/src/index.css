@@ -1858,3 +1858,8 @@ html[data-personalization-background="video"] .fx-mesh {
     animation: none;
   }
 }
+
+/* 拓扑图上有流量的边：一串小段顺着线走（features/topology/TopologyCanvas）。 */
+@keyframes topo-flow { to { stroke-dashoffset: -28; } }
+.topo-flow { animation: topo-flow 1.1s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .topo-flow { animation: none; } }

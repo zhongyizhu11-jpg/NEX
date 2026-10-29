@@ -28,6 +28,7 @@ import { createQueryCache } from "./queryCache";
 import { getUserEffectiveAllowedHostIds } from "./repositories/permissionRepository";
 import { getUserUsableTrafficBillingResourceIds } from "./repositories/trafficBillingRepository";
 import { getRouteStatus } from "./routeGroupStats";
+import { getRuleLiveRates } from "./ruleLiveRates";
 
 /*
   「网络拓扑」页的数据：把规则、隧道、转发组、落地入站、主机状态一次取齐，交给
@@ -78,6 +79,7 @@ function routeStatsFor(ruleId: number): TopologyRouteStats | null {
   const agent = status.agent;
   if (!agent && status.hops.length === 0) return null;
   return {
+    activeIndex: agent && agent.activeIndex >= 0 ? agent.activeIndex : undefined,
     targets: (agent?.targets || []).map((target) => ({
       index: target.index,
       latencyMs: target.latencyMs,
@@ -223,7 +225,28 @@ async function loadTopology(viewer: TopologyViewer, filterUserId: number | null)
     }
   }
 
-  return { ...graph, generatedAt: Date.now(), owners, scopeUserId };
+  return { ...graph, edges: withEdgeRates(graph.edges), generatedAt: Date.now(), owners, scopeUserId };
+}
+
+/** 每条边此刻的速率：经过它的规则的实时速率相加（server/ruleLiveRates，内存里的）。 */
+function withEdgeRates(edges: TopologyGraph["edges"]) {
+  const ruleIds = Array.from(new Set(edges.flatMap((edge) => edge.ruleIds)));
+  if (ruleIds.length === 0) return edges;
+  const rates = getRuleLiveRates(ruleIds);
+  if (rates.size === 0) return edges;
+  return edges.map((edge) => {
+    let total = 0;
+    let known = false;
+    for (const ruleId of edge.ruleIds) {
+      const rate = rates.get(ruleId);
+      if (!rate) continue;
+      known = true;
+      total += rate.inBps + rate.outBps;
+    }
+    // 备用路径上没有流量：规则的速率是整条规则的，别把它也算到备用那几段上。
+    if (edge.activePath === false) return edge;
+    return known ? { ...edge, rateBps: Math.round(total) } : edge;
+  });
 }
 
 export function getNetworkTopology(viewer: TopologyViewer, options: { userId?: number | null } = {}) {

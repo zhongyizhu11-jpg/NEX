@@ -41,11 +41,32 @@ export function topologyEdgeColor(edge: Pick<TopologyEdge, "kind" | "status">) {
   return TOPOLOGY_KIND_COLORS[edge.kind];
 }
 
-function edgeDash(edge: Pick<TopologyEdge, "kind" | "status">) {
+function edgeDash(edge: Pick<TopologyEdge, "kind" | "status" | "activePath">) {
   if (edge.status === "stopped") return "6 4";
+  // 线路组的备用路径：细虚线，和「在走的那条」一眼分开。
+  if (edge.activePath === false) return "3 4";
   if (edge.kind === "subscription") return "2 3";
   if (edge.kind === "group") return "5 3";
   return undefined;
+}
+
+/** 边上那枚小药丸写什么：有延迟写延迟，没延迟但有流量写速率；都没有不画。 */
+export function topologyEdgeBadge(edge: Pick<TopologyEdge, "latencyMs" | "rateBps" | "status">): string | null {
+  if (edge.status === "stopped") return null;
+  if (edge.latencyMs !== null && edge.latencyMs !== undefined) return `${Math.round(edge.latencyMs)} ms`;
+  if (edge.rateBps && edge.rateBps > 0) return formatEdgeRate(edge.rateBps);
+  return null;
+}
+
+export function formatEdgeRate(bps: number) {
+  if (bps >= 1024 * 1024) return `${(bps / 1024 / 1024).toFixed(1)} MB/s`;
+  if (bps >= 1024) return `${(bps / 1024).toFixed(bps >= 10 * 1024 ? 0 : 1)} KB/s`;
+  return `${Math.round(bps)} B/s`;
+}
+
+/** 有流量在走、而且线是正常的：画流动的小段。 */
+function edgeFlowing(edge: Pick<TopologyEdge, "rateBps" | "status" | "activePath">) {
+  return !!edge.rateBps && edge.rateBps > 0 && edge.status !== "stopped" && edge.status !== "failed" && edge.activePath !== false;
 }
 
 type Transform = { k: number; x: number; y: number };
@@ -324,12 +345,16 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, TopologyCanvasPro
           ))}
         </defs>
         <g transform={`translate(${transform.x} ${transform.y}) scale(${transform.k})`}>
-          {edgeGeometry.map(({ edge, d }) => {
+          {edgeGeometry.map(({ edge, d, mid }) => {
             const color = topologyEdgeColor(edge);
             const selected = selectedId === edge.id;
             const faded = dimmed(edge.id, "edge");
+            const standby = edge.activePath === false;
+            const flowing = edgeFlowing(edge);
+            const badge = transform.k >= 0.55 && !standby ? topologyEdgeBadge(edge) : null;
+            const badgeWidth = badge ? badge.length * 6.2 + 12 : 0;
             return (
-              <g key={edge.id} data-edge-id={edge.id} opacity={faded ? 0.12 : edge.status === "stopped" ? 0.5 : 1}>
+              <g key={edge.id} data-edge-id={edge.id} data-flowing={flowing ? "" : undefined} data-standby={standby ? "" : undefined} opacity={faded ? 0.12 : edge.status === "stopped" ? 0.5 : standby ? 0.55 : 1}>
                 <path
                   d={d}
                   fill="none"
@@ -355,12 +380,22 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, TopologyCanvasPro
                   d={d}
                   fill="none"
                   stroke={color}
-                  strokeWidth={topologyEdgeWidth(edge.ruleIds.length) + (selected ? 1.5 : 0)}
+                  strokeWidth={(standby ? 1.2 : topologyEdgeWidth(edge.ruleIds.length)) + (selected ? 1.5 : 0)}
                   strokeDasharray={edgeDash(edge)}
                   strokeLinecap="round"
                   markerEnd={`url(#${markerId(color)})`}
                   pointerEvents="none"
                 />
+                {flowing ? (
+                  // 流动的小段叠在线上：这是「此刻有流量」，不是状态。少动效模式下停住（CSS）。
+                  <path d={d} fill="none" stroke="var(--color-card)" strokeWidth={Math.max(1.2, topologyEdgeWidth(edge.ruleIds.length) - 1.2)} strokeDasharray="3 11" strokeLinecap="round" className="topo-flow" pointerEvents="none" opacity={0.9} />
+                ) : null}
+                {badge ? (
+                  <g transform={`translate(${mid.x - badgeWidth / 2} ${mid.y - 9})`} pointerEvents="none">
+                    <rect width={badgeWidth} height={18} rx={9} fill="var(--color-card)" stroke={color} strokeOpacity={0.55} strokeWidth={1} />
+                    <text x={badgeWidth / 2} y={12.5} textAnchor="middle" fontSize={10} fontWeight={600} fontFamily="var(--fx-font-mono)" className="fill-foreground">{badge}</text>
+                  </g>
+                ) : null}
               </g>
             );
           })}
@@ -452,7 +487,11 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, TopologyCanvasPro
                 {hoverEdge.protocol ? ` · ${hoverEdge.protocol.toUpperCase()}` : ""}
                 {hoverEdge.port ? ` · :${hoverEdge.port}` : ""}
                 {hoverEdge.latencyMs !== null ? ` · ${hoverEdge.latencyMs} ms` : ""}
+                {hoverEdge.rateBps !== null && hoverEdge.rateBps > 0 ? ` · ${formatEdgeRate(hoverEdge.rateBps)}` : ""}
               </p>
+              {hoverEdge.activePath !== null ? (
+                <p className="text-muted-foreground">{hoverEdge.activePath ? "当前走的路径" : "备用路径（此刻没走）"}</p>
+              ) : null}
               {hoverEdge.ruleIds.length > 0 ? (
                 <p className="text-muted-foreground">
                   {hoverEdge.ruleIds.slice(0, 3).map((id) => ruleNames.get(id) || `规则 ${id}`).join("、")}
