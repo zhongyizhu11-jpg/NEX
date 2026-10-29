@@ -153,41 +153,6 @@ export function routeBoardActiveChain(status: RouteBoardStatus | null | undefine
   return active ? summarizeRouteChain(active) : null;
 }
 
-/**
- * 「我的线路」里一条线路的一个节点：入口 / 中转（或出口）/ 落地。和线路板的节点同一副画法，
- * 只是没有速率那一行（线路卡上的速率在卡头写）。
- */
-export type LineNode = {
-  key: string;
-  role: "entry" | "relay" | "landing";
-  name: ReactNode;
-  caption: ReactNode;
-  health: NetworkHealth;
-  title?: string;
-};
-
-const LINE_SEGMENT_PLANNED: RouteSegment = { key: "planned", latencyMs: null, state: "planned", failures: 0, at: null, title: "这一段没有单独的探测" };
-
-/**
- * 一条线路画成一条链：节点之间一段。segments 按顺序对应节点之间的间隙，少给的那些画成「—」。
- */
-export function LineChain({ nodes, segments = [], flowing = false, className }: {
-  nodes: LineNode[];
-  segments?: RouteSegment[];
-  flowing?: boolean;
-  className?: string;
-}) {
-  const items: ReactNode[] = [];
-  nodes.forEach((node, index) => {
-    if (index > 0) {
-      const segment = segments[index - 1] || LINE_SEGMENT_PLANNED;
-      items.push(<Segment key={`seg-${index}`} segment={{ ...segment, key: `${segment.key}-${index}` }} flowing={flowing && segment.state !== "failed"} />);
-    }
-    items.push(<Node key={node.key} role={node.role} name={node.name} caption={node.caption} health={node.health} rate={undefined} idle title={node.title} preview />);
-  });
-  return <div className={cn("fx-rb-chain", className)} data-testid="line-chain">{items}</div>;
-}
-
 export function formatRate(bps: number) {
   return `${formatBytes(Math.max(0, bps))}/s`;
 }
