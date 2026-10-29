@@ -31,6 +31,7 @@ import { hostIpv6Address, hostPrivateAddress, normalizeConnectHostForHost, sameA
 import SectionTransition from "@/components/SectionTransition";
 import { RouteGroupsSection } from "@/features/rules/RouteGroupsSection";
 import { LinkOverviewSection } from "@/features/links/LinkOverviewSection";
+import { MyLinesSection } from "@/features/links/MyLinesSection";
 import { LinkWizardDialog } from "@/features/links/LinkWizardDialog";
 import type { LinkWizardAction } from "@shared/linkWizard";
 import { loadReactGlobe, prefetchReactGlobe } from "@/lib/reactGlobeLoader";
@@ -130,6 +131,7 @@ import {
   Upload,
   XCircle,
   FileJson,
+  Signpost,
 } from "lucide-react";
 import type { GlobeMethods } from "react-globe.gl";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type ReactNode } from "react";
@@ -814,11 +816,13 @@ function getTunnelModeDisplay(mode: unknown, showNginxLabel = true, forwardxVers
 }
 
 type TunnelViewMode = "card" | "table" | "globe";
-type TunnelSection = "tunnels" | "ports" | "chains" | "groups" | "aggregates" | "entries" | "exits" | "routes";
+type TunnelSection = "lines" | "tunnels" | "ports" | "chains" | "groups" | "aggregates" | "entries" | "exits" | "routes";
 type TunnelGroupMode = "port" | "failover" | "entry" | "exit";
 
-const TUNNEL_SECTIONS = ["tunnels", "ports", "chains", "groups", "aggregates", "entries", "exits", "routes"] as const;
+const TUNNEL_SECTIONS = ["lines", "tunnels", "ports", "chains", "groups", "aggregates", "entries", "exits", "routes"] as const;
 const TUNNEL_SECTION_ITEMS = [
+  // 我的线路：每条转发一条链（入口 → 经过 → 落地 → 出口），进来第一眼看的就是它；建和改还在后面各页。
+  { value: "lines", label: "我的线路", icon: Signpost },
   { value: "tunnels", label: "隧道链路", icon: Network },
   { value: "ports", label: "端口转发", icon: ArrowRightLeft },
   { value: "chains", label: "转发链", icon: Route },
@@ -2219,7 +2223,7 @@ function TunnelsContent() {
   const [phoneSearchOpen, setPhoneSearchOpen] = useState(false);
   const [activeSection, setActiveSection] = useUrlTab<TunnelSection>({
     values: TUNNEL_SECTIONS,
-    defaultValue: "tunnels",
+    defaultValue: "lines",
     storageKey: TUNNEL_SECTION_STORAGE_KEY,
     // 每次进来（刷新、从别的页面点过来）都从第一个分类开始，不记上次看的是哪一类。
     remember: false,
@@ -4691,6 +4695,12 @@ function TunnelsContent() {
               createRequestKey={groupCreateRequest?.mode === "entry" ? groupCreateRequest.requestKey : undefined}
               onCreateRequestConsumed={() => setGroupCreateRequest(null)}
             />
+          </SectionTransition>
+        </TabsContent>
+
+        <TabsContent value="lines" className="space-y-4">
+          <SectionTransition transitionKey={`lines-${normalizedLinkSearchQuery || "all"}`}>
+            <MyLinesSection searchQuery={normalizedLinkSearchQuery} isAdmin={user?.role === "admin"} />
           </SectionTransition>
         </TabsContent>
 

@@ -142,7 +142,7 @@ import {
 } from "@shared/failoverTargets";
 import { FAILOVER_TONE_CLASS, describeFailoverLineDisplay } from "@/lib/failoverLineDisplay";
 import { RouteGroupSheet } from "@/features/rules/RouteGroupSheet";
-import { RouteMiniChain } from "@/features/rules/RouteBoard";
+import { RouteMiniChain, routeBoardActiveChain } from "@/features/rules/RouteBoard";
 import { EntityActions } from "@/components/entity/EntityActions";
 import { IconTile, type IconTileTone } from "@/components/entity/IconTile";
 import { RouteGroupFields, routeGroupPayload, type RouteHostOption } from "@/features/rules/RouteGroupFields";
@@ -3457,6 +3457,33 @@ function RulesContent() {
     }, () => toast.error("读取规则失败"));
   }, [search, setLocation, rulePermissionLoading, hostsFetched, systemSettingsFetched, forwardGroupsFetched, forwardGroupsError]);
 
+  /*
+    /rules?diagnose=<规则 id>：从「我的线路」直接打开这条规则的诊断框（延迟测试那一页）。
+  */
+  useEffect(() => {
+    const params = new URLSearchParams(search);
+    const diagnoseId = Number(params.get("diagnose") || 0);
+    if (!Number.isInteger(diagnoseId) || diagnoseId <= 0) return;
+    if (rulePermissionLoading || !hostsFetched || !systemSettingsFetched || !(forwardGroupsFetched || forwardGroupsError)) return;
+    params.delete("diagnose");
+    const nextSearch = params.toString();
+    setLocation(`/rules${nextSearch ? `?${nextSearch}` : ""}`, { replace: true });
+    void utils.rules.getById.fetch({ id: diagnoseId }).then((rule) => {
+      if (!rule) {
+        toast.error("这条规则不存在，或者你没有权限查看");
+        return;
+      }
+      setSelfTestRule({
+        id: Number(rule.id),
+        name: String(rule.name || ""),
+        isForwardChain: getRuleCategory(rule, forwardGroupById) === "chain",
+        chainKernel: !isUserspaceForwardType((rule as any).forwardType),
+        probeMethod: ruleLatencyProbeMethodForRule(rule),
+      });
+    }, () => toast.error("读取规则失败"));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search, setLocation, rulePermissionLoading, hostsFetched, systemSettingsFetched, forwardGroupsFetched, forwardGroupsError]);
+
   const telegramBotReady = !!systemSettings?.telegram?.enabled && !!systemSettings?.telegram?.configured;
   const selectedForwardGroupIsChain = form.routeMode === "chain" || isForwardChainGroup(selectedForwardGroup);
   const selectedForwardGroupIsPort = forwardGroupModeOf(selectedForwardGroup) === "port";
@@ -6346,7 +6373,9 @@ function RulesContent() {
     if (category === "tunnel") {
       const tunnel = tunnelById.get(Number(rule?.tunnelId || 0));
       if (!tunnel) return [];
+      // 第一跳是入口机，卡片上已经是入口地址那一行了，「经」只列它后面经过的（中转和出口）。
       return getTunnelHopIds(tunnel)
+        .slice(1)
         .map((hostId: number) => String(tunnelHopHostName(tunnel, hostId, hosts) || "").trim())
         .filter(Boolean);
     }
@@ -7263,7 +7292,14 @@ function RulesContent() {
       tag = <span className="fx-rule-tag" data-tone="off" title={stop?.detail || "规则已停用"}>{stop?.label || "已停用"}</span>;
     } else {
       const probe = stableProbeByRule.get(Number(rule.id));
-      if (probe?.latestLatencyAt && !isLinkProbeFresh(probe.latestLatencyAt)) {
+      // 线路组：卡上写当前路径的整链延迟（线路板各段相加），不是出口直探目标的那个数。
+      const activeChain = failover ? routeBoardActiveChain(routeBoardByRule.get(Number(rule.id))) : null;
+      if (activeChain && activeChain.totalMs !== null && !activeChain.broken) {
+        const ms = Math.round(activeChain.totalMs);
+        tag = <span className="fx-rule-tag" data-tone={ms < 150 ? "ok" : ms < 300 ? "warn" : "down"} title={activeChain.partial ? "当前路径已测各段相加（有一段还没测到）" : "当前路径各段延迟相加"}>{activeChain.partial ? "≥ " : ""}{ms} ms</span>;
+      } else if (activeChain?.broken) {
+        tag = <span className="fx-rule-tag" data-tone="down" title="当前路径有一段不通">不通</span>;
+      } else if (probe?.latestLatencyAt && !isLinkProbeFresh(probe.latestLatencyAt)) {
         // 过期的探测：灰掉并写明多久以前，不再把三天前的 12 ms 画成绿的。
         const text = probe.latestLatencyIsTimeout ? "超时" : typeof probe.latestLatencyMs === "number" && Number.isFinite(probe.latestLatencyMs) ? `${Math.round(probe.latestLatencyMs)} ms` : "";
         if (text) tag = <span className="fx-rule-tag" data-tone="off" title={`${formatProbeAge(probe.latestLatencyAt)}测的，已过期；··· › 诊断 重新测`}>{text} · {formatProbeAge(probe.latestLatencyAt)}</span>;

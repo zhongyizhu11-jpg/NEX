@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { newRouteGroupDraft, routeGroupRuleFields, type RouteGroup } from "@shared/routeGroup";
 import { describeRoutePolicy } from "@shared/routePolicy";
-import { RouteBoardCard, RouteMiniChain, RoutePathCards, RouteSwitchChip, buildRoutePreviewStatus, describeRouteDials, summarizeRouteChain, type RouteBoardPath } from "./RouteBoard";
+import { RouteBoardCard, RouteMiniChain, RoutePathCards, RouteSwitchChip, buildRoutePreviewStatus, describeRouteDials, routeBoardActiveChain, summarizeRouteChain, type RouteBoardPath } from "./RouteBoard";
 
 const NOW = Date.UTC(2026, 9, 28, 12, 0, 0);
 const draft = newRouteGroupDraft({ timezone: "Asia/Shanghai" });
@@ -192,4 +192,12 @@ test("规则卡上的迷你链：一行一条，段上写延迟、不通写 ✕�
   assert.match(rows[0], /73 ms/);
   assert.match(rows[1], /data-state="failed"/);
   assert.match(rows[1], />✕</);
+});
+
+test("规则卡的延迟标签用当前在走那条路径的整链：各段相加，没有在走的就没有", () => {
+  const active = routeBoardActiveChain({ paths: [path(0), path(1)] });
+  assert.equal(active?.totalMs, 73);
+  assert.equal(active?.partial, false);
+  assert.equal(routeBoardActiveChain({ paths: [path(1)] }), null);
+  assert.equal(routeBoardActiveChain(null), null);
 });

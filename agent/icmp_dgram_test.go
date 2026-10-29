@@ -115,3 +115,25 @@ func TestListenICMPDatagramLoopback(t *testing.T) {
 		t.Fatalf("loopback datagram ping: latency=%d ok=%v err=%v", latency, ok, err)
 	}
 }
+
+// 回显请求按间隔发，不一口气发完：一口气发的话加固过的主机（ICMP 限速）会把后面几个丢掉，
+// 面板上就成了「丢包 3/5」。
+func TestNativePingSpacesEchoRequests(t *testing.T) {
+	peer := net.IPv4(198, 51, 100, 10).To4()
+	fake := newFakeICMPDatagramConn(peer)
+	started := time.Now()
+	latency, ok, err, sent, successes := nativePingExchange(fake, &net.UDPAddr{IP: peer}, peer, 8, 0, false, time.Second, 3)
+	elapsed := time.Since(started)
+	if err != nil || !ok || latency < 1 {
+		t.Fatalf("ping failed: latency=%d ok=%v err=%v", latency, ok, err)
+	}
+	if sent != 3 || successes != 3 {
+		t.Fatalf("sent=%d successes=%d, want 3/3", sent, successes)
+	}
+	if elapsed < 2*nativePingInterval-20*time.Millisecond {
+		t.Fatalf("three echo requests went out in %s: they should be %s apart", elapsed, nativePingInterval)
+	}
+	if len(fake.writeTo) != 3 {
+		t.Fatalf("wrote %d packets, want 3", len(fake.writeTo))
+	}
+}
