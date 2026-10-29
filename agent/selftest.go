@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -29,6 +30,24 @@ var selfTestQueue = make(chan selfTestJob, selfTestQueueCapacity)
 var selfTestWorkersOnce sync.Once
 var selfTestInFlightMu sync.Mutex
 var selfTestInFlight = map[int]bool{}
+
+// 最近一次领到手动测速的时刻（Unix 纳秒）：后台探测借名额（tcpingBorrowableWorkers）看它。
+var selfTestLastClaimAt atomic.Int64
+
+// 手动测速一阵一阵来：刚来过一批的这段时间里不借名额给后台探测，免得下一条手动的跟它抢。
+const selfTestBorrowQuietWindow = 10 * time.Second
+
+// selfTestBusy：手上有手动测速（排着的或在跑的），或者刚来过一批。
+func selfTestBusy() bool {
+	selfTestInFlightMu.Lock()
+	busy := len(selfTestInFlight) > 0
+	selfTestInFlightMu.Unlock()
+	if busy {
+		return true
+	}
+	last := selfTestLastClaimAt.Load()
+	return last > 0 && time.Since(time.Unix(0, last)) < selfTestBorrowQuietWindow
+}
 
 func selfTestPoller(cfg Config) {
 	activeUntil := time.Time{}
@@ -121,6 +140,7 @@ func claimSelfTest(testID int) bool {
 		return false
 	}
 	selfTestInFlight[testID] = true
+	selfTestLastClaimAt.Store(time.Now().UnixNano())
 	return true
 }
 

@@ -1650,6 +1650,8 @@ func collectTCPing(cfg Config, ruleProbes []ruleLatencyProbe, probes []tunnelPro
 	if force {
 		ruleLimit = len(ordinaryRuleTasks)
 		serviceLimit = len(serviceTasks)
+	} else {
+		ruleLimit = tcpingBorrowedRuleLimit(ruleLimit, len(ordinaryRuleTasks), 256)
 	}
 	tunnelProbeLimit := len(tunnelTasks)
 	tcpingCursorMu.Lock()
@@ -1981,16 +1983,69 @@ func rotateTCPingTasks(tasks []tcpingTask, cursor *int, limit int) []tcpingTask 
 	return selected
 }
 
+/*
+后台探测借手动测速的空闲名额（Open-Box 的做法）。
+
+手动测速有自己的 selfTestWorkerConcurrency 个工作协程，大部分时间空着；后台探测每轮最多
+tcpingMaxConcurrency 个并发，规则多（几百条）时一轮只轮到一部分，排队的要等下一轮。手动
+测速闲着（没有在跑的、10 秒内也没来过）而且后台这轮的活比自己的名额多时，借这些空名额多开
+几个协程，一轮也多选一些规则（tcpingBorrowedRuleLimit）。
+
+手动和紧急复查仍优先：借来的协程每拿一条之前看一眼，手动测速来了就做完手上这条退出，
+剩下的由自己的协程做完。
+*/
+func tcpingBorrowableWorkers(taskCount int, base int) int {
+	if taskCount <= base || base <= 0 {
+		return 0
+	}
+	if atomic.LoadInt64(&actionPendingCount) > 0 || selfTestBusy() {
+		return 0
+	}
+	borrow := selfTestWorkerConcurrency
+	if borrow > taskCount-base {
+		borrow = taskCount - base
+	}
+	return borrow
+}
+
+// 能借到名额时一轮多选几条普通规则：按借到后的并发等比放大，不超过上限。
+func tcpingBorrowedRuleLimit(limit int, total int, maximum int) int {
+	if limit <= 0 || limit >= total {
+		return limit
+	}
+	borrow := tcpingBorrowableWorkers(total, limit)
+	if borrow <= 0 {
+		return limit
+	}
+	scaled := limit * (tcpingMaxConcurrency + borrow) / tcpingMaxConcurrency
+	if maximum > 0 && scaled > maximum {
+		scaled = maximum
+	}
+	if scaled > total {
+		scaled = total
+	}
+	return scaled
+}
+
 func runTCPingTasks(tasks []tcpingTask) ([]map[string]any, []map[string]any, []map[string]any, []map[string]any) {
 	workerCount := tcpingTaskConcurrency(len(tasks))
+	borrowed := tcpingBorrowableWorkers(len(tasks), workerCount)
 	out := make(chan tcpingTaskResult, len(tasks))
-	jobs := make(chan tcpingTask, workerCount)
+	jobs := make(chan tcpingTask, workerCount+borrowed)
 	var wg sync.WaitGroup
-	for worker := 0; worker < workerCount; worker++ {
+	for worker := 0; worker < workerCount+borrowed; worker++ {
 		wg.Add(1)
+		isBorrowed := worker >= workerCount
 		go func() {
 			defer wg.Done()
-			for task := range jobs {
+			for {
+				if isBorrowed && selfTestBusy() {
+					return
+				}
+				task, ok := <-jobs
+				if !ok {
+					return
+				}
 				out <- executeTCPingTask(task)
 			}
 		}()
