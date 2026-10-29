@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { newRouteGroupDraft, routeGroupRuleFields, type RouteGroup } from "@shared/routeGroup";
 import { describeRoutePolicy } from "@shared/routePolicy";
-import { RouteBoardCard, RouteSwitchChip, describeRouteDials, summarizeRouteChain, type RouteBoardPath } from "./RouteBoard";
+import { RouteBoardCard, RouteMiniChain, RoutePathCards, RouteSwitchChip, buildRoutePreviewStatus, describeRouteDials, summarizeRouteChain, type RouteBoardPath } from "./RouteBoard";
 
 const NOW = Date.UTC(2026, 9, 28, 12, 0, 0);
 const draft = newRouteGroupDraft({ timezone: "Asia/Shanghai" });
@@ -149,4 +149,47 @@ test("真实连接的拨号药丸：有失败或慢的染琥珀，没拨过不�
   );
   assert.equal((html.match(/data-testid="route-dials"/g) || []).length, 1, "只有报了拨号的路径有药丸");
   assert.match(html, /data-tone="warn"[^>]*data-testid="route-dials">建连 12 · 失败 3 · 慢 2 · 拨号 640 ms/);
+});
+
+test("预览：拿还没保存的路径画链，每段「—」、不写在走、首选写「平时走它」", () => {
+  const status = buildRoutePreviewStatus({
+    paths: [
+      { key: "a", name: "", hops: [2, 3], dest: null, weight: 50, probe: null },
+      { key: "b", name: "备用线路", hops: [], dest: { ip: "203.0.113.9", port: 8443 }, weight: 50, probe: null },
+    ],
+    hosts: [{ id: 1, name: "HK entry" }, { id: 2, name: "HK relay" }, { id: 3, name: "JP relay" }],
+    entryHostId: 1,
+    sourcePort: 10001,
+    mainAddress: "10.95.0.10:443",
+  });
+  assert.equal(status.entry?.name, "HK entry");
+  assert.deepEqual(status.paths[0].dest, { ip: "10.95.0.10", port: 443 }, "没写落地的路径走规则目标");
+  assert.equal(status.paths[0].hops[0].nextLabel, "JP relay");
+  const policy = describeRoutePolicy(rule, { host: { isOnline: true, agentVersion: "2.2.237" }, nowMs: NOW })!;
+  const html = renderToStaticMarkup(<RoutePathCards preview status={status} policy={policy} />);
+  assert.equal((html.match(/data-preview=""/g) || []).length, 2);
+  assert.match(html, /平时走它/);
+  assert.doesNotMatch(html, />在走</);
+  assert.doesNotMatch(html, /未测/, "预览里的段不是「未测」");
+  assert.equal((html.match(/data-state="planned"/g) || []).length, 4, "A 三段、B 一段");
+  assert.doesNotMatch(html, /空闲/, "预览没有速率那一行");
+  assert.match(html, /主线路/);
+  assert.match(html, /203\.0\.113\.9:8443/);
+});
+
+test("规则卡上的迷你链：一行一条，段上写延迟、不通写 ✕，在走的那条标出来", () => {
+  const html = renderToStaticMarkup(
+    <RouteMiniChain
+      status={{ paths: [path(0), path(1, { healthy: false, hops: [{ ...path(1).hops[0], ok: false, consecutiveFailures: 4 }] })], entry: { hostId: 1, name: "HK entry 01", online: true, sourcePort: 10001 } }}
+      policy={describeRoutePolicy(rule, { host: { isOnline: true, agentVersion: "2.2.237" }, nowMs: NOW })!}
+      onOpen={() => {}}
+    />,
+  );
+  const rows = html.split("<li ").slice(1);
+  assert.equal(rows.length, 2);
+  assert.match(rows[0], /HK entry 01[^]*?>23<[^]*?HK relay[^]*?>20<[^]*?JP relay[^]*?>30<[^]*?落地/);
+  assert.match(rows[0], />在走</);
+  assert.match(rows[0], /73 ms/);
+  assert.match(rows[1], /data-state="failed"/);
+  assert.match(rows[1], />✕</);
 });

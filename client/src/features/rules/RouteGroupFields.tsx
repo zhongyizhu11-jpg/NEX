@@ -45,6 +45,7 @@ import {
 } from "@shared/routeGroup";
 import { PIN_DURATION_OPTIONS, formatPolicyClock, formatPolicyDuration, type RoutePolicy } from "@shared/routePolicy";
 import { ConditionBlock, PolicyGroup } from "./PolicyBlocks";
+import { RoutePathCards, buildRoutePreviewStatus } from "./RouteBoard";
 import { LinkSpreadPicker, linkChoiceClass } from "@/features/links/LinkSpreadPicker";
 
 /*
@@ -94,6 +95,8 @@ export type RouteGroupFieldsProps = {
   protocol?: string;
   /** 「我的节点」：路径的落地可以直接选一个，地址端口由面板从节点解析、节点地址变了跟着改。 */
   nodeOptions?: RouteNodeOption[];
+  /** 规则的源端口：预览里入口节点写它。 */
+  entrySourcePort?: number;
 };
 
 export type RouteNodeOption = { id: number; name: string; address: string; port: number; protocol?: string };
@@ -323,6 +326,7 @@ export function RouteGroupFields({
   defaultAdvancedOpen,
   protocol = "tcp",
   nodeOptions = [],
+  entrySourcePort,
 }: RouteGroupFieldsProps) {
   const now = nowMs ?? Date.now();
   const udpOnly = normalizeForwardRuleProtocol(protocol) === "udp";
@@ -743,6 +747,17 @@ export function RouteGroupFields({
         ) : null}
       </PolicyGroup>
 
+      {/* 它会这样跑：拿还没保存的路径画成线路板那种链，下面一句大白话说策略。填着填着就看得见。 */}
+      {policy && paths.length >= 2 ? (
+        <section className="flex min-w-0 flex-col gap-1.5" data-testid="route-preview" aria-label="它会这样跑">
+          <div className="text-meta text-muted-foreground">它会这样跑</div>
+          <RoutePathCards
+            preview
+            policy={policy}
+            status={buildRoutePreviewStatus({ paths, hosts, entryHostId, sourcePort: entrySourcePort, mainAddress })}
+          />
+        </section>
+      ) : null}
       <p className="text-secondary-type leading-relaxed text-foreground" data-testid="route-plain" aria-live="polite">
         {describeRouteGroupPlainly(value, { perSession: udpOnly })}
       </p>

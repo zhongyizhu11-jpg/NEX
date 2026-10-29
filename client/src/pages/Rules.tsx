@@ -142,6 +142,7 @@ import {
 } from "@shared/failoverTargets";
 import { FAILOVER_TONE_CLASS, describeFailoverLineDisplay } from "@/lib/failoverLineDisplay";
 import { RouteGroupSheet } from "@/features/rules/RouteGroupSheet";
+import { RouteMiniChain } from "@/features/rules/RouteBoard";
 import { EntityActions } from "@/components/entity/EntityActions";
 import { IconTile, type IconTileTone } from "@/components/entity/IconTile";
 import { RouteGroupFields, routeGroupPayload, type RouteHostOption } from "@/features/rules/RouteGroupFields";
@@ -2406,6 +2407,18 @@ function RulesContent() {
   // The batch-management dialog may load a separate full rule list, but it
   // must never replace the paged list rendered underneath the dialog.
   const rules = (isRuleGlobeView ? mapRules : rulePageQuery.data?.items) as any[] | undefined;
+  /*
+    规则卡上直接画线路组的迷你链（在走哪条、哪段慢）：一次拿全部线路组的状态，十秒一刷。
+    只有列表里有线路组规则时才拉；没有就不花这一次查询。
+  */
+  const anyRouteGroupRule = useMemo(() => (rules || []).some((rule: any) => !!rule?.failoverEnabled), [rules]);
+  const routeBoardQuery = trpc.rules.routeBoard.useQuery(user?.role === "admin" ? { scope: "all" } : undefined, {
+    enabled: anyRouteGroupRule,
+    refetchInterval: pollingInterval("log"),
+    staleTime: 5_000,
+    placeholderData: (previous: any) => previous,
+  });
+  const routeBoardByRule = useMemo(() => new Map<number, any>(((routeBoardQuery.data || []) as any[]).map((item) => [Number(item.ruleId), item.status])), [routeBoardQuery.data]);
   const isLoading = isRuleGlobeView
     ? ruleMapQuery.isLoading
     : rulePageQuery.isLoading;
@@ -7452,6 +7465,14 @@ function RulesContent() {
               {tag}
             </span>
           </div>
+          {failover && routeBoardByRule.get(Number(rule.id)) ? (
+            <RouteMiniChain
+              className="mt-1.5"
+              status={routeBoardByRule.get(Number(rule.id))}
+              policy={failover.policy}
+              onOpen={() => setPolicyRuleId(Number(rule.id))}
+            />
+          ) : null}
         </CardContent>
       </Card>
     );
@@ -8421,6 +8442,7 @@ function RulesContent() {
                     scheduleTimeZone={BILLING_TIME_ZONE}
                     protocol={form.protocol}
                     nodeOptions={targetNodeOptions}
+                    entrySourcePort={form.sourcePort}
                   />
                 </div>
               )}

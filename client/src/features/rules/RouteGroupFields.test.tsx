@@ -232,3 +232,10 @@ test("落地选了我的节点：画成一块带地址，不再是输入框；�
   assert.match(html, /203\.0\.113\.7:443/);
   assert.equal((html.match(/选我的节点/g) || []).length, 1, "只有手填的那条旁边有选节点");
 });
+
+test("编辑框里有「它会这样跑」的预览：每条路径一张链卡，入口写源端口", () => {
+  const html = render(group());
+  assert.equal((html.match(/data-testid="route-preview"/g) || []).length, 1);
+  assert.equal((html.match(/data-testid="route-path-card"/g) || []).length, 2);
+  assert.match(html, /JP relay 02/);
+});
