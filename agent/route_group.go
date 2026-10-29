@@ -73,11 +73,128 @@ type routeProbeSample struct {
 type routeTargetStats struct {
 	samples      []routeProbeSample
 	availability []bool
-	// 连续失败次数：探测不通和真实连接拨不通都算一次，一次探测成功清零。
+	// 连续失败次数：探测不通和真实连接拨不通都算一次，一次探测成功或一次正常的真实拨号清零。
 	// 「失败 1 次不切、连续失败 N 次才标记异常」看的就是它。
 	consecutiveFailures int
 	lastProbeOK         bool
 	lastProbeAt         time.Time
+	// 真实连接的拨号记录（最近 routeDialWindow）：成功、失败、慢；见 recordDial。
+	dials []routeDialSample
+	// 拨号耗时的折半移动平均 (prev+sample)/2：跟着最近几次走，又不会被一次尖峰带飞。0 = 还没拨过。
+	dialAvgMs int
+	// 连续几次拨号「慢」了；够 routeSlowDialStreak 次算一次失败并要求立刻探测。
+	consecutiveSlow int
+	lastDialAt      time.Time
+}
+
+/*
+真实连接也算票（honk 的思路）：探测 5 秒一次、探的是一个固定端点，而真实连接每时每刻都在
+拨，拨的就是业务要走的地址。拨不通本来就记一次失败；这里再补上「拨得慢」—— 连续
+routeSlowDialStreak 次比探测延迟慢 routeSlowDialFactor 倍（且不低于 routeSlowDialMinMs），
+当作一次失败并立刻探一轮，而不是等下一个 5 秒。一次正常的拨号成功则把连续失败清零：
+业务连接都通了，比探测更有说服力。
+
+拨号记录不进探测样本窗口：它不是按固定间隔来的，混进去丢包率和抖动就不准了。
+*/
+const (
+	routeDialWindow     = 10 * time.Minute
+	routeDialMaxSamples = 400
+	routeSlowDialMinMs  = 500
+	routeSlowDialFactor = 3
+	routeSlowDialStreak = 3
+)
+
+type routeDialSample struct {
+	at   time.Time
+	ok   bool
+	slow bool
+	ms   int
+}
+
+type routeDialSummary struct {
+	ok, failed, slow int
+	avgMs            int
+	lastAt           time.Time
+}
+
+// 这次拨号算不算慢：有探测延迟时按倍数比，没有就只看下限。
+func routeDialIsSlow(durationMs int, probeLatencyMs int) bool {
+	threshold := routeSlowDialMinMs
+	if probeLatencyMs > 0 && probeLatencyMs*routeSlowDialFactor > threshold {
+		threshold = probeLatencyMs * routeSlowDialFactor
+	}
+	return durationMs >= threshold
+}
+
+// recordDial 记一次真实拨号。返回 true 表示这次凑够了连续慢拨，调用方该报事件并立刻探测。
+func (s *routeTargetStats) recordDial(ok bool, durationMs int, at time.Time, probeLatencyMs int) bool {
+	if durationMs < 0 {
+		durationMs = 0
+	}
+	sample := routeDialSample{at: at, ok: ok, ms: durationMs}
+	s.lastDialAt = at
+	streak := false
+	if !ok {
+		s.consecutiveFailures++
+		s.consecutiveSlow = 0
+	} else {
+		if s.dialAvgMs <= 0 {
+			s.dialAvgMs = durationMs
+		} else {
+			s.dialAvgMs = (s.dialAvgMs + durationMs) / 2
+		}
+		sample.slow = routeDialIsSlow(durationMs, probeLatencyMs)
+		if sample.slow {
+			s.consecutiveSlow++
+			if s.consecutiveSlow >= routeSlowDialStreak {
+				s.consecutiveSlow = 0
+				s.consecutiveFailures++
+				streak = true
+			}
+		} else {
+			s.consecutiveSlow = 0
+			s.consecutiveFailures = 0
+		}
+	}
+	s.dials = append(s.dials, sample)
+	s.pruneDials(at)
+	return streak
+}
+
+func (s *routeTargetStats) pruneDials(now time.Time) {
+	cutoff := now.Add(-routeDialWindow)
+	start := 0
+	for start < len(s.dials) && s.dials[start].at.Before(cutoff) {
+		start++
+	}
+	if start > 0 {
+		s.dials = append([]routeDialSample(nil), s.dials[start:]...)
+	}
+	if len(s.dials) > routeDialMaxSamples {
+		s.dials = s.dials[len(s.dials)-routeDialMaxSamples:]
+	}
+}
+
+func (s *routeTargetStats) dialSummary(now time.Time) routeDialSummary {
+	out := routeDialSummary{}
+	if s == nil {
+		return out
+	}
+	s.pruneDials(now)
+	for _, sample := range s.dials {
+		switch {
+		case !sample.ok:
+			out.failed++
+		case sample.slow:
+			out.slow++
+			out.ok++
+		default:
+			out.ok++
+		}
+	}
+	out.avgMs = s.dialAvgMs
+	out.lastAt = s.lastDialAt
+	return out
 }
 
 type routeStatsSummary struct {
@@ -110,9 +227,9 @@ func (s *routeTargetStats) recordProbe(ok bool, latencyMs int, at time.Time) {
 	}
 }
 
-// 真实连接拨不通：算一次失败，但不进样本窗口 —— 它不是按固定间隔来的，混进去丢包率就不准了。
+// 真实连接拨不通：算一次失败，但不进样本窗口（见 recordDial）。
 func (s *routeTargetStats) recordDialFailure() {
-	s.consecutiveFailures++
+	s.recordDial(false, 0, time.Now(), 0)
 }
 
 func (s *routeTargetStats) summary() routeStatsSummary {
@@ -203,6 +320,34 @@ func (p *failoverProxy) statsLocked(index int) *routeTargetStats {
 		p.stats[index] = &routeTargetStats{}
 	}
 	return p.stats[index]
+}
+
+// markDialSuccess 记一次真实连接拨通了：清连续失败；连续几次拨得慢就当一次失败、报事件、立刻探一轮。
+func (p *failoverProxy) markDialSuccess(index int, duration time.Duration) {
+	p.mu.Lock()
+	p.ensureHealthStateLocked()
+	if index < 0 || index >= len(p.spec.Targets) {
+		p.mu.Unlock()
+		return
+	}
+	now := time.Now()
+	probe := p.scoreInputLocked(index)
+	probeMs := 0
+	if probe.hasLatency {
+		probeMs = probe.latencyMs
+	}
+	stats := p.statsLocked(index)
+	streak := stats.recordDial(true, int(duration/time.Millisecond), now, probeMs)
+	if streak {
+		target := p.spec.Targets[index]
+		reason := fmt.Sprintf("slow dial: %dms x%d, probe %dms", stats.dialAvgMs, routeSlowDialStreak, probeMs)
+		logf("failover target slow dials rule=%d source=%d index=%d target=%s:%d %s failures=%d/%d", p.ruleID, p.sourcePort, index, target.TargetIP, target.TargetPort, reason, stats.consecutiveFailures, p.spec.FailureThreshold)
+		p.recordTargetEventLocked(index, "slow_dial", reason)
+	}
+	p.mu.Unlock()
+	if streak {
+		go p.checkHealthShared()
+	}
 }
 
 // 评分的输入：样本窗口的汇总；还没攒到样本时退回最近一次探测的耗时。
@@ -508,6 +653,12 @@ type failoverTargetStatsReport struct {
 	Connections         int     `json:"connections"`
 	Samples             int     `json:"samples"`
 	LastProbeAt         int64   `json:"lastProbeAt,omitempty"`
+	// 真实连接最近 10 分钟的拨号：成功 / 失败 / 慢（慢的也算成功里的）、耗时折半均值、最近一次（Unix 毫秒）。
+	DialOK     int   `json:"dialOk"`
+	DialFailed int   `json:"dialFailed"`
+	DialSlow   int   `json:"dialSlow"`
+	DialMs     int   `json:"dialMs,omitempty"`
+	LastDialAt int64 `json:"lastDialAt,omitempty"`
 }
 
 type failoverStatsReport struct {
@@ -558,6 +709,11 @@ func (p *failoverProxy) statsReportLocked() failoverStatsReport {
 		}
 		if !stats.lastProbeAt.IsZero() {
 			item.LastProbeAt = stats.lastProbeAt.UnixMilli()
+		}
+		dials := stats.dialSummary(time.Now())
+		item.DialOK, item.DialFailed, item.DialSlow, item.DialMs = dials.ok, dials.failed, dials.slow, dials.avgMs
+		if !dials.lastAt.IsZero() {
+			item.LastDialAt = dials.lastAt.UnixMilli()
 		}
 		report.Targets = append(report.Targets, item)
 	}

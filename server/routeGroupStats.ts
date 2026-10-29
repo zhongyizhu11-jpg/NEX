@@ -34,7 +34,11 @@ export type RouteTargetStat = {
   samples: number;
   /** Unix 毫秒；0 = 没探过。 */
   lastProbeAt: number;
+  /** 真实连接最近 10 分钟的拨号：成功 / 失败 / 慢（慢的也在成功里）、耗时折半均值（0 = 没拨过）、最近一次（Unix 毫秒）。 */
+  dials?: RouteDialStat;
 };
+
+export type RouteDialStat = { ok: number; failed: number; slow: number; dialMs: number; lastAt: number };
 
 export type RouteAgentStats = {
   ruleId: number;
@@ -117,6 +121,13 @@ function sanitizeTarget(raw: any, index: number): RouteTargetStat | null {
     connections: Math.max(0, integer(raw.connections)),
     samples: Math.max(0, integer(raw.samples)),
     lastProbeAt: reportedMillis(raw.lastProbeAt),
+    dials: {
+      ok: Math.max(0, integer(raw.dialOk)),
+      failed: Math.max(0, integer(raw.dialFailed)),
+      slow: Math.max(0, integer(raw.dialSlow)),
+      dialMs: Math.max(0, integer(raw.dialMs)),
+      lastAt: reportedMillis(raw.lastDialAt),
+    },
   };
 }
 

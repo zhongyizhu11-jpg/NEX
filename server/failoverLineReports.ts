@@ -47,7 +47,7 @@ const lastSnapshotByHost = new Map<number, { signature: string; checkedAt: numbe
 const lastStatsAtByHost = new Map<number, number>();
 
 /** Agent 报的事件里面板要入库的几种；别的（比如将来加的）只进日志。 */
-const STORED_EVENT_KINDS: ReadonlySet<RouteEventKind> = new Set<RouteEventKind>(["switch", "unhealthy", "recovered", "prewarm", "precheck_failed", "unpinned", "flap_hold"]);
+const STORED_EVENT_KINDS: ReadonlySet<RouteEventKind> = new Set<RouteEventKind>(["switch", "unhealthy", "recovered", "prewarm", "precheck_failed", "unpinned", "flap_hold", "slow_dial"]);
 
 /**
  * Agent 报的时刻换成面板存的秒。

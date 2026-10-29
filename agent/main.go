@@ -13911,7 +13911,11 @@ func (p *failoverProxy) handleConn(client net.Conn) {
 		p.checkHealthShared()
 		target, index = p.pickTargetForKey(visitor, nil)
 		if index >= 0 {
+			started := time.Now()
 			upstream, err = failoverDialTCP(context.Background(), target, failoverProxyDialTimeout)
+			if err == nil {
+				p.markDialSuccess(index, time.Since(started))
+			}
 		} else {
 			logf("failover dial failed rule=%d no target available after trying %d targets: %v", p.ruleID, len(attempted), err)
 			return

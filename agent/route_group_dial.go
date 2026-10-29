@@ -121,10 +121,11 @@ func (p *failoverProxy) raceDelayLocked(index int) time.Duration {
 }
 
 type failoverDialResult struct {
-	conn   net.Conn
-	target failoverTarget
-	index  int
-	err    error
+	conn    net.Conn
+	target  failoverTarget
+	index   int
+	err     error
+	elapsed time.Duration
 }
 
 // dialFailoverPath 拨已经挑好的路径；允许竞速时按上面的规则再拨一条备选。拨失败的路径记一次
@@ -135,10 +136,13 @@ func (p *failoverProxy) dialFailoverPath(visitor string, target failoverTarget, 
 	delay := p.raceDelayLocked(index)
 	p.mu.RUnlock()
 	if !race {
+		started := time.Now()
 		conn, err := failoverDialTCP(context.Background(), target, timeout)
 		if err != nil {
 			attempted[index] = true
 			p.markTargetFailure(index, "dial failed")
+		} else {
+			p.markDialSuccess(index, time.Since(started))
 		}
 		return conn, target, index, err
 	}
@@ -146,8 +150,9 @@ func (p *failoverProxy) dialFailoverPath(visitor string, target failoverTarget, 
 	ctx, cancel := context.WithCancel(context.Background())
 	results := make(chan failoverDialResult, 2)
 	dial := func(target failoverTarget, index int) {
+		started := time.Now()
 		conn, err := failoverDialTCP(ctx, target, timeout)
-		results <- failoverDialResult{conn: conn, target: target, index: index, err: err}
+		results <- failoverDialResult{conn: conn, target: target, index: index, err: err, elapsed: time.Since(started)}
 	}
 	go dial(target, index)
 	pending := 1
@@ -176,6 +181,7 @@ func (p *failoverProxy) dialFailoverPath(visitor string, target failoverTarget, 
 		case result := <-results:
 			pending--
 			if result.err == nil {
+				p.markDialSuccess(result.index, result.elapsed)
 				cancel()
 				// 输家可能在取消前刚好连上：收下来关掉，别漏连接。
 				for ; pending > 0; pending-- {

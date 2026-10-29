@@ -128,6 +128,8 @@ export async function buildRouteStatus(rule: any) {
       prewarming: !!agent && agent.prewarmIndex === index,
       /** 入口 Agent 探到的最近一次（Unix 毫秒）；0 = 没探过。 */
       probedAt: target?.lastProbeAt ?? null,
+      /** 真实连接最近 10 分钟的拨号（Agent 2.2.237 起）；老 Agent 没报就是 null。 */
+      dials: target?.dials && (target.dials.ok > 0 || target.dials.failed > 0 || target.dials.lastAt > 0) ? target.dials : null,
     };
   });
   const agentVersion = oldestAgentVersion(schedulerHosts.map((schedulerHost) => String(schedulerHost?.agentVersion || "").trim()));

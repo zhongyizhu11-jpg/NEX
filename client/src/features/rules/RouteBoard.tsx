@@ -63,7 +63,24 @@ export type RouteBoardPath = {
   active: boolean;
   prewarming: boolean;
   probedAt?: number | null;
+  /** 真实连接最近 10 分钟的拨号：成功 / 失败 / 慢、耗时折半均值；老 Agent 没有。 */
+  dials?: { ok: number; failed: number; slow: number; dialMs: number; lastAt: number } | null;
 };
+
+/** 「建连 120 · 失败 3 · 慢 2 · 拨号 28ms」：有失败或慢的染琥珀，什么都没拨过不显示。 */
+export function describeRouteDials(dials: RouteBoardPath["dials"]): { text: string; tone: "ok" | "warn" | "off"; title: string } | null {
+  if (!dials || (dials.ok === 0 && dials.failed === 0)) return null;
+  const parts = [`建连 ${dials.ok}`];
+  if (dials.failed > 0) parts.push(`失败 ${dials.failed}`);
+  if (dials.slow > 0) parts.push(`慢 ${dials.slow}`);
+  if (dials.dialMs > 0) parts.push(`拨号 ${dials.dialMs} ms`);
+  const bad = dials.failed > 0 || dials.slow > 0;
+  return {
+    text: parts.join(" · "),
+    tone: bad ? "warn" : dials.ok > 0 ? "ok" : "off",
+    title: `最近 10 分钟真实连接的拨号：拨通 ${dials.ok} 次${dials.failed > 0 ? `、拨不通 ${dials.failed} 次` : ""}${dials.slow > 0 ? `、拨得慢 ${dials.slow} 次（比探测延迟慢 3 倍以上）` : ""}${dials.dialMs > 0 ? `；拨号耗时约 ${dials.dialMs} ms` : ""}。拨不通和连续拨得慢都算一次失败，参与切换判定。`,
+  };
+}
 
 export type RouteBoardEntry = { hostId: number; name: string; online: boolean | null; sourcePort: number };
 
@@ -253,6 +270,7 @@ export function RoutePathCard({ path, entry, ruleRate = null, share, preferred, 
   );
   const totalLabel = chain.totalMs === null ? "整链 —" : `整链 ${chain.partial ? "≥ " : ""}${round(chain.totalMs)} ms`;
   const grade = routeScoreGrade(path.score);
+  const dials = describeRouteDials(path.dials);
   return (
     <section className={cn("fx-rb-path", className)} data-health={health} data-active={path.active ? "" : undefined} data-testid="route-path-card">
       <header className="fx-rb-path-head">
@@ -276,6 +294,7 @@ export function RoutePathCard({ path, entry, ruleRate = null, share, preferred, 
           {path.lossPct !== null && path.lossPct > 0 ? <span className="fx-rb-meta">丢包 {path.lossPct.toFixed(1)}%</span> : null}
           {path.availabilityPct !== null && path.availabilityPct < 100 ? <span className="fx-rb-meta">可用 {path.availabilityPct.toFixed(1)}%</span> : null}
           {path.connections !== null && path.connections > 0 ? <span className="fx-rb-meta">{path.connections} 连接</span> : null}
+          {dials ? <span className="fx-rb-chip" data-tone={dials.tone} title={dials.title} data-testid="route-dials">{dials.text}</span> : null}
           {onOpen ? <button type="button" className="fx-rb-open" onClick={onOpen}>详情</button> : null}
         </span>
       </header>

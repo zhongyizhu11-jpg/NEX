@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { parseRoutePaths } from "../shared/routeGroup";
-import { recordRouteAgentStats, resetRouteStatsForTest } from "./routeGroupStats";
+import { getRouteStatus, recordRouteAgentStats, resetRouteStatsForTest } from "./routeGroupStats";
 import {
   ROUTE_PATH_QUALITY_SAMPLE_INTERVAL_MS,
   bucketRouteQualityRows,
@@ -154,4 +154,17 @@ test("七天保留：真的 SQLite 上只删 7 天前的，读回来换算正确
   fs.rmSync(directory, { recursive: true, force: true });
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
   assert.match(result.stdout, /ROUTE_QUALITY_OK/);
+});
+
+test("Agent 2.2.237 报的真实拨号计数进快照；老 Agent 没报就是全 0", () => {
+  resetRouteStatsForTest();
+  recordRouteAgentStats({
+    hostId: 1,
+    isAllowed: () => true,
+    nowMs: 6_000_000,
+    reports: [{ ruleId: 43, activeIndex: 0, targets: [{ ...target(0), dialOk: 12, dialFailed: 3, dialSlow: "2", dialMs: 640.4, lastDialAt: 1_700_000_000_000 }, { ...target(1), dialFailed: -5 }] }],
+  });
+  const stats = getRouteStatus(43, 6_000_000).agent!;
+  assert.deepEqual(stats.targets[0].dials, { ok: 12, failed: 3, slow: 2, dialMs: 640, lastAt: 1_700_000_000_000 });
+  assert.deepEqual(stats.targets[1].dials, { ok: 0, failed: 0, slow: 0, dialMs: 0, lastAt: 0 });
 });

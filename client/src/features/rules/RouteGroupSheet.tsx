@@ -236,7 +236,7 @@ export function RouteGroupPanel({ policy, status, events, canEdit, pending = fal
               const movement = event.fromLabel && event.toLabel
                 ? `${event.fromLabel} → ${event.toLabel}`
                 : event.toLabel || event.fromLabel || "";
-              const failed = kind === "precheck_failed" || kind === "unhealthy" || kind === "issue" || kind === "flap_hold";
+              const failed = kind === "precheck_failed" || kind === "unhealthy" || kind === "issue" || kind === "flap_hold" || kind === "slow_dial";
               return (
                 <div key={event.id} className="fx-list-row flex w-full min-w-0 items-start gap-3 px-4 py-3" data-testid="route-event">
                   <span className="w-[4.5rem] shrink-0 font-mono text-meta tabular-nums text-muted-foreground">{formatPolicyClock(event.at, now, timeZone)}</span>

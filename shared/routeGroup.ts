@@ -698,7 +698,7 @@ export function describeRoutePath(
   return stops.join(" → ");
 }
 
-export const ROUTE_EVENT_KINDS = ["switch", "unhealthy", "recovered", "precheck_failed", "prewarm", "pinned", "unpinned", "issue", "flap_hold"] as const;
+export const ROUTE_EVENT_KINDS = ["switch", "unhealthy", "recovered", "precheck_failed", "prewarm", "pinned", "unpinned", "issue", "flap_hold", "slow_dial"] as const;
 export type RouteEventKind = (typeof ROUTE_EVENT_KINDS)[number];
 
 export const ROUTE_EVENT_KIND_LABELS: Record<RouteEventKind, string> = {
@@ -711,6 +711,7 @@ export const ROUTE_EVENT_KIND_LABELS: Record<RouteEventKind, string> = {
   unpinned: "交回自动",
   issue: "路径不可用",
   flap_hold: "抖动抑制",
+  slow_dial: "连接变慢",
 };
 
 export function normalizeRouteEventKind(value: unknown): RouteEventKind | null {
@@ -744,6 +745,9 @@ export function describeRouteReason(reason: unknown): string {
   // Agent 的抖动抑制：flap: 3 switches in 1h, hold 5m until 2026-…
   const flap = /^flap:\s*(\d+)\s+switches in 1h,\s*hold\s+(\d+)m/i.exec(text);
   if (flap) return `一小时内自动切了 ${flap[1]} 次，线路在来回漂：暂停自动切换 ${flap[2]} 分钟（当前线路挂了照样切）`;
+  // Agent 的真实连接反馈：slow dial: 820ms x3, probe 40ms
+  const slow = /^slow dial:\s*(\d+)ms\s*x(\d+),\s*probe\s+(\d+)ms/i.exec(text);
+  if (slow) return `新连接连续 ${slow[2]} 次拨得慢（拨号约 ${slow[1]}ms${Number(slow[3]) > 0 ? `，探测 ${slow[3]}ms` : ""}）：记一次失败，立刻复查`;
   return text;
 }
 

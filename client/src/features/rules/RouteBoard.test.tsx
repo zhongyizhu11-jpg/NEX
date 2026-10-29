@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { newRouteGroupDraft, routeGroupRuleFields, type RouteGroup } from "@shared/routeGroup";
 import { describeRoutePolicy } from "@shared/routePolicy";
-import { RouteBoardCard, RouteSwitchChip, summarizeRouteChain, type RouteBoardPath } from "./RouteBoard";
+import { RouteBoardCard, RouteSwitchChip, describeRouteDials, summarizeRouteChain, type RouteBoardPath } from "./RouteBoard";
 
 const NOW = Date.UTC(2026, 9, 28, 12, 0, 0);
 const draft = newRouteGroupDraft({ timezone: "Asia/Shanghai" });
@@ -120,4 +120,33 @@ test("来回漂的线路组在切换药丸上说出来", () => {
   assert.match(html, /data-tone="warn"/);
   const quiet = renderToStaticMarkup(<RouteSwitchChip switches={{ count24h: 0, count1h: 0, manual24h: 0, flapping: false, lastAt: null, lastFromLabel: null, lastToLabel: null, lastReason: null }} />);
   assert.match(quiet, /24h 没切过/);
+});
+
+test("真实连接的拨号药丸：有失败或慢的染琥珀，没拨过不显示，老 Agent 没有这项", () => {
+  assert.equal(describeRouteDials(null), null);
+  assert.equal(describeRouteDials(undefined), null);
+  assert.equal(describeRouteDials({ ok: 0, failed: 0, slow: 0, dialMs: 0, lastAt: 0 }), null);
+  const fine = describeRouteDials({ ok: 120, failed: 0, slow: 0, dialMs: 28, lastAt: NOW })!;
+  assert.equal(fine.text, "建连 120 · 拨号 28 ms");
+  assert.equal(fine.tone, "ok");
+  const bad = describeRouteDials({ ok: 12, failed: 3, slow: 2, dialMs: 640, lastAt: NOW })!;
+  assert.equal(bad.text, "建连 12 · 失败 3 · 慢 2 · 拨号 640 ms");
+  assert.equal(bad.tone, "warn");
+  assert.match(bad.title, /拨不通 3 次、拨得慢 2 次/);
+  const policy = describeRoutePolicy(rule, { host: { isOnline: true, agentVersion: "2.2.237" }, nowMs: NOW })!;
+  const html = renderToStaticMarkup(
+    <RouteBoardCard
+      name="美国游戏线路"
+      status={{
+        paths: [path(0, { dials: { ok: 12, failed: 3, slow: 2, dialMs: 640, lastAt: NOW } }), path(1)],
+        entry: { hostId: 1, name: "HK entry 01", online: true, sourcePort: 10001 },
+        rate: null,
+        switches: { count24h: 0, count1h: 0, manual24h: 0, flapping: false, lastAt: null, lastFromLabel: null, lastToLabel: null, lastReason: null },
+      }}
+      policy={policy}
+      onOpen={() => {}}
+    />,
+  );
+  assert.equal((html.match(/data-testid="route-dials"/g) || []).length, 1, "只有报了拨号的路径有药丸");
+  assert.match(html, /data-tone="warn"[^>]*data-testid="route-dials">建连 12 · 失败 3 · 慢 2 · 拨号 640 ms/);
 });
