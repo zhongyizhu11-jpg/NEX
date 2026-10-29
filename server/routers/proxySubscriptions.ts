@@ -1,4 +1,5 @@
 import { nanoid } from "nanoid";
+import { followBoundRulesToNode } from "../proxyNodeFollow";
 import { z } from "zod";
 
 import { adminProcedure, protectedProcedure, router } from "../_core/trpc";
@@ -487,7 +488,13 @@ export const proxySubscriptionsRouter = router({
         Object.assign(data, nodeToRow(parsed.node, input.link));
       }
       if (Object.keys(data).length === 0) return { success: true };
+      const before = await db.getProxyNodeById(input.id) as any;
       await db.updateProxyNode(input.id, data as any);
+      if (input.link !== undefined && before
+        && (String(before.address || "") !== String((data as any).address || "") || Number(before.port) !== Number((data as any).port))) {
+        // 换了链接、地址端口变了：绑着它的转发和线路组路径跟着改。
+        await followBoundRulesToNode(input.id, `proxy-node-link-${input.id}`);
+      }
       return { success: true };
     }),
 

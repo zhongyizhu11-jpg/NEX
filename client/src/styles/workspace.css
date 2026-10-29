@@ -1738,6 +1738,30 @@ html[data-personalization-background="image"] .auth-divider-label, html[data-per
 .fx-rb-link[data-flowing]::before { background: var(--fx-primary-gradient); opacity: 1; }
 .fx-rb-link[data-state="unknown"]::before { background: repeating-linear-gradient(90deg, var(--fx-warn) 0 6px, transparent 6px 10px); opacity: .9; }
 .fx-rb-link[data-state="failed"]::before { background: repeating-linear-gradient(90deg, var(--fx-down) 0 6px, transparent 6px 10px); opacity: 1; }
+.fx-rb-link[data-state="planned"]::before { background: var(--fx-standby); opacity: .45; }
+.fx-rb-link[data-state="planned"] .fx-rb-badge { color: var(--fx-text-muted); border-style: dashed; }
+.fx-rb-path[data-preview] { background: var(--fx-l1-surface); }
+.fx-rb-path[data-preview] .fx-rb-node { background: var(--fx-l0-page); }
+
+/* 规则卡上的迷你链：一行一条路径。 */
+.fx-rb-mini { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; min-width: 0; }
+.fx-rb-mini-row { display: flex; width: 100%; min-width: 0; align-items: center; gap: 6px; padding: 2px 4px; border: 0; border-radius: 6px; background: transparent; font: inherit; font-size: 11.5px; line-height: 18px; color: var(--fx-text-secondary); text-align: left; cursor: default; }
+button.fx-rb-mini-row { cursor: pointer; }
+button.fx-rb-mini-row:hover { background: var(--fx-l2-group); }
+.fx-rb-mini-letter { flex: none; width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; border-radius: 999px; background: var(--fx-l2-group); font-size: 10px; font-weight: 700; color: var(--fx-text-secondary); }
+.fx-rb-mini-letter[data-active] { background: var(--fx-path); color: #fff; }
+.fx-rb-mini-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--fx-standby); }
+.fx-rb-mini-dot[data-health="healthy"] { background: var(--fx-healthy); }
+.fx-rb-mini-dot[data-health="degraded"], .fx-rb-mini-dot[data-health="switching"] { background: var(--fx-warn); }
+.fx-rb-mini-dot[data-health="down"] { background: var(--fx-down); }
+.fx-rb-mini-chain { display: flex; min-width: 0; flex: 1 1 auto; align-items: center; gap: 4px; overflow: hidden; white-space: nowrap; }
+.fx-rb-mini-stop { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.fx-rb-mini-seg { flex: none; font-style: normal; font-family: var(--fx-font-mono); font-size: 10px; color: var(--fx-text-muted); padding: 0 3px; border-radius: 4px; background: var(--fx-l2-group); font-variant-numeric: tabular-nums; }
+.fx-rb-mini-seg[data-state="measured"] { color: var(--fx-healthy-text); background: var(--fx-healthy-soft); }
+.fx-rb-mini-seg[data-state="failed"] { color: var(--fx-down-text); background: var(--fx-down-soft); }
+.fx-rb-mini-seg[data-state="unknown"] { color: var(--fx-warn-text); background: var(--fx-warn-soft); }
+.fx-rb-mini-end { flex: none; display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--fx-text-muted); font-variant-numeric: tabular-nums; }
+.fx-rb-mini-end [data-active] { color: var(--fx-path); font-weight: 600; }
 .fx-rb-badge { position: relative; z-index: 1; display: inline-flex; height: 20px; align-items: center; padding: 0 8px; border-radius: 999px; border: 1px solid var(--fx-stroke-weak); background: var(--fx-l1-surface); font-family: var(--fx-font-mono); font-size: 11px; font-weight: 600; white-space: nowrap; color: var(--fx-text-secondary); font-variant-numeric: tabular-nums; }
 /* 药丸要盖住线：状态色是半透明的，先垫一层面板底色再铺它。 */
 .fx-rb-link[data-state="unknown"] .fx-rb-badge { border-color: transparent; background: linear-gradient(var(--fx-warn-soft), var(--fx-warn-soft)), var(--fx-l1-surface); color: var(--fx-warn-text); font-family: inherit; }

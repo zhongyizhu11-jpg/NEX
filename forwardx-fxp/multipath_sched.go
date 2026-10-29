@@ -66,6 +66,10 @@ const multipathRTTMarks = 32
 const (
 	multipathPreferNum = 4
 	multipathPreferDen = 5
+	// multipathStandbyTakeover 是主腿压着数据多久没见回执，热备腿就接手。比重发
+	// 间隔（multipathReinjectMin）略长：主腿只是抖一下的话，重发先把那几片补过去，
+	// 热备腿不用整个接管；真断了，接管后重发会把主腿手上没送到的全交给热备腿。
+	multipathStandbyTakeover = 300 * time.Millisecond
 )
 
 // mpOut is one chunk in the sender's retransmit buffer.
@@ -287,18 +291,22 @@ func (s *multipathSession) claim(leg *multipathLegConn) mpWork {
 		if s.closedLocked() || leg.failed.Load() {
 			return mpWork{stop: true}
 		}
-		if s.ackWanted {
-			s.ackWanted = false
-			return mpWork{ack: true}
-		}
-		if len(s.control) > 0 {
-			frame := s.control[0]
-			s.control[0] = nil
-			s.control = s.control[1:]
-			return mpWork{control: frame}
+		now := time.Now()
+		// 回执和协议帧（结束标记、窗口）也不能交给一条已经停住的腿：它写得进去、送不到，
+		// 对端就一直等不到结束标记。只要有别的腿空着，就留给它们。
+		if !s.stalledLocked(leg, now) || !s.idleTakerLocked(leg) {
+			if s.ackWanted {
+				s.ackWanted = false
+				return mpWork{ack: true}
+			}
+			if len(s.control) > 0 {
+				frame := s.control[0]
+				s.control[0] = nil
+				s.control = s.control[1:]
+				return mpWork{control: frame}
+			}
 		}
 		if out := s.pickLocked(leg); out != nil {
-			now := time.Now()
 			if leg.pace.inflight() == 0 {
 				leg.pace.progressAt = now
 			}
@@ -332,6 +340,15 @@ func (s *multipathSession) claim(leg *multipathLegConn) mpWork {
 // would deliver the chunk sooner.
 func (s *multipathSession) pickLocked(leg *multipathLegConn) *mpOut {
 	if !leg.pace.eligible() {
+		return nil
+	}
+	now := time.Now()
+	if s.heldLocked(leg, now) {
+		// 热备腿、主腿还好：只送复制模式的副本（算是保温），别的都不碰。
+		return s.pickDupLocked(leg)
+	}
+	if s.yieldToStandbyLocked(leg, now) {
+		// 主腿停住了、热备腿已经空着等：新片和重发都交给它，别再往一条不动的腿上堆。
 		return nil
 	}
 	if out := s.pickRetryLocked(leg); out != nil {
@@ -393,7 +410,7 @@ func (s *multipathSession) betterIdleLegLocked(leg, avoid *multipathLegConn) boo
 		return false
 	}
 	for _, other := range s.legs {
-		if other == leg || other == avoid || !other.idleLocked() {
+		if other == leg || other == avoid || !s.legIdleLocked(other, now) {
 			continue
 		}
 		theirs := other.pace.expectedDelay(now)
@@ -407,8 +424,71 @@ func (s *multipathSession) betterIdleLegLocked(leg, avoid *multipathLegConn) boo
 // idleTakerLocked reports whether some other leg could take a chunk this
 // instant.
 func (s *multipathSession) idleTakerLocked(leg *multipathLegConn) bool {
+	now := time.Now()
 	for _, other := range s.legs {
-		if other != leg && other.idleLocked() {
+		if other != leg && s.legIdleLocked(other, now) {
+			return true
+		}
+	}
+	return false
+}
+
+// legIdleLocked is idleLocked for the leg, minus a standby leg that is being
+// held back: it is parked, but not for work the others could hand it.
+func (s *multipathSession) legIdleLocked(leg *multipathLegConn, now time.Time) bool {
+	return leg.idleLocked() && !s.heldLocked(leg, now)
+}
+
+// heldLocked reports whether this leg is a standby leg that must stay out of
+// the way, because a primary leg is still alive and moving.
+func (s *multipathSession) heldLocked(leg *multipathLegConn, now time.Time) bool {
+	return leg.standby && s.primaryHealthyLocked(now)
+}
+
+// yieldToStandbyLocked reports whether this primary leg has stalled (data
+// outstanding, nothing confirmed for multipathStandbyTakeover) while a standby
+// leg is free to take over. Its own chunks are resent there by
+// reinjectOverdueLocked; this keeps it from claiming new ones meanwhile.
+func (s *multipathSession) yieldToStandbyLocked(leg *multipathLegConn, now time.Time) bool {
+	if leg.standby || !s.stalledLocked(leg, now) {
+		return false
+	}
+	for _, other := range s.legs {
+		if other != leg && other.standby && other.idleLocked() {
+			return true
+		}
+	}
+	return false
+}
+
+// stalledLocked reports whether this leg holds data the far side has not
+// confirmed for multipathStandbyTakeover: it may still be connected, but
+// nothing handed to it is getting through right now.
+func (s *multipathSession) stalledLocked(leg *multipathLegConn, now time.Time) bool {
+	return leg.pace.inflight() > 0 && now.Sub(leg.pace.progressAt) >= multipathStandbyTakeover
+}
+
+// hasStandbyLocked reports whether the session has any standby leg at all.
+func (s *multipathSession) hasStandbyLocked() bool {
+	for _, leg := range s.legs {
+		if leg.standby {
+			return true
+		}
+	}
+	return false
+}
+
+// primaryHealthyLocked reports whether some non-standby leg is alive and
+// either empty or still being confirmed by the far side. A primary leg that
+// holds data and has shown no progress for multipathStandbyTakeover counts as
+// down, even before its connection breaks: that is the moment the standby
+// takes over.
+func (s *multipathSession) primaryHealthyLocked(now time.Time) bool {
+	for _, leg := range s.legs {
+		if leg.standby || leg.failed.Load() {
+			continue
+		}
+		if !s.stalledLocked(leg, now) {
 			return true
 		}
 	}

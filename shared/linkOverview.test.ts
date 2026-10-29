@@ -23,8 +23,9 @@ const overview = buildLinkOverview({
     { id: 14, name: "用出口组", mode: "forwardx", exitGroupId: 30, loadBalanceEnabled: 1, loadBalanceStrategy: "weighted", entryHostId: 1, exitHostId: 2 },
     { id: 15, name: "老多出口", mode: "tls", loadBalanceEnabled: 1, loadBalanceStrategy: "random", entryHostId: 1, exitHostId: 2 },
     { id: 16, name: "普通链", mode: "forwardx", relayMode: "chain", entryHostId: 1, exitHostId: 2 },
+    { id: 17, name: "热备中转", mode: "forwardx", relayMode: "hot_standby", entryHostId: 1, exitHostId: 2 },
   ],
-  hops: [10, 11, 16].flatMap((tunnelId) => [
+  hops: [10, 11, 16, 17].flatMap((tunnelId) => [
     { tunnelId, seq: 0, hostId: 1 }, { tunnelId, seq: 1, hostId: 4 }, { tunnelId, seq: 2, hostId: 5 }, { tunnelId, seq: 3, hostId: 2 },
   ]),
   exitNodes: [{ tunnelId: 14, hostId: 3 }, { tunnelId: 15, hostId: 3 }, { tunnelId: 15, hostId: 6, isEnabled: 0 }],
@@ -44,8 +45,11 @@ const keys = (items: { key: string }[]) => items.map((item) => item.key).sort();
 const find = (key: string) => [...overview.failover, ...overview.loadBalance, ...overview.splitConnection].find((item) => item.key === key);
 
 test("主备：中转主备、入口主备、出口主备、自动切换的线路组", () => {
-  assert.deepEqual(keys(overview.failover), ["exit_group:33", "forward_group:20", "forward_group:21", "route_group:40", "tunnel:10:relay"]);
+  assert.deepEqual(keys(overview.failover), ["exit_group:33", "forward_group:20", "forward_group:21", "route_group:40", "tunnel:10:relay", "tunnel:17:relay"]);
   assert.deepEqual(find("tunnel:10:relay")?.members, ["中转 1", "中转 2"]);
+  // 热备也是主备的一种，但它连接不断：列在主备里，写明毫秒级接手。
+  assert.match(find("tunnel:17:relay")?.how || "", /热备/);
+  assert.equal(find("tunnel:17:relay")?.href, "/tunnels?tab=tunnels&edit=17");
   assert.equal(find("forward_group:21")?.note, "只有一台，坏了没得换");
   assert.equal(find("route_group:40")?.href, "/rules?edit=40");
 });

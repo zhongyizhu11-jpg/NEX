@@ -61,6 +61,9 @@ type helloFrame struct {
 	// MultipathLegCapacityMbps：这一路的线路带宽，出口按它给回程（下载方向）各路分份额。
 	// 回程是出口在调度，它看不到面板给入口的腿配置，只能跟着 hello 带过去；老出口不认识就忽略。
 	MultipathLegCapacityMbps int `json:"multipathLegCapacityMbps,omitempty"`
+	// MultipathLegStandby（2.2.137 起）：这一路是热备腿（见 multipathLeg.Standby）。回程是出口在
+	// 调度，所以也要跟着 hello 带过去；老出口不认识就当普通腿，只有去程按热备走。
+	MultipathLegStandby bool `json:"multipathLegStandby,omitempty"`
 	// targetLiteral 不上线：出口核对过目标之后记下「配置里写的就是这个 IP」。
 	// 写死的 IP 是面板明确配的（比如出口本机调度器的 127.0.0.1），照拨；写的是
 	// 域名时，解析出来落到环回、链路本地这些地址上就不拨（见 dialExitTarget）。
@@ -224,7 +227,7 @@ const (
 	fxpUDPIdleTimeout    = 5 * time.Minute
 	fxpProtocolSampleMax = 512
 	fxpMasterContext     = "forwardx-fxp-v2 master"
-	fxpRuntimeVersion    = "2.2.136"
+	fxpRuntimeVersion    = "2.2.137"
 	fxpFallbackRetry     = 5 * time.Second
 	// A node that stays down is re-probed on a growing delay, because probing a
 	// peer that accepts but never answers costs a whole handshake timeout.

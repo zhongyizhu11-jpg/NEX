@@ -10,7 +10,7 @@ import FilterToolbar from "@/components/FilterToolbar";
 import { SearchToggle } from "@/components/ListControls";
 import { useAuth } from "@/_core/hooks/useAuth";
 import SectionTransition from "@/components/SectionTransition";
-import { forwardGroupModeOf } from "@shared/forwardTypes";
+import { forwardGroupModeOf, isUserspaceForwardType } from "@shared/forwardTypes";
 import { loadReactGlobe, prefetchReactGlobe } from "@/lib/reactGlobeLoader";
 import { escapeTooltipHtml, hostGeoCoordinate } from "@/lib/hostGeo";
 import { formatBytes } from "@shared/formatBytes";
@@ -142,6 +142,7 @@ import {
 } from "@shared/failoverTargets";
 import { FAILOVER_TONE_CLASS, describeFailoverLineDisplay } from "@/lib/failoverLineDisplay";
 import { RouteGroupSheet } from "@/features/rules/RouteGroupSheet";
+import { RouteMiniChain } from "@/features/rules/RouteBoard";
 import { EntityActions } from "@/components/entity/EntityActions";
 import { IconTile, type IconTileTone } from "@/components/entity/IconTile";
 import { RouteGroupFields, routeGroupPayload, type RouteHostOption } from "@/features/rules/RouteGroupFields";
@@ -211,6 +212,7 @@ import {
   RotateCcw,
   Lock,
   FileJson,
+  X,
 } from "lucide-react";
 import type { GlobeMethods } from "react-globe.gl";
 import {
@@ -332,6 +334,11 @@ type RuleFormData = {
   sourcePort: number;
   targetIp: string;
   targetPort: number;
+  /**
+   * 目标选的是「我的节点」：记节点 id，保存时作为 proxyNodeId 显式绑定；节点地址变了，
+   * 面板把目标改过去（server/proxyNodeFollow.ts）。手改目标地址就解开。
+   */
+  targetNodeId: number | null;
   telegramErrorNotifyEnabled: boolean;
   /** 规则专属域名开关（shared/ruleEntryDomain.ts）：关掉订阅直接用入口地址。缺省开。 */
   entryDomainEnabled: boolean;
@@ -371,6 +378,7 @@ const defaultForm: RuleFormData = {
   sourcePort: 0,
   targetIp: "",
   targetPort: 0,
+  targetNodeId: null,
   telegramErrorNotifyEnabled: false,
   // 新建规则默认不用专属域名，要用再在「更多设置」里打开。
   entryDomainEnabled: false,
@@ -2399,6 +2407,18 @@ function RulesContent() {
   // The batch-management dialog may load a separate full rule list, but it
   // must never replace the paged list rendered underneath the dialog.
   const rules = (isRuleGlobeView ? mapRules : rulePageQuery.data?.items) as any[] | undefined;
+  /*
+    规则卡上直接画线路组的迷你链（在走哪条、哪段慢）：一次拿全部线路组的状态，十秒一刷。
+    只有列表里有线路组规则时才拉；没有就不花这一次查询。
+  */
+  const anyRouteGroupRule = useMemo(() => (rules || []).some((rule: any) => !!rule?.failoverEnabled), [rules]);
+  const routeBoardQuery = trpc.rules.routeBoard.useQuery(user?.role === "admin" ? { scope: "all" } : undefined, {
+    enabled: anyRouteGroupRule,
+    refetchInterval: pollingInterval("log"),
+    staleTime: 5_000,
+    placeholderData: (previous: any) => previous,
+  });
+  const routeBoardByRule = useMemo(() => new Map<number, any>(((routeBoardQuery.data || []) as any[]).map((item) => [Number(item.ruleId), item.status])), [routeBoardQuery.data]);
   const isLoading = isRuleGlobeView
     ? ruleMapQuery.isLoading
     : rulePageQuery.isLoading;
@@ -2521,7 +2541,7 @@ function RulesContent() {
   const importCreateMutation = trpc.rules.create.useMutation();
 
   // tab：打开时先停在哪一页（表格里点「详细」直接看延迟记录）
-  const [selfTestRule, setSelfTestRule] = useState<{ id: number; name: string; isForwardChain?: boolean; probeMethod?: "tcping" | "ping"; tab?: string } | null>(null);
+  const [selfTestRule, setSelfTestRule] = useState<{ id: number; name: string; isForwardChain?: boolean; chainKernel?: boolean; probeMethod?: "tcping" | "ping"; tab?: string } | null>(null);
 
   const setRouteMode = (mode: RuleRouteMode, aggregate = false) => {
     if (mode === form.routeMode) return;
@@ -2819,6 +2839,7 @@ function RulesContent() {
       sourcePort: rule.sourcePort,
       targetIp: rule.targetIp,
       targetPort: rule.targetPort,
+      targetNodeId: Number(rule.proxyNodeId || 0) > 0 ? Number(rule.proxyNodeId) : null,
       telegramErrorNotifyEnabled: !!rule.telegramErrorNotifyEnabled,
       entryDomainEnabled: rule.entryDomainEnabled !== false,
       failoverEnabled: !!rule.failoverEnabled,
@@ -4131,6 +4152,7 @@ function RulesContent() {
         isEnabled: portStatus === "available" ? true : undefined,
         targetIp: form.targetIp,
         targetPort: form.targetPort,
+        ...(form.targetNodeId ? { proxyNodeId: form.targetNodeId } : {}),
         telegramErrorNotifyEnabled: form.telegramErrorNotifyEnabled,
         entryDomainEnabled: form.entryDomainEnabled,
         ...failoverPayload,
@@ -4152,6 +4174,7 @@ function RulesContent() {
         sourcePort: form.sourcePort,
         targetIp: form.targetIp,
         targetPort: form.targetPort,
+        ...(form.targetNodeId ? { proxyNodeId: form.targetNodeId } : {}),
         telegramErrorNotifyEnabled: form.telegramErrorNotifyEnabled,
         entryDomainEnabled: form.entryDomainEnabled,
         ...failoverPayload,
@@ -4945,6 +4968,31 @@ function RulesContent() {
   const getForwardGroupConfigStatus = useCallback((group: any): "available" | "degraded" | "pending" | "unavailable" | "disabled" => (
     groupAvailabilityById.get(Number(group?.id || 0))?.status || "unavailable"
   ), [groupAvailabilityById]);
+  // 下面 resolveRuleVisualStatus 在 ruleVisualStatuses 的 useMemo 里渲染时就会被调用，
+  // 这个 const 必须定义在它前面：放在后面就是「Cannot access ... before initialization」（2.3.488 整页白屏）。
+  /**
+   * 这条规则经过的机器里掉线了的（名字）。入口机自己、隧道从入口到出口的每一跳、转发链的每台成员。
+   * 转发组（多入口）不在这里管：组的运行状态已经按「几台在跑」分档了。
+   */
+  const getRuleOfflineHostNames = (rule: any): string[] => {
+    const category = getRuleCategory(rule, forwardGroupById);
+    const ids: number[] = [];
+    if (category === "tunnel") {
+      const tunnel = tunnelById.get(Number(rule?.tunnelId || 0));
+      if (tunnel) ids.push(...getTunnelHopIds(tunnel));
+    } else if (category === "chain") {
+      const group = forwardGroupById.get(Number(rule?.forwardGroupId || 0));
+      for (const member of (Array.isArray(group?.members) ? group.members : [])) ids.push(Number(member?.hostId || 0));
+    } else if (!rule?.forwardGroupId) {
+      ids.push(Number(rule?.hostId || 0));
+    }
+    const names: string[] = [];
+    for (const id of new Set(ids.filter((id) => id > 0))) {
+      const host = hostById.get(id);
+      if (host && host.isOnline === false) names.push(String(host.name || `主机 #${id}`));
+    }
+    return names;
+  };
   const resolveRuleVisualStatus = useCallback((rule: any): ReturnType<typeof resolveForwardRuleVisualStatus> => {
     const latest = stableProbeByRule.get(Number(rule.id));
     if (rule.forwardGroupId) {
@@ -6292,29 +6340,6 @@ function RulesContent() {
    * 隧道取它的跳点名，转发链取链上的主机名，转发组取组名 —— 组内部谁在跑是
    * 组自己的事，规则这一层只需要说明「走的是这个组」。
    */
-  /**
-   * 这条规则经过的机器里掉线了的（名字）。入口机自己、隧道从入口到出口的每一跳、转发链的每台成员。
-   * 转发组（多入口）不在这里管：组的运行状态已经按「几台在跑」分档了。
-   */
-  const getRuleOfflineHostNames = (rule: any): string[] => {
-    const category = getRuleCategory(rule, forwardGroupById);
-    const ids: number[] = [];
-    if (category === "tunnel") {
-      const tunnel = tunnelById.get(Number(rule?.tunnelId || 0));
-      if (tunnel) ids.push(...getTunnelHopIds(tunnel));
-    } else if (category === "chain") {
-      const group = forwardGroupById.get(Number(rule?.forwardGroupId || 0));
-      for (const member of (Array.isArray(group?.members) ? group.members : [])) ids.push(Number(member?.hostId || 0));
-    } else if (!rule?.forwardGroupId) {
-      ids.push(Number(rule?.hostId || 0));
-    }
-    const names: string[] = [];
-    for (const id of new Set(ids.filter((id) => id > 0))) {
-      const host = hostById.get(id);
-      if (host && host.isOnline === false) names.push(String(host.name || `主机 #${id}`));
-    }
-    return names;
-  };
 
   const getRuleHopNames = (rule: any): string[] => {
     const category = getRuleCategory(rule, forwardGroupById);
@@ -6776,7 +6801,7 @@ function RulesContent() {
       label: "诊断",
       ariaLabel: `诊断 ${rule.name}：转发链路自测`,
       icon: <Stethoscope className="h-3.5 w-3.5" />,
-      onSelect: () => setSelfTestRule({ id: rule.id, name: rule.name, isForwardChain: isForwardChainRule, probeMethod }),
+      onSelect: () => setSelfTestRule({ id: rule.id, name: rule.name, isForwardChain: isForwardChainRule, chainKernel: !isUserspaceForwardType(rule.forwardType), probeMethod }),
     };
     const editAction = { key: "edit", label: "编辑", ariaLabel: `编辑 ${rule.name}`, icon: <Pencil className="h-3.5 w-3.5" />, onSelect: () => openEdit(rule) };
     return (
@@ -7077,7 +7102,7 @@ function RulesContent() {
                 <button
                   type="button"
                   className="text-[11px] text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-foreground"
-                  onClick={() => setSelfTestRule({ id: rule.id, name: rule.name, isForwardChain: isForwardChainRule, probeMethod: ruleLatencyProbeMethodForRule(rule), tab: "history" })}
+                  onClick={() => setSelfTestRule({ id: rule.id, name: rule.name, isForwardChain: isForwardChainRule, chainKernel: !isUserspaceForwardType(rule.forwardType), probeMethod: ruleLatencyProbeMethodForRule(rule), tab: "history" })}
                 >
                   详细
                 </button>
@@ -7442,6 +7467,14 @@ function RulesContent() {
               {tag}
             </span>
           </div>
+          {failover && routeBoardByRule.get(Number(rule.id)) ? (
+            <RouteMiniChain
+              className="mt-1.5"
+              status={routeBoardByRule.get(Number(rule.id))}
+              policy={failover.policy}
+              onOpen={() => setPolicyRuleId(Number(rule.id))}
+            />
+          ) : null}
         </CardContent>
       </Card>
     );
@@ -7904,7 +7937,7 @@ function RulesContent() {
             label: "延迟记录",
             content: (
               <Suspense fallback={<DataSectionLoading />}>
-                <TcpingDetailBody ruleId={selfTestRule.id} isForwardChain={!!selfTestRule.isForwardChain} probeMethod={selfTestRule.probeMethod} active={!!selfTestRule} />
+                <TcpingDetailBody ruleId={selfTestRule.id} isForwardChain={!!selfTestRule.isForwardChain} chainKernel={!!selfTestRule.chainKernel} probeMethod={selfTestRule.probeMethod} active={!!selfTestRule} />
               </Suspense>
             ),
           }, {
@@ -8220,7 +8253,7 @@ function RulesContent() {
               value=""
               onValueChange={(value) => {
                 const node = targetNodeOptions.find((item) => String(item.id) === value);
-                if (node) setForm((prev) => ({ ...prev, targetIp: node.address, targetPort: node.port }));
+                if (node) setForm((prev) => ({ ...prev, targetIp: node.address, targetPort: node.port, targetNodeId: node.id }));
               }}
               >
               <SelectTrigger className="h-7 w-auto gap-1 border-dashed px-2 text-meta" aria-label="选我的节点作为目标">
@@ -8239,8 +8272,19 @@ function RulesContent() {
               <Input
               placeholder="例如: 10.0.0.1 或 example.com"
               value={form.targetIp}
-              onChange={(e) => setForm({ ...form, targetIp: e.target.value })}
+              onChange={(e) => setForm({ ...form, targetIp: e.target.value, targetNodeId: null })}
               />
+              {form.targetNodeId ? (
+              <p className="flex min-w-0 items-center gap-1.5 text-meta text-muted-foreground" data-testid="target-node-chip">
+              <span className="inline-flex min-w-0 items-center gap-1 rounded-[var(--fx-radius-control)] bg-[var(--fx-healthy-soft)] px-1.5 py-0.5 text-[var(--fx-healthy-text)]">
+              <span className="truncate">目标是我的节点「{proxyNodeNameById.get(form.targetNodeId) || `#${form.targetNodeId}`}」</span>
+              <button type="button" className="rounded-full p-0.5 hover:bg-black/10" aria-label="不再跟随节点" onClick={() => setForm({ ...form, targetNodeId: null })}>
+              <X className="h-3 w-3" />
+              </button>
+              </span>
+              <span className="min-w-0 truncate">节点地址变了，目标自动跟着改，订阅里就是这条</span>
+              </p>
+              ) : null}
               </FormField>
               <FormField className="space-y-1.5">
               <Label>目标端口 <span className="text-destructive">*</span></Label>
@@ -8251,7 +8295,7 @@ function RulesContent() {
               step={1}
               placeholder="例如: 80"
               value={form.targetPort || ""}
-              onChange={(e) => setForm({ ...form, targetPort: parseInt(e.target.value) || 0 })}
+              onChange={(e) => setForm({ ...form, targetPort: parseInt(e.target.value) || 0, targetNodeId: null })}
               />
               </FormField>
               <FormField className="space-y-1.5">
@@ -8399,6 +8443,8 @@ function RulesContent() {
                     policy={formRoutePolicy}
                     scheduleTimeZone={BILLING_TIME_ZONE}
                     protocol={form.protocol}
+                    nodeOptions={targetNodeOptions}
+                    entrySourcePort={form.sourcePort}
                   />
                 </div>
               )}

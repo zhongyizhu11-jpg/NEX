@@ -8,11 +8,10 @@ import {
   type InboundRoute,
   type InboundRouteTargetType,
 } from "@shared/inboundRouting";
-import { UNLOCK_STATUS_LABELS, type UnlockStatus } from "@shared/unlockCheck";
+import { LandingPicker } from "@/components/proxy/LandingPicker";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 
 /** 表单里的一条分流：域名先按文本编辑（换行 / 逗号分隔），保存时再拆。 */
@@ -43,18 +42,12 @@ export function inboundRoutesFromForm(routes: readonly InboundRouteForm[]) {
   };
 }
 
-const STATUS_TONE: Record<string, string> = {
-  ok: "text-[var(--fx-healthy-text)]",
-  partial: "text-[var(--fx-warn-text)]",
-  blocked: "text-[var(--fx-down-text)]",
-  unknown: "text-muted-foreground",
-};
-
 /**
  * 节点编辑器里的「分流」：按服务或域名，把这个端口的一部分流量从别的落地出去（shared/inboundRouting.ts）。
  *
  * 默认收着：多数节点不需要。有分流时标题上写几条，列表行上会显示每条实际去了哪。
- * 「走另一台落地」的下拉里每台落地后面带着所选服务的最新检测结论，选之前就知道它解不解锁。
+ * 「走另一台落地」用的是和转发规则出口共用的落地选择器（LandingPicker），入站后面带着所选服务的
+ * 最新检测结论，选之前就知道它解不解锁。
  */
 export function InboundRoutingEditor({ routes, onChange, hostId, status }: {
   routes: InboundRouteForm[];
@@ -64,10 +57,6 @@ export function InboundRoutingEditor({ routes, onChange, hostId, status }: {
   /** 已保存的节点：每条分流现在实际去了哪（服务端解析的结果）。 */
   status?: Array<{ note: string; action: string }>;
 }) {
-  const landingOptions = trpc.proxyInbounds.routingLandingOptions.useQuery(undefined, {
-    enabled: routes.some((route) => route.target === "landing"),
-    staleTime: 30_000,
-  });
   const update = (index: number, patch: Partial<InboundRouteForm>) => {
     onChange(routes.map((route, i) => (i === index ? { ...route, ...patch } : route)));
   };
@@ -101,8 +90,6 @@ export function InboundRoutingEditor({ routes, onChange, hostId, status }: {
 
       {routes.map((route, index) => {
         const domainCount = parseRouteDomains(route.domainsText).length;
-        const options = (landingOptions.data || []).filter((option) => option.hostId !== hostId);
-        const selected = options.find((option) => option.inboundId === route.landingInboundId);
         const note = status?.[index]?.note;
         return (
           <div key={index} className="space-y-2 rounded-md border bg-muted/30 p-2.5">
@@ -155,37 +142,18 @@ export function InboundRoutingEditor({ routes, onChange, hostId, status }: {
                   ))}
                 </SelectContent>
               </Select>
-              {route.target === "landing" ? (
-                <Select
-                  value={route.landingInboundId > 0 ? String(route.landingInboundId) : ""}
-                  onValueChange={(value) => update(index, { landingInboundId: Number(value) })}
-                >
-                  <SelectTrigger className="h-8" aria-label={`第 ${index + 1} 条分流走哪台落地`}>
-                    <SelectValue placeholder={landingOptions.isLoading ? "加载中…" : options.length ? "选一台落地" : "没有可用的 SS 落地"} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {options.map((option) => (
-                      <SelectItem key={option.inboundId} value={String(option.inboundId)}>
-                        {option.name}{option.online ? "" : "（离线）"}{option.enabled ? "" : "（已停用）"}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              ) : null}
             </div>
-            {route.target === "landing" && selected && route.presets.length > 0 ? (
-              <p className="text-xs text-muted-foreground">
-                「{selected.name}」最新检测：
-                {route.presets.map((id, i) => {
-                  const value = (selected.unlock as Record<string, string>)[id] as UnlockStatus | undefined;
-                  const name = INBOUND_ROUTE_PRESETS.find((preset) => preset.id === id)?.name || id;
-                  return (
-                    <span key={id} className={cn(value ? STATUS_TONE[value] : "text-muted-foreground")}>
-                      {i > 0 ? "、" : ""}{name} {value ? UNLOCK_STATUS_LABELS[value] : "没测过"}
-                    </span>
-                  );
-                })}
-              </p>
+            {route.target === "landing" ? (
+              <LandingPicker
+                compact
+                showUnlock
+                value={{ hostId: null, inboundId: route.landingInboundId > 0 ? route.landingInboundId : null }}
+                onChange={(next) => update(index, { landingInboundId: next.inboundId || 0 })}
+                excludeHostIds={[hostId]}
+                unlockServices={route.presets}
+                labelPrefix={`第 ${index + 1} 条分流的`}
+                emptyMessage="没有可用的 SS 落地：需要自己的 Shadowsocks 落地，或管理员开放的落地出口。"
+              />
             ) : null}
             {route.target === "auto_unlock" ? (
               <p className="text-xs text-muted-foreground">

@@ -2,28 +2,26 @@
  * 规则编辑器里的「出口」一段：直接连接 / 落地主机（Shadowsocks）/ 外部 Shadowsocks 链接。
  *
  * 规则（能用哪些方法、UDP / SS2022 要入口机有什么能力、规则形态的限制）都在 shared/ssEgress.ts，
- * 和服务端同一份；这里只负责选和提示。最终以服务端校验为准。
+ * 和服务端同一份；这里只负责选和提示。最终以服务端校验为准。落地主机 / 入站的下拉和「一键创建」
+ * 是和节点分流共用的落地选择器（proxy/LandingPicker.tsx）。
  *
  * UDP 走出口（规则协议选 TCP+UDP）和 SS2022 出口要每一台入口机都报了能力（Agent 2.2.227 起、gost 运行时
  * 3.2.6-nex3 起）：撑不起时 TCP+UDP 选不了、SS2022 入站不可选，并写清楚是哪台机器、要升级什么。
  */
 
 import { useMemo } from "react";
-import { toast } from "sonner";
-import { ArrowRightLeft, Globe2, Link2, Loader2, Plus, Server } from "lucide-react";
+import { ArrowRightLeft, Globe2, Link2, Server } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import { LandingPicker, useLandingOptions, type LandingInbound } from "@/components/proxy/LandingPicker";
 import { FormField } from "@/components/ui/form-field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { segmentedControlClassName, segmentedOptionClassName } from "@/components/ui/segmented";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { trpc } from "@/lib/trpc";
 import {
   isSs2022Method,
   parseSsEgressLink,
   RULE_EGRESS_TYPE_LABELS,
-  SS_EGRESS_DEFAULT_METHOD,
   SS_EGRESS_METHODS,
   SS_EGRESS_UDP_SUPPORTED,
   type RuleEgressType,
@@ -116,37 +114,20 @@ const OPTIONS: Array<{ type: RuleEgressType; short: string; icon: typeof Server 
 export function RuleEgressSection({ value, onChange, onEgressEnabled, blockedReason, runtimeNote, entryHostIds, viaTunnel = false, isAdmin }: Props) {
   // 谁去连 SS 落地：直连规则是入口机，走隧道的规则是隧道出口机。
   const dialer = viaTunnel ? "隧道出口机" : "入口机";
-  const utils = trpc.useUtils();
-  const optionsQuery = trpc.proxyInbounds.egressLandingOptions.useQuery(undefined, {
-    enabled: value.egressType === "ss_host",
-    staleTime: 15_000,
-    refetchOnWindowFocus: false,
-  });
-  const createLanding = trpc.proxyInbounds.createLandingEgress.useMutation({
-    onSuccess: async (result) => {
-      toast.success(`已在落地主机上创建 Shadowsocks 入站（${result.method}，端口 ${result.port}）`);
-      await utils.proxyInbounds.egressLandingOptions.invalidate();
-      onChange({ egressHostId: result.hostId, egressInboundId: Number(result.id) });
-    },
-    onError: (error) => toast.error(error.message || "创建落地入站失败"),
-  });
-
+  const options = useLandingOptions(value.egressType === "ss_host");
   const capabilities = useEgressEntryCapabilities(entryHostIds, value.egressType !== "none", viaTunnel ? "隧道出口机" : "入口主机");
   const entrySet = useMemo(() => new Set(entryHostIds.map(Number)), [entryHostIds]);
-  const hosts = useMemo(
-    () => ((optionsQuery.data || []) as any[]).filter((host) => !entrySet.has(Number(host.hostId))),
-    [entrySet, optionsQuery.data],
-  );
+  const hosts = useMemo(() => options.hosts.filter((host) => !entrySet.has(Number(host.hostId))), [entrySet, options.hosts]);
   const selectedHost = hosts.find((host) => Number(host.hostId) === Number(value.egressHostId)) || null;
   // SS2022 入站要每台入口机都有 ssEgress2022 能力；撑不起时照样列出来，但不能选。
-  const inboundBlockReason = (inbound: any): string | null => {
+  const inboundBlockReason = (inbound: LandingInbound): string | null => {
     if (inbound.methodError) return "不支持做出口";
     if (!inbound.isEnabled) return "已停用";
     if (isSs2022Method(inbound.method) && !capabilities.ss2022) return `${dialer}需升级才能用 SS2022`;
     return null;
   };
-  const usableInbounds = (selectedHost?.inbounds || []).filter((inbound: any) => !inboundBlockReason(inbound));
-  const selectedInbound = (selectedHost?.inbounds || []).find((inbound: any) => Number(inbound.id) === Number(value.egressInboundId)) || null;
+  const usableInbounds = (selectedHost?.inbounds || []).filter((inbound) => !inboundBlockReason(inbound));
+  const selectedInbound = (selectedHost?.inbounds || []).find((inbound) => Number(inbound.id) === Number(value.egressInboundId)) || null;
   const linkPreview = value.egressType === "ss_link" && value.egressLink.trim() ? parseSsEgressLink(value.egressLink) : null;
 
   const pick = (type: RuleEgressType) => {
@@ -198,97 +179,22 @@ export function RuleEgressSection({ value, onChange, onEgressEnabled, blockedRea
 
       {value.egressType === "ss_host" && (
         <div className="space-y-2">
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            <FormField className="min-w-0 space-y-1.5">
-              <Label>落地主机</Label>
-              <Select
-                value={value.egressHostId ? String(value.egressHostId) : undefined}
-                disabled={optionsQuery.isLoading}
-                onValueChange={(next) => {
-                  const host = hosts.find((item) => Number(item.hostId) === Number(next));
-                  const first = (host?.inbounds || []).find((inbound: any) => !inboundBlockReason(inbound));
-                  onChange({ egressHostId: Number(next), egressInboundId: first ? Number(first.id) : null });
-                }}
-              >
-                <SelectTrigger className="min-w-0">
-                  <SelectValue placeholder={optionsQuery.isLoading ? "加载中…" : "选择落地主机"} />
-                </SelectTrigger>
-                <SelectContent>
-                  {hosts.map((host: any) => (
-                    <SelectItem key={host.hostId} value={String(host.hostId)} textValue={host.hostName}>
-                      {host.hostName}
-                      {!host.online ? "（离线）" : host.inbounds.length === 0 ? "（无 SS 入站）" : ""}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </FormField>
-            <FormField className="min-w-0 space-y-1.5">
-              <Label>Shadowsocks 入站</Label>
-              <Select
-                value={value.egressInboundId ? String(value.egressInboundId) : undefined}
-                disabled={!selectedHost || (selectedHost.inbounds || []).length === 0}
-                onValueChange={(next) => onChange({ egressInboundId: Number(next) })}
-              >
-                <SelectTrigger className="min-w-0">
-                  <SelectValue placeholder={selectedHost && selectedHost.inbounds.length === 0 ? "这台主机还没有 SS 入站" : "选择入站"} />
-                </SelectTrigger>
-                <SelectContent>
-                  {(selectedHost?.inbounds || []).map((inbound: any) => (
-                    <SelectItem
-                      key={inbound.id}
-                      value={String(inbound.id)}
-                      disabled={!!inboundBlockReason(inbound)}
-                      textValue={`${inbound.name} ${inbound.port}`}
-                    >
-                      {inbound.name} :{inbound.port} · {inbound.method}
-                      {inboundBlockReason(inbound) ? `（${inboundBlockReason(inbound)}）` : ""}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </FormField>
-          </div>
-          {selectedHost && !selectedHost.online && (
-            <p className="text-meta text-[var(--fx-warn-text)]">这台落地主机当前离线，保存前请先让它上线。</p>
-          )}
+          <LandingPicker
+            value={{ hostId: value.egressHostId, inboundId: value.egressInboundId }}
+            onChange={(next) => onChange({ egressHostId: next.hostId, egressInboundId: next.inboundId })}
+            excludeHostIds={entryHostIds}
+            filterInbound={inboundBlockReason}
+            allowCreate
+            emptyMessage={isAdmin ? `除了${viaTunnel ? "隧道出口机" : "入口主机"}之外还没有别的主机可以当落地。` : undefined}
+          />
           {selectedInbound && isSs2022Method(selectedInbound.method) && !capabilities.ss2022 && !capabilities.loading && (
             <p className="text-meta leading-5 text-[var(--fx-warn-text)]">{capabilities.ss2022Reason}</p>
           )}
-          {selectedHost && usableInbounds.length === 0 && (
-            <div className="flex min-w-0 flex-col gap-2 rounded-md bg-muted/35 px-2.5 py-2 sm:flex-row sm:items-center">
-              <span className="min-w-0 flex-1 text-meta leading-5 text-muted-foreground">
-                {(selectedHost.inbounds || []).length > 0
-                  ? `这台主机上的 SS 入站都不能做出口（只支持 ${SS_EGRESS_METHODS.join(" / ")}）。`
-                  : "这台主机上还没有能做出口的 Shadowsocks 入站。"}
-              </span>
-              {selectedHost.canCreateInbound ? (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  className="w-full shrink-0 sm:w-auto"
-                  disabled={createLanding.isPending || !selectedHost.online}
-                  onClick={() => createLanding.mutate({ hostId: Number(selectedHost.hostId) })}
-                >
-                  {createLanding.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
-                  一键创建落地 SS 入站
-                </Button>
-              ) : (
-                <span className="text-meta text-muted-foreground">请联系管理员在这台主机上开一个。</span>
-              )}
-            </div>
-          )}
-          {!optionsQuery.isLoading && hosts.length === 0 && (
-            <p className="text-meta text-muted-foreground">
-              {isAdmin ? `除了${viaTunnel ? "隧道出口机" : "入口主机"}之外还没有别的主机可以当落地。` : "您还没有可以当落地的主机：需要自己的主机，或管理员授权的主机。"}
+          {!(selectedHost && usableInbounds.length === 0) && (
+            <p className="text-meta leading-5 text-muted-foreground">
+              {dialer}经这个 Shadowsocks 入站让落地去连目标；入站轮换密码、改端口后规则自动跟上。
             </p>
           )}
-          <p className="text-meta leading-5 text-muted-foreground">
-            {selectedHost && usableInbounds.length === 0
-              ? `一键创建的入站用 ${SS_EGRESS_DEFAULT_METHOD}、随机密码，端口从这台主机的端口范围里挑，默认不进订阅。`
-              : `${dialer}经这个 Shadowsocks 入站让落地去连目标；入站轮换密码、改端口后规则自动跟上。`}
-          </p>
         </div>
       )}
 

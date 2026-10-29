@@ -10,7 +10,7 @@ import test from "node:test";
  * FXP 一开始就按它分份额。拓扑：家里设备（入口）→ 前置 A 500M / 前置 B 300M → 落地。
  * 起一个真的 sqlite 和真的心跳路由跑一遍。
  */
-test("单连接叠加：每一路带上中转主机的线路带宽", () => {
+function legsScenario(relayMode: "aggregate" | "hot_standby") {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-aggregate-legs-"));
   const databasePath = path.join(directory, "aggregate.db");
   const logDirectory = path.join(directory, "logs");
@@ -41,7 +41,7 @@ test("单连接叠加：每一路带上中转主机的线路带宽", () => {
     }
     await exec(
       'INSERT INTO tunnels (id, name, "entryHostId", "exitHostId", mode, "relayMode", "listenPort", "userId", "isEnabled") VALUES (1, ?, 1, 4, ?, ?, 23001, 1, 1)',
-      ["家里叠加", "forwardx", "aggregate"],
+      ["家里叠加", "forwardx", process.env.FORWARDX_TEST_RELAY_MODE],
     );
     for (const [seq, hostId, port] of [[0, 1, 0], [1, 2, 23101], [2, 3, 23102], [3, 4, 23001]]) {
       await exec('INSERT INTO tunnel_hops ("tunnelId", seq, "hostId", "listenPort") VALUES (1, ?, ?, ?)', [seq, hostId, port]);
@@ -101,16 +101,29 @@ test("单连接叠加：每一路带上中转主机的线路带宽", () => {
   const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
     cwd: path.resolve(import.meta.dirname, ".."),
     encoding: "utf8",
-    env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: databasePath, FORWARDX_LOG_DIR: logDirectory },
+    env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: databasePath, FORWARDX_LOG_DIR: logDirectory, FORWARDX_TEST_RELAY_MODE: relayMode },
   });
   fs.rmSync(directory, { recursive: true, force: true });
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
   const line = result.stdout.split("\n").find((row) => row.startsWith("OUTCOME "));
   assert.ok(line, `没拿到结果：\n${result.stdout}\n${result.stderr}`);
-  const { legs, routed, schedulerPort } = JSON.parse(line.slice("OUTCOME ".length));
+  return JSON.parse(line.slice("OUTCOME ".length)) as { legs: any[]; routed: any; schedulerPort: number | null };
+}
+
+test("单连接叠加：每一路带上中转主机的线路带宽", () => {
+  const { legs, routed, schedulerPort } = legsScenario("aggregate");
   assert.ok(Array.isArray(legs) && legs.length === 2, `应该有两路：${JSON.stringify(legs)}`);
+  assert.ok(legs.every((leg: any) => !leg.standby), `叠加的腿都不是热备：${JSON.stringify(legs)}`);
   assert.deepEqual(legs.map((leg: any) => [leg.via, leg.capacityMbps]), [["relay#2", 500], ["relay#3", 300]], JSON.stringify(legs));
   // 叠加上开线路组：入口照样拆到两台中转，目标换成落地机上的调度器，由它按权重分给两个落地目标。
+  assert.ok(schedulerPort && schedulerPort > 0, `落地机上应该跑着线路组调度器：${JSON.stringify({ routed, schedulerPort })}`);
+  assert.deepEqual(routed, { legs: ["relay#2", "relay#3"], targetIp: "127.0.0.1", targetPort: schedulerPort });
+});
+
+test("热备：同样两路，第一台中转当主腿，其余标成 standby", () => {
+  const { legs, routed, schedulerPort } = legsScenario("hot_standby");
+  assert.ok(Array.isArray(legs) && legs.length === 2, `应该有两路：${JSON.stringify(legs)}`);
+  assert.deepEqual(legs.map((leg: any) => [leg.via, leg.capacityMbps, !!leg.standby]), [["relay#2", 500, false], ["relay#3", 300, true]], JSON.stringify(legs));
   assert.ok(schedulerPort && schedulerPort > 0, `落地机上应该跑着线路组调度器：${JSON.stringify({ routed, schedulerPort })}`);
   assert.deepEqual(routed, { legs: ["relay#2", "relay#3"], targetIp: "127.0.0.1", targetPort: schedulerPort });
 });

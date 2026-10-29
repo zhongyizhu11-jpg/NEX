@@ -1,5 +1,5 @@
 import { hostPolicyBool } from "../shared/hostTrafficPolicy";
-import { isTunnelRelayFailover } from "../shared/tunnelRelay";
+import { isTunnelRelayFailover, isTunnelRelayHotStandby } from "../shared/tunnelRelay";
 
 /*
   流量故障转移在 Agent 配置里的样子（上游 v2.3.281）。这里返回的全是运行时副本：只在心跳
@@ -40,9 +40,10 @@ export function planTunnelTrafficParticipation(tunnel: any, hops: any[], exits: 
       });
     }
   }
-  if (groupedEntries || groupedExits || isTunnelRelayFailover(tunnel, hops)) {
+  if (groupedEntries || groupedExits || isTunnelRelayFailover(tunnel, hops) || isTunnelRelayHotStandby(tunnel, hops)) {
     const transit = nextHops.slice(1, -1);
-    if (String(tunnel.relayMode) === "failover") {
+    if (String(tunnel.relayMode) === "failover" || String(tunnel.relayMode) === "hot_standby") {
+      // 主备 / 热备：少一台中转照样走，只把被暂停的那台拿掉；全没了才停。
       nextHops = nextHops.filter((hop, index) => index === 0 || index === nextHops.length - 1 || !excluded.has(Number(hop.hostId)));
       if (transit.length > 0 && nextHops.length === 2) next.isEnabled = false;
     } else if (transit.some((hop) => excluded.has(Number(hop.hostId)))) next.isEnabled = false;

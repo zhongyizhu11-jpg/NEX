@@ -18,7 +18,7 @@ import { LINK_SPREAD_LABELS, LINK_TERM_FAILOVER, LINK_TERM_LOAD_BALANCE, LINK_TE
 import { hostBandwidthHintMbps } from "./linkWeights";
 import { ROUTE_MODE_INFO, routeGroupOf, type RouteGroupRule } from "./routeGroup";
 import { normalizeTunnelParallelStreams, tunnelParallelStreamsUnavailableReason } from "./tunnelParallelStreams";
-import { isTunnelRelayAggregate, isTunnelRelayFailover, tunnelRelayCandidates } from "./tunnelRelay";
+import { isTunnelRelayAggregate, isTunnelRelayFailover, isTunnelRelayHotStandby, tunnelRelayCandidates } from "./tunnelRelay";
 
 export type LinkOverviewKind = "route_group" | "forward_group" | "entry_group" | "exit_group" | "tunnel" | "aggregate";
 
@@ -178,6 +178,8 @@ export function buildLinkOverview(input: LinkOverviewInput): LinkOverview {
       push("failover", { key: `tunnel:${id}:relay`, kind: "tunnel", id, name, enabled, how: "中转主备", members: relays, href });
     } else if (isTunnelRelayAggregate(tunnel, hops)) {
       push("splitConnection", { key: `tunnel:${id}:relay`, kind: "aggregate", id, name, enabled, how: `${relays.length} 台中转一起送`, members: relays, href });
+    } else if (isTunnelRelayHotStandby(tunnel, hops)) {
+      push("failover", { key: `tunnel:${id}:relay`, kind: "tunnel", id, name, enabled, how: "中转热备：全连着，只走第一台，停了毫秒级接手", members: relays, href });
     }
     const extraExits = exitsByTunnel.get(id) || [];
     const multiExit = on(tunnel.loadBalanceEnabled, false) && normalizeExitGroupStrategy(tunnel.loadBalanceStrategy) !== "none" && extraExits.length > 0;

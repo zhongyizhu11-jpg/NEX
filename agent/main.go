@@ -38,7 +38,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.237"
+var Version = "2.2.238"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -2965,6 +2965,8 @@ type fxpMultipathLeg struct {
 	Via  string `json:"via,omitempty"`
 	// CapacityMbps：这一路（中转主机）的线路带宽，FXP 按它给单连接叠加的各路定初始份额。
 	CapacityMbps int `json:"capacityMbps,omitempty"`
+	// Standby：热备腿（面板 2.3.489 / FXP 2.2.137 起）。连着不送，主腿停了才接手，连接不断。
+	Standby bool `json:"standby,omitempty"`
 }
 
 type fxpExitEndpoint struct {
@@ -10202,6 +10204,10 @@ func fxpServerSignature(spec fxpSpec) string {
 		// 带宽只在写了时进签名：没写的隧道签名和旧版一样，升级不重启 FXP。
 		if leg.CapacityMbps > 0 {
 			parts = append(parts, "c"+strconv.Itoa(leg.CapacityMbps))
+		}
+		// 热备只在打开时进签名：主腿 / 热备腿一换，FXP 要重启才会按新分工走。
+		if leg.Standby {
+			parts = append(parts, "standby")
 		}
 	}
 	for _, exit := range spec.Exits {

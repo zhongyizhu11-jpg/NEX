@@ -277,7 +277,7 @@ export async function getTunnelsPage(input: TunnelListQuery) {
   const relayHostsAvailable = sql`(
     NOT EXISTS (SELECT 1 FROM ${tunnelHops} WHERE ${tunnelHops.tunnelId} = ${tunnels.id})
     OR (
-      LOWER(COALESCE(${tunnels.relayMode}, 'chain')) = 'failover'
+      LOWER(COALESCE(${tunnels.relayMode}, 'chain')) IN ('failover', 'hot_standby')
       AND EXISTS (
         SELECT 1 FROM ${tunnelHops}
         INNER JOIN ${hosts} ON ${hosts.id} = ${tunnelHops.hostId}
@@ -290,7 +290,7 @@ export async function getTunnelsPage(input: TunnelListQuery) {
       )
     )
     OR (
-      LOWER(COALESCE(${tunnels.relayMode}, 'chain')) <> 'failover'
+      LOWER(COALESCE(${tunnels.relayMode}, 'chain')) NOT IN ('failover', 'hot_standby')
       AND NOT EXISTS (
         SELECT 1 FROM ${tunnelHops}
         INNER JOIN ${hosts} ON ${hosts.id} = ${tunnelHops.hostId}

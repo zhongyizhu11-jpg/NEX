@@ -14,7 +14,7 @@ test("每种组合都有一句建议", () => {
 
 test("稳定优先：入口 → 转发组，中转 → 隧道中转主备，出口 → 出口组主备，几条路 → 线路组", () => {
   assert.deepEqual(linkWizardAdvice("stable", "entry").action, { type: "group", mode: "failover" });
-  assert.deepEqual(linkWizardAdvice("stable", "relay").action, { type: "tunnel", relayMode: "failover", needsForwardX: false });
+  assert.deepEqual(linkWizardAdvice("stable", "relay").action, { type: "tunnel", relayMode: "hot_standby", needsForwardX: true });
   assert.deepEqual(linkWizardAdvice("stable", "exit").action, { type: "group", mode: "exit", exitStrategy: "fallback" });
   assert.deepEqual(linkWizardAdvice("stable", "path").action, { type: "rule" });
   assert.equal(linkWizardAdvice("stable", "one").action, null);

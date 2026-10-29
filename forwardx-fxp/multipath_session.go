@@ -49,6 +49,8 @@ type multipathLegConn struct {
 	cfgIndex int
 	// traffic 记这一路收发了多少，报给连接监控（conn_stats_legs.go）。出口上和不报统计时是 nil。
 	traffic *multipathLegTraffic
+	// standby 是热备腿：主腿健康时不分片，只挂着等（见 multipathSession.heldLocked）。
+	standby bool
 	// failed guards the alive-leg count: a leg's reader and its writer both
 	// notice the same breakage, and only the first may retire the leg.
 	failed atomic.Bool
@@ -456,12 +458,22 @@ func (s *multipathSession) housekeeping() {
 		if s.busy(time.Now()) && multipathBusyTick < tick {
 			tick = multipathBusyTick
 		}
+		// 闲着的时候节拍慢，但会话一有动静（第一片写进来、腿加进来）就得马上换成快节拍：
+		// 不然刚开始的那几秒里，重发和热备接手都要等慢节拍到点才看得到。
+		var wake <-chan struct{}
+		if tick > multipathBusyTick {
+			s.mu.Lock()
+			wake = s.changed
+			s.mu.Unlock()
+		}
 		timer := time.NewTimer(tick)
 		select {
 		case <-s.closed:
 			timer.Stop()
 			return
 		case <-timer.C:
+		case <-wake:
+			timer.Stop()
 		}
 		now := time.Now()
 		s.watchStalledLegs()
@@ -477,6 +489,11 @@ func (s *multipathSession) maintainSender(now time.Time) {
 	s.mu.Lock()
 	silent := s.silentLegsLocked(now)
 	s.reinjectOverdueLocked(now)
+	// 主腿刚停住的时候，热备腿的写入者还在等；没有新片、也还没到重发时间的话谁都不会
+	// 叫它。这里按节拍看一眼：该它接手了就叫醒它。
+	if s.hasStandbyLocked() && !s.primaryHealthyLocked(now) {
+		s.signalLocked()
+	}
 	if s.finQueued && !s.finAcked && !s.closedLocked() && now.Sub(s.finSentAt) >= s.finRetryLocked() {
 		s.queueFinLocked(now)
 	}

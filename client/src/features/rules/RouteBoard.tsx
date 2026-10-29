@@ -88,8 +88,8 @@ export type RouteBoardEntry = { hostId: number; name: string; online: boolean | 
 export type RouteSegment = {
   key: string;
   latencyMs: number | null;
-  /** measured 测到的；failed 探不通；unknown 还没人探这一段（中继没报、没建中继、老 Agent）。 */
-  state: "measured" | "failed" | "unknown";
+  /** measured 测到的；failed 探不通；unknown 还没人探这一段（中继没报、没建中继、老 Agent）；planned 编辑框里的预览，还没保存。 */
+  state: "measured" | "failed" | "unknown" | "planned";
   failures: number;
   /** Unix 毫秒 */
   at: number | null;
@@ -177,7 +177,7 @@ function hopHealth(hop: RouteBoardHop): NetworkHealth {
   return "unknown";
 }
 
-function Node({ role, name, caption, health, rate, idle, title }: {
+function Node({ role, name, caption, health, rate, idle, title, preview }: {
   role: "entry" | "relay" | "landing";
   name: ReactNode;
   caption: ReactNode;
@@ -185,6 +185,8 @@ function Node({ role, name, caption, health, rate, idle, title }: {
   rate: RouteBoardRate | undefined;
   idle: boolean;
   title?: string;
+  /** 编辑框里的预览：没有速率那一行。 */
+  preview?: boolean;
 }) {
   return (
     <div className="fx-rb-node" data-role={role} data-health={health} title={title}>
@@ -193,7 +195,7 @@ function Node({ role, name, caption, health, rate, idle, title }: {
         <b>{name}</b>
       </span>
       <span className="fx-rb-node-caption">{caption}</span>
-      <RateLine rate={rate} idle={idle} />
+      {preview ? null : <RateLine rate={rate} idle={idle} />}
     </div>
   );
 }
@@ -203,7 +205,9 @@ function Segment({ segment, flowing }: { segment: RouteSegment; flowing: boolean
     ? `${round(segment.latencyMs || 0)} ms`
     : segment.state === "failed"
       ? `不通${segment.failures > 0 ? ` ×${segment.failures}` : ""}`
-      : "未测";
+      : segment.state === "planned"
+        ? "—"
+        : "未测";
   return (
     <div className="fx-rb-link" data-state={segment.state} data-flowing={flowing ? "" : undefined} title={segment.title}>
       {flowing ? (<><i className="fx-rb-flow" /><i className="fx-rb-flow" /></>) : null}
@@ -212,7 +216,7 @@ function Segment({ segment, flowing }: { segment: RouteSegment; flowing: boolean
   );
 }
 
-export function RoutePathCard({ path, entry, ruleRate = null, share, preferred, weighted, className, onOpen }: {
+export function RoutePathCard({ path, entry, ruleRate = null, share, preferred, weighted, className, onOpen, preview = false }: {
   path: RouteBoardPath;
   entry: RouteBoardEntry | null;
   /** 整条规则的速率：入口节点写它；没中转时落地也写它。 */
@@ -222,13 +226,15 @@ export function RoutePathCard({ path, entry, ruleRate = null, share, preferred, 
   weighted?: boolean;
   className?: string;
   onOpen?: () => void;
+  /** 编辑框里的「它会这样跑」：只画链，段上没有延迟、节点没有速率、不写在走。 */
+  preview?: boolean;
 }) {
-  const chain = summarizeRouteChain(path);
-  const health = pathHealth(path);
+  const chain = preview ? previewChain(path) : summarizeRouteChain(path);
+  const health: NetworkHealth = preview ? "unknown" : pathHealth(path);
   // 在走的那条（权重负载：每条）才有流量；别的写「空闲」。
-  const carrying = path.active || !!weighted;
+  const carrying = !preview && (path.active || !!weighted);
   const lastHopRate = path.hops.length > 0 ? path.hops[path.hops.length - 1].rate ?? null : ruleRate;
-  const entryOffline = entry?.online === false;
+  const entryOffline = !preview && entry?.online === false;
   const segments = chain.segments;
   const nodes: ReactNode[] = [];
   nodes.push(
@@ -237,9 +243,10 @@ export function RoutePathCard({ path, entry, ruleRate = null, share, preferred, 
       role="entry"
       name={entry?.name || "入口"}
       caption={<>入口{entry?.sourcePort ? <> · <span className="font-mono">:{entry.sourcePort}</span></> : null}{entryOffline ? " · 离线" : ""}</>}
-      health={entryOffline ? "down" : carrying ? "healthy" : "standby"}
+      health={preview ? "unknown" : entryOffline ? "down" : carrying ? "healthy" : "standby"}
       rate={ruleRate}
       idle={!carrying}
+      preview={preview}
     />,
   );
   path.hops.forEach((hop, index) => {
@@ -249,10 +256,11 @@ export function RoutePathCard({ path, entry, ruleRate = null, share, preferred, 
         key={`hop-${index}`}
         role="relay"
         name={hop.name}
-        caption={<>中转{hop.port ? <> · 中继 <span className="font-mono">:{hop.port}</span></> : " · 中继还没建好"}{hop.enabled === false ? " · 已停用" : hop.running === false ? " · 没在跑" : ""}</>}
-        health={hopHealth(hop)}
+        caption={preview ? "中转 · 中继自动建" : <>中转{hop.port ? <> · 中继 <span className="font-mono">:{hop.port}</span></> : " · 中继还没建好"}{hop.enabled === false ? " · 已停用" : hop.running === false ? " · 没在跑" : ""}</>}
+        health={preview ? "unknown" : hopHealth(hop)}
         rate={hop.rate}
         idle={!carrying}
+        preview={preview}
       />,
     );
   });
@@ -263,14 +271,30 @@ export function RoutePathCard({ path, entry, ruleRate = null, share, preferred, 
       role="landing"
       name="落地"
       caption={<span className="font-mono">{formatFailoverEndpoint(path.dest.ip, path.dest.port) || "同规则目标"}</span>}
-      health={path.down ? "down" : path.healthy === false ? "degraded" : carrying ? "healthy" : "standby"}
+      health={preview ? "unknown" : path.down ? "down" : path.healthy === false ? "degraded" : carrying ? "healthy" : "standby"}
       rate={lastHopRate}
       idle={!carrying}
+      preview={preview}
     />,
   );
   const totalLabel = chain.totalMs === null ? "整链 —" : `整链 ${chain.partial ? "≥ " : ""}${round(chain.totalMs)} ms`;
   const grade = routeScoreGrade(path.score);
   const dials = describeRouteDials(path.dials);
+  if (preview) {
+    return (
+      <section className={cn("fx-rb-path", className)} data-health={health} data-active={preferred ? "" : undefined} data-preview="" data-testid="route-path-card">
+        <header className="fx-rb-path-head">
+          <span className="fx-rb-path-title">
+            <span className="fx-rb-letter">{path.letter}</span>
+            <b className="truncate">{path.name}</b>
+            {weighted && typeof share === "number" ? <EntityTag tone="standby">{share}%</EntityTag> : preferred ? <EntityTag tone="path">平时走它</EntityTag> : <EntityTag tone="standby">备用</EntityTag>}
+          </span>
+          <span className="fx-rb-path-stats"><span className="fx-rb-meta">保存后这里是实测延迟和评分</span></span>
+        </header>
+        <div className="fx-rb-chain">{nodes}</div>
+      </section>
+    );
+  }
   return (
     <section className={cn("fx-rb-path", className)} data-health={health} data-active={path.active ? "" : undefined} data-testid="route-path-card">
       <header className="fx-rb-path-head">
@@ -329,10 +353,10 @@ export type RouteBoardStatus = {
 /**
  * 一条线路组的全部路径卡：在走的排最前。weighted 时每条都带权重份额。
  */
-export function RoutePathCards({ status, policy, className }: { status: RouteBoardStatus; policy: RoutePolicy; className?: string }) {
+export function RoutePathCards({ status, policy, className, preview = false }: { status: RouteBoardStatus; policy: RoutePolicy; className?: string; preview?: boolean }) {
   const weighted = policy.mode === "weighted";
   const shares = routeWeightShares(status.paths);
-  const ordered = weighted ? status.paths : [...status.paths].sort((left, right) => Number(right.active) - Number(left.active) || left.index - right.index);
+  const ordered = weighted || preview ? status.paths : [...status.paths].sort((left, right) => Number(right.active) - Number(left.active) || left.index - right.index);
   return (
     <div className={cn("fx-rb-paths", className)}>
       {ordered.map((path) => (
@@ -344,9 +368,130 @@ export function RoutePathCards({ status, policy, className }: { status: RouteBoa
           share={weighted ? shares[path.index] : null}
           preferred={policy.lines[path.index]?.preferred}
           weighted={weighted}
+          preview={preview}
         />
       ))}
     </div>
+  );
+}
+
+/** 预览用的段：每段都是「还没测」，但不染琥珀 —— 这是还没保存，不是探不到。 */
+function previewChain(path: Pick<RouteBoardPath, "hops">): RouteChainSummary {
+  const segments: RouteSegment[] = [{ key: "entry", latencyMs: null, state: "planned", failures: 0, at: null, title: "保存后由入口机探测" }];
+  path.hops.forEach((hop, index) => segments.push({ key: `hop-${index}`, latencyMs: null, state: "planned", failures: 0, at: null, title: `保存后由 ${hop.name} 探它的下一跳` }));
+  return { segments, totalMs: null, partial: true, broken: false };
+}
+
+export type RoutePreviewInput = {
+  paths: ReadonlyArray<{ key: string; name: string; hops: number[]; dest: { ip: string; port: number } | null; weight: number; probe: { ip: string; port: number } | null }>;
+  hosts: ReadonlyArray<{ id: number; name: string }>;
+  entryHostId: number | null;
+  /** 规则的源端口；0 / 没填就不写。 */
+  sourcePort?: number;
+  /** 规则自己的目标 `地址:端口`；没写落地的路径走它。 */
+  mainAddress: string;
+};
+
+function splitHostPort(text: string): { ip: string; port: number } {
+  const trimmed = String(text || "").trim();
+  const at = trimmed.lastIndexOf(":");
+  if (at <= 0) return { ip: trimmed, port: 0 };
+  return { ip: trimmed.slice(0, at).replace(/^\[/, "").replace(/\]$/, ""), port: Number(trimmed.slice(at + 1)) || 0 };
+}
+
+/**
+ * 编辑框里拿还没保存的路径拼出线路板的样子：入口 ─ 中转 ─ 落地，每段还没测。
+ * 填着填着就看得见流量会怎么走，不用保存了再去线路板找。
+ */
+export function buildRoutePreviewStatus(input: RoutePreviewInput): RouteBoardStatus {
+  const hostName = (hostId: number) => input.hosts.find((host) => Number(host.id) === hostId)?.name || `主机 ${hostId}`;
+  const entryName = input.entryHostId ? hostName(input.entryHostId) : "入口";
+  const main = splitHostPort(input.mainAddress);
+  return {
+    entry: { hostId: Number(input.entryHostId || 0), name: entryName, online: null, sourcePort: Number(input.sourcePort || 0) },
+    rate: null,
+    switches: null,
+    paths: input.paths.map((path, index) => ({
+      key: path.key,
+      index,
+      letter: index < 26 ? String.fromCharCode(65 + index) : `#${index + 1}`,
+      name: String(path.name || "").trim() || (index === 0 ? "主线路" : `备用 ${index}`),
+      hops: path.hops.map((hostId, hopIndex) => ({
+        hostId,
+        name: hostName(hostId),
+        port: null,
+        running: null,
+        enabled: null,
+        ok: null,
+        latencyMs: null,
+        consecutiveFailures: 0,
+        probedAt: null,
+        nextLabel: hopIndex === path.hops.length - 1 ? "落地" : hostName(path.hops[hopIndex + 1]),
+      })),
+      dest: path.dest ?? main,
+      probe: path.probe,
+      weight: path.weight,
+      score: null,
+      latencyMs: null,
+      lossPct: null,
+      jitterMs: null,
+      availabilityPct: null,
+      healthy: null,
+      down: false,
+      downReason: "",
+      connections: null,
+      active: false,
+      prewarming: false,
+      probedAt: null,
+    })),
+  };
+}
+
+/**
+ * 规则卡上的迷你链：一条路径一行，「A 主线路 ● HK ─ 23 ─ SG ─ 29 ─ 落地 · 在走」。
+ * 线路板那张卡太大，规则卡只要一眼看出走的哪条、哪段慢；点一下进线路组面板。
+ */
+export function RouteMiniChain({ status, policy, onOpen, className }: { status: RouteBoardStatus; policy: RoutePolicy; onOpen?: () => void; className?: string }) {
+  const weighted = policy.mode === "weighted";
+  const shares = routeWeightShares(status.paths);
+  const entryName = status.entry?.name || "入口";
+  return (
+    <ul className={cn("fx-rb-mini", className)} data-testid="route-mini-chain">
+      {status.paths.map((path) => {
+        const chain = summarizeRouteChain(path);
+        const health = pathHealth(path);
+        const stops: string[] = [entryName, ...path.hops.map((hop) => hop.name), "落地"];
+        const parts: ReactNode[] = [];
+        stops.forEach((stop, index) => {
+          if (index > 0) {
+            const segment = chain.segments[index - 1];
+            parts.push(
+              <i key={`seg-${index}`} className="fx-rb-mini-seg" data-state={segment?.state || "unknown"}>
+                {segment?.state === "measured" ? `${round(segment.latencyMs || 0)}` : segment?.state === "failed" ? "✕" : "·"}
+              </i>,
+            );
+          }
+          parts.push(<span key={`stop-${index}`} className="fx-rb-mini-stop">{stop}</span>);
+        });
+        const state = weighted
+          ? `${shares[path.index]}%`
+          : path.active ? "在走" : path.down ? "断了" : path.prewarming ? "预热中" : "备用";
+        const total = chain.totalMs === null ? "" : `${chain.partial ? "≥" : ""}${round(chain.totalMs)} ms`;
+        const row = (
+          <>
+            <span className="fx-rb-mini-letter" data-active={path.active ? "" : undefined}>{path.letter}</span>
+            <i className="fx-rb-mini-dot" data-health={health} aria-hidden="true" />
+            <span className="fx-rb-mini-chain">{parts}</span>
+            <span className="fx-rb-mini-end">{total ? <span className="font-mono">{total}</span> : null}<span data-active={path.active ? "" : undefined}>{state}</span></span>
+          </>
+        );
+        return (
+          <li key={path.key} data-active={path.active ? "" : undefined} data-health={health}>
+            {onOpen ? <button type="button" className="fx-rb-mini-row" onClick={onOpen} title={`路径 ${path.letter} ${path.name}：点开线路组`}>{row}</button> : <span className="fx-rb-mini-row">{row}</span>}
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 

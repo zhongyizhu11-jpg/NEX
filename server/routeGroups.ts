@@ -29,6 +29,7 @@ import {
 import { getUserPlanPortRange } from "./repositories/billingRepository";
 import { getHostNamesByIds, getHostsByIds } from "./repositories/hostRepository";
 import { getUserById } from "./repositories/userRepository";
+import { getProxyNodesForSubscription } from "./repositories/proxySubscriptionRepository";
 import { dbBool } from "./repositories/repositoryUtils";
 import { findAvailablePort, getTunnelById, getTunnelExitNodes, isPortUsedOnHost } from "./repositories/tunnelRepository";
 import { forgetRouteStats, recordRouteHopProbe } from "./routeGroupStats";
@@ -233,8 +234,38 @@ function sameValue(left: unknown, right: unknown) {
   return String(left) === String(right);
 }
 
+/**
+ * 路径落地选了节点（destNodeId）：按规则主人看得到的节点把地址端口填进 dest。
+ * 节点不在了 / 停用了 / 没地址：dest 清空并记 issue，这条路径就用不了，不退回同目标（那不是用户配的）。
+ */
+async function resolveDestNodes(rule: any, paths: RoutePath[]) {
+  if (!paths.some((path) => Number(path.destNodeId || 0) > 0)) return;
+  const nodes = await getProxyNodesForSubscription(Number(rule?.userId || 0)) as any[];
+  for (const path of paths) {
+    const nodeId = Number(path.destNodeId || 0);
+    if (nodeId <= 0) continue;
+    const node = nodes.find((item) => Number(item.id) === nodeId);
+    const ip = String(node?.address || "").trim();
+    const port = Math.floor(Number(node?.port) || 0);
+    if (!node) {
+      path.dest = null;
+      path.issue = "落地节点已经不在了";
+    } else if (node.isEnabled === false || node.isEnabled === 0) {
+      path.dest = ip && port > 0 ? { ip, port } : null;
+      path.issue = `落地节点「${node.name || nodeId}」已停用`;
+    } else if (!ip || port <= 0) {
+      path.dest = null;
+      path.issue = `落地节点「${node.name || nodeId}」还没有地址`;
+    } else {
+      path.dest = { ip, port };
+      path.issue = null;
+    }
+  }
+}
+
 async function resolvePath(rule: any, path: RoutePath, index: number, hostById: Map<number, any>, liveByKey: Map<string, RelayRuleRow>): Promise<PathPlan> {
-  const plan: PathPlan = { path, index, hops: [], dial: null, issue: null };
+  const plan: PathPlan = { path, index, hops: [], dial: null, issue: path.issue && Number(path.destNodeId || 0) > 0 ? path.issue : null };
+  if (plan.issue) return plan;
   if (path.hops.length === 0) {
     // 没有中转：入口直接拨落地，routePathDial 读的时候自己算，这里不存 dial。
     return plan;
@@ -337,6 +368,8 @@ export async function syncRouteRelayRulesForRule(ruleId: number, options: SyncRo
     }
 
     const paths = group.paths.map((path) => ({ ...path, hops: [...path.hops] }));
+    // 落地选的是「我的节点」：地址端口从节点解析进 dest（节点地址变了由 proxyNodeFollow 再来一遍）。
+    await resolveDestNodes(rule, paths);
     const hopIds = Array.from(new Set(paths.flatMap((path) => path.hops)));
     const hosts = hopIds.length > 0 ? await getHostsByIds(hopIds) : [];
     const hostById = new Map((hosts as any[]).map((host) => [Number(host.id), host]));

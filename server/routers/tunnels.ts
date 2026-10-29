@@ -31,10 +31,12 @@ import { isAgentVersionAtLeast } from "../agentRouteUtils";
 import {
   AGENT_FORWARDX_RELAY_AGGREGATE_VERSION,
   AGENT_FORWARDX_RELAY_FAILOVER_VERSION,
+  AGENT_FORWARDX_RELAY_HOT_STANDBY_VERSION,
   isTunnelRelayAggregate,
   normalizeTunnelRelayMode,
   tunnelRelayAggregateSupported,
   tunnelRelayFailoverSupported,
+  tunnelRelayHotStandbySupported,
 } from "../../shared/tunnelRelay";
 import {
   normalizeTunnelParallelStreams,
@@ -73,7 +75,7 @@ const tunnelModeSchema = z.enum(["forwardx", "tls", "wss", "tcp", "mtls", "mwss"
 const forwardXVersionSchema = z.enum(["v1", "v2"]);
 const proxyProtocolVersionSchema = z.union([z.literal(1), z.literal(2)]);
 const tunnelLoadBalanceStrategySchema = z.enum(["none", "round_robin", "random", "least_conn", "ip_hash", "fallback", "weighted", "least_load"]);
-const tunnelRelayModeSchema = z.enum(["chain", "failover", "aggregate"]);
+const tunnelRelayModeSchema = z.enum(["chain", "failover", "aggregate", "hot_standby"]);
 const MAX_TUNNEL_HOPS = 10;
 const MAX_EXTRA_TUNNEL_EXITS = 4;
 const MAX_NGINX_CERT_BYTES = 64 * 1024;
@@ -137,6 +139,17 @@ async function requireForwardXRelayAggregateAgentVersions(hostIds: number[]) {
   if (unsupported.length === 0) return;
   const labels = unsupported.map(({ id, host }) => host?.name || host?.ip || `主机 ${id}`).slice(0, 5);
   throw new Error(`NEX 中转「单连接叠加」需要入口、中转和出口 Agent 升级到 v${AGENT_FORWARDX_RELAY_AGGREGATE_VERSION} 或更高版本：${labels.join("、")}`);
+}
+
+async function requireForwardXRelayHotStandbyAgentVersions(hostIds: number[]) {
+  const ids = Array.from(new Set(hostIds.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0)));
+  const hosts = await Promise.all(ids.map(async (id) => ({ id, host: await db.getHostById(id) as any })));
+  const unsupported = hosts.filter(({ host }) => (
+    !host || !isAgentVersionAtLeast(String(host.agentVersion || ""), AGENT_FORWARDX_RELAY_HOT_STANDBY_VERSION)
+  ));
+  if (unsupported.length === 0) return;
+  const labels = unsupported.map(({ id, host }) => host?.name || host?.ip || `主机 ${id}`).slice(0, 5);
+  throw new Error(`NEX 中转「热备」需要入口、中转和出口 Agent 升级到 v${AGENT_FORWARDX_RELAY_HOT_STANDBY_VERSION} 或更高版本：${labels.join("、")}`);
 }
 
 function isTunnelProxyProtocolSupported(mode: unknown) {
@@ -1105,6 +1118,10 @@ export const tunnelsRouter = router({
           if (!hopHostIds || hopHostIds.length < 4) throw new Error("带宽叠加至少需要配置两个中转主机");
           if (!tunnelRelayAggregateSupported(normalizedMode)) throw new Error("仅 NEX 隧道支持中转「单连接叠加」");
         }
+        if (relayMode === "hot_standby") {
+          if (!hopHostIds || hopHostIds.length < 4) throw new Error("热备至少需要配置两个中转主机");
+          if (!tunnelRelayHotStandbySupported(normalizedMode)) throw new Error("仅 NEX 隧道支持中转「热备」");
+        }
         await requireTunnelProtocolEnabled({ ...input, mode: normalizedMode });
         await requireEntryGroupAccess(ctx, input.entryGroupId, true);
         const exitGroup = await requireExitGroupAccess(ctx, input.exitGroupId, true);
@@ -1186,6 +1203,17 @@ export const tunnelsRouter = router({
             entryHostId,
           });
           await requireForwardXRelayAggregateAgentVersions([
+            ...entryHostIds,
+            ...(hopHostIds || []),
+            exitHostId,
+          ]);
+        }
+        if (relayMode === "hot_standby") {
+          const entryHostIds = await getTunnelEntryTestHostIds({
+            entryGroupId: input.entryGroupId ?? null,
+            entryHostId,
+          });
+          await requireForwardXRelayHotStandbyAgentVersions([
             ...entryHostIds,
             ...(hopHostIds || []),
             exitHostId,
@@ -1421,7 +1449,11 @@ export const tunnelsRouter = router({
           if (!hopIdsForConnect || hopIdsForConnect.length < 4) throw new Error("带宽叠加至少需要配置两个中转主机");
           if (!tunnelRelayAggregateSupported(nextModeForRuntime)) throw new Error("仅 NEX 隧道支持中转「单连接叠加」");
         }
-        const nextRelayMode = requestedRelayMode === "failover" || requestedRelayMode === "aggregate"
+        if (requestedRelayMode === "hot_standby") {
+          if (!hopIdsForConnect || hopIdsForConnect.length < 4) throw new Error("热备至少需要配置两个中转主机");
+          if (!tunnelRelayHotStandbySupported(nextModeForRuntime)) throw new Error("仅 NEX 隧道支持中转「热备」");
+        }
+        const nextRelayMode = requestedRelayMode === "failover" || requestedRelayMode === "aggregate" || requestedRelayMode === "hot_standby"
           ? requestedRelayMode
           : "chain";
         const entryHostId = hopHostIds ? hopHostIds[0] : (input.entryHostId ?? tunnel.entryHostId);

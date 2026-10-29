@@ -105,6 +105,19 @@ func TestFXPServerSignatureTracksMultipathChanges(t *testing.T) {
 	if fxpServerSignature(aggregate) == fxpServerSignature(swapped) {
 		t.Fatal("replacing a relay front must change the signature")
 	}
+
+	// 热备：同样两条腿，第二条标成 standby，FXP 要重启才会改成「只走第一条」。
+	standby := aggregate
+	standby.MultipathLegs = []fxpMultipathLeg{
+		{Host: "10.0.0.1", Port: 5000},
+		{Host: "10.0.0.2", Port: 5000, Standby: true},
+	}
+	if fxpServerSignature(aggregate) == fxpServerSignature(standby) {
+		t.Fatal("marking a leg standby must change the signature")
+	}
+	if normalized := normalizeFXPSpec(standby); len(normalized.MultipathLegs) != 2 || !normalized.MultipathLegs[1].Standby {
+		t.Fatalf("standby flag lost in normalization: %+v", normalized.MultipathLegs)
+	}
 }
 
 // 单连接多路并发：面板把同一个出口重复 N 条腿（via = stream#1..N），入口各开一条连接。

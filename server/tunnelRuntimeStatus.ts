@@ -70,7 +70,7 @@ export function getTunnelRuntimeTopologyStatus(tunnelId: number, topology: Tunne
   const entryReady = hops.length < 3 || entryCandidates.some(ready);
   const exitReady = exitCandidates.some(ready);
   const relayReady = relayCandidates.length === 0
-    || (String(topology.relayMode || "chain").toLowerCase() === "failover"
+    || (["failover", "hot_standby"].includes(String(topology.relayMode || "chain").toLowerCase())
       ? relayCandidates.some(ready)
       : relayCandidates.every(ready));
   const observedHostIds = unique([...entryCandidates, ...relayCandidates, ...exitCandidates]);
