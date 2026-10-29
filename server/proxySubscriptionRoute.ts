@@ -154,7 +154,8 @@ async function gate(req: Request, token: any, client: DetectedProxyClient): Prom
 /** 响应头：流量信息、更新间隔、名字、公告、帮助地址。 */
 function applyHeaders(res: Response, context: ProxySubTokenContext, options: { format: ProxySubscriptionFormat; profile: boolean; panelUrl: string; token: any }) {
   const { owner, settings } = context;
-  const userExpiresAt = owner.expiresAt ? new Date(owner.expiresAt as any).getTime() : 0;
+  // 和信息节点同一口径：账号到期与链接到期取更早的（proxySubBundle 里已算好）。
+  const userExpiresAt = context.info.expiresAt;
   res.setHeader(
     "Subscription-Userinfo",
     formatProxySubscriptionUserInfo({

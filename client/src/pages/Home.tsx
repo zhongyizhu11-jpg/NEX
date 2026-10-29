@@ -15,7 +15,6 @@ import { trafficQuotaBreakdown } from "@/lib/trafficQuota";
 import { trpc } from "@/lib/trpc";
 import { AccountSection } from "@/features/dashboard/AccountSection";
 import { AttentionSection } from "@/features/dashboard/AttentionSection";
-import { ExitQualitySection } from "@/features/dashboard/ExitQualitySection";
 import OpsHomeExtras from "@/features/ops/slots/HomeExtras";
 import { NetworkMapSlot } from "@/features/dashboard/NetworkMapSlot";
 import { QuickStartSection } from "@/features/dashboard/QuickStartSection";
@@ -85,13 +84,6 @@ function DashboardContent() {
     顶上那几个数和「需要关注」：5 秒一刷（原来 15 秒，加上服务端先给旧值，实际慢半分钟），
     切回这个标签页时立刻再拉一次 —— 手机上切出去处理完再回来，列表应该已经是新的。
   */
-  // 出口质量（Agent 2.2.237 起）：只给管理员；样本两分钟一个，一分钟拉一次够了。
-  const { data: exitQuality } = trpc.dashboard.exitQuality.useQuery(undefined, {
-    enabled: isAdmin,
-    refetchInterval: 60_000,
-    staleTime: 30_000,
-    placeholderData: (previousData) => previousData,
-  });
   const { data: health, isLoading: healthLoading, refetch: refetchHealth } = trpc.dashboard.health.useQuery(undefined, {
     refetchInterval: pollingInterval("fast"),
     refetchOnWindowFocus: "always",
@@ -270,7 +262,6 @@ function DashboardContent() {
         isAdmin={isAdmin}
         onOpen={setLocation}
       />
-      {isAdmin ? <ExitQualitySection data={exitQuality} /> : null}
       <OpsHomeExtras isAdmin={isAdmin} />
       {isAdmin ? trafficSection : accountSection}
       {isAdmin ? accountSection : trafficSection}

@@ -60,3 +60,14 @@ test("宽松匹配：非法正则退化成子串", () => {
   assert.equal(makeLooseMatcher("[")!("a[b"), true);
   assert.equal(makeLooseMatcher("[")!("ab"), false);
 });
+
+test("客户端看到的到期：账号和链接取更早的，都没有是 0", async () => {
+  const { effectiveProxySubExpiry } = await import("./proxySubTokenScope");
+  const token = new Date("2027-10-29T23:59:59Z");
+  const owner = new Date("2026-12-31T00:00:00Z");
+  assert.equal(effectiveProxySubExpiry(token, null), token.getTime(), "管理员账号没到期，链接的到期要写出来");
+  assert.equal(effectiveProxySubExpiry(token, owner), owner.getTime());
+  assert.equal(effectiveProxySubExpiry(null, owner.toISOString()), owner.getTime());
+  assert.equal(effectiveProxySubExpiry(null, undefined), 0);
+  assert.equal(effectiveProxySubExpiry("not a date", ""), 0);
+});

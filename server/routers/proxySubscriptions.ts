@@ -50,6 +50,8 @@ import { infoNodesWanted, loadProxySubTokenContext, resolveTemplateForToken } fr
 import { syncProxySubSource } from "../proxySubSourceSync";
 import { invalidateProxySubCacheForUser } from "../proxySubCache";
 import { clearProxySubRateLimitForToken } from "../proxySubRateLimit";
+import { buildInboundExit, buildNodeExit } from "../exitQualityView";
+import { buildSubscriptionRouteView } from "../subscriptionRouteView";
 
 /**
  * 订阅令牌够长才安全：地址里带着全部节点凭据，一旦可猜就等于把节点送人。
@@ -1131,6 +1133,35 @@ export const proxySubscriptionsRouter = router({
         await db.setUserProxySubTemplate(input.userId, input.templateId);
       }
       return { success: true };
+    }),
+
+  /**
+   * 落地出口检测：这个节点从哪台机器出去，那台出去以后到几个常用站点连不连得上、解锁了什么
+   * （server/exitQualityView）。自建节点传 inboundId，粘贴节点传 nodeId；只能查自己的。
+   */
+  exitCheck: protectedProcedure
+    .input(z.object({ inboundId: z.number().int().positive().optional(), nodeId: z.number().int().positive().optional() }).refine((value) => !!value.inboundId !== !!value.nodeId, "inboundId 和 nodeId 二选一"))
+    .query(async ({ ctx, input }) => {
+      await assertProxySubscriptionAllowed(ctx);
+      const isAdmin = ctx.user.role === "admin";
+      if (input.inboundId) {
+        const inbound = await db.getProxyInboundById(input.inboundId);
+        if (!inbound || (!isAdmin && Number(inbound.userId) !== Number(ctx.user.id))) throw new Error("落地节点不存在");
+        return buildInboundExit(inbound);
+      }
+      const node = await db.getProxyNodeById(Number(input.nodeId));
+      if (!node || (!isAdmin && Number(node.userId) !== Number(ctx.user.id))) throw new Error("节点不存在");
+      return buildNodeExit(node, { id: Number(ctx.user.id), role: String(ctx.user.role) });
+    }),
+
+  /** 订阅内容里点开一条中转：这条线路怎么走（server/subscriptionRouteView）。只能看自己的规则。 */
+  previewRoute: protectedProcedure
+    .input(z.object({ ruleId: z.number().int().positive() }))
+    .query(async ({ ctx, input }) => {
+      await assertProxySubscriptionAllowed(ctx);
+      const rule = await db.getForwardRuleById(input.ruleId) as any;
+      if (!rule || (ctx.user.role !== "admin" && Number(rule.userId) !== Number(ctx.user.id))) throw new Error("转发不存在");
+      return buildSubscriptionRouteView(rule);
     }),
 
   deleteToken: protectedProcedure

@@ -252,3 +252,18 @@ export function makeLooseMatcher(pattern: string): ((text: string) => boolean) |
     return (text) => text.toLowerCase().includes(lower);
   }
 }
+
+/**
+ * 客户端看到的到期时间（信息节点、Subscription-Userinfo 的 expire）：账号到期和这条链接自己的
+ * 到期取更早的那个。原来只看账号 —— 管理员账号没有到期，链接设了到期，预览里照样「长期有效」。
+ * 两个都没有返回 0。
+ */
+export function effectiveProxySubExpiry(tokenExpiresAt: unknown, ownerExpiresAt: unknown): number {
+  const millis = (value: unknown) => {
+    if (value === null || value === undefined || value === "") return 0;
+    const time = value instanceof Date ? value.getTime() : new Date(value as any).getTime();
+    return Number.isFinite(time) && time > 0 ? time : 0;
+  };
+  const candidates = [millis(tokenExpiresAt), millis(ownerExpiresAt)].filter((time) => time > 0);
+  return candidates.length > 0 ? Math.min(...candidates) : 0;
+}

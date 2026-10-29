@@ -277,9 +277,30 @@ export type NormalizeFailoverContext = {
   hostIds?: Set<number> | null;
   targetIp?: unknown;
   targetPort?: unknown;
-  /** 转发组模板不跑在任何一台机器上，路径不能带中转。 */
+  /** 转发组模板不跑在任何一台机器上；能不能带中转看组（routeHopsAllowedForGroup）。 */
   allowHops?: boolean;
+  /** 转发组模板：各成员机都是入口，中转不能是其中任何一台。 */
+  memberHostIds?: number[];
 };
+
+/**
+ * 转发组模板的线路组能不能带中转。
+ *
+ * 模板本身不跑，跑的是每台成员机上的子规则：子规则照抄模板的路径，各自按自己的入口机在中转机上
+ * 建中继（forwardGroupRepository.ensureMemberRuleForTemplate → routeGroups）。所以只要成员都是
+ * 直连主机（端口转发、主备组）就行；转发链的中转就是成员本身，隧道成员的调度在隧道出口上，都不带。
+ */
+export function routeHopsAllowedForGroup(group: any): boolean {
+  const mode = forwardGroupModeOf(group);
+  if (mode === "chain") return false;
+  const members = Array.isArray(group?.members) ? group.members : [];
+  return !members.some((member: any) => String(member?.memberType || "host") === "tunnel");
+}
+
+function groupMemberHostIds(group: any): number[] {
+  const members = Array.isArray(group?.members) ? group.members : [];
+  return members.filter((member: any) => String(member?.memberType || "host") !== "tunnel").map((member: any) => Number(member.hostId)).filter((id: number) => id > 0);
+}
 
 /** 主线路的探测目标：`地址:端口`，留空存 null。填错必须报错，不能默默当成没填。 */
 function normalizeMainProbeTarget(raw: unknown): string | null {
@@ -558,7 +579,12 @@ function normalizeRouteGroupInput(input: FailoverInput, context: NormalizeFailov
     };
   }
   if (context.allowHops === false && paths.some((path) => path.hops.length > 0)) {
-    throw new Error("转发组模板的线路不支持中转：模板本身不跑在任何一台机器上");
+    throw new Error("这个转发组的线路不能带中转：转发链的中转就是成员本身，隧道成员的线路在隧道出口上切换");
+  }
+  if (context.memberHostIds && context.memberHostIds.length > 0) {
+    const members = new Set(context.memberHostIds);
+    const clash = paths.find((path) => path.hops.some((hop) => members.has(hop)));
+    if (clash) throw new Error(`「${clash.name || "线路"}」的中转不能是转发组的成员机：它本身就是入口`);
   }
   const group: RouteGroup = { paths, policy };
   const error = validateRouteGroup(group, {
@@ -2397,7 +2423,7 @@ export const crudRulesRouter = router({
           failoverPinnedUntil: createFailoverEnabled ? input.failoverPinnedUntil : null,
           failoverPreferFastest: createFailoverEnabled ? input.failoverPreferFastest : false,
           routeGroup: createFailoverEnabled ? input.routeGroup : null,
-        }, input.protocol, { allowHops: false, targetIp: input.targetIp, targetPort: input.targetPort });
+        }, input.protocol, { allowHops: routeHopsAllowedForGroup(group), memberHostIds: groupMemberHostIds(group), hostIds: await routeHostIdsForActor(ctx.user), targetIp: input.targetIp, targetPort: input.targetPort });
         await assertRuleTargetsAllowedForActor(ctx.user, { targetIp: input.targetIp, ...templateFailoverColumns }, { forwardGroupId });
         const createTemplateRule = () => db.createForwardRule({
           hostId,
@@ -2978,8 +3004,10 @@ export const crudRulesRouter = router({
                 routeGroup: nextMainBackupEnabled && !groupChanged ? input.routeGroup : null,
               }, nextProtocol, {
                 rule: groupChanged ? null : rule,
-                // 转发组的模板规则不跑在任何一台机器上，路径不能带中转（和新建时同一条口径）。
-                allowHops: false,
+                // 模板不跑，子规则跑：成员都是直连主机时路径可以带中转（和新建时同一条口径）。
+                allowHops: routeHopsAllowedForGroup(group),
+                memberHostIds: groupMemberHostIds(group),
+                hostIds: await routeHostIdsForActor(ctx.user),
                 targetIp: input.targetIp ?? (rule as any).targetIp,
                 targetPort: input.targetPort ?? (rule as any).targetPort,
               })

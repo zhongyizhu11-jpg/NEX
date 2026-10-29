@@ -3,19 +3,31 @@ package main
 // 扩展模块 "sitelatency"（2.2.237 起）：概览「出口质量」。面板那头见 server/ops/siteLatency.ts，
 // 站点表和样本形状见 shared/siteLatency.ts。
 //
-// 面板下发站点（host:port）和间隔。每轮先解析、再单独计时 TCP 握手（DNS 不算进耗时），
-// 只握手、不发应用层请求。每个站点留最近 siteLatencyKeep 个样本。上报只交面板说它还没有的
+// 面板下发站点（host:port）和间隔。每轮先解析、再握手：
+//   · TCP 握手做 siteLatencyAttempts 次（间隔 siteLatencyAttemptGap），耗时取连上那几次的中位数，
+//     没连上的次数算进丢失 —— 一次握手的抖动不再直接变成卡上的大字。
+//   · 第一次连上之后在那条连接上做一次 TLS 握手（SNI = 站点域名），看对方证书是不是这个域名的。
+//     DNS 被污染时解析到的是别人的地址，TCP 照样可能几毫秒就通（2.2.237 就因此在上海测出
+//     Google 9 ms），只有证书对不上才说明连到的不是它：记 poisoned。TLS 握手被重置 / 没回应
+//     （按 SNI 阻断的典型样子）记 blocked。这一轮就算没连上。
+//   · 只校验叶证书的域名和有效期，不验证书链：精简系统常没装 CA 包，验链会把整台机器误判成被污染。
+// 不发应用层请求。每个站点留最近 siteLatencyKeep 个样本。上报只交面板说它还没有的
 // （directive.since 之后的）；面板重启后 since=0，整段两小时一次补齐。
 //
 // 面板不下发指令（老面板），这个模块什么都不做。
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
+	"errors"
+	"io"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -26,12 +38,17 @@ const (
 	siteLatencyMaxTargets      = 8
 	siteLatencyResolveTimeout  = 5 * time.Second
 	siteLatencyDialTimeout     = 5 * time.Second
+	siteLatencyTLSTimeout      = 5 * time.Second
+	siteLatencyAttempts        = 3
+	siteLatencyAttemptGap      = 200 * time.Millisecond
 )
 
 type siteLatencyTarget struct {
 	Key  string `json:"key"`
 	Host string `json:"host"`
 	Port int    `json:"port"`
+	// 要不要在 TCP 之后再做 TLS 校验证书；面板没说（老面板）就按端口：443 做。
+	TLS *bool `json:"tls,omitempty"`
 }
 
 type siteLatencyDirective struct {
@@ -45,6 +62,9 @@ type siteLatencySample struct {
 	T  int64  `json:"t"`
 	Ms int    `json:"ms"`
 	F  string `json:"f,omitempty"`
+	// 这一轮握了几次、连上几次（2.2.240 起）；老面板不认，照旧只看 ms。
+	N int `json:"n,omitempty"`
+	K int `json:"k,omitempty"`
 }
 
 type siteLatencyReportTarget struct {
@@ -61,20 +81,26 @@ type siteLatencyExtModule struct {
 	samples   map[string][]siteLatencySample
 
 	// 测试里替换
-	resolve func(ctx context.Context, host string) (string, error)
-	dial    func(ctx context.Context, network, addr string) (net.Conn, error)
-	now     func() time.Time
-	async   bool
+	resolve  func(ctx context.Context, host string) (string, error)
+	dial     func(ctx context.Context, network, addr string) (net.Conn, error)
+	verify   func(ctx context.Context, conn net.Conn, host string) string
+	now      func() time.Time
+	sleep    func(time.Duration)
+	async    bool
+	attempts int
 }
 
 func newSiteLatencyExtModule() *siteLatencyExtModule {
 	dialer := &net.Dialer{}
 	return &siteLatencyExtModule{
-		samples: map[string][]siteLatencySample{},
-		resolve: siteLatencyResolve,
-		dial:    dialer.DialContext,
-		now:     time.Now,
-		async:   true,
+		samples:  map[string][]siteLatencySample{},
+		resolve:  siteLatencyResolve,
+		dial:     dialer.DialContext,
+		verify:   siteLatencyVerifyTLS,
+		now:      time.Now,
+		sleep:    time.Sleep,
+		async:    true,
+		attempts: siteLatencyAttempts,
 	}
 }
 
@@ -135,7 +161,7 @@ func normalizeSiteLatencyTargets(targets []siteLatencyTarget) []siteLatencyTarge
 			continue
 		}
 		seen[key] = true
-		out = append(out, siteLatencyTarget{Key: key, Host: host, Port: target.Port})
+		out = append(out, siteLatencyTarget{Key: key, Host: host, Port: target.Port, TLS: target.TLS})
 		if len(out) >= siteLatencyMaxTargets {
 			break
 		}
@@ -235,25 +261,127 @@ func (m *siteLatencyExtModule) measure(targets []siteLatencyTarget) []siteLatenc
 	return results
 }
 
+func (target siteLatencyTarget) wantsTLS() bool {
+	if net.ParseIP(strings.Trim(target.Host, "[]")) != nil {
+		return false // 字面 IP 没有域名可校验
+	}
+	if target.TLS != nil {
+		return *target.TLS
+	}
+	return target.Port == 443
+}
+
 func (m *siteLatencyExtModule) measureOne(target siteLatencyTarget, at int64) siteLatencySample {
+	attempts := m.attempts
+	if attempts <= 0 {
+		attempts = 1
+	}
 	resolveCtx, cancelResolve := context.WithTimeout(context.Background(), siteLatencyResolveTimeout)
 	ip, err := m.resolve(resolveCtx, target.Host)
 	cancelResolve()
 	if err != nil {
-		return siteLatencySample{T: at, Ms: -1, F: "dns"}
+		return siteLatencySample{T: at, Ms: -1, F: "dns", N: attempts}
 	}
-	dialCtx, cancelDial := context.WithTimeout(context.Background(), siteLatencyDialTimeout)
-	defer cancelDial()
-	started := time.Now()
-	conn, err := m.dial(dialCtx, "tcp", net.JoinHostPort(ip, strconv.Itoa(target.Port)))
-	elapsed := time.Since(started)
-	if err != nil {
-		return siteLatencySample{T: at, Ms: -1, F: classifyProbeDialError(err)}
+	address := net.JoinHostPort(ip, strconv.Itoa(target.Port))
+	needTLS := target.wantsTLS()
+	verified := !needTLS
+	var times []int
+	failure := ""
+	for i := 0; i < attempts; i++ {
+		if i > 0 && m.sleep != nil {
+			m.sleep(siteLatencyAttemptGap)
+		}
+		dialCtx, cancelDial := context.WithTimeout(context.Background(), siteLatencyDialTimeout)
+		started := time.Now()
+		conn, err := m.dial(dialCtx, "tcp", address)
+		elapsed := time.Since(started)
+		cancelDial()
+		if err != nil {
+			failure = worseProbeFailure(failure, classifyProbeDialError(err))
+			continue
+		}
+		if !verified {
+			tlsCtx, cancelTLS := context.WithTimeout(context.Background(), siteLatencyTLSTimeout)
+			kind := m.verify(tlsCtx, conn, target.Host)
+			cancelTLS()
+			if kind != "" {
+				// 连到的不是它，或者被掐了：这一轮的握手耗时都没意义，整轮算没连上。
+				_ = conn.Close()
+				return siteLatencySample{T: at, Ms: -1, F: kind, N: attempts}
+			}
+			verified = true
+		}
+		_ = conn.Close()
+		ms := int(elapsed.Round(time.Millisecond) / time.Millisecond)
+		if ms < 1 {
+			ms = 1
+		}
+		times = append(times, ms)
 	}
-	_ = conn.Close()
-	ms := int(elapsed.Round(time.Millisecond) / time.Millisecond)
-	if ms < 1 {
-		ms = 1
+	if len(times) == 0 {
+		if failure == "" {
+			failure = "error"
+		}
+		return siteLatencySample{T: at, Ms: -1, F: failure, N: attempts}
 	}
-	return siteLatencySample{T: at, Ms: ms}
+	return siteLatencySample{T: at, Ms: siteLatencyMedian(times), N: attempts, K: len(times)}
+}
+
+func siteLatencyMedian(values []int) int {
+	sorted := append([]int(nil), values...)
+	sort.Ints(sorted)
+	middle := len(sorted) / 2
+	if len(sorted)%2 == 0 {
+		return (sorted[middle-1] + sorted[middle] + 1) / 2
+	}
+	return sorted[middle]
+}
+
+// siteLatencyVerifyTLS 在已连上的 TCP 上做一次 TLS 握手，返回空串 = 对方确实是这个域名。
+//   - 证书不是这个域名的 / 已过期 / 对方不是 TLS 服务或直接回告警 → "poisoned"：连到的不是它。
+//   - 握手被重置、对方关连接、没回应 → "blocked"：按 SNI 阻断的典型样子。
+func siteLatencyVerifyTLS(ctx context.Context, conn net.Conn, host string) string {
+	client := tls.Client(conn, &tls.Config{
+		ServerName:         host,
+		InsecureSkipVerify: true, // 链不验（见文件头），下面自己验域名和有效期
+		MinVersion:         tls.VersionTLS12,
+	})
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(deadline)
+	}
+	if err := client.HandshakeContext(ctx); err != nil {
+		return classifySiteLatencyTLSError(err)
+	}
+	certs := client.ConnectionState().PeerCertificates
+	if len(certs) == 0 {
+		return "poisoned"
+	}
+	leaf := certs[0]
+	if err := leaf.VerifyHostname(host); err != nil {
+		return "poisoned"
+	}
+	now := time.Now()
+	if now.Before(leaf.NotBefore) || now.After(leaf.NotAfter) {
+		return "poisoned"
+	}
+	return ""
+}
+
+func classifySiteLatencyTLSError(err error) string {
+	if errors.Is(err, syscall.ECONNRESET) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, syscall.EPIPE) {
+		return "blocked"
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return "blocked"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "blocked"
+	}
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "connection reset") || strings.Contains(msg, "broken pipe") {
+		return "blocked"
+	}
+	// 告警、不是 TLS 记录、协议版本对不上：对面是个别的服务，不是这个站点。
+	return "poisoned"
 }

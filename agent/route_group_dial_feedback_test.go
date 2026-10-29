@@ -33,7 +33,7 @@ func TestDialSuccessClearsConsecutiveFailures(t *testing.T) {
 }
 
 // 连续三次拨得慢（比探测延迟慢 3 倍且不低于 500ms）算一次失败；中间一次正常拨号就重新数。
-func TestSlowDialStreakCountsAsOneFailure(t *testing.T) {
+func TestSlowDialStreakAsksForProbeWithoutFailing(t *testing.T) {
 	stats := &routeTargetStats{}
 	now := time.Now()
 	for i := 0; i < 2; i++ {
@@ -53,12 +53,19 @@ func TestSlowDialStreakCountsAsOneFailure(t *testing.T) {
 	if !stats.recordDial(true, 700, now, 40) {
 		t.Fatal("连续第三次慢拨应当触发")
 	}
-	if stats.consecutiveFailures != 1 || stats.consecutiveSlow != 0 {
-		t.Fatalf("触发后应当记一次失败并清慢拨计数：failures=%d slow=%d", stats.consecutiveFailures, stats.consecutiveSlow)
+	if stats.consecutiveFailures != 0 || stats.consecutiveSlow != 0 {
+		t.Fatalf("触发后只要求探测、不记失败，并清慢拨计数：failures=%d slow=%d", stats.consecutiveFailures, stats.consecutiveSlow)
 	}
 	summary := stats.dialSummary(now)
 	if summary.ok != 6 || summary.slow != 5 || summary.failed != 0 {
 		t.Fatalf("拨号汇总不对：%+v", summary)
+	}
+	// 一直慢也不会把线路判坏：测速时几十条连接一起拨，慢是常态。
+	for i := 0; i < 30; i++ {
+		stats.recordDial(true, 900, now, 40)
+	}
+	if stats.consecutiveFailures != 0 {
+		t.Fatalf("只是慢不该攒失败：%d", stats.consecutiveFailures)
 	}
 	// 探测延迟很高时门槛跟着抬：探测 300ms，拨 700ms 不算慢（门槛 900ms）。
 	if routeDialIsSlow(700, 300) {
