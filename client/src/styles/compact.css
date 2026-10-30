@@ -193,9 +193,9 @@ html:root .empty-state-icon svg:not([data-fx-std-page] *) { width: 20px; height:
   html:root .workspace-main [data-slot="button"]:not([data-icon-button]):not([data-fx-std-page] *) { min-height: 0; height: 32px; padding-block: 0; font-size: 13px; }
   html:root .workspace-main [data-slot="button"][data-icon-button]:not([data-fx-std-page] *) { width: 32px; height: 32px; }
   html:root .workspace-main [data-slot="input"]:not([data-fx-std-page] *),
-  html:root .workspace-main [data-slot="select-trigger"]:not([data-fx-std-page] *) { height: 32px; font-size: 13px; }
+  html:root .workspace-main [data-slot="select-trigger"]:not([data-size="sm"]):not([data-fx-std-page] *) { height: 32px; font-size: 13px; }
   html:root .dialog-panel [data-slot="input"]:not([data-fx-std-page] *),
-  html:root .dialog-panel [data-slot="select-trigger"]:not([data-fx-std-page] *) { height: 32px; font-size: 13px; }
+  html:root .dialog-panel [data-slot="select-trigger"]:not([data-size="sm"]):not([data-fx-std-page] *) { height: 32px; font-size: 13px; }
   html:root .dialog-panel [data-slot="button"]:not([data-icon-button]):not([data-fx-std-page] *) { height: 32px; min-height: 0; padding-block: 0; font-size: 13px; }
   html:root .fx-chip:not([data-fx-std-page] *) { height: 28px; min-height: 28px; padding: 0 10px; font-size: 12.5px; }
   html:root .workspace-tabs:not([data-fx-std-page] *) { padding: 2px; }

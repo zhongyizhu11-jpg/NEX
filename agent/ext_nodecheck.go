@@ -68,6 +68,10 @@ var (
 	speedTestUpDuration   = 8 * time.Second
 	speedTestSampleEvery  = 500 * time.Millisecond
 	speedTestWarmup       = 2 * time.Second
+	// 链很长（经代理、几跳中转）时第一个字节来得晚：最多再多等这么久，让量的时间别被握手吃掉。
+	speedTestMaxExtra = 8 * time.Second
+	// 直接测（不经代理）时连 Cloudflare 等多久：国内机器常常连不上，早点改测到面板。
+	speedTestDirectMetaTimeout = 8 * time.Second
 )
 
 // 测试里换成本地 httptest 服务。
@@ -89,6 +93,8 @@ type speedTarget struct {
 	down    string
 	up      string
 	headers map[string]string
+	// 取 meta 等多久；0 = 15 秒。
+	metaTimeout time.Duration
 }
 
 func cloudflareSpeedTarget() speedTarget {
@@ -134,8 +140,11 @@ type speedSample struct {
 }
 
 type speedTestResult struct {
-	LatencyMs    float64 `json:"latencyMs"`
-	JitterMs     float64 `json:"jitterMs"`
+	// 连接建好以后来回一趟的时间（中位数）和相邻两次的差；第一个要握手的请求不算（2.2.243 起）。
+	LatencyMs float64 `json:"latencyMs"`
+	JitterMs  float64 `json:"jitterMs"`
+	// 第一个请求（取 meta）的耗时：经代理时含 sing-box → 节点 → 测速点的握手，像客户端的「延迟测试」。
+	ConnectMs    float64 `json:"connectMs,omitempty"`
 	DownloadMbps float64 `json:"downloadMbps"`
 	UploadMbps   float64 `json:"uploadMbps"`
 	Colo         string  `json:"colo,omitempty"`
@@ -339,7 +348,12 @@ func (m *nodeCheckExtModule) execute(d nodeCheckRunDirective, report *nodeCheckR
 				}
 			}
 			// 先对 Cloudflare；连不上 / 被拒（国内机器到国外 80、443 常常不通）就改测到面板。
-			targets := []speedTarget{cloudflareSpeedTarget()}
+			// 直接测时少等一会儿：连不上的话早点换面板；经代理时出去的是落地，照常等。
+			cloudflare := cloudflareSpeedTarget()
+			if !viaProxy {
+				cloudflare.metaTimeout = speedTestDirectMetaTimeout
+			}
+			targets := []speedTarget{cloudflare}
 			m.mu.Lock()
 			panelURL := m.panelURL
 			m.mu.Unlock()
@@ -356,7 +370,11 @@ func (m *nodeCheckExtModule) execute(d nodeCheckRunDirective, report *nodeCheckR
 				if speedErr == nil {
 					result.Server = target.name
 					if i > 0 {
-						result.Note = fmt.Sprintf("Cloudflare 测不了（%s），改测到面板：测的是这台机器到面板那条路", strings.Join(failures, "；"))
+						fallback := fmt.Sprintf("Cloudflare 测不了（%s），改测到面板：测的是这台机器到面板那条路", strings.Join(failures, "；"))
+						if result.Note != "" {
+							fallback += "；" + result.Note
+						}
+						result.Note = fallback
 					}
 					m.mu.Lock()
 					report.Speed = result
@@ -774,12 +792,19 @@ func parseCloudflareTrace(body string, result *speedTestResult) {
 // fetchSpeedMeta 出口 IP / ASN / 机房。连都连不上（拨号 / TLS 失败、超时）就是整条路不通，返回错误；
 // 连得上但回非 2xx（Cloudflare 的 /meta 对机房出口常回 403）不算失败，传输照测，再从 /cdn-cgi/trace 补。
 func fetchSpeedMeta(ctx context.Context, client *http.Client, target speedTarget, result *speedTestResult) error {
-	metaCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	timeout := target.metaTimeout
+	if timeout <= 0 {
+		timeout = 15 * time.Second
+	}
+	metaCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	started := time.Now()
 	resp, err := client.Do(target.request(metaCtx, http.MethodGet, target.meta, nil))
 	if err != nil {
 		return fmt.Errorf("连不上 %s：%v", target.label, err)
 	}
+	// 新连接上的第一个请求：经代理时这一下包括全部握手，单独记成「建连」。
+	result.ConnectMs = math.Round(float64(time.Since(started).Microseconds())/100) / 10
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	_ = resp.Body.Close()
 	var meta speedMeta
@@ -815,6 +840,14 @@ func runHTTPSpeedTest(ctx context.Context, dial nodeCheckDialFunc, target speedT
 	}
 
 	// 延迟：十次极小的请求，取到首字节的时间；延迟 = 中位数，抖动 = 相邻两次差的平均。只算 2xx 的。
+	// 先发一个不算的：meta 回非 2xx 时连接可能没留下，这一下把连接重新建好，后面十次都在建好的
+	// 连接上，量的是来回一趟（以前握手那一下也算进去，抖动被它拉到几百毫秒）。
+	warmCtx, cancelWarm := context.WithTimeout(ctx, 15*time.Second)
+	if rs, err := client.Do(target.request(warmCtx, http.MethodGet, target.down+"?bytes=0", nil)); err == nil {
+		_, _ = io.Copy(io.Discard, rs.Body)
+		_ = rs.Body.Close()
+	}
+	cancelWarm()
 	var latencies []float64
 	var lastErr error
 	for i := 0; i < speedTestLatencyN; i++ {
@@ -871,6 +904,10 @@ func runHTTPSpeedTest(ctx context.Context, dial nodeCheckDialFunc, target speedT
 		return nil, err
 	}
 	result.DownloadMbps = downMbps
+	if downMbps < 0.1 {
+		// 收到过字节、速度却是零：下行卡住了（限速、丢包或这条链下行有问题），别只给一个 0。
+		result.Note = fmt.Sprintf("下载几乎没速度：一共只收到 %d KB", down.get()>>10)
+	}
 
 	// 上传。每次送 upBytes；反代回 413 就减小再试（最小 1 MB，再小就当失败）。
 	up := &byteCounter{}
@@ -919,11 +956,13 @@ func runHTTPSpeedTest(ctx context.Context, dial nodeCheckDialFunc, target speedT
 	return result, nil
 }
 
-// runSpeedPhase 起 speedTestStreams 条流各自反复跑 stream，跑满 duration 就停；每 speedTestSampleEvery
-// 采一次这段时间的速率；返回去掉前 speedTestWarmup 的平均速率（Mbit/s）。
+// runSpeedPhase 起 speedTestStreams 条流各自反复跑 stream；每 speedTestSampleEvery 采一次这段时间的速率。
+// 从第一个字节到了才开始算：先丢掉 speedTestWarmup（TCP 慢启动），再量满 duration - warmup。经代理、
+// 几跳中转时第一个字节来得晚，最多多等 speedTestMaxExtra —— 以前从开始就计时，握手吃掉大半，量到的
+// 几乎都是零。返回量到的平均速率（Mbit/s）。
 // 流回 speedHTTPError（被拒 / 被限）就整段停下来报错：再试也是一样的。
 func runSpeedPhase(ctx context.Context, duration time.Duration, counter *byteCounter, stream func(ctx context.Context) error, sample func(mbps float64)) (float64, error) {
-	phaseCtx, cancel := context.WithTimeout(ctx, duration)
+	phaseCtx, cancel := context.WithTimeout(ctx, duration+speedTestMaxExtra)
 	defer cancel()
 	var wg sync.WaitGroup
 	var firstErr, fatalErr error
@@ -964,6 +1003,7 @@ func runSpeedPhase(ctx context.Context, duration time.Duration, counter *byteCou
 	defer ticker.Stop()
 	lastBytes := int64(0)
 	lastAt := started
+	var firstByteAt time.Time
 	var measured []float64
 	for {
 		select {
@@ -1008,8 +1048,16 @@ func runSpeedPhase(ctx context.Context, duration time.Duration, counter *byteCou
 			if sample != nil {
 				sample(mbps)
 			}
-			if now.Sub(started) >= speedTestWarmup {
+			if firstByteAt.IsZero() && total > 0 {
+				// 字节是这一格里某个时候到的，按这一格开头算
+				firstByteAt = now.Add(-speedTestSampleEvery)
+			}
+			if !firstByteAt.IsZero() && now.Sub(firstByteAt) >= speedTestWarmup {
 				measured = append(measured, mbps)
+			}
+			// 量够了就停：跑满 duration，而且第一个字节以后也量满了 duration（含 warmup）。
+			if now.Sub(started) >= duration && !firstByteAt.IsZero() && now.Sub(firstByteAt) >= duration {
+				cancel()
 			}
 		}
 	}

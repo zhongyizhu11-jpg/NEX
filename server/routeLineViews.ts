@@ -144,6 +144,8 @@ export type HostLineImpact = {
   /** 这台机器在哪几条线路里（0 = 主线路）。 */
   lineIndexes: number[];
   entry: boolean;
+  /** 这条线路的「恢复观察」秒数：维护结束后要探通、稳定这么久才切回来。 */
+  recoverSeconds?: number;
 };
 
 /**
@@ -197,6 +199,7 @@ export async function linesThroughHost(hostId: number, actor: { id: number; role
       ruleId: Number(rule.id),
       name: String(rule.name || ""),
       ...describeHostLineImpact({ hostId: id, isEntry, paths: group.paths, activeIndex, avoiding }),
+      recoverSeconds: Number(group.policy.recoverSeconds || 0),
     });
   }
   return out.slice(0, 50);

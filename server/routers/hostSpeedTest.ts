@@ -3,7 +3,8 @@ import { z } from "zod";
 import { protectedProcedure } from "../_core/trpc";
 import { requireHostAccess } from "./helpers";
 import { hostSupportsNodeCheck, listSpeedTestHistory, NodeCheckError, nodeCheckStatus, startNodeCheck } from "../ops/nodeCheck";
-import { NODE_CHECK_MIN_AGENT_VERSION } from "@shared/nodeCheck";
+import { NODE_CHECK_MIN_AGENT_VERSION, NODE_CHECK_PANEL_FALLBACK_VERSION } from "@shared/nodeCheck";
+import { isAgentVersionAtLeast } from "@shared/version";
 
 /*
   trpc.hosts.speedTest* —— 主机详情里的「网速测试」（Agent 2.2.241 起）：这台机器对 Cloudflare 测速。
@@ -31,9 +32,11 @@ export const hostSpeedTestProcedures = {
       return {
         supported: hostSupportsNodeCheck(host),
         minAgentVersion: NODE_CHECK_MIN_AGENT_VERSION,
+        // 连不上 Cloudflare 时改测到面板是 2.2.242 才有的：老的会直接报失败，界面要说清楚
+        panelFallback: isAgentVersionAtLeast(String(host.agentVersion || "").replace(/^v/i, ""), NODE_CHECK_PANEL_FALLBACK_VERSION),
         online: !!host.isOnline,
         hostName: String(host.name || ""),
-        countryCode: host.countryCode ? String(host.countryCode) : null,
+        countryCode: host.geoCountryCode ? String(host.geoCountryCode) : null,
         ...status,
       };
     }),

@@ -13,6 +13,8 @@
 import { normalizeUnlockResults, type UnlockServiceResult } from "./unlockCheck";
 
 export const NODE_CHECK_MIN_AGENT_VERSION = "2.2.241";
+/** 连不上 Cloudflare 时改测到面板：Agent 2.2.242 起。 */
+export const NODE_CHECK_PANEL_FALLBACK_VERSION = "2.2.242";
 
 export const NODE_CHECK_KINDS = ["speed", "exit"] as const;
 export type NodeCheckKind = (typeof NODE_CHECK_KINDS)[number];
@@ -20,8 +22,11 @@ export type NodeCheckKind = (typeof NODE_CHECK_KINDS)[number];
 export type SpeedSample = { t: number; down: number; up: number };
 
 export type SpeedTestResult = {
+  /** 连接建好以后来回一趟（中位数）；第一个要握手的请求不算（Agent 2.2.243 起）。 */
   latencyMs: number;
   jitterMs: number;
+  /** 第一个请求的耗时：经代理时含握手（sing-box → 节点 → 测速点）；老 Agent 没有，为 0。 */
+  connectMs: number;
   downloadMbps: number;
   uploadMbps: number;
   colo: string;
@@ -85,6 +90,7 @@ export function normalizeSpeedTestResult(raw: unknown): SpeedTestResult | null {
   return {
     latencyMs: Math.max(0, num(entry.latencyMs)),
     jitterMs: Math.max(0, num(entry.jitterMs)),
+    connectMs: Math.max(0, num(entry.connectMs)),
     downloadMbps: Math.max(0, num(entry.downloadMbps)),
     uploadMbps: Math.max(0, num(entry.uploadMbps)),
     colo: text(entry.colo, 16).toUpperCase(),

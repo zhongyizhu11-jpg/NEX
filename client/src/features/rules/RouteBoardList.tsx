@@ -185,7 +185,8 @@ export function RouteBoardList({ searchQuery = "", isAdmin = false, compact = fa
 
   return (
     <>
-      <div className={cn("flex flex-col", compact ? "gap-3" : "gap-3")} data-testid="route-board-list">
+      {/* 线路工作台的小卡在宽屏上排两列（手机上一列，和效果图一样） */}
+      <div className={cn(compact ? "grid grid-cols-1 gap-3 xl:grid-cols-2" : "flex flex-col gap-3")} data-testid="route-board-list">
         {(compact
           ? [...rows].sort((a, b) => {
             const sa = boardByRule.get(Number(a.rule.id))?.status as RouteStatus | undefined;

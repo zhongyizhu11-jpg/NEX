@@ -144,6 +144,11 @@ export async function ingestFailoverLineReports(input: {
     const fromTarget = normalizeAgentText(rawEvent?.fromTarget, 256);
     const reason = normalizeAgentText(rawEvent?.reason, 256);
     const latencyMs = Math.max(0, Math.floor(Number(rawEvent?.latencyMs || 0)));
+    // 新旧两条整条链的延迟、择优切过去前领先了多久（Agent 2.2.243 起；老的没有）
+    const positive = (value: unknown) => (Number.isFinite(Number(value)) && Number(value) > 0 ? Math.floor(Number(value)) : null);
+    const fromChainMs = positive(rawEvent?.fromChainMs);
+    const toChainMs = positive(rawEvent?.toChainMs);
+    const heldSeconds = positive(rawEvent?.heldSeconds);
     // Agent 没评分时报 0 或 -1（切换原因是探测不通、没样本）；只有真有分才记。
     const score = Number.isFinite(Number(rawEvent?.score)) && Number(rawEvent?.score) > 0 ? Math.min(100, Math.floor(Number(rawEvent.score))) : null;
     const transition = kind === "switch"
@@ -183,6 +188,9 @@ export async function ingestFailoverLineReports(input: {
         reason: reason || null,
         score,
         latencyMs: latencyMs > 0 ? latencyMs : null,
+        fromChainMs,
+        toChainMs,
+        heldSeconds,
         atSeconds,
       });
       storedEvents += 1;

@@ -12,7 +12,7 @@ import { StatusDot } from "@/components/network/StatusDot";
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 import { formatAgo } from "@shared/dashboardAttention";
 import { formatCpuPercent } from "./hostDisplay";
-import { hostGeoTooltip, hostPrimaryAddressLines, hostRegionText } from "./hostDisplay";
+import { hostGeoTooltip, hostInMaintenance, hostPrimaryAddressLines, hostRegionText } from "./hostDisplay";
 import { HostOsAvatar, hostOsOf } from "./HostOsBadge";
 import { deriveHostVitals, type HostVitals } from "./useHostVitals";
 import { hostTrafficExcluded, normalizeHostTrafficFailoverPercent } from "@shared/hostTrafficPolicy";
@@ -349,16 +349,23 @@ export default function HostSummaryCard(props: HostSummaryCardProps) {
             {/* Agent 版本号不上卡（2026-10-09 用户要求），进详情看；能升级时只留一句「可升级」。 */}
             {/* 运营商 / ASN 不另占一行，悬停时给（和地区、组织一起） */}
             <span title={hostGeoTooltip(host) || undefined}>{[region, address].filter(Boolean).join(" · ")}</span>
+            {/* 维护中（2.3.496）：从所有线路和组的候选里拿掉了，排最前 */}
+            {hostInMaintenance(host) ? (
+              <>
+                {region || address ? " · " : ""}
+                <span className="text-[var(--fx-warn-text)]" title={host?.maintenanceNote ? `维护中：${host.maintenanceNote}` : "维护中：不参与线路和组的调度"} data-host-maintenance="">维护中</span>
+              </>
+            ) : null}
             {/* 流量到阈值被暂停参与组调度：比「可升级」要紧，排在它前面，免得窄卡上被截掉。 */}
             {hostTrafficExcluded(host) ? (
               <>
-                {region || address ? " · " : ""}
+                {region || address || hostInMaintenance(host) ? " · " : ""}
                 <span className="text-[var(--fx-warn-text)]" title={hostTrafficFailoverTitle(host)} data-host-traffic-failover="">组调度已暂停</span>
               </>
             ) : null}
             {agentVersion && props.upgradeAvailable ? (
               <>
-                {region || address || hostTrafficExcluded(host) ? " · " : ""}
+                {region || address || hostTrafficExcluded(host) || hostInMaintenance(host) ? " · " : ""}
                 <span className="text-[var(--fx-warn-text)]">可升级</span>
               </>
             ) : null}

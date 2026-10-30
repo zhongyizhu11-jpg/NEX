@@ -692,7 +692,7 @@
     Tailwind 的 text-xs，裸的 [data-slot="input"] 只有 (0,1,0)，会输给它，
     实测字号掉到 12px。
   */
-  [data-slot="input"][class], [data-slot="select-trigger"][class] { position: relative; min-height: 34px; font-size: 15px; }
+  [data-slot="input"][class], [data-slot="select-trigger"][class]:not([data-size="sm"]) { position: relative; min-height: 34px; font-size: 15px; }
   [data-slot="input"]::after, [data-slot="select-trigger"]::after { content: ""; position: absolute; inset: -5px 0; }
 }
 @media (prefers-reduced-motion: reduce) {

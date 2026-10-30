@@ -521,7 +521,7 @@ export function RouteGroupFields({
           <div key={index} className="flex min-w-0 flex-col gap-1" data-state={condition?.state || "idle"}>
             <div className="flex flex-wrap items-center gap-1.5">
               <Select value={dayPresetOf(window.days)} onValueChange={(preset) => patch({ days: DAY_PRESETS[preset as keyof typeof DAY_PRESETS] })}>
-                <SelectTrigger className="h-8 w-24 text-xs" aria-label={`第 ${index + 1} 个时段：星期`}><SelectValue /></SelectTrigger>
+                <SelectTrigger size="sm" className="w-24" aria-label={`第 ${index + 1} 个时段：星期`}><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">每天</SelectItem>
                   <SelectItem value="weekday">工作日</SelectItem>
@@ -544,7 +544,7 @@ export function RouteGroupFields({
                 aria-label={`第 ${index + 1} 个时段：结束时间`}
               />
               <Select value={String(window.targetIndex)} onValueChange={(target) => patch({ targetIndex: Number(target) })}>
-                <SelectTrigger className="h-8 w-32 text-xs" aria-label={`第 ${index + 1} 个时段：首选哪条路径`}><SelectValue /></SelectTrigger>
+                <SelectTrigger size="sm" className="w-32" aria-label={`第 ${index + 1} 个时段：首选哪条路径`}><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {paths.map((path, position) => (
                     <SelectItem key={path.key} value={String(position)}>{routePathLetter(position)} {label(position)}</SelectItem>
@@ -607,6 +607,7 @@ export function RouteGroupFields({
   const mainTunnels = (lines?.[0]?.layers || []).flatMap((layer) => layer.tunnelIds).map((id) => tunnels.find((tunnel) => tunnel.id === id)).filter((tunnel): tunnel is RouteLineTunnel => !!tunnel);
   const replicateReady = mainTunnels.some((tunnel) => String(tunnel.mode || "").toLowerCase() === "forwardx");
   const seamlessTunnelReady = mainTunnels.some((tunnel) => String(tunnel.mode || "").toLowerCase() === "forwardx" && String(tunnel.relayMode || "") === "hot_standby");
+  const mainNexTunnel = mainTunnels.find((tunnel) => String(tunnel.mode || "").toLowerCase() === "forwardx") || null;
   const changeDelivery = (next: RouteDelivery) => {
     // 热备：一坏就切、旧连接马上重连；冷备回到平滑切换。其余参数照旧。
     const patch: Partial<RouteGroupPolicy> = next === "hot"
@@ -646,6 +647,19 @@ export function RouteGroupFields({
               onChange={(next) => changeMode(next === "scheduled" && mode === "hybrid" ? "hybrid" : next)}
             />
             <LineHint>{lineModeHint(routePolicy, udpOnly)}</LineHint>
+            {/* 四格之外的两种：稳定优先下「人工指定」= 手动主备，按时段下「时段外择优」= 混合（保存才生效，用 Checkbox） */}
+            {lineModeSegment(mode) === "failover" ? (
+              <label className="mt-[10px] flex w-fit items-center gap-2 text-[11.5px] text-muted-foreground">
+                <Checkbox checked={mode === "manual"} onCheckedChange={(checked) => changeMode(checked ? "manual" : "failover")} aria-label="人工指定走哪条" data-testid="route-line-manual" />
+                人工指定走哪条（手动主备）
+              </label>
+            ) : null}
+            {lineModeSegment(mode) === "scheduled" ? (
+              <label className="mt-[10px] flex w-fit items-center gap-2 text-[11.5px] text-muted-foreground">
+                <Checkbox checked={mode === "hybrid"} onCheckedChange={(checked) => changeMode(checked ? "hybrid" : "scheduled")} aria-label="时段外走整条链最快的" data-testid="route-line-hybrid" />
+                时段外走整条链最快的
+              </label>
+            ) : null}
             {mode === "manual" ? <div className="mt-2">{pinPicker(false)}</div> : null}
             {usesSchedule ? <div className="mt-3">{scheduleEditor}</div> : null}
             {weighted ? (
@@ -660,6 +674,37 @@ export function RouteGroupFields({
                 />
               </div>
             ) : null}
+            {weighted && routePolicy.spread === "weighted" ? (
+              /* 按权重：一条线路一个数（展开出来的几条路径一起分它那一份） */
+              <div className="mt-3 flex flex-col gap-1.5" data-testid="route-line-weights">
+                {lines.map((line, index) => {
+                  const total = lines.reduce((sum, item) => sum + Math.max(1, item.weight), 0);
+                  const share = total > 0 ? Math.round((Math.max(1, line.weight) / total) * 100) : 0;
+                  const name = index === 0 ? "主线路" : line.name || `备 ${index}`;
+                  return (
+                    <div key={line.key} className="flex min-w-0 items-center justify-between gap-2 text-[12.5px]">
+                      <span className="min-w-0 truncate">{name}</span>
+                      <div className="relative w-[4.5rem] shrink-0">
+                        <Input
+                          type="number"
+                          inputMode="numeric"
+                          min={ROUTE_GUARD_LIMITS.weight.min}
+                          max={ROUTE_GUARD_LIMITS.weight.max}
+                          value={line.weight}
+                          onChange={(event) => {
+                            const weight = Math.min(ROUTE_GUARD_LIMITS.weight.max, Math.max(ROUTE_GUARD_LIMITS.weight.min, parseInt(event.target.value) || 1));
+                            setLines(lines.map((item, position) => (position === index ? { ...item, weight } : item)));
+                          }}
+                          aria-label={`${name} 的权重`}
+                          className="h-8 pr-9 text-sm"
+                        />
+                        <span aria-hidden="true" className="pointer-events-none absolute inset-y-0 right-2 flex items-center text-meta text-muted-foreground">{share}%</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
             <label className="mt-[10px] flex w-fit items-center gap-2 text-[11.5px] text-muted-foreground">
               <Checkbox
                 checked={delivery === "hot"}
@@ -671,7 +716,16 @@ export function RouteGroupFields({
             </label>
             {delivery === "hot" && !seamlessTunnelReady ? (
               <LineHint className="mt-1">
-                握手慢了同时拨下一条、坏了马上切，旧连接断开让客户端马上重连。要换中转也不断连：主线路里放一段 NEX 隧道，隧道的中转方式设成「热备」。
+                握手慢了同时拨下一条、坏了马上切，旧连接断开让客户端马上重连。要换中转也不断连：主线路里放一段 NEX 隧道，隧道的中转方式设成「热备」（至少两台中转）。
+                {/* 主线路里已经有 NEX 隧道、只是没开热备：直接去改它（新标签页打开，这里没存的不丢） */}
+                {mainNexTunnel ? (
+                  <>
+                    {" "}
+                    <a href={`/tunnels?tab=tunnels&edit=${mainNexTunnel.id}`} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-foreground" data-testid="route-line-hot-tunnel">
+                      去改隧道「{mainNexTunnel.name}」
+                    </a>
+                  </>
+                ) : null}
               </LineHint>
             ) : null}
           </LineCard>
@@ -807,7 +861,7 @@ export function RouteGroupFields({
                         patchPath(index, { destNodeId: node.id, dest: { ip: node.address, port: node.port } });
                       }}
                     >
-                      <SelectTrigger className="h-7 w-auto shrink-0 gap-1 border-dashed px-2 text-xs" aria-label={`路径 ${routePathLetter(index)} 的落地选我的节点`}>
+                      <SelectTrigger size="sm" className="w-auto shrink-0 border-dashed" aria-label={`路径 ${routePathLetter(index)} 的落地选我的节点`}>
                         <SelectValue placeholder="选节点" />
                       </SelectTrigger>
                       <SelectContent align="end">
@@ -1133,19 +1187,26 @@ export function RouteGroupFields({
               }
             >
               <div className="grid min-w-0 grid-cols-[3.25rem_minmax(0,1fr)] items-center gap-x-2 gap-y-1.5">
-                {paths.map((path, index) => {
-                  const field = `probe-${path.key}`;
-                  const text = draftOf(field, path.probe);
+                {/* 有线路时探测地址填在线路上（展开出来的每条路径都用它）；老的路径草稿照旧填在路径上 */}
+                {(lines ? lines.map((line, index) => ({ key: line.key, probe: line.probe ?? null, title: index === 0 ? "主线路" : line.name || `备 ${index}` })) : paths.map((path, index) => ({ key: path.key, probe: path.probe, title: `${routePathLetter(index)} ${label(index)}` }))).map((row, index) => {
+                  const field = `probe-${row.key}`;
+                  const text = draftOf(field, row.probe);
                   const error = shownError(field, text);
+                  const commit = () => {
+                    if (!lines) return commitEndpoint(index, "probe", text);
+                    const parsed = parseRouteEndpoint(text);
+                    if (parsed && "error" in parsed) return;
+                    setLines(lines.map((item, position) => (position === index ? { ...item, probe: parsed } : item)));
+                  };
                   return (
-                    <FormField key={path.key} className="contents">
-                      <Label className="text-meta font-normal text-muted-foreground">{routePathLetter(index)} {label(index)}</Label>
+                    <FormField key={row.key} className="contents">
+                      <Label className="text-meta font-normal text-muted-foreground">{row.title}</Label>
                       <div className="flex min-w-0 flex-col gap-1">
                         <Input
                           value={text}
                           onChange={(event) => setDrafts({ ...drafts, [field]: event.target.value.replace(/\s+/g, "") })}
                           onFocus={() => setEditingField(field)}
-                          onBlur={() => { setEditingField(null); commitEndpoint(index, "probe", text); }}
+                          onBlur={() => { setEditingField(null); commit(); }}
                           placeholder={udpOnly ? "留空就 ping 拨号地址" : "留空就探拨号地址"}
                           className="h-9 font-mono text-sm"
                           spellCheck={false}
