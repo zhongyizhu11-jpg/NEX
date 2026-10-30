@@ -60,6 +60,8 @@ type PendingRun = NodeCheckSubject & {
   outbound: Record<string, unknown> | null;
   /** 主出站要经的前置代理等额外出站。 */
   extraOutbounds: Record<string, unknown>[] | null;
+  /** 那台机器没有 sing-box 时先跑它装（自建节点那套装机脚本）。 */
+  installCmd: string | null;
   family: UnlockFamily;
   requestedBy: number | null;
   createdAt: number;
@@ -117,7 +119,7 @@ export class NodeCheckError extends Error {}
  */
 export function startNodeCheck(
   host: { id: number; agentVersion?: string | null; isOnline?: unknown },
-  input: { kind: NodeCheckKind; nodeId?: number; entryKey?: string; nodeName?: string; outbound?: Record<string, unknown> | null; extraOutbounds?: Record<string, unknown>[]; family?: unknown; requestedBy?: number | null },
+  input: { kind: NodeCheckKind; nodeId?: number; entryKey?: string; nodeName?: string; outbound?: Record<string, unknown> | null; extraOutbounds?: Record<string, unknown>[]; installCmd?: string | null; family?: unknown; requestedBy?: number | null },
 ) {
   const hostId = Number(host.id);
   if (!(hostId > 0)) throw new NodeCheckError("主机不存在");
@@ -138,6 +140,7 @@ export function startNodeCheck(
     nodeName: String(input.nodeName || ""),
     outbound: (nodeId > 0 || entryKey) && input.outbound ? input.outbound : null,
     extraOutbounds: input.extraOutbounds && input.extraOutbounds.length > 0 ? input.extraOutbounds : null,
+    installCmd: input.installCmd || null,
     family: normalizeUnlockFamily(input.family),
     requestedBy: input.requestedBy ?? null,
     createdAt: Date.now(),
@@ -152,7 +155,7 @@ export function nodeCheckDirectiveFor(hostId: number) {
     runId: run.runId,
     kind: run.kind,
     family: run.family,
-    ...(run.outbound ? { via: { outbound: run.outbound, ...(run.extraOutbounds ? { extraOutbounds: run.extraOutbounds } : {}) } } : {}),
+    ...(run.outbound ? { via: { outbound: run.outbound, ...(run.extraOutbounds ? { extraOutbounds: run.extraOutbounds } : {}), ...(run.installCmd ? { installCmd: run.installCmd } : {}) } } : {}),
     ...(run.kind === "exit" ? { targets: SITE_LATENCY_TARGETS.map(({ key, host, port }) => ({ key, host, port })) } : {}),
   }));
   return runs.length > 0 ? { runs } : undefined;

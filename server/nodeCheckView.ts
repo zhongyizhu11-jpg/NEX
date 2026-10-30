@@ -1,6 +1,10 @@
 import * as db from "./db";
+import { resolveAgentAdvertisedPanelUrl } from "./agentPanelUrl";
 import { findNodeHost, type ExitQualityHost } from "./exitQualityView";
 import { hostSupportsNodeCheck, nodeCheckStatus, startNodeCheck, type NodeCheckSubject } from "./ops/nodeCheck";
+import { singboxAssetRelayBase } from "./singboxAssets";
+import { ensureSingboxBinaryCmd } from "./singboxRuntimePlan";
+import { effectiveGithubAccelerator } from "../shared/githubAccelerator";
 import { SITE_LATENCY_TARGETS, summarizeSiteSamples, type SiteLatencySample } from "../shared/siteLatency";
 import { singboxOutbound } from "../shared/proxySubscription";
 import { proxyNodeFromTemplateRow, type ProxySubscriptionEntry } from "../shared/proxySubscriptionPlan";
@@ -11,10 +15,11 @@ import type { ExitCheckResult } from "../shared/nodeCheck";
   两处按需检查怎么落到主机上（逻辑在 ops/nodeCheck.ts，这里只做节点 / 线路 ↔ 主机的对应）：
 
     · 节点菜单「出口检测」，节点的机器不是自己的：挑一台自己的机器，临时拉 sing-box 把这个节点当出站，
-      站点握手 + 解锁走它过去；结果画成和主机那版一样的出口面板。
-    · 预览订阅里每条线路的「测速」：挑一台自己的机器（不在这条线路上的），把订阅里这条线路的入口
-      当出站（客户端拿到的就是它），对 Cloudflare 测速 —— 测的是整条链：入口 → 中转 → 落地 → 出去。
-  候选机器里绑了这个节点的转发所在的入口机排最前（出口检测），线路上的机器排除（测速）。
+      站点握手 + 解锁走它过去；结果画成和主机那版一样的出口面板。候选机器里绑了这个节点的转发
+      所在的入口机排最前。
+    · 预览订阅里每条线路的「测速」：就在这条线路的入口机上跑 —— 它像客户端一样连自己的入口端口，
+      流量走入口 → 中转 → 落地出去，测的是整条链；不用挑机器。直连条目在落地机上跑。
+  机器上没有 sing-box 的，指令里带上自建节点那套装机脚本，Agent 先装再测。
 */
 
 export type NodeCheckHostCandidate = {
@@ -42,6 +47,16 @@ function sortCandidates(list: NodeCheckHostCandidate[]) {
 
 async function viewerHosts(viewer: { id: number; role: string }) {
   return (viewer.role === "admin" ? await db.getHosts() : await db.getHosts(viewer.id)) as any[];
+}
+
+/** 机器上没有 sing-box 时让 Agent 装一个用的脚本（和自建节点那套一样：GitHub / 加速 / 面板转发三路试）。 */
+export async function singboxInstallCmd() {
+  const [panelUrl, settings] = await Promise.all([
+    resolveAgentAdvertisedPanelUrl().catch(() => ""),
+    db.getAllSettings().catch(() => ({} as Record<string, string | null>)),
+  ]);
+  const accelerator = effectiveGithubAccelerator({ enabled: settings.githubAcceleratorEnabled === "true", url: settings.githubAcceleratorUrl ?? "" });
+  return ensureSingboxBinaryCmd({ accelerator, panelRelayBase: singboxAssetRelayBase(panelUrl) });
 }
 
 // ---------------------------------------------------------------- 节点：经一台机器的出口检测
@@ -81,7 +96,7 @@ export async function startExitCheckForNode(node: any, viewer: { id: number; rol
   delete outbound.detour;
   return {
     subject: { kind: "exit", hostId, nodeId: Number(node.id) } as NodeCheckSubject,
-    ...startNodeCheck(host, { kind: "exit", nodeId: Number(node.id), nodeName: String(node.name || ""), outbound, requestedBy: viewer.id }),
+    ...startNodeCheck(host, { kind: "exit", nodeId: Number(node.id), nodeName: String(node.name || ""), outbound, installCmd: await singboxInstallCmd(), requestedBy: viewer.id }),
   };
 }
 
@@ -91,14 +106,14 @@ export async function exitCheckStatusForNode(node: any, viewer: { id: number; ro
   return { plan: { ownHostId: plan.ownHost ? Number(plan.ownHost.id) : 0, ownHostName: plan.ownHost ? String(plan.ownHost.name || "") : "", match: plan.match, candidates: plan.candidates }, ...status };
 }
 
-// ---------------------------------------------------------------- 订阅线路：从一台机器连入口测整条链
+// ---------------------------------------------------------------- 订阅线路：在入口机上连自己的入口测整条链
 
 export type EntryCheckPlan = {
   entry: ProxySubscriptionEntry;
   entryName: string;
-  /** 线路上的机器（入口 / 落地），不拿来测。 */
-  routeHostIds: number[];
-  candidates: NodeCheckHostCandidate[];
+  /** 在哪台机器上跑：中转条目是入口机，直连条目是落地机；null = 对不上机器。 */
+  host: any | null;
+  hostRole: "entry" | "landing";
 };
 
 export function parseEntryKey(entryKey: string): { kind: "relay"; ruleId: number } | { kind: "direct"; templateId: number } | null {
@@ -115,29 +130,23 @@ export async function planEntryCheck(userId: number, viewer: { id: number; role:
   const { plan } = await db.getProxySubscriptionPreviewForUser(userId);
   const entry = plan.entries.find((item) => (ref.kind === "relay" ? item.kind === "relay" && Number(item.ruleId) === ref.ruleId : item.kind === "direct" && Number(item.templateId) === ref.templateId));
   if (!entry) throw new Error("订阅里没有这条线路了");
-  const routeHostIds = new Set<number>();
+  let host: any = null;
+  let hostRole: EntryCheckPlan["hostRole"] = "entry";
   if (entry.kind === "relay" && entry.ruleId > 0) {
     const rule = await db.getForwardRuleById(entry.ruleId) as any;
-    if (rule?.hostId) routeHostIds.add(Number(rule.hostId));
+    host = rule?.hostId ? await db.getHostById(Number(rule.hostId)) : null;
+  } else {
+    hostRole = "landing";
+    const template = await db.getProxyNodeById(Number(entry.templateId));
+    host = template ? (await findNodeHost(template, viewer)).host : null;
   }
-  const template = await db.getProxyNodeById(Number(entry.templateId));
-  if (template) {
-    const { host } = await findNodeHost(template, viewer);
-    if (host) routeHostIds.add(Number(host.id));
-  }
-  const hosts = await viewerHosts(viewer);
-  const candidates = sortCandidates(hosts.filter((item) => !routeHostIds.has(Number(item.id))).map((item) => candidateOf(item, false)));
-  return { entry, entryName: entry.node.name, routeHostIds: Array.from(routeHostIds), candidates };
+  return { entry, entryName: entry.node.name, host, hostRole };
 }
 
-/** 排一次线路测速：从 hostId 那台机器连这条线路的入口（订阅里给客户端的那个节点）测。 */
-export async function startSpeedTestForEntry(userId: number, viewer: { id: number; role: string }, input: { entryKey: string; hostId?: number }) {
+/** 排一次线路测速：入口机连自己的入口（订阅里给客户端的那个节点）走完整条链去测。 */
+export async function startSpeedTestForEntry(userId: number, viewer: { id: number; role: string }, input: { entryKey: string }) {
   const plan = await planEntryCheck(userId, viewer, input.entryKey);
-  const hostId = Number(input.hostId || plan.candidates.find((item) => item.online && item.supported)?.id || 0);
-  const candidate = plan.candidates.find((item) => item.id === hostId);
-  if (!candidate) throw new Error("没有可以用来测的机器：要一台在线、Agent 2.2.241 以上、而且不在这条线路上的机器");
-  const host = await db.getHostById(hostId);
-  if (!host) throw new Error("主机不存在");
+  if (!plan.host) throw new Error(plan.hostRole === "entry" ? "这条线路的入口机不在面板里" : "这个落地不在装了 Agent 的机器上，测不了");
   const outbound = singboxOutbound(plan.entry.node);
   delete outbound.detour;
   const extraOutbounds: Record<string, unknown>[] = [];
@@ -154,15 +163,20 @@ export async function startSpeedTestForEntry(userId: number, viewer: { id: numbe
     }
   }
   return {
-    subject: { kind: "speed", hostId, nodeId: 0, entryKey: input.entryKey } as NodeCheckSubject,
-    ...startNodeCheck(host, { kind: "speed", entryKey: input.entryKey, nodeName: plan.entryName, outbound, extraOutbounds, requestedBy: viewer.id }),
+    subject: { kind: "speed", hostId: Number(plan.host.id), nodeId: 0, entryKey: input.entryKey } as NodeCheckSubject,
+    ...startNodeCheck(plan.host, { kind: "speed", entryKey: input.entryKey, nodeName: plan.entryName, outbound, extraOutbounds, installCmd: await singboxInstallCmd(), requestedBy: viewer.id }),
   };
 }
 
 export async function speedTestStatusForEntry(userId: number, viewer: { id: number; role: string }, entryKey: string) {
   const plan = await planEntryCheck(userId, viewer, entryKey);
   const status = await nodeCheckStatus({ kind: "speed", hostId: 0, nodeId: 0, entryKey });
-  return { entryName: plan.entryName, candidates: plan.candidates, ...status };
+  return {
+    entryName: plan.entryName,
+    host: plan.host ? candidateOf(plan.host, false) : null,
+    hostRole: plan.hostRole,
+    ...status,
+  };
 }
 
 // ---------------------------------------------------------------- 结果画成出口面板

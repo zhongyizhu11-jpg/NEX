@@ -1,10 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { toast } from "sonner";
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from "recharts";
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { countryFlagLabel } from "@/lib/flagEmojiSupport";
 import { trpc } from "@/lib/trpc";
 import { formatMbps, NODE_CHECK_PHASE_LABELS, type SpeedSample, type SpeedTestResult } from "@shared/nodeCheck";
@@ -16,8 +15,8 @@ import { formatMbps, NODE_CHECK_PHASE_LABELS, type SpeedSample, type SpeedTestRe
 
   subject 两种：
     · { hostId }：主机详情里的「网速测试」，只测这台机器自己的带宽。
-    · { entryKey }：预览订阅里每条线路的「测速」：挑一台不在这条线路上的机器，临时拉 sing-box
-      把订阅里这条线路的入口当出站（客户端拿到的就是它），测的是整条链（server/nodeCheckView）。
+    · { entryKey }：预览订阅里每条线路的「测速」：入口机临时拉 sing-box，像客户端一样连自己的入口
+      （订阅里给客户端的那个节点），流量走完整条链出去，测的就是整条链（server/nodeCheckView）。
 */
 
 export type SpeedTestSubject = { hostId: number } | { entryKey: string };
@@ -84,8 +83,6 @@ export function SpeedTestDialog({ subject, name, onOpenChange }: { subject: Spee
   const utils = trpc.useUtils();
   const hostId = subject && "hostId" in subject ? subject.hostId : 0;
   const entryKey = subject && "entryKey" in subject ? subject.entryKey : "";
-  const [viaHostId, setViaHostId] = useState<number>(0);
-  useEffect(() => { setViaHostId(0); }, [entryKey, hostId]);
 
   const hostStatus = trpc.hosts.speedTestStatus.useQuery({ hostId }, {
     enabled: hostId > 0,
@@ -105,13 +102,13 @@ export function SpeedTestDialog({ subject, name, onOpenChange }: { subject: Spee
   const startEntry = trpc.proxySubscriptions.entrySpeedTestStart.useMutation({ onSuccess: invalidate, onError: (error) => toast.error(error.message) });
 
   const status: Status | null = hostId > 0 ? (hostStatus.data ?? null) : (entryStatus.data ?? null);
-  const candidates = entryKey ? entryStatus.data?.candidates ?? [] : [];
-  const chosenVia = viaHostId || candidates.find((item) => item.online && item.supported)?.id || 0;
+  const entryHost = entryKey ? entryStatus.data?.host ?? null : null;
   const pending = status?.pending ?? null;
   const latest = status?.latest ?? null;
   const starting = startHost.isPending || startEntry.isPending;
-  const hostUnsupported = hostId > 0 && hostStatus.data && !hostStatus.data.supported;
-  const hostOffline = hostId > 0 && hostStatus.data && !hostStatus.data.online;
+  const hostUnsupported = (hostId > 0 && hostStatus.data && !hostStatus.data.supported) || (!!entryKey && !!entryHost && !entryHost.supported);
+  const hostOffline = (hostId > 0 && hostStatus.data && !hostStatus.data.online) || (!!entryKey && !!entryHost && !entryHost.online);
+  const entryNoHost = !!entryKey && !!entryStatus.data && !entryHost;
 
   const samples = pending ? pending.samples : latest?.speed?.samples ?? [];
   const liveSample = pending && pending.samples.length > 0 ? pending.samples[pending.samples.length - 1] : null;
@@ -124,12 +121,13 @@ export function SpeedTestDialog({ subject, name, onOpenChange }: { subject: Spee
 
   const exitHostLabel = useMemo(() => {
     if (hostId > 0) return hostStatus.data ? `${countryFlagLabel(hostStatus.data.countryCode) || ""} ${hostStatus.data.hostName}`.trim() : "";
-    return "";
-  }, [hostId, hostStatus.data]);
+    if (entryHost) return `${entryHost.name}（${entryStatus.data?.hostRole === "landing" ? "落地机" : "入口机"}）${!entryHost.online ? " · 离线" : !entryHost.supported ? " · Agent 太旧" : ""}`;
+    return entryNoHost ? "入口机不在面板里" : "";
+  }, [hostId, hostStatus.data, entryHost, entryStatus.data?.hostRole, entryNoHost]);
 
   const start = () => {
     if (hostId > 0) startHost.mutate({ hostId });
-    else if (entryKey) startEntry.mutate({ entryKey, hostId: chosenVia || undefined });
+    else if (entryKey) startEntry.mutate({ entryKey });
   };
   const result = latest?.speed ?? null;
 
@@ -155,26 +153,10 @@ export function SpeedTestDialog({ subject, name, onOpenChange }: { subject: Spee
 
           <div className="fx-hd-sec">
             <div className="fx-hd-sec-body pt-2.5">
-              {entryKey ? (
-                <div className="flex min-w-0 items-center justify-between gap-3 text-[13.5px]">
-                  <span className="shrink-0">从哪台测</span>
-                  <Select value={chosenVia ? String(chosenVia) : ""} onValueChange={(value) => setViaHostId(Number(value))}>
-                    <SelectTrigger className="h-8 w-[200px]" aria-label="从哪台机器测"><SelectValue placeholder="选一台机器" /></SelectTrigger>
-                    <SelectContent>
-                      {candidates.map((item) => (
-                        <SelectItem key={item.id} value={String(item.id)} disabled={!item.online || !item.supported}>
-                          {item.name}{!item.online ? " · 离线" : !item.supported ? " · Agent 太旧" : ""}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              ) : (
-                <ResultRow label="出站" value={exitHostLabel || "—"} />
-              )}
+              <ResultRow label={entryKey ? "从哪台测" : "出站"} value={exitHostLabel || "—"} />
               {entryKey ? (
                 <p className="text-[11.5px] text-muted-foreground">
-                  选中的机器会像客户端一样连这条线路的入口，流量走入口 → 中转 → 落地出去，测出来的就是整条链的带宽。机器上要有 sing-box（建过自建节点的都有），线路上的机器不在候选里。
+                  入口机像客户端一样连自己的入口，流量走入口 → 中转 → 落地出去，测出来的就是整条链的带宽。机器上没有 sing-box 会先自动装一个。
                 </p>
               ) : null}
             </div>
@@ -184,14 +166,14 @@ export function SpeedTestDialog({ subject, name, onOpenChange }: { subject: Spee
             type="button"
             className="h-10 w-full rounded-full text-[15px]"
             variant="outline"
-            disabled={!!pending || starting || !!hostUnsupported || !!hostOffline || (!!entryKey && !chosenVia)}
-            title={hostUnsupported ? `需要升级 Agent（${hostStatus.data?.minAgentVersion} 起）` : hostOffline ? "主机离线" : undefined}
+            disabled={!!pending || starting || !!hostUnsupported || !!hostOffline || entryNoHost}
+            title={hostUnsupported ? "需要升级 Agent（2.2.241 起）" : hostOffline ? "主机离线" : undefined}
             onClick={start}
             data-testid="speed-test-start"
           >
             {pending ? "测速中…" : result ? "再测一次" : "启动"}
           </Button>
-          {hostUnsupported ? <p className="text-[12px] text-[var(--fx-warn-text)]">这台机器的 Agent 太旧，升级到 {hostStatus.data?.minAgentVersion} 后才能测速。</p> : null}
+          {hostUnsupported ? <p className="text-[12px] text-[var(--fx-warn-text)]">这台机器的 Agent 太旧，升级到 2.2.241 后才能测速。</p> : null}
           {latest?.error && !pending ? <p className="text-[12px] text-[var(--fx-down-text)]">{latest.error}</p> : null}
 
           {result ? (
@@ -208,7 +190,7 @@ export function SpeedTestDialog({ subject, name, onOpenChange }: { subject: Spee
             </div>
           ) : null}
           <p className="text-[11px] leading-relaxed text-muted-foreground">
-            此测速使用 Cloudflare 的测速服务，测的是{entryKey ? "经这条线路" : "这台机器"}到 Cloudflare 最近机房的带宽，每次约 300 MB 流量。
+            此测速使用 Cloudflare 的测速服务，测的是{entryKey ? "经这条线路" : "这台机器"}到 Cloudflare 最近机房的带宽，每次约 300 MB 流量。{entryKey ? "注意它不含你到入口机那一段。" : ""}
           </p>
         </div>
       </DialogContent>

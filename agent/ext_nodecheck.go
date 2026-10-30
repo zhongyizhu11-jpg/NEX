@@ -44,7 +44,8 @@ import (
 
 const (
 	nodeCheckResultTTL   = 15 * time.Minute
-	nodeCheckRunBudget   = 3 * time.Minute
+	nodeCheckRunBudget   = 6 * time.Minute
+	nodeCheckInstallWait = 3 * time.Minute
 	nodeCheckMaxRuns     = 8
 	nodeCheckDefaultBin  = "/usr/local/bin/forwardx-singbox"
 	nodeCheckSingboxWait = 8 * time.Second
@@ -73,6 +74,8 @@ type nodeCheckVia struct {
 	// 主出站要经的前置代理等额外出站（原样写进配置；主出站的 detour 指向其中一个的 tag）。
 	ExtraOutbounds []json.RawMessage `json:"extraOutbounds,omitempty"`
 	SingboxBin     string            `json:"singboxBin,omitempty"`
+	// 这台机器没有 sing-box 时先跑它装一个（面板给的就是自建节点那套装机脚本，GitHub / 加速 / 面板转发三路试）。
+	InstallCmd string `json:"installCmd,omitempty"`
 }
 
 type nodeCheckRunDirective struct {
@@ -325,7 +328,15 @@ func startNodeCheckSingbox(ctx context.Context, via *nodeCheckVia) (nodeCheckDia
 		bin = nodeCheckDefaultBin
 	}
 	if _, err := os.Stat(bin); err != nil {
-		return nil, nil, fmt.Errorf("这台机器没有 sing-box（%s）：给它建一个自建节点就会装上，或者换一台机器检测", bin)
+		if strings.TrimSpace(via.InstallCmd) == "" {
+			return nil, nil, fmt.Errorf("这台机器没有 sing-box（%s）：给它建一个自建节点就会装上，或者换一台机器检测", bin)
+		}
+		if err := installNodeCheckSingbox(ctx, via.InstallCmd); err != nil {
+			return nil, nil, err
+		}
+		if _, err := os.Stat(bin); err != nil {
+			return nil, nil, fmt.Errorf("装完还是没有 sing-box（%s）", bin)
+		}
 	}
 	var outbound map[string]any
 	if err := json.Unmarshal(via.Outbound, &outbound); err != nil || outbound == nil {
@@ -424,6 +435,30 @@ func startNodeCheckSingbox(ctx context.Context, via *nodeCheckVia) (nodeCheckDia
 		return nil, nil, errors.New("socks dialer does not support context")
 	}
 	return ctxDialer.DialContext, stop, nil
+}
+
+// installNodeCheckSingbox 跑面板给的装机脚本把 sing-box 装到 forwardx-singbox 那个位置（和自建节点用同一个）。
+func installNodeCheckSingbox(ctx context.Context, installCmd string) error {
+	installCtx, cancel := context.WithTimeout(ctx, nodeCheckInstallWait)
+	defer cancel()
+	c, cleanup, _, err := shellCommand(installCtx, installCmd)
+	if err != nil {
+		return fmt.Errorf("装 sing-box 的脚本起不来：%v", err)
+	}
+	defer cleanup()
+	output, err := c.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(output))
+		if len(msg) > 300 {
+			msg = msg[len(msg)-300:]
+		}
+		if msg == "" {
+			msg = err.Error()
+		}
+		return fmt.Errorf("装 sing-box 没成功：%s", msg)
+	}
+	logf("nodecheck installed sing-box for on-demand checks")
+	return nil
 }
 
 // ---------------------------------------------------------------- 经节点的出口检测

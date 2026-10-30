@@ -20,8 +20,8 @@ test("详情里有这一节；旧 Agent 提示升级；按钮和计划检测只�
   const section = read("./HostUnlockSection.tsx");
   assert.match(section, /需要升级 Agent/);
   assert.match(section, /检测解锁/);
-  assert.match(section, /title="流媒体 \/ AI 解锁"/);
-  assert.match(section, /<UnlockResultList results=\{latest\.results\} \/>/, "一行一个服务，右边「可用 · SG」");
+  assert.match(section, /<CollapsibleSection title="流媒体 \/ AI 解锁">/, "默认折叠");
+  assert.match(section, /<ExitHostPanel host=\{quality\.data\.host\} targets=\{quality\.data\.targets\} \/>/, "展开后和订阅页「出口检测」同一副面板");
   assert.ok(section.includes("data?.canManage ? ("), "「检测解锁」按钮只给管理员");
   assert.match(section, /data\?\.canManage && data\.schedule \?/);
   assert.match(section, /trpc\.hosts\.unlockHistory/);

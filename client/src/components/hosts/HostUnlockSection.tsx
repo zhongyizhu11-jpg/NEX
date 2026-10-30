@@ -15,15 +15,17 @@ import {
   type UnlockServiceResult,
   type UnlockStatus,
 } from "@shared/unlockCheck";
+import { ExitHostPanel } from "@/components/proxy/ExitQualityView";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { segmentedControlClassName, segmentedOptionClassName } from "@/components/ui/segmented";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
-import { Row, Section } from "./HostDetailDialog";
+import { CollapsibleSection, Row } from "./HostDetailDialog";
 
 /*
-  主机详情里「流媒体 / AI 解锁」一节（Agent 2.2.226 起）：一行一个服务，右边「可用 · SG」。
+  主机详情里「流媒体 / AI 解锁」一节（Agent 2.2.226 起）：默认折叠，展开是和订阅页节点菜单「出口检测」
+  同一副面板（ExitHostPanel：站点连通四格 + 解锁网格，hosts.exitQuality），下面是检测 / 协议族 / 计划检测。
 
   结果是 Agent 从这台机器的出口去打开各服务的页面、按页面标记猜出来的（agent/unlock_check.go），
   每一项只有四种结论，绿 / 黄 / 红 / 灰；拿不准的就是灰的「无法判断」，不硬说可用。
@@ -133,7 +135,11 @@ function HistoryDialog({ hostId, open, onOpenChange }: { hostId: number; open: b
 
 export default function HostUnlockSection({ hostId }: { hostId: number }) {
   if (!(hostId > 0)) return null;
-  return <HostUnlockBody hostId={hostId} />;
+  return (
+    <CollapsibleSection title="流媒体 / AI 解锁">
+      <HostUnlockBody hostId={hostId} />
+    </CollapsibleSection>
+  );
 }
 
 function HostUnlockBody({ hostId }: { hostId: number }) {
@@ -151,6 +157,10 @@ function HostUnlockBody({ hostId }: { hostId: number }) {
     },
   );
   const pendingCount = status.data?.pending.length ?? 0;
+  const quality = trpc.hosts.exitQuality.useQuery(
+    { hostId },
+    { enabled: hostId > 0, staleTime: 10_000, refetchOnWindowFocus: false, refetchInterval: pendingCount > 0 ? 3_000 : 60_000 },
+  );
   const start = trpc.hosts.startUnlockCheck.useMutation({
     onSuccess: () => void utils.hosts.unlockStatus.invalidate({ hostId }),
     onError: (error) => toast.error(error.message),
@@ -166,34 +176,28 @@ function HostUnlockBody({ hostId }: { hostId: number }) {
   // 检测跑完那一刻刷新一下主机列表和出口面板，卡片上的摘要跟着变。
   const lastPending = useRef(0);
   useEffect(() => {
-    if (lastPending.current > 0 && pendingCount === 0) void utils.hosts.listPage.invalidate();
+    if (lastPending.current > 0 && pendingCount === 0) {
+      void utils.hosts.listPage.invalidate();
+      void utils.hosts.exitQuality.invalidate({ hostId });
+    }
     lastPending.current = pendingCount;
-  }, [pendingCount, utils]);
+  }, [pendingCount, utils, hostId]);
 
   const data = status.data;
   const pending = data?.pending.find((item) => item.family === family) || data?.pending[0] || null;
   // 看选中的那个 family；它没测过就看最新的那份。
   const latest = data?.latest.find((item) => item.family === family) || data?.latest[0] || null;
-  const checkButton = data?.canManage ? (
-    <Button
-      size="sm"
-      variant="outline"
-      className="h-7 px-2.5 text-xs"
-      disabled={!data.supported || !data.online || !!pending || start.isPending}
-      title={!data.supported ? "需要升级 Agent" : !data.online ? "主机离线" : undefined}
-      onClick={() => start.mutate({ hostId, family })}
-    >
-      {pending ? "检测中…" : family === "auto" ? "检测解锁" : `检测解锁（${UNLOCK_FAMILY_LABELS[family]}）`}
-    </Button>
-  ) : null;
-
   return (
-    <Section title="流媒体 / AI 解锁" action={checkButton}>
+    <>
       {data && !data.supported ? (
         <Row label="解锁检测" value={<span className="text-[var(--fx-warn-text)]">需要升级 Agent（{data.minAgentVersion} 起）</span>} />
       ) : null}
 
-      {latest ? <UnlockResultList results={latest.results} /> : null}
+      {quality.data ? (
+        <ExitHostPanel host={quality.data.host} targets={quality.data.targets} />
+      ) : (
+        <p className="text-meta text-muted-foreground">{quality.isLoading ? "读取中…" : "读取失败"}</p>
+      )}
 
       <Row
         label="最近检测"
@@ -208,7 +212,16 @@ function HostUnlockBody({ hostId }: { hostId: number }) {
 
       {data?.canManage ? (
         <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
-          <span className="text-meta text-muted-foreground">检测用的出口</span>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 px-2.5 text-xs"
+            disabled={!data.supported || !data.online || !!pending || start.isPending}
+            title={!data.supported ? "需要升级 Agent" : !data.online ? "主机离线" : undefined}
+            onClick={() => start.mutate({ hostId, family })}
+          >
+            {pending ? "检测中…" : family === "auto" ? "检测解锁" : `检测解锁（${UNLOCK_FAMILY_LABELS[family]}）`}
+          </Button>
           <div className={cn(segmentedControlClassName, "flex")} role="radiogroup" aria-label="检测用的出口">
             {UNLOCK_FAMILIES.map((value) => (
               <button
@@ -257,6 +270,6 @@ function HostUnlockBody({ hostId }: { hostId: number }) {
       </div>
 
       <HistoryDialog hostId={hostId} open={historyOpen} onOpenChange={setHistoryOpen} />
-    </Section>
+    </>
   );
 }

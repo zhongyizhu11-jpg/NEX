@@ -135,10 +135,18 @@ func TestNodeCheckViaProxyStartsAndStopsSingbox(t *testing.T) {
 	}
 }
 
-// 没装 sing-box 的机器：错误里说清楚怎么办。
+// 没装 sing-box 的机器：面板没给装机脚本就说清楚怎么办；给了就先跑脚本，脚本失败把输出带回去。
 func TestNodeCheckSingboxMissingBinary(t *testing.T) {
 	_, _, err := startNodeCheckSingbox(context.Background(), &nodeCheckVia{Outbound: json.RawMessage(`{"type":"vless"}`), SingboxBin: "/nonexistent/forwardx-singbox"})
 	if err == nil || !strings.Contains(err.Error(), "没有 sing-box") {
+		t.Fatalf("err = %v", err)
+	}
+	_, _, err = startNodeCheckSingbox(context.Background(), &nodeCheckVia{Outbound: json.RawMessage(`{"type":"vless"}`), SingboxBin: "/nonexistent/forwardx-singbox", InstallCmd: "echo download failed; exit 1"})
+	if err == nil || !strings.Contains(err.Error(), "装 sing-box 没成功") || !strings.Contains(err.Error(), "download failed") {
+		t.Fatalf("err = %v", err)
+	}
+	_, _, err = startNodeCheckSingbox(context.Background(), &nodeCheckVia{Outbound: json.RawMessage(`{"type":"vless"}`), SingboxBin: "/nonexistent/forwardx-singbox", InstallCmd: "true"})
+	if err == nil || !strings.Contains(err.Error(), "装完还是没有") {
 		t.Fatalf("err = %v", err)
 	}
 }

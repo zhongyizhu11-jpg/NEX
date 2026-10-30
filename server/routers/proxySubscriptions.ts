@@ -1198,11 +1198,11 @@ export const proxySubscriptionsRouter = router({
     }),
 
   /**
-   * 预览订阅里每条线路的「测速」：从一台不在线路上的机器连这条线路的入口，对 Cloudflare 测速，
-   * 测的是整条链（server/nodeCheckView）。entryKey 是预览里的 rule-<id> / direct-<模板 id>。
+   * 预览订阅里每条线路的「测速」：入口机连自己的入口走完整条链对 Cloudflare 测速
+   * （server/nodeCheckView）。entryKey 是预览里的 rule-<id> / direct-<模板 id>。
    */
   entrySpeedTestStart: protectedProcedure
-    .input(z.object({ entryKey: z.string().min(1).max(48), hostId: z.number().int().positive().optional() }))
+    .input(z.object({ entryKey: z.string().min(1).max(48) }))
     .mutation(async ({ ctx, input }) => {
       await assertProxySubscriptionAllowed(ctx);
       try {
