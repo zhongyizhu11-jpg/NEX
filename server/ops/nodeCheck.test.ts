@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   ingestNodeCheckReport,
   nodeCheckDirectiveFor,
+  nodeCheckSpeedTokenHost,
   nodeCheckStatus,
   pendingNodeCheckRunsForHost,
   resetNodeCheckStateForTest,
@@ -35,7 +36,11 @@ test("同一个对象只排一次；指令带 via 和站点；测速在跑时进
   assert.match(direct.runId, /^nc-[a-z0-9-]+$/);
   const directive = nodeCheckDirectiveFor(2)!;
   assert.equal(directive.runs.length, 2);
-  assert.deepEqual(directive.runs[0], { runId: direct.runId, kind: "speed", family: "auto" });
+  assert.deepEqual({ ...directive.runs[0], panel: undefined }, { runId: direct.runId, kind: "speed", family: "auto", panel: undefined });
+  // 测速都带一个一次性口令，Agent 连不上 Cloudflare 时拿它来面板测。
+  assert.match(String(directive.runs[0].panel?.token || ""), /^[A-Za-z0-9_-]{20,}$/);
+  assert.equal(nodeCheckSpeedTokenHost(directive.runs[0].panel!.token), 2);
+  assert.equal(nodeCheckSpeedTokenHost("nope"), null);
   assert.equal(directive.runs[1].kind, "exit");
   assert.deepEqual((directive.runs[1] as any).via, { outbound });
   assert.ok((directive.runs[1] as any).targets.some((target: any) => target.key === "google"));
@@ -97,7 +102,8 @@ test("走扩展通道：有在等的检查时下发指令、让 Agent 5 秒来�
   assert.equal(idle.modules.nodecheck, undefined);
   const { runId } = startNodeCheck(host(8), { kind: "speed" });
   const busy = await handleAgentExtRound(host(8), { modules: {} });
-  assert.deepEqual(busy.modules.nodecheck, { runs: [{ runId, kind: "speed", family: "auto" }] });
+  const nodecheck = busy.modules.nodecheck as { runs: Record<string, unknown>[] };
+  assert.deepEqual({ runs: nodecheck.runs.map((run) => ({ ...run, panel: undefined })) }, { runs: [{ runId, kind: "speed", family: "auto", panel: undefined }] });
   assert.equal(busy.interval, 5);
   const old = await handleAgentExtRound(host(8, "2.2.240"), { modules: {} });
   assert.equal(old.modules.nodecheck, undefined);

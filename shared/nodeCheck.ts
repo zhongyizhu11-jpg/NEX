@@ -3,7 +3,8 @@
 
   两种检查：
     · speed：从一台主机对 Cloudflare 测速，得到延迟 / 抖动 / 下载 / 上传 / 机房 / 出口 IP，跑的时候
-      带一条下载 / 上传随时间的曲线。
+      带一条下载 / 上传随时间的曲线。连不上 Cloudflare（国内机器到国外 80 / 443 常常不通）就改测到
+      面板自己（server/ops/nodeCheckSpeedRoute.ts），结果标 server = "panel"。
     · exit：站点握手 + 流媒体 / AI 解锁，一次性跑一轮。给粘贴进来、机器不是自己的那些节点用：
       自己的机器有定时的出口探测（sitelatency）和解锁检测（unlock），不走这个。
   都可以「经节点」：让那台主机临时拉一个 sing-box，把要看的节点当出站，检查走它过去。
@@ -29,6 +30,9 @@ export type SpeedTestResult = {
   asOrg: string;
   country: string;
   city: string;
+  /** 对谁测的：Cloudflare，或连不上 Cloudflare 时改测到面板自己（note 说明原因）。 */
+  server: "cloudflare" | "panel";
+  note: string;
   samples: SpeedSample[];
 };
 
@@ -89,6 +93,8 @@ export function normalizeSpeedTestResult(raw: unknown): SpeedTestResult | null {
     asOrg: text(entry.asOrg),
     country: text(entry.country, 8).toUpperCase(),
     city: text(entry.city),
+    server: entry.server === "panel" ? "panel" : "cloudflare",
+    note: text(entry.note, 400),
     samples: normalizeSpeedSamples(entry.samples),
   };
 }

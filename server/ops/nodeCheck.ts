@@ -65,6 +65,8 @@ type PendingRun = NodeCheckSubject & {
   family: UnlockFamily;
   requestedBy: number | null;
   createdAt: number;
+  /** 测速时给 Agent 的一次性口令：连不上 Cloudflare 就拿它来面板测（server/ops/nodeCheckSpeedRoute.ts）。 */
+  speedToken: string | null;
   /** Agent 最近一次报的进度（running）。 */
   report: NodeCheckRunReport | null;
 };
@@ -144,6 +146,7 @@ export function startNodeCheck(
     family: normalizeUnlockFamily(input.family),
     requestedBy: input.requestedBy ?? null,
     createdAt: Date.now(),
+    speedToken: input.kind === "speed" ? randomBytes(18).toString("base64url") : null,
     report: null,
   });
   wakeAgentExt(hostId, "node-check");
@@ -157,8 +160,20 @@ export function nodeCheckDirectiveFor(hostId: number) {
     family: run.family,
     ...(run.outbound ? { via: { outbound: run.outbound, ...(run.extraOutbounds ? { extraOutbounds: run.extraOutbounds } : {}), ...(run.installCmd ? { installCmd: run.installCmd } : {}) } } : {}),
     ...(run.kind === "exit" ? { targets: SITE_LATENCY_TARGETS.map(({ key, host, port }) => ({ key, host, port })) } : {}),
+    ...(run.speedToken ? { panel: { token: run.speedToken } } : {}),
   }));
   return runs.length > 0 ? { runs } : undefined;
+}
+
+/** 面板当测速服务器时验口令：只认还在跑的测速。回这次测速的主机 id，不认识就 null。 */
+export function nodeCheckSpeedTokenHost(token: string): number | null {
+  const value = String(token || "").trim();
+  if (!value || value.length > 64) return null;
+  sweep();
+  for (const run of pendingRuns.values()) {
+    if (run.speedToken && run.speedToken === value) return run.hostId;
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------- 上报
