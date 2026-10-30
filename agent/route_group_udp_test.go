@@ -405,6 +405,10 @@ func newFailoverRecordingTarget(t *testing.T) *failoverRecordingTarget {
 				defer conn.Close()
 				_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 				data, _ := io.ReadAll(conn)
+				// 健康探测（代理一起来就会探一轮）只连上就关，不带字节：不算一次转发。
+				if len(data) == 0 {
+					return
+				}
 				target.mu.Lock()
 				target.received = append(target.received, string(data))
 				target.mu.Unlock()

@@ -101,11 +101,15 @@ func failoverDialTCP(ctx context.Context, target failoverTarget, timeout time.Du
 	return failoverTCPDialContext(ctx, "tcp", net.JoinHostPort(target.TargetIP, port))
 }
 
-// raceAllowedLocked 只有本来就会把连接分到不同路径上的策略才竞速。
+// raceAllowedLocked 只有本来就会把连接分到不同路径上的策略才竞速；热备（Delivery=hot）的
+// 主备策略也竞速：当前这条握手慢了就同时拨下一条健康的（pickTargetForKey 排除当前这条后
+// 挑出来的，也就是按优先级、分层规格下按层的下一条）。
 func (p *failoverProxy) raceAllowedLocked() bool {
 	switch p.spec.Strategy {
 	case "weighted", "round_robin", "random", "least_load":
 		return len(p.spec.Targets) > 1
+	case "fallback":
+		return p.spec.Delivery == "hot" && len(p.spec.Targets) > 1
 	}
 	return false
 }

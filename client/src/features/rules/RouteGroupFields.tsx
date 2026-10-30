@@ -47,6 +47,10 @@ import { PIN_DURATION_OPTIONS, formatPolicyClock, formatPolicyDuration, type Rou
 import { ConditionBlock, PolicyGroup } from "./PolicyBlocks";
 import { RoutePathCards, buildRoutePreviewStatus } from "./RouteBoard";
 import { LinkSpreadPicker, linkChoiceClass } from "@/features/links/LinkSpreadPicker";
+import { RouteLinesEditor, expandForPreview, type RouteLineHost, type RouteLinePool, type RouteLineTunnel } from "./RouteLinesEditor";
+import { LineCard, LineHint, LineSec, LineSegmented } from "@/features/lines/LineUi";
+import { ROUTE_DELIVERY_INFO, normalizeRouteDelivery, type RouteDelivery } from "@shared/routeGroup";
+import { serializeRouteLines, type RouteLine } from "@shared/routeLines";
 
 /*
   编辑框里「线路组」勾上之后的那一块：一个入口 + 多条路径 + 一个调度策略。
@@ -72,9 +76,20 @@ export type RouteHostOption = {
   agentVersion?: string | null;
 };
 
+/** 编辑框里的线路组：在 RouteGroup 之外带着线路定义（有它就按线路编辑，paths 是它的预览展开）。 */
+export type RouteGroupDraft = RouteGroup & { lines?: RouteLine[] | null };
+
 export type RouteGroupFieldsProps = {
-  value: RouteGroup;
-  onChange: (next: RouteGroup) => void;
+  value: RouteGroupDraft;
+  onChange: (next: RouteGroupDraft) => void;
+  /** 线路编辑要的：节点池、能当一段的隧道、入口叫什么、隧道规则入口前面那段。 */
+  pools?: RouteLinePool[];
+  tunnels?: RouteLineTunnel[];
+  entryName?: string;
+  entryPrefix?: string | null;
+  /** 能不能在线路里放隧道段（隧道规则不行：它的调度在隧道出口之后）。 */
+  allowTunnels?: boolean;
+  ruleId?: number | null;
   /** 能当中转的主机（用户看得见的）；入口机器自己会被排除。 */
   hosts: RouteHostOption[];
   /** 能不能加中转；转发组上的规则这一版不行（中继要按入口机各建一份）。 */
@@ -179,10 +194,13 @@ function endpointText(endpoint: RouteEndpoint | null): string {
  * 定时 / 混合下带，指定只在非权重负载下带 —— 换了模式之后界面上那份还留着（改回来就在），
  * 但发上去会被服务端拒绝，所以这里按模式归零。
  */
-export function routeGroupPayload(group: RouteGroup) {
+export function routeGroupPayload(group: RouteGroupDraft) {
   const { policy } = group;
   const usesSchedule = policy.mode === "scheduled" || policy.mode === "hybrid";
+  const lines = group.lines && group.lines.length > 0 ? JSON.parse(serializeRouteLines(group.lines) || "[]") : undefined;
   return {
+    ...(lines ? { lines } : {}),
+    delivery: normalizeRouteDelivery(policy.delivery),
     paths: group.paths.map((path) => ({
       key: path.key,
       name: path.name.trim(),
@@ -190,6 +208,8 @@ export function routeGroupPayload(group: RouteGroup) {
       dest: path.dest,
       weight: path.weight,
       probe: path.probe,
+      // 按线路提交时服务端重新展开；带上 lineKey，钉子 / 时段表指的是哪条线路才对得上。
+      ...(path.lineKey ? { lineKey: path.lineKey } : {}),
     })),
     mode: policy.mode,
     spread: policy.spread,
@@ -300,6 +320,40 @@ export function summarizeRouteAdvanced({ policy, probes }: RouteAdvancedSummaryI
   return items;
 }
 
+/** 「怎么切」四格：稳定优先 / 整链最优 / 按权重 / 按时段（混合也落在按时段，人工指定落在稳定优先）。 */
+const LINE_MODE_SEGMENTS: ReadonlyArray<{ value: RouteMode; label: string }> = [
+  { value: "failover", label: "稳定优先" },
+  { value: "smart", label: "整链最优" },
+  { value: "weighted", label: "按权重" },
+  { value: "scheduled", label: "按时段" },
+];
+
+function lineModeSegment(mode: RouteMode): RouteMode {
+  if (mode === "hybrid") return "scheduled";
+  if (mode === "manual") return "failover";
+  return mode;
+}
+
+function lineDuration(seconds: number) {
+  if (seconds < 60) return `${seconds} 秒`;
+  const minutes = Math.round(seconds / 60);
+  return minutes >= 60 && minutes % 60 === 0 ? `${minutes / 60} 小时` : `${minutes} 分钟`;
+}
+
+/** 「怎么切」下面那一句：平时走哪条、坏了几秒内切走、恢复多久切回。 */
+export function lineModeHint(policy: RouteGroupPolicy, perSession = false) {
+  const switchSeconds = Math.max(5, Math.round(Number(policy.failoverSeconds || 0)));
+  const back = policy.autoFailback ? `主线路恢复稳定 ${lineDuration(policy.recoverSeconds)}后切回` : "主线路恢复后不自动切回";
+  switch (policy.mode) {
+    case "smart": return `平时走整条链最快的；坏了 ${switchSeconds} 秒内切走，${back}。`;
+    case "weighted": return `${perSession ? "新会话" : "新连接"}按权重分到各条线路；坏了的先跳过，恢复稳定 ${lineDuration(policy.recoverSeconds)}后重新参与。`;
+    case "scheduled": return `按时段表定首选，时段外走主线路；坏了 ${switchSeconds} 秒内切走，${back}。`;
+    case "hybrid": return `按时段表定首选（到点前先预热预检），时段外走整条链最快的；坏了 ${switchSeconds} 秒内切走。`;
+    case "manual": return `一直走你指定的那条；它坏了 ${switchSeconds} 秒内临时切走，恢复后回来。`;
+    default: return `平时只走主线路；坏了 ${switchSeconds} 秒内切走，${back}。`;
+  }
+}
+
 const DAY_PRESETS = {
   all: [] as number[],
   weekday: [1, 2, 3, 4, 5],
@@ -327,6 +381,12 @@ export function RouteGroupFields({
   protocol = "tcp",
   nodeOptions = [],
   entrySourcePort,
+  pools = [],
+  tunnels = [],
+  entryName,
+  entryPrefix = null,
+  allowTunnels = false,
+  ruleId = null,
 }: RouteGroupFieldsProps) {
   const now = nowMs ?? Date.now();
   const udpOnly = normalizeForwardRuleProtocol(protocol) === "udp";
@@ -526,9 +586,98 @@ export function RouteGroupFields({
     </div>
   );
 
+  const lines = value.lines && value.lines.length > 0 ? value.lines : null;
+  /** 线路改了：同一套函数在本地展开一遍，paths 就是预览（钉子、时段表、预览卡都按它）。 */
+  const setLines = (next: RouteLine[]) => {
+    const preview = expandForPreview(next, { entryHostId, pools, tunnels });
+    const count = Math.max(1, preview.paths.length);
+    const clamp = (index: number) => Math.min(index, count - 1);
+    onChange({
+      ...value,
+      lines: next,
+      paths: preview.paths,
+      policy: {
+        ...routePolicy,
+        pin: routePolicy.pin ? { ...routePolicy.pin, index: clamp(routePolicy.pin.index) } : null,
+        schedule: routePolicy.schedule ? { ...routePolicy.schedule, windows: routePolicy.schedule.windows.map((window) => ({ ...window, targetIndex: clamp(window.targetIndex) })) } : null,
+      },
+    });
+  };
+  const delivery = normalizeRouteDelivery(routePolicy.delivery);
+  const mainTunnels = (lines?.[0]?.layers || []).flatMap((layer) => layer.tunnelIds).map((id) => tunnels.find((tunnel) => tunnel.id === id)).filter((tunnel): tunnel is RouteLineTunnel => !!tunnel);
+  const replicateReady = mainTunnels.some((tunnel) => String(tunnel.mode || "").toLowerCase() === "forwardx");
+  const seamlessTunnelReady = mainTunnels.some((tunnel) => String(tunnel.mode || "").toLowerCase() === "forwardx" && String(tunnel.relayMode || "") === "hot_standby");
+  const changeDelivery = (next: RouteDelivery) => {
+    // 热备：一坏就切、旧连接马上重连；冷备回到平滑切换。其余参数照旧。
+    const patch: Partial<RouteGroupPolicy> = next === "hot"
+      ? { delivery: next, failureThreshold: Math.min(routePolicy.failureThreshold, 2), failoverSeconds: Math.min(routePolicy.failoverSeconds, 10), switchMode: "fast" }
+      : next === "cold" ? { delivery: next, switchMode: "smooth" } : { delivery: next };
+    setPolicy(patch);
+  };
+
   return (
     <div className="flex min-w-0 flex-col gap-3">
-      <section className="flex min-w-0 flex-col gap-2" aria-label="线路" data-testid="route-paths">
+      {lines ? (
+        <RouteLinesEditor
+          lines={lines}
+          onChange={setLines}
+          hosts={hosts as RouteLineHost[]}
+          pools={pools}
+          tunnels={tunnels}
+          nodeOptions={nodeOptions}
+          entryHostId={entryHostId}
+          entryName={entryName || (entryHostId ? hostName(entryHostId) : "入口")}
+          entryPrefix={entryPrefix}
+          mainAddress={mainAddress}
+          allowHops={allowHops}
+          allowTunnels={allowTunnels}
+          previewPaths={paths}
+          ruleId={ruleId}
+        />
+      ) : null}
+      {lines ? (
+        <div className="flex min-w-0 flex-col" data-testid="route-line-mode">
+          <LineSec left="怎么切" />
+          <LineCard>
+            <LineSegmented
+              ariaLabel="怎么切"
+              value={lineModeSegment(mode)}
+              options={LINE_MODE_SEGMENTS}
+              onChange={(next) => changeMode(next === "scheduled" && mode === "hybrid" ? "hybrid" : next)}
+            />
+            <LineHint>{lineModeHint(routePolicy, udpOnly)}</LineHint>
+            {mode === "manual" ? <div className="mt-2">{pinPicker(false)}</div> : null}
+            {usesSchedule ? <div className="mt-3">{scheduleEditor}</div> : null}
+            {weighted ? (
+              <div className="mt-3">
+                <LinkSpreadPicker
+                  value={routePolicy.spread}
+                  options={ROUTE_SPREADS}
+                  labels={ROUTE_SPREAD_LABELS}
+                  onChange={(spread) => setPolicy({ spread })}
+                  ariaLabel={udpOnly ? "新会话怎么分" : "新连接怎么分"}
+                  hint={udpOnly ? ROUTE_SPREAD_SESSION_HINTS[routePolicy.spread] : ROUTE_SPREAD_LABELS[routePolicy.spread].hint}
+                />
+              </div>
+            ) : null}
+            <label className="mt-[10px] flex w-fit items-center gap-2 text-[11.5px] text-muted-foreground">
+              <Checkbox
+                checked={delivery === "hot"}
+                onCheckedChange={(checked) => changeDelivery(checked ? "hot" : "cold")}
+                aria-label="切换不断连（NEX 隧道热备）"
+                data-testid="route-line-seamless"
+              />
+              切换不断连（NEX 隧道热备）
+            </label>
+            {delivery === "hot" && !seamlessTunnelReady ? (
+              <LineHint className="mt-1">
+                握手慢了同时拨下一条、坏了马上切，旧连接断开让客户端马上重连。要换中转也不断连：主线路里放一段 NEX 隧道，隧道的中转方式设成「热备」。
+              </LineHint>
+            ) : null}
+          </LineCard>
+        </div>
+      ) : null}
+      <section className={cn("flex min-w-0 flex-col gap-2", lines && "hidden")} aria-label="线路" data-testid="route-paths">
         {paths.map((path, index) => {
           const destField = `dest-${path.key}`;
           const destText = draftOf(destField, path.dest);
@@ -693,6 +842,8 @@ export function RouteGroupFields({
         </div>
       </section>
 
+      {!lines ? (
+        <>
       <PolicyGroup title="怎么用这些线路">
         <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2" role="radiogroup" aria-label="怎么用这些线路">
           {ROUTE_MODES.map((candidate) => {
@@ -762,8 +913,10 @@ export function RouteGroupFields({
         {describeRouteGroupPlainly(value, { perSession: udpOnly })}
       </p>
       <p className="text-xs leading-5 text-muted-foreground" data-testid="route-seamless-tip">
-        线路组是按连接换路径，换的时候旧连接按上面说的处理。要连接不断的毫秒级切换：建一条 NEX 隧道，把几台中转的中转方式设成「热备」，每条连接同时连着全部中转，主的停了备用立刻接手。
+        线路组是按连接换路径，换的时候旧连接按上面说的处理。要连接不断的毫秒级切换靠 NEX 隧道：把隧道的中转方式设成「热备」，每条连接同时连着全部中转，主的停了备用立刻接手；端口转发规则可以直接在线路里加一段这样的隧道。
       </p>
+        </>
+      ) : null}
       {(policy?.warnings || []).map((warning) => (
         <p key={warning} className="rounded-[var(--fx-radius-control)] bg-[var(--fx-warn-soft)] px-3 py-2 text-xs leading-5 text-[var(--fx-warn-text)]">
           {warning}
@@ -787,6 +940,37 @@ export function RouteGroupFields({
 
         {advancedOpen ? (
           <div className="flex min-w-0 flex-col gap-4 pb-1 pt-2">
+            {lines ? (
+              <PolicyGroup
+                title="几条一起用"
+                note="默认一次只走一条。聚合：主线路那组的几条按连接分担（单个连接仍走一条）；复制：主线路走的 NEX 叠加隧道里同一份数据几条腿一起发，一条腿断了连接不断。"
+              >
+                <div className="grid grid-cols-3 gap-1.5" role="radiogroup" aria-label="几条一起用" data-testid="route-delivery">
+                  {(["single", "aggregate", "replicate"] as const).map((choice) => {
+                    const active = choice === "single" ? delivery === "cold" || delivery === "hot" : delivery === choice;
+                    const disabled = choice === "replicate" && !replicateReady;
+                    return (
+                      <button
+                        key={choice}
+                        type="button"
+                        role="radio"
+                        aria-checked={active}
+                        disabled={disabled}
+                        title={disabled ? "复制要主线路走 NEX 隧道（单连接叠加、开了复制）" : undefined}
+                        className={cn(templateChoiceClass(active), disabled && "cursor-not-allowed opacity-45")}
+                        onClick={() => {
+                          if (choice === "single") { if (delivery === "aggregate" || delivery === "replicate") changeDelivery("cold"); }
+                          else changeDelivery(choice);
+                        }}
+                      >
+                        <span className="text-sm font-medium">{choice === "single" ? "一次走一条" : ROUTE_DELIVERY_INFO[choice].label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                {delivery === "aggregate" || delivery === "replicate" ? <p className="text-meta leading-5 text-muted-foreground">{ROUTE_DELIVERY_INFO[delivery].hint}</p> : null}
+              </PolicyGroup>
+            ) : null}
             <PolicyGroup
               title="切换保护"
               note="拦的是网络抖一下引起的 A → B → A → B：失败一次不切，连续几次才算异常，异常持续够久才切，恢复后稳定够久才切回，刚切过去至少驻留一阵。当前这条挂了时驻留不生效 —— 守着死路比抖动更糟。"

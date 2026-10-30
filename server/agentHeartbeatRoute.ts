@@ -2,13 +2,15 @@ import { Router, Request, Response } from "express";
 import { parseFailoverTargets } from "../shared/failoverTargets";
 import {
   ROUTE_GROUP_UDP_AGENT_VERSION,
-  routeAgentStrategy,
+  routeDeliveryStrategy,
+  normalizeRouteDelivery,
   routeGroupForwardTypeSupported,
   routeGroupOf,
   routeGroupSchedulerAgentVersion,
   routePathDial,
 } from "../shared/routeGroup";
-import { routeHopDownHints } from "./routeGroupStats";
+import { noteRouteFirstHops, routeHopDownHints, routeNodeHints, routePathDownstreamMs } from "./routeGroupStats";
+import { ensureRouteNodeHealthFresh, getRouteNodeStatus } from "./routeNodeHealth";
 import { tunnelLinkShaping, hostEgressShaping } from "./tunnelFxpRuntime";
 import { ingestFailoverLineReports } from "./failoverLineReports";
 import { claimTunnelExitReportRequest, hasTunnelExitPort, loadTunnelExitPorts, recordTunnelExitPorts, tunnelExitPortFor, type TunnelExitPortEntry } from "./tunnelExitPorts";
@@ -155,7 +157,7 @@ import {
   tunnelParallelStreamsAgentsReady,
   tunnelParallelStreamsUnavailableReason,
 } from "@shared/tunnelParallelStreams";
-import { exitGroupCapacities, exitGroupWeights, LEAST_LOAD_AGENT_VERSION, normalizeExitGroupStrategy } from "@shared/exitStrategy";
+import { exitGroupCapacities, exitGroupWeights, normalizeExitGroupStrategy } from "@shared/exitStrategy";
 import { hostBandwidthHintMbps } from "@shared/linkWeights";
 import { forwardXExitStrategy, gostExitSelector, shouldUseFastTunnelFailover } from "./tunnelExitStrategy";
 import {
@@ -2769,6 +2771,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       开关一样不动，流量重置后下一次心跳自然回到原样。
     */
     const trafficExcludedHosts = await getTrafficExcludedHostIds();
+    // 线路组路径的「此刻不该走」提示要读每台机器在不在线、在不在维护（十秒快照）。
+    await ensureRouteNodeHealthFresh();
     if (trafficExcludedHosts.size > 0) {
       const blockForTraffic = (rule: any) => {
         rule.isEnabled = false;
@@ -3273,18 +3277,31 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       if (!group || group.paths.length < 2) return undefined;
       const { paths, policy } = group;
       const hints = routeHopDownHints(Number(rule.id), paths);
+      // 暂停、维护中、离线、熔断：比中转探测的结论更硬，压过它。
+      const nodeHints = routeNodeHints(paths, getRouteNodeStatus);
+      // 从「线路」展开出来的路径每条都有 tier：Agent 只在最低的、还有健康路径的那一组里挑（2.2.243 起；老 Agent 忽略）。
+      const tiered = paths.every((path) => typeof path.tier === "number");
+      const delivery = normalizeRouteDelivery(policy.delivery);
+      // 第 N 个目标的第一跳是哪台：入口 Agent 报的第一段延迟就是「进那台机器」的延迟（节点池卡上的毫秒数）。
+      noteRouteFirstHops(Number(rule.id), paths.map((path) => (path.hops.length > 0 ? Number(path.hops[0]) : null)));
       const targets = paths.map((path) => {
         const dial = routePathDial(path, routeRule);
+        const tier = tiered ? { tier: Number(path.tier) } : {};
         if (!dial) {
-          return { targetIp: "127.0.0.1", targetPort: 1, weight: path.weight, down: true, downReason: path.issue || "path unresolved" };
+          return { targetIp: "127.0.0.1", targetPort: 1, weight: path.weight, ...tier, down: true, downReason: path.issue || "path unresolved" };
         }
-        const hint = hints.get(path.key);
+        const hint = nodeHints.get(path.key) || hints.get(path.key);
+        // Agent 那边是整数毫秒（Go int），小数会让整份规格解不开。
+        const extraLatencyMs = Math.round(routePathDownstreamMs(Number(rule.id), path));
         return {
           targetIp: dial.ip,
           targetPort: dial.port,
           // 每条路径可以有自己的探测目标（探落地而不是探中转），见 shared/failoverTargets 里为什么需要它。
           ...(path.probe ? { probeIp: path.probe.ip, probePort: path.probe.port } : {}),
           weight: path.weight,
+          ...tier,
+          // 入口探不到的后面几段（中继各自探的）加起来：Agent 按整条链打分。
+          ...(extraLatencyMs > 0 ? { extraLatencyMs } : {}),
           ...(hint?.down ? { down: true, downReason: hint.reason } : {}),
         };
       });
@@ -3302,9 +3319,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         protocol,
         // 权重负载按它的分法（按权重 / 轮流 / 随机 / 按访客），其余模式都是主备（fallback）。
         // 「按负载」老 Agent 不认（会退成主备），改发「按权重」。
-        strategy: routeAgentStrategy(policy) === "least_load" && !routeSchedulerAgentAtLeast(rule, LEAST_LOAD_AGENT_VERSION)
-          ? "weighted"
-          : routeAgentStrategy(policy),
+        strategy: routeDeliveryStrategy(policy, delivery, (version) => routeSchedulerAgentAtLeast(rule, version)),
+        ...(delivery !== "cold" ? { delivery } : {}),
         targets,
         failoverSeconds: policy.failoverSeconds,
         recoverSeconds: policy.recoverSeconds,

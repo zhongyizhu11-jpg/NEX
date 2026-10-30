@@ -7,11 +7,16 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { pollingInterval } from "@/lib/polling";
 import { trpc } from "@/lib/trpc";
+import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { routeGroupOf, routePathLetter, type RouteGroup } from "@shared/routeGroup";
 import { describeRoutePolicy, pinUntilSeconds, type RoutePolicy } from "@shared/routePolicy";
 import { RouteBoardCard } from "./RouteBoard";
 import { RouteGroupSheet, type RouteStatus } from "./RouteGroupSheet";
+import { ROUTE_LINE_MODE_LABEL, chainLatency, routeLineGroups } from "./RouteLineOverview";
+import { LineBig, LineCard, LineChip, LinePill, formatLineMs, type LineTone } from "@/features/lines/LineUi";
+import { formatBytes } from "@shared/formatBytes";
+import { normalizeRouteDelivery } from "@shared/routeGroup";
 
 /*
   线路板：所有开了线路组的转发规则一处看全，每条一张卡，卡里一条路径一条链：
@@ -28,7 +33,65 @@ import { RouteGroupSheet, type RouteStatus } from "./RouteGroupSheet";
 
 type RouteBoardRow = { rule: any; group: RouteGroup; policy: RoutePolicy; host: any };
 
-export function RouteBoardList({ searchQuery = "", isAdmin = false }: { searchQuery?: string; isAdmin?: boolean }) {
+/** 线路工作台的紧凑卡（2.3.496，效果图 ④）：名字、在走哪条、整条链毫秒、用法标签；点开是线路详情。 */
+type CompactInfo = { entryPool: { count: number; dns: boolean } | null; trafficBytes: number };
+
+/** 卡片排序：有问题的在前（全坏 → 走备用 → 暂停），正常的在后，同档按名字。 */
+export function lineCardRank(status: RouteStatus) {
+  const groups = routeLineGroups(status);
+  const active = groups.find((group) => group.active);
+  if (groups.length > 0 && groups.every((group) => group.allDown)) return 0;
+  if (active && active.index > 0) return 1;
+  if (!active) return 2;
+  return 3;
+}
+
+function LineCompactCard({ name, owner, status, info, onOpen }: { name: string; owner: string | null; status: RouteStatus; info: CompactInfo; onOpen: () => void }) {
+  const groups = routeLineGroups(status);
+  const activeGroup = groups.find((group) => group.active) || null;
+  const active = status.paths.find((path) => path.active) || null;
+  const allDown = groups.length > 0 && groups.every((group) => group.allDown);
+  const total = chainLatency(active);
+  const lineIndex = activeGroup ? activeGroup.index : -1;
+  const tone: LineTone = allDown ? "down" : lineIndex > 0 ? "warn" : lineIndex === 0 ? "ok" : "gray";
+  const pill = allDown ? "全部故障" : lineIndex > 0 ? `走备 ${lineIndex}` : lineIndex === 0 ? "主线路" : "还没报";
+  const hops = active ? active.hops.map((hop) => (hop.viaTunnel ? `隧道 ${hop.name}` : hop.name)) : [];
+  const entry = info.entryPool ? `入口池 ×${info.entryPool.count}` : status.entry?.name || "入口";
+  const main = groups[0];
+  const suffix = allDown
+    ? (groups[0]?.reason || "都不通")
+    : lineIndex > 0
+      ? (main?.paused ? "主线路暂停" : main?.reason ? `主线路${/维护/.test(main.reason) ? "维护" : "故障"}` : "主线路故障")
+      : groups.length > 1 ? `备用 ${groups.length - 1}` : "";
+  const chain = active ? [entry, ...hops, "落地"].join(" → ") : "调度这条线路的 Agent 还没上报";
+  const delivery = normalizeRouteDelivery(status.delivery);
+  const mainCount = status.paths.filter((path) => (typeof path.tier === "number" ? path.tier : path.index) === 0).length;
+  const chips = [
+    ROUTE_LINE_MODE_LABEL[status.policy.mode] || "主备顺序",
+    delivery === "hot" ? "切换不断连" : delivery === "aggregate" ? (mainCount > 1 ? `聚合 ${mainCount} 条` : "聚合（只有 1 条）") : delivery === "replicate" ? "复制双发" : null,
+    info.entryPool?.dns ? "DNS 入口池" : null,
+    info.trafficBytes > 0 ? formatBytes(info.trafficBytes) : null,
+  ].filter((chip): chip is string => !!chip);
+  return (
+    <LineCard className="cursor-pointer p-3 hover:border-[var(--fx-stroke)]" role="button" tabIndex={0} onClick={onOpen} onKeyDown={(event) => { if (event.key === "Enter") onOpen(); }} data-testid="line-compact-card">
+      <div className="flex min-w-0 items-center justify-between gap-2">
+        <b className="min-w-0 truncate text-[14px]">{name}{owner ? <span className="ml-1.5 text-[11.5px] font-normal text-muted-foreground">{owner}</span> : null}</b>
+        <LinePill tone={tone} dot>{pill}</LinePill>
+      </div>
+      <div className="mt-1.5 flex min-w-0 items-center justify-between gap-2">
+        <span className="min-w-0 truncate text-[12px] text-muted-foreground">{chain}{active && suffix ? ` · ${suffix}` : ""}</span>
+        {total === null
+          ? <span className="shrink-0 text-[12px] text-muted-foreground">未测</span>
+          : <LineBig size={20} tone={tone === "ok" ? "acc" : tone} value={formatLineMs(total)} unit="ms" className="shrink-0" />}
+      </div>
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        {chips.map((chip) => <LineChip key={chip}>{chip}</LineChip>)}
+      </div>
+    </LineCard>
+  );
+}
+
+export function RouteBoardList({ searchQuery = "", isAdmin = false, compact = false }: { searchQuery?: string; isAdmin?: boolean; compact?: boolean }) {
   const [, setLocation] = useLocation();
   const utils = trpc.useUtils();
   // 只拉开了主备的规则：以前拉全部规则再在这里按 failoverEnabled 丢掉绝大多数。
@@ -59,6 +122,31 @@ export function RouteBoardList({ searchQuery = "", isAdmin = false }: { searchQu
   });
 
   const boardByRule = useMemo(() => new Map<number, any>(((boardQuery.data as any[]) || []).map((item) => [Number(item.ruleId), item])), [boardQuery.data]);
+  // 紧凑卡要的：近 24 小时流量（端口转发资源算它几台成员规则的合计）、入口是不是一个入口池。
+  const groupsQuery = trpc.forwardGroups.options.useQuery(undefined, { enabled: compact, staleTime: 60_000, refetchOnWindowFocus: false });
+  const allRules = (rulesQuery.data || []) as any[];
+  const childIdsByTemplate = useMemo(() => {
+    const map = new Map<number, number[]>();
+    for (const rule of allRules) {
+      const parent = Number(rule.forwardGroupRuleId || 0);
+      if (parent > 0) map.set(parent, [...(map.get(parent) || []), Number(rule.id)]);
+    }
+    return map;
+  }, [allRules]);
+  const trafficRuleIds = useMemo(() => (compact ? allRules.map((rule) => Number(rule.id)).filter((id) => id > 0).slice(0, 500) : []), [compact, allRules]);
+  const trafficQuery = trpc.rules.trafficSummary.useQuery({ hours: 24, range: "24h", ruleIds: trafficRuleIds }, { enabled: compact && trafficRuleIds.length > 0, staleTime: 30_000, refetchOnWindowFocus: false });
+  const trafficByRule = useMemo(() => {
+    const map = new Map<number, number>();
+    for (const row of (trafficQuery.data || []) as any[]) map.set(Number(row.ruleId), (map.get(Number(row.ruleId)) || 0) + Number(row.bytesIn || 0) + Number(row.bytesOut || 0));
+    return map;
+  }, [trafficQuery.data]);
+  const compactInfo = (rule: any): CompactInfo => {
+    const templateChildren = childIdsByTemplate.get(Number(rule.id)) || [];
+    const trafficBytes = (trafficByRule.get(Number(rule.id)) || 0) + templateChildren.reduce((sum, id) => sum + (trafficByRule.get(id) || 0), 0);
+    const group = Number(rule.forwardGroupId || 0) > 0 ? ((groupsQuery.data || []) as any[]).find((item) => Number(item.id) === Number(rule.forwardGroupId)) : null;
+    const members = group ? ((group.members || []) as any[]).filter((member) => member.isEnabled !== false && member.isEnabled !== 0).length : 0;
+    return { trafficBytes, entryPool: group && members > 1 ? { count: members, dns: !!group.domain } : null };
+  };
 
   const rows = useMemo<RouteBoardRow[]>(() => {
     const query = searchQuery.trim().toLowerCase();
@@ -97,11 +185,28 @@ export function RouteBoardList({ searchQuery = "", isAdmin = false }: { searchQu
 
   return (
     <>
-      <div className="flex flex-col gap-3" data-testid="route-board-list">
-        {rows.map((row) => {
+      <div className={cn("flex flex-col", compact ? "gap-3" : "gap-3")} data-testid="route-board-list">
+        {(compact
+          ? [...rows].sort((a, b) => {
+            const sa = boardByRule.get(Number(a.rule.id))?.status as RouteStatus | undefined;
+            const sb = boardByRule.get(Number(b.rule.id))?.status as RouteStatus | undefined;
+            const ra = sa ? lineCardRank(sa) : 4;
+            const rb = sb ? lineCardRank(sb) : 4;
+            return ra - rb || String(a.rule.name || "").localeCompare(String(b.rule.name || ""), "zh-CN");
+          })
+          : rows).map((row) => {
           const board = boardByRule.get(Number(row.rule.id));
           const status = (board?.status as RouteStatus | undefined) || null;
-          return status ? (
+          return status && compact ? (
+            <LineCompactCard
+              key={row.rule.id}
+              name={String(row.rule.name || "")}
+              owner={isAdmin && row.rule.userName ? String(row.rule.userName) : null}
+              status={status}
+              info={compactInfo(row.rule)}
+              onOpen={() => setOpenRuleId(Number(row.rule.id))}
+            />
+          ) : status ? (
             <RouteBoardCard
               key={row.rule.id}
               name={String(row.rule.name || "")}
@@ -131,6 +236,7 @@ export function RouteBoardList({ searchQuery = "", isAdmin = false }: { searchQu
         ruleId={openRuleId}
         subjectName={String(openRule?.rule.name || "")}
         policy={openRule?.policy ?? null}
+        rule={openRule && !Number(openRule.rule.forwardGroupRuleId || 0) ? openRule.rule : undefined}
         canEdit
         pending={pinMutation.isPending}
         onPin={(index, durationSeconds) => openRule && pinMutation.mutate({

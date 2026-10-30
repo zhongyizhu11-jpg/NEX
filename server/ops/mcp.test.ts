@@ -17,6 +17,27 @@ function session(overrides: Partial<McpSession> = {}): McpSession & { calls: Arr
       if (path === "hosts.listPage") return { items: [{ id: 1, name: "HK", ip: "1.1.1.1", agentToken: "t", extra: "drop" }], total: 1, page: 1, pageSize: 20 };
       if (path === "rules.toggle") return { success: true };
       if (path === "ops.events.list") throw new Error('No procedure found on path "ops.events.list"');
+      if (path === "rules.routeBoard") {
+        return [{
+          ruleId: 7,
+          name: "港日",
+          userId: 1,
+          userName: "alice",
+          status: {
+            ruleId: 7,
+            policy: { mode: "smart" },
+            activeIndex: 0,
+            agentStale: false,
+            entry: { hostId: 1, name: "入口", online: true, sourcePort: 443 },
+            paths: [{ key: "p1", letter: "A", name: "主线路", active: true, healthy: true, down: false, downReason: "", score: 92, latencyMs: 38, lossPct: 0, jitterMs: 2, hops: [{ hostId: 2, name: "港-1", rate: { inBps: 1 } }], dials: { ok: 3 } }],
+          },
+        }];
+      }
+      if (path === "rules.routeStatus") return { ruleId: 7, paths: [], activeIndex: 0 };
+      if (path === "rules.routeEvents") return [{ id: 1, kind: "recovered", toLabel: "B 备用", at: 1 }];
+      if (path === "lineDiagnostics.lineExport") {
+        return { filename: "line-7.json", contentType: "application/json", body: JSON.stringify({ rule: { id: 7, name: "港日" }, events: [{ kind: "unhealthy" }], quality: [], agentToken: "leak" }) };
+      }
       return null;
     },
     calls,
@@ -94,6 +115,12 @@ test("tools/list 按令牌权限过滤：只读令牌看不到修改类工具，
   assert.ok(fullUser.includes("create_rule"));
   assert.ok(!fullUser.includes("list_users"));
   assert.ok(!fullUser.includes("reset_user_traffic"));
+  // 线路组的四个工具都是只读的：只读令牌、普通用户都能用
+  const readUser = await names(session({ isAdmin: false }));
+  for (const name of ["list_lines", "get_line", "get_line_events", "export_line"]) {
+    assert.ok(readAdmin.includes(name), name);
+    assert.ok(readUser.includes(name), name);
+  }
   const all = ((await handleMcpMessage({ jsonrpc: "2.0", id: 1, method: "tools/list" }, session({ scope: "full" }))) as any).result.tools;
   assert.ok(all.length >= 12);
   for (const tool of all) {
@@ -139,4 +166,40 @@ test("sanitizeForMcp 去掉敏感字段、日期转字符串", () => {
     a: "1970-01-01T00:00:00.000Z",
     list: [{ b: 1 }],
   });
+});
+
+test("线路组工具：list_lines 走 rules.routeBoard 并压成摘要，get_line / get_line_events / export_line 各调各的过程", async () => {
+  const s = session();
+  const call = async (name: string, args: unknown) => {
+    const response = await handleMcpMessage({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }, s) as any;
+    assert.equal(response.result.isError, undefined, response.result.content[0].text);
+    return JSON.parse(response.result.content[0].text);
+  };
+  const lines = await call("list_lines", {});
+  assert.deepEqual(s.calls.at(-1), { path: "rules.routeBoard", input: {} });
+  assert.deepEqual(lines, [{
+    ruleId: 7,
+    name: "港日",
+    userName: "alice",
+    mode: "smart",
+    activeIndex: 0,
+    entry: { hostId: 1, name: "入口", online: true },
+    agentStale: false,
+    paths: [{ letter: "A", name: "主线路", active: true, healthy: true, down: false, downReason: null, score: 92, latencyMs: 38, lossPct: 0, jitterMs: 2, hops: "港-1" }],
+  }]);
+  await call("list_lines", { scope: "all" });
+  assert.deepEqual(s.calls.at(-1), { path: "rules.routeBoard", input: { scope: "all" } });
+
+  assert.deepEqual(await call("get_line", { ruleId: 7 }), { ruleId: 7, paths: [], activeIndex: 0 });
+  assert.deepEqual(s.calls.at(-1), { path: "rules.routeStatus", input: { ruleId: 7 } });
+
+  await call("get_line_events", { ruleId: 7 });
+  assert.deepEqual(s.calls.at(-1), { path: "rules.routeEvents", input: { ruleId: 7, limit: 30 } });
+
+  const exported = await call("export_line", { ruleId: 7, hours: 168 });
+  assert.deepEqual(s.calls.at(-1), { path: "lineDiagnostics.lineExport", input: { ruleId: 7, format: "json", hours: 168 } });
+  assert.deepEqual(exported, { rule: { id: 7, name: "港日" }, events: [{ kind: "unhealthy" }], quality: [] });
+
+  const tooLong = await handleMcpMessage({ jsonrpc: "2.0", id: 9, method: "tools/call", params: { name: "export_line", arguments: { ruleId: 7, hours: 500 } } }, s) as any;
+  assert.equal(tooLong.result.isError, true);
 });

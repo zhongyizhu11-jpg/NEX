@@ -110,6 +110,7 @@ import { reorderWithinSortOrderScope } from "./sortOrderSlots";
 import { normalizeExitGroupStrategy } from "@shared/exitStrategy";
 import { MAX_FORWARD_GROUP_MEMBERS, forwardGroupRouteMembers } from "../../shared/forwardGroup";
 import { parseRoutePaths, routeGroupForwardTypeSupported, routeGroupTunnelModeSupported, serializeRoutePaths, type RoutePath } from "../../shared/routeGroup";
+import { parseRouteLines, serializeRouteLines } from "../../shared/routeLines";
 import { getLastAuthenticatedAgentActivity } from "../agentActivity";
 import { HOST_TRAFFIC_FAILOVER_EXCLUDED_MESSAGE, hostTrafficExcluded } from "../../shared/hostTrafficPolicy";
 import { getTrafficExcludedHostIds } from "../hostTrafficPolicy";
@@ -268,6 +269,8 @@ function canPreserveChildRuleRuntime(existing: any, payload: any, options: SyncF
   const routeSame = !("routePaths" in (payload || {}))
     || (nullableString(normalizedRoutePaths(existing?.routePaths)) === nullableString(normalizedRoutePaths(payload?.routePaths))
       && nullableString(existing?.routeMode) === nullableString(payload?.routeMode)
+      && nullableString(existing?.routeDelivery || "cold") === nullableString(payload?.routeDelivery || "cold")
+      && nullableString(normalizedRouteLines(existing?.routeLines)) === nullableString(normalizedRouteLines(payload?.routeLines))
       && (payload?.routeMode == null || (
         nullableString(existing?.routeSwitchMode) === nullableString(payload?.routeSwitchMode)
         && ["routeFailureThreshold", "routeScoreMargin", "routeScoreHoldSeconds", "routePrewarmSeconds"].every((key) => nullableNumber(existing?.[key]) === nullableNumber(payload?.[key]))
@@ -281,6 +284,10 @@ function canPreserveChildRuleRuntime(existing: any, payload: any, options: SyncF
 
 function normalizedRoutePaths(raw: unknown): string | null {
   return serializeRoutePaths(parseRoutePaths(raw));
+}
+
+function normalizedRouteLines(raw: unknown): string | null {
+  return serializeRouteLines(parseRouteLines(raw));
 }
 
 function routePathDefinition(path: RoutePath) {
@@ -316,10 +323,13 @@ function childRouteColumns(templateRule: any, existing: any, childFailoverEnable
       routeScoreMargin: Number(templateRule.routeScoreMargin ?? 10),
       routeScoreHoldSeconds: Number(templateRule.routeScoreHoldSeconds ?? 180),
       routePrewarmSeconds: Number(templateRule.routePrewarmSeconds ?? 300),
+      // 线路（2.3.496）和切换方式跟着模板走：热备 / 聚合在每台成员机上一样生效，详情里画的线路也是模板那份。
+      routeDelivery: templateRule.routeDelivery || "cold",
+      routeLines: templateRule.routeLines ?? null,
       ...(existing ? { failoverTargets: existing.failoverTargets ?? templateRule.failoverTargets ?? null } : {}),
     };
   }
-  if (existing && (existing.routePaths || existing.routeMode)) return { routePaths: null, routeMode: null };
+  if (existing && (existing.routePaths || existing.routeMode || existing.routeLines)) return { routePaths: null, routeMode: null, routeLines: null, routeDelivery: "cold" };
   return null;
 }
 

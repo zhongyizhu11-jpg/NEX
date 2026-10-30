@@ -31,6 +31,7 @@ import { maintainCurrentPostgresqlDatabase } from "./postgresqlMaintenance";
 import { maintainCurrentMysqlDatabase } from "./mysqlMaintenance";
 import { AGENT_VERSION, APP_VERSION } from "../shared/versions";
 import { parseRoutePaths, serializeRoutePaths } from "../shared/routeGroup";
+import { parseRouteLines, serializeRouteLines } from "../shared/routeLines";
 import { AGENT_PANEL_MIGRATION_VERSION, isAgentVersionAtLeast } from "./agentRouteUtils";
 import { ensureTrafficStatBucketsBackfilled, ensureUserTrafficCountersBackfilled } from "./repositories/metricsRepository";
 import {
@@ -826,6 +827,8 @@ const IMPORT_TABLE_ORDER = [
   "proxy_sub_access_logs",
   // 共享 TLS 入站排在规则前面：规则的 tlsInboundId 指向它；它的 defaultRuleId 指回规则，第二遍再补。
   "host_tls_inbounds",
+  // 节点池排在规则前面：线路的层里引用它（routeLines 的 poolId）。
+  "node_pools",
   "forward_rules",
   // 规则占的 SNI 同时指向入站和规则，两边的 id 都得先映射好。
   "rule_sni_names",
@@ -1274,7 +1277,33 @@ export function remapRoutePathHosts(value: unknown, maps: ImportMaps) {
   return serializeRoutePaths(paths.map((path) => ({
     ...path,
     hops: path.hops.map((hostId) => mapRequiredId(maps, "hosts", hostId)),
+    ...(path.hopVia ? { hopVia: path.hopVia.map((tunnelId) => (tunnelId ? mapRequiredId(maps, "tunnels", tunnelId) : null)) } : {}),
   })));
+}
+
+/** 线路（2.3.496）：层里的机器、节点池、隧道都是 ID，和路径一样逐个映射。 */
+export function remapRouteLineRefs(value: unknown, maps: ImportMaps) {
+  const lines = parseRouteLines(value);
+  if (lines.length === 0) return null;
+  return serializeRouteLines(lines.map((line) => ({
+    ...line,
+    layers: line.layers.map((layer) => ({
+      ...layer,
+      hostIds: layer.hostIds.map((hostId) => mapRequiredId(maps, "hosts", hostId)),
+      poolId: mapOptionalId(maps, "node_pools", layer.poolId),
+      tunnelIds: layer.tunnelIds.map((tunnelId) => mapRequiredId(maps, "tunnels", tunnelId)),
+    })),
+  })));
+}
+
+function remapHostIdsJson(value: unknown, maps: ImportMaps) {
+  let ids: unknown = [];
+  try {
+    ids = JSON.parse(String(value || "[]"));
+  } catch {
+    ids = [];
+  }
+  return JSON.stringify((Array.isArray(ids) ? ids : []).map((hostId) => mapId(maps, "hosts", hostId)).filter((hostId): hostId is number => !!hostId));
 }
 
 async function prepareImportRow(table: string, source: Record<string, any>, maps: ImportMaps): Promise<PreparedImportRow | null> {
@@ -1343,9 +1372,16 @@ async function prepareImportRow(table: string, source: Record<string, any>, maps
       row.ruleId = null;
       return { row };
 
+    case "node_pools":
+      // 成员主机按映射改；源面板里已经删掉的机器丢掉，不让整池导入失败。
+      row.userId = mapRequiredId(maps, "users", source.userId);
+      row.hostIdsJson = remapHostIdsJson(source.hostIdsJson, maps);
+      return { row };
+
     case "forward_rules":
       row.hostId = mapRequiredId(maps, "hosts", source.hostId);
       row.routePaths = remapRoutePathHosts(source.routePaths, maps);
+      row.routeLines = remapRouteLineRefs(source.routeLines, maps);
       row.userId = mapRequiredId(maps, "users", source.userId);
       row.tunnelId = mapOptionalId(maps, "tunnels", source.tunnelId);
       row.forwardGroupId = mapOptionalId(maps, "forward_groups", source.forwardGroupId);

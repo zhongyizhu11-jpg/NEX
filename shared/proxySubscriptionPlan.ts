@@ -13,9 +13,11 @@ import { publishedRuleEntryDomain } from "./ruleEntryDomain";
 import { expandWeightedMembers, hostBandwidthHintMbps, PROXY_LOAD_BALANCE_MAX_WEIGHT, proxyLoadBalanceWeights } from "./linkWeights";
 import { proxyNodeBindingTruth } from "./proxyNodeAutoBind";
 import { proxySubRegionLabel } from "./proxySubRegion";
+import { buildProxySubUnlockGroups, type ProxySubUnlockStatusMap } from "./proxySubUnlock";
 import {
   buildProxyRulePlan,
   normalizeProxyRulePreset,
+  proxyRuleCategoriesForPreset,
   type ProxyRouteRule,
   type ProxyRuleSetRef,
   type ProxyRulePreset,
@@ -177,6 +179,8 @@ export type ProxySubEntryMeta = {
   customName: boolean;
   regionCode: string;
   latencyMs?: number | null;
+  /** 出口主机 id（直连 = 节点所在机器，中转 = 落地所在机器）；没有机器时 null。 */
+  exitHostId?: number | null;
 };
 
 export type ProxySubscriptionSkip = {
@@ -288,6 +292,12 @@ function templateRegionCode(template: ProxyNodeTemplateRow, hostsById: Map<numbe
   const host = hostsById.get(Number(template.hostId || 0));
   const geo = text(host?.geoCountryCode).toUpperCase();
   return /^[A-Z]{2}$/.test(geo) ? geo : "";
+}
+
+/** 节点流量出去的那台机器：自建节点所在的主机；粘来的 / 分享的没有。 */
+function templateExitHostId(template: ProxyNodeTemplateRow): number | null {
+  const hostId = Number(template.hostId || 0);
+  return Number.isInteger(hostId) && hostId > 0 ? hostId : null;
 }
 
 /** 订阅里显示的节点名：优先用户自定义，否则「入口主机 → 模板名」。 */
@@ -405,7 +415,7 @@ export function buildProxySubscriptionPlan(input: BuildProxySubscriptionPlanInpu
       templateId,
       kind: "direct",
       frontTemplateId: 0,
-      meta: { hostName: "", templateName: node.name, ruleName: "", customName: false, regionCode: templateRegionCode(template, hostsById) },
+      meta: { hostName: "", templateName: node.name, ruleName: "", customName: false, regionCode: templateRegionCode(template, hostsById), exitHostId: templateExitHostId(template) },
       node,
     });
   }
@@ -546,6 +556,8 @@ export function buildProxySubscriptionPlan(input: BuildProxySubscriptionPlanInpu
         customName: !!text(rule.proxyNodeName),
         // 地区看落地（模板），不看入口：客户端里要认的是「出口在哪」。
         regionCode: templateRegionCode(template, hostsById),
+        // 出口同样看落地：入口机只是转发，网站看到的是落地的 IP。
+        exitHostId: templateExitHostId(template),
         ...(input.latencyByRuleId?.has(ruleId) ? { latencyMs: input.latencyByRuleId.get(ruleId) ?? null } : {}),
       },
       node: relayProxyNode(templateNode, { address, port, name }),
@@ -757,6 +769,11 @@ export type BuildProxySubscriptionDocumentOptions = {
   categoryTargets?: Record<string, string>;
   /** 透传的外部订阅：主选择器和各分类组用 `use` 引用它们。 */
   providers?: readonly ProxySubProvider[];
+  /**
+   * 出口主机最新的解锁检测结论（服务端查好传进来）。有合格节点的流媒体 / AI 分类会多一个
+   * 「Netflix 解锁」这类组并默认选它，见 shared/proxySubUnlock.ts。不传 = 不做。
+   */
+  unlockStatuses?: ProxySubUnlockStatusMap | null;
 };
 
 function regionGroupsFor(nodes: readonly ProxyNode[]): ProxySubscriptionGroup[] {
@@ -891,15 +908,37 @@ export function buildProxySubscriptionDocument(
     groups.push(...customGroups, ...builtGroups);
   }
 
+  /*
+    解锁出口组：只看这份订阅里真有的分类，只在规则计划确实引用了它时才放进文档
+    （令牌覆盖了去向的分类不引用，就不出这个组）。
+  */
+  const preset = normalizeProxyRulePreset(options.rulePreset);
+  const unlock = hasContent && nodes.length > 0
+    ? buildProxySubUnlockGroups(
+      nodes.map((node, index) => ({ name: node.name, exitHostId: plan.entries[index]?.meta?.exitHostId ?? null })),
+      options.unlockStatuses,
+      {
+        categoryKeys: proxyRuleCategoriesForPreset(preset).map((category) => category.key),
+        reservedNames: [...nodes.map((node) => node.name), ...groups.map((group) => group.name), ...providerNames],
+      },
+    )
+    : { groups: [], preferredByCategory: {} };
+
   // 没有节点时不生成规则：规则会指向不存在的策略组，客户端直接拒绝整份配置。
   const rulePlan = hasContent
     ? buildProxyRulePlan({
-      preset: normalizeProxyRulePreset(options.rulePreset),
+      preset,
       mainGroupName: options.mainGroupName,
       selectableMembers,
       categoryTargets: options.categoryTargets,
+      preferredGroups: unlock.preferredByCategory,
     })
     : { ruleSets: [], categoryGroups: [], rules: [] };
+
+  const referenced = new Set(rulePlan.categoryGroups.flatMap((group) => group.members));
+  for (const group of unlock.groups) {
+    if (referenced.has(group.name)) groups.push({ name: group.name, type: group.type, members: group.members });
+  }
 
   for (const group of rulePlan.categoryGroups) {
     groups.push({ name: group.name, type: "select", members: group.members, ...(providerNames.length ? { use: providerNames } : {}) });

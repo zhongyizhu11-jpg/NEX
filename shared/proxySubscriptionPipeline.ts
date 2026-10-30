@@ -34,6 +34,7 @@ import type { ProxySubSettings } from "./proxySubSettings";
 import { renderProxySubTemplatePrelude, PROXY_SUB_BUILTIN_PRELUDES, proxySubTemplateTargetForFormat, type ProxySubTemplate } from "./proxySubTemplates";
 import { resolveTriState, type ProxySubTokenOptions, type ProxySubTokenScope } from "./proxySubTokenScope";
 import type { ProxyNode } from "./proxyNode";
+import type { ProxySubUnlockStatusMap } from "./proxySubUnlock";
 
 export type ProxySubPipelineInput = {
   plan: ProxySubscriptionPlan;
@@ -52,6 +53,8 @@ export type ProxySubPipelineInput = {
   vars: { appName: string; panelUrl: string; subUrl: string; username: string };
   /** 透传的外部订阅（provider 模式的来源）。 */
   providers?: readonly { name: string; url: string; intervalSec: number }[];
+  /** 出口主机最新的解锁检测结论（服务端按条目的 exitHostId 批量查好），见 shared/proxySubUnlock.ts。 */
+  unlockStatuses?: ProxySubUnlockStatusMap | null;
 };
 
 export type ProxySubPipelineDocument = {
@@ -83,6 +86,7 @@ export function buildProxySubPipelineDocument(input: ProxySubPipelineInput): Pro
     customGroups,
     categoryTargets: input.options.categoryTargets,
     providers: input.providers,
+    unlockStatuses: input.unlockStatuses,
   });
 
   // 自定义规则。没有节点时文档里没有组，规则也不该有（客户端会拒绝指向不存在的组）。

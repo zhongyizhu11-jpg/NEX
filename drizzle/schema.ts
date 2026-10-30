@@ -333,6 +333,10 @@ export const hosts = table("hosts", {
   trafficFailoverEnabled: boolean("trafficFailoverEnabled").notNull().default(false),
   trafficFailoverThresholdPercent: int("trafficFailoverThresholdPercent").notNull().default(100),
   trafficFailoverExcluded: boolean("trafficFailoverExcluded").notNull().default(false),
+  // 节点维护：从所有线路和组的候选里拿掉（2.3.496）。
+  maintenanceMode: boolean("maintenanceMode").notNull().default(false),
+  maintenanceSince: epoch("maintenanceSince"),
+  maintenanceNote: text("maintenanceNote"),
   // 主机公网出口整形（forwardx-fxp/link_shaper.go 的 egress）：off / auto / manual，
   // manual 时 egressMbps 是公网带宽上限（Mbit/s）。
   egressShapingMode: varchar("egressShapingMode", { length: 16 }).notNull().default("off"),
@@ -495,6 +499,10 @@ export const forwardRules = table("forward_rules", {
   routeScoreHoldSeconds: int("routeScoreHoldSeconds").notNull().default(180),
   // 计划切换提前多久预热并预检目标线路。
   routePrewarmSeconds: int("routePrewarmSeconds").notNull().default(300),
+  // 线路定义：每条线路几层候选（shared/routeLines.ts）；空 = 由 routePaths 推。
+  routeLines: text("routeLines"),
+  // 备用怎么候着：cold / hot / aggregate / replicate。
+  routeDelivery: varchar("routeDelivery", { length: 16 }).notNull().default("cold"),
   /*
     中转跳上自动生成的转发规则用这三列指回它属于哪条线路组规则的哪条路径
     的第几跳。它们不出现在列表、配额和流量统计里，随父规则一起改和删。

@@ -30,6 +30,7 @@ import { getSetting, setSetting } from "./settingsRepository";
 import { getTrafficSummaryByRule, getUnreachableRuleIds } from "./metricsRepository";
 import { signalRuleEntryDomainChanged } from "../ruleEntryDomainSignals";
 import { invalidateProxySubCacheForUser } from "../proxySubCache";
+import { loadProxySubUnlockStatuses } from "../proxySubUnlock";
 import { buildProxySubPipelineDocument, type ProxySubPipelineDocument, type ProxySubPipelineInput } from "../../shared/proxySubscriptionPipeline";
 
 // ==================== 客户端订阅：节点模板 ====================
@@ -1311,6 +1312,8 @@ export async function getProxySubscriptionPreviewForUser(
   const document = buildProxySubscriptionDocument(plan, templates as any, {
     mainGroupName: PROXY_SUBSCRIPTION_GROUP_NAME,
     rulePreset: normalizeProxyRulePreset(options.rulePreset),
+    // 没带规则预设时没有分类组，解锁组也用不上，不白查一遍。
+    unlockStatuses: normalizeProxyRulePreset(options.rulePreset) === "off" ? null : await loadProxySubUnlockStatuses(plan.entries),
   });
   return { plan, document };
 }
@@ -1321,7 +1324,7 @@ export async function getProxySubscriptionPreviewForUser(
  */
 export async function buildProxySubscriptionForToken(
   userId: number,
-  input: Omit<ProxySubPipelineInput, "plan" | "templates" | "providers">,
+  input: Omit<ProxySubPipelineInput, "plan" | "templates" | "providers" | "unlockStatuses">,
 ): Promise<ProxySubPipelineDocument> {
   const { plan, templates } = await buildProxySubscriptionContextForUser(userId, { withLatency: input.options.sortMode === "latency" });
   // 透传模式的外部订阅：不存节点，写成 proxy-providers 让客户端自己拉。
@@ -1329,5 +1332,7 @@ export async function buildProxySubscriptionForToken(
   const providers = (await listProxySubSourcesByUser(userId) as any[])
     .filter((source) => source.isEnabled && String(source.mode) === "provider")
     .map((source) => ({ name: String(source.name || `订阅 #${source.id}`), url: String(source.url), intervalSec: Number(source.intervalSec || 21600) }));
-  return buildProxySubPipelineDocument({ ...input, plan, templates: templates as any, providers });
+  // 解锁出口分流：按条目的出口主机查最新检测结论（不带规则时用不上，不查）。
+  const unlockStatuses = input.rulePreset === "off" ? null : await loadProxySubUnlockStatuses(plan.entries);
+  return buildProxySubPipelineDocument({ ...input, plan, templates: templates as any, providers, unlockStatuses });
 }

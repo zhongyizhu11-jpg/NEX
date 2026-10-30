@@ -349,6 +349,9 @@ export async function recoverPendingSelfTestSweep() {
   }
 }
 
+/** 线路组事件（forward_rule_route_events）保留多久：7 天。 */
+export const FORWARD_RULE_ROUTE_EVENT_RETENTION_HOURS = 7 * 24;
+
 /**
  * 每小时一次的历史清理。
  *
@@ -366,7 +369,8 @@ export async function runTcpingCleanup() {
     ["tunnel_latency_stats", () => db.cleanOldTunnelLatencyStats(72)],
     ["forward_tests", () => db.cleanOldForwardTests(72)],
     ["forward_group_events", () => db.cleanOldForwardGroupEvents(72)],
-    ["forward_rule_route_events", () => db.cleanOldForwardRuleRouteEvents(72)],
+    // 线路组的切换 / 异常 / 恢复记录留 7 天，和路径质量历史一样长，导出、回看一周的走势对得上。
+    ["forward_rule_route_events", () => db.cleanOldForwardRuleRouteEvents(FORWARD_RULE_ROUTE_EVENT_RETENTION_HOURS)],
     // 线路组路径质量历史留 7 天（一分钟一行，比延迟明细稀，留得长一点画周走势）。
     ["route_path_quality_stats", () => db.cleanOldRoutePathQualityStats(db.ROUTE_PATH_QUALITY_RETENTION_HOURS)],
     ["host_probe_service_stats", () => db.cleanOldHostProbeServiceStats(72)],

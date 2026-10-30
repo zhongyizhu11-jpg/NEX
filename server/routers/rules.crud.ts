@@ -21,6 +21,8 @@ import {
   ROUTE_MODES,
   ROUTE_SPREADS,
   ROUTE_SWITCH_MODES,
+  ROUTE_DELIVERIES,
+  normalizeRouteDelivery,
   newRoutePathKey,
   normalizeRouteSpread,
   normalizeRouteSwitchMode,
@@ -36,6 +38,8 @@ import {
   type RouteGroupPolicy,
   type RoutePath,
 } from "@shared/routeGroup";
+import { parseRouteLines, serializeRouteLines } from "@shared/routeLines";
+import { expandRouteGroupInputLines } from "../routeLineExpansion";
 import { legacyFailoverColumns, retireRouteRelayRulesForRule, syncRouteRelayRulesForRule } from "../routeGroups";
 import { getLinkAccessScope } from "../linkAccessView";
 import { timestampMillis } from "@shared/timestamp";
@@ -179,10 +183,35 @@ const routePathInputSchema = z.object({
   destNodeId: z.number().int().positive().nullable().optional(),
   weight: z.number().int().min(ROUTE_GUARD_LIMITS.weight.min).max(ROUTE_GUARD_LIMITS.weight.max).optional(),
   probe: routeEndpointInputSchema.nullable().optional(),
+  /** 线路展开出来的路径带的几项（服务端展开时填，老界面不传）。 */
+  hopVia: z.array(z.number().int().positive().nullable()).max(MAX_ROUTE_HOPS).optional(),
+  tier: z.number().int().min(0).max(MAX_ROUTE_PATHS).nullable().optional(),
+  paused: z.boolean().optional(),
+  lineKey: z.string().max(32).nullable().optional(),
+});
+
+/** 线路（shared/routeLines.ts）：每条几层候选。结构在 parseRouteLines 里再校验一遍，这里只挡大小。 */
+const routeLineInputSchema = z.object({
+  key: z.string().max(32).optional(),
+  name: z.string().max(40).optional(),
+  paused: z.boolean().optional(),
+  layers: z.array(z.object({
+    kind: z.enum(["hosts", "pool", "tunnel"]),
+    hostIds: z.array(z.number().int().positive()).max(16).optional(),
+    poolId: z.number().int().positive().nullable().optional(),
+    tunnelIds: z.array(z.number().int().positive()).max(16).optional(),
+    pick: z.enum(["best", "order"]).optional(),
+    skippable: z.boolean().optional(),
+  })).max(MAX_ROUTE_HOPS),
+  dests: z.array(z.object({ dest: routeEndpointInputSchema.nullable().optional(), destNodeId: z.number().int().positive().nullable().optional() })).max(8).optional(),
+  weight: z.number().int().min(ROUTE_GUARD_LIMITS.weight.min).max(ROUTE_GUARD_LIMITS.weight.max).optional(),
 });
 
 const routeGroupInputSchema = z.object({
-  paths: z.array(routePathInputSchema).min(1).max(MAX_ROUTE_PATHS),
+  /** 新编辑框：按线路提交，服务端展开成 paths（server/routeLineExpansion.ts）。 */
+  lines: z.array(routeLineInputSchema).max(MAX_ROUTE_PATHS).optional(),
+  delivery: z.enum(ROUTE_DELIVERIES).optional(),
+  paths: z.array(routePathInputSchema).max(MAX_ROUTE_PATHS).default([]),
   mode: z.enum(ROUTE_MODES),
   spread: z.enum(ROUTE_SPREADS).optional(),
   schedule: failoverScheduleInputSchema.nullable().optional(),
@@ -508,15 +537,21 @@ function normalizeRouteGroupInput(input: FailoverInput, context: NormalizeFailov
       const dest = raw.dest ? { ip: String(raw.dest.ip).trim(), port: Number(raw.dest.port) } : null;
       const destNodeId = Number((raw as any).destNodeId || 0) > 0 ? Math.floor(Number((raw as any).destNodeId)) : null;
       const stored = storedByKey.get(key);
+      const hopVia = Array.isArray((raw as any).hopVia) && (raw as any).hopVia.length === hops.length ? (raw as any).hopVia : undefined;
       const unchanged = !!stored
         && stored.hops.length === hops.length
         && stored.hops.every((hop, index) => hop === hops[index])
+        && (stored.hopVia || []).join(".") === (hopVia || []).join(".")
         && sameEndpoint(stored.dest, dest)
         && (stored.destNodeId || null) === destNodeId;
       return {
         key,
         name: String(raw.name || "").trim().slice(0, 40),
         hops,
+        ...(hopVia ? { hopVia } : {}),
+        ...((raw as any).tier !== undefined && (raw as any).tier !== null ? { tier: (raw as any).tier } : {}),
+        ...((raw as any).paused ? { paused: true } : {}),
+        ...((raw as any).lineKey ? { lineKey: (raw as any).lineKey } : {}),
         dest,
         destNodeId,
         weight: raw.weight ?? stored?.weight ?? 50,
@@ -553,6 +588,7 @@ function normalizeRouteGroupInput(input: FailoverInput, context: NormalizeFailov
       scoreHoldSeconds: clampGuard(routeGroup.scoreHoldSeconds ?? base?.scoreHoldSeconds, "scoreHoldSeconds", template.scoreHoldSeconds),
       prewarmSeconds: clampGuard(routeGroup.prewarmSeconds ?? base?.prewarmSeconds, "prewarmSeconds", template.prewarmSeconds),
       switchMode: normalizeRouteSwitchMode(routeGroup.switchMode ?? base?.switchMode),
+      delivery: normalizeRouteDelivery(routeGroup.delivery ?? base?.delivery),
     };
   } else {
     /*
@@ -591,6 +627,7 @@ function normalizeRouteGroupInput(input: FailoverInput, context: NormalizeFailov
     entryHostId: context.entryHostId ?? (rule ? Number(rule.hostId) : null),
     hostIds: context.hostIds ?? null,
     hasRuleTarget: !!String(target.targetIp || "").trim() && Number(target.targetPort) > 0,
+    rejectDuplicates: !!(input.routeGroup && Array.isArray((input.routeGroup as any).lines) && (input.routeGroup as any).lines.length > 0),
   });
   if (error) throw new Error(error);
   return {
@@ -603,6 +640,11 @@ function normalizeRouteGroupInput(input: FailoverInput, context: NormalizeFailov
     routeScoreMargin: policy.scoreMargin,
     routeScoreHoldSeconds: policy.scoreHoldSeconds,
     routePrewarmSeconds: policy.prewarmSeconds,
+    routeDelivery: normalizeRouteDelivery(policy.delivery),
+    // 线路定义：新编辑框按线路提交时存下来；老界面 / 只改钉子的保存不动它（undefined 不落库）。
+    ...(input.routeGroup && Array.isArray((input.routeGroup as any).lines) && (input.routeGroup as any).lines.length > 0
+      ? { routeLines: serializeRouteLines(parseRouteLines((input.routeGroup as any).lines)) }
+      : input.routeGroup ? { routeLines: null } : {}),
   };
 }
 
@@ -874,6 +916,8 @@ function sameStoredValue(next: unknown, current: unknown) {
 const ROUTE_RULE_COLUMNS = [
   "routeMode",
   "routePaths",
+  "routeLines",
+  "routeDelivery",
   "routeSwitchMode",
   "routeFailureThreshold",
   "routeScoreMargin",
@@ -2271,6 +2315,12 @@ export const crudRulesRouter = router({
       ...ruleLimitInputShape,
     }))
     .mutation(async ({ input, ctx }) => {
+      // 线路（分层候选）→ 具体路径：展开要查池、隧道、看得见哪些机器，放在所有同步校验之前。
+      if ((input as any).routeGroup?.lines?.length) {
+        Object.assign(input, await expandRouteGroupInputLines(input as any, ctx.user, Number(input.hostId || 0), input.tunnelId ?? null, {
+          groupTemplate: Number((input as any).forwardGroupId || 0) > 0,
+        }));
+      }
       const egressInput = takeEgressInput(input as any);
       // 单条规则限额：只有管理员能设，按操作者（不是新规则的主人）判定；摘出来单独落库。
       const limitInput = takeRuleLimitInput(input as any);
@@ -2529,6 +2579,15 @@ export const crudRulesRouter = router({
       // 单条规则限额和出口一样：先校验，主流程成功后单独落库。用户改不了管理员管理的规则。
       const limitInput = takeRuleLimitInput(input as any);
       const ruleBeforeUpdate = await db.getForwardRuleById(input.id);
+      if ((input as any).routeGroup?.lines?.length && ruleBeforeUpdate) {
+        Object.assign(input, await expandRouteGroupInputLines(
+          input as any,
+          ctx.user,
+          Number(input.hostId ?? (ruleBeforeUpdate as any).hostId ?? 0),
+          input.tunnelId !== undefined ? input.tunnelId : ((ruleBeforeUpdate as any).tunnelId ?? null),
+          { groupTemplate: Number((input as any).forwardGroupId ?? (ruleBeforeUpdate as any).forwardGroupId ?? 0) > 0 },
+        ));
+      }
       if (ruleBeforeUpdate && !dbBool((ruleBeforeUpdate as any).pendingDelete)) {
         if (ctx.user.role !== "admin" && ruleBeforeUpdate.userId !== ctx.user.id) throw new Error("无权操作此规则");
         assertRuleWritable(ctx.user, ruleBeforeUpdate);

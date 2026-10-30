@@ -49,3 +49,22 @@ test("CSV：带表头和 BOM，逗号引号转义，防公式注入", () => {
   assert.equal(lines[1], `2026-10-17T12:00:00.000Z,warn,rule.error,rule,1,'=cmd,,"bind: ""443"", in use"`);
   assert.ok(csv.startsWith("﻿"));
 });
+
+test("线路组：route.unhealthy 算线路告警，route.recovered 算恢复（带异常时长）", () => {
+  assert.equal(faultCategoryOf("route.unhealthy", "warn"), "route");
+  assert.equal(faultCategoryOf("route.recovered", "info"), null);
+  const unhealthy: FaultEventInput = { id: 20, kind: "route.unhealthy", level: "warn", message: "线路 B 异常", hostId: 4, ruleId: 7, createdAt: at(30) };
+  const recovered: FaultEventInput = { id: 21, kind: "route.recovered", level: "info", message: "线路 B 恢复", hostId: 4, ruleId: 7, data: { durationSeconds: 120 }, createdAt: at(28) };
+  const untimed: FaultEventInput = { id: 22, kind: "route.recovered", level: "info", message: "线路 C 恢复", hostId: 4, ruleId: 7, createdAt: at(10) };
+  assert.equal(isRecoveryEvent(recovered), true);
+  assert.equal(isRecoveryEvent(untimed), true);
+  assert.equal(isRecoveryEvent(unhealthy), false);
+  const summary = summarizeFaultEvents([unhealthy, recovered, untimed], { nowMs: now, hours: 24 });
+  assert.equal(summary.alerts, 1);
+  assert.deepEqual(summary.byCategory.map((item) => [item.key, item.count]), [["route", 1]]);
+  assert.equal(summary.recovered, 2);
+  assert.equal(summary.avgRecoverySeconds, 120);
+  const csv = faultEventsToCsv([unhealthy, recovered]).replace(/^﻿/, "").trim().split("\n");
+  assert.match(csv[1], /,warn,route\.unhealthy,route,/);
+  assert.match(csv[2], /,info,route\.recovered,recovered,/);
+});

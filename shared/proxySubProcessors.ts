@@ -35,6 +35,11 @@ export type ProxySubEntryMeta = {
   regionCode: string;
   /** 面板探测到的延迟（毫秒）；null = 没探测过或不通。 */
   latencyMs?: number | null;
+  /**
+   * 出口主机：流量从哪台机器的公网 IP 出去（直连 = 节点所在机器，中转 = 绑的落地所在机器）。
+   * 粘来的 / 分享的节点没有，为 null。解锁出口分流按它查检测结论（shared/proxySubUnlock.ts）。
+   */
+  exitHostId?: number | null;
 };
 
 export function entryMeta(entry: ProxySubscriptionEntry): ProxySubEntryMeta {

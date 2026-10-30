@@ -7,7 +7,7 @@ import { normalizeRouteEventKind, routePathLabel, routePathsOf, type RouteEventK
 import { recordRouteAgentStats } from "./routeGroupStats";
 import { recordRoutePathQuality } from "./routePathQualityHistory";
 import { notifyRouteSwitch } from "./routeSwitchNotifier";
-import { recordRouteSwitchEvent } from "./ops/eventHooks";
+import { recordRouteHealthEvent, recordRouteSwitchEvent } from "./ops/eventHooks";
 
 /*
   主备切换：Agent 自己切完，面板才知道。
@@ -190,6 +190,10 @@ export async function ingestFailoverLineReports(input: {
       appendPanelLog("warn", `[Failover] host=${hostId} rule=${ruleId} 切换记录写入失败: ${String((error as any)?.message || error)}`);
     }
     recordRouteSwitchEvent({ rule, hostId, kind, fromLabel, toLabel, reason }); // 事件时间线（与 TG 开关无关）
+    if (kind === "unhealthy" || kind === "recovered") {
+      // 某一条路径坏了 / 好了：Agent 把那条路径放在 to 上。也进时间线，故障看板据此数异常和恢复。
+      recordRouteHealthEvent({ rule, hostId, kind, pathKey: toIndex >= 0 ? paths[toIndex]?.key ?? null : null, pathLabel: toLabel, reason });
+    }
     if ((kind === "switch" || kind === "precheck_failed") && rule?.telegramErrorNotifyEnabled) {
       void notifyRouteSwitch({
         rule,

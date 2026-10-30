@@ -38,7 +38,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.242"
+var Version = "2.2.243"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -2637,6 +2637,27 @@ type failoverTarget struct {
 	// 这是运行时提示，不进 failoverSignature，也不落盘（见 applyRelayHintsLocked）。
 	Down       bool   `json:"down,omitempty"`
 	DownReason string `json:"downReason,omitempty"`
+	// 分层线路组：0 = 主线路组，1.. = 备用组（数字越小越优先）；nil = 不分层。
+	// 规格里**每一条**都带了 Tier 才按分层走（见 failoverSpecTiered），否则一律是老行为。
+	// 这是行为参数，进 failoverSignature。
+	Tier *int `json:"tier,omitempty"`
+	// 面板算好的、这条路径在下游各段中转上的延迟之和（毫秒）。评分和自动择优按
+	// 「本机探测延迟 + 它」比整条链路；上报的 latencyMs 仍只是第一段。
+	// 和 Down 一样是运行时提示：不进签名、不落盘，变了也不重建代理、不清统计。
+	ExtraLatencyMs int `json:"extraLatencyMs,omitempty"`
+}
+
+// 规格是不是分层的：每一条出站都标了 Tier。缺一条就整组按不分层处理（老面板）。
+func failoverSpecTiered(spec failoverSpec) bool {
+	if len(spec.Targets) == 0 {
+		return false
+	}
+	for _, target := range spec.Targets {
+		if target.Tier == nil {
+			return false
+		}
+	}
+	return true
 }
 
 // 这条出站实际该探哪儿。和面板的 failoverProbeEndpoint 是同一条规则。
@@ -2700,6 +2721,9 @@ type failoverSpec struct {
 	// 这个 PROXY 头是面板专门让前面的转发工具加给调度器的（规则本身不往目标发 PROXY 头，
 	// 可「按访客固定」要知道访客是谁）：调度器读完就扔，不转给路径。
 	ProxyProtocolStrip bool `json:"proxyProtocolStrip,omitempty"`
+	// 投递方式：""（老行为）/ cold（冷备，同 ""）/ hot（热备：主备策略也竞速拨备线）/
+	// aggregate（聚合，面板配 least_load 下发）/ replicate（多发，Agent 侧只用到分层）。
+	Delivery string `json:"delivery,omitempty"`
 }
 
 type tunnelProbe struct {
@@ -12904,6 +12928,8 @@ type failoverProxy struct {
 	// 同一时刻只跑一轮，其余连接等它的结果（见 checkHealthShared）。
 	healthFlightMu sync.Mutex
 	healthFlight   chan struct{}
+	// 客户端连进来以后有没有拨通一条路径（最近 10 分钟，按分钟一格）：线路详情「入站」那一段。
+	inbound routeInboundWindow
 }
 
 func failoverID(ruleID int, sourcePort int) string {
@@ -12937,14 +12963,25 @@ func failoverSignature(spec failoverSpec) string {
 		strconv.Itoa(spec.ScoreMargin),
 		strconv.Itoa(spec.ScoreHoldSeconds),
 		strconv.Itoa(spec.PrewarmSeconds),
-		spec.SwitchMode,
+		func() string {
+			// Delivery 为空时签名和加这个字段之前逐字相同。
+			if spec.Delivery == "" {
+				return spec.SwitchMode
+			}
+			return spec.SwitchMode + "/" + spec.Delivery
+		}(),
 		strconv.FormatBool(spec.ProxyProtocolReceive),
 		strconv.FormatBool(spec.ProxyProtocolStrip),
 	}
 	for _, target := range spec.Targets {
-		// Down / DownReason 是面板随时会变的运行时提示，故意不进签名：进了的话每次提示变化
-		// 都会重建代理，探测样本和「现在走哪条」全部归零。它们走 applyRelayHintsLocked。
-		parts = append(parts, target.TargetIP, strconv.Itoa(target.TargetPort), target.ProbeIP, strconv.Itoa(target.ProbePort), strconv.Itoa(target.Weight))
+		// Down / DownReason / ExtraLatencyMs 是面板随时会变的运行时提示，故意不进签名：进了的话
+		// 每次提示变化都会重建代理，探测样本和「现在走哪条」全部归零。它们走 applyRelayHintsLocked。
+		weight := strconv.Itoa(target.Weight)
+		if target.Tier != nil {
+			// 不带 Tier 时签名和加这个字段之前逐字相同。
+			weight += "t" + strconv.Itoa(*target.Tier)
+		}
+		parts = append(parts, target.TargetIP, strconv.Itoa(target.TargetPort), target.ProbeIP, strconv.Itoa(target.ProbePort), weight)
 	}
 	return strings.Join(parts, "|")
 }
@@ -12992,6 +13029,12 @@ func normalizeFailoverSpec(spec failoverSpec) failoverSpec {
 	default:
 		spec.SwitchMode = "smooth"
 	}
+	switch strings.TrimSpace(spec.Delivery) {
+	case "cold", "hot", "aggregate", "replicate":
+		spec.Delivery = strings.TrimSpace(spec.Delivery)
+	default:
+		spec.Delivery = ""
+	}
 	if spec.PinnedIndex != nil && (*spec.PinnedIndex < 0 || *spec.PinnedIndex >= len(spec.Targets)) {
 		spec.PinnedIndex = nil
 		spec.PinnedUntil = 0
@@ -13022,6 +13065,20 @@ func normalizeFailoverSpec(spec failoverSpec) failoverSpec {
 		target.DownReason = strings.TrimSpace(target.DownReason)
 		if !target.Down {
 			target.DownReason = ""
+		}
+		if target.Tier != nil {
+			// 复制一份：别和调用方的规格共用同一个指针。
+			tier := *target.Tier
+			if tier < 0 {
+				tier = 0
+			}
+			target.Tier = &tier
+		}
+		if target.ExtraLatencyMs < 0 {
+			target.ExtraLatencyMs = 0
+		}
+		if target.ExtraLatencyMs > failoverMaxExtraLatencyMs {
+			target.ExtraLatencyMs = failoverMaxExtraLatencyMs
 		}
 		cleaned = append(cleaned, target)
 		if len(cleaned) >= 11 {
@@ -13079,10 +13136,14 @@ func startFailoverProxyLocked(ruleID int, sourcePort int, spec failoverSpec, act
 				failoverMu.Unlock()
 			}
 		} else {
-			existing.rebuildForSpecLocked(spec, time.Now())
+			targetsChanged := existing.rebuildForSpecLocked(spec, time.Now())
 			existing.mu.Unlock()
 			existing.signature = signature
 			failoverMu.Unlock()
+			if targetsChanged {
+				// 出站换了：新出站的健康和延迟别等 5 秒后的定时探测。
+				go existing.probeNowAndReport()
+			}
 			if err := persistFailoverSpec(ruleID, sourcePort, spec); err != nil {
 				logf("failover persistent snapshot write failed rule=%d port=%d: %v", ruleID, sourcePort, err)
 			}
@@ -13136,6 +13197,8 @@ func startFailoverProxyLocked(ruleID int, sourcePort int, spec failoverSpec, act
 	// keeps a failed bind from tearing down the working proxy and makes dynamic
 	// internal-port handoffs continuous once the backend action completes.
 	go p.healthLoop()
+	// 第一轮探测不等定时器（5 秒后）：立刻探一轮，面板几秒内就能看到延迟和评分。
+	go p.probeNowAndReport()
 	if p.ln != nil {
 		go p.acceptLoop()
 	}
@@ -13246,6 +13309,11 @@ func failoverRemoteIP(conn net.Conn) string {
 	return conn.RemoteAddr().String()
 }
 
+/*
+候选路径。healthyOnly 时只要健康的；分层规格（failoverSpecTiered）下再只留「还有健康
+出站的最优一层」—— 权重 / 最少连接只在主线路组里分，整个主组都挂了才轮到备用组。
+healthyOnly=false（全挂时的兜底）不分层，和以前一样。
+*/
 func (p *failoverProxy) candidateIndicesLocked(exclude map[int]bool, healthyOnly bool) []int {
 	indices := make([]int, 0, len(p.spec.Targets))
 	for i := range p.spec.Targets {
@@ -13257,7 +13325,28 @@ func (p *failoverProxy) candidateIndicesLocked(exclude map[int]bool, healthyOnly
 		}
 		indices = append(indices, i)
 	}
-	return indices
+	if !healthyOnly || len(indices) < 2 || !failoverSpecTiered(p.spec) {
+		return indices
+	}
+	best := p.lowestTierLocked(indices)
+	filtered := indices[:0]
+	for _, i := range indices {
+		if *p.spec.Targets[i].Tier == best {
+			filtered = append(filtered, i)
+		}
+	}
+	return filtered
+}
+
+// indices 里最优（数字最小）的一层。调用方保证规格是分层的、indices 非空。
+func (p *failoverProxy) lowestTierLocked(indices []int) int {
+	best := *p.spec.Targets[indices[0]].Tier
+	for _, i := range indices[1:] {
+		if tier := *p.spec.Targets[i].Tier; tier < best {
+			best = tier
+		}
+	}
+	return best
 }
 
 func (p *failoverProxy) pickTarget(client net.Conn, exclude map[int]bool) (failoverTarget, int) {
@@ -13439,6 +13528,9 @@ const failoverFastestMarginMs = 20
 const failoverFastestMarginRatio = 0.2
 const failoverFastestHoldSeconds = 180
 
+// 面板给的下游延迟提示最多算到这么大（再大评分早就是 0 了），防一个离谱值溢出。
+const failoverMaxExtraLatencyMs = 60000
+
 func (p *failoverProxy) resetFastestLocked() {
 	p.fastestCandidate = -1
 	p.fastestSince = time.Time{}
@@ -13449,8 +13541,24 @@ func (p *failoverProxy) fastestIndexLocked(now time.Time) int {
 		return -1
 	}
 	p.ensureHealthStateLocked()
+	// 分层：只在还有健康出站的最优一层里择优。当前这条不在那一层（走着备用组而主组
+	// 已经恢复）时不择优 —— 交给按数组顺序切回，回到那一层的第一条健康出站。
+	tiered := failoverSpecTiered(p.spec)
+	bestTier := 0
+	if tiered {
+		healthy := p.candidateIndicesLocked(nil, true)
+		if len(healthy) == 0 {
+			p.resetFastestLocked()
+			return -1
+		}
+		bestTier = p.lowestTierLocked(healthy)
+		if *p.spec.Targets[p.activeIndex].Tier != bestTier {
+			p.resetFastestLocked()
+			return -1
+		}
+	}
 	activeScore, activeScored := p.scoreLocked(p.activeIndex)
-	activeLatency := p.scoreInputLocked(p.activeIndex).latencyMs
+	activeLatency := p.chainScoreInputLocked(p.activeIndex).latencyMs
 	best := -1
 	bestScore := 0
 	bestLatency := 0
@@ -13458,12 +13566,15 @@ func (p *failoverProxy) fastestIndexLocked(now time.Time) int {
 		if index == p.activeIndex || !p.healthyLocked(index) {
 			continue
 		}
+		if tiered && *p.spec.Targets[index].Tier != bestTier {
+			continue
+		}
 		// 还没法打分（没探出耗时）的不能当成「好得不得了」。
 		score, scored := p.scoreLocked(index)
 		if !scored {
 			continue
 		}
-		latency := p.scoreInputLocked(index).latencyMs
+		latency := p.chainScoreInputLocked(index).latencyMs
 		if best < 0 || score > bestScore || (score == bestScore && latency > 0 && latency < bestLatency) {
 			best, bestScore, bestLatency = index, score, latency
 		}
@@ -13738,6 +13849,36 @@ func (p *failoverProxy) markTargetFailure(index int, reason string) {
 	p.updateFallbackActiveLocked(reason)
 }
 
+/*
+立刻探一轮，探完唤醒一次心跳把新的统计带给面板。
+
+代理刚起来、或者换了出站时用：定时探测 5 秒后才来，再等一次心跳，面板上新线路要
+空着「等评分」好一阵。在自己的 goroutine 里跑，调用方不能持有 p.mu（探测要拿锁）。
+wakeHeartbeat 是带缓冲 channel 的非阻塞发送，不会卡住。
+*/
+func (p *failoverProxy) probeNowAndReport() {
+	if p.retiredNow() {
+		return
+	}
+	p.checkHealthShared()
+	if p.retiredNow() {
+		return
+	}
+	wakeHeartbeat()
+}
+
+func (p *failoverProxy) retiredNow() bool {
+	if p.done == nil {
+		return false
+	}
+	select {
+	case <-p.done:
+		return true
+	default:
+		return false
+	}
+}
+
 func (p *failoverProxy) healthLoop() {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
@@ -13897,6 +14038,7 @@ func (p *failoverProxy) handleConn(client net.Conn) {
 		target, index = p.pickTargetForKey(visitor, attempted)
 		if index < 0 {
 			logf("failover no target available rule=%d source=%d", p.ruleID, p.sourcePort)
+			p.inbound.record(false, time.Now())
 			return
 		}
 		// 拨失败的路径在里面记失败、加进 attempted；允许竞速的策略可能实际连上的是另一条。
@@ -13924,13 +14066,16 @@ func (p *failoverProxy) handleConn(client net.Conn) {
 			}
 		} else {
 			logf("failover dial failed rule=%d no target available after trying %d targets: %v", p.ruleID, len(attempted), err)
+			p.inbound.record(false, time.Now())
 			return
 		}
 		if err != nil {
 			logf("failover dial failed rule=%d target=%s:%d: %v", p.ruleID, target.TargetIP, target.TargetPort, err)
+			p.inbound.record(false, time.Now())
 			return
 		}
 	}
+	p.inbound.record(true, time.Now())
 	defer upstream.Close()
 	// 读 PROXY 头时多读到的字节（以及透传模式下的头本身）要先补给路径，再接着原样拷。
 	if len(prefix) > 0 {

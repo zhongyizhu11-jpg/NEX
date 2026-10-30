@@ -149,11 +149,22 @@ test("端口转发模板的线路组带中转：子规则照抄路径、中转�
       const again = JSON.parse((await runtime.queryRaw('SELECT "routePaths" FROM "forward_rules" WHERE "id" = ?', [child.id]))[0].routePaths);
       assert.deepEqual(again[0].dial, resolved[0].dial, "组同步不该冲掉子规则解析出来的 dial");
 
+      // 线路（2.3.496）和切换方式跟着模板：模板改成热备、带上线路定义，组同步带到子规则
+      const lines = JSON.stringify([{ key: "a", name: "主线路", layers: [{ kind: "hosts", hostIds: [2] }] }, { key: "b", name: "备用 1", layers: [{ kind: "hosts", hostIds: [3] }] }]);
+      await runtime.executeRaw('UPDATE "forward_rules" SET "routeDelivery" = ?, "routeLines" = ? WHERE "id" = ?', ["hot", lines, 200]);
+      await forwardGroups.syncForwardGroupRules(10);
+      const inherited = (await runtime.queryRaw('SELECT "routeDelivery", "routeLines", "routePaths" FROM "forward_rules" WHERE "id" = ?', [child.id]))[0];
+      assert.equal(inherited.routeDelivery, "hot", "子规则应当跟着模板换成热备");
+      assert.equal(inherited.routeLines, lines, "子规则应当带着模板的线路定义");
+      assert.deepEqual(JSON.parse(inherited.routePaths)[0].dial, resolved[0].dial, "只换切换方式不该冲掉 dial");
+
       // 模板去掉中转：子规则的路径清掉，中继收掉
       await runtime.executeRaw('UPDATE "forward_rules" SET "routePaths" = NULL, "routeMode" = NULL WHERE "id" = ?', [200]);
       await forwardGroups.syncForwardGroupRules(10);
-      const cleared = (await runtime.queryRaw('SELECT "routePaths" FROM "forward_rules" WHERE "id" = ?', [child.id]))[0];
+      const cleared = (await runtime.queryRaw('SELECT "routePaths", "routeLines", "routeDelivery" FROM "forward_rules" WHERE "id" = ?', [child.id]))[0];
       assert.equal(cleared.routePaths, null);
+      assert.equal(cleared.routeLines, null, "去掉中转后子规则的线路定义一起清掉");
+      assert.equal(cleared.routeDelivery, "cold");
       const live = await runtime.queryRaw('SELECT "id" FROM "forward_rules" WHERE "routeParentRuleId" = ? AND "pendingDelete" = 0', [child.id]);
       assert.equal(live.length, 0, "去掉中转后中继应当收掉");
       console.log("GROUP-ROUTE-HOPS-OK");

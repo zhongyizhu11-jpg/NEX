@@ -23,6 +23,7 @@ import HostIpChangeSection from "./HostIpChangeSection";
 import { HostTlsInboundSection } from "./HostTlsInboundManager";
 import HostUnlockSection from "./HostUnlockSection";
 import HostSpeedTestSection from "./HostSpeedTestSection";
+import HostLineSection from "./HostLineSection";
 
 /**
  * 主机详情 —— Detail 态。
@@ -279,9 +280,12 @@ export default function HostDetailDialog(props: HostDetailDialogProps) {
         <Tabs defaultValue="overview" className="flex min-w-0 flex-col gap-3">
           <TabsList aria-label="主机详情" className="w-full">
             <TabsTrigger value="overview" className="flex-1">概览</TabsTrigger>
+            <TabsTrigger value="lines" className="flex-1">线路</TabsTrigger>
             <TabsTrigger value="more" className="flex-1">更多</TabsTrigger>
           </TabsList>
           <TabsContent value="overview" className="m-0 flex min-w-0 flex-col gap-2.5">{overviewSections}</TabsContent>
+          {/* 线路：维护开关、节点熔断、经过它的线路和它们的切换记录（2.3.496） */}
+          <TabsContent value="lines" className="m-0 flex min-w-0 flex-col gap-2.5"><HostLineSection host={host} /></TabsContent>
           <TabsContent value="more" className="m-0 flex min-w-0 flex-col gap-2.5">{moreSections}</TabsContent>
         </Tabs>
 

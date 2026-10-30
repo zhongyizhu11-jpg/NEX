@@ -48,7 +48,7 @@ test("TG 菜单：主机、线路组改走路径、通知开关、每日简报",
       await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
       await schema.ensureDatabaseSchema();
       const dev = await import(url("server/devPanel.ts"));
-      await dev.seedDevPanelData();
+      await dev.seedDevPanelData({ lineDemo: false });
       const settings = await import(url("server/repositories/settingsRepository.ts"));
       await settings.setSetting("telegramBotEnabled", "true");
       await settings.setSetting("telegramBotToken", "1:token");

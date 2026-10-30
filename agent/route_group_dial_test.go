@@ -184,7 +184,7 @@ func failoverTaggedBackend(t *testing.T, tag string) int {
 	return listener.Addr().(*net.TCPAddr).Port
 }
 
-func runRaceDialScenario(t *testing.T, ruleID int, strategy string) (string, time.Duration, *failoverProxy, *atomic.Int32) {
+func runRaceDialScenario(t *testing.T, ruleID int, strategy string, mutate ...func(*failoverSpec)) (string, time.Duration, *failoverProxy, *atomic.Int32) {
 	t.Helper()
 	oldDir := persistentFailoverDir
 	persistentFailoverDir = filepath.Join(t.TempDir(), "failover")
@@ -211,6 +211,9 @@ func runRaceDialScenario(t *testing.T, ruleID int, strategy string) (string, tim
 	spec := failoverTestSpec(listenPort)
 	spec.Strategy = strategy
 	spec.Targets = []failoverTarget{{TargetIP: "127.0.0.1", TargetPort: slowPort}, {TargetIP: "127.0.0.1", TargetPort: fastPort}}
+	for _, fn := range mutate {
+		fn(&spec)
+	}
 	sourcePort := 60000 + ruleID%1000
 	t.Cleanup(func() { stopFailoverProxy(ruleID, sourcePort) })
 	if !startFailoverProxy(ruleID, sourcePort, spec, nil) {
