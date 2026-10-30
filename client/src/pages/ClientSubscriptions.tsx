@@ -86,6 +86,7 @@ import {
   Copy,
   Eye,
   EyeOff,
+  Gauge,
   Globe,
   KeyRound,
   Layers,
@@ -113,6 +114,7 @@ import {
 } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { NodeExitDialog, type ExitCheckSubject } from "@/components/proxy/ExitQualityView";
+import { SpeedTestDialog, type SpeedTestSubject } from "@/components/proxy/SpeedTestDialog";
 import { PreviewRouteDetail } from "@/components/proxy/PreviewRouteDetail";
 import {
   ProxySubTokenDevicesDialog,
@@ -581,6 +583,8 @@ export default function ClientSubscriptionsPage() {
   const [previewToken, setPreviewToken] = useState<{ id: number; name: string } | null>(null);
   // 节点菜单「出口检测」：自建传入站 id，粘贴传节点 id。
   const [exitCheck, setExitCheck] = useState<{ subject: ExitCheckSubject; name: string } | null>(null);
+  // 预览订阅里每条线路的「测速」：从一台机器连这条线路的入口走完整条链（SpeedTestDialog）。
+  const [speedTest, setSpeedTest] = useState<{ subject: SpeedTestSubject; name: string } | null>(null);
   // 订阅内容里展开看线路的那一条（rule-<id> / direct-<模板 id>）。
   const [expandedPreviewKey, setExpandedPreviewKey] = useState<string | null>(null);
   const openInboundExitCheck = useCallback((inboundId: number, name: string) => setExitCheck({ subject: { inboundId }, name }), []);
@@ -1549,6 +1553,7 @@ export default function ClientSubscriptionsPage() {
         onPreview={setPreviewToken}
       />
       <NodeExitDialog subject={exitCheck?.subject ?? null} name={exitCheck?.name || ""} onOpenChange={(open) => { if (!open) setExitCheck(null); }} />
+      <SpeedTestDialog subject={speedTest?.subject ?? null} name={speedTest?.name || ""} onOpenChange={(open) => { if (!open) setSpeedTest(null); }} />
       <ProxySubTokenPreviewDialog open={!!previewToken} onOpenChange={(open) => { if (!open) setPreviewToken(null); }} tokenId={previewToken?.id || null} tokenName={previewToken?.name || ""} />
       <ProxySubTokenLogsDialog open={!!logsToken} onOpenChange={(open) => { if (!open) setLogsToken(null); }} tokenId={logsToken?.id || null} tokenName={logsToken?.name || ""} />
       <ProxySubTokenDevicesDialog open={!!devicesToken} onOpenChange={(open) => { if (!open) setDevicesToken(null); }} tokenId={devicesToken?.id || null} tokenName={devicesToken?.name || ""} />
@@ -1669,6 +1674,16 @@ export default function ClientSubscriptionsPage() {
                         </div>
                         </button>
                         <div className="flex shrink-0 items-center gap-1">
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="h-7 w-7"
+                            title="测这条线路的网速：从一台机器连它的入口走完整条链"
+                            aria-label={`测 ${node.name} 的网速`}
+                            onClick={() => setSpeedTest({ subject: { entryKey: direct ? `direct-${node.templateId}` : `rule-${node.ruleId}` }, name: node.name })}
+                          >
+                            <Gauge className="h-3.5 w-3.5" />
+                          </Button>
                           <Button
                             size="icon"
                             variant="ghost"

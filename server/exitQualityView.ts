@@ -123,21 +123,22 @@ export async function buildInboundExit(inbound: any): Promise<NodeExitResult> {
   };
 }
 
-/** 粘贴节点：按地址对上看得到的主机（管理员看全部，用户只看自己的）。 */
-export async function buildNodeExit(node: any, viewer: { id: number; role: string }): Promise<NodeExitResult> {
-  let host: any = null;
-  let match: NodeExitResult["match"] = "none";
+/** 一个节点落在哪台自己的机器上：自建的看入站所在；粘贴的按地址对看得到的主机（管理员看全部，用户只看自己的）。 */
+export async function findNodeHost(node: any, viewer: { id: number; role: string }): Promise<{ host: any | null; match: NodeExitResult["match"] }> {
   const inboundId = Number(node.inboundId || 0);
   if (inboundId > 0) {
     const inbound = await db.getProxyInboundById(inboundId);
-    host = inbound ? await db.getHostById(Number(inbound.hostId)) : null;
-    if (host) match = "inbound";
+    const host = inbound ? await db.getHostById(Number(inbound.hostId)) : null;
+    if (host) return { host, match: "inbound" };
   }
-  if (!host) {
-    const hosts = (viewer.role === "admin" ? await db.getHosts() : await db.getHosts(viewer.id)) as any[];
-    host = matchHostByAddress(hosts, node.address);
-    if (host) match = "address";
-  }
+  const hosts = (viewer.role === "admin" ? await db.getHosts() : await db.getHosts(viewer.id)) as any[];
+  const host = matchHostByAddress(hosts, node.address);
+  return host ? { host, match: "address" } : { host: null, match: "none" };
+}
+
+/** 粘贴节点：按地址对上看得到的主机（管理员看全部，用户只看自己的）。 */
+export async function buildNodeExit(node: any, viewer: { id: number; role: string }): Promise<NodeExitResult> {
+  const { host, match } = await findNodeHost(node, viewer);
   return {
     targets: EXIT_QUALITY_TARGETS,
     subject: { kind: "node", id: Number(node.id), name: String(node.name || ""), address: `${String(node.address || "")}:${Number(node.port || 0)}` },

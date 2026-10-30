@@ -10,3 +10,4 @@ import "./netProfileAgent";
 import "./unlockAgent";
 import "./siteLatencyAgent";
 import "./hostLogsAgent";
+import "./nodeCheckAgent";

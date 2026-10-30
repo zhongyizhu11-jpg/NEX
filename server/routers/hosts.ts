@@ -41,6 +41,7 @@ import { parseManualHostAddress } from "@shared/hostManualAddress";
 import { wakeAgentExt } from "../ops/agentExt";
 import { flowOffloadStatusView } from "../ops/flowOffloadStatus";
 import { hostUnlockProcedures } from "./hostUnlock";
+import { hostSpeedTestProcedures } from "./hostSpeedTest";
 import { normalizeHostTrafficFailoverPercent } from "../../shared/hostTrafficPolicy";
 import { deleteHostWithChecks } from "../hostDeletion";
 
@@ -829,6 +830,8 @@ function scheduleOrphanedAgentHostCleanup() {
 export const hostsRouter = router({
     // 流媒体 / AI 解锁检测：unlockStatus / unlockHistory / startUnlockCheck / unlockSchedule / setUnlockSchedule（见 ./hostUnlock.ts）
     ...hostUnlockProcedures,
+    // 网速测试：speedTestStatus / speedTestHistory / startSpeedTest（见 ./hostSpeedTest.ts）
+    ...hostSpeedTestProcedures,
     publicMonitor: publicProcedure
       .input(z.object({ path: z.string().max(128).optional() }).optional())
       .query(async ({ input }) => {

@@ -455,7 +455,7 @@ function renderClash(
   return `${lines.join("\n")}\n`;
 }
 
-function singboxOutbound(node: ProxyNode): Record<string, unknown> {
+export function singboxOutbound(node: ProxyNode): Record<string, unknown> {
   const outbound: Record<string, unknown> = {
     tag: node.name,
     server: node.address,

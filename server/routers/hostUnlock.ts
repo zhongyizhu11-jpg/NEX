@@ -13,12 +13,10 @@ import {
   UnlockCheckError,
 } from "../ops/unlock";
 import { UNLOCK_FAMILIES, UNLOCK_MIN_AGENT_VERSION, UNLOCK_SCHEDULES } from "@shared/unlockCheck";
-import { buildHostExitQuality, EXIT_QUALITY_TARGETS } from "../exitQualityView";
 
 /*
   trpc.hosts.unlock* —— 主机详情里的「流媒体 / AI 解锁」一节（Agent 2.2.226 起）。
 
-  exitQuality       出口检测：站点连通走势 + 最近一次解锁（和订阅页节点菜单里的一样，server/exitQualityView）
   unlockStatus      最新结果（每个 family 一份）、在等的检测、是否支持；能用这台主机的人都能看
   unlockHistory     最近 10 次；同上
   startUnlockCheck  「检测解锁」按钮，只给管理员（每次都要从主机去请求一串第三方站点）
@@ -35,13 +33,6 @@ async function accessibleHost(ctx: { user: { id: number; role: string } }, hostI
 }
 
 export const hostUnlockProcedures = {
-  exitQuality: protectedProcedure
-    .input(hostInput)
-    .query(async ({ input, ctx }) => {
-      const host: any = await accessibleHost(ctx, input.hostId);
-      return { host: await buildHostExitQuality(host), targets: EXIT_QUALITY_TARGETS };
-    }),
-
   unlockStatus: protectedProcedure
     .input(hostInput)
     .query(async ({ input, ctx }) => {

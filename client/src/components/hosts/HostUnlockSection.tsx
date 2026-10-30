@@ -15,7 +15,6 @@ import {
   type UnlockServiceResult,
   type UnlockStatus,
 } from "@shared/unlockCheck";
-import { ExitHostPanel } from "@/components/proxy/ExitQualityView";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { segmentedControlClassName, segmentedOptionClassName } from "@/components/ui/segmented";
@@ -24,11 +23,9 @@ import { cn } from "@/lib/utils";
 import { Row, Section } from "./HostDetailDialog";
 
 /*
-  主机详情里「出口检测」一节：这台机器出去以后到百度 / Google / GitHub / OpenAI 连不连得上
-  （站点连通四格，Agent 2.2.237 起每 2 分钟一轮），解锁了什么（流媒体 / AI，Agent 2.2.226 起）。
-  画法和订阅页节点菜单里的「出口检测」同一副（ExitHostPanel），数据也是同一个口径（hosts.exitQuality）。
+  主机详情里「流媒体 / AI 解锁」一节（Agent 2.2.226 起）：一行一个服务，右边「可用 · SG」。
 
-  解锁结果是 Agent 从这台机器的出口去打开各服务的页面、按页面标记猜出来的（agent/unlock_check.go），
+  结果是 Agent 从这台机器的出口去打开各服务的页面、按页面标记猜出来的（agent/unlock_check.go），
   每一项只有四种结论，绿 / 黄 / 红 / 灰；拿不准的就是灰的「无法判断」，不硬说可用。
   默认不定期跑：每一次都要请求十来个第三方站点。管理员点「检测解锁」才跑，或者开计划检测。
   普通用户能看到自己能用的主机的结果，看不到按钮和计划设置。
@@ -61,20 +58,28 @@ function fullTime(checkedAt: number) {
   return checkedAt ? new Date(checkedAt * 1000).toLocaleString("zh-CN", { hour12: false }) : "—";
 }
 
-/** 历史弹窗里一次检测的各项：名字 + 徽标 + 地区，说明另起一行（窄屏上不挤）。 */
-function UnlockResultList({ results }: { results: UnlockServiceResult[] }) {
+const STATUS_TEXT_TONE: Record<UnlockStatus, string> = {
+  ok: "text-[var(--fx-healthy-text)]",
+  partial: "text-[var(--fx-warn-text)]",
+  blocked: "text-[var(--fx-down-text)]",
+  unknown: "text-muted-foreground",
+};
+
+/** 一行一个服务：名字在左，「可用 · SG」在右（和订阅页出口检测、Stash 的第三方服务一个念法）；说明放悬停。 */
+function UnlockResultList({ results, detailed = false }: { results: UnlockServiceResult[]; detailed?: boolean }) {
   const byId = new Map(results.map((item) => [item.service, item]));
   const rows = UNLOCK_SERVICES.map((def) => byId.get(def.id)).filter((item): item is UnlockServiceResult => !!item);
   return (
-    <ul className="flex min-w-0 flex-col divide-y divide-[var(--fx-stroke-weak)]" aria-label="各服务的检测结果">
+    <ul className="flex min-w-0 flex-col divide-y divide-[var(--fx-stroke-weak)]" aria-label="各服务的检测结果" data-testid="unlock-results">
       {rows.map((item) => (
-        <li key={item.service} className="flex min-w-0 flex-col gap-0.5 py-1.5 first:pt-0 last:pb-0">
-          <div className="flex min-w-0 items-center gap-2">
-            <span className="min-w-0 flex-1 truncate text-secondary-type font-medium text-foreground">{unlockServiceDef(item.service)?.name || item.service}</span>
-            {item.region ? <span className="shrink-0 font-mono text-meta tabular-nums text-muted-foreground">{item.region}</span> : null}
-            <UnlockStatusBadge status={item.status} />
+        <li key={item.service} className="flex min-w-0 flex-col gap-0.5 py-1.5 first:pt-0 last:pb-0" title={detailed ? undefined : item.detail || undefined}>
+          <div className="flex min-w-0 items-center justify-between gap-3">
+            <span className="min-w-0 truncate text-secondary-type text-foreground">{unlockServiceDef(item.service)?.name || item.service}</span>
+            <span className={cn("shrink-0 text-secondary-type tabular-nums", STATUS_TEXT_TONE[item.status])} data-status={item.status}>
+              {UNLOCK_STATUS_LABELS[item.status]}{item.region ? ` · ${item.region}` : ""}
+            </span>
           </div>
-          {item.detail ? <p className="min-w-0 break-words text-meta text-muted-foreground">{item.detail}</p> : null}
+          {detailed && item.detail ? <p className="min-w-0 break-words text-meta text-muted-foreground">{item.detail}</p> : null}
         </li>
       ))}
     </ul>
@@ -115,7 +120,7 @@ function HistoryDialog({ hostId, open, onOpenChange }: { hostId: number; open: b
                     </span>
                     <span className="min-w-0 max-w-full truncate text-meta text-muted-foreground">{unlockChipText(run.results) || `${run.results.length} 项`}</span>
                   </button>
-                  {isOpen ? <div className="mt-2 border-t border-[var(--fx-stroke-weak)] pt-2"><UnlockResultList results={run.results} /></div> : null}
+                  {isOpen ? <div className="mt-2 border-t border-[var(--fx-stroke-weak)] pt-2"><UnlockResultList results={run.results} detailed /></div> : null}
                 </li>
               );
             })}
@@ -146,10 +151,6 @@ function HostUnlockBody({ hostId }: { hostId: number }) {
     },
   );
   const pendingCount = status.data?.pending.length ?? 0;
-  const quality = trpc.hosts.exitQuality.useQuery(
-    { hostId },
-    { enabled: hostId > 0, staleTime: 10_000, refetchOnWindowFocus: false, refetchInterval: pendingCount > 0 ? 3_000 : 60_000 },
-  );
   const start = trpc.hosts.startUnlockCheck.useMutation({
     onSuccess: () => void utils.hosts.unlockStatus.invalidate({ hostId }),
     onError: (error) => toast.error(error.message),
@@ -165,16 +166,14 @@ function HostUnlockBody({ hostId }: { hostId: number }) {
   // 检测跑完那一刻刷新一下主机列表和出口面板，卡片上的摘要跟着变。
   const lastPending = useRef(0);
   useEffect(() => {
-    if (lastPending.current > 0 && pendingCount === 0) {
-      void utils.hosts.listPage.invalidate();
-      void utils.hosts.exitQuality.invalidate({ hostId });
-    }
+    if (lastPending.current > 0 && pendingCount === 0) void utils.hosts.listPage.invalidate();
     lastPending.current = pendingCount;
-  }, [pendingCount, utils, hostId]);
+  }, [pendingCount, utils]);
 
   const data = status.data;
-  const pending = data?.pending[0] || null;
-  const latest = data?.latest[0] || null;
+  const pending = data?.pending.find((item) => item.family === family) || data?.pending[0] || null;
+  // 看选中的那个 family；它没测过就看最新的那份。
+  const latest = data?.latest.find((item) => item.family === family) || data?.latest[0] || null;
   const checkButton = data?.canManage ? (
     <Button
       size="sm"
@@ -189,16 +188,12 @@ function HostUnlockBody({ hostId }: { hostId: number }) {
   ) : null;
 
   return (
-    <Section title="出口检测" action={checkButton}>
+    <Section title="流媒体 / AI 解锁" action={checkButton}>
       {data && !data.supported ? (
         <Row label="解锁检测" value={<span className="text-[var(--fx-warn-text)]">需要升级 Agent（{data.minAgentVersion} 起）</span>} />
       ) : null}
 
-      {quality.data ? (
-        <ExitHostPanel host={quality.data.host} targets={quality.data.targets} />
-      ) : (
-        <p className="text-meta text-muted-foreground">{quality.isLoading ? "读取中…" : "读取失败"}</p>
-      )}
+      {latest ? <UnlockResultList results={latest.results} /> : null}
 
       <Row
         label="最近检测"
@@ -254,7 +249,7 @@ function HostUnlockBody({ hostId }: { hostId: number }) {
 
       <div className="flex items-center justify-between gap-2">
         <p data-fx-help="" className="text-meta text-muted-foreground">
-          站点连通每 2 分钟一轮，只握手不发请求；解锁按各服务页面上的标记推断，服务改版后可能不准。
+          结果按各服务页面上的标记推断，服务改版后可能不准；检测会从这台主机向这些服务发起请求。
         </p>
         <button type="button" className="ml-auto shrink-0 text-meta font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline" disabled={!data || data.latest.length === 0} onClick={() => setHistoryOpen(true)}>
           历史
