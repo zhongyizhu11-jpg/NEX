@@ -2251,7 +2251,8 @@ function TunnelsContent() {
   const [phoneSearchOpen, setPhoneSearchOpen] = useState(false);
   const [activeSection, setActiveSection] = useUrlTab<TunnelSection>({
     values: TUNNEL_SECTIONS,
-    defaultValue: "tunnels",
+    // 第一个页签是「线路」工作台（所有线路一个入口），进来就是它。
+    defaultValue: "lines",
     storageKey: TUNNEL_SECTION_STORAGE_KEY,
     // 每次进来（刷新、从别的页面点过来）都从第一个分类开始，不记上次看的是哪一类。
     remember: false,
@@ -4735,11 +4736,17 @@ function TunnelsContent() {
         </TabsContent>
 
         <TabsContent value="pools" className="space-y-4">
-          <PoolFilterChips active={activeSection} onChange={(next) => setActiveSection(next)} />
           <SectionTransition transitionKey={activeSectionTransitionKey}>
             <NodePoolsSection
               hosts={((hostsOptionsQuery.data || []) as any[]).map((host) => ({ id: Number(host.id), name: String(host.name || ""), isOnline: !!host.isOnline }))}
-              groups={(forwardGroups || []).map((group: any) => ({ id: Number(group.id), name: String(group.name || ""), groupMode: String(group.groupMode || "failover"), members: group.members || [] }))}
+              onOpenGroup={(mode, groupId) => {
+                setActiveSection(mode === "failover" ? "groups" : mode === "entry" ? "entries" : "exits");
+                setGroupEditRequest({ id: groupId, requestKey: Date.now() });
+              }}
+              onCreateGroup={(mode) => {
+                setPendingGroupCreate({ mode });
+                setActiveSection(mode === "failover" ? "groups" : mode === "entry" ? "entries" : "exits");
+              }}
             />
           </SectionTransition>
         </TabsContent>

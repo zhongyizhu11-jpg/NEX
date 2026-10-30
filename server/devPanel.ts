@@ -1537,6 +1537,174 @@ async function seedRouteGroupDemo(ruleId: number, hostIds: number[]) {
   recordRouteHopProbe({ parentRuleId: ruleId, pathKey: "backup-sg", hopIndex: 1, hostId: hostIds[3], hostName: hostName(3), nextLabel: "落地", ok: true, latencyMs: 18 });
 }
 
+/**
+ * 线路演示（2.3.496 效果图那一套）：广港hkt（主线路走隧道 华南-香港 到 Jinx，备 1 经 jinx(39.9y)，
+ * 备 2 经 HK2 —— HK2 在维护），Sg（主线路经 HK2，所以在走备 1，聚合），日本（一层选香港中转池，复制双发）；
+ * 节点池、DNS 入口组（一条记录丢包被摘）、解锁出口组。数字（延迟、成功率、入站）照效果图假装 Agent 报过。
+ */
+async function seedLineDemo(adminId: number) {
+  const { expandRouteLines, serializeRouteLines } = await import("../shared/routeLines");
+  const now = nowDate();
+  const host = (name: string, ip: string, country: string, patch: Record<string, unknown> = {}) => insertAndGetId("hosts", {
+    userId: adminId, name, hostType: "slave", ip, ipv4: ip, osInfo: "Debian 12", cpuInfo: "AMD EPYC", memoryTotal: 2 * 1024 ** 3,
+    agentVersion: AGENT_VERSION, isOnline: true, lastHeartbeat: now, portRangeStart: 20000, portRangeEnd: 29999,
+    geoCountryCode: country, geoCountryName: country, trafficMeasureMode: "both", sortOrder: 50,
+    createdAt: now, updatedAt: now, ...patch,
+  });
+  const po0 = await host("Po0(200M)", "198.18.0.10", "CN");
+  const jinx = await host("Jinx", "198.18.0.20", "HK");
+  const jinx399 = await host("jinx(39.9y)", "198.18.0.21", "HK");
+  const hk2 = await host("HK2", "198.18.0.22", "HK", { maintenanceMode: true, maintenanceSince: minutesAgo(118), maintenanceNote: "换线" });
+  const sgLanding = await host("SG 落地", "198.18.0.30", "SG");
+  const tokyo = await host("东京落地", "198.18.0.40", "JP");
+  const bgp = [
+    await host("BGP-1", "203.0.113.10", "HK"),
+    await host("BGP-2", "203.0.113.11", "HK"),
+    await host("BGP-3", "203.0.113.12", "HK"),
+  ];
+  const sgNative = await host("SG 原生", "198.18.0.50", "SG");
+  const jpExit = await host("JP 出口", "198.18.0.51", "JP");
+  const names = new Map<number, string>([[po0, "Po0(200M)"], [jinx, "Jinx"], [jinx399, "jinx(39.9y)"], [hk2, "HK2"]]);
+
+  const tunnelId = await insertAndGetId("tunnels", {
+    userId: adminId, name: "华南-香港", entryHostId: po0, exitHostId: jinx, mode: "forwardx", relayMode: "hot_standby",
+    secret: "dev-line-secret", listenPort: 27001, rateLimitMbps: 0, portRangeStart: 27000, portRangeEnd: 27999,
+    networkType: "public", isEnabled: true, isRunning: true, lastLatencyMs: 1, lastTestStatus: "success", lastTestAt: now, sortOrder: 9,
+    createdAt: now, updatedAt: now,
+  });
+  const poolId = await insertAndGetId("node_pools", { userId: adminId, name: "香港中转池", role: "relay", hostIdsJson: JSON.stringify([jinx, jinx399, hk2]), sortOrder: 0, createdAt: now, updatedAt: now });
+
+  const bgpGroupId = await insertAndGetId("forward_groups", {
+    userId: adminId, name: "BGP 入口", groupType: "host", groupMode: "entry", forwardType: "iptables", domain: "bgp.example.com", recordType: "A",
+    sourcePort: 10010, protocol: "both", targetIp: "198.18.0.40", targetPort: 443, lastDdnsValue: "203.0.113.10,203.0.113.12",
+    lastStatus: "healthy", lastMessage: "203.0.113.11 丢包，已摘除", isEnabled: true, sortOrder: 9, createdAt: now, updatedAt: now,
+  });
+  for (const [index, hostId] of bgp.entries()) {
+    await insertAndGetId("forward_group_members", {
+      groupId: bgpGroupId, memberType: "host", hostId, priority: index + 1, isEnabled: true,
+      healthStatus: index === 1 ? "failed" : "healthy", lastLatencyMs: index === 1 ? null : 12 + index,
+      chinaHealthStatus: index === 1 ? "failed" : "healthy", failureSince: index === 1 ? minutesAgo(14) : null,
+      healthySince: index === 1 ? null : minutesAgo(90), lastCheckedAt: now, createdAt: now, updatedAt: now,
+    });
+  }
+  const exitGroupId = await insertAndGetId("forward_groups", {
+    userId: adminId, name: "解锁出口", groupType: "host", groupMode: "exit", exitStrategy: "least_load", forwardType: "nginx_stream",
+    sourcePort: 24480, protocol: "both", targetIp: "198.18.0.50", targetPort: 443, lastStatus: "healthy", isEnabled: true, sortOrder: 9,
+    createdAt: now, updatedAt: now,
+  });
+  for (const [index, hostId] of [sgNative, jpExit].entries()) {
+    await insertAndGetId("forward_group_members", {
+      groupId: exitGroupId, memberType: "host", hostId, priority: index + 1, isEnabled: true, healthStatus: "healthy",
+      lastLatencyMs: 30 + index * 20, chinaHealthStatus: "healthy", healthySince: minutesAgo(60), lastCheckedAt: now, createdAt: now, updatedAt: now,
+    });
+  }
+  const { recordUnlockRun } = await import("./ops/unlock");
+  const at = Math.floor(Date.now() / 1000) - 3600;
+  await recordUnlockRun({ hostId: sgNative, family: "auto", runId: "ul-line-sg", trigger: "manual", requestedBy: null, checkedAt: at, results: [
+    { service: "netflix", status: "ok", region: "SG", detail: "全解锁", ms: 400 },
+    { service: "chatgpt", status: "ok", region: "SG", detail: "可用", ms: 300 },
+  ] });
+  await recordUnlockRun({ hostId: jpExit, family: "auto", runId: "ul-line-jp", trigger: "manual", requestedBy: null, checkedAt: at, results: [
+    { service: "netflix", status: "ok", region: "JP", detail: "全解锁", ms: 420 },
+    { service: "chatgpt", status: "blocked", region: "JP", detail: "不支持", ms: 300 },
+  ] });
+  await executeRaw(`INSERT INTO ${quoteDbIdentifier("host_network_profiles")} (${["hostId", "resultJson", "checkedAt", "createdAt", "updatedAt"].map(quoteDbIdentifier).join(", ")}) VALUES (?, ?, ?, ?, ?)`, [sgNative, JSON.stringify({ ipType: "native" }), now, now, now]).catch(() => undefined);
+  await setSettings({ ddnsEnabled: "true", ddnsProvider: "cloudflare" } as any);
+
+  const tunnels = new Map([[tunnelId, { id: tunnelId, entryHostId: po0, exitHostId: jinx, name: "华南-香港", usable: true }]]);
+  const expand = (lines: any[]) => expandRouteLines(lines, {
+    entryHostId: po0,
+    poolMembers: (id) => (id === poolId ? [jinx, jinx399, hk2] : null),
+    hostUsable: (id) => id !== hk2 || true,
+    tunnel: (id) => tunnels.get(id) || null,
+  }).paths;
+  const layer = (patch: Record<string, unknown>) => ({ kind: "hosts", hostIds: [], poolId: null, tunnelIds: [], pick: "best", skippable: false, ...patch });
+  const line = (key: string, name: string, layers: any[], dests: any[] = []) => ({ key, name, paused: false, layers, dests, weight: 50 });
+  const rule = async (name: string, sourcePort: number, targetIp: string, targetPort: number, mode: string, delivery: string, lines: any[], sortOrder: number) => {
+    const paths = expand(lines);
+    return insertAndGetId("forward_rules", {
+      userId: adminId, hostId: po0, name, forwardType: "gost", protocol: "tcp", sourcePort, targetIp, targetPort, sortOrder, isRunning: true, isEnabled: true,
+      failoverEnabled: true, routeMode: mode, routeSwitchMode: delivery === "hot" ? "fast" : "smooth", routeFailureThreshold: delivery === "hot" ? 2 : 3,
+      routeScoreMargin: 10, routeScoreHoldSeconds: 120, routePrewarmSeconds: 0, failoverSeconds: 5, recoverSeconds: 180, failoverTargets: "[]",
+      routeDelivery: delivery, routeLines: serializeRouteLines(lines as any), routePaths: JSON.stringify(paths),
+      tunnelId: null, tunnelExitPort: null, forwardGroupId: null, forwardGroupRuleId: null, forwardGroupMemberId: null, isForwardGroupTemplate: false,
+      createdAt: now, updatedAt: now,
+    });
+  };
+  const hkt = await rule("广港hkt", 26300, "hkboil.ddos.top", 24895, "smart", "hot", [
+    line("main", "主线路", [layer({ kind: "tunnel", tunnelIds: [tunnelId] })]),
+    line("bk1", "备用线路", [layer({ hostIds: [jinx399] })]),
+    line("bk2", "备用 2", [layer({ hostIds: [hk2] })]),
+  ], 20);
+  const sg = await rule("Sg", 26310, "198.18.0.30", 443, "failover", "aggregate", [
+    line("main", "主线路", [layer({ hostIds: [hk2] })], [{ dest: { ip: "198.18.0.30", port: 443 }, destNodeId: null }]),
+    line("bk1", "备用线路", [layer({ hostIds: [jinx399] })], [{ dest: { ip: "198.18.0.30", port: 443 }, destNodeId: null }]),
+  ], 21);
+  const jp = await rule("日本", 26320, "198.18.0.40", 443, "smart", "replicate", [
+    line("main", "主线路", [layer({ kind: "pool", poolId })]),
+    line("bk1", "直连兜底", []),
+  ], 22);
+  void sgLanding; void tokyo;
+
+  // 中继规则落到中转机上，路径的拨号地址写回来。
+  for (const ruleId of [hkt, sg, jp]) {
+    await syncRouteRelayRulesForRule(ruleId, { deferRefresh: true, reason: "dev-seed" }).catch((error) => console.warn(`[DevPanel] line demo relays rule=${ruleId}: ${error instanceof Error ? error.message : String(error)}`));
+    await executeRaw(`UPDATE ${quoteDbIdentifier("forward_rules")} SET ${quoteDbIdentifier("isRunning")} = ? WHERE ${quoteDbIdentifier("routeParentRuleId")} = ?`, [true, ruleId]);
+  }
+  const readPaths = async (ruleId: number) => {
+    const rows = await (await import("./dbRuntime")).queryRaw<any>(`SELECT ${quoteDbIdentifier("routePaths")} FROM ${quoteDbIdentifier("forward_rules")} WHERE ${quoteDbIdentifier("id")} = ?`, [ruleId]);
+    return JSON.parse(String(rows[0]?.routePaths || "[]")) as any[];
+  };
+  const nowMs = Date.now();
+  const minutes = (value: number) => Math.floor((nowMs - value * 60_000) / 1000);
+  const dial = (path: any) => (path?.dial ? `${path.dial.ip}:${path.dial.port}` : "");
+
+  // 广港hkt：在走主线路（隧道），备 1 待命，备 2（HK2 维护）不通 ×3。
+  const hktPaths = await readPaths(hkt);
+  recordRouteAgentStats({ hostId: po0, isAllowed: () => true, reports: [{
+    ruleId: hkt, sourcePort: 26300, strategy: "fallback", activeIndex: 0, activeSince: nowMs - 25 * 60_000, prewarmIndex: -1,
+    inboundOk: 998, inboundFailed: 2,
+    targets: [
+      { index: 0, target: dial(hktPaths[0]), healthy: true, score: 96, latencyMs: 0.8, lossPct: 0, jitterMs: 0.2, availabilityPct: 100, consecutiveFailures: 0, connections: 41, samples: 120, lastProbeAt: nowMs - 2000, dialOk: 996, dialFailed: 4, dialSlow: 0, dialMs: 1 },
+      { index: 1, target: dial(hktPaths[1]), healthy: true, score: 93, latencyMs: 1.0, lossPct: 0, jitterMs: 0.3, availabilityPct: 100, consecutiveFailures: 0, connections: 0, samples: 120, lastProbeAt: nowMs - 2000 },
+      { index: 2, target: dial(hktPaths[2]), healthy: false, down: true, downReason: "maintenance: HK2", score: 0, latencyMs: -1, lossPct: 100, jitterMs: 0, availabilityPct: 0, consecutiveFailures: 3, connections: 0, samples: 120, lastProbeAt: nowMs - 2000 },
+    ],
+  }] });
+  for (const ok of [true, true, false, true, true, false, true]) {
+    recordRouteHopProbe({ parentRuleId: hkt, pathKey: hktPaths[0]?.key, hopIndex: 0, hostId: jinx, hostName: "Jinx", nextLabel: "落地", ok, latencyMs: ok ? 1.5 : null });
+  }
+  for (let i = 0; i < 5; i += 1) recordRouteHopProbe({ parentRuleId: hkt, pathKey: hktPaths[1]?.key, hopIndex: 0, hostId: jinx399, hostName: "jinx(39.9y)", nextLabel: "落地", ok: true, latencyMs: 2.0 });
+  await insertForwardRuleRouteEvent({ ruleId: hkt, kind: "switch", fromKey: hktPaths[1]?.key, toKey: hktPaths[0]?.key, fromLabel: "备用线路", toLabel: "主线路", reason: "score", score: 96, latencyMs: 2, atSeconds: minutes(241) });
+  await insertForwardRuleRouteEvent({ ruleId: hkt, kind: "switch", fromKey: hktPaths[0]?.key, toKey: hktPaths[1]?.key, fromLabel: "主线路", toLabel: "备用线路", reason: "relay down: Jinx 落地拨号成功率 71%，建连超时", atSeconds: minutes(30) });
+  await insertForwardRuleRouteEvent({ ruleId: hkt, kind: "switch", fromKey: hktPaths[1]?.key, toKey: hktPaths[0]?.key, fromLabel: "备用线路", toLabel: "主线路", reason: "failback", atSeconds: minutes(25) });
+  for (let i = 24; i >= 1; i -= 1) {
+    await insertAndGetId("traffic_stats", { ruleId: hkt, hostId: po0, bytesIn: Math.round(1.1 * 1024 ** 3), bytesOut: Math.round(1.76 * 1024 ** 3), connections: 300, recordedAt: minutesAgo(i * 60 - 30) });
+  }
+
+  // Sg：主线路经 HK2（维护），在走备 1。
+  const sgPaths = await readPaths(sg);
+  recordRouteAgentStats({ hostId: po0, isAllowed: () => true, reports: [{
+    ruleId: sg, sourcePort: 26310, strategy: "least_load", activeIndex: 1, activeSince: nowMs - 118 * 60_000, prewarmIndex: -1, inboundOk: 410, inboundFailed: 1,
+    targets: [
+      { index: 0, target: dial(sgPaths[0]), healthy: false, down: true, downReason: "maintenance: HK2", score: 0, latencyMs: -1, lossPct: 100, jitterMs: 0, availabilityPct: 0, consecutiveFailures: 5, connections: 0, samples: 120, lastProbeAt: nowMs - 2000 },
+      { index: 1, target: dial(sgPaths[1]), healthy: true, score: 88, latencyMs: 31, lossPct: 0, jitterMs: 2, availabilityPct: 100, consecutiveFailures: 0, connections: 12, samples: 120, lastProbeAt: nowMs - 2000, dialOk: 405, dialFailed: 2 },
+    ],
+  }] });
+  for (let i = 0; i < 5; i += 1) recordRouteHopProbe({ parentRuleId: sg, pathKey: sgPaths[1]?.key, hopIndex: 0, hostId: jinx399, hostName: "jinx(39.9y)", nextLabel: "落地", ok: true, latencyMs: 7 });
+  await insertForwardRuleRouteEvent({ ruleId: sg, kind: "switch", fromKey: sgPaths[0]?.key, toKey: sgPaths[1]?.key, fromLabel: "主线路", toLabel: "备用线路", reason: "maintenance: HK2", atSeconds: minutes(118) });
+
+  // 日本：池里挑整链最快的。
+  const jpPaths = await readPaths(jp);
+  recordRouteAgentStats({ hostId: po0, isAllowed: () => true, reports: [{
+    ruleId: jp, sourcePort: 26320, strategy: "fallback", activeIndex: 0, activeSince: nowMs - 6 * 3600_000, prewarmIndex: -1, inboundOk: 220, inboundFailed: 0,
+    targets: jpPaths.map((path, index) => ({ index, target: dial(path), healthy: !path.hops.includes(hk2), ...(path.hops.includes(hk2) ? { down: true, downReason: "maintenance: HK2" } : {}), score: 90 - index * 3, latencyMs: path.hops.includes(hk2) ? -1 : 12 + index * 6, lossPct: 0, jitterMs: 1, availabilityPct: 100, consecutiveFailures: path.hops.includes(hk2) ? 4 : 0, connections: index === 0 ? 9 : 0, samples: 120, lastProbeAt: nowMs - 2000, ...(index === 0 ? { dialOk: 218, dialFailed: 0 } : {}) })),
+  }] });
+  jpPaths.forEach((path) => {
+    const hop = path.hops[0];
+    if (hop && hop !== hk2) for (let i = 0; i < 5; i += 1) recordRouteHopProbe({ parentRuleId: jp, pathKey: path.key, hopIndex: 0, hostId: hop, hostName: names.get(hop) || "中转", nextLabel: "落地", ok: true, latencyMs: 40 });
+  });
+}
+
 async function seedRules(hostIds: number[], resources: DevResources, usersSeed: DevUsers): Promise<DevRules> {
   const rules = [
     { userId: usersSeed.adminId, hostId: hostIds[0], name: "Website TCP forward", forwardType: "iptables", protocol: "tcp", sourcePort: 15201, targetIp: "2a0e:97c0:3f4:1::41d", targetPort: 5201, sortOrder: 0, isRunning: true,
@@ -2477,7 +2645,8 @@ async function seedSettings() {
   });
 }
 
-export async function seedDevPanelData() {
+/** lineDemo：线路工作台那套演示（Po0 / Jinx / HK2 …）；只看原来那几台机器的测试传 false。 */
+export async function seedDevPanelData(options: { lineDemo?: boolean } = {}) {
   if (!isDevPanelMode()) return;
   const db = await getDb();
   if (!db) return;
@@ -2493,6 +2662,9 @@ export async function seedDevPanelData() {
   await seedUnlockChecks(hostIds);
   const resources = await seedTunnelsAndGroups(adminId, hostIds);
   const rules = await seedRules(hostIds, resources, usersSeed);
+  if (options.lineDemo !== false) {
+    await seedLineDemo(adminId).catch((error) => console.warn(`[DevPanel] line demo seed failed: ${error instanceof Error ? error.stack || error.message : String(error)}`));
+  }
   await seedProbeServices(adminId, hostIds);
   await seedNetworkProfiles(hostIds);
   const catalog = await seedCatalog(adminId, resources, hostIds);

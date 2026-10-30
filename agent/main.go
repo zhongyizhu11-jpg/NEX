@@ -12928,6 +12928,8 @@ type failoverProxy struct {
 	// 同一时刻只跑一轮，其余连接等它的结果（见 checkHealthShared）。
 	healthFlightMu sync.Mutex
 	healthFlight   chan struct{}
+	// 客户端连进来以后有没有拨通一条路径（最近 10 分钟，按分钟一格）：线路详情「入站」那一段。
+	inbound routeInboundWindow
 }
 
 func failoverID(ruleID int, sourcePort int) string {
@@ -14036,6 +14038,7 @@ func (p *failoverProxy) handleConn(client net.Conn) {
 		target, index = p.pickTargetForKey(visitor, attempted)
 		if index < 0 {
 			logf("failover no target available rule=%d source=%d", p.ruleID, p.sourcePort)
+			p.inbound.record(false, time.Now())
 			return
 		}
 		// 拨失败的路径在里面记失败、加进 attempted；允许竞速的策略可能实际连上的是另一条。
@@ -14063,13 +14066,16 @@ func (p *failoverProxy) handleConn(client net.Conn) {
 			}
 		} else {
 			logf("failover dial failed rule=%d no target available after trying %d targets: %v", p.ruleID, len(attempted), err)
+			p.inbound.record(false, time.Now())
 			return
 		}
 		if err != nil {
 			logf("failover dial failed rule=%d target=%s:%d: %v", p.ruleID, target.TargetIP, target.TargetPort, err)
+			p.inbound.record(false, time.Now())
 			return
 		}
 	}
+	p.inbound.record(true, time.Now())
 	defer upstream.Close()
 	// 读 PROXY 头时多读到的字节（以及透传模式下的头本身）要先补给路径，再接着原样拷。
 	if len(prefix) > 0 {

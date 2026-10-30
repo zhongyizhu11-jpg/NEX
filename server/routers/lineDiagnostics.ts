@@ -263,6 +263,12 @@ export const lineDiagnosticsRouter = router({
       return lineWorkspace(ctx.user, input?.hours ?? 24);
     }),
 
+  /** 节点池那一页：节点池 + 入口组（DNS 记录逐条的状态）+ 出口组（每台的解锁结论），合成一种卡片。 */
+  poolBoard: protectedProcedure.query(async ({ ctx }) => {
+    const { poolBoard } = await import("../routeLineViews");
+    return poolBoard(ctx.user);
+  }),
+
   /** 节点池：列表 / 建 / 改 / 删 / 从入口组、出口组导入。池改了，用到它的线路自动重新展开。 */
   nodePools: protectedProcedure.query(async ({ ctx }) => {
     const { listNodePools, ruleIdsUsingPool } = await import("../nodePools");

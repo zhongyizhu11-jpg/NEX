@@ -37,7 +37,7 @@ export async function expandRouteGroupInputLines<T extends { routeGroup?: any }>
   const lines = parseRouteLines(group.lines);
   if (lines.length === 0) throw new Error("线路组至少要有一条线路");
   const entryHostId = await schedulerHostOf(hostId, tunnelId);
-  const tunnelInLines = lines.some((line) => line.layers.some((layer) => layer.kind === "tunnel"));
+  const tunnelInLines = lines.some((line) => line.layers.some((layer) => layer.tunnelIds.length > 0));
   if (tunnelInLines && tunnelId) throw new Error("隧道规则的线路在隧道出口之后选路，不能再在线路里放隧道段：把规则改成端口转发、把隧道放进线路里");
   // 端口转发资源（转发组模板）在每台成员机上各跑一份，入口不是同一台，隧道段的「入口必须是上一个节点」对不上。
   if (tunnelInLines && options.groupTemplate) throw new Error("端口转发资源的线路在每台成员机上各跑一份，入口不是同一台机器，不能放隧道段：用中转机或节点池");
@@ -140,7 +140,7 @@ export async function reexpandRouteLinesForRules(ruleIds: readonly number[], rea
  * 不满足就拒绝保存并说清楚，不假装生效。
  */
 async function assertReplicateReady(main: RouteLine | undefined) {
-  const tunnelIds = main ? main.layers.filter((layer) => layer.kind === "tunnel").flatMap((layer) => layer.tunnelIds) : [];
+  const tunnelIds = main ? main.layers.flatMap((layer) => layer.tunnelIds) : [];
   if (tunnelIds.length === 0) throw new Error("「复制」要主线路走 NEX 隧道：在主线路里加一段 NEX 隧道（单连接叠加），再选复制");
   for (const tunnelId of tunnelIds) {
     const tunnel = await getTunnelById(tunnelId).catch(() => null) as any;

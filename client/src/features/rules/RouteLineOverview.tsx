@@ -1,44 +1,172 @@
 import { useMemo, useState } from "react";
-import { Download, Gauge, Pause, Play } from "lucide-react";
+import { Download, Gauge } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import {
+  LineBadge,
+  LineBig,
+  LineCard,
+  LineChipButton,
+  LineDot,
+  LineIconButton,
+  LinePath,
+  LinePauseGlyph,
+  LinePill,
+  LinePlayGlyph,
+  LineRow,
+  LineSec,
+  formatLineMs,
+  type LineTone,
+} from "@/features/lines/LineUi";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { formatFailoverEndpoint } from "@shared/failoverTargets";
-import { ROUTE_DELIVERY_INFO, describeRouteIssue, normalizeRouteDelivery } from "@shared/routeGroup";
-import type { RouteStatus, RouteStatusPath } from "./RouteGroupSheet";
+import { describeRouteIssue, normalizeRouteDelivery, normalizeRouteEventKind, type RouteMode } from "@shared/routeGroup";
+import type { RouteEvent, RouteStatus, RouteStatusHop, RouteStatusPath } from "./RouteGroupSheet";
 
 /*
-  线路面板的上半截（2.3.496，照 ZeroForwarder 的「最优延迟 + 自动切换」那一屏）：
+  线路详情（2.3.496，照效果图 ①「规则卡点开：线路组运行中」）：
 
-    大数字    整条链此刻多少毫秒、坏了多久能切走
-    分层图    入口 → 中转 / 隧道 → 落地，一列一层，在走的那条加粗，别的虚线，段上写毫秒
-    线路      主 / 备 N 一行一条：使用中 / 待命 / 故障（划掉），右边暂停
-    按段      入口拨第一跳的真实成功率，后面每段是中转探下一跳的成功率；坏的那段标红写原因
-    工具      导出（JSON，交给技术支持或 AI）、逐段测带宽（相邻两台自己的机器之间 iperf3）
+    大数字    整条链此刻多少毫秒 + 坏了几秒内切走
+    分层图    入口 → 隧道 / 中转 → 落地 → 目标，一列一层，在走的那条实线加粗、别的虚线，段上写毫秒；
+              下面一行写这条是几点开始走的、整条链多少、为什么是它
+    线路      主 / 备 N 一行一条：使用中 / 待命 / 不通 ×N（划掉），右边暂停
+    连接      客户端 → 入口 → … → 落地，每段最近 10 分钟的成功率，坏的那段标红写原因；
+              下面三个按钮：最近切换、暂停这条、异常明细（展开原来那份详细面板）
 
-  数据都来自 rules.routeStatus（server/routeStatusView.ts），这里只画。
+  数据都来自 rules.routeStatus / rules.routeEvents，这里只画。
 */
 
-type Path = Omit<RouteStatusPath, "hops"> & {
-  tier?: number | null;
-  lineKey?: string | null;
-  paused?: boolean;
-  downstreamMs?: number;
-  dials?: { ok: number; failed: number; slow: number; dialMs: number; lastAt: number } | null;
-  hops: Array<RouteStatusPath["hops"][number] & { viaTunnel?: { id: number; name: string } | null; successPct?: number | null; maintenance?: boolean; offline?: boolean | null; tripped?: boolean }>;
-};
+type Hop = RouteStatusHop;
+type Path = RouteStatusPath;
 
 const round = (value: number) => Math.round(value * 10) / 10;
 
+/** 整条链：入口这一段（入口 Agent 探的）+ 后面各段（各中转探的）。没探到 = null。 */
 export function chainLatency(path: Path | null | undefined): number | null {
   if (!path || path.latencyMs === null || path.latencyMs === undefined) return null;
   return round(Number(path.latencyMs) + Number(path.downstreamMs || 0));
 }
 
+/** 线路卡、副标题、工作台 chip 上那几个字。 */
+export const ROUTE_LINE_MODE_LABEL: Record<RouteMode, string> = {
+  failover: "主备顺序",
+  smart: "整链最优",
+  weighted: "按权重",
+  scheduled: "按时段",
+  hybrid: "按时段 · 择优",
+  manual: "人工指定",
+};
+
+/** 坏了几秒内切走：异常持续够久才切，最少按 5 秒说（探测本身也要一轮）。 */
+export function routeSwitchSeconds(policy: { failoverSeconds?: number | null } | null | undefined) {
+  return Math.max(5, Math.round(Number(policy?.failoverSeconds || 0)));
+}
+
+/** 「线路」那一行右边：这条规则按什么切。 */
+export function routeLineSwitchSummary(status: RouteStatus) {
+  if (normalizeRouteDelivery(status.delivery) === "aggregate") return "主线路那组一起分担";
+  const back = status.policy.autoFailback === false ? "不自动切回" : "恢复后切回";
+  switch (status.policy.mode) {
+    case "weighted": return "按权重分 · 坏了先跳过";
+    case "smart": return `挑整链最快的 · ${back}`;
+    case "scheduled":
+    case "hybrid": return "按时段首选 · 坏了往下切";
+    case "manual": return "走指定那条 · 坏了临时切";
+    default: return `按顺序切换 · ${back}`;
+  }
+}
+
+export type RouteLineGroup = {
+  key: string;
+  /** 0 = 主线路，1.. = 备 N */
+  index: number;
+  name: string;
+  paths: Path[];
+  /** 行上画哪一条：在走的那条，没有就第一条。 */
+  shown: Path;
+  active: boolean;
+  paused: boolean;
+  allDown: boolean;
+  reason: string;
+  failures: number;
+};
+
+/** 同一条线路展开的几条路径算一行，按线路顺序（tier）排。 */
+export function routeLineGroups(status: RouteStatus): RouteLineGroup[] {
+  const groups: Array<Omit<RouteLineGroup, "index" | "shown" | "active" | "paused" | "allDown" | "reason" | "failures"> & { tier: number }> = [];
+  for (const path of status.paths) {
+    const key = path.lineKey || path.key;
+    let group = groups.find((item) => item.key === key);
+    if (!group) {
+      group = { key, name: path.name, tier: typeof path.tier === "number" ? path.tier : groups.length, paths: [] };
+      groups.push(group);
+    }
+    group.paths.push(path);
+  }
+  return groups
+    .sort((a, b) => a.tier - b.tier)
+    .map((group, index) => {
+      const activePath = group.paths.find((path) => path.active) || null;
+      const allDown = group.paths.every((path) => path.down);
+      return {
+        key: group.key,
+        index,
+        name: group.name,
+        paths: group.paths,
+        shown: activePath || group.paths[0],
+        active: !!activePath,
+        paused: group.paths.every((path) => !!path.paused),
+        allDown,
+        reason: group.paths.find((path) => path.downReason)?.downReason || "",
+        failures: Math.max(0, ...group.paths.map((path) => Number(path.consecutiveFailures || 0))),
+      };
+    });
+}
+
+export function lineBadgeText(index: number) {
+  return index === 0 ? "主" : `备 ${index}`;
+}
+
+export function lineLongName(index: number) {
+  return index === 0 ? "主线路" : `备 ${index}`;
+}
+
+/** 行上的那条链：Po0 → 隧道 Jinx → 落地。 */
+export function routePathText(status: RouteStatus, path: Path, options: { tunnelPrefix?: boolean } = {}) {
+  const hops = path.hops.map((hop) => (hop.viaTunnel && options.tunnelPrefix !== false ? `隧道 ${hop.name}` : hop.name));
+  return [status.entry?.name || "入口", ...hops, "落地"].join(" → ");
+}
+
 function destLabel(path: Path) {
-  return path.dest?.ip ? formatFailoverEndpoint(path.dest.ip, path.dest.port) : "落地";
+  return path.dest?.ip ? formatFailoverEndpoint(path.dest.ip, path.dest.port) : "规则目标";
+}
+
+/** 副标题：整链最优 · 3 条线路 · 1 条故障已避开。 */
+export function routeLineSubtitle(status: RouteStatus | null, mode: RouteMode) {
+  const parts = [ROUTE_LINE_MODE_LABEL[mode] || ROUTE_LINE_MODE_LABEL.failover];
+  if (!status) return parts.join(" · ");
+  const groups = routeLineGroups(status);
+  parts.push(`${groups.length} 条线路`);
+  const down = groups.filter((group) => group.allDown && !group.paused).length;
+  const anyActive = groups.some((group) => group.active);
+  if (down > 0) parts.push(anyActive ? `${down} 条故障已避开` : `${down} 条故障`);
+  const paused = groups.filter((group) => group.paused).length;
+  if (paused > 0) parts.push(`${paused} 条暂停`);
+  return parts.join(" · ");
+}
+
+function clockText(ms: number, timeZone?: string) {
+  try {
+    return new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false, timeZone }).format(new Date(ms));
+  } catch {
+    return new Date(ms).toTimeString().slice(0, 8);
+  }
+}
+
+function shortClock(ms: number, timeZone?: string) {
+  return clockText(ms, timeZone).slice(0, 5);
 }
 
 /** 线路行右边的徽章只放几个字（节点名截短），完整原因在 title 里。状态里的原因已经是说人话的那句。 */
@@ -52,260 +180,487 @@ function shortIssue(reason: string) {
   return text.length > 8 ? `${text.slice(0, 7)}…` : text;
 }
 
-/** 「线路」那一行右边：这条规则按什么切。 */
-export function routeLineSwitchSummary(status: RouteStatus) {
-  if (normalizeRouteDelivery((status as any).delivery) === "aggregate") return "主线路那组一起分担";
-  switch (status.policy.mode) {
-    case "weighted": return "按权重分";
-    case "smart": return "主线路那组里挑最好的";
-    case "scheduled": return "按时段首选 · 坏了往下切";
-    case "hybrid": return "按时段首选 · 预检过了才切";
-    case "manual": return "走指定那条 · 坏了临时切";
-    default: return "按顺序切换 · 恢复后切回";
-  }
+// ---------------------------------------------------------------- 大数字
+
+export function RouteLineHero({ status }: { status: RouteStatus }) {
+  const active = status.paths.find((path) => path.active) || status.paths[0];
+  const total = chainLatency(active);
+  return (
+    <LineCard
+      className="grid grid-cols-[1fr_auto_1fr] items-end gap-1.5 border-l-[3px] border-l-[var(--fx-accent)] bg-[linear-gradient(135deg,color-mix(in_oklab,var(--fx-accent)_7%,var(--fx-l1-surface)),var(--fx-l1-surface))]"
+      data-testid="route-line-hero"
+    >
+      <div className="min-w-0">
+        {total === null ? <LineBig value={<span className="font-sans text-[22px] font-semibold tracking-normal text-muted-foreground">未测</span>} /> : <LineBig value={formatLineMs(total)} unit="ms" />}
+        <div className="mt-1 text-[11.5px] text-muted-foreground">整链延迟（测到落地）</div>
+      </div>
+      <div aria-hidden className="pb-4 text-[20px] text-[var(--fx-accent)]">+</div>
+      <div className="min-w-0 text-right">
+        <LineBig value={routeSwitchSeconds(status.policy)} unit="s 内" />
+        <div className="mt-1 text-[11.5px] text-muted-foreground">故障自动切走</div>
+      </div>
+    </LineCard>
+  );
 }
 
-const DIAGRAM_LABEL_MAX = 70;
-const DIAGRAM_SUB_MAX = 76;
+// ---------------------------------------------------------------- 分层图
 
-/** SVG 里没法量字，按字估：中文一个字一格，其余半格多一点（9.5px 字号）。 */
-function fitDiagramText(text: string, max: number, size = 9.5) {
-  const charWidth = (ch: string) => (/[\u2E80-\u9FFF\uFF00-\uFFEF]/.test(ch) ? size : size * 0.6);
+type DiagramNode = { key: string; label: string; sub: string; hot: boolean; tone: "ok" | "warn" | "down"; width: number };
+
+const DIAGRAM_WIDTH = 350;
+const ROW_GAP = 74;
+const BOX_HEIGHT = 26;
+const X_ENTRY = 26;
+const X_LANDING = 271;
+const X_TARGET = 334;
+
+/** SVG 里没法量字，按字估：等宽 11px，拉丁 6.6px 一个，中文 11px。 */
+function fitLabel(text: string, maxWidth: number) {
+  const charWidth = (ch: string) => (/[⺀-鿿＀-￯]/.test(ch) ? 11 : 6.6);
   let width = 0;
   let out = "";
   for (const ch of text) {
     const w = charWidth(ch);
-    if (width + w > max) return { text: `${out}…`, width: width + size * 0.6 };
+    if (width + w > maxWidth) return { text: `${out}…`, width: width + 6.6 };
     width += w;
     out += ch;
   }
   return { text: out, width };
 }
 
-export function RouteLineHero({ status }: { status: RouteStatus }) {
-  const paths = status.paths as unknown as Path[];
-  const active = paths.find((path) => path.active) || paths[0];
-  const total = chainLatency(active);
-  const delivery = normalizeRouteDelivery((status as any).delivery);
-  const switchSeconds = Math.max(5, Number(status.policy.failoverSeconds || 0));
-  return (
-    <div className="grid grid-cols-[1fr_auto_1fr] items-end gap-2 rounded-[var(--fx-radius-card,14px)] border-l-[3px] border-[var(--fx-accent)] bg-[var(--fx-l1-surface)] px-4 py-3" data-testid="route-line-hero">
-      <div>
-        <div className="font-mono text-[30px] font-bold leading-none tracking-tight text-[var(--fx-accent)]">
-          {total === null ? <span className="font-sans text-lg font-semibold text-muted-foreground">未测</span> : <>{total}<small className="ml-0.5 text-xs font-medium">ms</small></>}
-        </div>
-        <div className="mt-1 text-[11.5px] text-muted-foreground">整链延迟（测到落地）</div>
-      </div>
-      <div aria-hidden className="h-9 w-px self-center bg-[var(--fx-stroke-weak)]" />
-      <div className="text-right">
-        <div className="font-mono text-[30px] font-bold leading-none tracking-tight text-[var(--fx-accent)]">{switchSeconds}<small className="ml-0.5 text-xs font-medium">s 内</small></div>
-        <div className="mt-1 text-[11.5px] text-muted-foreground">故障切走 · {ROUTE_DELIVERY_INFO[delivery].label}</div>
-      </div>
-    </div>
-  );
+function hopTone(hop: Hop): "ok" | "warn" | "down" {
+  if (hop.maintenance) return "warn";
+  if (hop.offline || hop.tripped || hop.ok === false) return "down";
+  return "ok";
 }
 
-/** 分层图：一列一层。节点按列去重，同一台机器在同一列只画一次。 */
-export function RouteLineDiagram({ status }: { status: RouteStatus }) {
-  const paths = status.paths as unknown as Path[];
+const DOT_FILL = { ok: "var(--fx-healthy-text)", warn: "var(--fx-warn-text)", down: "var(--fx-down-text)" } as const;
+
+export function RouteLineDiagram({ status, modeLabel, timeZone }: { status: RouteStatus; modeLabel: string; timeZone?: string }) {
+  const paths = status.paths;
+  const active = paths.find((path) => path.active) || null;
   const layout = useMemo(() => {
     const maxHops = Math.max(0, ...paths.map((path) => path.hops.length));
-    const columns: Array<Array<{ key: string; label: string; sub: string; tone: string }>> = [];
-    columns.push([{ key: "entry", label: status.entry?.name || "入口", sub: "入口", tone: status.entry?.online === false ? "down" : "ok" }]);
-    for (let k = 0; k < maxHops; k += 1) {
-      const nodes: Array<{ key: string; label: string; sub: string; tone: string }> = [];
+    const columns: DiagramNode[][] = [];
+    const entryLabel = fitLabel(status.entry?.name || "入口", 64);
+    columns.push([{
+      key: "entry",
+      label: entryLabel.text,
+      sub: "",
+      hot: true,
+      tone: status.entry?.online === false ? "down" : "ok",
+      width: Math.max(40, Math.ceil(entryLabel.width) + 16),
+    }]);
+    for (let column = 0; column < maxHops; column += 1) {
+      const nodes: DiagramNode[] = [];
       for (const path of paths) {
-        const hop = path.hops[k];
+        const hop = path.hops[column];
         if (!hop) continue;
         const key = `h${hop.hostId}`;
-        if (nodes.some((node) => node.key === key)) continue;
-        nodes.push({ key, label: hop.name, sub: hop.viaTunnel ? `隧道 ${hop.viaTunnel.name}` : "中转", tone: hop.maintenance ? "warn" : hop.offline || hop.tripped ? "down" : "ok" });
+        const existing = nodes.find((node) => node.key === key);
+        const hot = !!path.active;
+        if (existing) {
+          if (hot) existing.hot = true;
+          continue;
+        }
+        const label = fitLabel(hop.name, 72);
+        const state = hop.maintenance ? "维护" : hop.offline ? "离线" : hop.tripped ? "熔断" : "";
+        nodes.push({
+          key,
+          label: label.text,
+          sub: hop.viaTunnel ? "隧道出口" : "中转",
+          hot,
+          tone: hopTone(hop),
+          width: Math.max(50, Math.ceil(label.width) + 16),
+          ...(state ? { sub: `${hop.viaTunnel ? "隧道出口" : "中转"} · ${state}` } : {}),
+        });
       }
+      // 不在走的那几台标「待命」（坏了的已经写了原因）。
+      for (const node of nodes) if (!node.hot && node.tone === "ok") node.sub = `${node.sub} · 待命`;
+      for (const node of nodes) if (node.hot && node.sub.endsWith("· 待命")) node.sub = node.sub.replace(" · 待命", "");
       columns.push(nodes);
     }
-    const landings: Array<{ key: string; label: string; sub: string; tone: string }> = [];
+    const landings: DiagramNode[] = [];
     for (const path of paths) {
       const key = `d${destLabel(path)}`;
-      if (landings.some((node) => node.key === key)) continue;
-      landings.push({ key, label: path.dest?.ip || "落地", sub: path.dest?.ip ? `落地 :${path.dest.port}` : "规则目标", tone: "ok" });
+      const existing = landings.find((node) => node.key === key);
+      if (existing) {
+        if (path.active) existing.hot = true;
+        if (!path.down) existing.tone = "ok";
+        continue;
+      }
+      landings.push({ key, label: "落地", sub: "", hot: !!path.active, tone: path.down ? "down" : "ok", width: 50 });
     }
+    if (landings.length > 1) landings.forEach((node, index) => { node.label = `落地 ${index + 1}`; node.width = 58; });
     columns.push(landings);
-    return columns.map((column) => column.map((node) => {
-      const label = fitDiagramText(node.label, DIAGRAM_LABEL_MAX);
-      return { ...node, label: label.text, sub: fitDiagramText(node.sub, DIAGRAM_SUB_MAX, 8).text, boxWidth: Math.max(44, Math.ceil(label.width) + 14) };
-    }));
+    return columns;
   }, [paths, status.entry?.name, status.entry?.online]);
-  const width = 340;
-  const rowHeight = 46;
-  const height = Math.max(110, Math.max(...layout.map((column) => column.length)) * rowHeight + 24);
-  // 第一列和最后一列往里收半个最宽的框，框不会被裁掉。
-  const halfWidest = (column: typeof layout[number] | undefined) => Math.max(22, ...(column || []).map((node) => node.boxWidth / 2)) + 2;
-  const left = halfWidest(layout[0]);
-  const right = halfWidest(layout[layout.length - 1]);
-  const colX = (index: number) => left + (index * (width - left - right)) / Math.max(1, layout.length - 1);
-  const nodeY = (column: number, key: string) => {
+
+  const maxRows = Math.max(1, ...layout.map((column) => column.length));
+  const height = Math.max(150, 76 + (maxRows - 1) * ROW_GAP);
+  const center = height / 2;
+  const hopColumns = layout.length - 2;
+  // 入口名字长（Po0(200M)）时框更宽：往右挪，别让左边被裁掉。
+  const entryX = Math.max(X_ENTRY, layout[0][0].width / 2 + 2);
+  const colX = (index: number) => {
+    if (index === 0) return entryX;
+    if (index === layout.length - 1) return X_LANDING;
+    if (hopColumns === 1) return Math.max(153, entryX + 92);
+    return entryX + ((X_LANDING - entryX) * index) / (hopColumns + 1);
+  };
+  const nodeAt = (column: number, key: string) => {
     const nodes = layout[column];
     const position = Math.max(0, nodes.findIndex((node) => node.key === key));
-    const span = nodes.length;
-    return 12 + ((position + 0.5) * (height - 24)) / Math.max(1, span);
+    return { node: nodes[position], y: center + (position - (nodes.length - 1) / 2) * ROW_GAP };
   };
-  const pathPoints = (path: Path) => {
-    const points: Array<{ x: number; y: number; ms: number | null }> = [{ x: colX(0), y: nodeY(0, "entry"), ms: null }];
-    path.hops.forEach((hop, index) => points.push({ x: colX(index + 1), y: nodeY(index + 1, `h${hop.hostId}`), ms: index === 0 ? path.latencyMs : path.hops[index - 1].latencyMs }));
-    const last = layout.length - 1;
-    points.push({ x: colX(last), y: nodeY(last, `d${destLabel(path)}`), ms: path.hops.length === 0 ? path.latencyMs : path.hops[path.hops.length - 1].latencyMs });
-    return points;
+
+  type Edge = { key: string; x1: number; y1: number; x2: number; y2: number; ms: number | null; hot: boolean };
+  const edges = new Map<string, Edge>();
+  for (const path of paths) {
+    const stops = [
+      { column: 0, key: "entry" },
+      ...path.hops.map((hop, index) => ({ column: index + 1, key: `h${hop.hostId}` })),
+      { column: layout.length - 1, key: `d${destLabel(path)}` },
+    ];
+    stops.slice(1).forEach((stop, index) => {
+      const from = stops[index];
+      const a = nodeAt(from.column, from.key);
+      const b = nodeAt(stop.column, stop.key);
+      const ms = index === 0 ? path.latencyMs : path.hops[index - 1]?.latencyMs ?? null;
+      const key = `${from.column}:${from.key}>${stop.column}:${stop.key}`;
+      const edge: Edge = { key, x1: colX(from.column) + a.node.width / 2 - 2, y1: a.y, x2: colX(stop.column) - b.node.width / 2, y2: b.y, ms: ms ?? null, hot: !!path.active };
+      const existing = edges.get(key);
+      if (!existing || (edge.hot && !existing.hot)) edges.set(key, edge);
+      else if (existing.ms === null && edge.ms !== null) existing.ms = edge.ms;
+    });
+  }
+  const ordered = Array.from(edges.values()).sort((a, b) => Number(a.hot) - Number(b.hot));
+  /*
+    中间那一行是直线，在走的粗线从同一个点往上（或往下）拐：直线上的数字放到粗线的另一边，
+    不然三条线路时「1.0」「2.0」正好压在粗线上。
+  */
+  const labelBelow = (edge: Edge) => {
+    if (edge.hot) return false;
+    const hot = ordered.find((other) => other.hot && (
+      (Math.abs(other.x1 - edge.x1) < 1 && Math.abs(other.y1 - edge.y1) < 1)
+      || (Math.abs(other.x2 - edge.x2) < 1 && Math.abs(other.y2 - edge.y2) < 1)
+    ));
+    if (!hot) return false;
+    const otherY = Math.abs(hot.y1 - edge.y1) < 1 ? hot.y2 : hot.y1;
+    return otherY < edge.y1;
   };
-  const ordered = [...paths].sort((a, b) => Number(a.active) - Number(b.active));
-  const active = paths.find((path) => path.active) || null;
+  const landingColumn = layout.length - 1;
+  const total = chainLatency(active);
+
   return (
-    <div className="rounded-[var(--fx-radius-card,14px)] bg-[var(--fx-l1-surface)] px-2 py-2" data-testid="route-line-diagram">
-      <svg viewBox={`0 0 ${width} ${height}`} width="100%" role="img" aria-label="线路分层图" className="block">
-        {ordered.map((path) => {
-          const points = pathPoints(path);
-          const d = points.map((point, index) => (index === 0 ? `M${point.x} ${point.y}` : `C${(points[index - 1].x + point.x) / 2} ${points[index - 1].y} ${(points[index - 1].x + point.x) / 2} ${point.y} ${point.x} ${point.y}`)).join(" ");
-          const isActive = path.active;
-          const broken = path.down || path.paused;
+    <LineCard className="px-[10px] py-3" data-testid="route-line-diagram">
+      <div className="relative h-4 text-[11px] text-muted-foreground">
+        <span className="absolute left-1">入口</span>
+        {layout.slice(1, -1).map((column, index) => {
+          const tunnels = column.filter((node) => node.sub.startsWith("隧道")).length;
+          const label = tunnels === column.length ? "隧道" : tunnels > 0 ? "隧道 / 中转" : "中转";
           return (
-            <g key={path.key}>
-              <path d={d} fill="none" stroke={isActive ? "var(--fx-accent)" : broken ? "var(--fx-down-text)" : "var(--fx-stroke)"} strokeOpacity={isActive ? 1 : 0.55} strokeWidth={isActive ? 2.6 : 1.4} strokeDasharray={isActive ? undefined : "4 4"} />
-              {points.slice(1).map((point, index) => (point.ms !== null && point.ms !== undefined ? (
-                <text key={index} x={(points[index].x + point.x) / 2} y={(points[index].y + point.y) / 2 - 5} textAnchor="middle" fontSize="9.5" fontFamily="ui-monospace,monospace" fill={isActive ? "var(--fx-accent)" : "var(--fx-text-muted)"} fontWeight={isActive ? 700 : 400}>{Math.round(Number(point.ms))}</text>
-              ) : null))}
-            </g>
+            <span key={index} className="absolute -translate-x-1/2 whitespace-nowrap" style={{ left: `${(colX(index + 1) / DIAGRAM_WIDTH) * 100}%` }}>
+              {hopColumns > 1 ? `${label} ${index + 1}` : label}
+            </span>
           );
         })}
-        {layout.map((column, columnIndex) => column.map((node) => {
-          const x = colX(columnIndex);
-          const y = nodeY(columnIndex, node.key);
-          return (
-            <g key={`${columnIndex}-${node.key}`}>
-              <rect x={x - node.boxWidth / 2} y={y - 11} width={node.boxWidth} height={22} rx={6} fill="var(--fx-l1-surface)" stroke={node.tone === "down" ? "var(--fx-down-text)" : node.tone === "warn" ? "var(--fx-warn-text)" : "var(--fx-stroke)"} strokeWidth={1.2} />
-              <text x={x} y={y + 3.5} textAnchor="middle" fontSize="9.5" fontWeight={600} fill="var(--fx-text)">{node.label}</text>
-              <text x={x} y={y + 20} textAnchor="middle" fontSize="8" fill="var(--fx-text-muted)">{node.sub}</text>
-            </g>
-          );
-        }))}
+        <span className="absolute -translate-x-1/2" style={{ left: `${(X_LANDING / DIAGRAM_WIDTH) * 100}%` }}>落地</span>
+        <span className="absolute right-1">目标</span>
+      </div>
+      <svg viewBox={`0 0 ${DIAGRAM_WIDTH} ${height}`} width="100%" role="img" aria-label="线路分层图" className="mt-1 block">
+        <g fill="none" strokeLinecap="round">
+          {ordered.map((edge) => {
+            const dx = (edge.x2 - edge.x1) * 0.43;
+            return (
+              <path
+                key={edge.key}
+                d={`M${edge.x1} ${edge.y1} C${edge.x1 + dx} ${edge.y1} ${edge.x2 - dx} ${edge.y2} ${edge.x2} ${edge.y2}`}
+                stroke={edge.hot ? "var(--fx-accent)" : "var(--fx-stroke)"}
+                strokeWidth={edge.hot ? 3 : 1.6}
+                strokeDasharray={edge.hot ? undefined : "4 4"}
+              />
+            );
+          })}
+          {layout[landingColumn].map((node) => {
+            const { y } = nodeAt(landingColumn, node.key);
+            return (
+              <path
+                key={`t-${node.key}`}
+                d={`M${X_LANDING + node.width / 2} ${y} C${X_LANDING + node.width / 2 + 14} ${y} ${X_TARGET - 20} ${center} ${X_TARGET - 8} ${center}`}
+                stroke={node.hot ? "var(--fx-accent)" : "var(--fx-stroke)"}
+                strokeWidth={node.hot ? 3 : 1.6}
+                strokeDasharray={node.hot ? undefined : "4 4"}
+              />
+            );
+          })}
+        </g>
+        <g fontFamily="var(--fx-font-mono, ui-monospace, monospace)" fontSize="10" textAnchor="middle">
+          {ordered.map((edge) => {
+            if (edge.ms === null || edge.ms === undefined) return null;
+            const straight = Math.abs(edge.y1 - edge.y2) < 1;
+            const top = Math.min(edge.y1, edge.y2);
+            const y = straight ? (labelBelow(edge) ? edge.y1 + 13 : edge.y1 - 6) : top < center ? top + 6 : Math.max(edge.y1, edge.y2) + 2;
+            return (
+              <text key={`ms-${edge.key}`} x={(edge.x1 + edge.x2) / 2} y={y} fill={edge.hot ? "var(--fx-accent)" : "var(--fx-text-muted)"} fontWeight={edge.hot ? 700 : 400}>
+                {formatLineMs(Number(edge.ms))}
+              </text>
+            );
+          })}
+        </g>
+        <g fontSize="11" fontFamily="var(--fx-font-mono, ui-monospace, monospace)" textAnchor="middle">
+          {layout.map((column, columnIndex) => column.map((node) => {
+            const x = colX(columnIndex);
+            const { y } = nodeAt(columnIndex, node.key);
+            const left = x - node.width / 2;
+            const topY = y - BOX_HEIGHT / 2;
+            return (
+              <g key={`${columnIndex}-${node.key}`}>
+                <rect x={left} y={topY} width={node.width} height={BOX_HEIGHT} rx={7} fill="var(--fx-l1-surface)" stroke={node.hot ? "var(--fx-accent)" : "var(--fx-stroke-weak)"} strokeWidth={node.hot ? 1.6 : 1} />
+                <text x={x} y={y + 4} fontWeight={node.hot ? 700 : 400} fill="var(--fx-text)">{node.label}</text>
+                {node.sub ? <text x={x} y={topY + BOX_HEIGHT + 13} fontSize="9" fill="var(--fx-text-muted)" fontFamily="inherit" style={{ fontFamily: "var(--fx-font-sans, system-ui, sans-serif)" }}>{node.sub}</text> : null}
+                <circle cx={left + node.width - 4} cy={topY + 2} r={3} fill={DOT_FILL[node.tone]} />
+              </g>
+            );
+          }))}
+          <circle cx={X_TARGET} cy={center} r={7} fill="var(--fx-l1-surface)" stroke={active ? "var(--fx-accent)" : "var(--fx-stroke)"} strokeWidth={1.6} />
+        </g>
       </svg>
-      {active ? (
-        <p className="truncate border-t border-dashed border-[var(--fx-stroke-weak)] px-1 pt-1.5 font-mono text-[11px] text-muted-foreground">
-          <b className="text-foreground">{[status.entry?.name || "入口", ...active.hops.map((hop) => hop.name), destLabel(active)].join(" → ")}</b>
-          {chainLatency(active) !== null ? <span className="text-[var(--fx-healthy-text)]"> {chainLatency(active)} ms</span> : null}
-          {(status.policy.mode === "smart" || status.policy.mode === "hybrid") ? " 整链最优" : ""}
-        </p>
-      ) : null}
-    </div>
+      <div className="mt-2 truncate whitespace-nowrap border-t border-dashed border-[var(--fx-stroke-weak)] pt-2 font-mono text-[11px] text-muted-foreground" data-testid="route-line-log">
+        {active ? (
+          <>
+            {status.activeSince ? `${clockText(status.activeSince, timeZone)} ` : ""}
+            <b className="font-semibold text-foreground">{routePathText(status, active, { tunnelPrefix: false })}</b>
+            {total !== null ? <span className="text-[var(--fx-healthy-text)]"> {formatLineMs(total)} ms</span> : null}
+            {" "}{modeLabel}
+          </>
+        ) : (
+          <span>{status.agentReportedAt ? "Agent 还没报在走哪条" : "调度这条线路的 Agent 还没上报"}</span>
+        )}
+      </div>
+    </LineCard>
   );
 }
 
-/** 线路列表：按线路分组（同一条线路展开的几条路径算一行），右边暂停（onPause 由线路组弹窗给）。 */
+// ---------------------------------------------------------------- 线路
+
 export function RouteLineList({ status, onPause, pausing = false }: { status: RouteStatus; onPause?: (lineKey: string, paused: boolean) => void; pausing?: boolean }) {
-  const paths = status.paths as unknown as Path[];
-  const groups: Array<{ key: string; name: string; tier: number; paths: Path[] }> = [];
-  for (const path of paths) {
-    const key = path.lineKey || path.key;
-    let group = groups.find((item) => item.key === key);
-    if (!group) {
-      group = { key, name: path.name, tier: typeof path.tier === "number" ? path.tier : groups.length, paths: [] };
-      groups.push(group);
-    }
-    group.paths.push(path);
-  }
+  const groups = routeLineGroups(status);
   return (
-    <div className="flex flex-col gap-1.5" data-testid="route-line-list">
-      {groups.map((group, index) => {
-        const active = group.paths.some((path) => path.active);
-        const paused = group.paths.every((path) => path.paused);
-        const allDown = group.paths.every((path) => path.down);
-        const reason = group.paths.find((path) => path.downReason)?.downReason || "";
-        const summary = group.paths[0];
-        const via = summary.hops.map((hop) => (hop.viaTunnel ? `隧道 ${hop.viaTunnel.name}` : hop.name));
+    <div className="flex flex-col gap-[7px]" data-testid="route-line-list">
+      {groups.map((group) => {
+        const bad = (group.allDown && !group.active) || group.paused;
+        const pill: { tone: LineTone; text: string; dot?: boolean } = group.paused
+          ? { tone: "gray", text: "已暂停" }
+          : group.active
+            ? { tone: "ok", text: "使用中", dot: true }
+            : group.allDown
+              ? { tone: "down", text: group.failures >= 2 ? `不通 ×${group.failures}` : group.reason ? shortIssue(group.reason) : "不通" }
+              : { tone: "gray", text: "待命" };
+        const text = routePathText(status, group.shown);
         return (
-          <div key={group.key} className={cn("flex min-w-0 items-center gap-2 rounded-xl border bg-[var(--fx-l1-surface)] px-2.5 py-2", active ? "border-[var(--fx-accent)] ring-2 ring-[var(--fx-accent-soft)]" : "border-[var(--fx-stroke-weak)]")}>
-            <span className={cn("shrink-0 rounded-md px-1.5 py-0.5 text-[11px] font-bold", index === 0 ? "bg-[var(--fx-accent)] text-white" : "bg-[var(--fx-l2-group)] text-muted-foreground")}>{index === 0 ? "主" : `备 ${index}`}</span>
-            <span className={cn("min-w-0 flex-1 truncate text-xs", (allDown || paused) && "text-muted-foreground line-through")}>
-              {[status.entry?.name || "入口", ...via, destLabel(summary)].join(" → ")}
-              {group.paths.length > 1 ? <span className="ml-1 text-[11px] no-underline">（{group.paths.length} 条组合）</span> : null}
-            </span>
-            <span className={cn(
-              "shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold",
-              paused ? "bg-[var(--fx-l2-group)] text-muted-foreground" : active ? "bg-[var(--fx-healthy-soft)] text-[var(--fx-healthy-text)]" : allDown ? "bg-[var(--fx-down-soft)] text-[var(--fx-down-text)]" : "bg-[var(--fx-l2-group)] text-muted-foreground",
-            )} title={allDown ? describeRouteIssue(reason) : undefined}>
-              {paused ? "已暂停" : active ? "使用中" : allDown ? (reason ? shortIssue(reason) : "故障") : "待命"}
-            </span>
+          <LineRow key={group.key} on={group.active} data-testid="route-line-row">
+            <LineBadge main={group.index === 0}>{lineBadgeText(group.index)}</LineBadge>
+            <LinePath bad={bad} title={`${group.name}：${text} · ${destLabel(group.shown)}${group.paths.length > 1 ? `（这条线路组合出 ${group.paths.length} 条路径）` : ""}`}>
+              {text}
+            </LinePath>
+            <LinePill tone={pill.tone} dot={pill.dot} title={group.allDown && group.reason ? describeRouteIssue(group.reason) : undefined}>{pill.text}</LinePill>
             {onPause ? (
-              <button
-                type="button"
-                className="fx-compact-touch inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-[var(--fx-stroke-weak)] text-muted-foreground hover:text-foreground disabled:opacity-40"
-                aria-label={paused ? `恢复线路 ${group.name}` : `暂停线路 ${group.name}`}
-                title={paused ? "恢复" : "暂停这条"}
+              <LineIconButton
+                aria-label={group.paused ? `恢复线路 ${group.name}` : `暂停线路 ${group.name}`}
+                title={group.paused ? "恢复这条" : "暂停这条"}
                 disabled={pausing}
-                onClick={() => onPause(group.key, !paused)}
+                onClick={() => onPause(group.key, !group.paused)}
               >
-                {paused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
-              </button>
+                {group.paused ? <LinePlayGlyph /> : <LinePauseGlyph />}
+              </LineIconButton>
             ) : null}
-          </div>
+          </LineRow>
         );
       })}
     </div>
   );
 }
 
-/** 按段成功率：在走的那条路径，从入口到落地一段一段。 */
-export function RouteStageStrip({ status }: { status: RouteStatus }) {
-  const paths = status.paths as unknown as Path[];
-  const path = paths.find((item) => item.active) || paths[0];
-  if (!path) return null;
-  const nodes = [status.entry?.name || "入口", ...path.hops.map((hop) => hop.name), "落地"];
+// ---------------------------------------------------------------- 连接 · 按段
+
+type Stage = { label: string; pct: number | null; why: string | null };
+
+export function routeStages(status: RouteStatus, path: Path): { nodes: string[]; stages: Stage[] } {
+  const nodes = ["客户端", status.entry?.name || "入口", ...path.hops.map((hop) => hop.name), "落地"];
+  const inbound = status.inbound && status.inbound.ok + status.inbound.failed > 0 ? round((status.inbound.ok / (status.inbound.ok + status.inbound.failed)) * 100) : null;
   const dials = path.dials;
   const first = dials && dials.ok + dials.failed > 0 ? round((dials.ok / (dials.ok + dials.failed)) * 100) : null;
-  const stages: Array<{ label: string; pct: number | null; why: string | null }> = [
-    { label: path.hops.length === 0 ? "拨落地" : path.hops[0].viaTunnel ? "隧道" : "拨中转", pct: first, why: first !== null && first < 95 ? "拨号失败多" : null },
+  const why = (pct: number | null, failing: boolean) => (failing ? "连不上" : pct !== null && pct < 95 ? "建连失败多" : null);
+  const firstLabel = path.hops.length === 0 ? "落地拨号" : path.hops[0].viaTunnel ? "隧道" : "中转";
+  const stages: Stage[] = [
+    { label: "入站", pct: inbound, why: inbound !== null && inbound < 95 ? "拨不通路径" : null },
+    { label: firstLabel, pct: first, why: why(first, false) },
     ...path.hops.map((hop, index) => {
-      const pct = hop.successPct ?? null;
       const next = path.hops[index + 1];
-      return { label: next ? (next.viaTunnel ? "隧道" : "中转") : "落地拨号", pct, why: hop.ok === false ? "连不上" : pct !== null && pct < 95 ? "丢包" : null };
+      const pct = hop.successPct ?? null;
+      return { label: next ? (next.viaTunnel ? "隧道" : "中转") : "落地拨号", pct, why: why(pct, hop.ok === false && (hop.consecutiveFailures || 0) >= 2) };
     }),
   ];
-  const tone = (pct: number | null) => (pct === null ? "text-muted-foreground" : pct >= 98 ? "text-[var(--fx-healthy-text)]" : pct >= 90 ? "text-[var(--fx-warn-text)]" : "text-[var(--fx-down-text)]");
+  return { nodes, stages };
+}
+
+function stageTone(stage: Stage): "ok" | "warn" | "down" | "none" {
+  if (stage.pct === null) return stage.why ? "down" : "none";
+  if (stage.why || stage.pct < 80) return "down";
+  if (stage.pct < 95) return "warn";
+  return "ok";
+}
+
+export function RouteStageStrip({ status }: { status: RouteStatus }) {
+  const path = status.paths.find((item) => item.active) || status.paths[0];
+  if (!path) return null;
+  const { nodes, stages } = routeStages(status, path);
   return (
-    <div className="rounded-[var(--fx-radius-card,14px)] bg-[var(--fx-l1-surface)] px-2 py-2.5" data-testid="route-stage-strip">
-      <div className="flex min-w-0 items-end">
-        {nodes.map((node, index) => (
-          <div key={index} className="contents">
-            <span className="shrink-0 truncate rounded-md border border-[var(--fx-stroke-weak)] px-1.5 py-1 font-mono text-[10.5px]" style={{ maxWidth: "4.6rem" }}>{node}</span>
-            {index < stages.length ? (
-              <div className="min-w-0 flex-1 px-0.5 text-center">
-                <div className="text-[9.5px] text-muted-foreground">{stages[index].label}</div>
-                <div className={cn("font-mono text-[11px] font-bold", tone(stages[index].pct))}>{stages[index].pct === null ? "—" : `${stages[index].pct}%`}</div>
-                <div className={cn("mx-0.5 mb-2 h-0.5 rounded", stages[index].why ? "bg-[repeating-linear-gradient(90deg,var(--fx-down-text)_0_5px,transparent_5px_8px)]" : stages[index].pct === null ? "bg-[var(--fx-stroke-weak)]" : "bg-[var(--fx-healthy-text)]")} />
-                {stages[index].why ? <div className="-mt-1.5 text-[9.5px] text-[var(--fx-down-text)]">{stages[index].why}</div> : null}
+    <div className="flex min-w-0 items-end text-[11px]" data-testid="route-stage-strip">
+      {nodes.map((node, index) => (
+        <div key={index} className="contents">
+          <span className="max-w-[4.75rem] shrink-0 truncate whitespace-nowrap rounded-[8px] border border-[var(--fx-stroke-weak)] bg-[var(--fx-l1-surface)] px-[6px] py-[5px] font-mono text-[10.5px]">{node}</span>
+          {index < stages.length ? (() => {
+            const stage = stages[index];
+            const tone = stageTone(stage);
+            return (
+              <div className="min-w-0 flex-1 px-[2px] text-center">
+                <div className="truncate text-[9.5px] text-muted-foreground">{stage.label}</div>
+                <div className={cn("font-mono font-bold", tone === "down" ? "text-[var(--fx-down-text)]" : tone === "warn" ? "text-[var(--fx-warn-text)]" : tone === "ok" ? "text-[var(--fx-healthy-text)]" : "text-muted-foreground")}>
+                  {stage.pct === null ? "—" : `${stage.pct}%`}
+                </div>
+                <div className={cn(
+                  "mx-[2px] mb-[9px] mt-[3px] h-[2px] rounded-[2px]",
+                  tone === "down" ? "bg-[repeating-linear-gradient(90deg,var(--fx-down-text)_0_5px,transparent_5px_8px)]" : tone === "warn" ? "bg-[var(--fx-warn-text)]" : tone === "ok" ? "bg-[var(--fx-healthy-text)]" : "bg-[var(--fx-stroke-weak)]",
+                )} />
+                <div className="-mt-[6px] h-0 whitespace-nowrap text-[9.5px] text-[var(--fx-down-text)]">{tone === "down" ? stage.why : ""}</div>
               </div>
-            ) : null}
-          </div>
-        ))}
-      </div>
-      <p className="mt-1.5 px-0.5 text-[10.5px] text-muted-foreground">第一段是入口真实拨号的成功率（近 10 分钟），后面每段是中转探下一跳的成功率（近 20 次）。</p>
+            );
+          })() : null}
+        </div>
+      ))}
     </div>
   );
 }
+
+// ---------------------------------------------------------------- 最近切换（底部第一个 chip）
+
+/** 最近一次切换说成一句：19:31 切到 备 1 · 19:36 已切回 / 19:31 自动切到 备 1 / 24 小时没切过。 */
+export function routeSwitchChip(status: RouteStatus, events: RouteEvent[], nowMs: number, timeZone?: string): { tone: LineTone; text: string } {
+  const groups = routeLineGroups(status);
+  const lineOf = (key: string | null) => {
+    if (!key) return -1;
+    const group = groups.find((item) => item.paths.some((path) => path.key === key) || item.key === key);
+    return group ? group.index : -1;
+  };
+  const switches = events
+    .filter((event) => normalizeRouteEventKind(event.kind) === "switch" && nowMs - event.at <= 24 * 3600_000)
+    .sort((a, b) => b.at - a.at);
+  const activeLine = groups.find((group) => group.active)?.index ?? -1;
+  const latest = switches[0];
+  if (!latest) return { tone: "ok", text: activeLine > 0 ? `在走 ${lineLongName(activeLine)}` : "24 小时没切过" };
+  const manual = /^pin|panel:/i.test(String(latest.reason || ""));
+  const to = lineOf(latest.toKey);
+  if (activeLine > 0 && to === activeLine) {
+    return { tone: "warn", text: `${shortClock(latest.at, timeZone)} ${manual ? "手动" : "自动"}切到 ${lineLongName(activeLine)}` };
+  }
+  if (activeLine === 0 && to === 0) {
+    const away = switches.find((event) => event.at < latest.at && lineOf(event.toKey) > 0);
+    if (away) return { tone: "ok", text: `${shortClock(away.at, timeZone)} 切到 ${lineLongName(lineOf(away.toKey))} · ${shortClock(latest.at, timeZone)} 已切回` };
+    return { tone: "ok", text: `${shortClock(latest.at, timeZone)} 换到 主线路` };
+  }
+  return { tone: "ok", text: `${shortClock(latest.at, timeZone)} 切到 ${to >= 0 ? lineLongName(to) : latest.toLabel || "另一条"}` };
+}
+
+// ---------------------------------------------------------------- 整屏
+
+export function RouteLineDetail({
+  status,
+  events,
+  modeLabel,
+  onPause,
+  pausing = false,
+  detailsOpen,
+  onToggleDetails,
+  nowMs,
+  timeZone,
+}: {
+  status: RouteStatus;
+  events: RouteEvent[];
+  modeLabel: string;
+  onPause?: (lineKey: string, paused: boolean) => void;
+  pausing?: boolean;
+  detailsOpen: boolean;
+  onToggleDetails: () => void;
+  nowMs?: number;
+  timeZone?: string;
+}) {
+  const now = nowMs ?? Date.now();
+  const groups = routeLineGroups(status);
+  const activeGroup = groups.find((group) => group.active) || null;
+  const pausable = !!activeGroup && !activeGroup.paused && groups.filter((group) => !group.paused).length > 1;
+  const chip = routeSwitchChip(status, events, now, timeZone);
+  return (
+    <div className="flex min-w-0 flex-col gap-3" data-testid="route-line-overview">
+      <RouteLineHero status={status} />
+      <RouteLineDiagram status={status} modeLabel={modeLabel} timeZone={timeZone} />
+      <div>
+        <LineSec left="线路" right={routeLineSwitchSummary(status)} />
+        <RouteLineList status={status} onPause={onPause} pausing={pausing} />
+      </div>
+      <div>
+        <LineSec left="连接 · 最近 10 分钟" right={<span title="入站：客户端连进来后拨通一条路径的比例；第二段：入口真实拨号的成功率；后面每段：中转探下一跳（近 20 次）">精确到哪一段</span>} />
+        <LineCard className="px-2 py-3">
+          <RouteStageStrip status={status} />
+          <div className="mt-4 flex flex-wrap gap-1.5">
+            <span className="inline-flex items-center gap-[5px] rounded-full border border-[var(--fx-stroke-weak)] bg-[var(--fx-l1-surface)] px-[10px] py-[5px] text-[11.5px]" data-testid="route-line-switch-chip">
+              <LineDot tone={chip.tone} />{chip.text}
+            </span>
+            {onPause ? (
+              <LineChipButton
+                disabled={!pausable || pausing}
+                title={pausable ? `暂停 ${lineLongName(activeGroup!.index)}，马上切到下一条` : "没有别的线路可切，不能暂停"}
+                onClick={() => {
+                  if (!activeGroup) return;
+                  onPause(activeGroup.key, true);
+                }}
+                data-testid="route-line-pause-active"
+              >
+                暂停这条
+              </LineChipButton>
+            ) : null}
+            <LineChipButton variant={detailsOpen ? "sel" : "default"} aria-expanded={detailsOpen} onClick={onToggleDetails} data-testid="route-line-details">
+              异常明细
+            </LineChipButton>
+          </div>
+        </LineCard>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- 暂停、导出、逐段测带宽
 
 /** 线路组弹窗里暂停 / 恢复一条线路。 */
 export function useRouteLinePause(ruleId: number) {
   const utils = trpc.useUtils();
   const pause = trpc.lineDiagnostics.linePause.useMutation({
-    onSuccess: () => void utils.rules.routeStatus.invalidate({ ruleId }),
+    onSuccess: (_data, variables) => {
+      void utils.rules.routeStatus.invalidate({ ruleId });
+      void utils.rules.routeEvents.invalidate({ ruleId });
+      void utils.rules.routeBoard.invalidate();
+      toast.success(variables.paused ? "已暂停，在走它的连接马上切到下一条" : "已恢复，探通后重新参与");
+    },
     onError: (error) => toast.error(error.message),
   });
   return { onPause: (lineKey: string, paused: boolean) => pause.mutate({ ruleId, lineKey, paused }), pausing: pause.isPending };
 }
 
-/** 导出 / 逐段测带宽。 */
 export function RouteLineTools({ status }: { status: RouteStatus }) {
   const utils = trpc.useUtils();
   const [runId, setRunId] = useState<string | null>(null);
-  const active = (status.paths as unknown as Path[]).find((path) => path.active) || (status.paths[0] as unknown as Path | undefined);
+  const active = status.paths.find((path) => path.active) || status.paths[0];
   const start = trpc.lineDiagnostics.segmentSpeedStart.useMutation({
     onSuccess: (run: any) => setRunId(String(run.runId)),
     onError: (error) => toast.error(error.message),

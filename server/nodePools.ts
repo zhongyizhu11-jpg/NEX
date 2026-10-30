@@ -93,7 +93,7 @@ export async function buildRouteExpandContext(actor: { id: number; role: string 
     const pool = await getNodePool(poolId);
     pools.set(poolId, pool && (actor.role === "admin" || pool.userId === actor.id) ? pool.hostIds : null);
   }
-  const tunnelIds = Array.from(new Set(lines.flatMap((line) => line.layers.filter((layer) => layer.kind === "tunnel").flatMap((layer) => layer.tunnelIds))));
+  const tunnelIds = Array.from(new Set(lines.flatMap((line) => line.layers.flatMap((layer) => layer.tunnelIds))));
   const tunnels = new Map<number, any>();
   for (const tunnelId of tunnelIds) {
     const tunnel = await getTunnelById(tunnelId).catch(() => null) as any;

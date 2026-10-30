@@ -40,12 +40,17 @@ export const ROUTE_LAYER_PICKS = ["best", "order"] as const;
 export type RouteLayerPick = (typeof ROUTE_LAYER_PICKS)[number];
 
 export type RouteLayer = {
+  /**
+   * pool = 这一层是一个节点池；hosts / tunnel = 这一层是几个候选：机器（hostIds）和隧道（tunnelIds）
+   * 可以混着放（「隧道 Jinx」和「jinx(39.9y)」二选一）。只有隧道的叫 tunnel，有机器的叫 hosts。
+   * 按顺序挑时隧道在前、机器在后（界面也按这个顺序画）。
+   */
   kind: RouteLayerKind;
-  /** kind = hosts：候选机器，按写的顺序。 */
+  /** 候选机器，按写的顺序。 */
   hostIds: number[];
-  /** kind = pool：节点池（forward_groups 里 groupMode = relay 的那种）。 */
+  /** kind = pool：节点池（node_pools）。 */
   poolId: number | null;
-  /** kind = tunnel：走哪条隧道。 */
+  /** 候选隧道：走它到它的出口机，隧道入口得是上一个节点。 */
   tunnelIds: number[];
   pick: RouteLayerPick;
   /** 可跳过：这一层多一个「不经过」的选项，候选全坏了还能直连下一层。 */
@@ -101,18 +106,13 @@ function sanitizeLayer(raw: any): RouteLayer | null {
   const kind = (ROUTE_LAYER_KINDS as readonly string[]).includes(String(raw.kind)) ? raw.kind as RouteLayerKind : "hosts";
   const pick = (ROUTE_LAYER_PICKS as readonly string[]).includes(String(raw.pick)) ? raw.pick as RouteLayerPick : "best";
   const poolId = Number.isInteger(Number(raw.poolId)) && Number(raw.poolId) > 0 ? Math.floor(Number(raw.poolId)) : null;
-  const layer: RouteLayer = {
-    kind,
-    hostIds: kind === "hosts" ? intIds(raw.hostIds, MAX_LAYER_CANDIDATES) : [],
-    poolId: kind === "pool" ? poolId : null,
-    tunnelIds: kind === "tunnel" ? intIds(raw.tunnelIds ?? (raw.tunnelId ? [raw.tunnelId] : []), MAX_LAYER_CANDIDATES) : [],
-    pick,
-    skippable: raw.skippable === true || raw.skippable === 1,
-  };
-  if (layer.kind === "hosts" && layer.hostIds.length === 0) return null;
-  if (layer.kind === "pool" && !layer.poolId) return null;
-  if (layer.kind === "tunnel" && layer.tunnelIds.length === 0) return null;
-  return layer;
+  const skippable = raw.skippable === true || raw.skippable === 1;
+  if (kind === "pool") return poolId ? { kind, hostIds: [], poolId, tunnelIds: [], pick, skippable } : null;
+  // 机器和隧道一起算候选上限，隧道在前。
+  const tunnelIds = intIds(raw.tunnelIds ?? (raw.tunnelId ? [raw.tunnelId] : []), MAX_LAYER_CANDIDATES);
+  const hostIds = intIds(raw.hostIds, MAX_LAYER_CANDIDATES - tunnelIds.length);
+  if (hostIds.length === 0 && tunnelIds.length === 0) return null;
+  return { kind: hostIds.length > 0 ? "hosts" : "tunnel", hostIds, poolId: null, tunnelIds, pick, skippable };
 }
 
 function sanitizeLine(raw: any, index: number): RouteLine | null {
@@ -163,9 +163,9 @@ export function serializeRouteLines(lines: RouteLine[] | null | undefined): stri
     ...(line.paused ? { paused: true } : {}),
     layers: line.layers.map((layer) => ({
       kind: layer.kind,
-      ...(layer.kind === "hosts" ? { hostIds: layer.hostIds } : {}),
+      ...(layer.kind !== "pool" && layer.hostIds.length > 0 ? { hostIds: layer.hostIds } : {}),
       ...(layer.kind === "pool" ? { poolId: layer.poolId } : {}),
-      ...(layer.kind === "tunnel" ? { tunnelIds: layer.tunnelIds } : {}),
+      ...(layer.kind !== "pool" && layer.tunnelIds.length > 0 ? { tunnelIds: layer.tunnelIds } : {}),
       pick: layer.pick,
       ...(layer.skippable ? { skippable: true } : {}),
     })),
@@ -264,7 +264,7 @@ function hashKey(text: string) {
 function layerOptions(layer: RouteLayer, previous: number[], ctx: RouteExpandContext): { options: LayerOption[]; issue: string | null } {
   const options: LayerOption[] = [];
   let issue: string | null = null;
-  if (layer.kind === "tunnel") {
+  if (layer.kind !== "pool") {
     for (const tunnelId of layer.tunnelIds) {
       const tunnel = ctx.tunnel(tunnelId);
       if (!tunnel) {
@@ -282,7 +282,8 @@ function layerOptions(layer: RouteLayer, previous: number[], ctx: RouteExpandCon
       }
       options.push({ hostId: tunnel.exitHostId, via: tunnel.id });
     }
-  } else {
+  }
+  if (layer.kind === "pool" || layer.hostIds.length > 0) {
     const candidates = layer.kind === "pool" ? (layer.poolId ? ctx.poolMembers(layer.poolId) : null) : layer.hostIds;
     if (!candidates) issue = "节点池不在了";
     for (const hostId of candidates || []) {

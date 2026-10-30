@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -701,6 +702,53 @@ type failoverStatsReport struct {
 	// 正在为计划切换预热的那条；没有是 -1。
 	PrewarmIndex int                         `json:"prewarmIndex"`
 	Targets      []failoverTargetStatsReport `json:"targets"`
+	// 最近 10 分钟连进来的客户端连接：拨通了一条路径的、一条都没拨通的（TCP；UDP 会话不算）。
+	InboundOK     int `json:"inboundOk,omitempty"`
+	InboundFailed int `json:"inboundFailed,omitempty"`
+}
+
+// routeInboundWindowMinutes 分钟一格，滚动着记。连接再多也只占这几格，不存样本。
+const routeInboundWindowMinutes = 10
+
+type routeInboundBucket struct {
+	minute int64
+	ok     int
+	failed int
+}
+
+type routeInboundWindow struct {
+	mu      sync.Mutex
+	buckets [routeInboundWindowMinutes]routeInboundBucket
+}
+
+func (w *routeInboundWindow) record(ok bool, at time.Time) {
+	minute := at.Unix() / 60
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	bucket := &w.buckets[minute%routeInboundWindowMinutes]
+	if bucket.minute != minute {
+		*bucket = routeInboundBucket{minute: minute}
+	}
+	if ok {
+		bucket.ok++
+	} else {
+		bucket.failed++
+	}
+}
+
+// summary 最近 10 分钟（含这一分钟）的合计。
+func (w *routeInboundWindow) summary(now time.Time) (ok int, failed int) {
+	current := now.Unix() / 60
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, bucket := range w.buckets {
+		if bucket.minute <= 0 || current-bucket.minute >= routeInboundWindowMinutes || bucket.minute > current {
+			continue
+		}
+		ok += bucket.ok
+		failed += bucket.failed
+	}
+	return ok, failed
 }
 
 func roundTenth(value float64) float64 {
@@ -749,6 +797,7 @@ func (p *failoverProxy) statsReportLocked() failoverStatsReport {
 		}
 		report.Targets = append(report.Targets, item)
 	}
+	report.InboundOK, report.InboundFailed = p.inbound.summary(time.Now())
 	return report
 }
 

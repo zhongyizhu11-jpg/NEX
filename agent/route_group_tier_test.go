@@ -412,3 +412,24 @@ func TestProbeImmediatelyOnStartAndTargetChange(t *testing.T) {
 	waitForProbe(t, proxy, 2, 3*time.Second)
 	waitForHeartbeatWake(t, 3*time.Second)
 }
+
+func TestRouteInboundWindowCountsLastTenMinutes(t *testing.T) {
+	var window routeInboundWindow
+	base := time.Unix(1_800_000_000, 0)
+	// 12 分钟前那一格滚出窗口，不该算进来。
+	window.record(false, base.Add(-12*time.Minute))
+	for i := 0; i < 9; i++ {
+		window.record(true, base.Add(-time.Duration(i)*time.Minute))
+	}
+	window.record(false, base.Add(-30*time.Second))
+	ok, failed := window.summary(base)
+	if ok != 9 || failed != 1 {
+		t.Fatalf("summary = %d ok / %d failed, want 9 / 1", ok, failed)
+	}
+	// 同一格被新的一分钟复用时先清零。
+	window.record(true, base.Add(10*time.Minute))
+	ok, failed = window.summary(base.Add(10 * time.Minute))
+	if ok != 1 || failed != 0 {
+		t.Fatalf("after wrap summary = %d / %d, want 1 / 0", ok, failed)
+	}
+}

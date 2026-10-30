@@ -155,6 +155,8 @@ export async function buildRouteStatus(rule: any) {
       down,
       downReason: describeRouteIssue(downReason),
       connections: target?.connections ?? null,
+      /** 入口 Agent 连着几次探不通（中转那一跳断了的话按那一跳的次数）。 */
+      consecutiveFailures: Math.max(target?.consecutiveFailures ?? 0, ...hops.map((hop) => hop.consecutiveFailures || 0)),
       samples: target?.samples ?? 0,
       active: activeIndex === index,
       prewarming: !!agent && agent.prewarmIndex === index,
@@ -211,6 +213,8 @@ export async function buildRouteStatus(rule: any) {
     schedulerHostIds,
     /** 这条规则（入口）此刻的速率。 */
     rate: getRuleLiveRate(Number(rule.id), nowMs),
+    /** 最近 10 分钟客户端连进来、拨通了一条路径的有几个、一条都没拨通的有几个（Agent 2.2.243 起，TCP）。 */
+    inbound: agent?.inbound ?? null,
     switches,
     /** 入口：规则所在的机器。卡片左端写它的名字；它离线了整条线路组都没法走。 */
     entry: {

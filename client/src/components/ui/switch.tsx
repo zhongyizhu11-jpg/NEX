@@ -6,6 +6,8 @@ import { settledToggleChecked } from "@/lib/optimisticToggle";
 
 type SwitchProps = React.ComponentPropsWithoutRef<typeof SwitchPrimitives.Root> & {
   instant?: boolean;
+  /** sm：30×18 的小开关（线路卡里一行里放好几个时用）。 */
+  size?: "default" | "sm";
 };
 
 /*
@@ -16,11 +18,12 @@ type SwitchProps = React.ComponentPropsWithoutRef<typeof SwitchPrimitives.Root> 
   接上之后 `<FormField><Label>转发总开关</Label><Switch /></FormField>` 就有名字了，
   不用再把同一句话在 aria-label 里抄第二遍 —— 抄第二遍早晚会和界面对不上。
 */
-const Switch = React.forwardRef<React.ComponentRef<typeof SwitchPrimitives.Root>, SwitchProps>(({ className, instant = false, ...props }, ref) => {
+const Switch = React.forwardRef<React.ComponentRef<typeof SwitchPrimitives.Root>, SwitchProps>(({ className, instant = false, size = "default", ...props }, ref) => {
   const fieldId = useFormFieldId();
+  const small = size === "sm";
   return (
-  <SwitchPrimitives.Root data-slot="switch" id={fieldId} className={cn("peer relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full border-0 p-0.5 focus-visible:outline-none focus-visible:shadow-[var(--fx-focus-ring)] disabled:cursor-not-allowed disabled:opacity-60 data-[state=unchecked]:bg-[var(--fx-stroke-base)] data-[state=checked]:bg-primary dark:data-[state=unchecked]:bg-[var(--fx-stroke-strong)]", instant ? "" : "transition-colors", className)} {...props} ref={ref}>
-    <SwitchPrimitives.Thumb className={cn("pointer-events-none block h-5 w-5 rounded-full bg-white shadow-[0_1px_2px_rgb(0_0_0/0.24),0_0_0_0.5px_rgb(0_0_0/0.06)] ring-0 data-[state=checked]:translate-x-5 data-[state=unchecked]:translate-x-0", instant ? "" : "transition-transform")} />
+  <SwitchPrimitives.Root data-slot="switch" id={fieldId} className={cn("peer relative inline-flex shrink-0 cursor-pointer items-center rounded-full border-0 focus-visible:outline-none focus-visible:shadow-[var(--fx-focus-ring)] disabled:cursor-not-allowed disabled:opacity-60 data-[state=unchecked]:bg-[var(--fx-stroke-base)] data-[state=checked]:bg-primary dark:data-[state=unchecked]:bg-[var(--fx-stroke-strong)]", small ? "h-[18px] w-[30px] p-[2px]" : "h-6 w-11 p-0.5", instant ? "" : "transition-colors", className)} {...props} ref={ref}>
+    <SwitchPrimitives.Thumb className={cn("pointer-events-none block rounded-full bg-white shadow-[0_1px_2px_rgb(0_0_0/0.24),0_0_0_0.5px_rgb(0_0_0/0.06)] ring-0 data-[state=unchecked]:translate-x-0", small ? "h-[14px] w-[14px] data-[state=checked]:translate-x-3" : "h-5 w-5 data-[state=checked]:translate-x-5", instant ? "" : "transition-transform")} />
   </SwitchPrimitives.Root>
   );
 })

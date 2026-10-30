@@ -3366,7 +3366,7 @@ function RulesContent() {
   })), [nodePoolsQuery.data]);
   const routeLineTunnels = useMemo<RouteLineTunnel[]>(() => ((tunnels || []) as any[])
     .filter((tunnel) => Number(tunnel.entryHostId) > 0 && Number(tunnel.exitHostId) > 0 && !(Number(tunnel.entryGroupId || 0) > 0))
-    .map((tunnel) => ({ id: Number(tunnel.id), name: String(tunnel.name || `隧道 ${tunnel.id}`), entryHostId: Number(tunnel.entryHostId), exitHostId: Number(tunnel.exitHostId), mode: tunnel.mode ? String(tunnel.mode) : null })), [tunnels]);
+    .map((tunnel) => ({ id: Number(tunnel.id), name: String(tunnel.name || `隧道 ${tunnel.id}`), entryHostId: Number(tunnel.entryHostId), exitHostId: Number(tunnel.exitHostId), mode: tunnel.mode ? String(tunnel.mode) : null, relayMode: tunnel.relayMode ? String(tunnel.relayMode) : null })), [tunnels]);
   const routeEntryName = useMemo(() => {
     const host = (hosts || []).find((item: any) => Number(item.id) === Number(routeEntryHostId || 0)) as any;
     return host ? String(host.name || `主机 ${host.id}`) : "入口";
@@ -9426,6 +9426,7 @@ function RulesContent() {
             ruleId={policyRuleId}
             subjectName={String(policyRule?.name || "")}
             policy={policy}
+            rule={policyRule && !Number(policyRule.forwardGroupRuleId || 0) ? policyRule : undefined}
             canEdit
             pending={pinMutation.isPending}
             onPin={(index, durationSeconds) => pinMutation.mutate({

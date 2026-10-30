@@ -9,7 +9,7 @@ import {
   routeGroupSchedulerAgentVersion,
   routePathDial,
 } from "../shared/routeGroup";
-import { routeHopDownHints, routeNodeHints, routePathDownstreamMs } from "./routeGroupStats";
+import { noteRouteFirstHops, routeHopDownHints, routeNodeHints, routePathDownstreamMs } from "./routeGroupStats";
 import { ensureRouteNodeHealthFresh, getRouteNodeStatus } from "./routeNodeHealth";
 import { tunnelLinkShaping, hostEgressShaping } from "./tunnelFxpRuntime";
 import { ingestFailoverLineReports } from "./failoverLineReports";
@@ -3282,6 +3282,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       // 从「线路」展开出来的路径每条都有 tier：Agent 只在最低的、还有健康路径的那一组里挑（2.2.243 起；老 Agent 忽略）。
       const tiered = paths.every((path) => typeof path.tier === "number");
       const delivery = normalizeRouteDelivery(policy.delivery);
+      // 第 N 个目标的第一跳是哪台：入口 Agent 报的第一段延迟就是「进那台机器」的延迟（节点池卡上的毫秒数）。
+      noteRouteFirstHops(Number(rule.id), paths.map((path) => (path.hops.length > 0 ? Number(path.hops[0]) : null)));
       const targets = paths.map((path) => {
         const dial = routePathDial(path, routeRule);
         const tier = tiered ? { tier: Number(path.tier) } : {};
@@ -3289,7 +3291,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
           return { targetIp: "127.0.0.1", targetPort: 1, weight: path.weight, ...tier, down: true, downReason: path.issue || "path unresolved" };
         }
         const hint = nodeHints.get(path.key) || hints.get(path.key);
-        const extraLatencyMs = routePathDownstreamMs(Number(rule.id), path);
+        // Agent 那边是整数毫秒（Go int），小数会让整份规格解不开。
+        const extraLatencyMs = Math.round(routePathDownstreamMs(Number(rule.id), path));
         return {
           targetIp: dial.ip,
           targetPort: dial.port,

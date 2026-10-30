@@ -50,6 +50,8 @@ export type RouteAgentStats = {
   activeSince: number;
   prewarmIndex: number;
   targets: RouteTargetStat[];
+  /** 最近 10 分钟连进来的客户端连接：拨通了一条路径的 / 一条都没拨通的（Agent 2.2.243 起；TCP）。 */
+  inbound?: { ok: number; failed: number } | null;
   /** 面板收到的时刻（Unix 毫秒） */
   reportedAt: number;
 };
@@ -165,6 +167,9 @@ export function recordRouteAgentStats(input: {
       activeSince: reportedMillis(raw?.activeSince),
       prewarmIndex: integer(raw?.prewarmIndex, -1),
       targets,
+      inbound: raw && ("inboundOk" in raw || "inboundFailed" in raw)
+        ? { ok: Math.max(0, integer(raw.inboundOk)), failed: Math.max(0, integer(raw.inboundFailed)) }
+        : null,
       reportedAt: nowMs,
     };
     const existing = seen.get(ruleId);
@@ -337,7 +342,8 @@ export function routePathDownstreamMs(ruleId: number, path: RoutePath, nowMs = D
     if (probe.pathKey !== path.key || nowMs - probe.at > ROUTE_HOP_STALE_MS) continue;
     if (probe.ok && typeof probe.latencyMs === "number") total += probe.latencyMs;
   }
-  return Math.round(total);
+  // 留一位小数：界面上 0.8 + 1.5 = 2.3；下发给 Agent 的 extraLatencyMs 是整数，那边自己取整。
+  return Math.round(total * 10) / 10;
 }
 
 /** 一段最近的探测成功率（百分比）；没样本为 null。 */
@@ -396,6 +402,7 @@ export function resetRouteStatsForTest() {
   agentStatsByRule.clear();
   hopProbesByRule.clear();
   nodeBreakers.clear();
+  firstHopByTargetIndex.clear();
 }
 
 /**
@@ -412,6 +419,41 @@ export function routeSegmentLatencyEstimate(fromHostId: number, toHostId: number
     }
   }
   return best;
+}
+
+/**
+ * 进这台机器的那一段此刻多快：中转探它（它是下一跳）、或者入口 Agent 探它（它是路径第一跳）里最快的一次。
+ * 节点池卡上成员旁边那个毫秒数；没人探过 = null。
+ */
+export function routeLatencyIntoHost(hostId: number, nowMs = Date.now()): number | null {
+  let best: number | null = null;
+  for (const probes of hopProbesByRule.values()) {
+    for (const probe of probes.values()) {
+      if (Number(probe.nextHostId || 0) !== Number(hostId)) continue;
+      if (!probe.ok || typeof probe.latencyMs !== "number" || nowMs - probe.at > ROUTE_HOP_STALE_MS) continue;
+      if (best === null || probe.latencyMs < best) best = probe.latencyMs;
+    }
+  }
+  for (const [ruleId, stats] of agentStatsByRule) {
+    if (nowMs - stats.reportedAt > ROUTE_STATS_STALE_MS) continue;
+    const firstHops = firstHopByTargetIndex.get(ruleId);
+    if (!firstHops) continue;
+    for (const target of stats.targets) {
+      if (firstHops.get(target.index) !== Number(hostId)) continue;
+      if (typeof target.latencyMs !== "number" || target.latencyMs < 0) continue;
+      if (best === null || target.latencyMs < best) best = target.latencyMs;
+    }
+  }
+  return best;
+}
+
+/** 心跳下发时记一份：这条规则第 N 个目标的第一跳是哪台机器（routeLatencyIntoHost 用）。 */
+const firstHopByTargetIndex = new Map<number, Map<number, number>>();
+
+export function noteRouteFirstHops(ruleId: number, firstHops: ReadonlyArray<number | null>) {
+  const map = new Map<number, number>();
+  firstHops.forEach((hostId, index) => { if (hostId) map.set(index, Number(hostId)); });
+  firstHopByTargetIndex.set(Number(ruleId), map);
 }
 
 /** 哪些规则的中继在探这台机器（它是那些路径的下一跳）。 */

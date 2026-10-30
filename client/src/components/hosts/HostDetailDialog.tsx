@@ -236,9 +236,6 @@ export default function HostDetailDialog(props: HostDetailDialogProps) {
           {/* 网速测试：这台机器对 Cloudflare 测速（Agent 2.2.241 起），点开是曲线和结果 */}
           <HostSpeedTestSection host={host} />
 
-          {/* 线路：维护开关、节点熔断、经过它的线路（2.3.496） */}
-          <HostLineSection hostId={Number(host.id)} />
-
           {/* 网络画像：双栈出站、运营商、25 端口、DNSBL（Agent 2.2.226 起在主机上测） */}
           <HostNetProfileSection host={host} canManage={user?.role === "admin"} />
 
@@ -283,9 +280,12 @@ export default function HostDetailDialog(props: HostDetailDialogProps) {
         <Tabs defaultValue="overview" className="flex min-w-0 flex-col gap-3">
           <TabsList aria-label="主机详情" className="w-full">
             <TabsTrigger value="overview" className="flex-1">概览</TabsTrigger>
+            <TabsTrigger value="lines" className="flex-1">线路</TabsTrigger>
             <TabsTrigger value="more" className="flex-1">更多</TabsTrigger>
           </TabsList>
           <TabsContent value="overview" className="m-0 flex min-w-0 flex-col gap-2.5">{overviewSections}</TabsContent>
+          {/* 线路：维护开关、节点熔断、经过它的线路和它们的切换记录（2.3.496） */}
+          <TabsContent value="lines" className="m-0 flex min-w-0 flex-col gap-2.5"><HostLineSection host={host} /></TabsContent>
           <TabsContent value="more" className="m-0 flex min-w-0 flex-col gap-2.5">{moreSections}</TabsContent>
         </Tabs>
 

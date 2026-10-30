@@ -59,5 +59,6 @@ test("节点提示：暂停 > 维护 > 离线 > 熔断；下游延迟按这条�
   assert.equal(hints.get("t")?.reason, "breaker: JP");
   assert.equal(hints.has("ok"), false);
   recordRouteHopProbe({ parentRuleId: 5, pathKey: "ok", hopIndex: 0, hostId: 2, hostName: "jinx", nextLabel: "落地", ok: true, latencyMs: 12.4 });
-  assert.equal(routePathDownstreamMs(5, paths[4]), 12);
+  // 界面上要 0.8 + 1.5 = 2.3 这种：留一位小数（下发给 Agent 时心跳那边再取整）。
+  assert.equal(routePathDownstreamMs(5, paths[4]), 12.4);
 });
