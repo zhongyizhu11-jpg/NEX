@@ -38,7 +38,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.241"
+var Version = "2.2.242"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value

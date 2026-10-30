@@ -32,6 +32,7 @@ import { registerAgentStatusRoutes } from "./agentStatusRoutes";
 import { registerAgentSelfTestRoutes } from "./agentSelfTestRoutes";
 import { registerAgentReportRoutes } from "./agentReportRoutes";
 import { registerAgentExtRoutes } from "./ops/agentExtRoute";
+import { registerNodeCheckSpeedRoutes } from "./ops/nodeCheckSpeedRoute";
 import { invalidateAgentDesiredStateCache, registerAgentHeartbeatRoute } from "./agentHeartbeatRoute";
 import { handleHostAddressChanged, refreshAgentsAffectedByHostAddress } from "./hostAddressRuntime";
 import { isHostStatusOnline, notifyHostOnlineIfNeeded } from "./hostStatusNotifier";
@@ -489,6 +490,8 @@ registerAgentStatusRoutes(agentApiRouter);
 registerAgentSelfTestRoutes(agentApiRouter);
 registerAgentReportRoutes(agentApiRouter);
 registerAgentExtRoutes(agentApiRouter);
+// 面板当测速服务器（/api/nodecheck/speed/*）：不在 /api/agent 下，不走加密信封，按一次性口令认。
+registerNodeCheckSpeedRoutes(agentRouter);
 
 agentApiRouter.post("/api/agent/migration-rollback", async (req: Request, res: Response) => {
   try {

@@ -17,8 +17,10 @@ import type { ExitCheckResult } from "../shared/nodeCheck";
     · 节点菜单「出口检测」，节点的机器不是自己的：挑一台自己的机器，临时拉 sing-box 把这个节点当出站，
       站点握手 + 解锁走它过去；结果画成和主机那版一样的出口面板。候选机器里绑了这个节点的转发
       所在的入口机排最前。
-    · 预览订阅里每条线路的「测速」：就在这条线路的入口机上跑 —— 它像客户端一样连自己的入口端口，
-      流量走入口 → 中转 → 落地出去，测的是整条链；不用挑机器。直连条目在落地机上跑。
+    · 预览订阅里每条线路的「测速」：自动挑一台不在这条线路上的机器当客户端，连订阅里这条线路的入口
+      （客户端拿到的就是它），流量走入口 → 中转 → 落地出去，测的是整条链。没有别的机器时才退回
+      在入口机上连 127.0.0.1 —— 云主机的公网 IP 多半是 NAT 出来的，机器自己连自己的公网 IP 不通；
+      而且内核转发（nftables）对本机发出的连接不生效，所以回环只对 gost / realm 这类用户态转发有效。
   机器上没有 sing-box 的，指令里带上自建节点那套装机脚本，Agent 先装再测。
 */
 
@@ -111,9 +113,12 @@ export async function exitCheckStatusForNode(node: any, viewer: { id: number; ro
 export type EntryCheckPlan = {
   entry: ProxySubscriptionEntry;
   entryName: string;
-  /** 在哪台机器上跑：中转条目是入口机，直连条目是落地机；null = 对不上机器。 */
+  /** 在哪台机器上跑：优先线路外的另一台机器；没有就是入口机自己（连回环）；null = 没有机器能测。 */
   host: any | null;
-  hostRole: "entry" | "landing";
+  /** other：线路外的另一台机器；self：入口机 / 落地机自己连回环。 */
+  hostRole: "other" | "self";
+  /** 线路上的机器（入口 / 落地）。 */
+  routeHostIds: number[];
 };
 
 export function parseEntryKey(entryKey: string): { kind: "relay"; ruleId: number } | { kind: "direct"; templateId: number } | null {
@@ -130,25 +135,42 @@ export async function planEntryCheck(userId: number, viewer: { id: number; role:
   const { plan } = await db.getProxySubscriptionPreviewForUser(userId);
   const entry = plan.entries.find((item) => (ref.kind === "relay" ? item.kind === "relay" && Number(item.ruleId) === ref.ruleId : item.kind === "direct" && Number(item.templateId) === ref.templateId));
   if (!entry) throw new Error("订阅里没有这条线路了");
-  let host: any = null;
-  let hostRole: EntryCheckPlan["hostRole"] = "entry";
+  const routeHostIds = new Set<number>();
+  let selfHost: any = null;
   if (entry.kind === "relay" && entry.ruleId > 0) {
     const rule = await db.getForwardRuleById(entry.ruleId) as any;
-    host = rule?.hostId ? await db.getHostById(Number(rule.hostId)) : null;
+    selfHost = rule?.hostId ? await db.getHostById(Number(rule.hostId)) : null;
   } else {
-    hostRole = "landing";
     const template = await db.getProxyNodeById(Number(entry.templateId));
-    host = template ? (await findNodeHost(template, viewer)).host : null;
+    selfHost = template ? (await findNodeHost(template, viewer)).host : null;
   }
-  return { entry, entryName: entry.node.name, host, hostRole };
+  if (selfHost) routeHostIds.add(Number(selfHost.id));
+  const template = await db.getProxyNodeById(Number(entry.templateId));
+  if (template) {
+    const { host: landing } = await findNodeHost(template, viewer);
+    if (landing) routeHostIds.add(Number(landing.id));
+  }
+  // 线路外的机器里挑一台在线、Agent 够新的；都不行再退回入口机自己。
+  const hosts = await viewerHosts(viewer);
+  const others = sortCandidates(hosts.filter((item) => !routeHostIds.has(Number(item.id))).map((item) => candidateOf(item, false)));
+  const other = others.find((item) => item.online && item.supported);
+  if (other) {
+    const host = hosts.find((item) => Number(item.id) === other.id);
+    return { entry, entryName: entry.node.name, host, hostRole: "other", routeHostIds: Array.from(routeHostIds) };
+  }
+  return { entry, entryName: entry.node.name, host: selfHost, hostRole: "self", routeHostIds: Array.from(routeHostIds) };
 }
 
 /** 排一次线路测速：入口机连自己的入口（订阅里给客户端的那个节点）走完整条链去测。 */
 export async function startSpeedTestForEntry(userId: number, viewer: { id: number; role: string }, input: { entryKey: string }) {
   const plan = await planEntryCheck(userId, viewer, input.entryKey);
-  if (!plan.host) throw new Error(plan.hostRole === "entry" ? "这条线路的入口机不在面板里" : "这个落地不在装了 Agent 的机器上，测不了");
+  if (!plan.host) throw new Error("没有机器能测这条线路：要一台在线、Agent 2.2.241 以上的机器");
   const outbound = singboxOutbound(plan.entry.node);
   delete outbound.detour;
+  if (plan.hostRole === "self") {
+    // 入口机自己测：连回环而不是自己的公网 IP（云主机的公网 IP 是 NAT 的，自己连自己不通）。
+    outbound.server = "127.0.0.1";
+  }
   const extraOutbounds: Record<string, unknown>[] = [];
   if (plan.entry.frontTemplateId > 0) {
     // 前置代理：订阅里这条线路先经另一条，测的时候也照样先经它。

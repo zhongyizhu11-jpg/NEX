@@ -236,7 +236,12 @@ function ViaHostExitCheck({ nodeId, address, targets }: { nodeId: number; addres
         </Button>
       </div>
       {latest?.error && !pending ? <p className="text-xs text-[var(--fx-down-text)]">{latest.error}</p> : null}
-      {data?.exitView && !pending ? <ExitHostPanel host={data.exitView} targets={targets} /> : null}
+      {data?.exitView && !pending ? (
+        <>
+          <ExitHostPanel host={data.exitView} targets={targets} />
+          <p className="text-[11px] text-muted-foreground">经节点测的握手时间含机器到节点那一段，比在节点机器上直接测的高，看相对快慢就好。</p>
+        </>
+      ) : null}
       {candidates.length === 0 && data ? <p className="text-xs text-muted-foreground">没有可以用的机器：要一台在线、Agent 2.2.241 以上的机器。</p> : null}
     </div>
   );

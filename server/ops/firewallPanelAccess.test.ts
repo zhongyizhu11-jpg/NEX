@@ -52,10 +52,10 @@ test("private, loopback and unknown addresses are always allowed", () => {
 test("agent, sync, stream, payment webhooks and migration are exempt; subscription is optional", () => {
   const off = { includeSubscription: false };
   const on = { includeSubscription: true };
-  for (const path of ["/api/agent/heartbeat", "/api/agent/ext", "/api/agent/install.sh", "/api/sync", "/api/stream", "/api/payment/webhook/alipay", "/api/migration/export"]) {
+  for (const path of ["/api/agent/heartbeat", "/api/agent/ext", "/api/agent/install.sh", "/api/sync", "/api/stream", "/api/payment/webhook/alipay", "/api/migration/export", "/api/nodecheck/speed/down"]) {
     assert.equal(isPanelAccessExemptPath(path, on), true, path);
   }
-  for (const path of ["/", "/login", "/api/trpc/auth.login", "/assets/index.js", "/api/agentx"]) {
+  for (const path of ["/", "/login", "/api/trpc/auth.login", "/assets/index.js", "/api/agentx", "/api/nodecheck"]) {
     assert.equal(isPanelAccessExemptPath(path, off), false, path);
   }
   assert.equal(isPanelAccessExemptPath("/api/sub/abc", off), true);

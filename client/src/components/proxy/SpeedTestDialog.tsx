@@ -13,6 +13,9 @@ import { formatMbps, NODE_CHECK_PHASE_LABELS, type SpeedSample, type SpeedTestRe
   大数字 + 下载 / 上传曲线，下面「出站」一行、「启动」按钮、延迟 / 抖动 / 下载 / 上传 /
   服务机房 / 出口 / 网络 一列。跑的时候曲线是实时的（Agent 每秒送一次进度，这里 1 秒一刷）。
 
+  先对 Cloudflare 测；国内机器到国外 80 / 443 常常不通，连不上就改测到面板自己（结果 server = "panel"，
+  note 说明原因，测的是机器到面板那条路）。
+
   subject 两种：
     · { hostId }：主机详情里的「网速测试」，只测这台机器自己的带宽。
     · { entryKey }：预览订阅里每条线路的「测速」：入口机临时拉 sing-box，像客户端一样连自己的入口
@@ -121,8 +124,8 @@ export function SpeedTestDialog({ subject, name, onOpenChange }: { subject: Spee
 
   const exitHostLabel = useMemo(() => {
     if (hostId > 0) return hostStatus.data ? `${countryFlagLabel(hostStatus.data.countryCode) || ""} ${hostStatus.data.hostName}`.trim() : "";
-    if (entryHost) return `${entryHost.name}（${entryStatus.data?.hostRole === "landing" ? "落地机" : "入口机"}）${!entryHost.online ? " · 离线" : !entryHost.supported ? " · Agent 太旧" : ""}`;
-    return entryNoHost ? "入口机不在面板里" : "";
+    if (entryHost) return `${entryHost.name}${entryStatus.data?.hostRole === "self" ? "（入口机自己）" : ""}${!entryHost.online ? " · 离线" : !entryHost.supported ? " · Agent 太旧" : ""}`;
+    return entryNoHost ? "没有机器能测" : "";
   }, [hostId, hostStatus.data, entryHost, entryStatus.data?.hostRole, entryNoHost]);
 
   const start = () => {
@@ -176,13 +179,14 @@ export function SpeedTestDialog({ subject, name, onOpenChange }: { subject: Spee
                 <ResultRow label="抖动" value={`${Math.round(result.jitterMs)} ms`} />
                 <ResultRow label="下载" value={formatMbps(result.downloadMbps)} />
                 <ResultRow label="上传" value={formatMbps(result.uploadMbps)} />
-                <ResultRow label="服务机房" value={result.colo || "—"} />
+                <ResultRow label="测速点" value={result.server === "panel" ? "面板服务器" : ["Cloudflare", result.colo].filter(Boolean).join(" · ")} />
                 <ResultRow label="出口" value={[[result.city, result.country].filter(Boolean).join(", "), result.clientIp].filter(Boolean).join(" · ") || "—"} />
                 <ResultRow label="网络" value={[result.asn, result.asOrg].filter(Boolean).join(" · ") || "—"} />
               </div>
             </div>
           ) : null}
-          <p className="text-center text-[11px] text-muted-foreground">由 Cloudflare 提供测速服务 · 每次约 300 MB</p>
+          {result?.note ? <p className="text-center text-[11.5px] text-[var(--fx-warn-text)]" data-testid="speed-test-note">{result.note}</p> : null}
+          <p className="text-center text-[11px] text-muted-foreground">对 Cloudflare 测速 · 连不上时改测到面板 · 每次约 300 MB</p>
         </div>
       </DialogContent>
     </Dialog>

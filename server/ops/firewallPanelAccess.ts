@@ -38,6 +38,8 @@ export function isPanelAccessExemptPath(path: string, rule: Pick<PanelAccessRule
   if (p.startsWith("/api/agent/") || p === "/api/agent") return true;
   if (p === "/api/sync" || p.startsWith("/api/sync/")) return true;
   if (p === "/api/stream" || p.startsWith("/api/stream/")) return true;
+  // Agent 测速改测到面板（server/ops/nodeCheckSpeedRoute.ts）：按一次性口令认，和 Agent 接口一样放行。
+  if (p.startsWith("/api/nodecheck/speed/")) return true;
   if (p.startsWith("/api/payment/webhook")) return true;
   if (p.startsWith("/api/migration/")) return true;
   if ((p.startsWith("/api/sub/") || p.startsWith("/s/")) && !rule.includeSubscription) return true;
