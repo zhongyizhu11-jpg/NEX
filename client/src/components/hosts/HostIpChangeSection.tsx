@@ -19,12 +19,11 @@ export default function HostIpChangeSection({ hostId }: { hostId: number }) {
   if (!data) return null;
   const state = normalizeIpChangeState(data.state);
   return (
-    <Section title="自动换 IP">
+    <Section title="自动换 IP" action={<Link href={AUTO_IP_CHANGE_ROUTE} className="text-meta font-medium text-primary underline-offset-2 hover:underline">设置</Link>}>
       <Row label="状态" value={`${IP_CHANGE_STATE_LABELS[state]}${data.autoEnabled ? " · 自动" : data.enabled ? " · 仅检测" : ""}`} />
       <Row label="连续失败" value={`${data.consecutiveFailures} / ${data.failureThreshold} 轮`} />
       <Row label="上次更换" value={formatTime(data.lastChangeAt)} />
       {data.lastError ? <p className="break-words text-meta text-[var(--fx-down-text)]">{data.lastError}</p> : null}
-      <Link href={AUTO_IP_CHANGE_ROUTE} className="text-meta text-primary underline-offset-2 hover:underline">打开自动换 IP 设置</Link>
     </Section>
   );
 }

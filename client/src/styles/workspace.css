@@ -1785,6 +1785,18 @@ button.fx-rb-mini-row:hover { background: var(--fx-l2-group); }
   .fx-rb-flow { display: none; }
 }
 
+/* 主机详情里的分节：浅底小卡，头上标题 + 这一节的主按钮，下面键值行。 */
+.fx-hd-sec { display: flex; min-width: 0; flex-direction: column; border: 1px solid var(--fx-stroke-weak); border-radius: 12px; background: var(--fx-l2-group); overflow: hidden; }
+.fx-hd-sec-head { display: flex; min-width: 0; width: 100%; align-items: center; justify-content: space-between; gap: 10px; min-height: 38px; padding: 6px 12px; border: 0; background: transparent; font: inherit; text-align: left; color: inherit; }
+button.fx-hd-sec-head { cursor: pointer; }
+button.fx-hd-sec-head:hover { background: color-mix(in srgb, var(--fx-text) 3%, transparent); }
+.fx-hd-sec-head > h3 { margin: 0; min-width: 0; flex: 0 1 auto; font-size: 12.5px; font-weight: 600; line-height: 18px; color: var(--fx-text-secondary); white-space: nowrap; }
+.fx-hd-sec-action { display: inline-flex; min-width: 0; flex: 0 1 auto; align-items: center; justify-content: flex-end; gap: 8px; }
+.fx-hd-sec-action > button, .fx-hd-sec-action > a { flex: none; }
+.fx-hd-sec-toggle { display: inline-flex; flex: none; align-items: center; gap: 3px; font-size: 11.5px; color: var(--fx-text-muted); }
+.fx-hd-sec-body { display: flex; min-width: 0; flex-direction: column; gap: 7px; padding: 2px 12px 11px; }
+.fx-hd-sec-body > .fx-hd-sec { margin-top: 2px; }
+
 /* 我的线路：泳道图。整块是点阵画布；三列（入口 / 中转 / 落地 [/ 出口]）靠同一副栅格对齐，列头和每条泳道各用一次。 */
 .fx-lanes {
   --fx-lane-ink: #2a9d8f;

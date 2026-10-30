@@ -25,8 +25,27 @@ export default function HostSecuritySection({ host }: { host: any }) {
   if (!(hostId > 0)) return null;
   const data = summary.data;
 
+  const rebaselineButton = data?.supported ? (
+    <Button
+      size="sm"
+      variant="outline"
+      className="h-7 px-2.5 text-xs"
+      disabled={rebaseline.isPending}
+      onClick={async () => {
+        const ok = await confirm({
+          title: "重新建立基线？",
+          description: "Agent 会把这台机器现在的端口、账号、钥匙、定时任务等都当作正常的记下来，之后只提醒新的变化。已有的发现不会删除。",
+          confirmText: "重新建立",
+        });
+        if (ok) rebaseline.mutate({ hostId });
+      }}
+    >
+      重新建立基线
+    </Button>
+  ) : null;
+
   return (
-    <Section title="安全">
+    <Section title="安全" action={rebaselineButton}>
       {!data ? (
         <Row label="巡检" value={summary.isLoading ? "读取中…" : "读取失败"} />
       ) : !data.supported ? (
@@ -48,26 +67,9 @@ export default function HostSecuritySection({ host }: { host: any }) {
           />
           <Row label="最近巡检" value={data.lastCheckAt ? `${formatAgo(Date.now() - data.lastCheckAt * 1000)} · 每 ${data.intervalMinutes} 分钟` : "还没有巡检过"} />
           <Row label="基线" value={data.baselineReady && data.baselineAt ? `${new Date(data.baselineAt * 1000).toLocaleDateString("zh-CN")} 建立` : "正在建立"} />
-          <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-            <Link href={`/insights?tab=security&host=${hostId}`} className="text-[13px] font-medium text-primary underline-offset-4 hover:underline">
-              查看这台主机的发现
-            </Link>
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={rebaseline.isPending}
-              onClick={async () => {
-                const ok = await confirm({
-                  title: "重新建立基线？",
-                  description: "Agent 会把这台机器现在的端口、账号、钥匙、定时任务等都当作正常的记下来，之后只提醒新的变化。已有的发现不会删除。",
-                  confirmText: "重新建立",
-                });
-                if (ok) rebaseline.mutate({ hostId });
-              }}
-            >
-              重新建立基线
-            </Button>
-          </div>
+          <Link href={`/insights?tab=security&host=${hostId}`} className="self-start text-meta font-medium text-primary underline-offset-4 hover:underline">
+            查看这台主机的发现
+          </Link>
         </>
       )}
     </Section>

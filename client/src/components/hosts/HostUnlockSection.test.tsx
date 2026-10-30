@@ -14,23 +14,17 @@ test("状态徽标：四种结论各一种颜色", () => {
   assert.match(renderToStaticMarkup(<UnlockStatusBadge status="unknown" />), /fx-stroke-base[^>]*>无法判断</);
 });
 
-test("详情里这一节默认折叠：只有标题和「展开」，点开才查、才显示", () => {
-  const html = renderToStaticMarkup(<HostUnlockSection hostId={5} />);
-  assert.match(html, /aria-expanded="false"/);
-  assert.match(html, /流媒体 \/ AI 解锁/);
-  assert.match(html, /展开/);
-  assert.doesNotMatch(html, /检测解锁|最近检测/);
-  assert.equal(renderToStaticMarkup(<HostUnlockSection hostId={0} />), "");
-});
-
 test("详情里有这一节；旧 Agent 提示升级；按钮和计划检测只给管理员；主机卡片上不显示解锁摘要", () => {
   const dialog = read("./HostDetailDialog.tsx");
   assert.match(dialog, /<HostUnlockSection hostId=\{Number\(host\.id\)\} \/>/);
   const section = read("./HostUnlockSection.tsx");
   assert.match(section, /需要升级 Agent/);
   assert.match(section, /检测解锁/);
-  assert.ok(section.includes("{data.canManage ? ("), "「检测解锁」按钮只给管理员");
-  assert.match(section, /data\.canManage && data\.schedule \?/);
+  assert.match(section, /title="出口检测"/, "这一节和订阅页节点菜单里的「出口检测」同一副画法");
+  assert.match(section, /<ExitHostPanel host=\{quality\.data\.host\} targets=\{quality\.data\.targets\} \/>/);
+  assert.ok(section.includes("data?.canManage ? ("), "「检测解锁」按钮只给管理员");
+  assert.match(section, /data\?\.canManage && data\.schedule \?/);
   assert.match(section, /trpc\.hosts\.unlockHistory/);
   assert.doesNotMatch(read("./HostSummaryCard.tsx"), /unlock/i);
+  assert.equal(renderToStaticMarkup(<HostUnlockSection hostId={0} />), "");
 });

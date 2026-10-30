@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown } from "lucide-react";
 import { toast } from "sonner";
 
 import { formatAgo } from "@shared/dashboardAttention";
@@ -16,21 +15,23 @@ import {
   type UnlockServiceResult,
   type UnlockStatus,
 } from "@shared/unlockCheck";
+import { ExitHostPanel } from "@/components/proxy/ExitQualityView";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { segmentedControlClassName, segmentedOptionClassName } from "@/components/ui/segmented";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
-import { Row } from "./HostDetailDialog";
+import { Row, Section } from "./HostDetailDialog";
 
 /*
-  主机详情里「流媒体 / AI 解锁」一节（Agent 2.2.226 起）。
+  主机详情里「出口检测」一节：这台机器出去以后到百度 / Google / GitHub / OpenAI 连不连得上
+  （站点连通四格，Agent 2.2.237 起每 2 分钟一轮），解锁了什么（流媒体 / AI，Agent 2.2.226 起）。
+  画法和订阅页节点菜单里的「出口检测」同一副（ExitHostPanel），数据也是同一个口径（hosts.exitQuality）。
 
-  结果是 Agent 从这台机器的出口去打开各服务的页面、按页面标记猜出来的（agent/unlock_check.go），
-  所以每一项只有四种结论，绿 / 黄 / 红 / 灰；拿不准的就是灰的「无法判断」，不硬说可用。
-  默认不定期跑：每一次都要请求十来个第三方站点。管理员点「检测解锁」才跑，或者在下面开计划检测。
+  解锁结果是 Agent 从这台机器的出口去打开各服务的页面、按页面标记猜出来的（agent/unlock_check.go），
+  每一项只有四种结论，绿 / 黄 / 红 / 灰；拿不准的就是灰的「无法判断」，不硬说可用。
+  默认不定期跑：每一次都要请求十来个第三方站点。管理员点「检测解锁」才跑，或者开计划检测。
   普通用户能看到自己能用的主机的结果，看不到按钮和计划设置。
-  默认折叠，点开才查、才显示（和「网络画像」一样）。
 */
 
 const STATUS_TONE: Record<UnlockStatus, string> = {
@@ -60,7 +61,7 @@ function fullTime(checkedAt: number) {
   return checkedAt ? new Date(checkedAt * 1000).toLocaleString("zh-CN", { hour12: false }) : "—";
 }
 
-/** 一行一个服务：名字 + 徽标 + 地区，说明另起一行（窄屏上不挤）。 */
+/** 历史弹窗里一次检测的各项：名字 + 徽标 + 地区，说明另起一行（窄屏上不挤）。 */
 function UnlockResultList({ results }: { results: UnlockServiceResult[] }) {
   const byId = new Map(results.map((item) => [item.service, item]));
   const rows = UNLOCK_SERVICES.map((def) => byId.get(def.id)).filter((item): item is UnlockServiceResult => !!item);
@@ -126,30 +127,13 @@ function HistoryDialog({ hostId, open, onOpenChange }: { hostId: number; open: b
 }
 
 export default function HostUnlockSection({ hostId }: { hostId: number }) {
-  const [open, setOpen] = useState(false);
   if (!(hostId > 0)) return null;
-  return (
-    <section className="flex min-w-0 flex-col gap-2 border-t border-[var(--fx-stroke-weak)] pt-3 first:border-t-0 first:pt-0">
-      <button
-        type="button"
-        className="flex min-w-0 items-center justify-between gap-2 text-left"
-        aria-expanded={open}
-        onClick={() => setOpen((value) => !value)}
-      >
-        <h3 className="text-meta font-medium uppercase tracking-wide text-muted-foreground">流媒体 / AI 解锁</h3>
-        <span className="inline-flex items-center gap-1 text-meta text-muted-foreground">
-          {open ? "收起" : "展开"}
-          <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", open && "rotate-180")} aria-hidden="true" />
-        </span>
-      </button>
-      {open ? <HostUnlockBody hostId={hostId} /> : null}
-    </section>
-  );
+  return <HostUnlockBody hostId={hostId} />;
 }
 
 function HostUnlockBody({ hostId }: { hostId: number }) {
   const utils = trpc.useUtils();
-  const [family, setFamily] = useState<UnlockFamily | null>(null);
+  const [family, setFamily] = useState<UnlockFamily>("auto");
   const [historyOpen, setHistoryOpen] = useState(false);
   const status = trpc.hosts.unlockStatus.useQuery(
     { hostId },
@@ -160,6 +144,11 @@ function HostUnlockBody({ hostId }: { hostId: number }) {
       // 有检测在跑就每 3 秒看一次，一般十几秒内出结果。
       refetchInterval: (query) => ((query.state.data?.pending.length ?? 0) > 0 ? 3_000 : false),
     },
+  );
+  const pendingCount = status.data?.pending.length ?? 0;
+  const quality = trpc.hosts.exitQuality.useQuery(
+    { hostId },
+    { enabled: hostId > 0, staleTime: 10_000, refetchOnWindowFocus: false, refetchInterval: pendingCount > 0 ? 3_000 : 60_000 },
   );
   const start = trpc.hosts.startUnlockCheck.useMutation({
     onSuccess: () => void utils.hosts.unlockStatus.invalidate({ hostId }),
@@ -173,67 +162,76 @@ function HostUnlockBody({ hostId }: { hostId: number }) {
     onError: (error) => toast.error(error.message),
   });
 
-  const data = status.data;
-  const pendingCount = data?.pending.length ?? 0;
-  // 检测跑完那一刻刷新一下主机列表，卡片上的摘要跟着变。
+  // 检测跑完那一刻刷新一下主机列表和出口面板，卡片上的摘要跟着变。
   const lastPending = useRef(0);
   useEffect(() => {
-    if (lastPending.current > 0 && pendingCount === 0) void utils.hosts.listPage.invalidate();
+    if (lastPending.current > 0 && pendingCount === 0) {
+      void utils.hosts.listPage.invalidate();
+      void utils.hosts.exitQuality.invalidate({ hostId });
+    }
     lastPending.current = pendingCount;
-  }, [pendingCount, utils]);
+  }, [pendingCount, utils, hostId]);
 
-  if (!data) return <Row label="解锁检测" value={status.isLoading ? "读取中…" : "读取失败"} />;
-
-  // 没选过就看 auto；auto 没测过但别的测过，看那个。
-  const shownFamily: UnlockFamily = family ?? (data.latest.some((run) => run.family === "auto") ? "auto" : data.latest[0]?.family ?? "auto");
-  const run = data.latest.find((item) => item.family === shownFamily) || null;
-  const pending = data.pending.find((item) => item.family === shownFamily) || null;
-  const anyHistory = data.latest.length > 0;
+  const data = status.data;
+  const pending = data?.pending[0] || null;
+  const latest = data?.latest[0] || null;
+  const checkButton = data?.canManage ? (
+    <Button
+      size="sm"
+      variant="outline"
+      className="h-7 px-2.5 text-xs"
+      disabled={!data.supported || !data.online || !!pending || start.isPending}
+      title={!data.supported ? "需要升级 Agent" : !data.online ? "主机离线" : undefined}
+      onClick={() => start.mutate({ hostId, family })}
+    >
+      {pending ? "检测中…" : family === "auto" ? "检测解锁" : `检测解锁（${UNLOCK_FAMILY_LABELS[family]}）`}
+    </Button>
+  ) : null;
 
   return (
-    <>
-      {!data.supported ? (
+    <Section title="出口检测" action={checkButton}>
+      {data && !data.supported ? (
         <Row label="解锁检测" value={<span className="text-[var(--fx-warn-text)]">需要升级 Agent（{data.minAgentVersion} 起）</span>} />
       ) : null}
 
-      <div className={cn(segmentedControlClassName, "grid grid-cols-3")} role="radiogroup" aria-label="检测用的出口">
-        {UNLOCK_FAMILIES.map((value) => (
-          <button
-            key={value}
-            type="button"
-            role="radio"
-            aria-checked={shownFamily === value}
-            className={segmentedOptionClassName(shownFamily === value, false, "h-7 text-[12.5px]")}
-            onClick={() => setFamily(value)}
-          >
-            {UNLOCK_FAMILY_LABELS[value]}
-          </button>
-        ))}
-      </div>
+      {quality.data ? (
+        <ExitHostPanel host={quality.data.host} targets={quality.data.targets} />
+      ) : (
+        <p className="text-meta text-muted-foreground">{quality.isLoading ? "读取中…" : "读取失败"}</p>
+      )}
 
       <Row
         label="最近检测"
-        value={pending ? "检测中…" : run ? <span title={fullTime(run.checkedAt)}>{agoText(run.checkedAt)} · {run.trigger === "schedule" ? "计划" : "手动"}</span> : "还没有检测过"}
+        value={!data
+          ? (status.isLoading ? "读取中…" : "读取失败")
+          : pending
+            ? "检测中…"
+            : latest
+              ? <span title={fullTime(latest.checkedAt)}>{agoText(latest.checkedAt)} · {UNLOCK_FAMILY_LABELS[latest.family]} · {latest.trigger === "schedule" ? "计划" : "手动"}</span>
+              : "还没有检测过"}
       />
-      {run ? <UnlockResultList results={run.results} /> : null}
 
-      <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-        <Button size="sm" variant="ghost" disabled={!anyHistory} onClick={() => setHistoryOpen(true)}>
-          历史
-        </Button>
-        {data.canManage ? (
-          <Button
-            size="sm"
-            disabled={!data.supported || !data.online || !!pending || start.isPending}
-            title={!data.supported ? "需要升级 Agent" : !data.online ? "主机离线" : undefined}
-            onClick={() => start.mutate({ hostId, family: shownFamily })}
-          >
-            {pending ? "检测中…" : shownFamily === "auto" ? "检测解锁" : `检测解锁（${UNLOCK_FAMILY_LABELS[shownFamily]}）`}
-          </Button>
-        ) : null}
-      </div>
+      {data?.canManage ? (
+        <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+          <span className="text-meta text-muted-foreground">检测用的出口</span>
+          <div className={cn(segmentedControlClassName, "flex")} role="radiogroup" aria-label="检测用的出口">
+            {UNLOCK_FAMILIES.map((value) => (
+              <button
+                key={value}
+                type="button"
+                role="radio"
+                aria-checked={family === value}
+                className={segmentedOptionClassName(family === value, false, "h-7 px-2.5 text-[12.5px]")}
+                onClick={() => setFamily(value)}
+              >
+                {UNLOCK_FAMILY_LABELS[value]}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
-      {data.canManage && data.schedule ? (
+      {data?.canManage && data.schedule ? (
         <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
           <span className="text-meta text-muted-foreground">计划检测（所有主机）</span>
           <div className={cn(segmentedControlClassName, "flex")} role="radiogroup" aria-label="计划检测">
@@ -254,11 +252,16 @@ function HostUnlockBody({ hostId }: { hostId: number }) {
         </div>
       ) : null}
 
-      <p data-fx-help="" className="text-meta text-muted-foreground">
-        结果按各服务页面上的标记推断，服务改版后可能不准；检测会从这台主机向这些服务发起请求。
-      </p>
+      <div className="flex items-center justify-between gap-2">
+        <p data-fx-help="" className="text-meta text-muted-foreground">
+          站点连通每 2 分钟一轮，只握手不发请求；解锁按各服务页面上的标记推断，服务改版后可能不准。
+        </p>
+        <button type="button" className="ml-auto shrink-0 text-meta font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline" disabled={!data || data.latest.length === 0} onClick={() => setHistoryOpen(true)}>
+          历史
+        </button>
+      </div>
 
       <HistoryDialog hostId={hostId} open={historyOpen} onOpenChange={setHistoryOpen} />
-    </>
+    </Section>
   );
 }
