@@ -105,3 +105,8 @@ export function getRuleLiveRates(ruleIds: readonly number[], nowMs = Date.now())
 export function resetRuleLiveRatesForTest() {
   samplesByRule.clear();
 }
+
+/** 给一批规则行补上此刻的速率（只在内存里，不进缓存）：订阅 / 线路图上每个节点的 ↓↑。 */
+export function withRuleLiveRates<T extends { ruleId: number | string }>(rows: T[], nowMs = Date.now()): Array<T & { liveRate: RuleLiveRate | null }> {
+  return rows.map((row) => ({ ...row, liveRate: getRuleLiveRate(Number(row.ruleId), nowMs) }));
+}

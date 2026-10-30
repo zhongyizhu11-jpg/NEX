@@ -2,7 +2,8 @@ import { isLinkProbeFresh } from "@shared/linkProbePolicy";
 import { forwardGroupModeOf } from "@shared/forwardTypes";
 import { formatHostAddressWithPort, getHostEntryAddress } from "@shared/hostEntryAddress";
 import { routeGroupOf } from "@shared/routeGroup";
-import { summarizeRouteChain, type RouteBoardStatus, type RouteChainSummary, type RouteSegment } from "@/features/rules/RouteBoard";
+import { summarizeRouteChain, type RouteBoardRate, type RouteBoardStatus, type RouteChainSummary, type RouteSegment } from "@/features/rules/RouteBoard";
+import type { RouteSwitchSummary } from "@shared/routeSwitchSummary";
 import { getTunnelHopIds, tunnelHopHostName } from "@/lib/tunnelDisplay";
 import type { NetworkHealth } from "@shared/networkHealth";
 
@@ -29,12 +30,17 @@ export type LineProbe = {
 
 export type LineTraffic = { bytesIn: number; bytesOut: number };
 
+/** 此刻的速率（字节/秒），来自 Agent 几秒一报的增量；90 秒没报就没有。 */
+export type LineRate = NonNullable<RouteBoardRate>;
+
 export type LineHop = {
   key: string;
   name: string;
   caption: string;
   health: NetworkHealth;
   title?: string;
+  /** 这一跳此刻的速率：线路组的中转各报各的；别的线路只有整条的，写在入口。 */
+  rate?: LineRate | null;
 };
 
 export type LineModel = {
@@ -56,6 +62,12 @@ export type LineModel = {
   statusText: string;
   probe: LineProbe | null;
   traffic: LineTraffic | null;
+  /** 整条线此刻的速率（入口上量的）。 */
+  rate: LineRate | null;
+  /** 线路组有几条路径可选（别的线路就是 1）。 */
+  pathCount: number;
+  /** 线路组最近 24 小时切换情况；别的线路没有。 */
+  switches: RouteSwitchSummary | null;
   subscription: { nodeName: string; visible: boolean } | null;
   /** 搜索用。 */
   haystack: string;
@@ -69,6 +81,8 @@ export type LineModelContext = {
   routeStatusByRule: Map<number, RouteBoardStatus | null | undefined>;
   probeByRule: Map<number, LineProbe | undefined>;
   trafficByRule: Map<number, LineTraffic | undefined>;
+  /** rules.trafficSummary 每行带的 liveRate（线路组的速率在线路板状态里，不走这个）。 */
+  rateByRule?: Map<number, LineRate | null | undefined>;
   nowMs?: number;
 };
 
@@ -221,6 +235,7 @@ export function buildLineModel(rule: any, context: LineModelContext): LineModel 
           caption: hostCaption(host, "中转"),
           health: hop.ok === false ? (hop.consecutiveFailures >= 3 ? "down" : "degraded") : hop.ok === true ? "healthy" : hostHealth(host),
           title: active.active ? `线路组当前走的路径 ${active.letter}「${active.name}」` : `线路组路径 ${active.letter}「${active.name}」（还没报在走哪条）`,
+          rate: hop.rate ?? null,
         });
       });
       // 线路板的段：第一段是入口探拨号地址，后面每段是那台中转探下一跳。节点数和它一致。
@@ -287,6 +302,10 @@ export function buildLineModel(rule: any, context: LineModelContext): LineModel 
   if (health === "down" && fresh && probe?.isTimeout) landing.health = "down";
 
   const traffic = context.trafficByRule.get(id) || null;
+  const rate: LineRate | null = routeGroup ? routeStatus?.rate ?? null : context.rateByRule?.get(id) ?? null;
+  if (rate) entry.rate = rate;
+  const pathCount = routeGroup ? Math.max(1, routeStatus?.paths?.length || routeGroup.paths.length || 1) : 1;
+  const switches = routeGroup ? routeStatus?.switches ?? null : null;
   const subscription = nodeId > 0 ? { nodeName: nodeName || "落地节点", visible: rule?.proxyNodeVisible !== false } : null;
   const haystack = [rule?.name, entry.name, entry.address, ...hops.map((hop) => hop.name), landing.name, landing.caption, exit?.name, KIND_LABELS[kind], rule?.userName]
     .filter(Boolean).join(" ").toLowerCase();
@@ -306,6 +325,9 @@ export function buildLineModel(rule: any, context: LineModelContext): LineModel 
     statusText,
     probe,
     traffic,
+    rate,
+    pathCount,
+    switches,
     subscription,
     haystack,
   };

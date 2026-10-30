@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { getRuleLiveRate, recordRuleTrafficSample, resetRuleLiveRatesForTest } from "./ruleLiveRates";
+import { getRuleLiveRate, recordRuleTrafficSample, resetRuleLiveRatesForTest, withRuleLiveRates } from "./ruleLiveRates";
 
 const T0 = Date.UTC(2026, 9, 28, 12, 0, 0);
 
@@ -47,4 +47,14 @@ test("半秒内重复上报的字节攒到下一次，不算成天文数字", ()
   assert.equal(getRuleLiveRate(3, T0 + 100), null);
   recordRuleTrafficSample({ ruleId: 3, hostId: 1, bytesIn: 5_000, bytesOut: 0, nowMs: T0 + 10_000 });
   assert.equal(getRuleLiveRate(3, T0 + 10_000)!.inBps, 500);
+});
+
+test("withRuleLiveRates：给汇总行补 liveRate，没报过的规则是 null，ruleId 是字符串也认", () => {
+  resetRuleLiveRatesForTest();
+  recordRuleTrafficSample({ ruleId: 9, hostId: 1, bytesIn: 0, bytesOut: 0, nowMs: T0 });
+  recordRuleTrafficSample({ ruleId: 9, hostId: 1, bytesIn: 20_000, bytesOut: 2_000, connections: 2, nowMs: T0 + 10_000 });
+  const rows = withRuleLiveRates([{ ruleId: "9", bytesIn: 1 }, { ruleId: 10, bytesIn: 2 }], T0 + 12_000);
+  assert.equal(rows[0].liveRate?.inBps, 1000);
+  assert.equal(rows[0].bytesIn, 1, "原来的字段原样带着");
+  assert.equal(rows[1].liveRate, null);
 });

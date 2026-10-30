@@ -1785,6 +1785,89 @@ button.fx-rb-mini-row:hover { background: var(--fx-l2-group); }
   .fx-rb-flow { display: none; }
 }
 
+/* 我的线路：泳道图。整块是点阵画布；三列（入口 / 中转 / 落地 [/ 出口]）靠同一副栅格对齐，列头和每条泳道各用一次。 */
+.fx-lanes {
+  --fx-lane-ink: #2a9d8f;
+  --fx-lane-ink-soft: color-mix(in srgb, var(--fx-lane-ink) 22%, transparent);
+  --fx-lane-card: var(--fx-l1-surface);
+  --fx-lane-end: clamp(170px, 24cqw, 290px);
+  --fx-lane-seg: 72px;
+  --fx-lane-pad: 16px;
+  container-type: inline-size; display: flex; flex-direction: column; gap: 14px; min-width: 0; margin: 0 -4px; padding: 6px 4px 14px;
+  background-image: radial-gradient(color-mix(in srgb, var(--fx-text-muted) 30%, transparent) 1.1px, transparent 1.3px); background-size: 16px 16px; background-position: 8px 8px;
+}
+.dark .fx-lanes { --fx-lane-ink: #5fc9b8; --fx-lane-card: color-mix(in srgb, var(--fx-l1-surface) 92%, #fff); }
+.fx-lane-row { display: grid; grid-template-columns: var(--fx-lane-end) minmax(0, 1fr) var(--fx-lane-end); align-items: center; gap: 0; min-width: 0; }
+.fx-lane-row[data-exit] { --fx-lane-end: clamp(140px, 18cqw, 230px); grid-template-columns: var(--fx-lane-end) minmax(0, 1fr) var(--fx-lane-end) calc(var(--fx-lane-end) + var(--fx-lane-seg)); }
+/* 列头：字对准每列第一张卡的左边（中转那列居中）。 */
+.fx-lanes-cols { padding: 0 calc(var(--fx-lane-pad) + 1px); font-size: 13px; color: var(--fx-text-muted); }
+.fx-lanes-cols .fx-lane-cell { display: flex; align-items: center; }
+.fx-lanes-cols .fx-lane-cell[data-col="relay"] { justify-content: center; }
+.fx-lanes-cols .fx-lane-cell[data-col="exit"] { padding-left: var(--fx-lane-seg); }
+/* 泳道：半透明的一块，边是淡淡的青。 */
+.fx-lane { display: flex; flex-direction: column; gap: 10px; padding: 12px var(--fx-lane-pad) var(--fx-lane-pad); border: 1px solid var(--fx-lane-ink-soft); border-radius: 18px; background: color-mix(in srgb, var(--fx-lane-card) 58%, transparent); min-width: 0; }
+.fx-lane[data-health="down"] { border-color: color-mix(in srgb, var(--fx-down) 35%, transparent); }
+.fx-lane[data-health="standby"] { opacity: .7; }
+.fx-lane[data-collapsed] { gap: 0; }
+.fx-lane-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+/* 标题框：名字、几条路径、整链延迟、切换次数、收起箭头，装在一个白框里。 */
+.fx-lane-title { display: inline-flex; min-width: 0; max-width: 100%; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 7px 12px; border: 1px solid var(--fx-stroke-weak); border-radius: 12px; background: var(--fx-lane-card); }
+.fx-lane-title > b { min-width: 0; max-width: 100%; font-size: 15px; font-weight: 700; color: var(--fx-text); }
+.fx-lane-sub { font-size: 13px; color: var(--fx-text-muted); }
+.fx-lane-chip { display: inline-flex; height: 24px; align-items: center; padding: 0 10px; border-radius: 999px; border: 1px solid var(--fx-stroke-weak); background: var(--fx-lane-card); font-size: 12.5px; font-weight: 600; white-space: nowrap; color: var(--fx-text-secondary); font-variant-numeric: tabular-nums; }
+.fx-lane-chip[data-tone="down"] { border-color: transparent; background: var(--fx-down-soft); color: var(--fx-down-text); }
+.fx-lane-chip[data-tone="off"] { color: var(--fx-text-muted); }
+.fx-lane-link { padding: 0; border: 0; background: transparent; font: inherit; font-size: 13px; color: var(--fx-lane-ink); cursor: pointer; white-space: nowrap; }
+.fx-lane-link:hover { text-decoration: underline; }
+.fx-lane-toggle { display: inline-flex; width: 20px; height: 20px; align-items: center; justify-content: center; border: 0; border-radius: 999px; background: transparent; color: var(--fx-text-muted); cursor: pointer; }
+.fx-lane-toggle:hover { background: var(--fx-l2-group); color: var(--fx-text); }
+.fx-lane-actions { display: inline-flex; flex: none; align-items: center; gap: 12px; padding-right: 2px; }
+.fx-lane-cell { display: flex; min-width: 0; align-items: center; }
+.fx-lane-middle { justify-content: stretch; }
+/* 节点：白卡，空心圆环 + 名字，角色一行，↓ ↑ 速率一行。 */
+.fx-lane-node { display: flex; min-width: 0; flex: 1 1 0; flex-direction: column; gap: 7px; padding: 13px 16px 14px; border: 1px solid var(--fx-stroke-weak); border-radius: 12px; background: var(--fx-lane-card); box-shadow: 0 1px 2px rgb(0 0 0 / 3%); }
+.fx-lane-middle .fx-lane-node { flex: 0 1 var(--fx-lane-end); min-width: 112px; }
+.fx-lane-exit .fx-lane-node { flex: 0 0 var(--fx-lane-end); }
+.fx-lane-exit .fx-lane-seg { flex: 1 1 var(--fx-lane-seg); }
+.fx-lane-node-head { display: flex; min-width: 0; align-items: center; gap: 9px; }
+.fx-lane-node-head > i { width: 13px; height: 13px; flex: none; border-radius: 50%; border: 2.5px solid var(--fx-lane-ink); background: var(--fx-lane-card); }
+.fx-lane-node[data-health="degraded"] .fx-lane-node-head > i, .fx-lane-node[data-health="switching"] .fx-lane-node-head > i { border-color: var(--fx-warn); }
+.fx-lane-node[data-health="down"] .fx-lane-node-head > i { border-color: var(--fx-down); background: var(--fx-down); }
+.fx-lane-node[data-health="standby"] .fx-lane-node-head > i { border-color: var(--fx-standby); }
+.fx-lane-node-head > b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; font-weight: 700; line-height: 20px; color: var(--fx-text); }
+.fx-lane-node-caption { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; line-height: 17px; color: var(--fx-text-muted); }
+.fx-lane-node-rate { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 10px; font-size: 13px; line-height: 17px; color: var(--fx-text-secondary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* 段：青色虚线横过去，药丸骑在正中。有流量时虚线往前走。 */
+.fx-lane-seg { --fx-lane-seg-color: var(--fx-lane-ink); position: relative; display: flex; flex: 1 1 var(--fx-lane-seg); min-width: 52px; height: 30px; align-items: center; justify-content: center; }
+.fx-lane-seg > i { position: absolute; inset-inline: 0; top: 50%; height: 3px; margin-top: -1.5px; background-image: linear-gradient(90deg, var(--fx-lane-seg-color) 0 8px, transparent 8px 13px); background-size: 13px 100%; background-repeat: repeat-x; opacity: .95; }
+.fx-lane-seg[data-state="failed"] { --fx-lane-seg-color: var(--fx-down); }
+.fx-lane-seg[data-flow] > i { animation: fx-lane-dash 1.2s linear infinite; }
+@keyframes fx-lane-dash { from { background-position: 0 0; } to { background-position: 13px 0; } }
+@media (prefers-reduced-motion: reduce) { .fx-lane-seg[data-flow] > i { animation: none; } }
+.fx-lane-pill { position: relative; z-index: 1; display: inline-flex; height: 26px; align-items: center; padding: 0 11px; border-radius: 999px; border: 1px solid var(--fx-stroke-weak); background: var(--fx-lane-card); font-size: 12.5px; font-weight: 600; white-space: nowrap; color: var(--fx-text); font-variant-numeric: tabular-nums; }
+.fx-lane-seg[data-state="unknown"] .fx-lane-pill { border-color: color-mix(in srgb, var(--fx-warn) 35%, transparent); background: linear-gradient(var(--fx-warn-soft), var(--fx-warn-soft)), var(--fx-lane-card); color: var(--fx-warn-text); }
+.fx-lane-seg[data-state="failed"] .fx-lane-pill { border-color: transparent; background: linear-gradient(var(--fx-down-soft), var(--fx-down-soft)), var(--fx-lane-card); color: var(--fx-down-text); }
+/* 中等宽度：两端的卡窄一点。 */
+@container (max-width: 860px) {
+  .fx-lanes { --fx-lane-end: clamp(140px, 26cqw, 200px); --fx-lane-seg: 56px; }
+  .fx-lane-node { padding: 10px 12px 11px; }
+  .fx-lane-node-head > b { font-size: 14px; }
+}
+/* 窄处（手机）泳道竖着排：列头收起，节点一个接一个，段变成短竖线。 */
+@container (max-width: 600px) {
+  .fx-lanes { padding-inline: 2px; margin-inline: -2px; }
+  .fx-lane { padding: 10px 10px 12px; }
+  .fx-lane-head { flex-wrap: wrap; }
+  .fx-lane-row, .fx-lane-row[data-exit] { display: flex; flex-direction: column; align-items: stretch; }
+  .fx-lanes-cols, .fx-lanes-cols[data-exit] { display: none; }
+  .fx-lane-cell, .fx-lane-exit { flex-direction: column; align-items: stretch; padding: 0; }
+  .fx-lane-middle .fx-lane-node, .fx-lane-exit .fx-lane-node, .fx-lane-node { flex: 0 0 auto; min-width: 0; }
+  .fx-lane-seg, .fx-lane-exit .fx-lane-seg { flex: 0 0 auto; width: auto; min-width: 0; height: 38px; }
+  .fx-lane-seg > i { inset-inline: auto; inset-block: 0; left: 50%; top: 0; width: 3px; height: auto; margin: 0 0 0 -1.5px; background-image: linear-gradient(180deg, var(--fx-lane-seg-color) 0 8px, transparent 8px 13px); background-size: 100% 13px; background-repeat: repeat-y; }
+  @keyframes fx-lane-dash-v { from { background-position: 0 0; } to { background-position: 0 13px; } }
+  .fx-lane-seg[data-flow] > i { animation-name: fx-lane-dash-v; }
+}
+
 /* 列表行里的一小段线：「HK entry 01 ──── SG relay 03」 */
 .fx-pathline { display: inline-flex; min-width: 0; align-items: center; gap: 6px; }
 .fx-pathline-ln { position: relative; flex: 1 1 18px; min-width: 18px; height: 2px; border-radius: 2px; background: var(--fx-pathline-color, var(--fx-accent)); }
