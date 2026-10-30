@@ -135,18 +135,16 @@ export function SpeedTestDialog({ subject, name, onOpenChange }: { subject: Spee
     <Dialog open={!!subject} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-h-[92svh] flex-col overflow-hidden sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>网速测试 · {name}</DialogTitle>
-          <DialogDescription className="text-xs">
-            {entryKey ? "从一台机器连这条线路的入口，走完整条链对 Cloudflare 测速：延迟、抖动、下载、上传，以及最后从哪个出口出去。" : "这台机器对 Cloudflare 测速：延迟、抖动、下载、上传，以及从哪个机房、哪个出口出去。"}
-          </DialogDescription>
+          <DialogTitle>网速测试</DialogTitle>
+          <DialogDescription className="truncate text-[13px]">{name}</DialogDescription>
         </DialogHeader>
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1" data-testid="speed-test">
           <div className="fx-hd-sec">
             <div className="fx-hd-sec-body pt-3">
-              <div className="text-[34px] font-bold leading-none tracking-tight tabular-nums" data-testid="speed-headline">{headline}</div>
+              <div className="text-[38px] font-semibold leading-none tracking-tight tabular-nums" data-testid="speed-headline">{headline}</div>
               <div className="text-[13px] text-muted-foreground">{subline}</div>
               {samples.length > 0 ? <SpeedChart samples={samples} /> : (
-                <div className="flex h-[120px] items-center justify-center text-[12.5px] text-muted-foreground">点「启动」开始，曲线会实时画出来。</div>
+                <div className="flex h-[120px] items-center justify-center text-[12.5px] text-muted-foreground">—</div>
               )}
             </div>
           </div>
@@ -154,11 +152,6 @@ export function SpeedTestDialog({ subject, name, onOpenChange }: { subject: Spee
           <div className="fx-hd-sec">
             <div className="fx-hd-sec-body pt-2.5">
               <ResultRow label={entryKey ? "从哪台测" : "出站"} value={exitHostLabel || "—"} />
-              {entryKey ? (
-                <p className="text-[11.5px] text-muted-foreground">
-                  入口机像客户端一样连自己的入口，流量走入口 → 中转 → 落地出去，测出来的就是整条链的带宽。机器上没有 sing-box 会先自动装一个。
-                </p>
-              ) : null}
             </div>
           </div>
 
@@ -173,8 +166,8 @@ export function SpeedTestDialog({ subject, name, onOpenChange }: { subject: Spee
           >
             {pending ? "测速中…" : result ? "再测一次" : "启动"}
           </Button>
-          {hostUnsupported ? <p className="text-[12px] text-[var(--fx-warn-text)]">这台机器的 Agent 太旧，升级到 2.2.241 后才能测速。</p> : null}
-          {latest?.error && !pending ? <p className="text-[12px] text-[var(--fx-down-text)]">{latest.error}</p> : null}
+          {hostUnsupported ? <p className="text-center text-[12px] text-[var(--fx-warn-text)]">Agent 需升级到 2.2.241</p> : null}
+          {latest?.error && !pending ? <p className="text-center text-[12px] text-[var(--fx-down-text)]">{latest.error}</p> : null}
 
           {result ? (
             <div className="fx-hd-sec">
@@ -189,9 +182,7 @@ export function SpeedTestDialog({ subject, name, onOpenChange }: { subject: Spee
               </div>
             </div>
           ) : null}
-          <p className="text-[11px] leading-relaxed text-muted-foreground">
-            此测速使用 Cloudflare 的测速服务，测的是{entryKey ? "经这条线路" : "这台机器"}到 Cloudflare 最近机房的带宽，每次约 300 MB 流量。{entryKey ? "注意它不含你到入口机那一段。" : ""}
-          </p>
+          <p className="text-center text-[11px] text-muted-foreground">由 Cloudflare 提供测速服务 · 每次约 300 MB</p>
         </div>
       </DialogContent>
     </Dialog>
