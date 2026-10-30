@@ -16,7 +16,10 @@ import {
 import { routeScoreGrade } from "../shared/routeScore";
 import { summarizeRouteSwitches, type RouteSwitchSummary } from "../shared/routeSwitchSummary";
 import { isAgentVersionBehind } from "../shared/version";
-import { getRouteStatus, routeHopDownHints } from "./routeGroupStats";
+import { getRouteStatus, routeHopDownHints, routeHopSuccessPct, routeNodeHints, routePathDownstreamMs, routeTrippedNodeIds } from "./routeGroupStats";
+import { ensureRouteNodeHealthFresh, getRouteNodeStatus } from "./routeNodeHealth";
+import { ROUTE_LINES_AGENT_VERSION, normalizeRouteDelivery } from "../shared/routeGroup";
+import { routeLinesOf, ROUTE_ENTRY_RELAY_INDEX } from "../shared/routeLines";
 import { routeRelayRulesByKey } from "./routeGroups";
 import { routeSchedulerHostIds } from "./routers/rules.crud";
 import { dbBool } from "./repositories/repositoryUtils";
@@ -58,7 +61,16 @@ export async function buildRouteStatus(rule: any) {
   const status = getRouteStatus(Number(rule.id), nowMs);
   const agent = status.agent || status.staleAgent;
   const hints = routeHopDownHints(Number(rule.id), paths, nowMs);
+  await ensureRouteNodeHealthFresh();
+  const nodeHints = routeNodeHints(paths, getRouteNodeStatus);
+  const tripped = routeTrippedNodeIds();
   const hopIds = Array.from(new Set(paths.flatMap((path) => path.hops)));
+  const viaTunnelIds = Array.from(new Set(paths.flatMap((path) => (path.hopVia || []).filter((value): value is number => !!value))));
+  const viaTunnels = new Map<number, any>();
+  for (const tunnelId of viaTunnelIds) {
+    const tunnel = await (db.getTunnelById(tunnelId) as Promise<any>).catch(() => null);
+    if (tunnel) viaTunnels.set(tunnelId, tunnel);
+  }
   /*
     评分和预热跑在调度层那台机器上 —— GOST 隧道规则是隧道的出口机，不是规则的入口机。
     版本读错机器的话，界面会说「支持评分」而真正跑调度的那台 Agent 还是旧的（或者反过来）。
@@ -85,9 +97,19 @@ export async function buildRouteStatus(rule: any) {
     const hops = path.hops.map((hostId, hopIndex) => {
       const probe = status.hops.find((item) => item.pathKey === path.key && item.hopIndex === hopIndex) || null;
       const relay = relays.get(`${path.key}:${hopIndex}`) as any;
+      const node = getRouteNodeStatus(hostId);
+      const viaId = path.hopVia?.[hopIndex] ?? null;
+      const via = viaId ? viaTunnels.get(viaId) : null;
       return {
         hostId,
         name: names.get(hostId) || `主机 ${hostId}`,
+        /** 到这一跳走的隧道（隧道段）；null = 普通中继。 */
+        viaTunnel: viaId ? { id: viaId, name: String(via?.name || `隧道 ${viaId}`), mode: String(via?.mode || "") } : null,
+        maintenance: !!node?.maintenance,
+        offline: node ? !node.online : null,
+        tripped: tripped.has(Number(hostId)),
+        /** 这一段最近 20 次探测的成功率；没样本为 null。 */
+        successPct: probe ? routeHopSuccessPct(probe) : null,
         port: relay ? Number(relay.sourcePort) : null,
         running: relay ? dbBool(relay.isRunning) : null,
         enabled: relay ? dbBool(relay.isEnabled) : null,
@@ -100,13 +122,23 @@ export async function buildRouteStatus(rule: any) {
         rate: relay ? getRuleLiveRate(Number(relay.id), nowMs) : null,
       };
     });
-    const down = !!target?.down || !!hint || !!path.issue;
-    const downReason = path.issue || (hint ? hint.reason : target?.downReason || "");
+    const nodeHint = nodeHints.get(path.key) || null;
+    const down = !!target?.down || !!hint || !!nodeHint || !!path.issue;
+    const downReason = path.issue || (nodeHint ? nodeHint.reason : hint ? hint.reason : target?.downReason || "");
+    // 隧道从入口机出发：入口机上那条走隧道的中继（routeHopIndex = 99）。
+    const entryRelay = relays.get(`${path.key}:${ROUTE_ENTRY_RELAY_INDEX}`) as any;
     return {
       key: path.key,
       index,
       letter: routePathLetter(index),
       name: routePathLabel(path, index),
+      /** 第几组（0 = 主线路那组）；老数据没有 = null。 */
+      tier: typeof path.tier === "number" ? path.tier : null,
+      lineKey: path.lineKey || null,
+      paused: !!path.paused,
+      entryRelayPort: entryRelay ? Number(entryRelay.sourcePort) : null,
+      /** 后面几段（中继各自探的）加起来，整条链 = 入口这段 + 它。 */
+      downstreamMs: routePathDownstreamMs(Number(rule.id), path, nowMs),
       hops,
       dest: routePathDestination(path, rule),
       dial: routePathDial(path, rule),
@@ -158,6 +190,9 @@ export async function buildRouteStatus(rule: any) {
     ruleId: Number(rule.id),
     protocol,
     policy,
+    delivery: normalizeRouteDelivery(policy.delivery),
+    /** 线路定义（分层候选）；老数据由路径推。 */
+    lines: routeLinesOf(rule),
     paths: rows,
     activeIndex,
     activeSince: status.agent?.activeSince || (active?.since ? active.since * 1000 : null),
@@ -166,10 +201,14 @@ export async function buildRouteStatus(rule: any) {
     agentStale: !status.agent && !!status.staleAgent,
     agentVersion: agentVersion || null,
     agentSupportsScores: !!agentVersion && !isAgentVersionBehind(agentVersion, ROUTE_GROUP_AGENT_VERSION),
+    /** 分层候选按组挑、整链打分、热备抢拨、改完马上探：Agent 2.2.243 起；老的照旧按顺序 / 全部里挑。 */
+    agentSupportsLines: !!agentVersion && !isAgentVersionBehind(agentVersion, ROUTE_LINES_AGENT_VERSION),
     agentSupportsProtocol: !schedulerAgentVersion || (!!agentVersion && !isAgentVersionBehind(agentVersion, schedulerAgentVersion)),
     requiredAgentVersion: schedulerAgentVersion || ROUTE_GROUP_AGENT_VERSION,
     schedulerNeed,
     tunnelMode: routeTunnel ? String(routeTunnel.mode || "") : null,
+    /** 调度器跑在哪几台机器上（直连是规则所在机器，隧道是出口）。 */
+    schedulerHostIds,
     /** 这条规则（入口）此刻的速率。 */
     rate: getRuleLiveRate(Number(rule.id), nowMs),
     switches,

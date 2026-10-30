@@ -67,6 +67,10 @@ export type RouteHopProbe = {
   /** Unix 毫秒 */
   at: number;
   consecutiveFailures: number;
+  /** 它探的下一台机器（落地为 0）：节点熔断按它算。 */
+  nextHostId?: number;
+  /** 最近几次的结果（新的在后），给「按段成功率」用。 */
+  recent?: boolean[];
 };
 
 export type RouteHopHint = { down: boolean; reason: string; hopIndex: number };
@@ -198,6 +202,7 @@ export function recordRouteHopProbe(input: {
   nextLabel: string;
   ok: boolean;
   latencyMs: number | null;
+  nextHostId?: number | null;
   nowMs?: number;
 }) {
   const nowMs = input.nowMs ?? Date.now();
@@ -226,9 +231,120 @@ export function recordRouteHopProbe(input: {
     latencyMs: latency,
     at: nowMs,
     consecutiveFailures: input.ok ? 0 : (previous?.consecutiveFailures || 0) + 1,
+    nextHostId: Number(input.nextHostId || 0) || 0,
+    recent: [...(previous?.recent || []), !!input.ok].slice(-ROUTE_HOP_RECENT),
   });
   const after = pathDownState(probes, pathKey, nowMs);
-  return { downChanged: !!before !== !!after, down: !!after };
+  const breaker = Number(input.nextHostId || 0) > 0
+    ? noteNodeProbe(Number(input.nextHostId), `${ruleId}:${key}`, !!input.ok, (previous?.consecutiveFailures || 0) + (input.ok ? 0 : 1), nowMs)
+    : null;
+  return { downChanged: !!before !== !!after, down: !!after, breaker };
+}
+
+// ---------------------------------------------------------------- 节点熔断
+
+/** 按段成功率看最近多少次探测。 */
+const ROUTE_HOP_RECENT = 20;
+/** 恢复后要稳定多久才把熔断解除。 */
+export const ROUTE_BREAKER_RECOVER_MS = 60_000;
+/** 一台机器多久之内有人探通过，就不算「都探不通」。 */
+const ROUTE_BREAKER_OK_WINDOW_MS = 120_000;
+
+type NodeBreakerState = { failing: Map<string, number>; lastOkAt: number; trippedAt: number; okSince: number };
+const nodeBreakers = new Map<number, NodeBreakerState>();
+
+/**
+ * 一次「谁探 nextHost」的结果。任一条线路连续 3 次探不通它、而两分钟内没有任何线路探通过 →
+ * 熔断：经过它的所有路径一起标成用不了，不用每条规则各自再探三轮。之后有探通的，稳定一分钟解除。
+ * 返回熔断状态翻没翻（翻了调用方要推所有经过它的规则）。
+ */
+function noteNodeProbe(hostId: number, prober: string, ok: boolean, consecutiveFailures: number, nowMs: number): { hostId: number; tripped: boolean } | null {
+  let state = nodeBreakers.get(hostId);
+  if (!state) {
+    state = { failing: new Map(), lastOkAt: 0, trippedAt: 0, okSince: 0 };
+    nodeBreakers.set(hostId, state);
+  }
+  const wasTripped = state.trippedAt > 0;
+  if (ok) {
+    state.failing.delete(prober);
+    state.lastOkAt = nowMs;
+    if (wasTripped) {
+      if (!state.okSince) state.okSince = nowMs;
+      if (nowMs - state.okSince >= ROUTE_BREAKER_RECOVER_MS) {
+        state.trippedAt = 0;
+        state.okSince = 0;
+        return { hostId, tripped: false };
+      }
+    }
+    return null;
+  }
+  state.failing.set(prober, consecutiveFailures);
+  state.okSince = 0;
+  if (!wasTripped && consecutiveFailures >= ROUTE_HOP_DOWN_THRESHOLD && nowMs - state.lastOkAt > ROUTE_BREAKER_OK_WINDOW_MS) {
+    state.trippedAt = nowMs;
+    return { hostId, tripped: true };
+  }
+  return null;
+}
+
+/** 此刻熔断着的机器。 */
+export function routeTrippedNodeIds(): Set<number> {
+  const ids = new Set<number>();
+  for (const [hostId, state] of nodeBreakers) if (state.trippedAt > 0) ids.add(hostId);
+  return ids;
+}
+
+export function routeNodeBreakerState(hostId: number) {
+  const state = nodeBreakers.get(Number(hostId));
+  return state ? { tripped: state.trippedAt > 0, trippedAt: state.trippedAt || null, lastOkAt: state.lastOkAt || null, failingProbers: state.failing.size } : { tripped: false, trippedAt: null, lastOkAt: null, failingProbers: 0 };
+}
+
+/**
+ * 一条路径「此刻不该走」的面板提示（Agent 认的短语，界面用 describeRouteIssue 翻译）：
+ * 暂停 > 维护 > 离线 > 熔断。中转断了的提示在 routeHopDownHints 里。
+ */
+export function routeNodeHints(
+  paths: readonly RoutePath[],
+  node: (hostId: number) => { name: string; online: boolean; maintenance: boolean } | null,
+  tripped: ReadonlySet<number> = routeTrippedNodeIds(),
+) {
+  const hints = new Map<string, RouteHopHint>();
+  for (const path of paths) {
+    if (path.paused) {
+      hints.set(path.key, { down: true, hopIndex: 0, reason: "paused" });
+      continue;
+    }
+    let found: RouteHopHint | null = null;
+    path.hops.forEach((hostId, hopIndex) => {
+      if (found) return;
+      const status = node(hostId);
+      const name = status?.name || `主机 ${hostId}`;
+      if (status?.maintenance) found = { down: true, hopIndex, reason: `maintenance: ${name}` };
+      else if (status && !status.online) found = { down: true, hopIndex, reason: `node offline: ${name}` };
+      else if (tripped.has(Number(hostId))) found = { down: true, hopIndex, reason: `breaker: ${name}` };
+    });
+    if (found) hints.set(path.key, found);
+  }
+  return hints;
+}
+
+/** 入口 Agent 探不到的那几段（中继各自探的）加起来：Agent 拿它算整条链的分。 */
+export function routePathDownstreamMs(ruleId: number, path: RoutePath, nowMs = Date.now()): number {
+  const probes = hopProbesByRule.get(Number(ruleId));
+  if (!probes) return 0;
+  let total = 0;
+  for (const probe of probes.values()) {
+    if (probe.pathKey !== path.key || nowMs - probe.at > ROUTE_HOP_STALE_MS) continue;
+    if (probe.ok && typeof probe.latencyMs === "number") total += probe.latencyMs;
+  }
+  return Math.round(total);
+}
+
+/** 一段最近的探测成功率（百分比）；没样本为 null。 */
+export function routeHopSuccessPct(probe: Pick<RouteHopProbe, "recent">): number | null {
+  const recent = probe.recent || [];
+  if (recent.length === 0) return null;
+  return Math.round((recent.filter(Boolean).length / recent.length) * 1000) / 10;
 }
 
 /**
@@ -279,4 +395,35 @@ export function forgetRouteStats(ruleId: number) {
 export function resetRouteStatsForTest() {
   agentStatsByRule.clear();
   hopProbesByRule.clear();
+  nodeBreakers.clear();
+}
+
+/**
+ * 一段（from → to）最近测到的延迟：所有线路里「from 探 to」的中继探测取最小。from = 入口机时，
+ * 入口 Agent 报的「拨第一跳」也算。展开线路时拿它给候选排序；没测过返回 null。
+ */
+export function routeSegmentLatencyEstimate(fromHostId: number, toHostId: number, nowMs = Date.now()): number | null {
+  let best: number | null = null;
+  for (const probes of hopProbesByRule.values()) {
+    for (const probe of probes.values()) {
+      if (probe.hostId !== fromHostId || Number(probe.nextHostId || 0) !== toHostId) continue;
+      if (!probe.ok || typeof probe.latencyMs !== "number" || nowMs - probe.at > ROUTE_HOP_STALE_MS) continue;
+      if (best === null || probe.latencyMs < best) best = probe.latencyMs;
+    }
+  }
+  return best;
+}
+
+/** 哪些规则的中继在探这台机器（它是那些路径的下一跳）。 */
+export function routeRuleIdsProbingHost(hostId: number): number[] {
+  const ids: number[] = [];
+  for (const [ruleId, probes] of hopProbesByRule) {
+    for (const probe of probes.values()) {
+      if (Number(probe.nextHostId || 0) === Number(hostId)) {
+        ids.push(ruleId);
+        break;
+      }
+    }
+  }
+  return ids;
 }

@@ -145,6 +145,14 @@ export function normalizeAgentProbeCounts(value: {
 
 export type SelfTestMeta =
   | {
+      /** 线路编辑框的逐段测延迟：从这台机器直接测目标（不经转发运行时）。 */
+      kind: "line-segment";
+      targetIp: string;
+      targetPort: number;
+      method: "tcp" | "ping";
+      hopLabel?: string;
+    }
+  | {
       /** Failover-group rule test, pinned at click time to the active member's runtime child rule. */
       kind: "forward-group";
       groupId: number;
@@ -295,6 +303,7 @@ function validAgentProbeResult(item: any, idKey: string) {
 export function isSelfTestMeta(value: unknown): value is SelfTestMeta {
   const meta = value as Partial<SelfTestMeta>;
   if (!meta || typeof meta.kind !== "string") return false;
+  if (meta.kind === "line-segment") return typeof (meta as any).targetIp === "string" && (meta as any).targetIp.length > 0;
   if (meta.kind === "forward-chain" || meta.kind === "forward-group") return Number.isFinite(Number((meta as any).groupId));
   return Number.isFinite(Number((meta as any).tunnelId));
 }

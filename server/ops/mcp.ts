@@ -115,6 +115,31 @@ const TUNNEL_FIELDS = ["id", "name", "mode", "protocol", "entryHostId", "exitHos
 const GROUP_FIELDS = ["id", "name", "groupMode", "mode", "isEnabled", "memberCount", "members", "status", "activeMemberId"];
 const USER_FIELDS = ["id", "username", "name", "email", "role", "accountEnabled", "canAddRules", "trafficUsed", "trafficLimit", "expiresAt", "ruleCount", "lastLoginAt", "createdAt"];
 
+/** 线路板一项的摘要：完整的 routeStatus 太深（逐跳的速率、拨号统计），列表里只留判断「好不好」要的。 */
+function compactLineStatus(status: any) {
+  if (!status || typeof status !== "object") return { status: null };
+  const paths = Array.isArray(status.paths) ? status.paths : [];
+  return {
+    mode: status.policy?.mode ?? null,
+    activeIndex: status.activeIndex ?? -1,
+    entry: status.entry ? { hostId: status.entry.hostId, name: status.entry.name, online: status.entry.online } : null,
+    agentStale: !!status.agentStale,
+    paths: paths.map((path: any) => ({
+      letter: path.letter,
+      name: path.name,
+      active: !!path.active,
+      healthy: path.healthy ?? null,
+      down: !!path.down,
+      downReason: path.downReason || null,
+      score: path.score ?? null,
+      latencyMs: path.latencyMs ?? null,
+      lossPct: path.lossPct ?? null,
+      jitterMs: path.jitterMs ?? null,
+      hops: Array.isArray(path.hops) ? path.hops.map((hop: any) => hop?.name).join(" > ") : "",
+    })),
+  };
+}
+
 // ---------- 工具 ----------
 
 const pageArgs = {
@@ -215,6 +240,66 @@ export const MCP_TOOLS: McpTool[] = [
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     args: z.object({}).strict(),
     run: async (_args, s) => compactPage(await s.invoke("forwardGroups.list"), GROUP_FIELDS),
+  },
+  {
+    name: "list_lines",
+    description: "列出开了线路组（多条线路 / 主备 / 智能择优）的规则，每条带当前走哪条线路、各线路的评分、延迟、丢包和是否异常。管理员传 scope=all 可看所有人的。",
+    inputSchema: {
+      type: "object",
+      properties: { scope: { type: "string", enum: ["self", "all"], description: "self = 只看自己的（默认），all = 所有人的（仅管理员）" } },
+      additionalProperties: false,
+    },
+    args: z.object({ scope: z.enum(["self", "all"]).optional() }).strict(),
+    run: async (args, s) => {
+      const items = await s.invoke("rules.routeBoard", args.scope ? { scope: args.scope } : {});
+      return Array.isArray(items) ? items.map((item: any) => ({ ruleId: item?.ruleId, name: item?.name, userName: item?.userName ?? null, ...compactLineStatus(item?.status) })) : items;
+    },
+  },
+  {
+    name: "get_line",
+    description: "查看一条线路组规则此刻的线路状态：每条线路走哪几跳、拨哪个地址、评分 / 延迟 / 丢包 / 抖动 / 可用率、哪一跳断了、现在走的是哪条、最近切了几次。",
+    inputSchema: { type: "object", properties: { ruleId: { type: "integer", minimum: 1, description: "规则 ID（list_lines 可查）" } }, required: ["ruleId"], additionalProperties: false },
+    args: z.object({ ruleId: z.number().int().positive() }).strict(),
+    run: async (args, s) => (await s.invoke("rules.routeStatus", { ruleId: args.ruleId })) ?? { message: "这条规则没有开线路组" },
+  },
+  {
+    name: "get_line_events",
+    description: "读取一条线路组规则最近的线路事件（切换、异常、恢复、预热、预检没过、人工指定等），最新的在前，原因已翻成人话。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ruleId: { type: "integer", minimum: 1, description: "规则 ID" },
+        limit: { type: "integer", minimum: 1, maximum: 100, description: "最多几条，默认 30" },
+      },
+      required: ["ruleId"],
+      additionalProperties: false,
+    },
+    args: z.object({ ruleId: z.number().int().positive(), limit: z.number().int().min(1).max(100).optional() }).strict(),
+    run: async (args, s) => s.invoke("rules.routeEvents", { ruleId: args.ruleId, limit: args.limit ?? 30 }),
+  },
+  {
+    name: "export_line",
+    description: "导出一条线路组规则的完整诊断资料（只读）：此刻的线路状态、最近 N 小时的线路事件和每条线路的质量历史（延迟、丢包、评分走势）。排查「线路时好时坏」时用它。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ruleId: { type: "integer", minimum: 1, description: "规则 ID" },
+        hours: { type: "integer", minimum: 1, maximum: 168, description: "最近几小时，默认 24，最多 168（7 天）" },
+      },
+      required: ["ruleId"],
+      additionalProperties: false,
+    },
+    args: z.object({ ruleId: z.number().int().positive(), hours: z.number().int().min(1).max(168).optional() }).strict(),
+    run: async (args, s) => {
+      const exported = (await s.invoke("lineDiagnostics.lineExport", { ruleId: args.ruleId, format: "json", hours: args.hours ?? 24 })) as { body?: unknown } | null;
+      if (!exported || typeof exported.body !== "string") return exported ?? { error: "导出失败" };
+      // body 是 JSON 文本；解析回对象交出去（直接给字符串会被截断成 2000 字）。
+      try {
+        return JSON.parse(exported.body);
+      } catch {
+        return { error: "导出的内容不是合法 JSON" };
+      }
+    },
   },
   {
     name: "dashboard_stats",

@@ -412,6 +412,11 @@ export type BuildProxyRulePlanOptions = {
    * 覆盖的是「默认去向」—— 组还是建，用户在客户端里照样能改；REJECT 则不建组。
    */
   categoryTargets?: Record<string, string>;
+  /**
+   * 分类 key → 该分类组默认首选的组名（解锁出口组，见 shared/proxySubUnlock.ts）。
+   * 只作用于默认走代理、且令牌没有覆盖去向的分类：放在成员最前面，原来的成员照旧排在后面兜底。
+   */
+  preferredGroups?: Record<string, string>;
 };
 
 /**
@@ -442,11 +447,15 @@ export function buildProxyRulePlan(options: BuildProxyRulePlanOptions): ProxyRul
     } else {
       target = groupName;
       // 首选项即默认去向，用户在客户端里可以随时改成别的。
+      // 解锁组只在没有覆盖时生效：令牌上明确指定的去向（包括 PROXY）优先。
+      const unlockGroup = !override && outbound === "proxy" ? String(options.preferredGroups?.[category.key] || "").trim() : "";
       const preferred = override && override !== "DIRECT" && override !== "PROXY"
         ? [override, options.mainGroupName, PROXY_RULE_TARGET_DIRECT]
         : outbound === "direct"
           ? [PROXY_RULE_TARGET_DIRECT, options.mainGroupName]
-          : [options.mainGroupName, PROXY_RULE_TARGET_DIRECT];
+          : unlockGroup
+            ? [unlockGroup, options.mainGroupName, PROXY_RULE_TARGET_DIRECT]
+            : [options.mainGroupName, PROXY_RULE_TARGET_DIRECT];
       categoryGroups.push({
         name: groupName,
         members: [...preferred, ...options.selectableMembers.filter((member) => !preferred.includes(member))],

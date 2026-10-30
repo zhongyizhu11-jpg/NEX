@@ -23,6 +23,7 @@ import HostIpChangeSection from "./HostIpChangeSection";
 import { HostTlsInboundSection } from "./HostTlsInboundManager";
 import HostUnlockSection from "./HostUnlockSection";
 import HostSpeedTestSection from "./HostSpeedTestSection";
+import HostLineSection from "./HostLineSection";
 
 /**
  * 主机详情 —— Detail 态。
@@ -234,6 +235,9 @@ export default function HostDetailDialog(props: HostDetailDialogProps) {
 
           {/* 网速测试：这台机器对 Cloudflare 测速（Agent 2.2.241 起），点开是曲线和结果 */}
           <HostSpeedTestSection host={host} />
+
+          {/* 线路：维护开关、节点熔断、经过它的线路（2.3.496） */}
+          <HostLineSection hostId={Number(host.id)} />
 
           {/* 网络画像：双栈出站、运营商、25 端口、DNSBL（Agent 2.2.226 起在主机上测） */}
           <HostNetProfileSection host={host} canManage={user?.role === "admin"} />

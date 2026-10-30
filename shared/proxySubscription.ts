@@ -567,7 +567,10 @@ export function singboxOutbound(node: ProxyNode): Record<string, unknown> {
 
 function singboxGroupOutbound(group: ProxySubscriptionGroup): Record<string, unknown> {
   if (group.type === "select") {
-    return { type: "selector", tag: group.name, outbounds: [...group.members] };
+    // 分类组里的「DIRECT」在 sing-box 里是 tag 为 direct 的那个出站（见下面 renderSingbox），
+    // 照原样写会让 sing-box 报 outbound not found。
+    const members = group.members.map((member) => (member === PROXY_RULE_TARGET_DIRECT ? "direct" : member));
+    return { type: "selector", tag: group.name, outbounds: Array.from(new Set(members)) };
   }
   // sing-box 没有单独的 fallback 类型，两种模式都用 urltest 表达；它本身就带
   // 故障切换，主备与择快的差别只在成员顺序。sing-box 也没有负载均衡出站，

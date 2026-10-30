@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { pollingInterval } from "@/lib/polling";
 import { trpc } from "@/lib/trpc";
+import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { routeGroupOf, routePathLetter, type RouteGroup } from "@shared/routeGroup";
 import { describeRoutePolicy, pinUntilSeconds, type RoutePolicy } from "@shared/routePolicy";
@@ -28,7 +29,41 @@ import { RouteGroupSheet, type RouteStatus } from "./RouteGroupSheet";
 
 type RouteBoardRow = { rule: any; group: RouteGroup; policy: RoutePolicy; host: any };
 
-export function RouteBoardList({ searchQuery = "", isAdmin = false }: { searchQuery?: string; isAdmin?: boolean }) {
+/** 线路工作台的紧凑卡（2.3.496）：名字、在走哪条、整条链毫秒、用法标签；点开是线路面板。 */
+function LineCompactCard({ name, owner, status, onOpen }: { name: string; owner: string | null; status: RouteStatus; onOpen: () => void }) {
+  const paths = status.paths as any[];
+  const active = paths.find((path) => path.active) || null;
+  const activeIndex = active ? paths.indexOf(active) : -1;
+  const lineIndex = active && typeof active.tier === "number" ? active.tier : activeIndex;
+  const allDown = paths.length > 0 && paths.every((path) => path.down);
+  const chain = active && active.latencyMs !== null && active.latencyMs !== undefined ? Math.round((Number(active.latencyMs) + Number(active.downstreamMs || 0)) * 10) / 10 : null;
+  const tone = allDown ? "down" : lineIndex > 0 ? "warn" : "ok";
+  const via = active ? [status.entry?.name || "入口", ...(active.hops || []).map((hop: any) => (hop.viaTunnel ? `隧道 ${hop.viaTunnel.name}` : hop.name)), active.dest?.ip ? `${active.dest.ip}:${active.dest.port}` : "落地"].join(" → ") : "还没报在走哪条";
+  const modeLabel = status.policy?.mode === "smart" || status.policy?.mode === "hybrid" ? "整链最优" : status.policy?.mode === "weighted" ? "按权重" : status.policy?.mode === "scheduled" ? "按时段" : "主备顺序";
+  const delivery = String((status as any).delivery || "cold");
+  const deliveryLabel = delivery === "hot" ? "热备" : delivery === "aggregate" ? "聚合" : delivery === "replicate" ? "复制双发" : null;
+  return (
+    <button type="button" onClick={onOpen} className="flex w-full min-w-0 flex-col gap-1.5 rounded-[var(--fx-radius-card,14px)] border border-[var(--fx-stroke-weak)] bg-[var(--fx-l1-surface)] px-3.5 py-3 text-left hover:border-[var(--fx-stroke)]" data-testid="line-compact-card">
+      <div className="flex min-w-0 items-center justify-between gap-2">
+        <b className="truncate text-sm">{name}{owner ? <span className="ml-1.5 text-meta font-normal text-muted-foreground">{owner}</span> : null}</b>
+        <span className={cn("shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold", tone === "down" ? "bg-[var(--fx-down-soft)] text-[var(--fx-down-text)]" : tone === "warn" ? "bg-[var(--fx-warn-soft)] text-[var(--fx-warn-text)]" : "bg-[var(--fx-healthy-soft)] text-[var(--fx-healthy-text)]")}>
+          {allDown ? "全部故障" : lineIndex > 0 ? `走备 ${lineIndex}` : "主线路"}
+        </span>
+      </div>
+      <div className="flex min-w-0 items-end justify-between gap-2">
+        <span className="min-w-0 truncate text-[12px] text-muted-foreground">{via}</span>
+        <span className={cn("shrink-0 font-mono text-lg font-bold", tone === "warn" ? "text-[var(--fx-warn-text)]" : "text-[var(--fx-accent)]")}>{chain === null ? <small className="text-xs font-medium text-muted-foreground">未测</small> : <>{chain}<small className="ml-0.5 text-[11px] font-medium">ms</small></>}</span>
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        <span className="rounded-full border border-[var(--fx-stroke-weak)] px-2 py-0.5 text-[11px]">{modeLabel}</span>
+        {deliveryLabel ? <span className="rounded-full border border-[var(--fx-stroke-weak)] px-2 py-0.5 text-[11px]">{deliveryLabel}</span> : null}
+        <span className="rounded-full border border-[var(--fx-stroke-weak)] px-2 py-0.5 text-[11px]">{paths.length} 条路径</span>
+      </div>
+    </button>
+  );
+}
+
+export function RouteBoardList({ searchQuery = "", isAdmin = false, compact = false }: { searchQuery?: string; isAdmin?: boolean; compact?: boolean }) {
   const [, setLocation] = useLocation();
   const utils = trpc.useUtils();
   // 只拉开了主备的规则：以前拉全部规则再在这里按 failoverEnabled 丢掉绝大多数。
@@ -101,7 +136,15 @@ export function RouteBoardList({ searchQuery = "", isAdmin = false }: { searchQu
         {rows.map((row) => {
           const board = boardByRule.get(Number(row.rule.id));
           const status = (board?.status as RouteStatus | undefined) || null;
-          return status ? (
+          return status && compact ? (
+            <LineCompactCard
+              key={row.rule.id}
+              name={String(row.rule.name || "")}
+              owner={isAdmin && row.rule.userName ? String(row.rule.userName) : null}
+              status={status}
+              onOpen={() => setOpenRuleId(Number(row.rule.id))}
+            />
+          ) : status ? (
             <RouteBoardCard
               key={row.rule.id}
               name={String(row.rule.name || "")}

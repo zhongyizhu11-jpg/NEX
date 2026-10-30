@@ -29,13 +29,14 @@ export function invalidateHostTrafficPolicyCache() {
 
 async function loadPolicyHostIds() {
   const rows = await queryRaw<any>(`SELECT ${q("id")} FROM ${q("hosts")}
-    WHERE ${q("trafficFailoverEnabled")} = ${boolLiteral(true)} OR ${q("trafficFailoverExcluded")} = ${boolLiteral(true)}`);
+    WHERE ${q("trafficFailoverEnabled")} = ${boolLiteral(true)} OR ${q("trafficFailoverExcluded")} = ${boolLiteral(true)} OR ${q("maintenanceMode")} = ${boolLiteral(true)}`);
   return new Set(rows.map((row) => Number(row.id)).filter((id) => id > 0));
 }
 
 async function loadExcludedHostIds() {
-  const rows = await queryRaw<any>(`SELECT ${q("id")}, ${q("trafficLimit")}, ${q("trafficFailoverEnabled")}, ${q("trafficFailoverExcluded")}
-    FROM ${q("hosts")} WHERE ${q("trafficFailoverExcluded")} = ${boolLiteral(true)}`);
+  // 维护中的主机和流量到阈值的一样处理：组调度、入口组 DNS、出口组都把它拿掉（2.3.496）。
+  const rows = await queryRaw<any>(`SELECT ${q("id")}, ${q("trafficLimit")}, ${q("trafficFailoverEnabled")}, ${q("trafficFailoverExcluded")}, ${q("maintenanceMode")}
+    FROM ${q("hosts")} WHERE ${q("trafficFailoverExcluded")} = ${boolLiteral(true)} OR ${q("maintenanceMode")} = ${boolLiteral(true)}`);
   return new Set(rows.filter(hostTrafficExcluded).map((host) => Number(host.id)));
 }
 

@@ -828,6 +828,34 @@ function scheduleOrphanedAgentHostCleanup() {
 }
 
 export const hostsRouter = router({
+    // 节点维护：从所有线路、转发组、入口组、出口组的候选里拿掉（server/hostMaintenance.ts）。
+    setMaintenance: protectedProcedure
+      .input(z.object({ hostId: z.number().int().positive(), enabled: z.boolean(), note: z.string().trim().max(200).nullable().optional() }))
+      .mutation(async ({ input, ctx }) => {
+        const host = await db.getHostById(input.hostId) as any;
+        if (!host) throw new TRPCError({ code: "NOT_FOUND", message: "主机不存在" });
+        if (ctx.user.role !== "admin" && Number(host.userId) !== Number(ctx.user.id)) throw new TRPCError({ code: "FORBIDDEN", message: "只有主机的主人或管理员能设维护" });
+        const { setHostMaintenance } = await import("../hostMaintenance");
+        return setHostMaintenance(input.hostId, input.enabled, input.note ?? null, ctx.user);
+      }),
+    // 节点在线路里的样子：维护中没有、熔断没有、经过它的线路有哪些（主机详情「线路」那一节）。
+    lineHealth: protectedProcedure
+      .input(z.object({ hostId: z.number().int().positive() }))
+      .query(async ({ input, ctx }) => {
+        const host = await db.getHostById(input.hostId) as any;
+        if (!host) throw new TRPCError({ code: "NOT_FOUND", message: "主机不存在" });
+        const { routeNodeBreakerState } = await import("../routeGroupStats");
+        const { linesThroughHost } = await import("../routeLineViews");
+        return {
+          hostId: Number(host.id),
+          maintenance: host.maintenanceMode === true || host.maintenanceMode === 1,
+          maintenanceSince: host.maintenanceSince ? Number(new Date(host.maintenanceSince).getTime() || Number(host.maintenanceSince) * 1000) : null,
+          maintenanceNote: host.maintenanceNote ? String(host.maintenanceNote) : null,
+          canManage: ctx.user.role === "admin" || Number(host.userId) === Number(ctx.user.id),
+          breaker: routeNodeBreakerState(Number(host.id)),
+          lines: await linesThroughHost(Number(host.id), ctx.user),
+        };
+      }),
     // 流媒体 / AI 解锁检测：unlockStatus / unlockHistory / startUnlockCheck / unlockSchedule / setUnlockSchedule（见 ./hostUnlock.ts）
     ...hostUnlockProcedures,
     // 网速测试：speedTestStatus / speedTestHistory / startSpeedTest（见 ./hostSpeedTest.ts）

@@ -16,6 +16,8 @@ export type HostTrafficPolicy = {
   trafficFailoverEnabled?: unknown;
   trafficFailoverThresholdPercent?: unknown;
   trafficFailoverExcluded?: unknown;
+  /** 节点维护（2.3.496）：和流量到阈值一样，从所有组、线路的候选里拿掉。 */
+  maintenanceMode?: unknown;
 };
 
 export const HOST_TRAFFIC_FAILOVER_DEFAULT_PERCENT = 100;
@@ -47,8 +49,11 @@ export function shouldExcludeHostForTraffic(host: HostTrafficPolicy, traffic: { 
  * 存着的 trafficFailoverExcluded 时，不能还把它当成暂停。
  */
 export function hostTrafficExcluded(host: HostTrafficPolicy | null | undefined) {
+  if (!!host && hostPolicyBool(host.maintenanceMode)) return true;
   return !!host && hostPolicyBool(host.trafficFailoverEnabled) && Number(host.trafficLimit) > 0
     && hostPolicyBool(host.trafficFailoverExcluded);
 }
+
+export const HOST_MAINTENANCE_EXCLUDED_MESSAGE = "主机维护中，已暂停组调度和线路";
 
 export const HOST_TRAFFIC_FAILOVER_EXCLUDED_MESSAGE = "主机流量达到故障转移阈值，已暂停组调度";

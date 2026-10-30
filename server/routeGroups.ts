@@ -13,7 +13,7 @@ import {
   type RoutePath,
 } from "../shared/routeGroup";
 import { appendPanelLog } from "./_core/panelLogger";
-import { pushAgentRefresh } from "./agentEvents";
+import { markHostMetricsWatching, pushAgentRefresh, requestHostTcping } from "./agentEvents";
 import { withKeyedTaskLock } from "./keyedTaskLock";
 import { reserveAvailableHostPort, reserveSpecificHostPort, type HostPortReservation } from "./portReservations";
 import {
@@ -32,7 +32,10 @@ import { getUserById } from "./repositories/userRepository";
 import { getProxyNodesForSubscription } from "./repositories/proxySubscriptionRepository";
 import { dbBool } from "./repositories/repositoryUtils";
 import { findAvailablePort, getTunnelById, getTunnelExitNodes, isPortUsedOnHost } from "./repositories/tunnelRepository";
-import { forgetRouteStats, recordRouteHopProbe } from "./routeGroupStats";
+import { forgetRouteStats, recordRouteHopProbe, routeRuleIdsProbingHost } from "./routeGroupStats";
+import { ROUTE_ENTRY_RELAY_INDEX, routePathRelayPlan, routeRelayTargetNode, type RouteRelayTarget } from "../shared/routeLines";
+import { getForwardRulesByTunnel } from "./repositories/forwardRuleRepository";
+import { reconcileForwardRuleTunnelExits, reserveTunnelExitPort, usesSharedTunnelPrimaryListener } from "./repositories/tunnelRepository";
 import { deleteRoutePathQualityStats } from "./repositories/routePathQualityRepository";
 import { forgetRoutePathQualityThrottle } from "./routePathQualityHistory";
 
@@ -77,6 +80,10 @@ type ResolvedHop = {
   target: RouteEndpoint;
   existing: RelayRuleRow | null;
   reservation: HostPortReservation | null;
+  /** 隧道段：这条中继走哪条隧道（建在隧道入口机上），出口在哪个端口收。 */
+  tunnel: any | null;
+  tunnelExitPort: number | null;
+  tunnelExitReservation: HostPortReservation | null;
 };
 
 type PathPlan = {
@@ -112,7 +119,8 @@ function hostLabel(host: any, hostId: number) {
 }
 
 function relayRuleName(rule: any, path: RoutePath, index: number, hopIndex: number, total: number) {
-  const name = `[线路组:${String(rule?.name || "").trim() || `规则 ${rule?.id}`}] ${routePathLabel(path, index)} ${hopIndex + 1}/${total}`;
+  const position = hopIndex === ROUTE_ENTRY_RELAY_INDEX ? "入口" : `${hopIndex + 1}/${total}`;
+  const name = `[线路组:${String(rule?.name || "").trim() || `规则 ${rule?.id}`}] ${routePathLabel(path, index)} ${position}`;
   return name.length > RELAY_NAME_LIMIT ? name.slice(0, RELAY_NAME_LIMIT) : name;
 }
 
@@ -175,8 +183,9 @@ function relayPayload(rule: any, plan: PathPlan, hop: ResolvedHop, parentEnabled
     gostMode: "direct",
     gostRelayHost: null,
     gostRelayPort: null,
-    tunnelId: null,
-    tunnelExitPort: null,
+    // 隧道段：这条中继就是一条走隧道的规则（入口在这台机器上，出口机直接拨 target）。
+    tunnelId: hop.tunnel ? Number(hop.tunnel.id) : null,
+    tunnelExitPort: hop.tunnel ? hop.tunnelExitPort : null,
     forwardGroupId: null,
     forwardGroupRuleId: null,
     forwardGroupMemberId: null,
@@ -225,7 +234,7 @@ function relayPayload(rule: any, plan: PathPlan, hop: ResolvedHop, parentEnabled
 }
 
 /** 这几样一变，中转机上的转发得重启；别的（名字、TG 提醒）改了只是元数据。 */
-const RELAY_RUNTIME_FIELDS = ["hostId", "sourcePort", "targetIp", "targetPort", "protocol", "isEnabled", "routePathKey", "routeHopIndex"] as const;
+const RELAY_RUNTIME_FIELDS = ["hostId", "sourcePort", "targetIp", "targetPort", "protocol", "isEnabled", "routePathKey", "routeHopIndex", "tunnelId", "tunnelExitPort"] as const;
 const RELAY_META_FIELDS = ["name", "telegramErrorNotifyEnabled", "userId", "routeParentRuleId"] as const;
 
 function sameValue(left: unknown, right: unknown) {
@@ -263,7 +272,58 @@ async function resolveDestNodes(rule: any, paths: RoutePath[]) {
   }
 }
 
-async function resolvePath(rule: any, path: RoutePath, index: number, hostById: Map<number, any>, liveByKey: Map<string, RelayRuleRow>): Promise<PathPlan> {
+/**
+ * 隧道段能不能用、按谁的身份用。线路里的隧道段是面板替用户建的一条隧道规则：入口必须是上一个
+ * 节点、隧道开着、没挂入口组；按倍率计费的隧道只给管理员用（中继不计流量，倍率会被绕过去）。
+ */
+async function relayTunnelIssue(rule: any, tunnel: any, fromHostId: number): Promise<string | null> {
+  if (!tunnel) return "隧道已经不在了";
+  const name = String(tunnel.name || "").trim() || `隧道 ${tunnel.id}`;
+  if (!dbBool(tunnel.isEnabled)) return `隧道「${name}」已停用`;
+  if (Number(tunnel.entryHostId) !== fromHostId) return `隧道「${name}」的入口不是上一个节点`;
+  if (Number(tunnel.entryGroupId || 0) > 0) return `隧道「${name}」挂了入口组，不能当线路里的一段`;
+  const owner = Number(rule?.userId || 0) > 0 ? await getUserById(Number(rule.userId)) as any : null;
+  const isAdmin = String(owner?.role || "") === "admin";
+  if (!isAdmin) {
+    if (Number(tunnel.userId || 0) !== Number(rule?.userId || 0) && !dbBool(tunnel.isPublic)) return `没有权限使用隧道「${name}」`;
+    const multiplier = Number(tunnel.trafficMultiplier ?? 100);
+    if (multiplier !== 100) return `隧道「${name}」按倍率计费，线路里用它需要管理员`;
+  }
+  return null;
+}
+
+/** 走隧道的中继在隧道出口机上收流量的端口：共享监听的隧道第一条规则用隧道自己的监听，其余各占一个。 */
+async function pickRelayTunnelExitPort(tunnel: any, existing: RelayRuleRow | null): Promise<{ port: number; reservation: HostPortReservation | null } | null> {
+  const exitHostId = Number(tunnel.exitHostId);
+  if (usesSharedTunnelPrimaryListener(tunnel) && Number(tunnel.listenPort || 0) > 0) {
+    const rules = await getForwardRulesByTunnel(Number(tunnel.id)) as any[];
+    const others = rules.filter((candidate) => candidate
+      && !dbBool(candidate.pendingDelete)
+      && !dbBool(candidate.isForwardGroupTemplate)
+      && dbBool(candidate.isEnabled)
+      && String(candidate.forwardType || "").toLowerCase() === "gost"
+      && (!existing || Number(candidate.id) !== Number(existing.id)));
+    const ownId = existing ? Number(existing.id) : Number.MAX_SAFE_INTEGER;
+    if (others.every((candidate) => Number(candidate.id) > ownId)) return { port: Number(tunnel.listenPort), reservation: null };
+  }
+  const exitHost = (await getHostsByIds([exitHostId]) as any[])[0];
+  const reservation = await reserveTunnelExitPort({
+    hostId: exitHostId,
+    preferredStart: exitHost?.portRangeStart,
+    preferredEnd: exitHost?.portRangeEnd,
+    currentPort: existing && Number(existing.tunnelId || 0) === Number(tunnel.id) ? existing.tunnelExitPort : null,
+    excludeRuleIds: existing ? [Number(existing.id)] : [],
+    excludeTunnelId: Number(tunnel.id),
+    protocol: "both",
+  });
+  return reservation ? { port: reservation.port, reservation } : null;
+}
+
+/**
+ * 一条路径落成中继规则（布局见 shared/routeLines 的 routePathRelayPlan）：先给每条中继挑好端口，
+ * 再从后往前算每条转给谁。哪一处解析不出来整条路径就标成不可用，不建半截。
+ */
+async function resolvePath(rule: any, path: RoutePath, index: number, hostById: Map<number, any>, liveByKey: Map<string, RelayRuleRow>, tunnelById: Map<number, any>): Promise<PathPlan> {
   const plan: PathPlan = { path, index, hops: [], dial: null, issue: path.issue && Number(path.destNodeId || 0) > 0 ? path.issue : null };
   if (plan.issue) return plan;
   if (path.hops.length === 0) {
@@ -275,40 +335,92 @@ async function resolvePath(rule: any, path: RoutePath, index: number, hostById: 
     plan.issue = "落地地址还没填";
     return plan;
   }
-  // 从最后一跳往回：每一跳的目标是它后面那一跳的入口地址 + 监听端口。
-  let next: RouteEndpoint = dest;
-  const resolved: ResolvedHop[] = [];
-  for (let hopIndex = path.hops.length - 1; hopIndex >= 0; hopIndex -= 1) {
-    const hostId = Number(path.hops[hopIndex]);
+  const layout = routePathRelayPlan(path);
+  const entryHostId = Number(rule.hostId);
+  const nodeHostId = (node: number) => (node === 0 ? entryHostId : Number(path.hops[node - 1]));
+  // 节点上的机器和入口地址（落地之外每个节点都得认得出来）。
+  for (let node = 1; node <= path.hops.length; node += 1) {
+    const hostId = nodeHostId(node);
     const host = hostById.get(hostId);
     if (!host) {
-      plan.issue = `第 ${hopIndex + 1} 跳的中转主机已经不在了`;
-      break;
+      plan.issue = `第 ${node} 跳的中转主机已经不在了`;
+      return plan;
     }
-    const entry = getHostEntryAddress(host);
-    if (!entry) {
+  }
+  const resolved: ResolvedHop[] = [];
+  const portBySlotNode = new Map<number, number>();
+  for (const slot of layout.slots) {
+    const hostId = slot.hostId ?? entryHostId;
+    const host = slot.hostId === null ? null : hostById.get(hostId);
+    const existing = liveByKey.get(relayKey(path.key, slot.hopIndex)) || null;
+    let tunnel: any = null;
+    let tunnelExitPort: number | null = null;
+    let tunnelExitReservation: HostPortReservation | null = null;
+    let planRanges = await relayPlanPortRanges(rule, hostId);
+    if (slot.tunnelId) {
+      tunnel = tunnelById.get(slot.tunnelId) || null;
+      const issue = await relayTunnelIssue(rule, tunnel, hostId);
+      if (issue) {
+        plan.issue = issue;
+        break;
+      }
+      // 走隧道的规则得在隧道的端口区间里监听。
+      const start = Number(tunnel.portRangeStart || 0);
+      const end = Number(tunnel.portRangeEnd || 0);
+      if (start > 0 && end >= start) planRanges = planRanges.length > 0 ? planRanges.filter((range) => range.end >= start && range.start <= end).map((range) => ({ start: Math.max(range.start, start), end: Math.min(range.end, end) })) : [{ start, end }];
+      const exit = await pickRelayTunnelExitPort(tunnel, existing);
+      if (!exit) {
+        plan.issue = `隧道「${tunnel.name || tunnel.id}」的出口机没有可用端口`;
+        break;
+      }
+      tunnelExitPort = exit.port;
+      tunnelExitReservation = exit.reservation;
+    } else if (slot.hostId !== null && host && !getHostEntryAddress(host)) {
       plan.issue = `中转「${hostLabel(host, hostId)}」没有入口地址`;
       break;
     }
-    const existing = liveByKey.get(relayKey(path.key, hopIndex)) || null;
-    const planRanges = await relayPlanPortRanges(rule, hostId);
     const reservation = await pickRelayPort(hostId, existing, relayProtocol(rule), planRanges);
     if (!reservation) {
-      plan.issue = planRanges.length > 0
-        ? `中转「${hostLabel(host, hostId)}」在套餐端口区间内没有可用端口`
-        : `中转「${hostLabel(host, hostId)}」的端口区间内没有可用端口`;
+      tunnelExitReservation?.release();
+      const label = slot.hostId === null ? "入口机" : `中转「${hostLabel(host, hostId)}」`;
+      plan.issue = planRanges.length > 0 ? `${label}在可用端口区间内没有空端口` : `${label}的端口区间内没有可用端口`;
       break;
     }
-    resolved.push({ hostId, host, hopIndex, port: reservation.port, target: next, existing, reservation });
-    next = { ip: entry, port: reservation.port };
+    portBySlotNode.set(slot.node, reservation.port);
+    resolved.push({ hostId, host: host ?? null, hopIndex: slot.hopIndex, port: reservation.port, target: dest, existing, reservation, tunnel, tunnelExitPort, tunnelExitReservation });
   }
   if (plan.issue) {
-    for (const hop of resolved) hop.reservation?.release();
+    for (const hop of resolved) {
+      hop.reservation?.release();
+      hop.tunnelExitReservation?.release();
+    }
     return plan;
   }
-  resolved.reverse();
+  const endpointOf = (target: RouteRelayTarget): RouteEndpoint | null => {
+    if (target.kind === "landing") return dest;
+    const port = portBySlotNode.get(target.node);
+    if (!port) return null;
+    if (target.loopback) return { ip: "127.0.0.1", port };
+    const host = hostById.get(nodeHostId(target.node));
+    const address = host ? getHostEntryAddress(host) : "";
+    return address ? { ip: address, port } : null;
+  };
+  layout.slots.forEach((slot, position) => {
+    const target = endpointOf(slot.target);
+    if (target) resolved[position].target = target;
+    else plan.issue = plan.issue || "路径里有一跳解析不出地址";
+  });
+  plan.dial = endpointOf(layout.dial);
+  if (!plan.dial) plan.issue = plan.issue || "路径还没解析出拨号地址";
+  if (plan.issue) {
+    for (const hop of resolved) {
+      hop.reservation?.release();
+      hop.tunnelExitReservation?.release();
+    }
+    plan.dial = null;
+    return plan;
+  }
   plan.hops = resolved;
-  plan.dial = next;
   return plan;
 }
 
@@ -341,6 +453,14 @@ async function refreshTouchedHosts(rule: any, touched: Set<number>, reason: stri
   for (const hostId of hostIds) {
     if (hostId > 0) pushAgentRefresh(hostId, reason, { urgent: true });
   }
+  /*
+    保存即测：中转机马上探一轮中继目标（不等一分钟一轮），调度那台机器一分钟里每两三秒报一次评分
+    （平时五分钟一次整份心跳，界面上就会一直「未测」）。只在路径真的改了时做，节点熔断之类的推送不做。
+  */
+  if (!/breaker|maintenance|hop-down|hop-recovered/.test(reason)) {
+    for (const hostId of touched) if (hostId > 0) requestHostTcping(hostId);
+    markHostMetricsWatching(Array.from(hostIds).filter((hostId) => hostId > 0), 60_000);
+  }
 }
 
 /**
@@ -372,6 +492,12 @@ export async function syncRouteRelayRulesForRule(ruleId: number, options: SyncRo
     // 落地选的是「我的节点」：地址端口从节点解析进 dest（节点地址变了由 proxyNodeFollow 再来一遍）。
     await resolveDestNodes(rule, paths);
     const hopIds = Array.from(new Set(paths.flatMap((path) => path.hops)));
+    const tunnelIds = Array.from(new Set(paths.flatMap((path) => (path.hopVia || []).filter((value): value is number => !!value))));
+    const tunnelById = new Map<number, any>();
+    for (const tunnelId of tunnelIds) {
+      const tunnel = await getTunnelById(tunnelId).catch(() => null);
+      if (tunnel) tunnelById.set(tunnelId, tunnel);
+    }
     const hosts = hopIds.length > 0 ? await getHostsByIds(hopIds) : [];
     const hostById = new Map((hosts as any[]).map((host) => [Number(host.id), host]));
     const liveByKey = new Map(live.map((row) => [relayKey(row.routePathKey, row.routeHopIndex), row]));
@@ -380,7 +506,7 @@ export async function syncRouteRelayRulesForRule(ruleId: number, options: SyncRo
     const plans: PathPlan[] = [];
     try {
       for (const [index, path] of paths.entries()) {
-        const plan = await resolvePath(rule, path, index, hostById, liveByKey);
+        const plan = await resolvePath(rule, path, index, hostById, liveByKey, tunnelById);
         plans.push(plan);
         path.dial = plan.dial;
         path.issue = plan.issue;
@@ -404,14 +530,25 @@ export async function syncRouteRelayRulesForRule(ruleId: number, options: SyncRo
               result.updated += 1;
             }
           } else {
-            await createForwardRule({ ...payload, isRunning: false } as any);
+            const createdId = await createForwardRule({ ...payload, isRunning: false } as any);
             touched.add(hop.hostId);
             result.created += 1;
+            if (hop.tunnel && createdId) {
+              // 多出口隧道：每个额外出口也要给这条中继一个端口（和普通隧道规则一样）。
+              await reconcileForwardRuleTunnelExits({ ...payload, id: Number(createdId) }, hop.tunnel).catch(() => undefined);
+            }
+          }
+          if (hop.tunnel) {
+            touched.add(Number(hop.tunnel.exitHostId));
+            for (const node of await getTunnelExitNodes(Number(hop.tunnel.id)).catch(() => [])) touched.add(Number((node as any)?.hostId || 0));
           }
         }
       }
     } finally {
-      for (const plan of plans) for (const hop of plan.hops) hop.reservation?.release();
+      for (const plan of plans) for (const hop of plan.hops) {
+        hop.reservation?.release();
+        hop.tunnelExitReservation?.release();
+      }
     }
 
     // 路径删了、跳数少了、解析不出来的：对应的中继规则收回。
@@ -528,6 +665,35 @@ export async function routeRelayRulesByKey(ruleId: number) {
 }
 
 /**
+ * 经过某台机器的所有线路组规则推一次刷新：节点熔断 / 维护 / 离线翻转时，入口调度器要立刻知道
+ * 那几条路径不能走（或恢复了），不等下一轮心跳。
+ */
+export async function refreshRulesThroughHost(hostId: number, reason: string) {
+  const id = Number(hostId);
+  if (!(id > 0)) return 0;
+  const relays = await getAllRouteRelayRules() as RelayRuleRow[];
+  const parents = Array.from(new Set([
+    ...relays
+      .filter((row) => !dbBool(row.pendingDelete) && Number(row.hostId) === id)
+      .map((row) => Number(row.routeParentRuleId)),
+    // 隧道出口机那种节点自己没有中继：靠「谁在探它」找。
+    ...routeRuleIdsProbingHost(id),
+  ].filter((parent) => parent > 0)));
+  const rules = parents.length > 0 ? await getForwardRulesByIds(parents) as any[] : [];
+  for (const rule of rules) await refreshTouchedHosts(rule, new Set<number>(), reason);
+  return rules.length;
+}
+
+/** 这条中继规则探的「下一个」是哪台机器（落地返回 null）。 */
+export function relayNextHostId(path: RoutePath, hopIndex: number): number | null {
+  const layout = routePathRelayPlan(path);
+  const slot = layout.slots.find((item) => item.hopIndex === hopIndex);
+  if (!slot) return null;
+  const node = routeRelayTargetNode(slot.target, path.hops.length);
+  return node >= 1 && node <= path.hops.length ? Number(path.hops[node - 1]) : null;
+}
+
+/**
  * 中转机报上来的规则探测里，属于中继规则的那些就是「这一跳通不通」。
  *
  * 中继规则是普通规则，中转机的 Agent 一分钟探一次它的目标（下一跳，或者落地），结果走
@@ -567,13 +733,14 @@ export async function ingestRouteHopProbeReports(input: {
     const paths = pathsByParent.get(Number(parent.id)) || routePathsOf(parent as RouteGroupRule);
     pathsByParent.set(Number(parent.id), paths);
     const path = paths.find((item) => item.key === String(relay.routePathKey || ""));
-    const next = path?.hops[Number(relay.routeHopIndex) + 1];
+    const next = path ? relayNextHostId(path, Number(relay.routeHopIndex)) : null;
     if (next) nextHostIds.add(Number(next));
   }
   const names = nextHostIds.size > 0 ? await getHostNamesByIds(Array.from(nextHostIds)) : new Map<number, string>();
 
   let recorded = 0;
   const flipped = new Map<number, boolean>();
+  const breakerFlips = new Map<number, boolean>();
   for (const report of relayReports) {
     const relay = input.rulesById.get(Number(report.ruleId));
     const parentId = Number(relay.routeParentRuleId);
@@ -582,8 +749,10 @@ export async function ingestRouteHopProbeReports(input: {
     const paths = pathsByParent.get(parentId) || [];
     const path = paths.find((item) => item.key === String(relay.routePathKey || ""));
     const hopIndex = Math.max(0, Math.floor(Number(relay.routeHopIndex) || 0));
-    const nextId = path?.hops[hopIndex + 1];
+    const nextId = path ? relayNextHostId(path, hopIndex) : null;
     const nextLabel = nextId ? (names.get(Number(nextId)) || `主机 ${nextId}`) : "落地";
+    // 隧道段的中继转给出口机本机（127.0.0.1）：在入口机上探它没有意义，不记。
+    if (relay.tunnelId && String(relay.targetIp || "") === "127.0.0.1") continue;
     const ok = !report.isTimeout && Number(report.probeSuccesses ?? 1) > 0;
     const latency = typeof report.latencyMs === "number" && Number.isFinite(report.latencyMs) && report.latencyMs >= 0 ? report.latencyMs : null;
     const result = recordRouteHopProbe({
@@ -595,10 +764,16 @@ export async function ingestRouteHopProbeReports(input: {
       nextLabel,
       ok,
       latencyMs: ok ? latency : null,
+      nextHostId: nextId ? Number(nextId) : null,
       nowMs,
     });
     recorded += 1;
     if (result.downChanged) flipped.set(parentId, result.down);
+    if (result.breaker) breakerFlips.set(result.breaker.hostId, result.breaker.tripped);
+  }
+  for (const [nodeId, tripped] of breakerFlips) {
+    appendPanelLog(tripped ? "warn" : "info", `[RouteGroup] 节点${tripped ? "熔断" : "解除熔断"}: host=${nodeId}`);
+    await refreshRulesThroughHost(nodeId, tripped ? "route-node-breaker" : "route-node-breaker-cleared").catch(() => undefined);
   }
   for (const [parentId, down] of flipped) {
     const parent = parentById.get(parentId);

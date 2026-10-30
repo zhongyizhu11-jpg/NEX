@@ -144,7 +144,9 @@ import { RouteGroupSheet } from "@/features/rules/RouteGroupSheet";
 import { RouteMiniChain, routeBoardActiveChain } from "@/features/rules/RouteBoard";
 import { EntityActions } from "@/components/entity/EntityActions";
 import { IconTile, type IconTileTone } from "@/components/entity/IconTile";
-import { RouteGroupFields, routeGroupPayload, type RouteHostOption } from "@/features/rules/RouteGroupFields";
+import { RouteGroupFields, routeGroupPayload, type RouteGroupDraft, type RouteHostOption } from "@/features/rules/RouteGroupFields";
+import { expandForPreview, type RouteLinePool, type RouteLineTunnel } from "@/features/rules/RouteLinesEditor";
+import { newRouteLine, routeLinesOf } from "@shared/routeLines";
 import { docsUrl } from "@/lib/docsLinks";
 import { ROUTE_MODE_HINTS, type RuleRouteTab } from "@/features/rules/routeModeHints";
 import { isAggregateLinkTunnel } from "@shared/aggregateLink";
@@ -158,7 +160,6 @@ import {
   routeGroupTunnelModeSupported,
   routePathLetter,
   validateRouteGroup,
-  type RouteGroup,
 } from "@shared/routeGroup";
 import {
   forwardRuleFormBlocker,
@@ -349,7 +350,7 @@ type RuleFormData = {
    * 择优、几个秒数……），提交时再拼回去。它们本来就是一件事的十个面 —— 一份 RouteGroup
    * 存着，编辑器整份改、提交整份发，和服务端、Agent 说的是同一个模型。
    */
-  routeGroup: RouteGroup | null;
+  routeGroup: RouteGroupDraft | null;
   /**
    * 端口转发的入口方式：port = 自己占一个端口；sni = 挂到主机的共享 TLS 入站上，按 SNI 分流
    * （shared/tlsInbound.ts）。sni 时没有源端口，协议固定 TCP，不支持线路组。
@@ -2843,7 +2844,11 @@ function RulesContent() {
       entryDomainEnabled: rule.entryDomainEnabled !== false,
       failoverEnabled: !!rule.failoverEnabled,
       // 老主备（2.3.376 之前配的）在这里被读成路径清单：备用各是一条直连的路径。
-      routeGroup: routeGroupOf(rule),
+      // 线路定义（2.3.496）：存了就用，老数据由路径推成「每条路径一条线路」，编辑框统一按线路编辑。
+      routeGroup: (() => {
+        const group = routeGroupOf(rule);
+        return group ? { ...group, lines: routeLinesOf(rule) } : null;
+      })(),
       entryMode: isSniRule ? "sni" : "port",
       tlsInboundId: isSniRule ? Number(rule.tlsInboundId) : null,
       sniNamesText: isSniRule ? parseSniNameJson(rule.sniNames).join("\n") : "",
@@ -3354,6 +3359,25 @@ function RulesContent() {
   const routeHostOptions = useMemo<RouteHostOption[]>(() => (
     (hosts || []).map((host: any) => ({ id: Number(host.id), name: String(host.name || ""), isOnline: !!host.isOnline, agentVersion: host.agentVersion ?? null }))
   ), [hosts]);
+  // 线路编辑：节点池、能当一段的隧道（入口在哪台、出口到哪台），入口叫什么；隧道规则把入口前面那段如实写出来。
+  const nodePoolsQuery = trpc.lineDiagnostics.nodePools.useQuery(undefined, { enabled: !!form.failoverEnabled, staleTime: 30_000, refetchOnWindowFocus: false });
+  const routeLinePools = useMemo<RouteLinePool[]>(() => ((nodePoolsQuery.data || []) as any[]).map((pool) => ({
+    id: Number(pool.id), name: String(pool.name), role: String(pool.role), members: (pool.members || []).map((member: any) => ({ hostId: Number(member.hostId), name: String(member.name), online: !!member.online, maintenance: !!member.maintenance })),
+  })), [nodePoolsQuery.data]);
+  const routeLineTunnels = useMemo<RouteLineTunnel[]>(() => ((tunnels || []) as any[])
+    .filter((tunnel) => Number(tunnel.entryHostId) > 0 && Number(tunnel.exitHostId) > 0 && !(Number(tunnel.entryGroupId || 0) > 0))
+    .map((tunnel) => ({ id: Number(tunnel.id), name: String(tunnel.name || `隧道 ${tunnel.id}`), entryHostId: Number(tunnel.entryHostId), exitHostId: Number(tunnel.exitHostId), mode: tunnel.mode ? String(tunnel.mode) : null })), [tunnels]);
+  const routeEntryName = useMemo(() => {
+    const host = (hosts || []).find((item: any) => Number(item.id) === Number(routeEntryHostId || 0)) as any;
+    return host ? String(host.name || `主机 ${host.id}`) : "入口";
+  }, [hosts, routeEntryHostId]);
+  const routeEntryPrefix = useMemo(() => {
+    if (form.routeMode !== "tunnel" || !form.tunnelId) return null;
+    const tunnel = (supportedTunnels as any[]).find((item) => Number(item.id) === Number(form.tunnelId));
+    if (!tunnel) return null;
+    const entry = (hosts || []).find((item: any) => Number(item.id) === Number(tunnel.entryHostId)) as any;
+    return `${entry?.name || "入口"} → 隧道 ${tunnel.name || tunnel.id} →`;
+  }, [form.routeMode, form.tunnelId, supportedTunnels, hosts]);
   /*
     转发组（故障转移组）上的规则由模板复制到每台入口机上，中继要按入口机各建一份，这一版先
     不支持经过中转 —— 编辑器里不给「经过中转」的按钮，提交时也拦。
@@ -4111,6 +4135,7 @@ function RulesContent() {
         entryHostId: routeEntryHostId,
         hostIds: new Set(routeHostOptions.map((host) => host.id)),
         hasRuleTarget: !!form.targetIp.trim() && form.targetPort > 0,
+        rejectDuplicates: !!form.routeGroup.lines?.length,
       });
       if (routeGroupError) {
         toast.error(routeGroupError);
@@ -8429,7 +8454,12 @@ function RulesContent() {
                       failoverEnabled: nextEnabled,
                       // 勾上时给一份草稿（主线路 + 一条空备用）；勾掉时留着，再勾回来还在。
                       // 协议不动：TCP、UDP、TCP+UDP 都能走线路组。
-                      routeGroup: nextEnabled ? (form.routeGroup ?? newRouteGroupDraft({ timezone: BILLING_TIME_ZONE })) : form.routeGroup,
+                      // 勾上时的草稿：只有主线路（就是现在这条路，入口直连目标），备用由用户加 —— 不再放一条和主线路一样的空备用。
+                      routeGroup: nextEnabled ? (form.routeGroup ?? (() => {
+                        const draft = newRouteGroupDraft({ timezone: BILLING_TIME_ZONE });
+                        const lines = [newRouteLine(0)];
+                        return { ...draft, lines, paths: expandForPreview(lines, { entryHostId: routeEntryHostId, pools: routeLinePools, tunnels: routeLineTunnels }).paths };
+                      })()) : form.routeGroup,
                     });
                   }}
                   className="mt-0.5"
@@ -8480,6 +8510,13 @@ function RulesContent() {
                     protocol={form.protocol}
                     nodeOptions={targetNodeOptions}
                     entrySourcePort={form.sourcePort}
+                    pools={routeLinePools}
+                    tunnels={routeLineTunnels}
+                    entryName={routeEntryName}
+                    entryPrefix={routeEntryPrefix}
+                    // 隧道规则在出口机上选路；端口转发资源（带转发组）每台成员机各跑一份、入口不是同一台：都放不了隧道段。
+                    allowTunnels={routeHopsAllowed && form.routeMode !== "tunnel" && Number(form.forwardGroupId || 0) <= 0}
+                    ruleId={editingId}
                   />
                 </div>
               )}

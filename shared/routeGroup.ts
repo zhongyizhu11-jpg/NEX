@@ -137,6 +137,21 @@ export type RoutePath = {
   dial: RouteEndpoint | null;
   /** 解析时发现的问题（中转离线、没有入口地址、分不出端口）；有它这条路径就用不了。 */
   issue: string | null;
+  /**
+   * 进入 hops[i] 那一段走哪条隧道（隧道 id）；null / 缺省 = 普通中继。和 hops 等长或为空。
+   * 隧道段的中继规则建在上一个节点（入口机或上一跳）上，走这条隧道，隧道出口直接拨下一跳 ——
+   * 出口机自己不再建中继（见 server/routeGroups.ts）。
+   */
+  hopVia?: Array<number | null>;
+  /**
+   * 第几组：0 = 主线路那一组，1.. = 备用 1、2……。从「线路」展开出来的路径才有（shared/routeLines.ts）；
+   * 老数据没有这一项，Agent 就按原来的办法（主备按顺序、择优在全部里挑）。
+   */
+  tier?: number | null;
+  /** 手动暂停：面板给调度器下发「这条用不了」，恢复前不会切过去。 */
+  paused?: boolean;
+  /** 从哪条线路定义展开来的（routeLines 里的 key）。 */
+  lineKey?: string | null;
 };
 
 export const ROUTE_MODES = ["failover", "scheduled", "manual", "smart", "hybrid", "weighted"] as const;
@@ -198,12 +213,36 @@ export const ROUTE_GUARD_LIMITS = {
   weight: { min: 1, max: 100 },
 } as const;
 
+/**
+ * 备用线路怎么候着：
+ *   cold       冷备：平时只探测，主线路坏了才切（默认，和以前一样）
+ *   hot        热备：备用和主线路一样频繁地探，一坏就切、旧连接马上重连；NEX 隧道的路径走热备腿，切换不断连
+ *   aggregate  聚合：几条路径同时跑，一个连接拆到多条上（只有 NEX 隧道能做）
+ *   replicate  复制：同一份数据在两条路径上同时发，一条断了连接不断（只有 NEX 隧道能做）
+ */
+export const ROUTE_DELIVERIES = ["cold", "hot", "aggregate", "replicate"] as const;
+export type RouteDelivery = (typeof ROUTE_DELIVERIES)[number];
+
+export const ROUTE_DELIVERY_INFO: Record<RouteDelivery, { label: string; hint: string }> = {
+  cold: { label: "冷备", hint: "平时只走一条，备用只做探测；坏了切走，旧连接留在原线路" },
+  hot: { label: "热备", hint: "握手慢了同时拨下一条，谁先通用谁；坏了 10 秒内切走，旧连接断开让客户端马上重连（连接一点不断要靠 NEX 隧道自己的热备）" },
+  aggregate: { label: "聚合", hint: "主线路那组的几条路径一起分担：新连接分到最空的那条，带宽按连接叠加；单个连接仍走一条（单连接叠加用 NEX 叠加隧道）" },
+  replicate: { label: "复制", hint: "主线路走的 NEX 叠加隧道里，同一份数据在几条腿上同时发，一条腿断了连接不断（隧道要开「复制」）" },
+};
+
+export function normalizeRouteDelivery(value: unknown): RouteDelivery {
+  const text = String(value ?? "").trim() as RouteDelivery;
+  return (ROUTE_DELIVERIES as readonly string[]).includes(text) ? text : "cold";
+}
+
 export type RouteGroupPolicy = RouteGuards & {
   mode: RouteMode;
   spread: RouteSpread;
   schedule: FailoverSchedule | null;
   /** 人工指定：手动主备模式的常态，其余模式的应急开关。 */
   pin: FailoverPin | null;
+  /** 备用怎么候着；缺省冷备（老数据）。 */
+  delivery?: RouteDelivery;
 };
 
 export type RouteGroup = {
@@ -376,10 +415,19 @@ function sanitizePath(raw: any, index: number): RoutePath | null {
     ? Array.from(new Set(raw.hops.map((hop: unknown) => Math.floor(Number(hop))).filter((hop: number) => Number.isInteger(hop) && hop > 0)))
       .slice(0, MAX_ROUTE_HOPS) as number[]
     : [];
+  const hopVia = Array.isArray(raw.hopVia) && raw.hopVia.length === hops.length
+    ? raw.hopVia.map((value: unknown) => (Number.isInteger(Number(value)) && Number(value) > 0 ? Math.floor(Number(value)) : null))
+    : undefined;
+  const tier = raw.tier === null || raw.tier === undefined || raw.tier === "" ? undefined : clampInt(raw.tier, 0, MAX_ROUTE_PATHS, 0);
+  const lineKey = typeof raw.lineKey === "string" && PATH_KEY_PATTERN.test(raw.lineKey.trim().toLowerCase()) ? raw.lineKey.trim().toLowerCase() : undefined;
   return {
     key: PATH_KEY_PATTERN.test(key) ? key : `p${index + 1}`,
     name: String(raw.name ?? "").trim().slice(0, 40),
     hops,
+    ...(hopVia && hopVia.some((value: number | null) => value !== null) ? { hopVia } : {}),
+    ...(tier !== undefined ? { tier } : {}),
+    ...(raw.paused === true || raw.paused === 1 || raw.paused === "1" ? { paused: true } : {}),
+    ...(lineKey ? { lineKey } : {}),
     dest: sanitizeEndpoint(raw.dest),
     destNodeId: Number.isInteger(Number(raw.destNodeId)) && Number(raw.destNodeId) > 0 ? Math.floor(Number(raw.destNodeId)) : null,
     weight: clampInt(raw.weight, ROUTE_GUARD_LIMITS.weight.min, ROUTE_GUARD_LIMITS.weight.max, 50),
@@ -421,6 +469,10 @@ export function serializeRoutePaths(paths: RoutePath[] | null | undefined): stri
     probe: path.probe,
     dial: path.dial,
     ...(path.issue ? { issue: path.issue } : {}),
+    ...(path.hopVia && path.hopVia.some((value) => value !== null) ? { hopVia: path.hopVia } : {}),
+    ...(typeof path.tier === "number" ? { tier: path.tier } : {}),
+    ...(path.paused ? { paused: true } : {}),
+    ...(path.lineKey ? { lineKey: path.lineKey } : {}),
   })));
 }
 
@@ -460,6 +512,8 @@ export type RouteGroupRule = {
   routeScoreMargin?: unknown;
   routeScoreHoldSeconds?: unknown;
   routePrewarmSeconds?: unknown;
+  routeDelivery?: unknown;
+  routeLines?: unknown;
 };
 
 function truthy(value: unknown, fallback: boolean) {
@@ -566,6 +620,7 @@ export function routePolicyOf(rule: RouteGroupRule, options: { nowMs?: number; p
     scoreHoldSeconds: clampInt(rule.routeScoreHoldSeconds, ROUTE_GUARD_LIMITS.scoreHoldSeconds.min, ROUTE_GUARD_LIMITS.scoreHoldSeconds.max, ROUTE_GUARD_DEFAULTS.scoreHoldSeconds),
     prewarmSeconds: clampInt(rule.routePrewarmSeconds, ROUTE_GUARD_LIMITS.prewarmSeconds.min, ROUTE_GUARD_LIMITS.prewarmSeconds.max, ROUTE_GUARD_DEFAULTS.prewarmSeconds),
     switchMode: normalizeRouteSwitchMode(rule.routeSwitchMode),
+    delivery: normalizeRouteDelivery(rule.routeDelivery),
   };
 }
 
@@ -580,6 +635,27 @@ export function routeGroupOf(rule: RouteGroupRule, options: { nowMs?: number } =
 export function routeAgentStrategy(policy: Pick<RouteGroupPolicy, "mode" | "spread">): "fallback" | RouteSpread {
   return policy.mode === "weighted" ? policy.spread : "fallback";
 }
+
+/**
+ * 下发给 Agent 的分配策略，算上「备用怎么候着」：聚合 = 主线路那一组里按负载分（Agent 只在最低健康
+ * tier 里挑，备用组照旧等着）；「按负载」老 Agent 不认（会退成主备），改发「按权重」。
+ */
+export function routeDeliveryStrategy(
+  policy: Pick<RouteGroupPolicy, "mode" | "spread">,
+  delivery: RouteDelivery,
+  agentAtLeast: (version: string) => boolean,
+): "fallback" | RouteSpread {
+  const leastLoad = agentAtLeast(ROUTE_LEAST_LOAD_AGENT_VERSION) ? "least_load" : "weighted";
+  if (delivery === "aggregate") return leastLoad;
+  const strategy = routeAgentStrategy(policy);
+  return strategy === "least_load" ? leastLoad : strategy;
+}
+
+/** 「按负载」：Agent 2.2.232 起（和 shared/exitStrategy 的 LEAST_LOAD_AGENT_VERSION 同一个）。 */
+export const ROUTE_LEAST_LOAD_AGENT_VERSION = "2.2.232";
+
+/** 线路（分层候选、tier、整链打分、热备抢拨、保存即测）：Agent 2.2.243 起。 */
+export const ROUTE_LINES_AGENT_VERSION = "2.2.243";
 
 /**
  * 线路组 → 老 failover* 列。
@@ -631,6 +707,7 @@ export function routeGroupRuleFields(group: RouteGroup, rule: Pick<RouteGroupRul
     routeScoreMargin: policy.scoreMargin,
     routeScoreHoldSeconds: policy.scoreHoldSeconds,
     routePrewarmSeconds: policy.prewarmSeconds,
+    routeDelivery: normalizeRouteDelivery(policy.delivery),
   };
 }
 
@@ -653,6 +730,8 @@ export type RouteGroupValidationContext = {
   hostIds?: Set<number> | null;
   /** 规则自己的目标填了没有：没写落地的路径要靠它。 */
   hasRuleTarget: boolean;
+  /** 两条路径一模一样时拒绝（新编辑框按线路提交时开；老数据里已有的重复不拦，免得改别的字段也存不了）。 */
+  rejectDuplicates?: boolean;
 };
 
 /**
@@ -674,8 +753,10 @@ export function validateRouteGroup(group: RouteGroup, context: RouteGroupValidat
     if (path.hops.length > MAX_ROUTE_HOPS) return `「${label}」最多经过 ${MAX_ROUTE_HOPS} 台中转`;
     if (context.entryHostId && path.hops.includes(context.entryHostId)) return `「${label}」的中转不能是入口机器自己`;
     if (new Set(path.hops).size !== path.hops.length) return `「${label}」里同一台中转出现了两次`;
+    if (path.hopVia && path.hopVia.length !== path.hops.length) return `「${label}」的隧道段和中转对不上`;
     if (context.hostIds) {
-      const missing = path.hops.find((hop) => !context.hostIds!.has(hop));
+      // 隧道段到的是隧道出口机：用的是隧道的权限（建中继时查），不要求它在自己的主机列表里。
+      const missing = path.hops.find((hop, index) => !path.hopVia?.[index] && !context.hostIds!.has(hop));
       if (missing !== undefined) return `「${label}」里有一台中转不在你的主机列表里`;
     }
     if (!path.dest && !context.hasRuleTarget) return `「${label}」没写落地，而规则的目标也还没填`;
@@ -691,6 +772,17 @@ export function validateRouteGroup(group: RouteGroup, context: RouteGroupValidat
   if (policy.pin && policy.pin.index >= paths.length) return "指定的路径不存在了";
   if (policy.mode === "weighted" && policy.spread === "weighted" && paths.every((path) => path.weight <= 0)) {
     return "权重不能全是 0";
+  }
+  if (paths.every((path) => path.paused)) return "不能把所有线路都暂停：至少留一条能走";
+  // 两条路径走的是同一条路（同样的中转、同样的隧道段、同一个落地）：备用等于没备。
+  const signatures = new Map<string, number>();
+  for (let index = 0; context.rejectDuplicates && index < paths.length; index += 1) {
+    const path = paths[index];
+    const dest = path.destNodeId ? `n${path.destNodeId}` : path.dest ? `${path.dest.ip}:${path.dest.port}` : "";
+    const signature = `${path.hops.join(".")}|${(path.hopVia || []).map((value) => value ?? "").join(".")}|${dest}`;
+    const previous = signatures.get(signature);
+    if (previous !== undefined) return `「${routePathLabel(paths[previous], previous)}」和「${routePathLabel(path, index)}」走的是同一条路：备用要换一台中转、一条隧道或者一个落地`;
+    signatures.set(signature, index);
   }
   return null;
 }
@@ -749,7 +841,7 @@ export function describeRouteReason(reason: unknown): string {
   if (lower === "startup" || lower === "spec updated") return "线路组重新下发";
   if (lower === "relay recovered") return "中转恢复";
   if (lower.startsWith("precheck:")) return `预检未通过：${describeRouteIssue(text.slice("precheck:".length))}`;
-  if (lower.startsWith("relay down")) return describeRouteIssue(text);
+  if (lower.startsWith("relay down") || lower === "paused" || lower.startsWith("maintenance:") || lower.startsWith("node offline:") || lower.startsWith("breaker:")) return describeRouteIssue(text);
   if (lower.startsWith("panel:")) return text.slice("panel:".length).trim();
   // Agent 的抖动抑制：flap: 3 switches in 1h, hold 5m until 2026-…
   const flap = /^flap:\s*(\d+)\s+switches in 1h,\s*hold\s+(\d+)m/i.exec(text);
@@ -776,6 +868,10 @@ export function describeRouteIssue(issue: unknown): string {
   const loss = /^loss\s+(\d+(?:\.\d+)?)\s*%$/i.exec(text);
   if (loss) return `丢包 ${loss[1]}%`;
   if (lower === "path unresolved") return "路径还没解析出拨号地址";
+  if (lower === "paused") return "已手动暂停";
+  if (lower.startsWith("maintenance:")) return `${text.slice("maintenance:".length).trim()} 维护中`;
+  if (lower.startsWith("node offline:")) return `${text.slice("node offline:".length).trim()} 离线`;
+  if (lower.startsWith("breaker:")) return `${text.slice("breaker:".length).trim()} 熔断：几条线路都探不通它`;
   return text;
 }
 

@@ -30,6 +30,7 @@ import { formatLatencyTimeLabel } from "@/lib/latencyTimeLabel";
 import { hostIpv6Address, hostPrivateAddress, normalizeConnectHostForHost, sameAddress } from "@/lib/multiHopAddress";
 import SectionTransition from "@/components/SectionTransition";
 import { RouteGroupsSection } from "@/features/rules/RouteGroupsSection";
+import { LineWorkspace, NodePoolsSection } from "@/features/links/LineWorkspace";
 import { LinkOverviewSection } from "@/features/links/LinkOverviewSection";
 import { LinkWizardDialog } from "@/features/links/LinkWizardDialog";
 import type { LinkWizardAction } from "@shared/linkWizard";
@@ -814,21 +815,52 @@ function getTunnelModeDisplay(mode: unknown, showNginxLabel = true, forwardxVers
 }
 
 type TunnelViewMode = "card" | "table" | "globe";
-type TunnelSection = "tunnels" | "ports" | "chains" | "groups" | "aggregates" | "entries" | "exits" | "routes";
+type TunnelSection = "lines" | "tunnels" | "ports" | "chains" | "pools" | "groups" | "aggregates" | "entries" | "exits" | "routes";
 type TunnelGroupMode = "port" | "failover" | "entry" | "exit";
 
-const TUNNEL_SECTIONS = ["tunnels", "ports", "chains", "groups", "aggregates", "entries", "exits", "routes"] as const;
+const TUNNEL_SECTIONS = ["lines", "tunnels", "ports", "chains", "pools", "groups", "aggregates", "entries", "exits", "routes"] as const;
+/*
+  2.3.496：「线路」工作台放最前（所有线路一个入口）；转发组 / 入口组 / 出口组收进「节点池」一页，
+  用页内的筛选切换（老链接 ?tab=groups 之类照样能进，分类条上亮的是「节点池」）。
+*/
 const TUNNEL_SECTION_ITEMS = [
+  { value: "lines", label: "线路", icon: Waypoints },
   { value: "tunnels", label: "隧道链路", icon: Network },
   { value: "ports", label: "端口转发", icon: ArrowRightLeft },
   { value: "chains", label: "转发链", icon: Route },
-  { value: "groups", label: "转发组", icon: ShieldCheck },
+  { value: "pools", label: "节点池", icon: ShieldCheck },
   // 叠加：中转方式为单连接叠加的 NEX 隧道单列一栏（shared/aggregateLink.ts），隧道链路里不再重复列。
   { value: "aggregates", label: "叠加", icon: Layers },
+  { value: "routes", label: "链路总览", icon: Waypoints },
+] as const satisfies readonly SlidingTabItem<TunnelSection>[];
+const POOL_SECTIONS = ["pools", "groups", "entries", "exits"] as const;
+const POOL_FILTERS: Array<{ value: (typeof POOL_SECTIONS)[number]; label: string; icon: typeof LogIn }> = [
+  { value: "pools", label: "节点池", icon: ShieldCheck },
+  { value: "groups", label: "转发组", icon: ShieldCheck },
   { value: "entries", label: "入口组", icon: LogIn },
   { value: "exits", label: "出口组", icon: LogOut },
-  { value: "routes", label: "线路总览", icon: Waypoints },
-] as const satisfies readonly SlidingTabItem<TunnelSection>[];
+];
+
+/** 节点池页的筛选：节点池 / 转发组 / 入口组 / 出口组（后三个是原来的三个分类，内容不变）。 */
+function PoolFilterChips({ active, onChange }: { active: string; onChange: (next: TunnelSection) => void }) {
+  return (
+    <div className="flex flex-wrap gap-1.5" role="tablist" aria-label="节点池分类" data-testid="pool-filter">
+      {POOL_FILTERS.map((item) => (
+        <button
+          key={item.value}
+          type="button"
+          role="tab"
+          aria-selected={active === item.value}
+          className={cn("inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs", active === item.value ? "border-transparent bg-[var(--fx-text)] text-[var(--fx-text-inverse)]" : "border-[var(--fx-stroke-weak)] bg-[var(--fx-l1-surface)] text-foreground")}
+          onClick={() => onChange(item.value)}
+        >
+          <item.icon className="h-3.5 w-3.5" />
+          {item.label}
+        </button>
+      ))}
+    </div>
+  );
+}
 
 const TUNNEL_SECTION_STORAGE_KEY = "forwardx.tunnels.section";
 const TUNNEL_VIEW_MODE_STORAGE_KEY = "forwardx.tunnels.viewMode";
@@ -4386,7 +4418,7 @@ function TunnelsContent() {
         {/* fx-list-controls：精简布局（桌面）下分类条和搜索那一行并排，两行变一行（compact.css） */}
         <div className="fx-list-controls space-y-4">
         <div className="fx-tabs-row">
-        <SlidingTabsList items={TUNNEL_SECTION_ITEMS} activeValue={activeSection} ariaLabel="链路管理" minItemWidthRem={compactLayout ? 5 : 7.75} />
+        <SlidingTabsList items={TUNNEL_SECTION_ITEMS} activeValue={(POOL_SECTIONS as readonly string[]).includes(activeSection) ? "pools" : activeSection} ariaLabel="链路管理" minItemWidthRem={compactLayout ? 5 : 7.75} />
         {collapsePhoneSearch ? (
           <SearchToggle open={phoneSearchOpen} active={linkSearchQuery.length > 0} onToggle={() => setPhoneSearchOpen((value) => !value)} />
         ) : null}
@@ -4661,6 +4693,7 @@ function TunnelsContent() {
         </TabsContent>
 
         <TabsContent value="groups" className="space-y-4">
+          <PoolFilterChips active={activeSection} onChange={(next) => setActiveSection(next)} />
           <SectionTransition transitionKey={activeSectionTransitionKey}>
             <ForwardGroupsContent
               mode="failover"
@@ -4678,6 +4711,7 @@ function TunnelsContent() {
         </TabsContent>
 
         <TabsContent value="entries" className="space-y-4">
+          <PoolFilterChips active={activeSection} onChange={(next) => setActiveSection(next)} />
           <SectionTransition transitionKey={activeSectionTransitionKey}>
             <ForwardGroupsContent
               mode="entry"
@@ -4694,6 +4728,22 @@ function TunnelsContent() {
           </SectionTransition>
         </TabsContent>
 
+        <TabsContent value="lines" className="space-y-4">
+          <SectionTransition transitionKey={`lines-${normalizedLinkSearchQuery || "all"}`}>
+            <LineWorkspace searchQuery={normalizedLinkSearchQuery} isAdmin={user?.role === "admin"} />
+          </SectionTransition>
+        </TabsContent>
+
+        <TabsContent value="pools" className="space-y-4">
+          <PoolFilterChips active={activeSection} onChange={(next) => setActiveSection(next)} />
+          <SectionTransition transitionKey={activeSectionTransitionKey}>
+            <NodePoolsSection
+              hosts={((hostsOptionsQuery.data || []) as any[]).map((host) => ({ id: Number(host.id), name: String(host.name || ""), isOnline: !!host.isOnline }))}
+              groups={(forwardGroups || []).map((group: any) => ({ id: Number(group.id), name: String(group.name || ""), groupMode: String(group.groupMode || "failover"), members: group.members || [] }))}
+            />
+          </SectionTransition>
+        </TabsContent>
+
         <TabsContent value="routes" className="space-y-4">
           <SectionTransition transitionKey={`routes-${normalizedLinkSearchQuery || "all"}`}>
             <div className="space-y-4">
@@ -4705,6 +4755,7 @@ function TunnelsContent() {
         </TabsContent>
 
         <TabsContent value="exits" className="space-y-4">
+          <PoolFilterChips active={activeSection} onChange={(next) => setActiveSection(next)} />
           <SectionTransition transitionKey={activeSectionTransitionKey}>
             <ForwardGroupsContent
               mode="exit"

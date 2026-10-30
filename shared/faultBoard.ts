@@ -26,7 +26,7 @@ export const FAULT_CATEGORIES: ReadonlyArray<{ key: FaultCategoryKey; label: str
   { key: "crash", label: "进程崩溃" },
   { key: "loss", label: "隧道丢包" },
   { key: "rule", label: "规则出错" },
-  { key: "route", label: "线路切换" },
+  { key: "route", label: "线路切换 / 异常" },
   { key: "security", label: "安全巡检" },
   { key: "other", label: "其它" },
 ];
@@ -49,6 +49,8 @@ export function faultCategoryOf(kind: string, level: string): FaultCategoryKey |
     case "route.switched":
     case "route.group_switched":
     case "route.precheck_failed":
+    // 线路组里某条路径探测不通（Agent 报的 unhealthy）：没切线也是一次线路告警。
+    case "route.unhealthy":
       return "route";
     case "security.finding":
       return "security";
@@ -66,6 +68,8 @@ const RECOVERY_KINDS: Record<string, string> = {
   "rule.recovered": "",
   "host.resource_recovered": "durationSeconds",
   "host.packet_loss_recovered": "durationSeconds",
+  // 线路组路径恢复：durationSeconds 是这条路径异常了多久（面板重启后配不上的不带）。
+  "route.recovered": "durationSeconds",
 };
 
 export function isRecoveryEvent(event: Pick<FaultEventInput, "kind" | "data">) {

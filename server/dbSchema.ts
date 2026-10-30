@@ -116,6 +116,8 @@ export const MIGRATION_TABLES = [
   "host_network_profiles",
   // 流媒体 / AI 解锁检测的结果（server/ops/unlockTables.ts），跟着主机走
   "host_unlock_checks",
+  // 节点池（server/ops/nodePoolTables.ts）：线路里一层候选用的机器分组
+  "node_pools",
 ] as const;
 
 const LAST_AUTO_TRAFFIC_RESET_BACKFILL_MARKER = "last-auto-traffic-reset-backfill-v1";
@@ -280,6 +282,8 @@ const tables: TableDef[] = [
       c("trafficLimit", "bigint", { notNull: true, default: 0 }), c("trafficMeasureMode", "varchar", { length: 16, notNull: true, default: "both" }),
       c("trafficFailoverEnabled", "bool", { notNull: true, default: false }), c("trafficFailoverThresholdPercent", "int", { notNull: true, default: 100 }),
       c("trafficFailoverExcluded", "bool", { notNull: true, default: false }),
+      // 节点维护（2.3.496）：从所有线路、转发组、入口组、出口组的候选里拿掉，经过它的连接先切走。
+      c("maintenanceMode", "bool", { notNull: true, default: false }), c("maintenanceSince", "epoch"), c("maintenanceNote", "text"),
       c("egressShapingMode", "varchar", { length: 16, notNull: true, default: "off" }), c("egressMbps", "int", { notNull: true, default: 0 }),
       c("flowOffload", "bool", { notNull: true, default: false }),
       // 这台机器上下线要不要推 Telegram / Discord（上游 2.3.285）。只管推送，不影响离线判定、事件和故障转移。
@@ -370,6 +374,8 @@ const tables: TableDef[] = [
       c("routeFailureThreshold", "int", { notNull: true, default: 3 }),
       c("routeScoreMargin", "int", { notNull: true, default: 10 }), c("routeScoreHoldSeconds", "int", { notNull: true, default: 180 }),
       c("routePrewarmSeconds", "int", { notNull: true, default: 300 }),
+      // 线路定义（分层候选，shared/routeLines.ts）和备用怎么候着（冷备 / 热备 / 聚合 / 复制）。
+      c("routeLines", "text"), c("routeDelivery", "varchar", { length: 16, notNull: true, default: "cold" }),
       c("routeParentRuleId", "int"), c("routePathKey", "varchar", { length: 32 }), c("routeHopIndex", "int"),
       c("disabledByTunnel", "bool", { notNull: true, default: false }), c("disabledByGroup", "bool", { notNull: true, default: false }),
       c("disabledByUser", "bool", { notNull: true, default: false }),

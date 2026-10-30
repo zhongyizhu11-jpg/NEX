@@ -195,7 +195,17 @@ export const rulesRouter = router({
     .input(z.object({ ruleId: z.number().int().positive() }))
     .query(async ({ input, ctx }) => {
       const rule = await requireRuleVisible(ctx.user, input.ruleId);
-      return buildRouteStatus(rule);
+      const status = await buildRouteStatus(rule);
+      /*
+        线路面板开着的时候，调度那台机器每两三秒报一次评分（平时五分钟一份整心跳）：不然面板上的
+        延迟和「在走哪条」总是几分钟前的。面板轮询一停，十五秒后自己回到平常的节奏。
+      */
+      if (status) {
+        const { markHostMetricsWatching, pushAgentRefresh } = await import("../agentEvents");
+        const schedulerHosts = status.schedulerHostIds || [Number(rule.hostId)];
+        for (const hostId of markHostMetricsWatching(schedulerHosts, 15_000)) pushAgentRefresh(hostId, "route-status-watch");
+      }
+      return status;
     }),
   /**
    * 线路板：所有开了线路组的规则一次拿全（链路管理页的「线路组」页签）。每条的内容和

@@ -299,6 +299,7 @@ func stripFailoverRelayHints(spec failoverSpec) failoverSpec {
 	for i := range targets {
 		targets[i].Down = false
 		targets[i].DownReason = ""
+		targets[i].ExtraLatencyMs = 0
 	}
 	spec.Targets = targets
 	return spec
@@ -362,12 +363,23 @@ func (p *failoverProxy) scoreInputLocked(index int) routeStatsSummary {
 	return summary
 }
 
-// 这条出站的评分；ok=false 表示还没法打分。
+// 按整条链路算的评分输入：本机探出的延迟再加上面板给的下游中转延迟（ExtraLatencyMs）。
+// 只在本机探出了延迟时才加 —— 没探出就是没法打分，不能靠下游那几段凑出一个分来。
+// 上报的 latencyMs、拨号快慢的比较仍用 scoreInputLocked（只是第一段）。
+func (p *failoverProxy) chainScoreInputLocked(index int) routeStatsSummary {
+	summary := p.scoreInputLocked(index)
+	if summary.hasLatency && index >= 0 && index < len(p.spec.Targets) {
+		summary.latencyMs += p.spec.Targets[index].ExtraLatencyMs
+	}
+	return summary
+}
+
+// 这条出站的评分（按整条链路的延迟）；ok=false 表示还没法打分。
 func (p *failoverProxy) scoreLocked(index int) (int, bool) {
 	if index < 0 || index >= len(p.spec.Targets) {
 		return 0, false
 	}
-	summary := p.scoreInputLocked(index)
+	summary := p.chainScoreInputLocked(index)
 	return routeScore(float64(summary.latencyMs), summary.hasLatency, summary.lossPct, summary.jitterMs, summary.availabilityPct, p.healthyLocked(index))
 }
 
@@ -431,6 +443,8 @@ func (p *failoverProxy) applyRelayHintsLocked(targets []failoverTarget) {
 		if i >= len(p.spec.Targets) {
 			break
 		}
+		// 下游延迟只影响评分：直接换上，下一轮探测按新值评估，不记事件、不重新选路。
+		p.spec.Targets[i].ExtraLatencyMs = target.ExtraLatencyMs
 		down := target.Down
 		downReason := strings.TrimSpace(target.DownReason)
 		if !down {
@@ -478,9 +492,21 @@ func (p *failoverProxy) applyRelayHintsLocked(targets []failoverTarget) {
 备线的流量拽回主线，而主线可能正挂着 —— 要等下一轮探测才发现。现在按「拨的地址 +
 探测地址」认出没变的出站，把它们的健康、样本、连接和「现在走哪条」都带过去；真变了的
 才从头来。不在这里重新选路：下一轮探测（5 秒内）会按新规格评估，和以前一样。
+
+返回出站列表有没有变（条数、顺序、拨的地址或探测地址）。变了的话调用方在放锁之后
+立刻探一轮（probeNowAndReport），新出站不用空等定时探测。
 */
-func (p *failoverProxy) rebuildForSpecLocked(spec failoverSpec, now time.Time) {
+func (p *failoverProxy) rebuildForSpecLocked(spec failoverSpec, now time.Time) bool {
 	p.ensureHealthStateLocked()
+	targetsChanged := len(spec.Targets) != len(p.spec.Targets)
+	if !targetsChanged {
+		for i := range spec.Targets {
+			if targetStateKey(spec.Targets[i]) != targetStateKey(p.spec.Targets[i]) {
+				targetsChanged = true
+				break
+			}
+		}
+	}
 	oldIndex := map[string]int{}
 	for i, target := range p.spec.Targets {
 		key := targetStateKey(target)
@@ -549,6 +575,7 @@ func (p *failoverProxy) rebuildForSpecLocked(spec failoverSpec, now time.Time) {
 	p.prewarmIndex = -1
 	p.precheckFailedIndex = -1
 	p.pinnedLast = -1
+	return targetsChanged
 }
 
 // ---- 断旧连接（快速故障转移 / 强制切换） ----
@@ -655,6 +682,8 @@ type failoverTargetStatsReport struct {
 	Connections         int     `json:"connections"`
 	Samples             int     `json:"samples"`
 	LastProbeAt         int64   `json:"lastProbeAt,omitempty"`
+	// 评分时加在 latencyMs 上的下游中转延迟（面板给的）。latencyMs 本身只是第一段。
+	ExtraLatencyMs int `json:"extraLatencyMs,omitempty"`
 	// 真实连接最近 10 分钟的拨号：成功 / 失败 / 慢（慢的也算成功里的）、耗时折半均值、最近一次（Unix 毫秒）。
 	DialOK     int   `json:"dialOk"`
 	DialFailed int   `json:"dialFailed"`
@@ -708,6 +737,7 @@ func (p *failoverProxy) statsReportLocked() failoverStatsReport {
 			ConsecutiveFailures: stats.consecutiveFailures,
 			Connections:         p.connectionsLocked(index),
 			Samples:             summary.samples,
+			ExtraLatencyMs:      target.ExtraLatencyMs,
 		}
 		if !stats.lastProbeAt.IsZero() {
 			item.LastProbeAt = stats.lastProbeAt.UnixMilli()

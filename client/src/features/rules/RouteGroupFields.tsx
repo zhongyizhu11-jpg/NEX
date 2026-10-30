@@ -47,6 +47,9 @@ import { PIN_DURATION_OPTIONS, formatPolicyClock, formatPolicyDuration, type Rou
 import { ConditionBlock, PolicyGroup } from "./PolicyBlocks";
 import { RoutePathCards, buildRoutePreviewStatus } from "./RouteBoard";
 import { LinkSpreadPicker, linkChoiceClass } from "@/features/links/LinkSpreadPicker";
+import { RouteLinesEditor, expandForPreview, type RouteLineHost, type RouteLinePool, type RouteLineTunnel } from "./RouteLinesEditor";
+import { ROUTE_DELIVERIES, ROUTE_DELIVERY_INFO, normalizeRouteDelivery, type RouteDelivery } from "@shared/routeGroup";
+import { serializeRouteLines, type RouteLine } from "@shared/routeLines";
 
 /*
   编辑框里「线路组」勾上之后的那一块：一个入口 + 多条路径 + 一个调度策略。
@@ -72,9 +75,20 @@ export type RouteHostOption = {
   agentVersion?: string | null;
 };
 
+/** 编辑框里的线路组：在 RouteGroup 之外带着线路定义（有它就按线路编辑，paths 是它的预览展开）。 */
+export type RouteGroupDraft = RouteGroup & { lines?: RouteLine[] | null };
+
 export type RouteGroupFieldsProps = {
-  value: RouteGroup;
-  onChange: (next: RouteGroup) => void;
+  value: RouteGroupDraft;
+  onChange: (next: RouteGroupDraft) => void;
+  /** 线路编辑要的：节点池、能当一段的隧道、入口叫什么、隧道规则入口前面那段。 */
+  pools?: RouteLinePool[];
+  tunnels?: RouteLineTunnel[];
+  entryName?: string;
+  entryPrefix?: string | null;
+  /** 能不能在线路里放隧道段（隧道规则不行：它的调度在隧道出口之后）。 */
+  allowTunnels?: boolean;
+  ruleId?: number | null;
   /** 能当中转的主机（用户看得见的）；入口机器自己会被排除。 */
   hosts: RouteHostOption[];
   /** 能不能加中转；转发组上的规则这一版不行（中继要按入口机各建一份）。 */
@@ -179,10 +193,13 @@ function endpointText(endpoint: RouteEndpoint | null): string {
  * 定时 / 混合下带，指定只在非权重负载下带 —— 换了模式之后界面上那份还留着（改回来就在），
  * 但发上去会被服务端拒绝，所以这里按模式归零。
  */
-export function routeGroupPayload(group: RouteGroup) {
+export function routeGroupPayload(group: RouteGroupDraft) {
   const { policy } = group;
   const usesSchedule = policy.mode === "scheduled" || policy.mode === "hybrid";
+  const lines = group.lines && group.lines.length > 0 ? JSON.parse(serializeRouteLines(group.lines) || "[]") : undefined;
   return {
+    ...(lines ? { lines } : {}),
+    delivery: normalizeRouteDelivery(policy.delivery),
     paths: group.paths.map((path) => ({
       key: path.key,
       name: path.name.trim(),
@@ -190,6 +207,8 @@ export function routeGroupPayload(group: RouteGroup) {
       dest: path.dest,
       weight: path.weight,
       probe: path.probe,
+      // 按线路提交时服务端重新展开；带上 lineKey，钉子 / 时段表指的是哪条线路才对得上。
+      ...(path.lineKey ? { lineKey: path.lineKey } : {}),
     })),
     mode: policy.mode,
     spread: policy.spread,
@@ -327,6 +346,12 @@ export function RouteGroupFields({
   protocol = "tcp",
   nodeOptions = [],
   entrySourcePort,
+  pools = [],
+  tunnels = [],
+  entryName,
+  entryPrefix = null,
+  allowTunnels = false,
+  ruleId = null,
 }: RouteGroupFieldsProps) {
   const now = nowMs ?? Date.now();
   const udpOnly = normalizeForwardRuleProtocol(protocol) === "udp";
@@ -526,9 +551,78 @@ export function RouteGroupFields({
     </div>
   );
 
+  const lines = value.lines && value.lines.length > 0 ? value.lines : null;
+  /** 线路改了：同一套函数在本地展开一遍，paths 就是预览（钉子、时段表、预览卡都按它）。 */
+  const setLines = (next: RouteLine[]) => {
+    const preview = expandForPreview(next, { entryHostId, pools, tunnels });
+    const count = Math.max(1, preview.paths.length);
+    const clamp = (index: number) => Math.min(index, count - 1);
+    onChange({
+      ...value,
+      lines: next,
+      paths: preview.paths,
+      policy: {
+        ...routePolicy,
+        pin: routePolicy.pin ? { ...routePolicy.pin, index: clamp(routePolicy.pin.index) } : null,
+        schedule: routePolicy.schedule ? { ...routePolicy.schedule, windows: routePolicy.schedule.windows.map((window) => ({ ...window, targetIndex: clamp(window.targetIndex) })) } : null,
+      },
+    });
+  };
+  const delivery = normalizeRouteDelivery(routePolicy.delivery);
+  const replicateReady = !!lines?.[0]?.layers.some((layer) => layer.kind === "tunnel" && layer.tunnelIds.some((id) => String(tunnels.find((tunnel) => tunnel.id === id)?.mode || "").toLowerCase() === "forwardx"));
+  const changeDelivery = (next: RouteDelivery) => {
+    // 热备：一坏就切、旧连接马上重连；冷备回到平滑切换。其余参数照旧。
+    const patch: Partial<RouteGroupPolicy> = next === "hot"
+      ? { delivery: next, failureThreshold: Math.min(routePolicy.failureThreshold, 2), failoverSeconds: Math.min(routePolicy.failoverSeconds, 10), switchMode: "fast" }
+      : next === "cold" ? { delivery: next, switchMode: "smooth" } : { delivery: next };
+    setPolicy(patch);
+  };
+
   return (
     <div className="flex min-w-0 flex-col gap-3">
-      <section className="flex min-w-0 flex-col gap-2" aria-label="线路" data-testid="route-paths">
+      {lines ? (
+        <RouteLinesEditor
+          lines={lines}
+          onChange={setLines}
+          hosts={hosts as RouteLineHost[]}
+          pools={pools}
+          tunnels={tunnels}
+          nodeOptions={nodeOptions}
+          entryHostId={entryHostId}
+          entryName={entryName || (entryHostId ? hostName(entryHostId) : "入口")}
+          entryPrefix={entryPrefix}
+          mainAddress={mainAddress}
+          allowHops={allowHops}
+          allowTunnels={allowTunnels}
+          previewPaths={paths}
+          ruleId={ruleId}
+        />
+      ) : null}
+      {lines ? (
+        <PolicyGroup title="备用怎么候着">
+          <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4" role="radiogroup" aria-label="备用怎么候着" data-testid="route-delivery">
+            {ROUTE_DELIVERIES.map((candidate) => {
+              const disabled = candidate === "replicate" && !replicateReady;
+              return (
+                <button
+                  key={candidate}
+                  type="button"
+                  role="radio"
+                  aria-checked={delivery === candidate}
+                  disabled={disabled}
+                  title={disabled ? "复制要主线路走 NEX 隧道（同一份数据两条腿一起发）" : undefined}
+                  className={cn(templateChoiceClass(delivery === candidate), disabled && "cursor-not-allowed opacity-45")}
+                  onClick={() => changeDelivery(candidate)}
+                >
+                  <span className="text-sm font-medium">{ROUTE_DELIVERY_INFO[candidate].label}</span>
+                </button>
+              );
+            })}
+          </div>
+          <p className="text-meta leading-5 text-muted-foreground">{ROUTE_DELIVERY_INFO[delivery].hint}</p>
+        </PolicyGroup>
+      ) : null}
+      <section className={cn("flex min-w-0 flex-col gap-2", lines && "hidden")} aria-label="线路" data-testid="route-paths">
         {paths.map((path, index) => {
           const destField = `dest-${path.key}`;
           const destText = draftOf(destField, path.dest);
@@ -762,7 +856,7 @@ export function RouteGroupFields({
         {describeRouteGroupPlainly(value, { perSession: udpOnly })}
       </p>
       <p className="text-xs leading-5 text-muted-foreground" data-testid="route-seamless-tip">
-        线路组是按连接换路径，换的时候旧连接按上面说的处理。要连接不断的毫秒级切换：建一条 NEX 隧道，把几台中转的中转方式设成「热备」，每条连接同时连着全部中转，主的停了备用立刻接手。
+        线路组是按连接换路径，换的时候旧连接按上面说的处理。要连接不断的毫秒级切换靠 NEX 隧道：把隧道的中转方式设成「热备」，每条连接同时连着全部中转，主的停了备用立刻接手；端口转发规则可以直接在线路里加一段这样的隧道。
       </p>
       {(policy?.warnings || []).map((warning) => (
         <p key={warning} className="rounded-[var(--fx-radius-control)] bg-[var(--fx-warn-soft)] px-3 py-2 text-xs leading-5 text-[var(--fx-warn-text)]">

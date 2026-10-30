@@ -158,6 +158,22 @@ export function buildMetaAgentSelfTestPayload(
   const tunnelPayload = buildTunnelAgentSelfTestPayload(test, meta);
   if (tunnelPayload) return tunnelPayload;
 
+  if (meta?.kind === "line-segment") {
+    // 线路逐段测延迟：Agent 不认识这个 kind，按普通目标测一次（ping 或 TCP），不碰任何转发运行时。
+    const method = normalizeLinkProbeMethod(meta.method);
+    return {
+      testId: agentInteger(test?.id),
+      kind: "line-segment",
+      ruleId: agentInteger(test?.ruleId),
+      forwardType: "line-segment",
+      protocol: method,
+      method,
+      sourcePort: 0,
+      targetIp: String(meta.targetIp || ""),
+      targetPort: agentInteger(meta.targetPort),
+    };
+  }
+
   if (meta?.kind === "forward-group") {
     // Execute the snapshot taken at click time: a failover after enqueueing
     // must not silently re-target a pending test.

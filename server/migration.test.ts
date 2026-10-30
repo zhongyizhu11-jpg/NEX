@@ -8,6 +8,7 @@ import {
   buildMigrationRuntimeExpectations,
   pruneMigrationSnapshotForPanelBackup,
   stripProxyDataFromSnapshot,
+  remapRouteLineRefs,
   remapRoutePathHosts,
   type MigrationImportedIds,
   type MigrationSnapshot,
@@ -20,6 +21,7 @@ import {
   createMigrationRequest,
   prepareTakeoverToken,
 } from "./migrationCodes";
+import { parseRouteLines } from "../shared/routeLines";
 
 function snapshot(tables: MigrationSnapshot["tables"]): MigrationSnapshot {
   return {
@@ -574,6 +576,27 @@ test("导入快照时线路组路径里的中转按主机 ID 映射走", () => {
     /依赖数据缺失/,
     "快照里缺这台中转就报错，不留一个错的主机 ID",
   );
+});
+
+test("导入快照时线路的层（机器、节点池、隧道）和路径上的隧道段按新 ID 映射", () => {
+  const maps = { hosts: new Map([[1, 101], [2, 102]]), node_pools: new Map([[5, 55]]), tunnels: new Map([[9, 99]]) } as any;
+  const lines = [{
+    key: "main",
+    name: "主线路",
+    paused: false,
+    weight: 50,
+    dests: [],
+    layers: [
+      { kind: "tunnel", hostIds: [], poolId: null, tunnelIds: [9], pick: "best", skippable: false },
+      { kind: "pool", hostIds: [], poolId: 5, tunnelIds: [], pick: "best", skippable: true },
+      { kind: "hosts", hostIds: [2, 1], poolId: null, tunnelIds: [], pick: "order", skippable: false },
+    ],
+  }];
+  const remapped = parseRouteLines(remapRouteLineRefs(JSON.stringify(lines), maps));
+  assert.deepEqual(remapped[0].layers.map((layer) => [layer.hostIds, layer.poolId, layer.tunnelIds]), [[[], null, [99]], [[], 55, []], [[102, 101], null, []]]);
+  assert.equal(remapRouteLineRefs(null, maps), null);
+  const paths = JSON.parse(String(remapRoutePathHosts(JSON.stringify([{ key: "a", name: "A", hops: [1, 2], hopVia: [9, null], dest: null, weight: 50 }]), maps)));
+  assert.deepEqual(paths[0].hopVia, [99, null]);
 });
 
 test("导入快照时隧道 / 线路组的入口出口组和节点的前置代理按新 ID 补回", () => {

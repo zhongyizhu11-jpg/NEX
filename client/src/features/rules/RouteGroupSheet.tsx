@@ -27,6 +27,7 @@ import { isAgentVersionBehind } from "@shared/version";
 import { RoutePathCards, RouteSwitchChip, type RouteBoardEntry, type RouteBoardRate } from "./RouteBoard";
 import { ConditionRow, PinSection, SentenceRow } from "./RoutePolicySheet";
 import { RouteQualityHistory } from "./RouteQualityHistory";
+import { RouteLineDiagram, RouteLineHero, RouteLineList, RouteLineTools, RouteStageStrip, routeLineSwitchSummary, useRouteLinePause } from "./RouteLineOverview";
 
 /*
   线路组面板：从规则卡上那个「主备 · 主线路 · 92 优」点进来。
@@ -141,9 +142,11 @@ export type RouteGroupPanelProps = {
   onUnpin?: () => void;
   nowMs?: number;
   timeZone?: string;
+  /** 线路组弹窗给：暂停线路、导出、逐段测带宽（要 tRPC，纯展示时不给）。 */
+  lineActions?: { onPause?: (lineKey: string, paused: boolean) => void; pausing?: boolean };
 };
 
-export function RouteGroupPanel({ policy, status, events, canEdit, pending = false, onPin, onUnpin, nowMs, timeZone }: RouteGroupPanelProps) {
+export function RouteGroupPanel({ policy, status, events, canEdit, pending = false, onPin, onUnpin, nowMs, timeZone, lineActions }: RouteGroupPanelProps) {
   const now = nowMs ?? Date.now();
   const report = describeRoutePolicyReport(policy, { nowMs: now, timeZone });
   const paths = status?.paths || [];
@@ -194,6 +197,30 @@ export function RouteGroupPanel({ policy, status, events, canEdit, pending = fal
             调度这条线路组的机器上 Agent（{status.agentVersion}）早于 {ROUTE_GROUP_UDP_AGENT_VERSION}：按访客固定读不到访客地址，所有访客都落在同一条路径上。升级 Agent 后才按访客分。
           </p>
         ) : null}
+
+      {/* 线路总览（2.3.496）：大数字、分层图、线路列表（可暂停）、按段成功率、导出和逐段测带宽。 */}
+      {status && status.paths.length > 0 ? (
+        <div className="flex flex-col gap-2" data-testid="route-line-overview">
+          {(status as any).agentSupportsLines === false && status.paths.some((path: any) => typeof path.tier === "number") ? (
+            <p className="rounded-[var(--fx-radius-control)] bg-[var(--fx-warn-soft)] px-3 py-2 text-meta text-[var(--fx-warn-text)]">
+              调度这条线路的机器上 Agent{status.agentVersion ? `（${status.agentVersion}）` : ""}早于 2.2.243：还不会按「主线路那组先挑」和整条链的延迟选，也不会改完马上探。升级 Agent 后生效，之前照旧按顺序切。
+            </p>
+          ) : null}
+          <RouteLineHero status={status} />
+          <RouteLineDiagram status={status} />
+          <div className="flex items-center justify-between px-1 pt-1 text-meta font-semibold text-muted-foreground">
+            <span>线路</span>
+            <span className="font-normal">{routeLineSwitchSummary(status)}</span>
+          </div>
+          <RouteLineList status={status} onPause={canEdit ? lineActions?.onPause : undefined} pausing={lineActions?.pausing} />
+          <div className="flex items-center justify-between px-1 pt-1 text-meta font-semibold text-muted-foreground">
+            <span>连接 · 按段</span>
+            <span className="font-normal">精确到哪一段</span>
+          </div>
+          <RouteStageStrip status={status} />
+          {lineActions ? <RouteLineTools status={status} /> : null}
+        </div>
+      ) : null}
 
       {/* 路径卡：一条路径一张，在走的排最前；每张是一条链，段上写延迟，节点下写速率。 */}
       <div className="flex flex-col gap-2">
@@ -298,11 +325,12 @@ export function RouteGroupSheet({
   subjectName,
   policy,
   onEdit,
-  refetchIntervalMs = 10_000,
+  refetchIntervalMs = 3_000,
   footer,
   ...panel
 }: RouteGroupSheetProps) {
   const enabled = open && !!policy && !!ruleId;
+  const linePause = useRouteLinePause(Number(ruleId) || 0);
   const statusQuery = trpc.rules.routeStatus.useQuery({ ruleId: Number(ruleId) }, { enabled, refetchInterval: refetchIntervalMs || false, staleTime: 5_000 });
   const eventsQuery = trpc.rules.routeEvents.useQuery({ ruleId: Number(ruleId), limit: 20 }, { enabled, refetchInterval: refetchIntervalMs || false, staleTime: 5_000 });
   /*
@@ -323,6 +351,7 @@ export function RouteGroupSheet({
           </DialogHeader>
           <RouteGroupPanel
             {...panel}
+            lineActions={linePause}
             policy={shown.policy}
             status={(statusQuery.data as RouteStatus | null | undefined) ?? null}
             events={(eventsQuery.data as RouteEvent[] | undefined) ?? []}

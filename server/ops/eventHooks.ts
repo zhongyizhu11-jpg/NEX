@@ -227,6 +227,74 @@ export function recordRouteSwitchEvent(input: {
   recordSoon({ ...base, kind: "route.switched", level: "info", message: `规则${ruleLabel(input.rule)}从 ${from} 切到 ${to}${reason ? `（${reason}）` : ""}` });
 }
 
+// ---------------- 线路异常 / 恢复 ----------------
+
+/*
+  Agent 报的 unhealthy / recovered：线路组里某一条路径探测不通了 / 又通了。它不等于切了线
+  （备线坏了主线照走），但故障看板要数「出了几次异常、多久恢复」，所以也记进时间线：
+  unhealthy → route.unhealthy（warn），recovered → route.recovered（info，带异常持续了多久）。
+
+  同一条规则同一条路径同一种事件 30 秒内只记一条（Agent 一次心跳可能连报几次）；
+  恢复的时长按这条路径上一次记下的异常算，面板重启后对不上的就不带时长。
+*/
+const ROUTE_HEALTH_COOLDOWN_MS = 30 * 1000;
+const lastRouteHealthAt = new Map<string, number>();
+const routeUnhealthySince = new Map<string, number>();
+
+export type RouteHealthEventInput = {
+  rule: any;
+  hostId?: number | null;
+  kind: string;
+  /** 出问题 / 恢复的那条路径：key 优先，没有就用名字。 */
+  pathKey?: string | null;
+  pathLabel?: string | null;
+  reason?: string | null;
+};
+
+/** 该不该记、记成什么样（纯函数部分，测试直接看它）。不该记返回 null。 */
+export function routeHealthPanelEvent(input: RouteHealthEventInput, now = Date.now()): PanelEventInput | null {
+  const ruleId = Number(input.rule?.id || 0);
+  if (!ruleId || (input.kind !== "unhealthy" && input.kind !== "recovered")) return null;
+  const pathId = String(input.pathKey || input.pathLabel || "?");
+  const pathKey = `${ruleId}:${pathId}`;
+  const key = `${pathKey}:${input.kind}`;
+  if (now - (lastRouteHealthAt.get(key) || 0) < ROUTE_HEALTH_COOLDOWN_MS) return null;
+  boundedSet(lastRouteHealthAt, key, now);
+  const path = shortName(input.pathLabel, "一条线路");
+  const reason = describeRouteReason(input.reason);
+  const base = {
+    hostId: Number(input.hostId || input.rule?.hostId || 0) || null,
+    userId: Number(input.rule?.userId || 0) || null,
+    ruleId,
+  };
+  if (input.kind === "unhealthy") {
+    if (!routeUnhealthySince.has(pathKey)) boundedSet(routeUnhealthySince, pathKey, now);
+    return {
+      ...base,
+      kind: "route.unhealthy",
+      level: "warn",
+      message: `规则${ruleLabel(input.rule)}的线路 ${path} 异常${reason ? `（${reason}）` : ""}`,
+      data: { path: input.pathLabel || null, pathKey: input.pathKey || null, reason: input.reason || null },
+    };
+  }
+  const since = routeUnhealthySince.get(pathKey);
+  routeUnhealthySince.delete(pathKey);
+  const durationSeconds = since !== undefined ? Math.max(0, Math.round((now - since) / 1000)) : null;
+  return {
+    ...base,
+    kind: "route.recovered",
+    level: "info",
+    message: `规则${ruleLabel(input.rule)}的线路 ${path} 恢复${durationSeconds !== null ? `（异常了 ${formatOutageDuration(durationSeconds)}）` : ""}`,
+    data: { path: input.pathLabel || null, pathKey: input.pathKey || null, ...(durationSeconds !== null ? { durationSeconds } : {}) },
+  };
+}
+
+/** Agent 报某条路径异常 / 恢复之后调用（server/failoverLineReports.ts）。不抛、不阻塞。 */
+export function recordRouteHealthEvent(input: RouteHealthEventInput) {
+  const event = routeHealthPanelEvent(input);
+  if (event) recordSoon(event);
+}
+
 /** 转发组 / 入口组（DNS 那套）自动切换。 */
 export function recordForwardGroupSwitchEvent(input: {
   group: any;
@@ -354,6 +422,8 @@ export function recordLoginFailureEvent(ip: string, username: string, now = Date
 export function resetEventHookMemory() {
   erroredRules.clear();
   lastRouteSwitchAt.clear();
+  lastRouteHealthAt.clear();
+  routeUnhealthySince.clear();
   loginFailures.clear();
 }
 
