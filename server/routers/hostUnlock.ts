@@ -13,6 +13,7 @@ import {
   UnlockCheckError,
 } from "../ops/unlock";
 import { UNLOCK_FAMILIES, UNLOCK_MIN_AGENT_VERSION, UNLOCK_SCHEDULES } from "@shared/unlockCheck";
+import { buildHostExitQuality, EXIT_QUALITY_TARGETS } from "../exitQualityView";
 
 /*
   trpc.hosts.unlock* —— 主机详情里的「流媒体 / AI 解锁」一节（Agent 2.2.226 起）。
@@ -33,6 +34,14 @@ async function accessibleHost(ctx: { user: { id: number; role: string } }, hostI
 }
 
 export const hostUnlockProcedures = {
+  /** 「流媒体 / AI 解锁」展开后的面板：站点连通走势 + 最近一次解锁（和订阅页节点菜单里的「出口检测」同一副，server/exitQualityView）。 */
+  exitQuality: protectedProcedure
+    .input(hostInput)
+    .query(async ({ input, ctx }) => {
+      const host: any = await accessibleHost(ctx, input.hostId);
+      return { host: await buildHostExitQuality(host), targets: EXIT_QUALITY_TARGETS };
+    }),
+
   unlockStatus: protectedProcedure
     .input(hostInput)
     .query(async ({ input, ctx }) => {

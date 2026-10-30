@@ -21,7 +21,12 @@ export default function HostEventsSection({ host }: { host: any }) {
   const items = (query.data ?? []) as OpsEventItem[];
 
   return (
-    <Section title="最近动态">
+    <Section
+      title="最近动态"
+      action={items.length > 0 ? (
+        <Link href={`/insights?tab=events&host=${hostId}`} className="text-meta font-medium text-primary underline-offset-2 hover:underline">查看全部</Link>
+      ) : null}
+    >
       {query.isLoading ? (
         <div className="text-meta text-muted-foreground">正在读取…</div>
       ) : query.isError ? (
@@ -32,18 +37,10 @@ export default function HostEventsSection({ host }: { host: any }) {
       ) : items.length === 0 ? (
         <div className="text-meta text-muted-foreground">这台主机还没有记录到事件。</div>
       ) : (
-        <>
-          {/* 详情弹窗里本来就是一块面，这里不再套圆角框，行也不留左右内边距，和上面几节的键值行对齐 */}
-          <div className="flex min-w-0 flex-col">
-            {items.map((event) => <EventRow key={event.id} event={event} now={now} showHost={false} className="px-0 py-2" />)}
-          </div>
-          <Link
-            href={`/insights?tab=events&host=${hostId}`}
-            className="self-start text-meta font-medium text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline"
-          >
-            查看全部
-          </Link>
-        </>
+        /* 详情弹窗里本来就是一块面，这里不再套圆角框，行也不留左右内边距，和上面几节的键值行对齐 */
+        <div className="flex min-w-0 flex-col divide-y divide-[var(--fx-stroke-weak)]">
+          {items.map((event) => <EventRow key={event.id} event={event} now={now} showHost={false} className="px-0 py-1.5" />)}
+        </div>
       )}
     </Section>
   );

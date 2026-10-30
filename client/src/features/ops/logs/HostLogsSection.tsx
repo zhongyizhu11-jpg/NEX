@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Download, Pause, Play, Trash2 } from "lucide-react";
 
-import { Section } from "@/components/hosts/HostDetailDialog";
+import { CollapsibleSection } from "@/components/hosts/HostDetailDialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -162,30 +162,10 @@ function HostLogsViewer({ hostId }: { hostId: number }) {
 
 export default function HostLogsSection({ host }: { host: any }) {
   const hostId = Number(host?.id || 0);
-  const [open, setOpen] = useState(false);
   if (hostId <= 0) return null;
   return (
-    <Section title="实时日志">
-      {open ? (
-        <>
-          <HostLogsViewer hostId={hostId} />
-          <button
-            type="button"
-            className="self-start text-meta font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-            onClick={() => setOpen(false)}
-          >
-            收起
-          </button>
-        </>
-      ) : (
-        <button
-          type="button"
-          className="self-start text-meta font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-          onClick={() => setOpen(true)}
-        >
-          查看这台主机的实时日志（Agent、运行时、隧道、内核）
-        </button>
-      )}
-    </Section>
+    <CollapsibleSection title="实时日志" summary="Agent、运行时、隧道、内核">
+      <HostLogsViewer hostId={hostId} />
+    </CollapsibleSection>
   );
 }

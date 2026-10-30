@@ -1,6 +1,7 @@
 import { protectedProcedure, router } from "../_core/trpc";
 import { z } from "zod";
 import { withRuleProbeFailures } from "../ruleProbeFailure";
+import { withRuleLiveRates } from "../ruleLiveRates";
 import * as db from "../db";
 import { lookupAddressGeo } from "../hostGeo";
 import { requireRuleAccess } from "./helpers";
@@ -131,7 +132,7 @@ export const trafficRulesRouter = router({
       // 累计（total）只有字节数，留在流量缓存，不被频繁的 TCPing 上报清掉。
       const summaryCache = input.range === "total" ? trafficQueryCache : latencyQueryCache;
       // 失败种类在内存里、每分钟都可能变，不进缓存，取出来再补。
-      return withRuleProbeFailures(await summaryCache.get(
+      return withRuleLiveRates(withRuleProbeFailures(await summaryCache.get(
         `summary:${ctx.user.id}:${input.range}:${hours}:${input.hostId || 0}:${ruleKey}`,
         { ttlMs: 5_000, staleMs: 0 },
         () => input.range === "total"
@@ -146,7 +147,7 @@ export const trafficRulesRouter = router({
             since,
             ruleIds,
           }),
-      ) as any[]);
+      ) as any[]));
     }),
   /* 规则卡上的小走势线：一次要一页规则的 24 小时逐时字节，不是每张卡各发一次。 */
   trafficSeriesBatch: protectedProcedure

@@ -141,16 +141,17 @@ export default function ImportExistingSection({ host }: { host: any }) {
   const selectable = forwards.filter((item) => item.canImport);
 
   return (
-    <Section title="导入现有配置">
-      <p className="text-meta text-muted-foreground">
-        找出这台机器上不是面板配的转发（realm、gost、socat、iptables、nftables），勾选后建成规则。
-      </p>
-      <div className="flex flex-wrap items-center gap-2">
-        <Button size="sm" variant="outline" disabled={scanning || !host?.isOnline} onClick={() => scan.mutate({ hostId })}>
+    <Section
+      title="导入现有配置"
+      action={(
+        <Button size="sm" variant="outline" className="h-7 px-2.5 text-xs" disabled={scanning || !host?.isOnline} title={!host?.isOnline ? "主机离线，扫描不了" : undefined} onClick={() => scan.mutate({ hostId })}>
           {scanning ? "正在扫描…" : scanId ? "重新扫描" : "扫描这台机器"}
         </Button>
-        {!host?.isOnline ? <span className="text-meta text-muted-foreground">主机离线，扫描不了</span> : null}
-      </div>
+      )}
+    >
+      <p className="text-meta text-muted-foreground">
+        找出这台机器上不是面板配的转发（realm、gost、socat、iptables、nftables），勾选后建成规则。{!host?.isOnline ? "主机离线，扫描不了。" : ""}
+      </p>
 
       {result.isError ? <p className="text-meta text-[var(--fx-warn-text)]">{result.error.message}</p> : null}
       {result.data?.status === "timeout" ? (

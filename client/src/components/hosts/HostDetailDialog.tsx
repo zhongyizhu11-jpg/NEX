@@ -10,7 +10,7 @@ import { HealthBadge } from "@/components/network/StatusDot";
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { formatCpuPercent, hostAddressText, hostGeoTooltip, hostRegionText } from "./hostDisplay";
+import { formatCpuPercent, hostGeoTooltip, hostRegionText } from "./hostDisplay";
 import HostNetProfileSection from "./HostNetProfileSection";
 import { HostOsAvatar, HostOsGlyph, hostOsOf } from "./HostOsBadge";
 import { fxpRuntimeBadgeTitle, fxpRuntimeDetailText } from "./FxpRuntimeBadge";
@@ -22,6 +22,7 @@ import MimicInstallPanel from "./MimicInstallPanel";
 import HostIpChangeSection from "./HostIpChangeSection";
 import { HostTlsInboundSection } from "./HostTlsInboundManager";
 import HostUnlockSection from "./HostUnlockSection";
+import HostSpeedTestSection from "./HostSpeedTestSection";
 
 /**
  * 主机详情 —— Detail 态。
@@ -42,37 +43,39 @@ import HostUnlockSection from "./HostUnlockSection";
  * PR 4「操作系统」那一轮 —— 在这里临时造一个，就等于多了一套浮层。
  */
 
-/** 详情里的一节（第五套主题那几节也用它，见 features/ops/slots/HostDetailExtraSections）。 */
-export function Section({ title, children }: { title: string; children: ReactNode }) {
+/**
+ * 详情里的一节：一张浅底的小卡，头上是标题（右边可以放这一节的主按钮或一句摘要），
+ * 下面是键值行。概览 / 更多两页、第五套主题那几节（features/ops/slots/HostDetailExtraSections）
+ * 都用它，所以整个弹窗的分节看起来是一副样子。
+ */
+export function Section({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
   return (
-    <section className="flex min-w-0 flex-col gap-2 border-t border-[var(--fx-stroke-weak)] pt-3 first:border-t-0 first:pt-0">
-      <h3 className="text-meta font-medium uppercase tracking-wide text-muted-foreground">{title}</h3>
-      {children}
+    <section className="fx-hd-sec">
+      <div className="fx-hd-sec-head">
+        <h3>{title}</h3>
+        {action ? <div className="fx-hd-sec-action">{action}</div> : null}
+      </div>
+      <div className="fx-hd-sec-body">{children}</div>
     </section>
   );
 }
 
 /** 默认折叠的一节：标题行点一下展开 / 收起；summary 在折叠时显示在标题右边（比如当前状态）。 */
-export function CollapsibleSection({ title, summary, children }: { title: string; summary?: ReactNode; children: ReactNode }) {
-  const [open, setOpen] = useState(false);
+export function CollapsibleSection({ title, summary, defaultOpen = false, children }: { title: string; summary?: ReactNode; defaultOpen?: boolean; children: ReactNode }) {
+  const [open, setOpen] = useState(defaultOpen);
   return (
-    <section className="flex min-w-0 flex-col gap-2 border-t border-[var(--fx-stroke-weak)] pt-3 first:border-t-0 first:pt-0">
-      <button
-        type="button"
-        className="flex min-w-0 items-center justify-between gap-2 text-left"
-        aria-expanded={open}
-        onClick={() => setOpen((value) => !value)}
-      >
-        <h3 className="shrink-0 text-meta font-medium uppercase tracking-wide text-muted-foreground">{title}</h3>
-        <span className="inline-flex min-w-0 items-center gap-2 text-meta text-muted-foreground">
-          {!open && summary ? <span className="min-w-0 truncate">{summary}</span> : null}
-          <span className="inline-flex shrink-0 items-center gap-1">
+    <section className="fx-hd-sec" data-open={open ? "" : undefined}>
+      <button type="button" className="fx-hd-sec-head" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+        <h3>{title}</h3>
+        <span className="fx-hd-sec-action">
+          {!open && summary ? <span className="min-w-0 truncate text-meta text-muted-foreground">{summary}</span> : null}
+          <span className="fx-hd-sec-toggle">
             {open ? "收起" : "展开"}
             <ChevronDown className={`h-3.5 w-3.5 transition-transform ${open ? "rotate-180" : ""}`} aria-hidden="true" />
           </span>
         </span>
       </button>
-      {open ? children : null}
+      {open ? <div className="fx-hd-sec-body">{children}</div> : null}
     </section>
   );
 }
@@ -155,13 +158,19 @@ export default function HostDetailDialog(props: HostDetailDialogProps) {
             />
             <Row label="Agent" value={host.agentVersion ? `v${host.agentVersion}` : "—"} />
             <Row label="FXP" value={<span title={fxpRuntimeBadgeTitle(host)}>{fxpRuntimeDetailText(host)}</span>} />
-            <Row label="地址" value={hostAddressText(host) || "—"} />
-            {host.observedIp ? (
+            {/* 地址：v4、v6 各一行，都没上报就写登记的 IP。出口 IP 和登记的不符只在不符时提一句。 */}
+            {host.ipv4 || host.ipv6 ? (
+              <>
+                {host.ipv4 ? <Row label="IPv4" value={<span className="font-mono">{host.ipv4}</span>} /> : null}
+                {host.ipv6 ? <Row label="IPv6" value={<span className="font-mono break-all">{host.ipv6}</span>} /> : null}
+              </>
+            ) : (
+              <Row label="地址" value={host.ip && host.ip !== "unknown" ? <span className="font-mono">{host.ip}</span> : "—"} />
+            )}
+            {host.observedIp && host.exitIpMismatch ? (
               <Row
-                label="面板看到的出口 IP"
-                value={host.exitIpMismatch
-                  ? <span className="text-[var(--fx-warn-text)]" title="和登记的地址不是同一个：地址被换过、机器前面多了一层代理，或者手填的地址已经不是这台机器。">{host.observedIp} · 和登记的不符</span>
-                  : <span>{host.observedIp} · 和登记的一致</span>}
+                label="出口 IP"
+                value={<span className="text-[var(--fx-warn-text)]" title="和登记的地址不是同一个：地址被换过、机器前面多了一层代理，或者手填的地址已经不是这台机器。">{host.observedIp} · 和登记的不符</span>}
               />
             ) : null}
             {/* 运营商 / ASN 在下面「网络画像」那一节，这里悬停给 */}
@@ -220,28 +229,26 @@ export default function HostDetailDialog(props: HostDetailDialogProps) {
   );
   const moreSections = (
     <>
+          {/* 出口检测：站点连通 + 流媒体 / AI 解锁，能用这台主机的人都能看，只有管理员能发起检测 */}
+          <HostUnlockSection hostId={Number(host.id)} />
+
+          {/* 网速测试：这台机器对 Cloudflare 测速（Agent 2.2.241 起），点开是曲线和结果 */}
+          <HostSpeedTestSection host={host} />
+
           {/* 网络画像：双栈出站、运营商、25 端口、DNSBL（Agent 2.2.226 起在主机上测） */}
           <HostNetProfileSection host={host} canManage={user?.role === "admin"} />
+
+          {user?.role === "admin" ? <HostTlsInboundSection hostId={Number(host.id)} /> : null}
 
           {/* mimic UDP 混淆环境：装没装、能不能用，管理员在这里一键安装 / 修复（2.3.439） */}
           <Section title="mimic UDP 混淆">
             <MimicInstallPanel host={host} canManage={user?.role === "admin"} />
           </Section>
 
-          {/* 流媒体 / AI 解锁检测：能用这台主机的人都能看结果，只有管理员能发起检测（Agent 2.2.226 起） */}
-          <HostUnlockSection hostId={Number(host.id)} />
-
-          {user?.role === "admin" && (
-            <Section title="共享 TLS 入站">
-              <HostTlsInboundSection hostId={Number(host.id)} />
-            </Section>
-          )}
-
           <OpsHostDetailExtraSections host={host} isAdmin={user?.role === "admin"} />
           {user?.role === "admin" ? <HostIpChangeSection hostId={Number(host.id)} /> : null}
     </>
   );
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md">
@@ -274,8 +281,8 @@ export default function HostDetailDialog(props: HostDetailDialogProps) {
             <TabsTrigger value="overview" className="flex-1">概览</TabsTrigger>
             <TabsTrigger value="more" className="flex-1">更多</TabsTrigger>
           </TabsList>
-          <TabsContent value="overview" className="m-0 flex min-w-0 flex-col gap-4">{overviewSections}</TabsContent>
-          <TabsContent value="more" className="m-0 flex min-w-0 flex-col gap-4">{moreSections}</TabsContent>
+          <TabsContent value="overview" className="m-0 flex min-w-0 flex-col gap-2.5">{overviewSections}</TabsContent>
+          <TabsContent value="more" className="m-0 flex min-w-0 flex-col gap-2.5">{moreSections}</TabsContent>
         </Tabs>
 
         <div className="flex items-center justify-end border-t border-[var(--fx-stroke-weak)] pt-3">

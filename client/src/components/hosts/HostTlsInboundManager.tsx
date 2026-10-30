@@ -14,6 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { OptimisticSwitch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { trpc } from "@/lib/trpc";
+import { Row, Section } from "./HostDetailDialog";
 import {
   TLS_INBOUND_AGENT_VERSION,
   TLS_INBOUND_DEFAULT_HANDSHAKE_TIMEOUT,
@@ -63,20 +64,16 @@ export function HostTlsInboundSection({ hostId }: { hostId: number }) {
   const { data } = trpc.tlsInbounds.listByHost.useQuery({ hostId }, { enabled: hostId > 0, staleTime: 15_000 });
   const inbounds = data?.inbounds || [];
   return (
-    <div className="flex min-w-0 flex-col gap-2">
-      <div className="flex min-w-0 items-center justify-between gap-2">
-        <span className="min-w-0 truncate text-secondary-type text-foreground">
-          {inbounds.length > 0
-            ? inbounds.map((inbound: any) => `${inbound.name} :${inbound.port}`).join("、")
-            : "未开启"}
-        </span>
-        <Button type="button" variant="outline" size="sm" onClick={() => setOpen(true)}>管理</Button>
-      </div>
+    <Section title="共享 TLS 入站" action={<Button type="button" variant="outline" size="sm" className="h-7 px-2.5 text-xs" onClick={() => setOpen(true)}>管理</Button>}>
+      <Row
+        label="入站"
+        value={inbounds.length > 0 ? inbounds.map((inbound: any) => `${inbound.name} :${inbound.port}`).join("、") : "未开启"}
+      />
       {data && !data.agentSupported && (
         <p className="text-meta text-[var(--fx-warn-text)]">需要升级 Agent：{TLS_INBOUND_AGENT_VERSION} 起支持共享 TLS 入站，当前 {data.agentVersion || "未知"}。</p>
       )}
       <HostTlsInboundManager hostId={hostId} open={open} onOpenChange={setOpen} />
-    </div>
+    </Section>
   );
 }
 

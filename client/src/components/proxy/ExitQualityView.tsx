@@ -1,4 +1,10 @@
+import { useState } from "react";
+import { toast } from "sonner";
+
 import { Sparkline } from "@/components/charts/Sparkline";
+import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { NODE_CHECK_PHASE_LABELS } from "@shared/nodeCheck";
 import DataSectionError from "@/components/DataSectionError";
 import DataSectionLoading from "@/components/DataSectionLoading";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -189,6 +195,53 @@ export function ExitHostPanel({ host, targets, compact = false }: { host: ExitQu
 
 export type ExitCheckSubject = { inboundId: number } | { nodeId: number };
 
+/**
+ * 粘贴进来、机器不是自己的节点：挑一台自己的机器，临时拉 sing-box 经这个节点做一轮站点握手 + 解锁，
+ * 结果画成和主机那版一样的面板（server/nodeCheckView）。
+ */
+function ViaHostExitCheck({ nodeId, address, targets }: { nodeId: number; address: string; targets: readonly ExitQualityTarget[] }) {
+  const utils = trpc.useUtils();
+  const [viaHostId, setViaHostId] = useState(0);
+  const status = trpc.proxySubscriptions.nodeExitCheckStatus.useQuery({ nodeId }, {
+    refetchOnWindowFocus: false,
+    refetchInterval: (query) => (query.state.data?.pending ? 2000 : false),
+  });
+  const start = trpc.proxySubscriptions.nodeExitCheckStart.useMutation({
+    onSuccess: () => void utils.proxySubscriptions.nodeExitCheckStatus.invalidate({ nodeId }),
+    onError: (error) => toast.error(error.message),
+  });
+  const data = status.data;
+  const candidates = data?.plan.candidates ?? [];
+  const chosen = viaHostId || candidates.find((item) => item.online && item.supported)?.id || 0;
+  const pending = data?.pending ?? null;
+  const latest = data?.latest ?? null;
+  return (
+    <div className="space-y-3" data-testid="exit-via-host">
+      <p className="rounded-md bg-[var(--fx-l2-group)] px-3 py-2.5 text-xs text-muted-foreground">
+        这个节点的地址 {address} 对不上你的任何一台机器：它不在装了 Agent 的机器上。可以让你的一台机器临时经这个节点去测它的出口（机器上要有 sing-box，建过自建节点的都有）。
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <Select value={chosen ? String(chosen) : ""} onValueChange={(value) => setViaHostId(Number(value))}>
+          <SelectTrigger className="h-8 w-[200px]" aria-label="经哪台机器检测"><SelectValue placeholder={status.isLoading ? "读取中…" : "选一台机器"} /></SelectTrigger>
+          <SelectContent>
+            {candidates.map((item) => (
+              <SelectItem key={item.id} value={String(item.id)} disabled={!item.online || !item.supported}>
+                {item.name}{item.preferred ? " · 入口" : ""}{!item.online ? " · 离线" : !item.supported ? " · Agent 太旧" : ""}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Button type="button" size="sm" variant="outline" className="h-8" disabled={!chosen || !!pending || start.isPending} onClick={() => start.mutate({ nodeId, hostId: chosen })}>
+          {pending ? `${NODE_CHECK_PHASE_LABELS[pending.phase] || "检测中"}…` : latest ? "再测一次" : "经这台机器检测"}
+        </Button>
+      </div>
+      {latest?.error && !pending ? <p className="text-xs text-[var(--fx-down-text)]">{latest.error}</p> : null}
+      {data?.exitView && !pending ? <ExitHostPanel host={data.exitView} targets={targets} /> : null}
+      {candidates.length === 0 && data ? <p className="text-xs text-muted-foreground">没有可以用的机器：要一台在线、Agent 2.2.241 以上的机器。</p> : null}
+    </div>
+  );
+}
+
 /** 订阅管理 › 节点菜单 › 出口检测。 */
 export function NodeExitDialog({ subject, name, onOpenChange }: { subject: ExitCheckSubject | null; name: string; onOpenChange: (open: boolean) => void }) {
   const query = trpc.proxySubscriptions.exitCheck.useQuery(subject ?? { nodeId: 1 }, {
@@ -212,11 +265,11 @@ export function NodeExitDialog({ subject, name, onOpenChange }: { subject: ExitC
           ) : query.error && !data ? (
             <DataSectionError label="出口检测" error={query.error} retrying={query.isFetching} onRetry={() => { void query.refetch(); }} />
           ) : data && !data.host ? (
-            <p data-testid="exit-unmatched" className="rounded-md bg-[var(--fx-l2-group)] px-3 py-2.5 text-sm text-muted-foreground">
-              {data.subject.kind === "node"
-                ? `这个节点的地址 ${data.subject.address} 对不上你的任何一台机器：落地不在装了 Agent 的机器上，面板测不了它的出口。`
-                : "这个节点所在的机器已经不在了。"}
-            </p>
+            data.subject.kind === "node" ? (
+              <ViaHostExitCheck nodeId={data.subject.id} address={data.subject.address} targets={data.targets} />
+            ) : (
+              <p data-testid="exit-unmatched" className="rounded-md bg-[var(--fx-l2-group)] px-3 py-2.5 text-sm text-muted-foreground">这个节点所在的机器已经不在了。</p>
+            )
           ) : data?.host ? (
             <div className="space-y-3">
               {data.match === "address" ? <p className="text-[11px] text-muted-foreground">按地址 {data.subject.address} 对上了这台机器。</p> : null}

@@ -51,6 +51,8 @@ import { syncProxySubSource } from "../proxySubSourceSync";
 import { invalidateProxySubCacheForUser } from "../proxySubCache";
 import { clearProxySubRateLimitForToken } from "../proxySubRateLimit";
 import { buildInboundExit, buildNodeExit } from "../exitQualityView";
+import { exitCheckStatusForNode, exitCheckToHostView, speedTestStatusForEntry, startExitCheckForNode, startSpeedTestForEntry } from "../nodeCheckView";
+import { NodeCheckError } from "../ops/nodeCheck";
 import { buildSubscriptionRouteView } from "../subscriptionRouteView";
 
 /**
@@ -103,6 +105,13 @@ async function hasProxySubscriptionPermission(ctx: any): Promise<boolean> {
   if (ctx.user.role === "admin") return true;
   const user = await db.getUserById(ctx.user.id);
   return !!user?.allowProxySubscription;
+}
+
+/** 节点菜单里的检查只能对自己的节点做（管理员看全部）。 */
+async function ownedNodeForCheck(ctx: any, nodeId: number) {
+  const node = await db.getProxyNodeById(nodeId);
+  if (!node || (ctx.user.role !== "admin" && Number(node.userId) !== Number(ctx.user.id))) throw new Error("节点不存在");
+  return node;
 }
 
 async function assertProxySubscriptionAllowed(ctx: any) {
@@ -1152,6 +1161,65 @@ export const proxySubscriptionsRouter = router({
       const node = await db.getProxyNodeById(Number(input.nodeId));
       if (!node || (!isAdmin && Number(node.userId) !== Number(ctx.user.id))) throw new Error("节点不存在");
       return buildNodeExit(node, { id: Number(ctx.user.id), role: String(ctx.user.role) });
+    }),
+
+  /**
+   * 节点菜单「出口检测」，节点的机器不是自己的：挑一台机器经这个节点检测（server/nodeCheckView）。
+   * 只能查自己的节点（管理员看全部）。
+   */
+  nodeExitCheckStart: protectedProcedure
+    .input(z.object({ nodeId: z.number().int().positive(), hostId: z.number().int().positive().optional() }))
+    .mutation(async ({ ctx, input }) => {
+      await assertProxySubscriptionAllowed(ctx);
+      const node = await ownedNodeForCheck(ctx, input.nodeId);
+      try {
+        return await startExitCheckForNode(node, { id: Number(ctx.user.id), role: String(ctx.user.role) }, { hostId: input.hostId });
+      } catch (error) {
+        if (error instanceof NodeCheckError) throw new Error(error.message);
+        throw error;
+      }
+    }),
+
+  nodeExitCheckStatus: protectedProcedure
+    .input(z.object({ nodeId: z.number().int().positive() }))
+    .query(async ({ ctx, input }) => {
+      await assertProxySubscriptionAllowed(ctx);
+      const node = await ownedNodeForCheck(ctx, input.nodeId);
+      const status = await exitCheckStatusForNode(node, { id: Number(ctx.user.id), role: String(ctx.user.role) });
+      const latest = status.latest;
+      const viaHost = latest ? await db.getHostById(Number(latest.hostId)) : null;
+      return {
+        nodeName: String(node.name || ""),
+        ...status,
+        exitView: latest?.exit && viaHost
+          ? exitCheckToHostView(latest.exit, { hostId: Number(viaHost.id), hostName: String(viaHost.name || ""), nodeName: String(node.name || ""), checkedAt: latest.checkedAt, countryCode: viaHost.countryCode ? String(viaHost.countryCode) : null })
+          : null,
+      };
+    }),
+
+  /**
+   * 预览订阅里每条线路的「测速」：入口机连自己的入口走完整条链对 Cloudflare 测速
+   * （server/nodeCheckView）。entryKey 是预览里的 rule-<id> / direct-<模板 id>。
+   */
+  entrySpeedTestStart: protectedProcedure
+    .input(z.object({ entryKey: z.string().min(1).max(48) }))
+    .mutation(async ({ ctx, input }) => {
+      await assertProxySubscriptionAllowed(ctx);
+      try {
+        return await startSpeedTestForEntry(Number(ctx.user.id), { id: Number(ctx.user.id), role: String(ctx.user.role) }, input);
+      } catch (error) {
+        if (error instanceof NodeCheckError) throw new Error(error.message);
+        throw error;
+      }
+    }),
+
+  entrySpeedTestStatus: protectedProcedure
+    .input(z.object({ entryKey: z.string().min(1).max(48) }))
+    .query(async ({ ctx, input }) => {
+      await assertProxySubscriptionAllowed(ctx);
+      const status = await speedTestStatusForEntry(Number(ctx.user.id), { id: Number(ctx.user.id), role: String(ctx.user.role) }, input.entryKey);
+      const viaHost = status.latest ? await db.getHostById(Number(status.latest.hostId)) : null;
+      return { ...status, viaHostName: viaHost ? String(viaHost.name || "") : "" };
     }),
 
   /** 订阅内容里点开一条中转：这条线路怎么走（server/subscriptionRouteView）。只能看自己的规则。 */

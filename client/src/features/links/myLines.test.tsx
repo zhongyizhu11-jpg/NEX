@@ -44,8 +44,9 @@ test("端口转发：入口 → 落地，端到端延迟写在卡头，24h 流�
   assert.match(line.statusText, /端到端 42 ms/);
   const html = renderToStaticMarkup(<LineCard line={line} />);
   assert.match(html, /端到端 42 ms/);
-  assert.match(html, /24H ↓ 1 KB · ↑ 2 KB/);
-  assert.equal((html.match(/fx-rb-node"/g) || []).length, 3, "卡头一个状态点 + 链上入口、落地两个节点");
+  assert.match(html, />整链 42 ms</);
+  assert.equal((html.match(/class="fx-lane-node"/g) || []).length, 2, "泳道里入口、落地两张卡");
+  assert.match(html, />42 ms</, "只有一段时端到端延迟就写在那一段上");
 });
 
 test("隧道转发：经过的只列入口后面的中转和出口，出口掉线整条线算断", () => {
@@ -61,7 +62,7 @@ test("隧道转发：经过的只列入口后面的中转和出口，出口掉�
   assert.match(line.statusText, /主机离线：US exit/);
   assert.deepEqual(line.subscription, { nodeName: "美国 01", visible: true });
   const html = renderToStaticMarkup(<LineCard line={line} />);
-  assert.match(html, />订阅</);
+  assert.match(html, /订阅「美国 01」/);
   assert.match(html, /data-state="planned"/, "隧道没有分段探测，段上画「—」");
 });
 
