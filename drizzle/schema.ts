@@ -1131,6 +1131,9 @@ export const forwardRuleRouteEvents = table("forward_rule_route_events", {
   reason: text("reason"),
   score: int("score"),
   latencyMs: int("latencyMs"),
+  fromChainMs: int("fromChainMs"),
+  toChainMs: int("toChainMs"),
+  heldSeconds: int("heldSeconds"),
   createdAt: epoch("createdAt").notNull().default(nowDefault()),
 });
 export type ForwardRuleRouteEvent = typeof forwardRuleRouteEvents.$inferSelect;

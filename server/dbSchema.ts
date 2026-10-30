@@ -699,6 +699,8 @@ const tables: TableDef[] = [
       c("fromKey", "varchar", { length: 32 }), c("toKey", "varchar", { length: 32 }),
       c("fromLabel", "text"), c("toLabel", "text"), c("reason", "text"),
       c("score", "int"), c("latencyMs", "int"),
+      // 切换时新旧两条整条链的延迟、择优切过去前领先了多久（Agent 2.2.243 起）
+      c("fromChainMs", "int"), c("toChainMs", "int"), c("heldSeconds", "int"),
       c("createdAt", "epoch", { notNull: true, default: "now" }),
     ],
     indexes: [["ruleId", "createdAt"], ["createdAt"]],

@@ -181,6 +181,9 @@ export const rulesRouter = router({
         reasonText: describeRouteReason(row.reason),
         score: row.score ?? null,
         latencyMs: row.latencyMs ?? null,
+        fromChainMs: row.fromChainMs ?? null,
+        toChainMs: row.toChainMs ?? null,
+        heldSeconds: row.heldSeconds ?? null,
         at: routeEventMillis(row.createdAt),
       }));
     }),

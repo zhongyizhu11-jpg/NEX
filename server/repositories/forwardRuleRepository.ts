@@ -1254,6 +1254,10 @@ export type ForwardRuleRouteEventInput = {
   reason?: string | null;
   score?: number | null;
   latencyMs?: number | null;
+  /** 切换时新旧两条整条链的延迟（毫秒）、择优切过去前领先了多久（秒）。 */
+  fromChainMs?: number | null;
+  toChainMs?: number | null;
+  heldSeconds?: number | null;
   /** 事件实际发生的时间（秒）。Agent 上报的事件带自己的时间戳；不给就是现在。 */
   atSeconds?: number | null;
 };
@@ -1293,6 +1297,9 @@ export async function insertForwardRuleRouteEvent(event: ForwardRuleRouteEventIn
     reason: routeEventText(event.reason),
     score: routeEventInt(event.score),
     latencyMs: routeEventInt(event.latencyMs),
+    fromChainMs: routeEventInt(event.fromChainMs),
+    toChainMs: routeEventInt(event.toChainMs),
+    heldSeconds: routeEventInt(event.heldSeconds),
     createdAt: new Date(seconds * 1000),
   };
   // drizzle 的 insert 结果三种库各长各样（MySQL 是 [ResultSetHeader]、PG 没有 id），统一走 insertAndGetId。

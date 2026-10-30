@@ -110,6 +110,11 @@ export function hostPrimaryAddressText(host: any) {
   return rows.map((row) => `${row.label} ${row.value}`).join("  /  ") || "-";
 }
 
+/** 节点维护（2.3.496）：开着就从所有线路、转发组、入口组、出口组的候选里拿掉。 */
+export function hostInMaintenance(host: any) {
+  return host?.maintenanceMode === true || host?.maintenanceMode === 1 || host?.maintenanceMode === "1";
+}
+
 export function hostRegionText(host: any) {
   const parts = [host.geoCountryName || host.geoCountryCode, host.geoRegion]
     .map((value) => String(value || "").trim())

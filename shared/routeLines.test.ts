@@ -6,6 +6,7 @@ import {
   newRouteLayer,
   newRouteLine,
   parseRouteLines,
+  routeLinesForEditor,
   routeLinesFromPaths,
   routeLinesOf,
   serializeRouteLines,
@@ -149,4 +150,29 @@ test("中继布局：没有隧道段和以前一样；隧道段建在上一个�
     [2, 51, { kind: "relay", node: 2, loopback: true }],
     [6, 52, { kind: "landing" }],
   ]);
+});
+
+test("线路上的探测地址：存得下、展开给每条路径；老路径推线路时带过来", () => {
+  const probe = { ip: "203.0.113.80", port: 443 };
+  const lines = [line("main", { layers: [newRouteLayer({ kind: "hosts", hostIds: [2, 3] })], probe }), line("bk")];
+  const parsed = parseRouteLines(serializeRouteLines(lines));
+  assert.deepEqual(parsed[0].probe, probe);
+  assert.equal(parsed[1].probe, undefined, "没填的不写");
+  const { paths } = expandRouteLines(parsed, ctx());
+  for (const path of paths.filter((item) => item.lineKey === "main")) assert.deepEqual(path.probe, probe, "以前展开时写死 null，编辑框里填了也丢");
+  assert.equal(paths.find((item) => item.lineKey === "bk")?.probe, null);
+  const back = routeLinesFromPaths(paths.filter((item) => item.lineKey === "main"));
+  assert.deepEqual(back[0].probe, probe);
+});
+
+test("编辑框只认线路：存的线路 → 存的路径 → 老 failover 列推出来的路径 → 一条空主线路", () => {
+  const stored = [line("main", { layers: [newRouteLayer({ kind: "hosts", hostIds: [2] })] })];
+  assert.equal(routeLinesForEditor({ routeLines: serializeRouteLines(stored), routePaths: null }, [])[0].key, "main");
+  const legacyPaths = expandRouteLines([line("a", { layers: [newRouteLayer({ kind: "hosts", hostIds: [3] })] })], ctx()).paths;
+  const fromLegacy = routeLinesForEditor({ routeLines: null, routePaths: null }, legacyPaths);
+  assert.equal(fromLegacy.length, 1);
+  assert.deepEqual(fromLegacy[0].layers[0].hostIds, [3]);
+  const empty = routeLinesForEditor({ routeLines: null, routePaths: null }, []);
+  assert.equal(empty.length, 1);
+  assert.equal(empty[0].layers.length, 0);
 });

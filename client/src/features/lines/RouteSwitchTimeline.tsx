@@ -84,8 +84,14 @@ export function routeSwitchEntries(events: RouteEvent[], status: RouteStatus | n
         return { ...base, tone: "ok", title: <>切回 <b>{to}</b></>, detail: recover > 0 ? `${to}恢复后稳定 ${duration(recover)}` : describeRouteReason(reason) };
       }
       if (lower === "score") {
-        const better = event.fromKey || event.fromLabel ? `比 ${from} 更优` : describeRouteReason(reason);
-        return { ...base, tone: "ok", title: <>整链最优换到 <b>{to}</b></>, detail: `${better}${event.latencyMs ? `，换过去 ${event.latencyMs} ms` : ""}` };
+        // 新 Agent 带着新旧两条整条链的延迟和领先了多久：「比 备 1 快 3 ms，持续 2 分钟」
+        const fromMs = Number(event.fromChainMs || 0);
+        const toMs = Number(event.toChainMs || 0);
+        const held = Number(event.heldSeconds || 0);
+        const named = !!(event.fromKey || event.fromLabel);
+        const faster = named && fromMs > 0 && toMs > 0 && fromMs > toMs ? `比 ${from} 快 ${fromMs - toMs} ms` : named ? `比 ${from} 更优` : describeRouteReason(reason);
+        const tail = held > 0 ? `，持续 ${duration(held)}` : !fromMs && event.latencyMs ? `，换过去 ${event.latencyMs} ms` : "";
+        return { ...base, tone: "ok", title: <>整链最优换到 <b>{to}</b></>, detail: `${faster}${tail}` };
       }
       if (lower === "schedule") return { ...base, tone: "acc", title: <>按时段换到 <b>{to}</b></>, detail: describeRouteReason(reason) };
       const failure = /health check|dial failed|relay down|maintenance|breaker|node offline|paused/.test(lower);

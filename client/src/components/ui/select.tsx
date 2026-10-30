@@ -41,12 +41,31 @@ Select.displayName = SelectPrimitive.Root.displayName
 const SelectGroup = SelectPrimitive.Group
 const SelectValue = SelectPrimitive.Value
 
-const SelectTrigger = React.forwardRef<React.ComponentRef<typeof SelectPrimitive.Trigger>, React.ComponentPropsWithoutRef<typeof SelectPrimitive.Trigger>>(({ className, children, ...props }, ref) => {
+/*
+  size="sm"：卡片里一行小字旁边的小下拉（线路编辑器的时段、落地选节点）。手机上所有下拉框都被
+  workspace.css 撑到 34px / 15px（好点），小的这种用 data-size="sm" 躲开那条规则。
+*/
+type SelectTriggerProps = React.ComponentPropsWithoutRef<typeof SelectPrimitive.Trigger> & { size?: "default" | "sm" }
+
+const SelectTrigger = React.forwardRef<React.ComponentRef<typeof SelectPrimitive.Trigger>, SelectTriggerProps>(({ className, children, size = "default", ...props }, ref) => {
   const fieldId = useFormFieldId();
+  const small = size === "sm"
   return (
-  <SelectPrimitive.Trigger data-slot="select-trigger" id={fieldId} ref={ref} className={cn("flex h-9 w-full items-center justify-between gap-2 rounded-md border border-input bg-background px-3 py-1.5 text-[14px] placeholder:text-muted-foreground focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 [&>span]:line-clamp-1", className)} {...props}>
+  <SelectPrimitive.Trigger
+    data-slot="select-trigger"
+    data-size={small ? "sm" : undefined}
+    id={fieldId}
+    ref={ref}
+    className={cn(
+      small
+        ? "flex h-7 w-full items-center justify-between gap-1 rounded-[8px] border border-input bg-background px-2 py-0 text-[12px] placeholder:text-muted-foreground focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 [&>span]:line-clamp-1"
+        : "flex h-9 w-full items-center justify-between gap-2 rounded-md border border-input bg-background px-3 py-1.5 text-[14px] placeholder:text-muted-foreground focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 [&>span]:line-clamp-1",
+      className,
+    )}
+    {...props}
+  >
     {children}
-    <SelectPrimitive.Icon asChild><ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" /></SelectPrimitive.Icon>
+    <SelectPrimitive.Icon asChild><ChevronDown className={cn("shrink-0 text-muted-foreground", small ? "h-3 w-3" : "h-4 w-4")} /></SelectPrimitive.Icon>
   </SelectPrimitive.Trigger>
   );
 })

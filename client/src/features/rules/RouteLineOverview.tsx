@@ -205,7 +205,7 @@ export function RouteLineHero({ status }: { status: RouteStatus }) {
 
 // ---------------------------------------------------------------- 分层图
 
-type DiagramNode = { key: string; label: string; sub: string; hot: boolean; tone: "ok" | "warn" | "down"; width: number };
+type DiagramNode = { key: string; label: string; sub: string; hot: boolean; tone: "ok" | "warn" | "down"; width: number; /** 全名（框里放不下时截断，悬停看全的） */ title: string };
 
 const DIAGRAM_WIDTH = 350;
 const ROW_GAP = 74;
@@ -241,10 +241,14 @@ export function RouteLineDiagram({ status, modeLabel, timeZone }: { status: Rout
   const active = paths.find((path) => path.active) || null;
   const layout = useMemo(() => {
     const maxHops = Math.max(0, ...paths.map((path) => path.hops.length));
+    // 只有一列中转时中间空得多，名字给宽一点（「jinx(39.9y)」不用截）；列多了就紧着来
+    const hopMaxWidth = maxHops <= 1 ? 84 : maxHops === 2 ? 72 : 56;
     const columns: DiagramNode[][] = [];
-    const entryLabel = fitLabel(status.entry?.name || "入口", 64);
+    const entryName = status.entry?.name || "入口";
+    const entryLabel = fitLabel(entryName, 64);
     columns.push([{
       key: "entry",
+      title: entryName,
       label: entryLabel.text,
       sub: "",
       hot: true,
@@ -263,10 +267,11 @@ export function RouteLineDiagram({ status, modeLabel, timeZone }: { status: Rout
           if (hot) existing.hot = true;
           continue;
         }
-        const label = fitLabel(hop.name, 72);
+        const label = fitLabel(hop.name, hopMaxWidth);
         const state = hop.maintenance ? "维护" : hop.offline ? "离线" : hop.tripped ? "熔断" : "";
         nodes.push({
           key,
+          title: hop.name,
           label: label.text,
           sub: hop.viaTunnel ? "隧道出口" : "中转",
           hot,
@@ -289,7 +294,7 @@ export function RouteLineDiagram({ status, modeLabel, timeZone }: { status: Rout
         if (!path.down) existing.tone = "ok";
         continue;
       }
-      landings.push({ key, label: "落地", sub: "", hot: !!path.active, tone: path.down ? "down" : "ok", width: 50 });
+      landings.push({ key, title: destLabel(path), label: "落地", sub: "", hot: !!path.active, tone: path.down ? "down" : "ok", width: 50 });
     }
     if (landings.length > 1) landings.forEach((node, index) => { node.label = `落地 ${index + 1}`; node.width = 58; });
     columns.push(landings);
@@ -416,6 +421,7 @@ export function RouteLineDiagram({ status, modeLabel, timeZone }: { status: Rout
             const topY = y - BOX_HEIGHT / 2;
             return (
               <g key={`${columnIndex}-${node.key}`}>
+                <title>{node.sub ? `${node.title} · ${node.sub}` : node.title}</title>
                 <rect x={left} y={topY} width={node.width} height={BOX_HEIGHT} rx={7} fill="var(--fx-l1-surface)" stroke={node.hot ? "var(--fx-accent)" : "var(--fx-stroke-weak)"} strokeWidth={node.hot ? 1.6 : 1} />
                 <text x={x} y={y + 4} fontWeight={node.hot ? 700 : 400} fill="var(--fx-text)">{node.label}</text>
                 {node.sub ? <text x={x} y={topY + BOX_HEIGHT + 13} fontSize="9" fill="var(--fx-text-muted)" fontFamily="inherit" style={{ fontFamily: "var(--fx-font-sans, system-ui, sans-serif)" }}>{node.sub}</text> : null}
