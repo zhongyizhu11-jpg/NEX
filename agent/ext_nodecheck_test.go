@@ -198,8 +198,9 @@ func TestCloudflareSpeedTestAgainstLocalServer(t *testing.T) {
 	if result.ClientIP != "203.0.113.9" || result.ASN != "AS13335" || result.Colo != "SIN" || result.ASOrg != "Test Org" {
 		t.Fatalf("meta not carried: %+v", result)
 	}
-	if result.LatencyMs <= 0 || result.DownloadMbps <= 0 || result.UploadMbps <= 0 {
-		t.Fatalf("numbers should be positive: %+v", result)
+	// 回环上延迟可能不到 0.1 ms，四舍五入就是 0：只要求不是负数。
+	if result.LatencyMs < 0 || result.JitterMs < 0 || result.DownloadMbps <= 0 || result.UploadMbps <= 0 {
+		t.Fatalf("numbers should be sane: %+v", result)
 	}
 	if len(result.Samples) < 4 || atomic.LoadInt32(&samples) != int32(len(result.Samples)) {
 		t.Fatalf("samples = %d (progress %d)", len(result.Samples), samples)
