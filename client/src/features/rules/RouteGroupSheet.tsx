@@ -150,6 +150,10 @@ export type RouteEvent = {
   reasonText: string;
   score: number | null;
   latencyMs: number | null;
+  /** 切换时新旧两条整条链的延迟、择优切过去前领先了多久（Agent 2.2.243 起）。 */
+  fromChainMs?: number | null;
+  toChainMs?: number | null;
+  heldSeconds?: number | null;
   at: number;
 };
 
@@ -170,9 +174,11 @@ export type RouteGroupPanelProps = {
   onUnpin?: () => void;
   nowMs?: number;
   timeZone?: string;
+  /** 画不画「路径」那几张卡：线路详情上面已经有分层图和线路列表，异常明细里就不再画一遍。 */
+  showPaths?: boolean;
 };
 
-export function RouteGroupPanel({ policy, status, events, canEdit, pending = false, onPin, onUnpin, nowMs, timeZone }: RouteGroupPanelProps) {
+export function RouteGroupPanel({ policy, status, events, canEdit, pending = false, onPin, onUnpin, nowMs, timeZone, showPaths = true }: RouteGroupPanelProps) {
   const now = nowMs ?? Date.now();
   const report = describeRoutePolicyReport(policy, { nowMs: now, timeZone });
   const paths = status?.paths || [];
@@ -225,7 +231,7 @@ export function RouteGroupPanel({ policy, status, events, canEdit, pending = fal
         ) : null}
 
       {/* 路径卡：一条路径一张，在走的排最前；每张是一条链，段上写延迟，节点下写速率。 */}
-      <div className="flex flex-col gap-2">
+      {showPaths ? <div className="flex flex-col gap-2">
         <div className="flex items-center justify-between gap-2 px-1">
           <span className="text-meta font-semibold text-muted-foreground">{weighted ? "路径（每条都在走）" : "路径"}</span>
           {status?.switches ? <RouteSwitchChip switches={status.switches} /> : null}
@@ -241,7 +247,7 @@ export function RouteGroupPanel({ policy, status, events, canEdit, pending = fal
         {status && others.some((path) => path.down) ? (
           <p className="px-1 text-meta text-muted-foreground">用不了的路径会被跳过，恢复并稳定一阵后重新参与。</p>
         ) : null}
-      </div>
+      </div> : null}
 
       <GroupedList>
         <ListSection
@@ -337,7 +343,8 @@ export function RouteGroupSheet({
   const enabled = open && !!policy && !!ruleId;
   const linePause = useRouteLinePause(Number(ruleId) || 0);
   const statusQuery = trpc.rules.routeStatus.useQuery({ ruleId: Number(ruleId) }, { enabled, refetchInterval: refetchIntervalMs || false, staleTime: 5_000 });
-  const eventsQuery = trpc.rules.routeEvents.useQuery({ ruleId: Number(ruleId), limit: 20 }, { enabled, refetchInterval: refetchIntervalMs || false, staleTime: 5_000 });
+  // 状态 3 秒一刷（数字要跟得上）；切换记录不会那么勤，10 秒够了
+  const eventsQuery = trpc.rules.routeEvents.useQuery({ ruleId: Number(ruleId), limit: 20 }, { enabled, refetchInterval: refetchIntervalMs ? Math.max(refetchIntervalMs, 10_000) : false, staleTime: 5_000 });
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
   /*
@@ -395,7 +402,7 @@ export function RouteGroupSheet({
             ) : null}
             {detailsOpen || (status && status.paths.length === 0) ? (
               <div className="flex min-w-0 flex-col gap-3 border-t border-[var(--fx-stroke-weak)] pt-3" data-testid="route-line-detail-panel">
-                <RouteGroupPanel {...panel} policy={shown.policy} status={status} events={events} />
+                <RouteGroupPanel {...panel} policy={shown.policy} status={status} events={events} showPaths={false} />
                 {status ? <RouteLineTools status={status} /> : null}
                 <RouteQualityHistory
                   ruleId={Number(ruleId) || 0}

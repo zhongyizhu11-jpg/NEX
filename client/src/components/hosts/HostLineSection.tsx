@@ -26,6 +26,9 @@ export default function HostLineSection({ host }: { host: any }) {
   const setMaintenance = trpc.hosts.setMaintenance.useMutation({
     onSuccess: (result: any, variables) => {
       void utils.hosts.lineHealth.invalidate({ hostId });
+      // 卡片和详情头上的「维护中」跟着变
+      void utils.hosts.list.invalidate();
+      void utils.hosts.listPage.invalidate();
       void utils.rules.routeBoard.invalidate();
       void utils.lineDiagnostics.lineWorkspace.invalidate();
       void utils.lineDiagnostics.poolBoard.invalidate();
@@ -50,6 +53,9 @@ export default function HostLineSection({ host }: { host: any }) {
     : lines.some((line) => line.entry) ? "入口" : lines.length > 0 ? "中转" : "没有线路经过";
   const region = countryNameZh(host?.geoCountryCode) || hostRegionText(host) || "";
   const sub = [role, region, host?.isOnline ? "在线" : "离线"].filter(Boolean).join(" · ");
+  // 关掉维护以后多久回来：经过它的线路里最长的「恢复观察」（线路组自己的设置，各条可能不一样）
+  const recoverSeconds = Math.max(0, ...lines.map((line) => Number(line.recoverSeconds || 0)));
+  const recoverText = recoverSeconds > 0 ? (recoverSeconds < 60 ? `${recoverSeconds} 秒` : `${Math.round(recoverSeconds / 60)} 分钟`) : "";
   // 什么时候开始维护、备注：放在「维护中」的悬停提示里，卡面和效果图一样干净
   const since = data?.maintenance && data.maintenanceSince
     ? `${formatAgo(Date.now() - Number(data.maintenanceSince))}开始维护${data.maintenanceNote ? ` · ${data.maintenanceNote}` : ""}`
@@ -72,7 +78,7 @@ export default function HostLineSection({ host }: { host: any }) {
                 data-testid="host-maintenance"
               />
             </div>
-            <LineHint className="mt-1.5">从所有线路的候选里拿掉，经过它的连接先切走。关掉后探通、稳定一阵再放回。</LineHint>
+            <LineHint className="mt-1.5">从所有线路的候选里拿掉，经过它的连接先切走。{recoverText ? `关掉后探通、稳定 ${recoverText}再放回。` : "关掉后探通、稳定一阵再放回。"}</LineHint>
             {lines.length > 0 ? (
               <div className="mt-[10px]">
                 {lines.map((line) => (

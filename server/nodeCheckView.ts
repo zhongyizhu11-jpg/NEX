@@ -1,10 +1,12 @@
 import * as db from "./db";
+import { dbBool } from "./repositories/repositoryUtils";
 import { resolveAgentAdvertisedPanelUrl } from "./agentPanelUrl";
 import { findNodeHost, type ExitQualityHost } from "./exitQualityView";
 import { hostSupportsNodeCheck, nodeCheckStatus, startNodeCheck, type NodeCheckSubject } from "./ops/nodeCheck";
 import { singboxAssetRelayBase } from "./singboxAssets";
 import { ensureSingboxBinaryCmd } from "./singboxRuntimePlan";
 import { effectiveGithubAccelerator } from "../shared/githubAccelerator";
+import { KERNEL_FORWARD_TYPES } from "../shared/forwardTypes";
 import { SITE_LATENCY_TARGETS, summarizeSiteSamples, type SiteLatencySample } from "../shared/siteLatency";
 import { singboxOutbound } from "../shared/proxySubscription";
 import { proxyNodeFromTemplateRow, type ProxySubscriptionEntry } from "../shared/proxySubscriptionPlan";
@@ -17,10 +19,8 @@ import type { ExitCheckResult } from "../shared/nodeCheck";
     · 节点菜单「出口检测」，节点的机器不是自己的：挑一台自己的机器，临时拉 sing-box 把这个节点当出站，
       站点握手 + 解锁走它过去；结果画成和主机那版一样的出口面板。候选机器里绑了这个节点的转发
       所在的入口机排最前。
-    · 预览订阅里每条线路的「测速」：自动挑一台不在这条线路上的机器当客户端，连订阅里这条线路的入口
-      （客户端拿到的就是它），流量走入口 → 中转 → 落地出去，测的是整条链。没有别的机器时才退回
-      在入口机上连 127.0.0.1 —— 云主机的公网 IP 多半是 NAT 出来的，机器自己连自己的公网 IP 不通；
-      而且内核转发（nftables）对本机发出的连接不生效，所以回环只对 gost / realm 这类用户态转发有效。
+    · 预览订阅里每条线路的「测速」：在入口机上连自己的入口（回环；内核转发连下一跳），流量走入口 →
+      中转 → 落地出去，测的是整条链（见下面 planEntryCheck）。
   机器上没有 sing-box 的，指令里带上自建节点那套装机脚本，Agent 先装再测。
 */
 
@@ -110,13 +110,33 @@ export async function exitCheckStatusForNode(node: any, viewer: { id: number; ro
 
 // ---------------------------------------------------------------- 订阅线路：在入口机上连自己的入口测整条链
 
+/*
+  订阅预览里一条线路的「测速」要测的是这条链本身：入口 → 中转 → 落地 → 出去。
+
+    · 中转线路（relay）：就在入口机上测。sing-box 当客户端连本机的入口（回环 127.0.0.1:入口端口），
+      流量照样经入口的转发、中转、落地出去 —— 和客户端连上入口之后走的是同一条路，只是少了「你到入口」
+      那一段（那一段是你自己的宽带，面板测不到）。内核转发（iptables / nftables）不接本机发出的连接，
+      就直接连它转去的下一跳，路是同一条。
+      以前借一台线路外的机器当客户端，挑到的常常在别的国家（比如香港的机器去连国内入口再回香港），
+      多绕两次国境，延迟几百毫秒、带宽也不是这条线路的。
+    · 直连节点（direct）、带前置代理的线路、入口机测不了（离线 / Agent 太旧）：借一台机器当客户端连
+      订阅里的地址。先挑和入口同一个国家的（直连节点挑国内的 —— 用的人在国内），都没有才随便挑一台，
+      界面上写清楚借的是谁、多了哪一段。
+*/
+
+export type EntryCheckRole = "entry" | "client";
+
 export type EntryCheckPlan = {
   entry: ProxySubscriptionEntry;
   entryName: string;
-  /** 在哪台机器上跑：优先线路外的另一台机器；没有就是入口机自己（连回环）；null = 没有机器能测。 */
+  /** 在哪台机器上跑；null = 没有机器能测。 */
   host: any | null;
-  /** other：线路外的另一台机器；self：入口机 / 落地机自己连回环。 */
-  hostRole: "other" | "self";
+  /** entry：入口机自己连自己的入口；client：借一台机器当客户端连订阅地址。 */
+  hostRole: EntryCheckRole;
+  /** 入口机测时 sing-box 实际连的地址：回环，或内核转发的下一跳。 */
+  dial: { server: string; port: number; via: "loopback" | "next-hop" } | null;
+  /** 给界面的一句话：在哪测、测的是哪一段、为什么借这台。 */
+  note: string;
   /** 线路上的机器（入口 / 落地）。 */
   routeHostIds: number[];
 };
@@ -129,6 +149,68 @@ export function parseEntryKey(entryKey: string): { kind: "relay"; ruleId: number
   return null;
 }
 
+/** 用的人默认在国内：直连节点借国内的机器当客户端。 */
+const CLIENT_COUNTRY = "CN";
+
+function hostUsable(host: any) {
+  return !!host && !!host.isOnline && hostSupportsNodeCheck(host);
+}
+
+function hostCountry(host: any) {
+  return String(host?.geoCountryCode || "").trim().toUpperCase();
+}
+
+/**
+ * 入口机上 sing-box 该连哪：用户态转发（gost / realm / socat / nginx）、线路组调度器、隧道入口、
+ * 共享 TLS 入站后面的守卫都在本机端口上接，连回环就行；内核转发（iptables / nftables）只改写外面进来
+ * 的包，本机发出的连接不经过它，直接连规则的目标 —— 它本来就转去那里（内核转发不跑线路组调度器）。
+ */
+export function entryLocalDial(rule: any): { server: string; port: number; via: "loopback" | "next-hop" } | null {
+  const forwardType = String(rule?.forwardType || "").trim().toLowerCase();
+  const kernel = (KERNEL_FORWARD_TYPES as readonly string[]).includes(forwardType) && !(Number(rule?.tunnelId || 0) > 0);
+  if (kernel) {
+    const server = String(rule?.targetIp || "").trim();
+    const port = Number(rule?.targetPort || 0);
+    return server && port > 0 && port <= 65535 ? { server, port, via: "next-hop" } : null;
+  }
+  const port = Number(rule?.sourcePort || 0);
+  return port > 0 && port <= 65535 ? { server: "127.0.0.1", port, via: "loopback" } : null;
+}
+
+/**
+ * 换掉出站连的地址，握手里的东西照客户端的来：TLS 的 SNI、ws / http 的 Host 原来跟着地址走，
+ * 换成 127.0.0.1 以后对面就看到 127.0.0.1 了，所以没写的时候写死成原来的地址。
+ */
+export function retargetOutbound(outbound: Record<string, unknown>, server: string, port: number): Record<string, unknown> {
+  const original = String(outbound.server || "").trim();
+  const next: Record<string, unknown> = { ...outbound, server, server_port: port };
+  if (!original || original === server) return next;
+  const tls = outbound.tls as Record<string, unknown> | undefined;
+  if (tls && tls.enabled && !tls.server_name && !tls.disable_sni) next.tls = { ...tls, server_name: original };
+  const transport = outbound.transport as Record<string, unknown> | undefined;
+  if (transport?.type === "ws") {
+    const headers = (transport.headers as Record<string, unknown> | undefined) || {};
+    if (!headers.Host) next.transport = { ...transport, headers: { ...headers, Host: original } };
+  } else if (transport?.type === "http") {
+    if (!Array.isArray(transport.host) || transport.host.length === 0) next.transport = { ...transport, host: [original] };
+  } else if (transport?.type === "httpupgrade") {
+    if (!transport.host) next.transport = { ...transport, host: original };
+  }
+  return next;
+}
+
+/** 组模板（入口组 / DNS 入口池）本身不在哪台机器上跑：挑一条成员规则，入口机在线、Agent 够新的优先。 */
+async function entryRuleOf(ruleId: number) {
+  const rule = await db.getForwardRuleById(ruleId) as any;
+  if (!rule || !dbBool(rule.isForwardGroupTemplate)) return rule;
+  const children = (await db.getForwardGroupChildRulesForTemplate(Number(rule.id)) as any[])
+    .filter((child) => !dbBool(child.pendingDelete) && dbBool(child.isEnabled, true));
+  for (const child of children) {
+    if (hostUsable(child.hostId ? await db.getHostById(Number(child.hostId)) : null)) return child;
+  }
+  return children[0] || rule;
+}
+
 export async function planEntryCheck(userId: number, viewer: { id: number; role: string }, entryKey: string): Promise<EntryCheckPlan> {
   const ref = parseEntryKey(entryKey);
   if (!ref) throw new Error("不认识的线路");
@@ -136,44 +218,71 @@ export async function planEntryCheck(userId: number, viewer: { id: number; role:
   const entry = plan.entries.find((item) => (ref.kind === "relay" ? item.kind === "relay" && Number(item.ruleId) === ref.ruleId : item.kind === "direct" && Number(item.templateId) === ref.templateId));
   if (!entry) throw new Error("订阅里没有这条线路了");
   const routeHostIds = new Set<number>();
-  let selfHost: any = null;
+  let entryHost: any = null;
+  let entryRule: any = null;
   if (entry.kind === "relay" && entry.ruleId > 0) {
-    const rule = await db.getForwardRuleById(entry.ruleId) as any;
-    selfHost = rule?.hostId ? await db.getHostById(Number(rule.hostId)) : null;
+    entryRule = await entryRuleOf(entry.ruleId);
+    entryHost = entryRule?.hostId ? await db.getHostById(Number(entryRule.hostId)) : null;
   } else {
     const template = await db.getProxyNodeById(Number(entry.templateId));
-    selfHost = template ? (await findNodeHost(template, viewer)).host : null;
+    entryHost = template ? (await findNodeHost(template, viewer)).host : null;
   }
-  if (selfHost) routeHostIds.add(Number(selfHost.id));
+  if (entryHost) routeHostIds.add(Number(entryHost.id));
   const template = await db.getProxyNodeById(Number(entry.templateId));
   if (template) {
     const { host: landing } = await findNodeHost(template, viewer);
     if (landing) routeHostIds.add(Number(landing.id));
   }
-  // 线路外的机器里挑一台在线、Agent 够新的；都不行再退回入口机自己。
-  const hosts = await viewerHosts(viewer);
-  const others = sortCandidates(hosts.filter((item) => !routeHostIds.has(Number(item.id))).map((item) => candidateOf(item, false)));
-  const other = others.find((item) => item.online && item.supported);
-  if (other) {
-    const host = hosts.find((item) => Number(item.id) === other.id);
-    return { entry, entryName: entry.node.name, host, hostRole: "other", routeHostIds: Array.from(routeHostIds) };
+  const base = { entry, entryName: entry.node.name, routeHostIds: Array.from(routeHostIds) };
+
+  // 中转线路、没有前置代理：入口机上测。
+  const hasFront = Number(entry.frontTemplateId || 0) > 0;
+  let entryProblem = "";
+  if (entry.kind === "relay" && !hasFront) {
+    const dial = entryLocalDial(entryRule);
+    if (hostUsable(entryHost) && dial) {
+      return {
+        ...base,
+        host: entryHost,
+        hostRole: "entry",
+        dial,
+        note: dial.via === "next-hop"
+          ? "在入口机上测：内核转发不接本机发出的连接，直接连它转去的下一跳，路和客户端连入口之后一样"
+          : "在入口机上测：连本机的入口，经中转、落地出去；不含你到入口那一段",
+      };
+    }
+    entryProblem = !entryHost ? "找不到入口机" : !entryHost.isOnline ? `入口机 ${entryHost.name} 离线` : !hostSupportsNodeCheck(entryHost) ? `入口机 ${entryHost.name} 的 Agent 太旧` : "入口规则没有可连的端口";
   }
-  return { entry, entryName: entry.node.name, host: selfHost, hostRole: "self", routeHostIds: Array.from(routeHostIds) };
+
+  // 借一台机器当客户端：和入口同一个国家的优先（直连节点按用的人在国内挑）。
+  const wantCountry = entry.kind === "relay" ? hostCountry(entryHost) || CLIENT_COUNTRY : CLIENT_COUNTRY;
+  const hosts = await viewerHosts(viewer);
+  // 线路上的机器不当客户端：入口机连不了自己的公网地址（云主机的公网 IP 是 NAT 的），落地机连自己没有意义。
+  const usable = hosts.filter((item) => !routeHostIds.has(Number(item.id)) && hostUsable(item));
+  const sameCountry = usable.filter((item) => hostCountry(item) === wantCountry);
+  const client = sameCountry[0] || usable[0] || null;
+  const where = client ? `${client.name}${hostCountry(client) ? `（${hostCountry(client)}）` : ""}` : "";
+  const why = entryProblem ? `${entryProblem}，` : hasFront ? "这条线路先经前置代理，" : entry.kind === "direct" ? "直连节点，" : "";
+  const farAway = client && wantCountry && hostCountry(client) !== wantCountry ? `；它不在 ${wantCountry}，结果多了它到入口那一段的距离` : "";
+  return {
+    ...base,
+    host: client,
+    hostRole: "client",
+    dial: null,
+    note: client ? `${why}借 ${where} 当客户端连订阅里的地址${farAway}` : `${why}没有别的在线、Agent 2.2.241 以上的机器能当客户端`,
+  };
 }
 
-/** 排一次线路测速：入口机连自己的入口（订阅里给客户端的那个节点）走完整条链去测。 */
+/** 排一次线路测速：入口机连自己的入口（或借一台机器当客户端连订阅地址）走完整条链去测。 */
 export async function startSpeedTestForEntry(userId: number, viewer: { id: number; role: string }, input: { entryKey: string }) {
   const plan = await planEntryCheck(userId, viewer, input.entryKey);
-  if (!plan.host) throw new Error("没有机器能测这条线路：要一台在线、Agent 2.2.241 以上的机器");
-  const outbound = singboxOutbound(plan.entry.node);
+  if (!plan.host) throw new Error(`没有机器能测这条线路：${plan.note}`);
+  let outbound = singboxOutbound(plan.entry.node);
   delete outbound.detour;
-  if (plan.hostRole === "self") {
-    // 入口机自己测：连回环而不是自己的公网 IP（云主机的公网 IP 是 NAT 的，自己连自己不通）。
-    outbound.server = "127.0.0.1";
-  }
+  if (plan.hostRole === "entry" && plan.dial) outbound = retargetOutbound(outbound, plan.dial.server, plan.dial.port);
   const extraOutbounds: Record<string, unknown>[] = [];
-  if (plan.entry.frontTemplateId > 0) {
-    // 前置代理：订阅里这条线路先经另一条，测的时候也照样先经它。
+  if (plan.hostRole === "client" && plan.entry.frontTemplateId > 0) {
+    // 前置代理：订阅里这条线路先经另一条，借来的客户端也照样先经它。
     const { plan: full } = await db.getProxySubscriptionPreviewForUser(userId);
     const front = full.entries.find((item) => Number(item.templateId) === Number(plan.entry.frontTemplateId));
     if (front) {
@@ -190,13 +299,35 @@ export async function startSpeedTestForEntry(userId: number, viewer: { id: numbe
   };
 }
 
+/*
+  测速跑的时候界面每秒拉一次状态，每次都把整份订阅算一遍太重：同一个人看同一条线路，10 秒内用上一次排的。
+*/
+const ENTRY_PLAN_CACHE_MS = 10_000;
+const entryPlanCache = new Map<string, { at: number; plan: Promise<EntryCheckPlan> }>();
+
+function cachedEntryPlan(userId: number, viewer: { id: number; role: string }, entryKey: string) {
+  const now = Date.now();
+  const key = `${userId}:${viewer.id}:${entryKey}`;
+  const hit = entryPlanCache.get(key);
+  if (hit && now - hit.at < ENTRY_PLAN_CACHE_MS) return hit.plan;
+  for (const [cacheKey, entry] of entryPlanCache) {
+    if (now - entry.at >= ENTRY_PLAN_CACHE_MS) entryPlanCache.delete(cacheKey);
+  }
+  const plan = planEntryCheck(userId, viewer, entryKey);
+  entryPlanCache.set(key, { at: now, plan });
+  plan.catch(() => entryPlanCache.delete(key));
+  return plan;
+}
+
 export async function speedTestStatusForEntry(userId: number, viewer: { id: number; role: string }, entryKey: string) {
-  const plan = await planEntryCheck(userId, viewer, entryKey);
+  const plan = await cachedEntryPlan(userId, viewer, entryKey);
   const status = await nodeCheckStatus({ kind: "speed", hostId: 0, nodeId: 0, entryKey });
   return {
     entryName: plan.entryName,
     host: plan.host ? candidateOf(plan.host, false) : null,
     hostRole: plan.hostRole,
+    dialVia: plan.dial?.via ?? null,
+    note: plan.note,
     ...status,
   };
 }

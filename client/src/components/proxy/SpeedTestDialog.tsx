@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { countryFlagLabel } from "@/lib/flagEmojiSupport";
 import { trpc } from "@/lib/trpc";
-import { formatMbps, NODE_CHECK_PHASE_LABELS, type SpeedSample, type SpeedTestResult } from "@shared/nodeCheck";
+import { formatMbps, NODE_CHECK_PANEL_FALLBACK_VERSION, NODE_CHECK_PHASE_LABELS, type SpeedSample, type SpeedTestResult } from "@shared/nodeCheck";
 
 /*
   网速测试：一台机器（或经一个节点）对 Cloudflare 测速。画法照 Stash 的「网速测试」：
@@ -14,12 +14,15 @@ import { formatMbps, NODE_CHECK_PHASE_LABELS, type SpeedSample, type SpeedTestRe
   服务机房 / 出口 / 网络 一列。跑的时候曲线是实时的（Agent 每秒送一次进度，这里 1 秒一刷）。
 
   先对 Cloudflare 测；国内机器到国外 80 / 443 常常不通，连不上就改测到面板自己（结果 server = "panel"，
-  note 说明原因，测的是机器到面板那条路）。
+  note 说明原因，测的是机器到面板那条路；Agent 2.2.242 起才会改测）。
 
   subject 两种：
     · { hostId }：主机详情里的「网速测试」，只测这台机器自己的带宽。
-    · { entryKey }：预览订阅里每条线路的「测速」：入口机临时拉 sing-box，像客户端一样连自己的入口
-      （订阅里给客户端的那个节点），流量走完整条链出去，测的就是整条链（server/nodeCheckView）。
+    · { entryKey }：预览订阅里每条线路的「测速」：在入口机上临时拉 sing-box 连本机的入口，流量走
+      入口 → 中转 → 落地出去，测的就是整条链；直连节点、入口机测不了时借一台机器当客户端
+      （server/nodeCheckView 的 planEntryCheck，note 写清楚在哪测、测的是哪一段）。
+
+  延迟是连接建好以后来回一趟的时间（中位数），抖动是相邻两次的差；第一个请求要握手，单独记成「建连」。
 */
 
 export type SpeedTestSubject = { hostId: number } | { entryKey: string };
@@ -124,7 +127,7 @@ export function SpeedTestDialog({ subject, name, onOpenChange }: { subject: Spee
 
   const exitHostLabel = useMemo(() => {
     if (hostId > 0) return hostStatus.data ? `${countryFlagLabel(hostStatus.data.countryCode) || ""} ${hostStatus.data.hostName}`.trim() : "";
-    if (entryHost) return `${entryHost.name}${entryStatus.data?.hostRole === "self" ? "（入口机自己）" : ""}${!entryHost.online ? " · 离线" : !entryHost.supported ? " · Agent 太旧" : ""}`;
+    if (entryHost) return `${entryHost.name}${entryStatus.data?.hostRole === "entry" ? " · 入口机本机" : " · 借来当客户端"}${!entryHost.online ? " · 离线" : !entryHost.supported ? " · Agent 太旧" : ""}`;
     return entryNoHost ? "没有机器能测" : "";
   }, [hostId, hostStatus.data, entryHost, entryStatus.data?.hostRole, entryNoHost]);
 
@@ -155,6 +158,9 @@ export function SpeedTestDialog({ subject, name, onOpenChange }: { subject: Spee
           <div className="fx-hd-sec">
             <div className="fx-hd-sec-body pt-2.5">
               <ResultRow label={entryKey ? "从哪台测" : "出站"} value={exitHostLabel || "—"} />
+              {entryKey && entryStatus.data?.note ? (
+                <p className="pb-2 text-[11.5px] leading-snug text-muted-foreground" data-testid="speed-test-plan">{entryStatus.data.note}</p>
+              ) : null}
             </div>
           </div>
 
@@ -177,6 +183,7 @@ export function SpeedTestDialog({ subject, name, onOpenChange }: { subject: Spee
               <div className="fx-hd-sec-body divide-y divide-[var(--fx-stroke-weak)] gap-0 pt-0.5" data-testid="speed-test-result">
                 <ResultRow label="延迟" value={`${Math.round(result.latencyMs)} ms`} />
                 <ResultRow label="抖动" value={`${Math.round(result.jitterMs)} ms`} />
+                {result.connectMs > 0 ? <ResultRow label="建连" value={`${Math.round(result.connectMs)} ms`} /> : null}
                 <ResultRow label="下载" value={formatMbps(result.downloadMbps)} />
                 <ResultRow label="上传" value={formatMbps(result.uploadMbps)} />
                 <ResultRow label="测速点" value={result.server === "panel" ? "面板服务器" : ["Cloudflare", result.colo].filter(Boolean).join(" · ")} />
@@ -186,7 +193,12 @@ export function SpeedTestDialog({ subject, name, onOpenChange }: { subject: Spee
             </div>
           ) : null}
           {result?.note ? <p className="text-center text-[11.5px] text-[var(--fx-warn-text)]" data-testid="speed-test-note">{result.note}</p> : null}
-          <p className="text-center text-[11px] text-muted-foreground">对 Cloudflare 测速 · 连不上时改测到面板 · 每次约 300 MB</p>
+          {hostId > 0 && hostStatus.data && hostStatus.data.supported && !hostStatus.data.panelFallback ? (
+            <p className="text-center text-[11.5px] text-[var(--fx-warn-text)]">这台的 Agent 早于 {NODE_CHECK_PANEL_FALLBACK_VERSION}：连不上 Cloudflare 时不会改测到面板，升级 Agent 后才会</p>
+          ) : null}
+          <p className="text-center text-[11px] text-muted-foreground">
+            {entryKey ? "经整条链对 Cloudflare 测速 · 连不上时改测到面板 · 每次约 300 MB" : "对 Cloudflare 测速 · 连不上时改测到面板 · 每次约 300 MB"}
+          </p>
         </div>
       </DialogContent>
     </Dialog>

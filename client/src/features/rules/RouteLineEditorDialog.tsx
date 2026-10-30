@@ -6,10 +6,11 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { trpc } from "@/lib/trpc";
 import { forwardGroupModeOf } from "@shared/forwardTypes";
 import { routeGroupOf, routeGroupRuleFields, validateRouteGroup } from "@shared/routeGroup";
-import { routeLinesOf } from "@shared/routeLines";
+import { routeLinesForEditor } from "@shared/routeLines";
 import { describeRoutePolicy } from "@shared/routePolicy";
 import { RouteGroupFields, routeGroupPayload, type RouteGroupDraft, type RouteHostOption } from "./RouteGroupFields";
 import type { RouteLinePool, RouteLineTunnel } from "./RouteLinesEditor";
+import { routeHostOptionsOf, routeLinePoolsOf, routeLineTunnelsOf } from "./routeLineOptions";
 
 /*
   编辑线路组（2.3.496，效果图 ②）：从线路详情右上角「编辑」进来，只改线路和怎么切，不碰规则的
@@ -31,21 +32,14 @@ export function RouteLineEditorDialog({ open, onOpenChange, rule }: { open: bool
   useEffect(() => {
     if (!open || !rule) return;
     const group = routeGroupOf(rule);
-    setDraft(group ? { ...group, lines: routeLinesOf(rule) } : null);
+    setDraft(group ? { ...group, lines: routeLinesForEditor(rule, group.paths) } : null);
     // 只在打开、或换了一条规则时取一次：规则列表定时刷新会换掉 rule 对象，不能把正在改的冲掉
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, ruleId]);
 
-  const hosts = useMemo<RouteHostOption[]>(() => ((hostsQuery.data || []) as any[]).map((host) => ({
-    id: Number(host.id), name: String(host.name || ""), isOnline: !!host.isOnline, agentVersion: host.agentVersion ?? null,
-  })), [hostsQuery.data]);
-  const tunnels = useMemo<RouteLineTunnel[]>(() => ((tunnelsQuery.data || []) as any[])
-    .filter((tunnel) => Number(tunnel.entryHostId) > 0 && Number(tunnel.exitHostId) > 0 && !(Number(tunnel.entryGroupId || 0) > 0))
-    .map((tunnel) => ({ id: Number(tunnel.id), name: String(tunnel.name || `隧道 ${tunnel.id}`), entryHostId: Number(tunnel.entryHostId), exitHostId: Number(tunnel.exitHostId), mode: tunnel.mode ? String(tunnel.mode) : null, relayMode: tunnel.relayMode ? String(tunnel.relayMode) : null })), [tunnelsQuery.data]);
-  const pools = useMemo<RouteLinePool[]>(() => ((poolsQuery.data || []) as any[]).map((pool) => ({
-    id: Number(pool.id), name: String(pool.name), role: String(pool.role),
-    members: (pool.members || []).map((member: any) => ({ hostId: Number(member.hostId), name: String(member.name), online: !!member.online, maintenance: !!member.maintenance })),
-  })), [poolsQuery.data]);
+  const hosts = useMemo<RouteHostOption[]>(() => routeHostOptionsOf(hostsQuery.data as any[]), [hostsQuery.data]);
+  const tunnels = useMemo<RouteLineTunnel[]>(() => routeLineTunnelsOf(tunnelsQuery.data as any[]), [tunnelsQuery.data]);
+  const pools = useMemo<RouteLinePool[]>(() => routeLinePoolsOf(poolsQuery.data as any[]), [poolsQuery.data]);
   const nodeOptions = useMemo(() => ((nodesQuery.data || []) as any[])
     .filter((node) => node.isEnabled !== false && node.isEnabled !== 0 && String(node.address || "").trim() && Number(node.port) > 0)
     .map((node) => ({ id: Number(node.id), name: String(node.name || `节点 #${node.id}`), protocol: String(node.protocol || "").toUpperCase(), address: String(node.address).trim(), port: Number(node.port) })), [nodesQuery.data]);

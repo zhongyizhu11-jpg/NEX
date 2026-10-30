@@ -146,7 +146,8 @@ import { EntityActions } from "@/components/entity/EntityActions";
 import { IconTile, type IconTileTone } from "@/components/entity/IconTile";
 import { RouteGroupFields, routeGroupPayload, type RouteGroupDraft, type RouteHostOption } from "@/features/rules/RouteGroupFields";
 import { expandForPreview, type RouteLinePool, type RouteLineTunnel } from "@/features/rules/RouteLinesEditor";
-import { newRouteLine, routeLinesOf } from "@shared/routeLines";
+import { newRouteLine, routeLinesForEditor } from "@shared/routeLines";
+import { routeHostOptionsOf, routeLinePoolsOf, routeLineTunnelsOf } from "@/features/rules/routeLineOptions";
 import { docsUrl } from "@/lib/docsLinks";
 import { ROUTE_MODE_HINTS, type RuleRouteTab } from "@/features/rules/routeModeHints";
 import { isAggregateLinkTunnel } from "@shared/aggregateLink";
@@ -2847,7 +2848,7 @@ function RulesContent() {
       // 线路定义（2.3.496）：存了就用，老数据由路径推成「每条路径一条线路」，编辑框统一按线路编辑。
       routeGroup: (() => {
         const group = routeGroupOf(rule);
-        return group ? { ...group, lines: routeLinesOf(rule) } : null;
+        return group ? { ...group, lines: routeLinesForEditor(rule, group.paths) } : null;
       })(),
       entryMode: isSniRule ? "sni" : "port",
       tlsInboundId: isSniRule ? Number(rule.tlsInboundId) : null,
@@ -3356,17 +3357,11 @@ function RulesContent() {
     }
     return form.hostId ? Number(form.hostId) : null;
   }, [form.routeMode, form.tunnelId, form.hostId, supportedTunnels]);
-  const routeHostOptions = useMemo<RouteHostOption[]>(() => (
-    (hosts || []).map((host: any) => ({ id: Number(host.id), name: String(host.name || ""), isOnline: !!host.isOnline, agentVersion: host.agentVersion ?? null }))
-  ), [hosts]);
+  const routeHostOptions = useMemo<RouteHostOption[]>(() => routeHostOptionsOf(hosts as any[]), [hosts]);
   // 线路编辑：节点池、能当一段的隧道（入口在哪台、出口到哪台），入口叫什么；隧道规则把入口前面那段如实写出来。
   const nodePoolsQuery = trpc.lineDiagnostics.nodePools.useQuery(undefined, { enabled: !!form.failoverEnabled, staleTime: 30_000, refetchOnWindowFocus: false });
-  const routeLinePools = useMemo<RouteLinePool[]>(() => ((nodePoolsQuery.data || []) as any[]).map((pool) => ({
-    id: Number(pool.id), name: String(pool.name), role: String(pool.role), members: (pool.members || []).map((member: any) => ({ hostId: Number(member.hostId), name: String(member.name), online: !!member.online, maintenance: !!member.maintenance })),
-  })), [nodePoolsQuery.data]);
-  const routeLineTunnels = useMemo<RouteLineTunnel[]>(() => ((tunnels || []) as any[])
-    .filter((tunnel) => Number(tunnel.entryHostId) > 0 && Number(tunnel.exitHostId) > 0 && !(Number(tunnel.entryGroupId || 0) > 0))
-    .map((tunnel) => ({ id: Number(tunnel.id), name: String(tunnel.name || `隧道 ${tunnel.id}`), entryHostId: Number(tunnel.entryHostId), exitHostId: Number(tunnel.exitHostId), mode: tunnel.mode ? String(tunnel.mode) : null, relayMode: tunnel.relayMode ? String(tunnel.relayMode) : null })), [tunnels]);
+  const routeLinePools = useMemo<RouteLinePool[]>(() => routeLinePoolsOf(nodePoolsQuery.data as any[]), [nodePoolsQuery.data]);
+  const routeLineTunnels = useMemo<RouteLineTunnel[]>(() => routeLineTunnelsOf(tunnels as any[]), [tunnels]);
   const routeEntryName = useMemo(() => {
     const host = (hosts || []).find((item: any) => Number(item.id) === Number(routeEntryHostId || 0)) as any;
     return host ? String(host.name || `主机 ${host.id}`) : "入口";

@@ -300,8 +300,14 @@ type failoverProxyEvent struct {
 	FromIndex int `json:"fromIndex"`
 	ToIndex   int `json:"toIndex"`
 	// 目标出站当时的评分（routeScore）；没法打分是 -1。
-	Score      int   `json:"score"`
-	OccurredAt int64 `json:"occurredAt"`
+	Score int `json:"score"`
+	// 切换时新旧两条整条链的延迟（入口探的这一段 + 后面几段，毫秒）；没探出来是 0。
+	// 面板据此写「比 备 1 快 3 ms」（2.2.243 起）。
+	FromChainMs int `json:"fromChainMs,omitempty"`
+	ToChainMs   int `json:"toChainMs,omitempty"`
+	// 整链最优切过去的：新的这条已经连续领先了多久（秒）。
+	HeldSeconds int   `json:"heldSeconds,omitempty"`
+	OccurredAt  int64 `json:"occurredAt"`
 }
 
 func recordFailoverProxyEvent(event failoverProxyEvent) {
@@ -13405,6 +13411,19 @@ func (p *failoverProxy) setActiveLocked(index int, reason string) {
 	}
 	old := p.activeIndex
 	closeOld := p.shouldCloseOldConnsLocked(old)
+	// 切之前把两条整条链的延迟和「领先了多久」记下来，事件里给人看。
+	fromChainMs, toChainMs, heldSeconds := 0, 0, 0
+	if old >= 0 && old < len(p.spec.Targets) {
+		if summary := p.chainScoreInputLocked(old); summary.hasLatency {
+			fromChainMs = int(summary.latencyMs)
+		}
+	}
+	if summary := p.chainScoreInputLocked(index); summary.hasLatency {
+		toChainMs = int(summary.latencyMs)
+	}
+	if reason == "score" && !p.fastestSince.IsZero() && p.fastestCandidate == index {
+		heldSeconds = int(time.Since(p.fastestSince).Seconds())
+	}
 	p.activeIndex = index
 	p.lastSwitchAt = time.Now()
 	p.activeSince = p.lastSwitchAt
@@ -13424,6 +13443,7 @@ func (p *failoverProxy) setActiveLocked(index int, reason string) {
 		FromTarget: from, ToTarget: failoverTargetLabel(next),
 		FromIndex: old, ToIndex: index,
 		Reason: reason, LatencyMs: p.latencyMsLocked(index), Score: p.scoreValueLocked(index),
+		FromChainMs: fromChainMs, ToChainMs: toChainMs, HeldSeconds: heldSeconds,
 	})
 	if closeOld {
 		if closed := p.closeConnsLocked(old); closed > 0 {

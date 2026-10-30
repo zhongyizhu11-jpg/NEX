@@ -1674,7 +1674,7 @@ async function seedLineDemo(adminId: number) {
     recordRouteHopProbe({ parentRuleId: hkt, pathKey: hktPaths[0]?.key, hopIndex: 0, hostId: jinx, hostName: "Jinx", nextLabel: "落地", ok, latencyMs: ok ? 1.5 : null });
   }
   for (let i = 0; i < 5; i += 1) recordRouteHopProbe({ parentRuleId: hkt, pathKey: hktPaths[1]?.key, hopIndex: 0, hostId: jinx399, hostName: "jinx(39.9y)", nextLabel: "落地", ok: true, latencyMs: 2.0 });
-  await insertForwardRuleRouteEvent({ ruleId: hkt, kind: "switch", fromKey: hktPaths[1]?.key, toKey: hktPaths[0]?.key, fromLabel: "备用线路", toLabel: "主线路", reason: "score", score: 96, latencyMs: 2, atSeconds: minutes(241) });
+  await insertForwardRuleRouteEvent({ ruleId: hkt, kind: "switch", fromKey: hktPaths[1]?.key, toKey: hktPaths[0]?.key, fromLabel: "备用线路", toLabel: "主线路", reason: "score", score: 96, latencyMs: 2, fromChainMs: 4, toChainMs: 2, heldSeconds: 120, atSeconds: minutes(241) });
   await insertForwardRuleRouteEvent({ ruleId: hkt, kind: "switch", fromKey: hktPaths[0]?.key, toKey: hktPaths[1]?.key, fromLabel: "主线路", toLabel: "备用线路", reason: "relay down: Jinx 落地拨号成功率 71%，建连超时", atSeconds: minutes(30) });
   await insertForwardRuleRouteEvent({ ruleId: hkt, kind: "switch", fromKey: hktPaths[1]?.key, toKey: hktPaths[0]?.key, fromLabel: "备用线路", toLabel: "主线路", reason: "failback", atSeconds: minutes(25) });
   for (let i = 24; i >= 1; i -= 1) {

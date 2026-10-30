@@ -37,9 +37,15 @@ import { trpc } from "@/lib/trpc";
   节点池（NodePoolsSection，效果图 ⑤）是同一页的另一个页签：节点池、入口组、出口组合成一种卡。
 */
 
+/** 告警默认只摆三行（和效果图一样），多的点开看：别把下面的线路卡挤出一屏。 */
+const ALERT_ROWS_SHOWN = 3;
+
 export function LineWorkspace({ searchQuery = "", isAdmin = false }: { searchQuery?: string; isAdmin?: boolean }) {
   const board = trpc.lineDiagnostics.lineWorkspace.useQuery({ hours: 24 }, { refetchInterval: 30_000, staleTime: 10_000 });
   const data = board.data;
+  const [allAlerts, setAllAlerts] = useState(false);
+  const alerts = data?.recent || [];
+  const shownAlerts = allAlerts ? alerts : alerts.slice(0, ALERT_ROWS_SHOWN);
   return (
     <div className="flex min-w-0 flex-col gap-3" data-testid="line-workspace">
       <LineTitle
@@ -60,15 +66,20 @@ export function LineWorkspace({ searchQuery = "", isAdmin = false }: { searchQue
           <div className="mt-1 text-[11.5px] text-muted-foreground">已自动恢复</div>
         </div>
       </LineCard>
-      {data && data.recent.length > 0 ? (
+      {alerts.length > 0 ? (
         <LineCard className="px-3 py-1.5" data-testid="line-workspace-recent">
-          {data.recent.map((item, index) => (
+          {shownAlerts.map((item, index) => (
             <LineKv
               key={index}
               left={<><LineDot tone={item.tone as LineTone} /> <span className="truncate">{item.text}</span></>}
               right={item.action}
             />
           ))}
+          {alerts.length > ALERT_ROWS_SHOWN ? (
+            <button type="button" className="w-full py-1.5 text-center text-[11.5px] text-muted-foreground hover:text-foreground" onClick={() => setAllAlerts(!allAlerts)} data-testid="line-workspace-more">
+              {allAlerts ? "收起" : `还有 ${alerts.length - ALERT_ROWS_SHOWN} 条`}
+            </button>
+          ) : null}
         </LineCard>
       ) : null}
       <div>
@@ -135,6 +146,7 @@ export function NodePoolsSection({ hosts, onOpenGroup, onCreateGroup }: {
       <LineTitle title="节点池" sub="一个池就是一层候选，线路里直接选池" />
       {board.isLoading ? <p className="px-1 text-[12.5px] text-muted-foreground">在读节点池…</p> : null}
 
+      {nodePools.length > 0 && entryGroups.length + exitGroups.length > 0 ? <LineSec left="中转池 / 落地池" right={`${nodePools.length} 个`} /> : null}
       {nodePools.map((pool) => (
         <LineCard
           key={`p${pool.id}`}
@@ -166,6 +178,7 @@ export function NodePoolsSection({ hosts, onOpenGroup, onCreateGroup }: {
         </LineCard>
       ))}
 
+      {entryGroups.length > 0 ? <LineSec left="入口组" right={`${entryGroups.length} 个`} /> : null}
       {entryGroups.map((group) => (
         <LineCard
           key={`e${group.id}`}
@@ -203,6 +216,7 @@ export function NodePoolsSection({ hosts, onOpenGroup, onCreateGroup }: {
         </LineCard>
       ))}
 
+      {exitGroups.length > 0 ? <LineSec left="出口组" right={`${exitGroups.length} 个`} /> : null}
       {exitGroups.map((group) => (
         <LineCard
           key={`x${group.id}`}

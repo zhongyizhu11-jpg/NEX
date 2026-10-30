@@ -10,7 +10,7 @@ import { HealthBadge } from "@/components/network/StatusDot";
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { formatCpuPercent, hostGeoTooltip, hostRegionText } from "./hostDisplay";
+import { formatCpuPercent, hostGeoTooltip, hostInMaintenance, hostRegionText } from "./hostDisplay";
 import HostNetProfileSection from "./HostNetProfileSection";
 import { HostOsAvatar, HostOsGlyph, hostOsOf } from "./HostOsBadge";
 import { fxpRuntimeBadgeTitle, fxpRuntimeDetailText } from "./FxpRuntimeBadge";
@@ -260,7 +260,8 @@ export default function HostDetailDialog(props: HostDetailDialogProps) {
             <div className="flex min-w-0 flex-col gap-1.5">
               <DialogTitle className="min-w-0 truncate">{name}</DialogTitle>
               <DialogDescription className="flex flex-wrap items-center gap-2">
-                <HealthBadge health={vitals.health} />
+                {/* 维护中：在线也不算「正常」—— 它已经从线路和组的候选里拿掉了 */}
+                <HealthBadge health={hostInMaintenance(host) && vitals.isOnline ? "degraded" : vitals.health} text={hostInMaintenance(host) ? "维护中" : undefined} />
                 {/*
                   上报时间只在离线时给。在线时它每隔几秒变一次，是噪音；
                   离线时它才是那个关键问题的答案 —— 「它是什么时候没的」。

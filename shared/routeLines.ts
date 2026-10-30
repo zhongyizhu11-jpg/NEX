@@ -72,6 +72,8 @@ export type RouteLine = {
   dests: RouteDestCandidate[];
   /** 权重负载模式：这条线路展开出来的路径一起分到的权重。 */
   weight: number;
+  /** 健康检查探哪：空 = 探路径的拨号地址；直连落地是用户态转发时填一个能反映整条链的地址。 */
+  probe?: RouteEndpoint | null;
 };
 
 export const MAX_ROUTE_LINES = MAX_ROUTE_PATHS;
@@ -126,6 +128,7 @@ function sanitizeLine(raw: any, index: number): RouteLine | null {
     }))
     : [];
   const weight = Math.min(100, Math.max(1, Math.floor(Number(raw.weight)) || 50));
+  const probe = endpointOf(raw.probe);
   return {
     key: KEY_PATTERN.test(key) ? key : `l${index + 1}`,
     name: String(raw.name ?? "").trim().slice(0, 40),
@@ -133,6 +136,7 @@ function sanitizeLine(raw: any, index: number): RouteLine | null {
     layers,
     dests,
     weight,
+    ...(probe ? { probe } : {}),
   };
 }
 
@@ -171,6 +175,7 @@ export function serializeRouteLines(lines: RouteLine[] | null | undefined): stri
     })),
     dests: line.dests.map((item) => ({ dest: item.dest, ...(item.destNodeId ? { destNodeId: item.destNodeId } : {}) })),
     weight: line.weight,
+    ...(line.probe ? { probe: line.probe } : {}),
   })));
 }
 
@@ -210,6 +215,7 @@ export function routeLinesFromPaths(paths: RoutePath[]): RouteLine[] {
       layers,
       dests: dests.length === 1 && !dests[0].dest && !dests[0].destNodeId ? [] : dests,
       weight: first.weight,
+      ...(first.probe ? { probe: first.probe } : {}),
     };
   });
 }
@@ -219,6 +225,17 @@ export function routeLinesOf(rule: Pick<RouteGroupRule, "routeLines" | "routePat
   const stored = parseRouteLines(rule.routeLines);
   if (stored.length > 0) return stored;
   return routeLinesFromPaths(parseRoutePaths(rule.routePaths));
+}
+
+/**
+ * 编辑框用的线路：存的线路 → 存的路径还原 → routeGroupOf 从老的 failover* 列推出来的路径还原 →
+ * 一条空的主线路。编辑框只认线路，老规则打开也是线路的样子。
+ */
+export function routeLinesForEditor(rule: Pick<RouteGroupRule, "routeLines" | "routePaths">, paths: RoutePath[]): RouteLine[] {
+  const lines = routeLinesOf(rule);
+  if (lines.length > 0) return lines;
+  const fromPaths = routeLinesFromPaths(paths);
+  return fromPaths.length > 0 ? fromPaths : [newRouteLine(0)];
 }
 
 function sameEndpoint(a: RouteEndpoint | null, b: RouteEndpoint | null) {
@@ -405,7 +422,8 @@ export function expandRouteLines(lines: RouteLine[], ctx: RouteExpandContext, li
         dest: combo.dest.dest,
         destNodeId: combo.dest.destNodeId,
         weight: line.weight,
-        probe: null,
+        // 线路上填的探测地址给它展开出来的每一条路径（以前这里写死 null，编辑框里填了也被丢掉）
+        probe: line.probe ?? null,
         dial: null,
         issue: null,
         tier: lineIndex,

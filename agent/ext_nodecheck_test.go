@@ -454,3 +454,97 @@ func TestSpeedTestUploadSlowLinkStillCounts(t *testing.T) {
 		t.Fatalf("upload should be measured from the bytes sent so far: %+v", result)
 	}
 }
+
+// 延迟只算建好的连接上来回一趟：第一个要握手的请求单独记成「建连」，不进延迟和抖动。
+// 以前它算进去，经代理时抖动被这一下拉到几百毫秒。
+func TestSpeedTestLatencySkipsHandshake(t *testing.T) {
+	var zeroRequests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/meta":
+			time.Sleep(150 * time.Millisecond)
+			_ = json.NewEncoder(w).Encode(map[string]any{"clientIp": "203.0.113.9", "colo": "HKG"})
+		case "/__down":
+			if r.URL.Query().Get("bytes") == "0" {
+				if zeroRequests.Add(1) == 1 {
+					time.Sleep(500 * time.Millisecond)
+				}
+				return
+			}
+			_, _ = w.Write(make([]byte, 256<<10))
+		case "/__up":
+			_, _ = io.Copy(io.Discard, r.Body)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	oldBase, oldDown, oldUp, oldEvery, oldWarm := speedTestBaseURL, speedTestDownDuration, speedTestUpDuration, speedTestSampleEvery, speedTestWarmup
+	speedTestBaseURL, speedTestDownDuration, speedTestUpDuration, speedTestSampleEvery, speedTestWarmup = server.URL, 500*time.Millisecond, 400*time.Millisecond, 100*time.Millisecond, 200*time.Millisecond
+	defer func() {
+		speedTestBaseURL, speedTestDownDuration, speedTestUpDuration, speedTestSampleEvery, speedTestWarmup = oldBase, oldDown, oldUp, oldEvery, oldWarm
+	}()
+	dialer := &net.Dialer{}
+	result, err := runHTTPSpeedTest(context.Background(), dialer.DialContext, cloudflareSpeedTarget(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ConnectMs < 150 {
+		t.Fatalf("connect time should cover the first request, got %.1f ms", result.ConnectMs)
+	}
+	if result.LatencyMs > 50 || result.JitterMs > 30 {
+		t.Fatalf("the slow first request leaked into latency/jitter: latency %.1f jitter %.1f", result.LatencyMs, result.JitterMs)
+	}
+	if got := zeroRequests.Load(); got != int32(speedTestLatencyN+1) {
+		t.Fatalf("want one warm-up plus %d measured requests, got %d", speedTestLatencyN, got)
+	}
+}
+
+// 链很长时第一个字节来得晚（比整段测速时间还晚）：等它到了再量，而不是报「没有传输到任何数据」或量出 0。
+func TestSpeedPhaseWaitsForFirstByte(t *testing.T) {
+	// 下载开始后头 900 ms 一个字节都不给（握手慢的长链），之后稳定地流。
+	var begin atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/meta":
+			_ = json.NewEncoder(w).Encode(map[string]any{"colo": "HKG"})
+		case "/__down":
+			if r.URL.Query().Get("bytes") == "0" {
+				return
+			}
+			begin.CompareAndSwap(0, time.Now().UnixNano())
+			if wait := 900*time.Millisecond - time.Since(time.Unix(0, begin.Load())); wait > 0 {
+				time.Sleep(wait)
+			}
+			flusher, _ := w.(http.Flusher)
+			chunk := make([]byte, 32<<10)
+			for i := 0; i < 400; i++ {
+				if _, err := w.Write(chunk); err != nil {
+					return
+				}
+				if flusher != nil {
+					flusher.Flush()
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+		case "/__up":
+			_, _ = io.Copy(io.Discard, r.Body)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	oldBase, oldDown, oldUp, oldEvery, oldWarm, oldExtra := speedTestBaseURL, speedTestDownDuration, speedTestUpDuration, speedTestSampleEvery, speedTestWarmup, speedTestMaxExtra
+	speedTestBaseURL, speedTestDownDuration, speedTestUpDuration, speedTestSampleEvery, speedTestWarmup, speedTestMaxExtra = server.URL, 700*time.Millisecond, 400*time.Millisecond, 100*time.Millisecond, 200*time.Millisecond, 2*time.Second
+	defer func() {
+		speedTestBaseURL, speedTestDownDuration, speedTestUpDuration, speedTestSampleEvery, speedTestWarmup, speedTestMaxExtra = oldBase, oldDown, oldUp, oldEvery, oldWarm, oldExtra
+	}()
+	dialer := &net.Dialer{}
+	result, err := runHTTPSpeedTest(context.Background(), dialer.DialContext, cloudflareSpeedTarget(), nil)
+	if err != nil {
+		t.Fatalf("slow first byte should still be measured: %v", err)
+	}
+	if result.DownloadMbps <= 0 {
+		t.Fatalf("download should be measured after the first byte, got %+v", result)
+	}
+}
