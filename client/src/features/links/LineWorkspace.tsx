@@ -238,7 +238,7 @@ export function NodePoolsSection({ hosts, onOpenGroup, onCreateGroup, isAdmin = 
         出来，「出口组」出现两次、手机上长到滑不到底；2.3.498 收成这四行。
       */}
       <div className="flex min-w-0 items-start justify-between gap-3">
-        <LineTitle title="节点池" sub="中转池是线路里的一层候选；落地池几台开同一份落地，订阅里一条" />
+        <LineTitle title="节点池" sub="中转池当线路一层候选，落地池几台一份配置" />
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button type="button" size="sm" className="mt-1 h-8 shrink-0 gap-1 rounded-full px-3" data-testid="node-pool-new">
