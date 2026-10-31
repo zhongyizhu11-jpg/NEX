@@ -6,7 +6,7 @@ import { newRouteGroupDraft, routeGroupRuleFields, routePolicyOf, type RouteGrou
 import { describeRoutePolicy } from "@shared/routePolicy";
 import { RouteGroupPanel, type RouteEvent, type RouteStatus, type RouteStatusPath } from "./RouteGroupSheet";
 import { RouteLineDiagram } from "./RouteLineDiagram";
-import { routeLineStatusControls } from "./RouteLineOverview";
+import { pinDurationSeconds, routeLineStatusControls } from "./RouteLineOverview";
 
 // 2026-09-22（星期二）上海 20:00：在「工作日 18:00–01:00」里。
 const NOW = Date.UTC(2026, 8, 22, 12, 0, 0);
@@ -301,4 +301,15 @@ test("手动换线路：点状态胶囊就能切到这条；指定了的那条�
   assert.match(pinned, /使用中 · 指定/);
   const plain = renderToStaticMarkup(<>{routeLineStatusControls(status(), group.paths[0].key)}</>);
   assert.doesNotMatch(plain, /route-line-switch/);
+});
+
+test("手动切的时长自己填：几分钟 / 几小时，空、0、负数、超过 30 天都不行", () => {
+  assert.equal(pinDurationSeconds("2", "hour"), 7200);
+  assert.equal(pinDurationSeconds("1.5", "hour"), 5400);
+  assert.equal(pinDurationSeconds("30", "min"), 1800);
+  assert.equal(pinDurationSeconds("", "hour"), null);
+  assert.equal(pinDurationSeconds("0", "min"), null);
+  assert.equal(pinDurationSeconds("-3", "hour"), null);
+  assert.equal(pinDurationSeconds("721", "hour"), null, "超过 30 天：选「不限时」");
+  assert.equal(pinDurationSeconds("720", "hour"), 720 * 3600);
 });

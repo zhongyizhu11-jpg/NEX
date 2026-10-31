@@ -19,11 +19,14 @@ import {
   lineChipClass,
   type LineTone,
 } from "@/features/lines/LineUi";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { describeRouteIssue, normalizeRouteEventKind } from "@shared/routeGroup";
-import { PIN_DURATION_OPTIONS, formatPolicyClock } from "@shared/routePolicy";
+import { formatPolicyClock } from "@shared/routePolicy";
 import type { RouteEvent, RouteStatus, RouteStatusPath } from "./RouteGroupSheet";
 import { RouteLineDiagram } from "./RouteLineDiagram";
 import {
@@ -107,7 +110,27 @@ export type RouteLineSwitch = {
   timeZone?: string;
 };
 
+/** 手动指定最长多久（防手滑多打一个 0）：30 天，再久就选「不限时」。 */
+const MAX_PIN_MINUTES = 30 * 24 * 60;
+
+/** 填的时长换成秒；不合法（空、0、负数、超过 30 天）返回 null。 */
+export function pinDurationSeconds(amount: string, unit: "min" | "hour"): number | null {
+  const value = Number(amount);
+  if (!Number.isFinite(value) || value <= 0) return null;
+  const minutes = unit === "hour" ? value * 60 : value;
+  if (minutes < 1 || minutes > MAX_PIN_MINUTES) return null;
+  return Math.round(minutes * 60);
+}
+
+/**
+ * 点状态胶囊弹出来的小框：时长自己填（几分钟 / 几小时），或者不限时（2.3.498，原来一排五个固定时长，
+ * 用户嫌多）。菜单里放输入框：输入框自己吞掉按键，不然菜单的「按字母跳到菜单项」会把焦点抢走。
+ */
 function LineSwitchMenu({ group, pill, lineSwitch }: { group: RouteLineGroup; pill: ReactNode; lineSwitch: RouteLineSwitch }) {
+  const [open, setOpen] = useState(false);
+  const [amount, setAmount] = useState("2");
+  const [unit, setUnit] = useState<"min" | "hour">("hour");
+  const [forever, setForever] = useState(false);
   const pinnedHere = lineSwitch.pinIndex !== null && group.paths.some((path) => path.index === lineSwitch.pinIndex);
   const until = lineSwitch.pinUntilMs ? `，到 ${formatPolicyClock(lineSwitch.pinUntilMs, lineSwitch.nowMs ?? Date.now(), lineSwitch.timeZone)} 交回自动` : "，直到交回自动";
   const head = pinnedHere
@@ -117,28 +140,71 @@ function LineSwitchMenu({ group, pill, lineSwitch }: { group: RouteLineGroup; pi
       : group.active
         ? "正在走这条：钉住它，自动选择就不会把它换走"
         : "切到这条：压过自动选择，到点交回自动";
+  const seconds = forever ? null : pinDurationSeconds(amount, unit);
+  const canPin = !pinnedHere && !group.paused;
+  const pin = () => {
+    if (!forever && seconds === null) return;
+    lineSwitch.onPin(group.shown.index, seconds);
+    setOpen(false);
+  };
   return (
-    <DropdownMenu>
+    <DropdownMenu open={open} onOpenChange={setOpen}>
       <DropdownMenuTrigger asChild>
         <button type="button" className="shrink-0 rounded-full" aria-label={`手动切换：${group.name}`} title="点一下：切到这条 / 交回自动" data-testid="route-line-switch">
           {pill}
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-60">
-        <DropdownMenuLabel className="whitespace-normal text-[11.5px] font-normal leading-[1.45] text-muted-foreground">{head}</DropdownMenuLabel>
-        {!pinnedHere && !group.paused ? PIN_DURATION_OPTIONS.map((option) => (
-          <DropdownMenuItem key={option.label} disabled={lineSwitch.pending} onSelect={() => lineSwitch.onPin(group.shown.index, option.seconds)}>
-            {option.seconds === null ? "一直走这条，直到交回自动" : `${group.active ? "钉住" : "切过去走"} ${option.label}`}
-          </DropdownMenuItem>
-        )) : null}
-        {group.allDown && !group.active && !group.paused && !pinnedHere ? (
-          <p className="px-2 pb-1 text-[11px] leading-[1.45] text-[var(--fx-warn-text)]">现在不通：指定了也会先往下切，通了再切过来。</p>
+      <DropdownMenuContent align="end" className="fx-line-ui w-64 p-3">
+        <p className="text-[11.5px] leading-[1.45] text-muted-foreground">{head}</p>
+        {canPin ? (
+          <div className="mt-2.5 flex flex-col gap-2">
+            <div className="flex items-center gap-1.5 text-[12.5px]">
+              <span className="shrink-0">走</span>
+              <Input
+                type="number"
+                inputMode="decimal"
+                min={1}
+                value={amount}
+                disabled={forever}
+                onChange={(event) => setAmount(event.target.value)}
+                onKeyDown={(event) => {
+                  event.stopPropagation();
+                  if (event.key === "Enter") pin();
+                }}
+                aria-label="切过去走多久"
+                className="h-8 w-16 text-center text-[13px]"
+                data-testid="route-line-pin-amount"
+              />
+              {(["min", "hour"] as const).map((option) => (
+                <LineChipButton key={option} variant={unit === option ? "sel" : "default"} disabled={forever} onClick={() => setUnit(option)} aria-pressed={unit === option}>
+                  {option === "min" ? "分钟" : "小时"}
+                </LineChipButton>
+              ))}
+            </div>
+            <label className="flex w-fit items-center gap-2 text-[11.5px] text-muted-foreground">
+              <Checkbox checked={forever} onCheckedChange={(checked) => setForever(!!checked)} aria-label="不限时，直到交回自动" />
+              不限时，直到交回自动
+            </label>
+            {group.allDown && !group.active ? (
+              <p className="text-[11px] leading-[1.45] text-[var(--fx-warn-text)]">现在不通：指定了也会先往下切，通了再切过来。</p>
+            ) : null}
+            <Button type="button" size="sm" className="h-8 w-full rounded-[10px]" disabled={lineSwitch.pending || (!forever && seconds === null)} onClick={pin} data-testid="route-line-pin">
+              {group.active ? "钉住这条" : "切过去"}
+            </Button>
+          </div>
         ) : null}
         {lineSwitch.pinIndex !== null ? (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem disabled={lineSwitch.pending} onSelect={lineSwitch.onUnpin} data-testid="route-line-unpin">交回自动</DropdownMenuItem>
-          </>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="mt-2 h-8 w-full rounded-[10px]"
+            disabled={lineSwitch.pending}
+            onClick={() => { lineSwitch.onUnpin(); setOpen(false); }}
+            data-testid="route-line-unpin"
+          >
+            交回自动
+          </Button>
         ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
