@@ -13142,9 +13142,16 @@ func startFailoverProxyLocked(ruleID int, sourcePort int, spec failoverSpec, act
 				failoverMu.Unlock()
 			}
 		} else {
+			pinChanged := !sameFailoverPin(existing.spec, spec)
 			targetsChanged := existing.rebuildForSpecLocked(spec, time.Now())
-			// 人工指定、时段表、换模式：面板一改就照做，不等下一轮探测（以前最多晚 5 秒）。驻留、预检照旧管自动切换。
-			existing.updateFallbackActiveLocked("panel update")
+			/*
+				人工指定改了（指定、取消指定）：面板一改就照做，不等下一轮探测（以前最多晚 5 秒）。别的改动
+				（时段表、阈值、出站）照旧不在这里重新选路 —— 正走着备线时改个设置不该把流量拽回主线，
+				下一轮探测按新规格评估（见 rebuildForSpecLocked）。
+			*/
+			if pinChanged {
+				existing.updateFallbackActiveLocked("panel pin")
+			}
 			existing.mu.Unlock()
 			existing.signature = signature
 			failoverMu.Unlock()
@@ -13910,6 +13917,17 @@ func (p *failoverProxy) retiredNow() bool {
 	default:
 		return false
 	}
+}
+
+// 两份规格的人工指定是不是同一个（指哪条、到什么时候）。
+func sameFailoverPin(a, b failoverSpec) bool {
+	if (a.PinnedIndex == nil) != (b.PinnedIndex == nil) {
+		return false
+	}
+	if a.PinnedIndex != nil && *a.PinnedIndex != *b.PinnedIndex {
+		return false
+	}
+	return a.PinnedUntil == b.PinnedUntil
 }
 
 /*
