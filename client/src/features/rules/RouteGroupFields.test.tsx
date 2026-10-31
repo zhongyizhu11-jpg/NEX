@@ -317,3 +317,21 @@ test("线路展开后是一条竖着的链：入口 → 中转 → 加中转 →
   assert.match(chain, />换落地</, "落地还是规则目标：换一个");
   assert.match(html, /data-testid="route-line-test"[^>]*>[^]*?测一下/, "⚡ 带字：测一下");
 });
+
+test("节点池那一跳：平时一个「池 · 名字 · N 台」（池里的机器不和别的混在一排），点开才是一列", () => {
+  const pools = [{ id: 7, name: "香港中转池", role: "relay", members: [
+    { hostId: 2, name: "JP relay 02", online: true, maintenance: false },
+    { hostId: 3, name: "SG relay 03", online: true, maintenance: true },
+  ] }];
+  const draft = group();
+  const lines = routeLinesFromPaths(draft.paths);
+  lines[0] = { ...lines[0], layers: [{ ...lines[0].layers[0], kind: "pool", poolId: 7, hostIds: [], tunnelIds: [] }] };
+  const html = render({ ...draft, lines }, false, "tcp", { pools });
+  assert.match(html, /data-testid="route-line-pool"[^>]*>[^]*?池 · 香港中转池 · 2 台/);
+  assert.match(html, /aria-expanded="false"[^>]*data-testid="route-line-pool"|data-testid="route-line-pool"[^>]*aria-expanded="false"|aria-expanded="false" title="看池里有哪几台"/);
+  assert.doesNotMatch(html, /data-testid="route-line-pool-members"/, "收着：池里的机器不摊开");
+  assert.doesNotMatch(html, /route-line-add-candidate/, "池那一跳没有「+ 并列」");
+  // 机器那一跳：「+ 并列」只放机器、隧道，菜单里没有节点池（换池在点机器的菜单里）
+  const plain = render(draft, false, "tcp", { pools });
+  assert.match(plain, /data-testid="route-line-add-candidate"/);
+});
