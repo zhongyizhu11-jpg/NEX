@@ -16,10 +16,10 @@ import {
 import { LINK_TERM_HINTS } from "@shared/linkTerms";
 
 /*
-  链路管理「线路总览」页签的上半部分：所有多条线路一起用的地方，按三个词各一栏（shared/linkOverview.ts）。
+  链路管理「链路总览」页签的下半部分：组和隧道里几条一起用的地方，按三个词各一栏（shared/linkOverview.ts）。
 
-  只读。每一项的「编辑」跳到它原来那页并直接打开编辑框（/rules?edit=、/tunnels?tab=…&edit=）。
-  下半部分还是原来的线路组表格（RouteGroupsSection），那里能看现在走哪条、能强制切换。
+  只读。每一项的「编辑」跳到它原来那页并直接打开编辑框（/tunnels?tab=…&edit=）。线路组不在这里列：
+  上半部分就是线路（LineWorkspace，2.3.499 起「线路」页签并进来了），再列一遍是重复。
 */
 
 const CATEGORIES: Array<{ key: LinkOverviewCategory; icon: LucideIcon; hint: string }> = [
@@ -34,8 +34,8 @@ export function LinkOverviewSection({ searchQuery = "" }: { searchQuery?: string
   const filtered = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
     const data = overviewQuery.data;
-    const match = (item: LinkOverviewItem) => !query
-      || [item.name, item.how, LINK_OVERVIEW_KIND_LABELS[item.kind], ...item.members].join(" ").toLowerCase().includes(query);
+    const match = (item: LinkOverviewItem) => item.kind !== "route_group" && (!query
+      || [item.name, item.how, LINK_OVERVIEW_KIND_LABELS[item.kind], ...item.members].join(" ").toLowerCase().includes(query));
     return {
       failover: (data?.failover || []).filter(match),
       loadBalance: (data?.loadBalance || []).filter(match),

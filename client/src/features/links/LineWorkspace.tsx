@@ -34,7 +34,8 @@ import { trpc } from "@/lib/trpc";
     告警     此刻还在的问题（维护中、熔断、离线的中转）+ 最近几条：左边出了什么事，右边系统做了什么
     线路     一条线路一张卡（按状态排序）：在走哪条、整条链毫秒、用法标签；点开是线路详情
 
-  节点池（NodePoolsSection，效果图 ⑤）是同一页的另一个页签：节点池、入口组、出口组合成一种卡。
+  2.3.499 起它是链路管理「链路总览」的上半部分（原来单独一个「线路」页签，和总览里的线路组列表重复）。
+  节点池（NodePoolsSection，效果图 ⑤）是另一个页签：节点池、入口组、出口组合成一种卡。
 */
 
 /** 告警默认只摆三行（和效果图一样），多的点开看：别把下面的线路卡挤出一屏。 */
@@ -84,7 +85,7 @@ export function LineWorkspace({ searchQuery = "", isAdmin = false }: { searchQue
       ) : null}
       <div>
         <LineSec left="线路" right="按状态排序" />
-        <RouteBoardList searchQuery={searchQuery} isAdmin={isAdmin} compact />
+        <RouteBoardList searchQuery={searchQuery} isAdmin={isAdmin} />
       </div>
     </div>
   );

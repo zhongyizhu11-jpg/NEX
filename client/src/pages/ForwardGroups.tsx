@@ -890,10 +890,13 @@ export function ForwardGroupsContent({
   const pageGroups = (groupPageQuery.data?.items || []) as any[];
   const relatedPageGroups = (groupPageQuery.data?.relatedGroups || []) as any[];
   const groups = (fullGroupQuery.data || [...pageGroups, ...relatedPageGroups]) as any[];
-  // 2.3.497：组的成员可以跟着节点池（线路 → 节点池页设）；编辑时提示一下，并能就地取消跟随
+  // 2.3.497：组的成员可以跟着节点池（线路 → 节点池页设）；编辑时提示一下，并能就地取消跟随。
+  // 2.3.499：组回到分类条上各自一页，卡上也写跟着哪个池（以前只有节点池页上看得见）。
   const editingPoolId = editingId ? Number(groups.find((group) => Number(group.id) === editingId)?.poolId || 0) || null : null;
-  const followedPoolQuery = trpc.lineDiagnostics.nodePools.useQuery(undefined, { enabled: showDialog && !!editingPoolId, staleTime: 30_000, refetchOnWindowFocus: false });
-  const followedPoolName = editingPoolId ? ((followedPoolQuery.data || []) as Array<{ id: number; name: string }>).find((pool) => Number(pool.id) === editingPoolId)?.name || `节点池 ${editingPoolId}` : "";
+  const anyFollowsPool = groups.some((group) => Number(group.poolId || 0) > 0);
+  const followedPoolQuery = trpc.lineDiagnostics.nodePools.useQuery(undefined, { enabled: anyFollowsPool || (showDialog && !!editingPoolId), staleTime: 30_000, refetchOnWindowFocus: false });
+  const poolNameOf = (poolId: number) => ((followedPoolQuery.data || []) as Array<{ id: number; name: string }>).find((pool) => Number(pool.id) === poolId)?.name || `节点池 ${poolId}`;
+  const followedPoolName = editingPoolId ? poolNameOf(editingPoolId) : "";
   const unfollowPool = trpc.forwardGroups.followPool.useMutation({
     onSuccess: () => {
       void utils.forwardGroups.invalidate();
@@ -2008,6 +2011,11 @@ export function ForwardGroupsContent({
                       {renderGroupPolicyBadge(group)}
                     </div>
                     {renderGroupMembers(group)}
+                    {Number(group.poolId || 0) > 0 ? (
+                      <p className="text-meta text-[var(--fx-accent)]" title="池里加减机器，这个组的成员跟着加减；在节点池页或编辑框里改" data-testid="group-follows-pool">
+                        成员跟着节点池「{poolNameOf(Number(group.poolId))}」
+                      </p>
+                    ) : null}
                   </div>
 
                   {renderGroupFacts(group)}
