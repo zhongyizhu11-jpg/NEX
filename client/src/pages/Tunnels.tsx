@@ -816,14 +816,14 @@ type TunnelViewMode = "card" | "table" | "globe";
 type TunnelSection = "lines" | "tunnels" | "ports" | "chains" | "pools" | "groups" | "aggregates" | "entries" | "exits" | "routes";
 type TunnelGroupMode = "port" | "failover" | "entry" | "exit";
 
-/** 「lines」只为老链接留着（?tab=lines）：「线路」这一页的值是 routes（2.3.499 以前叫「链路总览」），进来就转过去。 */
+/** 「lines」只为老链接留着（?tab=lines）：「线路概览」这一页的值是 routes（2.3.499 以前叫「链路总览」），进来就转过去。 */
 const TUNNEL_SECTIONS = ["tunnels", "lines", "ports", "chains", "pools", "groups", "aggregates", "entries", "exits", "routes"] as const;
 /*
   分类条第一个是「隧道链路」，进来看到的就是它（2.3.498，用户要的）。
   2.3.499：转发组 / 入口组 / 出口组回到分类条（2.3.497 收在「节点池」页里的一排筛选，多点一下、也不好找）；
   节点池页照旧把池和入口组、出口组的健康放一起看，组跟着哪个池在两边都看得见。原来的「链路总览」去掉了：
   它下面那三栏（主备 / 负载均衡 / 分连接）列的组和隧道在各自的页签里都有（入口组、出口组节点池页上也有），
-  上面的线路卡和单独的「线路」页签是同一批线路组 —— 合成最后一个页签「线路」，排在节点池后面（用户定的）。
+  上面的线路卡和单独的「线路」页签是同一批线路组 —— 合成最后一个页签「线路概览」，排在节点池后面（用户定的）。
 */
 const TUNNEL_SECTION_ITEMS = [
   { value: "tunnels", label: "隧道链路", icon: Network },
@@ -835,7 +835,7 @@ const TUNNEL_SECTION_ITEMS = [
   // 叠加：中转方式为单连接叠加的 NEX 隧道单列一栏（shared/aggregateLink.ts），隧道链路里不再重复列。
   { value: "aggregates", label: "叠加", icon: Layers },
   { value: "pools", label: "节点池", icon: ShieldCheck },
-  { value: "routes", label: "线路", icon: Waypoints },
+  { value: "routes", label: "线路概览", icon: Waypoints },
 ] as const satisfies readonly SlidingTabItem<TunnelSection>[];
 
 const TUNNEL_SECTION_STORAGE_KEY = "forwardx.tunnels.section";
@@ -4727,7 +4727,7 @@ function TunnelsContent() {
 
         <TabsContent value="routes" className="space-y-4">
           <SectionTransition transitionKey={`routes-${normalizedLinkSearchQuery || "all"}`}>
-            {/* 线路（2.3.499）：三个数、告警、按状态排的线路卡；原来「链路总览」的三栏在各自页签里都有，去掉了 */}
+            {/* 线路概览（2.3.499）：三个数、告警、按状态排的线路卡；原来「链路总览」的三栏在各自页签里都有，去掉了 */}
             <LineWorkspace searchQuery={normalizedLinkSearchQuery} isAdmin={user?.role === "admin"} />
           </SectionTransition>
         </TabsContent>

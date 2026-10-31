@@ -89,7 +89,13 @@ function LineCompactCard({ name, owner, status, info, onOpen }: { name: string; 
   );
 }
 
-export function RouteBoardList({ searchQuery = "", isAdmin = false }: { searchQuery?: string; isAdmin?: boolean }) {
+export function RouteBoardList({ searchQuery = "", isAdmin = false, openRuleId: openRuleIdProp, onOpenRuleChange }: {
+  searchQuery?: string;
+  isAdmin?: boolean;
+  /** 线路概览上面的告警行也能点开某条线路（2.3.499）：给了就由它管开的是哪条，不给自己管。 */
+  openRuleId?: number | null;
+  onOpenRuleChange?: (ruleId: number | null) => void;
+}) {
   const [, setLocation] = useLocation();
   const utils = trpc.useUtils();
   // 只拉开了主备的规则：以前拉全部规则再在这里按 failoverEnabled 丢掉绝大多数。
@@ -101,7 +107,9 @@ export function RouteBoardList({ searchQuery = "", isAdmin = false }: { searchQu
     staleTime: 5_000,
     placeholderData: (previous) => previous,
   });
-  const [openRuleId, setOpenRuleId] = useState<number | null>(null);
+  const [ownOpenRuleId, setOwnOpenRuleId] = useState<number | null>(null);
+  const openRuleId = openRuleIdProp !== undefined ? openRuleIdProp : ownOpenRuleId;
+  const setOpenRuleId = onOpenRuleChange ?? setOwnOpenRuleId;
   const hostById = useMemo(() => new Map<number, HostOptionRow>(((hostsQuery.data || []) as HostOptionRow[]).map((host) => [Number(host.id), host])), [hostsQuery.data]);
   const hostName = (hostId: number) => String(hostById.get(hostId)?.name || `主机 ${hostId}`);
 
@@ -146,22 +154,23 @@ export function RouteBoardList({ searchQuery = "", isAdmin = false }: { searchQu
     return { trafficBytes, entryPool: group && members > 1 ? { count: members, dns: !!group.domain } : null };
   };
 
+  const allRows = useMemo<RouteBoardRow[]>(() => allRules.flatMap((rule): RouteBoardRow[] => {
+    const group = routeGroupOf(rule);
+    if (!group) return [];
+    const host = hostById.get(Number(rule.hostId));
+    const policy = describeRoutePolicy(rule, { host });
+    if (!policy) return [];
+    return [{ rule, group, policy, host }];
+  }), [rulesQuery.data, hostById]);
   const rows = useMemo<RouteBoardRow[]>(() => {
     const query = searchQuery.trim().toLowerCase();
-    return allRules.flatMap((rule): RouteBoardRow[] => {
-      const group = routeGroupOf(rule);
-      if (!group) return [];
-      const host = hostById.get(Number(rule.hostId));
-      const name = String(host?.name || `主机 ${rule.hostId}`);
-      const haystack = [rule.name, name, ...group.paths.flatMap((path) => [path.name, ...path.hops.map(hostName)])].join(" ").toLowerCase();
-      if (query && !haystack.includes(query)) return [];
-      const policy = describeRoutePolicy(rule, { host });
-      if (!policy) return [];
-      return [{ rule, group, policy, host }];
-    });
-  }, [rulesQuery.data, hostById, searchQuery]);
+    if (!query) return allRows;
+    return allRows.filter(({ rule, group, host }) => [rule.name, String(host?.name || `主机 ${rule.hostId}`), ...group.paths.flatMap((path) => [path.name, ...path.hops.map(hostName)])]
+      .join(" ").toLowerCase().includes(query));
+  }, [allRows, searchQuery]);
 
-  const openRule = rows.find((row) => Number(row.rule.id) === openRuleId) || null;
+  // 告警行点开的那条可能被搜索过滤掉了：从全部里找
+  const openRule = allRows.find((row) => Number(row.rule.id) === openRuleId) || null;
 
   if (rulesQuery.isLoading) {
     return (
