@@ -4376,7 +4376,8 @@ function TunnelsContent() {
     return [entryGroupLabel ? `入口组 ${entryGroupLabel}` : "", route].filter(Boolean).join(" ｜ ");
   };
 
-  const createLinkAction = activeSection === "routes" && !linkWizardEnabled ? null : (
+  // 节点池那一页的新建在它自己的标题右边（建池 / 用组建池 / 新建组），这里的「新建链路」和池子无关，不放
+  const createLinkAction = (activeSection === "routes" && !linkWizardEnabled) || activeSection === "pools" ? null : (
     <Button
       className="fx-row-action ml-auto h-9 shrink-0 gap-1.5 rounded-full px-3.5"
       disabled={!canCreateActive}
@@ -4738,6 +4739,7 @@ function TunnelsContent() {
         <TabsContent value="pools" className="space-y-4">
           <SectionTransition transitionKey={activeSectionTransitionKey}>
             <NodePoolsSection
+              isAdmin={user?.role === "admin"}
               hosts={((hostsOptionsQuery.data || []) as any[]).map((host) => ({ id: Number(host.id), name: String(host.name || ""), isOnline: !!host.isOnline }))}
               onOpenGroup={(mode, groupId) => {
                 setActiveSection(mode === "failover" ? "groups" : mode === "entry" ? "entries" : "exits");

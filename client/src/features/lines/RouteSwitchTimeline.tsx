@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { describeRouteReason, normalizeRouteEventKind } from "@shared/routeGroup";
 import type { RouteEvent, RouteStatus } from "@/features/rules/RouteGroupSheet";
-import { lineLongName, routeLineGroups } from "@/features/rules/RouteLineOverview";
+import { lineLongName, routeLineGroups } from "@/features/rules/routeLineText";
 
 /*
   切换记录（2.3.496，效果图 ③ 下半截）：一条竖线，一个点一件事。

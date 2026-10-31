@@ -661,6 +661,8 @@ const tables: TableDef[] = [
       c("bandwidthAggregationSlots", "int", { notNull: true, default: 8 }),
       c("bandwidthAggregationMinMembers", "int", { notNull: true, default: 1 }),
       c("isEnabled", "bool", { notNull: true, default: true }), c("activeMemberId", "int"), c("lastDdnsValue", "text"),
+      // 成员跟着哪个节点池（2.3.497）：设了就由 server/nodePoolGroups.ts 按池里的机器同步主机成员
+      c("poolId", "int"),
       c("lastDdnsAt", "epoch"), c("lastFailoverAt", "epoch"), c("lastStatus", "varchar", { length: 32, notNull: true, default: "unknown" }),
       c("lastMessage", "text"), c("sortOrder", "int", { notNull: true, default: 0 }), c("userId", "int", { notNull: true }), c("createdAt", "epoch", { notNull: true, default: "now" }),
       c("updatedAt", "epoch", { notNull: true, default: "now" }),

@@ -1061,6 +1061,8 @@ export const forwardGroups = table("forward_groups", {
   bandwidthAggregationMinMembers: int("bandwidthAggregationMinMembers").notNull().default(1),
   isEnabled: boolean("isEnabled").notNull().default(true),
   activeMemberId: int("activeMemberId"),
+  /** 成员跟着哪个节点池（server/nodePoolGroups.ts）；null = 手动维护。 */
+  poolId: int("poolId"),
   lastDdnsValue: text("lastDdnsValue"),
   lastDdnsAt: epoch("lastDdnsAt"),
   lastFailoverAt: epoch("lastFailoverAt"),

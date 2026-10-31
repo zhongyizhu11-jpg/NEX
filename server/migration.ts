@@ -1363,6 +1363,8 @@ async function prepareImportRow(table: string, source: Record<string, any>, maps
       row.activeMemberId = null;
       // 入口组指回同一张表的另一行，和 activeMemberId 一样等第二遍再补。
       row.entryGroupId = null;
+      // 节点池排在组后面导入：跟着的池第二遍再补。
+      row.poolId = null;
       return { row };
 
     case "forward_group_members":
@@ -1862,11 +1864,14 @@ async function fixDeferredForwardGroupReferences(snapshot: MigrationSnapshot, ma
     if (exitGroupId) tunnelExitGroupUpdates.push({ id: nextId, value: exitGroupId });
   }
   const groupEntryGroupUpdates: Array<{ id: number; value: number }> = [];
+  const groupPoolUpdates: Array<{ id: number; value: number }> = [];
   for (const group of sortedSnapshotRows(snapshot, "forward_groups")) {
     const nextId = mapId(maps, "forward_groups", group.id);
     if (!nextId) continue;
     const entryGroupId = deferredOptional("forward_groups", group.entryGroupId);
     if (entryGroupId) groupEntryGroupUpdates.push({ id: nextId, value: entryGroupId });
+    const poolId = deferredOptional("node_pools", group.poolId);
+    if (poolId) groupPoolUpdates.push({ id: nextId, value: poolId });
   }
   const inviterUpdates: Array<{ id: number; value: number }> = [];
   for (const user of sortedSnapshotRows(snapshot, "users")) {
@@ -1953,6 +1958,7 @@ async function fixDeferredForwardGroupReferences(snapshot: MigrationSnapshot, ma
     await updateMappedColumn("tunnels", "entryGroupId", tunnelEntryGroupUpdates);
     await updateMappedColumn("tunnels", "exitGroupId", tunnelExitGroupUpdates);
     await updateMappedColumn("forward_groups", "entryGroupId", groupEntryGroupUpdates);
+    await updateMappedColumn("forward_groups", "poolId", groupPoolUpdates);
     await updateMappedColumn("proxy_nodes", "frontProxyId", frontProxyUpdates);
     await updateMappedColumn("users", "inviterId", inviterUpdates);
     await updateMappedColumn("host_tls_inbounds", "defaultRuleId", tlsInboundDefaultRuleUpdates);

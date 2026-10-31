@@ -13,10 +13,11 @@ import { routeGroupOf, routePathLetter, type RouteGroup } from "@shared/routeGro
 import { describeRoutePolicy, pinUntilSeconds, type RoutePolicy } from "@shared/routePolicy";
 import { RouteBoardCard } from "./RouteBoard";
 import { RouteGroupSheet, type RouteStatus } from "./RouteGroupSheet";
-import { ROUTE_LINE_MODE_LABEL, chainLatency, routeLineGroups } from "./RouteLineOverview";
+import { ROUTE_LINE_MODE_LABEL, chainLatency, routeLineGroups } from "./routeLineText";
 import { LineBig, LineCard, LineChip, LinePill, formatLineMs, type LineTone } from "@/features/lines/LineUi";
 import { formatBytes } from "@shared/formatBytes";
 import { normalizeRouteDelivery } from "@shared/routeGroup";
+import type { ForwardGroupOptionRow, HostOptionRow, LineRuleRow } from "./routeLineOptions";
 
 /*
   线路板：所有开了线路组的转发规则一处看全，每条一张卡，卡里一条路径一条链：
@@ -31,7 +32,7 @@ import { normalizeRouteDelivery } from "@shared/routeGroup";
   「编辑」打开的就是那条规则的编辑框（/rules?edit=<id>）。
 */
 
-type RouteBoardRow = { rule: any; group: RouteGroup; policy: RoutePolicy; host: any };
+type RouteBoardRow = { rule: LineRuleRow; group: RouteGroup; policy: RoutePolicy; host: HostOptionRow | undefined };
 
 /** 线路工作台的紧凑卡（2.3.496，效果图 ④）：名字、在走哪条、整条链毫秒、用法标签；点开是线路详情。 */
 type CompactInfo = { entryPool: { count: number; dns: boolean } | null; trafficBytes: number };
@@ -104,7 +105,7 @@ export function RouteBoardList({ searchQuery = "", isAdmin = false, compact = fa
     placeholderData: (previous) => previous,
   });
   const [openRuleId, setOpenRuleId] = useState<number | null>(null);
-  const hostById = useMemo(() => new Map<number, any>((hostsQuery.data || []).map((host: any) => [Number(host.id), host])), [hostsQuery.data]);
+  const hostById = useMemo(() => new Map<number, HostOptionRow>(((hostsQuery.data || []) as HostOptionRow[]).map((host) => [Number(host.id), host])), [hostsQuery.data]);
   const hostName = (hostId: number) => String(hostById.get(hostId)?.name || `主机 ${hostId}`);
 
   const pinMutation = trpc.rules.update.useMutation({
@@ -121,10 +122,10 @@ export function RouteBoardList({ searchQuery = "", isAdmin = false, compact = fa
     onError: (error) => toast.error(error.message || "操作失败"),
   });
 
-  const boardByRule = useMemo(() => new Map<number, any>(((boardQuery.data as any[]) || []).map((item) => [Number(item.ruleId), item])), [boardQuery.data]);
+  const boardByRule = useMemo(() => new Map((boardQuery.data || []).map((item) => [Number(item.ruleId), item])), [boardQuery.data]);
   // 紧凑卡要的：近 24 小时流量（端口转发资源算它几台成员规则的合计）、入口是不是一个入口池。
   const groupsQuery = trpc.forwardGroups.options.useQuery(undefined, { enabled: compact, staleTime: 60_000, refetchOnWindowFocus: false });
-  const allRules = (rulesQuery.data || []) as any[];
+  const allRules = (rulesQuery.data || []) as LineRuleRow[];
   const childIdsByTemplate = useMemo(() => {
     const map = new Map<number, number[]>();
     for (const rule of allRules) {
@@ -137,20 +138,20 @@ export function RouteBoardList({ searchQuery = "", isAdmin = false, compact = fa
   const trafficQuery = trpc.rules.trafficSummary.useQuery({ hours: 24, range: "24h", ruleIds: trafficRuleIds }, { enabled: compact && trafficRuleIds.length > 0, staleTime: 30_000, refetchOnWindowFocus: false });
   const trafficByRule = useMemo(() => {
     const map = new Map<number, number>();
-    for (const row of (trafficQuery.data || []) as any[]) map.set(Number(row.ruleId), (map.get(Number(row.ruleId)) || 0) + Number(row.bytesIn || 0) + Number(row.bytesOut || 0));
+    for (const row of trafficQuery.data || []) map.set(Number(row.ruleId), (map.get(Number(row.ruleId)) || 0) + Number(row.bytesIn || 0) + Number(row.bytesOut || 0));
     return map;
   }, [trafficQuery.data]);
-  const compactInfo = (rule: any): CompactInfo => {
+  const compactInfo = (rule: LineRuleRow): CompactInfo => {
     const templateChildren = childIdsByTemplate.get(Number(rule.id)) || [];
     const trafficBytes = (trafficByRule.get(Number(rule.id)) || 0) + templateChildren.reduce((sum, id) => sum + (trafficByRule.get(id) || 0), 0);
-    const group = Number(rule.forwardGroupId || 0) > 0 ? ((groupsQuery.data || []) as any[]).find((item) => Number(item.id) === Number(rule.forwardGroupId)) : null;
-    const members = group ? ((group.members || []) as any[]).filter((member) => member.isEnabled !== false && member.isEnabled !== 0).length : 0;
+    const group = Number(rule.forwardGroupId || 0) > 0 ? ((groupsQuery.data || []) as ForwardGroupOptionRow[]).find((item) => Number(item.id) === Number(rule.forwardGroupId)) : null;
+    const members = group ? (group.members || []).filter((member) => member.isEnabled !== false && member.isEnabled !== 0).length : 0;
     return { trafficBytes, entryPool: group && members > 1 ? { count: members, dns: !!group.domain } : null };
   };
 
   const rows = useMemo<RouteBoardRow[]>(() => {
     const query = searchQuery.trim().toLowerCase();
-    return (rulesQuery.data || []).flatMap((rule: any): RouteBoardRow[] => {
+    return allRules.flatMap((rule): RouteBoardRow[] => {
       const group = routeGroupOf(rule);
       if (!group) return [];
       const host = hostById.get(Number(rule.hostId));

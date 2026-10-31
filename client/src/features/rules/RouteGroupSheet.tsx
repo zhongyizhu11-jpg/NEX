@@ -27,8 +27,10 @@ import { isAgentVersionBehind } from "@shared/version";
 import { RoutePathCards, RouteSwitchChip, type RouteBoardEntry, type RouteBoardRate } from "./RouteBoard";
 import { ConditionRow, PinSection, SentenceRow } from "./RoutePolicySheet";
 import { RouteQualityHistory } from "./RouteQualityHistory";
-import { ROUTE_LINE_MODE_LABEL, RouteLineDetail, RouteLineTools, routeLineSubtitle, useRouteLinePause } from "./RouteLineOverview";
+import { RouteLineDetail, RouteLineTools, useRouteLinePause } from "./RouteLineOverview";
+import { ROUTE_LINE_MODE_LABEL, routeLineSubtitle } from "./routeLineText";
 import { RouteLineEditorDialog } from "./RouteLineEditorDialog";
+import type { LineRuleRow } from "./routeLineOptions";
 
 /*
   线路组面板：从规则卡上那个「主备 · 主线路 · 92 优」点进来。
@@ -321,7 +323,7 @@ export type RouteGroupSheetProps = Omit<RouteGroupPanelProps, "policy" | "status
   subjectName: string;
   policy: RoutePolicy | null;
   /** 有规则本身就在这里打开「编辑线路组」；没有就退回调用方给的 onEdit（打开整条规则的编辑框）。 */
-  rule?: any;
+  rule?: LineRuleRow | null;
   onEdit?: () => void;
   /** 面板打开时每隔多久刷一次状态（毫秒）；测试里传 0 关掉。 */
   refetchIntervalMs?: number;
@@ -352,7 +354,7 @@ export function RouteGroupSheet({
     动画里先塌成只剩标题再消失。
   */
   const [, setLocation] = useLocation();
-  const last = useRef<{ subjectName: string; policy: RoutePolicy; rule: any } | null>(null);
+  const last = useRef<{ subjectName: string; policy: RoutePolicy; rule: LineRuleRow | null } | null>(null);
   if (open && policy) last.current = { subjectName, policy, rule: rule ?? null };
   const shown = last.current;
   const status = (statusQuery.data as RouteStatus | null | undefined) ?? null;

@@ -890,6 +890,18 @@ export function ForwardGroupsContent({
   const pageGroups = (groupPageQuery.data?.items || []) as any[];
   const relatedPageGroups = (groupPageQuery.data?.relatedGroups || []) as any[];
   const groups = (fullGroupQuery.data || [...pageGroups, ...relatedPageGroups]) as any[];
+  // 2.3.497：组的成员可以跟着节点池（线路 → 节点池页设）；编辑时提示一下，并能就地取消跟随
+  const editingPoolId = editingId ? Number(groups.find((group) => Number(group.id) === editingId)?.poolId || 0) || null : null;
+  const followedPoolQuery = trpc.lineDiagnostics.nodePools.useQuery(undefined, { enabled: showDialog && !!editingPoolId, staleTime: 30_000, refetchOnWindowFocus: false });
+  const followedPoolName = editingPoolId ? ((followedPoolQuery.data || []) as Array<{ id: number; name: string }>).find((pool) => Number(pool.id) === editingPoolId)?.name || `节点池 ${editingPoolId}` : "";
+  const unfollowPool = trpc.forwardGroups.followPool.useMutation({
+    onSuccess: () => {
+      void utils.forwardGroups.invalidate();
+      void utils.lineDiagnostics.poolBoard.invalidate();
+      toast.success("不再跟着节点池，成员留着现在这些");
+    },
+    onError: (error) => toast.error(error.message),
+  });
   const isLoading = groupPageQuery.isLoading;
   const telegramSettingsLoaded = settings !== undefined;
   const telegramReady = telegramSettingsLoaded && !!settings?.telegram?.enabled && !!settings?.telegram?.configured;
@@ -1012,6 +1024,7 @@ export function ForwardGroupsContent({
 
   const closeDialog = () => {
     setShowDialog(false);
+    if (editRequest && editRequest.requestKey === lastEditRequestKeyRef.current) onEditRequestConsumed?.();
     clearCloseResetTimer();
     closeResetTimerRef.current = window.setTimeout(() => {
       resetForm();
@@ -1140,15 +1153,19 @@ export function ForwardGroupsContent({
     setShowDialog(true);
   };
 
+  /*
+    外面要打开某个组的编辑框（节点池页点组卡、/tunnels?edit=）。请求留到编辑框关掉才清：链路管理的分区
+    切换动画按「加载中 / 有列表」换 key，这一份组件加载完会被换成新的一份 —— 打开时就清掉的话，新的
+    那份拿不到请求，编辑框跟着旧的那份一起没了（以前从节点池页点组卡只切了页签、不开编辑框）。
+  */
   useEffect(() => {
     if (!editRequest || editRequest.requestKey === lastEditRequestKeyRef.current) return;
     const group = groups.find((item: any) => Number(item.id) === Number(editRequest.id));
     if (group) {
       lastEditRequestKeyRef.current = editRequest.requestKey;
       openEdit(group);
-      onEditRequestConsumed?.();
     }
-  }, [editRequest?.id, editRequest?.requestKey, groups, onEditRequestConsumed]);
+  }, [editRequest?.id, editRequest?.requestKey, groups]);
 
   const createMutation = trpc.forwardGroups.create.useMutation({
     onSuccess: () => {
@@ -2723,6 +2740,16 @@ export function ForwardGroupsContent({
             {!(form.groupMode === "port" && form.entryGroupId) && (
               <div className={form.groupMode === "chain" ? "space-y-2" : "space-y-3 rounded-lg border border-border/60 p-3"}>
                 <Label>{form.groupMode === "chain" ? "链路主机顺序" : form.groupMode === "port" || form.groupMode === "entry" ? "入口主机" : form.groupMode === "exit" ? "出口主机" : "成员优先级"}</Label>
+                {editingPoolId ? (
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-[var(--fx-accent)]/30 bg-[var(--fx-accent-soft)] px-3 py-2 text-xs leading-[1.5]" data-testid="group-follows-pool">
+                    <span className="min-w-0 flex-1">
+                      成员跟着节点池「{followedPoolName}」：机器的加减以池为准，这里只改每台的地址、带宽、权重和时段。
+                    </span>
+                    <Button type="button" variant="outline" size="sm" className="h-7 shrink-0 px-2 text-xs" disabled={unfollowPool.isPending} onClick={() => unfollowPool.mutate({ groupId: editingId!, poolId: null })}>
+                      不跟了
+                    </Button>
+                  </div>
+                ) : null}
                 {form.groupMode === "port" && (
                   <p data-fx-help="" className="text-xs text-muted-foreground">选一台或多台主机，每台都在规则的入口端口上监听、转到同一个目标；加减主机后已有规则自动跟着下发。</p>
                 )}

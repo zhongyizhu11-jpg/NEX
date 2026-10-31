@@ -316,10 +316,13 @@ export const lineDiagnosticsRouter = router({
         pools.logPoolReexpand(input.id, ruleIds);
         const { reexpandRouteLinesForRules } = await import("../routeLineExpansion");
         await reexpandRouteLinesForRules(ruleIds, "node-pool-updated");
-        return { id: input.id, reexpanded: ruleIds.length };
+        // 跟着这个池的入口组 / 出口组也按新的机器同步成员
+        const { syncGroupsFollowingPool } = await import("../nodePoolGroups");
+        const groups = await syncGroupsFollowingPool(input.id, "node-pool-updated");
+        return { id: input.id, reexpanded: ruleIds.length, groups };
       }
       const id = await pools.createNodePool({ userId: ctx.user.id, name: input.name, role: input.role, hostIds, note: input.note ?? undefined });
-      return { id, reexpanded: 0 };
+      return { id, reexpanded: 0, groups: [] as Array<{ groupId: number; added: number; removed: number; kept: number; skipped?: string; error?: string }> };
     }),
 
   nodePoolDelete: protectedProcedure
@@ -330,6 +333,9 @@ export const lineDiagnosticsRouter = router({
       if (!existing || (ctx.user.role !== "admin" && existing.userId !== ctx.user.id)) throw new Error("节点池不存在");
       const ruleIds = await pools.ruleIdsUsingPool(input.id);
       if (ruleIds.length > 0) throw new Error(`还有 ${ruleIds.length} 条线路在用这个池：先在线路里换掉它`);
+      // 跟着它的组不再跟，成员留着现在这些
+      const { releaseGroupsFollowingPool } = await import("../nodePoolGroups");
+      await releaseGroupsFollowingPool(input.id);
       await pools.deleteNodePool(input.id);
       return { ok: true };
     }),

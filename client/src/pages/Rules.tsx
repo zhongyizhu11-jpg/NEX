@@ -144,10 +144,12 @@ import { RouteGroupSheet } from "@/features/rules/RouteGroupSheet";
 import { RouteMiniChain, routeBoardActiveChain } from "@/features/rules/RouteBoard";
 import { EntityActions } from "@/components/entity/EntityActions";
 import { IconTile, type IconTileTone } from "@/components/entity/IconTile";
-import { RouteGroupFields, routeGroupPayload, type RouteGroupDraft, type RouteHostOption } from "@/features/rules/RouteGroupFields";
+import { routeGroupPayload, type RouteGroupDraft, type RouteHostOption } from "@/features/rules/RouteGroupFields";
 import { expandForPreview, type RouteLinePool, type RouteLineTunnel } from "@/features/rules/RouteLinesEditor";
 import { newRouteLine, routeLinesForEditor } from "@shared/routeLines";
 import { routeHostOptionsOf, routeLinePoolsOf, routeLineTunnelsOf } from "@/features/rules/routeLineOptions";
+import { RuleLineGroupField } from "@/features/rules/RuleLineGroupField";
+import { ROUTE_LINE_MODE_LABEL } from "@/features/rules/routeLineText";
 import { docsUrl } from "@/lib/docsLinks";
 import { ROUTE_MODE_HINTS, type RuleRouteTab } from "@/features/rules/routeModeHints";
 import { isAggregateLinkTunnel } from "@shared/aggregateLink";
@@ -157,7 +159,6 @@ import {
   newRouteGroupDraft,
   routeGroupForwardTypeSupported,
   routeGroupOf,
-  routeGroupRuleFields,
   routeGroupTunnelModeSupported,
   routePathLetter,
   validateRouteGroup,
@@ -3366,6 +3367,13 @@ function RulesContent() {
     const host = (hosts || []).find((item: any) => Number(item.id) === Number(routeEntryHostId || 0)) as any;
     return host ? String(host.name || `主机 ${host.id}`) : "入口";
   }, [hosts, routeEntryHostId]);
+  // 隧道规则：隧道入口那台在调度器前面，不拿来当中转建议
+  const routeUpstreamHostIds = useMemo(() => {
+    if (form.routeMode !== "tunnel" || !form.tunnelId) return [] as number[];
+    const tunnel = (supportedTunnels as any[]).find((item) => Number(item.id) === Number(form.tunnelId));
+    const id = Number(tunnel?.entryHostId || 0);
+    return id > 0 ? [id] : [];
+  }, [form.routeMode, form.tunnelId, supportedTunnels]);
   const routeEntryPrefix = useMemo(() => {
     if (form.routeMode !== "tunnel" || !form.tunnelId) return null;
     const tunnel = (supportedTunnels as any[]).find((item) => Number(item.id) === Number(form.tunnelId));
@@ -3387,21 +3395,17 @@ function RulesContent() {
     () => (editingId !== null ? (rules || []).find((rule: any) => Number(rule.id) === editingId) : null),
     [editingId, rules],
   );
-  const formRoutePolicy = useMemo(() => {
-    if (!form.failoverEnabled || !form.routeGroup) return null;
-    return describeRoutePolicy({
-      failoverEnabled: true,
-      targetIp: form.targetIp,
-      targetPort: form.targetPort,
-      forwardType: effectiveRouteForwardType,
-      protocol: form.protocol,
-      tunnelId: form.routeMode === "tunnel" ? form.tunnelId : null,
-      tunnelMode: form.routeMode === "tunnel" ? selectedTunnel?.mode : null,
-      proxyProtocolSend: editingStoredRule?.proxyProtocolSend,
-      proxyProtocolExitSend: editingStoredRule?.proxyProtocolExitSend,
-      ...routeGroupRuleFields(form.routeGroup, { targetIp: form.targetIp, targetPort: form.targetPort }),
-    }, { host: routeEntryHostId ? hostById.get(routeEntryHostId) : undefined });
-  }, [form.failoverEnabled, form.routeGroup, form.targetIp, form.targetPort, form.protocol, form.routeMode, form.tunnelId, selectedTunnel, effectiveRouteForwardType, editingStoredRule, routeEntryHostId, hostById]);
+  // 编辑线路组那个框里算「此刻」用的规则字段（框和草稿在 features/rules/RuleLineGroupField.tsx）
+  const routePolicyRule = useMemo(() => ({
+    targetIp: form.targetIp,
+    targetPort: form.targetPort,
+    forwardType: effectiveRouteForwardType,
+    protocol: form.protocol,
+    tunnelId: form.routeMode === "tunnel" ? form.tunnelId : null,
+    tunnelMode: form.routeMode === "tunnel" ? selectedTunnel?.mode : null,
+    proxyProtocolSend: editingStoredRule?.proxyProtocolSend,
+    proxyProtocolExitSend: editingStoredRule?.proxyProtocolExitSend,
+  }), [form.targetIp, form.targetPort, form.protocol, form.routeMode, form.tunnelId, selectedTunnel, effectiveRouteForwardType, editingStoredRule]);
   const advancedBlocked = isAdvancedSectionBlocker(submitBlocker);
   const advancedOpen = showAdvanced || advancedBlocked;
   // 出口开着却还缺东西（没选入站、入口机撑不起……）时自己展开：看不见的提示比什么都不说更糟。
@@ -3564,7 +3568,8 @@ function RulesContent() {
   const mainBackupDisabledText = mainBackupBlock?.reason || "";
   const routeGroupSectionVisible = !mainBackupBlock || form.failoverEnabled;
   const routeGroupSummary = form.failoverEnabled && form.routeGroup
-    ? `已开启 · ${form.routeGroup.paths.length} 条路径 · ${ROUTE_MODE_SHORT[form.routeGroup.policy.mode] ?? ""}`
+    // 和框里的摘要、线路详情一个说法：几条线路（不是展开出来的几条路径）、按什么切
+    ? `已开启 · ${form.routeGroup.lines?.length || form.routeGroup.paths.length} 条线路 · ${ROUTE_LINE_MODE_LABEL[form.routeGroup.policy.mode] || ROUTE_LINE_MODE_LABEL.failover}`
     : mainBackupBlock ? "用不了" : "未开启";
   const kernelForwardWarning = useMemo(() => buildKernelForwardWarning({
     rule: form,
@@ -8491,29 +8496,32 @@ function RulesContent() {
                   )}
                 </div>
               </div>
+              {/*
+                线路组的编辑只有一个地方：和线路详情里「编辑」同一个框、同一个编辑器（LineEditorShell）。
+                表单里只放一行摘要和「编辑线路」；框里点「完成」写回表单，跟着规则一起保存。
+              */}
               {form.failoverEnabled && form.routeGroup && (
-                <div className="mt-3 border-t border-[var(--fx-stroke-weak)] pt-3">
-                  <RouteGroupFields
-                    value={form.routeGroup}
-                    onChange={(routeGroup) => setForm({ ...form, routeGroup })}
-                    hosts={routeHostOptions}
-                    allowHops={routeHopsAllowed}
-                    entryHostId={routeEntryHostId}
-                    mainAddress={form.targetIp.trim() && form.targetPort > 0 ? `${form.targetIp.trim()}:${form.targetPort}` : ""}
-                    policy={formRoutePolicy}
-                    scheduleTimeZone={BILLING_TIME_ZONE}
-                    protocol={form.protocol}
-                    nodeOptions={targetNodeOptions}
-                    entrySourcePort={form.sourcePort}
-                    pools={routeLinePools}
-                    tunnels={routeLineTunnels}
-                    entryName={routeEntryName}
-                    entryPrefix={routeEntryPrefix}
-                    // 隧道规则在出口机上选路；端口转发资源（带转发组）每台成员机各跑一份、入口不是同一台：都放不了隧道段。
-                    allowTunnels={routeHopsAllowed && form.routeMode !== "tunnel" && Number(form.forwardGroupId || 0) <= 0}
-                    ruleId={editingId}
-                  />
-                </div>
+                <RuleLineGroupField
+                  value={form.routeGroup}
+                  onChange={(routeGroup) => setForm((current) => ({ ...current, routeGroup }))}
+                  hosts={routeHostOptions}
+                  pools={routeLinePools}
+                  tunnels={routeLineTunnels}
+                  nodeOptions={targetNodeOptions}
+                  entryHostId={routeEntryHostId}
+                  entryName={routeEntryName}
+                  entryPrefix={routeEntryPrefix}
+                  upstreamHostIds={routeUpstreamHostIds}
+                  allowHops={routeHopsAllowed}
+                  // 隧道规则在出口机上选路；端口转发资源（带转发组）每台成员机各跑一份、入口不是同一台：都放不了隧道段。
+                  allowTunnels={routeHopsAllowed && form.routeMode !== "tunnel" && Number(form.forwardGroupId || 0) <= 0}
+                  mainAddress={form.targetIp.trim() && form.targetPort > 0 ? `${form.targetIp.trim()}:${form.targetPort}` : ""}
+                  policyRule={routePolicyRule}
+                  entryHost={routeEntryHostId ? hostById.get(routeEntryHostId) : undefined}
+                  protocol={form.protocol}
+                  scheduleTimeZone={BILLING_TIME_ZONE}
+                  ruleId={editingId}
+                />
               )}
             </RuleFormCollapsible>
             )}
