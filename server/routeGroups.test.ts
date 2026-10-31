@@ -67,7 +67,7 @@ function run(): Outcome {
     }
     const paths = [
       { key: "main", name: "主线路", hops: [2], dest: null, weight: 60, probe: null, dial: null },
-      { key: "sg", name: "备用", hops: [3], dest: { ip: "198.51.100.9", port: 443 }, weight: 40, probe: null, dial: null },
+      { key: "sg", name: "新加坡", hops: [3], dest: { ip: "198.51.100.9", port: 443 }, weight: 40, probe: null, dial: null },
       { key: "bad", name: "坏路", hops: [4], dest: null, weight: 10, probe: null, dial: null },
     ];
     await exec(
@@ -301,8 +301,8 @@ test("下发给入口 Agent：三条路径按下标对齐，解析不出来的�
 
 test("Agent 报的切换、预检没过、恢复都落进切换记录，地址翻成路径的名字", () => {
   assert.deepEqual(outcome.events, [
-    { kind: "switch", fromLabel: "主线路", toLabel: "备用", reason: "schedule", score: 88 },
-    { kind: "precheck_failed", fromLabel: "备用", toLabel: "主线路", reason: "precheck: loss 6%", score: null },
+    { kind: "switch", fromLabel: "主线路", toLabel: "新加坡", reason: "schedule", score: 88 },
+    { kind: "precheck_failed", fromLabel: "新加坡", toLabel: "主线路", reason: "precheck: loss 6%", score: null },
     { kind: "recovered", fromLabel: null, toLabel: "主线路", reason: "health check", score: null },
   ]);
   assert.equal(outcome.agentTargets, 3, "评分快照该收下三条路径");
