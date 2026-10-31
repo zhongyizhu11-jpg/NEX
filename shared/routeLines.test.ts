@@ -186,3 +186,41 @@ test("按权重：一条线路一个数，展开出来的几条路径一起分�
   assert.equal(sum("main"), 60);
   assert.equal(sum("bk"), 40);
 });
+
+// ---------------------------------------------------------------- 落地池（2.3.500）
+
+const LANDING = (nodeId: number) => (nodeId === 88
+  ? { poolId: 40, name: "亚太落地池", members: [{ hostId: 6, dest: { ip: "198.18.0.6", port: 443 } }, { hostId: 3, dest: { ip: "198.18.0.3", port: 443 } }, { hostId: 2, dest: { ip: "198.18.0.2", port: 20001 } }] }
+  : nodeId === 89 ? { poolId: 41, name: "空池", members: [] } : null);
+
+test("落地选了落地池的池节点：一台成员一条路径，路径带 destHostId，key 按机器算（换 IP 不变）", () => {
+  const { paths, issues } = expandRouteLines([line("main", { dests: [{ dest: null, destNodeId: 88 }] })], ctx({ landingPool: LANDING }));
+  assert.equal(issues.size, 0);
+  assert.deepEqual(paths.map((path) => [path.destNodeId, path.destHostId, path.dest?.port]), [[88, 6, 443], [88, 3, 443], [88, 2, 20001]]);
+  const moved = expandRouteLines([line("main", { dests: [{ dest: null, destNodeId: 88 }] })], ctx({
+    landingPool: (nodeId) => {
+      const info = LANDING(nodeId);
+      return info ? { ...info, members: info.members.map((member) => ({ ...member, dest: { ip: `10.0.0.${member.hostId}`, port: member.dest.port } })) } : null;
+    },
+  }));
+  assert.deepEqual(moved.paths.map((path) => path.key), paths.map((path) => path.key), "成员换了地址，路径 key 不变（历史留着）");
+  const roundTrip = parseRoutePaths(serializeRoutePaths(paths));
+  assert.deepEqual(roundTrip.map((path) => path.destHostId), [6, 3, 2]);
+  assert.deepEqual(routeLinesFromPaths(roundTrip)[0].dests, [{ dest: null, destNodeId: 88 }], "还原成线路：几台成员是同一个落地候选");
+});
+
+test("规则目标绑着池节点：「规则目标」那个落地展开成池里几台；成员是入口或这条路上的中转就跳过", () => {
+  const { paths } = expandRouteLines([line("main", { layers: [newRouteLayer({ hostIds: [2] })] })], ctx({ landingPool: LANDING, ruleTargetNodeId: 88 }));
+  assert.deepEqual(paths.map((path) => [path.hops.join("."), path.destHostId]), [["2", 6], ["2", 3]], "经 2 中转时不落回 2");
+  const empty = expandRouteLines([line("main", { dests: [{ dest: null, destNodeId: 89 }] })], ctx({ landingPool: LANDING }));
+  assert.equal(empty.paths.length, 0);
+  assert.match(String(empty.issues.get("main")), /空池/);
+});
+
+test("落地池的几台不算重复路径；同一台出现两次才算", () => {
+  const { paths } = expandRouteLines([line("main", { dests: [{ dest: null, destNodeId: 88 }] })], ctx({ landingPool: LANDING }));
+  const group = { ...newRouteGroupDraft({ timezone: "Asia/Shanghai" }), paths };
+  assert.equal(validateRouteGroup({ paths, policy: group.policy } as any, { entryHostId: 1, hostIds: null, hasRuleTarget: true, rejectDuplicates: true }), null);
+  const twice = [paths[0], { ...paths[0], key: "dup" }];
+  assert.match(String(validateRouteGroup({ paths: twice, policy: group.policy } as any, { entryHostId: 1, hostIds: null, hasRuleTarget: true, rejectDuplicates: true })), /同一条/);
+});

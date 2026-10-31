@@ -238,7 +238,7 @@ export function NodePoolsSection({ hosts, onOpenGroup, onCreateGroup, isAdmin = 
         出来，「出口组」出现两次、手机上长到滑不到底；2.3.498 收成这四行。
       */}
       <div className="flex min-w-0 items-start justify-between gap-3">
-        <LineTitle title="节点池" sub="一个池就是一层候选，线路里直接选池" />
+        <LineTitle title="节点池" sub="中转池是线路里的一层候选；落地池几台开同一份落地，订阅里一条" />
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button type="button" size="sm" className="mt-1 h-8 shrink-0 gap-1 rounded-full px-3" data-testid="node-pool-new">
@@ -377,7 +377,7 @@ export function NodePoolsSection({ hosts, onOpenGroup, onCreateGroup, isAdmin = 
       ))}
 
       {data && nodePools.length + entryGroups.length + exitGroups.length === 0 ? (
-        <p className="px-1 text-[12.5px] text-muted-foreground">还没有池。建一个中转池，线路里一层直接选它；入口组、出口组也会在这里一起看。</p>
+        <p className="px-1 text-[12.5px] text-muted-foreground">还没有池。建一个中转池，线路里一层直接选它；或者建一个落地池，几台开同一份落地。入口组、出口组也会在这里一起看。</p>
       ) : null}
 
       <Dialog open={!!editing} onOpenChange={(open) => !open && setEditing(null)}>
