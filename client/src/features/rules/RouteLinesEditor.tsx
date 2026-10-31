@@ -25,10 +25,10 @@ import { segmentKey, useSegmentLatency } from "./segmentLatency";
   编辑线路组（2.3.496，照效果图 ②「编辑：主线路 + 有序备用」）：
 
     每条线路收着是一行，点开是一条竖着的链：入口 ● → 中转 ● （几跳就几个：中转 1、中转 2…）→ 落地 ●。
-    一跳里可以放几台候选（机器、隧道混着放），有两台以上才出「最低延迟 / 按顺序」——只有一台时没得挑；或者这一跳
-    是一个节点池：平时一个「池 · 名字 · N 台」，点开一列看池里每台（2.3.498）。两个加号分开叫：「+ 并列」在那一跳
-    里，同一跳再放一台（只放机器、隧道）；「+ 加中转」在链上最后一个中转和落地之间，串下一跳（机器、隧道、节点池
-    都能选）。整跳换成节点池：点这一跳的机器，「这一跳改用节点池」。「可跳过」（这一跳全坏了就直连下一跳）不再给勾：和加一条不经它的备用线路是一回事，
+    一跳里可以放几台候选（机器、隧道混着放），并列的几台放在一个胶囊里（「Jinx / jinx(39.9y)」），有两台以上才出
+    「最低延迟 / 按顺序」——只有一台时没得挑；或者这一跳是一个节点池：平时一个「池 · 名字 · N 台」，点开一列看池里
+    每台（2.3.498）。两个加号分开叫：「+ 加中转」在链上最后一个中转和落地之间，串下一跳，只加一台（或一条隧道）；
+    「+ 并列」在那一跳里，再放一台，或者把这一跳换成节点池（池就是一组现成的并列机器）。「可跳过」（这一跳全坏了就直连下一跳）不再给勾：和加一条不经它的备用线路是一回事，
     备用线路排第几、状态、暂停都看得见；老配置里勾过的照常生效，这里显示「可跳过 ×」，点一下取消。
     下面是有序的备用：一行一条，拖动排序；整行点一下展开来改，小闪电（逐段测）在展开的那块里 —— 收着的行上
     只留路径和状态，省地方（2.3.498，以前每行还挂着 ▾ 和 ⚡，路径被挤得只剩半截）。勾掉就不参与
@@ -177,19 +177,14 @@ export function RouteLinesEditor({
     if (open) setOpenKey(line.key);
   };
 
-  /**
-   * 一条线路怎么走：Po0 → jinx(39.9y) → 落地。一跳里并列几台写成 [Jinx / jinx(39.9y)]（和展开后那个框一样：
-   * 方括号里是这一跳挑一台，箭头是一跳接一跳），三台以上 [A / B 等 3 台]；节点池写池的名字。
-   */
+  /** 一条线路此刻怎么走（每层挑中的那个）：Po0 → jinx(39.9y) → 落地。（收起那一行就这样写，并列的框只在展开后画） */
   const lineText = (line: RouteLine) => {
     const parts = [entryName];
-    const name = (candidate: Candidate) => (candidate.kind === "tunnel" ? `隧道 ${hostName(candidate.to)}` : candidate.label);
     for (const layer of line.layers) {
       const candidates = candidatesOf(layer);
       if (layer.kind === "pool") parts.push(pools.find((pool) => pool.id === layer.poolId)?.name || "节点池");
-      else if (candidates.length > 2) parts.push(`[${name(candidates[0])} / ${name(candidates[1])} 等 ${candidates.length} 台]`);
-      else if (candidates.length === 2) parts.push(`[${name(candidates[0])} / ${name(candidates[1])}]`);
-      else if (candidates[0]) parts.push(name(candidates[0]));
+      else if (candidates[0]) parts.push(candidates[0].kind === "tunnel" ? `隧道 ${hostName(candidates[0].to)}` : candidates[0].label);
+      if (candidates.length > 1 && layer.kind !== "pool") parts[parts.length - 1] += ` 等 ${candidates.length} 个`;
     }
     parts.push("落地");
     return parts.join(" → ");
@@ -215,16 +210,12 @@ export function RouteLinesEditor({
         <LineChipButton variant="add" data-testid="route-line-add-layer">{label}</LineChipButton>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="max-h-80 overflow-y-auto">
-        {/* 节点池放最前：一个池就是这一跳的一组候选，池里加减机器，用它的线路跟着变 */}
-        {relayPools.length > 0 ? <DropdownMenuLabel className="text-[11px]">节点池（池里挑最快的）</DropdownMenuLabel> : null}
-        {relayPools.map((pool) => (
-          <DropdownMenuItem key={`p${pool.id}`} onSelect={() => addLayer(lineIndex, newRouteLayer({ kind: "pool", poolId: pool.id }))}>{pool.name} · {pool.members.length} 台</DropdownMenuItem>
-        ))}
-        {allowTunnels && tunnels.some((tunnel) => tunnel.entryHostId === previousHost) ? (<><DropdownMenuSeparator /><DropdownMenuLabel className="text-[11px]">隧道（从上一个节点出发）</DropdownMenuLabel></>) : null}
+        {/* 加中转只加一台（或一条隧道）：要一组就加完再「+ 并列」，或者在「+ 并列」里换成节点池 */}
+        {allowTunnels && tunnels.some((tunnel) => tunnel.entryHostId === previousHost) ? <DropdownMenuLabel className="text-[11px]">隧道（从上一个节点出发）</DropdownMenuLabel> : null}
         {allowTunnels ? tunnels.filter((tunnel) => tunnel.entryHostId === previousHost).map((tunnel) => (
           <DropdownMenuItem key={`t${tunnel.id}`} onSelect={() => addLayer(lineIndex, newRouteLayer({ kind: "tunnel", tunnelIds: [tunnel.id] }))}>{tunnel.name} → {hostName(tunnel.exitHostId)}</DropdownMenuItem>
         )) : null}
-        {relayPools.length > 0 || (allowTunnels && tunnels.some((tunnel) => tunnel.entryHostId === previousHost)) ? <DropdownMenuSeparator /> : null}
+        {allowTunnels && tunnels.some((tunnel) => tunnel.entryHostId === previousHost) ? <DropdownMenuSeparator /> : null}
         <DropdownMenuLabel className="text-[11px]">机器</DropdownMenuLabel>
         {hosts.filter((host) => host.id !== entryHostId).map((host) => (
           <DropdownMenuItem key={`h${host.id}`} onSelect={() => addLayer(lineIndex, newRouteLayer({ kind: "hosts", hostIds: [host.id] }))}>{host.name}{host.isOnline === false ? "（离线）" : ""}</DropdownMenuItem>
@@ -374,69 +365,88 @@ export function RouteLinesEditor({
           }
 
           /*
-            并列的几台放进一个框（「Jinx / jinx(39.9y)」）：框里是这一跳挑一台，竖链上的点是一跳接一跳 —— 「并」和「串」
-            一眼分开。「+ 并列」和怎么挑也在框里。只有一台时不画框。
+            并列的几台放进一个胶囊：「隧道 Jinx 0.8 / jinx(39.9y) 1.0」—— 一个胶囊就是这一跳挑一台（挑中的那台加粗），
+            竖链上的点是一跳接一跳，「并」和「串」一眼分开（用户给的写法）。只有一台时就是普通的胶囊。点胶囊里某一台：
+            排到最前 / 去掉。「+ 并列」再放一台，或者把这一跳换成节点池（池就是一组现成的并列机器）。
           */
           const grouped = candidates.length > 1;
+          const candidateMenu = (candidate: Candidate, index: number) => (
+            <DropdownMenuContent align="start" className="w-56">
+              {index > 0 && layer.pick === "order" ? <DropdownMenuItem onSelect={() => moveFirst(candidate)}>排到最前</DropdownMenuItem> : null}
+              <DropdownMenuItem onSelect={() => removeCandidate(candidate)}>去掉 {candidate.label}</DropdownMenuItem>
+            </DropdownMenuContent>
+          );
+          const candidateBody = (candidate: Candidate, index: number) => (
+            <>
+              <span className="truncate">{candidate.label}</span>
+              {candidate.state ? <span className="text-[10.5px] font-normal text-[var(--fx-warn-text)]">{candidate.state}</span> : null}
+              <LineMs value={measured[index]} />
+            </>
+          );
           return chainNode(label, "hop", (
             <>
-                <div
-                  className={cn(
-                    "flex min-w-0 flex-wrap items-center gap-1.5",
-                    grouped && "w-fit max-w-full rounded-[12px] border border-[var(--fx-stroke)] bg-[var(--fx-l2-group)] p-1.5",
-                  )}
-                  data-testid="route-line-layer"
-                  data-grouped={grouped ? "true" : undefined}
-                >
-                  {candidates.map((candidate, index) => (
-                    <Fragment key={`${candidate.kind}${candidate.id}`}>
-                    {grouped && index > 0 ? <span aria-hidden className="text-[12px] text-muted-foreground">/</span> : null}
-                    <DropdownMenu>
+                <div className="flex min-w-0 flex-wrap items-center gap-1.5" data-testid="route-line-layer">
+                  {grouped ? (
+                    <div className="inline-flex min-w-0 max-w-full flex-wrap items-center rounded-[12px] border border-[var(--fx-accent)] bg-[var(--fx-accent-soft)] px-[3px] py-[1px]" data-grouped="true">
+                      {candidates.map((candidate, index) => (
+                        <Fragment key={`${candidate.kind}${candidate.id}`}>
+                          {index > 0 ? <span aria-hidden className="px-[1px] text-[11.5px] text-muted-foreground">/</span> : null}
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <button
+                                type="button"
+                                title={candidate.hint}
+                                className={cn(
+                                  "inline-flex min-w-0 items-center gap-[5px] whitespace-nowrap rounded-full px-[6px] py-[2px] text-[11.5px] leading-[1.3]",
+                                  index === chosen ? "font-semibold text-[var(--fx-accent)]" : "text-foreground",
+                                )}
+                              >
+                                {candidateBody(candidate, index)}
+                              </button>
+                            </DropdownMenuTrigger>
+                            {candidateMenu(candidate, index)}
+                          </DropdownMenu>
+                        </Fragment>
+                      ))}
+                    </div>
+                  ) : candidates.map((candidate, index) => (
+                    <DropdownMenu key={`${candidate.kind}${candidate.id}`}>
                       <DropdownMenuTrigger asChild>
-                        <LineChipButton variant={index === chosen ? "sel" : "default"} title={candidate.hint}>
-                          <span className="truncate">{candidate.label}</span>
-                          {candidate.state ? <span className="text-[10.5px] font-normal text-[var(--fx-warn-text)]">{candidate.state}</span> : null}
-                          <LineMs value={measured[index]} />
-                        </LineChipButton>
+                        <LineChipButton variant="sel" title={candidate.hint}>{candidateBody(candidate, index)}</LineChipButton>
                       </DropdownMenuTrigger>
-                      <DropdownMenuContent align="start" className="w-56">
-                        {index > 0 && layer.pick === "order" ? <DropdownMenuItem onSelect={() => moveFirst(candidate)}>排到最前</DropdownMenuItem> : null}
-                        <DropdownMenuItem onSelect={() => removeCandidate(candidate)}>去掉 {candidate.label}</DropdownMenuItem>
-                        {/* 整跳换成节点池在这里（不在「+ 并列」里：并列是多放一台，换池是把这一跳整个换掉） */}
-                        {relayPools.length > 0 ? (
-                          <>
-                            <DropdownMenuSeparator />
-                            <DropdownMenuLabel className="text-[11px]">这一跳改用节点池</DropdownMenuLabel>
-                            {relayPools.map((item) => (
-                              <DropdownMenuItem key={`p${item.id}`} onSelect={() => replaceLayer(lineIndex, layerIndex, newRouteLayer({ kind: "pool", poolId: item.id, pick: layer.pick }))}>{item.name} · {item.members.length} 台</DropdownMenuItem>
-                            ))}
-                          </>
-                        ) : null}
-                      </DropdownMenuContent>
+                      {candidateMenu(candidate, index)}
                     </DropdownMenu>
-                    </Fragment>
                   ))}
-                  {canAddCandidate ? (
+                  {canAddCandidate || relayPools.length > 0 ? (
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
-                        <LineChipButton variant="add" aria-label={`${label}再并列一个`} title="这一跳再并列一台机器或一条隧道：几个里自动挑整条链最快的" data-testid="route-line-add-candidate">+ 并列</LineChipButton>
+                        <LineChipButton variant="add" aria-label={`${label}再并列一个`} title="这一跳再并列一台机器、一条隧道，或者换成节点池：几个里自动挑整条链最快的" data-testid="route-line-add-candidate">+ 并列</LineChipButton>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="start" className="max-h-72 overflow-y-auto">
-                        {addableTunnels.length > 0 ? <DropdownMenuLabel className="text-[11px]">并列一条隧道（从上一个节点出发）</DropdownMenuLabel> : null}
-                        {addableTunnels.map((tunnel) => (
+                        {relayPools.length > 0 ? <DropdownMenuLabel className="text-[11px]">换成节点池（池里挑最快的）</DropdownMenuLabel> : null}
+                        {relayPools.map((item) => (
+                          <DropdownMenuItem key={`p${item.id}`} onSelect={() => replaceLayer(lineIndex, layerIndex, newRouteLayer({ kind: "pool", poolId: item.id, pick: layer.pick }))}>{item.name} · {item.members.length} 台</DropdownMenuItem>
+                        ))}
+                        {relayPools.length > 0 && canAddCandidate ? <DropdownMenuSeparator /> : null}
+                        {canAddCandidate && addableTunnels.length > 0 ? <DropdownMenuLabel className="text-[11px]">并列一条隧道（从上一个节点出发）</DropdownMenuLabel> : null}
+                        {(canAddCandidate ? addableTunnels : []).map((tunnel) => (
                           <DropdownMenuItem key={`t${tunnel.id}`} onSelect={() => setLayer(lineIndex, layerIndex, { tunnelIds: [...layer.tunnelIds, tunnel.id] })}>{tunnel.name} → {hostName(tunnel.exitHostId)}</DropdownMenuItem>
                         ))}
-                        {addableTunnels.length > 0 && addableHosts.length > 0 ? <DropdownMenuSeparator /> : null}
-                        {addableHosts.length > 0 ? <DropdownMenuLabel className="text-[11px]">并列一台机器</DropdownMenuLabel> : null}
-                        {addableHosts.map((host) => (
+                        {canAddCandidate && addableTunnels.length > 0 && addableHosts.length > 0 ? <DropdownMenuSeparator /> : null}
+                        {canAddCandidate && addableHosts.length > 0 ? <DropdownMenuLabel className="text-[11px]">并列一台机器</DropdownMenuLabel> : null}
+                        {(canAddCandidate ? addableHosts : []).map((host) => (
                           <DropdownMenuItem key={`h${host.id}`} onSelect={() => setLayer(lineIndex, layerIndex, { hostIds: [...layer.hostIds, host.id], kind: "hosts" })}>{host.name}{host.isOnline === false ? "（离线）" : ""}</DropdownMenuItem>
                         ))}
                       </DropdownMenuContent>
                     </DropdownMenu>
                   ) : null}
-                  {grouped ? pickMenu : null}
                 </div>
-                {layer.skippable ? <div className="mt-[6px] flex min-w-0 flex-wrap items-center gap-[10px]">{skipChip}</div> : null}
+                {grouped || layer.skippable ? (
+                  <div className="mt-[6px] flex min-w-0 flex-wrap items-center gap-[10px]">
+                    {grouped ? pickMenu : null}
+                    {skipChip}
+                  </div>
+                ) : null}
             </>
           ), `layer-${layerIndex}`);
         })}
