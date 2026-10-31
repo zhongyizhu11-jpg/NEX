@@ -237,7 +237,8 @@ export function RouteLinesEditor({
       <span
         aria-hidden
         className={cn(
-          "relative z-[1] mt-[6px] h-[11px] w-[11px] rounded-full border-2 bg-[var(--fx-l1-surface)]",
+          // 圆点排在竖线后面，同是定位元素、后画的盖在上面：不用 z-index
+          "relative mt-[6px] h-[11px] w-[11px] rounded-full border-2 bg-[var(--fx-l1-surface)]",
           kind === "start" ? "border-[var(--fx-stroke)]" : kind === "end" ? "border-[var(--fx-accent)] bg-[var(--fx-accent)]" : "border-[var(--fx-accent)]",
         )}
       />
