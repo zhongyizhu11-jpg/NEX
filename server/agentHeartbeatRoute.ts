@@ -3279,9 +3279,14 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       const hints = routeHopDownHints(Number(rule.id), paths);
       // 暂停、维护中、离线、熔断：比中转探测的结论更硬，压过它。
       const nodeHints = routeNodeHints(paths, getRouteNodeStatus);
-      // 从「线路」展开出来的路径每条都有 tier：Agent 只在最低的、还有健康路径的那一组里挑（2.2.243 起；老 Agent 忽略）。
-      const tiered = paths.every((path) => typeof path.tier === "number");
       const delivery = normalizeRouteDelivery(policy.delivery);
+      /*
+        分层（每条目标带 tier，Agent 只在最低的、还有健康路径的那一层里挑 / 分，2.2.243 起）只给「聚合 / 复制」：
+        那是「主线路那组几条一起分担，备用组只兜底」。整链最优、按权重、按时段时段外择优都得在所有线路里比、
+        在所有线路上分 —— 带着分层，Agent 只在主线路里挑，备用线路再快也切不过去、权重也分不到备用上
+        （2.3.497 及以前：选了整链最优一直不切）。稳定优先 / 按时段 / 人工指定本来就按顺序走，分不分层一样。
+      */
+      const tiered = (delivery === "aggregate" || delivery === "replicate") && paths.every((path) => typeof path.tier === "number");
       // 第 N 个目标的第一跳是哪台：入口 Agent 报的第一段延迟就是「进那台机器」的延迟（节点池卡上的毫秒数）。
       noteRouteFirstHops(Number(rule.id), paths.map((path) => (path.hops.length > 0 ? Number(path.hops[0]) : null)));
       const targets = paths.map((path) => {

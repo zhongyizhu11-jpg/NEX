@@ -2,11 +2,12 @@ import { useMemo } from "react";
 
 import { LineCard, formatLineMs } from "@/features/lines/LineUi";
 import type { RouteStatus, RouteStatusHop } from "./RouteGroupSheet";
-import { chainLatency, lineClockText, routeDestLabel, routePathText } from "./routeLineText";
+import { chainLatency, lineClockText, routeDestLabel, routeLandingName, routePathText } from "./routeLineText";
 
 /*
-  线路详情里的分层图（效果图 ①，2.3.497 从 RouteLineOverview.tsx 拆出来）：入口 → 隧道 / 中转 → 落地 → 目标，
+  线路详情里的分层图（效果图 ①，2.3.497 从 RouteLineOverview.tsx 拆出来）：入口 → 隧道 / 中转 → 落地，
   一列一层，在走的那条实线加粗、别的虚线，段上写毫秒；下面一行写这条是几点开始走的、整条链多少、为什么是它。
+  落地是最后一列、一直画到卡片右边（2.3.498 起：后面那个「目标」小圆点去掉了，多出来的地方给落地写全名）。
 */
 
 type Hop = RouteStatusHop;
@@ -17,8 +18,10 @@ const DIAGRAM_WIDTH = 350;
 const ROW_GAP = 74;
 const BOX_HEIGHT = 26;
 const X_ENTRY = 26;
-const X_LANDING = 271;
-const X_TARGET = 334;
+/** 落地框的右边（右边留 2px，框描边不被裁）。 */
+const RIGHT_EDGE = DIAGRAM_WIDTH - 2;
+
+const columnWidth = (nodes: readonly DiagramNode[]) => Math.max(0, ...nodes.map((node) => node.width));
 
 /** SVG 里没法量字，按字估：等宽 11px，拉丁 6.6px 一个，中文 11px。 */
 function fitLabel(text: string, maxWidth: number) {
@@ -71,13 +74,16 @@ export function diagramRowOffsets(paths: ReadonlyArray<{ hopKeys: readonly strin
 export function RouteLineDiagram({ status, modeLabel, timeZone }: { status: RouteStatus; modeLabel: string; timeZone?: string }) {
   const paths = status.paths;
   const active = paths.find((path) => path.active) || null;
-  const layout = useMemo(() => {
+  const diagram = useMemo(() => {
     const maxHops = Math.max(0, ...paths.map((path) => path.hops.length));
-    // 只有一列中转时中间空得多，名字给宽一点（「jinx(39.9y)」不用截）；列多了就紧着来
-    const hopMaxWidth = maxHops <= 1 ? 84 : maxHops === 2 ? 72 : 56;
+    // 只有一列中转时中间空得多，名字给宽一点（「jinx(39.9y)」不用截）；列多了就紧着来（最多 5 列也得排得下）
+    const hopMaxWidth = maxHops <= 1 ? 84 : maxHops === 2 ? 54 : maxHops === 3 ? 38 : 26;
+    const hopMinBox = maxHops >= 4 ? 42 : 50;
+    // 两列之间至少留这么宽，段上的毫秒才有地方写
+    const minGap = maxHops <= 1 ? 30 : maxHops === 2 ? 24 : 14;
     const columns: DiagramNode[][] = [];
     const entryName = status.entry?.name || "入口";
-    const entryLabel = fitLabel(entryName, 64);
+    const entryLabel = fitLabel(entryName, maxHops >= 3 ? 44 : 64);
     columns.push([{
       key: "entry",
       title: entryName,
@@ -108,7 +114,7 @@ export function RouteLineDiagram({ status, modeLabel, timeZone }: { status: Rout
           sub: hop.viaTunnel ? "隧道出口" : "中转",
           hot,
           tone: hopTone(hop),
-          width: Math.max(50, Math.ceil(label.width) + 16),
+          width: Math.max(hopMinBox, Math.ceil(label.width) + 16),
           ...(state ? { sub: `${hop.viaTunnel ? "隧道出口" : "中转"} · ${state}` } : {}),
         });
       }
@@ -126,12 +132,51 @@ export function RouteLineDiagram({ status, modeLabel, timeZone }: { status: Rout
         if (!path.down) existing.tone = "ok";
         continue;
       }
-      landings.push({ key, title: routeDestLabel(path), label: "落地", sub: "", hot: !!path.active, tone: path.down ? "down" : "ok", width: 50 });
+      // 框里写落地的名字（我的节点 / 自己的机器，没有就写地址），不只写「落地」两个字；悬停看完整地址
+      const name = routeLandingName(path);
+      const title = path.destName ? `${path.destName}（${routeDestLabel(path)}）` : routeDestLabel(path);
+      landings.push({ key, title, label: name, sub: "", hot: !!path.active, tone: path.down ? "down" : "ok", width: 50 });
     }
-    if (landings.length > 1) landings.forEach((node, index) => { node.label = `落地 ${index + 1}`; node.width = 58; });
+    // 两个落地名字一样（同一个域名不同端口）：带上端口才分得清
+    for (const node of landings) {
+      const same = landings.filter((other) => other.label === node.label);
+      if (same.length > 1) {
+        const port = /:(\d+)$/.exec(node.title.replace(/）$/, ""))?.[1];
+        if (port) node.label = `${node.label}:${port}`;
+      }
+    }
+    // 落地拿入口、中转排完剩下的宽度（「hkboil.ddos.top」整个写得下），最多 160、最少 38
+    const used = columns.reduce((sum, nodes) => sum + columnWidth(nodes), 0) + minGap * (maxHops + 1);
+    const landingMaxWidth = Math.min(160, Math.max(38, RIGHT_EDGE - 2 - used - 16));
+    for (const node of landings) {
+      const fitted = fitLabel(node.label, landingMaxWidth);
+      node.label = fitted.text;
+      node.width = Math.max(50, Math.ceil(fitted.width) + 16);
+    }
     columns.push(landings);
-    return columns;
+
+    /*
+      每列的中心：入口靠左（名字长、框宽就往右挪，别被裁掉），落地那列最宽的框贴着右边，
+      中转列在两者之间按框宽排，列与列之间的空一样宽。
+    */
+    const entryWidth = columns[0][0].width;
+    const entryX = Math.max(X_ENTRY, entryWidth / 2 + 2);
+    const landingWidth = columnWidth(landings);
+    const landingX = RIGHT_EDGE - landingWidth / 2;
+    const hopWidths = columns.slice(1, -1).map(columnWidth);
+    const free = landingX - landingWidth / 2 - (entryX + entryWidth / 2) - hopWidths.reduce((sum, width) => sum + width, 0);
+    const gap = free / (hopWidths.length + 1);
+    const xs = [entryX];
+    let cursor = entryX + entryWidth / 2;
+    for (const width of hopWidths) {
+      cursor += gap;
+      xs.push(cursor + width / 2);
+      cursor += width;
+    }
+    xs.push(landingX);
+    return { columns, xs };
   }, [paths, status.entry?.name, status.entry?.online]);
+  const layout = diagram.columns;
 
   const offsets = diagramRowOffsets(
     paths.map((path) => ({ hopKeys: path.hops.map((hop) => `h${hop.hostId}`) })),
@@ -145,14 +190,7 @@ export function RouteLineDiagram({ status, modeLabel, timeZone }: { status: Rout
   const height = Math.max(150, natural);
   const center = 38 + (height - natural) / 2 - minOffset * ROW_GAP;
   const hopColumns = layout.length - 2;
-  // 入口名字长（Po0(200M)）时框更宽：往右挪，别让左边被裁掉。
-  const entryX = Math.max(X_ENTRY, layout[0][0].width / 2 + 2);
-  const colX = (index: number) => {
-    if (index === 0) return entryX;
-    if (index === layout.length - 1) return X_LANDING;
-    if (hopColumns === 1) return Math.max(153, entryX + 92);
-    return entryX + ((X_LANDING - entryX) * index) / (hopColumns + 1);
-  };
+  const colX = (index: number) => diagram.xs[index];
   const nodeAt = (column: number, key: string) => {
     const nodes = layout[column];
     const position = Math.max(0, nodes.findIndex((node) => node.key === key));
@@ -210,8 +248,7 @@ export function RouteLineDiagram({ status, modeLabel, timeZone }: { status: Rout
             </span>
           );
         })}
-        <span className="absolute -translate-x-1/2" style={{ left: `${(X_LANDING / DIAGRAM_WIDTH) * 100}%` }}>落地</span>
-        <span className="absolute right-1">目标</span>
+        <span className="absolute -translate-x-1/2" style={{ left: `${(colX(landingColumn) / DIAGRAM_WIDTH) * 100}%` }}>落地</span>
       </div>
       <svg viewBox={`0 0 ${DIAGRAM_WIDTH} ${height}`} width="100%" role="img" aria-label="线路分层图" className="mt-1 block">
         <g fill="none" strokeLinecap="round">
@@ -224,18 +261,6 @@ export function RouteLineDiagram({ status, modeLabel, timeZone }: { status: Rout
                 stroke={edge.hot ? "var(--fx-accent)" : "var(--fx-stroke)"}
                 strokeWidth={edge.hot ? 3 : 1.6}
                 strokeDasharray={edge.hot ? undefined : "4 4"}
-              />
-            );
-          })}
-          {layout[landingColumn].map((node) => {
-            const { y } = nodeAt(landingColumn, node.key);
-            return (
-              <path
-                key={`t-${node.key}`}
-                d={`M${X_LANDING + node.width / 2} ${y} C${X_LANDING + node.width / 2 + 14} ${y} ${X_TARGET - 20} ${center} ${X_TARGET - 8} ${center}`}
-                stroke={node.hot ? "var(--fx-accent)" : "var(--fx-stroke)"}
-                strokeWidth={node.hot ? 3 : 1.6}
-                strokeDasharray={node.hot ? undefined : "4 4"}
               />
             );
           })}
@@ -269,7 +294,6 @@ export function RouteLineDiagram({ status, modeLabel, timeZone }: { status: Rout
               </g>
             );
           }))}
-          <circle cx={X_TARGET} cy={center} r={7} fill="var(--fx-l1-surface)" stroke={active ? "var(--fx-accent)" : "var(--fx-stroke)"} strokeWidth={1.6} />
         </g>
       </svg>
       <div className="mt-2 truncate whitespace-nowrap border-t border-dashed border-[var(--fx-stroke-weak)] pt-2 font-mono text-[11px] text-muted-foreground" data-testid="route-line-log">

@@ -410,7 +410,10 @@ export function expandRouteLines(lines: RouteLine[], ctx: RouteExpandContext, li
   }
   const paths: RoutePath[] = [];
   lines.forEach((line, lineIndex) => {
-    perLine[lineIndex].slice(0, quota[lineIndex]).forEach((combo, comboIndex) => {
+    const used = perLine[lineIndex].slice(0, quota[lineIndex]);
+    // 按权重是一条线路一个数：展开出来的几条路径一起分它那一份（2.3.498 以前每条都拿整份，候选多的线路分得多）
+    const weight = Math.max(1, Math.round(line.weight / Math.max(1, used.length)));
+    used.forEach((combo, comboIndex) => {
       const signature = `${combo.hops.join(".")}|${combo.via.map((value) => value ?? "").join(".")}|${combo.dest.dest ? `${combo.dest.dest.ip}:${combo.dest.dest.port}` : ""}|${combo.dest.destNodeId ?? ""}`;
       const key = comboIndex === 0 && perLine[lineIndex].length === 1 ? line.key : `${line.key.slice(0, 24)}-${hashKey(signature)}`;
       const hasVia = combo.via.some((value) => value !== null);
@@ -421,7 +424,7 @@ export function expandRouteLines(lines: RouteLine[], ctx: RouteExpandContext, li
         ...(hasVia ? { hopVia: combo.via } : {}),
         dest: combo.dest.dest,
         destNodeId: combo.dest.destNodeId,
-        weight: line.weight,
+        weight,
         // 线路上填的探测地址给它展开出来的每一条路径（以前这里写死 null，编辑框里填了也被丢掉）
         probe: line.probe ?? null,
         dial: null,

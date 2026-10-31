@@ -1,7 +1,7 @@
 import { createContext, useContext } from "react";
 
 /*
-  线路编辑器里每段后面的毫秒从哪来（2.3.497）：编辑器自己不碰接口。面板里由 LineEditorShell 套上
+  线路编辑器里每段后面的毫秒从哪来（2.3.497）：编辑器自己不碰接口。面板里由用到编辑器的地方（线路详情、规则表单）套上
   SegmentLatencyProvider（这条线路最近一轮探测 + 点 ⚡ 逐段测，server/lineSegmentLatency.ts）；
   单测里没有它，编辑器照样画出来，只是没有数。
 */

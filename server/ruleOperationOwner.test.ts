@@ -78,8 +78,10 @@ test("administrator rule operations use the selected owner without bypassing use
       await assert.rejects(() => customer.update({ id: selected.id, name: "mine now" }), /管理员管理/);
       await assert.rejects(() => customer.toggle({ id: selected.id, isEnabled: false }), /管理员管理/);
       await assert.rejects(() => customer.delete({ id: selected.id }), /管理员管理/);
-      // Rules the user creates themselves stay fully editable.
-      const own = await customer.create({ ...grouped, sourcePort: 17600 });
+      // Rules the user creates themselves stay fully editable. The port must not be one the random picks
+      // above already took (selected.sourcePort, random.port) — a fixed 17600 collided about 1 run in 500.
+      const ownPort = [17600, 17601, 17602].find((port) => port !== selected.sourcePort && port !== random.port);
+      const own = await customer.create({ ...grouped, sourcePort: ownPort });
       await customer.update({ id: own.id, name: "self-service edited" });
       await customer.toggle({ id: own.id, isEnabled: false });
     } finally {

@@ -1,5 +1,5 @@
 import { formatFailoverEndpoint } from "@shared/failoverTargets";
-import { describeRouteIssue, normalizeRouteDelivery, type RouteMode } from "@shared/routeGroup";
+import { describeRouteIssue, normalizeRouteDelivery, routeSwitchWithinSeconds, type RouteMode } from "@shared/routeGroup";
 import type { RouteStatus, RouteStatusPath } from "./RouteGroupSheet";
 
 /*
@@ -28,9 +28,9 @@ export const ROUTE_LINE_MODE_LABEL: Record<RouteMode, string> = {
   manual: "人工指定",
 };
 
-/** 坏了几秒内切走：异常持续够久才切，最少按 5 秒说（探测本身也要一轮）。 */
-export function routeSwitchSeconds(policy: { failoverSeconds?: number | null } | null | undefined) {
-  return Math.max(5, Math.round(Number(policy?.failoverSeconds || 0)));
+/** 坏了几秒内切走：和编辑框「怎么切」下面那句同一个算法（shared/routeGroup 的 routeSwitchWithinSeconds）。 */
+export function routeSwitchSeconds(policy: { failoverSeconds?: number | null; failureThreshold?: number | null } | null | undefined) {
+  return routeSwitchWithinSeconds(policy || {});
 }
 
 /** 「线路」那一行右边：这条规则按什么切。 */
@@ -102,10 +102,16 @@ export function lineLongName(index: number) {
   return index === 0 ? "主线路" : `备 ${index}`;
 }
 
-/** 行上的那条链：Po0 → 隧道 Jinx → 落地。 */
+/** 落地写成什么（图上的框、行上的链）：名字（我的节点 / 自己的机器），没有就写地址，地址也没有才写「落地」。 */
+export function routeLandingName(path: Path | null | undefined) {
+  if (!path) return "落地";
+  return String(path.destName || "").trim() || String(path.dest?.ip || "").trim() || "落地";
+}
+
+/** 行上的那条链：Po0 → 隧道 Jinx → HK 落地。 */
 export function routePathText(status: RouteStatus, path: Path, options: { tunnelPrefix?: boolean } = {}) {
   const hops = path.hops.map((hop) => (hop.viaTunnel && options.tunnelPrefix !== false ? `隧道 ${hop.name}` : hop.name));
-  return [status.entry?.name || "入口", ...hops, "落地"].join(" → ");
+  return [status.entry?.name || "入口", ...hops, routeLandingName(path)].join(" → ");
 }
 
 /** 落地写什么：自己的地址，没有就是「规则目标」。 */

@@ -249,8 +249,8 @@ const failoverInputShape = {
   failoverPinnedUntil: z.number().int().min(0).nullable().optional(),
   /** 按实测延迟自动择优。 */
   failoverPreferFastest: z.boolean().optional(),
-  failoverSeconds: z.number().int().min(10).max(3600).optional(),
-  recoverSeconds: z.number().int().min(10).max(3600).optional(),
+  failoverSeconds: z.number().int().min(ROUTE_GUARD_LIMITS.failoverSeconds.min).max(ROUTE_GUARD_LIMITS.failoverSeconds.max).optional(),
+  recoverSeconds: z.number().int().min(ROUTE_GUARD_LIMITS.recoverSeconds.min).max(ROUTE_GUARD_LIMITS.recoverSeconds.max).optional(),
   autoFailback: z.boolean().optional(),
 } as const;
 

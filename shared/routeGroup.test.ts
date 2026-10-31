@@ -153,7 +153,9 @@ test("换模式：参数按模板预填，定时和混合补默认时段，手�
   assert.equal(weighted.pin, null);
   const smart = applyRouteMode(base, "smart", { timezone: "UTC", pathCount: 2 });
   assert.equal(smart.scoreMargin, 10);
-  assert.equal(smart.minHoldSeconds, 600);
+  // 整链最优要快：明显更快持续 30 秒就切，切过去驻留 1 分钟（以前 3 分钟 + 10 分钟，看着像「选了没生效」）
+  assert.equal(smart.scoreHoldSeconds, 30);
+  assert.equal(smart.minHoldSeconds, 60);
   assert.equal(smart.schedule, null);
   // 已经配好的时段表换到混合模式时要保留，不能被默认时段覆盖。
   const hybrid = applyRouteMode(scheduled, "hybrid", { timezone: "UTC", pathCount: 3 });
@@ -191,4 +193,19 @@ test("路径怎么走的一句话，和原因的翻译", () => {
   assert.equal(describeRouteReason("something else"), "something else");
   assert.deepEqual(routeWeightShares([{ weight: 70 }, { weight: 30 }]), [70, 30]);
   assert.deepEqual(routeWeightShares([{ weight: 0 }, { weight: 0 }]), [50, 50]);
+});
+
+test("切换下限放低：异常多久切 / 恢复观察最少 1 秒，择优持续最少 5 秒；N 秒内切走按探测间隔算", async () => {
+  const { ROUTE_GUARD_LIMITS, routeProbeIntervalSeconds, routeSwitchWithinSeconds } = await import("./routeGroup");
+  assert.equal(ROUTE_GUARD_LIMITS.failoverSeconds.min, 1);
+  assert.equal(ROUTE_GUARD_LIMITS.recoverSeconds.min, 1);
+  assert.equal(ROUTE_GUARD_LIMITS.scoreHoldSeconds.min, 5);
+  // Agent 探测间隔是「异常多久切」的一半，夹在 1–5 秒
+  assert.equal(routeProbeIntervalSeconds(1), 1);
+  assert.equal(routeProbeIntervalSeconds(3), 1.5);
+  assert.equal(routeProbeIntervalSeconds(60), 5);
+  // 默认（连续 2 次、3 秒）：1.5 秒探一轮，5 秒内切走
+  assert.equal(routeSwitchWithinSeconds({ failoverSeconds: 3, failureThreshold: 2 }), 5);
+  assert.equal(routeSwitchWithinSeconds({ failoverSeconds: 1, failureThreshold: 1 }), 2);
+  assert.equal(routeSwitchWithinSeconds({ failoverSeconds: 10, failureThreshold: 3 }), 15);
 });

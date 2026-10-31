@@ -176,3 +176,13 @@ test("编辑框只认线路：存的线路 → 存的路径 → 老 failover 列
   assert.equal(empty.length, 1);
   assert.equal(empty[0].layers.length, 0);
 });
+
+test("按权重：一条线路一个数，展开出来的几条路径一起分它那一份（候选多的线路不会多分）", () => {
+  const main = line("main", { weight: 60, layers: [newRouteLayer({ kind: "pool", poolId: 7 })] }); // 池里能用的 2 台 → 2 条路径
+  const backup = line("bk", { weight: 40, layers: [newRouteLayer({ kind: "hosts", hostIds: [6] })] });
+  const { paths } = expandRouteLines([main, backup], ctx());
+  const sum = (key: string) => paths.filter((path) => path.lineKey === key).reduce((total, path) => total + path.weight, 0);
+  assert.deepEqual(paths.filter((path) => path.lineKey === "main").map((path) => path.weight), [30, 30]);
+  assert.equal(sum("main"), 60);
+  assert.equal(sum("bk"), 40);
+});

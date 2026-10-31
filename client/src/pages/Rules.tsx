@@ -160,7 +160,6 @@ import {
   routeGroupForwardTypeSupported,
   routeGroupOf,
   routeGroupTunnelModeSupported,
-  routePathLetter,
   validateRouteGroup,
 } from "@shared/routeGroup";
 import {
@@ -2478,7 +2477,7 @@ function RulesContent() {
       // 只说做了什么，不说「已生效」：机器离线时要等它连上才会照做。
       toast.success(variables.failoverPinnedIndex === null || variables.failoverPinnedIndex === undefined
         ? "已交回自动"
-        : `已强制走路径 ${routePathLetter(variables.failoverPinnedIndex)}`);
+        : "已手动指定：调度这条线路的机器收到就切过去");
     },
     onError: (error) => toast.error(error.message || "操作失败"),
   });
@@ -8496,10 +8495,7 @@ function RulesContent() {
                   )}
                 </div>
               </div>
-              {/*
-                线路组的编辑只有一个地方：和线路详情里「编辑」同一个框、同一个编辑器（LineEditorShell）。
-                表单里只放一行摘要和「编辑线路」；框里点「完成」写回表单，跟着规则一起保存。
-              */}
+              {/* 线路组就在这一页里改（和线路详情第一页是同一个编辑器），跟着规则一起保存 */}
               {form.failoverEnabled && form.routeGroup && (
                 <RuleLineGroupField
                   value={form.routeGroup}

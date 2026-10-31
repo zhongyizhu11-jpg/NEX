@@ -5,6 +5,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { newRouteGroupDraft, routeGroupRuleFields, routePolicyOf, type RouteGroup } from "@shared/routeGroup";
 import { describeRoutePolicy } from "@shared/routePolicy";
 import { RouteGroupPanel, type RouteEvent, type RouteStatus, type RouteStatusPath } from "./RouteGroupSheet";
+import { RouteLineDiagram } from "./RouteLineDiagram";
+import { pinDurationSeconds, routeLineStatusControls } from "./RouteLineOverview";
 
 // 2026-09-22（星期二）上海 20:00：在「工作日 18:00–01:00」里。
 const NOW = Date.UTC(2026, 8, 22, 12, 0, 0);
@@ -150,7 +152,7 @@ test("调度计划：策略模板、此刻起作用的那一行、切换保护�
   assert.match(html, /到点前 5 分钟先预热预检，预检不过不切/);
   assert.match(html, /计划切换预热/);
   assert.match(html, /旧连接[^]*?平滑切换/);
-  assert.match(html, /探测连续失败 3 次才算异常/);
+  assert.match(html, /探测连续失败 2 次才算异常，异常持续 3 秒就切走/);
 });
 
 test("最近切换：时间、从哪条到哪条、原因；计划切换未执行写明继续用原路径", () => {
@@ -261,4 +263,53 @@ test("纯 UDP：调度计划里策略那句和旧会话都按会话说", () => {
   assert.doesNotMatch(udp, /新连接按权重分到各条路径/);
   const both = renderFor({ ...weighted, protocol: "both" }, { ...ready, protocol: "both" }, { isOnline: true, agentVersion: "2.2.199" });
   assert.match(both, /负载均衡 · 权重负载：新连接按权重分到各条路径，旧连接不动/);
+});
+
+test("线路详情里直接改：编辑器每条线路后面是此刻的状态和立刻生效的暂停；还没保存的新线路没有（照旧是勾）", () => {
+  const paused: string[] = [];
+  const onPause = (lineKey: string, value: boolean) => { paused.push(`${lineKey}:${value}`); };
+  const backup = renderToStaticMarkup(<>{routeLineStatusControls(status(), group.paths[1].key, onPause)}</>);
+  assert.match(backup, /data-testid="route-line-state"[^>]*>[^]*使用中/, "在走的那条写「使用中」");
+  assert.match(backup, /aria-label="暂停线路 备用线路"/, "暂停按钮还在，不用保存");
+  const main = renderToStaticMarkup(<>{routeLineStatusControls(status(), group.paths[0].key)}</>);
+  assert.match(main, /待命/);
+  assert.doesNotMatch(main, /route-line-pause/, "只能看的时候没有暂停");
+  assert.equal(routeLineStatusControls(status(), "new-line-not-saved"), null, "还没保存的新线路：没有状态，编辑器照旧给「参与切换」的勾");
+  assert.equal(routeLineStatusControls(null, group.paths[0].key), null, "状态还没读到");
+});
+
+test("分层图：落地是最后一列、一直画到右边，后面没有「目标」小圆点；落地写全名", () => {
+  // 和用户那条一样：主线路、备用各经一台中转（一列中转）
+  const landing = status({}, [
+    path(0, { dest: { ip: "hkboil.ddos.top", port: 24895 }, active: true }),
+    path(1, { active: false, hops: path(1).hops.slice(0, 1) }),
+  ]);
+  const html = renderToStaticMarkup(<RouteLineDiagram status={landing} modeLabel="整链最优" timeZone={TZ} />);
+  assert.doesNotMatch(html, />目标</, "表头没有「目标」");
+  assert.doesNotMatch(html, /<circle[^>]*r="7"/, "没有目标圆点");
+  assert.match(html, />hkboil\.ddos\.top</, "一列中转时落地名字写得下，不截");
+  const viewBox = Number(/viewBox="0 0 (\d+)/.exec(html)?.[1]);
+  const rects = Array.from(html.matchAll(/<rect x="([\d.]+)" y="[\d.]+" width="([\d.]+)"/g)).map((match) => Number(match[1]) + Number(match[2]));
+  assert.ok(Math.max(...rects) <= viewBox && Math.max(...rects) >= viewBox - 4, `落地框贴着右边（${Math.max(...rects)} / ${viewBox}）`);
+});
+
+test("手动换线路：点状态胶囊就能切到这条；指定了的那条胶囊带「指定」；没给切换（按权重 / 只能看）就是普通胶囊", () => {
+  const lineSwitch = { pinIndex: null, pinUntilMs: null, pending: false, onPin: noop, onUnpin: noop };
+  const idle = renderToStaticMarkup(<>{routeLineStatusControls(status(), group.paths[0].key, undefined, false, lineSwitch)}</>);
+  assert.match(idle, /aria-label="手动切换：主线路"[^>]*data-testid="route-line-switch"[^]*待命/, "胶囊本身就是切换按钮");
+  const pinned = renderToStaticMarkup(<>{routeLineStatusControls(status(), group.paths[1].key, undefined, false, { ...lineSwitch, pinIndex: 1 })}</>);
+  assert.match(pinned, /使用中 · 指定/);
+  const plain = renderToStaticMarkup(<>{routeLineStatusControls(status(), group.paths[0].key)}</>);
+  assert.doesNotMatch(plain, /route-line-switch/);
+});
+
+test("手动切的时长自己填：几分钟 / 几小时，空、0、负数、超过 30 天都不行", () => {
+  assert.equal(pinDurationSeconds("2", "hour"), 7200);
+  assert.equal(pinDurationSeconds("1.5", "hour"), 5400);
+  assert.equal(pinDurationSeconds("30", "min"), 1800);
+  assert.equal(pinDurationSeconds("", "hour"), null);
+  assert.equal(pinDurationSeconds("0", "min"), null);
+  assert.equal(pinDurationSeconds("-3", "hour"), null);
+  assert.equal(pinDurationSeconds("721", "hour"), null, "超过 30 天：选「不限时」");
+  assert.equal(pinDurationSeconds("720", "hour"), 720 * 3600);
 });

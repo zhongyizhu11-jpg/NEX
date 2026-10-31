@@ -12,12 +12,12 @@ import {
   type RouteMode,
 } from "@shared/routeGroup";
 import { describeRoutePolicy } from "@shared/routePolicy";
-import { routeLinesFromPaths } from "@shared/routeLines";
+import { newRouteLine, routeLinesFromPaths } from "@shared/routeLines";
 import { RouteGroupFields, lineModeHint, routeGroupPayload, summarizeRouteAdvanced, type RouteGroupDraft } from "./RouteGroupFields";
 import { SegmentLatencyContext, type SegmentLatencyHook } from "./segmentLatency";
 
 /*
-  编辑线路组（效果图 ②）：线路详情的「编辑」和规则表单的「编辑线路」是同一个编辑器。2.3.497 起
+  编辑线路组（效果图 ②）：线路详情第一页和规则表单里是同一个编辑器（2.3.498 起都是直接在页里改）。2.3.497 起
   只认线路：老草稿只有路径的，打开就按路径还原成线路。
 */
 
@@ -76,7 +76,7 @@ test("老草稿只有路径：打开就是线路的样子（主线路一张卡�
   assert.match(html, /data-testid="route-lines"/);
   assert.doesNotMatch(html, /data-testid="route-paths"|data-testid="route-preview"|data-testid="route-plain"|添加路径/, "老的路径编辑、预览卡、那句大白话都不在了");
   assert.match(html, /<span[^>]*>入口<\/span>[^]*?HK entry 01/, "主线路卡从入口写起");
-  assert.match(html, /第 1 层[^]*?JP relay 02/, "一跳一层");
+  assert.match(html, />中转<\/span>[^]*?JP relay 02/, "一跳一行，叫「中转」（不再是「第 1 层」）");
   assert.match(html, /title="规则自己的目标"[^]*?10\.95\.0\.10:443/, "没写落地的走规则自己的目标");
   assert.match(html, /HK entry 01 → SG relay 03 → JP relay 02 → 落地/, "备用折成一行：整条链怎么走");
   assert.match(html, /\+ 添加备用线路/);
@@ -98,10 +98,10 @@ test("怎么切四格，选中的那格下面一句它会怎么做；手动主�
   const smart = render(group("smart"));
   for (const segment of ["稳定优先", "整链最优", "按权重", "按时段"]) assert.match(smart, new RegExp(`role="radio"[^>]*>${segment}<`), `少了「${segment}」`);
   assert.match(smart, /aria-checked="true"[^>]*>整链最优</);
-  assert.match(smart, /平时走整条链最快的/);
+  assert.match(smart, /坏了 \d+ 秒内切走 · /, "选中那格下面一行要点");
   const hybrid = render(group("hybrid"));
   assert.match(hybrid, /aria-checked="true"[^>]*>按时段</, "混合落在「按时段」那格");
-  assert.match(hybrid, /aria-label="时段外走整条链最快的" data-testid="route-line-hybrid" checked=""|checked=""[^>]*data-testid="route-line-hybrid"/);
+  assert.match(hybrid, /aria-label="时段外挑最快的" data-testid="route-line-hybrid" checked=""|checked=""[^>]*data-testid="route-line-hybrid"/);
   const manual = render(group("manual"));
   assert.match(manual, /aria-checked="true"[^>]*>稳定优先</, "手动主备落在「稳定优先」那格");
   assert.match(manual, /data-testid="route-line-manual"/);
@@ -136,17 +136,22 @@ test("按权重：分法四选一，按权重时一条线路一个权重和百�
   assert.doesNotMatch(render(group("weighted", { spread: "round_robin" })), /data-testid="route-line-weights"/, "轮流不用填权重");
 });
 
-test("「怎么切」下面那一句：平时走哪条、坏了几秒内切走、恢复多久切回", () => {
+test("「怎么切」下面那一行只说要点：坏了几秒内切走、多久切回（四格已经写了是哪种）", () => {
   const hint = (mode: RouteMode, patch: Partial<RouteGroup["policy"]> = {}, perSession = false) => lineModeHint(group(mode, patch).policy, perSession);
-  assert.equal(hint("failover"), "平时只走主线路；坏了 10 秒内切走，主线路恢复稳定 5 分钟后切回。");
-  assert.match(hint("failover", { autoFailback: false }), /主线路恢复后不自动切回/);
-  assert.match(hint("smart"), /^平时走整条链最快的；坏了 \d+ 秒内切走/);
-  assert.match(hint("scheduled"), /^按时段表定首选，时段外走主线路/);
-  assert.match(hint("hybrid"), /到点前先预热预检）?，时段外走整条链最快的/);
-  assert.match(hint("manual"), /^一直走你指定的那条/);
-  assert.match(hint("weighted"), /^新连接按权重分到各条线路/);
-  assert.match(hint("weighted", {}, true), /^新会话按权重分到各条线路/, "纯 UDP 按会话说");
-  assert.match(hint("failover", { failoverSeconds: 2 }), /坏了 5 秒内切走/, "再短也按 5 秒说：探测本身就是 5 秒一轮");
+  assert.equal(hint("failover"), "坏了 5 秒内切走 · 5 分钟后切回");
+  assert.equal(hint("failover", { autoFailback: false }), "坏了 5 秒内切走 · 不自动切回");
+  assert.match(hint("smart"), /^坏了 \d+ 秒内切走 · /);
+  assert.match(hint("scheduled"), /^按时段表走 · 坏了/);
+  assert.match(hint("hybrid"), /^时段外挑最快的 · 坏了/);
+  assert.match(hint("manual"), /^走指定的那条 · 坏了/);
+  assert.equal(hint("weighted"), "新连接按权重分 · 坏了的先跳过");
+  assert.equal(hint("weighted", {}, true), "新会话按权重分 · 坏了的先跳过", "纯 UDP 按会话说");
+  for (const mode of ["failover", "smart", "scheduled", "hybrid", "manual", "weighted"] as RouteMode[]) {
+    assert.ok(hint(mode).length <= 24, `一行放得下：${hint(mode)}`);
+  }
+  // Agent 按「异常多久切」的一半探（1–5 秒）：最坏是刚探完就坏，等下一轮探到、再连续失败够次数、持续够时间
+  assert.match(hint("failover", { failoverSeconds: 1, failureThreshold: 1 }), /坏了 2 秒内切走/);
+  assert.match(hint("failover", { failoverSeconds: 30, failureThreshold: 3 }), /坏了 35 秒内切走/);
 });
 
 test("纯 UDP 的编辑框：分法和旧会话三选一都按会话说，TCP+UDP 照旧按连接", () => {
@@ -154,12 +159,12 @@ test("纯 UDP 的编辑框：分法和旧会话三选一都按会话说，TCP+UD
   assert.match(udp, /aria-label="新会话怎么分"/);
   assert.match(udp, /新会话轮流走每一条/);
   assert.match(udp, /切换时旧会话怎么办[^]*?平滑切换[^]*?已有的会话留在原路径[^]*?快速切换[^]*?丢掉它上面的会话[^]*?强制切换/);
-  assert.match(udp, /新会话按权重分到各条线路/);
+  assert.match(udp, /新会话按权重分 · /);
   assert.doesNotMatch(udp, /切换时旧连接怎么办|新连接轮流走每一条|新连接按权重分/);
   const both = render(group("weighted", { spread: "round_robin" }), true, "both");
   assert.match(both, /aria-label="新连接怎么分"/);
   assert.match(both, /切换时旧连接怎么办/);
-  assert.match(both, /新连接按权重分到各条线路/);
+  assert.match(both, /新连接按权重分 · /);
 });
 
 test("高级策略默认折起来，折叠条上只列改过模板值的项；改过的打开时直接展开", () => {
@@ -259,4 +264,86 @@ test("每段的毫秒从外面给（编辑框套的那一层）：给了就写�
   assert.match(html, />41</);
   assert.match(html, /data-testid="route-line-test-total"[^>]*>刚测的这条整链约 <b[^>]*>64 ms/);
   assert.doesNotMatch(render(group()), /data-testid="route-line-test-total"/, "没套那一层（单测）就没有数，照样画得出来");
+});
+
+test("线路详情里直接改：给了每条线路的状态，就替掉备用行上「参与切换」的勾；还没保存的新线路返回 null，照旧是勾", () => {
+  const draft = group();
+  const lines = [...routeLinesFromPaths(draft.paths), newRouteLine(2)];
+  const known = new Set(lines.slice(0, 2).map((line) => line.key));
+  const html = render({ ...draft, lines }, false, "tcp", {
+    renderLineStatus: (line, index) => (known.has(line.key) ? <span data-testid="line-status">状态{index}</span> : null),
+  });
+  assert.equal(count(html, /data-testid="line-status"/g), 2, "主线路、备 1 各一份");
+  assert.match(html, /状态0[^]*?aria-label="主线路的名字"[^]*?data-testid="route-line-test"/, "主线路的状态在那一行上，名字和 ⚡ 在展开的那块里");
+  assert.equal(count(html, /参与切换/g), 1, "只剩还没保存的备 2 是勾");
+  assert.match(html, /aria-label="备 2 参与切换"/);
+});
+
+test("收着的备用行只有路径和状态（⚡ 在展开的那块里）；一跳一个候选不问怎么挑；不再给「可跳过」的勾，勾过的能取消", () => {
+  const html = render(group(), false);
+  assert.equal(count(html, /data-testid="route-line-test"/g), 1, "只有主线路卡上有 ⚡");
+  assert.match(html, /data-testid="route-line-open"/, "备用行整行点开");
+  assert.doesNotMatch(html, /最低延迟|按顺序（/, "一个候选没得挑");
+  assert.doesNotMatch(html, /可跳过/);
+  assert.match(html, /\+ 加中转/, "「再加一层」改叫「加中转」，在链上最后一个中转和落地之间");
+  const lines = routeLinesFromPaths(group().paths);
+  lines[0] = { ...lines[0], layers: [{ ...lines[0].layers[0], kind: "hosts", hostIds: [2, 3], skippable: true }] };
+  const multi = render({ ...group(), lines }, false);
+  assert.match(multi, /aria-label="中转怎么挑"/, "两个候选才问怎么挑");
+  assert.match(multi, /aria-label="中转可跳过，点一下取消"/, "老配置勾过的照样显示，点一下取消");
+});
+
+test("线路详情里主线路也收成一行：都收着，点开才改；此刻在走的那条描边", () => {
+  const draft = group();
+  const lines = routeLinesFromPaths(draft.paths);
+  const html = render({ ...draft, lines }, false, "tcp", {
+    renderLineStatus: (line) => <span data-testid="line-status">{line.key}</span>,
+    activeLineKey: lines[1].key,
+    startCollapsed: true,
+  });
+  assert.equal(count(html, /data-testid="route-line-open"/g), 2, "主线路、备 1 都是一行");
+  assert.match(html, /aria-expanded="false" aria-label="展开改主线路：/);
+  assert.doesNotMatch(html, /aria-label="主线路的名字"|data-testid="route-line-test"/, "收着的时候名字和 ⚡ 都不出来");
+  assert.equal(count(html, /data-state="on"/g), 1, "只有在走的那条描边");
+  assert.match(html, /data-state="on"[^>]*>(?:(?!data-testid="route-line-open")[^])*?备 1/, "描边的是备 1（此刻在走的）");
+});
+
+test("线路展开后是一条竖着的链：入口 → 中转 → 加中转 → 落地；落地还是规则目标时是「换落地」", () => {
+  const html = render(group(), false);
+  const chain = html.slice(html.indexOf('data-testid="route-line-chain"'));
+  const order = ["入口", "中转", "+ 加中转", "落地"].map((text) => chain.indexOf(`>${text}<`));
+  assert.ok(order.every((index) => index > 0), `都在链上：${order.join(",")}`);
+  assert.deepEqual([...order].sort((a, b) => a - b), order, "按链的顺序摆");
+  assert.match(chain, />换落地</, "落地还是规则目标：换一个");
+  assert.match(html, /data-testid="route-line-test"[^>]*>[^]*?测一下/, "⚡ 带字：测一下");
+});
+
+test("节点池那一跳：平时一个「池 · 名字 · N 台」（池里的机器不和别的混在一排），点开才是一列", () => {
+  const pools = [{ id: 7, name: "香港中转池", role: "relay", members: [
+    { hostId: 2, name: "JP relay 02", online: true, maintenance: false },
+    { hostId: 3, name: "SG relay 03", online: true, maintenance: true },
+  ] }];
+  const draft = group();
+  const lines = routeLinesFromPaths(draft.paths);
+  lines[0] = { ...lines[0], layers: [{ ...lines[0].layers[0], kind: "pool", poolId: 7, hostIds: [], tunnelIds: [] }] };
+  const html = render({ ...draft, lines }, false, "tcp", { pools });
+  assert.match(html, /data-testid="route-line-pool"[^>]*>[^]*?池 · 香港中转池 · 2 台/);
+  assert.match(html, /aria-expanded="false"[^>]*data-testid="route-line-pool"|data-testid="route-line-pool"[^>]*aria-expanded="false"|aria-expanded="false" title="看池里有哪几台"/);
+  assert.doesNotMatch(html, /data-testid="route-line-pool-members"/, "收着：池里的机器不摊开");
+  assert.doesNotMatch(html, /route-line-add-candidate/, "池那一跳没有「+ 并列」");
+  // 机器那一跳：「+ 并列」只放机器、隧道，菜单里没有节点池（换池在点机器的菜单里）
+  const plain = render(draft, false, "tcp", { pools });
+  assert.match(plain, /data-testid="route-line-add-candidate"/);
+});
+
+test("同一跳并列的几台在展开后放进一个胶囊（Jinx / jinx）：胶囊里挑一台；收起那一行照旧", () => {
+  const draft = group();
+  const lines = routeLinesFromPaths(draft.paths);
+  lines[0] = { ...lines[0], layers: [{ ...lines[0].layers[0], kind: "hosts", hostIds: [2, 3] }] };
+  const html = render({ ...draft, lines }, false);
+  assert.match(html, /data-grouped="true"[^>]*>[^]*?JP relay 02[^]*?>\/<[^]*?SG relay 03/, "两台在一个胶囊里，用 / 隔开");
+  assert.match(html, /data-grouped="true"[^]*?aria-label="中转怎么挑"/, "怎么挑在胶囊下面一行");
+  assert.match(html, /HK entry 01 → JP relay 02 等 2 个 → 落地/, "收起那一行的写法不变");
+  const single = render(group(), false);
+  assert.doesNotMatch(single, /data-grouped="true"/, "只有一台：普通胶囊");
 });

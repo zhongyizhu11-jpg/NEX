@@ -3,6 +3,7 @@ import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip as RToolti
 
 import { LatencyStabilityStats } from "@/components/LatencyStabilityStats";
 import { Skeleton } from "@/components/ui/skeleton";
+import { lineChipClass } from "@/features/lines/LineUi";
 import { formatStatLatency, formatStatPercent, getLatencyYAxisMax, getLatencyYAxisTicks } from "@/lib/latencyChart";
 import { formatLatencyTimeLabel } from "@/lib/latencyTimeLabel";
 import { routeQualityStats, type RouteQualityPoint } from "@/lib/routeQuality";
@@ -63,7 +64,7 @@ export function RouteQualityHistory({ ruleId, enabled, activeKey }: { ruleId: nu
   const yTicks = getLatencyYAxisTicks(yMax);
 
   return (
-    <section className="flex min-w-0 flex-col gap-2" data-testid="route-quality-history">
+    <section className="fx-line-ui flex min-w-0 flex-col gap-2" data-testid="route-quality-history">
       <div className="flex flex-wrap items-center justify-between gap-2 px-1">
         <p className="text-secondary-type font-semibold text-foreground">线路质量</p>
         <div className="flex items-center gap-1" role="group" aria-label="时间范围">
@@ -90,10 +91,7 @@ export function RouteQualityHistory({ ruleId, enabled, activeKey }: { ruleId: nu
               key={path.key}
               type="button"
               aria-pressed={selected?.key === path.key}
-              className={cn(
-                "max-w-full truncate rounded-[var(--fx-radius-control)] border px-2 py-0.5 text-meta transition-colors",
-                selected?.key === path.key ? "border-primary bg-primary/10 text-foreground" : "border-border text-muted-foreground hover:bg-muted",
-              )}
+              className={lineChipClass(selected?.key === path.key ? "sel" : "default", "truncate")}
               onClick={() => setPickedKey(path.key)}
             >
               {path.letter} {path.name}

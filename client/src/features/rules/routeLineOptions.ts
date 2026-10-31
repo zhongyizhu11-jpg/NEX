@@ -1,6 +1,5 @@
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "../../../../server/routers";
-import type { RouteLine } from "@shared/routeLines";
 import type { RoutePolicyRule } from "@shared/routePolicy";
 import type { RouteHostOption } from "./RouteGroupFields";
 import type { RouteLinePool, RouteLineTunnel } from "./RouteLinesEditor";
@@ -67,21 +66,4 @@ export function routeLineTunnelsOf(tunnels: readonly TunnelOptionRow[] | null | 
       mode: tunnel.mode ? String(tunnel.mode) : null,
       relayMode: tunnel.relayMode ? String(tunnel.relayMode) : null,
     }));
-}
-
-/** 一条线路的样子，一行字：「Po0 → 隧道 Jinx → jinx(39.9y) 等 2 个 → 落地」（规则表单里的摘要用）。 */
-export function routeLineChainText(line: RouteLine, ctx: { entryName: string; hostName: (id: number) => string; pools: readonly RouteLinePool[]; tunnels: readonly RouteLineTunnel[] }) {
-  const parts = [ctx.entryName];
-  for (const layer of line.layers) {
-    if (layer.kind === "pool") {
-      parts.push(ctx.pools.find((pool) => pool.id === layer.poolId)?.name || "节点池");
-      continue;
-    }
-    const tunnel = layer.tunnelIds[0] ? ctx.tunnels.find((item) => item.id === layer.tunnelIds[0]) : null;
-    const first = tunnel ? `隧道 ${ctx.hostName(tunnel.exitHostId)}` : layer.hostIds[0] ? ctx.hostName(layer.hostIds[0]) : "";
-    const count = layer.tunnelIds.length + layer.hostIds.length;
-    if (first) parts.push(count > 1 ? `${first} 等 ${count} 个` : first);
-  }
-  parts.push("落地");
-  return parts.join(" → ");
 }
