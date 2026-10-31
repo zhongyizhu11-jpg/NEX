@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState, type Ref } from "react";
 import { ChevronDown } from "lucide-react";
 
 import { SortableItem, SortableReorderContext, useSortableReorder } from "@/components/SortableDragHandle";
@@ -17,12 +17,11 @@ import {
   LineSec,
   LineZapGlyph,
 } from "@/features/lines/LineUi";
-import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { formatFailoverEndpoint, parseFailoverEndpoint } from "@shared/failoverTargets";
 import { MAX_ROUTE_HOPS, MAX_ROUTE_PATHS, defaultRoutePathName, describeRouteIssue, type RoutePath } from "@shared/routeGroup";
 import { MAX_LAYER_CANDIDATES, MAX_LINE_DESTS, expandRouteLines, newRouteLayer, newRouteLine, type RouteLayer, type RouteLine } from "@shared/routeLines";
-import type { RouteStatus } from "./RouteGroupSheet";
+import { segmentKey, useSegmentLatency } from "./segmentLatency";
 
 /*
   编辑线路组（2.3.496，照效果图 ②「编辑：主线路 + 有序备用」）：
@@ -30,9 +29,10 @@ import type { RouteStatus } from "./RouteGroupSheet";
     主线路一张卡：入口 / 第 N 层 / 落地，一层里几个候选（机器、隧道可以混着放，或者一个节点池），
     按整条链的延迟挑（「最低延迟」）或按顺序；「可跳过」= 这一层全坏了就直连下一层。
     下面是有序的备用：一行一条，拖动排序，点开改；右边小闪电逐段测、勾掉就不参与。
-    再下面几个快捷：添加备用、经某台机器、直连落地。
+    再下面一个「添加备用线路」菜单：空白的、直连落地、经某台机器、经某个节点池。
 
-  chip 上的毫秒是右上角小闪电测出来的（server/lineSegmentLatency.ts）：保存前就知道每段多快。
+  chip 上的毫秒：打开就是最近一轮探测的，右上角小闪电逐段测的盖掉它（server/lineSegmentLatency.ts）——
+  保存前就知道每段多快。数从 segmentLatency.ts 的 context 来，编辑器自己不碰接口。
   展开成具体路径（Agent 认的那种）在服务端做；这里同一套函数做一份预览（钉子、时段表按它数）。
 */
 
@@ -40,10 +40,6 @@ export type RouteLineHost = { id: number; name: string; isOnline?: boolean | nul
 export type RouteLinePool = { id: number; name: string; role: string; members: Array<{ hostId: number; name: string; online: boolean; maintenance: boolean }> };
 export type RouteLineTunnel = { id: number; name: string; entryHostId: number; exitHostId: number; mode?: string | null; relayMode?: string | null };
 export type RouteLineNode = { id: number; name: string; address: string; port: number; protocol?: string };
-
-type LatencyMap = Map<string, number | null>;
-
-const segmentKey = (from: number, to: number | "dest") => `${from}>${to}`;
 
 type Candidate = { kind: "tunnel" | "host"; id: number; label: string; to: number; state: string; hint?: string };
 
@@ -62,6 +58,7 @@ export function RouteLinesEditor({
   allowTunnels,
   previewPaths,
   ruleId,
+  upstreamHostIds = [],
 }: {
   lines: RouteLine[];
   onChange: (lines: RouteLine[]) => void;
@@ -79,48 +76,13 @@ export function RouteLinesEditor({
   allowTunnels: boolean;
   previewPaths: RoutePath[];
   ruleId?: number | null;
+  /** 入口前面的机器（隧道规则的隧道入口）：流量已经从它那儿过来了，不拿来当中转建议。 */
+  upstreamHostIds?: number[];
 }) {
   const hostName = (id: number) => hosts.find((host) => host.id === id)?.name || `主机 ${id}`;
-  const [latency, setLatency] = useState<LatencyMap>(new Map());
-  // 打开就有数（效果图里每个候选后面的毫秒）：先用这条线路最近一轮探测的每一段，点 ⚡ 测出来的盖掉它。
-  const routeStatus = trpc.rules.routeStatus.useQuery({ ruleId: Number(ruleId || 0) }, { enabled: Number(ruleId || 0) > 0, staleTime: 15_000, refetchOnWindowFocus: false });
-  const probed = useMemo<LatencyMap>(() => {
-    const map: LatencyMap = new Map();
-    const data = routeStatus.data as RouteStatus | null | undefined;
-    if (!data || !entryHostId) return map;
-    for (const path of data.paths) {
-      const stops: Array<number | "dest"> = [entryHostId, ...path.hops.map((hop) => Number(hop.hostId)), "dest"];
-      stops.slice(1).forEach((to, index) => {
-        const from = stops[index];
-        const ms = index === 0 ? path.latencyMs : path.hops[index - 1]?.latencyMs;
-        const key = segmentKey(Number(from), to);
-        if (typeof ms === "number" && Number.isFinite(ms) && !map.has(key)) map.set(key, ms);
-      });
-    }
-    return map;
-  }, [routeStatus.data, entryHostId]);
-  const latencyOf = (key: string) => (latency.has(key) ? latency.get(key) : probed.get(key));
-  const [testingKey, setTestingKey] = useState<string | null>(null);
-  const [runId, setRunId] = useState<string | null>(null);
+  // 打开就有数（效果图里每个候选后面的毫秒）：最近一轮探测的每一段，点 ⚡ 测出来的盖掉它。
+  const { latencyOf, testingKey, test, lastRun } = useSegmentLatency({ ruleId: ruleId ?? null, entryHostId });
   const [openKey, setOpenKey] = useState<string | null>(null);
-  const start = trpc.lineDiagnostics.segmentLatencyStart.useMutation();
-  const status = trpc.lineDiagnostics.segmentLatencyStatus.useQuery({ runId: runId || "" }, {
-    enabled: !!runId,
-    refetchInterval: (query) => (query.state.data?.done ? false : 1000),
-  });
-  useEffect(() => {
-    const data = status.data;
-    if (!data) return;
-    setLatency((previous) => {
-      const next = new Map(previous);
-      for (const segment of data.segments) {
-        if (segment.status === "running" || segment.status === "pending") continue;
-        next.set(segmentKey(segment.from.hostId, segment.to.hostId ?? "dest"), segment.latencyMs);
-      }
-      return next;
-    });
-    if (data.done) setTestingKey(null);
-  }, [status.data]);
 
   const setLine = (index: number, patch: Partial<RouteLine>) => onChange(lines.map((line, position) => (position === index ? { ...line, ...patch } : line)));
   const setLayer = (lineIndex: number, layerIndex: number, patch: Partial<RouteLayer>) => {
@@ -156,7 +118,7 @@ export function RouteLinesEditor({
   };
 
   /** 小闪电：这条线路每层第一个候选连起来，逐段测。 */
-  const testLine = async (line: RouteLine) => {
+  const testLine = (line: RouteLine) => {
     if (!entryHostId) return;
     const hops: number[] = [];
     const hopVia: Array<number | null> = [];
@@ -169,22 +131,22 @@ export function RouteLinesEditor({
       const parsed = parseFailoverEndpoint(mainAddress);
       return parsed && !("error" in parsed) ? { ip: parsed.host, port: parsed.port } : null;
     })();
-    setTestingKey(line.key);
-    try {
-      const result = await start.mutateAsync({ ruleId: ruleId || undefined, entryHostId, hops, hopVia, dest });
-      setRunId(result.runId);
-    } catch {
-      setTestingKey(null);
-    }
+    test(line.key, { entryHostId, hops, hopVia, dest });
   };
 
   const mainHopIds = new Set(lines[0]?.layers.flatMap((layer) => layer.hostIds) || []);
-  const quickHosts = hosts.filter((host) => host.id !== entryHostId && host.isOnline !== false && !mainHopIds.has(host.id)).slice(0, 3);
-  const addBackup = (layers: RouteLayer[]) => {
+  // 「经 X」的建议：不是入口、不是入口前面那台、在线、主线路里没用；中转池里的排前面
+  const relayPoolHostIds = new Set(pools.filter((pool) => pool.role !== "landing").flatMap((pool) => pool.members.map((member) => member.hostId)));
+  const quickHosts = hosts
+    .filter((host) => host.id !== entryHostId && !upstreamHostIds.includes(host.id) && host.isOnline !== false && !mainHopIds.has(host.id))
+    .sort((left, right) => Number(relayPoolHostIds.has(right.id)) - Number(relayPoolHostIds.has(left.id)))
+    .slice(0, 5);
+  /** 加一条备用（落地和主线路一样）；open = 加完直接展开它，接着挑中转、落地。 */
+  const addBackup = (layers: RouteLayer[], open = false) => {
     if (lines.length >= MAX_ROUTE_PATHS) return;
     const line = newRouteLine(lines.length, { name: defaultRoutePathName(lines.length), layers, dests: lines[0]?.dests || [] });
     onChange([...lines, line]);
-    if (layers.length === 0) setOpenKey(line.key);
+    if (open) setOpenKey(line.key);
   };
 
   /** 一条线路此刻怎么走（每层挑中的那个）：Po0 → jinx(39.9y) → 落地。 */
@@ -205,7 +167,7 @@ export function RouteLinesEditor({
       aria-label={`逐段测一下${lineIndex === 0 ? "主线路" : `备 ${lineIndex}`}`}
       title="测一下：逐段测延迟"
       disabled={!entryHostId || testingKey !== null}
-      onClick={() => void testLine(line)}
+      onClick={() => testLine(line)}
       data-testid="route-line-test"
     >
       <LineZapGlyph className={cn(testingKey === line.key && "animate-pulse text-[var(--fx-accent)]")} />
@@ -354,7 +316,11 @@ export function RouteLinesEditor({
         {line.layers.length === 0 && allowHops ? (
           <>
             <span className="pt-[6px] text-[12px] text-muted-foreground">中转</span>
-            <div className="flex min-w-0 flex-wrap items-center gap-1.5">{addHopMenu(lineIndex, previousHost, "+ 经过中转")}</div>
+            {/* 先说现在是什么（直连），再给加的按钮：以前只有一个虚线的「+ 经过中转」，看不出有没有中转 */}
+            <div className="flex min-w-0 flex-wrap items-center gap-2 pt-[3px]">
+              <span className="text-[12px] text-muted-foreground">不经中转，入口直连落地</span>
+              {addHopMenu(lineIndex, previousHost, "+ 加中转", "py-[2px]")}
+            </div>
           </>
         ) : null}
         <span className="pt-[6px] text-[12px] text-muted-foreground">落地</span>
@@ -401,12 +367,13 @@ export function RouteLinesEditor({
             const open = openKey === line.key;
             return (
               <SortableItem key={line.key} id={line.key}>
-                {({ itemProps, handleProps }) => (
+                {({ itemProps, handleProps: { ref: handleRef, ...handleProps } }) => (
                   <div {...itemProps} data-testid="route-line">
                     <LineRow className={cn(open && "rounded-b-none border-b-transparent")}>
                       <button
                         type="button"
-                        {...(handleProps as any)}
+                        ref={handleRef as Ref<HTMLButtonElement>}
+                        {...handleProps}
                         className="fx-compact-touch -ml-0.5 shrink-0 cursor-grab touch-none px-0.5 text-[14px] leading-none tracking-[-2px] text-muted-foreground/50 active:cursor-grabbing"
                         aria-label={`拖动备 ${lineIndex} 排序`}
                       >
@@ -454,26 +421,42 @@ export function RouteLinesEditor({
           })}
         </div>
       </SortableReorderContext>
+      {/*
+        加备用线路：一个按钮一个菜单。以前是「+ 添加备用」后面跟一排「经 X」「直连落地」小块，
+        一换行就是两行按钮，也看不出它们是在加备用。
+      */}
       <div className="mb-1 mt-[9px] flex flex-wrap items-center gap-1.5">
-        <LineChipButton variant="add" disabled={lines.length >= MAX_ROUTE_PATHS} onClick={() => addBackup([])} data-testid="route-line-add">+ 添加备用</LineChipButton>
-        {allowHops ? quickHosts.map((host) => (
-          <LineChipButton key={host.id} disabled={lines.length >= MAX_ROUTE_PATHS} onClick={() => addBackup([newRouteLayer({ kind: "hosts", hostIds: [host.id] })])}>
-            经 {host.name}
-          </LineChipButton>
-        )) : null}
-        {allowHops && (main?.layers.length || 0) > 0 ? (
-          <LineChipButton disabled={lines.length >= MAX_ROUTE_PATHS} onClick={() => addBackup([])}>直连落地</LineChipButton>
-        ) : null}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <LineChipButton variant="add" disabled={lines.length >= MAX_ROUTE_PATHS} data-testid="route-line-add">
+              {lines.length >= MAX_ROUTE_PATHS ? `最多 ${MAX_ROUTE_PATHS} 条` : "+ 添加备用线路"}
+            </LineChipButton>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="max-h-80 overflow-y-auto">
+            <DropdownMenuItem onSelect={() => addBackup([], true)}>空白的，加完展开自己挑中转和落地</DropdownMenuItem>
+            {allowHops && (main?.layers.length || 0) > 0 ? (
+              <DropdownMenuItem onSelect={() => addBackup([])}>入口直连落地（不经中转）</DropdownMenuItem>
+            ) : null}
+            {allowHops && quickHosts.length > 0 ? (<><DropdownMenuSeparator /><DropdownMenuLabel className="text-[11px]">经一台中转</DropdownMenuLabel></>) : null}
+            {allowHops ? quickHosts.map((host) => (
+              <DropdownMenuItem key={host.id} onSelect={() => addBackup([newRouteLayer({ kind: "hosts", hostIds: [host.id] })])}>经 {host.name}</DropdownMenuItem>
+            )) : null}
+            {allowHops && pools.length > 0 ? (<><DropdownMenuSeparator /><DropdownMenuLabel className="text-[11px]">经一个节点池（池里挑最快的）</DropdownMenuLabel></>) : null}
+            {allowHops ? pools.filter((pool) => pool.role !== "landing").map((pool) => (
+              <DropdownMenuItem key={`p${pool.id}`} onSelect={() => addBackup([newRouteLayer({ kind: "pool", poolId: pool.id })])}>经 {pool.name} · {pool.members.length} 台</DropdownMenuItem>
+            )) : null}
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
-      {status.data && status.data.done && status.data.totalMs !== null ? (
+      {lastRun && lastRun.totalMs !== null ? (
         <p className="mx-1 mt-1 text-[11.5px] text-muted-foreground" data-testid="route-line-test-total">
-          刚测的这条整链约 <b className="font-mono text-foreground">{Math.round(Number(status.data.totalMs))} ms</b>
-          {status.data.segments.some((segment) => segment.viaTunnel) ? "（隧道段按两头机器直连测）" : ""}
+          刚测的这条整链约 <b className="font-mono text-foreground">{Math.round(lastRun.totalMs)} ms</b>
+          {lastRun.viaTunnel ? "（隧道段按两头机器直连测）" : ""}
         </p>
       ) : null}
-      {status.data?.done ? status.data.segments.filter((segment) => segment.error).map((segment, index) => (
-        <p key={index} className="mx-1 text-[11.5px] text-[var(--fx-warn-text)]">{segment.from.name} → {segment.to.name}：{describeRouteIssue(segment.error)}</p>
-      )) : null}
+      {(lastRun?.errors || []).map((item, index) => (
+        <p key={index} className="mx-1 text-[11.5px] text-[var(--fx-warn-text)]">{item.from} → {item.to}：{describeRouteIssue(item.error)}</p>
+      ))}
       {!allowHops ? <p className="mx-1 mt-1 text-[11.5px] text-muted-foreground">转发组上的规则暂不支持经过中转。</p> : null}
     </section>
   );

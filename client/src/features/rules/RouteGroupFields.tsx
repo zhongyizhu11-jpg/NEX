@@ -1,10 +1,9 @@
-import { useState } from "react";
-import { ChevronDown, Plus, Trash2, X } from "lucide-react";
+import { useMemo, useState } from "react";
+import { ChevronDown, Trash2 } from "lucide-react";
 
 import { EntityTag } from "@/components/entity/EntityCard";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { FormField } from "@/components/ui/form-field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -18,11 +17,7 @@ import {
   type FailoverScheduleWindow,
 } from "@shared/failoverSchedule";
 import {
-  MAX_ROUTE_HOPS,
-  MAX_ROUTE_PATHS,
   ROUTE_GUARD_LIMITS,
-  ROUTE_MODES,
-  ROUTE_MODE_INFO,
   ROUTE_SPREADS,
   ROUTE_SPREAD_LABELS,
   ROUTE_SPREAD_SESSION_HINTS,
@@ -30,43 +25,37 @@ import {
   ROUTE_SWITCH_MODE_INFO,
   ROUTE_SWITCH_MODE_SESSION_HINTS,
   applyRouteMode,
-  describeRouteIssue,
-  newRoutePath,
   routePathLabel,
   routePathLetter,
   routeTemplateGuards,
-  routeModeHint,
-  routeWeightShares,
   type RouteEndpoint,
   type RouteGroup,
   type RouteGroupPolicy,
   type RouteMode,
-  type RoutePath,
 } from "@shared/routeGroup";
 import { PIN_DURATION_OPTIONS, formatPolicyClock, formatPolicyDuration, type RoutePolicy } from "@shared/routePolicy";
 import { ConditionBlock, PolicyGroup } from "./PolicyBlocks";
-import { RoutePathCards, buildRoutePreviewStatus } from "./RouteBoard";
 import { LinkSpreadPicker, linkChoiceClass } from "@/features/links/LinkSpreadPicker";
 import { RouteLinesEditor, expandForPreview, type RouteLineHost, type RouteLinePool, type RouteLineTunnel } from "./RouteLinesEditor";
 import { LineCard, LineHint, LineSec, LineSegmented } from "@/features/lines/LineUi";
 import { ROUTE_DELIVERY_INFO, normalizeRouteDelivery, type RouteDelivery } from "@shared/routeGroup";
-import { serializeRouteLines, type RouteLine } from "@shared/routeLines";
+import { newRouteLine, routeLinesFromPaths, serializeRouteLines, type RouteLine } from "@shared/routeLines";
 
 /*
-  编辑框里「线路组」勾上之后的那一块：一个入口 + 多条路径 + 一个调度策略。
-
-  上一版的「主备线路」切的是落地地址：备用只是一个 host:port，要走中转得另建一条转发再把
-  地址抄进来。这里一条线是一条**路径**：入口 → 中转 → … → 落地，中转从主机列表里挑，落地
-  留空就是上面填的目标。中转机上的中继规则由面板按需生成，用户不用管。
+  编辑线路组（效果图 ②）的整块：线路详情里的「编辑」和规则表单里的「编辑线路」都是这一个
+  （外面套的是 RouteLineEditorDialog.tsx 的 LineEditorShell）。
 
   从上往下：
-    1. 线路：每条路径一行 —— 字母、名字、经过哪几台中转、落地。
-    2. 怎么用这些线路：六种策略模板，选一种，切换保护的参数按推荐值预填。定时 / 混合
-       在这里直接配时段表，手动在这里直接选走哪条，权重负载在这里选分法、填权重。
-    3. 一句话：按现在这套设置，流量会怎么走。
-    4. 高级策略：切换保护（连续失败次数、持续多久、恢复稳定多久、最短驻留、切不切回）、
-       择优门槛、计划切换预热、旧连接怎么办、应急人工指定、每条路径的探测地址。
+    1. 线路（RouteLinesEditor）：主线路一张卡（入口 / 一层层中转候选 / 落地），下面有序的备用。
+       中转机上的中继规则由面板按需生成，用户不用管。
+    2. 怎么切：四格（稳定优先 / 整链最优 / 按权重 / 按时段）+ 一句它会怎么做。稳定优先下可以人工
+       指定走哪条（手动主备），按时段下可以时段外择优（混合）；时段表、分法、每条线路的权重就地配。
+       「切换不断连」= 热备。
+    3. 高级策略：几条一起用、切换保护（连续失败次数、持续多久、恢复稳定多久、最短驻留、切不切回）、
+       择优门槛、计划切换预热、旧连接怎么办、应急人工指定、每条线路的探测地址。
        折起来时折叠条上列出改过模板值的项；有改过的，打开编辑框直接展开。
+
+  2.3.497 起只认线路：老草稿只有路径的，打开时按路径还原成线路（routeLinesFromPaths），改了就按线路存。
 */
 
 export type RouteHostOption = {
@@ -76,7 +65,7 @@ export type RouteHostOption = {
   agentVersion?: string | null;
 };
 
-/** 编辑框里的线路组：在 RouteGroup 之外带着线路定义（有它就按线路编辑，paths 是它的预览展开）。 */
+/** 编辑框里的线路组：在 RouteGroup 之外带着线路定义（paths 是线路在本地的预览展开：钉子、时段表按它数）。 */
 export type RouteGroupDraft = RouteGroup & { lines?: RouteLine[] | null };
 
 export type RouteGroupFieldsProps = {
@@ -90,6 +79,8 @@ export type RouteGroupFieldsProps = {
   /** 能不能在线路里放隧道段（隧道规则不行：它的调度在隧道出口之后）。 */
   allowTunnels?: boolean;
   ruleId?: number | null;
+  /** 入口前面的机器（隧道规则的隧道入口）：不拿来当中转建议。 */
+  upstreamHostIds?: number[];
   /** 能当中转的主机（用户看得见的）；入口机器自己会被排除。 */
   hosts: RouteHostOption[];
   /** 能不能加中转；转发组上的规则这一版不行（中继要按入口机各建一份）。 */
@@ -108,10 +99,8 @@ export type RouteGroupFieldsProps = {
   defaultAdvancedOpen?: boolean;
   /** 规则的协议（tcp / udp / both）：只转 UDP 的路径没有握手可探，健康检查的说法不一样。 */
   protocol?: string;
-  /** 「我的节点」：路径的落地可以直接选一个，地址端口由面板从节点解析、节点地址变了跟着改。 */
+  /** 「我的节点」：线路的落地可以直接选一个，地址端口由面板从节点解析、节点地址变了跟着改。 */
   nodeOptions?: RouteNodeOption[];
-  /** 规则的源端口：预览里入口节点写它。 */
-  entrySourcePort?: number;
 };
 
 export type RouteNodeOption = { id: number; name: string; address: string; port: number; protocol?: string };
@@ -227,71 +216,6 @@ export function routeGroupPayload(group: RouteGroupDraft) {
   };
 }
 
-export type RoutePlainOptions = {
-  /** 纯 UDP 规则：Agent 按会话挑路径，没有「连接」，说法换成会话。 */
-  perSession?: boolean;
-};
-
-/** 一两句大白话：按现在这套设置，流量会怎么走。 */
-export function describeRouteGroupPlainly(group: RouteGroup, options: RoutePlainOptions = {}): string {
-  const { paths, policy } = group;
-  const perSession = options.perSession === true;
-  const label = (index: number) => routePathLabel(paths[index], index);
-  if (paths.length < 2) return "还没有第二条路径。至少加一条，主线路出问题时才有地方可换。";
-  const failover = policy.failureThreshold > 1
-    ? `连续 ${policy.failureThreshold} 次探测不通、持续 ${formatPolicyDuration(policy.failoverSeconds)}`
-    : `连续 ${formatPolicyDuration(policy.failoverSeconds)}探测不通`;
-  const recover = formatPolicyDuration(policy.recoverSeconds);
-  const hold = policy.minHoldSeconds > 0 ? `切过去至少走 ${formatPolicyDuration(policy.minHoldSeconds)}，` : "";
-  const back = policy.autoFailback ? `首选恢复并稳定 ${recover}后自动切回。` : "首选恢复了也不切回，当前这条不出问题就一直走它。";
-  const old = perSession
-    ? policy.switchMode === "force"
-      ? "每次切换都丢掉旧会话，下一个包改走新路径。"
-      : policy.switchMode === "fast"
-        ? "路径挂了会丢掉它上面的会话，下一个包改走新路径；其余切换不动旧会话。"
-        : "切换只影响新会话，已有的会话留在原路径。"
-    : policy.switchMode === "force"
-      ? "每次切换都断开旧连接。"
-      : policy.switchMode === "fast"
-        ? "线路挂了会断开它上面的旧连接让客户端重连，其余切换不动旧连接。"
-        : "切换只影响新连接，旧连接留在原线路。";
-  switch (policy.mode) {
-    case "failover":
-      return `平时都走 ${label(0)}；${failover}就换到下一条，${hold}${back}${old}`;
-    case "scheduled": {
-      const windows = policy.schedule?.windows.length || 0;
-      return `按时段表定首选（${windows} 段），时段外回 ${label(0)}；首选${failover}就往下换，${back}${old}`;
-    }
-    case "manual": {
-      const pinned = policy.pin ? label(policy.pin.index) : "你指定的那条";
-      return `一直走 ${pinned}，直到你换；它${failover}才临时往下换，恢复并稳定 ${recover}后回来。${old}`;
-    }
-    case "smart":
-      return `按评分（延迟、丢包、抖动、可用率）走最好的一条：候选高出当前 ${policy.scoreMargin} 分、连续 ${formatPolicyDuration(policy.scoreHoldSeconds)}才换，不来回漂；${failover}照样立刻往下换。${old}`;
-    case "hybrid": {
-      const windows = policy.schedule?.windows.length || 0;
-      const prewarm = policy.prewarmSeconds > 0 ? `到点前 ${formatPolicyDuration(policy.prewarmSeconds)}先预热预检，预检不过就不切；` : "";
-      return `时段表定首选（${windows} 段），${prewarm}时段外按评分走最好的一条；${failover}照样立刻往下换。${old}`;
-    }
-    case "weighted": {
-      const skip = `哪条${failover}就先跳过它，恢复并稳定 ${recover}后重新参与。`;
-      // UDP 读不到访客地址：「按访客固定」在这里是按会话固定，单独说清楚。
-      if (perSession && policy.spread === "ip_hash") {
-        return `UDP 分不出访客，按访客固定在这里是按会话固定：每个会话一直走同一条，同一个访客的不同会话可能分到不同路径；${skip}`;
-      }
-      const shares = routeWeightShares(paths);
-      const spread = policy.spread === "weighted"
-        ? `按权重分（${paths.map((_, index) => `${label(index)} ${shares[index]}%`).join(" / ")}）`
-        : policy.spread === "round_robin"
-          ? "轮流走每一条"
-          : policy.spread === "random"
-            ? "随机挑一条能用的"
-            : "按来源 IP 固定走一条";
-      return perSession ? `每个新会话${spread}，旧会话不动；${skip}` : `每条新连接${spread}，旧连接不动；${skip}`;
-    }
-  }
-}
-
 export type RouteAdvancedSummaryInput = {
   policy: RouteGroupPolicy;
   probes: number;
@@ -380,13 +304,13 @@ export function RouteGroupFields({
   defaultAdvancedOpen,
   protocol = "tcp",
   nodeOptions = [],
-  entrySourcePort,
   pools = [],
   tunnels = [],
   entryName,
   entryPrefix = null,
   allowTunnels = false,
   ruleId = null,
+  upstreamHostIds = [],
 }: RouteGroupFieldsProps) {
   const now = nowMs ?? Date.now();
   const udpOnly = normalizeForwardRuleProtocol(protocol) === "udp";
@@ -397,11 +321,18 @@ export function RouteGroupFields({
   const weighted = mode === "weighted";
   const windows = routePolicy.schedule?.windows || [];
   const hostName = (hostId: number) => hosts.find((host) => Number(host.id) === hostId)?.name || `主机 ${hostId}`;
-  const shares = routeWeightShares(paths);
   const label = (index: number) => routePathLabel(paths[index], index);
   const deciding = policy?.deciding ?? null;
   const conditionFor = (windowIndex: number) => policy?.conditions.find((condition) => condition.windowIndex === windowIndex);
-  const probes = paths.filter((path) => !!path.probe).length;
+  // 存着的线路；老草稿只有路径的按路径还原（展开回去还是同样的路径），一条都没有就一条空的主线路
+  const storedLines = value.lines && value.lines.length > 0 ? value.lines : null;
+  const restoredLines = useMemo(() => {
+    if (storedLines) return null;
+    const fromPaths = routeLinesFromPaths(paths);
+    return fromPaths.length > 0 ? fromPaths : [newRouteLine(0)];
+  }, [storedLines, paths]);
+  const lines = storedLines || restoredLines || [];
+  const probes = lines.filter((line) => !!line.probe).length;
   const advancedSummary = summarizeRouteAdvanced({ policy: routePolicy, probes });
   const [advancedOpen, setAdvancedOpen] = useState(() => defaultAdvancedOpen ?? advancedSummary.length > 0);
   /*
@@ -419,18 +350,6 @@ export function RouteGroupFields({
   const shownError = (field: string, text: string) => (editingField === field ? null : routeEndpointError(text));
 
   const setPolicy = (patch: Partial<RouteGroupPolicy>) => onChange({ ...value, policy: { ...routePolicy, ...patch } });
-  const setPaths = (next: RoutePath[]) => onChange({ ...value, paths: next });
-  const patchPath = (index: number, patch: Partial<RoutePath>) => setPaths(paths.map((path, position) => (position === index ? { ...path, ...patch } : path)));
-  const removePath = (index: number) => {
-    const next = paths.filter((_, position) => position !== index);
-    // 时段表、指定里指着后面那几条的序号跟着往前挪；指着被删的那条的退回主线路。
-    const remap = (target: number) => (target === index ? 0 : target > index ? target - 1 : target);
-    const schedule = routePolicy.schedule
-      ? { ...routePolicy.schedule, windows: routePolicy.schedule.windows.map((window) => ({ ...window, targetIndex: remap(window.targetIndex) })) }
-      : null;
-    const pin = routePolicy.pin ? { ...routePolicy.pin, index: remap(routePolicy.pin.index) } : null;
-    onChange({ paths: next, policy: { ...routePolicy, schedule, pin } });
-  };
   const changeMode = (next: RouteMode) => onChange({
     ...value,
     policy: applyRouteMode(routePolicy, next, { timezone: scheduleTimeZone, pathCount: paths.length }),
@@ -438,13 +357,35 @@ export function RouteGroupFields({
   const setWindows = (next: FailoverScheduleWindow[]) => setPolicy({
     schedule: next.length > 0 ? { timezone: scheduleTimeZone, windows: next } : null,
   });
-  const commitEndpoint = (index: number, field: "dest" | "probe", text: string) => {
-    const parsed = parseRouteEndpoint(text);
-    // 写错的先留在框里（框上会报错），路径里的值不动：别把一个坏地址存进去。
-    if (parsed && "error" in parsed) return;
-    patchPath(index, { [field]: parsed } as Partial<RoutePath>);
+  /** 线路改了：同一套函数在本地展开一遍，paths 就是预览（钉子、时段表都按它数）。 */
+  const setLines = (next: RouteLine[]) => {
+    const preview = expandForPreview(next, { entryHostId, pools, tunnels });
+    const count = Math.max(1, preview.paths.length);
+    const clamp = (index: number) => Math.min(index, count - 1);
+    onChange({
+      ...value,
+      lines: next,
+      paths: preview.paths,
+      policy: {
+        ...routePolicy,
+        pin: routePolicy.pin ? { ...routePolicy.pin, index: clamp(routePolicy.pin.index) } : null,
+        schedule: routePolicy.schedule ? { ...routePolicy.schedule, windows: routePolicy.schedule.windows.map((window) => ({ ...window, targetIndex: clamp(window.targetIndex) })) } : null,
+      },
+    });
   };
-  const hopCandidates = (path: RoutePath) => hosts.filter((host) => Number(host.id) !== Number(entryHostId || 0) && !path.hops.includes(Number(host.id)));
+  const delivery = normalizeRouteDelivery(routePolicy.delivery);
+  const mainTunnels = (lines[0]?.layers || []).flatMap((layer) => layer.tunnelIds).map((id) => tunnels.find((tunnel) => tunnel.id === id)).filter((tunnel): tunnel is RouteLineTunnel => !!tunnel);
+  const replicateReady = mainTunnels.some((tunnel) => String(tunnel.mode || "").toLowerCase() === "forwardx");
+  const seamlessTunnelReady = mainTunnels.some((tunnel) => String(tunnel.mode || "").toLowerCase() === "forwardx" && String(tunnel.relayMode || "") === "hot_standby");
+  const mainNexTunnel = mainTunnels.find((tunnel) => String(tunnel.mode || "").toLowerCase() === "forwardx") || null;
+  const changeDelivery = (next: RouteDelivery) => {
+    // 热备：一坏就切、旧连接马上重连；冷备回到平滑切换。其余参数照旧。
+    const patch: Partial<RouteGroupPolicy> = next === "hot"
+      ? { delivery: next, failureThreshold: Math.min(routePolicy.failureThreshold, 2), failoverSeconds: Math.min(routePolicy.failoverSeconds, 10), switchMode: "fast" }
+      : next === "cold" ? { delivery: next, switchMode: "smooth" } : { delivery: next };
+    setPolicy(patch);
+  };
+  const lineTitle = (line: RouteLine, index: number) => (index === 0 ? "主线路" : line.name || `备 ${index}`);
 
   const pinPicker = (advanced: boolean) => (
     <div className="flex min-w-0 flex-col gap-2">
@@ -518,50 +459,55 @@ export function RouteGroupFields({
           position === index ? { ...item, ...next } : item
         )));
         return (
-          <div key={index} className="flex min-w-0 flex-col gap-1" data-state={condition?.state || "idle"}>
-            <div className="flex flex-wrap items-center gap-1.5">
-              <Select value={dayPresetOf(window.days)} onValueChange={(preset) => patch({ days: DAY_PRESETS[preset as keyof typeof DAY_PRESETS] })}>
-                <SelectTrigger size="sm" className="w-24" aria-label={`第 ${index + 1} 个时段：星期`}><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">每天</SelectItem>
-                  <SelectItem value="weekday">工作日</SelectItem>
-                  <SelectItem value="weekend">周末</SelectItem>
-                </SelectContent>
-              </Select>
-              <Input
-                type="time"
-                value={window.from}
-                onChange={(event) => patch({ from: event.target.value })}
-                className="h-8 w-36 text-xs sm:w-28"
-                aria-label={`第 ${index + 1} 个时段：开始时间`}
-              />
-              <span className="text-xs text-muted-foreground">至</span>
-              <Input
-                type="time"
-                value={window.to}
-                onChange={(event) => patch({ to: event.target.value })}
-                className="h-8 w-36 text-xs sm:w-28"
-                aria-label={`第 ${index + 1} 个时段：结束时间`}
-              />
-              <Select value={String(window.targetIndex)} onValueChange={(target) => patch({ targetIndex: Number(target) })}>
-                <SelectTrigger size="sm" className="w-32" aria-label={`第 ${index + 1} 个时段：首选哪条路径`}><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {paths.map((path, position) => (
-                    <SelectItem key={path.key} value={String(position)}>{routePathLetter(position)} {label(position)}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8 shrink-0"
-                aria-label={`删除第 ${index + 1} 个时段`}
-                onClick={() => setWindows(windows.filter((_, position) => position !== index))}
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </Button>
-              {condition?.state === "deciding" ? <EntityTag tone="path">此刻</EntityTag> : null}
+          <div key={index} className="flex min-w-0 flex-col gap-1" data-state={condition?.state || "idle"} data-testid="route-schedule-window">
+            {/* 手机上两行：星期 + 几点到几点一行，首选哪条 + 删除一行；宽屏一行放下 */}
+            <div className="flex min-w-0 flex-col gap-1.5 sm:flex-row sm:items-center">
+              <div className="flex min-w-0 items-center gap-1.5">
+                <Select value={dayPresetOf(window.days)} onValueChange={(preset) => patch({ days: DAY_PRESETS[preset as keyof typeof DAY_PRESETS] })}>
+                  <SelectTrigger size="sm" className="w-[5.5rem] shrink-0" aria-label={`第 ${index + 1} 个时段：星期`}><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">每天</SelectItem>
+                    <SelectItem value="weekday">工作日</SelectItem>
+                    <SelectItem value="weekend">周末</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Input
+                  type="time"
+                  value={window.from}
+                  onChange={(event) => patch({ from: event.target.value })}
+                  className="h-8 min-w-0 flex-1 text-xs sm:w-28 sm:flex-none"
+                  aria-label={`第 ${index + 1} 个时段：开始时间`}
+                />
+                <span className="shrink-0 text-xs text-muted-foreground">至</span>
+                <Input
+                  type="time"
+                  value={window.to}
+                  onChange={(event) => patch({ to: event.target.value })}
+                  className="h-8 min-w-0 flex-1 text-xs sm:w-28 sm:flex-none"
+                  aria-label={`第 ${index + 1} 个时段：结束时间`}
+                />
+              </div>
+              <div className="flex min-w-0 items-center gap-1.5">
+                <Select value={String(window.targetIndex)} onValueChange={(target) => patch({ targetIndex: Number(target) })}>
+                  <SelectTrigger size="sm" className="min-w-0 flex-1 sm:w-32 sm:flex-none" aria-label={`第 ${index + 1} 个时段：首选哪条路径`}><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {paths.map((path, position) => (
+                      <SelectItem key={path.key} value={String(position)}>{routePathLetter(position)} {label(position)}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 shrink-0"
+                  aria-label={`删除第 ${index + 1} 个时段`}
+                  onClick={() => setWindows(windows.filter((_, position) => position !== index))}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+                {condition?.state === "deciding" ? <EntityTag tone="path">此刻</EntityTag> : null}
+              </div>
             </div>
             {/* 配好之后用一句话复述一遍：跨午夜那一段最容易理解反。 */}
             <p className="text-xs leading-5 text-muted-foreground">
@@ -586,391 +532,118 @@ export function RouteGroupFields({
     </div>
   );
 
-  const lines = value.lines && value.lines.length > 0 ? value.lines : null;
-  /** 线路改了：同一套函数在本地展开一遍，paths 就是预览（钉子、时段表、预览卡都按它）。 */
-  const setLines = (next: RouteLine[]) => {
-    const preview = expandForPreview(next, { entryHostId, pools, tunnels });
-    const count = Math.max(1, preview.paths.length);
-    const clamp = (index: number) => Math.min(index, count - 1);
-    onChange({
-      ...value,
-      lines: next,
-      paths: preview.paths,
-      policy: {
-        ...routePolicy,
-        pin: routePolicy.pin ? { ...routePolicy.pin, index: clamp(routePolicy.pin.index) } : null,
-        schedule: routePolicy.schedule ? { ...routePolicy.schedule, windows: routePolicy.schedule.windows.map((window) => ({ ...window, targetIndex: clamp(window.targetIndex) })) } : null,
-      },
-    });
-  };
-  const delivery = normalizeRouteDelivery(routePolicy.delivery);
-  const mainTunnels = (lines?.[0]?.layers || []).flatMap((layer) => layer.tunnelIds).map((id) => tunnels.find((tunnel) => tunnel.id === id)).filter((tunnel): tunnel is RouteLineTunnel => !!tunnel);
-  const replicateReady = mainTunnels.some((tunnel) => String(tunnel.mode || "").toLowerCase() === "forwardx");
-  const seamlessTunnelReady = mainTunnels.some((tunnel) => String(tunnel.mode || "").toLowerCase() === "forwardx" && String(tunnel.relayMode || "") === "hot_standby");
-  const mainNexTunnel = mainTunnels.find((tunnel) => String(tunnel.mode || "").toLowerCase() === "forwardx") || null;
-  const changeDelivery = (next: RouteDelivery) => {
-    // 热备：一坏就切、旧连接马上重连；冷备回到平滑切换。其余参数照旧。
-    const patch: Partial<RouteGroupPolicy> = next === "hot"
-      ? { delivery: next, failureThreshold: Math.min(routePolicy.failureThreshold, 2), failoverSeconds: Math.min(routePolicy.failoverSeconds, 10), switchMode: "fast" }
-      : next === "cold" ? { delivery: next, switchMode: "smooth" } : { delivery: next };
-    setPolicy(patch);
-  };
-
   return (
     <div className="flex min-w-0 flex-col gap-3">
-      {lines ? (
-        <RouteLinesEditor
-          lines={lines}
-          onChange={setLines}
-          hosts={hosts as RouteLineHost[]}
-          pools={pools}
-          tunnels={tunnels}
-          nodeOptions={nodeOptions}
-          entryHostId={entryHostId}
-          entryName={entryName || (entryHostId ? hostName(entryHostId) : "入口")}
-          entryPrefix={entryPrefix}
-          mainAddress={mainAddress}
-          allowHops={allowHops}
-          allowTunnels={allowTunnels}
-          previewPaths={paths}
-          ruleId={ruleId}
-        />
-      ) : null}
-      {lines ? (
-        <div className="flex min-w-0 flex-col" data-testid="route-line-mode">
-          <LineSec left="怎么切" />
-          <LineCard>
-            <LineSegmented
-              ariaLabel="怎么切"
-              value={lineModeSegment(mode)}
-              options={LINE_MODE_SEGMENTS}
-              onChange={(next) => changeMode(next === "scheduled" && mode === "hybrid" ? "hybrid" : next)}
-            />
-            <LineHint>{lineModeHint(routePolicy, udpOnly)}</LineHint>
-            {/* 四格之外的两种：稳定优先下「人工指定」= 手动主备，按时段下「时段外择优」= 混合（保存才生效，用 Checkbox） */}
-            {lineModeSegment(mode) === "failover" ? (
-              <label className="mt-[10px] flex w-fit items-center gap-2 text-[11.5px] text-muted-foreground">
-                <Checkbox checked={mode === "manual"} onCheckedChange={(checked) => changeMode(checked ? "manual" : "failover")} aria-label="人工指定走哪条" data-testid="route-line-manual" />
-                人工指定走哪条（手动主备）
-              </label>
-            ) : null}
-            {lineModeSegment(mode) === "scheduled" ? (
-              <label className="mt-[10px] flex w-fit items-center gap-2 text-[11.5px] text-muted-foreground">
-                <Checkbox checked={mode === "hybrid"} onCheckedChange={(checked) => changeMode(checked ? "hybrid" : "scheduled")} aria-label="时段外走整条链最快的" data-testid="route-line-hybrid" />
-                时段外走整条链最快的
-              </label>
-            ) : null}
-            {mode === "manual" ? <div className="mt-2">{pinPicker(false)}</div> : null}
-            {usesSchedule ? <div className="mt-3">{scheduleEditor}</div> : null}
-            {weighted ? (
-              <div className="mt-3">
-                <LinkSpreadPicker
-                  value={routePolicy.spread}
-                  options={ROUTE_SPREADS}
-                  labels={ROUTE_SPREAD_LABELS}
-                  onChange={(spread) => setPolicy({ spread })}
-                  ariaLabel={udpOnly ? "新会话怎么分" : "新连接怎么分"}
-                  hint={udpOnly ? ROUTE_SPREAD_SESSION_HINTS[routePolicy.spread] : ROUTE_SPREAD_LABELS[routePolicy.spread].hint}
-                />
-              </div>
-            ) : null}
-            {weighted && routePolicy.spread === "weighted" ? (
-              /* 按权重：一条线路一个数（展开出来的几条路径一起分它那一份） */
-              <div className="mt-3 flex flex-col gap-1.5" data-testid="route-line-weights">
-                {lines.map((line, index) => {
-                  const total = lines.reduce((sum, item) => sum + Math.max(1, item.weight), 0);
-                  const share = total > 0 ? Math.round((Math.max(1, line.weight) / total) * 100) : 0;
-                  const name = index === 0 ? "主线路" : line.name || `备 ${index}`;
-                  return (
-                    <div key={line.key} className="flex min-w-0 items-center justify-between gap-2 text-[12.5px]">
-                      <span className="min-w-0 truncate">{name}</span>
-                      <div className="relative w-[4.5rem] shrink-0">
-                        <Input
-                          type="number"
-                          inputMode="numeric"
-                          min={ROUTE_GUARD_LIMITS.weight.min}
-                          max={ROUTE_GUARD_LIMITS.weight.max}
-                          value={line.weight}
-                          onChange={(event) => {
-                            const weight = Math.min(ROUTE_GUARD_LIMITS.weight.max, Math.max(ROUTE_GUARD_LIMITS.weight.min, parseInt(event.target.value) || 1));
-                            setLines(lines.map((item, position) => (position === index ? { ...item, weight } : item)));
-                          }}
-                          aria-label={`${name} 的权重`}
-                          className="h-8 pr-9 text-sm"
-                        />
-                        <span aria-hidden="true" className="pointer-events-none absolute inset-y-0 right-2 flex items-center text-meta text-muted-foreground">{share}%</span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            ) : null}
+      <RouteLinesEditor
+        lines={lines}
+        onChange={setLines}
+        hosts={hosts as RouteLineHost[]}
+        pools={pools}
+        tunnels={tunnels}
+        nodeOptions={nodeOptions}
+        entryHostId={entryHostId}
+        entryName={entryName || (entryHostId ? hostName(entryHostId) : "入口")}
+        entryPrefix={entryPrefix}
+        mainAddress={mainAddress}
+        allowHops={allowHops}
+        allowTunnels={allowTunnels}
+        previewPaths={paths}
+        ruleId={ruleId}
+        upstreamHostIds={upstreamHostIds}
+      />
+      <div className="flex min-w-0 flex-col" data-testid="route-line-mode">
+        <LineSec left="怎么切" />
+        <LineCard>
+          <LineSegmented
+            ariaLabel="怎么切"
+            value={lineModeSegment(mode)}
+            options={LINE_MODE_SEGMENTS}
+            onChange={(next) => changeMode(next === "scheduled" && mode === "hybrid" ? "hybrid" : next)}
+          />
+          <LineHint>{lineModeHint(routePolicy, udpOnly)}</LineHint>
+          {/* 四格之外的两种：稳定优先下「人工指定」= 手动主备，按时段下「时段外择优」= 混合（保存才生效，用 Checkbox） */}
+          {lineModeSegment(mode) === "failover" ? (
             <label className="mt-[10px] flex w-fit items-center gap-2 text-[11.5px] text-muted-foreground">
-              <Checkbox
-                checked={delivery === "hot"}
-                onCheckedChange={(checked) => changeDelivery(checked ? "hot" : "cold")}
-                aria-label="切换不断连（NEX 隧道热备）"
-                data-testid="route-line-seamless"
-              />
-              切换不断连（NEX 隧道热备）
+              <Checkbox checked={mode === "manual"} onCheckedChange={(checked) => changeMode(checked ? "manual" : "failover")} aria-label="人工指定走哪条" data-testid="route-line-manual" />
+              人工指定走哪条（手动主备）
             </label>
-            {delivery === "hot" && !seamlessTunnelReady ? (
-              <LineHint className="mt-1">
-                握手慢了同时拨下一条、坏了马上切，旧连接断开让客户端马上重连。要换中转也不断连：主线路里放一段 NEX 隧道，隧道的中转方式设成「热备」（至少两台中转）。
-                {/* 主线路里已经有 NEX 隧道、只是没开热备：直接去改它（新标签页打开，这里没存的不丢） */}
-                {mainNexTunnel ? (
-                  <>
-                    {" "}
-                    <a href={`/tunnels?tab=tunnels&edit=${mainNexTunnel.id}`} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-foreground" data-testid="route-line-hot-tunnel">
-                      去改隧道「{mainNexTunnel.name}」
-                    </a>
-                  </>
-                ) : null}
-              </LineHint>
-            ) : null}
-          </LineCard>
-        </div>
-      ) : null}
-      <section className={cn("flex min-w-0 flex-col gap-2", lines && "hidden")} aria-label="线路" data-testid="route-paths">
-        {paths.map((path, index) => {
-          const destField = `dest-${path.key}`;
-          const destText = draftOf(destField, path.dest);
-          const destError = shownError(destField, destText);
-          const candidates = hopCandidates(path);
-          return (
-            <div key={path.key} className="flex min-w-0 flex-col gap-1.5 rounded-[var(--fx-radius-control)] bg-[var(--fx-l1-surface)] px-3 py-2.5" data-testid="route-path">
-              <div className="flex min-w-0 items-center gap-2">
-                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--fx-path-soft)] text-xs font-semibold text-[var(--fx-path)]" aria-hidden="true">
-                  {routePathLetter(index)}
-                </span>
-                <Input
-                  value={path.name}
-                  onChange={(event) => patchPath(index, { name: event.target.value.slice(0, 40) })}
-                  placeholder={index === 0 ? "主线路" : `备用 ${index}`}
-                  aria-label={`路径 ${routePathLetter(index)} 的名字`}
-                  className="h-8 min-w-0 flex-1 text-sm"
-                />
-                {weighted && routePolicy.spread === "weighted" ? (
-                  <div className="relative w-[4.5rem] shrink-0">
-                    <Input
-                      type="number"
-                      inputMode="numeric"
-                      min={ROUTE_GUARD_LIMITS.weight.min}
-                      max={ROUTE_GUARD_LIMITS.weight.max}
-                      value={path.weight}
-                      onChange={(event) => patchPath(index, { weight: Math.min(ROUTE_GUARD_LIMITS.weight.max, Math.max(ROUTE_GUARD_LIMITS.weight.min, parseInt(event.target.value) || 1)) })}
-                      aria-label={`路径 ${routePathLetter(index)} 的权重`}
-                      className="h-8 pr-9 text-sm"
-                    />
-                    <span aria-hidden="true" className="pointer-events-none absolute inset-y-0 right-2 flex items-center text-meta text-muted-foreground">{shares[index]}%</span>
-                  </div>
-                ) : null}
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="fx-compact-touch h-8 w-8 shrink-0 text-muted-foreground"
-                  aria-label={`删掉路径 ${routePathLetter(index)}`}
-                  disabled={paths.length <= 2}
-                  title={paths.length <= 2 ? "线路组至少要两条路径" : undefined}
-                  onClick={() => removePath(index)}
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </Button>
-              </div>
-              {/* 入口 → 中转 → … → 落地：路径本身。中转是一个个可摘掉的小块，落地是一格。 */}
-              <div className="flex min-w-0 flex-wrap items-center gap-1 text-xs">
-                <span className="text-muted-foreground">入口</span>
-                {path.hops.map((hopId, hopIndex) => (
-                  <span key={`${hopId}-${hopIndex}`} className="flex items-center gap-1">
-                    <span aria-hidden="true" className="text-muted-foreground">→</span>
-                    <span className="inline-flex h-7 items-center gap-1 rounded-[var(--fx-radius-control)] border border-[var(--fx-stroke-weak)] bg-[var(--fx-l2-group)] pl-2 pr-1">
-                      {hostName(hopId)}
-                      <button
-                        type="button"
-                        className="rounded-full p-0.5 text-muted-foreground hover:text-foreground"
-                        aria-label={`从路径 ${routePathLetter(index)} 里去掉中转 ${hostName(hopId)}`}
-                        onClick={() => patchPath(index, { hops: path.hops.filter((_, position) => position !== hopIndex) })}
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
-                    </span>
-                  </span>
-                ))}
-                {allowHops && path.hops.length < MAX_ROUTE_HOPS && candidates.length > 0 ? (
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button type="button" variant="outline" size="sm" className="fx-compact-touch h-7 gap-1 px-2 text-xs">
-                        <Plus className="h-3 w-3" />
-                        {path.hops.length === 0 ? "经过中转" : "再加一跳"}
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="start" className="max-h-72 overflow-y-auto">
-                      {candidates.map((host) => (
-                        <DropdownMenuItem key={host.id} onSelect={() => patchPath(index, { hops: [...path.hops, Number(host.id)] })}>
-                          {host.name}
-                          {host.isOnline === false ? <span className="ml-1 text-muted-foreground">（离线）</span> : null}
-                        </DropdownMenuItem>
-                      ))}
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                ) : null}
-                <span aria-hidden="true" className="text-muted-foreground">→</span>
-                {/* 「落地」和输入框绑在一起换行：窄屏上不会出现「落地」两个字留在上一行。 */}
-                <span className="flex min-w-[12rem] flex-1 items-center gap-1">
-                  <span className="shrink-0 text-muted-foreground">落地</span>
-                  {path.destNodeId ? (
-                    /* 选的是我的节点：画成一块，地址只读；× 回到手填。 */
-                    <span className="inline-flex h-7 min-w-0 items-center gap-1 rounded-[var(--fx-radius-control)] bg-[var(--fx-healthy-soft)] pl-2 pr-1 text-xs text-[var(--fx-healthy-text)]" data-testid="route-dest-node">
-                      <span className="truncate">{nodeOptions.find((node) => node.id === path.destNodeId)?.name || `节点 #${path.destNodeId}`}</span>
-                      {path.dest ? <span className="truncate font-mono opacity-75">{formatFailoverEndpoint(path.dest.ip, path.dest.port)}</span> : null}
-                      <button
-                        type="button"
-                        className="rounded-full p-0.5 hover:bg-black/10"
-                        aria-label={`路径 ${routePathLetter(index)} 的落地不再跟随节点`}
-                        onClick={() => { const { [destField]: _dropped, ...rest } = drafts; setDrafts(rest); patchPath(index, { destNodeId: null, dest: null }); }}
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
-                    </span>
-                  ) : (
-                    <FormField className="contents">
-                      <Input
-                        value={destText}
-                        onChange={(event) => setDrafts({ ...drafts, [destField]: event.target.value.replace(/\s+/g, "") })}
-                        onFocus={() => setEditingField(destField)}
-                        onBlur={() => { setEditingField(null); commitEndpoint(index, "dest", destText); }}
-                        // 越短越好：手机上框很窄，长了就被截成半句。不填就走规则的目标地址（在上面）。
-                        placeholder="IP:端口，留空同目标"
-                        aria-label={`路径 ${routePathLetter(index)} 的落地`}
-                        className="h-7 min-w-0 flex-1 font-mono text-xs"
-                        spellCheck={false}
-                        autoComplete="off"
-                        aria-invalid={destError ? true : undefined}
-                      />
-                    </FormField>
-                  )}
-                  {!path.destNodeId && nodeOptions.length > 0 ? (
-                    <Select
-                      value=""
-                      onValueChange={(selected) => {
-                        const node = nodeOptions.find((item) => String(item.id) === selected);
-                        if (!node) return;
-                        const { [destField]: _dropped, ...rest } = drafts;
-                        setDrafts(rest);
-                        patchPath(index, { destNodeId: node.id, dest: { ip: node.address, port: node.port } });
-                      }}
-                    >
-                      <SelectTrigger size="sm" className="w-auto shrink-0 border-dashed" aria-label={`路径 ${routePathLetter(index)} 的落地选我的节点`}>
-                        <SelectValue placeholder="选节点" />
-                      </SelectTrigger>
-                      <SelectContent align="end">
-                        {nodeOptions.map((node) => (
-                          <SelectItem key={node.id} value={String(node.id)}>
-                            {node.name}{node.protocol ? ` · ${node.protocol}` : ""} · {node.address}:{node.port}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  ) : null}
-                </span>
-              </div>
-              {destError ? <p className="text-meta leading-5 text-[var(--fx-warn-text)]">{destError}</p> : null}
-              {path.issue ? <p className="text-meta leading-5 text-[var(--fx-warn-text)]">眼下用不了：{describeRouteIssue(path.issue)}</p> : null}
+          ) : null}
+          {lineModeSegment(mode) === "scheduled" ? (
+            <label className="mt-[10px] flex w-fit items-center gap-2 text-[11.5px] text-muted-foreground">
+              <Checkbox checked={mode === "hybrid"} onCheckedChange={(checked) => changeMode(checked ? "hybrid" : "scheduled")} aria-label="时段外走整条链最快的" data-testid="route-line-hybrid" />
+              时段外走整条链最快的
+            </label>
+          ) : null}
+          {mode === "manual" ? <div className="mt-2" data-state={deciding === "pin" ? "deciding" : "idle"} data-testid="policy-pin">{pinPicker(false)}</div> : null}
+          {usesSchedule ? <div className="mt-3" data-state={deciding === "schedule" ? "deciding" : "idle"} data-testid="policy-schedule">{scheduleEditor}</div> : null}
+          {weighted ? (
+            <div className="mt-3">
+              <LinkSpreadPicker
+                value={routePolicy.spread}
+                options={ROUTE_SPREADS}
+                labels={ROUTE_SPREAD_LABELS}
+                onChange={(spread) => setPolicy({ spread })}
+                ariaLabel={udpOnly ? "新会话怎么分" : "新连接怎么分"}
+                hint={udpOnly ? ROUTE_SPREAD_SESSION_HINTS[routePolicy.spread] : ROUTE_SPREAD_LABELS[routePolicy.spread].hint}
+              />
             </div>
-          );
-        })}
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="fx-compact-touch h-8 gap-1 text-meta"
-            disabled={paths.length >= MAX_ROUTE_PATHS}
-            onClick={() => setPaths([...paths, newRoutePath(paths.length)])}
-          >
-            <Plus className="h-3.5 w-3.5" />
-            {paths.length >= MAX_ROUTE_PATHS ? `最多 ${MAX_ROUTE_PATHS} 条` : "添加路径"}
-          </Button>
-          <span className="text-meta text-muted-foreground">{allowHops ? "中转机上的中继由面板自动建，不用手配。" : "转发组上的规则暂不支持经过中转。"}</span>
-        </div>
-      </section>
-
-      {!lines ? (
-        <>
-      <PolicyGroup title="怎么用这些线路">
-        <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2" role="radiogroup" aria-label="怎么用这些线路">
-          {ROUTE_MODES.map((candidate) => {
-            const info = ROUTE_MODE_INFO[candidate];
-            const active = mode === candidate;
-            return (
-              <button
-                key={candidate}
-                type="button"
-                role="radio"
-                aria-checked={active}
-                className={templateChoiceClass(active)}
-                onClick={() => changeMode(candidate)}
-              >
-                <span className="flex items-center gap-1.5 text-secondary-type font-medium">
-                  {info.template}
-                  <span className={cn("text-meta font-normal", active ? "opacity-80" : "text-muted-foreground")}>{info.label}</span>
-                </span>
-                <span className={cn("text-meta leading-4", active ? "opacity-80" : "text-muted-foreground")}>{routeModeHint(candidate, udpOnly)}</span>
-              </button>
-            );
-          })}
-        </div>
-        {mode === "manual" ? (
-          <ConditionBlock title="走哪条" detail="一直走它，直到你换；它挂了才临时往下切" deciding={deciding === "pin"} testId="policy-pin">
-            {pinPicker(false)}
-          </ConditionBlock>
-        ) : null}
-        {usesSchedule ? (
-          <ConditionBlock
-            title="时段表"
-            detail={mode === "hybrid" ? "时段内按它定首选，时段外按评分走最好的一条" : "时段内按它定首选，时段外回主线路"}
-            deciding={deciding === "schedule"}
-            showTag={false}
-            testId="policy-schedule"
-          >
-            {scheduleEditor}
-          </ConditionBlock>
-        ) : null}
-        {weighted ? (
-          <LinkSpreadPicker
-            value={routePolicy.spread}
-            options={ROUTE_SPREADS}
-            labels={ROUTE_SPREAD_LABELS}
-            onChange={(spread) => setPolicy({ spread })}
-            ariaLabel={udpOnly ? "新会话怎么分" : "新连接怎么分"}
-            hint={<>
-              {udpOnly ? ROUTE_SPREAD_SESSION_HINTS[routePolicy.spread] : ROUTE_SPREAD_LABELS[routePolicy.spread].hint}
-              {routePolicy.spread === "weighted" ? "；权重在上面每条路径的右边填。" : "。"}
-            </>}
-          />
-        ) : null}
-      </PolicyGroup>
-
-      {/* 它会这样跑：拿还没保存的路径画成线路板那种链，下面一句大白话说策略。填着填着就看得见。 */}
-      {policy && paths.length >= 2 ? (
-        <section className="flex min-w-0 flex-col gap-1.5" data-testid="route-preview" aria-label="它会这样跑">
-          <div className="text-meta text-muted-foreground">它会这样跑</div>
-          <RoutePathCards
-            preview
-            policy={policy}
-            status={buildRoutePreviewStatus({ paths, hosts, entryHostId, sourcePort: entrySourcePort, mainAddress })}
-          />
-        </section>
-      ) : null}
-      <p className="text-secondary-type leading-relaxed text-foreground" data-testid="route-plain" aria-live="polite">
-        {describeRouteGroupPlainly(value, { perSession: udpOnly })}
-      </p>
-      <p className="text-xs leading-5 text-muted-foreground" data-testid="route-seamless-tip">
-        线路组是按连接换路径，换的时候旧连接按上面说的处理。要连接不断的毫秒级切换靠 NEX 隧道：把隧道的中转方式设成「热备」，每条连接同时连着全部中转，主的停了备用立刻接手；端口转发规则可以直接在线路里加一段这样的隧道。
-      </p>
-        </>
-      ) : null}
+          ) : null}
+          {weighted && routePolicy.spread === "weighted" ? (
+            /* 按权重：一条线路一个数（展开出来的几条路径一起分它那一份） */
+            <div className="mt-3 flex flex-col gap-1.5" data-testid="route-line-weights">
+              {lines.map((line, index) => {
+                const total = lines.reduce((sum, item) => sum + Math.max(1, item.weight), 0);
+                const share = total > 0 ? Math.round((Math.max(1, line.weight) / total) * 100) : 0;
+                const name = lineTitle(line, index);
+                return (
+                  <div key={line.key} className="flex min-w-0 items-center justify-between gap-2 text-[12.5px]">
+                    <span className="min-w-0 truncate">{name}</span>
+                    <div className="relative w-[4.5rem] shrink-0">
+                      <Input
+                        type="number"
+                        inputMode="numeric"
+                        min={ROUTE_GUARD_LIMITS.weight.min}
+                        max={ROUTE_GUARD_LIMITS.weight.max}
+                        value={line.weight}
+                        onChange={(event) => {
+                          const weight = Math.min(ROUTE_GUARD_LIMITS.weight.max, Math.max(ROUTE_GUARD_LIMITS.weight.min, parseInt(event.target.value) || 1));
+                          setLines(lines.map((item, position) => (position === index ? { ...item, weight } : item)));
+                        }}
+                        aria-label={`${name} 的权重`}
+                        className="h-8 pr-9 text-sm"
+                      />
+                      <span aria-hidden="true" className="pointer-events-none absolute inset-y-0 right-2 flex items-center text-meta text-muted-foreground">{share}%</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : null}
+          <label className="mt-[10px] flex w-fit items-center gap-2 text-[11.5px] text-muted-foreground">
+            <Checkbox
+              checked={delivery === "hot"}
+              onCheckedChange={(checked) => changeDelivery(checked ? "hot" : "cold")}
+              aria-label="切换不断连（NEX 隧道热备）"
+              data-testid="route-line-seamless"
+            />
+            切换不断连（NEX 隧道热备）
+          </label>
+          {delivery === "hot" && !seamlessTunnelReady ? (
+            <LineHint className="mt-1">
+              握手慢了同时拨下一条、坏了马上切，旧连接断开让客户端马上重连。要换中转也不断连：主线路里放一段 NEX 隧道，隧道的中转方式设成「热备」（至少两台中转）。
+              {/* 主线路里已经有 NEX 隧道、只是没开热备：直接去改它（新标签页打开，这里没存的不丢） */}
+              {mainNexTunnel ? (
+                <>
+                  {" "}
+                  <a href={`/tunnels?tab=tunnels&edit=${mainNexTunnel.id}`} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-foreground" data-testid="route-line-hot-tunnel">
+                    去改隧道「{mainNexTunnel.name}」
+                  </a>
+                </>
+              ) : null}
+            </LineHint>
+          ) : null}
+        </LineCard>
+      </div>
       {(policy?.warnings || []).map((warning) => (
         <p key={warning} className="rounded-[var(--fx-radius-control)] bg-[var(--fx-warn-soft)] px-3 py-2 text-xs leading-5 text-[var(--fx-warn-text)]">
           {warning}
@@ -994,37 +667,35 @@ export function RouteGroupFields({
 
         {advancedOpen ? (
           <div className="flex min-w-0 flex-col gap-4 pb-1 pt-2">
-            {lines ? (
-              <PolicyGroup
-                title="几条一起用"
-                note="默认一次只走一条。聚合：主线路那组的几条按连接分担（单个连接仍走一条）；复制：主线路走的 NEX 叠加隧道里同一份数据几条腿一起发，一条腿断了连接不断。"
-              >
-                <div className="grid grid-cols-3 gap-1.5" role="radiogroup" aria-label="几条一起用" data-testid="route-delivery">
-                  {(["single", "aggregate", "replicate"] as const).map((choice) => {
-                    const active = choice === "single" ? delivery === "cold" || delivery === "hot" : delivery === choice;
-                    const disabled = choice === "replicate" && !replicateReady;
-                    return (
-                      <button
-                        key={choice}
-                        type="button"
-                        role="radio"
-                        aria-checked={active}
-                        disabled={disabled}
-                        title={disabled ? "复制要主线路走 NEX 隧道（单连接叠加、开了复制）" : undefined}
-                        className={cn(templateChoiceClass(active), disabled && "cursor-not-allowed opacity-45")}
-                        onClick={() => {
-                          if (choice === "single") { if (delivery === "aggregate" || delivery === "replicate") changeDelivery("cold"); }
-                          else changeDelivery(choice);
-                        }}
-                      >
-                        <span className="text-sm font-medium">{choice === "single" ? "一次走一条" : ROUTE_DELIVERY_INFO[choice].label}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-                {delivery === "aggregate" || delivery === "replicate" ? <p className="text-meta leading-5 text-muted-foreground">{ROUTE_DELIVERY_INFO[delivery].hint}</p> : null}
-              </PolicyGroup>
-            ) : null}
+            <PolicyGroup
+              title="几条一起用"
+              note="默认一次只走一条。聚合：主线路那组的几条按连接分担（单个连接仍走一条）；复制：主线路走的 NEX 叠加隧道里同一份数据几条腿一起发，一条腿断了连接不断。"
+            >
+              <div className="grid grid-cols-3 gap-1.5" role="radiogroup" aria-label="几条一起用" data-testid="route-delivery">
+                {(["single", "aggregate", "replicate"] as const).map((choice) => {
+                  const active = choice === "single" ? delivery === "cold" || delivery === "hot" : delivery === choice;
+                  const disabled = choice === "replicate" && !replicateReady;
+                  return (
+                    <button
+                      key={choice}
+                      type="button"
+                      role="radio"
+                      aria-checked={active}
+                      disabled={disabled}
+                      title={disabled ? "复制要主线路走 NEX 隧道（单连接叠加、开了复制）" : undefined}
+                      className={cn(templateChoiceClass(active), disabled && "cursor-not-allowed opacity-45")}
+                      onClick={() => {
+                        if (choice === "single") { if (delivery === "aggregate" || delivery === "replicate") changeDelivery("cold"); }
+                        else changeDelivery(choice);
+                      }}
+                    >
+                      <span className="text-sm font-medium">{choice === "single" ? "一次走一条" : ROUTE_DELIVERY_INFO[choice].label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              {delivery === "aggregate" || delivery === "replicate" ? <p className="text-meta leading-5 text-muted-foreground">{ROUTE_DELIVERY_INFO[delivery].hint}</p> : null}
+            </PolicyGroup>
             <PolicyGroup
               title="切换保护"
               note="拦的是网络抖一下引起的 A → B → A → B：失败一次不切，连续几次才算异常，异常持续够久才切，恢复后稳定够久才切回，刚切过去至少驻留一阵。当前这条挂了时驻留不生效 —— 守着死路比抖动更糟。"
@@ -1187,20 +858,20 @@ export function RouteGroupFields({
               }
             >
               <div className="grid min-w-0 grid-cols-[3.25rem_minmax(0,1fr)] items-center gap-x-2 gap-y-1.5">
-                {/* 有线路时探测地址填在线路上（展开出来的每条路径都用它）；老的路径草稿照旧填在路径上 */}
-                {(lines ? lines.map((line, index) => ({ key: line.key, probe: line.probe ?? null, title: index === 0 ? "主线路" : line.name || `备 ${index}` })) : paths.map((path, index) => ({ key: path.key, probe: path.probe, title: `${routePathLetter(index)} ${label(index)}` }))).map((row, index) => {
-                  const field = `probe-${row.key}`;
-                  const text = draftOf(field, row.probe);
+                {/* 探测地址填在线路上：展开出来的每条路径都用它 */}
+                {lines.map((line, index) => {
+                  const field = `probe-${line.key}`;
+                  const text = draftOf(field, line.probe ?? null);
                   const error = shownError(field, text);
                   const commit = () => {
-                    if (!lines) return commitEndpoint(index, "probe", text);
                     const parsed = parseRouteEndpoint(text);
+                    // 写错的先留在框里（框上会报错），线路里的值不动：别把一个坏地址存进去。
                     if (parsed && "error" in parsed) return;
                     setLines(lines.map((item, position) => (position === index ? { ...item, probe: parsed } : item)));
                   };
                   return (
-                    <FormField key={row.key} className="contents">
-                      <Label className="text-meta font-normal text-muted-foreground">{row.title}</Label>
+                    <FormField key={line.key} className="contents">
+                      <Label className="text-meta font-normal text-muted-foreground">{lineTitle(line, index)}</Label>
                       <div className="flex min-w-0 flex-col gap-1">
                         <Input
                           value={text}
@@ -1208,6 +879,7 @@ export function RouteGroupFields({
                           onFocus={() => setEditingField(field)}
                           onBlur={() => { setEditingField(null); commit(); }}
                           placeholder={udpOnly ? "留空就 ping 拨号地址" : "留空就探拨号地址"}
+                          aria-label={`${lineTitle(line, index)} 的探测地址`}
                           className="h-9 font-mono text-sm"
                           spellCheck={false}
                           autoComplete="off"

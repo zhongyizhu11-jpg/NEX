@@ -364,6 +364,14 @@ export const forwardGroupsRouter = router({
       return { success: true, group };
     })),
 
+  /** 成员跟着节点池（2.3.497）：poolId = null 取消，成员留着现在这些。 */
+  followPool: adminProcedure
+    .input(z.object({ groupId: z.number().int().positive(), poolId: z.number().int().positive().nullable() }))
+    .mutation(async ({ input }) => withKeyedTaskLock(`forward-group:${input.groupId}`, async () => {
+      const { setGroupPool } = await import("../nodePoolGroups");
+      return setGroupPool(input.groupId, input.poolId);
+    })),
+
   toggle: adminProcedure
     .input(z.object({ id: z.number().int().positive(), isEnabled: z.boolean() }))
     .mutation(async ({ input }) => withKeyedTaskLock(`forward-group:${input.id}`, async () => {

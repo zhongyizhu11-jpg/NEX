@@ -1740,8 +1740,6 @@ html[data-personalization-background="image"] .auth-divider-label, html[data-per
 .fx-rb-link[data-state="failed"]::before { background: repeating-linear-gradient(90deg, var(--fx-down) 0 6px, transparent 6px 10px); opacity: 1; }
 .fx-rb-link[data-state="planned"]::before { background: var(--fx-standby); opacity: .45; }
 .fx-rb-link[data-state="planned"] .fx-rb-badge { color: var(--fx-text-muted); border-style: dashed; }
-.fx-rb-path[data-preview] { background: var(--fx-l1-surface); }
-.fx-rb-path[data-preview] .fx-rb-node { background: var(--fx-l0-page); }
 
 /* 规则卡上的迷你链：一行一条路径。 */
 .fx-rb-mini { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; min-width: 0; }

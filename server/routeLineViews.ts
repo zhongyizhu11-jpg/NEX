@@ -269,6 +269,8 @@ export async function poolBoard(actor: { id: number; role: string }) {
       role: pool.role,
       note: pool.note,
       hostIds: pool.hostIds,
+      // 跟着这个池的入口组 / 出口组（2.3.497）
+      followers: groups.filter((group) => Number(group.poolId || 0) === pool.id).map((group) => String(group.domain || group.name || "")),
       members,
       usable: members.filter((member) => member.tone === "ok").length,
       total: members.length,
@@ -326,6 +328,8 @@ export async function poolBoard(actor: { id: number; role: string }) {
       provider: providerLabel(ddnsProvider),
       autoDns: group.ddnsAutoResolveEnabled !== false && group.ddnsAutoResolveEnabled !== 0,
       autoFailback: dbBool(group.autoFailback, true),
+      poolId: Number(group.poolId || 0) || null,
+      poolName: pools.find((pool) => pool.id === Number(group.poolId || 0))?.name ?? null,
       members,
       // DNS 轮询数在解析里的；主备数能接班的（在用 + 健康待命）
       usable: members.filter((member) => (failover ? member.ready : member.listed)).length,
@@ -368,6 +372,8 @@ export async function poolBoard(actor: { id: number; role: string }) {
       id: Number(group.id),
       name: String(group.name || ""),
       strategy: normalizeExitGroupStrategy(group.exitStrategy),
+      poolId: Number(group.poolId || 0) || null,
+      poolName: pools.find((pool) => pool.id === Number(group.poolId || 0))?.name ?? null,
       members,
       usable: members.filter((member) => member.tone === "ok").length,
       total: members.length,
