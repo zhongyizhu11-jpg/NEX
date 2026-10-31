@@ -5,7 +5,7 @@ import { getTunnelById } from "./repositories/tunnelRepository";
 import { getUserById } from "./repositories/userRepository";
 import { dbBool } from "./repositories/repositoryUtils";
 import { legacyFailoverColumns, syncRouteRelayRulesForRule } from "./routeGroups";
-import { parseRoutePaths, routeGroupOf, serializeRoutePaths, type RoutePath } from "../shared/routeGroup";
+import { parseRoutePaths, routeGroupOf, routeLineName, serializeRoutePaths, type RoutePath } from "../shared/routeGroup";
 import { expandRouteLines, parseRouteLines, routeLinesOf, serializeRouteLines, type RouteLine } from "../shared/routeLines";
 
 /*
@@ -46,10 +46,10 @@ export async function expandRouteGroupInputLines<T extends { routeGroup?: any }>
   const ruleTargetNodeId = (input as any).proxyNodeId !== undefined ? Number((input as any).proxyNodeId || 0) || null : options.ruleTargetNodeId ?? null;
   const context = await buildRouteExpandContext(actor, entryHostId, lines, { ruleTargetNodeId });
   const { paths, issues } = expandRouteLines(lines, context);
-  for (const line of lines) {
+  lines.forEach((line, lineIndex) => {
     const issue = issues.get(line.key);
-    if (issue) throw new Error(`线路「${line.name || line.key}」用不了：${issue}`);
-  }
+    if (issue) throw new Error(`线路「${routeLineName(line.name, lineIndex)}」用不了：${issue}`);
+  });
   if (paths.length < 2) throw new Error("线路组至少要两条路径：再加一条备用，或者给一层放两个候选");
   /*
     钉子和时段表按「第几条路径」记，编辑框按它自己预览展开的顺序给；服务端这边按实测延迟排，顺序

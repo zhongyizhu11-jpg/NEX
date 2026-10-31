@@ -110,8 +110,17 @@ export function routeLandingName(path: Path | null | undefined) {
 
 /** 行上的那条链：Po0 → 隧道 Jinx → HK 落地。 */
 export function routePathText(status: RouteStatus, path: Path, options: { tunnelPrefix?: boolean } = {}) {
+  const { head, landing } = routePathParts(status, path, options);
+  return `${head} → ${landing}`;
+}
+
+/**
+ * 链拆成两段：前面（入口 → 中转）和落地。手机上落地只写「落地」（地址、域名太长，一行放不下），宽屏写全
+ * （2.3.500，用户圈出来的那两处：线路图下面那行、连接那一条的最后一格）。
+ */
+export function routePathParts(status: RouteStatus, path: Path, options: { tunnelPrefix?: boolean } = {}) {
   const hops = path.hops.map((hop) => (hop.viaTunnel && options.tunnelPrefix !== false ? `隧道 ${hop.name}` : hop.name));
-  return [status.entry?.name || "入口", ...hops, routeLandingName(path)].join(" → ");
+  return { head: [status.entry?.name || "入口", ...hops].join(" → "), landing: routeLandingName(path) };
 }
 
 /** 落地写什么：自己的地址，没有就是「规则目标」。 */

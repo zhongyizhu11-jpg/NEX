@@ -4,6 +4,8 @@ import {
   defaultRoutePathName,
   newRoutePathKey,
   parseRoutePaths,
+  routeLineName,
+  routePathRoadKey,
   type RouteEndpoint,
   type RouteGroupRule,
   type RoutePath,
@@ -428,16 +430,31 @@ function compareOrder(a: number[], b: number[]) {
   return 0;
 }
 
+/** 一个组合是哪条路（和 routePathRoadKey 一个口径）：跨线路去重用。 */
+function comboRoadKey(combo: Combo) {
+  return routePathRoadKey({ hops: combo.hops, hopVia: combo.via, dest: combo.dest.dest, destNodeId: combo.dest.destNodeId, destHostId: combo.dest.destHostId ?? null });
+}
+
 /**
  * 线路 → 具体路径。总数不超过 limit（默认 MAX_ROUTE_PATHS）：先给每条线路一条，余下的按线路顺序
  * 轮着分（主线路先拿），线路自己组合不出更多就让给后面的。
  */
 export function expandRouteLines(lines: RouteLine[], ctx: RouteExpandContext, limit = MAX_ROUTE_PATHS): RouteExpandResult {
   const issues = new Map<string, string>();
+  /*
+    跨线路去重：后面一条线路里和前面线路一模一样的组合不再展开（同一条路已经在前面那一档了，再发一遍只是
+    重复的出站）。并列了几台的线路和别的线路部分重叠是常事（主线路「直连 / jinx」、备 1「经 jinx」），
+    不能因为这个就保存不了。整条线路都和前面重复时照样展开，让保存时的检查把它点出来（备用等于没备）。
+    暂停的线路不占路：主线路停着时，备 1 里经 jinx 那条照样展开，不然停了主线路备 1 反而少一台。
+  */
+  const seen = new Set<string>();
   const perLine = lines.map((line) => {
     const result = lineCombos(line, ctx, limit);
     if (result.issue) issues.set(line.key, result.issue);
-    return result.combos;
+    const fresh = result.combos.filter((combo) => !seen.has(comboRoadKey(combo)));
+    const kept = fresh.length > 0 ? fresh : result.combos;
+    if (!line.paused) for (const combo of kept) seen.add(comboRoadKey(combo));
+    return kept;
   });
   const quota = lines.map(() => 0);
   let remaining = limit;
@@ -473,7 +490,8 @@ export function expandRouteLines(lines: RouteLine[], ctx: RouteExpandContext, li
       const hasVia = combo.via.some((value) => value !== null);
       paths.push({
         key,
-        name: line.name || defaultRoutePathName(lineIndex),
+        // 默认名字按线路现在的位置叫（拖到第一位的「备用」就是主线路）
+        name: routeLineName(line.name, lineIndex),
         hops: combo.hops,
         ...(hasVia ? { hopVia: combo.via } : {}),
         dest: combo.dest.dest,

@@ -12,7 +12,7 @@ import { routeGroupOf, type RouteGroup } from "@shared/routeGroup";
 import { describeRoutePolicy, pinUntilSeconds, type RoutePolicy } from "@shared/routePolicy";
 import { RouteGroupSheet, type RouteStatus } from "./RouteGroupSheet";
 import { ROUTE_LINE_MODE_LABEL, chainLatency, routeLandingName, routeLineGroups } from "./routeLineText";
-import { LineBig, LineCard, LineChip, LinePill, formatLineMs, type LineTone } from "@/features/lines/LineUi";
+import { LineBig, LineCard, LineChip, LineLandingName, LinePill, formatLineMs, type LineTone } from "@/features/lines/LineUi";
 import { formatBytes } from "@shared/formatBytes";
 import { normalizeRouteDelivery } from "@shared/routeGroup";
 import type { ForwardGroupOptionRow, HostOptionRow, LineRuleRow } from "./routeLineOptions";
@@ -60,8 +60,10 @@ function LineCompactCard({ name, owner, status, info, onOpen }: { name: string; 
     ? (groups[0]?.reason || "都不通")
     : lineIndex > 0
       ? (main?.paused ? "主线路暂停" : main?.reason ? `主线路${/维护/.test(main.reason) ? "维护" : "故障"}` : "主线路故障")
-      : groups.length > 1 ? `备用 ${groups.length - 1}` : "";
-  const chain = active ? [entry, ...hops, routeLandingName(active)].join(" → ") : "调度这条线路的 Agent 还没上报";
+      // 「2 条备用」：写成「备用 2」会被看成在走第三条线路
+      : groups.length > 1 ? `${groups.length - 1} 条备用` : "";
+  // 落地在手机上只写「落地」（地址、域名太长），宽屏写全
+  const chain = active ? <>{[entry, ...hops].join(" → ")} → <LineLandingName name={routeLandingName(active)} /></> : "调度这条线路的 Agent 还没上报";
   const delivery = normalizeRouteDelivery(status.delivery);
   const mainCount = status.paths.filter((path) => (typeof path.tier === "number" ? path.tier : path.index) === 0).length;
   const chips = [

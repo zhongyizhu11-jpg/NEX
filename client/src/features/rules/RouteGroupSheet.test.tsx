@@ -17,7 +17,7 @@ const draft = newRouteGroupDraft({ timezone: TZ });
 const group: RouteGroup = {
   paths: [
     { ...draft.paths[0], hops: [2], dial: { ip: "203.0.113.2", port: 25311 } },
-    { ...draft.paths[1], name: "备用线路", hops: [3, 2], dest: { ip: "10.95.0.11", port: 443 }, dial: { ip: "203.0.113.3", port: 25312 } },
+    { ...draft.paths[1], name: "晚高峰", hops: [3, 2], dest: { ip: "10.95.0.11", port: 443 }, dial: { ip: "203.0.113.3", port: 25312 } },
   ],
   policy: { ...draft.policy, mode: "hybrid", schedule: { timezone: TZ, windows: [{ days: [1, 2, 3, 4, 5], from: "18:00", to: "01:00", targetIndex: 1 }] } },
 };
@@ -89,9 +89,9 @@ function status(patch: Partial<RouteStatus> = {}, paths?: RouteStatusPath[]): Ro
 }
 
 const events: RouteEvent[] = [
-  { id: 3, kind: "switch", fromKey: group.paths[0].key, toKey: group.paths[1].key, fromLabel: "主线路", toLabel: "备用线路", reason: "schedule", reasonText: "按时段表", score: 81, latencyMs: 61, at: NOW - 2 * 3_600_000 },
-  { id: 2, kind: "precheck_failed", fromKey: null, toKey: group.paths[1].key, fromLabel: null, toLabel: "备用线路", reason: "precheck:relay down: SG relay 03", reasonText: "预检未通过：中转异常：SG relay 03", score: null, latencyMs: null, at: NOW - 26 * 3_600_000 },
-  { id: 1, kind: "prewarm", fromKey: null, toKey: group.paths[1].key, fromLabel: null, toLabel: "备用线路", reason: "schedule", reasonText: "按时段表", score: null, latencyMs: null, at: NOW - 26.1 * 3_600_000 },
+  { id: 3, kind: "switch", fromKey: group.paths[0].key, toKey: group.paths[1].key, fromLabel: "主线路", toLabel: "晚高峰", reason: "schedule", reasonText: "按时段表", score: 81, latencyMs: 61, at: NOW - 2 * 3_600_000 },
+  { id: 2, kind: "precheck_failed", fromKey: null, toKey: group.paths[1].key, fromLabel: null, toLabel: "晚高峰", reason: "precheck:relay down: SG relay 03", reasonText: "预检未通过：中转异常：SG relay 03", score: null, latencyMs: null, at: NOW - 26 * 3_600_000 },
+  { id: 1, kind: "prewarm", fromKey: null, toKey: group.paths[1].key, fromLabel: null, toLabel: "晚高峰", reason: "schedule", reasonText: "按时段表", score: null, latencyMs: null, at: NOW - 26.1 * 3_600_000 },
 ];
 
 function render(options: { status?: RouteStatus | null; events?: RouteEvent[]; host?: any; rule?: typeof rule } = {}) {
@@ -112,7 +112,7 @@ test("三段都在：路径、调度计划、最近切换", () => {
   const order = ["路径", "调度计划", "最近切换"].map((header) => html.indexOf(`>${header}<`));
   assert.ok(order.every((position) => position > 0), `少了一段：${order.join(",")}`);
   assert.deepEqual([...order].sort((left, right) => left - right), order, "顺序就是从上往下");
-  assert.match(html, /现在走 备用线路，18:00 起/);
+  assert.match(html, /现在走 晚高峰，18:00 起/);
 });
 
 test("路径画成链：在走的排最前，段上写每一跳的延迟、整链相加，节点下写中继端口；评分和连接数在卡头", () => {
@@ -120,7 +120,7 @@ test("路径画成链：在走的排最前，段上写每一跳的延迟、整�
   const cards = html.split('data-testid="route-path-card"');
   assert.equal(cards.length, 3, "两条路径两张卡");
   const active = cards[1];
-  assert.match(active, /备用线路/);
+  assert.match(active, /晚高峰/);
   assert.match(active, />在走</);
   // 入口探第一跳 61ms，SG 探 JP 18ms，JP 探落地 28ms：整链 107。
   assert.match(active, /61 ms[^]*?SG relay 03[^]*?中继 <span[^>]*>:25310<[^]*?18 ms[^]*?JP relay 02[^]*?中继 <span[^>]*>:25311<[^]*?28 ms[^]*?落地/);
@@ -155,7 +155,7 @@ test("调度计划：策略模板、此刻起作用的那一行、切换保护�
 test("最近切换：时间、从哪条到哪条、原因；计划切换未执行写明继续用原路径", () => {
   const html = render();
   assert.equal((html.match(/data-testid="route-event"/g) || []).length, 3);
-  assert.match(html, /切换[^]*?主线路 → 备用线路[^]*?按时段表 · 评分 81 良/);
+  assert.match(html, /切换[^]*?主线路 → 晚高峰[^]*?按时段表 · 评分 81 良/);
   assert.match(html, /计划切换未执行[^]*?预检未通过：中转异常：SG relay 03 · 继续使用原路径/);
   assert.match(html, /9月21日 18:00/, "不是同一天的带日期");
   assert.match(render({ events: [] }), /还没有记录/);
@@ -267,7 +267,7 @@ test("线路详情里直接改：编辑器每条线路后面是此刻的状态�
   const onPause = (lineKey: string, value: boolean) => { paused.push(`${lineKey}:${value}`); };
   const backup = renderToStaticMarkup(<>{routeLineStatusControls(status(), group.paths[1].key, onPause)}</>);
   assert.match(backup, /data-testid="route-line-state"[^>]*>[^]*使用中/, "在走的那条写「使用中」");
-  assert.match(backup, /aria-label="暂停线路 备用线路"/, "暂停按钮还在，不用保存");
+  assert.match(backup, /aria-label="暂停线路 晚高峰"/, "暂停按钮还在，不用保存");
   const main = renderToStaticMarkup(<>{routeLineStatusControls(status(), group.paths[0].key)}</>);
   assert.match(main, /待命/);
   assert.doesNotMatch(main, /route-line-pause/, "只能看的时候没有暂停");

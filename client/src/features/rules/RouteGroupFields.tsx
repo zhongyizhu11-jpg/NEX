@@ -25,6 +25,7 @@ import {
   ROUTE_SWITCH_MODE_INFO,
   ROUTE_SWITCH_MODE_SESSION_HINTS,
   applyRouteMode,
+  routeLineName,
   routePathLabel,
   routeSwitchWithinSeconds,
   routePathLetter,
@@ -464,7 +465,7 @@ export function RouteGroupFields({
       : next === "cold" ? { delivery: next, switchMode: "smooth" } : { delivery: next };
     setPolicy(patch);
   };
-  const lineTitle = (line: RouteLine, index: number) => (index === 0 ? "主线路" : line.name || `备 ${index}`);
+  const lineTitle = (line: RouteLine, index: number) => routeLineName(line.name, index);
 
   const pinPicker = (advanced: boolean) => (
     <div className="flex min-w-0 flex-col gap-2">

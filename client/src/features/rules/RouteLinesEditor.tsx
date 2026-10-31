@@ -17,7 +17,7 @@ import {
 } from "@/features/lines/LineUi";
 import { cn } from "@/lib/utils";
 import { formatFailoverEndpoint, parseFailoverEndpoint } from "@shared/failoverTargets";
-import { MAX_ROUTE_HOPS, MAX_ROUTE_PATHS, defaultRoutePathName, describeRouteIssue, type RoutePath } from "@shared/routeGroup";
+import { MAX_ROUTE_HOPS, MAX_ROUTE_PATHS, defaultRoutePathName, describeRouteIssue, isDefaultRouteLineName, type RoutePath } from "@shared/routeGroup";
 import { MAX_LAYER_CANDIDATES, MAX_LINE_DESTS, expandRouteLines, newRouteLayer, newRouteLine, type RouteLayer, type RouteLine } from "@shared/routeLines";
 import { routeNodeOptionLabel } from "./routeLineOptions";
 import { segmentKey, useSegmentLatency } from "./segmentLatency";
@@ -208,8 +208,11 @@ export function RouteLinesEditor({
     for (const layer of line.layers) {
       const candidates = candidatesOf(layer);
       if (layer.kind === "pool") parts.push(pools.find((pool) => pool.id === layer.poolId)?.name || "节点池");
-      else if (candidates[0]) parts.push(candidates[0].kind === "tunnel" ? `隧道 ${hostName(candidates[0].to)}` : candidates[0].label);
-      if (candidates.length > 1 && layer.kind !== "pool") parts[parts.length - 1] += ` 等 ${candidates.length} 个`;
+      else if (candidates[0]) {
+        const first = candidates[0].kind === "tunnel" ? `隧道 ${hostName(candidates[0].to)}` : candidates[0].label;
+        // 和直连并列的一跳（可跳过）：「直连 / jinx」
+        parts.push(`${layer.skippable ? "直连 / " : ""}${first}${candidates.length > 1 ? ` 等 ${candidates.length} 个` : ""}`);
+      }
     }
     parts.push(destText(line));
     return parts.join(" → ");
@@ -218,7 +221,8 @@ export function RouteLinesEditor({
   const destText = (line: RouteLine) => {
     const nodeId = line.dests[0]?.destNodeId || (line.dests.length === 0 ? ruleTargetNodeId : null);
     const node = nodeId ? nodeOptions.find((option) => option.id === nodeId) : null;
-    return node?.landingPool ? node.name : "落地";
+    // 并列了几个落地：和中转一样写「等 N 个」
+    return `${node?.landingPool ? node.name : "落地"}${line.dests.length > 1 ? ` 等 ${line.dests.length} 个` : ""}`;
   };
 
   const testButton = (line: RouteLine, lineIndex: number) => (
@@ -235,21 +239,32 @@ export function RouteLinesEditor({
     </LineChipButton>
   );
 
-  const addHopMenu = (lineIndex: number, previousHost: number, label: string) => (
+  /**
+   * 「+ 加中转」：这条线路多经一台（或一条隧道）。parallel = 直连的线路上的「+ 并列」：这一跳和直连并列
+   * （可跳过的一层，展开成「直连」「经它」两条，挑整条链最快的），拿掉「直连」就是只走中转。
+   */
+  const addHopMenu = (lineIndex: number, previousHost: number, label: string, parallel = false) => (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <LineChipButton variant="add" data-testid="route-line-add-layer">{label}</LineChipButton>
+        <LineChipButton
+          variant="add"
+          data-testid={parallel ? "route-line-add-direct-parallel" : "route-line-add-layer"}
+          title={parallel ? "和直连并列一条经中转的：两条里挑整条链最快的" : undefined}
+        >
+          {label}
+        </LineChipButton>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="max-h-80 overflow-y-auto">
+        {parallel ? <DropdownMenuLabel className="text-[11px] font-normal text-muted-foreground">和直连并列：两条里挑整条链最快的</DropdownMenuLabel> : null}
         {/* 加中转只加一台（或一条隧道）：要一组就加完再「+ 并列」，或者在「+ 并列」里换成节点池 */}
         {allowTunnels && tunnels.some((tunnel) => tunnel.entryHostId === previousHost) ? <DropdownMenuLabel className="text-[11px]">隧道（从上一个节点出发）</DropdownMenuLabel> : null}
         {allowTunnels ? tunnels.filter((tunnel) => tunnel.entryHostId === previousHost).map((tunnel) => (
-          <DropdownMenuItem key={`t${tunnel.id}`} onSelect={() => addLayer(lineIndex, newRouteLayer({ kind: "tunnel", tunnelIds: [tunnel.id] }))}>{tunnel.name} → {hostName(tunnel.exitHostId)}</DropdownMenuItem>
+          <DropdownMenuItem key={`t${tunnel.id}`} onSelect={() => addLayer(lineIndex, newRouteLayer({ kind: "tunnel", tunnelIds: [tunnel.id], skippable: parallel }))}>{tunnel.name} → {hostName(tunnel.exitHostId)}</DropdownMenuItem>
         )) : null}
         {allowTunnels && tunnels.some((tunnel) => tunnel.entryHostId === previousHost) ? <DropdownMenuSeparator /> : null}
         <DropdownMenuLabel className="text-[11px]">机器</DropdownMenuLabel>
         {hosts.filter((host) => host.id !== entryHostId).map((host) => (
-          <DropdownMenuItem key={`h${host.id}`} onSelect={() => addLayer(lineIndex, newRouteLayer({ kind: "hosts", hostIds: [host.id] }))}>{host.name}{host.isOnline === false ? "（离线）" : ""}</DropdownMenuItem>
+          <DropdownMenuItem key={`h${host.id}`} onSelect={() => addLayer(lineIndex, newRouteLayer({ kind: "hosts", hostIds: [host.id], skippable: parallel }))}>{host.name}{host.isOnline === false ? "（离线）" : ""}</DropdownMenuItem>
         ))}
       </DropdownMenuContent>
     </DropdownMenu>
@@ -400,7 +415,20 @@ export function RouteLinesEditor({
             竖链上的点是一跳接一跳，「并」和「串」一眼分开（用户给的写法）。只有一台时就是普通的胶囊。点胶囊里某一台：
             排到最前 / 去掉。「+ 并列」再放一台，或者把这一跳换成节点池（池就是一组现成的并列机器）。
           */
-          const grouped = candidates.length > 1;
+          // 和直连并列的一跳：胶囊里第一个是「直连」（点它：去掉直连 = 只走中转）
+          const grouped = candidates.length + (layer.skippable ? 1 : 0) > 1;
+          const directOption = layer.skippable ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button type="button" className="inline-flex min-w-0 items-center gap-[5px] whitespace-nowrap rounded-full px-[6px] py-[2px] text-[11.5px] leading-[1.3] text-foreground" title="不经这一跳，直接到下一个节点" data-testid="route-line-direct-option">
+                  直连
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-56">
+                <DropdownMenuItem onSelect={() => setLayer(lineIndex, layerIndex, { skippable: false })}>去掉直连（只走中转）</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : null;
           const candidateMenu = (candidate: Candidate, index: number) => (
             <DropdownMenuContent align="start" className="w-56">
               {index > 0 && layer.pick === "order" ? <DropdownMenuItem onSelect={() => moveFirst(candidate)}>排到最前</DropdownMenuItem> : null}
@@ -419,9 +447,10 @@ export function RouteLinesEditor({
                 <div className="flex min-w-0 flex-wrap items-center gap-1.5" data-testid="route-line-layer">
                   {grouped ? (
                     <div className="inline-flex min-w-0 max-w-full flex-wrap items-center rounded-[12px] border border-[var(--fx-accent)] bg-[var(--fx-accent-soft)] px-[3px] py-[1px]" data-grouped="true">
+                      {directOption}
                       {candidates.map((candidate, index) => (
                         <Fragment key={`${candidate.kind}${candidate.id}`}>
-                          {index > 0 ? <span aria-hidden className="px-[1px] text-[11.5px] text-muted-foreground">/</span> : null}
+                          {index > 0 || directOption ? <span aria-hidden className="px-[1px] text-[11.5px] text-muted-foreground">/</span> : null}
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
                               <button
@@ -472,10 +501,9 @@ export function RouteLinesEditor({
                     </DropdownMenu>
                   ) : null}
                 </div>
-                {grouped || layer.skippable ? (
+                {grouped ? (
                   <div className="mt-[6px] flex min-w-0 flex-wrap items-center gap-[10px]">
-                    {grouped ? pickMenu : null}
-                    {skipChip}
+                    {pickMenu}
                   </div>
                 ) : null}
             </>
@@ -489,6 +517,7 @@ export function RouteLinesEditor({
             <div className="flex min-w-0 flex-wrap items-center gap-2">
               {line.layers.length === 0 ? <span className="text-[12px] text-muted-foreground">入口直连落地</span> : null}
               {addHopMenu(lineIndex, previousHost, "+ 加中转")}
+              {line.layers.length === 0 ? addHopMenu(lineIndex, previousHost, "+ 并列", true) : null}
             </div>
           </div>
         ) : null}
@@ -539,13 +568,10 @@ export function RouteLinesEditor({
           <div className="rounded-b-[12px] border border-t-0 border-[var(--fx-stroke-weak)] bg-[var(--fx-l1-surface)] px-[10px] pb-[10px]">
             {/* 名字像标题一样摆着，点一下就能改（以前是一整个输入框，太重）；右边测一下、删除 */}
             <div className="flex min-w-0 items-center gap-2 border-t border-dashed border-[var(--fx-stroke-weak)] pt-2">
-              <input
-                value={line.name}
-                onChange={(event) => setLine(lineIndex, { name: event.target.value.slice(0, 40) })}
-                placeholder={isMain ? "主线路" : defaultRoutePathName(lineIndex)}
-                aria-label={isMain ? "主线路的名字" : `备 ${lineIndex} 的名字`}
-                title="点一下改名字"
-                className="min-w-0 flex-1 rounded-[6px] bg-transparent px-1 py-[3px] text-[13px] font-semibold outline-none hover:bg-[var(--fx-l2-group)] focus:bg-[var(--fx-l2-group)]"
+              <LineNameInput
+                name={line.name}
+                lineIndex={lineIndex}
+                onChange={(name) => setLine(lineIndex, { name })}
               />
               {testButton(line, lineIndex)}
               {isMain ? null : (
@@ -651,6 +677,32 @@ export function RouteLinesEditor({
   );
 }
 
+/**
+ * 线路的名字。「主线路」「备用 2」这种默认名按线路现在的位置叫，框里不显示（灰字是位置名），免得拖过位置的
+ * 主线路框里还写着「备用」；正在打字时原样显示，不然打个「备」字（「备用香港」的头一个字）就被吞了。
+ */
+function LineNameInput({ name, lineIndex, onChange }: { name: string; lineIndex: number; onChange: (name: string) => void }) {
+  // 打字时框里是打的原样；没在改的时候默认名显示成空（灰字位置名）
+  const [draft, setDraft] = useState<string | null>(null);
+  const shown = (text: string) => (isDefaultRouteLineName(text) ? "" : text);
+  return (
+    <input
+      value={draft ?? shown(name)}
+      onChange={(event) => {
+        const next = event.target.value.slice(0, 40);
+        setDraft(next);
+        onChange(next);
+      }}
+      onFocus={() => setDraft(shown(name))}
+      onBlur={() => setDraft(null)}
+      placeholder={defaultRoutePathName(lineIndex)}
+      aria-label={lineIndex === 0 ? "主线路的名字" : `备 ${lineIndex} 的名字`}
+      title="点一下改名字"
+      className="min-w-0 flex-1 rounded-[6px] bg-transparent px-1 py-[3px] text-[13px] font-semibold outline-none hover:bg-[var(--fx-l2-group)] focus:bg-[var(--fx-l2-group)]"
+    />
+  );
+}
+
 function DestEditor({ line, mainAddress, nodeOptions, pools = [], hostName = (id) => `主机 ${id}`, ruleTargetNodeId = null, latency, onChange }: {
   line: RouteLine;
   mainAddress: string;
@@ -662,10 +714,16 @@ function DestEditor({ line, mainAddress, nodeOptions, pools = [], hostName = (id
   latency: number | null | undefined;
   onChange: (dests: RouteLine["dests"]) => void;
 }) {
-  const [typing, setTyping] = useState(false);
+  /*
+    加落地两种：「换落地」把规则目标换掉；「+ 并列」留着现在的（包括规则目标）再并列一个，几个里挑最快的。
+    以前规则目标那一格只有「换落地」，主线路、直连的备用想并列一个落地做不到（2.3.500 起都有「+ 并列」）。
+  */
+  const [typing, setTyping] = useState<null | "replace" | "append">(null);
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const dests = line.dests.length > 0 ? line.dests : [{ dest: null, destNodeId: null }];
+  const baseFor = (mode: "replace" | "append"): RouteLine["dests"] => (line.dests.length > 0 ? line.dests : mode === "append" ? [{ dest: null, destNodeId: null }] : []);
+  const addDest = (mode: "replace" | "append", candidate: RouteLine["dests"][number]) => onChange([...baseFor(mode), candidate].slice(0, MAX_LINE_DESTS));
   const label = (item: RouteLine["dests"][number]) => {
     if (item.destNodeId) {
       const node = nodeOptions.find((option) => option.id === item.destNodeId);
@@ -682,7 +740,8 @@ function DestEditor({ line, mainAddress, nodeOptions, pools = [], hostName = (id
   const plainNodes = nodeOptions.filter((node) => !node.landingPool);
   const commit = () => {
     const text = draft.replace(/\s+/g, "");
-    if (!text) { setTyping(false); return; }
+    const mode = typing || "append";
+    if (!text) { setTyping(null); return; }
     const parsed = parseFailoverEndpoint(text);
     if (!parsed || "error" in parsed) {
       setError("格式是 地址:端口");
@@ -690,11 +749,30 @@ function DestEditor({ line, mainAddress, nodeOptions, pools = [], hostName = (id
     }
     setError(null);
     setDraft("");
-    setTyping(false);
-    const next = line.dests.length > 0 ? line.dests : [];
-    if (next.length >= MAX_LINE_DESTS) return;
-    onChange([...next, { dest: { ip: parsed.host, port: parsed.port }, destNodeId: null }]);
+    setTyping(null);
+    if (baseFor(mode).length >= MAX_LINE_DESTS) return;
+    addDest(mode, { dest: { ip: parsed.host, port: parsed.port }, destNodeId: null });
   };
+  const menu = (mode: "replace" | "append") => (
+    <DropdownMenuContent align="start" className="max-h-72 overflow-y-auto">
+      {poolNodes.length > 0 ? <DropdownMenuLabel className="text-[11px]">落地池</DropdownMenuLabel> : null}
+      {poolNodes.map((node) => (
+        <DropdownMenuItem key={node.id} data-testid="route-line-dest-pool" onSelect={() => addDest(mode, { dest: null, destNodeId: node.id })}>
+          <span className="min-w-0 truncate">{node.name}</span>
+          <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">{node.landingPool!.ready}/{node.landingPool!.members} 台</span>
+        </DropdownMenuItem>
+      ))}
+      {poolNodes.length > 0 && plainNodes.length > 0 ? <DropdownMenuSeparator /> : null}
+      {plainNodes.length > 0 ? <DropdownMenuLabel className="text-[11px]">我的节点</DropdownMenuLabel> : null}
+      {plainNodes.map((node) => (
+        <DropdownMenuItem key={node.id} onSelect={() => addDest(mode, { dest: { ip: node.address, port: node.port }, destNodeId: node.id })}>
+          {node.name} · {node.address}:{node.port}
+        </DropdownMenuItem>
+      ))}
+      {nodeOptions.length > 0 ? <DropdownMenuSeparator /> : null}
+      <DropdownMenuItem onSelect={() => setTyping(mode)}>填 IP:端口…</DropdownMenuItem>
+    </DropdownMenuContent>
+  );
   return (
     <div className="flex min-w-0 flex-col gap-1">
       <div className="flex min-w-0 flex-wrap items-center gap-1.5">
@@ -735,35 +813,20 @@ function DestEditor({ line, mainAddress, nodeOptions, pools = [], hostName = (id
             </LineChip>
           )
         ))}
-        {dests.length < MAX_LINE_DESTS || line.dests.length === 0 ? (
+        {line.dests.length === 0 ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <LineChipButton
-                variant="add"
-                data-testid="route-line-dest-add"
-                title={line.dests.length === 0 ? "换一个落地：选我的节点，或填 IP:端口" : "同一个落地位置再并列一个：几个里挑最快的"}
-              >
-                {line.dests.length === 0 ? "换落地" : "+ 并列"}
-              </LineChipButton>
+              <LineChipButton variant="add" data-testid="route-line-dest-add" title="换一个落地：选我的节点、落地池，或填 IP:端口">换落地</LineChipButton>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="max-h-72 overflow-y-auto">
-              {poolNodes.length > 0 ? <DropdownMenuLabel className="text-[11px]">落地池</DropdownMenuLabel> : null}
-              {poolNodes.map((node) => (
-                <DropdownMenuItem key={node.id} data-testid="route-line-dest-pool" onSelect={() => onChange([...line.dests, { dest: null, destNodeId: node.id }].slice(0, MAX_LINE_DESTS))}>
-                  <span className="min-w-0 truncate">{node.name}</span>
-                  <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">{node.landingPool!.ready}/{node.landingPool!.members} 台</span>
-                </DropdownMenuItem>
-              ))}
-              {poolNodes.length > 0 && plainNodes.length > 0 ? <DropdownMenuSeparator /> : null}
-              {plainNodes.length > 0 ? <DropdownMenuLabel className="text-[11px]">我的节点</DropdownMenuLabel> : null}
-              {plainNodes.map((node) => (
-                <DropdownMenuItem key={node.id} onSelect={() => onChange([...line.dests, { dest: { ip: node.address, port: node.port }, destNodeId: node.id }].slice(0, MAX_LINE_DESTS))}>
-                  {node.name} · {node.address}:{node.port}
-                </DropdownMenuItem>
-              ))}
-              {nodeOptions.length > 0 ? <DropdownMenuSeparator /> : null}
-              <DropdownMenuItem onSelect={() => setTyping(true)}>填 IP:端口…</DropdownMenuItem>
-            </DropdownMenuContent>
+            {menu("replace")}
+          </DropdownMenu>
+        ) : null}
+        {dests.length < MAX_LINE_DESTS ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <LineChipButton variant="add" data-testid="route-line-dest-parallel" title="现在这个落地留着，再并列一个：几个里挑最快的">+ 并列</LineChipButton>
+            </DropdownMenuTrigger>
+            {menu("append")}
           </DropdownMenu>
         ) : null}
       </div>
@@ -775,7 +838,7 @@ function DestEditor({ line, mainAddress, nodeOptions, pools = [], hostName = (id
           onBlur={commit}
           onKeyDown={(event) => {
             if (event.key === "Enter") { event.preventDefault(); commit(); }
-            if (event.key === "Escape") { event.preventDefault(); setTyping(false); setDraft(""); setError(null); }
+            if (event.key === "Escape") { event.preventDefault(); setTyping(null); setDraft(""); setError(null); }
           }}
           placeholder="落地地址：IP:端口"
           aria-label="落地地址"

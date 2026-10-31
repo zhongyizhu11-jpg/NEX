@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { MAX_ROUTE_PATHS, parseRoutePaths, serializeRoutePaths, validateRouteGroup, newRouteGroupDraft, type RoutePath } from "./routeGroup";
+import { MAX_ROUTE_PATHS, isDefaultRouteLineName, parseRoutePaths, routePathLabel, serializeRoutePaths, validateRouteGroup, newRouteGroupDraft, type RoutePath } from "./routeGroup";
 import {
   expandRouteLines,
   newRouteLayer,
@@ -223,4 +223,65 @@ test("落地池的几台不算重复路径；同一台出现两次才算", () =>
   assert.equal(validateRouteGroup({ paths, policy: group.policy } as any, { entryHostId: 1, hostIds: null, hasRuleTarget: true, rejectDuplicates: true }), null);
   const twice = [paths[0], { ...paths[0], key: "dup" }];
   assert.match(String(validateRouteGroup({ paths: twice, policy: group.policy } as any, { entryHostId: 1, hostIds: null, hasRuleTarget: true, rejectDuplicates: true })), /同一条/);
+});
+
+// ---------------------------------------------------------------- 并列和别的线路重叠、默认名按位置（2.3.500）
+
+const VALIDATE = { entryHostId: 1, hostIds: null, hasRuleTarget: true, rejectDuplicates: true } as const;
+const policyOf = () => newRouteGroupDraft({ timezone: "Asia/Shanghai" }).policy;
+
+test("备用并列的一台和主线路那条重了：只展开新的那台，照样能保存", () => {
+  const main = line("main", { layers: [newRouteLayer({ kind: "hosts", hostIds: [2] })] });
+  const backup = line("bk1", { layers: [newRouteLayer({ kind: "hosts", hostIds: [3, 2] })] });
+  const { paths, issues } = expandRouteLines([main, backup], ctx());
+  assert.equal(issues.size, 0);
+  assert.deepEqual(paths.map((path) => [path.lineKey, path.hops.join("."), path.tier]), [["main", "2", 0], ["bk1", "3", 1]], "经 2 那条已经在主线路，备 1 只留经 3");
+  assert.equal(validateRouteGroup({ paths, policy: policyOf() } as any, VALIDATE), null);
+});
+
+test("主线路「直连 / 2」、备 1 只经 2：备 1 整条和主线路重了，保存时点名两条", () => {
+  const main = line("main", { name: "主线路", layers: [newRouteLayer({ kind: "hosts", hostIds: [2], skippable: true })] });
+  const backup = line("bk1", { name: "备用 1", layers: [newRouteLayer({ kind: "hosts", hostIds: [2] })] });
+  const { paths } = expandRouteLines([main, backup], ctx());
+  assert.deepEqual(paths.filter((path) => path.lineKey === "main").map((path) => path.hops.join(".")).sort(), ["", "2"], "主线路直连、经 2 各一条");
+  assert.deepEqual(paths.filter((path) => path.lineKey === "bk1").map((path) => path.hops.join(".")), ["2"], "整条都重的线路照样展开，让检查点出来");
+  assert.match(String(validateRouteGroup({ paths, policy: policyOf() } as any, VALIDATE)), /「主线路」和「备用 1」走的是同一条路/);
+});
+
+test("两条直连线路各并列一台：主线路「直连 / 2」、备 1「直连 / 3」，备 1 只多出经 3 那条", () => {
+  const main = line("main", { layers: [newRouteLayer({ kind: "hosts", hostIds: [2], skippable: true })] });
+  const backup = line("bk1", { layers: [newRouteLayer({ kind: "hosts", hostIds: [3], skippable: true })] });
+  const { paths } = expandRouteLines([main, backup], ctx());
+  assert.deepEqual(paths.filter((path) => path.lineKey === "bk1").map((path) => path.hops.join(".")), ["3"], "直连那条主线路已经有了");
+  assert.equal(validateRouteGroup({ paths, policy: policyOf() } as any, VALIDATE), null);
+});
+
+test("默认名字按线路现在的位置叫：删了主线路，原来的「备用 1」就是主线路；人起的名字不变", () => {
+  const lines = [
+    line("a", { name: "备用 1", layers: [newRouteLayer({ kind: "hosts", hostIds: [2] })] }),
+    line("b", { name: "主线路", layers: [newRouteLayer({ kind: "hosts", hostIds: [3] })] }),
+    line("c", { name: "晚高峰", layers: [newRouteLayer({ kind: "hosts", hostIds: [6] })] }),
+    line("d", { name: "", layers: [] }),
+  ];
+  const { paths } = expandRouteLines(lines, ctx());
+  assert.deepEqual(paths.map((path) => path.name), ["主线路", "备用 1", "晚高峰", "备用 3"]);
+  // 老数据里存着的路径名（2.3.499 以前展开时写进去的）按 tier 叫
+  assert.equal(routePathLabel({ name: "备用 1", tier: 0 }, 3), "主线路");
+  assert.equal(routePathLabel({ name: "备用", tier: 2 }, 0), "备用 2");
+  assert.equal(routePathLabel({ name: "主线路" }, 1), "备用 1", "没有 tier 的老路径按自己的位置");
+  assert.equal(routePathLabel({ name: "晚高峰", tier: 0 }, 0), "晚高峰");
+  for (const name of ["主线路", "主", "备用", "备用线路", "备用 2", "备2", "备 12"]) assert.ok(isDefaultRouteLineName(name), `「${name}」是默认名`);
+  for (const name of ["晚高峰", "备用香港", "主力"]) assert.equal(isDefaultRouteLineName(name), false, `「${name}」是人起的`);
+});
+
+test("暂停的线路不占路：主线路停着时备 1 里和它重的那台照样展开，保存不报重复", () => {
+  const main = line("main", { paused: true, layers: [newRouteLayer({ kind: "hosts", hostIds: [2] })] });
+  const backup = line("bk1", { layers: [newRouteLayer({ kind: "hosts", hostIds: [3, 2] })] });
+  const { paths } = expandRouteLines([main, backup], ctx());
+  assert.deepEqual(paths.filter((path) => path.lineKey === "main").map((path) => [path.hops.join("."), !!path.paused]), [["2", true]], "主线路照样展开，带 paused");
+  assert.deepEqual(paths.filter((path) => path.lineKey === "bk1").map((path) => path.hops.join(".")).sort(), ["2", "3"], "主线路停着，备 1 两台都在");
+  assert.equal(validateRouteGroup({ paths, policy: policyOf() } as any, VALIDATE), null);
+  // 主线路没停：经 2 归主线路，备 1 只剩经 3
+  const active = expandRouteLines([{ ...main, paused: false }, backup], ctx()).paths;
+  assert.deepEqual(active.filter((path) => path.lineKey === "bk1").map((path) => path.hops.join(".")), ["3"]);
 });

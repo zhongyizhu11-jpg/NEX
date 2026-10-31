@@ -437,7 +437,7 @@ export const lineDiagnosticsRouter = router({
       const template = Number(viewed.forwardGroupRuleId || 0) > 0 ? await db.getForwardRuleById(Number(viewed.forwardGroupRuleId)) as any : null;
       const rule = template || viewed;
       if (ctx.user.role !== "admin" && Number(rule.userId) !== Number(ctx.user.id)) throw new Error("无权操作此规则");
-      const { parseRoutePaths, serializeRoutePaths } = await import("@shared/routeGroup");
+      const { parseRoutePaths, routeLineName, serializeRoutePaths } = await import("@shared/routeGroup");
       const { routeLinesOf, serializeRouteLines } = await import("@shared/routeLines");
       const lines = routeLinesOf(rule);
       const paths = parseRoutePaths(rule.routePaths);
@@ -463,7 +463,10 @@ export const lineDiagnosticsRouter = router({
         fromKey: null,
         toKey: input.lineKey,
         fromLabel: null,
-        toLabel: lines.find((line) => line.key === input.lineKey)?.name || input.lineKey,
+        toLabel: (() => {
+          const lineIndex = lines.findIndex((line) => line.key === input.lineKey);
+          return lineIndex >= 0 ? routeLineName(lines[lineIndex].name, lineIndex) : input.lineKey;
+        })(),
         reason: `panel: ${input.paused ? "手动暂停这条线路" : "恢复这条线路"}`,
         score: null,
         latencyMs: null,
