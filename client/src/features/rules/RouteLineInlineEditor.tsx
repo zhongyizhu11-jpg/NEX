@@ -70,7 +70,7 @@ function withLinePaused(draft: RouteGroupDraft | null, lineKey: string, paused: 
   };
 }
 
-export function useRouteLineEditor({ rule, enabled, status, onPause, pausing = false, lineSwitch }: {
+export function useRouteLineEditor({ rule, enabled, status, onPause, pausing = false, lineSwitch, settingsOpen = false }: {
   /** 没有（转发组的子规则、只能看）就不出编辑器，详情里照旧是只读的线路列表。 */
   rule: LineRuleRow | null;
   /** 详情开着：开的那一下从库里那份开始。关着时不动，免得关的动画里编辑器先变回列表。 */
@@ -81,6 +81,8 @@ export function useRouteLineEditor({ rule, enabled, status, onPause, pausing = f
   pausing?: boolean;
   /** 手动换线路：点每条线路的状态胶囊「切到这条」（人工指定，马上生效、不用保存）。 */
   lineSwitch?: RouteLineSwitch;
+  /** 「添加备用线路 / 怎么切 / 高级策略」展没展开（「线路」标题右边那行点开，2.3.499）。 */
+  settingsOpen?: boolean;
 }): { editor: ReactNode; saveBar: ReactNode } {
   const utils = trpc.useUtils();
   const active = enabled && !!rule;
@@ -224,6 +226,7 @@ export function useRouteLineEditor({ rule, enabled, status, onPause, pausing = f
         activeLineKey={status ? routeLineGroups(status).find((group) => group.active)?.key ?? null : null}
         startCollapsed
         pinOnLineStatus={!!lineSwitch}
+        groupSettingsOpen={settingsOpen}
       />
     </SegmentLatencyProvider>
   ) : null;

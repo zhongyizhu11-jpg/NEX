@@ -344,6 +344,8 @@ export function RouteGroupSheet({
   // 状态 3 秒一刷（数字要跟得上）；切换记录不会那么勤，10 秒够了
   const eventsQuery = trpc.rules.routeEvents.useQuery({ ruleId: Number(ruleId), limit: 20 }, { enabled, refetchInterval: refetchIntervalMs ? Math.max(refetchIntervalMs, 10_000) : false, staleTime: 5_000 });
   const [detailsOpen, setDetailsOpen] = useState(false);
+  // 「添加备用线路 / 怎么切 / 高级策略」默认收着（照效果图 ①），点「线路」标题右边那行展开
+  const [settingsOpen, setSettingsOpen] = useState(false);
   /*
     关的那一下（130ms 的动画）调用方已经把规则清掉了，拿上一份接着画 —— 不然面板在
     动画里先塌成只剩标题再消失。
@@ -376,10 +378,11 @@ export function RouteGroupSheet({
     onPause: linePause.onPause,
     pausing: linePause.pausing,
     lineSwitch,
+    settingsOpen,
   });
   const editRuleFallback = canEdit && !shown?.rule && !!onEdit;
   return (
-    <Dialog open={open && !!policy} onOpenChange={(next) => { if (!next) setDetailsOpen(false); onOpenChange(next); }}>
+    <Dialog open={open && !!policy} onOpenChange={(next) => { if (!next) { setDetailsOpen(false); setSettingsOpen(false); } onOpenChange(next); }}>
       {shown ? (
         // 打开时不把焦点放进去：第一个能聚焦的是主线路的名字，手机上一开键盘就弹出来
         <DialogContent className="gap-3 bg-[var(--fx-l0-page)] sm:max-w-xl" onOpenAutoFocus={(event) => event.preventDefault()}>
@@ -414,6 +417,7 @@ export function RouteGroupSheet({
               timeZone={panel.timeZone}
               editor={editing.editor}
               lineSwitch={lineSwitch}
+              settings={editing.editor ? { open: settingsOpen, onToggle: () => setSettingsOpen(!settingsOpen) } : undefined}
             />
           ) : null}
           {detailsOpen || (status && status.paths.length === 0) ? (

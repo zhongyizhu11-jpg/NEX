@@ -237,6 +237,17 @@ test("提交的那份按模式归零：时段表只在定时 / 混合，指定�
   assert.deepEqual(payload.lines?.[0].layers, [{ kind: "hosts", hostIds: [2], pick: "order" }]);
 });
 
+test("线路详情里「添加备用线路 / 拖动排序 / 怎么切 / 高级策略」收起来（照效果图 ①，2.3.499）：收起时只剩线路几行；规则表单里一直都在", () => {
+  const closed = render(group("smart"), false, "tcp", { groupSettingsOpen: false });
+  assert.equal(count(closed, /data-testid="route-line"/g), 2, "线路几行照旧");
+  assert.doesNotMatch(closed, /添加备用线路|拖动备 1 排序|data-testid="route-line-mode"|data-testid="route-advanced"/);
+  const open = render(group("smart"), false);
+  assert.match(open, /添加备用线路/);
+  assert.match(open, /拖动备 1 排序/);
+  assert.match(open, /data-testid="route-line-mode"/);
+  assert.match(open, /data-testid="route-advanced"/);
+});
+
 test("线路改了，钉子和时段表的目标跟着线路走：同一条路径优先，线路多展开一条也不挪到别的线路上，线路删了是 null", () => {
   const before = [{ key: "main", lineKey: "main" }, { key: "b1", lineKey: "b1" }];
   // 主线路那一跳多并列了一台：主线路展开成两条，备用 1 往后挪了一位

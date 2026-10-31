@@ -66,6 +66,7 @@ export function RouteLinesEditor({
   renderLineStatus,
   activeLineKey = null,
   startCollapsed = false,
+  arrange = true,
 }: {
   lines: RouteLine[];
   onChange: (lines: RouteLine[]) => void;
@@ -94,6 +95,11 @@ export function RouteLinesEditor({
   activeLineKey?: string | null;
   /** 线路详情里：主线路也收成一行，点开才改。规则表单里新建时主线路一上来是展开的，好直接填。 */
   startCollapsed?: boolean;
+  /**
+   * 「+ 添加备用线路」和备用行前面的拖动排序（⋮⋮）出不出：线路详情里收在「线路」标题右边那个下拉里
+   * （2.3.499，照效果图 ①：平时只看到线路几行）；一条备用都没有时「添加」照样出。
+   */
+  arrange?: boolean;
 }) {
   const hostName = (id: number) => hosts.find((host) => host.id === id)?.name || `主机 ${id}`;
   // 打开就有数（效果图里每个候选后面的毫秒）：最近一轮探测的每一段，点 ⚡ 测出来的盖掉它。
@@ -549,7 +555,7 @@ export function RouteLinesEditor({
               <SortableItem key={line.key} id={line.key}>
                 {({ itemProps, handleProps: { ref: handleRef, ...handleProps } }) => (
                   <div {...itemProps} data-testid="route-line">
-                    {lineBlock(line, lineIndex, (
+                    {lineBlock(line, lineIndex, arrange ? (
                       <button
                         type="button"
                         ref={handleRef as Ref<HTMLButtonElement>}
@@ -560,7 +566,7 @@ export function RouteLinesEditor({
                       >
                         ⋮⋮
                       </button>
-                    ))}
+                    ) : null)}
                   </div>
                 )}
               </SortableItem>
@@ -572,7 +578,8 @@ export function RouteLinesEditor({
         加备用线路：一个按钮一个菜单。以前是「+ 添加备用」后面跟一排「经 X」「直连落地」小块，
         一换行就是两行按钮，也看不出它们是在加备用。
       */}
-      <div className="mb-1 mt-[9px] flex flex-wrap items-center gap-1.5">
+      {/* 线路详情里收在「线路」标题的下拉里；一条备用都没有时照样出（上面那句提示要能点得到） */}
+      {arrange || backups.length === 0 ? <div className="mb-1 mt-[9px] flex flex-wrap items-center gap-1.5">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <LineChipButton variant="add" disabled={lines.length >= MAX_ROUTE_PATHS} data-testid="route-line-add">
@@ -594,7 +601,7 @@ export function RouteLinesEditor({
             )) : null}
           </DropdownMenuContent>
         </DropdownMenu>
-      </div>
+      </div> : null}
       {lastRun && lastRun.totalMs !== null ? (
         <p className="mx-1 mt-1 text-[11.5px] text-muted-foreground" data-testid="route-line-test-total">
           刚测的这条整链约 <b className="font-mono text-foreground">{Math.round(lastRun.totalMs)} ms</b>

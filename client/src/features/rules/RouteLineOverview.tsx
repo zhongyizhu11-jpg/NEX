@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { Download, Gauge } from "lucide-react";
+import { ChevronDown, Download, Gauge } from "lucide-react";
 import { toast } from "sonner";
 
 import {
@@ -370,6 +370,7 @@ export function RouteLineDetail({
   timeZone,
   editor,
   lineSwitch,
+  settings,
 }: {
   status: RouteStatus;
   events: RouteEvent[];
@@ -384,6 +385,11 @@ export function RouteLineDetail({
   editor?: ReactNode;
   /** 手动换线路（点状态胶囊）；只读列表用，编辑器里的由编辑器自己带。 */
   lineSwitch?: RouteLineSwitch;
+  /**
+   * 有编辑器时：「线路」标题右边那行（怎么切的摘要）是个下拉，点开出「添加备用线路 / 拖动排序 / 怎么切 / 高级策略」
+   * （2.3.499，照效果图 ①：默认只看到线路几行，下面紧跟着连接）。
+   */
+  settings?: { open: boolean; onToggle: () => void };
 }) {
   const now = nowMs ?? Date.now();
   const chip = routeSwitchChip(status, events, now, timeZone);
@@ -392,7 +398,22 @@ export function RouteLineDetail({
       <RouteLineHero status={status} />
       <RouteLineDiagram status={status} modeLabel={modeLabel} timeZone={timeZone} />
       <div>
-        <LineSec left="线路" right={routeLineSwitchSummary(status)} />
+        <LineSec
+          left="线路"
+          right={settings ? (
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 hover:text-foreground"
+              aria-expanded={settings.open}
+              title={settings.open ? "收起" : "添加备用线路、排序、怎么切、高级策略"}
+              onClick={settings.onToggle}
+              data-testid="route-line-settings"
+            >
+              {routeLineSwitchSummary(status)}
+              <ChevronDown className={cn("h-3.5 w-3.5 shrink-0 transition-transform", settings.open && "rotate-180")} aria-hidden="true" />
+            </button>
+          ) : routeLineSwitchSummary(status)}
+        />
         {editor ?? <RouteLineList status={status} onPause={onPause} pausing={pausing} lineSwitch={lineSwitch} />}
       </div>
       <div>

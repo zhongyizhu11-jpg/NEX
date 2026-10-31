@@ -113,6 +113,11 @@ export type RouteGroupFieldsProps = {
    * 两处做同一件事（2.3.499）。规则表单里没有胶囊，照旧在高级策略里指定。
    */
   pinOnLineStatus?: boolean;
+  /**
+   * 「+ 添加备用线路」、拖动排序、「怎么切」「高级策略」出不出（2.3.499）：线路详情照效果图 ① 默认只有
+   * 线路几行，这几样收在「线路」标题右边那行（怎么切的摘要 + 箭头）里，点开才出来。规则表单里一直出。
+   */
+  groupSettingsOpen?: boolean;
 };
 
 export type RouteNodeOption = { id: number; name: string; address: string; port: number; protocol?: string };
@@ -376,6 +381,7 @@ export function RouteGroupFields({
   activeLineKey = null,
   startCollapsed = false,
   pinOnLineStatus = false,
+  groupSettingsOpen = true,
 }: RouteGroupFieldsProps) {
   const now = nowMs ?? Date.now();
   const udpOnly = normalizeForwardRuleProtocol(protocol) === "udp";
@@ -623,8 +629,9 @@ export function RouteGroupFields({
         renderLineStatus={renderLineStatus}
         activeLineKey={activeLineKey}
         startCollapsed={startCollapsed}
+        arrange={groupSettingsOpen}
       />
-      <div className="fx-line-ui flex min-w-0 flex-col" data-testid="route-line-mode">
+      {groupSettingsOpen ? <div className="fx-line-ui flex min-w-0 flex-col" data-testid="route-line-mode">
         <LineSec left="怎么切" />
         <LineCard>
           <LineSegmented
@@ -719,7 +726,7 @@ export function RouteGroupFields({
             </LineHint>
           ) : null}
         </LineCard>
-      </div>
+      </div> : null}
       {(policy?.warnings || []).map((warning) => (
         <p key={warning} className="rounded-[var(--fx-radius-control)] bg-[var(--fx-warn-soft)] px-3 py-2 text-xs leading-5 text-[var(--fx-warn-text)]">
           {warning}
@@ -730,7 +737,7 @@ export function RouteGroupFields({
         高级策略自成一个框（2.3.499）：折叠条只有标题和箭头（原来后面挂一长串改过的项，用户嫌乱 —— 要看点开看）；
         原来只在上面画一条线，下面紧挨着详情的「连接」那一节，看着挤、分不清是谁的。
       */}
-      <LineCard className="fx-line-ui p-0" data-testid="route-advanced">
+      {groupSettingsOpen ? <LineCard className="fx-line-ui p-0" data-testid="route-advanced">
         <button
           type="button"
           className="flex w-full min-w-0 items-center justify-between gap-2 px-[14px] py-[11px] text-left"
@@ -971,7 +978,7 @@ export function RouteGroupFields({
             </PolicyGroup>
           </div>
         ) : null}
-      </LineCard>
+      </LineCard> : null}
     </div>
   );
 }

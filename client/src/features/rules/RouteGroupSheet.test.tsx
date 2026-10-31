@@ -6,7 +6,7 @@ import { newRouteGroupDraft, routeGroupRuleFields, routePolicyOf, type RouteGrou
 import { describeRoutePolicy } from "@shared/routePolicy";
 import { RouteGroupPanel, type RouteEvent, type RouteStatus, type RouteStatusPath } from "./RouteGroupSheet";
 import { RouteLineDiagram } from "./RouteLineDiagram";
-import { pinDurationSeconds, routeLineStatusControls } from "./RouteLineOverview";
+import { RouteLineDetail, pinDurationSeconds, routeLineStatusControls } from "./RouteLineOverview";
 
 // 2026-09-22（星期二）上海 20:00：在「工作日 18:00–01:00」里。
 const NOW = Date.UTC(2026, 8, 22, 12, 0, 0);
@@ -309,4 +309,27 @@ test("手动切的时长自己填：几分钟 / 几小时，空、0、负数、�
   assert.equal(pinDurationSeconds("-3", "hour"), null);
   assert.equal(pinDurationSeconds("721", "hour"), null, "超过 30 天：选「不限时」");
   assert.equal(pinDurationSeconds("720", "hour"), 720 * 3600);
+});
+
+test("线路详情照效果图 ①（2.3.499）：「线路」标题右边那行（怎么切的摘要 + 箭头）是个下拉，点开才出添加备用线路、怎么切、高级策略", () => {
+  const renderDetail = (settings?: { open: boolean; onToggle: () => void }) => renderToStaticMarkup(
+    <RouteLineDetail
+      status={status()}
+      events={events}
+      modeLabel="按时段"
+      detailsOpen={false}
+      onToggleDetails={noop}
+      nowMs={NOW}
+      timeZone={TZ}
+      editor={<div data-testid="fake-editor" />}
+      settings={settings}
+    />,
+  );
+  const closed = renderDetail({ open: false, onToggle: noop });
+  assert.match(closed, /<button[^>]*aria-expanded="false"[^>]*data-testid="route-line-settings"/);
+  assert.match(renderDetail({ open: true, onToggle: noop }), /<button[^>]*aria-expanded="true"[^>]*data-testid="route-line-settings"/);
+  assert.doesNotMatch(renderDetail(), /route-line-settings/, "没有编辑器（只能看）就是一行字");
+  // 线路下面紧跟着连接；「精确到哪一段」那句小字去掉了
+  assert.match(closed, /fake-editor[^]*?连接 · 最近 10 分钟/);
+  assert.doesNotMatch(closed, /精确到哪一段/);
 });
