@@ -11,6 +11,16 @@ func leastLoadSelector(exits []exitEndpoint, fallback exitEndpoint) *exitEndpoin
 	return newExitEndpointSelector(exits, fallback, "least_load")
 }
 
+// setBusy 让这台看起来正在跑这么多流量（字节/秒）。sampledAt 一起设：包里前面的测试起的维护循环
+// 还在每秒 sample 一次所有主机，没采过样的那一下会把 rate 清零（当成第一次采样），这台就忽然「闲」了，
+// 测试偶尔挑中它（2.3.497 发版时 TestLeastLoadPowerOfTwoChoices 就这么红过一次）。
+func setBusy(load *fxpHostLoad, bytesPerSecond float64) {
+	load.mu.Lock()
+	load.rate = bytesPerSecond
+	load.sampledAt = time.Now()
+	load.mu.Unlock()
+}
+
 // 按负载：都没量的时候，新连接按线路带宽分（500M / 300M ≈ 5:3），而不是平均分。
 func TestLeastLoadSplitsNewConnectionsByCapacity(t *testing.T) {
 	selector := leastLoadSelector(
@@ -37,9 +47,7 @@ func TestLeastLoadAvoidsBusyExit(t *testing.T) {
 		[]exitEndpoint{{Host: "10.0.0.2", Port: 2, CapacityMbps: 500}},
 		exitEndpoint{Host: "10.0.0.1", Port: 1, CapacityMbps: 500},
 	)
-	selector.loads[0].mu.Lock()
-	selector.loads[0].rate = 50 * 1024 * 1024
-	selector.loads[0].mu.Unlock()
+	setBusy(selector.loads[0], 50*1024*1024)
 	for i := 0; i < 5; i++ {
 		if _, index, _ := selector.pick(nil); index != 1 {
 			t.Fatalf("第 %d 次挑到了正忙的那台", i)
@@ -200,9 +208,7 @@ func TestLeastLoadPowerOfTwoChoices(t *testing.T) {
 		},
 		exitEndpoint{Host: "10.0.0.1", Port: 1, CapacityMbps: 500},
 	)
-	selector.loads[2].mu.Lock()
-	selector.loads[2].rate = 80 * 1024 * 1024
-	selector.loads[2].mu.Unlock()
+	setBusy(selector.loads[2], 80*1024*1024)
 	counts := map[int]int{}
 	for i := 0; i < 400; i++ {
 		_, index, _ := selector.pick(nil)
