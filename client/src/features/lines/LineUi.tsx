@@ -6,7 +6,8 @@ import { cn } from "@/lib/utils";
 /*
   线路这几屏（线路详情、编辑线路组、节点维护、线路工作台、节点池）共用的小零件，尺寸照效果图
   （2.3.496 的 mock.html / mock2.html）：卡片 16px 圆角、14px 内边距；胶囊 11.5px；chip 11.5px、
-  内边距 3×9（2.3.498 起，约 23px 高，和 24px 的小图标钮、22px 的胶囊齐平）；行 12px 圆角、7×10 内边距；
+  内边距 3×9（2.3.498 起，约 23px 高，和 24px 的小图标钮、22px 的胶囊齐平）；行 12px 圆角、9×10 内边距
+  （2.3.499 起，约 43px 高，行里的胶囊和暂停钮不再贴着边框）；
   小图标钮 24×24、8px 圆角。颜色全走主题令牌：
   强调色跟着「默认配色」换（薰衣草就是效果图那个紫），状态色是全站那一套。
 */
@@ -165,7 +166,7 @@ export function LineRow({ on = false, bad = false, className, children, ...props
     <div
       data-state={on ? "on" : bad ? "bad" : undefined}
       className={cn(
-        "flex min-w-0 items-center gap-2 rounded-[12px] border bg-[var(--fx-l1-surface)] px-[10px] py-[7px] text-[13px]",
+        "flex min-w-0 items-center gap-2 rounded-[12px] border bg-[var(--fx-l1-surface)] px-[10px] py-[9px] text-[13px]",
         on ? "border-[var(--fx-accent)] shadow-[0_0_0_2px_var(--fx-accent-soft)]" : "border-[var(--fx-stroke-weak)]",
         className,
       )}

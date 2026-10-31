@@ -9428,12 +9428,12 @@ function RulesContent() {
             rule={policyRule && !Number(policyRule.forwardGroupRuleId || 0) ? policyRule : undefined}
             canEdit
             pending={pinMutation.isPending}
-            onPin={(index, durationSeconds) => pinMutation.mutate({
+            onPin={(index, durationSeconds, onDone) => pinMutation.mutate({
               id: Number(policyRule.id),
               failoverPinnedIndex: index,
               failoverPinnedUntil: pinUntilSeconds(durationSeconds),
-            })}
-            onUnpin={() => pinMutation.mutate({ id: Number(policyRule.id), failoverPinnedIndex: null, failoverPinnedUntil: null })}
+            }, { onSuccess: () => onDone?.() })}
+            onUnpin={(onDone) => pinMutation.mutate({ id: Number(policyRule.id), failoverPinnedIndex: null, failoverPinnedUntil: null }, { onSuccess: () => onDone?.() })}
             onEdit={() => {
               setPolicyRuleId(null);
               openEdit(policyRule);

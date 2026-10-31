@@ -96,16 +96,17 @@ function routeLinePill(group: RouteLineGroup, pinned = false): { tone: LineTone;
 
 /**
  * 手动换线路（2.3.498）：点状态胶囊就能「切到这条」，走的是人工指定（压过时段表和评分，到点交回自动；
- * 指定的那条挂了照样往下切）。以前要点开「异常明细」找「强制走一条」，用户问「想手动换怎么办」。
- * 按权重分的线路组没有「走哪条」，不给。
+ * 指定的那条挂了照样往下切）。以前要点开「异常明细」找「强制走一条」，用户问「想手动换怎么办」；2.3.499 起
+ * 那个入口去掉了，手动切换只在这里。按权重分的线路组没有「走哪条」，不给。
  */
 export type RouteLineSwitch = {
   /** 现在钉在第几条路径（status.paths[].index）；null = 没指定。 */
   pinIndex: number | null;
   pinUntilMs: number | null;
   pending: boolean;
-  onPin: (pathIndex: number, durationSeconds: number | null) => void;
-  onUnpin: () => void;
+  /** onDone：存进库里之后调（编辑器拿它把编辑稿里的指定跟上）。 */
+  onPin: (pathIndex: number, durationSeconds: number | null, onDone?: () => void) => void;
+  onUnpin: (onDone?: () => void) => void;
   nowMs?: number;
   timeZone?: string;
 };
@@ -395,7 +396,8 @@ export function RouteLineDetail({
         {editor ?? <RouteLineList status={status} onPause={onPause} pausing={pausing} lineSwitch={lineSwitch} />}
       </div>
       <div>
-        <LineSec left="连接 · 最近 10 分钟" right={<span title="入站：客户端连进来后拨通一条路径的比例；第二段：入口真实拨号的成功率；后面每段：中转探下一跳（近 20 次）">精确到哪一段</span>} />
+        {/* 右边那句「精确到哪一段」去掉了（2.3.499，用户嫌字多）：各段怎么算的放在标题的 title 里 */}
+        <LineSec left={<span title="入站：客户端连进来后拨通一条路径的比例；第二段：入口真实拨号的成功率；后面每段：中转探下一跳（近 20 次）">连接 · 最近 10 分钟</span>} />
         <LineCard className="px-2 py-3">
           <RouteStageStrip status={status} />
           {/*

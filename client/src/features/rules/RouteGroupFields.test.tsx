@@ -13,7 +13,7 @@ import {
 } from "@shared/routeGroup";
 import { describeRoutePolicy } from "@shared/routePolicy";
 import { newRouteLine, routeLinesFromPaths } from "@shared/routeLines";
-import { RouteGroupFields, lineModeHint, routeGroupPayload, summarizeRouteAdvanced, type RouteGroupDraft } from "./RouteGroupFields";
+import { RouteGroupFields, followRoutePath, lineModeHint, routeGroupPayload, routePathIndexFor, summarizeRouteAdvanced, type RouteGroupDraft } from "./RouteGroupFields";
 import { SegmentLatencyContext, type SegmentLatencyHook } from "./segmentLatency";
 
 /*
@@ -167,15 +167,18 @@ test("纯 UDP 的编辑框：分法和旧会话三选一都按会话说，TCP+UD
   assert.match(both, /新连接按权重分 · /);
 });
 
-test("高级策略默认折起来，折叠条上只列改过模板值的项；改过的打开时直接展开", () => {
+test("高级策略的折叠条只有标题和箭头（2.3.499）；默认折起来，规则表单里改过模板值的打开时直接展开", () => {
+  const toggleText = (html: string) => (html.match(/data-testid="route-advanced-toggle"[^>]*>([^]*?)<\/button>/)?.[1] ?? "").replace(/<[^>]+>/g, "").trim();
   const html = render(group(), "auto");
-  assert.match(html, /aria-expanded="false"[^>]*>[^]*?高级策略/);
-  assert.match(html, /按模板预填，一般不用动/);
+  assert.match(html, /aria-expanded="false"[^>]*data-testid="route-advanced-toggle"/);
+  assert.equal(toggleText(html), "高级策略");
+  assert.doesNotMatch(html, /按模板预填，一般不用动|route-advanced-summary/);
   assert.doesNotMatch(html, /切换保护|连续失败/, "新手用不上的东西默认折起来");
 
   const changed = render(group("hybrid", { failureThreshold: 5, switchMode: "force", prewarmSeconds: 0 }), "auto");
   assert.match(changed, /aria-expanded="true"/);
-  assert.match(changed, /连续失败 5 次 · 不预热 · 强制切换/);
+  assert.equal(toggleText(changed), "高级策略", "改过的项不再挂在折叠条上，点开看");
+  assert.doesNotMatch(changed, /连续失败 5 次 · 不预热 · 强制切换/);
 });
 
 test("高级策略里按模式给控件：择优门槛只在整链最优 / 混合，预热只在按时段 / 混合，应急指定只在自动模式", () => {
@@ -183,6 +186,8 @@ test("高级策略里按模式给控件：择优门槛只在整链最优 / 混�
   assert.match(smart, /择优门槛/);
   assert.doesNotMatch(smart, /计划切换预热/);
   assert.match(smart, /应急人工指定/);
+  // 线路详情里每条线路的状态胶囊就能切（2.3.499）：高级策略里不再放第二个入口
+  assert.doesNotMatch(render(group("smart"), true, "tcp", { pinOnLineStatus: true }), /应急人工指定|强制走一条/);
   const scheduled = render(group("scheduled"));
   assert.match(scheduled, /计划切换预热/);
   assert.doesNotMatch(scheduled, /择优门槛/);
@@ -230,6 +235,19 @@ test("提交的那份按模式归零：时段表只在定时 / 混合，指定�
   const payload = routeGroupPayload({ ...withLines, lines: routeLinesFromPaths(withLines.paths) });
   assert.equal(payload.lines?.length, 2);
   assert.deepEqual(payload.lines?.[0].layers, [{ kind: "hosts", hostIds: [2], pick: "order" }]);
+});
+
+test("线路改了，钉子和时段表的目标跟着线路走：同一条路径优先，线路多展开一条也不挪到别的线路上，线路删了是 null", () => {
+  const before = [{ key: "main", lineKey: "main" }, { key: "b1", lineKey: "b1" }];
+  // 主线路那一跳多并列了一台：主线路展开成两条，备用 1 往后挪了一位
+  const after = [{ key: "main-aaa", lineKey: "main" }, { key: "main-bbb", lineKey: "main" }, { key: "b1", lineKey: "b1" }];
+  assert.equal(followRoutePath(before, after, 1), 2, "钉在备用 1 上的还在备用 1（以前夹下标会变成主线路的第二条）");
+  assert.equal(followRoutePath(before, after, 0), 0);
+  assert.equal(followRoutePath(before, [{ key: "main", lineKey: "main" }], 1), null, "备用 1 删掉了：不改钉到别的线路上");
+  assert.equal(followRoutePath([{ key: "p1" }, { key: "p2" }], [{ key: "x", lineKey: "l1" }], 1), 0, "老草稿的路径没有线路归属：对不上照旧夹到范围里");
+  assert.equal(routePathIndexFor(after, { key: "main-bbb", lineKey: "main" }), 1, "同一条路径还在就是它");
+  assert.equal(routePathIndexFor(after, { key: "gone", lineKey: "b1" }), 2, "路径没了按线路找第一条");
+  assert.equal(routePathIndexFor(after, { key: "gone", lineKey: "b9" }), -1);
 });
 
 test("摘要只列和模板不一样的", () => {

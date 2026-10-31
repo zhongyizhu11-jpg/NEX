@@ -241,12 +241,12 @@ export function RouteBoardList({ searchQuery = "", isAdmin = false, compact = fa
         rule={openRule && !Number(openRule.rule.forwardGroupRuleId || 0) ? openRule.rule : undefined}
         canEdit
         pending={pinMutation.isPending}
-        onPin={(index, durationSeconds) => openRule && pinMutation.mutate({
+        onPin={(index, durationSeconds, onDone) => openRule && pinMutation.mutate({
           id: Number(openRule.rule.id),
           failoverPinnedIndex: index,
           failoverPinnedUntil: pinUntilSeconds(durationSeconds),
-        })}
-        onUnpin={() => openRule && pinMutation.mutate({ id: Number(openRule.rule.id), failoverPinnedIndex: null, failoverPinnedUntil: null })}
+        }, { onSuccess: () => onDone?.() })}
+        onUnpin={(onDone) => openRule && pinMutation.mutate({ id: Number(openRule.rule.id), failoverPinnedIndex: null, failoverPinnedUntil: null }, { onSuccess: () => onDone?.() })}
         onEdit={() => { const id = openRuleId; setOpenRuleId(null); if (id) setLocation(`/rules?edit=${id}`); }}
       />
     </>

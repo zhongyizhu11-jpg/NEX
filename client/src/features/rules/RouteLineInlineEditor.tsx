@@ -7,9 +7,9 @@ import { cn } from "@/lib/utils";
 import { forwardGroupModeOf } from "@shared/forwardTypes";
 import { routeGroupOf, routeGroupRuleFields, validateRouteGroup } from "@shared/routeGroup";
 import { routeLinesForEditor } from "@shared/routeLines";
-import { describeRoutePolicy } from "@shared/routePolicy";
-import type { RouteStatus } from "./RouteGroupSheet";
-import { RouteGroupFields, routeGroupPayload, type RouteGroupDraft, type RouteHostOption } from "./RouteGroupFields";
+import { describeRoutePolicy, pinUntilSeconds } from "@shared/routePolicy";
+import type { RouteStatus, RouteStatusPath } from "./RouteGroupSheet";
+import { RouteGroupFields, routeGroupPayload, routePathIndexFor, type RouteGroupDraft, type RouteHostOption } from "./RouteGroupFields";
 import { routeLineStatusControls, type RouteLineSwitch } from "./RouteLineOverview";
 import type { RouteLinePool, RouteLineTunnel } from "./RouteLinesEditor";
 import {
@@ -35,7 +35,8 @@ import { routeLineGroups } from "./routeLineText";
     重新展开线路、落实中继、推给 Agent），保存后 Agent 和中转马上探一轮 ——「保存后 10 秒内每一段都有数字」。
 
   编辑稿从「库里那份」改起：规则列表定时刷新会换掉 rule 对象，内容没变就当没变；没在改时库里变了（刚保存完、
-  刚暂停、别处改过）就跟上，正在改就不动。
+  刚暂停、别处改过）就跟上，正在改就不动。正在改的时候暂停、手动切换了，编辑稿也跟着改 —— 不然保存别的改动
+  时带上去的是改之前的那份，刚切过去的又被切回来。
 */
 
 function draftOf(rule: LineRuleRow | null): RouteGroupDraft | null {
@@ -46,6 +47,18 @@ function draftOf(rule: LineRuleRow | null): RouteGroupDraft | null {
 
 /** 两份编辑稿一样不一样：按提交出去的样子比。 */
 const payloadKey = (draft: RouteGroupDraft | null) => (draft ? JSON.stringify(routeGroupPayload(draft)) : "");
+
+/**
+ * 状态胶囊上的手动切换（指定 / 交回自动）已经存进库里了：编辑稿里的指定跟着改（按线路对上路径下标），
+ * 之后保存别的改动不会又把它改回去。编辑稿里已经没有那条线路（正改着删掉了）就不动，保存时照编辑稿来。
+ */
+export function withPin(draft: RouteGroupDraft | null, target: Pick<RouteStatusPath, "key" | "lineKey"> | null, untilMs: number | null): RouteGroupDraft | null {
+  if (!draft) return draft;
+  if (!target) return { ...draft, policy: { ...draft.policy, pin: null } };
+  const index = routePathIndexFor(draft.paths, target);
+  if (index < 0) return draft;
+  return { ...draft, policy: { ...draft.policy, pin: { index, untilMs } } };
+}
 
 /** 暂停 / 恢复一条线路已经存进库里了：编辑稿跟着改，之后保存别的改动不会又把它改回去。 */
 function withLinePaused(draft: RouteGroupDraft | null, lineKey: string, paused: boolean): RouteGroupDraft | null {
@@ -166,6 +179,24 @@ export function useRouteLineEditor({ rule, enabled, status, onPause, pausing = f
     setDraft((current) => withLinePaused(current, lineKey, paused));
     setSaved((current) => withLinePaused(current, lineKey, paused));
   });
+  const followPin = (target: RouteStatusPath | null, untilMs: number | null) => {
+    setDraft((current) => withPin(current, target, untilMs));
+    setSaved((current) => withPin(current, target, untilMs));
+  };
+  const editorSwitch: RouteLineSwitch | undefined = lineSwitch
+    ? {
+        ...lineSwitch,
+        onPin: (pathIndex, durationSeconds) => {
+          const target = status?.paths.find((path) => path.index === pathIndex) ?? null;
+          lineSwitch.onPin(pathIndex, durationSeconds, () => {
+            if (!target) return;
+            const until = pinUntilSeconds(durationSeconds);
+            followPin(target, until === null ? null : until * 1000);
+          });
+        },
+        onUnpin: () => lineSwitch.onUnpin(() => followPin(null, null)),
+      }
+    : undefined;
 
   // 机器列表到了再出编辑器：不然候选先显示成「主机 12」再变成名字
   const editor = draft && rule && hostsQuery.data ? (
@@ -189,9 +220,10 @@ export function useRouteLineEditor({ rule, enabled, status, onPause, pausing = f
         ruleId={ruleId || null}
         upstreamHostIds={routeTunnel ? [Number(routeTunnel.entryHostId || 0)].filter((id) => id > 0) : []}
         defaultAdvancedOpen={false}
-        renderLineStatus={(line) => routeLineStatusControls(status, line.key, pauseLine, pausing, lineSwitch)}
+        renderLineStatus={(line) => routeLineStatusControls(status, line.key, pauseLine, pausing, editorSwitch)}
         activeLineKey={status ? routeLineGroups(status).find((group) => group.active)?.key ?? null : null}
         startCollapsed
+        pinOnLineStatus={!!lineSwitch}
       />
     </SegmentLatencyProvider>
   ) : null;

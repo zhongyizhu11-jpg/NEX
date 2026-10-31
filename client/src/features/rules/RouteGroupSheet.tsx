@@ -27,7 +27,7 @@ import { formatRouteScore } from "@shared/routeScore";
 import type { RouteSwitchSummary } from "@shared/routeSwitchSummary";
 import { isAgentVersionBehind } from "@shared/version";
 import { RoutePathCards, RouteSwitchChip, type RouteBoardEntry, type RouteBoardRate } from "./RouteBoard";
-import { ConditionRow, PinSection, SentenceRow } from "./RoutePolicySheet";
+import { ConditionRow, SentenceRow } from "./RoutePolicySheet";
 import { RouteQualityHistory } from "./RouteQualityHistory";
 import { RouteLineDetail, RouteLineTools, useRouteLinePause, type RouteLineSwitch } from "./RouteLineOverview";
 import { ROUTE_LINE_MODE_LABEL, routeLineSubtitle } from "./routeLineText";
@@ -43,7 +43,8 @@ import type { LineRuleRow } from "./routeLineOptions";
     备用路径 —— 每条的评分、健康、为什么用不了
     调度计划 —— 按什么选（此刻起作用的那一行高亮）、什么时候切
     最近切换 —— 什么时候、从哪条到哪条、为什么
-  最后是应急的「强制走 / 交回自动」。
+  手动换线路只在第一页每条线路的状态胶囊上（「切到这条 / 交回自动」，RouteLineOverview）：2.3.499 起这里
+  不再有「应急人工指定 · 强制走一条」，两处做同一件事。
 
   判断在 shared/routePolicy，数字来自 rules.routeStatus（入口 Agent 每次心跳带评分，中转机
   一分钟报一次它那一跳），历史来自 rules.routeEvents。这里只管画。
@@ -174,17 +175,13 @@ export type RouteGroupPanelProps = {
   policy: RoutePolicy;
   status: RouteStatus | null;
   events: RouteEvent[];
-  canEdit: boolean;
-  pending?: boolean;
-  onPin?: (index: number, durationSeconds: number | null) => void;
-  onUnpin?: () => void;
   nowMs?: number;
   timeZone?: string;
   /** 画不画「路径」那几张卡：线路详情上面已经有分层图和线路列表，异常明细里就不再画一遍。 */
   showPaths?: boolean;
 };
 
-export function RouteGroupPanel({ policy, status, events, canEdit, pending = false, onPin, onUnpin, nowMs, timeZone, showPaths = true }: RouteGroupPanelProps) {
+export function RouteGroupPanel({ policy, status, events, nowMs, timeZone, showPaths = true }: RouteGroupPanelProps) {
   const now = nowMs ?? Date.now();
   const report = describeRoutePolicyReport(policy, { nowMs: now, timeZone });
   const paths = status?.paths || [];
@@ -299,21 +296,6 @@ export function RouteGroupPanel({ policy, status, events, canEdit, pending = fal
             })
           )}
         </ListSection>
-
-        {!weighted && canEdit && onPin && onUnpin ? (
-          <PinSection
-            policy={policy}
-            pending={pending}
-            onPin={onPin}
-            onUnpin={onUnpin}
-            nowMs={now}
-            timeZone={timeZone}
-            header={policy.mode === "manual" ? "手动指定" : "应急人工指定"}
-            footer={policy.mode === "manual"
-              ? "手动主备一直走你指定的那条；换一条在这里换。它挂了才临时往下切，恢复后再回来。"
-              : "应急用：压过时段表和评分，到点自动交回。指定的那条要是挂了，仍然会往下切 —— 不会为了守着它把连接送进死路。"}
-          />
-        ) : null}
       </GroupedList>
     </div>
   );
@@ -332,6 +314,12 @@ export type RouteGroupSheetProps = Omit<RouteGroupPanelProps, "policy" | "status
   /** 面板打开时每隔多久刷一次状态（毫秒）；测试里传 0 关掉。 */
   refetchIntervalMs?: number;
   footer?: ReactNode;
+  /** 能不能动手：就地改线路、暂停、点状态胶囊手动切换。 */
+  canEdit: boolean;
+  pending?: boolean;
+  /** 手动指定（状态胶囊「切到这条」）；onDone 在存进库里之后调。 */
+  onPin?: (index: number, durationSeconds: number | null, onDone?: () => void) => void;
+  onUnpin?: (onDone?: () => void) => void;
 };
 
 export function RouteGroupSheet({
@@ -344,6 +332,10 @@ export function RouteGroupSheet({
   onEdit,
   refetchIntervalMs = 3_000,
   footer,
+  canEdit,
+  pending = false,
+  onPin,
+  onUnpin,
   ...panel
 }: RouteGroupSheetProps) {
   const enabled = open && !!policy && !!ruleId;
@@ -365,27 +357,27 @@ export function RouteGroupSheet({
   const mode = shown?.policy.mode ?? "failover";
   const modeLabel = ROUTE_LINE_MODE_LABEL[mode] || ROUTE_LINE_MODE_LABEL.failover;
   // 手动换线路：点线路的状态胶囊「切到这条」= 人工指定（按权重分的没有「走哪条」，不给）
-  const lineSwitch: RouteLineSwitch | undefined = shown && panel.canEdit && panel.onPin && panel.onUnpin && shown.policy.mode !== "weighted"
+  const lineSwitch: RouteLineSwitch | undefined = shown && canEdit && onPin && onUnpin && shown.policy.mode !== "weighted"
     ? {
         pinIndex: shown.policy.pin ? shown.policy.pin.index : null,
         pinUntilMs: shown.policy.pin?.untilMs ?? null,
-        pending: !!panel.pending,
-        onPin: panel.onPin,
-        onUnpin: panel.onUnpin,
+        pending,
+        onPin,
+        onUnpin,
         nowMs: panel.nowMs,
         timeZone: panel.timeZone,
       }
     : undefined;
   // 线路就在详情第一页改（没有单独的「编辑线路组」了）；只有拿不到规则本身时才退回去改整条规则
   const editing = useRouteLineEditor({
-    rule: panel.canEdit ? shown?.rule ?? null : null,
+    rule: canEdit ? shown?.rule ?? null : null,
     enabled: open && !!policy,
     status,
     onPause: linePause.onPause,
     pausing: linePause.pausing,
     lineSwitch,
   });
-  const editRuleFallback = !!panel.canEdit && !shown?.rule && !!onEdit;
+  const editRuleFallback = canEdit && !shown?.rule && !!onEdit;
   return (
     <Dialog open={open && !!policy} onOpenChange={(next) => { if (!next) setDetailsOpen(false); onOpenChange(next); }}>
       {shown ? (
@@ -414,7 +406,7 @@ export function RouteGroupSheet({
               status={status}
               events={events}
               modeLabel={modeLabel}
-              onPause={panel.canEdit ? linePause.onPause : undefined}
+              onPause={canEdit ? linePause.onPause : undefined}
               pausing={linePause.pausing}
               detailsOpen={detailsOpen}
               onToggleDetails={() => setDetailsOpen(!detailsOpen)}

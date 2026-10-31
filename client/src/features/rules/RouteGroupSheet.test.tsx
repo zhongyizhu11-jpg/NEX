@@ -94,25 +94,22 @@ const events: RouteEvent[] = [
   { id: 1, kind: "prewarm", fromKey: null, toKey: group.paths[1].key, fromLabel: null, toLabel: "备用线路", reason: "schedule", reasonText: "按时段表", score: null, latencyMs: null, at: NOW - 26.1 * 3_600_000 },
 ];
 
-function render(options: { status?: RouteStatus | null; events?: RouteEvent[]; canEdit?: boolean; host?: any } = {}) {
-  const policy = describeRoutePolicy(rule, { host: options.host ?? { isOnline: true, agentVersion: "2.2.198" }, nowMs: NOW, timeZone: TZ })!;
+function render(options: { status?: RouteStatus | null; events?: RouteEvent[]; host?: any; rule?: typeof rule } = {}) {
+  const policy = describeRoutePolicy(options.rule ?? rule, { host: options.host ?? { isOnline: true, agentVersion: "2.2.198" }, nowMs: NOW, timeZone: TZ })!;
   return renderToStaticMarkup(
     <RouteGroupPanel
       policy={policy}
       status={options.status === undefined ? status() : options.status}
       events={options.events ?? events}
-      canEdit={options.canEdit ?? true}
-      onPin={noop}
-      onUnpin={noop}
       nowMs={NOW}
       timeZone={TZ}
     />,
   );
 }
 
-test("四段都在：路径、调度计划、最近切换；最后是应急人工指定", () => {
+test("三段都在：路径、调度计划、最近切换", () => {
   const html = render();
-  const order = ["路径", "调度计划", "最近切换", "应急人工指定"].map((header) => html.indexOf(`>${header}<`));
+  const order = ["路径", "调度计划", "最近切换"].map((header) => html.indexOf(`>${header}<`));
   assert.ok(order.every((position) => position > 0), `少了一段：${order.join(",")}`);
   assert.deepEqual([...order].sort((left, right) => left - right), order, "顺序就是从上往下");
   assert.match(html, /现在走 备用线路，18:00 起/);
@@ -172,9 +169,12 @@ test("Agent 太旧时说清楚没有评分；状态没读到时不空着", () =>
   assert.match(stale, /评分是 20 分钟前报的/);
 });
 
-test("不能改的人看不到人工指定", () => {
-  assert.doesNotMatch(render({ canEdit: false }), /应急人工指定|强制走一条/);
-  assert.match(render(), /强制走一条/);
+test("异常明细里没有「强制走一条」（2.3.499）：手动切换只在线路的状态胶囊上，钉着的时候也不再列一遍", () => {
+  assert.doesNotMatch(render(), /应急人工指定|强制走一条|交回自动/);
+  const pinned = render({ rule: { ...rule, failoverPinnedIndex: 0, failoverPinnedUntil: Math.floor(NOW / 1000) + 3_600 } });
+  assert.doesNotMatch(pinned, /应急人工指定|强制走一条|交回自动/);
+  // 调度计划里照样看得出是人工指定在决定
+  assert.match(pinned, /data-state="overridden"/);
 });
 
 /*
@@ -189,9 +189,6 @@ function renderFor(ruleFields: Record<string, unknown>, statusPatch: Partial<Rou
       policy={policy}
       status={status(statusPatch)}
       events={events}
-      canEdit
-      onPin={noop}
-      onUnpin={noop}
       nowMs={NOW}
       timeZone={TZ}
     />,
