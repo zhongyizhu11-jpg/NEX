@@ -9,7 +9,6 @@ import {
   LineBadge,
   LineChip,
   LineChipButton,
-  LineIconButton,
   LineMs,
   LinePath,
   LineRow,
@@ -24,9 +23,10 @@ import { segmentKey, useSegmentLatency } from "./segmentLatency";
 /*
   编辑线路组（2.3.496，照效果图 ②「编辑：主线路 + 有序备用」）：
 
-    主线路一张卡：入口 / 中转（几跳就几行：中转 1、中转 2…）/ 落地。一跳里可以放几个候选（机器、隧道混着放，
-    或者一个节点池），有两个以上才出「最低延迟 / 按顺序」——只有一个时没得挑（2.3.498）。两个加号分开叫：
-    「+ 并列」是同一跳再放一个（或把这一跳换成节点池），「+ 后面再接中转」在最后一跳下面，串下一跳。「可跳过」（这一跳全坏了就直连下一跳）不再给勾：和加一条不经它的备用线路是一回事，
+    每条线路收着是一行，点开是一条竖着的链：入口 ● → 中转 ● （几跳就几个：中转 1、中转 2…）→ 落地 ●。
+    一跳里可以放几个候选（机器、隧道混着放，或者一个节点池），有两个以上才出「最低延迟 / 按顺序」——只有一个时
+    没得挑（2.3.498）。两个加号分开叫：「+ 并列」在那一跳里，同一跳再放一个（或换成节点池）；「+ 加中转」在链上
+    最后一个中转和落地之间，串下一跳。「可跳过」（这一跳全坏了就直连下一跳）不再给勾：和加一条不经它的备用线路是一回事，
     备用线路排第几、状态、暂停都看得见；老配置里勾过的照常生效，这里显示「可跳过 ×」，点一下取消。
     下面是有序的备用：一行一条，拖动排序；整行点一下展开来改，小闪电（逐段测）在展开的那块里 —— 收着的行上
     只留路径和状态，省地方（2.3.498，以前每行还挂着 ▾ 和 ⚡，路径被挤得只剩半截）。勾掉就不参与
@@ -181,15 +181,17 @@ export function RouteLinesEditor({
   };
 
   const testButton = (line: RouteLine, lineIndex: number) => (
-    <LineIconButton
+    <LineChipButton
+      className="shrink-0"
       aria-label={`逐段测一下${lineIndex === 0 ? "主线路" : `备 ${lineIndex}`}`}
-      title="测一下：逐段测延迟"
+      title="逐段测延迟：每一段的毫秒写在节点后面"
       disabled={!entryHostId || testingKey !== null}
       onClick={() => testLine(line)}
       data-testid="route-line-test"
     >
-      <LineZapGlyph className={cn(testingKey === line.key && "animate-pulse text-[var(--fx-accent)]")} />
-    </LineIconButton>
+      <LineZapGlyph className={cn("h-3 w-3", testingKey === line.key && "animate-pulse text-[var(--fx-accent)]")} />
+      {testingKey === line.key ? "测着…" : "测一下"}
+    </LineChipButton>
   );
 
   const addHopMenu = (lineIndex: number, previousHost: number, label: string) => (
@@ -216,16 +218,36 @@ export function RouteLinesEditor({
     </DropdownMenu>
   );
 
-  /** 一条线路的全部内容（主线路那张卡、备用点开后）。 */
+  /**
+   * 链上的一个点：左边圆点（竖线把它们串起来）、名字（入口 / 中转 / 落地），右边内容。
+   * 入口是空心点，中转是描边点，落地是实心点 —— 一眼看出从哪儿、经哪儿、到哪儿。
+   */
+  const chainNode = (label: string, kind: "start" | "hop" | "end", children: ReactNode, key?: string) => (
+    <div key={key} className="relative grid min-w-0 grid-cols-[11px_34px_minmax(0,1fr)] items-start gap-x-2" data-testid="route-line-node">
+      <span
+        aria-hidden
+        className={cn(
+          "relative z-[1] mt-[6px] h-[11px] w-[11px] rounded-full border-2 bg-[var(--fx-l1-surface)]",
+          kind === "start" ? "border-[var(--fx-stroke)]" : kind === "end" ? "border-[var(--fx-accent)] bg-[var(--fx-accent)]" : "border-[var(--fx-accent)]",
+        )}
+      />
+      <span className="pt-[3px] text-[12px] text-muted-foreground">{label}</span>
+      <div className="flex min-w-0 flex-col">{children}</div>
+    </div>
+  );
+
+  /** 一条线路展开后的样子：入口 ● → 中转 ● → 落地 ●，一条竖线串起来；「+ 加中转」就在最后一个中转和落地之间。 */
   const renderLayers = (line: RouteLine, lineIndex: number) => {
     let previousHost = entryHostId || 0;
     return (
-      <div className="mt-[10px] grid min-w-0 grid-cols-[44px_minmax(0,1fr)] items-start gap-x-2 gap-y-[6px] text-[12.5px]">
-        <span className="pt-[6px] text-[12px] text-muted-foreground">入口</span>
-        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-          {entryPrefix ? <span className="text-[11px] text-muted-foreground">{entryPrefix}</span> : null}
-          <LineChip>{entryName}</LineChip>
-        </div>
+      <div className="relative mt-[10px] flex min-w-0 flex-col gap-[8px] text-[12.5px]" data-testid="route-line-chain">
+        <span aria-hidden className="pointer-events-none absolute bottom-[12px] left-[5px] top-[12px] w-px bg-[var(--fx-stroke)]" />
+        {chainNode("入口", "start", (
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+            {entryPrefix ? <span className="text-[11px] text-muted-foreground">{entryPrefix}</span> : null}
+            <LineChip>{entryName}</LineChip>
+          </div>
+        ))}
         {line.layers.map((layer, layerIndex) => {
           const from = previousHost;
           const candidates = candidatesOf(layer);
@@ -241,12 +263,10 @@ export function RouteLinesEditor({
           const total = layer.tunnelIds.length + layer.hostIds.length;
           const addableHosts = hosts.filter((host) => host.id !== entryHostId && !layer.hostIds.includes(host.id));
           const addableTunnels = allowTunnels ? tunnels.filter((tunnel) => tunnel.entryHostId === from && !layer.tunnelIds.includes(tunnel.id)) : [];
-          const last = layerIndex === line.layers.length - 1;
           const canAddCandidate = total < MAX_LAYER_CANDIDATES && (addableHosts.length > 0 || addableTunnels.length > 0);
           const label = line.layers.length > 1 ? `中转 ${layerIndex + 1}` : "中转";
           // 有得挑（两个以上候选、或者一个池）才问怎么挑
           const choosable = !!pool || total > 1;
-          const canChain = last && allowHops && line.layers.length < MAX_ROUTE_HOPS;
           const removeCandidate = (candidate: Candidate) => {
             const tunnelIds = candidate.kind === "tunnel" ? layer.tunnelIds.filter((id) => id !== candidate.id) : layer.tunnelIds;
             const hostIds = candidate.kind === "host" ? layer.hostIds.filter((id) => id !== candidate.id) : layer.hostIds;
@@ -257,10 +277,8 @@ export function RouteLinesEditor({
             if (candidate.kind === "tunnel") setLayer(lineIndex, layerIndex, { tunnelIds: [candidate.id, ...layer.tunnelIds.filter((id) => id !== candidate.id)] });
             else setLayer(lineIndex, layerIndex, { hostIds: [candidate.id, ...layer.hostIds.filter((id) => id !== candidate.id)] });
           };
-          return (
-            <div key={`layer-${layerIndex}`} className="contents">
-              <span className="pt-[6px] text-[12px] text-muted-foreground">{label}</span>
-              <div className="flex min-w-0 flex-col">
+          return chainNode(label, "hop", (
+            <>
                 <div className="flex min-w-0 flex-wrap items-center gap-1.5" data-testid="route-line-layer">
                   {pool ? (
                     <DropdownMenu>
@@ -323,7 +341,7 @@ export function RouteLinesEditor({
                     </DropdownMenu>
                   ) : null}
                 </div>
-                {choosable || layer.skippable || canChain ? (
+                {choosable || layer.skippable ? (
                   <div className="mt-[6px] flex min-w-0 flex-wrap items-center gap-[10px] text-[11.5px] text-muted-foreground">
                     {/* 小下拉而不是 Select：手机上 Select 被统一撑到 34px / 15px，这里要和效果图一样只占一行小字 */}
                     {choosable ? (
@@ -349,31 +367,31 @@ export function RouteLinesEditor({
                         可跳过<X className="h-3 w-3" aria-hidden="true" />
                       </LineChipButton>
                     ) : null}
-                    {canChain ? addHopMenu(lineIndex, previousHost, "+ 后面再接中转") : null}
                   </div>
                 ) : null}
-              </div>
-            </div>
-          );
+            </>
+          ), `layer-${layerIndex}`);
         })}
-        {line.layers.length === 0 && allowHops ? (
-          <>
-            <span className="pt-[6px] text-[12px] text-muted-foreground">中转</span>
-            {/* 先说现在是什么（直连），再给加的按钮：以前只有一个虚线的「+ 经过中转」，看不出有没有中转 */}
-            <div className="flex min-w-0 flex-wrap items-center gap-2 pt-[3px]">
-              <span className="text-[12px] text-muted-foreground">不经中转，入口直连落地</span>
+        {/* 「+ 加中转」在链上：最后一个中转和落地之间（没有中转时就在入口和落地之间，前面写一句「直连」） */}
+        {allowHops && line.layers.length < MAX_ROUTE_HOPS ? (
+          <div className="relative grid min-w-0 grid-cols-[11px_34px_minmax(0,1fr)] items-center gap-x-2">
+            <span aria-hidden />
+            <span aria-hidden />
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              {line.layers.length === 0 ? <span className="text-[12px] text-muted-foreground">入口直连落地</span> : null}
               {addHopMenu(lineIndex, previousHost, "+ 加中转")}
             </div>
-          </>
+          </div>
         ) : null}
-        <span className="pt-[6px] text-[12px] text-muted-foreground">落地</span>
-        <DestEditor
-          line={line}
-          mainAddress={mainAddress}
-          nodeOptions={nodeOptions}
-          latency={latencyOf(segmentKey(previousHost, "dest"))}
-          onChange={(dests) => setLine(lineIndex, { dests })}
-        />
+        {chainNode("落地", "end", (
+          <DestEditor
+            line={line}
+            mainAddress={mainAddress}
+            nodeOptions={nodeOptions}
+            latency={latencyOf(segmentKey(previousHost, "dest"))}
+            onChange={(dests) => setLine(lineIndex, { dests })}
+          />
+        ))}
       </div>
     );
   };
@@ -407,22 +425,24 @@ export function RouteLinesEditor({
         </LineRow>
         {open ? (
           <div className="rounded-b-[12px] border border-t-0 border-[var(--fx-stroke-weak)] bg-[var(--fx-l1-surface)] px-[10px] pb-[10px]">
+            {/* 名字像标题一样摆着，点一下就能改（以前是一整个输入框，太重）；右边测一下、删除 */}
             <div className="flex min-w-0 items-center gap-2 border-t border-dashed border-[var(--fx-stroke-weak)] pt-2">
-              <Input
+              <input
                 value={line.name}
                 onChange={(event) => setLine(lineIndex, { name: event.target.value.slice(0, 40) })}
                 placeholder={isMain ? "主线路" : defaultRoutePathName(lineIndex)}
                 aria-label={isMain ? "主线路的名字" : `备 ${lineIndex} 的名字`}
-                className="h-7 min-w-0 flex-1 text-[12.5px]"
+                title="点一下改名字"
+                className="min-w-0 flex-1 rounded-[6px] bg-transparent px-1 py-[3px] text-[13px] font-semibold outline-none hover:bg-[var(--fx-l2-group)] focus:bg-[var(--fx-l2-group)]"
               />
               {testButton(line, lineIndex)}
               {isMain ? null : (
                 <button
                   type="button"
-                  className="shrink-0 text-[11.5px] text-[var(--fx-down-text)] hover:underline"
+                  className="shrink-0 px-1 text-[11.5px] text-[var(--fx-down-text)] hover:underline"
                   onClick={() => { onChange(lines.filter((_, index) => index !== lineIndex)); setOpenKey(null); }}
                 >
-                  删掉这条
+                  删除
                 </button>
               )}
             </div>
@@ -570,7 +590,13 @@ function DestEditor({ line, mainAddress, nodeOptions, latency, onChange }: {
         {dests.length < MAX_LINE_DESTS || line.dests.length === 0 ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <LineChipButton variant="add" data-testid="route-line-dest-add">+ 选节点</LineChipButton>
+              <LineChipButton
+                variant="add"
+                data-testid="route-line-dest-add"
+                title={line.dests.length === 0 ? "换一个落地：选我的节点，或填 IP:端口" : "同一个落地位置再并列一个：几个里挑最快的"}
+              >
+                {line.dests.length === 0 ? "换落地" : "+ 并列"}
+              </LineChipButton>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="max-h-72 overflow-y-auto">
               {nodeOptions.length > 0 ? <DropdownMenuLabel className="text-[11px]">我的节点</DropdownMenuLabel> : null}

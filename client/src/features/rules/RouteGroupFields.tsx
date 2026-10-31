@@ -285,17 +285,20 @@ function lineDuration(seconds: number) {
   return minutes >= 60 && minutes % 60 === 0 ? `${minutes / 60} 小时` : `${minutes} 分钟`;
 }
 
-/** 「怎么切」下面那一句：平时走哪条、坏了几秒内切走、恢复多久切回。 */
+/**
+ * 「怎么切」下面那一行：只说要点（坏了几秒内切走、多久切回）。上面四格已经写了是哪种，不再复述
+ * （2.3.498：原来一句话两行，用户嫌字多）。
+ */
 export function lineModeHint(policy: RouteGroupPolicy, perSession = false) {
   const switchSeconds = routeSwitchWithinSeconds(policy);
-  const back = policy.autoFailback ? `主线路恢复稳定 ${lineDuration(policy.recoverSeconds)}后切回` : "主线路恢复后不自动切回";
+  const away = `坏了 ${switchSeconds} 秒内切走`;
+  const back = policy.autoFailback ? `${lineDuration(policy.recoverSeconds)}后切回` : "不自动切回";
   switch (policy.mode) {
-    case "smart": return `平时走整条链最快的；坏了 ${switchSeconds} 秒内切走，${back}。`;
-    case "weighted": return `${perSession ? "新会话" : "新连接"}按权重分到各条线路；坏了的先跳过，恢复稳定 ${lineDuration(policy.recoverSeconds)}后重新参与。`;
-    case "scheduled": return `按时段表定首选，时段外走主线路；坏了 ${switchSeconds} 秒内切走，${back}。`;
-    case "hybrid": return `按时段表定首选（到点前先预热预检），时段外走整条链最快的；坏了 ${switchSeconds} 秒内切走。`;
-    case "manual": return `一直走你指定的那条；它坏了 ${switchSeconds} 秒内临时切走，恢复后回来。`;
-    default: return `平时只走主线路；坏了 ${switchSeconds} 秒内切走，${back}。`;
+    case "weighted": return `${perSession ? "新会话" : "新连接"}按权重分 · 坏了的先跳过`;
+    case "scheduled": return `按时段表走 · ${away}`;
+    case "hybrid": return `时段外挑最快的 · ${away}`;
+    case "manual": return `走指定的那条 · ${away}，好了回来`;
+    default: return `${away} · ${back}`;
   }
 }
 
@@ -591,14 +594,14 @@ export function RouteGroupFields({
           {/* 四格之外的两种：稳定优先下「人工指定」= 手动主备，按时段下「时段外择优」= 混合（保存才生效，用 Checkbox） */}
           {lineModeSegment(mode) === "failover" ? (
             <label className="mt-[10px] flex w-fit items-center gap-2 text-[11.5px] text-muted-foreground">
-              <Checkbox checked={mode === "manual"} onCheckedChange={(checked) => changeMode(checked ? "manual" : "failover")} aria-label="人工指定走哪条" data-testid="route-line-manual" />
-              人工指定走哪条（手动主备）
+              <Checkbox checked={mode === "manual"} onCheckedChange={(checked) => changeMode(checked ? "manual" : "failover")} aria-label="手动指定走哪条" data-testid="route-line-manual" />
+              手动指定走哪条
             </label>
           ) : null}
           {lineModeSegment(mode) === "scheduled" ? (
             <label className="mt-[10px] flex w-fit items-center gap-2 text-[11.5px] text-muted-foreground">
-              <Checkbox checked={mode === "hybrid"} onCheckedChange={(checked) => changeMode(checked ? "hybrid" : "scheduled")} aria-label="时段外走整条链最快的" data-testid="route-line-hybrid" />
-              时段外走整条链最快的
+              <Checkbox checked={mode === "hybrid"} onCheckedChange={(checked) => changeMode(checked ? "hybrid" : "scheduled")} aria-label="时段外挑最快的" data-testid="route-line-hybrid" />
+              时段外挑最快的
             </label>
           ) : null}
           {mode === "manual" ? <div className="mt-2" data-state={deciding === "pin" ? "deciding" : "idle"} data-testid="policy-pin">{pinPicker(false)}</div> : null}
@@ -646,25 +649,28 @@ export function RouteGroupFields({
               })}
             </div>
           ) : null}
-          <label className="mt-[10px] flex w-fit items-center gap-2 text-[11.5px] text-muted-foreground">
+          {/* 说明放 title 里（字多，用户嫌占地方）：握手慢了同时拨下一条、坏了马上切；要换中转也不断连得靠热备的 NEX 隧道 */}
+          <label
+            className="mt-[10px] flex w-fit items-center gap-2 text-[11.5px] text-muted-foreground"
+            title="握手慢了同时拨下一条、坏了马上切，旧连接断开让客户端马上重连。要换中转也不断连：主线路里放一段 NEX 隧道，中转方式设成「热备」（至少两台中转）。"
+          >
             <Checkbox
               checked={delivery === "hot"}
               onCheckedChange={(checked) => changeDelivery(checked ? "hot" : "cold")}
-              aria-label="切换不断连（NEX 隧道热备）"
+              aria-label="切换不断连"
               data-testid="route-line-seamless"
             />
-            切换不断连（NEX 隧道热备）
+            切换不断连
           </label>
-          {delivery === "hot" && !seamlessTunnelReady ? (
+          {delivery === "hot" && !seamlessTunnelReady && mainNexTunnel ? (
             <LineHint className="mt-1">
-              握手慢了同时拨下一条、坏了马上切，旧连接断开让客户端马上重连。要换中转也不断连：主线路里放一段 NEX 隧道，隧道的中转方式设成「热备」（至少两台中转）。
-              {/* 主线路里已经有 NEX 隧道、只是没开热备：直接去改它（新标签页打开，这里没存的不丢） */}
+              {/* 主线路里已经有 NEX 隧道、只是没开热备：一句话、直接去改它（新标签页打开，这里没存的不丢） */}
               {mainNexTunnel ? (
                 <>
-                  {" "}
                   <a href={`/tunnels?tab=tunnels&edit=${mainNexTunnel.id}`} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-foreground" data-testid="route-line-hot-tunnel">
-                    去改隧道「{mainNexTunnel.name}」
+                    把隧道「{mainNexTunnel.name}」设成热备
                   </a>
+                  ，换中转也不断连
                 </>
               ) : null}
             </LineHint>
