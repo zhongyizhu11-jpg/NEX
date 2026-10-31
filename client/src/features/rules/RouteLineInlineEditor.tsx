@@ -10,7 +10,7 @@ import { routeLinesForEditor } from "@shared/routeLines";
 import { describeRoutePolicy } from "@shared/routePolicy";
 import type { RouteStatus } from "./RouteGroupSheet";
 import { RouteGroupFields, routeGroupPayload, type RouteGroupDraft, type RouteHostOption } from "./RouteGroupFields";
-import { routeLineStatusControls } from "./RouteLineOverview";
+import { routeLineStatusControls, type RouteLineSwitch } from "./RouteLineOverview";
 import type { RouteLinePool, RouteLineTunnel } from "./RouteLinesEditor";
 import {
   routeHostOptionsOf,
@@ -28,7 +28,8 @@ import { SegmentLatencyProvider } from "./SegmentLatencyProvider";
   线路详情第一页直接改线路（2.3.498 起，原来右上角「编辑」再开一层「编辑线路组」框，用户要的是一页改完）：
 
     详情里「线路」那一节就是编辑器（主线路一张卡、有序备用、怎么切、高级策略），每条线路后面照样是此刻的
-    状态（使用中 / 待命 / 不通）和暂停 —— 暂停点了马上生效，不用保存。别的改动攒着，动过才在底下钉一条
+    状态（使用中 / 待命 / 不通）和暂停 —— 暂停点了马上生效，不用保存；点状态胶囊能手动「切到这条」（人工指定，
+    也是马上生效）。别的改动攒着，动过才在底下钉一条
     「放弃改动 / 保存并立即测」。保存走 rules.update（只带 routeGroup，服务端拿库里的规则补齐其余字段、
     重新展开线路、落实中继、推给 Agent），保存后 Agent 和中转马上探一轮 ——「保存后 10 秒内每一段都有数字」。
 
@@ -55,7 +56,7 @@ function withLinePaused(draft: RouteGroupDraft | null, lineKey: string, paused: 
   };
 }
 
-export function useRouteLineEditor({ rule, enabled, status, onPause, pausing = false }: {
+export function useRouteLineEditor({ rule, enabled, status, onPause, pausing = false, lineSwitch }: {
   /** 没有（转发组的子规则、只能看）就不出编辑器，详情里照旧是只读的线路列表。 */
   rule: LineRuleRow | null;
   /** 详情开着：开的那一下从库里那份开始。关着时不动，免得关的动画里编辑器先变回列表。 */
@@ -64,6 +65,8 @@ export function useRouteLineEditor({ rule, enabled, status, onPause, pausing = f
   /** 立刻生效的暂停；onDone 在成功后调。 */
   onPause: (lineKey: string, paused: boolean, onDone?: () => void) => void;
   pausing?: boolean;
+  /** 手动换线路：点每条线路的状态胶囊「切到这条」（人工指定，马上生效、不用保存）。 */
+  lineSwitch?: RouteLineSwitch;
 }): { editor: ReactNode; saveBar: ReactNode } {
   const utils = trpc.useUtils();
   const active = enabled && !!rule;
@@ -185,7 +188,7 @@ export function useRouteLineEditor({ rule, enabled, status, onPause, pausing = f
         ruleId={ruleId || null}
         upstreamHostIds={routeTunnel ? [Number(routeTunnel.entryHostId || 0)].filter((id) => id > 0) : []}
         defaultAdvancedOpen={false}
-        renderLineStatus={(line) => routeLineStatusControls(status, line.key, pauseLine, pausing)}
+        renderLineStatus={(line) => routeLineStatusControls(status, line.key, pauseLine, pausing, lineSwitch)}
       />
     </SegmentLatencyProvider>
   ) : null;

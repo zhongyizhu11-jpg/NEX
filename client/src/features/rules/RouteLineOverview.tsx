@@ -19,9 +19,11 @@ import {
   lineChipClass,
   type LineTone,
 } from "@/features/lines/LineUi";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { describeRouteIssue, normalizeRouteEventKind } from "@shared/routeGroup";
+import { PIN_DURATION_OPTIONS, formatPolicyClock } from "@shared/routePolicy";
 import type { RouteEvent, RouteStatus, RouteStatusPath } from "./RouteGroupSheet";
 import { RouteLineDiagram } from "./RouteLineDiagram";
 import {
@@ -80,20 +82,77 @@ export function RouteLineHero({ status }: { status: RouteStatus }) {
 
 // ---------------------------------------------------------------- 线路
 
-/** 一条线路此刻的状态胶囊：已暂停 / 使用中 / 不通 ×N（或原因）/ 待命。 */
-function routeLinePill(group: RouteLineGroup): { tone: LineTone; text: string; dot?: boolean } {
+/** 一条线路此刻的状态胶囊：已暂停 / 使用中 / 不通 ×N（或原因）/ 待命；人工指定了这条，后面带「指定」。 */
+function routeLinePill(group: RouteLineGroup, pinned = false): { tone: LineTone; text: string; dot?: boolean } {
+  const tag = pinned ? " · 指定" : "";
   if (group.paused) return { tone: "gray", text: "已暂停" };
-  if (group.active) return { tone: "ok", text: "使用中", dot: true };
-  if (group.allDown) return { tone: "down", text: group.failures >= 2 ? `不通 ×${group.failures}` : group.reason ? lineShortIssue(group.reason) : "不通" };
-  return { tone: "gray", text: "待命" };
+  if (group.active) return { tone: "ok", text: `使用中${tag}`, dot: true };
+  if (group.allDown) return { tone: "down", text: `${group.failures >= 2 ? `不通 ×${group.failures}` : group.reason ? lineShortIssue(group.reason) : "不通"}${tag}` };
+  return { tone: "gray", text: `待命${tag}` };
 }
 
-/** 状态胶囊 + 暂停 / 恢复（点了立刻生效，不用保存）。只读的线路行和编辑器的每条线路共用。 */
-function LineStatusControls({ group, onPause, pausing = false }: { group: RouteLineGroup; onPause?: (lineKey: string, paused: boolean) => void; pausing?: boolean }) {
-  const pill = routeLinePill(group);
+/**
+ * 手动换线路（2.3.498）：点状态胶囊就能「切到这条」，走的是人工指定（压过时段表和评分，到点交回自动；
+ * 指定的那条挂了照样往下切）。以前要点开「异常明细」找「强制走一条」，用户问「想手动换怎么办」。
+ * 按权重分的线路组没有「走哪条」，不给。
+ */
+export type RouteLineSwitch = {
+  /** 现在钉在第几条路径（status.paths[].index）；null = 没指定。 */
+  pinIndex: number | null;
+  pinUntilMs: number | null;
+  pending: boolean;
+  onPin: (pathIndex: number, durationSeconds: number | null) => void;
+  onUnpin: () => void;
+  nowMs?: number;
+  timeZone?: string;
+};
+
+function LineSwitchMenu({ group, pill, lineSwitch }: { group: RouteLineGroup; pill: ReactNode; lineSwitch: RouteLineSwitch }) {
+  const pinnedHere = lineSwitch.pinIndex !== null && group.paths.some((path) => path.index === lineSwitch.pinIndex);
+  const until = lineSwitch.pinUntilMs ? `，到 ${formatPolicyClock(lineSwitch.pinUntilMs, lineSwitch.nowMs ?? Date.now(), lineSwitch.timeZone)} 交回自动` : "，直到交回自动";
+  const head = pinnedHere
+    ? `已指定走这条${until}`
+    : group.paused
+      ? "这条暂停着：先恢复才能切过去"
+      : group.active
+        ? "正在走这条：钉住它，自动选择就不会把它换走"
+        : "切到这条：压过自动选择，到点交回自动";
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button type="button" className="shrink-0 rounded-full" aria-label={`手动切换：${group.name}`} title="点一下：切到这条 / 交回自动" data-testid="route-line-switch">
+          {pill}
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-60">
+        <DropdownMenuLabel className="whitespace-normal text-[11.5px] font-normal leading-[1.45] text-muted-foreground">{head}</DropdownMenuLabel>
+        {!pinnedHere && !group.paused ? PIN_DURATION_OPTIONS.map((option) => (
+          <DropdownMenuItem key={option.label} disabled={lineSwitch.pending} onSelect={() => lineSwitch.onPin(group.shown.index, option.seconds)}>
+            {option.seconds === null ? "一直走这条，直到交回自动" : `${group.active ? "钉住" : "切过去走"} ${option.label}`}
+          </DropdownMenuItem>
+        )) : null}
+        {group.allDown && !group.active && !group.paused && !pinnedHere ? (
+          <p className="px-2 pb-1 text-[11px] leading-[1.45] text-[var(--fx-warn-text)]">现在不通：指定了也会先往下切，通了再切过来。</p>
+        ) : null}
+        {lineSwitch.pinIndex !== null ? (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem disabled={lineSwitch.pending} onSelect={lineSwitch.onUnpin} data-testid="route-line-unpin">交回自动</DropdownMenuItem>
+          </>
+        ) : null}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/** 状态胶囊（能手动换时点它切到这条）+ 暂停 / 恢复（点了立刻生效，不用保存）。只读的线路行和编辑器的每条线路共用。 */
+function LineStatusControls({ group, onPause, pausing = false, lineSwitch }: { group: RouteLineGroup; onPause?: (lineKey: string, paused: boolean) => void; pausing?: boolean; lineSwitch?: RouteLineSwitch }) {
+  const pinned = !!lineSwitch && lineSwitch.pinIndex !== null && group.paths.some((path) => path.index === lineSwitch.pinIndex);
+  const pill = routeLinePill(group, pinned);
+  const pillNode = <LinePill tone={pill.tone} dot={pill.dot} title={group.allDown && group.reason ? describeRouteIssue(group.reason) : undefined} testId="route-line-state">{pill.text}</LinePill>;
   return (
     <>
-      <LinePill tone={pill.tone} dot={pill.dot} title={group.allDown && group.reason ? describeRouteIssue(group.reason) : undefined} testId="route-line-state">{pill.text}</LinePill>
+      {lineSwitch ? <LineSwitchMenu group={group} pill={pillNode} lineSwitch={lineSwitch} /> : pillNode}
       {onPause ? (
         <LineIconButton
           aria-label={group.paused ? `恢复线路 ${group.name}` : `暂停线路 ${group.name}`}
@@ -113,12 +172,12 @@ function LineStatusControls({ group, onPause, pausing = false }: { group: RouteL
  * 编辑器里一条线路后面那组（RouteLinesEditor 的 renderLineStatus）。还没保存的新线路没有状态，返回 null ——
  * 编辑器看到 null 才照旧给「参与切换」的勾，所以这里是函数不是组件（组件元素永远不是 null）。
  */
-export function routeLineStatusControls(status: RouteStatus | null, lineKey: string, onPause?: (lineKey: string, paused: boolean) => void, pausing = false): ReactNode {
+export function routeLineStatusControls(status: RouteStatus | null, lineKey: string, onPause?: (lineKey: string, paused: boolean) => void, pausing = false, lineSwitch?: RouteLineSwitch): ReactNode {
   const group = status ? routeLineGroups(status).find((item) => item.key === lineKey) : undefined;
-  return group ? <LineStatusControls group={group} onPause={onPause} pausing={pausing} /> : null;
+  return group ? <LineStatusControls group={group} onPause={onPause} pausing={pausing} lineSwitch={lineSwitch} /> : null;
 }
 
-export function RouteLineList({ status, onPause, pausing = false }: { status: RouteStatus; onPause?: (lineKey: string, paused: boolean) => void; pausing?: boolean }) {
+export function RouteLineList({ status, onPause, pausing = false, lineSwitch }: { status: RouteStatus; onPause?: (lineKey: string, paused: boolean) => void; pausing?: boolean; lineSwitch?: RouteLineSwitch }) {
   const groups = routeLineGroups(status);
   return (
     <div className="flex flex-col gap-[7px]" data-testid="route-line-list">
@@ -131,7 +190,7 @@ export function RouteLineList({ status, onPause, pausing = false }: { status: Ro
             <LinePath bad={bad} title={`${group.name}：${text} · ${routeDestLabel(group.shown)}${group.paths.length > 1 ? `（这条线路组合出 ${group.paths.length} 条路径）` : ""}`}>
               {text}
             </LinePath>
-            <LineStatusControls group={group} onPause={onPause} pausing={pausing} />
+            <LineStatusControls group={group} onPause={onPause} pausing={pausing} lineSwitch={lineSwitch} />
           </LineRow>
         );
       })}
@@ -243,6 +302,7 @@ export function RouteLineDetail({
   nowMs,
   timeZone,
   editor,
+  lineSwitch,
 }: {
   status: RouteStatus;
   events: RouteEvent[];
@@ -255,6 +315,8 @@ export function RouteLineDetail({
   timeZone?: string;
   /** 能改的时候：线路这一节直接是编辑器（不再另开「编辑线路组」）；没给就是只读的线路列表。 */
   editor?: ReactNode;
+  /** 手动换线路（点状态胶囊）；只读列表用，编辑器里的由编辑器自己带。 */
+  lineSwitch?: RouteLineSwitch;
 }) {
   const now = nowMs ?? Date.now();
   const chip = routeSwitchChip(status, events, now, timeZone);
@@ -264,7 +326,7 @@ export function RouteLineDetail({
       <RouteLineDiagram status={status} modeLabel={modeLabel} timeZone={timeZone} />
       <div>
         <LineSec left="线路" right={routeLineSwitchSummary(status)} />
-        {editor ?? <RouteLineList status={status} onPause={onPause} pausing={pausing} />}
+        {editor ?? <RouteLineList status={status} onPause={onPause} pausing={pausing} lineSwitch={lineSwitch} />}
       </div>
       <div>
         <LineSec left="连接 · 最近 10 分钟" right={<span title="入站：客户端连进来后拨通一条路径的比例；第二段：入口真实拨号的成功率；后面每段：中转探下一跳（近 20 次）">精确到哪一段</span>} />

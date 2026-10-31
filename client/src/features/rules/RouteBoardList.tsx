@@ -9,7 +9,7 @@ import { pollingInterval } from "@/lib/polling";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-import { routeGroupOf, routePathLetter, type RouteGroup } from "@shared/routeGroup";
+import { routeGroupOf, type RouteGroup } from "@shared/routeGroup";
 import { describeRoutePolicy, pinUntilSeconds, type RoutePolicy } from "@shared/routePolicy";
 import { RouteBoardCard } from "./RouteBoard";
 import { RouteGroupSheet, type RouteStatus } from "./RouteGroupSheet";
@@ -117,7 +117,7 @@ export function RouteBoardList({ searchQuery = "", isAdmin = false, compact = fa
       utils.rules.routeBoard.invalidate();
       toast.success(variables.failoverPinnedIndex === null || variables.failoverPinnedIndex === undefined
         ? "已交回自动"
-        : `已强制走路径 ${routePathLetter(variables.failoverPinnedIndex)}`);
+        : "已手动指定：调度这条线路的机器收到就切过去");
     },
     onError: (error) => toast.error(error.message || "操作失败"),
   });

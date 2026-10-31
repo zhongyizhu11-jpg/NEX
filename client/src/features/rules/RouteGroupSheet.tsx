@@ -29,7 +29,7 @@ import { isAgentVersionBehind } from "@shared/version";
 import { RoutePathCards, RouteSwitchChip, type RouteBoardEntry, type RouteBoardRate } from "./RouteBoard";
 import { ConditionRow, PinSection, SentenceRow } from "./RoutePolicySheet";
 import { RouteQualityHistory } from "./RouteQualityHistory";
-import { RouteLineDetail, RouteLineTools, useRouteLinePause } from "./RouteLineOverview";
+import { RouteLineDetail, RouteLineTools, useRouteLinePause, type RouteLineSwitch } from "./RouteLineOverview";
 import { ROUTE_LINE_MODE_LABEL, routeLineSubtitle } from "./routeLineText";
 import { useRouteLineEditor } from "./RouteLineInlineEditor";
 import type { LineRuleRow } from "./routeLineOptions";
@@ -364,6 +364,18 @@ export function RouteGroupSheet({
   const events = (eventsQuery.data as RouteEvent[] | undefined) ?? [];
   const mode = shown?.policy.mode ?? "failover";
   const modeLabel = ROUTE_LINE_MODE_LABEL[mode] || ROUTE_LINE_MODE_LABEL.failover;
+  // 手动换线路：点线路的状态胶囊「切到这条」= 人工指定（按权重分的没有「走哪条」，不给）
+  const lineSwitch: RouteLineSwitch | undefined = shown && panel.canEdit && panel.onPin && panel.onUnpin && shown.policy.mode !== "weighted"
+    ? {
+        pinIndex: shown.policy.pin ? shown.policy.pin.index : null,
+        pinUntilMs: shown.policy.pin?.untilMs ?? null,
+        pending: !!panel.pending,
+        onPin: panel.onPin,
+        onUnpin: panel.onUnpin,
+        nowMs: panel.nowMs,
+        timeZone: panel.timeZone,
+      }
+    : undefined;
   // 线路就在详情第一页改（没有单独的「编辑线路组」了）；只有拿不到规则本身时才退回去改整条规则
   const editing = useRouteLineEditor({
     rule: panel.canEdit ? shown?.rule ?? null : null,
@@ -371,6 +383,7 @@ export function RouteGroupSheet({
     status,
     onPause: linePause.onPause,
     pausing: linePause.pausing,
+    lineSwitch,
   });
   const editRuleFallback = !!panel.canEdit && !shown?.rule && !!onEdit;
   return (
@@ -408,6 +421,7 @@ export function RouteGroupSheet({
               nowMs={panel.nowMs}
               timeZone={panel.timeZone}
               editor={editing.editor}
+              lineSwitch={lineSwitch}
             />
           ) : null}
           {detailsOpen || (status && status.paths.length === 0) ? (

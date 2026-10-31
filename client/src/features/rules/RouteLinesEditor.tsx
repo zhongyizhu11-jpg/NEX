@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactNode, type Ref } from "react";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, X } from "lucide-react";
 
 import { SortableItem, SortableReorderContext, useSortableReorder } from "@/components/SortableDragHandle";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -26,10 +26,13 @@ import { segmentKey, useSegmentLatency } from "./segmentLatency";
 /*
   编辑线路组（2.3.496，照效果图 ②「编辑：主线路 + 有序备用」）：
 
-    主线路一张卡：入口 / 第 N 层 / 落地，一层里几个候选（机器、隧道可以混着放，或者一个节点池），
-    按整条链的延迟挑（「最低延迟」）或按顺序；「可跳过」= 这一层全坏了就直连下一层。
-    下面是有序的备用：一行一条，拖动排序，点开改；右边小闪电逐段测、勾掉就不参与（线路详情里是状态胶囊和
-    立刻生效的暂停，见 renderLineStatus）。
+    主线路一张卡：入口 / 中转（几跳就几行：中转 1、中转 2…）/ 落地。一跳里可以放几个候选（机器、隧道混着放，
+    或者一个节点池），有两个以上才出「最低延迟 / 按顺序」——只有一个时没得挑（2.3.498）。「+ 后面再接中转」
+    在最后一跳下面，串下一跳。「可跳过」（这一跳全坏了就直连下一跳）不再给勾：和加一条不经它的备用线路是一回事，
+    备用线路排第几、状态、暂停都看得见；老配置里勾过的照常生效，这里显示「可跳过 ×」，点一下取消。
+    下面是有序的备用：一行一条，拖动排序；整行点一下展开来改，小闪电（逐段测）在展开的那块里 —— 收着的行上
+    只留路径和状态，省地方（2.3.498，以前每行还挂着 ▾ 和 ⚡，路径被挤得只剩半截）。勾掉就不参与
+    （线路详情里是状态胶囊和立刻生效的暂停，见 renderLineStatus）。
     再下面一个「添加备用线路」菜单：空白的、直连落地、经某台机器、经某个节点池。
 
   chip 上的毫秒：打开就是最近一轮探测的，右上角小闪电逐段测的盖掉它（server/lineSegmentLatency.ts）——
@@ -229,6 +232,10 @@ export function RouteLinesEditor({
           const addableHosts = hosts.filter((host) => host.id !== entryHostId && !layer.hostIds.includes(host.id));
           const addableTunnels = allowTunnels ? tunnels.filter((tunnel) => tunnel.entryHostId === from && !layer.tunnelIds.includes(tunnel.id)) : [];
           const last = layerIndex === line.layers.length - 1;
+          const label = line.layers.length > 1 ? `中转 ${layerIndex + 1}` : "中转";
+          // 有得挑（两个以上候选、或者一个池）才问怎么挑
+          const choosable = !!pool || total > 1;
+          const canChain = last && allowHops && line.layers.length < MAX_ROUTE_HOPS;
           const removeCandidate = (candidate: Candidate) => {
             const tunnelIds = candidate.kind === "tunnel" ? layer.tunnelIds.filter((id) => id !== candidate.id) : layer.tunnelIds;
             const hostIds = candidate.kind === "host" ? layer.hostIds.filter((id) => id !== candidate.id) : layer.hostIds;
@@ -241,7 +248,7 @@ export function RouteLinesEditor({
           };
           return (
             <div key={`layer-${layerIndex}`} className="contents">
-              <span className="pt-[6px] text-[12px] text-muted-foreground">第 {layerIndex + 1} 层</span>
+              <span className="pt-[6px] text-[12px] text-muted-foreground">{label}</span>
               <div className="flex min-w-0 flex-col">
                 <div className="flex min-w-0 flex-wrap items-center gap-1.5" data-testid="route-line-layer">
                   {pool ? (
@@ -250,7 +257,7 @@ export function RouteLinesEditor({
                         <LineChipButton variant="sel">池 · {pool.name}</LineChipButton>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="start">
-                        <DropdownMenuItem onSelect={() => removeLayer(lineIndex, layerIndex)}>去掉这一层</DropdownMenuItem>
+                        <DropdownMenuItem onSelect={() => removeLayer(lineIndex, layerIndex)}>去掉这个中转</DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
                   ) : null}
@@ -280,7 +287,7 @@ export function RouteLinesEditor({
                   {!pool && total < MAX_LAYER_CANDIDATES && (addableHosts.length > 0 || addableTunnels.length > 0) ? (
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
-                        <LineChipButton variant="add" className="min-w-[30px] justify-center" aria-label={`第 ${layerIndex + 1} 层再加一个候选`}>+</LineChipButton>
+                        <LineChipButton variant="add" className="min-w-[30px] justify-center" aria-label={`${label}再放一个候选`} title="这一跳再放一个候选：几个里挑最快的（或按顺序）">+</LineChipButton>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="start" className="max-h-72 overflow-y-auto">
                         {addableTunnels.length > 0 ? <DropdownMenuLabel className="text-[11px]">隧道（从上一个节点出发）</DropdownMenuLabel> : null}
@@ -296,26 +303,35 @@ export function RouteLinesEditor({
                     </DropdownMenu>
                   ) : null}
                 </div>
-                <div className="mt-[6px] flex min-w-0 flex-wrap items-center gap-[10px] text-[11.5px] text-muted-foreground">
-                  {/* 小下拉而不是 Select：手机上 Select 被统一撑到 34px / 15px，这里要和效果图一样只占一行小字 */}
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <button type="button" className="inline-flex items-center gap-1 rounded-[8px] border border-[var(--fx-stroke-weak)] bg-[var(--fx-l1-surface)] px-2 py-[3px] text-[11.5px] leading-[1.3] text-foreground" aria-label={`第 ${layerIndex + 1} 层怎么挑`}>
-                        {layer.pick === "order" ? "按顺序" : "最低延迟"}
-                        <ChevronDown className="h-3 w-3 text-muted-foreground" aria-hidden="true" />
-                      </button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="start">
-                      <DropdownMenuItem onSelect={() => setLayer(lineIndex, layerIndex, { pick: "best" })}>最低延迟</DropdownMenuItem>
-                      <DropdownMenuItem onSelect={() => setLayer(lineIndex, layerIndex, { pick: "order" })}>按顺序</DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                  <label className="flex items-center gap-1.5" title="这一层全坏了就直连下一层">
-                    <Checkbox checked={layer.skippable} onCheckedChange={(checked) => setLayer(lineIndex, layerIndex, { skippable: !!checked })} aria-label={`第 ${layerIndex + 1} 层可跳过`} />
-                    可跳过
-                  </label>
-                  {last && allowHops && line.layers.length < MAX_ROUTE_HOPS ? addHopMenu(lineIndex, previousHost, "+ 再加一层") : null}
-                </div>
+                {choosable || layer.skippable || canChain ? (
+                  <div className="mt-[6px] flex min-w-0 flex-wrap items-center gap-[10px] text-[11.5px] text-muted-foreground">
+                    {/* 小下拉而不是 Select：手机上 Select 被统一撑到 34px / 15px，这里要和效果图一样只占一行小字 */}
+                    {choosable ? (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button type="button" className="inline-flex items-center gap-1 rounded-[8px] border border-[var(--fx-stroke-weak)] bg-[var(--fx-l1-surface)] px-2 py-[3px] text-[11.5px] leading-[1.3] text-foreground" aria-label={`${label}怎么挑`}>
+                            {layer.pick === "order" ? "按顺序" : "最低延迟"}
+                            <ChevronDown className="h-3 w-3 text-muted-foreground" aria-hidden="true" />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="start">
+                          <DropdownMenuItem onSelect={() => setLayer(lineIndex, layerIndex, { pick: "best" })}>最低延迟（整条链最快的那个）</DropdownMenuItem>
+                          <DropdownMenuItem onSelect={() => setLayer(lineIndex, layerIndex, { pick: "order" })}>按顺序（前面的坏了才用后面的）</DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    ) : null}
+                    {layer.skippable ? (
+                      <LineChipButton
+                        onClick={() => setLayer(lineIndex, layerIndex, { skippable: false })}
+                        title="这一跳全坏了就直连下一跳（老配置里勾的）；点一下取消，要绕开它就加一条不经它的备用线路"
+                        aria-label={`${label}可跳过，点一下取消`}
+                      >
+                        可跳过<X className="h-3 w-3" aria-hidden="true" />
+                      </LineChipButton>
+                    ) : null}
+                    {canChain ? addHopMenu(lineIndex, previousHost, "+ 后面再接中转") : null}
+                  </div>
+                ) : null}
               </div>
             </div>
           );
@@ -393,16 +409,16 @@ export function RouteLinesEditor({
                       <LineBadge>备 {lineIndex}</LineBadge>
                       <button
                         type="button"
-                        className="flex min-w-0 flex-1 items-center gap-1 text-left"
+                        className="flex min-w-0 flex-1 items-center text-left"
                         aria-expanded={open}
+                        aria-label={`${open ? "收起" : "展开改"}备 ${lineIndex}：${lineText(line)}`}
                         onClick={() => setOpenKey(open ? null : line.key)}
-                        title="点开改这条"
+                        title={open ? "收起" : "点一下展开：改这条、测一下"}
+                        data-testid="route-line-open"
                       >
                         <LinePath bad={line.paused}>{lineText(line)}</LinePath>
-                        <ChevronDown className={cn("h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform", open && "rotate-180")} />
                       </button>
                       {lineStatus}
-                      {testButton(line, lineIndex)}
                       {lineStatus ? null : (
                         <Checkbox checked={!line.paused} onCheckedChange={(checked) => setLine(lineIndex, { paused: !checked })} aria-label={`备 ${lineIndex} 参与切换`} title="勾掉 = 暂停这条，保存后生效" />
                       )}
@@ -417,6 +433,7 @@ export function RouteLinesEditor({
                             aria-label={`备 ${lineIndex} 的名字`}
                             className="h-7 min-w-0 flex-1 text-[12.5px]"
                           />
+                          {testButton(line, lineIndex)}
                           <button
                             type="button"
                             className="shrink-0 text-[11.5px] text-[var(--fx-down-text)] hover:underline"

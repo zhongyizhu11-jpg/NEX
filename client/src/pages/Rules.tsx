@@ -160,7 +160,6 @@ import {
   routeGroupForwardTypeSupported,
   routeGroupOf,
   routeGroupTunnelModeSupported,
-  routePathLetter,
   validateRouteGroup,
 } from "@shared/routeGroup";
 import {
@@ -2478,7 +2477,7 @@ function RulesContent() {
       // 只说做了什么，不说「已生效」：机器离线时要等它连上才会照做。
       toast.success(variables.failoverPinnedIndex === null || variables.failoverPinnedIndex === undefined
         ? "已交回自动"
-        : `已强制走路径 ${routePathLetter(variables.failoverPinnedIndex)}`);
+        : "已手动指定：调度这条线路的机器收到就切过去");
     },
     onError: (error) => toast.error(error.message || "操作失败"),
   });

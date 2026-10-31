@@ -292,3 +292,13 @@ test("分层图：落地是最后一列、一直画到右边，后面没有「�
   const rects = Array.from(html.matchAll(/<rect x="([\d.]+)" y="[\d.]+" width="([\d.]+)"/g)).map((match) => Number(match[1]) + Number(match[2]));
   assert.ok(Math.max(...rects) <= viewBox && Math.max(...rects) >= viewBox - 4, `落地框贴着右边（${Math.max(...rects)} / ${viewBox}）`);
 });
+
+test("手动换线路：点状态胶囊就能切到这条；指定了的那条胶囊带「指定」；没给切换（按权重 / 只能看）就是普通胶囊", () => {
+  const lineSwitch = { pinIndex: null, pinUntilMs: null, pending: false, onPin: noop, onUnpin: noop };
+  const idle = renderToStaticMarkup(<>{routeLineStatusControls(status(), group.paths[0].key, undefined, false, lineSwitch)}</>);
+  assert.match(idle, /aria-label="手动切换：主线路"[^>]*data-testid="route-line-switch"[^]*待命/, "胶囊本身就是切换按钮");
+  const pinned = renderToStaticMarkup(<>{routeLineStatusControls(status(), group.paths[1].key, undefined, false, { ...lineSwitch, pinIndex: 1 })}</>);
+  assert.match(pinned, /使用中 · 指定/);
+  const plain = renderToStaticMarkup(<>{routeLineStatusControls(status(), group.paths[0].key)}</>);
+  assert.doesNotMatch(plain, /route-line-switch/);
+});

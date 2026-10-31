@@ -76,7 +76,7 @@ test("老草稿只有路径：打开就是线路的样子（主线路一张卡�
   assert.match(html, /data-testid="route-lines"/);
   assert.doesNotMatch(html, /data-testid="route-paths"|data-testid="route-preview"|data-testid="route-plain"|添加路径/, "老的路径编辑、预览卡、那句大白话都不在了");
   assert.match(html, /<span[^>]*>入口<\/span>[^]*?HK entry 01/, "主线路卡从入口写起");
-  assert.match(html, /第 1 层[^]*?JP relay 02/, "一跳一层");
+  assert.match(html, />中转<\/span>[^]*?JP relay 02/, "一跳一行，叫「中转」（不再是「第 1 层」）");
   assert.match(html, /title="规则自己的目标"[^]*?10\.95\.0\.10:443/, "没写落地的走规则自己的目标");
   assert.match(html, /HK entry 01 → SG relay 03 → JP relay 02 → 落地/, "备用折成一行：整条链怎么走");
   assert.match(html, /\+ 添加备用线路/);
@@ -274,4 +274,18 @@ test("线路详情里直接改：给了每条线路的状态，就替掉备用�
   assert.match(html, /aria-label="主线路的名字"[^]*?状态0[^]*?route-line-test/, "主线路的状态在卡头、⚡ 前面");
   assert.equal(count(html, /参与切换/g), 1, "只剩还没保存的备 2 是勾");
   assert.match(html, /aria-label="备 2 参与切换"/);
+});
+
+test("收着的备用行只有路径和状态（⚡ 在展开的那块里）；一跳一个候选不问怎么挑；不再给「可跳过」的勾，勾过的能取消", () => {
+  const html = render(group(), false);
+  assert.equal(count(html, /data-testid="route-line-test"/g), 1, "只有主线路卡上有 ⚡");
+  assert.match(html, /data-testid="route-line-open"/, "备用行整行点开");
+  assert.doesNotMatch(html, /最低延迟|按顺序（/, "一个候选没得挑");
+  assert.doesNotMatch(html, /可跳过/);
+  assert.match(html, /\+ 后面再接中转/, "「再加一层」改叫「后面再接中转」");
+  const lines = routeLinesFromPaths(group().paths);
+  lines[0] = { ...lines[0], layers: [{ ...lines[0].layers[0], kind: "hosts", hostIds: [2, 3], skippable: true }] };
+  const multi = render({ ...group(), lines }, false);
+  assert.match(multi, /aria-label="中转怎么挑"/, "两个候选才问怎么挑");
+  assert.match(multi, /aria-label="中转可跳过，点一下取消"/, "老配置勾过的照样显示，点一下取消");
 });
