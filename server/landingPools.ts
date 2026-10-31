@@ -278,11 +278,15 @@ async function syncPoolNodes(pool: NodePool, config: LandingConfig, health: Land
   const moved: number[] = [];
   const kept = new Set<number>();
   const recipients = new Set<number>();
+  let changed = false;
 
   if (!address) {
     for (const node of existing) {
       kept.add(Number(node.id));
-      if (dbBool(node.isEnabled, true)) await database.update(proxyNodes).set({ isEnabled: false, updatedAt: nowDate() } as any).where(eq(proxyNodes.id, Number(node.id)));
+      if (dbBool(node.isEnabled, true)) {
+        await database.update(proxyNodes).set({ isEnabled: false, updatedAt: nowDate() } as any).where(eq(proxyNodes.id, Number(node.id)));
+        changed = true;
+      }
     }
   } else {
     const inbound = landingConfigToInbound({ ...config, port }, pool.name || "落地池");
@@ -329,11 +333,13 @@ async function syncPoolNodes(pool: NodePool, config: LandingConfig, health: Land
         kept.add(Number(current.id));
         if (Object.entries(data).some(([key, value]) => !sameColumn(current[key], value))) {
           await database.update(proxyNodes).set({ ...data, updatedAt: nowDate() } as any).where(eq(proxyNodes.id, Number(current.id)));
+          changed = true;
         }
         if (!sameColumn(current.address, data.address) || !sameColumn(current.port, data.port)) moved.push(Number(current.id));
       } else {
         const created = Number(await insertAndGetId("proxy_nodes", { includeDirect: !!pool.directDomain, ...data } as any));
         kept.add(created);
+        changed = true;
       }
     }
   }
@@ -342,11 +348,15 @@ async function syncPoolNodes(pool: NodePool, config: LandingConfig, health: Land
     if (kept.has(Number(node.id))) continue;
     if (Number(node.poolSharedUserId || 0) > 0) recipients.add(Number(node.poolSharedUserId));
     await db.deleteProxyNode(Number(node.id));
+    changed = true;
   }
-  invalidateProxySubCacheForUser(pool.userId);
-  for (const recipient of recipients) invalidateProxySubCacheForUser(recipient);
-  const shares = await db.getProxyNodeShareUserIds(Array.from(kept));
-  for (const users of shares.values()) for (const recipient of users) invalidateProxySubCacheForUser(recipient);
+  // 订阅缓存只在池节点真的变了时清：健康检查每分钟跑一遍，大多数时候什么都没变
+  if (changed) {
+    invalidateProxySubCacheForUser(pool.userId);
+    for (const recipient of recipients) invalidateProxySubCacheForUser(recipient);
+    const shares = await db.getProxyNodeShareUserIds(Array.from(kept));
+    for (const users of shares.values()) for (const recipient of users) invalidateProxySubCacheForUser(recipient);
+  }
   return { nodeIds: Array.from(kept), moved };
 }
 
@@ -418,23 +428,31 @@ async function refreshLandingDependents(pool: NodePool, nodeIds: number[], moved
 
 // ---------------------------------------------------------------- DNS
 
+/** 写 DNS 失败过的（池 → 那次要写的值、时间）：同样的值十分钟内不再试，免得每分钟的健康检查刷一屏警告。 */
+const dnsFailures = new Map<number, { values: string; at: number; message: string }>();
+const DNS_RETRY_MS = 10 * 60_000;
+
 /** 直连域名：解析到能用的成员（和池同端口、有 IPv4）。一台能用的都没有时不动（别把记录写空）。 */
-async function refreshLandingDns(pool: NodePool, config: LandingConfig, health: LandingMemberHealth[]): Promise<string | null> {
+async function refreshLandingDns(pool: NodePool, config: LandingConfig, health: LandingMemberHealth[], options: { force?: boolean } = {}): Promise<string | null> {
   if (!pool.directDomain) return null;
   const values = landingPoolDnsValues(health, config.port).sort();
   if (values.length === 0) return "没有能用的成员，域名先保持原来的解析";
   const serialized = values.join(",");
   if (serialized === pool.directDnsValue) return null;
+  const failed = dnsFailures.get(pool.id);
+  if (!options.force && failed && failed.values === serialized && Date.now() - failed.at < DNS_RETRY_MS) return failed.message;
   try {
     const { updateDdnsRecordValues } = await import("./ddns");
     await updateDdnsRecordValues({ domain: pool.directDomain, recordType: "A", values, ttl: 60, groupId: 0 });
     await updateNodePool(pool.id, { directDnsValue: serialized });
+    dnsFailures.delete(pool.id);
     appendPanelLog("info", `[LandingPool] pool=${pool.id} ${pool.directDomain} → ${serialized}`);
     return null;
   } catch (error) {
-    const message = errorText(error);
-    appendPanelLog("warn", `[LandingPool] pool=${pool.id} 写 DNS ${pool.directDomain} 失败：${message}`);
-    return `写 DNS 失败：${message}`;
+    const message = `写 DNS 失败：${errorText(error)}`;
+    appendPanelLog("warn", `[LandingPool] pool=${pool.id} ${pool.directDomain} ${message}`);
+    dnsFailures.set(pool.id, { values: serialized, at: Date.now(), message });
+    return message;
   }
 }
 
@@ -550,7 +568,8 @@ async function syncLandingPoolLocked(poolId: number, options: { reason: string; 
     });
   await updateNodePool(poolId, { landingStateJson: serializeLandingState(states) });
   result.dependents = await refreshLandingDependents(pool, nodeIds, moved, membershipChanged, options.reason);
-  result.dnsError = await refreshLandingDns(pool, config, health);
+  // 保存池时（不是每分钟的健康检查）DNS 失败了也马上再试一次，结果报给保存的人
+  result.dnsError = await refreshLandingDns(pool, config, health, { force: true });
   if (touched.size > 0 || result.removed > 0) {
     appendPanelLog("info", `[LandingPool] pool=${poolId} (${options.reason}) ${states.filter((state) => !state.error).length}/${states.length} 台开着，收掉 ${result.removed} 台，${result.dependents} 条转发跟着更新`);
   }

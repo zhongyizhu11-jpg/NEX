@@ -151,14 +151,38 @@ function landingRouteGroupInput() {
  * 保存规则前：目标选的是池节点、没自己配线路组、这条规则能做成线路组、池里开着的成员（不算调度器那台）
  * 有两台以上 → 改成「落地 = 这个池」的线路组再交给原来的保存流程。做不成的照原样保存（指向池节点的首选）。
  */
+/** 这条规则的线路组是不是「目标 = 落地池」时自动做的那种：一条线路、不经中转、落地就是规则目标。 */
+function isAutoLandingRouteGroup(input: any, rule: any | null | undefined) {
+  const lines = Array.isArray(input.routeGroup?.lines) ? input.routeGroup.lines : rule?.routeLines ? (() => {
+    try { return JSON.parse(String(rule.routeLines)); } catch { return null; }
+  })() : null;
+  return Array.isArray(lines) && lines.length === 1
+    && (!Array.isArray(lines[0]?.layers) || lines[0].layers.length === 0)
+    && (!Array.isArray(lines[0]?.dests) || lines[0].dests.length === 0);
+}
+
 export async function applyLandingPoolTargetToRuleInput(
   input: any,
   actor: { id: number; role: string },
   context: { rule?: any | null; hostId: number; tunnelId: number | null; forwardGroupId: number | null },
 ): Promise<boolean> {
   const nodeId = input.proxyNodeId !== undefined ? Number(input.proxyNodeId || 0) : Number(context.rule?.proxyNodeId || 0);
+  const node = nodeId > 0 ? await db.getProxyNodeById(nodeId) as any : null;
+  /*
+    目标从落地池换成了别的（或者不绑了）：保存时自动做的那种线路组（一条线路、落地 = 规则目标）只有在池里才有
+    几条路径，换成一台就只剩一条 —— 退回普通转发，不然这次保存会被「线路组至少要两条路径」拦住。
+  */
+  const previousNodeId = Number(context.rule?.proxyNodeId || 0);
+  if (context.rule && input.proxyNodeId !== undefined && previousNodeId > 0 && previousNodeId !== nodeId && !(Number(node?.nodePoolId || 0) > 0)) {
+    const previous = await db.getProxyNodeById(previousNodeId) as any;
+    const failover = input.failoverEnabled !== undefined ? !!input.failoverEnabled : dbBool(context.rule.failoverEnabled);
+    if (Number(previous?.nodePoolId || 0) > 0 && failover && isAutoLandingRouteGroup(input, context.rule)) {
+      input.failoverEnabled = false;
+      input.routeGroup = null;
+    }
+    return false;
+  }
   if (!(nodeId > 0) || input.tlsInboundId) return false;
-  const node = await db.getProxyNodeById(nodeId) as any;
   if (!node || !(Number(node.nodePoolId || 0) > 0)) return false;
   // 用户自己配了线路组：线路里的「规则目标」会展开成池里的几台（ruleTargetNodeId），这里不动
   const failover = input.failoverEnabled !== undefined ? !!input.failoverEnabled : dbBool(context.rule?.failoverEnabled);

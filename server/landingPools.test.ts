@@ -154,6 +154,11 @@ test("落地池同步：每台一样的入站、被占换端口、池节点一�
       const rule = (await query('SELECT "failoverEnabled", "routeMode", "routePaths" FROM forward_rules WHERE id = 7'))[0];
       out.ruleGroup = [!!Number(rule.failoverEnabled), rule.routeMode, JSON.parse(rule.routePaths).map((p) => [p.destNodeId === poolNodeId, p.destHostId, p.dest ? p.dest.port : null])];
       out.using = (await landing.rulesUsingLandingPool(poolId)).map((row) => Number(row.id));
+      // 目标从池换成不绑：自动做的线路组退回普通转发
+      const ruleRow = (await query('SELECT * FROM forward_rules WHERE id = 7'))[0];
+      const leaveInput = { proxyNodeId: null, failoverEnabled: true, routeGroup: { mode: "weighted", lines: [{ key: "main", layers: [], dests: [] }] } };
+      await target.applyLandingPoolTargetToRuleInput(leaveInput, { id: 1, role: "admin" }, { rule: ruleRow, hostId: 4, tunnelId: null, forwardGroupId: null });
+      out.leave = [leaveInput.failoverEnabled, leaveInput.routeGroup];
       out.deleteGuard = await landing.assertLandingPoolUnused(poolId).then(() => "ok", (error) => String(error.message));
 
       // 去掉 H2：它的入站收掉，线路少一条
@@ -210,6 +215,7 @@ test("落地池同步：每台一样的入站、被占换端口、池节点一�
     assert.equal(out.ruleGroup[1], "weighted", "目标是落地池：按负载在几台里分");
     assert.deepEqual(out.ruleGroup[2].map((row: any[]) => [row[0], row[1]]), [[true, 1], [true, 2], [true, 3]], "一台一条路径");
     assert.deepEqual(out.using, [7]);
+    assert.deepEqual(out.leave, [false, null], "目标不再是池：自动做的线路组退回普通转发");
     assert.match(out.deleteGuard, /还有 1 条转发/);
     assert.deepEqual(out.afterRemove, [1, 3]);
     assert.deepEqual(out.afterRemovePaths.sort(), [1, 3], "去掉一台，线路跟着少一条");
