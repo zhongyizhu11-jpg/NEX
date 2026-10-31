@@ -303,8 +303,7 @@ export function RouteStageStrip({ status }: { status: RouteStatus }) {
     <div className="flex min-w-0 items-end text-[11px]" data-testid="route-stage-strip">
       {nodes.map((node, index) => (
         <div key={index} className="contents">
-          {/* 节点框 7px 上下边距（2.3.499 起，约 30px 高，和加高了的线路行一个节奏） */}
-          <span className="max-w-[4.75rem] shrink-0 truncate whitespace-nowrap rounded-[8px] border border-[var(--fx-stroke-weak)] bg-[var(--fx-l1-surface)] px-[6px] py-[7px] font-mono text-[10.5px]">{node}</span>
+          <span className="max-w-[4.75rem] shrink-0 truncate whitespace-nowrap rounded-[8px] border border-[var(--fx-stroke-weak)] bg-[var(--fx-l1-surface)] px-[6px] py-[5px] font-mono text-[10.5px]">{node}</span>
           {index < stages.length ? (() => {
             const stage = stages[index];
             const tone = stageTone(stage);
@@ -315,7 +314,7 @@ export function RouteStageStrip({ status }: { status: RouteStatus }) {
                   {stage.pct === null ? "—" : `${stage.pct}%`}
                 </div>
                 <div className={cn(
-                  "mx-[2px] mb-[11px] mt-[3px] h-[2px] rounded-[2px]",
+                  "mx-[2px] mb-[9px] mt-[3px] h-[2px] rounded-[2px]",
                   tone === "down" ? "bg-[repeating-linear-gradient(90deg,var(--fx-down-text)_0_5px,transparent_5px_8px)]" : tone === "warn" ? "bg-[var(--fx-warn-text)]" : tone === "ok" ? "bg-[var(--fx-healthy-text)]" : "bg-[var(--fx-stroke-weak)]",
                 )} />
                 <div className="-mt-[6px] h-0 whitespace-nowrap text-[9.5px] text-[var(--fx-down-text)]">{tone === "down" ? stage.why : ""}</div>
