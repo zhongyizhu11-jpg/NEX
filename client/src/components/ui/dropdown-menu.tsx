@@ -16,7 +16,7 @@ const DropdownMenuRadioGroup = DropdownMenuPrimitive.RadioGroup
 
 const DropdownMenuContent = React.forwardRef<React.ComponentRef<typeof DropdownMenuPrimitive.Content>, React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Content>>(({ className, sideOffset = 6, ...props }, ref) => (
   <DropdownMenuPortal>
-    <DropdownMenuPrimitive.Content ref={ref} sideOffset={sideOffset} className={cn("action-menu-content z-[var(--fx-z-in-overlay-base)] min-w-44 overflow-hidden rounded-[10px] border p-1 text-popover-foreground data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2", className)} {...props} />
+    <DropdownMenuPrimitive.Content ref={ref} sideOffset={sideOffset} className={cn("action-menu-content z-[var(--fx-z-in-overlay-base)] max-h-[var(--radix-dropdown-menu-content-available-height)] min-w-44 overflow-y-auto overflow-x-hidden overscroll-contain rounded-[10px] border p-1 text-popover-foreground data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2", className)} {...props} />
   </DropdownMenuPortal>
 ))
 DropdownMenuContent.displayName = DropdownMenuPrimitive.Content.displayName

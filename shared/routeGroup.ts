@@ -202,13 +202,17 @@ export const ROUTE_GUARD_DEFAULTS: RouteGuards = {
   switchMode: "smooth",
 };
 
+/*
+  2.3.498 起下限放低：异常多久切 / 恢复观察最少 1 秒，择优持续最少 5 秒。Agent 2.2.244 起探测间隔跟着「异常多久切」
+  走（一半，1–5 秒），设得短就探得勤，真能几秒内切走；老 Agent 照旧 5 秒一轮，最快也是下一轮探测时切。
+*/
 export const ROUTE_GUARD_LIMITS = {
   failureThreshold: { min: 1, max: 20 },
-  failoverSeconds: { min: 10, max: 3600 },
-  recoverSeconds: { min: 10, max: 3600 },
+  failoverSeconds: { min: 1, max: 3600 },
+  recoverSeconds: { min: 1, max: 3600 },
   minHoldSeconds: { min: 0, max: 86400 },
   scoreMargin: { min: 1, max: 60 },
-  scoreHoldSeconds: { min: 30, max: 3600 },
+  scoreHoldSeconds: { min: 5, max: 3600 },
   prewarmSeconds: { min: 0, max: 3600 },
   weight: { min: 1, max: 100 },
 } as const;
@@ -327,11 +331,28 @@ export const ROUTE_SWITCH_MODE_SESSION_HINTS: Record<RouteSwitchMode, string> = 
  * 持续异常 10 秒才切、恢复要稳定 5 分钟、刚切过去至少驻留 10 分钟 —— 这组数拦得住
  * 网络抖一下引起的 A → B → A → B。
  */
+/** Agent 多久探一轮线路（2.2.244 起跟着「异常多久切」走：它的一半，1–5 秒）。 */
+export function routeProbeIntervalSeconds(failoverSeconds: number) {
+  return Math.min(5, Math.max(1, Number(failoverSeconds || 0) / 2));
+}
+
+/**
+ * 坏了最多多少秒切走（界面上「N 秒内切走」）。最坏的情况是刚探完就坏：等下一轮探到，再要连续失败够次数、
+ * 而且持续异常够「异常多久切」。真实连接拨不通会当场换下一条，不用等这么久。
+ */
+export function routeSwitchWithinSeconds(policy: { failoverSeconds?: number | null; failureThreshold?: number | null }) {
+  const failoverSeconds = Math.max(0, Number(policy.failoverSeconds || 0));
+  const threshold = Math.max(1, Math.round(Number(policy.failureThreshold || 1)));
+  const probe = routeProbeIntervalSeconds(failoverSeconds);
+  return Math.ceil(probe + Math.max(failoverSeconds, (threshold - 1) * probe));
+}
+
 export function routeTemplateGuards(mode: RouteMode): RouteGuards {
+  // 坏了尽快切走（连续 2 次、3 秒，Agent 1.5 秒探一轮，5 秒内切走）；切回照旧稳着来（恢复 5 分钟、至少驻留 10 分钟）。
   const base: RouteGuards = {
     ...ROUTE_GUARD_DEFAULTS,
-    failureThreshold: 3,
-    failoverSeconds: 10,
+    failureThreshold: 2,
+    failoverSeconds: 3,
     recoverSeconds: 300,
     minHoldSeconds: 600,
     autoFailback: true,
@@ -345,7 +366,8 @@ export function routeTemplateGuards(mode: RouteMode): RouteGuards {
       return { ...base, minHoldSeconds: 0 };
     case "smart":
     case "hybrid":
-      return { ...base, scoreMargin: 10, scoreHoldSeconds: 180, prewarmSeconds: 300 };
+      // 整链最优：别的线路明显更快、持续 30 秒就切（快得多的 Agent 10 秒就切）；切过去至少走 1 分钟，防来回漂。
+      return { ...base, minHoldSeconds: 60, scoreMargin: 10, scoreHoldSeconds: 30, prewarmSeconds: 300 };
     default:
       return base;
   }

@@ -1,19 +1,15 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 
-import { Button } from "@/components/ui/button";
-import { LineBadge } from "@/features/lines/LineUi";
 import { routeGroupRuleFields } from "@shared/routeGroup";
 import { describeRoutePolicy, type RoutePolicyHost, type RoutePolicyRule } from "@shared/routePolicy";
 import { RouteGroupFields, type RouteGroupDraft, type RouteHostOption, type RouteNodeOption } from "./RouteGroupFields";
-import { LineEditorShell } from "./RouteLineEditorDialog";
-import { ROUTE_LINE_MODE_LABEL } from "./routeLineText";
 import type { RouteLinePool, RouteLineTunnel } from "./RouteLinesEditor";
-import { routeLineChainText } from "./routeLineOptions";
+import { SegmentLatencyProvider } from "./SegmentLatencyProvider";
 
 /*
-  规则表单里的线路组（2.3.497 从 pages/Rules.tsx 挪出来）：表单里只放一行摘要和「编辑线路」，点开是
-  和线路详情「编辑」同一个框、同一个编辑器（LineEditorShell + RouteGroupFields）。框里改的是一份
-  草稿，点「完成」才写回表单，跟着规则一起保存；点「取消」草稿扔掉。
+  规则表单里的线路组（从 pages/Rules.tsx 挪出来）：编辑器直接摆在表单里，和规则在同一页改、一起保存
+  （2.3.498 起又回到一页：2.3.497 的「摘要 + 编辑线路」要在规则框上再叠一层框，用户要的是一页改完）。
+  编辑器和线路详情第一页用的是同一个（RouteGroupFields），每段的毫秒也一样有（SegmentLatencyProvider）。
 */
 
 export type RuleLineGroupFieldProps = {
@@ -61,70 +57,36 @@ export function RuleLineGroupField({
   scheduleTimeZone,
   ruleId,
 }: RuleLineGroupFieldProps) {
-  const [draft, setDraft] = useState<RouteGroupDraft | null>(null);
-  const policy = useMemo(() => {
-    if (!draft) return null;
-    return describeRoutePolicy({
-      ...policyRule,
-      failoverEnabled: true,
-      ...routeGroupRuleFields(draft, { targetIp: policyRule.targetIp, targetPort: policyRule.targetPort }),
-    }, { host: entryHost });
-  }, [draft, policyRule, entryHost]);
-  const main = value.lines?.[0];
-  const backups = Math.max(0, (value.lines?.length || 1) - 1);
-  const hostName = (id: number) => hosts.find((host) => host.id === id)?.name || `主机 ${id}`;
+  const policy = useMemo(() => describeRoutePolicy({
+    ...policyRule,
+    failoverEnabled: true,
+    ...routeGroupRuleFields(value, { targetIp: policyRule.targetIp, targetPort: policyRule.targetPort }),
+  }, { host: entryHost }), [value, policyRule, entryHost]);
 
   return (
-    <>
-      <div className="mt-3 flex min-w-0 items-center justify-between gap-3 rounded-[12px] border border-[var(--fx-stroke-weak)] bg-[var(--fx-l1-surface)] px-3 py-2.5" data-testid="rule-line-summary">
-        <div className="min-w-0">
-          <div className="flex min-w-0 items-center gap-2 text-[13px]">
-            <LineBadge main>主</LineBadge>
-            <span className="truncate">{main ? routeLineChainText(main, { entryName, hostName, pools, tunnels }) : `${entryName} → 落地`}</span>
-          </div>
-          <div className="mt-1 text-[11.5px] text-muted-foreground">
-            {backups > 0 ? `备用 ${backups} 条` : "还没有备用"}
-            {" · "}{ROUTE_LINE_MODE_LABEL[value.policy.mode] || "主备顺序"}
-          </div>
-        </div>
-        <Button type="button" variant="outline" size="sm" className="shrink-0" onClick={() => setDraft(value)} data-testid="rule-line-edit">
-          编辑线路
-        </Button>
-      </div>
-      <LineEditorShell
-        open={!!draft}
-        onOpenChange={(open) => { if (!open) setDraft(null); }}
-        primaryLabel="完成"
-        primaryDisabled={!draft}
-        onPrimary={() => {
-          if (draft) onChange(draft);
-          setDraft(null);
-        }}
-        note="改完点「完成」，跟着规则一起保存"
-      >
-        {draft ? (
-          <RouteGroupFields
-            value={draft}
-            onChange={setDraft}
-            hosts={hosts}
-            allowHops={allowHops}
-            entryHostId={entryHostId}
-            mainAddress={mainAddress}
-            policy={policy}
-            scheduleTimeZone={scheduleTimeZone}
-            protocol={protocol}
-            nodeOptions={nodeOptions}
-            pools={pools}
-            tunnels={tunnels}
-            entryName={entryName}
-            entryPrefix={entryPrefix}
-            allowTunnels={allowTunnels}
-            ruleId={ruleId}
-            upstreamHostIds={upstreamHostIds}
-            defaultAdvancedOpen={false}
-          />
-        ) : null}
-      </LineEditorShell>
-    </>
+    <div className="mt-3 border-t border-[var(--fx-stroke-weak)] pt-3" data-testid="rule-line-group">
+      <SegmentLatencyProvider>
+        <RouteGroupFields
+          value={value}
+          onChange={onChange}
+          hosts={hosts}
+          allowHops={allowHops}
+          entryHostId={entryHostId}
+          mainAddress={mainAddress}
+          policy={policy}
+          scheduleTimeZone={scheduleTimeZone}
+          protocol={protocol}
+          nodeOptions={nodeOptions}
+          pools={pools}
+          tunnels={tunnels}
+          entryName={entryName}
+          entryPrefix={entryPrefix}
+          allowTunnels={allowTunnels}
+          ruleId={ruleId}
+          upstreamHostIds={upstreamHostIds}
+          defaultAdvancedOpen={false}
+        />
+      </SegmentLatencyProvider>
+    </div>
   );
 }

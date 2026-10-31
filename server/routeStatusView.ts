@@ -12,6 +12,7 @@ import {
   routePathDial,
   routePathLabel,
   routePathLetter,
+  type RoutePath,
 } from "../shared/routeGroup";
 import { routeScoreGrade } from "../shared/routeScore";
 import { summarizeRouteSwitches, type RouteSwitchSummary } from "../shared/routeSwitchSummary";
@@ -24,6 +25,62 @@ import { routeRelayRulesByKey } from "./routeGroups";
 import { routeSchedulerHostIds } from "./routers/rules.crud";
 import { dbBool } from "./repositories/repositoryUtils";
 import { getRuleLiveRate, type RuleLiveRate } from "./ruleLiveRates";
+import { queryRaw, quoteDbIdentifier } from "./dbRuntime";
+
+/*
+  落地叫什么（线路详情的图、线路行上写它，不只写「落地」两个字，2.3.498）：选的是「我的节点」就是节点名；
+  地址是规则主人自己某台机器的 IP / 域名就是那台的名字；都不是返回 null，界面写地址的主机部分。
+  线路详情 3 秒刷一次、线路板一次查全部规则，所以按地址缓存一分钟。
+*/
+const DEST_NAME_TTL_MS = 60_000;
+const destNameCache = new Map<string, { name: string | null; at: number }>();
+
+export async function routeDestNames(rule: any, paths: readonly RoutePath[]): Promise<Map<string, string>> {
+  const names = new Map<string, string>();
+  const now = Date.now();
+  const userId = Number(rule.userId || 0);
+  const cached = (key: string) => {
+    const hit = destNameCache.get(key);
+    return hit && now - hit.at < DEST_NAME_TTL_MS ? hit : null;
+  };
+  const missingAddresses: string[] = [];
+  for (const path of paths) {
+    const nodeId = Number(path.destNodeId || 0);
+    if (nodeId > 0) {
+      const key = `node:${nodeId}`;
+      let hit = cached(key);
+      if (!hit) {
+        const node = await (db.getProxyNodeById(nodeId) as Promise<any>).catch(() => undefined);
+        hit = { name: node?.name ? String(node.name) : null, at: now };
+        destNameCache.set(key, hit);
+      }
+      if (hit.name) names.set(path.key, hit.name);
+      continue;
+    }
+    const address = routePathDestination(path, rule).ip.trim();
+    if (address && !cached(`host:${userId}:${address}`) && !missingAddresses.includes(address)) missingAddresses.push(address);
+  }
+  if (missingAddresses.length > 0 && userId > 0) {
+    const q = quoteDbIdentifier;
+    const marks = missingAddresses.map(() => "?").join(",");
+    const columns = ["ip", "ipv4", "ipv6", "entryIp", "ddnsDomain"];
+    const rows = await queryRaw<any>(
+      `SELECT ${q("name")}, ${columns.map((column) => q(column)).join(", ")} FROM ${q("hosts")} WHERE ${q("userId")} = ? AND (${columns.map((column) => `${q(column)} IN (${marks})`).join(" OR ")})`,
+      [userId, ...columns.flatMap(() => missingAddresses)],
+    ).catch(() => [] as any[]);
+    for (const address of missingAddresses) {
+      const lower = address.toLowerCase();
+      const host = rows.find((row) => columns.some((column) => String(row[column] || "").trim().toLowerCase() === lower));
+      destNameCache.set(`host:${userId}:${address}`, { name: host?.name ? String(host.name) : null, at: now });
+    }
+  }
+  for (const path of paths) {
+    if (names.has(path.key) || Number(path.destNodeId || 0) > 0) continue;
+    const hit = cached(`host:${userId}:${routePathDestination(path, rule).ip.trim()}`);
+    if (hit?.name) names.set(path.key, hit.name);
+  }
+  return names;
+}
 
 /*
   线路组此刻的样子：每条路径走哪几跳、拨哪个地址、评分几分、哪一跳断了、现在走的是哪条，
@@ -82,12 +139,13 @@ export async function buildRouteStatus(rule: any) {
     : null;
   const routeExitNodes = routeTunnel ? await db.getTunnelExitNodes(Number(routeTunnel.id)).catch(() => []) : [];
   const schedulerHostIds = routeSchedulerHostIds(Number(rule.hostId), routeTunnel, routeExitNodes);
-  const [names, relays, schedulerHosts, events, entryHost] = await Promise.all([
+  const [names, relays, schedulerHosts, events, entryHost, destNames] = await Promise.all([
     hopIds.length > 0 ? db.getHostNamesByIds(hopIds) : Promise.resolve(new Map<number, string>()),
     routeRelayRulesByKey(Number(rule.id)),
     Promise.all(schedulerHostIds.map((hostId) => (db.getHostById(hostId) as Promise<any>).catch(() => null))),
     (db.getForwardRuleRouteEvents(Number(rule.id), SWITCH_EVENT_LIMIT) as Promise<any[]>).catch(() => [] as any[]),
     (db.getHostById(Number(rule.hostId)) as Promise<any>).catch(() => null),
+    routeDestNames(rule, paths).catch(() => new Map<string, string>()),
   ]);
   const active = describeFailoverActiveLine(rule);
   const activeIndex = status.agent && status.agent.activeIndex >= 0 ? status.agent.activeIndex : (active ? active.index : -1);
@@ -141,6 +199,8 @@ export async function buildRouteStatus(rule: any) {
       downstreamMs: routePathDownstreamMs(Number(rule.id), path, nowMs),
       hops,
       dest: routePathDestination(path, rule),
+      /** 落地叫什么：我的节点的名字，或者自己那台机器的名字；都不是为 null（界面写地址）。 */
+      destName: destNames.get(path.key) ?? null,
       dial: routePathDial(path, rule),
       issue: path.issue,
       weight: path.weight,

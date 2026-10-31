@@ -433,3 +433,35 @@ func TestRouteInboundWindowCountsLastTenMinutes(t *testing.T) {
 		t.Fatalf("after wrap summary = %d / %d, want 1 / 0", ok, failed)
 	}
 }
+
+// 面板改了人工指定（强制走 备 1）：规格一到就切，不等下一轮探测；交回自动后照常按顺序切回。
+func TestPanelPinAppliesImmediatelyOnSpecUpdate(t *testing.T) {
+	oldPersistentDir := persistentFailoverDir
+	persistentFailoverDir = filepath.Join(t.TempDir(), "failover")
+	t.Cleanup(func() { persistentFailoverDir = oldPersistentDir })
+	const ruleID, sourcePort = 950032, 65032
+	t.Cleanup(func() { stopFailoverProxy(ruleID, sourcePort) })
+
+	spec := failoverTestSpec(failoverTestPort(t))
+	spec.FailoverSeconds = 60 // 5 秒一轮：要是靠探测才切，这个测试等不到
+	spec.Targets = []failoverTarget{
+		{TargetIP: "127.0.0.1", TargetPort: failoverTaggedBackend(t, "A")},
+		{TargetIP: "127.0.0.1", TargetPort: failoverTaggedBackend(t, "B")},
+	}
+	if !startFailoverProxy(ruleID, sourcePort, spec, nil) {
+		t.Fatal("代理没起来")
+	}
+	proxy := currentFailoverProxy(ruleID, sourcePort)
+	pinned := spec
+	one := 1
+	pinned.PinnedIndex = &one
+	if !startFailoverProxy(ruleID, sourcePort, pinned, nil) {
+		t.Fatal("改指定失败")
+	}
+	proxy.mu.RLock()
+	active := proxy.activeIndex
+	proxy.mu.RUnlock()
+	if active != 1 {
+		t.Fatalf("指定走 备 1 应当立刻切过去：active=%d", active)
+	}
+}

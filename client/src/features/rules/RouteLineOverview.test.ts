@@ -75,3 +75,12 @@ test("线路卡排序：全坏的最前，再是走着备用的，再是还没�
   assert.equal(lineCardRank(unreported), 2);
   assert.equal(lineCardRank(onMain), 3);
 });
+
+test("落地写名字：有名字写名字，没有写地址，地址也没有才写「落地」", async () => {
+  const { routeLandingName } = await import("./routeLineText");
+  const path = (patch: Record<string, unknown>) => ({ dest: { ip: "", port: 0 }, destName: null, ...patch }) as unknown as Parameters<typeof routeLandingName>[0];
+  assert.equal(routeLandingName(path({ destName: "HK 落地机", dest: { ip: "203.0.113.9", port: 443 } })), "HK 落地机");
+  assert.equal(routeLandingName(path({ dest: { ip: "hkboil.ddos.top", port: 24895 } })), "hkboil.ddos.top");
+  assert.equal(routeLandingName(path({})), "落地");
+  assert.equal(routeLandingName(null), "落地");
+});

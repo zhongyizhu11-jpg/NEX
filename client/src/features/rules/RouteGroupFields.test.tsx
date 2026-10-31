@@ -12,12 +12,12 @@ import {
   type RouteMode,
 } from "@shared/routeGroup";
 import { describeRoutePolicy } from "@shared/routePolicy";
-import { routeLinesFromPaths } from "@shared/routeLines";
+import { newRouteLine, routeLinesFromPaths } from "@shared/routeLines";
 import { RouteGroupFields, lineModeHint, routeGroupPayload, summarizeRouteAdvanced, type RouteGroupDraft } from "./RouteGroupFields";
 import { SegmentLatencyContext, type SegmentLatencyHook } from "./segmentLatency";
 
 /*
-  编辑线路组（效果图 ②）：线路详情的「编辑」和规则表单的「编辑线路」是同一个编辑器。2.3.497 起
+  编辑线路组（效果图 ②）：线路详情第一页和规则表单里是同一个编辑器（2.3.498 起都是直接在页里改）。2.3.497 起
   只认线路：老草稿只有路径的，打开就按路径还原成线路。
 */
 
@@ -138,7 +138,7 @@ test("按权重：分法四选一，按权重时一条线路一个权重和百�
 
 test("「怎么切」下面那一句：平时走哪条、坏了几秒内切走、恢复多久切回", () => {
   const hint = (mode: RouteMode, patch: Partial<RouteGroup["policy"]> = {}, perSession = false) => lineModeHint(group(mode, patch).policy, perSession);
-  assert.equal(hint("failover"), "平时只走主线路；坏了 10 秒内切走，主线路恢复稳定 5 分钟后切回。");
+  assert.equal(hint("failover"), "平时只走主线路；坏了 5 秒内切走，主线路恢复稳定 5 分钟后切回。");
   assert.match(hint("failover", { autoFailback: false }), /主线路恢复后不自动切回/);
   assert.match(hint("smart"), /^平时走整条链最快的；坏了 \d+ 秒内切走/);
   assert.match(hint("scheduled"), /^按时段表定首选，时段外走主线路/);
@@ -146,7 +146,9 @@ test("「怎么切」下面那一句：平时走哪条、坏了几秒内切走�
   assert.match(hint("manual"), /^一直走你指定的那条/);
   assert.match(hint("weighted"), /^新连接按权重分到各条线路/);
   assert.match(hint("weighted", {}, true), /^新会话按权重分到各条线路/, "纯 UDP 按会话说");
-  assert.match(hint("failover", { failoverSeconds: 2 }), /坏了 5 秒内切走/, "再短也按 5 秒说：探测本身就是 5 秒一轮");
+  // Agent 按「异常多久切」的一半探（1–5 秒）：最坏是刚探完就坏，等下一轮探到、再连续失败够次数、持续够时间
+  assert.match(hint("failover", { failoverSeconds: 1, failureThreshold: 1 }), /坏了 2 秒内切走/);
+  assert.match(hint("failover", { failoverSeconds: 30, failureThreshold: 3 }), /坏了 35 秒内切走/);
 });
 
 test("纯 UDP 的编辑框：分法和旧会话三选一都按会话说，TCP+UDP 照旧按连接", () => {
@@ -259,4 +261,17 @@ test("每段的毫秒从外面给（编辑框套的那一层）：给了就写�
   assert.match(html, />41</);
   assert.match(html, /data-testid="route-line-test-total"[^>]*>刚测的这条整链约 <b[^>]*>64 ms/);
   assert.doesNotMatch(render(group()), /data-testid="route-line-test-total"/, "没套那一层（单测）就没有数，照样画得出来");
+});
+
+test("线路详情里直接改：给了每条线路的状态，就替掉备用行上「参与切换」的勾；还没保存的新线路返回 null，照旧是勾", () => {
+  const draft = group();
+  const lines = [...routeLinesFromPaths(draft.paths), newRouteLine(2)];
+  const known = new Set(lines.slice(0, 2).map((line) => line.key));
+  const html = render({ ...draft, lines }, false, "tcp", {
+    renderLineStatus: (line, index) => (known.has(line.key) ? <span data-testid="line-status">状态{index}</span> : null),
+  });
+  assert.equal(count(html, /data-testid="line-status"/g), 2, "主线路、备 1 各一份");
+  assert.match(html, /aria-label="主线路的名字"[^]*?状态0[^]*?route-line-test/, "主线路的状态在卡头、⚡ 前面");
+  assert.equal(count(html, /参与切换/g), 1, "只剩还没保存的备 2 是勾");
+  assert.match(html, /aria-label="备 2 参与切换"/);
 });

@@ -1,8 +1,7 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Download, Gauge } from "lucide-react";
 import { toast } from "sonner";
 
-import { Button } from "@/components/ui/button";
 import {
   LineBadge,
   LineBig,
@@ -17,6 +16,7 @@ import {
   LineRow,
   LineSec,
   formatLineMs,
+  lineChipClass,
   type LineTone,
 } from "@/features/lines/LineUi";
 import { trpc } from "@/lib/trpc";
@@ -33,17 +33,20 @@ import {
   roundMs,
   routeDestLabel,
   routeLineGroups,
+  routeLandingName,
   routeLineSwitchSummary,
   routePathText,
   routeSwitchSeconds,
+  type RouteLineGroup,
 } from "./routeLineText";
 
 /*
   线路详情（2.3.496，照效果图 ①「规则卡点开：线路组运行中」）：
 
     大数字    整条链此刻多少毫秒 + 坏了几秒内切走
-    分层图    入口 → 隧道 / 中转 → 落地 → 目标（RouteLineDiagram.tsx）
-    线路      主 / 备 N 一行一条：使用中 / 待命 / 不通 ×N（划掉），右边暂停
+    分层图    入口 → 隧道 / 中转 → 落地（RouteLineDiagram.tsx）
+    线路      能改的时候就是编辑器本身（2.3.498 起没有单独的「编辑线路组」框，RouteLineInlineEditor.tsx），
+              每条线路后面照样是使用中 / 待命 / 不通 ×N 和立刻生效的暂停；只能看的时候一行一条（划掉的是坏了的）
     连接      客户端 → 入口 → … → 落地，每段最近 10 分钟的成功率，坏的那段标红写原因；
               下面一行：最近切换、异常明细（展开原来那份详细面板）；暂停在线路列表每一行上
 
@@ -77,19 +80,50 @@ export function RouteLineHero({ status }: { status: RouteStatus }) {
 
 // ---------------------------------------------------------------- 线路
 
+/** 一条线路此刻的状态胶囊：已暂停 / 使用中 / 不通 ×N（或原因）/ 待命。 */
+function routeLinePill(group: RouteLineGroup): { tone: LineTone; text: string; dot?: boolean } {
+  if (group.paused) return { tone: "gray", text: "已暂停" };
+  if (group.active) return { tone: "ok", text: "使用中", dot: true };
+  if (group.allDown) return { tone: "down", text: group.failures >= 2 ? `不通 ×${group.failures}` : group.reason ? lineShortIssue(group.reason) : "不通" };
+  return { tone: "gray", text: "待命" };
+}
+
+/** 状态胶囊 + 暂停 / 恢复（点了立刻生效，不用保存）。只读的线路行和编辑器的每条线路共用。 */
+function LineStatusControls({ group, onPause, pausing = false }: { group: RouteLineGroup; onPause?: (lineKey: string, paused: boolean) => void; pausing?: boolean }) {
+  const pill = routeLinePill(group);
+  return (
+    <>
+      <LinePill tone={pill.tone} dot={pill.dot} title={group.allDown && group.reason ? describeRouteIssue(group.reason) : undefined} testId="route-line-state">{pill.text}</LinePill>
+      {onPause ? (
+        <LineIconButton
+          aria-label={group.paused ? `恢复线路 ${group.name}` : `暂停线路 ${group.name}`}
+          title={group.paused ? "恢复这条（马上生效）" : "暂停这条（马上生效）"}
+          disabled={pausing}
+          onClick={() => onPause(group.key, !group.paused)}
+          data-testid="route-line-pause"
+        >
+          {group.paused ? <LinePlayGlyph /> : <LinePauseGlyph />}
+        </LineIconButton>
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * 编辑器里一条线路后面那组（RouteLinesEditor 的 renderLineStatus）。还没保存的新线路没有状态，返回 null ——
+ * 编辑器看到 null 才照旧给「参与切换」的勾，所以这里是函数不是组件（组件元素永远不是 null）。
+ */
+export function routeLineStatusControls(status: RouteStatus | null, lineKey: string, onPause?: (lineKey: string, paused: boolean) => void, pausing = false): ReactNode {
+  const group = status ? routeLineGroups(status).find((item) => item.key === lineKey) : undefined;
+  return group ? <LineStatusControls group={group} onPause={onPause} pausing={pausing} /> : null;
+}
+
 export function RouteLineList({ status, onPause, pausing = false }: { status: RouteStatus; onPause?: (lineKey: string, paused: boolean) => void; pausing?: boolean }) {
   const groups = routeLineGroups(status);
   return (
     <div className="flex flex-col gap-[7px]" data-testid="route-line-list">
       {groups.map((group) => {
         const bad = (group.allDown && !group.active) || group.paused;
-        const pill: { tone: LineTone; text: string; dot?: boolean } = group.paused
-          ? { tone: "gray", text: "已暂停" }
-          : group.active
-            ? { tone: "ok", text: "使用中", dot: true }
-            : group.allDown
-              ? { tone: "down", text: group.failures >= 2 ? `不通 ×${group.failures}` : group.reason ? lineShortIssue(group.reason) : "不通" }
-              : { tone: "gray", text: "待命" };
         const text = routePathText(status, group.shown);
         return (
           <LineRow key={group.key} on={group.active} data-testid="route-line-row">
@@ -97,17 +131,7 @@ export function RouteLineList({ status, onPause, pausing = false }: { status: Ro
             <LinePath bad={bad} title={`${group.name}：${text} · ${routeDestLabel(group.shown)}${group.paths.length > 1 ? `（这条线路组合出 ${group.paths.length} 条路径）` : ""}`}>
               {text}
             </LinePath>
-            <LinePill tone={pill.tone} dot={pill.dot} title={group.allDown && group.reason ? describeRouteIssue(group.reason) : undefined}>{pill.text}</LinePill>
-            {onPause ? (
-              <LineIconButton
-                aria-label={group.paused ? `恢复线路 ${group.name}` : `暂停线路 ${group.name}`}
-                title={group.paused ? "恢复这条" : "暂停这条"}
-                disabled={pausing}
-                onClick={() => onPause(group.key, !group.paused)}
-              >
-                {group.paused ? <LinePlayGlyph /> : <LinePauseGlyph />}
-              </LineIconButton>
-            ) : null}
+            <LineStatusControls group={group} onPause={onPause} pausing={pausing} />
           </LineRow>
         );
       })}
@@ -120,7 +144,7 @@ export function RouteLineList({ status, onPause, pausing = false }: { status: Ro
 type Stage = { label: string; pct: number | null; why: string | null };
 
 export function routeStages(status: RouteStatus, path: Path): { nodes: string[]; stages: Stage[] } {
-  const nodes = ["客户端", status.entry?.name || "入口", ...path.hops.map((hop) => hop.name), "落地"];
+  const nodes = ["客户端", status.entry?.name || "入口", ...path.hops.map((hop) => hop.name), routeLandingName(path)];
   const inbound = status.inbound && status.inbound.ok + status.inbound.failed > 0 ? roundMs((status.inbound.ok / (status.inbound.ok + status.inbound.failed)) * 100) : null;
   const dials = path.dials;
   const first = dials && dials.ok + dials.failed > 0 ? roundMs((dials.ok / (dials.ok + dials.failed)) * 100) : null;
@@ -218,6 +242,7 @@ export function RouteLineDetail({
   onToggleDetails,
   nowMs,
   timeZone,
+  editor,
 }: {
   status: RouteStatus;
   events: RouteEvent[];
@@ -228,16 +253,18 @@ export function RouteLineDetail({
   onToggleDetails: () => void;
   nowMs?: number;
   timeZone?: string;
+  /** 能改的时候：线路这一节直接是编辑器（不再另开「编辑线路组」）；没给就是只读的线路列表。 */
+  editor?: ReactNode;
 }) {
   const now = nowMs ?? Date.now();
   const chip = routeSwitchChip(status, events, now, timeZone);
   return (
-    <div className="flex min-w-0 flex-col gap-3" data-testid="route-line-overview">
+    <div className="fx-line-ui flex min-w-0 flex-col gap-3" data-testid="route-line-overview">
       <RouteLineHero status={status} />
       <RouteLineDiagram status={status} modeLabel={modeLabel} timeZone={timeZone} />
       <div>
         <LineSec left="线路" right={routeLineSwitchSummary(status)} />
-        <RouteLineList status={status} onPause={onPause} pausing={pausing} />
+        {editor ?? <RouteLineList status={status} onPause={onPause} pausing={pausing} />}
       </div>
       <div>
         <LineSec left="连接 · 最近 10 分钟" right={<span title="入站：客户端连进来后拨通一条路径的比例；第二段：入口真实拨号的成功率；后面每段：中转探下一跳（近 20 次）">精确到哪一段</span>} />
@@ -248,7 +275,7 @@ export function RouteLineDetail({
             两个地方做同一件事反而让人犹豫该点哪个。
           */}
           <div className="mt-4 flex min-w-0 items-center justify-between gap-2">
-            <span className="inline-flex min-w-0 items-center gap-[5px] rounded-full border border-[var(--fx-stroke-weak)] bg-[var(--fx-l1-surface)] px-[10px] py-[5px] text-[11.5px]" data-testid="route-line-switch-chip">
+            <span className={lineChipClass("default", "min-w-0")} data-testid="route-line-switch-chip">
               <LineDot tone={chip.tone} /><span className="truncate">{chip.text}</span>
             </span>
             <LineChipButton className="shrink-0" variant={detailsOpen ? "sel" : "default"} aria-expanded={detailsOpen} onClick={onToggleDetails} data-testid="route-line-details">
@@ -263,7 +290,7 @@ export function RouteLineDetail({
 
 // ---------------------------------------------------------------- 暂停、导出、逐段测带宽
 
-/** 线路组弹窗里暂停 / 恢复一条线路。 */
+/** 线路详情里暂停 / 恢复一条线路（马上生效）；onDone 在成功后调（编辑器拿它把编辑稿里的暂停也改了）。 */
 export function useRouteLinePause(ruleId: number) {
   const utils = trpc.useUtils();
   const pause = trpc.lineDiagnostics.linePause.useMutation({
@@ -271,11 +298,15 @@ export function useRouteLinePause(ruleId: number) {
       void utils.rules.routeStatus.invalidate({ ruleId });
       void utils.rules.routeEvents.invalidate({ ruleId });
       void utils.rules.routeBoard.invalidate();
+      void utils.rules.list.invalidate();
       toast.success(variables.paused ? "已暂停，在走它的连接马上切到下一条" : "已恢复，探通后重新参与");
     },
     onError: (error) => toast.error(error.message),
   });
-  return { onPause: (lineKey: string, paused: boolean) => pause.mutate({ ruleId, lineKey, paused }), pausing: pause.isPending };
+  return {
+    onPause: (lineKey: string, paused: boolean, onDone?: () => void) => pause.mutate({ ruleId, lineKey, paused }, { onSuccess: () => onDone?.() }),
+    pausing: pause.isPending,
+  };
 }
 
 export function RouteLineTools({ status }: { status: RouteStatus }) {
@@ -310,14 +341,15 @@ export function RouteLineTools({ status }: { status: RouteStatus }) {
   };
   const data = run.data;
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className="fx-line-ui flex flex-col gap-1.5">
+      {/* 和线路详情里别的小块一样大（以前是 Button，手机上被撑到 44px 高） */}
       <div className="flex flex-wrap gap-1.5">
-        <Button type="button" variant="outline" size="sm" className="h-7 gap-1 rounded-full text-xs" disabled={!active || start.isPending || data?.status === "running"} onClick={() => active && start.mutate({ ruleId: status.ruleId, pathKey: active.key })} data-testid="route-line-speed">
+        <LineChipButton disabled={!active || start.isPending || data?.status === "running"} onClick={() => active && start.mutate({ ruleId: status.ruleId, pathKey: active.key })} data-testid="route-line-speed">
           <Gauge className="h-3.5 w-3.5" />{data?.status === "running" ? "测带宽中…" : "逐段测带宽"}
-        </Button>
-        <Button type="button" variant="outline" size="sm" className="h-7 gap-1 rounded-full text-xs" disabled={exporting} onClick={() => void exportLine()} data-testid="route-line-export">
+        </LineChipButton>
+        <LineChipButton disabled={exporting} onClick={() => void exportLine()} data-testid="route-line-export">
           <Download className="h-3.5 w-3.5" />导出 7 天记录
-        </Button>
+        </LineChipButton>
       </div>
       {data?.segments ? (
         <div className="flex flex-col gap-0.5 rounded-xl bg-[var(--fx-l1-surface)] px-3 py-2 text-xs" data-testid="route-line-speed-result">

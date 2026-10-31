@@ -71,7 +71,7 @@ const useTrpcSegmentLatency: SegmentLatencyHook = ({ ruleId, entryHostId }) => {
   };
 };
 
-/** 编辑框（LineEditorShell）套上它，线路编辑器里每段才有毫秒、⚡ 才测得了。 */
+/** 用到线路编辑器的地方（线路详情 RouteLineInlineEditor、规则表单 RuleLineGroupField）套上它，每段才有毫秒、⚡ 才测得了。 */
 export function SegmentLatencyProvider({ children }: { children: ReactNode }) {
   return <SegmentLatencyContext.Provider value={useTrpcSegmentLatency}>{children}</SegmentLatencyContext.Provider>;
 }

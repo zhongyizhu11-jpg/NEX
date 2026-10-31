@@ -2126,3 +2126,27 @@ html.fx-theme-fading *::after {
 /* 界面主题小圆点（顶栏调色盘、设置里的主题卡）：底是那套的页面底色，右上一点是强调色 */
 .fx-theme-dot { display: inline-block; flex: none; width: 18px; height: 18px; border-radius: 999px; background: radial-gradient(circle at 66% 34%, var(--sw-a) 0 30%, transparent 31%), var(--sw-b); box-shadow: inset 0 0 0 1px rgb(128 128 128 / 35%); }
 .fx-theme-dot-auto { background: conic-gradient(#3ea4ec 0 25%, #a78bfa 0 50%, #b08d57 0 75%, #c13a66 0); }
+
+/*
+  线路这几页（编辑线路组、线路详情、节点池）的小控件在触屏上（2.3.498）。
+
+  全局那条 `@media (pointer: coarse) { button { min-height: 44px } }` 把这里的候选 chip、「最低延迟 ▾」、
+  「+ 再加一层」、⚡ 和暂停按钮、拖动把手统统顶到 44px —— chip 成了大药丸、⚡/暂停成了细高的竖条，
+  一行线路被撑成两倍高（用户截图圈出来的就是这些）。这里让原生 button 回到设计稿的尺寸，命中区用 ::after
+  纵向撑出 6px（一行里上下两排控件隔着 8–10px，撑 6 不会盖到别的控件上）。shadcn 的 Button（data-slot="button"）
+  和开关不动，照旧走全局的触控尺寸。
+*/
+@media (pointer: coarse) {
+  .fx-line-ui :is(button, [role="button"]):not([data-slot="button"], [role="switch"]) {
+    min-height: 0;
+    min-width: 0;
+  }
+  :where(.fx-line-ui) :where(button, [role="button"]):not([data-slot="button"], [role="switch"], .absolute, .fixed, .sticky) {
+    position: relative;
+  }
+  :where(.fx-line-ui) :where(button, [role="button"]):not([data-slot="button"], [role="switch"], .absolute, .fixed, .sticky)::after {
+    content: "";
+    position: absolute;
+    inset: -6px 0;
+  }
+}

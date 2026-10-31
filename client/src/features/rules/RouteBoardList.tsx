@@ -13,7 +13,7 @@ import { routeGroupOf, routePathLetter, type RouteGroup } from "@shared/routeGro
 import { describeRoutePolicy, pinUntilSeconds, type RoutePolicy } from "@shared/routePolicy";
 import { RouteBoardCard } from "./RouteBoard";
 import { RouteGroupSheet, type RouteStatus } from "./RouteGroupSheet";
-import { ROUTE_LINE_MODE_LABEL, chainLatency, routeLineGroups } from "./routeLineText";
+import { ROUTE_LINE_MODE_LABEL, chainLatency, routeLandingName, routeLineGroups } from "./routeLineText";
 import { LineBig, LineCard, LineChip, LinePill, formatLineMs, type LineTone } from "@/features/lines/LineUi";
 import { formatBytes } from "@shared/formatBytes";
 import { normalizeRouteDelivery } from "@shared/routeGroup";
@@ -28,8 +28,8 @@ import type { ForwardGroupOptionRow, HostOptionRow, LineRuleRow } from "./routeL
   用户看了说「很明白」，就按那个意思画。
 
   数字来自 rules.routeBoard（和规则卡上线路面板读的 rules.routeStatus 是同一份，只是一次拿全），
-  策略（首选、时段、人工指定）仍从规则本身算（shared/routePolicy）。线路组是规则的一部分，
-  「编辑」打开的就是那条规则的编辑框（/rules?edit=<id>）。
+  策略（首选、时段、人工指定）仍从规则本身算（shared/routePolicy）。线路直接在详情第一页改；
+  转发组的子规则拿不到规则本身，详情里「改规则」打开的是那条规则的编辑框（/rules?edit=<id>）。
 */
 
 type RouteBoardRow = { rule: LineRuleRow; group: RouteGroup; policy: RoutePolicy; host: HostOptionRow | undefined };
@@ -64,7 +64,7 @@ function LineCompactCard({ name, owner, status, info, onOpen }: { name: string; 
     : lineIndex > 0
       ? (main?.paused ? "主线路暂停" : main?.reason ? `主线路${/维护/.test(main.reason) ? "维护" : "故障"}` : "主线路故障")
       : groups.length > 1 ? `备用 ${groups.length - 1}` : "";
-  const chain = active ? [entry, ...hops, "落地"].join(" → ") : "调度这条线路的 Agent 还没上报";
+  const chain = active ? [entry, ...hops, routeLandingName(active)].join(" → ") : "调度这条线路的 Agent 还没上报";
   const delivery = normalizeRouteDelivery(status.delivery);
   const mainCount = status.paths.filter((path) => (typeof path.tier === "number" ? path.tier : path.index) === 0).length;
   const chips = [

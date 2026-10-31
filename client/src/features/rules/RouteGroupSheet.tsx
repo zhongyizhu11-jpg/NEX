@@ -1,10 +1,12 @@
 import { useRef, useState, type ReactNode } from "react";
+import { Pencil } from "lucide-react";
 import { useLocation } from "wouter";
 
 import { GroupedList, ListRow, ListSection } from "@/components/ios/GroupedList";
 import { StatusDot } from "@/components/network/StatusDot";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { LineChipButton } from "@/features/lines/LineUi";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { formatAgo } from "@shared/dashboardAttention";
@@ -29,7 +31,7 @@ import { ConditionRow, PinSection, SentenceRow } from "./RoutePolicySheet";
 import { RouteQualityHistory } from "./RouteQualityHistory";
 import { RouteLineDetail, RouteLineTools, useRouteLinePause } from "./RouteLineOverview";
 import { ROUTE_LINE_MODE_LABEL, routeLineSubtitle } from "./routeLineText";
-import { RouteLineEditorDialog } from "./RouteLineEditorDialog";
+import { useRouteLineEditor } from "./RouteLineInlineEditor";
 import type { LineRuleRow } from "./routeLineOptions";
 
 /*
@@ -77,6 +79,8 @@ export type RouteStatusPath = {
   name: string;
   hops: RouteStatusHop[];
   dest: RouteEndpoint;
+  /** 落地叫什么：我的节点的名字，或者自己那台机器的名字；都不是为 null（界面写地址）。 */
+  destName?: string | null;
   dial: RouteEndpoint | null;
   issue: string | null;
   weight: number;
@@ -322,7 +326,7 @@ export type RouteGroupSheetProps = Omit<RouteGroupPanelProps, "policy" | "status
   /** 规则名，标题「广港hkt · 线路组」。 */
   subjectName: string;
   policy: RoutePolicy | null;
-  /** 有规则本身就在这里打开「编辑线路组」；没有就退回调用方给的 onEdit（打开整条规则的编辑框）。 */
+  /** 有规则本身，详情第一页的线路就能直接改；没有（转发组的子规则）就退回调用方给的 onEdit（打开整条规则的编辑框）。 */
   rule?: LineRuleRow | null;
   onEdit?: () => void;
   /** 面板打开时每隔多久刷一次状态（毫秒）；测试里传 0 关掉。 */
@@ -348,7 +352,6 @@ export function RouteGroupSheet({
   // 状态 3 秒一刷（数字要跟得上）；切换记录不会那么勤，10 秒够了
   const eventsQuery = trpc.rules.routeEvents.useQuery({ ruleId: Number(ruleId), limit: 20 }, { enabled, refetchInterval: refetchIntervalMs ? Math.max(refetchIntervalMs, 10_000) : false, staleTime: 5_000 });
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const [editorOpen, setEditorOpen] = useState(false);
   /*
     关的那一下（130ms 的动画）调用方已经把规则清掉了，拿上一份接着画 —— 不然面板在
     动画里先塌成只剩标题再消失。
@@ -361,84 +364,82 @@ export function RouteGroupSheet({
   const events = (eventsQuery.data as RouteEvent[] | undefined) ?? [];
   const mode = shown?.policy.mode ?? "failover";
   const modeLabel = ROUTE_LINE_MODE_LABEL[mode] || ROUTE_LINE_MODE_LABEL.failover;
-  const editable = !!panel.canEdit && (!!shown?.rule || !!onEdit);
-  const openEditor = () => {
-    if (shown?.rule) setEditorOpen(true);
-    else onEdit?.();
-  };
+  // 线路就在详情第一页改（没有单独的「编辑线路组」了）；只有拿不到规则本身时才退回去改整条规则
+  const editing = useRouteLineEditor({
+    rule: panel.canEdit ? shown?.rule ?? null : null,
+    enabled: open && !!policy,
+    status,
+    onPause: linePause.onPause,
+    pausing: linePause.pausing,
+  });
+  const editRuleFallback = !!panel.canEdit && !shown?.rule && !!onEdit;
   return (
-    <>
-      <Dialog open={open && !!policy} onOpenChange={(next) => { if (!next) setDetailsOpen(false); onOpenChange(next); }}>
-        {shown ? (
-          <DialogContent className="gap-3 bg-[var(--fx-l0-page)] sm:max-w-xl">
-            <DialogHeader className="space-y-0.5 pr-10">
-              <div className="flex min-w-0 items-start justify-between gap-2">
-                <DialogTitle className="min-w-0 truncate text-[19px] font-bold">{shown.subjectName} · 线路组</DialogTitle>
-                {editable ? (
-                  <Button type="button" variant="ghost" size="sm" className="h-7 shrink-0 px-2 text-[12.5px]" onClick={openEditor} data-testid="route-line-edit">
-                    编辑
+    <Dialog open={open && !!policy} onOpenChange={(next) => { if (!next) setDetailsOpen(false); onOpenChange(next); }}>
+      {shown ? (
+        // 打开时不把焦点放进去：第一个能聚焦的是主线路的名字，手机上一开键盘就弹出来
+        <DialogContent className="gap-3 bg-[var(--fx-l0-page)] sm:max-w-xl" onOpenAutoFocus={(event) => event.preventDefault()}>
+          <DialogHeader className="space-y-0.5 pr-10">
+            <div className="fx-line-ui flex min-w-0 items-center justify-between gap-2">
+              <DialogTitle className="min-w-0 truncate text-[19px] font-bold">{shown.subjectName} · 线路组</DialogTitle>
+              {editRuleFallback ? (
+                <LineChipButton className="shrink-0" onClick={onEdit} data-testid="route-line-edit-rule">
+                  <Pencil className="h-3 w-3" aria-hidden="true" />改规则
+                </LineChipButton>
+              ) : null}
+            </div>
+            <DialogDescription className="truncate text-[12.5px]">{routeLineSubtitle(status, mode)}</DialogDescription>
+          </DialogHeader>
+          {status && status.agentSupportsLines === false && status.paths.some((path) => typeof path.tier === "number") ? (
+            <p className="rounded-[12px] bg-[var(--fx-warn-soft)] px-3 py-2 text-[11.5px] text-[var(--fx-warn-text)]">
+              调度这条线路的机器上 Agent{status.agentVersion ? `（${status.agentVersion}）` : ""}早于 2.2.243：还不会按「主线路那组先挑」和整条链的延迟选，也不会改完马上探。升级 Agent 后生效，之前照旧按顺序切。
+            </p>
+          ) : null}
+          {!status ? (
+            <p className="px-1 text-[12.5px] text-muted-foreground">在读线路状态…</p>
+          ) : status.paths.length > 0 ? (
+            <RouteLineDetail
+              status={status}
+              events={events}
+              modeLabel={modeLabel}
+              onPause={panel.canEdit ? linePause.onPause : undefined}
+              pausing={linePause.pausing}
+              detailsOpen={detailsOpen}
+              onToggleDetails={() => setDetailsOpen(!detailsOpen)}
+              nowMs={panel.nowMs}
+              timeZone={panel.timeZone}
+              editor={editing.editor}
+            />
+          ) : null}
+          {detailsOpen || (status && status.paths.length === 0) ? (
+            <div className="flex min-w-0 flex-col gap-3 border-t border-[var(--fx-stroke-weak)] pt-3" data-testid="route-line-detail-panel">
+              <RouteGroupPanel {...panel} policy={shown.policy} status={status} events={events} showPaths={false} />
+              {status ? <RouteLineTools status={status} /> : null}
+              <RouteQualityHistory
+                ruleId={Number(ruleId) || 0}
+                enabled={enabled}
+                activeKey={(status?.paths || []).find((path) => path.active)?.key ?? null}
+              />
+              <div className="flex flex-wrap justify-end gap-2">
+                {footer}
+                {ruleId ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      onOpenChange(false);
+                      setLocation(`/topology?rule=${Number(ruleId)}`);
+                    }}
+                  >
+                    查看拓扑
                   </Button>
                 ) : null}
               </div>
-              <DialogDescription className="truncate text-[12.5px]">{routeLineSubtitle(status, mode)}</DialogDescription>
-            </DialogHeader>
-            {status && status.agentSupportsLines === false && status.paths.some((path) => typeof path.tier === "number") ? (
-              <p className="rounded-[12px] bg-[var(--fx-warn-soft)] px-3 py-2 text-[11.5px] text-[var(--fx-warn-text)]">
-                调度这条线路的机器上 Agent{status.agentVersion ? `（${status.agentVersion}）` : ""}早于 2.2.243：还不会按「主线路那组先挑」和整条链的延迟选，也不会改完马上探。升级 Agent 后生效，之前照旧按顺序切。
-              </p>
-            ) : null}
-            {!status ? (
-              <p className="px-1 text-[12.5px] text-muted-foreground">在读线路状态…</p>
-            ) : status.paths.length > 0 ? (
-              <RouteLineDetail
-                status={status}
-                events={events}
-                modeLabel={modeLabel}
-                onPause={panel.canEdit ? linePause.onPause : undefined}
-                pausing={linePause.pausing}
-                detailsOpen={detailsOpen}
-                onToggleDetails={() => setDetailsOpen(!detailsOpen)}
-                nowMs={panel.nowMs}
-                timeZone={panel.timeZone}
-              />
-            ) : null}
-            {detailsOpen || (status && status.paths.length === 0) ? (
-              <div className="flex min-w-0 flex-col gap-3 border-t border-[var(--fx-stroke-weak)] pt-3" data-testid="route-line-detail-panel">
-                <RouteGroupPanel {...panel} policy={shown.policy} status={status} events={events} showPaths={false} />
-                {status ? <RouteLineTools status={status} /> : null}
-                <RouteQualityHistory
-                  ruleId={Number(ruleId) || 0}
-                  enabled={enabled}
-                  activeKey={(status?.paths || []).find((path) => path.active)?.key ?? null}
-                />
-                <div className="flex flex-wrap justify-end gap-2">
-                  {footer}
-                  {ruleId ? (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => {
-                        onOpenChange(false);
-                        setLocation(`/topology?rule=${Number(ruleId)}`);
-                      }}
-                    >
-                      查看拓扑
-                    </Button>
-                  ) : null}
-                </div>
-              </div>
-            ) : null}
-          </DialogContent>
-        ) : null}
-      </Dialog>
-      {shown?.rule ? (
-        <RouteLineEditorDialog
-          open={editorOpen}
-          onOpenChange={setEditorOpen}
-          rule={shown.rule}
-        />
+            </div>
+          ) : null}
+          {editing.saveBar}
+        </DialogContent>
       ) : null}
-    </>
+    </Dialog>
   );
 }

@@ -67,7 +67,8 @@ test("rule transfer parser rejects coercible booleans and unknown enums", () => 
 });
 
 test("rule transfer parser enforces server-side timing and target constraints", () => {
-  const shortFailover = parseRuleTransferFile(transferFile({ ...validRule(), failoverSeconds: 1 }));
+  // 下限和服务端一样（ROUTE_GUARD_LIMITS，2.3.498 起最少 1 秒）：0 秒导不进来
+  const shortFailover = parseRuleTransferFile(transferFile({ ...validRule(), failoverSeconds: 0 }));
   assert.equal(shortFailover.ok, false);
   assert.match(shortFailover.ok ? "" : shortFailover.error, /failoverSeconds/);
 

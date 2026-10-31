@@ -818,14 +818,15 @@ type TunnelViewMode = "card" | "table" | "globe";
 type TunnelSection = "lines" | "tunnels" | "ports" | "chains" | "pools" | "groups" | "aggregates" | "entries" | "exits" | "routes";
 type TunnelGroupMode = "port" | "failover" | "entry" | "exit";
 
-const TUNNEL_SECTIONS = ["lines", "tunnels", "ports", "chains", "pools", "groups", "aggregates", "entries", "exits", "routes"] as const;
+const TUNNEL_SECTIONS = ["tunnels", "lines", "ports", "chains", "pools", "groups", "aggregates", "entries", "exits", "routes"] as const;
 /*
-  2.3.496：「线路」工作台放最前（所有线路一个入口）；转发组 / 入口组 / 出口组收进「节点池」一页，
-  用页内的筛选切换（老链接 ?tab=groups 之类照样能进，分类条上亮的是「节点池」）。
+  分类条第一个是「隧道链路」，进来看到的就是它（2.3.498，用户要的；2.3.496 起放最前的是「线路」工作台）。
+  转发组 / 入口组 / 出口组收进「节点池」一页，用页内的筛选切换（老链接 ?tab=groups 之类照样能进，
+  分类条上亮的是「节点池」）。
 */
 const TUNNEL_SECTION_ITEMS = [
-  { value: "lines", label: "线路", icon: Waypoints },
   { value: "tunnels", label: "隧道链路", icon: Network },
+  { value: "lines", label: "线路", icon: Waypoints },
   { value: "ports", label: "端口转发", icon: ArrowRightLeft },
   { value: "chains", label: "转发链", icon: Route },
   { value: "pools", label: "节点池", icon: ShieldCheck },
@@ -2251,8 +2252,8 @@ function TunnelsContent() {
   const [phoneSearchOpen, setPhoneSearchOpen] = useState(false);
   const [activeSection, setActiveSection] = useUrlTab<TunnelSection>({
     values: TUNNEL_SECTIONS,
-    // 第一个页签是「线路」工作台（所有线路一个入口），进来就是它。
-    defaultValue: "lines",
+    // 第一个页签是「隧道链路」，进来就是它。
+    defaultValue: "tunnels",
     storageKey: TUNNEL_SECTION_STORAGE_KEY,
     // 每次进来（刷新、从别的页面点过来）都从第一个分类开始，不记上次看的是哪一类。
     remember: false,

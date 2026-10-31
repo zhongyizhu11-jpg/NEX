@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { ChevronDown, Trash2 } from "lucide-react";
 
 import { EntityTag } from "@/components/entity/EntityCard";
@@ -26,6 +26,7 @@ import {
   ROUTE_SWITCH_MODE_SESSION_HINTS,
   applyRouteMode,
   routePathLabel,
+  routeSwitchWithinSeconds,
   routePathLetter,
   routeTemplateGuards,
   type RouteEndpoint,
@@ -42,8 +43,8 @@ import { ROUTE_DELIVERY_INFO, normalizeRouteDelivery, type RouteDelivery } from 
 import { newRouteLine, routeLinesFromPaths, serializeRouteLines, type RouteLine } from "@shared/routeLines";
 
 /*
-  编辑线路组（效果图 ②）的整块：线路详情里的「编辑」和规则表单里的「编辑线路」都是这一个
-  （外面套的是 RouteLineEditorDialog.tsx 的 LineEditorShell）。
+  编辑线路组（效果图 ②）的整块：线路详情第一页的线路（RouteLineInlineEditor.tsx，直接在详情里改）和
+  规则表单里的线路组（RuleLineGroupField.tsx，直接摆在表单里）都是这一个。
 
   从上往下：
     1. 线路（RouteLinesEditor）：主线路一张卡（入口 / 一层层中转候选 / 落地），下面有序的备用。
@@ -101,6 +102,8 @@ export type RouteGroupFieldsProps = {
   protocol?: string;
   /** 「我的节点」：线路的落地可以直接选一个，地址端口由面板从节点解析、节点地址变了跟着改。 */
   nodeOptions?: RouteNodeOption[];
+  /** 线路详情里直接改时：每条线路此刻的状态和立刻生效的暂停（见 RouteLinesEditor）。 */
+  renderLineStatus?: (line: RouteLine, index: number) => ReactNode;
 };
 
 export type RouteNodeOption = { id: number; name: string; address: string; port: number; protocol?: string };
@@ -118,6 +121,10 @@ function templateChoiceClass(active: boolean) {
   );
 }
 
+/**
+ * 数字格：打字时只把合法的数写回去，离开这一格时夹到 [min, max]。以前打什么都照收，「异常多久切」填 3 要到
+ * 保存时才被服务端拒（「不能小于 10」）；现在下限写在提示里，填出界的离开就改成边界值，保存不会失败。
+ */
 function NumberField({
   label,
   hint,
@@ -135,6 +142,12 @@ function NumberField({
   max: number;
   onChange: (next: number) => void;
 }) {
+  const [text, setText] = useState<string | null>(null);
+  const commit = (raw: string) => {
+    const parsed = parseInt(raw, 10);
+    onChange(Math.min(max, Math.max(min, Number.isFinite(parsed) ? parsed : min)));
+    setText(null);
+  };
   return (
     <FormField className="flex min-w-0 flex-col gap-1">
       <Label className="text-meta font-medium">{label}</Label>
@@ -145,8 +158,13 @@ function NumberField({
           min={min}
           max={max}
           step={1}
-          value={Number.isFinite(value) ? value : ""}
-          onChange={(event) => onChange(parseInt(event.target.value) || 0)}
+          value={text ?? (Number.isFinite(value) ? value : "")}
+          onChange={(event) => {
+            setText(event.target.value);
+            const parsed = parseInt(event.target.value, 10);
+            if (Number.isFinite(parsed) && parsed >= min && parsed <= max) onChange(parsed);
+          }}
+          onBlur={(event) => commit(event.target.value)}
           className="h-9 pr-7"
         />
         <span aria-hidden="true" className="pointer-events-none absolute inset-y-0 right-2.5 flex items-center text-meta text-muted-foreground">{unit}</span>
@@ -266,7 +284,7 @@ function lineDuration(seconds: number) {
 
 /** 「怎么切」下面那一句：平时走哪条、坏了几秒内切走、恢复多久切回。 */
 export function lineModeHint(policy: RouteGroupPolicy, perSession = false) {
-  const switchSeconds = Math.max(5, Math.round(Number(policy.failoverSeconds || 0)));
+  const switchSeconds = routeSwitchWithinSeconds(policy);
   const back = policy.autoFailback ? `主线路恢复稳定 ${lineDuration(policy.recoverSeconds)}后切回` : "主线路恢复后不自动切回";
   switch (policy.mode) {
     case "smart": return `平时走整条链最快的；坏了 ${switchSeconds} 秒内切走，${back}。`;
@@ -311,6 +329,7 @@ export function RouteGroupFields({
   allowTunnels = false,
   ruleId = null,
   upstreamHostIds = [],
+  renderLineStatus,
 }: RouteGroupFieldsProps) {
   const now = nowMs ?? Date.now();
   const udpOnly = normalizeForwardRuleProtocol(protocol) === "udp";
@@ -550,8 +569,9 @@ export function RouteGroupFields({
         previewPaths={paths}
         ruleId={ruleId}
         upstreamHostIds={upstreamHostIds}
+        renderLineStatus={renderLineStatus}
       />
-      <div className="flex min-w-0 flex-col" data-testid="route-line-mode">
+      <div className="fx-line-ui flex min-w-0 flex-col" data-testid="route-line-mode">
         <LineSec left="怎么切" />
         <LineCard>
           <LineSegmented
@@ -666,7 +686,7 @@ export function RouteGroupFields({
         </button>
 
         {advancedOpen ? (
-          <div className="flex min-w-0 flex-col gap-4 pb-1 pt-2">
+          <div className="fx-line-ui flex min-w-0 flex-col gap-4 pb-1 pt-2">
             <PolicyGroup
               title="几条一起用"
               note="默认一次只走一条。聚合：主线路那组的几条按连接分担（单个连接仍走一条）；复制：主线路走的 NEX 叠加隧道里同一份数据几条腿一起发，一条腿断了连接不断。"
@@ -712,7 +732,7 @@ export function RouteGroupFields({
                 />
                 <NumberField
                   label="异常多久切"
-                  hint="持续异常多久才切走"
+                  hint={`持续异常多久才切走，最少 ${ROUTE_GUARD_LIMITS.failoverSeconds.min} 秒；现在约 ${routeSwitchWithinSeconds(routePolicy)} 秒内切走`}
                   unit="秒"
                   value={routePolicy.failoverSeconds}
                   min={ROUTE_GUARD_LIMITS.failoverSeconds.min}
@@ -721,7 +741,7 @@ export function RouteGroupFields({
                 />
                 <NumberField
                   label="恢复观察"
-                  hint="恢复后要稳定多久"
+                  hint={`恢复后要稳定多久，最少 ${ROUTE_GUARD_LIMITS.recoverSeconds.min} 秒`}
                   unit="秒"
                   value={routePolicy.recoverSeconds}
                   min={ROUTE_GUARD_LIMITS.recoverSeconds.min}
@@ -773,7 +793,7 @@ export function RouteGroupFields({
                   />
                   <NumberField
                     label="持续多久"
-                    hint="明显更好要持续多久才换"
+                    hint={`明显更好要持续多久才换，最少 ${ROUTE_GUARD_LIMITS.scoreHoldSeconds.min} 秒；快一半以上的 10 秒就换`}
                     unit="秒"
                     value={routePolicy.scoreHoldSeconds}
                     min={ROUTE_GUARD_LIMITS.scoreHoldSeconds.min}

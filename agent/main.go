@@ -38,7 +38,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.243"
+var Version = "2.2.244"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -13143,6 +13143,8 @@ func startFailoverProxyLocked(ruleID int, sourcePort int, spec failoverSpec, act
 			}
 		} else {
 			targetsChanged := existing.rebuildForSpecLocked(spec, time.Now())
+			// 人工指定、时段表、换模式：面板一改就照做，不等下一轮探测（以前最多晚 5 秒）。驻留、预检照旧管自动切换。
+			existing.updateFallbackActiveLocked("panel update")
 			existing.mu.Unlock()
 			existing.signature = signature
 			failoverMu.Unlock()
@@ -13548,6 +13550,13 @@ const failoverFastestMarginMs = 20
 const failoverFastestMarginRatio = 0.2
 const failoverFastestHoldSeconds = 180
 
+/*
+好得多就不用等满 ScoreHoldSeconds（2.2.244 起）：整条链快 100 毫秒以上、而且只要一半的时间，连着 10 秒都是它
+就切。557ms 的线路旁边摆着 3ms 的，等三分钟只会让人以为「整链最优」没生效；只好一点点的照旧等满，防来回漂。
+*/
+const failoverDramaticMarginMs = 100
+const failoverDramaticHold = 10 * time.Second
+
 // 面板给的下游延迟提示最多算到这么大（再大评分早就是 0 了），防一个离谱值溢出。
 const failoverMaxExtraLatencyMs = 60000
 
@@ -13623,7 +13632,11 @@ func (p *failoverProxy) fastestIndexLocked(now time.Time) int {
 		p.fastestSince = now
 		return -1
 	}
-	if now.Sub(p.fastestSince) < time.Duration(p.spec.ScoreHoldSeconds)*time.Second {
+	hold := time.Duration(p.spec.ScoreHoldSeconds) * time.Second
+	if activeLatency > 0 && bestLatency > 0 && activeLatency-bestLatency >= failoverDramaticMarginMs && bestLatency*2 <= activeLatency && hold > failoverDramaticHold {
+		hold = failoverDramaticHold
+	}
+	if now.Sub(p.fastestSince) < hold {
 		return -1
 	}
 	return best
@@ -13899,15 +13912,38 @@ func (p *failoverProxy) retiredNow() bool {
 	}
 }
 
+/*
+探测间隔跟着「异常多久切」走（2.2.244 起）：它的一半，夹在 1–5 秒。设 3 秒就 1.5 秒探一轮，几秒内真能切走；
+默认 60 秒的老规格照旧 5 秒一轮。下一轮从这一轮探完开始算，探得慢（超时）的时候不会叠起来。
+*/
+func failoverHealthInterval(failoverSeconds int) time.Duration {
+	interval := time.Duration(failoverSeconds) * time.Second / 2
+	if interval < time.Second {
+		interval = time.Second
+	}
+	if interval > 5*time.Second {
+		interval = 5 * time.Second
+	}
+	return interval
+}
+
+func (p *failoverProxy) healthInterval() time.Duration {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return failoverHealthInterval(p.spec.FailoverSeconds)
+}
+
 func (p *failoverProxy) healthLoop() {
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
+	timer := time.NewTimer(p.healthInterval())
+	defer timer.Stop()
 	for {
 		select {
 		case <-p.done:
 			return
-		case <-ticker.C:
+		case <-timer.C:
 			p.checkHealthShared()
+			// 面板改了「异常多久切」（热更新，代理不重建）：下一轮就按新的间隔
+			timer.Reset(p.healthInterval())
 		}
 	}
 }

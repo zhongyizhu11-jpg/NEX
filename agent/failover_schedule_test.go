@@ -419,8 +419,8 @@ func fastestAfterHold(proxy *failoverProxy, start time.Time) int {
 }
 
 func TestFastestNeedsSustainedAdvantage(t *testing.T) {
-	// 第 1 条明显更快（200ms → 50ms），但得连着够久才算数。
-	proxy := fastestProxy([]int{200, 50}, 0)
+	// 第 1 条明显更快（200ms → 140ms：快 60ms、30%），但得连着够久才算数。
+	proxy := fastestProxy([]int{200, 140}, 0)
 	start := time.Now()
 
 	proxy.mu.Lock()
@@ -437,8 +437,8 @@ func TestFastestNeedsSustainedAdvantage(t *testing.T) {
 }
 
 func TestFastestResetsWhenCandidateChanges(t *testing.T) {
-	// 候选换人就重新计时：两条线轮流领先的话，谁都不该被选中。
-	proxy := fastestProxy([]int{200, 50, 60}, 0)
+	// 候选换人就重新计时：两条线轮流领先的话，谁都不该被选中。（只是明显更快、不是快一半以上，走的是完整的持续时间）
+	proxy := fastestProxy([]int{200, 150, 160}, 0)
 	start := time.Now()
 	proxy.mu.Lock()
 	defer proxy.mu.Unlock()
@@ -562,5 +562,46 @@ func TestPinnedIndexZeroValueIsNotAPin(t *testing.T) {
 	}
 	if got := proxy.priorityOrderLocked(evening); got[0] != 1 {
 		t.Fatalf("时段表被零值的钉住压住了，拿到 %v", got)
+	}
+}
+
+// 好得多（快 100ms 以上、只要一半时间）：连着 10 秒都是它就切，不用等满三分钟；第一次看到照样不切。
+func TestFastestSwitchesSoonerWhenDramaticallyBetter(t *testing.T) {
+	proxy := fastestProxy([]int{557, 3}, 0)
+	start := time.Now()
+	proxy.mu.Lock()
+	defer proxy.mu.Unlock()
+	if got := proxy.fastestIndexLocked(start); got != -1 {
+		t.Fatalf("第一次看到就切了：%d", got)
+	}
+	if got := proxy.fastestIndexLocked(start.Add(5 * time.Second)); got != -1 {
+		t.Fatalf("才 5 秒就切了：%d", got)
+	}
+	if got := proxy.fastestIndexLocked(start.Add(failoverDramaticHold + time.Second)); got != 1 {
+		t.Fatalf("557ms 对 3ms，连着 10 秒都更快，应当切过去，拿到 %d", got)
+	}
+
+	// 只快一点点（快 60ms、30%）的照旧要等满持续时间。
+	modest := fastestProxy([]int{200, 140}, 0)
+	modest.mu.Lock()
+	defer modest.mu.Unlock()
+	modest.fastestIndexLocked(start)
+	if got := modest.fastestIndexLocked(start.Add(failoverDramaticHold + time.Second)); got != -1 {
+		t.Fatalf("只快一点不该走快速通道：%d", got)
+	}
+}
+
+// 探测间隔跟着「异常多久切」：一半，夹在 1–5 秒；面板改了就按新的来。
+func TestFailoverHealthIntervalFollowsFailoverSeconds(t *testing.T) {
+	cases := map[int]time.Duration{0: time.Second, 1: time.Second, 2: time.Second, 3: 1500 * time.Millisecond, 8: 4 * time.Second, 10: 5 * time.Second, 60: 5 * time.Second}
+	for seconds, want := range cases {
+		if got := failoverHealthInterval(seconds); got != want {
+			t.Fatalf("failoverSeconds=%d：探测间隔应当 %s，拿到 %s", seconds, want, got)
+		}
+	}
+	proxy := fastestProxy([]int{10, 20}, 0)
+	proxy.spec.FailoverSeconds = 3
+	if got := proxy.healthInterval(); got != 1500*time.Millisecond {
+		t.Fatalf("规格里 3 秒：%s", got)
 	}
 }

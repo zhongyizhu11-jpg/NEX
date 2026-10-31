@@ -3,6 +3,7 @@ import {
   type ForwardRuleProtocol,
   type ForwardType,
 } from "@shared/forwardTypes";
+import { ROUTE_GUARD_LIMITS } from "@shared/routeGroup";
 import { z } from "zod";
 
 export const RULE_TRANSFER_FILE_KIND = "forwardx.forward-rules";
@@ -93,8 +94,8 @@ const ruleTransferRuleSchema = z.object({
   failoverEnabled: z.boolean().optional().default(false),
   failoverStrategy: z.enum(["fallback", "round_robin", "random", "ip_hash"]).optional().default("fallback"),
   failoverTargets: z.array(failoverTargetSchema).max(10).optional().default([]),
-  failoverSeconds: z.number().int().min(10).max(3600).optional().default(60),
-  recoverSeconds: z.number().int().min(10).max(3600).optional().default(120),
+  failoverSeconds: z.number().int().min(ROUTE_GUARD_LIMITS.failoverSeconds.min).max(ROUTE_GUARD_LIMITS.failoverSeconds.max).optional().default(60),
+  recoverSeconds: z.number().int().min(ROUTE_GUARD_LIMITS.recoverSeconds.min).max(ROUTE_GUARD_LIMITS.recoverSeconds.max).optional().default(120),
   autoFailback: z.boolean().optional().default(true),
 });
 

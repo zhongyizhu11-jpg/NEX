@@ -10,7 +10,7 @@ import test from "node:test";
  *   · 隧道段：中继规则建在隧道入口那台（这里是入口机自己），走这条隧道、在隧道端口区间里监听，
  *     出口机自己不建中继；入口调度器拨 127.0.0.1（云厂商 NAT 不让机器连自己的公网地址）。
  *   · 节点池：池里加一台机器，用到它的线路重新展开，多出一条路径和一条中继。
- *   · 心跳下发：tier、整链的下游延迟、暂停 / 维护提示都带上。
+ *   · 心跳下发：整链的下游延迟、暂停 / 维护提示都带上；tier 只在聚合 / 复制时带（整链最优要在所有线路里比）。
  * 起一个真的 sqlite 跑一遍。
  */
 
@@ -20,6 +20,7 @@ type Outcome = {
   expanded: { pathCount: number; keys: string[] };
   afterPool: { pathCount: number; relayHosts: number[] };
   spec: any;
+  aggregateSpec: any;
   pausedSpec: any;
   maintenanceSpec: any;
 };
@@ -97,6 +98,10 @@ function run(): Outcome {
     const bkPath = afterPaths.find((p) => p.lineKey === "bk" && p.hops[0] === 2);
     stats.recordRouteHopProbe({ parentRuleId: 1, pathKey: bkPath.key, hopIndex: 0, hostId: 2, hostName: "jinx", nextLabel: "落地", ok: true, latencyMs: 7 });
     const spec = await beat();
+    // 聚合：主线路那组一起分担、备用只兜底 —— 这时才分层
+    await exec('UPDATE forward_rules SET "routeDelivery" = ? WHERE id = 1', ["aggregate"]);
+    const aggregateSpec = await beat();
+    await exec('UPDATE forward_rules SET "routeDelivery" = ? WHERE id = 1', ["cold"]);
     // 暂停备用那条线路
     const paused = afterPaths.map((p) => (p.lineKey === "bk" ? { ...p, paused: true } : p));
     await exec('UPDATE forward_rules SET "routePaths" = ? WHERE id = 1', [JSON.stringify(paused)]);
@@ -112,7 +117,7 @@ function run(): Outcome {
       relays, paths: storedPaths,
       expanded: { pathCount: expandedPaths.length, keys: expandedPaths.map((p) => p.key) },
       afterPool: { pathCount: afterPaths.length, relayHosts: afterRelays.map((r) => Number(r.hostId)) },
-      spec, pausedSpec, maintenanceSpec,
+      spec, aggregateSpec, pausedSpec, maintenanceSpec,
     }));
     process.exit(0);
   `;
@@ -155,10 +160,12 @@ test("节点池：池里的机器当候选；池里加一台，线路重新展�
   assert.ok(outcome.afterPool.relayHosts.includes(2));
 });
 
-test("心跳：每条目标带 tier，备用带下游延迟；暂停 / 维护的路径标成用不了", () => {
+test("心跳：整链最优不分层（所有线路一起比），聚合才带 tier；备用带下游延迟；暂停 / 维护的路径标成用不了", () => {
   const targets = outcome.spec.targets as any[];
   assert.equal(targets.length, 3);
-  assert.deepEqual(targets.map((target) => target.tier), [0, 1, 1]);
+  assert.equal(outcome.spec.preferFastest, true);
+  assert.deepEqual(targets.map((target) => target.tier), [undefined, undefined, undefined], "整链最优带着分层，Agent 只在主线路里挑，备用再快也切不过去");
+  assert.deepEqual((outcome.aggregateSpec.targets as any[]).map((target) => target.tier), [0, 1, 1], "聚合：主线路那组一起分担，备用组兜底");
   assert.ok(targets.some((target) => target.extraLatencyMs === 7), `下游延迟没下发：${JSON.stringify(targets)}`);
   assert.ok(targets.every((target) => !target.down));
   const paused = outcome.pausedSpec.targets as any[];

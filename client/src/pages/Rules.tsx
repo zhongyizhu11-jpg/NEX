@@ -8496,10 +8496,7 @@ function RulesContent() {
                   )}
                 </div>
               </div>
-              {/*
-                线路组的编辑只有一个地方：和线路详情里「编辑」同一个框、同一个编辑器（LineEditorShell）。
-                表单里只放一行摘要和「编辑线路」；框里点「完成」写回表单，跟着规则一起保存。
-              */}
+              {/* 线路组就在这一页里改（和线路详情第一页是同一个编辑器），跟着规则一起保存 */}
               {form.failoverEnabled && form.routeGroup && (
                 <RuleLineGroupField
                   value={form.routeGroup}
