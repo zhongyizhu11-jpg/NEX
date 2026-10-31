@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode, type Ref } from "react";
+import { Fragment, useMemo, useState, type ReactNode, type Ref } from "react";
 import { ChevronDown, X } from "lucide-react";
 
 import { SortableItem, SortableReorderContext, useSortableReorder } from "@/components/SortableDragHandle";
@@ -177,14 +177,19 @@ export function RouteLinesEditor({
     if (open) setOpenKey(line.key);
   };
 
-  /** 一条线路此刻怎么走（每层挑中的那个）：Po0 → jinx(39.9y) → 落地。 */
+  /**
+   * 一条线路怎么走：Po0 → jinx(39.9y) → 落地。一跳里并列几台写成 [Jinx / jinx(39.9y)]（和展开后那个框一样：
+   * 方括号里是这一跳挑一台，箭头是一跳接一跳），三台以上 [A / B 等 3 台]；节点池写池的名字。
+   */
   const lineText = (line: RouteLine) => {
     const parts = [entryName];
+    const name = (candidate: Candidate) => (candidate.kind === "tunnel" ? `隧道 ${hostName(candidate.to)}` : candidate.label);
     for (const layer of line.layers) {
       const candidates = candidatesOf(layer);
       if (layer.kind === "pool") parts.push(pools.find((pool) => pool.id === layer.poolId)?.name || "节点池");
-      else if (candidates[0]) parts.push(candidates[0].kind === "tunnel" ? `隧道 ${hostName(candidates[0].to)}` : candidates[0].label);
-      if (candidates.length > 1 && layer.kind !== "pool") parts[parts.length - 1] += ` 等 ${candidates.length} 个`;
+      else if (candidates.length > 2) parts.push(`[${name(candidates[0])} / ${name(candidates[1])} 等 ${candidates.length} 台]`);
+      else if (candidates.length === 2) parts.push(`[${name(candidates[0])} / ${name(candidates[1])}]`);
+      else if (candidates[0]) parts.push(name(candidates[0]));
     }
     parts.push("落地");
     return parts.join(" → ");
@@ -276,8 +281,6 @@ export function RouteLinesEditor({
           const addableTunnels = allowTunnels ? tunnels.filter((tunnel) => tunnel.entryHostId === from && !layer.tunnelIds.includes(tunnel.id)) : [];
           const canAddCandidate = total < MAX_LAYER_CANDIDATES && (addableHosts.length > 0 || addableTunnels.length > 0);
           const label = line.layers.length > 1 ? `中转 ${layerIndex + 1}` : "中转";
-          // 有得挑（两个以上候选、或者一个池）才问怎么挑
-          const choosable = !!pool || total > 1;
           const removeCandidate = (candidate: Candidate) => {
             const tunnelIds = candidate.kind === "tunnel" ? layer.tunnelIds.filter((id) => id !== candidate.id) : layer.tunnelIds;
             const hostIds = candidate.kind === "host" ? layer.hostIds.filter((id) => id !== candidate.id) : layer.hostIds;
@@ -370,11 +373,25 @@ export function RouteLinesEditor({
             ), `layer-${layerIndex}`);
           }
 
+          /*
+            并列的几台放进一个框（「Jinx / jinx(39.9y)」）：框里是这一跳挑一台，竖链上的点是一跳接一跳 —— 「并」和「串」
+            一眼分开。「+ 并列」和怎么挑也在框里。只有一台时不画框。
+          */
+          const grouped = candidates.length > 1;
           return chainNode(label, "hop", (
             <>
-                <div className="flex min-w-0 flex-wrap items-center gap-1.5" data-testid="route-line-layer">
+                <div
+                  className={cn(
+                    "flex min-w-0 flex-wrap items-center gap-1.5",
+                    grouped && "w-fit max-w-full rounded-[12px] border border-[var(--fx-stroke)] bg-[var(--fx-l2-group)] p-1.5",
+                  )}
+                  data-testid="route-line-layer"
+                  data-grouped={grouped ? "true" : undefined}
+                >
                   {candidates.map((candidate, index) => (
-                    <DropdownMenu key={`${candidate.kind}${candidate.id}`}>
+                    <Fragment key={`${candidate.kind}${candidate.id}`}>
+                    {grouped && index > 0 ? <span aria-hidden className="text-[12px] text-muted-foreground">/</span> : null}
+                    <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <LineChipButton variant={index === chosen ? "sel" : "default"} title={candidate.hint}>
                           <span className="truncate">{candidate.label}</span>
@@ -397,6 +414,7 @@ export function RouteLinesEditor({
                         ) : null}
                       </DropdownMenuContent>
                     </DropdownMenu>
+                    </Fragment>
                   ))}
                   {canAddCandidate ? (
                     <DropdownMenu>
@@ -416,13 +434,9 @@ export function RouteLinesEditor({
                       </DropdownMenuContent>
                     </DropdownMenu>
                   ) : null}
+                  {grouped ? pickMenu : null}
                 </div>
-                {choosable || layer.skippable ? (
-                  <div className="mt-[6px] flex min-w-0 flex-wrap items-center gap-[10px] text-[11.5px] text-muted-foreground">
-                    {choosable ? pickMenu : null}
-                    {skipChip}
-                  </div>
-                ) : null}
+                {layer.skippable ? <div className="mt-[6px] flex min-w-0 flex-wrap items-center gap-[10px]">{skipChip}</div> : null}
             </>
           ), `layer-${layerIndex}`);
         })}

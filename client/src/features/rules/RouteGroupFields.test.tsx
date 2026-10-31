@@ -335,3 +335,16 @@ test("节点池那一跳：平时一个「池 · 名字 · N 台」（池里的�
   const plain = render(draft, false, "tcp", { pools });
   assert.match(plain, /data-testid="route-line-add-candidate"/);
 });
+
+test("同一跳并列的几台放进一个框（Jinx / jinx）：框里挑一台；收起那一行写成 [A / B]", () => {
+  const draft = group();
+  const lines = routeLinesFromPaths(draft.paths);
+  lines[0] = { ...lines[0], layers: [{ ...lines[0].layers[0], kind: "hosts", hostIds: [2, 3] }] };
+  const html = render({ ...draft, lines }, false);
+  assert.match(html, /data-testid="route-line-layer" data-grouped="true"/, "两台：画成一个框");
+  assert.match(html, /JP relay 02[^]*?>\/<[^]*?SG relay 03/, "框里用 / 隔开");
+  assert.match(html, /data-grouped="true"[^]*?aria-label="中转怎么挑"/, "怎么挑也在框里");
+  assert.match(html, /HK entry 01 → \[JP relay 02 \/ SG relay 03\] → 落地/, "收起那一行：方括号里是这一跳挑一台");
+  const single = render(group(), false);
+  assert.doesNotMatch(single, /data-grouped="true"/, "只有一台不画框");
+});
