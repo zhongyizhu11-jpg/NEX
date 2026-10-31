@@ -25,8 +25,8 @@ import { segmentKey, useSegmentLatency } from "./segmentLatency";
   编辑线路组（2.3.496，照效果图 ②「编辑：主线路 + 有序备用」）：
 
     主线路一张卡：入口 / 中转（几跳就几行：中转 1、中转 2…）/ 落地。一跳里可以放几个候选（机器、隧道混着放，
-    或者一个节点池），有两个以上才出「最低延迟 / 按顺序」——只有一个时没得挑（2.3.498）。「+ 后面再接中转」
-    在最后一跳下面，串下一跳。「可跳过」（这一跳全坏了就直连下一跳）不再给勾：和加一条不经它的备用线路是一回事，
+    或者一个节点池），有两个以上才出「最低延迟 / 按顺序」——只有一个时没得挑（2.3.498）。两个加号分开叫：
+    「+ 并列」是同一跳再放一个（或把这一跳换成节点池），「+ 后面再接中转」在最后一跳下面，串下一跳。「可跳过」（这一跳全坏了就直连下一跳）不再给勾：和加一条不经它的备用线路是一回事，
     备用线路排第几、状态、暂停都看得见；老配置里勾过的照常生效，这里显示「可跳过 ×」，点一下取消。
     下面是有序的备用：一行一条，拖动排序；整行点一下展开来改，小闪电（逐段测）在展开的那块里 —— 收着的行上
     只留路径和状态，省地方（2.3.498，以前每行还挂着 ▾ 和 ⚡，路径被挤得只剩半截）。勾掉就不参与
@@ -104,6 +104,8 @@ export function RouteLinesEditor({
     setLine(lineIndex, { layers: line.layers.map((layer, position) => (position === layerIndex ? { ...layer, ...patch } : layer)) });
   };
   const removeLayer = (lineIndex: number, layerIndex: number) => setLine(lineIndex, { layers: lines[lineIndex].layers.filter((_, position) => position !== layerIndex) });
+  /** 这一跳整个换掉（换成节点池、换成另一个池）。 */
+  const replaceLayer = (lineIndex: number, layerIndex: number, layer: RouteLayer) => setLine(lineIndex, { layers: lines[lineIndex].layers.map((item, position) => (position === layerIndex ? layer : item)) });
   const addLayer = (lineIndex: number, layer: RouteLayer) => setLine(lineIndex, { layers: [...lines[lineIndex].layers, layer] });
 
   const backups = lines.slice(1);
@@ -150,7 +152,9 @@ export function RouteLinesEditor({
 
   const mainHopIds = new Set(lines[0]?.layers.flatMap((layer) => layer.hostIds) || []);
   // 「经 X」的建议：不是入口、不是入口前面那台、在线、主线路里没用；中转池里的排前面
-  const relayPoolHostIds = new Set(pools.filter((pool) => pool.role !== "landing").flatMap((pool) => pool.members.map((member) => member.hostId)));
+  // 能当中转的池（只当落地用的不出现在选中转的菜单里）
+  const relayPools = pools.filter((pool) => pool.role !== "landing");
+  const relayPoolHostIds = new Set(relayPools.flatMap((pool) => pool.members.map((member) => member.hostId)));
   const quickHosts = hosts
     .filter((host) => host.id !== entryHostId && !upstreamHostIds.includes(host.id) && host.isOnline !== false && !mainHopIds.has(host.id))
     .sort((left, right) => Number(relayPoolHostIds.has(right.id)) - Number(relayPoolHostIds.has(left.id)))
@@ -194,18 +198,20 @@ export function RouteLinesEditor({
         <LineChipButton variant="add" data-testid="route-line-add-layer">{label}</LineChipButton>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="max-h-80 overflow-y-auto">
-        <DropdownMenuLabel className="text-[11px]">机器</DropdownMenuLabel>
-        {hosts.filter((host) => host.id !== entryHostId).map((host) => (
-          <DropdownMenuItem key={`h${host.id}`} onSelect={() => addLayer(lineIndex, newRouteLayer({ kind: "hosts", hostIds: [host.id] }))}>{host.name}{host.isOnline === false ? "（离线）" : ""}</DropdownMenuItem>
-        ))}
-        {pools.length > 0 ? (<><DropdownMenuSeparator /><DropdownMenuLabel className="text-[11px]">节点池</DropdownMenuLabel></>) : null}
-        {pools.map((pool) => (
+        {/* 节点池放最前：一个池就是这一跳的一组候选，池里加减机器，用它的线路跟着变 */}
+        {relayPools.length > 0 ? <DropdownMenuLabel className="text-[11px]">节点池（池里挑最快的）</DropdownMenuLabel> : null}
+        {relayPools.map((pool) => (
           <DropdownMenuItem key={`p${pool.id}`} onSelect={() => addLayer(lineIndex, newRouteLayer({ kind: "pool", poolId: pool.id }))}>{pool.name} · {pool.members.length} 台</DropdownMenuItem>
         ))}
         {allowTunnels && tunnels.some((tunnel) => tunnel.entryHostId === previousHost) ? (<><DropdownMenuSeparator /><DropdownMenuLabel className="text-[11px]">隧道（从上一个节点出发）</DropdownMenuLabel></>) : null}
         {allowTunnels ? tunnels.filter((tunnel) => tunnel.entryHostId === previousHost).map((tunnel) => (
           <DropdownMenuItem key={`t${tunnel.id}`} onSelect={() => addLayer(lineIndex, newRouteLayer({ kind: "tunnel", tunnelIds: [tunnel.id] }))}>{tunnel.name} → {hostName(tunnel.exitHostId)}</DropdownMenuItem>
         )) : null}
+        {relayPools.length > 0 || (allowTunnels && tunnels.some((tunnel) => tunnel.entryHostId === previousHost)) ? <DropdownMenuSeparator /> : null}
+        <DropdownMenuLabel className="text-[11px]">机器</DropdownMenuLabel>
+        {hosts.filter((host) => host.id !== entryHostId).map((host) => (
+          <DropdownMenuItem key={`h${host.id}`} onSelect={() => addLayer(lineIndex, newRouteLayer({ kind: "hosts", hostIds: [host.id] }))}>{host.name}{host.isOnline === false ? "（离线）" : ""}</DropdownMenuItem>
+        ))}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -236,6 +242,7 @@ export function RouteLinesEditor({
           const addableHosts = hosts.filter((host) => host.id !== entryHostId && !layer.hostIds.includes(host.id));
           const addableTunnels = allowTunnels ? tunnels.filter((tunnel) => tunnel.entryHostId === from && !layer.tunnelIds.includes(tunnel.id)) : [];
           const last = layerIndex === line.layers.length - 1;
+          const canAddCandidate = total < MAX_LAYER_CANDIDATES && (addableHosts.length > 0 || addableTunnels.length > 0);
           const label = line.layers.length > 1 ? `中转 ${layerIndex + 1}` : "中转";
           // 有得挑（两个以上候选、或者一个池）才问怎么挑
           const choosable = !!pool || total > 1;
@@ -261,6 +268,10 @@ export function RouteLinesEditor({
                         <LineChipButton variant="sel">池 · {pool.name}</LineChipButton>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="start">
+                        {relayPools.filter((item) => item.id !== pool.id).map((item) => (
+                          <DropdownMenuItem key={`swap${item.id}`} onSelect={() => replaceLayer(lineIndex, layerIndex, newRouteLayer({ kind: "pool", poolId: item.id, pick: layer.pick }))}>换成 {item.name} · {item.members.length} 台</DropdownMenuItem>
+                        ))}
+                        {relayPools.length > 1 ? <DropdownMenuSeparator /> : null}
                         <DropdownMenuItem onSelect={() => removeLayer(lineIndex, layerIndex)}>去掉这个中转</DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
@@ -288,19 +299,24 @@ export function RouteLinesEditor({
                       </DropdownMenu>
                     )
                   ))}
-                  {!pool && total < MAX_LAYER_CANDIDATES && (addableHosts.length > 0 || addableTunnels.length > 0) ? (
+                  {!pool && (canAddCandidate || relayPools.length > 0) ? (
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
-                        <LineChipButton variant="add" className="min-w-[30px] justify-center" aria-label={`${label}再放一个候选`} title="这一跳再放一个候选：几个里挑最快的（或按顺序）">+</LineChipButton>
+                        <LineChipButton variant="add" aria-label={`${label}再并列一个`} title="同一跳再并列一台（或一条隧道、或换成节点池）：几个里自动挑整条链最快的" data-testid="route-line-add-candidate">+ 并列</LineChipButton>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="start" className="max-h-72 overflow-y-auto">
-                        {addableTunnels.length > 0 ? <DropdownMenuLabel className="text-[11px]">隧道（从上一个节点出发）</DropdownMenuLabel> : null}
-                        {addableTunnels.map((tunnel) => (
+                        {relayPools.length > 0 ? <DropdownMenuLabel className="text-[11px]">换成节点池（池里挑最快的）</DropdownMenuLabel> : null}
+                        {relayPools.map((item) => (
+                          <DropdownMenuItem key={`p${item.id}`} onSelect={() => replaceLayer(lineIndex, layerIndex, newRouteLayer({ kind: "pool", poolId: item.id, pick: layer.pick }))}>{item.name} · {item.members.length} 台</DropdownMenuItem>
+                        ))}
+                        {relayPools.length > 0 && canAddCandidate ? <DropdownMenuSeparator /> : null}
+                        {canAddCandidate && addableTunnels.length > 0 ? <DropdownMenuLabel className="text-[11px]">并列一条隧道（从上一个节点出发）</DropdownMenuLabel> : null}
+                        {(canAddCandidate ? addableTunnels : []).map((tunnel) => (
                           <DropdownMenuItem key={`t${tunnel.id}`} onSelect={() => setLayer(lineIndex, layerIndex, { tunnelIds: [...layer.tunnelIds, tunnel.id] })}>{tunnel.name} → {hostName(tunnel.exitHostId)}</DropdownMenuItem>
                         ))}
-                        {addableTunnels.length > 0 && addableHosts.length > 0 ? <DropdownMenuSeparator /> : null}
-                        {addableHosts.length > 0 ? <DropdownMenuLabel className="text-[11px]">机器</DropdownMenuLabel> : null}
-                        {addableHosts.map((host) => (
+                        {canAddCandidate && addableTunnels.length > 0 && addableHosts.length > 0 ? <DropdownMenuSeparator /> : null}
+                        {canAddCandidate && addableHosts.length > 0 ? <DropdownMenuLabel className="text-[11px]">并列一台机器</DropdownMenuLabel> : null}
+                        {(canAddCandidate ? addableHosts : []).map((host) => (
                           <DropdownMenuItem key={`h${host.id}`} onSelect={() => setLayer(lineIndex, layerIndex, { hostIds: [...layer.hostIds, host.id], kind: "hosts" })}>{host.name}{host.isOnline === false ? "（离线）" : ""}</DropdownMenuItem>
                         ))}
                       </DropdownMenuContent>
