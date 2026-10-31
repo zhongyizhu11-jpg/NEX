@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { newRouteGroupDraft, routeGroupRuleFields, type RouteGroup } from "@shared/routeGroup";
 import { describeRoutePolicy } from "@shared/routePolicy";
-import { RouteBoardCard, RouteMiniChain, RouteSwitchChip, describeRouteDials, routeBoardActiveChain, summarizeRouteChain, type RouteBoardPath } from "./RouteBoard";
+import { RouteMiniChain, RoutePathCards, RouteSwitchChip, describeRouteDials, routeBoardActiveChain, summarizeRouteChain, type RouteBoardPath } from "./RouteBoard";
 
 const NOW = Date.UTC(2026, 9, 28, 12, 0, 0);
 const draft = newRouteGroupDraft({ timezone: "Asia/Shanghai" });
@@ -82,11 +82,10 @@ test("自定探测目标时第一段不算实测，整链用入口探到的那�
   assert.equal(chain.partial, false);
 });
 
-test("线路板卡：规则名、入口机、策略、切换次数、每个节点的速率；备用路径写「空闲」", () => {
+test("路径卡：每个节点的速率；备用路径写「空闲」；在走的那条有流动的小点", () => {
   const policy = describeRoutePolicy(rule, { host: { isOnline: true, agentVersion: "2.2.198" }, nowMs: NOW })!;
   const html = renderToStaticMarkup(
-    <RouteBoardCard
-      name="美国游戏线路"
+    <RoutePathCards
       status={{
         paths: [path(0), path(1)],
         entry: { hostId: 1, name: "HK entry 01", online: true, sourcePort: 10001 },
@@ -94,13 +93,8 @@ test("线路板卡：规则名、入口机、策略、切换次数、每个节�
         switches: { count24h: 6, count1h: 0, manual24h: 6, flapping: false, lastAt: NOW - 3_600_000, lastFromLabel: "A", lastToLabel: "B", lastReason: "pin" },
       }}
       policy={policy}
-      onOpen={() => {}}
     />,
   );
-  assert.match(html, /美国游戏线路/);
-  assert.match(html, /HK entry 01<span[^>]*>:10001</);
-  assert.match(html, /稳定优先 · 自动故障切换 · 2 条路径/);
-  assert.match(html, /24h 切换 ×6 · 人工 ×6/);
   const cards = html.split('data-testid="route-path-card"');
   assert.equal(cards.length, 3);
   // 在走的 A：入口写规则的速率，中转写各自中继的，落地写最后一跳的。
@@ -135,8 +129,7 @@ test("真实连接的拨号药丸：有失败或慢的染琥珀，没拨过不�
   assert.match(bad.title, /拨不通 3 次、拨得慢 2 次/);
   const policy = describeRoutePolicy(rule, { host: { isOnline: true, agentVersion: "2.2.237" }, nowMs: NOW })!;
   const html = renderToStaticMarkup(
-    <RouteBoardCard
-      name="美国游戏线路"
+    <RoutePathCards
       status={{
         paths: [path(0, { dials: { ok: 12, failed: 3, slow: 2, dialMs: 640, lastAt: NOW } }), path(1)],
         entry: { hostId: 1, name: "HK entry 01", online: true, sourcePort: 10001 },
@@ -144,7 +137,6 @@ test("真实连接的拨号药丸：有失败或慢的染琥珀，没拨过不�
         switches: { count24h: 0, count1h: 0, manual24h: 0, flapping: false, lastAt: null, lastFromLabel: null, lastToLabel: null, lastReason: null },
       }}
       policy={policy}
-      onOpen={() => {}}
     />,
   );
   assert.equal((html.match(/data-testid="route-dials"/g) || []).length, 1, "只有报了拨号的路径有药丸");

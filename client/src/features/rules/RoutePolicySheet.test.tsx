@@ -31,7 +31,7 @@ const rule = (patch: Partial<Record<keyof RoutePolicyRule, unknown>> = {}): Rout
 function render(patch: Parameters<typeof rule>[0] = {}, canEdit = true) {
   const policy = describeRoutePolicy(rule(patch), { host: { isOnline: true, agentVersion: "2.2.197" }, nowMs: NOW, timeZone: TZ })!;
   return renderToStaticMarkup(
-    <RoutePolicyPanel policy={policy} canEdit={canEdit} onPin={noop} onUnpin={noop} nowMs={NOW} timeZone={TZ} />,
+    <RoutePolicyPanel policy={policy} canEdit={canEdit} nowMs={NOW} timeZone={TZ} />,
   );
 }
 
@@ -47,8 +47,6 @@ test("钉着的时候，被压住的时段表那一行明说「被上面那条�
   const html = render({ failoverPinnedIndex: 0, failoverPinnedUntil: new Date(NOW + 3_600_000) });
   assert.match(html, /data-state="overridden"/);
   assert.match(html, /被上面那条压着/);
-  assert.match(html, /强制走 主线路/);
-  assert.match(html, /交回自动/);
 });
 
 test("线路上标出首选和在走", () => {
@@ -58,9 +56,9 @@ test("线路上标出首选和在走", () => {
   assert.match(html, /现在走 备用 1，18:00 起/);
 });
 
-test("没钉着时给入口「强制走一条」；不能改的人看不到这一块", () => {
-  assert.match(render(), /强制走一条/);
-  assert.doesNotMatch(render({}, false), /人工指定|强制走一条|交回自动/);
+test("规则的面板不给「强制走一条」（2.3.499）：手动切换在线路详情每条线路的状态胶囊上", () => {
+  assert.doesNotMatch(render(), /强制走一条|交回自动/);
+  assert.doesNotMatch(render({}, false), /强制走一条|交回自动/);
 });
 
 test("轮询没有「人工指定」这一块，也不说「从上往下」", () => {

@@ -6,7 +6,7 @@ import { newRouteGroupDraft, routeGroupRuleFields, routePolicyOf, type RouteGrou
 import { describeRoutePolicy } from "@shared/routePolicy";
 import { RouteGroupPanel, type RouteEvent, type RouteStatus, type RouteStatusPath } from "./RouteGroupSheet";
 import { RouteLineDiagram } from "./RouteLineDiagram";
-import { pinDurationSeconds, routeLineStatusControls } from "./RouteLineOverview";
+import { RouteLineDetail, pinDurationSeconds, routeLineStatusControls } from "./RouteLineOverview";
 
 // 2026-09-22（星期二）上海 20:00：在「工作日 18:00–01:00」里。
 const NOW = Date.UTC(2026, 8, 22, 12, 0, 0);
@@ -94,25 +94,22 @@ const events: RouteEvent[] = [
   { id: 1, kind: "prewarm", fromKey: null, toKey: group.paths[1].key, fromLabel: null, toLabel: "备用线路", reason: "schedule", reasonText: "按时段表", score: null, latencyMs: null, at: NOW - 26.1 * 3_600_000 },
 ];
 
-function render(options: { status?: RouteStatus | null; events?: RouteEvent[]; canEdit?: boolean; host?: any } = {}) {
-  const policy = describeRoutePolicy(rule, { host: options.host ?? { isOnline: true, agentVersion: "2.2.198" }, nowMs: NOW, timeZone: TZ })!;
+function render(options: { status?: RouteStatus | null; events?: RouteEvent[]; host?: any; rule?: typeof rule } = {}) {
+  const policy = describeRoutePolicy(options.rule ?? rule, { host: options.host ?? { isOnline: true, agentVersion: "2.2.198" }, nowMs: NOW, timeZone: TZ })!;
   return renderToStaticMarkup(
     <RouteGroupPanel
       policy={policy}
       status={options.status === undefined ? status() : options.status}
       events={options.events ?? events}
-      canEdit={options.canEdit ?? true}
-      onPin={noop}
-      onUnpin={noop}
       nowMs={NOW}
       timeZone={TZ}
     />,
   );
 }
 
-test("四段都在：路径、调度计划、最近切换；最后是应急人工指定", () => {
+test("三段都在：路径、调度计划、最近切换", () => {
   const html = render();
-  const order = ["路径", "调度计划", "最近切换", "应急人工指定"].map((header) => html.indexOf(`>${header}<`));
+  const order = ["路径", "调度计划", "最近切换"].map((header) => html.indexOf(`>${header}<`));
   assert.ok(order.every((position) => position > 0), `少了一段：${order.join(",")}`);
   assert.deepEqual([...order].sort((left, right) => left - right), order, "顺序就是从上往下");
   assert.match(html, /现在走 备用线路，18:00 起/);
@@ -172,9 +169,12 @@ test("Agent 太旧时说清楚没有评分；状态没读到时不空着", () =>
   assert.match(stale, /评分是 20 分钟前报的/);
 });
 
-test("不能改的人看不到人工指定", () => {
-  assert.doesNotMatch(render({ canEdit: false }), /应急人工指定|强制走一条/);
-  assert.match(render(), /强制走一条/);
+test("异常明细里没有「强制走一条」（2.3.499）：手动切换只在线路的状态胶囊上，钉着的时候也不再列一遍", () => {
+  assert.doesNotMatch(render(), /应急人工指定|强制走一条|交回自动/);
+  const pinned = render({ rule: { ...rule, failoverPinnedIndex: 0, failoverPinnedUntil: Math.floor(NOW / 1000) + 3_600 } });
+  assert.doesNotMatch(pinned, /应急人工指定|强制走一条|交回自动/);
+  // 调度计划里照样看得出是人工指定在决定
+  assert.match(pinned, /data-state="overridden"/);
 });
 
 /*
@@ -189,9 +189,6 @@ function renderFor(ruleFields: Record<string, unknown>, statusPatch: Partial<Rou
       policy={policy}
       status={status(statusPatch)}
       events={events}
-      canEdit
-      onPin={noop}
-      onUnpin={noop}
       nowMs={NOW}
       timeZone={TZ}
     />,
@@ -312,4 +309,27 @@ test("手动切的时长自己填：几分钟 / 几小时，空、0、负数、�
   assert.equal(pinDurationSeconds("-3", "hour"), null);
   assert.equal(pinDurationSeconds("721", "hour"), null, "超过 30 天：选「不限时」");
   assert.equal(pinDurationSeconds("720", "hour"), 720 * 3600);
+});
+
+test("线路详情照效果图 ①（2.3.499）：「线路」标题右边那行（怎么切的摘要 + 箭头）是个下拉，点开才出添加备用线路、怎么切、高级策略", () => {
+  const renderDetail = (settings?: { open: boolean; onToggle: () => void }) => renderToStaticMarkup(
+    <RouteLineDetail
+      status={status()}
+      events={events}
+      modeLabel="按时段"
+      detailsOpen={false}
+      onToggleDetails={noop}
+      nowMs={NOW}
+      timeZone={TZ}
+      editor={<div data-testid="fake-editor" />}
+      settings={settings}
+    />,
+  );
+  const closed = renderDetail({ open: false, onToggle: noop });
+  assert.match(closed, /<button[^>]*aria-expanded="false"[^>]*data-testid="route-line-settings"/);
+  assert.match(renderDetail({ open: true, onToggle: noop }), /<button[^>]*aria-expanded="true"[^>]*data-testid="route-line-settings"/);
+  assert.doesNotMatch(renderDetail(), /route-line-settings/, "没有编辑器（只能看）就是一行字");
+  // 线路下面紧跟着连接；「精确到哪一段」那句小字去掉了
+  assert.match(closed, /fake-editor[^]*?连接 · 最近 10 分钟/);
+  assert.doesNotMatch(closed, /精确到哪一段/);
 });

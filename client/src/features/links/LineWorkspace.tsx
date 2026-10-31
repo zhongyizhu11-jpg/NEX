@@ -1,5 +1,5 @@
 import { useMemo, useState, type SyntheticEvent } from "react";
-import { Check, ChevronDown, Plus, X } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Plus, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -34,7 +34,10 @@ import { trpc } from "@/lib/trpc";
     告警     此刻还在的问题（维护中、熔断、离线的中转）+ 最近几条：左边出了什么事，右边系统做了什么
     线路     一条线路一张卡（按状态排序）：在走哪条、整条链毫秒、用法标签；点开是线路详情
 
-  节点池（NodePoolsSection，效果图 ⑤）是同一页的另一个页签：节点池、入口组、出口组合成一种卡。
+  链路管理分类条最后一个页签「线路概览」就是它（2.3.499 起原来的「链路总览」去掉了：总览里的线路组列表和这里
+  重复，三栏组和隧道在各自页签里都有）。看到的都能点进去改：线路卡和跟某条线路有关的告警行都打开那条线路的
+  详情，在详情第一页直接改。
+  节点池（NodePoolsSection，效果图 ⑤）是另一个页签：节点池、入口组、出口组合成一种卡。
 */
 
 /** 告警默认只摆三行（和效果图一样），多的点开看：别把下面的线路卡挤出一屏。 */
@@ -44,12 +47,14 @@ export function LineWorkspace({ searchQuery = "", isAdmin = false }: { searchQue
   const board = trpc.lineDiagnostics.lineWorkspace.useQuery({ hours: 24 }, { refetchInterval: 30_000, staleTime: 10_000 });
   const data = board.data;
   const [allAlerts, setAllAlerts] = useState(false);
+  // 告警行和下面的线路卡点开的是同一个线路详情（在里面直接改）
+  const [openRuleId, setOpenRuleId] = useState<number | null>(null);
   const alerts = data?.recent || [];
   const shownAlerts = allAlerts ? alerts : alerts.slice(0, ALERT_ROWS_SHOWN);
   return (
     <div className="fx-line-ui flex min-w-0 flex-col gap-3" data-testid="line-workspace">
       <LineTitle
-        title="线路"
+        title="线路概览"
         sub={data ? `${data.lines} 条线路 · ${data.hosts.total} 台机器 · 近 ${data.hours} 小时` : "在读线路…"}
       />
       <LineCard className="grid grid-cols-3 gap-1.5 text-center" data-testid="line-workspace-stats">
@@ -72,7 +77,8 @@ export function LineWorkspace({ searchQuery = "", isAdmin = false }: { searchQue
             <LineKv
               key={index}
               left={<><LineDot tone={item.tone as LineTone} /> <span className="truncate">{item.text}</span></>}
-              right={item.action}
+              right={item.ruleId > 0 ? <span className="inline-flex items-center gap-0.5">{item.action}<ChevronRight className="h-3.5 w-3.5" aria-hidden="true" /></span> : item.action}
+              onClick={item.ruleId > 0 ? () => setOpenRuleId(item.ruleId) : undefined}
             />
           ))}
           {alerts.length > ALERT_ROWS_SHOWN ? (
@@ -84,7 +90,7 @@ export function LineWorkspace({ searchQuery = "", isAdmin = false }: { searchQue
       ) : null}
       <div>
         <LineSec left="线路" right="按状态排序" />
-        <RouteBoardList searchQuery={searchQuery} isAdmin={isAdmin} compact />
+        <RouteBoardList searchQuery={searchQuery} isAdmin={isAdmin} openRuleId={openRuleId} onOpenRuleChange={setOpenRuleId} />
       </div>
     </div>
   );

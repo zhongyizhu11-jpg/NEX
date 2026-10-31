@@ -29,9 +29,7 @@ import { hostSearchParts } from "@/lib/hostSearchParts";
 import { formatLatencyTimeLabel } from "@/lib/latencyTimeLabel";
 import { hostIpv6Address, hostPrivateAddress, normalizeConnectHostForHost, sameAddress } from "@/lib/multiHopAddress";
 import SectionTransition from "@/components/SectionTransition";
-import { RouteGroupsSection } from "@/features/rules/RouteGroupsSection";
 import { LineWorkspace, NodePoolsSection } from "@/features/links/LineWorkspace";
-import { LinkOverviewSection } from "@/features/links/LinkOverviewSection";
 import { LinkWizardDialog } from "@/features/links/LinkWizardDialog";
 import type { LinkWizardAction } from "@shared/linkWizard";
 import { loadReactGlobe, prefetchReactGlobe } from "@/lib/reactGlobeLoader";
@@ -818,50 +816,27 @@ type TunnelViewMode = "card" | "table" | "globe";
 type TunnelSection = "lines" | "tunnels" | "ports" | "chains" | "pools" | "groups" | "aggregates" | "entries" | "exits" | "routes";
 type TunnelGroupMode = "port" | "failover" | "entry" | "exit";
 
+/** 「lines」只为老链接留着（?tab=lines）：「线路概览」这一页的值是 routes（2.3.499 以前叫「链路总览」），进来就转过去。 */
 const TUNNEL_SECTIONS = ["tunnels", "lines", "ports", "chains", "pools", "groups", "aggregates", "entries", "exits", "routes"] as const;
 /*
-  分类条第一个是「隧道链路」，进来看到的就是它（2.3.498，用户要的；2.3.496 起放最前的是「线路」工作台）。
-  转发组 / 入口组 / 出口组收进「节点池」一页，用页内的筛选切换（老链接 ?tab=groups 之类照样能进，
-  分类条上亮的是「节点池」）。
+  分类条第一个是「隧道链路」，进来看到的就是它（2.3.498，用户要的）。
+  2.3.499：转发组 / 入口组 / 出口组回到分类条（2.3.497 收在「节点池」页里的一排筛选，多点一下、也不好找）；
+  节点池页照旧把池和入口组、出口组的健康放一起看，组跟着哪个池在两边都看得见。原来的「链路总览」去掉了：
+  它下面那三栏（主备 / 负载均衡 / 分连接）列的组和隧道在各自的页签里都有（入口组、出口组节点池页上也有），
+  上面的线路卡和单独的「线路」页签是同一批线路组 —— 合成最后一个页签「线路概览」，排在节点池后面（用户定的）。
 */
 const TUNNEL_SECTION_ITEMS = [
   { value: "tunnels", label: "隧道链路", icon: Network },
-  { value: "lines", label: "线路", icon: Waypoints },
   { value: "ports", label: "端口转发", icon: ArrowRightLeft },
   { value: "chains", label: "转发链", icon: Route },
-  { value: "pools", label: "节点池", icon: ShieldCheck },
-  // 叠加：中转方式为单连接叠加的 NEX 隧道单列一栏（shared/aggregateLink.ts），隧道链路里不再重复列。
-  { value: "aggregates", label: "叠加", icon: Layers },
-  { value: "routes", label: "链路总览", icon: Waypoints },
-] as const satisfies readonly SlidingTabItem<TunnelSection>[];
-const POOL_SECTIONS = ["pools", "groups", "entries", "exits"] as const;
-const POOL_FILTERS: Array<{ value: (typeof POOL_SECTIONS)[number]; label: string; icon: typeof LogIn }> = [
-  { value: "pools", label: "节点池", icon: ShieldCheck },
   { value: "groups", label: "转发组", icon: ShieldCheck },
   { value: "entries", label: "入口组", icon: LogIn },
   { value: "exits", label: "出口组", icon: LogOut },
-];
-
-/** 节点池页的筛选：节点池 / 转发组 / 入口组 / 出口组（后三个是原来的三个分类，内容不变）。 */
-function PoolFilterChips({ active, onChange }: { active: string; onChange: (next: TunnelSection) => void }) {
-  return (
-    <div className="flex flex-wrap gap-1.5" role="tablist" aria-label="节点池分类" data-testid="pool-filter">
-      {POOL_FILTERS.map((item) => (
-        <button
-          key={item.value}
-          type="button"
-          role="tab"
-          aria-selected={active === item.value}
-          className={cn("inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs", active === item.value ? "border-transparent bg-[var(--fx-text)] text-[var(--fx-text-inverse)]" : "border-[var(--fx-stroke-weak)] bg-[var(--fx-l1-surface)] text-foreground")}
-          onClick={() => onChange(item.value)}
-        >
-          <item.icon className="h-3.5 w-3.5" />
-          {item.label}
-        </button>
-      ))}
-    </div>
-  );
-}
+  // 叠加：中转方式为单连接叠加的 NEX 隧道单列一栏（shared/aggregateLink.ts），隧道链路里不再重复列。
+  { value: "aggregates", label: "叠加", icon: Layers },
+  { value: "pools", label: "节点池", icon: ShieldCheck },
+  { value: "routes", label: "线路概览", icon: Waypoints },
+] as const satisfies readonly SlidingTabItem<TunnelSection>[];
 
 const TUNNEL_SECTION_STORAGE_KEY = "forwardx.tunnels.section";
 const TUNNEL_VIEW_MODE_STORAGE_KEY = "forwardx.tunnels.viewMode";
@@ -2258,6 +2233,10 @@ function TunnelsContent() {
     // 每次进来（刷新、从别的页面点过来）都从第一个分类开始，不记上次看的是哪一类。
     remember: false,
   });
+  // 老链接 ?tab=lines：线路这一页的值是 routes
+  useEffect(() => {
+    if (activeSection === "lines") setActiveSection("routes");
+  }, [activeSection, setActiveSection]);
   const [linkSearchQuery, setLinkSearchQuery] = useState((() => {
     // 从别处（网络拓扑的详情面板）带着 ?q= 跳过来：先按它搜一遍。
     try {
@@ -4421,7 +4400,7 @@ function TunnelsContent() {
         {/* fx-list-controls：精简布局（桌面）下分类条和搜索那一行并排，两行变一行（compact.css） */}
         <div className="fx-list-controls space-y-4">
         <div className="fx-tabs-row">
-        <SlidingTabsList items={TUNNEL_SECTION_ITEMS} activeValue={(POOL_SECTIONS as readonly string[]).includes(activeSection) ? "pools" : activeSection} ariaLabel="链路管理" minItemWidthRem={compactLayout ? 5 : 7.75} />
+        <SlidingTabsList items={TUNNEL_SECTION_ITEMS} activeValue={activeSection === "lines" ? "routes" : activeSection} ariaLabel="链路管理" minItemWidthRem={compactLayout ? 5 : 7.75} />
         {collapsePhoneSearch ? (
           <SearchToggle open={phoneSearchOpen} active={linkSearchQuery.length > 0} onToggle={() => setPhoneSearchOpen((value) => !value)} />
         ) : null}
@@ -4696,7 +4675,6 @@ function TunnelsContent() {
         </TabsContent>
 
         <TabsContent value="groups" className="space-y-4">
-          <PoolFilterChips active={activeSection} onChange={(next) => setActiveSection(next)} />
           <SectionTransition transitionKey={activeSectionTransitionKey}>
             <ForwardGroupsContent
               mode="failover"
@@ -4714,7 +4692,6 @@ function TunnelsContent() {
         </TabsContent>
 
         <TabsContent value="entries" className="space-y-4">
-          <PoolFilterChips active={activeSection} onChange={(next) => setActiveSection(next)} />
           <SectionTransition transitionKey={activeSectionTransitionKey}>
             <ForwardGroupsContent
               mode="entry"
@@ -4728,12 +4705,6 @@ function TunnelsContent() {
               createRequestKey={groupCreateRequest?.mode === "entry" ? groupCreateRequest.requestKey : undefined}
               onCreateRequestConsumed={() => setGroupCreateRequest(null)}
             />
-          </SectionTransition>
-        </TabsContent>
-
-        <TabsContent value="lines" className="space-y-4">
-          <SectionTransition transitionKey={`lines-${normalizedLinkSearchQuery || "all"}`}>
-            <LineWorkspace searchQuery={normalizedLinkSearchQuery} isAdmin={user?.role === "admin"} />
           </SectionTransition>
         </TabsContent>
 
@@ -4756,16 +4727,12 @@ function TunnelsContent() {
 
         <TabsContent value="routes" className="space-y-4">
           <SectionTransition transitionKey={`routes-${normalizedLinkSearchQuery || "all"}`}>
-            <div className="space-y-4">
-              <LinkOverviewSection searchQuery={normalizedLinkSearchQuery} />
-              <h3 className="pt-2 text-sm font-semibold">线路组</h3>
-              <RouteGroupsSection searchQuery={normalizedLinkSearchQuery} isAdmin={user?.role === "admin"} />
-            </div>
+            {/* 线路概览（2.3.499）：三个数、告警、按状态排的线路卡；原来「链路总览」的三栏在各自页签里都有，去掉了 */}
+            <LineWorkspace searchQuery={normalizedLinkSearchQuery} isAdmin={user?.role === "admin"} />
           </SectionTransition>
         </TabsContent>
 
         <TabsContent value="exits" className="space-y-4">
-          <PoolFilterChips active={activeSection} onChange={(next) => setActiveSection(next)} />
           <SectionTransition transitionKey={activeSectionTransitionKey}>
             <ForwardGroupsContent
               mode="exit"

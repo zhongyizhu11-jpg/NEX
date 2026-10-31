@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { Download, Gauge } from "lucide-react";
+import { ChevronDown, Download, Gauge } from "lucide-react";
 import { toast } from "sonner";
 
 import {
@@ -96,16 +96,17 @@ function routeLinePill(group: RouteLineGroup, pinned = false): { tone: LineTone;
 
 /**
  * 手动换线路（2.3.498）：点状态胶囊就能「切到这条」，走的是人工指定（压过时段表和评分，到点交回自动；
- * 指定的那条挂了照样往下切）。以前要点开「异常明细」找「强制走一条」，用户问「想手动换怎么办」。
- * 按权重分的线路组没有「走哪条」，不给。
+ * 指定的那条挂了照样往下切）。以前要点开「异常明细」找「强制走一条」，用户问「想手动换怎么办」；2.3.499 起
+ * 那个入口去掉了，手动切换只在这里。按权重分的线路组没有「走哪条」，不给。
  */
 export type RouteLineSwitch = {
   /** 现在钉在第几条路径（status.paths[].index）；null = 没指定。 */
   pinIndex: number | null;
   pinUntilMs: number | null;
   pending: boolean;
-  onPin: (pathIndex: number, durationSeconds: number | null) => void;
-  onUnpin: () => void;
+  /** onDone：存进库里之后调（编辑器拿它把编辑稿里的指定跟上）。 */
+  onPin: (pathIndex: number, durationSeconds: number | null, onDone?: () => void) => void;
+  onUnpin: (onDone?: () => void) => void;
   nowMs?: number;
   timeZone?: string;
 };
@@ -369,6 +370,7 @@ export function RouteLineDetail({
   timeZone,
   editor,
   lineSwitch,
+  settings,
 }: {
   status: RouteStatus;
   events: RouteEvent[];
@@ -383,6 +385,11 @@ export function RouteLineDetail({
   editor?: ReactNode;
   /** 手动换线路（点状态胶囊）；只读列表用，编辑器里的由编辑器自己带。 */
   lineSwitch?: RouteLineSwitch;
+  /**
+   * 有编辑器时：「线路」标题右边那行（怎么切的摘要）是个下拉，点开出「添加备用线路 / 拖动排序 / 怎么切 / 高级策略」
+   * （2.3.499，照效果图 ①：默认只看到线路几行，下面紧跟着连接）。
+   */
+  settings?: { open: boolean; onToggle: () => void };
 }) {
   const now = nowMs ?? Date.now();
   const chip = routeSwitchChip(status, events, now, timeZone);
@@ -391,18 +398,34 @@ export function RouteLineDetail({
       <RouteLineHero status={status} />
       <RouteLineDiagram status={status} modeLabel={modeLabel} timeZone={timeZone} />
       <div>
-        <LineSec left="线路" right={routeLineSwitchSummary(status)} />
+        <LineSec
+          left="线路"
+          right={settings ? (
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 hover:text-foreground"
+              aria-expanded={settings.open}
+              title={settings.open ? "收起" : "添加备用线路、排序、怎么切、高级策略"}
+              onClick={settings.onToggle}
+              data-testid="route-line-settings"
+            >
+              {routeLineSwitchSummary(status)}
+              <ChevronDown className={cn("h-3.5 w-3.5 shrink-0 transition-transform", settings.open && "rotate-180")} aria-hidden="true" />
+            </button>
+          ) : routeLineSwitchSummary(status)}
+        />
         {editor ?? <RouteLineList status={status} onPause={onPause} pausing={pausing} lineSwitch={lineSwitch} />}
       </div>
       <div>
-        <LineSec left="连接 · 最近 10 分钟" right={<span title="入站：客户端连进来后拨通一条路径的比例；第二段：入口真实拨号的成功率；后面每段：中转探下一跳（近 20 次）">精确到哪一段</span>} />
-        <LineCard className="px-2 py-3">
+        {/* 右边那句「精确到哪一段」去掉了（2.3.499，用户嫌字多）：各段怎么算的放在标题的 title 里 */}
+        <LineSec left={<span title="入站：客户端连进来后拨通一条路径的比例；第二段：入口真实拨号的成功率；后面每段：中转探下一跳（近 20 次）">连接 · 最近 10 分钟</span>} />
+        <LineCard className="px-2 py-4">
           <RouteStageStrip status={status} />
           {/*
             最近一次切换 + 异常明细排一行。「暂停这条」去掉了：上面线路列表里每一行都有暂停键，
             两个地方做同一件事反而让人犹豫该点哪个。
           */}
-          <div className="mt-4 flex min-w-0 items-center justify-between gap-2">
+          <div className="mt-[18px] flex min-w-0 items-center justify-between gap-2">
             <span className={lineChipClass("default", "min-w-0")} data-testid="route-line-switch-chip">
               <LineDot tone={chip.tone} /><span className="truncate">{chip.text}</span>
             </span>

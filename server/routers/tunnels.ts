@@ -46,7 +46,6 @@ import {
   tunnelParallelStreamsUnavailableReason,
 } from "../../shared/tunnelParallelStreams";
 import { normalizeExitGroupStrategy } from "../../shared/exitStrategy";
-import { buildLinkOverview } from "../../shared/linkOverview";
 import { assertMimicEnvironment } from "../mimicEnvironment";
 import {
   defaultTunnelHostAddress,
@@ -918,32 +917,6 @@ export const tunnelsRouter = router({
         const hydrated = attachTunnelAvailability(hydratedRows, availabilityIndex)[0] || null;
         return hydrated ? tunnelForUser(hydrated, accessScope) : null;
       }),
-    /**
-     * 链路管理的「线路总览」：线路组、转发组、入口组、出口组、隧道里所有「多条线路一起用」的，
-     * 按主备 / 负载均衡 / 单连接叠加归好（shared/linkOverview.ts）。只读，改还是去各自那页。
-     */
-    linkOverview: adminProcedure.query(async () => {
-      const [hosts, tunnels, groups, rules] = await Promise.all([
-        db.getHosts(),
-        db.getTunnels(),
-        db.getForwardGroups(),
-        db.getForwardRules(undefined, undefined, { failoverOnly: true }),
-      ]);
-      const tunnelIds = (tunnels as any[]).map((tunnel) => Number(tunnel.id));
-      const [hops, exitNodes] = await Promise.all([
-        db.getTunnelHopsByTunnelIds(tunnelIds),
-        db.getTunnelExitNodesByTunnelIds(tunnelIds),
-      ]);
-      return buildLinkOverview({
-        hosts: hosts as any[],
-        tunnels: tunnels as any[],
-        hops: hops as any[],
-        exitNodes: exitNodes as any[],
-        groups: groups as any[],
-        // 转发组派生出来的子规则跟着组走，不单独算一条线路组。
-        routeRules: (rules as any[]).filter((rule) => !rule.pendingDelete && !Number(rule.forwardGroupRuleId || 0)),
-      });
-    }),
     listAll: adminProcedure.query(async () => {
       const hydrated = await attachTunnelEndpointHosts(await db.getTunnels() as any[]);
       const availabilityIndex = availabilityIndexForHydratedTunnels(hydrated);

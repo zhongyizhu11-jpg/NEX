@@ -53,8 +53,9 @@ import { newRouteLine, routeLinesFromPaths, serializeRouteLines, type RouteLine 
        指定走哪条（手动主备），按时段下可以时段外择优（混合）；时段表、分法、每条线路的权重就地配。
        「切换不断连」= 热备。
     3. 高级策略：几条一起用、切换保护（连续失败次数、持续多久、恢复稳定多久、最短驻留、切不切回）、
-       择优门槛、计划切换预热、旧连接怎么办、应急人工指定、每条线路的探测地址。
-       折起来时折叠条上列出改过模板值的项；有改过的，打开编辑框直接展开。
+       择优门槛、计划切换预热、旧连接怎么办、应急人工指定（线路详情里没有：那里点状态胶囊就能切）、
+       每条线路的探测地址。折叠条上只写「高级策略」和箭头（2.3.499 起，用户不要那一长串摘要）；规则表单里
+       有改过模板值的，打开时直接展开。
 
   2.3.497 起只认线路：老草稿只有路径的，打开时按路径还原成线路（routeLinesFromPaths），改了就按线路存。
 */
@@ -107,6 +108,16 @@ export type RouteGroupFieldsProps = {
   /** 线路详情里：此刻在走的那条（描边），主线路也收成一行（见 RouteLinesEditor）。 */
   activeLineKey?: string | null;
   startCollapsed?: boolean;
+  /**
+   * 线路详情里：每条线路的状态胶囊能「切到这条」（马上生效），高级策略里就不再放「应急人工指定」——
+   * 两处做同一件事（2.3.499）。规则表单里没有胶囊，照旧在高级策略里指定。
+   */
+  pinOnLineStatus?: boolean;
+  /**
+   * 「+ 添加备用线路」、拖动排序、「怎么切」「高级策略」出不出（2.3.499）：线路详情照效果图 ① 默认只有
+   * 线路几行，这几样收在「线路」标题右边那行（怎么切的摘要 + 箭头）里，点开才出来。规则表单里一直出。
+   */
+  groupSettingsOpen?: boolean;
 };
 
 export type RouteNodeOption = { id: number; name: string; address: string; port: number; protocol?: string };
@@ -237,12 +248,43 @@ export function routeGroupPayload(group: RouteGroupDraft) {
   };
 }
 
+const lineKeyOf = (path: { key: string; lineKey?: string | null } | undefined) => path?.lineKey || path?.key || null;
+
+/**
+ * 某条路径在另一份展开里是第几条：同一条路径（展开出来的 key 由线路和候选组合定）还在就是它，
+ * 不在了就是同一条线路展开出来的第一条；那条线路也没了是 -1。
+ */
+export function routePathIndexFor(paths: ReadonlyArray<{ key: string; lineKey?: string | null }>, target: { key: string; lineKey?: string | null }): number {
+  const same = paths.findIndex((path) => path.key === target.key);
+  if (same >= 0) return same;
+  const line = lineKeyOf(target);
+  return line ? paths.findIndex((path) => lineKeyOf(path) === line) : -1;
+}
+
+/**
+ * 线路改了、重新展开之后，原来指着第 index 条路径的（钉子、时段表的目标）该指新的第几条：跟着线路走。
+ * 以前只是把下标夹到范围里 —— 主线路多并列一台、展开多出一条，钉在备用上的就挪到了主线路上。
+ * 指着的那条线路删掉了返回 null；老草稿的路径没有线路归属、对不上时照旧夹到范围里。
+ */
+export function followRoutePath(
+  before: ReadonlyArray<{ key: string; lineKey?: string | null }>,
+  after: ReadonlyArray<{ key: string; lineKey?: string | null }>,
+  index: number,
+): number | null {
+  const clamped = Math.min(Math.max(0, index), Math.max(0, after.length - 1));
+  const target = before[index];
+  if (!target) return clamped;
+  const found = routePathIndexFor(after, target);
+  if (found >= 0) return found;
+  return target.lineKey ? null : clamped;
+}
+
 export type RouteAdvancedSummaryInput = {
   policy: RouteGroupPolicy;
   probes: number;
 };
 
-/** 「高级策略」折起来时挂在折叠条上的摘要：只列和模板值不一样的。 */
+/** 和模板值不一样的高级项（规则表单打开时有这些就直接展开「高级策略」）。 */
 export function summarizeRouteAdvanced({ policy, probes }: RouteAdvancedSummaryInput): string[] {
   const template = routeTemplateGuards(policy.mode);
   const items: string[] = [];
@@ -338,6 +380,8 @@ export function RouteGroupFields({
   renderLineStatus,
   activeLineKey = null,
   startCollapsed = false,
+  pinOnLineStatus = false,
+  groupSettingsOpen = true,
 }: RouteGroupFieldsProps) {
   const now = nowMs ?? Date.now();
   const udpOnly = normalizeForwardRuleProtocol(protocol) === "udp";
@@ -360,8 +404,7 @@ export function RouteGroupFields({
   }, [storedLines, paths]);
   const lines = storedLines || restoredLines || [];
   const probes = lines.filter((line) => !!line.probe).length;
-  const advancedSummary = summarizeRouteAdvanced({ policy: routePolicy, probes });
-  const [advancedOpen, setAdvancedOpen] = useState(() => defaultAdvancedOpen ?? advancedSummary.length > 0);
+  const [advancedOpen, setAdvancedOpen] = useState(() => defaultAdvancedOpen ?? summarizeRouteAdvanced({ policy: routePolicy, probes }).length > 0);
   /*
     这一次打开编辑框里选过的钉住时长。只用来标出选中的是哪一块：期限本身存的是一个时刻，
     过一秒就和任何一个「现在 + N」对不上。
@@ -384,19 +427,25 @@ export function RouteGroupFields({
   const setWindows = (next: FailoverScheduleWindow[]) => setPolicy({
     schedule: next.length > 0 ? { timezone: scheduleTimeZone, windows: next } : null,
   });
-  /** 线路改了：同一套函数在本地展开一遍，paths 就是预览（钉子、时段表都按它数）。 */
+  /**
+   * 线路改了：同一套函数在本地展开一遍，paths 就是预览（钉子、时段表都按它数）。钉子和时段表的目标
+   * 跟着线路走（followRoutePath）；钉着的那条线路删掉了，钉子也去掉，不改钉到别的线路上；时段表指着的
+   * 线路删掉了改指主线路。
+   */
   const setLines = (next: RouteLine[]) => {
     const preview = expandForPreview(next, { entryHostId, pools, tunnels });
-    const count = Math.max(1, preview.paths.length);
-    const clamp = (index: number) => Math.min(index, count - 1);
+    const follow = (index: number) => followRoutePath(paths, preview.paths, index);
+    const pinIndex = routePolicy.pin ? follow(routePolicy.pin.index) : null;
     onChange({
       ...value,
       lines: next,
       paths: preview.paths,
       policy: {
         ...routePolicy,
-        pin: routePolicy.pin ? { ...routePolicy.pin, index: clamp(routePolicy.pin.index) } : null,
-        schedule: routePolicy.schedule ? { ...routePolicy.schedule, windows: routePolicy.schedule.windows.map((window) => ({ ...window, targetIndex: clamp(window.targetIndex) })) } : null,
+        pin: routePolicy.pin && pinIndex !== null ? { ...routePolicy.pin, index: pinIndex } : null,
+        schedule: routePolicy.schedule
+          ? { ...routePolicy.schedule, windows: routePolicy.schedule.windows.map((window) => ({ ...window, targetIndex: follow(window.targetIndex) ?? 0 })) }
+          : null,
       },
     });
   };
@@ -580,8 +629,9 @@ export function RouteGroupFields({
         renderLineStatus={renderLineStatus}
         activeLineKey={activeLineKey}
         startCollapsed={startCollapsed}
+        arrange={groupSettingsOpen}
       />
-      <div className="fx-line-ui flex min-w-0 flex-col" data-testid="route-line-mode">
+      {groupSettingsOpen ? <div className="fx-line-ui flex min-w-0 flex-col" data-testid="route-line-mode">
         <LineSec left="怎么切" />
         <LineCard>
           <LineSegmented
@@ -676,30 +726,31 @@ export function RouteGroupFields({
             </LineHint>
           ) : null}
         </LineCard>
-      </div>
+      </div> : null}
       {(policy?.warnings || []).map((warning) => (
         <p key={warning} className="rounded-[var(--fx-radius-control)] bg-[var(--fx-warn-soft)] px-3 py-2 text-xs leading-5 text-[var(--fx-warn-text)]">
           {warning}
         </p>
       ))}
 
-      <div className="flex min-w-0 flex-col border-t border-[var(--fx-stroke-weak)] pt-1">
+      {/*
+        高级策略自成一个框（2.3.499）：折叠条只有标题和箭头（原来后面挂一长串改过的项，用户嫌乱 —— 要看点开看）；
+        原来只在上面画一条线，下面紧挨着详情的「连接」那一节，看着挤、分不清是谁的。
+      */}
+      {groupSettingsOpen ? <LineCard className="fx-line-ui p-0" data-testid="route-advanced">
         <button
           type="button"
-          className="flex min-h-9 w-full min-w-0 items-center gap-2 text-left"
+          className="flex w-full min-w-0 items-center justify-between gap-2 px-[14px] py-[11px] text-left"
           aria-expanded={advancedOpen}
           onClick={() => setAdvancedOpen(!advancedOpen)}
+          data-testid="route-advanced-toggle"
         >
-          <span className="shrink-0 text-secondary-type font-medium">高级策略</span>
-          {/* 折起来也得看得见里面动过什么 —— 收纳不是藏。 */}
-          <span className="min-w-0 flex-1 truncate text-meta text-muted-foreground" data-testid="route-advanced-summary">
-            {advancedSummary.length > 0 ? advancedSummary.join(" · ") : "按模板预填，一般不用动"}
-          </span>
+          <span className="text-[13px] font-medium">高级策略</span>
           <ChevronDown className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", advancedOpen && "rotate-180")} />
         </button>
 
         {advancedOpen ? (
-          <div className="fx-line-ui flex min-w-0 flex-col gap-4 pb-1 pt-2">
+          <div className="flex min-w-0 flex-col gap-4 border-t border-[var(--fx-stroke-weak)] px-[14px] pb-[14px] pt-3">
             <PolicyGroup
               title="几条一起用"
               note="默认一次只走一条。聚合：主线路那组的几条按连接分担（单个连接仍走一条）；复制：主线路走的 NEX 叠加隧道里同一份数据几条腿一起发，一条腿断了连接不断。"
@@ -861,7 +912,7 @@ export function RouteGroupFields({
               </div>
             </PolicyGroup>
 
-            {mode !== "manual" && !weighted ? (
+            {mode !== "manual" && !weighted && !pinOnLineStatus ? (
               <PolicyGroup title="应急人工指定">
                 <ConditionBlock
                   title="人工指定"
@@ -927,7 +978,7 @@ export function RouteGroupFields({
             </PolicyGroup>
           </div>
         ) : null}
-      </div>
+      </LineCard> : null}
     </div>
   );
 }

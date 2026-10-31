@@ -17,12 +17,6 @@ export const LINK_TERM_FAILOVER = "主备";
 export const LINK_TERM_LOAD_BALANCE = "负载均衡";
 export const LINK_TERM_SPLIT_CONNECTION = "单连接叠加";
 
-export const LINK_TERM_HINTS = {
-  failover: "平时走一条，坏了才换下一条",
-  loadBalance: "新连接分到几条线路上，连接多时带宽相加；单条连接仍只走一条",
-  splitConnection: "把一条连接拆开同时走几条线路、在出口拼回来，单条连接也能用上几条的带宽",
-} as const;
-
 /** 分连接的方式。值和数据库、Agent 里的一致，只是名字统一。 */
 export const LINK_SPREAD_LABELS = {
   least_load: { label: "按负载", hint: "新连接给现在最闲的那条（按实时流量、连接数和线路带宽算），最能把几条一起跑满" },

@@ -6,7 +6,7 @@ import { formatAgo } from "@shared/dashboardAttention";
 import { formatFailoverEndpoint } from "@shared/failoverTargets";
 import { formatBytes } from "@shared/formatBytes";
 import type { NetworkHealth } from "@shared/networkHealth";
-import { ROUTE_MODE_INFO, routeWeightShares } from "@shared/routeGroup";
+import { routeWeightShares } from "@shared/routeGroup";
 import { formatRouteScore, routeScoreGrade } from "@shared/routeScore";
 import type { RoutePolicy } from "@shared/routePolicy";
 import type { RouteSwitchSummary } from "@shared/routeSwitchSummary";
@@ -403,41 +403,5 @@ export function RouteMiniChain({ status, policy, onOpen, className }: { status: 
         );
       })}
     </ul>
-  );
-}
-
-/** 线路板上一条规则的卡：规则名、入口、策略、切换次数、速率，下面是路径卡。 */
-export function RouteBoardCard({ name, owner, status, policy, onOpen, onEdit }: {
-  name: string;
-  owner?: string | null;
-  status: RouteBoardStatus;
-  policy: RoutePolicy;
-  onOpen: () => void;
-  onEdit?: () => void;
-}) {
-  const info = ROUTE_MODE_INFO[policy.mode];
-  const entry = status.entry ?? null;
-  return (
-    <article className="fx-rb-card" data-testid="route-board-card">
-      <header className="fx-rb-card-head">
-        <div className="fx-rb-card-title">
-          <b className="truncate">{name}</b>
-          <span className="fx-rb-card-sub">
-            {entry ? <>{entry.name}<span className="font-mono">:{entry.sourcePort}</span></> : null}
-            {owner ? ` · ${owner}` : ""}
-            {` · ${info.template} · ${info.label}`}
-            {` · ${status.paths.length} 条路径`}
-          </span>
-        </div>
-        <div className="fx-rb-card-chips">
-          {status.switches ? <RouteSwitchChip switches={status.switches} /> : null}
-          {policy.pin ? <span className="fx-rb-chip" data-tone="warn">人工指定中</span> : null}
-          {status.rate ? <span className="fx-rb-chip" data-tone="ok">↓ {formatRate(status.rate.inBps)} · ↑ {formatRate(status.rate.outBps)}{status.rate.connections > 0 ? ` · ${status.rate.connections} 连接` : ""}</span> : null}
-          <button type="button" className="fx-rb-open" onClick={onOpen}>策略与记录</button>
-          {onEdit ? <button type="button" className="fx-rb-open" onClick={onEdit}>编辑</button> : null}
-        </div>
-      </header>
-      <RoutePathCards status={status} policy={policy} />
-    </article>
   );
 }
