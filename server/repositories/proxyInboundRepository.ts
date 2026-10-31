@@ -984,6 +984,16 @@ export async function syncProxyNodeFromInbound(inboundId: number): Promise<numbe
   const address = await getProxyInboundAddress(Number((row as any).hostId));
   const existing = (await db.select().from(proxyNodes).where(eq(proxyNodes.inboundId, inboundId))) as any[];
 
+  /*
+    落地池的成员入站（2.3.500）不派生节点：订阅里整个池只出一条池节点（server/landingPools.ts），
+    每台各派生一条就是「每台都显示」。万一留着以前派生的，删掉。
+  */
+  if (Number((row as any).nodePoolId || 0) > 0) {
+    const { deleteProxyNode } = await import("./proxySubscriptionRepository");
+    for (const node of existing) await deleteProxyNode(Number(node.id));
+    return [];
+  }
+
   if (!address) {
     /**
      * 地址没了（主机被改成无地址）时把已有的派生节点停用而不是删掉：
@@ -1122,6 +1132,13 @@ export async function syncProxyNodesForHostAddress(hostId: number): Promise<numb
   if (!address) return [];
 
   const rows = (await getProxyInboundsByHost(id)) as any[];
+  // 这台是落地池的成员：池节点的首选、线路里落在这台上的那几条路径、直连域名的解析跟着新地址走。
+  if (rows.some((row) => Number(row.nodePoolId || 0) > 0)) {
+    const { refreshLandingPoolsForHost } = await import("../landingPools");
+    await refreshLandingPoolsForHost(id, `host-address-${id}`).catch((error) => {
+      console.warn(`[LandingPool] 主机 ${id} 换地址后同步落地池失败: ${error instanceof Error ? error.message : String(error)}`);
+    });
+  }
   if (rows.length === 0) return [];
 
   const inboundIds = rows.map((row) => Number(row.id)).filter((value) => value > 0);

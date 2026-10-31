@@ -23,6 +23,14 @@ import {
 } from "./proxyNode";
 import { buildSingboxRouting, type ResolvedInboundRoute } from "./inboundRouting";
 
+/**
+ * REALITY 要偷的默认握手域名。
+ *
+ * 挑的标准是「随处可达、TLS 1.3、证书链正常、且本身流量就大」—— 偷一个冷门站点
+ * 反而显眼。用户可以改。
+ */
+export const PROXY_INBOUND_DEFAULT_REALITY_SERVER_NAME = "dl.google.com";
+
 /** 能作为落地节点开出去的协议。与 PROXY_NODE_PROTOCOLS 一致，因为两头都由 sing-box 承担。 */
 export const PROXY_INBOUND_PROTOCOLS = [
   "vless",

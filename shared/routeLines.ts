@@ -205,7 +205,8 @@ export function routeLinesFromPaths(paths: RoutePath[]): RouteLine[] {
     });
     const dests: RouteDestCandidate[] = [];
     for (const path of group) {
-      const candidate = { dest: path.dest, destNodeId: path.destNodeId };
+      // 落在落地池某台成员上的路径（destHostId）：还原成「落地 = 这个池节点」，几台成员是同一个候选
+      const candidate = path.destHostId && path.destNodeId ? { dest: null, destNodeId: path.destNodeId } : { dest: path.dest, destNodeId: path.destNodeId };
       if (!dests.some((item) => sameEndpoint(item.dest, candidate.dest) && item.destNodeId === candidate.destNodeId)) dests.push(candidate);
     }
     return {
@@ -256,7 +257,48 @@ export type RouteExpandContext = {
   tunnel: (tunnelId: number) => RouteTunnelInfo | null;
   /** 一段的延迟估计（毫秒）；不知道返回 null。from 为 0 表示入口机。 */
   estimateMs?: (fromHostId: number, toHostId: number) => number | null;
+  /**
+   * 落地选的节点是落地池的池节点（2.3.500）：池里开着的成员（按池里的顺序），一台展开一条路径；
+   * 不是池节点返回 null（照普通节点处理）。
+   */
+  landingPool?: (nodeId: number) => RouteLandingPoolInfo | null;
+  /** 规则自己的目标绑着的节点：是落地池的池节点时，线路里「规则目标」那个落地就是这个池。 */
+  ruleTargetNodeId?: number | null;
 };
+
+export type RouteLandingPoolInfo = {
+  poolId: number;
+  name: string;
+  /** 开着的成员；dest 是那台的对外地址 + 成员入站的端口（预览和打分用，真正下发时面板按成员再解析一遍）。 */
+  members: Array<{ hostId: number; dest: RouteEndpoint | null }>;
+};
+
+/** 展开时的一个落地：普通候选，或者落地池里的某台成员（destHostId）。 */
+type ExpandedDest = RouteDestCandidate & { destHostId?: number | null };
+
+/**
+ * 线路的落地候选 → 展开用的落地：落地池（候选选的是池节点，或者「规则目标」绑着池节点）拆成每台成员一个。
+ * 池里一台开着的都没有就报出来。
+ */
+function expandLineDests(line: RouteLine, ctx: RouteExpandContext): { dests: ExpandedDest[]; issue: string | null } {
+  const raw = line.dests.length > 0 ? line.dests : [{ dest: null, destNodeId: null }];
+  const dests: ExpandedDest[] = [];
+  let issue: string | null = null;
+  for (const candidate of raw) {
+    const nodeId = candidate.destNodeId || (!candidate.dest && ctx.ruleTargetNodeId ? ctx.ruleTargetNodeId : null);
+    const pool = nodeId && ctx.landingPool ? ctx.landingPool(nodeId) : null;
+    if (!pool) {
+      dests.push(candidate);
+      continue;
+    }
+    if (pool.members.length === 0) {
+      issue = `落地池「${pool.name}」里还没有开着的机器`;
+      continue;
+    }
+    for (const member of pool.members) dests.push({ dest: member.dest, destNodeId: nodeId, destHostId: member.hostId });
+  }
+  return { dests, issue: dests.length === 0 ? issue || "这条线路没有能用的落地" : null };
+}
 
 /** 一层展开后的一个选项：经过一台机器，或者经一条隧道到它的出口机，或者跳过。 */
 type LayerOption = { hostId: number; via: number | null } | { skip: true };
@@ -315,10 +357,12 @@ function layerOptions(layer: RouteLayer, previous: number[], ctx: RouteExpandCon
   return { options, issue: options.length === 0 ? issue : null };
 }
 
-type Combo = { hops: number[]; via: Array<number | null>; dest: RouteDestCandidate; estimate: number; order: number[] };
+type Combo = { hops: number[]; via: Array<number | null>; dest: ExpandedDest; estimate: number; order: number[] };
 
 function lineCombos(line: RouteLine, ctx: RouteExpandContext, cap: number): { combos: Combo[]; issue: string | null } {
-  const dests = line.dests.length > 0 ? line.dests : [{ dest: null, destNodeId: null }];
+  const expanded = expandLineDests(line, ctx);
+  if (expanded.issue) return { combos: [], issue: expanded.issue };
+  const dests = expanded.dests;
   let partial: Array<Omit<Combo, "dest" | "estimate"> & { estimate: number }> = [{ hops: [], via: [], estimate: 0, order: [] }];
   for (const layer of line.layers) {
     const next: typeof partial = [];
@@ -359,10 +403,18 @@ function lineCombos(line: RouteLine, ctx: RouteExpandContext, cap: number): { co
   for (const combo of partial) {
     dests.forEach((dest, destIndex) => {
       const last = combo.hops.length > 0 ? combo.hops[combo.hops.length - 1] : 0;
-      void last;
+      if (dest.destHostId) {
+        // 落地池的成员：不落回入口机、不落回这条路上已经经过的机器（自己连自己的公网地址常常不通）
+        if (dest.destHostId === ctx.entryHostId || combo.hops.includes(dest.destHostId)) return;
+        const segment = ctx.estimateMs?.(last, dest.destHostId) ?? null;
+        combos.push({ ...combo, dest, estimate: combo.estimate + (segment ?? DEFAULT_SEGMENT_MS), order: [...combo.order, destIndex] });
+        return;
+      }
       combos.push({ ...combo, dest, order: [...combo.order, destIndex] });
     });
   }
+  if (combos.length === 0) return { combos, issue: "落地池里的机器都是这条线路的入口或中转：换一个落地，或者去掉这几台中转" };
+  // 有一层按整条链挑时，落地池的几台也按整条链（含最后一段）比；全按顺序时成员按池里的顺序（排第一的是首选）
   const anyBest = line.layers.some((layer) => layer.pick === "best");
   combos.sort((a, b) => (anyBest ? a.estimate - b.estimate || compareOrder(a.order, b.order) : compareOrder(a.order, b.order)));
   return { combos, issue: null };
@@ -414,7 +466,9 @@ export function expandRouteLines(lines: RouteLine[], ctx: RouteExpandContext, li
     // 按权重是一条线路一个数：展开出来的几条路径一起分它那一份（2.3.498 以前每条都拿整份，候选多的线路分得多）
     const weight = Math.max(1, Math.round(line.weight / Math.max(1, used.length)));
     used.forEach((combo, comboIndex) => {
-      const signature = `${combo.hops.join(".")}|${combo.via.map((value) => value ?? "").join(".")}|${combo.dest.dest ? `${combo.dest.dest.ip}:${combo.dest.dest.port}` : ""}|${combo.dest.destNodeId ?? ""}`;
+      // 落地池的成员按机器记（h7），不按地址：那台换了 IP，这条路径的 key 和历史不变
+      const destPart = combo.dest.destHostId ? `h${combo.dest.destHostId}` : combo.dest.dest ? `${combo.dest.dest.ip}:${combo.dest.dest.port}` : "";
+      const signature = `${combo.hops.join(".")}|${combo.via.map((value) => value ?? "").join(".")}|${destPart}|${combo.dest.destNodeId ?? ""}`;
       const key = comboIndex === 0 && perLine[lineIndex].length === 1 ? line.key : `${line.key.slice(0, 24)}-${hashKey(signature)}`;
       const hasVia = combo.via.some((value) => value !== null);
       paths.push({
@@ -424,6 +478,7 @@ export function expandRouteLines(lines: RouteLine[], ctx: RouteExpandContext, li
         ...(hasVia ? { hopVia: combo.via } : {}),
         dest: combo.dest.dest,
         destNodeId: combo.dest.destNodeId,
+        ...(combo.dest.destHostId ? { destHostId: combo.dest.destHostId } : {}),
         weight,
         // 线路上填的探测地址给它展开出来的每一条路径（以前这里写死 null，编辑框里填了也被丢掉）
         probe: line.probe ?? null,

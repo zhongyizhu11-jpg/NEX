@@ -291,7 +291,7 @@ function normalizedRouteLines(raw: unknown): string | null {
 }
 
 function routePathDefinition(path: RoutePath) {
-  return JSON.stringify([path.key, path.name, path.hops, path.dest, path.destNodeId || null, path.weight, path.probe]);
+  return JSON.stringify([path.key, path.name, path.hops, path.dest, path.destNodeId || null, path.destHostId || null, path.weight, path.probe]);
 }
 
 /**

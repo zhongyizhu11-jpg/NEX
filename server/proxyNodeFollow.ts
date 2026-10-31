@@ -52,6 +52,12 @@ export async function followBoundRulesToNode(nodeId: number, reason = "proxy-nod
   const address = String(node?.address || "").trim();
   const port = Math.floor(Number(node?.port) || 0);
   if (!node || !address || port <= 0) return result;
+  /*
+    落地池的池节点（2.3.500）：它的地址只是「现在首选哪台」。线路组的路径落在池的每台成员上
+    （RoutePath.destHostId，server/landingPools.ts 按成员解析），不能被改成池节点这一个地址；
+    这里只管普通转发（只能指向一台的那种）跟着首选走。
+  */
+  const poolNode = Number(node.nodePoolId || 0) > 0;
 
   const bound = (await db
     .select()
@@ -60,6 +66,7 @@ export async function followBoundRulesToNode(nodeId: number, reason = "proxy-nod
   for (const rule of bound) {
     // 转发组成员和线路组中继由各自的模板 / 父规则带着走，自己不动。
     if (Number(rule.forwardGroupRuleId || 0) > 0 || Number(rule.routeParentRuleId || 0) > 0) continue;
+    if (poolNode && dbBool(rule.failoverEnabled)) continue;
     if (sameEndpoint(rule.targetIp, rule.targetPort, address, port)) continue;
     await updateForwardRule(Number(rule.id), { targetIp: address, targetPort: port, isRunning: false } as any);
     if (dbBool(rule.isForwardGroupTemplate) && Number(rule.forwardGroupId || 0) > 0) {
@@ -72,7 +79,7 @@ export async function followBoundRulesToNode(nodeId: number, reason = "proxy-nod
 
   // 线路组路径的落地选的是这个节点：重新解析一遍，dest 跟着节点走（中继规则的目标也会跟着改）。
   const marker = `%"destNodeId":${id}%`;
-  const referencing = (await db
+  const referencing = poolNode ? [] : (await db
     .select({ id: forwardRules.id, routePaths: forwardRules.routePaths, hostId: forwardRules.hostId, tunnelId: forwardRules.tunnelId })
     .from(forwardRules)
     .where(and(like(forwardRules.routePaths, marker), eq(forwardRules.pendingDelete, false)))) as any[];

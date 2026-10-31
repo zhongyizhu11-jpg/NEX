@@ -20,6 +20,7 @@ import {
   createEmptyProxyInbound,
   proxyInboundSecurities,
   proxyInboundTransports,
+  PROXY_INBOUND_DEFAULT_REALITY_SERVER_NAME,
   PROXY_INBOUND_PROTOCOLS,
   PROXY_INBOUND_SECURITIES,
   PROXY_INBOUND_SNELL_DEFAULT_VERSION,
@@ -66,13 +67,7 @@ import {
   generateRealityShortId,
 } from "../proxyRealityKeys";
 
-/**
- * REALITY 要偷的默认握手域名。
- *
- * 挑的标准是「随处可达、TLS 1.3、证书链正常、且本身流量就大」—— 偷一个冷门站点
- * 反而显眼。用户可以改。
- */
-const DEFAULT_REALITY_SERVER_NAME = "dl.google.com";
+const DEFAULT_REALITY_SERVER_NAME = PROXY_INBOUND_DEFAULT_REALITY_SERVER_NAME;
 
 async function assertAllowed(ctx: any) {
   if (ctx.user.role === "admin") return;
@@ -88,6 +83,18 @@ async function assertOwnedInbound(id: number, ctx: any) {
 }
 
 /**
+ * 落地池的成员入站（2.3.500）是面板照池的配置开的：每台一模一样，单独改一台就和别的对不上，
+ * 下次同步也会被改回去。改、换密钥、删都到节点池里做（池里去掉这台就收掉它）。
+ */
+async function assertNotLandingPoolMember(row: any) {
+  const poolId = Number(row?.nodePoolId || 0);
+  if (!(poolId > 0)) return;
+  const { getNodePool } = await import("../nodePools");
+  const pool = await getNodePool(poolId).catch(() => null);
+  throw new Error(`这是落地池「${pool?.name || `#${poolId}`}」在这台机器上开的入站：到 链路管理 → 节点池 里改（每台一起改）`);
+}
+
+/**
  * 这个用户还能不能再开一个落地节点。
  *
  * 主机授权只管「能在哪台机器上开」，管不住「开几个」—— 一个拿到主机授权的租户
@@ -96,7 +103,7 @@ async function assertOwnedInbound(id: number, ctx: any) {
  * 检查的是**归属者**的额度而不是操作者的：管理员替租户开节点时，占的是租户的份额。
  * 管理员自己不受限 —— 他要是想开满，配额也拦不住他，拦了反而碍事。
  */
-async function assertInboundQuota(ownerId: number, ctx: any) {
+export async function assertInboundQuota(ownerId: number, ctx: any) {
   if (ctx.user.role === "admin" && ownerId === ctx.user.id) return;
   const owner = await db.getUserById(ownerId);
   const limit = Number((owner as any)?.maxProxyInbounds || 0);
@@ -155,7 +162,7 @@ async function assertUsableHost(hostId: number, ctx: any) {
 }
 
 /** 普通用户开在别人机器上的入站：靠的是主机授权，授权收回后运行时不再下发它。 */
-function inboundNeedsHostGrant(ctx: any, host: any) {
+export function inboundNeedsHostGrant(ctx: any, host: any) {
   return ctx.user.role !== "admin" && Number(host?.userId) !== Number(ctx.user.id);
 }
 
@@ -175,11 +182,30 @@ async function assertInboundPortAllowed(ctx: any, host: any, port: number, exclu
   if (await db.isPortUsedOnHost(hostId, port, undefined, "both", undefined, true, undefined, excludeInboundId)) {
     throw new Error(`该主机的 ${port} 端口已被转发规则或隧道占用`);
   }
-  if (!inboundNeedsHostGrant(ctx, host)) return;
+  const policyError = await inboundHostPortPolicyError(ctx, host, port);
+  if (policyError) throw new Error(policyError);
+}
+
+/** 别人机器上的端口策略（范围 / 白名单）和套餐端口区间；自己的机器不受限。null = 能开。 */
+async function inboundHostPortPolicyError(ctx: any, host: any, port: number): Promise<string | null> {
+  if (!inboundNeedsHostGrant(ctx, host)) return null;
   let policy = portPolicyFrom(host);
-  const planRange = await db.getUserPlanPortRange(ctx.user.id, hostId);
+  const planRange = await db.getUserPlanPortRange(ctx.user.id, Number(host.id));
   if (planRange) policy = combinePortPolicies(policy, portPolicyFrom({ portRanges: planRange.ranges }));
-  if (!isPortAllowedByPolicy(port, policy)) throw new Error(portPolicyErrorMessage(policy, "落地节点端口"));
+  return isPortAllowedByPolicy(port, policy) ? null : portPolicyErrorMessage(policy, "落地节点端口");
+}
+
+/**
+ * 这个端口按规矩能不能开（不看占没占用）：别人机器上的系统端口、面板端口，主机的端口策略和套餐区间。
+ * 返回给人看的原因，null = 能开。落地池给每台成员挑端口时用它（被占了还能换一个，不合规矩就是不行）。
+ */
+export async function inboundPortPolicyError(ctx: any, host: any, port: number): Promise<string | null> {
+  try {
+    assertTenantListenPortAllowed({ actor: ctx.user, host, port, label: "落地节点端口" });
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  return inboundHostPortPolicyError(ctx, host, port);
 }
 
 /**
@@ -490,6 +516,16 @@ export const proxyInboundsRouter = router({
     const usersByInbound = await db.getProxyInboundUsersByInbounds(rows.map((row: any) => Number(row.id)));
     // 带分流的入站：每条分流现在实际去了哪（自动挑的那台、或者为什么拒绝 / 直连）。
     const routingStatus = await describeInboundRoutingStatus(rows as any[]).catch(() => new Map());
+    // 落地池的成员入站：行上标「来自落地池 X」，点过去到节点池（2.3.500）
+    const poolIds = Array.from(new Set((rows as any[]).map((row) => Number(row.nodePoolId || 0)).filter((id) => id > 0)));
+    const poolNames = new Map<number, string>();
+    if (poolIds.length > 0) {
+      const { getNodePool } = await import("../nodePools");
+      for (const poolId of poolIds) {
+        const pool = await getNodePool(poolId).catch(() => null);
+        poolNames.set(poolId, pool?.name || `落地池 #${poolId}`);
+      }
+    }
     /*
       这些端口所在机器的机房额度。
 
@@ -544,6 +580,8 @@ export const proxyInboundsRouter = router({
         (derived.get(Number(row.id))?.ids || []).flatMap((id: number) => shareUserIds.get(Number(id)) || []),
       ).size,
       hostQuota: hostQuotaOf(Number(row.hostId)),
+      nodePoolId: Number(row.nodePoolId || 0),
+      nodePoolName: poolNames.get(Number(row.nodePoolId || 0)) || null,
       routingJson: undefined,
       routing: parseInboundRouting(row.routingJson),
       routingStatus: routingStatus.get(Number(row.id)) || [],
@@ -642,6 +680,7 @@ export const proxyInboundsRouter = router({
     .mutation(async ({ ctx, input }) => {
       await assertAllowed(ctx);
       const row = await assertOwnedInbound(input.id, ctx);
+      await assertNotLandingPoolMember(row);
       const hostId = input.hostId ?? Number(row.hostId);
       const hostChanged = hostId !== Number(row.hostId);
       /*
@@ -752,6 +791,7 @@ export const proxyInboundsRouter = router({
     .mutation(async ({ ctx, input }) => {
       await assertAllowed(ctx);
       const row = await assertOwnedInbound(input.id, ctx);
+      await assertNotLandingPoolMember(row);
       const current = await db.loadProxyInbound(input.id);
       if (!current) throw new Error("落地节点不存在");
       const inbound = fillGeneratedCredentials({
@@ -780,6 +820,7 @@ export const proxyInboundsRouter = router({
     .mutation(async ({ ctx, input }) => {
       await assertAllowed(ctx);
       const row = await assertOwnedInbound(input.id, ctx);
+      await assertNotLandingPoolMember(row);
       // 还有转发规则拿它当 Shadowsocks 出口：删了那些规则会断，先让人把规则改掉（报错里列出规则）。
       await assertProxyInboundNotUsedAsEgress(input.id);
       // 别的落地分流时点名走它：删了那部分流量就只能拒绝，先让人把分流改掉。

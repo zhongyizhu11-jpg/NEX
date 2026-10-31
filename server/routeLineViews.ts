@@ -256,28 +256,32 @@ export async function poolBoard(actor: { id: number; role: string }) {
   // 成员的毫秒数：任一中转 / 入口探它的那一段里最快的（没人探过 = null）。
   const latencyInto = (hostId: number) => routeLatencyIntoHost(hostId);
 
-  const nodePools = pools.map((pool) => {
+  const { landingPoolView } = await import("./landingPoolSave");
+  const nodePools = await Promise.all(pools.map(async (pool) => {
     const members: PoolMemberView[] = pool.hostIds.map((hostId) => {
       const host = hostById.get(hostId);
       return { hostId, name: String(host?.name || `主机 ${hostId}`), ...hostState(host, tripped), latencyMs: latencyInto(hostId) };
     });
     const used = usage.get(pool.id);
     const picks = used ? Array.from(used.picks) : [];
+    // 落地池（2.3.500）：协议一句话、每台开出来没有（端口、换了端口、为什么没开）、在用的转发
+    const landing = await landingPoolView(pool).catch(() => null);
     return {
       id: pool.id,
       name: pool.name,
       role: pool.role,
       note: pool.note,
       hostIds: pool.hostIds,
+      landing,
       // 跟着这个池的入口组 / 出口组（2.3.497）
       followers: groups.filter((group) => Number(group.poolId || 0) === pool.id).map((group) => String(group.domain || group.name || "")),
       members,
       usable: members.filter((member) => member.tone === "ok").length,
       total: members.length,
-      lines: used ? used.rules.size : 0,
+      lines: used ? used.rules.size : landing?.rules ?? 0,
       pick: picks.length === 0 ? null : picks.length > 1 ? "混用" : picks[0] === "order" ? "按顺序" : "整链最优",
     };
-  });
+  }));
 
   let ddnsProvider: string | null = null;
   try {

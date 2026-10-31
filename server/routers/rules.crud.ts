@@ -181,6 +181,8 @@ const routePathInputSchema = z.object({
   dest: routeEndpointInputSchema.nullable().optional(),
   /** 落地选的是「我的节点」：面板按节点解析 dest，节点地址变了跟着改。 */
   destNodeId: z.number().int().positive().nullable().optional(),
+  /** 落地是落地池（destNodeId 是池节点）：这条路径落在池里的哪台成员上（服务端展开时填）。 */
+  destHostId: z.number().int().positive().nullable().optional(),
   weight: z.number().int().min(ROUTE_GUARD_LIMITS.weight.min).max(ROUTE_GUARD_LIMITS.weight.max).optional(),
   probe: routeEndpointInputSchema.nullable().optional(),
   /** 线路展开出来的路径带的几项（服务端展开时填，老界面不传）。 */
@@ -536,6 +538,7 @@ function normalizeRouteGroupInput(input: FailoverInput, context: NormalizeFailov
       const hops = Array.from(new Set((raw.hops || []).map((hop) => Math.floor(Number(hop))).filter((hop) => hop > 0)));
       const dest = raw.dest ? { ip: String(raw.dest.ip).trim(), port: Number(raw.dest.port) } : null;
       const destNodeId = Number((raw as any).destNodeId || 0) > 0 ? Math.floor(Number((raw as any).destNodeId)) : null;
+      const destHostId = destNodeId && Number((raw as any).destHostId || 0) > 0 ? Math.floor(Number((raw as any).destHostId)) : null;
       const stored = storedByKey.get(key);
       const hopVia = Array.isArray((raw as any).hopVia) && (raw as any).hopVia.length === hops.length ? (raw as any).hopVia : undefined;
       const unchanged = !!stored
@@ -543,7 +546,8 @@ function normalizeRouteGroupInput(input: FailoverInput, context: NormalizeFailov
         && stored.hops.every((hop, index) => hop === hops[index])
         && (stored.hopVia || []).join(".") === (hopVia || []).join(".")
         && sameEndpoint(stored.dest, dest)
-        && (stored.destNodeId || null) === destNodeId;
+        && (stored.destNodeId || null) === destNodeId
+        && (stored.destHostId || null) === destHostId;
       return {
         key,
         name: String(raw.name || "").trim().slice(0, 40),
@@ -554,6 +558,7 @@ function normalizeRouteGroupInput(input: FailoverInput, context: NormalizeFailov
         ...((raw as any).lineKey ? { lineKey: (raw as any).lineKey } : {}),
         dest,
         destNodeId,
+        ...(destHostId ? { destHostId } : {}),
         weight: raw.weight ?? stored?.weight ?? 50,
         probe: raw.probe ? { ip: String(raw.probe.ip).trim(), port: Number(raw.probe.port) } : null,
         // 拨号地址由保存后的同步解析；中转和落地没动的路径先沿用上次的，Agent 不用等一轮。
@@ -2315,6 +2320,15 @@ export const crudRulesRouter = router({
       ...ruleLimitInputShape,
     }))
     .mutation(async ({ input, ctx }) => {
+      // 目标是落地池的池节点（2.3.500）：能做成线路组就做成「落地 = 这个池」，在几台里分（server/landingRouteTarget.ts）
+      {
+        const { applyLandingPoolTargetToRuleInput } = await import("../landingRouteTarget");
+        await applyLandingPoolTargetToRuleInput(input as any, ctx.user, {
+          hostId: Number(input.hostId || 0),
+          tunnelId: input.tunnelId ?? null,
+          forwardGroupId: Number((input as any).forwardGroupId || 0) || null,
+        });
+      }
       // 线路（分层候选）→ 具体路径：展开要查池、隧道、看得见哪些机器，放在所有同步校验之前。
       if ((input as any).routeGroup?.lines?.length) {
         Object.assign(input, await expandRouteGroupInputLines(input as any, ctx.user, Number(input.hostId || 0), input.tunnelId ?? null, {
@@ -2579,13 +2593,26 @@ export const crudRulesRouter = router({
       // 单条规则限额和出口一样：先校验，主流程成功后单独落库。用户改不了管理员管理的规则。
       const limitInput = takeRuleLimitInput(input as any);
       const ruleBeforeUpdate = await db.getForwardRuleById(input.id);
+      if (ruleBeforeUpdate && !dbBool((ruleBeforeUpdate as any).pendingDelete)) {
+        // 目标换成了落地池的池节点（2.3.500）：能做成线路组就做成「落地 = 这个池」
+        const { applyLandingPoolTargetToRuleInput } = await import("../landingRouteTarget");
+        await applyLandingPoolTargetToRuleInput(input as any, ctx.user, {
+          rule: ruleBeforeUpdate,
+          hostId: Number(input.hostId ?? (ruleBeforeUpdate as any).hostId ?? 0),
+          tunnelId: input.tunnelId !== undefined ? input.tunnelId : ((ruleBeforeUpdate as any).tunnelId ?? null),
+          forwardGroupId: Number((input as any).forwardGroupId ?? (ruleBeforeUpdate as any).forwardGroupId ?? 0) || null,
+        });
+      }
       if ((input as any).routeGroup?.lines?.length && ruleBeforeUpdate) {
         Object.assign(input, await expandRouteGroupInputLines(
           input as any,
           ctx.user,
           Number(input.hostId ?? (ruleBeforeUpdate as any).hostId ?? 0),
           input.tunnelId !== undefined ? input.tunnelId : ((ruleBeforeUpdate as any).tunnelId ?? null),
-          { groupTemplate: Number((input as any).forwardGroupId ?? (ruleBeforeUpdate as any).forwardGroupId ?? 0) > 0 },
+          {
+            groupTemplate: Number((input as any).forwardGroupId ?? (ruleBeforeUpdate as any).forwardGroupId ?? 0) > 0,
+            ruleTargetNodeId: Number((ruleBeforeUpdate as any).proxyNodeId || 0) || null,
+          },
         ));
       }
       if (ruleBeforeUpdate && !dbBool((ruleBeforeUpdate as any).pendingDelete)) {

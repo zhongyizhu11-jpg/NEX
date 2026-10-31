@@ -665,6 +665,13 @@ export const proxyNodes = table("proxy_nodes", {
   // 对应入站上的哪个用户（proxy_inbound_users.id）。0 表示该协议只有单用户。
   // 派生时靠它把节点与用户对齐，用户删掉时才知道该删哪一条节点。
   inboundUserId: int("inboundUserId").notNull().default(0),
+  /**
+   * 落地池的节点（2.3.500，server/landingPools.ts）：0 = 不是。整个池在订阅里就这一条（多用户协议
+   * 一个池用户一条），成员机上的入站不再各派生节点。inboundUserId 这时记的是池用户的 id。
+   */
+  nodePoolId: int("nodePoolId").notNull().default(0),
+  /** 落地池分享时单独给那个人发的凭据（收件人 id）：不进主人自己的订阅。0 = 不是。 */
+  poolSharedUserId: int("poolSharedUserId").notNull().default(0),
   // 这台落地机的套餐规格与用量。带宽与总流量是人填的（面板无从得知你买的是什么套餐），
   // 已用由面板自己累加 —— traffic_stats 只保留 72 小时，累计量必须单独存一列，
   // 不能靠查那张表算出来。
@@ -749,6 +756,11 @@ export const proxyInbounds = table("proxy_inbounds", {
    * 取消授权时连端口一起收掉。
    */
   clonedFromInboundId: int("clonedFromInboundId").notNull().default(0),
+  /**
+   * 落地池的成员入站（2.3.500）：0 = 不是。面板照池的配置（node_pools.landingJson）开的，凭据和
+   * 池里每台一模一样；界面上只读，改要到节点池里改。它不派生节点：订阅里整个池就一条池节点。
+   */
+  nodePoolId: int("nodePoolId").notNull().default(0),
   /**
    * 这个入站是不是普通用户靠「主机授权」开在别人机器上的。
    *

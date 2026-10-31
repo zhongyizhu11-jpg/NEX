@@ -21,6 +21,8 @@ import { getSegmentSpeedRun, startSegmentSpeedRun, type SegmentEndpoints } from 
 import { lineSegmentLatencyStatus, startLineSegmentLatency } from "../lineSegmentLatency";
 import { routeEntryHostId } from "./rules.crud";
 import { requireHostsAccess } from "./helpers";
+import { landingConfigInputSchema } from "../landingPoolSave";
+import { MAX_LANDING_POOL_MEMBERS, parseLandingConfig, serializeLandingConfig } from "@shared/landingPool";
 import { formatHostAddressWithPort, getHostEntryAddress } from "@shared/hostEntryAddress";
 import {
   describeRouteReason,
@@ -272,6 +274,7 @@ export const lineDiagnosticsRouter = router({
   /** 节点池：列表 / 建 / 改 / 删 / 从入口组、出口组导入。池改了，用到它的线路自动重新展开。 */
   nodePools: protectedProcedure.query(async ({ ctx }) => {
     const { listNodePools, ruleIdsUsingPool } = await import("../nodePools");
+    const { landingPoolView } = await import("../landingPoolSave");
     const pools = await listNodePools(ctx.user.role === "admin" ? null : ctx.user.id);
     const hostIds = Array.from(new Set(pools.flatMap((pool) => pool.hostIds)));
     const hosts = hostIds.length > 0 ? await db.getHostsByIds(hostIds) as any[] : [];
@@ -279,8 +282,10 @@ export const lineDiagnosticsRouter = router({
     const { routeTrippedNodeIds, routeSegmentLatencyEstimate } = await import("../routeGroupStats");
     void routeSegmentLatencyEstimate;
     const tripped = routeTrippedNodeIds();
-    return Promise.all(pools.map(async (pool) => ({
+    return Promise.all(pools.map(async ({ landingJson: _landingJson, landingStateJson: _state, directDnsValue: _dns, ...pool }) => ({
       ...pool,
+      // 落地池（2.3.500）：配置（不含凭据）、每台成员开出来没有、池节点、在用的转发
+      landing: await landingPoolView({ ...pool, landingJson: _landingJson, landingStateJson: _state, directDnsValue: _dns }),
       usedBy: (await ruleIdsUsingPool(pool.id)).length,
       members: pool.hostIds.map((hostId) => {
         const host = byId.get(hostId);
@@ -300,18 +305,67 @@ export const lineDiagnosticsRouter = router({
     .input(z.object({
       id: z.number().int().positive().optional(),
       name: z.string().trim().min(1).max(60),
+      // any 是 2.3.499 以前的「通用」：读成中转
       role: z.enum(["relay", "landing", "any"]).default("relay"),
       hostIds: z.array(z.number().int().positive()).max(32),
       note: z.string().trim().max(200).nullable().optional(),
+      /** 落地池的那一份配置（2.3.500）；不传 = 不改。凭据服务端生成。 */
+      landing: landingConfigInputSchema.optional(),
+      /** 落地池直连用的域名；空 = 只走中转。不传 = 不改。 */
+      directDomain: z.string().trim().max(253).nullable().optional(),
     }))
     .mutation(async ({ input, ctx }) => {
       const pools = await import("../nodePools");
+      const landingSave = await import("../landingPoolSave");
+      const landingSync = await import("../landingPools");
       await requireHostsAccess(ctx, input.hostIds);
       const hostIds = Array.from(new Set(input.hostIds));
-      if (input.id) {
-        const existing = await pools.getNodePool(input.id);
-        if (!existing || (ctx.user.role !== "admin" && existing.userId !== ctx.user.id)) throw new Error("节点池不存在");
-        await pools.updateNodePool(input.id, { name: input.name, role: input.role, hostIds, note: input.note ?? null });
+      const role = pools.normalizeNodePoolRole(input.role);
+      const existing = input.id ? await pools.getNodePool(input.id) : null;
+      if (input.id && (!existing || (ctx.user.role !== "admin" && existing.userId !== ctx.user.id))) throw new Error("节点池不存在");
+      const emptyGroups = [] as Array<{ groupId: number; added: number; removed: number; kept: number; skipped?: string; error?: string }>;
+
+      if (role === "landing") {
+        if (hostIds.length > MAX_LANDING_POOL_MEMBERS) throw new Error(`落地池最多 ${MAX_LANDING_POOL_MEMBERS} 台：每台都要开入站，线路里一台一条路径`);
+        if (existing && existing.role !== "landing") {
+          const relayRules = await pools.ruleIdsUsingPool(existing.id);
+          if (relayRules.length > 0) throw new Error(`还有 ${relayRules.length} 条线路拿这个池当中转：先在线路里换掉它，再改成落地池`);
+        }
+        const before = existing ? parseLandingConfig(existing.landingJson) : null;
+        const merged = input.landing ? landingSave.mergeLandingInput(before, input.landing) : null;
+        const directDomain = input.directDomain !== undefined ? landingSave.normalizeDirectDomain(input.directDomain) : (existing?.directDomain || null);
+        await landingSave.assertDirectDomainReady(directDomain !== (existing?.directDomain || null) ? directDomain : null);
+        const domainChanged = directDomain !== (existing?.directDomain || null);
+        const landingJson = merged ? serializeLandingConfig(merged.config) : (existing?.landingJson ?? null);
+        let id = input.id || 0;
+        if (existing) {
+          await pools.updateNodePool(existing.id, { name: input.name, role, hostIds, note: input.note ?? null, landingJson, directDomain, ...(domainChanged ? { directDnsValue: null } : {}) });
+        } else {
+          id = Number(await pools.createNodePool({ userId: ctx.user.id, name: input.name, role, hostIds, note: input.note ?? undefined, landingJson, directDomain }));
+        }
+        const synced = await landingSync.syncLandingPool(id, { reason: existing ? "node-pool-updated" : "node-pool-created", domainChanged });
+        const { syncGroupsFollowingPool } = await import("../nodePoolGroups");
+        const groups = existing ? await syncGroupsFollowingPool(id, "node-pool-updated") : emptyGroups;
+        return {
+          id,
+          reexpanded: synced.dependents,
+          groups,
+          landing: {
+            open: synced.members.filter((member) => !member.error).length,
+            total: synced.members.length,
+            fallback: synced.members.filter((member) => member.portFallback).length,
+            errors: synced.members.filter((member) => member.error).map((member) => ({ hostId: member.hostId, error: member.error })),
+            credentialsReset: !!merged?.credentialsReset,
+            dnsError: synced.dnsError,
+          },
+        };
+      }
+
+      // 中转池。原来是落地池的：先确认没转发在用，再把每台的入站和池节点收掉
+      if (existing && existing.role === "landing" && existing.landingJson) await landingSync.assertLandingPoolUnused(existing.id);
+      if (input.id && existing) {
+        await pools.updateNodePool(input.id, { name: input.name, role, hostIds, note: input.note ?? null, ...(existing.role === "landing" ? { landingJson: null, directDomain: null, directDnsValue: null, landingStateJson: null } : {}) });
+        if (existing.role === "landing") await landingSync.syncLandingPool(input.id, { reason: "node-pool-now-relay" });
         const ruleIds = await pools.ruleIdsUsingPool(input.id);
         pools.logPoolReexpand(input.id, ruleIds);
         const { reexpandRouteLinesForRules } = await import("../routeLineExpansion");
@@ -319,10 +373,22 @@ export const lineDiagnosticsRouter = router({
         // 跟着这个池的入口组 / 出口组也按新的机器同步成员
         const { syncGroupsFollowingPool } = await import("../nodePoolGroups");
         const groups = await syncGroupsFollowingPool(input.id, "node-pool-updated");
-        return { id: input.id, reexpanded: ruleIds.length, groups };
+        return { id: input.id, reexpanded: ruleIds.length, groups, landing: null };
       }
-      const id = await pools.createNodePool({ userId: ctx.user.id, name: input.name, role: input.role, hostIds, note: input.note ?? undefined });
-      return { id, reexpanded: 0, groups: [] as Array<{ groupId: number; added: number; removed: number; kept: number; skipped?: string; error?: string }> };
+      const id = await pools.createNodePool({ userId: ctx.user.id, name: input.name, role, hostIds, note: input.note ?? undefined });
+      return { id, reexpanded: 0, groups: emptyGroups, landing: null };
+    }),
+
+  /** 落地池换全部凭据和密钥（疑似泄漏时）：每台成员一起换，客户端要重新拉订阅。 */
+  nodePoolRotate: protectedProcedure
+    .input(z.object({ id: z.number().int().positive() }))
+    .mutation(async ({ input, ctx }) => {
+      const pools = await import("../nodePools");
+      const existing = await pools.getNodePool(input.id);
+      if (!existing || (ctx.user.role !== "admin" && existing.userId !== ctx.user.id)) throw new Error("节点池不存在");
+      const { rotateLandingPoolCredentials } = await import("../landingPools");
+      const synced = await rotateLandingPoolCredentials(input.id);
+      return { ok: true, open: synced.members.filter((member) => !member.error).length, total: synced.members.length };
     }),
 
   nodePoolDelete: protectedProcedure
@@ -333,10 +399,14 @@ export const lineDiagnosticsRouter = router({
       if (!existing || (ctx.user.role !== "admin" && existing.userId !== ctx.user.id)) throw new Error("节点池不存在");
       const ruleIds = await pools.ruleIdsUsingPool(input.id);
       if (ruleIds.length > 0) throw new Error(`还有 ${ruleIds.length} 条线路在用这个池：先在线路里换掉它`);
+      // 落地池：还有转发的目标是它就不让删；删了把每台的入站和池节点收掉
+      const landingSync = await import("../landingPools");
+      if (existing.role === "landing") await landingSync.assertLandingPoolUnused(input.id);
       // 跟着它的组不再跟，成员留着现在这些
       const { releaseGroupsFollowingPool } = await import("../nodePoolGroups");
       await releaseGroupsFollowingPool(input.id);
       await pools.deleteNodePool(input.id);
+      if (existing.role === "landing") await landingSync.syncLandingPool(input.id, { reason: "node-pool-deleted" });
       return { ok: true };
     }),
 
@@ -351,7 +421,8 @@ export const lineDiagnosticsRouter = router({
         .map((member: any) => Number(member.hostId));
       if (hostIds.length === 0) throw new Error("这个组里没有主机成员");
       const pools = await import("../nodePools");
-      const id = await pools.createNodePool({ userId: ctx.user.id, name: `${String(group.name || "组").slice(0, 50)}（导入）`, role: input.role, hostIds });
+      // 导入建的池是中转池（落地池要配协议，在节点池弹窗里改成落地再配）
+      const id = await pools.createNodePool({ userId: ctx.user.id, name: `${String(group.name || "组").slice(0, 50)}（导入）`, role: "relay", hostIds });
       return { id, members: hostIds.length };
     }),
   /**

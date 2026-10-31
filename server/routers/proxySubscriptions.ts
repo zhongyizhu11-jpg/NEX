@@ -261,6 +261,49 @@ async function assertExternalSourcesAllowed(ctx: any) {
   if (!plan.allowExternalSubSources) throw new Error("当前套餐不包含外部订阅，请联系管理员");
 }
 
+/** 列表里的池节点带上它的落地池：名字、几台、几台能用、直连域名。 */
+async function landingPoolNodeInfo(nodes: readonly any[]) {
+  const result = new Map<number, { id: number; name: string; members: number; ready: number; directDomain: string | null; summary: string }>();
+  const poolIds = Array.from(new Set(nodes.map((node) => Number(node.nodePoolId || 0)).filter((id) => id > 0)));
+  if (poolIds.length === 0) return result;
+  const { getNodePool } = await import("../nodePools");
+  const { describeLandingConfig, parseLandingConfig, parseLandingState } = await import("../../shared/landingPool");
+  for (const poolId of poolIds) {
+    const pool = await getNodePool(poolId).catch(() => null);
+    if (!pool) continue;
+    const config = parseLandingConfig(pool.landingJson);
+    const states = parseLandingState(pool.landingStateJson);
+    result.set(poolId, {
+      id: pool.id,
+      name: pool.name,
+      members: pool.hostIds.length,
+      ready: states.filter((state) => !state.error && state.inboundId > 0).length,
+      directDomain: pool.directDomain || null,
+      summary: config ? describeLandingConfig(config) : "",
+    });
+  }
+  return result;
+}
+
+/**
+ * 池节点是照落地池派生的（server/landingPools.ts）：名字、地址、凭据、启停、备注每次同步都会改回去，
+ * 在这里改了也留不住，所以直接说去哪改。地区、带宽、额度、前置、选路组这些池不管，照常能改；
+ * 「直连进订阅」要池设了直连域名才有意义。
+ */
+async function assertLandingPoolNodeEdit(id: number, input: { link?: string; name?: string; remark?: string | null; isEnabled?: boolean; includeDirect?: boolean }) {
+  const node = await db.getProxyNodeById(id) as any;
+  const poolId = Number(node?.nodePoolId || 0);
+  if (!(poolId > 0)) return;
+  if (input.link !== undefined || input.name !== undefined || input.remark !== undefined || input.isEnabled !== undefined) {
+    throw new Error("这是落地池的节点：名字、协议、密钥和启停都在 链路管理 → 节点池 里改（每台一起改）");
+  }
+  if (input.includeDirect === true) {
+    const { getNodePool } = await import("../nodePools");
+    const pool = await getNodePool(poolId);
+    if (!pool?.directDomain) throw new Error("落地池没设直连域名：订阅里只走中转。要直连，先在节点池里给它设一个域名");
+  }
+}
+
 export const proxySubscriptionsRouter = router({
   /** 解析一条节点链接但不落库，供界面在保存前预览与报错。 */
   parseLink: protectedProcedure
@@ -281,7 +324,9 @@ export const proxySubscriptionsRouter = router({
 
   listNodes: protectedProcedure.query(async ({ ctx }) => {
     if (!await hasProxySubscriptionPermission(ctx)) return [];
-    const nodes = await db.getProxyNodesByUser(ctx.user.id);
+    // 落地池里为分享单独发的那几份凭据不列在主人这边：它们只为收件人存在（和订阅里不出是一个口径）
+    const nodes = (await db.getProxyNodesByUser(ctx.user.id) as any[]).filter((node) => !(Number(node.poolSharedUserId || 0) > 0));
+    const poolInfo = await landingPoolNodeInfo(nodes);
     const shareUserIds = await db.getProxyNodeShareUserIds(nodes.map((node: any) => Number(node.id)));
     const ruleIdsByNode = await db.getRuleIdsUsingProxyNodes(nodes.map((node: any) => Number(node.id)));
     const allRuleIds = Array.from(new Set(Array.from(ruleIdsByNode.values()).flat()));
@@ -327,6 +372,8 @@ export const proxySubscriptionsRouter = router({
         health: resolveProxyNodeHealth(samples),
         sharedToUserIds: shareUserIds.get(Number(node.id)) || [],
         sharedFrom: false,
+        // 落地池的池节点：池名、几台、几台能用、直连域名（界面标「落地池 · 3 台」，点过去到节点池）
+        landingPool: poolInfo.get(Number(node.nodePoolId || 0)) || null,
       };
     });
 
@@ -337,8 +384,10 @@ export const proxySubscriptionsRouter = router({
      */
     const shared = await db.getProxyNodesSharedToUser(ctx.user.id);
     if (shared.length === 0) return owned;
+    const sharedPoolInfo = await landingPoolNodeInfo(shared as any[]);
     const sharedRows = shared.map((node: any) => ({
       ...redactSharedProxyNodeRow(node),
+      landingPool: sharedPoolInfo.get(Number(node.nodePoolId || 0)) || null,
       // 分享进来的节点只可能以直连形态出现：收方名下没有绑着它的转发。
       includeDirect: true,
       frontProxyId: 0,
@@ -467,6 +516,7 @@ export const proxySubscriptionsRouter = router({
     .mutation(async ({ ctx, input }) => {
       await assertProxySubscriptionAllowed(ctx);
       await assertOwnedNode(input.id, ctx);
+      await assertLandingPoolNodeEdit(input.id, input);
       const data: Record<string, unknown> = {};
       if (input.countryCode !== undefined) {
         const code = String(input.countryCode || "").trim().toUpperCase();
@@ -524,6 +574,8 @@ export const proxySubscriptionsRouter = router({
     .mutation(async ({ ctx, input }) => {
       await assertProxySubscriptionAllowed(ctx);
       await assertOwnedNode(input.id, ctx);
+      const poolNode = await db.getProxyNodeById(input.id) as any;
+      if (Number(poolNode?.nodePoolId || 0) > 0) throw new Error("这是落地池的节点：到 链路管理 → 节点池 里删掉整个池，或者把池改回中转");
       // 引用它的转发会被自动解绑，只是不再进订阅，转发本身照常运行。
       const released = await db.countRulesUsingProxyNode(input.id);
       // 套餐里的绑定也会被清掉 —— 那会改变正在卖的东西，得说出来。

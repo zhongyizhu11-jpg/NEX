@@ -126,6 +126,11 @@ export type RoutePath = {
    * （server/proxyNodeFollow.ts）。null = 手填的 dest 或同目标。
    */
   destNodeId: number | null;
+  /**
+   * 落地选的是落地池（destNodeId 是池节点，2.3.500）：这条路径落在池里的哪台成员上。地址端口由面板按
+   * 那台的成员入站解析进 dest（server/routeGroups.ts），成员去掉了这条路径就用不了。
+   */
+  destHostId?: number | null;
   /** 权重（权重负载模式按它分新连接），1–100。 */
   weight: number;
   /** 自定探测目标；null = 探拨号地址本身。 */
@@ -452,6 +457,7 @@ function sanitizePath(raw: any, index: number): RoutePath | null {
     ...(lineKey ? { lineKey } : {}),
     dest: sanitizeEndpoint(raw.dest),
     destNodeId: Number.isInteger(Number(raw.destNodeId)) && Number(raw.destNodeId) > 0 ? Math.floor(Number(raw.destNodeId)) : null,
+    ...(Number.isInteger(Number(raw.destHostId)) && Number(raw.destHostId) > 0 && Number(raw.destNodeId) > 0 ? { destHostId: Math.floor(Number(raw.destHostId)) } : {}),
     weight: clampInt(raw.weight, ROUTE_GUARD_LIMITS.weight.min, ROUTE_GUARD_LIMITS.weight.max, 50),
     probe: sanitizeEndpoint(raw.probe),
     dial: sanitizeEndpoint(raw.dial),
@@ -487,6 +493,7 @@ export function serializeRoutePaths(paths: RoutePath[] | null | undefined): stri
     hops: path.hops,
     dest: path.dest,
     ...(path.destNodeId ? { destNodeId: path.destNodeId } : {}),
+    ...(path.destNodeId && path.destHostId ? { destHostId: path.destHostId } : {}),
     weight: path.weight,
     probe: path.probe,
     dial: path.dial,
@@ -800,7 +807,8 @@ export function validateRouteGroup(group: RouteGroup, context: RouteGroupValidat
   const signatures = new Map<string, number>();
   for (let index = 0; context.rejectDuplicates && index < paths.length; index += 1) {
     const path = paths[index];
-    const dest = path.destNodeId ? `n${path.destNodeId}` : path.dest ? `${path.dest.ip}:${path.dest.port}` : "";
+    // 落地池的几台成员是同一个池节点、不同的机器（destHostId），不算重复
+    const dest = path.destNodeId ? `n${path.destNodeId}${path.destHostId ? `h${path.destHostId}` : ""}` : path.dest ? `${path.dest.ip}:${path.dest.port}` : "";
     const signature = `${path.hops.join(".")}|${(path.hopVia || []).map((value) => value ?? "").join(".")}|${dest}`;
     const previous = signatures.get(signature);
     if (previous !== undefined) return `「${routePathLabel(paths[previous], previous)}」和「${routePathLabel(path, index)}」走的是同一条路：备用要换一台中转、一条隧道或者一个落地`;
