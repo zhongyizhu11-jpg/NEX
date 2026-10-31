@@ -54,6 +54,19 @@ export async function routeDestNames(rule: any, paths: readonly RoutePath[]): Pr
         hit = { name: node?.name ? String(node.name) : null, at: now };
         destNameCache.set(key, hit);
       }
+      // 落地池的成员（2.3.500）：池名后面带上是哪台，几条路径才分得清
+      const memberHostId = Number(path.destHostId || 0);
+      if (hit.name && memberHostId > 0) {
+        const hostKey = `hostid:${memberHostId}`;
+        let hostHit = cached(hostKey);
+        if (!hostHit) {
+          const host = await (db.getHostById(memberHostId) as Promise<any>).catch(() => undefined);
+          hostHit = { name: host?.name ? String(host.name) : null, at: now };
+          destNameCache.set(hostKey, hostHit);
+        }
+        names.set(path.key, hostHit.name ? `${hit.name} · ${hostHit.name}` : hit.name);
+        continue;
+      }
       if (hit.name) names.set(path.key, hit.name);
       continue;
     }

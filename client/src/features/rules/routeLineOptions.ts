@@ -23,7 +23,35 @@ export type TunnelOptionRow = {
   relayMode?: string | null;
 };
 export type ForwardGroupOptionRow = { id: number | string; groupMode?: string | null; domain?: string | null; members?: ReadonlyArray<{ isEnabled?: unknown }> | null };
-export type ProxyNodeRow = { id: number | string; name?: string | null; isEnabled?: unknown; address?: string | null; port?: number | string | null; protocol?: string | null };
+export type ProxyNodeRow = {
+  id: number | string;
+  name?: string | null;
+  isEnabled?: unknown;
+  address?: string | null;
+  port?: number | string | null;
+  protocol?: string | null;
+  /** 落地池的池节点（2.3.500，proxySubscriptions.listNodes 带的）。 */
+  landingPool?: { id: number; name: string; members: number; ready: number } | null;
+};
+
+/** 规则目标、线路落地能选的节点：开着、有地址端口的；落地池的池节点带上池（选了它就是在池里几台分）。 */
+export function routeNodeOptionsOf(nodes: readonly ProxyNodeRow[] | null | undefined) {
+  return (nodes || [])
+    .filter((node) => node.isEnabled !== false && node.isEnabled !== 0 && String(node.address || "").trim() && Number(node.port) > 0)
+    .map((node) => ({
+      id: Number(node.id),
+      name: String(node.name || `节点 #${node.id}`),
+      protocol: String(node.protocol || "").toUpperCase(),
+      address: String(node.address).trim(),
+      port: Number(node.port),
+      landingPool: node.landingPool ? { id: Number(node.landingPool.id), name: String(node.landingPool.name), members: Number(node.landingPool.members) || 0, ready: Number(node.landingPool.ready) || 0 } : null,
+    }));
+}
+
+/** 节点选项上那句「落地池 · 3 台」。 */
+export function routeNodeOptionLabel(node: { name: string; landingPool?: { ready: number } | null }) {
+  return node.landingPool ? `池 · ${node.name} · ${node.landingPool.ready} 台` : node.name;
+}
 export type NodePoolRow = inferRouterOutputs<AppRouter>["lineDiagnostics"]["nodePools"][number];
 
 /** 一条规则（rules.list 的一行）里线路编辑、线路详情读的字段。 */
@@ -51,6 +79,8 @@ export function routeLinePoolsOf(pools: readonly NodePoolRow[] | null | undefine
     name: String(pool.name),
     role: String(pool.role),
     members: (pool.members || []).map((member) => ({ hostId: Number(member.hostId), name: String(member.name), online: !!member.online, maintenance: !!member.maintenance })),
+    // 落地池里开着的成员（预览展开用：落地选了这个池，一台一条路径）
+    ...(pool.landing ? { landingMembers: pool.landing.members.filter((member) => member.open).map((member) => member.hostId) } : {}),
   }));
 }
 

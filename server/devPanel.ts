@@ -1545,8 +1545,9 @@ async function seedRouteGroupDemo(ruleId: number, hostIds: number[]) {
 async function seedLineDemo(adminId: number) {
   const { expandRouteLines, serializeRouteLines } = await import("../shared/routeLines");
   const now = nowDate();
+  // 带上 Agent 令牌：没令牌又没被引用的主机记录启动后会被当成孤儿清掉（落地池的成员也就跟着没了）
   const host = (name: string, ip: string, country: string, patch: Record<string, unknown> = {}) => insertAndGetId("hosts", {
-    userId: adminId, name, hostType: "slave", ip, ipv4: ip, osInfo: "Debian 12", cpuInfo: "AMD EPYC", memoryTotal: 2 * 1024 ** 3,
+    userId: adminId, name, hostType: "slave", ip, ipv4: ip, agentToken: `dev-line-${ip}`, osInfo: "Debian 12", cpuInfo: "AMD EPYC", memoryTotal: 2 * 1024 ** 3,
     agentVersion: AGENT_VERSION, isOnline: true, lastHeartbeat: now, portRangeStart: 20000, portRangeEnd: 29999,
     geoCountryCode: country, geoCountryName: country, trafficMeasureMode: "both", sortOrder: 50,
     createdAt: now, updatedAt: now, ...patch,
@@ -1703,6 +1704,38 @@ async function seedLineDemo(adminId: number) {
     const hop = path.hops[0];
     if (hop && hop !== hk2) for (let i = 0; i < 5; i += 1) recordRouteHopProbe({ parentRuleId: jp, pathKey: path.key, hopIndex: 0, hostId: hop, hostName: names.get(hop) || "中转", nextLabel: "落地", ok: true, latencyMs: 40 });
   });
+
+  // 落地池（2.3.500）：SG 落地 / 东京落地 / SG 原生开同一份 VLESS + REALITY；SG 原生的 443 被它自己的入站占了，换了端口。
+  // 「Po0 到亚太落地池」目标是这个池：保存时做成线路组，三台一台一条路径，按负载分。
+  const busyInbound = await insertAndGetId("proxy_inbounds", {
+    userId: adminId, hostId: sgNative, name: "SG 原生自用", protocol: "vless", port: 443, transport: "tcp", security: "none", isEnabled: true, createdAt: now, updatedAt: now,
+  });
+  await insertAndGetId("proxy_inbound_users", { inboundId: busyInbound, name: "默认", uuid: "6f1b0c3e-2d4a-4b7e-9c11-5a8f3e2d1c00", sortOrder: 0, createdAt: now, updatedAt: now });
+  const { mergeLandingInput } = await import("./landingPoolSave");
+  const { config: landingConfig } = mergeLandingInput(null, { protocol: "vless", port: 443, users: [{ id: 0, name: "默认" }] });
+  const landingPoolId = await insertAndGetId("node_pools", {
+    userId: adminId, name: "亚太落地池", role: "landing", hostIdsJson: JSON.stringify([sgLanding, tokyo, sgNative]), landingJson: JSON.stringify(landingConfig),
+    sortOrder: 1, createdAt: now, updatedAt: now,
+  });
+  const { getLandingPoolNodes, syncLandingPool } = await import("./landingPools");
+  await syncLandingPool(Number(landingPoolId), { reason: "dev-seed" }).catch((error) => console.warn(`[DevPanel] landing pool: ${error instanceof Error ? error.message : String(error)}`));
+  const poolNode = (await getLandingPoolNodes(Number(landingPoolId)))[0];
+  if (poolNode) {
+    const poolRule = await insertAndGetId("forward_rules", {
+      userId: adminId, hostId: po0, name: "Po0 到亚太落地池", forwardType: "gost", protocol: "tcp", sourcePort: 26330, targetIp: poolNode.address, targetPort: poolNode.port,
+      proxyNodeId: poolNode.id, proxyNodeVisible: true, isRunning: true, isEnabled: true, sortOrder: 23, createdAt: now, updatedAt: now,
+    });
+    const { ensureLandingRouteGroupForRule } = await import("./landingRouteTarget");
+    await ensureLandingRouteGroupForRule(Number(poolRule), "dev-seed");
+    const poolPaths = await readPaths(Number(poolRule));
+    recordRouteAgentStats({ hostId: po0, isAllowed: () => true, reports: [{
+      ruleId: Number(poolRule), sourcePort: 26330, strategy: "least_load", activeIndex: 0, activeSince: nowMs - 3 * 3600_000, prewarmIndex: -1, inboundOk: 640, inboundFailed: 1,
+      targets: poolPaths.map((path, index) => ({
+        index, target: path.dest ? `${path.dest.ip}:${path.dest.port}` : "", healthy: true, score: 92 - index * 4, latencyMs: 34 + index * 18, lossPct: 0, jitterMs: 1.5,
+        availabilityPct: 100, consecutiveFailures: 0, connections: [7, 5, 3][index] ?? 0, samples: 120, lastProbeAt: nowMs - 2000, dialOk: 210 - index * 30, dialFailed: 0,
+      })),
+    }] });
+  }
 }
 
 async function seedRules(hostIds: number[], resources: DevResources, usersSeed: DevUsers): Promise<DevRules> {

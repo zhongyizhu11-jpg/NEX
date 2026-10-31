@@ -35,6 +35,8 @@ export type RuleLineGroupFieldProps = {
   protocol: string;
   scheduleTimeZone: string;
   ruleId: number | null;
+  /** 规则目标绑着的节点（落地池的池节点时，「规则目标」预览成池里的几台）。 */
+  ruleTargetNodeId?: number | null;
 };
 
 export function RuleLineGroupField({
@@ -56,6 +58,7 @@ export function RuleLineGroupField({
   protocol,
   scheduleTimeZone,
   ruleId,
+  ruleTargetNodeId = null,
 }: RuleLineGroupFieldProps) {
   const policy = useMemo(() => describeRoutePolicy({
     ...policyRule,
@@ -83,6 +86,7 @@ export function RuleLineGroupField({
           entryPrefix={entryPrefix}
           allowTunnels={allowTunnels}
           ruleId={ruleId}
+          ruleTargetNodeId={ruleTargetNodeId}
           upstreamHostIds={upstreamHostIds}
           defaultAdvancedOpen={false}
         />

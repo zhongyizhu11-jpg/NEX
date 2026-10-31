@@ -147,7 +147,7 @@ import { IconTile, type IconTileTone } from "@/components/entity/IconTile";
 import { routeGroupPayload, type RouteGroupDraft, type RouteHostOption } from "@/features/rules/RouteGroupFields";
 import { expandForPreview, type RouteLinePool, type RouteLineTunnel } from "@/features/rules/RouteLinesEditor";
 import { newRouteLine, routeLinesForEditor } from "@shared/routeLines";
-import { routeHostOptionsOf, routeLinePoolsOf, routeLineTunnelsOf } from "@/features/rules/routeLineOptions";
+import { routeHostOptionsOf, routeLinePoolsOf, routeLineTunnelsOf, routeNodeOptionLabel, routeNodeOptionsOf } from "@/features/rules/routeLineOptions";
 import { RuleLineGroupField } from "@/features/rules/RuleLineGroupField";
 import { ROUTE_LINE_MODE_LABEL } from "@/features/rules/routeLineText";
 import { docsUrl } from "@/lib/docsLinks";
@@ -3016,15 +3016,8 @@ function RulesContent() {
     refetchOnWindowFocus: false,
   });
   /** 规则表单「选我的节点」：自己的、启用着、有地址和端口的节点。 */
-  const targetNodeOptions = useMemo(() => ((proxyNodesQuery.data || []) as any[])
-    .filter((node) => node.isEnabled !== false && node.isEnabled !== 0 && String(node.address || "").trim() && Number(node.port) > 0)
-    .map((node) => ({
-      id: Number(node.id),
-      name: String(node.name || `节点 #${node.id}`),
-      protocol: String(node.protocol || "").toUpperCase(),
-      address: String(node.address).trim(),
-      port: Number(node.port),
-    })), [proxyNodesQuery.data]);
+  // 落地池的池节点带着池（2.3.500）：目标选它就是在池里几台分（server/landingRouteTarget.ts）
+  const targetNodeOptions = useMemo(() => routeNodeOptionsOf((proxyNodesQuery.data || []) as any[]), [proxyNodesQuery.data]);
   const proxyNodeNameById = useMemo(() => {
     const map = new Map<number, string>();
     for (const node of (proxyNodesQuery.data || []) as any[]) {
@@ -8321,7 +8314,9 @@ function RulesContent() {
               <SelectContent align="end">
               {targetNodeOptions.map((node) => (
               <SelectItem key={node.id} value={String(node.id)}>
-              {node.name} · {node.protocol} · {node.address}:{node.port}
+              {node.landingPool
+                ? `${routeNodeOptionLabel(node)} · ${node.protocol}`
+                : `${node.name} · ${node.protocol} · ${node.address}:${node.port}`}
               </SelectItem>
               ))}
               </SelectContent>
@@ -8336,12 +8331,16 @@ function RulesContent() {
               {form.targetNodeId ? (
               <p className="flex min-w-0 items-center gap-1.5 text-meta text-muted-foreground" data-testid="target-node-chip">
               <span className="inline-flex min-w-0 items-center gap-1 rounded-[var(--fx-radius-control)] bg-[var(--fx-healthy-soft)] px-1.5 py-0.5 text-[var(--fx-healthy-text)]">
-              <span className="truncate">目标是我的节点「{proxyNodeNameById.get(form.targetNodeId) || `#${form.targetNodeId}`}」</span>
+              <span className="truncate">{targetNodeOptions.find((node) => node.id === form.targetNodeId)?.landingPool ? "目标是落地池" : "目标是我的节点"}「{proxyNodeNameById.get(form.targetNodeId) || `#${form.targetNodeId}`}」</span>
               <button type="button" className="rounded-full p-0.5 hover:bg-black/10" aria-label="不再跟随节点" onClick={() => setForm({ ...form, targetNodeId: null })}>
               <X className="h-3 w-3" />
               </button>
               </span>
-              <span className="min-w-0 truncate">节点地址变了，目标自动跟着改，订阅里就是这条</span>
+              <span className="min-w-0 truncate">
+              {targetNodeOptions.find((node) => node.id === form.targetNodeId)?.landingPool
+                ? "保存后在池里几台分（gost 等转发）；只能指向一台的转发跟着首选那台，坏了换"
+                : "节点地址变了，目标自动跟着改，订阅里就是这条"}
+              </span>
               </p>
               ) : null}
               </FormField>
@@ -8457,7 +8456,7 @@ function RulesContent() {
                       routeGroup: nextEnabled ? (form.routeGroup ?? (() => {
                         const draft = newRouteGroupDraft({ timezone: BILLING_TIME_ZONE });
                         const lines = [newRouteLine(0)];
-                        return { ...draft, lines, paths: expandForPreview(lines, { entryHostId: routeEntryHostId, pools: routeLinePools, tunnels: routeLineTunnels }).paths };
+                        return { ...draft, lines, paths: expandForPreview(lines, { entryHostId: routeEntryHostId, pools: routeLinePools, tunnels: routeLineTunnels, nodes: targetNodeOptions, ruleTargetNodeId: form.targetNodeId ?? null }).paths };
                       })()) : form.routeGroup,
                     });
                   }}
@@ -8504,6 +8503,7 @@ function RulesContent() {
                   pools={routeLinePools}
                   tunnels={routeLineTunnels}
                   nodeOptions={targetNodeOptions}
+                  ruleTargetNodeId={form.targetNodeId ?? null}
                   entryHostId={routeEntryHostId}
                   entryName={routeEntryName}
                   entryPrefix={routeEntryPrefix}

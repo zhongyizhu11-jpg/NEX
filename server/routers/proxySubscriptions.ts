@@ -263,7 +263,8 @@ async function assertExternalSourcesAllowed(ctx: any) {
 
 /** 列表里的池节点带上它的落地池：名字、几台、几台能用、直连域名。 */
 async function landingPoolNodeInfo(nodes: readonly any[]) {
-  const result = new Map<number, { id: number; name: string; members: number; ready: number; directDomain: string | null; summary: string }>();
+  type MemberLine = { hostId: number; name: string; port: number; portFallback: boolean; error: string | null };
+  const result = new Map<number, { id: number; name: string; members: number; ready: number; directDomain: string | null; summary: string; memberList: MemberLine[] }>();
   const poolIds = Array.from(new Set(nodes.map((node) => Number(node.nodePoolId || 0)).filter((id) => id > 0)));
   if (poolIds.length === 0) return result;
   const { getNodePool } = await import("../nodePools");
@@ -273,6 +274,7 @@ async function landingPoolNodeInfo(nodes: readonly any[]) {
     if (!pool) continue;
     const config = parseLandingConfig(pool.landingJson);
     const states = parseLandingState(pool.landingStateJson);
+    const hosts = pool.hostIds.length > 0 ? await db.getHostsByIds(pool.hostIds) as any[] : [];
     result.set(poolId, {
       id: pool.id,
       name: pool.name,
@@ -280,6 +282,12 @@ async function landingPoolNodeInfo(nodes: readonly any[]) {
       ready: states.filter((state) => !state.error && state.inboundId > 0).length,
       directDomain: pool.directDomain || null,
       summary: config ? describeLandingConfig(config) : "",
+      // 每台开在哪个端口（换了端口的、没开出来的标出来）：池节点那一行点开看
+      memberList: pool.hostIds.map((hostId) => {
+        const state = states.find((item) => item.hostId === hostId);
+        const host = hosts.find((item) => Number(item.id) === hostId);
+        return { hostId, name: String(host?.name || `主机 ${hostId}`), port: state?.port || 0, portFallback: !!state?.portFallback, error: state ? state.error : "还没同步" };
+      }),
     });
   }
   return result;

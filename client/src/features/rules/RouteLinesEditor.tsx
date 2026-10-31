@@ -19,6 +19,7 @@ import { cn } from "@/lib/utils";
 import { formatFailoverEndpoint, parseFailoverEndpoint } from "@shared/failoverTargets";
 import { MAX_ROUTE_HOPS, MAX_ROUTE_PATHS, defaultRoutePathName, describeRouteIssue, type RoutePath } from "@shared/routeGroup";
 import { MAX_LAYER_CANDIDATES, MAX_LINE_DESTS, expandRouteLines, newRouteLayer, newRouteLine, type RouteLayer, type RouteLine } from "@shared/routeLines";
+import { routeNodeOptionLabel } from "./routeLineOptions";
 import { segmentKey, useSegmentLatency } from "./segmentLatency";
 
 /*
@@ -41,9 +42,24 @@ import { segmentKey, useSegmentLatency } from "./segmentLatency";
 */
 
 export type RouteLineHost = { id: number; name: string; isOnline?: boolean | null };
-export type RouteLinePool = { id: number; name: string; role: string; members: Array<{ hostId: number; name: string; online: boolean; maintenance: boolean }> };
+export type RouteLinePool = {
+  id: number;
+  name: string;
+  role: string;
+  members: Array<{ hostId: number; name: string; online: boolean; maintenance: boolean }>;
+  /** 落地池：开着的成员（2.3.500）。 */
+  landingMembers?: number[];
+};
 export type RouteLineTunnel = { id: number; name: string; entryHostId: number; exitHostId: number; mode?: string | null; relayMode?: string | null };
-export type RouteLineNode = { id: number; name: string; address: string; port: number; protocol?: string };
+export type RouteLineNode = {
+  id: number;
+  name: string;
+  address: string;
+  port: number;
+  protocol?: string;
+  /** 落地池的池节点：选了它，落地就是池里的几台（展开成一台一条路径）。 */
+  landingPool?: { id: number; name: string; members: number; ready: number } | null;
+};
 
 type Candidate = { kind: "tunnel" | "host"; id: number; label: string; to: number; state: string; hint?: string };
 
@@ -67,6 +83,7 @@ export function RouteLinesEditor({
   activeLineKey = null,
   startCollapsed = false,
   arrange = true,
+  ruleTargetNodeId = null,
 }: {
   lines: RouteLine[];
   onChange: (lines: RouteLine[]) => void;
@@ -100,6 +117,8 @@ export function RouteLinesEditor({
    * （2.3.499，照效果图 ①：平时只看到线路几行）；一条备用都没有时「添加」照样出。
    */
   arrange?: boolean;
+  /** 规则目标绑着的节点（落地池的池节点时，「规则目标」那个落地写成「池 · 名字 · N 台」）。 */
+  ruleTargetNodeId?: number | null;
 }) {
   const hostName = (id: number) => hosts.find((host) => host.id === id)?.name || `主机 ${id}`;
   // 打开就有数（效果图里每个候选后面的毫秒）：最近一轮探测的每一段，点 ⚡ 测出来的盖掉它。
@@ -192,8 +211,14 @@ export function RouteLinesEditor({
       else if (candidates[0]) parts.push(candidates[0].kind === "tunnel" ? `隧道 ${hostName(candidates[0].to)}` : candidates[0].label);
       if (candidates.length > 1 && layer.kind !== "pool") parts[parts.length - 1] += ` 等 ${candidates.length} 个`;
     }
-    parts.push("落地");
+    parts.push(destText(line));
     return parts.join(" → ");
+  };
+  /** 一行里落地怎么写：选了落地池（或者规则目标就是池）写池名，别的写「落地」。 */
+  const destText = (line: RouteLine) => {
+    const nodeId = line.dests[0]?.destNodeId || (line.dests.length === 0 ? ruleTargetNodeId : null);
+    const node = nodeId ? nodeOptions.find((option) => option.id === nodeId) : null;
+    return node?.landingPool ? node.name : "落地";
   };
 
   const testButton = (line: RouteLine, lineIndex: number) => (
@@ -472,6 +497,9 @@ export function RouteLinesEditor({
             line={line}
             mainAddress={mainAddress}
             nodeOptions={nodeOptions}
+            pools={pools}
+            hostName={hostName}
+            ruleTargetNodeId={ruleTargetNodeId}
             latency={latencyOf(segmentKey(previousHost, "dest"))}
             onChange={(dests) => setLine(lineIndex, { dests })}
           />
@@ -546,7 +574,14 @@ export function RouteLinesEditor({
         名字、⚡（逐段测）、中转、落地都在展开的那块里。主线路排第一、不能拖、不能删。
       */}
       {main ? <div data-testid="route-line">{lineBlock(main, 0, null)}</div> : null}
-      {backups.length === 0 ? <p className="mx-1 mt-[7px] text-[11.5px] text-muted-foreground">还没有备用：主线路坏了没处可切。加一条经别的机器、别的隧道或别的落地的。</p> : null}
+      {backups.length === 0 ? (
+        <p className="mx-1 mt-[7px] text-[11.5px] text-muted-foreground">
+          {/* 主线路自己就展开成好几条（落地池的几台、一层里几个候选）：坏了在它们之间切，只是没有另一条路 */}
+          {main && previewPaths.filter((path) => path.lineKey === main.key).length > 1
+            ? `主线路在 ${previewPaths.filter((path) => path.lineKey === main.key).length} 条路径里切；想再多一层保险，加一条经别的机器或别的落地的备用。`
+            : "还没有备用：主线路坏了没处可切。加一条经别的机器、别的隧道或别的落地的。"}
+        </p>
+      ) : null}
       <SortableReorderContext sortable={sortable} strategy="vertical" restrictToList>
         <div className="mt-[7px] flex flex-col gap-[7px]">
           {backups.map((line, position) => {
@@ -616,10 +651,14 @@ export function RouteLinesEditor({
   );
 }
 
-function DestEditor({ line, mainAddress, nodeOptions, latency, onChange }: {
+function DestEditor({ line, mainAddress, nodeOptions, pools = [], hostName = (id) => `主机 ${id}`, ruleTargetNodeId = null, latency, onChange }: {
   line: RouteLine;
   mainAddress: string;
   nodeOptions: RouteLineNode[];
+  ruleTargetNodeId?: number | null;
+  /** 落地池的成员（落地选了池节点时，chip 的菜单里列出池里开着的几台）。 */
+  pools?: RouteLinePool[];
+  hostName?: (hostId: number) => string;
   latency: number | null | undefined;
   onChange: (dests: RouteLine["dests"]) => void;
 }) {
@@ -628,10 +667,19 @@ function DestEditor({ line, mainAddress, nodeOptions, latency, onChange }: {
   const [error, setError] = useState<string | null>(null);
   const dests = line.dests.length > 0 ? line.dests : [{ dest: null, destNodeId: null }];
   const label = (item: RouteLine["dests"][number]) => {
-    if (item.destNodeId) return nodeOptions.find((node) => node.id === item.destNodeId)?.name || `节点 #${item.destNodeId}`;
+    if (item.destNodeId) {
+      const node = nodeOptions.find((option) => option.id === item.destNodeId);
+      return node ? routeNodeOptionLabel(node) : `节点 #${item.destNodeId}`;
+    }
     if (item.dest) return formatFailoverEndpoint(item.dest.ip, item.dest.port);
+    // 规则目标是落地池的池节点：写池，不写首选那一台的地址（实际在池里几台分）
+    const target = ruleTargetNodeId ? nodeOptions.find((option) => option.id === ruleTargetNodeId) : null;
+    if (target?.landingPool) return routeNodeOptionLabel(target);
     return mainAddress || "规则目标";
   };
+  // 落地池（2.3.500）单列一组：选了就是在池里几台分，坏了切
+  const poolNodes = nodeOptions.filter((node) => !!node.landingPool);
+  const plainNodes = nodeOptions.filter((node) => !node.landingPool);
   const commit = () => {
     const text = draft.replace(/\s+/g, "");
     if (!text) { setTyping(false); return; }
@@ -660,6 +708,21 @@ function DestEditor({ line, mainAddress, nodeOptions, latency, onChange }: {
                 </LineChipButton>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start">
+                {(() => {
+                  // 落地池：列出池里开着的几台（一台一条路径，在这几台里分 / 坏了切）
+                  const node = item.destNodeId ? nodeOptions.find((option) => option.id === item.destNodeId) : null;
+                  const pool = node?.landingPool ? pools.find((entry) => entry.id === node.landingPool!.id) : null;
+                  if (!node?.landingPool) return null;
+                  const members = pool?.landingMembers || [];
+                  return (
+                    <>
+                      <DropdownMenuLabel className="text-[11px] font-normal text-muted-foreground" data-testid="route-line-dest-pool-members">
+                        {members.length > 0 ? `在这 ${members.length} 台里分：${members.map(hostName).join("、")}` : "池里还没有开着的机器"}
+                      </DropdownMenuLabel>
+                      <DropdownMenuSeparator />
+                    </>
+                  );
+                })()}
                 <DropdownMenuItem onSelect={() => onChange(line.dests.filter((_, position) => position !== index))}>
                   {line.dests.length === 1 ? "改回规则目标" : `去掉 ${label(item)}`}
                 </DropdownMenuItem>
@@ -684,8 +747,16 @@ function DestEditor({ line, mainAddress, nodeOptions, latency, onChange }: {
               </LineChipButton>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="max-h-72 overflow-y-auto">
-              {nodeOptions.length > 0 ? <DropdownMenuLabel className="text-[11px]">我的节点</DropdownMenuLabel> : null}
-              {nodeOptions.map((node) => (
+              {poolNodes.length > 0 ? <DropdownMenuLabel className="text-[11px]">落地池</DropdownMenuLabel> : null}
+              {poolNodes.map((node) => (
+                <DropdownMenuItem key={node.id} data-testid="route-line-dest-pool" onSelect={() => onChange([...line.dests, { dest: null, destNodeId: node.id }].slice(0, MAX_LINE_DESTS))}>
+                  <span className="min-w-0 truncate">{node.name}</span>
+                  <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">{node.landingPool!.ready}/{node.landingPool!.members} 台</span>
+                </DropdownMenuItem>
+              ))}
+              {poolNodes.length > 0 && plainNodes.length > 0 ? <DropdownMenuSeparator /> : null}
+              {plainNodes.length > 0 ? <DropdownMenuLabel className="text-[11px]">我的节点</DropdownMenuLabel> : null}
+              {plainNodes.map((node) => (
                 <DropdownMenuItem key={node.id} onSelect={() => onChange([...line.dests, { dest: { ip: node.address, port: node.port }, destNodeId: node.id }].slice(0, MAX_LINE_DESTS))}>
                   {node.name} · {node.address}:{node.port}
                 </DropdownMenuItem>
@@ -719,16 +790,33 @@ function DestEditor({ line, mainAddress, nodeOptions, latency, onChange }: {
 }
 
 /** 编辑框的预览：按同一套函数展开（没有实测延迟，顺序按写的来）。 */
-export function useRouteLinesPreview(lines: RouteLine[] | null | undefined, context: { entryHostId: number | null; pools: RouteLinePool[]; tunnels: RouteLineTunnel[] }) {
+type PreviewContext = {
+  entryHostId: number | null;
+  pools: RouteLinePool[];
+  tunnels: RouteLineTunnel[];
+  /** 节点选项（落地池的池节点带着池）：落地选了池节点，预览也按池里开着的几台展开。 */
+  nodes?: RouteLineNode[];
+  /** 规则目标绑着的节点（是池节点时「规则目标」就是这个池）。 */
+  ruleTargetNodeId?: number | null;
+};
+
+export function useRouteLinesPreview(lines: RouteLine[] | null | undefined, context: PreviewContext) {
   return useMemo(() => {
     if (!lines || lines.length === 0) return { paths: [] as RoutePath[], issues: new Map<string, string>() };
     return expandForPreview(lines, context);
-  }, [lines, context.entryHostId, context.pools, context.tunnels]);
+  }, [lines, context.entryHostId, context.pools, context.tunnels, context.nodes, context.ruleTargetNodeId]);
 }
 
-export function expandForPreview(lines: RouteLine[], context: { entryHostId: number | null; pools: RouteLinePool[]; tunnels: RouteLineTunnel[] }) {
+export function expandForPreview(lines: RouteLine[], context: PreviewContext) {
   return expandRouteLines(lines, {
     entryHostId: context.entryHostId,
+    ruleTargetNodeId: context.ruleTargetNodeId ?? null,
+    landingPool: (nodeId) => {
+      const node = context.nodes?.find((item) => item.id === nodeId);
+      if (!node?.landingPool) return null;
+      const pool = context.pools.find((item) => item.id === node.landingPool!.id);
+      return { poolId: node.landingPool.id, name: node.landingPool.name, members: (pool?.landingMembers || []).map((hostId) => ({ hostId, dest: null })) };
+    },
     poolMembers: (poolId) => context.pools.find((pool) => pool.id === poolId)?.members.map((member) => member.hostId) ?? null,
     hostUsable: () => true,
     tunnel: (tunnelId) => {

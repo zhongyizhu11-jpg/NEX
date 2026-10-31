@@ -1,4 +1,5 @@
 import { useMemo, useState, type SyntheticEvent } from "react";
+import type { inferRouterOutputs } from "@trpc/server";
 import { Check, ChevronDown, ChevronRight, Plus, X } from "lucide-react";
 import { toast } from "sonner";
 
@@ -24,8 +25,10 @@ import {
   type LineTone,
 } from "@/features/lines/LineUi";
 import { RouteBoardList } from "@/features/rules/RouteBoardList";
+import { LandingPoolFields, landingDraftError, landingDraftFrom, landingInputFromDraft, type LandingConfigView, type LandingDraft } from "./LandingPoolFields";
 import { LINK_SPREAD_LABELS } from "@shared/linkTerms";
 import { trpc } from "@/lib/trpc";
+import type { AppRouter } from "../../../../server/routers";
 
 /*
   线路工作台（2.3.496，效果图 ④「所有线路一个入口」）：
@@ -96,14 +99,24 @@ export function LineWorkspace({ searchQuery = "", isAdmin = false }: { searchQue
   );
 }
 
-type PoolRole = "relay" | "landing" | "any";
-const ROLE_LABEL: Record<PoolRole, string> = { relay: "中转", landing: "落地", any: "通用" };
+/*
+  节点池两种用途（2.3.500）：中转 = 线路里一层候选；落地 = 同一份落地配置开在每台上（协议、端口、密钥一样），
+  订阅里整个池只出一条。2.3.499 以前的「通用」读成中转。
+*/
+type PoolRole = "relay" | "landing";
+const ROLE_LABEL: Record<string, string> = { relay: "中转", landing: "落地", any: "中转" };
 const ROLE_OPTIONS = [
   { value: "relay", label: "中转" },
   { value: "landing", label: "落地" },
-  { value: "any", label: "通用" },
 ] as const satisfies ReadonlyArray<{ value: PoolRole; label: string }>;
-const ROLE_HINT: Record<PoolRole, string> = { relay: "线路里当一层中转", landing: "线路里当落地", any: "中转、落地哪层都能用" };
+const ROLE_HINT: Record<PoolRole, string> = {
+  relay: "线路里当一层中转，面板在这几台里挑",
+  landing: "同一份落地配置开在每台上，订阅里只出一条；走中转时在几台里分，坏了切",
+};
+/** 落地池最多几台（每台都要开入站，线路里一台一条路径）。 */
+const MAX_LANDING_MEMBERS = 8;
+
+type PoolDraft = { id?: number; name: string; role: PoolRole; hostIds: number[]; landing: LandingDraft; directDomain: string; configured: boolean };
 
 function countTone(usable: number, total: number): LineTone {
   if (total === 0 || usable === 0) return "down";
@@ -133,14 +146,31 @@ export function NodePoolsSection({ hosts, onOpenGroup, onCreateGroup, isAdmin = 
       setEditing(null);
       const groups = result.groups || [];
       const changed = groups.filter((group) => !group.error && group.added + group.removed > 0).length;
+      const landing = result.landing;
       const parts = [
-        result.reexpanded ? `${result.reexpanded} 条线路重新展开` : "",
+        landing ? `${landing.open}/${landing.total} 台开好了${landing.fallback ? `（${landing.fallback} 台换了端口）` : ""}` : "",
+        result.reexpanded ? `${result.reexpanded} 条${landing ? "转发" : "线路"}跟着更新` : "",
         changed ? `${changed} 个组跟着换了成员` : "",
       ].filter(Boolean);
       toast.success(parts.length ? `已保存，${parts.join("，")}` : "已保存");
+      if (landing?.credentialsReset) toast.warning("换了协议或加密方式，凭据整份换新：客户端要重新拉订阅");
+      if (landing && landing.errors.length) toast.warning(`${landing.errors.length} 台没开出来：${landing.errors.map((item) => `${hostName(item.hostId)}：${item.error}`).join("；")}`);
+      if (landing?.dnsError) toast.warning(landing.dnsError);
       const failed = groups.filter((group) => group.error || group.skipped);
       if (failed.length) toast.warning(`${failed.length} 个跟着这个池的组没同步：${failed.map((group) => group.error || group.skipped).join("；")}`);
       if (changed) void utils.forwardGroups.invalidate();
+      if (landing) {
+        void utils.proxyInbounds.list.invalidate();
+        void utils.proxySubscriptions.listNodes.invalidate();
+      }
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const rotate = trpc.lineDiagnostics.nodePoolRotate.useMutation({
+    onSuccess: (result) => {
+      refresh();
+      void utils.proxyInbounds.list.invalidate();
+      toast.success(`密钥换好了：${result.open}/${result.total} 台已换上，客户端要重新拉订阅`);
     },
     onError: (error) => toast.error(error.message),
   });
@@ -158,7 +188,7 @@ export function NodePoolsSection({ hosts, onOpenGroup, onCreateGroup, isAdmin = 
     },
     onError: (error) => toast.error(error.message),
   });
-  const [editing, setEditing] = useState<{ id?: number; name: string; role: PoolRole; hostIds: number[] } | null>(null);
+  const [editing, setEditing] = useState<PoolDraft | null>(null);
   const hostName = (id: number) => hosts.find((host) => host.id === id)?.name || `主机 ${id}`;
   const data = board.data;
   const entryGroups = data?.entryGroups || [];
@@ -169,7 +199,27 @@ export function NodePoolsSection({ hosts, onOpenGroup, onCreateGroup, isAdmin = 
     ...entryGroups.map((group) => ({ key: `e${group.id}`, label: `入口组 · ${group.domain || group.name}`, hostIds: group.members.map((member) => member.hostId) })),
     ...exitGroups.map((group) => ({ key: `x${group.id}`, label: `出口组 · ${group.name}`, hostIds: group.members.map((member) => member.hostId) })),
   ].filter((group) => group.hostIds.length > 0), [entryGroups, exitGroups]);
-  const openPool = (pool: (typeof nodePools)[number]) => setEditing({ id: pool.id, name: pool.name, role: pool.role as PoolRole, hostIds: pool.hostIds });
+  const openPool = (pool: (typeof nodePools)[number]) => setEditing({
+    id: pool.id,
+    name: pool.name,
+    role: pool.role === "landing" ? "landing" : "relay",
+    hostIds: pool.hostIds,
+    landing: landingDraftFrom((pool.landing?.config as LandingConfigView) ?? null),
+    directDomain: pool.landing?.directDomain || "",
+    configured: !!pool.landing?.configured,
+  });
+  const newPool = (role: PoolRole): PoolDraft => ({ name: "", role, hostIds: [], landing: landingDraftFrom(null), directDomain: "", configured: false });
+  const draftError = editing?.role === "landing" ? (editing.hostIds.length > MAX_LANDING_MEMBERS ? `落地池最多 ${MAX_LANDING_MEMBERS} 台` : landingDraftError(editing.landing)) : "";
+  const submit = () => {
+    if (!editing) return;
+    save.mutate({
+      id: editing.id,
+      name: editing.name.trim(),
+      role: editing.role,
+      hostIds: editing.hostIds,
+      ...(editing.role === "landing" ? { landing: landingInputFromDraft(editing.landing), directDomain: editing.directDomain.trim() || null } : {}),
+    });
+  };
   const editingFollowers = editing?.id ? nodePools.find((pool) => pool.id === editing.id)?.followers || [] : [];
   /*
     组的成员跟不跟节点池：跟着的，卡底下一个醒目的 chip（这是要一眼看见的状态）；没跟的只在说明
@@ -196,8 +246,11 @@ export function NodePoolsSection({ hosts, onOpenGroup, onCreateGroup, isAdmin = 
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-60">
-            <DropdownMenuItem onSelect={() => setEditing({ name: "", role: "relay", hostIds: [] })} data-testid="node-pool-new-pool">
-              节点池<span className="ml-auto text-[11px] text-muted-foreground">线路里一层候选</span>
+            <DropdownMenuItem onSelect={() => setEditing(newPool("relay"))} data-testid="node-pool-new-pool">
+              中转池<span className="ml-auto text-[11px] text-muted-foreground">线路里一层候选</span>
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => setEditing(newPool("landing"))} data-testid="node-pool-new-landing">
+              落地池<span className="ml-auto text-[11px] text-muted-foreground">几台一份配置</span>
             </DropdownMenuItem>
             {onCreateGroup ? (
               <>
@@ -213,7 +266,9 @@ export function NodePoolsSection({ hosts, onOpenGroup, onCreateGroup, isAdmin = 
       {board.isLoading ? <p className="px-1 text-[12.5px] text-muted-foreground">在读节点池…</p> : null}
 
       {nodePools.length > 0 && entryGroups.length + exitGroups.length > 0 ? <LineSec left="中转池 / 落地池" right={`${nodePools.length} 个`} /> : null}
-      {nodePools.map((pool) => (
+      {nodePools.map((pool) => pool.role === "landing" ? (
+        <LandingPoolCard key={`p${pool.id}`} pool={pool} onOpen={() => openPool(pool)} />
+      ) : (
         <LineCard
           key={`p${pool.id}`}
           className="cursor-pointer hover:border-[var(--fx-stroke)]"
@@ -329,12 +384,16 @@ export function NodePoolsSection({ hosts, onOpenGroup, onCreateGroup, isAdmin = 
         {editing ? (
           <DialogContent className="sm:max-w-md">
             <DialogHeader>
-              <DialogTitle>{editing.id ? "编辑节点池" : "新建节点池"}</DialogTitle>
-              <DialogDescription>线路里一层选这个池，就在这几台里按整条链的延迟挑。</DialogDescription>
+              <DialogTitle>{editing.id ? (editing.role === "landing" ? "编辑落地池" : "编辑节点池") : editing.role === "landing" ? "新建落地池" : "新建节点池"}</DialogTitle>
+              <DialogDescription>
+                {editing.role === "landing"
+                  ? "几台机器开同一份落地（协议、端口、密钥一样），订阅里整个池只出一条。"
+                  : "线路里一层选这个池，就在这几台里按整条链的延迟挑。"}
+              </DialogDescription>
             </DialogHeader>
             {/* fx-line-ui：「加机器」「从组带入」和机器 chip 跟线路那几屏一样大（不被触屏 44px 撑高） */}
             <div className="fx-line-ui flex flex-col gap-3">
-              <Input value={editing.name} onChange={(event) => setEditing({ ...editing, name: event.target.value.slice(0, 60) })} placeholder="例如：香港中转池" aria-label="节点池名字" />
+              <Input value={editing.name} onChange={(event) => setEditing({ ...editing, name: event.target.value.slice(0, 60) })} placeholder={editing.role === "landing" ? "例如：香港落地池" : "例如：香港中转池"} aria-label="节点池名字" />
               <div className="flex flex-col gap-1">
                 <LineSegmented ariaLabel="节点池用途" value={editing.role} options={ROLE_OPTIONS} onChange={(role) => setEditing({ ...editing, role })} />
                 <p className="px-1 text-[11.5px] text-muted-foreground">{ROLE_HINT[editing.role]}</p>
@@ -353,7 +412,7 @@ export function NodePoolsSection({ hosts, onOpenGroup, onCreateGroup, isAdmin = 
                 ))}
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <LineChipButton variant="add"><Plus className="h-3 w-3" />加机器</LineChipButton>
+                    <LineChipButton variant="add" disabled={editing.role === "landing" && editing.hostIds.length >= MAX_LANDING_MEMBERS} data-testid="node-pool-add-host"><Plus className="h-3 w-3" />加机器</LineChipButton>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="start" className="max-h-72">
                     {hosts.filter((host) => !editing.hostIds.includes(host.id)).map((host) => (
@@ -381,18 +440,83 @@ export function NodePoolsSection({ hosts, onOpenGroup, onCreateGroup, isAdmin = 
                   </DropdownMenu>
                 ) : null}
               </div>
+              {editing.role === "landing" ? (
+                <LandingPoolFields
+                  draft={editing.landing}
+                  onChange={(landing) => setEditing({ ...editing, landing })}
+                  directDomain={editing.directDomain}
+                  onDirectDomainChange={(directDomain) => setEditing({ ...editing, directDomain })}
+                  editing={!!editing.id && editing.configured}
+                  rotating={rotate.isPending}
+                  onRotate={editing.id ? () => { if (window.confirm("换掉这个落地池的全部凭据和密钥？每台一起换，客户端要重新拉订阅。")) rotate.mutate({ id: editing.id! }); } : undefined}
+                />
+              ) : null}
+              {draftError ? <p className="text-[11.5px] text-[var(--fx-warn-text)]">{draftError}</p> : null}
             </div>
             <DialogFooter>
               {editing.id ? (
                 <Button type="button" variant="ghost" className="mr-auto text-[var(--fx-down-text)]" disabled={remove.isPending} onClick={() => remove.mutate({ id: editing.id! })}>删掉这个池</Button>
               ) : null}
               <Button type="button" variant="outline" onClick={() => setEditing(null)}>取消</Button>
-              <Button type="button" disabled={!editing.name.trim() || editing.hostIds.length === 0 || save.isPending} onClick={() => save.mutate({ id: editing.id, name: editing.name.trim(), role: editing.role, hostIds: editing.hostIds })}>保存</Button>
+              <Button type="button" disabled={!editing.name.trim() || editing.hostIds.length === 0 || !!draftError || save.isPending} onClick={submit} data-testid="node-pool-save">保存</Button>
             </DialogFooter>
           </DialogContent>
         ) : null}
       </Dialog>
     </div>
+  );
+}
+
+type PoolBoardPool = inferRouterOutputs<AppRouter>["lineDiagnostics"]["poolBoard"]["nodePools"][number];
+
+/**
+ * 落地池的卡（2.3.500）：协议一句话、每台开在哪个端口（换了端口的标出来、没开出来的说为什么）、
+ * 订阅里一条、用在几条转发。点开是同一个编辑框。
+ */
+function LandingPoolCard({ pool, onOpen }: { pool: PoolBoardPool; onOpen: () => void }) {
+  const landing = pool.landing;
+  const states = new Map((landing?.members || []).map((member) => [member.hostId, member]));
+  const open = pool.members.filter((member) => states.get(member.hostId)?.open && member.tone === "ok").length;
+  return (
+    <LineCard
+      className="cursor-pointer hover:border-[var(--fx-stroke)]"
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={(event) => { if (event.key === "Enter") onOpen(); }}
+      data-testid="landing-pool-card"
+    >
+      <div className="flex min-w-0 items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <b className="truncate text-[14px]">{pool.name}</b>
+          <LinePill tone="acc">落地</LinePill>
+        </div>
+        <LinePill tone={landing?.configured ? countTone(open, pool.total) : "gray"}>{landing?.configured ? `${open}/${pool.total}` : "未配置"}</LinePill>
+      </div>
+      {landing?.configured ? (
+        <p className="mt-1.5 truncate font-mono text-[11.5px] text-muted-foreground" data-testid="landing-pool-summary">
+          {landing.summary}{landing.directDomain ? ` · 直连 ${landing.directDomain}` : ""}
+        </p>
+      ) : null}
+      <div className="mt-[10px] flex flex-wrap gap-1.5">
+        {pool.members.map((member) => {
+          const state = states.get(member.hostId);
+          const failed = !!landing?.configured && !!state?.error;
+          return (
+            <LineChip key={member.hostId} title={failed ? String(state?.error) : state?.portFallback ? `池的端口 ${landing?.config?.port} 在这台被占了，换成了 ${state.port}` : undefined}>
+              <LineDot tone={failed ? "down" : member.tone} />
+              {member.name}
+              {failed ? <span>没开</span> : member.state ? <span>{member.state}</span> : state?.port ? <span className="font-mono">{state.port}{state.portFallback ? "（换了端口）" : ""}</span> : null}
+            </LineChip>
+          );
+        })}
+      </div>
+      <LineHint>
+        {landing?.configured
+          ? `订阅里一条${landing.directDomain ? "（直连走域名）" : "，只走中转"} · 用在 ${landing.rules} 条转发`
+          : "还没配落地协议：点开选协议和端口，面板在每台上开一样的"}
+      </LineHint>
+    </LineCard>
   );
 }
 

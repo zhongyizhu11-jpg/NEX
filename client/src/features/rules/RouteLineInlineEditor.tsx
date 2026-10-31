@@ -16,6 +16,7 @@ import {
   routeHostOptionsOf,
   routeLinePoolsOf,
   routeLineTunnelsOf,
+  routeNodeOptionsOf,
   type ForwardGroupOptionRow,
   type HostOptionRow,
   type LineRuleRow,
@@ -122,9 +123,7 @@ export function useRouteLineEditor({ rule, enabled, status, onPause, pausing = f
   const hosts = useMemo<RouteHostOption[]>(() => routeHostOptionsOf(hostsQuery.data), [hostsQuery.data]);
   const tunnels = useMemo<RouteLineTunnel[]>(() => routeLineTunnelsOf(tunnelsQuery.data), [tunnelsQuery.data]);
   const pools = useMemo<RouteLinePool[]>(() => routeLinePoolsOf(poolsQuery.data), [poolsQuery.data]);
-  const nodeOptions = useMemo(() => ((nodesQuery.data || []) as ProxyNodeRow[])
-    .filter((node) => node.isEnabled !== false && node.isEnabled !== 0 && String(node.address || "").trim() && Number(node.port) > 0)
-    .map((node) => ({ id: Number(node.id), name: String(node.name || `节点 #${node.id}`), protocol: String(node.protocol || "").toUpperCase(), address: String(node.address).trim(), port: Number(node.port) })), [nodesQuery.data]);
+  const nodeOptions = useMemo(() => routeNodeOptionsOf((nodesQuery.data || []) as ProxyNodeRow[]), [nodesQuery.data]);
 
   const routeTunnel = rule && Number(rule.tunnelId || 0) > 0 ? tunnelRows.find((tunnel) => Number(tunnel.id) === Number(rule.tunnelId)) || null : null;
   const entryHostId = routeTunnel ? Number(routeTunnel.exitHostId || 0) || null : Number(rule?.hostId || 0) || null;
@@ -214,6 +213,7 @@ export function useRouteLineEditor({ rule, enabled, status, onPause, pausing = f
         scheduleTimeZone={draft.policy.schedule?.timezone || "Asia/Shanghai"}
         protocol={rule.protocol ? String(rule.protocol) : undefined}
         nodeOptions={nodeOptions}
+        ruleTargetNodeId={Number((rule as any).proxyNodeId || 0) || null}
         pools={pools}
         tunnels={tunnels}
         entryName={entryName}

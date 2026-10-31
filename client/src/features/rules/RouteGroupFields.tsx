@@ -103,6 +103,8 @@ export type RouteGroupFieldsProps = {
   protocol?: string;
   /** 「我的节点」：线路的落地可以直接选一个，地址端口由面板从节点解析、节点地址变了跟着改。 */
   nodeOptions?: RouteNodeOption[];
+  /** 规则目标绑着的节点：是落地池的池节点时，「规则目标」那个落地预览成池里的几台（2.3.500）。 */
+  ruleTargetNodeId?: number | null;
   /** 线路详情里直接改时：每条线路此刻的状态和立刻生效的暂停（见 RouteLinesEditor）。 */
   renderLineStatus?: (line: RouteLine, index: number) => ReactNode;
   /** 线路详情里：此刻在走的那条（描边），主线路也收成一行（见 RouteLinesEditor）。 */
@@ -120,7 +122,7 @@ export type RouteGroupFieldsProps = {
   groupSettingsOpen?: boolean;
 };
 
-export type RouteNodeOption = { id: number; name: string; address: string; port: number; protocol?: string };
+export type RouteNodeOption = { id: number; name: string; address: string; port: number; protocol?: string; landingPool?: { id: number; name: string; members: number; ready: number } | null };
 
 /** 小块选择：选中是整块反白，和策略面板、主机分组同一套（样式在 features/links/LinkSpreadPicker.tsx）。 */
 const choiceClass = linkChoiceClass;
@@ -370,6 +372,7 @@ export function RouteGroupFields({
   defaultAdvancedOpen,
   protocol = "tcp",
   nodeOptions = [],
+  ruleTargetNodeId = null,
   pools = [],
   tunnels = [],
   entryName,
@@ -433,7 +436,7 @@ export function RouteGroupFields({
    * 线路删掉了改指主线路。
    */
   const setLines = (next: RouteLine[]) => {
-    const preview = expandForPreview(next, { entryHostId, pools, tunnels });
+    const preview = expandForPreview(next, { entryHostId, pools, tunnels, nodes: nodeOptions, ruleTargetNodeId });
     const follow = (index: number) => followRoutePath(paths, preview.paths, index);
     const pinIndex = routePolicy.pin ? follow(routePolicy.pin.index) : null;
     onChange({
@@ -617,6 +620,7 @@ export function RouteGroupFields({
         pools={pools}
         tunnels={tunnels}
         nodeOptions={nodeOptions}
+        ruleTargetNodeId={ruleTargetNodeId}
         entryHostId={entryHostId}
         entryName={entryName || (entryHostId ? hostName(entryHostId) : "入口")}
         entryPrefix={entryPrefix}
