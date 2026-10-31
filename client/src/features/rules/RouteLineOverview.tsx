@@ -303,7 +303,8 @@ export function RouteStageStrip({ status }: { status: RouteStatus }) {
     <div className="flex min-w-0 items-end text-[11px]" data-testid="route-stage-strip">
       {nodes.map((node, index) => (
         <div key={index} className="contents">
-          <span className="max-w-[4.75rem] shrink-0 truncate whitespace-nowrap rounded-[8px] border border-[var(--fx-stroke-weak)] bg-[var(--fx-l1-surface)] px-[6px] py-[5px] font-mono text-[10.5px]">{node}</span>
+          {/* 节点框 7px 上下边距（2.3.499 起，约 30px 高，和加高了的线路行一个节奏） */}
+          <span className="max-w-[4.75rem] shrink-0 truncate whitespace-nowrap rounded-[8px] border border-[var(--fx-stroke-weak)] bg-[var(--fx-l1-surface)] px-[6px] py-[7px] font-mono text-[10.5px]">{node}</span>
           {index < stages.length ? (() => {
             const stage = stages[index];
             const tone = stageTone(stage);
@@ -314,7 +315,7 @@ export function RouteStageStrip({ status }: { status: RouteStatus }) {
                   {stage.pct === null ? "—" : `${stage.pct}%`}
                 </div>
                 <div className={cn(
-                  "mx-[2px] mb-[9px] mt-[3px] h-[2px] rounded-[2px]",
+                  "mx-[2px] mb-[11px] mt-[3px] h-[2px] rounded-[2px]",
                   tone === "down" ? "bg-[repeating-linear-gradient(90deg,var(--fx-down-text)_0_5px,transparent_5px_8px)]" : tone === "warn" ? "bg-[var(--fx-warn-text)]" : tone === "ok" ? "bg-[var(--fx-healthy-text)]" : "bg-[var(--fx-stroke-weak)]",
                 )} />
                 <div className="-mt-[6px] h-0 whitespace-nowrap text-[9.5px] text-[var(--fx-down-text)]">{tone === "down" ? stage.why : ""}</div>
@@ -419,13 +420,13 @@ export function RouteLineDetail({
       <div>
         {/* 右边那句「精确到哪一段」去掉了（2.3.499，用户嫌字多）：各段怎么算的放在标题的 title 里 */}
         <LineSec left={<span title="入站：客户端连进来后拨通一条路径的比例；第二段：入口真实拨号的成功率；后面每段：中转探下一跳（近 20 次）">连接 · 最近 10 分钟</span>} />
-        <LineCard className="px-2 py-3">
+        <LineCard className="px-2 py-4">
           <RouteStageStrip status={status} />
           {/*
             最近一次切换 + 异常明细排一行。「暂停这条」去掉了：上面线路列表里每一行都有暂停键，
             两个地方做同一件事反而让人犹豫该点哪个。
           */}
-          <div className="mt-4 flex min-w-0 items-center justify-between gap-2">
+          <div className="mt-[18px] flex min-w-0 items-center justify-between gap-2">
             <span className={lineChipClass("default", "min-w-0")} data-testid="route-line-switch-chip">
               <LineDot tone={chip.tone} /><span className="truncate">{chip.text}</span>
             </span>
