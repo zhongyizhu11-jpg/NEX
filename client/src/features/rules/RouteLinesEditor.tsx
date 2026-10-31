@@ -7,14 +7,12 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { Input } from "@/components/ui/input";
 import {
   LineBadge,
-  LineCard,
   LineChip,
   LineChipButton,
   LineIconButton,
   LineMs,
   LinePath,
   LineRow,
-  LineSec,
   LineZapGlyph,
 } from "@/features/lines/LineUi";
 import { cn } from "@/lib/utils";
@@ -64,6 +62,8 @@ export function RouteLinesEditor({
   ruleId,
   upstreamHostIds = [],
   renderLineStatus,
+  activeLineKey = null,
+  startCollapsed = false,
 }: {
   lines: RouteLine[];
   onChange: (lines: RouteLine[]) => void;
@@ -88,11 +88,15 @@ export function RouteLinesEditor({
    * 线路有状态，就用它代替备用行上「参与切换」那个要保存才生效的勾；还没保存的新线路返回 null，照旧是勾。
    */
   renderLineStatus?: (line: RouteLine, index: number) => ReactNode;
+  /** 此刻在走的那条（线路详情里）：那一行描强调色的边，和只读列表一样一眼看出走的是哪条。 */
+  activeLineKey?: string | null;
+  /** 线路详情里：主线路也收成一行，点开才改。规则表单里新建时主线路一上来是展开的，好直接填。 */
+  startCollapsed?: boolean;
 }) {
   const hostName = (id: number) => hosts.find((host) => host.id === id)?.name || `主机 ${id}`;
   // 打开就有数（效果图里每个候选后面的毫秒）：最近一轮探测的每一段，点 ⚡ 测出来的盖掉它。
   const { latencyOf, testingKey, test, lastRun } = useSegmentLatency({ ruleId: ruleId ?? null, entryHostId });
-  const [openKey, setOpenKey] = useState<string | null>(null);
+  const [openKey, setOpenKey] = useState<string | null>(() => (startCollapsed ? null : lines[0]?.key ?? null));
 
   const setLine = (index: number, patch: Partial<RouteLine>) => onChange(lines.map((line, position) => (position === index ? { ...line, ...patch } : line)));
   const setLayer = (lineIndex: number, layerIndex: number, patch: Partial<RouteLayer>) => {
@@ -358,93 +362,91 @@ export function RouteLinesEditor({
     );
   };
 
+  /** 一条线路：收着是一行（主 / 备 N、路径、状态），点开下面接着它的编辑块。 */
+  const lineBlock = (line: RouteLine, lineIndex: number, handle: ReactNode) => {
+    const isMain = lineIndex === 0;
+    const open = openKey === line.key;
+    const lineStatus = renderLineStatus?.(line, lineIndex) ?? null;
+    const badge = isMain ? "主" : `备 ${lineIndex}`;
+    return (
+      <>
+        <LineRow on={line.key === activeLineKey && !open} className={cn(open && "rounded-b-none border-b-transparent")}>
+          {handle}
+          <LineBadge main={isMain}>{badge}</LineBadge>
+          <button
+            type="button"
+            className="flex min-w-0 flex-1 items-center text-left"
+            aria-expanded={open}
+            aria-label={`${open ? "收起" : "展开改"}${isMain ? "主线路" : badge}：${lineText(line)}`}
+            onClick={() => setOpenKey(open ? null : line.key)}
+            title={open ? "收起" : "点一下展开：改这条、测一下"}
+            data-testid="route-line-open"
+          >
+            <LinePath bad={line.paused}>{lineText(line)}</LinePath>
+          </button>
+          {lineStatus}
+          {lineStatus || isMain ? null : (
+            <Checkbox checked={!line.paused} onCheckedChange={(checked) => setLine(lineIndex, { paused: !checked })} aria-label={`备 ${lineIndex} 参与切换`} title="勾掉 = 暂停这条，保存后生效" />
+          )}
+        </LineRow>
+        {open ? (
+          <div className="rounded-b-[12px] border border-t-0 border-[var(--fx-stroke-weak)] bg-[var(--fx-l1-surface)] px-[10px] pb-[10px]">
+            <div className="flex min-w-0 items-center gap-2 border-t border-dashed border-[var(--fx-stroke-weak)] pt-2">
+              <Input
+                value={line.name}
+                onChange={(event) => setLine(lineIndex, { name: event.target.value.slice(0, 40) })}
+                placeholder={isMain ? "主线路" : defaultRoutePathName(lineIndex)}
+                aria-label={isMain ? "主线路的名字" : `备 ${lineIndex} 的名字`}
+                className="h-7 min-w-0 flex-1 text-[12.5px]"
+              />
+              {testButton(line, lineIndex)}
+              {isMain ? null : (
+                <button
+                  type="button"
+                  className="shrink-0 text-[11.5px] text-[var(--fx-down-text)] hover:underline"
+                  onClick={() => { onChange(lines.filter((_, index) => index !== lineIndex)); setOpenKey(null); }}
+                >
+                  删掉这条
+                </button>
+              )}
+            </div>
+            {renderLayers(line, lineIndex)}
+          </div>
+        ) : null}
+      </>
+    );
+  };
+
   const main = lines[0];
 
   return (
     <section className="fx-line-ui flex min-w-0 flex-col" aria-label="线路" data-testid="route-lines">
-      {main ? (
-        <LineCard data-testid="route-line">
-          <div className="flex min-w-0 items-center justify-between gap-2">
-            <div className="flex min-w-0 items-center gap-2">
-              <LineBadge main>主</LineBadge>
-              <input
-                value={main.name}
-                onChange={(event) => setLine(0, { name: event.target.value.slice(0, 40) })}
-                placeholder="主线路"
-                aria-label="主线路的名字"
-                className="min-w-0 flex-1 rounded-md bg-transparent text-[14px] font-bold outline-none focus:bg-[var(--fx-l2-group)] focus:px-1"
-              />
-            </div>
-            <div className="flex shrink-0 items-center gap-1.5">
-              {renderLineStatus?.(main, 0)}
-              {testButton(main, 0)}
-            </div>
-          </div>
-          {renderLayers(main, 0)}
-        </LineCard>
-      ) : null}
-
-      <LineSec left="备用线路" right={backups.length > 1 ? "拖动排序" : undefined} />
-      {backups.length === 0 ? <p className="mx-1 mb-2 text-[11.5px] text-muted-foreground">还没有备用：主线路坏了没处可切。加一条经别的机器、别的隧道或别的落地的。</p> : null}
+      {/*
+        主线路和备用一样收成一行（2.3.498）：主 / 备 N、整条链怎么走、此刻的状态和暂停；整行点一下展开来改，
+        名字、⚡（逐段测）、中转、落地都在展开的那块里。主线路排第一、不能拖、不能删。
+      */}
+      {main ? <div data-testid="route-line">{lineBlock(main, 0, null)}</div> : null}
+      {backups.length === 0 ? <p className="mx-1 mt-[7px] text-[11.5px] text-muted-foreground">还没有备用：主线路坏了没处可切。加一条经别的机器、别的隧道或别的落地的。</p> : null}
       <SortableReorderContext sortable={sortable} strategy="vertical" restrictToList>
-        <div className="flex flex-col gap-[7px]">
+        <div className="mt-[7px] flex flex-col gap-[7px]">
           {backups.map((line, position) => {
             const lineIndex = position + 1;
-            const open = openKey === line.key;
-            const lineStatus = renderLineStatus?.(line, lineIndex) ?? null;
             return (
               <SortableItem key={line.key} id={line.key}>
                 {({ itemProps, handleProps: { ref: handleRef, ...handleProps } }) => (
                   <div {...itemProps} data-testid="route-line">
-                    <LineRow className={cn(open && "rounded-b-none border-b-transparent")}>
+                    {lineBlock(line, lineIndex, (
                       <button
                         type="button"
                         ref={handleRef as Ref<HTMLButtonElement>}
                         {...handleProps}
                         className="fx-compact-touch -ml-0.5 shrink-0 cursor-grab touch-none px-0.5 text-[14px] leading-none tracking-[-2px] text-muted-foreground/50 active:cursor-grabbing"
                         aria-label={`拖动备 ${lineIndex} 排序`}
+                        title="拖动排序"
                       >
                         ⋮⋮
                       </button>
-                      <LineBadge>备 {lineIndex}</LineBadge>
-                      <button
-                        type="button"
-                        className="flex min-w-0 flex-1 items-center text-left"
-                        aria-expanded={open}
-                        aria-label={`${open ? "收起" : "展开改"}备 ${lineIndex}：${lineText(line)}`}
-                        onClick={() => setOpenKey(open ? null : line.key)}
-                        title={open ? "收起" : "点一下展开：改这条、测一下"}
-                        data-testid="route-line-open"
-                      >
-                        <LinePath bad={line.paused}>{lineText(line)}</LinePath>
-                      </button>
-                      {lineStatus}
-                      {lineStatus ? null : (
-                        <Checkbox checked={!line.paused} onCheckedChange={(checked) => setLine(lineIndex, { paused: !checked })} aria-label={`备 ${lineIndex} 参与切换`} title="勾掉 = 暂停这条，保存后生效" />
-                      )}
-                    </LineRow>
-                    {open ? (
-                      <div className="rounded-b-[12px] border border-t-0 border-[var(--fx-stroke-weak)] bg-[var(--fx-l1-surface)] px-[10px] pb-[10px]">
-                        <div className="flex min-w-0 items-center gap-2 border-t border-dashed border-[var(--fx-stroke-weak)] pt-2">
-                          <Input
-                            value={line.name}
-                            onChange={(event) => setLine(lineIndex, { name: event.target.value.slice(0, 40) })}
-                            placeholder={defaultRoutePathName(lineIndex)}
-                            aria-label={`备 ${lineIndex} 的名字`}
-                            className="h-7 min-w-0 flex-1 text-[12.5px]"
-                          />
-                          {testButton(line, lineIndex)}
-                          <button
-                            type="button"
-                            className="shrink-0 text-[11.5px] text-[var(--fx-down-text)] hover:underline"
-                            onClick={() => { onChange(lines.filter((_, index) => index !== lineIndex)); setOpenKey(null); }}
-                          >
-                            删掉这条
-                          </button>
-                        </div>
-                        {renderLayers(line, lineIndex)}
-                      </div>
-                    ) : null}
+                    ))}
                   </div>
                 )}
               </SortableItem>

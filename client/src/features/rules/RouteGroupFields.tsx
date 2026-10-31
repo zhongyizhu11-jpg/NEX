@@ -104,6 +104,9 @@ export type RouteGroupFieldsProps = {
   nodeOptions?: RouteNodeOption[];
   /** 线路详情里直接改时：每条线路此刻的状态和立刻生效的暂停（见 RouteLinesEditor）。 */
   renderLineStatus?: (line: RouteLine, index: number) => ReactNode;
+  /** 线路详情里：此刻在走的那条（描边），主线路也收成一行（见 RouteLinesEditor）。 */
+  activeLineKey?: string | null;
+  startCollapsed?: boolean;
 };
 
 export type RouteNodeOption = { id: number; name: string; address: string; port: number; protocol?: string };
@@ -330,6 +333,8 @@ export function RouteGroupFields({
   ruleId = null,
   upstreamHostIds = [],
   renderLineStatus,
+  activeLineKey = null,
+  startCollapsed = false,
 }: RouteGroupFieldsProps) {
   const now = nowMs ?? Date.now();
   const udpOnly = normalizeForwardRuleProtocol(protocol) === "udp";
@@ -570,6 +575,8 @@ export function RouteGroupFields({
         ruleId={ruleId}
         upstreamHostIds={upstreamHostIds}
         renderLineStatus={renderLineStatus}
+        activeLineKey={activeLineKey}
+        startCollapsed={startCollapsed}
       />
       <div className="fx-line-ui flex min-w-0 flex-col" data-testid="route-line-mode">
         <LineSec left="怎么切" />

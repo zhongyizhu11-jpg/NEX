@@ -271,7 +271,7 @@ test("线路详情里直接改：给了每条线路的状态，就替掉备用�
     renderLineStatus: (line, index) => (known.has(line.key) ? <span data-testid="line-status">状态{index}</span> : null),
   });
   assert.equal(count(html, /data-testid="line-status"/g), 2, "主线路、备 1 各一份");
-  assert.match(html, /aria-label="主线路的名字"[^]*?状态0[^]*?route-line-test/, "主线路的状态在卡头、⚡ 前面");
+  assert.match(html, /状态0[^]*?aria-label="主线路的名字"[^]*?data-testid="route-line-test"/, "主线路的状态在那一行上，名字和 ⚡ 在展开的那块里");
   assert.equal(count(html, /参与切换/g), 1, "只剩还没保存的备 2 是勾");
   assert.match(html, /aria-label="备 2 参与切换"/);
 });
@@ -288,4 +288,19 @@ test("收着的备用行只有路径和状态（⚡ 在展开的那块里）；�
   const multi = render({ ...group(), lines }, false);
   assert.match(multi, /aria-label="中转怎么挑"/, "两个候选才问怎么挑");
   assert.match(multi, /aria-label="中转可跳过，点一下取消"/, "老配置勾过的照样显示，点一下取消");
+});
+
+test("线路详情里主线路也收成一行：都收着，点开才改；此刻在走的那条描边", () => {
+  const draft = group();
+  const lines = routeLinesFromPaths(draft.paths);
+  const html = render({ ...draft, lines }, false, "tcp", {
+    renderLineStatus: (line) => <span data-testid="line-status">{line.key}</span>,
+    activeLineKey: lines[1].key,
+    startCollapsed: true,
+  });
+  assert.equal(count(html, /data-testid="route-line-open"/g), 2, "主线路、备 1 都是一行");
+  assert.match(html, /aria-expanded="false" aria-label="展开改主线路：/);
+  assert.doesNotMatch(html, /aria-label="主线路的名字"|data-testid="route-line-test"/, "收着的时候名字和 ⚡ 都不出来");
+  assert.equal(count(html, /data-state="on"/g), 1, "只有在走的那条描边");
+  assert.match(html, /data-state="on"[^>]*>(?:(?!data-testid="route-line-open")[^])*?备 1/, "描边的是备 1（此刻在走的）");
 });

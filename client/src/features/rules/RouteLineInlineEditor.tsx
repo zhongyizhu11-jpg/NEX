@@ -23,6 +23,7 @@ import {
   type TunnelOptionRow,
 } from "./routeLineOptions";
 import { SegmentLatencyProvider } from "./SegmentLatencyProvider";
+import { routeLineGroups } from "./routeLineText";
 
 /*
   线路详情第一页直接改线路（2.3.498 起，原来右上角「编辑」再开一层「编辑线路组」框，用户要的是一页改完）：
@@ -189,6 +190,8 @@ export function useRouteLineEditor({ rule, enabled, status, onPause, pausing = f
         upstreamHostIds={routeTunnel ? [Number(routeTunnel.entryHostId || 0)].filter((id) => id > 0) : []}
         defaultAdvancedOpen={false}
         renderLineStatus={(line) => routeLineStatusControls(status, line.key, pauseLine, pausing, lineSwitch)}
+        activeLineKey={status ? routeLineGroups(status).find((group) => group.active)?.key ?? null : null}
+        startCollapsed
       />
     </SegmentLatencyProvider>
   ) : null;
