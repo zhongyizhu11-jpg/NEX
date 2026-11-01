@@ -624,8 +624,8 @@ export function RouteGroupFields({
         ruleTargetNodeId={ruleTargetNodeId}
         destSpreadAllowed={mode !== "weighted" && delivery !== "aggregate" && delivery !== "replicate"}
         destSpreadNote={mode === "weighted"
-          ? "按权重：几个落地已经按下面「新连接怎么分」一起分"
-          : delivery === "aggregate" ? "聚合：在用的那条线路，几个落地按负载一起分" : null}
+          ? "按权重：多落地已经按下面「新连接怎么分」一起分"
+          : delivery === "aggregate" ? "聚合：在用的那条线路，多落地按负载一起分" : null}
         entryHostId={entryHostId}
         entryName={entryName || (entryHostId ? hostName(entryHostId) : "入口")}
         entryPrefix={entryPrefix}

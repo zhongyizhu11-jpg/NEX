@@ -78,7 +78,7 @@ export type RouteLine = {
   weight: number;
   /** 健康检查探哪：空 = 探路径的拨号地址；直连落地是用户态转发时填一个能反映整条链的地址。 */
   probe?: RouteEndpoint | null;
-  /** 几个落地怎么用（2.3.501）：挑一个（默认）或者这条线路在用时一起分，见 ROUTE_DEST_SPREADS。 */
+  /** 多落地怎么用（2.3.501）：主备（默认）或者这条线路在用时一起分，见 ROUTE_DEST_SPREADS。 */
   destSpread?: RouteDestSpread;
 };
 

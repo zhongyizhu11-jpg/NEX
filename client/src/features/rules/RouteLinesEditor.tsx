@@ -133,7 +133,7 @@ export function RouteLinesEditor({
   /** 规则目标绑着的节点（落地池的池节点时，「规则目标」那个落地写成「池 · 名字 · N 台」）。 */
   ruleTargetNodeId?: number | null;
   /**
-   * 有几个落地的线路能不能选「几个落地怎么用」（2.3.501）：一次走一条线路时才能（主备 / 择优 / 时段 / 指定）；
+   * 有几个落地的线路能不能选「多落地怎么用」（2.3.501）：一次走一条线路时才能（主备 / 择优 / 时段 / 指定）；
    * 按权重、聚合时整组本来就在分，用 destSpreadNote 说一句。
    */
   destSpreadAllowed?: boolean;
@@ -851,14 +851,14 @@ function DestEditor({
         {dests.length < MAX_LINE_DESTS ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <LineChipButton variant="add" data-testid="route-line-dest-parallel" title="现在这个落地留着，再并列一个；几个落地怎么用在下面选">+ 并列</LineChipButton>
+              <LineChipButton variant="add" data-testid="route-line-dest-parallel" title="现在这个落地留着，再并列一个；多落地怎么用在下面选">+ 并列</LineChipButton>
             </DropdownMenuTrigger>
             {menu("append")}
           </DropdownMenu>
         ) : null}
       </div>
       {/*
-        几个落地怎么用（2.3.501）：和中转那一跳的「最低延迟 / 按顺序」同一个样子。挑一个 = 以前的样子；
+        多落地怎么用（2.3.501）：和中转那一跳的「最低延迟 / 按顺序」同一个样子。主备 = 以前的样子；
         别的几种是这条线路在用时，新连接在这几个落地之间分（Agent 2.2.245 起）。
       */}
       {landingCount >= 2 && spreadAllowed ? (
@@ -868,7 +868,7 @@ function DestEditor({
               <button
                 type="button"
                 className="inline-flex items-center gap-1 rounded-[8px] border border-[var(--fx-stroke-weak)] bg-[var(--fx-l1-surface)] px-2 py-[3px] text-[11.5px] leading-[1.3] text-foreground"
-                aria-label="几个落地怎么用"
+                aria-label="多落地怎么用"
                 title={ROUTE_DEST_SPREAD_LABELS[spread].hint}
                 data-testid="route-line-dest-spread"
               >
@@ -877,13 +877,10 @@ function DestEditor({
                 <ChevronDown className="h-3 w-3 text-muted-foreground" aria-hidden="true" />
               </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-64">
+            <DropdownMenuContent align="start" className="w-40">
               {ROUTE_DEST_SPREADS.map((value) => (
-                <DropdownMenuItem key={value} onSelect={() => onSpreadChange(value)} data-testid={`route-line-dest-spread-${value}`}>
-                  <span className="flex min-w-0 flex-col">
-                    <span className={cn("text-[12.5px]", value === spread && "font-semibold text-[var(--fx-accent)]")}>{ROUTE_DEST_SPREAD_LABELS[value].label}</span>
-                    <span className="text-[11px] leading-[1.4] text-muted-foreground">{ROUTE_DEST_SPREAD_LABELS[value].hint}</span>
-                  </span>
+                <DropdownMenuItem key={value} onSelect={() => onSpreadChange(value)} title={ROUTE_DEST_SPREAD_LABELS[value].hint} data-testid={`route-line-dest-spread-${value}`}>
+                  <span className={cn("text-[12.5px]", value === spread && "font-semibold text-[var(--fx-accent)]")}>{ROUTE_DEST_SPREAD_LABELS[value].label}</span>
                 </DropdownMenuItem>
               ))}
             </DropdownMenuContent>

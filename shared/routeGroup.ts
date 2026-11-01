@@ -159,14 +159,14 @@ export type RoutePath = {
   lineKey?: string | null;
   /**
    * 这条路径所在的线路有几个落地、选了「一起分」时（2.3.501）：这条线路在用时，新连接在它的几个落地之间
-   * 怎么分。只有线路展开出来的路径才有；没有 = 挑一个（老样子）。
+   * 怎么分。只有线路展开出来的路径才有；没有 = 主备（老样子）。
    */
   destSpread?: RouteLineDestSpread | null;
 };
 
 /**
  * 一条线路有几个落地（「+ 并列」的、落地池里的几台）时，这条线路在用时新连接怎么用它们（2.3.501）：
- *   one         挑一个：和以前一样，几个落地里按「怎么切」挑一个走，坏了换下一个
+ *   one         主备：和以前一样，几个落地里按「怎么切」挑一个走，坏了换下一个
  *   least_load  按负载分：给现在挂着连接最少的那个落地
  *   round_robin 轮流
  *   random      随机
@@ -175,11 +175,11 @@ export type RoutePath = {
  */
 export const ROUTE_DEST_SPREADS = ["one", "least_load", "round_robin", "random", "ip_hash"] as const;
 export type RouteDestSpread = (typeof ROUTE_DEST_SPREADS)[number];
-/** 路径上记的：只有「一起分」的几种（挑一个不记）。 */
+/** 路径上记的：只有「一起分」的几种（主备不记）。 */
 export type RouteLineDestSpread = Exclude<RouteDestSpread, "one">;
 
 export const ROUTE_DEST_SPREAD_LABELS: Record<RouteDestSpread, { label: string; hint: string }> = {
-  one: { label: "挑一个", hint: "几个落地里只用一个，按上面「怎么切」挑，坏了换下一个" },
+  one: { label: "主备", hint: "几个落地里只用一个，按上面「怎么切」挑，坏了换下一个" },
   least_load: { label: "按负载分", hint: "这条线路在用时，新连接给现在连接最少的那个落地" },
   round_robin: { label: "轮流", hint: "这条线路在用时，新连接轮流走每个落地" },
   random: { label: "随机", hint: "这条线路在用时，新连接随机挑一个能用的落地" },

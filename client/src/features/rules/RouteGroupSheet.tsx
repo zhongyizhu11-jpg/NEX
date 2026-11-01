@@ -262,7 +262,7 @@ export function RouteGroupPanel({ policy, status, events, nowMs, timeZone, showP
         >
           <SentenceRow label="策略" detail={`${modeInfo.template} · ${modeInfo.label}：${routeModeHint(policy.mode, policy.perSession)}`} />
           {(() => {
-            // 「落地怎么分」（2.3.501）：一次走一条线路时，选了几个落地一起分的线路在这里说一句
+            // 「多落地」（2.3.501）：一次走一条线路时，选了多落地一起分的线路在这里列出来
             const delivery = status?.delivery;
             if (weighted || delivery === "aggregate" || delivery === "replicate") return null;
             const spreading = (status?.lines || [])
@@ -271,8 +271,8 @@ export function RouteGroupPanel({ policy, status, events, nowMs, timeZone, showP
             if (spreading.length === 0) return null;
             return (
               <SentenceRow
-                label="几个落地"
-                detail={`${spreading.map(({ line, index }) => `${routeLineName(line.name, index)} ${ROUTE_DEST_SPREAD_LABELS[line.destSpread || "one"].label}`).join("；")}：这条线路在用时，新连接在它的几个落地之间分`}
+                label="多落地"
+                detail={spreading.map(({ line, index }) => `${routeLineName(line.name, index)} ${ROUTE_DEST_SPREAD_LABELS[line.destSpread || "one"].label}`).join("；")}
               />
             );
           })()}

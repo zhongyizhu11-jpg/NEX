@@ -383,7 +383,7 @@ export function describeRoutePolicy(rule: RoutePolicyRule, options: RoutePolicyO
     && mode !== "weighted" && spreadDelivery !== "aggregate" && spreadDelivery !== "replicate"
     && paths.some((path) => !!path.destSpread)
   ) {
-    warnings.push(`这台机器的 Agent 早于 ${ROUTE_DEST_SPREAD_AGENT_VERSION}：「几个落地一起分」它不认，每条线路只用一个落地。升级 Agent 后才分。`);
+    warnings.push(`这台机器的 Agent 早于 ${ROUTE_DEST_SPREAD_AGENT_VERSION}：多落地分流它不认，每条线路只用一个落地。升级 Agent 后才分。`);
   }
   for (const [index, path] of paths.entries()) {
     if (path.issue) warnings.push(`「${label(index)}」眼下用不了：${describeRouteIssue(path.issue)}。`);

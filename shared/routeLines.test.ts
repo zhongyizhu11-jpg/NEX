@@ -286,19 +286,19 @@ test("暂停的线路不占路：主线路停着时备 1 里和它重的那台�
   assert.deepEqual(active.filter((path) => path.lineKey === "bk1").map((path) => path.hops.join(".")), ["3"]);
 });
 
-// ---------------------------------------------------------------- 几个落地怎么用（2.3.501）
+// ---------------------------------------------------------------- 多落地怎么用（2.3.501）
 
-test("线路的「落地怎么分」：存得下、认不出的当挑一个；展开时带到这条线路的每条路径上，路径存取不丢、还原回线路", () => {
+test("线路的「落地怎么分」：存得下、认不出的当主备；展开时带到这条线路的每条路径上，路径存取不丢、还原回线路", () => {
   const raw = serializeRouteLines([
     line("main", { dests: [{ dest: { ip: "1.1.1.1", port: 443 }, destNodeId: null }, { dest: { ip: "2.2.2.2", port: 443 }, destNodeId: null }], destSpread: "least_load" }),
     line("bk", { layers: [newRouteLayer({ kind: "hosts", hostIds: [6] })], destSpread: "one" }),
   ]);
   assert.match(String(raw), /"destSpread":"least_load"/);
-  assert.doesNotMatch(String(raw), /"destSpread":"one"/, "挑一个不存");
+  assert.doesNotMatch(String(raw), /"destSpread":"one"/, "主备不存");
   const lines = parseRouteLines(raw);
   assert.equal(lines[0].destSpread, "least_load");
   assert.equal(lines[1].destSpread, undefined);
-  assert.equal(parseRouteLines(JSON.stringify([{ key: "x", name: "x", layers: [], dests: [], weight: 50, destSpread: "bogus" }]))[0].destSpread, undefined, "认不出的当挑一个");
+  assert.equal(parseRouteLines(JSON.stringify([{ key: "x", name: "x", layers: [], dests: [], weight: 50, destSpread: "bogus" }]))[0].destSpread, undefined, "认不出的当主备");
 
   const { paths } = expandRouteLines(lines, ctx());
   assert.deepEqual(paths.map((path) => [path.lineKey, path.destSpread ?? null]), [["main", "least_load"], ["main", "least_load"], ["bk", null]]);

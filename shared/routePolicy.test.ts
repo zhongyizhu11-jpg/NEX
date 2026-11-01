@@ -326,7 +326,7 @@ test("时段表那几行带着配置里的序号：前面有一条失效的，�
   assert.equal(policy.preferredIndex, 2);
 });
 
-test("几个落地一起分（2.3.501）：调度的 Agent 早于 2.2.245 时说一句；够新、按权重、没选一起分时不说；「其余时候」同一条线路只写一次", () => {
+test("多落地一起分（2.3.501）：调度的 Agent 早于 2.2.245 时说一句；够新、按权重、没选一起分时不说；「其余时候」同一条线路只写一次", () => {
   const spreadPaths = JSON.stringify([
     { key: "main-a", name: "主线路", hops: [], dest: null, weight: 50, tier: 0, lineKey: "main", destSpread: "least_load" },
     { key: "main-b", name: "主线路", hops: [], dest: { ip: "198.51.100.21", port: 443 }, weight: 50, tier: 0, lineKey: "main", destSpread: "least_load" },

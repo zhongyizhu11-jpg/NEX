@@ -333,3 +333,11 @@ test("线路详情照效果图 ①（2.3.499）：「线路」标题右边那行
   assert.match(closed, /fake-editor[^]*?连接 · 最近 10 分钟/);
   assert.doesNotMatch(closed, /精确到哪一段/);
 });
+
+test("调度计划里的「多落地」（2.3.501）：一起分的线路列成「主线路 按负载分」，不带长说明；主备的线路不列", () => {
+  const line = (key: string, name: string, destSpread?: "one" | "least_load" | "ip_hash") => ({ key, name, paused: false, layers: [], dests: [], weight: 50, ...(destSpread ? { destSpread } : {}) });
+  const html = render({ status: status({ lines: [line("main", "主线路", "least_load"), line("bk", "备用 1", "one"), line("bk2", "晚高峰", "ip_hash")] }) });
+  assert.match(html, />多落地<[^]*?主线路 按负载分；晚高峰 按访客固定</);
+  assert.doesNotMatch(html, /这条线路在用时/);
+  assert.doesNotMatch(render({ status: status({ lines: [line("main", "主线路")] }) }), />多落地</, "没有线路一起分：不列");
+});

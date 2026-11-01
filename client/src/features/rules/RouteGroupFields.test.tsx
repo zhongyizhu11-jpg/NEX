@@ -415,12 +415,12 @@ function withLines(draft: RouteGroupDraft, lines: RouteLine[]): RouteGroupDraft 
   return { ...draft, lines, paths };
 }
 
-test("几个落地怎么用（2.3.501）：线路有两个以上落地、一次走一条线路时，落地下面有「N 个落地：挑一个」；选了一起分，收起那一行带上", () => {
+test("多落地怎么用（2.3.501）：线路有两个以上落地、一次走一条线路时，落地下面有「N 个落地：主备」；选了一起分，收起那一行带上", () => {
   const draft = group("failover");
   const lines = routeLinesFromPaths(draft.paths);
   lines[0] = { ...lines[0], dests: [{ dest: null, destNodeId: null }, { dest: { ip: "198.51.100.7", port: 443 }, destNodeId: null }] };
   const html = render(withLines(draft, lines), false);
-  assert.match(html, /data-testid="route-line-dest-spread"[^>]*>[^]*?2 个落地：[^]*?挑一个/, "默认挑一个");
+  assert.match(html, /data-testid="route-line-dest-spread"[^>]*>[^]*?2 个落地：[^]*?主备/, "默认主备");
   const spreading = render(withLines(draft, [{ ...lines[0], destSpread: "least_load" }, ...lines.slice(1)]), false);
   assert.match(spreading, /data-testid="route-line-dest-spread"[^>]*>[^]*?按负载分/);
   assert.match(spreading, /HK entry 01 → JP relay 02 → 落地 等 2 个 · 按负载分/, "收起那一行写上怎么分");
@@ -434,6 +434,6 @@ test("按权重、聚合时整组本来就在分：不给选，落地下面说�
   lines[0] = { ...lines[0], dests: [{ dest: null, destNodeId: null }, { dest: { ip: "198.51.100.7", port: 443 }, destNodeId: null }], destSpread: "least_load" };
   const html = render(withLines(draft, lines), false);
   assert.doesNotMatch(html, /data-testid="route-line-dest-spread"/);
-  assert.match(html, /data-testid="route-line-dest-spread-note"[^>]*>按权重：几个落地已经按下面「新连接怎么分」一起分/);
+  assert.match(html, /data-testid="route-line-dest-spread-note"[^>]*>按权重：多落地已经按下面「新连接怎么分」一起分/);
   assert.doesNotMatch(html, /· 按负载分/, "存着的一起分这时不生效，行上也不写");
 });
