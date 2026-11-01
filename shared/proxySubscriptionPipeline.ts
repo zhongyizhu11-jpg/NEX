@@ -86,7 +86,8 @@ export function buildProxySubPipelineDocument(input: ProxySubPipelineInput): Pro
     customGroups,
     categoryTargets: input.options.categoryTargets,
     providers: input.providers,
-    unlockStatuses: input.unlockStatuses,
+    // 令牌关了解锁组：不给检测结论，分类组照常先走主选择器
+    unlockStatuses: input.options.unlockGroups === false ? null : input.unlockStatuses,
   });
 
   // 自定义规则。没有节点时文档里没有组，规则也不该有（客户端会拒绝指向不存在的组）。
