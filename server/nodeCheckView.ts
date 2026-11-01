@@ -11,7 +11,8 @@ import { SITE_LATENCY_TARGETS, summarizeSiteSamples, type SiteLatencySample } fr
 import { singboxOutbound } from "../shared/proxySubscription";
 import { proxyNodeFromTemplateRow, type ProxySubscriptionEntry } from "../shared/proxySubscriptionPlan";
 import { unlockChipItems, UNLOCK_SERVICES } from "../shared/unlockCheck";
-import type { ExitCheckResult } from "../shared/nodeCheck";
+import { NODE_CHECK_ACCURATE_VERSION, type ExitCheckResult } from "../shared/nodeCheck";
+import { isAgentVersionAtLeast } from "../shared/version";
 
 /*
   两处按需检查怎么落到主机上（逻辑在 ops/nodeCheck.ts，这里只做节点 / 线路 ↔ 主机的对应）：
@@ -29,6 +30,8 @@ export type NodeCheckHostCandidate = {
   name: string;
   online: boolean;
   supported: boolean;
+  /** Agent 2.2.246 起测速测得准（就近的 Ookla 测速点、上传只算对端收下的）。 */
+  accurate: boolean;
   /** 出口检测：绑了这个节点的转发的入口机。 */
   preferred: boolean;
 };
@@ -39,6 +42,7 @@ function candidateOf(item: any, preferred: boolean): NodeCheckHostCandidate {
     name: String(item.name || `主机 ${item.id}`),
     online: !!item.isOnline,
     supported: hostSupportsNodeCheck(item),
+    accurate: isAgentVersionAtLeast(String(item.agentVersion || "").replace(/^v/i, ""), NODE_CHECK_ACCURATE_VERSION),
     preferred,
   };
 }

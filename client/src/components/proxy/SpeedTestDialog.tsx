@@ -6,15 +6,17 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { countryFlagLabel } from "@/lib/flagEmojiSupport";
 import { trpc } from "@/lib/trpc";
-import { formatMbps, NODE_CHECK_PANEL_FALLBACK_VERSION, NODE_CHECK_PHASE_LABELS, type SpeedSample, type SpeedTestResult } from "@shared/nodeCheck";
+import { formatSpeedMs, formatTraffic, speedServerLabel } from "./speedTestFormat";
+import { formatMbps, NODE_CHECK_ACCURATE_VERSION, NODE_CHECK_PANEL_FALLBACK_VERSION, NODE_CHECK_PHASE_LABELS, type SpeedSample, type SpeedTestResult } from "@shared/nodeCheck";
 
 /*
   网速测试：一台机器（或经一个节点）对 Cloudflare 测速。画法照 Stash 的「网速测试」：
   大数字 + 下载 / 上传曲线，下面「出站」一行、「启动」按钮、延迟 / 抖动 / 下载 / 上传 /
   服务机房 / 出口 / 网络 一列。跑的时候曲线是实时的（Agent 每秒送一次进度，这里 1 秒一刷）。
 
-  先对 Cloudflare 测；国内机器到国外 80 / 443 常常不通，连不上就改测到面板自己（结果 server = "panel"，
-  note 说明原因，测的是机器到面板那条路；Agent 2.2.242 起才会改测）。
+  Agent 2.2.246 起先就近找一个 Ookla 测速点（speedtest.net 按出口 IP 给最近的几台，国内机器拿到电信 / 联通 /
+  移动的），测不了换 Cloudflare，都不行才测到面板自己（server = "panel"：量的是到面板这条路，上限是面板
+  服务器的带宽，界面上写明，不当成这台机器的带宽）。2.2.245 以前只有 Cloudflare → 面板，上传还偏高。
 
   subject 两种：
     · { hostId }：主机详情里的「网速测试」，只测这台机器自己的带宽。
@@ -123,7 +125,7 @@ export function SpeedTestDialog({ subject, name, onOpenChange }: { subject: Spee
     : latest?.speed ? formatMbps(latest.speed.downloadMbps) : "—";
   const subline = pending
     ? `${NODE_CHECK_PHASE_LABELS[pending.phase] || "测速中"}…`
-    : latest?.speed ? `已完成 · ${formatCheckedAt(latest.checkedAt)}` : latest?.error ? "上次失败" : "还没测过";
+    : latest?.speed ? `已完成 · ${formatCheckedAt(latest.checkedAt)}${latest.speed.server === "panel" ? " · 到面板的速度" : ""}` : latest?.error ? "上次失败" : "还没测过";
 
   const exitHostLabel = useMemo(() => {
     if (hostId > 0) return hostStatus.data ? `${countryFlagLabel(hostStatus.data.countryCode) || ""} ${hostStatus.data.hostName}`.trim() : "";
@@ -136,6 +138,9 @@ export function SpeedTestDialog({ subject, name, onOpenChange }: { subject: Spee
     else if (entryKey) startEntry.mutate({ entryKey });
   };
   const result = latest?.speed ?? null;
+  // 2.2.246 起测得准：就近的 Ookla 测速点、上传只算对端收下的
+  const accurate = hostId > 0 ? !!hostStatus.data?.accurate : !!entryHost?.accurate;
+  const agentKnown = hostId > 0 ? !!hostStatus.data?.supported : !!entryHost?.supported;
 
   return (
     <Dialog open={!!subject} onOpenChange={onOpenChange}>
@@ -181,24 +186,36 @@ export function SpeedTestDialog({ subject, name, onOpenChange }: { subject: Spee
           {result ? (
             <div className="fx-hd-sec">
               <div className="fx-hd-sec-body divide-y divide-[var(--fx-stroke-weak)] gap-0 pt-0.5" data-testid="speed-test-result">
-                <ResultRow label="延迟" value={`${Math.round(result.latencyMs)} ms`} />
-                <ResultRow label="抖动" value={`${Math.round(result.jitterMs)} ms`} />
-                {result.connectMs > 0 ? <ResultRow label="建连" value={`${Math.round(result.connectMs)} ms`} /> : null}
+                <ResultRow label="延迟" value={formatSpeedMs(result.latencyMs)} />
+                <ResultRow label="抖动" value={formatSpeedMs(result.jitterMs)} />
+                {result.connectMs > 0 ? <ResultRow label="建连" value={formatSpeedMs(result.connectMs)} /> : null}
                 <ResultRow label="下载" value={formatMbps(result.downloadMbps)} />
                 <ResultRow label="上传" value={formatMbps(result.uploadMbps)} />
-                <ResultRow label="测速点" value={result.server === "panel" ? "面板服务器" : ["Cloudflare", result.colo].filter(Boolean).join(" · ")} />
+                <ResultRow label="测速点" value={speedServerLabel(result)} />
                 <ResultRow label="出口" value={[[result.city, result.country].filter(Boolean).join(", "), result.clientIp].filter(Boolean).join(" · ") || "—"} />
                 <ResultRow label="网络" value={[result.asn, result.asOrg].filter(Boolean).join(" · ") || "—"} />
+                {result.downloadBytes + result.uploadBytes > 0 ? <ResultRow label="用掉流量" value={formatTraffic(result.downloadBytes + result.uploadBytes)} /> : null}
               </div>
             </div>
           ) : null}
           {result?.note ? <p className="text-center text-[11.5px] text-[var(--fx-warn-text)]" data-testid="speed-test-note">{result.note}</p> : null}
           {hostId > 0 && hostStatus.data && hostStatus.data.supported && !hostStatus.data.panelFallback ? (
             <p className="text-center text-[11.5px] text-[var(--fx-warn-text)]">这台的 Agent 早于 {NODE_CHECK_PANEL_FALLBACK_VERSION}：连不上 Cloudflare 时不会改测到面板，升级 Agent 后才会</p>
+          ) : agentKnown && !accurate ? (
+            <p className="text-center text-[11.5px] text-[var(--fx-warn-text)]" data-testid="speed-test-upgrade">
+              {entryKey ? "测速那台" : "这台"}的 Agent 早于 {NODE_CHECK_ACCURATE_VERSION}：上传数偏高，国内机器多半只能测到面板（上限是面板的带宽）。升级 Agent 后就近找测速点，测得准
+            </p>
           ) : null}
-          <p className="text-center text-[11px] text-muted-foreground">
-            {entryKey ? "经整条链对 Cloudflare 测速 · 连不上时改测到面板 · 每次约 300 MB" : "对 Cloudflare 测速 · 连不上时改测到面板 · 每次约 300 MB"}
-          </p>
+          <div className="text-center text-[11px] leading-[1.6] text-muted-foreground">
+            {accurate || !agentKnown ? (
+              <>
+                <p>{entryKey ? "经整条链，" : ""}就近找测速点：Ookla → Cloudflare → 面板</p>
+                <p>流量约为速度 × 18 秒，100M 约 230 MB</p>
+              </>
+            ) : (
+              <p>{entryKey ? "经整条链对 Cloudflare 测速 · 连不上时改测到面板" : "对 Cloudflare 测速 · 连不上时改测到面板"}</p>
+            )}
+          </div>
         </div>
       </DialogContent>
     </Dialog>

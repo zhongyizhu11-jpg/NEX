@@ -3,11 +3,12 @@ import { z } from "zod";
 import { protectedProcedure } from "../_core/trpc";
 import { requireHostAccess } from "./helpers";
 import { hostSupportsNodeCheck, listSpeedTestHistory, NodeCheckError, nodeCheckStatus, startNodeCheck } from "../ops/nodeCheck";
-import { NODE_CHECK_MIN_AGENT_VERSION, NODE_CHECK_PANEL_FALLBACK_VERSION } from "@shared/nodeCheck";
+import { NODE_CHECK_ACCURATE_VERSION, NODE_CHECK_MIN_AGENT_VERSION, NODE_CHECK_PANEL_FALLBACK_VERSION } from "@shared/nodeCheck";
 import { isAgentVersionAtLeast } from "@shared/version";
 
 /*
-  trpc.hosts.speedTest* —— 主机详情里的「网速测试」（Agent 2.2.241 起）：这台机器对 Cloudflare 测速。
+  trpc.hosts.speedTest* —— 主机详情里的「网速测试」（Agent 2.2.241 起）：这台机器测自己的带宽（2.2.246 起先就近的
+  Ookla 测速点，再 Cloudflare，再面板）。
 
   speedTestStatus   在跑的那次（带曲线进度）+ 最近一次结果；能用这台主机的人都能看
   speedTestHistory  最近 10 次
@@ -34,6 +35,8 @@ export const hostSpeedTestProcedures = {
         minAgentVersion: NODE_CHECK_MIN_AGENT_VERSION,
         // 连不上 Cloudflare 时改测到面板是 2.2.242 才有的：老的会直接报失败，界面要说清楚
         panelFallback: isAgentVersionAtLeast(String(host.agentVersion || "").replace(/^v/i, ""), NODE_CHECK_PANEL_FALLBACK_VERSION),
+        // 2.2.246 起测得准（就近的 Ookla 测速点、上传只算对端收下的）：老的界面上提示升级
+        accurate: isAgentVersionAtLeast(String(host.agentVersion || "").replace(/^v/i, ""), NODE_CHECK_ACCURATE_VERSION),
         online: !!host.isOnline,
         hostName: String(host.name || ""),
         countryCode: host.geoCountryCode ? String(host.geoCountryCode) : null,

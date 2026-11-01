@@ -191,7 +191,12 @@ func TestCloudflareSpeedTestAgainstLocalServer(t *testing.T) {
 	}()
 	dialer := &net.Dialer{}
 	var samples int32
-	result, err := runHTTPSpeedTest(context.Background(), dialer.DialContext, cloudflareSpeedTarget(), func(speedSample) { atomic.AddInt32(&samples, 1) })
+	result, err := runHTTPSpeedTest(context.Background(), dialer.DialContext, cloudflareSpeedTarget(), func(sample speedSample) {
+		// 「进到哪一段了」的标记不是曲线上的点
+		if sample.phase == "" {
+			atomic.AddInt32(&samples, 1)
+		}
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -353,6 +358,9 @@ func TestNodeCheckSpeedFallsBackToPanel(t *testing.T) {
 	var seen []string
 	m.runSpeed = func(ctx context.Context, dial nodeCheckDialFunc, target speedTarget, progress func(speedSample)) (*speedTestResult, error) {
 		seen = append(seen, target.name)
+		if target.name == "ookla" {
+			return nil, errors.New("连不上 speedtest.net：dial tcp: i/o timeout")
+		}
 		if target.name == "cloudflare" {
 			progress(speedSample{T: 100, Down: 0})
 			return nil, errors.New("连不上 speed.cloudflare.com：dial tcp 104.16.1.1:443: i/o timeout")
@@ -370,7 +378,7 @@ func TestNodeCheckSpeedFallsBackToPanel(t *testing.T) {
 		report, _ := m.Report(Config{}).(nodeCheckReport)
 		if len(report.Runs) == 1 && report.Runs[0].Status == "done" {
 			run := report.Runs[0]
-			if run.Speed == nil || run.Speed.Server != "panel" || !strings.Contains(run.Speed.Note, "i/o timeout") || !strings.Contains(run.Speed.Note, "改测到面板") {
+			if run.Speed == nil || run.Speed.Server != "panel" || !strings.Contains(run.Speed.Note, "104.16.1.1:443: i/o timeout") || !strings.Contains(run.Speed.Note, "speedtest.net") || !strings.Contains(run.Speed.Note, "改测到面板") || !strings.Contains(run.Speed.Note, "上限是面板服务器自己的带宽") {
 				t.Fatalf("fallback result: %+v", run.Speed)
 			}
 			// 第一轮失败时送上去的曲线点不能留在结果里。
@@ -384,11 +392,11 @@ func TestNodeCheckSpeedFallsBackToPanel(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if strings.Join(seen, ",") != "cloudflare,panel" {
+	if strings.Join(seen, ",") != "ookla,cloudflare,panel" {
 		t.Fatalf("targets tried = %v", seen)
 	}
 
-	// 没给 token：只试 Cloudflare，失败就是失败。
+	// 没给 token：只试 Ookla 和 Cloudflare，都失败就是失败。
 	seen = nil
 	directive, _ = json.Marshal(map[string]any{"runs": []map[string]any{{"runId": "nc-nofb", "kind": "speed"}}})
 	m.Apply(Config{PanelURL: "https://panel.example"}, directive)
@@ -402,7 +410,7 @@ func TestNodeCheckSpeedFallsBackToPanel(t *testing.T) {
 			}
 		}
 		if found != nil && found.Status == "error" {
-			if !strings.Contains(found.Error, "i/o timeout") || strings.Join(seen, ",") != "cloudflare" {
+			if !strings.Contains(found.Error, "i/o timeout") || strings.Join(seen, ",") != "ookla,cloudflare" {
 				t.Fatalf("error=%q seen=%v", found.Error, seen)
 			}
 			break

@@ -38,7 +38,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"golang.org/x/net/proxy"
@@ -55,11 +54,8 @@ const (
 	speedTestLatencyN = 10
 	speedTestStreams  = 4
 	// 每条流一次要 25 MB，吃完再要。Cloudflare 对非浏览器 / 机房出口的请求，一次要 100 MB 会回 403
-	// （50 MB 还行），浏览器版测速最大一档也是 25 MB。
+	// （50 MB 还行），浏览器版测速最大一档也是 25 MB。上传每次送多大见 ext_speedtest.go（跟着速度调）。
 	speedTestDownBytes = 25 << 20
-	// 上传一次 25 MB；面板前面有反代限制了请求体（413）就逐级减到 1 MB。
-	speedTestUpBytes    = 25 << 20
-	speedTestUpMinBytes = 1 << 20
 )
 
 // 测试里缩短。
@@ -83,9 +79,10 @@ type nodeCheckPanelSpeed struct {
 	Token string `json:"token"`
 }
 
-// speedTarget 一个测速服务器：Cloudflare 或面板。路径形状一样：meta、down?bytes=、up。
+// speedTarget 一个测速服务器：就近的 Ookla 测速点（2.2.246 起，跑的时候才挑）、Cloudflare 或面板。
+// Cloudflare 和面板的路径形状一样：meta、down?bytes=、up；Ookla 的见 ext_speedtest.go。
 type speedTarget struct {
-	name    string // "cloudflare" | "panel"
+	name    string // "ookla" | "cloudflare" | "panel"
 	label   string // 报错时用
 	base    string
 	meta    string
@@ -93,8 +90,14 @@ type speedTarget struct {
 	down    string
 	up      string
 	headers map[string]string
-	// 取 meta 等多久；0 = 15 秒。
+	// 取 meta（Ookla 是取服务器列表）等多久；0 = 15 秒。
 	metaTimeout time.Duration
+	// Ookla：挑中的那台（pickOoklaServer 填）。
+	ookla *ooklaServer
+}
+
+func ooklaSpeedTarget() speedTarget {
+	return speedTarget{name: "ookla", label: "Ookla 测速点"}
 }
 
 func cloudflareSpeedTarget() speedTarget {
@@ -137,6 +140,8 @@ type speedSample struct {
 	// 这一刻的下载 / 上传速率（Mbit/s）；没在测的那一项为 0
 	Down float64 `json:"down"`
 	Up   float64 `json:"up"`
+	// 只给进度回调用、不上报：非空时这一条只是说「进到哪一段了」，不是曲线上的点。
+	phase string
 }
 
 type speedTestResult struct {
@@ -153,10 +158,18 @@ type speedTestResult struct {
 	ASOrg        string  `json:"asOrg,omitempty"`
 	Country      string  `json:"country,omitempty"`
 	City         string  `json:"city,omitempty"`
-	// 对谁测的："cloudflare" | "panel"；改测到面板时 note 说明 Cloudflare 为什么没测成。
-	Server  string        `json:"server,omitempty"`
-	Note    string        `json:"note,omitempty"`
-	Samples []speedSample `json:"samples"`
+	// 对谁测的："ookla" | "cloudflare" | "panel"；换了测速点时 note 说明前面的为什么没测成。
+	Server string `json:"server,omitempty"`
+	// Ookla 测速点（2.2.246 起）：「运营商 · 城市」、国家、离出口多远、主机名。
+	ServerName       string  `json:"serverName,omitempty"`
+	ServerCountry    string  `json:"serverCountry,omitempty"`
+	ServerDistanceKm float64 `json:"serverDistanceKm,omitempty"`
+	ServerHost       string  `json:"serverHost,omitempty"`
+	// 这次测速用掉的流量（2.2.246 起）：下载收到的、上传送出去的（含没被确认的）。
+	DownloadBytes int64         `json:"downloadBytes,omitempty"`
+	UploadBytes   int64         `json:"uploadBytes,omitempty"`
+	Note          string        `json:"note,omitempty"`
+	Samples       []speedSample `json:"samples"`
 }
 
 type exitCheckResult struct {
@@ -331,6 +344,11 @@ func (m *nodeCheckExtModule) execute(d nodeCheckRunDirective, report *nodeCheckR
 			var lastWake time.Time
 			progress := func(sample speedSample) {
 				m.mu.Lock()
+				if sample.phase != "" {
+					report.Phase = sample.phase
+					m.mu.Unlock()
+					return
+				}
 				if report.Speed == nil {
 					report.Speed = &speedTestResult{}
 				}
@@ -347,13 +365,16 @@ func (m *nodeCheckExtModule) execute(d nodeCheckRunDirective, report *nodeCheckR
 					m.wake()
 				}
 			}
-			// 先对 Cloudflare；连不上 / 被拒（国内机器到国外 80、443 常常不通）就改测到面板。
-			// 直接测时少等一会儿：连不上的话早点换面板；经代理时出去的是落地，照常等。
+			// 先就近的 Ookla 测速点（2.2.246 起）；测不了换 Cloudflare；都不行、面板给了 token 才测到面板
+			// （那只量得出到面板这条路，上限是面板服务器的带宽）。直接测时少等一会儿：连不上的话早点换；
+			// 经代理时出去的是落地，照常等。
+			ookla := ooklaSpeedTarget()
 			cloudflare := cloudflareSpeedTarget()
 			if !viaProxy {
+				ookla.metaTimeout = speedTestDirectMetaTimeout
 				cloudflare.metaTimeout = speedTestDirectMetaTimeout
 			}
-			targets := []speedTarget{cloudflare}
+			targets := []speedTarget{ookla, cloudflare}
 			m.mu.Lock()
 			panelURL := m.panelURL
 			m.mu.Unlock()
@@ -370,7 +391,7 @@ func (m *nodeCheckExtModule) execute(d nodeCheckRunDirective, report *nodeCheckR
 				if speedErr == nil {
 					result.Server = target.name
 					if i > 0 {
-						fallback := fmt.Sprintf("Cloudflare 测不了（%s），改测到面板：测的是这台机器到面板那条路", strings.Join(failures, "；"))
+						fallback := speedFallbackNote(targets[:i], failures, target, viaProxy)
 						if result.Note != "" {
 							fallback += "；" + result.Note
 						}
@@ -651,6 +672,39 @@ func runExitCheck(ctx context.Context, dial nodeCheckDialFunc, viaProxy bool, fa
 
 // ---------------------------------------------------------------- 测速（Cloudflare / 面板）
 
+// speedFallbackNote 前面的测速点为什么没测成、现在测的是什么。
+func speedFallbackNote(tried []speedTarget, failures []string, used speedTarget, viaProxy bool) string {
+	names := make([]string, 0, len(tried))
+	for _, target := range tried {
+		switch target.name {
+		case "ookla":
+			names = append(names, "就近的 Ookla 测速点")
+		case "cloudflare":
+			names = append(names, "Cloudflare")
+		default:
+			names = append(names, target.label)
+		}
+	}
+	why := strings.Join(failures, "；")
+	who := strings.Join(names, "、")
+	// 英文结尾（「…、Cloudflare」）和后面的中文之间空一格
+	if last := who[len(who)-1]; (last >= 'a' && last <= 'z') || (last >= 'A' && last <= 'Z') {
+		who += " "
+	}
+	switch used.name {
+	case "panel":
+		where := "这台机器"
+		if viaProxy {
+			where = "整条链出口"
+		}
+		return fmt.Sprintf("%s都测不了（%s），改测到面板：测的是%s到面板这条路，上限是面板服务器自己的带宽，不代表%s的带宽", who, why, where, where)
+	case "cloudflare":
+		return fmt.Sprintf("%s测不了（%s），改对 Cloudflare 测", who, why)
+	default:
+		return fmt.Sprintf("%s测不了（%s）", who, why)
+	}
+}
+
 func firstLine(value string) string {
 	value = strings.TrimSpace(value)
 	if i := strings.IndexByte(value, '\n'); i >= 0 {
@@ -664,10 +718,12 @@ func firstLine(value string) string {
 
 func speedTestClient(dial nodeCheckDialFunc) *http.Client {
 	transport := &http.Transport{
-		Proxy:                 nil,
-		DialContext:           dial,
-		ForceAttemptHTTP2:     false, // 几条并行流各走各的连接，才测得出带宽
-		MaxIdleConns:          16,
+		Proxy:             nil,
+		DialContext:       dial,
+		ForceAttemptHTTP2: false, // 几条并行流各走各的连接，才测得出带宽
+		MaxIdleConns:      32,
+		// 默认每台只留 2 条空闲连接：四到六条流轮着要，多出来的每次都重新握手、重新慢启动。
+		MaxIdleConnsPerHost:   16,
 		MaxConnsPerHost:       0,
 		IdleConnTimeout:       30 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
@@ -722,32 +778,6 @@ type countingWriter struct{ counter *byteCounter }
 func (w countingWriter) Write(p []byte) (int, error) {
 	w.counter.add(int64(len(p)))
 	return len(p), nil
-}
-
-// zeroReader 产生 n 个零字节，边读边计数，给上传用。sent 记这一次请求送出去了多少：
-// 请求失败时把它从总数里扣掉，没被收下的字节不算上传速度。（transport 在另一个协程里读
-// 请求体，服务器提前回应时 Do 已经返回而读还没停，所以 sent 要原子。）
-type zeroReader struct {
-	remaining int64
-	counter   *byteCounter
-	sent      atomic.Int64
-}
-
-func (r *zeroReader) Read(p []byte) (int, error) {
-	if r.remaining <= 0 {
-		return 0, io.EOF
-	}
-	n := len(p)
-	if int64(n) > r.remaining {
-		n = int(r.remaining)
-	}
-	for i := 0; i < n; i++ {
-		p[i] = 0
-	}
-	r.remaining -= int64(n)
-	r.sent.Add(int64(n))
-	r.counter.add(int64(n))
-	return n, nil
 }
 
 func (t speedTarget) url(path string) string { return t.base + path }
@@ -830,12 +860,18 @@ func fetchSpeedMeta(ctx context.Context, client *http.Client, target speedTarget
 	return nil
 }
 
-// runHTTPSpeedTest 对一个测速服务器跑完整一轮：元数据 → 延迟 → 下载 → 上传。
+// runHTTPSpeedTest 对一个测速服务器跑完整一轮：元数据（Ookla 是挑测速点）→ 延迟 → 下载 → 上传。
 func runHTTPSpeedTest(ctx context.Context, dial nodeCheckDialFunc, target speedTarget, progress func(speedSample)) (*speedTestResult, error) {
 	client := speedTestClient(dial)
 	defer client.CloseIdleConnections()
 	result := &speedTestResult{Samples: []speedSample{}, Server: target.name}
-	if err := fetchSpeedMeta(ctx, client, target, result); err != nil {
+	if target.name == "ookla" {
+		picked, err := pickOoklaServer(ctx, client, target, result)
+		if err != nil {
+			return nil, err
+		}
+		target = picked
+	} else if err := fetchSpeedMeta(ctx, client, target, result); err != nil {
 		return nil, err
 	}
 
@@ -843,7 +879,7 @@ func runHTTPSpeedTest(ctx context.Context, dial nodeCheckDialFunc, target speedT
 	// 先发一个不算的：meta 回非 2xx 时连接可能没留下，这一下把连接重新建好，后面十次都在建好的
 	// 连接上，量的是来回一趟（以前握手那一下也算进去，抖动被它拉到几百毫秒）。
 	warmCtx, cancelWarm := context.WithTimeout(ctx, 15*time.Second)
-	if rs, err := client.Do(target.request(warmCtx, http.MethodGet, target.down+"?bytes=0", nil)); err == nil {
+	if rs, err := client.Do(target.latencyRequest(warmCtx)); err == nil {
 		_, _ = io.Copy(io.Discard, rs.Body)
 		_ = rs.Body.Close()
 	}
@@ -856,14 +892,14 @@ func runHTTPSpeedTest(ctx context.Context, dial nodeCheckDialFunc, target speedT
 		}
 		started := time.Now()
 		reqCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		rs, err := client.Do(target.request(reqCtx, http.MethodGet, target.down+"?bytes=0", nil))
+		rs, err := client.Do(target.latencyRequest(reqCtx))
 		if err == nil {
 			_, _ = io.Copy(io.Discard, rs.Body)
 			_ = rs.Body.Close()
 			if is2xx(rs) {
 				latencies = append(latencies, float64(time.Since(started).Microseconds())/1000)
 			} else {
-				lastErr = &speedHTTPError{Status: rs.StatusCode, Where: target.down, Label: target.label}
+				lastErr = speedStatusError(rs, target, target.downloadWhere())
 			}
 		} else {
 			lastErr = err
@@ -879,17 +915,21 @@ func runHTTPSpeedTest(ctx context.Context, dial nodeCheckDialFunc, target speedT
 	result.LatencyMs, result.JitterMs = summarizeLatencies(latencies)
 
 	start := time.Now()
-	// 下载
+	streams := target.streamCount()
+	// 下载：收到的字节是真到了的，边收边算。
+	if progress != nil {
+		progress(speedSample{phase: "download"})
+	}
 	down := &byteCounter{}
-	downMbps, err := runSpeedPhase(ctx, speedTestDownDuration, down, func(phaseCtx context.Context) error {
-		rs, err := client.Do(target.request(phaseCtx, http.MethodGet, fmt.Sprintf("%s?bytes=%d", target.down, speedTestDownBytes), nil))
+	downMbps, err := runSpeedPhase(ctx, speedTestDownDuration, streams, down, func(phaseCtx context.Context) error {
+		rs, err := client.Do(target.downloadRequest(phaseCtx))
 		if err != nil {
 			return err
 		}
 		defer rs.Body.Close()
 		if !is2xx(rs) {
 			_, _ = io.Copy(io.Discard, io.LimitReader(rs.Body, 4096))
-			return &speedHTTPError{Status: rs.StatusCode, Where: target.down, Label: target.label}
+			return speedStatusError(rs, target, target.downloadWhere())
 		}
 		_, err = io.Copy(countingWriter{down}, rs.Body)
 		return err
@@ -904,46 +944,35 @@ func runHTTPSpeedTest(ctx context.Context, dial nodeCheckDialFunc, target speedT
 		return nil, err
 	}
 	result.DownloadMbps = downMbps
+	result.DownloadBytes = down.get()
 	if downMbps < 0.1 {
 		// 收到过字节、速度却是零：下行卡住了（限速、丢包或这条链下行有问题），别只给一个 0。
 		result.Note = fmt.Sprintf("下载几乎没速度：一共只收到 %d KB", down.get()>>10)
 	}
 
-	// 上传。每次送 upBytes；反代回 413 就减小再试（最小 1 MB，再小就当失败）。
-	up := &byteCounter{}
-	var upBytes atomic.Int64
-	upBytes.Store(speedTestUpBytes)
-	upMbps, err := runSpeedPhase(ctx, speedTestUpDuration, up, func(phaseCtx context.Context) error {
-		size := upBytes.Load()
-		body := &zeroReader{remaining: size, counter: up}
-		r := target.request(phaseCtx, http.MethodPost, target.up, body)
-		r.ContentLength = size
-		r.Header.Set("Content-Type", "application/octet-stream")
-		rs, err := client.Do(r)
+	// 上传：只算服务器说收下了的字节（见 ext_speedtest.go），每次送多大跟着速度调。
+	if progress != nil {
+		progress(speedSample{phase: "upload"})
+	}
+	sent := &countingTotal{}
+	prefix := ""
+	if target.ookla != nil {
+		prefix = "content1="
+	}
+	upStart := time.Since(start)
+	upMbps, _, err := runUploadPhase(ctx, speedTestUpDuration, streams, target.uploadMaxBytes(), func(phaseCtx context.Context, size int64) (int64, error) {
+		rs, err := client.Do(target.uploadRequest(phaseCtx, &patternReader{remaining: size, prefix: prefix, sent: sent}, size))
 		if err != nil {
-			// 到点被我们自己掐掉的那一次，送出去的字节是真送了的，照算；真失败的才扣掉。
-			if phaseCtx.Err() == nil {
-				up.add(-body.sent.Load())
-			}
-			return err
+			return 0, err
 		}
-		_, _ = io.Copy(io.Discard, io.LimitReader(rs.Body, 4096))
+		body, _ := io.ReadAll(io.LimitReader(rs.Body, 4096))
 		_ = rs.Body.Close()
 		if !is2xx(rs) {
-			up.add(-body.sent.Load())
-			if rs.StatusCode == http.StatusRequestEntityTooLarge && size > speedTestUpMinBytes {
-				next := size / 4
-				if next < speedTestUpMinBytes {
-					next = speedTestUpMinBytes
-				}
-				upBytes.CompareAndSwap(size, next)
-				return fmt.Errorf("HTTP 413，改每次 %d MB", next>>20)
-			}
-			return &speedHTTPError{Status: rs.StatusCode, Where: target.up, Label: target.label}
+			return 0, speedStatusError(rs, target, target.uploadWhere())
 		}
-		return nil
-	}, func(mbps float64) {
-		sample := speedSample{T: time.Since(start).Milliseconds(), Up: mbps}
+		return target.confirmedUpload(body, size), nil
+	}, func(at time.Duration, mbps float64) {
+		sample := speedSample{T: (upStart + at).Milliseconds(), Up: mbps}
 		result.Samples = append(result.Samples, sample)
 		if progress != nil {
 			progress(sample)
@@ -953,24 +982,29 @@ func runHTTPSpeedTest(ctx context.Context, dial nodeCheckDialFunc, target speedT
 		return nil, err
 	}
 	result.UploadMbps = upMbps
+	result.UploadBytes = sent.get()
 	return result, nil
 }
 
-// runSpeedPhase 起 speedTestStreams 条流各自反复跑 stream；每 speedTestSampleEvery 采一次这段时间的速率。
+// runSpeedPhase 起 streams 条流各自反复跑 stream（下载用；上传见 runUploadPhase）；每 speedTestSampleEvery 采一次这段时间的速率。
 // 从第一个字节到了才开始算：先丢掉 speedTestWarmup（TCP 慢启动），再量满 duration - warmup。经代理、
 // 几跳中转时第一个字节来得晚，最多多等 speedTestMaxExtra —— 以前从开始就计时，握手吃掉大半，量到的
 // 几乎都是零。返回量到的平均速率（Mbit/s）。
 // 流回 speedHTTPError（被拒 / 被限）就整段停下来报错：再试也是一样的。
-func runSpeedPhase(ctx context.Context, duration time.Duration, counter *byteCounter, stream func(ctx context.Context) error, sample func(mbps float64)) (float64, error) {
+func runSpeedPhase(ctx context.Context, duration time.Duration, streams int, counter *byteCounter, stream func(ctx context.Context) error, sample func(mbps float64)) (float64, error) {
 	phaseCtx, cancel := context.WithTimeout(ctx, duration+speedTestMaxExtra)
 	defer cancel()
 	var wg sync.WaitGroup
 	var firstErr, fatalErr error
 	var errMu sync.Mutex
-	for i := 0; i < speedTestStreams; i++ {
+	if streams <= 0 {
+		streams = speedTestStreams
+	}
+	for i := 0; i < streams; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			retries := 0
 			for phaseCtx.Err() == nil {
 				err := stream(phaseCtx)
 				if err == nil {
@@ -980,12 +1014,27 @@ func runSpeedPhase(ctx context.Context, duration time.Duration, counter *byteCou
 					// 到点被我们自己掐掉的，不算错。传了字节的也算成功。
 					return
 				}
+				// 限流（429）说了几秒后再来：等一下接着测；说要等很久就整段停下来换测速点。
+				var rateErr *speedRateLimitError
+				if errors.As(err, &rateErr) && rateErr.RetryAfter <= speedTestRetryAfterMax && retries < speedTestRetryLimit {
+					retries++
+					wait := rateErr.RetryAfter
+					if wait <= 0 {
+						wait = time.Second
+					}
+					select {
+					case <-phaseCtx.Done():
+						return
+					case <-time.After(wait):
+					}
+					continue
+				}
 				var httpErr *speedHTTPError
 				errMu.Lock()
 				if firstErr == nil {
 					firstErr = err
 				}
-				if errors.As(err, &httpErr) && fatalErr == nil {
+				if (errors.As(err, &httpErr) || errors.As(err, &rateErr)) && fatalErr == nil {
 					fatalErr = err
 				}
 				fatal := fatalErr != nil

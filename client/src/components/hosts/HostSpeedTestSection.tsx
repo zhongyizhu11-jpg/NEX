@@ -2,13 +2,15 @@ import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { SpeedTestDialog } from "@/components/proxy/SpeedTestDialog";
+import { formatSpeedMs, speedServerLabel } from "@/components/proxy/speedTestFormat";
 import { trpc } from "@/lib/trpc";
 import { formatMbps } from "@shared/nodeCheck";
 import { Row, Section } from "./HostDetailDialog";
 
 /*
   主机详情里的「网速测试」一节：最近一次的下载 / 上传 / 延迟写在这儿，点「测速」打开曲线弹窗
-  （SpeedTestDialog）。测速要吃这台机器几百 MB 流量，所以只手动跑。Agent 2.2.241 起。
+  （SpeedTestDialog）。测速要吃这台机器几百 MB 流量，所以只手动跑。Agent 2.2.241 起；2.2.246 起先就近的 Ookla
+  测速点，测到面板的写明「到面板」（上限是面板的带宽，不是这台机器的）。
 */
 export default function HostSpeedTestSection({ host }: { host: any }) {
   const hostId = Number(host?.id || 0);
@@ -30,9 +32,9 @@ export default function HostSpeedTestSection({ host }: { host: any }) {
         <Row label="测速" value={<span className="text-[var(--fx-warn-text)]">需要升级 Agent（{data.minAgentVersion} 起）</span>} />
       ) : speed ? (
         <>
-          <Row label="下载 / 上传" value={`${formatMbps(speed.downloadMbps)} / ${formatMbps(speed.uploadMbps)}`} />
-          <Row label="延迟 / 抖动" value={`${Math.round(speed.latencyMs)} ms / ${Math.round(speed.jitterMs)} ms`} />
-          <Row label="机房 · 出口" value={[speed.colo, speed.clientIp].filter(Boolean).join(" · ") || "—"} />
+          <Row label="下载 / 上传" value={`${formatMbps(speed.downloadMbps)} / ${formatMbps(speed.uploadMbps)}${speed.server === "panel" ? "（到面板）" : ""}`} />
+          <Row label="延迟 / 抖动" value={`${formatSpeedMs(speed.latencyMs)} / ${formatSpeedMs(speed.jitterMs)}`} />
+          <Row label="测速点" value={speedServerLabel(speed)} />
           <Row label="测于" value={data?.latest?.checkedAt ? new Date(data.latest.checkedAt * 1000).toLocaleString("zh-CN", { hour12: false, month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—"} />
         </>
       ) : (

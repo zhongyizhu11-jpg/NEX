@@ -2,9 +2,11 @@
   按需的「网速测试」和「经节点的出口检测」（Agent 2.2.241 起，扩展模块 "nodecheck"）。
 
   两种检查：
-    · speed：从一台主机对 Cloudflare 测速，得到延迟 / 抖动 / 下载 / 上传 / 机房 / 出口 IP，跑的时候
-      带一条下载 / 上传随时间的曲线。连不上 Cloudflare（国内机器到国外 80 / 443 常常不通）就改测到
-      面板自己（server/ops/nodeCheckSpeedRoute.ts），结果标 server = "panel"。
+    · speed：从一台主机测速，得到延迟 / 抖动 / 下载 / 上传 / 测速点 / 出口 IP，跑的时候带一条下载 /
+      上传随时间的曲线。Agent 2.2.246 起先就近找一个 Ookla 测速点（speedtest.net 按出口 IP 给最近的几台，
+      国内机器拿到电信 / 联通 / 移动的），测不了换 Cloudflare，都不行才测到面板自己
+      （server/ops/nodeCheckSpeedRoute.ts，server = "panel"，上限是面板服务器的带宽）。2.2.245 以前只有
+      Cloudflare → 面板，而且上传是写进本机缓冲就算，经长链时偏高很多。
     · exit：站点握手 + 流媒体 / AI 解锁，一次性跑一轮。给粘贴进来、机器不是自己的那些节点用：
       自己的机器有定时的出口探测（sitelatency）和解锁检测（unlock），不走这个。
   都可以「经节点」：让那台主机临时拉一个 sing-box，把要看的节点当出站，检查走它过去。
@@ -15,6 +17,11 @@ import { normalizeUnlockResults, type UnlockServiceResult } from "./unlockCheck"
 export const NODE_CHECK_MIN_AGENT_VERSION = "2.2.241";
 /** 连不上 Cloudflare 时改测到面板：Agent 2.2.242 起。 */
 export const NODE_CHECK_PANEL_FALLBACK_VERSION = "2.2.242";
+/** 就近的 Ookla 测速点、上传只算对端收下的、429 按 Retry-After 等：Agent 2.2.246 起（测得准）。 */
+export const NODE_CHECK_ACCURATE_VERSION = "2.2.246";
+
+export const SPEED_TEST_SERVERS = ["ookla", "cloudflare", "panel"] as const;
+export type SpeedTestServer = (typeof SPEED_TEST_SERVERS)[number];
 
 export const NODE_CHECK_KINDS = ["speed", "exit"] as const;
 export type NodeCheckKind = (typeof NODE_CHECK_KINDS)[number];
@@ -35,8 +42,16 @@ export type SpeedTestResult = {
   asOrg: string;
   country: string;
   city: string;
-  /** 对谁测的：Cloudflare，或连不上 Cloudflare 时改测到面板自己（note 说明原因）。 */
-  server: "cloudflare" | "panel";
+  /** 对谁测的：就近的 Ookla 测速点、Cloudflare，或都测不了时测到面板自己（note 说明原因）。 */
+  server: SpeedTestServer;
+  /** Ookla 测速点（2.2.246 起）：「运营商 · 城市」、国家、离出口多远（公里）、主机名。 */
+  serverName: string;
+  serverCountry: string;
+  serverDistanceKm: number;
+  serverHost: string;
+  /** 这次用掉的流量（字节，2.2.246 起；老 Agent 为 0）。 */
+  downloadBytes: number;
+  uploadBytes: number;
   note: string;
   samples: SpeedSample[];
 };
@@ -99,7 +114,13 @@ export function normalizeSpeedTestResult(raw: unknown): SpeedTestResult | null {
     asOrg: text(entry.asOrg),
     country: text(entry.country, 8).toUpperCase(),
     city: text(entry.city),
-    server: entry.server === "panel" ? "panel" : "cloudflare",
+    server: (SPEED_TEST_SERVERS as readonly string[]).includes(String(entry.server)) ? entry.server as SpeedTestServer : "cloudflare",
+    serverName: text(entry.serverName, 96),
+    serverCountry: text(entry.serverCountry, 8).toUpperCase(),
+    serverDistanceKm: Math.max(0, Math.round(num(entry.serverDistanceKm))),
+    serverHost: text(entry.serverHost, 128),
+    downloadBytes: Math.max(0, Math.round(num(entry.downloadBytes))),
+    uploadBytes: Math.max(0, Math.round(num(entry.uploadBytes))),
     note: text(entry.note, 400),
     samples: normalizeSpeedSamples(entry.samples),
   };
