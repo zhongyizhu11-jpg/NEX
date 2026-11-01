@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, HTMLAttributes, ReactNode } from "react";
+import type { ButtonHTMLAttributes, HTMLAttributes, InputHTMLAttributes, ReactNode } from "react";
 import { forwardRef } from "react";
 
 import { cn } from "@/lib/utils";
@@ -259,3 +259,77 @@ export function LineLandingName({ name, className }: { name: string; className?:
     </span>
   );
 }
+
+/*
+  弹窗里的表单（节点池弹窗，2.3.501），照 iOS 设置那种分组列表排：
+    一节一个灰色小标题（右边可以放一个小按钮），下面一张白卡，卡底下可以跟一句灰字；
+    卡里一行一项，名字在左、值在右，行间一根从文字起的细线（LINE_FORM_ROW；不用 .fx-list-row：精简布局给它
+    钉了 8×12 的内边距，行就比小标题多缩进 12px）；
+    卡里的输入框、选择框不带框，值直接写在右边，点一下就能改。
+  上一版是「标签压在框上 + 框里套框 + 每个控件下面一句说明」，一屏七八个框、七八句灰字。
+*/
+export function LineField({ label, aside, footer, children, className, testId }: {
+  label?: ReactNode;
+  aside?: ReactNode;
+  /** 卡底下那句灰字。 */
+  footer?: ReactNode;
+  children: ReactNode;
+  className?: string;
+  testId?: string;
+}) {
+  return (
+    <section className={cn("flex min-w-0 flex-col gap-[7px]", className)} data-testid={testId}>
+      {label || aside ? (
+        <div className="flex min-h-[22px] min-w-0 items-center justify-between gap-3 px-[14px] text-[12px] leading-[1.3] text-muted-foreground">
+          <span className="flex min-w-0 items-center gap-1 truncate">{label}</span>
+          {aside ? <span className="flex shrink-0 items-center gap-1.5">{aside}</span> : null}
+        </div>
+      ) : null}
+      {children}
+      {footer ? <div className="px-[14px] text-[11.5px] leading-[1.55] text-muted-foreground">{footer}</div> : null}
+    </section>
+  );
+}
+
+/** 分组列表的白卡：左边留 14px，行间细线从文字起、一直画到右边（iOS 那样）。 */
+export function LineFormGroup({ className, children, testId }: { className?: string; children: ReactNode; testId?: string }) {
+  return <div className={cn("min-w-0 overflow-hidden rounded-[14px] border border-[var(--fx-stroke-weak)] bg-[var(--fx-l1-surface)] pl-[14px]", className)} data-testid={testId}>{children}</div>;
+}
+
+/** 分组列表里行与行之间那根线：除了第一行，每行上边一根。 */
+export const LINE_FORM_ROW = "border-t border-[var(--fx-stroke-weak)] first:border-t-0";
+
+/** 分组列表里的一行：名字在左，值或控件靠右。 */
+export function LineFormRow({ label, className, children, testId }: { label: ReactNode; className?: string; children?: ReactNode; testId?: string }) {
+  return (
+    <div className={cn(LINE_FORM_ROW, "flex min-h-[46px] min-w-0 items-center justify-between gap-4 py-[5px] pr-[14px]", className)} data-testid={testId}>
+      <span className="shrink-0 text-[14px] leading-[1.35] text-foreground">{label}</span>
+      {children ? <div className="flex min-w-0 flex-1 items-center justify-end gap-1.5">{children}</div> : null}
+    </div>
+  );
+}
+
+/**
+ * 卡里不带框的输入框：值靠右写（一整行只有它时靠左）。用自己的 data-slot：主题给 [data-slot="input"] 加的
+ * 圆角、底色、内阴影不落到它身上。
+ */
+export const LineBareInput = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement> & { align?: "left" | "right" }>(
+  function LineBareInput({ className, align = "right", type = "text", ...props }, ref) {
+    return (
+      <input
+        ref={ref}
+        type={type}
+        data-slot="line-bare-input"
+        className={cn(
+          "h-9 w-full min-w-0 border-0 bg-transparent p-0 text-[14px] text-foreground outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60",
+          align === "right" ? "text-right" : "text-left",
+          className,
+        )}
+        {...props}
+      />
+    );
+  },
+);
+
+/** 卡里不带框的选择框（给 SelectTrigger 用，配 data-slot="line-bare-select"）：只剩值和一个小箭头。 */
+export const LINE_BARE_SELECT = "h-9 w-auto max-w-full justify-end gap-1 rounded-none border-0 bg-transparent px-0 py-0 text-[14px] text-foreground shadow-none focus:outline-none [&>span]:truncate";

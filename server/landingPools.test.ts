@@ -16,7 +16,7 @@ import {
   type LandingMemberHealth,
 } from "../shared/landingPool";
 import { fillLandingCredentials } from "./landingPools";
-import { mergeLandingInput, normalizeDirectDomain } from "./landingPoolSave";
+import { landingDomainSuggestion, landingPoolRegion, mergeLandingInput, normalizeDirectDomain } from "./landingPoolSave";
 
 /*
   落地池（2.3.500）：一份配置开在每台成员上，订阅里整个池一条。
@@ -226,6 +226,92 @@ test("落地池同步：每台一样的入站、被占换端口、池节点一�
     assert.equal(out.afterRelease, 1);
     assert.equal(out.rotated, true, "换密钥每台一起换");
     assert.deepEqual(out.retired, [0, 0]);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("直连域名「自动」：池名拼得出英文用池名，拼不出用机器的地区，再不行用 lp；挂在 DDNS 管的主域名下", () => {
+  assert.equal(landingDomainSuggestion({ name: "HK Landing", root: "Example.com.", random: "AB12" }), "hk-landing-ab12.example.com");
+  assert.equal(landingDomainSuggestion({ name: "香港落地池", root: "example.com", random: "ab12", region: "hk" }), "hk-ab12.example.com");
+  assert.equal(landingDomainSuggestion({ name: "香港落地池", root: "example.com", random: "ab12" }), "lp-ab12.example.com");
+  assert.equal(landingDomainSuggestion({ name: "Crème Brûlée", root: "example.com", random: "ab12" }), "creme-brulee-ab12.example.com", "带音标的字母去掉音标");
+  assert.equal(landingDomainSuggestion({ name: "ＨＫ２ 落地", root: "example.com", random: "ab12" }), "hk2-ab12.example.com", "全角字母数字也认");
+  assert.equal(landingDomainSuggestion({ name: "a-very-long-pool-name-that-goes-on", root: "example.com", random: "ab12" }), "a-very-long-pool-nam-ab12.example.com", "名字那段最多 20 个字符");
+  assert.equal(normalizeDirectDomain(landingDomainSuggestion({ name: "HK", root: "example.com", random: "ab12" })), "hk-ab12.example.com", "起出来的名字能过保存时的校验");
+  assert.equal(landingPoolRegion(["HK", "hk", "JP", null, "xx1"]), "hk", "机器最多的那个地区");
+  assert.equal(landingPoolRegion([null, ""]), null);
+});
+
+test("直连域名只有管理员能设、能改；「自动」只给管理员，按 DDNS 主域名和机器地区起名", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-landing-domain-"));
+  try {
+    const script = String.raw`
+      import path from "node:path";
+      import { pathToFileURL } from "node:url";
+      const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
+      const runtime = await import(url("server/dbRuntime.ts"));
+      const schema = await import(url("server/dbSchema.ts"));
+      await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
+      await schema.ensureDatabaseSchema();
+      const exec = (sql, params = []) => runtime.executeRaw(sql, params);
+      const query = (sql, params = []) => runtime.queryRaw(sql, params);
+      await exec("INSERT INTO users (id, username, password, role, \"allowProxySubscription\") VALUES (1, 'admin', 'hash', 'admin', 1), (2, 'tenant', 'hash', 'user', 1)");
+      const now = Math.floor(Date.now() / 1000);
+      for (const id of [1, 2]) {
+        await exec('INSERT INTO hosts (id, name, ip, ipv4, "hostType", "agentToken", "userId", "isOnline", "lastHeartbeat", "agentVersion", "geoCountryCode") VALUES (?, ?, ?, ?, ?, ?, 2, 1, ?, ?, ?)', [id, "H" + id, "203.0.113." + id, "203.0.113." + id, "slave", "tok" + id, now, "2.2.245", "HK"]);
+      }
+      const db = await import(url("server/db.ts"));
+      const { lineDiagnosticsRouter } = await import(url("server/routers/lineDiagnostics.ts"));
+      const ctx = (user) => ({ user: { ...user, accountEnabled: true }, req: { headers: {}, socket: {} }, res: { setHeader: () => {} }, authSession: null, authFailureReason: null });
+      const tenant = lineDiagnosticsRouter.createCaller(ctx({ id: 2, role: "user", username: "tenant" }));
+      const admin = lineDiagnosticsRouter.createCaller(ctx({ id: 1, role: "admin", username: "admin" }));
+      const message = (promise) => promise.then(() => "ok", (error) => String(error.message));
+      const landing = { protocol: "vless", port: 443, security: "reality", transport: "tcp", flow: "xtls-rprx-vision", serverName: "", path: "", host: "", method: "", snellVersion: 0, users: [{ id: 0, name: "默认" }] };
+      const out = {};
+
+      const created = await tenant.nodePoolSave({ name: "HK 落地", role: "landing", hostIds: [1, 2], landing });
+      out.created = created.id > 0;
+      out.tenantNewWithDomain = await message(tenant.nodePoolSave({ name: "另一个", role: "landing", hostIds: [1], landing, directDomain: "www.admin-zone.com" }));
+      out.tenantSet = await message(tenant.nodePoolSave({ id: created.id, name: "HK 落地", role: "landing", hostIds: [1, 2], directDomain: "www.admin-zone.com" }));
+      out.tenantUnchanged = await message(tenant.nodePoolSave({ id: created.id, name: "HK 落地 改名", role: "landing", hostIds: [1, 2], directDomain: null }));
+      out.tenantOmitted = await message(tenant.nodePoolSave({ id: created.id, name: "HK 落地 再改", role: "landing", hostIds: [1, 2] }));
+      out.domainAfter = (await query('SELECT "directDomain" FROM node_pools WHERE id = ?', [created.id]))[0].directDomain ?? null;
+      out.tenantSuggest = await message(tenant.nodePoolSuggestDomain({ name: "x" }));
+
+      out.adminNoDdns = await admin.nodePoolSuggestDomain({ name: "香港落地", hostIds: [1, 2] });
+      await db.setSettings({ ddnsProvider: "aliyun", ddnsEnabled: "true", ddnsAliyunDomainName: "Example.com" });
+      out.adminChinese = await admin.nodePoolSuggestDomain({ name: "香港落地", hostIds: [1, 2] });
+      out.adminEnglish = await admin.nodePoolSuggestDomain({ name: "Tokyo Edge" });
+      await db.setSettings({ ddnsProvider: "webhook", ddnsWebhookUrl: "https://hook.example.com" });
+      out.adminWebhook = await admin.nodePoolSuggestDomain({ name: "x" });
+      console.log("RESULT " + JSON.stringify(out));
+      process.exit(0);
+    `;
+    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
+      cwd: path.resolve(import.meta.dirname, ".."),
+      encoding: "utf8",
+      env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: path.join(directory, "domain.db"), FORWARDX_LOG_DIR: directory },
+      timeout: 180000,
+    });
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    const line = result.stdout.split("\n").find((row) => row.startsWith("RESULT "));
+    assert.ok(line, `没拿到结果：\n${result.stdout}\n${result.stderr}`);
+    const out = JSON.parse(line.slice("RESULT ".length));
+    assert.equal(out.created, true, "普通用户照样能建落地池（不带域名）");
+    assert.match(out.tenantNewWithDomain, /只有管理员能设/, "普通用户新建时带域名：拦");
+    assert.match(out.tenantSet, /只有管理员能设/, "普通用户给已有的池设域名：拦");
+    assert.equal(out.tenantUnchanged, "ok", "送的和原来一样（都没有）：不拦，改名照常");
+    assert.equal(out.tenantOmitted, "ok", "不送域名 = 不改");
+    assert.equal(out.domainAfter, null);
+    assert.match(out.tenantSuggest, /只有管理员/);
+    assert.equal(out.adminNoDdns.domain, null);
+    assert.match(String(out.adminNoDdns.reason), /DDNS/, "没配 DDNS：说去哪配");
+    assert.match(String(out.adminChinese.domain), /^hk-[0-9a-f]{4}\.example\.com$/, "中文名：用机器的地区");
+    assert.equal(out.adminChinese.root, "example.com");
+    assert.match(String(out.adminEnglish.domain), /^tokyo-edge-[0-9a-f]{4}\.example\.com$/);
+    assert.equal(out.adminWebhook.domain, null);
+    assert.match(String(out.adminWebhook.reason), /Webhook/);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }

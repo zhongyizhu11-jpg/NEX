@@ -318,11 +318,19 @@ export const lineDiagnosticsRouter = router({
       const pools = await import("../nodePools");
       const landingSave = await import("../landingPoolSave");
       const landingSync = await import("../landingPools");
+      const existing = input.id ? await pools.getNodePool(input.id) : null;
+      if (input.id && (!existing || (ctx.user.role !== "admin" && existing.userId !== ctx.user.id))) throw new Error("节点池不存在");
+      /*
+        直连域名只有管理员能设、能改（2.3.501）：面板拿管理员配的 DNS 服务商替它写解析，普通用户填一个
+        www.管理员的域名 就能把它指到自己的机器上。和主机的 DDNS 一个规矩。
+      */
+      if (ctx.user.role !== "admin" && input.directDomain !== undefined) {
+        const wanted = landingSave.normalizeDirectDomain(input.directDomain);
+        if (wanted !== (existing?.directDomain || null)) throw new Error("直连域名只有管理员能设：面板要用系统的 DNS 服务商替它写解析");
+      }
       await requireHostsAccess(ctx, input.hostIds);
       const hostIds = Array.from(new Set(input.hostIds));
       const role = pools.normalizeNodePoolRole(input.role);
-      const existing = input.id ? await pools.getNodePool(input.id) : null;
-      if (input.id && (!existing || (ctx.user.role !== "admin" && existing.userId !== ctx.user.id))) throw new Error("节点池不存在");
       const emptyGroups = [] as Array<{ groupId: number; added: number; removed: number; kept: number; skipped?: string; error?: string }>;
 
       if (role === "landing") {
@@ -377,6 +385,31 @@ export const lineDiagnosticsRouter = router({
       }
       const id = await pools.createNodePool({ userId: ctx.user.id, name: input.name, role, hostIds, note: input.note ?? undefined });
       return { id, reexpanded: 0, groups: emptyGroups, landing: null };
+    }),
+
+  /**
+   * 落地池「自动」起直连域名（2.3.501，管理员）：在 DDNS 服务商管着的主域名下起一个没被别的池用过的名字。
+   * 拿不到主域名（没配 DDNS、Webhook、好几个域名没填 Zone ID）时 domain 为 null，reason 说为什么。
+   * 每次点都换一个随机尾巴，所以是 mutation（query 会被缓存成同一个）。
+   */
+  nodePoolSuggestDomain: protectedProcedure
+    .input(z.object({ name: z.string().trim().max(60).optional(), hostIds: z.array(z.number().int().positive()).max(32).optional() }))
+    .mutation(async ({ input, ctx }) => {
+      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "直连域名只有管理员能设" });
+      const { ddnsRootDomain } = await import("../ddns");
+      const { landingDomainSuggestion, landingPoolRegion } = await import("../landingPoolSave");
+      const { root, reason } = await ddnsRootDomain();
+      if (!root) return { domain: null, root: null, reason };
+      const hosts = input.hostIds?.length ? await db.getHostsByIds(Array.from(new Set(input.hostIds))) as any[] : [];
+      const region = landingPoolRegion(hosts.map((host) => host?.geoCountryCode));
+      const pools = await import("../nodePools");
+      const taken = new Set((await pools.listNodePools(null)).map((pool: any) => String(pool.directDomain || "").toLowerCase()).filter(Boolean));
+      const { randomBytes } = await import("node:crypto");
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        const domain = landingDomainSuggestion({ name: input.name || "", root, random: randomBytes(4).toString("hex").slice(0, 4), region });
+        if (!taken.has(domain)) return { domain, root, reason: null };
+      }
+      return { domain: null, root, reason: "没起出没重名的域名，再点一次或者自己填" };
     }),
 
   /** 落地池换全部凭据和密钥（疑似泄漏时）：每台成员一起换，客户端要重新拉订阅。 */

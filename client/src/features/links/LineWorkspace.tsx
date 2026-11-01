@@ -6,13 +6,17 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
 import {
   LineBig,
   LineCard,
   LineChip,
   LineChipButton,
+  LINE_GRAY_BG,
+  LineBareInput,
   LineDot,
+  LineField,
+  LineFormGroup,
+  LineFormRow,
   LineHint,
   LineKv,
   LineMs,
@@ -28,6 +32,7 @@ import { RouteBoardList } from "@/features/rules/RouteBoardList";
 import { LandingPoolFields, landingDraftError, landingDraftFrom, landingInputFromDraft, type LandingConfigView, type LandingDraft } from "./LandingPoolFields";
 import { LINK_SPREAD_LABELS } from "@shared/linkTerms";
 import { trpc } from "@/lib/trpc";
+import { cn } from "@/lib/utils";
 import type { AppRouter } from "../../../../server/routers";
 
 /*
@@ -109,9 +114,10 @@ const ROLE_OPTIONS = [
   { value: "relay", label: "中转" },
   { value: "landing", label: "落地" },
 ] as const satisfies ReadonlyArray<{ value: PoolRole; label: string }>;
-const ROLE_HINT: Record<PoolRole, string> = {
-  relay: "线路里当一层中转，面板在这几台里挑",
-  landing: "同一份落地配置开在每台上，订阅里只出一条；走中转时在几台里分，坏了切",
+/** 弹窗标题下那一句：这种池是干什么的（2.3.501 起只留这一句，用途下面那句、每个控件下面那句都去掉了）。 */
+const ROLE_DESCRIPTION: Record<PoolRole, string> = {
+  relay: "线路里一层选它，面板在这几台里按整条链的延迟挑。",
+  landing: "几台开同一份落地（协议、端口、密钥一样），订阅里整个池只出一条。",
 };
 /** 落地池最多几台（每台都要开入站，线路里一台一条路径）。 */
 const MAX_LANDING_MEMBERS = 8;
@@ -125,14 +131,12 @@ function countTone(usable: number, total: number): LineTone {
 
 export type PoolGroupMode = "entry" | "exit" | "failover";
 
-export function NodePoolsSection({ hosts, onOpenGroup, onCreateGroup, isAdmin = false }: {
+export function NodePoolsSection({ hosts, onOpenGroup, isAdmin = false }: {
   hosts: Array<{ id: number; name: string; isOnline?: boolean | null }>;
-  /** 管理员才能让组跟着节点池（改的是组的成员）。 */
+  /** 管理员才能让组跟着节点池（改的是组的成员），才能设落地池的直连域名。 */
   isAdmin?: boolean;
   /** 点入口组 / 出口组的卡：到它原来那一页打开编辑。 */
   onOpenGroup?: (mode: PoolGroupMode, groupId: number) => void;
-  /** 「新建池」里选入口组 / 出口组 / 转发组：到对应那一页新建。 */
-  onCreateGroup?: (mode: PoolGroupMode) => void;
 }) {
   const utils = trpc.useUtils();
   const board = trpc.lineDiagnostics.poolBoard.useQuery(undefined, { staleTime: 15_000, refetchInterval: 30_000 });
@@ -178,6 +182,14 @@ export function NodePoolsSection({ hosts, onOpenGroup, onCreateGroup, isAdmin = 
     onSuccess: () => { refresh(); setEditing(null); toast.success("已删掉"); },
     onError: (error) => toast.error(error.message),
   });
+  // 落地池直连域名「自动」（2.3.501，管理员）：每点一次起一个新的，所以是 mutation
+  const suggestDomain = trpc.lineDiagnostics.nodePoolSuggestDomain.useMutation({
+    onSuccess: (result) => {
+      if (result.domain) setEditing((current) => (current ? { ...current, directDomain: result.domain || "" } : current));
+      else toast.warning(result.reason || "没起出域名，自己填一个");
+    },
+    onError: (error) => toast.error(error.message),
+  });
   const followPool = trpc.forwardGroups.followPool.useMutation({
     onSuccess: (result, input) => {
       refresh();
@@ -217,7 +229,8 @@ export function NodePoolsSection({ hosts, onOpenGroup, onCreateGroup, isAdmin = 
       name: editing.name.trim(),
       role: editing.role,
       hostIds: editing.hostIds,
-      ...(editing.role === "landing" ? { landing: landingInputFromDraft(editing.landing), directDomain: editing.directDomain.trim() || null } : {}),
+      // 直连域名只有管理员送（2.3.501）：别人不送 = 不改，服务端也拦
+      ...(editing.role === "landing" ? { landing: landingInputFromDraft(editing.landing), ...(isAdmin ? { directDomain: editing.directDomain.trim() || null } : {}) } : {}),
     });
   };
   const editingFollowers = editing?.id ? nodePools.find((pool) => pool.id === editing.id)?.followers || [] : [];
@@ -233,9 +246,8 @@ export function NodePoolsSection({ hosts, onOpenGroup, onCreateGroup, isAdmin = 
   return (
     <div className="fx-line-ui flex min-w-0 flex-col gap-3" data-testid="node-pools">
       {/*
-        新建只有一个入口，在标题右边，一行一种东西：节点池（中转 / 落地 / 通用在框里选，现有组的机器在框里
-        「从组带入」）、入口组、出口组、转发组。2.3.497 的菜单把三种池、「用现有组的机器建池」和「组」都平铺
-        出来，「出口组」出现两次、手机上长到滑不到底；2.3.498 收成这四行。
+        新建只有一个入口，在标题右边：中转池、落地池两行（2.3.501）。入口组、出口组、转发组各有自己的页签，
+        在那里新建；这里只摆它们的卡（2.3.498–2.3.500 的菜单里也能建，五行带小字，挤）。
       */}
       <div className="flex min-w-0 items-start justify-between gap-3">
         <LineTitle title="节点池" sub="中转池当线路一层候选，落地池几台一份配置" />
@@ -245,21 +257,9 @@ export function NodePoolsSection({ hosts, onOpenGroup, onCreateGroup, isAdmin = 
               <Plus className="h-3.5 w-3.5" />新建
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-60">
-            <DropdownMenuItem onSelect={() => setEditing(newPool("relay"))} data-testid="node-pool-new-pool">
-              中转池<span className="ml-auto text-[11px] text-muted-foreground">线路里一层候选</span>
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => setEditing(newPool("landing"))} data-testid="node-pool-new-landing">
-              落地池<span className="ml-auto text-[11px] text-muted-foreground">几台一份配置</span>
-            </DropdownMenuItem>
-            {onCreateGroup ? (
-              <>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onSelect={() => onCreateGroup("entry")}>入口组<span className="ml-auto text-[11px] text-muted-foreground">DNS 轮询</span></DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => onCreateGroup("exit")}>出口组<span className="ml-auto text-[11px] text-muted-foreground">按解锁分流</span></DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => onCreateGroup("failover")}>转发组<span className="ml-auto text-[11px] text-muted-foreground">主备入口</span></DropdownMenuItem>
-              </>
-            ) : null}
+          <DropdownMenuContent align="end" className="w-32">
+            <DropdownMenuItem onSelect={() => setEditing(newPool("relay"))} data-testid="node-pool-new-pool">中转池</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => setEditing(newPool("landing"))} data-testid="node-pool-new-landing">落地池</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
@@ -382,51 +382,41 @@ export function NodePoolsSection({ hosts, onOpenGroup, onCreateGroup, isAdmin = 
 
       <Dialog open={!!editing} onOpenChange={(open) => !open && setEditing(null)}>
         {editing ? (
-          <DialogContent className="sm:max-w-md">
+          // 打开时不自动聚焦名字：手机上会直接弹键盘、盖住半个框（和线路详情一样）
+          <DialogContent className="sm:max-w-md" onOpenAutoFocus={(event) => event.preventDefault()}>
             <DialogHeader>
-              <DialogTitle>{editing.id ? (editing.role === "landing" ? "编辑落地池" : "编辑节点池") : editing.role === "landing" ? "新建落地池" : "新建节点池"}</DialogTitle>
-              <DialogDescription>
-                {editing.role === "landing"
-                  ? "几台机器开同一份落地（协议、端口、密钥一样），订阅里整个池只出一条。"
-                  : "线路里一层选这个池，就在这几台里按整条链的延迟挑。"}
-              </DialogDescription>
+              <DialogTitle>{`${editing.id ? "编辑" : "新建"}${editing.role === "landing" ? "落地池" : "中转池"}`}</DialogTitle>
+              <DialogDescription>{ROLE_DESCRIPTION[editing.role]}</DialogDescription>
             </DialogHeader>
-            {/* fx-line-ui：「加机器」「从组带入」和机器 chip 跟线路那几屏一样大（不被触屏 44px 撑高） */}
-            <div className="fx-line-ui flex flex-col gap-3">
-              <Input value={editing.name} onChange={(event) => setEditing({ ...editing, name: event.target.value.slice(0, 60) })} placeholder={editing.role === "landing" ? "例如：香港落地池" : "例如：香港中转池"} aria-label="节点池名字" />
-              <div className="flex flex-col gap-1">
-                <LineSegmented ariaLabel="节点池用途" value={editing.role} options={ROLE_OPTIONS} onChange={(role) => setEditing({ ...editing, role })} />
-                <p className="px-1 text-[11.5px] text-muted-foreground">{ROLE_HINT[editing.role]}</p>
-              </div>
-              {editingFollowers.length ? (
-                <p className="text-[11.5px] leading-[1.5] text-muted-foreground" data-testid="node-pool-followers">
-                  {editingFollowers.join("、")} 的成员跟着这个池：这里加减机器，{editingFollowers.length > 1 ? "它们" : "它"}的成员也跟着加减。
-                </p>
-              ) : null}
-              <div className="flex flex-wrap gap-1.5">
-                {editing.hostIds.map((hostId) => (
-                  <LineChip key={hostId}>
-                    {hostName(hostId)}
-                    <button type="button" aria-label={`去掉 ${hostName(hostId)}`} onClick={() => setEditing({ ...editing, hostIds: editing.hostIds.filter((id) => id !== hostId) })}><X className="h-3 w-3" /></button>
-                  </LineChip>
-                ))}
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <LineChipButton variant="add" disabled={editing.role === "landing" && editing.hostIds.length >= MAX_LANDING_MEMBERS} data-testid="node-pool-add-host"><Plus className="h-3 w-3" />加机器</LineChipButton>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start" className="max-h-72">
-                    {hosts.filter((host) => !editing.hostIds.includes(host.id)).map((host) => (
-                      <DropdownMenuItem key={host.id} onSelect={() => setEditing({ ...editing, hostIds: [...editing.hostIds, host.id] })}>{host.name}{host.isOnline === false ? "（离线）" : ""}</DropdownMenuItem>
-                    ))}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-                {/* 现有入口组 / 出口组的机器一次带进来（以前是「新建」菜单里单独一节「用现有组的机器建池」） */}
-                {importable.length > 0 ? (
+            {/*
+              2.3.501 起照 iOS 设置排：一张白卡写名字（改已有的池再多一行「用途」），一张白卡放机器，落地池再加
+              「落地配置」「用户」「直连域名」三张；卡里不带框，值写在右边。新建时用途已经在「新建」菜单里选了，
+              不再摆「中转 | 落地」。fx-line-ui：机器 chip、「加机器」跟线路那几屏一样大（不被触屏 44px 撑高）。
+            */}
+            <div className="fx-line-ui flex min-w-0 flex-col gap-[18px]">
+              <LineFormGroup>
+                <LineFormRow label="名字">
+                  <LineBareInput value={editing.name} onChange={(event) => setEditing({ ...editing, name: event.target.value.slice(0, 60) })} placeholder={editing.role === "landing" ? "例如：香港落地池" : "例如：香港中转池"} aria-label="节点池名字" />
+                </LineFormRow>
+                {editing.id ? (
+                  <LineFormRow label="用途">
+                    <div className="w-[8.5rem]">
+                      <LineSegmented ariaLabel="节点池用途" value={editing.role} options={ROLE_OPTIONS} onChange={(role) => setEditing({ ...editing, role })} />
+                    </div>
+                  </LineFormRow>
+                ) : null}
+              </LineFormGroup>
+              <LineField
+                label={<>机器<span data-testid="node-pool-count">· {editing.hostIds.length}{editing.role === "landing" ? `/${MAX_LANDING_MEMBERS}` : ""} 台</span></>}
+                aside={importable.length > 0 ? (
+                  /* 现有入口组 / 出口组的机器一次带进来 */
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
-                      <LineChipButton variant="add" data-testid="node-pool-from-group">从组带入<ChevronDown className="h-3 w-3" aria-hidden="true" /></LineChipButton>
+                      <button type="button" className="inline-flex items-center gap-0.5 text-[12px] font-medium text-[var(--fx-accent)]" data-testid="node-pool-from-group">
+                        从组带入<ChevronDown className="h-3 w-3" aria-hidden="true" />
+                      </button>
                     </DropdownMenuTrigger>
-                    <DropdownMenuContent align="start" className="w-60">
+                    <DropdownMenuContent align="end" className="w-60">
                       {importable.map((group) => (
                         <DropdownMenuItem
                           key={group.key}
@@ -439,19 +429,48 @@ export function NodePoolsSection({ hosts, onOpenGroup, onCreateGroup, isAdmin = 
                     </DropdownMenuContent>
                   </DropdownMenu>
                 ) : null}
-              </div>
+                footer={editingFollowers.length ? (
+                  <span data-testid="node-pool-followers">
+                    {editingFollowers.join("、")} 的成员跟着这个池：这里加减机器，{editingFollowers.length > 1 ? "它们" : "它"}的成员也跟着加减。
+                  </span>
+                ) : null}
+              >
+                <LineFormGroup className="py-3 pr-[14px]">
+                  <div className="flex flex-wrap gap-1.5">
+                    {editing.hostIds.map((hostId) => (
+                      <LineChip key={hostId} className={cn(LINE_GRAY_BG, "border-transparent py-[4px] pl-[10px] pr-[7px] text-[12px]")}>
+                        {hostName(hostId)}
+                        <button type="button" className="text-muted-foreground hover:text-foreground" aria-label={`去掉 ${hostName(hostId)}`} onClick={() => setEditing({ ...editing, hostIds: editing.hostIds.filter((id) => id !== hostId) })}><X className="h-3 w-3" /></button>
+                      </LineChip>
+                    ))}
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <LineChipButton variant="add" className="py-[4px] text-[12px]" disabled={editing.role === "landing" && editing.hostIds.length >= MAX_LANDING_MEMBERS} data-testid="node-pool-add-host"><Plus className="h-3 w-3" />加机器</LineChipButton>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="start" className="max-h-72">
+                        {hosts.filter((host) => !editing.hostIds.includes(host.id)).map((host) => (
+                          <DropdownMenuItem key={host.id} onSelect={() => setEditing({ ...editing, hostIds: [...editing.hostIds, host.id] })}>{host.name}{host.isOnline === false ? "（离线）" : ""}</DropdownMenuItem>
+                        ))}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
+                </LineFormGroup>
+              </LineField>
               {editing.role === "landing" ? (
                 <LandingPoolFields
                   draft={editing.landing}
                   onChange={(landing) => setEditing({ ...editing, landing })}
                   directDomain={editing.directDomain}
                   onDirectDomainChange={(directDomain) => setEditing({ ...editing, directDomain })}
+                  domainEditable={isAdmin}
+                  suggesting={suggestDomain.isPending}
+                  onSuggestDomain={isAdmin ? () => suggestDomain.mutate({ name: editing.name.trim() || undefined, hostIds: editing.hostIds }) : undefined}
                   editing={!!editing.id && editing.configured}
                   rotating={rotate.isPending}
                   onRotate={editing.id ? () => { if (window.confirm("换掉这个落地池的全部凭据和密钥？每台一起换，客户端要重新拉订阅。")) rotate.mutate({ id: editing.id! }); } : undefined}
                 />
               ) : null}
-              {draftError ? <p className="text-[11.5px] text-[var(--fx-warn-text)]">{draftError}</p> : null}
+              {draftError ? <p className="px-[14px] text-[12px] text-[var(--fx-warn-text)]">{draftError}</p> : null}
             </div>
             <DialogFooter>
               {editing.id ? (
