@@ -1788,7 +1788,7 @@ button.fx-rb-mini-row:hover { background: var(--fx-l2-group); }
 .fx-hd-sec-head { display: flex; min-width: 0; width: 100%; align-items: center; justify-content: space-between; gap: 10px; min-height: 38px; padding: 6px 12px; border: 0; background: transparent; font: inherit; text-align: left; color: inherit; }
 button.fx-hd-sec-head { cursor: pointer; }
 button.fx-hd-sec-head:hover { background: color-mix(in srgb, var(--fx-text) 3%, transparent); }
-.fx-hd-sec-head > h3 { margin: 0; min-width: 0; flex: 0 1 auto; font-size: 12.5px; font-weight: 600; line-height: 18px; color: var(--fx-text-secondary); white-space: nowrap; }
+.fx-hd-sec-head > h3 { margin: 0; flex: none; font-size: 12.5px; font-weight: 600; line-height: 18px; color: var(--fx-text-secondary); white-space: nowrap; }
 .fx-hd-sec-action { display: inline-flex; min-width: 0; flex: 0 1 auto; align-items: center; justify-content: flex-end; gap: 8px; }
 .fx-hd-sec-action > button, .fx-hd-sec-action > a { flex: none; }
 .fx-hd-sec-toggle { display: inline-flex; flex: none; align-items: center; gap: 3px; font-size: 11.5px; color: var(--fx-text-muted); }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -446,5 +447,136 @@ func TestOoklaCarrierRankingAndSummary(t *testing.T) {
 	}
 	if got := speedSummary([]float64{100, 200}); got != 150 {
 		t.Fatalf("few samples: plain mean = %v", got)
+	}
+}
+
+// 国内测速点用的假 Ookla 服务器：latency.txt 按给的延迟回，下载 2 MB，上传回 size=N。
+func newDomesticSpeedServer(t *testing.T, latency time.Duration) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/speedtest/latency.txt":
+			time.Sleep(latency)
+			_, _ = w.Write([]byte("test=test\n"))
+		case "/speedtest/random4000x4000.jpg":
+			_, _ = w.Write(make([]byte, 2<<20))
+		case "/speedtest/upload.php":
+			n, _ := io.Copy(io.Discard, r.Body)
+			_, _ = fmt.Fprintf(w, "size=%d", n)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
+func domesticHint(server *httptest.Server, sponsor, city string, distance float64) nodeCheckSpeedServer {
+	host := strings.TrimPrefix(server.URL, "http://")
+	return nodeCheckSpeedServer{URL: server.URL + "/speedtest/upload.php", Host: host, Name: city, Sponsor: sponsor, CC: "CN", DistanceKm: distance}
+}
+
+// 大陆的主机连不上 speedtest.net（2.2.248）：从面板带的国内测速点里挑，连不上的跳过；运营商用面板认的，
+// 同运营商的只要延迟不差太多就优先；note 写明测速点是从面板带的列表里挑的。
+func TestOoklaDomesticServersWhenSpeedtestNetUnreachable(t *testing.T) {
+	telecom := newDomesticSpeedServer(t, 0)
+	unicom := newDomesticSpeedServer(t, 12*time.Millisecond)
+	oldServers, oldConfig := ooklaServersURL, ooklaConfigURL
+	ooklaServersURL, ooklaConfigURL = "http://127.0.0.1:1/api/js/servers", "http://127.0.0.1:1/speedtest-config.php"
+	defer func() { ooklaServersURL, ooklaConfigURL = oldServers, oldConfig }()
+	withShortSpeedTest(t, "http://unused.invalid", 500*time.Millisecond, 800*time.Millisecond)
+
+	hints := &nodeCheckSpeedHints{Carrier: "unicom", Servers: []nodeCheckSpeedServer{
+		{URL: "http://127.0.0.1:1/speedtest/upload.php", Host: "127.0.0.1:1", Name: "无锡", Sponsor: "江苏电信 5G", CC: "CN", DistanceKm: 1200},
+		domesticHint(telecom, "上海电信", "上海", 1210),
+		domesticHint(unicom, "上海联通 5G", "上海", 1215),
+	}}
+	target := ooklaSpeedTarget()
+	target.metaTimeout = speedTestDirectMetaTimeout
+	target.domestic = hints.ooklaServers()
+	target.carrier = hints.carrierHint()
+	dialer := &net.Dialer{}
+	started := time.Now()
+	result, err := runHTTPSpeedTest(context.Background(), dialer.DialContext, target, nil)
+	if err != nil {
+		t.Fatalf("the domestic list should be used: %v", err)
+	}
+	if result.Server != "ookla" || result.ServerName != "上海联通 5G · 上海" || result.ServerCountry != "CN" || result.ServerDistanceKm != 1215 {
+		t.Fatalf("same carrier first (unicom), its ping is close: %+v", result)
+	}
+	if !strings.Contains(result.Note, "连不上 speedtest.net") || !strings.Contains(result.Note, "面板带的国内列表") {
+		t.Fatalf("note should say where the server came from: %q", result.Note)
+	}
+	if result.DownloadMbps <= 0 || result.UploadMbps <= 0 {
+		t.Fatalf("numbers: %+v", result)
+	}
+	if elapsed := time.Since(started); elapsed > 8*time.Second {
+		t.Fatalf("a refused list should not hold the test up: %v", elapsed)
+	}
+}
+
+// 列表接口连得上、给的却是境外的（香港那台延迟更低）：国内机器不测过墙的，测面板带的国内测速点。
+func TestOoklaDomesticDropsForeignListServers(t *testing.T) {
+	hongKong := newDomesticSpeedServer(t, 0)
+	shanghai := newDomesticSpeedServer(t, 15*time.Millisecond)
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/js/servers" {
+			_, _ = fmt.Fprintf(w, `[{"url":"%s/speedtest/upload.php","name":"Hong Kong","sponsor":"HK ISP","cc":"HK","country":"Hong Kong","host":"%s","distance":130}]`,
+				hongKong.URL, strings.TrimPrefix(hongKong.URL, "http://"))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer api.Close()
+	oldServers, oldConfig := ooklaServersURL, ooklaConfigURL
+	ooklaServersURL, ooklaConfigURL = api.URL+"/api/js/servers", api.URL+"/none"
+	defer func() { ooklaServersURL, ooklaConfigURL = oldServers, oldConfig }()
+	withShortSpeedTest(t, "http://unused.invalid", 500*time.Millisecond, 800*time.Millisecond)
+
+	target := ooklaSpeedTarget()
+	target.domestic = (&nodeCheckSpeedHints{Servers: []nodeCheckSpeedServer{domesticHint(shanghai, "上海电信", "上海", 1210)}}).ooklaServers()
+	dialer := &net.Dialer{}
+	result, err := runHTTPSpeedTest(context.Background(), dialer.DialContext, target, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ServerName != "上海电信 · 上海" || !strings.Contains(result.Note, "都在境外") {
+		t.Fatalf("foreign list servers are dropped for a mainland host: %q / %q", result.ServerName, result.Note)
+	}
+
+	// 面板没带国内测速点（不是大陆的主机）：照旧测列表给的
+	plain, err := runHTTPSpeedTest(context.Background(), dialer.DialContext, ooklaSpeedTarget(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.ServerName != "HK ISP · Hong Kong" || plain.Note != "" {
+		t.Fatalf("no hints: the list as before: %q / %q", plain.ServerName, plain.Note)
+	}
+}
+
+// 指令里的 speed：坏的 url、重复的 host 不要；运营商只认三家。
+func TestNodeCheckSpeedHintsDecode(t *testing.T) {
+	var directive nodeCheckRunDirective
+	raw := `{"runId":"nc-1","kind":"speed","speed":{"carrier":"telecom","servers":[
+		{"url":"http://a.example:8080/speedtest/upload.php","host":"a.example:8080","name":"上海","sponsor":"上海电信","cc":"cn","distanceKm":1210.4},
+		{"url":"http://A.example:8080/speedtest/upload.php","host":"A.EXAMPLE:8080","name":"dup","sponsor":"dup","cc":"CN"},
+		{"url":"ftp://b.example/upload.php","host":"b.example:21","name":"bad","sponsor":"bad","cc":"CN"},
+		{"url":"http://c.example:8080/speedtest/upload.php","host":"","name":"no host","sponsor":"x","cc":"CN"}]}}`
+	if err := json.Unmarshal([]byte(raw), &directive); err != nil {
+		t.Fatal(err)
+	}
+	servers := directive.Speed.ooklaServers()
+	if len(servers) != 1 || servers[0].Base != "http://a.example:8080/speedtest" || servers[0].CC != "CN" || servers[0].Sponsor != "上海电信" || servers[0].DistanceKm != 1210.4 {
+		t.Fatalf("servers = %+v", servers)
+	}
+	if directive.Speed.carrierHint() != "telecom" || (&nodeCheckSpeedHints{Carrier: "cable"}).carrierHint() != "" {
+		t.Fatal("carrier hint")
+	}
+	var none *nodeCheckSpeedHints
+	if none.ooklaServers() != nil || none.carrierHint() != "" {
+		t.Fatal("no hints")
+	}
+	if joinNotes("", " a ", "", "b") != "a；b" || joinNotes() != "" {
+		t.Fatal("joinNotes")
 	}
 }

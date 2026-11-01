@@ -17,6 +17,12 @@ package main
 
 还有：每台主机只留 2 条空闲连接（Go 的默认），四条流轮着要，两条流每次都重新握手、重新慢启动 ——
 连接池按流数开。
+
+国内机器（2.2.248）：speedtest.net 在大陆连不上（取列表超时），列表接口对境外来的请求又不给大陆的测速点，
+国内机器只能退到测面板（量的是出境到面板那一段，几台都是二三十 Mbps）。现在面板给大陆的主机带一份国内三网的
+Ookla 测速点（server/ops/speedTestDomestic.ts），和列表接口同时进行：
+  · 列表接口只等 ooklaListWaitDomestic，连不上不白等；它给的境外测速点不要 —— 过了墙测出来的是出境那一段；
+  · 运营商先看 speedtest-config.php（国内多半也连不上），拿不到用面板按 IP 归属认的。
 */
 
 import (
@@ -54,6 +60,8 @@ const (
 	// 列表里最近的前几台各 ping 三次，按延迟排；挑中的那台测不成（2.2.247）就换下一台，最多试几台。
 	ooklaPingCandidates = 6
 	ooklaMaxTries       = 3
+	// 面板带了国内测速点时列表接口只等这么久（大陆多半连不上，不白等 8 秒）。
+	ooklaListWaitDomestic = 5 * time.Second
 	// 上传每次送多大：从 256 KB 起，跟着速度调到一次大约 1 秒（Cloudflare 官方测速也是这么一级级加）。
 	speedTestUpStartBytes = 256 << 10
 	speedTestUpMinBytes   = 64 << 10
@@ -70,6 +78,7 @@ type ooklaServer struct {
 	Name       string
 	Sponsor    string
 	CC         string
+	Country    string
 	Host       string
 	DistanceKm float64
 }
@@ -119,24 +128,34 @@ func parseOoklaServers(body []byte) []ooklaServer {
 	}
 	servers := make([]ooklaServer, 0, len(raw))
 	for _, item := range raw {
-		url := anyText(item["url"])
-		if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+		base, ok := ooklaBase(anyText(item["url"]))
+		if !ok {
 			continue
-		}
-		base := url
-		if i := strings.LastIndex(base, "/"); i > strings.Index(base, "://")+3 {
-			base = base[:i]
 		}
 		servers = append(servers, ooklaServer{
 			Base:       base,
 			Name:       html.UnescapeString(anyText(item["name"])),
 			Sponsor:    html.UnescapeString(anyText(item["sponsor"])),
 			CC:         strings.ToUpper(anyText(item["cc"])),
+			Country:    html.UnescapeString(anyText(item["country"])),
 			Host:       anyText(item["host"]),
 			DistanceKm: anyFloat(item["distance"]),
 		})
 	}
 	return servers
+}
+
+// ooklaBase 列表里的 url（http://host:8080/speedtest/upload.php）去掉最后一段，后面拼 latency.txt / random*.jpg /
+// upload.php。不是 http(s) 的不要。
+func ooklaBase(raw string) (string, bool) {
+	if !strings.HasPrefix(raw, "http://") && !strings.HasPrefix(raw, "https://") {
+		return "", false
+	}
+	base := raw
+	if i := strings.LastIndex(base, "/"); i > strings.Index(base, "://")+3 {
+		base = base[:i]
+	}
+	return base, true
 }
 
 var ooklaClientTag = regexp.MustCompile(`<client\s+([^>]*?)/?>`)
@@ -174,14 +193,8 @@ type ooklaCandidate struct {
 	connectMs float64
 }
 
-// pickOoklaServers 拿服务器列表（按出口 IP 给最近的；经节点时就是落地出口附近的），前几台各 ping 三次，
-// 按延迟从低到高排好（至少两次 ping 得通的才算）。第一次要握手，记成那台的「建连」。出口 IP 和运营商
-// 从 speedtest-config.php 拿，写进 info。
-func pickOoklaServers(ctx context.Context, client *http.Client, target speedTarget, info *speedTestResult) ([]ooklaCandidate, error) {
-	timeout := target.metaTimeout
-	if timeout <= 0 {
-		timeout = 15 * time.Second
-	}
+// fetchOoklaServers 拿 speedtest.net 的服务器列表（按出口 IP 给最近的；经节点时就是落地出口附近的）。
+func fetchOoklaServers(ctx context.Context, client *http.Client, timeout time.Duration) ([]ooklaServer, error) {
 	listCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(listCtx, http.MethodGet, ooklaServersURL, nil)
@@ -199,33 +212,12 @@ func pickOoklaServers(ctx context.Context, client *http.Client, target speedTarg
 	if len(servers) == 0 {
 		return nil, errors.New("speedtest.net 没给测速点")
 	}
-	if len(servers) > ooklaPingCandidates {
-		servers = servers[:ooklaPingCandidates]
-	}
+	return servers, nil
+}
 
-	// 出口 IP 和运营商和 ping 一起拿（拿不到不要紧）：挑测速点时要看是不是同一家运营商。
-	var configWG sync.WaitGroup
-	configWG.Add(1)
-	go func() {
-		defer configWG.Done()
-		configCtx, cancelConfig := context.WithTimeout(ctx, 6*time.Second)
-		defer cancelConfig()
-		creq, err := http.NewRequestWithContext(configCtx, http.MethodGet, ooklaConfigURL, nil)
-		if err != nil {
-			return
-		}
-		creq.Header.Set("User-Agent", "NEX-Agent/"+Version)
-		cr, err := client.Do(creq)
-		if err != nil {
-			return
-		}
-		cbody, _ := io.ReadAll(io.LimitReader(cr.Body, 64<<10))
-		_ = cr.Body.Close()
-		if is2xx(cr) {
-			parseOoklaClient(string(cbody), info)
-		}
-	}()
-
+// pingOoklaServers 每台 ping 三次（同时 ping），至少两次 ping 得通的才算。第一次要握手，记成那台的「建连」；
+// 后两次取低的当延迟。latency.txt 被 30x 转到别处的，target 指向转过去的地方。
+func pingOoklaServers(ctx context.Context, client *http.Client, servers []ooklaServer) []ooklaCandidate {
 	type pinged struct {
 		ooklaCandidate
 		ok int
@@ -239,7 +231,7 @@ func pickOoklaServers(ctx context.Context, client *http.Client, target speedTarg
 			entry := pinged{ooklaCandidate: ooklaCandidate{server: server, best: math.Inf(1)}}
 			base := server.Base
 			moved := false
-			// 量三次：第一次要握手，记成「建连」；后两次取低的当延迟。被 30x 转走那一次不算，多给一次机会。
+			// 被 30x 转走那一次不算，多给一次机会。
 			for try := 0; try < 4 && entry.ok < 3; try++ {
 				probe := speedTarget{name: "ookla", label: "Ookla " + server.Host, base: base, ookla: &server}
 				pingCtx, cancelPing := context.WithTimeout(ctx, 4*time.Second)
@@ -277,18 +269,119 @@ func pickOoklaServers(ctx context.Context, client *http.Client, target speedTarg
 		}(i, server)
 	}
 	wg.Wait()
-	configWG.Wait()
 	var candidates []ooklaCandidate
 	for _, entry := range results {
 		if entry.ok >= 2 {
 			candidates = append(candidates, entry.ooklaCandidate)
 		}
 	}
-	if len(candidates) == 0 {
-		return nil, fmt.Errorf("附近 %d 个 Ookla 测速点都连不上", len(servers))
+	return candidates
+}
+
+// mainlandOnly 国内机器只要大陆的测速点（列表里 cc=CN、国家是 China 的），面板带的那份已经 ping 过的去掉。
+func mainlandOnly(servers []ooklaServer, already []ooklaServer) []ooklaServer {
+	seen := make(map[string]bool, len(already))
+	for _, server := range already {
+		seen[strings.ToLower(server.Host)] = true
 	}
-	rankOoklaCandidates(candidates, carrierOf(info.ASOrg))
-	return candidates, nil
+	var kept []ooklaServer
+	for _, server := range servers {
+		if server.CC != "CN" || (server.Country != "" && !strings.EqualFold(server.Country, "China")) || seen[strings.ToLower(server.Host)] {
+			continue
+		}
+		kept = append(kept, server)
+	}
+	return kept
+}
+
+// pickOoklaServers 挑测速点，按延迟从低到高排好（同运营商的优先，见 rankOoklaCandidates）。列表接口给的取最近的
+// 几台；面板给大陆的主机带了国内测速点（target.domestic）时同时 ping 那份，列表接口只给境外的或者连不上，就从那份
+// 里挑，返回的 note 写明。出口 IP 和运营商从 speedtest-config.php 拿，写进 info。
+func pickOoklaServers(ctx context.Context, client *http.Client, target speedTarget, info *speedTestResult) ([]ooklaCandidate, string, error) {
+	timeout := target.metaTimeout
+	if timeout <= 0 {
+		timeout = 15 * time.Second
+	}
+	domestic := target.domestic
+	if len(domestic) > 0 && timeout > ooklaListWaitDomestic {
+		timeout = ooklaListWaitDomestic
+	}
+	type listed struct {
+		servers []ooklaServer
+		err     error
+	}
+	listDone := make(chan listed, 1)
+	go func() {
+		servers, err := fetchOoklaServers(ctx, client, timeout)
+		listDone <- listed{servers, err}
+	}()
+
+	// 出口 IP 和运营商和 ping 一起拿（拿不到不要紧）：挑测速点时要看是不是同一家运营商。
+	var configWG sync.WaitGroup
+	configWG.Add(1)
+	go func() {
+		defer configWG.Done()
+		configCtx, cancelConfig := context.WithTimeout(ctx, 6*time.Second)
+		defer cancelConfig()
+		creq, err := http.NewRequestWithContext(configCtx, http.MethodGet, ooklaConfigURL, nil)
+		if err != nil {
+			return
+		}
+		creq.Header.Set("User-Agent", "NEX-Agent/"+Version)
+		cr, err := client.Do(creq)
+		if err != nil {
+			return
+		}
+		cbody, _ := io.ReadAll(io.LimitReader(cr.Body, 64<<10))
+		_ = cr.Body.Close()
+		if is2xx(cr) {
+			parseOoklaClient(string(cbody), info)
+		}
+	}()
+
+	// 面板带的国内测速点不用等列表，先 ping 着。
+	var candidates []ooklaCandidate
+	if len(domestic) > 0 {
+		candidates = pingOoklaServers(ctx, client, domestic)
+	}
+	list := <-listDone
+	note := ""
+	fromList := 0
+	if list.err == nil {
+		servers := list.servers
+		if len(domestic) > 0 {
+			servers = mainlandOnly(servers, domestic)
+			if len(servers) == 0 && len(candidates) > 0 {
+				note = "speedtest.net 给的测速点都在境外，改从面板带的国内测速点里挑"
+			}
+		}
+		if len(servers) > ooklaPingCandidates {
+			servers = servers[:ooklaPingCandidates]
+		}
+		fromList = len(servers)
+		candidates = append(candidates, pingOoklaServers(ctx, client, servers)...)
+	} else if len(candidates) > 0 {
+		note = "这台机器连不上 speedtest.net（国内常见），测速点从面板带的国内列表里挑"
+	}
+	configWG.Wait()
+	if len(candidates) == 0 {
+		switch {
+		case len(domestic) > 0 && list.err != nil:
+			return nil, "", fmt.Errorf("%v；面板带的 %d 个国内测速点也都连不上", list.err, len(domestic))
+		case len(domestic) > 0:
+			return nil, "", fmt.Errorf("面板带的 %d 个国内测速点、speedtest.net 给的 %d 个大陆测速点都连不上", len(domestic), fromList)
+		case list.err != nil:
+			return nil, "", list.err
+		default:
+			return nil, "", fmt.Errorf("附近 %d 个 Ookla 测速点都连不上", fromList)
+		}
+	}
+	carrier := carrierOf(info.ASOrg)
+	if carrier == "" {
+		carrier = target.carrier
+	}
+	rankOoklaCandidates(candidates, carrier)
+	return candidates, note, nil
 }
 
 // carrierOf 认运营商：国内三家（和它们在香港等地的分公司）。认不出返回空。
@@ -345,11 +438,22 @@ func speedSummary(values []float64) float64 {
 	return math.Round(sum/float64(len(sorted))*10) / 10
 }
 
+// joinNotes 几段说明用「；」连起来，空的跳过。
+func joinNotes(parts ...string) string {
+	kept := parts[:0:0]
+	for _, part := range parts {
+		if part = strings.TrimSpace(part); part != "" {
+			kept = append(kept, part)
+		}
+	}
+	return strings.Join(kept, "；")
+}
+
 // runOoklaSpeedTest 就近挑 Ookla 测速点测。挑中的那台测不成（回 4xx / 5xx、延迟全失败、上传被拒……）就换
 // 延迟次低的那台从头再测，最多试 ooklaMaxTries 台；2.2.246 一台测不成就整段放弃，改测 Cloudflare / 面板。
 func runOoklaSpeedTest(ctx context.Context, client *http.Client, target speedTarget, progress func(speedSample)) (*speedTestResult, error) {
 	info := &speedTestResult{}
-	candidates, err := pickOoklaServers(ctx, client, target, info)
+	candidates, listNote, err := pickOoklaServers(ctx, client, target, info)
 	if err != nil {
 		return nil, err
 	}
@@ -376,13 +480,11 @@ func runOoklaSpeedTest(ctx context.Context, client *http.Client, target speedTar
 		}
 		err := measureSpeed(ctx, client, candidate.target, result, progress)
 		if err == nil {
+			switched := ""
 			if len(failures) > 0 {
-				note := fmt.Sprintf("最近的 Ookla 测速点测不成（%s），换了 %s", strings.Join(failures, "；"), candidate.server.label())
-				if result.Note != "" {
-					note += "；" + result.Note
-				}
-				result.Note = note
+				switched = fmt.Sprintf("最近的 Ookla 测速点测不成（%s），换了 %s", strings.Join(failures, "；"), candidate.server.label())
 			}
+			result.Note = joinNotes(listNote, switched, result.Note)
 			return result, nil
 		}
 		if ctx.Err() != nil {

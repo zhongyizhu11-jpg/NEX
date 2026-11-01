@@ -7,7 +7,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { countryFlagLabel } from "@/lib/flagEmojiSupport";
 import { trpc } from "@/lib/trpc";
 import { formatSpeedMs, formatTraffic, speedReach, speedServerLabel } from "./speedTestFormat";
-import { formatMbps, NODE_CHECK_ACCURATE_VERSION, NODE_CHECK_PANEL_FALLBACK_VERSION, NODE_CHECK_PHASE_LABELS, type SpeedSample, type SpeedTestResult } from "@shared/nodeCheck";
+import { formatMbps, NODE_CHECK_ACCURATE_VERSION, NODE_CHECK_DOMESTIC_VERSION, NODE_CHECK_PANEL_FALLBACK_VERSION, NODE_CHECK_PHASE_LABELS, type SpeedSample, type SpeedTestResult } from "@shared/nodeCheck";
 
 /*
   网速测试：一台机器（或经一个节点）对 Cloudflare 测速。画法照 Stash 的「网速测试」：
@@ -161,6 +161,8 @@ export function SpeedTestDialog({ subject, name, onOpenChange }: { subject: Spee
   // 2.2.246 起测得准：就近的 Ookla 测速点、上传只算对端收下的
   const accurate = hostId > 0 ? !!hostStatus.data?.accurate : !!entryHost?.accurate;
   const agentKnown = hostId > 0 ? !!hostStatus.data?.supported : !!entryHost?.supported;
+  // 大陆的主机测自己：测国内三网的 Ookla 测速点（Agent 2.2.248 起）
+  const domesticHost = hostId > 0 && String(hostStatus.data?.countryCode || "").toUpperCase() === "CN" && !hostStatus.data?.domesticUpgrade;
 
   return (
     <Dialog open={!!subject} onOpenChange={onOpenChange}>
@@ -251,11 +253,15 @@ export function SpeedTestDialog({ subject, name, onOpenChange }: { subject: Spee
             <p className="text-center text-[11.5px] text-[var(--fx-warn-text)]" data-testid="speed-test-upgrade">
               {entryKey ? "测速那台" : "这台"}的 Agent 早于 {NODE_CHECK_ACCURATE_VERSION}：上传数偏高，国内机器多半只能测到面板（上限是面板的带宽）。升级 Agent 后就近找测速点，测得准
             </p>
+          ) : hostId > 0 && hostStatus.data?.supported && hostStatus.data.domesticUpgrade ? (
+            <p className="text-center text-[11.5px] text-[var(--fx-warn-text)]" data-testid="speed-test-upgrade">
+              这台的 Agent 早于 {NODE_CHECK_DOMESTIC_VERSION}：国内机器连不上 speedtest.net，只能测到面板（上限是面板的带宽）。升级 Agent 后测国内三网的测速点
+            </p>
           ) : null}
           <div className="text-center text-[11px] leading-[1.6] text-muted-foreground">
             {accurate || !agentKnown ? (
               <>
-                <p>{entryKey ? "经整条链，" : ""}就近找测速点：Ookla → Cloudflare → 面板</p>
+                <p>{entryKey ? "经整条链，" : ""}就近找测速点：Ookla{domesticHost ? "（国内三网）" : ""} → Cloudflare → 面板</p>
                 <p>流量约为速度 × 18 秒，100M 约 230 MB</p>
               </>
             ) : (

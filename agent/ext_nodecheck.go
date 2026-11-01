@@ -94,6 +94,9 @@ type speedTarget struct {
 	metaTimeout time.Duration
 	// Ookla：挑中的那台（pickOoklaServer 填）。
 	ookla *ooklaServer
+	// Ookla：面板给大陆的主机带的国内测速点，和面板按 IP 归属认的运营商（2.2.248，见 pickOoklaServers）。
+	domestic []ooklaServer
+	carrier  string
 }
 
 func ooklaSpeedTarget() speedTarget {
@@ -128,6 +131,62 @@ type nodeCheckRunDirective struct {
 	Via     *nodeCheckVia        `json:"via,omitempty"`
 	Targets []siteLatencyTarget  `json:"targets,omitempty"`
 	Panel   *nodeCheckPanelSpeed `json:"panel,omitempty"`
+	Speed   *nodeCheckSpeedHints `json:"speed,omitempty"`
+}
+
+// nodeCheckSpeedHints 面板给大陆的主机测速时带的（2.2.248）：一份国内三网的 Ookla 测速点（大陆连不上
+// speedtest.net 拿列表），和面板按这台机器的 IP 归属认的运营商（telecom / unicom / mobile，认不出为空）。
+type nodeCheckSpeedHints struct {
+	Servers []nodeCheckSpeedServer `json:"servers,omitempty"`
+	Carrier string                 `json:"carrier,omitempty"`
+}
+
+// nodeCheckSpeedServer 和 speedtest.net 列表里一条的样子一样：url 是 http://host:8080/speedtest/upload.php。
+type nodeCheckSpeedServer struct {
+	URL        string  `json:"url"`
+	Host       string  `json:"host"`
+	Name       string  `json:"name"`
+	Sponsor    string  `json:"sponsor"`
+	CC         string  `json:"cc"`
+	DistanceKm float64 `json:"distanceKm"`
+}
+
+// 面板带的国内测速点最多认这么多台（全 ping 一遍）。
+const nodeCheckDomesticMax = 32
+
+func (h *nodeCheckSpeedHints) ooklaServers() []ooklaServer {
+	if h == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var servers []ooklaServer
+	for _, item := range h.Servers {
+		base, ok := ooklaBase(strings.TrimSpace(item.URL))
+		host := strings.TrimSpace(item.Host)
+		if !ok || host == "" || seen[strings.ToLower(host)] {
+			continue
+		}
+		seen[strings.ToLower(host)] = true
+		servers = append(servers, ooklaServer{
+			Base: base, Name: item.Name, Sponsor: item.Sponsor, CC: strings.ToUpper(item.CC), Host: host,
+			DistanceKm: math.Max(0, item.DistanceKm),
+		})
+		if len(servers) >= nodeCheckDomesticMax {
+			break
+		}
+	}
+	return servers
+}
+
+func (h *nodeCheckSpeedHints) carrierHint() string {
+	if h == nil {
+		return ""
+	}
+	switch h.Carrier {
+	case "telecom", "unicom", "mobile":
+		return h.Carrier
+	}
+	return ""
 }
 
 type nodeCheckDirective struct {
@@ -380,6 +439,9 @@ func (m *nodeCheckExtModule) execute(d nodeCheckRunDirective, report *nodeCheckR
 			if !viaProxy {
 				ookla.metaTimeout = speedTestDirectMetaTimeout
 				cloudflare.metaTimeout = speedTestDirectMetaTimeout
+				// 大陆的主机：面板带了国内测速点（经代理时出去的是落地，用不上）
+				ookla.domestic = d.Speed.ooklaServers()
+				ookla.carrier = d.Speed.carrierHint()
 			}
 			targets := []speedTarget{ookla, cloudflare}
 			m.mu.Lock()
