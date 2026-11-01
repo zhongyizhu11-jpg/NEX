@@ -26,6 +26,7 @@ import {
 import { SITE_LATENCY_TARGETS } from "../../shared/siteLatency";
 import { normalizeUnlockFamily, type UnlockFamily } from "../../shared/unlockCheck";
 import { wakeAgentExt, type AgentExtHost } from "./agentExt";
+import { domesticSpeedTestHints, type SpeedTestHints } from "./speedTestDomestic";
 
 const q = quoteDbIdentifier;
 const TABLE = "host_speed_tests";
@@ -67,6 +68,13 @@ type PendingRun = NodeCheckSubject & {
   createdAt: number;
   /** 测速时给 Agent 的一次性口令：连不上 Cloudflare 就拿它来面板测（server/ops/nodeCheckSpeedRoute.ts）。 */
   speedToken: string | null;
+  /** 大陆的主机测自己时带的国内测速点和运营商（speedTestDomestic.ts，Agent 2.2.248 起认）。 */
+  speedHints: SpeedTestHints | null;
+  /**
+   * 测这台机器自己时，面板记的出口 IP 和 IP 归属：国内机器连不上 speedtest-config.php，Agent 报不上来出口 IP /
+   * 运营商，落库前用这个补（只补空的）。
+   */
+  egress: Pick<SpeedTestResult, "clientIp" | "asn" | "asOrg" | "country" | "city"> | null;
   /** Agent 最近一次报的进度（running）。 */
   report: NodeCheckRunReport | null;
 };
@@ -120,7 +128,7 @@ export class NodeCheckError extends Error {}
  * 旧 Agent / 离线主机直接报错（界面上会提示换一台机器或升级 Agent）。
  */
 export function startNodeCheck(
-  host: { id: number; agentVersion?: string | null; isOnline?: unknown },
+  host: { id: number; agentVersion?: string | null; isOnline?: unknown } & Parameters<typeof domesticSpeedTestHints>[0],
   input: { kind: NodeCheckKind; nodeId?: number; entryKey?: string; nodeName?: string; outbound?: Record<string, unknown> | null; extraOutbounds?: Record<string, unknown>[]; installCmd?: string | null; family?: unknown; requestedBy?: number | null },
 ) {
   const hostId = Number(host.id);
@@ -147,10 +155,39 @@ export function startNodeCheck(
     requestedBy: input.requestedBy ?? null,
     createdAt: Date.now(),
     speedToken: input.kind === "speed" ? randomBytes(18).toString("base64url") : null,
+    // 只测这台机器自己时才用得上：经节点、测线路时出去的是落地
+    speedHints: input.kind === "speed" && nodeId === 0 && !entryKey ? domesticSpeedTestHints(host) : null,
+    egress: input.kind === "speed" && nodeId === 0 && !entryKey ? hostEgress(host) : null,
     report: null,
   });
   wakeAgentExt(hostId, "node-check");
   return { runId, reused: false };
+}
+
+function hostEgress(host: Record<string, unknown>): PendingRun["egress"] {
+  const text = (value: unknown) => (value == null ? "" : String(value).trim());
+  // 主机地址可能登记的是域名：只拿 IP
+  const ip = (value: unknown) => (/^[0-9a-f:.]{2,45}$/i.test(text(value)) ? text(value) : "");
+  return {
+    clientIp: ip(host.ipv4) || ip(host.ip),
+    asn: text(host.geoAsn).replace(/^AS/i, ""),
+    asOrg: text(host.geoIsp) || text(host.geoOrg),
+    country: text(host.geoCountryCode).toUpperCase(),
+    city: text(host.geoRegion),
+  };
+}
+
+/** Agent 没报上来的出口信息用面板记的补（只补空的）。 */
+function withEgress(result: SpeedTestResult, egress: PendingRun["egress"]): SpeedTestResult {
+  if (!egress || result.clientIp) return result;
+  return {
+    ...result,
+    clientIp: egress.clientIp,
+    asn: result.asn || egress.asn,
+    asOrg: result.asOrg || egress.asOrg,
+    country: result.country || egress.country,
+    city: result.city || egress.city,
+  };
 }
 
 export function nodeCheckDirectiveFor(hostId: number) {
@@ -161,6 +198,7 @@ export function nodeCheckDirectiveFor(hostId: number) {
     ...(run.outbound ? { via: { outbound: run.outbound, ...(run.extraOutbounds ? { extraOutbounds: run.extraOutbounds } : {}), ...(run.installCmd ? { installCmd: run.installCmd } : {}) } } : {}),
     ...(run.kind === "exit" ? { targets: SITE_LATENCY_TARGETS.map(({ key, host, port }) => ({ key, host, port })) } : {}),
     ...(run.speedToken ? { panel: { token: run.speedToken } } : {}),
+    ...(run.speedHints ? { speed: run.speedHints } : {}),
   }));
   return runs.length > 0 ? { runs } : undefined;
 }
@@ -213,6 +251,7 @@ export async function ingestNodeCheckReport(host: AgentExtHost, raw: unknown) {
       continue;
     }
     pendingRuns.delete(report.runId);
+    if (report.speed) report.speed = withEgress(report.speed, pending.egress);
     const now = nowSec();
     // Agent 的时钟不一定准：只在差不多的范围内用它的完成时间。
     const checkedAt = report.finishedAt > 0 && Math.abs(report.finishedAt - now) < 15 * 60 ? report.finishedAt : now;

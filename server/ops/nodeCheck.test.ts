@@ -136,3 +136,42 @@ test("2.2.246 的结果：就近的 Ookla 测速点、用掉的流量都留着�
   assert.equal(recorded[1].result.serverName, "");
   assert.equal(recorded[1].result.downloadBytes, 0, "老 Agent 没报流量：0，不显示");
 });
+
+test("大陆的主机测自己时指令带国内测速点（Agent 2.2.248 起认）；经节点、测线路、境外主机都不带", () => {
+  resetNodeCheckStateForTest();
+  const guangzhou = { ...host(31, "2.2.248"), geoCountryCode: "CN", geoLatitudeMicro: 23127361, geoLongitudeMicro: 113264570, geoIsp: "Chinanet" };
+  startNodeCheck(guangzhou, { kind: "speed" });
+  const run = nodeCheckDirectiveFor(31)!.runs[0] as any;
+  assert.equal(run.speed.carrier, "telecom");
+  assert.equal(run.speed.servers[0].host, "hntelecom5g.cn:8080");
+  assert.match(run.speed.servers[0].url, /^http:\/\/hntelecom5g\.cn:8080\/speedtest\/upload\.php$/);
+  assert.ok(run.panel.token, "panel fallback stays");
+
+  startNodeCheck({ ...guangzhou, id: 32 }, { kind: "speed", nodeId: 9, nodeName: "JP", outbound });
+  startNodeCheck({ ...guangzhou, id: 33 }, { kind: "speed", entryKey: "rule-25", outbound });
+  startNodeCheck({ ...host(34, "2.2.248"), geoCountryCode: "HK" }, { kind: "speed" });
+  for (const id of [32, 33, 34]) assert.equal((nodeCheckDirectiveFor(id)!.runs[0] as any).speed, undefined, String(id));
+});
+
+
+test("测这台机器自己：Agent 没报上来出口 IP / 运营商（国内连不上 speedtest-config.php）就用面板记的补，报了的不动", async () => {
+  resetNodeCheckStateForTest();
+  const recorded: SpeedTestRecord[] = [];
+  setSpeedTestRecorderForTest(async (record) => { recorded.push(record); });
+  const po0 = { ...host(41, "2.2.248"), ip: "193.112.97.100", geoCountryCode: "CN", geoRegion: "Guangdong", geoIsp: "Shenzhen Tencent Computer Systems Company Limited", geoAsn: "AS45090" };
+  const first = startNodeCheck(po0, { kind: "speed", requestedBy: 1 });
+  await ingestNodeCheckReport(po0, { runs: [{ runId: first.runId, kind: "speed", status: "done", speed: { server: "ookla", downloadMbps: 196, uploadMbps: 199, serverName: "湖南电信 5G · 长沙", serverCountry: "CN" } }] });
+  assert.deepEqual(
+    { ip: recorded[0].result.clientIp, asn: recorded[0].result.asn, org: recorded[0].result.asOrg, country: recorded[0].result.country, city: recorded[0].result.city },
+    { ip: "193.112.97.100", asn: "45090", org: "Shenzhen Tencent Computer Systems Company Limited", country: "CN", city: "Guangdong" },
+  );
+  const second = startNodeCheck(po0, { kind: "speed", requestedBy: 1 });
+  await ingestNodeCheckReport(po0, { runs: [{ runId: second.runId, kind: "speed", status: "done", speed: { server: "ookla", downloadMbps: 196, clientIp: "203.0.113.9", asOrg: "Measured ISP" } }] });
+  assert.equal(recorded[1].result.clientIp, "203.0.113.9");
+  assert.equal(recorded[1].result.asOrg, "Measured ISP");
+  // 经节点测的不补：出去的是节点
+  const via = startNodeCheck(po0, { kind: "speed", nodeId: 5, nodeName: "JP", outbound });
+  await ingestNodeCheckReport(po0, { runs: [{ runId: via.runId, kind: "speed", status: "done", speed: { server: "ookla", downloadMbps: 50 } }] });
+  assert.equal(recorded[2].result.clientIp, "");
+  setSpeedTestRecorderForTest(null);
+});

@@ -3,7 +3,7 @@ import { z } from "zod";
 import { protectedProcedure } from "../_core/trpc";
 import { requireHostAccess } from "./helpers";
 import { hostSupportsNodeCheck, listSpeedTestHistory, NodeCheckError, nodeCheckStatus, startNodeCheck } from "../ops/nodeCheck";
-import { NODE_CHECK_ACCURATE_VERSION, NODE_CHECK_MIN_AGENT_VERSION, NODE_CHECK_PANEL_FALLBACK_VERSION } from "@shared/nodeCheck";
+import { NODE_CHECK_ACCURATE_VERSION, NODE_CHECK_DOMESTIC_VERSION, NODE_CHECK_MIN_AGENT_VERSION, NODE_CHECK_PANEL_FALLBACK_VERSION } from "@shared/nodeCheck";
 import { isAgentVersionAtLeast } from "@shared/version";
 
 /*
@@ -30,13 +30,16 @@ export const hostSpeedTestProcedures = {
     .query(async ({ input, ctx }) => {
       const host: any = await accessibleHost(ctx, input.hostId);
       const status = await nodeCheckStatus({ kind: "speed", hostId: input.hostId, nodeId: 0 });
+      const agentVersion = String(host.agentVersion || "").replace(/^v/i, "");
       return {
         supported: hostSupportsNodeCheck(host),
         minAgentVersion: NODE_CHECK_MIN_AGENT_VERSION,
         // 连不上 Cloudflare 时改测到面板是 2.2.242 才有的：老的会直接报失败，界面要说清楚
-        panelFallback: isAgentVersionAtLeast(String(host.agentVersion || "").replace(/^v/i, ""), NODE_CHECK_PANEL_FALLBACK_VERSION),
-        // 2.2.246 起测得准（就近的 Ookla 测速点、上传只算对端收下的）：老的界面上提示升级
-        accurate: isAgentVersionAtLeast(String(host.agentVersion || "").replace(/^v/i, ""), NODE_CHECK_ACCURATE_VERSION),
+        panelFallback: isAgentVersionAtLeast(agentVersion, NODE_CHECK_PANEL_FALLBACK_VERSION),
+        // 2.2.247 起测得准（就近的 Ookla 测速点、上传只算对端收下的）：老的界面上提示升级
+        accurate: isAgentVersionAtLeast(agentVersion, NODE_CHECK_ACCURATE_VERSION),
+        // 大陆的主机还要 2.2.248 才测国内三网的测速点（以前连不上 speedtest.net，只能测到面板）：提示升级
+        domesticUpgrade: String(host.geoCountryCode || "").trim().toUpperCase() === "CN" && !isAgentVersionAtLeast(agentVersion, NODE_CHECK_DOMESTIC_VERSION),
         online: !!host.isOnline,
         hostName: String(host.name || ""),
         countryCode: host.geoCountryCode ? String(host.geoCountryCode) : null,
