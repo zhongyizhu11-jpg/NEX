@@ -302,3 +302,149 @@ func TestSpeedFallbackNotes(t *testing.T) {
 		t.Fatalf("panel note: %s", note)
 	}
 }
+
+// Ookla 测速点把上传 307 转到别处（真机上 *.prod.hosts.ooklaserver.net 就这样）：跟过去照测，之后直接送到转过去的地方。
+// 2.2.246 没给请求体的 GetBody，Go 不跟 POST 的 307，整段失败、退到 Cloudflare / 面板。
+func TestOoklaUploadFollows307(t *testing.T) {
+	var redirected, landed atomic.Int32
+	speedServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/speedtest/latency.txt":
+			_, _ = w.Write([]byte("test=test\n"))
+		case "/speedtest/random4000x4000.jpg":
+			_, _ = w.Write(make([]byte, 2<<20))
+		case "/speedtest/upload.php":
+			redirected.Add(1)
+			http.Redirect(w, r, "/v2/upload?"+r.URL.RawQuery, http.StatusTemporaryRedirect)
+		case "/v2/upload":
+			landed.Add(1)
+			n, _ := io.Copy(io.Discard, r.Body)
+			_, _ = fmt.Fprintf(w, "size=%d", n)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer speedServer.Close()
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/js/servers" {
+			_, _ = fmt.Fprintf(w, `[{"url":"%s/speedtest/upload.php","name":"Singapore","sponsor":"Campana","cc":"SG","host":"x","distance":3}]`, speedServer.URL)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer api.Close()
+	oldServers, oldConfig := ooklaServersURL, ooklaConfigURL
+	ooklaServersURL, ooklaConfigURL = api.URL+"/api/js/servers", api.URL+"/none"
+	defer func() { ooklaServersURL, ooklaConfigURL = oldServers, oldConfig }()
+	withShortSpeedTest(t, "http://unused.invalid", 500*time.Millisecond, 1200*time.Millisecond)
+	dialer := &net.Dialer{}
+	result, err := runHTTPSpeedTest(context.Background(), dialer.DialContext, ooklaSpeedTarget(), nil)
+	if err != nil {
+		t.Fatalf("a 307 on upload.php should be followed: %v", err)
+	}
+	if result.UploadMbps <= 0 || result.Server != "ookla" {
+		t.Fatalf("upload after the redirect: %+v", result)
+	}
+	if landed.Load() <= redirected.Load() || redirected.Load() > int32(speedTestOoklaStreams*2) {
+		t.Fatalf("later uploads should go straight to the new place: redirected=%d landed=%d", redirected.Load(), landed.Load())
+	}
+}
+
+// 挑中的 Ookla 测速点测不成（下载回 403）：换延迟次低的那台从头测，note 写明换过；不再整段退到 Cloudflare / 面板。
+func TestOoklaFallsBackToNextServer(t *testing.T) {
+	serve := func(name string, latency time.Duration, forbidDownload bool) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/speedtest/latency.txt":
+				time.Sleep(latency)
+				_, _ = w.Write([]byte("test=test\n"))
+			case "/speedtest/random4000x4000.jpg":
+				if forbidDownload {
+					w.WriteHeader(http.StatusForbidden)
+					return
+				}
+				_, _ = w.Write(make([]byte, 2<<20))
+			case "/speedtest/upload.php":
+				n, _ := io.Copy(io.Discard, r.Body)
+				_, _ = fmt.Fprintf(w, "size=%d", n)
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+	}
+	near := serve("near", 0, true)
+	defer near.Close()
+	far := serve("far", 40*time.Millisecond, false)
+	defer far.Close()
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/js/servers" {
+			_, _ = fmt.Fprintf(w, `[{"url":"%s/speedtest/upload.php","name":"Near","sponsor":"Broken ISP","cc":"HK","host":"near","distance":1},
+				{"url":"%s/speedtest/upload.php","name":"Far","sponsor":"Good ISP","cc":"HK","host":"far","distance":9}]`, near.URL, far.URL)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer api.Close()
+	oldServers, oldConfig := ooklaServersURL, ooklaConfigURL
+	ooklaServersURL, ooklaConfigURL = api.URL+"/api/js/servers", api.URL+"/none"
+	defer func() { ooklaServersURL, ooklaConfigURL = oldServers, oldConfig }()
+	withShortSpeedTest(t, "http://unused.invalid", 500*time.Millisecond, 800*time.Millisecond)
+	dialer := &net.Dialer{}
+	var resets int
+	result, err := runHTTPSpeedTest(context.Background(), dialer.DialContext, ooklaSpeedTarget(), func(sample speedSample) {
+		if sample.phase == "reset" {
+			resets++
+		}
+	})
+	if err != nil {
+		t.Fatalf("the next Ookla server should be tried: %v", err)
+	}
+	if result.ServerName != "Good ISP · Far" || !strings.Contains(result.Note, "Broken ISP · Near") || !strings.Contains(result.Note, "换了 Good ISP · Far") {
+		t.Fatalf("server / note: %q / %q", result.ServerName, result.Note)
+	}
+	if resets != 1 || result.DownloadMbps <= 0 || result.UploadMbps <= 0 {
+		t.Fatalf("resets=%d result=%+v", resets, result)
+	}
+}
+
+func TestOoklaEntitiesAndWaitText(t *testing.T) {
+	var result speedTestResult
+	parseOoklaClient(`<client ip="104.191.143.202" isp="AT&amp;T Internet" country="US" />`, &result)
+	if result.ASOrg != "AT&T Internet" {
+		t.Fatalf("isp = %q", result.ASOrg)
+	}
+	servers := parseOoklaServers([]byte(`[{"url":"http://a:8080/speedtest/upload.php","name":"L.A.","sponsor":"Sonic &amp; Co","cc":"us","host":"a:8080"}]`))
+	if len(servers) != 1 || servers[0].Sponsor != "Sonic & Co" {
+		t.Fatalf("servers = %+v", servers)
+	}
+	text := (&speedRateLimitError{Label: "speed.cloudflare.com", Where: "/__down", RetryAfter: time.Hour}).Error()
+	if !strings.Contains(text, "约 1.0 小时后才放开") {
+		t.Fatalf("wait text: %s", text)
+	}
+}
+
+func TestOoklaCarrierRankingAndSummary(t *testing.T) {
+	if carrierOf("CHINANET Guangdong province network") != "telecom" || carrierOf("China Unicom 5G") != "unicom" || carrierOf("China Mobile Hong Kong limited") != "mobile" || carrierOf("CMHK Broadband") != "mobile" || carrierOf("Shenzhen Tencent Computer Systems") != "" {
+		t.Fatal("carrier names")
+	}
+	candidate := func(sponsor string, ms float64) ooklaCandidate {
+		return ooklaCandidate{server: ooklaServer{Sponsor: sponsor, Name: "Guangzhou"}, best: ms}
+	}
+	list := []ooklaCandidate{candidate("China Mobile GD", 4), candidate("China Telecom GD", 6), candidate("China Unicom GD", 5), candidate("China Telecom Far", 90)}
+	rankOoklaCandidates(list, "telecom")
+	if list[0].server.Sponsor != "China Telecom GD" || list[1].server.Sponsor != "China Mobile GD" || list[3].server.Sponsor != "China Telecom Far" {
+		t.Fatalf("same carrier first when its ping is close, far ones last: %+v", list)
+	}
+	plain := []ooklaCandidate{candidate("B", 6), candidate("A", 4)}
+	rankOoklaCandidates(plain, "")
+	if plain[0].server.Sponsor != "A" {
+		t.Fatalf("no carrier: by latency: %+v", plain)
+	}
+	// 十格里有慢启动和掉速：丢掉最慢 3 格、最快 1 格再平均
+	if got := speedSummary([]float64{10, 20, 30, 300, 300, 300, 300, 300, 300, 900}); got != 300 {
+		t.Fatalf("trimmed mean = %v", got)
+	}
+	if got := speedSummary([]float64{100, 200}); got != 150 {
+		t.Fatalf("few samples: plain mean = %v", got)
+	}
+}

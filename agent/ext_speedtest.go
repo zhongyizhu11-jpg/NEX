@@ -24,14 +24,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"math"
 	"math/rand"
 	"net/http"
+	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -42,12 +46,14 @@ var (
 )
 
 const (
-	// Ookla 的测速点给得起并发，多开两条，经长链（握手慢、窗口小）也能把带宽吃满。
-	speedTestOoklaStreams = 6
+	// Ookla 的测速点给得起并发，多开几条（Ookla 自己的客户端千兆以上也开到 8 条往上），经长链（握手慢、
+	// 窗口小）也能把带宽吃满。
+	speedTestOoklaStreams = 8
 	// random4000x4000.jpg 约 30 MB。
 	ooklaDownSize = 4000
-	// 列表里最近的前几台各 ping 三次，挑延迟最低的。
+	// 列表里最近的前几台各 ping 三次，按延迟排；挑中的那台测不成（2.2.247）就换下一台，最多试几台。
 	ooklaPingCandidates = 6
+	ooklaMaxTries       = 3
 	// 上传每次送多大：从 256 KB 起，跟着速度调到一次大约 1 秒（Cloudflare 官方测速也是这么一级级加）。
 	speedTestUpStartBytes = 256 << 10
 	speedTestUpMinBytes   = 64 << 10
@@ -123,8 +129,8 @@ func parseOoklaServers(body []byte) []ooklaServer {
 		}
 		servers = append(servers, ooklaServer{
 			Base:       base,
-			Name:       anyText(item["name"]),
-			Sponsor:    anyText(item["sponsor"]),
+			Name:       html.UnescapeString(anyText(item["name"])),
+			Sponsor:    html.UnescapeString(anyText(item["sponsor"])),
 			CC:         strings.ToUpper(anyText(item["cc"])),
 			Host:       anyText(item["host"]),
 			DistanceKm: anyFloat(item["distance"]),
@@ -143,7 +149,8 @@ func parseOoklaClient(body string, result *speedTestResult) {
 		return
 	}
 	for _, attr := range xmlAttr.FindAllStringSubmatch(match[1], -1) {
-		value := strings.TrimSpace(attr[2])
+		// XML 里的 & 写成 &amp;（「AT&amp;T Internet」）
+		value := strings.TrimSpace(html.UnescapeString(attr[2]))
 		switch attr[1] {
 		case "ip":
 			result.ClientIP = value
@@ -159,9 +166,18 @@ func speedCacheBuster() string {
 	return strconv.FormatInt(time.Now().UnixNano()+rand.Int63n(1000), 36)
 }
 
-// pickOoklaServer 拿服务器列表（按出口 IP 给最近的；经节点时就是落地出口附近的），前几台各 ping 三次，
-// 挑延迟最低的。第一次要握手，记成那台的「建连」。
-func pickOoklaServer(ctx context.Context, client *http.Client, target speedTarget, result *speedTestResult) (speedTarget, error) {
+// ooklaCandidate 一台 ping 得通的 Ookla 测速点：target 已经指向它（latency.txt 被 30x 转走的，指向转过去的地方）。
+type ooklaCandidate struct {
+	server    ooklaServer
+	target    speedTarget
+	best      float64
+	connectMs float64
+}
+
+// pickOoklaServers 拿服务器列表（按出口 IP 给最近的；经节点时就是落地出口附近的），前几台各 ping 三次，
+// 按延迟从低到高排好（至少两次 ping 得通的才算）。第一次要握手，记成那台的「建连」。出口 IP 和运营商
+// 从 speedtest-config.php 拿，写进 info。
+func pickOoklaServers(ctx context.Context, client *http.Client, target speedTarget, info *speedTestResult) ([]ooklaCandidate, error) {
 	timeout := target.metaTimeout
 	if timeout <= 0 {
 		timeout = 15 * time.Second
@@ -172,26 +188,47 @@ func pickOoklaServer(ctx context.Context, client *http.Client, target speedTarge
 	req.Header.Set("User-Agent", "NEX-Agent/"+Version)
 	resp, err := client.Do(req)
 	if err != nil {
-		return target, fmt.Errorf("连不上 speedtest.net：%v", err)
+		return nil, fmt.Errorf("连不上 speedtest.net：%v", err)
 	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 256<<10))
 	_ = resp.Body.Close()
 	if !is2xx(resp) {
-		return target, &speedHTTPError{Status: resp.StatusCode, Where: "服务器列表", Label: "speedtest.net"}
+		return nil, &speedHTTPError{Status: resp.StatusCode, Where: "服务器列表", Label: "speedtest.net"}
 	}
 	servers := parseOoklaServers(body)
 	if len(servers) == 0 {
-		return target, errors.New("speedtest.net 没给测速点")
+		return nil, errors.New("speedtest.net 没给测速点")
 	}
 	if len(servers) > ooklaPingCandidates {
 		servers = servers[:ooklaPingCandidates]
 	}
 
+	// 出口 IP 和运营商和 ping 一起拿（拿不到不要紧）：挑测速点时要看是不是同一家运营商。
+	var configWG sync.WaitGroup
+	configWG.Add(1)
+	go func() {
+		defer configWG.Done()
+		configCtx, cancelConfig := context.WithTimeout(ctx, 6*time.Second)
+		defer cancelConfig()
+		creq, err := http.NewRequestWithContext(configCtx, http.MethodGet, ooklaConfigURL, nil)
+		if err != nil {
+			return
+		}
+		creq.Header.Set("User-Agent", "NEX-Agent/"+Version)
+		cr, err := client.Do(creq)
+		if err != nil {
+			return
+		}
+		cbody, _ := io.ReadAll(io.LimitReader(cr.Body, 64<<10))
+		_ = cr.Body.Close()
+		if is2xx(cr) {
+			parseOoklaClient(string(cbody), info)
+		}
+	}()
+
 	type pinged struct {
-		server  ooklaServer
-		best    float64
-		connect float64
-		ok      int
+		ooklaCandidate
+		ok int
 	}
 	results := make([]pinged, len(servers))
 	var wg sync.WaitGroup
@@ -199,9 +236,12 @@ func pickOoklaServer(ctx context.Context, client *http.Client, target speedTarge
 		wg.Add(1)
 		go func(i int, server ooklaServer) {
 			defer wg.Done()
-			entry := pinged{server: server, best: math.Inf(1)}
-			probe := speedTarget{name: "ookla", label: server.Host, base: server.Base, ookla: &server}
-			for try := 0; try < 3; try++ {
+			entry := pinged{ooklaCandidate: ooklaCandidate{server: server, best: math.Inf(1)}}
+			base := server.Base
+			moved := false
+			// 量三次：第一次要握手，记成「建连」；后两次取低的当延迟。被 30x 转走那一次不算，多给一次机会。
+			for try := 0; try < 4 && entry.ok < 3; try++ {
+				probe := speedTarget{name: "ookla", label: "Ookla " + server.Host, base: base, ookla: &server}
 				pingCtx, cancelPing := context.WithTimeout(ctx, 4*time.Second)
 				started := time.Now()
 				rs, err := client.Do(probe.latencyRequest(pingCtx))
@@ -213,54 +253,172 @@ func pickOoklaServer(ctx context.Context, client *http.Client, target speedTarge
 				if err != nil || !is2xx(rs) {
 					break
 				}
+				// 被 30x 转到别处（http 转 https、换了路径）：后面都直接连转过去的地方，延迟也不多算一趟
+				if final := rs.Request.URL; final != nil && !moved {
+					if path := strings.TrimSuffix(final.Path, "/latency.txt"); path != final.Path {
+						if next := final.Scheme + "://" + final.Host + path; next != base {
+							base = next
+							moved = true
+							continue
+						}
+					}
+				}
 				ms := float64(time.Since(started).Microseconds()) / 1000
-				if try == 0 {
-					entry.connect = ms
+				if entry.ok == 0 {
+					entry.connectMs = ms
 				} else if ms < entry.best {
 					entry.best = ms
 				}
 				entry.ok++
 			}
+			entry.target = speedTarget{name: "ookla", label: "Ookla " + server.Host, base: base, ookla: &server}
+			entry.target.ookla.Base = base
 			results[i] = entry
 		}(i, server)
 	}
 	wg.Wait()
-	var picked *pinged
-	for i := range results {
-		if results[i].ok < 2 {
-			continue
-		}
-		if picked == nil || results[i].best < picked.best {
-			picked = &results[i]
+	configWG.Wait()
+	var candidates []ooklaCandidate
+	for _, entry := range results {
+		if entry.ok >= 2 {
+			candidates = append(candidates, entry.ooklaCandidate)
 		}
 	}
-	if picked == nil {
-		return target, fmt.Errorf("附近 %d 个 Ookla 测速点都连不上", len(servers))
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("附近 %d 个 Ookla 测速点都连不上", len(servers))
 	}
-	server := picked.server
-	target.base = server.Base
-	target.label = "Ookla " + server.Host
-	target.ookla = &server
-	result.ConnectMs = math.Round(picked.connect*10) / 10
-	result.ServerName = server.label()
-	result.ServerCountry = server.CC
-	result.ServerDistanceKm = math.Round(server.DistanceKm)
-	result.ServerHost = server.Host
+	rankOoklaCandidates(candidates, carrierOf(info.ASOrg))
+	return candidates, nil
+}
 
-	// 出口 IP 和运营商：拿不到不要紧。
-	configCtx, cancelConfig := context.WithTimeout(ctx, 6*time.Second)
-	defer cancelConfig()
-	if creq, err := http.NewRequestWithContext(configCtx, http.MethodGet, ooklaConfigURL, nil); err == nil {
-		creq.Header.Set("User-Agent", "NEX-Agent/"+Version)
-		if cr, err := client.Do(creq); err == nil {
-			cbody, _ := io.ReadAll(io.LimitReader(cr.Body, 64<<10))
-			_ = cr.Body.Close()
-			if is2xx(cr) {
-				parseOoklaClient(string(cbody), result)
-			}
-		}
+// carrierOf 认运营商：国内三家（和它们在香港等地的分公司）。认不出返回空。
+func carrierOf(name string) string {
+	n := strings.ToLower(name)
+	switch {
+	case strings.Contains(n, "telecom") || strings.Contains(n, "chinanet") || strings.Contains(n, "电信") || strings.Contains(n, "cn2"):
+		return "telecom"
+	case strings.Contains(n, "unicom") || strings.Contains(n, "联通") || strings.Contains(n, "china netcom"):
+		return "unicom"
+	case strings.Contains(n, "china mobile") || strings.Contains(n, "cmcc") || strings.Contains(n, "cmhk") || strings.Contains(n, "移动"):
+		return "mobile"
 	}
-	return target, nil
+	return ""
+}
+
+// rankOoklaCandidates 按延迟排；和这台机器同一家运营商的（电信 / 联通 / 移动）只要延迟不比最快的差太多
+// （两倍或多 20 ms 以内）就排前面：国内跨运营商的互联口常常是瓶颈，跨网测出来的不是这台机器的带宽。
+// 融合怪这类脚本也是按运营商分开挑测速点的。
+func rankOoklaCandidates(candidates []ooklaCandidate, clientCarrier string) {
+	sort.SliceStable(candidates, func(a, b int) bool { return candidates[a].best < candidates[b].best })
+	if clientCarrier == "" || len(candidates) < 2 {
+		return
+	}
+	near := math.Max(candidates[0].best*2, candidates[0].best+20)
+	rank := func(candidate ooklaCandidate) int {
+		if candidate.best > near {
+			return 2
+		}
+		if carrierOf(candidate.server.Sponsor+" "+candidate.server.Name) == clientCarrier {
+			return 0
+		}
+		return 1
+	}
+	sort.SliceStable(candidates, func(a, b int) bool { return rank(candidates[a]) < rank(candidates[b]) })
+}
+
+// speedSummary 把测到的每格速率合成一个数：照 Ookla 的做法丢掉最慢的 30% 和最快的 10% 再平均 —— 慢启动、
+// 偶尔掉速的那几格不把结果拉低，偶尔冲高的一格也不抬高；格子太少（不到 5 格）就直接平均。2.2.246 以前是
+// 直接平均，起伏大的线路结果偏低，和 Stash、Speedtest 这类客户端对不上。
+func speedSummary(values []float64) float64 {
+	if len(values) == 0 {
+		return 0
+	}
+	sorted := append([]float64(nil), values...)
+	sort.Float64s(sorted)
+	if len(sorted) >= 5 {
+		sorted = sorted[len(sorted)*3/10 : len(sorted)-len(sorted)/10]
+	}
+	sum := 0.0
+	for _, value := range sorted {
+		sum += value
+	}
+	return math.Round(sum/float64(len(sorted))*10) / 10
+}
+
+// runOoklaSpeedTest 就近挑 Ookla 测速点测。挑中的那台测不成（回 4xx / 5xx、延迟全失败、上传被拒……）就换
+// 延迟次低的那台从头再测，最多试 ooklaMaxTries 台；2.2.246 一台测不成就整段放弃，改测 Cloudflare / 面板。
+func runOoklaSpeedTest(ctx context.Context, client *http.Client, target speedTarget, progress func(speedSample)) (*speedTestResult, error) {
+	info := &speedTestResult{}
+	candidates, err := pickOoklaServers(ctx, client, target, info)
+	if err != nil {
+		return nil, err
+	}
+	var failures []string
+	for i, candidate := range candidates {
+		if i >= ooklaMaxTries || ctx.Err() != nil {
+			break
+		}
+		if i > 0 && progress != nil {
+			// 上一台的曲线不要了，从头画
+			progress(speedSample{phase: "reset"})
+		}
+		result := &speedTestResult{
+			Samples:          []speedSample{},
+			Server:           "ookla",
+			ClientIP:         info.ClientIP,
+			ASOrg:            info.ASOrg,
+			Country:          info.Country,
+			ConnectMs:        math.Round(candidate.connectMs*10) / 10,
+			ServerName:       candidate.server.label(),
+			ServerCountry:    candidate.server.CC,
+			ServerDistanceKm: math.Round(candidate.server.DistanceKm),
+			ServerHost:       candidate.server.Host,
+		}
+		err := measureSpeed(ctx, client, candidate.target, result, progress)
+		if err == nil {
+			if len(failures) > 0 {
+				note := fmt.Sprintf("最近的 Ookla 测速点测不成（%s），换了 %s", strings.Join(failures, "；"), candidate.server.label())
+				if result.Note != "" {
+					note += "；" + result.Note
+				}
+				result.Note = note
+			}
+			return result, nil
+		}
+		if ctx.Err() != nil {
+			return nil, err
+		}
+		failures = append(failures, fmt.Sprintf("%s %s", candidate.server.label(), firstLine(err.Error())))
+	}
+	return nil, fmt.Errorf("附近的 Ookla 测速点都测不成（%s）", strings.Join(failures, "；"))
+}
+
+// uploadRedirect 上传被测速点 307 / 308 转到别处（比如 http 转 https）以后，后面的请求直接送过去，
+// 不再每次先被转一趟。
+type uploadRedirect struct{ to atomic.Pointer[url.URL] }
+
+func (r *uploadRedirect) apply(req *http.Request) {
+	moved := r.to.Load()
+	if moved == nil {
+		return
+	}
+	next := *moved
+	next.RawQuery = req.URL.RawQuery
+	req.URL = &next
+	req.Host = next.Host
+}
+
+func (r *uploadRedirect) remember(sent *http.Request, resp *http.Response) {
+	if resp == nil || resp.Request == nil || resp.Request.URL == nil || sent == nil || sent.URL == nil {
+		return
+	}
+	final := resp.Request.URL
+	if final.Scheme == sent.URL.Scheme && final.Host == sent.URL.Host && final.Path == sent.URL.Path {
+		return
+	}
+	moved := *final
+	moved.RawQuery = ""
+	r.to.Store(&moved)
 }
 
 // ---------------------------------------------------------------- 各测速点的请求形状
@@ -352,7 +510,7 @@ type speedRateLimitError struct {
 
 func (e *speedRateLimitError) Error() string {
 	if e.RetryAfter > speedTestRetryAfterMax {
-		return fmt.Sprintf("%s 限流了（HTTP 429，%s），约 %s 后才放开", e.Label, e.Where, humanWait(e.RetryAfter))
+		return fmt.Sprintf("%s 限流了（HTTP 429，%s），约 %s后才放开", e.Label, e.Where, humanWait(e.RetryAfter))
 	}
 	return fmt.Sprintf("%s 限流了（HTTP 429，%s）", e.Label, e.Where)
 }
@@ -701,11 +859,7 @@ func runUploadPhase(ctx context.Context, duration time.Duration, streams int, ma
 				// 太慢，过了预热就没有定了的格子：拿送成的那几次整体算。
 				return ledger.overallMbps(), confirmed, nil
 			}
-			sum := 0.0
-			for _, v := range measured {
-				sum += v
-			}
-			return math.Round(sum/float64(len(measured))*10) / 10, confirmed, nil
+			return speedSummary(measured), confirmed, nil
 		case now := <-ticker.C:
 			elapsed := now.Sub(started)
 			settled := ledger.settled(elapsed)
