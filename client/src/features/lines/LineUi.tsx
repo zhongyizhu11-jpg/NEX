@@ -248,3 +248,14 @@ export function LineSegmented<T extends string>({ value, options, onChange, aria
 export function LineHint({ className, children }: { className?: string; children: ReactNode }) {
   return <p className={cn("mt-2 text-[11.5px] leading-[1.5] text-muted-foreground", className)}>{children}</p>;
 }
+
+/** 落地名：手机上只写「落地」（地址、域名太长），sm 以上写全；title 里总有全名。 */
+export function LineLandingName({ name, className }: { name: string; className?: string }) {
+  const full = String(name || "").trim() || "落地";
+  return (
+    <span className={className} title={full}>
+      <span className="sm:hidden">落地</span>
+      <span className="hidden sm:inline">{full}</span>
+    </span>
+  );
+}

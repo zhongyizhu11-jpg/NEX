@@ -126,6 +126,11 @@ export type RoutePath = {
    * （server/proxyNodeFollow.ts）。null = 手填的 dest 或同目标。
    */
   destNodeId: number | null;
+  /**
+   * 落地选的是落地池（destNodeId 是池节点，2.3.500）：这条路径落在池里的哪台成员上。地址端口由面板按
+   * 那台的成员入站解析进 dest（server/routeGroups.ts），成员去掉了这条路径就用不了。
+   */
+  destHostId?: number | null;
   /** 权重（权重负载模式按它分新连接），1–100。 */
   weight: number;
   /** 自定探测目标；null = 探拨号地址本身。 */
@@ -452,6 +457,7 @@ function sanitizePath(raw: any, index: number): RoutePath | null {
     ...(lineKey ? { lineKey } : {}),
     dest: sanitizeEndpoint(raw.dest),
     destNodeId: Number.isInteger(Number(raw.destNodeId)) && Number(raw.destNodeId) > 0 ? Math.floor(Number(raw.destNodeId)) : null,
+    ...(Number.isInteger(Number(raw.destHostId)) && Number(raw.destHostId) > 0 && Number(raw.destNodeId) > 0 ? { destHostId: Math.floor(Number(raw.destHostId)) } : {}),
     weight: clampInt(raw.weight, ROUTE_GUARD_LIMITS.weight.min, ROUTE_GUARD_LIMITS.weight.max, 50),
     probe: sanitizeEndpoint(raw.probe),
     dial: sanitizeEndpoint(raw.dial),
@@ -487,6 +493,7 @@ export function serializeRoutePaths(paths: RoutePath[] | null | undefined): stri
     hops: path.hops,
     dest: path.dest,
     ...(path.destNodeId ? { destNodeId: path.destNodeId } : {}),
+    ...(path.destNodeId && path.destHostId ? { destHostId: path.destHostId } : {}),
     weight: path.weight,
     probe: path.probe,
     dial: path.dial,
@@ -503,8 +510,37 @@ export function defaultRoutePathName(index: number): string {
   return index === 0 ? "主线路" : `备用 ${index}`;
 }
 
-export function routePathLabel(path: Pick<RoutePath, "name"> | null | undefined, index: number): string {
-  return String(path?.name || "").trim() || defaultRoutePathName(index);
+/**
+ * 「主线路」「备用」「备用 2」「备用线路」这种是默认名字，不是人起的：线路拖了位置、删了前面一条，它就对不上了
+ * （主线路叫着「备用」）。这种按线路现在的位置叫；人起的名字（「晚高峰」）照旧。
+ */
+const DEFAULT_LINE_NAME = /^(主线路|主线|主|备用线路|备用|备线|备|备用线路\s*\d+|备用\s*\d+|备\s*\d+)$/;
+
+export function isDefaultRouteLineName(name: unknown): boolean {
+  return DEFAULT_LINE_NAME.test(String(name ?? "").trim());
+}
+
+/** 线路叫什么：没起名或者是默认名，按第几条线路叫（主线路 / 备用 N）。 */
+export function routeLineName(name: unknown, lineIndex: number): string {
+  const text = String(name ?? "").trim();
+  return !text || isDefaultRouteLineName(text) ? defaultRoutePathName(lineIndex) : text;
+}
+
+/** 路径叫什么：线路展开的路径按它那条线路的位置（tier）叫，老的路径按自己的位置。 */
+export function routePathLabel(path: (Pick<RoutePath, "name"> & { tier?: number | null }) | null | undefined, index: number): string {
+  const tier = path && typeof path.tier === "number" ? path.tier : index;
+  return routeLineName(path?.name, tier);
+}
+
+/**
+ * 两条路径算不算「同一条路」：同样的中转、同样的隧道段、同一个落地（落地池按成员机，节点按节点，别的按地址；
+ * 没写落地 = 规则目标）。线路展开去重和保存时的重复检查都用它。
+ */
+export function routePathRoadKey(path: Pick<RoutePath, "hops" | "hopVia" | "dest" | "destNodeId"> & { destHostId?: number | null }): string {
+  const dest = path.destNodeId
+    ? `n${path.destNodeId}${path.destHostId ? `h${path.destHostId}` : ""}`
+    : path.dest ? `${path.dest.ip}:${path.dest.port}` : "";
+  return `${path.hops.join(".")}|${(path.hopVia || []).map((value) => value ?? "").join(".")}|${dest}`;
 }
 
 /** 路径的字母序号：A、B、C…… 卡片和切换历史里用它当短称。 */
@@ -800,8 +836,10 @@ export function validateRouteGroup(group: RouteGroup, context: RouteGroupValidat
   const signatures = new Map<string, number>();
   for (let index = 0; context.rejectDuplicates && index < paths.length; index += 1) {
     const path = paths[index];
-    const dest = path.destNodeId ? `n${path.destNodeId}` : path.dest ? `${path.dest.ip}:${path.dest.port}` : "";
-    const signature = `${path.hops.join(".")}|${(path.hopVia || []).map((value) => value ?? "").join(".")}|${dest}`;
+    // 暂停的线路不算：停着的主线路和备用走同一台是常事（停主线路就是要让备用顶上）
+    if (path.paused) continue;
+    // 落地池的几台成员是同一个池节点、不同的机器（destHostId），不算重复
+    const signature = routePathRoadKey(path);
     const previous = signatures.get(signature);
     if (previous !== undefined) return `「${routePathLabel(paths[previous], previous)}」和「${routePathLabel(path, index)}」走的是同一条路：备用要换一台中转、一条隧道或者一个落地`;
     signatures.set(signature, index);

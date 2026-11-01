@@ -5,7 +5,7 @@ import { getTunnelById } from "./repositories/tunnelRepository";
 import { getUserById } from "./repositories/userRepository";
 import { dbBool } from "./repositories/repositoryUtils";
 import { legacyFailoverColumns, syncRouteRelayRulesForRule } from "./routeGroups";
-import { parseRoutePaths, routeGroupOf, serializeRoutePaths, type RoutePath } from "../shared/routeGroup";
+import { parseRoutePaths, routeGroupOf, routeLineName, serializeRoutePaths, type RoutePath } from "../shared/routeGroup";
 import { expandRouteLines, parseRouteLines, routeLinesOf, serializeRouteLines, type RouteLine } from "../shared/routeLines";
 
 /*
@@ -30,7 +30,7 @@ export async function expandRouteGroupInputLines<T extends { routeGroup?: any }>
   actor: { id: number; role: string },
   hostId: number,
   tunnelId: number | null | undefined,
-  options: { groupTemplate?: boolean } = {},
+  options: { groupTemplate?: boolean; ruleTargetNodeId?: number | null } = {},
 ): Promise<T> {
   const group = input.routeGroup;
   if (!group || !Array.isArray(group.lines) || group.lines.length === 0) return input;
@@ -42,12 +42,14 @@ export async function expandRouteGroupInputLines<T extends { routeGroup?: any }>
   // 端口转发资源（转发组模板）在每台成员机上各跑一份，入口不是同一台，隧道段的「入口必须是上一个节点」对不上。
   if (tunnelInLines && options.groupTemplate) throw new Error("端口转发资源的线路在每台成员机上各跑一份，入口不是同一台机器，不能放隧道段：用中转机或节点池");
   if (group.delivery === "replicate") await assertReplicateReady(lines[0]);
-  const context = await buildRouteExpandContext(actor, entryHostId, lines);
+  // 规则目标绑着落地池的池节点时，「规则目标」那个落地展开成池里每台成员
+  const ruleTargetNodeId = (input as any).proxyNodeId !== undefined ? Number((input as any).proxyNodeId || 0) || null : options.ruleTargetNodeId ?? null;
+  const context = await buildRouteExpandContext(actor, entryHostId, lines, { ruleTargetNodeId });
   const { paths, issues } = expandRouteLines(lines, context);
-  for (const line of lines) {
+  lines.forEach((line, lineIndex) => {
     const issue = issues.get(line.key);
-    if (issue) throw new Error(`线路「${line.name || line.key}」用不了：${issue}`);
-  }
+    if (issue) throw new Error(`线路「${routeLineName(line.name, lineIndex)}」用不了：${issue}`);
+  });
   if (paths.length < 2) throw new Error("线路组至少要两条路径：再加一条备用，或者给一层放两个候选");
   /*
     钉子和时段表按「第几条路径」记，编辑框按它自己预览展开的顺序给；服务端这边按实测延迟排，顺序
@@ -77,6 +79,7 @@ export async function expandRouteGroupInputLines<T extends { routeGroup?: any }>
         hopVia: path.hopVia,
         dest: path.dest,
         destNodeId: path.destNodeId,
+        destHostId: path.destHostId ?? null,
         weight: path.weight,
         tier: path.tier,
         paused: path.paused,
@@ -100,7 +103,7 @@ export async function reexpandRouteLinesForRules(ruleIds: readonly number[], rea
       const owner = await getUserById(Number(rule.userId)) as any;
       const actor = { id: Number(rule.userId), role: String(owner?.role || "user") };
       const entryHostId = await schedulerHostOf(Number(rule.hostId), rule.tunnelId);
-      const context = await buildRouteExpandContext(actor, entryHostId, lines);
+      const context = await buildRouteExpandContext(actor, entryHostId, lines, { ruleTargetNodeId: Number(rule.proxyNodeId || 0) || null });
       const { paths } = expandRouteLines(lines, context);
       if (paths.length < 2) {
         appendPanelLog("warn", `[RouteLines] rule=${ruleId} 重新展开只剩 ${paths.length} 条路径，保持原样（${reason}）`);
@@ -109,7 +112,8 @@ export async function reexpandRouteLinesForRules(ruleIds: readonly number[], rea
       const stored = new Map(parseRoutePaths(rule.routePaths).map((path) => [path.key, path]));
       const merged: RoutePath[] = paths.map((path) => {
         const previous = stored.get(path.key);
-        const same = previous && previous.hops.join(".") === path.hops.join(".") && (previous.hopVia || []).join(".") === (path.hopVia || []).join(".");
+        const same = previous && previous.hops.join(".") === path.hops.join(".") && (previous.hopVia || []).join(".") === (path.hopVia || []).join(".")
+          && Number(previous.destHostId || 0) === Number(path.destHostId || 0);
         return same ? { ...path, dial: previous!.dial, issue: previous!.issue, probe: previous!.probe } : path;
       });
       const next = serializeRoutePaths(merged);

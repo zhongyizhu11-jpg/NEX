@@ -9,6 +9,7 @@ import {
   LineChipButton,
   LineDot,
   LineIconButton,
+  LineLandingName,
   LinePath,
   LinePauseGlyph,
   LinePill,
@@ -303,7 +304,10 @@ export function RouteStageStrip({ status }: { status: RouteStatus }) {
     <div className="flex min-w-0 items-end text-[11px]" data-testid="route-stage-strip">
       {nodes.map((node, index) => (
         <div key={index} className="contents">
-          <span className="max-w-[4.75rem] shrink-0 truncate whitespace-nowrap rounded-[8px] border border-[var(--fx-stroke-weak)] bg-[var(--fx-l1-surface)] px-[6px] py-[5px] font-mono text-[10.5px]">{node}</span>
+          {/* 最后一格是落地：手机上只写「落地」，宽屏写全（地址、域名太长） */}
+          <span className={cn("shrink-0 truncate whitespace-nowrap rounded-[8px] border border-[var(--fx-stroke-weak)] bg-[var(--fx-l1-surface)] px-[6px] py-[5px] font-mono text-[10.5px]", index === nodes.length - 1 ? "max-w-[4.75rem] sm:max-w-[14rem]" : "max-w-[4.75rem]")} title={node}>
+            {index === nodes.length - 1 ? <LineLandingName name={node} /> : node}
+          </span>
           {index < stages.length ? (() => {
             const stage = stages[index];
             const tone = stageTone(stage);

@@ -34,7 +34,7 @@ function group(mode: RouteMode = "failover", patch: Partial<RouteGroup["policy"]
   const draft = newRouteGroupDraft({ timezone: TZ });
   const list = paths || [
     { ...draft.paths[0], hops: [2] },
-    { ...draft.paths[1], name: "备用线路", hops: [3, 2], dest: { ip: "10.95.0.11", port: 443 } },
+    { ...draft.paths[1], name: "晚高峰", hops: [3, 2], dest: { ip: "10.95.0.11", port: 443 } },
   ];
   const policy = { ...applyRouteMode(draft.policy, mode, { timezone: TZ, pathCount: list.length }), ...patch };
   return { paths: list, policy };
@@ -113,7 +113,7 @@ test("按时段在「怎么切」下面直接配时段表，此刻命中的那�
   assert.match(html, /data-testid="route-schedule"/);
   assert.equal(stateOf(html, "policy-schedule"), "deciding");
   assert.equal(count(html, />此刻</g), 1, "「此刻」在命中的时段那一行上，只有一处");
-  assert.match(html, /工作日 18:00-01:00（次日） → 备用线路/, "时段复述用的是线路的名字");
+  assert.match(html, /工作日 18:00-01:00（次日） → 晚高峰/, "时段复述用的是线路的名字");
   assert.doesNotMatch(render(group("failover")), /data-testid="route-schedule"/, "稳定优先没有时段表");
 });
 
@@ -130,7 +130,7 @@ test("按权重：分法四选一，按权重时一条线路一个权重和百�
   for (const label of ["按权重", "轮流", "随机", "按访客固定"]) assert.match(html, new RegExp(label));
   assert.match(html, /data-testid="route-line-weights"/);
   assert.match(html, /aria-label="主线路 的权重"/);
-  assert.match(html, /aria-label="备用线路 的权重"/);
+  assert.match(html, /aria-label="晚高峰 的权重"/);
   assert.equal(count(html, />50%</g), 2);
   assert.doesNotMatch(html, /最短驻留|恢复后切回首选|应急人工指定/);
   assert.doesNotMatch(render(group("weighted", { spread: "round_robin" })), /data-testid="route-line-weights"/, "轮流不用填权重");
@@ -274,7 +274,29 @@ test("落地选了我的节点：落地那格写节点名，旁边照样能再�
   const html = render(value, true, "tcp", { nodeOptions: [{ id: 7, name: "HK 落地", address: "203.0.113.7", port: 443, protocol: "VLESS" }] });
   assert.match(html, /data-testid="route-line-dest"[^]*?HK 落地/);
   assert.doesNotMatch(html, /title="规则自己的目标"/, "主线路的落地是节点，不是规则目标");
-  assert.match(html, /data-testid="route-line-dest-add"/);
+  assert.match(html, /data-testid="route-line-dest-parallel"/, "落地旁边「+ 并列」再加一个");
+});
+
+test("直连的线路也能并列（2.3.500）：中转那一行「+ 加中转」旁边有「+ 并列」，落地是规则目标时「换落地」「+ 并列」都在", () => {
+  const draft = group("failover", {}, [
+    { ...group().paths[0], hops: [] },
+    { ...group().paths[1], hops: [2] },
+  ]);
+  const lines = routeLinesFromPaths(draft.paths);
+  const html = render({ ...draft, lines }, false);
+  const mainChain = html.slice(html.indexOf('data-testid="route-line-chain"'));
+  assert.match(mainChain, /入口直连落地[^]*?\+ 加中转[^]*?data-testid="route-line-add-direct-parallel"[^>]*>\+ 并列/, "直连那一行：加中转、并列");
+  assert.match(mainChain, />换落地<[^]*?data-testid="route-line-dest-parallel"[^>]*>\+ 并列/, "规则目标：换落地、并列");
+});
+
+test("和直连并列的一跳：胶囊里第一个是「直连」，点它能去掉直连；收起那一行写「直连 / 机器」", () => {
+  const draft = group();
+  const lines = routeLinesFromPaths(draft.paths);
+  lines[0] = { ...lines[0], layers: [{ ...lines[0].layers[0], kind: "hosts", hostIds: [2], skippable: true }] };
+  const html = render({ ...draft, lines }, false);
+  assert.match(html, /data-grouped="true"[^>]*>[^]*?data-testid="route-line-direct-option"[^>]*>直连<[^]*?>\/<[^]*?JP relay 02/, "直连 / JP relay 02");
+  assert.match(html, /HK entry 01 → 直连 \/ JP relay 02 → 落地/, "收起那一行");
+  assert.match(html, /aria-label="中转怎么挑"/, "直连和一台也是两个选择：问怎么挑");
 });
 
 test("每段的毫秒从外面给（编辑框套的那一层）：给了就写在候选和落地后面，刚测完的整链也写出来", () => {
@@ -319,7 +341,7 @@ test("收着的备用行只有路径和状态（⚡ 在展开的那块里）；�
   lines[0] = { ...lines[0], layers: [{ ...lines[0].layers[0], kind: "hosts", hostIds: [2, 3], skippable: true }] };
   const multi = render({ ...group(), lines }, false);
   assert.match(multi, /aria-label="中转怎么挑"/, "两个候选才问怎么挑");
-  assert.match(multi, /aria-label="中转可跳过，点一下取消"/, "老配置勾过的照样显示，点一下取消");
+  assert.match(multi, /data-testid="route-line-direct-option"[^>]*>直连</, "老配置勾过的「可跳过」现在写成胶囊里的「直连」，点它能去掉");
 });
 
 test("线路详情里主线路也收成一行：都收着，点开才改；此刻在走的那条描边", () => {
@@ -375,4 +397,12 @@ test("同一跳并列的几台在展开后放进一个胶囊（Jinx / jinx）：
   assert.match(html, /HK entry 01 → JP relay 02 等 2 个 → 落地/, "收起那一行的写法不变");
   const single = render(group(), false);
   assert.doesNotMatch(single, /data-grouped="true"/, "只有一台：普通胶囊");
+});
+
+test("落地并列了两个（规则目标 + 一个地址）：收起那一行写「落地 等 2 个」，和中转的「等 N 个」一个写法", () => {
+  const draft = group();
+  const lines = routeLinesFromPaths(draft.paths);
+  lines[0] = { ...lines[0], dests: [{ dest: null, destNodeId: null }, { dest: { ip: "198.51.100.7", port: 443 }, destNodeId: null }] };
+  const html = render({ ...draft, lines }, false);
+  assert.match(html, /HK entry 01 → JP relay 02 → 落地 等 2 个/);
 });

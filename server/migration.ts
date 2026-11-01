@@ -811,6 +811,9 @@ const IMPORT_TABLE_ORDER = [
   "tunnel_exit_nodes",
   "forward_groups",
   "forward_group_members",
+  // 节点池排在入站、节点、规则前面：落地池的成员入站和池节点（nodePoolId）、线路的层（routeLines 的
+  // poolId）都指向它。它自己只指向用户和主机。
+  "node_pools",
   // 排在 proxy_nodes 前面：节点的 inboundId / inboundUserId 指向它们，
   // 先有入站和入站用户才映射得出来。
   "proxy_inbounds",
@@ -827,8 +830,6 @@ const IMPORT_TABLE_ORDER = [
   "proxy_sub_access_logs",
   // 共享 TLS 入站排在规则前面：规则的 tlsInboundId 指向它；它的 defaultRuleId 指回规则，第二遍再补。
   "host_tls_inbounds",
-  // 节点池排在规则前面：线路的层里引用它（routeLines 的 poolId）。
-  "node_pools",
   "forward_rules",
   // 规则占的 SNI 同时指向入站和规则，两边的 id 都得先映射好。
   "rule_sni_names",
@@ -1296,6 +1297,19 @@ export function remapRouteLineRefs(value: unknown, maps: ImportMaps) {
   })));
 }
 
+/** 落地池配置里的用户：为分享单独发的凭据记着收件人，收件人没导进来就退回成手工凭据。 */
+function remapLandingJsonUsers(value: unknown, maps: ImportMaps) {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(String(value));
+    if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.users)) return String(value);
+    parsed.users = parsed.users.map((user: any) => ({ ...user, sharedUserId: mapId(maps, "users", user?.sharedUserId) || 0 }));
+    return JSON.stringify(parsed);
+  } catch {
+    return null;
+  }
+}
+
 function remapHostIdsJson(value: unknown, maps: ImportMaps) {
   let ids: unknown = [];
   try {
@@ -1378,6 +1392,10 @@ async function prepareImportRow(table: string, source: Record<string, any>, maps
       // 成员主机按映射改；源面板里已经删掉的机器丢掉，不让整池导入失败。
       row.userId = mapRequiredId(maps, "users", source.userId);
       row.hostIdsJson = remapHostIdsJson(source.hostIdsJson, maps);
+      // 落地池配置里分享凭据的收件人按映射改；同步结果和写过的 DNS 值是这边重新算的。
+      row.landingJson = remapLandingJsonUsers(source.landingJson, maps);
+      row.landingStateJson = null;
+      row.directDnsValue = null;
       return { row };
 
     case "forward_rules":
@@ -1419,6 +1437,8 @@ async function prepareImportRow(table: string, source: Record<string, any>, maps
     case "proxy_inbounds":
       row.userId = mapRequiredId(maps, "users", source.userId);
       row.hostId = mapRequiredId(maps, "hosts", source.hostId);
+      // 落地池的成员入站跟着池走；池没导进来就当人手建的入站留着。
+      row.nodePoolId = mapId(maps, "node_pools", source.nodePoolId) || 0;
       // 克隆来源指向同一张表的另一行；源没被导进来就退回成「人手建的」，
       // 而不是指向一个不存在的入站 —— 那会让回收逻辑找不到北。
       row.clonedFromInboundId = mapOptionalId(maps, "proxy_inbounds", source.clonedFromInboundId) || 0;
@@ -1438,7 +1458,12 @@ async function prepareImportRow(table: string, source: Record<string, any>, maps
       // 派生节点要跟着它的入站走，否则导入后会变成一个没人维护的孤儿节点。
       // 这一列是 notNull default 0，而 mapOptionalId 对「没有」返回的是 null。
       row.inboundId = mapOptionalId(maps, "proxy_inbounds", source.inboundId) || 0;
-      row.inboundUserId = mapOptionalId(maps, "proxy_inbound_users", source.inboundUserId) || 0;
+      // 落地池的池节点：inboundUserId 记的是池用户的 id（池配置里的编号，不是表行），原样留着。
+      row.nodePoolId = mapId(maps, "node_pools", source.nodePoolId) || 0;
+      row.inboundUserId = row.nodePoolId > 0
+        ? Number(source.inboundUserId || 0)
+        : mapOptionalId(maps, "proxy_inbound_users", source.inboundUserId) || 0;
+      row.poolSharedUserId = mapId(maps, "users", source.poolSharedUserId) || 0;
       // 外部订阅同步来的节点跟着来源走；来源没导入的话就当手工节点留着。
       row.sourceId = mapOptionalId(maps, "proxy_sub_sources", source.sourceId) || 0;
       // 前置代理指向同表另一行，这一遍它可能还没导入；先退回「不经由」（列是 notNull default 0），

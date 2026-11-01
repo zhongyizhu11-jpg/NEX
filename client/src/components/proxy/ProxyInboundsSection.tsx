@@ -580,7 +580,8 @@ export default function ProxyInboundsSection({
    * 组装在这里而不是在列表里：它的开关写的是派生节点的 includeDirect，跟粘贴那一
    * 路写的完全不是一个字段。各自组装好再汇到一个列表，接错线这件事就不可能发生。
    */
-  const inboundRowSpecs = useMemo<ProxyNodeRowSpec[]>(() => rows.map((row) => ({
+  // 落地池的成员入站（2.3.500）不各占一行：整个池在下面是一行（池节点），点开看是哪几台、各自什么端口
+  const inboundRowSpecs = useMemo<ProxyNodeRowSpec[]>(() => rows.filter((row) => !(Number(row.nodePoolId || 0) > 0)).map((row) => ({
     key: `inbound-${row.id}`,
     // 自建：面板在你自己机器上开的，凭据也是面板生成的。
     accent: "own" as const,
@@ -681,6 +682,7 @@ export default function ProxyInboundsSection({
         ]),
     ],
   })), [rows, hosts, userOptions, isAdmin, linkLoadingId, inboundLeading, notInSubscriptionInboundIds, hostNeverOnlineInboundIds, expandedQuotaIds, onExitCheck]);
+
 
   /** 三类合成一个列表：自建在前（它们是这一页的起点），然后是粘贴和分享来的。 */
   const allRowSpecs = useMemo(() => [...inboundRowSpecs, ...extraRows], [inboundRowSpecs, extraRows]);

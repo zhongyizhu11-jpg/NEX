@@ -111,9 +111,12 @@ import {
   History,
   ListOrdered,
   Smartphone,
+  Waypoints,
 } from "lucide-react";
+import { useLocation } from "wouter";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { NodeExitDialog, type ExitCheckSubject } from "@/components/proxy/ExitQualityView";
+import { LandingPoolMembersDetail, LandingPoolMembersToggle, type LandingPoolMemberLine } from "@/components/proxy/LandingPoolMembers";
 import { SpeedTestDialog, type SpeedTestSubject } from "@/components/proxy/SpeedTestDialog";
 import { PreviewRouteDetail } from "@/components/proxy/PreviewRouteDetail";
 import {
@@ -316,6 +319,7 @@ function renderTokenFailure(token: any) {
 }
 
 export default function ClientSubscriptionsPage() {
+  const [, navigate] = useLocation();
   const utils = trpc.useUtils();
   const confirm = useConfirmDialog();
 
@@ -759,6 +763,58 @@ export default function ClientSubscriptionsPage() {
 
   const pastedRowSpecs = useMemo<ProxyNodeRowSpec[]>(() => pastedNodes.map((node: any) => {
     const quotaExpanded = expandedQuotaIds.includes(Number(node.id));
+    /*
+      落地池的池节点（2.3.500）：整个池在订阅里就这一条。名字、协议、密钥、启停都跟着节点池走（只读），
+      这里能做的是分享、看在哪些转发里用、设了直连域名时开关「直连进订阅」。
+    */
+    if (node.landingPool && !node.sharedFrom) {
+      const pool = node.landingPool as { id: number; name: string; members: number; ready: number; directDomain: string | null; summary: string; memberList: LandingPoolMemberLine[] };
+      return {
+        key: `node-${node.id}`,
+        accent: "own" as const,
+        protocol: String(node.protocol || ""),
+        sortName: String(node.name || ""),
+        leading: <ProxyNodeHealthDot health={node.health} />,
+        name: node.name,
+        tag: (
+          <Badge variant="secondary" className="h-4 shrink-0 px-1 text-[10px] font-normal">
+            {PROXY_NODE_PROTOCOL_LABELS[node.protocol as ProxyNodeProtocol] || node.protocol}
+          </Badge>
+        ),
+        muted: !node.isEnabled,
+        meta: proxyNodeMetaText([
+          "落地池",
+          pool.summary,
+          pool.directDomain ? `直连 ${pool.directDomain}` : "只走中转",
+          node.ruleCount > 0 ? `${node.ruleCount} 条转发` : "无转发绑定",
+          unusedNodeIds.has(Number(node.id)) ? "不在订阅里" : "",
+          node.sharedToUserIds?.length ? `已分享 ${node.sharedToUserIds.length} 人` : "",
+          !node.isEnabled ? "一台都没开出来" : "",
+        ]),
+        // 点「3/3 台」展开看每台开在哪个端口（成员入站不在列表里各占一行）
+        detail: quotaExpanded ? (
+          <div className="flex flex-col gap-2">
+            <LandingPoolMembersDetail members={pool.memberList || []} directDomain={pool.directDomain} onOpenPool={() => navigate("/tunnels?tab=pools")} />
+            <ProxyNodeQuotaDetail node={node} />
+          </div>
+        ) : null,
+        inline: <LandingPoolMembersToggle ready={pool.ready} total={pool.members} expanded={quotaExpanded} onToggle={() => toggleQuota(Number(node.id))} />,
+        toggle: pool.directDomain ? (
+          <Switch aria-label={`${node.name} 直连进订阅`}
+            className="shrink-0 scale-90"
+            checked={!!node.includeDirect}
+            title={node.includeDirect ? `订阅里有一条直连（${pool.directDomain}），关掉就只走中转` : "订阅里加一条直连（走域名）"}
+            onCheckedChange={(checked) => updateNode.mutate({ id: node.id, includeDirect: checked })}
+          />
+        ) : null,
+        actions: [
+          { key: "pool", label: "到节点池里改", icon: Waypoints, onSelect: () => navigate("/tunnels?tab=pools") },
+          ...(isAdmin
+            ? [{ key: "share", label: "分享给用户", icon: Share2, onSelect: () => setShareNode({ id: Number(node.id), name: String(node.name || "") }) }]
+            : []),
+        ],
+      };
+    }
     return {
       key: `node-${node.id}`,
       // 粘来的和别人分享来的，左边色条不同：能不能改、凭据归谁，是这两类最大的差别。

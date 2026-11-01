@@ -1,8 +1,8 @@
 import { useMemo } from "react";
 
-import { LineCard, formatLineMs } from "@/features/lines/LineUi";
+import { LineCard, LineLandingName, formatLineMs } from "@/features/lines/LineUi";
 import type { RouteStatus, RouteStatusHop } from "./RouteGroupSheet";
-import { chainLatency, lineClockText, routeDestLabel, routeLandingName, routePathText } from "./routeLineText";
+import { chainLatency, lineClockText, routeDestLabel, routeLandingName, routePathParts } from "./routeLineText";
 
 /*
   线路详情里的分层图（效果图 ①，2.3.497 从 RouteLineOverview.tsx 拆出来）：入口 → 隧道 / 中转 → 落地，
@@ -300,7 +300,10 @@ export function RouteLineDiagram({ status, modeLabel, timeZone }: { status: Rout
         {active ? (
           <>
             {status.activeSince ? `${lineClockText(status.activeSince, timeZone)} ` : ""}
-            <b className="font-semibold text-foreground">{routePathText(status, active, { tunnelPrefix: false })}</b>
+            <b className="font-semibold text-foreground">{(() => {
+              const parts = routePathParts(status, active, { tunnelPrefix: false });
+              return <>{parts.head} → <LineLandingName name={parts.landing} /></>;
+            })()}</b>
             {total !== null ? <span className="text-[var(--fx-healthy-text)]"> {formatLineMs(total)} ms</span> : null}
             {" "}{modeLabel}
           </>

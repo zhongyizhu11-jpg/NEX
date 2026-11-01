@@ -55,6 +55,7 @@ export default defineConfig({
           { text: "隧道链路", link: "/guide/tunnels" },
           { text: "端口转发链", link: "/guide/port-chains" },
           { text: "线路组", link: "/guide/failover" },
+          { text: "落地池", link: "/guide/landing-pools" },
           { text: "转发组和入口出口组", link: "/guide/groups" },
           { text: "DDNS 和故障转移", link: "/guide/ddns" },
           { text: "自动换 IP", link: "/guide/auto-ip-change" },

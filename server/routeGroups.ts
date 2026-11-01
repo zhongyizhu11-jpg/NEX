@@ -249,10 +249,14 @@ function sameValue(left: unknown, right: unknown) {
  */
 async function resolveDestNodes(rule: any, paths: RoutePath[]) {
   if (!paths.some((path) => Number(path.destNodeId || 0) > 0)) return;
+  // 落在落地池某台成员上的路径（destHostId）按那台的成员入站解析（server/landingRouteTarget.ts）
+  const { resolveLandingPoolDests } = await import("./landingRouteTarget");
+  const handled = await resolveLandingPoolDests(paths);
+  if (paths.every((path) => handled.has(path) || !(Number(path.destNodeId || 0) > 0))) return;
   const nodes = await getProxyNodesForSubscription(Number(rule?.userId || 0)) as any[];
   for (const path of paths) {
     const nodeId = Number(path.destNodeId || 0);
-    if (nodeId <= 0) continue;
+    if (nodeId <= 0 || handled.has(path)) continue;
     const node = nodes.find((item) => Number(item.id) === nodeId);
     const ip = String(node?.address || "").trim();
     const port = Math.floor(Number(node?.port) || 0);

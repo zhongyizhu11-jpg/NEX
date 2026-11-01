@@ -228,13 +228,24 @@ export type ProxyNodeShareSkip = {
 
 type ProxyNodeShareScope =
   | { kind: "node"; nodeId: number }
-  | { kind: "inbound"; nodeId: number; inboundId: number; ownerUserId: number };
+  | { kind: "inbound"; nodeId: number; inboundId: number; ownerUserId: number }
+  /** 落地池（2.3.500）：每人一份凭据，开在池的每台成员上（server/landingPools.ts）。 */
+  | { kind: "pool"; nodeId: number; poolId: number; ownerUserId: number };
 
 async function resolveProxyNodeShareScope(nodeId: number): Promise<ProxyNodeShareScope | null> {
   const node = await getProxyNodeById(nodeId);
   if (!node) return null;
   const inboundId = Number((node as any).inboundId || 0);
   const ownerUserId = Number((node as any).userId || 0);
+  const poolId = Number((node as any).nodePoolId || 0);
+  if (poolId > 0) {
+    // 多用户协议每人发一份；单用户协议（SS / Snell）只能共用主人那一份，和单台入站同一个口径
+    const { getNodePool } = await import("../nodePools");
+    const { parseLandingConfig } = await import("../../shared/landingPool");
+    const pool = await getNodePool(poolId).catch(() => null);
+    const config = pool ? parseLandingConfig(pool.landingJson) : null;
+    return config && proxyInboundSupportsMultiUser(config.protocol) ? { kind: "pool", nodeId, poolId, ownerUserId } : { kind: "node", nodeId };
+  }
   if (inboundId <= 0) return { kind: "node", nodeId };
   const { loadProxyInbound } = await import("./proxyInboundRepository");
   const inbound = await loadProxyInbound(inboundId);
@@ -364,6 +375,14 @@ export async function getProxyNodeShareSelectionForUser(userId: number): Promise
     if (!scope) continue;
     if (scope.kind === "node") {
       result.push(scope.nodeId);
+      continue;
+    }
+    if (scope.kind === "pool") {
+      // 他拿的是自己那份的池节点；选择框里放的是代表整个池的主人那一条
+      const node = await getProxyNodeById(id) as any;
+      const { anchorNodeIdForLandingPool } = await import("../landingPools");
+      const anchor = Number(node?.poolSharedUserId || 0) > 0 ? await anchorNodeIdForLandingPool(scope.poolId) : scope.nodeId;
+      if (anchor) result.push(anchor);
       continue;
     }
     const anchor = await anchorNodeIdForInbound(scope.inboundId);
@@ -525,6 +544,7 @@ export async function reconcileProxyNodeSharesForUser(
   const resolved = new Map<number, "manual" | "plan">();
   const sharedOwnerCredential: Array<{ nodeId: number; name: string }> = [];
   const keepInboundIds = new Set<number>();
+  const keepPoolIds = new Set<number>();
   const keepDedicatedSourceIds = new Set<number>();
   for (const item of wanted) {
     if (!Number.isInteger(item.nodeId) || item.nodeId <= 0) continue;
@@ -560,6 +580,20 @@ export async function reconcileProxyNodeSharesForUser(
       // 克隆不成（比如源入站没了）就退回共享凭据，总比一点都拿不到强。
     }
 
+    // 落地池：每人一份凭据开在池的每台成员上（独享端口做不到：池是几台机器，套餐的「独享」退回成这一份）
+    if (scope.kind === "pool") {
+      keepPoolIds.add(scope.poolId);
+      const { ensureSharedLandingCredential } = await import("../landingPools");
+      const provisioned = await ensureSharedLandingCredential(scope.poolId, recipient, label).catch(() => null);
+      if (!provisioned) {
+        skipped.push({ nodeId: item.nodeId, reason: "credential", name: String((node as any).name || "") });
+        continue;
+      }
+      for (const hostId of provisioned.hostIds) hostIds.add(hostId);
+      if (resolved.get(provisioned.nodeId) !== "manual") resolved.set(provisioned.nodeId, item.source);
+      continue;
+    }
+
     let targetNodeId = scope.kind === "node" ? scope.nodeId : 0;
     // 这类节点给出去的是主人自己的真实凭据（粘贴的节点、不支持多用户的入站）：
     // 取消分享或对方到期后，他手上那份照样能连，只能靠主人换密码收回。
@@ -580,6 +614,18 @@ export async function reconcileProxyNodeSharesForUser(
     }
     // 手工优先：同一条既手工分了又被套餐带上，记成手工，撤套餐不该把它撤掉。
     if (resolved.get(targetNodeId) !== "manual") resolved.set(targetNodeId, item.source);
+  }
+
+  {
+    // 不再分给他的落地池：每台成员上他那份凭据收回，他的池节点跟着删
+    const { getSharedLandingPoolIdsForUser, releaseSharedLandingCredential } = await import("../landingPools");
+    const { getNodePool } = await import("../nodePools");
+    for (const poolId of await getSharedLandingPoolIdsForUser(recipient)) {
+      if (keepPoolIds.has(poolId)) continue;
+      if (await releaseSharedLandingCredential(poolId, recipient)) {
+        for (const hostId of (await getNodePool(poolId))?.hostIds || []) hostIds.add(hostId);
+      }
+    }
   }
 
   for (const inboundId of await getSharedInboundIdsForUser(recipient)) {
@@ -670,7 +716,7 @@ export async function getProxyNodeShareOptions() {
    * 二个人，挑原来那条节点即可 —— 系统会另发一份。
    */
   const excludedSet = await getSharedCredentialUserIds();
-  const rows = await db
+  const rows = (await db
     .select({
       id: proxyNodes.id,
       userId: proxyNodes.userId,
@@ -681,11 +727,15 @@ export async function getProxyNodeShareOptions() {
       inboundId: proxyNodes.inboundId,
       isEnabled: proxyNodes.isEnabled,
       inboundUserId: proxyNodes.inboundUserId,
+      nodePoolId: proxyNodes.nodePoolId,
+      poolSharedUserId: proxyNodes.poolSharedUserId,
     })
     .from(proxyNodes)
-    .orderBy(asc(proxyNodes.sortOrder), asc(proxyNodes.id));
-  if (excludedSet.size === 0) return rows;
-  return (rows as any[]).filter((row) => !excludedSet.has(Number(row.inboundUserId || 0)));
+    .orderBy(asc(proxyNodes.sortOrder), asc(proxyNodes.id))) as any[];
+  // 落地池里为分享单独发的那几份同理：池节点的 inboundUserId 是池用户编号，不在上面那张表里，按 poolSharedUserId 认
+  const visible = rows.filter((row) => !(Number(row.poolSharedUserId || 0) > 0));
+  if (excludedSet.size === 0) return visible;
+  return visible.filter((row) => Number(row.nodePoolId || 0) > 0 || !excludedSet.has(Number(row.inboundUserId || 0)));
 }
 
 /**
@@ -720,6 +770,35 @@ export async function setProxyNodeShareUsers(
     }
     for (const recipient of new Set([...previous, ...wanted])) invalidateProxySubCacheForUser(recipient);
     return { hostIds: [] };
+  }
+
+  if (scope.kind === "pool") {
+    // 落地池：和多凭据入站一个路数，只是凭据开在池的每台成员上
+    const landing = await import("../landingPools");
+    const { getNodePool } = await import("../nodePools");
+    const poolHosts = (await getNodePool(scope.poolId))?.hostIds || [];
+    const hostIds = new Set<number>();
+    const current = await landing.getSharedNodeIdsByLandingPool(scope.poolId);
+    const target = new Set(wanted);
+    for (const [recipient, sharedNodeId] of current) {
+      if (target.has(recipient)) continue;
+      await db.delete(proxyNodeShares).where(eq(proxyNodeShares.nodeId, sharedNodeId));
+      if (await landing.releaseSharedLandingCredential(scope.poolId, recipient)) for (const hostId of poolHosts) hostIds.add(hostId);
+    }
+    for (const recipient of target) {
+      const label = options.labels?.get(recipient) || `用户 #${recipient}`;
+      const provisioned = await landing.ensureSharedLandingCredential(scope.poolId, recipient, label);
+      if (!provisioned) continue;
+      for (const hostId of provisioned.hostIds) hostIds.add(hostId);
+      await db
+        .delete(proxyNodeShares)
+        .where(and(eq(proxyNodeShares.nodeId, provisioned.nodeId), eq(proxyNodeShares.userId, recipient)));
+      await db.insert(proxyNodeShares).values([{ nodeId: provisioned.nodeId, userId: recipient }] as any);
+    }
+    // 主人这一条上不挂分享：每个人拿自己那份
+    await db.delete(proxyNodeShares).where(eq(proxyNodeShares.nodeId, id));
+    for (const recipient of new Set([...current.keys(), ...target])) invalidateProxySubCacheForUser(recipient);
+    return { hostIds: Array.from(hostIds).filter((hostId) => hostId > 0) };
   }
 
   /**
@@ -770,6 +849,10 @@ export async function getProxyNodeShareRecipients(nodeId: number): Promise<numbe
   if (scope?.kind === "inbound") {
     return Array.from((await getSharedNodeIdsByInbound(scope.inboundId)).keys());
   }
+  if (scope?.kind === "pool") {
+    const { getSharedNodeIdsByLandingPool } = await import("../landingPools");
+    return Array.from((await getSharedNodeIdsByLandingPool(scope.poolId)).keys());
+  }
   const map = await getProxyNodeShareUserIds([Number(nodeId)]);
   return map.get(Number(nodeId)) || [];
 }
@@ -801,7 +884,7 @@ export async function getProxyNodesForSubscription(userId: number) {
   ]);
   // 只可能摘掉主人自己节点挂着的凭据：自己没有节点就不用查，有就只查这几条凭据。
   const sharedCredentialIds = await getSharedCredentialUserIds(
-    (owned as any[]).map((row) => Number(row.inboundUserId || 0)),
+    (owned as any[]).filter((row) => !(Number(row.nodePoolId || 0) > 0)).map((row) => Number(row.inboundUserId || 0)),
   );
   /**
    * 为别人单独发的凭据不进主人自己的订阅。
@@ -810,9 +893,11 @@ export async function getProxyNodesForSubscription(userId: number) {
    * 留着的话，主人的客户端里每多一个租户就多一条一模一样、只有凭据不同的
    * 线路，十个租户就是十条垃圾。
    */
+  // 落地池里为分享单独发的同理（池节点的 inboundUserId 是池用户编号，按 poolSharedUserId 认）
+  const ownedVisible = (owned as any[]).filter((row) => !(Number(row.poolSharedUserId || 0) > 0));
   const own = sharedCredentialIds.size === 0
-    ? owned
-    : (owned as any[]).filter((row) => !sharedCredentialIds.has(Number(row.inboundUserId || 0)));
+    ? ownedVisible
+    : ownedVisible.filter((row) => Number(row.nodePoolId || 0) > 0 || !sharedCredentialIds.has(Number(row.inboundUserId || 0)));
   return [...own, ...shared.map((row: any) => shareProxyNodeRow(row))];
 }
 

@@ -834,6 +834,16 @@ export async function deleteUser(userId: number): Promise<{ hostIds: number[] }>
     // 谁也管不着、却还在监听的端口。
     ...await releaseAllDedicatedInboundsForUser(userId),
   ];
+  // 落地池里给他单独发的那份凭据：每台成员上一起收掉（server/landingPools.ts）
+  {
+    const { getSharedLandingPoolIdsForUser, releaseSharedLandingCredential } = await import("../landingPools");
+    const { getNodePool } = await import("../nodePools");
+    for (const poolId of await getSharedLandingPoolIdsForUser(userId).catch(() => [] as number[])) {
+      if (await releaseSharedLandingCredential(poolId, userId).catch(() => false)) {
+        hostIds.push(...((await getNodePool(poolId).catch(() => null))?.hostIds || []));
+      }
+    }
+  }
   await db.delete(users).where(eq(users.id, userId));
   // 被他邀请来的人不再有邀请人：留着悬空的 id，哪天 id 被复用就错绑到别人头上。
   // 已经返过的返利记录保留，账要对得上。

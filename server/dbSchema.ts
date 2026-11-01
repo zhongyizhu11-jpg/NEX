@@ -446,6 +446,9 @@ const tables: TableDef[] = [
       c("snellVersion", "int", { notNull: true, default: 0 }), c("snellMode", "text"), c("xhttpMode", "text"),
       c("autoGroup", "varchar", { length: 16, notNull: true, default: "url-test" }), c("includeDirect", "bool", { notNull: true, default: false }), c("frontProxyId", "int", { notNull: true, default: 0 }),
       c("inboundId", "int", { notNull: true, default: 0 }), c("inboundUserId", "int", { notNull: true, default: 0 }),
+      // 落地池的节点（2.3.500，server/landingPools.ts）：整个池在订阅里就这一条；poolSharedUserId > 0
+      // 是分享时单独给那个人发的凭据（不进主人自己的订阅）。
+      c("nodePoolId", "int", { notNull: true, default: 0 }), c("poolSharedUserId", "int", { notNull: true, default: 0 }),
       // 落地机的套餐规格与用量：带宽与总流量人填，已用由面板累加。
       c("bandwidthMbps", "int", { notNull: true, default: 0 }),
       c("trafficLimit", "bigint", { notNull: true, default: 0 }),
@@ -463,7 +466,7 @@ const tables: TableDef[] = [
       删除入站、主机换地址后重算、界面上列出某个端口派生了哪几条。原来没有索引，
       这些全都是整表扫描，而一个商家几百上千行节点时，删一个入站要扫一遍全表。
     */
-    indexes: [["userId"], ["userId", "sortOrder"], ["trafficAutoReset"], ["inboundId"], ["sourceId"]],
+    indexes: [["userId"], ["userId", "sortOrder"], ["trafficAutoReset"], ["inboundId"], ["sourceId"], ["nodePoolId"]],
   },
   {
     // 落地入站：面板在自己管的主机上开出来的节点。Reality 私钥只存在这张表。
@@ -485,6 +488,8 @@ const tables: TableDef[] = [
       c("congestionControl", "text"),
       c("snellVersion", "int", { notNull: true, default: 0 }), c("snellMode", "text"),
       c("clonedFromInboundId", "int", { notNull: true, default: 0 }),
+      // 落地池的成员入站（2.3.500）：面板照池的配置开的，只读，跟着池走。
+      c("nodePoolId", "int", { notNull: true, default: 0 }),
       // 普通用户靠主机授权开在别人机器上的入站：授权收回后不再下发。
       c("hostGrantRequired", "bool", { notNull: true, default: false }),
       // 一键创建的落地出口入站（给规则当 Shadowsocks 出口用，派生节点默认不进订阅）。
@@ -499,7 +504,7 @@ const tables: TableDef[] = [
       c("isEnabled", "bool", { notNull: true, default: true }), c("sortOrder", "int", { notNull: true, default: 0 }),
       c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" }),
     ],
-    indexes: [["userId"], ["hostId"], ["userId", "sortOrder"], ["hostId", "isEnabled"]],
+    indexes: [["userId"], ["hostId"], ["userId", "sortOrder"], ["hostId", "isEnabled"], ["nodePoolId"]],
   },
   {
     // 落地入站上的用户：一个入站给多个人各发一份凭据。

@@ -71,6 +71,8 @@ export async function listLandingOptions(actor: Actor): Promise<LandingOptionHos
   const byHost = new Map<number, LandingOptionInbound[]>();
   for (const inbound of inbounds) {
     if (String(inbound.protocol) !== "shadowsocks") continue;
+    // 落地池的成员入站跟着池走（池里去掉那台它就没了），不拿来当单独的出口 / 分流落地。
+    if (Number(inbound.nodePoolId || 0) > 0) continue;
     const usable = isAdmin || Number(inbound.userId) === Number(actor.id) || dbBool(inbound.landingEgress);
     if (!usable) continue;
     const hostId = Number(inbound.hostId);

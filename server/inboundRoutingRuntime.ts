@@ -161,7 +161,8 @@ export function invalidateInboundRoutingContext() {
 /** 全部 SS 入站 + 它们所在主机 + 这些主机的最新解锁结论。30 秒缓存：每台落地每次心跳都会问。 */
 export async function loadRoutingContext(now = Date.now()): Promise<RoutingContext> {
   if (contextCache && now - contextCache.at < CONTEXT_CACHE_MS) return contextCache.value;
-  const inbounds = ((await db.getAllProxyInbounds()) as any[]).filter((row) => String(row.protocol) === "shadowsocks");
+  // 落地池的成员入站不当分流落地（跟着池走，池里去掉那台它就没了）
+  const inbounds = ((await db.getAllProxyInbounds()) as any[]).filter((row) => String(row.protocol) === "shadowsocks" && !(Number(row.nodePoolId || 0) > 0));
   const hostIds = Array.from(new Set(inbounds.map((row) => Number(row.hostId)).filter((id) => id > 0)));
   const hosts = hostIds.length > 0 ? ((await db.getHostsByIds(hostIds)) as any[]) : [];
   const hostById = new Map(hosts.map((host) => [Number(host.id), host]));
