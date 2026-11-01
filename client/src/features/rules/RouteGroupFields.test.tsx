@@ -277,7 +277,7 @@ test("落地选了我的节点：落地那格写节点名，旁边照样能再�
   assert.match(html, /data-testid="route-line-dest-parallel"/, "落地旁边「+ 并列」再加一个");
 });
 
-test("直连的线路也能并列（2.3.500）：中转那一行「+ 加中转」旁边有「+ 并列」，落地是规则目标时「换落地」「+ 并列」都在", () => {
+test("直连的线路：中转那一行只有「+ 加中转」，没有「直连 / X」那种并列（2.3.501）；落地是规则目标时「换落地」「+ 并列」都在", () => {
   const draft = group("failover", {}, [
     { ...group().paths[0], hops: [] },
     { ...group().paths[1], hops: [2] },
@@ -285,18 +285,20 @@ test("直连的线路也能并列（2.3.500）：中转那一行「+ 加中转�
   const lines = routeLinesFromPaths(draft.paths);
   const html = render({ ...draft, lines }, false);
   const mainChain = html.slice(html.indexOf('data-testid="route-line-chain"'));
-  assert.match(mainChain, /入口直连落地[^]*?\+ 加中转[^]*?data-testid="route-line-add-direct-parallel"[^>]*>\+ 并列/, "直连那一行：加中转、并列");
+  assert.match(mainChain, /入口直连落地[^]*?\+ 加中转/, "直连那一行：加中转");
+  assert.doesNotMatch(html, /route-line-add-direct-parallel|route-line-direct-option|>直连</, "不再有「直连」这个候选");
   assert.match(mainChain, />换落地<[^]*?data-testid="route-line-dest-parallel"[^>]*>\+ 并列/, "规则目标：换落地、并列");
 });
 
-test("和直连并列的一跳：胶囊里第一个是「直连」，点它能去掉直连；收起那一行写「直连 / 机器」", () => {
+test("老配置里可跳过的一跳（一台）：照 2.3.499 显示「可跳过 ×」，胶囊和收起那一行都不写「直连」", () => {
   const draft = group();
   const lines = routeLinesFromPaths(draft.paths);
   lines[0] = { ...lines[0], layers: [{ ...lines[0].layers[0], kind: "hosts", hostIds: [2], skippable: true }] };
   const html = render({ ...draft, lines }, false);
-  assert.match(html, /data-grouped="true"[^>]*>[^]*?data-testid="route-line-direct-option"[^>]*>直连<[^]*?>\/<[^]*?JP relay 02/, "直连 / JP relay 02");
-  assert.match(html, /HK entry 01 → 直连 \/ JP relay 02 → 落地/, "收起那一行");
-  assert.match(html, /aria-label="中转怎么挑"/, "直连和一台也是两个选择：问怎么挑");
+  assert.match(html, /aria-label="中转可跳过，点一下取消"/, "点一下取消");
+  assert.match(html, /HK entry 01 → JP relay 02 → 落地/, "收起那一行");
+  assert.doesNotMatch(html, /route-line-direct-option|直连 \//);
+  assert.doesNotMatch(html, /aria-label="中转怎么挑"/, "一台没得挑");
 });
 
 test("每段的毫秒从外面给（编辑框套的那一层）：给了就写在候选和落地后面，刚测完的整链也写出来", () => {
@@ -341,7 +343,7 @@ test("收着的备用行只有路径和状态（⚡ 在展开的那块里）；�
   lines[0] = { ...lines[0], layers: [{ ...lines[0].layers[0], kind: "hosts", hostIds: [2, 3], skippable: true }] };
   const multi = render({ ...group(), lines }, false);
   assert.match(multi, /aria-label="中转怎么挑"/, "两个候选才问怎么挑");
-  assert.match(multi, /data-testid="route-line-direct-option"[^>]*>直连</, "老配置勾过的「可跳过」现在写成胶囊里的「直连」，点它能去掉");
+  assert.match(multi, /aria-label="中转可跳过，点一下取消"/, "老配置勾过的照样显示，点一下取消");
 });
 
 test("线路详情里主线路也收成一行：都收着，点开才改；此刻在走的那条描边", () => {
