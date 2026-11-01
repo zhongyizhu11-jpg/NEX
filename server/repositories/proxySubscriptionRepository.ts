@@ -1418,6 +1418,6 @@ export async function buildProxySubscriptionForToken(
     .filter((source) => source.isEnabled && String(source.mode) === "provider")
     .map((source) => ({ name: String(source.name || `订阅 #${source.id}`), url: String(source.url), intervalSec: Number(source.intervalSec || 21600) }));
   // 解锁出口分流：按条目的出口主机查最新检测结论（不带规则时用不上，不查）。
-  const unlockStatuses = input.rulePreset === "off" ? null : await loadProxySubUnlockStatuses(plan.entries);
+  const unlockStatuses = input.rulePreset === "off" || input.options.unlockGroups === false ? null : await loadProxySubUnlockStatuses(plan.entries);
   return buildProxySubPipelineDocument({ ...input, plan, templates: templates as any, providers, unlockStatuses });
 }

@@ -75,6 +75,11 @@ export type ProxySubTokenOptions = {
   categoryTargets: Record<string, string>;
   /** 这条令牌自己的自定义规则（前置）。 */
   customRules: string;
+  /**
+   * 解锁组（规则订阅）：按出口检测给 YouTube / Netflix / Disney+ / AI / TikTok 各建一个只含检测可用节点的组，
+   * 对应分类组默认先走它（shared/proxySubUnlock.ts）。关掉后分类组照常先走主选择器。默认开。
+   */
+  unlockGroups: boolean;
 };
 
 export const PROXY_SUB_DEFAULT_TOKEN_OPTIONS: ProxySubTokenOptions = {
@@ -92,6 +97,7 @@ export const PROXY_SUB_DEFAULT_TOKEN_OPTIONS: ProxySubTokenOptions = {
   skipCertVerify: "default",
   categoryTargets: {},
   customRules: "",
+  unlockGroups: true,
 };
 
 export const PROXY_SUB_NAME_TEMPLATE_VARIABLES: ReadonlyArray<{ key: string; label: string }> = [
@@ -199,6 +205,7 @@ export function normalizeProxySubTokenOptions(input: unknown): ProxySubTokenOpti
     skipCertVerify: triState(raw.skipCertVerify),
     categoryTargets,
     customRules: textOf(raw.customRules, 10000),
+    unlockGroups: raw.unlockGroups !== false,
   };
 }
 

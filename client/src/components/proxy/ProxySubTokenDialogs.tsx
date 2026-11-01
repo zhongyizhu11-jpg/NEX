@@ -553,6 +553,14 @@ export function ProxySubTokenEditDialog({
                 </OptionGroup>
               </Section>
 
+              <Section title="解锁组" hint="只对规则订阅生效。">
+                <OptionGroup>
+                  <OptionRow label="按出口检测建解锁组" hint="给 YouTube、Netflix、Disney+、AI、TikTok 各建一个只放检测可用节点的组，对应分类默认先走它。关掉后这些分类照常先走主选择。">
+                    <Checkbox aria-label="按出口检测建解锁组" checked={options.unlockGroups} onCheckedChange={(checked) => setOptions((prev) => ({ ...prev, unlockGroups: checked === true }))} />
+                  </OptionRow>
+                </OptionGroup>
+              </Section>
+
               <Section title="分流去向覆盖" hint="只对规则订阅生效；没改的分类按预设走。">
                 <div className="grid gap-3 sm:grid-cols-2">
                   {categoryColumns.map((column, columnIndex) => (
