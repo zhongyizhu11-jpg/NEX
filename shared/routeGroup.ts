@@ -157,7 +157,74 @@ export type RoutePath = {
   paused?: boolean;
   /** 从哪条线路定义展开来的（routeLines 里的 key）。 */
   lineKey?: string | null;
+  /**
+   * 这条路径所在的线路有几个落地、选了「一起分」时（2.3.501）：这条线路在用时，新连接在它的几个落地之间
+   * 怎么分。只有线路展开出来的路径才有；没有 = 主备（老样子）。
+   */
+  destSpread?: RouteLineDestSpread | null;
 };
+
+/**
+ * 一条线路有几个落地（「+ 并列」的、落地池里的几台）时，这条线路在用时新连接怎么用它们（2.3.501）：
+ *   one         主备：和以前一样，几个落地里按「怎么切」挑一个走，坏了换下一个
+ *   least_load  按负载分：给现在挂着连接最少的那个落地
+ *   round_robin 轮流
+ *   random      随机
+ *   ip_hash     按访客固定：同一个访客 IP 一直走同一个落地
+ * 「怎么切」照旧决定走哪条线路；按权重（整组一起分）、聚合 / 复制时不用它。Agent 2.2.245 起。
+ */
+export const ROUTE_DEST_SPREADS = ["one", "least_load", "round_robin", "random", "ip_hash"] as const;
+export type RouteDestSpread = (typeof ROUTE_DEST_SPREADS)[number];
+/** 路径上记的：只有「一起分」的几种（主备不记）。 */
+export type RouteLineDestSpread = Exclude<RouteDestSpread, "one">;
+
+export const ROUTE_DEST_SPREAD_LABELS: Record<RouteDestSpread, { label: string; hint: string }> = {
+  one: { label: "主备", hint: "几个落地里只用一个，按上面「怎么切」挑，坏了换下一个" },
+  least_load: { label: "按负载分", hint: "这条线路在用时，新连接给现在连接最少的那个落地" },
+  round_robin: { label: "轮流", hint: "这条线路在用时，新连接轮流走每个落地" },
+  random: { label: "随机", hint: "这条线路在用时，新连接随机挑一个能用的落地" },
+  ip_hash: { label: "按访客固定", hint: "同一个访客 IP 一直走同一个落地，适合要保持登录的服务" },
+};
+
+export function normalizeRouteDestSpread(value: unknown): RouteDestSpread {
+  const text = String(value ?? "").trim();
+  return (ROUTE_DEST_SPREADS as readonly string[]).includes(text) ? text as RouteDestSpread : "one";
+}
+
+/** 「落地怎么分」：Agent 2.2.245 起；更老的 Agent 拿到也只认一个落地（字段它不认）。 */
+export const ROUTE_DEST_SPREAD_AGENT_VERSION = "2.2.245";
+
+/**
+ * 下发给 Agent 时带不带「落地怎么分」：一次走一条线路（分配策略是 fallback、不分层 —— 按权重、聚合 / 复制时
+ * 整组本来就在分）、有线路选了一起分、调度的 Agent 都够新（2.2.245）。
+ */
+export function routeDestSpreadReady(options: {
+  strategy: string;
+  tiered: boolean;
+  paths: ReadonlyArray<Pick<RoutePath, "destSpread" | "tier">>;
+  agentAtLeast: (version: string) => boolean;
+}): boolean {
+  return options.strategy === "fallback" && !options.tiered
+    && options.paths.some((path) => !!path.destSpread && typeof path.tier === "number")
+    && options.agentAtLeast(ROUTE_DEST_SPREAD_AGENT_VERSION);
+}
+
+/** 一条目标上的「落地怎么分」字段：第几条线路、落地是哪一个、怎么分；这条线路没选一起分就不带。 */
+export function routeDestSpreadTargetFields(
+  path: Pick<RoutePath, "destSpread" | "tier" | "dest" | "destNodeId"> & { destHostId?: number | null },
+  ready: boolean,
+): { line: number; landing: string; spread: RouteLineDestSpread } | Record<string, never> {
+  if (!ready || !path.destSpread || typeof path.tier !== "number") return {};
+  return { line: path.tier, landing: routePathLandingKey(path), spread: path.destSpread };
+}
+
+/** 落地是哪一个（同一个落地经不同中转的几条路径算一个）：落地池按成员机，节点按节点，别的按地址，没写 = 规则目标。 */
+export function routePathLandingKey(path: Pick<RoutePath, "dest" | "destNodeId"> & { destHostId?: number | null }): string {
+  if (path.destNodeId && path.destHostId) return `n${path.destNodeId}h${path.destHostId}`;
+  if (path.destNodeId) return `n${path.destNodeId}`;
+  if (path.dest) return `${path.dest.ip}:${path.dest.port}`;
+  return "target";
+}
 
 export const ROUTE_MODES = ["failover", "scheduled", "manual", "smart", "hybrid", "weighted"] as const;
 export type RouteMode = (typeof ROUTE_MODES)[number];
@@ -447,6 +514,7 @@ function sanitizePath(raw: any, index: number): RoutePath | null {
     : undefined;
   const tier = raw.tier === null || raw.tier === undefined || raw.tier === "" ? undefined : clampInt(raw.tier, 0, MAX_ROUTE_PATHS, 0);
   const lineKey = typeof raw.lineKey === "string" && PATH_KEY_PATTERN.test(raw.lineKey.trim().toLowerCase()) ? raw.lineKey.trim().toLowerCase() : undefined;
+  const destSpread = normalizeRouteDestSpread(raw.destSpread);
   return {
     key: PATH_KEY_PATTERN.test(key) ? key : `p${index + 1}`,
     name: String(raw.name ?? "").trim().slice(0, 40),
@@ -455,6 +523,7 @@ function sanitizePath(raw: any, index: number): RoutePath | null {
     ...(tier !== undefined ? { tier } : {}),
     ...(raw.paused === true || raw.paused === 1 || raw.paused === "1" ? { paused: true } : {}),
     ...(lineKey ? { lineKey } : {}),
+    ...(destSpread !== "one" ? { destSpread } : {}),
     dest: sanitizeEndpoint(raw.dest),
     destNodeId: Number.isInteger(Number(raw.destNodeId)) && Number(raw.destNodeId) > 0 ? Math.floor(Number(raw.destNodeId)) : null,
     ...(Number.isInteger(Number(raw.destHostId)) && Number(raw.destHostId) > 0 && Number(raw.destNodeId) > 0 ? { destHostId: Math.floor(Number(raw.destHostId)) } : {}),
@@ -502,6 +571,7 @@ export function serializeRoutePaths(paths: RoutePath[] | null | undefined): stri
     ...(typeof path.tier === "number" ? { tier: path.tier } : {}),
     ...(path.paused ? { paused: true } : {}),
     ...(path.lineKey ? { lineKey: path.lineKey } : {}),
+    ...(path.destSpread ? { destSpread: path.destSpread } : {}),
   })));
 }
 

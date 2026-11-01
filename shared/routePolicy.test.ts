@@ -325,3 +325,22 @@ test("时段表那几行带着配置里的序号：前面有一条失效的，�
   assert.equal(deciding?.key, "schedule-1");
   assert.equal(policy.preferredIndex, 2);
 });
+
+test("多落地一起分（2.3.501）：调度的 Agent 早于 2.2.245 时说一句；够新、按权重、没选一起分时不说；「其余时候」同一条线路只写一次", () => {
+  const spreadPaths = JSON.stringify([
+    { key: "main-a", name: "主线路", hops: [], dest: null, weight: 50, tier: 0, lineKey: "main", destSpread: "least_load" },
+    { key: "main-b", name: "主线路", hops: [], dest: { ip: "198.51.100.21", port: 443 }, weight: 50, tier: 0, lineKey: "main", destSpread: "least_load" },
+    { key: "bk", name: "备用 1", hops: [], dest: { ip: "198.51.100.22", port: 443 }, weight: 50, tier: 1, lineKey: "bk" },
+  ]);
+  const spreadRule = (patch: Parameters<typeof rule>[0] = {}) => rule({ routeMode: "failover", routePaths: spreadPaths, failoverTargets: "[]", ...patch });
+  const warningOf = (patch: Parameters<typeof rule>[0], agentVersion: string) =>
+    describeRoutePolicy(spreadRule(patch), { host: { isOnline: true, agentVersion }, nowMs: OUT_OF_WINDOW, timeZone: TZ })!.warnings.filter((text) => text.includes("2.2.245"));
+  assert.equal(warningOf({}, "2.2.244").length, 1, "老 Agent：说一句");
+  assert.match(warningOf({}, "2.2.244")[0], /每条线路只用一个落地/);
+  assert.equal(warningOf({}, "2.2.245").length, 0, "够新：不说");
+  assert.equal(warningOf({ routeMode: "weighted" }, "2.2.244").length, 0, "按权重整组在分：不说");
+  assert.equal(warningOf({ routePaths: spreadPaths.replaceAll('"destSpread":"least_load"', '"destSpread":"one"') }, "2.2.244").length, 0, "没选一起分：不说");
+  const order = describeRoutePolicy(spreadRule(), { host: { isOnline: true, agentVersion: "2.2.245" }, nowMs: OUT_OF_WINDOW, timeZone: TZ })!
+    .conditions.find((condition) => condition.kind === "order");
+  assert.equal(order?.then, "主线路 → 备用 1");
+});

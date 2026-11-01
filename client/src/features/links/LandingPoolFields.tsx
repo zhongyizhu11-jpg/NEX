@@ -1,10 +1,9 @@
-import { KeyRound, Plus, X } from "lucide-react";
+import { Loader2, Plus, Sparkles, X } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { LineChipButton, LineSegmented } from "@/features/lines/LineUi";
+import { cn } from "@/lib/utils";
+import { LINE_BARE_SELECT, LINE_FORM_ROW, LineBareInput, LineChipButton, LineField, LineFormGroup, LineFormRow, LineSegmented } from "@/features/lines/LineUi";
 import {
   LANDING_POOL_PROTOCOL_LABELS,
   LANDING_POOL_PROTOCOLS,
@@ -133,14 +132,21 @@ function withSecurity(draft: LandingDraft, security: LandingPoolSecurity): Landi
   };
 }
 
-const FIELD_LABEL = "text-[11.5px] text-muted-foreground";
-
-export function LandingPoolFields({ draft, onChange, directDomain, onDirectDomainChange, editing, onRotate, rotating }: {
+/*
+  2.3.501 起照 iOS 设置排：「落地配置」「用户」「直连域名」各一张白卡，卡里一行一项、值写在右边，
+  不带框；说明只剩卡底下一句。以前是标签压在框上、框里套框、每个控件底下一句灰字。
+*/
+export function LandingPoolFields({ draft, onChange, directDomain, onDirectDomainChange, domainEditable = true, onSuggestDomain, suggesting, editing, onRotate, rotating }: {
   draft: LandingDraft;
   onChange: (draft: LandingDraft) => void;
   directDomain: string;
   onDirectDomainChange: (value: string) => void;
-  /** 改已有的池：显示「换密钥」。 */
+  /** 直连域名只有管理员能设（面板拿系统的 DNS 服务商替它写解析）；别人只看得到管理员设的那个。 */
+  domainEditable?: boolean;
+  /** 「自动」：在 DDNS 管着的主域名下起一个。 */
+  onSuggestDomain?: () => void;
+  suggesting?: boolean;
+  /** 改已有的池：卡底下多一个「换一套」密钥。 */
   editing?: boolean;
   onRotate?: () => void;
   rotating?: boolean;
@@ -150,110 +156,135 @@ export function LandingPoolFields({ draft, onChange, directDomain, onDirectDomai
   const multi = proxyInboundSupportsMultiUser(draft.protocol);
   const ownUsers = draft.users.filter((user) => !user.shared).length;
   const setUser = (index: number, name: string) => onChange({ ...draft, users: draft.users.map((user, position) => (position === index ? { ...user, name: name.slice(0, 64) } : user)) });
+  // 凭据那句跟在最后一张配置卡底下（多用户协议是「用户」那张）
+  const credentials = (
+    <>
+      凭据和密钥由面板生成，每台一样；端口被占会自动换。
+      {editing && onRotate ? (
+        <button type="button" className="ml-1 font-medium text-[var(--fx-accent)] disabled:opacity-50" disabled={rotating} onClick={onRotate} data-testid="landing-rotate">换一套</button>
+      ) : null}
+    </>
+  );
   return (
-    <div className="flex flex-col gap-3" data-testid="landing-pool-fields">
-      <div className="flex flex-col gap-2.5 rounded-[12px] border border-[var(--fx-stroke-weak)] p-3">
-        <div className="grid grid-cols-[minmax(0,1fr)_96px] gap-2">
-          <label className="flex min-w-0 flex-col gap-1">
-            <span className={FIELD_LABEL}>协议</span>
+    <>
+      <LineField label="落地配置" footer={multi ? undefined : credentials} testId="landing-pool-fields">
+        <LineFormGroup>
+          <LineFormRow label="协议">
             <Select value={draft.protocol} onValueChange={(value) => onChange(withProtocol(draft, value as LandingPoolProtocol))}>
-              <SelectTrigger aria-label="落地协议" className="h-8 text-xs" data-testid="landing-protocol"><SelectValue /></SelectTrigger>
-              <SelectContent>
+              <SelectTrigger data-slot="line-bare-select" aria-label="落地协议" className={LINE_BARE_SELECT} data-testid="landing-protocol"><SelectValue /></SelectTrigger>
+              <SelectContent align="end">
                 {LANDING_POOL_PROTOCOLS.map((protocol) => (
                   <SelectItem key={protocol} value={protocol}>{LANDING_POOL_PROTOCOL_LABELS[protocol]}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
-          </label>
-          <label className="flex min-w-0 flex-col gap-1">
-            <span className={FIELD_LABEL}>端口</span>
-            <Input value={draft.port} inputMode="numeric" onChange={(event) => onChange({ ...draft, port: event.target.value.replace(/[^\d]/g, "").slice(0, 5) })} className="h-8 font-mono text-xs" aria-label="落地端口" data-testid="landing-port" />
-          </label>
-        </div>
-        {securities.length > 1 ? (
-          <LineSegmented
-            ariaLabel="安全层"
-            value={draft.security}
-            options={[{ value: "reality", label: "REALITY" }, { value: "none", label: "不加密" }]}
-            onChange={(security) => onChange(withSecurity(draft, security as LandingPoolSecurity))}
-          />
-        ) : null}
-        {transports.length > 1 ? (
-          <label className="flex min-w-0 flex-col gap-1">
-            <span className={FIELD_LABEL}>传输</span>
-            <Select value={draft.transport} onValueChange={(value) => onChange({ ...draft, transport: value as ProxyNodeTransport })}>
-              <SelectTrigger aria-label="传输" className="h-8 text-xs"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {transports.map((transport) => <SelectItem key={transport} value={transport}>{TRANSPORT_LABELS[transport] || transport}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </label>
-        ) : null}
-        {draft.transport !== "tcp" ? (
-          <div className="grid grid-cols-2 gap-2">
-            <Input value={draft.path} onChange={(event) => onChange({ ...draft, path: event.target.value.slice(0, 200) })} placeholder={draft.transport === "grpc" ? "serviceName" : "路径，比如 /ray"} className="h-8 text-xs" aria-label="路径" />
-            {draft.transport !== "grpc" ? <Input value={draft.host} onChange={(event) => onChange({ ...draft, host: event.target.value.slice(0, 253) })} placeholder="Host（可选）" className="h-8 text-xs" aria-label="Host" /> : null}
-          </div>
-        ) : null}
-        {draft.security === "reality" ? (
-          <>
-            <label className="flex min-w-0 flex-col gap-1">
-              <span className={FIELD_LABEL}>REALITY 握手域名</span>
-              <Input value={draft.serverName} onChange={(event) => onChange({ ...draft, serverName: event.target.value.trim().slice(0, 253) })} placeholder="不填用 dl.google.com" className="h-8 text-xs" aria-label="REALITY 握手域名" />
-            </label>
-            <label className="flex items-center justify-between gap-3 text-[12px]">
-              <span>Vision 流控<span className="ml-1 text-[11.5px] text-muted-foreground">推荐开着</span></span>
-              <Switch checked={draft.flow === "xtls-rprx-vision"} onCheckedChange={(on) => onChange({ ...draft, flow: on ? "xtls-rprx-vision" : "" })} aria-label="Vision 流控" />
-            </label>
-          </>
-        ) : null}
-        {draft.protocol === "shadowsocks" ? (
-          <label className="flex min-w-0 flex-col gap-1">
-            <span className={FIELD_LABEL}>加密方式</span>
-            <Select value={draft.method || PROXY_INBOUND_SHADOWSOCKS_DEFAULT_METHOD} onValueChange={(method) => onChange({ ...draft, method })}>
-              <SelectTrigger aria-label="加密方式" className="h-8 text-xs"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {SS_METHODS.map((method) => <SelectItem key={method.value} value={method.value}>{method.label}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </label>
-        ) : null}
-        {draft.protocol === "snell" ? (
-          <LineSegmented ariaLabel="Snell 版本" value={String(draft.snellVersion)} options={[{ value: "5", label: "Snell v5" }, { value: "6", label: "Snell v6" }]} onChange={(value) => onChange({ ...draft, snellVersion: Number(value) })} />
-        ) : null}
-        {multi ? (
-          <div className="flex flex-col gap-1.5" data-testid="landing-users">
-            <span className={FIELD_LABEL}>用户（一人一份凭据，每台都一样）</span>
+          </LineFormRow>
+          <LineFormRow label="端口">
+            <LineBareInput value={draft.port} inputMode="numeric" onChange={(event) => onChange({ ...draft, port: event.target.value.replace(/[^\d]/g, "").slice(0, 5) })} className="w-24 font-mono" aria-label="落地端口" data-testid="landing-port" />
+          </LineFormRow>
+          {securities.length > 1 ? (
+            <LineFormRow label="加密">
+              <div className="w-[10.5rem]">
+                <LineSegmented
+                  ariaLabel="安全层"
+                  value={draft.security}
+                  options={[{ value: "reality", label: "REALITY" }, { value: "none", label: "不加密" }]}
+                  onChange={(security) => onChange(withSecurity(draft, security as LandingPoolSecurity))}
+                />
+              </div>
+            </LineFormRow>
+          ) : null}
+          {transports.length > 1 ? (
+            <LineFormRow label="传输">
+              <Select value={draft.transport} onValueChange={(value) => onChange({ ...draft, transport: value as ProxyNodeTransport })}>
+                <SelectTrigger data-slot="line-bare-select" aria-label="传输" className={LINE_BARE_SELECT}><SelectValue /></SelectTrigger>
+                <SelectContent align="end">
+                  {transports.map((transport) => <SelectItem key={transport} value={transport}>{TRANSPORT_LABELS[transport] || transport}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </LineFormRow>
+          ) : null}
+          {draft.transport !== "tcp" ? (
+            <LineFormRow label={draft.transport === "grpc" ? "服务名" : "路径"}>
+              <LineBareInput value={draft.path} onChange={(event) => onChange({ ...draft, path: event.target.value.slice(0, 200) })} placeholder={draft.transport === "grpc" ? "serviceName" : "/ray"} className="font-mono" aria-label="路径" />
+            </LineFormRow>
+          ) : null}
+          {draft.transport !== "tcp" && draft.transport !== "grpc" ? (
+            <LineFormRow label="Host">
+              <LineBareInput value={draft.host} onChange={(event) => onChange({ ...draft, host: event.target.value.slice(0, 253) })} placeholder="可选" aria-label="Host" />
+            </LineFormRow>
+          ) : null}
+          {draft.security === "reality" ? (
+            <>
+              <LineFormRow label="握手域名">
+                <LineBareInput value={draft.serverName} onChange={(event) => onChange({ ...draft, serverName: event.target.value.trim().slice(0, 253) })} placeholder="dl.google.com" aria-label="REALITY 握手域名" />
+              </LineFormRow>
+              <LineFormRow label="Vision 流控">
+                <Switch checked={draft.flow === "xtls-rprx-vision"} onCheckedChange={(on) => onChange({ ...draft, flow: on ? "xtls-rprx-vision" : "" })} aria-label="Vision 流控" />
+              </LineFormRow>
+            </>
+          ) : null}
+          {draft.protocol === "shadowsocks" ? (
+            <LineFormRow label="加密方式">
+              <Select value={draft.method || PROXY_INBOUND_SHADOWSOCKS_DEFAULT_METHOD} onValueChange={(method) => onChange({ ...draft, method })}>
+                <SelectTrigger data-slot="line-bare-select" aria-label="加密方式" className={LINE_BARE_SELECT}><SelectValue /></SelectTrigger>
+                <SelectContent align="end">
+                  {SS_METHODS.map((method) => <SelectItem key={method.value} value={method.value}>{method.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </LineFormRow>
+          ) : null}
+          {draft.protocol === "snell" ? (
+            <LineFormRow label="版本">
+              <div className="w-[8rem]">
+                <LineSegmented ariaLabel="Snell 版本" value={String(draft.snellVersion)} options={[{ value: "5", label: "v5" }, { value: "6", label: "v6" }]} onChange={(value) => onChange({ ...draft, snellVersion: Number(value) })} />
+              </div>
+            </LineFormRow>
+          ) : null}
+        </LineFormGroup>
+      </LineField>
+      {multi ? (
+        <LineField label="用户" aside="一人一份凭据" footer={credentials} testId="landing-users">
+          <LineFormGroup>
             {draft.users.map((user, index) => (
-              <div key={`${user.id}-${index}`} className="flex min-w-0 items-center gap-1.5">
-                <Input value={user.name} disabled={user.shared} onChange={(event) => setUser(index, event.target.value)} className="h-8 min-w-0 flex-1 text-xs" aria-label={`用户 ${index + 1}`} />
-                {user.shared ? <span className="shrink-0 text-[11px] text-muted-foreground">分享发的</span> : null}
+              <div key={`${user.id}-${index}`} className={cn(LINE_FORM_ROW, "flex min-h-[46px] min-w-0 items-center gap-2 pr-[14px]")}>
+                <LineBareInput align="left" value={user.name} disabled={user.shared} onChange={(event) => setUser(index, event.target.value)} aria-label={`用户 ${index + 1}`} />
+                {user.shared ? <span className="shrink-0 text-[12px] text-muted-foreground">分享发的</span> : null}
                 {!user.shared && ownUsers > 1 ? (
-                  <button type="button" className="shrink-0 rounded p-1 text-muted-foreground hover:text-foreground" aria-label={`去掉 ${user.name || "用户"}`} onClick={() => onChange({ ...draft, users: draft.users.filter((_, position) => position !== index) })}><X className="h-3.5 w-3.5" /></button>
+                  <button type="button" className="shrink-0 rounded-full p-1 text-muted-foreground hover:text-foreground" aria-label={`去掉 ${user.name || "用户"}`} onClick={() => onChange({ ...draft, users: draft.users.filter((_, position) => position !== index) })}><X className="h-4 w-4" /></button>
                 ) : null}
               </div>
             ))}
-            <LineChipButton variant="add" className="self-start" onClick={() => onChange({ ...draft, users: [...draft.users, { id: 0, name: `用户 ${draft.users.length + 1}` }] })}><Plus className="h-3 w-3" />加用户</LineChipButton>
-          </div>
-        ) : null}
-        <p className="text-[11.5px] leading-[1.5] text-muted-foreground">
-          凭据和密钥由面板生成，每台机器一模一样；某台的端口被占了会换一个（订阅里还是一条，走中转不受影响）。
-        </p>
-      </div>
-      <label className="flex min-w-0 flex-col gap-1">
-        <span className={FIELD_LABEL}>直连域名（可选）</span>
-        <Input value={directDomain} onChange={(event) => onDirectDomainChange(event.target.value.trim().slice(0, 253))} placeholder="比如 hk.example.com" className="h-8 text-xs" aria-label="直连域名" data-testid="landing-domain" />
-        <span className="text-[11.5px] leading-[1.5] text-muted-foreground">
-          {directDomain
-            ? "订阅里多一条直连，DNS 只解析到在线的机器；每台要同一个端口。"
-            : "不填就只走中转：订阅里只有中转那一条，面板在池里挑机器。"}
-        </span>
-      </label>
-      {editing && onRotate ? (
-        <Button type="button" variant="outline" size="sm" className="self-start gap-1" disabled={rotating} onClick={onRotate} data-testid="landing-rotate">
-          <KeyRound className="h-3.5 w-3.5" />换密钥
-        </Button>
+            <button type="button" className={cn(LINE_FORM_ROW, "flex h-[46px] w-full items-center gap-1.5 pr-[14px] text-left text-[14px] text-[var(--fx-accent)]")} onClick={() => onChange({ ...draft, users: [...draft.users, { id: 0, name: `用户 ${draft.users.length + 1}` }] })}>
+              <Plus className="h-4 w-4" />加用户
+            </button>
+          </LineFormGroup>
+        </LineField>
       ) : null}
-    </div>
+      {domainEditable || directDomain ? (
+        <LineField
+          label="直连域名"
+          testId="landing-domain-field"
+          aside={domainEditable && onSuggestDomain ? (
+            <LineChipButton variant="sel" disabled={suggesting} onClick={onSuggestDomain} data-testid="landing-domain-auto">
+              {suggesting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}自动
+            </LineChipButton>
+          ) : null}
+          footer={directDomain
+            ? `订阅里多一条直连，DNS 只解析到在线的那几台。${domainEditable ? "" : "管理员设的。"}`
+            : "不填就只走中转。"}
+        >
+          <LineFormGroup>
+            <div className="flex min-h-[46px] min-w-0 items-center pr-[14px]">
+              {domainEditable ? (
+                <LineBareInput align="left" value={directDomain} onChange={(event) => onDirectDomainChange(event.target.value.trim().slice(0, 253))} placeholder="可选，比如 hk.example.com" aria-label="直连域名" data-testid="landing-domain" />
+              ) : (
+                <span className="min-w-0 truncate text-[14px]" data-testid="landing-domain">{directDomain}</span>
+              )}
+            </div>
+          </LineFormGroup>
+        </LineField>
+      ) : null}
+    </>
   );
 }

@@ -81,9 +81,12 @@ export async function expandRouteGroupInputLines<T extends { routeGroup?: any }>
         destNodeId: path.destNodeId,
         destHostId: path.destHostId ?? null,
         weight: path.weight,
+        // 线路上的探测地址（展开时给了每条路径）：以前这里没带，保存时被丢掉
+        probe: path.probe,
         tier: path.tier,
         paused: path.paused,
         lineKey: path.lineKey,
+        destSpread: path.destSpread ?? null,
       })),
     },
   };

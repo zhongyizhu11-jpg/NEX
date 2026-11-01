@@ -109,3 +109,30 @@ test("走扩展通道：有在等的检查时下发指令、让 Agent 5 秒来�
   assert.equal(old.modules.nodecheck, undefined);
   resetNodeCheckStateForTest();
 });
+
+test("2.2.246 的结果：就近的 Ookla 测速点、用掉的流量都留着；认不出的测速点按 Cloudflare 读", async () => {
+  resetNodeCheckStateForTest();
+  const recorded: SpeedTestRecord[] = [];
+  setSpeedTestRecorderForTest(async (record) => { recorded.push(record); });
+  const { runId } = startNodeCheck(host(6, "2.2.246"), { kind: "speed", requestedBy: 1 });
+  await ingestNodeCheckReport(host(6, "2.2.246"), { runs: [{ runId, kind: "speed", status: "done", finishedAt: Math.floor(Date.now() / 1000), speed: {
+    latencyMs: 3.4, jitterMs: 0.3, downloadMbps: 187.4, uploadMbps: 46.2, server: "ookla",
+    serverName: "China Telecom · Guangzhou", serverCountry: "cn", serverDistanceKm: 3.4, serverHost: "gz.example:8080",
+    downloadBytes: 245_000_000, uploadBytes: 48_000_000, clientIp: "198.51.100.8", asOrg: "China Telecom", country: "cn",
+    samples: [{ t: 500, down: 180 }],
+  } }] });
+  assert.equal(recorded.length, 1);
+  const result = recorded[0].result;
+  assert.equal(result.server, "ookla");
+  assert.equal(result.serverName, "China Telecom · Guangzhou");
+  assert.equal(result.serverCountry, "CN");
+  assert.equal(result.serverDistanceKm, 3);
+  assert.equal(result.downloadBytes + result.uploadBytes, 293_000_000);
+  assert.equal(result.jitterMs, 0.3, "不到 1 ms 的抖动留着小数");
+
+  const second = startNodeCheck(host(6, "2.2.246"), { kind: "speed", requestedBy: 1 });
+  await ingestNodeCheckReport(host(6, "2.2.246"), { runs: [{ runId: second.runId, kind: "speed", status: "done", speed: { downloadMbps: 10, server: "somewhere-new" } }] });
+  assert.equal(recorded[1].result.server, "cloudflare");
+  assert.equal(recorded[1].result.serverName, "");
+  assert.equal(recorded[1].result.downloadBytes, 0, "老 Agent 没报流量：0，不显示");
+});

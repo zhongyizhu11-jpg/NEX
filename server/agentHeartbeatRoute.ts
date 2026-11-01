@@ -3,6 +3,8 @@ import { parseFailoverTargets } from "../shared/failoverTargets";
 import {
   ROUTE_GROUP_UDP_AGENT_VERSION,
   routeDeliveryStrategy,
+  routeDestSpreadReady,
+  routeDestSpreadTargetFields,
   normalizeRouteDelivery,
   routeGroupForwardTypeSupported,
   routeGroupOf,
@@ -3287,13 +3289,21 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         （2.3.497 及以前：选了整链最优一直不切）。稳定优先 / 按时段 / 人工指定本来就按顺序走，分不分层一样。
       */
       const tiered = (delivery === "aggregate" || delivery === "replicate") && paths.every((path) => typeof path.tier === "number");
+      const strategy = routeDeliveryStrategy(policy, delivery, (version) => routeSchedulerAgentAtLeast(rule, version));
+      /*
+        「落地怎么分」（2.3.501，Agent 2.2.245）：一次走一条线路时（主备 / 择优 / 时段 / 人工指定都是 fallback），
+        线路选了「一起分」的，每条目标带上第几条线路、落地是哪一个、怎么分 —— Agent 挑出该走的那条之后，在它那条
+        线路的几个落地里按这个分新连接。按权重（整组一起分）、聚合 / 复制（分层）不带：那时已经在分了。
+      */
+      const destSpreadReady = routeDestSpreadReady({ strategy, tiered, paths, agentAtLeast: (version) => routeSchedulerAgentAtLeast(rule, version) });
       // 第 N 个目标的第一跳是哪台：入口 Agent 报的第一段延迟就是「进那台机器」的延迟（节点池卡上的毫秒数）。
       noteRouteFirstHops(Number(rule.id), paths.map((path) => (path.hops.length > 0 ? Number(path.hops[0]) : null)));
       const targets = paths.map((path) => {
         const dial = routePathDial(path, routeRule);
         const tier = tiered ? { tier: Number(path.tier) } : {};
+        const lineSpread = routeDestSpreadTargetFields(path, destSpreadReady);
         if (!dial) {
-          return { targetIp: "127.0.0.1", targetPort: 1, weight: path.weight, ...tier, down: true, downReason: path.issue || "path unresolved" };
+          return { targetIp: "127.0.0.1", targetPort: 1, weight: path.weight, ...tier, ...lineSpread, down: true, downReason: path.issue || "path unresolved" };
         }
         const hint = nodeHints.get(path.key) || hints.get(path.key);
         // Agent 那边是整数毫秒（Go int），小数会让整份规格解不开。
@@ -3305,6 +3315,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
           ...(path.probe ? { probeIp: path.probe.ip, probePort: path.probe.port } : {}),
           weight: path.weight,
           ...tier,
+          ...lineSpread,
           // 入口探不到的后面几段（中继各自探的）加起来：Agent 按整条链打分。
           ...(extraLatencyMs > 0 ? { extraLatencyMs } : {}),
           ...(hint?.down ? { down: true, downReason: hint.reason } : {}),
@@ -3324,7 +3335,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         protocol,
         // 权重负载按它的分法（按权重 / 轮流 / 随机 / 按访客），其余模式都是主备（fallback）。
         // 「按负载」老 Agent 不认（会退成主备），改发「按权重」。
-        strategy: routeDeliveryStrategy(policy, delivery, (version) => routeSchedulerAgentAtLeast(rule, version)),
+        strategy,
         ...(delivery !== "cold" ? { delivery } : {}),
         targets,
         failoverSeconds: policy.failoverSeconds,

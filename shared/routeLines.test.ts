@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { MAX_ROUTE_PATHS, isDefaultRouteLineName, parseRoutePaths, routePathLabel, serializeRoutePaths, validateRouteGroup, newRouteGroupDraft, type RoutePath } from "./routeGroup";
+import { MAX_ROUTE_PATHS, isDefaultRouteLineName, parseRoutePaths, routeDestSpreadReady, routeDestSpreadTargetFields, routePathLabel, routePathLandingKey, serializeRoutePaths, validateRouteGroup, newRouteGroupDraft, type RoutePath } from "./routeGroup";
 import {
   expandRouteLines,
   newRouteLayer,
@@ -284,4 +284,57 @@ test("暂停的线路不占路：主线路停着时备 1 里和它重的那台�
   // 主线路没停：经 2 归主线路，备 1 只剩经 3
   const active = expandRouteLines([{ ...main, paused: false }, backup], ctx()).paths;
   assert.deepEqual(active.filter((path) => path.lineKey === "bk1").map((path) => path.hops.join(".")), ["3"]);
+});
+
+// ---------------------------------------------------------------- 多落地怎么用（2.3.501）
+
+test("线路的「落地怎么分」：存得下、认不出的当主备；展开时带到这条线路的每条路径上，路径存取不丢、还原回线路", () => {
+  const raw = serializeRouteLines([
+    line("main", { dests: [{ dest: { ip: "1.1.1.1", port: 443 }, destNodeId: null }, { dest: { ip: "2.2.2.2", port: 443 }, destNodeId: null }], destSpread: "least_load" }),
+    line("bk", { layers: [newRouteLayer({ kind: "hosts", hostIds: [6] })], destSpread: "one" }),
+  ]);
+  assert.match(String(raw), /"destSpread":"least_load"/);
+  assert.doesNotMatch(String(raw), /"destSpread":"one"/, "主备不存");
+  const lines = parseRouteLines(raw);
+  assert.equal(lines[0].destSpread, "least_load");
+  assert.equal(lines[1].destSpread, undefined);
+  assert.equal(parseRouteLines(JSON.stringify([{ key: "x", name: "x", layers: [], dests: [], weight: 50, destSpread: "bogus" }]))[0].destSpread, undefined, "认不出的当主备");
+
+  const { paths } = expandRouteLines(lines, ctx());
+  assert.deepEqual(paths.map((path) => [path.lineKey, path.destSpread ?? null]), [["main", "least_load"], ["main", "least_load"], ["bk", null]]);
+  const roundTrip = parseRoutePaths(serializeRoutePaths(paths));
+  assert.deepEqual(roundTrip.map((path) => path.destSpread ?? null), ["least_load", "least_load", null]);
+  assert.equal(routeLinesFromPaths(roundTrip)[0].destSpread, "least_load", "老数据只有路径时还原回线路也带着");
+});
+
+test("落地是哪一个：落地池按池节点 + 成员机，节点按节点，地址按地址，没写是规则目标；经不同中转到同一个落地算一个", () => {
+  assert.equal(routePathLandingKey({ dest: { ip: "198.18.0.6", port: 443 }, destNodeId: 88, destHostId: 6 }), "n88h6");
+  assert.equal(routePathLandingKey({ dest: { ip: "203.0.113.7", port: 443 }, destNodeId: 7 }), "n7");
+  assert.equal(routePathLandingKey({ dest: { ip: "203.0.113.7", port: 443 }, destNodeId: null }), "203.0.113.7:443");
+  assert.equal(routePathLandingKey({ dest: null, destNodeId: null }), "target");
+  const main = line("main", { layers: [newRouteLayer({ kind: "hosts", hostIds: [2, 3] })], dests: [{ dest: null, destNodeId: 88 }], destSpread: "round_robin" });
+  const { paths } = expandRouteLines([main], ctx({ landingPool: LANDING }));
+  // 经 2：落到 6、3（不落回 2）；经 3：落到 6、2 —— 4 条路径、3 个落地
+  assert.equal(paths.length, 4);
+  assert.deepEqual([...new Set(paths.map(routePathLandingKey))].sort(), ["n88h2", "n88h3", "n88h6"]);
+  assert.ok(paths.every((path) => path.destSpread === "round_robin"));
+});
+
+test("下发给 Agent：一次走一条线路、有线路选了一起分、Agent 够新才带；按权重 / 聚合（分层）/ 老 Agent 不带", () => {
+  const main = line("main", { dests: [{ dest: { ip: "1.1.1.1", port: 443 }, destNodeId: null }, { dest: { ip: "2.2.2.2", port: 443 }, destNodeId: null }], destSpread: "ip_hash" });
+  const backup = line("bk", { layers: [newRouteLayer({ kind: "hosts", hostIds: [6] })] });
+  const { paths } = expandRouteLines([main, backup], ctx());
+  const newAgent = () => true;
+  const oldAgent = (version: string) => version !== "2.2.245";
+  assert.equal(routeDestSpreadReady({ strategy: "fallback", tiered: false, paths, agentAtLeast: newAgent }), true);
+  assert.equal(routeDestSpreadReady({ strategy: "least_load", tiered: false, paths, agentAtLeast: newAgent }), false, "按权重（整组分）不带");
+  assert.equal(routeDestSpreadReady({ strategy: "fallback", tiered: true, paths, agentAtLeast: newAgent }), false, "聚合 / 复制（分层）不带");
+  assert.equal(routeDestSpreadReady({ strategy: "fallback", tiered: false, paths, agentAtLeast: oldAgent }), false, "老 Agent 不带");
+  assert.equal(routeDestSpreadReady({ strategy: "fallback", tiered: false, paths: expandRouteLines([backup], ctx()).paths, agentAtLeast: newAgent }), false, "没有线路选一起分不带");
+  assert.deepEqual(paths.map((path) => routeDestSpreadTargetFields(path, true)), [
+    { line: 0, landing: "1.1.1.1:443", spread: "ip_hash" },
+    { line: 0, landing: "2.2.2.2:443", spread: "ip_hash" },
+    {},
+  ]);
+  assert.deepEqual(routeDestSpreadTargetFields(paths[0], false), {});
 });

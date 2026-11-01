@@ -4717,10 +4717,6 @@ function TunnelsContent() {
                 setActiveSection(mode === "failover" ? "groups" : mode === "entry" ? "entries" : "exits");
                 setGroupEditRequest({ id: groupId, requestKey: Date.now() });
               }}
-              onCreateGroup={(mode) => {
-                setPendingGroupCreate({ mode });
-                setActiveSection(mode === "failover" ? "groups" : mode === "entry" ? "entries" : "exits");
-              }}
             />
           </SectionTransition>
         </TabsContent>

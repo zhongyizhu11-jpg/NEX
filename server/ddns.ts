@@ -1136,3 +1136,52 @@ export async function updateDdnsRecord(input: DdnsRecordInput) {
     }
   });
 }
+
+/**
+ * DDNS 服务商管着的主域名（落地池「自动」起直连域名用，2.3.501）：阿里云、腾讯云设置里就有；Cloudflare、华为云
+ * 按 Zone ID 去问（没填 Zone ID 时，账号下只有一个域名就用它）；Webhook 不知道主域名。拿不到时 reason 说为什么。
+ */
+export async function ddnsRootDomain(): Promise<{ root: string | null; reason: string | null }> {
+  const settings = await getDdnsSettings();
+  if (!settings.enabled || settings.provider === "disabled") {
+    return { root: null, reason: "先到 系统设置 → DDNS 配好并启用 DNS 服务商" };
+  }
+  const done = (value: unknown) => {
+    const root = normalizeDomain(String(value || ""));
+    return root ? { root, reason: null } : { root: null, reason: "DDNS 设置里没有主域名：填一个完整域名" };
+  };
+  try {
+    switch (settings.provider) {
+      case "aliyun":
+        return done(settings.aliyunDomainName);
+      case "tencentcloud":
+        return done(settings.tencentcloudDomainName);
+      case "cloudflare": {
+        if (!settings.cloudflareApiToken) return { root: null, reason: "Cloudflare 的 API Token 没填" };
+        const headers = { Authorization: `Bearer ${settings.cloudflareApiToken}`, "Content-Type": "application/json" };
+        const zoneId = settings.cloudflareZoneId.trim();
+        if (zoneId) {
+          const body = await readJson(await ddnsFetch(`https://api.cloudflare.com/client/v4/zones/${encodeURIComponent(zoneId)}`, { headers }), "Cloudflare 查询 Zone 失败");
+          return done(body?.result?.name);
+        }
+        const body = await readJson(await ddnsFetch("https://api.cloudflare.com/client/v4/zones?status=active&per_page=50", { headers }), "Cloudflare 查询 Zone 失败");
+        const zones = Array.isArray(body?.result) ? body.result : [];
+        if (zones.length === 1) return done(zones[0]?.name);
+        return { root: null, reason: zones.length === 0 ? "Cloudflare 账号下没有能用的域名" : "Cloudflare 账号下有好几个域名：在 DDNS 设置里填 Zone ID，或者填一个完整域名" };
+      }
+      case "huaweicloud": {
+        ensureHuaweiCloudCredentials(settings);
+        const zoneId = settings.huaweicloudZoneId.trim();
+        if (zoneId) return done(String((await huaweicloudRequest(settings, "GET", `/v2/zones/${zoneId}`, {}))?.name || ""));
+        const body = await huaweicloudRequest(settings, "GET", "/v2/zones", { limit: 100 });
+        const zones = Array.isArray(body?.zones) ? body.zones : [];
+        if (zones.length === 1) return done(zones[0]?.name);
+        return { root: null, reason: zones.length === 0 ? "华为云账号下没有能用的域名" : "华为云账号下有好几个域名：在 DDNS 设置里填 Zone ID，或者填一个完整域名" };
+      }
+      default:
+        return { root: null, reason: "Webhook 方式不知道主域名：填一个完整域名" };
+    }
+  } catch (error) {
+    return { root: null, reason: error instanceof Error ? error.message : String(error) };
+  }
+}

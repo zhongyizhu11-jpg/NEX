@@ -9,11 +9,13 @@ import {
 import type { NetworkHealth } from "./networkHealth";
 import { normalizeForwardRuleProtocol } from "./forwardTypes";
 import {
+  ROUTE_DEST_SPREAD_AGENT_VERSION,
   ROUTE_GROUP_AGENT_VERSION,
   ROUTE_GROUP_UDP_AGENT_VERSION,
   ROUTE_SWITCH_MODE_INFO,
   ROUTE_SWITCH_MODE_SESSION_HINTS,
   describeRouteIssue,
+  normalizeRouteDelivery,
   routeAgentStrategy,
   routeGroupForwardTypeSupported,
   routeGroupIsForwardXTunnel,
@@ -349,7 +351,8 @@ export function describeRoutePolicy(rule: RoutePolicyRule, options: RoutePolicyO
       kind: "order",
       key: "order",
       when: conditions.length > 0 ? "其余时候" : "按顺序",
-      then: paths.map((_, index) => label(index)).join(" → "),
+      // 一条线路展开成几条路径（几个落地、几台中转候选）时名字是同一个：连着一样的只写一次
+      then: paths.map((_, index) => label(index)).filter((name, index, names) => index === 0 || name !== names[index - 1]).join(" → "),
       targetIndex: null,
       state: deciding === "order" ? "deciding" : "idle",
     });
@@ -372,6 +375,15 @@ export function describeRoutePolicy(rule: RoutePolicyRule, options: RoutePolicyO
     if (uses.length > 0) {
       warnings.push(`这台机器的 Agent 早于 ${ROUTE_GROUP_AGENT_VERSION}：${uses.join("、")}它不认，只按主备顺序切、切换时也不断旧连接。`);
     }
+  }
+  /* 「落地怎么分」（2.3.501）：一次走一条线路、有线路选了几个落地一起分，调度的 Agent 要 2.2.245 起。 */
+  const spreadDelivery = normalizeRouteDelivery(policy.delivery);
+  if (
+    options.host && version && !isAgentVersionAtLeast(version, ROUTE_DEST_SPREAD_AGENT_VERSION)
+    && mode !== "weighted" && spreadDelivery !== "aggregate" && spreadDelivery !== "replicate"
+    && paths.some((path) => !!path.destSpread)
+  ) {
+    warnings.push(`这台机器的 Agent 早于 ${ROUTE_DEST_SPREAD_AGENT_VERSION}：多落地分流它不认，每条线路只用一个落地。升级 Agent 后才分。`);
   }
   for (const [index, path] of paths.entries()) {
     if (path.issue) warnings.push(`「${label(index)}」眼下用不了：${describeRouteIssue(path.issue)}。`);

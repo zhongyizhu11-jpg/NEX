@@ -95,6 +95,35 @@ export function normalizeDirectDomain(value: unknown): string | null {
   return domain;
 }
 
+/**
+ * 「自动」起的直连域名（2.3.501）：池名能拼成英文就用它（「HK Landing」→ hk-landing）；中文名拼不出来，用池里机器的
+ * 地区（hk）；都没有用 lp。后面带 4 位随机字母数字免得重名，挂在 DDNS 管着的主域名下。随机那段由调用方给（测试里固定）。
+ */
+export function landingDomainSuggestion({ name, root, random, region }: { name: string; root: string; random: string; region?: string | null }): string {
+  const slugOf = (value: unknown) => String(value || "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 20)
+    .replace(/-+$/g, "");
+  const tail = String(random || "").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 8) || "0000";
+  return `${slugOf(name) || slugOf(region) || "lp"}-${tail}.${String(root || "").trim().toLowerCase().replace(/\.+$/, "")}`;
+}
+
+/** 池里机器最多的那个地区（两位国家码，小写）；没有就 null。 */
+export function landingPoolRegion(countryCodes: ReadonlyArray<unknown>): string | null {
+  const counts = new Map<string, number>();
+  for (const code of countryCodes) {
+    const value = String(code || "").trim().toLowerCase();
+    if (/^[a-z]{2}$/.test(value)) counts.set(value, (counts.get(value) || 0) + 1);
+  }
+  let best: string | null = null;
+  for (const [code, count] of Array.from(counts)) if (!best || count > (counts.get(best) || 0)) best = code;
+  return best;
+}
+
 /** 设直连域名要先有 DNS 服务商（面板要替它写解析）。 */
 export async function assertDirectDomainReady(domain: string | null) {
   if (!domain) return;

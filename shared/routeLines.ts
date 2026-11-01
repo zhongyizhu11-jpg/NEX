@@ -4,8 +4,10 @@ import {
   defaultRoutePathName,
   newRoutePathKey,
   parseRoutePaths,
+  normalizeRouteDestSpread,
   routeLineName,
   routePathRoadKey,
+  type RouteDestSpread,
   type RouteEndpoint,
   type RouteGroupRule,
   type RoutePath,
@@ -76,6 +78,8 @@ export type RouteLine = {
   weight: number;
   /** 健康检查探哪：空 = 探路径的拨号地址；直连落地是用户态转发时填一个能反映整条链的地址。 */
   probe?: RouteEndpoint | null;
+  /** 多落地怎么用（2.3.501）：主备（默认）或者这条线路在用时一起分，见 ROUTE_DEST_SPREADS。 */
+  destSpread?: RouteDestSpread;
 };
 
 export const MAX_ROUTE_LINES = MAX_ROUTE_PATHS;
@@ -131,6 +135,7 @@ function sanitizeLine(raw: any, index: number): RouteLine | null {
     : [];
   const weight = Math.min(100, Math.max(1, Math.floor(Number(raw.weight)) || 50));
   const probe = endpointOf(raw.probe);
+  const destSpread = normalizeRouteDestSpread(raw.destSpread);
   return {
     key: KEY_PATTERN.test(key) ? key : `l${index + 1}`,
     name: String(raw.name ?? "").trim().slice(0, 40),
@@ -139,6 +144,7 @@ function sanitizeLine(raw: any, index: number): RouteLine | null {
     dests,
     weight,
     ...(probe ? { probe } : {}),
+    ...(destSpread !== "one" ? { destSpread } : {}),
   };
 }
 
@@ -178,6 +184,7 @@ export function serializeRouteLines(lines: RouteLine[] | null | undefined): stri
     dests: line.dests.map((item) => ({ dest: item.dest, ...(item.destNodeId ? { destNodeId: item.destNodeId } : {}) })),
     weight: line.weight,
     ...(line.probe ? { probe: line.probe } : {}),
+    ...(line.destSpread && line.destSpread !== "one" ? { destSpread: line.destSpread } : {}),
   })));
 }
 
@@ -219,6 +226,7 @@ export function routeLinesFromPaths(paths: RoutePath[]): RouteLine[] {
       dests: dests.length === 1 && !dests[0].dest && !dests[0].destNodeId ? [] : dests,
       weight: first.weight,
       ...(first.probe ? { probe: first.probe } : {}),
+      ...(first.destSpread ? { destSpread: first.destSpread } : {}),
     };
   });
 }
@@ -505,6 +513,7 @@ export function expandRouteLines(lines: RouteLine[], ctx: RouteExpandContext, li
         tier: lineIndex,
         ...(line.paused ? { paused: true } : {}),
         lineKey: line.key,
+        ...(line.destSpread && line.destSpread !== "one" ? { destSpread: line.destSpread } : {}),
       });
     });
   });

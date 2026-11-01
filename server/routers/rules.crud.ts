@@ -17,6 +17,7 @@ import { normalizeExitGroupStrategy } from "@shared/exitStrategy";
 import {
   MAX_ROUTE_HOPS,
   MAX_ROUTE_PATHS,
+  ROUTE_DEST_SPREADS,
   ROUTE_GUARD_LIMITS,
   ROUTE_MODES,
   ROUTE_SPREADS,
@@ -190,6 +191,8 @@ const routePathInputSchema = z.object({
   tier: z.number().int().min(0).max(MAX_ROUTE_PATHS).nullable().optional(),
   paused: z.boolean().optional(),
   lineKey: z.string().max(32).nullable().optional(),
+  /** 这条路径所在线路的「几个落地怎么用」（服务端展开时填，2.3.501）。 */
+  destSpread: z.enum(["least_load", "round_robin", "random", "ip_hash"]).nullable().optional(),
 });
 
 /** 线路（shared/routeLines.ts）：每条几层候选。结构在 parseRouteLines 里再校验一遍，这里只挡大小。 */
@@ -207,6 +210,10 @@ const routeLineInputSchema = z.object({
   })).max(MAX_ROUTE_HOPS),
   dests: z.array(z.object({ dest: routeEndpointInputSchema.nullable().optional(), destNodeId: z.number().int().positive().nullable().optional() })).max(8).optional(),
   weight: z.number().int().min(ROUTE_GUARD_LIMITS.weight.min).max(ROUTE_GUARD_LIMITS.weight.max).optional(),
+  /** 线路上填的探测地址：展开给它的每条路径（以前这里没有这一项，填了保存时被丢掉）。 */
+  probe: routeEndpointInputSchema.nullable().optional(),
+  /** 几个落地怎么用（2.3.501）：挑一个 / 按负载分 / 轮流 / 随机 / 按访客固定。 */
+  destSpread: z.enum(ROUTE_DEST_SPREADS).optional(),
 });
 
 const routeGroupInputSchema = z.object({
@@ -556,6 +563,7 @@ function normalizeRouteGroupInput(input: FailoverInput, context: NormalizeFailov
         ...((raw as any).tier !== undefined && (raw as any).tier !== null ? { tier: (raw as any).tier } : {}),
         ...((raw as any).paused ? { paused: true } : {}),
         ...((raw as any).lineKey ? { lineKey: (raw as any).lineKey } : {}),
+        ...((raw as any).destSpread ? { destSpread: (raw as any).destSpread } : {}),
         dest,
         destNodeId,
         ...(destHostId ? { destHostId } : {}),
