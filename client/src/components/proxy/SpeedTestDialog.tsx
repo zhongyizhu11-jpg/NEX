@@ -1,12 +1,12 @@
 import { useMemo } from "react";
 import { toast } from "sonner";
-import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from "recharts";
+import { Area, AreaChart, CartesianGrid, ReferenceLine, ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis } from "recharts";
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { countryFlagLabel } from "@/lib/flagEmojiSupport";
 import { trpc } from "@/lib/trpc";
-import { formatSpeedMs, formatTraffic, speedServerLabel } from "./speedTestFormat";
+import { formatSpeedMs, formatTraffic, speedReach, speedServerLabel } from "./speedTestFormat";
 import { formatMbps, NODE_CHECK_ACCURATE_VERSION, NODE_CHECK_PANEL_FALLBACK_VERSION, NODE_CHECK_PHASE_LABELS, type SpeedSample, type SpeedTestResult } from "@shared/nodeCheck";
 
 /*
@@ -39,7 +39,10 @@ function formatCheckedAt(sec: number) {
   return new Date(sec * 1000).toLocaleString("zh-CN", { hour12: false, month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
-function SpeedChart({ samples }: { samples: SpeedSample[] }) {
+/**
+ * 曲线是入口往后的链路实测的；capMbps（入口机上行比链路慢时）画一条虚线：你下载时被它限住，大数字写的是它。
+ */
+function SpeedChart({ samples, capMbps }: { samples: SpeedSample[]; capMbps?: number | null }) {
   const data = samples.map((sample) => ({ t: sample.t / 1000, down: sample.down, up: sample.up }));
   const max = Math.max(1, ...samples.map((sample) => Math.max(sample.down, sample.up)));
   const yMax = max <= 10 ? 10 : max <= 100 ? 100 : max <= 500 ? 500 : max <= 1000 ? 1000 : Math.ceil(max / 1000) * 1000;
@@ -68,23 +71,31 @@ function SpeedChart({ samples }: { samples: SpeedSample[] }) {
           />
           <Area type="monotone" dataKey="down" stroke="var(--fx-accent)" strokeWidth={2} fill="url(#fxSpeedDown)" isAnimationActive={false} />
           <Area type="monotone" dataKey="up" stroke="var(--fx-healthy)" strokeWidth={2} fill="url(#fxSpeedUp)" isAnimationActive={false} />
+          {capMbps && capMbps > 0 ? <ReferenceLine y={capMbps} stroke="var(--fx-warn-text)" strokeDasharray="5 4" strokeWidth={1.5} ifOverflow="extendDomain" /> : null}
         </AreaChart>
       </ResponsiveContainer>
-      <div className="mt-1.5 flex gap-4 text-[11px] text-muted-foreground">
+      <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
         <span><i className="mr-1 inline-block h-2 w-2 rounded-full align-middle" style={{ background: "var(--fx-accent)" }} />下载</span>
         <span><i className="mr-1 inline-block h-2 w-2 rounded-full align-middle" style={{ background: "var(--fx-healthy)" }} />上传</span>
+        {capMbps && capMbps > 0 ? (
+          <span data-testid="speed-chart-cap"><i className="mr-1 inline-block h-0 w-3 border-t-[1.5px] border-dashed align-middle" style={{ borderColor: "var(--fx-warn-text)" }} />入口机上行 {formatMbps(capMbps)}</span>
+        ) : null}
       </div>
     </div>
   );
 }
 
-function ResultRow({ label, value }: { label: string; value: string }) {
+function ResultRow({ label, value, strong = false, testId }: { label: string; value: string; strong?: boolean; testId?: string }) {
   return (
-    <div className="flex min-w-0 items-center justify-between gap-3 py-2 text-[13.5px]">
-      <span className="shrink-0 text-foreground">{label}</span>
-      <span className="min-w-0 truncate text-right tabular-nums text-muted-foreground">{value}</span>
+    <div className="flex min-w-0 items-center justify-between gap-3 py-2 text-[13.5px]" data-testid={testId}>
+      <span className={strong ? "shrink-0 font-semibold text-foreground" : "shrink-0 text-foreground"}>{label}</span>
+      <span className={strong ? "min-w-0 truncate text-right font-semibold tabular-nums text-foreground" : "min-w-0 truncate text-right tabular-nums text-muted-foreground"}>{value}</span>
     </div>
   );
+}
+
+function formatDirections(down: number, up: number) {
+  return `↓ ${formatMbps(down)} · ↑ ${formatMbps(up)}`;
 }
 
 export function SpeedTestDialog({ subject, name, onOpenChange }: { subject: SpeedTestSubject | null; name: string; onOpenChange: (open: boolean) => void }) {
@@ -100,7 +111,8 @@ export function SpeedTestDialog({ subject, name, onOpenChange }: { subject: Spee
   const entryStatus = trpc.proxySubscriptions.entrySpeedTestStatus.useQuery({ entryKey }, {
     enabled: !!entryKey,
     refetchOnWindowFocus: false,
-    refetchInterval: (query) => (query.state.data?.pending ? 1000 : false),
+    // 入口机自己的网速测试排在线路前面先跑：它在跑的时候也要接着刷
+    refetchInterval: (query) => (query.state.data?.pending || query.state.data?.entryHostPending ? 1000 : false),
   });
   const invalidate = () => {
     if (hostId > 0) void utils.hosts.speedTestStatus.invalidate({ hostId });
@@ -118,14 +130,22 @@ export function SpeedTestDialog({ subject, name, onOpenChange }: { subject: Spee
   const hostOffline = (hostId > 0 && hostStatus.data && !hostStatus.data.online) || (!!entryKey && !!entryHost && !entryHost.online);
   const entryNoHost = !!entryKey && !!entryStatus.data && !entryHost;
 
+  // 订阅线路在入口机上测（2.3.502）：入口往后的链路，再按入口机自己的带宽算出你大约能跑到多少
+  const entryRole = !!entryKey && entryStatus.data?.hostRole === "entry";
+  const entryHostSpeed = entryRole ? entryStatus.data?.entryHostSpeed ?? null : null;
+  const entryHostPending = entryRole && !!entryStatus.data?.entryHostPending;
+  const reach = latest?.speed && entryHostSpeed && latest.speed.server !== "panel" ? speedReach(latest.speed, entryHostSpeed) : null;
+
   const samples = pending ? pending.samples : latest?.speed?.samples ?? [];
   const liveSample = pending && pending.samples.length > 0 ? pending.samples[pending.samples.length - 1] : null;
   const headline = pending
     ? liveSample ? formatMbps(liveSample.up > 0 ? liveSample.up : liveSample.down) : "—"
-    : latest?.speed ? formatMbps(latest.speed.downloadMbps) : "—";
+    : reach ? formatMbps(reach.downloadMbps) : latest?.speed ? formatMbps(latest.speed.downloadMbps) : "—";
   const subline = pending
-    ? `${NODE_CHECK_PHASE_LABELS[pending.phase] || "测速中"}…`
-    : latest?.speed ? `已完成 · ${formatCheckedAt(latest.checkedAt)}${latest.speed.server === "panel" ? " · 到面板的速度" : ""}` : latest?.error ? "上次失败" : "还没测过";
+    ? entryHostPending && pending.phase === "queued" ? "先测入口机自己的带宽…" : `${NODE_CHECK_PHASE_LABELS[pending.phase] || "测速中"}…`
+    : latest?.speed
+      ? `已完成 · ${formatCheckedAt(latest.checkedAt)}${latest.speed.server === "panel" ? " · 到面板的速度" : reach ? " · 你大约能跑到的下载" : ""}`
+      : latest?.error ? "上次失败" : "还没测过";
 
   const exitHostLabel = useMemo(() => {
     if (hostId > 0) return hostStatus.data ? `${countryFlagLabel(hostStatus.data.countryCode) || ""} ${hostStatus.data.hostName}`.trim() : "";
@@ -154,7 +174,7 @@ export function SpeedTestDialog({ subject, name, onOpenChange }: { subject: Spee
             <div className="fx-hd-sec-body pt-3">
               <div className="text-[38px] font-semibold leading-none tracking-tight tabular-nums" data-testid="speed-headline">{headline}</div>
               <div className="text-[13px] text-muted-foreground">{subline}</div>
-              {samples.length > 0 ? <SpeedChart samples={samples} /> : (
+              {samples.length > 0 ? <SpeedChart samples={samples} capMbps={!pending && reach?.downLimitedByEntry ? reach.downloadMbps : null} /> : (
                 <div className="flex h-[120px] items-center justify-center text-[12.5px] text-muted-foreground">—</div>
               )}
             </div>
@@ -183,14 +203,40 @@ export function SpeedTestDialog({ subject, name, onOpenChange }: { subject: Spee
           {hostUnsupported ? <p className="text-center text-[12px] text-[var(--fx-warn-text)]">Agent 需升级到 2.2.241</p> : null}
           {latest?.error && !pending ? <p className="text-center text-[12px] text-[var(--fx-down-text)]">{latest.error}</p> : null}
 
+          {entryRole && result && result.server !== "panel" ? (
+            <div className="fx-hd-sec">
+              <div className="fx-hd-sec-body gap-0 pt-0.5">
+                <div className="divide-y divide-[var(--fx-stroke-weak)]" data-testid="speed-test-reach">
+                  {reach ? <ResultRow label="你大约能跑到" value={formatDirections(reach.downloadMbps, reach.uploadMbps)} strong testId="speed-test-reach-value" /> : null}
+                  <ResultRow label="入口往后的链路" value={formatDirections(result.downloadMbps, result.uploadMbps)} />
+                  <ResultRow
+                    label="入口机自己的带宽"
+                    value={entryHostSpeed ? formatDirections(entryHostSpeed.downloadMbps, entryHostSpeed.uploadMbps) : entryHostPending ? "正在测…" : "还没测过"}
+                  />
+                </div>
+                <p className="pb-2.5 pt-1 text-[11.5px] leading-snug text-muted-foreground">
+                  {entryHostSpeed
+                    ? `你下载时数据要从入口机发给你，受它的上行限制；上传受它的下行限制（入口机 ${formatCheckedAt(entryHostSpeed.checkedAt)} 测的）。你自己的宽带不在里面。`
+                    : entryHostPending
+                      ? "入口机自己的带宽测完，这里就算出你大约能跑到多少。"
+                      : "入口机 30 天里没测过自己的带宽：再测一次时会先测它，才算得出你大约能跑到多少。"}
+                </p>
+              </div>
+            </div>
+          ) : null}
           {result ? (
             <div className="fx-hd-sec">
               <div className="fx-hd-sec-body divide-y divide-[var(--fx-stroke-weak)] gap-0 pt-0.5" data-testid="speed-test-result">
                 <ResultRow label="延迟" value={formatSpeedMs(result.latencyMs)} />
                 <ResultRow label="抖动" value={formatSpeedMs(result.jitterMs)} />
                 {result.connectMs > 0 ? <ResultRow label="建连" value={formatSpeedMs(result.connectMs)} /> : null}
-                <ResultRow label="下载" value={formatMbps(result.downloadMbps)} />
-                <ResultRow label="上传" value={formatMbps(result.uploadMbps)} />
+                {/* 在入口机上测的：下载 / 上传在上面「入口往后的链路」里 */}
+                {entryRole && result.server !== "panel" ? null : (
+                  <>
+                    <ResultRow label="下载" value={formatMbps(result.downloadMbps)} />
+                    <ResultRow label="上传" value={formatMbps(result.uploadMbps)} />
+                  </>
+                )}
                 <ResultRow label="测速点" value={speedServerLabel(result)} />
                 <ResultRow label="出口" value={[[result.city, result.country].filter(Boolean).join(", "), result.clientIp].filter(Boolean).join(" · ") || "—"} />
                 <ResultRow label="网络" value={[result.asn, result.asOrg].filter(Boolean).join(" · ") || "—"} />

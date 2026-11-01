@@ -344,6 +344,13 @@ func (m *nodeCheckExtModule) execute(d nodeCheckRunDirective, report *nodeCheckR
 			var lastWake time.Time
 			progress := func(sample speedSample) {
 				m.mu.Lock()
+				if sample.phase == "reset" {
+					// 换了一台测速点从头测：上一台画到一半的曲线不要了
+					report.Speed = nil
+					report.Phase = "latency"
+					m.mu.Unlock()
+					return
+				}
 				if sample.phase != "" {
 					report.Phase = sample.phase
 					m.mu.Unlock()
@@ -860,21 +867,25 @@ func fetchSpeedMeta(ctx context.Context, client *http.Client, target speedTarget
 	return nil
 }
 
-// runHTTPSpeedTest 对一个测速服务器跑完整一轮：元数据（Ookla 是挑测速点）→ 延迟 → 下载 → 上传。
+// runHTTPSpeedTest 对一个测速服务器跑完整一轮：元数据（Ookla 是挑测速点，测不成换下一台）→ 延迟 → 下载 → 上传。
 func runHTTPSpeedTest(ctx context.Context, dial nodeCheckDialFunc, target speedTarget, progress func(speedSample)) (*speedTestResult, error) {
 	client := speedTestClient(dial)
 	defer client.CloseIdleConnections()
-	result := &speedTestResult{Samples: []speedSample{}, Server: target.name}
 	if target.name == "ookla" {
-		picked, err := pickOoklaServer(ctx, client, target, result)
-		if err != nil {
-			return nil, err
-		}
-		target = picked
-	} else if err := fetchSpeedMeta(ctx, client, target, result); err != nil {
+		return runOoklaSpeedTest(ctx, client, target, progress)
+	}
+	result := &speedTestResult{Samples: []speedSample{}, Server: target.name}
+	if err := fetchSpeedMeta(ctx, client, target, result); err != nil {
 		return nil, err
 	}
+	if err := measureSpeed(ctx, client, target, result, progress); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
 
+// measureSpeed 对 target 量延迟、下载、上传，写进 result。
+func measureSpeed(ctx context.Context, client *http.Client, target speedTarget, result *speedTestResult, progress func(speedSample)) error {
 	// 延迟：十次极小的请求，取到首字节的时间；延迟 = 中位数，抖动 = 相邻两次差的平均。只算 2xx 的。
 	// 先发一个不算的：meta 回非 2xx 时连接可能没留下，这一下把连接重新建好，后面十次都在建好的
 	// 连接上，量的是来回一趟（以前握手那一下也算进去，抖动被它拉到几百毫秒）。
@@ -888,7 +899,7 @@ func runHTTPSpeedTest(ctx context.Context, dial nodeCheckDialFunc, target speedT
 	var lastErr error
 	for i := 0; i < speedTestLatencyN; i++ {
 		if ctx.Err() != nil {
-			return nil, ctx.Err()
+			return ctx.Err()
 		}
 		started := time.Now()
 		reqCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -908,9 +919,9 @@ func runHTTPSpeedTest(ctx context.Context, dial nodeCheckDialFunc, target speedT
 	}
 	if len(latencies) == 0 {
 		if lastErr != nil {
-			return nil, fmt.Errorf("延迟测试全部失败：%v", lastErr)
+			return fmt.Errorf("延迟测试全部失败：%v", lastErr)
 		}
-		return nil, errors.New("延迟测试全部失败")
+		return errors.New("延迟测试全部失败")
 	}
 	result.LatencyMs, result.JitterMs = summarizeLatencies(latencies)
 
@@ -941,7 +952,7 @@ func runHTTPSpeedTest(ctx context.Context, dial nodeCheckDialFunc, target speedT
 		}
 	})
 	if err != nil {
-		return nil, err
+		return err
 	}
 	result.DownloadMbps = downMbps
 	result.DownloadBytes = down.get()
@@ -960,8 +971,15 @@ func runHTTPSpeedTest(ctx context.Context, dial nodeCheckDialFunc, target speedT
 		prefix = "content1="
 	}
 	upStart := time.Since(start)
+	redirect := &uploadRedirect{}
 	upMbps, _, err := runUploadPhase(ctx, speedTestUpDuration, streams, target.uploadMaxBytes(), func(phaseCtx context.Context, size int64) (int64, error) {
-		rs, err := client.Do(target.uploadRequest(phaseCtx, &patternReader{remaining: size, prefix: prefix, sent: sent}, size))
+		req := target.uploadRequest(phaseCtx, &patternReader{remaining: size, prefix: prefix, sent: sent}, size)
+		redirect.apply(req)
+		// 测速点把上传 307 / 308 转到别处时，Go 要能重新拿到请求体才会跟过去（2.2.246 没给，Ookla 回 307 就整段失败）
+		req.GetBody = func() (io.ReadCloser, error) {
+			return io.NopCloser(&patternReader{remaining: size, prefix: prefix, sent: sent}), nil
+		}
+		rs, err := client.Do(req)
 		if err != nil {
 			return 0, err
 		}
@@ -970,6 +988,7 @@ func runHTTPSpeedTest(ctx context.Context, dial nodeCheckDialFunc, target speedT
 		if !is2xx(rs) {
 			return 0, speedStatusError(rs, target, target.uploadWhere())
 		}
+		redirect.remember(req, rs)
 		return target.confirmedUpload(body, size), nil
 	}, func(at time.Duration, mbps float64) {
 		sample := speedSample{T: (upStart + at).Milliseconds(), Up: mbps}
@@ -979,11 +998,11 @@ func runHTTPSpeedTest(ctx context.Context, dial nodeCheckDialFunc, target speedT
 		}
 	})
 	if err != nil {
-		return nil, err
+		return err
 	}
 	result.UploadMbps = upMbps
 	result.UploadBytes = sent.get()
-	return result, nil
+	return nil
 }
 
 // runSpeedPhase 起 streams 条流各自反复跑 stream（下载用；上传见 runUploadPhase）；每 speedTestSampleEvery 采一次这段时间的速率。
@@ -1076,11 +1095,7 @@ func runSpeedPhase(ctx context.Context, duration time.Duration, streams int, cou
 			if len(measured) == 0 {
 				return 0, errors.New("测速时间太短")
 			}
-			sum := 0.0
-			for _, v := range measured {
-				sum += v
-			}
-			return math.Round(sum/float64(len(measured))*10) / 10, nil
+			return speedSummary(measured), nil
 		case now := <-ticker.C:
 			total := counter.get()
 			elapsed := now.Sub(lastAt).Seconds()

@@ -2,7 +2,7 @@ import * as db from "./db";
 import { dbBool } from "./repositories/repositoryUtils";
 import { resolveAgentAdvertisedPanelUrl } from "./agentPanelUrl";
 import { findNodeHost, type ExitQualityHost } from "./exitQualityView";
-import { hostSupportsNodeCheck, nodeCheckStatus, startNodeCheck, type NodeCheckSubject } from "./ops/nodeCheck";
+import { hostSupportsNodeCheck, listSpeedTestHistory, nodeCheckStatus, pendingNodeCheckRun, startNodeCheck, type NodeCheckSubject } from "./ops/nodeCheck";
 import { singboxAssetRelayBase } from "./singboxAssets";
 import { ensureSingboxBinaryCmd } from "./singboxRuntimePlan";
 import { effectiveGithubAccelerator } from "../shared/githubAccelerator";
@@ -203,16 +203,34 @@ export function retargetOutbound(outbound: Record<string, unknown>, server: stri
   return next;
 }
 
-/** 组模板（入口组 / DNS 入口池）本身不在哪台机器上跑：挑一条成员规则，入口机在线、Agent 够新的优先。 */
-async function entryRuleOf(ruleId: number) {
+/**
+ * 组模板（转发组 / 入口组）本身不在哪台机器上跑：挑一条成员规则来测。先挑线路名字里那台（模板自己的
+ * 入口机，订阅里这条线路就叫「它 → 落地」），它测不了才挑组里别的在线、Agent 够新的成员 —— 2.3.501 以前
+ * 直接挑第一个能用的成员，「po0 → 落地」测的可能是组里另一台机器，带宽对不上。
+ * 返回挑中的规则，和（挑的不是线路名字里那台时）线路名字里那台为什么没测。
+ */
+export async function entryRuleOf(ruleId: number): Promise<{ rule: any; namedHost: any | null; namedHostSkipped: string }> {
   const rule = await db.getForwardRuleById(ruleId) as any;
-  if (!rule || !dbBool(rule.isForwardGroupTemplate)) return rule;
+  if (!rule || !dbBool(rule.isForwardGroupTemplate)) return { rule, namedHost: null, namedHostSkipped: "" };
   const children = (await db.getForwardGroupChildRulesForTemplate(Number(rule.id)) as any[])
     .filter((child) => !dbBool(child.pendingDelete) && dbBool(child.isEnabled, true));
-  for (const child of children) {
-    if (hostUsable(child.hostId ? await db.getHostById(Number(child.hostId)) : null)) return child;
+  const namedHostId = Number(rule.hostId || 0);
+  const namedHost = namedHostId > 0 ? await db.getHostById(namedHostId) : null;
+  const ordered = [
+    ...children.filter((child) => Number(child.hostId) === namedHostId),
+    ...children.filter((child) => Number(child.hostId) !== namedHostId),
+  ];
+  for (const child of ordered) {
+    const host = child.hostId ? await db.getHostById(Number(child.hostId)) : null;
+    if (!hostUsable(host)) continue;
+    const skipped = Number(child.hostId) === namedHostId || !namedHost
+      ? ""
+      : !children.some((item) => Number(item.hostId) === namedHostId)
+        ? `${namedHost.name} 不在组里`
+        : !namedHost.isOnline ? `${namedHost.name} 离线` : `${namedHost.name} 的 Agent 太旧`;
+    return { rule: child, namedHost, namedHostSkipped: skipped };
   }
-  return children[0] || rule;
+  return { rule: ordered[0] || rule, namedHost, namedHostSkipped: "" };
 }
 
 export async function planEntryCheck(userId: number, viewer: { id: number; role: string }, entryKey: string): Promise<EntryCheckPlan> {
@@ -224,9 +242,12 @@ export async function planEntryCheck(userId: number, viewer: { id: number; role:
   const routeHostIds = new Set<number>();
   let entryHost: any = null;
   let entryRule: any = null;
+  let groupNote = "";
   if (entry.kind === "relay" && entry.ruleId > 0) {
-    entryRule = await entryRuleOf(entry.ruleId);
+    const picked = await entryRuleOf(entry.ruleId);
+    entryRule = picked.rule;
     entryHost = entryRule?.hostId ? await db.getHostById(Number(entryRule.hostId)) : null;
+    if (picked.namedHostSkipped && entryHost) groupNote = `组里 ${picked.namedHostSkipped}，测的是组里的 ${entryHost.name}，带宽可能和它不一样；`;
   } else {
     const template = await db.getProxyNodeById(Number(entry.templateId));
     entryHost = template ? (await findNodeHost(template, viewer)).host : null;
@@ -250,9 +271,9 @@ export async function planEntryCheck(userId: number, viewer: { id: number; role:
         host: entryHost,
         hostRole: "entry",
         dial,
-        note: dial.via === "next-hop"
-          ? "在入口机上测：内核转发不接本机发出的连接，直接连它转去的下一跳，路和客户端连入口之后一样"
-          : "在入口机上测：连本机的入口，经中转、落地出去；不含你到入口那一段",
+        note: groupNote + (dial.via === "next-hop"
+          ? "在入口机上测：内核转发不接本机发出的连接，直接连它转去的下一跳，路和客户端连入口之后一样；入口机和你之间那一段按入口机自己的带宽算"
+          : "在入口机上测：连本机的入口，经中转、落地出去；入口机和你之间那一段按入口机自己的带宽算"),
       };
     }
     entryProblem = !entryHost ? "找不到入口机" : !entryHost.isOnline ? `入口机 ${entryHost.name} 离线` : !hostSupportsNodeCheck(entryHost) ? `入口机 ${entryHost.name} 的 Agent 太旧` : "入口规则没有可连的端口";
@@ -297,8 +318,19 @@ export async function startSpeedTestForEntry(userId: number, viewer: { id: numbe
       outbound.detour = "front";
     }
   }
+  // 在入口机上测、而入口机 30 天里没测过自己的带宽：先排一次它自己的网速测试（同一台机器上排在前面、先跑），
+  // 线路测完时两边的数都在，界面才算得出你大约能跑到多少。测过的不重测（一次要用掉速度 × 18 秒的流量）。
+  let entryHostRunId = "";
+  if (plan.hostRole === "entry" && !(await entryHostSpeedOf(Number(plan.host.id)))) {
+    try {
+      entryHostRunId = startNodeCheck(plan.host, { kind: "speed", requestedBy: viewer.id }).runId;
+    } catch {
+      // 排不上（Agent 太旧、刚离线）就只测线路
+    }
+  }
   return {
     subject: { kind: "speed", hostId: Number(plan.host.id), nodeId: 0, entryKey: input.entryKey } as NodeCheckSubject,
+    entryHostRunId,
     ...startNodeCheck(plan.host, { kind: "speed", entryKey: input.entryKey, nodeName: plan.entryName, outbound, extraOutbounds, installCmd: await singboxInstallCmd(), requestedBy: viewer.id }),
   };
 }
@@ -323,6 +355,28 @@ function cachedEntryPlan(userId: number, viewer: { id: number; role: string }, e
   return plan;
 }
 
+/** 入口机自己的带宽多久以内的还算数。 */
+const ENTRY_HOST_SPEED_MAX_AGE_SEC = 30 * 86400;
+
+/**
+ * 入口机自己的带宽：它最近一次主机网速测试（2.3.502）。线路测速是在入口机上测入口往后的整条链，你实际用的时候
+ * 数据还要在入口机和你之间走一趟 —— 你下载时入口机往外发（它的上行），你上传时入口机往里收（它的下行），
+ * 入口机只给 300M 的话，链路后面再快你也跑不过 300M。测到面板的那种不算（那是面板的带宽）。
+ */
+export async function entryHostSpeedOf(hostId: number, nowSec = Math.floor(Date.now() / 1000)) {
+  if (!(hostId > 0)) return null;
+  const rows = await listSpeedTestHistory({ hostId, nodeId: 0 }, 10).catch(() => []);
+  const row = rows.find((item) => item.result && item.result.server !== "panel" && nowSec - item.checkedAt <= ENTRY_HOST_SPEED_MAX_AGE_SEC);
+  if (!row?.result) return null;
+  return {
+    downloadMbps: row.result.downloadMbps,
+    uploadMbps: row.result.uploadMbps,
+    server: row.result.server,
+    serverName: row.result.serverName,
+    checkedAt: row.checkedAt,
+  };
+}
+
 export async function speedTestStatusForEntry(userId: number, viewer: { id: number; role: string }, entryKey: string) {
   const plan = await cachedEntryPlan(userId, viewer, entryKey);
   const status = await nodeCheckStatus({ kind: "speed", hostId: 0, nodeId: 0, entryKey });
@@ -332,6 +386,9 @@ export async function speedTestStatusForEntry(userId: number, viewer: { id: numb
     hostRole: plan.hostRole,
     dialVia: plan.dial?.via ?? null,
     note: plan.note,
+    // 在入口机上测时才有用：入口机自己的带宽（没测过、太久以前测的、只测到面板的为 null），和它是不是正在测
+    entryHostSpeed: plan.hostRole === "entry" && plan.host ? await entryHostSpeedOf(Number(plan.host.id)) : null,
+    entryHostPending: plan.hostRole === "entry" && plan.host ? !!pendingNodeCheckRun({ kind: "speed", hostId: Number(plan.host.id), nodeId: 0 }) : false,
     ...status,
   };
 }
