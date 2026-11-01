@@ -38,7 +38,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var Version = "2.2.244"
+var Version = "2.2.245"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -2651,6 +2651,13 @@ type failoverTarget struct {
 	// 「本机探测延迟 + 它」比整条链路；上报的 latencyMs 仍只是第一段。
 	// 和 Down 一样是运行时提示：不进签名、不落盘，变了也不重建代理、不清统计。
 	ExtraLatencyMs int `json:"extraLatencyMs,omitempty"`
+	// 「落地怎么分」（2.2.245，面板 2.3.501）：一次走一条线路时，选了「一起分」的那条线路上的目标带着
+	// 第几条线路（Line）、落在哪个落地（Landing：同一个落地经不同中转的几条一样）、怎么分（Spread：
+	// least_load / round_robin / random / ip_hash）。主备逻辑挑出该走的那条之后，新连接在它那条线路的
+	// 几个落地之间按 Spread 分（route_group_line_spread.go）。行为参数，进签名；不带时签名逐字不变。
+	Line    *int   `json:"line,omitempty"`
+	Landing string `json:"landing,omitempty"`
+	Spread  string `json:"spread,omitempty"`
 }
 
 // 规格是不是分层的：每一条出站都标了 Tier。缺一条就整组按不分层处理（老面板）。
@@ -12987,6 +12994,10 @@ func failoverSignature(spec failoverSpec) string {
 			// 不带 Tier 时签名和加这个字段之前逐字相同。
 			weight += "t" + strconv.Itoa(*target.Tier)
 		}
+		if target.Line != nil && target.Spread != "" {
+			// 同上：没有「落地怎么分」时签名不变。
+			weight += "l" + strconv.Itoa(*target.Line) + "/" + target.Landing + "/" + target.Spread
+		}
 		parts = append(parts, target.TargetIP, strconv.Itoa(target.TargetPort), target.ProbeIP, strconv.Itoa(target.ProbePort), weight)
 	}
 	return strings.Join(parts, "|")
@@ -13085,6 +13096,17 @@ func normalizeFailoverSpec(spec failoverSpec) failoverSpec {
 		}
 		if target.ExtraLatencyMs > failoverMaxExtraLatencyMs {
 			target.ExtraLatencyMs = failoverMaxExtraLatencyMs
+		}
+		// 「落地怎么分」三个字段一起才算数：缺线路号、分法不认识，就当没带（挑一个，老行为）。
+		target.Spread = strings.TrimSpace(target.Spread)
+		target.Landing = strings.TrimSpace(target.Landing)
+		if target.Line == nil || *target.Line < 0 || !validLineSpread(target.Spread) {
+			target.Line = nil
+			target.Landing = ""
+			target.Spread = ""
+		} else {
+			line := *target.Line
+			target.Line = &line
 		}
 		cleaned = append(cleaned, target)
 		if len(cleaned) >= 11 {
@@ -13410,6 +13432,8 @@ func (p *failoverProxy) pickTargetForKey(hashKey string, exclude map[int]bool) (
 		} else {
 			index = p.activeIndex
 		}
+		// 挑出来的这条所在线路选了「一起分」：在这条线路的几个落地之间分（2.2.245）。
+		index = p.spreadWithinLineLocked(index, hashKey, exclude)
 	}
 	return p.spec.Targets[index], index
 }
@@ -13458,6 +13482,10 @@ func (p *failoverProxy) setActiveLocked(index int, reason string) {
 		if closed := p.closeConnsLocked(old); closed > 0 {
 			logf("failover closed %d connection(s) on old target rule=%d source=%d index=%d mode=%s", closed, p.ruleID, p.sourcePort, old, p.spec.SwitchMode)
 		}
+	}
+	// 旧线路是几个落地一起分的：它别的落地上的连接按同一个切换方式处理（见 closeOldLineConnsLocked）。
+	if closed := p.closeOldLineConnsLocked(old, index); closed > 0 {
+		logf("failover closed %d connection(s) on the old line's other landings rule=%d source=%d index=%d mode=%s", closed, p.ruleID, p.sourcePort, old, p.spec.SwitchMode)
 	}
 }
 

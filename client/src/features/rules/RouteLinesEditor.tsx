@@ -17,7 +17,18 @@ import {
 } from "@/features/lines/LineUi";
 import { cn } from "@/lib/utils";
 import { formatFailoverEndpoint, parseFailoverEndpoint } from "@shared/failoverTargets";
-import { MAX_ROUTE_HOPS, MAX_ROUTE_PATHS, defaultRoutePathName, describeRouteIssue, isDefaultRouteLineName, type RoutePath } from "@shared/routeGroup";
+import {
+  MAX_ROUTE_HOPS,
+  MAX_ROUTE_PATHS,
+  ROUTE_DEST_SPREADS,
+  ROUTE_DEST_SPREAD_LABELS,
+  defaultRoutePathName,
+  describeRouteIssue,
+  isDefaultRouteLineName,
+  routePathLandingKey,
+  type RouteDestSpread,
+  type RoutePath,
+} from "@shared/routeGroup";
 import { MAX_LAYER_CANDIDATES, MAX_LINE_DESTS, expandRouteLines, newRouteLayer, newRouteLine, type RouteLayer, type RouteLine } from "@shared/routeLines";
 import { routeNodeOptionLabel } from "./routeLineOptions";
 import { segmentKey, useSegmentLatency } from "./segmentLatency";
@@ -84,6 +95,8 @@ export function RouteLinesEditor({
   startCollapsed = false,
   arrange = true,
   ruleTargetNodeId = null,
+  destSpreadAllowed = false,
+  destSpreadNote = null,
 }: {
   lines: RouteLine[];
   onChange: (lines: RouteLine[]) => void;
@@ -119,6 +132,12 @@ export function RouteLinesEditor({
   arrange?: boolean;
   /** 规则目标绑着的节点（落地池的池节点时，「规则目标」那个落地写成「池 · 名字 · N 台」）。 */
   ruleTargetNodeId?: number | null;
+  /**
+   * 有几个落地的线路能不能选「几个落地怎么用」（2.3.501）：一次走一条线路时才能（主备 / 择优 / 时段 / 指定）；
+   * 按权重、聚合时整组本来就在分，用 destSpreadNote 说一句。
+   */
+  destSpreadAllowed?: boolean;
+  destSpreadNote?: string | null;
 }) {
   const hostName = (id: number) => hosts.find((host) => host.id === id)?.name || `主机 ${id}`;
   // 打开就有数（效果图里每个候选后面的毫秒）：最近一轮探测的每一段，点 ⚡ 测出来的盖掉它。
@@ -216,12 +235,16 @@ export function RouteLinesEditor({
     parts.push(destText(line));
     return parts.join(" → ");
   };
-  /** 一行里落地怎么写：选了落地池（或者规则目标就是池）写池名，别的写「落地」。 */
+  /** 这条线路此刻展开出几个落地（并列的、落地池里开着的几台）：按预览路径数，经不同中转到同一个落地算一个。 */
+  const landingCountOf = (line: RouteLine) => new Set(previewPaths.filter((path) => path.lineKey === line.key).map(routePathLandingKey)).size;
+  const lineDestSpread = (line: RouteLine): RouteDestSpread => (destSpreadAllowed && landingCountOf(line) >= 2 ? line.destSpread || "one" : "one");
+  /** 一行里落地怎么写：选了落地池（或者规则目标就是池）写池名，别的写「落地」；几个落地一起分时带上怎么分。 */
   const destText = (line: RouteLine) => {
     const nodeId = line.dests[0]?.destNodeId || (line.dests.length === 0 ? ruleTargetNodeId : null);
     const node = nodeId ? nodeOptions.find((option) => option.id === nodeId) : null;
+    const spread = lineDestSpread(line);
     // 并列了几个落地：和中转一样写「等 N 个」
-    return `${node?.landingPool ? node.name : "落地"}${line.dests.length > 1 ? ` 等 ${line.dests.length} 个` : ""}`;
+    return `${node?.landingPool ? node.name : "落地"}${line.dests.length > 1 ? ` 等 ${line.dests.length} 个` : ""}${spread !== "one" ? ` · ${ROUTE_DEST_SPREAD_LABELS[spread].label}` : ""}`;
   };
 
   const testButton = (line: RouteLine, lineIndex: number) => (
@@ -510,6 +533,11 @@ export function RouteLinesEditor({
             ruleTargetNodeId={ruleTargetNodeId}
             latency={latencyOf(segmentKey(previousHost, "dest"))}
             onChange={(dests) => setLine(lineIndex, { dests })}
+            landingCount={landingCountOf(line)}
+            spread={lineDestSpread(line)}
+            spreadAllowed={destSpreadAllowed}
+            spreadNote={destSpreadNote}
+            onSpreadChange={(destSpread) => setLine(lineIndex, { destSpread })}
           />
         ))}
       </div>
@@ -682,7 +710,21 @@ function LineNameInput({ name, lineIndex, onChange }: { name: string; lineIndex:
   );
 }
 
-function DestEditor({ line, mainAddress, nodeOptions, pools = [], hostName = (id) => `主机 ${id}`, ruleTargetNodeId = null, latency, onChange }: {
+function DestEditor({
+  line,
+  mainAddress,
+  nodeOptions,
+  pools = [],
+  hostName = (id) => `主机 ${id}`,
+  ruleTargetNodeId = null,
+  latency,
+  onChange,
+  landingCount = 1,
+  spread = "one",
+  spreadAllowed = false,
+  spreadNote = null,
+  onSpreadChange = () => {},
+}: {
   line: RouteLine;
   mainAddress: string;
   nodeOptions: RouteLineNode[];
@@ -692,6 +734,12 @@ function DestEditor({ line, mainAddress, nodeOptions, pools = [], hostName = (id
   hostName?: (hostId: number) => string;
   latency: number | null | undefined;
   onChange: (dests: RouteLine["dests"]) => void;
+  /** 这条线路展开出几个落地（并列的、落地池里开着的几台）。 */
+  landingCount?: number;
+  spread?: RouteDestSpread;
+  spreadAllowed?: boolean;
+  spreadNote?: string | null;
+  onSpreadChange?: (spread: RouteDestSpread) => void;
 }) {
   /*
     加落地两种：「换落地」把规则目标换掉；「+ 并列」留着现在的（包括规则目标）再并列一个，几个里挑最快的。
@@ -774,7 +822,7 @@ function DestEditor({ line, mainAddress, nodeOptions, pools = [], hostName = (id
                   return (
                     <>
                       <DropdownMenuLabel className="text-[11px] font-normal text-muted-foreground" data-testid="route-line-dest-pool-members">
-                        {members.length > 0 ? `在这 ${members.length} 台里分：${members.map(hostName).join("、")}` : "池里还没有开着的机器"}
+                        {members.length > 0 ? `在这 ${members.length} 台里${spread === "one" && spreadAllowed ? "挑" : "分"}：${members.map(hostName).join("、")}` : "池里还没有开着的机器"}
                       </DropdownMenuLabel>
                       <DropdownMenuSeparator />
                     </>
@@ -803,12 +851,47 @@ function DestEditor({ line, mainAddress, nodeOptions, pools = [], hostName = (id
         {dests.length < MAX_LINE_DESTS ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <LineChipButton variant="add" data-testid="route-line-dest-parallel" title="现在这个落地留着，再并列一个：几个里挑最快的">+ 并列</LineChipButton>
+              <LineChipButton variant="add" data-testid="route-line-dest-parallel" title="现在这个落地留着，再并列一个；几个落地怎么用在下面选">+ 并列</LineChipButton>
             </DropdownMenuTrigger>
             {menu("append")}
           </DropdownMenu>
         ) : null}
       </div>
+      {/*
+        几个落地怎么用（2.3.501）：和中转那一跳的「最低延迟 / 按顺序」同一个样子。挑一个 = 以前的样子；
+        别的几种是这条线路在用时，新连接在这几个落地之间分（Agent 2.2.245 起）。
+      */}
+      {landingCount >= 2 && spreadAllowed ? (
+        <div className="mt-[4px] flex min-w-0 flex-wrap items-center gap-[10px]">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 rounded-[8px] border border-[var(--fx-stroke-weak)] bg-[var(--fx-l1-surface)] px-2 py-[3px] text-[11.5px] leading-[1.3] text-foreground"
+                aria-label="几个落地怎么用"
+                title={ROUTE_DEST_SPREAD_LABELS[spread].hint}
+                data-testid="route-line-dest-spread"
+              >
+                <span className="text-muted-foreground">{landingCount} 个落地：</span>
+                {ROUTE_DEST_SPREAD_LABELS[spread].label}
+                <ChevronDown className="h-3 w-3 text-muted-foreground" aria-hidden="true" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-64">
+              {ROUTE_DEST_SPREADS.map((value) => (
+                <DropdownMenuItem key={value} onSelect={() => onSpreadChange(value)} data-testid={`route-line-dest-spread-${value}`}>
+                  <span className="flex min-w-0 flex-col">
+                    <span className={cn("text-[12.5px]", value === spread && "font-semibold text-[var(--fx-accent)]")}>{ROUTE_DEST_SPREAD_LABELS[value].label}</span>
+                    <span className="text-[11px] leading-[1.4] text-muted-foreground">{ROUTE_DEST_SPREAD_LABELS[value].hint}</span>
+                  </span>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      ) : landingCount >= 2 && spreadNote ? (
+        <p className="text-[11.5px] leading-[1.45] text-muted-foreground" data-testid="route-line-dest-spread-note">{spreadNote}</p>
+      ) : null}
       {typing ? (
         <Input
           autoFocus

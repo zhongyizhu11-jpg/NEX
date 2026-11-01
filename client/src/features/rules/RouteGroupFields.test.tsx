@@ -12,7 +12,7 @@ import {
   type RouteMode,
 } from "@shared/routeGroup";
 import { describeRoutePolicy } from "@shared/routePolicy";
-import { newRouteLine, routeLinesFromPaths } from "@shared/routeLines";
+import { expandRouteLines, newRouteLine, routeLinesFromPaths, type RouteLine } from "@shared/routeLines";
 import { RouteGroupFields, followRoutePath, lineModeHint, routeGroupPayload, routePathIndexFor, summarizeRouteAdvanced, type RouteGroupDraft } from "./RouteGroupFields";
 import { SegmentLatencyContext, type SegmentLatencyHook } from "./segmentLatency";
 
@@ -407,4 +407,33 @@ test("落地并列了两个（规则目标 + 一个地址）：收起那一行�
   lines[0] = { ...lines[0], dests: [{ dest: null, destNodeId: null }, { dest: { ip: "198.51.100.7", port: 443 }, destNodeId: null }] };
   const html = render({ ...draft, lines }, false);
   assert.match(html, /HK entry 01 → JP relay 02 → 落地 等 2 个/);
+});
+
+/** 编辑框里线路和路径总是一起变的（改线路就重新展开）：测试里也这样，别让路径落后于线路。 */
+function withLines(draft: RouteGroupDraft, lines: RouteLine[]): RouteGroupDraft {
+  const { paths } = expandRouteLines(lines, { entryHostId: 1, poolMembers: () => null, hostUsable: () => true, tunnel: () => null });
+  return { ...draft, lines, paths };
+}
+
+test("几个落地怎么用（2.3.501）：线路有两个以上落地、一次走一条线路时，落地下面有「N 个落地：挑一个」；选了一起分，收起那一行带上", () => {
+  const draft = group("failover");
+  const lines = routeLinesFromPaths(draft.paths);
+  lines[0] = { ...lines[0], dests: [{ dest: null, destNodeId: null }, { dest: { ip: "198.51.100.7", port: 443 }, destNodeId: null }] };
+  const html = render(withLines(draft, lines), false);
+  assert.match(html, /data-testid="route-line-dest-spread"[^>]*>[^]*?2 个落地：[^]*?挑一个/, "默认挑一个");
+  const spreading = render(withLines(draft, [{ ...lines[0], destSpread: "least_load" }, ...lines.slice(1)]), false);
+  assert.match(spreading, /data-testid="route-line-dest-spread"[^>]*>[^]*?按负载分/);
+  assert.match(spreading, /HK entry 01 → JP relay 02 → 落地 等 2 个 · 按负载分/, "收起那一行写上怎么分");
+  // 只有一个落地的线路没有这个选择
+  assert.equal(count(render(group("failover"), false), /data-testid="route-line-dest-spread"/g), 0);
+});
+
+test("按权重、聚合时整组本来就在分：不给选，落地下面说一句", () => {
+  const draft = group("weighted");
+  const lines = routeLinesFromPaths(draft.paths);
+  lines[0] = { ...lines[0], dests: [{ dest: null, destNodeId: null }, { dest: { ip: "198.51.100.7", port: 443 }, destNodeId: null }], destSpread: "least_load" };
+  const html = render(withLines(draft, lines), false);
+  assert.doesNotMatch(html, /data-testid="route-line-dest-spread"/);
+  assert.match(html, /data-testid="route-line-dest-spread-note"[^>]*>按权重：几个落地已经按下面「新连接怎么分」一起分/);
+  assert.doesNotMatch(html, /· 按负载分/, "存着的一起分这时不生效，行上也不写");
 });

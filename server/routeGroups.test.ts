@@ -37,6 +37,9 @@ type Outcome = {
   groupTemplate: any;
   retired: number;
   eventsAfterDelete: number;
+  spreadOld: any;
+  spreadNew: any;
+  savedLines: any;
 };
 
 function run(): Outcome {
@@ -215,6 +218,57 @@ function run(): Outcome {
       },
     }, "tcp", { allowHops: false, targetIp: "198.51.100.7", targetPort: 443 });
 
+    /*
+      「几个落地怎么用」（2.3.501）：另一台入口上的规则，主线路三个落地选了按访客固定，备用经东京中转。
+      入口 Agent 2.2.245 起，下发的每条目标带上第几条线路、落地是哪一个、怎么分；更老的 Agent 不带。
+    */
+    await exec(
+      'INSERT INTO hosts (id, name, ip, ipv4, "hostType", "agentToken", "userId", "isOnline", "lastHeartbeat") VALUES (5, ?, ?, ?, ?, ?, 1, 1, ?)',
+      ["多落地入口", "203.0.113.5", "203.0.113.5", "slave", "tok5", Math.floor(Date.now() / 1000)],
+    );
+    const lineKit = await import(url("shared/routeLines.ts"));
+    const groupKit = await import(url("shared/routeGroup.ts"));
+    const spreadLines = lineKit.parseRouteLines(JSON.stringify([
+      { key: "main", name: "主线路", layers: [], dests: [{ dest: null }, { dest: { ip: "198.51.100.21", port: 443 } }, { dest: { ip: "198.51.100.22", port: 443 } }], weight: 50, destSpread: "ip_hash" },
+      { key: "bk", name: "备用 1", layers: [{ kind: "hosts", hostIds: [2], pick: "best" }], dests: [], weight: 50 },
+    ]));
+    const spreadPaths = lineKit.expandRouteLines(spreadLines, { entryHostId: 5, poolMembers: () => null, hostUsable: () => true, tunnel: () => null }).paths;
+    await exec(
+      'INSERT INTO forward_rules (id, "hostId", name, "forwardType", protocol, "sourcePort", "targetIp", "targetPort", "userId", "isEnabled",'
+        + ' "failoverEnabled", "failoverStrategy", "failoverTargets", "failoverSeconds", "recoverSeconds", "autoFailback",'
+        + ' "routeMode", "routePaths", "routeLines", "routeSwitchMode", "telegramErrorNotifyEnabled")'
+        + ' VALUES (900, 5, ?, ?, ?, ?, ?, ?, 1, 1, 1, ?, ?, 10, 300, 1, ?, ?, ?, ?, 0)',
+      ["多落地", "gost", "tcp", 20002, "198.51.100.20", 443, "fallback", "[]", "smart", groupKit.serializeRoutePaths(spreadPaths), lineKit.serializeRouteLines(spreadLines), "smooth"],
+    );
+    await routeGroups.syncRouteRelayRulesForRule(900, { reason: "test-spread" });
+    const spreadBeat = (agentVersion) => post("/api/agent/heartbeat", "tok5", { agentVersion, uptime: 1000, cpuUsage: 1, memoryUsage: 1, diskUsage: 1, forceReconcile: true });
+    // 规格变了才随心跳重发：老版本的第一跳就拿到；换成新版本后，规格带上新字段的那一跳拿到。
+    const spreadOld = specOf(await spreadBeat("2.2.244"));
+    const spreadNewFirst = specOf(await spreadBeat("2.2.245"));
+    const spreadNew = spreadNewFirst || specOf(await spreadBeat("2.2.245"));
+
+    /*
+      保存那一层（编辑框按线路提交）：线路上的探测地址、「几个落地怎么用」都要落到 routeLines 和展开的
+      每条路径上 —— 以前线路的探测地址在这一步被丢掉（2.3.501 修）。
+    */
+    const expansion = await import(url("server/routeLineExpansion.ts"));
+    const expandedInput = await expansion.expandRouteGroupInputLines({
+      failoverEnabled: true,
+      routeGroup: {
+        mode: "smart",
+        paths: [],
+        lines: [
+          { key: "main", name: "主线路", layers: [], dests: [{ dest: null }, { dest: { ip: "198.51.100.31", port: 443 } }], weight: 50, destSpread: "least_load", probe: { ip: "198.51.100.99", port: 8443 } },
+          { key: "bk", name: "备用 1", layers: [{ kind: "hosts", hostIds: [2], pick: "best" }], dests: [], weight: 50 },
+        ],
+      },
+    }, { id: 1, role: "admin" }, 1, null);
+    const savedGroup = crud.normalizeFailoverInput(expandedInput, "tcp", { entryHostId: 1, targetIp: "198.51.100.7", targetPort: 443 });
+    const savedLines = {
+      lines: JSON.parse(savedGroup.routeLines).map((line) => [line.key, line.destSpread || null, line.probe || null]),
+      paths: JSON.parse(savedGroup.routePaths).map((path) => [path.lineKey, path.destSpread || null, path.probe || null]),
+    };
+
     const retiredResult = await routeGroups.retireRouteRelayRulesForRule(1, { reason: "test-delete" });
     const eventsAfterDelete = Number((await query('SELECT COUNT(*) AS n FROM forward_rule_route_events WHERE "ruleId" = 1'))[0].n);
     server.close();
@@ -238,6 +292,9 @@ function run(): Outcome {
       groupTemplate: { routeMode: groupTemplate.routeMode, routePaths: groupTemplate.routePaths, failoverTargets: groupTemplate.failoverTargets },
       retired: retiredResult.retired,
       eventsAfterDelete,
+      spreadOld,
+      spreadNew,
+      savedLines,
     }));
   `;
   const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
@@ -370,4 +427,24 @@ test("转发组模板上的线路组也保存成路径；routeGroup 不当成列
     3,
     "三条保存路径都要把 routeGroup 从要写库的字段里摘出来",
   );
+});
+
+test("几个落地一起分（2.3.501）：入口 Agent 2.2.245 起，主线路的每条目标带线路、落地、分法；备用和老 Agent 不带", () => {
+  const fields = (spec: any) => (spec?.targets || []).map((target: any) => [target.line ?? null, target.landing ?? null, target.spread ?? null]);
+  assert.ok(outcome.spreadNew, "新 Agent 应当拿到这条规则的调度规格");
+  assert.equal(outcome.spreadNew.strategy, "fallback", "整链最优照旧是主备那一路，Agent 挑出线路再在里面分");
+  assert.deepEqual(fields(outcome.spreadNew), [
+    [0, "target", "ip_hash"],
+    [0, "198.51.100.21:443", "ip_hash"],
+    [0, "198.51.100.22:443", "ip_hash"],
+    [null, null, null],
+  ]);
+  assert.ok(outcome.spreadOld, "老 Agent 照样拿到规格");
+  assert.deepEqual(fields(outcome.spreadOld), [[null, null, null], [null, null, null], [null, null, null], [null, null, null]], "老 Agent 不带这几个字段，它只用一个落地");
+});
+
+test("按线路保存：线路上的探测地址、「几个落地怎么用」落到 routeLines 和展开的每条路径上（以前探测地址被丢掉）", () => {
+  const probe = { ip: "198.51.100.99", port: 8443 };
+  assert.deepEqual(outcome.savedLines.lines, [["main", "least_load", probe], ["bk", null, null]]);
+  assert.deepEqual(outcome.savedLines.paths, [["main", "least_load", probe], ["main", "least_load", probe], ["bk", null, null]]);
 });

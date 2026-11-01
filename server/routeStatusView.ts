@@ -19,7 +19,7 @@ import { summarizeRouteSwitches, type RouteSwitchSummary } from "../shared/route
 import { isAgentVersionBehind } from "../shared/version";
 import { getRouteStatus, routeHopDownHints, routeHopSuccessPct, routeNodeHints, routePathDownstreamMs, routeTrippedNodeIds } from "./routeGroupStats";
 import { ensureRouteNodeHealthFresh, getRouteNodeStatus } from "./routeNodeHealth";
-import { ROUTE_LINES_AGENT_VERSION, normalizeRouteDelivery } from "../shared/routeGroup";
+import { ROUTE_DEST_SPREAD_AGENT_VERSION, ROUTE_LINES_AGENT_VERSION, normalizeRouteDelivery, routeAgentStrategy } from "../shared/routeGroup";
 import { routeLinesOf, ROUTE_ENTRY_RELAY_INDEX } from "../shared/routeLines";
 import { routeRelayRulesByKey } from "./routeGroups";
 import { routeSchedulerHostIds } from "./routers/rules.crud";
@@ -240,6 +240,22 @@ export async function buildRouteStatus(rule: any) {
     };
   });
   const agentVersion = oldestAgentVersion(schedulerHosts.map((schedulerHost) => String(schedulerHost?.agentVersion || "").trim()));
+  /*
+    「落地怎么分」（2.3.501）：在用的那条线路选了一起分、调度的 Agent 够新时，这条线路上能用的几个落地都在走，
+    不只是 Agent 报的那一条 —— 图上、行上都按「在走」画。
+  */
+  const deliveryNow = normalizeRouteDelivery(policy.delivery);
+  const activePath = activeIndex >= 0 ? paths[activeIndex] : null;
+  if (
+    activePath?.destSpread && typeof activePath.tier === "number"
+    && routeAgentStrategy(policy) === "fallback" && deliveryNow !== "aggregate" && deliveryNow !== "replicate"
+    && !!agentVersion && !isAgentVersionBehind(agentVersion, ROUTE_DEST_SPREAD_AGENT_VERSION)
+  ) {
+    for (const row of rows) {
+      const path = paths[row.index];
+      if (path.tier === activePath.tier && path.destSpread && !row.down && !row.paused && row.healthy !== false) row.active = true;
+    }
+  }
   /*
     UDP、TCP+UDP 和 NEX 隧道的线路组要 Agent 2.2.199 起才调度；更老的时候面板不下发
     调度，流量走路径 A、不切换（server/agentHeartbeatRoute.ts 的 routePrimaryEndpoint）。

@@ -12,13 +12,16 @@ import { cn } from "@/lib/utils";
 import { formatAgo } from "@shared/dashboardAttention";
 import type { NetworkHealth } from "@shared/networkHealth";
 import {
+  ROUTE_DEST_SPREAD_LABELS,
   ROUTE_EVENT_KIND_LABELS,
   ROUTE_GROUP_FORWARDX_AGENT_VERSION,
   ROUTE_GROUP_UDP_AGENT_VERSION,
   ROUTE_MODE_INFO,
   normalizeRouteEventKind,
+  routeLineName,
   routeModeHint,
   routePathLetter,
+  type RouteDestSpread,
   type RouteEndpoint,
   type RouteGroupPolicy,
 } from "@shared/routeGroup";
@@ -139,7 +142,7 @@ export type RouteStatus = {
   /** cold / hot / aggregate / replicate */
   delivery?: string;
   /** 线路定义（分层候选）。 */
-  lines?: Array<{ key: string; name: string; paused: boolean; layers: unknown[]; dests: unknown[]; weight: number }>;
+  lines?: Array<{ key: string; name: string; paused: boolean; layers: unknown[]; dests: unknown[]; weight: number; destSpread?: RouteDestSpread }>;
   /** 调度这条线路组的 Agent 会不会按「主线路那组先挑」（2.2.243 起）。 */
   agentSupportsLines?: boolean;
   /** 最近 10 分钟客户端连进来：拨通了一条路径的 / 一条都没拨通的。 */
@@ -258,6 +261,21 @@ export function RouteGroupPanel({ policy, status, events, nowMs, timeZone, showP
           footer={weighted ? undefined : "从上往下，先对上的那一条说了算。它指的那条挂了，照样往下找 —— 选路和健康检查是两件事。"}
         >
           <SentenceRow label="策略" detail={`${modeInfo.template} · ${modeInfo.label}：${routeModeHint(policy.mode, policy.perSession)}`} />
+          {(() => {
+            // 「落地怎么分」（2.3.501）：一次走一条线路时，选了几个落地一起分的线路在这里说一句
+            const delivery = status?.delivery;
+            if (weighted || delivery === "aggregate" || delivery === "replicate") return null;
+            const spreading = (status?.lines || [])
+              .map((line, index) => ({ line, index }))
+              .filter(({ line }) => !!line.destSpread && line.destSpread !== "one");
+            if (spreading.length === 0) return null;
+            return (
+              <SentenceRow
+                label="几个落地"
+                detail={`${spreading.map(({ line, index }) => `${routeLineName(line.name, index)} ${ROUTE_DEST_SPREAD_LABELS[line.destSpread || "one"].label}`).join("；")}：这条线路在用时，新连接在它的几个落地之间分`}
+              />
+            );
+          })()}
           {policy.conditions.map((condition) => <ConditionRow key={condition.key} condition={condition} />)}
           {policy.guards.map((guard) => (
             <SentenceRow key={guard.key} label={guard.label} detail={guard.value} />
