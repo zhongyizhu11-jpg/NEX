@@ -59,9 +59,9 @@ const planInput = z.object({
     durationDays: z.number().int().min(1).max(3650),
     priceCents: z.number().int().min(0).max(100_000_000),
   })).max(PLAN_PRICE_TIER_LIMIT).default([]),
-  hostIds: z.array(z.number().int().positive()).default([]),
-  tunnelIds: z.array(z.number().int().positive()).default([]),
-  forwardGroupIds: z.array(z.number().int().positive()).default([]),
+  hostIds: z.array(z.number().int().positive()).max(50_000).default([]),
+  tunnelIds: z.array(z.number().int().positive()).max(50_000).default([]),
+  forwardGroupIds: z.array(z.number().int().positive()).max(50_000).default([]),
   /**
    * 套餐附带的落地节点。买了（或被分配）自动在这些节点上发一份独立凭据，
    * 到期、取消、换套餐自动收回 —— 不必每来一个客户手工分一次。
@@ -288,7 +288,7 @@ export const plansRouter = router({
     .input(z.object({
       id: z.number().int().positive(),
       days: z.number().int().min(1).max(3650).optional(),
-      expiresAt: z.string().nullable().optional(),
+      expiresAt: z.string().max(64).nullable().optional(),
     }))
     .mutation(async ({ input, ctx }) => {
       const hasExpiresAtInput = Object.prototype.hasOwnProperty.call(input, "expiresAt");

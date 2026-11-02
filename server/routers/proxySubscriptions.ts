@@ -186,6 +186,15 @@ async function adoptRulesForNewProxyNode(
   }
 }
 
+/**
+ * 作用域 / 外观选项：字段由 normalizeProxySubTokenScope / normalizeProxySubTokenOptions 逐个收拾（未知字段丢掉、
+ * 文本截断），这里只挡住不是对象的、和大得离谱的（正常的连自定义规则写满也就十几 KB）。
+ */
+const tokenJsonObject = z.record(z.string().max(64), z.unknown())
+  .refine((value) => JSON.stringify(value).length <= 64 * 1024, "内容太长")
+  .nullable()
+  .optional();
+
 /** 令牌上可以改的新东西：作用域、外观选项、别名、备注、到期、设备数、模板。create / update 共用。 */
 const tokenExtraInput = {
   alias: z.string().trim().max(32).nullable().optional(),
@@ -194,8 +203,8 @@ const tokenExtraInput = {
   expiresAt: z.string().max(64).nullable().optional(),
   maxDevices: z.number().int().min(0).max(1000).optional(),
   templateId: z.number().int().min(0).optional(),
-  scope: z.any().optional(),
-  options: z.any().optional(),
+  scope: tokenJsonObject,
+  options: tokenJsonObject,
 };
 
 async function normalizeTokenExtra(input: Record<string, any>, exceptTokenId: number): Promise<Record<string, unknown>> {

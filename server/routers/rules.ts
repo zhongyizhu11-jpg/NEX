@@ -422,7 +422,7 @@ export const rulesRouter = router({
   reorder: protectedProcedure
     .input(z.object({
       category: z.enum(["local", "tunnel", "chain", "group"]),
-      ids: z.array(z.number().int().positive()).min(1),
+      ids: z.array(z.number().int().positive()).min(1).max(50_000),
       startIndex: z.number().int().min(0).max(1_000_000).optional().default(0),
     }))
     .mutation(async ({ input, ctx }) => {

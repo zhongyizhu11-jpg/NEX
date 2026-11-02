@@ -57,7 +57,7 @@ export const usersRouter = router({
     create: adminProcedure
       .input(z.object({
         username: z.string().min(1).max(64),
-        password: z.string().min(6),
+        password: z.string().min(6).max(1024),
         name: z.string().trim().max(DISPLAY_NAME_MAX_LENGTH).optional(),
         email: z.string().email().optional(),
         canAddRules: z.boolean().default(false),
@@ -223,7 +223,7 @@ export const usersRouter = router({
       }),
     /** 设置某用户的主机权限（全量替换） */
     setHostPermissions: adminProcedure
-      .input(z.object({ userId: z.number(), hostIds: z.array(z.number()) }))
+      .input(z.object({ userId: z.number(), hostIds: z.array(z.number()).max(50_000) }))
       .mutation(async ({ input, ctx }) => {
         await withKeyedTaskLock(`user-resource-permissions:${input.userId}`, async () => {
           await db.setUserHostPermissions(input.userId, input.hostIds);
@@ -252,7 +252,7 @@ export const usersRouter = router({
         return db.getProxyNodeShareSelectionForUser(input.userId);
       }),
     setProxyNodeShares: adminProcedure
-      .input(z.object({ userId: z.number(), nodeIds: z.array(z.number()) }))
+      .input(z.object({ userId: z.number(), nodeIds: z.array(z.number()).max(50_000) }))
       .mutation(async ({ input, ctx }) => {
         const target = await db.getUserById(input.userId);
         const label = String((target as any)?.username || (target as any)?.name || "").trim();
@@ -286,7 +286,7 @@ export const usersRouter = router({
         return db.getUserManualAllowedForwardGroupIds(input.userId);
       }),
     setForwardGroupPermissions: adminProcedure
-      .input(z.object({ userId: z.number(), forwardGroupIds: z.array(z.number()) }))
+      .input(z.object({ userId: z.number(), forwardGroupIds: z.array(z.number()).max(50_000) }))
       .mutation(async ({ input, ctx }) => {
         await withKeyedTaskLock(`user-resource-permissions:${input.userId}`, async () => {
           await db.setUserForwardGroupPermissions(input.userId, input.forwardGroupIds);
@@ -308,9 +308,9 @@ export const usersRouter = router({
     setTrafficBillingPermissions: adminProcedure
       .input(z.object({
         userId: z.number(),
-        hostIds: z.array(z.number()),
-        tunnelIds: z.array(z.number()),
-        forwardGroupIds: z.array(z.number()).optional().default([]),
+        hostIds: z.array(z.number()).max(50_000),
+        tunnelIds: z.array(z.number()).max(50_000),
+        forwardGroupIds: z.array(z.number()).max(50_000).optional().default([]),
       }))
       .mutation(async ({ input, ctx }) => {
         const recovery = await withKeyedTaskLock(`user-resource-permissions:${input.userId}`, async () => {
@@ -333,7 +333,7 @@ export const usersRouter = router({
         return db.getUserAllowedTunnelIds(input.userId);
       }),
     setTunnelPermissions: adminProcedure
-      .input(z.object({ userId: z.number(), tunnelIds: z.array(z.number()) }))
+      .input(z.object({ userId: z.number(), tunnelIds: z.array(z.number()).max(50_000) }))
       .mutation(async ({ input, ctx }) => {
         await withKeyedTaskLock(`user-resource-permissions:${input.userId}`, async () => {
           await db.setUserTunnelPermissions(input.userId, input.tunnelIds);
@@ -392,7 +392,7 @@ export const usersRouter = router({
         /** 突发：峰值 Mbps 和能按峰值跑多少秒，0 = 不开（见 shared/forwardRateLimit.ts）。 */
         forwardBurstMbps: z.number().int().min(0).max(1_000_000).optional(),
         forwardBurstSeconds: z.number().int().min(0).max(3600).optional(),
-        expiresAt: z.string().nullable().optional(), // ISO date string or null
+        expiresAt: z.string().max(64).nullable().optional(), // ISO date string or null
         trafficAutoReset: z.boolean().optional(),
         trafficResetDay: z.number().int().min(1).max(31).optional(),
         canAddRules: z.boolean().optional(),
@@ -410,7 +410,7 @@ export const usersRouter = router({
         maxConnections: z.number().int().min(0).max(INT32_MAX).optional(),
         maxIPs: z.number().int().min(0).max(INT32_MAX).optional(),
         // 逗号分隔的转发方式列表；null 为全部允许
-        allowedForwardTypes: z.string().nullable().optional(),
+        allowedForwardTypes: z.string().max(2048).nullable().optional(),
         allowForwardXTunnel: z.boolean().optional(),
         allowProxySubscription: z.boolean().optional(),
       }))
