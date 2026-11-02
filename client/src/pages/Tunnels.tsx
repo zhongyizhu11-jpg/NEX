@@ -76,8 +76,7 @@ import {
 } from "@/components/ui/select";
 import { OptimisticSwitch, Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
-import { type SlidingTabItem } from "@/components/ui/sliding-tabs";
-import { LinkSectionTabs, type LinkSectionGroup } from "@/features/links/LinkSectionTabs";
+import { SlidingTabsList, type SlidingTabItem } from "@/components/ui/sliding-tabs";
 import { LINE_PARAM, readPositiveParam } from "@/features/links/lineLinks";
 import { useCompactLayout } from "@/hooks/useCompactLayout";
 import { SearchToggle } from "@/components/ListControls";
@@ -831,17 +830,6 @@ const TUNNEL_SECTION_ITEMS = [
   { value: "pools", label: "节点池", icon: ShieldCheck },
   { value: "routes", label: "线路概览", icon: Waypoints },
 ] as const satisfies readonly SlidingTabItem<TunnelSection>[];
-/*
-  2.3.506：九个页签在手机上要左右滑，新用户也不知道先看哪个。条上只留最常用的三个（隧道链路是默认页、
-  端口转发、看线路的线路概览），其余收进最后一格「更多」，按「转发 / 隧道 / 线路」分组列；先后照旧。
-  页签的值（?tab=）一个没改，老链接、别处跳过来的照常落到原来那一页（落在「更多」里的，那一格写它的名字）。
-*/
-const TUNNEL_PRIMARY_SECTIONS = ["tunnels", "ports", "routes"] as const satisfies readonly TunnelSection[];
-const TUNNEL_MORE_GROUPS = [
-  { label: "转发", values: ["chains", "groups", "entries", "exits"] },
-  { label: "隧道", values: ["aggregates"] },
-  { label: "线路", values: ["pools"] },
-] as const satisfies readonly LinkSectionGroup<TunnelSection>[];
 
 const TUNNEL_SECTION_STORAGE_KEY = "forwardx.tunnels.section";
 const TUNNEL_VIEW_MODE_STORAGE_KEY = "forwardx.tunnels.viewMode";
@@ -4365,14 +4353,7 @@ function TunnelsContent() {
         {/* fx-list-controls：精简布局（桌面）下分类条和搜索那一行并排，两行变一行（compact.css） */}
         <div className="fx-list-controls space-y-4">
         <div className="fx-tabs-row">
-        <LinkSectionTabs
-          items={TUNNEL_SECTION_ITEMS}
-          primary={TUNNEL_PRIMARY_SECTIONS}
-          groups={TUNNEL_MORE_GROUPS}
-          activeValue={activeSection === "lines" ? "routes" : activeSection}
-          onValueChange={(value) => setActiveSection(value)}
-          ariaLabel="链路管理"
-        />
+        <SlidingTabsList items={TUNNEL_SECTION_ITEMS} activeValue={activeSection === "lines" ? "routes" : activeSection} ariaLabel="链路管理" minItemWidthRem={compactLayout ? 5 : 7.75} />
         {collapsePhoneSearch ? (
           <SearchToggle open={phoneSearchOpen} active={linkSearchQuery.length > 0} onToggle={() => setPhoneSearchOpen((value) => !value)} />
         ) : null}
