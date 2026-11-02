@@ -40,7 +40,7 @@ export function avatarSeed(value?: string | null, fallback?: string | number | n
   return avatarSeedFromValue(value, fallback);
 }
 
-export function avatarSrc(value?: string | null, fallback?: string | number | null) {
+export function avatarSrc(value?: string | null, _fallback?: string | number | null) {
   const text = String(value || "").trim();
   if (isAvataaarsValue(text) || isMultiavatarValue(text) || text.startsWith("preset:") || !text) {
     return "";

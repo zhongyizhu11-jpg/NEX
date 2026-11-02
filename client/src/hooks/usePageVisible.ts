@@ -15,5 +15,3 @@ export function usePageVisible() {
   }, []);
   return visible;
 }
-
-export default usePageVisible;

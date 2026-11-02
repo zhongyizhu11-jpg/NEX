@@ -135,7 +135,7 @@ function requestedFormat(req: Request, pathFormat?: string): ProxySubscriptionFo
  * 三步资格检查：令牌存在且启用、令牌没过期、主人有资格。
  * 不过的回 403 并写明是哪一步（见 rejected），面板这边也记下来。
  */
-async function gate(req: Request, token: any, client: DetectedProxyClient): Promise<{ ok: true; context: ProxySubTokenContext } | { ok: false; reason: ProxySubTokenFailureReason; context: ProxySubTokenContext | null }> {
+async function gate(_req: Request, token: any, client: DetectedProxyClient): Promise<{ ok: true; context: ProxySubTokenContext } | { ok: false; reason: ProxySubTokenFailureReason; context: ProxySubTokenContext | null }> {
   const context = await loadProxySubTokenContext(token);
   if (!context) return { ok: false, reason: "not-eligible", context: null };
   if (!token.isEnabled) return { ok: false, reason: "disabled", context };

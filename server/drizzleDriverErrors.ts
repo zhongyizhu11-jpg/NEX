@@ -19,7 +19,7 @@ import { SQLitePreparedQuery } from "drizzle-orm/sqlite-core";
 
 const UNWRAPPED = Symbol.for("forwardx.drizzleDriverErrors");
 
-export function unwrapDrizzleQueryError(error: unknown): unknown {
+function unwrapDrizzleQueryError(error: unknown): unknown {
   if (error instanceof DrizzleQueryError && error.cause !== undefined && error.cause !== null) return error.cause;
   return error;
 }
@@ -38,7 +38,7 @@ function keepDriverErrors(prototype: any) {
   prototype.queryWithCache = wrapped;
 }
 
-export function installDrizzleDriverErrors() {
+function installDrizzleDriverErrors() {
   keepDriverErrors(MySqlPreparedQuery.prototype);
   keepDriverErrors(PgPreparedQuery.prototype);
   keepDriverErrors(SQLitePreparedQuery.prototype);

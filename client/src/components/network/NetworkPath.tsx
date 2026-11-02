@@ -55,7 +55,6 @@ export type NetworkEdgeSpec = {
 /** 一个节点：点 + 名字 + 注脚。 */
 export function NetworkNode({
   node,
-  orientation,
   className,
 }: {
   node: NetworkNodeSpec;

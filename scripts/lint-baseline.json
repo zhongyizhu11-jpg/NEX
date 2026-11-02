@@ -467,7 +467,6 @@
     "client/src/features/ops/relay/AgentRelaySection.tsx": 1,
     "client/src/features/ops/status/StatusAvailability.tsx": 1,
     "client/src/features/rules/RouteBoardList.tsx": 4,
-    "client/src/features/rules/RouteLinesEditor.tsx": 1,
     "client/src/hooks/useUrlTab.ts": 3,
     "client/src/pages/Billing.tsx": 5,
     "client/src/pages/ClientSubscriptions.tsx": 12,

@@ -362,7 +362,7 @@ export function isAgentFastLivenessConfirmedOffline(hostId: unknown) {
   return agentFastLivenessTracker.isConfirmedOffline(hostId);
 }
 
-export function getAgentFastLivenessState(hostId: unknown) {
+function getAgentFastLivenessState(hostId: unknown) {
   return agentFastLivenessTracker.state(hostId);
 }
 
