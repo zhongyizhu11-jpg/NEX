@@ -4,48 +4,40 @@ import DataSectionLoading from "@/components/DataSectionLoading";
 import { Button } from "@/components/ui/button";
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 import { hostDeleteNeedsOfflineConfirmation, offlineCleanupConfirmOptions } from "@/components/hosts/hostDeletion";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { formatBytes, formatCpuPercent, formatUptime } from "@/components/hosts/hostDisplay";
 import { ProxyNodeRow, proxyNodeMetaText } from "@/components/proxy/ProxyNodeRow";
-import { clipboardNeedsManualCopy, copyTextFromElement } from "@/lib/clipboard";
 import { trpc } from "@/lib/trpc";
 import { Plus, Terminal, Trash2 } from "lucide-react";
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
+import { useLocation } from "wouter";
 import { toast } from "sonner";
 
 /**
- * 「我的机器」——租户自己加机器、拿 Agent 安装命令、看在不在线。
+ * 「订阅管理 › 我的节点 › 我的机器」弹窗里的那一段：租户自己的机器列表，在线不在线、跑得怎么样。
  *
- * 为什么不直接把「主机管理」那一页放开：那页三千多行、近二十个接口，好几个是
- * adminProcedure（分组、DDNS、批量升级、流量校准……），整页放开只会让租户到处
- * 撞权限错。他要的其实只有三件事 —— 加一台、拿到安装命令、知道连上没有 ——
- * 所以在这里做一个够用的小入口，放在「新建节点」上面：先有机器，才谈得上在
- * 上面开节点。
+ * 2.3.506 起这里只是个快捷入口，不再自己实现一遍：
+ * - 加机器、拿安装命令都是 AddSelfServiceHostDialog（和「主机管理」那一页的「添加主机」同一个框，
+ *   加完直接给安装命令）；原来这里自己画了一个命令框，主机管理那边加的就拿不到命令。
+ * - 完整的管理（改名、看详情、监控）在「主机管理」那一页：租户早就能进那一页了（只看得到自己的和
+ *   被授权的机器），底部给一个「去主机管理」。
  *
- * 后端本来就支持：hosts.create 是 protectedProcedure，建出来的主机 userId 就是
- * 他自己，管理员那些字段（流量告警、DDNS、封禁开关）对非管理员一律落成默认值。
- * 缺的只是一个入口，和一条他拿得到的安装命令。
- *
- * 能开几个节点仍由 maxProxyInbounds 管着 —— 机器行本身不消耗任何东西，Agent
- * 没连上的行就是一条死记录。
+ * 后端：hosts.create 是 protectedProcedure，建出来的主机 userId 就是他自己；能开几个节点仍由
+ * maxProxyInbounds 管着 —— 机器行本身不消耗任何东西。
  */
 export default function MyHostsSection() {
   const { user } = useAuth();
   const utils = trpc.useUtils();
   const confirm = useConfirmDialog();
+  const [, setLocation] = useLocation();
 
   const [addOpen, setAddOpen] = useState(false);
+  // 只看某一台的安装命令（打开的还是那个加机器的框，直接在第二步）
   const [commandHostId, setCommandHostId] = useState(0);
-  const commandRef = useRef<HTMLParagraphElement | null>(null);
 
   const isAdmin = user?.role === "admin";
   const hostsQuery = trpc.hosts.list.useQuery(undefined, { enabled: !isAdmin });
   // 额度先摆出来，别等人填完表单才弹一句「已达上限」。
   const quotaQuery = trpc.hosts.selfServiceQuota.useQuery(undefined, { enabled: !isAdmin });
-  const commandQuery = trpc.hosts.agentInstallCommand.useQuery(
-    { hostId: commandHostId },
-    { enabled: commandHostId > 0 },
-  );
   /*
     自己加的机器现在什么情况。
 
@@ -111,7 +103,7 @@ export default function MyHostsSection() {
   const invalidate = () => {
     utils.hosts.list.invalidate();
     utils.hosts.selfServiceQuota.invalidate();
-    // 「新建节点」的主机下拉走的是 options，不刷的话新加的机器要等下次进页面才出现。
+    // 「新建 › 在我的机器上开一个」的主机下拉走的是 options，不刷的话新加的机器要等下次进页面才出现。
     utils.hosts.options.invalidate();
   };
 
@@ -153,80 +145,22 @@ export default function MyHostsSection() {
     if (ok) deleteHost.mutate({ id: Number(host.id) });
   };
 
-  const commandText = commandQuery.data?.command || "";
-  const panelUrlMissing = !!commandQuery.data && !commandQuery.data.panelUrl;
-
-  /** 两个弹窗（加机器 / 安装命令）两种布局都要用，所以拎出来。 */
+  /** 加机器 / 看安装命令：主机管理那一页用的同一个框（加完直接到安装命令那一步）。 */
   const dialogs = (
-    <>
-      {/* 和「主机管理」那一页共用同一个弹窗：字段、提示语、额度提示只该有一份。 */}
-      <AddSelfServiceHostDialog
-        open={addOpen}
-        onOpenChange={setAddOpen}
-        onCreated={(hostId) => {
-          invalidate();
-          // 加完直接把安装命令摆出来 —— 不装 Agent 这台机器什么也干不了。
-          if (hostId > 0) setCommandHostId(hostId);
-        }}
-      />
-
-      <Dialog open={commandHostId > 0} onOpenChange={(open) => !open && setCommandHostId(0)}>
-        <DialogContent className="flex max-h-[92svh] flex-col overflow-hidden sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Agent 安装命令</DialogTitle>
-            <DialogDescription>
-              用 root 连上那台机器，把下面这条整行粘进去执行。装好后这里的圆点会变绿。
-            </DialogDescription>
-          </DialogHeader>
-          <div className="min-h-0 flex-1 overflow-y-auto pr-1">
-            {commandQuery.isLoading ? (
-              <DataSectionLoading />
-            ) : panelUrlMissing ? (
-              <p className="py-4 text-center text-xs text-muted-foreground">
-                面板还没配公开地址，装上的 Agent 不知道该回连到哪里。请联系管理员在「系统设置」里配好面板地址，再回来取命令。
-              </p>
-            ) : (
-              <>
-                {/* select-all + break-all：一键复制失败时要能一下选中整条。 */}
-                <p
-                  ref={commandRef}
-                  className="select-all break-all rounded-md border bg-muted/30 p-2.5 font-mono text-[11px] leading-relaxed"
-                >
-                  {commandText}
-                </p>
-                {clipboardNeedsManualCopy() ? (
-                  <p className="pt-2 text-xs text-muted-foreground">
-                    当前是 http 访问，没有剪贴板 API，只能走旧办法，有些浏览器（iOS 尤其）会拒绝。
-                    一键复制不成时，长按上面这段选中即可。
-                  </p>
-                ) : null}
-                <p className="pt-2 text-xs text-[var(--fx-warn-text)]">
-                  命令里带着这台机器的 Agent 令牌，谁拿到谁就能把机器接进面板，别转发给别人。
-                </p>
-              </>
-            )}
-          </div>
-          <DialogFooter className="shrink-0 border-t pt-3">
-            <Button variant="outline" onClick={() => setCommandHostId(0)}>关闭</Button>
-            <Button
-              disabled={!commandText}
-              onClick={async () => {
-                const ok = await copyTextFromElement(commandRef.current, commandText);
-                if (ok) toast.success("命令已复制");
-                // 失败时选区还留着，直接用系统菜单复制就行。
-                else toast.error("浏览器拒绝了复制，命令已选中，用系统菜单复制即可");
-              }}
-            >
-              复制命令
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </>
+    <AddSelfServiceHostDialog
+      open={addOpen || commandHostId > 0}
+      commandHostId={commandHostId}
+      onOpenChange={(open) => {
+        if (open) return;
+        setAddOpen(false);
+        setCommandHostId(0);
+      }}
+      onCreated={invalidate}
+    />
   );
 
   /**
-   * 这一段现在长在「我的节点」那张卡的「我的机器」弹窗里，不再是页面上并列的
+   * 这一段长在「我的节点」那张卡的「我的机器」弹窗里，不是页面上并列的
    * 一张卡 —— 它是自建节点的前置条件，不是跟节点平级的东西。
    */
   const body = (
@@ -298,6 +232,12 @@ export default function MyHostsSection() {
           </Button>
         </div>
         {body}
+        {/* 改名、看详情和监控在主机管理那一页（同一批机器），这里不再做一份 */}
+        <div className="flex justify-end">
+          <Button size="sm" variant="ghost" className="h-8 px-2 text-xs text-muted-foreground" onClick={() => setLocation("/hosts")} data-testid="my-hosts-open-hosts">
+            去主机管理看全部
+          </Button>
+        </div>
       </div>
       {dialogs}
     </>

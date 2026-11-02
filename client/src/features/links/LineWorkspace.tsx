@@ -2,6 +2,7 @@ import { useMemo, useState, type SyntheticEvent } from "react";
 import type { inferRouterOutputs } from "@trpc/server";
 import { Check, ChevronDown, ChevronRight, Plus, X } from "lucide-react";
 import { toast } from "sonner";
+import { useLocation } from "wouter";
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -140,6 +141,7 @@ export function NodePoolsSection({ hosts, onOpenGroup, isAdmin = false }: {
   onOpenGroup?: (mode: PoolGroupMode, groupId: number) => void;
 }) {
   const utils = trpc.useUtils();
+  const [, setLocation] = useLocation();
   const board = trpc.nodePools.board.useQuery(undefined, { staleTime: 15_000, refetchInterval: 30_000 });
   const refresh = () => {
     void utils.nodePools.board.invalidate();
@@ -387,7 +389,13 @@ export function NodePoolsSection({ hosts, onOpenGroup, isAdmin = false }: {
           <DialogContent className="sm:max-w-md" onOpenAutoFocus={(event) => event.preventDefault()}>
             <DialogHeader>
               <DialogTitle>{`${editing.id ? "编辑" : "新建"}${editing.role === "landing" ? "落地池" : "中转池"}`}</DialogTitle>
-              <DialogDescription>{ROLE_DESCRIPTION[editing.role]}</DialogDescription>
+              <DialogDescription>
+                {ROLE_DESCRIPTION[editing.role]}
+                {/* 新建落地节点的主入口在订阅管理（2.3.506）：只开一台的不用建池 */}
+                {editing.role === "landing" && !editing.id ? (
+                  <> 只开一台的，到<a href="/client-subscriptions?create=node" onClick={(event) => { event.preventDefault(); setEditing(null); setLocation("/client-subscriptions?create=node"); }} className="text-primary hover:underline" data-testid="node-pool-single-landing">订阅管理新建节点</a>。</>
+                ) : null}
+              </DialogDescription>
             </DialogHeader>
             {/*
               2.3.501 起照 iOS 设置排：一张白卡写名字（改已有的池再多一行「用途」），一张白卡放机器，落地池再加

@@ -140,6 +140,7 @@ import {
 import type { GlobeMethods } from "react-globe.gl";
 import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
+import { useSearchIdParam } from "@/features/links/lineLinks";
 const ReactGlobe = lazy(() => import("react-globe.gl")) as typeof import("react-globe.gl").default;
 const HostFlatMap = lazy(() => import("@/components/HostFlatMap"));
 const GLOBE_EARTH_IMAGE_URL = "/globe/earth-dark.jpg";
@@ -1785,6 +1786,28 @@ function HostsContent() {
     pageVisible && activeManageTab === "hosts",
   );
   const detailHostId = detailHost ? Number(detailHost.id) : null;
+  /*
+    /hosts?host=<主机 id>：主机详情的深链（2.3.506）。打开详情时地址栏带着它（复制下来就能分享），
+    关掉就去掉；带着它进来时按 id 单独取（不一定在当前这一页里）。
+  */
+  const [hostParam, setHostParam] = useSearchIdParam("host");
+  useEffect(() => {
+    if (!hostParam || Number(detailHost?.id || 0) === hostParam) return;
+    void utils.hosts.getById.fetch({ id: hostParam }).then((host) => {
+      if (host) setDetailHost(host);
+      else {
+        toast.error("这台主机不存在，或者你没有权限查看");
+        setHostParam(null);
+      }
+    }, () => setHostParam(null));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hostParam]);
+  const lastDetailHostIdRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (detailHostId === lastDetailHostIdRef.current) return;
+    lastDetailHostIdRef.current = detailHostId;
+    setHostParam(detailHostId);
+  }, [detailHostId, setHostParam]);
   /*
     详情框打开时记下的是那一刻的主机。在详情里点编辑、保存之后列表会刷新，可那份快照不会：
     再点编辑，表单拿旧快照填，刚存的值（比如线路带宽）看着像没存上。所以详情框和它的编辑
