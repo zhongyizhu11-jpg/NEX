@@ -8497,6 +8497,7 @@ function RulesContent() {
               {/* 线路组就在这一页里改（和线路详情第一页是同一个编辑器），跟着规则一起保存 */}
               {form.failoverEnabled && form.routeGroup && (
                 <RuleLineGroupField
+                  canOpenTunnels={user?.role === "admin"}
                   value={form.routeGroup}
                   onChange={(routeGroup) => setForm((current) => ({ ...current, routeGroup }))}
                   hosts={routeHostOptions}

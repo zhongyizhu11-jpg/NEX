@@ -1,3 +1,4 @@
+import { useAuth } from "@/_core/hooks/useAuth";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 
@@ -86,6 +87,7 @@ export function useRouteLineEditor({ rule, enabled, status, onPause, pausing = f
   settingsOpen?: boolean;
 }): { editor: ReactNode; saveBar: ReactNode } {
   const utils = trpc.useUtils();
+  const canOpenTunnels = useAuth().user?.role === "admin";
   const active = enabled && !!rule;
   const hostsQuery = trpc.hosts.options.useQuery(undefined, { enabled: active, staleTime: 60_000, refetchOnWindowFocus: false });
   const tunnelsQuery = trpc.tunnels.options.useQuery(undefined, { enabled: active, staleTime: 30_000, refetchOnWindowFocus: false });
@@ -203,6 +205,7 @@ export function useRouteLineEditor({ rule, enabled, status, onPause, pausing = f
   const editor = draft && rule && hostsQuery.data ? (
     <SegmentLatencyProvider>
       <RouteGroupFields
+        canOpenTunnels={canOpenTunnels}
         value={draft}
         onChange={setDraft}
         hosts={hosts}
