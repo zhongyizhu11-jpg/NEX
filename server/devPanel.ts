@@ -127,7 +127,7 @@ async function ensureDevAdmin() {
   const existing = await getUserByUsername(DEV_ADMIN_USERNAME);
   const patch = {
     username: DEV_ADMIN_USERNAME,
-    password: hashPassword(DEV_ADMIN_PASSWORD),
+    password: await hashPassword(DEV_ADMIN_PASSWORD),
     name: "Local Dev Admin",
     email: DEV_ADMIN_USERNAME,
     emailVerified: true,
@@ -262,7 +262,7 @@ async function seedUsers(adminId: number): Promise<DevUsers> {
   for (const [index, row] of rows.entries()) {
     ids.push(await insertAndGetId("users", {
       ...row,
-      password: hashPassword(row.password),
+      password: await hashPassword(row.password),
       emailVerified: true,
       emailVerifiedAt: daysFromNow(-60),
       avatar: randomAvataaarsValue(`dev-user-${row.username}`),

@@ -217,7 +217,7 @@ export default function ApiTokensSection(_props: Record<string, never>) {
             <>
               <DialogHeader>
                 <DialogTitle>新建 API 令牌</DialogTitle>
-                <DialogDescription>令牌能以你的身份调用面板，像密码一样保管。</DialogDescription>
+                <DialogDescription>令牌能以你的身份调用面板，像密码一样保管。改密码、被重置密码或摘掉双重验证后，已有令牌全部失效。</DialogDescription>
               </DialogHeader>
               <div className="space-y-4">
                 <FormField className="space-y-2">

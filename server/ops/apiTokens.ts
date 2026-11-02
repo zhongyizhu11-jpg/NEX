@@ -214,3 +214,19 @@ export async function revokeUserApiToken(userId: number, id: number) {
   );
   return Number(result?.affectedRows ?? result?.changes ?? result?.rowCount ?? 0) > 0;
 }
+
+/**
+ * 撤销某人名下所有还有效的令牌：改密码、管理员重置密码、管理员摘掉 2FA 时调用。
+ * 这几件事多半意味着「账号可能被别人碰过」，旧令牌一起作废，用到的脚本和 AI 助手要重新建令牌。
+ * 返回撤销了几枚。
+ */
+export async function revokeAllUserApiTokens(userId: number, reason: string) {
+  const q = quoteDbIdentifier;
+  const result: any = await executeRaw(
+    `UPDATE ${q("api_tokens")} SET ${q("revokedAt")} = ? WHERE ${q("userId")} = ? AND ${q("revokedAt")} IS NULL`,
+    [Math.floor(Date.now() / 1000), userId],
+  );
+  const revoked = Number(result?.affectedRows ?? result?.changes ?? result?.rowCount ?? 0);
+  if (revoked > 0) console.info(`[ApiTokens] revoked all userId=${userId} count=${revoked} reason=${reason}`);
+  return revoked;
+}

@@ -166,6 +166,15 @@ test("sanitizeForMcp 去掉敏感字段、日期转字符串", () => {
     a: "1970-01-01T00:00:00.000Z",
     list: [{ b: 1 }],
   });
+  // 证书私钥、webhook 请求头这类也不交给 AI。
+  assert.deepEqual(sanitizeForMcp({
+    panelSsl: { enabled: true, certPem: "c", keyPem: "k", keyPemConfigured: true },
+    ddns: { webhookUrl: "https://x", webhookHeaders: "Authorization: Bearer x", webhookHeadersMasked: "Authorization: Bear******" },
+    authorization: "Bearer x",
+  }), {
+    panelSsl: { enabled: true },
+    ddns: { webhookUrl: "https://x" },
+  });
 });
 
 test("线路组工具：list_lines 走 rules.routeBoard 并压成摘要，get_line / get_line_events / export_line 各调各的过程", async () => {

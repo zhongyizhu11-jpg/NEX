@@ -78,7 +78,7 @@ export async function isUsernameTaken(username: string) {
 export async function setInitialPasswordForPasswordlessUser(userId: number, newPassword: string) {
   const result = await executeRaw(
     `UPDATE ${q("users")} SET ${q("password")} = ?, ${q("updatedAt")} = ? WHERE ${q("id")} = ? AND ${q("password")} LIKE ?`,
-    [hashPassword(newPassword), nowSeconds(), userId, "!unusable:%"],
+    [await hashPassword(newPassword), nowSeconds(), userId, "!unusable:%"],
   );
   return rawAffectedRows(result) > 0;
 }

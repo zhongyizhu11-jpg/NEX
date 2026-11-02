@@ -90,10 +90,10 @@ export async function getUserByTelegramLoginCode(code: string) {
 export async function authenticateUser(username: string, password: string) {
   const user = await getUserByUsername(username);
   if (!user) {
-    verifyPasswordAgainstDummy(password);
+    await verifyPasswordAgainstDummy(password);
     return null;
   }
-  if (!verifyPassword(password, user.password)) return null;
+  if (!(await verifyPassword(password, user.password))) return null;
   const db = await getDb();
   if (db && (user as any).accountEnabled !== false) {
     await db.update(users).set({ lastSignedIn: nowDate(), updatedAt: nowDate() }).where(eq(users.id, user.id));
@@ -104,18 +104,18 @@ export async function authenticateUser(username: string, password: string) {
 export async function changeUserPassword(userId: number, oldPassword: string, newPassword: string): Promise<boolean> {
   const user = await getUserById(userId);
   if (!user) return false;
-  if (!verifyPassword(oldPassword, user.password)) return false;
+  if (!(await verifyPassword(oldPassword, user.password))) return false;
   const db = await getDb();
   if (!db) return false;
   await revokeUserAuthSessions(userId, { reason: "password_changed" });
-  await db.update(users).set({ password: hashPassword(newPassword), updatedAt: nowDate() }).where(eq(users.id, userId));
+  await db.update(users).set({ password: await hashPassword(newPassword), updatedAt: nowDate() }).where(eq(users.id, userId));
   return true;
 }
 
 export async function verifyUserPassword(userId: number, password: string) {
   const user = await getUserById(userId);
   if (!user) return false;
-  return verifyPassword(password, user.password);
+  return await verifyPassword(password, user.password);
 }
 
 export async function updateUserProfile(userId: number, data: { name?: string; email?: string; displayRemark?: string | null; avatar?: string | null; telegramAnnouncementSubscribed?: boolean; uiLayout?: "standard" | "compact" | null }) {
@@ -366,7 +366,7 @@ export async function createUser(data: { username: string; password: string; nam
   if (!db) throw new Error("Database not available");
   return insertAndGetId("users", {
     username: data.username,
-    password: hashPassword(data.password),
+    password: await hashPassword(data.password),
     name: data.name ?? data.username,
     email: data.email ?? null,
     emailVerified: data.emailVerified ?? false,
@@ -406,7 +406,7 @@ export async function registerUser(data: {
   if (!db) throw new Error("Database not available");
   return insertAndGetId("users", {
     username: data.username,
-    password: data.unusablePassword ? createUnusablePasswordHash() : hashPassword(data.password),
+    password: data.unusablePassword ? createUnusablePasswordHash() : await hashPassword(data.password),
     ...(data.googleSub ? { googleSub: data.googleSub, googleEmail: data.googleEmail ?? null, googleLinkedAt: nowDate() } : {}),
     ...(data.discordId ? { discordId: data.discordId, discordUsername: data.discordUsername ?? null, discordEmail: data.discordEmail ?? null, discordLinkedAt: nowDate() } : {}),
     name: data.name ?? data.username,
@@ -442,7 +442,7 @@ export async function updateUserAccount(userId: number, data: { username?: strin
   const password = data.password?.trim();
   if (password) {
     await revokeUserAuthSessions(userId, { reason: "password_reset" });
-    patch.password = hashPassword(password);
+    patch.password = await hashPassword(password);
   }
   if (data.avatar !== undefined) {
     patch.avatar = normalizeAvatarValue(data.avatar) || randomAvataaarsValue(String(`user-${userId}`));

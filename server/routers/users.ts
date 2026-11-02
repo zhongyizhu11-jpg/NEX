@@ -15,6 +15,7 @@ import {
   setUserForwardAccessCommand,
 } from "../services/userCommandService";
 import { withKeyedTaskLock } from "../keyedTaskLock";
+import { revokeAllUserApiTokens } from "../ops/apiTokens";
 import { reconcileUserRuleResourceAuthorization } from "../ruleResourceAuthorization";
 import { pushAgentRefresh } from "../agentEvents";
 
@@ -131,6 +132,8 @@ export const usersRouter = router({
           avatar: input.avatar,
           password: password || undefined,
         });
+        // 管理员重置了密码：这个人名下的 API 令牌一起作废。
+        if (password) await revokeAllUserApiTokens(input.userId, "password_reset");
         console.info(`[Users] Updated account userId=${input.userId} usernameChanged=${!!username && username !== target.username} passwordChanged=${!!password} ${actorLabel(ctx)}`);
         return { success: true };
       }),
@@ -211,6 +214,8 @@ export const usersRouter = router({
           return { success: true, removed: false };
         }
         await db.disableUserTwoFactor(input.userId);
+        // 管理员摘 2FA 多半是在帮人找回账号：旧的 API 令牌一起作废。
+        await revokeAllUserApiTokens(input.userId, "two_factor_removed");
         console.info(`[Users] Removed 2FA userId=${input.userId} ${actorLabel(ctx)}`);
         return { success: true, removed: true };
       }),
