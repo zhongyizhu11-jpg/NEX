@@ -81,6 +81,7 @@ import {
 import { getAvatarDataUrlByteLength, isValidBrandLogoValue } from "../../shared/avatar";
 import { generateSelfSignedPanelSslCertificate, readPanelSslSettings, validatePanelSslConfig } from "../panelSsl";
 import { maskWebhookHeaders, resolvePanelSslKeyPem } from "../settingsSecrets";
+import { AGENT_LEGACY_AUTH_REJECT_SETTING, legacyAgentAuthHosts, setLegacyAgentAuthRejectedCache } from "../agentAuth";
 import {
   DEFAULT_AI_PROVIDER,
   DEFAULT_DEEPSEEK_MAX_TOKENS,
@@ -1939,6 +1940,8 @@ export const systemRouter = router({
         panelUpdateEnabled: all.githubAcceleratorPanelUpdateEnabled === "true",
       },
       agentPreferPanelInstall: all.agentPreferPanelInstall === "true",
+      // 拒绝旧式（明文 token）Agent 认证，默认关；见 server/agentAuth.ts。
+      agentLegacyAuthRejected: all[AGENT_LEGACY_AUTH_REJECT_SETTING] === "true",
       database: databaseSettingsSummary(all),
       mysql: {
         configured: all.mysqlConfigured === "true",
@@ -2178,6 +2181,7 @@ export const systemRouter = router({
           panelUpdateEnabled: z.boolean().optional(),
         }).optional(),
         agentPreferPanelInstall: z.boolean().optional(),
+        agentLegacyAuthRejected: z.boolean().optional(),
         email: z.object({
           enabled: z.boolean().optional(),
           host: z.string().max(256).optional(),
@@ -2438,6 +2442,11 @@ export const systemRouter = router({
         updateCheckInFlight = null;
         rollbackVersionCheckInFlight = null;
         console.info("[Settings] GitHub accelerator settings updated");
+      }
+      if (input.agentLegacyAuthRejected !== undefined) {
+        await db.setSetting(AGENT_LEGACY_AUTH_REJECT_SETTING, input.agentLegacyAuthRejected ? "true" : "false");
+        setLegacyAgentAuthRejectedCache(input.agentLegacyAuthRejected);
+        console.info(`[Settings] legacy Agent auth ${input.agentLegacyAuthRejected ? "rejected" : "accepted"}`);
       }
       if (input.agentPreferPanelInstall !== undefined) {
         await db.setSetting("agentPreferPanelInstall", input.agentPreferPanelInstall ? "true" : "false");
@@ -2731,6 +2740,15 @@ export const systemRouter = router({
       }
       return { success: true, changed: true, restartScheduled: restartRequired, enabled: next.enabled };
     }),
+
+  /** 最近还在用旧式（明文 token）认证连上来的主机，设置页「拒绝旧式 Agent 认证」旁边列出来。 */
+  legacyAgentAuthHosts: adminProcedure.query(async () => {
+    const entries = legacyAgentAuthHosts();
+    const names = entries.length ? await db.getHostNamesByIds(entries.map((item) => item.hostId)) : new Map<number, string>();
+    return entries
+      .filter((item) => names.has(item.hostId))
+      .map((item) => ({ hostId: item.hostId, name: names.get(item.hostId) || `#${item.hostId}`, lastLegacyAuthAt: item.lastLegacyAuthAt }));
+  }),
 
   /** 查看已保存的面板 HTTPS 私钥：只给网页上的管理员，API 令牌调不了（见 apiTokenPolicy.ts）。 */
   revealPanelSslKey: adminProcedure.mutation(async ({ ctx }) => {

@@ -3184,6 +3184,7 @@ type SystemSettingsSaveKey =
   | "forwardProtocols"
   | "sidebarMenu"
   | "agentInstall"
+  | "agentAuth"
   | "entryBridge"
   | "portAccessLimits";
 
@@ -4914,6 +4915,7 @@ function SystemInfoSection() {
   const [githubAcceleratorPanelUpdateEnabled, setGithubAcceleratorPanelUpdateEnabled] = useState(false);
   const [githubAcceleratorUrlInput, setGithubAcceleratorUrlInput] = useState(defaultGithubAcceleratorUrl);
   const [agentPreferPanelInstall, setAgentPreferPanelInstall] = useState(false);
+  const [agentLegacyAuthRejected, setAgentLegacyAuthRejected] = useState(false);
   const [ruleSwitchBridgeHours, setRuleSwitchBridgeHours] = useState(String(DEFAULT_RULE_SWITCH_BRIDGE_HOURS));
   const [portAccessLimitsEnabled, setPortAccessLimitsEnabled] = useState(false);
   const [linkWizardEnabled, setLinkWizardEnabled] = useState(false);
@@ -4994,6 +4996,7 @@ function SystemInfoSection() {
       setGithubAcceleratorPanelUpdateEnabled(!!settings.githubAccelerator?.panelUpdateEnabled);
       setGithubAcceleratorUrlInput(settings.githubAccelerator?.url || "");
       setAgentPreferPanelInstall(!!settings.agentPreferPanelInstall);
+      setAgentLegacyAuthRejected(!!(settings as any).agentLegacyAuthRejected);
       setRuleSwitchBridgeHours(String(normalizeRuleSwitchBridgeHours((settings as any).ruleSwitchBridgeHours)));
       setPortAccessLimitsEnabled(!!(settings as any).portAccessLimitsEnabled);
       setLinkWizardEnabled(!!(settings as any).linkWizardEnabled);
@@ -5135,6 +5138,8 @@ function SystemInfoSection() {
     },
     onError: (err) => toast.error(err.message || "保存面板 SSL 配置失败"),
   });
+
+  const legacyAgentAuthHosts = trpc.system.legacyAgentAuthHosts.useQuery(undefined, { refetchOnWindowFocus: false });
 
   const revealPanelSslKeyMutation = trpc.system.revealPanelSslKey.useMutation({
     onSuccess: (result) => {
@@ -5445,6 +5450,10 @@ function SystemInfoSection() {
     );
   };
 
+  const handleSaveAgentAuth = () => {
+    return saveSystemSettings("agentAuth", { agentLegacyAuthRejected });
+  };
+
   const handleSaveAgentInstall = () => {
     const inputUrl = normalizeConfigUrl(githubAcceleratorUrlInput);
     const acceleratorUrl = normalizeGithubAcceleratorUrl(inputUrl);
@@ -5528,6 +5537,12 @@ function SystemInfoSection() {
         || agentPreferPanelInstall !== !!settings.agentPreferPanelInstall
       ),
       save: handleSaveAgentInstall,
+    },
+    {
+      id: "agentAuth",
+      label: "Agent 认证",
+      dirty: !!settings && agentLegacyAuthRejected !== !!(settings as any).agentLegacyAuthRejected,
+      save: handleSaveAgentAuth,
     },
   ];
   for (const item of systemDockItems) {
@@ -7048,6 +7063,35 @@ function SystemInfoSection() {
           <div className="flex justify-end">
             <Button data-dock-save onClick={handleSaveAgentInstall} disabled={isSavingSetting("agentInstall")}>
               保存 GitHub 下载配置
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+      <Card className="border-border bg-card">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <ShieldCheck className="h-4 w-4 text-primary" />
+            Agent 认证
+          </CardTitle>
+          <CardDescription>
+            现在的 Agent 每个请求都带签名；很老的 Agent 还在请求头里直接发明文 Token。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <SettingList>
+            <SettingRow
+              asLabel
+              label="拒绝旧式 Agent 认证"
+              description={legacyAgentAuthHosts.data?.length
+                ? `最近还有 ${legacyAgentAuthHosts.data.length} 台主机在用旧式认证：${legacyAgentAuthHosts.data.slice(0, 5).map((item) => item.name).join("、")}${legacyAgentAuthHosts.data.length > 5 ? " 等" : ""}。打开后它们会连不上面板，请先升级这些主机的 Agent。`
+                : "打开后只接受签名认证，还在发明文 Token 的旧 Agent 会连不上面板。面板重启以来没有主机用过旧式认证。"}
+              control={<Checkbox aria-label="拒绝旧式 Agent 认证" checked={agentLegacyAuthRejected} onCheckedChange={(checked) => setAgentLegacyAuthRejected(checked === true)} />}
+            />
+          </SettingList>
+          <div className="flex justify-end">
+            <Button data-dock-save onClick={handleSaveAgentAuth} disabled={isSavingSetting("agentAuth")}>
+              {isSavingSetting("agentAuth") && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {isSavingSetting("agentAuth") ? "保存中..." : "保存 Agent 认证配置"}
             </Button>
           </div>
         </CardContent>
