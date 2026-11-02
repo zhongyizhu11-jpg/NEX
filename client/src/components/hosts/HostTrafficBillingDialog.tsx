@@ -1,5 +1,6 @@
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
+import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -106,6 +107,20 @@ export default function HostTrafficBillingDialog({
     onError: (error) => toast.error(error.message || "取消失败"),
   });
   const busy = saveConfig.isPending || deleteConfig.isPending;
+  const confirmDialog = useConfirmDialog();
+
+  // 取消前确认一次：这台上没单独配价的转发改回记进套餐流量
+  const removeConfig = async () => {
+    if (!config) return;
+    const confirmed = await confirmDialog({
+      title: "取消按量计费",
+      description: `取消「${host?.name || `主机 #${host?.id}`}」的按量计费？这台上没单独配价的转发改回记进套餐流量，不再按 GB 扣余额。`,
+      confirmText: "取消计费",
+      cancelText: "先不取消",
+      tone: "destructive",
+    });
+    if (confirmed) deleteConfig.mutate({ id: Number(config.id) });
+  };
 
   const save = () => {
     const pricePerGbMilliCents = milliCentsFromYuan(price);
@@ -206,7 +221,7 @@ export default function HostTrafficBillingDialog({
             variant="ghost"
             className="text-destructive hover:text-destructive"
             disabled={busy || !config}
-            onClick={() => deleteConfig.mutate({ id: Number(config?.id) })}
+            onClick={() => void removeConfig()}
           >
             取消这台的按量计费
           </Button>

@@ -790,7 +790,7 @@ export default function ClientSubscriptionsPage() {
         // 点「3/3 台」展开看每台开在哪个端口（成员入站不在列表里各占一行）
         detail: quotaExpanded ? (
           <div className="flex flex-col gap-2">
-            <LandingPoolMembersDetail members={pool.memberList || []} directDomain={pool.directDomain} onOpenPool={() => navigate("/tunnels?tab=pools")} />
+            <LandingPoolMembersDetail members={pool.memberList || []} directDomain={pool.directDomain} onOpenPool={isAdmin ? () => navigate("/tunnels?tab=pools") : undefined} />
             <ProxyNodeQuotaDetail node={node} />
           </div>
         ) : null,
@@ -804,9 +804,12 @@ export default function ClientSubscriptionsPage() {
           />
         ) : null,
         actions: [
-          { key: "pool", label: "到节点池里改", icon: Waypoints, onSelect: () => navigate("/tunnels?tab=pools") },
+          // 节点池页（/tunnels）只有管理员进得去：普通用户不显示这一项，成员明细在上面「几台」里展开看
           ...(isAdmin
-            ? [{ key: "share", label: "分享给用户", icon: Share2, onSelect: () => setShareNode({ id: Number(node.id), name: String(node.name || "") }) }]
+            ? [
+              { key: "pool", label: "到节点池里改", icon: Waypoints, onSelect: () => navigate("/tunnels?tab=pools") },
+              { key: "share", label: "分享给用户", icon: Share2, onSelect: () => setShareNode({ id: Number(node.id), name: String(node.name || "") }) },
+            ]
             : []),
         ],
       };

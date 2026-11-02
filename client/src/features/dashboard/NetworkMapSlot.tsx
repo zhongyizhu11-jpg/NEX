@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 
+import { useAuth } from "@/_core/hooks/useAuth";
 import { NetworkMapCardPlaceholder } from "@/components/network/NetworkMapPlaceholder";
 import { useNetworkMapData } from "@/features/network/networkMapData";
 
@@ -42,6 +43,9 @@ export function NetworkMapSlot({ enabled = true, cacheScope = "current", onOpen 
   onOpen: (href: string) => void;
 }) {
   const data = useNetworkMapData(enabled);
+  const { user } = useAuth();
+  // 链路页（/tunnels）只有管理员进得去：租户点一条隧道线去转发列表，不被路由守卫弹回首页
+  const open = (href: string) => onOpen(user?.role !== "admin" && href.startsWith("/tunnels") ? "/rules" : href);
   const [expected] = useState(() => readHint(cacheScope));
   /** 有没有主机：null = 还不知道 */
   const hasHosts = !enabled ? false : data.hostsSettled ? data.hosts.length > 0 : null;
@@ -62,7 +66,7 @@ export function NetworkMapSlot({ enabled = true, cacheScope = "current", onOpen 
   if (hasHosts === null) return expected ? <NetworkMapCardPlaceholder /> : null;
   return (
     <Suspense fallback={<NetworkMapCardPlaceholder />}>
-      <NetworkMapCard data={data} onOpen={onOpen} />
+      <NetworkMapCard data={data} onOpen={open} />
     </Suspense>
   );
 }

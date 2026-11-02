@@ -80,6 +80,7 @@ import { MORE_TAB_PATH, pickTabBarItems } from "@/components/ios/tabBarModel";
 import { useLocation } from "wouter";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
+import { useConfirmDialog } from "./ui/confirm-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "./ui/dialog";
 import { PasswordInput } from "./ui/password-input";
 import { Input } from "./ui/input";
@@ -959,6 +960,17 @@ function DashboardLayoutContent({
     },
     onError: (error) => toast.error(error.message || "解绑 Telegram 失败"),
   });
+  const confirmDialog = useConfirmDialog();
+  // 解绑前确认一次（个人资料页那边本来就有确认）
+  const confirmUnbindTelegram = async () => {
+    const confirmed = await confirmDialog({
+      title: "解除 Telegram 绑定",
+      description: "解绑后不再收到 Telegram 通知，要用得重新绑定。",
+      confirmText: "解除绑定",
+      tone: "destructive",
+    });
+    if (confirmed) unbindTelegramMutation.mutate();
+  };
 
   const handleChangePassword = () => {
     if (!oldPassword) {
@@ -2523,7 +2535,7 @@ function DashboardLayoutContent({
                 <Button
                   variant="destructive"
                   className="gap-2"
-                  onClick={() => unbindTelegramMutation.mutate()}
+                  onClick={() => void confirmUnbindTelegram()}
                   disabled={unbindTelegramMutation.isPending}
                 >
                   <Link2Off className="h-4 w-4" />
