@@ -6,10 +6,10 @@
  * 正文没变（哈希一样）就什么都不动。
  *
  * 这是面板主动往公网发请求，所以：
- *   - 只收 http(s)，解析出来的目标不能是私网 / 环回 / 链路本地 / 唯一本地地址
- *     （DNS 解析之后再查一遍，防 DNS 重绑定到内网）；
+ *   - 只收 http(s)，解析出来的目标不能是私网 / 环回 / 链路本地 / 唯一本地地址；
+ *     检查放在连接用的 lookup 里，连接只落在检查过的地址上（防 DNS 重绑定到内网，见 ssrf.ts）；
  *   - 不跟随跨主机跳转；同主机最多跟 3 次；
- *   - 正文最多 2 MB，15 秒超时；
+ *   - 正文最多 2 MB，边读边数、超了就断，15 秒超时；
  *   - 同一时间最多 3 路在拉。
  */
 
@@ -21,6 +21,8 @@ import * as db from "./db";
 import { classifyIpAddress } from "../shared/ipAddress";
 import { parseProxySubSourceContent, parseSubscriptionUserinfoHeader } from "../shared/proxySubSource";
 import { invalidateProxySubCacheForUser } from "./proxySubCache";
+import { loadProxySubSettings } from "./proxySubSettings";
+import { SafeOutboundError, safeHttpGet } from "./ssrf";
 import type { ProxyNode } from "../shared/proxyNode";
 
 const MAX_BYTES = 2 * 1024 * 1024;
@@ -31,11 +33,15 @@ const DEFAULT_UA = "NEX-Subscription-Sync/1.0 (+clash.meta; mihomo)";
 export class ProxySubSourceFetchError extends Error {}
 
 /** 这个主机名解析出来的地址是不是全在公网上。 */
+/** 只给测试用：让子进程里起的本地「机场」能被拉到。生产环境没有这个变量。 */
+function testAllowsPrivateSource() {
+  return process.env.FORWARDX_TEST_ALLOW_PRIVATE_SUB_SOURCE === "1" && process.env.NODE_ENV !== "production";
+}
+
 export async function assertPublicHost(hostname: string): Promise<void> {
   const host = String(hostname || "").replace(/^\[|\]$/g, "");
   if (!host) throw new ProxySubSourceFetchError("地址缺少主机名");
-  // 只给测试用：让子进程里起的本地「机场」能被拉到。生产环境没有这个变量。
-  if (process.env.FORWARDX_TEST_ALLOW_PRIVATE_SUB_SOURCE === "1" && process.env.NODE_ENV !== "production") return;
+  if (testAllowsPrivateSource()) return;
   if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal")) {
     throw new ProxySubSourceFetchError("不能拉取内网地址");
   }
@@ -52,47 +58,48 @@ export type FetchedSubscription = {
   contentHash: string;
 };
 
+function headerText(value: string | string[] | undefined): string {
+  return String(Array.isArray(value) ? value[0] : value || "");
+}
+
 export async function fetchExternalSubscription(url: string, userAgent: string): Promise<FetchedSubscription> {
   let current = new URL(url);
   if (current.protocol !== "http:" && current.protocol !== "https:") throw new ProxySubSourceFetchError("只支持 http(s) 地址");
   for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
+    // 先查一遍给出明白的报错；真正挡住的是连接时 lookup 里的那一遍（防重绑定）。
     await assertPublicHost(current.hostname);
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-    let response: Response;
+    let response: Awaited<ReturnType<typeof safeHttpGet>>;
     try {
-      response = await fetch(current.toString(), {
+      response = await safeHttpGet(current.toString(), {
         headers: { "user-agent": userAgent || DEFAULT_UA, accept: "*/*" },
-        redirect: "manual",
-        signal: controller.signal,
+        timeoutMs: TIMEOUT_MS,
+        maxBytes: MAX_BYTES,
+        purpose: "外部订阅",
+        isBlockedAddress: (address) => !testAllowsPrivateSource() && classifyIpAddress(address) !== "public",
       });
     } catch (error) {
-      clearTimeout(timer);
-      throw new ProxySubSourceFetchError(error instanceof Error && error.name === "AbortError" ? "拉取超时（15 秒）" : `拉取失败：${error instanceof Error ? error.message : String(error)}`);
-    }
-    try {
-      if (response.status >= 300 && response.status < 400) {
-        const location = response.headers.get("location");
-        if (!location) throw new ProxySubSourceFetchError(`上游返回 ${response.status} 但没有跳转地址`);
-        const next = new URL(location, current);
-        if (next.host !== current.host) throw new ProxySubSourceFetchError("上游跳转到了另一个主机，不跟随");
-        current = next;
-        continue;
+      if (error instanceof SafeOutboundError) {
+        if (error.code === "timeout") throw new ProxySubSourceFetchError("拉取超时（15 秒）");
+        if (error.code === "too-large") throw new ProxySubSourceFetchError("正文超过 2 MB");
+        if (error.code === "blocked") throw new ProxySubSourceFetchError("不能拉取内网地址");
       }
-      if (!response.ok) throw new ProxySubSourceFetchError(`上游返回 ${response.status}`);
-      const length = Number(response.headers.get("content-length") || 0);
-      if (length > MAX_BYTES) throw new ProxySubSourceFetchError("正文超过 2 MB");
-      const buffer = Buffer.from(await response.arrayBuffer());
-      if (buffer.length > MAX_BYTES) throw new ProxySubSourceFetchError("正文超过 2 MB");
-      const body = buffer.toString("utf8");
-      return {
-        body,
-        userinfo: response.headers.get("subscription-userinfo") || "",
-        contentHash: createHash("sha256").update(buffer).digest("hex"),
-      };
-    } finally {
-      clearTimeout(timer);
+      throw new ProxySubSourceFetchError(`拉取失败：${error instanceof Error ? error.message : String(error)}`);
     }
+    if (response.status >= 300 && response.status < 400) {
+      const location = headerText(response.headers.location);
+      if (!location) throw new ProxySubSourceFetchError(`上游返回 ${response.status} 但没有跳转地址`);
+      const next = new URL(location, current);
+      if (next.host !== current.host) throw new ProxySubSourceFetchError("上游跳转到了另一个主机，不跟随");
+      current = next;
+      continue;
+    }
+    if (response.status < 200 || response.status >= 300) throw new ProxySubSourceFetchError(`上游返回 ${response.status}`);
+    const buffer = response.body;
+    return {
+      body: buffer.toString("utf8"),
+      userinfo: headerText(response.headers["subscription-userinfo"]),
+      contentHash: createHash("sha256").update(buffer).digest("hex"),
+    };
   }
   throw new ProxySubSourceFetchError("跳转次数过多");
 }
@@ -244,12 +251,45 @@ export async function syncProxySubSource(sourceId: number, options: { force?: bo
 
 let running = 0;
 
+/**
+ * 定时拉取前的资格：和「改源 / 立即同步」两个接口同一套（全局开关 + 管理员或套餐允许）。
+ * 不够格的不拉，但把这一轮记成失败（写上原因、刷新拉取时间）：不刷新的话它们一直排在
+ * 到点队列最前面，把够格的挤出去。
+ */
+async function sourceOwnerAllowed(userId: number, cache: Map<number, boolean>): Promise<boolean> {
+  if (cache.has(userId)) return cache.get(userId)!;
+  let allowed = false;
+  try {
+    const owner = await db.getUserById(userId) as any;
+    if (owner) {
+      allowed = String(owner.role) === "admin" || !!(await db.getUserPlanSubscriptionInfo(userId)).allowExternalSubSources;
+    }
+  } catch {
+    allowed = false;
+  }
+  cache.set(userId, allowed);
+  return allowed;
+}
+
 /** 定时任务：把到点的来源拉一遍，最多并发 3 路。 */
 export async function runProxySubSourceSync(now = Date.now()): Promise<number> {
   const due = await db.listDueProxySubSources(now, 20) as any[];
   if (due.length === 0) return 0;
+  const settings = await loadProxySubSettings();
+  const owners = new Map<number, boolean>();
+  const eligible: any[] = [];
+  for (const source of due) {
+    const reason = !settings.externalSourcesEnabled
+      ? "管理员没有开放外部订阅，暂停拉取"
+      : (await sourceOwnerAllowed(Number(source.userId), owners) ? "" : "当前套餐不包含外部订阅，暂停拉取");
+    if (!reason) {
+      eligible.push(source);
+      continue;
+    }
+    await db.updateProxySubSource(Number(source.id), { lastFetchAt: new Date(now), lastStatus: "error", lastError: reason } as any).catch(() => undefined);
+  }
   let done = 0;
-  const queue = [...due];
+  const queue = [...eligible];
   const worker = async () => {
     while (queue.length > 0) {
       const source = queue.shift();
