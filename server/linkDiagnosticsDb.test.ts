@@ -1,59 +1,30 @@
-import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase as runSharedDatabaseTest } from "./testing/runInDatabase";
 
 /**
  * 一键链路诊断从库到清单走一遍：直连规则、隧道规则、隧道本身。看面板侧的项判得对、
  * 新 Agent 排了任务、旧 Agent 那几项是「需要升级 Agent」、Agent 回报后清单跟着变。
  */
+const setup = String.raw`
+    const db = await import(url("server/db.ts"));
+    const diagnostics = await import(url("server/linkDiagnostics.ts"));
+    const tasks = await import(url("server/diagnosticsAgentTasks.ts"));
+
+
+    await exec("INSERT INTO users (id, username, password, role) VALUES (1, 'admin', 'hash', 'admin')");
+    await exec("INSERT INTO users (id, username, password, role, canAddRules, trafficLimit, trafficUsed) VALUES (2, 'bob', 'hash', 'user', 1, 1000, 1000)");
+    await exec("INSERT INTO hosts (id, name, ip, ipv4, agentToken, userId, agentVersion) VALUES (10, 'hk', '203.0.113.10', '203.0.113.10', 'tok10', 1, '2.2.226')");
+    await exec("INSERT INTO hosts (id, name, ip, ipv4, agentToken, userId, agentVersion) VALUES (11, 'jp', '203.0.113.11', '203.0.113.11', 'tok11', 1, '2.2.224')");
+    await exec("INSERT INTO hosts (id, name, ip, ipv4, agentToken, userId, agentVersion) VALUES (12, 'us', '203.0.113.12', '203.0.113.12', 'tok12', 1, '2.2.226')");
+    await db.updateHostHeartbeat(10);
+    await db.updateHostHeartbeat(11);
+    const admin = { user: { id: 1, role: "admin" } };
+    const bob = { user: { id: 2, role: "user" } };
+    const byKey = (report) => Object.fromEntries(report.items.map((item) => [item.key, item]));
+`;
+
 function runInDatabase(body: string) {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-diagnostics-"));
-  try {
-    const script = String.raw`
-      import assert from "node:assert/strict";
-      import path from "node:path";
-      import { pathToFileURL } from "node:url";
-
-      const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-      const runtime = await import(url("server/dbRuntime.ts"));
-      const schema = await import(url("server/dbSchema.ts"));
-      const db = await import(url("server/db.ts"));
-      const diagnostics = await import(url("server/linkDiagnostics.ts"));
-      const tasks = await import(url("server/diagnosticsAgentTasks.ts"));
-
-      await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-      await schema.ensureDatabaseSchema();
-      const exec = (sql, params = []) => runtime.executeRaw(sql, params);
-
-      await exec("INSERT INTO users (id, username, password, role) VALUES (1, 'admin', 'hash', 'admin')");
-      await exec("INSERT INTO users (id, username, password, role, canAddRules, trafficLimit, trafficUsed) VALUES (2, 'bob', 'hash', 'user', 1, 1000, 1000)");
-      await exec("INSERT INTO hosts (id, name, ip, ipv4, agentToken, userId, agentVersion) VALUES (10, 'hk', '203.0.113.10', '203.0.113.10', 'tok10', 1, '2.2.226')");
-      await exec("INSERT INTO hosts (id, name, ip, ipv4, agentToken, userId, agentVersion) VALUES (11, 'jp', '203.0.113.11', '203.0.113.11', 'tok11', 1, '2.2.224')");
-      await exec("INSERT INTO hosts (id, name, ip, ipv4, agentToken, userId, agentVersion) VALUES (12, 'us', '203.0.113.12', '203.0.113.12', 'tok12', 1, '2.2.226')");
-      await db.updateHostHeartbeat(10);
-      await db.updateHostHeartbeat(11);
-      const admin = { user: { id: 1, role: "admin" } };
-      const bob = { user: { id: 2, role: "user" } };
-      const byKey = (report) => Object.fromEntries(report.items.map((item) => [item.key, item]));
-
-      ${body}
-
-      console.log("OK");
-    `;
-    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: path.join(directory, "diag.db") },
-      timeout: 120_000,
-    });
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    assert.match(result.stdout, /OK/);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  runSharedDatabaseTest(body, { name: "diagnostics", setup });
 }
 
 test("直连规则：面板侧当场出结论，Agent 项先等待，回报后更新；端口冲突、流量用完都能判出来", () => {

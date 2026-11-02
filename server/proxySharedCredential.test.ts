@@ -1,9 +1,5 @@
-import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase as runSharedDatabaseTest } from "./testing/runInDatabase";
 
 /**
  * 分享给租户时发一份独立凭据。
@@ -15,63 +11,37 @@ import test from "node:test";
  * 另一半是它不能被顺手删掉：管理员在入站弹窗里改个名字保存一下，提交的用户
  * 清单里没有这些自动发的凭据，全量替换会把租户集体断掉，而界面上看不出来。
  */
+const setup = String.raw`
+    const shares = await import(url("server/repositories/proxySubscriptionRepository.ts"));
+    const inbounds = await import(url("server/repositories/proxyInboundRepository.ts"));
+
+
+    // alice 是落地机与入站的主人；bob、carol 是租户。
+    await exec("INSERT INTO users (id, username, password, role, allowProxySubscription) VALUES (1, 'alice', 'hash', 'admin', 1)");
+    await exec("INSERT INTO users (id, username, password, role, allowProxySubscription) VALUES (2, 'bob', 'hash', 'user', 1)");
+    await exec("INSERT INTO users (id, username, password, role, allowProxySubscription) VALUES (3, 'carol', 'hash', 'user', 1)");
+    await exec("INSERT INTO hosts (id, name, ip, agentToken, userId) VALUES (10, 'hk', '203.0.113.9', 'tok', 1)");
+
+    /** 建一个入站并派生节点，返回主人自己那条节点的 id。 */
+    const makeInbound = async (protocol, port) => {
+      const id = Number(await inbounds.createProxyInbound({
+        userId: 1, hostId: 10, name: "HK", protocol, port,
+        transport: "tcp", security: protocol === "vless" ? "reality" : "none",
+        uuid: "11111111-2222-3333-4444-555555555555",
+        password: "psk-of-the-owner", method: "aes-128-gcm",
+        isEnabled: true,
+      }));
+      await inbounds.replaceProxyInboundUsers(id, [
+        { id: 0, name: "自己", uuid: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", password: "own-pass" },
+      ]);
+      await inbounds.syncProxyNodeFromInbound(id);
+      const rows = await query("SELECT id FROM proxy_nodes WHERE inboundId = ? ORDER BY id", [id]);
+      return { inboundId: id, nodeId: Number(rows[0].id) };
+    };
+`;
+
 function runInDatabase(body: string) {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-shared-credential-"));
-  try {
-    const script = String.raw`
-      import assert from "node:assert/strict";
-      import path from "node:path";
-      import { pathToFileURL } from "node:url";
-
-      const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-      const runtime = await import(url("server/dbRuntime.ts"));
-      const schema = await import(url("server/dbSchema.ts"));
-      const shares = await import(url("server/repositories/proxySubscriptionRepository.ts"));
-      const inbounds = await import(url("server/repositories/proxyInboundRepository.ts"));
-
-      await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-      await schema.ensureDatabaseSchema();
-      const exec = (sql, params = []) => runtime.executeRaw(sql, params);
-      const query = (sql, params = []) => runtime.queryRaw(sql, params);
-
-      // alice 是落地机与入站的主人；bob、carol 是租户。
-      await exec("INSERT INTO users (id, username, password, role, allowProxySubscription) VALUES (1, 'alice', 'hash', 'admin', 1)");
-      await exec("INSERT INTO users (id, username, password, role, allowProxySubscription) VALUES (2, 'bob', 'hash', 'user', 1)");
-      await exec("INSERT INTO users (id, username, password, role, allowProxySubscription) VALUES (3, 'carol', 'hash', 'user', 1)");
-      await exec("INSERT INTO hosts (id, name, ip, agentToken, userId) VALUES (10, 'hk', '203.0.113.9', 'tok', 1)");
-
-      /** 建一个入站并派生节点，返回主人自己那条节点的 id。 */
-      const makeInbound = async (protocol, port) => {
-        const id = Number(await inbounds.createProxyInbound({
-          userId: 1, hostId: 10, name: "HK", protocol, port,
-          transport: "tcp", security: protocol === "vless" ? "reality" : "none",
-          uuid: "11111111-2222-3333-4444-555555555555",
-          password: "psk-of-the-owner", method: "aes-128-gcm",
-          isEnabled: true,
-        }));
-        await inbounds.replaceProxyInboundUsers(id, [
-          { id: 0, name: "自己", uuid: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", password: "own-pass" },
-        ]);
-        await inbounds.syncProxyNodeFromInbound(id);
-        const rows = await query("SELECT id FROM proxy_nodes WHERE inboundId = ? ORDER BY id", [id]);
-        return { inboundId: id, nodeId: Number(rows[0].id) };
-      };
-
-      ${body}
-
-      console.log("OK");
-    `;
-    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: path.join(directory, "credential.db") },
-      timeout: 120_000,
-    });
-    assert.equal(result.status, 0, result.stderr || result.stdout);
-    assert.match(result.stdout, /OK/);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  runSharedDatabaseTest(body, { name: "shared-credential", setup });
 }
 
 test("分享多凭据入站：对方拿到的是自己那份，不是主人那份", () => {

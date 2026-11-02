@@ -1,9 +1,5 @@
-import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase as runSharedDatabaseTest } from "./testing/runInDatabase";
 
 /**
  * 多周期定价跑在真库上。
@@ -15,58 +11,32 @@ import test from "node:test";
  * 还有一条同样重要：**存量套餐一行没配也要照常能买**，否则这次改动会把所有老套餐
  * 变成买不了的卡片。
  */
+const setup = String.raw`
+    const billing = await import(url("server/repositories/billingRepository.ts"));
+
+
+    await exec("INSERT INTO users (id, username, password, role, allowProxySubscription, balanceCents) VALUES (1, 'alice', 'h', 'admin', 1, 0)");
+    await exec("INSERT INTO users (id, username, password, role, allowProxySubscription, balanceCents) VALUES (2, 'bob', 'h', 'user', 1, 100000)");
+    await exec("INSERT INTO hosts (id, name, ip, agentToken, userId) VALUES (10, 'hk', '203.0.113.9', 'tok', 1)");
+
+    /** 建一个套餐；tiers 为空就是「只有默认那一档」的老形态。 */
+    const makePlan = async (priceCents, durationDays, tiers = []) => Number((await billing.createSubscriptionPlan({
+      name: "月付", priceCents, currency: "CNY", durationDays,
+      portCount: 10, maxRules: 10, allowProxySubscription: true,
+      isActive: true, isStoreVisible: true,
+    }, [10], [], [], [], [], tiers)).id);
+
+    const balanceOf = async (userId = 2) => Number((await query("SELECT balanceCents FROM users WHERE id = ?", [userId]))[0].balanceCents);
+    const subscriptionRow = async () => (await query("SELECT * FROM user_subscriptions WHERE userId = 2 ORDER BY id DESC LIMIT 1"))[0];
+    /** 到期时间距今多少天（四舍五入）—— 直接比时间戳会被跑测试花掉的那几毫秒干扰。 */
+    const daysLeft = async () => {
+      const row = await subscriptionRow();
+      return Math.round((Number(row.expiresAt) - Math.floor(Date.now() / 1000)) / 86400);
+    };
+`;
+
 function runInDatabase(body: string) {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-plan-pricing-"));
-  try {
-    const script = String.raw`
-      import assert from "node:assert/strict";
-      import path from "node:path";
-      import { pathToFileURL } from "node:url";
-
-      const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-      const runtime = await import(url("server/dbRuntime.ts"));
-      const schema = await import(url("server/dbSchema.ts"));
-      const billing = await import(url("server/repositories/billingRepository.ts"));
-
-      await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-      await schema.ensureDatabaseSchema();
-      const exec = (sql, params = []) => runtime.executeRaw(sql, params);
-      const query = (sql, params = []) => runtime.queryRaw(sql, params);
-
-      await exec("INSERT INTO users (id, username, password, role, allowProxySubscription, balanceCents) VALUES (1, 'alice', 'h', 'admin', 1, 0)");
-      await exec("INSERT INTO users (id, username, password, role, allowProxySubscription, balanceCents) VALUES (2, 'bob', 'h', 'user', 1, 100000)");
-      await exec("INSERT INTO hosts (id, name, ip, agentToken, userId) VALUES (10, 'hk', '203.0.113.9', 'tok', 1)");
-
-      /** 建一个套餐；tiers 为空就是「只有默认那一档」的老形态。 */
-      const makePlan = async (priceCents, durationDays, tiers = []) => Number((await billing.createSubscriptionPlan({
-        name: "月付", priceCents, currency: "CNY", durationDays,
-        portCount: 10, maxRules: 10, allowProxySubscription: true,
-        isActive: true, isStoreVisible: true,
-      }, [10], [], [], [], [], tiers)).id);
-
-      const balanceOf = async (userId = 2) => Number((await query("SELECT balanceCents FROM users WHERE id = ?", [userId]))[0].balanceCents);
-      const subscriptionRow = async () => (await query("SELECT * FROM user_subscriptions WHERE userId = 2 ORDER BY id DESC LIMIT 1"))[0];
-      /** 到期时间距今多少天（四舍五入）—— 直接比时间戳会被跑测试花掉的那几毫秒干扰。 */
-      const daysLeft = async () => {
-        const row = await subscriptionRow();
-        return Math.round((Number(row.expiresAt) - Math.floor(Date.now() / 1000)) / 86400);
-      };
-
-      ${body}
-
-      console.log("OK");
-    `;
-    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: path.join(directory, "pricing.db") },
-      timeout: 120_000,
-    });
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    assert.match(result.stdout, /OK/);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  runSharedDatabaseTest(body, { name: "plan-pricing", setup });
 }
 
 test("没配多周期的老套餐照常能买 —— 这次改动不能把存量套餐变成买不了的卡片", () => {

@@ -1,9 +1,5 @@
-import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase as runSharedDatabaseTest } from "./testing/runInDatabase";
 
 /**
  * 节点分享：把我的某几个节点放进别人的订阅，所有权不变。
@@ -11,49 +7,23 @@ import test from "node:test";
  * 与「归属用户」的分工是这一组用例要守住的东西 —— 归属是整份转给对方，
  * 分享是同一份同时出现在两个人的订阅里。
  */
+const setup = String.raw`
+    const repo = await import(url("server/repositories/proxySubscriptionRepository.ts"));
+
+
+    // alice 是节点主人，bob 只租节点。
+    await exec("INSERT INTO users (id, username, password, role, allowProxySubscription) VALUES (1, 'alice', 'hash', 'admin', 1)");
+    await exec("INSERT INTO users (id, username, password, role, allowProxySubscription) VALUES (2, 'bob', 'hash', 'user', 1)");
+
+    const makeNode = async (userId, name, port, extra = {}) => Number(await repo.createProxyNode({
+      userId, name, protocol: "vless", address: "1.2.3.4", port,
+      uuid: "11111111-2222-3333-4444-555555555555", transport: "tcp", tls: true,
+      isEnabled: true, ...extra,
+    }));
+`;
+
 function runInDatabase(body: string) {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-node-share-"));
-  try {
-    const script = String.raw`
-      import assert from "node:assert/strict";
-      import path from "node:path";
-      import { pathToFileURL } from "node:url";
-
-      const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-      const runtime = await import(url("server/dbRuntime.ts"));
-      const schema = await import(url("server/dbSchema.ts"));
-      const repo = await import(url("server/repositories/proxySubscriptionRepository.ts"));
-
-      await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-      await schema.ensureDatabaseSchema();
-      const exec = (sql, params = []) => runtime.executeRaw(sql, params);
-      const query = (sql, params = []) => runtime.queryRaw(sql, params);
-
-      // alice 是节点主人，bob 只租节点。
-      await exec("INSERT INTO users (id, username, password, role, allowProxySubscription) VALUES (1, 'alice', 'hash', 'admin', 1)");
-      await exec("INSERT INTO users (id, username, password, role, allowProxySubscription) VALUES (2, 'bob', 'hash', 'user', 1)");
-
-      const makeNode = async (userId, name, port, extra = {}) => Number(await repo.createProxyNode({
-        userId, name, protocol: "vless", address: "1.2.3.4", port,
-        uuid: "11111111-2222-3333-4444-555555555555", transport: "tcp", tls: true,
-        isEnabled: true, ...extra,
-      }));
-
-      ${body}
-
-      console.log("OK");
-    `;
-    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: path.join(directory, "share.db") },
-      timeout: 120_000,
-    });
-    assert.equal(result.status, 0, result.stderr || result.stdout);
-    assert.match(result.stdout, /OK/);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  runSharedDatabaseTest(body, { name: "node-share", setup });
 }
 
 test("分享给谁，谁的订阅里就有这个节点", () => {
