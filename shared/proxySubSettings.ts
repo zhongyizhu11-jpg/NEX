@@ -96,7 +96,7 @@ export const PROXY_SUB_DEFAULT_SETTINGS: ProxySubSettings = {
   deviceLimitFallback: 0,
   deviceIpWindowHours: 24,
   infoNodesDefault: false,
-  nameTemplateDefault: "{host} → {node}",
+  nameTemplateDefault: "{name}",
   flagEmojiDefault: false,
   regionGroupsDefault: false,
   protocolPrefixDefault: false,

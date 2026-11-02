@@ -96,7 +96,7 @@ test("条目带出口主机：直连是节点所在机器，中转是落地所�
   const byName = new Map(entries.map((entry) => [entry.node.name, entry.meta?.exitHostId]));
   assert.equal(byName.get("US"), 10);
   assert.equal(byName.get("JP"), 20);
-  assert.equal(byName.get("广州1 → JP"), 20);
+  assert.equal(byName.get("jp-relay"), 20);
   assert.equal(byName.get("Shared"), null);
   assert.deepEqual(proxySubUnlockExitHostIds(entries).sort((a, b) => a - b), [10, 20, 30]);
 });
@@ -117,9 +117,9 @@ test("合格节点进解锁组（最近检测的在前），分类组首选它�
   const netflix = document.groups.find((group) => group.name === "Netflix 解锁");
   assert.ok(netflix);
   assert.equal(netflix.type, "fallback");
-  assert.deepEqual(netflix.members, ["JP", "广州1 → JP", "US"]);
+  assert.deepEqual(netflix.members, ["JP", "jp-relay", "US"]);
   const ai = document.groups.find((group) => group.name === "AI 解锁");
-  assert.deepEqual(ai?.members, ["JP", "广州1 → JP"]);
+  assert.deepEqual(ai?.members, ["JP", "jp-relay"]);
 
   const baseline = doc();
   for (const key of ["netflix", "ai"]) {
@@ -229,7 +229,7 @@ test("各格式都按已有的组写法输出解锁组", () => {
   const at = clashLines.indexOf('  - name: "Netflix 解锁"');
   assert.ok(at > 0, "clash 里有解锁组");
   assert.equal(clashLines[at + 1], "    type: fallback");
-  assert.equal(clashLines[at + 2], '    proxies: ["JP", "广州1 → JP", "US"]');
+  assert.equal(clashLines[at + 2], '    proxies: ["JP", "jp-relay", "US"]');
   const catAt = clashLines.indexOf(`  - name: "${netflixCategory}"`);
   assert.ok(clashLines[catAt + 2].startsWith('    proxies: ["Netflix 解锁", '));
 
@@ -237,7 +237,7 @@ test("各格式都按已有的组写法输出解锁组", () => {
   const singbox = JSON.parse(renderProxySubscription(document, "singbox"));
   const unlock = singbox.outbounds.find((item: any) => item.tag === "Netflix 解锁");
   assert.equal(unlock.type, "urltest");
-  assert.deepEqual(unlock.outbounds, ["JP", "广州1 → JP", "US"]);
+  assert.deepEqual(unlock.outbounds, ["JP", "jp-relay", "US"]);
   const selector = singbox.outbounds.find((item: any) => item.tag === netflixCategory);
   assert.equal(selector.outbounds[0], "Netflix 解锁");
   const tags = new Set(singbox.outbounds.map((item: any) => item.tag));
@@ -257,7 +257,7 @@ test("各格式都按已有的组写法输出解锁组", () => {
 test("某个格式写不出组里的节点时，解锁组连同对它的引用一起去掉", () => {
   const document = doc({ unlock: STATUSES });
   // Surge 不支持 VLESS：把解锁组里的节点（JP / US 两台出口）换成 VLESS，HK / Shared 保持 trojan。
-  const vless = new Set(["JP", "广州1 → JP", "US"]);
+  const vless = new Set(["JP", "jp-relay", "US"]);
   const mixed: ProxySubscriptionDocument = {
     ...document,
     nodes: document.nodes.map((node) => (vless.has(node.name) ? { ...node, protocol: "vless" as const, uuid: "u" } : node)),

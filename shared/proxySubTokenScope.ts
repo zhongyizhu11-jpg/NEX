@@ -101,6 +101,7 @@ export const PROXY_SUB_DEFAULT_TOKEN_OPTIONS: ProxySubTokenOptions = {
 };
 
 export const PROXY_SUB_NAME_TEMPLATE_VARIABLES: ReadonlyArray<{ key: string; label: string }> = [
+  { key: "{name}", label: "默认名：订阅里改过的名字，否则转发规则名（规则没起名是「入口 → 落地」）" },
   { key: "{flag}", label: "国旗（认得出地区时）" },
   { key: "{country}", label: "地区中文名" },
   { key: "{code}", label: "地区代码" },

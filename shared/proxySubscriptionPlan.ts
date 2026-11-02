@@ -308,16 +308,25 @@ function templateExitHostId(template: ProxyNodeTemplateRow): number | null {
   return Number.isInteger(hostId) && hostId > 0 ? hostId : null;
 }
 
-/** 订阅里显示的节点名：优先用户自定义，否则「入口主机 → 模板名」。 */
+/**
+ * 订阅里显示的节点名（用户在订阅里改过名的不走这里）：转发规则自己的名字；规则没起名才拼
+ * 「入口主机 → 模板名」。
+ *
+ * 原来一律拼「入口主机 → 落地」：同一台入口到同一个落地的几条（直走的、经中转的、挂线路组的）
+ * 在客户端里长得几乎一样，分不清哪条是哪条。规则名是他自己起的，转发页上看到的也是它。
+ * ruleName 传规则**真正的**名字，没起名传空串（别传「规则 #12」这种兜底）。
+ */
 export function defaultProxySubscriptionNodeName(options: {
   hostName: string;
   templateName: string;
   ruleName: string;
 }): string {
+  const rule = text(options.ruleName);
+  if (rule) return rule;
   const host = text(options.hostName);
   const template = text(options.templateName);
   if (host && template) return `${host} → ${template}`;
-  return template || host || text(options.ruleName) || "节点";
+  return template || host || "节点";
 }
 
 export type BuildProxySubscriptionPlanInput = {
@@ -491,7 +500,7 @@ export function buildProxySubscriptionPlan(input: BuildProxySubscriptionPlanInpu
         ? defaultProxySubscriptionNodeName({
           hostName: text(hostsById.get(Number(rule.hostId || 0))?.name),
           templateName: proxyNodeFromTemplateRow(hiddenTemplate).name,
-          ruleName,
+          ruleName: text(rule.name),
         })
         : "");
       skipped.push({
@@ -552,7 +561,7 @@ export function buildProxySubscriptionPlan(input: BuildProxySubscriptionPlanInpu
     const name = text(rule.proxyNodeName) || defaultProxySubscriptionNodeName({
       hostName: text(host?.name),
       templateName: templateNode.name,
-      ruleName,
+      ruleName: text(rule.name),
     });
 
     /**
@@ -605,6 +614,18 @@ export function buildProxySubscriptionPlan(input: BuildProxySubscriptionPlanInpu
       },
       node: relayProxyNode(templateNode, { address, port, name }),
     });
+  }
+
+  /**
+   * 默认名取规则名以后，几条撞名的（转发组展开到几台入口、或者两条规则起了同一个名字）
+   * 后面带上入口机，比「#2」好认。改过名的、规则没起名的不动；带上以后还撞的交给去重。
+   */
+  const ruleNamed = entries.filter((entry) => !entry.meta?.customName && text(entry.meta?.ruleName) && entry.node.name === entry.meta?.ruleName);
+  const nameCounts = new Map<string, number>();
+  for (const entry of ruleNamed) nameCounts.set(entry.node.name, (nameCounts.get(entry.node.name) ?? 0) + 1);
+  for (const entry of ruleNamed) {
+    const host = text(entry.meta?.hostName);
+    if ((nameCounts.get(entry.node.name) ?? 0) > 1 && host) entry.node = { ...entry.node, name: `${entry.node.name} · ${host}` };
   }
 
   // 直连条目自己也可能有前置（例如落地直连要经由线路机）。

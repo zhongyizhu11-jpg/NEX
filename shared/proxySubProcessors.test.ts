@@ -76,7 +76,7 @@ test("旗帜、协议前缀、前后缀、正则改名按顺序叠加；地区�
     options: { ...options, flagEmoji: "on", protocolPrefix: "on", prefix: "[NEX] ", suffix: " ★", renames: [{ from: "BGP", to: "IEPL" }] },
     settings,
   });
-  assert.equal(renamed.entries[0].node.name, "[NEX] [VLESS] 🇯🇵 上海 → 东京 IEPL ★");
+  assert.equal(renamed.entries[0].node.name, "[NEX] [VLESS] 🇯🇵 东京 IEPL ★");
   assert.equal(renamed.entries[0].node.regionCode, "JP");
   // 全局默认开旗帜，令牌不设 → 跟随；令牌设 off → 关。
   const withGlobal = applyProxySubNaming(plan([jp]), { options, settings: { ...settings, flagEmojiDefault: true } });

@@ -167,7 +167,7 @@ test("订阅地址按 token 返回节点，并按客户端 UA 选择格式", () 
     // QX 支持 VLESS，UA 里的域名部分是 URL 编码的 "Quantumult%20X"。
     const qx = await get("/api/sub/token-live", { "user-agent": "Quantumult%20X/1.0.30" });
     assert.ok(qx.body.startsWith("vless=1.2.3.4:20001"), qx.body.slice(0, 120));
-    assert.ok(qx.body.includes("tag=广州1 → HKT"), qx.body.slice(0, 200));
+    assert.ok(qx.body.includes("tag=广州1转HKT"), qx.body.slice(0, 200));
 
     // 显式 format 参数优先于 UA。
     const forced = await get("/api/sub/token-live?format=clash", { "user-agent": "Loon/700" });

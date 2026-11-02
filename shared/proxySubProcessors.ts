@@ -94,6 +94,15 @@ function tidyName(value: string): string {
     .trim();
 }
 
+/** 默认的节点命名模板：原样用生成时起好的名字。 */
+export const PROXY_SUB_DEFAULT_NAME_TEMPLATE = "{name}";
+
+/** 这个模板是不是「默认」：空、{name}，或者以前的默认值「{host} → {node}」。 */
+export function isProxySubDefaultNameTemplate(template: string): boolean {
+  const value = String(template || "").trim();
+  return !value || value === PROXY_SUB_DEFAULT_NAME_TEMPLATE || value === "{host} → {node}";
+}
+
 export function renderProxySubNodeName(template: string, vars: Record<string, string>): string {
   // 空变量先换成占位符，再把紧挨着它的分隔符一起去掉：「{host} → {node}」在直连条目上
   // 不该剩一个孤零零的箭头。
@@ -112,7 +121,7 @@ export function renderProxySubNodeName(template: string, vars: Record<string, st
 
 export function applyProxySubNaming(plan: ProxySubscriptionPlan, context: ProxySubNamingContext): ProxySubscriptionPlan {
   const { options, settings } = context;
-  const template = options.nameTemplate || settings.nameTemplateDefault || "{host} → {node}";
+  const template = options.nameTemplate || settings.nameTemplateDefault || PROXY_SUB_DEFAULT_NAME_TEMPLATE;
   const useFlag = resolveTriState(options.flagEmoji, settings.flagEmojiDefault);
   const useProtocol = resolveTriState(options.protocolPrefix, settings.protocolPrefixDefault);
   const renames = options.renames
@@ -125,14 +134,16 @@ export function applyProxySubNaming(plan: ProxySubscriptionPlan, context: ProxyS
     });
   const templateHasFlag = /\{flag\}/i.test(template);
   // 不是默认模板的话，手填的名字照样套：用户选模板就是想统一外观；默认模板下保留原来的行为。
-  const isDefaultTemplate = template.trim() === "{host} → {node}";
+  // 默认模板就是「用生成时起好的名字」（规则名，没起名才是「入口 → 落地」）。以前存下来的
+  // 「{host} → {node}」是当时的默认值，不是谁特意选的，也按默认算，不然规则名永远出不来。
+  const isDefaultTemplate = isProxySubDefaultNameTemplate(template);
 
   const entries = plan.entries.map((entry, index) => {
     const meta = entryMeta(entry);
     const code = meta.regionCode || guessProxySubRegionCode(`${meta.templateName} ${meta.hostName} ${entry.node.name}`);
     const flag = proxySubRegionFlag(code);
     let name = entry.node.name;
-    if (!(meta.customName && isDefaultTemplate)) {
+    if (!isDefaultTemplate) {
       const rendered = renderProxySubNodeName(template, {
         flag,
         country: proxySubRegionName(code),
