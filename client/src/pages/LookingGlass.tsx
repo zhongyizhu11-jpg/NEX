@@ -1,6 +1,7 @@
 import WorkspaceHeader from "@/components/WorkspaceHeader";
 import { FormField } from "@/components/ui/form-field";
 import DashboardLayout from "@/components/DashboardLayout";
+import QueryErrorState, { failedQueryState } from "@/components/QueryErrorState";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { BorderBeam } from "@/components/ui/border-beam";
@@ -345,10 +346,13 @@ export default function LookingGlass() {
   const [liveOutput, setLiveOutput] = useState("");
   const completedTaskIdsRef = useRef<Set<string>>(new Set());
 
-  const { data: hosts } = trpc.lookingGlass.hosts.useQuery(undefined, {
+  const hostsQuery = trpc.lookingGlass.hosts.useQuery(undefined, {
     staleTime: 60000,
     refetchOnWindowFocus: false,
   });
+  const hosts = hostsQuery.data;
+  // 主机列表没读到时说没读到，不说「暂无可用主机」。
+  const hostsFailure = failedQueryState(hostsQuery);
   const availableHosts = useMemo(() => hosts || [], [hosts]);
   const selectedHost = availableHosts.find((host: any) => String(host.id) === hostId) as any;
   const clientInfo = trpc.lookingGlass.clientInfo.useQuery(undefined, {
@@ -663,7 +667,9 @@ export default function LookingGlass() {
                     ))}
                   </SelectContent>
                 </Select>
-                {availableHosts.length === 0 && (
+                {hostsFailure ? (
+                  <QueryErrorState compact label="主机列表" {...hostsFailure} />
+                ) : availableHosts.length === 0 && (
                   <p className="text-xs text-muted-foreground">暂无可用主机，请先添加并连接 Agent。</p>
                 )}
               </FormField>
@@ -855,7 +861,7 @@ export default function LookingGlass() {
 
               <div className="rounded-lg border border-border/40 bg-muted/20 p-3">
                 <p className="text-xs font-medium text-muted-foreground">当前访问 IP</p>
-                <p className="mt-1 break-all font-mono text-sm">{clientInfo.data?.ip || "正在获取..."}</p>
+                <p className="mt-1 break-all font-mono text-sm">{clientInfo.data?.ip || (clientInfo.isError ? "没读到" : "正在获取...")}</p>
               </div>
 
               {latestResult && !isIperf3Method && (

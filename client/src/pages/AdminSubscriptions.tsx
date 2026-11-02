@@ -6,6 +6,7 @@
  */
 
 import DashboardLayout from "@/components/DashboardLayout";
+import QueryErrorState, { QueryErrorRow, failedQueryState } from "@/components/QueryErrorState";
 import { PROXY_SUB_GROUP_MATCHES, PROXY_SUB_GROUP_MATCH_LABELS, normalizeProxySubGroupMatch, type ProxySubGroupMatch } from "@shared/proxySubGroupFilter";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
 import { ProxySubTokenDevicesDialog, ProxySubTokenEditDialog, ProxySubTokenLogsDialog, type ProxySubTokenLike } from "@/components/proxy/ProxySubTokenDialogs";
@@ -90,7 +91,9 @@ function TokensTab() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {items.length === 0 ? (
+              {items.length === 0 && !query.isLoading && query.isError ? (
+                <QueryErrorRow colSpan={7} label="令牌列表" error={query.error} onRetry={() => void query.refetch()} retrying={query.isFetching} />
+              ) : items.length === 0 ? (
                 <TableRow><TableCell colSpan={7} className="py-8 text-center text-sm text-muted-foreground">{query.isLoading ? "加载中…" : "没有令牌"}</TableCell></TableRow>
               ) : items.map((row) => {
                 const status = proxySubTokenStatus(row);
@@ -157,6 +160,7 @@ function StatsTab() {
   const stats = trpc.proxySubscriptions.adminAccessStats.useQuery({ days });
   const logs = trpc.proxySubscriptions.adminAccessLogs.useQuery({ limit: 100 });
   const data = stats.data;
+  const statsFailure = failedQueryState(stats);
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-2">
@@ -168,6 +172,7 @@ function StatsTab() {
           </SelectContent>
         </Select>
       </div>
+      {statsFailure ? <QueryErrorState compact label="拉取统计" {...statsFailure} /> : null}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Card><CardContent className="p-4"><p className="text-xs text-muted-foreground">拉取次数</p><p className="text-2xl font-semibold">{data?.total ?? "—"}</p></CardContent></Card>
         <Card><CardContent className="p-4"><p className="text-xs text-muted-foreground">不同 IP</p><p className="text-2xl font-semibold">{data?.distinctIps ?? "—"}</p></CardContent></Card>
@@ -208,6 +213,7 @@ function StatsTab() {
               </TableRow>
             </TableHeader>
             <TableBody>
+              {failedQueryState(logs) ? <QueryErrorRow colSpan={6} label="拉取记录" {...failedQueryState(logs)!} /> : null}
               {(logs.data || []).map((row: any) => (
                 <TableRow key={row.id}>
                   <TableCell className="whitespace-nowrap text-xs">{timeText(row.at)}</TableCell>
@@ -285,7 +291,9 @@ function TemplatesTab() {
         </p>
         <Button size="sm" onClick={() => openCreate()}><Plus className="mr-1 h-4 w-4" />新建模板</Button>
       </div>
-      {templates.length === 0 ? (
+      {failedQueryState(query) ? (
+        <QueryErrorState label="模板" minHeight="min-h-[120px]" {...failedQueryState(query)!} />
+      ) : templates.length === 0 ? (
         <Card><CardContent className="py-8 text-center text-sm text-muted-foreground">还没有模板，所有人用内置的开头部分。</CardContent></Card>
       ) : (
         <div className="grid gap-3 md:grid-cols-2">
@@ -425,6 +433,9 @@ function SettingsTab() {
   const submit = () => {
     save.mutate({ ...form, domains: domainsText.split(/\r?\n/).map((item) => item.trim()).filter(Boolean) });
   };
+  // 没读到现有设置时不给表单：不然看到的是默认值，一点保存就把真实设置盖掉。
+  const settingsFailure = failedQueryState(query);
+  if (settingsFailure) return <QueryErrorState label="订阅设置" {...settingsFailure} />;
 
   return (
     <div className="space-y-4">

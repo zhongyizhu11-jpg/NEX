@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { formatBytes } from "@shared/formatBytes";
 import DashboardLayout from "@/components/DashboardLayout";
 import DataSectionLoading from "@/components/DataSectionLoading";
+import QueryErrorState, { failedQueryState } from "@/components/QueryErrorState";
 import { AgentResourceManager } from "@/components/plugins/AgentResourceManager";
 import { PluginResultRenderer } from "@/components/plugins/PluginResultRenderer";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -777,21 +778,27 @@ export default function Plugins({ sidebarPluginId }: { sidebarPluginId?: string 
   const utils = trpc.useUtils();
   const confirmDialog = useConfirmDialog();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const { data: publicInfo, isLoading: publicInfoLoading } = trpc.system.publicInfo.useQuery(undefined, {
+  const publicInfoQuery = trpc.system.publicInfo.useQuery(undefined, {
     refetchOnWindowFocus: false,
     retry: false,
   });
-  const { data: storeItems = [], isLoading: storeLoading } = trpc.plugins.store.useQuery(undefined, {
+  const { data: publicInfo, isLoading: publicInfoLoading } = publicInfoQuery;
+  const storeQuery = trpc.plugins.store.useQuery(undefined, {
     enabled: publicInfo?.pluginsEnabled === true,
   });
+  const { data: storeItems = [], isLoading: storeLoading } = storeQuery;
   const { data: storeSources = [] } = trpc.plugins.storeSources.useQuery(undefined, {
     enabled: publicInfo?.pluginsEnabled === true,
   });
-  const { data: plugins = [], isLoading: pluginsLoading } = trpc.plugins.list.useQuery(undefined, {
+  const pluginsQuery = trpc.plugins.list.useQuery(undefined, {
     enabled: publicInfo?.pluginsEnabled === true,
   });
+  const { data: plugins = [], isLoading: pluginsLoading } = pluginsQuery;
   const pluginListLoading = publicInfoLoading || pluginsLoading;
   const pluginStoreLoading = publicInfoLoading || storeLoading;
+  // 没读到时说没读到，不显示「还没有安装插件」「暂无商店插件」。
+  const pluginListFailure = failedQueryState(publicInfoQuery, pluginsQuery);
+  const pluginStoreFailure = failedQueryState(publicInfoQuery, storeQuery);
   const [selectedPluginId, setSelectedPluginId] = useState(sidebarPluginId || "");
   const [activeSection, setActiveSection] = useState<PluginSection>("usage");
   const [storeRepositoryList, setStoreRepositoryList] = useState("");
@@ -2006,6 +2013,8 @@ export default function Plugins({ sidebarPluginId }: { sidebarPluginId?: string 
               <CardContent className="space-y-3">
                 {pluginListLoading ? (
                   <DataSectionLoading label="正在加载插件" minHeight="min-h-[160px]" />
+                ) : pluginListFailure ? (
+                  <QueryErrorState label="插件列表" minHeight="min-h-[160px]" {...pluginListFailure} />
                 ) : plugins.length ? (
                   plugins.map((plugin: PluginRow) => {
                     const active = selectedPlugin?.pluginId === plugin.pluginId;
@@ -2087,6 +2096,8 @@ export default function Plugins({ sidebarPluginId }: { sidebarPluginId?: string 
             <CardContent className="space-y-3">
               {pluginStoreLoading ? (
                 <DataSectionLoading label="正在加载商店" minHeight="min-h-[120px]" />
+              ) : pluginStoreFailure ? (
+                <QueryErrorState label="插件商店" minHeight="min-h-[120px]" {...pluginStoreFailure} />
               ) : storeItems.length ? (
                 <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                   {storeItems.map((item: any) => {
@@ -2378,6 +2389,8 @@ export default function Plugins({ sidebarPluginId }: { sidebarPluginId?: string 
             <CardContent className="space-y-3">
               {pluginListLoading ? (
                 <DataSectionLoading label="正在加载插件" minHeight="min-h-[160px]" />
+              ) : pluginListFailure ? (
+                <QueryErrorState label="插件列表" minHeight="min-h-[160px]" {...pluginListFailure} />
               ) : plugins.length ? (
                 plugins.map((plugin: PluginRow) => {
                   const active = selectedPlugin?.pluginId === plugin.pluginId;
