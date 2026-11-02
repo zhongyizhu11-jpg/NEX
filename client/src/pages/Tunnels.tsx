@@ -159,21 +159,14 @@ import {
   normalizeExitGroupStrategy,
   type ExitGroupStrategy,
 } from "@shared/exitStrategy";
-import {
-  CartesianGrid,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip as RTooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
 import MultiHopEditor from "@/components/MultiHopEditor";
 import { ForwardGroupsContent } from "@/pages/ForwardGroups";
 import { LatencyHistoryDayStrip } from "@/components/LatencyHistoryDays";
 import { EntityActions } from "@/components/entity/EntityActions";
 
 const ReactGlobe = lazy(loadReactGlobe) as typeof import("react-globe.gl").default;
+// 延迟曲线按需加载：recharts 不跟着隧道页一起下，点开延迟弹窗才取。
+const TunnelLatencyLineChart = lazy(() => import("@/components/charts/LatencyLineCharts").then((m) => ({ default: m.TunnelLatencyLineChart })));
 
 type TunnelForm = {
   name: string;
@@ -1391,72 +1384,9 @@ function TunnelLatencyBody({ tunnelId, active }: { tunnelId: number; active: boo
           ) : chartData.length === 0 ? (
             <div className="flex h-full items-center justify-center text-sm text-muted-foreground">暂无隧道链路延迟数据</div>
           ) : (
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartData} margin={{ top: 8, right: 10, left: -8, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
-                <XAxis dataKey="label" tick={{ fontSize: 9 }} minTickGap={60} interval="preserveStartEnd" />
-                <YAxis tick={{ fontSize: 9 }} tickFormatter={(v) => `${v}ms`} width={50} domain={[0, yMax]} ticks={yTicks} allowDecimals={false} />
-                <RTooltip
-                  cursor={{ stroke: "var(--color-muted-foreground)", strokeDasharray: "3 3" }}
-                  offset={12}
-                  wrapperStyle={{ pointerEvents: "none" }}
-                  content={({ active, payload }: any) => {
-                    if (!active || !payload?.length) return null;
-                    const item = payload[0].payload;
-                    return (
-                      <div className="min-w-40 rounded-lg border border-border bg-card px-3 py-2 shadow-md">
-                        <p className="mb-2 text-xs text-muted-foreground">{item.fullLabel}</p>
-                        <div className="space-y-1">
-                          {seriesMeta.map((meta) => {
-                            const hasValue = item[meta.rawKey] !== undefined || item[meta.timeoutKey] !== undefined;
-                            if (!hasValue) return null;
-                            const timeout = !!item[meta.timeoutKey];
-                            return (
-                              <div key={meta.key} className="flex items-center justify-between gap-4 text-xs">
-                                <span className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
-                                  <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: timeout ? "var(--color-destructive)" : meta.color }} />
-                                  <span className="truncate">{meta.label}</span>
-                                </span>
-                                <span className="text-right">
-                                  <span className={timeout ? "font-semibold text-destructive" : "font-semibold tabular-nums"}>
-                                    {timeout ? "超时" : `${Number(item[meta.rawKey] || 0)}ms`}
-                                  </span>
-                                  {Number(item[`${meta.key}ProbeCount`]) > 1 && Number(item[`${meta.key}ProbeSuccesses`]) < Number(item[`${meta.key}ProbeCount`]) ? (
-                                    <span className="block text-[10px] font-normal text-muted-foreground">
-                                      丢包 {Number(item[`${meta.key}ProbeCount`]) - Number(item[`${meta.key}ProbeSuccesses`])}/{Number(item[`${meta.key}ProbeCount`])}
-                                    </span>
-                                  ) : null}
-                                </span>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    );
-                  }}
-                />
-                {seriesMeta.map((meta) => (
-                  <Line
-                    key={meta.key}
-                    type="monotone"
-                    dataKey={meta.dataKey}
-                    stroke={meta.color}
-                    strokeWidth={meta.key === "total" ? 1.8 : 1.35}
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    dot={(props: any) => props?.payload?.[meta.timeoutKey] ? (
-                      <circle cx={props.cx} cy={props.cy} r={3} fill="var(--color-destructive)" stroke="var(--color-background)" strokeWidth={1.5} />
-                    ) : (
-                      <circle cx={props.cx} cy={props.cy} r={0} fill="transparent" />
-                    )}
-                    activeDot={{ r: 4, fill: meta.color, stroke: "var(--color-background)", strokeWidth: 2 }}
-                    connectNulls={false}
-                    isAnimationActive={shouldAnimateChart}
-                    animationDuration={shouldAnimateChart ? 500 : 0}
-                  />
-                ))}
-              </LineChart>
-            </ResponsiveContainer>
+            <Suspense fallback={<Skeleton className="h-full w-full" />}>
+              <TunnelLatencyLineChart chartData={chartData} seriesMeta={seriesMeta} yMax={yMax} yTicks={yTicks} animate={shouldAnimateChart} />
+            </Suspense>
           )}
         </div>
         {seriesMeta.length > 1 ? (

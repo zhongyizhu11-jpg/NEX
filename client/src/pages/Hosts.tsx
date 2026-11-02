@@ -20,6 +20,7 @@ import { getStoredAgentTokenViewMode, storeAgentTokenViewMode, type AgentTokenVi
 import { formatMetricSizeDetail } from "@/lib/formatMetricSize";
 import { usePageVisible } from "@/hooks/usePageVisible";
 import { usePanelFlags } from "@/hooks/usePanelFlags";
+import { useOpenedOnce } from "@/hooks/useOpenedOnce";
 import { useIsMobile } from "@/hooks/useMobile";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { escapeTooltipHtml, hostGeoCoordinate, hostMapClusterDistance } from "@/lib/hostGeo";
@@ -44,7 +45,6 @@ import { FxpRuntimeBadge, fxpRuntimeDetailText } from "@/components/hosts/FxpRun
 import { hostNeedsAgentUpgrade } from "@shared/fxpRuntime";
 import HostGroupManager, { compareHostGroupDisplayOrder, type HostGroupView, type HostGroupViewMode } from "@/components/hosts/HostGroupManager";
 import HostProbeServiceManager, { type HostProbeServiceViewMode } from "@/components/hosts/HostProbeServiceManager";
-import HostProbeServiceLatencyDialog from "@/components/hosts/HostProbeServiceLatencyDialog";
 import {
   editableDetectedAddress,
   compareVersions,
@@ -142,6 +142,8 @@ import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState
 import { toast } from "sonner";
 const ReactGlobe = lazy(() => import("react-globe.gl")) as typeof import("react-globe.gl").default;
 const HostFlatMap = lazy(() => import("@/components/HostFlatMap"));
+// 探测延迟曲线（recharts）点开才下载，不跟着主机页一起。
+const HostProbeServiceLatencyDialog = lazy(() => import("@/components/hosts/HostProbeServiceLatencyDialog"));
 const GLOBE_EARTH_IMAGE_URL = "/globe/earth-dark.jpg";
 const GLOBE_BUMP_IMAGE_URL = "/globe/earth-topology.png";
 const GLOBE_BACKGROUND_IMAGE_URL = "/globe/night-sky.png";
@@ -1717,6 +1719,8 @@ function HostsContent() {
   const [hostDialogTab, setHostDialogTab] = useState<HostDialogTab>("basic");
   const [upgradeHost, setUpgradeHost] = useState<any>(null);
   const [probeLatencyHost, setProbeLatencyHost] = useState<any>(null);
+  // 探测延迟弹窗（recharts）第一次打开才下载、才挂上。
+  const probeLatencyDialogMounted = useOpenedOnce(!!probeLatencyHost);
   /*
     点开的那台机器。列表只负责「要不要点进去」，其余全部在这里展开 ——
     上一版没有这一层，所有字段都挤在列表里，于是列表既看不清也翻不完。
@@ -3055,12 +3059,16 @@ function HostsContent() {
         refreshInterval={hostLiveRefreshInterval}
       />
 
-      <HostProbeServiceLatencyDialog
-        open={!!probeLatencyHost}
-        onOpenChange={(open) => !open && setProbeLatencyHost(null)}
-        host={probeLatencyHost}
-        services={probeServices as any[]}
-      />
+      {probeLatencyDialogMounted ? (
+        <Suspense fallback={null}>
+          <HostProbeServiceLatencyDialog
+            open={!!probeLatencyHost}
+            onOpenChange={(open) => !open && setProbeLatencyHost(null)}
+            host={probeLatencyHost}
+            services={probeServices as any[]}
+          />
+        </Suspense>
+      ) : null}
       {/* Reset Host Traffic Dialog */}
       {/* 租户自助加机器 —— 和「订阅管理 → 我的机器」用的是同一个弹窗。 */}
       <AddSelfServiceHostDialog

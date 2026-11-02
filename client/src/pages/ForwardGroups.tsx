@@ -96,17 +96,8 @@ import {
   Clock,
   FileJson,
 } from "lucide-react";
-import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
-import {
-  Area,
-  AreaChart,
-  CartesianGrid,
-  ResponsiveContainer,
-  Tooltip as RTooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
 import { MAX_FORWARD_GROUP_MEMBERS } from "@shared/forwardGroup";
 import { hostBandwidthHintMbps } from "@shared/linkWeights";
 import { LINK_SPREAD_LABELS } from "@shared/linkTerms";
@@ -158,6 +149,9 @@ import {
   normalizeMemberWeight,
   type BandwidthAggregationStrategy,
 } from "@shared/bandwidthAggregation";
+
+// 延迟曲线按需加载：recharts 不跟着组列表一起下，点开延迟弹窗才取。
+const GroupLatencyAreaChart = lazy(() => import("@/components/charts/LatencyLineCharts").then((m) => ({ default: m.GroupLatencyAreaChart })));
 
 /** MySQL 会把布尔返回成 0 / 1 或 "0" / "1"。 */
 const dbFlag = (value: unknown) => value === true || value === 1 || value === "1";
@@ -569,39 +563,9 @@ function ForwardGroupLatencyDialog({
           ) : chartData.length === 0 ? (
             <div className="flex h-full items-center justify-center text-sm text-muted-foreground">暂无延迟数据</div>
           ) : (
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={chartData} margin={{ top: 8, right: 10, left: -8, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="forwardGroupLatencyGradient" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="var(--color-chart-2)" stopOpacity={0.38} />
-                    <stop offset="95%" stopColor="var(--color-chart-2)" stopOpacity={0.04} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" opacity={0.35} />
-                <XAxis dataKey="label" stroke="var(--color-muted-foreground)" fontSize={11} tickLine={false} axisLine={false} minTickGap={24} />
-                <YAxis stroke="var(--color-muted-foreground)" fontSize={11} tickLine={false} axisLine={false} width={42} domain={[0, yMax]} ticks={yTicks} tickFormatter={(value) => `${value}ms`} />
-                <RTooltip
-                  content={({ active, payload }) => {
-                    if (!active || !payload?.length) return null;
-                    const item = payload[0].payload as GroupLatencyPoint;
-                    return (
-                      <div className="rounded-md border border-border bg-popover px-3 py-2 text-xs shadow-md">
-                        <p className="font-medium">{item.fullLabel}</p>
-                        <p className={item.isTimeout ? "text-destructive" : "text-foreground"}>
-                          {item.isTimeout ? "\u8d85\u65f6/\u4e0d\u53ef\u8fbe" : `${item.latency}ms`}
-                        </p>
-                        {Number(item.probeCount) > 1 && Number(item.probeSuccesses) < Number(item.probeCount) ? (
-                          <p className="text-muted-foreground">
-                            丢包 {Number(item.probeCount) - Number(item.probeSuccesses)}/{Number(item.probeCount)}（{(((Number(item.probeCount) - Number(item.probeSuccesses)) / Number(item.probeCount)) * 100).toFixed(0)}%）
-                          </p>
-                        ) : null}
-                      </div>
-                    );
-                  }}
-                />
-                <Area type="monotone" dataKey="chartLatency" stroke="var(--color-chart-2)" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" fill="url(#forwardGroupLatencyGradient)" dot={false} activeDot={{ r: 4, fill: "var(--color-chart-2)", stroke: "var(--color-background)", strokeWidth: 2 }} isAnimationActive={shouldAnimateChart} animationDuration={shouldAnimateChart ? 500 : 0} />
-              </AreaChart>
-            </ResponsiveContainer>
+            <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-muted-foreground"><Loader2 className="mr-2 h-4 w-4 animate-spin" /> 正在加载延迟数据</div>}>
+              <GroupLatencyAreaChart chartData={chartData} yMax={yMax} yTicks={yTicks} animate={shouldAnimateChart} />
+            </Suspense>
           )}
         </div>
         <LatencyStabilityStats

@@ -1,11 +1,14 @@
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { SpeedTestDialog } from "@/components/proxy/SpeedTestDialog";
+import { useOpenedOnce } from "@/hooks/useOpenedOnce";
 import { formatSpeedMs, speedServerLabel } from "@/components/proxy/speedTestFormat";
 import { trpc } from "@/lib/trpc";
 import { formatMbps } from "@shared/nodeCheck";
 import { Row, Section } from "./HostDetailDialog";
+
+// 测速曲线（recharts）点「测速」才下载，不跟着主机页一起。
+const SpeedTestDialog = lazy(() => import("@/components/proxy/SpeedTestDialog").then((m) => ({ default: m.SpeedTestDialog })));
 
 /*
   主机详情里的「网速测试」一节：最近一次的下载 / 上传 / 延迟写在这儿，点「测速」打开曲线弹窗
@@ -16,6 +19,7 @@ export default function HostSpeedTestSection({ host }: { host: any }) {
   const hostId = Number(host?.id || 0);
   const [open, setOpen] = useState(false);
   const status = trpc.hosts.speedTestStatus.useQuery({ hostId }, { enabled: hostId > 0, staleTime: 15_000, refetchOnWindowFocus: false });
+  const dialogMounted = useOpenedOnce(open);
   if (!(hostId > 0)) return null;
   const data = status.data;
   const speed = data?.latest?.speed ?? null;
@@ -40,7 +44,11 @@ export default function HostSpeedTestSection({ host }: { host: any }) {
       ) : (
         <Row label="最近一次" value={status.isLoading ? "读取中…" : data?.latest?.error ? <span className="text-[var(--fx-down-text)]">上次失败</span> : "还没测过"} />
       )}
-      <SpeedTestDialog subject={open ? { hostId } : null} name={String(host?.name || "")} onOpenChange={(value) => { if (!value) setOpen(false); }} />
+      {dialogMounted ? (
+        <Suspense fallback={null}>
+          <SpeedTestDialog subject={open ? { hostId } : null} name={String(host?.name || "")} onOpenChange={(value) => { if (!value) setOpen(false); }} />
+        </Suspense>
+      ) : null}
     </Section>
   );
 }
