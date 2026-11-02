@@ -12600,6 +12600,14 @@ func (i *protocolGuardInspection) inspectClient(chunk []byte) (string, bool) {
 	if i.blocked || i.clientInspectionDone {
 		return "", false
 	}
+	if len(i.clientSample) == 0 {
+		// 请求行前面的空行不占采样额度：HTTP 服务端会跳过它们（RFC 9112 2.2），
+		// 不跳的话先发几百字节 CRLF 就能把采样撑满、绕过拦截。
+		chunk = trimLeadingHTTPBlankLines(chunk)
+		if len(chunk) == 0 {
+			return "", false
+		}
+	}
 	if len(i.clientSample) < protocolGuardSampleMaxBytes {
 		remaining := protocolGuardSampleMaxBytes - len(i.clientSample)
 		if remaining > len(chunk) {
@@ -15636,7 +15644,16 @@ func buildProxyProtocolV1(info proxyProtocolInfo, fallbackSource net.Addr, targe
 	return fmt.Sprintf("PROXY %s %s %s %d %d\r\n", family, sourceIP, destIP, sourcePort, destPort)
 }
 
+// trimLeadingHTTPBlankLines 去掉开头的 CR/LF。只用于协议识别的采样，转发的
+// 数据原样不动。TLS、SOCKS 的首字节不会是 CR/LF，去掉不影响它们的识别。
+// 和 forwardx-fxp 里的同名函数保持一致（对照样本见仓库根目录 testdata/protocol_detection.json）。
+func trimLeadingHTTPBlankLines(data []byte) []byte {
+	return bytes.TrimLeft(data, "\r\n")
+}
+
 func detectHTTPProtocol(data []byte) bool {
+	// 服务端会跳过请求行之前的空行，这里也跳过，免得前面垫一个 CRLF 就绕过拦截。
+	data = trimLeadingHTTPBlankLines(data)
 	if bytes.HasPrefix(data, []byte("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")) {
 		return true
 	}
@@ -15648,11 +15665,13 @@ func detectHTTPProtocol(data []byte) bool {
 	if lineEnd < 0 {
 		return false
 	}
-	parts := bytes.Split(data[:lineEnd], []byte{' '})
+	// 连续多个空格按一个算：nginx 之类的服务端容忍请求行里的多余空格。
+	parts := bytes.FieldsFunc(data[:lineEnd], func(r rune) bool { return r == ' ' })
 	if len(parts) != 3 {
 		return false
 	}
-	method := string(parts[0])
+	// 方法不分大小写：有的服务端和代理照收小写方法，大小写一换就绕过去了。
+	method := strings.ToUpper(string(parts[0]))
 	switch method {
 	case "GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS", "PATCH", "CONNECT", "TRACE":
 	default:
@@ -15687,6 +15706,9 @@ func validHTTPRequestTarget(method string, target []byte) bool {
 	return bytes.HasPrefix(lower, []byte("http://")) || bytes.HasPrefix(lower, []byte("https://"))
 }
 
+// detectTLSProtocol 只认 ClientHello 的形状（记录头 + 握手类型 + 长度对得上），不只看前三个字节：
+// 加密协议（SS2022 等）的随机首包碰巧以 16 03 0x 开头时不能被当成 TLS 拦掉。
+// 和 forwardx-fxp 里的同名函数保持一致（对照样本见仓库根目录 testdata/protocol_detection.json）。
 func detectTLSProtocol(data []byte) bool {
 	if len(data) < 9 {
 		return false
