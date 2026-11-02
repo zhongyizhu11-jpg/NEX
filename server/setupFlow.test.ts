@@ -5,11 +5,13 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-function runSetupFlow(body: string) {
+function runSetupFlow(body: string, options: { config?: (directory: string, databasePath: string) => unknown; connect?: boolean } = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-setup-flow-"));
   const databasePath = path.join(directory, "forwardx.db");
   const configPath = path.join(directory, "database.json");
-  fs.writeFileSync(configPath, JSON.stringify({ type: "sqlite", sqlite: { path: databasePath } }));
+  const config = options.config ? options.config(directory, databasePath) : { type: "sqlite", sqlite: { path: databasePath } };
+  fs.writeFileSync(configPath, JSON.stringify(config));
+  const connect = options.connect !== false;
 
   const script = String.raw`
     import assert from "node:assert/strict";
@@ -25,8 +27,10 @@ function runSetupFlow(body: string) {
     const taskLocks = await import(url("server/keyedTaskLock.ts"));
     const { setupRouter } = await import(url("server/routers/setup.ts"));
     try {
-      await runtime.connectDatabase();
-      await schema.ensureDatabaseSchema();
+      if (${connect}) {
+        await runtime.connectDatabase();
+        await schema.ensureDatabaseSchema();
+      }
       const caller = setupRouter.createCaller({ user: null });
       ${body}
     } finally {
@@ -191,4 +195,74 @@ test("an active panel migration keeps setup open after administrator rows arrive
       globalThis.fetch = originalFetch;
     }
   `);
+});
+
+test("setup writes are refused after install, for administrators too", () => {
+  runSetupFlow(String.raw`
+    const adminCaller = setupRouter.createCaller({ user: { role: "admin" } });
+    // 全新安装：没有管理员、没有完成标记时，向导可以写（带不带登录态都一样）。
+    await adminCaller.testDatabase({ type: "sqlite", sqlite: { path: process.env.SQLITE_PATH } });
+    await caller.createAdmin({ email: "Owner@Example.com", password: "owner-password", name: "Owner" });
+    const marker = path.join(process.env.FORWARDX_TEST_DIRECTORY, ".setup-complete");
+    assert.equal(fs.existsSync(marker), true);
+
+    const attempts = [
+      () => adminCaller.resetExistingData(),
+      () => adminCaller.useExistingData(),
+      () => adminCaller.updateAdmin({ email: "attacker@example.com", password: "attacker-password" }),
+      () => adminCaller.createAdmin({ email: "second@example.com", password: "second-password" }),
+      () => adminCaller.saveDatabase({ type: "sqlite", sqlite: { path: process.env.SQLITE_PATH } }),
+      () => adminCaller.testDatabase({ type: "sqlite", sqlite: { path: process.env.SQLITE_PATH } }),
+    ];
+    for (const attempt of attempts) {
+      await assert.rejects(attempt(), /SETUP_LOCKED/);
+    }
+
+    // 本机标记丢了，但库里已有管理员：照样锁住。
+    fs.unlinkSync(marker);
+    await assert.rejects(adminCaller.resetExistingData(), /SETUP_LOCKED/);
+    await assert.rejects(adminCaller.updateAdmin({ email: "attacker@example.com" }), /SETUP_LOCKED/);
+
+    const admins = await runtime.queryRaw('SELECT "username" FROM "users" WHERE "role" = ?', ["admin"]);
+    assert.deepEqual(admins.map((row) => row.username), ["owner@example.com"]);
+    assert.ok(await users.authenticateUser("owner@example.com", "owner-password"));
+  `);
+});
+
+test("database recovery during a pending first install still reaches the setup database step", () => {
+  // 库路径指向一个目录：连不上库。database.json 带 setupPending（安装脚本写的），说明首次安装还没完成。
+  const brokenConfig = (directory: string) => {
+    const blocked = path.join(directory, "not-a-database");
+    fs.mkdirSync(blocked, { recursive: true });
+    return { type: "sqlite", sqlite: { path: blocked }, setupPending: true };
+  };
+  runSetupFlow(String.raw`
+    const target = path.join(process.env.FORWARDX_TEST_DIRECTORY, "recovered.db");
+    const result = await caller.testDatabase({ type: "sqlite", sqlite: { path: target } });
+    assert.equal(result.success, true);
+    const adminResult = await setupRouter.createCaller({ user: { role: "admin" } })
+      .testDatabase({ type: "sqlite", sqlite: { path: target } });
+    assert.equal(adminResult.success, true);
+    // 不在恢复白名单里的写接口照旧拒绝。
+    await assert.rejects(caller.useExistingData(), /SETUP_LOCKED/);
+  `, { config: brokenConfig, connect: false });
+});
+
+test("a broken database without a pending install stays locked", () => {
+  const brokenConfig = (directory: string) => {
+    const blocked = path.join(directory, "not-a-database");
+    fs.mkdirSync(blocked, { recursive: true });
+    return { type: "sqlite", sqlite: { path: blocked } };
+  };
+  runSetupFlow(String.raw`
+    // 第一次失败记下数据库故障，之后的请求由故障中间件直接 503；两种都是拒绝。
+    const target = path.join(process.env.FORWARDX_TEST_DIRECTORY, "other.db");
+    await assert.rejects(caller.testDatabase({ type: "sqlite", sqlite: { path: target } }), /SETUP_LOCKED|数据库暂时不可用/);
+    await assert.rejects(
+      setupRouter.createCaller({ user: { role: "admin" } }).saveDatabase({ type: "sqlite", sqlite: { path: target } }),
+      /SETUP_LOCKED|数据库暂时不可用/,
+    );
+    assert.equal(fs.existsSync(target), false);
+    assert.equal(JSON.parse(fs.readFileSync(process.env.DATABASE_CONFIG_PATH, "utf8")).sqlite.path.endsWith("not-a-database"), true);
+  `, { config: brokenConfig, connect: false });
 });

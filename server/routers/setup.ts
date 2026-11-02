@@ -191,14 +191,16 @@ async function setupStatus() {
   }
 }
 
-async function ensureSetupWriteAllowed(
-  ctx: { user?: { role?: string } | null },
-  options: { allowDatabaseRecovery?: boolean } = {},
-) {
+/*
+  安装向导的写接口（切库、清库、建/改首位管理员、迁移）只在「还没装好」时开放。
+  装好（本机有完成标记，或库里已有管理员）以后对所有人拒绝，管理员和管理员的 API 令牌也不例外：
+  以前管理员直接放行，一枚管理员令牌调 resetExistingData 就能清库、调 updateAdmin 就能改写
+  首位管理员的邮箱和密码。数据库故障恢复（首次安装没完成、库连不上）那条路照旧保留。
+*/
+async function ensureSetupWriteAllowed(options: { allowDatabaseRecovery?: boolean } = {}) {
   if (hasActivePanelMigration()) {
     throw new TRPCError({ code: "CONFLICT", message: "SETUP_MIGRATION_RUNNING" });
   }
-  if (ctx.user?.role === "admin") return;
   if (hasLocalSetupCompleteMarker()) {
     throw new TRPCError({ code: "FORBIDDEN", message: "SETUP_LOCKED" });
   }
@@ -219,12 +221,11 @@ async function ensureSetupWriteAllowed(
 }
 
 async function withSetupWriteLock<T>(
-  ctx: { user?: { role?: string } | null },
   work: () => Promise<T>,
   options: { allowDatabaseRecovery?: boolean } = {},
 ) {
   return withKeyedTaskLock(SETUP_WRITE_LOCK_KEY, async () => {
-    await ensureSetupWriteAllowed(ctx, options);
+    await ensureSetupWriteAllowed(options);
     return work();
   });
 }
@@ -347,8 +348,8 @@ export const setupRouter = router({
 
   testDatabase: publicProcedure
     .input(databaseSetupInput)
-    .mutation(async ({ input, ctx }) => {
-      return withSetupWriteLock(ctx, async () => {
+    .mutation(async ({ input }) => {
+      return withSetupWriteLock(async () => {
         await testDatabaseConnection(input as DatabaseConfig);
         return { success: true };
       }, { allowDatabaseRecovery: true });
@@ -356,14 +357,14 @@ export const setupRouter = router({
 
   saveDatabase: publicProcedure
     .input(databaseSetupInput)
-    .mutation(async ({ input, ctx }) => {
-      return withSetupWriteLock(ctx, () => saveDatabase(input as DatabaseConfig), { allowDatabaseRecovery: true });
+    .mutation(async ({ input }) => {
+      return withSetupWriteLock(() => saveDatabase(input as DatabaseConfig), { allowDatabaseRecovery: true });
     }),
 
   testMysql: publicProcedure
     .input(mysqlConfigInput)
-    .mutation(async ({ input, ctx }) => {
-      return withSetupWriteLock(ctx, async () => {
+    .mutation(async ({ input }) => {
+      return withSetupWriteLock(async () => {
         await testDatabaseConnection({ type: "mysql", mysql: input });
         return { success: true };
       }, { allowDatabaseRecovery: true });
@@ -371,8 +372,8 @@ export const setupRouter = router({
 
   saveMysql: publicProcedure
     .input(mysqlConfigInput)
-    .mutation(async ({ input, ctx }) => {
-      return withSetupWriteLock(ctx, () => saveDatabase({ type: "mysql", mysql: input }), { allowDatabaseRecovery: true });
+    .mutation(async ({ input }) => {
+      return withSetupWriteLock(() => saveDatabase({ type: "mysql", mysql: input }), { allowDatabaseRecovery: true });
     }),
 
   startMigration: publicProcedure
@@ -382,8 +383,8 @@ export const setupRouter = router({
       targetPanelUrl: z.string().trim().min(1, "请输入新面板访问地址"),
       dataScope: z.enum(PANEL_MIGRATION_SCOPES).default("essential"),
     }))
-    .mutation(async ({ input, ctx }) => {
-      return withSetupWriteLock(ctx, async () => {
+    .mutation(async ({ input }) => {
+      return withSetupWriteLock(async () => {
         await reconnectDatabase();
         await ensureDatabaseSchema();
         return startPanelMigration(input);
@@ -394,14 +395,14 @@ export const setupRouter = router({
     .input(z.object({ jobId: z.string().min(1) }))
     .query(({ input }) => getMigrationJob(input.jobId)),
 
-  useExistingData: publicProcedure.mutation(async ({ ctx }) => withSetupWriteLock(ctx, async () => {
+  useExistingData: publicProcedure.mutation(async () => withSetupWriteLock(async () => {
     await reconnectDatabase();
     await ensureDatabaseSchema();
     await setSettings({ setupDataChoice: "use-existing" });
     return setupStatus();
   })),
 
-  resetExistingData: publicProcedure.mutation(async ({ ctx }) => withSetupWriteLock(ctx, async () => {
+  resetExistingData: publicProcedure.mutation(async () => withSetupWriteLock(async () => {
     await clearExistingPanelData();
     return setupStatus();
   })),
@@ -412,8 +413,8 @@ export const setupRouter = router({
       password: z.string().min(8, "密码至少 8 位").max(128).refine((value) => !!value.trim(), "请输入管理员密码"),
       name: z.string().trim().max(64).optional(),
     }))
-    .mutation(async ({ input, ctx }) => {
-      return withSetupWriteLock(ctx, async () => {
+    .mutation(async ({ input }) => {
+      return withSetupWriteLock(async () => {
         await reconnectDatabase();
         await ensureDatabaseSchema();
         const id = await withDatabaseTransaction(async () => {
@@ -433,8 +434,8 @@ export const setupRouter = router({
       password: z.string().max(128).optional(),
       name: z.string().trim().max(64).optional(),
     }))
-    .mutation(async ({ input, ctx }) => {
-      return withSetupWriteLock(ctx, async () => {
+    .mutation(async ({ input }) => {
+      return withSetupWriteLock(async () => {
         await reconnectDatabase();
         await ensureDatabaseSchema();
         if (input.password !== undefined && !input.password.trim()) {
