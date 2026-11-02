@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from "react";
+import { lazy, Suspense, useRef, useState, type ReactNode } from "react";
 import { Pencil } from "lucide-react";
 import { useLocation } from "wouter";
 
@@ -31,7 +31,7 @@ import type { RouteSwitchSummary } from "@shared/routeSwitchSummary";
 import { isAgentVersionBehind } from "@shared/version";
 import { RoutePathCards, RouteSwitchChip, type RouteBoardEntry, type RouteBoardRate } from "./RouteBoard";
 import { ConditionRow, SentenceRow } from "./RoutePolicySheet";
-import { RouteQualityHistory } from "./RouteQualityHistory";
+import { Skeleton } from "@/components/ui/skeleton";
 import { RouteLineDetail, RouteLineTools, useRouteLinePause, type RouteLineSwitch } from "./RouteLineOverview";
 import { ROUTE_LINE_MODE_LABEL, routeLineSubtitle } from "./routeLineText";
 import { useRouteLineEditor } from "./RouteLineInlineEditor";
@@ -166,6 +166,18 @@ export type RouteEvent = {
   heldSeconds?: number | null;
   at: number;
 };
+
+// 线路质量曲线（recharts）展开详情时才下载；占位和它一样高，不跳版。
+const RouteQualityHistory = lazy(() => import("./RouteQualityHistory").then((m) => ({ default: m.RouteQualityHistory })));
+
+function RouteQualityHistoryPlaceholder() {
+  return (
+    <section className="flex min-w-0 flex-col gap-2" aria-hidden="true">
+      <Skeleton className="mx-1 h-5 w-24" />
+      <Skeleton className="h-44 w-full" />
+    </section>
+  );
+}
 
 const reportHealth: Record<ReturnType<typeof describeRoutePolicyReport>["tone"], NetworkHealth> = {
   normal: "healthy",
@@ -442,11 +454,13 @@ export function RouteGroupSheet({
             <div className="flex min-w-0 flex-col gap-3 border-t border-[var(--fx-stroke-weak)] pt-3" data-testid="route-line-detail-panel">
               <RouteGroupPanel {...panel} policy={shown.policy} status={status} events={events} showPaths={false} />
               {status ? <RouteLineTools status={status} /> : null}
-              <RouteQualityHistory
-                ruleId={Number(ruleId) || 0}
-                enabled={enabled}
-                activeKey={(status?.paths || []).find((path) => path.active)?.key ?? null}
-              />
+              <Suspense fallback={<RouteQualityHistoryPlaceholder />}>
+                <RouteQualityHistory
+                  ruleId={Number(ruleId) || 0}
+                  enabled={enabled}
+                  activeKey={(status?.paths || []).find((path) => path.active)?.key ?? null}
+                />
+              </Suspense>
               <div className="flex flex-wrap justify-end gap-2">
                 {footer}
                 {ruleId ? (

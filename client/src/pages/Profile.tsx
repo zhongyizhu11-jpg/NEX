@@ -6,6 +6,7 @@ import DiscordAccountSection from "@/features/discordLogin/DiscordAccountSection
 import { useAuth } from "@/_core/hooks/useAuth";
 import { AvatarPicker } from "@/components/AvatarPicker";
 import DashboardLayout from "@/components/DashboardLayout";
+import QueryErrorState, { failedQueryState } from "@/components/QueryErrorState";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -87,7 +88,7 @@ function ProfileContent() {
     refetchOnWindowFocus: false,
     retry: false,
   });
-  const { data: telegramStatus } = trpc.telegram.status.useQuery(undefined, {
+  const telegramStatusQuery = trpc.telegram.status.useQuery(undefined, {
     enabled: !!user,
     refetchInterval: (query) => {
       const status = query.state.data;
@@ -98,11 +99,16 @@ function ProfileContent() {
     refetchOnWindowFocus: false,
     retry: false,
   });
-  const { data: twoFactorStatus } = trpc.auth.twoFactorStatus.useQuery(undefined, {
+  const telegramStatus = telegramStatusQuery.data;
+  const twoFactorStatusQuery = trpc.auth.twoFactorStatus.useQuery(undefined, {
     enabled: !!user,
     refetchOnWindowFocus: false,
     retry: false,
   });
+  const twoFactorStatus = twoFactorStatusQuery.data;
+  // 没读到时直接说没读到：原来会显示成「未绑定」「管理员尚未启用双重验证功能」。
+  const telegramFailure = failedQueryState(telegramStatusQuery);
+  const twoFactorFailure = failedQueryState(twoFactorStatusQuery);
   useEffect(() => {
     if (user) setAvatarDraft(migrateLegacyAvatarValue((user as any).avatar, `user-${user.id}`));
   }, [user?.id, (user as any)?.avatar]);
@@ -530,11 +536,16 @@ function ProfileContent() {
               </CardTitle>
               <CardDescription>绑定后可接收提醒，并支持 Telegram 登录。</CardDescription>
             </div>
-            <Badge variant={telegramStatus?.bound ? "default" : "outline"} className="w-fit">
-              {telegramStatus?.bound ? "已绑定" : "未绑定"}
-            </Badge>
+            {telegramFailure ? null : (
+              <Badge variant={telegramStatus?.bound ? "default" : "outline"} className="w-fit">
+                {telegramStatus?.bound ? "已绑定" : "未绑定"}
+              </Badge>
+            )}
           </CardHeader>
           <CardContent className="space-y-4">
+            {telegramFailure ? (
+              <QueryErrorState compact label="Telegram 绑定状态" {...telegramFailure} />
+            ) : (<>
             <SettingList>
               <SettingRow
                 label="公告 Telegram 推送"
@@ -627,6 +638,7 @@ function ProfileContent() {
                 {createTelegramBindMutation.isPending ? "生成中..." : "生成绑定码"}
               </Button>
             )}
+            </>)}
           </CardContent>
         </Card>
 
@@ -639,11 +651,16 @@ function ProfileContent() {
               </CardTitle>
               <CardDescription>使用 2FA 软件生成动态验证码。</CardDescription>
             </div>
-            <Badge variant={twoFactorStatus?.enabled ? "default" : "outline"} className="w-fit">
-              {twoFactorStatus?.enabled ? "已启用" : "未启用"}
-            </Badge>
+            {twoFactorFailure ? null : (
+              <Badge variant={twoFactorStatus?.enabled ? "default" : "outline"} className="w-fit">
+                {twoFactorStatus?.enabled ? "已启用" : "未启用"}
+              </Badge>
+            )}
           </CardHeader>
           <CardContent className="space-y-4">
+            {twoFactorFailure ? (
+              <QueryErrorState compact label="双因素认证状态" {...twoFactorFailure} />
+            ) : (<>
             {!twoFactorStatus?.globalEnabled ? (
               <div className="flex items-start gap-2 rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm text-primary">
                 <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -734,6 +751,7 @@ function ProfileContent() {
                 </div>
               </div>
             )}
+            </>)}
           </CardContent>
         </Card>
       </div>

@@ -9,6 +9,7 @@ import { formatBytes } from "@shared/formatBytes";
 import DashboardLayout from "@/components/DashboardLayout";
 import MobileAppSettings from "@/components/MobileAppSettings";
 import SystemStatusHeader, { type SystemHealth } from "@/components/SystemStatusHeader";
+import QueryErrorState, { failedQueryState } from "@/components/QueryErrorState";
 import { mobileAuth } from "@/lib/mobileAuth";
 import { pollingInterval } from "@/lib/polling";
 import { trafficQuotaBreakdown } from "@/lib/trafficQuota";
@@ -62,23 +63,30 @@ function DashboardContent() {
   const pearl = useUiTheme() === "pearl";
   const isAdmin = user?.role === "admin";
   const [, setLocation] = useLocation();
-  const { data: trafficTotals, isLoading: trafficTotalsLoading } = trpc.dashboard.trafficTotals.useQuery(undefined, {
+  const trafficTotalsQuery = trpc.dashboard.trafficTotals.useQuery(undefined, {
     refetchInterval: pollingInterval("normal"),
     staleTime: 5000,
     placeholderData: (previousData) => previousData,
   });
-  const { data: wallet, isLoading: walletLoading } = trpc.billing.me.useQuery(undefined, { enabled: !isAdmin, placeholderData: (previousData) => previousData });
-  const { data: trafficBilling, isLoading: trafficBillingLoading } = trpc.trafficBilling.status.useQuery(undefined, { placeholderData: (previousData) => previousData });
-  const { data: subscriptions = [], isLoading: subscriptionsLoading } = trpc.plans.mySubscriptions.useQuery(undefined, { enabled: !isAdmin, placeholderData: (previousData) => previousData });
-  const { data: userTraffic = [], isLoading: userTrafficLoading } = trpc.dashboard.userTraffic.useQuery(undefined, { refetchInterval: pollingInterval("slow"), placeholderData: (previousData) => previousData });
-  const { data: trafficBreakdown, isLoading: breakdownLoading } = trpc.dashboard.trafficBreakdown.useQuery(
+  const { data: trafficTotals, isLoading: trafficTotalsLoading } = trafficTotalsQuery;
+  const walletQuery = trpc.billing.me.useQuery(undefined, { enabled: !isAdmin, placeholderData: (previousData) => previousData });
+  const { data: wallet, isLoading: walletLoading } = walletQuery;
+  const trafficBillingQuery = trpc.trafficBilling.status.useQuery(undefined, { placeholderData: (previousData) => previousData });
+  const { data: trafficBilling, isLoading: trafficBillingLoading } = trafficBillingQuery;
+  const subscriptionsQuery = trpc.plans.mySubscriptions.useQuery(undefined, { enabled: !isAdmin, placeholderData: (previousData) => previousData });
+  const { data: subscriptions = [], isLoading: subscriptionsLoading } = subscriptionsQuery;
+  const userTrafficQuery = trpc.dashboard.userTraffic.useQuery(undefined, { refetchInterval: pollingInterval("slow"), placeholderData: (previousData) => previousData });
+  const { data: userTraffic = [], isLoading: userTrafficLoading } = userTrafficQuery;
+  const trafficBreakdownQuery = trpc.dashboard.trafficBreakdown.useQuery(
     { hours: 24, limit: 30 },
     { refetchInterval: pollingInterval("slow"), staleTime: 25000, placeholderData: (previousData) => previousData },
   );
-  const { data: trafficSeries, isLoading: trendLoading } = trpc.dashboard.trafficSeries.useQuery(
+  const { data: trafficBreakdown, isLoading: breakdownLoading } = trafficBreakdownQuery;
+  const trafficSeriesQuery = trpc.dashboard.trafficSeries.useQuery(
     { hours: 24, bucketMinutes: 60 },
     { refetchInterval: pollingInterval("slow"), staleTime: 25000, placeholderData: (previousData) => previousData },
   );
+  const { data: trafficSeries, isLoading: trendLoading } = trafficSeriesQuery;
 
   /*
     顶上那几个数和「需要关注」：5 秒一刷（原来 15 秒，加上服务端先给旧值，实际慢半分钟），
@@ -168,8 +176,18 @@ function DashboardContent() {
     [accountExpiresAt, quota.hasQuota, trafficLimit, trafficUsed],
   );
 
+  /*
+    没读到就说没读到：失败时这些格子原来会显示「0 B」「---」「暂无流量数据」，看着像真的没有。
+    轮询失败一次、上一轮的数据还在时照常显示数据（failedQueryState 只认手里没数据的失败）。
+  */
+  const accountFailure = failedQueryState(userTrafficQuery, trafficBillingQuery, !isAdmin && subscriptionsQuery, !isAdmin && walletQuery);
+  const chartFailure = failedQueryState(trafficSeriesQuery);
+  const breakdownFailure = visibleTrafficBreakdown ? null : failedQueryState(trafficBreakdownQuery);
+  const totalsFailure = failedQueryState(trafficTotalsQuery);
+
   const accountSection = (
     <AccountSection
+      error={accountFailure ? <QueryErrorState label={isAdmin ? "消耗数据" : "账户数据"} minHeight="min-h-[120px]" {...accountFailure} /> : undefined}
       isAdmin={isAdmin}
       loading={accountStatusLoading}
       cacheScope={accountCacheScope}
@@ -211,6 +229,9 @@ function DashboardContent() {
       breakdownLoading={breakdownLoading}
       totals={trafficTotals}
       totalsLoading={trafficTotalsLoading}
+      chartError={chartFailure ? <QueryErrorState compact label="流量走势" {...chartFailure} /> : undefined}
+      breakdownError={breakdownFailure ? <QueryErrorState compact label="流量排行" {...breakdownFailure} /> : undefined}
+      totalsError={totalsFailure ? <QueryErrorState compact label="累计流量" {...totalsFailure} /> : undefined}
     />
   );
 
