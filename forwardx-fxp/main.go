@@ -340,6 +340,15 @@ type exitEndpointSelector struct {
 	// probed 表示有 TCP 探测在盯这些端点；UDP 那条路就不再拿「地址解析成功」
 	// 去覆盖探测得出的健康结论。
 	probed atomic.Bool
+	// random 是 random / least_load 策略用的随机数来源；nil 用 crypto/rand。测试里换成固定种子。
+	random func() (uint64, error)
+}
+
+func (s *exitEndpointSelector) randomValue() (uint64, error) {
+	if s.random != nil {
+		return s.random()
+	}
+	return randomUint64()
 }
 
 // fallbackRetryDelay backs off a repeatedly failing endpoint.
@@ -576,7 +585,7 @@ func (s *exitEndpointSelector) pick(excluded map[int]bool, selectionKeys ...stri
 		return exitEndpoint{}, -1, false
 	}
 	if s.strategy == "random" {
-		if value, err := randomUint64(); err == nil {
+		if value, err := s.randomValue(); err == nil {
 			index := candidates[int(value%uint64(len(candidates)))]
 			return s.endpoints[index], index, true
 		}
