@@ -201,7 +201,7 @@ const legacyTunnelConfigPath = "/etc/forwardx-tunnels/config.json"
 const legacyRuntimeConfigPath = "/etc/forwardx-runtime/config.json"
 const legacyTunnelRuntimeConfigPath = "/etc/forwardx-tunnel-runtime/config.json"
 const desiredStateRecordPath = "/var/lib/forwardx-agent/desired_state_records.json"
-const desiredStateVersionPath = "/var/lib/forwardx-agent/desired_state_agent_version"
+const desiredStateVersionPath = agentStateDir + "/desired_state_agent_version"
 
 var upgradeStarted int32
 var upgradeStartedAt int64
@@ -8111,7 +8111,7 @@ func managedServiceActionSignature(a action, serviceName string, unit string) st
 }
 
 func managedServiceSignaturePath(name string) string {
-	return "/var/lib/forwardx-agent/service_" + name + ".signature"
+	return agentStatePath("service_" + name + ".signature")
 }
 
 func managedServiceSignatureMatches(name string, signature string) bool {
@@ -8128,8 +8128,7 @@ func writeManagedServiceSignature(name string, signature string) {
 	if signature == "" {
 		return
 	}
-	_ = os.MkdirAll("/var/lib/forwardx-agent", 0755)
-	_ = os.WriteFile(managedServiceSignaturePath(name), []byte(signature+"\n"), 0644)
+	_ = writeStateFile(managedServiceSignaturePath(name), []byte(signature+"\n"))
 }
 
 func managedServiceActive(name string) bool {
@@ -8569,31 +8568,29 @@ func writeState(a action) {
 	if a.RuleID <= 0 {
 		return
 	}
-	_ = os.MkdirAll("/var/lib/forwardx-agent", 0755)
 	port := strconv.Itoa(a.SourcePort)
 	resetTrafficStateIfRuleChanged(port, a.RuleID)
-	_ = os.WriteFile("/var/lib/forwardx-agent/port_"+port+".rule", []byte(strconv.Itoa(a.RuleID)), 0644)
-	_ = os.WriteFile("/var/lib/forwardx-agent/port_"+port+".fwtype", []byte(a.ForwardType), 0644)
+	_ = writeStateFile(agentStatePath("port_"+port+".rule"), []byte(strconv.Itoa(a.RuleID)))
+	_ = writeStateFile(agentStatePath("port_"+port+".fwtype"), []byte(a.ForwardType))
 	writeRuleTunnelState(port, a.TunnelID)
 	if a.TargetIP != "" && a.TargetPort > 0 {
-		_ = os.WriteFile("/var/lib/forwardx-agent/target_"+port+".info", []byte(fmt.Sprintf("%s\n%d\n%s\n", a.TargetIP, a.TargetPort, normalizeRuntimeProtocol(a.Protocol))), 0644)
+		_ = writeStateFile(agentStatePath("target_"+port+".info"), []byte(fmt.Sprintf("%s\n%d\n%s\n", a.TargetIP, a.TargetPort, normalizeRuntimeProtocol(a.Protocol))))
 	}
 }
 
 func writeTunnelState(a action) {
-	_ = os.MkdirAll("/var/lib/forwardx-agent", 0755)
 	port := strconv.Itoa(a.SourcePort)
-	_ = os.WriteFile("/var/lib/forwardx-agent/tunnel_"+port+".id", []byte(strconv.Itoa(a.TunnelID)), 0644)
-	_ = os.WriteFile("/var/lib/forwardx-agent/tunnel_"+port+".fwtype", []byte(a.ForwardType), 0644)
+	_ = writeStateFile(agentStatePath("tunnel_"+port+".id"), []byte(strconv.Itoa(a.TunnelID)))
+	_ = writeStateFile(agentStatePath("tunnel_"+port+".fwtype"), []byte(a.ForwardType))
 }
 
 func writeRuleTunnelState(port string, tunnelID int) {
 	if strings.TrimSpace(port) == "" {
 		return
 	}
-	path := "/var/lib/forwardx-agent/port_" + port + ".tunnel"
+	path := agentStatePath("port_" + port + ".tunnel")
 	if tunnelID > 0 {
-		_ = os.WriteFile(path, []byte(strconv.Itoa(tunnelID)), 0644)
+		_ = writeStateFile(path, []byte(strconv.Itoa(tunnelID)))
 		return
 	}
 	_ = os.Remove(path)
@@ -8603,14 +8600,13 @@ func writeRunningRuleState(r runningRule) {
 	if r.RuleID <= 0 || r.SourcePort <= 0 {
 		return
 	}
-	_ = os.MkdirAll("/var/lib/forwardx-agent", 0755)
 	port := strconv.Itoa(r.SourcePort)
 	resetTrafficStateIfRuleChanged(port, r.RuleID)
-	_ = os.WriteFile("/var/lib/forwardx-agent/port_"+port+".rule", []byte(strconv.Itoa(r.RuleID)), 0644)
-	_ = os.WriteFile("/var/lib/forwardx-agent/port_"+port+".fwtype", []byte(r.ForwardType), 0644)
+	_ = writeStateFile(agentStatePath("port_"+port+".rule"), []byte(strconv.Itoa(r.RuleID)))
+	_ = writeStateFile(agentStatePath("port_"+port+".fwtype"), []byte(r.ForwardType))
 	writeRuleTunnelState(port, r.TunnelID)
 	if r.TargetIP != "" && r.TargetPort > 0 {
-		_ = os.WriteFile("/var/lib/forwardx-agent/target_"+port+".info", []byte(fmt.Sprintf("%s\n%d\n%s\n", r.TargetIP, r.TargetPort, normalizeRuntimeProtocol(r.Protocol))), 0644)
+		_ = writeStateFile(agentStatePath("target_"+port+".info"), []byte(fmt.Sprintf("%s\n%d\n%s\n", r.TargetIP, r.TargetPort, normalizeRuntimeProtocol(r.Protocol))))
 	}
 }
 
