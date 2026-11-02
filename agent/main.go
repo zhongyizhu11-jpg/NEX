@@ -4321,19 +4321,20 @@ func heartbeat(cfg Config, forceReconcile ...bool) (heartbeatResult, error) {
 	// Interactive tasks are independent from desired-state reconciliation. Accept
 	// them before an early local-state return so a heartbeat response cannot drop
 	// a task while the Agent is rebuilding its runtime snapshot.
+	// 都走 interactiveTasks：按任务 ID 去重、全局限并发、超出时给面板回失败结果（interactive_tasks.go）。
 	for _, task := range resp.LookingGlassTests {
-		go handleLookingGlassTask(cfg, task)
+		dispatchLookingGlassTask(cfg, task)
 	}
 	// 一键链路诊断（2.2.226 起）：每个任务一组检查，并发跑完整包回报。
 	for _, task := range resp.DiagnosticsTasks {
-		go handleDiagnosticsTask(cfg, task)
+		dispatchDiagnosticsTask(cfg, task)
 	}
 	// 规则的「连接」清单（2.2.237 起）：现场读一遍 /proc 或 conntrack 回给面板。
 	for _, task := range resp.RuleConnectionTasks {
-		go handleRuleConnectionsTask(cfg, task)
+		dispatchRuleConnectionsTask(cfg, task)
 	}
 	for _, task := range resp.Iperf3Tasks {
-		go handleIperf3Task(cfg, task)
+		dispatchIperf3Task(cfg, task)
 	}
 	for _, task := range resp.PluginTasks {
 		enqueuePluginAgentTask(cfg, task)
@@ -4628,8 +4629,11 @@ func tcpingDueInterval(serviceProbes []hostProbeServiceProbe, ruleCount int, lin
 	}
 	return interval
 }
-func handleLookingGlassTask(cfg Config, task lookingGlassTask) {
-	result := runLookingGlassTask(cfg, task)
+func handleLookingGlassTask(ctx context.Context, cfg Config, task lookingGlassTask) {
+	reportLookingGlassFinal(cfg, task, runLookingGlassTask(ctx, cfg, task))
+}
+
+func reportLookingGlassFinal(cfg Config, task lookingGlassTask, result lookingGlassResult) {
 	if err := post(cfg, "/api/agent/looking-glass-result", map[string]any{"result": result}, &map[string]any{}); err != nil {
 		if isTransientAgentCommError(err) {
 			logAgentCommError("looking-glass-result", err)
@@ -4649,8 +4653,13 @@ func reportLookingGlassProgress(cfg Config, result lookingGlassResult) {
 	}
 }
 
-func handleIperf3Task(cfg Config, task iperf3Task) {
-	result := runIperf3Task(cfg, task)
+func handleIperf3Task(ctx context.Context, cfg Config, task iperf3Task) {
+	var result iperf3Result
+	if err := ctx.Err(); err != nil {
+		result = iperf3RejectedResult(task, interactiveTaskQueueTimeoutMessage)
+	} else {
+		result = runIperf3Task(cfg, task)
+	}
 	if err := post(cfg, "/api/agent/iperf3-result", map[string]any{"result": result}, &map[string]any{}); err != nil {
 		if isTransientAgentCommError(err) {
 			logAgentCommError("iperf3-result", err)
@@ -4876,7 +4885,7 @@ func stopIperf3Server(reason string) string {
 	return output
 }
 
-func runLookingGlassTask(cfg Config, task lookingGlassTask) lookingGlassResult {
+func runLookingGlassTask(ctx context.Context, cfg Config, task lookingGlassTask) lookingGlassResult {
 	started := time.Now()
 	result := lookingGlassResult{
 		TaskID:            task.TaskID,
@@ -4946,7 +4955,7 @@ func runLookingGlassTask(cfg Config, task lookingGlassTask) lookingGlassResult {
 		result.DurationMs = durationMs
 		reportLookingGlassProgress(cfg, result)
 	}
-	output, exitCode, timedOut := runLookingGlassCommand(command, args, timeout, progress)
+	output, exitCode, timedOut := runLookingGlassCommandContext(ctx, command, args, timeout, progress)
 	result.Output = output
 	if strings.TrimSpace(result.Output) == "" {
 		result.Output = "命令没有返回输出"
@@ -5078,7 +5087,12 @@ func missingNetworkToolMessage(tool string) string {
 const lookingGlassProgressInterval = time.Second
 
 func runLookingGlassCommand(name string, args []string, timeout time.Duration, onProgress func(string, int)) (string, *int, bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	return runLookingGlassCommandContext(context.Background(), name, args, timeout, onProgress)
+}
+
+// runLookingGlassCommandContext 同上，parent 到期（交互任务总时限）时也结束命令。
+func runLookingGlassCommandContext(parent context.Context, name string, args []string, timeout time.Duration, onProgress func(string, int)) (string, *int, bool) {
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	started := time.Now()
 	cmd := exec.CommandContext(ctx, name, args...)

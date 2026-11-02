@@ -66,7 +66,7 @@ var ruleConnectionsInFlightMu sync.Mutex
 var ruleConnectionsInFlight = map[string]bool{}
 var ruleConnectionsSlots = make(chan struct{}, 2)
 
-func handleRuleConnectionsTask(cfg Config, task ruleConnectionsTask) {
+func handleRuleConnectionsTask(ctx context.Context, cfg Config, task ruleConnectionsTask) {
 	if strings.TrimSpace(task.TaskID) == "" {
 		return
 	}
@@ -82,9 +82,18 @@ func handleRuleConnectionsTask(cfg Config, task ruleConnectionsTask) {
 		delete(ruleConnectionsInFlight, task.TaskID)
 		ruleConnectionsInFlightMu.Unlock()
 	}()
-	ruleConnectionsSlots <- struct{}{}
-	result := runRuleConnectionsTask(task)
-	<-ruleConnectionsSlots
+	var result ruleConnectionsResult
+	select {
+	case ruleConnectionsSlots <- struct{}{}:
+		result = runRuleConnectionsTaskContext(ctx, task)
+		<-ruleConnectionsSlots
+	case <-ctx.Done():
+		result = ruleConnectionsResult{TaskID: task.TaskID, Rows: []ruleConnectionRow{}, Error: interactiveTaskQueueTimeoutMessage}
+	}
+	reportRuleConnectionsResult(cfg, task, result)
+}
+
+func reportRuleConnectionsResult(cfg Config, task ruleConnectionsTask, result ruleConnectionsResult) {
 	if err := post(cfg, "/api/agent/rule-connections-result", map[string]any{"result": result}, &map[string]any{}); err != nil {
 		if isTransientAgentCommError(err) {
 			logAgentCommError("rule-connections-result", err)
@@ -103,6 +112,11 @@ func ruleConnectionsTimeout(task ruleConnectionsTask) time.Duration {
 }
 
 func runRuleConnectionsTask(task ruleConnectionsTask) ruleConnectionsResult {
+	return runRuleConnectionsTaskContext(context.Background(), task)
+}
+
+// runRuleConnectionsTaskContext 同上，parent 到期时也一起收尾（交互任务总时限）。
+func runRuleConnectionsTaskContext(parent context.Context, task ruleConnectionsTask) ruleConnectionsResult {
 	result := ruleConnectionsResult{TaskID: task.TaskID, Rows: []ruleConnectionRow{}}
 	if task.Port <= 0 || task.Port > 65535 {
 		result.Error = "端口不对"
@@ -112,7 +126,7 @@ func runRuleConnectionsTask(task ruleConnectionsTask) ruleConnectionsResult {
 	if limit <= 0 || limit > 1000 {
 		limit = ruleConnectionsDefaultLimit
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), ruleConnectionsTimeout(task))
+	ctx, cancel := context.WithTimeout(parent, ruleConnectionsTimeout(task))
 	defer cancel()
 	protocol := strings.ToLower(strings.TrimSpace(task.Protocol))
 	wantTCP := protocol == "" || protocol == "tcp" || protocol == "both"
