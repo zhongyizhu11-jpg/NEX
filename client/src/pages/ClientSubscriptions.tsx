@@ -896,7 +896,7 @@ export default function ClientSubscriptionsPage() {
   };
   const preview = previewQuery.data;
 
-  const previewNodes = (preview?.nodes ?? []) as any[];
+  const previewNodes = useMemo(() => (preview?.nodes ?? []) as any[], [preview]);
   const directPreviewNodes = useMemo(
     () => previewNodes.filter((node) => node?.kind === "direct"),
     [previewNodes],
@@ -905,6 +905,18 @@ export default function ClientSubscriptionsPage() {
     () => previewNodes.filter((node) => node?.kind !== "direct"),
     [previewNodes],
   );
+
+  /** 自己的节点里，有两条以上入口、选路方式却是「不生成」的：自动选路组那段要给它们留一行改回去。 */
+  const offGroupOwners = useMemo(() => {
+    const counts = new Map<number, number>();
+    for (const node of previewNodes) {
+      const id = Number(node?.templateId || 0);
+      if (id > 0) counts.set(id, (counts.get(id) ?? 0) + 1);
+    }
+    return Array.from(counts.entries())
+      .filter(([id, count]) => count >= 2 && normalizeProxyNodeAutoGroup(ownNodeById.get(id)?.autoGroup) === "off")
+      .map(([id, count]) => ({ owner: ownNodeById.get(id), count }));
+  }, [previewNodes, ownNodeById]);
 
   // 只有「已隐藏」需要一键恢复，其他原因要用户自己去改转发或模板。
   const hiddenRules = useMemo(
@@ -1924,7 +1936,7 @@ export default function ClientSubscriptionsPage() {
                         className="flex items-center gap-2 rounded-md border border-dashed px-2.5 py-1.5"
                       >
                         <EyeOff className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                        {/* 和上面节点同一种叫法（入口机 → 落地），规则名放在下面一行，不然分不清是哪条 */}
+                        {/* 和上面节点同一种叫法（规则名，订阅里改过的用改过的）；两者不一样时规则名放在下面一行 */}
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-1.5">
                             <span className="truncate text-sm text-muted-foreground">{item.nodeName || item.ruleName}</span>
@@ -1944,7 +1956,7 @@ export default function ClientSubscriptionsPage() {
                   </div>
                 )}
 
-                {(preview?.groups.length ?? 0) > 0 && (
+                {((preview?.groups.length ?? 0) > 0 || offGroupOwners.length > 0) && (
                   <div className="space-y-1.5">
                     <SectionLabel>
                       <Zap className="mr-1 inline h-3 w-3" />
@@ -1955,36 +1967,74 @@ export default function ClientSubscriptionsPage() {
                       「选路方式」自动生成（新节点默认「自动选最快」）。不写清楚的话，看着像是面板自己改了设置。
                     */}
                     <p className="text-xs text-muted-foreground">
-                      一个落地有两条以上入口时，按这个节点的「选路方式」自动生成，新节点默认「自动选最快」。点一行改成主备、负载均衡或不生成。
+                      一个落地有两条以上入口时，按这个节点的「选路方式」自动生成，新节点默认「自动选最快」。右边可以直接改成主备、负载均衡或不生成。
                     </p>
                     {preview!.groups.map((group) => {
                       const owner = group.templateId ? nodes.find((node) => Number(node.id) === Number(group.templateId)) : null;
-                      const body = (
-                        <>
-                          <span className="font-medium text-foreground">{group.name}</span>
-                          {group.type === "url-test" ? " · 自动选最快 · " : group.type === "load-balance" ? " · 负载均衡 · " : " · 主备切换 · "}
-                          {group.members.map((member, index) => (
-                            group.type === "load-balance" && Array.isArray(group.weights) && group.weights[index]
-                              ? `${member}×${group.weights[index]}`
-                              : member
-                          )).join(" / ")}
-                          {group.type === "load-balance" && Array.isArray(group.weights) ? "（按带宽分连接，Clash / Mihomo 生效）" : ""}
-                        </>
-                      );
-                      return owner ? (
-                        <button
-                          key={group.name}
-                          type="button"
-                          className="block w-full truncate rounded-md border px-2.5 py-1.5 text-left text-xs text-muted-foreground hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                          title={`改「${String(owner.name || "")}」的选路方式`}
-                          onClick={() => { setPreviewOpen(false); openEditNode(owner); }}
-                        >
-                          {body}
-                        </button>
-                      ) : (
-                        <div key={group.name} className="truncate rounded-md border px-2.5 py-1.5 text-xs text-muted-foreground">{body}</div>
+                      // 自建节点（从自己机器的入站派生）没有节点链接，不能走「编辑客户端节点」那个框：就地改选路方式。
+                      const editable = !!owner && !owner.sharedFrom;
+                      const members = group.members.map((member, index) => (
+                        group.type === "load-balance" && Array.isArray(group.weights) && group.weights[index]
+                          ? `${member}×${group.weights[index]}`
+                          : member
+                      )).join(" / ");
+                      const modeLabel = group.type === "url-test" ? "自动选最快" : group.type === "load-balance" ? "负载均衡" : "主备切换";
+                      return (
+                        <div key={group.name} className="rounded-md border px-2.5 py-1.5 text-xs text-muted-foreground">
+                          <div className="flex items-center gap-2">
+                            <span className="min-w-0 flex-1 truncate font-medium text-foreground">{group.name}</span>
+                            {editable ? (
+                              <Select
+                                value={normalizeProxyNodeAutoGroup(owner.autoGroup)}
+                                onValueChange={(value) => updateNode.mutate({ id: Number(owner.id), autoGroup: value as ProxyNodeAutoGroup })}
+                                disabled={updateNode.isPending}
+                              >
+                                <SelectTrigger aria-label={`「${String(owner.name || "")}」的选路方式`} className="h-7 w-32 shrink-0 text-xs">
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {PROXY_NODE_AUTO_GROUPS.map((mode) => (
+                                    <SelectItem key={mode} value={mode}>{PROXY_NODE_AUTO_GROUP_LABELS[mode]}</SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            ) : (
+                              <span className="shrink-0">{modeLabel}</span>
+                            )}
+                          </div>
+                          <p className="mt-0.5 truncate">
+                            {members}
+                            {group.type === "load-balance" && Array.isArray(group.weights) ? "（按带宽分连接，Clash / Mihomo 生效）" : ""}
+                          </p>
+                        </div>
                       );
                     })}
+                    {/*
+                      选了「不生成」，组就从上面消失了 —— 下拉也跟着没了，想改回来只能去节点里找。
+                      所以有两条以上入口、却设成不生成的自己的节点，在这里留一行，照样能改回去。
+                    */}
+                    {offGroupOwners.map(({ owner, count }) => (
+                      <div key={`off-${owner.id}`} className="rounded-md border border-dashed px-2.5 py-1.5 text-xs text-muted-foreground">
+                        <div className="flex items-center gap-2">
+                          <span className="min-w-0 flex-1 truncate font-medium text-foreground">{String(owner.name || "")}</span>
+                          <Select
+                            value="off"
+                            onValueChange={(value) => updateNode.mutate({ id: Number(owner.id), autoGroup: value as ProxyNodeAutoGroup })}
+                            disabled={updateNode.isPending}
+                          >
+                            <SelectTrigger aria-label={`「${String(owner.name || "")}」的选路方式`} className="h-7 w-32 shrink-0 text-xs">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {PROXY_NODE_AUTO_GROUPS.map((mode) => (
+                                <SelectItem key={mode} value={mode}>{PROXY_NODE_AUTO_GROUP_LABELS[mode]}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <p className="mt-0.5 truncate">没有生成组，{count} 条入口在客户端里各是一个节点</p>
+                      </div>
+                    ))}
                   </div>
                 )}
 

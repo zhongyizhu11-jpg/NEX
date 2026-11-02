@@ -447,7 +447,7 @@ function SettingsTab() {
         <FormField className="space-y-1.5 sm:col-span-2"><Label>公告</Label><Textarea value={form.announce} onChange={(event) => set("announce", event.target.value)} rows={2} /><p data-fx-help="" className="text-xs text-muted-foreground">写进 announce 响应头（Happ / v2RayTun 会显示）、落地页，信息节点开着时也插一条。</p></FormField>
       </>)}
       {section("节点外观默认值", <>
-        <FormField className="space-y-1.5 sm:col-span-2"><Label>默认命名模板</Label><Input value={form.nameTemplateDefault} onChange={(event) => set("nameTemplateDefault", event.target.value)} /><p data-fx-help="" className="text-xs text-muted-foreground">{"变量：{flag} {country} {code} {host} {node} {rule} {protocol} {index}。令牌上可以单独改。"}</p></FormField>
+        <FormField className="space-y-1.5 sm:col-span-2"><Label>默认命名模板</Label><Input value={form.nameTemplateDefault} onChange={(event) => set("nameTemplateDefault", event.target.value)} /><p data-fx-help="" className="text-xs text-muted-foreground">{"变量：{name} {flag} {country} {code} {host} {node} {rule} {protocol} {index}。默认 {name}：用转发规则名，规则没起名时是「入口 → 落地」。令牌上可以单独改。"}</p></FormField>
         {toggle("flagEmojiDefault", "节点名加国旗", "地区来自机器位置、节点上手填的国家码或名字里的关键字。")}
         {toggle("regionGroupsDefault", "按地区生成策略组", "🇭🇰 香港、🇯🇵 日本……各一个自动选最快的组。")}
         {toggle("protocolPrefixDefault", "节点名加协议前缀", "[VLESS] [Hysteria2] 这种。")}

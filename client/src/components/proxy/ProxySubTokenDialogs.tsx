@@ -480,7 +480,7 @@ export function ProxySubTokenEditDialog({
               <Section title="命名">
                 <FormField className="space-y-1.5">
                   <Label>节点命名模板</Label>
-                  <Input value={options.nameTemplate} onChange={(event) => setOptions((prev) => ({ ...prev, nameTemplate: event.target.value }))} placeholder={settings?.nameTemplateDefault || "{host} → {node}"} />
+                  <Input value={options.nameTemplate} onChange={(event) => setOptions((prev) => ({ ...prev, nameTemplate: event.target.value }))} placeholder={settings?.nameTemplateDefault || "{name}"} />
                   <div className="flex flex-wrap gap-1">
                     {PROXY_SUB_NAME_TEMPLATE_VARIABLES.map((item) => (
                       <button
@@ -488,7 +488,7 @@ export function ProxySubTokenEditDialog({
                         type="button"
                         className="rounded border px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground hover:text-foreground"
                         title={item.label}
-                        onClick={() => setOptions((prev) => ({ ...prev, nameTemplate: `${prev.nameTemplate || settings?.nameTemplateDefault || "{host} → {node}"}${item.key}` }))}
+                        onClick={() => setOptions((prev) => ({ ...prev, nameTemplate: `${prev.nameTemplate || settings?.nameTemplateDefault || "{name}"}${item.key}` }))}
                       >
                         {item.key}
                       </button>

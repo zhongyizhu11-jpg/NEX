@@ -473,7 +473,7 @@
     "client/src/features/rules/RouteBoardList.tsx": 4,
     "client/src/hooks/useUrlTab.ts": 3,
     "client/src/pages/Billing.tsx": 5,
-    "client/src/pages/ClientSubscriptions.tsx": 12,
+    "client/src/pages/ClientSubscriptions.tsx": 10,
     "client/src/pages/CustomSidebarPage.tsx": 1,
     "client/src/pages/EmailSettings.tsx": 1,
     "client/src/pages/ForwardGroups.tsx": 8,

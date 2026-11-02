@@ -43,13 +43,13 @@ test("隧道换入口机器后订阅节点跟着换，转发组按第一个成�
     await exec("INSERT INTO hosts (id, name, ip, ipv4, userId) VALUES (4, '备用入口', '4.4.4.4', '4.4.4.4', 1)");
     await exec("INSERT INTO proxy_nodes (id, userId, name, protocol, address, port, uuid, transport, tls, sni, isEnabled) VALUES (1, 1, 'HKT', 'vless', 'hkt.example.com', 443, 'uuid-hk', 'tcp', 1, 'hkt.example.com', 1)");
     await exec("INSERT INTO tunnels (id, name, entryHostId, exitHostId, mode, listenPort, userId, isEnabled) VALUES (10, '华南-香港', 1, 3, 'gost', 30000, 1, 1)");
-    // 规则行记的入口还是 1 号机器。
-    await exec("INSERT INTO forward_rules (id, hostId, tunnelId, name, forwardType, protocol, sourcePort, targetIp, targetPort, userId, isEnabled, isRunning, pendingDelete, proxyNodeId, proxyNodeVisible) VALUES (1, 1, 10, '广港hkt', 'gost', 'tcp', 44760, 'hkt.example.com', 443, 1, 1, 1, 0, 1, 1)");
+    // 规则行记的入口还是 1 号机器。规则不起名：订阅里叫「入口机 → 落地」，入口机换了名字跟着换。
+    await exec("INSERT INTO forward_rules (id, hostId, tunnelId, name, forwardType, protocol, sourcePort, targetIp, targetPort, userId, isEnabled, isRunning, pendingDelete, proxyNodeId, proxyNodeVisible) VALUES (1, 1, 10, '', 'gost', 'tcp', 44760, 'hkt.example.com', 443, 1, 1, 1, 0, 1, 1)");
     // 转发组：成员 4 号机优先级最高；规则行记的入口是 1 号机。
     await exec("INSERT INTO forward_groups (id, name, groupType, groupMode, targetIp, targetPort, userId, isEnabled) VALUES (20, '入口组', 'host', 'failover', 'hkt.example.com', 443, 1, 1)");
     await exec("INSERT INTO forward_group_members (id, groupId, memberType, hostId, priority, isEnabled) VALUES (201, 20, 'host', 4, 0, 1)");
     await exec("INSERT INTO forward_group_members (id, groupId, memberType, hostId, priority, isEnabled) VALUES (202, 20, 'host', 2, 10, 1)");
-    await exec("INSERT INTO forward_rules (id, hostId, forwardGroupId, isForwardGroupTemplate, name, forwardType, protocol, sourcePort, targetIp, targetPort, userId, isEnabled, isRunning, pendingDelete, proxyNodeId, proxyNodeVisible) VALUES (2, 1, 20, 1, '组转HKT', 'realm', 'tcp', 44761, 'hkt.example.com', 443, 1, 1, 1, 0, 1, 1)");
+    await exec("INSERT INTO forward_rules (id, hostId, forwardGroupId, isForwardGroupTemplate, name, forwardType, protocol, sourcePort, targetIp, targetPort, userId, isEnabled, isRunning, pendingDelete, proxyNodeId, proxyNodeVisible) VALUES (2, 1, 20, 1, '', 'realm', 'tcp', 44761, 'hkt.example.com', 443, 1, 1, 1, 0, 1, 1)");
     await exec("INSERT INTO proxy_sub_tokens (id, userId, name, token, defaultFormat, isEnabled) VALUES (1, 1, '手机', 'tok', 'base64', 1)");
 
     const app = express();

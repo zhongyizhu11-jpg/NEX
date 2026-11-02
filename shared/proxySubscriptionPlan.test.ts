@@ -34,7 +34,8 @@ const HOSTS: ProxySubscriptionHostRow[] = [
 function rule(overrides: Partial<ProxySubscriptionRuleRow> & { id: number }): ProxySubscriptionRuleRow {
   return {
     hostId: 1,
-    name: "转发",
+    // 没起名的转发：订阅里叫「入口机 → 落地」。起了名的用规则名，见「订阅节点默认叫规则名」。
+    name: "",
     sourcePort: 20001,
     proxyNodeId: 1,
     proxyNodeVisible: true,
@@ -85,7 +86,7 @@ test("单个节点可以在订阅里隐藏，且能说明原因", () => {
 
   assert.equal(plan.entries.length, 1);
   assert.equal(plan.entries[0].ruleId, 1);
-  assert.deepEqual(plan.skipped, [{ ruleId: 2, ruleName: "备用转发", reason: "hidden", nodeName: "广州2 → HKT" }]);
+  assert.deepEqual(plan.skipped, [{ ruleId: 2, ruleName: "备用转发", reason: "hidden", nodeName: "备用转发" }]);
 });
 
 test("未绑定模板的转发不进订阅", () => {
@@ -200,9 +201,34 @@ test("关掉的转发也按订阅里的叫法给名字；开了线路组的标�
   const hidden = plan.skipped.find((item) => item.ruleId === 2);
   assert.ok(hidden);
   assert.equal(hidden.reason, "hidden");
-  assert.equal(hidden.nodeName, plan.entries[0].node.name.replace(/#\d+$/, "").trim() || hidden.nodeName);
-  assert.match(String(hidden.nodeName), /→/);
+  // 起了名的就叫规则名，和上面节点的叫法一致
+  assert.equal(hidden.nodeName, "RFC jinx 39.9y");
+  assert.equal(plan.entries[0].node.name, "广州1 → HKT");
   assert.equal(hidden.lineGroup, undefined);
+});
+
+test("订阅节点默认叫规则名；撞名的带上入口机；订阅里改过名的照旧", () => {
+  const plan = buildProxySubscriptionPlan({
+    rules: [
+      rule({ id: 1, hostId: 1, sourcePort: 42004, name: "Po0(300)-Jinx" }),
+      rule({ id: 2, hostId: 1, sourcePort: 61942, name: "RFC jinx 39.9y" }),
+      // 转发组展开到两台入口：规则名一样
+      rule({ id: 3, hostId: 1, sourcePort: 30001, name: "香港组" }),
+      rule({ id: 4, hostId: 2, sourcePort: 30001, name: "香港组" }),
+      rule({ id: 5, hostId: 2, sourcePort: 30002, name: "随便", proxyNodeName: "我自己起的" }),
+      rule({ id: 6, hostId: 2, sourcePort: 30003 }),
+    ],
+    templates: [HKT_TEMPLATE],
+    hosts: HOSTS,
+  });
+  assert.deepEqual(plan.entries.map((entry) => entry.node.name), [
+    "Po0(300)-Jinx",
+    "RFC jinx 39.9y",
+    "香港组 · 广州1",
+    "香港组 · 广州2",
+    "我自己起的",
+    "广州2 → HKT",
+  ]);
 });
 
 test("串两跳：第一跳写的是第二跳机器的 IP 而机器首选入口是域名，不报「指向已经变了」", () => {
@@ -323,14 +349,11 @@ test("模板行的宽松字段被收敛成合法模型", () => {
   assert.equal(node.udp, true);
 });
 
-test("节点名在主机名或模板名缺失时仍有可用回退", () => {
-  assert.equal(
-    defaultProxySubscriptionNodeName({ hostName: "广州1", templateName: "HKT", ruleName: "转发" }),
-    "广州1 → HKT",
-  );
-  assert.equal(defaultProxySubscriptionNodeName({ hostName: "", templateName: "HKT", ruleName: "转发" }), "HKT");
-  assert.equal(defaultProxySubscriptionNodeName({ hostName: "广州1", templateName: "", ruleName: "转发" }), "广州1");
-  assert.equal(defaultProxySubscriptionNodeName({ hostName: "", templateName: "", ruleName: "转发" }), "转发");
+test("节点名：有规则名用规则名，没有才拼入口和落地，都缺时仍有可用回退", () => {
+  assert.equal(defaultProxySubscriptionNodeName({ hostName: "广州1", templateName: "HKT", ruleName: "转发" }), "转发");
+  assert.equal(defaultProxySubscriptionNodeName({ hostName: "广州1", templateName: "HKT", ruleName: "" }), "广州1 → HKT");
+  assert.equal(defaultProxySubscriptionNodeName({ hostName: "", templateName: "HKT", ruleName: "" }), "HKT");
+  assert.equal(defaultProxySubscriptionNodeName({ hostName: "广州1", templateName: "", ruleName: "" }), "广州1");
   assert.equal(defaultProxySubscriptionNodeName({ hostName: "", templateName: "", ruleName: "" }), "节点");
 });
 

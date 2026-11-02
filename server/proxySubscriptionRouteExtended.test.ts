@@ -200,9 +200,10 @@ test("订阅路由的新能力", () => {
     const beforeRename = await get("/api/sub/tok-all?format=clash");
     assert.ok(beforeRename.body.includes("HKT"));
     const repo = await import(url("server/repositories/proxySubscriptionRepository.ts"));
-    await repo.updateProxyNode(1, { name: "HKT-renamed" });
+    // 节点名默认取规则名，不一定出现在输出里；改 SNI 一定会。
+    await repo.updateProxyNode(1, { name: "HKT-renamed", sni: "renamed.example.com" });
     const afterRename = await get("/api/sub/tok-all?format=clash");
-    assert.ok(afterRename.body.includes("HKT-renamed"), "改名后缓存要作废：" + afterRename.body.slice(0, 200));
+    assert.ok(afterRename.body.includes("renamed.example.com"), "改节点后缓存要作废：" + afterRename.body.slice(0, 200));
 
     // 透传模式的外部订阅：Clash 输出里写成 proxy-providers，主选择器 use 它；base64 忽略。
     await exec("INSERT INTO proxy_sub_sources (id, userId, name, url, intervalSec, mode, isEnabled) VALUES (1, 1, '机场A', 'https://airport.example.com/sub', 3600, 'provider', 1)");

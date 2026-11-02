@@ -111,8 +111,8 @@ test("订阅节点地址：域名发布过就用域名，否则用入口地址�
   assert.equal(address(on, 12)?.address, "203.0.113.2");
   assert.equal(address(on, 13)?.address, "203.0.113.2");
   assert.equal(on.warnings.filter((warning) => warning.reason === "target-mismatch").length, 0, JSON.stringify(on.warnings));
-  // 节点名仍按入口主机起。
-  assert.match(String(address(on, 10)?.name), /HK/);
+  // 节点名跟域名无关：还是规则名。
+  assert.equal(address(on, 10)?.name, "a");
 
   const off = buildProxySubscriptionPlan({ rules, templates, hosts, ruleEntryDomainSuffix: "" });
   assert.equal(address(off, 10)?.address, "203.0.113.1");
