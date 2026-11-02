@@ -4844,11 +4844,19 @@ function RulesContent() {
     isReady: !isLoading && !!rulePageQuery.data,
   });
   const pagedRules = rulePagination.items;
-  const ruleSortingEnabled = ruleCategory !== "all"
-    && effectiveViewMode !== "globe"
+  /**
+   * 能不能拖：不在地球视图、没按资源筛、没在搜索。管理员看「全部用户」时，这一页的规则只要都是同一个人的
+   * 也能拖（单人自用的面板就是这样）；混着几个人的不给拖，免得把别人的顺序一起挪了。
+   */
+  const ruleSortingBase = effectiveViewMode !== "globe"
     && filterResource === "all"
-    && ruleSearchQuery.trim().length === 0
-    && (user?.role !== "admin" || filterUser !== "all");
+    && ruleSearchQuery.trim().length === 0;
+  const ruleSortOwnersOk = (rules: ReadonlyArray<{ userId?: unknown }>) => user?.role !== "admin"
+    || filterUser !== "all"
+    || new Set(rules.map((rule) => Number(rule.userId || 0))).size <= 1;
+  const ruleSortingEnabled = ruleCategory !== "all"
+    && ruleSortingBase
+    && ruleSortOwnersOk(pagedRules);
   const ruleSortingReady = ruleSortingEnabled && !rulePageQuery.isPlaceholderData;
   const ruleSortableItems = useMemo(() => {
     if (!ruleSortingEnabled) return [];
@@ -4890,6 +4898,58 @@ function RulesContent() {
     return groups.filter((group) => group.rules.length > 0);
   }, [forwardGroupById, pagedRules]);
   const shouldGroupRuleCards = ruleCategory === "all";
+
+  /**
+   * 「全部」按类型分组显示时，每一组里也能拖。一组就是一个分类（端口转发 / 隧道转发 / 转发链 / 转发组），
+   * 存的是那个分类自己的顺序 —— 和点进那个分类的页签去拖是同一份，两边看到的一样。
+   */
+  const ruleGroupSortItems = useMemo(() => {
+    const byType: Record<RuleGroupType, typeof pagedRules> = { local: [], tunnel: [], chain: [], group: [] };
+    if (!shouldGroupRuleCards || !ruleSortingBase) return byType;
+    for (const group of desktopRuleGroups) {
+      byType[group.type] = group.rules.filter((rule) => !rule.forwardGroupRuleId && !rule.forwardGroupMemberId);
+    }
+    return byType;
+  }, [desktopRuleGroups, ruleSortingBase, shouldGroupRuleCards]);
+  const ruleGroupSortingEnabled = (type: RuleGroupType) => shouldGroupRuleCards
+    && ruleSortingBase
+    && ruleGroupSortItems[type].length >= 2
+    && ruleSortOwnersOk(ruleGroupSortItems[type]);
+  const saveRuleGroupOrder = (type: RuleGroupType, nextGroupRules: typeof pagedRules) => {
+    // 这一页上同组的位置按新顺序换人，别的组原地不动，拖完马上就是新顺序，不用等刷新。
+    const sortableIds = new Set(ruleGroupSortItems[type].map((rule) => Number(rule.id)));
+    const queue = [...nextGroupRules];
+    const nextPage = pagedRules.map((rule) => (sortableIds.has(Number(rule.id)) ? queue.shift() : rule));
+    const requestId = ruleOrder.begin(nextPage);
+    reorderRulesMutation.mutate({
+      category: type,
+      ids: nextGroupRules.map((rule) => Number(rule.id)),
+    }, {
+      onError: () => ruleOrder.release(requestId),
+      onSettled: () => ruleOrder.resync(requestId, () => Promise.all([
+        utils.rules.list.invalidate(),
+        utils.rules.listPage.invalidate(),
+        utils.rules.mapItems.invalidate(),
+        utils.rules.listSummary.invalidate(),
+      ])),
+    });
+  };
+  const ruleGroupSortableOptions = (type: RuleGroupType) => ({
+    items: ruleGroupSortItems[type],
+    getId: (rule: (typeof pagedRules)[number]) => Number(rule.id),
+    disabled: !ruleGroupSortingEnabled(type) || rulePageQuery.isPlaceholderData || ruleReorderPending,
+    onReorder: (nextRules: typeof pagedRules) => saveRuleGroupOrder(type, nextRules),
+  });
+  const localRuleGroupSortable = useSortableReorder(ruleGroupSortableOptions("local"));
+  const tunnelRuleGroupSortable = useSortableReorder(ruleGroupSortableOptions("tunnel"));
+  const chainRuleGroupSortable = useSortableReorder(ruleGroupSortableOptions("chain"));
+  const groupRuleGroupSortable = useSortableReorder(ruleGroupSortableOptions("group"));
+  const ruleGroupSortables: Record<RuleGroupType, typeof localRuleGroupSortable> = {
+    local: localRuleGroupSortable,
+    tunnel: tunnelRuleGroupSortable,
+    chain: chainRuleGroupSortable,
+    group: groupRuleGroupSortable,
+  };
 
   const getHostName = (hostId: number) => {
     return hosts?.find((h: any) => h.id === hostId)?.name || `主机 #${hostId}`;
@@ -7250,6 +7310,37 @@ function RulesContent() {
     const [value, unit] = formatBytes(bytes).split(" ");
     return { value: value || "0", unit: unit || "B" };
   };
+  /** 「全部」里一组规则卡：这一组能拖就包一层拖拽（手机竖着拖，桌面按格子拖），不能拖照旧。 */
+  const renderRuleGroupItems = (group: (typeof desktopRuleGroups)[number], collapsed: boolean, mobile: boolean) => {
+    const sortable = ruleGroupSortables[group.type];
+    if (!ruleGroupSortingEnabled(group.type)) {
+      return (
+        <RuleGroupItems open={!collapsed} layout={false} className={mobile ? groupedRuleMobileGridClass : groupedRuleCardGridClass}>
+          {group.rules.map((rule) => renderRuleCard(rule))}
+        </RuleGroupItems>
+      );
+    }
+    // 外层只管折叠；带 rule-card-grid-static 的网格会把子元素的 transform 锁死，拖不动，这里用普通网格。
+    return (
+      <RuleGroupItems open={!collapsed} layout={false} className="">
+        <SortableReorderContext
+          sortable={sortable}
+          ids={group.rules.map((rule) => Number(rule.id))}
+          strategy={mobile ? "vertical" : "rect"}
+          restrictToList={mobile}
+        >
+          <div className={mobile ? sortableRuleMobileGridClass : sortableRuleCardGridClass}>
+            {group.rules.map((rule) => (
+              <SortableItem key={rule.id} id={Number(rule.id)} disabled={sortable.disabled}>
+                {(state) => renderRuleCard(rule, state)}
+              </SortableItem>
+            ))}
+          </div>
+        </SortableReorderContext>
+      </RuleGroupItems>
+    );
+  };
+
   const renderRuleCard = (rule: any, sortable?: RuleSortableRenderState) => {
     const supported = isRuleSupported(rule);
     const protocolKey = getRuleProtocolKey(rule);
@@ -7830,9 +7921,7 @@ function RulesContent() {
                     return (
                       <section key={group.type} className="space-y-2">
                         {renderRuleGroupHeader(group)}
-                        <RuleGroupItems open={!collapsed} layout={false} className={groupedRuleCardGridClass}>
-                          {group.rules.map((rule: any) => renderRuleCard(rule))}
-                        </RuleGroupItems>
+                        {renderRuleGroupItems(group, collapsed, false)}
                       </section>
                     );
                   })}
@@ -7859,9 +7948,7 @@ function RulesContent() {
                       return (
                         <section key={group.type} className="space-y-2">
                           {renderRuleGroupHeader(group)}
-                          <RuleGroupItems open={!collapsed} layout={false} className={groupedRuleMobileGridClass}>
-                            {group.rules.map((rule: any) => renderRuleCard(rule))}
-                          </RuleGroupItems>
+                          {renderRuleGroupItems(group, collapsed, true)}
                         </section>
                       );
                     })}

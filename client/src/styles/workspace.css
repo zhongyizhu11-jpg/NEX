@@ -1789,6 +1789,8 @@ html[data-personalization-background="image"] .auth-divider-label, html[data-per
 .fx-rb-mini-row { display: flex; width: 100%; min-width: 0; align-items: center; gap: 6px; padding: 2px 4px; border: 0; border-radius: 6px; background: transparent; font: inherit; font-size: 11.5px; line-height: 18px; color: var(--fx-text-secondary); text-align: left; cursor: default; }
 button.fx-rb-mini-row { cursor: pointer; }
 button.fx-rb-mini-row:hover { background: var(--fx-l2-group); }
+/* 触屏上按钮统一撑到 44px（index.css），规则卡上一条线路一行就被撑得很散。整行都能点、行挨着行，26px 够按。 */
+@media (pointer: coarse) { button.fx-rb-mini-row { min-height: 26px; } }
 .fx-rb-mini-letter { flex: none; width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; border-radius: 999px; background: var(--fx-l2-group); font-size: 10px; font-weight: 700; color: var(--fx-text-secondary); }
 .fx-rb-mini-letter[data-active] { background: var(--fx-path); color: #fff; }
 .fx-rb-mini-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--fx-standby); }
