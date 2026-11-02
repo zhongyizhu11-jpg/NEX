@@ -29,6 +29,7 @@ import {
   type LineTone,
 } from "@/features/lines/LineUi";
 import { RouteBoardList } from "@/features/rules/RouteBoardList";
+import { LINE_PARAM, useSearchIdParam } from "./lineLinks";
 import { LandingPoolFields, landingDraftError, landingDraftFrom, landingInputFromDraft, type LandingConfigView, type LandingDraft } from "./LandingPoolFields";
 import { LINK_SPREAD_LABELS } from "@shared/linkTerms";
 import { trpc } from "@/lib/trpc";
@@ -55,8 +56,8 @@ export function LineWorkspace({ searchQuery = "", isAdmin = false }: { searchQue
   const board = trpc.lineDiagnostics.lineWorkspace.useQuery({ hours: 24 }, { refetchInterval: 30_000, staleTime: 10_000 });
   const data = board.data;
   const [allAlerts, setAllAlerts] = useState(false);
-  // 告警行和下面的线路卡点开的是同一个线路详情（在里面直接改）
-  const [openRuleId, setOpenRuleId] = useState<number | null>(null);
+  // 告警行和下面的线路卡点开的是同一个线路详情（在里面直接改）。开着时地址栏带 ?line=<规则 id>，复制下来就能分享（lineLinks.ts）
+  const [openRuleId, setOpenRuleId] = useSearchIdParam(LINE_PARAM);
   const alerts = data?.recent || [];
   const shownAlerts = allAlerts ? alerts : alerts.slice(0, ALERT_ROWS_SHOWN);
   return (

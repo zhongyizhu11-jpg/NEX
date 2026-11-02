@@ -29,6 +29,7 @@ import {
 } from "@shared/networkTopology";
 import { TOPOLOGY_KIND_COLORS, TopologyCanvas, type TopologyCanvasHandle } from "@/features/topology/TopologyCanvas";
 import { MyLinesSection } from "@/features/links/MyLinesSection";
+import { lineDetailHref } from "@/features/links/lineLinks";
 import { layoutTopology, topologyColumnLabels } from "@/features/topology/topologyLayout";
 import {
   TOPOLOGY_EDGE_KINDS,
@@ -238,7 +239,8 @@ export default function TopologyPage() {
     return `${GROUP_MODE_LABELS[groupById.get(focus.id)?.groupMode || ""] || "组"} · ${groupById.get(focus.id)?.name || `#${focus.id}`}`;
   })();
 
-  const ruleHref = (rule: TopologyRuleRef) => `/rules?q=${encodeURIComponent(rule.name)}`;
+  // 线路组规则去线路详情（和线路概览、我的线路、订阅内容同一个地址），别的规则按名字在转发规则页里搜
+  const ruleHref = (rule: TopologyRuleRef) => (rule.kind === "route" ? lineDetailHref(rule.id) : `/rules?q=${encodeURIComponent(rule.name)}`);
   const tunnelHref = (tunnel: TopologyTunnelRef) => (isAdmin ? `/tunnels?tab=tunnels&q=${encodeURIComponent(tunnel.name)}` : null);
   const groupHref = (group: TopologyGroupRef) => (isAdmin ? `/tunnels?tab=${GROUP_SECTION_BY_MODE[group.groupMode] || "groups"}&q=${encodeURIComponent(group.name)}` : null);
 

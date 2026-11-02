@@ -1,6 +1,5 @@
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { readStoredViewMode, writeStoredViewMode } from "@/lib/viewModeStorage";
-import { useFaultBundleExport } from "@/components/links/useFaultBundleExport";
 import { FormField } from "@/components/ui/form-field";
 import EmptyState from "@/components/EmptyState";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
@@ -17,7 +16,7 @@ import { formatBytes } from "@shared/formatBytes";
 import AnimatedStatValue from "@/components/AnimatedStatValue";
 import AutoAnimateContainer from "@/components/AutoAnimateContainer";
 import DashboardLayout from "@/components/DashboardLayout";
-import { DiagnoseDialog, type DiagnoseExtraTab } from "@/components/DiagnoseDialog";
+import { DiagnoseDialog, DiagnoseSubjectActions, type DiagnoseExtraTab } from "@/components/DiagnoseDialog";
 import { LatencyRating } from "@/components/LatencyRating";
 import { LinkTestProbeView, parseLinkTestMessage, type LinkTestPlannedSegment } from "@/components/LinkTestLatencySummary";
 import { describeProbeFailureShort } from "@shared/probeFailure";
@@ -141,6 +140,7 @@ import {
 } from "@shared/failoverTargets";
 import { FAILOVER_TONE_CLASS, describeFailoverLineDisplay } from "@/lib/failoverLineDisplay";
 import { RouteGroupSheet } from "@/features/rules/RouteGroupSheet";
+import { LineDetailFromUrl } from "@/features/links/LineDetailFromUrl";
 import { RouteMiniChain, routeBoardActiveChain } from "@/features/rules/RouteBoard";
 import { EntityActions } from "@/components/entity/EntityActions";
 import { IconTile, type IconTileTone } from "@/components/entity/IconTile";
@@ -212,7 +212,6 @@ import {
   Globe,
   RotateCcw,
   Lock,
-  FileJson,
   X,
 } from "lucide-react";
 import type { GlobeMethods } from "react-globe.gl";
@@ -2018,7 +2017,6 @@ function RulesContent() {
   // 手机 + 精简：搜索行收成分类条右边一枚图标（ListControls.tsx），点开才占一行
   const [phoneSearchOpen, setPhoneSearchOpen] = useState(false);
   const utils = trpc.useUtils();
-  const faultBundle = useFaultBundleExport();
   const [ruleProbeCacheRevision, setRuleProbeCacheRevision] = useState(0);
   const invalidatedRuleProbeIdsRef = useRef(new Set<number>());
   const invalidateRuleProbeStatuses = useCallback((ruleIds: Iterable<number> | undefined) => {
@@ -8001,16 +7999,7 @@ function RulesContent() {
               </Suspense>
             ),
           }]}
-          actions={(
-            <>
-              <Button type="button" variant="outline" size="sm" className="gap-1.5" disabled={faultBundle.pending} onClick={() => { void faultBundle.exportBundle("rule", Number(selfTestRule.id)); }}>
-                <FileJson className="h-3.5 w-3.5" />导出故障包
-              </Button>
-              <Button type="button" variant="outline" size="sm" className="gap-1.5" onClick={() => { setSelfTestRule(null); setLocation(`/topology?rule=${Number(selfTestRule.id)}`); }}>
-                <Network className="h-3.5 w-3.5" />查看拓扑
-              </Button>
-            </>
-          )}
+          actions={<DiagnoseSubjectActions kind="rule" id={Number(selfTestRule.id)} onLeave={() => setSelfTestRule(null)} />}
         />
       )}
 
@@ -9441,6 +9430,8 @@ function RulesContent() {
           />
         );
       })()}
+      {/* /rules?line=<规则 id>：线路详情的深链（拓扑、订阅、线路概览都这么跳过来），自己按 id 取规则 */}
+      <LineDetailFromUrl />
       <Dialog open={!!deleteRule} onOpenChange={(open) => !open && setDeleteRule(null)}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>

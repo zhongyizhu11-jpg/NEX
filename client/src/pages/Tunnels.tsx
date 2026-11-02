@@ -1,7 +1,6 @@
 import { formatBytes } from "@shared/formatBytes";
 import { FormField } from "@/components/ui/form-field";
 import { readStoredViewMode, writeStoredViewMode } from "@/lib/viewModeStorage";
-import { useFaultBundleExport } from "@/components/links/useFaultBundleExport";
 import { ResourceTrafficLine } from "@/components/links/ResourceTrafficLine";
 import EmptyState from "@/components/EmptyState";
 import { TunnelConnStatsBody } from "@/components/tunnels/TunnelConnStatsDialog";
@@ -35,7 +34,7 @@ import type { LinkWizardAction } from "@shared/linkWizard";
 import { loadReactGlobe, prefetchReactGlobe } from "@/lib/reactGlobeLoader";
 import { escapeTooltipHtml, hostGeoCoordinate } from "@/lib/hostGeo";
 import DashboardLayout from "@/components/DashboardLayout";
-import { DiagnoseDialog, type DiagnoseExtraTab } from "@/components/DiagnoseDialog";
+import { DiagnoseDialog, DiagnoseSubjectActions, type DiagnoseExtraTab } from "@/components/DiagnoseDialog";
 import { useAuth } from "@/_core/hooks/useAuth";
 import AnimatedStatValue from "@/components/AnimatedStatValue";
 import { LatencyRating, getLatencyRating } from "@/components/LatencyRating";
@@ -76,7 +75,9 @@ import {
 } from "@/components/ui/select";
 import { OptimisticSwitch, Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
-import { SlidingTabsList, type SlidingTabItem } from "@/components/ui/sliding-tabs";
+import { type SlidingTabItem } from "@/components/ui/sliding-tabs";
+import { LinkSectionTabs, type LinkSectionGroup } from "@/features/links/LinkSectionTabs";
+import { LINE_PARAM, readPositiveParam } from "@/features/links/lineLinks";
 import { useCompactLayout } from "@/hooks/useCompactLayout";
 import { SearchToggle } from "@/components/ListControls";
 import { useIsMobile } from "@/hooks/useMobile";
@@ -128,7 +129,7 @@ import {
   Trash2,
   Upload,
   XCircle,
-  FileJson,
+  Wand2,
 } from "lucide-react";
 import type { GlobeMethods } from "react-globe.gl";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type ReactNode } from "react";
@@ -837,6 +838,17 @@ const TUNNEL_SECTION_ITEMS = [
   { value: "pools", label: "节点池", icon: ShieldCheck },
   { value: "routes", label: "线路概览", icon: Waypoints },
 ] as const satisfies readonly SlidingTabItem<TunnelSection>[];
+/*
+  2.3.506：九个页签在手机上要左右滑，新用户也不知道先看哪个。条上只留最常用的三个（隧道链路是默认页、
+  端口转发、看线路的线路概览），其余收进最后一格「更多」，按「转发 / 隧道 / 线路」分组列；先后照旧。
+  页签的值（?tab=）一个没改，老链接、别处跳过来的照常落到原来那一页（落在「更多」里的，那一格写它的名字）。
+*/
+const TUNNEL_PRIMARY_SECTIONS = ["tunnels", "ports", "routes"] as const satisfies readonly TunnelSection[];
+const TUNNEL_MORE_GROUPS = [
+  { label: "转发", values: ["chains", "groups", "entries", "exits"] },
+  { label: "隧道", values: ["aggregates"] },
+  { label: "线路", values: ["pools"] },
+] as const satisfies readonly LinkSectionGroup<TunnelSection>[];
 
 const TUNNEL_SECTION_STORAGE_KEY = "forwardx.tunnels.section";
 const TUNNEL_VIEW_MODE_STORAGE_KEY = "forwardx.tunnels.viewMode";
@@ -2158,7 +2170,6 @@ function tunnelMatchesLinkSearch(
 function TunnelsContent() {
   const { user, loading: authLoading } = useAuth();
   const utils = trpc.useUtils();
-  const faultBundle = useFaultBundleExport();
   // 列表视图在手机宽度（Tailwind sm 以下）显示成卡片：只渲染看得见的那套，不再卡片 + 表格各渲染一份再藏一份。
   const isBelowSm = useMediaQuery("(max-width: 639px)");
   // The compact options query is preferred for the editors. Keep the older
@@ -2247,6 +2258,11 @@ function TunnelsContent() {
   }));
   const [, setTopologyLocation] = useLocation();
   const linkLocation = useSearch();
+  // /tunnels?line=<规则 id>：线路详情的深链（lineLinks.ts），开在线路概览那一页
+  useEffect(() => {
+    if (readPositiveParam(linkLocation, LINE_PARAM) && activeSection !== "routes") setActiveSection("routes");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [linkLocation]);
   const [showCreateTypeDialog, setShowCreateTypeDialog] = useState(false);
   const [aggregateDialog, setAggregateDialog] = useState<{ open: boolean; tunnel: any | null }>({ open: false, tunnel: null });
   const [chainCreateForm, setChainCreateForm] = useState<ChainCreateForm>(defaultChainCreateForm);
@@ -4356,10 +4372,32 @@ function TunnelsContent() {
     return [entryGroupLabel ? `入口组 ${entryGroupLabel}` : "", route].filter(Boolean).join(" ｜ ");
   };
 
-  // 节点池那一页的新建在它自己的标题右边（建池 / 用组建池 / 新建组），这里的「新建链路」和池子无关，不放
-  const createLinkAction = (activeSection === "routes" && !linkWizardEnabled) || activeSection === "pools" ? null : (
+  /*
+    「向导」（2.3.506）：「按目标新建」原来只在系统设置里打开后、线路概览那一页才有，不知道的人找不到。
+    现在每一页的「新建链路」左边都有一个小的「向导」，点开就是同一个向导；设置的意思没变 —— 打开后
+    线路概览右上角照旧是醒目的「按目标新建」（那时那一页不再重复摆「向导」）。
+  */
+  const showWizardButton = activeSection !== "pools" && !(activeSection === "routes" && linkWizardEnabled);
+  const wizardAction = showWizardButton ? (
     <Button
-      className="fx-row-action ml-auto h-9 shrink-0 gap-1.5 rounded-full px-3.5"
+      type="button"
+      variant="outline"
+      className="fx-row-action ml-auto h-9 shrink-0 gap-1.5 rounded-full px-3 max-sm:w-9 max-sm:px-0"
+      disabled={!canCreateGroup}
+      title={canCreateGroup ? "不知道建哪一种：说说想要什么，面板推荐一种并打开预填好的新建框" : "至少需要 1 台主机"}
+      aria-label="向导：按目标新建"
+      onClick={() => setLinkWizardOpen(true)}
+      data-testid="link-wizard-open"
+    >
+      <Wand2 className="h-4 w-4" />
+      {/* 手机上只留图标（页头那一行放不下三个带字的按钮），读屏照样念「向导」 */}
+      <span className="max-sm:sr-only">向导</span>
+    </Button>
+  ) : null;
+  // 节点池那一页的新建在它自己的标题右边（建池 / 用组建池 / 新建组），这里的「新建链路」和池子无关，不放
+  const createButton = (activeSection === "routes" && !linkWizardEnabled) || activeSection === "pools" ? null : (
+    <Button
+      className={cn("fx-row-action h-9 shrink-0 gap-1.5 rounded-full px-3.5", !wizardAction && "ml-auto")}
       disabled={!canCreateActive}
       title={createDisabledTitle}
       onClick={openCreateTypeDialog}
@@ -4368,11 +4406,17 @@ function TunnelsContent() {
       {activeSection === "routes" ? "按目标新建" : "新建链路"}
     </Button>
   );
+  const createLinkAction = wizardAction || createButton ? <>{wizardAction}{createButton}</> : null;
+  const headerShowsTunnelStats = activeSection !== "routes" && activeSection !== "pools" && activeSection !== "lines";
 
   return (
     <div className="space-y-6" data-fx-std-page={compactLayout ? undefined : ""} data-fx-compact-page={compactLayout ? "" : undefined}>
       {/* data-fx-std-page：标准布局下这一页整页按原来的标准画（compact.css 让出去）；精简下不带，按紧凑的方式画 */}
-      <WorkspaceHeader title="链路管理" description="管理隧道、端口转发和多节点线路" status={
+      {/*
+        线路概览、节点池两页不摆页头的「n / m 可用」和状态点：那是隧道链路那一页的数，摆在这两页是把
+        隧道的汇总原样再画一遍（2.3.506）；这两页自己有各自的数（三个数、每个池的 n/m）。
+      */}
+      <WorkspaceHeader title="链路管理" description="管理隧道、端口转发和多节点线路" status={headerShowsTunnelStats ? (
           <span className="text-meta tabular-nums text-muted-foreground">
             <AnimatedStatValue
               as="span"
@@ -4382,7 +4426,7 @@ function TunnelsContent() {
               fallbackValue={headerStat.fallback}
             />
           </span>
-      } chips={<HeaderStatusChips items={headerChipItems} />} actions={<>
+      ) : undefined} chips={headerShowsTunnelStats ? <HeaderStatusChips items={headerChipItems} /> : undefined} actions={<>
           <ViewModeToggle
             value={activeViewMode}
             onChange={handleActiveViewModeChange}
@@ -4400,7 +4444,14 @@ function TunnelsContent() {
         {/* fx-list-controls：精简布局（桌面）下分类条和搜索那一行并排，两行变一行（compact.css） */}
         <div className="fx-list-controls space-y-4">
         <div className="fx-tabs-row">
-        <SlidingTabsList items={TUNNEL_SECTION_ITEMS} activeValue={activeSection === "lines" ? "routes" : activeSection} ariaLabel="链路管理" minItemWidthRem={compactLayout ? 5 : 7.75} />
+        <LinkSectionTabs
+          items={TUNNEL_SECTION_ITEMS}
+          primary={TUNNEL_PRIMARY_SECTIONS}
+          groups={TUNNEL_MORE_GROUPS}
+          activeValue={activeSection === "lines" ? "routes" : activeSection}
+          onValueChange={(value) => setActiveSection(value)}
+          ariaLabel="链路管理"
+        />
         {collapsePhoneSearch ? (
           <SearchToggle open={phoneSearchOpen} active={linkSearchQuery.length > 0} onToggle={() => setPhoneSearchOpen((value) => !value)} />
         ) : null}
@@ -4761,16 +4812,7 @@ function TunnelsContent() {
               ? [{ key: "conn", label: "连接监控", content: <TunnelConnStatsBody tunnel={{ id: testTunnel.id, name: testTunnel.name }} /> }]
               : []),
           ]}
-          actions={(
-            <>
-              <Button type="button" variant="outline" size="sm" className="gap-1.5" disabled={faultBundle.pending} onClick={() => { void faultBundle.exportBundle("tunnel", Number(testTunnel.id)); }}>
-                <FileJson className="h-3.5 w-3.5" />导出故障包
-              </Button>
-              <Button type="button" variant="outline" size="sm" className="gap-1.5" onClick={() => { setTestTunnel(null); setTopologyLocation(`/topology?tunnel=${Number(testTunnel.id)}`); }}>
-                <Network className="h-3.5 w-3.5" />查看拓扑
-              </Button>
-            </>
-          )}
+          actions={<DiagnoseSubjectActions kind="tunnel" id={Number(testTunnel.id)} onLeave={() => setTestTunnel(null)} speedTest />}
         />
       )}
 
