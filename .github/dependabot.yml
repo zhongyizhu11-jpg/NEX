@@ -1,0 +1,52 @@
+version: 2
+
+# 依赖每周查一次，按生态分组成一个 PR，免得一周冒出几十个。
+# 跨大版本的升级（drizzle、nodemailer 这类）单独成组，需要专门回归。
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      npm-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+      npm-major:
+        update-types:
+          - major
+
+  - package-ecosystem: gomod
+    directory: "/agent"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    groups:
+      agent-go:
+        patterns:
+          - "*"
+
+  - package-ecosystem: gomod
+    directory: "/forwardx-fxp"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    groups:
+      fxp-go:
+        patterns:
+          - "*"
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    groups:
+      github-actions:
+        patterns:
+          - "*"
