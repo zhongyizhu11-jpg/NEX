@@ -77,6 +77,8 @@ export default defineConfig({
           { text: "工单", link: "/guide/tickets" },
           { text: "Google 登录", link: "/guide/google-login" },
           { text: "Discord 登录和通知", link: "/guide/discord" },
+          { text: "插件", link: "/guide/plugins" },
+          { text: "iOS 客户端自签安装", link: "/ios-self-sign" },
           { text: "升级和备份", link: "/guide/upgrade-backup" },
           { text: "卸载 NEX", link: "/guide/uninstall" },
           { text: "常见问题排查", link: "/guide/troubleshooting" },

@@ -81,7 +81,7 @@
 1. 纯逻辑放 `shared/`，前后端共用，预览所见即客户端所得。渲染拆成**流水线**：取节点 → 令牌过滤 → 处理器（改名 / 旗帜 / 排序 / 去重 / 信息节点） → 模板渲染 → 响应头。每一级可单测。
 2. 新表、新列 **`drizzle/schema.ts` 和 `server/dbSchema.ts` 两处同改**，`ensureDatabaseSchema` 自动补列，三种数据库都要能跑。
 3. 一律**向后兼容**：旧地址 `/api/sub/<token>?format=&rules=` 行为不变；所有新开关默认值等于现状。
-4. 每个工作包独立成 PR，先补守源码的测试（`node:test`，加进 `package.json` 的 `test:server` 清单），改完跑 `pnpm test:all`。
+4. 每个工作包独立成 PR，先补守源码的测试（`node:test`，文件名以 `.test.ts` 结尾即可，`pnpm test:all` 会自动找到，不用再登记到 `test:server` 清单），改完跑 `pnpm test:all`。
 5. 公网接口（`/api/sub/*`）的新能力先想「被滥用会怎样」：限流、SSRF、长度上限、404 不泄露存在性。
 
 ## 四、总体设计
@@ -176,7 +176,7 @@ collect(userId)                    现有 getProxySubscriptionDocumentForUser（
   - 上限取 `min(令牌.maxDevices, 用户有效值)`，用户有效值由手动值和套餐值合并（沿 `mergeManualAndPlanLimits`）。
   - 用户和管理员都能看设备列表、删设备；令牌重置时清空设备。
 - **通知**：接现有邮件 / Telegram 通知器，事件：令牌首次被拉取、新设备 / 新 IP、超设备数、连续失败（商家视角「客户导不进去」最有价值）。每令牌每事件每天去重。
-- 验收：`proxySubAccessLog.test.ts`（并发写）、`proxySubDeviceLimit.test.ts`（HWID 超限、IP 退化、重置清空）。
+- 验收：`server/proxySubscriptionRouteExtended.test.ts`（拉取日志落表、严格模式拒绝不带 HWID、第二台设备超限）、`shared/proxySubDeviceLimit.test.ts`（HWID 超限、严格模式和按 IP 退化、三层上限取最严）。
 
 ### WP4 模板与自定义规则（L）
 
@@ -216,7 +216,7 @@ collect(userId)                    现有 getProxySubscriptionDocumentForUser（
 - `/api/sub/:token` 带 `Accept: text/html` 时返回一张无需登录的落地页：套餐名、已用 / 总量进度条、到期日、重置日、设备数、公告、各客户端一键导入（复用 `shared/proxyClientImport.ts` 的目标表）、二维码、显式格式地址；不列节点明细（防泄露）。品牌用现有 `/api/client-logos` 与面板名称。
 - 响应头补 `profile-web-page-url`（指向落地页）、`support-url`（`proxySub.supportUrl`）、`announce`（base64，`proxySub.announce`）。
 - 落地页走同样的资格判定、限流与访问日志（`result=page`）。
-- 验收：`proxySubPage.test.ts`（HTML 分支、不含节点明细、404 口径一致）。
+- 验收：`server/proxySubscriptionRouteExtended.test.ts` 里的落地页用例（HTML 分支、不含节点凭据、客户端 UA 照旧拿订阅）。
 
 ### WP8 套餐与计费联动（S）
 
