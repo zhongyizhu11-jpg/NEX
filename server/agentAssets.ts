@@ -1,13 +1,39 @@
-import { normalizeVersion } from "@shared/version";
+import { compareVersions, normalizeVersion } from "@shared/version";
+import { createHash } from "crypto";
 import fs from "fs";
 import fsp from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
 import { AGENT_VERSION, APP_VERSION } from "../shared/versions";
+import { setBoundedMapValue } from "./boundedCache";
 
 const REPO_URL = "https://github.com/zhongyizhu11-jpg/NEX";
 const MAX_AGENT_ASSET_BYTES = 80 * 1024 * 1024;
 const fetchLocks = new Map<string, Promise<string | null>>();
+
+/*
+  /api/agent/assets 不用登录（装机脚本、老 Agent 升级都从这里取），所以替人去 GitHub 下载这件事要收住：
+  - 只替「当前版本」和往前 AGENT_ASSET_RECENT_RELEASES 个补丁版本去下（装机脚本当前版本的包还没传完时，
+    会回退到上一个发布版本；比当前新的也放行，面板没升级时脚本可能取 GitHub 上最新的）；
+    更老的只认面板上已经有的文件。
+  - 下不到的记负缓存，AGENT_ASSET_MISS_TTL_MS 内不再去 GitHub。
+  - 下完按发布页的 SHA256SUMS 校验（发布流程每版都传这个文件）。
+  - 缓存目录最多留 AGENT_ASSET_CACHE_MAX_VERSIONS 个版本，多了删最旧的（当前版本不删）。
+*/
+export const AGENT_ASSET_RECENT_RELEASES = 5;
+export const AGENT_ASSET_CACHE_MAX_VERSIONS = 6;
+const AGENT_ASSET_MISS_TTL_MS = 5 * 60 * 1000;
+const missCache = new Map<string, number>();
+
+/** 什么样的 fetch 都行（测试里换成假的）。 */
+export type AgentAssetFetch = (url: string, init?: any) => Promise<{
+  ok: boolean;
+  status: number;
+  statusText?: string;
+  headers: { get(name: string): string | null };
+  body: any;
+  text(): Promise<string>;
+}>;
 
 export const AGENT_ASSET_NAMES = [
   "forwardx-agent-linux-amd64",
@@ -136,7 +162,78 @@ export function getBundledAgentAssetPath(version: string, asset: string) {
   return null;
 }
 
-async function downloadAgentAssetToCache(version: string, asset: string) {
+/** 这个版本值不值得替人去 GitHub 下：当前 Agent / 面板版本，或者不比「当前往前 N 个补丁版本」更老。 */
+export function isAgentAssetVersionFetchable(version: string) {
+  const normalized = normalizeVersion(version);
+  if (!isSemver(normalized)) return false;
+  if (normalized === normalizeVersion(AGENT_VERSION) || normalized === normalizeVersion(APP_VERSION)) return true;
+  const [major, minor, patch] = normalizeVersion(APP_VERSION).split(".").map(Number);
+  const floor = `${major}.${minor}.${Math.max(0, patch - AGENT_ASSET_RECENT_RELEASES)}`;
+  return compareVersions(normalized, floor) >= 0;
+}
+
+/**
+ * 发布页上这个版本的 SHA256SUMS 里，这个文件该是什么哈希。
+ * 返回哈希；发布页没有这个文件（老版本）或者里面没列这一项返回 "unpublished"；
+ * 取不到（网络问题、上游 5xx）返回 null —— 这种情况不缓存二进制，过一会儿再试。
+ */
+async function releaseAssetSha256(releaseVersion: string, asset: string, fetchImpl: AgentAssetFetch): Promise<string | "unpublished" | null> {
+  try {
+    const res = await fetchImpl(`${REPO_URL}/releases/download/v${normalizeVersion(releaseVersion)}/SHA256SUMS`, {
+      redirect: "follow",
+      headers: { "User-Agent": `NEX/${APP_VERSION}` },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (res.status === 404) return "unpublished";
+    if (!res.ok) return null;
+    const sums = parseSha256Sums(await res.text());
+    return sums[asset] || "unpublished";
+  } catch {
+    return null;
+  }
+}
+
+async function fileSha256(filePath: string) {
+  const hash = createHash("sha256");
+  for await (const chunk of fs.createReadStream(filePath)) hash.update(chunk as Buffer);
+  return hash.digest("hex");
+}
+
+/**
+ * 缓存目录里的版本多于上限时删最旧的（按目录修改时间）。当前 Agent / 面板版本和刚写进去的那个不删。
+ */
+export async function pruneAgentAssetCache(keepVersion: string, maxVersions = AGENT_ASSET_CACHE_MAX_VERSIONS) {
+  const root = path.resolve(process.cwd(), "data", "agent-assets");
+  let entries: fs.Dirent[];
+  try {
+    entries = await fsp.readdir(root, { withFileTypes: true });
+  } catch {
+    return [] as string[];
+  }
+  const protectedDirs = new Set([keepVersion, AGENT_VERSION, APP_VERSION].map((value) => `v${normalizeVersion(value)}`));
+  const dirs: Array<{ name: string; mtimeMs: number }> = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !/^v\d+\.\d+\.\d+$/.test(entry.name)) continue;
+    const stat = await fsp.stat(path.join(root, entry.name)).catch(() => null);
+    if (stat) dirs.push({ name: entry.name, mtimeMs: stat.mtimeMs });
+  }
+  if (dirs.length <= maxVersions) return [];
+  dirs.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  const removed: string[] = [];
+  let room = Math.max(0, maxVersions - dirs.filter((dir) => protectedDirs.has(dir.name)).length);
+  for (const dir of dirs) {
+    if (protectedDirs.has(dir.name)) continue;
+    if (room > 0) {
+      room -= 1;
+      continue;
+    }
+    await fsp.rm(path.join(root, dir.name), { recursive: true, force: true }).catch(() => undefined);
+    removed.push(dir.name);
+  }
+  return removed;
+}
+
+async function downloadAgentAssetToCache(version: string, asset: string, fetchImpl: AgentAssetFetch) {
   const normalized = normalizeVersion(version);
   if (!isSemver(normalized) || !AGENT_ASSET_NAME_SET.has(asset)) return null;
 
@@ -145,7 +242,7 @@ async function downloadAgentAssetToCache(version: string, asset: string) {
     await fsp.mkdir(path.dirname(cachePath), { recursive: true });
     const tmpPath = `${cachePath}.tmp-${process.pid}-${Date.now()}`;
     try {
-      const res = await fetch(githubAssetUrl(releaseVersion, asset), {
+      const res = await fetchImpl(githubAssetUrl(releaseVersion, asset), {
         cache: "no-store",
         redirect: "follow",
         headers: {
@@ -181,8 +278,20 @@ async function downloadAgentAssetToCache(version: string, asset: string) {
         console.warn(`[AgentAssets] Downloaded asset is not an ELF binary ${asset} v${releaseVersion}`);
         continue;
       }
+      const expected = await releaseAssetSha256(releaseVersion, asset, fetchImpl);
+      if (expected === null) {
+        console.warn(`[AgentAssets] SHA256SUMS unavailable for v${releaseVersion}, not caching ${asset}`);
+        continue;
+      }
+      if (expected === "unpublished") {
+        console.warn(`[AgentAssets] v${releaseVersion} publishes no checksum for ${asset}; caching without verification`);
+      } else if ((await fileSha256(tmpPath)) !== expected) {
+        console.warn(`[AgentAssets] Checksum mismatch for ${asset} v${releaseVersion}`);
+        continue;
+      }
       await fsp.chmod(tmpPath, 0o755).catch(() => undefined);
       await fsp.rename(tmpPath, cachePath);
+      await pruneAgentAssetCache(releaseVersion).catch(() => undefined);
       return cachePath;
     } catch (error) {
       console.warn(`[AgentAssets] Failed to cache ${asset} v${releaseVersion}:`, error);
@@ -193,20 +302,33 @@ async function downloadAgentAssetToCache(version: string, asset: string) {
   return null;
 }
 
-export async function getOrFetchAgentAssetPath(version: string, asset: string) {
+export async function getOrFetchAgentAssetPath(version: string, asset: string, fetchImpl: AgentAssetFetch = fetch as any) {
   const bundled = getBundledAgentAssetPath(version, asset);
   if (bundled) return bundled;
 
   const normalized = normalizeVersion(version);
   if (!isSemver(normalized) || !AGENT_ASSET_NAME_SET.has(asset)) return null;
+  if (!isAgentAssetVersionFetchable(normalized)) return null;
 
   const key = `${normalized}:${asset}`;
+  const missUntil = missCache.get(key) || 0;
+  if (missUntil > Date.now()) return null;
+  if (missUntil) missCache.delete(key);
   let lock = fetchLocks.get(key);
   if (!lock) {
-    lock = downloadAgentAssetToCache(normalized, asset).finally(() => fetchLocks.delete(key));
+    lock = downloadAgentAssetToCache(normalized, asset, fetchImpl)
+      .then((result) => {
+        if (!result) setBoundedMapValue(missCache, key, Date.now() + AGENT_ASSET_MISS_TTL_MS, 1000);
+        return result;
+      })
+      .finally(() => fetchLocks.delete(key));
     fetchLocks.set(key, lock);
   }
   return await lock;
+}
+
+export function clearAgentAssetMissCacheForTests() {
+  missCache.clear();
 }
 
 export function getMissingBundledAgentAssets(version = APP_VERSION) {
