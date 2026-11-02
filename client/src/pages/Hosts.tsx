@@ -19,6 +19,7 @@ import { parseHostDateTime } from "@/components/hosts/HostCard";
 import { getStoredAgentTokenViewMode, storeAgentTokenViewMode, type AgentTokenViewMode } from "@/lib/agentTokenViewMode";
 import { formatMetricSizeDetail } from "@/lib/formatMetricSize";
 import { usePageVisible } from "@/hooks/usePageVisible";
+import { usePanelFlags } from "@/hooks/usePanelFlags";
 import { useIsMobile } from "@/hooks/useMobile";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { escapeTooltipHtml, hostGeoCoordinate, hostMapClusterDistance } from "@/lib/hostGeo";
@@ -102,7 +103,6 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import DataSectionLoading from "@/components/DataSectionLoading";
 import DataSectionError from "@/components/DataSectionError";
 import { countryFeatureHasCode, normalizeCountryCode } from "@/lib/countryFeatures";
-import { normalizeForwardProtocolSettings } from "@shared/forwardTypes";
 import { useUrlTab } from "@/hooks/useUrlTab";
 import { pollingInterval, visiblePollingInterval } from "@/lib/polling";
 import { trpc } from "@/lib/trpc";
@@ -1697,18 +1697,13 @@ function HostsContent() {
   // Shared hosts can have a per-user API order which intentionally differs
   // from the global host sortOrder.
   const baseDisplayHosts = useMemo<any[]>(() => [...((hosts || []) as any[])], [hosts]);
-  const { data: systemSettings } = trpc.system.getSettings.useQuery();
-  const forwardProtocolSettings = useMemo(
-    () => normalizeForwardProtocolSettings(systemSettings?.forwardProtocols),
-    [systemSettings?.forwardProtocols]
-  );
+  // 协议开关、Agent 版本、DDNS / Telegram 是否就绪：从 publicInfo 读，不再拉整份 getSettings。
+  const panelFlags = usePanelFlags();
+  const forwardProtocolSettings = panelFlags.forwardProtocols;
   const nginxFeatureEnabled = forwardProtocolSettings.nginx !== false || forwardProtocolSettings.nginx_stream !== false;
-  const latestAgentVersion = useMemo(
-    () => systemSettings?.agentVersion || "",
-    [systemSettings?.agentVersion]
-  );
-  const ddnsProviderEnabled = Boolean(systemSettings?.ddns?.enabled && systemSettings?.ddns?.provider && systemSettings.ddns.provider !== "disabled");
-  const telegramBotReady = Boolean(systemSettings?.telegram?.enabled && systemSettings?.telegram?.configured);
+  const latestAgentVersion = panelFlags.agentVersion;
+  const ddnsProviderEnabled = panelFlags.ddnsEnabled;
+  const telegramBotReady = panelFlags.telegramBotReady;
   /**
    * 这两个提醒会从哪儿发出去。
    *
@@ -2566,10 +2561,10 @@ function HostsContent() {
     try {
       setCheckingAgentUpdate(true);
       lastAgentUpdateCheck.current = now;
-      await utils.system.getSettings.invalidate();
+      await utils.system.publicInfo.invalidate();
       const latestHosts = await utils.hosts.list.fetch();
-      const latestSettings = await utils.system.getSettings.fetch();
-      const agentVersion = latestSettings?.agentVersion || "";
+      const latestInfo = await utils.system.publicInfo.fetch();
+      const agentVersion = latestInfo?.agentVersion || "";
       const count = latestHosts.filter((host: any) => hostNeedsAgentUpgrade(host, agentVersion)).length;
       toast.success(count > 0 ? `发现 ${count} 台 Agent 有新版本` : "Agent 版本检查完成，暂无新版本");
     } catch (err: any) {

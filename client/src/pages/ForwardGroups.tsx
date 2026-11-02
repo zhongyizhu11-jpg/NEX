@@ -1,5 +1,6 @@
 import { useLocation } from "wouter";
 import { readStoredViewMode, writeStoredViewMode } from "@/lib/viewModeStorage";
+import { usePanelFlags } from "@/hooks/usePanelFlags";
 import { useFaultBundleExport } from "@/components/links/useFaultBundleExport";
 import { MemberScheduleButton } from "@/components/links/MemberScheduleButton";
 import { describeMemberSchedule, groupModeSupportsMemberSchedule, memberEnabledIntent, parseMemberSchedule, type MemberActiveSchedule } from "@shared/memberSchedule";
@@ -123,7 +124,6 @@ import {
   FORWARD_TYPE_LABELS,
   FORWARD_TYPES,
   TUNNEL_PROTOCOLS,
-  normalizeForwardProtocolSettings,
   normalizeForwardRuleProtocol,
   type ForwardRuleProtocol,
   type ForwardType,
@@ -840,7 +840,8 @@ export function ForwardGroupsContent({
     ? hostsOptionsQuery.data
     : hostsFallbackQuery.data ?? hostsOptionsQuery.data;
   const { data: tunnels } = trpc.tunnels.options.useQuery();
-  const { data: settings } = trpc.system.getSettings.useQuery();
+  // 协议开关、Telegram、DDNS 是否就绪：从 publicInfo 读，不再拉整份 getSettings。
+  const panelFlags = usePanelFlags();
   const [showDialog, setShowDialog] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [form, setForm] = useState<GroupForm>(makeDefaultForm());
@@ -906,12 +907,9 @@ export function ForwardGroupsContent({
     onError: (error) => toast.error(error.message),
   });
   const isLoading = groupPageQuery.isLoading;
-  const telegramSettingsLoaded = settings !== undefined;
-  const telegramReady = telegramSettingsLoaded && !!settings?.telegram?.enabled && !!settings?.telegram?.configured;
-  const forwardProtocolSettings = useMemo(
-    () => normalizeForwardProtocolSettings(settings?.forwardProtocols),
-    [settings?.forwardProtocols]
-  );
+  const telegramSettingsLoaded = panelFlags.loaded;
+  const telegramReady = telegramSettingsLoaded && panelFlags.telegramBotReady;
+  const forwardProtocolSettings = panelFlags.forwardProtocols;
   const availableForwardTypes = useMemo(
     () => FORWARD_TYPES.filter((type) => forwardProtocolSettings[type] !== false),
     [forwardProtocolSettings]
@@ -1645,7 +1643,7 @@ export function ForwardGroupsContent({
     说「建议」而不是「解析到」。设置还没加载出来时是 undefined，按开着说。
   */
   const groupPolicyOptions: GroupRoutePolicyOptions = {
-    ddnsSwitching: settings?.ddns ? !!settings.ddns.enabled && settings.ddns.provider !== "disabled" : undefined,
+    ddnsSwitching: panelFlags.loaded ? panelFlags.ddnsEnabled : undefined,
     memberLabel: (member) => memberLabel(member),
   };
 

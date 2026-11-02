@@ -1668,6 +1668,19 @@ function databaseSettingsSummary(all: Record<string, string | null>, exposeDetai
   };
 }
 
+/** publicInfo 里给管理员的几个开关；算法和 getSettings 里对应字段一致。 */
+function publicAdminFlags(all: Record<string, string | null>) {
+  const envToken = ENV.telegramBotToken.trim();
+  const telegramEnabled = all.telegramBotEnabled === "true" || (!!envToken && all.telegramBotEnabled !== "false");
+  const telegramConfigured = !!(envToken || String(all.telegramBotToken || "").trim());
+  const ddnsProvider = all.ddnsProvider || "disabled";
+  return {
+    telegramBotReady: telegramEnabled && telegramConfigured,
+    ddnsEnabled: all.ddnsEnabled === "true" && ddnsProvider !== "disabled",
+    linkWizardEnabled: all.linkWizardEnabled === "true",
+  };
+}
+
 function publicSystemSettings(all: Record<string, string | null>, activeProtocol: string) {
   const aiProvider = normalizeAiProvider(all.deepseekProvider);
   const aiProviderConfigs = buildAiProviderConfigMap(all);
@@ -1827,7 +1840,7 @@ export const systemRouter = router({
     return { status: "ok", timestamp: new Date().toISOString() };
   }),
 
-  publicInfo: publicProcedure.query(() => {
+  publicInfo: publicProcedure.query(({ ctx }) => {
     return db.getAllSettings().then((all) => ({
       repoUrl: REPO_URL,
       telegramBotUrl: TELEGRAM_BOT_URL,
@@ -1866,6 +1879,15 @@ export const systemRouter = router({
         title: normalizePublicHostMonitorTitle(all.publicHostMonitorTitle),
       },
       sidebarMenu: readSidebarMenuSettings(all),
+      /*
+        规则、隧道、组、主机页原来为了下面几项拉整份 getSettings（证书、首页 HTML 都在里面）。
+        前三项 getSettings 本来就对谁都给（未登录也给），放这里看到的和以前一样。
+      */
+      panelPublicUrl: all.panelPublicUrl ?? "",
+      forwardProtocols: normalizeForwardProtocolSettings(parseForwardProtocolSettings(all.forwardProtocols)),
+      ruleEntryDomainActive: resolveRuleEntryDomainRuntimeSettings(all).activeSuffix !== "",
+      // 只对管理员有意义、getSettings 也只给管理员真实值的开关；其他人是 null（和以前读到的 false 一样）。
+      adminFlags: ctx.user?.role === "admin" ? publicAdminFlags(all) : null,
     }));
   }),
 

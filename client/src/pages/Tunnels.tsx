@@ -37,6 +37,7 @@ import { escapeTooltipHtml, hostGeoCoordinate } from "@/lib/hostGeo";
 import DashboardLayout from "@/components/DashboardLayout";
 import { DiagnoseDialog, type DiagnoseExtraTab } from "@/components/DiagnoseDialog";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { usePanelFlags } from "@/hooks/usePanelFlags";
 import AnimatedStatValue from "@/components/AnimatedStatValue";
 import { LatencyRating, getLatencyRating } from "@/components/LatencyRating";
 import { LatencyPeakCutToggle } from "@/components/LatencyPeakCutToggle";
@@ -139,7 +140,6 @@ import {
   FORWARD_TYPES,
   TUNNEL_PROTOCOLS,
   normalizeForwardXVersion,
-  normalizeForwardProtocolSettings,
   type ForwardProtocolKey,
   type ForwardType,
   type TunnelProtocol,
@@ -2156,7 +2156,7 @@ function tunnelMatchesLinkSearch(
 }
 
 function TunnelsContent() {
-  const { user, loading: authLoading } = useAuth();
+  const { user } = useAuth();
   const utils = trpc.useUtils();
   const faultBundle = useFaultBundleExport();
   // 列表视图在手机宽度（Tailwind sm 以下）显示成卡片：只渲染看得见的那套，不再卡片 + 表格各渲染一份再藏一份。
@@ -2184,20 +2184,9 @@ function TunnelsContent() {
   const hostsQueryLoading = !hasResolvedHosts
     && (hostsOptionsQuery.isLoading || (useHostsFallback && hostsFallbackQuery.isLoading));
   const hostsQueryFailed = hostsFallbackQuery.isError && (hosts?.length ?? 0) === 0;
-  // Wait for the session query before loading settings.  The server deliberately
-  // hides developer-only capabilities from anonymous requests; starting this
-  // query at the same time as auth can otherwise cache the anonymous response
-  // (globalEnabled=false) for the whole page lifetime.
-  const { data: systemSettings } = trpc.system.getSettings.useQuery(undefined, {
-    enabled: !authLoading,
-    // The response is role-sensitive: an anonymous request intentionally
-    // returns globalEnabled=false. Always refresh once this page has a
-    // resolved session so a cached anonymous response cannot hide the admin
-    // NEX V1 option.
-    staleTime: 0,
-    refetchOnMount: "always",
-    refetchOnWindowFocus: false,
-  });
+  // 协议开关和「按目标新建」向导开关：从 publicInfo 读，不再拉整份 getSettings。
+  // 管理员才有的开关跟着登录身份走，usePanelFlags 会等登录状态、并在拿到登录前的旧结果时补拉。
+  const panelFlags = usePanelFlags();
   const [showDialog, setShowDialog] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [form, setForm] = useState<TunnelForm>(defaultForm);
@@ -2405,10 +2394,7 @@ function TunnelsContent() {
     { enabled: !!deleteTunnel },
   );
 
-  const forwardProtocolSettings = useMemo(
-    () => normalizeForwardProtocolSettings(systemSettings?.forwardProtocols),
-    [systemSettings?.forwardProtocols]
-  );
+  const forwardProtocolSettings = panelFlags.forwardProtocols;
   const allowedForwardTypes = useMemo<ForwardType[]>(() => {
     const all = [...FORWARD_TYPES];
     if (!user || user.role === "admin") return all;
@@ -3993,7 +3979,7 @@ function TunnelsContent() {
   const canCreateAggregate = !!hosts?.length && hosts.length >= 4 && !forwardxRuntimeDisabled;
   const activeSectionCreatesGroup = activeSection === "ports" || activeSection === "groups" || activeSection === "entries" || activeSection === "exits";
   // 「按目标新建」向导默认关（系统设置里开），懂行的人不需要它。
-  const linkWizardEnabled = !!(systemSettings as any)?.linkWizardEnabled;
+  const linkWizardEnabled = panelFlags.linkWizardEnabled;
   const canCreateActive = activeSection === "routes"
     ? linkWizardEnabled && canCreateGroup
     : activeSection === "tunnels"

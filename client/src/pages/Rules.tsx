@@ -9,6 +9,7 @@ import { describeLinkKind, linkKindForRouteMode, linkKindRequiresAdmin } from "@
 import FilterToolbar from "@/components/FilterToolbar";
 import { SearchToggle } from "@/components/ListControls";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { usePanelFlags } from "@/hooks/usePanelFlags";
 import SectionTransition from "@/components/SectionTransition";
 import { forwardGroupModeOf, isUserspaceForwardType } from "@shared/forwardTypes";
 import { loadReactGlobe, prefetchReactGlobe } from "@/lib/reactGlobeLoader";
@@ -222,7 +223,6 @@ import {
   FORWARD_PROTOCOL_LABELS,
   TUNNEL_PROTOCOLS,
   formatForwardRuleProtocol,
-  normalizeForwardProtocolSettings,
   type ForwardType,
   type ForwardProtocolKey,
 } from "@shared/forwardTypes";
@@ -2068,17 +2068,15 @@ function RulesContent() {
     staleTime: 10000,
     refetchOnWindowFocus: false,
   });
-  const { data: systemSettings, isFetched: systemSettingsFetched } = trpc.system.getSettings.useQuery(undefined, {
-    enabled: secondaryQueriesReady,
-    staleTime: 60000,
-    refetchOnWindowFocus: false,
-  });
+  // 协议开关、专属域名、Telegram 是否就绪：从 publicInfo 读，不再为这几项拉整份 getSettings。
+  const panelFlags = usePanelFlags();
+  const systemSettingsFetched = panelFlags.settled;
   /*
     规则专属域名此刻能不能用（设置 → DDNS 启用了服务商、填了后缀）。不能用时对话框里不显示
     「专属域名」开关：一个开了也没效果的开关只会让人以为哪里坏了。值照样随表单提交，功能
     之后开启时按规则上存的来。
   */
-  const ruleEntryDomainAvailable = !!systemSettings?.ddns?.ruleEntryDomainActive;
+  const ruleEntryDomainAvailable = panelFlags.ruleEntryDomainActive;
   const { data: wallet, isLoading: walletLoading } = trpc.billing.me.useQuery(undefined, {
     enabled: user?.role !== "admin" && secondaryQueriesReady,
     staleTime: 30000,
@@ -2884,10 +2882,7 @@ function RulesContent() {
     if (!form.hostId || !hosts) return null;
     return hosts.find((h: any) => h.id === form.hostId) || null;
   }, [form.forwardGroupId, form.hostId, form.routeMode, hosts, isLegacyLocalRuleEdit]);
-  const forwardProtocolSettings = useMemo(
-    () => normalizeForwardProtocolSettings(systemSettings?.forwardProtocols),
-    [systemSettings?.forwardProtocols]
-  );
+  const forwardProtocolSettings = panelFlags.forwardProtocols;
   const nginxTunnelEnabled = forwardProtocolSettings.nginx_stream !== false;
   const protocolUnsupportedLabel = useCallback((protocolKey: ForwardProtocolKey | null | undefined) => {
     const genericLabel = "\u8be5\u534f\u8bae";
@@ -3498,7 +3493,7 @@ function RulesContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search, setLocation, rulePermissionLoading, hostsFetched, systemSettingsFetched, forwardGroupsFetched, forwardGroupsError]);
 
-  const telegramBotReady = !!systemSettings?.telegram?.enabled && !!systemSettings?.telegram?.configured;
+  const telegramBotReady = panelFlags.telegramBotReady;
   const selectedForwardGroupIsChain = form.routeMode === "chain" || isForwardChainGroup(selectedForwardGroup);
   const selectedForwardGroupIsPort = forwardGroupModeOf(selectedForwardGroup) === "port";
   const mainBackupForwardType = effectiveRouteForwardType;
