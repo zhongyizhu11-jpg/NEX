@@ -684,7 +684,7 @@ export const proxySubscriptionsRouter = router({
     return {
       groups: document.groups
         .filter((group) => group.type !== "select")
-        .map((group) => ({ name: group.name, type: group.type, members: group.members, weights: group.weights ?? null })),
+        .map((group) => ({ name: group.name, type: group.type, members: group.members, weights: group.weights ?? null, templateId: group.templateId ?? null })),
       nodes: plan.entries.map((entry) => ({
         ruleId: entry.ruleId,
         templateId: entry.templateId,
@@ -696,6 +696,8 @@ export const proxySubscriptionsRouter = router({
         port: entry.node.port,
         // 绑定已经对不上了：这条照发，但界面上要标出来。
         targetMismatch: entry.targetMismatch === true,
+        // 开了线路组：一个入口，面板在几条线路之间切。
+        lineGroup: entry.lineGroup === true,
       })),
       skipped: plan.skipped.map((item) => ({
         ...item,

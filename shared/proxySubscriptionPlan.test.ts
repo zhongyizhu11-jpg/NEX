@@ -85,7 +85,7 @@ test("单个节点可以在订阅里隐藏，且能说明原因", () => {
 
   assert.equal(plan.entries.length, 1);
   assert.equal(plan.entries[0].ruleId, 1);
-  assert.deepEqual(plan.skipped, [{ ruleId: 2, ruleName: "备用转发", reason: "hidden" }]);
+  assert.deepEqual(plan.skipped, [{ ruleId: 2, ruleName: "备用转发", reason: "hidden", nodeName: "广州2 → HKT" }]);
 });
 
 test("未绑定模板的转发不进订阅", () => {
@@ -158,6 +158,51 @@ test("链 / 线路组拆出来的内部规则：主规则已绑节点时不再�
     hosts: HOSTS,
   });
   assert.deepEqual(unboundParent.entries.map((entry) => entry.ruleId), [11]);
+});
+
+test("端口转发模板挂线路组：中转机上的中继（挂在展开的规则下）也不单独出节点", () => {
+  // 模板 1 绑了节点；展开的规则 31 没绑；线路组的中继 32 / 35 挂在 31 下面，目标是落地，被自动绑上了
+  const plan = buildProxySubscriptionPlan({
+    rules: [
+      rule({ id: 1, hostId: 1, sourcePort: 42004, isForwardGroupTemplate: true }),
+      rule({ id: 31, hostId: 1, sourcePort: 42004, forwardGroupRuleId: 1, isForwardGroupTemplate: false, proxyNodeId: 0 }),
+      rule({ id: 32, hostId: 2, sourcePort: 43418, routeParentRuleId: 31 }),
+      rule({ id: 35, hostId: 2, sourcePort: 40871, routeParentRuleId: 31 }),
+    ],
+    templates: [HKT_TEMPLATE],
+    hosts: HOSTS,
+  });
+  assert.deepEqual(plan.entries.map((entry) => entry.ruleId), [1], "只有模板那个入口，中继不算一条线路");
+  assert.equal(plan.skipped.length, 0);
+
+  // 父子关系成环（脏数据）也不能卡住
+  const looped = buildProxySubscriptionPlan({
+    rules: [
+      rule({ id: 40, hostId: 1, sourcePort: 50000, routeParentRuleId: 41, proxyNodeId: 0 }),
+      rule({ id: 41, hostId: 2, sourcePort: 50001, routeParentRuleId: 40 }),
+    ],
+    templates: [HKT_TEMPLATE],
+    hosts: HOSTS,
+  });
+  assert.deepEqual(looped.entries.map((entry) => entry.ruleId), [41]);
+});
+
+test("关掉的转发也按订阅里的叫法给名字；开了线路组的标出来", () => {
+  const plan = buildProxySubscriptionPlan({
+    rules: [
+      rule({ id: 1, hostId: 1, sourcePort: 42004, failoverEnabled: true }),
+      rule({ id: 2, hostId: 1, sourcePort: 42005, name: "RFC jinx 39.9y", proxyNodeVisible: false }),
+    ],
+    templates: [HKT_TEMPLATE],
+    hosts: HOSTS,
+  });
+  assert.equal(plan.entries[0].lineGroup, true);
+  const hidden = plan.skipped.find((item) => item.ruleId === 2);
+  assert.ok(hidden);
+  assert.equal(hidden.reason, "hidden");
+  assert.equal(hidden.nodeName, plan.entries[0].node.name.replace(/#\d+$/, "").trim() || hidden.nodeName);
+  assert.match(String(hidden.nodeName), /→/);
+  assert.equal(hidden.lineGroup, undefined);
 });
 
 test("串两跳：第一跳写的是第二跳机器的 IP 而机器首选入口是域名，不报「指向已经变了」", () => {

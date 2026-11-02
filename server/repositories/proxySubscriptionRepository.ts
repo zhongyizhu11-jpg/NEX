@@ -1243,6 +1243,8 @@ export async function buildProxySubscriptionContextForUser(userId: number, optio
       forwardGroupRuleId: forwardRules.forwardGroupRuleId,
       isForwardGroupTemplate: forwardRules.isForwardGroupTemplate,
       routeParentRuleId: forwardRules.routeParentRuleId,
+      // 开了线路组的规则在订阅里只出一个入口，面板在几条线路之间切；界面上给它标「线路组」。
+      failoverEnabled: forwardRules.failoverEnabled,
       // 入口机器以隧道 / 转发组当前的为准，见 applyEffectiveEntryHosts。
       tunnelId: forwardRules.tunnelId,
       forwardGroupId: forwardRules.forwardGroupId,

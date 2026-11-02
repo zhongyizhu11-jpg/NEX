@@ -113,6 +113,8 @@ export type ProxySubscriptionRuleRow = {
   forwardGroupRuleId?: unknown;
   isForwardGroupTemplate?: unknown;
   routeParentRuleId?: unknown;
+  /** 开了主备 / 线路组：订阅里这一条入口背后是面板在几条线路之间切（界面标「线路组」）。 */
+  failoverEnabled?: unknown;
 };
 
 export type ProxySubscriptionHostRow = HostEntryAddressSource & {
@@ -168,6 +170,8 @@ export type ProxySubscriptionEntry = {
   bandwidthMbps?: number;
   /** 命名、地区、排序要用的元信息（shared/proxySubProcessors.ts）。老调用方可能不填。 */
   meta?: ProxySubEntryMeta;
+  /** 这条转发开了线路组：一个入口，面板在几条线路之间切。只给界面标注用。 */
+  lineGroup?: boolean;
   node: ProxyNode;
 };
 
@@ -187,6 +191,10 @@ export type ProxySubscriptionSkip = {
   ruleId: number;
   ruleName: string;
   reason: ProxySubscriptionSkipReason;
+  /** 进了订阅会叫什么（「入口机 → 落地」），和上面节点列表同一种叫法；算不出来时没有。 */
+  nodeName?: string;
+  /** 这条转发开了线路组。 */
+  lineGroup?: boolean;
 };
 
 /**
@@ -442,6 +450,26 @@ export function buildProxySubscriptionPlan(input: BuildProxySubscriptionPlanInpu
     const groupTemplate = Number(rule.forwardGroupRuleId || 0);
     return groupTemplate > 0 && !bool(rule.isForwardGroupTemplate) ? groupTemplate : 0;
   };
+  /*
+    内部规则可能套了几层：端口转发（转发组模板）挂线路组时，中转机上的中继规则挂在模板展开出来的
+    那条下面（routeParentRuleId → 展开的规则 → forwardGroupRuleId → 模板），绑节点的是模板。只看
+    上一层的话展开的那条没绑，中继就漏进订阅，成了一个绕开入口直连中转机的节点。所以一路往上找，
+    哪一层绑了就算。
+  */
+  const ruleById = new Map<number, ProxySubscriptionRuleRow>();
+  for (const rule of input.rules) ruleById.set(Number(rule.id), rule);
+  const hasBoundAncestor = (rule: ProxySubscriptionRuleRow) => {
+    const seen = new Set<number>([Number(rule.id)]);
+    let parentId = internalParentOf(rule);
+    while (parentId > 0 && !seen.has(parentId)) {
+      if (boundRuleIds.has(parentId)) return true;
+      seen.add(parentId);
+      const parent = ruleById.get(parentId);
+      if (!parent) return false;
+      parentId = internalParentOf(parent);
+    }
+    return false;
+  };
 
   for (const rule of input.rules) {
     const ruleId = Number(rule.id);
@@ -449,8 +477,7 @@ export function buildProxySubscriptionPlan(input: BuildProxySubscriptionPlanInpu
     const skip = (reason: ProxySubscriptionSkipReason) => skipped.push({ ruleId, ruleName, reason });
 
     if (bool(rule.pendingDelete)) continue;
-    const parentRuleId = internalParentOf(rule);
-    if (parentRuleId > 0 && boundRuleIds.has(parentRuleId)) continue;
+    if (hasBoundAncestor(rule)) continue;
 
     const templateId = Number(rule.proxyNodeId || 0);
     if (!templateId) {
@@ -458,7 +485,22 @@ export function buildProxySubscriptionPlan(input: BuildProxySubscriptionPlanInpu
       continue;
     }
     if (rule.proxyNodeVisible !== undefined && !bool(rule.proxyNodeVisible)) {
-      skip("hidden");
+      // 关掉的那几条也按订阅里的叫法写（「入口机 → 落地」），不然和上面的节点对不上号。
+      const hiddenTemplate = templatesById.get(templateId);
+      const hiddenName = text(rule.proxyNodeName) || (hiddenTemplate
+        ? defaultProxySubscriptionNodeName({
+          hostName: text(hostsById.get(Number(rule.hostId || 0))?.name),
+          templateName: proxyNodeFromTemplateRow(hiddenTemplate).name,
+          ruleName,
+        })
+        : "");
+      skipped.push({
+        ruleId,
+        ruleName,
+        reason: "hidden",
+        ...(hiddenName ? { nodeName: hiddenName } : {}),
+        ...(bool(rule.failoverEnabled) ? { lineGroup: true } : {}),
+      });
       continue;
     }
     if (rule.isEnabled !== undefined && !bool(rule.isEnabled)) {
@@ -549,6 +591,7 @@ export function buildProxySubscriptionPlan(input: BuildProxySubscriptionPlanInpu
       frontTemplateId: frontIdOf(template),
       ...(targetMismatch ? { targetMismatch: true } : {}),
       ...(bandwidthMbps > 0 ? { bandwidthMbps } : {}),
+      ...(bool(rule.failoverEnabled) ? { lineGroup: true } : {}),
       meta: {
         hostName: text(host?.name),
         templateName: templateNode.name,
@@ -712,6 +755,11 @@ export type ProxySubscriptionGroup = {
    * 没有 = 平均分。只有确认支持「组里重复列同一个节点」的客户端（mihomo / Clash）才照着展开。
    */
   weights?: number[];
+  /**
+   * 自动选路组属于哪个落地节点（按节点的「选路方式」生成的那种）。只给面板界面用：订阅内容里点这个组
+   * 直接打开那个节点改选路方式。渲染订阅时不输出。
+   */
+  templateId?: number;
 };
 
 /** 透传给客户端的外部订阅（shared/proxySubSource.ts 的 provider 模式）。 */
@@ -878,6 +926,7 @@ export function buildProxySubscriptionDocument(
       type: mode,
       members: memberNames,
       ...(weights ? { weights } : {}),
+      templateId,
     });
   }
 

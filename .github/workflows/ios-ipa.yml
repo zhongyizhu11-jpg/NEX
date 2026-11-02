@@ -18,6 +18,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: forwardx-ios-${{ github.ref }}
@@ -42,13 +43,41 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Validate headless icon conversion
         run: xcrun swift scripts/prepare-ios-assets.swift "$PWD"
+      # 全量测试在 macOS 上要七八分钟，加上打包整个任务压在 15 分钟上下，2.3.506 起多次被中途取消。
+      # 这里只为了出 IPA：PR 上 CI 那个工作流会跑全量测试；打 tag / 手动发布时，同一个提交在 main 上
+      # 已经跑过完整 CI 并且通过（和 release-panel 同一个判断），就不再重跑，查不到或没通过照旧全量测。
+      - name: Check CI result for this commit
+        id: ci
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -uo pipefail
+          passed=false
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            passed=true
+            echo "Pull request: the CI workflow runs the full test suite on this PR"
+          elif count="$(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs" \
+              -f head_sha="${GITHUB_SHA}" -f status=success -f per_page=50 \
+              --jq '[.workflow_runs[] | select(.head_sha == $ENV.GITHUB_SHA and .conclusion == "success" and (.event == "push" or .event == "workflow_dispatch"))] | length')"; then
+            if [ "${count:-0}" -gt 0 ] 2>/dev/null; then
+              passed=true
+            fi
+          else
+            echo "::warning::Could not query CI runs for ${GITHUB_SHA}; running full verification"
+          fi
+          echo "CI already passed on ${GITHUB_SHA}: ${passed}"
+          echo "passed=${passed}" >> "$GITHUB_OUTPUT"
       - name: Validate versions and application code
         env:
           FORWARDX_RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
         run: |
           pnpm check:versions
           pnpm exec tsc --noEmit
-          pnpm test:all
+      - name: Run panel tests
+        if: steps.ci.outputs.passed != 'true'
+        run: pnpm test:all
       - name: Build unsigned device IPA
         env:
           IOS_BUILD_NUMBER: ${{ github.run_number }}

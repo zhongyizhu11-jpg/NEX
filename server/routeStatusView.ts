@@ -123,14 +123,89 @@ export type RouteStatusRate = RuleLiveRate | null;
 /** 切换记录只留最近的，够数一天的就行。 */
 const SWITCH_EVENT_LIMIT = 60;
 
+/**
+ * 端口转发（转发组模板，2.3.4xx 起能挂线路组）自己不下发：真正在入口机上跑、调度、上报评分的是它展开出来的
+ * 那条规则（forwardGroupRuleId = 模板），中转机上的中继规则也挂在展开的规则下面。线路的状态（评分、在走哪条、
+ * 中转端口、切换记录、速率、入口）都得从那条读，否则模板上永远是「两条都待命」。
+ * 入口组有几台机器时展开成几条，取最近有 Agent 上报的那条（其次在跑的、再其次最早的）。
+ * 不是模板、或者还没展开出来，就是它自己。
+ */
+/** 一行 forward_rules（只用到这里读的几个字段，别的照原样带着）。 */
+type RuleRow = Record<string, unknown>;
+
+export async function routeStatusSubject<T extends RuleRow>(rule: T, nowMs = Date.now()): Promise<T> {
+  if (!dbBool(rule?.isForwardGroupTemplate)) return rule;
+  const rows = (await (db.getForwardGroupChildRulesForTemplate(Number(rule.id)) as Promise<unknown[]>).catch(() => [])) || [];
+  const children = (rows as T[])
+    .filter((child) => child && !dbBool(child.pendingDelete) && Number(child.sourcePort || 0) > 0);
+  if (children.length === 0) return rule;
+  const reportedAt = (child: T) => {
+    const status = getRouteStatus(Number(child.id), nowMs);
+    return (status.agent || status.staleAgent)?.reportedAt ?? 0;
+  };
+  const ranked = children
+    .map((child) => ({ child, at: reportedAt(child), running: dbBool(child.isRunning), enabled: child.isEnabled === undefined ? true : dbBool(child.isEnabled) }))
+    .sort((left, right) => (
+      Number(right.enabled) - Number(left.enabled)
+      || right.at - left.at
+      || Number(right.running) - Number(left.running)
+      || Number(left.child.id) - Number(right.child.id)
+    ));
+  return ranked[0].child;
+}
+
+/**
+ * 规则列表里的端口转发模板：「现在走哪条」（failoverActiveTarget / failoverActiveAt）换成它展开那条的。
+ * 模板上留着的是转成端口转发之前那条规则最后报的，早就不对了 —— 规则卡和线路面板上会写成
+ * 「Agent 报的 … 不在线路清单里」。别的规则原样返回。
+ */
+export async function withTemplateRouteActive<T>(value: T): Promise<T> {
+  const items = (value as { items?: unknown } | null)?.items;
+  const list = (Array.isArray(value) ? value : Array.isArray(items) ? items : []) as RuleRow[];
+  const templates = list.filter((rule) => rule && dbBool(rule.isForwardGroupTemplate) && dbBool(rule.failoverEnabled));
+  if (templates.length === 0) return value;
+  const nowMs = Date.now();
+  const overlay = new Map<number, { failoverActiveTarget: unknown; failoverActiveAt: unknown }>();
+  await Promise.all(templates.map(async (rule) => {
+    const subject = await routeStatusSubject(rule, nowMs).catch(() => rule);
+    overlay.set(Number(rule.id), subject === rule
+      ? { failoverActiveTarget: null, failoverActiveAt: null }
+      : { failoverActiveTarget: subject.failoverActiveTarget ?? null, failoverActiveAt: subject.failoverActiveAt ?? null });
+  }));
+  const decorate = (rule: RuleRow) => {
+    const next = rule ? overlay.get(Number(rule.id)) : undefined;
+    return next ? { ...rule, ...next } : rule;
+  };
+  if (Array.isArray(value)) return (value as RuleRow[]).map(decorate) as T;
+  return { ...(value as object), items: (items as RuleRow[]).map(decorate) } as T;
+}
+
+/** 切换记录：展开的规则自己的，再加上模板上的（转成端口转发之前那条规则攒下的），按时间合在一起。 */
+type RouteEventRow = {
+  kind?: string; createdAt?: unknown; reason?: string | null;
+  fromKey?: string | null; toKey?: string | null; fromLabel?: string | null; toLabel?: string | null;
+};
+
+async function routeSwitchEventsFor(rule: RuleRow, subject: RuleRow) {
+  const load = (ruleId: number) => (db.getForwardRuleRouteEvents(ruleId, SWITCH_EVENT_LIMIT) as Promise<RouteEventRow[]>)
+    .catch(() => [] as RouteEventRow[]);
+  if (Number(subject.id) === Number(rule.id)) return load(Number(rule.id));
+  const [own, inherited] = await Promise.all([load(Number(subject.id)), load(Number(rule.id))]);
+  return [...own, ...inherited]
+    .sort((left, right) => routeEventMillis(right.createdAt) - routeEventMillis(left.createdAt))
+    .slice(0, SWITCH_EVENT_LIMIT);
+}
+
 export async function buildRouteStatus(rule: any) {
-  const group = routeGroupOf(rule);
+  const nowMs = Date.now();
+  // subject：真正跑着、上报着的那条（端口转发模板 → 它展开的规则；别的就是 rule 本身）。线路定义照旧按 rule 显示。
+  const subject = await routeStatusSubject(rule, nowMs);
+  const group = routeGroupOf(subject) || routeGroupOf(rule);
   if (!group) return null;
   const { paths, policy } = group;
-  const nowMs = Date.now();
-  const status = getRouteStatus(Number(rule.id), nowMs);
+  const status = getRouteStatus(Number(subject.id), nowMs);
   const agent = status.agent || status.staleAgent;
-  const hints = routeHopDownHints(Number(rule.id), paths, nowMs);
+  const hints = routeHopDownHints(Number(subject.id), paths, nowMs);
   await ensureRouteNodeHealthFresh();
   const nodeHints = routeNodeHints(paths, getRouteNodeStatus);
   const tripped = routeTrippedNodeIds();
@@ -147,20 +222,20 @@ export async function buildRouteStatus(rule: any) {
     负载均衡的隧道每个出口各跑一个调度器，心跳要每一台都够版本才下发 UDP 调度，所以这里
     按最旧的那台说（routeSchedulerHostIds 和心跳是同一个口径）。
   */
-  const routeTunnel = Number(rule.tunnelId || 0) > 0
-    ? await (db.getTunnelById(Number(rule.tunnelId)) as Promise<any>).catch(() => null)
+  const routeTunnel = Number(subject.tunnelId || 0) > 0
+    ? await (db.getTunnelById(Number(subject.tunnelId)) as Promise<any>).catch(() => null)
     : null;
   const routeExitNodes = routeTunnel ? await db.getTunnelExitNodes(Number(routeTunnel.id)).catch(() => []) : [];
-  const schedulerHostIds = routeSchedulerHostIds(Number(rule.hostId), routeTunnel, routeExitNodes);
+  const schedulerHostIds = routeSchedulerHostIds(Number(subject.hostId), routeTunnel, routeExitNodes);
   const [names, relays, schedulerHosts, events, entryHost, destNames] = await Promise.all([
     hopIds.length > 0 ? db.getHostNamesByIds(hopIds) : Promise.resolve(new Map<number, string>()),
-    routeRelayRulesByKey(Number(rule.id)),
+    routeRelayRulesByKey(Number(subject.id)),
     Promise.all(schedulerHostIds.map((hostId) => (db.getHostById(hostId) as Promise<any>).catch(() => null))),
-    (db.getForwardRuleRouteEvents(Number(rule.id), SWITCH_EVENT_LIMIT) as Promise<any[]>).catch(() => [] as any[]),
-    (db.getHostById(Number(rule.hostId)) as Promise<any>).catch(() => null),
-    routeDestNames(rule, paths).catch(() => new Map<string, string>()),
+    routeSwitchEventsFor(rule, subject),
+    (db.getHostById(Number(subject.hostId)) as Promise<any>).catch(() => null),
+    routeDestNames(subject, paths).catch(() => new Map<string, string>()),
   ]);
-  const active = describeFailoverActiveLine(rule);
+  const active = describeFailoverActiveLine(subject);
   const activeIndex = status.agent && status.agent.activeIndex >= 0 ? status.agent.activeIndex : (active ? active.index : -1);
   const rows = paths.map((path, index) => {
     const target = agent?.targets.find((item) => item.index === index) || null;
@@ -209,12 +284,12 @@ export async function buildRouteStatus(rule: any) {
       paused: !!path.paused,
       entryRelayPort: entryRelay ? Number(entryRelay.sourcePort) : null,
       /** 后面几段（中继各自探的）加起来，整条链 = 入口这段 + 它。 */
-      downstreamMs: routePathDownstreamMs(Number(rule.id), path, nowMs),
+      downstreamMs: routePathDownstreamMs(Number(subject.id), path, nowMs),
       hops,
-      dest: routePathDestination(path, rule),
+      dest: routePathDestination(path, subject),
       /** 落地叫什么：我的节点的名字，或者自己那台机器的名字；都不是为 null（界面写地址）。 */
       destName: destNames.get(path.key) ?? null,
-      dial: routePathDial(path, rule),
+      dial: routePathDial(path, subject),
       issue: path.issue,
       weight: path.weight,
       probe: path.probe,
@@ -301,16 +376,16 @@ export async function buildRouteStatus(rule: any) {
     /** 调度器跑在哪几台机器上（直连是规则所在机器，隧道是出口）。 */
     schedulerHostIds,
     /** 这条规则（入口）此刻的速率。 */
-    rate: getRuleLiveRate(Number(rule.id), nowMs),
+    rate: getRuleLiveRate(Number(subject.id), nowMs),
     /** 最近 10 分钟客户端连进来、拨通了一条路径的有几个、一条都没拨通的有几个（Agent 2.2.243 起，TCP）。 */
     inbound: agent?.inbound ?? null,
     switches,
     /** 入口：规则所在的机器。卡片左端写它的名字；它离线了整条线路组都没法走。 */
     entry: {
-      hostId: Number(rule.hostId || 0),
-      name: String(entryHost?.name || `主机 ${rule.hostId}`),
+      hostId: Number(subject.hostId || 0),
+      name: String(entryHost?.name || `主机 ${subject.hostId}`),
       online: entryHost ? dbBool(entryHost.isOnline) : null,
-      sourcePort: Number(rule.sourcePort || 0),
+      sourcePort: Number(subject.sourcePort || 0),
     },
   };
 }
