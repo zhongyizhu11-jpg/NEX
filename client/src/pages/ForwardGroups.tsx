@@ -1692,7 +1692,7 @@ export function ForwardGroupsContent({
       >
         <Badge
           variant="outline"
-          className={cn("h-5 max-w-full cursor-pointer gap-1 px-1.5 text-[10px] font-medium", FAILOVER_TONE_CLASS[display.tone])}
+          className={cn("h-5 max-w-full cursor-pointer gap-1 px-1.5 text-[11px] font-medium", FAILOVER_TONE_CLASS[display.tone])}
         >
           <Globe className="h-3 w-3 shrink-0" aria-hidden="true" />
           <span className="truncate">{display.text}</span>
@@ -2699,7 +2699,7 @@ export function ForwardGroupsContent({
                     <div className="text-xs text-muted-foreground">PROXY Protocol</div>
                   </div>
                   <div className="flex items-center gap-2">
-                    <Badge variant={advancedSettingsConfigured ? "secondary" : "outline"} className="h-5 px-1.5 text-[10px] font-normal">
+                    <Badge variant={advancedSettingsConfigured ? "secondary" : "outline"} className="h-5 px-1.5 text-[11px] font-normal">
                       {advancedSettingsConfigured ? "已配置" : "可选"}
                     </Badge>
                     <ChevronRight className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 ${advancedSettingsOpen ? "rotate-90" : ""}`} />

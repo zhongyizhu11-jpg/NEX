@@ -589,7 +589,7 @@ function PoolFollowMenu({ inline, poolId, poolName, pools, busy, onPick }: {
           </LineChipButton>
         )}
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="max-h-[60vh] w-64 overflow-y-auto" onClick={stop}>
+      <DropdownMenuContent align="start" className="max-h-[60svh] w-64 overflow-y-auto" onClick={stop}>
         <DropdownMenuLabel className="text-[11px] font-normal text-muted-foreground">跟着一个节点池：池里加减机器，组的成员跟着加减</DropdownMenuLabel>
         {pools.map((pool) => (
           <DropdownMenuItem key={pool.id} disabled={pool.total === 0} onSelect={() => { if (pool.id !== poolId) onPick(pool.id); }}>

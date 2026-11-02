@@ -262,7 +262,7 @@ function AccountsSection() {
             <DialogDescription className="[overflow-wrap:anywhere]">{formProvider?.docsHint || "凭据加密保存在面板数据库里，任何接口都不会回显原文。"}</DialogDescription>
           </DialogHeader>
           {form ? (
-            <div className="dialog-scroll-area max-h-[65vh] space-y-3 overflow-y-auto pr-1">
+            <div className="dialog-scroll-area max-h-[65svh] space-y-3 overflow-y-auto pr-1">
               <div className="grid gap-3 sm:grid-cols-2">
                 <FormField className="space-y-1">
                   <Label className="text-sm">账号名称 *</Label>
@@ -597,7 +597,7 @@ function HostsSection() {
             <DialogDescription>探测由这台主机的 Agent 执行，不需要升级 Agent。</DialogDescription>
           </DialogHeader>
           {form ? (
-            <div className="dialog-scroll-area max-h-[65vh] space-y-4 overflow-y-auto pr-1">
+            <div className="dialog-scroll-area max-h-[65svh] space-y-4 overflow-y-auto pr-1">
               <div className="grid gap-3 sm:grid-cols-2">
                 <FormField className="space-y-1">
                   <Label className="text-sm">主机</Label>

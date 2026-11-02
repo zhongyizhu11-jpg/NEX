@@ -47,7 +47,7 @@ function StatCard({ label, hint, children }: { label: string; hint: string; chil
     <div className="latency-stat-card min-w-0 rounded-md border border-border/50 bg-muted/20 px-2 py-1.5 sm:rounded-lg sm:px-2.5 sm:py-2">
       <Tooltip>
         <TooltipTrigger asChild>
-          <p className="cursor-help truncate text-[10px] text-muted-foreground underline decoration-dotted decoration-muted-foreground/40 underline-offset-2 sm:text-[11px]" tabIndex={0} aria-label={`${label}：${hint}`}>
+          <p className="cursor-help truncate text-[11px] text-muted-foreground underline decoration-dotted decoration-muted-foreground/40 underline-offset-2 sm:text-[11px]" tabIndex={0} aria-label={`${label}：${hint}`}>
             {label}
           </p>
         </TooltipTrigger>
@@ -101,7 +101,7 @@ export function LatencyStabilityStats({
       </StatCard>
       <StatCard label="稳定性" hint={LATENCY_STAT_HINTS.score}>
         <Value>{stats.score === null ? "--" : `${stats.score}/100`}</Value>
-        <p className={`truncate text-[10px] font-medium sm:text-[11px] ${stats.rating.className}`}>
+        <p className={`truncate text-[11px] font-medium sm:text-[11px] ${stats.rating.className}`}>
           {stats.rating.label}
         </p>
       </StatCard>

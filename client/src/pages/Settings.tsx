@@ -1009,7 +1009,7 @@ function PanelLogsSection() {
               {levelTabs.map((tab) => (
                 <TabsTrigger key={tab.value} value={tab.value} className="min-w-0 gap-1.5 text-xs">
                   {tab.label}
-                  <span className="rounded bg-background/70 px-1.5 py-0.5 text-[10px] text-muted-foreground">{tab.count}</span>
+                  <span className="rounded bg-background/70 px-1.5 py-0.5 text-[11px] text-muted-foreground">{tab.count}</span>
                 </TabsTrigger>
               ))}
             </TabsList>
@@ -3918,10 +3918,10 @@ function PersonalizationSettingsSection() {
                   <div className="min-w-0 flex-1">
                     <div className="flex min-w-0 flex-wrap items-center gap-2">
                       <p className="max-w-full truncate text-sm font-medium">{page.name}</p>
-                      <Badge variant="outline" className="shrink-0 text-[10px]">
+                      <Badge variant="outline" className="shrink-0 text-[11px]">
                         {page.visibility === "admin" ? "仅管理员" : "所有用户"}
                       </Badge>
-                      <Badge variant="secondary" className="shrink-0 text-[10px]">
+                      <Badge variant="secondary" className="shrink-0 text-[11px]">
                         {page.openMode === "external" ? "新窗口" : "嵌入"}
                       </Badge>
                     </div>

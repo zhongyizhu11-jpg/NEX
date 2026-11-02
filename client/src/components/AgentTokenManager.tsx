@@ -124,7 +124,7 @@ function TokenStatusBadge({ tokenItem }: { tokenItem: any }) {
   const host = tokenItem.host;
   if (!host) {
     return (
-      <Badge variant="secondary" className="shrink-0 gap-1.5 text-[10px]">
+      <Badge variant="secondary" className="shrink-0 gap-1.5 text-[11px]">
         <span className="h-2 w-2 rounded-full bg-muted-foreground/40" />
         未绑定
       </Badge>

@@ -642,7 +642,7 @@ export default function HostCard({
                   {host.agentVersion ? `v${host.agentVersion}` : "未上报"}
                 </span>
                 {agentNeedsUpdate && (
-                  <Badge variant="outline" className="shrink-0 border-[color-mix(in_srgb,var(--fx-warn)_30%,transparent)] px-1.5 py-0 text-[10px] text-[var(--fx-warn-text)]">
+                  <Badge variant="outline" className="shrink-0 border-[color-mix(in_srgb,var(--fx-warn)_30%,transparent)] px-1.5 py-0 text-[11px] text-[var(--fx-warn-text)]">
                     新版
                   </Badge>
                 )}
@@ -650,7 +650,7 @@ export default function HostCard({
               </div>
               {host.agentUpgradeRequested && (
                 <div className="mt-1 flex flex-wrap gap-1.5">
-                  <Badge variant="outline" className={`shrink-0 px-1.5 py-0 text-[10px] ${agentUpgradeTimedOut ? "border-destructive/30 text-destructive" : "border-primary/25 text-primary"}`}>
+                  <Badge variant="outline" className={`shrink-0 px-1.5 py-0 text-[11px] ${agentUpgradeTimedOut ? "border-destructive/30 text-destructive" : "border-primary/25 text-primary"}`}>
                     {agentUpgradeTimedOut ? "升级失败" : "升级中"}
                   </Badge>
                 </div>
@@ -675,7 +675,7 @@ export default function HostCard({
                   {host.agentVersion ? `v${host.agentVersion}` : "未上报"}
                 </span>
                 {agentNeedsUpdate && (
-                  <Badge variant="outline" className="shrink-0 border-[color-mix(in_srgb,var(--fx-warn)_30%,transparent)] px-1.5 py-0 text-[10px] text-[var(--fx-warn-text)]">
+                  <Badge variant="outline" className="shrink-0 border-[color-mix(in_srgb,var(--fx-warn)_30%,transparent)] px-1.5 py-0 text-[11px] text-[var(--fx-warn-text)]">
                     新版
                   </Badge>
                 )}
@@ -683,7 +683,7 @@ export default function HostCard({
               </div>
               {host.agentUpgradeRequested && (
                 <div className="mt-1 flex flex-wrap gap-1.5">
-                  <Badge variant="outline" className={`shrink-0 px-1.5 py-0 text-[10px] ${agentUpgradeTimedOut ? "border-destructive/30 text-destructive" : "border-primary/25 text-primary"}`}>
+                  <Badge variant="outline" className={`shrink-0 px-1.5 py-0 text-[11px] ${agentUpgradeTimedOut ? "border-destructive/30 text-destructive" : "border-primary/25 text-primary"}`}>
                     {agentUpgradeTimedOut ? "升级失败" : "升级中"}
                   </Badge>
                 </div>
@@ -732,7 +732,7 @@ export default function HostCard({
                 <Clock className="h-3 w-3 text-muted-foreground" />
                 <span className="text-muted-foreground">运行</span>
                 {remainingTimeLabel && (
-                  <span className={`shrink-0 whitespace-nowrap rounded border px-1.5 py-0.5 text-[10px] font-medium leading-none ${remainingTimeClass}`}>
+                  <span className={`shrink-0 whitespace-nowrap rounded border px-1.5 py-0.5 text-[11px] font-medium leading-none ${remainingTimeClass}`}>
                     {remainingTimeLabel}
                   </span>
                 )}
@@ -804,7 +804,7 @@ export default function HostCard({
                 {isOnline ? "运行时间" : "最后运行时长"}
               </span>
               {remainingTimeLabel && (
-                <span className={`shrink-0 whitespace-nowrap rounded border px-1.5 py-0.5 text-[10px] font-medium leading-none ${remainingTimeClass}`}>
+                <span className={`shrink-0 whitespace-nowrap rounded border px-1.5 py-0.5 text-[11px] font-medium leading-none ${remainingTimeClass}`}>
                   {remainingTimeLabel}
                 </span>
               )}

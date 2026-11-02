@@ -76,7 +76,7 @@ export function LinePill({ tone = "gray", dot = false, className, title, childre
 /** 「主」「备 1」那种小方块。 */
 export function LineBadge({ main = false, children }: { main?: boolean; children: ReactNode }) {
   return (
-    <span className={cn("shrink-0 whitespace-nowrap rounded-[6px] px-[7px] py-[2px] text-[11px] font-bold leading-[1.35]", main ? "bg-[var(--fx-accent)] text-on-accent" : cn(LINE_GRAY_BG, "text-muted-foreground"))}>
+    <span className={cn("shrink-0 whitespace-nowrap rounded-inner px-[7px] py-[2px] text-[11px] font-bold leading-[1.35]", main ? "bg-[var(--fx-accent)] text-on-accent" : cn(LINE_GRAY_BG, "text-muted-foreground"))}>
       {children}
     </span>
   );
@@ -315,7 +315,8 @@ export const LineBareInput = forwardRef<HTMLInputElement, InputHTMLAttributes<HT
         type={type}
         data-slot="line-bare-input"
         className={cn(
-          "h-9 w-full min-w-0 border-0 bg-transparent p-0 text-[14px] text-foreground outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60",
+          // 没有框，聚焦时也得看得见焦点在哪：和别的输入框一样，一道强调色细边加一圈淡光
+          "h-9 w-full min-w-0 rounded-inner border-0 bg-transparent p-0 text-[14px] text-foreground outline-none transition-shadow placeholder:text-muted-foreground focus-visible:shadow-[0_0_0_1px_var(--fx-path),var(--fx-focus-ring)] disabled:cursor-not-allowed disabled:opacity-60",
           align === "right" ? "text-right" : "text-left",
           className,
         )}

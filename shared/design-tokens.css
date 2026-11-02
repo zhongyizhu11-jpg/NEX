@@ -351,6 +351,7 @@
   --fx-radius-surface: 22px;   /* 主 Surface、大容器（参考站 rounded-xl 卡片） */
   --fx-radius-modal: 28px;     /* 对话框、Bottom Sheet（参考站 rounded-2xl） */
   --fx-radius-pill: 999px;     /* 徽标、状态胶囊 */
+  --fx-radius-inner: 6px;      /* 控件里面那一层：分段里的选项、菜单项、小方块徽标（rounded-inner） */
 
   /* ═══════════════════════════════════════════════════════
      七、高度 —— 四级，靠它建立空间关系

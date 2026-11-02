@@ -1387,7 +1387,7 @@ export default function ClientSubscriptionsPage() {
                                 <span className="w-full truncate text-center text-[11px] font-medium leading-tight">
                                   {target.shortLabel}
                                 </span>
-                                <span className="w-full truncate text-center text-[10px] text-muted-foreground">
+                                <span className="w-full truncate text-center text-[11px] text-muted-foreground">
                                   {!supported
                                     ? "不支持规则"
                                     : offPlatform

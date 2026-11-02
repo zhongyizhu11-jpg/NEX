@@ -353,7 +353,7 @@ export default function TopologyPage() {
             aria-selected={view === value}
             onClick={() => setView(value)}
             className={cn(
-              "inline-flex h-full flex-1 items-center justify-center whitespace-nowrap rounded-[6px] px-4 text-[13px] font-medium text-muted-foreground transition-all hover:text-foreground sm:flex-none",
+              "inline-flex h-full flex-1 items-center justify-center whitespace-nowrap rounded-inner px-4 text-[13px] font-medium text-muted-foreground transition-all hover:text-foreground sm:flex-none",
               view === value && "bg-[image:var(--fx-primary-gradient)] font-semibold text-[var(--fx-primary-text)] hover:text-[var(--fx-primary-text)]",
             )}
           >

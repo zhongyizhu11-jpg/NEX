@@ -1888,14 +1888,14 @@ function DashboardLayoutContent({
                           : `可升级到 ${upgradeTargetVersion}`}
                   </p>
                   {displayUpgradeJob?.status === "running" && upgradeProgress.detail && (
-                    <p className="mt-0.5 truncate text-[10px] tabular-nums text-primary/60">{upgradeProgress.detail}</p>
+                    <p className="mt-0.5 truncate text-[11px] tabular-nums text-primary/60">{upgradeProgress.detail}</p>
                   )}
                   {(displayUpgradeJob?.status === "running" || displayUpgradeJob?.status === "waiting_assets") && (
                     <div className="mt-2 space-y-2">
                       <Progress value={upgradeProgress.percent} className="h-1" />
                       <div className="space-y-1">
                         {upgradeProgress.steps.map((step) => (
-                          <div key={step.label} className="flex min-w-0 items-center gap-1.5 text-[10px] leading-4 text-primary/75">
+                          <div key={step.label} className="flex min-w-0 items-center gap-1.5 text-[11px] leading-4 text-primary/75">
                             {step.done ? (
                               <CheckCircle2 className="h-3 w-3 shrink-0 text-[var(--fx-healthy-text)]" />
                             ) : step.active ? (

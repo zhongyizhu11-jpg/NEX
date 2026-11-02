@@ -41,7 +41,7 @@ export function FxpRuntimeBadge({ host, className }: { host: HostLike | null | u
       title={fxpRuntimeBadgeTitle(host)}
       data-fxp-state={status.state}
       className={cn(
-        "shrink-0 px-1.5 py-0 text-[10px]",
+        "shrink-0 px-1.5 py-0 text-[11px]",
         incompatible
           ? "border-destructive/30 text-destructive"
           : "border-[color-mix(in_srgb,var(--fx-warn)_30%,transparent)] text-[var(--fx-warn-text)]",

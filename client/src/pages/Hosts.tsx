@@ -1381,7 +1381,7 @@ const HostTableRow = memo(function HostTableRow({
           {hostOs.label ? <span className="truncate" title={hostOs.full}>{hostOs.label}</span> : <span>--</span>}
           {host.agentVersion && <span className="font-mono" title="Agent 版本">v{host.agentVersion}</span>}
           {agentNeedsUpdate && <span className="text-[var(--fx-warn-text)]">新版本</span>}
-          <FxpRuntimeBadge host={host} className="h-4 px-1 text-[9px] leading-none" />
+          <FxpRuntimeBadge host={host} className="h-4 px-1 text-[11px] leading-none" />
           {host.agentUpgradeRequested && (
             <span className={agentUpgradeTimedOut ? "text-destructive" : "text-primary"}>{agentUpgradeTimedOut ? "升级失败" : "升级中"}</span>
           )}
@@ -1448,23 +1448,23 @@ const HostTableRow = memo(function HostTableRow({
             </div>
             <div className="flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-[11px] text-muted-foreground">
               {hostOs.label && (
-                <span className="shrink-0 rounded border border-border/50 bg-muted/35 px-1.5 py-0.5 text-[10px] font-medium leading-none text-foreground/80" title={hostOs.full}>
+                <span className="shrink-0 rounded border border-border/50 bg-muted/35 px-1.5 py-0.5 text-[11px] font-medium leading-none text-foreground/80" title={hostOs.full}>
                   {hostOs.label}
                 </span>
               )}
               {host.agentVersion && (
-                <span className="shrink-0 rounded border border-border/50 bg-muted/35 px-1.5 py-0.5 font-mono text-[10px] leading-none text-muted-foreground" title="Agent 版本">
+                <span className="shrink-0 rounded border border-border/50 bg-muted/35 px-1.5 py-0.5 font-mono text-[11px] leading-none text-muted-foreground" title="Agent 版本">
                   v{host.agentVersion}
                 </span>
               )}
               {agentNeedsUpdate && (
-                <Badge variant="outline" className="h-4 shrink-0 border-[color-mix(in_srgb,var(--fx-warn)_30%,transparent)] px-1 py-0 text-[9px] leading-none text-[var(--fx-warn-text)]">
+                <Badge variant="outline" className="h-4 shrink-0 border-[color-mix(in_srgb,var(--fx-warn)_30%,transparent)] px-1 py-0 text-[11px] leading-none text-[var(--fx-warn-text)]">
                   新版本
                 </Badge>
               )}
-              <FxpRuntimeBadge host={host} className="h-4 px-1 text-[9px] leading-none" />
+              <FxpRuntimeBadge host={host} className="h-4 px-1 text-[11px] leading-none" />
               {host.agentUpgradeRequested && (
-                <Badge variant="outline" className={`h-4 shrink-0 px-1 py-0 text-[9px] leading-none ${agentUpgradeTimedOut ? "border-destructive/30 text-destructive" : "border-primary/25 text-primary"}`}>
+                <Badge variant="outline" className={`h-4 shrink-0 px-1 py-0 text-[11px] leading-none ${agentUpgradeTimedOut ? "border-destructive/30 text-destructive" : "border-primary/25 text-primary"}`}>
                   {agentUpgradeTimedOut ? "升级失败" : "升级中"}
                 </Badge>
               )}
@@ -3300,7 +3300,7 @@ function HostsContent() {
 
       {/* 编辑主机对话框 */}
       <Dialog open={showDialog} onOpenChange={setShowDialog}>
-        <DialogContent className="flex h-[min(720px,86vh)] max-h-[86vh] flex-col overflow-hidden sm:max-w-[44rem]">
+        <DialogContent className="flex h-[min(720px,86svh)] max-h-[86svh] flex-col overflow-hidden sm:max-w-[44rem]">
           <DialogHeader className="shrink-0 space-y-1">
             <DialogTitle>编辑主机</DialogTitle>
             <DialogDescription className="sr-only">

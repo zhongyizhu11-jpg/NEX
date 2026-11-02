@@ -68,6 +68,7 @@ html[data-ui-theme="indigo"] {
   --fx-radius-card: 10px;
   --fx-radius-surface: 12px;
   --fx-radius-modal: 16px;
+  --fx-radius-inner: 8px;
   --fx-header-height: 56px;
   --fx-font: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", Roboto, "Helvetica Neue", "Noto Sans", Arial, sans-serif;
   /* 强调色：HEX 的靛蓝。「默认配色」另选时这些会被 <html> 上的内联值盖掉（那是用户的选择） */
@@ -329,7 +330,7 @@ html[data-ui-theme="indigo"] .workspace-layout [data-sidebar="menu-button"][data
 
 /* ── 5. 页面里其它圆角：一律收到 8 / 12（HEX 的两档）──────────── */
 /* 分段按钮组、证据框、提示条这类 Tailwind 圆角；圆点、头像、状态灯（rounded-full）不动 */
-html[data-ui-theme="indigo"] .workspace-main :is(.rounded-md, .rounded-lg, .rounded-\[6px\]) { border-radius: 8px; }
+html[data-ui-theme="indigo"] .workspace-main :is(.rounded-md, .rounded-lg) { border-radius: 8px; }
 html[data-ui-theme="indigo"] .workspace-main :is(.rounded-xl, .rounded-2xl, .rounded-3xl) { border-radius: 12px; }
 html[data-ui-theme="indigo"] [role="dialog"] :is(.rounded-md, .rounded-lg) { border-radius: 8px; }
 html[data-ui-theme="indigo"] [role="dialog"] :is(.rounded-xl, .rounded-2xl) { border-radius: 12px; }
