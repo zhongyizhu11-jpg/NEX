@@ -2,6 +2,7 @@ import { resolveSiteTitle } from "@shared/brand";
 import { avatarQuotaState } from "@/lib/avatarQuota";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Progress } from "@/components/ui/progress";
+import { Countdown, formatCountdown, useDeadlinePassed } from "@/components/Countdown";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -559,7 +560,8 @@ function DashboardLayoutContent({
   );
   const [showAnnouncement, setShowAnnouncement] = useState(false);
   const [showUpgradeAnnouncement, setShowUpgradeAnnouncement] = useState(false);
-  const [upgradeAnnouncementCountdown, setUpgradeAnnouncementCountdown] = useState(UPGRADE_ANNOUNCEMENT_COUNTDOWN_SECONDS);
+  // 升级公告「我知道了」能点的时间；按钮上的秒数由 <Countdown> 自己数，布局不每秒重画。
+  const [upgradeAnnouncementDeadline, setUpgradeAnnouncementDeadline] = useState(0);
   const [showTelegramDialog, setShowTelegramDialog] = useState(false);
   const [showUpgradeDialog, setShowUpgradeDialog] = useState(false);
   const {
@@ -576,11 +578,9 @@ function DashboardLayoutContent({
   const [backgroundUpgrade, setBackgroundUpgrade] = useState<PanelUpgradeSession | null>(() => readPanelUpgradeSession());
   const [dismissedPanelUpgradeNoticeVersion, setDismissedPanelUpgradeNoticeVersion] = useState(() => readDismissedPanelUpgradeNoticeVersion());
   const [telegramBind, setTelegramBind] = useState<any | null>(null);
-  const [telegramBindTick, setTelegramBindTick] = useState(Date.now());
   const [showTwoFactorDialog, setShowTwoFactorDialog] = useState(false);
   const [twoFactorSetup, setTwoFactorSetup] = useState<{ setupId: string; secret: string; otpauthUrl: string; expiresAt: Date; expiresInSeconds: number } | null>(null);
   const [twoFactorQrCode, setTwoFactorQrCode] = useState("");
-  const [twoFactorSetupTick, setTwoFactorSetupTick] = useState(Date.now());
   const [twoFactorPassword, setTwoFactorPassword] = useState("");
   const [twoFactorCode, setTwoFactorCode] = useState("");
   /*
@@ -706,8 +706,7 @@ function DashboardLayoutContent({
         if (existingDisplay?.key !== announcementKey) {
           writeUpgradeAnnouncementDisplaySession(userId, { key: announcementKey, shownAt });
         }
-        const elapsedSeconds = Math.floor(Math.max(0, Date.now() - shownAt) / 1000);
-        setUpgradeAnnouncementCountdown(Math.max(0, UPGRADE_ANNOUNCEMENT_COUNTDOWN_SECONDS - elapsedSeconds));
+        setUpgradeAnnouncementDeadline(shownAt + UPGRADE_ANNOUNCEMENT_COUNTDOWN_SECONDS * 1000);
       }
       setShowUpgradeAnnouncement(true);
       return;
@@ -716,14 +715,6 @@ function DashboardLayoutContent({
     writeLastSeenUpgradeAnnouncementVersion(userId, currentVersion);
     clearUpgradeAnnouncementDisplaySession(userId);
   }, [isAdmin, publicInfo?.version, upgradeAnnouncement?.id, upgradeAnnouncementFetched, user?.id, utils.announcements.upgradePopup]);
-
-  useEffect(() => {
-    if (!showUpgradeAnnouncement) return;
-    const timer = window.setInterval(() => {
-      setUpgradeAnnouncementCountdown((value) => (value <= 1 ? 0 : value - 1));
-    }, 1000);
-    return () => window.clearInterval(timer);
-  }, [showUpgradeAnnouncement, upgradeAnnouncement?.id]);
 
   useEffect(() => {
     if (!publicInfo) return;
@@ -863,7 +854,7 @@ function DashboardLayoutContent({
         clearUpgradeAnnouncementDisplaySession(user.id);
       }
       setShowUpgradeAnnouncement(false);
-      setUpgradeAnnouncementCountdown(UPGRADE_ANNOUNCEMENT_COUNTDOWN_SECONDS);
+      setUpgradeAnnouncementDeadline(0);
       displayedUpgradeAnnouncementKeyRef.current = "";
       utils.announcements.upgradePopup.setData(undefined, undefined);
     },
@@ -942,7 +933,6 @@ function DashboardLayoutContent({
   const createTelegramBindMutation = trpc.telegram.createBindCode.useMutation({
     onSuccess: (data) => {
       setTelegramBind(data);
-      setTelegramBindTick(Date.now());
       setShowTelegramDialog(true);
       utils.telegram.status.invalidate();
       toast.success("Telegram 绑定码已生成");
@@ -993,7 +983,6 @@ function DashboardLayoutContent({
     onSuccess: (data) => {
       setTwoFactorSetup(data);
       setTwoFactorQrCode("");
-      setTwoFactorSetupTick(Date.now());
       setTwoFactorCode("");
       toast.success("双重验证二维码已生成");
     },
@@ -1055,26 +1044,16 @@ function DashboardLayoutContent({
     };
   }, [twoFactorSetup?.otpauthUrl]);
 
-  useEffect(() => {
-    if (!showTwoFactorDialog || twoFactorStatus?.enabled || !twoFactorSetup) return;
-    const timer = window.setInterval(() => setTwoFactorSetupTick(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [showTwoFactorDialog, twoFactorSetup, twoFactorStatus?.enabled]);
-
-  useEffect(() => {
-    if (!telegramBind?.expiresAt) return;
-    const timer = window.setInterval(() => setTelegramBindTick(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [telegramBind?.expiresAt]);
-
+  /*
+    二维码、绑定码的有效期：布局只在过期那一刻重画一次；每秒跳的「剩余 m:ss」交给 <Countdown>，
+    不再让整个布局每秒渲染（以前绑定码在弹窗关掉后也一直在跳）。
+  */
   const twoFactorSetupExpiresAt = twoFactorSetup?.expiresAt ? new Date(twoFactorSetup.expiresAt).getTime() : 0;
-  const twoFactorSetupRemaining = twoFactorSetupExpiresAt ? Math.max(0, Math.ceil((twoFactorSetupExpiresAt - twoFactorSetupTick) / 1000)) : 0;
-  const twoFactorSetupExpired = !!twoFactorSetup && twoFactorSetupRemaining <= 0;
-  const twoFactorSetupRemainingLabel = `${Math.floor(twoFactorSetupRemaining / 60)}:${String(twoFactorSetupRemaining % 60).padStart(2, "0")}`;
+  const twoFactorSetupDeadlinePassed = useDeadlinePassed(twoFactorSetupExpiresAt);
+  const twoFactorSetupExpired = !!twoFactorSetup && twoFactorSetupDeadlinePassed;
   const telegramBindExpiresAt = telegramBind?.expiresAt ? new Date(telegramBind.expiresAt).getTime() : 0;
-  const telegramBindRemaining = telegramBindExpiresAt ? Math.max(0, Math.ceil((telegramBindExpiresAt - telegramBindTick) / 1000)) : 0;
-  const telegramBindExpired = !!telegramBind && telegramBindRemaining <= 0;
-  const telegramBindRemainingLabel = `${Math.floor(telegramBindRemaining / 60)}:${String(telegramBindRemaining % 60).padStart(2, "0")}`;
+  const telegramBindDeadlinePassed = useDeadlinePassed(telegramBindExpiresAt);
+  const telegramBindExpired = !!telegramBind && telegramBindDeadlinePassed;
   const handleEnableTwoFactor = () => {
     if (!twoFactorSetup) {
       beginTwoFactorSetupMutation.mutate();
@@ -1135,7 +1114,6 @@ function DashboardLayoutContent({
     }
     if (!telegramBind && telegramStatus?.pendingBind?.code) {
       setTelegramBind(telegramStatus.pendingBind);
-      setTelegramBindTick(Date.now());
     }
   }, [telegramBind, telegramStatus?.bound, telegramStatus?.pendingBind]);
 
@@ -2337,7 +2315,7 @@ function DashboardLayoutContent({
                   {twoFactorSetup
                     ? twoFactorSetupExpired
                       ? "二维码已过期，请重新生成"
-                      : `剩余 ${twoFactorSetupRemainingLabel}`
+                      : <Countdown deadlineMs={twoFactorSetupExpiresAt}>{(left) => `剩余 ${formatCountdown(left)}`}</Countdown>
                     : "正在生成二维码"}
                 </div>
               </div>
@@ -2464,7 +2442,7 @@ function DashboardLayoutContent({
                           {telegramBind.code}
                         </code>
                         <Badge variant={telegramBindExpired ? "destructive" : "outline"} className="shrink-0">
-                          {telegramBindExpired ? "已过期" : `${telegramBindRemainingLabel} 后过期`}
+                          {telegramBindExpired ? "已过期" : <Countdown deadlineMs={telegramBindExpiresAt}>{(left) => `${formatCountdown(left)} 后过期`}</Countdown>}
                         </Badge>
                       </div>
                       <p className="mt-2 text-xs text-muted-foreground">
@@ -2578,12 +2556,16 @@ function DashboardLayoutContent({
             dangerouslySetInnerHTML={{ __html: renderMixedHtml(upgradeAnnouncement?.content || "") }}
           />
           <DialogFooter>
-            <Button
-              onClick={() => upgradeAnnouncement?.id && dismissUpgradeAnnouncement.mutate({ id: upgradeAnnouncement.id })}
-              disabled={upgradeAnnouncementCountdown > 0 || dismissUpgradeAnnouncement.isPending}
-            >
-              {upgradeAnnouncementCountdown > 0 ? `${upgradeAnnouncementCountdown}S` : "我知道了"}
-            </Button>
+            <Countdown deadlineMs={upgradeAnnouncementDeadline}>
+              {(upgradeAnnouncementCountdown) => (
+                <Button
+                  onClick={() => upgradeAnnouncement?.id && dismissUpgradeAnnouncement.mutate({ id: upgradeAnnouncement.id })}
+                  disabled={upgradeAnnouncementCountdown > 0 || dismissUpgradeAnnouncement.isPending}
+                >
+                  {upgradeAnnouncementCountdown > 0 ? `${upgradeAnnouncementCountdown}S` : "我知道了"}
+                </Button>
+              )}
+            </Countdown>
           </DialogFooter>
         </DialogContent>
       </Dialog>
