@@ -1721,6 +1721,10 @@ export default function ClientSubscriptionsPage() {
                                 {remarkByTemplateId.get(Number(node.templateId)) || "直连"}
                               </Badge>
                             )}
+                            {/* 开了线路组的转发：订阅里只有这一个入口，面板在几条线路之间切（中转机上的那几段不单独出节点）。 */}
+                            {!direct && node.lineGroup && (
+                              <Badge variant="outline" size="sm" className="shrink-0 font-normal" title="一个入口，面板在几条线路之间自动切">线路组</Badge>
+                            )}
                           </div>
                           <p className="truncate text-[11px] leading-tight text-muted-foreground">
                             {node.address}:{node.port}
@@ -1920,8 +1924,17 @@ export default function ClientSubscriptionsPage() {
                         className="flex items-center gap-2 rounded-md border border-dashed px-2.5 py-1.5"
                       >
                         <EyeOff className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                        <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">{item.ruleName}</span>
-                        <Switch aria-label={`${item.ruleName} 放回订阅`}
+                        {/* 和上面节点同一种叫法（入口机 → 落地），规则名放在下面一行，不然分不清是哪条 */}
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5">
+                            <span className="truncate text-sm text-muted-foreground">{item.nodeName || item.ruleName}</span>
+                            {item.lineGroup && <Badge variant="outline" size="sm" className="shrink-0 font-normal">线路组</Badge>}
+                          </div>
+                          {item.nodeName && item.nodeName !== item.ruleName && (
+                            <p className="truncate text-[11px] leading-tight text-muted-foreground">转发「{item.ruleName}」</p>
+                          )}
+                        </div>
+                        <Switch aria-label={`${item.nodeName || item.ruleName} 放回订阅`}
                           className="shrink-0 scale-90"
                           checked={false}
                           onCheckedChange={() => setRuleVisible.mutate({ ruleId: item.ruleId, visible: true })}
@@ -1937,18 +1950,41 @@ export default function ClientSubscriptionsPage() {
                       <Zap className="mr-1 inline h-3 w-3" />
                       自动选路组（Clash 与 sing-box）
                     </SectionLabel>
-                    {preview!.groups.map((group) => (
-                      <div key={group.name} className="truncate rounded-md border px-2.5 py-1.5 text-xs text-muted-foreground">
-                        <span className="font-medium text-foreground">{group.name}</span>
-                        {group.type === "url-test" ? " · 自动选最快 · " : group.type === "load-balance" ? " · 负载均衡 · " : " · 主备切换 · "}
-                        {group.members.map((member, index) => (
-                          group.type === "load-balance" && Array.isArray(group.weights) && group.weights[index]
-                            ? `${member}×${group.weights[index]}`
-                            : member
-                        )).join(" / ")}
-                        {group.type === "load-balance" && Array.isArray(group.weights) ? "（按带宽分连接，Clash / Mihomo 生效）" : ""}
-                      </div>
-                    ))}
+                    {/*
+                      这些组不是谁手动建的：一个落地节点有两条以上入口（直连 + 转发、或几条转发）时，按这个节点的
+                      「选路方式」自动生成（新节点默认「自动选最快」）。不写清楚的话，看着像是面板自己改了设置。
+                    */}
+                    <p className="text-xs text-muted-foreground">
+                      一个落地有两条以上入口时，按这个节点的「选路方式」自动生成，新节点默认「自动选最快」。点一行改成主备、负载均衡或不生成。
+                    </p>
+                    {preview!.groups.map((group) => {
+                      const owner = group.templateId ? nodes.find((node) => Number(node.id) === Number(group.templateId)) : null;
+                      const body = (
+                        <>
+                          <span className="font-medium text-foreground">{group.name}</span>
+                          {group.type === "url-test" ? " · 自动选最快 · " : group.type === "load-balance" ? " · 负载均衡 · " : " · 主备切换 · "}
+                          {group.members.map((member, index) => (
+                            group.type === "load-balance" && Array.isArray(group.weights) && group.weights[index]
+                              ? `${member}×${group.weights[index]}`
+                              : member
+                          )).join(" / ")}
+                          {group.type === "load-balance" && Array.isArray(group.weights) ? "（按带宽分连接，Clash / Mihomo 生效）" : ""}
+                        </>
+                      );
+                      return owner ? (
+                        <button
+                          key={group.name}
+                          type="button"
+                          className="block w-full truncate rounded-md border px-2.5 py-1.5 text-left text-xs text-muted-foreground hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          title={`改「${String(owner.name || "")}」的选路方式`}
+                          onClick={() => { setPreviewOpen(false); openEditNode(owner); }}
+                        >
+                          {body}
+                        </button>
+                      ) : (
+                        <div key={group.name} className="truncate rounded-md border px-2.5 py-1.5 text-xs text-muted-foreground">{body}</div>
+                      );
+                    })}
                   </div>
                 )}
 
