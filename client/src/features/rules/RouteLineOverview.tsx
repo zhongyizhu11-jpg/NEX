@@ -25,6 +25,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { trpc } from "@/lib/trpc";
+import { SegmentSpeedResult } from "@/features/network/SegmentSpeedResult";
 import { cn } from "@/lib/utils";
 import { describeRouteIssue, normalizeRouteEventKind } from "@shared/routeGroup";
 import { formatPolicyClock } from "@shared/routePolicy";
@@ -506,19 +507,10 @@ export function RouteLineTools({ status }: { status: RouteStatus }) {
           <Download className="h-3.5 w-3.5" />导出 7 天记录
         </LineChipButton>
       </div>
+      {/* 结果和网络测试页「iperf3 对拉」是同一个组件（features/network/SegmentSpeedResult），叫法、字段一样 */}
       {data?.segments ? (
-        <div className="flex flex-col gap-0.5 rounded-xl bg-[var(--fx-l1-surface)] px-3 py-2 text-xs" data-testid="route-line-speed-result">
-          {data.segments.map((segment, index) => (
-            <div key={index} className={cn("flex items-center justify-between gap-2", data.slowest === index && "font-semibold text-[var(--fx-warn-text)]")}>
-              <span className="truncate">{segment.from.name} → {segment.to.name}</span>
-              <span className="shrink-0 font-mono">
-                {segment.status === "done" ? `${segment.mbps === null ? "—" : Math.round(segment.mbps)} Mbps${data.slowest === index ? " · 最慢" : ""}` : segment.status === "skipped" ? "测不了" : segment.status === "error" ? "失败" : "…"}
-              </span>
-            </div>
-          ))}
-          {data.segments.filter((segment) => segment.error && segment.status !== "skipped").map((segment, index) => (
-            <p key={`e${index}`} className="text-[11px] text-[var(--fx-warn-text)]">{segment.from.name} → {segment.to.name}：{segment.error}</p>
-          ))}
+        <div data-testid="route-line-speed-result">
+          <SegmentSpeedResult run={data} variant="compact" />
         </div>
       ) : null}
     </div>

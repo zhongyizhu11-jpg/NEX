@@ -65,3 +65,13 @@ test("标准 / 精简布局用同一个诊断框：延迟记录、连接监控�
   assert.match(rules, /tab: "history" \}\)/);
   assert.match(read("./DiagnoseDialog.tsx"), /initialTab\?: DiagnoseTab;/);
 });
+
+test("转发链的诊断框和规则、隧道一样：延迟记录是页签，底部是同一排按钮（DiagnoseSubjectActions）", () => {
+  const read = (file: string) => fs.readFileSync(path.resolve(import.meta.dirname, file), "utf8");
+  const groups = read("../pages/ForwardGroups.tsx");
+  assert.match(groups, /extraTabs=\{\[\{ key: "history", label: "延迟记录", content: <ForwardGroupLatencyBody/);
+  assert.doesNotMatch(groups, /ForwardGroupLatencyDialog|setLatencyGroup/, "独立的转发链延迟弹窗删掉了");
+  for (const [file, kind] of [["../pages/Rules.tsx", "rule"], ["../pages/Tunnels.tsx", "tunnel"], ["../pages/ForwardGroups.tsx", "forwardGroup"]] as const) {
+    assert.match(read(file), new RegExp(`<DiagnoseSubjectActions kind="${kind}"`), `${file} 的底部按钮`);
+  }
+});

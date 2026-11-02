@@ -31,7 +31,7 @@ export default function HostLineSection({ host }: { host: any }) {
       void utils.hosts.listPage.invalidate();
       void utils.rules.routeBoard.invalidate();
       void utils.lineDiagnostics.lineWorkspace.invalidate();
-      void utils.lineDiagnostics.poolBoard.invalidate();
+      void utils.nodePools.board.invalidate();
       toast.success(variables.enabled ? `已进入维护${result?.lines ? `，${result.lines} 条线路已避开` : ""}` : "已结束维护，探通稳定后线路会自己回来");
     },
     onError: (error) => toast.error(error.message),

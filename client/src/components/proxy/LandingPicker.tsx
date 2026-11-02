@@ -273,7 +273,7 @@ export function LandingPicker({
       )}
       {allowCreate && selectedHost && usableInbounds.length === 0 && (
         <p className="text-meta leading-5 text-muted-foreground">
-          一键创建的入站用 {SS_EGRESS_DEFAULT_METHOD}、随机密码，端口从这台主机的端口范围里挑，默认不进订阅。
+          一键创建的入站用 {SS_EGRESS_DEFAULT_METHOD}、随机密码，端口从这台主机的端口范围里挑，默认不进订阅。要给客户端用的落地节点，到「订阅管理 › 新建 › 在我的机器上开一个」开。
         </p>
       )}
       {!options.isLoading && hosts.length === 0 && (

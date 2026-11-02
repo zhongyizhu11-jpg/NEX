@@ -11,6 +11,7 @@ import { forwardGroupsRouter } from "./routers/forwardGroups";
 import { hostsRouter } from "./routers/hosts";
 import { lookingGlassRouter } from "./routers/lookingGlass";
 import { lineDiagnosticsRouter } from "./routers/lineDiagnostics";
+import { nodePoolsRouter } from "./routers/nodePools";
 import { plansRouter } from "./routers/plans";
 import { referralRouter } from "./routers/referral";
 import { pluginsRouter } from "./routers/plugins";
@@ -45,6 +46,7 @@ export const appRouter = router({
   hosts: hostsRouter,
   lookingGlass: lookingGlassRouter,
   lineDiagnostics: lineDiagnosticsRouter,
+  nodePools: nodePoolsRouter,
   diagnostics: diagnosticsRouter,
   rules: rulesRouter,
   forwardGroups: forwardGroupsRouter,

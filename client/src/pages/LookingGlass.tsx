@@ -319,9 +319,27 @@ function Iperf3Output({
   );
 }
 
+/**
+ * 别处带着 ?method=iperf3-pair&tunnel=<id> 跳过来（隧道诊断框的「测带宽」，2.3.506）：先选好测什么。
+ * 只认对拉这一种，别的 method 不从地址栏读（那几种要填目标，带过来也没用）。
+ */
+function readPairDeepLink(): { method: Method | null; tunnelId: number | null } {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const tunnelId = Number(params.get("tunnel") || 0);
+    return {
+      method: params.get("method") === "iperf3-pair" ? "iperf3-pair" : null,
+      tunnelId: Number.isInteger(tunnelId) && tunnelId > 0 ? tunnelId : null,
+    };
+  } catch {
+    return { method: null, tunnelId: null };
+  }
+}
+
 export default function LookingGlass() {
   const utils = trpc.useUtils();
-  const [method, setMethod] = useState<Method>("ping");
+  const [pairDeepLink] = useState(readPairDeepLink);
+  const [method, setMethod] = useState<Method>(pairDeepLink.method || "ping");
   const [target, setTarget] = useState("");
   const [port, setPort] = useState("443");
   // TCPing 的地址族：目标是域名时只用这一族的地址（面板解析好再下发，所以老 Agent 也生效）
@@ -635,7 +653,7 @@ export default function LookingGlass() {
         </Alert>
 
         {method === "iperf3-pair" ? (
-          <Iperf3PairPanel methodPicker={methodPicker} hosts={availableHosts as any} />
+          <Iperf3PairPanel methodPicker={methodPicker} hosts={availableHosts as any} initialTunnelId={pairDeepLink.tunnelId} />
         ) : (
         <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,420px)_1fr]">
           <Card className="border-border bg-card">

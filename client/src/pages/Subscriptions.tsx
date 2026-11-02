@@ -134,16 +134,16 @@ export default function Subscriptions() {
 
   const deleteCancelledSubscription = trpc.plans.deleteCancelledSubscription.useMutation({
     onSuccess: () => {
-      toast.success("已取消的订阅记录已删除");
+      toast.success("已取消的套餐记录已删除");
       utils.plans.mySubscriptions.invalidate();
       utils.billing.ledgerPage.invalidate();
     },
-    onError: (error) => toast.error(error.message || "删除订阅记录失败"),
+    onError: (error) => toast.error(error.message || "删除套餐记录失败"),
   });
 
   const confirmDeleteCancelledSubscription = async (sub: any) => {
     const confirmed = await confirmDialog({
-      title: "删除订阅记录",
+      title: "删除套餐记录",
       description: `确认删除“${sub.planName || `套餐 #${sub.planId}`}”的已取消记录？支付和余额流水会继续保留。`,
       confirmText: "删除",
       tone: "destructive",
@@ -378,7 +378,7 @@ export default function Subscriptions() {
         )}
 
         {isLoading && (
-          <DataSectionLoading label="正在加载订阅数据" />
+          <DataSectionLoading label="正在加载套餐" />
         )}
 
         {/*
@@ -397,7 +397,7 @@ export default function Subscriptions() {
         {!isLoading && !subscriptionsError && visibleSubscriptions.length === 0 && (
           <EmptyState
             icon={<Package />}
-            title="暂无可显示订阅"
+            title="暂无可显示的套餐"
             description={(
               <>
                 {cancelledCount > 0
@@ -453,8 +453,8 @@ export default function Subscriptions() {
                           size="icon"
                           variant="ghost"
                           className="h-8 w-8 text-destructive"
-                          title="删除已取消订阅"
-                          aria-label="删除已取消订阅"
+                          title="删除已取消的套餐"
+                          aria-label="删除已取消的套餐"
                           onClick={() => void confirmDeleteCancelledSubscription(sub)}
                           disabled={deleteCancelledSubscription.isPending}
                         >
@@ -582,7 +582,7 @@ export default function Subscriptions() {
                 续费套餐
               </DialogTitle>
               <DialogDescription>
-                再次购买 {renewingSub?.planName || "当前套餐"} 会延长当前订阅有效期。
+                再次购买 {renewingSub?.planName || "当前套餐"} 会延长当前套餐的有效期。
                 {/* 说清楚续的是哪一档：买年付的人得看得见这次续的还是一年。 */}
                 {renewingSub?.renewDurationDays
                   ? `本次续期 ${planDurationLabel(Number(renewingSub.renewDurationDays))}。`

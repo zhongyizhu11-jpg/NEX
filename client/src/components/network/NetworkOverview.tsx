@@ -29,8 +29,13 @@ import type { ForwardMapLink } from "@shared/forwardMapLinks";
  * 点之间的线合成一条：正常 = 主色实线 + 往出口流动的光点，降级 = 琥珀虚线，中断 = 红虚线、正中一个 ⊗，停用 = 灰虚线；
  * 两头在同一个点里的线不画，状态算进那个点的颜色。纯 SVG，没有瓦片、没有地图库、没有图片。
  *
- * 点单台主机去主机页，点合起来的点展开列表，点线去隧道页（这一对只有转发时去转发页）。
+ * 点单台主机打开那台的详情（/hosts?host=），点合起来的点展开列表，点线去隧道页（这一对只有转发时去转发页）。
  */
+/** 点一台主机去哪：有 id 就开那台的详情，没有就是主机列表。 */
+function hostDetailHref(hostId?: number) {
+  return hostId && hostId > 0 ? `/hosts?host=${Math.trunc(hostId)}` : "/hosts";
+}
+
 /** 经纬网每 20° 一条；经度多画到 540°，跨太平洋（经度按 0~360 算）时右半边也有 */
 const GRATICULE_LAT = [-60, -40, -20, 0, 20, 40, 60, 80];
 const GRATICULE_LNG = Array.from({ length: 37 }, (_, index) => -180 + index * 20);
@@ -195,7 +200,8 @@ export function NetworkOverview({ model, forwardLinks, onOpen, initialWidth = 72
 
   const openNode = (node: OverviewCluster) => {
     if (node.members.length > 1) setOpenId((current) => (current === node.id ? null : node.id));
-    else onOpen?.("/hosts");
+    // 单台直接开那台的详情（/hosts?host=<id>，2.3.506 起主机详情能深链）
+    else onOpen?.(hostDetailHref(node.members[0]?.id));
   };
 
   return (
@@ -375,7 +381,7 @@ export function NetworkOverview({ model, forwardLinks, onOpen, initialWidth = 72
           width={width}
           height={height}
           onClose={() => setOpenId(null)}
-          onOpenHost={() => { setOpenId(null); onOpen?.("/hosts"); }}
+          onOpenHost={(hostId) => { setOpenId(null); onOpen?.(hostDetailHref(hostId)); }}
         />
       ) : null}
     </div>
@@ -388,7 +394,8 @@ function ClusterPopover({ cluster, width, height, onClose, onOpenHost }: {
   width: number;
   height: number;
   onClose: () => void;
-  onOpenHost: () => void;
+  /** 点某一台给它的 id（开那台的详情）；「还有 N 台」不给（去主机列表）。 */
+  onOpenHost: (hostId?: number) => void;
 }) {
   const r = clusterRadius(cluster);
   const left = Math.min(Math.max(cluster.x - POPOVER_W / 2, 6), width - POPOVER_W - 6);
@@ -421,14 +428,14 @@ function ClusterPopover({ cluster, width, height, onClose, onOpenHost }: {
       </div>
       <div className="fx-overview-popover-list">
       {shown.map((member) => (
-        <button key={member.id} type="button" className="fx-overview-popover-row" onClick={onOpenHost}>
+        <button key={member.id} type="button" className="fx-overview-popover-row" onClick={() => onOpenHost(member.id)}>
           <span aria-hidden="true" className="fx-overview-popover-dot" data-tone={hostTone(member.health)} />
           <span className="min-w-0 flex-1 truncate text-left">{member.name}</span>
           {member.city && member.city !== title ? <span className="shrink-0 text-muted-foreground">{member.city}</span> : null}
         </button>
       ))}
       {members.length > shown.length ? (
-        <button type="button" className="fx-overview-popover-row text-muted-foreground" onClick={onOpenHost}>还有 {members.length - shown.length} 台 →</button>
+        <button type="button" className="fx-overview-popover-row text-muted-foreground" onClick={() => onOpenHost()}>还有 {members.length - shown.length} 台 →</button>
       ) : null}
       </div>
     </div>

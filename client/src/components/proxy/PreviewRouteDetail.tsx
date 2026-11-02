@@ -1,4 +1,6 @@
 import { trpc } from "@/lib/trpc";
+import { useLocation } from "wouter";
+import { lineDetailHref } from "@/features/links/lineLinks";
 import { ArrowRight } from "lucide-react";
 import { ExitHostPanel } from "./ExitQualityView";
 
@@ -33,6 +35,7 @@ function Arrow() {
 }
 
 export function PreviewRouteDetail({ ruleId, nodeId, direct, address }: { ruleId: number; nodeId: number; direct: boolean; address: string }) {
+  const [, setLocation] = useLocation();
   const routeQuery = trpc.proxySubscriptions.previewRoute.useQuery({ ruleId }, { enabled: !direct && ruleId > 0, staleTime: 30_000, refetchOnWindowFocus: false });
   const route = routeQuery.data;
   const landingNodeId = route?.landing.nodeId || nodeId;
@@ -66,6 +69,13 @@ export function PreviewRouteDetail({ ruleId, nodeId, direct, address }: { ruleId
           <p className="text-[11px] text-muted-foreground">
             {route.kindLabel}{route.note ? ` · ${route.note}` : ""}
             {route.ruleName ? ` · 转发「${route.ruleName}」` : ""}
+            {/* 线路组：点进去是线路详情（/rules?line=，和线路概览、网络拓扑同一个面板） */}
+            {route.kind === "route" && ruleId > 0 ? (
+              <>
+                {" · "}
+                <a href={lineDetailHref(ruleId)} onClick={(event) => { event.preventDefault(); setLocation(lineDetailHref(ruleId)); }} className="text-primary hover:underline" data-testid="preview-route-line-detail">线路详情</a>
+              </>
+            ) : null}
           </p>
         </>
       ) : null}

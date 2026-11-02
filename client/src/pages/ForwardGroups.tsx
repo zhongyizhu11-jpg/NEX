@@ -18,7 +18,7 @@ import { formatLatencyTimeLabel } from "@/lib/latencyTimeLabel";
 import { hostIpv6Address, hostPrivateAddress, normalizeConnectHostForHost, sameAddress } from "@/lib/multiHopAddress";
 import SectionTransition from "@/components/SectionTransition";
 import DashboardLayout from "@/components/DashboardLayout";
-import { DiagnoseDialog } from "@/components/DiagnoseDialog";
+import { DiagnoseDialog, DiagnoseSubjectActions, type DiagnoseExtraTab } from "@/components/DiagnoseDialog";
 import EmptyState from "@/components/EmptyState";
 import AnimatedStatValue from "@/components/AnimatedStatValue";
 import { LatencyRating } from "@/components/LatencyRating";
@@ -475,17 +475,12 @@ type GroupLatencySeriesDatum = {
 const groupLatencySeriesCache = new Map<number, GroupLatencySeriesDatum[]>();
 const groupLatencyAnimatedKeys = new Set<number>();
 
-function ForwardGroupLatencyDialog({
-  groupId,
-  groupName,
-  open,
-  onOpenChange,
-}: {
-  groupId: number;
-  groupName: string;
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
-}) {
+/*
+  转发链的延迟记录（图、稳定性统计、近 30 天色块），没有对话框外壳：并进「诊断」框当一页
+  （DiagnoseDialog extraTabs，2.3.506 起和规则、隧道一样；原来是单独的「延迟记录」弹窗）。
+*/
+function ForwardGroupLatencyBody({ groupId, active }: { groupId: number; active: boolean }) {
+  const open = active;
   const [peakCutEnabled, setPeakCutEnabled] = useState(false);
   const [timeRangeHours, setTimeRangeHours] = useState<LatencyTimeRangeHours>(DEFAULT_LATENCY_TIME_RANGE_HOURS);
   const { data, isLoading, isFetching } = trpc.forwardGroups.latencySeries.useQuery(
@@ -546,21 +541,14 @@ function ForwardGroupLatencyDialog({
   }, [groupId, shouldAnimateChart]);
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[96svh] w-[calc(100vw-0.75rem)] max-w-[95vw] flex-col gap-3 overflow-hidden p-3 sm:max-w-3xl sm:p-6">
-        <DialogHeader>
-          <div className="flex flex-col gap-2 pr-9 sm:flex-row sm:items-start sm:justify-between sm:pr-10">
-            <div className="min-w-0">
-              <DialogTitle>{"\u8f6c\u53d1\u94fe\u5ef6\u8fdf - "}{groupName}</DialogTitle>
-              <DialogDescription>{`最近 ${latencyTimeRangeLabel(timeRangeHours)} 链路逐跳探测汇总，纯 UDP 规则使用 Ping，其余规则使用 TCPing。`}</DialogDescription>
-            </div>
-            <div className="flex flex-wrap items-center gap-2 self-start sm:justify-end">
-              <LatencyTimeRangeSelect value={timeRangeHours} onChange={setTimeRangeHours} />
-              <LatencyPeakCutToggle id={`forward-group-peak-cut-${groupId}`} checked={peakCutEnabled} onCheckedChange={setPeakCutEnabled} className="shrink-0" />
-            </div>
+    <div className="min-w-0 space-y-3">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <p className="min-w-0 text-meta text-muted-foreground">{`最近 ${latencyTimeRangeLabel(timeRangeHours)} 链路逐跳探测汇总，纯 UDP 规则使用 Ping，其余规则使用 TCPing。`}</p>
+          <div className="flex flex-wrap items-center gap-2 self-start sm:justify-end">
+            <LatencyTimeRangeSelect value={timeRangeHours} onChange={setTimeRangeHours} />
+            <LatencyPeakCutToggle id={`forward-group-peak-cut-${groupId}`} checked={peakCutEnabled} onCheckedChange={setPeakCutEnabled} className="shrink-0" />
           </div>
-        </DialogHeader>
-        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain pr-1">
+        </div>
         <div className="h-[42svh] min-h-[220px] rounded-lg border border-border/60 bg-muted/20 p-2 sm:h-[260px] sm:p-3">
           {(isLoading || waitForFreshSeries) && !seriesData ? (
             <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
@@ -610,12 +598,7 @@ function ForwardGroupLatencyDialog({
           description="统计各跳实际的 TCP / Ping 探测（含已上报的备用路径），不等于端到端业务丢包。"
         />
         <LatencyHistoryDayStrip summaries={history.data} loading={history.isLoading} />
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>关闭</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    </div>
   );
 }
 
@@ -627,6 +610,8 @@ function ForwardGroupSelfTestDialog({
   hostById,
   open,
   onOpenChange,
+  extraTabs,
+  actions,
 }: {
   groupId: number;
   groupName: string;
@@ -635,6 +620,9 @@ function ForwardGroupSelfTestDialog({
   hostById?: Map<number, any>;
   open: boolean;
   onOpenChange: (v: boolean) => void;
+  /** 并进来的页（延迟记录）和底部动作（故障包、拓扑），和规则、隧道的诊断框一样（DiagnoseDialog）。 */
+  extraTabs?: DiagnoseExtraTab[];
+  actions?: ReactNode;
 }) {
   const utils = trpc.useUtils();
   const [optimisticTesting, setOptimisticTesting] = useState(false);
@@ -785,6 +773,8 @@ function ForwardGroupSelfTestDialog({
       outcome={isSuccess ? "success" : status === "timeout" ? "timeout" : isFailed ? "failed" : null}
       failureReason={parsedMessage.message}
       checklist={{ kind: "forwardGroup", id: groupId }}
+      extraTabs={extraTabs}
+      actions={actions}
       onRun={() => {
         manualTestRef.current = true;
         setBaselineTestId(latestTestId);
@@ -847,7 +837,6 @@ export function ForwardGroupsContent({
   const savedMembersRef = useRef<Record<string, MemberForm[]>>({ host: [], tunnel: [] });
   const [dragMemberKey, setDragMemberKey] = useState<string | null>(null);
   const [internalViewMode, setInternalViewMode] = useState<ForwardGroupViewMode>(() => getStoredForwardGroupViewMode());
-  const [latencyGroup, setLatencyGroup] = useState<{ id: number; name: string } | null>(null);
   const [testGroup, setTestGroup] = useState<{ id: number; name: string } | null>(null);
   const [deleteGroup, setDeleteGroup] = useState<any | null>(null);
   // 点开故障转移策略面板的那个组。只存 id：面板跟着列表轮询刷新，不拿一份旧快照。
@@ -879,7 +868,7 @@ export function ForwardGroupsContent({
     refetchOnWindowFocus: false,
     placeholderData: (previousData) => previousData,
   });
-  const needsFullGroupList = showDialog || !!latencyGroup || !!testGroup || !!editRequest;
+  const needsFullGroupList = showDialog || !!testGroup || !!editRequest;
   const fullGroupQuery = trpc.forwardGroups.options.useQuery(undefined, {
     enabled: needsFullGroupList,
     refetchInterval: pollingInterval("normal"),
@@ -894,13 +883,13 @@ export function ForwardGroupsContent({
   // 2.3.499：组回到分类条上各自一页，卡上也写跟着哪个池（以前只有节点池页上看得见）。
   const editingPoolId = editingId ? Number(groups.find((group) => Number(group.id) === editingId)?.poolId || 0) || null : null;
   const anyFollowsPool = groups.some((group) => Number(group.poolId || 0) > 0);
-  const followedPoolQuery = trpc.lineDiagnostics.nodePools.useQuery(undefined, { enabled: anyFollowsPool || (showDialog && !!editingPoolId), staleTime: 30_000, refetchOnWindowFocus: false });
+  const followedPoolQuery = trpc.nodePools.list.useQuery(undefined, { enabled: anyFollowsPool || (showDialog && !!editingPoolId), staleTime: 30_000, refetchOnWindowFocus: false });
   const poolNameOf = (poolId: number) => ((followedPoolQuery.data || []) as Array<{ id: number; name: string }>).find((pool) => Number(pool.id) === poolId)?.name || `节点池 ${poolId}`;
   const followedPoolName = editingPoolId ? poolNameOf(editingPoolId) : "";
   const unfollowPool = trpc.forwardGroups.followPool.useMutation({
     onSuccess: () => {
       void utils.forwardGroups.invalidate();
-      void utils.lineDiagnostics.poolBoard.invalidate();
+      void utils.nodePools.board.invalidate();
       toast.success("不再跟着节点池，成员留着现在这些");
     },
     onError: (error) => toast.error(error.message),
@@ -2084,28 +2073,24 @@ export function ForwardGroupsContent({
           { key: "edit", label: "编辑", ariaLabel: `编辑${resource} ${group.name}`, icon: <Pencil className="h-3.5 w-3.5" />, onSelect: () => openEdit(group) },
         ]}
         menu={[
-          ...(isChain ? [{
-            key: "latency",
-            label: "延迟记录",
-            ariaLabel: `查看${resource} ${group.name} 的延迟`,
-            icon: <Activity className="h-3.5 w-3.5" />,
-            onSelect: () => setLatencyGroup({ id: Number(group.id), name: group.name }),
-          }] : []),
-          {
+          /*
+            转发链的延迟记录、故障包、拓扑都在「诊断」框里（页签和底部按钮，2.3.506 起和规则、隧道一样），
+            菜单里不再单列；别的组没有诊断框，故障包和拓扑照旧在菜单里。
+          */
+          ...(isChain ? [] : [{
             key: "fault-bundle",
             label: "导出故障包",
             ariaLabel: `导出${resource} ${group.name} 的故障包（诊断结论、脱敏配置、沿线主机状态）`,
             icon: <FileJson className="h-3.5 w-3.5" />,
             disabled: faultBundle.pending,
             onSelect: () => { void faultBundle.exportBundle("forwardGroup", Number(group.id)); },
-          },
-          {
+          }, {
             key: "topology",
             label: "查看拓扑",
             ariaLabel: `在网络拓扑里查看${resource} ${group.name}`,
             icon: <Network className="h-3.5 w-3.5" />,
             onSelect: () => setTopologyLocation(`/topology?group=${Number(group.id)}`),
-          },
+          }]),
           {
             key: "sync",
             label: "同步",
@@ -2980,14 +2965,6 @@ export function ForwardGroupsContent({
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      {latencyGroup && (
-        <ForwardGroupLatencyDialog
-          groupId={latencyGroup.id}
-          groupName={latencyGroup.name}
-          open={!!latencyGroup}
-          onOpenChange={(open) => !open && setLatencyGroup(null)}
-        />
-      )}
       {testGroup && (
         <ForwardGroupSelfTestDialog
           groupId={testGroup.id}
@@ -2997,6 +2974,8 @@ export function ForwardGroupsContent({
           hostById={hostById}
           open={!!testGroup}
           onOpenChange={(open) => !open && setTestGroup(null)}
+          extraTabs={[{ key: "history", label: "延迟记录", content: <ForwardGroupLatencyBody groupId={testGroup.id} active={!!testGroup} /> }]}
+          actions={<DiagnoseSubjectActions kind="forwardGroup" id={testGroup.id} onLeave={() => setTestGroup(null)} />}
         />
       )}
       {(() => {

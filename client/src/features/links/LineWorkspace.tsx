@@ -2,6 +2,7 @@ import { useMemo, useState, type SyntheticEvent } from "react";
 import type { inferRouterOutputs } from "@trpc/server";
 import { Check, ChevronDown, ChevronRight, Plus, X } from "lucide-react";
 import { toast } from "sonner";
+import { useLocation } from "wouter";
 
 import { Button } from "@/components/ui/button";
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -30,6 +31,7 @@ import {
   type LineTone,
 } from "@/features/lines/LineUi";
 import { RouteBoardList } from "@/features/rules/RouteBoardList";
+import { LINE_PARAM, useSearchIdParam } from "./lineLinks";
 import { LandingPoolFields, landingDraftError, landingDraftFrom, landingInputFromDraft, type LandingConfigView, type LandingDraft } from "./LandingPoolFields";
 import { LINK_SPREAD_LABELS } from "@shared/linkTerms";
 import { trpc } from "@/lib/trpc";
@@ -56,8 +58,8 @@ export function LineWorkspace({ searchQuery = "", isAdmin = false }: { searchQue
   const board = trpc.lineDiagnostics.lineWorkspace.useQuery({ hours: 24 }, { refetchInterval: 30_000, staleTime: 10_000 });
   const data = board.data;
   const [allAlerts, setAllAlerts] = useState(false);
-  // 告警行和下面的线路卡点开的是同一个线路详情（在里面直接改）
-  const [openRuleId, setOpenRuleId] = useState<number | null>(null);
+  // 告警行和下面的线路卡点开的是同一个线路详情（在里面直接改）。开着时地址栏带 ?line=<规则 id>，复制下来就能分享（lineLinks.ts）
+  const [openRuleId, setOpenRuleId] = useSearchIdParam(LINE_PARAM);
   const alerts = data?.recent || [];
   const shownAlerts = allAlerts ? alerts : alerts.slice(0, ALERT_ROWS_SHOWN);
   return (
@@ -140,12 +142,13 @@ export function NodePoolsSection({ hosts, onOpenGroup, isAdmin = false }: {
   onOpenGroup?: (mode: PoolGroupMode, groupId: number) => void;
 }) {
   const utils = trpc.useUtils();
-  const board = trpc.lineDiagnostics.poolBoard.useQuery(undefined, { staleTime: 15_000, refetchInterval: 30_000 });
+  const [, setLocation] = useLocation();
+  const board = trpc.nodePools.board.useQuery(undefined, { staleTime: 15_000, refetchInterval: 30_000 });
   const refresh = () => {
-    void utils.lineDiagnostics.poolBoard.invalidate();
-    void utils.lineDiagnostics.nodePools.invalidate();
+    void utils.nodePools.board.invalidate();
+    void utils.nodePools.list.invalidate();
   };
-  const save = trpc.lineDiagnostics.nodePoolSave.useMutation({
+  const save = trpc.nodePools.save.useMutation({
     onSuccess: (result) => {
       refresh();
       setEditing(null);
@@ -171,7 +174,7 @@ export function NodePoolsSection({ hosts, onOpenGroup, isAdmin = false }: {
     },
     onError: (error) => toast.error(error.message),
   });
-  const rotate = trpc.lineDiagnostics.nodePoolRotate.useMutation({
+  const rotate = trpc.nodePools.rotate.useMutation({
     onSuccess: (result) => {
       refresh();
       void utils.proxyInbounds.list.invalidate();
@@ -179,12 +182,12 @@ export function NodePoolsSection({ hosts, onOpenGroup, isAdmin = false }: {
     },
     onError: (error) => toast.error(error.message),
   });
-  const remove = trpc.lineDiagnostics.nodePoolDelete.useMutation({
+  const remove = trpc.nodePools.delete.useMutation({
     onSuccess: () => { refresh(); setEditing(null); toast.success("已删掉"); },
     onError: (error) => toast.error(error.message),
   });
   // 落地池直连域名「自动」（2.3.501，管理员）：每点一次起一个新的，所以是 mutation
-  const suggestDomain = trpc.lineDiagnostics.nodePoolSuggestDomain.useMutation({
+  const suggestDomain = trpc.nodePools.suggestDomain.useMutation({
     onSuccess: (result) => {
       if (result.domain) setEditing((current) => (current ? { ...current, directDomain: result.domain || "" } : current));
       else toast.warning(result.reason || "没起出域名，自己填一个");
@@ -406,7 +409,13 @@ export function NodePoolsSection({ hosts, onOpenGroup, isAdmin = false }: {
           <DialogContent className="sm:max-w-md" onOpenAutoFocus={(event) => event.preventDefault()}>
             <DialogHeader>
               <DialogTitle>{`${editing.id ? "编辑" : "新建"}${editing.role === "landing" ? "落地池" : "中转池"}`}</DialogTitle>
-              <DialogDescription>{ROLE_DESCRIPTION[editing.role]}</DialogDescription>
+              <DialogDescription>
+                {ROLE_DESCRIPTION[editing.role]}
+                {/* 新建落地节点的主入口在订阅管理（2.3.506）：只开一台的不用建池 */}
+                {editing.role === "landing" && !editing.id ? (
+                  <> 只开一台的，到<a href="/client-subscriptions?create=node" onClick={(event) => { event.preventDefault(); setEditing(null); setLocation("/client-subscriptions?create=node"); }} className="text-primary hover:underline" data-testid="node-pool-single-landing">订阅管理新建节点</a>。</>
+                ) : null}
+              </DialogDescription>
             </DialogHeader>
             {/*
               2.3.501 起照 iOS 设置排：一张白卡写名字（改已有的池再多一行「用途」），一张白卡放机器，落地池再加

@@ -52,7 +52,7 @@ export function routeNodeOptionsOf(nodes: readonly ProxyNodeRow[] | null | undef
 export function routeNodeOptionLabel(node: { name: string; landingPool?: { ready: number } | null }) {
   return node.landingPool ? `池 · ${node.name} · ${node.landingPool.ready} 台` : node.name;
 }
-export type NodePoolRow = inferRouterOutputs<AppRouter>["lineDiagnostics"]["nodePools"][number];
+export type NodePoolRow = inferRouterOutputs<AppRouter>["nodePools"]["list"][number];
 
 /** 一条规则（rules.list 的一行）里线路编辑、线路详情读的字段。 */
 export type LineRuleRow = RoutePolicyRule & {
