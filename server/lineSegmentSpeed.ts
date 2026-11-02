@@ -1,14 +1,17 @@
 /*
-  线路组的分段测速：一条路径「入口 → 中转 1 → 中转 2 … → 落地」，相邻两台都是面板里的机器
-  （都装着 Agent）的那几段，各跑一次 iperf3，找出哪一段是瓶颈。
+  分段测速（iperf3 对拉）：一串「上游 → 下游」两台都是面板里的机器（都装着 Agent）的段，各跑一次 iperf3，
+  找出哪一段是瓶颈。两处在用：
+    · 线路组的「逐段测带宽」：一条路径「入口 → 中转 1 → … → 落地」拆成段（routers/lineDiagnostics.ts）；
+    · 网络测试页的「iperf3 对拉」：选一条隧道（按它经过的机器拆段）或者自己挑两台（routers/lookingGlass.ts）。
 
   每一段怎么测：
     1. 下游那台开 iperf3 服务端（和网络测试页「一键开 iperf3 服务端」同一个任务，
        enqueueIperf3AgentTask，端口由 Agent 自动挑一个空闲的）；
     2. 上游那台当客户端（和网络测试页的「iperf3 客户端」同一个任务，enqueueLookingGlassAgentTask），
-       目标是下游的入口地址（getHostEntryAddress），4 条并行、8 秒；
+       目标是下游的入口地址（getHostEntryAddress），默认 4 条并行、8 秒（对拉可以改）；
        先测正向（上游 → 下游，就是流量真实的方向），再加 -R 测一次反向 —— 服务端已经开着，
-       多 8 秒就能把回程也测了；
+       多几秒就能把回程也测了；对拉还会再用 1 条连接测一次正向，和多条合计比一比（单个下载能跑多快、
+       中间有没有硬限速），连同重传给一句判断（shared/lineDiagnostics.ts iperf3SegmentVerdict）；
     3. 停掉下游的 iperf3 服务端，等 Agent 回报停好了，再测下一段（下一段的上游就是这一台，
        它还开着服务端的话网络测试那边会拒绝跑客户端）。
   段与段一个一个测，不并行：并行会互相抢带宽，测出来的数没意义。
@@ -28,6 +31,9 @@ import { isPrivateOrReservedAddress } from "../shared/ipAddress";
 import {
   describeIperf3Failure,
   iperf3EffectiveMbps,
+  iperf3RetransmitsPerGB,
+  iperf3SegmentVerdict,
+  parseIperf3Detail,
   parseIperf3Mbps,
   slowestSegmentIndex,
   type PlannedLineSegment,
@@ -64,26 +70,38 @@ export type SegmentSpeedSegment = {
   mbps: number | null;
   /** 反向（-R，下游 → 上游）Mbit/s；没测出来是 null。 */
   reverseMbps: number | null;
+  /** 正向 / 反向每 GB 重传几次（TCP）；算不出来是 null。 */
+  retransPerGB: number | null;
+  reverseRetransPerGB: number | null;
+  /** 正向多条连接里最慢、最快的一条（Mbit/s）；单条连接测时是 null。 */
+  streamRange: { min: number; max: number } | null;
+  /** 只用 1 条连接再测一次正向（对拉才测）。 */
+  singleMbps: number | null;
+  /** 一句判断：单条 vs 多条、丢包。 */
+  verdict: string | null;
   error: string | null;
 };
 
 export type SegmentSpeedRunView = {
   runId: string;
-  ruleId: number;
-  pathKey: string;
-  pathName: string;
+  /** 测的是什么：「A 主线路」「隧道 华南-香港」「Po0(200M) → Jinx」。 */
+  title: string;
   status: RunStatus;
   error: string | null;
   startedAt: number;
   finishedAt: number | null;
   seconds: number;
   streams: number;
+  /** 有没有加测单条连接。 */
+  single: boolean;
   segments: SegmentSpeedSegment[];
   /** 最慢（瓶颈）那一段的下标；一段都没测出来是 null。 */
   slowest: number | null;
 };
 
-type Run = SegmentSpeedRunView & { userId: number };
+type Run = SegmentSpeedRunView & { userId: number; lockKey: string };
+
+export type SegmentSpeedOptions = { seconds: number; streams: number; single: boolean };
 
 /** 一段要用到的两头：上游当客户端，下游开服务端、被拨的是它的入口地址。 */
 export type SegmentEndpoints = {
@@ -97,11 +115,12 @@ export type SegmentEndpoints = {
 export type SegmentSpeedDeps = {
   startServer: (hostId: number) => Promise<number>;
   stopServer: (hostId: number) => Promise<void>;
-  runClient: (input: { hostId: number; target: string; port: number; reverse: boolean; allowPrivate: boolean }) => Promise<string>;
+  runClient: (input: { hostId: number; target: string; port: number; reverse: boolean; allowPrivate: boolean; streams: number; seconds: number }) => Promise<string>;
 };
 
 const runs = new Map<string, Run>();
-const activeRunByRule = new Map<number, string>();
+/** 同一样东西（一条线路、一条隧道、一对机器）同时只测一轮。 */
+const activeRunByKey = new Map<string, string>();
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -112,7 +131,7 @@ function errorText(error: unknown) {
 }
 
 function viewOf(run: Run): SegmentSpeedRunView {
-  const { userId: _userId, ...view } = run;
+  const { userId: _userId, lockKey: _lockKey, ...view } = run;
   return { ...view, segments: run.segments.map((segment) => ({ ...segment, from: { ...segment.from }, to: { ...segment.to } })) };
 }
 
@@ -180,11 +199,11 @@ export const defaultSegmentSpeedDeps: SegmentSpeedDeps = {
     while (Date.now() < deadline && hasActiveIperf3Task(hostId)) await sleep(POLL_INTERVAL_MS);
   },
 
-  async runClient({ hostId, target, port, reverse, allowPrivate }) {
+  async runClient({ hostId, target, port, reverse, allowPrivate, streams, seconds }) {
     if (hasActiveIperf3Task(hostId)) throw new Error("上游机器上开着 iperf3 服务端，先停掉再测");
     if (hasActiveLookingGlassTask(hostId)) throw new Error("上游机器上正有网络测试在跑，等它结束再测");
     const resolved = await resolveIperf3Target(target, allowPrivate);
-    const options = normalizeIperf3ClientOptions({ streams: SEGMENT_SPEED_STREAMS, seconds: SEGMENT_SPEED_SECONDS, reverse });
+    const options = normalizeIperf3ClientOptions({ streams, seconds, reverse });
     const { task } = enqueueLookingGlassAgentTask(hostId, {
       method: "iperf3-client",
       target: resolved.host,
@@ -221,19 +240,33 @@ async function runSegments(run: Run, endpoints: Array<SegmentEndpoints | null>, 
     const ends = endpoints[index];
     if (segment.status === "skipped" || !ends) continue;
     segment.status = "running";
+    const client = (reverse: boolean, streams: number) => deps.runClient({ hostId: ends.fromHostId, target: ends.toAddress, port, reverse, allowPrivate, streams, seconds: run.seconds });
+    let port = 0;
     try {
-      const port = await deps.startServer(ends.toHostId);
+      port = await deps.startServer(ends.toHostId);
       try {
-        const forward = parseIperf3Mbps(await deps.runClient({ hostId: ends.fromHostId, target: ends.toAddress, port, reverse: false, allowPrivate }));
+        const forward = parseIperf3Detail(await client(false, run.streams));
         const mbps = iperf3EffectiveMbps(forward);
         if (mbps === null) throw new Error("iperf3 跑完了，但输出里没有汇总带宽");
         segment.mbps = mbps;
+        segment.retransPerGB = iperf3RetransmitsPerGB(forward.retransmits, forward.sentBytes);
+        segment.streamRange = forward.streamMbps.length > 1 ? { min: Math.min(...forward.streamMbps), max: Math.max(...forward.streamMbps) } : null;
         try {
-          segment.reverseMbps = iperf3EffectiveMbps(parseIperf3Mbps(await deps.runClient({ hostId: ends.fromHostId, target: ends.toAddress, port, reverse: true, allowPrivate })));
+          const reverse = parseIperf3Detail(await client(true, run.streams));
+          segment.reverseMbps = iperf3EffectiveMbps(reverse);
+          segment.reverseRetransPerGB = iperf3RetransmitsPerGB(reverse.retransmits, reverse.sentBytes);
         } catch {
           // 反向没测成不算这一段失败：正向（流量方向）已经有数了。
           segment.reverseMbps = null;
         }
+        if (run.single && run.streams > 1) {
+          try {
+            segment.singleMbps = iperf3EffectiveMbps(parseIperf3Mbps(await client(false, 1)));
+          } catch {
+            segment.singleMbps = null;
+          }
+        }
+        segment.verdict = iperf3SegmentVerdict({ mbps, singleMbps: segment.singleMbps, streams: run.streams, retransmits: forward.retransmits, sentBytes: forward.sentBytes });
       } finally {
         await deps.stopServer(ends.toHostId).catch(() => undefined);
       }
@@ -257,36 +290,36 @@ function finish(run: Run) {
 /**
  * 开一轮分段测速，立刻返回 runId，后台一段一段测；进度用 getSegmentSpeedRun 看。
  *
- * plan 是 planLineSegments 的结果；endpoints 与 plan 等长，能测的段给两头的主机和下游地址，
- * 不能测的给 null（会标成 skipped，原因用 plan 的 skipReason）。
+ * plan 是要测的段（线路组用 planLineSegments 拆，对拉自己拼）；endpoints 与 plan 等长，能测的段给两头的主机
+ * 和下游地址，不能测的给 null（会标成 skipped，原因用 plan 的 skipReason）。lockKey 相同的同时只能有一轮。
  */
 export function startSegmentSpeedRun(input: {
-  ruleId: number;
-  pathKey: string;
-  pathName: string;
+  lockKey: string;
+  title: string;
   userId: number;
   allowPrivate: boolean;
   plan: readonly PlannedLineSegment[];
   endpoints: ReadonlyArray<SegmentEndpoints | null>;
+  options?: Partial<SegmentSpeedOptions>;
   deps?: SegmentSpeedDeps;
 }) {
   pruneRuns();
-  const activeId = activeRunByRule.get(input.ruleId);
+  const activeId = activeRunByKey.get(input.lockKey);
   if (activeId && runs.get(activeId)?.status === "running") {
-    throw new Error("这条线路正在分段测速，等这一轮测完再开");
+    throw new Error("这一组正在测，等这一轮测完再开");
   }
   const run: Run = {
     runId: crypto.randomUUID(),
-    ruleId: input.ruleId,
-    pathKey: input.pathKey,
-    pathName: input.pathName,
+    lockKey: input.lockKey,
+    title: input.title,
     userId: input.userId,
     status: "running",
     error: null,
     startedAt: Date.now(),
     finishedAt: null,
-    seconds: SEGMENT_SPEED_SECONDS,
-    streams: SEGMENT_SPEED_STREAMS,
+    seconds: input.options?.seconds ?? SEGMENT_SPEED_SECONDS,
+    streams: input.options?.streams ?? SEGMENT_SPEED_STREAMS,
+    single: input.options?.single ?? false,
     segments: input.plan.map((segment, index) => {
       const skipReason = segment.skipReason || (input.endpoints[index] ? null : "这一段测不了");
       return {
@@ -295,20 +328,25 @@ export function startSegmentSpeedRun(input: {
         status: skipReason ? "skipped" : "pending",
         mbps: null,
         reverseMbps: null,
+        retransPerGB: null,
+        reverseRetransPerGB: null,
+        streamRange: null,
+        singleMbps: null,
+        verdict: null,
         error: skipReason,
       };
     }),
     slowest: null,
   };
   runs.set(run.runId, run);
-  activeRunByRule.set(input.ruleId, run.runId);
+  activeRunByKey.set(input.lockKey, run.runId);
   const done = runSegments(run, [...input.endpoints], input.deps || defaultSegmentSpeedDeps, input.allowPrivate)
     .catch((error) => {
       run.error = errorText(error);
     })
     .finally(() => {
       finish(run);
-      if (activeRunByRule.get(input.ruleId) === run.runId) activeRunByRule.delete(input.ruleId);
+      if (activeRunByKey.get(input.lockKey) === run.runId) activeRunByKey.delete(input.lockKey);
     });
   return { runId: run.runId, view: viewOf(run), done };
 }
@@ -323,5 +361,5 @@ export function getSegmentSpeedRun(runId: string, user: { id: number; role: stri
 
 export function resetSegmentSpeedRunsForTest() {
   runs.clear();
-  activeRunByRule.clear();
+  activeRunByKey.clear();
 }

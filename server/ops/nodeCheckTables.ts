@@ -6,7 +6,8 @@ import { col, type TableDef } from "./tableDefs";
   host_speed_tests —— 每次测速一行（每个对象留最近 10 次，见 trimSpeedTestHistory）。
     hostId：从哪台机器测的。
     nodeId：经哪个节点测的；0 = 测这台机器自己的出口。
-    entryKey：测的是订阅里哪条线路（rule-<规则 id> / direct-<模板 id>）；从 hostId 那台机器连线路入口走完整条链。
+    entryKey：2.3.502–2.3.504 订阅线路整链测速用的，那个测速 2.3.505 去掉了；列留着（老库里有），新记录不写，
+      旧行在下一次测速落库时删掉（server/ops/nodeCheck.ts recordSpeedTest）。
     resultJson：shared/nodeCheck.ts 的 SpeedTestResult（校验过才落库，曲线也在里面）。
   经节点的出口检测只放内存（一小时），不落库：那是临时看一眼的东西。换面板时测速记录也不搬。
 */

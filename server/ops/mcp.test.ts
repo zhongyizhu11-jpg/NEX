@@ -204,7 +204,7 @@ test("线路组工具：list_lines 走 rules.routeBoard 并压成摘要，get_li
   assert.equal(tooLong.result.isError, true);
 });
 
-test("网速测试工具：get_speed_test 只读、按 hostId / entryKey 走对应过程；speed_test 要完全权限，发起后等到这次的结果", async () => {
+test("网速测试工具：get_speed_test 只读、只认 hostId；speed_test 要完全权限，发起后等到这次的结果", async () => {
   const readOnly = session();
   const list = await handleMcpMessage({ jsonrpc: "2.0", id: 1, method: "tools/list" }, readOnly) as any;
   const names = list.result.tools.map((tool: any) => tool.name);
@@ -213,11 +213,9 @@ test("网速测试工具：get_speed_test 只读、按 hostId / entryKey 走对�
   const host = await handleMcpMessage({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "get_speed_test", arguments: { hostId: 9 } } }, readOnly) as any;
   assert.equal(host.result.isError, undefined);
   assert.deepEqual(readOnly.calls.at(-1), { path: "hosts.speedTestStatus", input: { hostId: 9 } });
-  await handleMcpMessage({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "get_speed_test", arguments: { entryKey: "rule-25" } } }, readOnly);
-  assert.deepEqual(readOnly.calls.at(-1), { path: "proxySubscriptions.entrySpeedTestStatus", input: { entryKey: "rule-25" } });
-  const both = await handleMcpMessage({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "get_speed_test", arguments: { hostId: 9, entryKey: "rule-25" } } }, readOnly) as any;
-  assert.equal(both.result.isError, true);
-  assert.match(both.result.content[0].text, /二选一/);
+  // 订阅线路的整链测速 2.3.505 去掉了：entryKey 不认
+  const line = await handleMcpMessage({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "get_speed_test", arguments: { entryKey: "rule-25" } } }, readOnly) as any;
+  assert.equal(line.result.isError, true);
 
   // 完全权限：发起，先回在测，再回这次的结果
   let polls = 0;

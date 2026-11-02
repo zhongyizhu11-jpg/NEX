@@ -33,7 +33,7 @@ export const FORWARD_TYPE_LABELS: Record<ForwardType, string> = {
  * 后一种情况下主备的健康检查有盲区：中转好好的、它到落地那段断了，不会切，流量
  * 继续往死路里送。所以哪种转发方式用在中转上，直接决定了要不要另外配一个探测目标。
  */
-export const KERNEL_FORWARD_TYPES = ["iptables", "nftables"] as const;
+const KERNEL_FORWARD_TYPES = ["iptables", "nftables"] as const;
 
 export function isUserspaceForwardType(value: unknown): boolean {
   const normalized = String(value ?? "").trim().toLowerCase();

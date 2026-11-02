@@ -154,3 +154,36 @@ test("lineExportToCsv：三张表依次排，文件名只含 ASCII", () => {
   assert.match(text, /\n# quality\npath,time.*\nA 主线路,2026-10-29T00:00:00.000Z,41.5,0,2,100,92,60\n$/);
   assert.equal(lineExportFilename(7, "csv", Date.UTC(2026, 9, 30, 8, 5, 9, 123)), "line-7-20261030T080509Z.csv");
 });
+
+test("parseIperf3Detail：重传、发了多少字节、每条流的速率；parseIperf3Mbps 不变", async () => {
+  const { parseIperf3Detail } = await import("./lineDiagnostics");
+  const multi = parseIperf3Detail(MULTI_STREAM);
+  assert.equal(multi.retransmits, 218);
+  assert.equal(multi.sentBytes, 436 * 1024 ** 2);
+  assert.deepEqual(multi.streamMbps, [228, 223]);
+  const single = parseIperf3Detail(SINGLE_STREAM_OLD);
+  assert.equal(single.retransmits, 3);
+  assert.deepEqual(single.streamMbps, [], "单条流不列");
+  assert.equal(parseIperf3Detail(REVERSE_GBITS).retransmits, 1024);
+});
+
+test("iperf3SegmentVerdict：单条 vs 多条、重传三档", async () => {
+  const { iperf3SegmentVerdict, iperf3RetransmitsPerGB } = await import("./lineDiagnostics");
+  const gb = 1024 ** 3;
+  assert.equal(iperf3RetransmitsPerGB(236313, 1.88 * gb), 125698);
+  assert.equal(iperf3SegmentVerdict({ mbps: 1613, singleMbps: 420, streams: 4, retransmits: 236313, sentBytes: 1.88 * gb }),
+    "单条连接只有 420 Mbps，4 条一起才到 1613：单个下载会慢一些；重传很多（每 GB 约 125,698 次），这段丢包明显");
+  assert.equal(iperf3SegmentVerdict({ mbps: 900, singleMbps: 880, streams: 4, retransmits: 10, sentBytes: 1 * gb }), "单条连接就能跑满；几乎不丢包");
+  assert.match(iperf3SegmentVerdict({ mbps: 300, singleMbps: 900, streams: 8, retransmits: 500, sentBytes: 1 * gb })!, /合计反而比单条低.*有一些重传/);
+  assert.equal(iperf3SegmentVerdict({ mbps: 500, singleMbps: null, streams: 4, retransmits: null, sentBytes: null }), null);
+});
+
+test("planPairSegments：两台一段；链式中转相邻两台一段；并排中转入口到每台、每台到出口各一段", async () => {
+  const { planPairSegments } = await import("./lineDiagnostics");
+  const n = (hostId: number) => ({ hostId, name: `h${hostId}` });
+  const names = (plan: ReturnType<typeof planPairSegments>) => plan.map((segment) => `${segment.from.name}>${segment.to.name}${segment.skipReason ? "(skip)" : ""}`);
+  assert.deepEqual(names(planPairSegments({ hops: [n(9), n(2)], parallelRelays: false })), ["h9>h2"]);
+  assert.deepEqual(names(planPairSegments({ hops: [n(1), n(2), n(3)], parallelRelays: false })), ["h1>h2", "h2>h3"]);
+  assert.deepEqual(names(planPairSegments({ hops: [n(1), n(2), n(3), n(4)], parallelRelays: true })), ["h1>h2", "h1>h3", "h2>h4", "h3>h4"]);
+  assert.deepEqual(names(planPairSegments({ hops: [n(1), n(1), n(2)], parallelRelays: false })), ["h1>h1(skip)", "h1>h2"]);
+});

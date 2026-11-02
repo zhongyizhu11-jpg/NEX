@@ -555,7 +555,7 @@ export function ProxySubTokenEditDialog({
 
               <Section title="解锁组" hint="只对规则订阅生效。">
                 <OptionGroup>
-                  <OptionRow label="按出口检测建解锁组" hint="给 YouTube、Netflix、Disney+、AI、TikTok 各建一个只放检测可用节点的组，对应分类默认先走它。关掉后这些分类照常先走主选择。">
+                  <OptionRow label="按出口检测建解锁组" hint="默认关。打开后给 YouTube、Netflix、Disney+、AI、TikTok 各建一个只放检测可用节点的组，对应分类默认先走它；关着时这些分类照常先走主选择。">
                     <Checkbox aria-label="按出口检测建解锁组" checked={options.unlockGroups} onCheckedChange={(checked) => setOptions((prev) => ({ ...prev, unlockGroups: checked === true }))} />
                   </OptionRow>
                 </OptionGroup>

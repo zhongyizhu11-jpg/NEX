@@ -77,7 +77,7 @@ export type ProxySubTokenOptions = {
   customRules: string;
   /**
    * 解锁组（规则订阅）：按出口检测给 YouTube / Netflix / Disney+ / AI / TikTok 各建一个只含检测可用节点的组，
-   * 对应分类组默认先走它（shared/proxySubUnlock.ts）。关掉后分类组照常先走主选择器。默认开。
+   * 对应分类组默认先走它（shared/proxySubUnlock.ts）。关着时分类组照常先走主选择器。默认关（2.3.505 起），要用的在令牌上打开。
    */
   unlockGroups: boolean;
 };
@@ -97,7 +97,7 @@ export const PROXY_SUB_DEFAULT_TOKEN_OPTIONS: ProxySubTokenOptions = {
   skipCertVerify: "default",
   categoryTargets: {},
   customRules: "",
-  unlockGroups: true,
+  unlockGroups: false,
 };
 
 export const PROXY_SUB_NAME_TEMPLATE_VARIABLES: ReadonlyArray<{ key: string; label: string }> = [
@@ -205,7 +205,7 @@ export function normalizeProxySubTokenOptions(input: unknown): ProxySubTokenOpti
     skipCertVerify: triState(raw.skipCertVerify),
     categoryTargets,
     customRules: textOf(raw.customRules, 10000),
-    unlockGroups: raw.unlockGroups !== false,
+    unlockGroups: raw.unlockGroups === true,
   };
 }
 

@@ -59,12 +59,12 @@ function fakeDeps(overrides: Partial<SegmentSpeedDeps> = {}) {
 test("分段测速：一段一段测，先正向再反向，测完停服务端；落地那段跳过；找出最慢的", async () => {
   resetSegmentSpeedRunsForTest();
   const { deps, log } = fakeDeps();
-  const started = startSegmentSpeedRun({ ruleId: 7, pathKey: "p1", pathName: "A 主线路", userId: 5, allowPrivate: false, plan, endpoints, deps });
+  const started = startSegmentSpeedRun({ lockKey: "rule:7", title: "A 主线路", userId: 5, allowPrivate: false, plan, endpoints, deps });
   assert.equal(started.view.status, "running");
   assert.deepEqual(started.view.segments.map((segment) => segment.status), ["running", "pending", "skipped"]);
   assert.equal(started.view.segments[2].error, LANDING_NOT_OWNED_REASON);
   // 同一条规则测着的时候不能再开一轮
-  assert.throws(() => startSegmentSpeedRun({ ruleId: 7, pathKey: "p1", pathName: "A", userId: 5, allowPrivate: false, plan, endpoints, deps }), /正在分段测速/);
+  assert.throws(() => startSegmentSpeedRun({ lockKey: "rule:7", title: "A", userId: 5, allowPrivate: false, plan, endpoints, deps }), /正在测，等这一轮测完/);
   await started.done;
 
   assert.deepEqual(log, [
@@ -106,7 +106,7 @@ test("分段测速：一段没装 iperf3 只算这一段出错，服务端照样
       return iperf3Output(50, 48);
     },
   });
-  const started = startSegmentSpeedRun({ ruleId: 8, pathKey: "p1", pathName: "A", userId: 5, allowPrivate: false, plan, endpoints, deps });
+  const started = startSegmentSpeedRun({ lockKey: "rule:8", title: "A", userId: 5, allowPrivate: false, plan, endpoints, deps });
   await started.done;
   const view = getSegmentSpeedRun(started.runId, { id: 5, role: "user" })!;
   assert.equal(view.status, "done");
@@ -122,7 +122,7 @@ test("分段测速：一段没装 iperf3 只算这一段出错，服务端照样
 test("分段测速：每段都失败整轮算 error；输出读不出带宽算这一段失败", async () => {
   resetSegmentSpeedRunsForTest();
   const { deps, log } = fakeDeps({ async runClient() { return "iperf3: error - unable to connect to server: Connection refused"; } });
-  const started = startSegmentSpeedRun({ ruleId: 9, pathKey: "p1", pathName: "A", userId: 5, allowPrivate: false, plan, endpoints, deps });
+  const started = startSegmentSpeedRun({ lockKey: "rule:9", title: "A", userId: 5, allowPrivate: false, plan, endpoints, deps });
   await started.done;
   const view = getSegmentSpeedRun(started.runId, { id: 5, role: "user" })!;
   assert.equal(view.status, "error");
@@ -135,11 +135,47 @@ test("分段测速：直连路径（只有到落地那段）直接 done，全部
   resetSegmentSpeedRunsForTest();
   const direct = planLineSegments({ entry: { hostId: 1, name: "入口" }, hops: [], landing: { name: "x" } });
   const { deps, log } = fakeDeps();
-  const started = startSegmentSpeedRun({ ruleId: 10, pathKey: "p1", pathName: "A", userId: 5, allowPrivate: false, plan: direct, endpoints: [null], deps });
+  const started = startSegmentSpeedRun({ lockKey: "rule:10", title: "A", userId: 5, allowPrivate: false, plan: direct, endpoints: [null], deps });
   await started.done;
   const view = getSegmentSpeedRun(started.runId, { id: 5, role: "user" })!;
   assert.equal(view.status, "done");
   assert.deepEqual(view.segments.map((segment) => segment.status), ["skipped"]);
   assert.equal(log.length, 0);
   resetSegmentSpeedRunsForTest();
+});
+
+test("对拉：按选的时长 / 并发测，正反之后再用 1 条连接测一次正向；带重传、每条流快慢和一句判断", async () => {
+  resetSegmentSpeedRunsForTest();
+  const calls: Array<{ reverse: boolean; streams: number; seconds: number }> = [];
+  const multi = `[  5]   0.00-10.00  sec   600 MBytes   503 Mbits/sec  60000             sender
+[  5]   0.00-10.00  sec   598 MBytes   501 Mbits/sec                  receiver
+[  7]   0.00-10.00  sec   400 MBytes   335 Mbits/sec  40000             sender
+[  7]   0.00-10.00  sec   398 MBytes   333 Mbits/sec                  receiver
+[SUM]   0.00-10.00  sec  1000 MBytes   838 Mbits/sec  100000             sender
+[SUM]   0.00-10.00  sec   996 MBytes   834 Mbits/sec                  receiver
+`;
+  const { deps } = fakeDeps({
+    async runClient({ reverse, streams, seconds }) {
+      calls.push({ reverse, streams, seconds });
+      return streams === 1 ? iperf3Output(310, 300) : multi;
+    },
+  });
+  const pairPlan = [{ from: { hostId: 1, name: "Po0" }, to: { hostId: 2, name: "Jinx" }, skipReason: null }];
+  const started = startSegmentSpeedRun({
+    lockKey: "pair:1-2", title: "Po0 → Jinx", userId: 5, allowPrivate: true,
+    plan: pairPlan, endpoints: [{ fromHostId: 1, toHostId: 2, toAddress: "198.51.100.2" }],
+    options: { seconds: 10, streams: 2, single: true }, deps,
+  });
+  await started.done;
+  assert.deepEqual(calls, [
+    { reverse: false, streams: 2, seconds: 10 },
+    { reverse: true, streams: 2, seconds: 10 },
+    { reverse: false, streams: 1, seconds: 10 },
+  ]);
+  const segment = getSegmentSpeedRun(started.runId, { id: 5, role: "user" })!.segments[0];
+  assert.equal(segment.mbps, 834);
+  assert.equal(segment.singleMbps, 300);
+  assert.deepEqual(segment.streamRange, { min: 333, max: 501 });
+  assert.equal(segment.retransPerGB, 102400);
+  assert.match(segment.verdict!, /单条连接只有 300 Mbps，2 条一起才到 834.*重传很多/);
 });
