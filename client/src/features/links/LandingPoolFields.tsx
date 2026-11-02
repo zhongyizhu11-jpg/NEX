@@ -36,7 +36,7 @@ export type LandingDraft = {
   users: LandingDraftUser[];
 };
 
-/** 服务端给的落地配置视图（lineDiagnostics.nodePools 的 landing.config）。 */
+/** 服务端给的落地配置视图（nodePools.list 的 landing.config）。 */
 export type LandingConfigView = {
   protocol: string;
   port: number;

@@ -3352,7 +3352,7 @@ function RulesContent() {
   }, [form.routeMode, form.tunnelId, form.hostId, supportedTunnels]);
   const routeHostOptions = useMemo<RouteHostOption[]>(() => routeHostOptionsOf(hosts as any[]), [hosts]);
   // 线路编辑：节点池、能当一段的隧道（入口在哪台、出口到哪台），入口叫什么；隧道规则把入口前面那段如实写出来。
-  const nodePoolsQuery = trpc.lineDiagnostics.nodePools.useQuery(undefined, { enabled: !!form.failoverEnabled, staleTime: 30_000, refetchOnWindowFocus: false });
+  const nodePoolsQuery = trpc.nodePools.list.useQuery(undefined, { enabled: !!form.failoverEnabled, staleTime: 30_000, refetchOnWindowFocus: false });
   const routeLinePools = useMemo<RouteLinePool[]>(() => routeLinePoolsOf(nodePoolsQuery.data as any[]), [nodePoolsQuery.data]);
   const routeLineTunnels = useMemo<RouteLineTunnel[]>(() => routeLineTunnelsOf(tunnels as any[]), [tunnels]);
   const routeEntryName = useMemo(() => {

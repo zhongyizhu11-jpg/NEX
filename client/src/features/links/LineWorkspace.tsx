@@ -139,12 +139,12 @@ export function NodePoolsSection({ hosts, onOpenGroup, isAdmin = false }: {
   onOpenGroup?: (mode: PoolGroupMode, groupId: number) => void;
 }) {
   const utils = trpc.useUtils();
-  const board = trpc.lineDiagnostics.poolBoard.useQuery(undefined, { staleTime: 15_000, refetchInterval: 30_000 });
+  const board = trpc.nodePools.board.useQuery(undefined, { staleTime: 15_000, refetchInterval: 30_000 });
   const refresh = () => {
-    void utils.lineDiagnostics.poolBoard.invalidate();
-    void utils.lineDiagnostics.nodePools.invalidate();
+    void utils.nodePools.board.invalidate();
+    void utils.nodePools.list.invalidate();
   };
-  const save = trpc.lineDiagnostics.nodePoolSave.useMutation({
+  const save = trpc.nodePools.save.useMutation({
     onSuccess: (result) => {
       refresh();
       setEditing(null);
@@ -170,7 +170,7 @@ export function NodePoolsSection({ hosts, onOpenGroup, isAdmin = false }: {
     },
     onError: (error) => toast.error(error.message),
   });
-  const rotate = trpc.lineDiagnostics.nodePoolRotate.useMutation({
+  const rotate = trpc.nodePools.rotate.useMutation({
     onSuccess: (result) => {
       refresh();
       void utils.proxyInbounds.list.invalidate();
@@ -178,12 +178,12 @@ export function NodePoolsSection({ hosts, onOpenGroup, isAdmin = false }: {
     },
     onError: (error) => toast.error(error.message),
   });
-  const remove = trpc.lineDiagnostics.nodePoolDelete.useMutation({
+  const remove = trpc.nodePools.delete.useMutation({
     onSuccess: () => { refresh(); setEditing(null); toast.success("已删掉"); },
     onError: (error) => toast.error(error.message),
   });
   // 落地池直连域名「自动」（2.3.501，管理员）：每点一次起一个新的，所以是 mutation
-  const suggestDomain = trpc.lineDiagnostics.nodePoolSuggestDomain.useMutation({
+  const suggestDomain = trpc.nodePools.suggestDomain.useMutation({
     onSuccess: (result) => {
       if (result.domain) setEditing((current) => (current ? { ...current, directDomain: result.domain || "" } : current));
       else toast.warning(result.reason || "没起出域名，自己填一个");

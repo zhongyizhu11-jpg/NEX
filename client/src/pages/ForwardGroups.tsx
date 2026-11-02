@@ -894,13 +894,13 @@ export function ForwardGroupsContent({
   // 2.3.499：组回到分类条上各自一页，卡上也写跟着哪个池（以前只有节点池页上看得见）。
   const editingPoolId = editingId ? Number(groups.find((group) => Number(group.id) === editingId)?.poolId || 0) || null : null;
   const anyFollowsPool = groups.some((group) => Number(group.poolId || 0) > 0);
-  const followedPoolQuery = trpc.lineDiagnostics.nodePools.useQuery(undefined, { enabled: anyFollowsPool || (showDialog && !!editingPoolId), staleTime: 30_000, refetchOnWindowFocus: false });
+  const followedPoolQuery = trpc.nodePools.list.useQuery(undefined, { enabled: anyFollowsPool || (showDialog && !!editingPoolId), staleTime: 30_000, refetchOnWindowFocus: false });
   const poolNameOf = (poolId: number) => ((followedPoolQuery.data || []) as Array<{ id: number; name: string }>).find((pool) => Number(pool.id) === poolId)?.name || `节点池 ${poolId}`;
   const followedPoolName = editingPoolId ? poolNameOf(editingPoolId) : "";
   const unfollowPool = trpc.forwardGroups.followPool.useMutation({
     onSuccess: () => {
       void utils.forwardGroups.invalidate();
-      void utils.lineDiagnostics.poolBoard.invalidate();
+      void utils.nodePools.board.invalidate();
       toast.success("不再跟着节点池，成员留着现在这些");
     },
     onError: (error) => toast.error(error.message),
