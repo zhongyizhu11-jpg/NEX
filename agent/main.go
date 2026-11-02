@@ -143,9 +143,6 @@ func resolveActionWorkerMaxConcurrency() int {
 const actionQueueBacklogLogThreshold = 50
 const actionQueueSlowWaitThreshold = 3 * time.Second
 const actionSlowHandleThreshold = 15 * time.Second
-const actionShellTimeout = 90 * time.Second
-const actionShellSlowThreshold = 5 * time.Second
-const shellInlineMaxBytes = 8 * 1024
 const protocolGuardSampleMaxBytes = 512
 const protocolGuardTLSMinRecordSize = 64
 const protocolGuardSOCKS5MaxMethods = 16
@@ -201,7 +198,7 @@ const legacyTunnelConfigPath = "/etc/forwardx-tunnels/config.json"
 const legacyRuntimeConfigPath = "/etc/forwardx-runtime/config.json"
 const legacyTunnelRuntimeConfigPath = "/etc/forwardx-tunnel-runtime/config.json"
 const desiredStateRecordPath = "/var/lib/forwardx-agent/desired_state_records.json"
-const desiredStateVersionPath = "/var/lib/forwardx-agent/desired_state_agent_version"
+const desiredStateVersionPath = agentStateDir + "/desired_state_agent_version"
 
 var upgradeStarted int32
 var upgradeStartedAt int64
@@ -4321,19 +4318,20 @@ func heartbeat(cfg Config, forceReconcile ...bool) (heartbeatResult, error) {
 	// Interactive tasks are independent from desired-state reconciliation. Accept
 	// them before an early local-state return so a heartbeat response cannot drop
 	// a task while the Agent is rebuilding its runtime snapshot.
+	// 都走 interactiveTasks：按任务 ID 去重、全局限并发、超出时给面板回失败结果（interactive_tasks.go）。
 	for _, task := range resp.LookingGlassTests {
-		go handleLookingGlassTask(cfg, task)
+		dispatchLookingGlassTask(cfg, task)
 	}
 	// 一键链路诊断（2.2.226 起）：每个任务一组检查，并发跑完整包回报。
 	for _, task := range resp.DiagnosticsTasks {
-		go handleDiagnosticsTask(cfg, task)
+		dispatchDiagnosticsTask(cfg, task)
 	}
 	// 规则的「连接」清单（2.2.237 起）：现场读一遍 /proc 或 conntrack 回给面板。
 	for _, task := range resp.RuleConnectionTasks {
-		go handleRuleConnectionsTask(cfg, task)
+		dispatchRuleConnectionsTask(cfg, task)
 	}
 	for _, task := range resp.Iperf3Tasks {
-		go handleIperf3Task(cfg, task)
+		dispatchIperf3Task(cfg, task)
 	}
 	for _, task := range resp.PluginTasks {
 		enqueuePluginAgentTask(cfg, task)
@@ -4628,8 +4626,11 @@ func tcpingDueInterval(serviceProbes []hostProbeServiceProbe, ruleCount int, lin
 	}
 	return interval
 }
-func handleLookingGlassTask(cfg Config, task lookingGlassTask) {
-	result := runLookingGlassTask(cfg, task)
+func handleLookingGlassTask(ctx context.Context, cfg Config, task lookingGlassTask) {
+	reportLookingGlassFinal(cfg, task, runLookingGlassTask(ctx, cfg, task))
+}
+
+func reportLookingGlassFinal(cfg Config, task lookingGlassTask, result lookingGlassResult) {
 	if err := post(cfg, "/api/agent/looking-glass-result", map[string]any{"result": result}, &map[string]any{}); err != nil {
 		if isTransientAgentCommError(err) {
 			logAgentCommError("looking-glass-result", err)
@@ -4649,8 +4650,13 @@ func reportLookingGlassProgress(cfg Config, result lookingGlassResult) {
 	}
 }
 
-func handleIperf3Task(cfg Config, task iperf3Task) {
-	result := runIperf3Task(cfg, task)
+func handleIperf3Task(ctx context.Context, cfg Config, task iperf3Task) {
+	var result iperf3Result
+	if err := ctx.Err(); err != nil {
+		result = iperf3RejectedResult(task, interactiveTaskQueueTimeoutMessage)
+	} else {
+		result = runIperf3Task(cfg, task)
+	}
 	if err := post(cfg, "/api/agent/iperf3-result", map[string]any{"result": result}, &map[string]any{}); err != nil {
 		if isTransientAgentCommError(err) {
 			logAgentCommError("iperf3-result", err)
@@ -4876,7 +4882,7 @@ func stopIperf3Server(reason string) string {
 	return output
 }
 
-func runLookingGlassTask(cfg Config, task lookingGlassTask) lookingGlassResult {
+func runLookingGlassTask(ctx context.Context, cfg Config, task lookingGlassTask) lookingGlassResult {
 	started := time.Now()
 	result := lookingGlassResult{
 		TaskID:            task.TaskID,
@@ -4946,7 +4952,7 @@ func runLookingGlassTask(cfg Config, task lookingGlassTask) lookingGlassResult {
 		result.DurationMs = durationMs
 		reportLookingGlassProgress(cfg, result)
 	}
-	output, exitCode, timedOut := runLookingGlassCommand(command, args, timeout, progress)
+	output, exitCode, timedOut := runLookingGlassCommandContext(ctx, command, args, timeout, progress)
 	result.Output = output
 	if strings.TrimSpace(result.Output) == "" {
 		result.Output = "命令没有返回输出"
@@ -5078,7 +5084,12 @@ func missingNetworkToolMessage(tool string) string {
 const lookingGlassProgressInterval = time.Second
 
 func runLookingGlassCommand(name string, args []string, timeout time.Duration, onProgress func(string, int)) (string, *int, bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	return runLookingGlassCommandContext(context.Background(), name, args, timeout, onProgress)
+}
+
+// runLookingGlassCommandContext 同上，parent 到期（交互任务总时限）时也结束命令。
+func runLookingGlassCommandContext(parent context.Context, name string, args []string, timeout time.Duration, onProgress func(string, int)) (string, *int, bool) {
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	started := time.Now()
 	cmd := exec.CommandContext(ctx, name, args...)
@@ -5698,7 +5709,7 @@ func handleActionJobWithRuntimeSnapshot(cfg Config, a action, releaseRuntimeGate
 		if ok && shouldVerifyManagedRuntimeListen(a) && !waitForManagedRuntimeActionListenReady(a, 12*time.Second) {
 			ok = false
 			message := fmt.Sprintf("managed runtime listener not ready after apply port=%d protocol=%s forwardType=%s", a.SourcePort, normalizeRuntimeProtocol(a.Protocol), strings.TrimSpace(a.ForwardType))
-			actionMessage.set(message)
+			actionMessage.set("%s", message)
 			if shouldLogAgentReport(fmt.Sprintf("managed-runtime-listen-missing:%d:%s:%s", a.SourcePort, normalizeRuntimeProtocol(a.Protocol), a.ForwardType), agentReportLogInterval) {
 				logf("%s %s readiness={%s} owner=%s", message, actionLogSummary(a), managedRuntimeActionReadinessDiagnostic(a), listenPortOwnerSummary(a.SourcePort))
 			}
@@ -5732,7 +5743,7 @@ func handleActionJobWithRuntimeSnapshot(cfg Config, a action, releaseRuntimeGate
 	if ok && !skippedStaleRemove && actionRequiresKernelForwardConsistency(a) && !newKernelForwardSnapshot().desiredActionConsistent(a) {
 		ok = false
 		message := fmt.Sprintf("kernel firewall state mismatch after %s", strings.TrimSpace(a.Op))
-		actionMessage.set(message)
+		actionMessage.set("%s", message)
 		if shouldLogAgentReport(fmt.Sprintf("kernel-forward-mismatch:%d:%d:%s:%s", a.RuleID, a.SourcePort, a.ForwardType, a.Op), agentReportLogInterval) {
 			logf("%s %s", message, actionLogSummary(a))
 		}
@@ -8097,7 +8108,7 @@ func managedServiceActionSignature(a action, serviceName string, unit string) st
 }
 
 func managedServiceSignaturePath(name string) string {
-	return "/var/lib/forwardx-agent/service_" + name + ".signature"
+	return agentStatePath("service_" + name + ".signature")
 }
 
 func managedServiceSignatureMatches(name string, signature string) bool {
@@ -8114,8 +8125,7 @@ func writeManagedServiceSignature(name string, signature string) {
 	if signature == "" {
 		return
 	}
-	_ = os.MkdirAll("/var/lib/forwardx-agent", 0755)
-	_ = os.WriteFile(managedServiceSignaturePath(name), []byte(signature+"\n"), 0644)
+	_ = writeStateFile(managedServiceSignaturePath(name), []byte(signature+"\n"))
 }
 
 func managedServiceActive(name string) bool {
@@ -8555,31 +8565,29 @@ func writeState(a action) {
 	if a.RuleID <= 0 {
 		return
 	}
-	_ = os.MkdirAll("/var/lib/forwardx-agent", 0755)
 	port := strconv.Itoa(a.SourcePort)
 	resetTrafficStateIfRuleChanged(port, a.RuleID)
-	_ = os.WriteFile("/var/lib/forwardx-agent/port_"+port+".rule", []byte(strconv.Itoa(a.RuleID)), 0644)
-	_ = os.WriteFile("/var/lib/forwardx-agent/port_"+port+".fwtype", []byte(a.ForwardType), 0644)
+	_ = writeStateFile(agentStatePath("port_"+port+".rule"), []byte(strconv.Itoa(a.RuleID)))
+	_ = writeStateFile(agentStatePath("port_"+port+".fwtype"), []byte(a.ForwardType))
 	writeRuleTunnelState(port, a.TunnelID)
 	if a.TargetIP != "" && a.TargetPort > 0 {
-		_ = os.WriteFile("/var/lib/forwardx-agent/target_"+port+".info", []byte(fmt.Sprintf("%s\n%d\n%s\n", a.TargetIP, a.TargetPort, normalizeRuntimeProtocol(a.Protocol))), 0644)
+		_ = writeStateFile(agentStatePath("target_"+port+".info"), []byte(fmt.Sprintf("%s\n%d\n%s\n", a.TargetIP, a.TargetPort, normalizeRuntimeProtocol(a.Protocol))))
 	}
 }
 
 func writeTunnelState(a action) {
-	_ = os.MkdirAll("/var/lib/forwardx-agent", 0755)
 	port := strconv.Itoa(a.SourcePort)
-	_ = os.WriteFile("/var/lib/forwardx-agent/tunnel_"+port+".id", []byte(strconv.Itoa(a.TunnelID)), 0644)
-	_ = os.WriteFile("/var/lib/forwardx-agent/tunnel_"+port+".fwtype", []byte(a.ForwardType), 0644)
+	_ = writeStateFile(agentStatePath("tunnel_"+port+".id"), []byte(strconv.Itoa(a.TunnelID)))
+	_ = writeStateFile(agentStatePath("tunnel_"+port+".fwtype"), []byte(a.ForwardType))
 }
 
 func writeRuleTunnelState(port string, tunnelID int) {
 	if strings.TrimSpace(port) == "" {
 		return
 	}
-	path := "/var/lib/forwardx-agent/port_" + port + ".tunnel"
+	path := agentStatePath("port_" + port + ".tunnel")
 	if tunnelID > 0 {
-		_ = os.WriteFile(path, []byte(strconv.Itoa(tunnelID)), 0644)
+		_ = writeStateFile(path, []byte(strconv.Itoa(tunnelID)))
 		return
 	}
 	_ = os.Remove(path)
@@ -8589,14 +8597,13 @@ func writeRunningRuleState(r runningRule) {
 	if r.RuleID <= 0 || r.SourcePort <= 0 {
 		return
 	}
-	_ = os.MkdirAll("/var/lib/forwardx-agent", 0755)
 	port := strconv.Itoa(r.SourcePort)
 	resetTrafficStateIfRuleChanged(port, r.RuleID)
-	_ = os.WriteFile("/var/lib/forwardx-agent/port_"+port+".rule", []byte(strconv.Itoa(r.RuleID)), 0644)
-	_ = os.WriteFile("/var/lib/forwardx-agent/port_"+port+".fwtype", []byte(r.ForwardType), 0644)
+	_ = writeStateFile(agentStatePath("port_"+port+".rule"), []byte(strconv.Itoa(r.RuleID)))
+	_ = writeStateFile(agentStatePath("port_"+port+".fwtype"), []byte(r.ForwardType))
 	writeRuleTunnelState(port, r.TunnelID)
 	if r.TargetIP != "" && r.TargetPort > 0 {
-		_ = os.WriteFile("/var/lib/forwardx-agent/target_"+port+".info", []byte(fmt.Sprintf("%s\n%d\n%s\n", r.TargetIP, r.TargetPort, normalizeRuntimeProtocol(r.Protocol))), 0644)
+		_ = writeStateFile(agentStatePath("target_"+port+".info"), []byte(fmt.Sprintf("%s\n%d\n%s\n", r.TargetIP, r.TargetPort, normalizeRuntimeProtocol(r.Protocol))))
 	}
 }
 
@@ -8712,6 +8719,11 @@ func syncRunningRuleState(rules []runningRule, protectedPorts map[string]bool) {
 			continue
 		}
 		port := strings.TrimSuffix(strings.TrimPrefix(name, "port_"), ".rule")
+		if !shellSafePort(port) {
+			// 状态目录里不是数字端口的文件不是 Agent 写的，别拿它的名字去拼清理命令。
+			unsafeShellPortNoop("syncRunningRuleState", port)
+			continue
+		}
 		if !wanted[port] {
 			localRuleID := readRuleIDByPort(port)
 			if desired, ok := desiredRunningRuleForStatePort(localRuleID, atoi(port)); ok {
@@ -8758,6 +8770,9 @@ func nftRuleCleanupCmd(ruleID int) string {
 }
 
 func nftPortCleanupCmd(port string, protocol string) string {
+	if !shellSafePort(port) {
+		return unsafeShellPortNoop("nftPortCleanupCmd", port)
+	}
 	protos := []string{"tcp", "udp"}
 	if protocol == "tcp" || protocol == "udp" {
 		protos = []string{protocol}
@@ -8887,6 +8902,9 @@ func iptablesRuleTag(ruleID int) string {
 }
 
 func iptablesAgentDeleteCountingRules(binary string, port string) string {
+	if !shellSafePort(port) {
+		return unsafeShellPortNoop("iptablesAgentDeleteCountingRules", port)
+	}
 	marker := "fwx-stat-" + port + ":"
 	inChain := "FWX_IN_" + port
 	outChain := "FWX_OUT_" + port
@@ -8901,6 +8919,9 @@ func iptablesAgentDeleteCountingRules(binary string, port string) string {
 // iptablesAgentDedupeCountingRules 删掉同一链里逐字相同的重复计数规则，只保留第一条
 // （保留下来的那条计数器不动）。重复来自旧版本 `-C || -A` 在 xtables 锁忙时的重复追加。
 func iptablesAgentDedupeCountingRules(binary string, port string) string {
+	if !shellSafePort(port) {
+		return unsafeShellPortNoop("iptablesAgentDedupeCountingRules", port)
+	}
 	marker := "fwx-stat-" + port + ":"
 	bin := iptablesAgentBin(binary)
 	cmd := fmt.Sprintf(`%s -t mangle -S 2>/dev/null | awk -v marker=%s '/^-A / {chain=$2; position[chain]++; if (index($0, marker) && seen[$0]++) {count++; chains[count]=chain; numbers[count]=position[chain]}} END {for (i=count; i>=1; i--) print chains[i], numbers[i]}' | while read -r chain number; do [ -n "$chain" ] && [ -n "$number" ] && %s -t mangle -D "$chain" "$number" 2>/dev/null || true; done`, bin, shellQuote(marker), bin)
@@ -8928,6 +8949,9 @@ func iptablesAgentDnatTarget(targetIP string, targetPort int) string {
 }
 
 func iptablesAgentDeleteDnatRulesForPort(binary string, port string, protocol string) string {
+	if !shellSafePort(port) {
+		return unsafeShellPortNoop("iptablesAgentDeleteDnatRulesForPort", port)
+	}
 	protos := []string{"tcp", "udp"}
 	if protocol == "tcp" || protocol == "udp" {
 		protos = []string{protocol}
@@ -8956,7 +8980,7 @@ func iptablesAgentDeleteDnatRulesForPort(binary string, port string, protocol st
 //
 // 读取 PREROUTING 失败时宁可保留无标记副本（最多留一条无害的放行/伪装），也不误删。
 func iptablesAgentTargetCleanupCmds(ruleID int, port string, targetIP string, targetPort int, protocol string) []string {
-	if strings.TrimSpace(port) == "" || !iptablesAgentIsIPAddress(targetIP) || targetPort <= 0 {
+	if !shellSafePort(port) || !iptablesAgentIsIPAddress(targetIP) || targetPort <= 0 {
 		return nil
 	}
 	target := iptablesAgentAddress(targetIP)
@@ -9051,6 +9075,10 @@ func managedPortCleanupCmds(port string) []string {
 }
 
 func managedPortCleanupCmdsWithNginx(port string, cleanupNginx bool) []string {
+	if !shellSafePort(port) {
+		unsafeShellPortNoop("managedPortCleanupCmds", port)
+		return nil
+	}
 	inMarker := "fwx-stat-" + port + ":in"
 	outMarker := "fwx-stat-" + port + ":out"
 	cmds := append(managedListenerCleanupCmds(port),
@@ -9124,6 +9152,10 @@ func managedListenerCleanupCmds(port string) []string {
 }
 
 func managedListenerCleanupCmdsForProtocol(port string, protocol string) []string {
+	if !shellSafePort(port) {
+		unsafeShellPortNoop("managedListenerCleanupCmds", port)
+		return nil
+	}
 	protocol = normalizeRuntimeProtocol(protocol)
 	cmds := []string{}
 	seen := map[string]bool{}
@@ -9151,10 +9183,17 @@ func managedListenerCleanupCmdsForProtocol(port string, protocol string) []strin
 }
 
 func managedNginxCleanupShell(port string) string {
+	if !shellSafePort(port) {
+		return unsafeShellPortNoop("managedNginxCleanupShell", port)
+	}
 	return "if [ -f /etc/forwardx/nginx/nginx.conf ] && grep -Eq \"listen .*:" + port + "( |;)|listen \\\\[::\\\\]:" + port + "( |;)|listen 0.0.0.0:" + port + "( |;)\" /etc/forwardx/nginx/nginx.conf 2>/dev/null; then listen_count=$(grep -E '^[[:space:]]*listen[[:space:]]+' /etc/forwardx/nginx/nginx.conf 2>/dev/null | wc -l | tr -d ' '); if [ \"${listen_count:-0}\" -le 1 ]; then " + managedServiceCleanupShell("forwardx-nginx") + "; else echo \"[nginx] keep shared forwardx-nginx while replacing port " + port + "\"; fi; fi"
 }
 
 func fxpPortCleanupCmds(port string) []string {
+	if !shellSafePort(port) {
+		unsafeShellPortNoop("fxpPortCleanupCmds", port)
+		return nil
+	}
 	return []string{
 		"for pid in $(pgrep -f '[f]orwardx-fxp.*fxp-.*-" + port + "\\.json' 2>/dev/null || true); do if [ \"$pid\" = \"$$\" ] || [ \"$pid\" = \"$PPID\" ]; then continue; fi; kill \"$pid\" 2>/dev/null || true; done",
 		"rm -f /run/forwardx-agent/fxp-*-" + port + ".json 2>/dev/null || true",
@@ -9186,6 +9225,9 @@ func atoi(s string) int {
 const nftProcessTrafficTable = "forwardx_traffic"
 
 func nftProcessCountingCleanupCmd(port string) string {
+	if !shellSafePort(port) {
+		return unsafeShellPortNoop("nftProcessCountingCleanupCmd", port)
+	}
 	marker := "fwx-stat-" + port + ":"
 	return fmt.Sprintf(`if command -v nft >/dev/null 2>&1 && nft list table inet %s >/dev/null 2>&1; then for c in input output forward; do for h in $(nft -a list chain inet %s "$c" 2>/dev/null | awk -v marker=%s 'index($0, marker) {print $NF}'); do nft delete rule inet %s "$c" handle "$h" 2>/dev/null || true; done; done; fi; true`, nftProcessTrafficTable, nftProcessTrafficTable, shellQuote(marker), nftProcessTrafficTable)
 }
@@ -12590,6 +12632,14 @@ func (i *protocolGuardInspection) inspectClient(chunk []byte) (string, bool) {
 	if i.blocked || i.clientInspectionDone {
 		return "", false
 	}
+	if len(i.clientSample) == 0 {
+		// 请求行前面的空行不占采样额度：HTTP 服务端会跳过它们（RFC 9112 2.2），
+		// 不跳的话先发几百字节 CRLF 就能把采样撑满、绕过拦截。
+		chunk = trimLeadingHTTPBlankLines(chunk)
+		if len(chunk) == 0 {
+			return "", false
+		}
+	}
 	if len(i.clientSample) < protocolGuardSampleMaxBytes {
 		remaining := protocolGuardSampleMaxBytes - len(i.clientSample)
 		if remaining > len(chunk) {
@@ -15626,7 +15676,16 @@ func buildProxyProtocolV1(info proxyProtocolInfo, fallbackSource net.Addr, targe
 	return fmt.Sprintf("PROXY %s %s %s %d %d\r\n", family, sourceIP, destIP, sourcePort, destPort)
 }
 
+// trimLeadingHTTPBlankLines 去掉开头的 CR/LF。只用于协议识别的采样，转发的
+// 数据原样不动。TLS、SOCKS 的首字节不会是 CR/LF，去掉不影响它们的识别。
+// 和 forwardx-fxp 里的同名函数保持一致（对照样本见仓库根目录 testdata/protocol_detection.json）。
+func trimLeadingHTTPBlankLines(data []byte) []byte {
+	return bytes.TrimLeft(data, "\r\n")
+}
+
 func detectHTTPProtocol(data []byte) bool {
+	// 服务端会跳过请求行之前的空行，这里也跳过，免得前面垫一个 CRLF 就绕过拦截。
+	data = trimLeadingHTTPBlankLines(data)
 	if bytes.HasPrefix(data, []byte("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")) {
 		return true
 	}
@@ -15638,11 +15697,13 @@ func detectHTTPProtocol(data []byte) bool {
 	if lineEnd < 0 {
 		return false
 	}
-	parts := bytes.Split(data[:lineEnd], []byte{' '})
+	// 连续多个空格按一个算：nginx 之类的服务端容忍请求行里的多余空格。
+	parts := bytes.FieldsFunc(data[:lineEnd], func(r rune) bool { return r == ' ' })
 	if len(parts) != 3 {
 		return false
 	}
-	method := string(parts[0])
+	// 方法不分大小写：有的服务端和代理照收小写方法，大小写一换就绕过去了。
+	method := strings.ToUpper(string(parts[0]))
 	switch method {
 	case "GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS", "PATCH", "CONNECT", "TRACE":
 	default:
@@ -15677,6 +15738,9 @@ func validHTTPRequestTarget(method string, target []byte) bool {
 	return bytes.HasPrefix(lower, []byte("http://")) || bytes.HasPrefix(lower, []byte("https://"))
 }
 
+// detectTLSProtocol 只认 ClientHello 的形状（记录头 + 握手类型 + 长度对得上），不只看前三个字节：
+// 加密协议（SS2022 等）的随机首包碰巧以 16 03 0x 开头时不能被当成 TLS 拦掉。
+// 和 forwardx-fxp 里的同名函数保持一致（对照样本见仓库根目录 testdata/protocol_detection.json）。
 func detectTLSProtocol(data []byte) bool {
 	if len(data) < 9 {
 		return false
@@ -16472,241 +16536,6 @@ func calcMAC(key, iv, ct []byte, ts int64) []byte {
 	return m.Sum(nil)
 }
 
-func runShell(cmd string) bool {
-	ok, _ := runShellWithOutput(cmd)
-	return ok
-}
-
-func runShellWithOutput(cmd string) (bool, string) {
-	if len(cmd) > shellInlineMaxBytes {
-		logVerbosef("exec: long shell command bytes=%d via temp script", len(cmd))
-	} else {
-		logVerbosef("exec: %s", cmd)
-	}
-	started := time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), actionShellTimeout)
-	defer cancel()
-	c, cleanup, viaTemp, err := shellCommand(ctx, cmd)
-	if err != nil {
-		logf("exec failed before start err=%v %s", err, shellCommandLogSummary(cmd))
-		return false, compactShellFailureOutput(nil, err, false)
-	}
-	out, err := c.CombinedOutput()
-	cleanup()
-	retriedViaTemp := false
-	if isArgumentListTooLong(err) && !viaTemp && ctx.Err() != context.DeadlineExceeded {
-		logf("exec retry via temp script after argument list too long bytes=%d", len(cmd))
-		c, cleanup, _, err = shellCommandTempScript(ctx, cmd)
-		if err != nil {
-			logf("exec failed before temp retry err=%v %s", err, shellCommandLogSummary(cmd))
-			return false, compactShellFailureOutput(nil, err, false)
-		}
-		retriedViaTemp = true
-		viaTemp = true
-		out, err = c.CombinedOutput()
-		cleanup()
-	}
-	elapsed := time.Since(started)
-	if len(out) > 0 && (err != nil || ctx.Err() == context.DeadlineExceeded || agentVerboseLogs) {
-		logf("%s", strings.TrimSpace(string(out)))
-	}
-	if ctx.Err() == context.DeadlineExceeded {
-		logf("exec timeout duration=%s temp=%v retriedTemp=%v outputBytes=%d %s", elapsed.Round(time.Millisecond), viaTemp, retriedViaTemp, len(out), shellCommandLogSummary(cmd))
-		return false, compactShellFailureOutput(out, ctx.Err(), true)
-	}
-	if err != nil {
-		logf("exec failed duration=%s temp=%v retriedTemp=%v outputBytes=%d err=%v %s", elapsed.Round(time.Millisecond), viaTemp, retriedViaTemp, len(out), err, shellCommandLogSummary(cmd))
-		return false, compactShellFailureOutput(out, err, false)
-	}
-	if elapsed >= actionShellSlowThreshold {
-		logf("exec slow duration=%s temp=%v retriedTemp=%v outputBytes=%d %s", elapsed.Round(time.Millisecond), viaTemp, retriedViaTemp, len(out), shellCommandLogSummary(cmd))
-	}
-	return true, ""
-}
-
-func runShellQuiet(cmd string) bool {
-	if strings.TrimSpace(cmd) == "" {
-		return true
-	}
-	started := time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	c, cleanup, viaTemp, err := shellCommand(ctx, cmd)
-	if err != nil {
-		return false
-	}
-	err = c.Run()
-	cleanup()
-	retriedViaTemp := false
-	if isArgumentListTooLong(err) && !viaTemp && ctx.Err() != context.DeadlineExceeded {
-		c, cleanup, _, err = shellCommandTempScript(ctx, cmd)
-		if err != nil {
-			return false
-		}
-		retriedViaTemp = true
-		viaTemp = true
-		err = c.Run()
-		cleanup()
-	}
-	elapsed := time.Since(started)
-	ok := err == nil && ctx.Err() != context.DeadlineExceeded
-	if ctx.Err() == context.DeadlineExceeded {
-		logf("exec quiet timeout duration=%s temp=%v retriedTemp=%v %s", elapsed.Round(time.Millisecond), viaTemp, retriedViaTemp, shellCommandLogSummary(cmd))
-	} else if elapsed >= actionShellSlowThreshold {
-		logf("exec quiet slow ok=%v duration=%s temp=%v retriedTemp=%v %s", ok, elapsed.Round(time.Millisecond), viaTemp, retriedViaTemp, shellCommandLogSummary(cmd))
-	}
-	return ok
-}
-
-func runShellBatch(commands []string) bool {
-	ok, _ := runShellBatchWithOutput(commands)
-	return ok
-}
-
-func runShellBatchWithOutput(commands []string) (bool, string) {
-	filtered := make([]string, 0, len(commands))
-	for _, cmd := range commands {
-		if strings.TrimSpace(cmd) != "" {
-			filtered = append(filtered, cmd)
-		}
-	}
-	if len(filtered) == 0 {
-		return true, ""
-	}
-	if len(filtered) == 1 {
-		return runShellWithOutput(filtered[0])
-	}
-	var script strings.Builder
-	script.WriteString("set +e\n")
-	script.WriteString("__forwardx_status=0\n")
-	for _, cmd := range filtered {
-		script.WriteString("(\n")
-		script.WriteString(cmd)
-		script.WriteString("\n) || __forwardx_status=1\n")
-	}
-	script.WriteString("exit $__forwardx_status\n")
-	return runShellWithOutput(script.String())
-}
-
-func compactShellFailureOutput(out []byte, err error, timedOut bool) string {
-	detail := strings.Join(strings.Fields(string(out)), " ")
-	if detail == "" {
-		switch {
-		case timedOut:
-			detail = "command timed out"
-		case err != nil:
-			detail = err.Error()
-		}
-	}
-	const maxRunes = 240
-	runes := []rune(detail)
-	if len(runes) > maxRunes {
-		return "..." + string(runes[len(runes)-(maxRunes-3):])
-	}
-	return detail
-}
-
-func isArgumentListTooLong(err error) bool {
-	return err != nil && strings.Contains(strings.ToLower(err.Error()), "argument list too long")
-}
-
-func shellCommandLogSummary(cmd string) string {
-	h := fnv.New64a()
-	_, _ = h.Write([]byte(cmd))
-	return fmt.Sprintf("cmdHash=%016x cmdBytes=%d", h.Sum64(), len(cmd))
-}
-
-func shellCommand(ctx context.Context, cmd string) (*exec.Cmd, func(), bool, error) {
-	if len(cmd) <= shellInlineMaxBytes {
-		c := exec.CommandContext(ctx, "sh", "-c", cmd)
-		prepareShellCommand(c)
-		return c, func() {}, false, nil
-	}
-	return shellCommandTempScript(ctx, cmd)
-}
-
-// shellCommandWaitDelay：sh 退出（或超时被杀）后，最多再等这么久让输出管道关闭。
-// 命令里后台起的孙进程如果继承了 stdout/stderr，不设这个值 Wait 会一直阻塞，
-// 进而让 actionPendingCount 永远降不下来、流量采集再也不跑。
-var shellCommandWaitDelay = 5 * time.Second
-
-// shellStandardPath 是 systemd 默认的 PATH。改用 `sh -c`（不再 `-l` 读 /etc/profile，
-// 那里的脚本可能很慢甚至卡住）之后，用它补齐 Agent 进程 PATH 里缺的标准目录，
-// 保证 iptables/nft/systemctl 以及装在 /usr/local/bin 下的转发程序都能找到。
-const shellStandardPath = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-
-func prepareShellCommand(c *exec.Cmd) {
-	// 单独的进程组 + 超时时杀整个组：只杀 sh 会留下卡住的孙进程继续占着管道。
-	configureShellProcessGroup(c)
-	c.WaitDelay = shellCommandWaitDelay
-	c.Env = shellCommandEnv(os.Environ())
-}
-
-func shellCommandEnv(base []string) []string {
-	env := make([]string, 0, len(base)+2)
-	pathValue := ""
-	for _, item := range base {
-		if strings.HasPrefix(item, "PATH=") {
-			pathValue = strings.TrimPrefix(item, "PATH=")
-			continue
-		}
-		if strings.HasPrefix(item, iptablesWaitEnvName+"=") {
-			continue
-		}
-		env = append(env, item)
-	}
-	env = append(env, "PATH="+mergeShellPath(pathValue, shellStandardPath))
-	env = append(env, iptablesWaitEnvName+"="+iptablesWaitFlag())
-	return env
-}
-
-func mergeShellPath(current string, required string) string {
-	parts := []string{}
-	seen := map[string]bool{}
-	for _, list := range []string{current, required} {
-		for _, dir := range strings.Split(list, ":") {
-			dir = strings.TrimSpace(dir)
-			if dir == "" || seen[dir] {
-				continue
-			}
-			seen[dir] = true
-			parts = append(parts, dir)
-		}
-	}
-	return strings.Join(parts, ":")
-}
-
-func shellCommandTempScript(ctx context.Context, cmd string) (*exec.Cmd, func(), bool, error) {
-	dir := filepath.Join(os.TempDir(), "forwardx-agent")
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return nil, func() {}, true, err
-	}
-	file, err := os.CreateTemp(dir, "shell-*.sh")
-	if err != nil {
-		return nil, func() {}, true, err
-	}
-	path := file.Name()
-	cleanup := func() {
-		_ = os.Remove(path)
-	}
-	if _, err := file.WriteString("#!/bin/sh\n" + cmd + "\n"); err != nil {
-		_ = file.Close()
-		cleanup()
-		return nil, func() {}, true, err
-	}
-	if err := file.Close(); err != nil {
-		cleanup()
-		return nil, func() {}, true, err
-	}
-	if err := os.Chmod(path, 0700); err != nil {
-		cleanup()
-		return nil, func() {}, true, err
-	}
-	c := exec.CommandContext(ctx, "sh", path)
-	prepareShellCommand(c)
-	return c, cleanup, true, nil
-}
-
 func listenPortOwnerSummary(port int) string {
 	if port <= 0 {
 		return ""
@@ -17237,10 +17066,6 @@ func diskStats() (usage int, used uint64, total uint64) {
 		total, _ = strconv.ParseUint(fields[2], 10, 64)
 	}
 	return usage, used, total
-}
-
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
 }
 
 func shouldLogAgentReport(key string, interval time.Duration) bool {

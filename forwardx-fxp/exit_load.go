@@ -306,7 +306,7 @@ func (s *exitEndpointSelector) pickByCapacity(candidates []int, skip int) int {
 			total += s.capacities[index]
 		}
 	}
-	value, err := randomUint64()
+	value, err := s.randomValue()
 	if err != nil || total <= 0 {
 		for _, index := range candidates {
 			if index != skip {

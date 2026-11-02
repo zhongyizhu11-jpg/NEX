@@ -16,45 +16,173 @@ concurrency:
   group: forwardx-ci-${{ github.ref }}
   cancel-in-progress: true
 
+# 拆成几个并行的任务：类型检查、面板测试、构建和文档、Go（agent / fxp 各一个）。
+# 最后的 verify 汇总结果，名字和以前那个单任务一样，分支保护里要求的检查不用改。
 jobs:
-  verify:
+  typecheck:
+    name: Typecheck
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: 10.28.1
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "22"
           cache: pnpm
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check versions
+        run: pnpm check:versions
+
+      - name: Type check
+        run: pnpm exec tsc --noEmit
+
+      # Lint（ESLint 基线，只拦新增）由依赖那一组接上：命令定下来以后加在这里。
+      # - name: Lint
+      #   run: <lint command>
+
+  panel-tests:
+    name: Panel tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
         with:
-          go-version: "1.23.x"
-          cache-dependency-path: |
-            agent/go.mod
-            forwardx-fxp/go.mod
-            forwardx-fxp/go.sum
+          version: 10.28.1
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: pnpm
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Verify panel
-        run: |
-          pnpm check:versions
-          pnpm exec tsc --noEmit
-          pnpm test:all
-          pnpm build
-          pnpm docs:build
+      - name: Run panel tests
+        run: pnpm test:all
 
-      - name: Verify Agent and FXP
+  build:
+    name: Build and docs
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.28.1
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build panel
+        run: pnpm build
+
+      - name: Build docs
+        run: pnpm docs:build
+
+  go:
+    name: Go (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - agent
+          - forwardx-fxp
+    defaults:
+      run:
+        working-directory: ${{ matrix.module }}
+    env:
+      # go.mod 里写的是 go 1.24（本地老工具链也能编），CI 和发布用下面这个受支持的版本，不自动换工具链。
+      GOTOOLCHAIN: local
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.x"
+          check-latest: true
+          cache-dependency-path: |
+            agent/go.sum
+            forwardx-fxp/go.sum
+
+      - name: gofmt
         run: |
-          (cd agent && go test ./... && go vet ./...)
-          (cd forwardx-fxp && go test ./... && go vet ./...)
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt needed:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test ./...
+
+      - name: Cross-compile linux/arm64
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /dev/null .
+
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+          "$(go env GOPATH)/bin/govulncheck" ./...
+
+      # staticcheck 先只看正确性类检查（SA），而且只报告不拦：第一次在 CI 上跑出来的问题清掉以后，
+      # 去掉 continue-on-error 让它开始拦。
+      - name: staticcheck
+        continue-on-error: true
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@v0.8.2
+          "$(go env GOPATH)/bin/staticcheck" -checks "SA*" ./...
+
+  verify:
+    name: verify
+    if: always()
+    needs:
+      - typecheck
+      - panel-tests
+      - build
+      - go
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: All checks passed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "results: $RESULTS"
+          for result in $RESULTS; do
+            if [ "$result" != "success" ]; then
+              echo "::error::a CI job did not succeed ($result)"
+              exit 1
+            fi
+          done

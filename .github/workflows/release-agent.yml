@@ -8,6 +8,8 @@ on:
 
 permissions:
   contents: write
+  # 查同一个提交上 CI 有没有跑过（见下面 Check CI result）。
+  actions: read
 
 concurrency:
   group: forwardx-release-agent-${{ github.ref_name }}
@@ -17,6 +19,9 @@ jobs:
   build-agent:
     if: github.event_name != 'push' || startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GOTOOLCHAIN: local
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -24,10 +29,10 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: "1.23.x"
+          go-version: "1.26.x"
+          check-latest: true
           cache-dependency-path: |
-            agent/go.mod
-            forwardx-fxp/go.mod
+            agent/go.sum
             forwardx-fxp/go.sum
 
       - name: Setup Node
@@ -51,7 +56,29 @@ jobs:
           FORWARDX_RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
         run: npm run check:versions
 
+      # 同一个提交在 main 上已经跑过完整 CI 并且通过，就不再重跑 Go 测试（发布面板那边同样处理）。
+      - name: Check CI result for this commit
+        id: ci
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          passed=false
+          if count="$(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs" \
+              -f head_sha="${GITHUB_SHA}" -f status=success -f per_page=50 \
+              --jq '[.workflow_runs[] | select(.head_sha == $ENV.GITHUB_SHA and .conclusion == "success" and (.event == "push" or .event == "workflow_dispatch"))] | length')"; then
+            if [ "${count:-0}" -gt 0 ] 2>/dev/null; then
+              passed=true
+            fi
+          else
+            echo "::warning::Could not query CI runs for ${GITHUB_SHA}; running Go tests"
+          fi
+          echo "CI already passed on ${GITHUB_SHA}: ${passed}"
+          echo "passed=${passed}" >> "$GITHUB_OUTPUT"
+
       - name: Run Agent tests and vet
+        if: steps.ci.outputs.passed != 'true'
         shell: bash
         run: |
           (cd agent && go test ./... && go vet ./...)

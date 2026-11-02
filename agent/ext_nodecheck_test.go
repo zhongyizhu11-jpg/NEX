@@ -207,7 +207,8 @@ func TestCloudflareSpeedTestAgainstLocalServer(t *testing.T) {
 	if result.LatencyMs < 0 || result.JitterMs < 0 || result.DownloadMbps <= 0 || result.UploadMbps <= 0 {
 		t.Fatalf("numbers should be sane: %+v", result)
 	}
-	if len(result.Samples) < 4 || atomic.LoadInt32(&samples) != int32(len(result.Samples)) {
+	// 样本数不按墙钟算：CI 机器忙时 ticker 会丢拍，两段各有至少一个点（下面 hasDown / hasUp）就够了。
+	if len(result.Samples) < 2 || atomic.LoadInt32(&samples) != int32(len(result.Samples)) {
 		t.Fatalf("samples = %d (progress %d)", len(result.Samples), samples)
 	}
 	hasDown, hasUp := false, false

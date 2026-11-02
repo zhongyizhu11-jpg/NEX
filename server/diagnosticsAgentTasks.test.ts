@@ -93,5 +93,6 @@ test("诊断结果的上报路径在 /api/sync 白名单里，排着的任务会
   assert.match(source, /diagnosticsTasks \} : \{\}\)/, "完整心跳把任务带下去");
   const agent = fs.readFileSync(path.join(process.cwd(), "agent/main.go"), "utf8");
   assert.match(agent, /DiagnosticsTasks\s+\[\]diagnosticsTask\s+`json:"diagnosticsTasks,omitempty"`/);
-  assert.match(agent, /go handleDiagnosticsTask\(cfg, task\)/);
+  // 交互任务走 interactiveTasks 限流（agent/interactive_tasks.go），不再直接开 goroutine。
+  assert.match(agent, /dispatchDiagnosticsTask\(cfg, task\)/);
 });

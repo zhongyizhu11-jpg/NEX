@@ -226,9 +226,12 @@ const (
 	fxpHalfCloseLinger   = 30 * time.Second
 	fxpUDPIdleTimeout    = 5 * time.Minute
 	fxpProtocolSampleMax = 512
-	fxpMasterContext     = "forwardx-fxp-v2 master"
-	fxpRuntimeVersion    = "2.2.137"
-	fxpFallbackRetry     = 5 * time.Second
+	// 和 agent 的同名常量一致：TLS 记录至少这么长才像 ClientHello；SOCKS5 问候最多这么多种方法。
+	protocolGuardTLSMinRecordSize = 64
+	protocolGuardSOCKS5MaxMethods = 16
+	fxpMasterContext              = "forwardx-fxp-v2 master"
+	fxpRuntimeVersion             = "2.2.137"
+	fxpFallbackRetry              = 5 * time.Second
 	// A node that stays down is re-probed on a growing delay, because probing a
 	// peer that accepts but never answers costs a whole handshake timeout.
 	fxpFallbackRetryMax = 2 * time.Minute
@@ -340,6 +343,15 @@ type exitEndpointSelector struct {
 	// probed 表示有 TCP 探测在盯这些端点；UDP 那条路就不再拿「地址解析成功」
 	// 去覆盖探测得出的健康结论。
 	probed atomic.Bool
+	// random 是 random / least_load 策略用的随机数来源；nil 用 crypto/rand。测试里换成固定种子。
+	random func() (uint64, error)
+}
+
+func (s *exitEndpointSelector) randomValue() (uint64, error) {
+	if s.random != nil {
+		return s.random()
+	}
+	return randomUint64()
 }
 
 // fallbackRetryDelay backs off a repeatedly failing endpoint.
@@ -576,7 +588,7 @@ func (s *exitEndpointSelector) pick(excluded map[int]bool, selectionKeys ...stri
 		return exitEndpoint{}, -1, false
 	}
 	if s.strategy == "random" {
-		if value, err := randomUint64(); err == nil {
+		if value, err := s.randomValue(); err == nil {
 			index := candidates[int(value%uint64(len(candidates)))]
 			return s.endpoints[index], index, true
 		}
@@ -1414,19 +1426,20 @@ func consumeProxyProtocolV1(data []byte) (proxyProtocolInfo, []byte, bool, error
 	if len(parts) != 6 || (parts[1] != "TCP4" && parts[1] != "TCP6") {
 		return proxyProtocolInfo{}, nil, false, errors.New("unsupported proxy protocol header")
 	}
-	srcPort, err := strconv.Atoi(parts[4])
-	if err != nil || srcPort <= 0 || srcPort > 65535 {
+	// 端口按 PROXY 协议规范是 0-65535（和 agent 一致）。
+	sourcePort, err := strconv.Atoi(parts[4])
+	if err != nil || sourcePort < 0 || sourcePort > 65535 {
 		return proxyProtocolInfo{}, nil, false, errors.New("invalid proxy protocol source port")
 	}
-	dstPort, err := strconv.Atoi(parts[5])
-	if err != nil || dstPort <= 0 || dstPort > 65535 {
+	destPort, err := strconv.Atoi(parts[5])
+	if err != nil || destPort < 0 || destPort > 65535 {
 		return proxyProtocolInfo{}, nil, false, errors.New("invalid proxy protocol destination port")
 	}
 	return proxyProtocolInfo{
 		SourceIP:   parts[2],
 		DestIP:     parts[3],
-		SourcePort: srcPort,
-		DestPort:   dstPort,
+		SourcePort: sourcePort,
+		DestPort:   destPort,
 	}, data[end+2:], true, nil
 }
 
@@ -3145,30 +3158,75 @@ func validHTTPRequestTarget(method string, target []byte) bool {
 	return bytes.HasPrefix(lower, []byte("http://")) || bytes.HasPrefix(lower, []byte("https://"))
 }
 
+// detectTLSProtocol 只认 ClientHello 的形状（记录头 + 握手类型 + 长度对得上），不只看前三个字节：
+// 加密协议（SS2022 等）的随机首包碰巧以 16 03 0x 开头时不能被当成 TLS 拦掉。
+// 和 agent 里的同名函数保持一致（对照样本见仓库根目录 testdata/protocol_detection.json）。
 func detectTLSProtocol(data []byte) bool {
-	return len(data) >= 5 && data[0] == 0x16 && data[1] == 0x03 && data[2] >= 0x01 && data[2] <= 0x04
+	if len(data) < 9 {
+		return false
+	}
+	if data[0] != 0x16 || data[1] != 0x03 || data[2] < 0x01 || data[2] > 0x04 {
+		return false
+	}
+	recordLen := int(binary.BigEndian.Uint16(data[3:5]))
+	if recordLen < protocolGuardTLSMinRecordSize || recordLen > 18432 {
+		return false
+	}
+	if data[5] != 0x01 {
+		return false
+	}
+	handshakeLen := int(data[6])<<16 | int(data[7])<<8 | int(data[8])
+	if handshakeLen <= 0 || handshakeLen+4 > recordLen {
+		return false
+	}
+	return true
 }
 
+// detectSocksProtocol 只认完整的客户端问候：SOCKS5 方法数和长度正好对上、没有重复方法；
+// SOCKS4 / 4a 请求到 userid（和 4a 的域名）结尾的 0 为止。后面还跟着别的字节的不算，
+// 免得加密流量的首包碰巧以 05 xx 开头就被拦。和 agent 里的同名函数保持一致。
 func detectSocksProtocol(data []byte) bool {
 	if len(data) < 2 {
 		return false
 	}
 	if data[0] == 0x04 {
-		return len(data) >= 7 && (data[1] == 0x01 || data[1] == 0x02)
+		return detectSocks4Request(data)
 	}
 	if data[0] != 0x05 {
 		return false
 	}
 	nMethods := int(data[1])
-	if nMethods <= 0 || len(data) < 2+nMethods {
+	if nMethods <= 0 || nMethods > protocolGuardSOCKS5MaxMethods || len(data) != 2+nMethods {
 		return false
 	}
-	for _, method := range data[2 : 2+nMethods] {
-		if method == 0x00 || method == 0x02 {
-			return true
+	seen := make(map[byte]bool, nMethods)
+	for _, method := range data[2:] {
+		if method == 0xff || seen[method] {
+			return false
 		}
+		seen[method] = true
 	}
-	return false
+	return true
+}
+
+func detectSocks4Request(data []byte) bool {
+	if len(data) < 9 || data[0] != 0x04 || (data[1] != 0x01 && data[1] != 0x02) {
+		return false
+	}
+	userEnd := bytes.IndexByte(data[8:], 0x00)
+	if userEnd < 0 {
+		return false
+	}
+	end := 8 + userEnd + 1
+	isSocks4A := data[4] == 0x00 && data[5] == 0x00 && data[6] == 0x00 && data[7] != 0x00
+	if isSocks4A {
+		domainEnd := bytes.IndexByte(data[end:], 0x00)
+		if domainEnd <= 0 {
+			return false
+		}
+		end += domainEnd + 1
+	}
+	return end == len(data)
 }
 
 func reportProtocolBlock(cfg config, proto string) {

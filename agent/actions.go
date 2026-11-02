@@ -1013,7 +1013,6 @@ func rememberDesiredActionResult(key string, signature string, ok bool) {
 func resetDesiredActionRecordsAfterAgentUpgrade() {
 	desiredActionRecordMu.Lock()
 	defer desiredActionRecordMu.Unlock()
-	_ = os.MkdirAll("/var/lib/forwardx-agent", 0755)
 	raw, err := os.ReadFile(desiredStateVersionPath)
 	previous := strings.TrimSpace(string(raw))
 	if previous == "" {
@@ -1034,7 +1033,7 @@ func resetDesiredActionRecordsAfterAgentUpgrade() {
 		logf("agent version changed from %s to %s; preserved successful desired state records and released failed retries=%d", previous, Version, removedFailures)
 	}
 	if err != nil || previous != Version {
-		_ = os.WriteFile(desiredStateVersionPath, []byte(Version+"\n"), 0644)
+		_ = writeStateFile(desiredStateVersionPath, []byte(Version+"\n"))
 	}
 }
 

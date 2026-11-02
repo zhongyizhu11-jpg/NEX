@@ -84,8 +84,7 @@ func persistFlowOffloadEnabled(enabled bool) {
 		_ = os.Remove(flowOffloadStateFile)
 		return
 	}
-	_ = os.MkdirAll(filepath.Dir(flowOffloadStateFile), 0755)
-	_ = os.WriteFile(flowOffloadStateFile, []byte("1\n"), 0644)
+	_ = writeStateFile(flowOffloadStateFile, []byte("1\n"))
 }
 
 // startFlowOffloadLoop 在 Agent 启动时调用：接上上次留下的表、按持久化的开关同步，之后定时同步。
