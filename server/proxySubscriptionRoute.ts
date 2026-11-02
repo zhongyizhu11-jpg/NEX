@@ -19,7 +19,9 @@ import { PROXY_SUB_TOKEN_FAILURE_LABELS, type ProxySubTokenFailureReason } from 
 import { proxyCredentialRecipientActive } from "./repositories/proxyInboundRepository";
 import { infoNodesWanted, loadProxySubTokenContext, resolveTemplateForToken, type ProxySubTokenContext } from "./proxySubBundle";
 import { getProxySubCached, proxySubCacheKey, setProxySubCached } from "./proxySubCache";
-import { checkProxySubRateLimit } from "./proxySubRateLimit";
+import { checkProxySubRateLimit, proxySubMissBlockState, recordProxySubMiss } from "./proxySubRateLimit";
+import { clientIp } from "./clientIp";
+import { createKeyedSerial } from "./keyedSerial";
 import { notifyProxySubEvent } from "./proxySubNotify";
 import { announceHeaderValue, renderProxySubPage } from "./proxySubPage";
 import { panelRulesetMirrorBase } from "./proxySubRulesetMirror";
@@ -45,9 +47,11 @@ export function clientSupportsWeightedLoadBalance(userAgent: string): boolean {
   return ua.includes("clash") || ua.includes("mihomo");
 }
 
-function clientIp(req: Request): string {
-  // 用 req.ip：它按面板的 trust proxy 设置解析 X-Forwarded-For。直接读这个头的话，
-  // 谁都能在请求里写一个假 IP，「谁在拉这个订阅」的记录就不可信了。
+/**
+ * 设备数退化模式（不带 x-hwid）的设备键用的 IP：保持原来的写法（req.ip 原样，可能是 ::ffff:1.2.3.4）。
+ * 换成 clientIp 的写法的话，升级后已登记的 IP 设备会被当成新设备，严格模式下可能直接被拒。
+ */
+function deviceIp(req: Request): string {
   return req.ip || "";
 }
 
@@ -107,12 +111,35 @@ function notFound(res: Response) {
 }
 
 /**
+ * 查空太多被挡着的 IP：直接 429，不再去查令牌（见 proxySubRateLimit 里的说明）。
+ * 挡住返回 true。
+ */
+function missBlocked(req: Request, res: Response, json = false): boolean {
+  const state = proxySubMissBlockState(clientIp(req));
+  if (!state.blocked) return false;
+  res.setHeader("Retry-After", String(state.retryAfterSeconds));
+  if (json) res.status(429).json({ error: "too many requests" });
+  else res.status(429).type("text/plain").send("请求太频繁，稍后再试");
+  return true;
+}
+
+/**
  * 令牌在、但这次不放行：403 + 原因。原来一律 404「订阅不存在」，设备满了、账号到期、地址停用
  * 在客户端上都像地址没了，用户只能去重置 —— 重置又解决不了到期之类的问题，换了地址照样 404。
  * 令牌是 40 位随机串，拿得到它的就是订阅的主人，告诉他为什么拉不到不算泄露。
  */
 function rejected(res: Response, reason: ProxySubTokenFailureReason) {
   res.status(403).type("text/plain").send(`订阅暂时拉不到：${PROXY_SUB_TOKEN_FAILURE_LABELS[reason] || "被拒绝"}`);
+}
+
+/**
+ * 被拒时怎么回：长地址照旧 403 + 原因；短链一律 404，和「不存在」一模一样。
+ * 别名是用户自己取的、可能被人猜，回 403 等于告诉对方「这个别名有人在用」。
+ * 原因照样记在令牌上（logAccess），主人在面板的「订阅管理」里能看到。
+ */
+function refuse(res: Response, reason: ProxySubTokenFailureReason, byAlias: boolean) {
+  if (byAlias) notFound(res);
+  else rejected(res, reason);
 }
 
 async function findToken(param: string, byAlias: boolean) {
@@ -152,7 +179,7 @@ async function gate(req: Request, token: any, client: DetectedProxyClient): Prom
 }
 
 /** 响应头：流量信息、更新间隔、名字、公告、帮助地址。 */
-function applyHeaders(res: Response, context: ProxySubTokenContext, options: { format: ProxySubscriptionFormat; profile: boolean; panelUrl: string; token: any }) {
+function applyHeaders(res: Response, context: ProxySubTokenContext, options: { format: ProxySubscriptionFormat; profile: boolean; panelUrl: string; token: any; byAlias: boolean }) {
   const { owner, settings } = context;
   // 和信息节点同一口径：账号到期与链接到期取更早的（proxySubBundle 里已算好）。
   const userExpiresAt = context.info.expiresAt;
@@ -173,7 +200,9 @@ function applyHeaders(res: Response, context: ProxySubTokenContext, options: { f
   ))) res.setHeader(name, value);
   if (options.panelUrl) {
     // 浏览器打开这条地址给落地页，客户端（Happ、Hiddify、v2RayTun……）读这个头把它放在订阅详情里。
-    res.setHeader("Profile-Web-Page-Url", `${options.panelUrl.replace(/\/+$/, "")}/api/sub/${options.token.token}`);
+    // 从短链拉的就给短链：不把令牌带给只知道别名的人。
+    const path = options.byAlias && options.token.alias ? `/s/${options.token.alias}` : `/api/sub/${options.token.token}`;
+    res.setHeader("Profile-Web-Page-Url", `${options.panelUrl.replace(/\/+$/, "")}${path}`);
   }
   if (settings.supportUrl) res.setHeader("Support-Url", settings.supportUrl);
   const announce = announceHeaderValue(settings.announce);
@@ -183,14 +212,25 @@ function applyHeaders(res: Response, context: ProxySubTokenContext, options: { f
 }
 
 /**
+ * 同一条令牌的设备检查排队跑：「列出设备 → 判断 → 登记新设备」要连成一气。
+ * 原来两台新设备同时来，都看到「还差一台满」，都放行、都登记，就超了上限。
+ */
+const deviceGateSerial = createKeyedSerial<number>();
+
+/**
  * 设备数限制：带 x-hwid 的按 hwid 算，不带的按 IP 退化（或严格模式拒绝）。
  * 登记和通知都是尽力而为，拒绝才是硬的。
  */
 async function deviceGate(req: Request, context: ProxySubTokenContext, client: DetectedProxyClient): Promise<{ allowed: boolean; reason?: "device-limit" | "hwid-required"; headers: Record<string, string>; hwid: string }> {
   const { settings, token } = context;
   const hwid = normalizeProxySubHwid(header(req, "x-hwid"));
-  const ip = clientIp(req);
   if (!settings.deviceLimitEnabled && !hwid) return { allowed: true, headers: {}, hwid: "" };
+  return deviceGateSerial(Number(token.id), () => deviceGateLocked(req, context, client, hwid));
+}
+
+async function deviceGateLocked(req: Request, context: ProxySubTokenContext, client: DetectedProxyClient, hwid: string): Promise<{ allowed: boolean; reason?: "device-limit" | "hwid-required"; headers: Record<string, string>; hwid: string }> {
+  const { settings, token } = context;
+  const ip = deviceIp(req);
   const devices = await db.listProxySubDevicesByToken(Number(token.id)) as any[];
   const decision = evaluateProxySubDeviceAccess({
     enabled: settings.deviceLimitEnabled,
@@ -203,23 +243,24 @@ async function deviceGate(req: Request, context: ProxySubTokenContext, client: D
     devices: devices.map((device) => ({ hwid: String(device.hwid), lastSeenAt: device.lastSeenAt ? new Date(device.lastSeenAt).getTime() : 0 })),
   });
   if (decision.allowed && decision.deviceKey) {
-    void db.touchProxySubDevice({
+    // 在队里等登记写完再放下一个：不然下一个列设备时还看不到这一台。
+    await db.touchProxySubDevice({
       tokenId: Number(token.id),
       userId: Number(token.userId),
       hwid: decision.deviceKey,
       deviceOs: header(req, "x-device-os"),
       osVersion: header(req, "x-ver-os"),
       model: header(req, "x-device-model"),
-      ip,
+      ip: clientIp(req),
       userAgent: String(req.headers["user-agent"] || ""),
     }).then((result) => {
       if (result.isNew && devices.length > 0) {
-        void notifyProxySubEvent({ kind: "new-device", tokenId: Number(token.id), tokenName: String(token.name || ""), userId: Number(token.userId), detail: `${client.label}${client.version ? " " + client.version : ""}，来自 ${ip || "未知 IP"}` });
+        void notifyProxySubEvent({ kind: "new-device", tokenId: Number(token.id), tokenName: String(token.name || ""), userId: Number(token.userId), detail: `${client.label}${client.version ? " " + client.version : ""}，来自 ${clientIp(req) || "未知 IP"}` });
       }
     }).catch(() => {});
   }
   if (!decision.allowed && decision.reason === "device-limit") {
-    void notifyProxySubEvent({ kind: "device-limit", tokenId: Number(token.id), tokenName: String(token.name || ""), userId: Number(token.userId), detail: `已有 ${decision.count} 台，上限 ${context.deviceLimit}；这次来自 ${client.label}（${ip || "未知 IP"}）` });
+    void notifyProxySubEvent({ kind: "device-limit", tokenId: Number(token.id), tokenName: String(token.name || ""), userId: Number(token.userId), detail: `已有 ${decision.count} 台，上限 ${context.deviceLimit}；这次来自 ${client.label}（${clientIp(req) || "未知 IP"}）` });
   }
   return { allowed: decision.allowed, reason: decision.reason, headers: decision.headers, hwid };
 }
@@ -230,9 +271,11 @@ async function handleSubscription(req: Request, res: Response, options: { param:
   const userAgent = String(req.headers["user-agent"] || "");
   const client = detectProxyClient(userAgent, req.query.flag);
   try {
+    if (missBlocked(req, res)) return;
     const record = await findToken(options.param, options.byAlias);
     if (!record) {
-      // 令牌根本不存在的那一种记不了：没有任何一行能挂上这笔记录。
+      // 令牌根本不存在的那一种记不了：没有任何一行能挂上这笔记录。按 IP 记一次查空，防猜别名。
+      recordProxySubMiss(clientIp(req));
       notFound(res);
       return;
     }
@@ -243,7 +286,7 @@ async function handleSubscription(req: Request, res: Response, options: { param:
       if (context && gated.reason !== "disabled") {
         void notifyProxySubEvent({ kind: "failure", tokenId: Number(record.id), tokenName: String(record.name || ""), userId: Number(record.userId), detail: `原因：${gated.reason}，来自 ${clientIp(req) || "未知 IP"}（${client.label}）` });
       }
-      rejected(res, gated.reason);
+      refuse(res, gated.reason, options.byAlias);
       return;
     }
     const { settings, token } = gated.context;
@@ -253,7 +296,7 @@ async function handleSubscription(req: Request, res: Response, options: { param:
     const wantsHtml = !options.pathFormat && !req.query.format && !req.query.target
       && String(req.headers.accept || "").includes("text/html") && client.browser;
     if (wantsHtml && settings.landingPageEnabled) {
-      const html = await renderLandingPage(req, gated.context, panelUrl);
+      const html = await renderLandingPage(req, gated.context, panelUrl, options.byAlias);
       logAccess(req, context, client, { format: "html", profile: false, result: "page", hwid: "", bytes: html.length });
       res.setHeader("Cache-Control", "no-store");
       res.setHeader("X-Robots-Tag", "noindex");
@@ -280,7 +323,7 @@ async function handleSubscription(req: Request, res: Response, options: { param:
     for (const [name, value] of Object.entries(device.headers)) res.setHeader(name, value);
     if (!device.allowed) {
       logAccess(req, context, client, { format: "", profile: false, result: device.reason || "device-limit", hwid: device.hwid, bytes: 0 });
-      rejected(res, device.reason || "device-limit");
+      refuse(res, device.reason || "device-limit", options.byAlias);
       return;
     }
 
@@ -347,7 +390,7 @@ async function handleSubscription(req: Request, res: Response, options: { param:
       if (settings.cacheTtlSec > 0) setProxySubCached(cacheKey, body, settings.cacheTtlSec);
     }
 
-    applyHeaders(res, gated.context, { format, profile, panelUrl, token });
+    applyHeaders(res, gated.context, { format, profile, panelUrl, token, byAlias: options.byAlias });
     res.status(200).send(body);
 
     if (!token.lastAccessAt && Number(token.accessCount || 0) === 0) {
@@ -399,7 +442,7 @@ function queryOverrides(req: Request): { options: Partial<ProxySubTokenContext["
   return { options, scope };
 }
 
-async function renderLandingPage(req: Request, context: ProxySubTokenContext, panelUrl: string): Promise<string> {
+async function renderLandingPage(req: Request, context: ProxySubTokenContext, panelUrl: string, byAlias: boolean): Promise<string> {
   const { token, settings } = context;
   const origin = panelUrl || `${req.protocol}://${req.get("host") || ""}`;
   const origins = [origin, ...settings.domains.filter((item) => item.replace(/\/+$/, "") !== origin.replace(/\/+$/, ""))];
@@ -415,10 +458,15 @@ async function renderLandingPage(req: Request, context: ProxySubTokenContext, pa
       vars: { appName: context.appName, panelUrl, subUrl: "", username: context.username },
     }).catch(() => null),
   ]);
+  // 从短链打开的：页面上（含二维码）只出现短链，不出现令牌。
+  const viaAlias = byAlias && !!token.alias;
   let qrDataUrl = "";
   try {
     const { toDataURL } = await import("qrcode");
-    qrDataUrl = await toDataURL(buildProxySubscriptionUrl({ origin, token: String(token.token), format: "base64", kind: "nodes" }), { margin: 1, width: 360 });
+    const qrUrl = viaAlias
+      ? buildProxySubscriptionUrl({ origin, token: "", alias: String(token.alias), format: "base64", kind: "nodes" })
+      : buildProxySubscriptionUrl({ origin, token: String(token.token), format: "base64", kind: "nodes" });
+    qrDataUrl = await toDataURL(qrUrl, { margin: 1, width: 360 });
   } catch {
     // 二维码生成不了就不显示，地址照样在。
   }
@@ -437,8 +485,9 @@ async function renderLandingPage(req: Request, context: ProxySubTokenContext, pa
     announce: settings.announce,
     supportUrl: settings.supportUrl,
     origins,
-    token: String(token.token),
+    token: viaAlias ? "" : String(token.token),
     alias: String(token.alias || ""),
+    viaAlias,
     qrDataUrl,
   });
 }
@@ -462,8 +511,10 @@ proxySubscriptionRouter.get("/api/sub/:token", (req: Request, res: Response) => 
 /** 订阅的基本信息（JSON）：给自定义客户端、落地页脚本、排查问题用。不含节点。 */
 proxySubscriptionRouter.get("/api/sub/:token/info", async (req: Request, res: Response) => {
   try {
+    if (missBlocked(req, res, true)) return;
     const record = await findToken(String(req.params.token || ""), false);
     if (!record) {
+      recordProxySubMiss(clientIp(req));
       res.status(404).json({ error: "not found" });
       return;
     }
@@ -474,6 +525,18 @@ proxySubscriptionRouter.get("/api/sub/:token/info", async (req: Request, res: Re
       return;
     }
     const context = gated.context;
+    // 和订阅本身同一套限流：这一条每次也要组装一遍节点，不限的话一样能把面板拖慢。
+    const limit = checkProxySubRateLimit({
+      tokenId: Number(record.id),
+      ip: clientIp(req),
+      tokenLimit: context.settings.rateLimitPerMinute,
+      ipLimit: context.settings.ipRateLimitPerMinute,
+    });
+    if (limit.limited) {
+      res.setHeader("Retry-After", String(limit.retryAfterSeconds));
+      res.status(429).json({ error: "too many requests" });
+      return;
+    }
     const panelUrl = await resolvePanelUrl(req);
     const [deviceCount, built] = await Promise.all([
       db.countProxySubDevices(Number(record.id)),

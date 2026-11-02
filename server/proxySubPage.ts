@@ -32,6 +32,11 @@ export type ProxySubPageInput = {
   origins: string[];
   token: string;
   alias: string;
+  /**
+   * 这一页是从短链（/s/<别名>）打开的：页面上的地址、按钮、二维码都用短链，不出现令牌。
+   * 别名是用户自己取的，可能被人猜中；猜中的人不该顺手拿到长期有效的令牌。
+   */
+  viaAlias?: boolean;
   /** 主地址的二维码 data URL，可空。 */
   qrDataUrl: string;
 };
@@ -53,12 +58,15 @@ function dateText(ms: number): string {
 
 export function renderProxySubPage(input: ProxySubPageInput): string {
   const origin = input.origins[0] || "";
-  const mainUrl = buildProxySubscriptionUrl({ origin, token: input.token, format: "base64", kind: "nodes" });
+  const viaAlias = !!input.viaAlias && !!input.alias;
+  // 从短链打开时 token 置空：下面每一条地址都走 alias，令牌不会被拼进页面。
+  const ref = viaAlias ? { token: "", alias: input.alias } : { token: input.token };
+  const mainUrl = buildProxySubscriptionUrl({ origin, ...ref, format: "base64", kind: "nodes" });
   const usedPercent = input.trafficLimit > 0 ? Math.min(100, Math.round((input.trafficUsed / input.trafficLimit) * 100)) : 0;
   const daysLeft = input.expiresAt > 0 ? Math.max(0, Math.ceil((input.expiresAt - Date.now()) / 86_400_000)) : -1;
 
   const clientButtons = PROXY_CLIENT_TARGETS.map((target) => {
-    const url = buildProxySubscriptionUrl({ origin, token: input.token, format: target.format, kind: "nodes", pinFormat: target.format !== "base64" });
+    const url = buildProxySubscriptionUrl({ origin, ...ref, format: target.format, kind: "nodes", pinFormat: target.format !== "base64" });
     const importer = proxyClientImportFor(target, "nodes");
     const link = importer.buildImportUrl ? importer.buildImportUrl(url, input.tokenName) : "";
     const platforms = escapeHtml(proxyClientPlatformsLabel(target));
@@ -68,8 +76,9 @@ export function renderProxySubPage(input: ProxySubPageInput): string {
     return `<button class="client" type="button" data-copy="${escapeHtml(url)}" title="${escapeHtml(importer.manualHint || "复制地址后在客户端里粘贴")}"><span class="client-name">${escapeHtml(target.label)}</span><span class="client-meta">${platforms} · 复制地址</span></button>`;
   }).join("");
 
-  const altUrls = input.origins.slice(1).map((alt) => buildProxySubscriptionUrl({ origin: alt, token: input.token, format: "base64", kind: "nodes" }));
-  const aliasUrl = input.alias ? `${origin.replace(/\/+$/, "")}/s/${input.alias}` : "";
+  const altUrls = input.origins.slice(1).map((alt) => buildProxySubscriptionUrl({ origin: alt, ...ref, format: "base64", kind: "nodes" }));
+  // 从短链打开时主地址就是短链，不再单列一行。
+  const aliasUrl = input.alias && !viaAlias ? `${origin.replace(/\/+$/, "")}/s/${input.alias}` : "";
 
   return `<!doctype html>
 <html lang="zh-CN">

@@ -4,6 +4,8 @@ import test from "node:test";
 import {
   makeLooseMatcher,
   normalizeProxySubAlias,
+  PROXY_SUB_ALIAS_MIN_LENGTH,
+  proxySubAliasLongEnough,
   normalizeProxySubTokenOptions,
   parseProxySubTokenOptions,
   parseProxySubTokenScope,
@@ -52,6 +54,11 @@ test("短链别名的规则", () => {
   assert.equal(normalizeProxySubAlias("-abc"), "");
   assert.equal(normalizeProxySubAlias("abc_d"), "");
   assert.equal(normalizeProxySubAlias("a".repeat(33)), "");
+  // 查找仍认老的 4 位别名；新设的要够长。
+  assert.equal(normalizeProxySubAlias("vip1"), "vip1");
+  assert.equal(proxySubAliasLongEnough("vip1"), false);
+  assert.equal(proxySubAliasLongEnough("my-phone-1"), true);
+  assert.equal(PROXY_SUB_ALIAS_MIN_LENGTH, 10);
 });
 
 test("宽松匹配：非法正则退化成子串", () => {

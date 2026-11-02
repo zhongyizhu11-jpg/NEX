@@ -323,10 +323,10 @@ export function ProxySubTokenEditDialog({
                   <FormField className="space-y-1.5">
                     <Label>短链别名</Label>
                     <div className="relative">
-                      <Input value={alias} onChange={(event) => setAlias(event.target.value)} maxLength={32} placeholder="my-phone" className="pl-9 font-mono" />
+                      <Input value={alias} onChange={(event) => setAlias(event.target.value)} maxLength={32} placeholder="my-phone-home" className="pl-9 font-mono" />
                       <span aria-hidden="true" className="pointer-events-none absolute inset-y-0 left-3 z-10 flex items-center font-mono text-xs text-muted-foreground">/s/</span>
                     </div>
-                    <p data-fx-help="" className="text-xs text-muted-foreground">和长地址等价，能手打。4–32 位小写字母、数字、连字符。</p>
+                    <p data-fx-help="" className="text-xs text-muted-foreground">和长地址等价，能手打。新设的别名要 10–32 位小写字母、数字、连字符，太短容易被人猜到。</p>
                   </FormField>
                   <FormField className="space-y-1.5">
                     <Label>到期</Label>

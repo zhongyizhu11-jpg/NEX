@@ -245,6 +245,18 @@ export function normalizeProxySubAlias(value: unknown): string {
 }
 
 /**
+ * 新设（或改成）的别名最短几位。短链不用登录就能拉到带凭据的节点，4 位的别名用字典
+ * 几秒就能撞中。老别名照样能用：查找仍按 normalizeProxySubAlias 的 4 位起算，
+ * 只有新建或改别名时才按这个长度卡。
+ */
+export const PROXY_SUB_ALIAS_MIN_LENGTH = 10;
+
+/** 新设的别名够不够长（传进来的应是 normalizeProxySubAlias 之后的值）。 */
+export function proxySubAliasLongEnough(alias: string): boolean {
+  return String(alias || "").length >= PROXY_SUB_ALIAS_MIN_LENGTH;
+}
+
+/**
  * 正则匹配的宽松版：非法正则退化成不区分大小写的子串匹配，不让一个写坏的表达式
  * 把整条订阅弄成 500。
  */
