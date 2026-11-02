@@ -68,7 +68,7 @@ import { hasQueuedPluginAgentTasks, takePluginAgentTasks } from "./pluginAgentTa
 import { hasPendingMimicInstallTask, hasQueuedMimicInstallTask, takeMimicInstallTask } from "./mimicInstallTasks";
 import { getAgentPluginInventory, updateAgentPluginInventory } from "./agentPluginInventory";
 import { getAgentHostFromRequest, getAgentHostIdentityFromRequest, getAgentPresenceHostFromRequest } from "./agentAuth";
-import { liveMetricsIntervalFor, liveSampleFromCompactMetrics, recordHostLiveSample } from "./hostLiveMetrics";
+import { isHostLiveFocused, liveMetricsIntervalFor, liveSampleFromCompactMetrics, recordHostLiveSample } from "./hostLiveMetrics";
 import { normalizeAgentText, normalizeNetworkInterface } from "./agentInputValidation";
 import { pruneMapEntries, setBoundedMapValue } from "./boundedCache";
 import { isValidTlsServerName } from "./nginxTlsInput";
@@ -1864,7 +1864,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       appendPanelLog("info", `[AgentDNS] host=${host.id} reported DNS change for ${dnsChangedReports.length} watched name(s); rule-specific refresh only`);
     }
 
-    await db.insertHostMetric({
+    // 30 秒内同一台只写一行（见 metricsRepository.insertHostMetricSampled）；有人正在看实时指标时每次都写。
+    await db.insertHostMetricSampled({
       hostId: host.id,
       cpuUsage: cpuUsage ?? null,
       memoryUsage: memoryUsage ?? null,
@@ -1880,7 +1881,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       uptime: uptime ?? null,
       tcpConnections: tcpConnections ?? null,
       udpConnections: udpConnections ?? null,
-    });
+    }, { force: isHostMetricsWatching(host.id) || isHostLiveFocused(host.id) });
     // 资源告警：CPU / 内存 / 磁盘持续超过阈值时通知管理员（不阻塞心跳）
     observeHostResourceSample(host, { cpu: cpuUsage ?? null, memory: memoryUsage ?? null, disk: diskUsage ?? null });
     // OOM / 服务崩溃（Agent ≥ 2.2.230 才报这两项）

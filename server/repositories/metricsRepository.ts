@@ -234,6 +234,47 @@ export async function insertHostMetric(metric: InsertHostMetric) {
   await db.insert(hostMetrics).values(metric);
 }
 
+/*
+  host_metrics 按主机采样入库：同一台 30 秒内最多一行。
+  Agent 在配置变更、SSE 唤醒、对账合并时会连着几秒报一次心跳，每次都插一行没有意义。
+  有人正在看这台主机的实时指标时（force）照旧每次都写，页面上的数字和速度不变慢。
+
+  读这张表的地方：
+    · 主机列表 / 详情取每台最新两行算网速 —— 采样后两行至少隔 30 秒，照样算得出；
+    · 状态页可用率回填（statusAvailabilityLogic.gapDownIntervals）把相邻两行隔了 12 分钟以上
+      当成断线 —— 远大于 30 秒，采样不会造出假断线；
+    · 带宽聚合取最新快照，同上。
+*/
+export const HOST_METRIC_SAMPLE_INTERVAL_MS = 30_000;
+const HOST_METRIC_SAMPLE_CACHE_MAX = 20_000;
+const lastHostMetricInsertAt = new Map<number, number>();
+
+export function shouldInsertHostMetricSample(hostId: number, now = Date.now(), force = false) {
+  if (force) return true;
+  const last = lastHostMetricInsertAt.get(hostId);
+  return last === undefined || now - last >= HOST_METRIC_SAMPLE_INTERVAL_MS || now < last;
+}
+
+/** 按采样间隔写一行；返回这次是否真的写了。 */
+export async function insertHostMetricSampled(metric: InsertHostMetric, options: { force?: boolean; now?: number } = {}) {
+  const hostId = Number(metric.hostId);
+  const now = options.now ?? Date.now();
+  if (!shouldInsertHostMetricSample(hostId, now, options.force === true)) return false;
+  await insertHostMetric(metric);
+  lastHostMetricInsertAt.delete(hostId);
+  lastHostMetricInsertAt.set(hostId, now);
+  if (lastHostMetricInsertAt.size > HOST_METRIC_SAMPLE_CACHE_MAX) {
+    const oldest = lastHostMetricInsertAt.keys().next().value;
+    if (oldest !== undefined) lastHostMetricInsertAt.delete(oldest);
+  }
+  return true;
+}
+
+/** 主机删掉后清掉它的采样记录。 */
+export function forgetHostMetricSample(hostId: number) {
+  lastHostMetricInsertAt.delete(Number(hostId));
+}
+
 export async function cleanOldHostMetrics(retainHours: number = 72) {
   const db = await getDb();
   if (!db) return;

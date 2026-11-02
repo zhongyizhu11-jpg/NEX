@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
-import { and, desc, eq, inArray, like, max, ne, or } from "drizzle-orm";
+import { and, desc, eq, inArray, like, max, or } from "drizzle-orm";
 import { configAuditEvents } from "../drizzle/schema";
 import { afterDatabaseCommit, getDb, insertAndGetId, isDatabaseTransactionActive } from "./dbRuntime";
 import { invalidateAgentStableHeartbeatPlan } from "./agentHeartbeatGate";
@@ -183,12 +183,23 @@ export async function recordConfigAuditEvent(input: {
   return write();
 }
 
+/*
+  最新的配置版本 = 最新一条非 dispatch 审计的 id。dispatch 行远多于真正的改动（每台机器的期望
+  状态一变就记一条，留 30 天），以前用 action <> 'dispatch' 倒序扫，要先跨过所有更新的 dispatch 行。
+  现在按三种改动各取一次「这种 action 的最大 id」，每次都走 (action, id) 索引只读一行，再取最大。
+*/
+const CONFIG_REVISION_ACTIONS: AuditAction[] = ["create", "update", "delete"];
+
 export async function latestConfigRevision() {
   const db = await getDb();
   if (!db) return 0;
-  const rows = await db.select({ id: configAuditEvents.id }).from(configAuditEvents)
-    .where(ne(configAuditEvents.action, "dispatch" as any)).orderBy(desc(configAuditEvents.id)).limit(1);
-  return Number(rows[0]?.id || 0);
+  let latest = 0;
+  for (const action of CONFIG_REVISION_ACTIONS) {
+    const rows = await db.select({ id: configAuditEvents.id }).from(configAuditEvents)
+      .where(eq(configAuditEvents.action, action as any)).orderBy(desc(configAuditEvents.id)).limit(1);
+    latest = Math.max(latest, Number(rows[0]?.id || 0));
+  }
+  return latest;
 }
 
 export async function listRecentConfigAuditEvents(limit = 500) {
