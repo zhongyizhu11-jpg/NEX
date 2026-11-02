@@ -8,13 +8,14 @@
 */
 import type { Request } from "express";
 import { executeRaw, queryRaw, quoteDbIdentifier, rawEpochToDate } from "../dbRuntime";
+import { clientIp } from "../clientIp";
 
 const WRITE_INTERVAL_MS = 5 * 60 * 1000;
 const MAX_TRACKED_SESSIONS = 20_000;
 const written = new Map<string, { ua: string; ip: string; at: number }>();
 
 function requestIp(req: Request) {
-  return String(req.ip || req.socket?.remoteAddress || "").replace(/^::ffff:/, "").slice(0, 64);
+  return clientIp(req).slice(0, 64);
 }
 
 function requestUserAgent(req: Request) {

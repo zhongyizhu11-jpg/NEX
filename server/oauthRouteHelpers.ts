@@ -14,9 +14,11 @@ import { createTwoFactorChallenge } from "./twoFactorChallenges";
 import { recordTwoFactorChallengeIssue, twoFactorChallengeIssueState } from "./authRateLimit";
 import { ACCOUNT_DISABLED_ERR_MSG } from "../shared/const";
 import { parseEmailDomainList } from "../shared/googleLogin";
+import { clientIp } from "./clientIp";
+import { escapeHtmlAttr } from "../shared/htmlEscape";
 
 export function oauthRequestIp(req: Pick<Request, "ip" | "socket">) {
-  return String(req.ip || req.socket?.remoteAddress || "unknown");
+  return clientIp(req, "unknown");
 }
 
 function hostOf(value: string | null | undefined) {
@@ -49,7 +51,7 @@ export function withQuery(path: string, params: Record<string, string>) {
 }
 
 export function escapeHtml(value: string) {
-  return value.replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[ch]!));
+  return escapeHtmlAttr(value);
 }
 
 export type OAuthAppPage = {

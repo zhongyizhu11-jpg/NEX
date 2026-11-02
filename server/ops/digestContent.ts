@@ -19,6 +19,7 @@ import { formatOutageDuration } from "../../shared/opsEvents";
 import { normalizeDigestHour, parseDigestBlocks, type DigestBlockKey } from "../../shared/opsDigest";
 import { listPanelEvents } from "./panelEvents";
 import { summarizeOutages } from "./digestFormat";
+import { escapeHtmlText as escapeHtml } from "../../shared/htmlEscape";
 
 const KEY_HOUR = "ops.digest.hour";
 const KEY_BLOCKS = "ops.digest.blocks";
@@ -41,10 +42,6 @@ export async function saveDigestSettings(input: { hour: number; blocks: readonly
     [KEY_BLOCKS]: parseDigestBlocks(input.blocks).join(","),
   });
   return getDigestSettings();
-}
-
-function escapeHtml(value: unknown) {
-  return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 function short(value: unknown, max = 14) {

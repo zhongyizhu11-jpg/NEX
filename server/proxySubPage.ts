@@ -11,6 +11,7 @@
 import { encodeBase64Utf8 } from "../shared/proxyNode";
 import { PROXY_CLIENT_TARGETS, proxyClientImportFor, buildProxySubscriptionUrl, proxyClientPlatformsLabel } from "../shared/proxyClientImport";
 import { formatBytes } from "../shared/formatBytes";
+import { escapeHtmlAttr as escapeHtml } from "../shared/htmlEscape";
 
 export type ProxySubPageInput = {
   appName: string;
@@ -40,15 +41,6 @@ export type ProxySubPageInput = {
   /** 主地址的二维码 data URL，可空。 */
   qrDataUrl: string;
 };
-
-function escapeHtml(value: unknown): string {
-  return String(value ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
 
 function dateText(ms: number): string {
   if (!ms) return "";

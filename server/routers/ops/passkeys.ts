@@ -23,6 +23,7 @@ import {
 } from "../../ops/passkeys";
 import { SUPPORTED_COSE_ALGS, verifyAuthenticationResponse, verifyRegistrationResponse, WebAuthnError } from "../../ops/webauthn";
 import { recordPanelEvent } from "../../ops/panelEvents";
+import { clientIp } from "../../clientIp";
 
 /*
   trpc.ops.passkeys.* —— 个人资料 › 通行密钥 和 登录页「用通行密钥登录」（#12）。
@@ -78,7 +79,7 @@ async function asUserError<T>(work: () => Promise<T>): Promise<T> {
 }
 
 function requestIp(ctx: any) {
-  return String(ctx.req?.ip || ctx.req?.socket?.remoteAddress || "unknown");
+  return clientIp(ctx.req, "unknown");
 }
 
 export const passkeysRouter = router({

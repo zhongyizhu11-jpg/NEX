@@ -4,13 +4,7 @@
 */
 import { IP_CHANGE_TRIGGER_LABELS } from "../../shared/ipChange";
 import type { IpChangeNotice } from "./service";
-
-function escapeHtml(value: unknown) {
-  return String(value ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-}
+import { escapeHtmlText as escapeHtml } from "../../shared/htmlEscape";
 
 function hostName(notice: IpChangeNotice) {
   return String(notice.host?.name || "").trim() || `主机 #${notice.host?.id}`;

@@ -29,6 +29,7 @@ import {
   updateTelegramNotifyPref,
   type TelegramNotifyCategory,
 } from "../telegramNotifyPrefs";
+import { clientIp } from "../clientIp";
 
 /*
   trpc.discordAuth.* —— Discord 登录的设置、个人资料里的绑定 / 解绑、App 里的轮询登录，
@@ -37,7 +38,7 @@ import {
 */
 
 function requestIp(ctx: any) {
-  return String(ctx.req?.ip || ctx.req?.socket?.remoteAddress || "unknown");
+  return clientIp(ctx.req, "unknown");
 }
 
 function displayName(user: any) {
