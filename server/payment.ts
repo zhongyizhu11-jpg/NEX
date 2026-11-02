@@ -375,6 +375,14 @@ function easyPaySign(params: Record<string, string>, pkey: string) {
   return crypto.createHash("md5").update(raw).digest("hex");
 }
 
+/** 易支付回调签名比较：定长比较，不按字符逐个短路（大小写不敏感，和原来一致）。 */
+export function easyPaySignatureMatches(expected: string, provided: unknown) {
+  if (typeof provided !== "string" || !provided) return false;
+  const a = Buffer.from(expected.toLowerCase(), "utf8");
+  const b = Buffer.from(provided.toLowerCase(), "utf8");
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
 function createOutTradeNo() {
   const suffix = crypto.randomBytes(4).toString("hex");
   return `FWX${Date.now()}${suffix}`.toUpperCase();
@@ -1719,7 +1727,7 @@ async function handleEasyPayNotification(req: express.Request, res: express.Resp
     const raw = postRaw || new URLSearchParams(params).toString();
     if (!config.easypay.enabled || !config.easypay.pkey) throw new Error("EasyPay is not configured");
     const expected = easyPaySign(params, config.easypay.pkey);
-    if (!params.sign || expected.toLowerCase() !== params.sign.toLowerCase()) {
+    if (!easyPaySignatureMatches(expected, params.sign)) {
       appendPanelLog("warn", "[Payment] EasyPay notify signature failed");
       res.status(400).send("fail");
       return;
