@@ -47,9 +47,9 @@ jobs:
       - name: Type check
         run: pnpm exec tsc --noEmit
 
-      # Lint（ESLint 基线，只拦新增）由依赖那一组接上：命令定下来以后加在这里。
-      # - name: Lint
-      #   run: <lint command>
+      # ESLint 基线：只拦新增（规则 → 文件的条数超过 scripts/lint-baseline.json 就失败）
+      - name: Lint
+        run: pnpm lint
 
   panel-tests:
     name: Panel tests

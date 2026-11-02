@@ -9,6 +9,7 @@ export default tseslint.config(
       "dist/**",
       "client/dist/**",
       "node_modules/**",
+      ".claude/**",
       "docs/**",
       "android/**",
       "ios/**",
