@@ -50,8 +50,6 @@ export type NodeCheckSubject = {
   hostId: number;
   /** 经哪个节点；0 = 这台机器自己。 */
   nodeId: number;
-  /** 订阅里的哪条线路（rule-<id> / direct-<模板 id>）：从 hostId 那台机器连线路入口走完整条链。 */
-  entryKey?: string;
 };
 
 type PendingRun = NodeCheckSubject & {
@@ -90,10 +88,9 @@ const pendingRuns = new Map<string, PendingRun>();
 /** 最近一次结果，按对象：speed:h<hostId> / speed:n<nodeId> / exit:n<nodeId>。 */
 const latestResults = new Map<string, FinishedRun>();
 
-type SubjectRef = Pick<NodeCheckSubject, "kind" | "hostId" | "nodeId"> & { entryKey?: string };
+type SubjectRef = Pick<NodeCheckSubject, "kind" | "hostId" | "nodeId">;
 
 export function nodeCheckSubjectKey(subject: SubjectRef) {
-  if (subject.entryKey) return `${subject.kind}:e${subject.entryKey}`;
   return subject.nodeId > 0 ? `${subject.kind}:n${subject.nodeId}` : `${subject.kind}:h${subject.hostId}`;
 }
 
@@ -111,7 +108,7 @@ export function pendingNodeCheckRunsForHost(hostId: number) {
   return Array.from(pendingRuns.values()).filter((run) => run.hostId === hostId);
 }
 
-export function pendingNodeCheckRun(subject: SubjectRef) {
+function pendingNodeCheckRun(subject: SubjectRef) {
   sweep();
   const key = nodeCheckSubjectKey(subject);
   return Array.from(pendingRuns.values()).find((run) => nodeCheckSubjectKey(run) === key) || null;
@@ -129,7 +126,7 @@ export class NodeCheckError extends Error {}
  */
 export function startNodeCheck(
   host: { id: number; agentVersion?: string | null; isOnline?: unknown } & Parameters<typeof domesticSpeedTestHints>[0],
-  input: { kind: NodeCheckKind; nodeId?: number; entryKey?: string; nodeName?: string; outbound?: Record<string, unknown> | null; extraOutbounds?: Record<string, unknown>[]; installCmd?: string | null; family?: unknown; requestedBy?: number | null },
+  input: { kind: NodeCheckKind; nodeId?: number; nodeName?: string; outbound?: Record<string, unknown> | null; extraOutbounds?: Record<string, unknown>[]; installCmd?: string | null; family?: unknown; requestedBy?: number | null },
 ) {
   const hostId = Number(host.id);
   if (!(hostId > 0)) throw new NodeCheckError("主机不存在");
@@ -137,10 +134,8 @@ export function startNodeCheck(
   if (!hostSupportsNodeCheck(host)) throw new NodeCheckError(`需要把这台机器的 Agent 升级到 ${NODE_CHECK_MIN_AGENT_VERSION} 或更新版本`);
   if (host.isOnline === false || host.isOnline === 0) throw new NodeCheckError("主机离线，等它上线再测");
   const nodeId = Math.max(0, Math.floor(Number(input.nodeId || 0)));
-  const entryKey = String(input.entryKey || "").trim().slice(0, 48) || undefined;
   if (input.kind === "exit" && !(nodeId > 0 && input.outbound)) throw new NodeCheckError("出口检测只给经节点的");
-  if (entryKey && !input.outbound) throw new NodeCheckError("这条线路没有可连的入口");
-  const subject: NodeCheckSubject = { kind: input.kind, hostId, nodeId, ...(entryKey ? { entryKey } : {}) };
+  const subject: NodeCheckSubject = { kind: input.kind, hostId, nodeId };
   const existing = pendingNodeCheckRun(subject);
   if (existing) return { runId: existing.runId, reused: true };
   const runId = newRunId();
@@ -148,16 +143,16 @@ export function startNodeCheck(
     ...subject,
     runId,
     nodeName: String(input.nodeName || ""),
-    outbound: (nodeId > 0 || entryKey) && input.outbound ? input.outbound : null,
+    outbound: nodeId > 0 && input.outbound ? input.outbound : null,
     extraOutbounds: input.extraOutbounds && input.extraOutbounds.length > 0 ? input.extraOutbounds : null,
     installCmd: input.installCmd || null,
     family: normalizeUnlockFamily(input.family),
     requestedBy: input.requestedBy ?? null,
     createdAt: Date.now(),
     speedToken: input.kind === "speed" ? randomBytes(18).toString("base64url") : null,
-    // 只测这台机器自己时才用得上：经节点、测线路时出去的是落地
-    speedHints: input.kind === "speed" && nodeId === 0 && !entryKey ? domesticSpeedTestHints(host) : null,
-    egress: input.kind === "speed" && nodeId === 0 && !entryKey ? hostEgress(host) : null,
+    // 只测这台机器自己时才用得上：经节点时出去的是节点
+    speedHints: input.kind === "speed" && nodeId === 0 ? domesticSpeedTestHints(host) : null,
+    egress: input.kind === "speed" && nodeId === 0 ? hostEgress(host) : null,
     report: null,
   });
   wakeAgentExt(hostId, "node-check");
@@ -221,7 +216,6 @@ const RUN_ID_RE = /^nc-[a-z0-9-]{1,60}$/;
 export type SpeedTestRecord = {
   hostId: number;
   nodeId: number;
-  entryKey?: string;
   runId: string;
   requestedBy: number | null;
   checkedAt: number;
@@ -255,10 +249,10 @@ export async function ingestNodeCheckReport(host: AgentExtHost, raw: unknown) {
     const now = nowSec();
     // Agent 的时钟不一定准：只在差不多的范围内用它的完成时间。
     const checkedAt = report.finishedAt > 0 && Math.abs(report.finishedAt - now) < 15 * 60 ? report.finishedAt : now;
-    const finished: FinishedRun = { kind: pending.kind, hostId, nodeId: pending.nodeId, entryKey: pending.entryKey, runId: report.runId, nodeName: pending.nodeName, finishedAt: checkedAt * 1000, report };
+    const finished: FinishedRun = { kind: pending.kind, hostId, nodeId: pending.nodeId, runId: report.runId, nodeName: pending.nodeName, finishedAt: checkedAt * 1000, report };
     latestResults.set(nodeCheckSubjectKey(pending), finished);
     if (report.status === "done" && report.kind === "speed" && report.speed) {
-      await recordSpeed({ hostId, nodeId: pending.nodeId, entryKey: pending.entryKey, runId: report.runId, requestedBy: pending.requestedBy, checkedAt, result: report.speed });
+      await recordSpeed({ hostId, nodeId: pending.nodeId, runId: report.runId, requestedBy: pending.requestedBy, checkedAt, result: report.speed });
     }
   }
 }
@@ -279,7 +273,7 @@ export async function nodeCheckStatus(subject: SubjectRef): Promise<NodeCheckSta
     const row = rows[0];
     if (row) {
       latest = {
-        kind: "speed", hostId: row.hostId, nodeId: row.nodeId, entryKey: row.entryKey || undefined, runId: row.runId, nodeName: "", finishedAt: row.checkedAt * 1000,
+        kind: "speed", hostId: row.hostId, nodeId: row.nodeId, runId: row.runId, nodeName: "", finishedAt: row.checkedAt * 1000,
         report: { runId: row.runId, kind: "speed", status: "done", phase: "", startedAt: 0, finishedAt: row.checkedAt, error: "", speed: row.result, exit: null },
       };
     }
@@ -311,7 +305,6 @@ function rowView(row: any) {
     id: Number(row.id),
     hostId: Number(row.hostId),
     nodeId: Number(row.nodeId) || 0,
-    entryKey: String(row.entryKey || ""),
     runId: String(row.runId),
     checkedAt: Number(row.checkedAt) || 0,
     result: (() => {
@@ -330,7 +323,6 @@ export async function recordSpeedTest(record: SpeedTestRecord) {
   await insertAndGetId(TABLE, {
     hostId: record.hostId,
     nodeId: record.nodeId,
-    entryKey: record.entryKey || null,
     runId: record.runId,
     requestedBy: record.requestedBy,
     resultJson: JSON.stringify(record.result),
@@ -338,16 +330,21 @@ export async function recordSpeedTest(record: SpeedTestRecord) {
     createdAt: nowSec(),
   });
   await trimSpeedTestHistory(record);
+  // 订阅线路整链测速（2.3.505 去掉）留下的旧记录不再有人看
+  await executeRaw(`DELETE FROM ${q(TABLE)} WHERE ${q("entryKey")} IS NOT NULL AND ${q("entryKey")} <> ''`, []).catch(() => undefined);
 }
 
-function subjectWhere(subject: Pick<NodeCheckSubject, "hostId" | "nodeId" | "entryKey">) {
-  if (subject.entryKey) return { sql: `${q("entryKey")} = ?`, params: [subject.entryKey] };
+/**
+ * entryKey 列是 2.3.502–2.3.504 订阅线路整链测速留下的（那个测速 2.3.505 去掉了）：那几行的 hostId 是入口机，
+ * 不算这台机器自己的带宽，查的时候排除掉，测这台机器时顺手删掉（见 recordSpeedTest）。
+ */
+function subjectWhere(subject: Pick<NodeCheckSubject, "hostId" | "nodeId">) {
   return subject.nodeId > 0
     ? { sql: `${q("nodeId")} = ?`, params: [subject.nodeId] }
     : { sql: `${q("hostId")} = ? AND ${q("nodeId")} = ? AND (${q("entryKey")} IS NULL OR ${q("entryKey")} = '')`, params: [subject.hostId, 0] };
 }
 
-export async function trimSpeedTestHistory(subject: Pick<NodeCheckSubject, "hostId" | "nodeId" | "entryKey">, keep = SPEED_TEST_HISTORY_KEEP) {
+export async function trimSpeedTestHistory(subject: Pick<NodeCheckSubject, "hostId" | "nodeId">, keep = SPEED_TEST_HISTORY_KEEP) {
   const where = subjectWhere(subject);
   const rows = await queryRaw<any>(`SELECT ${q("id")} FROM ${q(TABLE)} WHERE ${where.sql} ORDER BY ${q("checkedAt")} DESC, ${q("id")} DESC`, where.params);
   const drop = rows.slice(keep).map((row) => Number(row.id));
@@ -356,7 +353,7 @@ export async function trimSpeedTestHistory(subject: Pick<NodeCheckSubject, "host
   return drop.length;
 }
 
-export async function listSpeedTestHistory(subject: Pick<NodeCheckSubject, "hostId" | "nodeId" | "entryKey">, limit = SPEED_TEST_HISTORY_KEEP) {
+export async function listSpeedTestHistory(subject: Pick<NodeCheckSubject, "hostId" | "nodeId">, limit = SPEED_TEST_HISTORY_KEEP) {
   const where = subjectWhere(subject);
   const rows = await queryRaw<any>(
     `SELECT * FROM ${q(TABLE)} WHERE ${where.sql} ORDER BY ${q("checkedAt")} DESC, ${q("id")} DESC LIMIT ${Math.max(1, Math.min(50, Math.floor(limit)))}`,

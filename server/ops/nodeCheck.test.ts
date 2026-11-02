@@ -137,7 +137,7 @@ test("2.2.246 的结果：就近的 Ookla 测速点、用掉的流量都留着�
   assert.equal(recorded[1].result.downloadBytes, 0, "老 Agent 没报流量：0，不显示");
 });
 
-test("大陆的主机测自己时指令带国内测速点（Agent 2.2.248 起认）；经节点、测线路、境外主机都不带", () => {
+test("大陆的主机测自己时指令带国内测速点（Agent 2.2.248 起认）；经节点、境外主机都不带", () => {
   resetNodeCheckStateForTest();
   const guangzhou = { ...host(31, "2.2.248"), geoCountryCode: "CN", geoLatitudeMicro: 23127361, geoLongitudeMicro: 113264570, geoIsp: "Chinanet" };
   startNodeCheck(guangzhou, { kind: "speed" });
@@ -148,11 +148,9 @@ test("大陆的主机测自己时指令带国内测速点（Agent 2.2.248 起认
   assert.ok(run.panel.token, "panel fallback stays");
 
   startNodeCheck({ ...guangzhou, id: 32 }, { kind: "speed", nodeId: 9, nodeName: "JP", outbound });
-  startNodeCheck({ ...guangzhou, id: 33 }, { kind: "speed", entryKey: "rule-25", outbound });
   startNodeCheck({ ...host(34, "2.2.248"), geoCountryCode: "HK" }, { kind: "speed" });
-  for (const id of [32, 33, 34]) assert.equal((nodeCheckDirectiveFor(id)!.runs[0] as any).speed, undefined, String(id));
+  for (const id of [32, 34]) assert.equal((nodeCheckDirectiveFor(id)!.runs[0] as any).speed, undefined, String(id));
 });
-
 
 test("测这台机器自己：Agent 没报上来出口 IP / 运营商（国内连不上 speedtest-config.php）就用面板记的补，报了的不动", async () => {
   resetNodeCheckStateForTest();

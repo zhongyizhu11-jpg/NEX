@@ -145,9 +145,8 @@ export const lineDiagnosticsRouter = router({
       }
 
       const { view } = startSegmentSpeedRun({
-        ruleId: Number(rule.id),
-        pathKey: path.key,
-        pathName: `${routePathLetter(pathIndex)} ${routePathLabel(path, pathIndex)}`.trim(),
+        lockKey: `rule:${Number(rule.id)}`,
+        title: `${routePathLetter(pathIndex)} ${routePathLabel(path, pathIndex)}`.trim(),
         userId: Number(ctx.user.id),
         allowPrivate: ctx.user.role === "admin",
         plan,

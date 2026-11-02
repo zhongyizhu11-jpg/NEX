@@ -27,11 +27,12 @@ import {
   Wifi,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ElementType } from "react";
+import { Iperf3PairPanel } from "@/features/network/Iperf3PairPanel";
 import { PROBE_ADDRESS_FAMILIES, PROBE_ADDRESS_FAMILY_LABELS, type ProbeAddressFamily } from "@shared/probeFamily";
 import { toast } from "sonner";
 
-type Method = "ping" | "ping6" | "traceroute" | "traceroute6" | "mtr" | "mtr6" | "tcp" | "iperf3-client" | "iperf3";
-type NetworkMethod = Exclude<Method, "iperf3">;
+type Method = "ping" | "ping6" | "traceroute" | "traceroute6" | "mtr" | "mtr6" | "tcp" | "iperf3-pair" | "iperf3-client" | "iperf3";
+type NetworkMethod = Exclude<Method, "iperf3" | "iperf3-pair">;
 type RunState = "idle" | "queued" | "running" | "success" | "warning" | "error";
 type Iperf3State = "idle" | "queued" | "starting" | "running" | "stopping" | "stopped" | "error";
 
@@ -86,6 +87,7 @@ const methods: Array<{
   { value: "mtr", label: "MTR IPv4", description: "连续检测 IPv4 路由质量和丢包情况", icon: Activity },
   { value: "mtr6", label: "MTR IPv6", description: "连续检测 IPv6 路由质量和丢包情况", icon: Activity },
   { value: "tcp", label: "TCPing", description: "测试目标 TCP 端口连接延迟", icon: RadioTower },
+  { value: "iperf3-pair", label: "iperf3 对拉", description: "选一条隧道或两台机器：自动在下游开服务端，上游测正反两向和单条连接，测完自动关", icon: Gauge },
   { value: "iperf3-client", label: "iperf3 客户端", description: "从选中 Agent 向目标上的 iperf3 服务端跑一次带宽测试，可反向测下行", icon: Gauge },
   { value: "iperf3", label: "iperf3 服务端", description: "在选中 Agent 上启动 iperf3 服务端并展示客户端命令", icon: Gauge },
 ];
@@ -596,10 +598,35 @@ export default function LookingGlass() {
       ? "测试中..."
       : "开始测试";
 
+  const methodPicker = (
+    <FormField className="space-y-2">
+      <Label>测试类型</Label>
+      <Select value={method} onValueChange={(value) => setMethod(value as Method)}>
+        <SelectTrigger>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {methods.map((item) => {
+            const ItemIcon = item.icon;
+            return (
+              <SelectItem key={item.value} value={item.value}>
+                <span className="flex items-center gap-2">
+                  <ItemIcon className="h-4 w-4 text-primary" />
+                  {item.label}
+                </span>
+              </SelectItem>
+            );
+          })}
+        </SelectContent>
+      </Select>
+      <p className="text-xs text-muted-foreground">{selected.description}</p>
+    </FormField>
+  );
+
   return (
     <DashboardLayout>
       <div className="space-y-5">
-        <WorkspaceHeader title="网络测试" description="从 Agent 主机发起 Ping、Traceroute、MTR、TCPing 或 iperf3 带宽测试。" />
+        <WorkspaceHeader title="网络测试" description="从 Agent 主机发起 Ping、Traceroute、MTR、TCPing，或在两台机器之间用 iperf3 对拉测带宽。" />
 
         <Alert className="border-border bg-card text-foreground [&>svg]:text-muted-foreground">
           <Globe2 className="h-4 w-4" />
@@ -609,6 +636,9 @@ export default function LookingGlass() {
           </AlertDescription>
         </Alert>
 
+        {method === "iperf3-pair" ? (
+          <Iperf3PairPanel methodPicker={methodPicker} hosts={availableHosts as any} />
+        ) : (
         <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,420px)_1fr]">
           <Card className="border-border bg-card">
             <CardHeader className="pb-3">
@@ -638,28 +668,7 @@ export default function LookingGlass() {
                 )}
               </FormField>
 
-              <FormField className="space-y-2">
-                <Label>测试类型</Label>
-                <Select value={method} onValueChange={(value) => setMethod(value as Method)}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {methods.map((item) => {
-                      const ItemIcon = item.icon;
-                      return (
-                        <SelectItem key={item.value} value={item.value}>
-                          <span className="flex items-center gap-2">
-                            <ItemIcon className="h-4 w-4 text-primary" />
-                            {item.label}
-                          </span>
-                        </SelectItem>
-                      );
-                    })}
-                  </SelectContent>
-                </Select>
-                <p className="text-xs text-muted-foreground">{selected.description}</p>
-              </FormField>
+              {methodPicker}
 
               {!isIperf3Method && (
                 <div className="space-y-2">
@@ -871,6 +880,7 @@ export default function LookingGlass() {
             <ResultOutput result={latestResult} liveOutput={runningOutput} state={runState} />
           )}
         </div>
+        )}
 
         {history.length > 0 && (
           <Card className="border-border bg-card">

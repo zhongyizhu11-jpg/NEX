@@ -51,7 +51,7 @@ import { syncProxySubSource } from "../proxySubSourceSync";
 import { invalidateProxySubCacheForUser } from "../proxySubCache";
 import { clearProxySubRateLimitForToken } from "../proxySubRateLimit";
 import { buildInboundExit, buildNodeExit } from "../exitQualityView";
-import { exitCheckStatusForNode, exitCheckToHostView, speedTestStatusForEntry, startExitCheckForNode, startSpeedTestForEntry } from "../nodeCheckView";
+import { exitCheckStatusForNode, exitCheckToHostView, startExitCheckForNode } from "../nodeCheckView";
 import { NodeCheckError } from "../ops/nodeCheck";
 import { buildSubscriptionRouteView } from "../subscriptionRouteView";
 
@@ -1255,31 +1255,6 @@ export const proxySubscriptionsRouter = router({
           ? exitCheckToHostView(latest.exit, { hostId: Number(viaHost.id), hostName: String(viaHost.name || ""), nodeName: String(node.name || ""), checkedAt: latest.checkedAt, countryCode: viaHost.countryCode ? String(viaHost.countryCode) : null })
           : null,
       };
-    }),
-
-  /**
-   * 预览订阅里每条线路的「测速」：入口机连自己的入口走完整条链对 Cloudflare 测速
-   * （server/nodeCheckView）。entryKey 是预览里的 rule-<id> / direct-<模板 id>。
-   */
-  entrySpeedTestStart: protectedProcedure
-    .input(z.object({ entryKey: z.string().min(1).max(48) }))
-    .mutation(async ({ ctx, input }) => {
-      await assertProxySubscriptionAllowed(ctx);
-      try {
-        return await startSpeedTestForEntry(Number(ctx.user.id), { id: Number(ctx.user.id), role: String(ctx.user.role) }, input);
-      } catch (error) {
-        if (error instanceof NodeCheckError) throw new Error(error.message);
-        throw error;
-      }
-    }),
-
-  entrySpeedTestStatus: protectedProcedure
-    .input(z.object({ entryKey: z.string().min(1).max(48) }))
-    .query(async ({ ctx, input }) => {
-      await assertProxySubscriptionAllowed(ctx);
-      const status = await speedTestStatusForEntry(Number(ctx.user.id), { id: Number(ctx.user.id), role: String(ctx.user.role) }, input.entryKey);
-      const viaHost = status.latest ? await db.getHostById(Number(status.latest.hostId)) : null;
-      return { ...status, viaHostName: viaHost ? String(viaHost.name || "") : "" };
     }),
 
   /** 订阅内容里点开一条中转：这条线路怎么走（server/subscriptionRouteView）。只能看自己的规则。 */

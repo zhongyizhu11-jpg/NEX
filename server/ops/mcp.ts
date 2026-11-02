@@ -228,58 +228,45 @@ export const MCP_TOOLS: McpTool[] = [
     },
   },
   /*
-    网速测试（2.3.502）：和主机详情「网速测试」、预览订阅里每条线路的「测速」同一套。subject 二选一：
-      hostId     这台机器自己的带宽
-      entryKey   订阅里的一条线路：rule-<规则 ID>（中转线路，在入口机上测入口往后的链路）或 direct-<节点 ID>（直连节点）
+    网速测试：和主机详情「网速测试」同一套，测这台机器自己的带宽（大陆的主机测国内三网的测速点）。
+    链路上机器之间的速度用 iperf3 对拉（网络测试页）。
   */
   {
     name: "get_speed_test",
-    description: "读取网速测试的结果（不发起新的测试）：传 hostId 看这台机器自己的带宽；传 entryKey 看订阅里一条线路（rule-<规则 ID> 或 direct-<节点 ID>），线路的结果里还有入口机自己的带宽。返回在测的那次（进度）、最近一次结果（下载 / 上传 / 延迟 / 抖动 / 测速点 / 说明）和这台的 Agent 是否够新。",
+    description: "读取一台主机网速测试的结果（不发起新的测试）。返回在测的那次（进度）、最近一次结果（下载 / 上传 / 延迟 / 抖动 / 测速点 / 说明）和这台的 Agent 是否够新。",
     inputSchema: {
       type: "object",
-      properties: {
-        hostId: { type: "integer", minimum: 1, description: "主机 ID（看这台机器自己的带宽）" },
-        entryKey: { type: "string", description: "订阅线路：rule-<规则 ID> 或 direct-<节点 ID>" },
-      },
+      properties: { hostId: { type: "integer", minimum: 1, description: "主机 ID" } },
+      required: ["hostId"],
       additionalProperties: false,
     },
-    args: z.object({ hostId: z.number().int().positive().optional(), entryKey: z.string().regex(/^(rule|direct)-\d+$/).optional() }).strict().refine((value) => !!value.hostId !== !!value.entryKey, { message: "hostId 和 entryKey 二选一" }),
-    run: async (args, s) => args.hostId
-      ? s.invoke("hosts.speedTestStatus", { hostId: args.hostId })
-      : s.invoke("proxySubscriptions.entrySpeedTestStatus", { entryKey: args.entryKey }),
+    args: z.object({ hostId: z.number().int().positive() }).strict(),
+    run: async (args, s) => s.invoke("hosts.speedTestStatus", { hostId: args.hostId }),
   },
   {
     name: "speed_test",
-    description: "发起一次网速测试并等最多约 50 秒（和网页上「测速」相同）：传 hostId 测这台机器自己的带宽，传 entryKey 测订阅里一条线路（rule-<规则 ID> 或 direct-<节点 ID>）。会用掉这台机器约「速度 × 18 秒」的流量。没等到结果就返回「已发出」，稍后用 get_speed_test 查看。",
+    description: "给一台主机发起一次网速测试并等最多约 50 秒（和主机详情里「测速」相同）。会用掉这台机器约「速度 × 18 秒」的流量。没等到结果就返回「已发出」，稍后用 get_speed_test 查看。",
     inputSchema: {
       type: "object",
-      properties: {
-        hostId: { type: "integer", minimum: 1, description: "主机 ID" },
-        entryKey: { type: "string", description: "订阅线路：rule-<规则 ID> 或 direct-<节点 ID>" },
-      },
+      properties: { hostId: { type: "integer", minimum: 1, description: "主机 ID" } },
+      required: ["hostId"],
       additionalProperties: false,
     },
     mutation: true,
-    args: z.object({ hostId: z.number().int().positive().optional(), entryKey: z.string().regex(/^(rule|direct)-\d+$/).optional() }).strict().refine((value) => !!value.hostId !== !!value.entryKey, { message: "hostId 和 entryKey 二选一" }),
+    args: z.object({ hostId: z.number().int().positive() }).strict(),
     run: async (args, s) => {
-      const started = (args.hostId
-        ? await s.invoke("hosts.startSpeedTest", { hostId: args.hostId })
-        : await s.invoke("proxySubscriptions.entrySpeedTestStart", { entryKey: args.entryKey })) as { runId?: string } | null;
+      const started = await s.invoke("hosts.startSpeedTest", { hostId: args.hostId }) as { runId?: string } | null;
       const runId = String(started?.runId || "");
-      const status = () => (args.hostId
-        ? s.invoke("hosts.speedTestStatus", { hostId: args.hostId })
-        : s.invoke("proxySubscriptions.entrySpeedTestStatus", { entryKey: args.entryKey })) as Promise<any>;
       // 前面有反代的话，一个请求挂太久会被掐：最多等 50 秒
       const deadline = Date.now() + (s.pollTimeoutMs ?? 50_000);
       const interval = s.pollIntervalMs ?? 3_000;
       while (Date.now() < deadline) {
         await sleep(interval);
-        const current = await status();
+        const current = await s.invoke("hosts.speedTestStatus", { hostId: args.hostId }) as any;
         if (current?.pending) continue;
-        if (current?.entryHostPending) continue;
         if (current?.latest && (!runId || current.latest.runId === runId)) return current;
       }
-      return { message: "测速已发出，结果还没回来（一次要二三十秒；线路测速可能先测入口机自己的带宽），稍后用 get_speed_test 查看", runId: runId || null };
+      return { message: "测速已发出，结果还没回来（一次要二三十秒），稍后用 get_speed_test 查看", runId: runId || null };
     },
   },
   {

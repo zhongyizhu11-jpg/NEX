@@ -24,8 +24,38 @@ import {
   hasActiveIperf3Task,
   type Iperf3Status,
 } from "../iperf3AgentTasks";
-import { requireHostAccess } from "./helpers";
+import { requireHostAccess, requireHostsAccess } from "./helpers";
+import * as tunnelRepo from "../repositories/tunnelRepository";
+import { getSegmentSpeedRun, startSegmentSpeedRun } from "../lineSegmentSpeed";
+import { planPairSegments, type LineSegmentNode } from "../../shared/lineDiagnostics";
+import { getHostEntryAddress } from "../../shared/hostEntryAddress";
+import { isTunnelRelayAggregate, isTunnelRelayFailover } from "../../shared/tunnelRelay";
 import { normalizeProbeAddressFamily, PROBE_ADDRESS_FAMILIES, probeFamilyNumber, type ProbeAddressFamily } from "../../shared/probeFamily";
+
+/*
+  iperf3 对拉（2.3.505）：选一条隧道（按它经过的机器拆段）或者两台机器，一段一段：下游开服务端、上游测正向 /
+  反向 / 单条连接，测完关掉。跑法在 server/lineSegmentSpeed.ts，和线路组的「逐段测带宽」同一套。
+*/
+const PAIR_SECONDS = [5, 10, 20, 30] as const;
+const PAIR_STREAMS = [1, 2, 4, 8, 16] as const;
+
+/** 能对拉的隧道：自己的（管理员是全部），带跳点（入口、中转…、出口）和中转是不是并排的。 */
+async function pairTunnels(ctx: { user: { id: number; role: string } }) {
+  const tunnels = (await tunnelRepo.getTunnels(ctx.user.role === "admin" ? undefined : Number(ctx.user.id))) as any[];
+  const hops = (await tunnelRepo.getTunnelHopsByTunnelIds(tunnels.map((tunnel) => Number(tunnel.id)))) as any[];
+  return tunnels.map((tunnel) => {
+    const own = hops.filter((hop) => Number(hop.tunnelId) === Number(tunnel.id));
+    const hostIds = own.length >= 2
+      ? own.map((hop) => Number(hop.hostId)).filter((id) => id > 0)
+      : [Number(tunnel.entryHostId), Number(tunnel.exitHostId)].filter((id) => id > 0);
+    return {
+      id: Number(tunnel.id),
+      name: String(tunnel.name || `隧道 ${tunnel.id}`),
+      hostIds,
+      parallelRelays: isTunnelRelayAggregate(tunnel, own) || isTunnelRelayFailover(tunnel, own),
+    };
+  }).filter((tunnel) => tunnel.hostIds.length >= 2);
+}
 
 const methodSchema = z.enum(["ping", "ping6", "traceroute", "traceroute6", "mtr", "mtr6", "tcp", "iperf3-client"]);
 
@@ -239,6 +269,73 @@ export const lookingGlassRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "网络测试任务不存在或已过期" });
       }
       return decorateStatus(status, host);
+    }),
+
+  /** 对拉能选的隧道（按经过的机器）。机器列表用 hosts。 */
+  pairSpeedTunnels: protectedProcedure.query(async ({ ctx }) => {
+    await assertNetworkTestAllowed(ctx);
+    return pairTunnels(ctx);
+  }),
+
+  /** 开一轮 iperf3 对拉：tunnelId 和 fromHostId / toHostId 二选一。立刻返回进度，之后用 pairSpeedStatus 轮询。 */
+  pairSpeedStart: protectedProcedure
+    .input(z.object({
+      tunnelId: z.number().int().positive().optional(),
+      fromHostId: z.number().int().positive().optional(),
+      toHostId: z.number().int().positive().optional(),
+      seconds: z.number().int().refine((value) => (PAIR_SECONDS as readonly number[]).includes(value)).default(10),
+      streams: z.number().int().refine((value) => (PAIR_STREAMS as readonly number[]).includes(value)).default(4),
+      single: z.boolean().default(true),
+    }).refine((value) => !!value.tunnelId !== !!(value.fromHostId && value.toHostId), { message: "选一条隧道，或者选两台机器" }))
+    .mutation(async ({ input, ctx }) => {
+      await assertNetworkTestAllowed(ctx);
+      let hopIds: number[];
+      let parallelRelays = false;
+      let title: string;
+      let lockKey: string;
+      if (input.tunnelId) {
+        const tunnel = (await pairTunnels(ctx)).find((item) => item.id === input.tunnelId);
+        if (!tunnel) throw new TRPCError({ code: "NOT_FOUND", message: "隧道不存在或不是你的" });
+        hopIds = tunnel.hostIds;
+        parallelRelays = tunnel.parallelRelays;
+        title = `隧道 ${tunnel.name}`;
+        lockKey = `tunnel:${tunnel.id}`;
+      } else {
+        if (input.fromHostId === input.toHostId) throw new Error("两头要选两台不同的机器");
+        hopIds = [Number(input.fromHostId), Number(input.toHostId)];
+        lockKey = `pair:${hopIds.join("-")}`;
+        title = "";
+      }
+      const hosts = await requireHostsAccess(ctx, Array.from(new Set(hopIds))) as any[];
+      const hostById = new Map<number, any>(hosts.map((host) => [Number(host.id), host]));
+      const node = (hostId: number): LineSegmentNode => ({ hostId, name: String(hostById.get(hostId)?.name || `主机 ${hostId}`) });
+      if (!title) title = `${node(hopIds[0]).name} → ${node(hopIds[1]).name}`;
+      const plan = planPairSegments({ hops: hopIds.map(node), parallelRelays });
+      for (const hostId of new Set(hopIds)) {
+        const host = hostById.get(hostId);
+        if (!String(host?.agentToken || "")) throw new Error(`「${host?.name || `主机 ${hostId}`}」没有绑定 Agent，没法在它上面跑 iperf3`);
+      }
+      const endpoints = plan.map((segment) => (segment.skipReason || segment.from.hostId === null || segment.to.hostId === null
+        ? null
+        : { fromHostId: segment.from.hostId, toHostId: segment.to.hostId, toAddress: getHostEntryAddress(hostById.get(segment.to.hostId)) }));
+      return startSegmentSpeedRun({
+        lockKey,
+        title,
+        userId: Number(ctx.user.id),
+        allowPrivate: ctx.user.role === "admin",
+        plan,
+        endpoints,
+        options: { seconds: input.seconds, streams: input.streams, single: input.single },
+      }).view;
+    }),
+
+  pairSpeedStatus: protectedProcedure
+    .input(z.object({ runId: z.string().min(8).max(64) }))
+    .query(async ({ input, ctx }) => {
+      await assertNetworkTestAllowed(ctx);
+      const run = getSegmentSpeedRun(input.runId, ctx.user);
+      if (!run) throw new TRPCError({ code: "NOT_FOUND", message: "对拉任务不存在或已过期" });
+      return run;
     }),
 
   iperf3Start: protectedProcedure

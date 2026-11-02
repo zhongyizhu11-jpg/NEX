@@ -17,11 +17,3 @@ test("延迟、抖动不到 10 ms 留一位小数（抖动 0.3 ms 不再显示�
   assert.equal(formatTraffic(293_000_000), "279 MB");
   assert.equal(formatTraffic(2.5 * (1 << 30)), "2.5 GB");
 });
-
-test("你大约能跑到：入口往后的链路和入口机自己的带宽取小 —— 下载看入口机上行，上传看它的下行", async () => {
-  const { speedReach } = await import("./speedTestFormat");
-  // 链路后面很快，入口机只给 300M 上行：下载被入口机限住
-  assert.deepEqual(speedReach({ downloadMbps: 3660, uploadMbps: 1210 }, { downloadMbps: 900, uploadMbps: 300 }), { downloadMbps: 300, uploadMbps: 900, downLimitedByEntry: true, upLimitedByEntry: true });
-  // 入口机够快：就是链路的数
-  assert.deepEqual(speedReach({ downloadMbps: 73, uploadMbps: 78 }, { downloadMbps: 200, uploadMbps: 200 }), { downloadMbps: 73, uploadMbps: 78, downLimitedByEntry: false, upLimitedByEntry: false });
-});

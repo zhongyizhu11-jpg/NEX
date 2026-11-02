@@ -45,23 +45,46 @@ function round2(value: number) {
   sender 永远是发数据的那一端（反向时是对端），receiver 是收数据的那一端。
   每秒一行的区间行末尾没有 sender / receiver，不算。
 */
-const SUMMARY_LINE = /^\s*\[\s*(SUM|\d+)\s*\]\s+[\d.]+\s*-\s*[\d.]+\s+sec\s+[\d.]+\s+\w?Bytes\s+([\d.]+)\s+([KMGT]?)bits\/sec\b.*\b(sender|receiver)\s*$/i;
+const SUMMARY_LINE = /^\s*\[\s*(SUM|\d+)\s*\]\s+[\d.]+\s*-\s*[\d.]+\s+sec\s+([\d.]+)\s+([KMGT]?)Bytes\s+([\d.]+)\s+([KMGT]?)bits\/sec\b\s*(\d+)?.*\b(sender|receiver)\s*$/i;
 
-export function parseIperf3Mbps(output: string): Iperf3Mbps {
-  const sum: Iperf3Mbps = { sendMbps: null, recvMbps: null };
-  const streams = { send: [] as number[], recv: [] as number[] };
+/** 一次 iperf3 的汇总，多读几样：重传（发送端那行的 Retr 列）、发了多少字节、接收端每条流各多快。 */
+export type Iperf3Detail = Iperf3Mbps & {
+  /** 重传次数（TCP，发送端汇总行）；没有这一列（UDP、老版本）是 null。 */
+  retransmits: number | null;
+  /** 发送端汇总的字节数（算每 GB 重传几次用）。 */
+  sentBytes: number | null;
+  /** 接收端每条流的速率（多流时才有意义）。 */
+  streamMbps: number[];
+};
+
+const BYTE_FACTOR: Record<string, number> = { "": 1, K: 1024, M: 1024 ** 2, G: 1024 ** 3, T: 1024 ** 4 };
+
+export function parseIperf3Detail(output: string): Iperf3Detail {
+  const sum = { sendMbps: null as number | null, recvMbps: null as number | null, retr: null as number | null, bytes: null as number | null };
+  const streams = { send: [] as number[], recv: [] as number[], retr: [] as number[], bytes: [] as number[] };
   for (const line of String(output || "").split(/\r?\n/)) {
     const match = SUMMARY_LINE.exec(line);
     if (!match) continue;
-    const mbps = rateToMbps(match[2], match[3]);
+    const mbps = rateToMbps(match[4], match[5]);
     if (mbps === null) continue;
-    const side = match[4].toLowerCase() === "sender" ? "send" : "recv";
+    const bytes = Number(match[2]) * (BYTE_FACTOR[match[3].toUpperCase()] ?? 1);
+    const retr = match[6] === undefined ? null : Number(match[6]);
+    const side = match[7].toLowerCase() === "sender" ? "send" : "recv";
     if (match[1].toUpperCase() === "SUM") {
       // 同一份输出里出现多次（重复粘贴、或者 Agent 把两次测试拼在一起）以最后一次为准。
-      if (side === "send") sum.sendMbps = mbps;
-      else sum.recvMbps = mbps;
+      if (side === "send") {
+        sum.sendMbps = mbps;
+        sum.retr = retr;
+        sum.bytes = bytes;
+      } else {
+        sum.recvMbps = mbps;
+      }
+    } else if (side === "send") {
+      streams.send.push(mbps);
+      if (retr !== null) streams.retr.push(retr);
+      streams.bytes.push(bytes);
     } else {
-      streams[side].push(mbps);
+      streams.recv.push(mbps);
     }
   }
   const total = (values: number[]) => (values.length > 0 ? values.reduce((a, b) => a + b, 0) : null);
@@ -70,12 +93,49 @@ export function parseIperf3Mbps(output: string): Iperf3Mbps {
   return {
     sendMbps: sendMbps === null ? null : round2(sendMbps),
     recvMbps: recvMbps === null ? null : round2(recvMbps),
+    retransmits: sum.retr ?? total(streams.retr),
+    sentBytes: sum.bytes ?? total(streams.bytes),
+    streamMbps: streams.recv.length > 1 ? streams.recv.map(round2) : [],
   };
+}
+
+export function parseIperf3Mbps(output: string): Iperf3Mbps {
+  const { sendMbps, recvMbps } = parseIperf3Detail(output);
+  return { sendMbps, recvMbps };
 }
 
 /** 一次测试最能代表「这段线路有多快」的数：接收端看到的优先（发送端会把缓冲区里没发出去的也算上）。 */
 export function iperf3EffectiveMbps(result: Iperf3Mbps): number | null {
   return result.recvMbps ?? result.sendMbps;
+}
+
+/** 每 GiB 发出去的数据重传多少次；算不出来是 null。 */
+export function iperf3RetransmitsPerGB(retransmits: number | null, sentBytes: number | null): number | null {
+  if (retransmits === null || !sentBytes || sentBytes <= 0) return null;
+  return Math.round(retransmits / (sentBytes / 1024 ** 3));
+}
+
+/**
+ * 对拉一段测完后的一句话判断（iperf3 对拉、线路组分段测速共用）：
+ *  · 单条连接和多条合计比：单条就跑满 → 线路干净；单条远低于合计 → 有丢包 / 单流受限，单个下载会慢；
+ *    多条合计反而比单条低 → 中间有硬限速（令牌桶，腾讯云联网 / 公网带宽上限都是），几条流互相挤掉。
+ *  · 重传：按每 GB 几次分三档。
+ */
+export function iperf3SegmentVerdict(input: { mbps: number | null; singleMbps: number | null; streams: number; retransmits: number | null; sentBytes: number | null }): string | null {
+  const parts: string[] = [];
+  const { mbps, singleMbps } = input;
+  if (mbps !== null && singleMbps !== null && input.streams > 1 && mbps > 0) {
+    if (singleMbps >= mbps * 1.1) parts.push(`${input.streams} 条连接合计反而比单条低：中间有硬限速，几条连接互相挤掉（隧道可以开链路整形）`);
+    else if (singleMbps >= mbps * 0.8) parts.push("单条连接就能跑满");
+    else parts.push(`单条连接只有 ${Math.round(singleMbps)} Mbps，${input.streams} 条一起才到 ${Math.round(mbps)}：单个下载会慢一些`);
+  }
+  const perGB = iperf3RetransmitsPerGB(input.retransmits, input.sentBytes);
+  if (perGB !== null) {
+    if (perGB >= 1000) parts.push(`重传很多（每 GB 约 ${perGB.toLocaleString("en-US")} 次），这段丢包明显`);
+    else if (perGB >= 100) parts.push(`有一些重传（每 GB 约 ${perGB} 次）`);
+    else parts.push("几乎不丢包");
+  }
+  return parts.length > 0 ? parts.join("；") : null;
 }
 
 /**
@@ -128,6 +188,34 @@ export function planLineSegments(input: {
 }
 
 /** 测完的段里带宽最低的那一段的下标；一段都没测出来返回 null。 */
+/**
+ * iperf3 对拉要测的段（网络测试页）：
+ *  · 选两台机器：就一段 A → B；
+ *  · 选一条隧道：按它经过的机器拆 —— 链式中转是相邻两台一段；主备 / 叠加的几台中转是并排的，
+ *    入口到每台中转、每台中转到出口各一段。
+ * hostIds 是隧道跳点（入口、中转…、出口）；同一台机器前后相连的段不测。
+ */
+export function planPairSegments(input: {
+  hops: readonly LineSegmentNode[];
+  parallelRelays: boolean;
+}): PlannedLineSegment[] {
+  const hops = input.hops;
+  const pairs: Array<[LineSegmentNode, LineSegmentNode]> = [];
+  if (input.parallelRelays && hops.length >= 3) {
+    const entry = hops[0];
+    const exit = hops[hops.length - 1];
+    for (const relay of hops.slice(1, -1)) pairs.push([entry, relay]);
+    for (const relay of hops.slice(1, -1)) pairs.push([relay, exit]);
+  } else {
+    for (let index = 0; index + 1 < hops.length; index += 1) pairs.push([hops[index], hops[index + 1]]);
+  }
+  return pairs.map(([from, to]) => ({
+    from,
+    to,
+    skipReason: from.hostId !== null && from.hostId === to.hostId ? "前后是同一台机器，不用测" : null,
+  }));
+}
+
 export function slowestSegmentIndex(segments: ReadonlyArray<{ status: string; mbps: number | null }>): number | null {
   let slowest: number | null = null;
   segments.forEach((segment, index) => {
