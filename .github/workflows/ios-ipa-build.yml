@@ -1,0 +1,99 @@
+name: iOS IPA build
+
+# 被 ios-ipa.yml 调用：同一套打包步骤，在调用方指定的 macOS 机器上跑一遍。
+# 拆出来是为了能换机器重跑（Apple Silicon 机器经常排不上，见 ios-ipa.yml）而不用把步骤抄两份。
+on:
+  workflow_call:
+    inputs:
+      runner:
+        description: runs-on 标签
+        type: string
+        required: true
+      ref:
+        description: 要打包的代码（tag / 分支 / 提交）；留空 = 触发这次运行的那个
+        type: string
+        required: false
+        default: ''
+      release_tag:
+        description: 发布用的 tag（校验版本号用）；不是发布留空
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  build:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.28.1
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: pnpm
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26.0.1'
+      - run: pnpm install --frozen-lockfile
+      - name: Validate headless icon conversion
+        run: xcrun swift scripts/prepare-ios-assets.swift "$PWD"
+      # 全量测试在 macOS 上要七八分钟，加上打包整个任务压在 15 分钟上下，2.3.506 起多次被中途取消。
+      # 这里只为了出 IPA：PR 上 CI 那个工作流会跑全量测试；打 tag / 手动发布时，同一个提交在 main 上
+      # 已经跑过完整 CI 并且通过（和 release-panel 同一个判断），就不再重跑，查不到或没通过照旧全量测。
+      - name: Check CI result for this commit
+        id: ci
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -uo pipefail
+          passed=false
+          # 补发旧版本时检出的不是触发这次运行的提交，按实际检出的算。
+          HEAD_SHA="$(git rev-parse HEAD)"
+          export HEAD_SHA
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            passed=true
+            echo "Pull request: the CI workflow runs the full test suite on this PR"
+          elif count="$(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs" \
+              -f head_sha="${HEAD_SHA}" -f status=success -f per_page=50 \
+              --jq '[.workflow_runs[] | select(.head_sha == $ENV.HEAD_SHA and .conclusion == "success" and (.event == "push" or .event == "workflow_dispatch"))] | length')"; then
+            if [ "${count:-0}" -gt 0 ] 2>/dev/null; then
+              passed=true
+            fi
+          else
+            echo "::warning::Could not query CI runs for ${HEAD_SHA}; running full verification"
+          fi
+          echo "CI already passed on ${HEAD_SHA}: ${passed}"
+          echo "passed=${passed}" >> "$GITHUB_OUTPUT"
+      - name: Validate versions and application code
+        env:
+          FORWARDX_RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          pnpm check:versions
+          pnpm exec tsc --noEmit
+      - name: Run panel tests
+        if: steps.ci.outputs.passed != 'true'
+        run: pnpm test:all
+      - name: Build unsigned device IPA
+        env:
+          IOS_BUILD_NUMBER: ${{ github.run_number }}
+        run: pnpm mobile:ipa
+      - name: Upload IPA for self-signing
+        uses: actions/upload-artifact@v4
+        with:
+          # 带上机器名：两台都跑到上传这一步时不会撞名，发布那步按前缀取。
+          name: forwardx-ios-unsigned-${{ github.run_number }}-${{ inputs.runner }}
+          path: |
+            ios/build/*-unsigned.ipa
+            ios/build/*-unsigned.ipa.sha256
+          if-no-files-found: error
+          retention-days: 30
