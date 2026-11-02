@@ -3680,6 +3680,7 @@ function PersonalizationSettingsSection() {
   ];
   for (const item of personalizationDockItems) {
     // 列表是固定的八项、顺序不变，所以在循环里调 hook 是安全的
+    // eslint-disable-next-line react-hooks/rules-of-hooks
     useSaveDockItem({ ...item, id: `personalization.${item.id}`, pending: isSavingPersonalization(item.id), reset: resetPersonalizationDraft });
   }
 
@@ -5507,6 +5508,7 @@ function SystemInfoSection() {
   ];
   for (const item of systemDockItems) {
     // 列表是固定的九项、顺序不变，所以在循环里调 hook 是安全的
+    // eslint-disable-next-line react-hooks/rules-of-hooks
     useSaveDockItem({ ...item, id: `system.${item.id}`, pending: isSavingSetting(item.id), reset: resetSystemDraft });
   }
 
