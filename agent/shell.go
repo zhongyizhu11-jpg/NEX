@@ -1,7 +1,7 @@
 package main
 
 // 跑 shell 命令的几个入口（runShell 系列）和 shellQuote，从 main.go 原样搬过来，行为不变。
-// 拼进命令的面板字段要先 shellQuote 或先校验。
+// 拼进命令的面板字段要先 shellQuote 或先校验（端口用 shellSafePort）。
 
 import (
 	"context"
@@ -20,6 +20,32 @@ const shellInlineMaxBytes = 8 * 1024
 
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
+}
+
+// shellSafePort 判断要直接拼进 shell 命令（iptables / nft / awk / pgrep 模式、文件名）的端口文本
+// 是不是 1-65535 的纯数字。端口大多来自 strconv.Itoa，但也有从状态目录文件名、iptables 输出里
+// 读回来的；这里是最后一道防线，不是数字就不拼命令。
+func shellSafePort(port string) bool {
+	if len(port) == 0 || len(port) > 5 {
+		return false
+	}
+	value := 0
+	for i := 0; i < len(port); i++ {
+		c := port[i]
+		if c < '0' || c > '9' {
+			return false
+		}
+		value = value*10 + int(c-'0')
+	}
+	return value >= 1 && value <= 65535
+}
+
+// unsafeShellPortNoop 记一条日志并返回一条什么都不做的命令。
+func unsafeShellPortNoop(where string, port string) string {
+	if shouldLogAgentReport("unsafe-shell-port:"+where, agentReportLogInterval) {
+		logf("refused to build shell command with invalid port where=%s port=%q", where, port)
+	}
+	return "true"
 }
 
 func runShell(cmd string) bool {

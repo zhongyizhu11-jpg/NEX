@@ -8719,6 +8719,11 @@ func syncRunningRuleState(rules []runningRule, protectedPorts map[string]bool) {
 			continue
 		}
 		port := strings.TrimSuffix(strings.TrimPrefix(name, "port_"), ".rule")
+		if !shellSafePort(port) {
+			// 状态目录里不是数字端口的文件不是 Agent 写的，别拿它的名字去拼清理命令。
+			unsafeShellPortNoop("syncRunningRuleState", port)
+			continue
+		}
 		if !wanted[port] {
 			localRuleID := readRuleIDByPort(port)
 			if desired, ok := desiredRunningRuleForStatePort(localRuleID, atoi(port)); ok {
@@ -8765,6 +8770,9 @@ func nftRuleCleanupCmd(ruleID int) string {
 }
 
 func nftPortCleanupCmd(port string, protocol string) string {
+	if !shellSafePort(port) {
+		return unsafeShellPortNoop("nftPortCleanupCmd", port)
+	}
 	protos := []string{"tcp", "udp"}
 	if protocol == "tcp" || protocol == "udp" {
 		protos = []string{protocol}
@@ -8894,6 +8902,9 @@ func iptablesRuleTag(ruleID int) string {
 }
 
 func iptablesAgentDeleteCountingRules(binary string, port string) string {
+	if !shellSafePort(port) {
+		return unsafeShellPortNoop("iptablesAgentDeleteCountingRules", port)
+	}
 	marker := "fwx-stat-" + port + ":"
 	inChain := "FWX_IN_" + port
 	outChain := "FWX_OUT_" + port
@@ -8908,6 +8919,9 @@ func iptablesAgentDeleteCountingRules(binary string, port string) string {
 // iptablesAgentDedupeCountingRules 删掉同一链里逐字相同的重复计数规则，只保留第一条
 // （保留下来的那条计数器不动）。重复来自旧版本 `-C || -A` 在 xtables 锁忙时的重复追加。
 func iptablesAgentDedupeCountingRules(binary string, port string) string {
+	if !shellSafePort(port) {
+		return unsafeShellPortNoop("iptablesAgentDedupeCountingRules", port)
+	}
 	marker := "fwx-stat-" + port + ":"
 	bin := iptablesAgentBin(binary)
 	cmd := fmt.Sprintf(`%s -t mangle -S 2>/dev/null | awk -v marker=%s '/^-A / {chain=$2; position[chain]++; if (index($0, marker) && seen[$0]++) {count++; chains[count]=chain; numbers[count]=position[chain]}} END {for (i=count; i>=1; i--) print chains[i], numbers[i]}' | while read -r chain number; do [ -n "$chain" ] && [ -n "$number" ] && %s -t mangle -D "$chain" "$number" 2>/dev/null || true; done`, bin, shellQuote(marker), bin)
@@ -8935,6 +8949,9 @@ func iptablesAgentDnatTarget(targetIP string, targetPort int) string {
 }
 
 func iptablesAgentDeleteDnatRulesForPort(binary string, port string, protocol string) string {
+	if !shellSafePort(port) {
+		return unsafeShellPortNoop("iptablesAgentDeleteDnatRulesForPort", port)
+	}
 	protos := []string{"tcp", "udp"}
 	if protocol == "tcp" || protocol == "udp" {
 		protos = []string{protocol}
@@ -8963,7 +8980,7 @@ func iptablesAgentDeleteDnatRulesForPort(binary string, port string, protocol st
 //
 // 读取 PREROUTING 失败时宁可保留无标记副本（最多留一条无害的放行/伪装），也不误删。
 func iptablesAgentTargetCleanupCmds(ruleID int, port string, targetIP string, targetPort int, protocol string) []string {
-	if strings.TrimSpace(port) == "" || !iptablesAgentIsIPAddress(targetIP) || targetPort <= 0 {
+	if !shellSafePort(port) || !iptablesAgentIsIPAddress(targetIP) || targetPort <= 0 {
 		return nil
 	}
 	target := iptablesAgentAddress(targetIP)
@@ -9058,6 +9075,10 @@ func managedPortCleanupCmds(port string) []string {
 }
 
 func managedPortCleanupCmdsWithNginx(port string, cleanupNginx bool) []string {
+	if !shellSafePort(port) {
+		unsafeShellPortNoop("managedPortCleanupCmds", port)
+		return nil
+	}
 	inMarker := "fwx-stat-" + port + ":in"
 	outMarker := "fwx-stat-" + port + ":out"
 	cmds := append(managedListenerCleanupCmds(port),
@@ -9131,6 +9152,10 @@ func managedListenerCleanupCmds(port string) []string {
 }
 
 func managedListenerCleanupCmdsForProtocol(port string, protocol string) []string {
+	if !shellSafePort(port) {
+		unsafeShellPortNoop("managedListenerCleanupCmds", port)
+		return nil
+	}
 	protocol = normalizeRuntimeProtocol(protocol)
 	cmds := []string{}
 	seen := map[string]bool{}
@@ -9158,10 +9183,17 @@ func managedListenerCleanupCmdsForProtocol(port string, protocol string) []strin
 }
 
 func managedNginxCleanupShell(port string) string {
+	if !shellSafePort(port) {
+		return unsafeShellPortNoop("managedNginxCleanupShell", port)
+	}
 	return "if [ -f /etc/forwardx/nginx/nginx.conf ] && grep -Eq \"listen .*:" + port + "( |;)|listen \\\\[::\\\\]:" + port + "( |;)|listen 0.0.0.0:" + port + "( |;)\" /etc/forwardx/nginx/nginx.conf 2>/dev/null; then listen_count=$(grep -E '^[[:space:]]*listen[[:space:]]+' /etc/forwardx/nginx/nginx.conf 2>/dev/null | wc -l | tr -d ' '); if [ \"${listen_count:-0}\" -le 1 ]; then " + managedServiceCleanupShell("forwardx-nginx") + "; else echo \"[nginx] keep shared forwardx-nginx while replacing port " + port + "\"; fi; fi"
 }
 
 func fxpPortCleanupCmds(port string) []string {
+	if !shellSafePort(port) {
+		unsafeShellPortNoop("fxpPortCleanupCmds", port)
+		return nil
+	}
 	return []string{
 		"for pid in $(pgrep -f '[f]orwardx-fxp.*fxp-.*-" + port + "\\.json' 2>/dev/null || true); do if [ \"$pid\" = \"$$\" ] || [ \"$pid\" = \"$PPID\" ]; then continue; fi; kill \"$pid\" 2>/dev/null || true; done",
 		"rm -f /run/forwardx-agent/fxp-*-" + port + ".json 2>/dev/null || true",
@@ -9193,6 +9225,9 @@ func atoi(s string) int {
 const nftProcessTrafficTable = "forwardx_traffic"
 
 func nftProcessCountingCleanupCmd(port string) string {
+	if !shellSafePort(port) {
+		return unsafeShellPortNoop("nftProcessCountingCleanupCmd", port)
+	}
 	marker := "fwx-stat-" + port + ":"
 	return fmt.Sprintf(`if command -v nft >/dev/null 2>&1 && nft list table inet %s >/dev/null 2>&1; then for c in input output forward; do for h in $(nft -a list chain inet %s "$c" 2>/dev/null | awk -v marker=%s 'index($0, marker) {print $NF}'); do nft delete rule inet %s "$c" handle "$h" 2>/dev/null || true; done; done; fi; true`, nftProcessTrafficTable, nftProcessTrafficTable, shellQuote(marker), nftProcessTrafficTable)
 }
