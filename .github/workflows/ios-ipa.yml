@@ -2,6 +2,11 @@ name: iOS IPA
 
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: '给已有的发布补 IPA（例如 v2.3.507）：用那个 tag 的代码打包并挂到它的 Release；留空 = 按所选分支 / tag'
+        required: false
+        default: ''
   pull_request:
     paths:
       - 'ios/**'
@@ -13,6 +18,7 @@ on:
       - 'pnpm-lock.yaml'
       - 'scripts/*ios*'
       - '.github/workflows/ios-ipa.yml'
+      - '.github/workflows/ios-ipa-build.yml'
   push:
     tags: ['v*.*.*']
 
@@ -21,80 +27,39 @@ permissions:
   actions: read
 
 concurrency:
-  group: forwardx-ios-${{ github.ref }}
+  group: forwardx-ios-${{ github.ref }}-${{ inputs.release_tag || '' }}
   cancel-in-progress: false
 
+# 先在 Intel 的 macOS 15 上打。
+# Apple Silicon（macos-15）机器 GitHub 那边容量不够：2.3.506 起几乎每次都是「The job was not acquired
+# by Runner of type hosted even after multiple attempts」，排 15 分钟一步没跑就被取消。打出来的是
+# 真机 arm64 的包（generic/platform=iOS），在哪种 Mac 上编译都一样。Intel 那台不行（排不上、Xcode 版本没有）
+# 才换 Apple Silicon 再试一次。
 jobs:
   build:
-    runs-on: macos-15
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-        with:
-          version: 10.28.1
-      - uses: actions/setup-node@v6
-        with:
-          node-version: '22'
-          cache: pnpm
-      - uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: '26.0.1'
-      - run: pnpm install --frozen-lockfile
-      - name: Validate headless icon conversion
-        run: xcrun swift scripts/prepare-ios-assets.swift "$PWD"
-      # 全量测试在 macOS 上要七八分钟，加上打包整个任务压在 15 分钟上下，2.3.506 起多次被中途取消。
-      # 这里只为了出 IPA：PR 上 CI 那个工作流会跑全量测试；打 tag / 手动发布时，同一个提交在 main 上
-      # 已经跑过完整 CI 并且通过（和 release-panel 同一个判断），就不再重跑，查不到或没通过照旧全量测。
-      - name: Check CI result for this commit
-        id: ci
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          EVENT_NAME: ${{ github.event_name }}
-        run: |
-          set -uo pipefail
-          passed=false
-          if [ "$EVENT_NAME" = "pull_request" ]; then
-            passed=true
-            echo "Pull request: the CI workflow runs the full test suite on this PR"
-          elif count="$(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs" \
-              -f head_sha="${GITHUB_SHA}" -f status=success -f per_page=50 \
-              --jq '[.workflow_runs[] | select(.head_sha == $ENV.GITHUB_SHA and .conclusion == "success" and (.event == "push" or .event == "workflow_dispatch"))] | length')"; then
-            if [ "${count:-0}" -gt 0 ] 2>/dev/null; then
-              passed=true
-            fi
-          else
-            echo "::warning::Could not query CI runs for ${GITHUB_SHA}; running full verification"
-          fi
-          echo "CI already passed on ${GITHUB_SHA}: ${passed}"
-          echo "passed=${passed}" >> "$GITHUB_OUTPUT"
-      - name: Validate versions and application code
-        env:
-          FORWARDX_RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
-        run: |
-          pnpm check:versions
-          pnpm exec tsc --noEmit
-      - name: Run panel tests
-        if: steps.ci.outputs.passed != 'true'
-        run: pnpm test:all
-      - name: Build unsigned device IPA
-        env:
-          IOS_BUILD_NUMBER: ${{ github.run_number }}
-        run: pnpm mobile:ipa
-      - name: Upload IPA for self-signing
-        uses: actions/upload-artifact@v4
-        with:
-          name: forwardx-ios-unsigned-${{ github.run_number }}
-          path: |
-            ios/build/*-unsigned.ipa
-            ios/build/*-unsigned.ipa.sha256
-          if-no-files-found: error
-          retention-days: 30
+    uses: ./.github/workflows/ios-ipa-build.yml
+    with:
+      runner: macos-15-intel
+      ref: ${{ inputs.release_tag || '' }}
+      release_tag: ${{ inputs.release_tag || (github.ref_type == 'tag' && github.ref_name || '') }}
+
+  build-arm:
+    needs: build
+    if: ${{ always() && needs.build.result != 'success' && needs.build.result != 'skipped' }}
+    uses: ./.github/workflows/ios-ipa-build.yml
+    with:
+      runner: macos-15
+      ref: ${{ inputs.release_tag || '' }}
+      release_tag: ${{ inputs.release_tag || (github.ref_type == 'tag' && github.ref_name || '') }}
 
   publish:
-    if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
-    needs: build
+    # 只有发布才挂到 Release：打 tag（或在 tag 上手动跑），或者手动补发时填了 release_tag。
+    if: >-
+      always()
+      && (needs.build.result == 'success' || needs.build-arm.result == 'success')
+      && (inputs.release_tag != '' && inputs.release_tag != null
+          || github.ref_type == 'tag' && startsWith(github.ref_name, 'v'))
+    needs: [build, build-arm]
     runs-on: ubuntu-latest
     timeout-minutes: 35
     permissions:
@@ -102,17 +67,20 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: forwardx-ios-unsigned-${{ github.run_number }}
+          pattern: forwardx-ios-unsigned-${{ github.run_number }}-*
+          merge-multiple: true
           path: ipa
       - name: Attach to the existing panel release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
         run: |
+          ls -l ipa
           for attempt in $(seq 1 180); do
             if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-              gh release upload "$RELEASE_TAG" ipa/*
+              # 补发时 Release 上可能已经有同名的旧文件，覆盖掉。
+              gh release upload "$RELEASE_TAG" ipa/* --clobber
               exit 0
             fi
             sleep 10

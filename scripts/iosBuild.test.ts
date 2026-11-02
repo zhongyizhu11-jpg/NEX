@@ -49,9 +49,14 @@ test('IPA script archives a device app without credentials and validates its con
 
 test('iOS credentials and build outputs are never committed', () => {
   const workflow = read('.github/workflows/ios-ipa.yml');
-  assert.doesNotMatch(workflow, /secrets\./);
-  assert.match(workflow, /contents: read/);
-  assert.match(workflow, /if: github.ref_type == 'tag'/);
+  const build = read('.github/workflows/ios-ipa-build.yml');
+  for (const file of [workflow, build]) {
+    assert.doesNotMatch(file, /secrets\./);
+    assert.match(file, /contents: read/);
+  }
+  // 只有发布（tag 或手动补发填了 release_tag）才往 Release 上挂
+  assert.match(workflow, /publish:\s*\n\s*#[^\n]*\n\s*if: >-[\s\S]*github\.ref_type == 'tag'/);
+  assert.match(workflow, /inputs\.release_tag != ''/);
   assert.match(read('ios/.gitignore'), /App\/App\/public/);
   assert.match(read('.gitignore'), /ios\/build\//);
 });
@@ -71,4 +76,15 @@ test('ProMotion: the app may draw above 60Hz and asks WebKit not to cap page upd
   assert.match(controller, /_setPreferPageRenderingUpdatesNear60FPSEnabled:/);
   // private setter must be guarded so an older / newer WebKit without it cannot crash the app
   assert.match(controller, /responds\(to: selector\)/);
+});
+
+test('IPA build falls back to Apple Silicon when the Intel runner cannot build', () => {
+  const workflow = read('.github/workflows/ios-ipa.yml');
+  // Apple Silicon 机器经常排不上（not acquired by Runner），先用 Intel，失败了再换
+  assert.match(workflow, /runner: macos-15-intel/);
+  assert.match(workflow, /build-arm:[\s\S]*needs\.build\.result != 'success'[\s\S]*runner: macos-15\n/);
+  assert.match(workflow, /needs: \[build, build-arm\]/);
+  const build = read('.github/workflows/ios-ipa-build.yml');
+  assert.match(build, /runs-on: \$\{\{ inputs\.runner \}\}/);
+  assert.match(build, /workflow_call:/);
 });
