@@ -175,7 +175,7 @@ import { mimicRuntimeLifecycles } from "./mimicRuntimeLifecycle";
 import { buildTunnelRuleLatencyProbe } from "./ruleLatency";
 import { selectTunnelDialAddress, selectTunnelHopDialAddress } from "./tunnelAddressSelection";
 import { DnsRuntimeGenerationTracker } from "./dnsRuntimeGeneration";
-import { selectResolvedTargetIp } from "./dnsTargetResolution";
+import { resolveTargetIpWithTimeout, selectResolvedTargetIp } from "./dnsTargetResolution";
 import { createResolvedTargetGate } from "./ruleTargetPolicy";
 import { buildForwardXMimicConfig } from "./mimicConfig";
 import { gateForwardRulesForRuntime } from "./linkAccessView";
@@ -1355,19 +1355,9 @@ function addDnsWatch(watches: Map<string, AgentDnsWatch>, host: string, scope: s
   watches.set(key, { host: value, scope, ...(refId ? { refId } : {}) });
 }
 
+// 解析失败或超过 TARGET_DNS_RESOLVE_TIMEOUT_MS 都返回原值，由 selectResolvedTargetIp 回落到上次结果。
 async function resolveTargetIp(raw: string): Promise<string> {
-  const trimmed = String(raw || "").trim();
-  if (!trimmed) return trimmed;
-  if (isIP(trimmed)) return trimmed;
-  try {
-    const ips = await resolve4(trimmed);
-    if (ips.length > 0) return ips[0];
-  } catch { /* fall through */ }
-  try {
-    const ips = await resolve6(trimmed);
-    if (ips.length > 0) return ips[0];
-  } catch { /* fall through */ }
-  return trimmed; // 解析失败返回原值
+  return await resolveTargetIpWithTimeout(raw, { resolve4, resolve6 });
 }
 
 async function resolveTargetIpCached(ruleId: number, raw: string, force = false): Promise<string> {
