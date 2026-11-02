@@ -1300,11 +1300,14 @@ export default function Plans() {
                                   </div>
                                 </TableCell>
                                 <TableCell data-label="限制" className="text-sm text-muted-foreground">
-                                  <div>{plan.portCount} 个端口</div>
-                                  <div>规则 {plan.maxRules || "不限"} · 流量 {formatQuotaBytes(plan.trafficLimit)}</div>
-                                  <div>附加流量 {plan.trafficAddons?.length || 0} 档</div>
-                                  <div>连接 {plan.maxConnections || "不限"} · 单 IP {plan.maxIPs || "不限"} · 限速 {speed(plan.rateLimitMbps)}</div>
-                                  <div>邀请返利 {referralRateText(plan.referralRateBps)}</div>
+                                  {/* 包一层：手机上格子是「列名 …… 值」一行 flex，几行 div 直接放进去会被挤成并排的窄列 */}
+                                  <div className="min-w-0">
+                                    <div>{plan.portCount} 个端口</div>
+                                    <div>规则 {plan.maxRules || "不限"} · 流量 {formatQuotaBytes(plan.trafficLimit)}</div>
+                                    <div>附加流量 {plan.trafficAddons?.length || 0} 档</div>
+                                    <div>连接 {plan.maxConnections || "不限"} · 单 IP {plan.maxIPs || "不限"} · 限速 {speed(plan.rateLimitMbps)}</div>
+                                    <div>邀请返利 {referralRateText(plan.referralRateBps)}</div>
+                                  </div>
                                 </TableCell>
                                 <TableCell data-label="状态">
                                   <PlanStatusSwitches
