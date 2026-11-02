@@ -6,6 +6,7 @@ import { describeRouteReason, routeEventMillis, routeGroupOf, type RoutePath } f
 import { parseRouteLines } from "../shared/routeLines";
 import { normalizeExitGroupStrategy } from "../shared/exitStrategy";
 import { routeFaultCounts } from "./ops/routeFaultCounts";
+import { ignoreErrorWith } from "./ignoredError";
 
 const q = quoteDbIdentifier;
 
@@ -85,13 +86,13 @@ export async function lineWorkspace(actor: { id: number; role: string }, hours =
     ? await queryRaw<any>(
       `SELECT * FROM ${q("forward_rule_route_events")} WHERE ${q("createdAt")} >= ? AND ${q("ruleId")} IN (${ruleIds.map(() => "?").join(",")}) ORDER BY ${q("createdAt")} DESC LIMIT 400`,
       [since, ...ruleIds],
-    ).catch(() => [] as any[])
+    ).catch(ignoreErrorWith("LineWorkspace route events", [] as any[]))
     : [];
   const nameByRule = new Map(rules.map((rule) => [Number(rule.id), String(rule.name || "")]));
   const { alerts, recovered } = await routeFaultCounts({
     hours,
     scope: isAdmin ? { all: true } : { ruleIds, userId: actor.id },
-  }).catch(() => ({ alerts: 0, recovered: 0 }));
+  }).catch(ignoreErrorWith("LineWorkspace alert counts", { alerts: 0, recovered: 0 }));
   const recent: LineAlertRow[] = [];
   const nowMs = Date.now();
   // 此刻还在的问题排前面：维护、熔断、离线的中转，各自有几条线路在避开它。

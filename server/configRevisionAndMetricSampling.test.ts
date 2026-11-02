@@ -52,7 +52,7 @@ test("sampled inserts write one row per host per window and always write when fo
     assert.equal(await count(5), 3);
     assert.equal(await count(6), 1);
     // 主机删掉后采样记录一起清掉，同 id 再来第一条立刻写
-    metrics.forgetHostMetricSample(5);
+    (await import(url("server/entityCleanup.ts"))).notifyHostDeleted(5);
     assert.equal(await metrics.insertHostMetricSampled({ hostId: 5, cpuUsage: 6 }, { now: t0 + 32_000 }), true);
     assert.equal(metrics.HOST_METRIC_SAMPLE_INTERVAL_MS, 30_000);
   `, { name: "host-metric-sampling", quiet: true });

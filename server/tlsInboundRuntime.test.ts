@@ -125,7 +125,9 @@ test("Agent 报上来的监听状态只存内存", () => {
 
 test("心跳接上了：sniInbounds 是一个状态段，SNI 规则一律走守卫并只听回环", () => {
   const source = fs.readFileSync(path.resolve(import.meta.dirname, "agentHeartbeatRoute.ts"), "utf8");
-  const sectionNames = /const AGENT_STATE_SECTION_NAMES = \[([\s\S]*?)\] as const;/.exec(source)?.[1] || "";
+  // 状态段的名单在 agentHeartbeatReport.ts（上报规整那一步）
+  const reportSource = fs.readFileSync(path.resolve(import.meta.dirname, "agentHeartbeatReport.ts"), "utf8");
+  const sectionNames = /const AGENT_STATE_SECTION_NAMES = \[([\s\S]*?)\] as const;/.exec(reportSource)?.[1] || "";
   assert.match(sectionNames, /"sniInbounds"/);
   assert.match(source, /if \(isSniRuntimeRule\(rule\)\) return true;/);
   assert.equal((source.match(/isSniRuntimeRule\(rule\) \? \{ bindAddress: "127\.0\.0\.1" \} : \{\}/g) || []).length, 2);

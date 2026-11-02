@@ -1,7 +1,8 @@
 ﻿import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { notifyRuleDeleted } from "../entityCleanup";
 import { invalidateProxySubCacheForUser } from "../proxySubCache";
 import { forwardGroupMembers, forwardGroups, forwardRuleRouteEvents, forwardRuleTunnelExits, forwardRules, InsertForwardRule, tunnels } from "../../drizzle/schema";
-import { executeRaw, getDb, insertAndGetId, nowDate } from "../dbRuntime";
+import { afterDatabaseCommit, executeRaw, getDb, insertAndGetId, nowDate } from "../dbRuntime";
 import { queryRaw } from "../dbRuntime";
 import { boolLiteral, boolValue, inList, quoteIdentifier } from "../dbCompat";
 import { describePortPolicy, isPortAllowedByPolicy, portPolicyFrom, portPolicyHasRestriction, type PortPolicySource } from "@shared/portPolicy";
@@ -1552,6 +1553,8 @@ export async function finalizeForwardRuleDelete(id: number) {
     eq(forwardRules.pendingDelete, true),
   ));
   if (retiredDomains > 0) signalRuleEntryDomainCleanup("rule-deleted");
+  // 按规则 id 记在内存里的缓存（目标域名解析等）一起清掉
+  await afterDatabaseCommit(() => notifyRuleDeleted(id));
 }
 
 export async function purgeSettledPendingForwardRuleDeletes() {

@@ -25,6 +25,8 @@ import { normalizeTrafficCounterBytes } from "../../shared/trafficCounterBytes";
 import { getProbeCounterStatistics } from "./probeCounterRepository";
 import { SELF_TEST_MAX_LIFETIME_SECONDS } from "../selfTestTiming";
 import { reconcileHostTrafficPolicy } from "../hostTrafficPolicy";
+import { onHostDeleted } from "../entityCleanup";
+import { ignoreErrorWith } from "../ignoredError";
 
 const TRAFFIC_BUCKET_MINUTES = 30;
 const TRAFFIC_BUCKET_SECONDS = TRAFFIC_BUCKET_MINUTES * 60;
@@ -274,6 +276,7 @@ export async function insertHostMetricSampled(metric: InsertHostMetric, options:
 export function forgetHostMetricSample(hostId: number) {
   lastHostMetricInsertAt.delete(Number(hostId));
 }
+onHostDeleted(forgetHostMetricSample);
 
 export async function cleanOldHostMetrics(retainHours: number = 72) {
   const db = await getDb();
@@ -300,7 +303,7 @@ export async function getLatestHostMetricRows(hostIds?: number[]) {
     "id", "hostId", "cpuUsage", "memoryUsage", "memoryUsed", "swapUsage",
     "swapUsed", "swapTotal", "networkIn", "networkOut", "diskUsage",
     "diskUsed", "diskTotal", "uptime", "tcpConnections", "udpConnections", "recordedAt",
-  ]).catch(() => []);
+  ]).catch(ignoreErrorWith("HostMetrics latest rows", [] as any[]));
   const mapped = (rows as any[])
     .map((row) => ({
       id: Number(row?.id || 0),
@@ -367,7 +370,7 @@ export async function sumLatestHostConnections(hostIds: number[]) {
   const rows = await queryLatestHostMetricRows(
     ids,
     ["id", "hostId", "tcpConnections", "udpConnections", "recordedAt"],
-  ).catch(() => []);
+  ).catch(ignoreErrorWith("HostMetrics connections", [] as any[]));
   const total = { ...empty };
   for (const row of rows as any[]) {
     if (Number(row?.rn || 0) !== 1) continue;
@@ -411,7 +414,7 @@ export async function getLatestHostMetricSnapshots(hostIds?: number[]) {
   const rows = await queryLatestHostMetricRows(
     ids,
     ["id", "hostId", "networkIn", "networkOut", "recordedAt"],
-  ).catch(() => []);
+  ).catch(ignoreErrorWith("HostMetrics snapshots", [] as any[]));
   return (rows as any[]).map(mapLatestHostMetricSnapshot).filter((row) => row.hostId > 0);
 }
 
