@@ -17,6 +17,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import DatePickerInput, { formatDateInputValue } from "@/components/DatePickerInput";
+import { formatDateTime as formatTime } from "@/lib/formatTime";
 import { cn } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
 import { PROXY_NODE_PROTOCOLS, PROXY_NODE_PROTOCOL_LABELS, type ProxyNodeProtocol } from "@shared/proxyNode";
@@ -69,13 +70,6 @@ function dateInputValue(value: unknown): string {
   const date = new Date(value as any);
   if (!Number.isFinite(date.getTime())) return "";
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-}
-
-function formatTime(value: unknown): string {
-  if (!value) return "—";
-  const date = new Date(value as any);
-  if (!Number.isFinite(date.getTime())) return "—";
-  return date.toLocaleString("zh-CN", { hour12: false });
 }
 
 /** 分区：一个灰色小标题 + 一句说明 + 字段。四个页签都按这个节奏排，眼睛才找得到东西。 */

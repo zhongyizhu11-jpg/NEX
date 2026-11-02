@@ -138,12 +138,12 @@ function TokenStatusBadge({ tokenItem }: { tokenItem: any }) {
     用猜类名的规则关掉。状态色走令牌，不闪（手册：闪动只留给「正在发生」的事）。
   */
   return isOnline ? (
-    <Badge className="shrink-0 gap-1.5 border-[color-mix(in_srgb,var(--fx-healthy)_25%,transparent)] bg-[var(--fx-healthy-soft)] text-[var(--fx-healthy-text)] text-[10px]">
+    <Badge tone="up" className="shrink-0 gap-1.5 border-[color-mix(in_srgb,var(--fx-healthy)_25%,transparent)] text-[11px]">
       <span className="h-2 w-2 rounded-full bg-[var(--fx-healthy)]" aria-hidden="true" />
       在线
     </Badge>
   ) : (
-    <Badge className="shrink-0 gap-1.5 border-[color-mix(in_srgb,var(--fx-down)_25%,transparent)] bg-[var(--fx-down-soft)] text-[var(--fx-down-text)] text-[10px]">
+    <Badge tone="down" className="shrink-0 gap-1.5 border-[color-mix(in_srgb,var(--fx-down)_25%,transparent)] text-[11px]">
       <span className="h-2 w-2 rounded-full bg-[var(--fx-down)]" aria-hidden="true" />
       离线
     </Badge>

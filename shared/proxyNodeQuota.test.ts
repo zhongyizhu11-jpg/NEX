@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  formatBandwidthMbps,
+  formatBandwidthShort,
   formatProxyNodeQuotaDetail,
   formatProxyNodeQuotaLabeled,
   formatProxyNodeQuotaUsedFirst,
@@ -15,14 +15,14 @@ import {
 const GB = 1e9;
 
 test("带宽按机房口径写，没填显示破折号", () => {
-  assert.equal(formatBandwidthMbps(500), "500M");
-  assert.equal(formatBandwidthMbps(1000), "1G");
-  assert.equal(formatBandwidthMbps(2500), "2.5G");
+  assert.equal(formatBandwidthShort(500), "500M");
+  assert.equal(formatBandwidthShort(1000), "1G");
+  assert.equal(formatBandwidthShort(2500), "2.5G");
   // 10G 不该写成 10.0G。
-  assert.equal(formatBandwidthMbps(10000), "10G");
-  assert.equal(formatBandwidthMbps(0), "—");
-  assert.equal(formatBandwidthMbps(-1), "—");
-  assert.equal(formatBandwidthMbps(Number.NaN), "—");
+  assert.equal(formatBandwidthShort(10000), "10G");
+  assert.equal(formatBandwidthShort(0), "—");
+  assert.equal(formatBandwidthShort(-1), "—");
+  assert.equal(formatBandwidthShort(Number.NaN), "—");
 });
 
 test("流量按 1000 进制换算，跟机房卖的套餐对得上", () => {

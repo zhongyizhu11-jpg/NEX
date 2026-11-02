@@ -1628,8 +1628,8 @@ export function ForwardGroupsContent({
   const groupStatusBadge = (group: any) => {
     const configState = getGroupConfigState(group);
     if (configState.status === "disabled") return <Badge variant="outline">停用</Badge>;
-    if (configState.status === "available") return <Badge className="border-[color-mix(in_srgb,var(--fx-healthy)_20%,transparent)] bg-[var(--fx-healthy-soft)] text-[var(--fx-healthy-text)] hover:bg-[color-mix(in_srgb,var(--fx-healthy)_20%,transparent)] hover:text-[var(--fx-healthy-text)] dark:hover:bg-[color-mix(in_srgb,var(--fx-healthy)_20%,transparent)] dark:hover:text-[var(--fx-healthy-text)]">可用</Badge>;
-    if (configState.status === "degraded") return <Badge className="border-[color-mix(in_srgb,var(--fx-warn)_25%,transparent)] bg-[var(--fx-warn-soft)] text-[var(--fx-warn-text)] hover:bg-[var(--fx-warn-soft)]">部分可用</Badge>;
+    if (configState.status === "available") return <Badge tone="up" className="border-[color-mix(in_srgb,var(--fx-healthy)_20%,transparent)]">可用</Badge>;
+    if (configState.status === "degraded") return <Badge tone="warn" className="border-[color-mix(in_srgb,var(--fx-warn)_25%,transparent)]">部分可用</Badge>;
     if (configState.status === "pending") return <Badge variant="secondary">等待检测</Badge>;
     return <Badge variant="destructive">不可用</Badge>;
   };
@@ -1717,7 +1717,7 @@ export function ForwardGroupsContent({
         {live && live.tone !== "off" ? <MemberLiveDot tone={live.tone} /> : renderMemberConfigIcon(group, member)}
         <span className="truncate">{label}</span>
         {live?.note ? <span className="shrink-0 font-mono text-[10.5px] tabular-nums opacity-80">{live.note}</span> : null}
-        {resolved ? <span className="shrink-0 rounded-sm bg-[var(--fx-healthy)] px-1 text-[10px] font-semibold leading-4 text-white" data-testid="member-resolved">解析</span> : null}
+        {resolved ? <span className="shrink-0 rounded-sm bg-[var(--fx-healthy-soft)] px-1 text-[11px] font-semibold leading-4 text-[var(--fx-healthy-text)]" data-testid="member-resolved">解析</span> : null}
       </>
     );
   };

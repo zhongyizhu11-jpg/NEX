@@ -29,6 +29,8 @@
 */
 
 html[data-ui-theme="gilt"] {
+  /* 强调色沿用面板默认：浅色下深蓝底配白字 */
+  --fx-on-accent: #ffffff;
   --fx-l0-page: #f5f2ec;
   --fx-l1-surface: #fffdf9;
   --fx-l2-group: #f4f0e8;
@@ -61,6 +63,8 @@ html[data-ui-theme="gilt"] {
   --fx-font-display: "New York", "Iowan Old Style", "Songti SC", "STSong", Georgia, "Noto Serif CJK SC", "Source Han Serif SC", "Times New Roman", serif;
 }
 html.dark[data-ui-theme="gilt"] {
+  /* 深色下强调色是浅蓝，字用深色 */
+  --fx-on-accent: #0d1722;
   --fx-l0-page: #131110;
   --fx-l1-surface: #1c1917;
   --fx-raised: #241f1b;

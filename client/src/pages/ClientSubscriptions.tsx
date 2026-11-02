@@ -773,7 +773,7 @@ export default function ClientSubscriptionsPage() {
         leading: <ProxyNodeHealthDot health={node.health} />,
         name: node.name,
         tag: (
-          <Badge variant="secondary" className="h-4 shrink-0 px-1 text-[10px] font-normal">
+          <Badge variant="secondary" size="sm" className="shrink-0 font-normal">
             {PROXY_NODE_PROTOCOL_LABELS[node.protocol as ProxyNodeProtocol] || node.protocol}
           </Badge>
         ),
@@ -823,7 +823,7 @@ export default function ClientSubscriptionsPage() {
       leading: <ProxyNodeHealthDot health={node.health} />,
       name: node.name,
       tag: (
-        <Badge variant="secondary" className="h-4 shrink-0 px-1 text-[10px] font-normal">
+        <Badge variant="secondary" size="sm" className="shrink-0 font-normal">
           {PROXY_NODE_PROTOCOL_LABELS[node.protocol as ProxyNodeProtocol] || node.protocol}
         </Badge>
       ),
@@ -1717,7 +1717,7 @@ export default function ClientSubscriptionsPage() {
                               「直连」，每条都写一遍等于没说，还占着唯一能放信息的位置。
                             */}
                             {direct && (
-                              <Badge variant="outline" className="h-4 shrink-0 px-1 text-[10px] font-normal">
+                              <Badge variant="outline" size="sm" className="shrink-0 font-normal">
                                 {remarkByTemplateId.get(Number(node.templateId)) || "直连"}
                               </Badge>
                             )}

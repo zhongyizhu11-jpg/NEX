@@ -38,7 +38,7 @@ export type ProxyNodeQuota = {
 export type ProxyNodeQuotaState = "none" | "normal" | "warn" | "exceeded";
 
 /** 带宽写成 500M / 2.5G 这种机房口径的写法，0 显示成 —。 */
-export function formatBandwidthMbps(mbps: number): string {
+export function formatBandwidthShort(mbps: number): string {
   const value = Number(mbps);
   if (!Number.isFinite(value) || value <= 0) return "—";
   if (value < 1000) return `${value}M`;
@@ -109,7 +109,7 @@ export function proxyNodeQuotaState(quota: ProxyNodeQuota): ProxyNodeQuotaState 
  * 桌面端鼠标一停就知道哪个是哪个，手机上则靠固定顺序。
  */
 export function formatProxyNodeQuotaDetail(quota: ProxyNodeQuota): string {
-  const bandwidth = formatBandwidthMbps(quota.bandwidthMbps);
+  const bandwidth = formatBandwidthShort(quota.bandwidthMbps);
   const limit = (Number(quota.trafficLimit) || 0) > 0 ? formatQuotaBytes(quota.trafficLimit) : "—";
   const used = formatQuotaBytes(quota.trafficUsed);
   const head = `${bandwidth} / ${limit} / ${used}`;
@@ -120,7 +120,7 @@ export function formatProxyNodeQuotaDetail(quota: ProxyNodeQuota): string {
 /** 带标签的完整写法，给悬停说明用 —— 那里不缺地方，正好补上顺序之外的含义。 */
 export function formatProxyNodeQuotaLabeled(quota: ProxyNodeQuota): string {
   const parts: string[] = [];
-  if ((Number(quota.bandwidthMbps) || 0) > 0) parts.push(`带宽 ${formatBandwidthMbps(quota.bandwidthMbps)}`);
+  if ((Number(quota.bandwidthMbps) || 0) > 0) parts.push(`带宽 ${formatBandwidthShort(quota.bandwidthMbps)}`);
   if ((Number(quota.trafficLimit) || 0) > 0) parts.push(`总流量 ${formatQuotaBytes(quota.trafficLimit)}`);
   parts.push(`已用 ${formatQuotaBytes(quota.trafficUsed)}`);
   if ((Number(quota.trafficLimit) || 0) > 0) {
@@ -145,7 +145,7 @@ export function formatProxyNodeQuotaUsedFirst(quota: ProxyNodeQuota): string {
   parts.push(limit > 0
     ? `已用 ${formatQuotaBytes(quota.trafficUsed)} / ${formatQuotaBytes(limit)}（${proxyNodeQuotaPercent(quota)}%）`
     : `已用 ${formatQuotaBytes(quota.trafficUsed)}`);
-  if ((Number(quota.bandwidthMbps) || 0) > 0) parts.push(`带宽 ${formatBandwidthMbps(quota.bandwidthMbps)}`);
+  if ((Number(quota.bandwidthMbps) || 0) > 0) parts.push(`带宽 ${formatBandwidthShort(quota.bandwidthMbps)}`);
   return parts.join(" · ");
 }
 

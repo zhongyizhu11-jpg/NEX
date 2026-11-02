@@ -24,6 +24,8 @@ const buttonVariants = cva("inline-flex items-center justify-center gap-2 whites
     },
     size: {
       default: "h-9 px-3.5 py-2",
+      /* xs：卡片角上、行尾那种小按钮（28px 高），不再各处手写 h-7 px-2 text-xs */
+      xs: "h-7 gap-1.5 rounded-md px-2.5 text-[12px]",
       sm: "h-8 rounded-md px-3 text-[13px]",
       lg: "h-10 rounded-md px-5 text-[14px]",
       icon: "h-9 w-9",

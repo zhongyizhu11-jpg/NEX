@@ -82,6 +82,8 @@
   --color-path-line: var(--fx-path-line);
   --color-delivery: var(--fx-delivery);
   --color-delivery-soft: var(--fx-delivery-soft);
+  /* 强调色实底上的字：text-on-accent，不写死 text-white（深色主题里强调色是浅的） */
+  --color-on-accent: var(--fx-on-accent);
 
   /*
     六档字号接进 Tailwind：text-display / text-metric / text-section /

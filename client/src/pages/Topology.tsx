@@ -5,6 +5,8 @@ import { useLocation, useSearch } from "wouter";
 import DataSectionError from "@/components/DataSectionError";
 import EmptyState from "@/components/EmptyState";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
+import { StatusDot } from "@/components/network/StatusDot";
+import type { NetworkHealth } from "@shared/networkHealth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -65,11 +67,12 @@ function readStoredView(): TopologyView {
   }
 }
 
-const STATUS_DOT: Record<TopologyStatus, string> = {
-  running: "bg-[var(--fx-healthy-text)]",
-  degraded: "bg-[var(--fx-warn-text)]",
-  failed: "bg-destructive",
-  stopped: "bg-muted-foreground/50",
+/** 拓扑的四档状态借全站那一枚状态点画（components/network/StatusDot），不再自己配色 */
+const STATUS_HEALTH: Record<TopologyStatus, NetworkHealth> = {
+  running: "healthy",
+  degraded: "degraded",
+  failed: "down",
+  stopped: "standby",
 };
 
 const GROUP_SECTION_BY_MODE: Record<string, string> = { chain: "chains", port: "ports", failover: "groups", entry: "entries", exit: "exits" };
@@ -109,10 +112,6 @@ function store(key: string, value: string) {
   }
 }
 
-function StatusDot({ status }: { status: TopologyStatus }) {
-  return <span className={cn("inline-block h-2 w-2 shrink-0 rounded-full", STATUS_DOT[status])} aria-label={TOPOLOGY_STATUS_LABELS[status]} />;
-}
-
 type Selection = { type: "node" | "edge"; id: string } | null;
 
 function ResourceRow({ status, title, meta, onFocus, href, onNavigate }: {
@@ -125,7 +124,7 @@ function ResourceRow({ status, title, meta, onFocus, href, onNavigate }: {
 }) {
   return (
     <li className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 hover:bg-muted/50">
-      <StatusDot status={status} />
+      <StatusDot health={STATUS_HEALTH[status]} label={TOPOLOGY_STATUS_LABELS[status]} />
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-medium">{title}</p>
         <p className="truncate text-meta text-muted-foreground">{meta}</p>

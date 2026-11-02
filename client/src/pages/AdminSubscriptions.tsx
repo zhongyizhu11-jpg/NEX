@@ -23,6 +23,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { formatDateTime as timeText } from "@/lib/formatTime";
 import { trpc } from "@/lib/trpc";
 import { PROXY_SUB_TOKEN_FAILURE_LABELS, proxySubTokenStatus } from "@shared/proxySubTokenStatus";
 import { PROXY_SUB_DEFAULT_SETTINGS, type ProxySubSettings } from "@shared/proxySubSettings";
@@ -39,12 +40,6 @@ const TAB_ITEMS = [
   { value: "templates", label: "模板", icon: FileCode2 },
   { value: "settings", label: "设置", icon: Settings2 },
 ] as const satisfies readonly SlidingTabItem<AdminTab>[];
-
-function timeText(value: unknown): string {
-  if (!value) return "—";
-  const date = new Date(value as any);
-  return Number.isFinite(date.getTime()) ? date.toLocaleString("zh-CN", { hour12: false }) : "—";
-}
 
 const RESULT_LABELS: Record<string, string> = { ok: "成功", page: "落地页", ...PROXY_SUB_TOKEN_FAILURE_LABELS };
 

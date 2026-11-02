@@ -6,7 +6,7 @@ import DataSectionLoading from "@/components/DataSectionLoading";
 import EmptyState from "@/components/EmptyState";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { segmentedControlClassName, segmentedOptionClassName } from "@/components/ui/segmented";
+import { SegmentedControl } from "@/components/ui/segmented-control";
 import { pollingInterval } from "@/lib/polling";
 import { trpc } from "@/lib/trpc";
 import { groupEventsByDay } from "@shared/opsEvents";
@@ -72,21 +72,7 @@ export default function EventsTab(_props: Record<string, never>) {
   return (
     <div className="flex min-w-0 flex-col gap-4">
       <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div className={segmentedControlClassName} role="group" aria-label="级别">
-          <div className="grid grid-cols-2 gap-1">
-            {LEVEL_OPTIONS.map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                aria-pressed={level === option.value}
-                onClick={() => setLevel(option.value)}
-                className={segmentedOptionClassName(level === option.value)}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-        </div>
+        <SegmentedControl ariaLabel="级别" value={level} options={LEVEL_OPTIONS} onChange={setLevel} listClassName="grid grid-cols-2 gap-1" />
         <Select value={hostFilter} onValueChange={setHostFilter}>
           <SelectTrigger className="h-9 w-full sm:w-56" aria-label="主机">
             <SelectValue placeholder="全部主机" />

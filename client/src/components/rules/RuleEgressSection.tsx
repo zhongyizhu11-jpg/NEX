@@ -16,7 +16,7 @@ import { LandingPicker, useLandingOptions, type LandingInbound } from "@/compone
 import { FormField } from "@/components/ui/form-field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { segmentedControlClassName, segmentedOptionClassName } from "@/components/ui/segmented";
+import { SegmentedControl } from "@/components/ui/segmented-control";
 import { trpc } from "@/lib/trpc";
 import {
   isSs2022Method,
@@ -141,29 +141,23 @@ export function RuleEgressSection({ value, onChange, onEgressEnabled, blockedRea
     // 标题和折叠在外面（规则编辑框的 RuleFormCollapsible「出口」），这里只放里面的内容。
     <section className="space-y-2.5" data-testid="rule-egress-section">
       <p className="text-meta text-muted-foreground">目标看到的来源 IP 是谁</p>
-      <div className={segmentedControlClassName} role="group" aria-label="出口">
-        <div className="grid grid-cols-3 gap-1">
-          {OPTIONS.map((option) => {
-            const active = value.egressType === option.type;
-            const disabled = option.type !== "none" && !!blockedReason && !active;
-            const Icon = option.icon;
-            return (
-              <button
-                key={option.type}
-                type="button"
-                aria-pressed={active}
-                title={RULE_EGRESS_TYPE_LABELS[option.type]}
-                disabled={disabled}
-                className={segmentedOptionClassName(active, disabled, "px-1.5")}
-                onClick={() => pick(option.type)}
-              >
-                <Icon className="hidden h-4 w-4 shrink-0 sm:block" />
-                <span className="truncate">{option.short}</span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
+      <SegmentedControl<RuleEgressType>
+        ariaLabel="出口"
+        listClassName="grid grid-cols-3 gap-1"
+        optionClassName="px-1.5"
+        value={value.egressType}
+        options={OPTIONS.map((option) => {
+          const Icon = option.icon;
+          return {
+            value: option.type,
+            title: RULE_EGRESS_TYPE_LABELS[option.type],
+            disabled: option.type !== "none" && !!blockedReason && value.egressType !== option.type,
+            icon: <Icon className="hidden h-4 w-4 shrink-0 sm:block" />,
+            label: <span className="truncate">{option.short}</span>,
+          };
+        })}
+        onChange={pick}
+      />
 
       {value.egressType === "none" && (
         <p className="text-meta leading-5 text-muted-foreground">

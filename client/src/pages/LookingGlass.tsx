@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { copyTextToClipboard } from "@/lib/clipboard";
+import { formatDateTime as formatTimePoint } from "@/lib/formatTime";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import {
@@ -103,10 +104,7 @@ function methodMeta(method: Method) {
 }
 
 function formatDateTime(value: string | Date | undefined) {
-  if (!value) return "-";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "-";
-  return date.toLocaleString("zh-CN", { hour12: false });
+  return formatTimePoint(value, "-");
 }
 
 function resultOk(result?: LookingGlassResult | null) {

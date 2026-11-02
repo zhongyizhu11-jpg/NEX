@@ -32,6 +32,8 @@
 */
 
 html[data-ui-theme="cinnabar"] {
+  /* 强调色沿用面板默认：浅色下深蓝底配白字 */
+  --fx-on-accent: #ffffff;
   --fx-l0-page: #f6f6f4;
   --fx-l1-surface: #ffffff;
   --fx-raised: #ffffff;
@@ -65,6 +67,8 @@ html[data-ui-theme="cinnabar"] {
   --fx-font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, "Liberation Mono", monospace;
 }
 html.dark[data-ui-theme="cinnabar"] {
+  /* 深色下强调色是浅蓝，字用深色 */
+  --fx-on-accent: #0d1722;
   --fx-l0-page: #0a0a0b;
   --fx-l1-surface: #111113;
   --fx-raised: #18181b;

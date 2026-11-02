@@ -3,9 +3,8 @@ import { toast } from "sonner";
 import DataSectionError from "@/components/DataSectionError";
 import DataSectionLoading from "@/components/DataSectionLoading";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { segmentedControlClassName, segmentedOptionClassName } from "@/components/ui/segmented";
+import { SegmentedControl } from "@/components/ui/segmented-control";
 import { trpc } from "@/lib/trpc";
-import { cn } from "@/lib/utils";
 
 /**
  * 设置 › 进阶 › 流量用尽时的处理（#18）。
@@ -61,24 +60,18 @@ export default function QuotaModeSection(_props: Record<string, never>) {
         <CardDescription>用户流量用完后，他名下的规则都会停下、新连接被拒；这里决定已经连着的怎么办。</CardDescription>
       </CardHeader>
       <CardContent className="space-y-2">
-        <div className={cn(segmentedControlClassName, "grid grid-cols-2 gap-1")} role="radiogroup" aria-label="流量用尽时的处理">
-          {OPTIONS.map((option) => (
-            <button
-              key={option.value}
-              type="button"
-              role="radio"
-              aria-checked={current === option.value}
-              disabled={setMode.isPending}
-              onClick={() => {
-                if (current !== option.value) setMode.mutate({ mode: option.value });
-              }}
-              className={segmentedOptionClassName(current === option.value, setMode.isPending)}
-            >
-              {setMode.isPending && setMode.variables?.mode === option.value ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-              {option.label}
-            </button>
-          ))}
-        </div>
+        <SegmentedControl
+          ariaLabel="流量用尽时的处理"
+          className="grid grid-cols-2 gap-1"
+          value={current}
+          disabled={setMode.isPending}
+          options={OPTIONS.map((option) => ({
+            value: option.value,
+            label: option.label,
+            icon: setMode.isPending && setMode.variables?.mode === option.value ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null,
+          }))}
+          onChange={(mode) => setMode.mutate({ mode })}
+        />
         <p className="text-meta text-muted-foreground">{active.hint}</p>
         {current === "cut" && outdated.length > 0 ? (
           <p className="text-meta text-[var(--fx-warn-text)]">

@@ -1444,19 +1444,19 @@ function UsersContent() {
                 <div className="min-w-0 flex-1">
                   <div className="flex min-w-0 items-center gap-1.5">
                     <span className="min-w-0 truncate text-sm font-semibold">{u.username || "未命名"}</span>
-                    {u.role === "admin" && <Badge className="h-4 shrink-0 px-1 text-[10px]">管理员</Badge>}
+                    {u.role === "admin" && <Badge size="sm" className="shrink-0">管理员</Badge>}
                     {u.id === currentUser?.id && (
-                      <Badge variant="outline" className="h-4 shrink-0 px-1 text-[10px] text-primary">当前</Badge>
+                      <Badge variant="outline" size="sm" className="shrink-0 text-primary">当前</Badge>
                     )}
                     {/*
                       异常要在行上就看得见 —— 「谁被禁了 / 谁超额了 / 谁过期了」正是
                       管理员扫这一屏在找的东西，藏进详情就等于要一个个点开找。
                     */}
                     {u.accountEnabled === false && (
-                      <Badge variant="destructive" className="h-4 shrink-0 px-1 text-[10px]">禁用</Badge>
+                      <Badge variant="destructive" size="sm" className="shrink-0">禁用</Badge>
                     )}
-                    {isOverLimit && <Badge variant="destructive" className="h-4 shrink-0 px-1 text-[10px]">超额</Badge>}
-                    {isExpired && <Badge variant="destructive" className="h-4 shrink-0 px-1 text-[10px]">已到期</Badge>}
+                    {isOverLimit && <Badge variant="destructive" size="sm" className="shrink-0">超额</Badge>}
+                    {isExpired && <Badge variant="destructive" size="sm" className="shrink-0">已到期</Badge>}
                   </div>
                   <p className="mt-0.5 truncate text-xs text-muted-foreground">
                     #{u.id}

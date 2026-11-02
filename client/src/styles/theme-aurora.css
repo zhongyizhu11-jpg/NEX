@@ -24,6 +24,8 @@
 */
 
 html[data-ui-theme="aurora"] {
+  /* 强调色沿用面板默认：浅色下深蓝底配白字 */
+  --fx-on-accent: #ffffff;
   /* 底：很浅的冷白，柔光铺在它上面。页面底色设置仍然能换这一层（它写的就是 --fx-l0-page） */
   --fx-l0-page: #f4f6fb;
   --fx-l3-control-fill: rgb(255 255 255 / 58%);
@@ -54,6 +56,8 @@ html[data-ui-theme="aurora"] {
 }
 
 html.dark[data-ui-theme="aurora"] {
+  /* 深色下强调色是浅蓝，字用深色 */
+  --fx-on-accent: #0d1722;
   --fx-l0-page: #0f1117;
   --fx-l1-surface: #1b1e27;
   --fx-raised: #232734;

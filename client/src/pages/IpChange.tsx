@@ -34,6 +34,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { formatDateTime as formatTime } from "@/lib/formatTime";
 import { trpc } from "@/lib/trpc";
 
 /*
@@ -44,13 +45,6 @@ import { trpc } from "@/lib/trpc";
 */
 
 type TabKey = "hosts" | "accounts" | "events";
-
-function formatTime(value: unknown) {
-  if (!value) return "—";
-  const date = new Date(value as any);
-  if (Number.isNaN(date.getTime())) return "—";
-  return date.toLocaleString("zh-CN", { hour12: false });
-}
 
 const TONE_CLASS: Record<string, string> = {
   healthy: "border-transparent bg-[var(--fx-healthy-soft)] text-[var(--fx-healthy-text)]",

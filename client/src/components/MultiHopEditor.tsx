@@ -13,7 +13,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { ArrowDown, GripVertical, Trash2 } from "lucide-react";
-import { segmentedControlClassName, segmentedOptionClassName } from "@/components/ui/segmented";
+import { SegmentedControl } from "@/components/ui/segmented-control";
 import {
   multiHopAddressSelection,
   selectedMultiHopConnectHost,
@@ -325,47 +325,19 @@ export default function MultiHopEditor({
         {showRelayMode && (
           <div className="flex min-w-0 items-center gap-2 sm:ml-auto">
             <span className="shrink-0 text-xs text-muted-foreground">中转方式</span>
-            <div className={`${segmentedControlClassName} grid min-w-0 flex-1 grid-cols-4 gap-1 sm:w-80 sm:flex-none`}>
-              <button
-                type="button"
-                aria-pressed={relayMode === "chain"}
-                className={segmentedOptionClassName(relayMode === "chain", false, "h-7 px-2 text-xs")}
-                onClick={() => onRelayModeChange?.("chain")}
-                title={TUNNEL_RELAY_MODE_HINTS.chain}
-              >
-                {TUNNEL_RELAY_MODE_LABELS.chain}
-              </button>
-              <button
-                type="button"
-                aria-pressed={relayMode === "failover"}
-                disabled={!failoverAvailable}
-                className={segmentedOptionClassName(relayMode === "failover", !failoverAvailable, "h-7 px-2 text-xs")}
-                onClick={() => onRelayModeChange?.("failover")}
-                title={failoverDisabledReason || TUNNEL_RELAY_MODE_HINTS.failover}
-              >
-                {TUNNEL_RELAY_MODE_LABELS.failover}
-              </button>
-              <button
-                type="button"
-                aria-pressed={relayMode === "aggregate"}
-                disabled={!aggregateAvailable}
-                className={segmentedOptionClassName(relayMode === "aggregate", !aggregateAvailable, "h-7 px-2 text-xs")}
-                onClick={() => onRelayModeChange?.("aggregate")}
-                title={aggregateDisabledReason || TUNNEL_RELAY_MODE_HINTS.aggregate}
-              >
-                {TUNNEL_RELAY_MODE_LABELS.aggregate}
-              </button>
-              <button
-                type="button"
-                aria-pressed={relayMode === "hot_standby"}
-                disabled={!hotStandbyAvailable}
-                className={segmentedOptionClassName(relayMode === "hot_standby", !hotStandbyAvailable, "h-7 px-2 text-xs")}
-                onClick={() => onRelayModeChange?.("hot_standby")}
-                title={hotStandbyDisabledReason || TUNNEL_RELAY_MODE_HINTS.hot_standby}
-              >
-                {TUNNEL_RELAY_MODE_LABELS.hot_standby}
-              </button>
-            </div>
+            <SegmentedControl<TunnelRelayMode>
+              ariaLabel="中转方式"
+              className="grid min-w-0 flex-1 grid-cols-4 gap-1 sm:w-80 sm:flex-none"
+              optionClassName="h-7 px-2 text-xs"
+              value={relayMode}
+              options={[
+                { value: "chain", label: TUNNEL_RELAY_MODE_LABELS.chain, title: TUNNEL_RELAY_MODE_HINTS.chain },
+                { value: "failover", label: TUNNEL_RELAY_MODE_LABELS.failover, disabled: !failoverAvailable, title: failoverDisabledReason || TUNNEL_RELAY_MODE_HINTS.failover },
+                { value: "aggregate", label: TUNNEL_RELAY_MODE_LABELS.aggregate, disabled: !aggregateAvailable, title: aggregateDisabledReason || TUNNEL_RELAY_MODE_HINTS.aggregate },
+                { value: "hot_standby", label: TUNNEL_RELAY_MODE_LABELS.hot_standby, disabled: !hotStandbyAvailable, title: hotStandbyDisabledReason || TUNNEL_RELAY_MODE_HINTS.hot_standby },
+              ]}
+              onChange={(mode) => onRelayModeChange?.(mode)}
+            />
           </div>
         )}
       </div>

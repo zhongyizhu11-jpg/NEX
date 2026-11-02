@@ -4,7 +4,7 @@ import DataSectionError from "@/components/DataSectionError";
 import DataSectionLoading from "@/components/DataSectionLoading";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { segmentedControlClassName, segmentedOptionClassName } from "@/components/ui/segmented";
+import { SegmentedControl } from "@/components/ui/segmented-control";
 import { trpc } from "@/lib/trpc";
 import { formatBytes } from "@shared/formatBytes";
 import { formatMoneyCents } from "@shared/formatMoney";
@@ -115,21 +115,7 @@ export default function OpsBoardTab() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className={segmentedControlClassName} role="group" aria-label="时间范围">
-          <div className="grid grid-cols-3 gap-1">
-            {RANGE_OPTIONS.map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                aria-pressed={range === option.value}
-                className={segmentedOptionClassName(range === option.value)}
-                onClick={() => setRange(option.value)}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-        </div>
+        <SegmentedControl ariaLabel="时间范围" value={range} options={RANGE_OPTIONS} onChange={setRange} listClassName="grid grid-cols-3 gap-1" />
         <Select value={String(refreshSeconds)} onValueChange={(value) => setRefreshSeconds(Number(value))}>
           <SelectTrigger className="h-8 w-[8.5rem] text-xs" aria-label="自动刷新"><SelectValue /></SelectTrigger>
           <SelectContent>

@@ -29,14 +29,34 @@ const badgeVariants = cva("inline-flex shrink-0 items-center whitespace-nowrap r
       destructive: "border-transparent bg-[var(--fx-down-soft)] text-[var(--fx-down-text)]",
       outline: "border-[var(--fx-stroke-base)] text-foreground",
     },
+    /*
+      tone：按语义上色，软底、深字（和 destructive 同一个思路），不再每处自己拼
+      `bg-[var(--fx-healthy-soft)] text-[var(--fx-healthy-text)]`，更不要实底配 text-white ——
+      深色主题里状态色是亮的，白字压上去就看不见了。给了 tone 就以 tone 为准，variant 只管形状。
+    */
+    tone: {
+      neutral: "border-transparent bg-[var(--fx-standby-soft)] bg-none text-muted-foreground",
+      accent: "border-transparent bg-[var(--fx-accent-soft)] bg-none text-[var(--fx-accent)]",
+      up: "border-transparent bg-[var(--fx-healthy-soft)] bg-none text-[var(--fx-healthy-text)]",
+      warn: "border-transparent bg-[var(--fx-warn-soft)] bg-none text-[var(--fx-warn-text)]",
+      down: "border-transparent bg-[var(--fx-down-soft)] bg-none text-[var(--fx-down-text)]",
+      info: "border-transparent bg-[var(--fx-path-soft)] bg-none text-[var(--fx-path-text)]",
+    },
+    /* sm：列表行里、名字旁边那种小标（11px，16px 高）；md 是默认 */
+    size: {
+      sm: "h-4 px-1 py-0 text-[11px] leading-4",
+      md: "",
+    },
   },
-  defaultVariants: { variant: "default" },
+  defaultVariants: { variant: "default", size: "md" },
 })
+
+export type BadgeTone = NonNullable<VariantProps<typeof badgeVariants>["tone"]>
 
 export interface BadgeProps extends React.HTMLAttributes<HTMLDivElement>, VariantProps<typeof badgeVariants> {}
 
-function Badge({ className, variant, ...props }: BadgeProps) {
-  return <div data-slot="badge" data-variant={variant ?? "default"} className={cn(badgeVariants({ variant }), className)} {...props} />
+function Badge({ className, variant, tone, size, ...props }: BadgeProps) {
+  return <div data-slot="badge" data-variant={variant ?? "default"} data-tone={tone ?? undefined} className={cn(badgeVariants({ variant, tone, size }), className)} {...props} />
 }
 
 export { Badge, badgeVariants }

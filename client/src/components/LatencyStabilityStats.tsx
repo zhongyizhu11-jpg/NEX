@@ -1,4 +1,5 @@
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { formatDateTime } from "@/lib/formatTime";
 import { cn } from "@/lib/utils";
 import { formatStatLatency, formatStatPercent, type LatencyStabilityStats as LatencyStabilityStatsValue } from "@/lib/latencyChart";
 import type { ReactNode } from "react";
@@ -19,9 +20,7 @@ type LatencyStabilityStatsProps = {
 };
 
 function formatCounterTime(value: Date | string | null | undefined) {
-  if (!value) return "";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "" : date.toLocaleString("zh-CN", { hour12: false });
+  return formatDateTime(value, "");
 }
 
 /*

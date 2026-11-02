@@ -1,6 +1,7 @@
 import type { ButtonHTMLAttributes, HTMLAttributes, InputHTMLAttributes, ReactNode } from "react";
 import { forwardRef } from "react";
 
+import { SegmentedControl } from "@/components/ui/segmented-control";
 import { cn } from "@/lib/utils";
 
 /*
@@ -75,7 +76,7 @@ export function LinePill({ tone = "gray", dot = false, className, title, childre
 /** 「主」「备 1」那种小方块。 */
 export function LineBadge({ main = false, children }: { main?: boolean; children: ReactNode }) {
   return (
-    <span className={cn("shrink-0 whitespace-nowrap rounded-[6px] px-[7px] py-[2px] text-[11px] font-bold leading-[1.35]", main ? "bg-[var(--fx-accent)] text-white" : cn(LINE_GRAY_BG, "text-muted-foreground"))}>
+    <span className={cn("shrink-0 whitespace-nowrap rounded-[6px] px-[7px] py-[2px] text-[11px] font-bold leading-[1.35]", main ? "bg-[var(--fx-accent)] text-on-accent" : cn(LINE_GRAY_BG, "text-muted-foreground"))}>
       {children}
     </span>
   );
@@ -223,24 +224,17 @@ export function LineSegmented<T extends string>({ value, options, onChange, aria
   onChange: (value: T) => void;
   ariaLabel: string;
 }) {
+  // 键盘（方向键切换、Tab 只停选中那格）交给共用的分段选择，这里只给小号的样子
   return (
-    <div role="radiogroup" aria-label={ariaLabel} className={cn("grid gap-[3px] rounded-[10px] p-[3px] text-center text-[11.5px]", LINE_GRAY_BG)} style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }}>
-      {options.map((option) => {
-        const on = option.value === value;
-        return (
-          <button
-            key={option.value}
-            type="button"
-            role="radio"
-            aria-checked={on}
-            onClick={() => onChange(option.value)}
-            className={cn("rounded-[8px] py-[6px]", on ? "bg-[var(--fx-l1-surface)] font-semibold text-foreground shadow-[0_1px_2px_rgba(0,0,0,.08)]" : "text-muted-foreground hover:text-foreground")}
-          >
-            {option.label}
-          </button>
-        );
-      })}
-    </div>
+    <SegmentedControl
+      ariaLabel={ariaLabel}
+      value={value}
+      options={options}
+      onChange={onChange}
+      className={cn("grid gap-[3px] rounded-[10px] p-[3px] text-center text-[11.5px]", LINE_GRAY_BG)}
+      style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }}
+      getOptionClassName={(on) => cn("rounded-[8px] py-[6px] focus-visible:outline-none focus-visible:shadow-[var(--fx-focus-ring)]", on ? "bg-[var(--fx-l1-surface)] font-semibold text-foreground shadow-[0_1px_2px_rgba(0,0,0,.08)]" : "text-muted-foreground hover:text-foreground")}
+    />
   );
 }
 

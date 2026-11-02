@@ -76,6 +76,7 @@ html[data-ui-theme="indigo"] {
   --fx-accent-soft: rgb(66 104 170 / 12%);
   --fx-accent-fill: #4268aa;
   --fx-accent-fill-foreground: #ffffff;
+  --fx-on-accent: #ffffff;
   --fx-primary-gradient: linear-gradient(#4268aa, #4268aa);
   --fx-primary-gradient-hover: linear-gradient(#37599a, #37599a);
   --fx-primary-sheen: none;
@@ -132,6 +133,7 @@ html.dark[data-ui-theme="indigo"] {
   --fx-accent-soft: rgb(145 175 224 / 18%);
   --fx-accent-fill: #91afe0;
   --fx-accent-fill-foreground: #142032;
+  --fx-on-accent: #142032;
   --fx-primary-gradient: linear-gradient(#91afe0, #91afe0);
   --fx-primary-gradient-hover: linear-gradient(#a3bde6, #a3bde6);
   --fx-primary-fill: #91afe0;

@@ -193,7 +193,7 @@ export default function ImportExistingSection({ host }: { host: any }) {
                     {item.importedRuleId ? (
                       <div className="flex flex-wrap items-center gap-2 pt-0.5">
                         {done ? (
-                          <Badge className="border-transparent bg-[var(--fx-healthy-soft)] bg-none text-[var(--fx-healthy-text)]">已切到面板规则</Badge>
+                          <Badge tone="up">已切到面板规则</Badge>
                         ) : (
                           <Badge variant="secondary">已导入（停用中）</Badge>
                         )}

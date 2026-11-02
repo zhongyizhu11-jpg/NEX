@@ -116,6 +116,8 @@
   --fx-accent-soft: rgb(62 164 236 / 14%);
   --fx-accent-fill: #0b74d1;
   --fx-accent-fill-foreground: #ffffff;
+  /* 压在 --fx-accent 上的字（「主」徽标、强调色实底按钮）。强调色深色下是浅蓝，白字看不见，所以分开定 */
+  --fx-on-accent: #ffffff;
   /*
     主色控件（主按钮、选中的分段项、选中的分类 chip、开关的开、复选的勾、进度条、侧栏选中项）
     **全部是一道天蓝渐变**：照 kfchost 主按钮量到的 `135deg rgba(140,207,255,.96) → rgba(86,170,242,.92)`，
@@ -489,6 +491,7 @@
   --fx-accent-soft: rgb(62 164 236 / 22%);
   --fx-accent-fill: #0e72bc;   /* 参考站深色主按钮 oklch(0.54 0.142 248.5)：炭灰上不刺 */
   --fx-accent-fill-foreground: #ffffff;
+  --fx-on-accent: #0d1722;
   --fx-primary-gradient: linear-gradient(135deg, #5fb0f5 0%, #2f86d6 100%);
   --fx-primary-gradient-hover: linear-gradient(135deg, #6ebaf8 0%, #3b93e2 100%);
   --fx-primary-sheen: linear-gradient(135deg, rgb(255 255 255 / 30%) 0%, rgb(255 255 255 / 0%) 100%);
