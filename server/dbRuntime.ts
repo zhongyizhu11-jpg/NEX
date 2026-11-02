@@ -12,6 +12,8 @@ import { SCHEMA_DIALECT } from "../drizzle/schema";
 import { ENV } from "./env";
 import { databasePoolSettingsForHostCount } from "./databasePoolSizing";
 import { databaseHealth } from "./databaseHealthState";
+// 让 drizzle 继续抛驱动原来的错误（0.44 起会包成 DrizzleQueryError），见文件里的说明
+import "./drizzleDriverErrors";
 
 export type DatabaseKind = "mysql" | "sqlite" | "postgresql";
 export const MYSQL_MIN_VERSION = "8.0.13";

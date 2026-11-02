@@ -54,6 +54,4 @@ export function hostTrafficExcluded(host: HostTrafficPolicy | null | undefined) 
     && hostPolicyBool(host.trafficFailoverExcluded);
 }
 
-export const HOST_MAINTENANCE_EXCLUDED_MESSAGE = "主机维护中，已暂停组调度和线路";
-
 export const HOST_TRAFFIC_FAILOVER_EXCLUDED_MESSAGE = "主机流量达到故障转移阈值，已暂停组调度";

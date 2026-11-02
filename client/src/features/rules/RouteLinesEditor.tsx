@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState, type ReactNode, type Ref } from "react";
+import { Fragment, useState, type ReactNode, type Ref } from "react";
 import { ChevronDown, X } from "lucide-react";
 
 import { SortableItem, SortableReorderContext, useSortableReorder } from "@/components/SortableDragHandle";
@@ -921,13 +921,6 @@ type PreviewContext = {
   /** 规则目标绑着的节点（是池节点时「规则目标」就是这个池）。 */
   ruleTargetNodeId?: number | null;
 };
-
-export function useRouteLinesPreview(lines: RouteLine[] | null | undefined, context: PreviewContext) {
-  return useMemo(() => {
-    if (!lines || lines.length === 0) return { paths: [] as RoutePath[], issues: new Map<string, string>() };
-    return expandForPreview(lines, context);
-  }, [lines, context.entryHostId, context.pools, context.tunnels, context.nodes, context.ruleTargetNodeId]);
-}
 
 export function expandForPreview(lines: RouteLine[], context: PreviewContext) {
   return expandRouteLines(lines, {

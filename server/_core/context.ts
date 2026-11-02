@@ -67,7 +67,7 @@ function clearSessionCookie(res: Response, req: Request) {
   res.clearCookie(COOKIE_NAME, { ...getSessionCookieOptions(req), maxAge: -1 });
 }
 
-function normalizeSessionPayload(req: Request, payload: unknown) {
+function normalizeSessionPayload(_req: Request, payload: unknown) {
   if (!payload || typeof payload !== "object") return null;
   const data = payload as Record<string, any>;
   const userId = Number(data.userId);

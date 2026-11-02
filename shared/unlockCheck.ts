@@ -15,11 +15,8 @@ export type UnlockStatus = (typeof UNLOCK_STATUSES)[number];
 export const UNLOCK_FAMILIES = ["auto", "ipv4", "ipv6"] as const;
 export type UnlockFamily = (typeof UNLOCK_FAMILIES)[number];
 
-export const UNLOCK_FAMILY_LABELS: Record<UnlockFamily, string> = { auto: "自动", ipv4: "IPv4", ipv6: "IPv6" };
-
 export const UNLOCK_SCHEDULES = ["off", "daily", "weekly"] as const;
 export type UnlockSchedule = (typeof UNLOCK_SCHEDULES)[number];
-export const UNLOCK_SCHEDULE_LABELS: Record<UnlockSchedule, string> = { off: "关闭", daily: "每天", weekly: "每周" };
 
 export type UnlockServiceDef = {
   id: string;
@@ -44,10 +41,6 @@ export const UNLOCK_SERVICES: readonly UnlockServiceDef[] = [
 ];
 
 const SERVICE_BY_ID = new Map(UNLOCK_SERVICES.map((service) => [service.id, service]));
-
-export function unlockServiceDef(id: string): UnlockServiceDef | undefined {
-  return SERVICE_BY_ID.get(id);
-}
 
 export const UNLOCK_STATUS_LABELS: Record<UnlockStatus, string> = {
   ok: "可用",

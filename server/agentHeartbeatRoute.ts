@@ -3761,7 +3761,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       if ((normalized !== "least_load" && normalized !== "ip_hash") || hostIds.length < 2) return null;
       return exitGroupCapacities(strategy, await exitBandwidthsForHostIds(hostIds));
     };
-    const forwardXEntryRoutes = async (rule: any, tunnel: any) => {
+    const forwardXEntryRoutes = async (_rule: any, tunnel: any) => {
       const routes: Array<{ hostId: number; host: string; port: number; udpPort: number; key: string }> = [];
       const hops = tunnelHopsByTunnelId.get(Number(tunnel.id));
       if (Array.isArray(hops) && tunnelRelayUsesParallelRelays(tunnel, hops)) {

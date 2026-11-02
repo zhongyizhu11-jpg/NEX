@@ -7,7 +7,7 @@ import type { ReactNode } from "react";
  * `useReducedMotion` 那一支是必要的：系统里开了「减少动态效果」的人，多半是
  * 因为位移动画会让他不舒服 —— 这时候只留透明度变化，不做位移和缩放。
  */
-export function SectionTransition({
+function SectionTransition({
   transitionKey,
   className,
   children,

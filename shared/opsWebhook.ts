@@ -25,7 +25,7 @@ export const WEBHOOK_CATEGORIES: ReadonlyArray<{
 export const WEBHOOK_CATEGORY_KEYS: readonly WebhookCategoryKey[] = WEBHOOK_CATEGORIES.map((category) => category.key);
 
 /** 默认全开：填了地址、打开开关就能收到，不用再去勾。 */
-export const DEFAULT_WEBHOOK_CATEGORIES: readonly WebhookCategoryKey[] = WEBHOOK_CATEGORY_KEYS;
+const DEFAULT_WEBHOOK_CATEGORIES: readonly WebhookCategoryKey[] = WEBHOOK_CATEGORY_KEYS;
 
 export const WEBHOOK_LEVEL_OPTIONS: ReadonlyArray<{ value: OpsEventLevel; label: string; description: string }> = [
   { value: "info", label: "全部", description: "恢复、登录这类普通消息也推送" },

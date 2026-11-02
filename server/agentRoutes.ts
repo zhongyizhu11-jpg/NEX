@@ -64,7 +64,7 @@ function parseForwardProtocolSettings(value: string | null | undefined) {
 const AGENT_FIREWALL_COUNTER_REFRESH_VERSION = "2.2.178";
 const AGENT_PROTOCOL_GUARD_BACKEND_VERSION = "2.2.127";
 
-agentRouter.use((req, res, next) => {
+agentRouter.use((_req, res, next) => {
   res.setHeader("X-ForwardX-Agent-Auth", "challenge-v2");
   next();
 });

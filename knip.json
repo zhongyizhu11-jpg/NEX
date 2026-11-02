@@ -1,0 +1,20 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "entry": [
+    "client/src/lib/avataaarsLodashShim.ts",
+    "scripts/*.mjs",
+    "server/*.fixture.ts",
+    "{server,shared,client/src,scripts}/**/*.test.{ts,tsx}",
+    "docs/.vitepress/config.mts",
+    "docs/.vitepress/theme/index.ts"
+  ],
+  "project": [
+    "client/src/**/*.{ts,tsx}",
+    "server/**/*.ts",
+    "shared/**/*.ts",
+    "drizzle/**/*.ts",
+    "scripts/**/*.{ts,mjs}",
+    "docs/.vitepress/**/*.{ts,mts}"
+  ],
+  "ignoreBinaries": ["convert", "openssl", "go", "ip"]
+}
