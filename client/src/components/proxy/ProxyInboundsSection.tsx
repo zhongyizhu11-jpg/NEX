@@ -591,7 +591,7 @@ export default function ProxyInboundsSection({
     sortName: String(row.name || ""),
     // 只放协议小标，和粘贴行一样。客户端兼容挪到 ⋯ 菜单（行里那枚小标在手机上会挤掉名字）。
     tag: (
-      <Badge variant="secondary" className="h-4 shrink-0 px-1 text-[10px] font-normal">
+      <Badge variant="secondary" size="sm" className="shrink-0 font-normal">
         {PROXY_NODE_PROTOCOL_LABELS[row.protocol as ProxyNodeProtocol] || row.protocol}
       </Badge>
     ),

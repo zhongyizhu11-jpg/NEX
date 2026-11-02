@@ -34,6 +34,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { formatDateTime as formatTime } from "@/lib/formatTime";
 import { trpc } from "@/lib/trpc";
 
 /*
@@ -44,13 +45,6 @@ import { trpc } from "@/lib/trpc";
 */
 
 type TabKey = "hosts" | "accounts" | "events";
-
-function formatTime(value: unknown) {
-  if (!value) return "—";
-  const date = new Date(value as any);
-  if (Number.isNaN(date.getTime())) return "—";
-  return date.toLocaleString("zh-CN", { hour12: false });
-}
 
 const TONE_CLASS: Record<string, string> = {
   healthy: "border-transparent bg-[var(--fx-healthy-soft)] text-[var(--fx-healthy-text)]",
@@ -268,7 +262,7 @@ function AccountsSection() {
             <DialogDescription className="[overflow-wrap:anywhere]">{formProvider?.docsHint || "凭据加密保存在面板数据库里，任何接口都不会回显原文。"}</DialogDescription>
           </DialogHeader>
           {form ? (
-            <div className="dialog-scroll-area max-h-[65vh] space-y-3 overflow-y-auto pr-1">
+            <div className="dialog-scroll-area max-h-[65svh] space-y-3 overflow-y-auto pr-1">
               <div className="grid gap-3 sm:grid-cols-2">
                 <FormField className="space-y-1">
                   <Label className="text-sm">账号名称 *</Label>
@@ -603,7 +597,7 @@ function HostsSection() {
             <DialogDescription>探测由这台主机的 Agent 执行，不需要升级 Agent。</DialogDescription>
           </DialogHeader>
           {form ? (
-            <div className="dialog-scroll-area max-h-[65vh] space-y-4 overflow-y-auto pr-1">
+            <div className="dialog-scroll-area max-h-[65svh] space-y-4 overflow-y-auto pr-1">
               <div className="grid gap-3 sm:grid-cols-2">
                 <FormField className="space-y-1">
                   <Label className="text-sm">主机</Label>

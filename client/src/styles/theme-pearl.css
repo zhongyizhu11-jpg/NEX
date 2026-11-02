@@ -81,6 +81,7 @@ html[data-ui-theme="pearl"] {
   --fx-accent-soft: rgb(14 17 22 / 7%);
   --fx-accent-fill: #0e1116;
   --fx-accent-fill-foreground: #fafafa;
+  --fx-on-accent: #fafafa;
   --fx-primary-gradient: linear-gradient(#12161c, #12161c);
   --fx-primary-gradient-hover: linear-gradient(#262b33, #262b33);
   --fx-primary-sheen: linear-gradient(180deg, rgb(255 255 255 / 16%) 0%, rgb(255 255 255 / 0%) 100%);
@@ -143,6 +144,7 @@ html.dark[data-ui-theme="pearl"] {
   --fx-accent-soft: rgb(232 236 239 / 10%);
   --fx-accent-fill: #e8ecef;
   --fx-accent-fill-foreground: #0e1116;
+  --fx-on-accent: #0e1116;
   --fx-primary-gradient: linear-gradient(#e6e9ec, #e6e9ec);
   --fx-primary-gradient-hover: linear-gradient(#f4f6f7, #f4f6f7);
   --fx-primary-sheen: linear-gradient(180deg, rgb(255 255 255 / 30%) 0%, rgb(255 255 255 / 0%) 100%);

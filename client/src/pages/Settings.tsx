@@ -33,7 +33,7 @@ import { SlidingTabsList } from "@/components/ui/sliding-tabs";
 import { GroupedList, ListRow, ListSection } from "@/components/ios/GroupedList";
 import { SettingList, SettingRow } from "@/components/SettingRow";
 import { EntityActions } from "@/components/entity/EntityActions";
-import { segmentedControlClassName, segmentedOptionClassName } from "@/components/ui/segmented";
+import { SegmentedControl } from "@/components/ui/segmented-control";
 import { useIsMobile } from "@/hooks/useMobile";
 import { LayoutDefaultCard } from "@/components/settings/LayoutDefaultCard";
 import DataSectionLoading from "@/components/DataSectionLoading";
@@ -1009,7 +1009,7 @@ function PanelLogsSection() {
               {levelTabs.map((tab) => (
                 <TabsTrigger key={tab.value} value={tab.value} className="min-w-0 gap-1.5 text-xs">
                   {tab.label}
-                  <span className="rounded bg-background/70 px-1.5 py-0.5 text-[10px] text-muted-foreground">{tab.count}</span>
+                  <span className="rounded bg-background/70 px-1.5 py-0.5 text-[11px] text-muted-foreground">{tab.count}</span>
                 </TabsTrigger>
               ))}
             </TabsList>
@@ -1892,22 +1892,16 @@ function BackupRestoreSection({ panelUrl }: { panelUrl: string }) {
                 </Badge>
               )}
             >
-              <div className={`${segmentedControlClassName} grid grid-cols-3 gap-1`} role="group" aria-label="目标数据库">
-                {(["sqlite", "mysql", "postgresql"] as DatabaseType[]).map((type) => (
-                  <button
-                    key={type}
-                    type="button"
-                    aria-pressed={databaseSwitchType === type}
-                    onClick={() => {
-                      setDatabaseSwitchType(type);
-                      setTestedDatabaseSwitchKey("");
-                    }}
-                    className={segmentedOptionClassName(databaseSwitchType === type)}
-                  >
-                    {type === "sqlite" ? "SQLite" : type === "mysql" ? "MySQL" : "PostgreSQL"}
-                  </button>
-                ))}
-              </div>
+              <SegmentedControl<DatabaseType>
+                ariaLabel="目标数据库"
+                className="grid grid-cols-3 gap-1"
+                value={databaseSwitchType}
+                options={(["sqlite", "mysql", "postgresql"] as DatabaseType[]).map((type) => ({ value: type, label: type === "sqlite" ? "SQLite" : type === "mysql" ? "MySQL" : "PostgreSQL" }))}
+                onChange={(type) => {
+                  setDatabaseSwitchType(type);
+                  setTestedDatabaseSwitchKey("");
+                }}
+              />
               <p className="text-meta text-muted-foreground">
                 {databaseSwitchType === "sqlite"
                   ? "本地数据文件，无需额外服务。"
@@ -3924,10 +3918,10 @@ function PersonalizationSettingsSection() {
                   <div className="min-w-0 flex-1">
                     <div className="flex min-w-0 flex-wrap items-center gap-2">
                       <p className="max-w-full truncate text-sm font-medium">{page.name}</p>
-                      <Badge variant="outline" className="shrink-0 text-[10px]">
+                      <Badge variant="outline" className="shrink-0 text-[11px]">
                         {page.visibility === "admin" ? "仅管理员" : "所有用户"}
                       </Badge>
-                      <Badge variant="secondary" className="shrink-0 text-[10px]">
+                      <Badge variant="secondary" className="shrink-0 text-[11px]">
                         {page.openMode === "external" ? "新窗口" : "嵌入"}
                       </Badge>
                     </div>
@@ -5985,22 +5979,16 @@ function SystemInfoSection() {
                 label="证书来源"
                 description={panelSslEnabled ? "HTTPS 按选中的来源启动。" : "启用后按选中的来源启动。"}
               >
-                <div className={`${segmentedControlClassName} grid grid-cols-2 gap-1`} role="group" aria-label="证书来源">
-                  {([
+                <SegmentedControl
+                  ariaLabel="证书来源"
+                  className="grid grid-cols-2 gap-1"
+                  value={panelSslMode}
+                  options={[
                     { value: "path", label: "服务器文件路径" },
                     { value: "pem", label: "粘贴 PEM 内容" },
-                  ] as const).map((option) => (
-                    <button
-                      key={option.value}
-                      type="button"
-                      aria-pressed={panelSslMode === option.value}
-                      onClick={() => setPanelSslMode(option.value)}
-                      className={segmentedOptionClassName(panelSslMode === option.value)}
-                    >
-                      {option.label}
-                    </button>
-                  ))}
-                </div>
+                  ] as const}
+                  onChange={setPanelSslMode}
+                />
                 <p className="text-meta text-muted-foreground">
                   {panelSslPathActive
                     ? `读取服务器上的证书和私钥文件。PEM 内容：${panelSslPemConfigured ? "已保存备用" : "未配置"}。`

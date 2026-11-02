@@ -3,9 +3,8 @@ import { toast } from "sonner";
 
 import { normalizePersonalizationLayout, PERSONALIZATION_LAYOUTS, type PersonalizationLayoutId } from "@shared/personalization";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { segmentedControlClassName, segmentedOptionClassName } from "@/components/ui/segmented";
+import { SegmentedControl } from "@/components/ui/segmented-control";
 import { trpc } from "@/lib/trpc";
-import { cn } from "@/lib/utils";
 
 /*
   设置 › 个性化 › 布局：站点默认的布局密度（标准 / 精简）。点了就存 —— 它不像配色那样要先试看再保存，
@@ -41,26 +40,19 @@ export function LayoutDefaultCard() {
           全站默认的布局。两种只差总览、转发、主机、链路四页：标准按原来的样子，精简按紧凑的方式画。每个账号可以在个人资料里自己选。</CardDescription>
       </CardHeader>
       <CardContent>
-        <div className={cn(segmentedControlClassName, "grid max-w-sm grid-cols-2 gap-1")} role="radiogroup" aria-label="站点默认布局">
-          {PERSONALIZATION_LAYOUTS.map((layout) => {
-            const active = current === layout.id;
-            return (
-              <button
-                key={layout.id}
-                type="button"
-                role="radio"
-                aria-checked={active}
-                disabled={!settings || save.isPending}
-                title={layout.description}
-                onClick={() => select(layout.id)}
-                className={segmentedOptionClassName(active, !settings || save.isPending)}
-              >
-                {save.isPending && save.variables?.personalizationLayout === layout.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-                {layout.name}
-              </button>
-            );
-          })}
-        </div>
+        <SegmentedControl
+          ariaLabel="站点默认布局"
+          className="grid max-w-sm grid-cols-2 gap-1"
+          value={current}
+          disabled={!settings || save.isPending}
+          options={PERSONALIZATION_LAYOUTS.map((layout) => ({
+            value: layout.id,
+            label: layout.name,
+            title: layout.description,
+            icon: save.isPending && save.variables?.personalizationLayout === layout.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null,
+          }))}
+          onChange={select}
+        />
       </CardContent>
     </Card>
   );

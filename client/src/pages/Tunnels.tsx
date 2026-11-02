@@ -1422,7 +1422,7 @@ function TunnelLatencyBody({ tunnelId, active }: { tunnelId: number; active: boo
                                     {timeout ? "超时" : `${Number(item[meta.rawKey] || 0)}ms`}
                                   </span>
                                   {Number(item[`${meta.key}ProbeCount`]) > 1 && Number(item[`${meta.key}ProbeSuccesses`]) < Number(item[`${meta.key}ProbeCount`]) ? (
-                                    <span className="block text-[10px] font-normal text-muted-foreground">
+                                    <span className="block text-[11px] font-normal text-muted-foreground">
                                       丢包 {Number(item[`${meta.key}ProbeCount`]) - Number(item[`${meta.key}ProbeSuccesses`])}/{Number(item[`${meta.key}ProbeCount`])}
                                     </span>
                                   ) : null}
@@ -3507,7 +3507,7 @@ function TunnelsContent() {
             <div className="text-xs text-muted-foreground">PROXY Protocol</div>
           </div>
           <div className="flex items-center gap-2">
-            <Badge variant={advancedConfigured ? "secondary" : "outline"} className="h-5 px-1.5 text-[10px] font-normal">
+            <Badge variant={advancedConfigured ? "secondary" : "outline"} className="h-5 px-1.5 text-[11px] font-normal">
               {advancedConfigured ? "已配置" : "可选"}
             </Badge>
             <ChevronRight className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 ${chainAdvancedOpen ? "rotate-90" : ""}`} />
@@ -3874,7 +3874,7 @@ function TunnelsContent() {
             <div data-fx-help="" className="text-xs text-muted-foreground">PROXY Protocol、传输优化</div>
           </div>
           <div className="flex items-center gap-2">
-            <Badge variant={advancedConfigured ? "secondary" : "outline"} className="h-5 px-1.5 text-[10px] font-normal">
+            <Badge variant={advancedConfigured ? "secondary" : "outline"} className="h-5 px-1.5 text-[11px] font-normal">
               {advancedConfigured ? "已配置" : "可选"}
             </Badge>
             <ChevronRight className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 ${tunnelAdvancedOpen ? "rotate-90" : ""}`} />
@@ -4168,12 +4168,12 @@ function TunnelsContent() {
               isTimeout={item.isTimeout}
               icon="none"
               timeoutText="超时"
-              className={compact ? "shrink-0 text-[10px]" : "shrink-0"}
+              className={compact ? "shrink-0 text-[11px]" : "shrink-0"}
             />
           </div>
         ))}
         {hiddenCount > 0 && (
-          <div className="text-[10px] leading-none text-muted-foreground">还有 {hiddenCount} 条延迟明细</div>
+          <div className="text-[11px] leading-none text-muted-foreground">还有 {hiddenCount} 条延迟明细</div>
         )}
       </div>
     );
@@ -4551,7 +4551,7 @@ function TunnelsContent() {
                       </TableCell>
                       <TableCell className="hidden py-3 md:table-cell">
                         <div className="flex flex-wrap items-center gap-1.5">
-                          <Badge variant="outline" className="text-[10px]">
+                          <Badge variant="outline" className="text-[11px]">
                             {getTunnelModeDisplay(tunnel.mode, nginxTunnelEnabled, tunnel.forwardxVersion, tunnel.wireGuardPlane)}
                           </Badge>
                         </div>

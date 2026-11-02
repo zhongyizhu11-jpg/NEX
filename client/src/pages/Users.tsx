@@ -1213,9 +1213,9 @@ function UsersContent() {
             <Progress value={pct} className={`mt-2 h-1.5 ${isOverLimit ? "[&>div]:bg-destructive" : ""}`} />
           )}
           <div className="mt-2 flex flex-wrap gap-1.5">
-            {isOverLimit && <Badge variant="destructive" className="h-5 px-1.5 text-[10px]">超额</Badge>}
+            {isOverLimit && <Badge variant="destructive" className="h-5 px-1.5 text-[11px]">超额</Badge>}
             {u.trafficAutoReset && (
-              <Badge variant="outline" className="h-5 px-1.5 text-[10px]">每月{u.trafficResetDay || 1}日重置</Badge>
+              <Badge variant="outline" className="h-5 px-1.5 text-[11px]">每月{u.trafficResetDay || 1}日重置</Badge>
             )}
           </div>
           <div className="mt-2 flex items-center justify-between gap-2 border-t border-border/40 pt-2 text-xs">
@@ -1232,7 +1232,7 @@ function UsersContent() {
           <div className="min-w-0 rounded-md bg-muted/25 p-2">
             <div className="flex items-center justify-between gap-2">
               <p className="text-muted-foreground">到期</p>
-              {isExpired && <Badge variant="destructive" className="h-5 shrink-0 px-1.5 text-[10px]">已到期</Badge>}
+              {isExpired && <Badge variant="destructive" className="h-5 shrink-0 px-1.5 text-[11px]">已到期</Badge>}
             </div>
             <p className={`mt-1 truncate font-medium ${isExpired ? "text-destructive" : ""}`}>
               {u.expiresAt ? new Date(u.expiresAt).toLocaleDateString(undefined, { timeZone: BILLING_TIME_ZONE }) : "不限"}
@@ -1444,19 +1444,19 @@ function UsersContent() {
                 <div className="min-w-0 flex-1">
                   <div className="flex min-w-0 items-center gap-1.5">
                     <span className="min-w-0 truncate text-sm font-semibold">{u.username || "未命名"}</span>
-                    {u.role === "admin" && <Badge className="h-4 shrink-0 px-1 text-[10px]">管理员</Badge>}
+                    {u.role === "admin" && <Badge size="sm" className="shrink-0">管理员</Badge>}
                     {u.id === currentUser?.id && (
-                      <Badge variant="outline" className="h-4 shrink-0 px-1 text-[10px] text-primary">当前</Badge>
+                      <Badge variant="outline" size="sm" className="shrink-0 text-primary">当前</Badge>
                     )}
                     {/*
                       异常要在行上就看得见 —— 「谁被禁了 / 谁超额了 / 谁过期了」正是
                       管理员扫这一屏在找的东西，藏进详情就等于要一个个点开找。
                     */}
                     {u.accountEnabled === false && (
-                      <Badge variant="destructive" className="h-4 shrink-0 px-1 text-[10px]">禁用</Badge>
+                      <Badge variant="destructive" size="sm" className="shrink-0">禁用</Badge>
                     )}
-                    {isOverLimit && <Badge variant="destructive" className="h-4 shrink-0 px-1 text-[10px]">超额</Badge>}
-                    {isExpired && <Badge variant="destructive" className="h-4 shrink-0 px-1 text-[10px]">已到期</Badge>}
+                    {isOverLimit && <Badge variant="destructive" size="sm" className="shrink-0">超额</Badge>}
+                    {isExpired && <Badge variant="destructive" size="sm" className="shrink-0">已到期</Badge>}
                   </div>
                   <p className="mt-0.5 truncate text-xs text-muted-foreground">
                     #{u.id}
@@ -1535,14 +1535,14 @@ function UsersContent() {
                                 <p className="min-w-0 truncate text-sm font-medium leading-5" title={u.displayRemark ? `${u.username || "未命名"} · ${u.displayRemark}` : undefined}>{u.username || "未命名"}</p>
                                 <span className="contents">
                                 {/* 精简布局：「普通用户」是默认，不标；管理员照标 */}
-                                <Badge data-fx-compact-hide={u.role === "admin" ? undefined : ""} variant={u.role === "admin" ? "default" : "outline"} className="h-5 w-fit shrink-0 px-1.5 text-[10px] leading-4">
+                                <Badge data-fx-compact-hide={u.role === "admin" ? undefined : ""} variant={u.role === "admin" ? "default" : "outline"} className="h-5 w-fit shrink-0 px-1.5 text-[11px] leading-4">
                                   {u.role === "admin" ? "管理员" : "普通用户"}
                                 </Badge>
                                 {u.accountEnabled === false && (
-                                  <Badge variant="destructive" className="h-5 w-fit shrink-0 px-1.5 text-[10px]">账户禁用</Badge>
+                                  <Badge variant="destructive" className="h-5 w-fit shrink-0 px-1.5 text-[11px]">账户禁用</Badge>
                                 )}
                                 {u.id === currentUser?.id && (
-                                  <span className="shrink-0 text-[10px] font-medium leading-4 text-primary">当前登录</span>
+                                  <span className="shrink-0 text-[11px] font-medium leading-4 text-primary">当前登录</span>
                                 )}
                                 </span>
                               </div>
@@ -1556,7 +1556,7 @@ function UsersContent() {
                                     onCheckedChangeAsync={(checked) => updateForwardAccessMutation.mutateAsync({ userId: u.id, enabled: checked })}
                                     className="shrink-0"
                                   />
-                                  <span className="shrink-0 whitespace-nowrap text-[10px] text-muted-foreground">
+                                  <span className="shrink-0 whitespace-nowrap text-[11px] text-muted-foreground">
                                     {u.canAddRules ? "转发启用" : "转发停用"}
                                   </span>
                                 </div>
@@ -1567,10 +1567,10 @@ function UsersContent() {
                         <TableCell>
                           <div className="min-w-[190px] space-y-1">
                             <div className="flex items-center justify-between gap-2">
-                              <span className="shrink-0 text-[10px] text-muted-foreground">套餐/分配</span>
+                              <span className="shrink-0 text-[11px] text-muted-foreground">套餐/分配</span>
                               <div className="flex min-w-0 items-center justify-end gap-1">
                                 {isOverLimit && (
-                                  <Badge variant="destructive" className="h-3.5 shrink-0 px-1 py-0 text-[9px]">超额</Badge>
+                                  <Badge variant="destructive" className="h-3.5 shrink-0 px-1 py-0 text-[11px]">超额</Badge>
                                 )}
                                 <span className="truncate text-xs tabular-nums">
                                   {formatBytes(used)} / {limit > 0 ? formatBytes(limit) : "不限"}
@@ -1584,7 +1584,7 @@ function UsersContent() {
                               />
                             )}
                             <div className="flex items-center justify-between gap-2">
-                              <span className="shrink-0 text-[10px] text-muted-foreground">按量计费</span>
+                              <span className="shrink-0 text-[11px] text-muted-foreground">按量计费</span>
                               <span className="truncate text-xs font-medium tabular-nums">{formatBytes(billingUsed)}</span>
                             </div>
                           </div>
@@ -1597,7 +1597,7 @@ function UsersContent() {
                                 <p className="truncate text-xs font-medium">
                                   {u.telegramUsername ? `@${u.telegramUsername}` : u.telegramFirstName || u.telegramId}
                                 </p>
-                                <p className="text-[10px] text-muted-foreground">
+                                <p className="text-[11px] text-muted-foreground">
                                   {u.telegramLinkedAt ? new Date(u.telegramLinkedAt).toLocaleDateString() : "已绑定"}
                                 </p>
                               </div>
@@ -1622,7 +1622,7 @@ function UsersContent() {
                                   </span>
                                 </div>
                                 {isExpired && (
-                                  <Badge variant="destructive" className="h-4 px-1.5 py-0 text-[9px]">已到期</Badge>
+                                  <Badge variant="destructive" className="h-4 px-1.5 py-0 text-[11px]">已到期</Badge>
                                 )}
                               </>
                             ) : (
@@ -1641,17 +1641,17 @@ function UsersContent() {
                               />
                               {/* 精简布局：开关本身就是状态，旁边那枚「转发启用 / 停用」不再标 */}
                               {u.canAddRules || u.role === "admin" ? (
-                                <Badge data-fx-compact-hide="" variant="outline" className="h-5 w-fit shrink-0 whitespace-nowrap border-chart-2/30 px-2 py-0 text-[10px] text-chart-2">
+                                <Badge data-fx-compact-hide="" variant="outline" className="h-5 w-fit shrink-0 whitespace-nowrap border-chart-2/30 px-2 py-0 text-[11px] text-chart-2">
                                   转发启用
                                 </Badge>
                               ) : (
-                                <Badge data-fx-compact-hide="" variant="outline" className="h-5 w-fit shrink-0 whitespace-nowrap border-muted-foreground/30 px-2 py-0 text-[10px] text-muted-foreground">
+                                <Badge data-fx-compact-hide="" variant="outline" className="h-5 w-fit shrink-0 whitespace-nowrap border-muted-foreground/30 px-2 py-0 text-[11px] text-muted-foreground">
                                   转发停用
                                 </Badge>
                               )}
                             </div>
                             {u.trafficAutoReset && (
-                              <span className="whitespace-nowrap text-center text-[10px] text-muted-foreground">
+                              <span className="whitespace-nowrap text-center text-[11px] text-muted-foreground">
                                 每月{u.trafficResetDay || 1}日重置
                               </span>
                             )}
@@ -1739,7 +1739,7 @@ function UsersContent() {
                             <p className="truncate text-sm font-semibold">{userLabel({ username: sub.username, name: sub.name, id: sub.userId })}</p>
                             <p className="mt-1 truncate text-xs text-muted-foreground">{sub.planName || `套餐 #${sub.planId}`}</p>
                           </div>
-                          <Badge variant={active ? "default" : "secondary"} className="shrink-0 text-[10px]">
+                          <Badge variant={active ? "default" : "secondary"} className="shrink-0 text-[11px]">
                             {subscriptionStatusLabel(sub.status)}
                           </Badge>
                         </div>
@@ -2127,7 +2127,7 @@ function UsersContent() {
                 <DialogTitle className="flex min-w-0 items-center gap-2">
                   <UserAvatar user={detailUser} className="h-8 w-8 shrink-0" />
                   <span className="min-w-0 truncate">{detailUser.username || "未命名"}</span>
-                  <Badge variant={detailUser.role === "admin" ? "default" : "outline"} className="h-5 shrink-0 px-1.5 text-[10px]">
+                  <Badge variant={detailUser.role === "admin" ? "default" : "outline"} className="h-5 shrink-0 px-1.5 text-[11px]">
                     {detailUser.role === "admin" ? "管理员" : "普通用户"}
                   </Badge>
                 </DialogTitle>
@@ -2248,7 +2248,7 @@ function UsersContent() {
 
       {/* Traffic & Permission Settings Dialog */}
       <Dialog open={showTrafficSettings} onOpenChange={setShowTrafficSettings}>
-        <DialogContent className="sm:max-w-lg max-h-[90vh] flex flex-col">
+        <DialogContent className="sm:max-w-lg max-h-[90svh] flex flex-col">
           <DialogTitle>流量与权限设置</DialogTitle>
           <DialogDescription data-fx-help="">
             设置 "{trafficUserName}" 的管理员额外配额和权限；套餐权益在订阅管理中单独体现。
@@ -2627,7 +2627,7 @@ function UsersContent() {
               <FormField className="space-y-2">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <Label className="text-sm font-medium">端口转发授权</Label>
-                  <Badge variant="outline" className="text-[10px]">{selectedAllowedPortForwards.length} 条</Badge>
+                  <Badge variant="outline" className="text-[11px]">{selectedAllowedPortForwards.length} 条</Badge>
                 </div>
                 <Select value={addAllowedPortForwardId} onValueChange={addForwardGroupPermission} disabled={!availableAllowedPortForwards.length}>
                   <SelectTrigger className="h-9 w-full">
@@ -2647,7 +2647,7 @@ function UsersContent() {
                       <div key={group.id} className="flex items-center justify-between gap-3 rounded-lg border border-border/40 bg-background/50 p-2.5">
                         <div className="flex items-center gap-2 min-w-0">
                           <span className="text-sm font-medium truncate">{group.name}</span>
-                          <span className="text-[10px] text-muted-foreground font-mono truncate">{String(group.forwardType || "-")}</span>
+                          <span className="text-[11px] text-muted-foreground font-mono truncate">{String(group.forwardType || "-")}</span>
                         </div>
                         <Button
                           type="button"
@@ -2674,7 +2674,7 @@ function UsersContent() {
               <FormField className="space-y-2">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <Label className="text-sm font-medium">转发链/转发组授权</Label>
-                  <Badge variant="outline" className="text-[10px]">{selectedAllowedChainAndFailoverGroups.length} 条</Badge>
+                  <Badge variant="outline" className="text-[11px]">{selectedAllowedChainAndFailoverGroups.length} 条</Badge>
                 </div>
                 <Select value={addAllowedForwardGroupId} onValueChange={addForwardGroupPermission} disabled={!availableAllowedChainAndFailoverGroups.length}>
                   <SelectTrigger className="h-9 w-full">
@@ -2694,8 +2694,8 @@ function UsersContent() {
                       <div key={group.id} className="flex items-center justify-between gap-3 rounded-lg border border-border/40 bg-background/50 p-2.5">
                         <div className="flex items-center gap-2 min-w-0">
                           <span className="text-sm font-medium truncate">{group.name}</span>
-                          <Badge variant="outline" className="text-[10px] px-1.5 py-0">{forwardGroupAuthLabel(group)}</Badge>
-                          <span className="text-[10px] text-muted-foreground font-mono truncate">{String(group.forwardType || "-")}</span>
+                          <Badge variant="outline" className="text-[11px] px-1.5 py-0">{forwardGroupAuthLabel(group)}</Badge>
+                          <span className="text-[11px] text-muted-foreground font-mono truncate">{String(group.forwardType || "-")}</span>
                         </div>
                         <Button
                           type="button"
@@ -2722,7 +2722,7 @@ function UsersContent() {
               <FormField className="space-y-2">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <Label className="text-sm font-medium">隧道转发</Label>
-                  <Badge variant="outline" className="text-[10px]">{allowedTunnelIds.length} 条</Badge>
+                  <Badge variant="outline" className="text-[11px]">{allowedTunnelIds.length} 条</Badge>
                 </div>
                 <Select value={addAllowedTunnelId} onValueChange={addTunnelPermission} disabled={!availableAllowedTunnels.length}>
                   <SelectTrigger className="h-9 w-full">
@@ -2743,9 +2743,9 @@ function UsersContent() {
                         <div className="min-w-0">
                           <div className="flex items-center gap-2">
                             <span className="text-sm font-medium truncate">{t.name}</span>
-                            <Badge variant="outline" className="text-[10px] px-1.5 py-0">{String(t.mode || "tls")}</Badge>
+                            <Badge variant="outline" className="text-[11px] px-1.5 py-0">{String(t.mode || "tls")}</Badge>
                           </div>
-                          <p className="text-[10px] text-muted-foreground truncate">
+                          <p className="text-[11px] text-muted-foreground truncate">
                             {tunnelRouteText(t)} :{t.listenPort}
                           </p>
                         </div>
@@ -2774,7 +2774,7 @@ function UsersContent() {
               <FormField className="space-y-2">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <Label className="text-sm font-medium">订阅节点分享</Label>
-                  <Badge variant="outline" className="text-[10px]">{sharedProxyNodeIds.length} 个</Badge>
+                  <Badge variant="outline" className="text-[11px]">{sharedProxyNodeIds.length} 个</Badge>
                 </div>
                 <p data-fx-help="" className="text-xs text-muted-foreground">
                   选中的节点会直接出现在他的订阅里，节点仍然是原主人的，他改不了也删不掉。
@@ -2801,12 +2801,12 @@ function UsersContent() {
                         <div className="min-w-0">
                           <div className="flex items-center gap-2">
                             <span className="text-sm font-medium truncate">{node.name}</span>
-                            <Badge variant="outline" className="text-[10px] px-1.5 py-0">{String(node.protocol || "-")}</Badge>
+                            <Badge variant="outline" className="text-[11px] px-1.5 py-0">{String(node.protocol || "-")}</Badge>
                             {!node.isEnabled ? (
-                              <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-muted-foreground">已停用</Badge>
+                              <Badge variant="outline" className="text-[11px] px-1.5 py-0 text-muted-foreground">已停用</Badge>
                             ) : null}
                           </div>
-                          <p className="text-[10px] text-muted-foreground font-mono truncate">
+                          <p className="text-[11px] text-muted-foreground font-mono truncate">
                             {String(node.address || "-")}:{node.port}
                           </p>
                         </div>
@@ -2835,7 +2835,7 @@ function UsersContent() {
               <FormField className="space-y-2">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <Label className="text-sm font-medium">网络测试主机授权</Label>
-                  <Badge variant="outline" className="text-[10px]">{allowedHostIds.length} 台</Badge>
+                  <Badge variant="outline" className="text-[11px]">{allowedHostIds.length} 台</Badge>
                 </div>
                 <p data-fx-help="" className="text-xs text-muted-foreground">
                   网络测试会展示用户自己创建、通过主机授权或套餐授权获得的主机；这里用于手动增加授权。端口转发、转发链或转发组的成员主机不会因此单独展示。
@@ -2882,7 +2882,7 @@ function UsersContent() {
               <FormField className="space-y-2">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <Label className="text-sm font-medium">流量计费转发资源</Label>
-                  <Badge variant="outline" className="text-[10px]">{trafficBillingForwardGroupIds.length} 个</Badge>
+                  <Badge variant="outline" className="text-[11px]">{trafficBillingForwardGroupIds.length} 个</Badge>
                 </div>
                 <Select value={addBillingForwardGroupId} onValueChange={addTrafficBillingForwardGroup} disabled={!availableBillingForwardGroups.length}>
                   <SelectTrigger className="h-9 w-full">
@@ -2903,9 +2903,9 @@ function UsersContent() {
                         <div className="min-w-0">
                           <div className="flex items-center gap-2">
                             <span className="truncate text-sm font-medium">{group.name || `转发资源 #${group.id}`}</span>
-                            <Badge variant="outline" className="px-1.5 py-0 text-[10px]">{forwardGroupAuthLabel(group)}</Badge>
+                            <Badge variant="outline" className="px-1.5 py-0 text-[11px]">{forwardGroupAuthLabel(group)}</Badge>
                           </div>
-                          <p className="truncate text-[10px] text-muted-foreground">
+                          <p className="truncate text-[11px] text-muted-foreground">
                             {(group.members || []).length ? `${group.members.length} 成员` : "链路管理资源"}
                           </p>
                         </div>
@@ -2934,7 +2934,7 @@ function UsersContent() {
               <FormField className="space-y-2">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <Label className="text-sm font-medium">历史计费主机</Label>
-                  <Badge variant="outline" className="text-[10px]">{trafficBillingHostIds.length} 台</Badge>
+                  <Badge variant="outline" className="text-[11px]">{trafficBillingHostIds.length} 台</Badge>
                 </div>
                 <Select value={addBillingHostId} onValueChange={addTrafficBillingHost} disabled={!availableBillingHosts.length}>
                   <SelectTrigger className="h-9 w-full">
@@ -2954,7 +2954,7 @@ function UsersContent() {
                       <div key={h.id} className="flex items-center justify-between gap-3 rounded-lg border border-border/40 bg-background/50 p-2.5">
                         <div className="flex min-w-0 items-center gap-2">
                           <span className="truncate text-sm font-medium">{h.name}</span>
-                          <span className="truncate font-mono text-[10px] text-muted-foreground">{h.ip}</span>
+                          <span className="truncate font-mono text-[11px] text-muted-foreground">{h.ip}</span>
                         </div>
                         <Button
                           type="button"
@@ -2981,7 +2981,7 @@ function UsersContent() {
               <FormField className="space-y-2">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <Label className="text-sm font-medium">流量计费隧道</Label>
-                  <Badge variant="outline" className="text-[10px]">{trafficBillingTunnelIds.length} 条</Badge>
+                  <Badge variant="outline" className="text-[11px]">{trafficBillingTunnelIds.length} 条</Badge>
                 </div>
                 <Select value={addBillingTunnelId} onValueChange={addTrafficBillingTunnel} disabled={!availableBillingTunnels.length}>
                   <SelectTrigger className="h-9 w-full">
@@ -3002,9 +3002,9 @@ function UsersContent() {
                         <div className="min-w-0">
                           <div className="flex items-center gap-2">
                             <span className="truncate text-sm font-medium">{t.name}</span>
-                            <Badge variant="outline" className="px-1.5 py-0 text-[10px]">{String(t.mode || "tls")}</Badge>
+                            <Badge variant="outline" className="px-1.5 py-0 text-[11px]">{String(t.mode || "tls")}</Badge>
                           </div>
-                          <p className="truncate text-[10px] text-muted-foreground">
+                          <p className="truncate text-[11px] text-muted-foreground">
                             {tunnelRouteText(t)} :{t.listenPort}
                           </p>
                         </div>

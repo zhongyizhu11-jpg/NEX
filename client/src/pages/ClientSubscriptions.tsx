@@ -773,7 +773,7 @@ export default function ClientSubscriptionsPage() {
         leading: <ProxyNodeHealthDot health={node.health} />,
         name: node.name,
         tag: (
-          <Badge variant="secondary" className="h-4 shrink-0 px-1 text-[10px] font-normal">
+          <Badge variant="secondary" size="sm" className="shrink-0 font-normal">
             {PROXY_NODE_PROTOCOL_LABELS[node.protocol as ProxyNodeProtocol] || node.protocol}
           </Badge>
         ),
@@ -790,7 +790,7 @@ export default function ClientSubscriptionsPage() {
         // 点「3/3 台」展开看每台开在哪个端口（成员入站不在列表里各占一行）
         detail: quotaExpanded ? (
           <div className="flex flex-col gap-2">
-            <LandingPoolMembersDetail members={pool.memberList || []} directDomain={pool.directDomain} onOpenPool={() => navigate("/tunnels?tab=pools")} />
+            <LandingPoolMembersDetail members={pool.memberList || []} directDomain={pool.directDomain} onOpenPool={isAdmin ? () => navigate("/tunnels?tab=pools") : undefined} />
             <ProxyNodeQuotaDetail node={node} />
           </div>
         ) : null,
@@ -804,9 +804,12 @@ export default function ClientSubscriptionsPage() {
           />
         ) : null,
         actions: [
-          { key: "pool", label: "到节点池里改", icon: Waypoints, onSelect: () => navigate("/tunnels?tab=pools") },
+          // 节点池页（/tunnels）只有管理员进得去：普通用户不显示这一项，成员明细在上面「几台」里展开看
           ...(isAdmin
-            ? [{ key: "share", label: "分享给用户", icon: Share2, onSelect: () => setShareNode({ id: Number(node.id), name: String(node.name || "") }) }]
+            ? [
+              { key: "pool", label: "到节点池里改", icon: Waypoints, onSelect: () => navigate("/tunnels?tab=pools") },
+              { key: "share", label: "分享给用户", icon: Share2, onSelect: () => setShareNode({ id: Number(node.id), name: String(node.name || "") }) },
+            ]
             : []),
         ],
       };
@@ -820,7 +823,7 @@ export default function ClientSubscriptionsPage() {
       leading: <ProxyNodeHealthDot health={node.health} />,
       name: node.name,
       tag: (
-        <Badge variant="secondary" className="h-4 shrink-0 px-1 text-[10px] font-normal">
+        <Badge variant="secondary" size="sm" className="shrink-0 font-normal">
           {PROXY_NODE_PROTOCOL_LABELS[node.protocol as ProxyNodeProtocol] || node.protocol}
         </Badge>
       ),
@@ -1384,7 +1387,7 @@ export default function ClientSubscriptionsPage() {
                                 <span className="w-full truncate text-center text-[11px] font-medium leading-tight">
                                   {target.shortLabel}
                                 </span>
-                                <span className="w-full truncate text-center text-[10px] text-muted-foreground">
+                                <span className="w-full truncate text-center text-[11px] text-muted-foreground">
                                   {!supported
                                     ? "不支持规则"
                                     : offPlatform
@@ -1714,7 +1717,7 @@ export default function ClientSubscriptionsPage() {
                               「直连」，每条都写一遍等于没说，还占着唯一能放信息的位置。
                             */}
                             {direct && (
-                              <Badge variant="outline" className="h-4 shrink-0 px-1 text-[10px] font-normal">
+                              <Badge variant="outline" size="sm" className="shrink-0 font-normal">
                                 {remarkByTemplateId.get(Number(node.templateId)) || "直连"}
                               </Badge>
                             )}

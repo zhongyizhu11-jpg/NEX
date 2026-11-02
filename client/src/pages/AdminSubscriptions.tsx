@@ -23,6 +23,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { formatDateTime as timeText } from "@/lib/formatTime";
 import { trpc } from "@/lib/trpc";
 import { PROXY_SUB_TOKEN_FAILURE_LABELS, proxySubTokenStatus } from "@shared/proxySubTokenStatus";
 import { PROXY_SUB_DEFAULT_SETTINGS, type ProxySubSettings } from "@shared/proxySubSettings";
@@ -39,12 +40,6 @@ const TAB_ITEMS = [
   { value: "templates", label: "模板", icon: FileCode2 },
   { value: "settings", label: "设置", icon: Settings2 },
 ] as const satisfies readonly SlidingTabItem<AdminTab>[];
-
-function timeText(value: unknown): string {
-  if (!value) return "—";
-  const date = new Date(value as any);
-  return Number.isFinite(date.getTime()) ? date.toLocaleString("zh-CN", { hour12: false }) : "—";
-}
 
 const RESULT_LABELS: Record<string, string> = { ok: "成功", page: "落地页", ...PROXY_SUB_TOKEN_FAILURE_LABELS };
 
@@ -77,7 +72,7 @@ function TokensTab() {
       </div>
       <Card>
         <CardContent className="overflow-x-auto p-0">
-          <Table>
+          <Table className="fx-table-stack">
             <TableHeader>
               <TableRow>
                 <TableHead>用户</TableHead>
@@ -96,8 +91,8 @@ function TokensTab() {
                 const status = proxySubTokenStatus(row);
                 return (
                   <TableRow key={row.id}>
-                    <TableCell className="text-sm">{row.username || `#${row.userId}`}</TableCell>
-                    <TableCell className="text-sm">
+                    <TableCell data-label="用户" className="text-sm">{row.username || `#${row.userId}`}</TableCell>
+                    <TableCell data-label="用途" className="text-sm">
                       <div className="flex flex-wrap items-center gap-1">
                         <span>{row.name}</span>
                         {row.alias ? <Badge variant="outline">/s/{row.alias}</Badge> : null}
@@ -107,13 +102,13 @@ function TokensTab() {
                       </div>
                       {row.remark ? <p className="text-xs text-muted-foreground">{row.remark}</p> : null}
                     </TableCell>
-                    <TableCell className="text-xs">
+                    <TableCell data-label="状态" className="text-xs">
                       {status.kind === "failed" ? <Badge variant="destructive">{PROXY_SUB_TOKEN_FAILURE_LABELS[status.reason]}</Badge> : status.kind === "ok" ? <Badge variant="secondary">正常</Badge> : <span className="text-muted-foreground">从没拉过</span>}
                     </TableCell>
-                    <TableCell className="whitespace-nowrap text-xs">{timeText(row.lastAccessAt)}{row.lastAccessIp ? <span className="block font-mono text-muted-foreground">{row.lastAccessIp}</span> : null}</TableCell>
-                    <TableCell className="text-xs">{row.lastClientLabel || "—"}{row.lastClientVersion ? ` ${row.lastClientVersion}` : ""}</TableCell>
-                    <TableCell className="text-xs">{row.accessCount || 0}</TableCell>
-                    <TableCell className="whitespace-nowrap text-right">
+                    <TableCell data-label="最近拉取" className="whitespace-nowrap text-xs">{timeText(row.lastAccessAt)}{row.lastAccessIp ? <span className="block font-mono text-muted-foreground">{row.lastAccessIp}</span> : null}</TableCell>
+                    <TableCell data-label="客户端" className="text-xs">{row.lastClientLabel || "—"}{row.lastClientVersion ? ` ${row.lastClientVersion}` : ""}</TableCell>
+                    <TableCell data-label="次数" className="text-xs">{row.accessCount || 0}</TableCell>
+                    <TableCell className="fx-table-stack-actions whitespace-nowrap text-right">
                       <Button size="sm" variant="ghost" onClick={() => setEditing({ ...row, scope: parseProxySubTokenScope(row.scopeJson), options: parseProxySubTokenOptions(row.optionsJson) })}>编辑</Button>
                       <Button size="sm" variant="ghost" onClick={() => setLogsOf({ id: row.id, name: row.name })}>记录</Button>
                       <Button size="sm" variant="ghost" onClick={() => setDevicesOf({ id: row.id, name: row.name })}>设备</Button>
@@ -196,7 +191,7 @@ function StatsTab() {
       <Card>
         <CardHeader><CardTitle className="text-sm">最近 100 次拉取</CardTitle></CardHeader>
         <CardContent className="overflow-x-auto p-0">
-          <Table>
+          <Table className="fx-table-stack">
             <TableHeader>
               <TableRow>
                 <TableHead>时间</TableHead>
@@ -210,12 +205,12 @@ function StatsTab() {
             <TableBody>
               {(logs.data || []).map((row: any) => (
                 <TableRow key={row.id}>
-                  <TableCell className="whitespace-nowrap text-xs">{timeText(row.at)}</TableCell>
-                  <TableCell className="text-xs">#{row.tokenId} · 用户 #{row.userId}</TableCell>
-                  <TableCell className="text-xs"><Badge variant={row.result === "ok" || row.result === "page" ? "secondary" : "destructive"}>{RESULT_LABELS[row.result] || row.result}</Badge></TableCell>
-                  <TableCell className="text-xs" title={row.userAgent || ""}>{row.clientLabel || "未识别"}{row.clientVersion ? ` ${row.clientVersion}` : ""}</TableCell>
-                  <TableCell className="text-xs">{row.format || "—"}{row.profile ? "（规则）" : ""}</TableCell>
-                  <TableCell className="font-mono text-xs">{row.ip || "—"}</TableCell>
+                  <TableCell data-label="时间" className="whitespace-nowrap text-xs">{timeText(row.at)}</TableCell>
+                  <TableCell data-label="令牌" className="text-xs">#{row.tokenId} · 用户 #{row.userId}</TableCell>
+                  <TableCell data-label="结果" className="text-xs"><Badge variant={row.result === "ok" || row.result === "page" ? "secondary" : "destructive"}>{RESULT_LABELS[row.result] || row.result}</Badge></TableCell>
+                  <TableCell data-label="客户端" className="text-xs" title={row.userAgent || ""}>{row.clientLabel || "未识别"}{row.clientVersion ? ` ${row.clientVersion}` : ""}</TableCell>
+                  <TableCell data-label="格式" className="text-xs">{row.format || "—"}{row.profile ? "（规则）" : ""}</TableCell>
+                  <TableCell data-label="IP" className="font-mono text-xs">{row.ip || "—"}</TableCell>
                 </TableRow>
               ))}
             </TableBody>

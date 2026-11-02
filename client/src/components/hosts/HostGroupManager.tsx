@@ -511,7 +511,7 @@ export default function HostGroupManager({
       )}
 
       <Dialog open={dialogOpen} onOpenChange={(open) => !pending && setDialogOpen(open)}>
-        <DialogContent className="flex max-h-[88vh] flex-col overflow-hidden sm:max-w-2xl">
+        <DialogContent className="flex max-h-[88svh] flex-col overflow-hidden sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>{editingId ? "编辑分组" : "添加分组"}</DialogTitle>
             <DialogDescription data-fx-help="">选择需要归入此分组的主机。</DialogDescription>

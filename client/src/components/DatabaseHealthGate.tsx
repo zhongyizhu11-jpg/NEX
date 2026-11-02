@@ -4,6 +4,7 @@ import { useLocation } from "wouter";
 import { AlertTriangle, Database, RefreshCw } from "lucide-react";
 import { parseDatabaseHealth, type DatabaseHealth } from "@shared/databaseHealth";
 import { Button } from "@/components/ui/button";
+import { formatDateTime } from "@/lib/formatTime";
 import { mobileAuth } from "@/lib/mobileAuth";
 
 export const DATABASE_HEALTH_QUERY_KEY = "database-health";
@@ -18,10 +19,7 @@ const DATABASE_LABELS: Record<NonNullable<DatabaseHealth["databaseType"]>, strin
 };
 
 function formatTime(value: string | null) {
-  if (!value) return null;
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return null;
-  return date.toLocaleString("zh-CN", { hour12: false });
+  return formatDateTime(value, "") || null;
 }
 
 /**

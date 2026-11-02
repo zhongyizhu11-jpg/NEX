@@ -10,7 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { SettingList, SettingRow } from "@/components/SettingRow";
-import { segmentedControlClassName, segmentedOptionClassName } from "@/components/ui/segmented";
+import { SegmentedControl } from "@/components/ui/segmented-control";
 import { useLayoutPreference } from "@/hooks/useCompactLayout";
 import { PERSONALIZATION_LAYOUTS, type PersonalizationLayoutId } from "@shared/personalization";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -477,24 +477,15 @@ function ProfileContent() {
                 label="布局"
                 description={`只差总览、转发、主机、链路四页：精简下按紧凑的方式画，一屏多看几张；功能和数据一样。跟随站点现在是「${PERSONALIZATION_LAYOUTS.find((item) => item.id === layoutPreference.siteLayout)?.name ?? "标准"}」。`}
                 control={(
-                  <div className={cn(segmentedControlClassName, "grid grid-cols-3 gap-1")} role="radiogroup" aria-label="布局">
-                    {([{ id: null, name: "跟随站点" }, ...PERSONALIZATION_LAYOUTS] as Array<{ id: PersonalizationLayoutId | null; name: string }>).map((option) => {
-                      const active = layoutPreference.preference === option.id;
-                      return (
-                        <button
-                          key={option.id ?? "site"}
-                          type="button"
-                          role="radio"
-                          aria-checked={active}
-                          disabled={layoutPreference.saving}
-                          onClick={() => { if (!active) void layoutPreference.setPreference(option.id); }}
-                          className={segmentedOptionClassName(active, layoutPreference.saving, "px-2.5")}
-                        >
-                          {option.name}
-                        </button>
-                      );
-                    })}
-                  </div>
+                  <SegmentedControl<PersonalizationLayoutId | "site">
+                    ariaLabel="布局"
+                    className="grid grid-cols-3 gap-1"
+                    optionClassName="px-2.5"
+                    disabled={layoutPreference.saving}
+                    value={layoutPreference.preference ?? "site"}
+                    options={[{ value: "site" as const, label: "跟随站点" }, ...PERSONALIZATION_LAYOUTS.map((layout) => ({ value: layout.id, label: layout.name }))]}
+                    onChange={(id) => { void layoutPreference.setPreference(id === "site" ? null : id); }}
+                  />
                 )}
               />
             </SettingList>

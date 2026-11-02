@@ -21,6 +21,7 @@ import { OptimisticSwitch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { renderMixedHtml, textToHtml } from "@/lib/htmlContent";
+import { formatDateTime } from "@/lib/formatTime";
 import { pollingInterval } from "@/lib/polling";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
@@ -122,9 +123,7 @@ function pluginSupportsUpdates(plugin?: PluginRow) {
 }
 
 function formatTime(value?: string | Date | number | null) {
-  if (!value) return "-";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "-" : date.toLocaleString();
+  return formatDateTime(value, "-");
 }
 
 function formatDateText(value?: string | Date | number | null) {
@@ -747,7 +746,7 @@ function ChinaWhitelistHostStatusSummary({
                 <div className="flex shrink-0 items-center gap-1.5">
                   {failed && <ShieldAlert className="h-3.5 w-3.5 text-destructive" />}
                   <Badge variant="outline" className={cn(
-                    "text-[10px]",
+                    "text-[11px]",
                     data?.applied ? "border-[color-mix(in_srgb,var(--fx-healthy)_25%,transparent)] bg-[var(--fx-healthy-soft)] text-[var(--fx-healthy-text)]" : failed ? "border-destructive/25 bg-destructive/10 text-destructive" : "border-border/50 text-muted-foreground",
                   )}>
                     {stateLabel}
@@ -2027,7 +2026,7 @@ export default function Plugins({ sidebarPluginId }: { sidebarPluginId?: string 
                             <Badge variant="outline" className={pluginStatusClass(plugin.status)}>
                               {pluginStatusLabel(plugin.status)}
                             </Badge>
-                            {plugin.trustRequired && plugin.trusted && <Badge className="bg-[var(--fx-warn)] text-white">已信任</Badge>}
+                            {plugin.trustRequired && plugin.trusted && <Badge tone="warn">已信任</Badge>}
                           </div>
                           <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{plugin.description || plugin.pluginId}</p>
                         </div>
@@ -2110,7 +2109,7 @@ export default function Plugins({ sidebarPluginId }: { sidebarPluginId?: string 
                           <div className="flex flex-wrap justify-end gap-1.5">
                             {item.official && <Badge className="bg-primary text-primary-foreground">官方</Badge>}
                             {!item.official && item.storeSourceName && <Badge variant="outline" className="max-w-40 truncate" title={item.storeSourceName}>{item.storeSourceName}</Badge>}
-                            {installed && <Badge className="bg-[var(--fx-healthy)] text-white">已安装</Badge>}
+                            {installed && <Badge tone="up">已安装</Badge>}
                           </div>
                         </div>
                         <div className="mt-4 min-w-0 flex-1">
@@ -2294,7 +2293,7 @@ export default function Plugins({ sidebarPluginId }: { sidebarPluginId?: string 
                         {storeDetailItem.name}
                         {storeDetailItem.official && <Badge className="bg-primary text-primary-foreground">官方</Badge>}
                         {!storeDetailItem.official && storeDetailItem.storeSourceName && <Badge variant="outline">{storeDetailItem.storeSourceName}</Badge>}
-                        {installedIds.has(storeDetailItem.id) && <Badge className="bg-[var(--fx-healthy)] text-white">已安装</Badge>}
+                        {installedIds.has(storeDetailItem.id) && <Badge tone="up">已安装</Badge>}
                       </DialogTitle>
                       <DialogDescription className="mt-1">
                         开发者：{storeDetailItem.author || "NEX"} · v{storeDetailItem.version || "0.0.0"} · 更新：{formatDateText(storeDetailItem.updatedAt)}
@@ -2406,7 +2405,7 @@ export default function Plugins({ sidebarPluginId }: { sidebarPluginId?: string 
                             <Badge variant="outline" className={pluginStatusClass(plugin.status)}>
                               {pluginStatusLabel(plugin.status)}
                             </Badge>
-                            {plugin.trustRequired && plugin.trusted && <Badge className="bg-[var(--fx-warn)] text-white">已信任</Badge>}
+                            {plugin.trustRequired && plugin.trusted && <Badge tone="warn">已信任</Badge>}
                             {updating ? (
                               <Badge className="gap-1.5 bg-primary text-primary-foreground">
                                 <Loader2 className="h-3 w-3 animate-spin" />更新中
@@ -2452,7 +2451,7 @@ export default function Plugins({ sidebarPluginId }: { sidebarPluginId?: string 
                         <Badge variant="outline" className={pluginStatusClass(selectedPlugin.status)}>
                           {pluginStatusLabel(selectedPlugin.status)}
                         </Badge>
-                        {selectedPluginRequiresTrust && selectedPlugin.trusted && <Badge className="bg-[var(--fx-warn)] text-white">已信任</Badge>}
+                        {selectedPluginRequiresTrust && selectedPlugin.trusted && <Badge tone="warn">已信任</Badge>}
                         {selectedPluginUpdating ? (
                           <Badge className="gap-1.5 bg-primary text-primary-foreground">
                             <Loader2 className="h-3 w-3 animate-spin" />更新中
@@ -2782,12 +2781,12 @@ export default function Plugins({ sidebarPluginId }: { sidebarPluginId?: string 
                               <p className="text-sm font-medium">{action.label}</p>
                               {action.description && <p className="text-xs text-muted-foreground">{action.description}</p>}
                               <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                                <Badge variant="outline" className="font-mono text-[10px]">{action.type}</Badge>
+                                <Badge variant="outline" className="font-mono text-[11px]">{action.type}</Badge>
                                 {(action.type === "panel.request" || action.type === "agent.request") && !selectedPlugin.trusted && (
-                                  <Badge variant="destructive" className="text-[10px]">需要插件信任</Badge>
+                                  <Badge variant="destructive" className="text-[11px]">需要插件信任</Badge>
                                 )}
                                 {Array.isArray(action.inputSchema) && action.inputSchema.length > 0 && (
-                                  <Badge variant="outline" className="text-[10px]">需要输入 {action.inputSchema.length} 项</Badge>
+                                  <Badge variant="outline" className="text-[11px]">需要输入 {action.inputSchema.length} 项</Badge>
                                 )}
                               </div>
                             </div>

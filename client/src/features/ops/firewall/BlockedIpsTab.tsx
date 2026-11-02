@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { FormField } from "@/components/ui/form-field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { segmentedControlClassName, segmentedOptionClassName } from "@/components/ui/segmented";
+import { SegmentedControl } from "@/components/ui/segmented-control";
 import { trpc } from "@/lib/trpc";
 import { pollingInterval } from "@/lib/polling";
 import { cn } from "@/lib/utils";
@@ -104,20 +104,7 @@ function BlockDialog({ open, onOpenChange, initialCidr }: { open: boolean; onOpe
           </FormField>
           <div className="space-y-1.5">
             <span className="text-sm font-medium" id="fw-block-expiry">封多久</span>
-            <div className={cn(segmentedControlClassName, "flex gap-1")} role="radiogroup" aria-labelledby="fw-block-expiry">
-              {EXPIRY_OPTIONS.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  role="radio"
-                  aria-checked={expiry === option.value}
-                  onClick={() => setExpiry(option.value)}
-                  className={segmentedOptionClassName(expiry === option.value, false, "h-8 flex-1 px-2 text-[13px]")}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
+            <SegmentedControl ariaLabel="封多久" className="flex gap-1" optionClassName="h-8 flex-1 px-2 text-[13px]" value={expiry} options={EXPIRY_OPTIONS} onChange={setExpiry} />
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>取消</Button>

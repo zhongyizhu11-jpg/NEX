@@ -705,7 +705,7 @@ function LineNameInput({ name, lineIndex, onChange }: { name: string; lineIndex:
       placeholder={defaultRoutePathName(lineIndex)}
       aria-label={lineIndex === 0 ? "主线路的名字" : `备 ${lineIndex} 的名字`}
       title="点一下改名字"
-      className="min-w-0 flex-1 rounded-[6px] bg-transparent px-1 py-[3px] text-[13px] font-semibold outline-none hover:bg-[var(--fx-l2-group)] focus:bg-[var(--fx-l2-group)]"
+      className="min-w-0 flex-1 rounded-inner bg-transparent px-1 py-[3px] text-[13px] font-semibold outline-none hover:bg-[var(--fx-l2-group)] focus:bg-[var(--fx-l2-group)]"
     />
   );
 }

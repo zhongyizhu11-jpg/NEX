@@ -4420,7 +4420,7 @@ function RulesContent() {
                 <span className="flex min-w-0 flex-wrap items-center gap-1.5">
                   {renderRuleGroupIcon(category, "h-3.5 w-3.5")}
                   <span className="min-w-0 truncate text-sm font-medium">{rule.name}</span>
-                  <Badge variant="secondary" className="h-5 shrink-0 px-1.5 text-[10px]">{desktopRuleTypeLabels[category]}</Badge>
+                  <Badge variant="secondary" className="h-5 shrink-0 px-1.5 text-[11px]">{desktopRuleTypeLabels[category]}</Badge>
                 </span>
                 <span className="mt-1 block truncate text-xs text-muted-foreground">
                   :{rule.sourcePort} -&gt; {rule.targetIp}:{rule.targetPort} / {forwardTypeDisplayLabel(rule.forwardType)} / {formatForwardRuleProtocol(rule.protocol)}
@@ -4899,7 +4899,7 @@ function RulesContent() {
   };
   const getHostOptionName = (host: any) => host?.name || `主机 #${host?.id || "-"}`;
   const renderTrafficBillingResourceBadge = (enabled = true) => enabled ? (
-    <span className="shrink-0 rounded border border-[color-mix(in_srgb,var(--fx-warn)_30%,transparent)] bg-[var(--fx-warn-soft)] px-1.5 py-0.5 text-[10px] font-medium leading-none text-[var(--fx-warn-text)]">
+    <span className="shrink-0 rounded border border-[color-mix(in_srgb,var(--fx-warn)_30%,transparent)] bg-[var(--fx-warn-soft)] px-1.5 py-0.5 text-[11px] font-medium leading-none text-[var(--fx-warn-text)]">
       按量计费资源
     </span>
   ) : null;
@@ -6142,7 +6142,7 @@ function RulesContent() {
   /** 规则主人看到的那枚「管理员管理」：说明为什么编辑、开关、删除都不在。 */
   const renderAdminManagedBadge = (rule: any) => (
     user?.role !== "admin" && isAdminManagedRule(rule) ? (
-      <Badge key="admin-managed" variant="outline" className="h-5 gap-1 px-1.5 text-[10px] text-muted-foreground" title={ADMIN_MANAGED_RULE_MESSAGE}>
+      <Badge key="admin-managed" variant="outline" className="h-5 gap-1 px-1.5 text-[11px] text-muted-foreground" title={ADMIN_MANAGED_RULE_MESSAGE}>
         <Lock className="h-3 w-3" aria-hidden="true" />
         管理员管理
       </Badge>
@@ -6156,9 +6156,9 @@ function RulesContent() {
     const text = formatSniRuleEntry({ names: parseSniNameJson(rule.sniNames), hostName: inbound?.hostName, port: inbound?.port });
     return (
       <span key="sni" className="inline-flex min-w-0 max-w-full items-center gap-1">
-        <Badge variant="outline" className="h-5 min-w-0 max-w-full truncate px-1.5 text-[10px] font-normal" title={text}>{text}</Badge>
+        <Badge variant="outline" className="h-5 min-w-0 max-w-full truncate px-1.5 text-[11px] font-normal" title={text}>{text}</Badge>
         {state !== "ok" ? (
-          <Badge variant="outline" className="h-5 shrink-0 border-[color-mix(in_srgb,var(--fx-warn)_40%,transparent)] px-1.5 text-[10px] text-[var(--fx-warn-text)]">
+          <Badge variant="outline" className="h-5 shrink-0 border-[color-mix(in_srgb,var(--fx-warn)_40%,transparent)] px-1.5 text-[11px] text-[var(--fx-warn-text)]">
             {TLS_INBOUND_RULE_STATE_LABELS[state]}
           </Badge>
         ) : null}
@@ -6176,12 +6176,12 @@ function RulesContent() {
     const title = [text, egress.masked, egress.message].filter(Boolean).join(" · ");
     return (
       <span key="egress" className="inline-flex min-w-0 max-w-full flex-wrap items-center gap-1" data-testid="rule-egress-badge">
-        <Badge variant="outline" className="h-5 min-w-0 max-w-full truncate px-1.5 text-[10px] font-normal" title={title}>{text}</Badge>
+        <Badge variant="outline" className="h-5 min-w-0 max-w-full truncate px-1.5 text-[11px] font-normal" title={title}>{text}</Badge>
         <Badge
           variant="outline"
           className={cn(
             // 状态那一枚（例如「UDP 出口需要升级 Agent/运行时」）在窄屏上可能比剩下的宽度长：整枚换行，不截字。
-            "h-5 max-w-full shrink-0 truncate px-1.5 text-[10px]",
+            "h-5 max-w-full shrink-0 truncate px-1.5 text-[11px]",
             tone === "ok" && "border-[color-mix(in_srgb,var(--fx-healthy)_40%,transparent)] text-[var(--fx-healthy-text)]",
             tone === "warn" && "border-[color-mix(in_srgb,var(--fx-warn)_40%,transparent)] text-[var(--fx-warn-text)]",
             tone === "muted" && "text-muted-foreground",
@@ -6425,10 +6425,10 @@ function RulesContent() {
             type="button"
             onClick={() => entry.copyable && copyEntryAddress(rule, entry.value)}
             disabled={!entry.copyable}
-            className="group inline-flex min-w-0 max-w-full shrink items-center gap-1 rounded-[6px] px-1 py-0.5 -mx-1 text-left transition-colors enabled:hover:bg-[var(--fx-l2-group)] disabled:cursor-default disabled:text-muted-foreground"
+            className="group inline-flex min-w-0 max-w-full shrink items-center gap-1 rounded-inner px-1 py-0.5 -mx-1 text-left transition-colors enabled:hover:bg-[var(--fx-l2-group)] disabled:cursor-default disabled:text-muted-foreground"
             title={entry.copyable ? `${entryTitle}${entryAddresses.length > 1 ? ` (${entry.label})` : ""}` : entry.text}
           >
-            {entryAddresses.length > 1 && <span className="shrink-0 text-[10px] text-muted-foreground">{entry.label}</span>}
+            {entryAddresses.length > 1 && <span className="shrink-0 text-[11px] text-muted-foreground">{entry.label}</span>}
             <code className="fx-table-addr min-w-0 truncate">{entry.text}</code>
             {entry.copyable && <Copy className="h-3 w-3 shrink-0 text-muted-foreground opacity-60 group-hover:opacity-100" />}
           </button>
@@ -6445,14 +6445,14 @@ function RulesContent() {
         <button
           type="button"
           onClick={() => copyTargetAddress(targetAddress)}
-          className="group inline-flex min-w-0 max-w-full shrink items-center gap-1 rounded-[6px] px-1 py-0.5 -mx-1 text-left transition-colors hover:bg-[var(--fx-l2-group)]"
+          className="group inline-flex min-w-0 max-w-full shrink items-center gap-1 rounded-inner px-1 py-0.5 -mx-1 text-left transition-colors hover:bg-[var(--fx-l2-group)]"
           title={`复制目标地址: ${targetAddress}`}
         >
           <code className="fx-table-addr min-w-0 truncate">{targetAddress}</code>
           <Copy className="h-3 w-3 shrink-0 text-muted-foreground opacity-60 group-hover:opacity-100" />
         </button>
         {failoverEnabled && (
-          <Badge variant="outline" className="h-5 shrink-0 border-[color-mix(in_srgb,var(--fx-warn)_30%,transparent)] px-1.5 text-[10px] text-[var(--fx-warn-text)]">
+          <Badge variant="outline" className="h-5 shrink-0 border-[color-mix(in_srgb,var(--fx-warn)_30%,transparent)] px-1.5 text-[11px] text-[var(--fx-warn-text)]">
             {routeLabel} {failoverCount} 条
           </Badge>
         )}
@@ -6481,7 +6481,7 @@ function RulesContent() {
     return (
       <Badge
         variant="outline"
-        className={`w-fit whitespace-nowrap text-[10px] ${forwardToolBadgeClass(forwardType)}`}
+        className={`w-fit whitespace-nowrap text-[11px] ${forwardToolBadgeClass(forwardType)}`}
         title={`转发工具：${label}`}
       >
         {forwardType === "iptables" || forwardType === "nftables" ? (
@@ -6515,7 +6515,7 @@ function RulesContent() {
       <Badge
         key="fxp-issue"
         variant="outline"
-        className="h-5 w-fit border-destructive/30 px-1.5 text-[10px] text-destructive"
+        className="h-5 w-fit border-destructive/30 px-1.5 text-[11px] text-destructive"
         title={issue}
       >
         <AlertCircle className="mr-1 h-3 w-3" />
@@ -6528,7 +6528,7 @@ function RulesContent() {
     return (
       <Badge
         variant="outline"
-        className="h-5 w-fit border-[color-mix(in_srgb,var(--fx-warn)_35%,transparent)] bg-[var(--fx-warn-soft)] px-1.5 text-[10px] text-[var(--fx-warn-text)]"
+        className="h-5 w-fit border-[color-mix(in_srgb,var(--fx-warn)_35%,transparent)] bg-[var(--fx-warn-soft)] px-1.5 text-[11px] text-[var(--fx-warn-text)]"
         title={warning}
       >
         <AlertCircle className="mr-1 h-3 w-3" />
@@ -6557,7 +6557,7 @@ function RulesContent() {
       return (
         <Badge
           variant="outline"
-          className="w-fit whitespace-nowrap border-[color-mix(in_srgb,var(--fx-warn)_40%,transparent)] text-[10px] text-[var(--fx-warn-text)]"
+          className="w-fit whitespace-nowrap border-[color-mix(in_srgb,var(--fx-warn)_40%,transparent)] text-[11px] text-[var(--fx-warn-text)]"
           title={`这条转发的目标已经不是它绑的「${nodeName}」了。订阅里那条线路还在，但客户端连过去是拿着「${nodeName}」的凭据去连新目标 —— 把目标改回去，或者在这里重新选节点。`}
         >
           <AlertTriangle className="mr-1 h-3 w-3" />
@@ -6568,7 +6568,7 @@ function RulesContent() {
     return (
       <Badge
         variant="outline"
-        className={`w-fit whitespace-nowrap text-[10px] ${
+        className={`w-fit whitespace-nowrap text-[11px] ${
           visible ? "border-[color-mix(in_srgb,var(--fx-path)_30%,transparent)] text-[var(--fx-path)]" : "border-muted-foreground/30 text-muted-foreground"
         }`}
         title={visible
@@ -6628,7 +6628,7 @@ function RulesContent() {
       >
         <Badge
           variant="outline"
-          className={cn("h-5 cursor-pointer gap-1 px-1.5 text-[10px] font-medium", FAILOVER_TONE_CLASS[display.tone])}
+          className={cn("h-5 cursor-pointer gap-1 px-1.5 text-[11px] font-medium", FAILOVER_TONE_CLASS[display.tone])}
         >
           <GitBranch className="h-3 w-3" aria-hidden="true" />
           {display.text}
@@ -6660,7 +6660,7 @@ function RulesContent() {
     const badge = (
       <Badge
         variant="outline"
-        className={`w-fit whitespace-nowrap text-[10px] ${
+        className={`w-fit whitespace-nowrap text-[11px] ${
           rule.forwardGroupId
             ? "border-[color-mix(in_srgb,var(--fx-healthy)_30%,transparent)] text-[var(--fx-healthy-text)]"
             : rule.forwardType === "iptables" || rule.forwardType === "nftables"
@@ -7062,7 +7062,7 @@ function RulesContent() {
               {compactLayout ? (
                 /* 精简的表：协议自己一列，名字下面挂类型标签（端口转发 / 隧道转发 / 转发链 / 转发组）和所属人 */
                 <span className="mt-0.5 flex min-w-0 items-center gap-1.5">
-                  <Badge variant="secondary" className="h-5 shrink-0 px-1.5 text-[10px] font-normal">{desktopRuleTypeLabels[getRuleDisplayType(rule, forwardGroupById)]}</Badge>
+                  <Badge variant="secondary" className="h-5 shrink-0 px-1.5 text-[11px] font-normal">{desktopRuleTypeLabels[getRuleDisplayType(rule, forwardGroupById)]}</Badge>
                   {owner ? <span className="truncate text-[11px] leading-4 text-muted-foreground" title={owner}>{owner}</span> : null}
                 </span>
               ) : (
@@ -7124,7 +7124,7 @@ function RulesContent() {
         head: "协议",
         headClassName: "text-center",
         cellClassName: "text-center",
-        cell: (rule: any) => <Badge variant="secondary" className="whitespace-nowrap text-[10px] font-normal">{formatForwardRuleProtocol(rule.protocol)}</Badge>,
+        cell: (rule: any) => <Badge variant="secondary" className="whitespace-nowrap text-[11px] font-normal">{formatForwardRuleProtocol(rule.protocol)}</Badge>,
       },
       {
         key: "total",
@@ -7353,7 +7353,7 @@ function RulesContent() {
       rule?.tunnelId ? renderTunnelFxpIssueBadge(tunnelById.get(Number(rule.tunnelId))) : null,
       renderSubscriptionBadge(rule, "card"),
       !supported ? (
-        <Badge key="unsupported" variant="outline" className="h-5 border-destructive/30 px-1.5 text-[10px] text-destructive">
+        <Badge key="unsupported" variant="outline" className="h-5 border-destructive/30 px-1.5 text-[11px] text-destructive">
           {protocolUnsupportedLabel(protocolKey)} 不支持
         </Badge>
       ) : null,
@@ -8579,7 +8579,7 @@ function RulesContent() {
               ) : (
               <div className="flex h-10 items-center justify-between gap-2 rounded-md border border-border/60 bg-muted/30 px-3 text-sm">
               <span className="truncate">{FORWARD_TYPE_LABELS[effectiveRouteForwardType] || effectiveRouteForwardType}</span>
-              <Badge variant="outline" className="shrink-0 text-[10px]">
+              <Badge variant="outline" className="shrink-0 text-[11px]">
               {isForwardGroupRouteMode ? "上级决定" : "已锁定"}
               </Badge>
               </div>
@@ -8668,7 +8668,7 @@ function RulesContent() {
             </DialogTitle>
             <DialogDescription data-fx-help="">筛选并选择规则后，可批量复制、编辑、导出或删除。</DialogDescription>
           </DialogHeader>
-          <div className="max-h-[72vh] space-y-4 overflow-y-auto pr-1">
+          <div className="max-h-[72svh] space-y-4 overflow-y-auto pr-1">
             <div className={segmentedControlClassName}>
               <div className="grid grid-cols-2 gap-1 sm:grid-cols-4">
                 <button
@@ -8835,7 +8835,7 @@ function RulesContent() {
                           <div className="flex min-w-0 flex-wrap items-center gap-1.5">
                             <ArrowRightLeft className="h-3.5 w-3.5 text-primary" />
                             <span className="min-w-0 truncate text-sm font-medium">{rule.name}</span>
-                            <Badge variant="secondary" className="h-5 shrink-0 px-1.5 text-[10px]">{formatForwardRuleProtocol(rule.protocol)}</Badge>
+                            <Badge variant="secondary" className="h-5 shrink-0 px-1.5 text-[11px]">{formatForwardRuleProtocol(rule.protocol)}</Badge>
                           </div>
                           <div className="mt-1 truncate text-xs text-muted-foreground">
                             {rule.sourcePort > 0 ? `:${rule.sourcePort}` : "随机端口"} -&gt; {rule.targetIp}:{rule.targetPort} / {forwardTypeDisplayLabel(rule.forwardType)}
@@ -9004,7 +9004,7 @@ function RulesContent() {
                             <div className="flex min-w-0 flex-wrap items-center gap-1.5">
                               {renderRuleGroupIcon(category, "h-3.5 w-3.5")}
                               <span className="min-w-0 truncate text-sm font-medium">{rule.name}</span>
-                              <Badge variant="secondary" className="h-5 shrink-0 px-1.5 text-[10px]">{desktopRuleTypeLabels[category]}</Badge>
+                              <Badge variant="secondary" className="h-5 shrink-0 px-1.5 text-[11px]">{desktopRuleTypeLabels[category]}</Badge>
                             </div>
                             <div className="mt-1 truncate text-xs text-muted-foreground">
                               :{rule.sourcePort} -&gt; {rule.targetIp}:{rule.targetPort} / {forwardTypeDisplayLabel(rule.forwardType)} / {formatForwardRuleProtocol(rule.protocol)}

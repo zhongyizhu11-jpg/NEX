@@ -7,6 +7,7 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { FormField } from "@/components/ui/form-field";
 import { Input } from "@/components/ui/input";
@@ -16,6 +17,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import DatePickerInput, { formatDateInputValue } from "@/components/DatePickerInput";
+import { formatDateTime as formatTime } from "@/lib/formatTime";
 import { cn } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
 import { PROXY_NODE_PROTOCOLS, PROXY_NODE_PROTOCOL_LABELS, type ProxyNodeProtocol } from "@shared/proxyNode";
@@ -68,13 +70,6 @@ function dateInputValue(value: unknown): string {
   const date = new Date(value as any);
   if (!Number.isFinite(date.getTime())) return "";
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-}
-
-function formatTime(value: unknown): string {
-  if (!value) return "—";
-  const date = new Date(value as any);
-  if (!Number.isFinite(date.getTime())) return "—";
-  return date.toLocaleString("zh-CN", { hour12: false });
 }
 
 /** 分区：一个灰色小标题 + 一句说明 + 字段。四个页签都按这个节奏排，眼睛才找得到东西。 */
@@ -695,6 +690,18 @@ export function ProxySubTokenDevicesDialog({ open, onOpenChange, tokenId, tokenN
     },
     onError: (error) => toast.error(error.message || "移除失败"),
   });
+  const confirmDialog = useConfirmDialog();
+  // 移除前确认一次：被移除的设备下次拉取会重新登记，占一个设备名额
+  const removeDevice = async (row: any) => {
+    const label = String(row.hwid).startsWith("ip:") ? `按 IP 记的 ${row.lastIp || String(row.hwid).slice(3)}` : String(row.hwid).slice(0, 16);
+    const confirmed = await confirmDialog({
+      title: "移除设备",
+      description: `移除设备「${label}」？它下次拉订阅会重新登记。`,
+      confirmText: "移除",
+      tone: "destructive",
+    });
+    if (confirmed) remove.mutate({ id: row.id });
+  };
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-h-[92svh] flex-col overflow-hidden sm:max-w-2xl">
@@ -726,7 +733,7 @@ export function ProxySubTokenDevicesDialog({ open, onOpenChange, tokenId, tokenN
                     <TableCell className="whitespace-nowrap text-xs">{formatTime(row.lastSeenAt)}</TableCell>
                     <TableCell className="font-mono text-xs">{row.lastIp || "—"}</TableCell>
                     <TableCell className="text-right">
-                      <Button size="sm" variant="ghost" onClick={() => remove.mutate({ id: row.id })} disabled={remove.isPending}>移除</Button>
+                      <Button size="sm" variant="ghost" onClick={() => void removeDevice(row)} disabled={remove.isPending}>移除</Button>
                     </TableCell>
                   </TableRow>
                 ))}

@@ -289,7 +289,7 @@ export function RouteLineDiagram({ status, modeLabel, timeZone }: { status: Rout
                 <title>{node.sub ? `${node.title} · ${node.sub}` : node.title}</title>
                 <rect x={left} y={topY} width={node.width} height={BOX_HEIGHT} rx={7} fill="var(--fx-l1-surface)" stroke={node.hot ? "var(--fx-accent)" : "var(--fx-stroke-weak)"} strokeWidth={node.hot ? 1.6 : 1} />
                 <text x={x} y={y + 4} fontWeight={node.hot ? 700 : 400} fill="var(--fx-text)">{node.label}</text>
-                {node.sub ? <text x={x} y={topY + BOX_HEIGHT + 13} fontSize="9" fill="var(--fx-text-muted)" fontFamily="inherit" style={{ fontFamily: "var(--fx-font-sans, system-ui, sans-serif)" }}>{node.sub}</text> : null}
+                {node.sub ? <text x={x} y={topY + BOX_HEIGHT + 13} fontSize="9" fill="var(--fx-text-muted)" fontFamily="inherit" style={{ fontFamily: "var(--fx-font, system-ui, sans-serif)" }}>{node.sub}</text> : null}
                 <circle cx={left + node.width - 4} cy={topY + 2} r={3} fill={DOT_FILL[node.tone]} />
               </g>
             );

@@ -4,6 +4,7 @@ import { Check, ChevronDown, ChevronRight, Plus, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import {
@@ -201,6 +202,7 @@ export function NodePoolsSection({ hosts, onOpenGroup, isAdmin = false }: {
     onError: (error) => toast.error(error.message),
   });
   const [editing, setEditing] = useState<PoolDraft | null>(null);
+  const confirmDialog = useConfirmDialog();
   const hostName = (id: number) => hosts.find((host) => host.id === id)?.name || `主机 ${id}`;
   const data = board.data;
   const entryGroups = data?.entryGroups || [];
@@ -234,6 +236,24 @@ export function NodePoolsSection({ hosts, onOpenGroup, isAdmin = false }: {
     });
   };
   const editingFollowers = editing?.id ? nodePools.find((pool) => pool.id === editing.id)?.followers || [] : [];
+  /* 删池前确认一次：说清池里几台、几条线路 / 转发在用、哪些组跟着它 */
+  const confirmRemove = async () => {
+    if (!editing?.id) return;
+    const pool = nodePools.find((item) => item.id === editing.id);
+    const uses = [
+      pool?.lines ? `${pool.lines} 条线路在用它（要先在线路里换掉）` : "",
+      pool?.landing?.rules ? `${pool.landing.rules} 条转发在用它` : "",
+      pool?.landing?.configured ? "订阅里的这一条会一起去掉，每台上开的入站也收掉" : "",
+      pool?.followers.length ? `${pool.followers.join("、")} 不再跟着它，成员留着现在这些` : "",
+    ].filter(Boolean);
+    const confirmed = await confirmDialog({
+      title: "删掉这个池",
+      description: `删掉「${editing.name || pool?.name || "这个池"}」？池里 ${editing.hostIds.length} 台机器${uses.length ? `；${uses.join("；")}` : ""}。删了不能恢复。`,
+      confirmText: "删掉",
+      tone: "destructive",
+    });
+    if (confirmed) remove.mutate({ id: editing.id });
+  };
   /*
     组的成员跟不跟节点池：跟着的，卡底下一个醒目的 chip（这是要一眼看见的状态）；没跟的只在说明
     后面挂一个不起眼的「跟着节点池」—— 每张卡都摆一个「成员：手动加减」太吵。
@@ -467,14 +487,18 @@ export function NodePoolsSection({ hosts, onOpenGroup, isAdmin = false }: {
                   onSuggestDomain={isAdmin ? () => suggestDomain.mutate({ name: editing.name.trim() || undefined, hostIds: editing.hostIds }) : undefined}
                   editing={!!editing.id && editing.configured}
                   rotating={rotate.isPending}
-                  onRotate={editing.id ? () => { if (window.confirm("换掉这个落地池的全部凭据和密钥？每台一起换，客户端要重新拉订阅。")) rotate.mutate({ id: editing.id! }); } : undefined}
+                  onRotate={editing.id ? () => {
+                    const id = editing.id!;
+                    void confirmDialog({ title: "换凭据和密钥", description: "换掉这个落地池的全部凭据和密钥？每台一起换，客户端要重新拉订阅。", confirmText: "换掉" })
+                      .then((confirmed) => { if (confirmed) rotate.mutate({ id }); });
+                  } : undefined}
                 />
               ) : null}
               {draftError ? <p className="px-[14px] text-[12px] text-[var(--fx-warn-text)]">{draftError}</p> : null}
             </div>
             <DialogFooter>
               {editing.id ? (
-                <Button type="button" variant="ghost" className="mr-auto text-[var(--fx-down-text)]" disabled={remove.isPending} onClick={() => remove.mutate({ id: editing.id! })}>删掉这个池</Button>
+                <Button type="button" variant="ghost" className="mr-auto text-[var(--fx-down-text)]" disabled={remove.isPending} onClick={() => void confirmRemove()}>删掉这个池</Button>
               ) : null}
               <Button type="button" variant="outline" onClick={() => setEditing(null)}>取消</Button>
               <Button type="button" disabled={!editing.name.trim() || editing.hostIds.length === 0 || !!draftError || save.isPending} onClick={submit} data-testid="node-pool-save">保存</Button>
@@ -565,7 +589,7 @@ function PoolFollowMenu({ inline, poolId, poolName, pools, busy, onPick }: {
           </LineChipButton>
         )}
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="max-h-[60vh] w-64 overflow-y-auto" onClick={stop}>
+      <DropdownMenuContent align="start" className="max-h-[60svh] w-64 overflow-y-auto" onClick={stop}>
         <DropdownMenuLabel className="text-[11px] font-normal text-muted-foreground">跟着一个节点池：池里加减机器，组的成员跟着加减</DropdownMenuLabel>
         {pools.map((pool) => (
           <DropdownMenuItem key={pool.id} disabled={pool.total === 0} onSelect={() => { if (pool.id !== poolId) onPick(pool.id); }}>

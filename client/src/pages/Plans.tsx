@@ -1273,7 +1273,7 @@ export default function Plans() {
                       </AutoAnimateContainer>
                     ) : (
                       <div key="plan-table-view" className="overflow-x-auto rounded-[var(--fx-radius-surface)] border border-[var(--fx-stroke-weak)] bg-[var(--fx-l1-surface)]">
-                        <Table>
+                        <Table className="fx-table-stack">
                           <TableHeader>
                             <TableRow>
                               <TableHead>套餐</TableHead>
@@ -1291,22 +1291,22 @@ export default function Plans() {
                                   <div className="font-medium">{plan.name}</div>
                                   <div className="max-w-md truncate text-xs text-muted-foreground">{planDescriptionSummary(plan.description) || "无描述"}</div>
                                 </TableCell>
-                                <TableCell>{money(plan.priceCents, plan.currency)} / {durationLabel(plan.durationDays)}</TableCell>
-                                <TableCell>
+                                <TableCell data-label="价格">{money(plan.priceCents, plan.currency)} / {durationLabel(plan.durationDays)}</TableCell>
+                                <TableCell data-label="资源">
                                   <div className="flex flex-wrap gap-1">
                                     {planResourcePartsForDisplay(plan, forwardGroupMap).map((item) => (
                                       <Badge key={item.label} variant="outline">{item.label} {item.count}</Badge>
                                     ))}
                                   </div>
                                 </TableCell>
-                                <TableCell className="text-sm text-muted-foreground">
+                                <TableCell data-label="限制" className="text-sm text-muted-foreground">
                                   <div>{plan.portCount} 个端口</div>
                                   <div>规则 {plan.maxRules || "不限"} · 流量 {formatQuotaBytes(plan.trafficLimit)}</div>
                                   <div>附加流量 {plan.trafficAddons?.length || 0} 档</div>
                                   <div>连接 {plan.maxConnections || "不限"} · 单 IP {plan.maxIPs || "不限"} · 限速 {speed(plan.rateLimitMbps)}</div>
                                   <div>邀请返利 {referralRateText(plan.referralRateBps)}</div>
                                 </TableCell>
-                                <TableCell>
+                                <TableCell data-label="状态">
                                   <PlanStatusSwitches
                                     plan={plan}
                                     layout="inline"
@@ -1315,7 +1315,7 @@ export default function Plans() {
                                     onToggleStoreVisible={() => togglePlanStoreVisible(plan)}
                                   />
                                 </TableCell>
-                                <TableCell className="text-right">
+                                <TableCell className="fx-table-stack-actions text-right">
                                   <EntityActions
                                     className="justify-end"
                                     primary={[{ key: "edit", label: "编辑", ariaLabel: `编辑套餐 ${plan.name}`, onSelect: () => openPlanEdit(plan) }]}

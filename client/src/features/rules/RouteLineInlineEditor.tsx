@@ -240,7 +240,7 @@ export function useRouteLineEditor({ rule, enabled, status, onPause, pausing = f
         </Button>
         <Button
           type="button"
-          className="h-auto flex-1 rounded-[12px] border border-[var(--fx-accent)] bg-[var(--fx-accent)] py-[11px] text-[14px] font-semibold text-white hover:bg-[var(--fx-accent)]/90"
+          className="h-auto flex-1 rounded-[12px] border border-[var(--fx-accent)] bg-[var(--fx-accent)] py-[11px] text-[14px] font-semibold text-on-accent hover:bg-[var(--fx-accent)]/90"
           disabled={save.isPending}
           onClick={submit}
           data-testid="route-line-save"

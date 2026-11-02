@@ -35,7 +35,8 @@ type Props = {
   onMoreSettings?: (tunnel: any) => void;
 };
 
-function formatMbps(value: number) {
+// 机器填的带宽上限（Mbps）写成 100M / 1G 的短写法，没填给空串
+function formatCapacityShort(value: number) {
   if (!(value > 0)) return "";
   return value >= 1000 && value % 100 === 0 ? `${value / 1000}G` : `${value}M`;
 }
@@ -96,7 +97,7 @@ export default function AggregateLinkDialog({ open, onOpenChange, tunnel, hosts,
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+      <DialogContent className="max-h-[90svh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>{tunnel ? "编辑叠加" : "新建叠加"}</DialogTitle>
           <DialogDescription data-fx-help="">一条连接拆到几台中转同时送，在落地拼回来。</DialogDescription>
@@ -138,7 +139,7 @@ export default function AggregateLinkDialog({ open, onOpenChange, tunnel, hosts,
               <Label className="text-sm">中转（至少 {AGGREGATE_LINK_MIN_RELAYS} 台）</Label>
               {relayHostIds.length > 0 ? (
                 <span className="text-xs tabular-nums text-muted-foreground">
-                  {relayBandwidthKnown ? `合计 ${formatMbps(relayBandwidths.reduce((sum, value) => sum + value, 0))}` : `已选 ${relayHostIds.length} 台`}
+                  {relayBandwidthKnown ? `合计 ${formatCapacityShort(relayBandwidths.reduce((sum, value) => sum + value, 0))}` : `已选 ${relayHostIds.length} 台`}
                 </span>
               ) : null}
             </div>
@@ -153,7 +154,7 @@ export default function AggregateLinkDialog({ open, onOpenChange, tunnel, hosts,
                   <label key={id} className="flex cursor-pointer items-center gap-2.5 rounded px-2 py-1.5 hover:bg-muted/50">
                     <Checkbox checked={checked} disabled={full} onCheckedChange={(next) => toggleRelay(id, next)} />
                     <span className="min-w-0 flex-1 truncate text-sm">{host.name}</span>
-                    <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{formatMbps(hostBandwidthHintMbps(host)) || "带宽未填"}</span>
+                    <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{formatCapacityShort(hostBandwidthHintMbps(host)) || "带宽未填"}</span>
                   </label>
                 );
               })}

@@ -28,3 +28,8 @@ test("注册的字号和 index.css 里 @theme 定义的一一对应", () => {
   assert.ok(themeSizes.length >= 6, `index.css 里只认出 ${themeSizes.length} 个字号，正则大概失效了`);
   assert.deepEqual(registered, themeSizes);
 });
+
+test("自定义圆角 rounded-inner 和别的圆角冲突时后写的胜出", () => {
+  assert.equal(cn("rounded-inner px-2", "rounded-full"), "px-2 rounded-full");
+  assert.equal(cn("rounded-[6px]", "rounded-inner"), "rounded-inner");
+});

@@ -80,6 +80,7 @@ import { MORE_TAB_PATH, pickTabBarItems } from "@/components/ios/tabBarModel";
 import { useLocation } from "wouter";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
+import { useConfirmDialog } from "./ui/confirm-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "./ui/dialog";
 import { PasswordInput } from "./ui/password-input";
 import { Input } from "./ui/input";
@@ -959,6 +960,17 @@ function DashboardLayoutContent({
     },
     onError: (error) => toast.error(error.message || "解绑 Telegram 失败"),
   });
+  const confirmDialog = useConfirmDialog();
+  // 解绑前确认一次（个人资料页那边本来就有确认）
+  const confirmUnbindTelegram = async () => {
+    const confirmed = await confirmDialog({
+      title: "解除 Telegram 绑定",
+      description: "解绑后不再收到 Telegram 通知，要用得重新绑定。",
+      confirmText: "解除绑定",
+      tone: "destructive",
+    });
+    if (confirmed) unbindTelegramMutation.mutate();
+  };
 
   const handleChangePassword = () => {
     if (!oldPassword) {
@@ -1876,14 +1888,14 @@ function DashboardLayoutContent({
                           : `可升级到 ${upgradeTargetVersion}`}
                   </p>
                   {displayUpgradeJob?.status === "running" && upgradeProgress.detail && (
-                    <p className="mt-0.5 truncate text-[10px] tabular-nums text-primary/60">{upgradeProgress.detail}</p>
+                    <p className="mt-0.5 truncate text-[11px] tabular-nums text-primary/60">{upgradeProgress.detail}</p>
                   )}
                   {(displayUpgradeJob?.status === "running" || displayUpgradeJob?.status === "waiting_assets") && (
                     <div className="mt-2 space-y-2">
                       <Progress value={upgradeProgress.percent} className="h-1" />
                       <div className="space-y-1">
                         {upgradeProgress.steps.map((step) => (
-                          <div key={step.label} className="flex min-w-0 items-center gap-1.5 text-[10px] leading-4 text-primary/75">
+                          <div key={step.label} className="flex min-w-0 items-center gap-1.5 text-[11px] leading-4 text-primary/75">
                             {step.done ? (
                               <CheckCircle2 className="h-3 w-3 shrink-0 text-[var(--fx-healthy-text)]" />
                             ) : step.active ? (
@@ -2523,7 +2535,7 @@ function DashboardLayoutContent({
                 <Button
                   variant="destructive"
                   className="gap-2"
-                  onClick={() => unbindTelegramMutation.mutate()}
+                  onClick={() => void confirmUnbindTelegram()}
                   disabled={unbindTelegramMutation.isPending}
                 >
                   <Link2Off className="h-4 w-4" />

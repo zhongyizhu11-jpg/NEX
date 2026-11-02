@@ -34,7 +34,7 @@ const THEME_VAR_MAP = {
   字（--fx-accent）默认就用主色，主色太浅的预设自己给 accent；线用 ring；淡底从主色兑 12%。
   --fx-path / --fx-flow-in / --fx-focus-ring 在令牌里都指向 --fx-accent，不用单独写。
 */
-const ACCENT_VARS = ["--fx-accent", "--fx-accent-strong", "--fx-accent-soft", "--fx-accent-fill", "--fx-accent-fill-foreground"] as const;
+const ACCENT_VARS = ["--fx-accent", "--fx-accent-strong", "--fx-accent-soft", "--fx-accent-fill", "--fx-accent-fill-foreground", "--fx-on-accent"] as const;
 
 /*
   主色控件的那道渐变也跟着预设走。2.3.375 把主按钮、选中的分段项 / chip / 侧栏项、开关换成
@@ -87,6 +87,11 @@ export function applyPersonalizationTheme(value: unknown, root?: HTMLElement) {
   target.style.setProperty("--fx-accent-soft", `color-mix(in srgb, ${colors.primary} 12%, transparent)`);
   target.style.setProperty("--fx-accent-fill", colors.primary);
   target.style.setProperty("--fx-accent-fill-foreground", colors.primaryForeground);
+  /*
+    强调色上的字：强调色就是主色时用主色配的字色；单给了 accent 的预设，浅色下 accent 偏深、
+    深色下偏浅，用反色字（浅色白、深色近黑）正好对得上。
+  */
+  target.style.setProperty("--fx-on-accent", colors.accent ? "var(--fx-text-inverse)" : colors.primaryForeground);
   const [from, to] = primaryGradientStops(colors.primary, mode);
   const darker = (color: string) => `color-mix(in oklab, ${color} 90%, black)`;
   target.style.setProperty("--fx-primary-gradient", linearGradient135([from, to]));
