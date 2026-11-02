@@ -5,8 +5,9 @@ import * as db from "../db";
 import { refreshUserForwardEndpoints } from "./helpers";
 import { adjustUserBalanceCommand, setUserBalanceCommand } from "../services/userCommandService";
 import { clearForwardxAiSettingsCache } from "../ai/settings";
+import { clientIp } from "../clientIp";
 
-const dateInput = z.string().trim().optional().nullable();
+const dateInput = z.string().trim().max(64).optional().nullable();
 
 function parseDate(value?: string | null) {
   if (!value) return null;
@@ -16,8 +17,17 @@ function parseDate(value?: string | null) {
 }
 
 function getRequestIp(ctx: { req: { ip?: string; socket: { remoteAddress?: string } } }) {
-  return ctx.req.ip || ctx.req.socket.remoteAddress || "unknown";
+  return clientIp(ctx.req, "unknown");
 }
+
+/**
+ * 老的「一次返回全部」接口加的可选分页：不传时行为和原来完全一样（返回全部），
+ * 传了 limit / offset 就只取这一段。新代码请用对应的 *Page 接口。
+ */
+const legacyListInput = z.object({
+  limit: z.number().int().min(1).max(1000).optional(),
+  offset: z.number().int().min(0).max(10_000_000).optional(),
+}).optional();
 
 const billingPageInput = z.object({
   page: z.number().int().min(1).max(100_000).default(1),
@@ -232,7 +242,7 @@ export const billingRouter = router({
       return { ...result, forwardAccessRestored: recovery.restored };
     }),
 
-  listRedemptionCodes: adminProcedure.query(async () => db.listRedemptionCodes()),
+  listRedemptionCodes: adminProcedure.input(legacyListInput).query(async ({ input }) => db.listRedemptionCodes(input)),
 
   listRedemptionCodesPage: adminProcedure
     .input(z.object({
@@ -285,7 +295,7 @@ export const billingRouter = router({
       return { success: true, deleted: ids.length };
     }),
 
-  listDiscountCodes: adminProcedure.query(async () => db.listDiscountCodes()),
+  listDiscountCodes: adminProcedure.input(legacyListInput).query(async ({ input }) => db.listDiscountCodes(input)),
 
   listDiscountCodesPage: adminProcedure
     .input(z.object({
@@ -299,7 +309,7 @@ export const billingRouter = router({
       discountType: z.enum(["percent", "amount"]),
       discountValue: z.number().int().min(1).max(100_000_000),
       maxUses: z.number().int().min(0).max(1_000_000).default(0),
-      planIds: z.array(z.number().int().positive()).default([]),
+      planIds: z.array(z.number().int().positive()).max(1000).default([]),
       startsAt: dateInput,
       expiresAt: dateInput,
     }))

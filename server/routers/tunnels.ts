@@ -924,7 +924,7 @@ export const tunnelsRouter = router({
     }),
     reorder: adminProcedure
       .input(z.object({
-        ids: z.array(z.number().int().positive()).min(1),
+        ids: z.array(z.number().int().positive()).min(1).max(50_000),
         startIndex: z.number().int().min(0).max(1_000_000).optional().default(0),
       }))
       .mutation(async ({ input }) => {
@@ -1055,8 +1055,8 @@ export const tunnelsRouter = router({
         loadBalanceEnabled: z.boolean().optional().default(false),
         loadBalanceStrategy: tunnelLoadBalanceStrategySchema.optional().default("round_robin"),
         loadBalanceExits: z.array(tunnelLoadBalanceExitSchema).max(MAX_EXTRA_TUNNEL_EXITS).optional(),
-        hopHostIds: z.array(z.number()).optional(),
-        hopConnectHosts: z.array(z.string().max(128).nullable()).optional(),
+        hopHostIds: z.array(z.number()).max(64).optional(),
+        hopConnectHosts: z.array(z.string().max(128).nullable()).max(64).optional(),
       }))
       .mutation(async ({ input, ctx }) => db.withDatabaseTransaction(async () => {
         const heldReservations: HostPortReservation[] = [];
@@ -1352,8 +1352,8 @@ export const tunnelsRouter = router({
         loadBalanceStrategy: tunnelLoadBalanceStrategySchema.optional(),
         loadBalanceExits: z.array(tunnelLoadBalanceExitSchema).max(MAX_EXTRA_TUNNEL_EXITS).optional(),
         isEnabled: z.boolean().optional(),
-        hopHostIds: z.array(z.number()).optional(),
-        hopConnectHosts: z.array(z.string().max(128).nullable()).optional(),
+        hopHostIds: z.array(z.number()).max(64).optional(),
+        hopConnectHosts: z.array(z.string().max(128).nullable()).max(64).optional(),
       }))
       .mutation(async ({ input, ctx }) => withKeyedTaskLock(`tunnel:${input.id}`, async () => db.withDatabaseTransaction(async () => {
         const heldReservations: HostPortReservation[] = [];

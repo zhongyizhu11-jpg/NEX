@@ -66,6 +66,7 @@ import {
   setUserBalanceCommand,
   setUserForwardAccessCommand,
 } from "./services/userCommandService";
+import { escapeHtmlText as escapeHtml } from "../shared/htmlEscape";
 
 type TelegramUser = {
   id: number;
@@ -295,13 +296,6 @@ function randomCode(length = 32) {
 
 function isMobileLoginCode(value: string | undefined) {
   return /^APP[A-Z0-9]{20,64}$/i.test((value || "").trim());
-}
-
-function escapeHtml(value: unknown) {
-  return String(value ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
 }
 
 function formatMoneyCny(cents: number | string | null | undefined) {

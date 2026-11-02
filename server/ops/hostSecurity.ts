@@ -25,6 +25,7 @@ import {
   type FindingStatus,
   type IncomingFinding,
 } from "./hostSecurityCore";
+import { escapeHtmlText as escapeHtml } from "../../shared/htmlEscape";
 
 const q = quoteDbIdentifier;
 const FINDINGS = "host_security_findings";
@@ -261,10 +262,6 @@ export async function ingestSecurityReport(host: AgentExtHost, raw: unknown) {
 // ---------- Telegram ----------
 
 const SEVERITY_LABEL: Record<FindingSeverity, string> = { low: "低", medium: "中", high: "高", critical: "严重" };
-
-function escapeHtml(value: unknown) {
-  return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
 
 /**
  * 和主机离线提醒同一批收件人（管理员里绑了 Telegram、没关掉「主机」类提醒的人）。

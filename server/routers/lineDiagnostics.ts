@@ -18,7 +18,7 @@ import { ROUTE_PATH_QUALITY_RETENTION_HOURS, getRoutePathQualityHistory } from "
 import { bucketRouteQualityRows, routeQualityBucketMs } from "../routePathQualityHistory";
 import { buildRouteStatus } from "../routeStatusView";
 import { getSegmentSpeedRun, startSegmentSpeedRun, type SegmentEndpoints } from "../lineSegmentSpeed";
-import { lineSegmentLatencyStatus, startLineSegmentLatency } from "../lineSegmentLatency";
+import { lineSegmentLatencyStatus, startLineSegmentLatency, vetSegmentDest } from "../lineSegmentLatency";
 import { routeEntryHostId } from "./rules.crud";
 import { requireHostsAccess } from "./helpers";
 import { landingConfigInputSchema } from "../landingPoolSave";
@@ -243,9 +243,13 @@ export const lineDiagnosticsRouter = router({
       dest: z.object({ ip: z.string().trim().min(1).max(255), port: z.number().int().min(1).max(65535) }).nullable(),
     }))
     .mutation(async ({ input, ctx }) => {
+      // 和分段测速、网络测试页同一个开关。
+      await assertNetworkTestAllowed(ctx.user);
       if (input.ruleId) await requireRuleVisible(ctx.user, input.ruleId);
       await requireHostsAccess(ctx, [input.entryHostId, ...input.hops]);
-      const runId = await startLineSegmentLatency(ctx.user, { entryHostId: input.entryHostId, hops: input.hops, hopVia: input.hopVia, dest: input.dest }, input.ruleId || 0);
+      // 落地地址：拨它的是别人的主机时，按规则的受限目标策略查（见 vetSegmentDest）。被拦的那一段报原因，别的段照测。
+      const vetted = await vetSegmentDest(ctx.user, { entryHostId: input.entryHostId, hops: input.hops, dest: input.dest });
+      const runId = await startLineSegmentLatency(ctx.user, { entryHostId: input.entryHostId, hops: input.hops, hopVia: input.hopVia, dest: vetted.dest, destIssue: vetted.issue }, input.ruleId || 0);
       return { runId };
     }),
 

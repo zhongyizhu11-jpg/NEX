@@ -39,6 +39,7 @@ import {
   type PaymentProvider,
   type PaymentReturnPath,
 } from "./paymentUrls";
+import { clientIp } from "./clientIp";
 
 const PAYMENT_CONFIG_KEY = "paymentConfig";
 
@@ -420,7 +421,7 @@ function stripeCheckoutExpiresAt(expiresAt: Date, now = Date.now()) {
 
 function getClientIp(req: express.Request) {
   // IPv4 映射地址（::ffff:1.2.3.4）还原成 IPv4：易支付会把 clientip 拿去风控，不认这种写法。
-  return (req.ip || req.socket.remoteAddress || "").replace(/^::ffff:/i, "");
+  return clientIp(req);
 }
 
 // 密钥格式的兼容和报错见 server/paymentCrypto.ts。

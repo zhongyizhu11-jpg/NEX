@@ -29,8 +29,10 @@ import {
   normalizeProxySubTokenScope,
   parseProxySubTokenOptions,
   parseProxySubTokenScope,
+  PROXY_SUB_ALIAS_MIN_LENGTH,
   PROXY_SUB_DEFAULT_TOKEN_OPTIONS,
   PROXY_SUB_EMPTY_SCOPE,
+  proxySubAliasLongEnough,
   serializeProxySubTokenOptions,
   serializeProxySubTokenScope,
 } from "../../shared/proxySubTokenScope";
@@ -184,6 +186,15 @@ async function adoptRulesForNewProxyNode(
   }
 }
 
+/**
+ * 作用域 / 外观选项：字段由 normalizeProxySubTokenScope / normalizeProxySubTokenOptions 逐个收拾（未知字段丢掉、
+ * 文本截断），这里只挡住不是对象的、和大得离谱的（正常的连自定义规则写满也就十几 KB）。
+ */
+const tokenJsonObject = z.record(z.string().max(64), z.unknown())
+  .refine((value) => JSON.stringify(value).length <= 64 * 1024, "内容太长")
+  .nullable()
+  .optional();
+
 /** 令牌上可以改的新东西：作用域、外观选项、别名、备注、到期、设备数、模板。create / update 共用。 */
 const tokenExtraInput = {
   alias: z.string().trim().max(32).nullable().optional(),
@@ -192,8 +203,8 @@ const tokenExtraInput = {
   expiresAt: z.string().max(64).nullable().optional(),
   maxDevices: z.number().int().min(0).max(1000).optional(),
   templateId: z.number().int().min(0).optional(),
-  scope: z.any().optional(),
-  options: z.any().optional(),
+  scope: tokenJsonObject,
+  options: tokenJsonObject,
 };
 
 async function normalizeTokenExtra(input: Record<string, any>, exceptTokenId: number): Promise<Record<string, unknown>> {
@@ -202,7 +213,12 @@ async function normalizeTokenExtra(input: Record<string, any>, exceptTokenId: nu
     if (!input.alias) data.alias = null;
     else {
       const alias = normalizeProxySubAlias(input.alias);
-      if (!alias) throw new Error("短链别名只能用 4–32 位小写字母、数字和连字符，首尾不能是连字符");
+      const aliasRule = `短链别名只能用 ${PROXY_SUB_ALIAS_MIN_LENGTH}–32 位小写字母、数字和连字符，首尾不能是连字符`;
+      if (!alias) throw new Error(aliasRule);
+      // 老别名（原来最短 4 位）原样保存时照样放行：编辑框每次保存都会把别名带上来。
+      const current = exceptTokenId > 0 ? await db.getProxySubTokenById(exceptTokenId) as any : null;
+      const unchanged = !!current && String(current.alias || "") === alias;
+      if (!unchanged && !proxySubAliasLongEnough(alias)) throw new Error(`${aliasRule}（太短容易被人猜到）`);
       if (await db.proxySubAliasInUse(alias, exceptTokenId)) throw new Error("这个短链别名已经被用了");
       data.alias = alias;
     }
@@ -971,6 +987,13 @@ export const proxySubscriptionsRouter = router({
     .mutation(async ({ ctx, input }) => {
       await assertProxySubscriptionAllowed(ctx);
       await assertOwnedSource(input.id, ctx);
+      /*
+        管理员关了外部订阅、或者套餐不再包含时：改地址、改 UA、重新启用都不行（这几样会让面板
+        再去拉别处）；改名、改间隔、停用照样能改，删除也照样能删。
+      */
+      if (input.url !== undefined || input.userAgent !== undefined || input.isEnabled === true) {
+        await assertExternalSourcesAllowed(ctx);
+      }
       const data: Record<string, unknown> = {};
       if (input.name !== undefined) data.name = input.name;
       if (input.url !== undefined) {
@@ -1002,6 +1025,7 @@ export const proxySubscriptionsRouter = router({
     .mutation(async ({ ctx, input }) => {
       await assertProxySubscriptionAllowed(ctx);
       await assertOwnedSource(input.id, ctx);
+      await assertExternalSourcesAllowed(ctx);
       return syncProxySubSource(input.id, { force: true });
     }),
 

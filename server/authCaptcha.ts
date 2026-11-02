@@ -5,6 +5,7 @@ import Cap from "@cap.js/server";
 import { Router, type Request, type Response } from "express";
 import { setBoundedMapValue } from "./boundedCache";
 import { ipRateLimitScope } from "./ipRateLimitScope";
+import { clientIp } from "./clientIp";
 
 export const LOGIN_CAPTCHA_FAILURE_THRESHOLD = 3;
 /**
@@ -376,7 +377,7 @@ export class AuthCaptchaService {
 export const authCaptcha = new AuthCaptchaService();
 
 function requestIp(req: Request) {
-  return req.ip || req.socket.remoteAddress || "unknown";
+  return clientIp(req, "unknown");
 }
 
 function capPurpose(value: unknown): CaptchaPurpose | null {

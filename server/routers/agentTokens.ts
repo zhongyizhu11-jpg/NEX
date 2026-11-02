@@ -16,7 +16,7 @@ export const agentTokensRouter = router({
     }));
   }),
   create: protectedProcedure
-    .input(z.object({ description: z.string().optional() }))
+    .input(z.object({ description: z.string().max(500).optional() }))
     .mutation(async ({ ctx, input }) => {
       // 每个 token 注册一台新机器：建 token 这一步就按自助上限卡住（注册时还会再查一次）。
       await assertCanAddSelfServiceHost({ ...(await db.getUserById(ctx.user.id)), ...ctx.user } as any, {
@@ -86,7 +86,7 @@ export const agentTokensRouter = router({
       return { success: true, releasedPendingCleanup, removedHosts };
     }),
   getInstallToken: protectedProcedure
-    .input(z.object({ id: z.number().optional(), token: z.string().optional() }))
+    .input(z.object({ id: z.number().optional(), token: z.string().max(512).optional() }))
     .query(async ({ input, ctx }) => {
       if (!input.id && !input.token) throw new Error("缺少 Token 参数");
       const token = input.id

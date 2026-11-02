@@ -1,6 +1,6 @@
 ﻿import { eq, inArray, like } from "drizzle-orm";
 import { systemSettings } from "../../drizzle/schema";
-import { executeRaw, getDatabaseKind, getDb } from "../dbRuntime";
+import { executeRaw, getDatabaseKind, getDb, rawAffectedRows } from "../dbRuntime";
 
 // ==================== System Settings (key-value) ====================
 
@@ -226,6 +226,30 @@ export async function setSetting(key: string, value: string | null): Promise<voi
   }
   if (invalidatesCache) invalidateAllSettingsCache();
 }
+/**
+ * 抢一个标记键：键还不存在就写进去并返回 true，已经有了返回 false（不改它）。
+ *
+ * 给「一天只发一次」这类去重用。原来是 getSetting 看一眼、没有再 setSetting —— 两路同时来，
+ * 都看到「没有」，就都发了。这里一条 INSERT 带冲突忽略，谁插进去算谁的。
+ */
+export async function claimSettingKey(key: string, value = "1"): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const invalidatesCache = affectsAllSettingsCache(key);
+  const nowSec = Math.floor(Date.now() / 1000);
+  let result: any;
+  if (getDatabaseKind() === "sqlite") {
+    result = await executeRaw("INSERT INTO system_settings (key, value, updatedAt) VALUES (?, ?, ?) ON CONFLICT(key) DO NOTHING", [key, value, nowSec]);
+  } else if (getDatabaseKind() === "postgresql") {
+    result = await executeRaw('INSERT INTO system_settings ("key", value, "updatedAt") VALUES (?, ?, ?) ON CONFLICT ("key") DO NOTHING', [key, value, nowSec]);
+  } else {
+    result = await executeRaw("INSERT IGNORE INTO system_settings (`key`, value, updatedAt) VALUES (?, ?, ?)", [key, value, nowSec]);
+  }
+  const claimed = rawAffectedRows(result) > 0;
+  if (claimed && invalidatesCache) invalidateAllSettingsCache();
+  return claimed;
+}
+
 /** 批量 UPSERT */
 export async function setSettings(map: Record<string, string | null>): Promise<void> {
   for (const [k, v] of Object.entries(map)) {

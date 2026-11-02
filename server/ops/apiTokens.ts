@@ -18,6 +18,7 @@ import type { User } from "../../drizzle/schema";
 import * as db from "../db";
 import { executeRaw, insertAndGetId, queryRaw, quoteDbIdentifier, rawEpochToDate } from "../dbRuntime";
 import { normalizeApiTokenScope, type ApiTokenContext, type ApiTokenScope } from "./apiTokenPolicy";
+import { clientIp } from "../clientIp";
 
 export * from "./apiTokenPolicy";
 
@@ -125,7 +126,7 @@ export function neutralizeCookies(res: Response) {
 }
 
 export function requestIp(req: Request) {
-  return String(req.ip || req.socket?.remoteAddress || "unknown");
+  return clientIp(req, "unknown");
 }
 
 /**

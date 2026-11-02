@@ -98,7 +98,7 @@ const baseSchema = z.object({
   autoFailback: z.boolean().default(true),
   isEnabled: z.boolean().default(true),
   // 端口转发挂了入口组时可以没有自己的成员，下限由 service 按形态判
-  members: z.array(memberSchema),
+  members: z.array(memberSchema).max(1000),
 });
 
 async function assertForwardGroupAccess(
@@ -265,7 +265,7 @@ export const forwardGroupsRouter = router({
   reorderGroups: adminProcedure
     .input(z.object({
       groupMode: z.enum(["port", "failover", "chain", "entry", "exit"]),
-      ids: z.array(z.number().int().positive()).min(1),
+      ids: z.array(z.number().int().positive()).min(1).max(50_000),
       startIndex: z.number().int().min(0).max(1_000_000).optional().default(0),
     }))
     .mutation(async ({ input }) => {
@@ -393,7 +393,7 @@ export const forwardGroupsRouter = router({
     })),
 
   reorder: adminProcedure
-    .input(z.object({ groupId: z.number(), memberIds: z.array(z.number().int().positive()).min(1) }))
+    .input(z.object({ groupId: z.number(), memberIds: z.array(z.number().int().positive()).min(1).max(1000) }))
     .mutation(async ({ input }) => withKeyedTaskLock(`forward-group:${input.groupId}`, async () => {
       await db.reorderForwardGroupMembers(input.groupId, input.memberIds);
       await db.runForwardGroupFailover(input.groupId, { forcePriority: true, forceSync: true });

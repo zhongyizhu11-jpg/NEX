@@ -4,6 +4,7 @@ import { getAllSettings } from "./repositories/settingsRepository";
 import { getTelegramAdminRecipients } from "./repositories/userRepository";
 import { filterTelegramRecipients } from "./telegramNotifyPrefs";
 import { isDiscordBotReady, notifyDiscordAdmins } from "./discordNotify";
+import { escapeHtmlText as escapeHtml } from "../shared/htmlEscape";
 
 type ForwardGroupSwitchNotifyPayload = {
   groupId: number;
@@ -18,13 +19,6 @@ type ForwardGroupSwitchNotifyPayload = {
   reason: string;
   detail?: string | null;
 };
-
-function escapeHtml(value: unknown) {
-  return String(value ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-}
 
 function formatTime(value = new Date()) {
   return value.toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" });

@@ -4,6 +4,7 @@ import { getTelegramAdminRecipients } from "./repositories/userRepository";
 import { isTelegramBotReady } from "./telegramReady";
 import { filterTelegramRecipients } from "./telegramNotifyPrefs";
 import { isDiscordBotReady, notifyDiscordAdmins } from "./discordNotify";
+import { escapeHtmlText as escapeHtml } from "../shared/htmlEscape";
 
 /*
   线路组切换的 Telegram 提醒。
@@ -31,13 +32,6 @@ export type RouteSwitchNotifyPayload = {
 
 const NOTIFY_COOLDOWN_MS = 60 * 1000;
 const lastNotifyAt = new Map<string, number>();
-
-function escapeHtml(value: unknown) {
-  return String(value ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-}
 
 function formatTime(value = new Date()) {
   return value.toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" });

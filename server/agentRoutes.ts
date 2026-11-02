@@ -1,7 +1,9 @@
 import { Router, Request, Response, NextFunction } from "express";
 import * as db from "./db";
 import { AGENT_VERSION } from "./_core/systemRouter";
-import { AGENT_ASSET_NAME_SET, getAgentReleaseChecksums, getOrFetchAgentAssetPath } from "./agentAssets";
+import { AGENT_ASSET_NAME_SET, getAgentReleaseChecksums, getBundledAgentAssetPath, getOrFetchAgentAssetPath, isAgentAssetVersionFetchable } from "./agentAssets";
+import { SlidingWindowRateLimiter } from "./ai/rateLimiter";
+import { ipRateLimitScope } from "./ipRateLimitScope";
 import { APP_VERSION } from "../shared/versions";
 import { appendPanelLog } from "./_core/panelLogger";
 import { generateInstallScript } from "./agentInstallScripts";
@@ -546,10 +548,27 @@ registerRealmAssetRoutes(agentRouter);
 // GET /api/agent/singbox-assets/v<版本>/<包名>：落地机从 GitHub 下不到 sing-box 时从这里下
 registerSingboxAssetRoutes(agentRouter);
 
+/*
+  Agent 二进制中转不用登录，按 IP 限速（和 realm / sing-box 中转同一种做法）。一次装机取三个文件，
+  10 分钟 240 次够一个出口 IP 后面几十台同时装；再多的是在刷。
+*/
+const agentAssetRelayLimiter = new SlidingWindowRateLimiter({ limit: 240, windowMs: 10 * 60 * 1000 });
+
 agentRouter.get("/api/agent/assets/:version/:asset", async (req: Request, res: Response) => {
+  const limit = agentAssetRelayLimiter.consume(ipRateLimitScope(req.ip || ""));
+  if (!limit.allowed) {
+    res.setHeader("Retry-After", String(Math.max(1, Math.ceil(limit.retryAfterMs / 1000))));
+    res.status(429).send("Too many requests");
+    return;
+  }
   const version = String(req.params.version || "").trim().replace(/^v/i, "");
   const asset = String(req.params.asset || "").trim();
   if (!/^\d+\.\d+\.\d+$/.test(version) || !AGENT_ASSET_NAME_SET.has(asset)) {
+    res.status(404).send("Not found");
+    return;
+  }
+  // 太老的版本只认面板上已有的文件，不替人去 GitHub 下（见 agentAssets.ts）。
+  if (!isAgentAssetVersionFetchable(version) && !getBundledAgentAssetPath(version, asset)) {
     res.status(404).send("Not found");
     return;
   }

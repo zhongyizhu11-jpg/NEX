@@ -56,8 +56,8 @@ export async function notifyProxySubEvent(event: ProxySubNotifyEvent): Promise<v
     const settings = await loadProxySubSettings();
     if (!enabledFor(event.kind, settings)) return;
     const key = `proxySubNotify:${event.kind}:${event.tokenId}:${dayKey()}`;
-    if (await db.getSetting(key)) return;
-    await db.setSetting(key, "1");
+    // 一条 INSERT 抢标记：原来先查再写，同一秒来的两次都看到「今天还没发」，就发了两封。
+    if (!(await db.claimSettingKey(key, "1"))) return;
 
     const user = await db.getUserById(event.userId) as any;
     if (!user) return;
