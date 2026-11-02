@@ -38,7 +38,7 @@ test("concurrent (batched) login attempts still hit the captcha gate and the rat
       await schema.ensureDatabaseSchema();
       await runtime.executeRaw(
         'INSERT INTO "users" ("id", "username", "password", "role") VALUES (?, ?, ?, ?)',
-        [1, "victim@example.com", hashPassword("correct-horse"), "user"],
+        [1, "victim@example.com", await hashPassword("correct-horse"), "user"],
       );
 
       const BATCH = 20;

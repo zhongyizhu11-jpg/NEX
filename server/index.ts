@@ -27,6 +27,7 @@ import { TRPC_MAX_BATCH_SIZE } from "../shared/const";
 import { resolveTrustProxySetting } from "./trustProxy";
 import { authCapRouter } from "./authCaptcha";
 import { isAllowedMobileCorsOrigin } from "./mobileCors";
+import { installJsonBodyParsers } from "./bodyParsers";
 import { panelAccessGuard } from "./ops/firewallPanelAccess";
 import { mcpRouter } from "./ops/mcpRoute";
 import { llmsTxtRouter } from "./llmsTxt";
@@ -190,9 +191,8 @@ async function startServer() {
 
   // Payment webhooks need the original request body for signature verification.
   app.use(paymentCallbackRouter);
-  // Plugin archives are accepted as base64 JSON and can expand beyond the 5 MB binary limit.
-  app.use(express.json({ limit: "10mb" }));
-  app.use(express.urlencoded({ limit: "1mb", extended: true }));
+  // JSON 请求体默认 1MB；Agent 上报、插件包上传、备份导入、背景图这几条单独放到 10MB（server/bodyParsers.ts）。
+  installJsonBodyParsers(app);
   app.use(cookieParser());
   installMobileCors(app);
   app.use(authCapRouter);

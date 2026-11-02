@@ -573,7 +573,7 @@ export async function createInitialAdmin(input: { email: string; password: strin
 
   const id = await insertAndGetId("users", {
     username: email,
-    password: hashPassword(input.password),
+    password: await hashPassword(input.password),
     name: input.name?.trim() || email,
     email,
     avatar: randomAvataaarsValue(String(`admin-${email}-${Date.now()}`)),
@@ -605,7 +605,7 @@ export async function updateInitialAdmin(input: { email: string; password?: stri
   };
   if (input.password?.trim()) {
     await revokeUserAuthSessions(admin.id, { reason: "password_reset" });
-    payload.password = hashPassword(input.password);
+    payload.password = await hashPassword(input.password);
   }
   await db.update(users).set(payload).where(eq(users.id, admin.id));
   return admin.id;
