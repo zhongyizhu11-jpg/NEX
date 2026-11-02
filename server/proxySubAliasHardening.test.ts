@@ -145,6 +145,14 @@ test("短链别名防枚举、/info 限流、设备数与通知去重的竞态",
       const results = await Promise.all([0, 1, 2, 3, 4].map((i) => get("/api/sub/tok-race-0123456789abcdefghijklmnopqrstu", from("198.51.100.4", { "user-agent": "Happ/1.63.1", "x-hwid": "RACE-DEVICE-000" + i }))));
       assert.equal(results.filter((item) => item.status === 200).length, 1, JSON.stringify(results.map((item) => item.status)));
       assert.equal((await query("SELECT COUNT(*) AS c FROM proxy_sub_devices WHERE tokenId = 3"))[0].c, 1);
+      // 严格模式下不带 hwid：长地址 403 带设备头，短链 404 且不带任何设备头。
+      const strictToken = await get("/api/sub/tok-secret-0123456789abcdefghijklmnopqrst", from("198.51.100.5", { "user-agent": "Happ/1.63.1" }));
+      assert.equal(strictToken.status, 403);
+      assert.equal(strictToken.headers["x-hwid-not-supported"], "true");
+      const strictAlias = await get("/s/vip1-renamed-x", from("198.51.100.5", { "user-agent": "Happ/1.63.1" }));
+      assert.equal(strictAlias.status, 404);
+      assert.equal(strictAlias.headers["x-hwid-not-supported"], undefined);
+      assert.equal(strictAlias.body, missingAlias.body);
 
       // 通知去重：同一个键同时抢十次，只有一次抢到。
       const claims = await Promise.all(Array.from({ length: 10 }, () => settingsRepo.claimSettingKey("proxySubNotify:test:1:2026-01-01")));

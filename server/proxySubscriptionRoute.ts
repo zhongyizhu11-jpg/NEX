@@ -320,7 +320,10 @@ async function handleSubscription(req: Request, res: Response, options: { param:
 
     // 设备数。
     const device = await deviceGate(req, gated.context, client);
-    for (const [name, value] of Object.entries(device.headers)) res.setHeader(name, value);
+    // 短链被拒时连设备数的头也不带：带了就和「不存在」不一样了（见 refuse）。
+    if (device.allowed || !options.byAlias) {
+      for (const [name, value] of Object.entries(device.headers)) res.setHeader(name, value);
+    }
     if (!device.allowed) {
       logAccess(req, context, client, { format: "", profile: false, result: device.reason || "device-limit", hwid: device.hwid, bytes: 0 });
       refuse(res, device.reason || "device-limit", options.byAlias);
