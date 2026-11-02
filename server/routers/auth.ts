@@ -29,6 +29,7 @@ import {
 import { pruneMapEntries, setBoundedMapValue } from "../boundedCache";
 import { withKeyedTaskLock } from "../keyedTaskLock";
 import { ipRateLimitScope } from "../ipRateLimitScope";
+import { apiTokenProfileUpdateError } from "../ops/apiTokenPolicy";
 
 const emailCodeStore = new Map<string, { code: string; expiresAt: number; lastSentAt: number; attempts: number }>();
 const emailSendIpStore = new Map<string, LoginFailEntry>();
@@ -649,6 +650,8 @@ export const authRouter = router({
       uiLayout: z.enum(["standard", "compact"]).nullable().optional(),
     }))
     .mutation(async ({ input, ctx }) => {
+      const tokenError = apiTokenProfileUpdateError(ctx.apiToken, input, ctx.user.email);
+      if (tokenError) throw new TRPCError({ code: "FORBIDDEN", message: tokenError });
       await db.updateUserProfile(ctx.user.id, {
         ...input,
         name: input.name === undefined ? undefined : input.name.trim(),
