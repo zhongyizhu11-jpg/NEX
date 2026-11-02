@@ -80,6 +80,7 @@ import {
 } from "../../shared/customSidebarPages";
 import { getAvatarDataUrlByteLength, isValidBrandLogoValue } from "../../shared/avatar";
 import { generateSelfSignedPanelSslCertificate, readPanelSslSettings, validatePanelSslConfig } from "../panelSsl";
+import { maskWebhookHeaders, resolvePanelSslKeyPem } from "../settingsSecrets";
 import {
   DEFAULT_AI_PROVIDER,
   DEFAULT_DEEPSEEK_MAX_TOKENS,
@@ -1697,6 +1698,7 @@ function publicSystemSettings(all: Record<string, string | null>, activeProtocol
       keyPath: "",
       certPem: "",
       keyPem: "",
+      keyPemConfigured: false,
       activeProtocol,
     },
     webPort: getPublicWebPort(),
@@ -1779,6 +1781,7 @@ function publicSystemSettings(all: Record<string, string | null>, activeProtocol
       webhookUrl: "",
       webhookMethod: "POST",
       webhookHeaders: "",
+      webhookHeadersMasked: "",
       ruleEntryDomainSuffix: "",
       // 规则专属域名此刻能不能用（DNS 服务商启用且后缀有效）：规则对话框据此决定显不显示「专属域名」开关。
       // 普通用户也要知道 —— 他们自己的规则也能关掉域名。
@@ -1904,7 +1907,9 @@ export const systemRouter = router({
         certPath: panelSsl.certPath,
         keyPath: panelSsl.keyPath,
         certPem: panelSsl.certPem,
-        keyPem: panelSsl.keyPem,
+        // 私钥不随设置返回（只读令牌也能调这里），只说配没配；要看走 system.revealPanelSslKey。
+        keyPem: "",
+        keyPemConfigured: !!panelSsl.keyPem,
         activeProtocol,
       },
       webPort: getPublicWebPort(),
@@ -1987,7 +1992,9 @@ export const systemRouter = router({
         tencentcloudRecordLineId: all.ddnsTencentCloudRecordLineId ?? "",
         webhookUrl: all.ddnsWebhookUrl ?? "",
         webhookMethod: all.ddnsWebhookMethod ?? "POST",
-        webhookHeaders: all.ddnsWebhookHeaders ?? "",
+        // 请求头里多半是鉴权信息：只回打码后的样子，保存时不带就保持原值。
+        webhookHeaders: "",
+        webhookHeadersMasked: maskWebhookHeaders(all.ddnsWebhookHeaders),
         ruleEntryDomainSuffix: all.ruleEntryDomainSuffix ?? "",
         ruleEntryDomainActive: resolveRuleEntryDomainRuntimeSettings(all).activeSuffix !== "",
       },
@@ -2243,6 +2250,8 @@ export const systemRouter = router({
           webhookUrl: z.string().max(1000).optional(),
           webhookMethod: z.enum(["POST", "PUT", "GET"]).optional(),
           webhookHeaders: z.string().max(2000).optional(),
+          /** 请求头不再回给前端：传空串当作「没改」，要清掉得明确传这个。 */
+          clearWebhookHeaders: z.boolean().optional(),
           ruleEntryDomainSuffix: z.string().max(255).optional(),
         }).optional(),
       })
@@ -2615,7 +2624,10 @@ export const systemRouter = router({
         }
         if (input.ddns.webhookUrl !== undefined) next.ddnsWebhookUrl = input.ddns.webhookUrl.trim() || null;
         if (input.ddns.webhookMethod !== undefined) next.ddnsWebhookMethod = input.ddns.webhookMethod;
-        if (input.ddns.webhookHeaders !== undefined) next.ddnsWebhookHeaders = input.ddns.webhookHeaders.trim() || null;
+        if (input.ddns.clearWebhookHeaders) next.ddnsWebhookHeaders = null;
+        if (input.ddns.webhookHeaders !== undefined && input.ddns.webhookHeaders.trim()) {
+          next.ddnsWebhookHeaders = input.ddns.webhookHeaders.trim();
+        }
         if (input.ddns.ruleEntryDomainSuffix !== undefined) {
           next.ruleEntryDomainSuffix = normalizeRuleEntryDomainSuffixInput(input.ddns.ruleEntryDomainSuffix) || null;
         }
@@ -2672,20 +2684,21 @@ export const systemRouter = router({
       confirmed: z.literal(true),
     }))
     .mutation(async ({ input }) => {
+      const all = await db.getAllSettings();
+      const current = readPanelSslSettings(all);
       const next = {
         enabled: input.enabled,
         mode: input.mode,
         certPath: input.certPath.trim(),
         keyPath: input.keyPath.trim(),
         certPem: input.certPem.trim(),
-        keyPem: input.keyPem.trim(),
+        // 前端拿不到已保存的私钥：私钥框留空就沿用原来的（证书也清空才一起删）。
+        keyPem: resolvePanelSslKeyPem(input, current.keyPem),
       };
       if (next.enabled || (next.mode === "pem" && (next.certPem || next.keyPem))) {
         await validatePanelSslConfig({ ...next, enabled: true });
       }
 
-      const all = await db.getAllSettings();
-      const current = readPanelSslSettings(all);
       const changed = current.enabled !== next.enabled
         || current.mode !== next.mode
         || current.certPath !== next.certPath
@@ -2718,6 +2731,13 @@ export const systemRouter = router({
       }
       return { success: true, changed: true, restartScheduled: restartRequired, enabled: next.enabled };
     }),
+
+  /** 查看已保存的面板 HTTPS 私钥：只给网页上的管理员，API 令牌调不了（见 apiTokenPolicy.ts）。 */
+  revealPanelSslKey: adminProcedure.mutation(async ({ ctx }) => {
+    const panelSsl = readPanelSslSettings(await db.getAllSettings());
+    console.info(`[Settings] panel SSL private key revealed userId=${ctx.user.id}`);
+    return { keyPem: panelSsl.keyPem };
+  }),
 
   generatePanelSelfSignedCertificate: adminProcedure
     .input(z.object({

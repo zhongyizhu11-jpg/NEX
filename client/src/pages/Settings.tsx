@@ -4898,6 +4898,8 @@ function SystemInfoSection() {
   const [panelSslKeyPath, setPanelSslKeyPath] = useState("");
   const [panelSslCertPem, setPanelSslCertPem] = useState("");
   const [panelSslKeyPem, setPanelSslKeyPem] = useState("");
+  // 私钥不再随设置返回：服务端只说存没存，私钥框留空保存 = 沿用已保存的。
+  const [panelSslKeyPemSaved, setPanelSslKeyPemSaved] = useState(false);
   const [showWebPortConfirm, setShowWebPortConfirm] = useState(false);
   const [webPortCountdown, setWebPortCountdown] = useState(5);
   const [showPanelSslConfirm, setShowPanelSslConfirm] = useState(false);
@@ -4938,6 +4940,8 @@ function SystemInfoSection() {
   const [ddnsWebhookUrl, setDdnsWebhookUrl] = useState("");
   const [ddnsWebhookMethod, setDdnsWebhookMethod] = useState<"POST" | "PUT" | "GET">("POST");
   const [ddnsWebhookHeaders, setDdnsWebhookHeaders] = useState("");
+  // 请求头只回打码后的样子：框里留空 = 保持原值，要删得点「清除」。
+  const [ddnsWebhookHeadersClear, setDdnsWebhookHeadersClear] = useState(false);
   const [ruleEntryDomainSuffix, setRuleEntryDomainSuffix] = useState("");
   const [publicHostMonitorEnabled, setPublicHostMonitorEnabled] = useState(false);
   const [publicHostMonitorPath, setPublicHostMonitorPath] = useState("dev");
@@ -4974,6 +4978,7 @@ function SystemInfoSection() {
       setPanelSslKeyPath(settings.panelSsl?.keyPath || "");
       setPanelSslCertPem(settings.panelSsl?.certPem || "");
       setPanelSslKeyPem(settings.panelSsl?.keyPem || "");
+      setPanelSslKeyPemSaved(!!settings.panelSsl?.keyPemConfigured);
       setRegistrationEnabled(settings.registrationEnabled ?? true);
       setAuthCaptchaEnabled(settings.authCaptchaEnabled ?? true);
       setTwoFactorEnabled(!!settings.twoFactorEnabled);
@@ -5012,6 +5017,7 @@ function SystemInfoSection() {
       setDdnsWebhookUrl(settings.ddns?.webhookUrl || "");
       setDdnsWebhookMethod((settings.ddns?.webhookMethod === "PUT" || settings.ddns?.webhookMethod === "GET") ? settings.ddns.webhookMethod : "POST");
       setDdnsWebhookHeaders(settings.ddns?.webhookHeaders || "");
+      setDdnsWebhookHeadersClear(false);
       setRuleEntryDomainSuffix(settings.ddns?.ruleEntryDomainSuffix || "");
       if (settings.publicHostMonitor) {
         setPublicHostMonitorEnabled(!!settings.publicHostMonitor.enabled);
@@ -5130,6 +5136,17 @@ function SystemInfoSection() {
     onError: (err) => toast.error(err.message || "保存面板 SSL 配置失败"),
   });
 
+  const revealPanelSslKeyMutation = trpc.system.revealPanelSslKey.useMutation({
+    onSuccess: (result) => {
+      if (!result.keyPem) {
+        toast.info("没有已保存的私钥");
+        return;
+      }
+      setPanelSslKeyPem(result.keyPem);
+    },
+    onError: (err) => toast.error(err.message || "读取私钥失败"),
+  });
+
   const generatePanelSelfSignedMutation = trpc.system.generatePanelSelfSignedCertificate.useMutation({
     onSuccess: (result) => {
       setPanelSslMode("path");
@@ -5226,7 +5243,12 @@ function SystemInfoSection() {
       toast.error("证书内容不是有效的 PEM 证书");
       return false;
     }
-    if (!/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]+-----END [A-Z ]*PRIVATE KEY-----/.test(panelSslKeyPem.trim())) {
+    const keyPem = panelSslKeyPem.trim();
+    if (!keyPem && !panelSslKeyPemSaved) {
+      toast.error("请粘贴私钥 PEM");
+      return false;
+    }
+    if (keyPem && !/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]+-----END [A-Z ]*PRIVATE KEY-----/.test(keyPem)) {
       toast.error("私钥内容不是有效的 PEM 私钥");
       return false;
     }
@@ -5309,11 +5331,14 @@ function SystemInfoSection() {
         tencentcloudRecordLineId: ddnsTencentCloudRecordLineId,
         webhookUrl: ddnsWebhookUrl,
         webhookMethod: ddnsWebhookMethod,
-        webhookHeaders: ddnsWebhookHeaders,
+        webhookHeaders: ddnsWebhookHeaders.trim() || undefined,
+        clearWebhookHeaders: ddnsWebhookHeadersClear && !ddnsWebhookHeaders.trim() ? true : undefined,
         ruleEntryDomainSuffix: ruleEntryDomainSuffix.trim(),
       },
     }, {
       onSuccess: () => {
+        setDdnsWebhookHeaders("");
+        setDdnsWebhookHeadersClear(false);
         setDdnsCloudflareApiToken("");
         setDdnsHuaweiCloudSecretKey("");
         setDdnsAliyunAccessKeySecret("");
@@ -5457,7 +5482,7 @@ function SystemInfoSection() {
     ddnsHuaweiCloudRegion, ddnsHuaweiCloudEndpoint, ddnsHuaweiCloudZoneId, ddnsHuaweiCloudLine, ddnsAliyunAccessKeyId,
     ddnsAliyunAccessKeySecret, ddnsAliyunDomainName, ddnsAliyunEndpoint, ddnsAliyunLine, ddnsTencentCloudSecretId,
     ddnsTencentCloudSecretKey, ddnsTencentCloudDomainName, ddnsTencentCloudRecordLine, ddnsTencentCloudRecordLineId,
-    ddnsWebhookUrl, ddnsWebhookMethod, ddnsWebhookHeaders, ruleEntryDomainSuffix,
+    ddnsWebhookUrl, ddnsWebhookMethod, ddnsWebhookHeaders, ddnsWebhookHeadersClear, ruleEntryDomainSuffix,
   ];
   const ddnsSaved = settings ? [
     !!settings.ddns?.enabled,
@@ -5471,7 +5496,7 @@ function SystemInfoSection() {
     settings.ddns?.tencentcloudRecordLine || "默认", settings.ddns?.tencentcloudRecordLineId || "",
     settings.ddns?.webhookUrl || "",
     (settings.ddns?.webhookMethod === "PUT" || settings.ddns?.webhookMethod === "GET") ? settings.ddns.webhookMethod : "POST",
-    settings.ddns?.webhookHeaders || "", settings.ddns?.ruleEntryDomainSuffix || "",
+    settings.ddns?.webhookHeaders || "", false, settings.ddns?.ruleEntryDomainSuffix || "",
   ] : ddnsDraft;
   const systemDockItems: Array<{ id: SystemSettingsSaveKey; label: string; dirty: boolean; save: () => Promise<boolean> | boolean }> = [
     { id: "panelUrl", label: "面板地址", dirty: !!settings && panelUrlInput !== (settings.panelPublicUrl || ""), save: handleSavePanelUrl },
@@ -5704,7 +5729,7 @@ function SystemInfoSection() {
   const sidebarMenuEnabledCount = SIDEBAR_MENU_KEYS.filter((key) => sidebarMenu[key]).length;
   const panelSslPathActive = panelSslMode === "path";
   const panelSslPathConfigured = !!panelSslCertPath.trim() && !!panelSslKeyPath.trim();
-  const panelSslPemConfigured = !!panelSslCertPem.trim() && !!panelSslKeyPem.trim();
+  const panelSslPemConfigured = !!panelSslCertPem.trim() && (!!panelSslKeyPem.trim() || panelSslKeyPemSaved);
 
   useEffect(() => {
     if (!canShowDockerUpgradeScript || !updateInfo?.latestVersion) return;
@@ -6050,12 +6075,29 @@ function SystemInfoSection() {
                       />
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="panel-ssl-key-pem">私钥 PEM</Label>
+                      <div className="flex min-h-5 items-center justify-between gap-2">
+                        <Label htmlFor="panel-ssl-key-pem" className="flex items-center gap-2">
+                          私钥 PEM
+                          {panelSslKeyPemSaved && <Badge variant="secondary">已配置</Badge>}
+                        </Label>
+                        {panelSslKeyPemSaved && !panelSslKeyPem.trim() && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 px-2 text-xs"
+                            onClick={() => revealPanelSslKeyMutation.mutate()}
+                            disabled={revealPanelSslKeyMutation.isPending}
+                          >
+                            {revealPanelSslKeyMutation.isPending ? "读取中..." : "查看"}
+                          </Button>
+                        )}
+                      </div>
                       <Textarea
                         id="panel-ssl-key-pem"
                         value={panelSslKeyPem}
                         onChange={(e) => setPanelSslKeyPem(e.target.value)}
-                        placeholder="-----BEGIN PRIVATE KEY-----"
+                        placeholder={panelSslKeyPemSaved ? "已配置，留空保持不变；粘贴新私钥即可替换" : "-----BEGIN PRIVATE KEY-----"}
                         className="min-h-44 resize-y font-mono text-xs leading-5"
                       />
                     </div>
@@ -6418,14 +6460,40 @@ function SystemInfoSection() {
                 </FormField>
               </div>
               <FormField className="space-y-2">
-                <Label>请求头</Label>
+                <div className="flex min-h-5 items-center justify-between gap-2">
+                  <Label className="flex items-center gap-2">
+                    请求头
+                    {!!settings?.ddns?.webhookHeadersMasked && !ddnsWebhookHeadersClear && <Badge variant="secondary">已配置</Badge>}
+                  </Label>
+                  {!!settings?.ddns?.webhookHeadersMasked && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 px-2 text-xs"
+                      onClick={() => {
+                        setDdnsWebhookHeadersClear((current) => !current);
+                        setDdnsWebhookHeaders("");
+                      }}
+                    >
+                      {ddnsWebhookHeadersClear ? "撤销清除" : "清除"}
+                    </Button>
+                  )}
+                </div>
                 <Textarea
                   value={ddnsWebhookHeaders}
-                  onChange={(e) => setDdnsWebhookHeaders(e.target.value)}
-                  placeholder='{"Authorization":"Bearer xxx"}'
+                  onChange={(e) => {
+                    setDdnsWebhookHeaders(e.target.value);
+                    if (e.target.value.trim()) setDdnsWebhookHeadersClear(false);
+                  }}
+                  placeholder={ddnsWebhookHeadersClear
+                    ? "保存后清除已保存的请求头"
+                    : settings?.ddns?.webhookHeadersMasked
+                      ? `${settings.ddns.webhookHeadersMasked}\n（已保存，留空保持不变；填写则整体替换）`
+                      : '{"Authorization":"Bearer xxx"}'}
                   className="min-h-20 font-mono text-xs"
                 />
-                <p className="text-xs text-muted-foreground">支持 JSON 或每行一个 Header。</p>
+                <p className="text-xs text-muted-foreground">支持 JSON 或每行一个 Header。已保存的内容不再显示原文。</p>
               </FormField>
             </div>
           )}
