@@ -30,6 +30,7 @@ import { pruneMapEntries, setBoundedMapValue } from "../boundedCache";
 import { withKeyedTaskLock } from "../keyedTaskLock";
 import { ipRateLimitScope } from "../ipRateLimitScope";
 import { apiTokenProfileUpdateError } from "../ops/apiTokenPolicy";
+import { revokeAllUserApiTokens } from "../ops/apiTokens";
 
 const emailCodeStore = new Map<string, { code: string; expiresAt: number; lastSentAt: number; attempts: number }>();
 const emailSendIpStore = new Map<string, LoginFailEntry>();
@@ -41,6 +42,15 @@ const EMAIL_CODE_IP_MAX_PER_WINDOW = 10;
 const EMAIL_AUTH_STORE_MAX_KEYS = 50_000;
 const TWO_FACTOR_ISSUER = "NEX";
 const DISPLAY_NAME_MAX_LENGTH = 24;
+/*
+  登录相关输入的长度上限：用户名 / 邮箱按邮箱的最大长度；验证密码时放宽到 1024，
+  以前不限长时设过超长密码的人照样能登录；新设的密码最多 256 位。
+  不设上限的话，一次请求塞几 MB 的密码进来，每次都要算一遍 scrypt。
+*/
+const ACCOUNT_NAME_MAX_LENGTH = 320;
+const PASSWORD_INPUT_MAX_LENGTH = 1024;
+const NEW_PASSWORD_MAX_LENGTH = 256;
+const CHALLENGE_ID_MAX_LENGTH = 128;
 
 type LoginFailEntry = { count: number; lastFailAt: number };
 
@@ -248,7 +258,7 @@ export const authRouter = router({
   }),
 
   sendEmailCode: publicProcedure
-    .input(z.object({ email: z.string().email("邮箱格式不正确") }))
+    .input(z.object({ email: z.string().email("邮箱格式不正确").max(ACCOUNT_NAME_MAX_LENGTH) }))
     .mutation(async ({ input, ctx }) => {
       const registrationEnabled = (await db.getSetting("registrationEnabled")) !== "false";
       if (!registrationEnabled) {
@@ -288,7 +298,7 @@ export const authRouter = router({
     }),
 
   needsCaptcha: publicProcedure
-    .input(z.object({ username: z.string() }))
+    .input(z.object({ username: z.string().max(ACCOUNT_NAME_MAX_LENGTH) }))
     .query(async ({ input, ctx }) => {
       const ip = ctx.req.ip || ctx.req.socket.remoteAddress || "unknown";
       const enabled = await captchaEnabled();
@@ -297,13 +307,13 @@ export const authRouter = router({
 
   login: publicProcedure
     .input(z.object({
-      username: z.string().min(1, "请输入用户名"),
-      password: z.string().min(1, "请输入密码"),
-      captchaId: z.string().optional(),
+      username: z.string().min(1, "请输入用户名").max(ACCOUNT_NAME_MAX_LENGTH, "用户名太长"),
+      password: z.string().min(1, "请输入密码").max(PASSWORD_INPUT_MAX_LENGTH, "密码太长"),
+      captchaId: z.string().max(CHALLENGE_ID_MAX_LENGTH).optional(),
       captchaAnswer: z.string().trim().min(1).max(12).optional(),
       capToken: z.string().trim().min(1).max(256).optional(),
       mobile: z.boolean().optional(),
-      twoFactorCode: z.string().optional(),
+      twoFactorCode: z.string().max(32).optional(),
     }))
     .mutation(async ({ input, ctx }) => {
       const ip = ctx.req.ip || ctx.req.socket.remoteAddress || "unknown";
@@ -399,7 +409,7 @@ export const authRouter = router({
 
   verifyTwoFactorLogin: publicProcedure
     .input(z.object({
-      challengeId: z.string().min(16),
+      challengeId: z.string().min(16).max(CHALLENGE_ID_MAX_LENGTH),
       code: z.string().min(6).max(12),
       mobile: z.boolean().optional(),
     }))
@@ -443,11 +453,11 @@ export const authRouter = router({
   register: publicProcedure
     .input(z.object({
       username: z.string().email("用户名必须是邮箱格式").max(64),
-      password: z.string().min(6, "密码至少6个字符"),
+      password: z.string().min(6, "密码至少6个字符").max(NEW_PASSWORD_MAX_LENGTH, `密码最多 ${NEW_PASSWORD_MAX_LENGTH} 个字符`),
       name: z.string().trim().max(DISPLAY_NAME_MAX_LENGTH).optional(),
-      email: z.string().email("邮箱格式不正确").optional(),
-      emailCode: z.string().optional(),
-      captchaId: z.string().optional(),
+      email: z.string().email("邮箱格式不正确").max(ACCOUNT_NAME_MAX_LENGTH).optional(),
+      emailCode: z.string().max(16).optional(),
+      captchaId: z.string().max(CHALLENGE_ID_MAX_LENGTH).optional(),
       captchaAnswer: z.string().trim().min(1).max(12).optional(),
       capToken: z.string().trim().min(1).max(256).optional(),
       /** 邀请码（来自 ?invite= / ?ref= 或手填）。对不上就忽略，除非开了「必须邀请注册」。 */
@@ -533,8 +543,8 @@ export const authRouter = router({
 
   changePassword: protectedProcedure
     .input(z.object({
-      oldPassword: z.string().min(1, "请输入当前密码"),
-      newPassword: z.string().min(6, "新密码至少6个字符"),
+      oldPassword: z.string().min(1, "请输入当前密码").max(PASSWORD_INPUT_MAX_LENGTH, "密码太长"),
+      newPassword: z.string().min(6, "新密码至少6个字符").max(NEW_PASSWORD_MAX_LENGTH, `新密码最多 ${NEW_PASSWORD_MAX_LENGTH} 个字符`),
     }))
     .mutation(async ({ input, ctx }) => {
       const success = await db.changeUserPassword(ctx.user.id, input.oldPassword, input.newPassword);
@@ -542,6 +552,8 @@ export const authRouter = router({
         console.warn(`[Auth] Change password failed userId=${ctx.user.id}`);
         throw new Error("当前密码错误");
       }
+      // 改了密码，旧的 API 令牌一起作废（会话在 changeUserPassword 里已经踢掉）。
+      await revokeAllUserApiTokens(ctx.user.id, "password_changed");
       console.info(`[Auth] Password changed userId=${ctx.user.id}`);
       return { success: true };
     }),
@@ -574,9 +586,9 @@ export const authRouter = router({
 
   enableTwoFactor: protectedProcedure
     .input(z.object({
-      setupId: z.string().min(16),
+      setupId: z.string().min(16).max(CHALLENGE_ID_MAX_LENGTH),
       code: z.string().min(6).max(12),
-      password: z.string().min(1, "请输入当前密码"),
+      password: z.string().min(1, "请输入当前密码").max(PASSWORD_INPUT_MAX_LENGTH, "密码太长"),
     }))
     .mutation(async ({ input, ctx }) => {
       const ip = getRequestIp(ctx);
@@ -613,7 +625,7 @@ export const authRouter = router({
 
   disableTwoFactor: protectedProcedure
     .input(z.object({
-      password: z.string().min(1, "请输入当前密码"),
+      password: z.string().min(1, "请输入当前密码").max(PASSWORD_INPUT_MAX_LENGTH, "密码太长"),
       code: z.string().min(6).max(12).optional(),
     }))
     .mutation(async ({ input, ctx }) => {

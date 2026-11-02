@@ -33,6 +33,7 @@ import { startBackgroundServices } from "../backgroundServices";
 import { isDevPanelMode } from "../devPanel";
 import { PANEL_MIGRATION_SCOPES } from "../../shared/panelMigration";
 import { withKeyedTaskLock } from "../keyedTaskLock";
+import { revokeAllUserApiTokens } from "../ops/apiTokens";
 
 let setupSchemaReadyKey = "";
 const SETUP_WRITE_LOCK_KEY = "panel-setup-write";
@@ -446,6 +447,7 @@ export const setupRouter = router({
         }
         const id = await withDatabaseTransaction(async () => {
           const updatedId = await updateInitialAdmin(input);
+          if (input.password?.trim()) await revokeAllUserApiTokens(updatedId, "password_reset_setup");
           const existingData = await getExistingDataSummary();
           await setSettings({ setupDataChoice: existingData.hasExistingData ? "use-existing" : "new-panel" });
           return updatedId;

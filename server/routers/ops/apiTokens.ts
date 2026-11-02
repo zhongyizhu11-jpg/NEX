@@ -10,6 +10,9 @@ import { recordPanelEvent } from "../../ops/panelEvents";
  * 入口在设置页（只有管理员进得去），所以接口也只给管理员；每人只看得到、只撤得掉自己的。
  * 用令牌本身调这里一律被拒（见 server/ops/apiTokenPolicy.ts）：令牌不能给自己续命。
  */
+/** 新令牌不指定有效期时的默认值（天）。 */
+export const DEFAULT_API_TOKEN_EXPIRY_DAYS = 90;
+
 export const apiTokensRouter = router({
   list: adminProcedure.query(async ({ ctx }) => listUserApiTokens(ctx.user.id)),
 
@@ -24,7 +27,8 @@ export const apiTokensRouter = router({
         userId: ctx.user.id,
         name: input.name,
         scope: input.scope,
-        expiresInDays: input.expiresInDays ?? null,
+        // 没传有效期 = 默认 90 天；明确传 null 才是永不过期（网页上选「永不过期」）。
+        expiresInDays: input.expiresInDays === undefined ? DEFAULT_API_TOKEN_EXPIRY_DAYS : input.expiresInDays,
       });
       const who = ctx.user.name || ctx.user.username;
       void recordPanelEvent({
