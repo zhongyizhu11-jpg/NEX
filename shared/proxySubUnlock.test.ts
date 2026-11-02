@@ -203,20 +203,20 @@ test("流水线：结论透传进去，按令牌覆盖照样优先", () => {
     settings: normalizeProxySubSettings({}),
     vars: { appName: "NEX", panelUrl: "", subUrl: "", username: "u" },
   };
-  const built = buildProxySubPipelineDocument({ ...base, options: normalizeProxySubTokenOptions({}), unlockStatuses: STATUSES });
+  const built = buildProxySubPipelineDocument({ ...base, options: normalizeProxySubTokenOptions({ unlockGroups: true }), unlockStatuses: STATUSES });
   assert.ok(built.document.groups.some((group) => group.name === "Netflix 解锁"));
   assert.equal(categoryGroup(built.document, "netflix")!.members[0], "Netflix 解锁");
 
-  const overridden = buildProxySubPipelineDocument({ ...base, options: normalizeProxySubTokenOptions({ categoryTargets: { netflix: "DIRECT" } }), unlockStatuses: STATUSES });
+  const overridden = buildProxySubPipelineDocument({ ...base, options: normalizeProxySubTokenOptions({ unlockGroups: true, categoryTargets: { netflix: "DIRECT" } }), unlockStatuses: STATUSES });
   assert.equal(overridden.document.groups.some((group) => group.name === "Netflix 解锁"), false);
   assert.equal(categoryGroup(overridden.document, "netflix")!.members[0], PROXY_RULE_TARGET_DIRECT);
 
-  // 令牌关了解锁组：一个都不出，分类组先走主选择器
-  const off = buildProxySubPipelineDocument({ ...base, options: normalizeProxySubTokenOptions({ unlockGroups: false }), unlockStatuses: STATUSES });
-  assert.equal(off.document.groups.some((group) => group.name.endsWith(" 解锁")), false);
-  assert.equal(categoryGroup(off.document, "netflix")!.members[0], PROXY_SUBSCRIPTION_GROUP_NAME);
-  assert.equal(normalizeProxySubTokenOptions({}).unlockGroups, true, "默认开");
-  assert.equal(normalizeProxySubTokenOptions({ unlockGroups: "x" }).unlockGroups, true, "只认明确的 false");
+  // 默认关（2.3.505 起）：一个都不出，分类组先走主选择器；只认明确的 true
+  for (const raw of [{}, { unlockGroups: false }, { unlockGroups: "x" }]) {
+    const off = buildProxySubPipelineDocument({ ...base, options: normalizeProxySubTokenOptions(raw), unlockStatuses: STATUSES });
+    assert.equal(off.document.groups.some((group) => group.name.endsWith(" 解锁")), false, JSON.stringify(raw));
+    assert.equal(categoryGroup(off.document, "netflix")!.members[0], PROXY_SUBSCRIPTION_GROUP_NAME);
+  }
 });
 
 test("各格式都按已有的组写法输出解锁组", () => {
