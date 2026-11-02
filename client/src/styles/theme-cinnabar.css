@@ -32,6 +32,8 @@
 */
 
 html[data-ui-theme="cinnabar"] {
+  /* 强调色沿用面板默认：浅色下深蓝底配白字 */
+  --fx-on-accent: #ffffff;
   --fx-l0-page: #f6f6f4;
   --fx-l1-surface: #ffffff;
   --fx-raised: #ffffff;
@@ -62,9 +64,12 @@ html[data-ui-theme="cinnabar"] {
   --fx-radius-card: 4px;
   --fx-radius-surface: 4px;
   --fx-radius-modal: 6px;
+  --fx-radius-inner: 3px;
   --fx-font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, "Liberation Mono", monospace;
 }
 html.dark[data-ui-theme="cinnabar"] {
+  /* 深色下强调色是浅蓝，字用深色 */
+  --fx-on-accent: #0d1722;
   --fx-l0-page: #0a0a0b;
   --fx-l1-surface: #111113;
   --fx-raised: #18181b;
@@ -420,6 +425,6 @@ html[data-ui-theme="cinnabar"] .fx-brand-preview-meta em { color: var(--fx-cinna
 
 /* ── 6. 页面里其它圆角：一律收成小方角（Umbrella 全站 3–4px）──── */
 /* 分段按钮组、证据框、提示条这类 Tailwind 圆角；圆点、头像、状态灯（rounded-full）不动 */
-html[data-ui-theme="cinnabar"] .workspace-main :is(.rounded-md, .rounded-lg, .rounded-\[6px\]) { border-radius: 3px; }
+html[data-ui-theme="cinnabar"] .workspace-main :is(.rounded-md, .rounded-lg) { border-radius: 3px; }
 html[data-ui-theme="cinnabar"] .workspace-main :is(.rounded-xl, .rounded-2xl, .rounded-3xl) { border-radius: 4px; }
 html[data-ui-theme="cinnabar"] [role="dialog"] :is(.rounded-md, .rounded-lg, .rounded-xl, .rounded-2xl) { border-radius: 3px; }

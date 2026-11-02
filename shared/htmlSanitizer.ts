@@ -1,3 +1,5 @@
+import { escapeHtmlAttr } from "./htmlEscape";
+
 const ALLOWED_TAGS = new Set([
   "a",
   "b",
@@ -36,12 +38,7 @@ const ALLOWED_ATTRS = new Set(["class", "href", "rel", "target", "title"]);
 const URL_ATTRS = new Set(["href"]);
 
 export function escapeHtml(content: string) {
-  return String(content || "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
+  return escapeHtmlAttr(content || "");
 }
 
 function decodeBasicEntities(value: string) {

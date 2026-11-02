@@ -3842,10 +3842,23 @@ function redemptionCodesListQuery(db: any) {
     .leftJoin(users, eq(redemptionCodes.usedByUserId, users.id));
 }
 
-export async function listRedemptionCodes() {
+/** 老接口的可选窗口：都不传时返回全部（和原来一样）；传了任一个就只取这一段。 */
+export type LegacyListWindow = { limit?: number; offset?: number } | undefined;
+
+function legacyWindow(window: LegacyListWindow) {
+  if (!window || (window.limit === undefined && window.offset === undefined)) return null;
+  return {
+    limit: Math.min(1000, Math.max(1, Math.floor(Number(window.limit ?? 1000)) || 1000)),
+    offset: Math.max(0, Math.floor(Number(window.offset ?? 0)) || 0),
+  };
+}
+
+export async function listRedemptionCodes(window?: LegacyListWindow) {
   const db = await getDb();
   if (!db) return [];
-  return redemptionCodesListQuery(db).orderBy(desc(redemptionCodes.createdAt), desc(redemptionCodes.id));
+  const query = redemptionCodesListQuery(db).orderBy(desc(redemptionCodes.createdAt), desc(redemptionCodes.id));
+  const range = legacyWindow(window);
+  return range ? query.limit(range.limit).offset(range.offset) : query;
 }
 
 export async function listRedemptionCodesPage(input: PageRequest & {
@@ -3971,10 +3984,12 @@ export async function redeemCode(userId: number, code: string, attemptScope?: st
 // ==================== Discount Codes ====================
 
 
-export async function listDiscountCodes() {
+export async function listDiscountCodes(window?: LegacyListWindow) {
   const db = await getDb();
   if (!db) return [];
-  const rows = await db.select().from(discountCodes).orderBy(desc(discountCodes.createdAt), desc(discountCodes.id));
+  const query = db.select().from(discountCodes).orderBy(desc(discountCodes.createdAt), desc(discountCodes.id));
+  const range = legacyWindow(window);
+  const rows = range ? await query.limit(range.limit).offset(range.offset) : await query;
   return attachDiscountPlans(rows);
 }
 

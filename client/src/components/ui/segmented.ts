@@ -8,7 +8,7 @@ export const segmentedControlClassName = "rounded-md bg-[var(--fx-l3-control-fil
 
 export function segmentedOptionClassName(active: boolean, disabled = false, className?: string) {
   return cn(
-    "group flex h-8 min-w-0 items-center justify-center gap-2 rounded-[6px] px-3 text-center text-[13px] font-medium transition-all focus-visible:outline-none focus-visible:shadow-[var(--fx-focus-ring)]",
+    "group flex h-8 min-w-0 items-center justify-center gap-2 rounded-inner px-3 text-center text-[13px] font-medium transition-all focus-visible:outline-none focus-visible:shadow-[var(--fx-focus-ring)]",
     active
       ? "bg-[var(--fx-l1-surface)] text-foreground shadow-[var(--fx-elevation-control)] dark:bg-[var(--fx-hover)] dark:shadow-none"
       : "text-muted-foreground hover:text-foreground",

@@ -1,9 +1,5 @@
-import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase as runSharedDatabaseTest } from "./testing/runInDatabase";
 
 /**
  * 「一天只做一次」的日标记要能被清掉。
@@ -15,40 +11,15 @@ import test from "node:test";
  *
  * 清理最怕的是误删：日期解析不出来的键一律不动，宁可留着垃圾也不能删掉真设置。
  */
+const setup = String.raw`
+    const settings = await import(url("server/repositories/settingsRepository.ts"));
+
+    const dayString = (offsetDays) =>
+      new Date(Date.now() - offsetDays * 24 * 3600 * 1000).toISOString().slice(0, 10);
+`;
+
 function runInDatabase(body: string) {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-ephemeral-"));
-  try {
-    const script = String.raw`
-      import assert from "node:assert/strict";
-      import path from "node:path";
-      import { pathToFileURL } from "node:url";
-
-      const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-      const runtime = await import(url("server/dbRuntime.ts"));
-      const schema = await import(url("server/dbSchema.ts"));
-      const settings = await import(url("server/repositories/settingsRepository.ts"));
-
-      await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-      await schema.ensureDatabaseSchema();
-      const query = (sql, params = []) => runtime.queryRaw(sql, params);
-      const dayString = (offsetDays) =>
-        new Date(Date.now() - offsetDays * 24 * 3600 * 1000).toISOString().slice(0, 10);
-
-      ${body}
-
-      console.log("OK");
-    `;
-    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: path.join(directory, "settings.db") },
-      timeout: 120_000,
-    });
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    assert.match(result.stdout, /OK/);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  runSharedDatabaseTest(body, { name: "ephemeral", setup });
 }
 
 test("过期的日标记会被清掉，今天的留着", () => {

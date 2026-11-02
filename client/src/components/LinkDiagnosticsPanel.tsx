@@ -56,7 +56,7 @@ function DiagnosticRow({ item, expanded, onToggle }: { item: DiagnosticItem; exp
   const expandable = !!(item.detail || (item.hint && item.status !== "pass"));
   const latency = typeof item.latencyMs === "number" ? `${item.latencyMs} ms` : "";
   return (
-    <li className="min-w-0 border-b border-[var(--fx-border-subtle,var(--border))] last:border-b-0" data-diagnostic-key={item.key}>
+    <li className="min-w-0 border-b border-[var(--fx-stroke-weak)] last:border-b-0" data-diagnostic-key={item.key}>
       <button
         type="button"
         className={cn(

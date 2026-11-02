@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState, type ReactNode } from "react";
 import { Check, Search, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
-import { segmentedControlClassName, segmentedOptionClassName } from "@/components/ui/segmented";
+import { SegmentedControl } from "@/components/ui/segmented-control";
 import { cn } from "@/lib/utils";
 import {
   FIREWALL_COMMON_COUNTRIES,
@@ -55,21 +55,15 @@ export function ModeSegmented({ value, onChange, ariaLabel, disabled }: {
   disabled?: boolean;
 }) {
   return (
-    <div className={cn(segmentedControlClassName, "flex gap-1")} role="radiogroup" aria-label={ariaLabel}>
-      {(["off", "block", "allow"] as FirewallMode[]).map((mode) => (
-        <button
-          key={mode}
-          type="button"
-          role="radio"
-          aria-checked={value === mode}
-          disabled={disabled}
-          onClick={() => onChange(mode)}
-          className={segmentedOptionClassName(value === mode, disabled, "h-8 flex-1 px-2 text-[12.5px] sm:text-[13px]")}
-        >
-          {mode === "off" ? "关闭" : mode === "block" ? "拦截" : "只放行"}
-        </button>
-      ))}
-    </div>
+    <SegmentedControl
+      ariaLabel={ariaLabel}
+      className="flex gap-1"
+      optionClassName="h-8 flex-1 px-2 text-[12.5px] sm:text-[13px]"
+      disabled={disabled}
+      value={value}
+      options={(["off", "block", "allow"] as FirewallMode[]).map((mode) => ({ value: mode, label: mode === "off" ? "关闭" : mode === "block" ? "拦截" : "只放行" }))}
+      onChange={onChange}
+    />
   );
 }
 

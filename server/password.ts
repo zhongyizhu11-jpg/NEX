@@ -1,29 +1,47 @@
 import crypto from "crypto";
+import { promisify } from "util";
 
 // Keep the same scrypt work for unknown accounts as for existing accounts.
 // This prevents login timing from revealing whether a username is registered.
 const DUMMY_PASSWORD_HASH = "00000000000000000000000000000000:9d861075585ee1229b2ddb8ca08518bafea87a1bd9325f2ae25a4238d89a0b347a57f4a1363c6b6c14534c90e7b5a2840f77a842fc850dbd1e2ad583dbdc1aa7";
 
-export function hashPassword(password: string): string {
+/*
+  scrypt 走异步版本（libuv 线程池）：同步的 scryptSync 每次要卡住事件循环几十毫秒，
+  换着 IP 刷登录就能拖慢整个面板，连 Agent 心跳一起卡。哈希格式（salt:hash，64 字节）不变。
+*/
+const scryptAsync = promisify(crypto.scrypt) as (password: crypto.BinaryLike, salt: crypto.BinaryLike, keylen: number) => Promise<Buffer>;
+
+export async function hashPassword(password: string): Promise<string> {
   const salt = crypto.randomBytes(16).toString("hex");
-  const hash = crypto.scryptSync(password, salt, 64).toString("hex");
+  const hash = (await scryptAsync(password, salt, 64)).toString("hex");
   return `${salt}:${hash}`;
 }
 
-export function verifyPassword(password: string, stored: string): boolean {
-  const [salt, hash] = stored.split(":");
-  if (!salt || !hash) return false;
+export async function verifyPassword(password: string, stored: string): Promise<boolean> {
+  const [salt, hash] = String(stored || "").split(":");
+  if (!salt || !hash) {
+    // 不是 salt:hash 的格式（比如「不能用的密码」标记）：照样跑一次 scrypt，时间和真密码差不多。
+    await verifyPasswordAgainstDummy(password);
+    return false;
+  }
   try {
     const expected = Buffer.from(hash, "hex");
-    const testHash = crypto.scryptSync(password, salt, 64);
+    const testHash = await scryptAsync(password, salt, 64);
     return expected.length === testHash.length && crypto.timingSafeEqual(expected, testHash);
   } catch {
     return false;
   }
 }
 
-export function verifyPasswordAgainstDummy(password: string): boolean {
-  return verifyPassword(password, DUMMY_PASSWORD_HASH);
+export async function verifyPasswordAgainstDummy(password: string): Promise<boolean> {
+  const [salt, hash] = DUMMY_PASSWORD_HASH.split(":");
+  try {
+    const expected = Buffer.from(hash, "hex");
+    const testHash = await scryptAsync(password, salt, 64);
+    return expected.length === testHash.length && crypto.timingSafeEqual(expected, testHash);
+  } catch {
+    return false;
+  }
 }
 
 /*

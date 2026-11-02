@@ -1,6 +1,7 @@
 import WorkspaceHeader from "@/components/WorkspaceHeader";
 import { FormField } from "@/components/ui/form-field";
 import DashboardLayout from "@/components/DashboardLayout";
+import QueryErrorState, { failedQueryState } from "@/components/QueryErrorState";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { BorderBeam } from "@/components/ui/border-beam";
@@ -10,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { copyTextToClipboard } from "@/lib/clipboard";
+import { formatDateTime as formatTimePoint } from "@/lib/formatTime";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import {
@@ -103,10 +105,7 @@ function methodMeta(method: Method) {
 }
 
 function formatDateTime(value: string | Date | undefined) {
-  if (!value) return "-";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "-";
-  return date.toLocaleString("zh-CN", { hour12: false });
+  return formatTimePoint(value, "-");
 }
 
 function resultOk(result?: LookingGlassResult | null) {
@@ -321,9 +320,27 @@ function Iperf3Output({
   );
 }
 
+/**
+ * 别处带着 ?method=iperf3-pair&tunnel=<id> 跳过来（隧道诊断框的「测带宽」，2.3.506）：先选好测什么。
+ * 只认对拉这一种，别的 method 不从地址栏读（那几种要填目标，带过来也没用）。
+ */
+function readPairDeepLink(): { method: Method | null; tunnelId: number | null } {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const tunnelId = Number(params.get("tunnel") || 0);
+    return {
+      method: params.get("method") === "iperf3-pair" ? "iperf3-pair" : null,
+      tunnelId: Number.isInteger(tunnelId) && tunnelId > 0 ? tunnelId : null,
+    };
+  } catch {
+    return { method: null, tunnelId: null };
+  }
+}
+
 export default function LookingGlass() {
   const utils = trpc.useUtils();
-  const [method, setMethod] = useState<Method>("ping");
+  const [pairDeepLink] = useState(readPairDeepLink);
+  const [method, setMethod] = useState<Method>(pairDeepLink.method || "ping");
   const [target, setTarget] = useState("");
   const [port, setPort] = useState("443");
   // TCPing 的地址族：目标是域名时只用这一族的地址（面板解析好再下发，所以老 Agent 也生效）
@@ -345,10 +362,13 @@ export default function LookingGlass() {
   const [liveOutput, setLiveOutput] = useState("");
   const completedTaskIdsRef = useRef<Set<string>>(new Set());
 
-  const { data: hosts } = trpc.lookingGlass.hosts.useQuery(undefined, {
+  const hostsQuery = trpc.lookingGlass.hosts.useQuery(undefined, {
     staleTime: 60000,
     refetchOnWindowFocus: false,
   });
+  const hosts = hostsQuery.data;
+  // 主机列表没读到时说没读到，不说「暂无可用主机」。
+  const hostsFailure = failedQueryState(hostsQuery);
   const availableHosts = useMemo(() => hosts || [], [hosts]);
   const selectedHost = availableHosts.find((host: any) => String(host.id) === hostId) as any;
   const clientInfo = trpc.lookingGlass.clientInfo.useQuery(undefined, {
@@ -637,7 +657,7 @@ export default function LookingGlass() {
         </Alert>
 
         {method === "iperf3-pair" ? (
-          <Iperf3PairPanel methodPicker={methodPicker} hosts={availableHosts as any} />
+          <Iperf3PairPanel methodPicker={methodPicker} hosts={availableHosts as any} initialTunnelId={pairDeepLink.tunnelId} />
         ) : (
         <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,420px)_1fr]">
           <Card className="border-border bg-card">
@@ -663,7 +683,9 @@ export default function LookingGlass() {
                     ))}
                   </SelectContent>
                 </Select>
-                {availableHosts.length === 0 && (
+                {hostsFailure ? (
+                  <QueryErrorState compact label="主机列表" {...hostsFailure} />
+                ) : availableHosts.length === 0 && (
                   <p className="text-xs text-muted-foreground">暂无可用主机，请先添加并连接 Agent。</p>
                 )}
               </FormField>
@@ -855,7 +877,7 @@ export default function LookingGlass() {
 
               <div className="rounded-lg border border-border/40 bg-muted/20 p-3">
                 <p className="text-xs font-medium text-muted-foreground">当前访问 IP</p>
-                <p className="mt-1 break-all font-mono text-sm">{clientInfo.data?.ip || "正在获取..."}</p>
+                <p className="mt-1 break-all font-mono text-sm">{clientInfo.data?.ip || (clientInfo.isError ? "没读到" : "正在获取...")}</p>
               </div>
 
               {latestResult && !isIperf3Method && (

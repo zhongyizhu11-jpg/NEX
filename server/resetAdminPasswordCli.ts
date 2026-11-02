@@ -17,6 +17,7 @@ import {
 import { ensureDatabaseSchema } from "./dbSchema";
 import { hashPassword } from "./password";
 import { revokeUserAuthSessions } from "./repositories/sessionRepository";
+import { revokeAllUserApiTokens } from "./ops/apiTokens";
 
 const MIN_PASSWORD_LENGTH = 8;
 const MAX_PASSWORD_LENGTH = 128;
@@ -184,8 +185,9 @@ async function resetAdminPasswordInTransaction(input: ResetAdminPasswordOptions)
   const current = locked[0];
 
   await revokeUserAuthSessions(target.id, { reason: "password_reset_cli" });
+  await revokeAllUserApiTokens(target.id, "password_reset_cli");
   const patch: Record<string, unknown> = {
-    password: hashPassword(input.newPassword),
+    password: await hashPassword(input.newPassword),
     updatedAt: nowDate(),
   };
   if (input.enableAccount) patch.accountEnabled = true;

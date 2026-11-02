@@ -16,7 +16,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import DataSectionLoading from "@/components/DataSectionLoading";
 import DataSectionError from "@/components/DataSectionError";
 import { EntityCard } from "@/components/entity/EntityCard";
-import { segmentedControlClassName, segmentedOptionClassName } from "@/components/ui/segmented";
+import { SegmentedControl } from "@/components/ui/segmented-control";
 import { useUrlTab } from "@/hooks/useUrlTab";
 import { planResourceText } from "@/lib/planDisplay";
 import { trpc } from "@/lib/trpc";
@@ -132,25 +132,24 @@ function StorePlanCard({
         一个按钮的切换器是纯噪音。
       */}
       {options.length > 1 ? (
-        <div className={`${segmentedControlClassName} mt-3 flex flex-wrap gap-1`} role="group" aria-label="购买周期">
-          {options.map((option) => {
-            const isActive = option.durationDays === active?.durationDays;
-            return (
-              <button
-                key={option.durationDays}
-                type="button"
-                aria-pressed={isActive}
-                onClick={() => setSelectedDays(option.durationDays)}
-                className={segmentedOptionClassName(isActive, false, "h-8 flex-1 px-2.5 text-xs")}
-              >
+        <SegmentedControl<number>
+          ariaLabel="购买周期"
+          className="mt-3 flex flex-wrap gap-1"
+          optionClassName="h-8 flex-1 px-2.5 text-xs"
+          value={active?.durationDays}
+          options={options.map((option) => ({
+            value: option.durationDays,
+            label: (
+              <>
                 {durationLabel(option.durationDays)}
                 {option.discountPercent > 0 ? (
                   <span className="text-[var(--fx-healthy-text)]">省 {option.discountPercent}%</span>
                 ) : null}
-              </button>
-            );
-          })}
-        </div>
+              </>
+            ),
+          }))}
+          onChange={setSelectedDays}
+        />
       ) : null}
 
       <ul className="mt-4 flex-1 space-y-2" aria-label="套餐权益">

@@ -14,6 +14,7 @@ import { filterTelegramRecipients } from "./telegramNotifyPrefs";
 import { isDiscordHostStatusNotifyEnabled, notifyDiscordAdmins } from "./discordNotify";
 import { HostOfflineNotificationDebouncer } from "./hostOfflineNotificationDebouncer";
 import { recordHostStatusEvent } from "./ops/eventHooks";
+import { escapeHtmlText as escapeHtml } from "../shared/htmlEscape";
 
 type HostStatus = "online" | "offline";
 
@@ -31,13 +32,6 @@ function waitForRetry(delayMs: number) {
     const timer = setTimeout(resolve, delayMs);
     timer.unref?.();
   });
-}
-
-function escapeHtml(value: unknown) {
-  return String(value ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
 }
 
 function formatTime(value = new Date()) {

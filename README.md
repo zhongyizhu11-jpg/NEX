@@ -206,11 +206,14 @@ pnpm dev
 
 ```bash
 pnpm exec tsc --noEmit
-pnpm test:server
+pnpm lint
+pnpm test:all
 pnpm build
 pnpm docs:build
 pnpm check:versions
 ```
+
+`pnpm test:all` 会自动找出 `server/`、`shared/`、`client/src/`、`scripts/` 下所有 `*.test.ts(x)` 一起跑。
 
 ## 安全建议
 

@@ -33,6 +33,7 @@ import {
   type ResourceAlertTransition,
 } from "../shared/resourceAlert";
 import { formatOutageDuration } from "../shared/opsEvents";
+import { escapeHtmlText as escapeHtml } from "../shared/htmlEscape";
 
 const KEY_PREFIX = "ops.resourceAlert.";
 const CONFIG_KEYS: Array<keyof ResourceAlertConfig> = [
@@ -72,10 +73,6 @@ export async function saveResourceAlertConfig(input: Partial<ResourceAlertConfig
 }
 
 // ---------------- 管理员告警投递（资源告警、OOM、进程崩溃、丢包共用） ----------------
-
-function escapeHtml(value: unknown) {
-  return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
 
 function formatTime(value = new Date()) {
   return value.toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" });

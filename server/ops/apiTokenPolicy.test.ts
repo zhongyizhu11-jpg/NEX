@@ -1,0 +1,107 @@
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import test from "node:test";
+import {
+  API_TOKEN_FORBIDDEN_MESSAGE,
+  API_TOKEN_READ_ONLY_MESSAGE,
+  apiTokenForbiddenPaths,
+  apiTokenPolicyError,
+  apiTokenProfileUpdateError,
+} from "./apiTokenPolicy";
+
+test("令牌碰不到夺号、整库带走、装插件这几类过程，读写令牌都一样", () => {
+  const paths = [
+    "setup.resetExistingData",
+    "setup.updateAdmin",
+    "setup.saveDatabase",
+    "setup.status",
+    "telegram.createBindCode",
+    "telegram.unbind",
+    "telegram.login",
+    "telegram.startMobileLogin",
+    "googleAuth.setInitialPassword",
+    "googleAuth.unlink",
+    "discordAuth.setInitialPassword",
+    "discordAuth.unlink",
+    "system.exportPanelBackup",
+    "system.importPanelBackup",
+    "system.getMigrationCode",
+    "system.createMigrationCode",
+    "system.startPanelMigration",
+    "system.startDatabaseSwitch",
+    "system.revealPanelSslKey",
+    "plugins.installFromUpload",
+    "plugins.installFromGithub",
+    "plugins.installFromStore",
+    "plugins.updateFromGithub",
+    "plugins.setTrusted",
+    "plugins.runAction",
+    "ops.offsiteBackup.get",
+    "ops.offsiteBackup.save",
+    "ops.offsiteBackup.restore",
+  ];
+  for (const procedure of paths) {
+    for (const scope of ["read", "full"] as const) {
+      for (const type of ["query", "mutation"]) {
+        assert.equal(apiTokenPolicyError(scope, procedure, type), API_TOKEN_FORBIDDEN_MESSAGE, `${scope} ${procedure}`);
+      }
+    }
+  }
+  // 普通业务过程不受影响。
+  assert.equal(apiTokenPolicyError("full", "plugins.list", "query"), null);
+  assert.equal(apiTokenPolicyError("full", "system.getSettings", "query"), null);
+  assert.equal(apiTokenPolicyError("full", "telegram.status", "query"), null);
+  assert.equal(apiTokenPolicyError("read", "system.backupSummary", "query"), null);
+  assert.equal(apiTokenPolicyError("read", "plugins.runAction", "mutation"), API_TOKEN_FORBIDDEN_MESSAGE);
+  assert.equal(apiTokenPolicyError("read", "rules.toggle", "mutation"), API_TOKEN_READ_ONLY_MESSAGE);
+  // 前缀相同的别的过程不会被误伤。
+  assert.equal(apiTokenPolicyError("full", "telegram.loginStatus", "query"), null);
+  assert.equal(apiTokenPolicyError("full", "setupWizardHint", "query"), null);
+});
+
+test("令牌改资料：改昵称照常，换邮箱被拒；网页会话不受影响", () => {
+  const token = { scope: "full" as const };
+  assert.equal(apiTokenProfileUpdateError(token, { email: undefined }, "a@example.com"), null);
+  assert.equal(apiTokenProfileUpdateError(token, { email: "A@Example.com " }, "a@example.com"), null);
+  assert.equal(apiTokenProfileUpdateError(token, { email: "b@example.com" }, "a@example.com"), API_TOKEN_FORBIDDEN_MESSAGE);
+  assert.equal(apiTokenProfileUpdateError(token, { email: "b@example.com" }, null), API_TOKEN_FORBIDDEN_MESSAGE);
+  assert.equal(apiTokenProfileUpdateError(null, { email: "b@example.com" }, "a@example.com"), null);
+});
+
+test("MCP 工具调用的过程都不在禁止名单里", () => {
+  const source = fs.readFileSync(path.join(process.cwd(), "server/ops/mcp.ts"), "utf8");
+  const invoked = [...source.matchAll(/s\.invoke\("([^"]+)"/g)].map((match) => match[1]);
+  assert.ok(invoked.length > 10);
+  for (const procedure of invoked) {
+    assert.equal(apiTokenPolicyError("full", procedure, "mutation"), null, procedure);
+  }
+});
+
+test("禁止名单里的每个过程都真实存在（防止改名后名单悄悄失效）", () => {
+  const script = String.raw`
+    import path from "node:path";
+    import { pathToFileURL } from "node:url";
+    const { appRouter } = await import(pathToFileURL(path.join(process.cwd(), "server/routers.ts")).href);
+    process.stdout.write("\n@@" + JSON.stringify(Object.keys(appRouter._def.procedures)) + "\n");
+    process.exit(0);
+  `;
+  const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
+    cwd: process.cwd(),
+    env: { ...process.env, NODE_ENV: "test", JWT_SECRET: "api-token-policy-test-secret" },
+    encoding: "utf8",
+    timeout: 120_000,
+  });
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  const line = result.stdout.split("\n").find((item) => item.startsWith("@@"));
+  assert.ok(line, result.stdout);
+  const procedures: string[] = JSON.parse(line.slice(2));
+  for (const rule of apiTokenForbiddenPaths()) {
+    if (rule.endsWith(".")) {
+      assert.ok(procedures.some((procedure) => procedure.startsWith(rule)), `没有以 ${rule} 开头的过程`);
+    } else {
+      assert.ok(procedures.includes(rule), `过程不存在：${rule}`);
+    }
+  }
+});

@@ -562,7 +562,8 @@ func TestLinkShaperSharedBucket(t *testing.T) {
 	wg.Wait()
 	elapsed := time.Since(start).Seconds()
 	got := float64(total.Load()) / elapsed
-	if got > float64(rate)*1.25 || got < float64(rate)*0.7 {
+	// 竞态检测下发得慢，下限不作数；共用一个桶不能超速（上限）照样要求。
+	if got > float64(rate)*1.25 || (got < float64(rate)*0.7 && !raceDetectorEnabled) {
 		t.Fatalf("two shapers on one shared bucket sent %.1f MB/s, want about %.1f MB/s", got/1e6, float64(rate)/1e6)
 	}
 

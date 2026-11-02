@@ -37,6 +37,7 @@ export type RuleLineGroupFieldProps = {
   ruleId: number | null;
   /** 规则目标绑着的节点（落地池的池节点时，「规则目标」预览成池里的几台）。 */
   ruleTargetNodeId?: number | null;
+  canOpenTunnels?: boolean;
 };
 
 export function RuleLineGroupField({
@@ -59,6 +60,7 @@ export function RuleLineGroupField({
   scheduleTimeZone,
   ruleId,
   ruleTargetNodeId = null,
+  canOpenTunnels = false,
 }: RuleLineGroupFieldProps) {
   const policy = useMemo(() => describeRoutePolicy({
     ...policyRule,
@@ -70,6 +72,7 @@ export function RuleLineGroupField({
     <div className="mt-3 border-t border-[var(--fx-stroke-weak)] pt-3" data-testid="rule-line-group">
       <SegmentLatencyProvider>
         <RouteGroupFields
+          canOpenTunnels={canOpenTunnels}
           value={value}
           onChange={onChange}
           hosts={hosts}

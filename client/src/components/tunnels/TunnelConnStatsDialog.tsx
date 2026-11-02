@@ -27,7 +27,8 @@ function formatMs(value: number | null) {
   return value === null ? "—" : `${value} ms`;
 }
 
-function formatMbps(value: number) {
+// 近一段时间实测的速率（Mbps），原样带单位；测速结果用 @shared/nodeCheck 的 formatMbps
+function formatRecentMbps(value: number) {
   return value >= 1000 ? `${(value / 1000).toFixed(2)} Gbps` : `${value} Mbps`;
 }
 
@@ -114,8 +115,8 @@ export function TunnelConnStatsBody({ tunnel }: { tunnel: { id: number; name: st
                           <div className="truncate font-mono text-xs text-muted-foreground">{leg.endpoint}</div>
                         </div>
                         <div className="shrink-0 text-right text-sm tabular-nums">
-                          <div>↓ {formatMbps(leg.recentDownMbps)}</div>
-                          <div className="text-xs text-muted-foreground">↑ {formatMbps(leg.recentUpMbps)}</div>
+                          <div>↓ {formatRecentMbps(leg.recentDownMbps)}</div>
+                          <div className="text-xs text-muted-foreground">↑ {formatRecentMbps(leg.recentUpMbps)}</div>
                         </div>
                       </div>
                       <div className="flex items-center gap-2">

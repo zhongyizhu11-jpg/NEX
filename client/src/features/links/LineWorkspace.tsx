@@ -2,8 +2,10 @@ import { useMemo, useState, type SyntheticEvent } from "react";
 import type { inferRouterOutputs } from "@trpc/server";
 import { Check, ChevronDown, ChevronRight, Plus, X } from "lucide-react";
 import { toast } from "sonner";
+import { useLocation } from "wouter";
 
 import { Button } from "@/components/ui/button";
+import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import {
@@ -29,6 +31,7 @@ import {
   type LineTone,
 } from "@/features/lines/LineUi";
 import { RouteBoardList } from "@/features/rules/RouteBoardList";
+import { LINE_PARAM, useSearchIdParam } from "./lineLinks";
 import { LandingPoolFields, landingDraftError, landingDraftFrom, landingInputFromDraft, type LandingConfigView, type LandingDraft } from "./LandingPoolFields";
 import { LINK_SPREAD_LABELS } from "@shared/linkTerms";
 import { trpc } from "@/lib/trpc";
@@ -55,8 +58,8 @@ export function LineWorkspace({ searchQuery = "", isAdmin = false }: { searchQue
   const board = trpc.lineDiagnostics.lineWorkspace.useQuery({ hours: 24 }, { refetchInterval: 30_000, staleTime: 10_000 });
   const data = board.data;
   const [allAlerts, setAllAlerts] = useState(false);
-  // 告警行和下面的线路卡点开的是同一个线路详情（在里面直接改）
-  const [openRuleId, setOpenRuleId] = useState<number | null>(null);
+  // 告警行和下面的线路卡点开的是同一个线路详情（在里面直接改）。开着时地址栏带 ?line=<规则 id>，复制下来就能分享（lineLinks.ts）
+  const [openRuleId, setOpenRuleId] = useSearchIdParam(LINE_PARAM);
   const alerts = data?.recent || [];
   const shownAlerts = allAlerts ? alerts : alerts.slice(0, ALERT_ROWS_SHOWN);
   return (
@@ -139,12 +142,13 @@ export function NodePoolsSection({ hosts, onOpenGroup, isAdmin = false }: {
   onOpenGroup?: (mode: PoolGroupMode, groupId: number) => void;
 }) {
   const utils = trpc.useUtils();
-  const board = trpc.lineDiagnostics.poolBoard.useQuery(undefined, { staleTime: 15_000, refetchInterval: 30_000 });
+  const [, setLocation] = useLocation();
+  const board = trpc.nodePools.board.useQuery(undefined, { staleTime: 15_000, refetchInterval: 30_000 });
   const refresh = () => {
-    void utils.lineDiagnostics.poolBoard.invalidate();
-    void utils.lineDiagnostics.nodePools.invalidate();
+    void utils.nodePools.board.invalidate();
+    void utils.nodePools.list.invalidate();
   };
-  const save = trpc.lineDiagnostics.nodePoolSave.useMutation({
+  const save = trpc.nodePools.save.useMutation({
     onSuccess: (result) => {
       refresh();
       setEditing(null);
@@ -170,7 +174,7 @@ export function NodePoolsSection({ hosts, onOpenGroup, isAdmin = false }: {
     },
     onError: (error) => toast.error(error.message),
   });
-  const rotate = trpc.lineDiagnostics.nodePoolRotate.useMutation({
+  const rotate = trpc.nodePools.rotate.useMutation({
     onSuccess: (result) => {
       refresh();
       void utils.proxyInbounds.list.invalidate();
@@ -178,12 +182,12 @@ export function NodePoolsSection({ hosts, onOpenGroup, isAdmin = false }: {
     },
     onError: (error) => toast.error(error.message),
   });
-  const remove = trpc.lineDiagnostics.nodePoolDelete.useMutation({
+  const remove = trpc.nodePools.delete.useMutation({
     onSuccess: () => { refresh(); setEditing(null); toast.success("已删掉"); },
     onError: (error) => toast.error(error.message),
   });
   // 落地池直连域名「自动」（2.3.501，管理员）：每点一次起一个新的，所以是 mutation
-  const suggestDomain = trpc.lineDiagnostics.nodePoolSuggestDomain.useMutation({
+  const suggestDomain = trpc.nodePools.suggestDomain.useMutation({
     onSuccess: (result) => {
       if (result.domain) setEditing((current) => (current ? { ...current, directDomain: result.domain || "" } : current));
       else toast.warning(result.reason || "没起出域名，自己填一个");
@@ -201,6 +205,7 @@ export function NodePoolsSection({ hosts, onOpenGroup, isAdmin = false }: {
     onError: (error) => toast.error(error.message),
   });
   const [editing, setEditing] = useState<PoolDraft | null>(null);
+  const confirmDialog = useConfirmDialog();
   const hostName = (id: number) => hosts.find((host) => host.id === id)?.name || `主机 ${id}`;
   const data = board.data;
   const entryGroups = data?.entryGroups || [];
@@ -234,6 +239,24 @@ export function NodePoolsSection({ hosts, onOpenGroup, isAdmin = false }: {
     });
   };
   const editingFollowers = editing?.id ? nodePools.find((pool) => pool.id === editing.id)?.followers || [] : [];
+  /* 删池前确认一次：说清池里几台、几条线路 / 转发在用、哪些组跟着它 */
+  const confirmRemove = async () => {
+    if (!editing?.id) return;
+    const pool = nodePools.find((item) => item.id === editing.id);
+    const uses = [
+      pool?.lines ? `${pool.lines} 条线路在用它（要先在线路里换掉）` : "",
+      pool?.landing?.rules ? `${pool.landing.rules} 条转发在用它` : "",
+      pool?.landing?.configured ? "订阅里的这一条会一起去掉，每台上开的入站也收掉" : "",
+      pool?.followers.length ? `${pool.followers.join("、")} 不再跟着它，成员留着现在这些` : "",
+    ].filter(Boolean);
+    const confirmed = await confirmDialog({
+      title: "删掉这个池",
+      description: `删掉「${editing.name || pool?.name || "这个池"}」？池里 ${editing.hostIds.length} 台机器${uses.length ? `；${uses.join("；")}` : ""}。删了不能恢复。`,
+      confirmText: "删掉",
+      tone: "destructive",
+    });
+    if (confirmed) remove.mutate({ id: editing.id });
+  };
   /*
     组的成员跟不跟节点池：跟着的，卡底下一个醒目的 chip（这是要一眼看见的状态）；没跟的只在说明
     后面挂一个不起眼的「跟着节点池」—— 每张卡都摆一个「成员：手动加减」太吵。
@@ -386,7 +409,13 @@ export function NodePoolsSection({ hosts, onOpenGroup, isAdmin = false }: {
           <DialogContent className="sm:max-w-md" onOpenAutoFocus={(event) => event.preventDefault()}>
             <DialogHeader>
               <DialogTitle>{`${editing.id ? "编辑" : "新建"}${editing.role === "landing" ? "落地池" : "中转池"}`}</DialogTitle>
-              <DialogDescription>{ROLE_DESCRIPTION[editing.role]}</DialogDescription>
+              <DialogDescription>
+                {ROLE_DESCRIPTION[editing.role]}
+                {/* 新建落地节点的主入口在订阅管理（2.3.506）：只开一台的不用建池 */}
+                {editing.role === "landing" && !editing.id ? (
+                  <> 只开一台的，到<a href="/client-subscriptions?create=node" onClick={(event) => { event.preventDefault(); setEditing(null); setLocation("/client-subscriptions?create=node"); }} className="text-primary hover:underline" data-testid="node-pool-single-landing">订阅管理新建节点</a>。</>
+                ) : null}
+              </DialogDescription>
             </DialogHeader>
             {/*
               2.3.501 起照 iOS 设置排：一张白卡写名字（改已有的池再多一行「用途」），一张白卡放机器，落地池再加
@@ -467,14 +496,18 @@ export function NodePoolsSection({ hosts, onOpenGroup, isAdmin = false }: {
                   onSuggestDomain={isAdmin ? () => suggestDomain.mutate({ name: editing.name.trim() || undefined, hostIds: editing.hostIds }) : undefined}
                   editing={!!editing.id && editing.configured}
                   rotating={rotate.isPending}
-                  onRotate={editing.id ? () => { if (window.confirm("换掉这个落地池的全部凭据和密钥？每台一起换，客户端要重新拉订阅。")) rotate.mutate({ id: editing.id! }); } : undefined}
+                  onRotate={editing.id ? () => {
+                    const id = editing.id!;
+                    void confirmDialog({ title: "换凭据和密钥", description: "换掉这个落地池的全部凭据和密钥？每台一起换，客户端要重新拉订阅。", confirmText: "换掉" })
+                      .then((confirmed) => { if (confirmed) rotate.mutate({ id }); });
+                  } : undefined}
                 />
               ) : null}
               {draftError ? <p className="px-[14px] text-[12px] text-[var(--fx-warn-text)]">{draftError}</p> : null}
             </div>
             <DialogFooter>
               {editing.id ? (
-                <Button type="button" variant="ghost" className="mr-auto text-[var(--fx-down-text)]" disabled={remove.isPending} onClick={() => remove.mutate({ id: editing.id! })}>删掉这个池</Button>
+                <Button type="button" variant="ghost" className="mr-auto text-[var(--fx-down-text)]" disabled={remove.isPending} onClick={() => void confirmRemove()}>删掉这个池</Button>
               ) : null}
               <Button type="button" variant="outline" onClick={() => setEditing(null)}>取消</Button>
               <Button type="button" disabled={!editing.name.trim() || editing.hostIds.length === 0 || !!draftError || save.isPending} onClick={submit} data-testid="node-pool-save">保存</Button>
@@ -565,7 +598,7 @@ function PoolFollowMenu({ inline, poolId, poolName, pools, busy, onPick }: {
           </LineChipButton>
         )}
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="max-h-[60vh] w-64 overflow-y-auto" onClick={stop}>
+      <DropdownMenuContent align="start" className="max-h-[60svh] w-64 overflow-y-auto" onClick={stop}>
         <DropdownMenuLabel className="text-[11px] font-normal text-muted-foreground">跟着一个节点池：池里加减机器，组的成员跟着加减</DropdownMenuLabel>
         {pools.map((pool) => (
           <DropdownMenuItem key={pool.id} disabled={pool.total === 0} onSelect={() => { if (pool.id !== poolId) onPick(pool.id); }}>

@@ -2,13 +2,23 @@ package main
 
 import (
 	"fmt"
+	mathrand "math/rand"
 	"testing"
 	"time"
 )
 
 func leastLoadSelector(exits []exitEndpoint, fallback exitEndpoint) *exitEndpointSelector {
 	resetFXPEndpointRegistry()
-	return newExitEndpointSelector(exits, fallback, "least_load")
+	selector := newExitEndpointSelector(exits, fallback, "least_load")
+	selector.random = seededExitRandom(20261102)
+	return selector
+}
+
+// seededExitRandom 给选择器一个固定种子的随机数来源：按分量随机挑的那几个测试每次跑结果都一样，
+// 不会因为 crypto/rand 偶尔抽得偏而红（CI 上 TestLeastLoadPowerOfTwoChoices 红过）。
+func seededExitRandom(seed int64) func() (uint64, error) {
+	source := mathrand.New(mathrand.NewSource(seed))
+	return func() (uint64, error) { return source.Uint64(), nil }
 }
 
 // setBusy 让这台看起来正在跑这么多流量（字节/秒）。sampledAt 一起设：包里前面的测试起的维护循环

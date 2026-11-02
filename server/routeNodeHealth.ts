@@ -40,16 +40,3 @@ export function getRouteNodeStatus(hostId: number): RouteNodeStatus | null {
 export function invalidateRouteNodeHealth() {
   snapshot = null;
 }
-
-/** 维护中的主机 id。 */
-export function routeMaintenanceHostIds(): Set<number> {
-  const ids = new Set<number>();
-  for (const status of snapshot?.byId.values() || []) if (status.maintenance) ids.add(status.id);
-  return ids;
-}
-
-/** 测试用：直接塞一份快照。 */
-export function setRouteNodeHealthForTest(rows: RouteNodeStatus[] | null) {
-  snapshot = rows ? { byId: new Map(rows.map((row) => [row.id, row])), loadedAt: Date.now() + 3_600_000 } : null;
-}
-

@@ -18,7 +18,10 @@ const STORAGE_PREFIX = "forwardx.queryCache.v1";
 export const QUERY_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_QUERY_BYTES = 256 * 1024;
 const MAX_TOTAL_BYTES = 2_500_000;
+// 第一次有新结果后稍等一下就存（刚登录、刚打开时尽快留一份）；之后最多 30 秒存一次。
+// 切到后台、关页面时不等，立刻存。以前每 1.5 秒存一次，主机页概览 3 秒一刷，主线程一直在序列化。
 const SAVE_DELAY_MS = 1_500;
+export const SAVE_MIN_INTERVAL_MS = 30_000;
 
 const PERSISTED_ROUTERS = new Set([
   "setup",
@@ -33,6 +36,44 @@ const PERSISTED_ROUTERS = new Set([
   "trafficBilling",
 ]);
 const PERSISTED_PATHS = new Set(["auth.me", "system.publicInfo"]);
+/*
+  白名单路由里那些几秒一轮询的「实时」接口不存：概览、实时速率、延迟曲线、测试进度、日志。
+  它们每轮都有新结果，存了也是下一秒就过时，只会让序列化一直跑；打开页面时它们本来就要马上重新拉。
+  以 refetchInterval 用到的为准（hosts.summary、hosts.pageLive、rules.trafficSummary……）。
+*/
+const LIVE_PATHS = new Set([
+  "hosts.summary",
+  "hosts.pageLive",
+  "hosts.liveVitals",
+  "hosts.metrics",
+  "hosts.latestMetricsSummary",
+  "hosts.lineHealth",
+  "hosts.exitQuality",
+  "hosts.unlockStatus",
+  "hosts.speedTestStatus",
+  "hosts.mimicInstallStatus",
+  "hosts.probeServiceSeries",
+  "rules.trafficSummary",
+  "rules.trafficSeriesBatch",
+  "rules.latestTest",
+  "rules.connectionsStatus",
+  "rules.routeStatus",
+  "rules.routeEvents",
+  "rules.routeQualityHistory",
+  "rules.tcpingSeries",
+  "rules.probeStatistics",
+  "tunnels.latencySeries",
+  "tunnels.latencySparkBatch",
+  "tunnels.latencyHistoryBatch",
+  "tunnels.probeStatistics",
+  "forwardGroups.latestTest",
+  "forwardGroups.latencySeries",
+  "forwardGroups.probeStatistics",
+  "forwardGroups.bandwidthAggregation",
+  "setup.migrationStatus",
+]);
+// 日志类：不管挂在哪个路由下都不存。
+const LOG_PATH = /(^|\.)(logs?|\w+Logs?)(\.|$)/;
 const SENSITIVE_FIELD = /token|secret|password|passwd|private.?key|api.?key|credential/i;
 
 export function queryPathOf(queryKey: readonly unknown[]) {
@@ -40,9 +81,14 @@ export function queryPathOf(queryKey: readonly unknown[]) {
   return Array.isArray(head) ? head.map(String).join(".") : "";
 }
 
+export function isLivePollingPath(path: string) {
+  return LIVE_PATHS.has(path) || LOG_PATH.test(path);
+}
+
 export function isPersistablePath(path: string) {
   if (!path) return false;
   if (PERSISTED_PATHS.has(path)) return true;
+  if (isLivePollingPath(path)) return false;
   return PERSISTED_ROUTERS.has(path.split(".")[0]);
 }
 
@@ -167,37 +213,78 @@ export function resumeQueryCachePersistenceForTests() {
   persistenceSuspended = false;
 }
 
+type SuperJsonMeta = { values?: unknown; referentialEqualities?: unknown; v?: number };
+
+function prefixedPaths(prefix: string, record: Record<string, unknown>, mapValue: (value: unknown) => unknown = (value) => value) {
+  const out: Record<string, unknown> = {};
+  for (const [path, value] of Object.entries(record)) out[`${prefix}${path}`] = mapValue(value);
+  return out;
+}
+
+/*
+  每条查询只序列化一次：量大小用的就是这条的字符串，最后的整包直接把这些字符串拼起来，
+  不再把整个缓存重新走一遍。拼出来的就是 superjson 自己的格式（json + meta），
+  读的时候照旧 superjson.parse。各条的 meta 路径加上「state.queries.<序号>.」前缀合进去。
+*/
 export function serializeQueryCache(queryClient: QueryClient, now = Date.now()) {
   const state = dehydrate(queryClient, { shouldDehydrateQuery: shouldPersistQuery, shouldDehydrateMutation: () => false });
   let total = 0;
-  const queries = [];
+  const jsonParts: string[] = [];
+  const values: Record<string, unknown> = {};
+  const referentialEqualities: Record<string, unknown> = {};
   // 新的优先：超出总量时丢最久没更新的。
   for (const query of [...state.queries].sort((left, right) => right.state.dataUpdatedAt - left.state.dataUpdatedAt)) {
-    const size = superjson.stringify(query.state.data).length;
+    const serialized = superjson.serialize(query) as { json: unknown; meta?: SuperJsonMeta };
+    const meta = serialized.meta;
+    // 根上带注解（数组形式）的情况查询对象不会出现；万一出现就不存这一条，不去猜格式。
+    if (meta && (Array.isArray(meta.values) || Array.isArray(meta.referentialEqualities))) continue;
+    const json = JSON.stringify(serialized.json);
+    const size = json.length;
     if (size > MAX_QUERY_BYTES || total + size > MAX_TOTAL_BYTES) continue;
     total += size;
-    queries.push(query);
+    const prefix = `state.queries.${jsonParts.length}.`;
+    jsonParts.push(json);
+    if (meta?.values) Object.assign(values, prefixedPaths(prefix, meta.values as Record<string, unknown>));
+    if (meta?.referentialEqualities) {
+      Object.assign(referentialEqualities, prefixedPaths(prefix, meta.referentialEqualities as Record<string, unknown>, (paths) =>
+        Array.isArray(paths) ? paths.map((path) => `${prefix}${path}`) : paths));
+    }
   }
-  return superjson.stringify({ version: APP_VERSION, savedAt: now, state: { mutations: [], queries } } satisfies PersistedCache);
+  const head = JSON.stringify({ version: APP_VERSION, savedAt: now });
+  const body = `${head.slice(0, -1)},"state":{"mutations":[],"queries":[${jsonParts.join(",")}]}}`;
+  const metaOut: SuperJsonMeta = {};
+  if (Object.keys(values).length > 0) metaOut.values = values;
+  if (Object.keys(referentialEqualities).length > 0) metaOut.referentialEqualities = referentialEqualities;
+  if (!metaOut.values && !metaOut.referentialEqualities) return `{"json":${body}}`;
+  metaOut.v = 1;
+  return `{"json":${body},"meta":${JSON.stringify(metaOut)}}`;
 }
 
-/** 查询有新结果就过一会儿存一次；切到后台、关页面时立刻存。 */
+/**
+ * 查询有新结果就记下「有变化」：第一次稍等一下就存，之后最多 30 秒存一次；
+ * 切到后台、关页面（pagehide / beforeunload）时有没存的就立刻存。
+ */
 export function startQueryCachePersistence(
   queryClient: QueryClient,
-  options: { scope?: string | (() => string); storage?: StorageLike | null } = {},
+  options: { scope?: string | (() => string); storage?: StorageLike | null; now?: () => number } = {},
 ) {
   const storage = options.storage === undefined ? defaultStorage() : options.storage;
   if (!storage) return () => {};
   const scopeOf = () => (typeof options.scope === "function" ? options.scope() : options.scope) || "";
+  const clock = options.now ?? Date.now;
   let timer: ReturnType<typeof setTimeout> | null = null;
+  let dirty = false;
+  let lastSavedAt = 0;
   let stopped = false;
 
   const save = () => {
     if (timer) clearTimeout(timer);
     timer = null;
-    if (stopped || persistenceSuspended) return;
+    if (stopped || persistenceSuspended || !dirty) return;
+    dirty = false;
+    lastSavedAt = clock();
     try {
-      storage.setItem(queryCacheStorageKey(scopeOf()), serializeQueryCache(queryClient));
+      storage.setItem(queryCacheStorageKey(scopeOf()), serializeQueryCache(queryClient, lastSavedAt));
     } catch {
       // 空间满了或被禁用：下次打开就是没有缓存的老样子，不影响使用。
       try {
@@ -208,7 +295,10 @@ export function startQueryCachePersistence(
     }
   };
   const schedule = () => {
-    if (!stopped && !timer) timer = setTimeout(save, SAVE_DELAY_MS);
+    dirty = true;
+    if (stopped || timer) return;
+    const wait = lastSavedAt > 0 ? Math.max(SAVE_DELAY_MS, lastSavedAt + SAVE_MIN_INTERVAL_MS - clock()) : SAVE_DELAY_MS;
+    timer = setTimeout(save, wait);
   };
 
   const unsubscribe = queryClient.getQueryCache().subscribe((event) => {
@@ -217,13 +307,14 @@ export function startQueryCachePersistence(
     }
   });
   const onHidden = () => {
-    if (document.visibilityState === "hidden" && timer) save();
+    if (document.visibilityState === "hidden") save();
   };
-  const onPageHide = () => {
-    if (timer) save();
-  };
+  const onPageHide = () => save();
   if (typeof document !== "undefined") document.addEventListener("visibilitychange", onHidden);
-  if (typeof window !== "undefined") window.addEventListener("pagehide", onPageHide);
+  if (typeof window !== "undefined") {
+    window.addEventListener("pagehide", onPageHide);
+    window.addEventListener("beforeunload", onPageHide);
+  }
 
   return () => {
     stopped = true;
@@ -231,6 +322,9 @@ export function startQueryCachePersistence(
     timer = null;
     unsubscribe();
     if (typeof document !== "undefined") document.removeEventListener("visibilitychange", onHidden);
-    if (typeof window !== "undefined") window.removeEventListener("pagehide", onPageHide);
+    if (typeof window !== "undefined") {
+      window.removeEventListener("pagehide", onPageHide);
+      window.removeEventListener("beforeunload", onPageHide);
+    }
   };
 }

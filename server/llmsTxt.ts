@@ -46,7 +46,7 @@ export function buildLlmsTxt(origin: string) {
     `- 地址：\`${base}/mcp\`（Streamable HTTP，POST JSON-RPC，回 application/json）。`,
     "- 认证：`Authorization: Bearer <个人 API 令牌>`。令牌在面板「设置 › 进阶 › API 令牌与 MCP」里创建。",
     "- **只做排查时请用只读令牌**：只读令牌调不了任何会改动的工具和接口。",
-    "- 令牌碰不到改密码、双重验证、通行密钥、登录设备和令牌管理，这些只能在网页上操作。",
+    "- 令牌碰不到改密码、双重验证、通行密钥、登录设备和令牌管理，也碰不到登录绑定、备份迁移、切换数据库、插件安装和安装向导，这些只能在网页上操作。",
     "- 返回给 AI 的数据会去掉令牌、密码、密钥类字段，长文本和长列表会截断。",
     "",
     "Claude Code 的配置示例：",

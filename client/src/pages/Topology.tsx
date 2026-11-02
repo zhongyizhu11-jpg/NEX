@@ -5,6 +5,8 @@ import { useLocation, useSearch } from "wouter";
 import DataSectionError from "@/components/DataSectionError";
 import EmptyState from "@/components/EmptyState";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
+import { StatusDot } from "@/components/network/StatusDot";
+import type { NetworkHealth } from "@shared/networkHealth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -29,6 +31,7 @@ import {
 } from "@shared/networkTopology";
 import { TOPOLOGY_KIND_COLORS, TopologyCanvas, type TopologyCanvasHandle } from "@/features/topology/TopologyCanvas";
 import { MyLinesSection } from "@/features/links/MyLinesSection";
+import { lineDetailHref } from "@/features/links/lineLinks";
 import { layoutTopology, topologyColumnLabels } from "@/features/topology/topologyLayout";
 import {
   TOPOLOGY_EDGE_KINDS,
@@ -65,11 +68,12 @@ function readStoredView(): TopologyView {
   }
 }
 
-const STATUS_DOT: Record<TopologyStatus, string> = {
-  running: "bg-[var(--fx-healthy-text)]",
-  degraded: "bg-[var(--fx-warn-text)]",
-  failed: "bg-destructive",
-  stopped: "bg-muted-foreground/50",
+/** 拓扑的四档状态借全站那一枚状态点画（components/network/StatusDot），不再自己配色 */
+const STATUS_HEALTH: Record<TopologyStatus, NetworkHealth> = {
+  running: "healthy",
+  degraded: "degraded",
+  failed: "down",
+  stopped: "standby",
 };
 
 const GROUP_SECTION_BY_MODE: Record<string, string> = { chain: "chains", port: "ports", failover: "groups", entry: "entries", exit: "exits" };
@@ -109,10 +113,6 @@ function store(key: string, value: string) {
   }
 }
 
-function StatusDot({ status }: { status: TopologyStatus }) {
-  return <span className={cn("inline-block h-2 w-2 shrink-0 rounded-full", STATUS_DOT[status])} aria-label={TOPOLOGY_STATUS_LABELS[status]} />;
-}
-
 type Selection = { type: "node" | "edge"; id: string } | null;
 
 function ResourceRow({ status, title, meta, onFocus, href, onNavigate }: {
@@ -125,7 +125,7 @@ function ResourceRow({ status, title, meta, onFocus, href, onNavigate }: {
 }) {
   return (
     <li className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 hover:bg-muted/50">
-      <StatusDot status={status} />
+      <StatusDot health={STATUS_HEALTH[status]} label={TOPOLOGY_STATUS_LABELS[status]} />
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-medium">{title}</p>
         <p className="truncate text-meta text-muted-foreground">{meta}</p>
@@ -238,7 +238,8 @@ export default function TopologyPage() {
     return `${GROUP_MODE_LABELS[groupById.get(focus.id)?.groupMode || ""] || "组"} · ${groupById.get(focus.id)?.name || `#${focus.id}`}`;
   })();
 
-  const ruleHref = (rule: TopologyRuleRef) => `/rules?q=${encodeURIComponent(rule.name)}`;
+  // 线路组规则去线路详情（和线路概览、我的线路、订阅内容同一个地址），别的规则按名字在转发规则页里搜
+  const ruleHref = (rule: TopologyRuleRef) => (rule.kind === "route" ? lineDetailHref(rule.id) : `/rules?q=${encodeURIComponent(rule.name)}`);
   const tunnelHref = (tunnel: TopologyTunnelRef) => (isAdmin ? `/tunnels?tab=tunnels&q=${encodeURIComponent(tunnel.name)}` : null);
   const groupHref = (group: TopologyGroupRef) => (isAdmin ? `/tunnels?tab=${GROUP_SECTION_BY_MODE[group.groupMode] || "groups"}&q=${encodeURIComponent(group.name)}` : null);
 
@@ -354,7 +355,7 @@ export default function TopologyPage() {
             aria-selected={view === value}
             onClick={() => setView(value)}
             className={cn(
-              "inline-flex h-full flex-1 items-center justify-center whitespace-nowrap rounded-[6px] px-4 text-[13px] font-medium text-muted-foreground transition-all hover:text-foreground sm:flex-none",
+              "inline-flex h-full flex-1 items-center justify-center whitespace-nowrap rounded-inner px-4 text-[13px] font-medium text-muted-foreground transition-all hover:text-foreground sm:flex-none",
               view === value && "bg-[image:var(--fx-primary-gradient)] font-semibold text-[var(--fx-primary-text)] hover:text-[var(--fx-primary-text)]",
             )}
           >

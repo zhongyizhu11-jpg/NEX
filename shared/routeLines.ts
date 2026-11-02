@@ -520,11 +520,6 @@ export function expandRouteLines(lines: RouteLine[], ctx: RouteExpandContext, li
   return { paths, issues };
 }
 
-/** 一条线路此刻展开出来几条路径（给编辑框显示「组合出 3 条」）。 */
-export function countLinePaths(paths: RoutePath[], lineKey: string) {
-  return paths.filter((path) => path.lineKey === lineKey).length;
-}
-
 // ---------------------------------------------------------------- 中继布局
 
 /** 隧道从入口机出发时，入口机上那条中继规则的 routeHopIndex（真正的跳从 0 起，最多 MAX_ROUTE_HOPS）。 */

@@ -25,7 +25,7 @@ export function LandingPoolMembersToggle({ ready, total, expanded, onToggle }: {
   );
 }
 
-export function LandingPoolMembersDetail({ members, directDomain, onOpenPool }: { members: LandingPoolMemberLine[]; directDomain: string | null; onOpenPool: () => void }) {
+export function LandingPoolMembersDetail({ members, directDomain, onOpenPool }: { members: LandingPoolMemberLine[]; directDomain: string | null; /** 节点池页只有管理员进得去：别人不传，这个入口就不出现 */ onOpenPool?: () => void }) {
   return (
     <div className="flex flex-col gap-1 text-[12px]" data-testid="landing-pool-members">
       {members.map((member) => (
@@ -41,7 +41,7 @@ export function LandingPoolMembersDetail({ members, directDomain, onOpenPool }: 
       ))}
       <div className="mt-0.5 flex min-w-0 items-center justify-between gap-3 text-[11.5px] text-muted-foreground">
         <span className="min-w-0 truncate">{directDomain ? `直连 ${directDomain}` : "只走中转"}</span>
-        <button type="button" className="shrink-0 text-[var(--fx-accent)] underline-offset-2 hover:underline" onClick={onOpenPool}>到节点池里改</button>
+        {onOpenPool ? <button type="button" className="shrink-0 text-[var(--fx-accent)] underline-offset-2 hover:underline" onClick={onOpenPool}>到节点池里改</button> : null}
       </div>
     </div>
   );

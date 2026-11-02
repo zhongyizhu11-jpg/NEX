@@ -53,6 +53,7 @@ import { applyLinkShapingDefaultOffOnce } from "./linkShapingDefaultOff";
 import { runProxySubSourceSync } from "./proxySubSourceSync";
 import { loadProxySubSettings } from "./proxySubSettings";
 import { pruneProxySubRateLimit } from "./proxySubRateLimit";
+import { escapeHtmlText as escapeHtmlLocal } from "../shared/htmlEscape";
 
 type TimedOutForwardTest = {
   id: number;
@@ -1006,13 +1007,6 @@ function hostTrafficMeasureModeLabel(mode: unknown) {
   if (mode === "outbound") return "仅出向";
   if (mode === "max") return "取最大值";
   return "双向";
-}
-
-function escapeHtmlLocal(value: unknown) {
-  return String(value ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
 }
 
 export function startScheduler() {

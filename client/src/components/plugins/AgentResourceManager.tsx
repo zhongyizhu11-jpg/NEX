@@ -1097,7 +1097,7 @@ export function AgentResourceManager({
       </div>
 
       <Dialog open={formOpen} onOpenChange={(open) => { if (!saving) setFormOpen(open); }}>
-        <DialogContent className="flex max-h-[88vh] max-w-2xl flex-col overflow-hidden p-0">
+        <DialogContent className="flex max-h-[88svh] max-w-2xl flex-col overflow-hidden p-0">
           <DialogHeader className="border-b border-border/40 px-5 py-4 pr-12 text-left">
             <DialogTitle>{formMode === "create" ? (view.operations?.create?.label || "新增") : (view.operations?.update?.label || "编辑")}</DialogTitle>
             <DialogDescription>{view.description || "填写资源信息。"}</DialogDescription>

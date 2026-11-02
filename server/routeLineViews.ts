@@ -5,12 +5,16 @@ import { getRouteStatus, routeLatencyIntoHost, routeTrippedNodeIds } from "./rou
 import { describeRouteReason, routeEventMillis, routeGroupOf, type RoutePath } from "../shared/routeGroup";
 import { parseRouteLines } from "../shared/routeLines";
 import { normalizeExitGroupStrategy } from "../shared/exitStrategy";
+import { routeFaultCounts } from "./ops/routeFaultCounts";
+import { ignoreErrorWith } from "./ignoredError";
 
 const q = quoteDbIdentifier;
 
 /*
   线路工作台和节点详情要的几份视图：
     · lineWorkspace：看板头（在线节点、24 小时告警、已自动恢复、最近几条）。
+      告警 / 已自动恢复的条数和故障看板「线路切换 / 异常」同一个来源（server/ops/routeFaultCounts.ts）；
+      最近几条仍从线路事件表取，那里有切换前后的线路名。
     · linesThroughHost：经过某台机器的线路，以及此刻是在走它还是避开了它。
   线路卡本身还是 rules.routeBoard（server/routeStatusView.ts）。
 */
@@ -82,11 +86,13 @@ export async function lineWorkspace(actor: { id: number; role: string }, hours =
     ? await queryRaw<any>(
       `SELECT * FROM ${q("forward_rule_route_events")} WHERE ${q("createdAt")} >= ? AND ${q("ruleId")} IN (${ruleIds.map(() => "?").join(",")}) ORDER BY ${q("createdAt")} DESC LIMIT 400`,
       [since, ...ruleIds],
-    ).catch(() => [] as any[])
+    ).catch(ignoreErrorWith("LineWorkspace route events", [] as any[]))
     : [];
   const nameByRule = new Map(rules.map((rule) => [Number(rule.id), String(rule.name || "")]));
-  let alerts = 0;
-  let recovered = 0;
+  const { alerts, recovered } = await routeFaultCounts({
+    hours,
+    scope: isAdmin ? { all: true } : { ruleIds, userId: actor.id },
+  }).catch(ignoreErrorWith("LineWorkspace alert counts", { alerts: 0, recovered: 0 }));
   const recent: LineAlertRow[] = [];
   const nowMs = Date.now();
   // 此刻还在的问题排前面：维护、熔断、离线的中转，各自有几条线路在避开它。
@@ -107,8 +113,6 @@ export async function lineWorkspace(actor: { id: number; role: string }, hours =
     const failureSwitch = kind === "switch" && FAILURE_SWITCH.test(reason);
     const isAlert = ALERT_KINDS.has(kind) || failureSwitch;
     const isRecovery = kind === "recovered" || (kind === "switch" && /failback|relay recovered/i.test(reason));
-    if (isAlert) alerts += 1;
-    if (isRecovery) recovered += 1;
     if (!isAlert && !isRecovery) continue;
     const alert = switchAlert(row, nameByRule.get(Number(row.ruleId)) || `规则 ${row.ruleId}`);
     if (!alert) continue;

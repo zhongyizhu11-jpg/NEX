@@ -99,6 +99,8 @@ export type RouteGroupFieldsProps = {
   /** 钉住期限按哪个时区显示；默认看的人自己的时区。 */
   timeZone?: string;
   /** 「高级策略」一开始展不展开；不给就看有没有改过模板值。 */
+  /** 隧道页只有管理员能进：普通用户不给跳过去会被弹回的链接，只给一句话 */
+  canOpenTunnels?: boolean;
   defaultAdvancedOpen?: boolean;
   /** 规则的协议（tcp / udp / both）：只转 UDP 的路径没有握手可探，健康检查的说法不一样。 */
   protocol?: string;
@@ -361,6 +363,7 @@ function dayPresetOf(days: number[]): keyof typeof DAY_PRESETS {
 
 export function RouteGroupFields({
   value,
+  canOpenTunnels = false,
   onChange,
   hosts,
   allowHops = true,
@@ -724,7 +727,8 @@ export function RouteGroupFields({
           {delivery === "hot" && !seamlessTunnelReady && mainNexTunnel ? (
             <LineHint className="mt-1">
               {/* 主线路里已经有 NEX 隧道、只是没开热备：一句话、直接去改它（新标签页打开，这里没存的不丢） */}
-              {mainNexTunnel ? (
+              {mainNexTunnel && !canOpenTunnels ? <>主线路里的隧道「{mainNexTunnel.name}」没开热备，请管理员把它设成热备，换中转才不断连</> : null}
+              {mainNexTunnel && canOpenTunnels ? (
                 <>
                   <a href={`/tunnels?tab=tunnels&edit=${mainNexTunnel.id}`} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-foreground" data-testid="route-line-hot-tunnel">
                     把隧道「{mainNexTunnel.name}」设成热备

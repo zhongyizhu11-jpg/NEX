@@ -1,71 +1,41 @@
-import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
+import { runInDatabase as runSharedDatabaseTest } from "./testing/runInDatabase";
 
 /**
  * 共享 TLS 入站（SNI 分流）落到库里的那几条规矩：端口不能和别的监听撞、一个名字只能归一条规则
  * （暂停的也算）、白名单不能把已有规则挤出去、入站上有规则不能删、默认规则得是管理员的。
  */
+const setup = String.raw`
+    const db = await import(url("server/db.ts"));
+    const service = await import(url("server/tlsInbounds.ts"));
+    const shared = await import(url("shared/tlsInbound.ts"));
+
+
+    await exec("INSERT INTO users (id, username, password, role) VALUES (1, 'admin', 'hash', 'admin')");
+    await exec("INSERT INTO users (id, username, password, role) VALUES (2, 'bob', 'hash', 'user')");
+    await exec("INSERT INTO hosts (id, name, ip, ipv4, agentToken, userId, agentVersion) VALUES (10, 'hk', '1.2.3.4', '1.2.3.4', 'tok', 1, '2.2.224')");
+
+    const settings = (overrides = {}) => service.normalizeTlsInboundInput({ name: "共享", port: 443, ...overrides });
+    const makeInbound = async (overrides = {}) => {
+      const value = settings(overrides);
+      await service.validateTlsInboundChange({ hostId: 10, settings: value });
+      return Number(await db.createTlsInbound(10, value));
+    };
+    let nextRuleId = 100;
+    const makeSniRule = async (inboundId, names, overrides = {}) => {
+      const id = nextRuleId++;
+      const row = { userId: 2, isEnabled: 1, sourcePort: 45000 + id, ...overrides };
+      await exec(
+        "INSERT INTO forward_rules (id, userId, name, hostId, forwardType, protocol, sourcePort, targetIp, targetPort, isEnabled, pendingDelete, isForwardGroupTemplate, tlsInboundId, sniNames) VALUES (?, ?, ?, 10, 'realm', 'tcp', ?, '8.8.8.8', 443, ?, 0, 0, ?, ?)",
+        [id, row.userId, "r" + id, row.sourcePort, row.isEnabled, inboundId, JSON.stringify(names)],
+      );
+      await db.replaceRuleSniNames(id, inboundId, names);
+      return id;
+    };
+`;
+
 function runInDatabase(body: string) {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-tls-inbound-"));
-  try {
-    const script = String.raw`
-      import assert from "node:assert/strict";
-      import path from "node:path";
-      import { pathToFileURL } from "node:url";
-
-      const url = (file) => pathToFileURL(path.join(process.cwd(), file)).href;
-      const runtime = await import(url("server/dbRuntime.ts"));
-      const schema = await import(url("server/dbSchema.ts"));
-      const db = await import(url("server/db.ts"));
-      const service = await import(url("server/tlsInbounds.ts"));
-      const shared = await import(url("shared/tlsInbound.ts"));
-
-      await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
-      await schema.ensureDatabaseSchema();
-      const exec = (sql, params = []) => runtime.executeRaw(sql, params);
-      const query = (sql, params = []) => runtime.queryRaw(sql, params);
-
-      await exec("INSERT INTO users (id, username, password, role) VALUES (1, 'admin', 'hash', 'admin')");
-      await exec("INSERT INTO users (id, username, password, role) VALUES (2, 'bob', 'hash', 'user')");
-      await exec("INSERT INTO hosts (id, name, ip, ipv4, agentToken, userId, agentVersion) VALUES (10, 'hk', '1.2.3.4', '1.2.3.4', 'tok', 1, '2.2.224')");
-
-      const settings = (overrides = {}) => service.normalizeTlsInboundInput({ name: "共享", port: 443, ...overrides });
-      const makeInbound = async (overrides = {}) => {
-        const value = settings(overrides);
-        await service.validateTlsInboundChange({ hostId: 10, settings: value });
-        return Number(await db.createTlsInbound(10, value));
-      };
-      let nextRuleId = 100;
-      const makeSniRule = async (inboundId, names, overrides = {}) => {
-        const id = nextRuleId++;
-        const row = { userId: 2, isEnabled: 1, sourcePort: 45000 + id, ...overrides };
-        await exec(
-          "INSERT INTO forward_rules (id, userId, name, hostId, forwardType, protocol, sourcePort, targetIp, targetPort, isEnabled, pendingDelete, isForwardGroupTemplate, tlsInboundId, sniNames) VALUES (?, ?, ?, 10, 'realm', 'tcp', ?, '8.8.8.8', 443, ?, 0, 0, ?, ?)",
-          [id, row.userId, "r" + id, row.sourcePort, row.isEnabled, inboundId, JSON.stringify(names)],
-        );
-        await db.replaceRuleSniNames(id, inboundId, names);
-        return id;
-      };
-
-      ${body}
-
-      console.log("OK");
-    `;
-    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: path.join(directory, "tls.db") },
-      timeout: 120_000,
-    });
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    assert.match(result.stdout, /OK/);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  runSharedDatabaseTest(body, { name: "tls-inbound", setup });
 }
 
 test("入站端口和这台机器上的其他监听互相避让", () => {

@@ -310,7 +310,7 @@ function PublicHostListResourceMetric({
       </div>
       <Progress value={progressValue} className={progressClass} />
       {detail && (
-        <div className="truncate text-[10px] leading-none text-muted-foreground" title={detail}>
+        <div className="truncate text-[11px] leading-none text-muted-foreground" title={detail}>
           {detail}
         </div>
       )}
@@ -394,7 +394,7 @@ function PublicHostTable({
                     <div className="min-w-0 space-y-1">
                       <div className="flex min-w-0 items-center gap-2">
                         <span className="min-w-0 truncate font-semibold" title={host.name}>{host.name || "-"}</span>
-                        <span className="shrink-0 rounded border border-border/50 bg-muted/35 px-1.5 py-0.5 font-mono text-[10px] leading-none text-muted-foreground">
+                        <span className="shrink-0 rounded border border-border/50 bg-muted/35 px-1.5 py-0.5 font-mono text-[11px] leading-none text-muted-foreground">
                           {host.agentVersion ? `v${host.agentVersion}` : "未上报"}
                         </span>
                       </div>
@@ -478,7 +478,7 @@ function ServiceChartTooltip({ active, payload, label, services }: any) {
                   {counts.isTimeout ? "超时" : typeof raw?.latencyMs === "number" ? `${raw.latencyMs}ms` : "--"}
                 </span>
                 {counts.probeCount > 1 && counts.probeSuccesses < counts.probeCount ? (
-                  <span className="block text-[10px] font-normal text-muted-foreground">
+                  <span className="block text-[11px] font-normal text-muted-foreground">
                     丢包 {counts.probeCount - counts.probeSuccesses}/{counts.probeCount}
                   </span>
                 ) : null}

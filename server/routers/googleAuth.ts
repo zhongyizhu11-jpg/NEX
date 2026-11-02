@@ -10,6 +10,7 @@ import { GOOGLE_START_PATH, googleLoginErrorMessage, sanitizeGoogleInviteCode } 
 import { googleLoginAdminView, isGoogleLoginUsable, planGoogleSettingsUpdate, readGoogleLoginSettings } from "../googleLoginSettings";
 import { setInitialPasswordForPasswordlessUser, unlinkGoogleAccount } from "../repositories/googleAccountRepository";
 import { consumeGoogleStartQuota, googleAppFlows, issueGoogleSessionOrChallenge, sessionErrorCode } from "../googleAuthRoute";
+import { clientIp } from "../clientIp";
 
 /*
   trpc.googleAuth.* —— Google 登录的设置、个人资料里的绑定 / 解绑，和 App 里的轮询登录。
@@ -17,7 +18,7 @@ import { consumeGoogleStartQuota, googleAppFlows, issueGoogleSessionOrChallenge,
 */
 
 function requestIp(ctx: any) {
-  return String(ctx.req?.ip || ctx.req?.socket?.remoteAddress || "unknown");
+  return clientIp(ctx.req, "unknown");
 }
 
 function displayName(user: any) {

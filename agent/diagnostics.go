@@ -132,7 +132,7 @@ var diagnosticsInFlightMu sync.Mutex
 var diagnosticsInFlight = map[string]bool{}
 var diagnosticsSlots = make(chan struct{}, diagnosticsMaxConcurrent)
 
-func handleDiagnosticsTask(cfg Config, task diagnosticsTask) {
+func handleDiagnosticsTask(ctx context.Context, cfg Config, task diagnosticsTask) {
 	if strings.TrimSpace(task.TaskID) == "" {
 		return
 	}
@@ -148,9 +148,18 @@ func handleDiagnosticsTask(cfg Config, task diagnosticsTask) {
 		delete(diagnosticsInFlight, task.TaskID)
 		diagnosticsInFlightMu.Unlock()
 	}()
-	diagnosticsSlots <- struct{}{}
-	result := runDiagnosticsTask(defaultDiagnosticsEnv(), task)
-	<-diagnosticsSlots
+	var result diagnosticsResult
+	select {
+	case diagnosticsSlots <- struct{}{}:
+		result = runDiagnosticsTaskContext(ctx, defaultDiagnosticsEnv(), task)
+		<-diagnosticsSlots
+	case <-ctx.Done():
+		result = diagnosticsResult{TaskID: task.TaskID, Results: []diagnosticsCheckResult{}, Error: interactiveTaskQueueTimeoutMessage}
+	}
+	reportDiagnosticsResult(cfg, task, result)
+}
+
+func reportDiagnosticsResult(cfg Config, task diagnosticsTask, result diagnosticsResult) {
 	if err := post(cfg, "/api/agent/diagnostics-result", map[string]any{"result": result}, &map[string]any{}); err != nil {
 		if isTransientAgentCommError(err) {
 			logAgentCommError("diagnostics-result", err)
@@ -173,8 +182,13 @@ func diagnosticsTaskTimeout(task diagnosticsTask) time.Duration {
 
 // runDiagnosticsTask 并发跑完所有检查；到总时限还没跑完的那几项记成「超时」，不等它们。
 func runDiagnosticsTask(env diagnosticsEnv, task diagnosticsTask) diagnosticsResult {
+	return runDiagnosticsTaskContext(context.Background(), env, task)
+}
+
+// runDiagnosticsTaskContext 同上，parent 到期时也一起收尾（交互任务总时限）。
+func runDiagnosticsTaskContext(parent context.Context, env diagnosticsEnv, task diagnosticsTask) diagnosticsResult {
 	started := env.now()
-	ctx, cancel := context.WithTimeout(context.Background(), diagnosticsTaskTimeout(task))
+	ctx, cancel := context.WithTimeout(parent, diagnosticsTaskTimeout(task))
 	defer cancel()
 	checks := task.Checks
 	if len(checks) > 64 {

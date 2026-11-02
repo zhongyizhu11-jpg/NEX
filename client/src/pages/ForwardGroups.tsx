@@ -1,5 +1,6 @@
 import { useLocation } from "wouter";
 import { readStoredViewMode, writeStoredViewMode } from "@/lib/viewModeStorage";
+import { usePanelFlags } from "@/hooks/usePanelFlags";
 import { useFaultBundleExport } from "@/components/links/useFaultBundleExport";
 import { MemberScheduleButton } from "@/components/links/MemberScheduleButton";
 import { describeMemberSchedule, groupModeSupportsMemberSchedule, memberEnabledIntent, parseMemberSchedule, type MemberActiveSchedule } from "@shared/memberSchedule";
@@ -18,7 +19,7 @@ import { formatLatencyTimeLabel } from "@/lib/latencyTimeLabel";
 import { hostIpv6Address, hostPrivateAddress, normalizeConnectHostForHost, sameAddress } from "@/lib/multiHopAddress";
 import SectionTransition from "@/components/SectionTransition";
 import DashboardLayout from "@/components/DashboardLayout";
-import { DiagnoseDialog } from "@/components/DiagnoseDialog";
+import { DiagnoseDialog, DiagnoseSubjectActions, type DiagnoseExtraTab } from "@/components/DiagnoseDialog";
 import EmptyState from "@/components/EmptyState";
 import AnimatedStatValue from "@/components/AnimatedStatValue";
 import { LatencyRating } from "@/components/LatencyRating";
@@ -95,17 +96,8 @@ import {
   Clock,
   FileJson,
 } from "lucide-react";
-import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
-import {
-  Area,
-  AreaChart,
-  CartesianGrid,
-  ResponsiveContainer,
-  Tooltip as RTooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
 import { MAX_FORWARD_GROUP_MEMBERS } from "@shared/forwardGroup";
 import { hostBandwidthHintMbps } from "@shared/linkWeights";
 import { LINK_SPREAD_LABELS } from "@shared/linkTerms";
@@ -123,7 +115,6 @@ import {
   FORWARD_TYPE_LABELS,
   FORWARD_TYPES,
   TUNNEL_PROTOCOLS,
-  normalizeForwardProtocolSettings,
   normalizeForwardRuleProtocol,
   type ForwardRuleProtocol,
   type ForwardType,
@@ -158,6 +149,9 @@ import {
   normalizeMemberWeight,
   type BandwidthAggregationStrategy,
 } from "@shared/bandwidthAggregation";
+
+// 延迟曲线按需加载：recharts 不跟着组列表一起下，点开延迟弹窗才取。
+const GroupLatencyAreaChart = lazy(() => import("@/components/charts/LatencyLineCharts").then((m) => ({ default: m.GroupLatencyAreaChart })));
 
 /** MySQL 会把布尔返回成 0 / 1 或 "0" / "1"。 */
 const dbFlag = (value: unknown) => value === true || value === 1 || value === "1";
@@ -475,17 +469,12 @@ type GroupLatencySeriesDatum = {
 const groupLatencySeriesCache = new Map<number, GroupLatencySeriesDatum[]>();
 const groupLatencyAnimatedKeys = new Set<number>();
 
-function ForwardGroupLatencyDialog({
-  groupId,
-  groupName,
-  open,
-  onOpenChange,
-}: {
-  groupId: number;
-  groupName: string;
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
-}) {
+/*
+  转发链的延迟记录（图、稳定性统计、近 30 天色块），没有对话框外壳：并进「诊断」框当一页
+  （DiagnoseDialog extraTabs，2.3.506 起和规则、隧道一样；原来是单独的「延迟记录」弹窗）。
+*/
+function ForwardGroupLatencyBody({ groupId, active }: { groupId: number; active: boolean }) {
+  const open = active;
   const [peakCutEnabled, setPeakCutEnabled] = useState(false);
   const [timeRangeHours, setTimeRangeHours] = useState<LatencyTimeRangeHours>(DEFAULT_LATENCY_TIME_RANGE_HOURS);
   const { data, isLoading, isFetching } = trpc.forwardGroups.latencySeries.useQuery(
@@ -546,21 +535,14 @@ function ForwardGroupLatencyDialog({
   }, [groupId, shouldAnimateChart]);
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[96svh] w-[calc(100vw-0.75rem)] max-w-[95vw] flex-col gap-3 overflow-hidden p-3 sm:max-w-3xl sm:p-6">
-        <DialogHeader>
-          <div className="flex flex-col gap-2 pr-9 sm:flex-row sm:items-start sm:justify-between sm:pr-10">
-            <div className="min-w-0">
-              <DialogTitle>{"\u8f6c\u53d1\u94fe\u5ef6\u8fdf - "}{groupName}</DialogTitle>
-              <DialogDescription>{`最近 ${latencyTimeRangeLabel(timeRangeHours)} 链路逐跳探测汇总，纯 UDP 规则使用 Ping，其余规则使用 TCPing。`}</DialogDescription>
-            </div>
-            <div className="flex flex-wrap items-center gap-2 self-start sm:justify-end">
-              <LatencyTimeRangeSelect value={timeRangeHours} onChange={setTimeRangeHours} />
-              <LatencyPeakCutToggle id={`forward-group-peak-cut-${groupId}`} checked={peakCutEnabled} onCheckedChange={setPeakCutEnabled} className="shrink-0" />
-            </div>
+    <div className="min-w-0 space-y-3">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <p className="min-w-0 text-meta text-muted-foreground">{`最近 ${latencyTimeRangeLabel(timeRangeHours)} 链路逐跳探测汇总，纯 UDP 规则使用 Ping，其余规则使用 TCPing。`}</p>
+          <div className="flex flex-wrap items-center gap-2 self-start sm:justify-end">
+            <LatencyTimeRangeSelect value={timeRangeHours} onChange={setTimeRangeHours} />
+            <LatencyPeakCutToggle id={`forward-group-peak-cut-${groupId}`} checked={peakCutEnabled} onCheckedChange={setPeakCutEnabled} className="shrink-0" />
           </div>
-        </DialogHeader>
-        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain pr-1">
+        </div>
         <div className="h-[42svh] min-h-[220px] rounded-lg border border-border/60 bg-muted/20 p-2 sm:h-[260px] sm:p-3">
           {(isLoading || waitForFreshSeries) && !seriesData ? (
             <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
@@ -569,39 +551,9 @@ function ForwardGroupLatencyDialog({
           ) : chartData.length === 0 ? (
             <div className="flex h-full items-center justify-center text-sm text-muted-foreground">暂无延迟数据</div>
           ) : (
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={chartData} margin={{ top: 8, right: 10, left: -8, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="forwardGroupLatencyGradient" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="var(--color-chart-2)" stopOpacity={0.38} />
-                    <stop offset="95%" stopColor="var(--color-chart-2)" stopOpacity={0.04} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" opacity={0.35} />
-                <XAxis dataKey="label" stroke="var(--color-muted-foreground)" fontSize={11} tickLine={false} axisLine={false} minTickGap={24} />
-                <YAxis stroke="var(--color-muted-foreground)" fontSize={11} tickLine={false} axisLine={false} width={42} domain={[0, yMax]} ticks={yTicks} tickFormatter={(value) => `${value}ms`} />
-                <RTooltip
-                  content={({ active, payload }) => {
-                    if (!active || !payload?.length) return null;
-                    const item = payload[0].payload as GroupLatencyPoint;
-                    return (
-                      <div className="rounded-md border border-border bg-popover px-3 py-2 text-xs shadow-md">
-                        <p className="font-medium">{item.fullLabel}</p>
-                        <p className={item.isTimeout ? "text-destructive" : "text-foreground"}>
-                          {item.isTimeout ? "\u8d85\u65f6/\u4e0d\u53ef\u8fbe" : `${item.latency}ms`}
-                        </p>
-                        {Number(item.probeCount) > 1 && Number(item.probeSuccesses) < Number(item.probeCount) ? (
-                          <p className="text-muted-foreground">
-                            丢包 {Number(item.probeCount) - Number(item.probeSuccesses)}/{Number(item.probeCount)}（{(((Number(item.probeCount) - Number(item.probeSuccesses)) / Number(item.probeCount)) * 100).toFixed(0)}%）
-                          </p>
-                        ) : null}
-                      </div>
-                    );
-                  }}
-                />
-                <Area type="monotone" dataKey="chartLatency" stroke="var(--color-chart-2)" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" fill="url(#forwardGroupLatencyGradient)" dot={false} activeDot={{ r: 4, fill: "var(--color-chart-2)", stroke: "var(--color-background)", strokeWidth: 2 }} isAnimationActive={shouldAnimateChart} animationDuration={shouldAnimateChart ? 500 : 0} />
-              </AreaChart>
-            </ResponsiveContainer>
+            <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-muted-foreground"><Loader2 className="mr-2 h-4 w-4 animate-spin" /> 正在加载延迟数据</div>}>
+              <GroupLatencyAreaChart chartData={chartData} yMax={yMax} yTicks={yTicks} animate={shouldAnimateChart} />
+            </Suspense>
           )}
         </div>
         <LatencyStabilityStats
@@ -610,12 +562,7 @@ function ForwardGroupLatencyDialog({
           description="统计各跳实际的 TCP / Ping 探测（含已上报的备用路径），不等于端到端业务丢包。"
         />
         <LatencyHistoryDayStrip summaries={history.data} loading={history.isLoading} />
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>关闭</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    </div>
   );
 }
 
@@ -627,6 +574,8 @@ function ForwardGroupSelfTestDialog({
   hostById,
   open,
   onOpenChange,
+  extraTabs,
+  actions,
 }: {
   groupId: number;
   groupName: string;
@@ -635,6 +584,9 @@ function ForwardGroupSelfTestDialog({
   hostById?: Map<number, any>;
   open: boolean;
   onOpenChange: (v: boolean) => void;
+  /** 并进来的页（延迟记录）和底部动作（故障包、拓扑），和规则、隧道的诊断框一样（DiagnoseDialog）。 */
+  extraTabs?: DiagnoseExtraTab[];
+  actions?: ReactNode;
 }) {
   const utils = trpc.useUtils();
   const [optimisticTesting, setOptimisticTesting] = useState(false);
@@ -785,6 +737,8 @@ function ForwardGroupSelfTestDialog({
       outcome={isSuccess ? "success" : status === "timeout" ? "timeout" : isFailed ? "failed" : null}
       failureReason={parsedMessage.message}
       checklist={{ kind: "forwardGroup", id: groupId }}
+      extraTabs={extraTabs}
+      actions={actions}
       onRun={() => {
         manualTestRef.current = true;
         setBaselineTestId(latestTestId);
@@ -840,14 +794,14 @@ export function ForwardGroupsContent({
     ? hostsOptionsQuery.data
     : hostsFallbackQuery.data ?? hostsOptionsQuery.data;
   const { data: tunnels } = trpc.tunnels.options.useQuery();
-  const { data: settings } = trpc.system.getSettings.useQuery();
+  // 协议开关、Telegram、DDNS 是否就绪：从 publicInfo 读，不再拉整份 getSettings。
+  const panelFlags = usePanelFlags();
   const [showDialog, setShowDialog] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [form, setForm] = useState<GroupForm>(makeDefaultForm());
   const savedMembersRef = useRef<Record<string, MemberForm[]>>({ host: [], tunnel: [] });
   const [dragMemberKey, setDragMemberKey] = useState<string | null>(null);
   const [internalViewMode, setInternalViewMode] = useState<ForwardGroupViewMode>(() => getStoredForwardGroupViewMode());
-  const [latencyGroup, setLatencyGroup] = useState<{ id: number; name: string } | null>(null);
   const [testGroup, setTestGroup] = useState<{ id: number; name: string } | null>(null);
   const [deleteGroup, setDeleteGroup] = useState<any | null>(null);
   // 点开故障转移策略面板的那个组。只存 id：面板跟着列表轮询刷新，不拿一份旧快照。
@@ -879,7 +833,7 @@ export function ForwardGroupsContent({
     refetchOnWindowFocus: false,
     placeholderData: (previousData) => previousData,
   });
-  const needsFullGroupList = showDialog || !!latencyGroup || !!testGroup || !!editRequest;
+  const needsFullGroupList = showDialog || !!testGroup || !!editRequest;
   const fullGroupQuery = trpc.forwardGroups.options.useQuery(undefined, {
     enabled: needsFullGroupList,
     refetchInterval: pollingInterval("normal"),
@@ -894,24 +848,21 @@ export function ForwardGroupsContent({
   // 2.3.499：组回到分类条上各自一页，卡上也写跟着哪个池（以前只有节点池页上看得见）。
   const editingPoolId = editingId ? Number(groups.find((group) => Number(group.id) === editingId)?.poolId || 0) || null : null;
   const anyFollowsPool = groups.some((group) => Number(group.poolId || 0) > 0);
-  const followedPoolQuery = trpc.lineDiagnostics.nodePools.useQuery(undefined, { enabled: anyFollowsPool || (showDialog && !!editingPoolId), staleTime: 30_000, refetchOnWindowFocus: false });
+  const followedPoolQuery = trpc.nodePools.list.useQuery(undefined, { enabled: anyFollowsPool || (showDialog && !!editingPoolId), staleTime: 30_000, refetchOnWindowFocus: false });
   const poolNameOf = (poolId: number) => ((followedPoolQuery.data || []) as Array<{ id: number; name: string }>).find((pool) => Number(pool.id) === poolId)?.name || `节点池 ${poolId}`;
   const followedPoolName = editingPoolId ? poolNameOf(editingPoolId) : "";
   const unfollowPool = trpc.forwardGroups.followPool.useMutation({
     onSuccess: () => {
       void utils.forwardGroups.invalidate();
-      void utils.lineDiagnostics.poolBoard.invalidate();
+      void utils.nodePools.board.invalidate();
       toast.success("不再跟着节点池，成员留着现在这些");
     },
     onError: (error) => toast.error(error.message),
   });
   const isLoading = groupPageQuery.isLoading;
-  const telegramSettingsLoaded = settings !== undefined;
-  const telegramReady = telegramSettingsLoaded && !!settings?.telegram?.enabled && !!settings?.telegram?.configured;
-  const forwardProtocolSettings = useMemo(
-    () => normalizeForwardProtocolSettings(settings?.forwardProtocols),
-    [settings?.forwardProtocols]
-  );
+  const telegramSettingsLoaded = panelFlags.loaded;
+  const telegramReady = telegramSettingsLoaded && panelFlags.telegramBotReady;
+  const forwardProtocolSettings = panelFlags.forwardProtocols;
   const availableForwardTypes = useMemo(
     () => FORWARD_TYPES.filter((type) => forwardProtocolSettings[type] !== false),
     [forwardProtocolSettings]
@@ -1628,8 +1579,8 @@ export function ForwardGroupsContent({
   const groupStatusBadge = (group: any) => {
     const configState = getGroupConfigState(group);
     if (configState.status === "disabled") return <Badge variant="outline">停用</Badge>;
-    if (configState.status === "available") return <Badge className="border-[color-mix(in_srgb,var(--fx-healthy)_20%,transparent)] bg-[var(--fx-healthy-soft)] text-[var(--fx-healthy-text)] hover:bg-[color-mix(in_srgb,var(--fx-healthy)_20%,transparent)] hover:text-[var(--fx-healthy-text)] dark:hover:bg-[color-mix(in_srgb,var(--fx-healthy)_20%,transparent)] dark:hover:text-[var(--fx-healthy-text)]">可用</Badge>;
-    if (configState.status === "degraded") return <Badge className="border-[color-mix(in_srgb,var(--fx-warn)_25%,transparent)] bg-[var(--fx-warn-soft)] text-[var(--fx-warn-text)] hover:bg-[var(--fx-warn-soft)]">部分可用</Badge>;
+    if (configState.status === "available") return <Badge tone="up" className="border-[color-mix(in_srgb,var(--fx-healthy)_20%,transparent)]">可用</Badge>;
+    if (configState.status === "degraded") return <Badge tone="warn" className="border-[color-mix(in_srgb,var(--fx-warn)_25%,transparent)]">部分可用</Badge>;
     if (configState.status === "pending") return <Badge variant="secondary">等待检测</Badge>;
     return <Badge variant="destructive">不可用</Badge>;
   };
@@ -1645,7 +1596,7 @@ export function ForwardGroupsContent({
     说「建议」而不是「解析到」。设置还没加载出来时是 undefined，按开着说。
   */
   const groupPolicyOptions: GroupRoutePolicyOptions = {
-    ddnsSwitching: settings?.ddns ? !!settings.ddns.enabled && settings.ddns.provider !== "disabled" : undefined,
+    ddnsSwitching: panelFlags.loaded ? panelFlags.ddnsEnabled : undefined,
     memberLabel: (member) => memberLabel(member),
   };
 
@@ -1692,7 +1643,7 @@ export function ForwardGroupsContent({
       >
         <Badge
           variant="outline"
-          className={cn("h-5 max-w-full cursor-pointer gap-1 px-1.5 text-[10px] font-medium", FAILOVER_TONE_CLASS[display.tone])}
+          className={cn("h-5 max-w-full cursor-pointer gap-1 px-1.5 text-[11px] font-medium", FAILOVER_TONE_CLASS[display.tone])}
         >
           <Globe className="h-3 w-3 shrink-0" aria-hidden="true" />
           <span className="truncate">{display.text}</span>
@@ -1717,7 +1668,7 @@ export function ForwardGroupsContent({
         {live && live.tone !== "off" ? <MemberLiveDot tone={live.tone} /> : renderMemberConfigIcon(group, member)}
         <span className="truncate">{label}</span>
         {live?.note ? <span className="shrink-0 font-mono text-[10.5px] tabular-nums opacity-80">{live.note}</span> : null}
-        {resolved ? <span className="shrink-0 rounded-sm bg-[var(--fx-healthy)] px-1 text-[10px] font-semibold leading-4 text-white" data-testid="member-resolved">解析</span> : null}
+        {resolved ? <span className="shrink-0 rounded-sm bg-[var(--fx-healthy-soft)] px-1 text-[11px] font-semibold leading-4 text-[var(--fx-healthy-text)]" data-testid="member-resolved">解析</span> : null}
       </>
     );
   };
@@ -2084,28 +2035,24 @@ export function ForwardGroupsContent({
           { key: "edit", label: "编辑", ariaLabel: `编辑${resource} ${group.name}`, icon: <Pencil className="h-3.5 w-3.5" />, onSelect: () => openEdit(group) },
         ]}
         menu={[
-          ...(isChain ? [{
-            key: "latency",
-            label: "延迟记录",
-            ariaLabel: `查看${resource} ${group.name} 的延迟`,
-            icon: <Activity className="h-3.5 w-3.5" />,
-            onSelect: () => setLatencyGroup({ id: Number(group.id), name: group.name }),
-          }] : []),
-          {
+          /*
+            转发链的延迟记录、故障包、拓扑都在「诊断」框里（页签和底部按钮，2.3.506 起和规则、隧道一样），
+            菜单里不再单列；别的组没有诊断框，故障包和拓扑照旧在菜单里。
+          */
+          ...(isChain ? [] : [{
             key: "fault-bundle",
             label: "导出故障包",
             ariaLabel: `导出${resource} ${group.name} 的故障包（诊断结论、脱敏配置、沿线主机状态）`,
             icon: <FileJson className="h-3.5 w-3.5" />,
             disabled: faultBundle.pending,
             onSelect: () => { void faultBundle.exportBundle("forwardGroup", Number(group.id)); },
-          },
-          {
+          }, {
             key: "topology",
             label: "查看拓扑",
             ariaLabel: `在网络拓扑里查看${resource} ${group.name}`,
             icon: <Network className="h-3.5 w-3.5" />,
             onSelect: () => setTopologyLocation(`/topology?group=${Number(group.id)}`),
-          },
+          }]),
           {
             key: "sync",
             label: "同步",
@@ -2699,7 +2646,7 @@ export function ForwardGroupsContent({
                     <div className="text-xs text-muted-foreground">PROXY Protocol</div>
                   </div>
                   <div className="flex items-center gap-2">
-                    <Badge variant={advancedSettingsConfigured ? "secondary" : "outline"} className="h-5 px-1.5 text-[10px] font-normal">
+                    <Badge variant={advancedSettingsConfigured ? "secondary" : "outline"} className="h-5 px-1.5 text-[11px] font-normal">
                       {advancedSettingsConfigured ? "已配置" : "可选"}
                     </Badge>
                     <ChevronRight className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 ${advancedSettingsOpen ? "rotate-90" : ""}`} />
@@ -2980,14 +2927,6 @@ export function ForwardGroupsContent({
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      {latencyGroup && (
-        <ForwardGroupLatencyDialog
-          groupId={latencyGroup.id}
-          groupName={latencyGroup.name}
-          open={!!latencyGroup}
-          onOpenChange={(open) => !open && setLatencyGroup(null)}
-        />
-      )}
       {testGroup && (
         <ForwardGroupSelfTestDialog
           groupId={testGroup.id}
@@ -2997,6 +2936,8 @@ export function ForwardGroupsContent({
           hostById={hostById}
           open={!!testGroup}
           onOpenChange={(open) => !open && setTestGroup(null)}
+          extraTabs={[{ key: "history", label: "延迟记录", content: <ForwardGroupLatencyBody groupId={testGroup.id} active={!!testGroup} /> }]}
+          actions={<DiagnoseSubjectActions kind="forwardGroup" id={testGroup.id} onLeave={() => setTestGroup(null)} />}
         />
       )}
       {(() => {

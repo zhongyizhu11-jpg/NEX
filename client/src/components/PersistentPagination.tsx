@@ -45,17 +45,30 @@ function writeStoredPage(storageKey: string, page: number) {
   }
 }
 
+// 同一页里两处用同一个键（隧道页页头的统计和下面的组列表）时互相通知，页码一致，列表查询才能合成一个。
+const PAGE_CHANGE_EVENT = "forwardx:persistent-page";
+
 export function usePersistentPageRequest(storageKey: string): PersistentPageRequestState {
   const [page, setStoredPage] = useState(() => readStoredPage(storageKey));
 
   useEffect(() => {
     setStoredPage(readStoredPage(storageKey));
+    if (typeof window === "undefined") return;
+    const onChange = (event: Event) => {
+      const detail = (event as CustomEvent<{ storageKey: string; page: number }>).detail;
+      if (detail?.storageKey === storageKey) setStoredPage(detail.page);
+    };
+    window.addEventListener(PAGE_CHANGE_EVENT, onChange);
+    return () => window.removeEventListener(PAGE_CHANGE_EVENT, onChange);
   }, [storageKey]);
 
   const setPage = useCallback((nextPage: number) => {
     const normalized = Math.max(1, Math.floor(Number(nextPage) || 1));
     setStoredPage(normalized);
     writeStoredPage(storageKey, normalized);
+    if (typeof window !== "undefined" && typeof CustomEvent === "function") {
+      window.dispatchEvent(new CustomEvent(PAGE_CHANGE_EVENT, { detail: { storageKey, page: normalized } }));
+    }
   }, [storageKey]);
 
   return { page, setPage };

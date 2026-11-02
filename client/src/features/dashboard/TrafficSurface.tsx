@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo } from "react";
+import { lazy, Suspense, useEffect, useMemo, type ReactNode } from "react";
 
 import { ListSection } from "@/components/ios/GroupedList";
 import { Metric, MetricGroup } from "@/components/entity/Metric";
@@ -56,6 +56,9 @@ export function TrafficSurface({
   breakdownLoading,
   totals,
   totalsLoading,
+  chartError,
+  breakdownError,
+  totalsError,
 }: {
   /** 近 24H 总量；series 还没回来时是 undefined —— 「还没有数」和「真的是 0」是两回事 */
   recentBytes: number | undefined;
@@ -65,11 +68,17 @@ export function TrafficSurface({
   breakdownLoading: boolean;
   totals: { totalTrafficIn?: number; totalTrafficOut?: number } | null | undefined;
   totalsLoading: boolean;
+  /** 走势没读到时放在图的位置（不是「暂无流量数据」） */
+  chartError?: ReactNode;
+  /** 排行没读到时放在排行的位置 */
+  breakdownError?: ReactNode;
+  /** 累计没读到：两格显示「—」并在下面说一句，不显示 0 */
+  totalsError?: ReactNode;
 }) {
   const recentIn = useMemo(() => (chartData.length ? chartData.reduce((sum, point) => sum + point.bytesIn, 0) : undefined), [chartData]);
   const recentOut = useMemo(() => (chartData.length ? chartData.reduce((sum, point) => sum + point.bytesOut, 0) : undefined), [chartData]);
   const ranking = useMemo(() => rankRuleTraffic(breakdown, TRAFFIC_RANK_ROWS), [breakdown]);
-  const cumulativeReady = !(totalsLoading && !totals);
+  const cumulativeReady = !(totalsLoading && !totals) && !totalsError;
   // 挂上就预取图表库（effect 在首屏画完之后才跑）；取不到时 lazy 渲染那一下会再取、再报错
   useEffect(() => { void loadTrafficCharts().catch(() => {}); }, []);
 
@@ -93,6 +102,8 @@ export function TrafficSurface({
             <div className="h-40 w-full sm:h-52" data-fx-chart="traffic" data-fx-empty={!chartLoading && chartData.length === 0 ? "" : undefined}>
               {chartLoading && chartData.length === 0 ? (
                 <Skeleton className="h-full w-full" />
+              ) : chartError && chartData.length === 0 ? (
+                <div className="flex h-full items-center justify-center">{chartError}</div>
               ) : chartData.length === 0 ? (
                 <div className="flex h-full items-center justify-center text-secondary-type text-muted-foreground">暂无流量数据</div>
               ) : (
@@ -107,6 +118,8 @@ export function TrafficSurface({
             <div className="flex flex-col gap-[var(--fx-space-3)] border-t border-[var(--fx-stroke-weak)] pt-[var(--fx-space-4)] lg:border-t-0 lg:pt-0" aria-hidden="true">
               {[0, 1, 2].map((item) => <Skeleton key={item} className="h-7 w-full" />)}
             </div>
+          ) : breakdownError && ranking.items.length === 0 ? (
+            <div className="flex min-w-0 flex-col border-t border-[var(--fx-stroke-weak)] pt-[var(--fx-space-4)] lg:border-t-0 lg:pt-0">{breakdownError}</div>
           ) : ranking.items.length > 0 ? (
             <div className="flex min-w-0 flex-col gap-[var(--fx-space-3)] border-t border-[var(--fx-stroke-weak)] pt-[var(--fx-space-4)] lg:border-t-0 lg:pt-0">
               <h3 className="text-meta font-medium text-muted-foreground">用得最多</h3>
@@ -160,6 +173,7 @@ export function TrafficSurface({
             value={cumulativeReady ? formatBytes(totals?.totalTrafficOut ?? 0) : "—"}
           />
         </MetricGroup>
+        {totalsError ?? null}
       </div>
     </ListSection>
   );

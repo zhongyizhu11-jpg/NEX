@@ -1,0 +1,46 @@
+name: Go race
+
+# 每晚一次 go test -race：数据竞争在普通测试里不一定红，单独跑一遍。
+on:
+  schedule:
+    - cron: "17 19 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: forwardx-go-race
+  cancel-in-progress: true
+
+jobs:
+  race:
+    name: Race (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - agent
+          - forwardx-fxp
+    defaults:
+      run:
+        working-directory: ${{ matrix.module }}
+    env:
+      GOTOOLCHAIN: local
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.x"
+          check-latest: true
+          cache-dependency-path: |
+            agent/go.sum
+            forwardx-fxp/go.sum
+
+      - name: go test -race
+        run: go test -race ./...

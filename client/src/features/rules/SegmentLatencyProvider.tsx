@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 
+import { toast } from "sonner";
+
 import { trpc } from "@/lib/trpc";
 import type { RouteStatus } from "./RouteGroupSheet";
 import { SegmentLatencyContext, segmentKey, type SegmentLatencyHook, type SegmentTestResult } from "./segmentLatency";
@@ -65,7 +67,11 @@ const useTrpcSegmentLatency: SegmentLatencyHook = ({ ruleId, entryHostId }) => {
       setTestingKey(lineKey);
       start.mutateAsync({ ruleId: ruleId || undefined, ...request }).then(
         (result) => setRunId(result.runId),
-        () => setTestingKey(null),
+        (error) => {
+          setTestingKey(null);
+          // 原来失败了什么也不说（比如管理员关了网络测试），点了像没反应。
+          toast.error(error instanceof Error ? error.message : "测试没能开始");
+        },
       );
     },
   };

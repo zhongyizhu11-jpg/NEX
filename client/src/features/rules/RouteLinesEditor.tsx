@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState, type ReactNode, type Ref } from "react";
+import { Fragment, useState, type ReactNode, type Ref } from "react";
 import { ChevronDown, X } from "lucide-react";
 
 import { SortableItem, SortableReorderContext, useSortableReorder } from "@/components/SortableDragHandle";
@@ -705,7 +705,7 @@ function LineNameInput({ name, lineIndex, onChange }: { name: string; lineIndex:
       placeholder={defaultRoutePathName(lineIndex)}
       aria-label={lineIndex === 0 ? "主线路的名字" : `备 ${lineIndex} 的名字`}
       title="点一下改名字"
-      className="min-w-0 flex-1 rounded-[6px] bg-transparent px-1 py-[3px] text-[13px] font-semibold outline-none hover:bg-[var(--fx-l2-group)] focus:bg-[var(--fx-l2-group)]"
+      className="min-w-0 flex-1 rounded-inner bg-transparent px-1 py-[3px] text-[13px] font-semibold outline-none hover:bg-[var(--fx-l2-group)] focus:bg-[var(--fx-l2-group)]"
     />
   );
 }
@@ -921,13 +921,6 @@ type PreviewContext = {
   /** 规则目标绑着的节点（是池节点时「规则目标」就是这个池）。 */
   ruleTargetNodeId?: number | null;
 };
-
-export function useRouteLinesPreview(lines: RouteLine[] | null | undefined, context: PreviewContext) {
-  return useMemo(() => {
-    if (!lines || lines.length === 0) return { paths: [] as RoutePath[], issues: new Map<string, string>() };
-    return expandForPreview(lines, context);
-  }, [lines, context.entryHostId, context.pools, context.tunnels, context.nodes, context.ruleTargetNodeId]);
-}
 
 export function expandForPreview(lines: RouteLine[], context: PreviewContext) {
   return expandRouteLines(lines, {

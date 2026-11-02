@@ -9,6 +9,7 @@ import { formatRate, type RouteSegment } from "@/features/rules/RouteBoard";
 import { pollingInterval } from "@/lib/polling";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
+import { lineDetailHref } from "./lineLinks";
 import { buildLineModel, type LineHop, type LineModel, type LineProbe, type LineRate, type LineTraffic } from "./myLines";
 
 /*
@@ -63,7 +64,7 @@ function describeLine(line: LineModel) {
   return parts.join("，");
 }
 
-export function LineCard({ line, onEdit, onDiagnose, withExitColumn = !!line.exit }: { line: LineModel; onEdit?: () => void; onDiagnose?: () => void; withExitColumn?: boolean }) {
+export function LineCard({ line, onEdit, onDiagnose, onOpenDetail, withExitColumn = !!line.exit }: { line: LineModel; onEdit?: () => void; onDiagnose?: () => void; onOpenDetail?: () => void; withExitColumn?: boolean }) {
   const [collapsed, setCollapsed] = useState(false);
   const probe = line.probe;
   const flowing = line.health === "healthy" && !!line.rate && (line.rate.inBps > 0 || line.rate.outBps > 0);
@@ -96,7 +97,7 @@ export function LineCard({ line, onEdit, onDiagnose, withExitColumn = !!line.exi
           <span className="fx-lane-sub">{describeLine(line)}</span>
           {latencyChip}
           {line.switches && line.switches.count24h > 0 ? (
-            <button type="button" className="fx-lane-link" onClick={onDiagnose} title={line.switches.lastFromLabel && line.switches.lastToLabel ? `最近一次：${line.switches.lastFromLabel} → ${line.switches.lastToLabel}` : undefined} data-testid="route-switch-chip">
+            <button type="button" className="fx-lane-link" onClick={onOpenDetail ?? onDiagnose} title={line.switches.lastFromLabel && line.switches.lastToLabel ? `最近一次：${line.switches.lastFromLabel} → ${line.switches.lastToLabel}` : undefined} data-testid="route-switch-chip">
               {line.switches.flapping ? "来回切换" : line.switches.manual24h > 0 ? "经手动切换" : "经切换"} ×{line.switches.count24h}
             </button>
           ) : null}
@@ -105,6 +106,8 @@ export function LineCard({ line, onEdit, onDiagnose, withExitColumn = !!line.exi
           </button>
         </span>
         <span className="fx-lane-actions">
+          {/* 线路组：「详情」打开线路详情（/rules?line=，和线路概览里点卡片是同一个面板），切换记录也在那里 */}
+          {onOpenDetail ? <button type="button" className="fx-lane-link" onClick={onOpenDetail} data-testid="line-open-detail">详情</button> : null}
           {onDiagnose ? <button type="button" className="fx-lane-link" onClick={onDiagnose}>诊断</button> : null}
           {onEdit ? <button type="button" className="fx-lane-link" onClick={onEdit}>编辑</button> : null}
         </span>
@@ -236,6 +239,7 @@ export function MyLinesSection({ searchQuery = "", isAdmin = false }: { searchQu
           withExitColumn={withExitColumn}
           onEdit={() => setLocation(`/rules?edit=${line.id}`)}
           onDiagnose={() => setLocation(`/rules?diagnose=${line.id}`)}
+          onOpenDetail={line.kind === "route" ? () => setLocation(lineDetailHref(line.id)) : undefined}
         />
       ))}
     </div>

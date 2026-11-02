@@ -58,6 +58,7 @@ export function AccountSection({
   balanceText,
   canForward,
   forwardPaused = false,
+  error,
 }: {
   isAdmin: boolean;
   loading: boolean;
@@ -73,7 +74,16 @@ export function AccountSection({
   canForward?: boolean;
   /** 「需要关注」里已经有一行「转发已暂停」—— 这里要用同一个词 */
   forwardPaused?: boolean;
+  /** 账户数据没读到：显示这一块，不显示一排「0 B」「---」 */
+  error?: ReactNode;
 }) {
+  if (error) {
+    return (
+      <ListSection header={isAdmin ? "我的消耗" : "我的账户"}>
+        <div className="p-[var(--fx-card-padding)]">{error}</div>
+      </ListSection>
+    );
+  }
   const cached = (key: string, value: string, fallback: string) => (
     <AnimatedStatValue
       value={value}

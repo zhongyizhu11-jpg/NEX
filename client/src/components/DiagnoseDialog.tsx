@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Loader2, Stethoscope } from "lucide-react";
+import { FileJson, Gauge, Loader2, Network, Stethoscope } from "lucide-react";
+import { useLocation } from "wouter";
 
 import { LinkDiagnosticsPanel } from "@/components/LinkDiagnosticsPanel";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useFaultBundleExport, type FaultBundleKind } from "@/components/links/useFaultBundleExport";
 import { cn } from "@/lib/utils";
 import type { DiagnosticSubjectKind } from "@shared/linkDiagnostics";
 
@@ -16,7 +18,8 @@ export type DiagnoseExtraTab = { key: string; label: string; content: ReactNode 
 export type DiagnoseOutcome = "success" | "timeout" | "failed";
 
 /**
- * 诊断的外壳：规则、隧道、转发链三处「诊断」共用。
+ * 诊断的外壳：规则、隧道、转发链三处「诊断」共用（2.3.506 起三处的页签和底部按钮也一样：延迟测试 /
+ * 一键诊断 / 延迟记录 …，底部是 DiagnoseSubjectActions）。服务端对应的统一入口是 diagnostics.*。
  *
  * 原来三处各写一份，而且同一件事有四个名字：卡片上的按钮叫「诊断」，点开标题叫「延迟探测」，
  * 底部按钮叫「链路测试」，测的时候写「探测中…」。用户按的是「诊断」，就一路叫诊断。
@@ -188,6 +191,40 @@ export function DiagnoseDialog({
         ) : null}
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** 「查看拓扑」聚焦用的参数名（/topology?rule= / ?tunnel= / ?group=）。 */
+const TOPOLOGY_FOCUS_KEY: Record<FaultBundleKind, string> = { rule: "rule", tunnel: "tunnel", forwardGroup: "group" };
+
+/** 网络测试页「iperf3 对拉」，先选好这条隧道（Iperf3PairPanel 的 initialTunnelId）。 */
+export function tunnelSpeedTestHref(tunnelId: number) {
+  return `/looking-glass?method=iperf3-pair&tunnel=${Math.trunc(Number(tunnelId))}`;
+}
+
+/**
+ * 诊断框底部那一排（2.3.506 起规则、隧道、转发链三处一个样）：导出故障包、查看拓扑，隧道多一个「测带宽」
+ * （打开网络测试页的 iperf3 对拉、选好这条隧道 —— 和线路详情的「逐段测带宽」同一套测法、同一种结果）。
+ * onLeave：跳去别的页之前把诊断框关掉。
+ */
+export function DiagnoseSubjectActions({ kind, id, onLeave, speedTest = false }: { kind: FaultBundleKind; id: number; onLeave: () => void; speedTest?: boolean }) {
+  const faultBundle = useFaultBundleExport();
+  const [, setLocation] = useLocation();
+  const go = (href: string) => { onLeave(); setLocation(href); };
+  return (
+    <>
+      <Button type="button" variant="outline" size="sm" className="gap-1.5" disabled={faultBundle.pending} onClick={() => { void faultBundle.exportBundle(kind, Number(id)); }}>
+        <FileJson className="h-3.5 w-3.5" />导出故障包
+      </Button>
+      <Button type="button" variant="outline" size="sm" className="gap-1.5" onClick={() => go(`/topology?${TOPOLOGY_FOCUS_KEY[kind]}=${Number(id)}`)}>
+        <Network className="h-3.5 w-3.5" />查看拓扑
+      </Button>
+      {speedTest && kind === "tunnel" ? (
+        <Button type="button" variant="outline" size="sm" className="gap-1.5" onClick={() => go(tunnelSpeedTestHref(id))} data-testid="diagnose-speed-test">
+          <Gauge className="h-3.5 w-3.5" />测带宽
+        </Button>
+      ) : null}
+    </>
   );
 }
 

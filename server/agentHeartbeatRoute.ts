@@ -68,9 +68,11 @@ import { hasQueuedPluginAgentTasks, takePluginAgentTasks } from "./pluginAgentTa
 import { hasPendingMimicInstallTask, hasQueuedMimicInstallTask, takeMimicInstallTask } from "./mimicInstallTasks";
 import { getAgentPluginInventory, updateAgentPluginInventory } from "./agentPluginInventory";
 import { getAgentHostFromRequest, getAgentHostIdentityFromRequest, getAgentPresenceHostFromRequest } from "./agentAuth";
-import { liveMetricsIntervalFor, liveSampleFromCompactMetrics, recordHostLiveSample } from "./hostLiveMetrics";
+import { isHostLiveFocused, liveMetricsIntervalFor, liveSampleFromCompactMetrics, recordHostLiveSample } from "./hostLiveMetrics";
 import { normalizeAgentText, normalizeNetworkInterface } from "./agentInputValidation";
 import { pruneMapEntries, setBoundedMapValue } from "./boundedCache";
+import { onHostDeleted, onRuleDeleted } from "./entityCleanup";
+import { ignoreErrorWith } from "./ignoredError";
 import { isValidTlsServerName } from "./nginxTlsInput";
 import { mergeAgentReportedAddress, observedAgentAddress } from "./agentAddressState";
 import { recordHostObservedAddress } from "./hostObservedAddress";
@@ -164,9 +166,7 @@ import { hostBandwidthHintMbps } from "@shared/linkWeights";
 import { forwardXExitStrategy, gostExitSelector, shouldUseFastTunnelFailover } from "./tunnelExitStrategy";
 import {
   getMimicLifecycleRevisionSignature,
-  hashNormalizedConfig,
   latestConfigRevision,
-  normalizeConfigForHash,
   recordConfigAuditEvent,
   type MimicLifecycleResource,
 } from "./configAudit";
@@ -175,7 +175,24 @@ import { mimicRuntimeLifecycles } from "./mimicRuntimeLifecycle";
 import { buildTunnelRuleLatencyProbe } from "./ruleLatency";
 import { selectTunnelDialAddress, selectTunnelHopDialAddress } from "./tunnelAddressSelection";
 import { DnsRuntimeGenerationTracker } from "./dnsRuntimeGeneration";
-import { selectResolvedTargetIp } from "./dnsTargetResolution";
+import { resolveTargetIpWithTimeout, selectResolvedTargetIp } from "./dnsTargetResolution";
+import {
+  AGENT_STATE_SECTION_NAMES,
+  normalizeAgentLocalRuntimeState,
+  normalizeAgentStateSignatures,
+  normalizeMimicEnvironment,
+  normalizeRuntimeStateSignature,
+  stableStateSignature,
+  type AgentLocalRuntimeRuleState,
+  type AgentLocalRuntimeServiceState,
+  type AgentLocalRuntimeState,
+  type AgentLocalRuntimeTunnelState,
+  type AgentStateSectionName,
+  type AgentStateSignatures,
+} from "./agentHeartbeatReport";
+import { stableActionSignatureHash, stableDesiredStateHash, withDesiredStateConfigHash } from "./agentDesiredStateHash";
+// 这几个以前直接从本文件导出，测试和别的模块还按老路径引用。
+export { stableStateSignature, stableDesiredStateHash, withDesiredStateConfigHash };
 import { createResolvedTargetGate } from "./ruleTargetPolicy";
 import { buildForwardXMimicConfig } from "./mimicConfig";
 import { gateForwardRulesForRuntime } from "./linkAccessView";
@@ -268,6 +285,35 @@ function runtimeBool(value: unknown, fallback = false): boolean {
   return fallback;
 }
 
+/** 主机删掉后清掉心跳里按这台主机记的缓存（见 server/entityCleanup.ts）。 */
+export function forgetAgentHeartbeatHost(hostId: number) {
+  const id = Number(hostId);
+  for (const cache of [
+    nginxRuntimeLogCache,
+    mimicRuntimeLogCache,
+    agentActionBatchCache,
+    agentDesiredStateSendCache,
+    agentDesiredDispatchAuditHash,
+    agentHeartbeatSummaryLogCache,
+    agentOrphanPortStreakCache,
+    agentLocalRuntimeStateCache,
+  ] as Map<number, unknown>[]) cache.delete(id);
+  const prefix = `${id}:`;
+  for (const cache of [agentRuntimeSyncActionCache, agentPluginSyncActionCache] as Map<string, unknown>[]) {
+    for (const key of Array.from(cache.keys())) if (key.startsWith(prefix)) cache.delete(key);
+  }
+}
+
+/** 规则删掉后清掉它的目标域名解析缓存。 */
+export function forgetAgentHeartbeatRule(ruleId: number) {
+  const id = Number(ruleId);
+  resolvedIpCache.delete(id);
+  resolvedIpCheckedAt.delete(id);
+}
+
+onHostDeleted(forgetAgentHeartbeatHost);
+onRuleDeleted(forgetAgentHeartbeatRule);
+
 export function pruneAgentHeartbeatCaches(now = Date.now()) {
   const stale = (timestamp: number) => !Number.isFinite(timestamp) || now - timestamp >= AGENT_CACHE_IDLE_TTL_MS;
   for (const [ruleId, checkedAt] of resolvedIpCheckedAt) {
@@ -344,18 +390,6 @@ const GOST_UDP_LISTENER_METADATA = {
   readQueueSize: "256",
   backlog: "128",
 } as const;
-const AGENT_STATE_SECTION_NAMES = [
-  "runningRules",
-  "ruleLatencyProbes",
-  "tunnelProbes",
-  "forwardGroupProbes",
-  "hostProbeServices",
-  "guardRules",
-  "dnsWatch",
-  // 共享 TLS 入站（SNI 分流）的路由表，见 server/tlsInboundRuntime.ts。老 Agent 不认这个键，照样回签名也无妨。
-  "sniInbounds",
-] as const;
-const AGENT_STATE_SIGNATURE_SCHEMA = "v2";
 
 export function buildGostRuleListener(protocol: "tcp" | "udp") {
   return protocol === "udp"
@@ -515,151 +549,8 @@ type AgentDnsWatch = {
   scope: string;
   refId?: number;
 };
-type AgentStateSectionName = typeof AGENT_STATE_SECTION_NAMES[number];
-type AgentStateSignatures = Partial<Record<AgentStateSectionName, string>>;
-type AgentLocalRuntimeRuleState = {
-  port: number;
-  ruleId: number;
-  tunnelId?: number;
-  forwardType: string;
-  targetIp?: string;
-  targetPort?: number;
-  protocol?: string;
-  transportVersion?: "v1" | "v2";
-  ready?: boolean;
-};
-type AgentLocalRuntimeTunnelState = {
-  port: number;
-  tunnelId: number;
-  forwardType: string;
-  transportVersion?: "v1" | "v2";
-  wireGuardPlane?: "kernel" | "netstack";
-  ready?: boolean;
-};
-// Agent 2.2.220 起单独上报每条跑着的 V2 隧道数据面（入口机上没有隧道监听端口，
-// 以前只有出口通过 tunnels[] 报得出来）。
-type AgentLocalRuntimeWireGuardPlaneState = {
-  tunnelId: number;
-  plane: "kernel" | "netstack";
-};
-type AgentLocalRuntimeServiceState = {
-  name: string;
-  active: boolean;
-  hasWork: boolean;
-  status?: string;
-  message?: string;
-  hooksReady?: boolean;
-  connectionState?: string;
-};
-type AgentLocalRuntimeState = {
-  rules: AgentLocalRuntimeRuleState[];
-  tunnels: AgentLocalRuntimeTunnelState[];
-  services: AgentLocalRuntimeServiceState[];
-  wireGuardPlanes?: AgentLocalRuntimeWireGuardPlaneState[];
-};
 const agentLocalRuntimeStateCache = new Map<number, { signature: string; state: AgentLocalRuntimeState; updatedAt: number }>();
 
-function stableActionSignature(actions: any[]) {
-  return JSON.stringify(actions.map((action: any) => ({
-    op: action?.op || "",
-    statusType: action?.statusType || "",
-    ruleId: Number(action?.ruleId || 0),
-    tunnelId: Number(action?.tunnelId || 0),
-    pluginId: String(action?.pluginId || ""),
-    forwardType: action?.forwardType || "",
-    sourcePort: Number(action?.sourcePort || 0),
-    targetIp: String(action?.targetIp || ""),
-    targetPort: Number(action?.targetPort || 0),
-    protocol: action?.protocol || "",
-    commands: action?.commands || [],
-    removalCommands: action?.removalCommands || [],
-    removalToken: action?.removalToken || "",
-    managedConfigs: action?.managedConfigs || [],
-    portAccessLimits: action?.portAccessLimits || [],
-    rollbackCommands: action?.rollbackCommands || [],
-    preCommands: action?.preCommands || [],
-    postCommands: action?.postCommands || [],
-    serviceName: action?.serviceName || action?.svcName || "",
-    serviceNameExtra: action?.serviceNameExtra || "",
-    unit: action?.unit || "",
-    unitExtra: action?.unitExtra || "",
-    fxp: action?.fxp || null,
-    wireGuard: action?.wireGuard || null,
-    failover: action?.failover || null,
-    forceRuntimeSync: action?.forceRuntimeSync === true,
-    requiresMimicEnvironment: action?.requiresMimicEnvironment === true,
-  })));
-}
-
-/*
-  下发缓存（批次签发时间、期望状态是否要重发、运行时同步动作）只需要判断「和上次一样不一样」，
-  不需要签名原文。原文是整批动作连同全部命令、托管配置的 JSON，一台机器几十上百 KB，
-  乘上几千台机器常驻在内存里；这里只存它的 sha256，比较结果不变。
-*/
-function stableActionSignatureHash(actions: any[], prefix = "") {
-  return crypto.createHash("sha256").update(prefix).update(stableActionSignature(actions)).digest("hex");
-}
-
-function canonicalizeStateSection(value: any): any {
-  if (Array.isArray(value)) {
-    return value
-      .map((item) => {
-        const canonicalValue = canonicalizeStateSection(item);
-        return { canonicalValue, sortKey: JSON.stringify(canonicalValue) };
-      })
-      .sort((a, b) => a.sortKey.localeCompare(b.sortKey))
-      .map(({ canonicalValue }) => canonicalValue);
-  }
-  if (value && typeof value === "object") {
-    return Object.keys(value)
-      .sort()
-      .reduce((acc: Record<string, any>, key) => {
-        const item = value[key];
-        if (typeof item !== "undefined") acc[key] = canonicalizeStateSection(item);
-        return acc;
-      }, {});
-  }
-  return value;
-}
-
-export function stableStateSignature(value: any) {
-  return crypto
-    .createHash("sha256")
-    .update(`${AGENT_STATE_SIGNATURE_SCHEMA}\n${JSON.stringify(canonicalizeStateSection(value))}`)
-    .digest("hex");
-}
-
-/*
-  整批期望状态的摘要 = hashConfig(去掉 issuedAt / configHash 的动作数组)。
-  hashConfig 对数组就是逐项规整再 JSON 拼接，而规整是逐键独立的，所以「先规整整条动作、
-  再去掉这两个键」和「先去掉再规整」得到同一个对象。心跳里每条动作算 configHash 时已经
-  规整过一次，把去键后的 JSON 片段记在 normalizedPieces 里，这里直接拼，不再整批重新规整；
-  没给片段（或动作不在里面）时就地规整，结果逐字节相同。
-*/
-function desiredStateActionPiece(normalizedAction: any) {
-  const { issuedAt: _issuedAt, configHash: _configHash, ...stableAction } = normalizedAction || {};
-  return JSON.stringify(stableAction);
-}
-
-// 给一条动作补上 configHash（= hashConfig(action)），顺手把它去键后的规整片段记进 pieces。
-export function withDesiredStateConfigHash<T extends object>(action: T, pieces: WeakMap<object, string>) {
-  const hashInput = normalizeConfigForHash(action);
-  const hashedAction = { ...action, configHash: hashNormalizedConfig(hashInput) };
-  pieces.set(hashedAction, desiredStateActionPiece(hashInput));
-  return hashedAction;
-}
-
-export function stableDesiredStateHash(actions: any[], normalizedPieces?: WeakMap<object, string>) {
-  const hash = crypto.createHash("sha256");
-  hash.update("[");
-  actions.forEach((action: any, index: number) => {
-    if (index > 0) hash.update(",");
-    const cached = action && typeof action === "object" ? normalizedPieces?.get(action) : undefined;
-    hash.update(cached ?? desiredStateActionPiece(normalizeConfigForHash(action)));
-  });
-  hash.update("]");
-  return hash.digest("hex");
-}
 
 export function selectForwardChainListenerPort(
   childRules: any[],
@@ -752,91 +643,6 @@ function agentPluginInventorySignature(inventory: ReturnType<typeof getAgentPlug
   });
 }
 
-function normalizeAgentStateSignatures(input: any): AgentStateSignatures {
-  if (!input || typeof input !== "object") return {};
-  const output: AgentStateSignatures = {};
-  for (const name of AGENT_STATE_SECTION_NAMES) {
-    const value = String(input[name] || "").trim();
-    if (/^[a-f0-9]{64}$/i.test(value)) output[name] = value.toLowerCase();
-  }
-  return output;
-}
-
-function normalizeRuntimeStateSignature(input: any) {
-  const value = String(input || "").trim();
-  return /^[a-f0-9]{1,128}$/i.test(value) ? value.toLowerCase() : "";
-}
-
-function normalizeMimicEnvironment(input: any) {
-  if (!input || typeof input !== "object" || typeof input.available !== "boolean") return null;
-  return {
-    available: input.available === true,
-    version: normalizeAgentText(input.version, 64) || null,
-    status: normalizeAgentText(input.status, 64) || (input.available ? "ready" : "unknown"),
-    message: normalizeAgentText(input.message, 512) || null,
-  };
-}
-
-function normalizeAgentLocalRuntimeState(input: any): AgentLocalRuntimeState | null {
-  if (!input || typeof input !== "object") return null;
-  const rules = Array.isArray(input.rules)
-    ? input.rules
-      .map((item: any) => ({
-        port: Number(item?.port || 0),
-        ruleId: Number(item?.ruleId || 0),
-        tunnelId: Number(item?.tunnelId || 0) || undefined,
-        forwardType: String(item?.forwardType || "").trim(),
-        targetIp: String(item?.targetIp || "").trim() || undefined,
-        targetPort: Number(item?.targetPort || 0) || undefined,
-        protocol: String(item?.protocol || "").trim() || undefined,
-        transportVersion: String(item?.transportVersion || "").trim().toLowerCase() === "v2"
-          ? "v2" as const
-          : String(item?.transportVersion || "").trim().toLowerCase() === "v1"
-            ? "v1" as const
-            : undefined,
-        ready: item?.ready !== false,
-      }))
-      .filter((item: AgentLocalRuntimeRuleState) => item.port > 0)
-    : [];
-  const tunnels = Array.isArray(input.tunnels)
-    ? input.tunnels
-      .map((item: any) => ({
-        port: Number(item?.port || 0),
-        tunnelId: Number(item?.tunnelId || 0),
-        forwardType: String(item?.forwardType || "").trim(),
-        transportVersion: String(item?.transportVersion || "").trim().toLowerCase() === "v2"
-          ? "v2" as const
-          : String(item?.transportVersion || "").trim().toLowerCase() === "v1"
-            ? "v1" as const
-            : undefined,
-        wireGuardPlane: (["kernel", "netstack"] as const).find((plane) => plane === String(item?.wireGuardPlane || "").trim().toLowerCase()),
-        ready: item?.ready !== false,
-      }))
-      .filter((item: AgentLocalRuntimeTunnelState) => item.port > 0 && item.tunnelId > 0)
-    : [];
-  const services = Array.isArray(input.services)
-    ? input.services
-      .map((item: any) => ({
-        name: String(item?.name || "").trim(),
-        active: item?.active === true,
-        hasWork: item?.hasWork === true,
-        status: normalizeAgentText(item?.status, 32) || undefined,
-        message: normalizeAgentText(item?.message, 512) || undefined,
-        hooksReady: typeof item?.hooksReady === "boolean" ? item.hooksReady : undefined,
-        connectionState: normalizeAgentText(item?.connectionState, 32) || undefined,
-      }))
-      .filter((item: AgentLocalRuntimeServiceState) => !!item.name)
-    : [];
-  const wireGuardPlanes = Array.isArray(input.wireGuardPlanes)
-    ? input.wireGuardPlanes
-      .map((item: any) => ({
-        tunnelId: Number(item?.tunnelId || 0),
-        plane: (["kernel", "netstack"] as const).find((plane) => plane === String(item?.plane || "").trim().toLowerCase()),
-      }))
-      .filter((item: any): item is AgentLocalRuntimeWireGuardPlaneState => item.tunnelId > 0 && !!item.plane)
-    : [];
-  return { rules, tunnels, services, wireGuardPlanes };
-}
 
 function resolveAgentLocalRuntimeState(hostId: number, signature: string, reported: AgentLocalRuntimeState | null) {
   const id = Number(hostId);
@@ -1355,19 +1161,9 @@ function addDnsWatch(watches: Map<string, AgentDnsWatch>, host: string, scope: s
   watches.set(key, { host: value, scope, ...(refId ? { refId } : {}) });
 }
 
+// 解析失败或超过 TARGET_DNS_RESOLVE_TIMEOUT_MS 都返回原值，由 selectResolvedTargetIp 回落到上次结果。
 async function resolveTargetIp(raw: string): Promise<string> {
-  const trimmed = String(raw || "").trim();
-  if (!trimmed) return trimmed;
-  if (isIP(trimmed)) return trimmed;
-  try {
-    const ips = await resolve4(trimmed);
-    if (ips.length > 0) return ips[0];
-  } catch { /* fall through */ }
-  try {
-    const ips = await resolve6(trimmed);
-    if (ips.length > 0) return ips[0];
-  } catch { /* fall through */ }
-  return trimmed; // 解析失败返回原值
+  return await resolveTargetIpWithTimeout(raw, { resolve4, resolve6 });
 }
 
 async function resolveTargetIpCached(ruleId: number, raw: string, force = false): Promise<string> {
@@ -1874,7 +1670,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       appendPanelLog("info", `[AgentDNS] host=${host.id} reported DNS change for ${dnsChangedReports.length} watched name(s); rule-specific refresh only`);
     }
 
-    await db.insertHostMetric({
+    // 30 秒内同一台只写一行（见 metricsRepository.insertHostMetricSampled）；有人正在看实时指标时每次都写。
+    await db.insertHostMetricSampled({
       hostId: host.id,
       cpuUsage: cpuUsage ?? null,
       memoryUsage: memoryUsage ?? null,
@@ -1890,7 +1687,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       uptime: uptime ?? null,
       tcpConnections: tcpConnections ?? null,
       udpConnections: udpConnections ?? null,
-    });
+    }, { force: isHostMetricsWatching(host.id) || isHostLiveFocused(host.id) });
     // 资源告警：CPU / 内存 / 磁盘持续超过阈值时通知管理员（不阻塞心跳）
     observeHostResourceSample(host, { cpu: cpuUsage ?? null, memory: memoryUsage ?? null, disk: diskUsage ?? null });
     // OOM / 服务崩溃（Agent ≥ 2.2.230 才报这两项）
@@ -3225,12 +3022,20 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       const ids = Array.from(new Set(tunnelExitEndpointsForRule(rule, tunnel).map((endpoint) => endpoint.exitHostId).filter((id) => id > 0)));
       return ids.length > 0 ? ids : [Number(tunnel.exitHostId || rule?.hostId || host.id)];
     };
+    // 先把要看版本的机器收齐，一次查完（以前每台各查一次）。
+    const missingSchedulerHostIds = new Set<number>();
     for (const rule of [...agentAllRules, ...agentHostRules] as any[]) {
       if (!rule?.failoverEnabled || !routeGroupSchedulerAgentVersion(rule?.protocol, routeTunnelOf(rule)?.mode)) continue;
       for (const schedulerHostId of routeSchedulerCandidateHostIds(rule)) {
-        if (routeSchedulerAgentVersions.has(schedulerHostId)) continue;
-        const schedulerHost = await db.getHostById(schedulerHostId).catch(() => null) as any;
-        routeSchedulerAgentVersions.set(schedulerHostId, String(schedulerHost?.agentVersion || ""));
+        if (!routeSchedulerAgentVersions.has(schedulerHostId)) missingSchedulerHostIds.add(schedulerHostId);
+      }
+    }
+    if (missingSchedulerHostIds.size > 0) {
+      const schedulerHosts = await db.getHostsByIds(Array.from(missingSchedulerHostIds))
+        .catch(ignoreErrorWith("AgentHeartbeat scheduler hosts", [] as any[])) as any[];
+      const versionById = new Map(schedulerHosts.map((row: any) => [Number(row.id), String(row?.agentVersion || "")]));
+      for (const schedulerHostId of missingSchedulerHostIds) {
+        routeSchedulerAgentVersions.set(schedulerHostId, versionById.get(schedulerHostId) || "");
       }
     }
     const routeSchedulerAgentAtLeast = (rule: any, version: string) => routeSchedulerHostIds(rule).every((schedulerHostId) => (
@@ -3676,7 +3481,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     let egressHintPromise: Promise<number> | null = null;
     const egressHint = () => {
       if (!egressHintPromise) {
-        egressHintPromise = db.hostEgressShapingHint(Number(host.id)).catch(() => 0);
+        egressHintPromise = db.hostEgressShapingHint(Number(host.id)).catch(ignoreErrorWith("AgentHeartbeat egress hint", 0));
       }
       return egressHintPromise;
     };
@@ -3956,7 +3761,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       if ((normalized !== "least_load" && normalized !== "ip_hash") || hostIds.length < 2) return null;
       return exitGroupCapacities(strategy, await exitBandwidthsForHostIds(hostIds));
     };
-    const forwardXEntryRoutes = async (rule: any, tunnel: any) => {
+    const forwardXEntryRoutes = async (_rule: any, tunnel: any) => {
       const routes: Array<{ hostId: number; host: string; port: number; udpPort: number; key: string }> = [];
       const hops = tunnelHopsByTunnelId.get(Number(tunnel.id));
       if (Array.isArray(hops) && tunnelRelayUsesParallelRelays(tunnel, hops)) {

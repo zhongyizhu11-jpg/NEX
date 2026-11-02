@@ -110,17 +110,6 @@ export function formatHostAddressWithPort(address: string, port: number | string
   return `${value}:${port}`;
 }
 
-export function getHostEntryAddressText(
-  host: HostEntryAddressSource | null | undefined,
-  port?: number | string,
-): string {
-  const entries = getHostEntryAddresses(host);
-  if (entries.length === 0) return "";
-  return entries
-    .map((entry) => (port === undefined ? entry.value : formatHostAddressWithPort(entry.value, port)))
-    .join(" / ");
-}
-
 /**
  * 这台机器的 Agent 到底装没装上。
  *

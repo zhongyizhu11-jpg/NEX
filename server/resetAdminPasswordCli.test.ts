@@ -18,8 +18,8 @@ test("password reset CLI changes only the selected administrator and revokes ses
     try {
       await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
       await schema.ensureDatabaseSchema();
-      await runtime.executeRaw('INSERT INTO "users" ("id", "username", "password", "name", "email", "role", "accountEnabled", "twoFactorEnabled") VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [1, "admin@example.com", password.hashPassword("old-password"), "Admin", "admin@example.com", "admin", 0, 1]);
-      await runtime.executeRaw('INSERT INTO "users" ("id", "username", "password", "name", "role", "accountEnabled") VALUES (?, ?, ?, ?, ?, ?)', [2, "other-admin", password.hashPassword("other-password"), "Other", "admin", 1]);
+      await runtime.executeRaw('INSERT INTO "users" ("id", "username", "password", "name", "email", "role", "accountEnabled", "twoFactorEnabled") VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [1, "admin@example.com", await password.hashPassword("old-password"), "Admin", "admin@example.com", "admin", 0, 1]);
+      await runtime.executeRaw('INSERT INTO "users" ("id", "username", "password", "name", "role", "accountEnabled") VALUES (?, ?, ?, ?, ?, ?)', [2, "other-admin", await password.hashPassword("other-password"), "Other", "admin", 1]);
       const sessions = await import(url("server/repositories/sessionRepository.ts"));
       const session = await import(url("server/session.ts"));
       for (const [kind, sid] of [["browser", "browser-1"], ["mobile", "mobile-1"], ["telegram", "telegram-1"]]) {
@@ -59,15 +59,15 @@ test("password reset CLI changes only the selected administrator and revokes ses
     try {
       await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
       const admin = await users.getUserById(1);
-      assert.equal(password.verifyPassword("new-password-123", admin.password), true);
-      assert.equal(password.verifyPassword("old-password", admin.password), false);
+      assert.equal(await password.verifyPassword("new-password-123", admin.password), true);
+      assert.equal(await password.verifyPassword("old-password", admin.password), false);
       assert.equal(Boolean(admin.accountEnabled), false);
       assert.equal(Boolean(admin.twoFactorEnabled), true);
       const sessions = await runtime.queryRaw('SELECT "revokedAt", "revokeReason" FROM "auth_sessions" WHERE "userId" = 1');
       assert.equal(sessions.length, 3);
       assert.ok(sessions.every((row) => row.revokedAt && row.revokeReason === "password_reset_cli"));
       const other = await users.getUserById(2);
-      assert.equal(password.verifyPassword("other-password", other.password), true);
+      assert.equal(await password.verifyPassword("other-password", other.password), true);
     } finally {
       await runtime.closeDatabase();
     }
@@ -98,7 +98,7 @@ test("reset CLI rejects ambiguous administrator selection", () => {
     try {
       await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
       await schema.ensureDatabaseSchema();
-      await runtime.executeRaw('INSERT INTO "users" ("id", "username", "password", "role") VALUES (?, ?, ?, ?), (?, ?, ?, ?)', [1, "first-admin", password.hashPassword("first"), "admin", 2, "second-admin", password.hashPassword("second"), "admin"]);
+      await runtime.executeRaw('INSERT INTO "users" ("id", "username", "password", "role") VALUES (?, ?, ?, ?), (?, ?, ?, ?)', [1, "first-admin", await password.hashPassword("first"), "admin", 2, "second-admin", await password.hashPassword("second"), "admin"]);
     } finally {
       await runtime.closeDatabase();
     }

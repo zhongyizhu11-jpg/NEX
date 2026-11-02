@@ -12,27 +12,34 @@ import { topologyEdgeWidth, topologyNodeTone, topologyRoleText } from "./topolog
   画和手势。拖动超过 4px 才算拖（之前的按下 / 抬起仍然是点击），所以点节点、点连线不会被平移吃掉。
 */
 
+/*
+  颜色全走主题令牌（SVG 属性里直接写 var()，换主题、切深浅色跟着变，不用重画）：
+  连线按「哪一种」上色用分类色（--fx-cat-* / 图表色），状态只用状态色（红 / 琥珀），两套不混。
+*/
 export const TOPOLOGY_KIND_COLORS: Record<TopologyEdge["kind"], string> = {
-  rule: "#64748b",
-  tunnel: "#2563eb",
-  chain: "#7c3aed",
-  routePath: "#d97706",
-  subscription: "#0d9488",
-  group: "#4f46e5",
+  rule: "var(--fx-standby)",
+  tunnel: "var(--fx-path)",
+  chain: "var(--fx-chart-3)",
+  routePath: "var(--fx-cat-orange)",
+  subscription: "var(--fx-cat-teal)",
+  group: "var(--fx-cat-indigo)",
 };
 
-const STATUS_COLORS = { failed: "#dc2626", degraded: "#ea580c" } as const;
+const STATUS_COLORS = { failed: "var(--fx-down)", degraded: "var(--fx-warn)" } as const;
+
+/** 没接上 / 被遮住的节点：比「目标」那种灰再淡一档 */
+const FADED_GRAY = "color-mix(in srgb, var(--fx-standby) 60%, transparent)";
 
 export const TOPOLOGY_TONE_COLORS: Record<ReturnType<typeof topologyNodeTone>, string> = {
-  entry: "#0284c7",
-  relay: "#7c3aed",
-  exit: "#d97706",
-  landing: "#059669",
-  target: "#64748b",
-  inbound: "#0d9488",
-  group: "#4f46e5",
-  masked: "#94a3b8",
-  idle: "#94a3b8",
+  entry: "var(--fx-chart-1)",
+  relay: "var(--fx-chart-3)",
+  exit: "var(--fx-cat-orange)",
+  landing: "var(--fx-chart-5)",
+  target: "var(--fx-standby)",
+  inbound: "var(--fx-cat-teal)",
+  group: "var(--fx-cat-indigo)",
+  masked: FADED_GRAY,
+  idle: FADED_GRAY,
 };
 
 export function topologyEdgeColor(edge: Pick<TopologyEdge, "kind" | "status">) {
@@ -405,7 +412,7 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, TopologyCanvasPro
             const tone = TOPOLOGY_TONE_COLORS[topologyNodeTone(node)];
             const selected = selectedId === node.id;
             const flag = node.country ? countryFlagLabel(node.country) : "";
-            const statusColor = node.online === null ? null : node.online ? "#16a34a" : "#dc2626";
+            const statusColor = node.online === null ? null : node.online ? "var(--fx-healthy)" : "var(--fx-down)";
             return (
               <g
                 key={node.id}

@@ -1,14 +1,9 @@
 import { Link } from "wouter";
 
 import { AUTO_IP_CHANGE_ROUTE, IP_CHANGE_STATE_LABELS, normalizeIpChangeState } from "@shared/ipChange";
+import { formatDateTime as formatTime } from "@/lib/formatTime";
 import { trpc } from "@/lib/trpc";
 import { Row, Section } from "./HostDetailDialog";
-
-function formatTime(value: unknown) {
-  if (!value) return "—";
-  const date = new Date(value as any);
-  return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString("zh-CN", { hour12: false });
-}
 
 /**
  * 主机详情里「自动换 IP」那一节：只有管理员、插件开着、这台主机配置过时才出现。

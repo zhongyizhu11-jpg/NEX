@@ -60,8 +60,8 @@ export const JSON_RPC_INTERNAL_ERROR = -32603;
 
 // ---------- 结果整理 ----------
 
-/** 不管哪个过程返回了什么，这些字段都不交给 AI：令牌、密码、密钥类。 */
-const SENSITIVE_KEY = /token|secret|password|privatekey|private_key|apikey|api_key|cookie|psk|uuid$/i;
+/** 不管哪个过程返回了什么，这些字段都不交给 AI：令牌、密码、密钥类，证书 PEM 和自定义请求头（多半带鉴权）。 */
+const SENSITIVE_KEY = /token|secret|password|privatekey|private_key|apikey|api_key|cookie|psk|uuid$|pem|header|authorization/i;
 const MAX_STRING = 2000;
 const MAX_ARRAY = 200;
 

@@ -20,6 +20,8 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
+  /* 控件里面那一层小圆角（分段选项、菜单项、小方块徽标），每个主题自己定，不再写死 rounded-[6px] */
+  --radius-inner: var(--fx-radius-inner);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -82,6 +84,8 @@
   --color-path-line: var(--fx-path-line);
   --color-delivery: var(--fx-delivery);
   --color-delivery-soft: var(--fx-delivery-soft);
+  /* 强调色实底上的字：text-on-accent，不写死 text-white（深色主题里强调色是浅的） */
+  --color-on-accent: var(--fx-on-accent);
 
   /*
     六档字号接进 Tailwind：text-display / text-metric / text-section /

@@ -70,7 +70,7 @@ function UserOnlineIpsBody({ userId, onNavigate }: { userId: number; onNavigate:
   if (!data) return null;
   const earlier = data.recent.filter((item) => !item.online);
   return (
-    <div className="flex max-h-[65vh] min-w-0 flex-col gap-3 overflow-y-auto">
+    <div className="flex max-h-[65svh] min-w-0 flex-col gap-3 overflow-y-auto">
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <span className="text-[15px] font-semibold text-foreground">在线 {limitText(data.onlineCount, data.limit)}</span>
         <span className="text-[12.5px] text-muted-foreground">24 小时内用过 {data.distinct24h} 个 IP</span>

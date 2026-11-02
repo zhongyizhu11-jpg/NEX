@@ -48,8 +48,8 @@ GOST_SS2_VERSION="${GOST_SS2_VERSION:-0.1.1}"
 GOST_SS2_VERSION="${GOST_SS2_VERSION#v}"
 NEX_GOST_BUILD="${NEX_GOST_BUILD:-nex5}"
 GOARCHES="${GOARCHES:-amd64 arm64}"
-# gost 3.2.6 的 go.mod 要求 Go >= 1.24，而 Agent 和发布流程用的是 1.23（GOTOOLCHAIN=local）。
-# 只给 gost 这一步指定工具链，go 命令会从 proxy.golang.org 自动下载。和官方发布包同一版本。
+# gost 3.2.6 的 go.mod 要求 Go >= 1.24；发布流程用 1.26（GOTOOLCHAIN=local），这里仍单独指定工具链，和官方发布包同一版本。
+# go 命令会从 proxy.golang.org 自动下载这个工具链。
 GOST_GO_TOOLCHAIN="${GOST_GO_TOOLCHAIN:-go1.25.4}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

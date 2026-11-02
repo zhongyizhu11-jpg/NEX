@@ -51,6 +51,7 @@ import { assertNoDirectSelfForwardLoop } from "../selfForwardLoop";
 import * as db from "../db";
 import { handleTrafficBillingShortfall } from "../trafficBillingRuleBlock";
 import { pushAgentRefresh } from "../agentEvents";
+import { invalidateProxySubCacheForUser } from "../proxySubCache";
 import { forwardTypeSchema } from "./schemas";
 import {
   pushTunnelEndpointRefresh,
@@ -1901,46 +1902,58 @@ export async function createDirectForwardRuleForActor(
     await assertRuleTargetsAllowedForActor(actor, { targetIp: input.targetIp, ...failoverColumns }, { hostId, tunnel: selectedTunnelForRule });
     await assertRouteRelayPortQuota(actor, failoverColumns.routePaths, null);
     const { routeGroup: _routeGroupInput, ...ruleInput } = input;
-    const id = await db.createForwardRule({
-      ...ruleInput,
-      ...failoverColumns,
-      ...proxyProtocol,
-      ...transportTuning,
-      telegramErrorNotifyEnabled: !!input.telegramErrorNotifyEnabled,
-      ...RULE_PROTOCOL_BLOCK_COLUMNS,
-      sourcePort,
-      hostId,
-      targetIp: normalizeRuleTargetIp(input.targetIp, { tunnelId }),
-      gostMode: "direct",
-      gostRelayHost: null,
-      gostRelayPort: null,
-      tunnelId,
-      tunnelExitPort,
-      ...(egressColumns || {}),
-      ...(options.limitColumns || {}),
-      userId: actor.id,
+    /*
+      规则行、订阅自动绑定、隧道出口映射和隧道运行标记在一个事务里写：中途哪一步失败（比如
+      多出口隧道分不到出口端口）都整体回滚，不会留下一条占着端口的半成品规则。
+      通知 Agent、中转同步放在提交之后。
+    */
+    const { id, autoBound, tunnelForPush } = await db.withDatabaseTransaction(async () => {
+      const createdId = await db.createForwardRule({
+        ...ruleInput,
+        ...failoverColumns,
+        ...proxyProtocol,
+        ...transportTuning,
+        telegramErrorNotifyEnabled: !!input.telegramErrorNotifyEnabled,
+        ...RULE_PROTOCOL_BLOCK_COLUMNS,
+        sourcePort,
+        hostId,
+        targetIp: normalizeRuleTargetIp(input.targetIp, { tunnelId }),
+        gostMode: "direct",
+        gostRelayHost: null,
+        gostRelayPort: null,
+        tunnelId,
+        tunnelExitPort,
+        ...(egressColumns || {}),
+        ...(options.limitColumns || {}),
+        userId: actor.id,
+      });
+      // 走 Shadowsocks 出口的规则不自动绑订阅（目标不是落地节点本身）。
+      const bound = egressColumns && egressColumns.egressType !== "none" ? null : await autoBindProxyNodeForRule({
+        ruleId: Number(createdId),
+        userId: actor.id,
+        targetIp: input.targetIp,
+        targetPort: Number(input.targetPort),
+        boundNodeId: Number((input as any).proxyNodeId || 0),
+        isCreate: true,
+      });
+      let tunnelRow: any = null;
+      if (tunnelId) {
+        tunnelRow = await db.getTunnelById(tunnelId);
+        // Mapping reconciliation has its own reservation scope. Release the
+        // primary allocation after the rule row exists so a same-port mapping
+        // is not mistaken for an unrelated in-flight allocation.
+        tunnelExitPortReservation?.release();
+        tunnelExitPortReservation = null;
+        if (tunnelRow) await db.reconcileForwardRuleTunnelExits({ ...input, id: createdId, hostId, tunnelExitPort, sourcePort, tunnelId }, tunnelRow);
+        await db.updateTunnel(tunnelId, { isRunning: false } as any);
+      }
+      return { id: createdId, autoBound: bound, tunnelForPush: tunnelRow };
     });
     await quotaReservation.release();
     quotaReservation = null;
-    // 走 Shadowsocks 出口的规则不自动绑订阅（目标不是落地节点本身）。
-    const autoBound = egressColumns && egressColumns.egressType !== "none" ? null : await autoBindProxyNodeForRule({
-      ruleId: Number(id),
-      userId: actor.id,
-      targetIp: input.targetIp,
-      targetPort: Number(input.targetPort),
-      boundNodeId: Number((input as any).proxyNodeId || 0),
-      isCreate: true,
-    });
+    invalidateProxySubCacheForUser(actor.id);
     if (tunnelId) {
-      const tunnel = await db.getTunnelById(tunnelId);
-      // Mapping reconciliation has its own reservation scope. Release the
-      // primary allocation after the rule row exists so a same-port mapping
-      // is not mistaken for an unrelated in-flight allocation.
-      tunnelExitPortReservation?.release();
-      tunnelExitPortReservation = null;
-      if (tunnel) await db.reconcileForwardRuleTunnelExits({ ...input, id, hostId, tunnelExitPort, sourcePort, tunnelId }, tunnel);
-      await db.updateTunnel(tunnelId, { isRunning: false } as any);
-      if (tunnel) await pushTunnelEndpointRefresh(tunnel, `${options.reasonPrefix || "forward-rule"}-created`);
+      if (tunnelForPush) await pushTunnelEndpointRefresh(tunnelForPush, `${options.reasonPrefix || "forward-rule"}-created`);
     } else {
       pushAgentRefresh(hostId, `${options.reasonPrefix || "forward-rule"}-created`);
     }
@@ -3419,6 +3432,7 @@ export const crudRulesRouter = router({
       }
 
       const { id, routeGroup: _routeGroupInput, ...data } = input;
+      let pinChangeData: Record<string, unknown> | null = null;
       (data as any).hostId = nextHostIdForRule;
       if (input.targetIp !== undefined) (data as any).targetIp = normalizeRuleTargetIp(input.targetIp, { tunnelId: nextTunnelIdForRule });
       if (
@@ -3448,7 +3462,8 @@ export const crudRulesRouter = router({
           targetIp: (data as any).targetIp ?? (rule as any).targetIp,
           targetPort: input.targetPort ?? (rule as any).targetPort,
         }));
-        await recordRoutePinChange(rule, data as any);
+        // 人工指定的变化在下面保存规则的事务里一起记：后面的校验没过就不该留一条「已指定」。
+        pinChangeData = { ...data };
       }
       if (
         input.proxyProtocolReceive !== undefined ||
@@ -3599,7 +3614,7 @@ export const crudRulesRouter = router({
           }
         } else {
           (data as any).tunnelExitPort = null;
-          await db.clearForwardRuleTunnelExits(id);
+          // 出口映射在下面保存规则的事务里清（没有隧道时那里一定会清），这里不提前写库。
         }
       }
        if (dbBool(data.isEnabled)) {
@@ -3701,10 +3716,17 @@ export const crudRulesRouter = router({
         (data as any).isRunning = false;
         if ((rule as any).tunnelId) affectedTunnelIds.add((rule as any).tunnelId);
         if ((data as any).tunnelId) affectedTunnelIds.add((data as any).tunnelId);
-        for (const affectedTunnelId of affectedTunnelIds) {
-          await db.updateTunnel(affectedTunnelId, { isRunning: false } as any);
-        }
       }
+      /*
+        这次保存的数据库写入（隧道运行标记、规则行、订阅绑定、隧道出口映射、人工指定记录）放在
+        一个事务里：中途哪一步失败都整体回滚，不会留下改了一半的规则。通知 Agent、入口桥接、
+        中转同步这些带外部动作的放在提交之后（事务里等它们会占着数据库，也可能被 Agent 读到没提交的数据）。
+      */
+      const bindingChange = await db.withDatabaseTransaction(async () => {
+      for (const affectedTunnelId of affectedTunnelIds) {
+        await db.updateTunnel(affectedTunnelId, { isRunning: false } as any);
+      }
+      if (pinChangeData) await recordRoutePinChange(rule, pinChangeData);
       await db.updateForwardRule(id, data);
       /**
        * 改完目标之后再认一次。
@@ -3718,7 +3740,7 @@ export const crudRulesRouter = router({
       if (explicitNodeId > 0 && !egressActiveAfterSave && explicitNodeId !== Number((rule as any).proxyNodeId || 0)) {
         await db.updateForwardRule(id, { proxyNodeId: explicitNodeId, proxyNodeVisible: true } as any);
       }
-      const bindingChange = egressActiveAfterSave ? null : await autoBindProxyNodeForRule({
+      const bindingChangeInTransaction = egressActiveAfterSave ? null : await autoBindProxyNodeForRule({
         ruleId: Number(id),
         userId: Number((rule as any).userId || ctx.user.id),
         targetIp: data.targetIp ?? (rule as any).targetIp,
@@ -3751,6 +3773,9 @@ export const crudRulesRouter = router({
       } else {
         await db.clearForwardRuleTunnelExits(id);
       }
+      return bindingChangeInTransaction;
+      });
+      invalidateProxySubCacheForUser(Number((rule as any).userId || ctx.user.id));
       // 桥接要在通知旧入口之前落库：旧入口下一次心跳就该拿到「撤规则 + 起桥接」，中间不留空档。
       await applyRuleEntryBridgeSwitch(entryBridgePlan, "forward-rule-entry-bridge");
       // 规则和出口映射都写完之后再通知隧道各端（推送会顺带作废出口机缓存的稳定心跳计划）：

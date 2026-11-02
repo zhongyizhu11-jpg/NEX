@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Download, Pause, Play, Trash2 } from "lucide-react";
 
 import { CollapsibleSection } from "@/components/hosts/HostDetailDialog";
@@ -39,26 +40,36 @@ function HostLogsViewer({ hostId }: { hostId: number }) {
   const [paused, setPaused] = useState(false);
   const [filter, setFilter] = useState("");
   const [lines, setLines] = useState<Line[]>([]);
-  const afterSeqRef = useRef(0);
+  // 已经拿到的最后一个序号，记着是哪个来源的：换来源后到下一次渲染前发出去的请求也不会带错序号。
+  const cursorRef = useRef<{ source: string; seq: number }>({ source, seq: 0 });
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const stickToBottomRef = useRef(true);
+  const utils = trpc.useUtils();
 
   const status = trpc.ops.hostLogs.status.useQuery({ hostId }, { staleTime: 30_000 });
-  const poll = trpc.ops.hostLogs.poll.useQuery(
-    { hostId, source, afterSeq: afterSeqRef.current },
-    {
-      enabled: !paused && !!status.data?.supported,
-      refetchInterval: pollingInterval("live"),
-      refetchIntervalInBackground: false,
-      retry: false,
-      staleTime: 0,
-      placeholderData: (previous) => previous,
+  /*
+    序号不进查询键：以前 afterSeq 放在参数里，每拉到一批键就变一次，缓存里一批一条，看得越久占的内存越多。
+    现在键只有主机和来源，请求时再带上当前序号；不看了（关掉、换来源）这条缓存就丢掉。
+  */
+  const poll = useQuery({
+    queryKey: ["ops.hostLogs.poll", hostId, source],
+    queryFn: () => {
+      const cursor = cursorRef.current;
+      const afterSeq = cursor.source === source ? cursor.seq : 0;
+      return utils.client.ops.hostLogs.poll.query({ hostId, source, afterSeq });
     },
-  );
+    enabled: !paused && !!status.data?.supported,
+    refetchInterval: pollingInterval("live"),
+    refetchIntervalInBackground: false,
+    retry: false,
+    staleTime: 0,
+    gcTime: 0,
+    placeholderData: (previous) => previous,
+  });
 
   // 换来源：清空，重新从头拿。
   useEffect(() => {
-    afterSeqRef.current = 0;
+    cursorRef.current = { source, seq: 0 };
     setLines([]);
   }, [source]);
 
@@ -67,7 +78,8 @@ function HostLogsViewer({ hostId }: { hostId: number }) {
     // 刚换了来源时，上一个来源的回包可能还在路上：不是当前来源的丢掉。
     if (!data || data.source !== source) return;
     if (data.lines.length > 0) {
-      afterSeqRef.current = Math.max(afterSeqRef.current, data.nextSeq);
+      const cursor = cursorRef.current;
+      cursorRef.current = { source, seq: Math.max(cursor.source === source ? cursor.seq : 0, data.nextSeq) };
       setLines((current) => {
         const known = current.length > 0 ? current[current.length - 1].seq : 0;
         const fresh = data.lines.filter((line) => line.seq > known);

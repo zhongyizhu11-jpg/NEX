@@ -16,6 +16,7 @@ import DataSectionError from "@/components/DataSectionError";
 import { clipboardNeedsManualCopy, copyTextToClipboard } from "@/lib/clipboard";
 import { mobileAuth } from "@/lib/mobileAuth";
 import { trpc } from "@/lib/trpc";
+import { usePanelFlags } from "@/hooks/usePanelFlags";
 import { dateLabel, relativeTimeLabel } from "../account/timeLabel";
 
 type Scope = "read" | "full";
@@ -61,7 +62,8 @@ export default function ApiTokensSection(_props: Record<string, never>) {
   const utils = trpc.useUtils();
   const confirm = useConfirmDialog();
   const listQuery = trpc.ops.apiTokens.list.useQuery();
-  const { data: systemSettings } = trpc.system.getSettings.useQuery();
+  // 面板公开地址从 publicInfo 读，不为这一项拉整份 getSettings。
+  const { panelPublicUrl } = usePanelFlags();
   const createMutation = trpc.ops.apiTokens.create.useMutation();
   const revokeMutation = trpc.ops.apiTokens.revoke.useMutation();
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -70,7 +72,7 @@ export default function ApiTokensSection(_props: Record<string, never>) {
   const [expiry, setExpiry] = useState<(typeof EXPIRY_OPTIONS)[number]["value"]>("90");
   const [created, setCreated] = useState<{ token: string; name: string } | null>(null);
 
-  const panelUrl = (String(systemSettings?.panelPublicUrl || "").trim() || mobileAuth.panelOrigin()).replace(/\/+$/, "");
+  const panelUrl = (panelPublicUrl.trim() || mobileAuth.panelOrigin()).replace(/\/+$/, "");
   const mcpUrl = `${panelUrl}/mcp`;
   const tokenPlaceholder = created?.token || "<令牌>";
   const claudeCommand = `claude mcp add --transport http nex ${mcpUrl} --header "Authorization: Bearer ${tokenPlaceholder}"`;
@@ -217,7 +219,7 @@ export default function ApiTokensSection(_props: Record<string, never>) {
             <>
               <DialogHeader>
                 <DialogTitle>新建 API 令牌</DialogTitle>
-                <DialogDescription>令牌能以你的身份调用面板，像密码一样保管。</DialogDescription>
+                <DialogDescription>令牌能以你的身份调用面板，像密码一样保管。改密码、被重置密码或摘掉双重验证后，已有令牌全部失效。</DialogDescription>
               </DialogHeader>
               <div className="space-y-4">
                 <FormField className="space-y-2">

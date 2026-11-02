@@ -7,6 +7,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -173,27 +174,31 @@ func TestNetProfilePendingResultKeptUntilAcked(t *testing.T) {
 	}
 	// 6 小时没到、没有新 runId：不测
 	now = now.Add(time.Hour)
-	calls := 0
-	m.httpGet = func(ctx context.Context, network, url string) (string, error) { calls++; return "", errors.New("down") }
+	// 三类检查并发跑，假的 httpGet 会被几个 goroutine 同时调：计数用原子的。
+	var calls atomic.Int64
+	m.httpGet = func(ctx context.Context, network, url string) (string, error) {
+		calls.Add(1)
+		return "", errors.New("down")
+	}
 	m.Apply(Config{}, ack)
-	if calls != 0 {
+	if calls.Load() != 0 {
 		t.Fatalf("should not re-run before interval")
 	}
 	// 新的 runId：立刻测；同一个 runId 再来不重复测
 	run, _ := json.Marshal(netProfileDirective{RunID: "np-2", LastCheckedAt: now.Unix() - 3600})
 	m.Apply(Config{}, run)
-	if calls == 0 {
+	if calls.Load() == 0 {
 		t.Fatalf("new runId should trigger a run")
 	}
-	before := calls
+	before := calls.Load()
 	m.Apply(Config{}, run)
-	if calls != before {
+	if calls.Load() != before {
 		t.Fatalf("same runId must not run twice")
 	}
 	// 到点了：再测
 	now = now.Add(7 * time.Hour)
 	m.Apply(Config{}, ack)
-	if calls == before {
+	if calls.Load() == before {
 		t.Fatalf("should run again after interval")
 	}
 }

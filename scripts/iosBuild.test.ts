@@ -30,9 +30,9 @@ test('iOS and Android retain the same app identity and web assets', () => {
 test('iOS runtime is pinned to the existing Capacitor runtime', () => {
   const pkg = JSON.parse(read('package.json'));
   const lock = read('pnpm-lock.yaml');
-  assert.equal(pkg.dependencies['@capacitor/ios'], '8.3.4');
-  assert.match(lock, /'@capacitor\/ios@8\.3\.4\(@capacitor\/core@8\.3\.4\)'/);
-  assert.match(read('ios/App/CapApp-SPM/Package.swift'), /exact: "8\.3\.4"/);
+  assert.equal(pkg.devDependencies['@capacitor/ios'], '8.4.3');
+  assert.match(lock, /'@capacitor\/ios@8\.4\.3\(@capacitor\/core@8\.4\.3\)'/);
+  assert.match(read('ios/App/CapApp-SPM/Package.swift'), /exact: "8\.4\.3"/);
   assert.match(read('ios/App/CapApp-SPM/Package.swift'), /CapacitorPreferences/);
 });
 

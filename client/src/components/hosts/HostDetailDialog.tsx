@@ -67,7 +67,8 @@ export function CollapsibleSection({ title, summary, defaultOpen = false, childr
   return (
     <section className="fx-hd-sec" data-open={open ? "" : undefined}>
       <button type="button" className="fx-hd-sec-head" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
-        <h3>{title}</h3>
+        {/* 按钮里只能放短语内容，标题用 span（样子和 h3 那一种一样） */}
+        <span className="fx-hd-sec-title">{title}</span>
         <span className="fx-hd-sec-action">
           {!open && summary ? <span className="min-w-0 truncate text-meta text-muted-foreground">{summary}</span> : null}
           <span className="fx-hd-sec-toggle">

@@ -45,7 +45,7 @@ test("Google 登录在 SQLite 上端到端跑通", () => {
       const tmpId = await db.registerUser({ username: "tmp", password: "", unusablePassword: true, googleSub: "sub-tmp", googleEmail: "tmp@x.io" });
       const tmp = await db.getUserById(tmpId);
       assert.equal(password.hasUsablePassword(tmp.password), false);
-      assert.equal(password.verifyPassword("", tmp.password), false);
+      assert.equal(await password.verifyPassword("", tmp.password), false);
       assert.equal(await db.authenticateUser("tmp", ""), null);
       assert.equal((await repo.getUserByGoogleSub("sub-tmp")).id, tmpId);
       await assert.rejects(repo.linkGoogleAccount(bobId, "sub-tmp", "x@x.io"), /UNIQUE/i, "同一个 sub 不能绑两个账号");

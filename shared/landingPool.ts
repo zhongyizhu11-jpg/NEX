@@ -433,10 +433,3 @@ export function landingPoolDnsValues(members: readonly LandingMemberHealth[], po
     .map((member) => member.ipv4)));
 }
 
-/** 池节点的名字：一份凭据就叫池名；多份时带上用户名（和单台入站派生节点同一个口径）。 */
-export function landingPoolNodeName(poolName: string, user: Pick<LandingPoolUser, "name"> | null, userCount: number): string {
-  const base = text(poolName, 60) || "落地池";
-  const label = text(user?.name, 64);
-  if (!label || userCount <= 1) return base;
-  return `${base} · ${label}`;
-}

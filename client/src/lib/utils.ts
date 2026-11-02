@@ -12,8 +12,15 @@ import { extendTailwindMerge } from "tailwind-merge";
   className 里的 text-meta 和变体里的 text-[14px] 两个都留着，谁生效看 CSS 先后。
   注册成字号之后：和颜色类共存，和别的字号冲突时后写的胜出 —— 和 text-sm 一个待遇。
 */
+/*
+  圆角同理：index.css 的 @theme 里加了 rounded-inner（控件里面那一层小圆角，跟着主题走），
+  不注册的话它和 className 里的 rounded-full 两个都留着，谁生效看 CSS 先后。
+*/
 const twMerge = extendTailwindMerge({
   extend: {
+    theme: {
+      borderRadius: ["inner"],
+    },
     classGroups: {
       "font-size": [{ text: ["display", "metric", "section", "primary-type", "secondary-type", "meta"] }],
     },

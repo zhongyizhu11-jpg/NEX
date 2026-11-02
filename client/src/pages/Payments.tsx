@@ -36,6 +36,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useUrlTab } from "@/hooks/useUrlTab";
 import { mobileAuth } from "@/lib/mobileAuth";
 import { trpc } from "@/lib/trpc";
+import { usePanelFlags } from "@/hooks/usePanelFlags";
 import {
   CheckCircle2,
   CircleDollarSign,
@@ -280,7 +281,8 @@ export default function Payments() {
     isFetching: ordersFetching,
     refetch: refetchOrders,
   } = trpc.payment.listOrders.useQuery({ limit: 100 }, { refetchInterval: 30_000, placeholderData: (previousData: any) => previousData });
-  const { data: settings } = trpc.system.getSettings.useQuery();
+  // 面板公开地址从 publicInfo 读，不为这一项拉整份 getSettings。
+  const { panelPublicUrl } = usePanelFlags();
   const [form, setForm] = useState<PaymentConfigForm>(emptyForm);
   const [amount, setAmount] = useState("10");
   const [paymentType, setPaymentType] = useState<"alipay" | "wxpay" | "stripe" | "usdt">("alipay");
@@ -389,10 +391,10 @@ export default function Payments() {
   }, [config]);
 
   const panelUrl = useMemo(() => {
-    const configured = settings?.panelPublicUrl?.trim();
+    const configured = panelPublicUrl.trim();
     if (configured) return configured.replace(/\/+$/, "");
     return mobileAuth.panelOrigin();
-  }, [settings?.panelPublicUrl]);
+  }, [panelPublicUrl]);
 
   const updateConfig = trpc.payment.updateConfig.useMutation({
     onSuccess: () => {

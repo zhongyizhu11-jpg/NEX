@@ -6,6 +6,7 @@
  */
 
 import DashboardLayout from "@/components/DashboardLayout";
+import QueryErrorState, { QueryErrorRow, failedQueryState } from "@/components/QueryErrorState";
 import { PROXY_SUB_GROUP_MATCHES, PROXY_SUB_GROUP_MATCH_LABELS, normalizeProxySubGroupMatch, type ProxySubGroupMatch } from "@shared/proxySubGroupFilter";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
 import { ProxySubTokenDevicesDialog, ProxySubTokenEditDialog, ProxySubTokenLogsDialog, type ProxySubTokenLike } from "@/components/proxy/ProxySubTokenDialogs";
@@ -23,6 +24,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { formatDateTime as timeText } from "@/lib/formatTime";
 import { trpc } from "@/lib/trpc";
 import { PROXY_SUB_TOKEN_FAILURE_LABELS, proxySubTokenStatus } from "@shared/proxySubTokenStatus";
 import { PROXY_SUB_DEFAULT_SETTINGS, type ProxySubSettings } from "@shared/proxySubSettings";
@@ -39,12 +41,6 @@ const TAB_ITEMS = [
   { value: "templates", label: "模板", icon: FileCode2 },
   { value: "settings", label: "设置", icon: Settings2 },
 ] as const satisfies readonly SlidingTabItem<AdminTab>[];
-
-function timeText(value: unknown): string {
-  if (!value) return "—";
-  const date = new Date(value as any);
-  return Number.isFinite(date.getTime()) ? date.toLocaleString("zh-CN", { hour12: false }) : "—";
-}
 
 const RESULT_LABELS: Record<string, string> = { ok: "成功", page: "落地页", ...PROXY_SUB_TOKEN_FAILURE_LABELS };
 
@@ -77,7 +73,7 @@ function TokensTab() {
       </div>
       <Card>
         <CardContent className="overflow-x-auto p-0">
-          <Table>
+          <Table className="fx-table-stack">
             <TableHeader>
               <TableRow>
                 <TableHead>用户</TableHead>
@@ -90,14 +86,16 @@ function TokensTab() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {items.length === 0 ? (
+              {items.length === 0 && !query.isLoading && query.isError ? (
+                <QueryErrorRow colSpan={7} label="令牌列表" error={query.error} onRetry={() => void query.refetch()} retrying={query.isFetching} />
+              ) : items.length === 0 ? (
                 <TableRow><TableCell colSpan={7} className="py-8 text-center text-sm text-muted-foreground">{query.isLoading ? "加载中…" : "没有令牌"}</TableCell></TableRow>
               ) : items.map((row) => {
                 const status = proxySubTokenStatus(row);
                 return (
                   <TableRow key={row.id}>
-                    <TableCell className="text-sm">{row.username || `#${row.userId}`}</TableCell>
-                    <TableCell className="text-sm">
+                    <TableCell data-label="用户" className="text-sm">{row.username || `#${row.userId}`}</TableCell>
+                    <TableCell data-label="用途" className="text-sm">
                       <div className="flex flex-wrap items-center gap-1">
                         <span>{row.name}</span>
                         {row.alias ? <Badge variant="outline">/s/{row.alias}</Badge> : null}
@@ -107,13 +105,13 @@ function TokensTab() {
                       </div>
                       {row.remark ? <p className="text-xs text-muted-foreground">{row.remark}</p> : null}
                     </TableCell>
-                    <TableCell className="text-xs">
+                    <TableCell data-label="状态" className="text-xs">
                       {status.kind === "failed" ? <Badge variant="destructive">{PROXY_SUB_TOKEN_FAILURE_LABELS[status.reason]}</Badge> : status.kind === "ok" ? <Badge variant="secondary">正常</Badge> : <span className="text-muted-foreground">从没拉过</span>}
                     </TableCell>
-                    <TableCell className="whitespace-nowrap text-xs">{timeText(row.lastAccessAt)}{row.lastAccessIp ? <span className="block font-mono text-muted-foreground">{row.lastAccessIp}</span> : null}</TableCell>
-                    <TableCell className="text-xs">{row.lastClientLabel || "—"}{row.lastClientVersion ? ` ${row.lastClientVersion}` : ""}</TableCell>
-                    <TableCell className="text-xs">{row.accessCount || 0}</TableCell>
-                    <TableCell className="whitespace-nowrap text-right">
+                    <TableCell data-label="最近拉取" className="whitespace-nowrap text-xs">{timeText(row.lastAccessAt)}{row.lastAccessIp ? <span className="block font-mono text-muted-foreground">{row.lastAccessIp}</span> : null}</TableCell>
+                    <TableCell data-label="客户端" className="text-xs">{row.lastClientLabel || "—"}{row.lastClientVersion ? ` ${row.lastClientVersion}` : ""}</TableCell>
+                    <TableCell data-label="次数" className="text-xs">{row.accessCount || 0}</TableCell>
+                    <TableCell className="fx-table-stack-actions whitespace-nowrap text-right">
                       <Button size="sm" variant="ghost" onClick={() => setEditing({ ...row, scope: parseProxySubTokenScope(row.scopeJson), options: parseProxySubTokenOptions(row.optionsJson) })}>编辑</Button>
                       <Button size="sm" variant="ghost" onClick={() => setLogsOf({ id: row.id, name: row.name })}>记录</Button>
                       <Button size="sm" variant="ghost" onClick={() => setDevicesOf({ id: row.id, name: row.name })}>设备</Button>
@@ -157,6 +155,7 @@ function StatsTab() {
   const stats = trpc.proxySubscriptions.adminAccessStats.useQuery({ days });
   const logs = trpc.proxySubscriptions.adminAccessLogs.useQuery({ limit: 100 });
   const data = stats.data;
+  const statsFailure = failedQueryState(stats);
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-2">
@@ -168,6 +167,7 @@ function StatsTab() {
           </SelectContent>
         </Select>
       </div>
+      {statsFailure ? <QueryErrorState compact label="拉取统计" {...statsFailure} /> : null}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Card><CardContent className="p-4"><p className="text-xs text-muted-foreground">拉取次数</p><p className="text-2xl font-semibold">{data?.total ?? "—"}</p></CardContent></Card>
         <Card><CardContent className="p-4"><p className="text-xs text-muted-foreground">不同 IP</p><p className="text-2xl font-semibold">{data?.distinctIps ?? "—"}</p></CardContent></Card>
@@ -196,7 +196,7 @@ function StatsTab() {
       <Card>
         <CardHeader><CardTitle className="text-sm">最近 100 次拉取</CardTitle></CardHeader>
         <CardContent className="overflow-x-auto p-0">
-          <Table>
+          <Table className="fx-table-stack">
             <TableHeader>
               <TableRow>
                 <TableHead>时间</TableHead>
@@ -208,14 +208,15 @@ function StatsTab() {
               </TableRow>
             </TableHeader>
             <TableBody>
+              {failedQueryState(logs) ? <QueryErrorRow colSpan={6} label="拉取记录" {...failedQueryState(logs)!} /> : null}
               {(logs.data || []).map((row: any) => (
                 <TableRow key={row.id}>
-                  <TableCell className="whitespace-nowrap text-xs">{timeText(row.at)}</TableCell>
-                  <TableCell className="text-xs">#{row.tokenId} · 用户 #{row.userId}</TableCell>
-                  <TableCell className="text-xs"><Badge variant={row.result === "ok" || row.result === "page" ? "secondary" : "destructive"}>{RESULT_LABELS[row.result] || row.result}</Badge></TableCell>
-                  <TableCell className="text-xs" title={row.userAgent || ""}>{row.clientLabel || "未识别"}{row.clientVersion ? ` ${row.clientVersion}` : ""}</TableCell>
-                  <TableCell className="text-xs">{row.format || "—"}{row.profile ? "（规则）" : ""}</TableCell>
-                  <TableCell className="font-mono text-xs">{row.ip || "—"}</TableCell>
+                  <TableCell data-label="时间" className="whitespace-nowrap text-xs">{timeText(row.at)}</TableCell>
+                  <TableCell data-label="令牌" className="text-xs">#{row.tokenId} · 用户 #{row.userId}</TableCell>
+                  <TableCell data-label="结果" className="text-xs"><Badge variant={row.result === "ok" || row.result === "page" ? "secondary" : "destructive"}>{RESULT_LABELS[row.result] || row.result}</Badge></TableCell>
+                  <TableCell data-label="客户端" className="text-xs" title={row.userAgent || ""}>{row.clientLabel || "未识别"}{row.clientVersion ? ` ${row.clientVersion}` : ""}</TableCell>
+                  <TableCell data-label="格式" className="text-xs">{row.format || "—"}{row.profile ? "（规则）" : ""}</TableCell>
+                  <TableCell data-label="IP" className="font-mono text-xs">{row.ip || "—"}</TableCell>
                 </TableRow>
               ))}
             </TableBody>
@@ -285,7 +286,9 @@ function TemplatesTab() {
         </p>
         <Button size="sm" onClick={() => openCreate()}><Plus className="mr-1 h-4 w-4" />新建模板</Button>
       </div>
-      {templates.length === 0 ? (
+      {failedQueryState(query) ? (
+        <QueryErrorState label="模板" minHeight="min-h-[120px]" {...failedQueryState(query)!} />
+      ) : templates.length === 0 ? (
         <Card><CardContent className="py-8 text-center text-sm text-muted-foreground">还没有模板，所有人用内置的开头部分。</CardContent></Card>
       ) : (
         <div className="grid gap-3 md:grid-cols-2">
@@ -425,6 +428,9 @@ function SettingsTab() {
   const submit = () => {
     save.mutate({ ...form, domains: domainsText.split(/\r?\n/).map((item) => item.trim()).filter(Boolean) });
   };
+  // 没读到现有设置时不给表单：不然看到的是默认值，一点保存就把真实设置盖掉。
+  const settingsFailure = failedQueryState(query);
+  if (settingsFailure) return <QueryErrorState label="订阅设置" {...settingsFailure} />;
 
   return (
     <div className="space-y-4">

@@ -33,7 +33,7 @@ import { SlidingTabsList } from "@/components/ui/sliding-tabs";
 import { GroupedList, ListRow, ListSection } from "@/components/ios/GroupedList";
 import { SettingList, SettingRow } from "@/components/SettingRow";
 import { EntityActions } from "@/components/entity/EntityActions";
-import { segmentedControlClassName, segmentedOptionClassName } from "@/components/ui/segmented";
+import { SegmentedControl } from "@/components/ui/segmented-control";
 import { useIsMobile } from "@/hooks/useMobile";
 import { LayoutDefaultCard } from "@/components/settings/LayoutDefaultCard";
 import DataSectionLoading from "@/components/DataSectionLoading";
@@ -1009,7 +1009,7 @@ function PanelLogsSection() {
               {levelTabs.map((tab) => (
                 <TabsTrigger key={tab.value} value={tab.value} className="min-w-0 gap-1.5 text-xs">
                   {tab.label}
-                  <span className="rounded bg-background/70 px-1.5 py-0.5 text-[10px] text-muted-foreground">{tab.count}</span>
+                  <span className="rounded bg-background/70 px-1.5 py-0.5 text-[11px] text-muted-foreground">{tab.count}</span>
                 </TabsTrigger>
               ))}
             </TabsList>
@@ -1892,22 +1892,16 @@ function BackupRestoreSection({ panelUrl }: { panelUrl: string }) {
                 </Badge>
               )}
             >
-              <div className={`${segmentedControlClassName} grid grid-cols-3 gap-1`} role="group" aria-label="目标数据库">
-                {(["sqlite", "mysql", "postgresql"] as DatabaseType[]).map((type) => (
-                  <button
-                    key={type}
-                    type="button"
-                    aria-pressed={databaseSwitchType === type}
-                    onClick={() => {
-                      setDatabaseSwitchType(type);
-                      setTestedDatabaseSwitchKey("");
-                    }}
-                    className={segmentedOptionClassName(databaseSwitchType === type)}
-                  >
-                    {type === "sqlite" ? "SQLite" : type === "mysql" ? "MySQL" : "PostgreSQL"}
-                  </button>
-                ))}
-              </div>
+              <SegmentedControl<DatabaseType>
+                ariaLabel="目标数据库"
+                className="grid grid-cols-3 gap-1"
+                value={databaseSwitchType}
+                options={(["sqlite", "mysql", "postgresql"] as DatabaseType[]).map((type) => ({ value: type, label: type === "sqlite" ? "SQLite" : type === "mysql" ? "MySQL" : "PostgreSQL" }))}
+                onChange={(type) => {
+                  setDatabaseSwitchType(type);
+                  setTestedDatabaseSwitchKey("");
+                }}
+              />
               <p className="text-meta text-muted-foreground">
                 {databaseSwitchType === "sqlite"
                   ? "本地数据文件，无需额外服务。"
@@ -3184,6 +3178,7 @@ type SystemSettingsSaveKey =
   | "forwardProtocols"
   | "sidebarMenu"
   | "agentInstall"
+  | "agentAuth"
   | "entryBridge"
   | "portAccessLimits";
 
@@ -3680,6 +3675,7 @@ function PersonalizationSettingsSection() {
   ];
   for (const item of personalizationDockItems) {
     // 列表是固定的八项、顺序不变，所以在循环里调 hook 是安全的
+    // eslint-disable-next-line react-hooks/rules-of-hooks
     useSaveDockItem({ ...item, id: `personalization.${item.id}`, pending: isSavingPersonalization(item.id), reset: resetPersonalizationDraft });
   }
 
@@ -3924,10 +3920,10 @@ function PersonalizationSettingsSection() {
                   <div className="min-w-0 flex-1">
                     <div className="flex min-w-0 flex-wrap items-center gap-2">
                       <p className="max-w-full truncate text-sm font-medium">{page.name}</p>
-                      <Badge variant="outline" className="shrink-0 text-[10px]">
+                      <Badge variant="outline" className="shrink-0 text-[11px]">
                         {page.visibility === "admin" ? "仅管理员" : "所有用户"}
                       </Badge>
-                      <Badge variant="secondary" className="shrink-0 text-[10px]">
+                      <Badge variant="secondary" className="shrink-0 text-[11px]">
                         {page.openMode === "external" ? "新窗口" : "嵌入"}
                       </Badge>
                     </div>
@@ -4898,6 +4894,8 @@ function SystemInfoSection() {
   const [panelSslKeyPath, setPanelSslKeyPath] = useState("");
   const [panelSslCertPem, setPanelSslCertPem] = useState("");
   const [panelSslKeyPem, setPanelSslKeyPem] = useState("");
+  // 私钥不再随设置返回：服务端只说存没存，私钥框留空保存 = 沿用已保存的。
+  const [panelSslKeyPemSaved, setPanelSslKeyPemSaved] = useState(false);
   const [showWebPortConfirm, setShowWebPortConfirm] = useState(false);
   const [webPortCountdown, setWebPortCountdown] = useState(5);
   const [showPanelSslConfirm, setShowPanelSslConfirm] = useState(false);
@@ -4912,6 +4910,7 @@ function SystemInfoSection() {
   const [githubAcceleratorPanelUpdateEnabled, setGithubAcceleratorPanelUpdateEnabled] = useState(false);
   const [githubAcceleratorUrlInput, setGithubAcceleratorUrlInput] = useState(defaultGithubAcceleratorUrl);
   const [agentPreferPanelInstall, setAgentPreferPanelInstall] = useState(false);
+  const [agentLegacyAuthRejected, setAgentLegacyAuthRejected] = useState(false);
   const [ruleSwitchBridgeHours, setRuleSwitchBridgeHours] = useState(String(DEFAULT_RULE_SWITCH_BRIDGE_HOURS));
   const [portAccessLimitsEnabled, setPortAccessLimitsEnabled] = useState(false);
   const [linkWizardEnabled, setLinkWizardEnabled] = useState(false);
@@ -4938,6 +4937,8 @@ function SystemInfoSection() {
   const [ddnsWebhookUrl, setDdnsWebhookUrl] = useState("");
   const [ddnsWebhookMethod, setDdnsWebhookMethod] = useState<"POST" | "PUT" | "GET">("POST");
   const [ddnsWebhookHeaders, setDdnsWebhookHeaders] = useState("");
+  // 请求头只回打码后的样子：框里留空 = 保持原值，要删得点「清除」。
+  const [ddnsWebhookHeadersClear, setDdnsWebhookHeadersClear] = useState(false);
   const [ruleEntryDomainSuffix, setRuleEntryDomainSuffix] = useState("");
   const [publicHostMonitorEnabled, setPublicHostMonitorEnabled] = useState(false);
   const [publicHostMonitorPath, setPublicHostMonitorPath] = useState("dev");
@@ -4974,6 +4975,7 @@ function SystemInfoSection() {
       setPanelSslKeyPath(settings.panelSsl?.keyPath || "");
       setPanelSslCertPem(settings.panelSsl?.certPem || "");
       setPanelSslKeyPem(settings.panelSsl?.keyPem || "");
+      setPanelSslKeyPemSaved(!!settings.panelSsl?.keyPemConfigured);
       setRegistrationEnabled(settings.registrationEnabled ?? true);
       setAuthCaptchaEnabled(settings.authCaptchaEnabled ?? true);
       setTwoFactorEnabled(!!settings.twoFactorEnabled);
@@ -4989,6 +4991,7 @@ function SystemInfoSection() {
       setGithubAcceleratorPanelUpdateEnabled(!!settings.githubAccelerator?.panelUpdateEnabled);
       setGithubAcceleratorUrlInput(settings.githubAccelerator?.url || "");
       setAgentPreferPanelInstall(!!settings.agentPreferPanelInstall);
+      setAgentLegacyAuthRejected(!!(settings as any).agentLegacyAuthRejected);
       setRuleSwitchBridgeHours(String(normalizeRuleSwitchBridgeHours((settings as any).ruleSwitchBridgeHours)));
       setPortAccessLimitsEnabled(!!(settings as any).portAccessLimitsEnabled);
       setLinkWizardEnabled(!!(settings as any).linkWizardEnabled);
@@ -5012,6 +5015,7 @@ function SystemInfoSection() {
       setDdnsWebhookUrl(settings.ddns?.webhookUrl || "");
       setDdnsWebhookMethod((settings.ddns?.webhookMethod === "PUT" || settings.ddns?.webhookMethod === "GET") ? settings.ddns.webhookMethod : "POST");
       setDdnsWebhookHeaders(settings.ddns?.webhookHeaders || "");
+      setDdnsWebhookHeadersClear(false);
       setRuleEntryDomainSuffix(settings.ddns?.ruleEntryDomainSuffix || "");
       if (settings.publicHostMonitor) {
         setPublicHostMonitorEnabled(!!settings.publicHostMonitor.enabled);
@@ -5130,6 +5134,19 @@ function SystemInfoSection() {
     onError: (err) => toast.error(err.message || "保存面板 SSL 配置失败"),
   });
 
+  const legacyAgentAuthHosts = trpc.system.legacyAgentAuthHosts.useQuery(undefined, { refetchOnWindowFocus: false });
+
+  const revealPanelSslKeyMutation = trpc.system.revealPanelSslKey.useMutation({
+    onSuccess: (result) => {
+      if (!result.keyPem) {
+        toast.info("没有已保存的私钥");
+        return;
+      }
+      setPanelSslKeyPem(result.keyPem);
+    },
+    onError: (err) => toast.error(err.message || "读取私钥失败"),
+  });
+
   const generatePanelSelfSignedMutation = trpc.system.generatePanelSelfSignedCertificate.useMutation({
     onSuccess: (result) => {
       setPanelSslMode("path");
@@ -5226,7 +5243,12 @@ function SystemInfoSection() {
       toast.error("证书内容不是有效的 PEM 证书");
       return false;
     }
-    if (!/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]+-----END [A-Z ]*PRIVATE KEY-----/.test(panelSslKeyPem.trim())) {
+    const keyPem = panelSslKeyPem.trim();
+    if (!keyPem && !panelSslKeyPemSaved) {
+      toast.error("请粘贴私钥 PEM");
+      return false;
+    }
+    if (keyPem && !/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]+-----END [A-Z ]*PRIVATE KEY-----/.test(keyPem)) {
       toast.error("私钥内容不是有效的 PEM 私钥");
       return false;
     }
@@ -5309,11 +5331,14 @@ function SystemInfoSection() {
         tencentcloudRecordLineId: ddnsTencentCloudRecordLineId,
         webhookUrl: ddnsWebhookUrl,
         webhookMethod: ddnsWebhookMethod,
-        webhookHeaders: ddnsWebhookHeaders,
+        webhookHeaders: ddnsWebhookHeaders.trim() || undefined,
+        clearWebhookHeaders: ddnsWebhookHeadersClear && !ddnsWebhookHeaders.trim() ? true : undefined,
         ruleEntryDomainSuffix: ruleEntryDomainSuffix.trim(),
       },
     }, {
       onSuccess: () => {
+        setDdnsWebhookHeaders("");
+        setDdnsWebhookHeadersClear(false);
         setDdnsCloudflareApiToken("");
         setDdnsHuaweiCloudSecretKey("");
         setDdnsAliyunAccessKeySecret("");
@@ -5420,6 +5445,10 @@ function SystemInfoSection() {
     );
   };
 
+  const handleSaveAgentAuth = () => {
+    return saveSystemSettings("agentAuth", { agentLegacyAuthRejected });
+  };
+
   const handleSaveAgentInstall = () => {
     const inputUrl = normalizeConfigUrl(githubAcceleratorUrlInput);
     const acceleratorUrl = normalizeGithubAcceleratorUrl(inputUrl);
@@ -5457,7 +5486,7 @@ function SystemInfoSection() {
     ddnsHuaweiCloudRegion, ddnsHuaweiCloudEndpoint, ddnsHuaweiCloudZoneId, ddnsHuaweiCloudLine, ddnsAliyunAccessKeyId,
     ddnsAliyunAccessKeySecret, ddnsAliyunDomainName, ddnsAliyunEndpoint, ddnsAliyunLine, ddnsTencentCloudSecretId,
     ddnsTencentCloudSecretKey, ddnsTencentCloudDomainName, ddnsTencentCloudRecordLine, ddnsTencentCloudRecordLineId,
-    ddnsWebhookUrl, ddnsWebhookMethod, ddnsWebhookHeaders, ruleEntryDomainSuffix,
+    ddnsWebhookUrl, ddnsWebhookMethod, ddnsWebhookHeaders, ddnsWebhookHeadersClear, ruleEntryDomainSuffix,
   ];
   const ddnsSaved = settings ? [
     !!settings.ddns?.enabled,
@@ -5471,7 +5500,7 @@ function SystemInfoSection() {
     settings.ddns?.tencentcloudRecordLine || "默认", settings.ddns?.tencentcloudRecordLineId || "",
     settings.ddns?.webhookUrl || "",
     (settings.ddns?.webhookMethod === "PUT" || settings.ddns?.webhookMethod === "GET") ? settings.ddns.webhookMethod : "POST",
-    settings.ddns?.webhookHeaders || "", settings.ddns?.ruleEntryDomainSuffix || "",
+    settings.ddns?.webhookHeaders || "", false, settings.ddns?.ruleEntryDomainSuffix || "",
   ] : ddnsDraft;
   const systemDockItems: Array<{ id: SystemSettingsSaveKey; label: string; dirty: boolean; save: () => Promise<boolean> | boolean }> = [
     { id: "panelUrl", label: "面板地址", dirty: !!settings && panelUrlInput !== (settings.panelPublicUrl || ""), save: handleSavePanelUrl },
@@ -5504,9 +5533,16 @@ function SystemInfoSection() {
       ),
       save: handleSaveAgentInstall,
     },
+    {
+      id: "agentAuth",
+      label: "Agent 认证",
+      dirty: !!settings && agentLegacyAuthRejected !== !!(settings as any).agentLegacyAuthRejected,
+      save: handleSaveAgentAuth,
+    },
   ];
   for (const item of systemDockItems) {
     // 列表是固定的九项、顺序不变，所以在循环里调 hook 是安全的
+    // eslint-disable-next-line react-hooks/rules-of-hooks
     useSaveDockItem({ ...item, id: `system.${item.id}`, pending: isSavingSetting(item.id), reset: resetSystemDraft });
   }
 
@@ -5704,7 +5740,7 @@ function SystemInfoSection() {
   const sidebarMenuEnabledCount = SIDEBAR_MENU_KEYS.filter((key) => sidebarMenu[key]).length;
   const panelSslPathActive = panelSslMode === "path";
   const panelSslPathConfigured = !!panelSslCertPath.trim() && !!panelSslKeyPath.trim();
-  const panelSslPemConfigured = !!panelSslCertPem.trim() && !!panelSslKeyPem.trim();
+  const panelSslPemConfigured = !!panelSslCertPem.trim() && (!!panelSslKeyPem.trim() || panelSslKeyPemSaved);
 
   useEffect(() => {
     if (!canShowDockerUpgradeScript || !updateInfo?.latestVersion) return;
@@ -5848,8 +5884,8 @@ function SystemInfoSection() {
             按目标新建向导
           </CardTitle>
           <CardDescription>
-            打开后，链路管理的「线路总览」页签右上角多一个「按目标新建」：选想要什么（稳定 / 多人一起快 / 单条连接也要快）和多出来的机器在哪一段，
-            面板推荐该建哪一种，并打开预填好的新建框。熟悉转发组、出口组、隧道中转的话不用开。
+            打开后，链路管理的「线路概览」页签右上角多一个醒目的「按目标新建」：选想要什么（稳定 / 多人一起快 / 单条连接也要快）和多出来的机器在哪一段，
+            面板推荐该建哪一种，并打开预填好的新建框。不开也能用：每一页「新建链路」旁边的「向导」打开的是同一个。
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -5985,22 +6021,16 @@ function SystemInfoSection() {
                 label="证书来源"
                 description={panelSslEnabled ? "HTTPS 按选中的来源启动。" : "启用后按选中的来源启动。"}
               >
-                <div className={`${segmentedControlClassName} grid grid-cols-2 gap-1`} role="group" aria-label="证书来源">
-                  {([
+                <SegmentedControl
+                  ariaLabel="证书来源"
+                  className="grid grid-cols-2 gap-1"
+                  value={panelSslMode}
+                  options={[
                     { value: "path", label: "服务器文件路径" },
                     { value: "pem", label: "粘贴 PEM 内容" },
-                  ] as const).map((option) => (
-                    <button
-                      key={option.value}
-                      type="button"
-                      aria-pressed={panelSslMode === option.value}
-                      onClick={() => setPanelSslMode(option.value)}
-                      className={segmentedOptionClassName(panelSslMode === option.value)}
-                    >
-                      {option.label}
-                    </button>
-                  ))}
-                </div>
+                  ] as const}
+                  onChange={setPanelSslMode}
+                />
                 <p className="text-meta text-muted-foreground">
                   {panelSslPathActive
                     ? `读取服务器上的证书和私钥文件。PEM 内容：${panelSslPemConfigured ? "已保存备用" : "未配置"}。`
@@ -6050,12 +6080,29 @@ function SystemInfoSection() {
                       />
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="panel-ssl-key-pem">私钥 PEM</Label>
+                      <div className="flex min-h-5 items-center justify-between gap-2">
+                        <Label htmlFor="panel-ssl-key-pem" className="flex items-center gap-2">
+                          私钥 PEM
+                          {panelSslKeyPemSaved && <Badge variant="secondary">已配置</Badge>}
+                        </Label>
+                        {panelSslKeyPemSaved && !panelSslKeyPem.trim() && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 px-2 text-xs"
+                            onClick={() => revealPanelSslKeyMutation.mutate()}
+                            disabled={revealPanelSslKeyMutation.isPending}
+                          >
+                            {revealPanelSslKeyMutation.isPending ? "读取中..." : "查看"}
+                          </Button>
+                        )}
+                      </div>
                       <Textarea
                         id="panel-ssl-key-pem"
                         value={panelSslKeyPem}
                         onChange={(e) => setPanelSslKeyPem(e.target.value)}
-                        placeholder="-----BEGIN PRIVATE KEY-----"
+                        placeholder={panelSslKeyPemSaved ? "已配置，留空保持不变；粘贴新私钥即可替换" : "-----BEGIN PRIVATE KEY-----"}
                         className="min-h-44 resize-y font-mono text-xs leading-5"
                       />
                     </div>
@@ -6418,14 +6465,40 @@ function SystemInfoSection() {
                 </FormField>
               </div>
               <FormField className="space-y-2">
-                <Label>请求头</Label>
+                <div className="flex min-h-5 items-center justify-between gap-2">
+                  <Label className="flex items-center gap-2">
+                    请求头
+                    {!!settings?.ddns?.webhookHeadersMasked && !ddnsWebhookHeadersClear && <Badge variant="secondary">已配置</Badge>}
+                  </Label>
+                  {!!settings?.ddns?.webhookHeadersMasked && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 px-2 text-xs"
+                      onClick={() => {
+                        setDdnsWebhookHeadersClear((current) => !current);
+                        setDdnsWebhookHeaders("");
+                      }}
+                    >
+                      {ddnsWebhookHeadersClear ? "撤销清除" : "清除"}
+                    </Button>
+                  )}
+                </div>
                 <Textarea
                   value={ddnsWebhookHeaders}
-                  onChange={(e) => setDdnsWebhookHeaders(e.target.value)}
-                  placeholder='{"Authorization":"Bearer xxx"}'
+                  onChange={(e) => {
+                    setDdnsWebhookHeaders(e.target.value);
+                    if (e.target.value.trim()) setDdnsWebhookHeadersClear(false);
+                  }}
+                  placeholder={ddnsWebhookHeadersClear
+                    ? "保存后清除已保存的请求头"
+                    : settings?.ddns?.webhookHeadersMasked
+                      ? `${settings.ddns.webhookHeadersMasked}\n（已保存，留空保持不变；填写则整体替换）`
+                      : '{"Authorization":"Bearer xxx"}'}
                   className="min-h-20 font-mono text-xs"
                 />
-                <p className="text-xs text-muted-foreground">支持 JSON 或每行一个 Header。</p>
+                <p className="text-xs text-muted-foreground">支持 JSON 或每行一个 Header。已保存的内容不再显示原文。</p>
               </FormField>
             </div>
           )}
@@ -6980,6 +7053,35 @@ function SystemInfoSection() {
           <div className="flex justify-end">
             <Button data-dock-save onClick={handleSaveAgentInstall} disabled={isSavingSetting("agentInstall")}>
               保存 GitHub 下载配置
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+      <Card className="border-border bg-card">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <ShieldCheck className="h-4 w-4 text-primary" />
+            Agent 认证
+          </CardTitle>
+          <CardDescription>
+            现在的 Agent 每个请求都带签名；很老的 Agent 还在请求头里直接发明文 Token。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <SettingList>
+            <SettingRow
+              asLabel
+              label="拒绝旧式 Agent 认证"
+              description={legacyAgentAuthHosts.data?.length
+                ? `最近还有 ${legacyAgentAuthHosts.data.length} 台主机在用旧式认证：${legacyAgentAuthHosts.data.slice(0, 5).map((item) => item.name).join("、")}${legacyAgentAuthHosts.data.length > 5 ? " 等" : ""}。打开后它们会连不上面板，请先升级这些主机的 Agent。`
+                : "打开后只接受签名认证，还在发明文 Token 的旧 Agent 会连不上面板。面板重启以来没有主机用过旧式认证。"}
+              control={<Checkbox aria-label="拒绝旧式 Agent 认证" checked={agentLegacyAuthRejected} onCheckedChange={(checked) => setAgentLegacyAuthRejected(checked === true)} />}
+            />
+          </SettingList>
+          <div className="flex justify-end">
+            <Button data-dock-save onClick={handleSaveAgentAuth} disabled={isSavingSetting("agentAuth")}>
+              {isSavingSetting("agentAuth") && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {isSavingSetting("agentAuth") ? "保存中..." : "保存 Agent 认证配置"}
             </Button>
           </div>
         </CardContent>

@@ -799,6 +799,49 @@ html.dark[data-card-style="bar"] .workspace-main [data-slot="card"], html.dark[d
 [data-slot="table"] [data-slot="badge"] { border-color: transparent; background: transparent; padding-left: 0; padding-right: 0; font-size: 13px; font-weight: 500; }
 [data-slot="table"] [data-slot="badge"][data-variant="secondary"] { color: var(--fx-text-muted); }
 [data-slot="table"] code { border: 0; background: transparent; padding: 0; }
+
+/*
+  窄屏（<640px）把表格叠成一张张卡：手机上横着拖一张七列的表，看到第三列就忘了第一列。
+  页面给 <Table className="fx-table-stack">，每格写 data-label="列名"：
+  表头藏起来，每行一块弱线圆角卡，每格一行「列名 …… 值」；没写 data-label 的格整行占满
+  （第一格的名字当卡的标题，最后一格的操作按钮靠右排）。宽屏照旧是表。
+*/
+@media (max-width: 639px) {
+  [data-slot="table"].fx-table-stack,
+  [data-slot="table"].fx-table-stack tbody,
+  [data-slot="table"].fx-table-stack tbody > tr { display: block; width: 100%; }
+  [data-slot="table"].fx-table-stack thead { display: none; }
+  [data-slot="table"].fx-table-stack tbody { display: flex; flex-direction: column; gap: 8px; padding: 8px; }
+  [data-slot="table"].fx-table-stack tbody > tr {
+    height: auto;
+    padding: 6px 12px;
+    border: 1px solid var(--fx-stroke-weak);
+    border-radius: var(--fx-radius-card);
+  }
+  [data-slot="table"].fx-table-stack tbody > tr:hover { background: transparent; }
+  [data-slot="table"].fx-table-stack [data-slot="table-cell"] {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 5px 0;
+    text-align: right;
+    white-space: normal;
+  }
+  [data-slot="table"].fx-table-stack [data-slot="table-cell"]::before {
+    content: attr(data-label);
+    flex: none;
+    font-size: 12px;
+    color: var(--fx-text-muted);
+    text-align: left;
+  }
+  /* 没有列名的格：名字那格当标题，操作那格靠右换行排 */
+  [data-slot="table"].fx-table-stack [data-slot="table-cell"]:not([data-label]) { display: block; text-align: left; }
+  [data-slot="table"].fx-table-stack [data-slot="table-cell"]:not([data-label])::before { content: none; }
+  [data-slot="table"].fx-table-stack [data-slot="table-cell"].fx-table-stack-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; border-top: 1px solid var(--fx-stroke-weak); margin-top: 4px; padding-top: 8px; }
+  /* 空表、出错那一行（colspan）照旧居中 */
+  [data-slot="table"].fx-table-stack [data-slot="table-cell"][colspan] { display: block; text-align: center; border: 0; }
+}
 /*
   空状态原来是 200px 最小高度 + 32px 内边距 + 一个带边框的大图标方块 —— 一整张
   屏幕的三分之一，只为了说一句「暂无出口组」。它是「这里现在没东西」，不是这一页
@@ -1345,8 +1388,8 @@ html[data-personalization-background="image"] .auth-divider-label, html[data-per
     position: sticky;
     top: 0;
     z-index: var(--fx-z-sticky);
-    margin: 0 calc(var(--fx-page-gutter, 12px) * -1);
-    padding: env(safe-area-inset-top, 0px) var(--fx-page-gutter, 12px) 0;
+    margin: 0 calc(var(--fx-gutter, 12px) * -1);
+    padding: env(safe-area-inset-top, 0px) var(--fx-gutter, 12px) 0;
     background: color-mix(in srgb, var(--fx-l0-page) 86%, transparent);
     backdrop-filter: saturate(180%) blur(20px);
     -webkit-backdrop-filter: saturate(180%) blur(20px);
@@ -1788,7 +1831,7 @@ button.fx-rb-mini-row:hover { background: var(--fx-l2-group); }
 .fx-hd-sec-head { display: flex; min-width: 0; width: 100%; align-items: center; justify-content: space-between; gap: 10px; min-height: 38px; padding: 6px 12px; border: 0; background: transparent; font: inherit; text-align: left; color: inherit; }
 button.fx-hd-sec-head { cursor: pointer; }
 button.fx-hd-sec-head:hover { background: color-mix(in srgb, var(--fx-text) 3%, transparent); }
-.fx-hd-sec-head > h3 { margin: 0; flex: none; font-size: 12.5px; font-weight: 600; line-height: 18px; color: var(--fx-text-secondary); white-space: nowrap; }
+.fx-hd-sec-head > h3, .fx-hd-sec-head > .fx-hd-sec-title { margin: 0; flex: none; font-size: 12.5px; font-weight: 600; line-height: 18px; color: var(--fx-text-secondary); white-space: nowrap; }
 .fx-hd-sec-action { display: inline-flex; min-width: 0; flex: 0 1 auto; align-items: center; justify-content: flex-end; gap: 8px; }
 .fx-hd-sec-action > button, .fx-hd-sec-action > a { flex: none; }
 .fx-hd-sec-toggle { display: inline-flex; flex: none; align-items: center; gap: 3px; font-size: 11.5px; color: var(--fx-text-muted); }

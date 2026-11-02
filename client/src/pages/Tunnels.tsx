@@ -1,7 +1,6 @@
 import { formatBytes } from "@shared/formatBytes";
 import { FormField } from "@/components/ui/form-field";
 import { readStoredViewMode, writeStoredViewMode } from "@/lib/viewModeStorage";
-import { useFaultBundleExport } from "@/components/links/useFaultBundleExport";
 import { ResourceTrafficLine } from "@/components/links/ResourceTrafficLine";
 import EmptyState from "@/components/EmptyState";
 import { TunnelConnStatsBody } from "@/components/tunnels/TunnelConnStatsDialog";
@@ -35,8 +34,9 @@ import type { LinkWizardAction } from "@shared/linkWizard";
 import { loadReactGlobe, prefetchReactGlobe } from "@/lib/reactGlobeLoader";
 import { escapeTooltipHtml, hostGeoCoordinate } from "@/lib/hostGeo";
 import DashboardLayout from "@/components/DashboardLayout";
-import { DiagnoseDialog, type DiagnoseExtraTab } from "@/components/DiagnoseDialog";
+import { DiagnoseDialog, DiagnoseSubjectActions, type DiagnoseExtraTab } from "@/components/DiagnoseDialog";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { usePanelFlags } from "@/hooks/usePanelFlags";
 import AnimatedStatValue from "@/components/AnimatedStatValue";
 import { LatencyRating, getLatencyRating } from "@/components/LatencyRating";
 import { LatencyPeakCutToggle } from "@/components/LatencyPeakCutToggle";
@@ -77,6 +77,7 @@ import {
 import { OptimisticSwitch, Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { SlidingTabsList, type SlidingTabItem } from "@/components/ui/sliding-tabs";
+import { LINE_PARAM, readPositiveParam } from "@/features/links/lineLinks";
 import { useCompactLayout } from "@/hooks/useCompactLayout";
 import { SearchToggle } from "@/components/ListControls";
 import { useIsMobile } from "@/hooks/useMobile";
@@ -128,7 +129,7 @@ import {
   Trash2,
   Upload,
   XCircle,
-  FileJson,
+  Wand2,
 } from "lucide-react";
 import type { GlobeMethods } from "react-globe.gl";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type ReactNode } from "react";
@@ -139,7 +140,6 @@ import {
   FORWARD_TYPES,
   TUNNEL_PROTOCOLS,
   normalizeForwardXVersion,
-  normalizeForwardProtocolSettings,
   type ForwardProtocolKey,
   type ForwardType,
   type TunnelProtocol,
@@ -159,21 +159,14 @@ import {
   normalizeExitGroupStrategy,
   type ExitGroupStrategy,
 } from "@shared/exitStrategy";
-import {
-  CartesianGrid,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip as RTooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
 import MultiHopEditor from "@/components/MultiHopEditor";
 import { ForwardGroupsContent } from "@/pages/ForwardGroups";
 import { LatencyHistoryDayStrip } from "@/components/LatencyHistoryDays";
 import { EntityActions } from "@/components/entity/EntityActions";
 
 const ReactGlobe = lazy(loadReactGlobe) as typeof import("react-globe.gl").default;
+// 延迟曲线按需加载：recharts 不跟着隧道页一起下，点开延迟弹窗才取。
+const TunnelLatencyLineChart = lazy(() => import("@/components/charts/LatencyLineCharts").then((m) => ({ default: m.TunnelLatencyLineChart })));
 
 type TunnelForm = {
   name: string;
@@ -1391,72 +1384,9 @@ function TunnelLatencyBody({ tunnelId, active }: { tunnelId: number; active: boo
           ) : chartData.length === 0 ? (
             <div className="flex h-full items-center justify-center text-sm text-muted-foreground">暂无隧道链路延迟数据</div>
           ) : (
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartData} margin={{ top: 8, right: 10, left: -8, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
-                <XAxis dataKey="label" tick={{ fontSize: 9 }} minTickGap={60} interval="preserveStartEnd" />
-                <YAxis tick={{ fontSize: 9 }} tickFormatter={(v) => `${v}ms`} width={50} domain={[0, yMax]} ticks={yTicks} allowDecimals={false} />
-                <RTooltip
-                  cursor={{ stroke: "var(--color-muted-foreground)", strokeDasharray: "3 3" }}
-                  offset={12}
-                  wrapperStyle={{ pointerEvents: "none" }}
-                  content={({ active, payload }: any) => {
-                    if (!active || !payload?.length) return null;
-                    const item = payload[0].payload;
-                    return (
-                      <div className="min-w-40 rounded-lg border border-border bg-card px-3 py-2 shadow-md">
-                        <p className="mb-2 text-xs text-muted-foreground">{item.fullLabel}</p>
-                        <div className="space-y-1">
-                          {seriesMeta.map((meta) => {
-                            const hasValue = item[meta.rawKey] !== undefined || item[meta.timeoutKey] !== undefined;
-                            if (!hasValue) return null;
-                            const timeout = !!item[meta.timeoutKey];
-                            return (
-                              <div key={meta.key} className="flex items-center justify-between gap-4 text-xs">
-                                <span className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
-                                  <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: timeout ? "var(--color-destructive)" : meta.color }} />
-                                  <span className="truncate">{meta.label}</span>
-                                </span>
-                                <span className="text-right">
-                                  <span className={timeout ? "font-semibold text-destructive" : "font-semibold tabular-nums"}>
-                                    {timeout ? "超时" : `${Number(item[meta.rawKey] || 0)}ms`}
-                                  </span>
-                                  {Number(item[`${meta.key}ProbeCount`]) > 1 && Number(item[`${meta.key}ProbeSuccesses`]) < Number(item[`${meta.key}ProbeCount`]) ? (
-                                    <span className="block text-[10px] font-normal text-muted-foreground">
-                                      丢包 {Number(item[`${meta.key}ProbeCount`]) - Number(item[`${meta.key}ProbeSuccesses`])}/{Number(item[`${meta.key}ProbeCount`])}
-                                    </span>
-                                  ) : null}
-                                </span>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    );
-                  }}
-                />
-                {seriesMeta.map((meta) => (
-                  <Line
-                    key={meta.key}
-                    type="monotone"
-                    dataKey={meta.dataKey}
-                    stroke={meta.color}
-                    strokeWidth={meta.key === "total" ? 1.8 : 1.35}
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    dot={(props: any) => props?.payload?.[meta.timeoutKey] ? (
-                      <circle cx={props.cx} cy={props.cy} r={3} fill="var(--color-destructive)" stroke="var(--color-background)" strokeWidth={1.5} />
-                    ) : (
-                      <circle cx={props.cx} cy={props.cy} r={0} fill="transparent" />
-                    )}
-                    activeDot={{ r: 4, fill: meta.color, stroke: "var(--color-background)", strokeWidth: 2 }}
-                    connectNulls={false}
-                    isAnimationActive={shouldAnimateChart}
-                    animationDuration={shouldAnimateChart ? 500 : 0}
-                  />
-                ))}
-              </LineChart>
-            </ResponsiveContainer>
+            <Suspense fallback={<Skeleton className="h-full w-full" />}>
+              <TunnelLatencyLineChart chartData={chartData} seriesMeta={seriesMeta} yMax={yMax} yTicks={yTicks} animate={shouldAnimateChart} />
+            </Suspense>
           )}
         </div>
         {seriesMeta.length > 1 ? (
@@ -2156,9 +2086,8 @@ function tunnelMatchesLinkSearch(
 }
 
 function TunnelsContent() {
-  const { user, loading: authLoading } = useAuth();
+  const { user } = useAuth();
   const utils = trpc.useUtils();
-  const faultBundle = useFaultBundleExport();
   // 列表视图在手机宽度（Tailwind sm 以下）显示成卡片：只渲染看得见的那套，不再卡片 + 表格各渲染一份再藏一份。
   const isBelowSm = useMediaQuery("(max-width: 639px)");
   // The compact options query is preferred for the editors. Keep the older
@@ -2184,20 +2113,9 @@ function TunnelsContent() {
   const hostsQueryLoading = !hasResolvedHosts
     && (hostsOptionsQuery.isLoading || (useHostsFallback && hostsFallbackQuery.isLoading));
   const hostsQueryFailed = hostsFallbackQuery.isError && (hosts?.length ?? 0) === 0;
-  // Wait for the session query before loading settings.  The server deliberately
-  // hides developer-only capabilities from anonymous requests; starting this
-  // query at the same time as auth can otherwise cache the anonymous response
-  // (globalEnabled=false) for the whole page lifetime.
-  const { data: systemSettings } = trpc.system.getSettings.useQuery(undefined, {
-    enabled: !authLoading,
-    // The response is role-sensitive: an anonymous request intentionally
-    // returns globalEnabled=false. Always refresh once this page has a
-    // resolved session so a cached anonymous response cannot hide the admin
-    // NEX V1 option.
-    staleTime: 0,
-    refetchOnMount: "always",
-    refetchOnWindowFocus: false,
-  });
+  // 协议开关和「按目标新建」向导开关：从 publicInfo 读，不再拉整份 getSettings。
+  // 管理员才有的开关跟着登录身份走，usePanelFlags 会等登录状态、并在拿到登录前的旧结果时补拉。
+  const panelFlags = usePanelFlags();
   const [showDialog, setShowDialog] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [form, setForm] = useState<TunnelForm>(defaultForm);
@@ -2247,6 +2165,11 @@ function TunnelsContent() {
   }));
   const [, setTopologyLocation] = useLocation();
   const linkLocation = useSearch();
+  // /tunnels?line=<规则 id>：线路详情的深链（lineLinks.ts），开在线路概览那一页
+  useEffect(() => {
+    if (readPositiveParam(linkLocation, LINE_PARAM) && activeSection !== "routes") setActiveSection("routes");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [linkLocation]);
   const [showCreateTypeDialog, setShowCreateTypeDialog] = useState(false);
   const [aggregateDialog, setAggregateDialog] = useState<{ open: boolean; tunnel: any | null }>({ open: false, tunnel: null });
   const [chainCreateForm, setChainCreateForm] = useState<ChainCreateForm>(defaultChainCreateForm);
@@ -2361,11 +2284,16 @@ function TunnelsContent() {
           : activeSection === "exits"
             ? "exit"
             : null;
+  /*
+    页头的「已启用 / 总数」只要统计数字。下面的 ForwardGroupsContent 本来就在轮询这一页的 listPage，
+    这里用和它一模一样的参数（同一个页码键、同样规整过的搜索词），两处共用一个查询，不再各打一份。
+  */
+  const forwardGroupSummaryPage = usePersistentPageRequest(`forwardx.forwardGroups.${activeForwardGroupMode || "failover"}.page`);
   const forwardGroupSummaryQuery = trpc.forwardGroups.listPage.useQuery({
-    page: 1,
-    pageSize: 1,
+    page: forwardGroupSummaryPage.page,
+    pageSize: 12,
     groupMode: activeForwardGroupMode || "failover",
-    search: linkSearchQuery,
+    search: linkSearchQuery.trim().toLowerCase(),
   }, {
     enabled: activeForwardGroupMode !== null,
     refetchInterval: pollingInterval("normal"),
@@ -2400,10 +2328,7 @@ function TunnelsContent() {
     { enabled: !!deleteTunnel },
   );
 
-  const forwardProtocolSettings = useMemo(
-    () => normalizeForwardProtocolSettings(systemSettings?.forwardProtocols),
-    [systemSettings?.forwardProtocols]
-  );
+  const forwardProtocolSettings = panelFlags.forwardProtocols;
   const allowedForwardTypes = useMemo<ForwardType[]>(() => {
     const all = [...FORWARD_TYPES];
     if (!user || user.role === "admin") return all;
@@ -3507,7 +3432,7 @@ function TunnelsContent() {
             <div className="text-xs text-muted-foreground">PROXY Protocol</div>
           </div>
           <div className="flex items-center gap-2">
-            <Badge variant={advancedConfigured ? "secondary" : "outline"} className="h-5 px-1.5 text-[10px] font-normal">
+            <Badge variant={advancedConfigured ? "secondary" : "outline"} className="h-5 px-1.5 text-[11px] font-normal">
               {advancedConfigured ? "已配置" : "可选"}
             </Badge>
             <ChevronRight className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 ${chainAdvancedOpen ? "rotate-90" : ""}`} />
@@ -3874,7 +3799,7 @@ function TunnelsContent() {
             <div data-fx-help="" className="text-xs text-muted-foreground">PROXY Protocol、传输优化</div>
           </div>
           <div className="flex items-center gap-2">
-            <Badge variant={advancedConfigured ? "secondary" : "outline"} className="h-5 px-1.5 text-[10px] font-normal">
+            <Badge variant={advancedConfigured ? "secondary" : "outline"} className="h-5 px-1.5 text-[11px] font-normal">
               {advancedConfigured ? "已配置" : "可选"}
             </Badge>
             <ChevronRight className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 ${tunnelAdvancedOpen ? "rotate-90" : ""}`} />
@@ -3988,7 +3913,7 @@ function TunnelsContent() {
   const canCreateAggregate = !!hosts?.length && hosts.length >= 4 && !forwardxRuntimeDisabled;
   const activeSectionCreatesGroup = activeSection === "ports" || activeSection === "groups" || activeSection === "entries" || activeSection === "exits";
   // 「按目标新建」向导默认关（系统设置里开），懂行的人不需要它。
-  const linkWizardEnabled = !!(systemSettings as any)?.linkWizardEnabled;
+  const linkWizardEnabled = panelFlags.linkWizardEnabled;
   const canCreateActive = activeSection === "routes"
     ? linkWizardEnabled && canCreateGroup
     : activeSection === "tunnels"
@@ -4168,12 +4093,12 @@ function TunnelsContent() {
               isTimeout={item.isTimeout}
               icon="none"
               timeoutText="超时"
-              className={compact ? "shrink-0 text-[10px]" : "shrink-0"}
+              className={compact ? "shrink-0 text-[11px]" : "shrink-0"}
             />
           </div>
         ))}
         {hiddenCount > 0 && (
-          <div className="text-[10px] leading-none text-muted-foreground">还有 {hiddenCount} 条延迟明细</div>
+          <div className="text-[11px] leading-none text-muted-foreground">还有 {hiddenCount} 条延迟明细</div>
         )}
       </div>
     );
@@ -4356,10 +4281,32 @@ function TunnelsContent() {
     return [entryGroupLabel ? `入口组 ${entryGroupLabel}` : "", route].filter(Boolean).join(" ｜ ");
   };
 
-  // 节点池那一页的新建在它自己的标题右边（建池 / 用组建池 / 新建组），这里的「新建链路」和池子无关，不放
-  const createLinkAction = (activeSection === "routes" && !linkWizardEnabled) || activeSection === "pools" ? null : (
+  /*
+    「向导」（2.3.506）：「按目标新建」原来只在系统设置里打开后、线路概览那一页才有，不知道的人找不到。
+    现在每一页的「新建链路」左边都有一个小的「向导」，点开就是同一个向导；设置的意思没变 —— 打开后
+    线路概览右上角照旧是醒目的「按目标新建」（那时那一页不再重复摆「向导」）。
+  */
+  const showWizardButton = activeSection !== "pools" && !(activeSection === "routes" && linkWizardEnabled);
+  const wizardAction = showWizardButton ? (
     <Button
-      className="fx-row-action ml-auto h-9 shrink-0 gap-1.5 rounded-full px-3.5"
+      type="button"
+      variant="outline"
+      className="fx-row-action ml-auto h-9 shrink-0 gap-1.5 rounded-full px-3 max-sm:w-9 max-sm:px-0"
+      disabled={!canCreateGroup}
+      title={canCreateGroup ? "不知道建哪一种：说说想要什么，面板推荐一种并打开预填好的新建框" : "至少需要 1 台主机"}
+      aria-label="向导：按目标新建"
+      onClick={() => setLinkWizardOpen(true)}
+      data-testid="link-wizard-open"
+    >
+      <Wand2 className="h-4 w-4" />
+      {/* 手机上只留图标（页头那一行放不下三个带字的按钮），读屏照样念「向导」 */}
+      <span className="max-sm:sr-only">向导</span>
+    </Button>
+  ) : null;
+  // 节点池那一页的新建在它自己的标题右边（建池 / 用组建池 / 新建组），这里的「新建链路」和池子无关，不放
+  const createButton = (activeSection === "routes" && !linkWizardEnabled) || activeSection === "pools" ? null : (
+    <Button
+      className={cn("fx-row-action h-9 shrink-0 gap-1.5 rounded-full px-3.5", !wizardAction && "ml-auto")}
       disabled={!canCreateActive}
       title={createDisabledTitle}
       onClick={openCreateTypeDialog}
@@ -4368,11 +4315,17 @@ function TunnelsContent() {
       {activeSection === "routes" ? "按目标新建" : "新建链路"}
     </Button>
   );
+  const createLinkAction = wizardAction || createButton ? <>{wizardAction}{createButton}</> : null;
+  const headerShowsTunnelStats = activeSection !== "routes" && activeSection !== "pools" && activeSection !== "lines";
 
   return (
     <div className="space-y-6" data-fx-std-page={compactLayout ? undefined : ""} data-fx-compact-page={compactLayout ? "" : undefined}>
       {/* data-fx-std-page：标准布局下这一页整页按原来的标准画（compact.css 让出去）；精简下不带，按紧凑的方式画 */}
-      <WorkspaceHeader title="链路管理" description="管理隧道、端口转发和多节点线路" status={
+      {/*
+        线路概览、节点池两页不摆页头的「n / m 可用」和状态点：那是隧道链路那一页的数，摆在这两页是把
+        隧道的汇总原样再画一遍（2.3.506）；这两页自己有各自的数（三个数、每个池的 n/m）。
+      */}
+      <WorkspaceHeader title="链路管理" description="管理隧道、端口转发和多节点线路" status={headerShowsTunnelStats ? (
           <span className="text-meta tabular-nums text-muted-foreground">
             <AnimatedStatValue
               as="span"
@@ -4382,7 +4335,7 @@ function TunnelsContent() {
               fallbackValue={headerStat.fallback}
             />
           </span>
-      } chips={<HeaderStatusChips items={headerChipItems} />} actions={<>
+      ) : undefined} chips={headerShowsTunnelStats ? <HeaderStatusChips items={headerChipItems} /> : undefined} actions={<>
           <ViewModeToggle
             value={activeViewMode}
             onChange={handleActiveViewModeChange}
@@ -4551,7 +4504,7 @@ function TunnelsContent() {
                       </TableCell>
                       <TableCell className="hidden py-3 md:table-cell">
                         <div className="flex flex-wrap items-center gap-1.5">
-                          <Badge variant="outline" className="text-[10px]">
+                          <Badge variant="outline" className="text-[11px]">
                             {getTunnelModeDisplay(tunnel.mode, nginxTunnelEnabled, tunnel.forwardxVersion, tunnel.wireGuardPlane)}
                           </Badge>
                         </div>
@@ -4761,16 +4714,7 @@ function TunnelsContent() {
               ? [{ key: "conn", label: "连接监控", content: <TunnelConnStatsBody tunnel={{ id: testTunnel.id, name: testTunnel.name }} /> }]
               : []),
           ]}
-          actions={(
-            <>
-              <Button type="button" variant="outline" size="sm" className="gap-1.5" disabled={faultBundle.pending} onClick={() => { void faultBundle.exportBundle("tunnel", Number(testTunnel.id)); }}>
-                <FileJson className="h-3.5 w-3.5" />导出故障包
-              </Button>
-              <Button type="button" variant="outline" size="sm" className="gap-1.5" onClick={() => { setTestTunnel(null); setTopologyLocation(`/topology?tunnel=${Number(testTunnel.id)}`); }}>
-                <Network className="h-3.5 w-3.5" />查看拓扑
-              </Button>
-            </>
-          )}
+          actions={<DiagnoseSubjectActions kind="tunnel" id={Number(testTunnel.id)} onLeave={() => setTestTunnel(null)} speedTest />}
         />
       )}
 

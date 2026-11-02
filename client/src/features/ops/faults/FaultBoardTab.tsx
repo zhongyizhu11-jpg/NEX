@@ -6,7 +6,7 @@ import DataSectionError from "@/components/DataSectionError";
 import DataSectionLoading from "@/components/DataSectionLoading";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { segmentedControlClassName, segmentedOptionClassName } from "@/components/ui/segmented";
+import { SegmentedControl } from "@/components/ui/segmented-control";
 import { downloadTextFile } from "@/lib/fileDownload";
 import { pollingInterval } from "@/lib/polling";
 import { trpc } from "@/lib/trpc";
@@ -82,21 +82,7 @@ export default function FaultBoardTab() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className={segmentedControlClassName} role="group" aria-label="时间范围">
-          <div className="grid grid-cols-3 gap-1">
-            {RANGE_OPTIONS.map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                aria-pressed={hours === option.value}
-                className={segmentedOptionClassName(hours === option.value)}
-                onClick={() => setHours(option.value)}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-        </div>
+        <SegmentedControl<number> ariaLabel="时间范围" value={hours} options={RANGE_OPTIONS} onChange={setHours} listClassName="grid grid-cols-3 gap-1" />
         <div className="flex flex-wrap gap-2">
           <Button size="sm" variant="outline" disabled={exportMutation.isPending} onClick={() => exportMutation.mutate({ hours, format: "csv" })}>
             <Download className="mr-1.5 h-3.5 w-3.5" />导出 CSV

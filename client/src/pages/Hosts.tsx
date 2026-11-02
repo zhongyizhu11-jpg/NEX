@@ -19,6 +19,8 @@ import { parseHostDateTime } from "@/components/hosts/HostCard";
 import { getStoredAgentTokenViewMode, storeAgentTokenViewMode, type AgentTokenViewMode } from "@/lib/agentTokenViewMode";
 import { formatMetricSizeDetail } from "@/lib/formatMetricSize";
 import { usePageVisible } from "@/hooks/usePageVisible";
+import { usePanelFlags } from "@/hooks/usePanelFlags";
+import { useOpenedOnce } from "@/hooks/useOpenedOnce";
 import { useIsMobile } from "@/hooks/useMobile";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { escapeTooltipHtml, hostGeoCoordinate, hostMapClusterDistance } from "@/lib/hostGeo";
@@ -43,7 +45,6 @@ import { FxpRuntimeBadge, fxpRuntimeDetailText } from "@/components/hosts/FxpRun
 import { hostNeedsAgentUpgrade } from "@shared/fxpRuntime";
 import HostGroupManager, { compareHostGroupDisplayOrder, type HostGroupView, type HostGroupViewMode } from "@/components/hosts/HostGroupManager";
 import HostProbeServiceManager, { type HostProbeServiceViewMode } from "@/components/hosts/HostProbeServiceManager";
-import HostProbeServiceLatencyDialog from "@/components/hosts/HostProbeServiceLatencyDialog";
 import {
   editableDetectedAddress,
   compareVersions,
@@ -102,7 +103,6 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import DataSectionLoading from "@/components/DataSectionLoading";
 import DataSectionError from "@/components/DataSectionError";
 import { countryFeatureHasCode, normalizeCountryCode } from "@/lib/countryFeatures";
-import { normalizeForwardProtocolSettings } from "@shared/forwardTypes";
 import { useUrlTab } from "@/hooks/useUrlTab";
 import { pollingInterval, visiblePollingInterval } from "@/lib/polling";
 import { trpc } from "@/lib/trpc";
@@ -140,8 +140,11 @@ import {
 import type { GlobeMethods } from "react-globe.gl";
 import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
+import { useSearchIdParam } from "@/features/links/lineLinks";
 const ReactGlobe = lazy(() => import("react-globe.gl")) as typeof import("react-globe.gl").default;
 const HostFlatMap = lazy(() => import("@/components/HostFlatMap"));
+// 探测延迟曲线（recharts）点开才下载，不跟着主机页一起。
+const HostProbeServiceLatencyDialog = lazy(() => import("@/components/hosts/HostProbeServiceLatencyDialog"));
 const GLOBE_EARTH_IMAGE_URL = "/globe/earth-dark.jpg";
 const GLOBE_BUMP_IMAGE_URL = "/globe/earth-topology.png";
 const GLOBE_BACKGROUND_IMAGE_URL = "/globe/night-sky.png";
@@ -1381,7 +1384,7 @@ const HostTableRow = memo(function HostTableRow({
           {hostOs.label ? <span className="truncate" title={hostOs.full}>{hostOs.label}</span> : <span>--</span>}
           {host.agentVersion && <span className="font-mono" title="Agent 版本">v{host.agentVersion}</span>}
           {agentNeedsUpdate && <span className="text-[var(--fx-warn-text)]">新版本</span>}
-          <FxpRuntimeBadge host={host} className="h-4 px-1 text-[9px] leading-none" />
+          <FxpRuntimeBadge host={host} className="h-4 px-1 text-[11px] leading-none" />
           {host.agentUpgradeRequested && (
             <span className={agentUpgradeTimedOut ? "text-destructive" : "text-primary"}>{agentUpgradeTimedOut ? "升级失败" : "升级中"}</span>
           )}
@@ -1448,23 +1451,23 @@ const HostTableRow = memo(function HostTableRow({
             </div>
             <div className="flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-[11px] text-muted-foreground">
               {hostOs.label && (
-                <span className="shrink-0 rounded border border-border/50 bg-muted/35 px-1.5 py-0.5 text-[10px] font-medium leading-none text-foreground/80" title={hostOs.full}>
+                <span className="shrink-0 rounded border border-border/50 bg-muted/35 px-1.5 py-0.5 text-[11px] font-medium leading-none text-foreground/80" title={hostOs.full}>
                   {hostOs.label}
                 </span>
               )}
               {host.agentVersion && (
-                <span className="shrink-0 rounded border border-border/50 bg-muted/35 px-1.5 py-0.5 font-mono text-[10px] leading-none text-muted-foreground" title="Agent 版本">
+                <span className="shrink-0 rounded border border-border/50 bg-muted/35 px-1.5 py-0.5 font-mono text-[11px] leading-none text-muted-foreground" title="Agent 版本">
                   v{host.agentVersion}
                 </span>
               )}
               {agentNeedsUpdate && (
-                <Badge variant="outline" className="h-4 shrink-0 border-[color-mix(in_srgb,var(--fx-warn)_30%,transparent)] px-1 py-0 text-[9px] leading-none text-[var(--fx-warn-text)]">
+                <Badge variant="outline" className="h-4 shrink-0 border-[color-mix(in_srgb,var(--fx-warn)_30%,transparent)] px-1 py-0 text-[11px] leading-none text-[var(--fx-warn-text)]">
                   新版本
                 </Badge>
               )}
-              <FxpRuntimeBadge host={host} className="h-4 px-1 text-[9px] leading-none" />
+              <FxpRuntimeBadge host={host} className="h-4 px-1 text-[11px] leading-none" />
               {host.agentUpgradeRequested && (
-                <Badge variant="outline" className={`h-4 shrink-0 px-1 py-0 text-[9px] leading-none ${agentUpgradeTimedOut ? "border-destructive/30 text-destructive" : "border-primary/25 text-primary"}`}>
+                <Badge variant="outline" className={`h-4 shrink-0 px-1 py-0 text-[11px] leading-none ${agentUpgradeTimedOut ? "border-destructive/30 text-destructive" : "border-primary/25 text-primary"}`}>
                   {agentUpgradeTimedOut ? "升级失败" : "升级中"}
                 </Badge>
               )}
@@ -1697,18 +1700,13 @@ function HostsContent() {
   // Shared hosts can have a per-user API order which intentionally differs
   // from the global host sortOrder.
   const baseDisplayHosts = useMemo<any[]>(() => [...((hosts || []) as any[])], [hosts]);
-  const { data: systemSettings } = trpc.system.getSettings.useQuery();
-  const forwardProtocolSettings = useMemo(
-    () => normalizeForwardProtocolSettings(systemSettings?.forwardProtocols),
-    [systemSettings?.forwardProtocols]
-  );
+  // 协议开关、Agent 版本、DDNS / Telegram 是否就绪：从 publicInfo 读，不再拉整份 getSettings。
+  const panelFlags = usePanelFlags();
+  const forwardProtocolSettings = panelFlags.forwardProtocols;
   const nginxFeatureEnabled = forwardProtocolSettings.nginx !== false || forwardProtocolSettings.nginx_stream !== false;
-  const latestAgentVersion = useMemo(
-    () => systemSettings?.agentVersion || "",
-    [systemSettings?.agentVersion]
-  );
-  const ddnsProviderEnabled = Boolean(systemSettings?.ddns?.enabled && systemSettings?.ddns?.provider && systemSettings.ddns.provider !== "disabled");
-  const telegramBotReady = Boolean(systemSettings?.telegram?.enabled && systemSettings?.telegram?.configured);
+  const latestAgentVersion = panelFlags.agentVersion;
+  const ddnsProviderEnabled = panelFlags.ddnsEnabled;
+  const telegramBotReady = panelFlags.telegramBotReady;
   /**
    * 这两个提醒会从哪儿发出去。
    *
@@ -1722,6 +1720,8 @@ function HostsContent() {
   const [hostDialogTab, setHostDialogTab] = useState<HostDialogTab>("basic");
   const [upgradeHost, setUpgradeHost] = useState<any>(null);
   const [probeLatencyHost, setProbeLatencyHost] = useState<any>(null);
+  // 探测延迟弹窗（recharts）第一次打开才下载、才挂上。
+  const probeLatencyDialogMounted = useOpenedOnce(!!probeLatencyHost);
   /*
     点开的那台机器。列表只负责「要不要点进去」，其余全部在这里展开 ——
     上一版没有这一层，所有字段都挤在列表里，于是列表既看不清也翻不完。
@@ -1785,6 +1785,28 @@ function HostsContent() {
     pageVisible && activeManageTab === "hosts",
   );
   const detailHostId = detailHost ? Number(detailHost.id) : null;
+  /*
+    /hosts?host=<主机 id>：主机详情的深链（2.3.506）。打开详情时地址栏带着它（复制下来就能分享），
+    关掉就去掉；带着它进来时按 id 单独取（不一定在当前这一页里）。
+  */
+  const [hostParam, setHostParam] = useSearchIdParam("host");
+  useEffect(() => {
+    if (!hostParam || Number(detailHost?.id || 0) === hostParam) return;
+    void utils.hosts.getById.fetch({ id: hostParam }).then((host) => {
+      if (host) setDetailHost(host);
+      else {
+        toast.error("这台主机不存在，或者你没有权限查看");
+        setHostParam(null);
+      }
+    }, () => setHostParam(null));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hostParam]);
+  const lastDetailHostIdRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (detailHostId === lastDetailHostIdRef.current) return;
+    lastDetailHostIdRef.current = detailHostId;
+    setHostParam(detailHostId);
+  }, [detailHostId, setHostParam]);
   /*
     详情框打开时记下的是那一刻的主机。在详情里点编辑、保存之后列表会刷新，可那份快照不会：
     再点编辑，表单拿旧快照填，刚存的值（比如线路带宽）看着像没存上。所以详情框和它的编辑
@@ -2566,10 +2588,10 @@ function HostsContent() {
     try {
       setCheckingAgentUpdate(true);
       lastAgentUpdateCheck.current = now;
-      await utils.system.getSettings.invalidate();
+      await utils.system.publicInfo.invalidate();
       const latestHosts = await utils.hosts.list.fetch();
-      const latestSettings = await utils.system.getSettings.fetch();
-      const agentVersion = latestSettings?.agentVersion || "";
+      const latestInfo = await utils.system.publicInfo.fetch();
+      const agentVersion = latestInfo?.agentVersion || "";
       const count = latestHosts.filter((host: any) => hostNeedsAgentUpgrade(host, agentVersion)).length;
       toast.success(count > 0 ? `发现 ${count} 台 Agent 有新版本` : "Agent 版本检查完成，暂无新版本");
     } catch (err: any) {
@@ -3060,12 +3082,16 @@ function HostsContent() {
         refreshInterval={hostLiveRefreshInterval}
       />
 
-      <HostProbeServiceLatencyDialog
-        open={!!probeLatencyHost}
-        onOpenChange={(open) => !open && setProbeLatencyHost(null)}
-        host={probeLatencyHost}
-        services={probeServices as any[]}
-      />
+      {probeLatencyDialogMounted ? (
+        <Suspense fallback={null}>
+          <HostProbeServiceLatencyDialog
+            open={!!probeLatencyHost}
+            onOpenChange={(open) => !open && setProbeLatencyHost(null)}
+            host={probeLatencyHost}
+            services={probeServices as any[]}
+          />
+        </Suspense>
+      ) : null}
       {/* Reset Host Traffic Dialog */}
       {/* 租户自助加机器 —— 和「订阅管理 → 我的机器」用的是同一个弹窗。 */}
       <AddSelfServiceHostDialog
@@ -3300,7 +3326,7 @@ function HostsContent() {
 
       {/* 编辑主机对话框 */}
       <Dialog open={showDialog} onOpenChange={setShowDialog}>
-        <DialogContent className="flex h-[min(720px,86vh)] max-h-[86vh] flex-col overflow-hidden sm:max-w-[44rem]">
+        <DialogContent className="flex h-[min(720px,86svh)] max-h-[86svh] flex-col overflow-hidden sm:max-w-[44rem]">
           <DialogHeader className="shrink-0 space-y-1">
             <DialogTitle>编辑主机</DialogTitle>
             <DialogDescription className="sr-only">

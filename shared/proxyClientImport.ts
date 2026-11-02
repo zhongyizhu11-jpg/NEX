@@ -366,13 +366,16 @@ export function buildProxySubscriptionUrl(options: {
    * 令牌默认格式上 —— 默认设成 Clash 的话，Shadowrocket 会收到一份 Clash YAML。
    */
   pinFormat?: boolean;
+  /** 给了就拼成短链 /s/<别名>（内容和 /api/sub/<令牌> 一样），不给就用令牌。 */
+  alias?: string;
 }): string {
   const params = new URLSearchParams();
   if (options.format !== "base64" || options.pinFormat) params.set("format", options.format);
   // rules=1 表示按订阅链接上配置的预设来，具体档位不暴露在地址里。
   if (options.kind === "rules") params.set("rules", "1");
   const query = params.toString();
-  return `${options.origin.replace(/\/+$/, "")}/api/sub/${options.token}${query ? `?${query}` : ""}`;
+  const path = options.alias ? `/s/${options.alias}` : `/api/sub/${options.token}`;
+  return `${options.origin.replace(/\/+$/, "")}${path}${query ? `?${query}` : ""}`;
 }
 
 /** 该格式是否真的能表达分流规则；不能的话没必要展示规则订阅地址。 */

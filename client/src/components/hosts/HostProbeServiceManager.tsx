@@ -539,7 +539,7 @@ export default function HostProbeServiceManager({
                           <Activity className="h-4 w-4 text-muted-foreground" />
                           <div>
                             <div className="font-medium">{service.name}</div>
-                            <Badge variant="outline" className="mt-1 px-1.5 py-0 text-[10px] uppercase">{service.method}</Badge>
+                            <Badge variant="outline" className="mt-1 px-1.5 py-0 text-[11px] uppercase">{service.method}</Badge>
                           </div>
                         </div>
                       </TableCell>
@@ -572,7 +572,7 @@ export default function HostProbeServiceManager({
       </div>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="flex max-h-[88vh] flex-col overflow-hidden sm:max-w-2xl">
+        <DialogContent className="flex max-h-[88svh] flex-col overflow-hidden sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>{editingId ? "编辑服务" : "添加服务"}</DialogTitle>
             <DialogDescription data-fx-help="">配置主机 Ping / TCPing 探测服务</DialogDescription>

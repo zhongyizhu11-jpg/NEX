@@ -5,6 +5,7 @@ import { formatForwardRuleProtocol, FORWARD_TYPE_LABELS, type ForwardType } from
 import { isTelegramBotReady } from "./telegramReady";
 import { filterTelegramRecipients } from "./telegramNotifyPrefs";
 import { isDiscordBotReady, notifyDiscordAdmins } from "./discordNotify";
+import { escapeHtmlText as escapeHtml } from "../shared/htmlEscape";
 
 type ForwardRuleErrorPayload = {
   rule: any;
@@ -41,13 +42,6 @@ export function shouldNotifyForwardRuleError(ruleId: number, message?: string | 
   }
   lastRuleErrorNotifyAt.set(signature, now);
   return true;
-}
-
-function escapeHtml(value: unknown) {
-  return String(value ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
 }
 
 function formatTime(value = new Date()) {

@@ -31,6 +31,8 @@
 */
 
 html[data-ui-theme="rose"] {
+  /* 强调色沿用面板默认：浅色下深蓝底配白字 */
+  --fx-on-accent: #ffffff;
   --fx-l0-page: #fbf0f2;
   --fx-l1-surface: #fffafb;
   --fx-raised: #fff;
@@ -70,6 +72,8 @@ html[data-ui-theme="rose"] {
   --fx-font-display: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", "New York", Georgia, "Songti SC", "STSong", "Noto Serif CJK SC", "Source Han Serif SC", serif;
 }
 html.dark[data-ui-theme="rose"] {
+  /* 深色下强调色是浅蓝，字用深色 */
+  --fx-on-accent: #0d1722;
   --fx-l0-page: #150f12;
   --fx-l1-surface: #1e1619;
   --fx-raised: #271d22;

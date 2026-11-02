@@ -47,6 +47,24 @@ pnpm build
 pnpm start
 ```
 
+### 提交前自查
+
+提 PR 前在本地跑一遍：
+
+```bash
+pnpm exec tsc --noEmit          # 类型检查
+node scripts/check-tdz.mjs      # 模块初始化顺序检查
+pnpm lint                       # ESLint，只拦新增问题（基线在 scripts/lint-baseline.json）
+pnpm test:all                   # 全部测试（自动发现 *.test.ts / *.test.tsx）
+pnpm build                      # 前端 + 后端构建
+```
+
+改了 Go 代码（`agent/`、`forwardx-fxp/`）时，在对应目录再跑：
+
+```bash
+gofmt -l . && go vet ./... && go test ./...
+```
+
 ## 提交 Issue
 
 提交 Issue 时，请尽量包含以下信息：

@@ -1,5 +1,9 @@
+import dns from "node:dns";
+import { isIP } from "node:net";
+
 import * as db from "./db";
 import { pushAgentRefresh } from "./agentEvents";
+import { restrictedForwardTargetClass, restrictedForwardTargetLabel } from "./ruleTargetPolicy";
 import { getHostEntryAddress } from "../shared/hostEntryAddress";
 import { MAX_ROUTE_HOPS, type RouteEndpoint } from "../shared/routeGroup";
 
@@ -17,6 +21,8 @@ export type LineSegmentDraft = {
   hops: number[];
   hopVia?: Array<number | null>;
   dest: RouteEndpoint | null;
+  /** 落地这一段不测、直接报这句（比如目标被拦了）。 */
+  destIssue?: string | null;
 };
 
 export type LineSegmentProbe = {
@@ -41,14 +47,15 @@ export async function planLineSegmentProbes(draft: LineSegmentDraft): Promise<Li
     const isLast = index === nodes.length - 1;
     if (isLast) {
       const dest = draft.dest;
+      const filled = !!(dest && dest.ip && dest.port > 0);
       probes.push({
         fromHostId: from,
         fromName: nameOf(from),
         toHostId: null,
         toName: "落地",
         viaTunnel: false,
-        target: dest && dest.ip && dest.port > 0 ? { ip: dest.ip, port: dest.port, method: "tcp" } : null,
-        issue: dest && dest.ip && dest.port > 0 ? null : "落地地址还没填",
+        target: filled && !draft.destIssue ? { ip: dest!.ip, port: dest!.port, method: "tcp" } : null,
+        issue: draft.destIssue || (filled ? null : "落地地址还没填"),
       });
       break;
     }
@@ -65,6 +72,56 @@ export async function planLineSegmentProbes(draft: LineSegmentDraft): Promise<Li
     });
   }
   return probes;
+}
+
+/** 拨落地的是哪台：入口，或者最后一跳中转（和 planLineSegmentProbes 同一个口径）。 */
+export function segmentDestDialHostId(draft: Pick<LineSegmentDraft, "entryHostId" | "hops">): number {
+  const hops = draft.hops.slice(0, MAX_ROUTE_HOPS);
+  return hops.length > 0 ? hops[hops.length - 1] : draft.entryHostId;
+}
+
+async function lookupAll(host: string): Promise<string[]> {
+  const records = await dns.promises.lookup(host, { all: true, verbatim: true });
+  return records.map((record) => record.address);
+}
+
+/**
+ * 「最后一台 → 落地」这一段，落地地址是用户随手填的。拨它的那台是别人的机器（共享主机）时，
+ * 和规则同一把尺子（ruleTargetPolicy）：内网、环回、链路本地、云元数据这些不让测 ——
+ * 不然普通用户能借别人的 Agent 去探内网端口。域名先在面板上解析，解析结果也要是公网，
+ * 并且把测试钉在解析出来的那个地址上（不留给 Agent 再解析一次）。
+ * 管理员、或者拨落地的就是他自己的机器：照旧。
+ */
+export async function vetSegmentDest(
+  actor: { id: number; role: string },
+  draft: Pick<LineSegmentDraft, "entryHostId" | "hops" | "dest">,
+  resolve: (host: string) => Promise<string[]> = lookupAll,
+): Promise<{ dest: RouteEndpoint | null; issue: string | null }> {
+  const dest = draft.dest;
+  if (actor.role === "admin" || !dest || !dest.ip || !(dest.port > 0)) return { dest, issue: null };
+  const dialHostId = segmentDestDialHostId(draft);
+  const [dialHost] = await db.getHostsByIds([dialHostId]) as any[];
+  if (dialHost && Number(dialHost.userId) === Number(actor.id)) return { dest, issue: null };
+  const blocked = (kind: string) => ({
+    dest: null,
+    issue: `落地地址是${restrictedForwardTargetLabel(kind)}，测它的主机不是你自己的，不能测`,
+  });
+  const literalKind = restrictedForwardTargetClass(dest.ip);
+  if (literalKind) return blocked(literalKind);
+  const host = String(dest.ip).trim().replace(/^\[(.*)\]$/, "$1");
+  if (isIP(host)) return { dest, issue: null };
+  let addresses: string[];
+  try {
+    addresses = await resolve(host);
+  } catch {
+    addresses = [];
+  }
+  if (addresses.length === 0) return { dest: null, issue: `落地地址 ${host} 解析不了` };
+  for (const address of addresses) {
+    const kind = restrictedForwardTargetClass(address);
+    if (kind) return blocked(kind);
+  }
+  return { dest: { ...dest, ip: addresses[0] }, issue: null };
 }
 
 type Run = { ownerId: number; createdAt: number; probes: LineSegmentProbe[]; testIds: Array<number | null> };

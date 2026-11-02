@@ -1,4 +1,5 @@
 import { and, asc, desc, eq, inArray, isNotNull, or, sql, type SQLWrapper } from "drizzle-orm";
+import { notifyHostDeleted } from "../entityCleanup";
 import { isHostConsideredOnline } from "../hostHeartbeatPolicy";
 export { isFreshHostHeartbeat } from "../hostHeartbeatPolicy";
 import {
@@ -801,6 +802,8 @@ export async function deleteHost(id: number) {
   await afterDatabaseCommit(async () => {
     removePresenceCapableHost(id);
     invalidateAgentAuthTokenCandidates();
+    // 按主机 id 记在内存里的缓存（心跳、指标采样……）一起清掉
+    notifyHostDeleted(id);
     await refreshDatabasePoolSettings().catch(() => undefined);
   });
 }

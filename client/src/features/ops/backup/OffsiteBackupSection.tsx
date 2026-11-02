@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PasswordInput } from "@/components/ui/password-input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { segmentedControlClassName, segmentedOptionClassName } from "@/components/ui/segmented";
+import { SegmentedControl } from "@/components/ui/segmented-control";
 import { Switch } from "@/components/ui/switch";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
@@ -232,19 +232,7 @@ export default function OffsiteBackupSection(_props: Record<string, never>) {
       <CardContent className="space-y-4">
         <SettingList>
           <SettingRow label="传到哪里" description={DESTINATION_HINTS[form.destination]}>
-            <div className={cn(segmentedControlClassName, "grid grid-cols-4 gap-1")} role="group" aria-label="备份目的地">
-              {DESTINATIONS.map((item) => (
-                <button
-                  key={item.value}
-                  type="button"
-                  aria-pressed={form.destination === item.value}
-                  onClick={() => set("destination", item.value)}
-                  className={segmentedOptionClassName(form.destination === item.value, false, "px-1")}
-                >
-                  {item.label}
-                </button>
-              ))}
-            </div>
+            <SegmentedControl ariaLabel="备份目的地" className="grid grid-cols-4 gap-1" optionClassName="px-1" value={form.destination} options={DESTINATIONS} onChange={(destination) => set("destination", destination)} />
             {form.destination === "webdav" ? (
               <div className="grid gap-3 sm:grid-cols-2">
                 <FormField className="space-y-1.5 sm:col-span-2">
@@ -342,10 +330,13 @@ export default function OffsiteBackupSection(_props: Record<string, never>) {
 
               <SettingRow label="多久一次" description="北京时间。">
                 <div className="flex flex-wrap items-center gap-2">
-                  <div className={cn(segmentedControlClassName, "grid grid-cols-2 gap-1")} role="group" aria-label="备份节奏">
-                    <button type="button" aria-pressed={form.scheduleMode === "daily"} onClick={() => set("scheduleMode", "daily")} className={segmentedOptionClassName(form.scheduleMode === "daily")}>每天</button>
-                    <button type="button" aria-pressed={form.scheduleMode === "interval"} onClick={() => set("scheduleMode", "interval")} className={segmentedOptionClassName(form.scheduleMode === "interval")}>每隔</button>
-                  </div>
+                  <SegmentedControl
+                    ariaLabel="备份节奏"
+                    className="grid grid-cols-2 gap-1"
+                    value={form.scheduleMode}
+                    options={[{ value: "daily", label: "每天" }, { value: "interval", label: "每隔" }] as const}
+                    onChange={(mode) => set("scheduleMode", mode)}
+                  />
                   {form.scheduleMode === "daily" ? (
                     <Select value={form.scheduleHour} onValueChange={(value) => set("scheduleHour", value)}>
                       <SelectTrigger className="h-9 w-[104px]" aria-label="每天几点备份"><SelectValue /></SelectTrigger>

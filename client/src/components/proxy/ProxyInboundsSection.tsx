@@ -59,7 +59,8 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useLocation } from "wouter";
 import { toast } from "sonner";
 
 const TRANSPORT_LABELS: Record<string, string> = {
@@ -236,6 +237,7 @@ export default function ProxyInboundsSection({
 } = {}) {
   const { user: me } = useAuth();
   const isAdmin = me?.role === "admin";
+  const [, setLocation] = useLocation();
   const utils = trpc.useUtils();
   const confirm = useConfirmDialog();
   const [collapsed, setCollapsed] = useState(false);
@@ -456,6 +458,23 @@ export default function ProxyInboundsSection({
     setDialogOpen(true);
   };
 
+  /*
+    /client-subscriptions?create=node：别处（节点池的落地池框、文档）指过来时直接打开「在我的机器上开一个」，
+    用一次就从地址栏去掉。主机列表还没到时等它到了再开（框里要预选第一台）。
+  */
+  const createDeepLinkHandled = useRef(false);
+  useEffect(() => {
+    if (createDeepLinkHandled.current || hostsQuery.isLoading) return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("create") !== "node") return;
+    createDeepLinkHandled.current = true;
+    params.delete("create");
+    const rest = params.toString();
+    setLocation(`${window.location.pathname}${rest ? `?${rest}` : ""}`, { replace: true });
+    if (hosts.length > 0) openCreate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hostsQuery.isLoading, hosts.length]);
+
   const openEdit = (row: any) => {
     /*
       安全层和传输方式按协议收敛一次再进表单。
@@ -591,7 +610,7 @@ export default function ProxyInboundsSection({
     sortName: String(row.name || ""),
     // 只放协议小标，和粘贴行一样。客户端兼容挪到 ⋯ 菜单（行里那枚小标在手机上会挤掉名字）。
     tag: (
-      <Badge variant="secondary" className="h-4 shrink-0 px-1 text-[10px] font-normal">
+      <Badge variant="secondary" size="sm" className="shrink-0 font-normal">
         {PROXY_NODE_PROTOCOL_LABELS[row.protocol as ProxyNodeProtocol] || row.protocol}
       </Badge>
     ),
@@ -809,6 +828,15 @@ export default function ProxyInboundsSection({
                     <DropdownMenuItem onSelect={() => onPasteNode()}>
                       粘一条节点链接
                     </DropdownMenuItem>
+                    {/*
+                      新建落地节点只有这一个主入口（2.3.506）。几台开同一份的「落地池」在链路管理 › 节点池里建
+                      （只有管理员进得去链路管理），这里给一条路过去，不再让人自己找。
+                    */}
+                    {isAdmin ? (
+                      <DropdownMenuItem onSelect={() => setLocation("/tunnels?tab=pools")}>
+                        几台开同一份（落地池）
+                      </DropdownMenuItem>
+                    ) : null}
                   </DropdownMenuContent>
                 </DropdownMenu>
               ) : (

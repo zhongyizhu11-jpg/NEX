@@ -8,7 +8,7 @@ import type { ReactNode } from "react";
  * `min-w-0` + `break-words` 是关键 —— 少了它，一个长 token 或长域名会把整行
  * 撑出屏幕，手机上就变成横向滚动。
  */
-export function MobileInfoRow({
+function MobileInfoRow({
   label,
   children,
   valueClassName = "",
