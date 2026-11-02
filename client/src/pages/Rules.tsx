@@ -2054,7 +2054,7 @@ function RulesContent() {
   );
   // 规则页只拿隧道名称 / 归属来展示和选择，一分钟刷一次就够；隧道页和表单里就地新建隧道都会直接 invalidate。
   const { data: tunnels } = trpc.tunnels.options.useQuery(undefined, {
-    refetchInterval: 60_000,
+    refetchInterval: pollingInterval("minute"),
     staleTime: 10000,
     refetchOnWindowFocus: false,
   });
@@ -4578,11 +4578,15 @@ function RulesContent() {
     return map;
   }, [ruleTargetGeoRows]);
   const trafficRangeLabel = "近 24h";
+  /*
+    累计（total）和近 24h 是两份不同的数（服务端分开算、分开缓存），合不成一个查询。
+    累计这份只用来显示卡上的总字节，实时速率、延迟都从 24h 那份取，所以它 30 秒一轮就够。
+  */
   const { data: totalTrafficSummary } = trpc.rules.trafficSummary.useQuery(
     { hours: 24, range: "total", ruleIds: visibleRuleIdsForMetrics },
     {
       enabled: secondaryQueriesReady && visibleRuleIdsForMetrics.length > 0,
-      refetchInterval: pollingInterval("normal"),
+      refetchInterval: pollingInterval("slow"),
       staleTime: 5000,
       refetchOnWindowFocus: false,
       placeholderData: (previousData) => previousData,

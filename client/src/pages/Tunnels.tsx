@@ -2361,11 +2361,16 @@ function TunnelsContent() {
           : activeSection === "exits"
             ? "exit"
             : null;
+  /*
+    页头的「已启用 / 总数」只要统计数字。下面的 ForwardGroupsContent 本来就在轮询这一页的 listPage，
+    这里用和它一模一样的参数（同一个页码键、同样规整过的搜索词），两处共用一个查询，不再各打一份。
+  */
+  const forwardGroupSummaryPage = usePersistentPageRequest(`forwardx.forwardGroups.${activeForwardGroupMode || "failover"}.page`);
   const forwardGroupSummaryQuery = trpc.forwardGroups.listPage.useQuery({
-    page: 1,
-    pageSize: 1,
+    page: forwardGroupSummaryPage.page,
+    pageSize: 12,
     groupMode: activeForwardGroupMode || "failover",
-    search: linkSearchQuery,
+    search: linkSearchQuery.trim().toLowerCase(),
   }, {
     enabled: activeForwardGroupMode !== null,
     refetchInterval: pollingInterval("normal"),
