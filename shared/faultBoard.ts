@@ -86,6 +86,35 @@ export function recoveryDurationSeconds(event: Pick<FaultEventInput, "kind" | "d
   return Number.isFinite(value) && value >= 0 ? value : null;
 }
 
+/*
+  线路类告警的口径（一处定义，两处用）：故障看板「线路切换 / 异常」这一类的条数，
+  和线路工作台头上的「告警 / 已自动恢复」都按这两个判断数，同一时段数字一致。
+*/
+export function isRouteFaultEvent(event: Pick<FaultEventInput, "kind" | "level" | "data">) {
+  return !isRecoveryEvent(event) && faultCategoryOf(event.kind, event.level) === "route";
+}
+
+export function isRouteRecoveryEvent(event: Pick<FaultEventInput, "kind" | "data">) {
+  return event.kind.startsWith("route.") && isRecoveryEvent(event);
+}
+
+/** 时间窗口内线路告警几条、自动恢复几次。 */
+export function tallyRouteFaults(
+  events: ReadonlyArray<Pick<FaultEventInput, "kind" | "level" | "data" | "createdAt">>,
+  options: { nowMs: number; hours: number },
+): { alerts: number; recovered: number } {
+  const startMs = options.nowMs - Math.max(1, Math.floor(options.hours)) * 3_600_000;
+  let alerts = 0;
+  let recovered = 0;
+  for (const event of events) {
+    const at = toMs(event.createdAt);
+    if (at < startMs || at > options.nowMs) continue;
+    if (isRouteRecoveryEvent(event)) recovered += 1;
+    else if (isRouteFaultEvent(event)) alerts += 1;
+  }
+  return { alerts, recovered };
+}
+
 export type FaultSummary = {
   alerts: number;
   critical: number;

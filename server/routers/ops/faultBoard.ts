@@ -2,7 +2,8 @@ import { z } from "zod";
 import { adminProcedure, router } from "../../_core/trpc";
 import * as db from "../../db";
 import { isHostConsideredOnline } from "../../hostHeartbeatPolicy";
-import { listPanelEvents, type PanelEvent } from "../../ops/panelEvents";
+import { type PanelEvent } from "../../ops/panelEvents";
+import { panelEventsSince } from "../../ops/routeFaultCounts";
 import { getHostNamesByIds } from "../../repositories/hostRepository";
 import { getFiringLossAlerts, getFiringResourceAlerts } from "../../resourceAlertNotifier";
 import { redactSupportValue } from "../../supportBundle";
@@ -17,21 +18,9 @@ import { APP_VERSION } from "../../../shared/versions";
   事件按 id 倒序一页 500 条往回翻，最多翻 10 页（5000 条）：再多也看不过来，汇总里会标出「截断」。
 */
 
-const MAX_PAGES = 10;
-const PAGE_SIZE = 500;
-
+// 和线路工作台共用同一个取事件的函数，线路告警的条数两边一致（server/ops/routeFaultCounts.ts）。
 async function eventsSince(sinceSeconds: number) {
-  const all: PanelEvent[] = [];
-  let beforeId: number | null = null;
-  let truncated = false;
-  for (let page = 0; page < MAX_PAGES; page += 1) {
-    const batch = await listPanelEvents({ sinceSeconds, beforeId, limit: PAGE_SIZE });
-    all.push(...batch);
-    if (batch.length < PAGE_SIZE) return { events: all, truncated };
-    beforeId = batch[batch.length - 1].id;
-  }
-  truncated = true;
-  return { events: all, truncated };
+  return await panelEventsSince(sinceSeconds);
 }
 
 async function withHostNames(events: PanelEvent[]): Promise<FaultEventInput[]> {

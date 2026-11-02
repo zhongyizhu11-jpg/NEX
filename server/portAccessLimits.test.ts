@@ -85,7 +85,9 @@ test("heartbeat sync covers already-running entry rules without restarting their
   assert.match(block, /isEntryBridgeRuntimeRule/);
   assert.match(block, /"chain"/);
   assert.doesNotMatch(block, /rule\.isRunning|restart|resetForward/);
-  assert.match(source, /portAccessLimits: action\?\.portAccessLimits \|\| \[\]/);
+  // 动作签名（判断要不要重发）在 agentDesiredStateHash.ts 里，限制变了也算变化
+  const signatureSource = readFileSync(new URL("./agentDesiredStateHash.ts", import.meta.url), "utf8");
+  assert.match(signatureSource, /portAccessLimits: action\?\.portAccessLimits \|\| \[\]/);
 });
 
 test("the enforcement setting only turns on for an explicit \"true\"", () => {
