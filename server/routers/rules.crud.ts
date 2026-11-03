@@ -49,6 +49,7 @@ import { z } from "zod";
 import { planProxyNodeBinding } from "@shared/proxyNodeAutoBind";
 import { assertNoDirectSelfForwardLoop } from "../selfForwardLoop";
 import * as db from "../db";
+import { afterDatabaseCommit, isDatabaseTransactionActive } from "../dbRuntime";
 import { handleTrafficBillingShortfall } from "../trafficBillingRuleBlock";
 import { pushAgentRefresh } from "../agentEvents";
 import { invalidateProxySubCacheForUser } from "../proxySubCache";
@@ -1282,7 +1283,7 @@ async function assertForwardGroupPortWithinUserPlanRange(options: {
   }
 }
 
-async function settleTrafficBillingForDeletedRule(rule: any) {
+async function settleTrafficBillingForDeletedRule(rule: any, options: { alreadyMarked?: boolean } = {}) {
   const billed = await withTrafficBillingUserLock(rule.userId, async () => {
     const billingResource = await db.findTrafficBillingResourceForRule(rule);
     const fallback = db.trafficBillingResourceCandidatesForRule(rule)[0];
@@ -1297,7 +1298,9 @@ async function settleTrafficBillingForDeletedRule(rule: any) {
       : null;
     // Keep settlement and the state transition under the same user lock so a
     // traffic report cannot create fresh unsettled usage between them.
-    await db.markForwardRulePendingDelete(Number(rule.id));
+    // 事务里已经标过待删的（见 markTemplateChildrenPendingDelete）不再标第二遍：再标会把
+    // Agent 可能已经确认的删除状态（isRunning=false）重新打回「待删」。
+    if (!options.alreadyMarked) await db.markForwardRulePendingDelete(Number(rule.id));
     return result;
   });
   if (billed && Number(billed.balanceAfterCents) < 0) {
@@ -1329,14 +1332,30 @@ async function markTemplateChildrenPendingDelete(
   options: { deferRefresh?: boolean } = {},
 ) {
   const childRules = await db.getForwardGroupChildRulesForTemplate(templateRuleId);
+  /*
+    在事务里（模板改回普通规则、模板换组）：事务里只把子规则标成待删、把隧道标成待下发，流量结算
+    放到提交之后。结算要拿这个用户的计费键锁，而计费那边是「先拿键锁、再开事务」：事务里等这把锁，
+    SQLite 下事务占着全局连接锁，两边互相等死；结算在 MySQL / PG 上还会锁住用户的计费行，跟着
+    大事务一起占着。回滚了就不结算 —— 子规则其实没删。和 forwardGroupRepository 的
+    removeManagedRule 在事务里的做法一致。
+  */
+  const inTransaction = isDatabaseTransactionActive();
   for (const child of childRules as any[]) {
-    await settleTrafficBillingForDeletedRule(child);
+    if (inTransaction) await db.markForwardRulePendingDelete(Number(child.id));
+    else await settleTrafficBillingForDeletedRule(child);
     const tunnelId = Number((child as any).tunnelId || 0);
     if (tunnelId) {
       await db.updateTunnel(tunnelId, { isRunning: false } as any);
     }
   }
-  if (!options.deferRefresh) await refreshPendingTemplateChildren(childRules as any[], reason);
+  if (inTransaction) {
+    await afterDatabaseCommit(async () => {
+      for (const child of childRules) await settleTrafficBillingForDeletedRule(child, { alreadyMarked: true });
+      if (!options.deferRefresh) await refreshPendingTemplateChildren(childRules, reason);
+    });
+  } else if (!options.deferRefresh) {
+    await refreshPendingTemplateChildren(childRules as any[], reason);
+  }
   return childRules;
 }
 
@@ -2552,14 +2571,13 @@ export const crudRulesRouter = router({
           isRunning: false,
           userId: ctx.user.id,
         } as any);
-        let id = 0;
-        // 同步子规则时，这些入口端口是本请求自己占着的（见 runWithHeldHostPortReservations）。
-        if (isForwardChain) {
-          id = await runWithHeldHostPortReservations(groupReservations, () => db.withForwardGroupSyncTransaction(forwardGroupId, createTemplateRule));
-        } else {
-          id = await createTemplateRule();
-          await runWithHeldHostPortReservations(groupReservations, () => db.syncForwardGroupRules(forwardGroupId));
-        }
+        /*
+          模板行和它在每台成员机上的子规则在一个事务里写（转发链早就这样，端口转发 / 主备组以前是先建
+          模板、再在事务外同步）：同步到一半失败（某台成员机上端口被占、隧道出口分不到端口），整体回滚，
+          不会留下一条没有子规则、却占着入口端口的模板。通知 Agent、中继同步、跑故障转移都在提交之后。
+          同步子规则时，这些入口端口是本请求自己占着的（见 runWithHeldHostPortReservations）。
+        */
+        const id = await runWithHeldHostPortReservations(groupReservations, () => db.withForwardGroupSyncTransaction(forwardGroupId, createTemplateRule));
         await quotaReservation?.release();
         quotaReservation = null;
         await db.runForwardGroupFailover(forwardGroupId);
@@ -2997,23 +3015,31 @@ export const crudRulesRouter = router({
           }
           await assertRuleTargetsAllowedForActor(ctx.user, data, { hostId: nextHostId, tunnel: nextTunnelId ? selectedTunnelForRule : null });
 
-          await db.updateForwardRule(input.id, data);
-          // Let the mapping reconciler acquire endpoint reservations itself;
-          // retaining this primary reservation would make a matching mapping
-          // appear busy and can rotate its port unnecessarily.
-          tunnelExitPortReservationForConversion?.release();
-          tunnelExitPortReservationForConversion = null;
-          if (nextTunnelId && selectedTunnelForRule) {
-            await db.reconcileForwardRuleTunnelExits({ ...rule, ...data, id: input.id, tunnelId: nextTunnelId, tunnelExitPort }, selectedTunnelForRule);
-            await db.updateTunnel(nextTunnelId, { isRunning: false } as any);
-          } else {
-            await db.clearForwardRuleTunnelExits(input.id);
-          }
-          const retiredChildren = await markTemplateChildrenPendingDelete(
-            input.id,
-            "forward-group-rule-converted",
-            { deferRefresh: true },
-          );
+          /*
+            模板改回普通规则：规则行、隧道出口映射、隧道运行标记、子规则标待删在一个事务里，中途失败整体
+            回滚 —— 以前规则行先改成了普通规则，后面出错时子规则还在成员机上跑，却再也没有模板管它们。
+            先拿这个组的同步锁再开事务（只拿锁、不在事务里同步）：别的请求此刻同步这个组，会照着还没
+            提交的模板再把子规则建回来。子规则的流量结算、通知 Agent 都在提交之后。
+          */
+          const retiredChildren = await db.withForwardGroupsSyncTransaction([groupId], async () => {
+            await db.updateForwardRule(input.id, data);
+            // Let the mapping reconciler acquire endpoint reservations itself;
+            // retaining this primary reservation would make a matching mapping
+            // appear busy and can rotate its port unnecessarily.
+            tunnelExitPortReservationForConversion?.release();
+            tunnelExitPortReservationForConversion = null;
+            if (nextTunnelId && selectedTunnelForRule) {
+              await db.reconcileForwardRuleTunnelExits({ ...rule, ...data, id: input.id, tunnelId: nextTunnelId, tunnelExitPort }, selectedTunnelForRule);
+              await db.updateTunnel(nextTunnelId, { isRunning: false } as any);
+            } else {
+              await db.clearForwardRuleTunnelExits(input.id);
+            }
+            return markTemplateChildrenPendingDelete(
+              input.id,
+              "forward-group-rule-converted",
+              { deferRefresh: true },
+            );
+          }, { syncGroupIds: [] });
           await refreshPendingTemplateChildren(retiredChildren as any[], "forward-group-rule-converted");
           if (nextTunnelId && selectedTunnelForRule) {
             await pushTunnelEndpointRefresh(selectedTunnelForRule, "forward-group-rule-converted");
@@ -3161,23 +3187,19 @@ export const crudRulesRouter = router({
         }
         if (keyFieldChanged || groupChanged || data.isEnabled !== undefined) data.isRunning = false;
         await assertRuleTargetsAllowedForActor(ctx.user, { ...rule, ...data }, { forwardGroupId: activeGroupId });
-        // 同步子规则时，新入口端口是本请求自己占着的（见 runWithHeldHostPortReservations）。
-        await runWithHeldHostPortReservations(heldReservations, async () => {
-        if (!groupChanged && isForwardChain) {
-          await db.withForwardGroupSyncTransaction(
-            activeGroupId,
-            () => db.updateForwardRule(input.id, data),
-          );
-        } else {
+        /*
+          改模板（含换到另一个组）：模板行、旧组子规则标待删、新旧两个组的子规则同步在一个事务里，
+          中途失败整体回滚 —— 以前模板先改了、同步到一半报错，成员机上就留着一半新一半旧的子规则。
+          换组时两个组的同步锁一起拿（按组 id 从小到大，见 withForwardGroupsSyncTransaction）；
+          旧组先同步（收掉跟着模板走了的子规则），再同步新组。故障转移、通知 Agent 都在提交之后。
+          同步子规则时，新入口端口是本请求自己占着的（见 runWithHeldHostPortReservations）。
+        */
+        const touchedGroupIds = groupChanged ? [groupId, activeGroupId] : [activeGroupId];
+        await runWithHeldHostPortReservations(heldReservations, () => db.withForwardGroupsSyncTransaction(touchedGroupIds, async () => {
           if (groupChanged) await markTemplateChildrenPendingDelete(input.id, "forward-group-rule-route-changed");
           await db.updateForwardRule(input.id, data);
-          if (groupChanged) {
-            await db.syncForwardGroupRules(groupId);
-            await db.runForwardGroupFailover(groupId);
-          }
-          await db.syncForwardGroupRules(activeGroupId);
-        }
-        });
+        }));
+        if (groupChanged) await db.runForwardGroupFailover(groupId);
         await db.runForwardGroupFailover(activeGroupId);
         return { success: true, reset: keyFieldChanged || groupChanged };
       }
@@ -3283,18 +3305,29 @@ export const crudRulesRouter = router({
           data.protocolBlockReason = null;
         }
         await assertRuleTargetsAllowedForActor(ctx.user, data, { forwardGroupId: groupId });
-        await db.updateForwardRule(input.id, data);
-        await db.clearForwardRuleTunnelExits(input.id);
+        /*
+          普通规则改成转发组模板：规则行、隧道出口映射、旧隧道的运行标记、在每台成员机上建子规则在一个
+          事务里，中途失败整体回滚 —— 以前规则行先改成了模板（原来那条转发随之停掉），子规则却没建出来，
+          这条转发就哪儿都不跑了。
+          中继规则收回（要拿 route-relays 键锁）、通知旧入口 / 旧隧道、故障转移都在提交之后。
+          同步子规则时，新入口端口是本请求自己占着的（见 runWithHeldHostPortReservations）。
+        */
+        const oldTunnelId = Number((rule as any).tunnelId || 0);
+        const oldTunnel = await runWithHeldHostPortReservations(heldReservations, () => db.withForwardGroupSyncTransaction(groupId, async () => {
+          await db.updateForwardRule(input.id, data);
+          await db.clearForwardRuleTunnelExits(input.id);
+          if (!oldTunnelId) return null;
+          const tunnel = await db.getTunnelById(oldTunnelId);
+          await db.updateTunnel(oldTunnelId, { isRunning: false } as any);
+          return tunnel;
+        }));
         // 变成转发组模板之后没有线路组了：中转机上的中继规则收回。
         await syncRouteGroupAfterSave(input.id, "forward-rule-route-changed");
-        if ((rule as any).tunnelId) {
-          const oldTunnel = await db.getTunnelById((rule as any).tunnelId);
-          await db.updateTunnel((rule as any).tunnelId, { isRunning: false } as any);
+        if (oldTunnelId) {
           if (oldTunnel) await pushTunnelEndpointRefresh(oldTunnel, "forward-rule-route-changed");
         } else if (Number((rule as any).hostId || 0) > 0) {
           pushAgentRefresh(Number((rule as any).hostId), "forward-rule-route-changed");
         }
-        await runWithHeldHostPortReservations(heldReservations, () => db.syncForwardGroupRules(groupId));
         await db.runForwardGroupFailover(groupId);
         return { success: true, reset: true };
       }
