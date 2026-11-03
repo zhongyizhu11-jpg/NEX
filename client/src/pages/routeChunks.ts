@@ -8,6 +8,11 @@
   为什么不直接在 App.tsx 里 export 那些 lazy 组件：lazy 组件只在渲染时才触发 import，
   预取要的是「现在就下」，得拿到原始的 import 函数。
 */
+import { createElement, use, type ComponentType } from "react";
+
+/** 路由页面组件：各页 props 不同（Tickets 有 mode），这里不约束。 */
+type RouteComponent = ComponentType<Record<string, unknown>>;
+
 export const routeChunks: Record<string, () => Promise<unknown>> = {
   "/hosts": () => import("@/pages/Hosts"),
   "/rules": () => import("@/pages/Rules"),
@@ -44,6 +49,10 @@ export const routeChunks: Record<string, () => Promise<unknown>> = {
   如果这里回一个已经 resolve 的空 promise，它会立刻换页，Suspense 照样先转一圈。
 */
 const pendingChunks = new Map<string, Promise<unknown>>();
+/** 已经到手的页面组件：lazyRoute 先查这里，查到就同步渲染，连 Suspense 都不经过。 */
+const loadedRoutes = new Map<string, RouteComponent>();
+/** 上一次下载失败的原因：lazyRoute 渲染时抛给 ErrorBoundary，抛过就清掉，重试会重新下。 */
+const routeErrors = new Map<string, unknown>();
 
 /** 把某一页的代码先拉下来。重复调用拿到的是同一个 promise：在路上就等它，到了就立刻 resolve。 */
 export function prefetchRoute(path: string): Promise<unknown> | undefined {
@@ -51,12 +60,55 @@ export function prefetchRoute(path: string): Promise<unknown> | undefined {
   if (!loader) return undefined;
   const existing = pendingChunks.get(path);
   if (existing) return existing;
-  const pending = loader().catch(() => {
-    // 网络抖一下没取到：忘掉这一次，下次预取重新下；点击时 lazy() 也会自己再试。
-    pendingChunks.delete(path);
-  });
+  const pending = loader()
+    .then((module) => {
+      const component = (module as { default?: unknown } | undefined)?.default;
+      if (typeof component === "function" || (component && typeof component === "object")) {
+        loadedRoutes.set(path, component as RouteComponent);
+      }
+      routeErrors.delete(path);
+    })
+    .catch((error: unknown) => {
+      // 网络抖一下没取到：忘掉这一次，下次预取重新下；页面渲染时 lazyRoute 也会自己再试。
+      routeErrors.set(path, error);
+      pendingChunks.delete(path);
+    });
   pendingChunks.set(path, pending);
   return pending;
+}
+
+/**
+ * 代替 React.lazy 的路由组件。
+ *
+ * React.lazy 第一次渲染**一定**挂起：哪怕包早就预取到了，它也要先 then 一下、下一个微任务
+ * 才知道结果。挂起就要先提交一次 fallback，而 React 对「fallback 刚提交又马上出结果」有 300ms
+ * 的节流（避免闪一下）—— 于是第一次点进转发规则，代码明明在缓存里，内容也要等 300ms 才画出来
+ * （2026-11-03 用户：「换页面或者刷新时……感觉卡顿，特别是打开转发规则时」）。
+ *
+ * 这里把下载结果记在模块级：预取到了就同步渲染，不经过 Suspense；真没到才挂起等那一次下载。
+ */
+export function lazyRoute(path: string): RouteComponent {
+  function RouteChunk(props: Record<string, unknown>) {
+    const loaded = loadedRoutes.get(path);
+    if (loaded) return createElement(loaded, props);
+    if (!pendingChunks.has(path)) {
+      const error = routeErrors.get(path);
+      if (error !== undefined) {
+        routeErrors.delete(path);
+        throw error instanceof Error ? error : new Error(String(error));
+      }
+    }
+    const pending = prefetchRoute(path);
+    if (!pending) throw new Error(`没有登记的页面：${path}`);
+    use(pending);
+    const loadedNow = loadedRoutes.get(path);
+    if (loadedNow) return createElement(loadedNow, props);
+    const error = routeErrors.get(path);
+    routeErrors.delete(path);
+    throw error instanceof Error ? error : new Error(error !== undefined ? String(error) : `页面包里没有组件：${path}`);
+  }
+  RouteChunk.displayName = `RouteChunk(${path})`;
+  return RouteChunk;
 }
 
 type NetworkInformationLike = { saveData?: boolean; effectiveType?: string };

@@ -10,6 +10,7 @@ import { mobileAuth } from "./lib/mobileAuth";
 import { clearPersistedQueryCache, restorePersistedQueryCache, startQueryCachePersistence } from "./lib/queryPersistence";
 import "./index.css";
 import { applyRememberedLayout } from "./components/LayoutLayer";
+import { prefetchRoute } from "./pages/routeChunks";
 import { DATABASE_UNAVAILABLE_MESSAGE } from "@shared/databaseHealth";
 import { DATABASE_HEALTH_QUERY_KEY } from "./components/DatabaseHealthGate";
 
@@ -164,6 +165,12 @@ const trpcClient = trpc.createClient({
 });
 
 async function bootstrap() {
+  /*
+    这一页的代码和入口包一起下：刷新 /rules 时不等外壳渲染到路由那一层才去取 Rules 的包
+    （本机缓存也要先取再求值，排在入口包的那 60ms 之后），现在和入口包的求值并行。
+    不认识的地址（登录页、公开页）这里直接返回 undefined，没有副作用。
+  */
+  if (typeof window !== "undefined") void prefetchRoute(window.location.pathname);
   await mobileAuth.hydrateNative();
 
   if (mobileAuth.isNative) {

@@ -294,11 +294,19 @@ export function startQueryCachePersistence(
       }
     }
   };
+  // 序列化一百多 KB 在手机上要几十毫秒：到点之后再等浏览器空闲（最多再等 1s），别卡在滚动中间。
+  const saveWhenIdle = () => {
+    const idle = typeof window !== "undefined"
+      ? (window as { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number }).requestIdleCallback
+      : undefined;
+    if (idle) idle(save, { timeout: 1000 });
+    else save();
+  };
   const schedule = () => {
     dirty = true;
     if (stopped || timer) return;
     const wait = lastSavedAt > 0 ? Math.max(SAVE_DELAY_MS, lastSavedAt + SAVE_MIN_INTERVAL_MS - clock()) : SAVE_DELAY_MS;
-    timer = setTimeout(save, wait);
+    timer = setTimeout(saveWhenIdle, wait);
   };
 
   const unsubscribe = queryClient.getQueryCache().subscribe((event) => {

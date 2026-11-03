@@ -301,16 +301,21 @@
     backwards 只在动画开始前应用 from（防止首帧闪一下），结束之后不留值，
     元素回到自己的 transform: none。顺带也不再为每个页面永久占一个合成层。
   */
+  /*
+    换页 / 卡片进场都压短了（2026-11-03 用户：「我需要极速刷新和跳转页面」）：原来页面 220ms、
+    卡片 340ms 再加每张 45ms 的错开，第 9 张卡要 700ms 才全亮，数据明明早就在缓存里，看起来像在等。
+    现在页面 140ms，卡片 160ms、错开 24ms、最多错 5 张，一屏卡片 300ms 内全部到位。
+  */
   .route-content-enter {
-    animation: forwardx-page-enter 220ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+    animation: forwardx-page-enter 140ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
   }
 
   .tab-content-enter[data-state="active"] {
-    animation: forwardx-page-enter 200ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+    animation: forwardx-page-enter 140ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
   }
 
   .stagger-card {
-    animation: forwardx-card-enter 340ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    animation: forwardx-card-enter 160ms cubic-bezier(0.22, 1, 0.36, 1) both;
     animation-delay: var(--card-enter-delay, 0ms);
   }
 
@@ -322,14 +327,11 @@
   }
 
   .stagger-card:nth-child(1) { --card-enter-delay: 0ms; }
-  .stagger-card:nth-child(2) { --card-enter-delay: 45ms; }
-  .stagger-card:nth-child(3) { --card-enter-delay: 90ms; }
-  .stagger-card:nth-child(4) { --card-enter-delay: 135ms; }
-  .stagger-card:nth-child(5) { --card-enter-delay: 180ms; }
-  .stagger-card:nth-child(6) { --card-enter-delay: 225ms; }
-  .stagger-card:nth-child(7) { --card-enter-delay: 270ms; }
-  .stagger-card:nth-child(8) { --card-enter-delay: 315ms; }
-  .stagger-card:nth-child(n + 9) { --card-enter-delay: 360ms; }
+  .stagger-card:nth-child(2) { --card-enter-delay: 24ms; }
+  .stagger-card:nth-child(3) { --card-enter-delay: 48ms; }
+  .stagger-card:nth-child(4) { --card-enter-delay: 72ms; }
+  .stagger-card:nth-child(5) { --card-enter-delay: 96ms; }
+  .stagger-card:nth-child(n + 6) { --card-enter-delay: 120ms; }
 
   @media (prefers-reduced-motion: reduce) {
     .route-content-enter,

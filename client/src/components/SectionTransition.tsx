@@ -34,7 +34,8 @@ function SectionTransition({
       : { initial: { opacity: 0, y: 10, scale: 0.995 }, animate: { opacity: 1, y: 0, scale: 1 }, exit: { opacity: 0, y: -8, scale: 0.995 } });
 
   return (
-    <AnimatePresence mode="wait">
+    // initial=false：页面刚挂上那一次不做进场（外面 route-content-enter 已经在做整页进场，叠两层只是更慢）；分区切换时照常
+    <AnimatePresence mode="wait" initial={false}>
       <m.div
         key={transitionKey}
         className={className}
