@@ -94,19 +94,19 @@ test("输入框字号低于 16px 的前提：viewport 里有 maximum-scale=1", (
   }
 });
 
-test("iOS App 手机顶栏往上收：安全区只留 72%（最少 20px）、顶栏 44px；液态玻璃的两枚胶囊浮在状态栏下面", () => {
+test("iOS App 手机顶栏往上收：安全区只留 72%（最少 20px）、顶栏 44px；液态玻璃的顶栏融进壁纸", () => {
   assert.match(css, /html\.capacitor-ios \.workspace-appbar \{ --fx-header-height: 44px; padding-top: max\(20px, calc\(env\(safe-area-inset-top, 0px\) \* 0\.72\)\); height: calc\(44px \+ max\(20px, calc\(env\(safe-area-inset-top, 0px\) \* 0\.72\)\)\); \}/);
   const glass = fs.readFileSync(path.resolve(import.meta.dirname, "theme-liquid-glass.css"), "utf8");
-  // iOS 壳：顶栏本身只占状态栏那一段的高度 + 44px，上面压一层淡渐变让时间 / 电量看得清
-  assert.match(glass, /html\.capacitor-ios\[data-ui-theme="liquid-glass"\] \.workspace-appbar \{\s*height: calc\(44px \+ var\(--fx-lg-ios-appbar-top\)\);\s*padding-top: var\(--fx-lg-ios-appbar-top\);/);
-  assert.match(glass, /html\.capacitor-ios\[data-ui-theme="liquid-glass"\] \.workspace-appbar::before \{[\s\S]*?linear-gradient\(to bottom, rgb\(0 0 0 \/ 18%\), transparent\)/);
   /*
-    手机上顶栏不是一整条：栏本身透明没有边和模糊，品牌和右边的图标各自是一枚胶囊，
-    和底部标签栏同一种玻璃（用户 2026-11-03：长条、整条胶囊都不协调）。
+    手机上顶栏没有容器：栏透明、没有边和模糊，顶上一层淡白雾（深色黑雾）淡到页头
+    （2026-11-03 用户从四个候选里选的 A）。iOS 壳里只是往上收，雾把状态栏也盖住。
   */
-  const mobile = glass.slice(glass.indexOf("手机上顶栏不再是一整条"));
-  assert.match(mobile, /html\[data-ui-theme="liquid-glass"\] \.workspace-appbar \{\s*top: 0;\s*margin: 0;\s*border: 0;\s*border-radius: 0;\s*background: transparent;/);
-  assert.match(mobile, /html\[data-ui-theme="liquid-glass"\] \.workspace-appbar-brand,\s*html\[data-ui-theme="liquid-glass"\] \.workspace-appbar-actions \{\s*height: 44px;[\s\S]*?border-radius: var\(--fx-radius-pill\);[\s\S]*?backdrop-filter: blur\(20px\) saturate\(180%\);/);
+  const mobile = glass.slice(glass.indexOf("手机上顶栏融进壁纸"));
+  assert.match(mobile, /html\[data-ui-theme="liquid-glass"\] \.workspace-appbar \{\s*top: 0;\s*margin: 0;\s*border: 0;\s*border-radius: 0;\s*background: transparent;[\s\S]*?box-shadow: none;/);
+  assert.match(mobile, /html\[data-ui-theme="liquid-glass"\] \.workspace-appbar::before \{[\s\S]*?linear-gradient\(to bottom, rgb\(255 255 255 \/ 72%\) 0%, rgb\(255 255 255 \/ 40%\) 55%, transparent 100%\)/);
+  assert.match(mobile, /html\.dark\[data-ui-theme="liquid-glass"\] \.workspace-appbar::before \{[\s\S]*?rgb\(0 0 0 \/ 55%\)/);
+  assert.match(mobile, /html\.capacitor-ios\[data-ui-theme="liquid-glass"\] \.workspace-appbar \{\s*height: calc\(44px \+ var\(--fx-lg-ios-appbar-top\)\);\s*padding-top: var\(--fx-lg-ios-appbar-top\);/);
+  assert.doesNotMatch(mobile, /data-lg-appbar/, "候选样式选定后不该留着");
 });
 
 test("液态玻璃：进场动画不动透明度和 clip-path，玻璃卡的模糊在切页时不会消失再出现", () => {

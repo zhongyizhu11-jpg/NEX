@@ -1952,6 +1952,8 @@ button.fx-hd-sec-head:hover { background: color-mix(in srgb, var(--fx-text) 3%, 
 */
 /* 卡的状态色交给卡片风格（上面那一节）：状态光 / 彩色描边 / 渐变卡头都读 --fx-card-tone */
 .workspace-main .fx-rule-card { --fx-card-tone: var(--fx-rule-tone); overflow: hidden; }
+/* 换进转发页的第一帧还没轮到画的卡（Rules.tsx RuleCardPlaceholder）：和紧凑卡差不多高的淡块 */
+.fx-rule-card-placeholder { min-height: 132px; border-radius: var(--fx-radius-card, 16px); background: var(--fx-l2-group); opacity: .55; }
 .workspace-main .fx-rule-card[data-tone="off"] { --fx-card-tone: transparent; }
 /* 主机卡同样读 --fx-card-tone：在线主色、降级琥珀、掉线红、没上报过不着色（纯白边） */
 .fx-host-card[data-tone="warn"] { --fx-card-tone: var(--fx-warn); }

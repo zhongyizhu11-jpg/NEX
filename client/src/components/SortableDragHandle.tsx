@@ -49,9 +49,14 @@ type SortableHandleProps = HTMLAttributes<HTMLElement> & {
 /** 触屏上按住卡片多久算拖（毫秒）。用户要的是「按住再拖」，短了会把停一下再滑的手势当成拖。 */
 export const TOUCH_HOLD_MS = 1000;
 
+/*
+  只在拖的时候量位置。原来是 Always：每次渲染都把每张卡 getBoundingClientRect 一遍（强制排版），
+  转发页换进来一次就要 60ms（桌面），手机上两百多毫秒，而且规则数据一刷新就再来一遍
+  （2026-11-03 剖析）。拖动开始时再量，拖着的时候 dnd-kit 本来就会持续量。
+*/
 const sortableMeasuring = {
   droppable: {
-    strategy: MeasuringStrategy.Always,
+    strategy: MeasuringStrategy.WhileDragging,
   },
 };
 

@@ -446,10 +446,9 @@ html.dark[data-ui-theme="liquid-glass"] .workspace-appbar {
   box-shadow: 0 4px 16px rgb(0 0 0 / 15%), inset 0 1px 1px rgb(255 255 255 / 8%);
 }
 /*
-  手机上顶栏不再是一整条：品牌是一枚小玻璃胶囊，右边几个图标合成另一枚（iOS 26 导航栏的
-  做法 —— 控件各自成组浮在内容上，而不是一条横贯屏幕的栏）。之前先是 18px 圆角的长条、
-  后来是整条胶囊，用户都说不协调（2026-11-03）。两枚胶囊和底部标签栏同一套玻璃：
-  同样的描边、模糊和投影。
+  手机上顶栏融进壁纸：没有任何容器 —— logo、名字和右边几个图标直接压在照片上，顶上一层很淡的
+  白雾（深色下是黑雾）从状态栏一直淡到页头，保证字和图标看得清。18px 圆角的浮条、整条胶囊、
+  两枚胶囊用户都说不协调；2026-11-03 给了四个候选，选的是这个（A）。
 */
 @media (max-width: 767px) {
   html[data-ui-theme="liquid-glass"] .workspace-appbar {
@@ -462,46 +461,7 @@ html.dark[data-ui-theme="liquid-glass"] .workspace-appbar {
     backdrop-filter: none;
     box-shadow: none;
   }
-  html[data-ui-theme="liquid-glass"] .workspace-appbar-inner { padding-inline: 16px; gap: 8px; }
-  html[data-ui-theme="liquid-glass"] .workspace-appbar-brand,
-  html[data-ui-theme="liquid-glass"] .workspace-appbar-actions {
-    height: 44px;
-    border: 1px solid rgb(255 255 255 / 65%);
-    border-radius: var(--fx-radius-pill);
-    background: rgb(255 255 255 / 40%);
-    -webkit-backdrop-filter: blur(20px) saturate(180%);
-    backdrop-filter: blur(20px) saturate(180%);
-    box-shadow: inset 0 1px 1px rgb(255 255 255 / 80%), 0 12px 36px rgb(0 0 0 / 8%);
-  }
-  html.dark[data-ui-theme="liquid-glass"] .workspace-appbar-brand,
-  html.dark[data-ui-theme="liquid-glass"] .workspace-appbar-actions {
-    border-color: rgb(255 255 255 / 12%);
-    background: rgb(20 24 33 / 55%);
-    box-shadow: inset 0 1px 1px rgb(255 255 255 / 12%), 0 12px 36px rgb(0 0 0 / 50%);
-  }
-  html[data-ui-theme="liquid-glass"] .workspace-appbar-brand { padding: 0 14px 0 8px; gap: 8px; }
-  html[data-ui-theme="liquid-glass"] .workspace-appbar-brand img,
-  html[data-ui-theme="liquid-glass"] .workspace-appbar-brand > div { width: 26px; height: 26px; }
-  html[data-ui-theme="liquid-glass"] .workspace-appbar-actions { padding: 0 4px; gap: 0; }
-  html[data-ui-theme="liquid-glass"] .workspace-appbar-actions > * { flex-shrink: 0; }
-  /* ── 候选样式（2026-11-03 给用户挑；选定后删掉其余） ── */
-  /* A. 融入：没有任何容器，品牌和图标直接压在壁纸上，顶上一层淡淡的白雾让字看得清 */
-  html[data-ui-theme="liquid-glass"][data-lg-appbar="plain"] .workspace-appbar-brand,
-  html[data-ui-theme="liquid-glass"][data-lg-appbar="plain"] .workspace-appbar-actions,
-  html[data-ui-theme="liquid-glass"][data-lg-appbar="circles"] .workspace-appbar-brand,
-  html[data-ui-theme="liquid-glass"][data-lg-appbar="circles"] .workspace-appbar-actions,
-  html[data-ui-theme="liquid-glass"][data-lg-appbar="bar"] .workspace-appbar-brand,
-  html[data-ui-theme="liquid-glass"][data-lg-appbar="bar"] .workspace-appbar-actions,
-  html[data-ui-theme="liquid-glass"][data-lg-appbar="brandplain"] .workspace-appbar-brand {
-    border: 0;
-    background: transparent;
-    -webkit-backdrop-filter: none;
-    backdrop-filter: none;
-    box-shadow: none;
-  }
-  html[data-ui-theme="liquid-glass"][data-lg-appbar="plain"] .workspace-appbar::before,
-  html[data-ui-theme="liquid-glass"][data-lg-appbar="circles"] .workspace-appbar::before,
-  html[data-ui-theme="liquid-glass"][data-lg-appbar="brandplain"] .workspace-appbar::before {
+  html[data-ui-theme="liquid-glass"] .workspace-appbar::before {
     content: "";
     position: absolute;
     inset: 0 0 auto;
@@ -510,69 +470,21 @@ html.dark[data-ui-theme="liquid-glass"] .workspace-appbar {
     pointer-events: none;
     z-index: -1;
   }
-  html.dark[data-ui-theme="liquid-glass"][data-lg-appbar="plain"] .workspace-appbar::before,
-  html.dark[data-ui-theme="liquid-glass"][data-lg-appbar="circles"] .workspace-appbar::before,
-  html.dark[data-ui-theme="liquid-glass"][data-lg-appbar="brandplain"] .workspace-appbar::before {
+  html.dark[data-ui-theme="liquid-glass"] .workspace-appbar::before {
     background: linear-gradient(to bottom, rgb(0 0 0 / 55%) 0%, rgb(0 0 0 / 30%) 55%, transparent 100%);
   }
-  html[data-ui-theme="liquid-glass"][data-lg-appbar="plain"] .workspace-appbar-actions { gap: 2px; }
-  /* B. 边到边：一条贴顶的磨砂玻璃条（iOS 系统导航栏那种），状态栏也在玻璃里，底下一根细白线 */
-  html[data-ui-theme="liquid-glass"][data-lg-appbar="bar"] .workspace-appbar {
-    border-bottom: 1px solid rgb(255 255 255 / 55%);
-    background: rgb(255 255 255 / 52%);
-    -webkit-backdrop-filter: blur(24px) saturate(180%);
-    backdrop-filter: blur(24px) saturate(180%);
-    box-shadow: 0 1px 0 rgb(0 0 0 / 4%);
-  }
-  html.dark[data-ui-theme="liquid-glass"][data-lg-appbar="bar"] .workspace-appbar {
-    border-bottom-color: rgb(255 255 255 / 10%);
-    background: rgb(20 24 33 / 62%);
-  }
-  html.capacitor-ios[data-ui-theme="liquid-glass"][data-lg-appbar="bar"] .workspace-appbar::before { content: none; }
-  html[data-ui-theme="liquid-glass"][data-lg-appbar="bar"] .workspace-appbar-brand { padding-left: 0; }
-  /* C. 独立圆钮：品牌直接压在壁纸上，右边每个图标各自一枚玻璃圆钮 */
-  html[data-ui-theme="liquid-glass"][data-lg-appbar="circles"] .workspace-appbar-actions { gap: 6px; padding: 0; }
-  html[data-ui-theme="liquid-glass"][data-lg-appbar="circles"] .workspace-appbar-actions .workspace-appbar-icon,
-  html[data-ui-theme="liquid-glass"][data-lg-appbar="circles"] .workspace-appbar-actions .workspace-appbar-search,
-  html[data-ui-theme="liquid-glass"][data-lg-appbar="circles"] .workspace-appbar-actions .workspace-appbar-account {
-    width: 40px;
-    height: 40px;
-    border: 1px solid rgb(255 255 255 / 65%);
-    border-radius: 999px;
-    background: rgb(255 255 255 / 40%);
-    -webkit-backdrop-filter: blur(20px) saturate(180%);
-    backdrop-filter: blur(20px) saturate(180%);
-    box-shadow: inset 0 1px 1px rgb(255 255 255 / 80%), 0 8px 24px rgb(0 0 0 / 8%);
-  }
-  html.dark[data-ui-theme="liquid-glass"][data-lg-appbar="circles"] .workspace-appbar-actions .workspace-appbar-icon,
-  html.dark[data-ui-theme="liquid-glass"][data-lg-appbar="circles"] .workspace-appbar-actions .workspace-appbar-search,
-  html.dark[data-ui-theme="liquid-glass"][data-lg-appbar="circles"] .workspace-appbar-actions .workspace-appbar-account {
-    border-color: rgb(255 255 255 / 12%);
-    background: rgb(20 24 33 / 55%);
-    box-shadow: inset 0 1px 1px rgb(255 255 255 / 12%), 0 8px 24px rgb(0 0 0 / 40%);
-  }
-  /* D. 品牌裸露、图标一枚胶囊：左边只有 logo 和名字，右边一枚图标胶囊 */
-  html[data-ui-theme="liquid-glass"][data-lg-appbar="brandplain"] .workspace-appbar-brand { padding-left: 0; }
-  /*
-    iOS App 里状态栏那一段照片直接露着：两枚胶囊浮在状态栏下面（离顶的距离和 workspace.css 里其他
-    主题顶栏的 padding-top 一样，品牌那一行的位置不变），上面压一层很淡的暗渐变，时间和电量在亮照片上
-    也看得清。
-  */
+  html[data-ui-theme="liquid-glass"] .workspace-appbar-inner { padding-inline: 16px; gap: 8px; }
+  html[data-ui-theme="liquid-glass"] .workspace-appbar-brand { padding: 0 8px 0 0; gap: 10px; }
+  html[data-ui-theme="liquid-glass"] .workspace-appbar-brand img,
+  html[data-ui-theme="liquid-glass"] .workspace-appbar-brand > div { width: 26px; height: 26px; }
+  html[data-ui-theme="liquid-glass"] .workspace-appbar-actions { gap: 2px; }
+  /* iOS App：状态栏那一段也在雾里，顶栏整体往上收（和 workspace.css 里其他主题一样只留 72% 的安全区） */
   html.capacitor-ios[data-ui-theme="liquid-glass"] {
     --fx-lg-ios-appbar-top: max(20px, calc(env(safe-area-inset-top, 0px) * 0.72));
   }
   html.capacitor-ios[data-ui-theme="liquid-glass"] .workspace-appbar {
     height: calc(44px + var(--fx-lg-ios-appbar-top));
     padding-top: var(--fx-lg-ios-appbar-top);
-  }
-  html.capacitor-ios[data-ui-theme="liquid-glass"] .workspace-appbar::before {
-    content: "";
-    position: absolute;
-    inset: 0 0 auto;
-    height: calc(var(--fx-lg-ios-appbar-top) + 28px);
-    background: linear-gradient(to bottom, rgb(0 0 0 / 18%), transparent);
-    pointer-events: none;
-    z-index: -1;
   }
 }
 html[data-ui-theme="liquid-glass"] .workspace-appbar-icon:hover { background: var(--fx-hover); }
