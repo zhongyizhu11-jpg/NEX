@@ -4240,15 +4240,21 @@ function RulesContent() {
   const baseScopedRules = useMemo(() => rules || [], [rules]);
   const selectedScopedRules = selectedScopeQueryEnabled ? selectedScopeRules : undefined;
   const scopedRulesReady = selectedScopeQueryEnabled ? selectedScopedRules !== undefined : ruleListDataReady;
-  const [stableFilteredRules, setStableFilteredRules] = useState<any[]>([]);
-  const [filteredRulesPrimed, setFilteredRulesPrimed] = useState(false);
-  useEffect(() => {
-    if (!scopedRulesReady) return;
+  /*
+    列表同步算出来，不再经一个 effect「下一轮」才填：以前第一次渲染是空的（数据明明在缓存里），
+    等 effect 填上才有卡 —— 中间先画了一帧「没有规则」，分区切换动画又要先把那一帧退场（200ms）
+    再把列表进场，换到这一页要空着 300ms 才见到卡（用户 2026-11-03 录屏）。
+    数据还没就绪（第一次打开、缓存里没有）时沿用上一次算出的列表，不闪空。
+  */
+  const lastFilteredRulesRef = useRef<any[]>([]);
+  const filteredRules = useMemo(() => {
+    if (!scopedRulesReady) return lastFilteredRulesRef.current;
     const sourceRules = selectedScopeQueryEnabled ? selectedScopedRules || [] : baseScopedRules;
-    setStableFilteredRules(sourceRules.filter((rule: any) => isForwardRuleVisibleByFilters(rule, ruleFilters)));
-    setFilteredRulesPrimed(true);
+    const next = sourceRules.filter((rule: any) => isForwardRuleVisibleByFilters(rule, ruleFilters));
+    lastFilteredRulesRef.current = next;
+    return next;
   }, [baseScopedRules, ruleFilters, scopedRulesReady, selectedScopedRules, selectedScopeQueryEnabled]);
-  const filteredRules = stableFilteredRules;
+  const filteredRulesPrimed = scopedRulesReady || lastFilteredRulesRef.current.length > 0;
   // Batch tools need all matching source rules, while the page itself stays
   // on its current server page.  Keep these two data sources separate.
   const transferSourceRules = selectedScopeQueryEnabled
@@ -7046,7 +7052,8 @@ function RulesContent() {
     ? "grid gap-0"
     : "grid gap-3";
   const ruleContentModeKey = effectiveViewMode === "card" ? "card" : displayMode;
-  const ruleContentTransitionKey = `${ruleCategory}-${ruleContentModeKey}-${isLoading ? "loading" : filteredRules.length > 0 ? "list" : "empty"}`;
+  // 只按分类 / 视图切换做进出场；加载中 → 列表 → 空这种状态变化就地换内容，不再先退场再进场（那是 200ms 的空白）
+  const ruleContentTransitionKey = `${ruleCategory}-${ruleContentModeKey}`;
 
   /*
     分组图标一律中性。
@@ -7403,14 +7410,10 @@ function RulesContent() {
     const linesExpanded = hasLineRows && expandedLineRuleIds.has(Number(rule.id));
     // 有线路行可展开时点这枚是展开 / 收起；没有（线路板还没数据）就照旧直接进线路组
     const onFailoverPill = () => (hasLineRows ? toggleRuleLines(Number(rule.id)) : setPolicyRuleId(Number(rule.id)));
+    // 线路组一律写在地址行左边那枚（择优 · 2 条 / 主备 · 主线路），右端的标签照旧是延迟 / 状态：
+    // 以前择优、切换中会顶掉右端的延迟，两种线路组的卡就长得不一样（用户 2026-11-03 对比图）。
     let tag: ReactNode = null;
-    if (failover && failover.tone !== "normal") {
-      tag = (
-        <button type="button" className="fx-rule-tag" data-tone={failover.tone === "warn" ? "warn" : "off"} title={hasLineRows ? (linesExpanded ? "收起线路" : `${failover.title}（点开看线路）`) : failover.title} aria-expanded={hasLineRows ? linesExpanded : undefined} onClick={onFailoverPill}>
-          {failover.text}
-        </button>
-      );
-    } else if (visual?.state === "error") {
+    if (visual?.state === "error") {
       tag = <span className="fx-rule-tag" data-tone="down" title={visual.title}>{visual.title}</span>;
     } else if (visual?.state === "disabled") {
       const stop = resolveForwardRuleStopReason(rule);
@@ -7441,11 +7444,12 @@ function RulesContent() {
         tag = <span className="fx-rule-tag" data-tone="off" title="还没测过延迟：··· › 诊断 测一次">未测试</span>;
       }
     }
-    const failoverAside = failover && failover.tone === "normal" ? (
+    const failoverAside = failover ? (
       <button
         type="button"
         className="fx-rule-foot-link"
-        title={hasLineRows ? (linesExpanded ? "收起线路" : "展开线路") : failover.title}
+        data-tone={failover.tone === "normal" ? undefined : failover.tone === "warn" ? "warn" : "off"}
+        title={hasLineRows ? (linesExpanded ? "收起线路" : `${failover.title}（点开看线路）`) : failover.title}
         aria-label={`线路组：${failover.title}`}
         aria-expanded={hasLineRows ? linesExpanded : undefined}
         onClick={onFailoverPill}

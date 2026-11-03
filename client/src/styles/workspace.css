@@ -2033,6 +2033,9 @@ button.fx-rule-tag:hover { filter: brightness(.96); }
 /* 线路组按规矩在走：右下角一小段绿字，点开线路面板。切了线的那种走 .fx-rule-foot-detail 的状态色。 */
 .fx-rule-foot-link { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; font-size: 12px; font-weight: 500; color: var(--fx-healthy-text); }
 .fx-rule-foot-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+/* 线路组那枚：正常绿；择优 / 切换中琥珀；停用 / 没数据灰 */
+.fx-rule-foot-link[data-tone="warn"] { color: var(--fx-warn-text); }
+.fx-rule-foot-link[data-tone="off"] { color: var(--fx-text-muted); }
 /* 名字后面的「订阅」两个字：一个身份，不是一条状态，所以是裸的彩色小字，不套框。 */
 .fx-rule-mark { display: inline-flex; flex: none; align-items: center; gap: 2px; font-size: 11px; line-height: 16px; font-weight: 500; color: var(--fx-path); }
 .fx-rule-mark[data-muted] { color: var(--fx-text-muted); }

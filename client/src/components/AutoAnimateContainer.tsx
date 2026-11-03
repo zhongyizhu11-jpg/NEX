@@ -72,9 +72,25 @@ export default function AutoAnimateContainer<T extends ElementType = "div">({
   });
   const Component = (as || "div") as ElementType;
   const animateLayout = layout ?? standardCardGridClassPattern.test(className || "");
+  const attachTimerRef = useRef<number | null>(null);
   const setRef = useCallback((node: Element | null) => {
     elementRef.current = node;
-    parent(node);
+    if (attachTimerRef.current !== null) {
+      window.clearTimeout(attachTimerRef.current);
+      attachTimerRef.current = null;
+    }
+    if (!node) {
+      parent(null);
+      return;
+    }
+    /*
+      挂上的那一刻不接 auto-animate：它一接上就把每个子元素量一遍位置（强制排版）再给每个挂
+      观察器，转发页首屏为此多花几十毫秒（手机上一百多）。首屏本来没有东西要动，等页面画出来再接。
+    */
+    attachTimerRef.current = window.setTimeout(() => {
+      attachTimerRef.current = null;
+      if (elementRef.current === node) parent(node);
+    }, 320);
   }, [parent]);
 
   useLayoutEffect(() => {
@@ -147,7 +163,11 @@ export default function AutoAnimateContainer<T extends ElementType = "div">({
       previousRectsRef.current = nextRects;
     };
 
-    animateFromPreviousLayout();
+    // 刚挂上时只是记一遍位置，没有上一帧可比：放到下一帧量，别挡住首屏那次绘制。
+    frameRef.current = window.requestAnimationFrame(() => {
+      frameRef.current = null;
+      animateFromPreviousLayout();
+    });
     const observer = new ResizeObserver(() => {
       if (frameRef.current !== null) window.cancelAnimationFrame(frameRef.current);
       frameRef.current = window.requestAnimationFrame(() => {

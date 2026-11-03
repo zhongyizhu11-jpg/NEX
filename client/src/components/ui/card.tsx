@@ -21,13 +21,14 @@ const Card = React.forwardRef<HTMLDivElement, CardProps>(({ className, style, en
     ? style
     : ({
         ...style,
-        "--card-enter-delay": `${Math.min(Math.max(enterIndex, 0), 12) * 45}ms`,
+        "--card-enter-delay": `${Math.min(Math.max(enterIndex, 0), 5) * 24}ms`,
       } as React.CSSProperties)
 
   React.useEffect(() => {
     if (!animateEnter) return
-    const delay = Math.min(Math.max(enterIndex ?? 0, 0), 12) * 45
-    const timer = window.setTimeout(() => setAnimateEnter(false), delay + 420)
+    // 和 index.css 里 .stagger-card 的时长 / 错开对齐：动画一结束就摘掉类，别让每张卡多等几百毫秒才重渲染。
+    const delay = Math.min(Math.max(enterIndex ?? 0, 0), 5) * 24
+    const timer = window.setTimeout(() => setAnimateEnter(false), delay + 240)
     return () => window.clearTimeout(timer)
   }, [animateEnter, enterIndex])
 

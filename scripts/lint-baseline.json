@@ -1,6 +1,6 @@
 {
   "@typescript-eslint/no-explicit-any": {
-    "client/src/App.tsx": 27,
+    "client/src/App.tsx": 2,
     "client/src/components/AgentTokenManager.tsx": 27,
     "client/src/components/AvatarPicker.tsx": 1,
     "client/src/components/BandwidthAggregationSummary.tsx": 1,
@@ -464,7 +464,6 @@
     "client/src/components/plugins/AgentResourceManager.tsx": 2,
     "client/src/components/proxy/ProxyInboundsSection.tsx": 1,
     "client/src/components/referral/AdminReferralPanel.tsx": 1,
-    "client/src/features/links/LineWorkspace.tsx": 2,
     "client/src/features/links/MyLinesSection.tsx": 2,
     "client/src/features/ops/ops/ImportExistingSection.tsx": 3,
     "client/src/features/ops/proxy/InboundCompatibility.tsx": 1,

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { prefetchRoute, routeChunks, shouldSkipIdlePrefetch } from "./routeChunks";
+import { lazyRoute, prefetchRoute, routeChunks, shouldSkipIdlePrefetch } from "./routeChunks";
 
 test("省流量或 3G 及以下不做空闲批量预取，其余照常", () => {
   assert.equal(shouldSkipIdlePrefetch(undefined), false, "不支持 navigator.connection 的浏览器照常预取");
@@ -62,4 +62,41 @@ test("下载失败的那一次会被忘掉，下次预取重新下", async () =>
 
 test("没登记的路径不预取", () => {
   assert.equal(prefetchRoute("/__not-a-route"), undefined);
+});
+
+/**
+ * 预取到手之后，lazyRoute 同步渲染，不再经过 Suspense：React.lazy 第一次渲染必挂起，
+ * 挂起提交的 fallback 又会让内容被节流 300ms，第一次点进转发规则就是这样白等的。
+ */
+test("lazyRoute：包到了就同步渲染出页面组件，不挂起", async () => {
+  const Page = () => null;
+  routeChunks["/__test-loaded"] = () => Promise.resolve({ default: Page });
+  try {
+    const Route = lazyRoute("/__test-loaded");
+    await prefetchRoute("/__test-loaded");
+    const element = (Route as (props: Record<string, unknown>) => { type: unknown; props: Record<string, unknown> })({ mode: "admin" });
+    assert.equal(element.type, Page);
+    assert.equal(element.props.mode, "admin");
+  } finally {
+    delete routeChunks["/__test-loaded"];
+  }
+});
+
+test("lazyRoute：上一次下载失败，渲染时把错误抛给 ErrorBoundary，再渲染就重新下", async () => {
+  let loads = 0;
+  routeChunks["/__test-failed"] = () => {
+    loads += 1;
+    return Promise.reject(new Error("offline"));
+  };
+  try {
+    const Route = lazyRoute("/__test-failed") as (props: Record<string, unknown>) => unknown;
+    await prefetchRoute("/__test-failed");
+    assert.throws(() => Route({}), /offline/);
+    assert.equal(loads, 1);
+    // 错误抛过一次就清掉：下一次渲染会重新发起下载（这里只验证它重新下了，挂起本身要在 React 里才能测）
+    assert.throws(() => Route({}), (error: unknown) => !(error instanceof Error && error.message === "offline"));
+    assert.equal(loads, 2);
+  } finally {
+    delete routeChunks["/__test-failed"];
+  }
 });

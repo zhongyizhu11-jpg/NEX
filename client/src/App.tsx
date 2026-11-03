@@ -11,7 +11,7 @@ import { matchRoute, Redirect, Route, Switch, useLocation, useRouter } from "wou
 import ErrorBoundary from "./components/ErrorBoundary";
 import RouteFallback from "./components/RouteFallback";
 import { AppShell } from "./components/DashboardLayout";
-import { prefetchRoute, routeChunks } from "@/pages/routeChunks";
+import { lazyRoute, prefetchRoute } from "@/pages/routeChunks";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import PersonalizationLayer from "./components/PersonalizationLayer";
 import LayoutLayer from "./components/LayoutLayer";
@@ -38,40 +38,40 @@ const loadMotionFeatures = () => import("@/motionFeatures").then((mod) => mod.de
   标签栏点过去时代码已经在缓存里。
 */
 const SetupPage = lazy(() => import("./pages/Setup"));
-const AnnouncementsPage = lazy(routeChunks["/announcements"] as () => Promise<{ default: ComponentType<any> }>);
-const BillingPage = lazy(routeChunks["/billing"] as () => Promise<{ default: ComponentType<any> }>);
+const AnnouncementsPage = lazyRoute("/announcements");
+const BillingPage = lazyRoute("/billing");
 const CustomSidebarPage = lazy(() => import("@/pages/CustomSidebarPage"));
 const EmailSettingsPage = lazy(() => import("@/pages/EmailSettingsRoute"));
-const ForwardGroupsPage = lazy(routeChunks["/forward-groups"] as () => Promise<{ default: ComponentType<any> }>);
+const ForwardGroupsPage = lazyRoute("/forward-groups");
 const HomepagePreviewPage = lazy(() => import("@/pages/HomepagePreview"));
 const HostMonitorPage = lazy(() => import("@/pages/HostMonitor"));
 const IpChangePage = lazy(() => import("@/pages/IpChange"));
-const InsightsPage = lazy(routeChunks["/insights"] as () => Promise<{ default: ComponentType<any> }>);
-const TopologyPage = lazy(routeChunks["/topology"] as () => Promise<{ default: ComponentType<any> }>);
-const HostsPage = lazy(routeChunks["/hosts"] as () => Promise<{ default: ComponentType<any> }>);
-const MorePage = lazy(routeChunks["/more"] as () => Promise<{ default: ComponentType<any> }>);
-const LookingGlassPage = lazy(routeChunks["/looking-glass"] as () => Promise<{ default: ComponentType<any> }>);
-const PaymentsPage = lazy(routeChunks["/payments"] as () => Promise<{ default: ComponentType<any> }>);
-const PlansPage = lazy(routeChunks["/plans"] as () => Promise<{ default: ComponentType<any> }>);
-const PluginsPage = lazy(routeChunks["/plugins"] as () => Promise<{ default: ComponentType<any> }>);
-const ProfilePage = lazy(routeChunks["/profile"] as () => Promise<{ default: ComponentType<any> }>);
-const RulesPage = lazy(routeChunks["/rules"] as () => Promise<{ default: ComponentType<any> }>);
-const SettingsPage = lazy(routeChunks["/settings"] as () => Promise<{ default: ComponentType<any> }>);
-const StorePage = lazy(routeChunks["/store"] as () => Promise<{ default: ComponentType<any> }>);
-const SubscriptionsPage = lazy(routeChunks["/subscriptions"] as () => Promise<{ default: ComponentType<any> }>);
-const ClientSubscriptionsPage = lazy(routeChunks["/client-subscriptions"] as () => Promise<{ default: ComponentType<any> }>);
-const AdminSubscriptionsPage = lazy(routeChunks["/admin/subscriptions"] as () => Promise<{ default: ComponentType<any> }>);
-const ProxyInboundsPage = lazy(routeChunks["/proxy-inbounds"] as () => Promise<{ default: ComponentType<any> }>);
-const TrafficBillingPage = lazy(routeChunks["/traffic-billing"] as () => Promise<{ default: ComponentType<any> }>);
-const TunnelsPage = lazy(routeChunks["/tunnels"] as () => Promise<{ default: ComponentType<any> }>);
-const UsersPage = lazy(routeChunks["/users"] as () => Promise<{ default: ComponentType<any> }>);
-const WalletPage = lazy(routeChunks["/wallet"] as () => Promise<{ default: ComponentType<any> }>);
-const TicketsPage = lazy(routeChunks["/tickets"] as () => Promise<{ default: ComponentType<any> }>);
+const InsightsPage = lazyRoute("/insights");
+const TopologyPage = lazyRoute("/topology");
+const HostsPage = lazyRoute("/hosts");
+const MorePage = lazyRoute("/more");
+const LookingGlassPage = lazyRoute("/looking-glass");
+const PaymentsPage = lazyRoute("/payments");
+const PlansPage = lazyRoute("/plans");
+const PluginsPage = lazyRoute("/plugins");
+const ProfilePage = lazyRoute("/profile");
+const RulesPage = lazyRoute("/rules");
+const SettingsPage = lazyRoute("/settings");
+const StorePage = lazyRoute("/store");
+const SubscriptionsPage = lazyRoute("/subscriptions");
+const ClientSubscriptionsPage = lazyRoute("/client-subscriptions");
+const AdminSubscriptionsPage = lazyRoute("/admin/subscriptions");
+const ProxyInboundsPage = lazyRoute("/proxy-inbounds");
+const TrafficBillingPage = lazyRoute("/traffic-billing");
+const TunnelsPage = lazyRoute("/tunnels");
+const UsersPage = lazyRoute("/users");
+const WalletPage = lazyRoute("/wallet");
+const TicketsPage = lazyRoute("/tickets");
 /** 管理员的工单管理：同一个页面组件，换成管理员那套接口。 */
 function AdminTicketsPage() {
   return <TicketsPage mode="admin" />;
 }
-const ReferralsPage = lazy(routeChunks["/referrals"] as () => Promise<{ default: ComponentType<any> }>);
+const ReferralsPage = lazyRoute("/referrals");
 
 type RoutableComponent = ComponentType<any>;
 
