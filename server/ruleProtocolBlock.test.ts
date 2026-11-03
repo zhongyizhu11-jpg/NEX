@@ -60,6 +60,12 @@ test("规则那三列不许有人读，生效的只能是主机那一层", () =>
     "server/agentHeartbeatNginx.ts",
     "server/agentHeartbeatRuntime.ts",
     "server/agentHeartbeatTunnel.ts",
+    "server/agentHeartbeatNginxPlan.ts",
+    "server/agentHeartbeatGostPlan.ts",
+    "server/agentHeartbeatRuleRemoval.ts",
+    "server/agentHeartbeatWireGuardPlan.ts",
+    "server/agentHeartbeatForwardXHop.ts",
+    "server/agentHeartbeatLocalMatch.ts",
     "server/agentStatusRoutes.ts",
     "server/repositories/forwardGroupRepository.ts",
   ];
