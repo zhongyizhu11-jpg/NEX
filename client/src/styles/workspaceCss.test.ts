@@ -94,7 +94,21 @@ test("输入框字号低于 16px 的前提：viewport 里有 maximum-scale=1", (
   }
 });
 
-test("iOS App 手机顶栏往上收：安全区只留 72%（最少 20px）、顶栏 44px；液态玻璃的浮条不再离顶 8px", () => {
+test("iOS App 手机顶栏往上收：安全区只留 72%（最少 20px）、顶栏 44px；液态玻璃的胶囊浮在状态栏下面", () => {
   assert.match(css, /html\.capacitor-ios \.workspace-appbar \{ --fx-header-height: 44px; padding-top: max\(20px, calc\(env\(safe-area-inset-top, 0px\) \* 0\.72\)\); height: calc\(44px \+ max\(20px, calc\(env\(safe-area-inset-top, 0px\) \* 0\.72\)\)\); \}/);
-  assert.match(css, /html\.capacitor-ios\[data-ui-theme="liquid-glass"\] \.workspace-appbar \{ top: 0; margin-top: 0; \}/);
+  const glass = fs.readFileSync(path.resolve(import.meta.dirname, "theme-liquid-glass.css"), "utf8");
+  assert.match(glass, /html\.capacitor-ios\[data-ui-theme="liquid-glass"\] \.workspace-appbar \{\s*top: var\(--fx-lg-ios-appbar-top\);\s*height: 44px;\s*margin-top: var\(--fx-lg-ios-appbar-top\);\s*padding-top: 0;/);
+  // 手机上和底部标签栏同一种胶囊
+  assert.match(glass, /@media \(max-width: 767px\) \{\s*html\[data-ui-theme="liquid-glass"\] \.workspace-appbar \{\s*margin-inline: 16px;[\s\S]*?border-radius: var\(--fx-radius-pill\);/);
+});
+
+test("液态玻璃：进场动画不动透明度和 clip-path，玻璃卡的模糊在切页时不会消失再出现", () => {
+  const glass = fs.readFileSync(path.resolve(import.meta.dirname, "theme-liquid-glass.css"), "utf8");
+  assert.match(glass, /\.route-content-enter,\s*html\[data-ui-theme="liquid-glass"\] \.tab-content-enter\[data-state="active"\] \{\s*animation-name: fx-lg-page-enter;/);
+  assert.match(glass, /\.host-card-grid-static > \* \{\s*animation: none;\s*clip-path: none;\s*will-change: auto;/);
+  for (const name of ["fx-lg-page-enter", "fx-lg-card-enter"]) {
+    const block = glass.match(new RegExp(`@keyframes ${name} \\{([^}]*\\}[^}]*)\\}`))?.[1] || "";
+    assert.ok(block, name);
+    assert.doesNotMatch(block, /opacity|clip-path|filter/);
+  }
 });

@@ -719,10 +719,12 @@ function RuleCardModeTransition({
     const element = ref.current;
     if (!element || reduceMotion || typeof element.animate !== "function") return;
 
+    // 液态玻璃下不动透明度：这层半透明的那 140ms 里，里面玻璃卡的模糊会消失（见 theme-liquid-glass.css「进场动画」）。
+    const glass = document.documentElement.getAttribute("data-ui-theme") === "liquid-glass";
     const animation = element.animate(
       [
-        { opacity: 0.9, transform: "translate3d(0, 4px, 0)" },
-        { opacity: 1, transform: "translate3d(0, 0, 0)" },
+        { ...(glass ? {} : { opacity: 0.9 }), transform: "translate3d(0, 4px, 0)" },
+        { ...(glass ? {} : { opacity: 1 }), transform: "translate3d(0, 0, 0)" },
       ],
       { duration: 140, easing: "cubic-bezier(0.22, 1, 0.36, 1)" },
     );
@@ -7476,6 +7478,9 @@ function RulesContent() {
               <div className="fx-rule-sub" title={subtitle}>{subtitle}</div>
             </div>
             <div className="fx-rule-head-actions">
+              {renderRuleActions(rule, true)}
+              {renderRuleEnabledSwitch(rule)}
+              {/* 拖动手柄放最右边（iOS 列表编辑态的位置）：原来在「···」左边，正是拇指上下滑的地方，一碰就成了拖（用户 2026-11-03） */}
               {sortable && (
                 <SortableDragHandle
                   dragHandleProps={sortable.handleProps}
@@ -7484,8 +7489,6 @@ function RulesContent() {
                   className="bg-card/70"
                 />
               )}
-              {renderRuleActions(rule, true)}
-              {renderRuleEnabledSwitch(rule)}
             </div>
           </div>
 
