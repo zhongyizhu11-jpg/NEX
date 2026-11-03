@@ -3,8 +3,9 @@ import {
   DndContext,
   KeyboardSensor,
   MeasuringStrategy,
-  PointerSensor,
+  MouseSensor,
   pointerWithin,
+  TouchSensor,
   useSensor,
   useSensors,
   type DragEndEvent,
@@ -44,6 +45,9 @@ type SortableHandleProps = HTMLAttributes<HTMLElement> & {
   disabled?: boolean;
   ref?: Ref<HTMLElement>;
 };
+
+/** 触屏上按住卡片多久算拖（毫秒）。用户要的是「按住再拖」，短了会把停一下再滑的手势当成拖。 */
+export const TOUCH_HOLD_MS = 1000;
 
 const sortableMeasuring = {
   droppable: {
@@ -156,9 +160,18 @@ export function useSortableReorder<T>({
 
   const ids = useStableSortableIds(items.map((item) => getId(item)));
 
+  /*
+    鼠标：抓住手柄挪 4px 就算拖。触屏上没有手柄（index.css 里 pointer: coarse 下藏掉）：按住整张卡
+    TOUCH_HOLD_MS 不动才算拖，按住之前手指一动（超过 tolerance）就是在滚页面，拖就取消。
+    以前触屏也靠那枚手柄、而且手柄 touch-action: none —— 手柄正好在拇指上下滑的地方，滑到就成了拖，
+    页面还不动（用户 2026-11-03）。按住之后 dnd-kit 在 touchmove 上 preventDefault，页面就不再跟着手指动。
+  */
   const sensors = useSensors(
-    useSensor(PointerSensor, {
+    useSensor(MouseSensor, {
       activationConstraint: { distance: 4 },
+    }),
+    useSensor(TouchSensor, {
+      activationConstraint: { delay: TOUCH_HOLD_MS, tolerance: 8 },
     }),
     useSensor(KeyboardSensor, {
       coordinateGetter: sortableKeyboardCoordinates,
@@ -314,6 +327,8 @@ export function SortableItem({
     itemProps: HTMLAttributes<HTMLElement> & {
       ref: Ref<any>;
       style: CSSProperties;
+      "data-sortable-item"?: string;
+      "data-sortable-dragging"?: string;
     };
     handleProps: SortableHandleProps;
     isDragging: boolean;
@@ -342,6 +357,21 @@ export function SortableItem({
     display: itemKind === "row" ? "table-row" : undefined,
     willChange: "transform",
   };
+  // 触屏的起手（onTouchStart）挂在整张卡上：按住卡片就能拖。鼠标和键盘的仍在手柄上。
+  const { onTouchStart, ...handleListeners } = (listeners ?? {}) as Record<string, unknown> & { onTouchStart?: (event: unknown) => void };
+  // 拖完松手那一下浏览器还会补一个 click：卡片本身能点（打开编辑）的话，松手就弹出编辑框了。刚拖完的 400ms 里吞掉。
+  const droppedAtRef = useRef(0);
+  const wasDraggingRef = useRef(false);
+  useEffect(() => {
+    if (wasDraggingRef.current && !isDragging) droppedAtRef.current = Date.now();
+    wasDraggingRef.current = isDragging;
+  }, [isDragging]);
+  const swallowClickAfterDrop = (event: { preventDefault: () => void; stopPropagation: () => void }) => {
+    if (Date.now() - droppedAtRef.current < 400) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  };
 
   return (
     <>
@@ -349,10 +379,14 @@ export function SortableItem({
         itemProps: {
           ref: setNodeRef as Ref<any>,
           style,
+          "data-sortable-item": disabled ? undefined : "",
+          "data-sortable-dragging": isDragging ? "" : undefined,
+          onTouchStart: disabled ? undefined : (onTouchStart as HTMLAttributes<HTMLElement>["onTouchStart"]),
+          onClickCapture: swallowClickAfterDrop,
         },
         handleProps: {
           ...attributes,
-          ...listeners,
+          ...handleListeners,
           ref: setActivatorNodeRef as Ref<HTMLElement>,
           disabled,
           style: { touchAction: "none" },
@@ -386,6 +420,7 @@ export function SortableDragHandle({
     <button
       ref={ref as Ref<HTMLButtonElement>}
       type="button"
+      data-sortable-handle=""
       aria-label="拖动排序"
       title={busy ? "正在保存排序" : disabled ? "至少需要两个项目才能排序" : "拖动排序"}
       disabled={disabled}

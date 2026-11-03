@@ -719,10 +719,12 @@ function RuleCardModeTransition({
     const element = ref.current;
     if (!element || reduceMotion || typeof element.animate !== "function") return;
 
+    // 液态玻璃下不动透明度：这层半透明的那 140ms 里，里面玻璃卡的模糊会消失（见 theme-liquid-glass.css「进场动画」）。
+    const glass = document.documentElement.getAttribute("data-ui-theme") === "liquid-glass";
     const animation = element.animate(
       [
-        { opacity: 0.9, transform: "translate3d(0, 4px, 0)" },
-        { opacity: 1, transform: "translate3d(0, 0, 0)" },
+        { ...(glass ? {} : { opacity: 0.9 }), transform: "translate3d(0, 4px, 0)" },
+        { ...(glass ? {} : { opacity: 1 }), transform: "translate3d(0, 0, 0)" },
       ],
       { duration: 140, easing: "cubic-bezier(0.22, 1, 0.36, 1)" },
     );
@@ -4468,11 +4470,11 @@ function RulesContent() {
   const ruleFilterCacheScope = user?.role === "admin"
     ? `admin-${user?.id || "self"}-${filterUser}`
     : `user-${user?.id || "self"}`;
-  const ruleCategoryCountsCacheKey = useMemo(() => [
-    ruleFilterCacheScope,
-    filterResource,
-    ruleSearchQuery.trim() || "search-all",
-  ].map((value) => encodeURIComponent(String(value))).join("."), [filterResource, ruleFilterCacheScope, ruleSearchQuery]);
+  // 分类条的数字只按「谁的规则」数（服务端同样不看搜索 / 筛选），缓存键也只跟这个走
+  const ruleCategoryCountsCacheKey = useMemo(
+    () => encodeURIComponent(ruleFilterCacheScope),
+    [ruleFilterCacheScope],
+  );
   const [stableRuleCategoryCounts, setStableRuleCategoryCounts] = useState(() => {
     const cached = readCachedRuleCategoryCounts(ruleCategoryCountsCacheKey);
     return { counts: cached || EMPTY_RULE_CATEGORY_COUNTS, ready: !!cached };
@@ -4492,6 +4494,8 @@ function RulesContent() {
     const baseFilters = {
       ...ruleFilters,
       ruleCategory: "all" as RuleCategory,
+      filterResource: "all" as RuleResourceFilter,
+      searchQuery: "",
     };
     const counts: RuleCategoryCounts = { ...EMPTY_RULE_CATEGORY_COUNTS };
     sourceRules
@@ -6113,6 +6117,19 @@ function RulesContent() {
     卡片上入口只写第一个地址（专属域名排第一），后面的挤成「+N」。用户要挑着复制 IP 或域名，
     所以「+N」是个开关：点开把每个地址各自列一行，各带复制；再点收起。按规则 id 记，翻页不丢。
   */
+  /*
+    规则卡上线路组的 A / B 线路行平时收着（和别的卡一样高），点「择优 · 2 条」「主备 · 主线路」那枚才展开；
+    展开后点哪一行进线路组编辑（用户 2026-11-03）。
+  */
+  const [expandedLineRuleIds, setExpandedLineRuleIds] = useState<Set<number>>(() => new Set());
+  const toggleRuleLines = (ruleId: number) => {
+    setExpandedLineRuleIds((previous) => {
+      const next = new Set(previous);
+      if (next.has(ruleId)) next.delete(ruleId);
+      else next.add(ruleId);
+      return next;
+    });
+  };
   const [expandedEntryRuleIds, setExpandedEntryRuleIds] = useState<Set<number>>(() => new Set());
   const toggleEntryAddresses = (ruleId: number) => {
     setExpandedEntryRuleIds((previous) => {
@@ -7382,10 +7399,14 @@ function RulesContent() {
     const spark = sparkByRule.get(Number(rule.id)) || [];
 
     // 地址行右端那枚小标签：切了线 / 出错 / 停用比延迟要紧，有就换掉延迟。
+    const hasLineRows = !!failover && !!routeBoardByRule.get(Number(rule.id));
+    const linesExpanded = hasLineRows && expandedLineRuleIds.has(Number(rule.id));
+    // 有线路行可展开时点这枚是展开 / 收起；没有（线路板还没数据）就照旧直接进线路组
+    const onFailoverPill = () => (hasLineRows ? toggleRuleLines(Number(rule.id)) : setPolicyRuleId(Number(rule.id)));
     let tag: ReactNode = null;
     if (failover && failover.tone !== "normal") {
       tag = (
-        <button type="button" className="fx-rule-tag" data-tone={failover.tone === "warn" ? "warn" : "off"} title={failover.title} onClick={() => setPolicyRuleId(Number(rule.id))}>
+        <button type="button" className="fx-rule-tag" data-tone={failover.tone === "warn" ? "warn" : "off"} title={hasLineRows ? (linesExpanded ? "收起线路" : `${failover.title}（点开看线路）`) : failover.title} aria-expanded={hasLineRows ? linesExpanded : undefined} onClick={onFailoverPill}>
           {failover.text}
         </button>
       );
@@ -7424,9 +7445,10 @@ function RulesContent() {
       <button
         type="button"
         className="fx-rule-foot-link"
-        title={failover.title}
+        title={hasLineRows ? (linesExpanded ? "收起线路" : "展开线路") : failover.title}
         aria-label={`线路组：${failover.title}`}
-        onClick={() => setPolicyRuleId(Number(rule.id))}
+        aria-expanded={hasLineRows ? linesExpanded : undefined}
+        onClick={onFailoverPill}
       >
         <GitBranch className="h-3 w-3" aria-hidden="true" />
         {failover.text}
@@ -7476,6 +7498,9 @@ function RulesContent() {
               <div className="fx-rule-sub" title={subtitle}>{subtitle}</div>
             </div>
             <div className="fx-rule-head-actions">
+              {renderRuleActions(rule, true)}
+              {renderRuleEnabledSwitch(rule)}
+              {/* 拖动手柄放最右边（iOS 列表编辑态的位置）：原来在「···」左边，正是拇指上下滑的地方，一碰就成了拖（用户 2026-11-03） */}
               {sortable && (
                 <SortableDragHandle
                   dragHandleProps={sortable.handleProps}
@@ -7484,8 +7509,6 @@ function RulesContent() {
                   className="bg-card/70"
                 />
               )}
-              {renderRuleActions(rule, true)}
-              {renderRuleEnabledSwitch(rule)}
             </div>
           </div>
 
@@ -7607,7 +7630,7 @@ function RulesContent() {
               {tag}
             </span>
           </div>
-          {failover && routeBoardByRule.get(Number(rule.id)) ? (
+          {linesExpanded && failover && routeBoardByRule.get(Number(rule.id)) ? (
             <RouteMiniChain
               className="mt-1.5"
               status={routeBoardByRule.get(Number(rule.id))}

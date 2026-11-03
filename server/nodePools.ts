@@ -67,6 +67,23 @@ export async function listNodePools(userId: number | null): Promise<NodePool[]> 
   return rows.map(rowToPool);
 }
 
+/**
+ * 节点池拖动排序：被拖的几个在原来的座位里换（见 sortOrderSlots），范围是这个人看得到的全部池。
+ * userId 为 null 是管理员（看全部）。
+ */
+export async function reorderNodePools(userId: number | null, ids: number[]) {
+  const orderedIds = Array.from(new Set(ids.map((id) => Math.floor(Number(id))).filter((id) => Number.isInteger(id) && id > 0)));
+  if (orderedIds.length === 0 || orderedIds.length !== ids.length) throw new Error("排序数据无效");
+  const { reorderWithinSortOrderScope } = await import("./repositories/sortOrderSlots");
+  const loadScope = () => (userId === null
+    ? queryRaw<{ id: number; sortOrder: number }>(`SELECT ${q("id")} AS ${q("id")}, ${q("sortOrder")} AS ${q("sortOrder")} FROM ${q("node_pools")} ORDER BY ${q("sortOrder")}, ${q("id")}`)
+    : queryRaw<{ id: number; sortOrder: number }>(`SELECT ${q("id")} AS ${q("id")}, ${q("sortOrder")} AS ${q("sortOrder")} FROM ${q("node_pools")} WHERE ${q("userId")} = ? ORDER BY ${q("sortOrder")}, ${q("id")}`, [userId]));
+  const scope = await loadScope();
+  const visible = new Set(scope.map((row) => Number(row.id)));
+  if (orderedIds.some((id) => !visible.has(id))) throw new Error("排序中包含不存在或无权访问的节点池");
+  await reorderWithinSortOrderScope({ table: "node_pools", orderedIds, loadScope });
+}
+
 export async function getNodePool(id: number): Promise<NodePool | null> {
   const rows = await queryRaw<any>(`SELECT * FROM ${q("node_pools")} WHERE ${q("id")} = ?`, [Number(id)]);
   return rows[0] ? rowToPool(rows[0]) : null;

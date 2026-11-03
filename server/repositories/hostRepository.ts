@@ -38,6 +38,7 @@ import { repairForwardGroupRuleIntegrity } from "../forwardGroupRuleIntegrity";
 import { pageResult, pageWindowForTotal, type PageRequest } from "../../shared/pagination";
 import { recordConfigAuditEvent, shouldAuditConfigPatch } from "../configAudit";
 import { HOST_ONLINE_TTL_MS } from "../hostHeartbeatPolicy";
+import { reorderWithinSortOrderScope } from "./sortOrderSlots";
 import { invalidateAgentAuthTokenCandidates } from "./tokenRepository";
 import { getSetting, setSetting } from "./settingsRepository";
 import { deleteHostProbeHourlyStats } from "./hostProbeHourlyRepository";
@@ -712,6 +713,24 @@ export async function reorderHosts(ids: number[], userId?: number, startIndex = 
       if (previousOrder.get(id) === index) continue;
       await executeRaw(`UPDATE ${q("hosts")} SET ${q("sortOrder")} = ?, ${q("updatedAt")} = ? WHERE ${q("id")} = ?`, [index, now, id]);
     }
+  });
+}
+
+/**
+ * 管理员在「全部」页（按分组排）里拖不在任何分组里的那几台：在它们原来的座位里换，
+ * 不按页偏移重排整张表（前面那些按分组排的主机不在同一个顺序里，偏移是错的）。
+ */
+export async function reorderHostsInPlace(ids: number[]) {
+  const orderedIds = normalizeIds(ids);
+  if (orderedIds.length === 0 || orderedIds.length !== ids.length) throw new Error("排序数据无效");
+  const q = quoteIdentifier;
+  await reorderWithinSortOrderScope({
+    table: "hosts",
+    orderedIds,
+    loadScope: () => queryRaw<{ id: number; sortOrder: number }>(
+      `SELECT ${q("id")} AS ${q("id")}, ${q("sortOrder")} AS ${q("sortOrder")} FROM ${q("hosts")}
+        ORDER BY ${q("sortOrder")} ASC, ${q("createdAt")} DESC, ${q("id")} DESC`,
+    ),
   });
 }
 

@@ -1,4 +1,4 @@
-import { useMemo, useState, type SyntheticEvent } from "react";
+import { useMemo, useState, type HTMLAttributes, type Ref, type SyntheticEvent } from "react";
 import type { inferRouterOutputs } from "@trpc/server";
 import { Check, ChevronDown, ChevronRight, Plus, X } from "lucide-react";
 import { toast } from "sonner";
@@ -31,6 +31,7 @@ import {
   type LineTone,
 } from "@/features/lines/LineUi";
 import { RouteBoardList } from "@/features/rules/RouteBoardList";
+import { SortableList } from "@/components/SortableList";
 import { LINE_PARAM, useSearchIdParam } from "./lineLinks";
 import { LandingPoolFields, landingDraftError, landingDraftFrom, landingInputFromDraft, type LandingConfigView, type LandingDraft } from "./LandingPoolFields";
 import { LINK_SPREAD_LABELS } from "@shared/linkTerms";
@@ -204,13 +205,37 @@ export function NodePoolsSection({ hosts, onOpenGroup, isAdmin = false }: {
     },
     onError: (error) => toast.error(error.message),
   });
+  /*
+    拖动排序（2.3.509，手机上按住卡片 1 秒拖）：池的顺序存在节点池上；入口组、出口组的卡和它们自己那一页
+    是同一份顺序（forwardGroups.reorderGroups，管理员）。拖完先按新顺序摆着，存好再刷新。
+  */
+  const [poolOrder, setPoolOrder] = useState<number[] | null>(null);
+  const [entryOrder, setEntryOrder] = useState<number[] | null>(null);
+  const [exitOrder, setExitOrder] = useState<number[] | null>(null);
+  const reorderPools = trpc.nodePools.reorder.useMutation({
+    onError: (error) => toast.error(error.message || "排序没存上"),
+    onSettled: () => { void board.refetch().finally(() => setPoolOrder(null)); },
+  });
+  const reorderGroups = trpc.forwardGroups.reorderGroups.useMutation({
+    onError: (error) => toast.error(error.message || "排序没存上"),
+    onSettled: () => {
+      void utils.forwardGroups.invalidate();
+      void board.refetch().finally(() => { setEntryOrder(null); setExitOrder(null); });
+    },
+  });
   const [editing, setEditing] = useState<PoolDraft | null>(null);
   const confirmDialog = useConfirmDialog();
   const hostName = (id: number) => hosts.find((host) => host.id === id)?.name || `主机 ${id}`;
   const data = board.data;
-  const entryGroups = data?.entryGroups || [];
-  const exitGroups = data?.exitGroups || [];
-  const nodePools = data?.nodePools || [];
+  const ordered = <T extends { id: number }>(items: T[], order: number[] | null) => {
+    if (!order) return items;
+    const byId = new Map(items.map((item) => [item.id, item]));
+    const next = order.map((id) => byId.get(id)).filter((item): item is T => !!item);
+    return next.length === items.length ? next : items;
+  };
+  const entryGroups = ordered(data?.entryGroups || [], entryOrder);
+  const exitGroups = ordered(data?.exitGroups || [], exitOrder);
+  const nodePools = ordered(data?.nodePools || [], poolOrder);
   /** 建池框里「从组带入」：有成员的入口组、出口组，带入它们的机器。 */
   const importable = useMemo(() => [
     ...entryGroups.map((group) => ({ key: `e${group.id}`, label: `入口组 · ${group.domain || group.name}`, hostIds: group.members.map((member) => member.hostId) })),
@@ -289,11 +314,22 @@ export function NodePoolsSection({ hosts, onOpenGroup, isAdmin = false }: {
       {board.isLoading ? <p className="px-1 text-[12.5px] text-muted-foreground">在读节点池…</p> : null}
 
       {nodePools.length > 0 && entryGroups.length + exitGroups.length > 0 ? <LineSec left="中转池 / 落地池" right={`${nodePools.length} 个`} /> : null}
-      {nodePools.map((pool) => pool.role === "landing" ? (
-        <LandingPoolCard key={`p${pool.id}`} pool={pool} onOpen={() => openPool(pool)} />
+      <SortableList
+        items={nodePools}
+        getId={(pool) => pool.id}
+        className="flex min-w-0 flex-col gap-3"
+        disabled={reorderPools.isPending}
+        onReorder={(next) => {
+          setPoolOrder(next.map((pool) => pool.id));
+          reorderPools.mutate({ ids: next.map((pool) => pool.id) });
+        }}
+      >
+      {(pool, sortable) => pool.role === "landing" ? (
+        <LandingPoolCard key={`p${pool.id}`} pool={pool} onOpen={() => openPool(pool)} sortableProps={sortable?.itemProps} />
       ) : (
         <LineCard
           key={`p${pool.id}`}
+          {...(sortable?.itemProps || {})}
           className="cursor-pointer hover:border-[var(--fx-stroke)]"
           role="button"
           tabIndex={0}
@@ -323,12 +359,24 @@ export function NodePoolsSection({ hosts, onOpenGroup, isAdmin = false }: {
             {pool.followers.length ? ` · ${pool.followers.join("、")} 的成员跟着这个池` : ""}
           </LineHint>
         </LineCard>
-      ))}
+      )}
+      </SortableList>
 
       {entryGroups.length > 0 ? <LineSec left="入口组" right={`${entryGroups.length} 个`} /> : null}
-      {entryGroups.map((group) => (
+      <SortableList
+        items={entryGroups}
+        getId={(group) => group.id}
+        className="flex min-w-0 flex-col gap-3"
+        disabled={!isAdmin || reorderGroups.isPending || new Set(entryGroups.map((group) => group.mode)).size > 1}
+        onReorder={(next) => {
+          setEntryOrder(next.map((group) => group.id));
+          reorderGroups.mutate({ groupMode: next[0]?.mode === "failover" ? "failover" : "entry", ids: next.map((group) => group.id) });
+        }}
+      >
+      {(group, sortable) => (
         <LineCard
           key={`e${group.id}`}
+          {...(sortable?.itemProps || {})}
           className={onOpenGroup ? "cursor-pointer hover:border-[var(--fx-stroke)]" : undefined}
           onClick={() => onOpenGroup?.(group.mode, group.id)}
           title={group.domain ? `${group.name}（${group.domain}）` : group.name}
@@ -363,12 +411,24 @@ export function NodePoolsSection({ hosts, onOpenGroup, isAdmin = false }: {
           </LineHint>
           {followMenu(group, false)}
         </LineCard>
-      ))}
+      )}
+      </SortableList>
 
       {exitGroups.length > 0 ? <LineSec left="出口组" right={`${exitGroups.length} 个`} /> : null}
-      {exitGroups.map((group) => (
+      <SortableList
+        items={exitGroups}
+        getId={(group) => group.id}
+        className="flex min-w-0 flex-col gap-3"
+        disabled={!isAdmin || reorderGroups.isPending}
+        onReorder={(next) => {
+          setExitOrder(next.map((group) => group.id));
+          reorderGroups.mutate({ groupMode: "exit", ids: next.map((group) => group.id) });
+        }}
+      >
+      {(group, sortable) => (
         <LineCard
           key={`x${group.id}`}
+          {...(sortable?.itemProps || {})}
           className={onOpenGroup ? "cursor-pointer hover:border-[var(--fx-stroke)]" : undefined}
           onClick={() => onOpenGroup?.("exit", group.id)}
           data-testid="exit-pool-card"
@@ -397,7 +457,8 @@ export function NodePoolsSection({ hosts, onOpenGroup, isAdmin = false }: {
           </LineHint>
           {followMenu(group, false)}
         </LineCard>
-      ))}
+      )}
+      </SortableList>
 
       {data && nodePools.length + entryGroups.length + exitGroups.length === 0 ? (
         <p className="px-1 text-[12.5px] text-muted-foreground">还没有池。建一个中转池，线路里一层直接选它；或者建一个落地池，几台开同一份落地。入口组、出口组也会在这里一起看。</p>
@@ -525,12 +586,13 @@ type PoolBoardPool = inferRouterOutputs<AppRouter>["lineDiagnostics"]["poolBoard
  * 落地池的卡（2.3.500）：协议一句话、每台开在哪个端口（换了端口的标出来、没开出来的说为什么）、
  * 订阅里一条、用在几条转发。点开是同一个编辑框。
  */
-function LandingPoolCard({ pool, onOpen }: { pool: PoolBoardPool; onOpen: () => void }) {
+function LandingPoolCard({ pool, onOpen, sortableProps }: { pool: PoolBoardPool; onOpen: () => void; sortableProps?: HTMLAttributes<HTMLDivElement> & { ref?: Ref<HTMLDivElement> } }) {
   const landing = pool.landing;
   const states = new Map((landing?.members || []).map((member) => [member.hostId, member]));
   const open = pool.members.filter((member) => states.get(member.hostId)?.open && member.tone === "ok").length;
   return (
     <LineCard
+      {...(sortableProps || {})}
       className="cursor-pointer hover:border-[var(--fx-stroke)]"
       role="button"
       tabIndex={0}

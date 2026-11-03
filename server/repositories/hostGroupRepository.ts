@@ -8,6 +8,7 @@ import {
 } from "../../drizzle/schema";
 import { executeRaw, getDb, insertAndGetId, nowDate, queryRaw } from "../dbRuntime";
 import { inList, quoteIdentifier } from "../dbCompat";
+import { reorderWithinSortOrderScope } from "./sortOrderSlots";
 
 export type HostGroupInput = {
   name: string;
@@ -164,6 +165,33 @@ export async function reorderHostGroups(ids: number[], userId?: number) {
     userId,
     notFoundMessage: "排序中包含无权操作或不存在的分组",
     deps: { getDb, queryRaw, executeRaw, quoteIdentifier, inList },
+  });
+}
+
+/**
+ * 在「全部」页（按分组排）里拖：只把这几台在它们原来的座位里换一下，不按页偏移重编号。
+ * 那一页上同一个分组的主机可能只是这个分组的一段，startIndex 算不准；按座位换就不用知道前面还有几台。
+ */
+export async function reorderHostGroupMembersInPlace(groupId: number, hostIds: number[]) {
+  const normalizedGroupId = Math.floor(Number(groupId));
+  if (!Number.isInteger(normalizedGroupId) || normalizedGroupId <= 0) throw new Error("分组不存在");
+  const orderedHostIds = Array.from(hostIds || []).map((id) => Math.floor(Number(id))).filter((id) => Number.isInteger(id) && id > 0);
+  if (orderedHostIds.length === 0 || new Set(orderedHostIds).size !== orderedHostIds.length) throw new Error("排序数据无效");
+  const q = quoteIdentifier;
+  const members = await queryRaw<{ id: number; hostId: number; sortOrder: number }>(
+    `SELECT ${q("id")} AS ${q("id")}, ${q("hostId")} AS ${q("hostId")}, ${q("sortOrder")} AS ${q("sortOrder")}
+       FROM ${q("host_group_members")}
+      WHERE ${q("groupId")} = ?
+      ORDER BY ${q("sortOrder")} ASC, ${q("id")} ASC`,
+    [normalizedGroupId],
+  );
+  const memberIdByHost = new Map(members.map((row) => [Number(row.hostId), Number(row.id)]));
+  const orderedIds = orderedHostIds.map((hostId) => memberIdByHost.get(hostId));
+  if (orderedIds.some((id) => !id)) throw new Error("排序中包含不属于该分组的主机");
+  await reorderWithinSortOrderScope({
+    table: "host_group_members",
+    orderedIds: orderedIds as number[],
+    loadScope: async () => members.map((row) => ({ id: row.id, sortOrder: row.sortOrder })),
   });
 }
 

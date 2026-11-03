@@ -290,6 +290,35 @@ html.dark[data-ui-theme="liquid-glass"] .workspace-layout [data-sidebar="group-l
   text-shadow: 0 1px 2px rgb(0 0 0 / 70%), 0 0 14px rgb(0 0 0 / 60%);
 }
 
+/* ── 1b. 进场动画 ───────────────────────────────────────────────── */
+/*
+  玻璃卡的模糊只能看到「它所在的那一组」后面的东西。祖先元素只要透明度不到 1、带 clip-path、或者
+  will-change 里写了这两样，就自成一组（规范里叫 backdrop root），组里的卡模糊到的是这一组自己
+  透明的底 —— 于是切页、切分区、卡片进场的那一两百毫秒里卡上没有模糊，照片从卡里直接透出来，动画
+  一结束模糊才「啪」地出现（用户 2026-11-03 的录屏）。这一套里进场只准动位移：位移不开新的组。
+*/
+html[data-ui-theme="liquid-glass"] .route-content-enter,
+html[data-ui-theme="liquid-glass"] .tab-content-enter[data-state="active"] {
+  animation-name: fx-lg-page-enter;
+}
+html[data-ui-theme="liquid-glass"] .stagger-card { animation-name: fx-lg-card-enter; }
+html[data-ui-theme="liquid-glass"] .card-mode-transition { animation-name: fx-lg-card-enter; will-change: transform; }
+html[data-ui-theme="liquid-glass"] .rule-card-grid-static,
+html[data-ui-theme="liquid-glass"] .rule-card-grid-static > *,
+html[data-ui-theme="liquid-glass"] .host-card-grid-static,
+html[data-ui-theme="liquid-glass"] .host-card-grid-static > * {
+  animation: none;
+  clip-path: none;
+  will-change: auto;
+}
+@keyframes fx-lg-page-enter {
+  from { transform: translateY(8px); }
+}
+@keyframes fx-lg-card-enter {
+  from { transform: translateY(6px); }
+  to { transform: translateY(0); }
+}
+
 /* ── 2. 玻璃卡 ───────────────────────────────────────────────── */
 /*
   经典的「彩色描边」是 padding-box / border-box 两层渐变压在不透明白卡上；卡身一半透之后那层渐变会从
@@ -415,6 +444,50 @@ html[data-ui-theme="liquid-glass"] .workspace-appbar {
 html.dark[data-ui-theme="liquid-glass"] .workspace-appbar {
   border-color: rgb(255 255 255 / 8%);
   box-shadow: 0 4px 16px rgb(0 0 0 / 15%), inset 0 1px 1px rgb(255 255 255 / 8%);
+}
+/*
+  手机上顶栏和底部标签栏是同一枚胶囊：同样离边 16px、同样的圆角、描边、玻璃和投影。
+  以前是一条 18px 圆角的长条，和底下那枚圆滚滚的胶囊摆在一起两种形状（用户 2026-11-03 圈的）。
+*/
+@media (max-width: 767px) {
+  html[data-ui-theme="liquid-glass"] .workspace-appbar {
+    margin-inline: 16px;
+    border-color: rgb(255 255 255 / 65%);
+    border-radius: var(--fx-radius-pill);
+    background: rgb(255 255 255 / 40%);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    backdrop-filter: blur(20px) saturate(180%);
+    box-shadow: inset 0 1px 1px rgb(255 255 255 / 80%), 0 12px 36px rgb(0 0 0 / 8%);
+  }
+  html.dark[data-ui-theme="liquid-glass"] .workspace-appbar {
+    border-color: rgb(255 255 255 / 12%);
+    background: rgb(20 24 33 / 55%);
+    box-shadow: inset 0 1px 1px rgb(255 255 255 / 12%), 0 12px 36px rgb(0 0 0 / 50%);
+  }
+  html[data-ui-theme="liquid-glass"] .workspace-appbar-inner { padding-inline: 10px 12px; }
+  /*
+    iOS App 里状态栏不再包在胶囊里：胶囊浮在状态栏下面（离顶的距离和 workspace.css 里其他主题顶栏
+    的 padding-top 一样，所以品牌那一行的位置不变），滚起来也停在那里。状态栏那一段照片直接露着，
+    上面压一层很淡的暗渐变，时间和电量在亮照片上也看得清。
+  */
+  html.capacitor-ios[data-ui-theme="liquid-glass"] {
+    --fx-lg-ios-appbar-top: max(20px, calc(env(safe-area-inset-top, 0px) * 0.72));
+  }
+  html.capacitor-ios[data-ui-theme="liquid-glass"] .workspace-appbar {
+    top: var(--fx-lg-ios-appbar-top);
+    height: 44px;
+    margin-top: var(--fx-lg-ios-appbar-top);
+    padding-top: 0;
+  }
+  html.capacitor-ios[data-ui-theme="liquid-glass"] .workspace-appbar::before {
+    content: "";
+    position: absolute;
+    inset: calc(-1 * var(--fx-lg-ios-appbar-top)) -16px auto;
+    height: calc(var(--fx-lg-ios-appbar-top) + 28px);
+    background: linear-gradient(to bottom, rgb(0 0 0 / 18%), transparent);
+    pointer-events: none;
+    z-index: -1;
+  }
 }
 html[data-ui-theme="liquid-glass"] .workspace-appbar-icon:hover { background: var(--fx-hover); }
 /* 侧栏：透的玻璃，右边一条白线 */

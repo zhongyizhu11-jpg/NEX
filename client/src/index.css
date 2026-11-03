@@ -1657,6 +1657,14 @@
     min-height: 44px;
   }
 
+  /*
+    触屏上没有拖动手柄：按住整张卡 1 秒（SortableDragHandle.tsx 的 TOUCH_HOLD_MS）就能拖，
+    手柄只留给鼠标。按住的时候不要弹出系统的文字选择 / 长按菜单。
+  */
+  [data-sortable-handle] { display: none; }
+  [data-sortable-item] { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+  [data-sortable-item][data-sortable-dragging] { box-shadow: 0 16px 40px -12px rgb(0 0 0 / 35%); }
+
   /* 方形图标按钮两个方向都要够 */
   button:where(.size-8, .size-9, .h-8, .h-9, [data-icon-button]),
   [role="button"]:where(.size-8, .size-9, .h-8, .h-9) {

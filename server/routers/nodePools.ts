@@ -1,4 +1,5 @@
-import { router } from "../_core/trpc";
+import { z } from "zod";
+import { protectedProcedure, router } from "../_core/trpc";
 import { lineDiagnosticsRouter } from "./lineDiagnostics";
 
 /*
@@ -25,4 +26,12 @@ export const nodePoolsRouter = router({
   delete: legacy.nodePoolDelete,
   /** 从入口组 / 出口组带入（= lineDiagnostics.nodePoolImport）。 */
   import: legacy.nodePoolImport,
+  /** 拖动排序（2.3.509）：被拖的几个在原来的座位里换；管理员排全部，别人排自己的。 */
+  reorder: protectedProcedure
+    .input(z.object({ ids: z.array(z.number().int().positive()).min(1).max(1000) }))
+    .mutation(async ({ input, ctx }) => {
+      const { reorderNodePools } = await import("../nodePools");
+      await reorderNodePools(ctx.user.role === "admin" ? null : ctx.user.id, input.ids);
+      return { success: true };
+    }),
 });

@@ -4183,18 +4183,19 @@ function TunnelsContent() {
               <TunnelLinkShapingNotice tunnel={tunnel} />
             </div>
             <div className="fx-rule-head-actions">
-              <SortableDragHandle
-                dragHandleProps={sortable.handleProps}
-                visible={sortable.isDragging}
-                busy={tunnelReorderPending}
-                className="bg-card/70"
-              />
               {renderTunnelActions(tunnel, supported, true)}
               {supported ? (
                 renderTunnelEnabledSwitch(tunnel)
               ) : (
                 renderUnsupportedHint(<span className="inline-flex"><Switch aria-label="当前协议不支持" checked={false} disabled className="switch-compact" /></span>)
               )}
+              {/* 拖动手柄放最右边，和转发规则卡一样：原来的位置正是拇指上下滑的地方 */}
+              <SortableDragHandle
+                dragHandleProps={sortable.handleProps}
+                visible={sortable.isDragging}
+                busy={tunnelReorderPending}
+                className="bg-card/70"
+              />
             </div>
           </div>
           <div className="fx-tunnel-route">
