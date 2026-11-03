@@ -1331,12 +1331,15 @@ export const hostsRouter = router({
         groupId: z.number().int().positive(),
         hostIds: reorderIdsSchema,
         startIndex: z.number().int().min(0).max(1_000_000).optional().default(0),
+        /** 「全部」页里拖：在原来的座位里换，不看 startIndex */
+        inPlace: z.boolean().optional(),
       }))
       .mutation(async ({ input }) => {
         const group = await db.getHostGroupById(input.groupId);
         if (!group) throw new Error("主机分组不存在");
         await assertHostGroupHostIdsExist(input.hostIds);
-        await db.reorderHostGroupMembers(input.groupId, input.hostIds, input.startIndex);
+        if (input.inPlace) await db.reorderHostGroupMembersInPlace(input.groupId, input.hostIds);
+        else await db.reorderHostGroupMembers(input.groupId, input.hostIds, input.startIndex);
         return { success: true };
       }),
     /** 获取所有主机列表（管理员用，用于权限分配） */
@@ -1516,9 +1519,13 @@ export const hostsRouter = router({
       .input(z.object({
         ids: reorderIdsSchema,
         startIndex: z.number().int().min(0).max(1_000_000).optional().default(0),
+        /** 管理员在「全部」页（按分组排）里拖不在分组里的主机：在原来的座位里换 */
+        inPlace: z.boolean().optional(),
       }))
       .mutation(async ({ input, ctx }) => {
-        if (ctx.user.role === "admin") {
+        if (ctx.user.role === "admin" && input.inPlace) {
+          await db.reorderHostsInPlace(input.ids);
+        } else if (ctx.user.role === "admin") {
           await db.reorderHosts(input.ids, undefined, input.startIndex);
         } else {
           const scope = await visibleHostQueryScope(ctx.user);

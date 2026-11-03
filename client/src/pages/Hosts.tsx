@@ -2425,11 +2425,29 @@ function HostsContent() {
   });
   const hostReorderPending = reorderHostsMutation.isPending || reorderHostGroupMembersMutation.isPending;
   const hostSortGroupId = selectedHostGroupId === "all" ? null : Number(selectedHostGroupId);
-  const hostSortMode: "hosts" | "group" | null = selectedHostGroupId !== "all" && selectedHostGroup
+  /*
+    「全部」页有分组时列表是按分组排的（分组顺序 → 组内顺序 → 不在分组里的按主机顺序），以前这里干脆不让拖。
+    现在能拖：同一个分组里的几台互换，存的是那个分组的组内顺序；最后那段不在分组里的，存主机顺序；
+    跨分组拖不了（拖过去松手会弹回，提示去「分组管理」调）。分组只有管理员看得到。
+  */
+  const hostSortMode: "hosts" | "group" | "grouped" | null = selectedHostGroupId !== "all" && selectedHostGroup
     ? "group"
     : selectedHostGroupId === "all" && enabledHostGroups.length === 0 && !(user?.role === "admin" && isHostGroupsLoading)
       ? "hosts"
-      : null;
+      : selectedHostGroupId === "all" && enabledHostGroups.length > 0 && user?.role === "admin"
+        ? "grouped"
+        : null;
+  /** 「全部」页按分组排时每台主机落在哪一段：排在最前的那个启用分组；不在任何分组里是 0。和服务端 hostListOrder 同一个规则。 */
+  const hostFirstGroupById = useMemo(() => {
+    const map = new Map<number, number>();
+    for (const group of enabledHostGroups) {
+      for (const hostId of group.hostIds || []) {
+        const id = Number(hostId);
+        if (id > 0 && !map.has(id)) map.set(id, Number(group.id));
+      }
+    }
+    return map;
+  }, [enabledHostGroups]);
   // Deliberately independent of the in-flight mutation: gating this on `isPending`
   // swapped the sortable grid for the animated one for the length of the request,
   // which remounted every card and read as a full page refresh after each drop.
@@ -2444,6 +2462,28 @@ function HostsContent() {
     // One reorder at a time, otherwise two overlapping writes can land out of order.
     disabled: !hostSortingEnabled || hostPageQuery.isPlaceholderData || hostReorderPending,
     onReorder: (nextHosts) => {
+      if (hostSortMode === "grouped") {
+        const keyOf = (host: { id?: unknown }) => hostFirstGroupById.get(Number(host.id)) ?? 0;
+        const before = filteredDisplayHosts.map(keyOf);
+        const after = nextHosts.map(keyOf);
+        if (before.some((key, index) => key !== after[index])) {
+          toast.info("只能在同一个分组里拖；要换分组顺序，到「分组管理」里调");
+          return;
+        }
+        const changed = filteredDisplayHosts.findIndex((host: { id?: unknown }, index: number) => Number(host.id) !== Number(nextHosts[index]?.id));
+        if (changed < 0) return;
+        const segmentKey = after[changed];
+        const segmentIds = nextHosts.filter((host) => keyOf(host) === segmentKey).map((host) => Number(host.id));
+        const requestId = beginOptimisticHostOrder(nextHosts.map((host) => Number(host.id)));
+        const onError = () => releaseOptimisticHostOrder(requestId);
+        const onSettled = () => resyncHostOrder(requestId, segmentKey > 0);
+        if (segmentKey > 0) {
+          reorderHostGroupMembersMutation.mutate({ groupId: segmentKey, hostIds: segmentIds, inPlace: true }, { onError, onSettled });
+        } else {
+          reorderHostsMutation.mutate({ ids: segmentIds, inPlace: true }, { onError, onSettled });
+        }
+        return;
+      }
       const groupSortId = hostSortMode === "group" ? hostSortGroupId : null;
       if (!groupSortId && hostSortMode !== "hosts") return;
       const hostIds = nextHosts.map((host: any) => Number(host.id)).filter((id) => Number.isInteger(id) && id > 0);
