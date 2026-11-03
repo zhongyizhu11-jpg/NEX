@@ -167,3 +167,70 @@ test("界面主题：玫瑰；顶栏给自己选的那套盖过站点默认，�
     delete (globalThis as any).localStorage;
   }
 });
+
+test("界面主题按需加载：页面上的 <html> 等那一套样式有了结果才换属性；等的时候被清掉又挂上，先顶着原来那套", async () => {
+  const { applyPersonalizationSurface, clearPersonalizationSurface } = await import("./personalizationTheme");
+  const { isUiThemeStyleReady, loadUiThemeStyles } = await import("./uiThemeStyles");
+  const g = globalThis as { document?: unknown };
+  const { root, attrs, classes } = fakeRoot(false);
+  const warn = console.warn;
+  g.document = { documentElement: root };
+  // node 里 import 不了 .css：下载会「失败」，正好走一遍失败也照样往下走的那条路
+  console.warn = () => {};
+  const settle = async (id: string) => {
+    await loadUiThemeStyles(id);
+    await Promise.resolve();
+  };
+  try {
+    assert.equal(isUiThemeStyleReady("classic"), true, "经典没有主题文件");
+    assert.equal(isUiThemeStyleReady("rose"), false);
+
+    applyPersonalizationSurface({ uiTheme: "rose" }, root);
+    assert.equal(attrs.has("data-ui-theme"), false, "样式没到，属性先不动");
+    await settle("rose");
+    assert.equal(attrs.get("data-ui-theme"), "rose", "样式有了结果才挂上");
+    assert.equal(isUiThemeStyleReady("rose"), true);
+
+    // 连着换两套：中间那套不管先到后到都作废，只挂最后要的那套（两边谁先下完不一定，所以记下每一次挂了什么）
+    const shown: string[] = [];
+    const setAttribute = root.setAttribute.bind(root);
+    root.setAttribute = (name: string, value: string) => {
+      if (name === "data-ui-theme") shown.push(value);
+      setAttribute(name, value);
+    };
+    applyPersonalizationSurface({ uiTheme: "gilt" }, root);
+    applyPersonalizationSurface({ uiTheme: "pearl" }, root);
+    assert.equal(attrs.get("data-ui-theme"), "rose", "两套都没到，屏幕上还是玫瑰");
+    await Promise.all([settle("gilt"), settle("pearl")]);
+    await Promise.resolve();
+    assert.equal(attrs.get("data-ui-theme"), "pearl");
+    assert.deepEqual(shown, ["pearl"], "墨金一次都没挂上");
+    root.setAttribute = setAttribute;
+    assert.equal(classes.has("fx-theme-fading"), true, "切换照旧淡过去");
+
+    // PersonalizationLayer 依赖一变：先清掉、同一轮里接着挂一套还没下的 —— 中间不能空着（不然先闪一下经典）
+    clearPersonalizationSurface(root);
+    applyPersonalizationSurface({ uiTheme: "indigo" }, root);
+    assert.equal(attrs.get("data-ui-theme"), "pearl", "刚撤掉的那套先放回去顶着");
+    await settle("indigo");
+    assert.equal(attrs.get("data-ui-theme"), "indigo");
+
+    // 真卸载：清掉之后没人接着挂，过一个微任务就忘掉，之后不会把旧的放回来
+    clearPersonalizationSurface(root);
+    await Promise.resolve();
+    applyPersonalizationSurface({ uiTheme: "aurora" }, root);
+    assert.equal(attrs.has("data-ui-theme"), false);
+    await settle("aurora");
+    assert.equal(attrs.get("data-ui-theme"), "aurora");
+
+    // 等的时候切回一套现成的：现成的立刻挂上，等的那套回来也不再改
+    applyPersonalizationSurface({ uiTheme: "cinnabar" }, root);
+    applyPersonalizationSurface({ uiTheme: "rose" }, root);
+    assert.equal(attrs.get("data-ui-theme"), "rose");
+    await settle("cinnabar");
+    assert.equal(attrs.get("data-ui-theme"), "rose");
+  } finally {
+    console.warn = warn;
+    delete g.document;
+  }
+});

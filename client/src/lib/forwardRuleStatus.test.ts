@@ -243,7 +243,11 @@ test("规则页把路径上的机器在线状态喂给状态判定，过期的�
   // 主机列表要定时刷新，掉线才能在这一页上看到。
   assert.match(source, /trpc\.hosts\.options\.useQuery\(undefined, \{\s*\n\s*\/\/[^\n]*\n\s*refetchInterval: pollingInterval\("slow"\)/);
   // 过了新鲜期的探测：精简行的标签和表格的延迟列都不再画成绿色数字。
-  assert.match(source, /probe\?\.latestLatencyAt && !isLinkProbeFresh\(probe\.latestLatencyAt\)/);
+  // 卡片的标签在 RuleCard 里画，过没过期由 features/rules/ruleCardProps.ts 按 isLinkProbeFresh 先算好。
+  const cardProps = fs.readFileSync(path.resolve(import.meta.dirname, "../features/rules/ruleCardProps.ts"), "utf8");
+  assert.match(cardProps, /const probeStale = !!probeAt && !sources\.isProbeFresh\(probeAt\)/);
+  assert.match(source, /isProbeFresh: isLinkProbeFresh,/);
+  assert.match(source, /\} else if \(probe\.at && probe\.stale\) \{/);
   assert.match(source, /if \(!isLinkProbeFresh\(t\.latestLatencyAt\)\) \{/);
 });
 

@@ -1,0 +1,3 @@
+/* 界面主题「朱砂」的按需样式包：主题本身，后面再接一份 compact.css（为什么要再接一份见 client/src/lib/uiThemeStyles.ts） */
+@import "../theme-cinnabar.css";
+@import "../compact.css";

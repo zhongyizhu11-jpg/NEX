@@ -324,36 +324,7 @@ html[data-ui-theme="cinnabar"] .workspace-layout [data-sidebar="menu-button"][da
   html[data-ui-theme="cinnabar"] .fx-tabbar-label { letter-spacing: .06em; }
 }
 
-/* ── 设置页「界面主题」的预览 ───────────────────────────────── */
-/* 近白方格纸、顶上一道朱红斜纹、两张方角细线卡各带一笔朱红、底下一条方角条 */
-.fx-uitheme-swatch[data-theme="cinnabar"] {
-  background:
-    repeating-linear-gradient(-45deg, #d42a33 0 3px, transparent 3px 6px) top / 100% 3px no-repeat,
-    linear-gradient(rgb(10 10 11 / 5%) 1px, transparent 1px) 0 0 / 10px 10px,
-    linear-gradient(90deg, rgb(10 10 11 / 5%) 1px, transparent 1px) 0 0 / 10px 10px,
-    #f6f6f4;
-}
-.dark .fx-uitheme-swatch[data-theme="cinnabar"] {
-  background:
-    repeating-linear-gradient(-45deg, #e5333d 0 3px, transparent 3px 6px) top / 100% 3px no-repeat,
-    linear-gradient(rgb(255 255 255 / 4%) 1px, transparent 1px) 0 0 / 10px 10px,
-    linear-gradient(90deg, rgb(255 255 255 / 4%) 1px, transparent 1px) 0 0 / 10px 10px,
-    #0a0a0b;
-}
-.fx-uitheme-swatch[data-theme="cinnabar"] > i {
-  border-radius: 2px;
-  border-color: rgb(10 10 11 / 14%);
-  background: linear-gradient(#d42a33, #d42a33) left top / 10px 2px no-repeat, #fff;
-  box-shadow: none;
-}
-.dark .fx-uitheme-swatch[data-theme="cinnabar"] > i {
-  border-color: rgb(255 255 255 / 12%);
-  background: linear-gradient(#e5333d, #e5333d) left top / 10px 2px no-repeat, #111113;
-  box-shadow: none;
-}
-.fx-uitheme-swatch[data-theme="cinnabar"] > i:first-child { margin-top: 4px; }
-.fx-uitheme-swatch[data-theme="cinnabar"] > b { border-radius: 2px; border-color: rgb(10 10 11 / 16%); background: rgb(255 255 255 / 94%); }
-.dark .fx-uitheme-swatch[data-theme="cinnabar"] > b { border-color: rgb(255 255 255 / 14%); background: rgb(17 17 19 / 94%); }
+/* 设置页「界面主题」的预览（.fx-uitheme-swatch）挪到了 ui-theme-shared.css：选别的主题时也要画，不能跟着这个文件按需加载 */
 
 /* ── 5. 设置页：编号分节 + 贴底保存栏 ─────────────────────────── */
 /*
