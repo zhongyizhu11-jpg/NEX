@@ -237,7 +237,7 @@ import {
   pushUniqueHostEntryAddress,
   type HostEntryAddress,
 } from "@shared/hostEntryAddress";
-import { Fragment, lazy, memo, Suspense, useState, useMemo, useEffect, useCallback, useRef, type CSSProperties, type ReactNode } from "react";
+import { Fragment, lazy, memo, Suspense, useState, useMemo, useEffect, useCallback, useDeferredValue, useRef, type CSSProperties, type ReactNode } from "react";
 import { useReducedMotion } from "motion/react";
 import { toast } from "sonner";
 import { useLocation, useSearch } from "wouter";
@@ -682,6 +682,14 @@ function RuleGroupItems({
       </AutoAnimateContainer>
     </div>
   );
+}
+
+/** 换进来的第一帧先画这么多张卡，其余随后补（见 ruleCardsHydrated）。手机一屏 4 张紧凑卡。 */
+const INITIAL_RULE_CARD_BUDGET = 6;
+
+/** 还没轮到画的卡先占着位：和紧凑卡差不多高，补上时列表不跳。 */
+function RuleCardPlaceholder() {
+  return <div className="fx-rule-card-placeholder" aria-hidden="true" />;
 }
 
 function RuleRouteTransition({
@@ -2037,10 +2045,14 @@ function RulesContent() {
     const timer = window.setTimeout(() => setSecondaryQueriesReady(true), 300);
     return () => window.clearTimeout(timer);
   }, []);
+  /*
+    几张「选项」表（主机 / 隧道 / 转发组）的 staleTime 放到 30 秒：在页面间来回切时每次挂载都重取一遍，
+    每条回来都把整页重画一次，手机上切进转发页之后要卡上一秒（2026-11-03 剖析）。挂着的时候照常轮询。
+  */
   const { data: hosts, isFetched: hostsFetched } = trpc.hosts.options.useQuery(undefined, {
     // 规则的状态要跟着机器在不在线走：掉线了这一页得在半分钟内看得到。
     refetchInterval: pollingInterval("slow"),
-    staleTime: 10000,
+    staleTime: 30_000,
     refetchOnWindowFocus: false,
   });
   // 共享 TLS 入站（SNI 分流）：能挂规则的（usable）加上自己规则挂着的（只用来显示）。
@@ -2055,7 +2067,7 @@ function RulesContent() {
   // 规则页只拿隧道名称 / 归属来展示和选择，一分钟刷一次就够；隧道页和表单里就地新建隧道都会直接 invalidate。
   const { data: tunnels } = trpc.tunnels.options.useQuery(undefined, {
     refetchInterval: pollingInterval("minute"),
-    staleTime: 10000,
+    staleTime: 60_000,
     refetchOnWindowFocus: false,
   });
   const { data: users } = trpc.users.options.useQuery(undefined, {
@@ -2065,7 +2077,7 @@ function RulesContent() {
   });
   const { data: forwardGroups, isFetched: forwardGroupsFetched, isError: forwardGroupsError } = trpc.forwardGroups.options.useQuery(undefined, {
     refetchInterval: pollingInterval("normal"),
-    staleTime: 10000,
+    staleTime: 30_000,
     refetchOnWindowFocus: false,
   });
   // 协议开关、专属域名、Telegram 是否就绪：从 publicInfo 读，不再为这几项拉整份 getSettings。
@@ -4908,6 +4920,18 @@ function RulesContent() {
     return groups.filter((group) => group.rules.length > 0);
   }, [forwardGroupById, pagedRules]);
   const shouldGroupRuleCards = ruleCategory === "all";
+  /*
+    换进这一页时先只画前几张卡（手机上刚好一屏），剩下的交给 React 的低优先级渲染随后补上：
+    第一帧要画十几张卡的整棵树在手机上要几百毫秒，期间点什么都没反应（用户 2026-11-03 录屏
+    「切到转发规则还是有点卡顿」）。useDeferredValue 的首次渲染拿到 false，紧接着的过渡渲染
+    拿到 true —— 过渡是可打断的，不挡滚动和点击。占位块和卡同高，列表不会跳。
+  */
+  const ruleCardsHydrated = useDeferredValue(true, false);
+  const initialRuleCardIds = useMemo(() => {
+    const ordered = shouldGroupRuleCards ? desktopRuleGroups.flatMap((group) => group.rules) : pagedRules;
+    return new Set(ordered.slice(0, INITIAL_RULE_CARD_BUDGET).map((rule: { id?: unknown }) => Number(rule.id)));
+  }, [desktopRuleGroups, pagedRules, shouldGroupRuleCards]);
+  const ruleCardVisible = (rule: { id?: unknown }) => ruleCardsHydrated || initialRuleCardIds.has(Number(rule.id));
 
   /**
    * 「全部」按类型分组显示时，每一组里也能拖。一组就是一个分类（端口转发 / 隧道转发 / 转发链 / 转发组），
@@ -7340,7 +7364,7 @@ function RulesContent() {
     if (!ruleGroupSortingEnabled(group.type)) {
       return (
         <RuleGroupItems open={!collapsed} layout={false} className={mobile ? groupedRuleMobileGridClass : groupedRuleCardGridClass}>
-          {group.rules.map((rule) => renderRuleCard(rule))}
+          {group.rules.map((rule) => (ruleCardVisible(rule) ? renderRuleCard(rule) : <RuleCardPlaceholder key={rule.id} />))}
         </RuleGroupItems>
       );
     }
@@ -7356,7 +7380,7 @@ function RulesContent() {
           <div className={mobile ? sortableRuleMobileGridClass : sortableRuleCardGridClass}>
             {group.rules.map((rule) => (
               <SortableItem key={rule.id} id={Number(rule.id)} disabled={sortable.disabled}>
-                {(state) => renderRuleCard(rule, state)}
+                {(state) => (ruleCardVisible(rule) ? renderRuleCard(rule, state) : <RuleCardPlaceholder />)}
               </SortableItem>
             ))}
           </div>
@@ -7919,8 +7943,9 @@ function RulesContent() {
       )}
 
       <SectionTransition transitionKey={ruleContentTransitionKey}>
-      {isLoading || (!ruleStatusSnapshotReady && !hasCachedRuleStatus) ? (
-        <DataSectionLoading label={isLoading ? "正在加载转发规则" : "正在加载规则状态"} />
+      {isLoading || (!ruleStatusSnapshotReady && !hasCachedRuleStatus) || (filteredRules.length === 0 && !scopedRulesReady) ? (
+        // 列表还没就绪（刚换进来、换页、换筛选）时不能画「没有匹配的规则」：那一帧是空的，不是真没有（用户 2026-11-03 录屏）
+        <DataSectionLoading label={isLoading || !scopedRulesReady ? "正在加载转发规则" : "正在加载规则状态"} />
       ) : filteredRules.length > 0 ? (
         <>
           {effectiveViewMode === "globe" ? (
@@ -7958,7 +7983,7 @@ function RulesContent() {
                   <div className={sortableRuleCardGridClass}>
                     {pagedRules.map((rule: any) => (
                       <SortableItem key={rule.id} id={Number(rule.id)} disabled={ruleSortable.disabled}>
-                        {(sortable) => renderRuleCard(rule, ruleSortingEnabled ? sortable : undefined)}
+                        {(sortable) => (ruleCardVisible(rule) ? renderRuleCard(rule, ruleSortingEnabled ? sortable : undefined) : <RuleCardPlaceholder />)}
                       </SortableItem>
                     ))}
                   </div>
@@ -7985,7 +8010,7 @@ function RulesContent() {
                     <div className={sortableRuleMobileGridClass}>
                       {pagedRules.map((rule: any) => (
                         <SortableItem key={rule.id} id={Number(rule.id)} disabled={ruleSortable.disabled}>
-                          {(sortable) => renderRuleCard(rule, ruleSortingEnabled ? sortable : undefined)}
+                          {(sortable) => (ruleCardVisible(rule) ? renderRuleCard(rule, ruleSortingEnabled ? sortable : undefined) : <RuleCardPlaceholder />)}
                         </SortableItem>
                       ))}
                     </div>

@@ -341,3 +341,16 @@ test("real panel startup with PostgreSQL down still serves diagnostics, keeps co
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+/*
+  App 的跨域头要在健康检查路由前面：原来 installMobileCors 排在 registerDatabaseHealthRoutes 后面，
+  /api/database-health 的响应不带 Access-Control-Allow-Origin，iOS App 每次打开都报
+  「有 1 项数据没读到：database-health（Load failed）」（用户 2026-11-03）。
+*/
+test("server/index.ts：App 跨域头装在 /api/database-health 路由之前", () => {
+  const source = fs.readFileSync(path.resolve(import.meta.dirname, "index.ts"), "utf8");
+  const cors = source.indexOf("installMobileCors(app);");
+  const health = source.indexOf("registerDatabaseHealthRoutes(app);");
+  assert.ok(cors > 0 && health > 0);
+  assert.ok(cors < health, "installMobileCors(app) 要在 registerDatabaseHealthRoutes(app) 之前");
+});

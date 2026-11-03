@@ -38,6 +38,8 @@ export default function GoogleLoginSettingsCard() {
   const updateMutation = trpc.googleAuth.updateAdminSettings.useMutation();
   const saved = settingsQuery.data;
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
+  // 客户端 ID / 密钥两个框先只读，用户点进去才可写：挡浏览器把登录密码自动填进来（见下面的注释）。
+  const [clientFieldsEditable, setClientFieldsEditable] = useState(false);
 
   const savedDraft: Draft = saved
     ? { enabled: saved.enabled, clientId: saved.clientId, clientSecret: "", allowRegistration: saved.allowRegistration, allowedDomains: saved.allowedDomains }
@@ -143,23 +145,35 @@ export default function GoogleLoginSettingsCard() {
         <div className="grid gap-3 @[42rem]:grid-cols-2">
           <div className="space-y-2">
             <Label htmlFor="google-client-id">客户端 ID</Label>
+            {/*
+              「客户端 ID + 客户端密钥」在浏览器眼里就是一对账号密码：Safari / Chrome 一打开设置页就把
+              面板的登录密码填进密钥框，onChange 一触发这张卡就「有改动未保存」，点放弃下次打开又来
+              （用户 2026-11-03）。autoComplete="off" 对密码框不管用：密钥框用 new-password，两个框都先
+              只读、点进去再放开，浏览器就不认为这是登录表单。
+            */}
             <Input
               id="google-client-id"
+              name="google-oauth-client-id"
               value={draft.clientId}
               onChange={(e) => setDraft((current) => ({ ...current, clientId: e.target.value }))}
               placeholder="1234567890-xxxx.apps.googleusercontent.com"
               autoComplete="off"
               spellCheck={false}
+              readOnly={!clientFieldsEditable}
+              onFocus={() => setClientFieldsEditable(true)}
             />
           </div>
           <div className="space-y-2">
             <Label htmlFor="google-client-secret">客户端密钥</Label>
             <PasswordInput
               id="google-client-secret"
+              name="google-oauth-client-secret"
               value={draft.clientSecret}
               onChange={(e) => setDraft((current) => ({ ...current, clientSecret: e.target.value }))}
               placeholder={saved?.clientSecretSet ? "已保存，留空不改" : "GOCSPX-…"}
-              autoComplete="off"
+              autoComplete="new-password"
+              readOnly={!clientFieldsEditable}
+              onFocus={() => setClientFieldsEditable(true)}
             />
             {saved?.clientSecretMasked ? <p className="break-all text-meta text-muted-foreground">当前：{saved.clientSecretMasked}</p> : null}
           </div>

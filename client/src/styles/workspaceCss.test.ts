@@ -94,12 +94,19 @@ test("输入框字号低于 16px 的前提：viewport 里有 maximum-scale=1", (
   }
 });
 
-test("iOS App 手机顶栏往上收：安全区只留 72%（最少 20px）、顶栏 44px；液态玻璃的胶囊浮在状态栏下面", () => {
+test("iOS App 手机顶栏往上收：安全区只留 72%（最少 20px）、顶栏 44px；液态玻璃的顶栏融进壁纸", () => {
   assert.match(css, /html\.capacitor-ios \.workspace-appbar \{ --fx-header-height: 44px; padding-top: max\(20px, calc\(env\(safe-area-inset-top, 0px\) \* 0\.72\)\); height: calc\(44px \+ max\(20px, calc\(env\(safe-area-inset-top, 0px\) \* 0\.72\)\)\); \}/);
   const glass = fs.readFileSync(path.resolve(import.meta.dirname, "theme-liquid-glass.css"), "utf8");
-  assert.match(glass, /html\.capacitor-ios\[data-ui-theme="liquid-glass"\] \.workspace-appbar \{\s*top: var\(--fx-lg-ios-appbar-top\);\s*height: 44px;\s*margin-top: var\(--fx-lg-ios-appbar-top\);\s*padding-top: 0;/);
-  // 手机上和底部标签栏同一种胶囊
-  assert.match(glass, /@media \(max-width: 767px\) \{\s*html\[data-ui-theme="liquid-glass"\] \.workspace-appbar \{\s*margin-inline: 16px;[\s\S]*?border-radius: var\(--fx-radius-pill\);/);
+  /*
+    手机上顶栏没有容器：栏透明、没有边和模糊，顶上一层淡白雾（深色黑雾）淡到页头
+    （2026-11-03 用户从四个候选里选的 A）。iOS 壳里只是往上收，雾把状态栏也盖住。
+  */
+  const mobile = glass.slice(glass.indexOf("手机上顶栏融进壁纸"));
+  assert.match(mobile, /html\[data-ui-theme="liquid-glass"\] \.workspace-appbar \{\s*top: 0;\s*margin: 0;\s*border: 0;\s*border-radius: 0;\s*background: transparent;[\s\S]*?box-shadow: none;/);
+  assert.match(mobile, /html\[data-ui-theme="liquid-glass"\] \.workspace-appbar::before \{[\s\S]*?linear-gradient\(to bottom, rgb\(255 255 255 \/ 72%\) 0%, rgb\(255 255 255 \/ 40%\) 55%, transparent 100%\)/);
+  assert.match(mobile, /html\.dark\[data-ui-theme="liquid-glass"\] \.workspace-appbar::before \{[\s\S]*?rgb\(0 0 0 \/ 55%\)/);
+  assert.match(mobile, /html\.capacitor-ios\[data-ui-theme="liquid-glass"\] \.workspace-appbar \{\s*height: calc\(44px \+ var\(--fx-lg-ios-appbar-top\)\);\s*padding-top: var\(--fx-lg-ios-appbar-top\);/);
+  assert.doesNotMatch(mobile, /data-lg-appbar/, "候选样式选定后不该留着");
 });
 
 test("液态玻璃：进场动画不动透明度和 clip-path，玻璃卡的模糊在切页时不会消失再出现", () => {
