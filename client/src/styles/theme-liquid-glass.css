@@ -446,43 +446,60 @@ html.dark[data-ui-theme="liquid-glass"] .workspace-appbar {
   box-shadow: 0 4px 16px rgb(0 0 0 / 15%), inset 0 1px 1px rgb(255 255 255 / 8%);
 }
 /*
-  手机上顶栏和底部标签栏是同一枚胶囊：同样离边 16px、同样的圆角、描边、玻璃和投影。
-  以前是一条 18px 圆角的长条，和底下那枚圆滚滚的胶囊摆在一起两种形状（用户 2026-11-03 圈的）。
+  手机上顶栏不再是一整条：品牌是一枚小玻璃胶囊，右边几个图标合成另一枚（iOS 26 导航栏的
+  做法 —— 控件各自成组浮在内容上，而不是一条横贯屏幕的栏）。之前先是 18px 圆角的长条、
+  后来是整条胶囊，用户都说不协调（2026-11-03）。两枚胶囊和底部标签栏同一套玻璃：
+  同样的描边、模糊和投影。
 */
 @media (max-width: 767px) {
   html[data-ui-theme="liquid-glass"] .workspace-appbar {
-    margin-inline: 16px;
-    border-color: rgb(255 255 255 / 65%);
+    top: 0;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    box-shadow: none;
+  }
+  html[data-ui-theme="liquid-glass"] .workspace-appbar-inner { padding-inline: 16px; gap: 8px; }
+  html[data-ui-theme="liquid-glass"] .workspace-appbar-brand,
+  html[data-ui-theme="liquid-glass"] .workspace-appbar-actions {
+    height: 44px;
+    border: 1px solid rgb(255 255 255 / 65%);
     border-radius: var(--fx-radius-pill);
     background: rgb(255 255 255 / 40%);
     -webkit-backdrop-filter: blur(20px) saturate(180%);
     backdrop-filter: blur(20px) saturate(180%);
     box-shadow: inset 0 1px 1px rgb(255 255 255 / 80%), 0 12px 36px rgb(0 0 0 / 8%);
   }
-  html.dark[data-ui-theme="liquid-glass"] .workspace-appbar {
+  html.dark[data-ui-theme="liquid-glass"] .workspace-appbar-brand,
+  html.dark[data-ui-theme="liquid-glass"] .workspace-appbar-actions {
     border-color: rgb(255 255 255 / 12%);
     background: rgb(20 24 33 / 55%);
     box-shadow: inset 0 1px 1px rgb(255 255 255 / 12%), 0 12px 36px rgb(0 0 0 / 50%);
   }
-  html[data-ui-theme="liquid-glass"] .workspace-appbar-inner { padding-inline: 10px 12px; }
+  html[data-ui-theme="liquid-glass"] .workspace-appbar-brand { padding: 0 14px 0 8px; gap: 8px; }
+  html[data-ui-theme="liquid-glass"] .workspace-appbar-brand img,
+  html[data-ui-theme="liquid-glass"] .workspace-appbar-brand > div { width: 26px; height: 26px; }
+  html[data-ui-theme="liquid-glass"] .workspace-appbar-actions { padding: 0 4px; gap: 0; }
+  html[data-ui-theme="liquid-glass"] .workspace-appbar-actions > * { flex-shrink: 0; }
   /*
-    iOS App 里状态栏不再包在胶囊里：胶囊浮在状态栏下面（离顶的距离和 workspace.css 里其他主题顶栏
-    的 padding-top 一样，所以品牌那一行的位置不变），滚起来也停在那里。状态栏那一段照片直接露着，
-    上面压一层很淡的暗渐变，时间和电量在亮照片上也看得清。
+    iOS App 里状态栏那一段照片直接露着：两枚胶囊浮在状态栏下面（离顶的距离和 workspace.css 里其他
+    主题顶栏的 padding-top 一样，品牌那一行的位置不变），上面压一层很淡的暗渐变，时间和电量在亮照片上
+    也看得清。
   */
   html.capacitor-ios[data-ui-theme="liquid-glass"] {
     --fx-lg-ios-appbar-top: max(20px, calc(env(safe-area-inset-top, 0px) * 0.72));
   }
   html.capacitor-ios[data-ui-theme="liquid-glass"] .workspace-appbar {
-    top: var(--fx-lg-ios-appbar-top);
-    height: 44px;
-    margin-top: var(--fx-lg-ios-appbar-top);
-    padding-top: 0;
+    height: calc(44px + var(--fx-lg-ios-appbar-top));
+    padding-top: var(--fx-lg-ios-appbar-top);
   }
   html.capacitor-ios[data-ui-theme="liquid-glass"] .workspace-appbar::before {
     content: "";
     position: absolute;
-    inset: calc(-1 * var(--fx-lg-ios-appbar-top)) -16px auto;
+    inset: 0 0 auto;
     height: calc(var(--fx-lg-ios-appbar-top) + 28px);
     background: linear-gradient(to bottom, rgb(0 0 0 / 18%), transparent);
     pointer-events: none;

@@ -184,6 +184,13 @@ async function startServer() {
   installCompression(app);
   // 面板访问的地区限制（第五套主题「地区规则」页设置）：关着时只多一次内存判断。
   app.use(panelAccessGuard);
+  /*
+    App 的跨域头要在所有 /api 路由之前：原来排在健康检查路由后面，/api/database-health 的响应不带
+    Access-Control-Allow-Origin，iOS App（capacitor://localhost）每次打开都报
+    「有 1 项数据没读到：database-health（Load failed）」（用户 2026-11-03）。预检（OPTIONS）
+    不经过那条路由所以是通的，只有 GET 本身被浏览器拦下。
+  */
+  installMobileCors(app);
   // 数据库故障页（上游 v2.3.281）：/api/database-health 不查库、不要登录；故障期间别的 /api/*
   // 直接 503，tRPC 由 createContext / 中间件回 503，静态页照常。
   registerDatabaseHealthRoutes(app);
@@ -194,7 +201,6 @@ async function startServer() {
   // JSON 请求体默认 1MB；Agent 上报、插件包上传、备份导入、背景图这几条单独放到 10MB（server/bodyParsers.ts）。
   installJsonBodyParsers(app);
   app.use(cookieParser());
-  installMobileCors(app);
   app.use(authCapRouter);
   // GET /api/auth/google/start、/callback：Google 登录的整页跳转（server/googleAuthRoute.ts）。
   app.use(googleAuthRouter);
