@@ -342,7 +342,9 @@ export const rulesRouter = router({
       if (!rule) return null;
       if (ctx.user.role !== "admin" && rule.userId !== ctx.user.id) return null;
       if (ctx.user.role !== "admin" && isManagedForwardGroupChildRule(rule)) return null;
-      return withRuleResourceAccess(await withRuleEgressDisplay(await withRuleEntryBridges(rule)), ctx.user);
+      // 端口转发模板：「现在走哪条」和路径的拨号地址都换成展开那条的，和列表里一致（线路详情按 id 单独取也是这里）。
+      const [shown] = await withTemplateRouteActive([rule]);
+      return withRuleResourceAccess(await withRuleEgressDisplay(await withRuleEntryBridges(shown)), ctx.user);
     }),
   /**
    * 能当「备用线路」用的中转。

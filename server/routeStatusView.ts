@@ -19,7 +19,7 @@ import { summarizeRouteSwitches, type RouteSwitchSummary } from "../shared/route
 import { isAgentVersionBehind } from "../shared/version";
 import { getRouteStatus, routeHopDownHints, routeHopSuccessPct, routeNodeHints, routePathDownstreamMs, routeTrippedNodeIds } from "./routeGroupStats";
 import { ensureRouteNodeHealthFresh, getRouteNodeStatus } from "./routeNodeHealth";
-import { ROUTE_DEST_SPREAD_AGENT_VERSION, ROUTE_LINES_AGENT_VERSION, normalizeRouteDelivery, routeAgentStrategy } from "../shared/routeGroup";
+import { ROUTE_DEST_SPREAD_AGENT_VERSION, ROUTE_LINES_AGENT_VERSION, normalizeRouteDelivery, routeAgentStrategy, routePathsOf, serializeRoutePaths } from "../shared/routeGroup";
 import { routeLinesOf, ROUTE_ENTRY_RELAY_INDEX } from "../shared/routeLines";
 import { routeRelayRulesByKey } from "./routeGroups";
 import { routeSchedulerHostIds } from "./routers/rules.crud";
@@ -165,12 +165,16 @@ export async function withTemplateRouteActive<T>(value: T): Promise<T> {
   const templates = list.filter((rule) => rule && dbBool(rule.isForwardGroupTemplate) && dbBool(rule.failoverEnabled));
   if (templates.length === 0) return value;
   const nowMs = Date.now();
-  const overlay = new Map<number, { failoverActiveTarget: unknown; failoverActiveAt: unknown }>();
+  const overlay = new Map<number, { failoverActiveTarget: unknown; failoverActiveAt: unknown; routePaths?: string | null }>();
   await Promise.all(templates.map(async (rule) => {
     const subject = await routeStatusSubject(rule, nowMs).catch(() => rule);
     overlay.set(Number(rule.id), subject === rule
       ? { failoverActiveTarget: null, failoverActiveAt: null }
-      : { failoverActiveTarget: subject.failoverActiveTarget ?? null, failoverActiveAt: subject.failoverActiveAt ?? null });
+      : {
+        failoverActiveTarget: subject.failoverActiveTarget ?? null,
+        failoverActiveAt: subject.failoverActiveAt ?? null,
+        routePaths: withSubjectDials(rule, subject),
+      });
   }));
   const decorate = (rule: RuleRow) => {
     const next = rule ? overlay.get(Number(rule.id)) : undefined;
@@ -178,6 +182,30 @@ export async function withTemplateRouteActive<T>(value: T): Promise<T> {
   };
   if (Array.isArray(value)) return (value as RuleRow[]).map(decorate) as T;
   return { ...(value as object), items: (items as RuleRow[]).map(decorate) } as T;
+}
+
+/**
+ * 模板的路径带上展开那条解析好的拨号地址（dial）。
+ *
+ * 模板上的路径有中转而 dial 为空（中转端口是展开时才在中转机上开的），界面拿模板算「Agent 报的
+ * 地址对应哪条线路」时每条线路的地址都是空的，于是规则卡写「择优 · 2 条」、异常明细报
+ * 「Agent 报的 172.81.104.166:43418 不在线路清单里」（用户 2026-11-03），而线路详情（按展开那条算）
+ * 明明标着主线路在用。按 key 对上展开那条的路径，把 dial 抄过来；对不上的保持原样。
+ */
+function withSubjectDials(template: RuleRow, subject: RuleRow): string | null {
+  const templatePaths = routePathsOf(template as Parameters<typeof routePathsOf>[0]);
+  const subjectPaths = routePathsOf(subject as Parameters<typeof routePathsOf>[0]);
+  if (templatePaths.length === 0 || subjectPaths.length === 0) return (template.routePaths as string | null | undefined) ?? null;
+  const byKey = new Map(subjectPaths.map((path) => [path.key, path]));
+  let changed = false;
+  const merged = templatePaths.map((path, index) => {
+    if (path.dial) return path;
+    const match = byKey.get(path.key) ?? byKey.get(String(path.lineKey || "")) ?? subjectPaths[index];
+    if (!match?.dial || match.hops.length !== path.hops.length) return path;
+    changed = true;
+    return { ...path, dial: match.dial };
+  });
+  return changed ? serializeRoutePaths(merged) : ((template.routePaths as string | null | undefined) ?? null);
 }
 
 /** 切换记录：展开的规则自己的，再加上模板上的（转成端口转发之前那条规则攒下的），按时间合在一起。 */

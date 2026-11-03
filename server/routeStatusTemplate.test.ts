@@ -30,7 +30,12 @@ test("端口转发模板的线路状态从展开的规则读：评分、在走�
     // 模板：转成端口转发之前留下的「在走」还是旧地址
     await insertRule(1, { isForwardGroupTemplate: true, forwardGroupId: 1, failoverActiveTarget: "hkboil.ddos.top:24895", failoverActiveAt: 1793619039 });
     // 展开的那条：同一台入口、同一个端口，真正在跑
-    await insertRule(31, { forwardGroupId: 1, forwardGroupRuleId: 1, isRunning: true, failoverActiveTarget: "172.81.104.158:45855", failoverActiveAt: 1793620000 });
+    // 展开时在中转机上开了端口，dial 才有；模板上的路径没有 dial
+    const childPaths = JSON.stringify([
+      { key: "a", name: "主线路", hops: [2], dest: null, weight: 50, probe: null, dial: { ip: "203.0.113.2", port: 43418 }, tier: 0, lineKey: "a" },
+      { key: "b", name: "备用 1", hops: [], dest: null, weight: 50, probe: null, dial: null, tier: 1, lineKey: "b" },
+    ]);
+    await insertRule(31, { forwardGroupId: 1, forwardGroupRuleId: 1, isRunning: true, routePaths: childPaths, failoverActiveTarget: "172.81.104.158:45855", failoverActiveAt: 1793620000 });
 
     const stats = await import(url("server/routeGroupStats.ts"));
     stats.recordRouteAgentStats({
@@ -63,6 +68,20 @@ test("端口转发模板的线路状态从展开的规则读：评分、在走�
     const listed = await view.withTemplateRouteActive([template, await db.getForwardRuleById(31)]);
     assert.equal(listed[0].failoverActiveTarget, "172.81.104.158:45855", "列表里模板的「现在走哪条」换成展开那条的");
     assert.equal(listed[1].failoverActiveTarget, "172.81.104.158:45855", "不是模板的原样");
+    /*
+      模板的路径带上展开那条的 dial：界面拿模板算「Agent 报的地址是哪条线路」，dial 为空时每条线路的
+      地址都是空的，Agent 报的中转地址就被当成「不在线路清单里」，规则卡只能写「择优 · 2 条」。
+    */
+    const { routePathsOf, routePathDial } = await import(url("shared/routeGroup.ts"));
+    const listedPaths = routePathsOf(listed[0]);
+    assert.deepEqual(listedPaths[0].dial, { ip: "203.0.113.2", port: 43418 }, "主线路的拨号地址来自展开那条");
+    assert.equal(listedPaths[1].dial, null, "直连那条本来就没有 dial");
+    assert.equal(listedPaths[0].hops[0], 2, "路径本身（中转）不变");
+    const { describeFailoverActiveLine } = await import(url("shared/failoverActiveLine.ts"));
+    const active = describeFailoverActiveLine({ ...listed[0], failoverActiveTarget: "203.0.113.2:43418" });
+    assert.equal(active.index, 0, "Agent 报的中转地址对上主线路");
+    assert.equal(active.unknown, false);
+    assert.ok(routePathDial(listedPaths[0], listed[0]));
 
     // 不是模板：就是它自己
     const plain = await db.getForwardRuleById(31);
