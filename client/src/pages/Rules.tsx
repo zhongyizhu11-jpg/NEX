@@ -4470,11 +4470,11 @@ function RulesContent() {
   const ruleFilterCacheScope = user?.role === "admin"
     ? `admin-${user?.id || "self"}-${filterUser}`
     : `user-${user?.id || "self"}`;
-  const ruleCategoryCountsCacheKey = useMemo(() => [
-    ruleFilterCacheScope,
-    filterResource,
-    ruleSearchQuery.trim() || "search-all",
-  ].map((value) => encodeURIComponent(String(value))).join("."), [filterResource, ruleFilterCacheScope, ruleSearchQuery]);
+  // 分类条的数字只按「谁的规则」数（服务端同样不看搜索 / 筛选），缓存键也只跟这个走
+  const ruleCategoryCountsCacheKey = useMemo(
+    () => encodeURIComponent(ruleFilterCacheScope),
+    [ruleFilterCacheScope],
+  );
   const [stableRuleCategoryCounts, setStableRuleCategoryCounts] = useState(() => {
     const cached = readCachedRuleCategoryCounts(ruleCategoryCountsCacheKey);
     return { counts: cached || EMPTY_RULE_CATEGORY_COUNTS, ready: !!cached };
@@ -4494,6 +4494,8 @@ function RulesContent() {
     const baseFilters = {
       ...ruleFilters,
       ruleCategory: "all" as RuleCategory,
+      filterResource: "all" as RuleResourceFilter,
+      searchQuery: "",
     };
     const counts: RuleCategoryCounts = { ...EMPTY_RULE_CATEGORY_COUNTS };
     sourceRules

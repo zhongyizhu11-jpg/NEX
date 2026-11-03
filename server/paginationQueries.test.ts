@@ -471,6 +471,8 @@ test("database-backed list queries page, search, scope, and hydrate only request
         search: "Singapore Exit",
       });
       assert.deepEqual(tunnelSearch.items.map((item) => Number(item.id)), [101]);
+      // 分类条的数字不跟搜索走：只按谁的规则数
+      assert.deepEqual(tunnelSearch.categoryCounts, { all: 5, local: 3, tunnel: 1, chain: 1, group: 0 });
 
       const tunnelCategorySearch = await rules.getForwardRulesPage({
         ...visibleRuleInput,

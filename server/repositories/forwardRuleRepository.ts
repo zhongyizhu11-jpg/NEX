@@ -820,7 +820,16 @@ export async function getForwardRulesPage(input: ForwardRuleListQuery) {
     includeSearch: false,
     includeCategory: false,
   });
-  const categoryFilter = buildForwardRuleSqlFilter(input, { includeCategory: false });
+  /*
+    分类条上的数字只按「谁的规则」数，不跟搜索、入口机、资源筛选走：以前跟着筛选变，切一下页签、开一个筛选，
+    「全部 7」就变成「全部 4」「全部 0」，看着像规则少了（用户 2026-11-03）。筛选只影响下面的列表。
+  */
+  const categoryFilter = buildForwardRuleSqlFilter(input, {
+    includeCategory: false,
+    includeEntryHost: false,
+    includeResource: false,
+    includeSearch: false,
+  });
   const filtered = buildForwardRuleSqlFilter(input);
   const [scopeRows, totalRows, categoryRows] = await Promise.all([
     queryRaw<{ totalItems: number }>(

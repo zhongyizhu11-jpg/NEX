@@ -22,7 +22,10 @@ import DashboardLayout from "@/components/DashboardLayout";
 import { DiagnoseDialog, DiagnoseSubjectActions, type DiagnoseExtraTab } from "@/components/DiagnoseDialog";
 import EmptyState from "@/components/EmptyState";
 import AnimatedStatValue from "@/components/AnimatedStatValue";
-import { LatencyRating } from "@/components/LatencyRating";
+import { LatencyRating, getLatencyRating } from "@/components/LatencyRating";
+import { StatusDot } from "@/components/network/StatusDot";
+import { useCompactLayout } from "@/hooks/useCompactLayout";
+import { formatBytes } from "@shared/formatBytes";
 import { LatencyPeakCutToggle } from "@/components/LatencyPeakCutToggle";
 import { LatencyStabilityStats } from "@/components/LatencyStabilityStats";
 import {
@@ -96,7 +99,7 @@ import {
   Clock,
   FileJson,
 } from "lucide-react";
-import { Fragment, lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { toast } from "sonner";
 import { MAX_FORWARD_GROUP_MEMBERS } from "@shared/forwardGroup";
 import { hostBandwidthHintMbps } from "@shared/linkWeights";
@@ -774,6 +777,8 @@ export function ForwardGroupsContent({
 }: ForwardGroupsContentProps) {
   const utils = trpc.useUtils();
   const faultBundle = useFaultBundleExport();
+  // 精简布局：卡片和隧道链路那一页同一种（名字 + 一行说明 + 成员一行 + 右下一枚状态 / 延迟标签）
+  const compactLayout = useCompactLayout();
   const [, setTopologyLocation] = useLocation();
   // Keep a same-scope fallback for older/database deployments where the
   // compact options projection can fail. An error should not masquerade as an
@@ -1865,9 +1870,16 @@ export function ForwardGroupsContent({
           isTimeout: !!group.latestLatencyIsTimeout,
         },
       );
+      // 精简布局：三站以内横着画一行（和隧道链路卡一样）：注脚和段上的字不画，挤在一行里会叠在一起；
+      // 整条链的延迟在右边那枚标签上。多了照旧竖排。
+      const oneRow = compactLayout && path.nodes.length <= 3;
       return (
         <div title={path.title}>
-          <NetworkPath nodes={path.nodes} edges={path.edges} orientation="vertical" />
+          <NetworkPath
+            nodes={oneRow ? path.nodes.map((node) => ({ ...node, sublabel: undefined })) : path.nodes}
+            edges={oneRow ? path.edges.map((edge) => ({ ...edge, via: undefined, latencyMs: undefined })) : path.edges}
+            orientation={oneRow ? "horizontal" : "vertical"}
+          />
         </div>
       );
     }
@@ -1907,7 +1919,97 @@ export function ForwardGroupsContent({
     );
   };
 
-  const renderForwardGroupCard = (group: any) => (
+  /*
+    精简布局下的转发组 / 转发链 / 入口组 / 出口组卡：和隧道链路卡同一套结构和样式（fx-tunnel-card，
+    compact.css 把它排成两行：名字 · 说明 · 累计 · 操作 / 成员 · 标签）。以前链路管理里只有隧道链路是精简的，
+    切到别的页签又回到大卡（用户 2026-11-03）。
+  */
+  const GROUP_TONE_COLOR: Record<"ok" | "warn" | "down" | "off", string> = {
+    ok: "var(--fx-primary-fill)",
+    warn: "var(--fx-warn)",
+    down: "var(--fx-down)",
+    off: "var(--fx-text-muted)",
+  };
+  const renderCompactGroupCard = (
+    group: Parameters<typeof getGroupConfigState>[0],
+    { itemProps, handleProps, isDragging, isDropTarget }: Parameters<Parameters<typeof SortableItem>[0]["children"]>[0],
+  ) => {
+    const state = getGroupConfigState(group);
+    const mode = normalizeGroupMode(group.groupMode);
+    const tone: "ok" | "warn" | "down" | "off" = state.status === "available" ? "ok" : state.status === "degraded" ? "warn" : state.status === "unavailable" ? "down" : "off";
+    const health = tone === "ok" ? "healthy" : tone === "warn" ? "degraded" : tone === "down" ? "down" : "standby";
+    const statusText = ({ available: "可用", degraded: "部分可用", pending: "等待检测", unavailable: "不可用", disabled: "停用" } as Record<string, string>)[state.status] || "不可用";
+    const members = Array.isArray(group.members) ? group.members : [];
+    const usable = members.filter((member: unknown) => isGroupMemberActive(group, member)).length;
+    const multiplier = Number(group.trafficMultiplier ?? 1);
+    const subtitle = [
+      groupModeDisplayLabel(group.groupMode),
+      mode === "port" || mode === "chain" ? (FORWARD_TYPE_LABELS[group.forwardType as ForwardType] || group.forwardType || "iptables") : "",
+      (mode === "port" || mode === "chain") && Number.isFinite(multiplier) && multiplier !== 1 ? `倍率 ${formatTrafficMultiplier(group.trafficMultiplier)}` : "",
+      Number(group.poolId || 0) > 0 ? `跟着「${poolNameOf(Number(group.poolId))}」` : "",
+    ].filter(Boolean).join(" · ");
+    const latency = mode === "chain" && typeof group.latestLatencyMs === "number" && Number.isFinite(group.latestLatencyMs) ? Number(group.latestLatencyMs) : null;
+    const rating = latency !== null && tone !== "down" ? getLatencyRating(latency) : null;
+    const ratingTone = !rating ? null : rating.label === "优秀" ? "healthy" : rating.label === "良好" ? "ok" : rating.label === "一般" ? "warn" : "down";
+    const tagTone = ratingTone || (tone === "ok" ? "healthy" : tone === "warn" ? "warn" : tone === "down" ? "down" : "off");
+    const tagText = rating && latency !== null
+      ? `${Math.round(latency)} ms`
+      : tone === "ok" && members.length > 0 && mode !== "chain" ? `${usable}/${members.length} 可用` : statusText;
+    const summary = group.trafficSummary;
+    return (
+      <Card
+        {...itemProps}
+        className={cn(
+          "group/sortable relative fx-rule-card fx-tunnel-card action-card border-border bg-card transition-[box-shadow,opacity]",
+          isDragging && "opacity-55 ring-1 ring-primary/35",
+          isDropTarget && "ring-1 ring-primary/45",
+        )}
+        data-tone={tone}
+        style={{ ...(itemProps?.style || {}), "--fx-rule-tone": GROUP_TONE_COLOR[tone] } as CSSProperties}
+        title={state.message}
+      >
+        <CardContent className="fx-rule-card-body action-card-content">
+          <div className="fx-rule-head">
+            <div className="fx-rule-title">
+              <div className="fx-rule-name">
+                <span className="fx-rule-dot"><StatusDot health={health} size="large" label={state.message} /></span>
+                <span className="truncate">{group.name}</span>
+              </div>
+              <div className="fx-rule-sub" title={subtitle}>{subtitle}</div>
+            </div>
+            <div className="fx-rule-head-actions">
+              {renderGroupActions(group, true)}
+              {renderGroupEnabledSwitch(group)}
+              <SortableDragHandle
+                dragHandleProps={handleProps}
+                visible={isDragging}
+                busy={groupReorderPending}
+                className="bg-card/70"
+              />
+            </div>
+          </div>
+          <div className="fx-tunnel-route">{renderGroupMembers(group)}</div>
+          <div className="fx-tunnel-meta">
+            {summary ? (
+              <>
+                <span className="fx-tunnel-bytes fx-rule-num" title={`累计 ${formatBytes(summary.totalBytes)} · 入向 ${formatBytes(summary.bytesIn)} · 出向 ${formatBytes(summary.bytesOut)}`}>
+                  <b>{formatBytes(summary.totalBytes).replace(/\s*[A-Za-z]+$/, "")}</b><small>{(formatBytes(summary.totalBytes).match(/[A-Za-z]+$/) || [""])[0]}</small>
+                </span>
+                <span className="fx-tunnel-rules text-meta text-muted-foreground">{summary.ruleCount} 条规则</span>
+              </>
+            ) : null}
+            <span className="fx-rule-tag fx-tunnel-latency-tag" data-tone={tagTone} title={state.message}>{tagText}</span>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  };
+
+  const renderForwardGroupCard = (group: any) => compactLayout ? (
+    <SortableItem key={group.id} id={Number(group.id)} disabled={groupSortable.disabled}>
+      {(sortable) => renderCompactGroupCard(group, sortable)}
+    </SortableItem>
+  ) : (
     <SortableItem key={group.id} id={Number(group.id)} disabled={groupSortable.disabled}>
       {({ itemProps, handleProps, isDragging, isDropTarget }) => (
                 <Card
