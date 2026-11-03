@@ -120,7 +120,6 @@ import {
   type ForwardType,
 } from "@shared/forwardTypes";
 import {
-  EXIT_GROUP_STRATEGY_LABELS,
   exitGroupWeights,
   normalizeExitGroupStrategy,
   type ExitGroupStrategy,
@@ -1694,16 +1693,9 @@ export function ForwardGroupsContent({
 
   const groupRuntimeBadges = (group: any) => {
     const mode = normalizeGroupMode(group.groupMode);
-    if (mode === "exit") {
-      const strategy = normalizeExitGroupStrategy(group.exitStrategy);
-      return (
-        <div className="mt-1 flex flex-wrap gap-1.5 text-[11px]">
-          <Badge variant="secondary" className="h-5 rounded px-1.5 font-normal">
-            {EXIT_GROUP_STRATEGY_LABELS[strategy]}
-          </Badge>
-        </div>
-      );
-    }
+    // 出口组卡上不再挂「按负载 - 新连接给现在最闲的那条…」那一长条：手机上一行放不下、被截断，
+    // 怎么分在编辑框里看得到（用户 2026-11-03 圈掉的）。
+    if (mode === "exit") return null;
     if (mode !== "port" && mode !== "chain") return null;
     return (
       <div className="mt-1 flex flex-wrap gap-1.5 text-[11px]">
@@ -1937,14 +1929,14 @@ export function ForwardGroupsContent({
                       {groupRuntimeBadges(group)}
                     </div>
                     <div className="flex shrink-0 items-center gap-1">
+                      {renderGroupActions(group, true)}
+                      {renderGroupEnabledSwitch(group)}
                       <SortableDragHandle
                         dragHandleProps={handleProps}
                         visible={isDragging}
                         busy={groupReorderPending}
                         className="bg-card/70"
                       />
-                      {renderGroupActions(group, true)}
-                      {renderGroupEnabledSwitch(group)}
                     </div>
                   </div>
 

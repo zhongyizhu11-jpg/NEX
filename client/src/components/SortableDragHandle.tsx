@@ -359,6 +359,19 @@ export function SortableItem({
   };
   // 触屏的起手（onTouchStart）挂在整张卡上：按住卡片就能拖。鼠标和键盘的仍在手柄上。
   const { onTouchStart, ...handleListeners } = (listeners ?? {}) as Record<string, unknown> & { onTouchStart?: (event: unknown) => void };
+  // 拖完松手那一下浏览器还会补一个 click：卡片本身能点（打开编辑）的话，松手就弹出编辑框了。刚拖完的 400ms 里吞掉。
+  const droppedAtRef = useRef(0);
+  const wasDraggingRef = useRef(false);
+  useEffect(() => {
+    if (wasDraggingRef.current && !isDragging) droppedAtRef.current = Date.now();
+    wasDraggingRef.current = isDragging;
+  }, [isDragging]);
+  const swallowClickAfterDrop = (event: { preventDefault: () => void; stopPropagation: () => void }) => {
+    if (Date.now() - droppedAtRef.current < 400) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  };
 
   return (
     <>
@@ -369,6 +382,7 @@ export function SortableItem({
           "data-sortable-item": disabled ? undefined : "",
           "data-sortable-dragging": isDragging ? "" : undefined,
           onTouchStart: disabled ? undefined : (onTouchStart as HTMLAttributes<HTMLElement>["onTouchStart"]),
+          onClickCapture: swallowClickAfterDrop,
         },
         handleProps: {
           ...attributes,
