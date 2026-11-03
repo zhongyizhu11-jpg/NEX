@@ -116,7 +116,7 @@ import {
  * 规则行上的协议封禁三列永远写 false。
  *
  * 真正生效的封禁只有**主机**那一层：下发给 Agent 的策略一律按 rule.hostId 去查主机
- * （见 agentHeartbeatRoute 的 protocolPolicyFromHost / getHostProtocolPolicy），规则
+ * （见 agentHeartbeatProtocolGuard 的 protocolPolicyFromHost、agentHeartbeatRoute 的 getHostProtocolPolicy），规则
  * 自己的这三列全仓库没有任何地方读过。
  *
  * 那为什么不干脆不写？因为老库里可能存着 true。哪天有人把下发那一路接到规则这一层，
