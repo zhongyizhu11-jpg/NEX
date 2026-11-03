@@ -990,22 +990,4 @@ html[data-ui-theme="pearl"] [role="option"] { border-radius: 10px; transition: b
   html[data-ui-theme="pearl"] .dialog-panel[data-state][class] { animation-duration: 1ms !important; }
 }
 
-/* ── 设置页「界面主题」的预览 ───────────────────────────────── */
-/* 珍珠灰底、两张瓷片卡（细线 + 软影 + 顶部高光），底下一枚珍珠玻璃条里一块墨色 */
-.fx-uitheme-swatch[data-theme="pearl"] { background: #f4f6f5; }
-.dark .fx-uitheme-swatch[data-theme="pearl"] { background: #161b1e; }
-.fx-uitheme-swatch[data-theme="pearl"] > i {
-  border-radius: 7px;
-  border-color: #dce3e0;
-  background: linear-gradient(145deg, #ffffff 0%, #f9fbfa 100%);
-  box-shadow: 0 2px 3px rgb(28 44 38 / 4%), 0 8px 14px -10px rgb(28 44 38 / 22%), inset 0 1px 0 rgb(255 255 255 / 88%);
-}
-.dark .fx-uitheme-swatch[data-theme="pearl"] > i {
-  border-color: #354145;
-  background: linear-gradient(145deg, #252e32 0%, #20272b 100%);
-  box-shadow: 0 2px 3px rgb(0 0 0 / 12%), 0 8px 14px -10px rgb(0 0 0 / 40%), inset 0 1px 0 rgb(255 255 255 / 7%);
-}
-.fx-uitheme-swatch[data-theme="pearl"] > b { border-radius: 7px; border-color: #dce3e0; background: rgb(252 253 252 / 94%); }
-.dark .fx-uitheme-swatch[data-theme="pearl"] > b { border-color: #354145; background: rgb(37 45 49 / 96%); }
-.fx-uitheme-swatch[data-theme="pearl"] > b::after { border-radius: 4px; background: #0e1116; }
-.dark .fx-uitheme-swatch[data-theme="pearl"] > b::after { background: #e8ecef; }
+/* 设置页「界面主题」的预览（.fx-uitheme-swatch）挪到了 ui-theme-shared.css：选别的主题时也要画，不能跟着这个文件按需加载 */

@@ -288,14 +288,4 @@ html[data-ui-theme="gilt"] .workspace-header-aside .fx-sparkline { width: 220px;
   html[data-ui-theme="gilt"] .workspace-filter > .fx-filter-pill { width: 36px; height: 36px !important; border: 1px solid var(--fx-stroke-base); background: var(--fx-l1-surface); }
 }
 
-/* ── 设置页「界面主题」的预览 ───────────────────────────────── */
-/* 米白纸、两张平贴的小圆角卡纸带暖线、左上一截金线、底下一枚胶囊 */
-.fx-uitheme-swatch[data-theme="gilt"] { background: #f5f2ec; }
-.dark .fx-uitheme-swatch[data-theme="gilt"] { background: #131110; }
-.fx-uitheme-swatch[data-theme="gilt"]::before { content: ""; position: absolute; left: 12px; top: 5px; width: 18px; height: 1.5px; background: #b08d57; }
-.dark .fx-uitheme-swatch[data-theme="gilt"]::before { background: #c9a66b; }
-.fx-uitheme-swatch[data-theme="gilt"] > i { border-radius: 4px; border-color: rgb(122 95 50 / 26%); background: #fffdf9; box-shadow: none; }
-.dark .fx-uitheme-swatch[data-theme="gilt"] > i { border-color: rgb(201 166 107 / 28%); background: #1c1917; box-shadow: none; }
-.fx-uitheme-swatch[data-theme="gilt"] > i:first-child { margin-top: 4px; }
-.fx-uitheme-swatch[data-theme="gilt"] > b { border-color: rgb(176 141 87 / 40%); background: rgb(255 253 249 / 90%); }
-.dark .fx-uitheme-swatch[data-theme="gilt"] > b { border-color: rgb(201 166 107 / 32%); background: rgb(28 25 23 / 90%); }
+/* 设置页「界面主题」的预览（.fx-uitheme-swatch）挪到了 ui-theme-shared.css：选别的主题时也要画，不能跟着这个文件按需加载 */

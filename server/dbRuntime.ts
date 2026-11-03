@@ -95,9 +95,26 @@ type DatabaseTransactionContext = {
   sqlite?: Database.Database;
   afterCommit: Array<() => Promise<void> | void>;
   afterSettled: Array<() => Promise<void> | void>;
+  /** 提交 / 回滚之后置 false，见 activeTransaction。 */
+  active: boolean;
 };
 
 const transactionContext = new AsyncLocalStorage<DatabaseTransactionContext>();
+
+/*
+  当前调用链上「还没结束」的事务。
+
+  AsyncLocalStorage 的上下文会跟着事务里创建的定时器、没等完的 Promise 一起带出去：
+  事务里排了一个 setTimeout（比如规则专属域名的防抖同步），它在提交之后才跑，拿到的还是
+  这个事务的上下文。连接这时已经还回池里（MySQL / PostgreSQL 可能已经借给别的请求），
+  再拿它查库就是在别人的连接上跑；isDatabaseTransactionActive 也会一直报「在事务里」，
+  让「必须在事务外调用」的同步路径直接报错。所以事务结束时把上下文标成失效，这里只认还活着的。
+  SQLite 连接锁的上下文用的是同一个办法（见 withSqliteConnectionLock）。
+*/
+function activeTransaction() {
+  const store = transactionContext.getStore();
+  return store?.active ? store : undefined;
+}
 
 type SqliteConnectionLockContext = {
   sqlite: Database.Database;
@@ -797,18 +814,18 @@ export async function reconnectDatabase() {
 }
 
 export async function getDb() {
-  const active = transactionContext.getStore();
+  const active = activeTransaction();
   if (active) return active.db;
   if (_db) return _db;
   return connectDatabase();
 }
 
 export function isDatabaseTransactionActive() {
-  return !!transactionContext.getStore();
+  return !!activeTransaction();
 }
 
 export async function afterDatabaseCommit(work: () => Promise<void> | void) {
-  const active = transactionContext.getStore();
+  const active = activeTransaction();
   if (active) {
     active.afterCommit.push(work);
     return;
@@ -817,7 +834,7 @@ export async function afterDatabaseCommit(work: () => Promise<void> | void) {
 }
 
 export async function afterDatabaseTransactionSettled(work: () => Promise<void> | void) {
-  const active = transactionContext.getStore();
+  const active = activeTransaction();
   if (active) {
     active.afterSettled.push(work);
     return;
@@ -838,7 +855,7 @@ export async function withDatabaseTransaction<T>(work: () => Promise<T>): Promis
 }
 
 async function runDatabaseTransaction<T>(work: () => Promise<T>): Promise<T> {
-  if (transactionContext.getStore()) return work();
+  if (activeTransaction()) return work();
   if (!_db || !_kind) await connectDatabase();
   if (_kind === "mysql") {
     if (!_pool) throw new DatabaseNotConfiguredError("MySQL database is not connected");
@@ -846,16 +863,18 @@ async function runDatabaseTransaction<T>(work: () => Promise<T>): Promise<T> {
     const afterCommit: Array<() => Promise<void> | void> = [];
     const afterSettled: Array<() => Promise<void> | void> = [];
     let result: T;
+    const db = drizzleMysql(reportingDatabaseClient(connection) as any) as Db;
+    const context: DatabaseTransactionContext = { db, mysqlConnection: connection, afterCommit, afterSettled, active: true };
     try {
       try {
         await connection.beginTransaction();
-        const db = drizzleMysql(reportingDatabaseClient(connection) as any) as Db;
-        result = await transactionContext.run({ db, mysqlConnection: connection, afterCommit, afterSettled }, work);
+        result = await transactionContext.run(context, work);
         await connection.commit();
       } catch (error) {
         await connection.rollback().catch(() => undefined);
         throw error;
       } finally {
+        context.active = false;
         connection.release();
       }
     } finally {
@@ -870,16 +889,18 @@ async function runDatabaseTransaction<T>(work: () => Promise<T>): Promise<T> {
     const afterCommit: Array<() => Promise<void> | void> = [];
     const afterSettled: Array<() => Promise<void> | void> = [];
     let result: T;
+    const db = drizzlePostgres(reportingDatabaseClient(client) as any) as Db;
+    const context: DatabaseTransactionContext = { db, postgresClient: client, afterCommit, afterSettled, active: true };
     try {
       try {
         await client.query("BEGIN");
-        const db = drizzlePostgres(reportingDatabaseClient(client) as any) as Db;
-        result = await transactionContext.run({ db, postgresClient: client, afterCommit, afterSettled }, work);
+        result = await transactionContext.run(context, work);
         await client.query("COMMIT");
       } catch (error) {
         await client.query("ROLLBACK").catch(() => undefined);
         throw error;
       } finally {
+        context.active = false;
         client.release();
       }
     } finally {
@@ -895,16 +916,19 @@ async function runDatabaseTransaction<T>(work: () => Promise<T>): Promise<T> {
     const afterCommit: Array<() => Promise<void> | void> = [];
     const afterSettled: Array<() => Promise<void> | void> = [];
     let result: T;
+    const context: DatabaseTransactionContext = { db, sqlite, afterCommit, afterSettled, active: true };
     try {
       result = await withSqliteConnectionLock(sqlite, async () => {
         let transactionResult: T;
         try {
           sqlite.exec("BEGIN IMMEDIATE");
-          transactionResult = await transactionContext.run({ db, sqlite, afterCommit, afterSettled }, work);
+          transactionResult = await transactionContext.run(context, work);
           sqlite.exec("COMMIT");
         } catch (error) {
           try { sqlite.exec("ROLLBACK"); } catch { /* transaction may already be closed */ }
           throw error;
+        } finally {
+          context.active = false;
         }
         return transactionResult;
       }, "transaction");
@@ -918,7 +942,7 @@ async function runDatabaseTransaction<T>(work: () => Promise<T>): Promise<T> {
 }
 
 export async function withSqliteExclusive<T>(work: (sqlite: Database.Database) => Promise<T> | T): Promise<T> {
-  if (transactionContext.getStore()) throw new Error("SQLite exclusive work cannot start inside a database transaction");
+  if (activeTransaction()) throw new Error("SQLite exclusive work cannot start inside a database transaction");
   if (!_db || !_kind) await connectDatabase();
   if (_kind !== "sqlite" || !_sqlite) throw new Error("SQLite direct migration requires an active SQLite database");
   const sqlite = _sqlite;
@@ -967,7 +991,7 @@ export async function executeRaw(sqlText: string, params: any[] = []) {
 }
 
 async function executeRawImpl(sqlText: string, params: any[]) {
-  const active = transactionContext.getStore();
+  const active = activeTransaction();
   const normalizedParams = params.map((value) => normalizeRawValue(value, _kind));
   if (_kind === "mysql") {
     const executor = active?.mysqlConnection || _pool;
@@ -994,7 +1018,7 @@ export async function queryRaw<T = Record<string, any>>(sqlText: string, params:
 }
 
 async function queryRawImpl<T>(sqlText: string, params: any[]): Promise<T[]> {
-  const active = transactionContext.getStore();
+  const active = activeTransaction();
   const normalizedParams = params.map((value) => normalizeRawValue(value, _kind));
   if (_kind === "mysql") {
     const executor = active?.mysqlConnection || _pool;

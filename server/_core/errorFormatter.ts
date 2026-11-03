@@ -1,5 +1,7 @@
 import { randomBytes } from "node:crypto";
-import { ZodError, type ZodIssue } from "zod";
+import { ZodError, type core } from "zod";
+
+type ZodIssue = core.$ZodIssue;
 
 /**
  * tRPC 的输入校验失败时，默认把整份 ZodError（一串 JSON）塞进 message，
@@ -20,38 +22,47 @@ function sizeUnit(type: string): string {
   return "";
 }
 
+/*
+  zod 4 的 issue 形状（2.3.513 从 zod 3 升上来，修 zod 3 的高危漏洞）：
+  - invalid_type 不再带 received：缺字段只能从默认文案「…, received undefined」里看出来；
+  - too_small / too_big 用 origin 说是字符串 / 数组 / 数字；
+  - invalid_string → invalid_format，invalid_enum_value / invalid_literal → invalid_value，
+    invalid_date 并进 invalid_type（expected: "date"），not_multiple_of 的倍数叫 divisor。
+*/
+function issueOrigin(issue: { origin?: unknown }): string {
+  return typeof issue.origin === "string" ? issue.origin : "";
+}
+
 /** 把一条 zod issue 翻成一句人话；schema 里自带中文提示的直接用。 */
 export function zodIssueReason(issue: ZodIssue): string {
   const message = String(issue.message || "").trim();
   if (message && CJK_PATTERN.test(message)) return message;
   switch (issue.code) {
     case "invalid_type":
-      return issue.received === "undefined" || issue.received === "null" ? "不能为空" : "类型不正确";
+      if (/received (?:undefined|null)\b/.test(message)) return "不能为空";
+      return issue.expected === "date" ? "日期无效" : "类型不正确";
     case "too_small": {
       const min = Number(issue.minimum);
-      if (issue.type === "string" && min === 1) return "不能为空";
-      if (issue.type === "array" && min === 1) return "至少选择一项";
-      const unit = sizeUnit(issue.type);
+      const origin = issueOrigin(issue);
+      if (origin === "string" && min === 1) return "不能为空";
+      if (origin === "array" && min === 1) return "至少选择一项";
+      const unit = sizeUnit(origin);
       if (unit) return `至少 ${min} ${unit}`;
       return issue.inclusive ? `不能小于 ${min}` : `必须大于 ${min}`;
     }
     case "too_big": {
       const max = Number(issue.maximum);
-      const unit = sizeUnit(issue.type);
+      const unit = sizeUnit(issueOrigin(issue));
       if (unit) return `最多 ${max} ${unit}`;
       return issue.inclusive ? `不能大于 ${max}` : `必须小于 ${max}`;
     }
-    case "invalid_string":
+    case "invalid_format":
       return "格式不正确";
-    case "invalid_enum_value":
-    case "invalid_literal":
+    case "invalid_value":
     case "invalid_union":
-    case "invalid_union_discriminator":
       return "取值无效";
     case "not_multiple_of":
-      return `必须是 ${String(issue.multipleOf)} 的倍数`;
-    case "invalid_date":
-      return "日期无效";
+      return `必须是 ${String(issue.divisor)} 的倍数`;
     case "unrecognized_keys":
       return "包含不支持的字段";
     default:

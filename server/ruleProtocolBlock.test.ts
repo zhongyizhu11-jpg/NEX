@@ -8,7 +8,7 @@ import test from "node:test";
  *
  * forward_rules 上有 blockHttp / blockSocks / blockTls 三列，看着像是「这条转发禁用
  * HTTP」。实际上下发给 Agent 的策略一律按 rule.hostId 去查**主机**
- * （agentHeartbeatRoute 的 protocolPolicyFromHost），规则自己的这三列全仓库没有任何
+ * （agentHeartbeatProtocolGuard 的 protocolPolicyFromHost），规则自己的这三列全仓库没有任何
  * 地方读过 —— 写死 false，仅此而已。
  *
  * 两件事各自都会咬人：
@@ -51,6 +51,21 @@ test("规则那三列不许有人读，生效的只能是主机那一层", () =>
   const files = [
     "server/routers/rules.crud.ts",
     "server/agentHeartbeatRoute.ts",
+    // 从 agentHeartbeatRoute.ts 拆出去的下发相关模块，一样要扫。
+    "server/agentHeartbeatProtocolGuard.ts",
+    "server/agentHeartbeatAccessLimits.ts",
+    "server/agentHeartbeatDispatch.ts",
+    "server/agentHeartbeatDns.ts",
+    "server/agentHeartbeatLocalState.ts",
+    "server/agentHeartbeatNginx.ts",
+    "server/agentHeartbeatRuntime.ts",
+    "server/agentHeartbeatTunnel.ts",
+    "server/agentHeartbeatNginxPlan.ts",
+    "server/agentHeartbeatGostPlan.ts",
+    "server/agentHeartbeatRuleRemoval.ts",
+    "server/agentHeartbeatWireGuardPlan.ts",
+    "server/agentHeartbeatForwardXHop.ts",
+    "server/agentHeartbeatLocalMatch.ts",
     "server/agentStatusRoutes.ts",
     "server/repositories/forwardGroupRepository.ts",
   ];
@@ -73,7 +88,7 @@ test("规则那三列不许有人读，生效的只能是主机那一层", () =>
     [],
     "有人开始读规则自己的协议封禁列了：\n" + offenders.join("\n")
       + "\n这三列永远是 false，读它只会得到「没封禁」。真要做单条规则的封禁，"
-      + "得先把下发那一路（agentHeartbeatRoute 的 protocolPolicyFromHost）接上。",
+      + "得先把下发那一路（agentHeartbeatProtocolGuard 的 protocolPolicyFromHost）接上。",
   );
 });
 

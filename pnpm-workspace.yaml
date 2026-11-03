@@ -12,3 +12,17 @@ patchedDependencies:
   avataaars@2.0.0: patches/avataaars@2.0.0.patch
   globe.gl@2.46.1: patches/globe.gl@2.46.1.patch
   three-globe@2.45.2: patches/three-globe@2.45.2.patch
+
+# 只在构建 / 打包时用到的间接依赖（Capacitor CLI、Vite、Babel）有已公开的漏洞，上游还没跟进新版本。
+# 这里统一抬到修好的版本（2.3.513）；都是同一大版本里的小版本，接口不变。
+overrides:
+  tar@<7.5.21: ^7.5.21
+  brace-expansion@>=5 <5.0.9: ^5.0.9
+  postcss@<8.5.18: ^8.5.18
+  nanoid@>=3 <3.3.18: ^3.3.18
+  browserslist@<4.28.7: ^4.28.7
+  "@xmldom/xmldom@<0.9.12": ^0.9.12
+  source-map-js@<1.2.2: ^1.2.2
+  "@vue/server-renderer@<3.5.42": ^3.5.42
+  # eslint-plugin-react-hooks 自己带着 zod 3（只在 lint 时用），也一起抬到修好的 zod 4.6.7
+  zod@<4.6.6: ^4.6.7

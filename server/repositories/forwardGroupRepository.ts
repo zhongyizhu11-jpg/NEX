@@ -333,9 +333,36 @@ function childRouteColumns(templateRule: any, existing: any, childFailoverEnable
   return null;
 }
 
-/** 子规则的路径带着中转（或者刚把中转去掉）：把中转机上的中继落实下来 / 收掉。 */
+/*
+  转发组同步里的外部动作（通知 Agent、中转机上的中继同步）：同步跑在数据库事务里时一律等提交之后再做。
+  - 回滚了就不该通知：Agent 收到通知会马上来拉配置，拉到的要么是一份从没存在过的拓扑，要么（MySQL /
+    PostgreSQL 读不到未提交的行）是改之前的旧配置，而这次通知已经用掉了，下一轮整份心跳之前都不会再来拉；
+  - 中继同步要拿 route-relays:<规则> 键锁、还会自己分端口：事务里去等键锁，会和「先拿键锁再查库」的路径
+    互相等死（SQLite 下事务占着全局连接锁，MySQL / PG 下卡到行锁超时）。
+  不在事务里时照旧立刻做、照旧把错误抛给调用方。提交之后再失败只记日志：数据已经提交，不能因为一次通知
+  失败让整个保存报错（Agent 下一轮心跳、中继的启动修复都会补上）。
+*/
+async function afterForwardGroupSyncCommit(label: string, work: () => Promise<unknown> | unknown) {
+  if (!isDatabaseTransactionActive()) {
+    await work();
+    return;
+  }
+  await afterDatabaseCommit(async () => {
+    try {
+      await work();
+    } catch (error) {
+      appendPanelLog("warn", `[ForwardGroup] ${label} after commit failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  });
+}
+
+/** 子规则的路径带着中转（或者刚把中转去掉）：把中转机上的中继落实下来 / 收掉。在事务里时等提交之后再做。 */
 async function syncChildRouteRelays(ruleId: number, routeColumns: Record<string, unknown> | null, reason: string) {
   if (!routeColumns) return;
+  await afterForwardGroupSyncCommit(`route relay sync rule=${ruleId}`, () => syncChildRouteRelaysNow(ruleId, routeColumns, reason));
+}
+
+async function syncChildRouteRelaysNow(ruleId: number, routeColumns: Record<string, unknown>, reason: string) {
   const { retireRouteRelayRulesForRule, syncRouteRelayRulesForRule } = await import("../routeGroups");
   // 去掉了中转：只收中继，不跑完整同步（完整同步会把老式主备列推导成路径写回来）。
   const run = routeColumns.routePaths == null
@@ -2746,8 +2773,14 @@ export function filterForwardGroupFieldsForUse(
   }));
 }
 
+/** 通知这条规则涉及的 Agent 重新拉配置。在事务里时等提交之后再通知（见 afterForwardGroupSyncCommit）。 */
 async function refreshRuleEndpoints(rule: any, reason: string) {
   if (!rule) return;
+  if (isDatabaseTransactionActive()) {
+    // 提交之后回调里已经不在事务里，会走下面直接通知。
+    await afterForwardGroupSyncCommit(`refresh rule=${Number(rule?.id || 0)}`, () => refreshRuleEndpoints(rule, reason));
+    return;
+  }
   pushAgentRefresh(Number(rule.hostId), reason, { urgent: true });
   if ((rule as any).tunnelId) {
     const tunnel = await getTunnelById(Number((rule as any).tunnelId));
@@ -2801,7 +2834,12 @@ async function forwardGroupRuntimeDependenciesEnabled(group: any) {
   return dbBool(entryGroup?.isEnabled) && forwardGroupModeOf(entryGroup) === "entry";
 }
 
+/** 通知这批规则涉及的 Agent（和隧道两端）。在事务里时等提交之后再通知（见 afterForwardGroupSyncCommit）。 */
 async function refreshControlledForwardRules(rules: any[], reason: string) {
+  if (isDatabaseTransactionActive()) {
+    await afterForwardGroupSyncCommit(`refresh ${rules.length} rules`, () => refreshControlledForwardRules(rules, reason));
+    return;
+  }
   const hostIds = new Set<number>();
   const tunnelIds = new Set<number>();
   for (const rule of rules) {
@@ -3589,14 +3627,22 @@ async function removeManagedRule(
   // 再来一遍，既多拿一次计费锁，又会把 Agent 已确认的删除状态重新打回「待删」。
   if (dbBool((rule as any).pendingDelete)) return;
   // 子规则带着线路组中转（模板的路径有中转时）：中转机上那几条中继跟着收掉，别等面板重启才清。
+  // 收中继要拿 route-relays:<规则> 键锁，在事务里时放到提交之后（见 afterForwardGroupSyncCommit）。
   if (parseRoutePaths((rule as any).routePaths).some((path) => path.hops.length > 0)) {
-    const { retireRouteRelayRulesForRule } = await import("../routeGroups");
-    await retireRouteRelayRulesForRule(Number(rule.id), { reason: "forward-group-child-removed" }).catch(() => undefined);
+    await afterForwardGroupSyncCommit(`route relay retire rule=${Number(rule.id)}`, async () => {
+      const { retireRouteRelayRulesForRule } = await import("../routeGroups");
+      await retireRouteRelayRulesForRule(Number(rule.id), { reason: "forward-group-child-removed" }).catch(() => undefined);
+    });
   }
   const billingResource = await findTrafficBillingResourceForRule(rule);
   const fallback = trafficBillingResourceCandidatesForRule(rule)[0];
   const resource = billingResource || fallback;
-  if (options.deferRefresh) {
+  /*
+    在事务里（建 / 改模板、转发链同步）：事务里只标待删，结算放到提交之后。结算要拿这个用户的计费键锁，
+    计费那边是「先拿键锁、再开事务」，事务里再等键锁就互相等死；结算自己在 MySQL / PG 上还会锁用户的
+    计费行，跟着这个大事务一起占着，和流量上报抢锁。回滚了也就不结算 —— 子规则其实没删。
+  */
+  if (options.deferRefresh || isDatabaseTransactionActive()) {
     await markForwardRulePendingDelete(Number(rule.id));
     await afterDatabaseCommit(async () => {
       const billed = resource
@@ -3848,14 +3894,48 @@ export async function withForwardGroupSyncTransaction<T>(
   work: () => Promise<T>,
   options: SyncForwardGroupRulesOptions = {},
 ): Promise<T> {
+  return withForwardGroupsSyncTransaction([groupId], work, options);
+}
+
+/*
+  建 / 改转发组模板规则：模板行的写入（work）和这些组的子规则同步放在同一个事务里，中途哪一步失败
+  （成员机上端口被占、出口分不到端口、写库报错）整体回滚，不会留下一条没有子规则的模板，也不会留下
+  一半成员上有、一半成员上没有的子规则。
+
+  防死锁的规矩：
+  - 键锁都在开事务之前拿。同步锁 forward-group-sync:<组> 别处也是「先拿锁、再开事务」，并且
+    syncForwardGroupRules 在事务里调用会直接报错，所以事务里不会有人再去等这把锁。
+  - 换组时要同时拿新旧两个组的锁：按组 id 从小到大拿，两个请求互相换组也不会各拿一把互等。
+  - 事务里的同步不等任何别的键锁、不等事务外发起的查询：通知 Agent、中继同步、删除子规则的流量结算
+    都挂到提交之后（afterForwardGroupSyncCommit、removeManagedRule），端口预留只做「占得到就占、
+    占不到就算冲突」，不排队等。
+  syncGroupIds 默认等于 lockGroupIds；只想拿锁、不想在事务里同步的（比如模板改回普通规则）传 []。
+*/
+export async function withForwardGroupsSyncTransaction<T>(
+  lockGroupIds: readonly number[],
+  work: () => Promise<T>,
+  options: SyncForwardGroupRulesOptions & { syncGroupIds?: readonly number[] } = {},
+): Promise<T> {
   if (isDatabaseTransactionActive()) {
     throw new Error("Forward group sync transaction must start before a database transaction");
   }
-  return withKeyedTaskLock(`forward-group-sync:${groupId}`, () => withDatabaseTransaction(async () => {
+  const { syncGroupIds, ...syncOptions } = options;
+  const validIds = (ids: readonly number[]) => Array.from(new Set(ids.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0)));
+  const locked = validIds(lockGroupIds).sort((left, right) => left - right);
+  const synced = validIds(syncGroupIds ?? lockGroupIds);
+  if (synced.some((id) => !locked.includes(id))) {
+    throw new Error("Forward group sync transaction can only sync groups whose lock it holds");
+  }
+  const run = () => withDatabaseTransaction(async () => {
     const result = await work();
-    await syncForwardGroupRulesWithLockHeld(groupId, options);
+    for (const groupId of synced) await syncForwardGroupRulesWithLockHeld(groupId, syncOptions);
     return result;
-  }));
+  });
+  const withLocks = locked.reduceRight<() => Promise<T>>(
+    (inner, groupId) => () => withKeyedTaskLock(`forward-group-sync:${groupId}`, inner),
+    run,
+  );
+  return withLocks();
 }
 
 export async function syncForwardGroupRules(groupId: number, options: SyncForwardGroupRulesOptions = {}) {
@@ -3877,9 +3957,17 @@ export async function createForwardGroup(data: InsertForwardGroup, members: Forw
   for (const member of members) await targetHostIdForMember(member);
   const normalizedMembers = await Promise.all(members.map((member, index) => normalizeForwardGroupMemberInput(groupMode, member, index, { externalEntry })));
   await validateForwardGroupRecordMembers({ ...data, groupMode }, normalizedMembers as any);
+  /*
+    组、成员、「已创建」事件三样一起写：以前中途失败（比如某个成员行写不进去）会留下一个缺成员的组，
+    界面上看着建成了，同步时又报「至少需要一个成员」。校验都在上面做完了，这里只剩写库，没有键锁、
+    没有对外通知，放进一个事务里没有死锁的余地。
+    排序号在事务外先算好：它的查询失败时按 0 兜底（.catch），PostgreSQL 下事务里的语句一旦报错，
+    整个事务就只能回滚了，兜底兜不住。
+  */
   const sortOrder = (data as any).sortOrder === undefined
     ? await nextForwardGroupSortOrder(Number((data as any).userId || 0), groupMode)
     : Math.max(0, Math.floor(Number((data as any).sortOrder) || 0));
+  return withDatabaseTransaction(async () => {
   const id = await insertAndGetId("forward_groups", {
     ...data,
     failoverRuntimeInheritanceEnabled: (data as any).failoverRuntimeInheritanceEnabled ?? true,
@@ -3914,6 +4002,7 @@ export async function createForwardGroup(data: InsertForwardGroup, members: Forw
         ? "出口组已创建；可在隧道中作为出口组选择。"
         : "Forward group created; use it from forwarding rules to generate member routes.");
   return id;
+  });
 }
 
 type RuleProtocol = "tcp" | "udp" | "both";

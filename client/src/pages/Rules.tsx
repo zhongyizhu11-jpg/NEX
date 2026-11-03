@@ -143,6 +143,7 @@ import { FAILOVER_TONE_CLASS, describeFailoverLineDisplay } from "@/lib/failover
 import { RouteGroupSheet } from "@/features/rules/RouteGroupSheet";
 import { LineDetailFromUrl } from "@/features/links/LineDetailFromUrl";
 import { RouteMiniChain, routeBoardActiveChain } from "@/features/rules/RouteBoard";
+import { buildRuleCardDerivedProps, ruleCardPropsEqual, type RuleCardDerivedProps, type RuleCardDerivedSources } from "@/features/rules/ruleCardProps";
 import { EntityActions } from "@/components/entity/EntityActions";
 import { IconTile, type IconTileTone } from "@/components/entity/IconTile";
 import { routeGroupPayload, type RouteGroupDraft, type RouteHostOption } from "@/features/rules/RouteGroupFields";
@@ -268,6 +269,7 @@ import {
 import { buildLinkAvailabilityIndex } from "@shared/linkAvailability";
 import { useUrlTab } from "@/hooks/useUrlTab";
 import { useIsMobile } from "@/hooks/useMobile";
+import { useStableRows } from "@/lib/stableRows";
 import { formatEntryBridgeNote } from "@shared/ruleEntryBridge";
 
 /** 探测是多久以前的：「18 分钟前」。 */
@@ -691,6 +693,439 @@ const INITIAL_RULE_CARD_BUDGET = 6;
 function RuleCardPlaceholder() {
   return <div className="fx-rule-card-placeholder" aria-hidden="true" />;
 }
+
+/*
+  ─── 规则卡：单独一个 React.memo 组件 ───
+
+  以前卡片是 RulesContent 里的一个 renderRuleCard 闭包，页面上随便哪条查询轮询回来（规则列表、
+  流量、线路板……每几秒一条），整页连同每一张卡都重画一遍：一屏几十张卡，手机上一次就是上百毫秒。
+  现在卡片只认传进来的 props，props 没变就不重画，一次轮询只改了一条规则，就只重画那一张。
+
+  props 分三类，都要求「没变就是同一个值」：
+    · rule：没变的那条规则拿到的还是上一轮的对象（规则行里有 Date，光靠 React Query 的结构共享
+      做不到，见下面 rules 那里的 useStableRows）；
+    · 这张卡自己的派生值（状态、线路组、流量数字、探测结果……）：父组件按规则算好
+      （features/rules/ruleCardProps.ts 的 buildRuleCardDerivedProps），传原始值（数字、字符串、布尔），
+      对象一律拆开；走势线是数组，按内容比（ruleCardPropsEqual）；和「现在几点」有关的（探测过没过期、
+      多久以前、到没到期、线路组「几点起」）也在那里按当下算好，卡片自己不读时钟 —— 不然没重画的卡
+      会一直停在上次的「3 分钟前」；
+    · page：一页共用的那一包（布局、身份、主机 / 隧道 / 线路组表……），变了所有卡一起重画。
+      page.ui 是一个引用永远不变的转发器，调过去的是父组件这一轮最新的函数（见 RulesContent 里的
+      ruleCardUi）：卡片里点「编辑」「开关」拿到的总是最新的状态，不会是这张卡上次画时的旧闭包。
+      ui.* 读到的页面数据都列在 page.helperInputs 里，它们一变 page 就换引用。
+*/
+type RuleCardRule = any;
+type RuleCardTone = "ok" | "warn" | "down" | "off";
+
+type RuleTransferDisplay = {
+  entryAddresses: Array<{ label: string; value: string; text: string; copyable: boolean }>;
+  targetAddress: string;
+  entryTitle: string;
+};
+
+type RuleCardUi = {
+  isRuleSupported: (rule: RuleCardRule) => boolean;
+  getRuleProtocolKey: (rule: RuleCardRule) => ForwardProtocolKey | null;
+  protocolUnsupportedLabel: (protocolKey: ForwardProtocolKey | null | undefined) => string;
+  getRuleTransferDisplay: (rule: RuleCardRule) => RuleTransferDisplay;
+  getRuleHopNames: (rule: RuleCardRule) => string[];
+  getRuleResourceName: (rule: RuleCardRule) => string;
+  getRuleOwnerName: (rule: RuleCardRule) => string;
+  renderAdminManagedBadge: (rule: RuleCardRule) => ReactNode;
+  renderSniRuleBadge: (rule: RuleCardRule) => ReactNode;
+  renderEgressBadge: (rule: RuleCardRule) => ReactNode;
+  renderKernelForwardWarningBadge: (rule: RuleCardRule) => ReactNode;
+  renderTunnelFxpIssueBadge: (rule: RuleCardRule) => ReactNode;
+  renderSubscriptionBadge: (rule: RuleCardRule) => ReactNode;
+  renderSubscriptionMark: (rule: RuleCardRule) => ReactNode;
+  renderRuleActions: (rule: RuleCardRule) => ReactNode;
+  renderRuleEnabledSwitch: (rule: RuleCardRule) => ReactNode;
+  copyEntryAddress: (rule: RuleCardRule, entryValue?: string) => void;
+  copyTargetAddress: (text: string) => void;
+  toggleEntryAddresses: (ruleId: number) => void;
+  toggleRuleLines: (ruleId: number) => void;
+  openRulePolicy: (ruleId: number) => void;
+  openEdit: (rule: RuleCardRule) => void;
+  toggleRuleEnabled: (rule: RuleCardRule, checked: boolean) => Promise<void>;
+};
+
+type RuleCardPage = {
+  compact: boolean;
+  compactLayout: boolean;
+  isAdmin: boolean;
+  ruleReorderPending: boolean;
+  forwardGroupById: Map<number, RuleCardRule>;
+  ui: RuleCardUi;
+  /** ui.* 读到的页面数据：卡片不直接用，放在这里是为了它们一变 page 就换引用、所有卡跟着重画。 */
+  helperInputs: readonly unknown[];
+};
+
+type RuleCardProps = RuleCardDerivedProps & {
+  rule: RuleCardRule;
+  sortable?: RuleSortableRenderState;
+  page: RuleCardPage;
+};
+
+const RULE_TONE_COLOR: Record<RuleCardTone, string> = {
+  ok: "var(--fx-primary-fill)",
+  warn: "var(--fx-warn)",
+  down: "var(--fx-down)",
+  off: "var(--fx-text-muted)",
+};
+
+const splitBytes = (bytes: number) => {
+  const [value, unit] = formatBytes(bytes).split(" ");
+  return { value: value || "0", unit: unit || "B" };
+};
+
+const ruleRowKey = (rule: { id?: unknown }) => Number(rule?.id);
+const EMPTY_TLS_INBOUND_OPTIONS: never[] = [];
+
+/** 规则卡的转发器：每个方法调的都是 ref 这一刻指着的那份（父组件每轮渲染重新指一次）。 */
+function createRuleCardUiDispatcher(ref: { current: RuleCardUi | null }): RuleCardUi {
+  const latest = () => {
+    if (!ref.current) throw new Error("规则卡的转发器还没接上");
+    return ref.current;
+  };
+  return {
+    isRuleSupported: (rule) => latest().isRuleSupported(rule),
+    getRuleProtocolKey: (rule) => latest().getRuleProtocolKey(rule),
+    protocolUnsupportedLabel: (protocolKey) => latest().protocolUnsupportedLabel(protocolKey),
+    getRuleTransferDisplay: (rule) => latest().getRuleTransferDisplay(rule),
+    getRuleHopNames: (rule) => latest().getRuleHopNames(rule),
+    getRuleResourceName: (rule) => latest().getRuleResourceName(rule),
+    getRuleOwnerName: (rule) => latest().getRuleOwnerName(rule),
+    renderAdminManagedBadge: (rule) => latest().renderAdminManagedBadge(rule),
+    renderSniRuleBadge: (rule) => latest().renderSniRuleBadge(rule),
+    renderEgressBadge: (rule) => latest().renderEgressBadge(rule),
+    renderKernelForwardWarningBadge: (rule) => latest().renderKernelForwardWarningBadge(rule),
+    renderTunnelFxpIssueBadge: (rule) => latest().renderTunnelFxpIssueBadge(rule),
+    renderSubscriptionBadge: (rule) => latest().renderSubscriptionBadge(rule),
+    renderSubscriptionMark: (rule) => latest().renderSubscriptionMark(rule),
+    renderRuleActions: (rule) => latest().renderRuleActions(rule),
+    renderRuleEnabledSwitch: (rule) => latest().renderRuleEnabledSwitch(rule),
+    copyEntryAddress: (rule, entryValue) => latest().copyEntryAddress(rule, entryValue),
+    copyTargetAddress: (text) => latest().copyTargetAddress(text),
+    toggleEntryAddresses: (ruleId) => latest().toggleEntryAddresses(ruleId),
+    toggleRuleLines: (ruleId) => latest().toggleRuleLines(ruleId),
+    openRulePolicy: (ruleId) => latest().openRulePolicy(ruleId),
+    openEdit: (rule) => latest().openEdit(rule),
+    toggleRuleEnabled: (rule, checked) => latest().toggleRuleEnabled(rule, checked),
+  };
+}
+
+/*
+  规则卡（「玻璃 · 大数字」那版样稿，用户选的方向，按他们的要求收紧到一屏四张）：
+
+    ● 名字                                        ··· [开关]
+      资源 · 经 跳点 · 工具 · 协议
+    113 GB   ～～走势线～～          近 24H
+                                    ↓ 2.76 GB · ↑ 3.42 GB
+    ─────────────────────────────────────────────
+    192.0.2.21:443  →  10.10.3.88:443        [46 ms]
+
+  卡不描边，坐在浅灰页面上靠一层很淡的投影成形；左上角一抹状态色的光（--fx-rule-tone）。
+  状态点在名字左边（用户定的）。第一版卡头还有一枚类型图标格，用户看图说「图标不要」，去掉了；
+  类型仍由分组标题上的小图标格和卡上那抹光的色调说。
+  大数字是累计总量：一张卡最值得一眼看到的数。走势线是近 24 小时逐时字节，只画形状。
+  地址一行等宽字、不截断；右端一枚小标签：延迟，或者切了线 / 出错 / 停用这些更要紧的话。
+*/
+const RuleCard = memo(function RuleCard({
+  rule,
+  sortable,
+  page,
+  visualState,
+  visualTitle,
+  failover,
+  totalIn,
+  totalOut,
+  hasTotal,
+  dailyIn,
+  dailyOut,
+  spark,
+  routeBoard,
+  probe,
+  entriesExpanded: entriesOpen,
+  linesOpen,
+}: RuleCardProps) {
+  const { ui, compact, compactLayout } = page;
+  const visual = { state: visualState, title: visualTitle };
+  const supported = ui.isRuleSupported(rule);
+  const protocolKey = ui.getRuleProtocolKey(rule);
+  const category = getRuleCategory(rule, page.forwardGroupById) as RuleGroupType;
+  const health = !supported || rule.resourceAccessAllowed === false ? "down" : ruleVisualStateToHealth(visual.state);
+  const healthToken = describeNetworkHealth(health).token;
+  const tone: RuleCardTone = healthToken === "down"
+    ? "down"
+    : healthToken === "standby"
+      ? "off"
+      : healthToken === "warn" || (failover && failover.tone === "warn")
+        ? "warn"
+        : "ok";
+  const toneColor = RULE_TONE_COLOR[tone];
+
+  const { entryAddresses, targetAddress, entryTitle } = ui.getRuleTransferDisplay(rule);
+  const primaryEntry = entryAddresses[0];
+  const extraEntries = Math.max(0, entryAddresses.length - 1);
+  const entriesExpanded = extraEntries > 0 && entriesOpen;
+  const hops = decideRuleFlowLayout(category) === "flow" && category !== "group" ? ui.getRuleHopNames(rule) : [];
+  const forwardLabel = FORWARD_TYPE_LABELS[rule?.forwardType as ForwardType] || "";
+  const subtitleParts = [
+    ui.getRuleResourceName(rule),
+    hops.length > 0 ? `经 ${hops.join(" / ")}` : "",
+    forwardLabel,
+    formatForwardRuleProtocol(rule.protocol),
+    !compact && page.isAdmin ? ui.getRuleOwnerName(rule) : "",
+  ].filter(Boolean);
+  const subtitle = subtitleParts.join(" · ");
+
+  const big = splitBytes(totalIn + totalOut);
+  const dailyBytes = dailyIn + dailyOut;
+
+  // 地址行右端那枚小标签：切了线 / 出错 / 停用比延迟要紧，有就换掉延迟。
+  const hasLineRows = !!failover && !!routeBoard;
+  const linesExpanded = hasLineRows && linesOpen;
+  // 有线路行可展开时点这枚是展开 / 收起；没有（线路板还没数据）就照旧直接进线路组
+  const onFailoverPill = () => (hasLineRows ? ui.toggleRuleLines(Number(rule.id)) : ui.openRulePolicy(Number(rule.id)));
+  // 线路组一律写在地址行左边那枚（择优 · 2 条 / 主备 · 主线路），右端的标签照旧是延迟 / 状态：
+  // 以前择优、切换中会顶掉右端的延迟，两种线路组的卡就长得不一样（用户 2026-11-03 对比图）。
+  let tag: ReactNode = null;
+  if (visual.state === "error") {
+    tag = <span className="fx-rule-tag" data-tone="down" title={visual.title}>{visual.title}</span>;
+  } else if (visual.state === "disabled") {
+    const stop = resolveForwardRuleStopReason(rule);
+    tag = <span className="fx-rule-tag" data-tone="off" title={stop?.detail || "规则已停用"}>{stop?.label || "已停用"}</span>;
+  } else {
+    // 线路组：卡上写当前路径的整链延迟（线路板各段相加），不是出口直探目标的那个数。
+    const activeChain = failover ? routeBoardActiveChain(routeBoard) : null;
+    if (activeChain && activeChain.totalMs !== null && !activeChain.broken) {
+      const ms = Math.round(activeChain.totalMs);
+      tag = <span className="fx-rule-tag" data-tone={ms < 150 ? "ok" : ms < 300 ? "warn" : "down"} title={activeChain.partial ? "当前路径已测各段相加（有一段还没测到）" : "当前路径各段延迟相加"}>{activeChain.partial ? "≥ " : ""}{ms} ms</span>;
+    } else if (activeChain?.broken) {
+      tag = <span className="fx-rule-tag" data-tone="down" title="当前路径有一段不通">不通</span>;
+    } else if (probe.at && probe.stale) {
+      // 过期的探测：灰掉并写明多久以前，不再把三天前的 12 ms 画成绿的。
+      const text = probe.isTimeout ? "超时" : probe.ms !== null ? `${Math.round(probe.ms)} ms` : "";
+      if (text) tag = <span className="fx-rule-tag" data-tone="off" title={`${probe.ageText}测的，已过期；··· › 诊断 重新测`}>{text} · {probe.ageText}</span>;
+    } else if (probe.at) {
+      if (probe.isTimeout) {
+        tag = <span className="fx-rule-tag" data-tone="down" title="最近一次测试超时">超时</span>;
+      } else if (probe.ms !== null) {
+        const ms = probe.ms;
+        tag = <span className="fx-rule-tag" data-tone={ms < 150 ? "ok" : ms < 300 ? "warn" : "down"} title="最近一次测得的延迟">{ms} ms</span>;
+      }
+    }
+    // 精简的列表行：这个位置固定是延迟（用户 2026-10-21 圈的），没测过也占着，写「未测试」
+    if (!tag && compactLayout) {
+      tag = <span className="fx-rule-tag" data-tone="off" title="还没测过延迟：··· › 诊断 测一次">未测试</span>;
+    }
+  }
+  const failoverAside = failover ? (
+    <button
+      type="button"
+      className="fx-rule-foot-link"
+      data-tone={failover.tone === "normal" ? undefined : failover.tone === "warn" ? "warn" : "off"}
+      title={hasLineRows ? (linesExpanded ? "收起线路" : `${failover.title}（点开看线路）`) : failover.title}
+      aria-label={`线路组：${failover.title}`}
+      aria-expanded={hasLineRows ? linesExpanded : undefined}
+      onClick={onFailoverPill}
+    >
+      <GitBranch className="h-3 w-3" aria-hidden="true" />
+      {failover.text}
+    </button>
+  ) : null;
+
+  const alerts = [
+    ui.renderAdminManagedBadge(rule),
+    ui.renderSniRuleBadge(rule),
+    ui.renderEgressBadge(rule),
+    ui.renderKernelForwardWarningBadge(rule),
+    rule?.tunnelId ? ui.renderTunnelFxpIssueBadge(rule) : null,
+    ui.renderSubscriptionBadge(rule),
+    !supported ? (
+      <Badge key="unsupported" variant="outline" className="h-5 border-destructive/30 px-1.5 text-[11px] text-destructive">
+        {ui.protocolUnsupportedLabel(protocolKey)} 不支持
+      </Badge>
+    ) : null,
+  ].filter(Boolean);
+
+  return (
+    <Card
+      {...(sortable?.itemProps || {})}
+      className={cn(
+        "group/sortable fx-rule-card relative action-card transition-[box-shadow,opacity]",
+        !supported && "opacity-70",
+        sortable?.isDragging && "opacity-55 ring-1 ring-primary/35",
+        sortable?.isDropTarget && "ring-1 ring-primary/45",
+      )}
+      data-tone={tone}
+      data-size={compact ? "compact" : "standard"}
+      style={{ ...(sortable?.itemProps?.style || {}), "--fx-rule-tone": toneColor } as CSSProperties}
+      title={!supported ? unsupportedProtocolTitle : undefined}
+    >
+      <CardContent className="fx-rule-card-body action-card-content">
+        <div className="fx-rule-head">
+          <div className="fx-rule-title">
+            <div className="fx-rule-name">
+              {/* 状态点在名字左边（用户定的），图标格不要了（用户看了图说「图标不要」） */}
+              <span className="fx-rule-dot">
+                {supported ? (
+                  <span title={visual.title} className="inline-flex">
+                    <StatusDot health={ruleVisualStateToHealth(visual.state)} size="large" label={visual.title} />
+                  </span>
+                ) : <StatusDot health="down" size="large" label={unsupportedProtocolTitle} />}
+              </span>
+              <span className="truncate" title={rule.name}>{rule.name}</span>
+              {ui.renderSubscriptionMark(rule)}
+            </div>
+            <div className="fx-rule-sub" title={subtitle}>{subtitle}</div>
+          </div>
+          <div className="fx-rule-head-actions">
+            {ui.renderRuleActions(rule)}
+            {ui.renderRuleEnabledSwitch(rule)}
+            {/* 拖动手柄放最右边（iOS 列表编辑态的位置）：原来在「···」左边，正是拇指上下滑的地方，一碰就成了拖（用户 2026-11-03） */}
+            {sortable && (
+              <SortableDragHandle
+                dragHandleProps={sortable.handleProps}
+                visible={sortable.isDragging}
+                busy={page.ruleReorderPending}
+                className="bg-card/70"
+              />
+            )}
+          </div>
+        </div>
+
+        <div className="fx-rule-big">
+          <div
+            className="fx-rule-num"
+            title={hasTotal ? `累计入向 ${formatBytes(totalIn)} / 出向 ${formatBytes(totalOut)}` : "还没有流量"}
+          >
+            <b>{big.value}</b><small>{big.unit}</small>
+          </div>
+          <Sparkline
+            values={spark}
+            width={96}
+            height={28}
+            stroke={toneColor}
+            className="fx-rule-spark"
+            title={spark.some((value) => value > 0) ? "近 24 小时逐时流量走势" : undefined}
+          />
+          <div className="fx-rule-day">
+            <span>近 24H</span>
+            <span className="fx-rule-day-val" title="近 24 小时入向 · 出向">
+              {dailyBytes > 0 ? `↓ ${formatBytes(dailyIn)} · ↑ ${formatBytes(dailyOut)}` : "没有流量"}
+            </span>
+          </div>
+        </div>
+
+        {alerts.length > 0 ? (
+          <div className="fx-rule-alerts">{alerts}</div>
+        ) : null}
+        {/* 到期那一下（props.expiryPassed 翻过去）这张卡会重画，RuleLimitSummary 按当下时间判断「已于…到期」 */}
+        <RuleLimitSummary rule={rule} />
+        {(rule.protocolBlockReason || rule.resourceAccessAllowed === false) && (
+          <div className="line-clamp-2 text-[11px] leading-4 text-destructive">
+            {rule.protocolBlockReason || revokedResourceTitle}
+          </div>
+        )}
+        {rule.entryDomainError ? (
+          <div className="line-clamp-1 text-[11px] leading-4 text-[var(--fx-warn-text)]" title={String(rule.entryDomainError)}>
+            规则域名未同步：{String(rule.entryDomainError)}（面板会自动重试）
+          </div>
+        ) : null}
+        {(() => {
+          const stop = !rule.protocolBlockReason && rule.resourceAccessAllowed !== false ? resolveForwardRuleStopReason(rule) : null;
+          return stop?.autoResume ? (
+            <div className="line-clamp-2 text-[11px] leading-4 text-muted-foreground">{stop.detail}</div>
+          ) : null;
+        })()}
+        {entryBridgeNotes(rule).map((note) => (
+          <div key={note} className="line-clamp-2 text-[11px] leading-4 text-muted-foreground">{note}</div>
+        ))}
+
+        <div className="fx-rule-path" title={`${entryAddresses.map((entry) => entry.text).join(" / ")} → ${targetAddress}`}>
+          {/* 入口和目标都是点一下就复制（用户要的）；小复制图标常驻，不用悬停才显出来 */}
+          {primaryEntry && !entriesExpanded ? (
+            <span className="fx-rule-addr-group">
+              <button
+                type="button"
+                onClick={() => primaryEntry.copyable && ui.copyEntryAddress(rule, primaryEntry.value)}
+                disabled={!primaryEntry.copyable}
+                className="fx-rule-addr"
+                title={primaryEntry.copyable ? entryTitle : primaryEntry.text}
+              >
+                <span className="truncate">{primaryEntry.text}</span>
+                {primaryEntry.copyable ? <Copy className="fx-rule-addr-copy" aria-hidden="true" /> : null}
+              </button>
+              {extraEntries > 0 ? (
+                <button
+                  type="button"
+                  className="fx-rule-addr-more"
+                  onClick={() => ui.toggleEntryAddresses(Number(rule.id))}
+                  aria-expanded={false}
+                  title={`展开全部 ${entryAddresses.length} 个入口地址`}
+                >
+                  +{extraEntries}
+                </button>
+              ) : null}
+            </span>
+          ) : null}
+          {primaryEntry && entriesExpanded ? (
+            <span className="fx-rule-addr-list">
+              {entryAddresses.map((entry) => (
+                <button
+                  key={`${entry.label}:${entry.value}`}
+                  type="button"
+                  onClick={() => entry.copyable && ui.copyEntryAddress(rule, entry.value)}
+                  disabled={!entry.copyable}
+                  className="fx-rule-addr"
+                  title={entry.copyable ? `${entryTitle} (${entry.label})` : entry.text}
+                >
+                  <span className="fx-rule-addr-label">{entry.label}</span>
+                  <span className="truncate">{entry.text}</span>
+                  {entry.copyable ? <Copy className="fx-rule-addr-copy" aria-hidden="true" /> : null}
+                </button>
+              ))}
+              <button
+                type="button"
+                className="fx-rule-addr-more"
+                onClick={() => ui.toggleEntryAddresses(Number(rule.id))}
+                aria-expanded={true}
+                title="收起"
+              >
+                收起
+              </button>
+            </span>
+          ) : null}
+          <span className="fx-rule-path-to">
+            <ArrowRight className="fx-rule-path-arrow" aria-hidden="true" />
+            <button
+              type="button"
+              onClick={() => ui.copyTargetAddress(targetAddress)}
+              className="fx-rule-addr"
+              title={`复制目标地址: ${targetAddress}`}
+            >
+              <span className="truncate">{targetAddress}</span>
+              <Copy className="fx-rule-addr-copy" aria-hidden="true" />
+            </button>
+          </span>
+          <span className="fx-rule-path-end">
+            {failoverAside}
+            {tag}
+          </span>
+        </div>
+        {linesExpanded && failover?.policy && routeBoard ? (
+          <RouteMiniChain
+            className="mt-1.5"
+            status={routeBoard}
+            policy={failover.policy}
+            onOpen={() => ui.openRulePolicy(Number(rule.id))}
+          />
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}, ruleCardPropsEqual);
 
 function RuleRouteTransition({
   transitionKey: _transitionKey,
@@ -2020,6 +2455,13 @@ function RulesContent() {
   const { user } = useAuth();
   // 精简布局（compact.css 收的是组件打了 data-fx-help 的说明；规则框里这几行是条件渲染，由这个开关管）。
   const compactLayout = useCompactLayout();
+  /*
+    规则卡的转发器（见 RuleCard 前面的说明和 renderRuleCard 上面那段）：引用一直不变，调过去的是
+    ruleCardUiRef 这一轮指向的最新函数。放在最前面，是因为下面的 renderRuleActions / renderRuleEnabledSwitch
+    里「编辑」「开关」也经它调：卡片没重画时，按钮上挂着的闭包是旧的，经它一转就还是最新的状态。
+  */
+  const ruleCardUiRef = useRef<RuleCardUi | null>(null);
+  const ruleCardUi = useMemo(() => createRuleCardUiDispatcher(ruleCardUiRef), []);
   const hideRuleFormHints = true;
   const [, setLocation] = useLocation();
   const search = useSearch();
@@ -2056,10 +2498,12 @@ function RulesContent() {
     refetchOnWindowFocus: false,
   });
   // 共享 TLS 入站（SNI 分流）：能挂规则的（usable）加上自己规则挂着的（只用来显示）。
-  const { data: tlsInboundOptions = [] } = trpc.tlsInbounds.listForUser.useQuery(undefined, {
+  const { data: tlsInboundOptionsData } = trpc.tlsInbounds.listForUser.useQuery(undefined, {
     staleTime: 30_000,
     refetchOnWindowFocus: false,
   });
+  // 没数据时也给同一个空数组：写成解构默认值 = [] 每次渲染都是新的，tlsInboundById 跟着每轮重建，规则卡的 memo 就全废了
+  const tlsInboundOptions = tlsInboundOptionsData ?? EMPTY_TLS_INBOUND_OPTIONS;
   const tlsInboundById = useMemo(
     () => new Map((tlsInboundOptions as any[]).map((inbound: any) => [Number(inbound.id), inbound] as const)),
     [tlsInboundOptions],
@@ -2417,7 +2861,11 @@ function RulesContent() {
   }, [ruleListSummary, ruleListSummaryPlaceholder]);
   // The batch-management dialog may load a separate full rule list, but it
   // must never replace the paged list rendered underneath the dialog.
-  const rules = (isRuleGlobeView ? mapRules : rulePageQuery.data?.items) as any[] | undefined;
+  /*
+    规则行里有 Date（createdAt / updatedAt / 到期时间……），React Query 的结构共享认不出来：每轮询一次
+    每条规则都成了新对象，memo 的规则卡一张都比不上。内容没变的沿用上一轮的对象（lib/stableRows.ts）。
+  */
+  const rules = useStableRows((isRuleGlobeView ? mapRules : rulePageQuery.data?.items) as any[] | undefined, ruleRowKey);
   /*
     规则卡上直接画线路组的迷你链（在走哪条、哪段慢）：一次拿全部线路组的状态，十秒一刷。
     只有列表里有线路组规则时才拉；没有就不花这一次查询。
@@ -2688,7 +3136,7 @@ function RulesContent() {
     const content = supported && resourceAccessAllowed ? (
       <OptimisticSwitch
         checked={enabled}
-        onCheckedChangeAsync={(checked) => toggleRuleEnabled(rule, checked)}
+        onCheckedChangeAsync={(checked) => ruleCardUi.toggleRuleEnabled(rule, checked)}
         onToggleSuccess={(checked) => toast.success(checked ? "规则已开启" : "规则已关闭")}
         onToggleError={(error) => toast.error(error instanceof Error ? error.message : "切换规则状态失败")}
         className="switch-compact"
@@ -6952,7 +7400,7 @@ function RulesContent() {
       icon: <Stethoscope className="h-3.5 w-3.5" />,
       onSelect: () => setSelfTestRule({ id: rule.id, name: rule.name, isForwardChain: isForwardChainRule, chainKernel: !isUserspaceForwardType(rule.forwardType), probeMethod }),
     };
-    const editAction = { key: "edit", label: "编辑", ariaLabel: `编辑 ${rule.name}`, icon: <Pencil className="h-3.5 w-3.5" />, onSelect: () => openEdit(rule) };
+    const editAction = { key: "edit", label: "编辑", ariaLabel: `编辑 ${rule.name}`, icon: <Pencil className="h-3.5 w-3.5" />, onSelect: () => ruleCardUi.openEdit(rule) };
     return (
       <EntityActions
         primary={tableCompact
@@ -7332,32 +7780,6 @@ function RulesContent() {
     );
   };
 
-  /*
-    规则卡（「玻璃 · 大数字」那版样稿，用户选的方向，按他们的要求收紧到一屏四张）：
-
-      ● 名字                                        ··· [开关]
-        入口主机 · 转发工具 · 协议
-      113 GB   ～～走势线～～          近 24H
-                                      ↓ 2.76 GB · ↑ 3.42 GB
-      ─────────────────────────────────────────────
-      192.0.2.21:443  →  10.10.3.88:443        [46 ms]
-
-    卡不描边，坐在浅灰页面上靠一层很淡的投影成形；左上角一抹状态色的光（--fx-rule-tone）。
-    状态点在名字左边（用户定的）。第一版卡头还有一枚类型图标格，用户看图说「图标不要」，去掉了；
-    类型仍由分组标题上的小图标格和卡上那抹光的色调说。
-    大数字是累计总量：一张卡最值得一眼看到的数。走势线是近 24 小时逐时字节，只画形状。
-    地址一行等宽字、不截断；右端一枚小标签：延迟，或者切了线 / 出错 / 停用这些更要紧的话。
-  */
-  const RULE_TONE_COLOR: Record<"ok" | "warn" | "down" | "off", string> = {
-    ok: "var(--fx-primary-fill)",
-    warn: "var(--fx-warn)",
-    down: "var(--fx-down)",
-    off: "var(--fx-text-muted)",
-  };
-  const splitBytes = (bytes: number) => {
-    const [value, unit] = formatBytes(bytes).split(" ");
-    return { value: value || "0", unit: unit || "B" };
-  };
   /** 「全部」里一组规则卡：这一组能拖就包一层拖拽（手机竖着拖，桌面按格子拖），不能拖照旧。 */
   const renderRuleGroupItems = (group: (typeof desktopRuleGroups)[number], collapsed: boolean, mobile: boolean) => {
     const sortable = ruleGroupSortables[group.type];
@@ -7389,287 +7811,107 @@ function RulesContent() {
     );
   };
 
-  const renderRuleCard = (rule: any, sortable?: RuleSortableRenderState) => {
-    const supported = isRuleSupported(rule);
-    const protocolKey = getRuleProtocolKey(rule);
-    const compact = effectiveRuleCardSize === "compact";
-    const category = getRuleCategory(rule, forwardGroupById) as RuleGroupType;
-    const visual = ruleVisualStatuses.get(Number(rule.id))?.display || resolveRuleVisualStatus(rule);
-    const health = !supported || rule.resourceAccessAllowed === false ? "down" : ruleVisualStateToHealth(visual?.state);
-    const healthToken = describeNetworkHealth(health).token;
-    const failover = describeFailoverLineDisplay(rule, hostById.get(Number(rule.hostId)));
-    const tone: "ok" | "warn" | "down" | "off" = healthToken === "down"
-      ? "down"
-      : healthToken === "standby"
-        ? "off"
-        : healthToken === "warn" || (failover && failover.tone === "warn")
-          ? "warn"
-          : "ok";
-    const toneColor = RULE_TONE_COLOR[tone];
-
-    const { entryAddresses, targetAddress, entryTitle } = getRuleTransferDisplay(rule);
-    const primaryEntry = entryAddresses[0];
-    const extraEntries = Math.max(0, entryAddresses.length - 1);
-    const entriesExpanded = extraEntries > 0 && expandedEntryRuleIds.has(Number(rule.id));
-    const hops = decideRuleFlowLayout(category) === "flow" && category !== "group" ? getRuleHopNames(rule) : [];
-    const forwardLabel = FORWARD_TYPE_LABELS[rule?.forwardType as ForwardType] || "";
-    const subtitleParts = [
-      getRuleResourceName(rule),
-      hops.length > 0 ? `经 ${hops.join(" / ")}` : "",
-      forwardLabel,
-      formatForwardRuleProtocol(rule.protocol),
-      !compact && user?.role === "admin" ? getRuleOwnerName(rule) : "",
-    ].filter(Boolean);
-    const subtitle = subtitleParts.join(" · ");
-
-    const total = totalTrafficByRule.get(rule.id);
-    const totalBytes = Number(total?.bytesIn || 0) + Number(total?.bytesOut || 0);
-    const big = splitBytes(totalBytes);
-    const daily = dailyTrafficByRule.get(rule.id);
-    const dailyBytes = Number(daily?.bytesIn || 0) + Number(daily?.bytesOut || 0);
-    const spark = sparkByRule.get(Number(rule.id)) || [];
-
-    // 地址行右端那枚小标签：切了线 / 出错 / 停用比延迟要紧，有就换掉延迟。
-    const hasLineRows = !!failover && !!routeBoardByRule.get(Number(rule.id));
-    const linesExpanded = hasLineRows && expandedLineRuleIds.has(Number(rule.id));
-    // 有线路行可展开时点这枚是展开 / 收起；没有（线路板还没数据）就照旧直接进线路组
-    const onFailoverPill = () => (hasLineRows ? toggleRuleLines(Number(rule.id)) : setPolicyRuleId(Number(rule.id)));
-    // 线路组一律写在地址行左边那枚（择优 · 2 条 / 主备 · 主线路），右端的标签照旧是延迟 / 状态：
-    // 以前择优、切换中会顶掉右端的延迟，两种线路组的卡就长得不一样（用户 2026-11-03 对比图）。
-    let tag: ReactNode = null;
-    if (visual?.state === "error") {
-      tag = <span className="fx-rule-tag" data-tone="down" title={visual.title}>{visual.title}</span>;
-    } else if (visual?.state === "disabled") {
-      const stop = resolveForwardRuleStopReason(rule);
-      tag = <span className="fx-rule-tag" data-tone="off" title={stop?.detail || "规则已停用"}>{stop?.label || "已停用"}</span>;
-    } else {
-      const probe = stableProbeByRule.get(Number(rule.id));
-      // 线路组：卡上写当前路径的整链延迟（线路板各段相加），不是出口直探目标的那个数。
-      const activeChain = failover ? routeBoardActiveChain(routeBoardByRule.get(Number(rule.id))) : null;
-      if (activeChain && activeChain.totalMs !== null && !activeChain.broken) {
-        const ms = Math.round(activeChain.totalMs);
-        tag = <span className="fx-rule-tag" data-tone={ms < 150 ? "ok" : ms < 300 ? "warn" : "down"} title={activeChain.partial ? "当前路径已测各段相加（有一段还没测到）" : "当前路径各段延迟相加"}>{activeChain.partial ? "≥ " : ""}{ms} ms</span>;
-      } else if (activeChain?.broken) {
-        tag = <span className="fx-rule-tag" data-tone="down" title="当前路径有一段不通">不通</span>;
-      } else if (probe?.latestLatencyAt && !isLinkProbeFresh(probe.latestLatencyAt)) {
-        // 过期的探测：灰掉并写明多久以前，不再把三天前的 12 ms 画成绿的。
-        const text = probe.latestLatencyIsTimeout ? "超时" : typeof probe.latestLatencyMs === "number" && Number.isFinite(probe.latestLatencyMs) ? `${Math.round(probe.latestLatencyMs)} ms` : "";
-        if (text) tag = <span className="fx-rule-tag" data-tone="off" title={`${formatProbeAge(probe.latestLatencyAt)}测的，已过期；··· › 诊断 重新测`}>{text} · {formatProbeAge(probe.latestLatencyAt)}</span>;
-      } else if (probe?.latestLatencyAt) {
-        if (probe.latestLatencyIsTimeout) {
-          tag = <span className="fx-rule-tag" data-tone="down" title="最近一次测试超时">超时</span>;
-        } else if (typeof probe.latestLatencyMs === "number" && Number.isFinite(probe.latestLatencyMs)) {
-          const ms = probe.latestLatencyMs;
-          tag = <span className="fx-rule-tag" data-tone={ms < 150 ? "ok" : ms < 300 ? "warn" : "down"} title="最近一次测得的延迟">{ms} ms</span>;
-        }
-      }
-      // 精简的列表行：这个位置固定是延迟（用户 2026-10-21 圈的），没测过也占着，写「未测试」
-      if (!tag && compactLayout) {
-        tag = <span className="fx-rule-tag" data-tone="off" title="还没测过延迟：··· › 诊断 测一次">未测试</span>;
-      }
-    }
-    const failoverAside = failover ? (
-      <button
-        type="button"
-        className="fx-rule-foot-link"
-        data-tone={failover.tone === "normal" ? undefined : failover.tone === "warn" ? "warn" : "off"}
-        title={hasLineRows ? (linesExpanded ? "收起线路" : `${failover.title}（点开看线路）`) : failover.title}
-        aria-label={`线路组：${failover.title}`}
-        aria-expanded={hasLineRows ? linesExpanded : undefined}
-        onClick={onFailoverPill}
-      >
-        <GitBranch className="h-3 w-3" aria-hidden="true" />
-        {failover.text}
-      </button>
-    ) : null;
-
-    const alerts = [
-      renderAdminManagedBadge(rule),
-      renderSniRuleBadge(rule),
-      renderEgressBadge(rule),
-      renderKernelForwardWarningBadge(getRuleKernelForwardWarning(rule)),
-      rule?.tunnelId ? renderTunnelFxpIssueBadge(tunnelById.get(Number(rule.tunnelId))) : null,
-      renderSubscriptionBadge(rule, "card"),
-      !supported ? (
-        <Badge key="unsupported" variant="outline" className="h-5 border-destructive/30 px-1.5 text-[11px] text-destructive">
-          {protocolUnsupportedLabel(protocolKey)} 不支持
-        </Badge>
-      ) : null,
-    ].filter(Boolean);
-
-    return (
-      <Card
-        key={rule.id}
-        {...(sortable?.itemProps || {})}
-        className={cn(
-          "group/sortable fx-rule-card relative action-card transition-[box-shadow,opacity]",
-          !supported && "opacity-70",
-          sortable?.isDragging && "opacity-55 ring-1 ring-primary/35",
-          sortable?.isDropTarget && "ring-1 ring-primary/45",
-        )}
-        data-tone={tone}
-        data-size={compact ? "compact" : "standard"}
-        style={{ ...(sortable?.itemProps?.style || {}), "--fx-rule-tone": toneColor } as CSSProperties}
-        title={!supported ? unsupportedProtocolTitle : undefined}
-      >
-        <CardContent className="fx-rule-card-body action-card-content">
-          <div className="fx-rule-head">
-            <div className="fx-rule-title">
-              <div className="fx-rule-name">
-                {/* 状态点在名字左边（用户定的），图标格不要了（用户看了图说「图标不要」） */}
-                <span className="fx-rule-dot">
-                  {supported ? renderStatusDot(rule) : <StatusDot health="down" size="large" label={unsupportedProtocolTitle} />}
-                </span>
-                <span className="truncate" title={rule.name}>{rule.name}</span>
-                {renderSubscriptionMark(rule)}
-              </div>
-              <div className="fx-rule-sub" title={subtitle}>{subtitle}</div>
-            </div>
-            <div className="fx-rule-head-actions">
-              {renderRuleActions(rule, true)}
-              {renderRuleEnabledSwitch(rule)}
-              {/* 拖动手柄放最右边（iOS 列表编辑态的位置）：原来在「···」左边，正是拇指上下滑的地方，一碰就成了拖（用户 2026-11-03） */}
-              {sortable && (
-                <SortableDragHandle
-                  dragHandleProps={sortable.handleProps}
-                  visible={sortable.isDragging}
-                  busy={ruleReorderPending}
-                  className="bg-card/70"
-                />
-              )}
-            </div>
-          </div>
-
-          <div className="fx-rule-big">
-            <div
-              className="fx-rule-num"
-              title={total ? `累计入向 ${formatBytes(Number(total.bytesIn || 0))} / 出向 ${formatBytes(Number(total.bytesOut || 0))}` : "还没有流量"}
-            >
-              <b>{big.value}</b><small>{big.unit}</small>
-            </div>
-            <Sparkline
-              values={spark}
-              width={96}
-              height={28}
-              stroke={toneColor}
-              className="fx-rule-spark"
-              title={spark.some((value) => value > 0) ? "近 24 小时逐时流量走势" : undefined}
-            />
-            <div className="fx-rule-day">
-              <span>近 24H</span>
-              <span className="fx-rule-day-val" title="近 24 小时入向 · 出向">
-                {dailyBytes > 0 ? `↓ ${formatBytes(Number(daily?.bytesIn || 0))} · ↑ ${formatBytes(Number(daily?.bytesOut || 0))}` : "没有流量"}
-              </span>
-            </div>
-          </div>
-
-          {alerts.length > 0 ? (
-            <div className="fx-rule-alerts">{alerts}</div>
-          ) : null}
-          <RuleLimitSummary rule={rule} />
-          {(rule.protocolBlockReason || rule.resourceAccessAllowed === false) && (
-            <div className="line-clamp-2 text-[11px] leading-4 text-destructive">
-              {rule.protocolBlockReason || revokedResourceTitle}
-            </div>
-          )}
-          {rule.entryDomainError ? (
-            <div className="line-clamp-1 text-[11px] leading-4 text-[var(--fx-warn-text)]" title={String(rule.entryDomainError)}>
-              规则域名未同步：{String(rule.entryDomainError)}（面板会自动重试）
-            </div>
-          ) : null}
-          {(() => {
-            const stop = !rule.protocolBlockReason && rule.resourceAccessAllowed !== false ? resolveForwardRuleStopReason(rule) : null;
-            return stop?.autoResume ? (
-              <div className="line-clamp-2 text-[11px] leading-4 text-muted-foreground">{stop.detail}</div>
-            ) : null;
-          })()}
-          {entryBridgeNotes(rule).map((note) => (
-            <div key={note} className="line-clamp-2 text-[11px] leading-4 text-muted-foreground">{note}</div>
-          ))}
-
-          <div className="fx-rule-path" title={`${entryAddresses.map((entry) => entry.text).join(" / ")} → ${targetAddress}`}>
-            {/* 入口和目标都是点一下就复制（用户要的）；小复制图标常驻，不用悬停才显出来 */}
-            {primaryEntry && !entriesExpanded ? (
-              <span className="fx-rule-addr-group">
-                <button
-                  type="button"
-                  onClick={() => primaryEntry.copyable && copyEntryAddress(rule, primaryEntry.value)}
-                  disabled={!primaryEntry.copyable}
-                  className="fx-rule-addr"
-                  title={primaryEntry.copyable ? entryTitle : primaryEntry.text}
-                >
-                  <span className="truncate">{primaryEntry.text}</span>
-                  {primaryEntry.copyable ? <Copy className="fx-rule-addr-copy" aria-hidden="true" /> : null}
-                </button>
-                {extraEntries > 0 ? (
-                  <button
-                    type="button"
-                    className="fx-rule-addr-more"
-                    onClick={() => toggleEntryAddresses(Number(rule.id))}
-                    aria-expanded={false}
-                    title={`展开全部 ${entryAddresses.length} 个入口地址`}
-                  >
-                    +{extraEntries}
-                  </button>
-                ) : null}
-              </span>
-            ) : null}
-            {primaryEntry && entriesExpanded ? (
-              <span className="fx-rule-addr-list">
-                {entryAddresses.map((entry) => (
-                  <button
-                    key={`${entry.label}:${entry.value}`}
-                    type="button"
-                    onClick={() => entry.copyable && copyEntryAddress(rule, entry.value)}
-                    disabled={!entry.copyable}
-                    className="fx-rule-addr"
-                    title={entry.copyable ? `${entryTitle} (${entry.label})` : entry.text}
-                  >
-                    <span className="fx-rule-addr-label">{entry.label}</span>
-                    <span className="truncate">{entry.text}</span>
-                    {entry.copyable ? <Copy className="fx-rule-addr-copy" aria-hidden="true" /> : null}
-                  </button>
-                ))}
-                <button
-                  type="button"
-                  className="fx-rule-addr-more"
-                  onClick={() => toggleEntryAddresses(Number(rule.id))}
-                  aria-expanded={true}
-                  title="收起"
-                >
-                  收起
-                </button>
-              </span>
-            ) : null}
-            <span className="fx-rule-path-to">
-              <ArrowRight className="fx-rule-path-arrow" aria-hidden="true" />
-              <button
-                type="button"
-                onClick={() => copyTargetAddress(targetAddress)}
-                className="fx-rule-addr"
-                title={`复制目标地址: ${targetAddress}`}
-              >
-                <span className="truncate">{targetAddress}</span>
-                <Copy className="fx-rule-addr-copy" aria-hidden="true" />
-              </button>
-            </span>
-            <span className="fx-rule-path-end">
-              {failoverAside}
-              {tag}
-            </span>
-          </div>
-          {linesExpanded && failover && routeBoardByRule.get(Number(rule.id)) ? (
-            <RouteMiniChain
-              className="mt-1.5"
-              status={routeBoardByRule.get(Number(rule.id))}
-              policy={failover.policy}
-              onOpen={() => setPolicyRuleId(Number(rule.id))}
-            />
-          ) : null}
-        </CardContent>
-      </Card>
-    );
+  /*
+    规则卡本身是模块级的 RuleCard（React.memo，见文件前面那段说明）。这里只做两件事：
+      · ruleCardUi：引用永远不变的转发器，调到的是这一轮渲染里最新的那些函数（ruleCardUiRef 每轮重新指一次）。
+        卡片没重画时，它上面「编辑」「开关」这些按钮拿着的也还是最新的 openEdit / toggleRuleEnabled。
+      · renderRuleCard：按这条规则把 RuleCard 要的派生值算好（原始值），和 ruleCardPage 一起交给它。
+  */
+  ruleCardUiRef.current = {
+    isRuleSupported,
+    getRuleProtocolKey,
+    protocolUnsupportedLabel,
+    getRuleTransferDisplay,
+    getRuleHopNames,
+    getRuleResourceName,
+    getRuleOwnerName,
+    renderAdminManagedBadge,
+    renderSniRuleBadge,
+    renderEgressBadge,
+    renderKernelForwardWarningBadge: (rule) => renderKernelForwardWarningBadge(getRuleKernelForwardWarning(rule)),
+    renderTunnelFxpIssueBadge: (rule) => renderTunnelFxpIssueBadge(tunnelById.get(Number(rule.tunnelId))),
+    renderSubscriptionBadge: (rule) => renderSubscriptionBadge(rule, "card"),
+    renderSubscriptionMark,
+    renderRuleActions: (rule) => renderRuleActions(rule, true),
+    renderRuleEnabledSwitch,
+    copyEntryAddress: (rule, entryValue) => { void copyEntryAddress(rule, entryValue); },
+    copyTargetAddress: (text) => { void copyTargetAddress(text); },
+    toggleEntryAddresses,
+    toggleRuleLines,
+    openRulePolicy: (ruleId) => setPolicyRuleId(ruleId),
+    openEdit,
+    toggleRuleEnabled,
   };
+  const ruleCardIsAdmin = user?.role === "admin";
+  const ruleCardCompact = effectiveRuleCardSize === "compact";
+  const ruleCardResetPending = resetTrafficMutation.isPending;
+  const ruleCardPage = useMemo<RuleCardPage>(() => ({
+    compact: ruleCardCompact,
+    compactLayout,
+    isAdmin: ruleCardIsAdmin,
+    ruleReorderPending,
+    forwardGroupById,
+    ui: ruleCardUi,
+    helperInputs: [
+      hosts,
+      hostById,
+      tunnelById,
+      tlsInboundById,
+      userById,
+      subscriptionAllowed,
+      proxyNodeNameById,
+      driftedRuleIds,
+      isRuleSupported,
+      getRuleProtocolKey,
+      protocolUnsupportedLabel,
+      ruleCardResetPending,
+      resetTrafficTarget,
+    ],
+  }), [
+    compactLayout,
+    driftedRuleIds,
+    forwardGroupById,
+    getRuleProtocolKey,
+    hostById,
+    hosts,
+    isRuleSupported,
+    protocolUnsupportedLabel,
+    proxyNodeNameById,
+    resetTrafficTarget,
+    ruleCardCompact,
+    ruleCardIsAdmin,
+    ruleCardResetPending,
+    ruleCardUi,
+    ruleReorderPending,
+    subscriptionAllowed,
+    tlsInboundById,
+    tunnelById,
+    userById,
+  ]);
+
+  const ruleCardSources: RuleCardDerivedSources = {
+    visualDisplay: (ruleId) => ruleVisualStatuses.get(ruleId)?.display,
+    resolveVisual: resolveRuleVisualStatus,
+    hostById,
+    routeBoardByRule,
+    totalTrafficByRule,
+    dailyTrafficByRule,
+    sparkByRule,
+    stableProbeByRule,
+    expandedEntryRuleIds,
+    expandedLineRuleIds,
+    isProbeFresh: isLinkProbeFresh,
+    probeAgeText: formatProbeAge,
+  };
+  const renderRuleCard = (rule: RuleCardRule, sortable?: RuleSortableRenderState) => (
+    <RuleCard
+      key={rule.id}
+      rule={rule}
+      sortable={sortable}
+      page={ruleCardPage}
+      {...buildRuleCardDerivedProps(rule, ruleCardSources)}
+    />
+  );
 
   /*
     「新建规则」放在搜索栏那一行的最右边（用户要的位置）：搜索、筛选、新建都是「对这个列表

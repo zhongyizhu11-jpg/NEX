@@ -4,13 +4,11 @@
 @import "@fontsource-variable/public-sans";
 @import "../../shared/design-tokens.css";
 @import "./styles/workspace.css";
-@import "./styles/theme-aurora.css";
-@import "./styles/theme-gilt.css";
-@import "./styles/theme-rose.css";
-@import "./styles/theme-cinnabar.css";
-@import "./styles/theme-liquid-glass.css";
-@import "./styles/theme-indigo.css";
-@import "./styles/theme-pearl.css";
+/*
+  七套界面主题（theme-*.css）不再打进主样式表：选了哪套才下哪套（client/src/lib/uiThemeStyles.ts，
+  开机在 main.tsx 里等它下完再画第一帧）。这里只留下不管选哪套都要画的那几块（预览小屏、保存栏）。
+*/
+@import "./styles/ui-theme-shared.css";
 @import "./styles/compact.css";
 
 @custom-variant dark (&:is(.dark *));

@@ -1,6 +1,6 @@
 {
   "name": "forwardx",
-  "version": "2.3.512",
+  "version": "2.3.513",
   "description": "NEX 多主机端口转发与隧道管理面板",
   "license": "AGPL-3.0-only",
   "private": true,
@@ -57,7 +57,7 @@
     "qrcode": "^1.5.4",
     "superjson": "^2.2.2",
     "svg-captcha": "^1.4.0",
-    "zod": "^3.24.0"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@cap.js/widget": "^0.1.57",
@@ -111,12 +111,12 @@
     "eslint-plugin-react-hooks": "^7.1.1",
     "knip": "^6.44.1",
     "lucide-react": "^0.469.0",
-    "maplibre-gl": "^5.24.0",
+    "maplibre-gl": "^6.16.0",
     "motion": "^12.40.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-globe.gl": "^2.38.0",
-    "react-map-gl": "^8.1.1",
+    "react-map-gl": "^8.1.3",
     "recharts": "^2.13.0",
     "sonner": "^1.7.0",
     "tailwind-merge": "^2.6.0",
@@ -125,7 +125,7 @@
     "tw-animate-css": "^1.0.0",
     "typescript": "^5.7.0",
     "typescript-eslint": "^8.72.1",
-    "vite": "^6.0.0",
+    "vite": "^6.4.5",
     "vitepress": "^1.6.4",
     "wouter": "^3.3.0"
   }

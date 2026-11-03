@@ -152,7 +152,7 @@ export const pluginsRouter = router({
   saveSettings: adminProcedure
     .input(z.object({
       pluginId: z.string().trim().min(1).max(128),
-      values: z.record(z.unknown()).refine((values) => Object.keys(values).length <= 50, "插件设置项不能超过 50 个"),
+      values: z.record(z.string(), z.unknown()).refine((values) => Object.keys(values).length <= 50, "插件设置项不能超过 50 个"),
     }))
     .mutation(async ({ input }) => {
       return pluginRepo.savePluginSettings(input.pluginId, input.values);
@@ -162,7 +162,7 @@ export const pluginsRouter = router({
     .input(z.object({
       pluginId: z.string().trim().min(1).max(128),
       actionId: z.string().trim().min(1).max(128),
-      input: z.record(z.unknown()).optional(),
+      input: z.record(z.string(), z.unknown()).optional(),
       hostIds: z.array(z.number().int().positive()).max(512).optional(),
       resourceViewId: z.string().trim().min(1).max(128).optional(),
     }))
@@ -209,7 +209,7 @@ export const pluginsRouter = router({
       hostIds: z.array(z.number().int().positive()).max(512),
       assetPaths: z.array(z.string().trim().min(1).max(240)).max(96),
       operation: z.string().trim().max(80).optional(),
-      fieldValues: z.record(z.unknown()).optional(),
+      fieldValues: z.record(z.string(), z.unknown()).optional(),
       note: z.string().max(500).optional(),
     }))
     .mutation(async ({ input }) => {

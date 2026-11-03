@@ -29,12 +29,10 @@ import {
   proxyInboundTrafficProtocol,
   proxyInboundTrafficRuleId,
 } from "../shared/proxyInboundTraffic";
-import { effectiveGithubAccelerator } from "../shared/githubAccelerator";
 import { AGENT_PLUGIN_TASK_VERSION, buildMetaAgentSelfTestPayload, buildRuleAgentSelfTestPayload, hasAgentVersionChanged, isAgentUpgradeCompleted, isAgentVersionAtLeast, normalizeReportedFxpVersion, parseSelfTestMeta, tunnelSecretSeed } from "./agentRouteUtils";
 import { resolveAgentAdvertisedPanelUrl } from "./agentPanelUrl";
 import { getAgentMigrationSwitchTarget, getPanelMigrationAgentDirective } from "./panelMigrationAgentState";
 import * as hopRepo from "./repositories/tunnelRepository";
-import crypto from "crypto";
 import {
   getForwardProtocolSettings,
   isRuleProtocolEnabled,
@@ -54,10 +52,9 @@ import {
 import { mapWithConcurrency } from "./asyncPool";
 import { agentSupportsPortAccessLimits, portAccessLimitAction, portAccessLimitSpecs, readPortAccessLimitsEnabled, resolvePortAccessLimitAction } from "./portAccessLimits";
 import { ruleLimitRootId } from "./ruleLimits";
-import { clearTunnelRuntimeStatusForHost, getHostWireGuardPlane, getTunnelRuntimeGeneration, isTunnelRuntimeHostReady, replaceHostWireGuardPlanes } from "./tunnelRuntimeStatus";
+import { getHostWireGuardPlane, getTunnelRuntimeGeneration, isTunnelRuntimeHostReady } from "./tunnelRuntimeStatus";
 import { appendPanelLog } from "./_core/panelLogger";
 import { isIP } from "net";
-import { resolve4, resolve6 } from "dns/promises";
 import { hasQueuedLookingGlassAgentTasks, takeLookingGlassAgentTasks } from "./lookingGlassAgentTasks";
 import { hasQueuedDiagnosticsAgentTasks, hasRunningDiagnosticsAgentTasks, takeDiagnosticsAgentTasks } from "./diagnosticsAgentTasks";
 import { hasQueuedRuleConnectionsTasks, hasRunningRuleConnectionsTasks, takeRuleConnectionsTasks } from "./ruleConnectionsAgentTasks";
@@ -70,41 +67,32 @@ import { getAgentPluginInventory, updateAgentPluginInventory } from "./agentPlug
 import { getAgentHostFromRequest, getAgentHostIdentityFromRequest, getAgentPresenceHostFromRequest } from "./agentAuth";
 import { isHostLiveFocused, liveMetricsIntervalFor, liveSampleFromCompactMetrics, recordHostLiveSample } from "./hostLiveMetrics";
 import { normalizeAgentText, normalizeNetworkInterface } from "./agentInputValidation";
-import { pruneMapEntries, setBoundedMapValue } from "./boundedCache";
+import { setBoundedMapValue } from "./boundedCache";
 import { onHostDeleted, onRuleDeleted } from "./entityCleanup";
 import { ignoreErrorWith } from "./ignoredError";
-import { isValidTlsServerName } from "./nginxTlsInput";
 import { mergeAgentReportedAddress, observedAgentAddress } from "./agentAddressState";
 import { recordHostObservedAddress } from "./hostObservedAddress";
 import { noteAgentPrivateIpv4 } from "./agentPrivateAddress";
 import {
   gostTunnelTransportType,
-  planGostTunnelProbeListeners,
   shouldReconcileGostRuntime,
   shouldReconcileNginxRuntime,
   tunnelExitRuntimeForwardType,
   tunnelHopRuntimeForwardType,
   tunnelRuleRuntimeForwardType,
   tunnelRuntimeFamily,
-  isPassiveForwardXFirstHopMarker,
 } from "./tunnelRuntimePlan";
 import { effectiveTunnelProxyProtocolOptions, gostProxyProtocolMetadata, gostTunnelProxyProtocolPlan, resolveRuleProxyProtocolOptions } from "./gostProxyProtocol";
-import { planGostTunnelHopRelay, planGostTunnelRuleProtocol } from "./gostTunnelProtocol";
+import { planGostTunnelRuleProtocol } from "./gostTunnelProtocol";
 import {
   buildCountingChainCmds,
   buildCountingCleanupCmds,
   buildKernelForwardTransitionCleanupCmds,
   buildEntryBridgeConntrackFlushCmds,
   buildIptablesForwardCleanupCmds,
-  buildIptablesTransitionCleanupCmds,
   buildManagedPortCleanupCmds,
   buildNftCleanupCmds,
   buildKernelForwardCmds,
-  buildNftTransitionCleanupCmds,
-  IPTABLES_WAIT_ARG,
-  iptablesEnsureShell,
-  killByPatternCmd,
-  removeManagedServiceCmd,
   gostRuntimeApiConfig,
   gostRuntimeApiExecStart,
   restartManagedServiceIfConfigChangedCmd,
@@ -113,7 +101,6 @@ import {
   syncGostServiceIfConfigChangedCmd,
   startManagedServiceCmd,
   stopManagedServiceCmd,
-  writeManagedServiceCmd,
 } from "./agentActionCommands";
 import {
   REALM_CONFIG_DIR,
@@ -122,10 +109,6 @@ import {
   buildSocatServiceUnit,
   cleanEndpointHost,
   endpointHostPort,
-  isIpv6Literal,
-  legacyRealmConfigPathForPort,
-  legacyRealmServiceNameForPort,
-  legacySocatServiceNameForPort,
   realmConfigPathForPort,
   realmServiceNameForPort,
   realmTomlString,
@@ -134,7 +117,7 @@ import {
   socatSocketOptions,
   socatServiceNameForPort,
 } from "./forwardRuntimeConfigs";
-import { handleHostAddressChanged, hostIngressAddress, refreshAgentsAffectedByHostAddress } from "./hostAddressRuntime";
+import { handleHostAddressChanged, hostIngressAddress } from "./hostAddressRuntime";
 import { isHostStatusOnline, notifyHostOnlineIfNeeded } from "./hostStatusNotifier";
 import { buildPluginHostAssetSyncActions } from "./repositories/pluginRepository";
 import {
@@ -146,14 +129,12 @@ import {
 import {
   AGENT_FORWARDX_WIREGUARD_VERSION,
   buildForwardXWireGuardMimicFilters,
-  buildForwardXWireGuardPlans,
-  forwardXWireGuardMTU,
   isForwardXWireGuardV2,
   type ForwardXWireGuardNodePlan,
 } from "./forwardXWireGuard";
 import { agentActionIssueTracker, agentStatusOrderGuard, agentStatusOrderingKey } from "./agentStatusOrdering";
 import { forwardGroupProbeTopologyKey, tunnelProbeTopologyKey } from "./probeTopology";
-import { resolveLocalForwardXTransportVersion, resolveRuleTrafficPortForHost } from "./agentRuntimeRuleState";
+import { resolveRuleTrafficPortForHost } from "./agentRuntimeRuleState";
 import { isTunnelRelayAggregate, isTunnelRelayFailover, isTunnelRelayHotStandby, tunnelRelayCandidates, tunnelRelayUsesParallelRelays } from "@shared/tunnelRelay";
 import {
   buildParallelStreamLegs,
@@ -163,7 +144,7 @@ import {
 } from "@shared/tunnelParallelStreams";
 import { exitGroupCapacities, exitGroupWeights, normalizeExitGroupStrategy } from "@shared/exitStrategy";
 import { hostBandwidthHintMbps } from "@shared/linkWeights";
-import { forwardXExitStrategy, gostExitSelector, shouldUseFastTunnelFailover } from "./tunnelExitStrategy";
+import { forwardXExitStrategy } from "./tunnelExitStrategy";
 import {
   getMimicLifecycleRevisionSignature,
   latestConfigRevision,
@@ -174,10 +155,7 @@ import { approveMimicInterfaceRemovals } from "./mimicRemovalGuard";
 import { mimicRuntimeLifecycles } from "./mimicRuntimeLifecycle";
 import { buildTunnelRuleLatencyProbe } from "./ruleLatency";
 import { selectTunnelDialAddress, selectTunnelHopDialAddress } from "./tunnelAddressSelection";
-import { DnsRuntimeGenerationTracker } from "./dnsRuntimeGeneration";
-import { resolveTargetIpWithTimeout, selectResolvedTargetIp } from "./dnsTargetResolution";
 import {
-  AGENT_STATE_SECTION_NAMES,
   normalizeAgentLocalRuntimeState,
   normalizeAgentStateSignatures,
   normalizeMimicEnvironment,
@@ -185,10 +163,7 @@ import {
   stableStateSignature,
   type AgentLocalRuntimeRuleState,
   type AgentLocalRuntimeServiceState,
-  type AgentLocalRuntimeState,
   type AgentLocalRuntimeTunnelState,
-  type AgentStateSectionName,
-  type AgentStateSignatures,
 } from "./agentHeartbeatReport";
 import { stableActionSignatureHash, stableDesiredStateHash, withDesiredStateConfigHash } from "./agentDesiredStateHash";
 // 这几个以前直接从本文件导出，测试和别的模块还按老路径引用。
@@ -200,1037 +175,149 @@ import { getTrafficExcludedHostIds } from "./hostTrafficPolicy";
 import { groupRuleTrafficBlocked, planTunnelTrafficParticipation } from "./hostTrafficRuntimePlan";
 import { isEntryBridgeRuntimeRule, loadEntryBridgeRuntimeRules, markRuntimeRulesNotRunning, setRuntimeRuleRunning } from "./ruleEntryBridges";
 import { isEntryBridgeRuleId } from "../shared/ruleEntryBridge";
-import { runAgentRuntimeRecovery } from "./agentRuntimeRecovery";
 import { observePresenceCapableHostActivity, registerPresenceCapableHost } from "./agentFastLiveness";
 import { recordAuthenticatedAgentActivity } from "./agentActivity";
 import { recordHostRestartEvent } from "./ops/eventHooks";
 import { observeHostHealthCounters, observeHostResourceSample } from "./resourceAlertNotifier";
 import { buildForwardRateTiers, forwardRateTiersForAgent, mbpsToBytesPerSecond, strictestForwardRate } from "../shared/forwardRateLimit";
 import { buildAgentSniInbounds, isSniRuntimeRule, recordTlsInboundRuntimeStatus, sniRuleRuntimeView } from "./tlsInboundRuntime";
-import { buildGostEgressChain, evaluateRuleEgress, gostEgressChainName, loadEgressRuntimeContext, ruleEgressRuntime, ruleEgressRuntimeView, tunnelEgressDialHostIdsOf, type SsEgressRuntime } from "./ssEgress";
+import { evaluateRuleEgress, loadEgressRuntimeContext, ruleEgressRuntimeView, tunnelEgressDialHostIdsOf } from "./ssEgress";
 import { normalizeRuleEgressType, parseAgentCapabilities, ruleEgressStateBlocksDelivery } from "../shared/ssEgress";
 import { hostSupportsGostApiSync } from "../shared/gostRuntimeApi";
-
-// DNS 解析缓存：ruleId → 主目标上次解析到的 IPv4 地址。
-// 备用线路策略里的域名由 Agent 的 TCP 拨号和健康检查动态解析。
-const AGENT_DNS_RESOLVE_TTL_MS = 5 * 60 * 1000;
-const resolvedIpCache = new Map<number, { raw: string; ip: string }>();
-const resolvedIpCheckedAt = new Map<number, number>();
-
-/**
- * Agent 报上来的 DNS 变化只用于这台 Agent 自己这一次的下发，不写进全面板共享的解析缓存。
- *
- * 这个缓存按规则 id 存，同一条规则的其他入口 / 跳点 / 出口（包括负载均衡的其他出口）都会
- * 复用它。以前直接把 Agent 给的 IP 写进去、还顺手刷新时间：多出口隧道里租户自己的那台
- * 出口报一个假解析，所有出口都会把明文流量转去它指定的 IP。现在只让缓存过期，由面板
- * 自己重新解析。
- */
-function expireSharedResolvedIp(ruleId: number) {
-  resolvedIpCheckedAt.delete(ruleId);
-}
-const resolvedIpInflight = new Map<string, Promise<string>>();
-const tunnelRouteLogCache = new Map<string, string>();
-const nginxRuntimeLogCache = new Map<number, string>();
-const mimicRuntimeLogCache = new Map<number, { signature: string; loggedAt: number }>();
-const dnsRuntimeGenerations = new DnsRuntimeGenerationTracker();
-const agentActionBatchCache = new Map<number, { signature: string; issuedAt: number; seenAt: number }>();
-const agentDesiredStateSendCache = new Map<number, { signature: string; sentAt: number }>();
-const agentDesiredDispatchAuditHash = new Map<number, string>();
-const agentRuntimeSyncActionCache = new Map<string, { signature: string; sentAt: number }>();
-const agentPluginSyncActionCache = new Map<string, { signature: string; sentAt: number }>();
-const fxpUdpTargetSignatureCache = new Map<string, string>();
-const agentRuntimeDriftLogCache = new Map<string, number>();
-const fxpEndpointStatusCache = new Map<string, string>();
-const AGENT_HOST_CACHE_MAX = 10_000;
-const AGENT_DYNAMIC_CACHE_MAX = 20_000;
-const AGENT_CACHE_IDLE_TTL_MS = 24 * 60 * 60 * 1000;
-const AGENT_HEARTBEAT_SUMMARY_LOG_INTERVAL_MS = 5 * 60 * 1000;
-const agentHeartbeatSummaryLogCache = new Map<number, number>();
-// 孤儿端口迟滞：hostId -> (ruleId:port:protocol -> 连续判定为孤儿的心跳次数)。
-// 一个上报端口若其 ruleId 属于面板已知的本机启用规则，则该端口极可能只是运行态推导
-// 的瞬时缺口（如隧道出口端口某轮未算出），必须连续多轮都判孤儿才真正下发拆除，
-// 否则会与 apply 形成 apply→remove→apply 抖动死循环。
-const agentOrphanPortStreakCache = new Map<number, Map<string, number>>();
-const AGENT_ORPHAN_REMOVE_MIN_STREAK = 3;
-
-/**
- * Normalize boolean values read from the database before they participate in
- * runtime planning.  SQLite adapters normally return 0/1, while some MySQL
- * drivers (and legacy rows) expose those values as strings.  JavaScript's
- * truthiness would otherwise treat the string "0" as enabled and could make
- * the Agent create listeners for disabled tunnels or exit nodes.
- *
- * Unknown values are returned unchanged so this helper is safe to use on
- * optional columns whose historical default is represented by `undefined`.
- */
-export function normalizeAgentRuntimeBoolean(value: unknown): unknown {
-  if (value === true || value === false) return value;
-  if (value === 1 || value === "1") return true;
-  if (value === 0 || value === "0") return false;
-  if (typeof value === "string") {
-    const normalized = value.trim().toLowerCase();
-    if (normalized === "true") return true;
-    if (normalized === "false") return false;
-  }
-  return value;
-}
-
-function runtimeBool(value: unknown, fallback = false): boolean {
-  const normalized = normalizeAgentRuntimeBoolean(value);
-  if (normalized === undefined || normalized === null || normalized === "") return fallback;
-  if (normalized === true || normalized === false) return normalized;
-  // Preserve the caller's historical default for malformed/legacy values.
-  // In particular, fields that used to be checked with `value !== false`
-  // pass `fallback=true` so an absent/unknown optional flag remains enabled.
-  return fallback;
-}
-
-/** 主机删掉后清掉心跳里按这台主机记的缓存（见 server/entityCleanup.ts）。 */
-export function forgetAgentHeartbeatHost(hostId: number) {
-  const id = Number(hostId);
-  for (const cache of [
-    nginxRuntimeLogCache,
-    mimicRuntimeLogCache,
-    agentActionBatchCache,
-    agentDesiredStateSendCache,
-    agentDesiredDispatchAuditHash,
-    agentHeartbeatSummaryLogCache,
-    agentOrphanPortStreakCache,
-    agentLocalRuntimeStateCache,
-  ] as Map<number, unknown>[]) cache.delete(id);
-  const prefix = `${id}:`;
-  for (const cache of [agentRuntimeSyncActionCache, agentPluginSyncActionCache] as Map<string, unknown>[]) {
-    for (const key of Array.from(cache.keys())) if (key.startsWith(prefix)) cache.delete(key);
-  }
-}
-
-/** 规则删掉后清掉它的目标域名解析缓存。 */
-export function forgetAgentHeartbeatRule(ruleId: number) {
-  const id = Number(ruleId);
-  resolvedIpCache.delete(id);
-  resolvedIpCheckedAt.delete(id);
-}
+import {
+  AGENT_DYNAMIC_CACHE_MAX,
+  AGENT_HOST_CACHE_MAX,
+  AGENT_ORPHAN_REMOVE_MIN_STREAK,
+  agentDesiredDispatchAuditHash,
+  agentOrphanPortStreakCache,
+  dnsRuntimeGenerations,
+  forgetAgentHeartbeatHost,
+  forgetAgentHeartbeatRule,
+  fxpEndpointStatusCache,
+  fxpUdpTargetSignatureCache,
+  invalidateAgentDesiredStateCache,
+  pruneAgentHeartbeatCaches,
+  resolvedIpCache,
+} from "./agentHeartbeatState";
+import {
+  addDnsWatch,
+  type AgentDnsWatch,
+  buildDnsChangeCleanup,
+  buildForwardTargetCleanup,
+  expireSharedResolvedIp,
+  failoverProxyHandlesTargetDns,
+  resolveTargetIpCached,
+} from "./agentHeartbeatDns";
+import {
+  forwardXUDPTargetAddress,
+  getSingboxAccelerator,
+  isForwardXTunnelMode,
+  isGostTunnelMode,
+  legacyRealmCleanupCmds,
+  legacySocatCleanupCmds,
+  MIMIC_CONFIG_DIR,
+  mimicFilterEndpoint,
+  RUNTIME_BIN,
+  RUNTIME_CONFIG_PATH,
+  RUNTIME_SERVICE_NAME,
+  runtimeBool,
+  selectForwardChainListenerPort,
+  SHARED_GOST_FORWARD_TYPES,
+  SHARED_RUNTIME_NOFILE,
+  TUNNEL_RUNTIME_SERVICE_NAME,
+  udpOverTcpEnabled,
+} from "./agentHeartbeatRuntime";
+import {
+  isNginxTunnelMode,
+  NGINX_SERVICE_NAME,
+  nginxRuntimeVerifyCmd,
+  SHARED_NGINX_FORWARD_TYPES,
+} from "./agentHeartbeatNginx";
+import {
+  allocateProtocolGuardPorts,
+  cleanupGuardBackendCmds,
+  hasProtocolPolicy,
+  PROTOCOL_GUARD_LEGACY_SPAN,
+  PROTOCOL_GUARD_PORT_MAX,
+  PROTOCOL_GUARD_PORT_MIN,
+  protocolPolicyFromHost,
+  realmGuardConfigPathForPort,
+  selectProtocolGuardProxyProtocol,
+  selectProtocolGuardRateLimit,
+  shouldReconcileProtocolGuardBackend,
+  shouldUseProcessBackendGuard,
+  shouldUseProtocolGuard,
+} from "./agentHeartbeatProtocolGuard";
+import { buildAccessLimitCleanupCmds, buildAccessLimitCmds } from "./agentHeartbeatAccessLimits";
+import type { HeartbeatRequestContext, TunnelEgressHelper } from "./agentHeartbeatContext";
+import { createGostRuntimePlan } from "./agentHeartbeatGostPlan";
+import { createDisabledRuleRemovalBuilder } from "./agentHeartbeatRuleRemoval";
+import { createForwardXWireGuardPlanner } from "./agentHeartbeatWireGuardPlan";
+import { createForwardXHopSpecBuilder } from "./agentHeartbeatForwardXHop";
+import { createLocalRuntimeMatchers } from "./agentHeartbeatLocalMatch";
+import { createNginxRuntimeSyncPlanBuilder } from "./agentHeartbeatNginxPlan";
+import {
+  fxpHopKey,
+  gostTunnelNode,
+  holdTunnelEgressRule,
+  pointTunnelEgressRule,
+  tunnelExitRowsMatchNodes,
+} from "./agentHeartbeatTunnel";
+import {
+  actionMayAffectRuntimeFamily,
+  AGENT_PLUGIN_SYNC_RESEND_MS,
+  dropStalePortRemoveActions,
+  isTunnelApplyBlockingProbe,
+  resolveActionBatchIssuedAt,
+  ruleRuntimeIdentityKey,
+  ruleRuntimePortIdentityKey,
+  runtimePortProtocolKey,
+  runtimeSyncReconcileDue,
+  shouldSendDesiredState,
+  shouldSendPluginSyncAction,
+  shouldSendRuntimeSyncAction,
+} from "./agentHeartbeatDispatch";
+import {
+  agentPluginInventorySignature,
+  buildAgentStateResponseSections,
+  getOrphanPortStreaks,
+  isKernelForwardRule,
+  resolveAgentLocalRuntimeState,
+  settleStoppedRule,
+} from "./agentHeartbeatLocalState";
+import {
+  heartbeatIndicatesAgentReboot,
+  heartbeatTimestampMs,
+  resetAgentRuntimeStateForRecovery,
+} from "./agentHeartbeatRecovery";
+import {
+  compactMimicFiltersForLog,
+  logAgentHeartbeatSummary,
+  shouldLogAgentRuntimeDrift,
+  shouldLogMimicRuntimePlan,
+} from "./agentHeartbeatLogging";
+// 下面这些拆到了 agentHeartbeat*.ts，测试和别的模块还按老路径从本文件引用。
+export { forgetAgentHeartbeatHost, forgetAgentHeartbeatRule, pruneAgentHeartbeatCaches, invalidateAgentDesiredStateCache } from "./agentHeartbeatState";
+export { normalizeAgentRuntimeBoolean, buildGostRuleListener, forwardXUDPTargetAddress, selectForwardChainListenerPort } from "./agentHeartbeatRuntime";
+export { buildNginxStreamServerBlock, buildNginxStreamConfig, buildNginxTunnelTlsClientOptions, buildNginxTunnelServerCertificate, buildNginxCertificateCleanupCmd, buildNginxRuntimeRetirementPlan } from "./agentHeartbeatNginx";
+export { AGENT_RATE_LIMIT_GUARD_VERSION, AGENT_RATE_TIERS_VERSION, shouldReconcileProtocolGuardBackend, allocateProtocolGuardPorts, selectProtocolGuardRateLimit, selectProtocolGuardProxyProtocol } from "./agentHeartbeatProtocolGuard";
+export type { ProtocolGuardPortPlan } from "./agentHeartbeatProtocolGuard";
+export { isTunnelApplyBlockingProbe } from "./agentHeartbeatDispatch";
 
 onHostDeleted(forgetAgentHeartbeatHost);
 onRuleDeleted(forgetAgentHeartbeatRule);
 
-export function pruneAgentHeartbeatCaches(now = Date.now()) {
-  const stale = (timestamp: number) => !Number.isFinite(timestamp) || now - timestamp >= AGENT_CACHE_IDLE_TTL_MS;
-  for (const [ruleId, checkedAt] of resolvedIpCheckedAt) {
-    if (!stale(checkedAt)) continue;
-    resolvedIpCheckedAt.delete(ruleId);
-    resolvedIpCache.delete(ruleId);
-  }
-  pruneMapEntries(mimicRuntimeLogCache, (entry) => stale(entry.loggedAt));
-  pruneMapEntries(agentActionBatchCache, (entry) => stale(entry.seenAt));
-  agentActionIssueTracker.prune(now);
-  pruneMapEntries(agentDesiredStateSendCache, (entry) => stale(entry.sentAt));
-  pruneMapEntries(agentRuntimeSyncActionCache, (entry) => stale(entry.sentAt));
-  pruneMapEntries(agentPluginSyncActionCache, (entry) => stale(entry.sentAt));
-  pruneMapEntries(agentRuntimeDriftLogCache, (loggedAt) => stale(loggedAt));
-  pruneMapEntries(agentHeartbeatSummaryLogCache, (loggedAt) => stale(loggedAt));
-  pruneMapEntries(agentLocalRuntimeStateCache, (entry) => stale(entry.updatedAt));
-}
-
 const agentCacheCleanupTimer = setInterval(() => pruneAgentHeartbeatCaches(), 10 * 60 * 1000);
 agentCacheCleanupTimer.unref?.();
-const RUNTIME_BIN = "/usr/local/bin/forwardx-runtime";
-const RUNTIME_SERVICE_NAME = "forwardx-runtime";
-const TUNNEL_RUNTIME_SERVICE_NAME = "forwardx-tunnel-runtime";
-const RUNTIME_CONFIG_PATH = "/etc/forwardx/runtime/gost.json";
-const TUNNEL_RUNTIME_CONFIG_PATH = "/etc/forwardx/runtime/tunnel-gost.json";
-const RUNTIME_CONFIG_DIR = "/etc/forwardx/runtime";
-const NGINX_BIN = "/usr/local/bin/forwardx-nginx";
-const NGINX_SERVICE_NAME = "forwardx-nginx";
-const NGINX_CONFIG_DIR = "/etc/forwardx/nginx";
-const NGINX_CONFIG_PATH = "/etc/forwardx/nginx/nginx.conf";
-const NGINX_CERT_DIR = "/etc/forwardx/nginx/certs";
-const NGINX_ERROR_LOG_PATH = "/var/log/forwardx-agent/forwardx-nginx-error.log";
-const NGINX_SESSION_LOG_PATH = "/var/log/forwardx-agent/forwardx-nginx-session.log";
-const LEGACY_GOST_SERVICE_NAME = "forwardx-gost";
-const LEGACY_TUNNEL_SERVICE_NAME = "forwardx-tunnels";
-const MIMIC_CONFIG_DIR = "/etc/mimic";
 const AGENT_FIREWALL_COUNTER_REFRESH_VERSION = "2.2.178";
 const AGENT_PROTOCOL_GUARD_BACKEND_VERSION = "2.2.127";
-export const AGENT_RATE_LIMIT_GUARD_VERSION = "2.2.187";
-/** 多级限速、上下行分开、突发（guardRule.rateLimits）从这一版 Agent 起。 */
-export const AGENT_RATE_TIERS_VERSION = "2.2.230";
-const RATE_LIMIT_GUARD_FORWARD_TYPES = new Set(["iptables", "nftables", "realm", "socat", "nginx"]);
 const AGENT_DESIRED_STATE_VERSION = "2.2.134";
 const AGENT_STATE_SIGNATURE_VERSION = "2.2.137";
-const AGENT_ACTION_BATCH_REUSE_MS = 45 * 1000;
-const AGENT_DESIRED_STATE_ACTIVE_RESEND_MS = 60 * 1000;
 const AGENT_RUNTIME_SYNC_REPAIR_RESEND_MS = 60 * 1000;
 const AGENT_GOST_RUNTIME_RECONCILE_MS = 5 * 60 * 1000;
 const AGENT_NGINX_RUNTIME_RECONCILE_MS = 5 * 60 * 1000;
 const AGENT_MIMIC_RUNTIME_RECONCILE_MS = 5 * 60 * 1000;
-const AGENT_REBOOT_DETECTION_GRACE_MS = 1000;
-const AGENT_PLUGIN_SYNC_RESEND_MS = 5 * 60 * 1000;
-const MIMIC_RUNTIME_PLAN_LOG_INTERVAL_MS = 5 * 60 * 1000;
-const AGENT_RUNTIME_DRIFT_LOG_INTERVAL_MS = 5 * 60 * 1000;
-const SHARED_GOST_FORWARD_TYPES = new Set([
-  "gost",
-  "gost-tunnel",
-  "gost-tunnel-exit",
-  "gost-tunnel-hop",
-]);
-const SHARED_NGINX_FORWARD_TYPES = new Set(["nginx", "nginx-tunnel", "nginx-tunnel-exit"]);
-const GOST_TUNNEL_MODES = new Set(["tls", "wss", "tcp", "mtls", "mwss", "mtcp"]);
 const VERBOSE_AGENT_ACTIONS = /^(1|true|yes|on)$/i.test(String(process.env.FORWARDX_VERBOSE_AGENT_ACTIONS || ""));
-/** 多条规则共用一个进程的运行时（gost、隧道 gost）的句柄上限，和 Agent 自己的一致。 */
-const SHARED_RUNTIME_NOFILE = 1048576;
-const GOST_UDP_LISTENER_METADATA = {
-  keepalive: true,
-  ttl: "30s",
-  // GOST v3.2.6 GetInt ignores JSON numbers decoded as float64, so integer metadata stays string-encoded.
-  // 队列里每个包占一块 readBufferSize 大小的缓冲，所以缓冲保持 8K（公网 UDP 包
-  // 远小于此），只把每个客户端的队列从 64 包放到 256 包：64 包在突发（QUIC 握手、
-  // 游戏开局）时直接丢包，256 包最坏也只占 2MB。
-  readBufferSize: "8192",
-  readQueueSize: "256",
-  backlog: "128",
-} as const;
-
-export function buildGostRuleListener(protocol: "tcp" | "udp") {
-  return protocol === "udp"
-    ? { type: protocol, metadata: { ...GOST_UDP_LISTENER_METADATA } }
-    : { type: protocol };
-}
-
-export function forwardXUDPTargetAddress(rule: any): string {
-  return String(rule?.targetIp || rule?._originalTargetIp || "").trim();
-}
-
-type NginxStreamServerOptions = {
-  name: string;
-  listenPort: number;
-  proto: "tcp" | "udp";
-  upstream: string;
-  loopbackOnly?: boolean;
-  sslServer?: {
-    certPath: string;
-    keyPath: string;
-  } | null;
-  sslClient?: {
-    serverName?: string | null;
-  } | null;
-};
-
-const nginxConfigQuote = (value: unknown) => String(value || "").replace(/\\/g, "\\\\").replace(/"/g, "\\\"");
-
-const nginxListenLine = (port: number, proto: "tcp" | "udp", loopbackOnly = false) => {
-  const parts = [`listen ${loopbackOnly ? "127.0.0.1" : "[::]"}:${port}`];
-  if (proto === "udp") parts.push("udp", "reuseport");
-  else parts.push("so_keepalive=60s:15s:4");
-  if (!loopbackOnly) parts.push("ipv6only=off");
-  return `${parts.join(" ")};`;
-};
-
-export function buildNginxStreamServerBlock(options: NginxStreamServerOptions) {
-  const lines = [
-    "  server {",
-    `    # ${nginxConfigQuote(options.name)}`,
-    options.sslServer && options.proto === "tcp"
-      ? `    listen ${options.loopbackOnly ? "127.0.0.1" : "[::]"}:${options.listenPort} ssl so_keepalive=60s:15s:4${options.loopbackOnly ? "" : " ipv6only=off"};`
-      : `    ${nginxListenLine(options.listenPort, options.proto, options.loopbackOnly)}`,
-    "    proxy_connect_timeout 10s;",
-    options.proto === "udp" ? "    proxy_timeout 2m;" : "    proxy_timeout 24h;",
-  ];
-  if (options.proto === "tcp") {
-    lines.push("    proxy_socket_keepalive on;");
-  }
-  if (options.sslServer && options.proto === "tcp") {
-    lines.push(
-      `    ssl_certificate ${options.sslServer.certPath};`,
-      `    ssl_certificate_key ${options.sslServer.keyPath};`,
-      "    ssl_protocols TLSv1.2 TLSv1.3;",
-    );
-  }
-  if (options.sslClient && options.proto === "tcp") {
-    lines.push(
-      "    proxy_ssl on;",
-      // Existing certificates may be self-signed or lack a matching SAN. Keep encryption compatible
-      // until tunnels have an explicit CA trust model that can safely enable identity verification.
-      "    proxy_ssl_verify off;",
-    );
-    const serverName = String(options.sslClient.serverName || "").trim();
-    // nginxConfigQuote 只转义不加引号，挡不住 ; { } $ 与换行；旧数据里这样的域名直接不写，
-    // 免得一条隧道改写或弄坏整台主机的 nginx 配置。合法主机名原样写出，配置文本不变。
-    if (serverName && isValidTlsServerName(serverName)) {
-      lines.push(
-        "    proxy_ssl_server_name on;",
-        `    proxy_ssl_name ${nginxConfigQuote(serverName)};`,
-      );
-    }
-  }
-  lines.push(`    proxy_pass ${options.upstream};`, "  }");
-  return lines.join("\n");
-}
-
-export function buildNginxStreamConfig(options: {
-  upstreams: string[];
-  servers: string[];
-  certFingerprints?: string[];
-}) {
-  const hasServers = options.servers.length > 0;
-  return [
-    `include ${NGINX_CONFIG_DIR}/modules.conf;`,
-    "worker_processes auto;",
-    // 每个 worker 的句柄上限跟着 worker_connections 走：一条转发占两个句柄，
-    // 不抬的话 65535 个连接位实际只用得到系统默认的那一点。
-    "worker_rlimit_nofile 1048576;",
-    `error_log ${NGINX_ERROR_LOG_PATH} notice;`,
-    "pid /run/forwardx-nginx.pid;",
-    ...(options.certFingerprints || []).sort(),
-    "",
-    "events {",
-    "  worker_connections 65535;",
-    "}",
-    "",
-    ...(hasServers ? [
-      "stream {",
-      "  log_format forwardx_session '$time_iso8601 status=$status protocol=$protocol listen=$server_port session_time=$session_time bytes_received=$bytes_received bytes_sent=$bytes_sent upstream=$upstream_addr upstream_connect_time=$upstream_connect_time';",
-      `  access_log ${NGINX_SESSION_LOG_PATH} forwardx_session buffer=32k flush=5s;`,
-      "  tcp_nodelay on;",
-      // 默认 16k：每搬 16k 就一次读写，高带宽下系统调用翻几倍。64k 和其他转发方式一致。
-      "  proxy_buffer_size 64k;",
-      "  resolver 1.1.1.1 8.8.8.8 valid=60s ipv6=on;",
-      "",
-      ...options.upstreams.flatMap((block) => [block, ""]),
-      ...options.servers.flatMap((block) => [block, ""]),
-      "}",
-      "",
-    ] : []),
-  ].join("\n");
-}
-
-export function buildNginxTunnelTlsClientOptions(tunnel: any) {
-  const id = Number(tunnel?.id || 0);
-  const certPem = String(tunnel?.certPem || "").trim();
-  const keyPem = String(tunnel?.certKeyPem || "").trim();
-  if (!id || !certPem || !keyPem) return null;
-  return {
-    serverName: String(tunnel?.certDomain || "").trim() || null,
-  };
-}
-
-export function buildNginxTunnelServerCertificate(tunnel: any) {
-  const clientOptions = buildNginxTunnelTlsClientOptions(tunnel);
-  if (!clientOptions) return null;
-  const id = Number(tunnel.id);
-  const certPem = String(tunnel.certPem).trim();
-  const keyPem = String(tunnel.certKeyPem).trim();
-  const normalizedCertPem = certPem.endsWith("\n") ? certPem : `${certPem}\n`;
-  const normalizedKeyPem = keyPem.endsWith("\n") ? keyPem : `${keyPem}\n`;
-  const fingerprint = crypto.createHash("sha256").update(`${normalizedCertPem}\n${normalizedKeyPem}`).digest("hex");
-  const fileKey = fingerprint.slice(0, 16);
-  return {
-    certPath: `${NGINX_CERT_DIR}/tunnel-${id}-${fileKey}.crt`,
-    keyPath: `${NGINX_CERT_DIR}/tunnel-${id}-${fileKey}.key`,
-    certPem: normalizedCertPem,
-    keyPem: normalizedKeyPem,
-    fingerprint,
-    serverName: clientOptions.serverName,
-  };
-}
-
-export function buildNginxCertificateCleanupCmd(activePaths: string[]) {
-  const certDir = shQuote(NGINX_CERT_DIR);
-  const liveConfig = shQuote(NGINX_CONFIG_PATH);
-  const keepPatterns = Array.from(new Set(activePaths.filter(Boolean))).sort().map(shQuote).join("|");
-  const cleanup = keepPatterns
-    ? `case "$base_cert_file" in ${keepPatterns}) ;; *) rm -f -- "$cert_file" ;; esac`
-    : 'rm -f -- "$cert_file"';
-  return `for cert_file in ${certDir}/tunnel-*.crt ${certDir}/tunnel-*.key ${certDir}/tunnel-*.crt.forwardx-last-good ${certDir}/tunnel-*.key.forwardx-last-good; do [ -e "$cert_file" ] || continue; base_cert_file=\${cert_file%.forwardx-last-good}; if grep -Fq -- "$base_cert_file" ${liveConfig} 2>/dev/null; then continue; fi; ${cleanup}; done; rm -f ${certDir}/.forwardx-config-* ${certDir}/.forwardx-restore-* 2>/dev/null || true`;
-}
-
-type AgentDnsWatch = {
-  host: string;
-  scope: string;
-  refId?: number;
-};
-const agentLocalRuntimeStateCache = new Map<number, { signature: string; state: AgentLocalRuntimeState; updatedAt: number }>();
-
-
-export function selectForwardChainListenerPort(
-  childRules: any[],
-  memberIdValue: unknown,
-  hostIdValue: unknown,
-  fallbackPortValue: unknown,
-) {
-  const memberId = Number(memberIdValue || 0);
-  const hostId = Number(hostIdValue || 0);
-  const fallbackPort = Number(fallbackPortValue || 0);
-  const child = childRules.find((candidate: any) => {
-    const pendingDelete = candidate?.pendingDelete === true
-      || candidate?.pendingDelete === 1
-      || candidate?.pendingDelete === "1"
-      || String(candidate?.pendingDelete || "").toLowerCase() === "true";
-    return !pendingDelete
-      && Number(candidate?.forwardGroupMemberId || 0) === memberId
-      && Number(candidate?.hostId || 0) === hostId;
-  });
-  const port = Number(child?.sourcePort || 0);
-  return port > 0 ? port : fallbackPort;
-}
-
-export type ProtocolGuardPortPlan = {
-  guardListenPort: number;
-  failoverProxyPort: number;
-  guardBackendPort: number;
-};
-
-const PROTOCOL_GUARD_PORT_MIN = 20000;
-const PROTOCOL_GUARD_PORT_MAX = 65535;
-const PROTOCOL_GUARD_LEGACY_SPAN = 20000;
-const PROTOCOL_GUARD_PROCESS_BACKENDS = new Set(["gost", "realm", "socat", "nginx"]);
-
-export function shouldReconcileProtocolGuardBackend(useRuleGuard: boolean, forwardType: unknown) {
-  return useRuleGuard && PROTOCOL_GUARD_PROCESS_BACKENDS.has(String(forwardType || ""));
-}
-
-export function allocateProtocolGuardPorts(
-  rules: Array<{ id?: unknown; sourcePort?: unknown; targetPort?: unknown }>,
-  reservedPorts: Iterable<unknown> = [],
-): Map<number, ProtocolGuardPortPlan> {
-  const used = new Set<number>();
-  const reserve = (value: unknown) => {
-    const port = Number(value || 0);
-    if (Number.isInteger(port) && port > 0 && port <= PROTOCOL_GUARD_PORT_MAX) used.add(port);
-  };
-  for (const port of reservedPorts) reserve(port);
-  for (const rule of rules) {
-    reserve(rule?.sourcePort);
-    // A target may be a service on this Agent. Reserving every target port is
-    // conservative, but prevents a loopback Guard backend from taking over a
-    // real local service before the target address has been resolved.
-    reserve(rule?.targetPort);
-  }
-
-  const ruleIds = Array.from(new Set(rules
-    .map((rule) => Number(rule?.id || 0))
-    .filter((id) => Number.isInteger(id) && id > 0)))
-    .sort((left, right) => left - right);
-  const poolSize = PROTOCOL_GUARD_PORT_MAX - PROTOCOL_GUARD_PORT_MIN + 1;
-  const allocate = (preferredPort: number) => {
-    const preferredOffset = preferredPort - PROTOCOL_GUARD_PORT_MIN;
-    for (let offset = 0; offset < poolSize; offset += 1) {
-      const port = PROTOCOL_GUARD_PORT_MIN + ((preferredOffset + offset) % poolSize);
-      if (used.has(port)) continue;
-      used.add(port);
-      return port;
-    }
-    throw new Error("No free protocol guard internal port is available");
-  };
-
-  const plans = new Map<number, ProtocolGuardPortPlan>();
-  for (const ruleId of ruleIds) {
-    const legacyOffset = ruleId % PROTOCOL_GUARD_LEGACY_SPAN;
-    plans.set(ruleId, {
-      guardListenPort: allocate(39000 + legacyOffset),
-      failoverProxyPort: allocate(41000 + legacyOffset),
-      guardBackendPort: allocate(43000 + legacyOffset),
-    });
-  }
-  return plans;
-}
-
-function agentPluginInventorySignature(inventory: ReturnType<typeof getAgentPluginInventory>) {
-  if (!inventory) return "";
-  return stableStateSignature({
-    versions: Object.fromEntries(Array.from(inventory.versions.entries()).sort(([left], [right]) => left.localeCompare(right))),
-    syncSignatures: Object.fromEntries(Array.from(inventory.syncSignatures.entries()).sort(([left], [right]) => left.localeCompare(right))),
-  });
-}
-
-
-function resolveAgentLocalRuntimeState(hostId: number, signature: string, reported: AgentLocalRuntimeState | null) {
-  const id = Number(hostId);
-  if (!Number.isFinite(id) || id <= 0) return { state: null as AgentLocalRuntimeState | null, requestLocalState: false };
-  if (reported) {
-    const nextSignature = signature || stableStateSignature(reported);
-    setBoundedMapValue(agentLocalRuntimeStateCache, id, { signature: nextSignature, state: reported, updatedAt: Date.now() }, AGENT_HOST_CACHE_MAX);
-    replaceHostWireGuardPlanes(id, [
-      ...(reported.wireGuardPlanes || []),
-      ...reported.tunnels
-        .filter((tunnel) => tunnel.transportVersion === "v2" && tunnel.wireGuardPlane)
-        .map((tunnel) => ({ tunnelId: tunnel.tunnelId, plane: tunnel.wireGuardPlane! })),
-    ]);
-    return { state: reported, requestLocalState: false };
-  }
-  if (!signature) return { state: null as AgentLocalRuntimeState | null, requestLocalState: false };
-  const cached = agentLocalRuntimeStateCache.get(id);
-  if (cached && cached.signature === signature) {
-    return { state: cached.state, requestLocalState: false };
-  }
-  return { state: null as AgentLocalRuntimeState | null, requestLocalState: true };
-}
-
-function buildAgentStateResponseSections(sections: Record<AgentStateSectionName, any[]>, clientSignatures: AgentStateSignatures) {
-  const signatures: Record<AgentStateSectionName, string> = {} as Record<AgentStateSectionName, string>;
-  const payload: Partial<Record<AgentStateSectionName, any[]>> = {};
-  for (const name of AGENT_STATE_SECTION_NAMES) {
-    const signature = stableStateSignature(sections[name] || []);
-    signatures[name] = signature;
-    if (clientSignatures[name] !== signature) {
-      payload[name] = sections[name] || [];
-    }
-  }
-  return { payload, signatures };
-}
-
-export function invalidateAgentDesiredStateCache(
-  hostId: number,
-  options: { preserveLocalRuntimeState?: boolean } = {},
-) {
-  const id = Number(hostId);
-  if (!Number.isFinite(id) || id <= 0) return;
-  agentStableHeartbeatPlanCache.invalidate(id);
-  agentActionBatchCache.delete(id);
-  agentActionIssueTracker.forgetPrefix(`agent-status:${id}:`);
-  agentDesiredStateSendCache.delete(id);
-  if (!options.preserveLocalRuntimeState) agentLocalRuntimeStateCache.delete(id);
-  for (const key of Array.from(agentRuntimeSyncActionCache.keys())) {
-    if (key.startsWith(`${id}:`)) agentRuntimeSyncActionCache.delete(key);
-  }
-  for (const key of Array.from(agentPluginSyncActionCache.keys())) {
-    if (key.startsWith(`${id}:`)) agentPluginSyncActionCache.delete(key);
-  }
-  agentOrphanPortStreakCache.delete(id);
-}
-function heartbeatTimestampMs(value: unknown) {
-  if (!value) return 0;
-  const timestamp = new Date(value as any).getTime();
-  return Number.isFinite(timestamp) ? timestamp : 0;
-}
-
-function heartbeatUptimeSeconds(value: unknown) {
-  const seconds = Number(value);
-  return Number.isFinite(seconds) && seconds > 0 ? seconds : 0;
-}
-
-function heartbeatIndicatesAgentReboot(previousHost: any, uptime: unknown, bootId?: unknown, nowMs = Date.now()) {
-  const nextBootId = normalizeAgentText(bootId, 128);
-  const previousBootId = normalizeAgentText(previousHost?.agentBootId, 128);
-  if (nextBootId && previousBootId) return nextBootId !== previousBootId;
-  const lastHeartbeatMs = heartbeatTimestampMs(previousHost?.lastHeartbeat);
-  const uptimeSeconds = heartbeatUptimeSeconds(uptime);
-  if (lastHeartbeatMs <= 0 || uptimeSeconds <= 0) return false;
-  const bootedAtMs = nowMs - uptimeSeconds * 1000;
-  return bootedAtMs > lastHeartbeatMs + AGENT_REBOOT_DETECTION_GRACE_MS;
-}
-
-async function resetAgentRuntimeStateForRecovery(
-  hostId: number,
-  reason: string,
-  options: { preserveReportedRuntime?: boolean } = {},
-) {
-  const id = Number(hostId);
-  if (!Number.isFinite(id) || id <= 0) return;
-  await runAgentRuntimeRecovery(id, options, async () => {
-    // A reboot/process restart invalidates the panel's in-memory per-host tunnel
-    // readiness even when the Agent supplied a local snapshot. The snapshot is
-    // used to avoid needless teardown, but it must not keep a stale multi-hop
-    // host marked ready and suppress the recovery action for that hop.
-    clearTunnelRuntimeStatusForHost(id);
-    if (!options.preserveReportedRuntime) {
-      await db.resetAgentRuntimeStateForHost(id);
-    }
-    // resolveAgentLocalRuntimeState() runs before restart detection. Preserve the
-    // snapshot accepted in this heartbeat or the next request would need to
-    // upload it again before reconciliation can continue.
-    invalidateAgentDesiredStateCache(id, { preserveLocalRuntimeState: true });
-    await refreshAgentsAffectedByHostAddress(id, reason);
-    appendPanelLog(
-      "info",
-      `[AgentRecovery] host=${id} reason=${reason} runtime state ${options.preserveReportedRuntime ? "reconciling from local snapshot" : "marked for reapply"}`,
-    );
-  });
-}
-
-
-/**
- * 取得某主机的"孤儿端口迟滞计数"Map（port -> 连续判定为孤儿的心跳次数），不存在则创建。
- * 迟滞语义：一个上报端口的 ruleId 若属于面板已知的本机启用规则（稳定身份），
- * 即便本轮运行态推导没把它算进 expectedRulePorts，也很可能只是瞬时缺口，
- * 必须连续 AGENT_ORPHAN_REMOVE_MIN_STREAK 轮都判孤儿才真正拆除；一旦重新匹配上规则即清零。
- */
-function getOrphanPortStreaks(hostId: number): Map<string, number> {
-  const id = Number(hostId);
-  let streaks = agentOrphanPortStreakCache.get(id);
-  if (!streaks) {
-    streaks = new Map<string, number>();
-    setBoundedMapValue(agentOrphanPortStreakCache, id, streaks, AGENT_HOST_CACHE_MAX);
-  }
-  return streaks;
-}
-
-function logAgentHeartbeatSummary(input: {
-  hostId: number;
-  hostName?: string;
-  expectedRules: number;
-  reportedRules: number;
-  reportedServices: number;
-  actions: number;
-  pendingApply: number;
-  pendingRemove: number;
-  recoveryPending: boolean;
-  requestLocalState: boolean;
-  coalesced?: boolean;
-  stable: boolean;
-  runtimeDrift?: number;
-  metricsWatching?: boolean;
-  nextInterval?: number;
-  interactiveTasks?: number;
-}) {
-  const hostId = Number(input.hostId);
-  if (!Number.isFinite(hostId) || hostId <= 0) return;
-  const now = Date.now();
-  const last = agentHeartbeatSummaryLogCache.get(hostId) || 0;
-  if (last > 0 && now - last < AGENT_HEARTBEAT_SUMMARY_LOG_INTERVAL_MS) return;
-  setBoundedMapValue(agentHeartbeatSummaryLogCache, hostId, now, AGENT_HOST_CACHE_MAX);
-  const name = String(input.hostName || "-")
-    .replace(/[\u0000-\u001f\u007f]+/g, " ")
-    .replace(/\s{2,}/g, " ")
-    .trim()
-    .slice(0, 96) || "-";
-  const safeCount = (value: unknown) => {
-    const count = Number(value);
-    return Number.isFinite(count) && count >= 0 ? Math.floor(count) : 0;
-  };
-  const pending = safeCount(input.pendingApply) + safeCount(input.pendingRemove);
-  const status = input.coalesced
-    ? "reconciliation-coalesced"
-    : input.requestLocalState
-      ? "local-state-requested"
-      : input.recoveryPending
-        ? "recovery-pending"
-        : input.stable
-          ? "stable"
-          : pending > 0
-            ? "actions-pending"
-            : "reconciling";
-  appendPanelLog(
-    "info",
-    `[AgentHeartbeat] summary host=${hostId} name=${name} status=${status}`
-      + ` expectedRules=${safeCount(input.expectedRules)}`
-      + ` reportedRules=${safeCount(input.reportedRules)}`
-      + ` reportedServices=${safeCount(input.reportedServices)}`
-      + ` actions=${safeCount(input.actions)}`
-      + ` pendingApply=${safeCount(input.pendingApply)}`
-      + ` pendingRemove=${safeCount(input.pendingRemove)}`
-      + ` drift=${safeCount(input.runtimeDrift)}`
-      + ` metricsWatching=${input.metricsWatching === true}`
-      + ` interactiveTasks=${safeCount(input.interactiveTasks)}`
-      + (Number.isFinite(Number(input.nextInterval)) ? ` nextInterval=${safeCount(input.nextInterval)}` : "")
-      + ` recoveryPending=${input.recoveryPending}`
-      + ` requestLocalState=${input.requestLocalState}`,
-  );
-}
-
-function resolveActionBatchIssuedAt(hostId: number, actions: any[], fallbackIssuedAt: number) {
-  if (actions.length === 0) {
-    agentActionBatchCache.delete(hostId);
-    return fallbackIssuedAt;
-  }
-  const now = Date.now();
-  const signature = stableActionSignatureHash(actions);
-  const cached = agentActionBatchCache.get(hostId);
-  if (cached && cached.signature === signature && now - cached.seenAt < AGENT_ACTION_BATCH_REUSE_MS) {
-    setBoundedMapValue(agentActionBatchCache, hostId, { ...cached, seenAt: now }, AGENT_HOST_CACHE_MAX);
-    return cached.issuedAt;
-  }
-  setBoundedMapValue(agentActionBatchCache, hostId, { signature, issuedAt: fallbackIssuedAt, seenAt: now }, AGENT_HOST_CACHE_MAX);
-  return fallbackIssuedAt;
-}
-
-function compactMimicFiltersForLog(filters: string[]) {
-  const items = filters.map((item) => String(item || "").trim()).filter(Boolean).sort();
-  if (items.length <= 6) return items.join(",");
-  return `${items.slice(0, 6).join(",")},+${items.length - 6}`;
-}
-
-function shouldLogMimicRuntimePlan(hostId: number, signature: string) {
-  const id = Number(hostId);
-  if (!Number.isFinite(id) || id <= 0 || !signature) return false;
-  const now = Date.now();
-  const cached = mimicRuntimeLogCache.get(id);
-  if (!cached || cached.signature !== signature || now - cached.loggedAt >= MIMIC_RUNTIME_PLAN_LOG_INTERVAL_MS) {
-    setBoundedMapValue(mimicRuntimeLogCache, id, { signature, loggedAt: now }, AGENT_HOST_CACHE_MAX);
-    return true;
-  }
-  return false;
-}
-
-function shouldLogAgentRuntimeDrift(hostId: number, ruleId: number) {
-  const key = `${hostId}:${ruleId}`;
-  const now = Date.now();
-  const last = agentRuntimeDriftLogCache.get(key) || 0;
-  if (now - last < AGENT_RUNTIME_DRIFT_LOG_INTERVAL_MS) return false;
-  setBoundedMapValue(agentRuntimeDriftLogCache, key, now, 5_000);
-  if (agentRuntimeDriftLogCache.size > 5000) {
-    for (const [cachedKey, loggedAt] of agentRuntimeDriftLogCache) {
-      if (now - loggedAt > AGENT_RUNTIME_DRIFT_LOG_INTERVAL_MS * 2) agentRuntimeDriftLogCache.delete(cachedKey);
-    }
-  }
-  return true;
-}
-
-/**
- * 这条动作在不在「隧道正在下发」—— 是的话，这次心跳先不叫 Agent 立即重测（forceTcping），
- * 免得测到一半搭好的隧道报超时。
- *
- * V2 隧道的 WireGuard 运行时动作（statusType = runtime）不算：它没有可核对的本地监听，
- * knownRunning 永远是 false，每次心跳都会留在待办里。原来把它也算进来，带 V2 隧道的主机
- * 就再也收不到立即重测：规则「诊断」等不到新的隧道段样本，18 秒后记成「端到端探测超时」，
- * 卡片挂红，可隧道诊断明明是通的。运行时没起来时 Agent 的 WireGuard 探测本来就是「未就绪」
- * 不上报，不会报假超时，所以不用在这里拦。
- */
-export function isTunnelApplyBlockingProbe(action: any) {
-  if (!action || action.op !== "apply" || Number(action.ruleId || 0) > 0) return false;
-  if (action.statusType === "runtime") return false;
-  return action.statusType === "tunnel" || Number(action.tunnelId) > 0;
-}
-
-function shouldSendDesiredState(hostId: number, actions: any[], activeWorkActions: any[], now: number, configRevision = 0) {
-  const id = Number(hostId);
-  if (!Number.isFinite(id) || id <= 0) return actions.length > 0;
-  const signature = stableActionSignatureHash(actions, `${Math.max(0, Math.floor(Number(configRevision) || 0))}\n`);
-  const cached = agentDesiredStateSendCache.get(id);
-  const hasActiveWork = activeWorkActions.length > 0;
-  const changed = !cached || cached.signature !== signature;
-  const activeResync = hasActiveWork && !!cached && now - cached.sentAt >= AGENT_DESIRED_STATE_ACTIVE_RESEND_MS;
-  const shouldSend = changed || activeResync;
-  if (shouldSend) {
-    setBoundedMapValue(agentDesiredStateSendCache, id, { signature, sentAt: now }, AGENT_HOST_CACHE_MAX);
-  }
-  return shouldSend;
-}
-
-/**
- * 下载 sing-box 用的 GitHub 加速设置。
- *
- * 每次心跳都读一遍设置表，但缓存几秒 —— 这个值几乎不变，而心跳是每台主机每
- * 半分钟一次，不缓存的话纯属白查。
- */
-let singboxAcceleratorCache: { value: { enabled: boolean; url: string }; at: number } | null = null;
-const SINGBOX_ACCELERATOR_CACHE_MS = 30_000;
-
-async function getSingboxAccelerator() {
-  const now = Date.now();
-  if (singboxAcceleratorCache && now - singboxAcceleratorCache.at < SINGBOX_ACCELERATOR_CACHE_MS) {
-    return singboxAcceleratorCache.value;
-  }
-  const all = await db.getAllSettings().catch(() => ({} as Record<string, string | null>));
-  const value = effectiveGithubAccelerator({
-    enabled: all.githubAcceleratorEnabled === "true",
-    url: all.githubAcceleratorUrl ?? "",
-  });
-  singboxAcceleratorCache = { value, at: now };
-  return value;
-}
-
-function shouldSendRuntimeSyncAction(hostId: number, action: any, force: boolean, now: number, resendAfterMs = 0) {
-  const id = Number(hostId);
-  if (!Number.isFinite(id) || id <= 0) return true;
-  const actionType = String(action?.forwardType || "runtime").trim() || "runtime";
-  const cacheKey = `${id}:${actionType}`;
-  const signature = stableActionSignatureHash([action]);
-  const cached = agentRuntimeSyncActionCache.get(cacheKey);
-  const changed = !cached || cached.signature !== signature;
-  const shouldResend = !!cached && resendAfterMs > 0 && now - cached.sentAt >= resendAfterMs;
-  if (force || changed || shouldResend) {
-    setBoundedMapValue(agentRuntimeSyncActionCache, cacheKey, { signature, sentAt: now }, AGENT_DYNAMIC_CACHE_MAX);
-    return true;
-  }
-  return false;
-}
-
-function shouldSendPluginSyncAction(hostId: number, action: any, now: number, resendAfterMs = AGENT_PLUGIN_SYNC_RESEND_MS) {
-  const id = Number(hostId);
-  if (!Number.isFinite(id) || id <= 0) return true;
-  const cacheKey = `${id}:${String(action?.forwardType || "plugin-sync")}`;
-  const signature = stableActionSignatureHash([action]);
-  const cached = agentPluginSyncActionCache.get(cacheKey);
-  if (!cached || cached.signature !== signature || now - cached.sentAt >= resendAfterMs) {
-    setBoundedMapValue(agentPluginSyncActionCache, cacheKey, { signature, sentAt: now }, AGENT_DYNAMIC_CACHE_MAX);
-    return true;
-  }
-  return false;
-}
-
-function runtimeSyncReconcileDue(hostId: number, actionType: string, now: number, intervalMs: number) {
-  const id = Number(hostId);
-  if (!Number.isFinite(id) || id <= 0) return true;
-  const cached = agentRuntimeSyncActionCache.get(`${id}:${String(actionType || "runtime").trim() || "runtime"}`);
-  return !cached || now - cached.sentAt >= intervalMs;
-}
-
-function runtimePortProtocolKey(portValue: unknown, protocol: unknown) {
-  const port = Number(portValue || 0);
-  if (port <= 0) return "";
-  return `${port}:${normalizeForwardRuleProtocol(protocol, "both")}`;
-}
-
-function ruleRuntimeIdentityKey(ruleIdValue: unknown, portValue: unknown, protocol: unknown) {
-  const ruleId = Number(ruleIdValue || 0);
-  const portKey = runtimePortProtocolKey(portValue, protocol);
-  if (ruleId <= 0 || !portKey) return "";
-  return `${ruleId}:${portKey}`;
-}
-
-function ruleRuntimePortIdentityKey(ruleIdValue: unknown, portValue: unknown) {
-  const ruleId = Number(ruleIdValue || 0);
-  const port = Number(portValue || 0);
-  if (ruleId <= 0 || port <= 0) return "";
-  return `${ruleId}:${port}`;
-}
-
-function actionRuleRuntimePortIdentityKey(action: any) {
-  return ruleRuntimePortIdentityKey(action?.ruleId, action?.sourcePort);
-}
-
-function actionPortKey(action: any) {
-  const port = Number(action?.sourcePort || 0);
-  if (port <= 0) return "";
-  const statusType = String(action?.statusType || "").trim();
-  const ruleId = Number(action?.ruleId || 0);
-  const tunnelId = Number(action?.tunnelId || 0);
-  if (ruleId > 0 || statusType === "rule") {
-    return `rule-port:${runtimePortProtocolKey(port, action?.protocol)}`;
-  }
-  if (tunnelId > 0 || statusType === "tunnel") {
-    return `tunnel:${tunnelId}:${port}`;
-  }
-  return "";
-}
-
-function dropStalePortRemoveActions(actions: any[], protectedRulePorts = new Set<string>()) {
-  const applyPorts = new Set<string>();
-  for (const action of actions) {
-    if (action?.op !== "apply") continue;
-    const key = actionPortKey(action);
-    if (key) applyPorts.add(key);
-    const rulePortKey = actionRuleRuntimePortIdentityKey(action);
-    if (rulePortKey) applyPorts.add(rulePortKey);
-  }
-  return actions.filter((action: any) => {
-    if (action?.op !== "remove") return true;
-    const key = actionPortKey(action);
-    const rulePortKey = actionRuleRuntimePortIdentityKey(action);
-    return !((key && (applyPorts.has(key) || protectedRulePorts.has(key))) || (rulePortKey && (applyPorts.has(rulePortKey) || protectedRulePorts.has(rulePortKey))));
-  });
-}
-
-function actionMayAffectRuntimeFamily(action: any, forwardTypes: Set<string>) {
-  if (!action || action.statusType === "runtime") return false;
-  const op = String(action.op || "").trim();
-  if (op !== "apply" && op !== "remove") return false;
-  if (action.fxp) return false;
-  const runtimeForwardType = String(action.runtimeBackendForwardType || action.forwardType || "").trim();
-  return forwardTypes.has(runtimeForwardType);
-}
-
-function isForwardXTunnelMode(tunnel: any) {
-  return String(tunnel?.mode || "").toLowerCase() === "forwardx";
-}
-
-function isNginxTunnelMode(tunnel: any) {
-  return String(tunnel?.mode || "").toLowerCase() === "nginx_stream";
-}
-
-function isGostTunnelMode(tunnel: any) {
-  return !!tunnel && GOST_TUNNEL_MODES.has(String(tunnel?.mode || "").toLowerCase());
-}
-
-function legacyRealmCleanupCmds(port: unknown, protocol: unknown) {
-  const normalized = normalizeForwardRuleProtocol(protocol, "both");
-  if (normalized === "udp") return [];
-  const serviceName = legacyRealmServiceNameForPort(port);
-  const configPath = legacyRealmConfigPathForPort(port);
-  return [
-    removeManagedServiceCmd(serviceName),
-    killByPatternCmd(`[r]ealm .*${configPath}`),
-    `rm -f ${shQuote(configPath)} ${shQuote(`${configPath}.sha256`)} 2>/dev/null || true`,
-  ];
-}
-
-function legacySocatCleanupCmds(port: unknown, protocol: unknown) {
-  const normalized = normalizeForwardRuleProtocol(protocol, "both");
-  if (normalized === "udp") return [];
-  return [removeManagedServiceCmd(legacySocatServiceNameForPort(port))];
-}
-
-function socatKillByProtocolCmd(port: unknown, protocol: unknown) {
-  const normalized = normalizeForwardRuleProtocol(protocol, "both");
-  if (normalized === "both") return killByPatternCmd(`[s]ocat.*LISTEN:${Number(port) || 0}`);
-  const protoUpper = normalized === "udp" ? "UDP" : "TCP";
-  return killByPatternCmd(`[s]ocat.*${protoUpper}[46]?-LISTEN:${Number(port) || 0}`);
-}
-
-function realmGuardConfigPathForPort(port: unknown) {
-  return `${REALM_CONFIG_DIR}/forwardx-realm-guard-${Number(port) || 0}.toml`;
-}
-
-function mimicFilterEndpoint(host: unknown, port: unknown) {
-  const clean = cleanEndpointHost(host);
-  const p = Number(port) || 0;
-  if (!clean || p <= 0 || p > 65535) return "";
-  if (clean === "0.0.0.0" || clean === "::" || clean === "[::]") {
-    return isIpv6Literal(clean) ? "[::]:" + p : "0.0.0.0:" + p;
-  }
-  return endpointHostPort(clean, p);
-}
-
-function udpOverTcpEnabled(rule: any, tunnel: any) {
-  return !!rule
-    && !!tunnel
-    && isForwardXTunnelMode(tunnel)
-    && (runtimeBool((rule as any).udpOverTcp) || runtimeBool((tunnel as any).udpOverTcp))
-    && isForwardRuleProtocolUdpEnabled(rule?.protocol);
-}
-
-export function selectProtocolGuardRateLimit(options: {
-  agentVersion: string;
-  hostId: number;
-  rule: { forwardType?: unknown; tunnelId?: unknown; userId?: unknown; tunnelMode?: unknown; tunnelEntry?: unknown };
-  limitIn: number;
-  limitOut: number;
-  rateLimitScope?: unknown;
-  /** 多级限速（shared/forwardRateLimit.ts 的 forwardRateTiersForAgent），Agent ≥ 2.2.230 才下发。 */
-  rateLimits?: ReturnType<typeof forwardRateTiersForAgent>;
-}) {
-  const forwardType = String(options.rule?.forwardType || "").trim();
-  const tunnelId = Number(options.rule?.tunnelId || 0);
-  const nginxTunnelEntry = tunnelId > 0
-    && String(options.rule?.tunnelMode || "").trim().toLowerCase() === "nginx_stream"
-    && options.rule?.tunnelEntry === true;
-  const userId = Number(options.rule?.userId || 0);
-  const limitIn = Math.max(0, Math.floor(Number(options.limitIn) || 0));
-  const limitOut = Math.max(0, Math.floor(Number(options.limitOut) || 0));
-  if (
-    !isAgentVersionAtLeast(options.agentVersion, AGENT_RATE_LIMIT_GUARD_VERSION)
-    || (tunnelId > 0 && !nginxTunnelEntry)
-    || (!RATE_LIMIT_GUARD_FORWARD_TYPES.has(forwardType) && !nginxTunnelEntry)
-    || (nginxTunnelEntry && forwardType !== "gost")
-    || userId <= 0
-    || (limitIn <= 0 && limitOut <= 0)
-  ) {
-    return { rateLimitScope: "", limitIn: 0, limitOut: 0 };
-  }
-  const tiers = Array.isArray(options.rateLimits) ? options.rateLimits : [];
-  return {
-    rateLimitScope: String(options.rateLimitScope || "").trim() || (nginxTunnelEntry
-      ? `user-${userId}-host-${Math.max(0, Number(options.hostId) || 0)}-tunnel-${tunnelId}`
-      : `user-${userId}-host-${Math.max(0, Number(options.hostId) || 0)}`),
-    limitIn,
-    limitOut,
-    ...(tiers.length > 0 && isAgentVersionAtLeast(options.agentVersion, AGENT_RATE_TIERS_VERSION) ? { rateLimits: tiers } : {}),
-  };
-}
-
-export function selectProtocolGuardProxyProtocol(options: {
-  backendPort: number;
-  backendForwardType?: unknown;
-  receive: boolean;
-  send: boolean;
-}) {
-  const receive = options.receive === true;
-  const send = options.send === true;
-  const backendForwardType = String(options.backendForwardType || "").trim().toLowerCase();
-  const backendConsumesProxyProtocol = Number(options.backendPort) > 0
-    && (backendForwardType === "gost" || backendForwardType === "realm");
-  return {
-    proxyProtocolReceive: receive,
-    // GOST and Realm consume the Guard's internal PROXY header before applying
-    // their own send setting. Transparent backends such as Nginx must only see
-    // a header when the user explicitly enabled sending it downstream.
-    proxyProtocolSend: send || (receive && backendConsumesProxyProtocol),
-  };
-}
-
-function isHostnameAddress(value: string) {
-  const text = String(value || "").trim();
-  return !!text && !isIP(text) && /^[a-zA-Z0-9]([a-zA-Z0-9\-_.]*[a-zA-Z0-9])?$/.test(text);
-}
-
-function addDnsWatch(watches: Map<string, AgentDnsWatch>, host: string, scope: string, refId?: number) {
-  const value = String(host || "").trim();
-  if (!isHostnameAddress(value)) return;
-  const key = `${scope}:${refId || 0}:${value.toLowerCase()}`;
-  watches.set(key, { host: value, scope, ...(refId ? { refId } : {}) });
-}
-
-// 解析失败或超过 TARGET_DNS_RESOLVE_TIMEOUT_MS 都返回原值，由 selectResolvedTargetIp 回落到上次结果。
-async function resolveTargetIp(raw: string): Promise<string> {
-  return await resolveTargetIpWithTimeout(raw, { resolve4, resolve6 });
-}
-
-async function resolveTargetIpCached(ruleId: number, raw: string, force = false): Promise<string> {
-  const trimmed = String(raw || "").trim();
-  if (!trimmed || isIP(trimmed)) return trimmed;
-  const now = Date.now();
-  const cachedIp = resolvedIpCache.get(ruleId);
-  const checkedAt = resolvedIpCheckedAt.get(ruleId) || 0;
-  if (!force && cachedIp && cachedIp.raw === trimmed && now - checkedAt < AGENT_DNS_RESOLVE_TTL_MS) return cachedIp.ip;
-  const inflightKey = trimmed.toLowerCase();
-  let work = resolvedIpInflight.get(inflightKey);
-  if (!work) {
-    work = resolveTargetIp(trimmed).finally(() => {
-      if (resolvedIpInflight.get(inflightKey) === work) resolvedIpInflight.delete(inflightKey);
-    });
-    resolvedIpInflight.set(inflightKey, work);
-  }
-  const resolved = selectResolvedTargetIp(trimmed, await work, cachedIp);
-  setBoundedMapValue(resolvedIpCache, ruleId, { raw: trimmed, ip: resolved }, AGENT_DYNAMIC_CACHE_MAX);
-  setBoundedMapValue(resolvedIpCheckedAt, ruleId, Date.now(), AGENT_DYNAMIC_CACHE_MAX);
-  return resolved;
-}
-
-function ensureRuntimeBinaryCmd() {
-  const runtime = shQuote(RUNTIME_BIN);
-  return `if [ -e ${runtime} ]; then chmod 0755 ${runtime} 2>/dev/null || true; else for bin in /usr/local/bin/gost $(command -v gost 2>/dev/null || true); do [ -n "$bin" ] || continue; [ -x "$bin" ] || continue; install -m 0755 "$bin" ${runtime} && break; done; fi; [ -x ${runtime} ]`;
-}
-
-function ensureNginxBinaryCmd() {
-  const nginx = shQuote(NGINX_BIN);
-  return `if [ -e ${nginx} ]; then chmod 0755 ${nginx} 2>/dev/null || true; else for bin in /usr/sbin/nginx /usr/local/nginx/sbin/nginx $(command -v nginx 2>/dev/null || true); do [ -n "$bin" ] || continue; [ -x "$bin" ] || continue; install -m 0755 "$bin" ${nginx} && break; done; fi; [ -x ${nginx} ]`;
-}
-
-export function buildNginxRuntimeRetirementPlan() {
-  const processPattern = "[/]usr/local/bin/forwardx-nginx.*[/]etc/forwardx/nginx/nginx[.]conf";
-  const persistentArtifacts = [
-    NGINX_CONFIG_PATH,
-    `${NGINX_CONFIG_PATH}.sha256`,
-    `${NGINX_CONFIG_PATH}.forwardx-last-good`,
-    `${NGINX_CONFIG_DIR}/modules.conf`,
-    "/run/forwardx-nginx.pid",
-  ];
-  const terminateManagedProcess = [
-    killByPatternCmd(processPattern),
-    `for attempt in 1 2 3; do if ! pgrep -f '${processPattern}' >/dev/null 2>&1; then break; fi; sleep 1; done`,
-    `if pgrep -f '${processPattern}' >/dev/null 2>&1; then for pid in $(pgrep -f '${processPattern}' 2>/dev/null || true); do if [ "$pid" = "$$" ] || [ "$pid" = "$PPID" ]; then continue; fi; kill -KILL "$pid" 2>/dev/null || true; done; sleep 1; fi`,
-    `if pgrep -f '${processPattern}' >/dev/null 2>&1; then echo "[service] ${NGINX_SERVICE_NAME} managed process cleanup failed"; exit 1; fi`,
-  ].join("; ");
-  const removePersistentState = [
-    `rm -f ${persistentArtifacts.map(shQuote).join(" ")} 2>/dev/null || true`,
-    `if [ -e ${shQuote(NGINX_CONFIG_PATH)} ]; then echo "[service] ${NGINX_SERVICE_NAME} config cleanup failed"; exit 1; fi`,
-  ].join("; ");
-  const removeManagedCertificates = [
-    `rm -f ${shQuote(NGINX_CERT_DIR)}/*.crt ${shQuote(NGINX_CERT_DIR)}/*.key ${shQuote(NGINX_CERT_DIR)}/*.crt.forwardx-last-good ${shQuote(NGINX_CERT_DIR)}/*.key.forwardx-last-good ${shQuote(NGINX_CERT_DIR)}/.forwardx-config-* ${shQuote(NGINX_CERT_DIR)}/.forwardx-restore-* 2>/dev/null || true`,
-    `rm -f ${shQuote(NGINX_CONFIG_DIR)}/.forwardx-config-* ${shQuote(NGINX_CONFIG_DIR)}/.forwardx-restore-* ${shQuote(NGINX_ERROR_LOG_PATH)} ${shQuote(NGINX_SESSION_LOG_PATH)} 2>/dev/null || true`,
-    `rmdir ${shQuote(NGINX_CERT_DIR)} ${shQuote(NGINX_CONFIG_DIR)} 2>/dev/null || true`,
-  ].join("; ");
-  return {
-    preCommands: [] as string[],
-    managedConfigs: [] as any[],
-    commands: [
-      removeManagedServiceCmd(NGINX_SERVICE_NAME),
-      `${terminateManagedProcess}; ${removePersistentState}`,
-      removeManagedCertificates,
-    ],
-  };
-}
 
 export function registerAgentHeartbeatRoute(agentRouter: Router) {
 /*
@@ -2042,30 +1129,6 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       }
     }
 
-    // DNS 变更的规则：生成清理旧 IP 规则的动作
-    const buildForwardTargetCleanup = (rule: any, targetIp: string, targetPort: number): string[] => {
-      const port = rule.sourcePort;
-      const cleanupRule = { ...rule, targetIp, targetPort };
-      const cmds: string[] = [];
-      if (rule.forwardType === "iptables") {
-        cmds.push(...buildIptablesForwardCleanupCmds(cleanupRule));
-      } else if (rule.forwardType === "nftables") {
-        cmds.push(...buildNftCleanupCmds(cleanupRule));
-      } else {
-        cmds.push(...buildManagedPortCleanupCmds(Number(port), targetIp, targetPort, rule.protocol));
-      }
-      if (rule.forwardType === "iptables") cmds.push(...buildCountingCleanupCmds(port, targetIp, targetPort, rule.protocol));
-      return cmds;
-    };
-    const buildDnsChangeCleanup = (rule: any, oldIp: string): string[] => (
-      buildForwardTargetCleanup(rule, oldIp, Number(rule.targetPort) || 0)
-    );
-    const failoverProxyHandlesTargetDns = (rule: any) => (
-      runtimeBool(rule?.failoverEnabled)
-      && rule.forwardType === "gost"
-      && normalizeForwardRuleProtocol(rule.protocol) === "tcp"
-      && (routeGroupOf(rule)?.paths.length || 0) >= 2
-    );
     const chainMemberAddress = (member: any, hostLike: any) => {
       const configured = String(member?.connectHost || "").trim();
       if (configured) {
@@ -2355,7 +1418,6 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       停不停用要在下面生成 gostRules 之前定下来；出口机自己的端口要等分完守卫端口才分（见下面 failoverProxyPort 之后那一段）。
     */
     await loadTunnelExitPorts();
-    type TunnelEgressHelper = { ruleId: number; tunnel: any; runtime: SsEgressRuntime; targetHost: string; targetPort: number; protocol: string; port: number };
     /** 这台是出口机、要在本机跑 SS 客户端的规则。 */
     const tunnelEgressHelpers = new Map<number, TunnelEgressHelper>();
     /** 同一条规则在 agentHostRules / agentAllRules 里是不同的对象，改目标、停用要一起改。 */
@@ -2366,22 +1428,6 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       list.push(rule);
       tunnelEgressRuleObjects.set(Number(rule.id), list);
     }
-    const holdTunnelEgressRule = (objects: any[], state: string) => {
-      for (const rule of objects) {
-        rule.isEnabled = false;
-        rule.egressRuntimeBlocked = state;
-      }
-    };
-    const pointTunnelEgressRule = (objects: any[], port: number) => {
-      for (const rule of objects) {
-        if (!rule._tunnelEgressTarget) {
-          rule._tunnelEgressTarget = { host: String(rule._originalTargetIp || rule.targetIp || ""), port: Number(rule.targetPort || 0) };
-        }
-        rule.targetIp = "127.0.0.1";
-        rule._originalTargetIp = "127.0.0.1";
-        rule.targetPort = port;
-      }
-    };
     for (const [ruleId, objects] of tunnelEgressRuleObjects) {
       const rule = objects[0];
       if (objects.every((item) => runtimeBool(item.pendingDelete) || !runtimeBool(item.isEnabled))) continue;
@@ -2534,25 +1580,6 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         appendPanelLog("error", `[Tunnel] failed to allocate dedicated UDP transport port tunnel=${tunnel.id}: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
-    const tunnelExitRowsMatchNodes = (rows: any[], nodes: any[]) => {
-      const enabledNodes = nodes
-        .filter((node: any) => node && runtimeBool(node.isEnabled, true))
-        .map((node: any) => ({
-          id: Number(node.id),
-          seq: Number(node.seq),
-          hostId: Number(node.hostId),
-        }))
-        .filter((node: any) => node.id > 0 && node.hostId > 0);
-      if (rows.length !== enabledNodes.length) return false;
-      const rowByNodeId = new Map(rows.map((row: any) => [Number(row.exitNodeId), row]));
-      return enabledNodes.every((node: any) => {
-        const row = rowByNodeId.get(node.id);
-        return !!row
-          && Number(row.exitSeq) === node.seq
-          && Number(row.exitHostId) === node.hostId
-          && Number(row.tunnelExitPort) > 0;
-      });
-    };
     for (const rule of agentAllRules as any[]) {
       if (!rule || rule.forwardType !== "gost" || !rule.tunnelId || runtimeBool(rule.pendingDelete)) continue;
       const tunnel = tunnelById.get(Number(rule.tunnelId)) as any;
@@ -2822,60 +1849,6 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         maxConnections: Math.max(0, Number(user?.maxConnections) || 0),
         maxIPs: Math.max(0, Number(user?.maxIPs) || 0),
       };
-    };
-    type AccessLimitBinary = "iptables" | "ip6tables";
-    const accessLimitBinaries: AccessLimitBinary[] = ["iptables", "ip6tables"];
-    const accessLimitCommand = (binary: AccessLimitBinary, command: string) => (
-      binary === "ip6tables"
-        ? `if command -v ip6tables >/dev/null 2>&1; then ${command}; fi; true`
-        : `${command}; true`
-    );
-    // `$FWX_IPT_WAIT` 由 Agent 注入 xtables 锁等待参数，见 agentActionCommands.IPTABLES_WAIT_ARG。
-    const accessLimitBin = (binary: AccessLimitBinary) => `${binary} ${IPTABLES_WAIT_ARG}`;
-    const accessLimitDeleteJump = (binary: AccessLimitBinary, chainName: string, port: number, scopeChain: string) => (
-      accessLimitCommand(binary, `while ${accessLimitBin(binary)} -C ${chainName} -p tcp --dport ${port} -j ${scopeChain} 2>/dev/null; do if ${accessLimitBin(binary)} -D ${chainName} -p tcp --dport ${port} -j ${scopeChain} 2>/dev/null; then :; else break; fi; done`)
-    );
-    const accessLimitEnsureJump = (binary: AccessLimitBinary, chainName: string, port: number, scopeChain: string) => (
-      accessLimitCommand(binary, iptablesEnsureShell(accessLimitBin(binary), "", `${chainName} -p tcp --dport ${port} -j ${scopeChain}`, "-I"))
-    );
-    const accessLimitOptional = (binary: AccessLimitBinary, command: string) => accessLimitCommand(binary, `${command} 2>/dev/null`);
-    const accessScopeName = (scope: string) => `FWX_LIMIT_${scope.replace(/[^A-Za-z0-9_]/g, "_").slice(0, 40)}`;
-    const buildAccessLimitCleanupCmds = (port: number, scope: string): string[] => {
-      const chain = accessScopeName(scope);
-      const cmds: string[] = [];
-      for (const binary of accessLimitBinaries) {
-        cmds.push(
-          accessLimitDeleteJump(binary, "INPUT", port, chain),
-          accessLimitDeleteJump(binary, "FORWARD", port, chain),
-        );
-      }
-      return cmds;
-    };
-    const buildAccessLimitCmds = (port: number, scope: string, limits: { maxConnections?: number; maxIPs?: number }): string[] => {
-      const maxConnections = Math.max(0, Number(limits.maxConnections || 0));
-      const maxIPs = Math.max(0, Number(limits.maxIPs || 0));
-      if (maxConnections <= 0 && maxIPs <= 0) return buildAccessLimitCleanupCmds(port, scope);
-      const chain = accessScopeName(scope);
-      const cmds = buildAccessLimitCleanupCmds(port, scope);
-      for (const binary of accessLimitBinaries) {
-        const mask = binary === "ip6tables" ? 128 : 32;
-        cmds.push(
-          accessLimitOptional(binary, `${accessLimitBin(binary)} -N ${chain}`),
-          accessLimitOptional(binary, `${accessLimitBin(binary)} -F ${chain}`),
-        );
-        if (maxConnections > 0) {
-          cmds.push(accessLimitCommand(binary, `${accessLimitBin(binary)} -A ${chain} -p tcp -m connlimit --connlimit-above ${maxConnections} --connlimit-mask 0 -j REJECT --reject-with tcp-reset`));
-        }
-        if (maxIPs > 0) {
-          cmds.push(accessLimitCommand(binary, `${accessLimitBin(binary)} -A ${chain} -p tcp -m connlimit --connlimit-above ${maxIPs} --connlimit-mask ${mask} -j REJECT --reject-with tcp-reset`));
-        }
-        cmds.push(
-          accessLimitCommand(binary, `${accessLimitBin(binary)} -A ${chain} -j RETURN`),
-          accessLimitEnsureJump(binary, "INPUT", port, chain),
-          accessLimitEnsureJump(binary, "FORWARD", port, chain),
-        );
-      }
-      return cmds;
     };
     const accessScopeForRule = (rule: any) => (
       rule.tunnelId
@@ -3304,6 +2277,18 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       return address;
     };
     const tunnelExitEndpointById = new Map<number, { host: string; port: number; udpPort?: number }>();
+    // 拆到 agentHeartbeat*Plan.ts 等模块里的那几段要读的、本次请求只读的值（见 agentHeartbeatContext.ts）。
+    const heartbeatCtx: HeartbeatRequestContext = {
+      host,
+      hostTunnels,
+      agentHostRules,
+      agentAllRules,
+      forwardProtocolSettings,
+      tunnelById,
+      tunnelHopsByTunnelId,
+      tunnelExitNodesByTunnelId,
+      tunnelExitEndpointById,
+    };
     const hostIngressAddressById = new Map<number, string>();
     const getHostIngressAddress = async (hostId: number) => {
       const id = Number(hostId);
@@ -3345,130 +2330,17 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       }
       return getHostIngressAddress(Number((exitNode as any)?.hostId));
     };
-    const wireGuardPlanPromises = new Map<number, Promise<Map<number, ForwardXWireGuardNodePlan>>>();
-    const getForwardXWireGuardPlans = (tunnel: any) => {
-      const tunnelId = Number(tunnel?.id || 0);
-      const existing = wireGuardPlanPromises.get(tunnelId);
-      if (existing) return existing;
-      const work = (async () => {
-        if (!isForwardXWireGuardV2(tunnel)) return new Map<number, ForwardXWireGuardNodePlan>();
-        const nodes = new Map<number, { hostId: number; listenPort: number }>();
-        const links = new Map<string, { fromHostId: number; toHostId: number; endpointHost: string; endpointPort: number }>();
-        const addNode = (hostIdValue: unknown, listenPortValue: unknown = 0) => {
-          const hostId = Number(hostIdValue || 0);
-          const listenPort = Number(listenPortValue || 0);
-          if (!Number.isInteger(hostId) || hostId <= 0) return;
-          const current = nodes.get(hostId);
-          nodes.set(hostId, {
-            hostId,
-            listenPort: listenPort > 0 ? listenPort : Number(current?.listenPort || 0),
-          });
-        };
-        const addLink = (fromHostIdValue: unknown, toHostIdValue: unknown, endpointHostValue: unknown, endpointPortValue: unknown) => {
-          const fromHostId = Number(fromHostIdValue || 0);
-          const toHostId = Number(toHostIdValue || 0);
-          const endpointHost = String(endpointHostValue || "").trim();
-          const endpointPort = Number(endpointPortValue || 0);
-          if (fromHostId <= 0 || toHostId <= 0 || fromHostId === toHostId || !endpointHost || endpointPort <= 0) return;
-          addNode(fromHostId);
-          addNode(toHostId, endpointPort);
-          links.set(`${fromHostId}:${toHostId}`, { fromHostId, toHostId, endpointHost, endpointPort });
-        };
-        const entryHostIds = tunnelEntryHostIds(tunnel);
-        entryHostIds.forEach((hostId) => addNode(hostId));
-        const hops = tunnelHopsByTunnelId.get(tunnelId) || [];
-        const extraExitNodes = normalizeExitGroupStrategy((tunnel as any).loadBalanceStrategy) === "none"
-          ? []
-          : (tunnelExitNodesByTunnelId.get(tunnelId) || [])
-            .filter((node: any) => runtimeBool(node?.isEnabled, true) && Number(node?.hostId || 0) > 0);
-        if (Array.isArray(hops) && hops.length >= 2) {
-          hops.forEach((hop: any, index: number) => addNode(hop?.hostId, index > 0 ? hop?.mimicPort : 0));
-          const relayFailover = tunnelRelayUsesParallelRelays(tunnel, hops);
-          const finalExit = hops[hops.length - 1] as any;
-          const relayHops = relayFailover ? tunnelRelayCandidates(hops) : [hops[1]];
-          for (const relayHop of relayHops as any[]) {
-            const relayEndpointHost = await getHopDialAddress(relayHop, tunnel);
-            for (const entryHostId of entryHostIds) {
-              addLink(entryHostId, relayHop?.hostId, relayEndpointHost, relayHop?.mimicPort);
-            }
-          }
-          if (relayFailover) {
-            const finalEndpointHost = await getHopDialAddress(finalExit, tunnel);
-            for (const relayHop of relayHops as any[]) {
-              addLink(relayHop?.hostId, finalExit?.hostId, finalEndpointHost, finalExit?.mimicPort);
-            }
-          } else {
-            for (let index = 1; index < hops.length - 1; index += 1) {
-              const current = hops[index] as any;
-              const next = hops[index + 1] as any;
-              addLink(current?.hostId, next?.hostId, await getHopDialAddress(next, tunnel), next?.mimicPort);
-            }
-          }
-          if (runtimeBool((tunnel as any).loadBalanceEnabled) && extraExitNodes.length > 0) {
-            const branchSources = relayFailover
-              ? relayHops.map((hop: any) => Number(hop?.hostId || 0))
-              : hops.length >= 3
-              ? [Number((hops[hops.length - 2] as any)?.hostId || 0)]
-              : entryHostIds;
-            for (const exitNode of extraExitNodes) {
-              const endpointHost = await getExtraExitDialAddress(exitNode, tunnel);
-              addNode(exitNode?.hostId, exitNode?.mimicPort);
-              for (const sourceHostId of branchSources) {
-                addLink(sourceHostId, exitNode?.hostId, endpointHost, exitNode?.mimicPort);
-              }
-            }
-          }
-        } else {
-          const primaryEndpointHost = await tunnelExitHostAddress(tunnel);
-          addNode(tunnel?.exitHostId, tunnel?.mimicPort);
-          for (const entryHostId of entryHostIds) {
-            addLink(entryHostId, tunnel?.exitHostId, primaryEndpointHost, tunnel?.mimicPort);
-          }
-          if (runtimeBool((tunnel as any).loadBalanceEnabled)) {
-            for (const exitNode of extraExitNodes) {
-              const endpointHost = await getExtraExitDialAddress(exitNode, tunnel);
-              addNode(exitNode?.hostId, exitNode?.mimicPort);
-              for (const entryHostId of entryHostIds) {
-                addLink(entryHostId, exitNode?.hostId, endpointHost, exitNode?.mimicPort);
-              }
-            }
-          }
-        }
-        return buildForwardXWireGuardPlans({
-          tunnelId,
-          seed: tunnelSecretSeed(tunnel),
-          generation: tunnelDnsGeneration(tunnel),
-          mtu: forwardXWireGuardMTU(tunnelNeedsMimic(tunnel)),
-          nodes: Array.from(nodes.values()),
-          links: Array.from(links.values()),
-        });
-      })();
-      wireGuardPlanPromises.set(tunnelId, work);
-      return work;
-    };
-    const getCurrentHostForwardXWireGuardPlan = async (tunnel: any) => {
-      if (!isForwardXWireGuardV2(tunnel)) return null;
-      if (!isAgentVersionAtLeast(String((host as any).agentVersion || ""), AGENT_FORWARDX_WIREGUARD_VERSION)) {
-        const logKey = `wireguard-agent-version:${Number(host.id)}:${Number(tunnel?.id || 0)}`;
-        const message = `NEX V2 requires Agent v${AGENT_FORWARDX_WIREGUARD_VERSION} or newer`;
-        if (tunnelRouteLogCache.get(logKey) !== message) {
-          setBoundedMapValue(tunnelRouteLogCache, logKey, message, AGENT_DYNAMIC_CACHE_MAX);
-          appendPanelLog("warn", `[Tunnel] V2 waiting for Agent upgrade tunnel=${tunnel?.id || 0} host=${host.id} current=${(host as any).agentVersion || "-"} required=${AGENT_FORWARDX_WIREGUARD_VERSION}`);
-        }
-        return null;
-      }
-      try {
-        return (await getForwardXWireGuardPlans(tunnel)).get(Number(host.id)) || null;
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        const logKey = `wireguard-plan:${Number(host.id)}:${Number(tunnel?.id || 0)}`;
-        if (tunnelRouteLogCache.get(logKey) !== message) {
-          setBoundedMapValue(tunnelRouteLogCache, logKey, message, AGENT_DYNAMIC_CACHE_MAX);
-          appendPanelLog("error", `[Tunnel] V2 plan failed tunnel=${tunnel?.id || 0} host=${host.id}: ${message}`);
-        }
-        return null;
-      }
-    };
+    const {
+      getCurrentHostForwardXWireGuardPlan,
+      getForwardXWireGuardPlans,
+    } = createForwardXWireGuardPlanner(heartbeatCtx, {
+      getExtraExitDialAddress,
+      getHopDialAddress,
+      tunnelDnsGeneration,
+      tunnelEntryHostIds,
+      tunnelExitHostAddress,
+      tunnelNeedsMimic,
+    });
     // 自动模式的提示值：这台主机上每条隧道学到过的限速点（FXP 报上来记在面板里的）。
     let linkShapingHintsPromise: Promise<Map<number, { up: number; down: number }>> | null = null;
     const linkShapingHints = () => {
@@ -3601,14 +2473,6 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         .map((endpoint) => endpoint.listenPort);
       return Array.from(new Set(ports));
     };
-    const hopKey = (secret: string, idx: number) =>
-      crypto.createHash("sha256").update(`${secret}|hop|${idx}`).digest("hex");
-    const hopSeq = (hop: any, fallback: number) => {
-      const seq = Number((hop as any)?.seq);
-      return Number.isFinite(seq) ? seq : fallback;
-    };
-    const fxpHopKey = (tunnel: any, hop: any, fallback: number) =>
-      hopKey(tunnelSecretSeed(tunnel), hopSeq(hop, fallback));
     const forwardXExtraExitRoutes = async (tunnel: any) => {
       const routes: Array<{ hostId: number; host: string; port: number; udpPort: number; key: string }> = [];
       if (!runtimeBool((tunnel as any).loadBalanceEnabled) || normalizeExitGroupStrategy((tunnel as any).loadBalanceStrategy) === "none") return routes;
@@ -3623,89 +2487,20 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       }
       return routes;
     };
-    const buildForwardXHopSpec = async (
-      tunnel: any,
-      hops: any[],
-      hopIdx: number,
-      op: "apply" | "remove",
-    ) => {
-      const hop = hops[hopIdx] as any;
-      const listenPort = Number(hop?.listenPort) || 0;
-      const wireGuardV2 = isForwardXWireGuardV2(tunnel);
-      const udpListenPort = !wireGuardV2 && tunnelNeedsMimic(tunnel) ? Number(hop?.mimicPort || 0) : 0;
-      const isLast = hopIdx === hops.length - 1;
-      const fxpSpec: any = {
-        role: isLast ? "exit" : "relay",
-        tunnelId: tunnel.id,
-        ruleId: 0,
-        listenPort,
-        protocol: "both",
-        key: fxpHopKey(tunnel, hop, hopIdx),
-        dnsGeneration: tunnelDnsGeneration(tunnel),
-      };
-      if (udpListenPort > 0) fxpSpec.udpListenPort = udpListenPort;
-      if (!isLast) {
-        const nextHop = tunnelRelayUsesParallelRelays(tunnel, hops)
-          ? hops[hops.length - 1] as any
-          : hops[hopIdx + 1] as any;
-        const nextIp = await getHopDialAddress(nextHop, tunnel);
-        const nextUdpPort = !wireGuardV2 && tunnelNeedsMimic(tunnel) ? Number(nextHop?.mimicPort || 0) : 0;
-        const nextMimicPort = tunnelNeedsMimic(tunnel) ? Number(nextHop?.mimicPort || 0) : 0;
-        fxpSpec.relayExitHost = String(nextIp).trim();
-        fxpSpec.relayExitPort = Number(nextHop?.listenPort) || 0;
-        if (wireGuardV2) fxpSpec.relayPeerId = String(Number(nextHop?.hostId || 0));
-        if (nextUdpPort > 0) fxpSpec.udpRelayExitPort = nextUdpPort;
-        fxpSpec.relayKey = fxpHopKey(tunnel, nextHop, hopIdx + 1);
-        if (nextMimicPort > 0) {
-          const endpoint = mimicFilterEndpoint(fxpSpec.relayExitHost, nextMimicPort);
-          if (endpoint) addMimicFilter(`remote=${endpoint}`, hostInterface, [{ resourceType: "tunnel", resourceId: tunnel.id }]);
-        }
-        const nextIsFinalExit = Number(nextHop?.hostId || 0) === Number((hops[hops.length - 1] as any)?.hostId || 0);
-        if (nextIsFinalExit && runtimeBool((tunnel as any).loadBalanceEnabled)) {
-          const extraRoutes = await forwardXExtraExitRoutes(tunnel);
-          if (extraRoutes.length > 0) {
-            if (tunnelNeedsMimic(tunnel) && extraRoutes.some((route) => Number(route.udpPort || 0) <= 0)) {
-              appendPanelLog("error", `[TunnelRoute] missing NEX mimic UDP port tunnel=${tunnel.id} hop=${hopIdx} extraExit=1`);
-              return null;
-            }
-            for (const route of extraRoutes) {
-              if (route.udpPort <= 0) continue;
-              const endpoint = mimicFilterEndpoint(route.host, route.udpPort);
-              if (endpoint) addMimicFilter(`remote=${endpoint}`, hostInterface, [{ resourceType: "tunnel", resourceId: tunnel.id }]);
-            }
-            const relayExitHostIds = [Number(nextHop?.hostId || 0), ...extraRoutes.map((route) => Number(route.hostId || 0))];
-            const relayExitWeights = await exitWeightsForHostIds((tunnel as any).loadBalanceStrategy, relayExitHostIds);
-            const relayExitCapacities = await exitCapacitiesForHostIds((tunnel as any).loadBalanceStrategy, relayExitHostIds);
-            fxpSpec.exits = [
-              { host: fxpSpec.relayExitHost, port: fxpSpec.relayExitPort, udpPort: fxpSpec.udpRelayExitPort || fxpSpec.relayExitPort, key: fxpSpec.relayKey, peerId: wireGuardV2 ? String(Number(nextHop?.hostId || 0)) : undefined },
-              ...extraRoutes.map((route) => ({ host: route.host, port: route.port, udpPort: wireGuardV2 ? route.port : route.udpPort || 0, key: route.key, peerId: wireGuardV2 ? String(route.hostId) : undefined })),
-            ].map((exit, index) => ({
-              ...exit,
-              ...(relayExitWeights ? { weight: relayExitWeights[index] } : {}),
-              ...(relayExitCapacities ? { capacityMbps: relayExitCapacities[index] } : {}),
-            }));
-            fxpSpec.exitStrategy = forwardXExitStrategy((tunnel as any).loadBalanceStrategy);
-          }
-        }
-        if (op === "apply" && (!fxpSpec.relayExitHost || fxpSpec.relayExitPort <= 0 || !fxpSpec.relayKey)) {
-          appendPanelLog("error", `[TunnelRoute] invalid NEX relay next hop tunnel=${tunnel.id} hop=${hopIdx} nextHost=${fxpSpec.relayExitHost || "-"} nextPort=${fxpSpec.relayExitPort || "-"}`);
-          return null;
-        }
-        if (op === "apply" && tunnelNeedsMimic(tunnel) && nextMimicPort <= 0) {
-          appendPanelLog("error", `[TunnelRoute] missing NEX mimic UDP next port tunnel=${tunnel.id} hop=${hopIdx} nextHost=${fxpSpec.relayExitHost || "-"} nextPort=${fxpSpec.relayExitPort || "-"}`);
-          return null;
-        }
-      }
-      if (op === "apply" && listenPort <= 0) {
-        appendPanelLog("error", `[TunnelRoute] invalid NEX hop listen port tunnel=${tunnel.id} hop=${hopIdx} listen=${listenPort || "-"}`);
-        return null;
-      }
-      if (op === "apply" && !wireGuardV2 && tunnelNeedsMimic(tunnel) && udpListenPort <= 0) {
-        appendPanelLog("error", `[TunnelRoute] missing NEX mimic UDP listen port tunnel=${tunnel.id} hop=${hopIdx} listen=${listenPort || "-"}`);
-        return null;
-      }
-      return applyForwardXTransport(fxpSpec, tunnel);
-    };
+    const {
+      buildForwardXHopSpec,
+    } = createForwardXHopSpecBuilder({
+      addMimicFilter,
+      applyForwardXTransport,
+      // 这两个在下面才声明：转调一层，真正调用时才读，和原来闭包的时机一样。
+      exitCapacitiesForHostIds: (strategy: unknown, hostIds: number[]) => exitCapacitiesForHostIds(strategy, hostIds),
+      exitWeightsForHostIds: (strategy: unknown, hostIds: number[]) => exitWeightsForHostIds(strategy, hostIds),
+      forwardXExtraExitRoutes,
+      getHopDialAddress,
+      hostInterface,
+      tunnelDnsGeneration,
+      tunnelNeedsMimic,
+    });
     const forwardXEntryRoute = async (tunnel: any) => {
       const hops = tunnelHopsByTunnelId.get(Number(tunnel.id));
       if (Array.isArray(hops) && hops.length >= 2) {
@@ -3957,14 +2752,6 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         return probes;
       }))).flat().filter((probe: any) => probe && probe.targetIp && probe.targetPort > 0);
     const emptyProtocolPolicy = { blockHttp: false, blockSocks: false, blockTls: false };
-    const protocolPolicyFromHost = (hostLike: any) => ({
-      blockHttp: !!(hostLike as any)?.blockHttp,
-      blockSocks: !!(hostLike as any)?.blockSocks,
-      blockTls: !!(hostLike as any)?.blockTls,
-    });
-    const hasProtocolPolicy = (policy: any) => {
-      return policy.blockHttp || policy.blockSocks || policy.blockTls;
-    };
     const hostProtocolPolicyById = new Map<number, typeof emptyProtocolPolicy>([
       [Number(host.id), protocolPolicyFromHost(host)],
     ]);
@@ -4096,7 +2883,6 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       }
       return entries.sort((a, b) => Number(a.ruleId) - Number(b.ruleId));
     };
-    const shouldUseProcessBackendGuard = (rule: any) => PROTOCOL_GUARD_PROCESS_BACKENDS.has(String(rule?.forwardType || ""));
     const tunnelForRule = (rule: any) => (
       Number(rule?.tunnelId || 0) > 0 ? tunnelById.get(Number(rule.tunnelId)) as any : null
     );
@@ -4139,7 +2925,6 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       if (!isForwardRuleProtocolTcpEnabled(rule.protocol)) return false;
       return hasProtocolPolicy(await ruleProtocolPolicy(rule));
     };
-    const shouldUseProtocolGuard = (rule: any, policy: any) => isForwardRuleProtocolTcpEnabled(rule?.protocol) && hasProtocolPolicy(policy);
     const guardListenPort = (rule: any) => protocolGuardPortsForRule(rule).guardListenPort;
     const guardBackendPort = (rule: any) => protocolGuardPortsForRule(rule).guardBackendPort;
     const guardTargetForRule = (rule: any, useRuleGuard: boolean) => (
@@ -4153,23 +2938,6 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
           }
         : { ...failoverTargetEndpoint(rule), backendPort: 0, backendForwardType: "" }
     );
-    const cleanupGuardBackendCmds = (rule: any, keepNames: string[] = []) => {
-      const sourcePort = Number(rule?.sourcePort || 0);
-      if (!sourcePort) return [];
-      const keep = new Set(keepNames.map((name) => String(name || "").trim()).filter(Boolean));
-      const realmGuardService = `forwardx-realm-guard-${sourcePort}`;
-      const services = [
-        realmGuardService,
-        `forwardx-socat-guard-${sourcePort}`,
-        `forwardx-socat-guard-tcp-${sourcePort}`,
-        `forwardx-socat-guard-udp-${sourcePort}`,
-      ];
-      const cmds = services.filter((name) => !keep.has(name)).map((name) => removeManagedServiceCmd(name));
-      if (!keep.has(realmGuardService)) {
-        cmds.push(`rm -f ${shQuote(realmGuardConfigPathForPort(sourcePort))} ${shQuote(`${realmGuardConfigPathForPort(sourcePort)}.sha256`)} 2>/dev/null || true`);
-      }
-      return cmds;
-    };
     const tunnelExitRules = agentAllRules
       .filter((r: any) => {
         if (runtimeBool(r.pendingDelete) || !runtimeBool(r.isEnabled) || r.forwardType !== "gost" || !r.tunnelId) return false;
@@ -4192,23 +2960,6 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
           && isRuleProtocolEnabled(forwardProtocolSettings, r, tunnel)
           && isCurrentHostTunnelExitForRule(r, tunnel);
       });
-    const gostTunnelNode = (
-      name: string,
-      addr: string,
-      dialerType: string,
-      tunnel: any,
-      connector?: Record<string, unknown>,
-    ) => ({
-      name,
-      addr,
-      connector: connector || planGostTunnelHopRelay({
-        tunnelId: Number(tunnel.id),
-        secretSeed: tunnelSecretSeed(tunnel),
-      }),
-      dialer: {
-        type: dialerType,
-      },
-    });
     const buildLoadBalancedExitNodes = async (rule: any, tunnel: any, primaryHostOverride?: string) => {
       const nodes: any[] = [];
       const nodeHostIds: number[] = [];
@@ -4278,740 +3029,70 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       if (await shouldUseRuleGuard(rule)) continue;
       routeHeaderStripRuleIds.add(Number(rule.id));
     }
-    // Shadowsocks 出口链：每条带出口的规则每个协议一条（chain-egress-<规则>-<协议>），和隧道链一起写进 chains。
-    const egressGostChains: any[] = [];
-    const gostServiceConfig = (await Promise.all(gostRules
-      .map(async (r: any) => {
-        const useRuleGuard = await shouldUseRuleGuard(r);
-        const tunnel = (r as any).tunnelId ? tunnelById.get((r as any).tunnelId) as any : null;
-        if (tunnel && !isGostTunnelMode(tunnel)) return [];
-        const protos = tunnel ? tunnelForwardProtos(r.protocol) : forwardRuleProtocols(r.protocol);
-        return Promise.all(protos.map(async (proto) => {
-          const tunnelHops = tunnel ? tunnelHopsByTunnelId.get(Number(tunnel.id)) : null;
-          const isMultiHopTunnel = Array.isArray(tunnelHops) && tunnelHops.length >= 3;
-          const useMultiHopEntry =
-            isMultiHopTunnel
-            && isCurrentHostTunnelEntry(tunnel);
-          const relayFailover = useMultiHopEntry && tunnelRelayUsesParallelRelays(tunnel, tunnelHops);
-          const exitCandidateCount = tunnel ? tunnelExitEndpointsForRule(r, tunnel).length : 0;
-          const routeRetries = Math.max(
-            relayFailover ? tunnelRelayCandidates(tunnelHops as any[]).length - 1 : 0,
-            exitCandidateCount - 1,
-          );
-          // Every multi-exit strategy must fail over promptly when a node is
-          // blackholed.  The selector already retries the remaining nodes;
-          // leaving the default dial timeout here makes round-robin/random/
-          // hash wait on the dead endpoint before that retry can happen.
-          const fastFailover = shouldUseFastTunnelFailover(exitCandidateCount, relayFailover);
-          const tunnelExitHost = tunnel ? tunnelExitEndpointById.get(tunnel.id)?.host : "";
-          const tunnelProxyPlan = tunnel ? tunnelProxyProtocolPlan(r) : null;
-          const protocolPlan = tunnel ? planGostTunnelRuleProtocol({
-            protocol: r.protocol,
-            tunnelId: Number(tunnel.id),
-            ruleId: Number(r.id),
-            secretSeed: tunnelSecretSeed(tunnel),
-          }) : null;
-          const handlerProxyMetadata = proto === "tcp"
-            ? (tunnel
-              ? tunnelProxyPlan?.entryHandler
-              : maybeProxyProtocolMetadata(r, "send")
-                // 只发给本机的调度器、由它剥掉的头（按访客固定），见 routeHeaderStripRuleIds。
-                || (routeHeaderStripRuleIds.has(Number(r.id)) ? gostProxyProtocolMetadata(1) : undefined))
-            : undefined;
-          const serviceListenPort = useRuleGuard && !tunnel ? guardBackendPort(r) : Number(r.sourcePort);
-          const service: any = {
-            name: `fwx-${r.id}-${proto}`,
-            addr: useRuleGuard && !tunnel ? `127.0.0.1:${serviceListenPort}` : `:${serviceListenPort}`,
-            handler: tunnel
-              ? {
-                  type: proto,
-                  chain: `chain-tunnel-${r.id}`,
-                  ...(routeRetries > 0 ? { retries: routeRetries } : {}),
-                  ...(handlerProxyMetadata ? { metadata: handlerProxyMetadata } : {}),
-                }
-              : { type: proto, ...(handlerProxyMetadata ? { metadata: handlerProxyMetadata } : {}) },
-            listener: buildGostRuleListener(proto),
-          };
-          if (proto === "tcp" && tunnelProxyPlan?.entryListener) {
-            service.metadata = tunnelProxyPlan.entryListener;
-          } else if (proto === "tcp" && !tunnel && proxyProtocolEnabled(r, "receive")) {
-            service.metadata = maybeProxyProtocolMetadata(r, "receive");
-          } else if (proto === "tcp" && useRuleGuard && proxyProtocolEnabled(r, "send")) {
-            service.metadata = gostProxyProtocolMetadata(proxyProtocolVersion(r));
-          }
-          if (fastFailover) {
-            service.metadata = { ...(service.metadata || {}), dialTimeout: "3s" };
-          }
-          if (!tunnel) {
-            service.forwarder = {
-              nodes: [{
-                name: `target-${r.id}`,
-                addr: failoverTargetAddr(r),
-                connector: { type: proto },
-                dialer: { type: proto },
-              }],
-            };
-            /*
-              Shadowsocks 出口：forwarder 仍是最终目标，handler 挂一条一跳的链 —— gost 拨的是落地的 SS
-              服务器，请它代连目标（和隧道入口同一个机制）。计数（监听端口上的计数链）、限速（服务上的
-              limiter）都在入口这一侧，和普通 gost 规则一样。运行视图已经保证：没有 egressRuntime 的
-              出口规则根本走不到这里（按停用下发）；UDP 不走出口时协议已收窄成 TCP。
-            */
-            const egressRuntime = ruleEgressRuntime(r);
-            if (egressRuntime && (proto === "tcp" || egressRuntime.udp)) {
-              service.handler = { ...service.handler, chain: gostEgressChainName(Number(r.id), proto) };
-              egressGostChains.push(buildGostEgressChain(Number(r.id), proto, egressRuntime));
-            } else if (egressRuntime) {
-              return null;
-            }
-          } else if (!useMultiHopEntry && (!tunnelExitHost || tunnelExitEndpointsForRule(r, tunnel).length === 0)) {
-            return null;
-          } else if (useMultiHopEntry || protocolPlan?.entryNeedsTarget) {
-            service.forwarder = {
-              nodes: [{
-                name: `target-${r.id}`,
-                addr: protocolPlan?.entryNeedsTarget
-                  ? await gostTunnelExitTargetAddr(r, tunnel)
-                  : failoverTargetAddr(r),
-                connector: { type: proto },
-                dialer: { type: proto },
-              }],
-            };
-          }
-          return applyGostLimiter(service, r, tunnel);
-        }));
-      })))
-      .flat()
-      .filter(Boolean);
-    /*
-      走隧道的规则接 Shadowsocks 出口，这台是隧道出口机：本机 127.0.0.1:端口 上一个 gost 转发，handler 挂出口链
-      （和直连规则的出口同一条链），forwarder 是规则真正的目标 —— SS 落地代连。隧道出口拨进来的就是它。
-      计数、限速都在入口那一侧，这里不挂。
-    */
-    for (const helper of tunnelEgressHelpers.values()) {
-      if (!helper.port || !helper.targetHost || !helper.targetPort) continue;
-      for (const proto of forwardRuleProtocols(helper.protocol)) {
-        if (proto === "udp" && !helper.runtime.udp) continue;
-        gostServiceConfig.push({
-          name: `fwx-tegress-${helper.ruleId}-${proto}`,
-          addr: `127.0.0.1:${helper.port}`,
-          handler: { type: proto, chain: gostEgressChainName(helper.ruleId, proto) },
-          listener: buildGostRuleListener(proto),
-          forwarder: {
-            nodes: [{
-              name: `tegress-target-${helper.ruleId}`,
-              addr: endpointHostPort(helper.targetHost, helper.targetPort),
-              connector: { type: proto },
-              dialer: { type: proto },
-            }],
-          },
-        });
-        egressGostChains.push(buildGostEgressChain(helper.ruleId, proto, helper.runtime));
-      }
-    }
-    const tunnelGostChains = (await Promise.all(gostRules
-      .filter((r: any) => runtimeBool(r.isEnabled) && r.forwardType === "gost" && r.tunnelId)
-      .map(async (r: any) => {
-        const tunnel = tunnelById.get((r as any).tunnelId) as any;
-        if (!isGostTunnelMode(tunnel)) return null;
-        const tunnelExitHost = tunnel ? tunnelExitEndpointById.get(tunnel.id)?.host : "";
-        if (!tunnel || !tunnelExitHost || tunnelExitEndpointsForRule(r, tunnel).length === 0) return null;
-        const tunnelHops = tunnelHopsByTunnelId.get(Number(tunnel.id));
-        const firstHop = Array.isArray(tunnelHops) && tunnelHops.length >= 2 ? (tunnelHops[0] as any) : null;
-        const isMultiHopTunnel = Array.isArray(tunnelHops) && tunnelHops.length >= 3;
-        const useMultiHopEntry =
-          isMultiHopTunnel
-          && isCurrentHostTunnelEntry(tunnel);
-        // Multi-hop rules on the entry host must build an explicit B->...->exit chain.
-        // Dialing the local first-hop listener only proves the generic probe path and bypasses
-        // the selected tunnel exit listener.
-        if (isMultiHopTunnel && !useMultiHopEntry) {
-          console.warn(`[TunnelRoute] skip direct fallback for multi-hop tunnel=${tunnel.id} rule=${r.id}; entry host mismatch host=${host.id} firstHop=${Number(firstHop?.hostId) || 0}`);
-          return null;
-        }
-        if (isMultiHopTunnel && useMultiHopEntry) {
-          const chainHops: any[] = [];
-          const routeParts: string[] = [`entry#${Number(host.id)}:${Number((r as any).sourcePort)}`];
-          const relayFailover = isTunnelRelayFailover(tunnel, tunnelHops);
-          if (relayFailover) {
-            const relayNodes = await Promise.all(tunnelRelayCandidates(tunnelHops).map(async (hop: any, index: number) => {
-              const hopDialHost = await getHopDialAddress(hop, tunnel);
-              if (!hopDialHost || !Number(hop.listenPort)) return null;
-              const hopAddr = endpointHostPort(hopDialHost, hop.listenPort);
-              routeParts.push(`relay#${index + 1}:${Number(hop.hostId)}@${hopAddr}`);
-              return gostTunnelNode(
-                `relay-${r.id}-${Number(hop.seq)}`,
-                hopAddr,
-                gostTunnelTransportType(tunnel.mode),
-                tunnel,
-              );
-            }));
-            const validRelayNodes = relayNodes.filter(Boolean);
-            if (validRelayNodes.length !== tunnelRelayCandidates(tunnelHops).length) return null;
-            chainHops.push({
-              name: `hop-tunnel-${r.id}-relay-failover`,
-              selector: gostRelayFailoverHopMetadata,
-              nodes: validRelayNodes,
-            });
-          } else {
-            for (let i = 1; i < tunnelHops.length - 1; i++) {
-              const hop = tunnelHops[i] as any;
-              const hopDialHost = await getHopDialAddress(hop, tunnel);
-              if (!hopDialHost || !Number(hop.listenPort)) return null;
-              const hopAddr = endpointHostPort(hopDialHost, hop.listenPort);
-              routeParts.push(`hop#${Number(hop.hostId)}@${hopAddr}`);
-              chainHops.push({
-                name: `hop-tunnel-${r.id}-${Number(hop.seq)}`,
-                nodes: [gostTunnelNode(
-                  `mhop-${r.id}-${Number(hop.seq)}`,
-                  hopAddr,
-                  gostTunnelTransportType(tunnel.mode),
-                  tunnel,
-                )],
-              });
-            }
-          }
-          const exitHop = tunnelHops[tunnelHops.length - 1] as any;
-          const exitHost = await getHopDialAddress(exitHop, tunnel);
-          const exitNodes = await buildLoadBalancedExitNodes(r, tunnel, exitHost);
-          if (!exitHost || exitNodes.length === 0) return null;
-          chainHops.push({
-            name: `hop-tunnel-${r.id}-exit`,
-            ...(exitNodes.length > 1 ? { selector: gostExitSelector((tunnel as any).loadBalanceStrategy) } : {}),
-            nodes: exitNodes,
-          });
-          if (chainHops.length === 0) return null;
-          routeParts.push(`exit#${Number(exitHop.hostId)}@${exitNodes.map((node: any) => node.addr).join(",")}`);
-          const route = routeParts.join(" -> ");
-          const routeKey = `${tunnel.id}:${r.id}:${host.id}`;
-          if (tunnelRouteLogCache.get(routeKey) !== route) {
-            setBoundedMapValue(tunnelRouteLogCache, routeKey, route, AGENT_DYNAMIC_CACHE_MAX);
-            appendPanelLog("info", `[TunnelRoute] gost multi-hop tunnel=${tunnel.id} rule=${r.id} host=${host.id} proxyEntrySend=${proxyProtocolEnabled(r, "entrySend")} route=${route}`);
-          }
-          return { name: `chain-tunnel-${r.id}`, hops: chainHops };
-        }
-        const firstExitEndpoint = tunnelExitEndpointsForRule(r, tunnel)[0];
-        const chainTargetAddr = useMultiHopEntry
-          ? endpointHostPort("127.0.0.1", firstHop.listenPort)
-          : endpointHostPort(tunnelExitHost, firstExitEndpoint?.listenPort || 0);
-        const chainNodeName = useMultiHopEntry ? `mhop-entry-${r.id}` : `exit-${r.id}`;
-        const exitNodes = !useMultiHopEntry ? await buildLoadBalancedExitNodes(r, tunnel) : [];
-        return {
-          name: `chain-tunnel-${r.id}`,
-          hops: [{
-            name: `hop-tunnel-${r.id}`,
-            ...(exitNodes.length > 1 ? { selector: gostExitSelector((tunnel as any).loadBalanceStrategy) } : {}),
-            nodes: useMultiHopEntry ? [gostTunnelNode(
-              chainNodeName,
-              chainTargetAddr,
-              "tcp",
-              tunnel,
-            )] : exitNodes,
-          }],
-        };
-      }))).filter(Boolean);
-    const gostChains = [...tunnelGostChains, ...egressGostChains];
-    const gostManagedConfigs: any[] = [];
-    const buildGostReloadCmds = () => {
-      const encodedConfig = Buffer.from(JSON.stringify({ services: gostServiceConfig, chains: gostChains, limiters: gostRateLimiters, ...gostRuntimeApiSection(gostServiceName) }, null, 2), "utf8").toString("base64");
-      gostManagedConfigs.push({
-        path: RUNTIME_CONFIG_PATH,
-        contentBase64: encodedConfig,
-        format: "json",
-        serviceName: gostServiceName,
-      });
-      const proxyDebugCmds = VERBOSE_AGENT_ACTIONS ? gostRules
-        .filter((rule: any) => rule && Number(rule.tunnelId || 0) > 0 && (
-          proxyProtocolEnabled(rule, "entryReceive") ||
-          proxyProtocolEnabled(rule, "entrySend") ||
-          proxyProtocolEnabled(rule, "exitReceive") ||
-          proxyProtocolEnabled(rule, "exitSend")
-        ))
-        .map((rule: any) => buildProxyRuleDebugCmd("entry", rule, {
-          chain: `chain-tunnel-${Number(rule.id || 0)}`,
-        })) : [];
-      const cmds = [
-        `mkdir -p ${shQuote(RUNTIME_CONFIG_DIR)}`,
-        ...proxyDebugCmds,
-        writeManagedServiceCmd(gostServiceName, gostServiceUnit),
-        stopManagedServiceCmd(LEGACY_GOST_SERVICE_NAME),
-      ];
-      if (gostServiceConfig.length > 0) {
-        cmds.unshift(ensureRuntimeBinaryCmd());
-        if (anyTunnelDnsRefresh(hostTunnels as any[])) {
-          cmds.push(dnsRuntimeRefreshCmd("gost"), `rm -f ${shQuote(`${RUNTIME_CONFIG_PATH}.sha256`)} 2>/dev/null || true`);
-        }
-        cmds.push(gostRuntimeSyncCmd(gostServiceName, RUNTIME_CONFIG_PATH));
-      } else {
-        cmds.push(stopManagedServiceCmd(gostServiceName));
-      }
-      return cmds;
-    };
-    const businessTunnelListenKeys = new Set<string>();
-    for (const rule of tunnelExitRules as any[]) {
-      const tunnel = tunnelById.get(Number((rule as any).tunnelId)) as any;
-      if (!tunnel || !isGostTunnelMode(tunnel)) continue;
-      for (const endpoint of tunnelExitEndpointsForRule(rule, tunnel)) {
-        if (endpoint.exitHostId > 0 && endpoint.listenPort > 0) {
-          businessTunnelListenKeys.add(`${endpoint.exitHostId}:${endpoint.listenPort}`);
-        }
-      }
-    }
-    // Keep idle GOST links probeable. A real forwarding service on the same
-    // host and port takes precedence, so the generated runtime never binds twice.
-    const gostTunnelProbePlans = planGostTunnelProbeListeners(
-      Number(host.id),
-      (hostTunnels as any[]).map((tunnel: any) => ({
-        ...tunnel,
-        protocolEnabled: isTunnelProtocolEnabled(forwardProtocolSettings, tunnel),
-      })),
-      tunnelExitNodesByTunnelId,
-      businessTunnelListenKeys,
-    );
-    const gostTunnelProbeServices = gostTunnelProbePlans.map((probe) => ({
-      name: probe.name,
-      addr: `:${probe.listenPort}`,
-      handler: { type: "tcp" },
-      listener: {
-        type: gostTunnelTransportType(probe.mode),
-      },
-      forwarder: {
-        nodes: [{
-          name: `probe-${probe.name}`,
-          addr: "127.0.0.1:9",
-          connector: { type: "tcp" },
-          dialer: { type: "tcp" },
-        }],
-      },
-    }));
-    const buildTunnelReloadCmds = async () => {
-      const ruleServices = (await Promise.all(tunnelExitRules.map(async (rule: any) => {
-        const tunnel = tunnelById.get(rule.tunnelId) as any;
-        if (!tunnel || !isGostTunnelMode(tunnel)) return [];
-        const exitPorts = currentHostTunnelExitPortsForRule(rule, tunnel);
-        if (exitPorts.length === 0) return [];
-        const protocolPlan = planGostTunnelRuleProtocol({
-          protocol: rule.protocol,
-          tunnelId: Number(tunnel.id),
-          ruleId: Number(rule.id),
-          secretSeed: tunnelSecretSeed(tunnel),
-        });
-        const targetAddr = protocolPlan.exitTargetDialType ? await gostTunnelExitTargetAddr(rule, tunnel) : "";
-        return exitPorts.map((exitPort) => {
-          return {
-            name: `fwx-tunnel-exit-${tunnel.id}-${rule.id}-${exitPort}`,
-            addr: `:${exitPort}`,
-            handler: protocolPlan.exitHandler,
-            listener: {
-              type: gostTunnelTransportType(tunnel.mode),
-            },
-            ...(protocolPlan.exitTargetDialType
-              ? {
-                  forwarder: {
-                    nodes: [{
-                      name: `target-${rule.id}`,
-                      addr: targetAddr,
-                      connector: { type: protocolPlan.exitTargetDialType },
-                      dialer: { type: protocolPlan.exitTargetDialType },
-                    }],
-                  },
-                }
-              : {}),
-          };
-        });
-      }))).flat();
-      const multiHopRelayServices = await Promise.all((hostTunnels as any[]).map(async (tunnel: any) => {
-        if (!tunnel || !runtimeBool(tunnel.isEnabled) || !isGostTunnelMode(tunnel) || !isTunnelProtocolEnabled(forwardProtocolSettings, tunnel)) return null;
-        const hops = tunnelHopsByTunnelId.get(Number(tunnel.id));
-        if (!hops || hops.length < 2) return null;
-        const hostIdx = hops.findIndex((hop: any) => Number(hop.hostId) === Number(host.id));
-        if (hostIdx < 0 || hostIdx >= hops.length - 1) return null; // not in chain or exit hop
-        const currentHop = hops[hostIdx] as any;
-        return {
-          name: `fwx-mhop-${tunnel.id}-${Number(currentHop.seq)}`,
-          addr: `:${Number(currentHop.listenPort)}`,
-          handler: planGostTunnelHopRelay({
-            tunnelId: Number(tunnel.id),
-            secretSeed: tunnelSecretSeed(tunnel),
-          }),
-          listener: {
-            // Entry hop receives local plain TCP traffic; relays receive tunneled traffic.
-            type: Number(currentHop.seq) === 0 ? "tcp" : gostTunnelTransportType(tunnel.mode),
-          },
-        };
-      }));
-      const services = [...gostTunnelProbeServices, ...ruleServices, ...multiHopRelayServices.filter(Boolean)];
-      const countingCmds = tunnelExitRules.flatMap((rule: any) => {
-        const tunnel = tunnelById.get(rule.tunnelId) as any;
-        if (!tunnel || !isGostTunnelMode(tunnel)) return [];
-        return currentHostTunnelExitPortsForRule(rule, tunnel)
-          .flatMap((exitPort) => buildCountingChainCmds(Number(exitPort), rule.targetIp, rule.targetPort, rule.protocol));
-      });
-      const proxyDebugCmds = VERBOSE_AGENT_ACTIONS ? tunnelExitRules.flatMap((rule: any) => {
-        const tunnel = tunnelById.get(Number(rule.tunnelId)) as any;
-        if (!tunnel || isForwardXTunnel(tunnel)) return [];
-        if (
-          !proxyProtocolEnabled(rule, "entryReceive") &&
-          !proxyProtocolEnabled(rule, "entrySend") &&
-          !proxyProtocolEnabled(rule, "exitReceive") &&
-          !proxyProtocolEnabled(rule, "exitSend")
-        ) return [];
-        return currentHostTunnelExitPortsForRule(rule, tunnel).map((exitPort) => buildProxyRuleDebugCmd("exit", rule, {
-          exitPort: Number(exitPort),
-          listener: gostTunnelTransportType(tunnel.mode),
-        }));
-      }) : [];
-      const encodedConfig = Buffer.from(JSON.stringify({ services, ...gostRuntimeApiSection(TUNNEL_RUNTIME_SERVICE_NAME) }, null, 2), "utf8").toString("base64");
-      gostManagedConfigs.push({
-        path: TUNNEL_RUNTIME_CONFIG_PATH,
-        contentBase64: encodedConfig,
-        format: "json",
-        serviceName: TUNNEL_RUNTIME_SERVICE_NAME,
-      });
-      const cmds = [
-        `mkdir -p ${shQuote(RUNTIME_CONFIG_DIR)}`,
-        ...proxyDebugCmds,
-        writeManagedServiceCmd(TUNNEL_RUNTIME_SERVICE_NAME, [
-          "[Unit]",
-          "Description=ForwardX managed tunnel runtime",
-          "After=network.target",
-          "StartLimitIntervalSec=60",
-          "StartLimitBurst=5",
-          "",
-          "[Service]",
-          "Type=simple",
-          `ExecStart=${gostRuntimeExecStart(TUNNEL_RUNTIME_SERVICE_NAME, TUNNEL_RUNTIME_CONFIG_PATH)}`,
-          "Restart=always",
-          "RestartSec=5",
-          `LimitNOFILE=${SHARED_RUNTIME_NOFILE}`,
-          "",
-          "[Install]",
-          "WantedBy=multi-user.target",
-          "",
-        ].join("\n")),
-        stopManagedServiceCmd(LEGACY_TUNNEL_SERVICE_NAME),
-      ];
-      if (services.length > 0) {
-        cmds.unshift(ensureRuntimeBinaryCmd());
-        if (anyTunnelDnsRefresh(hostTunnels as any[])) {
-          cmds.push(dnsRuntimeRefreshCmd("gost-tunnel"), `rm -f ${shQuote(`${TUNNEL_RUNTIME_CONFIG_PATH}.sha256`)} 2>/dev/null || true`);
-        }
-        cmds.push(gostRuntimeSyncCmd(TUNNEL_RUNTIME_SERVICE_NAME, TUNNEL_RUNTIME_CONFIG_PATH));
-      } else {
-        cmds.push(stopManagedServiceCmd(TUNNEL_RUNTIME_SERVICE_NAME));
-      }
-      cmds.push(...countingCmds);
-      return cmds;
-    };
+    const {
+      buildGostReloadCmds,
+      buildTunnelReloadCmds,
+      gostManagedConfigs,
+      gostServiceConfig,
+      gostTunnelProbePlans,
+    } = await createGostRuntimePlan(heartbeatCtx, {
+      VERBOSE_AGENT_ACTIONS,
+      anyTunnelDnsRefresh,
+      applyGostLimiter,
+      buildLoadBalancedExitNodes,
+      buildProxyRuleDebugCmd,
+      currentHostTunnelExitPortsForRule,
+      dnsRuntimeRefreshCmd,
+      failoverTargetAddr,
+      getHopDialAddress,
+      gostRateLimiters,
+      gostRelayFailoverHopMetadata,
+      gostRules,
+      gostRuntimeApiSection,
+      gostRuntimeExecStart,
+      gostRuntimeSyncCmd,
+      gostServiceName,
+      gostServiceUnit,
+      gostTunnelExitTargetAddr,
+      guardBackendPort,
+      isCurrentHostTunnelEntry,
+      isForwardXTunnel,
+      maybeProxyProtocolMetadata,
+      proxyProtocolEnabled,
+      proxyProtocolVersion,
+      routeHeaderStripRuleIds,
+      shouldUseRuleGuard,
+      tunnelEgressHelpers,
+      tunnelExitEndpointsForRule,
+      tunnelExitRules,
+      tunnelForwardProtos,
+      tunnelProxyProtocolPlan,
+    });
 
     // 收集所有正在运行的规则的 port→ruleId 映射，用于 agent 重建映射文件
-    const nginxEndpoint = (hostValue: unknown, portValue: unknown) => {
-      const clean = cleanEndpointHost(hostValue);
-      const port = Number(portValue) || 0;
-      if (!clean || port <= 0 || port > 65535) return "";
-      return isIpv6Literal(clean) ? `[${clean}]:${port}` : `${clean}:${port}`;
-    };
-    const nginxProtocolsForRule = (rule: any): Array<"tcp" | "udp"> => {
-      return forwardRuleProtocols(rule?.protocol);
-    };
-    const nginxUpstreamBlock = (
-      name: string,
-      endpoints: Array<{ addr: string; primary?: boolean; weight?: number }>,
-      strategyRaw?: unknown,
-    ) => {
-      const cleanEndpoints = endpoints.filter((endpoint) => endpoint.addr);
-      if (cleanEndpoints.length === 0) return "";
-      const strategy = cleanEndpoints.length > 1 ? String(strategyRaw || "round_robin") : "round_robin";
-      const lines = [`  upstream ${name} {`];
-      if (strategy === "random") lines.push("    random;");
-      else if (strategy === "least_conn" || strategy === "least_load") lines.push("    least_conn;");
-      else if (strategy === "ip_hash") lines.push("    hash $remote_addr consistent;");
-      cleanEndpoints.forEach((endpoint, index) => {
-        const backup = strategy === "fallback" && index > 0 ? " backup" : "";
-        const weight = (strategy === "weighted" || strategy === "least_load") && Number(endpoint.weight) > 1 ? ` weight=${Math.floor(Number(endpoint.weight))}` : "";
-        lines.push(`    server ${endpoint.addr}${weight} max_fails=2 fail_timeout=10s${backup};`);
-      });
-      lines.push("  }");
-      return lines.join("\n");
-    };
     const buildNginxPortCleanupCmds = (rule: any) => [
       `rm -f /var/lib/forwardx-agent/traffic_${Number(rule.sourcePort) || 0}.prev /var/lib/forwardx-agent/port_${Number(rule.sourcePort) || 0}.rule /var/lib/forwardx-agent/port_${Number(rule.sourcePort) || 0}.fwtype /var/lib/forwardx-agent/port_${Number(rule.sourcePort) || 0}.tunnel /var/lib/forwardx-agent/target_${Number(rule.sourcePort) || 0}.info 2>/dev/null || true`,
       ...buildCountingCleanupCmds(rule.sourcePort, rule.targetIp, rule.targetPort, rule.protocol),
       ...buildAccessLimitCleanupCmds(rule.sourcePort, accessScopeForRule(rule)),
     ];
-    const nginxRuntimeActiveCmd = () => (
-      `if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then systemctl is-active --quiet ${shQuote(NGINX_SERVICE_NAME)}.service; ` +
-      `elif command -v rc-service >/dev/null 2>&1; then rc-service ${shQuote(NGINX_SERVICE_NAME)} status >/dev/null 2>&1; ` +
-      `elif [ -x /etc/init.d/${NGINX_SERVICE_NAME} ]; then /etc/init.d/${NGINX_SERVICE_NAME} status >/dev/null 2>&1; ` +
-      `else pgrep -f '${NGINX_BIN}.*${NGINX_CONFIG_PATH}' >/dev/null 2>&1; fi`
-    );
-    const nginxConfigHashCmd = (configPath = NGINX_CONFIG_PATH) => {
-      const config = shQuote(configPath);
-      return `if command -v sha256sum >/dev/null 2>&1; then sha256sum ${config} 2>/dev/null | awk '{print "sha256:"$1}'; elif command -v cksum >/dev/null 2>&1; then cksum ${config} 2>/dev/null | awk '{print "cksum:"$1":"$2}'; else echo "mtime:$(wc -c < ${config} 2>/dev/null):$(date -r ${config} +%s 2>/dev/null)"; fi`;
-    };
-    const nginxRuntimeVerifyCmd = () => {
-      const config = shQuote(NGINX_CONFIG_PATH);
-      return `[ -s ${config} ] && (${nginxRuntimeActiveCmd()}) && new_hash=$(${nginxConfigHashCmd()}); old_hash=$(cat ${config}.sha256 2>/dev/null || true); [ -n "$new_hash" ] && [ "$new_hash" = "$old_hash" ]`;
-    };
-    const reloadNginxIfConfigChangedCmd = () => {
-      const config = shQuote(NGINX_CONFIG_PATH);
-      const active = nginxRuntimeActiveCmd();
-      const start = startManagedServiceCmd(NGINX_SERVICE_NAME);
-      const configHash = nginxConfigHashCmd();
-      const reload = `${shQuote(NGINX_BIN)} -p ${shQuote(NGINX_CONFIG_DIR)} -c ${config} -s reload || { [ -s /run/forwardx-nginx.pid ] && kill -HUP "$(cat /run/forwardx-nginx.pid)" 2>/dev/null; }`;
-      return `new_hash=$(${configHash}); old_hash=$(cat ${config}.sha256 2>/dev/null || true); if [ -z "$new_hash" ]; then echo "[service] ${NGINX_SERVICE_NAME} config hash failed"; exit 1; fi; if [ "$new_hash" != "$old_hash" ] || ! { ${active}; }; then if { ${active}; }; then ${reload} || { echo "[service] ${NGINX_SERVICE_NAME} reload failed"; exit 1; }; else ${start}; fi; printf '%s' "$new_hash" > ${config}.sha256; else echo "[service] ${NGINX_SERVICE_NAME} config unchanged"; fi`;
-    };
-    const buildNginxRuntimeSyncPlan = async () => {
-      const startedAt = Date.now();
-      const nginxManagedConfigs: any[] = [];
-      const upstreams: string[] = [];
-      const servers: string[] = [];
-      const certFingerprints: string[] = [];
-      const certKeys = new Set<string>();
-      const activeCertPaths = new Set<string>();
-      const countingCmds: string[] = [];
-      const routeSummaries: string[] = [];
-      const warnNginxRoute = (message: string) => {
-        const key = `nginx:${Number(host.id)}:${message}`;
-        if (tunnelRouteLogCache.get(key) === message) return;
-        setBoundedMapValue(tunnelRouteLogCache, key, message, AGENT_DYNAMIC_CACHE_MAX);
-        appendPanelLog("warn", message);
-      };
-      const logNginxRoute = (message: string) => {
-        const key = `nginx:${Number(host.id)}:${message}`;
-        if (tunnelRouteLogCache.get(key) === message) return;
-        setBoundedMapValue(tunnelRouteLogCache, key, message, AGENT_DYNAMIC_CACHE_MAX);
-        appendPanelLog("info", message);
-      };
-      const ensureNginxTunnelCert = (tunnel: any) => {
-        const cert = buildNginxTunnelServerCertificate(tunnel);
-        if (!cert) return null;
-        activeCertPaths.add(cert.certPath);
-        activeCertPaths.add(cert.keyPath);
-        const key = `${cert.certPath}:${cert.keyPath}`;
-        if (!certKeys.has(key)) {
-          certKeys.add(key);
-          certFingerprints.push(`# cert tunnel-${Number(tunnel?.id || 0)} ${cert.fingerprint}`);
-          nginxManagedConfigs.push(
-            {
-              path: cert.certPath,
-              contentBase64: Buffer.from(cert.certPem, "utf8").toString("base64"),
-              format: "text",
-              mode: 0o644,
-            },
-            {
-              path: cert.keyPath,
-              contentBase64: Buffer.from(cert.keyPem, "utf8").toString("base64"),
-              format: "text",
-              mode: 0o600,
-            },
-          );
-        }
-        return cert;
-      };
-      const addUpstreamServer = (name: string, endpoints: Array<{ addr: string; primary?: boolean; weight?: number }>, strategy?: unknown) => {
-        const block = nginxUpstreamBlock(name, endpoints, strategy);
-        if (!block) return false;
-        upstreams.push(block);
-        return true;
-      };
-      let tlsClientServers = 0;
-      let tlsServerServers = 0;
-      const addServer = (options: NginxStreamServerOptions) => {
-        if (!options.listenPort || !options.upstream) return;
-        if (options.sslClient && options.proto === "tcp") tlsClientServers += 1;
-        if (options.sslServer && options.proto === "tcp") tlsServerServers += 1;
-        servers.push(buildNginxStreamServerBlock(options));
-      };
-
-      for (const rule of agentHostRules as any[]) {
-        if (!rule || runtimeBool(rule.pendingDelete) || !runtimeBool(rule.isEnabled) || rule.forwardType !== "nginx") continue;
-        if (!isRuleProtocolEnabled(forwardProtocolSettings, rule, null)) continue;
-        const useRuleGuard = await shouldUseRuleGuard(rule);
-        const listenPort = useRuleGuard ? guardBackendPort(rule) : Number(rule.sourcePort);
-        // 线路组生效时 nginx 拨本机的调度器，由它挑路径（failoverTargetEndpoint）。
-        const nginxTarget = failoverTargetEndpoint(rule);
-        for (const proto of nginxProtocolsForRule(rule)) {
-          const upstream = `fwx_rule_${Number(rule.id)}_${proto}`;
-          if (!addUpstreamServer(upstream, [{ addr: nginxEndpoint(nginxTarget.targetIp, nginxTarget.targetPort), primary: true }])) continue;
-          routeSummaries.push(`rule=${rule.id} port=${Number(rule.sourcePort)} listen=${listenPort} proto=${proto} target=${nginxTarget.targetIp}:${Number(nginxTarget.targetPort) || 0}`);
-          addServer({
-            name: `rule ${Number(rule.id)} ${proto}`,
-            listenPort,
-            proto,
-            upstream,
-            loopbackOnly: useRuleGuard,
-          });
-        }
-        countingCmds.push(...buildCountingChainCmds(rule.sourcePort, rule.targetIp, rule.targetPort, rule.protocol));
-        countingCmds.push(...buildRuleAccessLimitCmds(rule));
-      }
-
-      for (const rule of agentHostRules as any[]) {
-        if (!rule || runtimeBool(rule.pendingDelete) || !runtimeBool(rule.isEnabled) || rule.forwardType !== "gost" || !rule.tunnelId) continue;
-        const tunnel = tunnelById.get(Number(rule.tunnelId)) as any;
-        if (!tunnel || !runtimeBool(tunnel.isEnabled) || !isNginxTunnelMode(tunnel) || !isCurrentHostTunnelEntry(tunnel)) continue;
-        if (!isTunnelProtocolEnabled(forwardProtocolSettings, tunnel) || !isRuleProtocolEnabled(forwardProtocolSettings, rule, tunnel)) continue;
-        const tlsClient = buildNginxTunnelTlsClientOptions(tunnel);
-        const endpoints: Array<{ addr: string; primary?: boolean; weight?: number }> = [];
-        const endpointHostIds: number[] = [];
-        for (const endpoint of tunnelExitEndpointsForRule(rule, tunnel)) {
-          const exitHost = endpoint.primary
-            ? (tunnelExitEndpointById.get(tunnel.id)?.host || await tunnelExitHostAddress(tunnel))
-            : await getExtraExitDialAddress(endpoint.node, tunnel);
-          const addr = nginxEndpoint(exitHost, endpoint.listenPort);
-          if (addr) {
-            endpoints.push({ addr, primary: endpoint.primary });
-            endpointHostIds.push(endpoint.exitHostId);
-            continue;
-          }
-          warnNginxRoute(`[NginxRuntime] missing endpoint host=${host.id} name=${String(host.name || "-")} tunnel=${tunnel.id} rule=${rule.id} exitHost=${endpoint.exitHostId} listenPort=${endpoint.listenPort || "-"} primary=${endpoint.primary}`);
-        }
-        const endpointWeights = await exitWeightsForHostIds((tunnel as any).loadBalanceStrategy, endpointHostIds);
-        if (endpointWeights) endpoints.forEach((endpoint, index) => { endpoint.weight = endpointWeights[index]; });
-        if (endpoints.length === 0) {
-          warnNginxRoute(`[NginxRuntime] skipped tunnel entry host=${host.id} name=${String(host.name || "-")} tunnel=${tunnel.id} rule=${rule.id} reason=no-endpoints`);
-          continue;
-        }
-        const useRuleGuard = await shouldUseRuleGuard(rule);
-        const listenPort = useRuleGuard ? guardBackendPort(rule) : Number(rule.sourcePort);
-        routeSummaries.push(`entry rule=${rule.id} tunnel=${tunnel.id} port=${Number(rule.sourcePort)} listen=${listenPort} endpoints=${endpoints.map((item) => item.addr).join(",")}`);
-        for (const proto of nginxProtocolsForRule(rule)) {
-          const upstream = `fwx_tentry_${Number(rule.id)}_${proto}`;
-          if (!addUpstreamServer(upstream, endpoints, (tunnel as any).loadBalanceStrategy)) continue;
-          addServer({
-            name: `tunnel entry ${Number(tunnel.id)} rule ${Number(rule.id)} ${proto}`,
-            listenPort,
-            proto,
-            upstream,
-            loopbackOnly: useRuleGuard,
-            sslClient: proto === "tcp" ? tlsClient : null,
-          });
-        }
-        countingCmds.push(...buildCountingChainCmds(rule.sourcePort, rule.targetIp, rule.targetPort, rule.protocol));
-        countingCmds.push(...buildRuleAccessLimitCmds(rule));
-      }
-
-      const nginxBusinessListenKeys = new Set<string>();
-      for (const rule of nginxTunnelExitRules as any[]) {
-        const tunnel = tunnelById.get(Number(rule.tunnelId)) as any;
-        if (!tunnel || !isNginxTunnelMode(tunnel)) continue;
-        const exitPorts = currentHostTunnelExitPortsForRule(rule, tunnel);
-        if (exitPorts.length === 0) continue;
-        let cert: ReturnType<typeof buildNginxTunnelServerCertificate> | null | undefined;
-        // 线路组生效时出口的 nginx 拨本机的调度器，由它挑路径（failoverForCurrentHost 下发规格）。
-        const exitTarget = failoverTargetEndpoint(rule);
-        for (const exitPort of exitPorts) {
-          nginxBusinessListenKeys.add(`${Number(host.id)}:${Number(exitPort)}`);
-          routeSummaries.push(`exit rule=${rule.id} tunnel=${tunnel.id} host=${Number(host.id)} listen=${Number(exitPort)} target=${exitTarget.targetIp}:${Number(exitTarget.targetPort) || 0}`);
-          for (const proto of nginxProtocolsForRule(rule)) {
-            const upstream = `fwx_texit_${Number(tunnel.id)}_${Number(rule.id)}_${Number(exitPort)}_${proto}`;
-            if (!addUpstreamServer(upstream, [{ addr: nginxEndpoint(exitTarget.targetIp, exitTarget.targetPort), primary: true }])) continue;
-            if (proto === "tcp" && cert === undefined) cert = ensureNginxTunnelCert(tunnel);
-            addServer({
-              name: `tunnel exit ${Number(tunnel.id)} rule ${Number(rule.id)} port ${Number(exitPort)} ${proto}`,
-              listenPort: Number(exitPort),
-              proto,
-              upstream,
-              sslServer: proto === "tcp" && cert ? { certPath: cert.certPath, keyPath: cert.keyPath } : null,
-            });
-          }
-          countingCmds.push(...buildCountingChainCmds(Number(exitPort), rule.targetIp, rule.targetPort, rule.protocol));
-        }
-      }
-
-      for (const tunnel of hostTunnels as any[]) {
-        if (!tunnel || !runtimeBool(tunnel.isEnabled) || !isNginxTunnelMode(tunnel) || !isTunnelProtocolEnabled(forwardProtocolSettings, tunnel)) continue;
-        const probePorts: number[] = [];
-        if (Number(tunnel.exitHostId) === Number(host.id)) probePorts.push(Number(tunnel.listenPort) || 0);
-        for (const exitNode of tunnelExtraExitNodes(tunnel)) {
-          if (Number((exitNode as any).hostId || 0) === Number(host.id)) probePorts.push(Number((exitNode as any).listenPort || 0));
-        }
-        const activeProbePorts = Array.from(new Set(probePorts.filter((port) => port > 0)));
-        if (activeProbePorts.length === 0) continue;
-        let cert: ReturnType<typeof buildNginxTunnelServerCertificate> | null | undefined;
-        for (const listenPort of activeProbePorts) {
-          if (nginxBusinessListenKeys.has(`${Number(host.id)}:${listenPort}`)) continue;
-          const upstream = `fwx_tprobe_${Number(tunnel.id)}_${listenPort}`;
-          if (!addUpstreamServer(upstream, [{ addr: "127.0.0.1:9", primary: true }])) continue;
-          if (cert === undefined) cert = ensureNginxTunnelCert(tunnel);
-          addServer({
-            name: `tunnel probe ${Number(tunnel.id)} port ${listenPort}`,
-            listenPort,
-            proto: "tcp",
-            upstream,
-            sslServer: cert ? { certPath: cert.certPath, keyPath: cert.keyPath } : null,
-          });
-        }
-      }
-
-      const hasServers = servers.length > 0;
-      const configSignature = crypto.createHash("sha256")
-        .update(JSON.stringify({ hostId: Number(host.id), upstreams, servers, certFingerprints, counting: countingCmds.length }))
-        .digest("hex");
-      const previousSignature = nginxRuntimeLogCache.get(Number(host.id));
-      if (previousSignature !== configSignature) {
-        setBoundedMapValue(nginxRuntimeLogCache, Number(host.id), configSignature, AGENT_HOST_CACHE_MAX);
-        logNginxRoute(`[NginxRuntime] host=${host.id} name=${String(host.name || "-")} servers=${servers.length} upstreams=${upstreams.length} tlsClients=${tlsClientServers} tlsServers=${tlsServerServers} certs=${certKeys.size} counting=${countingCmds.length} routes=${routeSummaries.length} elapsedMs=${Date.now() - startedAt}`);
-        for (const summary of routeSummaries.slice(0, 20)) {
-          logNginxRoute(`[NginxRuntime] host=${host.id} ${summary}`);
-        }
-        if (routeSummaries.length > 20) {
-          logNginxRoute(`[NginxRuntime] host=${host.id} routeDetailsOmitted=${routeSummaries.length - 20}`);
-        }
-      }
-      const config = buildNginxStreamConfig({ upstreams, servers, certFingerprints });
-      const encodedConfig = Buffer.from(config, "utf8").toString("base64");
-      const setupCmds = [
-        `mkdir -p ${shQuote(NGINX_CONFIG_DIR)} ${shQuote(NGINX_CERT_DIR)} /var/log/forwardx-agent`,
-        `modules_conf=${shQuote(`${NGINX_CONFIG_DIR}/modules.conf`)}; : > "$modules_conf"; for mod in /usr/lib/nginx/modules/ngx_stream_module.so /usr/lib64/nginx/modules/ngx_stream_module.so /usr/share/nginx/modules/ngx_stream_module.so modules/ngx_stream_module.so; do if [ -s "$mod" ]; then printf 'load_module %s;\\n' "$mod" > "$modules_conf"; break; fi; done`,
-        buildNginxCertificateCleanupCmd(Array.from(activeCertPaths)),
-      ];
-      const cmds: string[] = [];
-      if (hasServers) {
-        nginxManagedConfigs.push({
-          path: NGINX_CONFIG_PATH,
-          contentBase64: encodedConfig,
-          format: "text",
-          mode: 0o644,
-          validateCommand: `${shQuote(NGINX_BIN)} -p ${shQuote(NGINX_CONFIG_DIR)} -c {{path}} -t`,
-          serviceName: NGINX_SERVICE_NAME,
-        });
-        const nginxApplyCmd = [
-          writeManagedServiceCmd(NGINX_SERVICE_NAME, [
-            "[Unit]",
-            "Description=ForwardX managed Nginx stream runtime",
-            "After=network.target",
-            "",
-            "[Service]",
-            "Type=simple",
-            `ExecStart=${NGINX_BIN} -p ${NGINX_CONFIG_DIR} -c ${NGINX_CONFIG_PATH} -g "daemon off;"`,
-            `ExecReload=${NGINX_BIN} -p ${NGINX_CONFIG_DIR} -c ${NGINX_CONFIG_PATH} -s reload`,
-            "Restart=always",
-            "RestartSec=5",
-            "LimitNOFILE=65535",
-            "",
-            "[Install]",
-            "WantedBy=multi-user.target",
-            "",
-          ].join("\n")),
-          ...(anyTunnelDnsRefresh(hostTunnels as any[]) ? [dnsRuntimeRefreshCmd("nginx"), `rm -f ${shQuote(`${NGINX_CONFIG_PATH}.sha256`)} 2>/dev/null || true`] : []),
-          reloadNginxIfConfigChangedCmd(),
-        ].filter(Boolean).map((cmd) => `(${cmd})`).join(" && ");
-        cmds.push(nginxApplyCmd);
-        cmds.push(...countingCmds);
-        return {
-          preCommands: [ensureNginxBinaryCmd(), ...setupCmds],
-          commands: cmds,
-          managedConfigs: nginxManagedConfigs,
-        };
-      }
-      const retirementPlan = buildNginxRuntimeRetirementPlan();
-      return {
-        ...retirementPlan,
-        commands: [...retirementPlan.commands, ...countingCmds],
-      };
-    };
+    const {
+      buildNginxRuntimeSyncPlan,
+    } = createNginxRuntimeSyncPlanBuilder(heartbeatCtx, {
+      anyTunnelDnsRefresh,
+      buildRuleAccessLimitCmds,
+      currentHostTunnelExitPortsForRule,
+      dnsRuntimeRefreshCmd,
+      exitWeightsForHostIds,
+      failoverTargetEndpoint,
+      getExtraExitDialAddress,
+      guardBackendPort,
+      isCurrentHostTunnelEntry,
+      nginxTunnelExitRules,
+      shouldUseRuleGuard,
+      tunnelExitEndpointsForRule,
+      tunnelExitHostAddress,
+      tunnelExtraExitNodes,
+    });
     let nginxRuntimeSyncPlanPromise: ReturnType<typeof buildNginxRuntimeSyncPlan> | null = null;
     const getNginxRuntimeSyncPlan = () => {
       if (!nginxRuntimeSyncPlanPromise) {
@@ -5049,170 +3130,14 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       });
     };
 
-    const isKernelForwardRule = (rule: any) => {
-      const forwardType = String(rule?.forwardType || "").trim();
-      return forwardType === "iptables" || forwardType === "nftables";
-    };
-    const buildDisabledRuleRemovalAction = async (rule: any) => {
-      const tunnel = (rule as any).tunnelId ? tunnelById.get((rule as any).tunnelId) as any : null;
-      if (rule.forwardType === "iptables") {
-        const cmds: string[] = [
-          ...buildNftTransitionCleanupCmds(rule),
-          ...buildIptablesForwardCleanupCmds(rule),
-          ...buildCountingCleanupCmds(rule.sourcePort, rule.targetIp, rule.targetPort, rule.protocol),
-          ...buildAccessLimitCleanupCmds(rule.sourcePort, accessScopeForRule(rule)),
-        ];
-        return {
-          ruleId: rule.id,
-          op: "remove",
-          forwardType: rule.forwardType,
-          sourcePort: rule.sourcePort,
-          targetIp: rule.targetIp,
-          targetPort: rule.targetPort,
-          protocol: rule.protocol,
-          commands: cmds,
-        };
-      }
-      if (rule.forwardType === "nftables") {
-        const cmds = [
-          ...buildIptablesTransitionCleanupCmds(rule),
-          ...buildNftCleanupCmds(rule, { removeStateFiles: false, cleanupConntrack: true }),
-          ...buildManagedPortCleanupCmds(Number(rule.sourcePort), rule.targetIp, rule.targetPort, rule.protocol),
-        ];
-        cmds.push(...buildAccessLimitCleanupCmds(rule.sourcePort, accessScopeForRule(rule)));
-        return {
-          ruleId: rule.id,
-          op: "remove",
-          forwardType: rule.forwardType,
-          sourcePort: rule.sourcePort,
-          targetIp: rule.targetIp,
-          targetPort: rule.targetPort,
-          protocol: rule.protocol,
-          commands: cmds,
-        };
-      }
-      if (rule.forwardType === "realm") {
-        const svcName = realmServiceNameForPort(rule.sourcePort, rule.protocol);
-        const realmConfigPath = realmConfigPathForPort(rule.sourcePort, rule.protocol);
-        return {
-          ruleId: rule.id,
-          op: "remove",
-          forwardType: rule.forwardType,
-          sourcePort: rule.sourcePort,
-          targetIp: rule.targetIp,
-          targetPort: rule.targetPort,
-          protocol: rule.protocol,
-          svcName,
-          commands: [
-            ...buildKernelForwardTransitionCleanupCmds(rule),
-            removeManagedServiceCmd(svcName),
-            killByPatternCmd(`[r]ealm .*${realmConfigPath}`),
-            ...legacyRealmCleanupCmds(rule.sourcePort, rule.protocol),
-            `rm -f ${shQuote(realmConfigPath)} ${shQuote(`${realmConfigPath}.sha256`)} 2>/dev/null || true`,
-            ...cleanupGuardBackendCmds(rule),
-            `rm -f /var/lib/forwardx-agent/traffic_${rule.sourcePort}.prev 2>/dev/null || true`,
-            `rm -f /var/lib/forwardx-agent/port_${rule.sourcePort}.rule /var/lib/forwardx-agent/port_${rule.sourcePort}.tunnel 2>/dev/null || true`,
-            ...buildCountingCleanupCmds(rule.sourcePort, rule.targetIp, rule.targetPort, rule.protocol),
-            ...buildAccessLimitCleanupCmds(rule.sourcePort, accessScopeForRule(rule)),
-          ],
-        };
-      }
-      if (rule.forwardType === "socat") {
-        const removeCmds: string[] = [];
-        if (normalizeForwardRuleProtocol(rule.protocol) === "both") {
-          const svcTcp = `forwardx-socat-tcp-${rule.sourcePort}`;
-          const svcUdp = `forwardx-socat-udp-${rule.sourcePort}`;
-          removeCmds.push(removeManagedServiceCmd(svcTcp));
-          removeCmds.push(removeManagedServiceCmd(svcUdp));
-        } else {
-          const svcName = socatServiceNameForPort(rule.sourcePort, rule.protocol);
-          removeCmds.push(removeManagedServiceCmd(svcName));
-          removeCmds.push(...legacySocatCleanupCmds(rule.sourcePort, rule.protocol));
-        }
-        removeCmds.push(socatKillByProtocolCmd(rule.sourcePort, rule.protocol));
-        removeCmds.push(...buildKernelForwardTransitionCleanupCmds(rule));
-        removeCmds.push(...cleanupGuardBackendCmds(rule));
-        removeCmds.push(`rm -f /var/lib/forwardx-agent/traffic_${rule.sourcePort}.prev 2>/dev/null || true`);
-        removeCmds.push(`rm -f /var/lib/forwardx-agent/port_${rule.sourcePort}.rule /var/lib/forwardx-agent/port_${rule.sourcePort}.tunnel 2>/dev/null || true`);
-        removeCmds.push(...buildCountingCleanupCmds(rule.sourcePort, rule.targetIp, rule.targetPort, rule.protocol));
-        removeCmds.push(...buildAccessLimitCleanupCmds(rule.sourcePort, accessScopeForRule(rule)));
-        return {
-          ruleId: rule.id,
-          op: "remove",
-          forwardType: rule.forwardType,
-          sourcePort: rule.sourcePort,
-          targetIp: rule.targetIp,
-          targetPort: rule.targetPort,
-          protocol: rule.protocol,
-          commands: removeCmds,
-        };
-      }
-      if (rule.forwardType === "nginx") {
-        return {
-          ruleId: rule.id,
-          op: "remove",
-          forwardType: rule.forwardType,
-          sourcePort: rule.sourcePort,
-          targetIp: rule.targetIp,
-          targetPort: rule.targetPort,
-          protocol: rule.protocol,
-          commands: [
-            ...buildKernelForwardTransitionCleanupCmds(rule),
-            ...buildNginxPortCleanupCmds(rule),
-            ...cleanupGuardBackendCmds(rule),
-          ],
-        };
-      }
-      if (rule.forwardType === "gost") {
-        if (tunnel && isNginxTunnelMode(tunnel)) {
-          return {
-            ruleId: rule.id,
-            tunnelId: tunnel.id,
-            statusType: "rule",
-            op: "remove",
-            forwardType: "nginx-tunnel",
-            sourcePort: rule.sourcePort,
-            targetIp: rule.targetIp,
-            targetPort: rule.targetPort,
-            protocol: rule.protocol,
-            commands: [
-              ...buildKernelForwardTransitionCleanupCmds(rule),
-              ...buildNginxPortCleanupCmds(rule),
-              ...cleanupGuardBackendCmds(rule),
-            ],
-          };
-        }
-        const fxpRemoveKey = tunnel && isForwardXTunnel(tunnel)
-          ? (await forwardXEntryRoute(tunnel)).key
-          : "";
-        return {
-          tunnelId: tunnel ? tunnel.id : 0,
-          statusType: tunnel ? "rule" : undefined,
-          ruleId: rule.id,
-          op: "remove",
-          forwardType: rule.forwardType,
-          sourcePort: rule.sourcePort,
-          targetIp: rule.targetIp,
-          targetPort: rule.targetPort,
-          protocol: rule.protocol,
-          commands: [
-            ...buildKernelForwardTransitionCleanupCmds(rule),
-            ...buildManagedPortCleanupCmds(rule.sourcePort, rule.targetIp, rule.targetPort, rule.protocol),
-            ...cleanupGuardBackendCmds(rule),
-          ],
-          fxp: tunnel && isForwardXTunnel(tunnel) ? {
-            role: "entry",
-            transportVersion: isForwardXWireGuardV2(tunnel) ? "v2" : "v1",
-            tunnelId: tunnel.id,
-            ruleId: rule.id,
-            listenPort: rule.sourcePort,
-            protocol: rule.protocol,
-            key: fxpRemoveKey || tunnelSecretSeed(tunnel),
-          } : undefined,
-        };
-      }
-      return null;
-    };
+    const {
+      buildDisabledRuleRemovalAction,
+    } = createDisabledRuleRemovalBuilder(heartbeatCtx, {
+      accessScopeForRule,
+      buildNginxPortCleanupCmds,
+      forwardXEntryRoute,
+      isForwardXTunnel,
+    });
 
     const reportedRuntimeState = localRuntimeState.state;
     const hasReportedRuntimeState = !!reportedRuntimeState;
@@ -5254,211 +3179,23 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     const expectedRuleIdentityKeys = new Set<string>();
     const expectedRulePortIdentityKeys = new Set<string>();
     const expectedTunnelPorts = new Set<number>();
-    const forwardTypeCompatible = (local: unknown, expected: unknown) => {
-      const localValue = String(local || "").trim();
-      const expectedValue = String(expected || "").trim();
-      if (!localValue || !expectedValue) return true;
-      if (localValue === expectedValue) return true;
-      return localValue === "gost" && (expectedValue === "forwardx" || expectedValue === "nginx-tunnel");
-    };
-    const localTextCompatible = (local: unknown, expected: unknown) => {
-      const localValue = cleanEndpointHost(local).toLowerCase();
-      const expectedValue = cleanEndpointHost(expected).toLowerCase();
-      if (!localValue || !expectedValue) return true;
-      return localValue === expectedValue;
-    };
-    const localNumberCompatible = (local: unknown, expected: unknown) => {
-      const localValue = Number(local || 0);
-      const expectedValue = Number(expected || 0);
-      if (localValue <= 0 || expectedValue <= 0) return true;
-      return localValue === expectedValue;
-    };
-    const localProtocolCompatible = (local: unknown, expected: unknown) => {
-      const localValue = String(local || "").trim();
-      const expectedValue = String(expected || "").trim();
-      if (!localValue || !expectedValue) return true;
-      return normalizeForwardRuleProtocol(localValue) === normalizeForwardRuleProtocol(expectedValue);
-    };
-    const expectedForwardXTransportVersion = (tunnelId: number, expectedForwardType: string) => {
-      const normalizedType = String(expectedForwardType || "").trim();
-      if (normalizedType !== "forwardx" && normalizedType !== "forwardx-tunnel") return undefined;
-      const tunnel = tunnelById.get(Number(tunnelId || 0)) as any;
-      if (!isForwardXTunnelMode(tunnel)) return undefined;
-      return isForwardXWireGuardV2(tunnel) ? "v2" as const : "v1" as const;
-    };
-    const localForwardXTransportCompatible = (local: { transportVersion?: "v1" | "v2" }, expected: "v1" | "v2" | undefined) => {
-      if (!expected) return true;
-      // V2 must never adopt a V1 runtime. For V1, tolerate an omitted field
-      // from older Agents while still rejecting a clearly stale V2 process.
-      return expected === "v2"
-        ? local.transportVersion === "v2"
-        : local.transportVersion !== "v2";
-    };
-    const findLocalRuleState = (port: number, protocol: unknown, ruleId?: number) => {
-      const normalizedProtocol = normalizeForwardRuleProtocol(protocol, "both");
-      const candidates = reportedLocalRules.filter((local: AgentLocalRuntimeRuleState) => Number(local.port || 0) === Number(port || 0));
-      const exact = candidates.find((local: AgentLocalRuntimeRuleState) => (
-        (ruleId === undefined || Number(local.ruleId || 0) === Number(ruleId || 0))
-        && localProtocolCompatible(local.protocol, normalizedProtocol)
-      ));
-      return exact || candidates.find((local: AgentLocalRuntimeRuleState) => localProtocolCompatible(local.protocol, normalizedProtocol)) || localRulesByPort.get(port);
-    };
-    const localRuleMatches = (rule: any, expectedForwardType: string, port: number) => {
-      if (!hasReportedRuntimeState || port <= 0) return true;
-      const local = findLocalRuleState(port, rule.protocol, Number(rule.id));
-      return !!local
-        && local.ready !== false
-        && Number(local.ruleId || 0) === Number(rule.id)
-        && (Number(local.tunnelId || 0) <= 0 || Number(local.tunnelId || 0) === Number(rule?.tunnelId || 0))
-        && forwardTypeCompatible(local.forwardType, expectedForwardType)
-        && localForwardXTransportCompatible(local, expectedForwardXTransportVersion(Number(rule?.tunnelId || 0), expectedForwardType))
-        && (localTextCompatible(local.targetIp, processTarget(rule)) || localTextCompatible(local.targetIp, rule.targetIp))
-        && localNumberCompatible(local.targetPort, rule.targetPort)
-        && localProtocolCompatible(local.protocol, rule.protocol);
-    };
-    const protectActiveRulePort = (rule: any, port = Number(rule?.sourcePort || 0)) => {
-      const ruleId = Number(rule?.id || 0);
-      if (ruleId <= 0 || port <= 0 || runtimeBool(rule?.pendingDelete)) return;
-      protectedRuleRemoveActionKeys.add(actionPortKey({
-        statusType: "rule",
-        ruleId,
-        sourcePort: port,
-        protocol: rule.protocol,
-      }));
-      protectedRuleRemoveActionKeys.add(ruleRuntimePortIdentityKey(ruleId, port));
-    };
-    const localTunnelMatches = (
-      tunnelId: number,
-      expectedForwardType: string,
-      port: number,
-      options: { allowPassiveForwardXFirstHop?: boolean } = {},
-    ) => {
-      if (!hasReportedRuntimeState || port <= 0) return true;
-      const local = localTunnelsByPort.get(port);
-      const passiveForwardXFirstHop = isPassiveForwardXFirstHopMarker({
-        isFirstHop: !!options.allowPassiveForwardXFirstHop,
-        tunnelId,
-        port,
-        local,
-      });
-      return !!local
-        && (local.ready !== false || passiveForwardXFirstHop)
-        && Number(local.tunnelId || 0) === Number(tunnelId)
-        && forwardTypeCompatible(local.forwardType, expectedForwardType)
-        && (passiveForwardXFirstHop || localForwardXTransportCompatible(local, expectedForwardXTransportVersion(tunnelId, expectedForwardType)));
-    };
-    const buildGenericLocalRuleRemovalAction = (local: AgentLocalRuntimeRuleState) => {
-      const port = Number(local.port || 0);
-      const forwardType = String(local.forwardType || "").trim() || "unknown";
-      const protocol = local.protocol || "both";
-      const transportVersion = resolveLocalForwardXTransportVersion({
-        reportedTransportVersion: local.transportVersion,
-        tunnel: tunnelById.get(Number(local.tunnelId || 0)),
-      });
-      const fxp = forwardType === "forwardx" && Number(local.ruleId || 0) > 0
-        ? {
-            role: "entry",
-            ...(transportVersion ? { transportVersion } : {}),
-            tunnelId: Number(local.tunnelId || 0),
-            ruleId: Number(local.ruleId || 0),
-            listenPort: port,
-            protocol,
-            key: "",
-          }
-        : undefined;
-      const cleanupCmds = SHARED_NGINX_FORWARD_TYPES.has(forwardType)
-        ? [
-          // A local nginx state record may be the result of a previous
-          // nftables -> nginx handoff.  Shared-nginx cleanup intentionally
-          // keeps the shared daemon alive, so also remove any per-rule kernel
-          // forwarding state left behind by an older Agent.
-          ...buildKernelForwardTransitionCleanupCmds({
-            id: Number(local.ruleId || 0),
-            sourcePort: port,
-            targetIp: local.targetIp || "",
-            targetPort: Number(local.targetPort || 0),
-            protocol,
-          }),
-          ...buildNginxPortCleanupCmds({
-            sourcePort: port,
-            targetIp: local.targetIp || "",
-            targetPort: Number(local.targetPort || 0),
-            protocol,
-          }),
-        ]
-        : [
-          ...buildManagedPortCleanupCmds(port, local.targetIp, local.targetPort, protocol),
-          ...(fxp ? [] : [
-            `for pid in $(pgrep -f '[f]orwardx-fxp.*fxp-.*-${port}\\\\.json' 2>/dev/null || true); do if [ "$pid" = "$$" ] || [ "$pid" = "$PPID" ]; then continue; fi; kill "$pid" 2>/dev/null || true; done`,
-            `rm -f /run/forwardx-agent/fxp-*-${port}.json 2>/dev/null || true`,
-          ]),
-          `rm -f /var/lib/forwardx-agent/tunnel_${port}.id /var/lib/forwardx-agent/tunnel_${port}.fwtype 2>/dev/null || true`,
-        ];
-      return {
-        ruleId: Number(local.ruleId || 0),
-        tunnelId: Number(local.tunnelId || 0),
-        statusType: "rule",
-        op: "remove",
-        forwardType,
-        sourcePort: port,
-        targetIp: local.targetIp || "",
-        targetPort: Number(local.targetPort || 0),
-        protocol,
-        commands: cleanupCmds,
-        fxp,
-      };
-    };
-    const buildGenericLocalTunnelRemovalAction = (local: AgentLocalRuntimeTunnelState) => {
-      const port = Number(local.port || 0);
-      const forwardType = String(local.forwardType || "").trim() || "gost-tunnel";
-      const cleanupCmds = SHARED_NGINX_FORWARD_TYPES.has(forwardType)
-        ? [
-          ...buildNginxPortCleanupCmds({
-            sourcePort: port,
-            targetIp: "",
-            targetPort: port,
-            protocol: "tcp",
-          }),
-          `rm -f /var/lib/forwardx-agent/tunnel_${port}.id /var/lib/forwardx-agent/tunnel_${port}.fwtype 2>/dev/null || true`,
-        ]
-        : [
-          ...buildManagedPortCleanupCmds(port),
-          `for pid in $(pgrep -f '[f]orwardx-fxp.*fxp-.*-${port}\\\\.json' 2>/dev/null || true); do if [ "$pid" = "$$" ] || [ "$pid" = "$PPID" ]; then continue; fi; kill "$pid" 2>/dev/null || true; done`,
-          `rm -f /run/forwardx-agent/fxp-*-${port}.json /var/lib/forwardx-agent/tunnel_${port}.id /var/lib/forwardx-agent/tunnel_${port}.fwtype 2>/dev/null || true`,
-        ];
-      return {
-        tunnelId: Number(local.tunnelId || 0),
-        statusType: "tunnel",
-        ruleId: 0,
-        op: "remove",
-        forwardType,
-        sourcePort: port,
-        targetIp: "",
-        targetPort: port,
-        protocol: "tcp",
-        commands: cleanupCmds,
-      };
-    };
-    const localRuleNeedsRemoval = (rule: any) => {
-      if (!hasReportedRuntimeState) return true;
-      const port = Number(rule?.sourcePort || 0);
-      if (port <= 0) return true;
-      const local = findLocalRuleState(port, rule.protocol, Number(rule?.id || 0));
-      if (!local) return true;
-      if (isKernelForwardRule(rule)) return true;
-      return Number(local.ruleId || 0) === Number(rule?.id || 0);
-    };
-    const localRuleHasKernelForwardState = (rule: any) => {
-      if (!hasReportedRuntimeState) return false;
-      const local = findLocalRuleState(
-        Number(rule?.sourcePort || 0),
-        rule?.protocol,
-        Number(rule?.id || 0),
-      );
-      return !!local
-        && Number(local.ruleId || 0) === Number(rule?.id || 0)
-        && isKernelForwardRule(local);
-    };
+    const {
+      buildGenericLocalRuleRemovalAction,
+      buildGenericLocalTunnelRemovalAction,
+      localRuleHasKernelForwardState,
+      localRuleMatches,
+      localRuleNeedsRemoval,
+      localTunnelMatches,
+      protectActiveRulePort,
+    } = createLocalRuntimeMatchers(heartbeatCtx, {
+      buildNginxPortCleanupCmds,
+      hasReportedRuntimeState,
+      localRulesByPort,
+      localTunnelsByPort,
+      processTarget,
+      protectedRuleRemoveActionKeys,
+      reportedLocalRules,
+    });
     const shouldForceStoppedKernelRuleCleanup = (rule: any) => !!rule?.resourceAccessDenied
       || (supportsDesiredState && (
         (isKernelForwardRule(rule) && localRuleNeedsRemoval(rule))
@@ -5467,17 +3204,6 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         // issue one cleanup action so a stale kernel redirect cannot survive.
         || localRuleHasKernelForwardState(rule)
       ));
-
-    const settleStoppedRule = async (rule: any) => {
-      const id = Number(rule?.id || 0);
-      if (id <= 0) return;
-      if (runtimeBool((rule as any).pendingDelete)) {
-        await db.finalizeForwardRuleDelete(id);
-      } else {
-        await setRuntimeRuleRunning(id, false);
-      }
-      rule.isRunning = false;
-    };
 
     const pendingTunnelExitRuleIds = new Set(
       tunnelExitRules
