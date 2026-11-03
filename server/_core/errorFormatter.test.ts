@@ -8,7 +8,7 @@ import { publicProcedure, router } from "./trpc";
 function zodErrorOf(schema: z.ZodTypeAny, value: unknown) {
   const result = schema.safeParse(value);
   assert.equal(result.success, false);
-  return (result as z.SafeParseError<unknown>).error;
+  return (result as z.ZodSafeParseError<unknown>).error;
 }
 
 const baseShape = () => ({
