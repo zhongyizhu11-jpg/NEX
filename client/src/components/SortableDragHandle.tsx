@@ -143,6 +143,15 @@ export function useOptimisticSortableOrder<T>({
   return { begin, items: orderedItems, release, resync };
 }
 
+/*
+  传感器参数写成模块级常量：dnd-kit 的 useSensor 按参数对象的引用做 useMemo，写成字面量每次渲染都是新的，
+  一路传到每张卡的 listeners 上，卡片每次轮询都拿到一组新的事件处理，React.memo 的卡片就白包了
+  （转发 / 主机页的卡片按「props 没变就不重画」省渲染，见 Rules.tsx 的 RuleCard）。
+*/
+const MOUSE_SENSOR_OPTIONS = { activationConstraint: { distance: 4 } };
+const TOUCH_SENSOR_OPTIONS = { activationConstraint: { delay: TOUCH_HOLD_MS, tolerance: 8 } };
+const KEYBOARD_SENSOR_OPTIONS = { coordinateGetter: sortableKeyboardCoordinates };
+
 export function useSortableReorder<T>({
   items,
   getId,
@@ -172,15 +181,9 @@ export function useSortableReorder<T>({
     页面还不动（用户 2026-11-03）。按住之后 dnd-kit 在 touchmove 上 preventDefault，页面就不再跟着手指动。
   */
   const sensors = useSensors(
-    useSensor(MouseSensor, {
-      activationConstraint: { distance: 4 },
-    }),
-    useSensor(TouchSensor, {
-      activationConstraint: { delay: TOUCH_HOLD_MS, tolerance: 8 },
-    }),
-    useSensor(KeyboardSensor, {
-      coordinateGetter: sortableKeyboardCoordinates,
-    }),
+    useSensor(MouseSensor, MOUSE_SENSOR_OPTIONS),
+    useSensor(TouchSensor, TOUCH_SENSOR_OPTIONS),
+    useSensor(KeyboardSensor, KEYBOARD_SENSOR_OPTIONS),
   );
 
   const clear = useCallback(() => {
@@ -354,16 +357,25 @@ export function SortableItem({
     disabled,
   });
 
-  const style: CSSProperties = {
-    transform: transform ? CSS.Translate.toString(transform) : undefined,
+  /*
+    交给卡片的这一包（itemProps / handleProps / 两个状态）只在真的变了时才换引用：卡片是 React.memo 的，
+    这包每次都是新对象的话，父组件一轮询所有卡都得重画（转发页一屏几十张卡）。
+    transform 按字符串比；listeners、attributes、两个 ref 回调 dnd-kit 自己是稳定的（传感器参数见上面的常量）。
+  */
+  const transformText = transform ? CSS.Translate.toString(transform) : undefined;
+  const style = useMemo<CSSProperties>(() => ({
+    transform: transformText,
     transition: isDragging ? "none" : transition,
     zIndex: isDragging ? 20 : undefined,
     position: isDragging ? "relative" : undefined,
     display: itemKind === "row" ? "table-row" : undefined,
     willChange: "transform",
-  };
+  }), [isDragging, itemKind, transformText, transition]);
   // 触屏的起手（onTouchStart）挂在整张卡上：按住卡片就能拖。鼠标和键盘的仍在手柄上。
-  const { onTouchStart, ...handleListeners } = (listeners ?? {}) as Record<string, unknown> & { onTouchStart?: (event: unknown) => void };
+  const { onTouchStart, handleListeners } = useMemo(() => {
+    const { onTouchStart: touchStart, ...rest } = (listeners ?? {}) as Record<string, unknown> & { onTouchStart?: (event: unknown) => void };
+    return { onTouchStart: touchStart, handleListeners: rest };
+  }, [listeners]);
   // 拖完松手那一下浏览器还会补一个 click：卡片本身能点（打开编辑）的话，松手就弹出编辑框了。刚拖完的 400ms 里吞掉。
   const droppedAtRef = useRef(0);
   const wasDraggingRef = useRef(false);
@@ -371,37 +383,38 @@ export function SortableItem({
     if (wasDraggingRef.current && !isDragging) droppedAtRef.current = Date.now();
     wasDraggingRef.current = isDragging;
   }, [isDragging]);
-  const swallowClickAfterDrop = (event: { preventDefault: () => void; stopPropagation: () => void }) => {
+  const swallowClickAfterDrop = useCallback((event: { preventDefault: () => void; stopPropagation: () => void }) => {
     if (Date.now() - droppedAtRef.current < 400) {
       event.preventDefault();
       event.stopPropagation();
     }
-  };
+  }, []);
 
-  return (
-    <>
-      {children({
-        itemProps: {
-          ref: setNodeRef as Ref<any>,
-          style,
-          "data-sortable-item": disabled ? undefined : "",
-          "data-sortable-dragging": isDragging ? "" : undefined,
-          onTouchStart: disabled ? undefined : (onTouchStart as HTMLAttributes<HTMLElement>["onTouchStart"]),
-          onClickCapture: swallowClickAfterDrop,
-        },
-        handleProps: {
-          ...attributes,
-          ...handleListeners,
-          ref: setActivatorNodeRef as Ref<HTMLElement>,
-          disabled,
-          style: { touchAction: "none" },
-        },
-        isDragging,
-        isDropTarget: isOver && !isDragging,
-      })}
-    </>
-  );
+  const isDropTarget = isOver && !isDragging;
+  const state = useMemo(() => ({
+    itemProps: {
+      ref: setNodeRef as Ref<any>,
+      style,
+      "data-sortable-item": disabled ? undefined : "",
+      "data-sortable-dragging": isDragging ? "" : undefined,
+      onTouchStart: disabled ? undefined : (onTouchStart as HTMLAttributes<HTMLElement>["onTouchStart"]),
+      onClickCapture: swallowClickAfterDrop,
+    },
+    handleProps: {
+      ...attributes,
+      ...handleListeners,
+      ref: setActivatorNodeRef as Ref<HTMLElement>,
+      disabled,
+      style: SORTABLE_HANDLE_STYLE,
+    },
+    isDragging,
+    isDropTarget,
+  }), [attributes, disabled, handleListeners, isDragging, isDropTarget, onTouchStart, setActivatorNodeRef, setNodeRef, style, swallowClickAfterDrop]);
+
+  return <>{children(state)}</>;
 }
+
+const SORTABLE_HANDLE_STYLE: CSSProperties = { touchAction: "none" };
 
 export function SortableDragHandle({
   dragHandleProps,

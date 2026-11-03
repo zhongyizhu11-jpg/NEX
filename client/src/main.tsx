@@ -13,9 +13,21 @@ import { applyRememberedLayout } from "./components/LayoutLayer";
 import { prefetchRoute } from "./pages/routeChunks";
 import { DATABASE_UNAVAILABLE_MESSAGE } from "@shared/databaseHealth";
 import { DATABASE_HEALTH_QUERY_KEY } from "./components/DatabaseHealthGate";
+import { loadUiThemeStyles } from "./lib/uiThemeStyles";
 
 // 精简布局：刷新时先按上次记住的挂上，auth.me 回来后 LayoutLayer 再校正
 applyRememberedLayout();
+
+/*
+  界面主题的样式按需下（lib/uiThemeStyles.ts）：index.html 的内联脚本已经按上次记住的那套挂好了
+  data-ui-theme，这里马上去下那一套，bootstrap 里等它下完再 createRoot —— 第一帧就是那套主题，
+  不会先画成经典再跳过去。和 bootstrap 里页面包的预取、手机 App 读登录态同时进行，一般不多等。
+  网太慢时最多等 BOOT_THEME_WAIT_MS：宁可主题晚一点补上，也不让整页一直停在启动底色上。
+*/
+const BOOT_THEME_WAIT_MS = 5_000;
+const bootUiThemeStyles = typeof document === "undefined"
+  ? Promise.resolve()
+  : loadUiThemeStyles(document.documentElement.getAttribute("data-ui-theme"));
 
 const LOGIN_EXPIRED_NOTICE = "登录状态已失效，请重新登录";
 
@@ -183,6 +195,8 @@ async function bootstrap() {
   const cacheScope = () => (mobileAuth.isNative ? mobileAuth.getPanelUrl() || "native" : "");
   restorePersistedQueryCache(queryClient, { scope: cacheScope() });
   startQueryCachePersistence(queryClient, { scope: cacheScope });
+
+  await Promise.race([bootUiThemeStyles, new Promise<void>((resolve) => setTimeout(resolve, BOOT_THEME_WAIT_MS))]);
 
   createRoot(document.getElementById("root")!).render(
     <trpc.Provider client={trpcClient} queryClient={queryClient}>

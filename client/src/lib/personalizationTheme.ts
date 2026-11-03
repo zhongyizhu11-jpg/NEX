@@ -10,6 +10,8 @@ import {
   primaryGradientStops,
 } from "@shared/personalization";
 
+import { isUiThemeStyleReady, loadUiThemeStyles } from "./uiThemeStyles";
+
 /*
   预设写到 <html> 上的变量。
 
@@ -138,6 +140,7 @@ const PAGE_TINT_VARS = ["--fx-l0-page", "--fx-l3-control-fill"] as const;
   界面主题（经典 / 极光 / 墨金 / 玫瑰）是 <html data-ui-theme>，画法全在 theme-*.css。经典不写属性。
   首屏在 publicInfo 回来之前先按经典画，再切到极光会闪一下：所以把选过的主题记进 localStorage，
   index.html 顶部那段内联脚本开机就按它先把属性挂上（和深浅色 forwardx-theme 同一套做法）。
+  主题样式现在按需下（uiThemeStyles.ts），main.tsx 也按这个属性先把那一套的样式下完再画第一帧。
 */
 export const UI_THEME_STORAGE_KEY = "forwardx-ui-theme";
 
@@ -225,6 +228,30 @@ function fadeIfChanged(target: HTMLElement, key: string) {
   }, 600));
 }
 
+/*
+  界面主题的样式是按需下的（uiThemeStyles.ts）：属性只在那一套的样式到了之后才改，没到之前屏幕上
+  还是原来那一套。下面两张表按 <html> 记：
+    pendingUiTheme  正在等样式的那一套。等的时候又换了一套（连点几下），先到的旧样式回来时对不上号就作废。
+    clearedUiTheme  clearPersonalizationSurface 刚撤掉的那一套。PersonalizationLayer 的依赖一变（比如顶栏
+                    调色盘存了站点主题），React 会先跑上一轮的清理、紧接着再挂新的 —— 新的那套要是还在下，
+                    中间这段属性是空的，就会先闪一下经典。同一轮里接着来的那次 apply 发现要等，就把刚撤掉的
+                    那套先放回去顶着；下一个微任务就忘掉（真卸载时不会有人接着 apply）。
+  只有页面上那个 <html> 走这条路；测试里传进来的假节点、没有 document 的环境照旧同步挂上。
+*/
+const pendingUiTheme = new WeakMap<HTMLElement, { uiTheme: string; pageTint: string }>();
+const clearedUiTheme = new WeakMap<HTMLElement, string>();
+
+function isDocumentRoot(target: HTMLElement) {
+  return typeof document !== "undefined" && target === document.documentElement;
+}
+
+function commitUiTheme(target: HTMLElement, uiTheme: string, pageTint: string) {
+  if (uiTheme === "classic") target.removeAttribute("data-ui-theme");
+  else target.setAttribute("data-ui-theme", uiTheme);
+  const dark = target.classList.contains("dark");
+  fadeIfChanged(target, `${uiTheme}|${dark ? "dark" : "light"}|${pageTint}`);
+}
+
 export function applyPersonalizationSurface(
   input: { pageTint?: unknown; cardStyle?: unknown; uiTheme?: unknown; ignoreOverride?: boolean },
   root?: HTMLElement,
@@ -236,11 +263,27 @@ export function applyPersonalizationSurface(
   const uiTheme = override ?? normalizePersonalizationUiTheme(input.uiTheme);
   if (!target) return { pageTint, cardStyle, uiTheme };
   target.setAttribute("data-card-style", cardStyle);
-  if (uiTheme === "classic") target.removeAttribute("data-ui-theme");
-  else target.setAttribute("data-ui-theme", uiTheme);
+  const ready = !isDocumentRoot(target) || isUiThemeStyleReady(uiTheme);
+  const cleared = clearedUiTheme.get(target);
+  clearedUiTheme.delete(target);
+  if (ready) {
+    pendingUiTheme.delete(target);
+    commitUiTheme(target, uiTheme, pageTint);
+  } else {
+    pendingUiTheme.set(target, { uiTheme, pageTint });
+    if (cleared && target.getAttribute("data-ui-theme") === null && isUiThemeStyleReady(cleared)) target.setAttribute("data-ui-theme", cleared);
+    void loadUiThemeStyles(uiTheme).then(() => {
+      // 等的这段时间里又来过几次 apply（深浅色切换会再调一次）：用最后一次的底色算淡入的 key
+      const pending = pendingUiTheme.get(target);
+      if (!pending || pending.uiTheme !== uiTheme) return;
+      pendingUiTheme.delete(target);
+      commitUiTheme(target, pending.uiTheme, pending.pageTint);
+      syncThemeColorMeta(target);
+    });
+  }
+  // 记的是「要的」那一套，不等样式：这时候刷新，开机就直接去下它
   rememberUiTheme(uiTheme);
   const dark = target.classList.contains("dark");
-  fadeIfChanged(target, `${uiTheme}|${dark ? "dark" : "light"}|${pageTint}`);
   const vars = dark ? null : personalizationPageTintVars(pageTint);
   if (vars) {
     target.style.setProperty("--fx-l0-page", vars.page);
@@ -257,6 +300,12 @@ export function applyPersonalizationSurface(
 export function clearPersonalizationSurface(root?: HTMLElement) {
   const target = root || (typeof document !== "undefined" ? document.documentElement : null);
   if (!target) return;
+  pendingUiTheme.delete(target);
+  const shown = target.getAttribute("data-ui-theme");
+  if (shown && isDocumentRoot(target)) {
+    clearedUiTheme.set(target, shown);
+    queueMicrotask(() => { if (clearedUiTheme.get(target) === shown) clearedUiTheme.delete(target); });
+  }
   for (const cssVar of PAGE_TINT_VARS) target.style.removeProperty(cssVar);
   target.removeAttribute("data-page-tint");
   target.removeAttribute("data-card-style");

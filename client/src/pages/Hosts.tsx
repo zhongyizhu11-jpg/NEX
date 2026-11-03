@@ -139,6 +139,7 @@ import {
 } from "lucide-react";
 import type { GlobeMethods } from "react-globe.gl";
 import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useStableRows } from "@/lib/stableRows";
 import { toast } from "sonner";
 import { useSearchIdParam } from "@/features/links/lineLinks";
 const ReactGlobe = lazy(() => import("react-globe.gl")) as typeof import("react-globe.gl").default;
@@ -1156,6 +1157,7 @@ type HostCardItemProps = {
 };
 
 const EMPTY_LIVE_ROWS: any[] = [];
+const hostRowKey = (host: { id?: unknown }) => Number(host?.id);
 // 能看到的机器超过这个数，实时刷新放慢到 5 秒（汇总要扫全部机器）。
 const HOST_LIVE_MANY_HOSTS = 200;
 
@@ -1675,11 +1677,15 @@ function HostsContent() {
     placeholderData: (previousData: any) => previousData,
   });
   const usesFullHostDisplay = isHostMapView || needsFullHostList;
-  const hosts = (isHostMapView
+  /*
+    主机行里有 Date（创建时间、心跳时间……），React Query 的结构共享认不出来，listPage 每轮询一次
+    每台主机都成了新对象，下面合并状态的缓存、memo 的卡片全都对不上。内容没变的沿用上一轮的对象。
+  */
+  const hosts = useStableRows((isHostMapView
     ? mapHosts
     : needsFullHostList
       ? fullHostQuery.data
-      : hostPageQuery.data?.items) as any[] | undefined;
+      : hostPageQuery.data?.items) as any[] | undefined, hostRowKey);
   const isLoading = isHostMapView
     ? hostMapQuery.isLoading
     : needsFullHostList
@@ -1824,10 +1830,27 @@ function HostsContent() {
     placeholderData: (previousData: any) => previousData,
   });
   const hostLiveMetricById = useStableLiveRowsById(hostLiveVitalsQuery.data ?? EMPTY_LIVE_ROWS, "hostId");
-  const hostLatestMetricById = useMemo(
-    () => mergeLiveMetricRows(hostPageMetricById, hostLiveMetricById),
-    [hostPageMetricById, hostLiveMetricById],
-  );
+  /*
+    合并出来的 { ...库里那条, ...实时那条 } 每次都是新对象：实时指标两秒一轮，只要有一台在报，
+    整页每张卡的 metricRow 就全换了引用。两边输入都没变的主机沿用上一轮合并的结果。
+  */
+  const mergedMetricCacheRef = useRef(new Map<number, { page: unknown; live: unknown; merged: unknown }>());
+  const hostLatestMetricById = useMemo(() => {
+    const merged = mergeLiveMetricRows(hostPageMetricById, hostLiveMetricById);
+    const previous = mergedMetricCacheRef.current;
+    const nextCache = new Map<number, { page: unknown; live: unknown; merged: unknown }>();
+    const stable = new Map<number, unknown>();
+    merged.forEach((row, hostId) => {
+      const page = hostPageMetricById.get(hostId);
+      const live = hostLiveMetricById.get(hostId);
+      const cached = previous.get(hostId);
+      const value = cached && cached.page === page && cached.live === live ? cached.merged : row;
+      nextCache.set(hostId, { page, live, merged: value });
+      stable.set(hostId, value);
+    });
+    mergedMetricCacheRef.current = nextCache;
+    return stable as typeof merged;
+  }, [hostPageMetricById, hostLiveMetricById]);
   // 状态合并进主机对象时也沿用上一轮的结果，否则每轮每张卡都是新对象，memo 白做。
   const mergedHostCacheRef = useRef(new Map<number, { host: any; status: any; merged: any }>());
   // Drag-to-reorder used to wait for the server: the mutation invalidated the host

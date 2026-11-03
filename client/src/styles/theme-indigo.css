@@ -310,23 +310,7 @@ html[data-ui-theme="indigo"] .workspace-layout [data-sidebar="menu-button"][data
   html[data-ui-theme="indigo"] .fx-tabbar-label { font-size: 11px; }
 }
 
-/* ── 设置页「界面主题」的预览 ───────────────────────────────── */
-/* 冷灰底、两张白卡各一圈冷灰线和一根靛蓝细条、底下一条白的通栏条 */
-.fx-uitheme-swatch[data-theme="indigo"] { background: #f2f3f5; }
-.dark .fx-uitheme-swatch[data-theme="indigo"] { background: #121417; }
-.fx-uitheme-swatch[data-theme="indigo"] > i {
-  border-radius: 4px;
-  border-color: #e2e5ea;
-  background: linear-gradient(#4268aa, #4268aa) 6px calc(100% - 4px) / 46% 2px no-repeat, linear-gradient(#eceef2, #eceef2) 6px calc(100% - 4px) / calc(100% - 12px) 2px no-repeat, #fff;
-  box-shadow: none;
-}
-.dark .fx-uitheme-swatch[data-theme="indigo"] > i {
-  border-color: #30363f;
-  background: linear-gradient(#91afe0, #91afe0) 6px calc(100% - 4px) / 46% 2px no-repeat, linear-gradient(#2b3038, #2b3038) 6px calc(100% - 4px) / calc(100% - 12px) 2px no-repeat, #1b1e23;
-  box-shadow: none;
-}
-.fx-uitheme-swatch[data-theme="indigo"] > b { border-radius: 0; border-color: #e2e5ea; background: #fff; }
-.dark .fx-uitheme-swatch[data-theme="indigo"] > b { border-color: #30363f; background: #1b1e23; }
+/* 设置页「界面主题」的预览（.fx-uitheme-swatch）挪到了 ui-theme-shared.css：选别的主题时也要画，不能跟着这个文件按需加载 */
 
 /* ── 5. 页面里其它圆角：一律收到 8 / 12（HEX 的两档）──────────── */
 /* 分段按钮组、证据框、提示条这类 Tailwind 圆角；圆点、头像、状态灯（rounded-full）不动 */

@@ -289,25 +289,7 @@ html[data-ui-theme="rose"] .workspace-layout [data-sidebar="sidebar"] { border-r
   html[data-ui-theme="rose"] .fx-tabbar, html[data-ui-theme="rose"] .workspace-appbar, html[data-ui-theme="rose"] .fx-navbar { background: var(--fx-l1-surface); }
 }
 
-/* ── 设置页「界面主题」的预览 ───────────────────────────────── */
-/* 胭脂粉底，左上一团玫瑰光，两片没有边线的白瓣带软影，底下一枚白胶囊 */
-.fx-uitheme-swatch[data-theme="rose"] {
-  background:
-    radial-gradient(70% 60% at 4% 0%, rgb(255 196 212 / 85%), transparent 70%),
-    radial-gradient(55% 50% at 100% 100%, rgb(255 214 190 / 60%), transparent 70%),
-    #fbf0f2;
-}
-.dark .fx-uitheme-swatch[data-theme="rose"] {
-  background:
-    radial-gradient(70% 60% at 4% 0%, rgb(193 58 102 / 26%), transparent 70%),
-    radial-gradient(55% 50% at 100% 100%, rgb(223 138 94 / 14%), transparent 70%),
-    #150f12;
-}
-.fx-uitheme-swatch[data-theme="rose"] > i { border-radius: 11px; border-color: transparent; background: rgb(255 255 255 / 80%); box-shadow: inset 0 1px 0 rgb(255 255 255 / 90%), 0 8px 18px -10px rgb(122 30 64 / 40%); }
-.dark .fx-uitheme-swatch[data-theme="rose"] > i { border-color: transparent; background: rgb(34 24 29 / 82%); box-shadow: inset 0 1px 0 rgb(255 255 255 / 6%); }
-.fx-uitheme-swatch[data-theme="rose"] > i:first-child { margin-top: 2px; }
-.fx-uitheme-swatch[data-theme="rose"] > b { border-color: rgb(255 255 255 / 90%); background: rgb(255 255 255 / 72%); }
-.dark .fx-uitheme-swatch[data-theme="rose"] > b { border-color: rgb(255 180 200 / 12%); background: rgb(30 22 25 / 78%); }
+/* 设置页「界面主题」的预览（.fx-uitheme-swatch）挪到了 ui-theme-shared.css：选别的主题时也要画，不能跟着这个文件按需加载 */
 
 /* ── 5. 设置页：编号分节 + 贴底保存栏（参考 Rosélune 设置页，2026-10-11 用户「全做到第四套」）── */
 /*
@@ -367,55 +349,4 @@ html[data-ui-theme="rose"] .fx-settings-pane .fx-list-row + .fx-list-row { borde
 html[data-ui-theme="rose"] .fx-setting-sub { margin-left: 4px; padding: 2px 0 2px 16px; border-left: 1px solid var(--fx-stroke-base); }
 html[data-ui-theme="rose"] .fx-setting-sub:empty { display: none; }
 
-/* 贴底保存栏：一枚浮在页底的白色药丸（固定外壳，可以用毛玻璃），左边一句话，右边「放弃 / 保存」 */
-.fx-save-dock {
-  position: sticky;
-  bottom: 16px;
-  z-index: var(--fx-z-sticky);
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 20px;
-  padding: 6px 6px 6px 18px;
-  border: 1px solid rgb(255 255 255 / 85%);
-  border-radius: var(--fx-radius-pill);
-  /* 底下滚过去的字不能透上来抢眼：栏身几乎不透明，毛玻璃只是把边上那点透色揉开 */
-  background: color-mix(in srgb, var(--fx-l1-surface) 92%, transparent);
-  -webkit-backdrop-filter: var(--fx-glass-blur);
-  backdrop-filter: var(--fx-glass-blur);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 90%), 0 18px 40px -22px rgb(122 30 64 / 45%), 0 2px 6px rgb(122 30 64 / 6%);
-}
-html.dark .fx-save-dock { border-color: rgb(255 180 200 / 12%); box-shadow: inset 0 1px 0 rgb(255 255 255 / 6%), 0 18px 40px -22px rgb(0 0 0 / 80%); }
-.fx-save-dock-text { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--fx-text-muted); }
-.fx-save-dock[data-dirty] .fx-save-dock-text { color: var(--fx-text); }
-.fx-save-dock-actions { display: flex; flex: none; align-items: center; gap: 4px; }
-.fx-save-dock-actions [data-slot="button"] { height: 36px; border-radius: var(--fx-radius-pill); }
-/* 没改动时「保存」是灰的；一改动才是主色渐变（disabled 的主按钮本来就会淡掉，这里再去掉渐变，像参考站那样灰） */
-.fx-save-dock:not([data-dirty]) .fx-save-dock-actions [data-slot="button"]:last-child { background: var(--fx-hover); background-image: none; color: var(--fx-text-muted); box-shadow: none; opacity: 1; }
-@media (max-width: 767px) {
-  /* 手机上躲开底部标签栏（58 高 + 离底 12 + 安全区） */
-  .fx-save-dock { bottom: calc(82px + env(safe-area-inset-bottom, 0px)); padding-left: 14px; }
-  .fx-save-dock-text { font-size: 12.5px; }
-}
-@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .fx-save-dock { background: var(--fx-l1-surface); }
-}
-
-/* 个性化顶上的预览卡：一片白瓣，Logo、站点名（斜体衬线）、现在的界面主题 */
-.fx-brand-preview {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  padding: 22px 16px 18px;
-  border-radius: var(--fx-radius-surface);
-  background: var(--fx-card-fill, var(--fx-l1-surface));
-  box-shadow: var(--fx-elevation-card);
-  text-align: center;
-}
-.fx-brand-preview-logo { display: inline-flex; width: 56px; height: 56px; align-items: center; justify-content: center; }
-.fx-brand-preview-logo img { max-width: 100%; max-height: 100%; object-fit: contain; }
-.fx-brand-preview-name { font: italic 400 22px/1.25 var(--fx-font-display, serif); color: var(--fx-text); overflow-wrap: anywhere; }
-.fx-brand-preview-meta { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--fx-text-muted); }
-.fx-brand-preview-meta .fx-theme-dot { width: 14px; height: 14px; }
-.fx-brand-preview-meta em { font-style: normal; color: var(--fx-rose, var(--fx-accent)); }
+/* 贴底保存栏（.fx-save-dock）和个性化顶上的预览卡（.fx-brand-preview）挪到了 ui-theme-shared.css：哪套主题下都画，不能跟着这个文件按需加载 */
