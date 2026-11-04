@@ -9,6 +9,7 @@
  */
 
 import { PROXY_NODE_PROTOCOLS, type ProxyNodeProtocol } from "./proxyNode";
+import { PROXY_SUB_REGION_GROUP_TYPES, type ProxySubRegionGroupType } from "./proxySubRegion";
 
 export type ProxySubTokenScope = {
   /** 只要这些节点模板（proxy_nodes.id）；空 = 全部。 */
@@ -63,6 +64,8 @@ export type ProxySubTokenOptions = {
   protocolPrefix: TriState;
   infoNodes: TriState;
   regionGroups: TriState;
+  /** 地区组怎么选节点；default = 跟随全局。 */
+  regionGroupType: "default" | ProxySubRegionGroupType;
   sortMode: ProxySubSortMode;
   /** 正则改名：按顺序应用。 */
   renames: ProxySubRenameRule[];
@@ -90,6 +93,7 @@ export const PROXY_SUB_DEFAULT_TOKEN_OPTIONS: ProxySubTokenOptions = {
   protocolPrefix: "default",
   infoNodes: "default",
   regionGroups: "default",
+  regionGroupType: "default",
   sortMode: "manual",
   renames: [],
   dedupe: false,
@@ -174,6 +178,12 @@ export function serializeProxySubTokenScope(scope: ProxySubTokenScope): string |
   return proxySubTokenScopeIsEmpty(normalized) ? null : JSON.stringify(normalized);
 }
 
+/** 认不出来的（含 "default"）一律跟随全局，不悄悄改成某一种。 */
+function regionGroupTypeOption(value: unknown): "default" | ProxySubRegionGroupType {
+  const raw = String(value ?? "").trim().toLowerCase();
+  return (PROXY_SUB_REGION_GROUP_TYPES as readonly string[]).includes(raw) ? raw as ProxySubRegionGroupType : "default";
+}
+
 export function normalizeProxySubTokenOptions(input: unknown): ProxySubTokenOptions {
   const raw = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
   const sortMode = String(raw.sortMode ?? "").trim().toLowerCase();
@@ -199,6 +209,7 @@ export function normalizeProxySubTokenOptions(input: unknown): ProxySubTokenOpti
     protocolPrefix: triState(raw.protocolPrefix),
     infoNodes: triState(raw.infoNodes),
     regionGroups: triState(raw.regionGroups),
+    regionGroupType: regionGroupTypeOption(raw.regionGroupType),
     sortMode: (PROXY_SUB_SORT_MODES as readonly string[]).includes(sortMode) ? sortMode as ProxySubSortMode : "manual",
     renames,
     dedupe: raw.dedupe === true,

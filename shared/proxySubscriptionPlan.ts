@@ -12,7 +12,7 @@ import { compileProxySubGroupFilter, type ProxySubGroupMatch } from "./proxySubG
 import { publishedRuleEntryDomain } from "./ruleEntryDomain";
 import { expandWeightedMembers, hostBandwidthHintMbps, PROXY_LOAD_BALANCE_MAX_WEIGHT, proxyLoadBalanceWeights } from "./linkWeights";
 import { proxyNodeBindingTruth } from "./proxyNodeAutoBind";
-import { proxySubRegionLabel } from "./proxySubRegion";
+import { normalizeProxySubRegionGroupType, proxySubRegionLabel, type ProxySubRegionGroupType } from "./proxySubRegion";
 import { buildProxySubUnlockGroups, type ProxySubUnlockStatusMap } from "./proxySubUnlock";
 import {
   buildProxyRulePlan,
@@ -830,8 +830,10 @@ export type ProxySubCustomGroup = {
 export type BuildProxySubscriptionDocumentOptions = {
   mainGroupName: string;
   rulePreset?: ProxyRulePreset;
-  /** 按地区（节点上的 regionCode）各建一个 url-test 组。 */
+  /** 按地区（节点上的 regionCode）各建一个组。 */
   regionGroups?: boolean;
+  /** 地区组的类型；不传 = 自动选最快（url-test）。 */
+  regionGroupType?: ProxySubRegionGroupType;
   /** 模板里的自定义组。 */
   customGroups?: readonly ProxySubCustomGroup[];
   /** 分类去向覆盖：分类 key → DIRECT / REJECT / PROXY / 组名。 */
@@ -845,7 +847,7 @@ export type BuildProxySubscriptionDocumentOptions = {
   unlockStatuses?: ProxySubUnlockStatusMap | null;
 };
 
-function regionGroupsFor(nodes: readonly ProxyNode[]): ProxySubscriptionGroup[] {
+function regionGroupsFor(nodes: readonly ProxyNode[], type: ProxySubRegionGroupType): ProxySubscriptionGroup[] {
   const byRegion = new Map<string, string[]>();
   for (const node of nodes) {
     const code = String(node.regionCode || "").toUpperCase();
@@ -858,7 +860,7 @@ function regionGroupsFor(nodes: readonly ProxyNode[]): ProxySubscriptionGroup[] 
   for (const [code, members] of Array.from(byRegion.entries()).sort((a, b) => a[0].localeCompare(b[0]))) {
     const label = proxySubRegionLabel(code);
     if (!label) continue;
-    groups.push({ name: label, type: "url-test", members });
+    groups.push({ name: label, type, members });
   }
   return groups;
 }
@@ -951,8 +953,10 @@ export function buildProxySubscriptionDocument(
     });
   }
 
-  // 地区组：同一地区的节点（直连和中转都算）放一个 url-test 组。
-  const regionGroups = options.regionGroups ? regionGroupsFor(nodes) : [];
+  // 地区组：同一地区的节点（直连和中转都算）放一个组；默认自动选最快，也可以改成手动选 / 主备。
+  const regionGroups = options.regionGroups
+    ? regionGroupsFor(nodes, normalizeProxySubRegionGroupType(options.regionGroupType))
+    : [];
   // 自定义组：模板里按正则定义的；名字和自动组 / 地区组撞了的以自定义为准（后写的覆盖）。
   const customGroups = customGroupsFor(
     options.customGroups || [],

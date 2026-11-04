@@ -38,6 +38,7 @@ import {
 } from "../../shared/proxySubTokenScope";
 import { parseProxyCustomRules } from "../../shared/proxySubCustomRules";
 import { normalizeProxySubSettings, PROXY_SUB_DEFAULT_SETTINGS, type ProxySubSettings } from "../../shared/proxySubSettings";
+import { PROXY_SUB_REGION_GROUP_TYPES } from "../../shared/proxySubRegion";
 import {
   normalizeProxySubCustomGroups,
   PROXY_SUB_BUILTIN_PRELUDES,
@@ -747,6 +748,7 @@ export const proxySubscriptionsRouter = router({
       nameTemplateDefault: settings.nameTemplateDefault,
       flagEmojiDefault: settings.flagEmojiDefault,
       regionGroupsDefault: settings.regionGroupsDefault,
+      regionGroupTypeDefault: settings.regionGroupTypeDefault,
       protocolPrefixDefault: settings.protocolPrefixDefault,
       deviceLimitEnabled: settings.deviceLimitEnabled,
       deviceLimitStrict: settings.deviceLimitStrict,
@@ -1102,6 +1104,7 @@ export const proxySubscriptionsRouter = router({
       nameTemplateDefault: z.string().trim().max(120).optional(),
       flagEmojiDefault: z.boolean().optional(),
       regionGroupsDefault: z.boolean().optional(),
+      regionGroupTypeDefault: z.enum(PROXY_SUB_REGION_GROUP_TYPES).optional(),
       protocolPrefixDefault: z.boolean().optional(),
       accessLogRetentionDays: z.number().int().min(0).max(365).optional(),
       externalSourcesEnabled: z.boolean().optional(),
