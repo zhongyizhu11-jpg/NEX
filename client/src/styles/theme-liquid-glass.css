@@ -551,19 +551,80 @@ html[data-ui-theme="liquid-glass"] .auth-divider-label { background: transparent
 }
 
 /* ── 4. 胶囊玻璃控件 ─────────────────────────────────────────── */
-/* 分段控件：玻璃槽 + 白边，整条和每一格都是胶囊；选中格 Apple 蓝实心加光晕 */
+/*
+  分段控件（照珍珠主题那版）：整圆的凹槽，各格按内容宽；选中格是一枚浮起的白胶囊、主色字，
+  不再是实心紫块。凹槽保留玻璃的磨砂，压在壁纸上仍看得出是一条槽。
+*/
 html[data-ui-theme="liquid-glass"] .workspace-tabs {
-  border-radius: var(--fx-radius-pill);
-  border: 1px solid rgb(255 255 255 / 60%);
-  background: var(--fx-l3-control-fill);
-  box-shadow: inset 0 1px 1px rgb(255 255 255 / 70%);
+  padding: 6px;
+  border-radius: 999px;
+  border: 1px solid rgb(255 255 255 / 55%);
+  background: rgb(255 255 255 / 32%);
+  box-shadow: inset 0 1px 3px rgb(20 30 50 / 8%);
   -webkit-backdrop-filter: blur(12px);
   backdrop-filter: blur(12px);
 }
-html.dark[data-ui-theme="liquid-glass"] .workspace-tabs { border-color: rgb(255 255 255 / 8%); box-shadow: inset 0 1px 1px rgb(255 255 255 / 6%); }
+html.dark[data-ui-theme="liquid-glass"] .workspace-tabs {
+  border-color: rgb(255 255 255 / 8%);
+  background: rgb(255 255 255 / 5%);
+  box-shadow: inset 0 1px 3px rgb(0 0 0 / 28%);
+}
+html[data-ui-theme="liquid-glass"] .workspace-tabs .workspace-tabs-list { justify-content: center; gap: 4px; }
 html[data-ui-theme="liquid-glass"] .workspace-tabs .workspace-tab,
-html[data-ui-theme="liquid-glass"] .workspace-tab-scroll { border-radius: var(--fx-radius-pill); }
-html[data-ui-theme="liquid-glass"] .workspace-tabs .workspace-tab[data-state="active"] { box-shadow: var(--fx-primary-shadow); }
+html[data-ui-theme="liquid-glass"] .workspace-tab-scroll { border-radius: 999px; }
+html[data-ui-theme="liquid-glass"] .workspace-tabs .workspace-tab,
+html.dark[data-ui-theme="liquid-glass"] .workspace-tabs .workspace-tab {
+  flex: 0 0 auto;
+  min-width: 136px;
+  min-height: 36px;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid transparent;
+  background: transparent;
+  background-image: none;
+  color: var(--fx-text-muted);
+  font-size: 14px;
+  font-weight: 500;
+  box-shadow: none;
+  transition: color 180ms, background-color 180ms, border-color 180ms, box-shadow 220ms;
+}
+html[data-ui-theme="liquid-glass"] .workspace-tabs .workspace-tab > svg { color: currentColor; }
+html[data-ui-theme="liquid-glass"] .workspace-tabs .workspace-tab:hover:not([data-state="active"]) { color: var(--fx-text); background: rgb(255 255 255 / 30%); }
+html.dark[data-ui-theme="liquid-glass"] .workspace-tabs .workspace-tab:hover:not([data-state="active"]) { background: rgb(255 255 255 / 6%); }
+html[data-ui-theme="liquid-glass"] .workspace-tabs .workspace-tab[data-state="active"] {
+  border-color: rgb(255 255 255 / 85%);
+  background: linear-gradient(145deg, #ffffff 0%, #f7f8fc 100%);
+  color: var(--fx-primary-fill);
+  box-shadow: 0 1px 2px rgb(14 17 22 / 6%), 0 10px 24px -14px rgb(20 30 60 / 28%), inset 0 1px 0 #ffffff;
+}
+html.dark[data-ui-theme="liquid-glass"] .workspace-tabs .workspace-tab[data-state="active"] {
+  border-color: rgb(255 255 255 / 14%);
+  background: linear-gradient(145deg, rgb(255 255 255 / 16%) 0%, rgb(255 255 255 / 10%) 100%);
+  color: color-mix(in srgb, var(--fx-primary-fill) 45%, #ffffff);
+  box-shadow: 0 2px 3px rgb(0 0 0 / 12%), 0 12px 28px -16px rgb(0 0 0 / 40%), inset 0 1px 0 rgb(255 255 255 / 10%);
+}
+html[data-ui-theme="liquid-glass"] .workspace-tabs .workspace-tab[data-state="active"] > svg { color: currentColor; }
+html.dark[data-ui-theme="liquid-glass"] .workspace-tabs .workspace-tab[data-state="active"] .workspace-tab-count { color: inherit; }
+html[data-ui-theme="liquid-glass"] .workspace-tabs .workspace-tab-count {
+  display: inline-flex;
+  min-width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--fx-text-muted) 12%, transparent);
+  color: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 10px;
+}
+html[data-ui-theme="liquid-glass"] .workspace-tabs .workspace-tab[data-state="active"] .workspace-tab-count { background: color-mix(in srgb, var(--fx-primary-fill) 10%, transparent); color: var(--fx-primary-fill); }
+@media (max-width: 767px) {
+  html[data-ui-theme="liquid-glass"] .workspace-tabs .workspace-tabs-list { justify-content: flex-start; }
+  html[data-ui-theme="liquid-glass"] .workspace-tabs .workspace-tab,
+  html.dark[data-ui-theme="liquid-glass"] .workspace-tabs .workspace-tab { min-width: 0; }
+}
 /* 输入框、下拉触发器、搜索框：白 60% 的玻璃，12px 圆角 */
 html[data-ui-theme="liquid-glass"] .workspace-main [data-slot="input"],
 html[data-ui-theme="liquid-glass"] .workspace-main [data-slot="select-trigger"],
@@ -619,7 +680,15 @@ html[data-ui-theme="liquid-glass"] .workspace-main [data-slot="button"]:not([dat
   html[data-ui-theme="liquid-glass"] [data-slot="button"][data-variant="outline"]:active,
   html[data-ui-theme="liquid-glass"] [data-slot="button"][data-variant="secondary"]:active { transform: scale(0.96); }
 }
-/* 状态胶囊、分组 chip、徽标：玻璃底的未选中态 */
+/*
+  状态 chip（可用 / 中断……）照珍珠：36px 高、14px 圆角的小块，未选中是磨砂玻璃一圈细白线；
+  选中是浮起的白块 + 主色字 + 掺主色的细线，不再是实心紫块。
+*/
+html[data-ui-theme="liquid-glass"] .fx-chip {
+  height: 36px;
+  border-radius: 14px;
+  font-size: 14px;
+}
 html[data-ui-theme="liquid-glass"] .fx-chip:not(.fx-chip-on) {
   background: rgb(255 255 255 / 40%);
   border-color: rgb(255 255 255 / 60%);
@@ -632,7 +701,68 @@ html.dark[data-ui-theme="liquid-glass"] .fx-chip:not(.fx-chip-on) {
   border-color: rgb(255 255 255 / 18%);
   box-shadow: none;
 }
-html[data-ui-theme="liquid-glass"] .fx-chip-on { box-shadow: var(--fx-primary-shadow); }
+html[data-ui-theme="liquid-glass"] .fx-chip-on,
+html[data-ui-theme="liquid-glass"] .fx-chip-on:hover {
+  border-color: color-mix(in srgb, var(--fx-primary-fill) 30%, rgb(255 255 255 / 80%));
+  background: linear-gradient(145deg, #ffffff 0%, #f7f8fc 100%);
+  background-image: linear-gradient(145deg, #ffffff 0%, #f7f8fc 100%);
+  color: var(--fx-primary-fill);
+  box-shadow: 0 2px 3px rgb(20 30 60 / 4%), 0 10px 24px -14px rgb(20 30 60 / 25%), inset 0 1px 0 #ffffff;
+  font-weight: 500;
+}
+html.dark[data-ui-theme="liquid-glass"] .fx-chip-on,
+html.dark[data-ui-theme="liquid-glass"] .fx-chip-on:hover {
+  border-color: color-mix(in srgb, var(--fx-primary-fill) 35%, rgb(255 255 255 / 14%));
+  background: rgb(255 255 255 / 14%);
+  background-image: none;
+  color: color-mix(in srgb, var(--fx-primary-fill) 45%, #ffffff);
+  box-shadow: 0 2px 3px rgb(0 0 0 / 12%), inset 0 1px 0 rgb(255 255 255 / 10%);
+}
+html[data-ui-theme="liquid-glass"] .fx-chip-count { opacity: 1; display: inline-flex; min-width: 20px; height: 20px; align-items: center; justify-content: center; padding: 0 6px; border-radius: 999px; background: color-mix(in srgb, var(--fx-text-muted) 12%, transparent); font-size: 10px; font-weight: 600; }
+html[data-ui-theme="liquid-glass"] .fx-chip-on .fx-chip-count { background: color-mix(in srgb, var(--fx-primary-fill) 10%, transparent); color: var(--fx-primary-fill); }
+/* 搜索框跟 chip 一样 14px 圆角的磨砂块，和珍珠那一排对齐 */
+html[data-ui-theme="liquid-glass"] .fx-search-pill {
+  border-radius: 14px !important;
+  border: 1px solid rgb(255 255 255 / 65%) !important;
+  background: rgb(255 255 255 / 45%) !important;
+  box-shadow: inset 0 1px 2px rgb(20 30 50 / 4%), 0 1px 0 rgb(255 255 255 / 80%);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+html.dark[data-ui-theme="liquid-glass"] .fx-search-pill {
+  border-color: rgb(255 255 255 / 12%) !important;
+  background: rgb(255 255 255 / 7%) !important;
+  box-shadow: inset 0 1px 2px rgb(0 0 0 / 20%);
+}
+html[data-ui-theme="liquid-glass"] .fx-search-pill:focus-visible { border-color: var(--fx-primary-stroke) !important; }
+/*
+  搜索框左边的放大镜：输入框带 backdrop-filter 会自成一层、按 DOM 顺序盖在放大镜上面（看着发虚），
+  提一层回到框上，颜色照珍珠用正文色。
+*/
+html[data-ui-theme="liquid-glass"] :has(> .fx-search-pill) > svg:first-child { z-index: 1; color: var(--fx-text-secondary); }
+/* 页头状态行（「可用 4 · 中断 1」）照珍珠：30px 整圆的小胶囊、细白线、磨砂底、12px / 500 */
+html[data-ui-theme="liquid-glass"] .workspace-main .workspace-header-chips { gap: 8px; }
+html[data-ui-theme="liquid-glass"] .workspace-main .workspace-header-chips > * {
+  display: inline-flex;
+  height: 30px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  border: 1px solid rgb(255 255 255 / 65%);
+  border-radius: 999px;
+  background: rgb(255 255 255 / 45%);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 80%);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+}
+html.dark[data-ui-theme="liquid-glass"] .workspace-main .workspace-header-chips > * {
+  border-color: rgb(255 255 255 / 12%);
+  background: rgb(255 255 255 / 7%);
+  box-shadow: none;
+}
 html[data-ui-theme="liquid-glass"] [data-slot="badge"][data-variant="outline"],
 html[data-ui-theme="liquid-glass"] [data-slot="badge"][data-variant="secondary"] {
   border-color: rgb(255 255 255 / 60%);

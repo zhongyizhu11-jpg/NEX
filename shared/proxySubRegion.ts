@@ -86,3 +86,29 @@ export function guessProxySubRegionCode(name: unknown): string {
 export function stripProxySubRegionFlag(name: string): string {
   return String(name || "").replace(/[\u{1F1E6}-\u{1F1FF}][\u{1F1E6}-\u{1F1FF}]\s*/gu, "").trim();
 }
+
+/**
+ * 地区组怎么选节点。
+ *
+ * url-test  客户端测速，自动走延迟最低的（原来唯一的做法）
+ * select    手动：客户端里点开这个组自己挑一个，客户端记住选择
+ * fallback  主备：按节点顺序，前一个不通才切下一个
+ */
+export const PROXY_SUB_REGION_GROUP_TYPES = ["url-test", "select", "fallback"] as const;
+
+export type ProxySubRegionGroupType = (typeof PROXY_SUB_REGION_GROUP_TYPES)[number];
+
+export const PROXY_SUB_REGION_GROUP_TYPE_LABELS: Record<ProxySubRegionGroupType, string> = {
+  "url-test": "自动选最快",
+  select: "手动选择",
+  fallback: "主备切换",
+};
+
+export const PROXY_SUB_DEFAULT_REGION_GROUP_TYPE: ProxySubRegionGroupType = "url-test";
+
+export function normalizeProxySubRegionGroupType(value: unknown): ProxySubRegionGroupType {
+  const raw = String(value ?? "").trim().toLowerCase();
+  return (PROXY_SUB_REGION_GROUP_TYPES as readonly string[]).includes(raw)
+    ? raw as ProxySubRegionGroupType
+    : PROXY_SUB_DEFAULT_REGION_GROUP_TYPE;
+}

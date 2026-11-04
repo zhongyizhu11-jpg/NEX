@@ -518,6 +518,28 @@
     overscroll-behavior-y: auto;
   }
 
+  /*
+    整页不许横着动（网页版也一样）。iOS Safari 上两种情况会让整页左右晃：
+      1. 页签条 / 筛选 chip 条这些横向滚动条滑到头还接着滑，滚动链传给整页，整页跟着橡皮筋回弹；
+      2. 某个元素比视口宽一点点（阴影外的描边、负外边距），整页就能被横着拖。
+    根元素锁横向回弹 + 裁掉横向溢出；横向滚动条自己滑到头就停（contain），不再往外传。
+    竖向不动：滚动、回弹、下拉都照旧。
+  */
+  html {
+    overflow-x: hidden;
+    overscroll-behavior-x: none;
+  }
+
+  body {
+    overflow-x: clip;
+    overscroll-behavior-x: none;
+  }
+
+  .overflow-x-auto,
+  .workspace-tabs-viewport {
+    overscroll-behavior-x: contain;
+  }
+
   [data-mobile-header="true"] {
     min-height: calc(3.5rem + var(--forwardx-safe-area-top));
     padding-top: var(--forwardx-safe-area-top);

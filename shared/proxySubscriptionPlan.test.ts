@@ -882,3 +882,20 @@ test("自定义组按关键词挑成员：任一 / 全部 / 排除，订阅里�
   assert.deepEqual(byName.get("老写法"), names);
   assert.equal(byName.has("空组被丢掉"), false);
 });
+
+test("地区组：默认自动选最快，可改成手动选择 / 主备切换，认不出的值退回自动", () => {
+  const templates = [HKT_TEMPLATE];
+  const plan = planFor(
+    [rule({ id: 1, hostId: 1, sourcePort: 20001 }), rule({ id: 2, hostId: 2, sourcePort: 20002 })],
+    templates,
+  );
+  for (const entry of plan.entries) entry.node.regionCode = "HK";
+  const regionGroup = (regionGroupType?: any) => buildProxySubscriptionDocument(plan, templates, { mainGroupName: "NEX", regionGroups: true, regionGroupType })
+    .groups.find((group) => group.name.includes("香港"));
+
+  assert.equal(regionGroup()?.type, "url-test");
+  assert.equal(regionGroup("select")?.type, "select");
+  assert.deepEqual(regionGroup("select")?.members, ["广州1 → HKT", "广州2 → HKT"]);
+  assert.equal(regionGroup("fallback")?.type, "fallback");
+  assert.equal(regionGroup("load-balance")?.type, "url-test");
+});

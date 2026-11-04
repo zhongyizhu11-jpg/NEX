@@ -83,6 +83,9 @@ export function buildProxySubPipelineDocument(input: ProxySubPipelineInput): Pro
     mainGroupName: PROXY_SUBSCRIPTION_GROUP_NAME,
     rulePreset: input.rulePreset,
     regionGroups: resolveTriState(input.options.regionGroups, input.settings.regionGroupsDefault),
+    regionGroupType: input.options.regionGroupType && input.options.regionGroupType !== "default"
+      ? input.options.regionGroupType
+      : input.settings.regionGroupTypeDefault,
     customGroups,
     categoryTargets: input.options.categoryTargets,
     providers: input.providers,

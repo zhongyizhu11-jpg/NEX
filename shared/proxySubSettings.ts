@@ -8,6 +8,8 @@
  * 节点、不限设备、不限流……），升级后什么都不改就和原来一样。
  */
 
+import { normalizeProxySubRegionGroupType, type ProxySubRegionGroupType } from "./proxySubRegion";
+
 export const PROXY_SUB_SETTING_PREFIX = "proxySub.";
 
 export type ProxySubSettings = {
@@ -53,6 +55,8 @@ export type ProxySubSettings = {
   flagEmojiDefault: boolean;
   /** 默认生不生成地区组。 */
   regionGroupsDefault: boolean;
+  /** 地区组默认怎么选节点：url-test 自动选最快 / select 手动 / fallback 主备。 */
+  regionGroupTypeDefault: ProxySubRegionGroupType;
   /** 节点名默认加不加协议前缀。 */
   protocolPrefixDefault: boolean;
   /** 访问日志保留天数；0 = 不记日志。 */
@@ -99,6 +103,7 @@ export const PROXY_SUB_DEFAULT_SETTINGS: ProxySubSettings = {
   nameTemplateDefault: "{name}",
   flagEmojiDefault: false,
   regionGroupsDefault: false,
+  regionGroupTypeDefault: "url-test",
   protocolPrefixDefault: false,
   accessLogRetentionDays: 30,
   externalSourcesEnabled: false,
@@ -136,6 +141,7 @@ const FIELD_KINDS: Record<keyof ProxySubSettings, Kind> = {
   nameTemplateDefault: "text",
   flagEmojiDefault: "bool",
   regionGroupsDefault: "bool",
+  regionGroupTypeDefault: "text",
   protocolPrefixDefault: "bool",
   accessLogRetentionDays: "int",
   externalSourcesEnabled: "bool",
@@ -242,6 +248,7 @@ export function normalizeProxySubSettings(input: Partial<ProxySubSettings>): Pro
   if (out.supportUrl && !/^https?:\/\//i.test(out.supportUrl)) out.supportUrl = "";
   if (out.rulesetMirror && out.rulesetMirror !== "panel" && !/^https?:\/\//i.test(out.rulesetMirror)) out.rulesetMirror = "";
   out.rulesetMirror = String(out.rulesetMirror).replace(/\/+$/, "");
+  out.regionGroupTypeDefault = normalizeProxySubRegionGroupType(out.regionGroupTypeDefault);
   return out as ProxySubSettings;
 }
 

@@ -78,3 +78,15 @@ test("客户端看到的到期：账号和链接取更早的，都没有是 0", 
   assert.equal(effectiveProxySubExpiry(null, undefined), 0);
   assert.equal(effectiveProxySubExpiry("not a date", ""), 0);
 });
+
+test("地区组怎么选：令牌上只认三种，其余跟随全局；全局设置同样收拾", async () => {
+  const { normalizeProxySubTokenOptions } = await import("./proxySubTokenScope");
+  const { normalizeProxySubSettings, parseProxySubSettings, proxySubSettingKey } = await import("./proxySubSettings");
+  assert.equal(normalizeProxySubTokenOptions({}).regionGroupType, "default");
+  assert.equal(normalizeProxySubTokenOptions({ regionGroupType: "select" }).regionGroupType, "select");
+  assert.equal(normalizeProxySubTokenOptions({ regionGroupType: "FALLBACK" }).regionGroupType, "fallback");
+  assert.equal(normalizeProxySubTokenOptions({ regionGroupType: "load-balance" }).regionGroupType, "default");
+  assert.equal(normalizeProxySubSettings({}).regionGroupTypeDefault, "url-test");
+  assert.equal(normalizeProxySubSettings({ regionGroupTypeDefault: "nope" as any }).regionGroupTypeDefault, "url-test");
+  assert.equal(parseProxySubSettings({ [proxySubSettingKey("regionGroupTypeDefault")]: "select" }).regionGroupTypeDefault, "select");
+});

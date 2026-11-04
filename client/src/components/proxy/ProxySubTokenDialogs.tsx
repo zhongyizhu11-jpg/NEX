@@ -35,7 +35,7 @@ import {
   type ProxySubTokenScope,
   type TriState,
 } from "@shared/proxySubTokenScope";
-import { proxySubRegionLabel } from "@shared/proxySubRegion";
+import { PROXY_SUB_DEFAULT_REGION_GROUP_TYPE, PROXY_SUB_REGION_GROUP_TYPE_LABELS, PROXY_SUB_REGION_GROUP_TYPES, proxySubRegionLabel, type ProxySubRegionGroupType } from "@shared/proxySubRegion";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 
@@ -61,6 +61,7 @@ export type ProxySubSettingsPublic = {
   nameTemplateDefault: string;
   flagEmojiDefault: boolean;
   regionGroupsDefault: boolean;
+  regionGroupTypeDefault?: ProxySubRegionGroupType;
   protocolPrefixDefault: boolean;
   deviceLimitEnabled: boolean;
 };
@@ -517,6 +518,17 @@ export function ProxySubTokenEditDialog({
                   <TriStateSelect label="节点名加国旗" value={options.flagEmoji} fallback={!!settings?.flagEmojiDefault} onChange={(value) => setOptions((prev) => ({ ...prev, flagEmoji: value }))} />
                   <TriStateSelect label="节点名加协议前缀" hint="像 [VLESS] 香港 01" value={options.protocolPrefix} fallback={!!settings?.protocolPrefixDefault} onChange={(value) => setOptions((prev) => ({ ...prev, protocolPrefix: value }))} />
                   <TriStateSelect label="按地区生成策略组" value={options.regionGroups} fallback={!!settings?.regionGroupsDefault} onChange={(value) => setOptions((prev) => ({ ...prev, regionGroups: value }))} />
+                  {(options.regionGroups === "on" || (options.regionGroups === "default" && !!settings?.regionGroupsDefault)) ? (
+                    <OptionRow label="地区组怎么选" hint="手动选择：客户端里点开「🇭🇰 香港」这类组自己挑节点，不再按延迟自动换。">
+                      <Select value={options.regionGroupType} onValueChange={(next) => setOptions((prev) => ({ ...prev, regionGroupType: next as ProxySubTokenOptions["regionGroupType"] }))}>
+                        <SelectTrigger aria-label="地区组怎么选" className="h-8 w-36 text-xs"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="default">跟随默认（{PROXY_SUB_REGION_GROUP_TYPE_LABELS[settings?.regionGroupTypeDefault || PROXY_SUB_DEFAULT_REGION_GROUP_TYPE]}）</SelectItem>
+                          {PROXY_SUB_REGION_GROUP_TYPES.map((type) => <SelectItem key={type} value={type}>{PROXY_SUB_REGION_GROUP_TYPE_LABELS[type]}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                    </OptionRow>
+                  ) : null}
                   <TriStateSelect label="插入信息节点" hint="剩余流量 / 到期 / 公告。它们指向本机、永远连不上，客户端测速会标红。" value={options.infoNodes} fallback={!!settings?.infoNodesDefault} onChange={(value) => setOptions((prev) => ({ ...prev, infoNodes: value }))} />
                 </OptionGroup>
               </Section>

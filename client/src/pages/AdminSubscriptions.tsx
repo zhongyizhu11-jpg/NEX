@@ -19,6 +19,7 @@ import { FormField } from "@/components/ui/form-field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { PROXY_SUB_REGION_GROUP_TYPE_LABELS, PROXY_SUB_REGION_GROUP_TYPES, type ProxySubRegionGroupType } from "@shared/proxySubRegion";
 import { SlidingTabsList, type SlidingTabItem } from "@/components/ui/sliding-tabs";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -449,7 +450,17 @@ function SettingsTab() {
       {section("节点外观默认值", <>
         <FormField className="space-y-1.5 sm:col-span-2"><Label>默认命名模板</Label><Input value={form.nameTemplateDefault} onChange={(event) => set("nameTemplateDefault", event.target.value)} /><p data-fx-help="" className="text-xs text-muted-foreground">{"变量：{name} {flag} {country} {code} {host} {node} {rule} {protocol} {index}。默认 {name}：用转发规则名，规则没起名时是「入口 → 落地」。令牌上可以单独改。"}</p></FormField>
         {toggle("flagEmojiDefault", "节点名加国旗", "地区来自机器位置、节点上手填的国家码或名字里的关键字。")}
-        {toggle("regionGroupsDefault", "按地区生成策略组", "🇭🇰 香港、🇯🇵 日本……各一个自动选最快的组。")}
+        {toggle("regionGroupsDefault", "按地区生成策略组", "🇭🇰 香港、🇯🇵 日本……每个地区一个组，怎么选见下一项。")}
+        <FormField className="space-y-1.5">
+          <Label>地区组怎么选</Label>
+          <Select value={form.regionGroupTypeDefault} onValueChange={(value) => set("regionGroupTypeDefault", value as ProxySubRegionGroupType)}>
+            <SelectTrigger aria-label="地区组怎么选"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {PROXY_SUB_REGION_GROUP_TYPES.map((type) => <SelectItem key={type} value={type}>{PROXY_SUB_REGION_GROUP_TYPE_LABELS[type]}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <p data-fx-help="" className="text-xs text-muted-foreground">自动选最快：客户端按延迟自己换；手动选择：在客户端里点开地区组自己挑；主备切换：按顺序，前一个不通才换下一个。令牌上可以单独改。</p>
+        </FormField>
         {toggle("protocolPrefixDefault", "节点名加协议前缀", "[VLESS] [Hysteria2] 这种。")}
         {toggle("infoNodesDefault", "插入信息节点", "剩余流量 / 到期 / 公告，做成几条连不上的占位节点。")}
       </>)}
