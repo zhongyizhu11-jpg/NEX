@@ -18,15 +18,33 @@ type SlidingTabsListProps<T extends string> = {
   minItemWidthRem?: number;
 };
 
+/*
+  选中的页签被裁掉了才把它滑进来，而且只滑到刚好露出来。
+
+  原来不管看没看得见，离边 44px 以内就滑（给鼠标那两枚左右箭头留位置）：手机上没有箭头，
+  点一个已经整个在眼前的页签，整条还是左右挪一截，再点回去又挪回来 —— 用户录屏里
+  「页面左右晃」就是这个（2026-11-04）。触屏上按边缘淡出的那 28px 算，鼠标上才给箭头留位。
+*/
+const TOUCH_EDGE_PX = 28;
+const POINTER_EDGE_PX = 44;
+
 function revealActiveTab(element: HTMLDivElement) {
   if (element.scrollWidth <= element.clientWidth) return;
   const selected = element.querySelector<HTMLElement>('[data-state="active"]');
   if (!selected) return;
   const item = selected.getBoundingClientRect();
   const frame = element.getBoundingClientRect();
-  // Leave room for the 44px touch scroll controls without moving the page.
-  if (item.left < frame.left + 44) element.scrollLeft -= frame.left + 44 - item.left;
-  else if (item.right > frame.right - 44) element.scrollLeft += item.right - frame.right + 44;
+  const coarse = typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches;
+  const edge = coarse ? TOUCH_EDGE_PX : POINTER_EDGE_PX;
+  // 两边都还没碰到留白区就什么都不做：整条不动，点下去只换高亮
+  if (item.left >= frame.left + edge && item.right <= frame.right - edge) return;
+  if (item.width + edge * 2 > frame.width) {
+    // 页签比整条还宽（极窄屏）：对齐左边就够了
+    element.scrollLeft += item.left - frame.left - edge;
+    return;
+  }
+  if (item.left < frame.left + edge) element.scrollLeft -= frame.left + edge - item.left;
+  else element.scrollLeft += item.right - frame.right + edge;
 }
 /*
   折叠式分类条（墨金主题、手机上）。
