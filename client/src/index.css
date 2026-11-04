@@ -533,6 +533,12 @@
   body {
     overflow-x: clip;
     overscroll-behavior-x: none;
+    /*
+      iOS Safari 不看 overflow-x: hidden 就能把整页横着拖（WebKit 的老毛病）；touch-action 它是认的：
+      手指在页面上只准竖着滑和双指缩放。横向滚动条（分类条、chip 条、表格）自己是滚动容器，
+      手势落在它们上面照旧能横滑，这条管不到它们。
+    */
+    touch-action: pan-y pinch-zoom;
   }
 
   .overflow-x-auto,
