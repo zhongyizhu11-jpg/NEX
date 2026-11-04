@@ -739,7 +739,7 @@ html[data-ui-theme="liquid-glass"] .fx-search-pill:focus-visible { border-color:
   搜索框左边的放大镜：输入框带 backdrop-filter 会自成一层、按 DOM 顺序盖在放大镜上面（看着发虚），
   提一层回到框上，颜色照珍珠用正文色。
 */
-html[data-ui-theme="liquid-glass"] :has(> .fx-search-pill) > svg:first-child { z-index: 1; color: var(--fx-text-secondary); }
+html[data-ui-theme="liquid-glass"] :has(> .fx-search-pill) > svg:first-child { z-index: var(--fx-z-raised); color: var(--fx-text-secondary); }
 /* 页头状态行（「可用 4 · 中断 1」）照珍珠：30px 整圆的小胶囊、细白线、磨砂底、12px / 500 */
 html[data-ui-theme="liquid-glass"] .workspace-main .workspace-header-chips { gap: 8px; }
 html[data-ui-theme="liquid-glass"] .workspace-main .workspace-header-chips > * {
