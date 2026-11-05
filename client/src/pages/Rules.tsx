@@ -59,6 +59,7 @@ import { Tabs } from "@/components/ui/tabs";
 import { SlidingTabsList, type SlidingTabItem } from "@/components/ui/sliding-tabs";
 import type { FilterChipItem } from "@/components/ui/filter-chips";
 import { useCompactLayout } from "@/hooks/useCompactLayout";
+import { useUiTheme } from "@/hooks/useUiTheme";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Table,
@@ -111,6 +112,7 @@ import { DEFAULT_RULE_EGRESS_FORM, RuleEgressSection, useEgressEntryCapabilities
 import { RuleFormCollapsible } from "@/components/rules/RuleFormCollapsible";
 import { RuleLimitsForm, newRuleLimitsForm, ruleLimitsChanges, ruleLimitsSummary, type RuleLimitsFormValue } from "@/components/rules/RuleLimitsForm";
 import { RuleLimitSummary } from "@/components/rules/RuleLimitSummary";
+import { hasRuleLimits } from "@shared/ruleLimits";
 import { ADMIN_MANAGED_RULE_MESSAGE, isAdminManagedRule, normalizeRuleLimitReason } from "@shared/ruleLimits";
 import {
   normalizeRuleEgressType,
@@ -830,19 +832,21 @@ function createRuleCardUiDispatcher(ref: { current: RuleCardUi | null }): RuleCa
   大数字是累计总量：一张卡最值得一眼看到的数。走势线是近 24 小时逐时字节，只画形状。
   地址一行等宽字、不截断；右端一枚小标签：延迟，或者切了线 / 出错 / 停用这些更要紧的话。
 */
-const RuleCard = memo(function RuleCard({
+/*
+  规则卡和「深空」主题下的规则行共用的派生值：状态色、副标题、延迟标签、线路组那枚、告警徽标……
+  两种画法只是排版不同，显示的内容和判断必须一模一样，所以算在一处。不是 hook（里面没有 hook），
+  只是一段从 props 推出来的纯计算，外加几枚现成的小 JSX。
+*/
+function deriveRuleView({
   rule,
-  sortable,
   page,
   visualState,
   visualTitle,
   failover,
   totalIn,
   totalOut,
-  hasTotal,
   dailyIn,
   dailyOut,
-  spark,
   routeBoard,
   probe,
   entriesExpanded: entriesOpen,
@@ -949,6 +953,20 @@ const RuleCard = memo(function RuleCard({
     ) : null,
   ].filter(Boolean);
 
+  return {
+    ui, compact, compactLayout, visual, supported, protocolKey, category, health, tone, toneColor,
+    entryAddresses, targetAddress, entryTitle, primaryEntry, extraEntries, entriesExpanded,
+    subtitle, big, dailyBytes, hasLineRows, linesExpanded, tag, failoverAside, alerts,
+  };
+}
+
+const RuleCard = memo(function RuleCard(props: RuleCardProps) {
+  const { rule, sortable, page, totalIn, totalOut, hasTotal, dailyIn, dailyOut, spark, routeBoard, failover } = props;
+  const {
+    ui, compact, visual, supported, tone, toneColor,
+    entryAddresses, targetAddress, entryTitle, primaryEntry, extraEntries, entriesExpanded,
+    subtitle, big, dailyBytes, linesExpanded, tag, failoverAside, alerts,
+  } = deriveRuleView(props);
   return (
     <Card
       {...(sortable?.itemProps || {})}
@@ -1124,6 +1142,146 @@ const RuleCard = memo(function RuleCard({
         ) : null}
       </CardContent>
     </Card>
+  );
+}, ruleCardPropsEqual);
+
+/*
+  「深空」主题下的规则行（用户 2026-11-05 选的商业化方向 B：一整块面板里一行一条，不是一张张大卡）。
+
+  手机：三行 —— ● 名字 · 副标题 ……… 延迟 ··· [开关] / 入口 → 目标 ……… 累计 / 一条贴满整行的走势。
+  桌面：一行一条的表格 —— 名字 | 入口 → 目标 | 延迟 | 近 24 小时走势 | 近 24 小时 ↓↑ | 累计 | 操作。
+  内容、判断、按钮和规则卡完全一样（deriveRuleView），只是排法不同；告警、限速、到期这些附加信息
+  有才出现，在行的最下面另起一行。排法全在 theme-deepspace.css 的 .fx-ds-rule*。
+*/
+const RuleRow = memo(function RuleRow(props: RuleCardProps) {
+  const { rule, sortable, page, totalIn, totalOut, hasTotal, dailyIn, dailyOut, spark, routeBoard, failover } = props;
+  const {
+    ui, visual, supported, tone, toneColor,
+    entryAddresses, targetAddress, entryTitle, primaryEntry, extraEntries,
+    subtitle, big, dailyBytes, linesExpanded, tag, failoverAside, alerts,
+  } = deriveRuleView(props);
+  const stop = !rule.protocolBlockReason && rule.resourceAccessAllowed !== false ? resolveForwardRuleStopReason(rule) : null;
+  const notes = [
+    ...(rule.protocolBlockReason || rule.resourceAccessAllowed === false ? [{ key: "block", tone: "down", text: String(rule.protocolBlockReason || revokedResourceTitle) }] : []),
+    ...(rule.entryDomainError ? [{ key: "domain", tone: "warn", text: `规则域名未同步：${String(rule.entryDomainError)}（面板会自动重试）` }] : []),
+    ...(stop?.autoResume ? [{ key: "stop", tone: "off", text: stop.detail }] : []),
+    ...entryBridgeNotes(rule).map((note) => ({ key: note, tone: "off", text: note })),
+  ];
+  return (
+    <div
+      {...(sortable?.itemProps || {})}
+      className={cn(
+        "group/sortable fx-ds-rule",
+        !supported && "opacity-70",
+        sortable?.isDragging && "opacity-55 ring-1 ring-primary/35",
+        sortable?.isDropTarget && "ring-1 ring-primary/45",
+      )}
+      data-tone={tone}
+      style={{ ...(sortable?.itemProps?.style || {}), "--fx-rule-tone": toneColor } as CSSProperties}
+      title={!supported ? unsupportedProtocolTitle : undefined}
+    >
+      <div className="fx-ds-rule-id">
+        <span className="fx-ds-rule-dot">
+          {supported ? (
+            <span title={visual.title} className="inline-flex">
+              <StatusDot health={ruleVisualStateToHealth(visual.state)} label={visual.title} />
+            </span>
+          ) : <StatusDot health="down" label={unsupportedProtocolTitle} />}
+        </span>
+        <div className="fx-ds-rule-names">
+          <div className="fx-ds-rule-name">
+            <span className="truncate" title={rule.name}>{rule.name}</span>
+            {ui.renderSubscriptionMark(rule)}
+          </div>
+          <div className="fx-ds-rule-sub" title={subtitle}>{subtitle}</div>
+        </div>
+      </div>
+
+      <div className="fx-ds-rule-path" title={`${entryAddresses.map((entry) => entry.text).join(" / ")} → ${targetAddress}`}>
+        {primaryEntry ? (
+          <button
+            type="button"
+            onClick={() => primaryEntry.copyable && ui.copyEntryAddress(rule, primaryEntry.value)}
+            disabled={!primaryEntry.copyable}
+            className="fx-ds-rule-addr"
+            title={primaryEntry.copyable ? entryTitle : primaryEntry.text}
+          >
+            <span className="truncate">{primaryEntry.text}</span>
+          </button>
+        ) : null}
+        {extraEntries > 0 ? (
+          <button
+            type="button"
+            className="fx-ds-rule-more"
+            onClick={() => ui.toggleEntryAddresses(Number(rule.id))}
+            title={`共 ${entryAddresses.length} 个入口地址`}
+          >
+            +{extraEntries}
+          </button>
+        ) : null}
+        <ArrowRight className="fx-ds-rule-arrow" aria-hidden="true" />
+        <button
+          type="button"
+          onClick={() => ui.copyTargetAddress(targetAddress)}
+          className="fx-ds-rule-addr"
+          title={`复制目标地址: ${targetAddress}`}
+        >
+          <span className="truncate">{targetAddress}</span>
+        </button>
+      </div>
+
+      <div className="fx-ds-rule-lat">
+        {failoverAside}
+        {tag}
+      </div>
+
+      <Sparkline
+        values={spark}
+        width={240}
+        height={22}
+        stroke={toneColor}
+        className="fx-ds-rule-spark"
+        title={spark.some((value) => value > 0) ? "近 24 小时逐时流量走势" : undefined}
+      />
+
+      <div className="fx-ds-rule-day" title="近 24 小时入向 · 出向">
+        {dailyBytes > 0 ? `↓ ${formatBytes(dailyIn)} · ↑ ${formatBytes(dailyOut)}` : "近 24H 没有流量"}
+      </div>
+
+      <div className="fx-ds-rule-total" title={hasTotal ? `累计入向 ${formatBytes(totalIn)} / 出向 ${formatBytes(totalOut)}` : "还没有流量"}>
+        <b>{big.value}</b><small>{big.unit}</small>
+      </div>
+
+      <div className="fx-ds-rule-actions">
+        {ui.renderRuleActions(rule)}
+        {ui.renderRuleEnabledSwitch(rule)}
+        {sortable && (
+          <SortableDragHandle
+            dragHandleProps={sortable.handleProps}
+            visible={sortable.isDragging}
+            busy={page.ruleReorderPending}
+          />
+        )}
+      </div>
+
+      {alerts.length > 0 || notes.length > 0 || hasRuleLimits(rule) ? (
+        <div className="fx-ds-rule-extra">
+          {alerts.length > 0 ? <div className="fx-rule-alerts">{alerts}</div> : null}
+          <RuleLimitSummary rule={rule} />
+          {notes.map((note) => (
+            <div key={note.key} className="fx-ds-rule-note" data-tone={note.tone}>{note.text}</div>
+          ))}
+        </div>
+      ) : null}
+      {linesExpanded && failover?.policy && routeBoard ? (
+        <RouteMiniChain
+          className="fx-ds-rule-extra"
+          status={routeBoard}
+          policy={failover.policy}
+          onOpen={() => ui.openRulePolicy(Number(rule.id))}
+        />
+      ) : null}
+    </div>
   );
 }, ruleCardPropsEqual);
 
@@ -2455,6 +2613,7 @@ function RulesContent() {
   const { user } = useAuth();
   // 精简布局（compact.css 收的是组件打了 data-fx-help 的说明；规则框里这几行是条件渲染，由这个开关管）。
   const compactLayout = useCompactLayout();
+  const uiTheme = useUiTheme();
   /*
     规则卡的转发器（见 RuleCard 前面的说明和 renderRuleCard 上面那段）：引用一直不变，调过去的是
     ruleCardUiRef 这一轮指向的最新函数。放在最前面，是因为下面的 renderRuleActions / renderRuleEnabledSwitch
@@ -7504,10 +7663,15 @@ function RulesContent() {
     });
   };
 
-  const groupedRuleCardGridClass = effectiveRuleCardSize === "compact"
+  /*
+    「深空」主题：规则不画成一张张卡，画成一整块面板里的一行行（RuleRow）；四种网格换成同一个列表容器。
+    手机「全部」分组外面那层（一组一组的 section）照旧是普通的竖排，列表容器只套在每组的行外面。
+  */
+  const denseRuleRows = uiTheme === "deepspace";
+  const groupedRuleCardGridClass = denseRuleRows ? "fx-ds-rule-list" : effectiveRuleCardSize === "compact"
     ? "standard-card-grid-compact rule-card-grid-static rule-card-grid-static-compact gap-3"
     : "standard-card-grid rule-card-grid-static rule-card-grid-static-standard gap-4";
-  const sortableRuleCardGridClass = effectiveRuleCardSize === "compact"
+  const sortableRuleCardGridClass = denseRuleRows ? "fx-ds-rule-list" : effectiveRuleCardSize === "compact"
     ? "standard-card-grid-compact gap-3"
     : "standard-card-grid gap-4";
   /*
@@ -7517,10 +7681,11 @@ function RulesContent() {
     这里把组间距放到 gap-0（由卡片自己的上下内边距 14px 撑开，等于组间 28px），
     组内间距在 CSS 里收到 5px。
   */
-  const groupedRuleMobileGridClass = effectiveRuleCardSize === "compact"
+  const groupedRuleMobileGridClass = denseRuleRows ? "fx-ds-rule-list" : effectiveRuleCardSize === "compact"
     ? "grid rule-card-grid-static rule-card-grid-static-compact gap-0"
     : "grid rule-card-grid-static rule-card-grid-static-standard gap-3";
-  const sortableRuleMobileGridClass = effectiveRuleCardSize === "compact"
+  const groupedRuleMobileSectionsClass = denseRuleRows ? "grid gap-4" : groupedRuleMobileGridClass;
+  const sortableRuleMobileGridClass = denseRuleRows ? "fx-ds-rule-list" : effectiveRuleCardSize === "compact"
     ? "grid gap-0"
     : "grid gap-3";
   const ruleContentModeKey = effectiveViewMode === "card" ? "card" : displayMode;
@@ -7903,8 +8068,9 @@ function RulesContent() {
     isProbeFresh: isLinkProbeFresh,
     probeAgeText: formatProbeAge,
   };
+  const RuleItem = denseRuleRows ? RuleRow : RuleCard;
   const renderRuleCard = (rule: RuleCardRule, sortable?: RuleSortableRenderState) => (
-    <RuleCard
+    <RuleItem
       key={rule.id}
       rule={rule}
       sortable={sortable}
@@ -8236,7 +8402,7 @@ function RulesContent() {
             <>
               <RuleCardModeTransition mode={effectiveRuleCardSize} className="sm:hidden">
                 {shouldGroupRuleCards ? (
-                  <AutoAnimateContainer layout={false} className={groupedRuleMobileGridClass}>
+                  <AutoAnimateContainer layout={false} className={groupedRuleMobileSectionsClass}>
                     {desktopRuleGroups.map((group) => {
                       const collapsed = !!ruleGroupCollapsed[group.type];
                       return (

@@ -301,4 +301,81 @@ html[data-ui-theme="deepspace"] .workspace-main :is(.rounded-xl, .rounded-2xl, .
 html[data-ui-theme="deepspace"] [role="dialog"] :is(.rounded-md, .rounded-lg) { border-radius: 8px; }
 html[data-ui-theme="deepspace"] [role="dialog"] :is(.rounded-xl, .rounded-2xl) { border-radius: 12px; }
 
+/* ── 7. 转发规则：一整块面板里一行一条（RuleRow，Rules.tsx）──────── */
+/*
+  列表容器是一块面板（面板底、一圈暗线、12px），行与行之间一道线；行本身不描边不投影。
+  手机三行：名字 + 延迟 + 操作 / 入口 → 目标 + 累计 / 走势。桌面一行：七列对齐成一张表。
+*/
+html[data-ui-theme="deepspace"] .fx-ds-rule-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--fx-card-stroke);
+  border-radius: 12px;
+  background: var(--fx-card-fill);
+  overflow: hidden;
+}
+html[data-ui-theme="deepspace"] .fx-ds-rule-list > .fx-rule-card-placeholder { min-height: 92px; border-radius: 0; opacity: .35; }
+html[data-ui-theme="deepspace"] .fx-ds-rule {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "id actions"
+    "path total"
+    "spark lat"
+    "extra extra";
+  column-gap: 10px;
+  row-gap: 6px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--fx-stroke-weak);
+  background: var(--fx-card-fill);
+  min-width: 0;
+}
+html[data-ui-theme="deepspace"] .fx-ds-rule-list > :last-child,
+html[data-ui-theme="deepspace"] .fx-ds-rule-list > :last-child > .fx-ds-rule { border-bottom: 0; }
+html[data-ui-theme="deepspace"] .fx-ds-rule[data-tone="down"] { box-shadow: inset 3px 0 0 var(--fx-down); }
+html[data-ui-theme="deepspace"] .fx-ds-rule[data-tone="warn"] { box-shadow: inset 3px 0 0 var(--fx-warn); }
+html[data-ui-theme="deepspace"] .fx-ds-rule-id { grid-area: id; display: flex; align-items: center; gap: 8px; min-width: 0; }
+html[data-ui-theme="deepspace"] .fx-ds-rule-dot { display: inline-flex; flex: none; }
+html[data-ui-theme="deepspace"] .fx-ds-rule-names { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+html[data-ui-theme="deepspace"] .fx-ds-rule-name { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 14px; font-weight: 600; line-height: 20px; color: var(--fx-text); }
+html[data-ui-theme="deepspace"] .fx-ds-rule-sub { font-size: 12px; line-height: 16px; color: var(--fx-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+html[data-ui-theme="deepspace"] .fx-ds-rule-lat { grid-area: lat; display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; }
+html[data-ui-theme="deepspace"] .fx-ds-rule-lat .fx-rule-tag { font-family: var(--fx-ds-mono); font-size: 12px; }
+html[data-ui-theme="deepspace"] .fx-ds-rule-actions { grid-area: actions; display: flex; align-items: center; gap: 4px; }
+html[data-ui-theme="deepspace"] .fx-ds-rule-path { grid-area: path; display: flex; align-items: center; gap: 6px; min-width: 0; font-family: var(--fx-ds-mono); font-size: 12px; line-height: 18px; color: var(--fx-text-muted); }
+html[data-ui-theme="deepspace"] .fx-ds-rule-addr { display: inline-flex; min-width: 0; max-width: 100%; min-height: 0; height: auto; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: copy; }
+html[data-ui-theme="deepspace"] .fx-ds-rule-addr:hover:not(:disabled) { color: var(--fx-text); }
+html[data-ui-theme="deepspace"] .fx-ds-rule-addr:disabled { cursor: default; }
+html[data-ui-theme="deepspace"] .fx-ds-rule-more { flex: none; min-height: 0; height: auto; padding: 0 5px; border: 1px solid var(--fx-stroke-base); border-radius: 5px; background: transparent; color: var(--fx-text-muted); font: inherit; font-size: 11px; line-height: 16px; }
+html[data-ui-theme="deepspace"] .fx-ds-rule-arrow { flex: none; width: 12px; height: 12px; color: var(--fx-stroke-strong); }
+html[data-ui-theme="deepspace"] .fx-ds-rule-total { grid-area: total; display: flex; align-items: baseline; justify-content: flex-end; gap: 3px; white-space: nowrap; font-family: var(--fx-ds-mono); font-variant-numeric: tabular-nums; color: var(--fx-text-secondary); }
+html[data-ui-theme="deepspace"] .fx-ds-rule-total > b { font-size: 13px; font-weight: 500; }
+html[data-ui-theme="deepspace"] .fx-ds-rule-total > small { font-size: 11px; color: var(--fx-text-muted); }
+html[data-ui-theme="deepspace"] .fx-ds-rule-spark { grid-area: spark; align-self: center; width: 100%; height: 20px; opacity: .85; }
+html[data-ui-theme="deepspace"] .fx-ds-rule-day { display: none; font-family: var(--fx-ds-mono); font-size: 12px; color: var(--fx-text-muted); white-space: nowrap; text-align: right; }
+html[data-ui-theme="deepspace"] .fx-ds-rule-extra { grid-area: extra; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+html[data-ui-theme="deepspace"] .fx-ds-rule-extra:empty { display: none; }
+html[data-ui-theme="deepspace"] .fx-ds-rule-note { font-size: 11px; line-height: 16px; color: var(--fx-text-muted); }
+html[data-ui-theme="deepspace"] .fx-ds-rule-note[data-tone="down"] { color: var(--fx-down-text); }
+html[data-ui-theme="deepspace"] .fx-ds-rule-note[data-tone="warn"] { color: var(--fx-warn-text); }
+/* 一行里放了两个 RouteMiniChain / 额外行时，第二个也占满一整行 */
+html[data-ui-theme="deepspace"] .fx-ds-rule > .fx-ds-rule-extra + .fx-ds-rule-extra { grid-row: auto; }
+@media (min-width: 768px) {
+  html[data-ui-theme="deepspace"] .fx-ds-rule {
+    grid-template-columns: minmax(180px, 1.3fr) minmax(200px, 1.7fr) 96px 128px 168px 84px auto;
+    grid-template-areas:
+      "id path lat spark day total actions"
+      "extra extra extra extra extra extra extra";
+    align-items: center;
+    column-gap: 16px;
+    row-gap: 6px;
+    padding: 10px 16px;
+  }
+  html[data-ui-theme="deepspace"] .fx-ds-rule:hover { background: var(--fx-hover); }
+  html[data-ui-theme="deepspace"] .fx-ds-rule-spark { height: 20px; }
+  html[data-ui-theme="deepspace"] .fx-ds-rule-day { display: block; grid-area: day; }
+  html[data-ui-theme="deepspace"] .fx-ds-rule-lat { justify-content: flex-start; }
+}
+
 /* 设置页「界面主题」的预览（.fx-uitheme-swatch）在 ui-theme-shared.css：选别的主题时也要画，不能跟着这个文件按需加载 */
