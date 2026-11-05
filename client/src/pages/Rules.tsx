@@ -1156,7 +1156,7 @@ const RuleCard = memo(function RuleCard(props: RuleCardProps) {
 const RuleRow = memo(function RuleRow(props: RuleCardProps) {
   const { rule, sortable, page, totalIn, totalOut, hasTotal, dailyIn, dailyOut, spark, routeBoard, failover } = props;
   const {
-    ui, visual, supported, tone, toneColor,
+    ui, visual, supported, tone, toneColor, category,
     entryAddresses, targetAddress, entryTitle, primaryEntry, extraEntries,
     subtitle, big, dailyBytes, linesExpanded, tag, failoverAside, alerts,
   } = deriveRuleView(props);
@@ -1190,6 +1190,7 @@ const RuleRow = memo(function RuleRow(props: RuleCardProps) {
         </span>
         <div className="fx-ds-rule-names">
           <div className="fx-ds-rule-name">
+            <span className="fx-ds-rule-kind" data-kind={category}>{desktopRuleTypeLabels[category as RuleGroupType] || "转发"}</span>
             <span className="truncate" title={rule.name}>{rule.name}</span>
             {ui.renderSubscriptionMark(rule)}
           </div>
@@ -5526,7 +5527,8 @@ function RulesContent() {
     });
     return groups.filter((group) => group.rules.length > 0);
   }, [forwardGroupById, pagedRules]);
-  const shouldGroupRuleCards = ruleCategory === "all";
+  // 「深空」主题：「全部」也不分组，一张表到底；类型写在每一行名字前面的小标签上（RuleRow）
+  const shouldGroupRuleCards = ruleCategory === "all" && uiTheme !== "deepspace";
   /*
     换进这一页时先只画前几张卡（手机上刚好一屏），剩下的交给 React 的低优先级渲染随后补上：
     第一帧要画十几张卡的整棵树在手机上要几百毫秒，期间点什么都没反应（用户 2026-11-03 录屏

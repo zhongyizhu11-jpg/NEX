@@ -717,7 +717,7 @@
 .workspace-main [data-slot="card"] {
   border: 1px solid var(--fx-card-stroke, var(--fx-stroke-weak));
   border-radius: var(--fx-radius-surface);
-  background: var(--fx-card-fill, var(--fx-l1-surface)); /* --fx-card-fill 只有「极光」主题给（半透明玻璃），见 theme-aurora.css */
+  background: var(--fx-card-fill, var(--fx-l1-surface));
   box-shadow: var(--fx-elevation-card);
   backdrop-filter: none;
 }

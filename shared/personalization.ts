@@ -602,10 +602,6 @@ export function normalizePersonalizationCardStyle(value: unknown): Personalizati
   配色 / 页面底色 / 卡片风格那三项是「在当前主题上微调」，主题是它们底下那一层。
 
     classic 经典 —— 现在这套：浅灰页面托白卡、细线、天蓝渐变控件；深色是炭灰。出厂值，不往 <html> 上写属性。
-    aurora  极光 —— 页面是一层淡淡的彩色柔光（主色 + 薄荷 + 淡紫），卡片是半透明的玻璃片
-            （白 72% + 白高光边 + 带一点主色的软影，**不做 backdrop 模糊**，滚动不卡），
-            分段控件、搜索框、按钮全部改成胶囊，顶栏和底部标签栏更透。深色是深蓝黑底上压暗的同一组光。
-
     gilt    墨金 —— 米白纸底托奶白卡（暖色细线 + 软影），页面标题、卡标题、统计大数字用衬线，标题下一截
             金线，分组小标题金色小字；筛选 chip 选中态墨色实心（深色下金色）。深色是暖墨黑配金线。
             高端杂志 / 精品酒店的气质；主按钮仍是主色渐变。
@@ -639,12 +635,11 @@ export function normalizePersonalizationCardStyle(value: unknown): Personalizati
             1px 暗线、不投影、不模糊；流量 / 延迟 / 统计数字一律等宽字；控件 8px，主按钮平的天蓝，分段控件是一排带细边的
             小方块；手机底栏贴底通栏。深色是本色，浅色是冷白托白卡。2026-11-05 用户从三个商业化方向里挑的这一套。
 
-  画法全在 client/src/styles/theme-aurora.css / theme-gilt.css / theme-rose.css / theme-cinnabar.css / theme-liquid-glass.css / theme-indigo.css / theme-pearl.css / theme-deepspace.css 里按 <html data-ui-theme> 选；这里只管 id 和文案。
+  画法全在 client/src/styles/theme-gilt.css / theme-rose.css / theme-cinnabar.css / theme-liquid-glass.css / theme-indigo.css / theme-pearl.css / theme-deepspace.css 里按 <html data-ui-theme> 选；这里只管 id 和文案。
   存的是 id；别的值一律回到 classic。
 */
 export const PERSONALIZATION_UI_THEMES = [
   { id: "classic", name: "经典", description: "浅灰底托白卡、细线分区、天蓝渐变控件；深色是炭灰。现在这套。" },
-  { id: "aurora", name: "极光", description: "彩色柔光底 + 半透明玻璃卡 + 胶囊控件，顶栏和标签栏更通透；深色是深蓝黑底上的微光。" },
   { id: "gilt", name: "墨金", description: "米白纸底、平贴的小圆角卡纸，数字放在米色带上；衬线标题、金色下划线分段、方标签筛选；深色是墨黑配金。" },
   { id: "rose", name: "玫瑰", description: "胭脂粉底、无边线的浮起白瓣卡，数字嵌在托盘里；斜体衬线标题、细线空槽分段、全药丸；设置页改为编号分节。" },
   { id: "cinnabar", name: "朱砂", description: "素白纸面、3px 小方角、朱红短线和菱形标记，标签全大写加宽字距，一份技术规格书的样子。" },

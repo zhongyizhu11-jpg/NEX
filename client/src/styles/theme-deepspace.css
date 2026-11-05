@@ -379,3 +379,168 @@ html[data-ui-theme="deepspace"] .fx-ds-rule > .fx-ds-rule-extra + .fx-ds-rule-ex
 }
 
 /* 设置页「界面主题」的预览（.fx-uitheme-swatch）在 ui-theme-shared.css：选别的主题时也要画，不能跟着这个文件按需加载 */
+
+/* ── 8. 更极端的一版（用户 2026-11-05：「变化不够大」，四项全选）──────── */
+/*
+  纯黑底、霓虹青绿强调色、标题和数字一律等宽字，页头收成一行状态栏，桌面顶部导航（DashboardLayout.tsx
+  的 renderTopNav），「全部」不分组一张表到底（Rules.tsx）。
+  主色用 !important 写死：「默认配色」平时内联在 <html> 上盖过主题，这一套的霓虹色就是它的样子，
+  不跟着默认配色变（其他主题照旧跟）。
+*/
+html.dark[data-ui-theme="deepspace"] {
+  --fx-l0-page: #000000;
+  --fx-l1-surface: #0a0a0a;
+  --fx-raised: #141414;
+  --fx-l2-group: #0f0f0f;
+  --fx-l3-control: #0a0a0a;
+  --fx-l3-control-fill: #141414;
+  --fx-sidebar: #050505;
+  --fx-stroke-weak: #1c1c1c;
+  --fx-stroke-base: #2a2a2a;
+  --fx-stroke-strong: #4a4a4a;
+  --fx-control-stroke: #2a2a2a;
+  --fx-text: #ededed;
+  --fx-text-secondary: #c7c7c7;
+  --fx-text-muted: #8f8f8f;
+  --fx-card-fill: #0a0a0a;
+  --fx-card-stroke: #1c1c1c;
+  --fx-ds-track: #1f1f1f;
+  --fx-glass: #000000;
+  --fx-glass-strong: #050505;
+  --fx-elevation-popover: 0 16px 40px -12px rgb(0 0 0 / 90%), 0 0 0 1px #2a2a2a;
+  --fx-accent: #00e5a0 !important;
+  --fx-accent-strong: #00e5a0 !important;
+  --fx-accent-soft: rgb(0 229 160 / 14%) !important;
+  --fx-accent-fill: #00e5a0 !important;
+  --fx-accent-fill-foreground: #00140d !important;
+  --fx-on-accent: #00140d !important;
+  --fx-primary-gradient: linear-gradient(#00e5a0, #00e5a0) !important;
+  --fx-primary-gradient-hover: linear-gradient(#33ecb3, #33ecb3) !important;
+  --fx-primary-fill: #00e5a0 !important;
+  --fx-primary-fill-hover: #33ecb3 !important;
+  --fx-primary-text: #00140d !important;
+  --fx-primary-stroke: #00e5a0 !important;
+  --fx-healthy: #00e5a0;
+  --fx-healthy-soft: rgb(0 229 160 / 12%);
+  --fx-healthy-text: #00e5a0;
+  --fx-warn: #ffb020;
+  --fx-warn-soft: rgb(255 176 32 / 12%);
+  --fx-warn-text: #ffb020;
+  --fx-down: #ff4d6a;
+  --fx-down-soft: rgb(255 77 106 / 12%);
+  --fx-down-text: #ff4d6a;
+  --fx-down-fill: #ff4d6a;
+  --fx-flow-in: #00e5a0;
+  --fx-flow-out: #3ab8ff;
+}
+html[data-ui-theme="deepspace"]:not(.dark) {
+  --fx-accent: #00a676 !important;
+  --fx-accent-strong: #00a676 !important;
+  --fx-accent-soft: rgb(0 166 118 / 10%) !important;
+  --fx-accent-fill: #00a676 !important;
+  --fx-accent-fill-foreground: #ffffff !important;
+  --fx-on-accent: #ffffff !important;
+  --fx-primary-gradient: linear-gradient(#00a676, #00a676) !important;
+  --fx-primary-gradient-hover: linear-gradient(#008f66, #008f66) !important;
+  --fx-primary-fill: #00a676 !important;
+  --fx-primary-fill-hover: #008f66 !important;
+  --fx-primary-text: #ffffff !important;
+  --fx-primary-stroke: #00a676 !important;
+}
+/* 标题、页签、徽标、读数全换等宽字：终端感 */
+html[data-ui-theme="deepspace"] .workspace-header-title,
+html[data-ui-theme="deepspace"] .workspace-appbar-title,
+html[data-ui-theme="deepspace"] .fx-navbar-large-title,
+html[data-ui-theme="deepspace"] .workspace-main [data-slot="card-title"],
+html[data-ui-theme="deepspace"] .workspace-tabs .workspace-tab,
+html[data-ui-theme="deepspace"] .fx-chip,
+html[data-ui-theme="deepspace"] .fx-ds-rule-name,
+html[data-ui-theme="deepspace"] .workspace-header-chips,
+html[data-ui-theme="deepspace"] .workspace-header-meta,
+html[data-ui-theme="deepspace"] .fx-tabbar-label,
+html[data-ui-theme="deepspace"] .fx-ds-topnav { font-family: var(--fx-ds-mono); letter-spacing: 0; }
+html[data-ui-theme="deepspace"] .workspace-main .workspace-header-title { font-size: 18px; line-height: 26px; font-weight: 600; text-transform: none; }
+html[data-ui-theme="deepspace"] .workspace-main .workspace-header-title::before { content: "> "; color: var(--fx-primary-fill); }
+
+/* 页头收成一行状态栏：标题 + 读数 + 状态点排一行，走势线不要了 */
+html[data-ui-theme="deepspace"] .workspace-main .workspace-header {
+  align-items: center;
+  gap: 8px 16px;
+  padding: 10px 14px;
+  margin-bottom: 4px;
+  border: 1px solid var(--fx-card-stroke);
+  border-radius: 10px;
+  background: var(--fx-card-fill);
+}
+html[data-ui-theme="deepspace"] .workspace-main .workspace-header-main { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; min-width: 0; }
+html[data-ui-theme="deepspace"] .workspace-main .workspace-header-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; min-width: 0; }
+html[data-ui-theme="deepspace"] .workspace-main .workspace-header-row > .min-w-0 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; }
+html[data-ui-theme="deepspace"] .workspace-main .workspace-header-meta { font-size: 12px; color: var(--fx-text-muted); }
+html[data-ui-theme="deepspace"] .workspace-main .workspace-header-aside .fx-sparkline { display: none; }
+html[data-ui-theme="deepspace"] .workspace-main .workspace-header-aside { font-size: 12px; color: var(--fx-text-muted); }
+html[data-ui-theme="deepspace"] .workspace-main .workspace-header-chips { gap: 4px 12px; font-size: 12px; }
+
+/* 规则行名字前面的类型小标签 */
+html[data-ui-theme="deepspace"] .fx-ds-rule-kind { flex: none; padding: 0 5px; border: 1px solid var(--fx-stroke-base); border-radius: 4px; font-size: 10.5px; line-height: 16px; font-weight: 500; color: var(--fx-text-muted); }
+html[data-ui-theme="deepspace"] .fx-ds-rule-kind[data-kind="tunnel"] { color: #3ab8ff; border-color: color-mix(in srgb, #3ab8ff 40%, transparent); }
+html[data-ui-theme="deepspace"] .fx-ds-rule-kind[data-kind="chain"] { color: #c084fc; border-color: color-mix(in srgb, #c084fc 40%, transparent); }
+html[data-ui-theme="deepspace"] .fx-ds-rule-kind[data-kind="group"] { color: var(--fx-warn); border-color: color-mix(in srgb, var(--fx-warn) 40%, transparent); }
+html[data-ui-theme="deepspace"] .fx-ds-rule-kind[data-kind="local"] { color: var(--fx-primary-fill); border-color: color-mix(in srgb, var(--fx-primary-fill) 40%, transparent); }
+
+/* 桌面顶部导航（DashboardLayout.tsx 的 renderTopNav） */
+html[data-ui-theme="deepspace"] .fx-ds-topnav { display: flex; align-items: center; gap: 2px; flex: 1 1 auto; min-width: 0; margin-left: 12px; overflow-x: auto; scrollbar-width: none; }
+html[data-ui-theme="deepspace"] .fx-ds-topnav::-webkit-scrollbar { display: none; }
+html[data-ui-theme="deepspace"] .fx-ds-topnav-item { position: relative; display: inline-flex; align-items: center; gap: 4px; flex: none; height: 34px; min-height: 0; padding: 0 12px; border: 0; border-radius: 6px; background: transparent; color: var(--fx-text-muted); font: inherit; font-size: 13px; white-space: nowrap; }
+html[data-ui-theme="deepspace"] .fx-ds-topnav-item:hover { color: var(--fx-text); background: var(--fx-hover); }
+html[data-ui-theme="deepspace"] .fx-ds-topnav-item[data-active="true"] { color: var(--fx-text); }
+html[data-ui-theme="deepspace"] .fx-ds-topnav-item[data-active="true"]::after { content: ""; position: absolute; left: 12px; right: 12px; bottom: -11px; height: 2px; border-radius: 2px; background: var(--fx-primary-fill); }
+html[data-ui-theme="deepspace"] .fx-ds-topnav-badge { min-width: 18px; padding: 0 5px; border-radius: 999px; background: var(--fx-down-soft); color: var(--fx-down-text); font-size: 10px; line-height: 16px; text-align: center; }
+html[data-ui-theme="deepspace"] .fx-ds-topnav-upgrade { color: var(--fx-primary-fill); }
+
+/* ── 9. 订阅管理页（ClientSubscriptions.tsx，data-fx-page="subscriptions"）──────── */
+/*
+  订阅链接从「一条一个框」改成一块面板里一行一条；「一键订阅」是一条细的霓虹描边条，不是一块实心大按钮；
+  客户端那几格是一排等宽字小方块；整页的卡都是同一种暗面板，标题小写等宽。
+*/
+html[data-ui-theme="deepspace"] [data-fx-page="subscriptions"] [data-slot="card-header"] { padding-top: 14px; padding-bottom: 10px; border-bottom: 1px solid var(--fx-stroke-weak); }
+html[data-ui-theme="deepspace"] [data-fx-page="subscriptions"] [data-slot="card-title"] { font-size: 13px; color: var(--fx-text); }
+html[data-ui-theme="deepspace"] [data-fx-page="subscriptions"] [data-slot="card-title"] > span:first-child { border-radius: 4px; background: transparent; border: 1px solid var(--fx-stroke-base); color: var(--fx-primary-fill); }
+html[data-ui-theme="deepspace"] [data-fx-page="subscriptions"] .fx-sub-token-list { display: flex; flex-direction: column; gap: 0; margin: -4px -12px; }
+@media (min-width: 640px) { html[data-ui-theme="deepspace"] [data-fx-page="subscriptions"] .fx-sub-token-list { margin: -8px -24px -8px; } }
+html[data-ui-theme="deepspace"] [data-fx-page="subscriptions"] .fx-sub-token-list > * + * { margin-top: 0; }
+html[data-ui-theme="deepspace"] [data-fx-page="subscriptions"] .fx-sub-token {
+  border: 0;
+  border-bottom: 1px solid var(--fx-stroke-weak);
+  border-radius: 0;
+  padding: 12px 14px;
+  background: transparent;
+}
+@media (min-width: 640px) { html[data-ui-theme="deepspace"] [data-fx-page="subscriptions"] .fx-sub-token { padding: 14px 24px; } }
+html[data-ui-theme="deepspace"] [data-fx-page="subscriptions"] .fx-sub-token:last-child { border-bottom: 0; }
+html[data-ui-theme="deepspace"] [data-fx-page="subscriptions"] .fx-sub-token > div:first-child .font-medium { font-family: var(--fx-ds-mono); font-size: 14px; }
+html[data-ui-theme="deepspace"] [data-fx-page="subscriptions"] .fx-sub-token .text-xs { font-family: var(--fx-ds-mono); }
+html[data-ui-theme="deepspace"] [data-fx-page="subscriptions"] .fx-token-subscribe:not(:disabled) {
+  height: 36px;
+  border: 1px solid color-mix(in srgb, var(--fx-primary-fill) 55%, transparent) !important;
+  background: transparent !important;
+  background-image: none !important;
+  color: var(--fx-primary-fill) !important;
+  font-family: var(--fx-ds-mono);
+  font-size: 13px;
+}
+html[data-ui-theme="deepspace"] [data-fx-page="subscriptions"] .fx-token-subscribe:not(:disabled):hover { background: color-mix(in srgb, var(--fx-primary-fill) 10%, transparent) !important; }
+/* 客户端格子：一排细边小方块，图标灰、名字等宽字 */
+html[data-ui-theme="deepspace"] [data-fx-page="subscriptions"] .fx-sub-token .grid > a,
+html[data-ui-theme="deepspace"] [data-fx-page="subscriptions"] .fx-sub-token .grid > button,
+html[data-ui-theme="deepspace"] [data-fx-page="subscriptions"] .fx-sub-token .grid > div { border-radius: 6px; border-color: var(--fx-stroke-base); background: transparent; font-family: var(--fx-ds-mono); }
+html[data-ui-theme="deepspace"] [data-fx-page="subscriptions"] .fx-sub-token .grid > a:hover,
+html[data-ui-theme="deepspace"] [data-fx-page="subscriptions"] .fx-sub-token .grid > button:hover { border-color: var(--fx-primary-fill); background: color-mix(in srgb, var(--fx-primary-fill) 8%, transparent); }
+/* 节点列表里每条一个小框 → 去框，行间一道线 */
+html[data-ui-theme="deepspace"] [data-fx-page="subscriptions"] .rounded-md.border { border-radius: 6px; }
+html[data-ui-theme="deepspace"] [data-fx-page="subscriptions"] .text-sm.font-medium { font-family: var(--fx-ds-mono); }
+/* 状态栏式页头：内容一律靠左（原来的页头在某些宽度下会居中） */
+html[data-ui-theme="deepspace"] .workspace-main .workspace-header { justify-content: space-between; text-align: left; }
+html[data-ui-theme="deepspace"] .workspace-main .workspace-header-main { flex: 1 1 auto; justify-content: flex-start; align-items: flex-start !important; text-align: left; }
+html[data-ui-theme="deepspace"] .workspace-main .workspace-header-row,
+html[data-ui-theme="deepspace"] .workspace-main .workspace-header-chips { justify-content: flex-start; margin-inline: 0; align-self: flex-start; }
+html[data-ui-theme="deepspace"] .workspace-main .workspace-header-chips-aside { margin-left: auto; }

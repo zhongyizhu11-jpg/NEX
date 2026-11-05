@@ -1101,7 +1101,7 @@ export default function ClientSubscriptionsPage() {
 
   return (
     <DashboardLayout>
-      <div className="space-y-6">
+      <div className="space-y-6" data-fx-page="subscriptions">
         <div className="flex items-center justify-between gap-4">
           <WorkspaceHeader title={<>订阅管理</>} description={<>你有哪些线路，以及怎么把它们带进客户端。</>} />
           {healthSummary.badge ? (
@@ -1222,7 +1222,7 @@ export default function ClientSubscriptionsPage() {
                   : "先在下面加节点 —— 自己机器上开一个，或者粘一条别处的链接 —— 再回来建链接。"}
               </p>
             ) : (
-              <div className="space-y-4">
+              <div className="fx-sub-token-list space-y-4">
                 {tokens.map((token: any) => {
                   const expanded = importOpenTokenId === token.id;
                   const kind = importKind;
@@ -1231,7 +1231,7 @@ export default function ClientSubscriptionsPage() {
                   // 这样同一条地址粘到哪个客户端都能拿到对的格式。
                   const manualUrl = subscriptionUrl(token.token, "base64", kind);
                   return (
-                  <div key={token.id} className="space-y-3 rounded-lg border p-3">
+                  <div key={token.id} className="fx-sub-token space-y-3 rounded-lg border p-3">
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
                         <span className="font-medium">{token.name}</span>

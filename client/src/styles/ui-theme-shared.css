@@ -9,15 +9,14 @@
       紧凑外壳成了标准布局之后哪套主题下都画。
   留在主题文件里会出现「没选玫瑰就没有保存栏的样式」。
 
-  顺序照原来 index.css 里 @import 主题的顺序排（极光 → 墨金 → 玫瑰 → 朱砂 → 液态玻璃 → 靛蓝 → 珍珠），
+  顺序照原来 index.css 里 @import 主题的顺序排（墨金 → 玫瑰 → 朱砂 → 液态玻璃 → 靛蓝 → 珍珠），
   在 index.css 里也放在原来主题那个位置：彼此之间、和前后文件之间的层叠先后都没变。
 */
 
-/* ═══ 原在 theme-aurora.css ═══ */
+/* ═══ 所有主题共用的预览底座（原在已下线的 theme-aurora.css） ═══ */
 /* ── 设置页「界面主题」的两枚预览 ───────────────────────────── */
 /*
-  一小块手机屏：底 + 两张卡 + 底部一枚胶囊。经典那枚是灰底白卡实边线，极光那枚是柔光底玻璃卡。
-  画法和真页面用同一组变量（极光那枚自己带一套，不依赖当前是否已经选了极光）。
+  一小块手机屏：底 + 两张卡 + 底部一枚胶囊。经典那枚是灰底白卡实边线；其余主题在下面各自覆盖。
 */
 .fx-uitheme-swatch { position: relative; display: flex; flex-direction: column; gap: 6px; height: 88px; padding: 10px 12px 8px; overflow: hidden; border-radius: 14px; background: #f5f5f7; isolation: isolate; }
 .dark .fx-uitheme-swatch { background: #1e1e1e; }
@@ -27,24 +26,6 @@
 .fx-uitheme-swatch > b { position: absolute; left: 50%; bottom: 7px; width: 54%; height: 12px; transform: translateX(-50%); border-radius: 999px; border: 1px solid rgb(0 0 0 / 6%); background: rgb(255 255 255 / 80%); }
 .dark .fx-uitheme-swatch > b { border-color: rgb(255 255 255 / 10%); background: rgb(42 42 42 / 85%); }
 .fx-uitheme-swatch > b::after { content: ""; position: absolute; left: 3px; top: 2px; width: 22%; height: 6px; border-radius: 999px; background: var(--fx-primary-gradient); }
-.fx-uitheme-swatch[data-theme="aurora"] {
-  background:
-    radial-gradient(70% 60% at 6% 0%, color-mix(in srgb, var(--fx-primary-fill) 40%, transparent), transparent 70%),
-    radial-gradient(55% 50% at 100% 10%, rgb(167 139 250 / 32%), transparent 70%),
-    radial-gradient(60% 55% at 92% 100%, rgb(94 234 212 / 34%), transparent 70%),
-    #f4f6fb;
-}
-.dark .fx-uitheme-swatch[data-theme="aurora"] {
-  background:
-    radial-gradient(70% 60% at 6% 0%, color-mix(in srgb, var(--fx-primary-fill) 34%, transparent), transparent 70%),
-    radial-gradient(55% 50% at 100% 10%, rgb(139 120 240 / 24%), transparent 70%),
-    radial-gradient(60% 55% at 92% 100%, rgb(63 209 189 / 16%), transparent 70%),
-    #0f1117;
-}
-.fx-uitheme-swatch[data-theme="aurora"] > i { border-color: rgb(255 255 255 / 92%); background: rgb(255 255 255 / 70%); box-shadow: inset 0 1px 0 rgb(255 255 255 / 95%), 0 8px 18px -10px rgb(30 50 90 / 30%); }
-.dark .fx-uitheme-swatch[data-theme="aurora"] > i { border-color: rgb(255 255 255 / 9%); background: rgb(30 33 43 / 74%); box-shadow: inset 0 1px 0 rgb(255 255 255 / 7%); }
-.fx-uitheme-swatch[data-theme="aurora"] > b { border-color: rgb(255 255 255 / 90%); background: rgb(255 255 255 / 62%); }
-.dark .fx-uitheme-swatch[data-theme="aurora"] > b { border-color: rgb(255 255 255 / 10%); background: rgb(24 27 36 / 70%); }
 
 /* ═══ 原在 theme-gilt.css ═══ */
 /* ── 设置页「界面主题」的预览 ───────────────────────────────── */
