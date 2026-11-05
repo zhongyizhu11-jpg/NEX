@@ -11,6 +11,7 @@ import { clearPersistedQueryCache, restorePersistedQueryCache, startQueryCachePe
 import "./index.css";
 import { applyRememberedLayout } from "./components/LayoutLayer";
 import { prefetchRoute } from "./pages/routeChunks";
+import { startLayoutProbeIfRequested } from "./lib/layoutProbe";
 import { DATABASE_UNAVAILABLE_MESSAGE } from "@shared/databaseHealth";
 import { DATABASE_HEALTH_QUERY_KEY } from "./components/DatabaseHealthGate";
 import { loadUiThemeStyles } from "./lib/uiThemeStyles";
@@ -183,6 +184,7 @@ async function bootstrap() {
     不认识的地址（登录页、公开页）这里直接返回 undefined，没有副作用。
   */
   if (typeof window !== "undefined") void prefetchRoute(window.location.pathname);
+  startLayoutProbeIfRequested();
   await mobileAuth.hydrateNative();
 
   if (mobileAuth.isNative) {

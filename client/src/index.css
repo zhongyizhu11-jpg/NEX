@@ -546,6 +546,16 @@
     overscroll-behavior-x: contain;
   }
 
+  /*
+    手机上的提示条（sonner）：库自带的写法是 left:16px + width:100%，整条往右多出 16px，
+    出提示的那几秒里页面比屏幕宽（iPhone 上布局宽度被撑开后不一定会缩回去）。
+    改成左右各 16px、宽度跟着收，提示本身铺满这一条。
+  */
+  @media (max-width: 600px) {
+    [data-sonner-toaster] { width: auto !important; }
+    [data-sonner-toaster] [data-sonner-toast] { width: 100% !important; }
+  }
+
   [data-mobile-header="true"] {
     min-height: calc(3.5rem + var(--forwardx-safe-area-top));
     padding-top: var(--forwardx-safe-area-top);
