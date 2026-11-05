@@ -1,0 +1,304 @@
+/*
+  ── 界面主题「深空」（设置 › 个性化 › 界面主题）──
+
+  第九种气质，由 <html data-ui-theme="deepspace"> 打开；没有这个属性这个文件一条都不生效。
+  用户 2026-11-05 在三个商业化方向（瓷白 / 深空 / 品牌）里挑了「深空」，要直接做成一套主题，
+  前后台不分开。参考的是运维控制台那一类（Cloudflare、Tailscale、Vercel 的深色后台）：
+
+    1. 底   深色是近黑的蓝灰（#0b0d10），卡是低一档亮度的面板（#13161b），一圈 1px 暗线，不投影、
+            不打光、不模糊。浅色是冷白（#f7f8fa）托纯白卡，同一套线条和间距 —— 深色是这套的本色，
+            浅色只为了顶栏那个深浅切换按钮仍然有用。
+    2. 数   流量、延迟、统计大数字一律等宽字（系统自带的 ui-monospace / SF Mono / Menlo，不下载字体），
+            tabular-nums，列对得齐，像终端读数。
+    3. 控件 8px 圆角，主按钮是一块平的天蓝（深色下配深字），没有渐变、没有投影。分段控件不是凹槽，
+            是一排带细边的小方块，选中那块边线变亮、底抬一档（和设计稿里的筛选条一样）。
+    4. 外壳 顶栏和页面同色实底 + 一道底线；手机底部标签栏是贴底通栏 + 顶线，不是悬浮胶囊。
+    5. 色   状态色在深色下用亮一点的绿 / 琥珀 / 珊瑚红，暗底上读得清；「默认配色」另选一套时，
+            按钮和选中态照常跟着换（那些值内联在 <html> 上，盖过这里）。
+
+  不新增任何 backdrop 模糊（2.3.515 的教训：手机上每一层模糊都要 GPU 每帧重画）；不用伪元素画卡。
+*/
+
+html[data-ui-theme="deepspace"] {
+  --fx-l0-page: #f7f8fa;
+  --fx-l1-surface: #ffffff;
+  --fx-raised: #ffffff;
+  --fx-l2-group: #f3f4f6;
+  --fx-l3-control: #ffffff;
+  --fx-l3-control-fill: #eef0f3;
+  --fx-sidebar: #fbfbfc;
+  --fx-hover: rgb(14 17 22 / 5%);
+  --fx-pressed: rgb(14 17 22 / 9%);
+  --fx-stroke-weak: #e3e6ea;
+  --fx-stroke-base: #d0d5dc;
+  --fx-stroke-strong: #8a93a0;
+  --fx-control-stroke: #c3c9d1;
+  --fx-text: #0e1116;
+  --fx-text-secondary: #3a414c;
+  --fx-text-muted: #5d6673;
+  --fx-ds-tone: var(--fx-primary-fill);
+  --fx-ds-tone-soft: color-mix(in srgb, var(--fx-primary-fill) 10%, transparent);
+  --fx-ds-track: #e9ecf0;
+  --fx-ds-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, "JetBrains Mono", Consolas, "Liberation Mono", monospace;
+  --fx-card-fill: #ffffff;
+  --fx-card-stroke: #e3e6ea;
+  --fx-elevation-card: none;
+  --fx-elevation-control: none;
+  --fx-elevation-popover: 0 16px 40px -12px rgb(14 17 22 / 22%), 0 0 0 1px #e3e6ea;
+  --fx-glass: #f7f8fa;
+  --fx-glass-strong: #ffffff;
+  --fx-radius-control: 8px;
+  --fx-radius-card: 12px;
+  --fx-radius-surface: 12px;
+  --fx-radius-modal: 14px;
+  --fx-radius-inner: 8px;
+  --fx-header-height: 56px;
+  --fx-font: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", Roboto, "Noto Sans", Arial, sans-serif;
+  --fx-accent: #1f6feb;
+  --fx-accent-strong: #1f6feb;
+  --fx-accent-soft: rgb(31 111 235 / 10%);
+  --fx-accent-fill: #1f6feb;
+  --fx-accent-fill-foreground: #ffffff;
+  --fx-on-accent: #ffffff;
+  --fx-primary-gradient: linear-gradient(#1f6feb, #1f6feb);
+  --fx-primary-gradient-hover: linear-gradient(#1a5fcc, #1a5fcc);
+  --fx-primary-sheen: none;
+  --fx-primary-fill: #1f6feb;
+  --fx-primary-fill-hover: #1a5fcc;
+  --fx-primary-text: #ffffff;
+  --fx-primary-stroke: #1f6feb;
+  --fx-primary-shadow: none;
+  --fx-mesh-1: rgb(31 111 235 / 10%);
+  --fx-healthy: #15803d;
+  --fx-healthy-soft: rgb(21 128 61 / 10%);
+  --fx-healthy-text: #15803d;
+  --fx-warn: #a15c07;
+  --fx-warn-soft: rgb(161 92 7 / 12%);
+  --fx-warn-text: #a15c07;
+  --fx-down: #c0392b;
+  --fx-down-soft: rgb(192 57 43 / 10%);
+  --fx-down-text: #c0392b;
+  --fx-down-fill: #c0392b;
+  --fx-flow-in: #15803d;
+  --fx-flow-out: #1f6feb;
+}
+html.dark[data-ui-theme="deepspace"] {
+  --fx-l0-page: #0b0d10;
+  --fx-l1-surface: #13161b;
+  --fx-raised: #1a1e25;
+  --fx-l2-group: #171b21;
+  --fx-l3-control: #13161b;
+  --fx-l3-control-fill: #1a1e25;
+  --fx-sidebar: #0f1216;
+  --fx-hover: rgb(255 255 255 / 5%);
+  --fx-pressed: rgb(255 255 255 / 9%);
+  --fx-stroke-weak: #1e232b;
+  --fx-stroke-base: #2a313b;
+  --fx-stroke-strong: #4a5260;
+  --fx-control-stroke: #2f3742;
+  --fx-text: #e8eaed;
+  --fx-text-secondary: #c9ced6;
+  --fx-text-muted: #9ba4b0;
+  --fx-ds-tone-soft: color-mix(in srgb, var(--fx-primary-fill) 16%, transparent);
+  --fx-ds-track: #232933;
+  --fx-card-fill: #13161b;
+  --fx-card-stroke: #1e232b;
+  --fx-elevation-card: none;
+  --fx-elevation-control: none;
+  --fx-elevation-popover: 0 16px 40px -12px rgb(0 0 0 / 75%), 0 0 0 1px #2a313b;
+  --fx-glass: #0b0d10;
+  --fx-glass-strong: #0f1216;
+  --fx-accent: #5aa9ff;
+  --fx-accent-strong: #5aa9ff;
+  --fx-accent-soft: rgb(90 169 255 / 16%);
+  --fx-accent-fill: #5aa9ff;
+  --fx-accent-fill-foreground: #06121f;
+  --fx-on-accent: #06121f;
+  --fx-primary-gradient: linear-gradient(#5aa9ff, #5aa9ff);
+  --fx-primary-gradient-hover: linear-gradient(#7dbbff, #7dbbff);
+  --fx-primary-fill: #5aa9ff;
+  --fx-primary-fill-hover: #7dbbff;
+  --fx-primary-text: #06121f;
+  --fx-primary-stroke: #5aa9ff;
+  --fx-mesh-1: rgb(90 169 255 / 10%);
+  --fx-healthy: #4cc38a;
+  --fx-healthy-soft: rgb(76 195 138 / 14%);
+  --fx-healthy-text: #4cc38a;
+  --fx-warn: #f0a43a;
+  --fx-warn-soft: rgb(240 164 58 / 14%);
+  --fx-warn-text: #f0a43a;
+  --fx-down: #f07178;
+  --fx-down-soft: rgb(240 113 120 / 14%);
+  --fx-down-text: #f07178;
+  --fx-down-fill: #f07178;
+  --fx-flow-in: #4cc38a;
+  --fx-flow-out: #5aa9ff;
+}
+
+/* ── 1. 外壳：顶栏、侧栏是和页面同色的实底，一道细线分开 ──────── */
+html[data-ui-theme="deepspace"] .workspace-appbar { background: var(--fx-glass); -webkit-backdrop-filter: none; backdrop-filter: none; border-bottom: 1px solid var(--fx-stroke-weak); box-shadow: none; }
+html[data-ui-theme="deepspace"] .workspace-layout [data-sidebar="sidebar"] { background: var(--fx-sidebar); border-right-color: var(--fx-stroke-weak); -webkit-backdrop-filter: none; backdrop-filter: none; }
+html[data-ui-theme="deepspace"] .workspace-appbar-title { font-size: 15px; font-weight: 600; letter-spacing: 0; }
+html[data-ui-theme="deepspace"] .workspace-appbar-version { border-radius: 6px; border: 1px solid var(--fx-stroke-base); background: transparent; font-family: var(--fx-ds-mono); }
+html[data-ui-theme="deepspace"] .workspace-appbar-search { border-radius: 8px; border: 1px solid var(--fx-control-stroke); background: var(--fx-l1-surface); }
+html[data-ui-theme="deepspace"] .workspace-appbar-search:hover { border-color: var(--fx-stroke-strong); background: var(--fx-l1-surface); }
+html[data-ui-theme="deepspace"] .workspace-appbar-icon,
+html[data-ui-theme="deepspace"] .workspace-appbar-account,
+html[data-ui-theme="deepspace"] .workspace-appbar-brand { border-radius: 8px; }
+@media (max-width: 639px) {
+  html[data-ui-theme="deepspace"] .workspace-appbar-search { border-color: transparent; background: transparent; }
+}
+
+/* ── 2. 卡：面板色、1px 暗线、12px、不投影；悬停线亮一档 ─────── */
+html[data-ui-theme="deepspace"]:not([data-card-style]) .workspace-main [data-slot="card"],
+html[data-ui-theme="deepspace"][data-card-style="edge"] .workspace-main [data-slot="card"],
+html[data-ui-theme="deepspace"]:not([data-card-style]) .fx-card-face,
+html[data-ui-theme="deepspace"][data-card-style="edge"] .fx-card-face {
+  border: 1px solid var(--fx-card-stroke);
+  background: var(--fx-card-fill);
+  box-shadow: none;
+  transition: border-color 120ms;
+}
+html[data-ui-theme="deepspace"]:not([data-card-style]) .workspace-main [data-tone="warn"][data-slot="card"],
+html[data-ui-theme="deepspace"][data-card-style="edge"] .workspace-main [data-tone="warn"][data-slot="card"],
+html[data-ui-theme="deepspace"]:not([data-card-style]) .fx-card-face[data-tone="warn"],
+html[data-ui-theme="deepspace"][data-card-style="edge"] .fx-card-face[data-tone="warn"],
+html[data-ui-theme="deepspace"]:not([data-card-style]) .workspace-main [data-tone="down"][data-slot="card"],
+html[data-ui-theme="deepspace"][data-card-style="edge"] .workspace-main [data-tone="down"][data-slot="card"],
+html[data-ui-theme="deepspace"]:not([data-card-style]) .fx-card-face[data-tone="down"],
+html[data-ui-theme="deepspace"][data-card-style="edge"] .fx-card-face[data-tone="down"] {
+  border-color: color-mix(in srgb, var(--fx-card-tone) 45%, var(--fx-card-stroke));
+}
+html[data-ui-theme="deepspace"] .workspace-main .fx-host-card:hover,
+html[data-ui-theme="deepspace"] .workspace-main .fx-rule-card:hover { border-color: var(--fx-stroke-strong); box-shadow: none; }
+html[data-ui-theme="deepspace"] .fx-cardstyle-swatch[data-style="edge"] .fx-cardstyle-swatch-face { border: 1px solid var(--fx-card-stroke); background: var(--fx-card-fill); box-shadow: none; }
+html[data-ui-theme="deepspace"] .fx-host-card > div:first-child > span:first-child { border-radius: 8px; border: 1px solid var(--fx-stroke-weak); background: var(--fx-l2-group); color: var(--fx-ds-tone); }
+/* 主机卡读数：标签左、等宽数字右，底下一根 4px 细条（灰槽 + 主色；≥70% 琥珀、≥90% 红照旧走 data-tone） */
+html[data-ui-theme="deepspace"] .fx-host-card .grid.grid-cols-3 { gap: 14px; }
+html[data-ui-theme="deepspace"] .fx-host-spec { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: baseline; column-gap: 6px; border-radius: 0; background: transparent; padding: 0 0 10px; }
+html[data-ui-theme="deepspace"] .fx-host-spec > i { font-size: 12px; line-height: 18px; }
+html[data-ui-theme="deepspace"] .fx-host-spec > b { font-family: var(--fx-ds-mono); font-size: 13.5px; line-height: 18px; font-weight: 500; text-align: right; }
+html[data-ui-theme="deepspace"] .fx-host-spec-bar { left: 0; right: 0; bottom: 0; height: 4px; border-radius: 999px; background: var(--fx-ds-track); }
+html[data-ui-theme="deepspace"] .fx-host-spec-bar > span { border-radius: 999px; background: var(--fx-ds-tone); }
+html[data-ui-theme="deepspace"] .fx-host-spec-bar > span[data-tone="warn"] { background: var(--fx-warn); }
+html[data-ui-theme="deepspace"] .fx-host-spec-bar > span[data-tone="down"] { background: var(--fx-down); }
+
+/* ── 3. 数：统计条、规则卡流量、页头读数一律等宽 ─────────────── */
+html[data-ui-theme="deepspace"] .fx-summary-cell { border-left-color: var(--fx-stroke-weak); }
+html[data-ui-theme="deepspace"] .fx-summary-cell > span:first-child { font-size: 12px; letter-spacing: .04em; color: var(--fx-text-muted); }
+html[data-ui-theme="deepspace"] .fx-summary-value { font-family: var(--fx-ds-mono); font-size: 26px; line-height: 32px; font-weight: 500; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
+@media (max-width: 767px) { html[data-ui-theme="deepspace"] .fx-summary-value { font-size: 21px; line-height: 28px; } }
+html[data-ui-theme="deepspace"] .fx-rule-num > b { font-family: var(--fx-ds-mono); font-size: 21px; font-weight: 500; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
+html[data-ui-theme="deepspace"] .fx-rule-num > small { font-size: 11px; font-weight: 400; }
+html[data-ui-theme="deepspace"] .fx-rule-addr,
+html[data-ui-theme="deepspace"] .workspace-main .font-mono { font-family: var(--fx-ds-mono); }
+html[data-ui-theme="deepspace"] .fx-rule-path,
+html[data-ui-theme="deepspace"] .fx-tunnel-foot { border-top-color: var(--fx-stroke-weak); }
+html[data-ui-theme="deepspace"] .fx-rule-spark,
+html[data-ui-theme="deepspace"] .workspace-header-aside .fx-sparkline { color: var(--fx-ds-tone); }
+html[data-ui-theme="deepspace"] .fx-rule-tag { border-radius: 6px; }
+html[data-ui-theme="deepspace"] .workspace-header-aside { font-family: var(--fx-ds-mono); font-size: 12px; }
+
+/* ── 4. 字：标题 22px / 600，分组小标题小灰字 ──────────────────── */
+html[data-ui-theme="deepspace"] .workspace-main .workspace-header-title { font-size: 22px; line-height: 30px; font-weight: 600; letter-spacing: -.01em; }
+html[data-ui-theme="deepspace"] .fx-navbar-large-title { font-weight: 600; letter-spacing: -.01em; }
+html[data-ui-theme="deepspace"] .workspace-main .workspace-header { padding-bottom: 4px; }
+html[data-ui-theme="deepspace"] .fx-list-section-header,
+html[data-ui-theme="deepspace"] .workspace-main .fx-list-section-header { font-size: 12px; letter-spacing: .06em; font-weight: 500; color: var(--fx-text-muted); }
+html[data-ui-theme="deepspace"] .workspace-main [data-slot="card-title"] { font-weight: 600; letter-spacing: 0; }
+
+/* ── 5. 控件：8px、平色主按钮、带细边的分段方块 ───────────────── */
+/* 分段控件：不要凹槽，一排小方块各带一圈细边；选中那块边线亮、底抬一档 */
+html[data-ui-theme="deepspace"] .workspace-tabs,
+html.dark[data-ui-theme="deepspace"] .workspace-tabs { padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
+html[data-ui-theme="deepspace"] .workspace-tabs .workspace-tabs-list { gap: 6px; }
+html[data-ui-theme="deepspace"] .workspace-tabs .workspace-tab,
+html.dark[data-ui-theme="deepspace"] .workspace-tabs .workspace-tab {
+  flex: 0 0 auto;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--fx-stroke-weak);
+  border-radius: 8px;
+  background: transparent;
+  background-image: none;
+  box-shadow: none;
+  color: var(--fx-text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  transition: color 120ms, border-color 120ms, background-color 120ms;
+}
+html[data-ui-theme="deepspace"] .workspace-tab-scroll { border-radius: 8px; }
+html[data-ui-theme="deepspace"] .workspace-tabs .workspace-tab:hover:not([data-state="active"]) { color: var(--fx-text); border-color: var(--fx-stroke-base); }
+html[data-ui-theme="deepspace"] .workspace-tabs .workspace-tab[data-state="active"],
+html.dark[data-ui-theme="deepspace"] .workspace-tabs .workspace-tab[data-state="active"] { border-color: var(--fx-stroke-strong); background: var(--fx-raised); background-image: none; color: var(--fx-text); font-weight: 600; box-shadow: none; }
+html[data-ui-theme="deepspace"] .workspace-tabs .workspace-tab[data-state="active"] > svg { color: var(--fx-ds-tone); }
+html[data-ui-theme="deepspace"] .workspace-tabs .workspace-tab-count { font-family: var(--fx-ds-mono); font-size: 12px; color: var(--fx-text-muted); }
+html[data-ui-theme="deepspace"] .workspace-tabs .workspace-tab[data-state="active"] .workspace-tab-count { color: var(--fx-text-secondary); }
+/* 筛选 chip：同一个画法 */
+html[data-ui-theme="deepspace"] .fx-chip { height: 32px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--fx-stroke-weak); background: transparent; color: var(--fx-text-muted); font-weight: 500; }
+html[data-ui-theme="deepspace"] .fx-chip:hover { border-color: var(--fx-stroke-base); color: var(--fx-text); }
+html[data-ui-theme="deepspace"] .fx-chip-on,
+html[data-ui-theme="deepspace"] .fx-chip-on:hover { border-color: var(--fx-stroke-strong); background: var(--fx-raised); background-image: none; color: var(--fx-text); font-weight: 600; }
+html[data-ui-theme="deepspace"] .fx-chip-count { font-family: var(--fx-ds-mono); opacity: 1; color: var(--fx-text-muted); }
+/* 输入框、下拉、搜索框：8px、面板底、边线比分隔线深一档 */
+html[data-ui-theme="deepspace"] .workspace-main [data-slot="input"],
+html[data-ui-theme="deepspace"] .workspace-main [data-slot="textarea"],
+html[data-ui-theme="deepspace"] .workspace-main [data-slot="select-trigger"],
+html[data-ui-theme="deepspace"] .workspace-filter-search input { border-radius: 8px; background: var(--fx-l1-surface); border-color: var(--fx-control-stroke); }
+html[data-ui-theme="deepspace"] .fx-search-pill { border-radius: 8px !important; background: var(--fx-l1-surface) !important; border: 1px solid var(--fx-control-stroke) !important; }
+html[data-ui-theme="deepspace"] .fx-search-pill:focus-visible { border-color: var(--fx-ds-tone) !important; }
+html[data-ui-theme="deepspace"] [data-slot="button"]:not([data-icon-button]),
+html[data-ui-theme="deepspace"] .fx-row-action,
+html[data-ui-theme="deepspace"] .fx-filter-pill { border-radius: 8px !important; }
+html[data-ui-theme="deepspace"] .workspace-main [data-icon-button],
+html[data-ui-theme="deepspace"] .workspace-header-actions [data-slot="button"] { border-radius: 8px !important; }
+html[data-ui-theme="deepspace"] [data-slot="badge"] { border-radius: 6px; }
+/* 主按钮：一块平的主色（禁用的交给组件，理由见 theme-indigo.css 同一段） */
+html[data-ui-theme="deepspace"] [data-slot="button"][data-variant="default"]:not(:disabled),
+html[data-ui-theme="deepspace"] [data-slot="button"]:not([data-variant]):not(:disabled) { background-image: none !important; background-color: var(--fx-primary-fill); border-color: transparent; box-shadow: none; font-weight: 600; }
+html[data-ui-theme="deepspace"] [data-slot="button"][data-variant="default"]:not(:disabled):hover,
+html[data-ui-theme="deepspace"] [data-slot="button"]:not([data-variant]):not(:disabled):hover { background-color: var(--fx-primary-fill-hover); }
+html[data-ui-theme="deepspace"] [data-slot="button"]:disabled { box-shadow: none; }
+html[data-ui-theme="deepspace"] [data-slot="button"][data-variant="outline"] { box-shadow: none; border-color: var(--fx-stroke-base); }
+/* 侧栏选中项：抬一档的底 + 一圈亮线，图标主色 */
+html[data-ui-theme="deepspace"] .workspace-layout [data-sidebar="menu-button"] { border-radius: 8px; }
+html[data-ui-theme="deepspace"] .workspace-layout [data-sidebar="menu-button"][data-active="true"] { background: var(--fx-raised); background-image: none; color: var(--fx-text); font-weight: 600; box-shadow: inset 0 0 0 1px var(--fx-stroke-base); }
+html[data-ui-theme="deepspace"] .workspace-layout [data-sidebar="menu-button"][data-active="true"] > svg { color: var(--fx-ds-tone); }
+/* 弹层：实底，不模糊 */
+html[data-ui-theme="deepspace"] .fx-glass-surface,
+html[data-ui-theme="deepspace"] [role="menu"].fx-glass-surface,
+html[data-ui-theme="deepspace"] [role="listbox"].fx-glass-surface { background: var(--fx-raised); -webkit-backdrop-filter: none; backdrop-filter: none; }
+html[data-ui-theme="deepspace"] .dialog-panel { border: 1px solid var(--fx-stroke-base); background-color: var(--fx-l1-surface); box-shadow: var(--fx-elevation-popover); -webkit-backdrop-filter: none; backdrop-filter: none; }
+
+@media (max-width: 767px) {
+  html[data-ui-theme="deepspace"] .fx-navbar { background: var(--fx-glass); -webkit-backdrop-filter: none; backdrop-filter: none; }
+  html[data-ui-theme="deepspace"] .workspace-tabs .workspace-tabs-list { justify-content: flex-start; }
+  /* 底部标签栏：贴底通栏 + 顶上一道线；选中项字和图标是主色，图标下一枚淡底圆角方块 */
+  html[data-ui-theme="deepspace"] .fx-tabbar {
+    inset-inline: 0;
+    bottom: 0;
+    height: calc(60px + env(safe-area-inset-bottom, 0px));
+    padding: 4px 8px calc(4px + env(safe-area-inset-bottom, 0px));
+    border: 0;
+    border-top: 1px solid var(--fx-stroke-weak);
+    border-radius: 0;
+    background: var(--fx-glass-strong);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    box-shadow: none;
+  }
+  html[data-ui-theme="deepspace"] .fx-tabbar-item { height: 52px; border-radius: 8px; gap: 3px; }
+  html[data-ui-theme="deepspace"] .fx-tabbar-item:active { transform: none; }
+  html[data-ui-theme="deepspace"] .fx-tabbar-item > svg { width: 44px; height: 26px; padding: 3px 11px; border-radius: 8px; box-sizing: border-box; transition: background-color 120ms; }
+  html[data-ui-theme="deepspace"] .fx-tabbar-item-active { color: var(--fx-ds-tone); background: transparent; background-image: none; box-shadow: none; font-weight: 600; }
+  html[data-ui-theme="deepspace"] .fx-tabbar-item-active > svg { background: var(--fx-ds-tone-soft); color: var(--fx-ds-tone); }
+  html[data-ui-theme="deepspace"] .fx-tabbar-label { font-size: 11px; }
+}
+
+/* ── 6. 页面里其它圆角：收到 8 / 12 两档；圆点、头像、状态灯（rounded-full）不动 ── */
+html[data-ui-theme="deepspace"] .workspace-main :is(.rounded-md, .rounded-lg) { border-radius: 8px; }
+html[data-ui-theme="deepspace"] .workspace-main :is(.rounded-xl, .rounded-2xl, .rounded-3xl) { border-radius: 12px; }
+html[data-ui-theme="deepspace"] [role="dialog"] :is(.rounded-md, .rounded-lg) { border-radius: 8px; }
+html[data-ui-theme="deepspace"] [role="dialog"] :is(.rounded-xl, .rounded-2xl) { border-radius: 12px; }
+
+/* 设置页「界面主题」的预览（.fx-uitheme-swatch）在 ui-theme-shared.css：选别的主题时也要画，不能跟着这个文件按需加载 */

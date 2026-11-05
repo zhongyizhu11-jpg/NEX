@@ -41,6 +41,7 @@ const LOADERS: Record<ThemedId, () => Promise<unknown>> = {
   "liquid-glass": () => import("../styles/ui-themes/ui-theme-liquid-glass.css"),
   indigo: () => import("../styles/ui-themes/ui-theme-indigo.css"),
   pearl: () => import("../styles/ui-themes/ui-theme-pearl.css"),
+  deepspace: () => import("../styles/ui-themes/ui-theme-deepspace.css"),
 };
 
 /* 已经有结果的（下完了，或者下失败了）。失败的也算：见 loadUiThemeStyles 的说明。 */
