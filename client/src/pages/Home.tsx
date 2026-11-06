@@ -20,13 +20,15 @@ import OpsHomeExtras from "@/features/ops/slots/HomeExtras";
 import { NetworkMapSlot } from "@/features/dashboard/NetworkMapSlot";
 import { QuickStartSection } from "@/features/dashboard/QuickStartSection";
 import { TrafficSurface, type TrafficChartPoint } from "@/features/dashboard/TrafficSurface";
-import { lazy, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useLocation } from "wouter";
 
 // 未登录才用得到的落地页不进入口包；外面 App 的 Suspense 兜着。
 const PublicHome = lazy(() => import("./PublicHome"));
 const CustomPublicHome = lazy(() => import("./PublicHome").then((mod) => ({ default: mod.CustomPublicHome })));
+// 「深空」主题的事件日志 + 地区表：只有选了深空才取
+const DeepspacePanels = lazy(() => import("@/features/dashboard/DeepspacePanels"));
 
 const LOGIN_WELCOME_TOAST_KEY = "forwardx.loginWelcome";
 
@@ -60,7 +62,13 @@ function DashboardContent() {
   const compactLayout = useCompactLayout();
   const { user } = useAuth();
   // 「珍珠」主题照上游仪表盘：标题右边日期铭牌 + 系统在线，四张统计卡排在地图前面。别的主题顺序和节点都不变。
-  const pearl = useUiTheme() === "pearl";
+  const uiTheme = useUiTheme();
+  const pearl = uiTheme === "pearl";
+  /*
+    「深空」换的是排法，不是数据：数字格在最上，下面一张两栏的面板 ——
+    左边流量 + 地区，右边小地图 + 事件日志（手机上一栏：事件、流量、地区，地图不放）。
+  */
+  const deepspace = uiTheme === "deepspace";
   const isAdmin = user?.role === "admin";
   const [, setLocation] = useLocation();
   const trafficTotalsQuery = trpc.dashboard.trafficTotals.useQuery(undefined, {
@@ -252,13 +260,7 @@ function DashboardContent() {
       />
   );
 
-  return (
-    <div className="space-y-6" data-fx-std-page={compactLayout ? undefined : ""} data-fx-compact-page={compactLayout ? "" : undefined}>
-      {/* data-fx-std-page：标准布局下总览整页按原来的标准画（compact.css 让出去）；精简下不带，按紧凑的方式画 */}
-      {/*
-        标题下面那一行是此刻的数（「4 台主机 · 19 条线路 · 19 条转发」），不是一句说明书。
-        「查看运行状态、资源使用和流量趋势」是在解释这一页叫总览 —— 它叫总览就够了。
-      */}
+  const header = (
       <WorkspaceHeader title="总览" status={health ? (
         /* 精简布局：下面的状态卡已经是这三个数，标题行不再重复一遍 */
         <span className="tabular-nums" data-fx-compact-hide="">
@@ -269,13 +271,51 @@ function DashboardContent() {
           ].filter(Boolean).join(" · ")}
         </span>
       ) : null} actions={pearl ? <PearlHeaderBadges /> : undefined} />
+  );
+  const mapEnabled = !health || health.hosts.total > 0;
+
+  if (deepspace) {
+    return (
+      <div className="fx-ds-ov space-y-3" data-fx-std-page={compactLayout ? undefined : ""} data-fx-compact-page={compactLayout ? "" : undefined}>
+        {header}
+        {statusHeader}
+        <QuickStartSection health={health as SystemHealth | undefined} isAdmin={isAdmin} onOpen={setLocation} dense={compactLayout} />
+        <div className="fx-ds-ov-grid">
+          <div className="fx-ds-ov-main">{isAdmin ? trafficSection : accountSection}</div>
+          <div className="fx-ds-ov-map">
+            <NetworkMapSlot enabled={mapEnabled} cacheScope={accountCacheScope} onOpen={setLocation} />
+          </div>
+          <Suspense fallback={null}>
+            <DeepspacePanels
+              attention={(health as SystemHealth | undefined)?.attention}
+              isAdmin={isAdmin}
+              onOpen={setLocation}
+              mapEnabled={mapEnabled}
+            />
+          </Suspense>
+        </div>
+        <OpsHomeExtras isAdmin={isAdmin} />
+        {isAdmin ? accountSection : trafficSection}
+        <MobileAppSettings snapshot={mobileReminderSnapshot} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6" data-fx-std-page={compactLayout ? undefined : ""} data-fx-compact-page={compactLayout ? "" : undefined}>
+      {/* data-fx-std-page：标准布局下总览整页按原来的标准画（compact.css 让出去）；精简下不带，按紧凑的方式画 */}
+      {/*
+        标题下面那一行是此刻的数（「4 台主机 · 19 条线路 · 19 条转发」），不是一句说明书。
+        「查看运行状态、资源使用和流量趋势」是在解释这一页叫总览 —— 它叫总览就够了。
+      */}
+      {header}
       {/*
         概览放在数字前面：这一页第一眼看到的是「机器在哪、谁转给谁、哪条断了」，数字是第二眼的事
         （用户 2026-09-27 明确要它留在顶端）。没有主机时它自己不出现。
         它的几条请求不等 health：health 还没回来时照常并行取，health 说没有主机才停。
       */}
       {pearl ? statusHeader : null}
-      <NetworkMapSlot enabled={!health || health.hosts.total > 0} cacheScope={accountCacheScope} onOpen={setLocation} />
+      <NetworkMapSlot enabled={mapEnabled} cacheScope={accountCacheScope} onOpen={setLocation} />
       {pearl ? null : statusHeader}
       <QuickStartSection health={health as SystemHealth | undefined} isAdmin={isAdmin} onOpen={setLocation} dense={compactLayout} />
       <AttentionSection
