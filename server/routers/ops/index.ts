@@ -25,6 +25,7 @@ import { faultBoardRouter } from "./faultBoard";
 import { connStatsRouter } from "./connStats";
 import { opsBoardRouter } from "./opsBoard";
 import { auditRouter } from "./audit";
+import { slowQueriesRouter } from "./slowQueries";
 
 export const opsRouter = router({
   audit: auditRouter,
@@ -49,4 +50,5 @@ export const opsRouter = router({
   faultBoard: faultBoardRouter,
   connStats: connStatsRouter,
   board: opsBoardRouter,
+  slowQueries: slowQueriesRouter,
 });

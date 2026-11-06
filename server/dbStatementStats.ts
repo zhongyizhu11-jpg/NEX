@@ -46,10 +46,11 @@ export function statementFingerprint(sqlText: string) {
   return String(sqlText || "")
     .replace(/\s+/g, " ")
     .replace(/'(?:[^']|'')*'/g, "?")
-    .replace(/\b\d+(?:\.\d+)?\b/g, "?")
     .replace(/\$\d+/g, "?")
-    .replace(/\(\s*\?(?:\s*,\s*\?)+\s*\)/g, "(?…)")
-    .replace(/(?:\(\?…\)|\(\?\))(?:\s*,\s*(?:\(\?…\)|\(\?\)))+/g, "(?…),…")
+    .replace(/\b\d+(?:\.\d+)?\b/g, "?")
+    // (?) / (?, ?, …) → (?…)；多行 VALUES (?…), (?…), … 也并成一个
+    .replace(/\(\s*\?(?:\s*,\s*\?)*\s*\)/g, "(?…)")
+    .replace(/\(\?…\)(?:\s*,\s*\(\?…\))+/g, "(?…)")
     .trim()
     .slice(0, 1000);
 }

@@ -91,7 +91,8 @@ function reportingDatabaseClient<T extends object>(client: T, kind: DatabaseKind
 function statementTextOf(input: unknown) {
   if (typeof input === "string") return input;
   if (input && typeof input === "object") {
-    const candidate = (input as any).sql ?? (input as any).text;
+    const record = input as { sql?: unknown; text?: unknown };
+    const candidate = record.sql ?? record.text;
     if (typeof candidate === "string") return candidate;
   }
   return "";
@@ -1045,7 +1046,7 @@ async function executeRawImpl(sqlText: string, params: any[]) {
   if (_kind === "mysql") {
     const executor = active?.mysqlConnection || _pool;
     if (!executor) throw new DatabaseNotConfiguredError("MySQL database is not connected");
-    const [result] = await timedRemoteStatement<any>("mysql", sqlText, () => executor.execute(sqlText, normalizedParams));
+    const [result] = await timedRemoteStatement<unknown[]>("mysql", sqlText, () => executor.execute(sqlText, normalizedParams));
     return result as any;
   }
   if (_kind === "sqlite") {
@@ -1060,7 +1061,7 @@ async function executeRawImpl(sqlText: string, params: any[]) {
   if (_kind === "postgresql") {
     const executor = active?.postgresClient || _pgPool;
     if (!executor) throw new DatabaseNotConfiguredError("PostgreSQL database is not connected");
-    const result = await timedRemoteStatement<any>("postgresql", sqlText, () => executor.query(postgresSql(sqlText, normalizedParams)));
+    const result = await timedRemoteStatement<unknown>("postgresql", sqlText, () => executor.query(postgresSql(sqlText, normalizedParams)));
     return result as any;
   }
   throw new DatabaseNotConfiguredError();
@@ -1076,7 +1077,7 @@ async function queryRawImpl<T>(sqlText: string, params: any[]): Promise<T[]> {
   if (_kind === "mysql") {
     const executor = active?.mysqlConnection || _pool;
     if (!executor) throw new DatabaseNotConfiguredError("MySQL database is not connected");
-    const [rows] = await timedRemoteStatement<any>("mysql", sqlText, () => executor.query(sqlText, normalizedParams));
+    const [rows] = await timedRemoteStatement<unknown[]>("mysql", sqlText, () => executor.query(sqlText, normalizedParams));
     return rows as T[];
   }
   if (_kind === "sqlite") {
@@ -1091,7 +1092,7 @@ async function queryRawImpl<T>(sqlText: string, params: any[]): Promise<T[]> {
   if (_kind === "postgresql") {
     const executor = active?.postgresClient || _pgPool;
     if (!executor) throw new DatabaseNotConfiguredError("PostgreSQL database is not connected");
-    const result = await timedRemoteStatement<any>("postgresql", sqlText, () => executor.query(postgresSql(sqlText, normalizedParams)));
+    const result = await timedRemoteStatement<{ rows: unknown[] }>("postgresql", sqlText, () => executor.query(postgresSql(sqlText, normalizedParams)));
     return result.rows as T[];
   }
   throw new DatabaseNotConfiguredError();
