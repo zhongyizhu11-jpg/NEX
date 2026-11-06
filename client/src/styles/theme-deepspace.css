@@ -545,6 +545,122 @@ html[data-ui-theme="deepspace"] .workspace-main .workspace-header-row,
 html[data-ui-theme="deepspace"] .workspace-main .workspace-header-chips { justify-content: flex-start; margin-inline: 0; align-self: flex-start; }
 html[data-ui-theme="deepspace"] .workspace-main .workspace-header-chips-aside { margin-left: auto; }
 
+/* ── 10. 主机管理（深空）：一台一行（HostDsRow，Hosts.tsx）──────── */
+/*
+  和转发规则同一种面板：一块暗面板里一行一台，行间一道线。
+  手机四截：● 系统 名字 … 状态签 ··· / 地区 · 地址 … N 转发 / CPU MEM DSK 三根细条 / ↓ ↑ 速率。
+  电脑（≥768px）是一张真表：状态 / 主机 / 系统 / 地区·地址 / CPU / 内存 / 磁盘 / 网速 / 转发 / 版本 / ···，
+  表头（.fx-ds-host-head）和行用同一套列宽。占用条 ≥70% 琥珀、≥85% 红；离线的行左边一道红线、占用全写「—」。
+*/
+html[data-ui-theme="deepspace"] .fx-ds-host-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--fx-card-stroke);
+  border-radius: 12px;
+  background: var(--fx-card-fill);
+  overflow: hidden;
+}
+html[data-ui-theme="deepspace"] .fx-ds-host-head { display: none; }
+html[data-ui-theme="deepspace"] .fx-ds-host {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto auto;
+  grid-template-areas:
+    "dot os name ver actions"
+    "addr addr addr rules rules"
+    "gauges gauges gauges gauges gauges"
+    "rate rate rate rate rate";
+  align-items: center;
+  column-gap: 8px;
+  row-gap: 5px;
+  padding: 11px 14px 12px;
+  border-bottom: 1px solid var(--fx-stroke-weak);
+  background: var(--fx-card-fill);
+  min-width: 0;
+  cursor: pointer;
+  outline: none;
+}
+html[data-ui-theme="deepspace"] .fx-ds-host-list > :last-child,
+html[data-ui-theme="deepspace"] .fx-ds-host-list > :last-child > .fx-ds-host { border-bottom: 0; }
+html[data-ui-theme="deepspace"] .fx-ds-host:focus-visible { box-shadow: inset 0 0 0 1px var(--fx-primary-fill); }
+html[data-ui-theme="deepspace"] .fx-ds-host[data-offline] { box-shadow: inset 3px 0 0 var(--fx-down); }
+html[data-ui-theme="deepspace"] .fx-ds-host-dot { grid-area: dot; display: inline-flex; }
+html[data-ui-theme="deepspace"] .fx-ds-host-os {
+  grid-area: os;
+  justify-self: start;
+  padding: 0 5px;
+  border: 1px solid var(--fx-stroke-base);
+  border-radius: 4px;
+  font-family: var(--fx-ds-mono);
+  font-size: 10.5px;
+  line-height: 16px;
+  font-weight: 500;
+  color: var(--fx-text-secondary);
+  white-space: nowrap;
+}
+html[data-ui-theme="deepspace"] .fx-ds-host-name { grid-area: name; min-width: 0; font-size: 14px; font-weight: 600; line-height: 20px; color: var(--fx-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+html[data-ui-theme="deepspace"] .fx-ds-host-addr { grid-area: addr; min-width: 0; font-family: var(--fx-ds-mono); font-size: 12px; line-height: 16px; color: var(--fx-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+html[data-ui-theme="deepspace"] .fx-ds-host-rules { grid-area: rules; justify-self: end; font-family: var(--fx-ds-mono); font-size: 12px; line-height: 16px; color: var(--fx-text-muted); white-space: nowrap; }
+html[data-ui-theme="deepspace"] .fx-ds-host-rules > b { font-weight: 500; color: var(--fx-text-secondary); }
+html[data-ui-theme="deepspace"] .fx-ds-host-rules > i { font-style: normal; }
+html[data-ui-theme="deepspace"] .fx-ds-host-rules[data-muted] > b { color: var(--fx-text-muted); }
+html[data-ui-theme="deepspace"] .fx-ds-host-gauges { grid-area: gauges; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; min-width: 0; margin-top: 3px; }
+html[data-ui-theme="deepspace"] .fx-ds-host-gauge { display: flex; align-items: center; gap: 5px; min-width: 0; font-family: var(--fx-ds-mono); font-size: 11px; line-height: 16px; white-space: nowrap; }
+html[data-ui-theme="deepspace"] .fx-ds-host-gauge > i { font-style: normal; color: var(--fx-text-muted); }
+html[data-ui-theme="deepspace"] .fx-ds-host-gauge > b { font-weight: 500; color: var(--fx-text); font-variant-numeric: tabular-nums; }
+html[data-ui-theme="deepspace"] .fx-ds-host-gauge > b[data-tone="warn"] { color: var(--fx-warn-text); }
+html[data-ui-theme="deepspace"] .fx-ds-host-gauge > b[data-tone="down"] { color: var(--fx-down-text); }
+html[data-ui-theme="deepspace"] .fx-ds-host-bar { position: relative; flex: 1 1 auto; min-width: 16px; height: 4px; border-radius: 2px; background: var(--fx-ds-track); overflow: hidden; }
+html[data-ui-theme="deepspace"] .fx-ds-host-bar > span { position: absolute; inset: 0; border-radius: 2px; background: var(--fx-primary-fill); transform-origin: left center; }
+html[data-ui-theme="deepspace"] .fx-ds-host-bar > span[data-tone="warn"] { background: var(--fx-warn); }
+html[data-ui-theme="deepspace"] .fx-ds-host-bar > span[data-tone="down"] { background: var(--fx-down); }
+html[data-ui-theme="deepspace"] .fx-ds-host-rate { grid-area: rate; min-width: 0; font-family: var(--fx-ds-mono); font-size: 12px; line-height: 16px; color: var(--fx-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+html[data-ui-theme="deepspace"] .fx-ds-host-ver { grid-area: ver; display: flex; align-items: center; justify-content: flex-end; gap: 4px; min-width: 0; }
+html[data-ui-theme="deepspace"] .fx-ds-host-tag { flex: none; padding: 0 5px; border: 1px solid var(--fx-stroke-base); border-radius: 4px; font-family: var(--fx-ds-mono); font-size: 10.5px; line-height: 16px; white-space: nowrap; color: var(--fx-text-muted); }
+html[data-ui-theme="deepspace"] .fx-ds-host-tag[data-tone="warn"] { color: var(--fx-warn-text); border-color: color-mix(in srgb, var(--fx-warn) 45%, transparent); background: color-mix(in srgb, var(--fx-warn) 10%, transparent); }
+html[data-ui-theme="deepspace"] .fx-ds-host-tag[data-tone="down"] { color: var(--fx-down-text); border-color: color-mix(in srgb, var(--fx-down) 45%, transparent); background: color-mix(in srgb, var(--fx-down) 10%, transparent); }
+/* 手机上版本号本身不占地方：只在有话要说（可升级 / 离线 / 维护）时出签 */
+html[data-ui-theme="deepspace"] .fx-ds-host-version { display: none; font-family: var(--fx-ds-mono); font-size: 12px; color: var(--fx-text-muted); white-space: nowrap; }
+html[data-ui-theme="deepspace"] .fx-ds-host-actions { grid-area: actions; display: flex; align-items: center; gap: 2px; margin: -4px -6px -4px 0; }
+html[data-ui-theme="deepspace"] .fx-ds-host-actions button { min-height: 0; }
+@media (min-width: 768px) {
+  html[data-ui-theme="deepspace"] .fx-ds-host,
+  html[data-ui-theme="deepspace"] .fx-ds-host-head {
+    grid-template-columns: 14px minmax(130px, 1.3fr) 58px minmax(160px, 1.5fr) minmax(86px, .8fr) minmax(86px, .8fr) minmax(86px, .8fr) minmax(176px, 1.25fr) 44px minmax(110px, 1fr) 36px;
+    grid-template-areas: "dot name os addr cpu mem dsk rate rules ver actions";
+    column-gap: 14px;
+    row-gap: 0;
+    padding: 0 16px;
+  }
+  html[data-ui-theme="deepspace"] .fx-ds-host { min-height: 46px; }
+  html[data-ui-theme="deepspace"] .fx-ds-host:hover { background: var(--fx-hover); }
+  html[data-ui-theme="deepspace"] .fx-ds-host-head {
+    display: grid;
+    align-items: center;
+    min-height: 34px;
+    border-bottom: 1px solid var(--fx-stroke-base);
+    font-family: var(--fx-ds-mono);
+    font-size: 10.5px;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+    color: var(--fx-text-muted);
+    white-space: nowrap;
+  }
+  html[data-ui-theme="deepspace"] .fx-ds-host-name { font-size: 13px; }
+  html[data-ui-theme="deepspace"] .fx-ds-host-gauges { display: contents; }
+  html[data-ui-theme="deepspace"] .fx-ds-host-gauge[data-area="cpu"] { grid-area: cpu; }
+  html[data-ui-theme="deepspace"] .fx-ds-host-gauge[data-area="mem"] { grid-area: mem; }
+  html[data-ui-theme="deepspace"] .fx-ds-host-gauge[data-area="dsk"] { grid-area: dsk; }
+  /* 列名已经在表头里了：CPU / MEM / DSK 三个字只在手机上要 */
+  html[data-ui-theme="deepspace"] .fx-ds-host-gauge > i { display: none; }
+  html[data-ui-theme="deepspace"] .fx-ds-host-gauge > b { width: 34px; flex: none; font-size: 12px; }
+  html[data-ui-theme="deepspace"] .fx-ds-host-bar { max-width: 56px; }
+  html[data-ui-theme="deepspace"] .fx-ds-host-rules { justify-self: start; font-size: 12.5px; }
+  html[data-ui-theme="deepspace"] .fx-ds-host-rules > i { display: none; }
+  /* 维护中 + 组调度暂停 + 可升级 三枚同时在时折成两行，不顶出列 */
+  html[data-ui-theme="deepspace"] .fx-ds-host-ver { justify-content: flex-start; flex-wrap: wrap; row-gap: 3px; padding: 6px 0; }
+  html[data-ui-theme="deepspace"] .fx-ds-host-version { display: inline; }
+  html[data-ui-theme="deepspace"] .fx-ds-host-actions { justify-content: flex-end; margin: 0; }
 /* ── 12. 总览（Home.tsx 的 deepspace 分支 + features/dashboard/DeepspacePanels.tsx）──────── */
 /*
   数字格：四格带线的方块（手机 2×2，电脑一排四个），图标去掉，标签等宽大写；结论那一行收成格子下面的状态行。

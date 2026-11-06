@@ -165,3 +165,36 @@ export function parseHostOs(value: unknown): HostOsIdentity {
   const name = (firstNumeric === -1 ? words : words.slice(0, firstNumeric)).slice(0, 3).join(" ") || words[0] || full;
   return { family: "linux", name, version, label: join(name, version), full };
 }
+
+/*
+  「深空」主题主机行里那一枚短标签：发行版缩成 3～5 个大写字母，一列竖着对齐好扫。
+  认不出的 Linux 写 LNX；GOOS 兜底的 Windows / FreeBSD / macOS 取名字；没上报是空串（调用处画「—」）。
+*/
+const OS_SHORT_TAGS: Record<HostOsFamily, string> = {
+  debian: "DEB",
+  ubuntu: "UBU",
+  centos: "CENT",
+  almalinux: "ALMA",
+  rocky: "ROCKY",
+  rhel: "RHEL",
+  fedora: "FED",
+  alpine: "ALP",
+  arch: "ARCH",
+  manjaro: "MANJ",
+  opensuse: "SUSE",
+  kali: "KALI",
+  mint: "MINT",
+  openwrt: "WRT",
+  alinux: "ALI",
+  deepin: "DEEP",
+  linux: "LNX",
+  unknown: "",
+};
+
+export function hostOsShortTag(os: Pick<HostOsIdentity, "family" | "name">): string {
+  if (os.family !== "unknown") return OS_SHORT_TAGS[os.family];
+  if (/^windows/i.test(os.name)) return "WIN";
+  if (/^macos/i.test(os.name)) return "MAC";
+  if (/^freebsd/i.test(os.name)) return "BSD";
+  return os.name ? os.name.replace(/[^a-z0-9]/gi, "").slice(0, 4).toUpperCase() : "";
+}
