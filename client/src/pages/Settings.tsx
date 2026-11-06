@@ -4996,7 +4996,7 @@ function SystemInfoSection() {
       setTwoFactorEnabled(!!settings.twoFactorEnabled);
       setLookingGlassUserEnabled(settings.lookingGlassUserEnabled ?? true);
       setAllowMultiDeviceLogin(!!settings.allowMultiDeviceLogin);
-      setLoginNewDeviceNotify((settings as any).loginNewDeviceNotify !== false);
+      setLoginNewDeviceNotify(settings.loginNewDeviceNotify !== false);
       setUpdateAutoCheckEnabled(settings.upgrade?.autoCheckEnabled !== false);
       setForwardProtocols(normalizeForwardProtocolSettings(settings.forwardProtocols));
       setSidebarMenu(normalizeSidebarMenuSettings({
@@ -5537,7 +5537,7 @@ function SystemInfoSection() {
       ),
       save: handleSavePublicHostMonitor,
     },
-    { id: "sessionPolicy", label: "登录设备", dirty: !!settings && (allowMultiDeviceLogin !== !!settings.allowMultiDeviceLogin || loginNewDeviceNotify !== ((settings as any).loginNewDeviceNotify !== false)), save: handleSaveSessionPolicy },
+    { id: "sessionPolicy", label: "登录设备", dirty: !!settings && (allowMultiDeviceLogin !== !!settings.allowMultiDeviceLogin || loginNewDeviceNotify !== (settings.loginNewDeviceNotify !== false)), save: handleSaveSessionPolicy },
     {
       id: "agentInstall",
       label: "Agent 安装",

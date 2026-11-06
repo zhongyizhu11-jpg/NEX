@@ -392,7 +392,7 @@ export function recordLoginSuccessEvent(user: any, ip: string) {
  * 新设备 / 异地登录（server/ops/loginDevices.ts 判断）。所有人都提醒本人；进时间线的只有管理员账号 ——
  * 管理员账号被别人登上了，是整个面板的事。
  */
-export function recordNewDeviceLoginEvent(user: any, detail: { what: string; device: string; ip: string; location: string }) {
+export function recordNewDeviceLoginEvent(user: { id?: unknown; name?: unknown; username?: unknown; role?: unknown } | null | undefined, detail: { what: string; device: string; ip: string; location: string }) {
   if (String(user?.role || "") !== "admin") return;
   const userId = Number(user?.id || 0) || null;
   const name = shortName(user?.name || user?.username, `#${userId || "?"}`);

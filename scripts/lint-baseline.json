@@ -354,7 +354,7 @@
     "server/routers/proxyInbounds.ts": 41,
     "server/routers/proxySubscriptions.ts": 58,
     "server/routers/ruleLimitInput.ts": 6,
-    "server/routers/rules.crud.ts": 395,
+    "server/routers/rules.crud.ts": 393,
     "server/routers/rules.ports.ts": 13,
     "server/routers/rules.selfTest.ts": 15,
     "server/routers/rules.traffic.ts": 6,
