@@ -29,7 +29,7 @@ export const API_TOKEN_MODULE_LABELS: Record<ApiTokenModule, string> = {
 
 export const API_TOKEN_MODULE_DETAILS: Record<ApiTokenModule, string> = {
   rules: "转发规则、线路诊断",
-  hosts: "主机、Agent 令牌、换 IP、防火墙与主机日志",
+  hosts: "主机、Agent 令牌、换 IP、防火墙、主机日志与网络调优",
   lines: "隧道、转发组、节点池、拓扑、TLS 入口",
   proxy: "代理入站、订阅链接",
   users: "用户、推广、工单",
@@ -52,6 +52,7 @@ export const API_TOKEN_MODULE_PREFIXES: Record<ApiTokenModule, readonly string[]
     "ops.agentRelay.",
     "ops.hostOps.",
     "ops.hostLogs.",
+    "ops.netTune.",
     "ops.resourceAlert.",
   ],
   lines: ["tunnels.", "forwardGroups.", "nodePools.", "topology.", "tlsInbounds."],

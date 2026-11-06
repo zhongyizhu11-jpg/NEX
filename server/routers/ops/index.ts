@@ -26,6 +26,7 @@ import { connStatsRouter } from "./connStats";
 import { opsBoardRouter } from "./opsBoard";
 import { auditRouter } from "./audit";
 import { profilingRouter } from "./profiling";
+import { netTuneRouter } from "./netTune";
 
 export const opsRouter = router({
   audit: auditRouter,
@@ -51,4 +52,5 @@ export const opsRouter = router({
   connStats: connStatsRouter,
   board: opsBoardRouter,
   profiling: profilingRouter,
+  netTune: netTuneRouter,
 });

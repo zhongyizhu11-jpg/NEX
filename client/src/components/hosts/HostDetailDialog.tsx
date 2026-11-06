@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatCpuPercent, hostGeoTooltip, hostInMaintenance, hostRegionText } from "./hostDisplay";
 import HostNetProfileSection from "./HostNetProfileSection";
+import HostNetTuneSection from "./HostNetTuneSection";
 import { HostOsAvatar, HostOsGlyph, hostOsOf } from "./HostOsBadge";
 import { fxpRuntimeBadgeTitle, fxpRuntimeDetailText } from "./FxpRuntimeBadge";
 import { buildHostActions, hostTrafficFailoverTitle, type HostSummaryCardProps } from "./HostSummaryCard";
@@ -239,6 +240,9 @@ export default function HostDetailDialog(props: HostDetailDialogProps) {
 
           {/* 网络画像：双栈出站、运营商、25 端口、DNSBL（Agent 2.2.226 起在主机上测） */}
           <HostNetProfileSection host={host} canManage={user?.role === "admin"} />
+
+          {/* 网络调优：转发相关内核参数是否达标，一键按安装脚本那套规则调好（Agent 2.2.250 起，管理员） */}
+          {user?.role === "admin" ? <HostNetTuneSection host={host} /> : null}
 
           {user?.role === "admin" ? <HostTlsInboundSection hostId={Number(host.id)} /> : null}
 
