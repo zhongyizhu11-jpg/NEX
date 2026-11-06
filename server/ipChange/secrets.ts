@@ -43,30 +43,72 @@ export type CredentialCipher = {
   decrypt(stored: string | null | undefined): IpChangeCredentials;
 };
 
+/** AES-256-GCM 封一段字符串：PREFIX + base64(iv | tag | 密文)。 */
+function sealString(key: Buffer, plaintext: string) {
+  const iv = crypto.randomBytes(IV_LENGTH);
+  const cipher = crypto.createCipheriv(CIPHER, key, iv);
+  const body = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
+  return PREFIX + Buffer.concat([iv, cipher.getAuthTag(), body]).toString("base64");
+}
+
+/** sealString 的反操作；格式不对或密钥不对都抛错（调用方决定给人看哪句话）。 */
+function openString(key: Buffer, stored: string) {
+  const raw = Buffer.from(stored.slice(PREFIX.length), "base64");
+  const iv = raw.subarray(0, IV_LENGTH);
+  const tag = raw.subarray(IV_LENGTH, IV_LENGTH + TAG_LENGTH);
+  const body = raw.subarray(IV_LENGTH + TAG_LENGTH);
+  const decipher = crypto.createDecipheriv(CIPHER, key, iv);
+  decipher.setAuthTag(tag);
+  return Buffer.concat([decipher.update(body), decipher.final()]).toString("utf8");
+}
+
+/** 这段文字是不是 sealString 封出来的（看前缀，不验证能不能解开）。 */
+export function isSealedSecret(value: unknown) {
+  return typeof value === "string" && value.startsWith(PREFIX);
+}
+
 export function createCredentialCipher(secret: string, info?: string): CredentialCipher {
   const key = deriveIpChangeKey(secret, info);
   return {
     encrypt(credentials) {
-      const iv = crypto.randomBytes(IV_LENGTH);
-      const cipher = crypto.createCipheriv(CIPHER, key, iv);
-      const body = Buffer.concat([cipher.update(JSON.stringify(credentials || {}), "utf8"), cipher.final()]);
-      return PREFIX + Buffer.concat([iv, cipher.getAuthTag(), body]).toString("base64");
+      return sealString(key, JSON.stringify(credentials || {}));
     },
     decrypt(stored) {
       const text = String(stored || "");
       if (!text) return {};
-      if (!text.startsWith(PREFIX)) throw new IpChangeSecretError("凭据格式无法识别，请重新填写");
+      if (!isSealedSecret(text)) throw new IpChangeSecretError("凭据格式无法识别，请重新填写");
       try {
-        const raw = Buffer.from(text.slice(PREFIX.length), "base64");
-        const iv = raw.subarray(0, IV_LENGTH);
-        const tag = raw.subarray(IV_LENGTH, IV_LENGTH + TAG_LENGTH);
-        const body = raw.subarray(IV_LENGTH + TAG_LENGTH);
-        const decipher = crypto.createDecipheriv(CIPHER, key, iv);
-        decipher.setAuthTag(tag);
-        const json = Buffer.concat([decipher.update(body), decipher.final()]).toString("utf8");
-        return sanitizeCredentials(JSON.parse(json));
+        return sanitizeCredentials(JSON.parse(openString(key, text)));
       } catch {
         throw new IpChangeSecretError("凭据无法解密（面板密钥变过，例如迁移到了新服务器），请重新填写");
+      }
+    },
+  };
+}
+
+export type StringCipher = {
+  encrypt(plaintext: string): string;
+  /** 解不开抛 IpChangeSecretError；不带前缀的当明文原样返回（升级前存的老值）。 */
+  decrypt(stored: string): string;
+};
+
+/**
+ * 加密一段任意字符串（系统设置里的密钥类值，见 server/settingsEncryption.ts）。
+ * 和凭据用同一套算法、同一个前缀，info 不同派生出另一把密钥。
+ */
+export function createStringCipher(secret: string, info: string): StringCipher {
+  const key = deriveIpChangeKey(secret, info);
+  return {
+    encrypt(plaintext) {
+      return sealString(key, String(plaintext ?? ""));
+    },
+    decrypt(stored) {
+      const text = String(stored ?? "");
+      if (!isSealedSecret(text)) return text;
+      try {
+        return openString(key, text);
+      } catch {
+        throw new IpChangeSecretError("无法解密（面板密钥变过，例如迁移到了新服务器），请重新填写");
       }
     },
   };

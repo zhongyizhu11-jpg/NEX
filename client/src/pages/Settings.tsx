@@ -711,6 +711,20 @@ function SettingsContent() {
   return (
     <div className="space-y-6">
       <WorkspaceHeader title="系统设置" description="配置面板、通知、外观与数据维护。" />
+      {/*
+        密钥类设置落库是加密的（server/settingsEncryption.ts），密钥是面板的 JWT_SECRET / jwt.secret。
+        数据库文件被直接拷到另一台机器、两边密钥又不同时，这几项解不开：说清楚是哪几项、要重新填。
+      */}
+      {systemSettings && "undecryptableSecretSettings" in systemSettings && systemSettings.undecryptableSecretSettings.length > 0 ? (
+        <Alert variant="destructive">
+          <AlertTitle>有 {systemSettings.undecryptableSecretSettings.length} 项设置需要重新填写</AlertTitle>
+          <AlertDescription>
+            {"面板密钥（JWT_SECRET / 数据目录下的 jwt.secret）和保存这些设置时不一样，例如数据库被直接拷到了新服务器，"
+              + `下面几项已经读不出来，按空值处理：${systemSettings.undecryptableSecretSettings.join("、")}。`
+              + "在对应的设置里重新填写保存即可；以后迁移面板请用「备份恢复」或「面板迁移」，不会再出现这个问题。"}
+          </AlertDescription>
+        </Alert>
+      ) : null}
 
       {/*
         三种宽度，三种导航：

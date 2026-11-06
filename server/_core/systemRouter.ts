@@ -1,4 +1,5 @@
 import { resolveSiteTitle } from "../../shared/brand";
+import { undecryptableSecretSettingLabels } from "../settingsEncryption";
 import { router, publicProcedure, protectedProcedure, adminProcedure } from "./trpc";
 import { githubRepoParts } from "../../shared/githubAccelerator";
 import { updateMultiDeviceLoginSettingCache } from "./context";
@@ -1937,6 +1938,8 @@ export const systemRouter = router({
       },
       webPort: getPublicWebPort(),
       webPortManagement: getWebPortManagement(),
+      // 解不开的密钥类设置（数据库被拷到了 JWT_SECRET 不同的机器上），设置页提示重新填写，见 server/settingsEncryption.ts。
+      undecryptableSecretSettings: undecryptableSecretSettingLabels(),
       registrationEnabled: all.registrationEnabled !== "false",
       authCaptchaEnabled: all.authCaptchaEnabled !== "false",
       twoFactorEnabled: all.twoFactorEnabled === "true",
