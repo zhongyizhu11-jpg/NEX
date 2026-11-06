@@ -67,7 +67,8 @@ test("首页：日期铭牌和系统在线只在珍珠下；统计卡在珍珠�
   assert.equal(badges.length, 1);
   assert.match(source, /actions=\{pearl \? <PearlHeaderBadges \/> : undefined\}/);
   const before = source.indexOf("{pearl ? statusHeader : null}");
-  const map = source.indexOf("<NetworkMapSlot");
+  // 深空分支（更靠前）自己也有一张地图；这里只看默认那条 return 里的顺序
+  const map = source.indexOf("<NetworkMapSlot", before);
   const after = source.indexOf("{pearl ? null : statusHeader}");
   assert.ok(before > 0 && before < map && map < after, "非珍珠：地图 → 运行状态；珍珠：运行状态 → 地图");
 });

@@ -37,6 +37,8 @@ import HostTrafficBillingDialog from "@/components/hosts/HostTrafficBillingDialo
 import HostCard, { HostActionButtons } from "@/components/hosts/HostCard";
 // 本页 902 行已有一个同名的统计小卡，这里取别名区分：这个是主机列表里的实体卡
 import HostEntitySummaryCard from "@/components/hosts/HostSummaryCard";
+import { HostDsRow, HostDsTableHead } from "@/components/hosts/HostDsRow";
+import { useUiTheme } from "@/hooks/useUiTheme";
 import HostDetailDialog from "@/components/hosts/HostDetailDialog";
 import { hostDeleteNeedsOfflineConfirmation, offlineCleanupConfirmOptions } from "@/components/hosts/hostDeletion";
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -1297,6 +1299,66 @@ const SortableHostCardItem = memo(function SortableHostCardItem({
   );
 });
 
+/*
+  「深空」主题的主机行：卡片 / 表格三种视图在这套主题下都画成同一种「一台一行」
+  （手机四截、电脑一张真表，见 HostDsRow）。数据、回调、memo 口径和卡片完全一样。
+*/
+function HostDsItemView({
+  host,
+  metricRow,
+  traffic,
+  isAdmin,
+  latestAgentVersion,
+  resetTrafficPending,
+  actions,
+  dragHandle,
+  sortableClassName,
+}: Omit<HostCardItemProps, "compact">) {
+  const metrics = useMemo(() => (metricRow ? [metricRow] : null), [metricRow]);
+  return (
+    <HostDsRow
+      host={host}
+      metrics={metrics}
+      traffic={traffic}
+      canUpgrade={isAdmin}
+      upgradeAvailable={isAdmin && !!latestAgentVersion && hostNeedsAgentUpgrade(host, latestAgentVersion)}
+      resetTrafficPending={resetTrafficPending}
+      onOpenDetail={actions.openDetail}
+      onEdit={actions.edit}
+      onDelete={actions.remove}
+      onUpgrade={actions.upgrade}
+      onResetTraffic={isAdmin ? actions.resetTraffic : undefined}
+      onCorrectTraffic={isAdmin ? actions.correctTraffic : undefined}
+      onEditBilling={isAdmin ? actions.editBilling : undefined}
+      onViewProbeLatency={actions.viewProbeLatency}
+      dragHandle={dragHandle}
+      className={sortableClassName}
+    />
+  );
+}
+
+const HostDsItem = memo(HostDsItemView);
+
+const SortableHostDsItem = memo(function SortableHostDsItem({
+  sortDisabled,
+  sortBusy,
+  ...props
+}: Omit<HostCardItemProps, "compact" | "dragHandle" | "sortableClassName"> & { sortDisabled: boolean; sortBusy: boolean }) {
+  return (
+    <SortableItem id={Number(props.host.id)} disabled={sortDisabled}>
+      {({ itemProps, handleProps, isDragging, isDropTarget }) => (
+        <div {...itemProps}>
+          <HostDsItemView
+            {...props}
+            dragHandle={<SortableDragHandle dragHandleProps={handleProps} visible={isDragging} busy={sortBusy} className="shrink-0" />}
+            sortableClassName={cn(isDragging && "opacity-55 ring-1 ring-primary/35", isDropTarget && "ring-1 ring-primary/45")}
+          />
+        </div>
+      )}
+    </SortableItem>
+  );
+});
+
 const HostTableRow = memo(function HostTableRow({
   host,
   latestMetric,
@@ -1560,6 +1622,8 @@ function HostsContent() {
   // 和 Tailwind 的 md / sm 断点对齐：只渲染看得见的那一套，不再两套都渲染再用 CSS 藏一套。
   const isBelowMd = useMediaQuery("(max-width: 767px)");
   const isBelowSm = useMediaQuery("(max-width: 639px)");
+  // 「深空」主题：卡片 / 表格都画成一台一行（地图两种照旧）
+  const deepspaceRows = useUiTheme() === "deepspace";
   const [preferredViewMode, setViewMode] = useState<HostViewMode>(() => getStoredHostViewMode());
   /*
     地图在 md 以下本来就藏着（切换按钮也藏着），可桌面上记住的「地图」带到手机上，
@@ -2904,6 +2968,25 @@ function HostsContent() {
               <HostFlatMap hosts={filteredDisplayHosts} onEdit={openMapHostEdit} />
             </Suspense>
           </>
+        ) : deepspaceRows ? (
+          /* ========== 深空：一台一行（手机四截 / 电脑一张表） ========== */
+          <div className="fx-ds-host-list">
+            <HostDsTableHead />
+            {hostSortingEnabled ? (
+              <SortableReorderContext sortable={hostSortable} ids={pagedHostIds} strategy="vertical" restrictToList>
+                {pagedHosts.map((host) => (
+                  <SortableHostDsItem
+                    key={host.id}
+                    {...hostItemProps(host)}
+                    sortDisabled={hostSortable.disabled}
+                    sortBusy={hostReorderPending}
+                  />
+                ))}
+              </SortableReorderContext>
+            ) : (
+              pagedHosts.map((host) => <HostDsItem key={host.id} {...hostItemProps(host)} />)
+            )}
+          </div>
         ) : viewMode === "card" || viewMode === "compact-card" ? (
           /* ========== 卡片式布局 ========== */
           hostSortingEnabled ? (

@@ -544,3 +544,317 @@ html[data-ui-theme="deepspace"] .workspace-main .workspace-header-main { flex: 1
 html[data-ui-theme="deepspace"] .workspace-main .workspace-header-row,
 html[data-ui-theme="deepspace"] .workspace-main .workspace-header-chips { justify-content: flex-start; margin-inline: 0; align-self: flex-start; }
 html[data-ui-theme="deepspace"] .workspace-main .workspace-header-chips-aside { margin-left: auto; }
+
+/* ── 10. 主机管理（深空）：一台一行（HostDsRow，Hosts.tsx）──────── */
+/*
+  和转发规则同一种面板：一块暗面板里一行一台，行间一道线。
+  手机四截：● 系统 名字 … 状态签 ··· / 地区 · 地址 … N 转发 / CPU MEM DSK 三根细条 / ↓ ↑ 速率。
+  电脑（≥768px）是一张真表：状态 / 主机 / 系统 / 地区·地址 / CPU / 内存 / 磁盘 / 网速 / 转发 / 版本 / ···，
+  表头（.fx-ds-host-head）和行用同一套列宽。占用条 ≥70% 琥珀、≥85% 红；离线的行左边一道红线、占用全写「—」。
+*/
+html[data-ui-theme="deepspace"] .fx-ds-host-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--fx-card-stroke);
+  border-radius: 12px;
+  background: var(--fx-card-fill);
+  overflow: hidden;
+}
+html[data-ui-theme="deepspace"] .fx-ds-host-head { display: none; }
+html[data-ui-theme="deepspace"] .fx-ds-host {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto auto;
+  grid-template-areas:
+    "dot os name ver actions"
+    "addr addr addr rules rules"
+    "gauges gauges gauges gauges gauges"
+    "rate rate rate rate rate";
+  align-items: center;
+  column-gap: 8px;
+  row-gap: 5px;
+  padding: 11px 14px 12px;
+  border-bottom: 1px solid var(--fx-stroke-weak);
+  background: var(--fx-card-fill);
+  min-width: 0;
+  cursor: pointer;
+  outline: none;
+}
+html[data-ui-theme="deepspace"] .fx-ds-host-list > :last-child,
+html[data-ui-theme="deepspace"] .fx-ds-host-list > :last-child > .fx-ds-host { border-bottom: 0; }
+html[data-ui-theme="deepspace"] .fx-ds-host:focus-visible { box-shadow: inset 0 0 0 1px var(--fx-primary-fill); }
+html[data-ui-theme="deepspace"] .fx-ds-host[data-offline] { box-shadow: inset 3px 0 0 var(--fx-down); }
+html[data-ui-theme="deepspace"] .fx-ds-host-dot { grid-area: dot; display: inline-flex; }
+html[data-ui-theme="deepspace"] .fx-ds-host-os {
+  grid-area: os;
+  justify-self: start;
+  padding: 0 5px;
+  border: 1px solid var(--fx-stroke-base);
+  border-radius: 4px;
+  font-family: var(--fx-ds-mono);
+  font-size: 10.5px;
+  line-height: 16px;
+  font-weight: 500;
+  color: var(--fx-text-secondary);
+  white-space: nowrap;
+}
+html[data-ui-theme="deepspace"] .fx-ds-host-name { grid-area: name; min-width: 0; font-size: 14px; font-weight: 600; line-height: 20px; color: var(--fx-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+html[data-ui-theme="deepspace"] .fx-ds-host-addr { grid-area: addr; min-width: 0; font-family: var(--fx-ds-mono); font-size: 12px; line-height: 16px; color: var(--fx-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+html[data-ui-theme="deepspace"] .fx-ds-host-rules { grid-area: rules; justify-self: end; font-family: var(--fx-ds-mono); font-size: 12px; line-height: 16px; color: var(--fx-text-muted); white-space: nowrap; }
+html[data-ui-theme="deepspace"] .fx-ds-host-rules > b { font-weight: 500; color: var(--fx-text-secondary); }
+html[data-ui-theme="deepspace"] .fx-ds-host-rules > i { font-style: normal; }
+html[data-ui-theme="deepspace"] .fx-ds-host-rules[data-muted] > b { color: var(--fx-text-muted); }
+html[data-ui-theme="deepspace"] .fx-ds-host-gauges { grid-area: gauges; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; min-width: 0; margin-top: 3px; }
+html[data-ui-theme="deepspace"] .fx-ds-host-gauge { display: flex; align-items: center; gap: 5px; min-width: 0; font-family: var(--fx-ds-mono); font-size: 11px; line-height: 16px; white-space: nowrap; }
+html[data-ui-theme="deepspace"] .fx-ds-host-gauge > i { font-style: normal; color: var(--fx-text-muted); }
+html[data-ui-theme="deepspace"] .fx-ds-host-gauge > b { font-weight: 500; color: var(--fx-text); font-variant-numeric: tabular-nums; }
+html[data-ui-theme="deepspace"] .fx-ds-host-gauge > b[data-tone="warn"] { color: var(--fx-warn-text); }
+html[data-ui-theme="deepspace"] .fx-ds-host-gauge > b[data-tone="down"] { color: var(--fx-down-text); }
+html[data-ui-theme="deepspace"] .fx-ds-host-bar { position: relative; flex: 1 1 auto; min-width: 16px; height: 4px; border-radius: 2px; background: var(--fx-ds-track); overflow: hidden; }
+html[data-ui-theme="deepspace"] .fx-ds-host-bar > span { position: absolute; inset: 0; border-radius: 2px; background: var(--fx-primary-fill); transform-origin: left center; }
+html[data-ui-theme="deepspace"] .fx-ds-host-bar > span[data-tone="warn"] { background: var(--fx-warn); }
+html[data-ui-theme="deepspace"] .fx-ds-host-bar > span[data-tone="down"] { background: var(--fx-down); }
+html[data-ui-theme="deepspace"] .fx-ds-host-rate { grid-area: rate; min-width: 0; font-family: var(--fx-ds-mono); font-size: 12px; line-height: 16px; color: var(--fx-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+html[data-ui-theme="deepspace"] .fx-ds-host-ver { grid-area: ver; display: flex; align-items: center; justify-content: flex-end; gap: 4px; min-width: 0; }
+html[data-ui-theme="deepspace"] .fx-ds-host-tag { flex: none; padding: 0 5px; border: 1px solid var(--fx-stroke-base); border-radius: 4px; font-family: var(--fx-ds-mono); font-size: 10.5px; line-height: 16px; white-space: nowrap; color: var(--fx-text-muted); }
+html[data-ui-theme="deepspace"] .fx-ds-host-tag[data-tone="warn"] { color: var(--fx-warn-text); border-color: color-mix(in srgb, var(--fx-warn) 45%, transparent); background: color-mix(in srgb, var(--fx-warn) 10%, transparent); }
+html[data-ui-theme="deepspace"] .fx-ds-host-tag[data-tone="down"] { color: var(--fx-down-text); border-color: color-mix(in srgb, var(--fx-down) 45%, transparent); background: color-mix(in srgb, var(--fx-down) 10%, transparent); }
+/* 手机上版本号本身不占地方：只在有话要说（可升级 / 离线 / 维护）时出签 */
+html[data-ui-theme="deepspace"] .fx-ds-host-version { display: none; font-family: var(--fx-ds-mono); font-size: 12px; color: var(--fx-text-muted); white-space: nowrap; }
+html[data-ui-theme="deepspace"] .fx-ds-host-actions { grid-area: actions; display: flex; align-items: center; gap: 2px; margin: -4px -6px -4px 0; }
+html[data-ui-theme="deepspace"] .fx-ds-host-actions button { min-height: 0; }
+@media (min-width: 768px) {
+  html[data-ui-theme="deepspace"] .fx-ds-host,
+  html[data-ui-theme="deepspace"] .fx-ds-host-head {
+    grid-template-columns: 14px minmax(130px, 1.3fr) 58px minmax(160px, 1.5fr) minmax(86px, .8fr) minmax(86px, .8fr) minmax(86px, .8fr) minmax(176px, 1.25fr) 44px minmax(110px, 1fr) 36px;
+    grid-template-areas: "dot name os addr cpu mem dsk rate rules ver actions";
+    column-gap: 14px;
+    row-gap: 0;
+    padding: 0 16px;
+  }
+  html[data-ui-theme="deepspace"] .fx-ds-host { min-height: 46px; }
+  html[data-ui-theme="deepspace"] .fx-ds-host:hover { background: var(--fx-hover); }
+  html[data-ui-theme="deepspace"] .fx-ds-host-head {
+    display: grid;
+    align-items: center;
+    min-height: 34px;
+    border-bottom: 1px solid var(--fx-stroke-base);
+    font-family: var(--fx-ds-mono);
+    font-size: 10.5px;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+    color: var(--fx-text-muted);
+    white-space: nowrap;
+  }
+  html[data-ui-theme="deepspace"] .fx-ds-host-name { font-size: 13px; }
+  html[data-ui-theme="deepspace"] .fx-ds-host-gauges { display: contents; }
+  html[data-ui-theme="deepspace"] .fx-ds-host-gauge[data-area="cpu"] { grid-area: cpu; }
+  html[data-ui-theme="deepspace"] .fx-ds-host-gauge[data-area="mem"] { grid-area: mem; }
+  html[data-ui-theme="deepspace"] .fx-ds-host-gauge[data-area="dsk"] { grid-area: dsk; }
+  /* 列名已经在表头里了：CPU / MEM / DSK 三个字只在手机上要 */
+  html[data-ui-theme="deepspace"] .fx-ds-host-gauge > i { display: none; }
+  html[data-ui-theme="deepspace"] .fx-ds-host-gauge > b { width: 34px; flex: none; font-size: 12px; }
+  html[data-ui-theme="deepspace"] .fx-ds-host-bar { max-width: 56px; }
+  html[data-ui-theme="deepspace"] .fx-ds-host-rules { justify-self: start; font-size: 12.5px; }
+  html[data-ui-theme="deepspace"] .fx-ds-host-rules > i { display: none; }
+  /* 维护中 + 组调度暂停 + 可升级 三枚同时在时折成两行，不顶出列 */
+  html[data-ui-theme="deepspace"] .fx-ds-host-ver { justify-content: flex-start; flex-wrap: wrap; row-gap: 3px; padding: 6px 0; }
+  html[data-ui-theme="deepspace"] .fx-ds-host-version { display: inline; }
+  html[data-ui-theme="deepspace"] .fx-ds-host-actions { justify-content: flex-end; margin: 0; }
+}
+
+/* ── 11. 链路管理（深空）：隧道链路一整块面板里一行一条（Tunnels.tsx 的 renderTunnelRow）── */
+/*
+  手机四行：状态点 · 类型 · 名字 · ⋯ 开关 / 入口 ── 46 ms ──▶ 出口 / 30 天色块 + 可用率 / 累计 · 规则数。
+  桌面一行一条，加一行表头：状态 / 类型 / 名称 / 路径 / 延迟 / 24H 走势 / 30 天可用 / 累计 / 规则 / 开关。
+*/
+html[data-ui-theme="deepspace"] .fx-ds-link-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--fx-card-stroke);
+  border-radius: 12px;
+  background: var(--fx-card-fill);
+  overflow: hidden;
+}
+html[data-ui-theme="deepspace"] .fx-ds-link-head { display: none; }
+html[data-ui-theme="deepspace"] .fx-ds-link {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    "dot kind name actions"
+    "path path path path"
+    "days days days days"
+    "foot foot foot foot";
+  align-items: center;
+  column-gap: 8px;
+  row-gap: 7px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--fx-stroke-weak);
+  background: var(--fx-card-fill);
+  min-width: 0;
+}
+html[data-ui-theme="deepspace"] .fx-ds-link-list > :last-child,
+html[data-ui-theme="deepspace"] .fx-ds-link-list > :last-child > .fx-ds-link { border-bottom: 0; }
+html[data-ui-theme="deepspace"] .fx-ds-link-drop { background: var(--fx-hover); }
+html[data-ui-theme="deepspace"] .fx-ds-link[data-tone="down"] { box-shadow: inset 3px 0 0 var(--fx-down); }
+html[data-ui-theme="deepspace"] .fx-ds-link[data-tone="warn"] { box-shadow: inset 3px 0 0 var(--fx-warn); }
+html[data-ui-theme="deepspace"] .fx-ds-link[data-tone="off"] > :not(.fx-ds-link-actions) { opacity: .55; }
+html[data-ui-theme="deepspace"] .fx-ds-link-dot { grid-area: dot; display: inline-flex; }
+html[data-ui-theme="deepspace"] .fx-ds-link-kind {
+  grid-area: kind;
+  justify-self: start;
+  padding: 0 5px;
+  border: 1px solid var(--fx-stroke-base);
+  border-radius: 4px;
+  font-family: var(--fx-ds-mono);
+  font-size: 10.5px;
+  line-height: 16px;
+  font-weight: 500;
+  color: var(--fx-text-muted);
+  white-space: nowrap;
+}
+html[data-ui-theme="deepspace"] .fx-ds-link-kind[data-kind="tls"] { color: #3ab8ff; border-color: color-mix(in srgb, #3ab8ff 40%, transparent); }
+html[data-ui-theme="deepspace"] .fx-ds-link-kind[data-kind="wss"] { color: #c084fc; border-color: color-mix(in srgb, #c084fc 40%, transparent); }
+html[data-ui-theme="deepspace"] .fx-ds-link-kind[data-kind="nex"] { color: var(--fx-primary-fill); border-color: color-mix(in srgb, var(--fx-primary-fill) 40%, transparent); }
+html[data-ui-theme="deepspace"] .fx-ds-link-name { grid-area: name; display: flex; flex-direction: column; gap: 1px; min-width: 0; font-size: 14px; font-weight: 600; line-height: 20px; color: var(--fx-text); }
+html[data-ui-theme="deepspace"] .fx-ds-link-name > :not(:first-child) { font-size: 11px; font-weight: 400; line-height: 16px; }
+html[data-ui-theme="deepspace"] .fx-ds-link-warn { color: var(--fx-down-text); }
+html[data-ui-theme="deepspace"] .fx-ds-link-actions { grid-area: actions; display: flex; align-items: center; gap: 4px; }
+html[data-ui-theme="deepspace"] .fx-ds-link-actions button { min-height: 0; }
+html[data-ui-theme="deepspace"] .fx-ds-link-path { grid-area: path; display: flex; align-items: center; gap: 6px; min-width: 0; font-family: var(--fx-ds-mono); font-size: 12px; line-height: 18px; color: var(--fx-text-secondary); }
+html[data-ui-theme="deepspace"] .fx-ds-link-node { flex: 0 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+html[data-ui-theme="deepspace"] .fx-ds-link-edge { flex: none; display: inline-flex; align-items: center; gap: 4px; color: var(--fx-primary-fill); white-space: nowrap; }
+html[data-ui-theme="deepspace"] .fx-ds-link-edge::before { content: "──"; letter-spacing: -.1em; }
+html[data-ui-theme="deepspace"] .fx-ds-link-edge::after { content: "──▶"; letter-spacing: -.1em; }
+html[data-ui-theme="deepspace"] .fx-ds-link-edge[data-tone="warn"] { color: var(--fx-warn); }
+html[data-ui-theme="deepspace"] .fx-ds-link-edge[data-tone="down"] { color: var(--fx-down); }
+html[data-ui-theme="deepspace"] .fx-ds-link-edge[data-tone="off"] { color: var(--fx-text-muted); }
+html[data-ui-theme="deepspace"] .fx-ds-link-edge-lat:empty { display: none; }
+html[data-ui-theme="deepspace"] .fx-ds-link-via { padding: 0 4px; border: 1px solid var(--fx-stroke-base); border-radius: 4px; font-size: 10.5px; line-height: 14px; color: var(--fx-text-muted); }
+html[data-ui-theme="deepspace"] .fx-ds-link-lat,
+html[data-ui-theme="deepspace"] .fx-ds-link-spark,
+html[data-ui-theme="deepspace"] .fx-ds-link-total,
+html[data-ui-theme="deepspace"] .fx-ds-link-rules { display: none; }
+html[data-ui-theme="deepspace"] .fx-ds-link-days { grid-area: days; display: flex; align-items: center; gap: 10px; min-width: 0; }
+html[data-ui-theme="deepspace"] .fx-ds-link-days > [data-latency-history] { flex: 1 1 auto; }
+html[data-ui-theme="deepspace"] .fx-ds-link-days [data-latency-history] > span:first-child { font-family: var(--fx-ds-mono); }
+html[data-ui-theme="deepspace"] .fx-ds-link-pct,
+html[data-ui-theme="deepspace"] .fx-ds-link-muted { flex: none; font-family: var(--fx-ds-mono); font-size: 11.5px; color: var(--fx-text-muted); font-variant-numeric: tabular-nums; }
+html[data-ui-theme="deepspace"] .fx-ds-link-foot { grid-area: foot; display: flex; justify-content: space-between; gap: 12px; min-width: 0; font-family: var(--fx-ds-mono); font-size: 11.5px; line-height: 16px; color: var(--fx-text-muted); }
+html[data-ui-theme="deepspace"] .fx-ds-link-foot > span { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+html[data-ui-theme="deepspace"] .fx-ds-link-lat[data-tone="healthy"],
+html[data-ui-theme="deepspace"] .fx-ds-link-lat[data-tone="ok"] { color: var(--fx-primary-fill); }
+html[data-ui-theme="deepspace"] .fx-ds-link-lat[data-tone="warn"] { color: var(--fx-warn); }
+html[data-ui-theme="deepspace"] .fx-ds-link-lat[data-tone="down"] { color: var(--fx-down); }
+html[data-ui-theme="deepspace"] .fx-ds-link-lat[data-tone="off"] { color: var(--fx-text-muted); }
+@media (min-width: 768px) {
+  html[data-ui-theme="deepspace"] .fx-ds-link-head,
+  html[data-ui-theme="deepspace"] .fx-ds-link {
+    /* 最后一列（⋯ / 开关 / 拖动）给定宽：表头那一格是空的，auto 会让表头和行的列对不齐 */
+    grid-template-columns: 12px 52px minmax(140px, 1fr) minmax(220px, 2.2fr) 76px 150px minmax(170px, 210px) 84px 40px 120px;
+    grid-template-areas: "dot kind name path lat spark days total rules actions";
+    column-gap: 14px;
+    padding: 0 16px;
+  }
+  html[data-ui-theme="deepspace"] .fx-ds-link-head {
+    display: grid;
+    align-items: center;
+    min-height: 34px;
+    border-bottom: 1px solid var(--fx-card-stroke);
+    font-family: var(--fx-ds-mono);
+    font-size: 10.5px;
+    letter-spacing: .05em;
+    color: var(--fx-text-muted);
+    white-space: nowrap;
+  }
+  html[data-ui-theme="deepspace"] .fx-ds-link { min-height: 54px; row-gap: 0; }
+  html[data-ui-theme="deepspace"] .fx-ds-link:hover { background: var(--fx-hover); }
+  html[data-ui-theme="deepspace"] .fx-ds-link-name { font-size: 13px; }
+  html[data-ui-theme="deepspace"] .fx-ds-link-edge-lat { display: none; }
+  html[data-ui-theme="deepspace"] .fx-ds-link-lat { display: block; grid-area: lat; font-family: var(--fx-ds-mono); font-size: 12.5px; white-space: nowrap; }
+  html[data-ui-theme="deepspace"] .fx-ds-link-spark { display: block; grid-area: spark; width: 100%; height: 22px; opacity: .85; }
+  html[data-ui-theme="deepspace"] .fx-ds-link-total { display: block; grid-area: total; font-family: var(--fx-ds-mono); font-size: 12.5px; white-space: nowrap; color: var(--fx-text-secondary); font-variant-numeric: tabular-nums; }
+  html[data-ui-theme="deepspace"] .fx-ds-link-rules { display: block; grid-area: rules; font-family: var(--fx-ds-mono); font-size: 12.5px; color: var(--fx-text-muted); }
+  html[data-ui-theme="deepspace"] .fx-ds-link-days [data-latency-history] > span:first-child { display: none; }
+  html[data-ui-theme="deepspace"] .fx-ds-link-foot { display: none; }
+  html[data-ui-theme="deepspace"] .fx-ds-link-actions { justify-content: flex-end; }
+}
+
+/* ── 12. 总览（Home.tsx 的 deepspace 分支 + features/dashboard/DeepspacePanels.tsx）──────── */
+/*
+  数字格：四格带线的方块（手机 2×2，电脑一排四个），图标去掉，标签等宽大写；结论那一行收成格子下面的状态行。
+  下面两栏：左边流量 + 地区，右边小地图 + 事件日志（事件紧贴地图下面，不等左边流量那块画完）；
+  手机一栏，顺序 事件 → 流量 → 地区（要处理的事先看到），地图不放。
+*/
+html[data-ui-theme="deepspace"] .fx-ds-ov .system-health { gap: 0; padding: 0; overflow: hidden; border: 1px solid var(--fx-stroke-weak); border-radius: 10px; background: var(--fx-card-fill); box-shadow: none; }
+html[data-ui-theme="deepspace"] .fx-ds-ov .system-health .fx-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0; padding: 0; border: 0; border-radius: 0; background: transparent; }
+html[data-ui-theme="deepspace"] .fx-ds-ov .fx-summary-cell { padding: 12px 14px !important; border-left: 0 !important; border-right: 1px solid var(--fx-stroke-weak); border-bottom: 1px solid var(--fx-stroke-weak); }
+html[data-ui-theme="deepspace"] .fx-ds-ov .fx-summary-cell:nth-child(2n) { border-right: 0; }
+html[data-ui-theme="deepspace"] .fx-ds-ov .fx-summary-cell > span:first-child > span:not(.truncate) { display: none; }
+html[data-ui-theme="deepspace"] .fx-ds-ov .fx-summary-cell > span:first-child { font-family: var(--fx-ds-mono); font-size: 11px; letter-spacing: .04em; text-transform: uppercase; }
+html[data-ui-theme="deepspace"] .fx-ds-ov .fx-summary-cell > span:last-child { font-family: var(--fx-ds-mono); font-size: 11.5px; }
+html[data-ui-theme="deepspace"] .fx-ds-ov .system-health-verdict { margin: 0; border: 0; border-radius: 0; padding: 9px 14px; font-family: var(--fx-ds-mono); }
+html[data-ui-theme="deepspace"] .fx-ds-ov .system-health-verdict .text-primary-type { font-size: 13px; }
+html[data-ui-theme="deepspace"] .fx-ds-ov .system-health-verdict button { min-height: 0; }
+@media (min-width: 768px) {
+  html[data-ui-theme="deepspace"] .fx-ds-ov .system-health .fx-summary { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  html[data-ui-theme="deepspace"] .fx-ds-ov .fx-summary-cell:nth-child(2n) { border-right: 1px solid var(--fx-stroke-weak); }
+  html[data-ui-theme="deepspace"] .fx-ds-ov .fx-summary-cell:last-child { border-right: 0; }
+}
+
+html[data-ui-theme="deepspace"] .fx-ds-ov-grid { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+html[data-ui-theme="deepspace"] .fx-ds-ov-grid > .fx-ds-events { order: 1; }
+html[data-ui-theme="deepspace"] .fx-ds-ov-main { order: 2; min-width: 0; }
+html[data-ui-theme="deepspace"] .fx-ds-ov-grid > .fx-ds-regions { order: 3; }
+html[data-ui-theme="deepspace"] .fx-ds-ov-map { display: none; min-width: 0; }
+@media (min-width: 1024px) {
+  html[data-ui-theme="deepspace"] .fx-ds-ov-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+    grid-template-rows: auto auto 1fr;
+    grid-template-areas: "main map" "main events" "regions events";
+    align-items: start;
+  }
+  html[data-ui-theme="deepspace"] .fx-ds-ov-main { grid-area: main; }
+  html[data-ui-theme="deepspace"] .fx-ds-ov-map { display: block; grid-area: map; }
+  html[data-ui-theme="deepspace"] .fx-ds-ov-grid > .fx-ds-regions { grid-area: regions; }
+  html[data-ui-theme="deepspace"] .fx-ds-ov-grid > .fx-ds-events { grid-area: events; }
+}
+
+html[data-ui-theme="deepspace"] .fx-ds-panel { min-width: 0; overflow: hidden; border: 1px solid var(--fx-stroke-weak); border-radius: 10px; background: var(--fx-card-fill); }
+html[data-ui-theme="deepspace"] .fx-ds-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 14px; border-bottom: 1px solid var(--fx-stroke-weak); font-family: var(--fx-ds-mono); font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--fx-text-muted); }
+html[data-ui-theme="deepspace"] .fx-ds-panel-head > b { font-family: inherit; font-size: 13px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--fx-text); }
+html[data-ui-theme="deepspace"] .fx-ds-panel-foot { margin: 0; padding: 8px 14px; font-family: var(--fx-ds-mono); font-size: 11px; color: var(--fx-text-muted); }
+
+html[data-ui-theme="deepspace"] .fx-ds-event { display: grid; grid-template-columns: 40px 46px minmax(0, 1fr); align-items: baseline; gap: 8px; width: 100%; min-height: 0; padding: 8px 14px; border: 0; border-bottom: 1px solid var(--fx-stroke-weak); background: transparent; color: var(--fx-text); font-size: 12.5px; text-align: left; }
+html[data-ui-theme="deepspace"] button.fx-ds-event { cursor: pointer; }
+html[data-ui-theme="deepspace"] button.fx-ds-event:hover { background: var(--fx-hover); }
+html[data-ui-theme="deepspace"] .fx-ds-event-time { font-family: var(--fx-ds-mono); font-size: 11px; color: var(--fx-text-muted); }
+html[data-ui-theme="deepspace"] .fx-ds-event-level { font-family: var(--fx-ds-mono); font-size: 10.5px; color: var(--fx-text-muted); }
+html[data-ui-theme="deepspace"] .fx-ds-event[data-tone="down"] .fx-ds-event-level { color: var(--fx-down-text); }
+html[data-ui-theme="deepspace"] .fx-ds-event[data-tone="warn"] .fx-ds-event-level { color: var(--fx-warn-text); }
+html[data-ui-theme="deepspace"] .fx-ds-event[data-tone="ok"] .fx-ds-event-level { color: var(--fx-accent); }
+html[data-ui-theme="deepspace"] .fx-ds-event-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html[data-ui-theme="deepspace"] .fx-ds-event-text > b { font-weight: 600; }
+html[data-ui-theme="deepspace"] .fx-ds-event-text > span { color: var(--fx-text-muted); }
+
+html[data-ui-theme="deepspace"] .fx-ds-region { display: grid; grid-template-columns: 30px minmax(0, 1fr) 40px 58px 34px; align-items: center; gap: 8px; min-height: 42px; padding: 0 14px; border-bottom: 1px solid var(--fx-stroke-weak); font-size: 13px; }
+html[data-ui-theme="deepspace"] .fx-ds-region:last-child { border-bottom: 0; }
+html[data-ui-theme="deepspace"] .fx-ds-region-code,
+html[data-ui-theme="deepspace"] .fx-ds-region-count,
+html[data-ui-theme="deepspace"] .fx-ds-region-online { font-family: var(--fx-ds-mono); font-size: 11.5px; color: var(--fx-text-muted); }
+html[data-ui-theme="deepspace"] .fx-ds-region-city { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html[data-ui-theme="deepspace"] .fx-ds-region-lat { font-family: var(--fx-ds-mono); font-size: 12.5px; color: var(--fx-accent); }
+html[data-ui-theme="deepspace"] .fx-ds-region[data-tone="warn"] .fx-ds-region-lat { color: var(--fx-warn-text); }
+html[data-ui-theme="deepspace"] .fx-ds-region[data-tone="down"] .fx-ds-region-lat { color: var(--fx-down-text); }
+html[data-ui-theme="deepspace"] .fx-ds-region-online { text-align: right; }
+html[data-ui-theme="deepspace"] .fx-ds-region-cells { display: none; }
+html[data-ui-theme="deepspace"] .fx-ds-region-cells > i { display: block; width: 8px; height: 14px; border-radius: 1px; background: var(--fx-accent); }
+html[data-ui-theme="deepspace"] .fx-ds-region-cells > i[data-tone="warn"] { background: var(--fx-warn-text); }
+html[data-ui-theme="deepspace"] .fx-ds-region-cells > i[data-tone="down"] { background: var(--fx-down-text); }
+html[data-ui-theme="deepspace"] .fx-ds-region-cells > i[data-tone="muted"] { background: var(--fx-stroke-strong); }
+@media (min-width: 768px) {
+  html[data-ui-theme="deepspace"] .fx-ds-region { grid-template-columns: 40px minmax(0, 1fr) 52px 72px minmax(80px, 1.4fr) 44px; min-height: 46px; }
+  html[data-ui-theme="deepspace"] .fx-ds-region-cells { display: flex; flex-wrap: wrap; gap: 3px; }
+}

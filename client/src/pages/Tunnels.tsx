@@ -12,6 +12,7 @@ import { useLocation, useSearch } from "wouter";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
 import { HeaderStatusChips } from "@/components/HeaderStatusChips";
 import { Sparkline } from "@/components/charts/Sparkline";
+import { useUiTheme } from "@/hooks/useUiTheme";
 import { hourlySlots } from "@/lib/hourlySlots";
 import { describeNetworkHealth } from "@shared/networkHealth";
 import { NetworkPath } from "@/components/network/NetworkPath";
@@ -161,7 +162,7 @@ import {
 } from "@shared/exitStrategy";
 import MultiHopEditor from "@/components/MultiHopEditor";
 import { ForwardGroupsContent } from "@/pages/ForwardGroups";
-import { LatencyHistoryDayStrip } from "@/components/LatencyHistoryDays";
+import { buildLatencyHistoryDays, LatencyHistoryDayStrip, summarizeLatencyHistory } from "@/components/LatencyHistoryDays";
 import { EntityActions } from "@/components/entity/EntityActions";
 
 const ReactGlobe = lazy(loadReactGlobe) as typeof import("react-globe.gl").default;
@@ -806,6 +807,8 @@ function getTunnelModeDisplay(mode: unknown, showNginxLabel = true, forwardxVers
 }
 
 type TunnelViewMode = "card" | "table" | "globe";
+/** SortableItem 交给每一行的那份状态（itemProps / handleProps / 是否在拖） */
+type SortableItemState = Parameters<Parameters<typeof SortableItem>[0]["children"]>[0];
 type TunnelSection = "lines" | "tunnels" | "ports" | "chains" | "pools" | "groups" | "aggregates" | "entries" | "exits" | "routes";
 type TunnelGroupMode = "port" | "failover" | "entry" | "exit";
 
@@ -2130,6 +2133,8 @@ function TunnelsContent() {
   const [preferredViewMode, setViewMode] = useState<TunnelViewMode>(() => getStoredTunnelViewMode());
   const [preferredChainViewMode, setChainViewMode] = useState<TunnelViewMode>(() => getStoredChainViewMode());
   const compactLayout = useCompactLayout();
+  // 深空主题：隧道链路画成一行一条（手机）/ 一张表（桌面），不分卡片和表格两档
+  const dsLinkRows = useUiTheme() === "deepspace";
   const isMobile = useIsMobile();
   /*
     精简布局（桌面）：链路页的几个列表都是表（用户 2026-10-21 定的「条状」）；记住的卡片视图不动，
@@ -2554,6 +2559,7 @@ function TunnelsContent() {
     },
   );
   const pagedTunnels = tunnelPagination.items;
+  type TunnelListItem = (typeof pagedTunnels)[number];
   /**
    * 链路状态点。
    *
@@ -2581,7 +2587,8 @@ function TunnelsContent() {
     const { health, message } = tunnelHealthOf(tunnel, supported);
     return <StatusDot health={health} size="large" label={message} />;
   };
-  const renderTunnelRoute = (tunnel: any, compact = false, orientation?: "auto" | "horizontal" | "vertical", showVia = true, showLatency = true) => {
+  /* 一条隧道的路径（节点 + 边）。卡片画成 NetworkPath，深空的行把它压成一行「入口 ── ms ──▶ 出口」，两边用同一份 */
+  const tunnelPathOf = (tunnel: TunnelListItem, showVia = true, showLatency = true) => {
     const entryGroup = Number(tunnel?.entryGroupId || 0) > 0 ? entryGroupById.get(Number(tunnel.entryGroupId)) : null;
     /*
       换成 Path 语言：位置本身说明谁是入口谁是出口，不再给每个节点贴
@@ -2592,7 +2599,7 @@ function TunnelsContent() {
       真正有信息量的东西：地区、经过谁、多少 ms。
     */
     const { health } = tunnelHealthOf(tunnel);
-    const path = buildTunnelPath(tunnel, {
+    return buildTunnelPath(tunnel, {
       hosts,
       entryGroup: entryGroup ? { id: Number(entryGroup.id), name: entryGroup.name, domain: entryGroup.domain } : null,
       entryGroupMemberHostIds: entryGroup
@@ -2604,6 +2611,9 @@ function TunnelsContent() {
       // 链路卡的副标题已经写了模式（「GOST TLS · 直连」），线旁边不再重复一遍，路径就是一行
       via: showVia ? getTunnelModeDisplay(tunnel?.mode, true, tunnel?.forwardxVersion) : undefined,
     });
+  };
+  const renderTunnelRoute = (tunnel: any, compact = false, orientation?: "auto" | "horizontal" | "vertical", showVia = true, showLatency = true) => {
+    const path = tunnelPathOf(tunnel, showVia, showLatency);
     return (
       <div title={path.title}>
         <NetworkPath nodes={path.nodes} edges={path.edges} orientation={orientation ?? (compact ? "auto" : "vertical")} />
@@ -4117,10 +4127,8 @@ function TunnelsContent() {
     down: "var(--fx-down)",
     off: "var(--fx-text-muted)",
   };
-  const renderTunnelCard = (
-    tunnel: any,
-    sortable: { itemProps: any; handleProps: any; isDragging: boolean; isDropTarget: boolean },
-  ) => {
+  /* 卡片和深空的行共用的那一份推算：状态色、延迟、评级、走势、可用率。两边只是画法不同 */
+  const deriveTunnelView = (tunnel: TunnelListItem) => {
     const supported = isTunnelSupported(tunnel);
     const protocolKey = getTunnelProtocolKey(tunnel);
     const { health } = tunnelHealthOf(tunnel, supported);
@@ -4155,6 +4163,13 @@ function TunnelsContent() {
     const historySummaries = historyByTunnel.get(Number(tunnel.id));
     const noLatencyData = !hasLatency && !(spark?.values?.length) && availPct == null && !(Array.isArray(historySummaries) && historySummaries.length);
     const oneLineFoot = compactLayout && noLatencyData;
+    return { supported, protocolKey, tone, toneColor, statusText, hopCount, hasEntryGroup, availabilityStatus, subtitle, broken, latencyMs, hasLatency, timeout, rating, ratingTone, spark, availPct, availTone, historySummaries, noLatencyData, oneLineFoot };
+  };
+  const renderTunnelCard = (
+    tunnel: any,
+    sortable: { itemProps: any; handleProps: any; isDragging: boolean; isDropTarget: boolean },
+  ) => {
+    const { supported, protocolKey, tone, toneColor, statusText, hopCount, hasEntryGroup, availabilityStatus, subtitle, broken, latencyMs, hasLatency, timeout, rating, ratingTone, spark, availPct, availTone, historySummaries, oneLineFoot } = deriveTunnelView(tunnel);
     return (
       <Card
         {...sortable.itemProps}
@@ -4219,7 +4234,7 @@ function TunnelsContent() {
           ) : (
           <div className="fx-tunnel-foot">
             {hasLatency ? (
-              <div className="fx-rule-num"><b>{Math.round(latencyMs)}</b><small>ms</small></div>
+              <div className="fx-rule-num"><b>{Math.round(latencyMs as number)}</b><small>ms</small></div>
             ) : (
               <span className="fx-tunnel-none">{broken ? "不通" : timeout ? "超时" : "未测试"}</span>
             )}
@@ -4253,7 +4268,7 @@ function TunnelsContent() {
               title={hasLatency ? "最近一次测得的延迟" : timeout ? "最近一次测试超时" : statusText}
             >
               {hasLatency
-                ? `${Math.round(latencyMs)} ms`
+                ? `${Math.round(latencyMs as number)} ms`
                 : !supported || availabilityStatus === "unavailable" || availabilityStatus === "disabled" || availabilityStatus === "degraded"
                   ? statusText
                   : timeout ? "超时" : availabilityStatus === "pending" ? "等待检测" : "未测试"}
@@ -4273,6 +4288,80 @@ function TunnelsContent() {
           ) : null}
         </CardContent>
       </Card>
+    );
+  };
+  /*
+    深空主题的链路行（只在深空下用，别的主题照旧画卡片 / 表格）：
+      手机  状态点 · 类型标签 · 名字 · ⋯ 开关 / 「入口 ── 46 ms ──▶ 出口」/ 30 天色块 + 可用率 / 累计 · 规则数
+      桌面  一行一条，列：状态 / 类型 / 名称 / 路径 / 延迟 / 24H 走势 / 30 天 / 累计 / 规则 / 开关
+    数据和卡片是同一份（deriveTunnelView、tunnelPathOf），只是排法不同。
+  */
+  const renderTunnelRow = (tunnel: TunnelListItem, sortable: SortableItemState) => {
+    const { supported, protocolKey, tone, toneColor, statusText, broken, latencyMs, hasLatency, timeout, ratingTone, spark, historySummaries } = deriveTunnelView(tunnel);
+    const modeText = getTunnelModeDisplay(tunnel.mode, nginxTunnelEnabled, tunnel.forwardxVersion, tunnel.wireGuardPlane);
+    const kindText = modeText.split(" · ")[0].replace(/^GOST\s+/i, "");
+    const kindKey = /tls/i.test(kindText) ? "tls" : /ws/i.test(kindText) ? "wss" : /nex/i.test(kindText) ? "nex" : "other";
+    const path = tunnelPathOf(tunnel, false, false);
+    const first = path.nodes[0];
+    const last = path.nodes.length > 1 ? path.nodes[path.nodes.length - 1] : null;
+    const lastLabel = last
+      ? last.id === "load-balance-exits"
+        ? `负载均衡 ×${String(last.sublabel || "").split(" / ").filter(Boolean).length || 1}`
+        : last.name
+      : null;
+    const relays = Math.max(0, path.nodes.length - 2);
+    const latencyText = hasLatency ? `${Math.round(latencyMs as number)} ms` : broken ? "中断" : timeout ? "超时" : !supported ? "不支持" : tone === "off" ? statusText : "未测试";
+    const latencyTone = hasLatency ? ratingTone : broken || timeout ? "down" : "off";
+    const days = buildLatencyHistoryDays(historySummaries);
+    const overall = summarizeLatencyHistory(days);
+    const dayPct = overall.lossPercent == null ? null : Math.max(0, 100 - overall.lossPercent);
+    const summary = tunnel.trafficSummary;
+    return (
+      <div
+        {...sortable.itemProps}
+        className={cn("group/sortable fx-ds-link", sortable.isDragging && "opacity-55", sortable.isDropTarget && "fx-ds-link-drop")}
+        data-tone={tone}
+        title={!supported ? unsupportedProtocolTitle : undefined}
+      >
+        <span className="fx-ds-link-dot">{renderTunnelStatusDot(tunnel, supported)}</span>
+        <span className="fx-ds-link-kind" data-kind={kindKey} title={modeText}>{kindText}</span>
+        <div className="fx-ds-link-name">
+          <span className="truncate">{tunnel.name}</span>
+          {!supported ? <span className="fx-ds-link-warn">{tunnelProtocolLabel(protocolKey)} 当前不支持</span> : null}
+          <TunnelFxpIssueNotice tunnel={tunnel} as="span" />
+        </div>
+        <div className="fx-ds-link-path" title={path.title}>
+          <span className="fx-ds-link-node">{first?.name || "—"}</span>
+          {last ? (
+            <span className="fx-ds-link-edge" data-tone={latencyTone}>
+              {relays > 0 ? <span className="fx-ds-link-via">+{relays}</span> : null}
+              <span className="fx-ds-link-edge-lat">{broken ? "✕" : hasLatency ? latencyText : ""}</span>
+            </span>
+          ) : null}
+          {last ? <span className="fx-ds-link-node">{lastLabel}</span> : null}
+        </div>
+        <span className="fx-ds-link-lat" data-tone={latencyTone}>{latencyText}</span>
+        <Sparkline values={spark?.values || []} width={150} height={22} stroke={toneColor} className="fx-ds-link-spark" title="近 24 小时延迟走势" />
+        <div className="fx-ds-link-days">
+          {supported ? <LatencyHistoryDayStrip variant="compact" summaries={historySummaries} loading={!tunnelHistoryRows} /> : <span className="fx-ds-link-muted">—</span>}
+          <span className="fx-ds-link-pct">{dayPct == null ? "—" : formatStatPercent(dayPct, 1)}</span>
+        </div>
+        <span className="fx-ds-link-total" title={summary ? `累计 ${formatBytes(summary.totalBytes)} · 入向 ${formatBytes(summary.bytesIn)} · 出向 ${formatBytes(summary.bytesOut)}` : undefined}>{summary ? formatBytes(summary.totalBytes) : "—"}</span>
+        <span className="fx-ds-link-rules">{summary ? summary.ruleCount : "—"}</span>
+        <div className="fx-ds-link-foot">
+          <span>累计 {summary ? formatBytes(summary.totalBytes) : "—"} · {summary ? summary.ruleCount : 0} 条规则</span>
+          <span>{spark?.avgMs != null ? `24H 均 ${spark.avgMs} · 高 ${spark.maxMs} ms` : statusText}</span>
+        </div>
+        <div className="fx-ds-link-actions">
+          {renderTunnelActions(tunnel, supported, true)}
+          {supported ? (
+            renderTunnelEnabledSwitch(tunnel)
+          ) : (
+            renderUnsupportedHint(<span className="inline-flex"><Switch aria-label="当前协议不支持" checked={false} disabled className="switch-compact" /></span>)
+          )}
+          <SortableDragHandle dragHandleProps={sortable.handleProps} visible={sortable.isDragging} busy={tunnelReorderPending} />
+        </div>
+      </div>
     );
   };
   const tunnelTableRouteText = (tunnel: any) => {
@@ -4421,7 +4510,29 @@ function TunnelsContent() {
         <DataSectionLoading label="正在加载隧道数据" />
       ) : tunnels && tunnelItems.length > 0 ? (
         <>
-        {tunnelListViewMode === "card" ? (
+        {dsLinkRows ? (
+          <SortableReorderContext sortable={tunnelSortable} ids={pagedTunnels.map((tunnel) => Number(tunnel.id))} strategy="vertical" restrictToList>
+          <div className="fx-ds-link-list">
+            <div className="fx-ds-link-head" aria-hidden="true">
+              <span />
+              <span>类型</span>
+              <span>名称</span>
+              <span>路径</span>
+              <span>延迟</span>
+              <span>24H 走势</span>
+              <span>30 天可用</span>
+              <span>累计</span>
+              <span>规则</span>
+              <span />
+            </div>
+            {pagedTunnels.map((tunnel) => (
+              <SortableItem key={tunnel.id} id={Number(tunnel.id)} disabled={tunnelSortable.disabled}>
+                {(sortable) => renderTunnelRow(tunnel, sortable)}
+              </SortableItem>
+            ))}
+          </div>
+          </SortableReorderContext>
+        ) : tunnelListViewMode === "card" ? (
           <SortableReorderContext sortable={tunnelSortable} ids={pagedTunnels.map((tunnel: any) => Number(tunnel.id))} strategy="rect">
           <div className="standard-card-grid items-start gap-4">
             {pagedTunnels.map((tunnel: any) => (

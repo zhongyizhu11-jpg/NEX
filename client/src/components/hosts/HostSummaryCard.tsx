@@ -230,6 +230,30 @@ const speedText = (value: number | null) => (value === null ? "—" : `${formatB
  * 服务端没给数（老版本）就不画右边。
  */
 export function HostFootRow({ host, vitals, now }: { host: any; vitals: HostVitals; now: number }) {
+  const { left, tone, right, rightMuted } = hostFootText(host, vitals, now);
+  return (
+    <div className="fx-host-foot" data-tone={tone}>
+      <span>{left}</span>
+      {right ? <span className="fx-host-foot-links" data-muted={rightMuted ? "" : undefined}>{right}</span> : null}
+    </div>
+  );
+}
+
+/** 「离线多久」那一截（「18 分钟」），没心跳记录时是空串。卡片底行和深空主机行共用。 */
+type SummaryHost = HostSummaryCardProps["host"];
+
+export function hostOfflineAgo(host: SummaryHost, now: number): string {
+  const seen = host?.lastHeartbeat ? new Date(host.lastHeartbeat).getTime() : NaN;
+  return Number.isFinite(seen) && seen > 0 ? formatAgo(now - seen).replace(/前$/, "") : "";
+}
+
+/** 底行的两段文字：左边速率 / 离线多久，右边挂了几条转发、几条线路经过。卡片和深空主机行共用一份。 */
+export function hostFootText(host: SummaryHost, vitals: HostVitals, now: number): {
+  left: string;
+  tone: "warn" | "down" | undefined;
+  right: string | null;
+  rightMuted: boolean;
+} {
   const ruleCount = Number(host?.ruleCount);
   const tunnelCount = Number(host?.tunnelCount);
   const hasCounts = Number.isFinite(ruleCount) || Number.isFinite(tunnelCount);
@@ -244,8 +268,7 @@ export function HostFootRow({ host, vitals, now }: { host: any; vitals: HostVita
     left = "还没上报过";
   } else {
     tone = "down";
-    const seen = host?.lastHeartbeat ? new Date(host.lastHeartbeat).getTime() : NaN;
-    const ago = Number.isFinite(seen) && seen > 0 ? formatAgo(now - seen).replace(/前$/, "") : "";
+    const ago = hostOfflineAgo(host, now);
     // 离线前没在跑流量就不写「离线前 ↓ 0 B/s」—— 那是一句没有信息的红字。
     const lastIn = Number(vitals.speedIn || 0);
     const lastOut = Number(vitals.speedOut || 0);
@@ -267,27 +290,27 @@ export function HostFootRow({ host, vitals, now }: { host: any; vitals: HostVita
     }
   }
 
-  return (
-    <div className="fx-host-foot" data-tone={tone}>
-      <span>{left}</span>
-      {right ? <span className="fx-host-foot-links" data-muted={rightMuted ? "" : undefined}>{right}</span> : null}
-    </div>
-  );
+  return { left, tone, right, rightMuted };
 }
 
-export default function HostSummaryCard(props: HostSummaryCardProps) {
-  const { host, metrics, traffic } = props;
-  const confirmDialog = useConfirmDialog();
+/**
+ * 列表上一台主机要画的东西（名字、系统、地区、首个地址、Agent 版本、占用和速率）。
+ * Summary 卡和「深空」主题的主机行共用这一份推导 —— 两种画法，同一套口径。
+ */
+export function deriveHostSummaryView(host: SummaryHost, metrics: HostSummaryCardProps["metrics"], traffic: HostSummaryCardProps["traffic"]) {
   const vitals = deriveHostVitals(host, metrics, traffic);
-
   const name = String(host?.name || "-").trim() || "-";
   const os = hostOsOf(host);
   // 注脚里只写城市（「Tokyo」），没有城市才写国家：一行是地区 · IP（能升级再加「可升级」）。
   const region = String(host?.geoRegion || "").trim() || hostRegionText(host);
   const address = hostPrimaryAddressLines(host).map((row) => row.value).filter((value) => value && value !== "-")[0] || "";
   const agentVersion = String(host?.agentVersion ?? "").trim().replace(/^v/i, "");
-  const now = Date.now();
+  return { vitals, name, os, region, address, agentVersion };
+}
 
+/** 卡片 / 行右上角那组操作（含删除前的确认）。 */
+export function useHostEntityActions(props: HostSummaryCardProps) {
+  const confirmDialog = useConfirmDialog();
   const confirmDelete = async () => {
     if (
       await confirmDialog({
@@ -297,11 +320,18 @@ export default function HostSummaryCard(props: HostSummaryCardProps) {
         tone: "destructive",
       })
     ) {
-      props.onDelete(host.id);
+      props.onDelete(props.host.id);
     }
   };
+  return buildHostActions({ ...props, onConfirmDelete: () => void confirmDelete() });
+}
 
-  const { primary, menu } = buildHostActions({ ...props, onConfirmDelete: () => void confirmDelete() });
+export default function HostSummaryCard(props: HostSummaryCardProps) {
+  const { host, metrics, traffic } = props;
+  const { vitals, name, os, region, address, agentVersion } = deriveHostSummaryView(host, metrics, traffic);
+  const now = Date.now();
+
+  const { primary, menu } = useHostEntityActions(props);
 
   return (
     <EntityCard
