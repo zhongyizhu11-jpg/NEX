@@ -47,7 +47,7 @@ function ItemRow({ item }: { item: NetTuneItem }) {
   );
 }
 
-export default function HostNetTuneSection({ host }: { host: any }) {
+export default function HostNetTuneSection({ host }: { host: { id?: number | string | null } }) {
   const hostId = Number(host?.id);
   const statusQuery = trpc.ops.netTune.status.useQuery({ hostId }, {
     enabled: hostId > 0,

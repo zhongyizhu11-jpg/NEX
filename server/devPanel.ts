@@ -1,5 +1,3 @@
-import { recordAgentRuntimeStats } from "./ops/agentRuntime";
-import { seedNetTuneDemoResult } from "./ops/netTuneAgent";
 import { eq } from "drizzle-orm";
 import { users } from "../drizzle/schema";
 import { MIGRATION_TABLES } from "./dbSchema";
@@ -2685,7 +2683,12 @@ async function seedSettings() {
   只在内存里的几样 Agent 数据（心跳带来的运行状态、网络调优的检查结果），面板重启就没了；
   开发面板没有真 Agent，这里放一份演示值，主机详情里那几节才看得到样子。
 */
-function seedAgentMemoryDemo(hostIds: number[]) {
+async function seedAgentMemoryDemo(hostIds: number[]) {
+  // 动态导入：devPanel 被很多模块引用，静态导入会和扩展通道（ops/agentExt）绕成环，模块初始化时撞上 TDZ。
+  const [{ recordAgentRuntimeStats }, { seedNetTuneDemoResult }] = await Promise.all([
+    import("./ops/agentRuntime"),
+    import("./ops/netTuneAgent"),
+  ]);
   const [first, second] = hostIds;
   if (first) {
     recordAgentRuntimeStats(first, {
@@ -2801,7 +2804,7 @@ export async function seedDevPanelData(options: { lineDemo?: boolean } = {}) {
   }
   await seedProbeServices(adminId, hostIds);
   await seedNetworkProfiles(hostIds);
-  seedAgentMemoryDemo(hostIds);
+  await seedAgentMemoryDemo(hostIds).catch((error) => console.warn(`[DevPanel] agent memory demo seed failed: ${error instanceof Error ? error.message : String(error)}`));
   const catalog = await seedCatalog(adminId, resources, hostIds);
   await seedUserState(usersSeed, hostIds, resources, rules, catalog);
   await seedForwardTests(usersSeed, rules, hostIds);

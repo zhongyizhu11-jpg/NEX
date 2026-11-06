@@ -4,8 +4,8 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { SettingList, SettingRow } from "@/components/SettingRow";
 import { trpc } from "@/lib/trpc";
 import { formatBytes } from "@shared/formatBytes";
@@ -111,11 +111,11 @@ export default function PanelProfilingCard() {
             keepDescription
             description={enabled ? `还剩约 ${minutesLeft(enabledUntil, now)} 分钟自动关闭；关闭时采好的文件一起删除` : "关闭时不能采集，也不能下载"}
             control={(
-              <Checkbox
+              <Switch
                 aria-label="开启性能剖析"
                 checked={enabled}
                 disabled={setEnabled.isPending || !status}
-                onCheckedChange={(value) => setEnabled.mutate({ enabled: value === true })}
+                onCheckedChange={(value) => setEnabled.mutate({ enabled: value })}
               />
             )}
           />
