@@ -4944,6 +4944,7 @@ function SystemInfoSection() {
   const [publicHostMonitorPath, setPublicHostMonitorPath] = useState("dev");
   const [publicHostMonitorTitle, setPublicHostMonitorTitle] = useState("");
   const [allowMultiDeviceLogin, setAllowMultiDeviceLogin] = useState(false);
+  const [loginNewDeviceNotify, setLoginNewDeviceNotify] = useState(true);
   const [updateAutoCheckEnabled, setUpdateAutoCheckEnabled] = useState(true);
   const [showForwardProtocolDialog, setShowForwardProtocolDialog] = useState(false);
   const [showSidebarMenuDialog, setShowSidebarMenuDialog] = useState(false);
@@ -4981,6 +4982,7 @@ function SystemInfoSection() {
       setTwoFactorEnabled(!!settings.twoFactorEnabled);
       setLookingGlassUserEnabled(settings.lookingGlassUserEnabled ?? true);
       setAllowMultiDeviceLogin(!!settings.allowMultiDeviceLogin);
+      setLoginNewDeviceNotify((settings as any).loginNewDeviceNotify !== false);
       setUpdateAutoCheckEnabled(settings.upgrade?.autoCheckEnabled !== false);
       setForwardProtocols(normalizeForwardProtocolSettings(settings.forwardProtocols));
       setSidebarMenu(normalizeSidebarMenuSettings({
@@ -5370,7 +5372,7 @@ function SystemInfoSection() {
   };
 
   const handleSaveSessionPolicy = () => {
-    return saveSystemSettings("sessionPolicy", { allowMultiDeviceLogin });
+    return saveSystemSettings("sessionPolicy", { allowMultiDeviceLogin, loginNewDeviceNotify });
   };
 
   const handleSaveEntryBridge = () => {
@@ -5521,7 +5523,7 @@ function SystemInfoSection() {
       ),
       save: handleSavePublicHostMonitor,
     },
-    { id: "sessionPolicy", label: "登录设备", dirty: !!settings && allowMultiDeviceLogin !== !!settings.allowMultiDeviceLogin, save: handleSaveSessionPolicy },
+    { id: "sessionPolicy", label: "登录设备", dirty: !!settings && (allowMultiDeviceLogin !== !!settings.allowMultiDeviceLogin || loginNewDeviceNotify !== ((settings as any).loginNewDeviceNotify !== false)), save: handleSaveSessionPolicy },
     {
       id: "agentInstall",
       label: "Agent 安装",
@@ -6590,6 +6592,12 @@ function SystemInfoSection() {
               label="允许多设备在线"
               description="关闭时后登录的设备会立即接管，正在使用的旧会话将退出；仅保留 Cookie 但未在使用的设备不会阻止新登录。"
               control={<Checkbox aria-label="允许多设备在线" checked={allowMultiDeviceLogin} onCheckedChange={setAllowMultiDeviceLogin} />}
+            />
+            <SettingRow
+              asLabel
+              label="新设备登录提醒"
+              description="账号在没见过的设备或网络上登录时，用邮件和 Telegram 提醒本人；管理员账号还会记进事件时间线。每人每天最多 5 次。"
+              control={<Checkbox aria-label="新设备登录提醒" checked={loginNewDeviceNotify} onCheckedChange={(value) => setLoginNewDeviceNotify(value === true)} />}
             />
             <SettingRow
               label="左侧导航栏常用入口"

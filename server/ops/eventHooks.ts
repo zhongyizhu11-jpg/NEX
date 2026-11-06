@@ -388,6 +388,24 @@ export function recordLoginSuccessEvent(user: any, ip: string) {
   recordSoon({ kind: "account.login", level: "info", userId, message: `管理员 ${name} 登录（${String(ip || "未知 IP").slice(0, 64)}）`, data: { ip } });
 }
 
+/**
+ * 新设备 / 异地登录（server/ops/loginDevices.ts 判断）。所有人都提醒本人；进时间线的只有管理员账号 ——
+ * 管理员账号被别人登上了，是整个面板的事。
+ */
+export function recordNewDeviceLoginEvent(user: any, detail: { what: string; device: string; ip: string; location: string }) {
+  if (String(user?.role || "") !== "admin") return;
+  const userId = Number(user?.id || 0) || null;
+  const name = shortName(user?.name || user?.username, `#${userId || "?"}`);
+  const where = [String(detail.ip || "未知 IP").slice(0, 64), detail.location].filter(Boolean).join(" · ");
+  recordSoon({
+    kind: "account.login_new_device",
+    level: "warn",
+    userId,
+    message: `管理员 ${name} ${detail.what}：${detail.device}（${where}）`,
+    data: { ip: detail.ip, device: detail.device, location: detail.location },
+  });
+}
+
 const LOGIN_FAIL_WINDOW_MS = 15 * 60 * 1000;
 /** 同一个 IP 连续失败到这几次时各记一条；一两次输错密码不值得进时间线。 */
 const LOGIN_FAIL_THRESHOLDS = new Set([5, 20, 100]);

@@ -33,6 +33,7 @@ export type PanelEventKind =
   | "security.finding"
   | "account.login"
   | "account.login_failed"
+  | "account.login_new_device"
   | "account.api_token_created"
   | "account.passkey_added"
   | "account.passkey_removed"
