@@ -17,7 +17,7 @@
 import { createHash } from "node:crypto";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { gunzipSync } from "node:zlib";
+import { brotliDecompressSync, gunzipSync, inflateSync } from "node:zlib";
 import compression from "compression";
 import express from "express";
 
@@ -433,7 +433,7 @@ async function get(port: number, path: string, userAgent: string, acceptEncoding
         const encoding = String(res.headers["content-encoding"] || "");
         resolve({
           status: res.statusCode || 0,
-          body: encoding === "gzip" ? gunzipSync(raw) : raw,
+          body: encoding === "gzip" ? gunzipSync(raw) : encoding === "br" ? brotliDecompressSync(raw) : encoding === "deflate" ? inflateSync(raw) : raw,
           type: String(res.headers["content-type"] || ""),
           etag: String(res.headers.etag || ""),
           encoding,
@@ -452,13 +452,32 @@ if (mode === "golden") {
   const counts = await runtime.withDatabaseTransaction(() => seed(SCALES.golden));
   const { server, port } = await startServer();
   const sha = (body: Buffer) => createHash("sha256").update(body).digest("hex");
+  const same = (a: Fetched, b: Fetched) => a.status === b.status && sha(a.body) === sha(b.body) && a.type === b.type && a.etag === b.etag;
+  const cold = new Map<string, Fetched>();
   for (const request of goldenRequests()) {
     const plain = await get(port, request.path, request.userAgent);
+    cold.set(request.label, plain);
     // 同一条再带 gzip 拉一次：解压后必须和不压的逐字节一样，头也一样。
     const gzipped = await get(port, request.path, request.userAgent, "gzip");
-    const gzipSame = gzipped.encoding === "gzip" && sha(gzipped.body) === sha(plain.body) && gzipped.type === plain.type && gzipped.etag === plain.etag;
+    const gzipSame = gzipped.encoding === "gzip" && same(gzipped, plain);
     process.stdout.write(`${JSON.stringify({ label: request.label, status: plain.status, bytes: plain.body.length, sha256: sha(plain.body), type: plain.type, etag: plain.etag, gzipSame })}\n`);
   }
+  // 再开着缓存把整张表拉一遍（第一次填缓存、之后命中）：不压、gzip、br、deflate 解开都得和冷的一模一样。
+  const { saveProxySubSettings } = await import("./proxySubSettings");
+  await saveProxySubSettings({ cacheTtlSec: 60 });
+  const encodings: Array<[string, string]> = [["", ""], ["gzip", "gzip"], ["gzip, deflate, br", "br"], ["deflate", "deflate"], ["gzip", "gzip"]];
+  let warmChecked = 0;
+  const warmMismatches: string[] = [];
+  for (const request of goldenRequests()) {
+    const expected = cold.get(request.label)!;
+    for (const [accept, encoding] of encodings) {
+      const warm = await get(port, request.path, request.userAgent, accept);
+      warmChecked += 1;
+      const encodingOk = expected.body.length < 1024 ? warm.encoding === "" : warm.encoding === encoding;
+      if (!same(warm, expected) || !encodingOk) warmMismatches.push(`${request.label} [${accept || "identity"} → ${warm.encoding || "identity"}]`);
+    }
+  }
+  process.stdout.write(`${JSON.stringify({ label: "warm", checked: warmChecked, mismatches: warmMismatches })}\n`);
   process.stdout.write(`${JSON.stringify({ label: "counts", ...counts })}\n`);
   server.close();
   await runtime.closeDatabase();
@@ -473,7 +492,41 @@ if (mode === "golden") {
   process.on("SIGTERM", () => process.exit(0));
   process.on("SIGINT", () => process.exit(0));
   process.stdout.write(`READY ${JSON.stringify({ port, pid: process.pid, tokens: TOKENS, alias: ALIAS, cacheTtlSec: Number(ttl), seeded: counts, formatClients: FORMAT_CLIENT, detectedClients: DETECTED_CLIENTS })}\n`);
+} else if (mode === "stages") {
+  // 不走 HTTP，在进程里把流水线每一段各跑 N 遍：哪一段吃多少 CPU，比压整条路由看得清楚。
+  const existing = await runtime.queryRaw<{ n: number }>(`SELECT COUNT(*) AS n FROM "proxy_sub_tokens"`);
+  if (Number(existing[0]?.n || 0) === 0) await runtime.withDatabaseTransaction(() => seed(SCALES.bench));
+  const db = await import("./db");
+  const { loadProxySubTokenContext, resolveTemplateForToken } = await import("./proxySubBundle");
+  const { buildProxySubPipelineDocument, renderProxySubPipeline, proxySubTemplateUserVars } = await import("../shared/proxySubscriptionPipeline");
+  const { detectProxyClient } = await import("../shared/proxyClientUserAgent");
+  const rounds = Math.max(1, Number(process.env.BENCH_ROUNDS || 30));
+  const time = async (work: () => unknown) => {
+    await work();
+    const started = process.hrtime.bigint();
+    const cpu = process.cpuUsage();
+    for (let i = 0; i < rounds; i++) await work();
+    const used = process.cpuUsage(cpu);
+    return { wallMs: Number(process.hrtime.bigint() - started) / 1e6 / rounds, cpuMs: (used.user + used.system) / 1000 / rounds };
+  };
+  const token = await db.getProxySubTokenByToken(TOKENS.default);
+  const context = (await loadProxySubTokenContext(token))!;
+  const results: Record<string, { wallMs: number; cpuMs: number }> = {};
+  results["读库 + plan"] = await time(() => db.buildProxySubscriptionContextForUser(OWNER_ID));
+  const { plan, templates } = await db.buildProxySubscriptionContextForUser(OWNER_ID);
+  for (const format of PROXY_SUBSCRIPTION_FORMATS) {
+    const template = await resolveTemplateForToken(context, format);
+    const vars = { appName: context.appName, panelUrl: PANEL_URL, subUrl: `${PANEL_URL}/api/sub/${TOKENS.default}/${format}?rules=1`, username: context.username, ...proxySubTemplateUserVars(context.info) };
+    const input = { plan, templates, rulePreset: "balanced" as const, scope: context.scope, options: context.options, settings: context.settings, userCustomRules: String(context.owner.proxySubCustomRules || ""), template, info: null, vars, providers: [], unlockStatuses: null };
+    if (format === "clash") results["处理器 + 文档"] = await time(() => buildProxySubPipelineDocument(input));
+    const built = buildProxySubPipelineDocument(input);
+    const client = detectProxyClient(FORMAT_CLIENT[format]);
+    results[`渲染 ${format}`] = await time(() => renderProxySubPipeline({ built, format, profile: true, profileUrl: vars.subUrl, client, settings: context.settings, template, vars, weightedLoadBalance: format === "clash", shadowrocketClient: format === "shadowrocket" }));
+  }
+  process.stdout.write(`${JSON.stringify({ rounds, entries: plan.entries.length, results })}\n`);
+  await runtime.closeDatabase();
+  process.exit(0);
 } else {
-  console.error("usage: node --import tsx server/proxySubBench.fixture.ts <golden|serve>");
+  console.error("usage: node --import tsx server/proxySubBench.fixture.ts <golden|serve|stages>");
   process.exit(2);
 }

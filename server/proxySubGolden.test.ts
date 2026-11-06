@@ -11,7 +11,8 @@ import test from "node:test";
  * server/proxySubBench.fixture.ts 的小档账号（自建 / 粘来 / 落地池 / 分享来的节点，转发组、前置代理、
  * 停用 / 隐藏 / 只放 TCP 的转发，四条作用域和模板各不相同的令牌）按「8 种格式 × 典型客户端 ×
  * 节点订阅 / 规则订阅」和「只靠 UA 识别格式」各拉一遍。每一份的字节数、sha256、Content-Type、
- * ETag 都得和下面一样；带 gzip 再拉一次，解压后也必须一模一样。
+ * ETag 都得和下面一样；带 gzip 再拉一次，解压后也必须一模一样。再开着缓存把整张表拉几遍
+ * （命中缓存、不压 / gzip / br / deflate）：发出去的解开以后、ETag、Content-Type 都得和冷的一样。
  *
  * 这些值是在给订阅生成做性能优化**之前**记下的：优化只许让它更快，不许改输出的任何一个字节。
  * 真要改订阅内容（新功能、修渲染）时，跑
@@ -115,10 +116,13 @@ test("订阅金样：每种格式 × 客户端 × 令牌的输出逐字节不变
     const rows = result.stdout.split("\n").filter((line) => line.startsWith("{\"label\"")).map((line) => JSON.parse(line));
     const counts = rows.find((row) => row.label === "counts");
     assert.deepEqual(counts, { label: "counts", rules: 56, nodes: 40, visibleTemplates: 37 }, "固定账号的规模变了：金样已经不是同一份数据");
+    const warm = rows.find((row) => row.label === "warm");
+    assert.ok(warm && warm.checked >= Object.keys(GOLDEN).length * 5, "开着缓存的那一遍没跑");
+    assert.deepEqual(warm.mismatches, [], "开着缓存时（命中、gzip / br / deflate）发出去的和冷的不一样");
     const seen = new Set<string>();
     const mismatches: string[] = [];
     for (const row of rows) {
-      if (row.label === "counts") continue;
+      if (row.label === "counts" || row.label === "warm") continue;
       seen.add(row.label);
       assert.equal(row.status, 200, `${row.label} 没拉到`);
       assert.equal(row.gzipSame, true, `${row.label}：gzip 解压后和不压的不一样`);

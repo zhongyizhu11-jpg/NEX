@@ -13,6 +13,10 @@
  *   node scripts/bench-proxy-sub.mjs analyze <file.cpuprofile>
  *
  * 库文件不存在时子进程会先灌数据（几秒）；之后同一个文件复用，冷热两次测的是同一份数据。
+ *
+ * 服务端默认和线上一样先用 esbuild 打成一个包（esbuild.config.mjs 的同一组选项）再用 node 跑：
+ * tsx 按模块现编译、还给每个闭包补 name，剖出来一成多是它自己。--tsx 走 tsx（不打包）。
+ * --root <dir> 用另一份源码树打包（比如导出来的旧版本），压测脚本本身不变：前后对比用。
  */
 import { spawn } from "node:child_process";
 import fs from "node:fs";
@@ -40,12 +44,33 @@ function args(argv) {
   return out;
 }
 
-function startServer({ db, cache, profileDir }) {
+/** 和 esbuild.config.mjs 一样打包（bundle、node22、esm、依赖不打进去），输出在 <源码树>/dist/bench/。 */
+async function bundleFixture(sourceRoot) {
+  const { build } = await import("esbuild");
+  const outfile = path.join(sourceRoot, "dist", "bench", "proxySubBench.fixture.mjs");
+  await build({
+    entryPoints: [path.join(sourceRoot, "server", "proxySubBench.fixture.ts")],
+    outfile,
+    bundle: true,
+    platform: "node",
+    target: "node22",
+    format: "esm",
+    packages: "external",
+    sourcemap: true,
+    alias: { "@shared": path.join(sourceRoot, "shared") },
+    banner: { js: "import { createRequire } from 'module';\nconst require = createRequire(import.meta.url);" },
+    logLevel: "warning",
+  });
+  return outfile;
+}
+
+async function startServer({ db, cache, profileDir, sourceRoot, useTsx }) {
   const nodeArgs = [];
   if (profileDir) nodeArgs.push("--cpu-prof", `--cpu-prof-dir=${profileDir}`, "--cpu-prof-interval=200");
-  nodeArgs.push("--import", "tsx", "server/proxySubBench.fixture.ts", "serve");
+  if (useTsx) nodeArgs.push("--import", "tsx", "server/proxySubBench.fixture.ts", "serve");
+  else nodeArgs.push(await bundleFixture(sourceRoot), "serve");
   const child = spawn(process.execPath, nodeArgs, {
-    cwd: root,
+    cwd: sourceRoot,
     env: { ...process.env, DATABASE_TYPE: "sqlite", FORWARDX_TEST_DB: db, BENCH_CACHE_TTL: String(cache), FORWARDX_LOG_DIR: path.join(path.dirname(db), "logs"), NODE_ENV: "production" },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -217,12 +242,13 @@ const options = args(process.argv.slice(2));
 const command = options._[0] || "run";
 if (options.encoding) acceptEncoding = String(options.encoding);
 const db = path.resolve(String(options.db || path.join(os.tmpdir(), "forwardx-sub-bench", "bench.db")));
+const sourceRoot = path.resolve(String(options.root || root));
 fs.mkdirSync(path.dirname(db), { recursive: true });
 
 if (command === "analyze") {
   console.log(analyze(options._[1], Number(options.top || 40)));
 } else if (command === "run") {
-  const server = await startServer({ db, cache: Number(options.cache || 0) });
+  const server = await startServer({ db, cache: Number(options.cache || 0), sourceRoot, useTsx: !!options.tsx });
   try {
     const result = await runLoad(server.info.port, cases(server.info), { requests: Number(options.requests || 30), concurrency: Number(options.concurrency || 20) });
     const output = { cacheTtlSec: server.info.cacheTtlSec, acceptEncoding, seeded: server.info.seeded, ...result };
@@ -236,7 +262,7 @@ if (command === "analyze") {
   const out = path.resolve(String(options.out || path.join(path.dirname(db), "profile")));
   fs.mkdirSync(out, { recursive: true });
   for (const file of fs.readdirSync(out)) if (file.endsWith(".cpuprofile")) fs.rmSync(path.join(out, file));
-  const server = await startServer({ db, cache: 0, profileDir: out });
+  const server = await startServer({ db, cache: 0, profileDir: out, sourceRoot, useTsx: !!options.tsx });
   try {
     const list = cases(server.info);
     for (let round = 0; round < Number(options.requests || 20); round++) {

@@ -108,7 +108,8 @@ test("重置订阅地址：旧地址和旧短链失效、限流计数清零、�
     assert.match(out.disabled.body, /停用/);
     assert.match(String(out.warningWhenExpired), /没有订阅资格/);
     assert.equal(out.expiredPull.status, 403);
-    assert.match(out.expiredPull.body, /订阅资格/);
+    // 2.3.519 起到期 / 流量用完 / 余额不足分开说（4974c8b5），到期的写「账号已到期」。
+    assert.match(out.expiredPull.body, /账号已到期/);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
