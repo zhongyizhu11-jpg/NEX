@@ -1,4 +1,5 @@
-﻿import { eq, inArray, like } from "drizzle-orm";
+﻿import { createHash } from "node:crypto";
+import { eq, inArray, like } from "drizzle-orm";
 import { systemSettings } from "../../drizzle/schema";
 import { executeRaw, getDatabaseKind, getDb, rawAffectedRows } from "../dbRuntime";
 import {
@@ -276,7 +277,9 @@ export async function setSettings(map: Record<string, string | null>): Promise<v
 export async function migrateSecretSettingsToEncrypted(options: { force?: boolean } = {}): Promise<number> {
   const db = await getDb();
   if (!db) return 0;
-  if (!options.force && await getSetting(SETTINGS_SECRETS_MIGRATION_KEY)) return 0;
+  // 记号存的是名单的指纹：以后名单里加了新键，老面板上那个键的明文也会在下一次启动时加密掉。
+  const signature = secretSettingKeysSignature();
+  if (!options.force && (await getSetting(SETTINGS_SECRETS_MIGRATION_KEY)) === signature) return 0;
   const count = await encryptPlaintextSecretSettings({
     async readRaw(keys) {
       if (keys.length === 0) return [];
@@ -288,6 +291,12 @@ export async function migrateSecretSettingsToEncrypted(options: { force?: boolea
     // 传进来的已经是密文，setSetting 认得前缀不会再加密一层。
     writeRaw: (key, value) => setSetting(key, value),
   }, SECRET_SETTING_KEYS);
-  await setSetting(SETTINGS_SECRETS_MIGRATION_KEY, String(Math.floor(Date.now() / 1000)));
+  await setSetting(SETTINGS_SECRETS_MIGRATION_KEY, signature);
   return count;
+}
+
+/** 密钥类键名单的指纹（排序后哈希），名单变了就和库里记的对不上。 */
+export function secretSettingKeysSignature(): string {
+  const digest = createHash("sha256").update(Array.from(SECRET_SETTING_KEYS).sort().join("\n")).digest("hex").slice(0, 16);
+  return `v1:${digest}`;
 }

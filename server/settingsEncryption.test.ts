@@ -124,6 +124,12 @@ test("SQLite：透明读写、升级迁移、跨面板导出导入", async () =>
     assert.ok(await repo.getSetting(SETTINGS_SECRETS_MIGRATION_KEY), "记下做过了");
     assert.equal(await repo.migrateSecretSettingsToEncrypted(), 0, "第二次不再扫");
     assert.equal(await repo.migrateSecretSettingsToEncrypted({ force: true }), 0, "强制再跑：全是密文，什么也不改");
+    assert.equal(await repo.getSetting(SETTINGS_SECRETS_MIGRATION_KEY), repo.secretSettingKeysSignature(), "记的是名单指纹");
+    // 名单以后变了（这里模拟成旧版本留下的记号）：下一次启动会重新扫，把还没加密的新键加密掉
+    await runtime.executeRaw("INSERT INTO system_settings (key, value, updatedAt) VALUES (?, ?, ?)", ["discordBotToken", "legacy-discord", now]);
+    await repo.setSetting(SETTINGS_SECRETS_MIGRATION_KEY, "1793900000");
+    assert.equal(await repo.migrateSecretSettingsToEncrypted(), 1, "记号和名单对不上：再扫一遍");
+    assert.ok(isSealedSecret(await rawValue("discordBotToken")));
 
     // 3. 导出是明文
     const snapshot = await exportMigrationSnapshot();
