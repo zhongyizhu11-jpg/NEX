@@ -197,6 +197,39 @@ func (q *fxpUDPQueue) nextTracked(done <-chan struct{}, inFlight *atomic.Int64) 
 	}
 }
 
+// nextBatchTracked 和 nextTracked 一样等第一个包，然后把队列里已经在的包一并取走，最多 max 个，
+// 追加在 out 后面。发送协程醒一次就把攒下的都发掉（见 udp_batch_linux.go）。
+func (q *fxpUDPQueue) nextBatchTracked(done <-chan struct{}, inFlight *atomic.Int64, out []fxpUDPQueuedPacket, max int) ([]fxpUDPQueuedPacket, bool) {
+	first, ok := q.nextTracked(done, inFlight)
+	if !ok {
+		return out, false
+	}
+	out = append(out, first)
+	if max <= 1 {
+		return out, true
+	}
+	q.mu.Lock()
+	for len(out) < max && q.size > 0 {
+		packet := q.popOldestLocked(false)
+		packet.leaseBudget = q.budget
+		packet.leaseInFlight = inFlight
+		packet.leaseBytes = len(packet.payload)
+		if inFlight != nil {
+			inFlight.Add(1)
+		}
+		out = append(out, packet)
+	}
+	q.mu.Unlock()
+	return out, true
+}
+
+// fxpUDPQueuedDone 把一批包都交还（还缓冲、还额度）。
+func fxpUDPQueuedDone(batch []fxpUDPQueuedPacket) {
+	for i := range batch {
+		batch[i].done()
+	}
+}
+
 func (q *fxpUDPQueue) pending() int {
 	if q == nil {
 		return 0

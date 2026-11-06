@@ -286,6 +286,13 @@ func (s *linkShaper) pacingCap() int64 {
 	return s.learned.Load()
 }
 
+// linkShaperActive：主机出口整形开着（wait 可能会等）。开着时 UDP 发送协程逐包等额度、逐包发，
+// 不把一批包攒成一次突发。
+func linkShaperActive() bool {
+	s := linkShaperEgress()
+	return s != nil && s.rate.Load() > 0
+}
+
 // wait 为 n 字节领额度，必要时阻塞到允许发出的时刻。关着时立刻返回。
 func (s *linkShaper) wait(n int) {
 	if s == nil || n <= 0 {

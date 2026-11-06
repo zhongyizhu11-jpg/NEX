@@ -25,6 +25,7 @@ import { HostTlsInboundSection } from "./HostTlsInboundManager";
 import HostUnlockSection from "./HostUnlockSection";
 import HostSpeedTestSection from "./HostSpeedTestSection";
 import HostLineSection from "./HostLineSection";
+import HostAgentRuntimeSection from "./HostAgentRuntimeSection";
 
 /**
  * 主机详情 —— Detail 态。
@@ -253,6 +254,9 @@ export default function HostDetailDialog(props: HostDetailDialogProps) {
 
           <OpsHostDetailExtraSections host={host} isAdmin={user?.role === "admin"} />
           {user?.role === "admin" ? <HostIpChangeSection hostId={Number(host.id)} /> : null}
+
+          {/* Agent 进程自己的内存 / 协程 / GC / UDP 会话 / AES，管理员可临时开性能剖析（老 Agent 不显示） */}
+          <HostAgentRuntimeSection hostId={Number(host.id)} isAdmin={user?.role === "admin"} />
     </>
   );
   return (

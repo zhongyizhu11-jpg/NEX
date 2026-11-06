@@ -273,6 +273,15 @@ func (p *failoverProxy) udpSessionFor(key netip.AddrPort) *failoverUDPSession {
 	if session != nil {
 		return session
 	}
+	// 全进程的 UDP 中继会话到顶（udp_session_budget.go）：回收这条规则自己最老的会话腾位置，
+	// 这条规则一个会话都没有就拒掉，不去动别的规则。
+	if udpRelayGlobalFull() && !p.recycleUDPSessionForGlobalCap() {
+		noteUDPRelaySessionRejected()
+		if shouldLogAgentReport(fmt.Sprintf("failover-udp-global-limit:%d:%d", p.ruleID, p.sourcePort), agentReportLogInterval) {
+			logf("failover udp process session limit reached rule=%d source=%d processSessions=%d cap=%d; new session dropped", p.ruleID, p.sourcePort, udpRelaySessionsActive.Load(), udpRelayGlobalSessionCap())
+		}
+		return nil
+	}
 	// 只有新会话才需要字符串形式（「按访客固定」的哈希键），热路径上不再每个包都格式化一次。
 	upstream, index := p.dialUDPPath(key.String())
 	if upstream == nil {
@@ -305,12 +314,31 @@ func (p *failoverProxy) udpSessionFor(key netip.AddrPort) *failoverUDPSession {
 	if evicted != nil {
 		p.untrackConn(evicted.index, evicted.upstream)
 		_ = evicted.upstream.Close()
+		noteUDPRelaySessionEvicted()
 		if shouldLogAgentReport(fmt.Sprintf("failover-udp-session-limit:%d:%d", p.ruleID, p.sourcePort), agentReportLogInterval) {
 			logf("failover udp session limit reached rule=%d source=%d sessions=%d; recycling the idlest", p.ruleID, p.sourcePort, failoverUDPMaxSessions)
 		}
 	}
-	go p.copyUDPToClient(session)
+	runUDPRelaySession(func() { p.copyUDPToClient(session) })
 	return session
+}
+
+// recycleUDPSessionForGlobalCap 在全进程会话数到顶时回收这条规则最久没动静的会话（和规则自己
+// 到上限时一样的规矩）。这条规则没有会话可回收返回 false。
+func (p *failoverProxy) recycleUDPSessionForGlobalCap() bool {
+	p.udpMu.Lock()
+	evicted := p.oldestUDPSessionLocked()
+	if evicted != nil {
+		delete(p.udpSessions, evicted.key)
+	}
+	p.udpMu.Unlock()
+	if evicted == nil {
+		return false
+	}
+	p.untrackConn(evicted.index, evicted.upstream)
+	_ = evicted.upstream.Close()
+	noteUDPRelaySessionEvicted()
+	return true
 }
 
 // oldestUDPSessionLocked 线性扫描找最久没动静的会话。只在会话数顶到上限（4096）、又来了新来源时

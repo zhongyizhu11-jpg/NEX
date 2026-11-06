@@ -47,6 +47,7 @@ export const API_TOKEN_MODULE_PREFIXES: Record<ApiTokenModule, readonly string[]
     "lookingGlass.",
     "ipChange.",
     "netProfile.",
+    "agentRuntime.",
     "ops.firewall.",
     "ops.hostSecurity.",
     "ops.agentRelay.",
