@@ -1,4 +1,5 @@
 import { ACCOUNT_DISABLED_ERR_MSG, COOKIE_NAME, NOT_ADMIN_ERR_MSG, SESSION_REPLACED_ERR_MSG, UNAUTHED_ERR_MSG } from '../../shared/const';
+import { AsyncLocalStorage } from "node:async_hooks";
 import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
 import type { TrpcContext } from "./context";
@@ -10,6 +11,9 @@ import { apiTokenPolicyError } from "../ops/apiTokenPolicy";
 import { assertMaintenanceAllows } from "../ops/maintenance";
 import { databaseHealth } from "../databaseHealthState";
 import { DATABASE_UNAVAILABLE_MESSAGE } from "../../shared/databaseHealth";
+import { apiRateLimitMessage, checkApiRateLimit } from "../apiRateLimit";
+import { currentApiRateLimitConfig, noteApiRateLimited } from "../apiRateLimitConfig";
+import { clientIp } from "../clientIp";
 
 const t = initTRPC.context<TrpcContext>().create({
   transformer: superjson,
@@ -33,7 +37,7 @@ const rejectMutationsDuringDatabaseMaintenance = t.middleware(opts => {
 const enforceApiTokenPolicy = t.middleware(opts => {
   const apiToken = opts.ctx.apiToken;
   if (apiToken) {
-    const reason = apiTokenPolicyError(apiToken.scope, opts.path, opts.type);
+    const reason = apiTokenPolicyError(apiToken.scope, opts.path, opts.type, apiToken.modules);
     if (reason) throw new TRPCError({ code: "FORBIDDEN", message: reason });
   }
   return opts.next();
@@ -55,7 +59,34 @@ const rejectWhileDatabaseUnavailable = t.middleware(async opts => {
   return result;
 });
 
-const baseProcedure = t.procedure.use(rejectWhileDatabaseUnavailable).use(rejectMutationsDuringDatabaseMaintenance).use(enforceApiTokenPolicy);
+/**
+ * 全局接口限流：按令牌 / 用户 / 来源 IP 各一份额度，查询和修改分开（server/apiRateLimit.ts）。
+ * 超了回 429（TOO_MANY_REQUESTS），带 Retry-After。放在令牌权限之后：没权限的调用先被拒，不占额度。
+ *
+ * 只算最外面那一层：过程里再 createCaller 调别的过程（批量重启规则、故障包）不重复计数 ——
+ * 管理员点一次「全部重启」不该因为里面调了 300 次 rules.* 被挡。没有 HTTP 请求的进程内调用
+ * （测试、定时任务、Telegram 机器人）不限，它们不是从外面打进来的。
+ */
+const rateLimitedScope = new AsyncLocalStorage<true>();
+
+const enforceApiRateLimit = t.middleware(opts => {
+  const { ctx } = opts;
+  if (!ctx.req || rateLimitedScope.getStore()) return opts.next();
+  const ip = clientIp(ctx.req, "unknown");
+  const decision = checkApiRateLimit(
+    { apiTokenId: ctx.apiToken?.id ?? null, userId: ctx.user ? Number(ctx.user.id) : null, ip },
+    opts.type,
+    currentApiRateLimitConfig(),
+  );
+  if (decision.limited) {
+    try { ctx.res?.setHeader?.("Retry-After", String(decision.retryAfterSeconds)); } catch { /* 响应壳（MCP）没有头可写 */ }
+    noteApiRateLimited(decision, { path: opts.path, type: opts.type, userId: ctx.user ? Number(ctx.user.id) : null, tokenName: ctx.apiToken?.name ?? null, ip });
+    throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: apiRateLimitMessage(decision, opts.type) });
+  }
+  return rateLimitedScope.run(true, () => opts.next());
+});
+
+const baseProcedure = t.procedure.use(rejectWhileDatabaseUnavailable).use(rejectMutationsDuringDatabaseMaintenance).use(enforceApiTokenPolicy).use(enforceApiRateLimit);
 
 export const publicProcedure = baseProcedure;
 

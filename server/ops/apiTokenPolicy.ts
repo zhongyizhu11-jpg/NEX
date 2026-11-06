@@ -2,6 +2,7 @@
   API 令牌能调什么（#9）。单独一个不带依赖的文件：server/_core/trpc.ts 的中间件要引用它，
   不能顺带把整个数据库层拖进 tRPC 的核心模块。
 */
+import { apiTokenModuleOfPath, apiTokenModulesAllowPath, apiTokenModulesLabel, API_TOKEN_MODULE_LABELS, type ApiTokenModule } from "../../shared/apiTokenModules";
 
 export type ApiTokenScope = "read" | "full";
 
@@ -9,6 +10,8 @@ export type ApiTokenContext = {
   id: number;
   scope: ApiTokenScope;
   name: string;
+  /** 只能碰这几个模块（shared/apiTokenModules.ts）；null / 不给 = 不限。 */
+  modules?: ApiTokenModule[] | null;
 };
 
 export const API_TOKEN_READ_ONLY_MESSAGE = "这个 API 令牌是只读的，不能执行修改操作";
@@ -30,7 +33,8 @@ export function normalizeApiTokenScope(value: unknown): ApiTokenScope {
   · 面板备份导出导入、迁移码、面板迁移、切换数据库：整库带走（含 Agent 令牌和 2FA 密钥）或改写用户表；
   · 面板 SSL 私钥查看：私钥只给网页上的管理员；
   · 插件安装、更新、授予信任、执行动作：插件能在所有 Agent 上以 root 跑脚本；
-  · 离站备份整个路由：能把整库备份发到别处，也能从备份恢复。
+  · 离站备份整个路由：能把整库备份发到别处，也能从备份恢复；
+  · 改接口限流：被限流的令牌不能自己把限流关掉。
   auth.updateProfile 改邮箱在过程里单独拦（见 apiTokenProfileUpdateError）：只改昵称这类不受影响。
 */
 const TOKEN_FORBIDDEN_PATHS = [
@@ -71,6 +75,8 @@ const TOKEN_FORBIDDEN_PATHS = [
   "plugins.updateFromGithub",
   "plugins.setTrusted",
   "plugins.runAction",
+  // 令牌不能给自己（和别的令牌）解除接口限流
+  "ops.apiRateLimit.update",
 ];
 
 /** 测试和 MCP 自检用：当前禁止名单（只读副本）。 */
@@ -78,12 +84,25 @@ export function apiTokenForbiddenPaths(): readonly string[] {
   return [...TOKEN_FORBIDDEN_PATHS];
 }
 
-/** 这枚令牌能不能调这个过程。能返回 null，不能返回给人看的原因。 */
-export function apiTokenPolicyError(scope: ApiTokenScope, path: string, type: string): string | null {
+/** 令牌勾了模块、而这个过程不在里面时的说明。 */
+export function apiTokenModuleDeniedMessage(modules: readonly ApiTokenModule[], path: string) {
+  const module = apiTokenModuleOfPath(path);
+  const where = module ? `「${API_TOKEN_MODULE_LABELS[module]}」` : "未开放给令牌的部分";
+  return `这个 API 令牌只能访问：${apiTokenModulesLabel(modules)}；${path} 属于${where}`;
+}
+
+/**
+ * 这枚令牌能不能调这个过程。能返回 null，不能返回给人看的原因。
+ * 顺序：高危禁止名单 → 模块范围 → 只读。禁止名单永远最先，勾了哪个模块都绕不过去。
+ */
+export function apiTokenPolicyError(scope: ApiTokenScope, path: string, type: string, modules?: readonly ApiTokenModule[] | null): string | null {
   const normalizedPath = String(path || "");
   // 以 . 结尾的是整个路由，否则是单个过程。
   if (TOKEN_FORBIDDEN_PATHS.some((rule) => (rule.endsWith(".") ? normalizedPath.startsWith(rule) : normalizedPath === rule))) {
     return API_TOKEN_FORBIDDEN_MESSAGE;
+  }
+  if (modules && modules.length > 0 && !apiTokenModulesAllowPath(modules, normalizedPath)) {
+    return apiTokenModuleDeniedMessage(modules, normalizedPath);
   }
   if (scope !== "full" && type !== "query") return API_TOKEN_READ_ONLY_MESSAGE;
   return null;
