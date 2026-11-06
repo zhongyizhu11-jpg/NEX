@@ -23,7 +23,8 @@ import {
   withSqliteExclusive,
 } from "./dbRuntime";
 import { countAll, quoteIdentifier } from "./dbCompat";
-import { getAllSettings, RUNTIME_CACHE_SETTING_PREFIX, setSetting } from "./repositories/settingsRepository";
+import { getAllSettings, migrateSecretSettingsToEncrypted, RUNTIME_CACHE_SETTING_PREFIX, setSetting } from "./repositories/settingsRepository";
+import { decryptSettingRowsForExport, SETTINGS_SECRETS_MIGRATION_KEY } from "./settingsEncryption";
 import { clearHostAgentUpgradeRequest, getHosts, HOST_ONLINE_TTL_MS, requestHostAgentUpgrade } from "./db";
 import { pushAgentPanelMigration, pushAgentUpgrade } from "./agentEvents";
 import { assertSafeOutboundUrl } from "./ssrf";
@@ -274,8 +275,10 @@ export async function exportMigrationSnapshot(
     options.onProgress?.({ table, tableIndex, tableTotal: includedTables.length, status: "reading" });
     const rows = await queryRaw(`SELECT * FROM ${quote(table)}`);
     // 设置表里的运行时缓存（出口报的端口等）按这个面板的主机、规则 ID 记，换个面板 ID 就对不上，不带走。
+    // 密钥类设置在库里是用本面板密钥加密的（server/settingsEncryption.ts），导出成明文：备份文件本身有备份密码加密，
+    // 导入时 setSetting 会用新面板自己的密钥再加密 —— 原样带走的话换一台机器就解不开了。
     const exportedRows = table === "system_settings"
-      ? rows.filter((row: any) => !String(row?.key || "").startsWith(RUNTIME_CACHE_SETTING_PREFIX))
+      ? decryptSettingRowsForExport(rows.filter((row: any) => !String(row?.key || "").startsWith(RUNTIME_CACHE_SETTING_PREFIX)))
       : rows;
     tables[table] = exportedRows;
     options.onProgress?.({
@@ -365,10 +368,32 @@ function validateSqliteMigrationFile(filePath: string) {
   }
 }
 
+/**
+ * SQLite 快速迁移搬的是整个数据库文件，而密钥类设置是用本面板的密钥加密的，新面板解不开：
+ * 在要发出去的**副本**里把它们换成明文，并去掉「已加密」的记号，目标面板导入后再用自己的密钥加密
+ * （importDirectSqliteBackup 末尾）。副本里本来就有 Agent 令牌、2FA 密钥这些明文，多这几项不改变它的敏感程度。
+ */
+function decryptSecretSettingsInSqliteCopy(filePath: string) {
+  const sqlite = new Database(filePath, { fileMustExist: true });
+  try {
+    const rows = sqlite.prepare("SELECT key, value FROM system_settings").all() as Array<{ key: string; value: string | null }>;
+    const update = sqlite.prepare("UPDATE system_settings SET value = ? WHERE key = ?");
+    sqlite.transaction(() => {
+      decryptSettingRowsForExport(rows).forEach((row, index) => {
+        if (row.value !== rows[index].value) update.run(row.value, row.key);
+      });
+      sqlite.prepare("DELETE FROM system_settings WHERE key = ?").run(SETTINGS_SECRETS_MIGRATION_KEY);
+    })();
+  } finally {
+    sqlite.close();
+  }
+}
+
 async function createDirectSqliteBackup(meta: Omit<DirectSqliteMigrationMeta, "byteLength" | "sha256">) {
   const filePath = sqliteMigrationTempPath(`export-${Date.now()}`);
   try {
     await withSqliteExclusive((sqlite) => sqlite.backup(filePath));
+    decryptSecretSettingsInSqliteCopy(filePath);
     validateSqliteMigrationFile(filePath);
     const stat = await fs.promises.stat(filePath);
     const sha256 = await sha256File(filePath);
@@ -2135,6 +2160,8 @@ export async function importDirectSqliteBackup(
     lastPanelMigrationScope: "full",
   };
   for (const [key, value] of Object.entries(resetSettings)) await setSetting(key, value);
+  // 源面板发来的副本里密钥类设置已经是明文（decryptSecretSettingsInSqliteCopy），用本面板的密钥加密回去。
+  await migrateSecretSettingsToEncrypted({ force: true });
   invalidatePanelDataSummaryCache();
 
   return {
