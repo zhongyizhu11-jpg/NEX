@@ -858,3 +858,22 @@ html[data-ui-theme="deepspace"] .fx-ds-region-cells > i[data-tone="muted"] { bac
   html[data-ui-theme="deepspace"] .fx-ds-region { grid-template-columns: 40px minmax(0, 1fr) 52px 72px minmax(80px, 1.4fr) 44px; min-height: 46px; }
   html[data-ui-theme="deepspace"] .fx-ds-region-cells { display: flex; flex-wrap: wrap; gap: 3px; }
 }
+
+/* ── 13. 操作审计（深空）：监控 › 操作审计（features/ops/audit/AuditTab.tsx），和转发、主机同一种面板行 ── */
+/*
+  骨架在 workspace.css（表头 + 行同一套列宽，手机两截）；这里换成深空的样子：暗面板、细线、
+  表头等宽小字大写，时间 / 过程名 / 耗时 / 参数全用等宽字，结果标签方角带边框。
+*/
+html[data-ui-theme="deepspace"] .fx-audit-list { border-radius: 10px; border-color: var(--fx-stroke-weak); background: var(--fx-card-fill); box-shadow: none; }
+html[data-ui-theme="deepspace"] .fx-audit-head { font-family: var(--fx-ds-mono); font-size: 10.5px; letter-spacing: .05em; text-transform: uppercase; color: var(--fx-text-muted); }
+html[data-ui-theme="deepspace"] .fx-audit-row { font-size: 12.5px; border-bottom-color: var(--fx-stroke-weak); }
+html[data-ui-theme="deepspace"] .fx-audit-row:hover { background: var(--fx-raised, var(--fx-hover)); }
+html[data-ui-theme="deepspace"] .fx-audit-time,
+html[data-ui-theme="deepspace"] .fx-audit-dur,
+html[data-ui-theme="deepspace"] .fx-audit-code,
+html[data-ui-theme="deepspace"] .fx-audit-json { font-family: var(--fx-ds-mono); letter-spacing: -.01em; }
+html[data-ui-theme="deepspace"] .fx-audit-time { font-size: 11.5px; }
+html[data-ui-theme="deepspace"] .fx-audit-badge { border-radius: 3px; border: 1px solid currentColor; background: transparent; font-family: var(--fx-ds-mono); font-size: 10.5px; }
+html[data-ui-theme="deepspace"] .fx-audit-row-mobile { padding: 10px 14px; }
+html[data-ui-theme="deepspace"] .fx-audit-detail .fx-audit-json { background: var(--fx-l0-page); border-color: var(--fx-stroke-weak); }
+html[data-ui-theme="deepspace"] .fx-audit-detail .fx-audit-change { border-color: var(--fx-stroke-weak); background: var(--fx-l2-group); }

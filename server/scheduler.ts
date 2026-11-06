@@ -30,6 +30,7 @@ import { reconcileRuleEntryDomains } from "./ruleEntryDomain";
 import { checkPanelUpdateTask } from "./_core/systemRouter";
 import { createNonOverlappingScheduledTask } from "./scheduledTask";
 import { cleanOldLatencyDailyStats, rollupLatencyDailyStats } from "./repositories/latencyDailyRepository";
+import { pruneOperationAuditEvents } from "./operationAudit";
 import { cleanOldHostProbeHourlyStats, rollupHostProbeHourlyStats } from "./repositories/hostProbeHourlyRepository";
 import { runIpChangeTick } from "./ipChange/runtime";
 import { optimizeSqliteDatabase } from "./dbRuntime";
@@ -384,6 +385,8 @@ export async function runTcpingCleanup() {
     ["auth_sessions", () => pruneStaleAuthSessions(7)],
     // 只删 30 天前的 dispatch 审计行，配置改动（create/update/delete）一条不动。
     ["config_audit_events:dispatch", () => pruneDispatchConfigAuditEvents(30)],
+    // 操作审计按「保留天数」清（默认 90 天，监控 › 操作审计里改），见 server/operationAudit.ts。
+    ["operation_audit_events", () => pruneOperationAuditEvents()],
   ];
   for (const [name, run] of steps) {
     try {

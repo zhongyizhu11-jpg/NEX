@@ -10,6 +10,7 @@ import { apiTokenPolicyError } from "../ops/apiTokenPolicy";
 import { assertMaintenanceAllows } from "../ops/maintenance";
 import { databaseHealth } from "../databaseHealthState";
 import { DATABASE_UNAVAILABLE_MESSAGE } from "../../shared/databaseHealth";
+import { auditMutationCall } from "../operationAudit";
 
 const t = initTRPC.context<TrpcContext>().create({
   transformer: superjson,
@@ -55,7 +56,19 @@ const rejectWhileDatabaseUnavailable = t.middleware(async opts => {
   return result;
 });
 
-const baseProcedure = t.procedure.use(rejectWhileDatabaseUnavailable).use(rejectMutationsDuringDatabaseMaintenance).use(enforceApiTokenPolicy);
+/**
+ * 操作审计：登录用户的每次写操作记一行（谁、从哪、调了什么、参数打码、成没成），见 server/operationAudit.ts。
+ * 排在令牌策略前面：被令牌策略、管理员校验拒掉的写操作也要记成「被拒绝」。
+ */
+const recordOperationAudit = t.middleware(opts => auditMutationCall({
+  type: opts.type,
+  path: opts.path,
+  ctx: opts.ctx,
+  getRawInput: opts.getRawInput,
+  next: () => opts.next(),
+}));
+
+const baseProcedure = t.procedure.use(rejectWhileDatabaseUnavailable).use(rejectMutationsDuringDatabaseMaintenance).use(recordOperationAudit).use(enforceApiTokenPolicy);
 
 export const publicProcedure = baseProcedure;
 
