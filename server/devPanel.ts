@@ -1,3 +1,5 @@
+import { recordAgentRuntimeStats } from "./ops/agentRuntime";
+import { seedNetTuneDemoResult } from "./ops/netTuneAgent";
 import { eq } from "drizzle-orm";
 import { users } from "../drizzle/schema";
 import { MIGRATION_TABLES } from "./dbSchema";
@@ -2679,6 +2681,105 @@ async function seedSettings() {
 }
 
 /** lineDemo：线路工作台那套演示（Po0 / Jinx / HK2 …）；只看原来那几台机器的测试传 false。 */
+/*
+  只在内存里的几样 Agent 数据（心跳带来的运行状态、网络调优的检查结果），面板重启就没了；
+  开发面板没有真 Agent，这里放一份演示值，主机详情里那几节才看得到样子。
+*/
+function seedAgentMemoryDemo(hostIds: number[]) {
+  const [first, second] = hostIds;
+  if (first) {
+    recordAgentRuntimeStats(first, {
+      rssBytes: 48 * 1048576,
+      heapBytes: 21 * 1048576,
+      goroutines: 312,
+      gcCount: 1832,
+      gcPauseMaxUs: 640,
+      gcPauseTotalMs: 920,
+      udpSessions: { active: 214, cap: 16384, evicted: 0, rejected: 0 },
+      cpuAes: true,
+    });
+    seedNetTuneDemoResult(first, {
+      id: "devcheck1",
+      apply: false,
+      status: "done",
+      startedAt: Math.floor(Date.now() / 1000) - 120,
+      finishedAt: Math.floor(Date.now() / 1000) - 119,
+      values: {
+        "net.ipv4.ip_forward": "1",
+        "net.core.rmem_max": "212992",
+        "net.core.wmem_max": "212992",
+        "net.ipv4.tcp_rmem": "4096 131072 6291456",
+        "net.ipv4.tcp_wmem": "4096 16384 4194304",
+        "net.core.rmem_default": "212992",
+        "net.core.wmem_default": "212992",
+        "net.ipv4.udp_rmem_min": "4096",
+        "net.ipv4.udp_wmem_min": "4096",
+        "net.netfilter.nf_conntrack_max": "262144",
+        "net.netfilter.nf_conntrack_buckets": "65536",
+        "net.netfilter.nf_conntrack_count": "18342",
+        "net.netfilter.nf_conntrack_tcp_be_liberal": "0",
+        "net.core.netdev_max_backlog": "1000",
+        "net.core.somaxconn": "4096",
+        "net.ipv4.tcp_max_syn_backlog": "512",
+        "net.ipv4.tcp_mtu_probing": "0",
+        "net.ipv4.tcp_notsent_lowat": "4294967295",
+        "net.ipv4.tcp_slow_start_after_idle": "1",
+        "net.ipv4.tcp_fastopen": "1",
+        "net.ipv4.tcp_tw_reuse": "2",
+        "net.ipv4.tcp_no_metrics_save": "0",
+        "net.ipv4.tcp_congestion_control": "cubic",
+        "net.ipv4.tcp_available_congestion_control": "reno cubic bbr",
+        "net.core.default_qdisc": "fq_codel",
+        "kernel.osrelease": "6.1.0-27-amd64",
+      },
+    });
+  }
+  if (second) {
+    seedNetTuneDemoResult(second, {
+      id: "devapply1",
+      apply: true,
+      status: "done",
+      startedAt: Math.floor(Date.now() / 1000) - 600,
+      finishedAt: Math.floor(Date.now() / 1000) - 599,
+      values: {
+        "net.ipv4.ip_forward": "1",
+        "net.core.rmem_max": "67108864",
+        "net.core.wmem_max": "67108864",
+        "net.ipv4.tcp_rmem": "4096 131072 67108864",
+        "net.ipv4.tcp_wmem": "4096 16384 67108864",
+        "net.core.rmem_default": "1048576",
+        "net.core.wmem_default": "1048576",
+        "net.ipv4.udp_rmem_min": "16384",
+        "net.ipv4.udp_wmem_min": "16384",
+        "net.netfilter.nf_conntrack_max": "1048576",
+        "net.netfilter.nf_conntrack_buckets": "262144",
+        "net.netfilter.nf_conntrack_count": "9120",
+        "net.netfilter.nf_conntrack_tcp_be_liberal": "1",
+        "net.core.netdev_max_backlog": "16384",
+        "net.core.somaxconn": "4096",
+        "net.ipv4.tcp_max_syn_backlog": "8192",
+        "net.ipv4.tcp_mtu_probing": "1",
+        "net.ipv4.tcp_notsent_lowat": "131072",
+        "net.ipv4.tcp_slow_start_after_idle": "0",
+        "net.ipv4.tcp_fastopen": "3",
+        "net.ipv4.tcp_tw_reuse": "1",
+        "net.ipv4.tcp_no_metrics_save": "1",
+        "net.ipv4.tcp_congestion_control": "bbr",
+        "net.ipv4.tcp_available_congestion_control": "reno cubic bbr",
+        "net.core.default_qdisc": "fq",
+        "kernel.osrelease": "5.15.0-122-generic",
+      },
+      changed: [
+        { key: "net.core.rmem_max", from: "212992", to: "67108864" },
+        { key: "net.ipv4.tcp_rmem", from: "4096 131072 6291456", to: "4096 131072 67108864" },
+        { key: "net.ipv4.tcp_congestion_control", from: "cubic", to: "bbr" },
+        { key: "net.core.default_qdisc", from: "fq_codel", to: "fq" },
+      ],
+      file: "/etc/sysctl.d/99-forwardx-network.conf",
+    });
+  }
+}
+
 export async function seedDevPanelData(options: { lineDemo?: boolean } = {}) {
   if (!isDevPanelMode()) return;
   const db = await getDb();
@@ -2700,6 +2801,7 @@ export async function seedDevPanelData(options: { lineDemo?: boolean } = {}) {
   }
   await seedProbeServices(adminId, hostIds);
   await seedNetworkProfiles(hostIds);
+  seedAgentMemoryDemo(hostIds);
   const catalog = await seedCatalog(adminId, resources, hostIds);
   await seedUserState(usersSeed, hostIds, resources, rules, catalog);
   await seedForwardTests(usersSeed, rules, hostIds);

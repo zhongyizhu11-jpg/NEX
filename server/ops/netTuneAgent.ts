@@ -105,6 +105,13 @@ registerAgentExtModule({
   intervalSeconds: (host) => (states.get(Number(host.id))?.pending ? 5 : undefined),
 });
 
+/** 本地开发面板（server/devPanel.ts）放一份演示结果；线上不会调用。 */
+export function seedNetTuneDemoResult(hostId: number, result: NetTuneResult) {
+  const state = stateOf(hostId);
+  state.latest = result;
+  if (result.apply) state.lastApply = result;
+}
+
 /** 只给测试用。 */
 export function resetNetTuneStateForTest() {
   states.clear();
