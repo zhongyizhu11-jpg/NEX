@@ -15,6 +15,7 @@ import { paymentCallbackRouter } from "./payment";
 import { migrationRouter } from "./migration";
 import { clientLogoRouter } from "./clientLogoRoute";
 import { proxySubscriptionRouter } from "./proxySubscriptionRoute";
+import { panelProfilingRouter } from "./panelProfilingRoute";
 import { xboardCompatRouter } from "./xboardCompatRoute";
 import { proxySubRulesetRouter } from "./proxySubRulesetMirror";
 import { initDatabase } from "./db";
@@ -214,6 +215,8 @@ async function startServer() {
   // Xboard / V2Board 兼容的几个用户端接口（默认关，设置 › 订阅里开）：server/xboardCompatRoute.ts。
   app.use(xboardCompatRouter);
   app.use(clientLogoRouter);
+  // GET /api/ops/profiling/:id/download：管理员下载面板的 CPU 剖析 / 堆快照（server/panelProfilingRoute.ts）。
+  app.use(panelProfilingRouter);
   // POST /mcp：AI 客户端用个人 API 令牌接入（server/ops/mcp.ts）。
   app.use(mcpRouter);
   // GET /llms.txt：给 AI 助手看的说明书（怎么接 MCP、有哪些工具），不含面板数据。

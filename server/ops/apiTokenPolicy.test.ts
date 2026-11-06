@@ -43,6 +43,11 @@ test("令牌碰不到夺号、整库带走、装插件这几类过程，读写�
     "ops.offsiteBackup.restore",
     "ops.audit.list",
     "ops.audit.setRetention",
+    "ops.profiling.status",
+    "ops.profiling.setEnabled",
+    "ops.profiling.captureCpu",
+    "ops.profiling.captureHeap",
+    "ops.profiling.remove",
   ];
   for (const procedure of paths) {
     for (const scope of ["read", "full"] as const) {

@@ -372,9 +372,62 @@ export function buildProxySubscriptionPlan(input: BuildProxySubscriptionPlanInpu
    * 报警。数据本来就都在手上，顺手算一遍。
    */
   // IPv6 字面量在转发那边可能带方括号、主机那边不一定带，两侧都去掉再比。
-  const entryKey = (address: unknown, port: unknown) =>
-    `${text(address).toLowerCase().replace(/^\[/, "").replace(/\]$/, "")}:${toPort(port)}`;
-  const ownForwardEntries = new Set<string>();
+  const entryAddressKey = (address: unknown) => text(address).toLowerCase().replace(/^\[/, "").replace(/\]$/, "");
+  const entryKey = (address: unknown, port: unknown) => `${entryAddressKey(address)}:${toPort(port)}`;
+  /*
+    几百条转发共用十几台入口机、几百个模板：每台机器的地址、每个模板的节点模型在这一次调用里只算一遍
+    （原来每条转发都从头算，一千条节点时占了这个函数大半的时间）。只在这一次调用里记，不跨请求。
+  */
+  const hostAddressKeys = new Map<number, string[]>();
+  const ownEntryAddressKeys = (host: ProxySubscriptionHostRow | undefined): string[] => {
+    const hostId = host ? Number(host.id) : 0;
+    const known = hostAddressKeys.get(hostId);
+    if (known && host === hostsById.get(hostId)) return known;
+    const keys: string[] = [];
+    for (const entry of getHostEntryAddresses(host)) keys.push(entryAddressKey(entry.value));
+    for (const raw of [host?.ip, host?.ipv4, host?.ipv6, hostAutoIpv4(host), hostAutoIpv6(host)]) {
+      if (text(raw)) keys.push(entryAddressKey(raw));
+    }
+    if (host === hostsById.get(hostId)) hostAddressKeys.set(hostId, keys);
+    return keys;
+  };
+  const hostEntryAddress = new Map<number, string>();
+  const preferredEntryAddress = (host: ProxySubscriptionHostRow | undefined): string => {
+    const hostId = host ? Number(host.id) : 0;
+    if (host !== hostsById.get(hostId)) return getHostEntryAddress(host);
+    let address = hostEntryAddress.get(hostId);
+    if (address === undefined) {
+      address = getHostEntryAddress(host);
+      hostEntryAddress.set(hostId, address);
+    }
+    return address;
+  };
+  // 中转条目只读模板的节点模型（relayProxyNode 会拷一份再改地址），同一个模板共用一份。
+  const templateNodes = new Map<ProxyNodeTemplateRow, ProxyNode>();
+  const templateNodeOf = (template: ProxyNodeTemplateRow): ProxyNode => {
+    let node = templateNodes.get(template);
+    if (!node) {
+      node = proxyNodeFromTemplateRow(template);
+      templateNodes.set(template, node);
+    }
+    return node;
+  };
+  const ruleDomains = new Map<ProxySubscriptionRuleRow, string>();
+  const ruleEntryDomain = (rule: ProxySubscriptionRuleRow): string => {
+    let domain = ruleDomains.get(rule);
+    if (domain === undefined) {
+      domain = publishedRuleEntryDomain(rule, input.ruleEntryDomainSuffix);
+      ruleDomains.set(rule, domain);
+    }
+    return domain;
+  };
+
+  /*
+    按端口记「哪几台机器在这个端口上有转发」，查的时候再看目标地址是不是那几台机器的地址之一。
+    和原来把每条转发 × 每个地址拼成 `地址:端口` 塞进一个集合是同一个判断，只是不用拼几千个字符串。
+  */
+  const ownEntryHostsByPort = new Map<number, Set<ProxySubscriptionHostRow>>();
+  const ownEntryDomainKeys = new Set<string>();
   for (const rule of input.rules) {
     if (bool(rule.pendingDelete)) continue;
     const host = hostsById.get(Number(rule.hostId || 0));
@@ -384,16 +437,25 @@ export function buildProxySubscriptionPlan(input: BuildProxySubscriptionPlanInpu
       第一跳的目标是他自己手填的：机器配了入口域名或 DDNS 时，他照样可能写的是
       机器的 IP（或 IPv6）—— 只认首选地址就会把这条好好的串接报成「指向已经变了」。
     */
-    if (port) {
-      for (const entry of getHostEntryAddresses(host)) ownForwardEntries.add(entryKey(entry.value, port));
-      for (const raw of [host?.ip, host?.ipv4, host?.ipv6, hostAutoIpv4(host), hostAutoIpv6(host)]) {
-        if (text(raw)) ownForwardEntries.add(entryKey(raw, port));
-      }
+    if (port && host) {
+      let onPort = ownEntryHostsByPort.get(port);
+      if (!onPort) ownEntryHostsByPort.set(port, onPort = new Set());
+      onPort.add(host);
     }
     // 第一跳的目标可能写的是第二跳的专属域名，同样算自己的入口。
-    const domain = publishedRuleEntryDomain(rule, input.ruleEntryDomainSuffix);
-    if (domain && port) ownForwardEntries.add(entryKey(domain, port));
+    const domain = ruleEntryDomain(rule);
+    if (domain && port) ownEntryDomainKeys.add(entryKey(domain, port));
   }
+  const pointsAtOwnForwardEntry = (address: unknown, portValue: unknown): boolean => {
+    const port = toPort(portValue);
+    if (!port) return false;
+    const key = entryAddressKey(address);
+    if (ownEntryDomainKeys.size > 0 && ownEntryDomainKeys.has(`${key}:${port}`)) return true;
+    const onPort = ownEntryHostsByPort.get(port);
+    if (!onPort) return false;
+    for (const host of onPort) if (ownEntryAddressKeys(host).includes(key)) return true;
+    return false;
+  };
 
   /**
    * 落地机自己的直连地址。
@@ -550,14 +612,14 @@ export function buildProxySubscriptionPlan(input: BuildProxySubscriptionPlanInpu
       客户端手里的地址都不用变。没发布成功过（功能没开、规则上关了开关、服务商报错）
       照旧用入口地址。
     */
-    const address = publishedRuleEntryDomain(rule, input.ruleEntryDomainSuffix) || getHostEntryAddress(host);
+    const address = ruleEntryDomain(rule) || preferredEntryAddress(host);
     const port = toPort(rule.sourcePort);
     if (!address || !port) {
       skip("no-entry-address");
       continue;
     }
 
-    const templateNode = proxyNodeFromTemplateRow(template);
+    const templateNode = templateNodeOf(template);
     const name = text(rule.proxyNodeName) || defaultProxySubscriptionNodeName({
       hostName: text(host?.name),
       templateName: templateNode.name,
@@ -574,8 +636,7 @@ export function buildProxySubscriptionPlan(input: BuildProxySubscriptionPlanInpu
      */
     let targetMismatch = false;
     const targetText = `${text(rule.targetIp)}:${toPort(rule.targetPort) || "-"}`;
-    const pointsAtOwnForwardEntry = ownForwardEntries.has(entryKey(rule.targetIp, rule.targetPort));
-    if (!pointsAtOwnForwardEntry
+    if (!pointsAtOwnForwardEntry(rule.targetIp, rule.targetPort)
       && proxyNodeBindingTruth(
         { targetIp: rule.targetIp, targetPort: rule.targetPort },
         { address: templateNode.address, port: templateNode.port },
