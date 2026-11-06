@@ -352,6 +352,8 @@ export async function getEnabledProxyInboundsWithUsersByHost(
         accountEnabled: users.accountEnabled,
         allowProxySubscription: users.allowProxySubscription,
         expiresAt: users.expiresAt,
+        trafficLimit: users.trafficLimit,
+        trafficUsed: users.trafficUsed,
       })
       .from(users)
       .where(inArray(users.id, ownerIds));
@@ -421,6 +423,8 @@ export async function getEnabledProxyInboundsWithUsersByHost(
         accountEnabled: users.accountEnabled,
         allowProxySubscription: users.allowProxySubscription,
         expiresAt: users.expiresAt,
+        trafficLimit: users.trafficLimit,
+        trafficUsed: users.trafficUsed,
       })
       .from(users)
       .where(inArray(users.id, recipientIds));
@@ -776,19 +780,48 @@ export async function releaseAllDedicatedInboundsForUser(userId: number): Promis
  * 三条都要过：账号还开着、还有客户端订阅权限、还没到期。管理员不受订阅权限
  * 那条约束 —— 他本来就绕过那个开关。
  */
-export function proxyCredentialRecipientActive(user: {
+export type ProxyCredentialRecipient = {
   role?: unknown;
   accountEnabled?: unknown;
   allowProxySubscription?: unknown;
   expiresAt?: unknown;
-} | null | undefined, now = Date.now()): boolean {
-  if (!user) return false;
-  if (user.accountEnabled === false || user.accountEnabled === 0) return false;
-  const isAdmin = String(user.role || "") === "admin";
-  if (!isAdmin && !(user.allowProxySubscription === true || user.allowProxySubscription === 1)) return false;
+  /** 流量额度：查询带上这两列才会按「用完了」判；没带（旧调用）就不看流量 */
+  trafficLimit?: unknown;
+  trafficUsed?: unknown;
+  /** 自动暂停时记的原因（setUserForwardAccess）：用来说清楚是到期、超流量还是欠费 */
+  forwardAccessPauseReason?: unknown;
+};
+
+export type ProxyCredentialBlockReason = "missing" | "disabled" | "no-permission" | "expired" | "traffic-exhausted" | "balance-insufficient";
+
+/**
+ * 这个人的代理凭据 / 订阅现在为什么不能用（能用回 null）。订阅入口、落地机凭据同步、Xboard 兼容口
+ * 用的是同一把尺子 —— 订阅给了、落地机却不认，或者反过来，都是这几处各算各的造成的。
+ *
+ * 流量：额度用完时转发那边（agentReportRoutes）会调 setUserForwardAccess(false, "traffic_limit")，
+ * 连带关掉订阅权限；这里再直接比一次用量和额度，管理员把额度调到已用量以下、还没等到下一次流量上报时也作数。
+ * 管理员不看订阅开关和流量（和自动暂停那边一致：管理员从不被自动暂停）；到期照旧算（原来就是这样）。
+ */
+export function proxyCredentialRecipientBlockReason(user: ProxyCredentialRecipient | null | undefined, now = Date.now()): ProxyCredentialBlockReason | null {
+  if (!user) return "missing";
+  if (user.accountEnabled === false || user.accountEnabled === 0) return "disabled";
   const expiresAt = user.expiresAt ? new Date(user.expiresAt as any).getTime() : 0;
-  if (expiresAt && expiresAt <= now) return false;
-  return true;
+  if (expiresAt && expiresAt <= now) return "expired";
+  if (String(user.role || "") === "admin") return null;
+  const limit = Number(user.trafficLimit || 0);
+  if (limit > 0 && Number(user.trafficUsed || 0) >= limit) return "traffic-exhausted";
+  if (!(user.allowProxySubscription === true || user.allowProxySubscription === 1)) {
+    const pause = String(user.forwardAccessPauseReason || "");
+    if (pause === "traffic_limit") return "traffic-exhausted";
+    if (pause === "expired") return "expired";
+    if (pause === "traffic_billing_balance") return "balance-insufficient";
+    return "no-permission";
+  }
+  return null;
+}
+
+export function proxyCredentialRecipientActive(user: ProxyCredentialRecipient | null | undefined, now = Date.now()): boolean {
+  return proxyCredentialRecipientBlockReason(user, now) === null;
 }
 
 /** 这个入站上为某人单独发的那份凭据。没有就返回 null。 */

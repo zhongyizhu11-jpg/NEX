@@ -16,7 +16,7 @@ import { proxySubTemplateUserVars, renderProxySubPipeline } from "../shared/prox
 import { normalizeProxySubHwid, evaluateProxySubDeviceAccess } from "../shared/proxySubDeviceLimit";
 import { normalizeProxySubAlias } from "../shared/proxySubTokenScope";
 import { PROXY_SUB_TOKEN_FAILURE_LABELS, type ProxySubTokenFailureReason } from "../shared/proxySubTokenStatus";
-import { proxyCredentialRecipientActive } from "./repositories/proxyInboundRepository";
+import { proxyCredentialRecipientBlockReason, type ProxyCredentialBlockReason } from "./repositories/proxyInboundRepository";
 import { infoNodesWanted, loadProxySubTokenContext, resolveTemplateForToken, type ProxySubTokenContext } from "./proxySubBundle";
 import { getProxySubCached, proxySubCacheKey, setProxySubCached } from "./proxySubCache";
 import { checkProxySubRateLimit, proxySubMissBlockState, recordProxySubMiss } from "./proxySubRateLimit";
@@ -158,6 +158,16 @@ function requestedFormat(req: Request, pathFormat?: string): ProxySubscriptionFo
   return raw ? normalizeProxySubscriptionFormat(raw) : null;
 }
 
+/** 主人不能用的原因 → 记在令牌上、回给客户端的那句话（到期 / 流量用完 / 欠费分开说） */
+const OWNER_BLOCK_REASONS: Record<ProxyCredentialBlockReason, ProxySubTokenFailureReason> = {
+  missing: "not-eligible",
+  disabled: "not-eligible",
+  "no-permission": "not-eligible",
+  expired: "account-expired",
+  "traffic-exhausted": "traffic-exhausted",
+  "balance-insufficient": "balance-insufficient",
+};
+
 /**
  * 三步资格检查：令牌存在且启用、令牌没过期、主人有资格。
  * 不过的回 403 并写明是哪一步（见 rejected），面板这边也记下来。
@@ -169,11 +179,12 @@ async function gate(_req: Request, token: any, client: DetectedProxyClient): Pro
   const expiresAt = token.expiresAt ? new Date(token.expiresAt as any).getTime() : 0;
   if (expiresAt && expiresAt <= Date.now()) return { ok: false, reason: "token-expired", context };
   /**
-   * 订阅本身的资格：和落地机那边用**同一把尺子**（proxyCredentialRecipientActive）。
+   * 订阅本身的资格：和落地机那边用**同一把尺子**（proxyCredentialRecipientBlockReason）。
    * 到期的租户照样拉到一份列着全部节点的订阅，页头还老老实实写着他已经过期 ——
    * 落地机那边早就把他的凭据拿掉了，两处判定必须一致。
    */
-  if (!proxyCredentialRecipientActive(context.owner as any)) return { ok: false, reason: "not-eligible", context };
+  const blocked = proxyCredentialRecipientBlockReason(context.owner as any);
+  if (blocked) return { ok: false, reason: OWNER_BLOCK_REASONS[blocked], context };
   void client;
   return { ok: true, context };
 }
