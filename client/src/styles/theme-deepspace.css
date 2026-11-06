@@ -544,3 +544,121 @@ html[data-ui-theme="deepspace"] .workspace-main .workspace-header-main { flex: 1
 html[data-ui-theme="deepspace"] .workspace-main .workspace-header-row,
 html[data-ui-theme="deepspace"] .workspace-main .workspace-header-chips { justify-content: flex-start; margin-inline: 0; align-self: flex-start; }
 html[data-ui-theme="deepspace"] .workspace-main .workspace-header-chips-aside { margin-left: auto; }
+
+/* ── 11. 链路管理（深空）：隧道链路一整块面板里一行一条（Tunnels.tsx 的 renderTunnelRow）── */
+/*
+  手机四行：状态点 · 类型 · 名字 · ⋯ 开关 / 入口 ── 46 ms ──▶ 出口 / 30 天色块 + 可用率 / 累计 · 规则数。
+  桌面一行一条，加一行表头：状态 / 类型 / 名称 / 路径 / 延迟 / 24H 走势 / 30 天可用 / 累计 / 规则 / 开关。
+*/
+html[data-ui-theme="deepspace"] .fx-ds-link-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--fx-card-stroke);
+  border-radius: 12px;
+  background: var(--fx-card-fill);
+  overflow: hidden;
+}
+html[data-ui-theme="deepspace"] .fx-ds-link-head { display: none; }
+html[data-ui-theme="deepspace"] .fx-ds-link {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    "dot kind name actions"
+    "path path path path"
+    "days days days days"
+    "foot foot foot foot";
+  align-items: center;
+  column-gap: 8px;
+  row-gap: 7px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--fx-stroke-weak);
+  background: var(--fx-card-fill);
+  min-width: 0;
+}
+html[data-ui-theme="deepspace"] .fx-ds-link-list > :last-child,
+html[data-ui-theme="deepspace"] .fx-ds-link-list > :last-child > .fx-ds-link { border-bottom: 0; }
+html[data-ui-theme="deepspace"] .fx-ds-link-drop { background: var(--fx-hover); }
+html[data-ui-theme="deepspace"] .fx-ds-link[data-tone="down"] { box-shadow: inset 3px 0 0 var(--fx-down); }
+html[data-ui-theme="deepspace"] .fx-ds-link[data-tone="warn"] { box-shadow: inset 3px 0 0 var(--fx-warn); }
+html[data-ui-theme="deepspace"] .fx-ds-link[data-tone="off"] > :not(.fx-ds-link-actions) { opacity: .55; }
+html[data-ui-theme="deepspace"] .fx-ds-link-dot { grid-area: dot; display: inline-flex; }
+html[data-ui-theme="deepspace"] .fx-ds-link-kind {
+  grid-area: kind;
+  justify-self: start;
+  padding: 0 5px;
+  border: 1px solid var(--fx-stroke-base);
+  border-radius: 4px;
+  font-family: var(--fx-ds-mono);
+  font-size: 10.5px;
+  line-height: 16px;
+  font-weight: 500;
+  color: var(--fx-text-muted);
+  white-space: nowrap;
+}
+html[data-ui-theme="deepspace"] .fx-ds-link-kind[data-kind="tls"] { color: #3ab8ff; border-color: color-mix(in srgb, #3ab8ff 40%, transparent); }
+html[data-ui-theme="deepspace"] .fx-ds-link-kind[data-kind="wss"] { color: #c084fc; border-color: color-mix(in srgb, #c084fc 40%, transparent); }
+html[data-ui-theme="deepspace"] .fx-ds-link-kind[data-kind="nex"] { color: var(--fx-primary-fill); border-color: color-mix(in srgb, var(--fx-primary-fill) 40%, transparent); }
+html[data-ui-theme="deepspace"] .fx-ds-link-name { grid-area: name; display: flex; flex-direction: column; gap: 1px; min-width: 0; font-size: 14px; font-weight: 600; line-height: 20px; color: var(--fx-text); }
+html[data-ui-theme="deepspace"] .fx-ds-link-name > :not(:first-child) { font-size: 11px; font-weight: 400; line-height: 16px; }
+html[data-ui-theme="deepspace"] .fx-ds-link-warn { color: var(--fx-down-text); }
+html[data-ui-theme="deepspace"] .fx-ds-link-actions { grid-area: actions; display: flex; align-items: center; gap: 4px; }
+html[data-ui-theme="deepspace"] .fx-ds-link-actions button { min-height: 0; }
+html[data-ui-theme="deepspace"] .fx-ds-link-path { grid-area: path; display: flex; align-items: center; gap: 6px; min-width: 0; font-family: var(--fx-ds-mono); font-size: 12px; line-height: 18px; color: var(--fx-text-secondary); }
+html[data-ui-theme="deepspace"] .fx-ds-link-node { flex: 0 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+html[data-ui-theme="deepspace"] .fx-ds-link-edge { flex: none; display: inline-flex; align-items: center; gap: 4px; color: var(--fx-primary-fill); white-space: nowrap; }
+html[data-ui-theme="deepspace"] .fx-ds-link-edge::before { content: "──"; letter-spacing: -.1em; }
+html[data-ui-theme="deepspace"] .fx-ds-link-edge::after { content: "──▶"; letter-spacing: -.1em; }
+html[data-ui-theme="deepspace"] .fx-ds-link-edge[data-tone="warn"] { color: var(--fx-warn); }
+html[data-ui-theme="deepspace"] .fx-ds-link-edge[data-tone="down"] { color: var(--fx-down); }
+html[data-ui-theme="deepspace"] .fx-ds-link-edge[data-tone="off"] { color: var(--fx-text-muted); }
+html[data-ui-theme="deepspace"] .fx-ds-link-edge-lat:empty { display: none; }
+html[data-ui-theme="deepspace"] .fx-ds-link-via { padding: 0 4px; border: 1px solid var(--fx-stroke-base); border-radius: 4px; font-size: 10.5px; line-height: 14px; color: var(--fx-text-muted); }
+html[data-ui-theme="deepspace"] .fx-ds-link-lat,
+html[data-ui-theme="deepspace"] .fx-ds-link-spark,
+html[data-ui-theme="deepspace"] .fx-ds-link-total,
+html[data-ui-theme="deepspace"] .fx-ds-link-rules { display: none; }
+html[data-ui-theme="deepspace"] .fx-ds-link-days { grid-area: days; display: flex; align-items: center; gap: 10px; min-width: 0; }
+html[data-ui-theme="deepspace"] .fx-ds-link-days > [data-latency-history] { flex: 1 1 auto; }
+html[data-ui-theme="deepspace"] .fx-ds-link-days [data-latency-history] > span:first-child { font-family: var(--fx-ds-mono); }
+html[data-ui-theme="deepspace"] .fx-ds-link-pct,
+html[data-ui-theme="deepspace"] .fx-ds-link-muted { flex: none; font-family: var(--fx-ds-mono); font-size: 11.5px; color: var(--fx-text-muted); font-variant-numeric: tabular-nums; }
+html[data-ui-theme="deepspace"] .fx-ds-link-foot { grid-area: foot; display: flex; justify-content: space-between; gap: 12px; min-width: 0; font-family: var(--fx-ds-mono); font-size: 11.5px; line-height: 16px; color: var(--fx-text-muted); }
+html[data-ui-theme="deepspace"] .fx-ds-link-foot > span { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+html[data-ui-theme="deepspace"] .fx-ds-link-lat[data-tone="healthy"],
+html[data-ui-theme="deepspace"] .fx-ds-link-lat[data-tone="ok"] { color: var(--fx-primary-fill); }
+html[data-ui-theme="deepspace"] .fx-ds-link-lat[data-tone="warn"] { color: var(--fx-warn); }
+html[data-ui-theme="deepspace"] .fx-ds-link-lat[data-tone="down"] { color: var(--fx-down); }
+html[data-ui-theme="deepspace"] .fx-ds-link-lat[data-tone="off"] { color: var(--fx-text-muted); }
+@media (min-width: 768px) {
+  html[data-ui-theme="deepspace"] .fx-ds-link-head,
+  html[data-ui-theme="deepspace"] .fx-ds-link {
+    /* 最后一列（⋯ / 开关 / 拖动）给定宽：表头那一格是空的，auto 会让表头和行的列对不齐 */
+    grid-template-columns: 12px 52px minmax(140px, 1fr) minmax(220px, 2.2fr) 76px 150px minmax(170px, 210px) 84px 40px 120px;
+    grid-template-areas: "dot kind name path lat spark days total rules actions";
+    column-gap: 14px;
+    padding: 0 16px;
+  }
+  html[data-ui-theme="deepspace"] .fx-ds-link-head {
+    display: grid;
+    align-items: center;
+    min-height: 34px;
+    border-bottom: 1px solid var(--fx-card-stroke);
+    font-family: var(--fx-ds-mono);
+    font-size: 10.5px;
+    letter-spacing: .05em;
+    color: var(--fx-text-muted);
+    white-space: nowrap;
+  }
+  html[data-ui-theme="deepspace"] .fx-ds-link { min-height: 54px; row-gap: 0; }
+  html[data-ui-theme="deepspace"] .fx-ds-link:hover { background: var(--fx-hover); }
+  html[data-ui-theme="deepspace"] .fx-ds-link-name { font-size: 13px; }
+  html[data-ui-theme="deepspace"] .fx-ds-link-edge-lat { display: none; }
+  html[data-ui-theme="deepspace"] .fx-ds-link-lat { display: block; grid-area: lat; font-family: var(--fx-ds-mono); font-size: 12.5px; white-space: nowrap; }
+  html[data-ui-theme="deepspace"] .fx-ds-link-spark { display: block; grid-area: spark; width: 100%; height: 22px; opacity: .85; }
+  html[data-ui-theme="deepspace"] .fx-ds-link-total { display: block; grid-area: total; font-family: var(--fx-ds-mono); font-size: 12.5px; white-space: nowrap; color: var(--fx-text-secondary); font-variant-numeric: tabular-nums; }
+  html[data-ui-theme="deepspace"] .fx-ds-link-rules { display: block; grid-area: rules; font-family: var(--fx-ds-mono); font-size: 12.5px; color: var(--fx-text-muted); }
+  html[data-ui-theme="deepspace"] .fx-ds-link-days [data-latency-history] > span:first-child { display: none; }
+  html[data-ui-theme="deepspace"] .fx-ds-link-foot { display: none; }
+  html[data-ui-theme="deepspace"] .fx-ds-link-actions { justify-content: flex-end; }
+}
