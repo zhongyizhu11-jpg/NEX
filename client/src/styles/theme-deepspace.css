@@ -661,6 +661,8 @@ html[data-ui-theme="deepspace"] .fx-ds-host-actions button { min-height: 0; }
   html[data-ui-theme="deepspace"] .fx-ds-host-ver { justify-content: flex-start; flex-wrap: wrap; row-gap: 3px; padding: 6px 0; }
   html[data-ui-theme="deepspace"] .fx-ds-host-version { display: inline; }
   html[data-ui-theme="deepspace"] .fx-ds-host-actions { justify-content: flex-end; margin: 0; }
+}
+
 /* ── 11. 链路管理（深空）：隧道链路一整块面板里一行一条（Tunnels.tsx 的 renderTunnelRow）── */
 /*
   手机四行：状态点 · 类型 · 名字 · ⋯ 开关 / 入口 ── 46 ms ──▶ 出口 / 30 天色块 + 可用率 / 累计 · 规则数。
