@@ -54,11 +54,17 @@ export class AgentHeartbeatGate {
         this.enqueue(hostId, currentTime);
         return null;
       }
-      if (this.waiting[0] !== hostId) {
+      /*
+        排着队的主机按先后进，但不必非等队头：空出 N 个位置时，队伍前 N 台谁先回来谁先进。
+        原来只认队头 —— 队头那台晚回来几秒（Agent 的重试本来就带随机），后面的就算有空位也全被打回去。
+      */
+      const freeSlots = Math.max(1, this.maxConcurrent) - this.active.size;
+      const position = this.waiting.indexOf(hostId);
+      if (position < 0 || position >= freeSlots) {
         this.waitingSince.set(hostId, currentTime);
         return null;
       }
-      this.waiting.shift();
+      this.waiting.splice(position, 1);
       this.waitingSince.delete(hostId);
     }
 
@@ -70,6 +76,17 @@ export class AgentHeartbeatGate {
       this.active.delete(hostId);
       this.completedAt.set(hostId, this.now());
     };
+  }
+
+  /**
+   * 回 reconciliationCoalesced 时建议 Agent 多久后再来（nextInterval，秒）。在排队的按前面还有
+   * 几批（每批 maxConcurrent 台）算，3~15 秒；没在排队（同一台重复 / 刚对账过）照旧 5 秒。
+   * 旧 Agent 不看这个值，固定 5 秒后再来；新 Agent 在它上面再加 0~50% 随机（agent/panel_backoff.go）。
+   */
+  retryHintSeconds(hostIdValue: unknown) {
+    const position = this.waiting.indexOf(Number(hostIdValue));
+    if (position < 0) return 5;
+    return Math.min(15, Math.max(3, 3 + Math.ceil(position / Math.max(1, this.maxConcurrent))));
   }
 
   clear(hostIdValue?: unknown) {
