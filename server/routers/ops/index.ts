@@ -12,6 +12,7 @@ import { hostSecurityRouter } from "./hostSecurity";
 import { agentRelayRouter } from "./agentRelay";
 import { hostOpsRouter } from "./hostOps";
 import { apiTokensRouter } from "./apiTokens";
+import { apiRateLimitRouter } from "./apiRateLimit";
 import { passkeysRouter } from "./passkeys";
 import { sessionsRouter } from "./sessions";
 import { maintenanceRouter } from "./maintenance";
@@ -34,6 +35,7 @@ export const opsRouter = router({
   agentRelay: agentRelayRouter,
   hostOps: hostOpsRouter,
   apiTokens: apiTokensRouter,
+  apiRateLimit: apiRateLimitRouter,
   passkeys: passkeysRouter,
   sessions: sessionsRouter,
   maintenance: maintenanceRouter,

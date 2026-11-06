@@ -105,3 +105,32 @@ test("禁止名单里的每个过程都真实存在（防止改名后名单悄�
     }
   }
 });
+
+test("勾了模块的令牌：范围内照常（只读仍不能改），范围外一律拒，禁止名单永远最先", () => {
+  // 范围内
+  assert.equal(apiTokenPolicyError("full", "rules.toggle", "mutation", ["rules"]), null);
+  assert.equal(apiTokenPolicyError("read", "rules.listPage", "query", ["rules"]), null);
+  // 范围内但只读令牌改东西
+  assert.equal(apiTokenPolicyError("read", "rules.toggle", "mutation", ["rules"]), API_TOKEN_READ_ONLY_MESSAGE);
+  // 范围外：查询也拒，说明里写清能去哪、这个过程归哪
+  const denied = apiTokenPolicyError("full", "hosts.listPage", "query", ["rules"]);
+  assert.match(String(denied), /只能访问：转发规则/);
+  assert.match(String(denied), /hosts\.listPage 属于「主机」/);
+  // 没归类的路由勾了模块也不给
+  assert.match(String(apiTokenPolicyError("full", "googleAuth.status", "query", ["rules", "hosts"])), /未开放给令牌的部分/);
+  // setup. 本来就在禁止名单里：禁止的说明优先
+  assert.equal(apiTokenPolicyError("full", "setup.status", "query", ["rules", "hosts"]), API_TOKEN_FORBIDDEN_MESSAGE);
+  // auth.me 永远能调
+  assert.equal(apiTokenPolicyError("read", "auth.me", "query", ["rules"]), null);
+  // 禁止名单优先：就算勾了「系统设置」，导出备份照样拒
+  assert.equal(apiTokenPolicyError("full", "system.exportPanelBackup", "mutation", ["system"]), API_TOKEN_FORBIDDEN_MESSAGE);
+  // 不传 / 空 = 不限，和老令牌一样
+  assert.equal(apiTokenPolicyError("full", "users.listPage", "query"), null);
+  assert.equal(apiTokenPolicyError("full", "users.listPage", "query", []), null);
+  assert.equal(apiTokenPolicyError("full", "users.listPage", "query", null), null);
+});
+
+test("令牌不能改接口限流（不能给自己解除限流），能查看", () => {
+  assert.equal(apiTokenPolicyError("full", "ops.apiRateLimit.update", "mutation"), API_TOKEN_FORBIDDEN_MESSAGE);
+  assert.equal(apiTokenPolicyError("full", "ops.apiRateLimit.get", "query"), null);
+});

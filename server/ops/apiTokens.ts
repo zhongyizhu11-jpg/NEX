@@ -18,6 +18,7 @@ import type { User } from "../../drizzle/schema";
 import * as db from "../db";
 import { executeRaw, insertAndGetId, queryRaw, quoteDbIdentifier, rawEpochToDate } from "../dbRuntime";
 import { normalizeApiTokenScope, type ApiTokenContext, type ApiTokenScope } from "./apiTokenPolicy";
+import { normalizeApiTokenModules, serializeApiTokenModules, type ApiTokenModule } from "../../shared/apiTokenModules";
 import { clientIp } from "../clientIp";
 
 export * from "./apiTokenPolicy";
@@ -66,6 +67,7 @@ type TokenRow = {
   userId: number;
   name: string;
   scope: ApiTokenScope;
+  modules: ApiTokenModule[] | null;
   expiresAt: Date | null;
   revokedAt: Date | null;
   lastUsedAt: Date | null;
@@ -77,6 +79,7 @@ function rowToToken(row: Record<string, any>): TokenRow {
     userId: Number(row.userId),
     name: String(row.name || ""),
     scope: normalizeApiTokenScope(row.scope),
+    modules: normalizeApiTokenModules(row.modules),
     expiresAt: rawEpochToDate(row.expiresAt),
     revokedAt: rawEpochToDate(row.revokedAt),
     lastUsedAt: rawEpochToDate(row.lastUsedAt),
@@ -115,7 +118,7 @@ export async function resolveApiToken(token: string, ip: string): Promise<Resolv
   await touchApiToken(record.id, ip, record.lastUsedAt).catch((error) => {
     console.warn(`[ApiTokens] touch failed id=${record.id}: ${error instanceof Error ? error.message : String(error)}`);
   });
-  return { user, apiToken: { id: record.id, scope: record.scope, name: record.name } };
+  return { user, apiToken: { id: record.id, scope: record.scope, name: record.name, modules: record.modules } };
 }
 
 /** 令牌请求的响应不写也不清 cookie。 */
@@ -151,6 +154,8 @@ export type ApiTokenListItem = {
   name: string;
   prefix: string;
   scope: ApiTokenScope;
+  /** null = 不限模块 */
+  modules: ApiTokenModule[] | null;
   lastUsedAt: Date | null;
   lastUsedIp: string | null;
   expiresAt: Date | null;
@@ -172,6 +177,7 @@ export async function listUserApiTokens(userId: number): Promise<ApiTokenListIte
       name: String(row.name || ""),
       prefix: String(row.prefix || ""),
       scope: normalizeApiTokenScope(row.scope),
+      modules: normalizeApiTokenModules(row.modules),
       lastUsedAt: rawEpochToDate(row.lastUsedAt),
       lastUsedIp: row.lastUsedIp ? String(row.lastUsedIp) : null,
       expiresAt,
@@ -183,7 +189,7 @@ export async function listUserApiTokens(userId: number): Promise<ApiTokenListIte
 
 export const MAX_API_TOKENS_PER_USER = 50;
 
-export async function createUserApiToken(input: { userId: number; name: string; scope: ApiTokenScope; expiresInDays?: number | null }) {
+export async function createUserApiToken(input: { userId: number; name: string; scope: ApiTokenScope; modules?: readonly ApiTokenModule[] | null; expiresInDays?: number | null }) {
   const q = quoteDbIdentifier;
   const countRows = await queryRaw<{ n: number }>(
     `SELECT COUNT(*) AS ${q("n")} FROM ${q("api_tokens")} WHERE ${q("userId")} = ? AND ${q("revokedAt")} IS NULL`,
@@ -201,10 +207,21 @@ export async function createUserApiToken(input: { userId: number; name: string; 
     prefix: generated.prefix,
     tokenHash: generated.hash,
     scope: input.scope,
+    modules: serializeApiTokenModules(input.modules),
     expiresAt,
     createdAt: nowSeconds,
   });
   return { id, token: generated.token, prefix: generated.prefix, expiresAt: expiresAt ? new Date(expiresAt * 1000) : null };
+}
+
+/** 改一枚令牌能碰的模块（只能改自己的、还有效的）。null / 空 = 不限。 */
+export async function updateUserApiTokenModules(userId: number, id: number, modules: readonly ApiTokenModule[] | null) {
+  const q = quoteDbIdentifier;
+  const result = (await executeRaw(
+    `UPDATE ${q("api_tokens")} SET ${q("modules")} = ? WHERE ${q("id")} = ? AND ${q("userId")} = ? AND ${q("revokedAt")} IS NULL`,
+    [serializeApiTokenModules(modules), id, userId],
+  )) as { affectedRows?: number; changes?: number; rowCount?: number } | null | undefined;
+  return Number(result?.affectedRows ?? result?.changes ?? result?.rowCount ?? 0) > 0;
 }
 
 export async function revokeUserApiToken(userId: number, id: number) {

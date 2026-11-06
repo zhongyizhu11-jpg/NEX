@@ -15,7 +15,8 @@
 */
 import { z } from "zod";
 import { APP_VERSION } from "../../shared/versions";
-import { API_TOKEN_READ_ONLY_MESSAGE, type ApiTokenScope } from "./apiTokenPolicy";
+import { API_TOKEN_READ_ONLY_MESSAGE, apiTokenModuleDeniedMessage, type ApiTokenScope } from "./apiTokenPolicy";
+import { apiTokenModulesAllowPath, type ApiTokenModule } from "../../shared/apiTokenModules";
 
 export const MCP_SUPPORTED_PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"] as const;
 export const MCP_DEFAULT_PROTOCOL_VERSION = "2025-06-18";
@@ -26,6 +27,8 @@ export type McpInvoker = (path: string, input?: unknown) => Promise<unknown>;
 
 export type McpSession = {
   scope: ApiTokenScope;
+  /** 令牌只能碰的模块；null / 不给 = 不限（见 shared/apiTokenModules.ts）。 */
+  modules?: ApiTokenModule[] | null;
   isAdmin: boolean;
   invoke: McpInvoker;
   /** 测试里把轮询等待调成 0。 */
@@ -480,9 +483,49 @@ export const MCP_TOOLS: McpTool[] = [
   },
 ];
 
+/*
+  每个工具会调哪些 tRPC 过程。令牌勾了模块时，用到的过程有一个不在范围里，这个工具就不列出来、也不让调
+  （调了也会被 tRPC 中间件拒，这里只是提前给一句直白的话）。mcp.test.ts 用假调用器跑一遍每个工具，
+  核对这里没漏写。
+*/
+export const MCP_TOOL_PATHS: Record<string, readonly string[]> = {
+  list_hosts: ["hosts.listPage"],
+  get_host: ["hosts.getById"],
+  list_rules: ["rules.listPage"],
+  get_rule: ["rules.getById"],
+  get_rule_test: ["rules.latestTest"],
+  diagnose_rule: ["rules.startSelfTest", "rules.latestTest"],
+  get_speed_test: ["hosts.speedTestStatus"],
+  speed_test: ["hosts.startSpeedTest", "hosts.speedTestStatus"],
+  list_tunnels: ["tunnels.listPage"],
+  list_route_groups: ["forwardGroups.list"],
+  list_lines: ["rules.routeBoard"],
+  get_line: ["rules.routeStatus"],
+  get_line_events: ["rules.routeEvents"],
+  export_line: ["lineDiagnostics.lineExport"],
+  dashboard_stats: ["dashboard.stats"],
+  list_users: ["users.listPage"],
+  get_events: ["ops.events.list"],
+  get_fault_bundle: ["diagnostics.faultBundle"],
+  get_fault_board: ["ops.faultBoard.summary"],
+  get_ops_board: ["ops.board.summary"],
+  set_rule_enabled: ["rules.toggle"],
+  create_rule: ["rules.create"],
+  reset_user_traffic: ["users.resetTraffic"],
+};
+
+/** 这个工具用到的过程里，第一个不在令牌模块范围内的；都在（或不限模块）返回 null。 */
+function toolBlockedPath(tool: McpTool, session: McpSession): string | null {
+  if (!session.modules || session.modules.length === 0) return null;
+  const paths = MCP_TOOL_PATHS[tool.name] ?? [];
+  if (paths.length === 0) return tool.name;
+  return paths.find((path) => !apiTokenModulesAllowPath(session.modules, path)) ?? null;
+}
+
 function toolUsable(tool: McpTool, session: McpSession) {
   if (tool.adminOnly && !session.isAdmin) return false;
   if (tool.mutation && session.scope !== "full") return false;
+  if (toolBlockedPath(tool, session)) return false;
   return true;
 }
 
@@ -508,6 +551,8 @@ export async function callMcpTool(name: string, rawArgs: unknown, session: McpSe
   if (!tool) return null;
   if (tool.mutation && session.scope !== "full") return toolText(`${API_TOKEN_READ_ONLY_MESSAGE}（${tool.name} 会修改数据，需要「完全」权限的令牌）`, true);
   if (tool.adminOnly && !session.isAdmin) return toolText("这个工具只有管理员能用", true);
+  const blocked = toolBlockedPath(tool, session);
+  if (blocked) return toolText(apiTokenModuleDeniedMessage(session.modules ?? [], blocked), true);
   const parsed = tool.args.safeParse(rawArgs ?? {});
   if (!parsed.success) {
     const issues = parsed.error.issues.map((issue) => `${issue.path.join(".") || "参数"}：${issue.message}`).join("；");

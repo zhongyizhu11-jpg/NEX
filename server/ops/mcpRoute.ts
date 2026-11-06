@@ -11,6 +11,24 @@ import express, { type Request, type Response } from "express";
 import { getSetting } from "../repositories/settingsRepository";
 import { neutralizeCookies, readApiTokenFromHeader, requestIp, resolveApiToken } from "./apiTokens";
 import { handleMcpPayload, JSON_RPC_INTERNAL_ERROR, type McpInvoker } from "./mcp";
+import { apiRateLimitMessage, checkApiRateLimit } from "../apiRateLimit";
+import { currentApiRateLimitConfig, noteApiRateLimited } from "../apiRateLimitConfig";
+
+/**
+ * /mcp 这一层也限流：initialize、tools/list 这些不调 tRPC 过程，不在这里数的话一个疯跑的客户端
+ * 能无限打（每次还要查一遍令牌）。令牌有效按令牌的查询额度算，无效按来源 IP 的匿名额度算；
+ * 工具真正调到的 tRPC 过程在 trpc.ts 的中间件里再各算一次（修改类工具因此也受修改额度约束）。
+ * 超了回 429 + Retry-After。
+ */
+function rejectIfRateLimited(req: Request, res: Response, caller: { apiTokenId: number | null; userId: number | null; tokenName?: string | null }) {
+  const ip = requestIp(req);
+  const decision = checkApiRateLimit({ apiTokenId: caller.apiTokenId, userId: caller.userId, ip }, "query", currentApiRateLimitConfig());
+  if (!decision.limited) return false;
+  noteApiRateLimited(decision, { path: "mcp", type: "query", userId: caller.userId, tokenName: caller.tokenName ?? null, ip });
+  res.setHeader("Retry-After", String(decision.retryAfterSeconds));
+  res.status(429).json(jsonRpcError(-32029, apiRateLimitMessage(decision, "query")));
+  return true;
+}
 
 function jsonRpcError(code: number, message: string) {
   return { jsonrpc: "2.0", id: null, error: { code, message } };
@@ -67,6 +85,9 @@ async function handlePost(req: Request, res: Response) {
   }
   const token = readApiTokenFromHeader(req.headers.authorization);
   const resolved = token ? await resolveApiToken(token, requestIp(req)).catch(() => null) : null;
+  if (rejectIfRateLimited(req, res, resolved
+    ? { apiTokenId: resolved.apiToken.id, userId: Number(resolved.user.id), tokenName: resolved.apiToken.name }
+    : { apiTokenId: null, userId: null })) return;
   if (!resolved) {
     res.setHeader("WWW-Authenticate", 'Bearer realm="nex", error="invalid_token"');
     res.status(401).json(jsonRpcError(-32001, "需要有效的 API 令牌（Authorization: Bearer nex_…），请在面板 设置 › 进阶 里创建"));
@@ -77,6 +98,7 @@ async function handlePost(req: Request, res: Response) {
     const invoke = await createInvoker(ctx);
     const outcome = await handleMcpPayload(req.body, {
       scope: resolved.apiToken.scope,
+      modules: resolved.apiToken.modules ?? null,
       isAdmin: resolved.user.role === "admin",
       invoke,
     });

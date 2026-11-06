@@ -18,6 +18,8 @@ import { mobileAuth } from "@/lib/mobileAuth";
 import { trpc } from "@/lib/trpc";
 import { usePanelFlags } from "@/hooks/usePanelFlags";
 import { dateLabel, relativeTimeLabel } from "../account/timeLabel";
+import { apiTokenModulesLabel, type ApiTokenModule } from "@shared/apiTokenModules";
+import { ApiTokenModulePicker } from "./ApiTokenModulePicker";
 
 type Scope = "read" | "full";
 const EXPIRY_OPTIONS = [
@@ -66,10 +68,14 @@ export default function ApiTokensSection(_props: Record<string, never>) {
   const { panelPublicUrl } = usePanelFlags();
   const createMutation = trpc.ops.apiTokens.create.useMutation();
   const revokeMutation = trpc.ops.apiTokens.revoke.useMutation();
+  const updateModulesMutation = trpc.ops.apiTokens.updateModules.useMutation();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [name, setName] = useState("");
   const [scope, setScope] = useState<Scope>("read");
   const [expiry, setExpiry] = useState<(typeof EXPIRY_OPTIONS)[number]["value"]>("90");
+  const [modules, setModules] = useState<ApiTokenModule[]>([]);
+  // 改模块：正在改哪一枚、勾了哪些
+  const [editing, setEditing] = useState<{ id: number; name: string; modules: ApiTokenModule[] } | null>(null);
   const [created, setCreated] = useState<{ token: string; name: string } | null>(null);
 
   const panelUrl = (panelPublicUrl.trim() || mobileAuth.panelOrigin()).replace(/\/+$/, "");
@@ -83,6 +89,7 @@ export default function ApiTokensSection(_props: Record<string, never>) {
     setName("");
     setScope("read");
     setExpiry("90");
+    setModules([]);
     setCreated(null);
     setDialogOpen(true);
   };
@@ -97,12 +104,25 @@ export default function ApiTokensSection(_props: Record<string, never>) {
       const result = await createMutation.mutateAsync({
         name: trimmed,
         scope,
+        modules: modules.length ? modules : null,
         expiresInDays: expiry === "never" ? null : Number(expiry),
       });
       setCreated({ token: result.token, name: trimmed });
       await utils.ops.apiTokens.list.invalidate();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "创建失败");
+    }
+  };
+
+  const handleSaveModules = async () => {
+    if (!editing) return;
+    try {
+      await updateModulesMutation.mutateAsync({ id: editing.id, modules: editing.modules.length ? editing.modules : null });
+      await utils.ops.apiTokens.list.invalidate();
+      toast.success("已更新令牌能访问的模块");
+      setEditing(null);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "保存失败");
     }
   };
 
@@ -132,7 +152,7 @@ export default function ApiTokensSection(_props: Record<string, never>) {
               <KeyRound className="h-4 w-4 text-primary" />
               API 令牌
             </CardTitle>
-            <CardDescription>给脚本和 AI 助手用，权限和你本人一样；「只读」令牌只能查看。</CardDescription>
+            <CardDescription>给脚本和 AI 助手用，权限和你本人一样；「只读」令牌只能查看，还可以只开放部分模块。</CardDescription>
           </div>
           <Button className="w-full gap-2 sm:w-auto" onClick={openCreate}>
             <Plus className="h-4 w-4" />
@@ -155,6 +175,7 @@ export default function ApiTokensSection(_props: Record<string, never>) {
                     <span className="flex flex-wrap items-center gap-2">
                       <span className="break-all">{item.name}</span>
                       <Badge variant={item.scope === "full" ? "default" : "secondary"}>{item.scope === "full" ? "完全" : "只读"}</Badge>
+                      <Badge variant="outline" className="max-w-full truncate" title={apiTokenModulesLabel(item.modules)}>{apiTokenModulesLabel(item.modules)}</Badge>
                       {item.expired ? <Badge variant="destructive">已过期</Badge> : null}
                     </span>
                   )}
@@ -166,9 +187,14 @@ export default function ApiTokensSection(_props: Record<string, never>) {
                     </>
                   )}
                   control={(
-                    <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={() => handleRevoke(item)} disabled={revokeMutation.isPending}>
-                      撤销
-                    </Button>
+                    <span className="flex items-center gap-1">
+                      <Button variant="ghost" size="sm" onClick={() => setEditing({ id: item.id, name: item.name, modules: [...(item.modules ?? [])] })}>
+                        模块
+                      </Button>
+                      <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={() => handleRevoke(item)} disabled={revokeMutation.isPending}>
+                        撤销
+                      </Button>
+                    </span>
                   )}
                 />
               ))}
@@ -196,7 +222,7 @@ export default function ApiTokensSection(_props: Record<string, never>) {
       </Card>
 
       <Dialog open={dialogOpen} onOpenChange={(open) => { setDialogOpen(open); if (!open) setCreated(null); }}>
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg">
           {created ? (
             <>
               <DialogHeader>
@@ -237,6 +263,10 @@ export default function ApiTokensSection(_props: Record<string, never>) {
                   </Select>
                 </FormField>
                 <FormField className="space-y-2">
+                  <Label>能访问的模块</Label>
+                  <ApiTokenModulePicker value={modules} onChange={setModules} />
+                </FormField>
+                <FormField className="space-y-2">
                   <Label>有效期</Label>
                   <Select value={expiry} onValueChange={(value) => setExpiry(value as typeof expiry)}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
@@ -258,6 +288,22 @@ export default function ApiTokensSection(_props: Record<string, never>) {
               </DialogFooter>
             </>
           )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!editing} onOpenChange={(open) => { if (!open) setEditing(null); }}>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>令牌能访问的模块</DialogTitle>
+            <DialogDescription>「{editing?.name}」改完立刻生效；用它的脚本调到范围外的接口会被拒绝。</DialogDescription>
+          </DialogHeader>
+          {editing ? (
+            <ApiTokenModulePicker value={editing.modules} onChange={(next) => setEditing({ ...editing, modules: next })} disabled={updateModulesMutation.isPending} />
+          ) : null}
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setEditing(null)}>取消</Button>
+            <Button onClick={handleSaveModules} disabled={updateModulesMutation.isPending}>{updateModulesMutation.isPending ? "保存中…" : "保存"}</Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </>
