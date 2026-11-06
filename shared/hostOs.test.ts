@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseHostOs } from "./hostOs";
+import { hostOsShortTag, parseHostOs } from "./hostOs";
 
 /**
  * osInfo 是 Agent 原样上报的 /etc/os-release PRETTY_NAME。卡片上只放得下
@@ -52,6 +52,18 @@ test("没上报：空标识，卡片上就不画", () => {
   for (const value of [null, undefined, "", "   "]) {
     assert.deepEqual(parseHostOs(value), { family: "unknown", name: "", version: "", label: "", full: "" });
   }
+});
+
+test("深空主机行的短标签", () => {
+  const tag = (raw: string | null) => hostOsShortTag(parseHostOs(raw));
+  assert.equal(tag("Ubuntu 24.04.1 LTS"), "UBU");
+  assert.equal(tag("Debian GNU/Linux 12 (bookworm)"), "DEB");
+  assert.equal(tag("AlmaLinux 9.4 (Seafoam Ocelot)"), "ALMA");
+  assert.equal(tag("Rocky Linux 9.3 (Blue Onyx)"), "ROCKY");
+  assert.equal(tag("CentOS Linux 7 (Core)"), "CENT");
+  assert.equal(tag("windows/amd64"), "WIN");
+  assert.equal(tag("linux/amd64"), "LNX");
+  assert.equal(tag(null), "");
 });
 
 test("名字和版本分开给，详情里能单独用", () => {
