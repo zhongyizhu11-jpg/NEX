@@ -311,6 +311,9 @@ func agentPresenceLoop(cfg Config) {
 			delay, retrying = retries.failure(err)
 			// 重试节奏（指数退避与冷却）不变，只把每次的等待在 [最小间隔, delay] 里随机化。
 			delay = fullJitterDelay(delay, agentPresenceMinInterval)
+			if retryAfter := panelRetryAfterDelay(err); retryAfter > delay {
+				delay = retryAfter
+			}
 			retryGeneration = currentGeneration
 			if !retrying && shouldLogAgentReport("presence-retry-paused", agentReportLogInterval) {
 				logf("presence retry burst stopped; next scheduled attempt in %s: %v", delay, err)

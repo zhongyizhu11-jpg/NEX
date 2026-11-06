@@ -53,12 +53,23 @@ export function isTunnelApplyBlockingProbe(action: any) {
   return action.statusType === "tunnel" || Number(action.tunnelId) > 0;
 }
 
-export function shouldSendDesiredState(hostId: number, actions: any[], activeWorkActions: any[], now: number, configRevision = 0) {
+/**
+ * 这次要不要把期望状态整份发下去：动作内容（签名，不含 knownRunning）变了就发；还有待办、或者
+ * Agent 报上来的已执行摘要和当前的对不上（agentBehind）时，距上次发过 60 秒就再发一次。
+ */
+export function shouldSendDesiredState(
+  hostId: number,
+  actions: any[],
+  activeWorkActions: any[],
+  now: number,
+  configRevision = 0,
+  agentBehind = false,
+) {
   const id = Number(hostId);
   if (!Number.isFinite(id) || id <= 0) return actions.length > 0;
   const signature = stableActionSignatureHash(actions, `${Math.max(0, Math.floor(Number(configRevision) || 0))}\n`);
   const cached = agentDesiredStateSendCache.get(id);
-  const hasActiveWork = activeWorkActions.length > 0;
+  const hasActiveWork = activeWorkActions.length > 0 || agentBehind;
   const changed = !cached || cached.signature !== signature;
   const activeResync = hasActiveWork && !!cached && now - cached.sentAt >= AGENT_DESIRED_STATE_ACTIVE_RESEND_MS;
   const shouldSend = changed || activeResync;

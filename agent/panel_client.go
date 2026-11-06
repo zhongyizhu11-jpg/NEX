@@ -176,14 +176,15 @@ func postOnceWithClientToPanelURL(client *http.Client, cfg Config, panelURL stri
 				return wrapAgentRequestAttemptError(migratedPanelError{PanelURL: panelURL}, auth, authResult, responseAuthenticated)
 			}
 		}
+		retryAfter := parsePanelRetryAfter(res.StatusCode, res.Header.Get("Retry-After"), time.Now())
 		if decryptErr != nil {
 			return wrapAgentRequestAttemptError(
-				agentHTTPStatusError{StatusCode: res.StatusCode, Status: res.Status, Detail: decryptErr.Error()},
+				agentHTTPStatusError{StatusCode: res.StatusCode, Status: res.Status, Detail: decryptErr.Error(), RetryAfter: retryAfter},
 				auth, authResult, responseAuthenticated,
 			)
 		}
 		return wrapAgentRequestAttemptError(
-			agentHTTPStatusError{StatusCode: res.StatusCode, Status: res.Status, Detail: formatPanelErrorBody(decodedBody)},
+			agentHTTPStatusError{StatusCode: res.StatusCode, Status: res.Status, Detail: formatPanelErrorBody(decodedBody), RetryAfter: retryAfter},
 			auth, authResult, responseAuthenticated,
 		)
 	}
