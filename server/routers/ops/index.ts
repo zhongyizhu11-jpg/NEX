@@ -24,8 +24,10 @@ import { hostLogsRouter } from "./hostLogs";
 import { faultBoardRouter } from "./faultBoard";
 import { connStatsRouter } from "./connStats";
 import { opsBoardRouter } from "./opsBoard";
+import { auditRouter } from "./audit";
 
 export const opsRouter = router({
+  audit: auditRouter,
   events: eventsRouter,
   webhooks: webhooksRouter,
   digest: digestRouter,

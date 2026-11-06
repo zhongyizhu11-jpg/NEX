@@ -34,7 +34,8 @@ export function normalizeApiTokenScope(value: unknown): ApiTokenScope {
   · 面板 SSL 私钥查看：私钥只给网页上的管理员；
   · 插件安装、更新、授予信任、执行动作：插件能在所有 Agent 上以 root 跑脚本；
   · 离站备份整个路由：能把整库备份发到别处，也能从备份恢复；
-  · 改接口限流：被限流的令牌不能自己把限流关掉。
+  · 改接口限流：被限流的令牌不能自己把限流关掉；
+  · 操作审计整个路由：审计记着所有人的 IP 和参数，令牌既不该能读走，也不该能把保留天数改短、借每天的清理删掉记录。
   auth.updateProfile 改邮箱在过程里单独拦（见 apiTokenProfileUpdateError）：只改昵称这类不受影响。
 */
 const TOKEN_FORBIDDEN_PATHS = [
@@ -42,6 +43,7 @@ const TOKEN_FORBIDDEN_PATHS = [
   "ops.passkeys.",
   "ops.sessions.",
   "ops.offsiteBackup.",
+  "ops.audit.",
   "setup.",
   "auth.changePassword",
   "auth.beginTwoFactorSetup",

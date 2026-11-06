@@ -1,4 +1,4 @@
-import { Activity, Ban, Globe2, LayoutDashboard, ShieldAlert, Siren, Users2 } from "lucide-react";
+import { Activity, Ban, Globe2, LayoutDashboard, ScrollText, ShieldAlert, Siren, Users2 } from "lucide-react";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { SlidingTabsList, type SlidingTabItem } from "@/components/ui/sliding-tabs";
@@ -7,6 +7,7 @@ import { useOpsFeatures } from "@/features/ops/useOpsFeatures";
 import OpsBoardTab from "@/features/ops/board/OpsBoardTab";
 import OnlineIpsTab from "@/features/ops/online/OnlineIpsTab";
 import EventsTab from "@/features/ops/events/EventsTab";
+import AuditTab from "@/features/ops/audit/AuditTab";
 import FaultBoardTab from "@/features/ops/faults/FaultBoardTab";
 import SecurityTab from "@/features/ops/security/SecurityTab";
 import BlockedIpsTab from "@/features/ops/firewall/BlockedIpsTab";
@@ -15,11 +16,11 @@ import NotFound from "@/pages/NotFound";
 
 /*
   监控（借鉴 Rosélune 的 Monitor + Access 两页）：
-  收了多少钱、跑了多少流量（看板），谁在连、出了什么故障、发生了什么、机器安不安全、挡了谁。一页七个分段，每段一个独立组件，
+  收了多少钱、跑了多少流量（看板），谁在连、出了什么故障、发生了什么、谁改了什么（操作审计）、机器安不安全、挡了谁。一页八个分段，每段一个独立组件，
   各自在 client/src/features/ops/ 里。运维功能入口关着时这一页不存在（侧栏没有入口，直接打开是 404），
   开关在 features/ops/useOpsFeatures.ts；2.3.437 起所有主题都开。
 */
-const INSIGHTS_TABS = ["board", "online", "faults", "events", "security", "blocked", "countries"] as const;
+const INSIGHTS_TABS = ["board", "online", "faults", "events", "audit", "security", "blocked", "countries"] as const;
 type InsightsTab = typeof INSIGHTS_TABS[number];
 
 const INSIGHTS_TAB_ITEMS: SlidingTabItem<InsightsTab>[] = [
@@ -27,6 +28,7 @@ const INSIGHTS_TAB_ITEMS: SlidingTabItem<InsightsTab>[] = [
   { value: "online", label: "在线 IP", icon: Users2 },
   { value: "faults", label: "故障", icon: Siren },
   { value: "events", label: "事件", icon: Activity },
+  { value: "audit", label: "操作审计", icon: ScrollText },
   { value: "security", label: "安全巡检", icon: ShieldAlert },
   { value: "blocked", label: "IP 封禁", icon: Ban },
   { value: "countries", label: "地区规则", icon: Globe2 },
@@ -49,6 +51,7 @@ export default function InsightsPage() {
         <TabsContent value="online" className="mt-4"><OnlineIpsTab /></TabsContent>
         <TabsContent value="faults" className="mt-4"><FaultBoardTab /></TabsContent>
         <TabsContent value="events" className="mt-4"><EventsTab /></TabsContent>
+        <TabsContent value="audit" className="mt-4"><AuditTab /></TabsContent>
         <TabsContent value="security" className="mt-4"><SecurityTab /></TabsContent>
         <TabsContent value="blocked" className="mt-4"><BlockedIpsTab /></TabsContent>
         <TabsContent value="countries" className="mt-4"><CountryRuleTab /></TabsContent>
