@@ -20,8 +20,11 @@ export async function telegramBotReady(): Promise<boolean> {
   return botEnabled && botConfigured;
 }
 
+/** 发通知只用到用户行上的这两列。 */
+export type NotifyRecipient = { email?: unknown; telegramId?: unknown } | null | undefined;
+
 /** 发给 user（已读出来的用户行）。tag 只用来区分日志。返回实际发出去的渠道。 */
-export async function notifyUserDirect(user: any, title: string, body: string, tag: string): Promise<Array<"email" | "telegram">> {
+export async function notifyUserDirect(user: NotifyRecipient, title: string, body: string, tag: string): Promise<Array<"email" | "telegram">> {
   const sent: Array<"email" | "telegram"> = [];
   if (!user) return sent;
   const email = String(user.email || "").trim();
@@ -33,7 +36,7 @@ export async function notifyUserDirect(user: any, title: string, body: string, t
       });
   }
   if (user.telegramId && await telegramBotReady()) {
-    await sendTelegramMessage(user.telegramId, body)
+    await sendTelegramMessage(user.telegramId as Parameters<typeof sendTelegramMessage>[0], body)
       .then(() => { sent.push("telegram"); })
       .catch((error) => {
         console.warn(`[${tag}] Telegram 通知发送失败:`, error instanceof Error ? error.message : error);

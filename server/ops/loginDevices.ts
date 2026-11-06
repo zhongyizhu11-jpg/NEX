@@ -88,9 +88,12 @@ async function geoOf(ip: string): Promise<{ countryCode: string | null; label: s
 /**
  * 登录成功后调一次。不 await 也行（内部吞掉所有错误）；返回判断结果给测试看。
  */
-export async function noteLoginDevice(user: any, req: Request, sessionKind: string, now = Date.now()): Promise<LoginDeviceDecision | null> {
+export type LoginDeviceUser = { id?: unknown; username?: unknown; name?: unknown; role?: unknown; email?: unknown; telegramId?: unknown };
+
+export async function noteLoginDevice(user: LoginDeviceUser | null | undefined, req: Request, sessionKind: string, now = Date.now()): Promise<LoginDeviceDecision | null> {
   try {
-    const userId = Number(user?.id || 0);
+    if (!user) return null;
+    const userId = Number(user.id || 0);
     if (!userId) return null;
     const ua = String(req.headers?.["user-agent"] || "");
     const device = describeSessionDevice(ua, sessionKind).slice(0, 64);
