@@ -34,13 +34,13 @@ type ThemedId = Exclude<PersonalizationUiThemeId, "classic">;
   不会出现「选了新主题却永远等不到样式」。
 */
 const LOADERS: Record<ThemedId, () => Promise<unknown>> = {
-  aurora: () => import("../styles/ui-themes/ui-theme-aurora.css"),
   gilt: () => import("../styles/ui-themes/ui-theme-gilt.css"),
   rose: () => import("../styles/ui-themes/ui-theme-rose.css"),
   cinnabar: () => import("../styles/ui-themes/ui-theme-cinnabar.css"),
   "liquid-glass": () => import("../styles/ui-themes/ui-theme-liquid-glass.css"),
   indigo: () => import("../styles/ui-themes/ui-theme-indigo.css"),
   pearl: () => import("../styles/ui-themes/ui-theme-pearl.css"),
+  deepspace: () => import("../styles/ui-themes/ui-theme-deepspace.css"),
 };
 
 /* 已经有结果的（下完了，或者下失败了）。失败的也算：见 loadUiThemeStyles 的说明。 */

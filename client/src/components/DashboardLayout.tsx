@@ -31,6 +31,7 @@ import {
   Ellipsis,
   LogOut,
   PanelLeft,
+  ChevronDown,
   Server,
   ArrowRightLeft,
   Users,
@@ -1494,6 +1495,70 @@ function DashboardLayoutContent({
     );
   });
 
+  /*
+    「深空」主题在桌面上不要侧栏，导航放到顶栏一行（运维控制台那种：Cloudflare / Vercel 的顶部导航）。
+    主导航一项一个按钮；管理、账户、扩展那几组收进右边一个「管理」下拉，不然一行放不下。
+    手机照旧是底部标签栏 + 侧栏抽屉，这里不管。
+  */
+  const deepspaceTopNav = uiTheme === "deepspace" && !isMobile;
+  const openNavItem = (item: SidebarNavItem) => {
+    if (!item.externalUrl) {
+      navigateFromSidebar(item.path);
+      return;
+    }
+    window.open(item.externalUrl, "_blank", "noopener,noreferrer");
+  };
+  const renderTopNav = () => {
+    const more = [...sidebarManagementItems, ...otherMenuItems];
+    const moreActive = more.some((item) => item.path === currentPath);
+    return (
+      <nav className="fx-ds-topnav" aria-label="主导航">
+        {primaryMenuItems.map((item) => (
+          <button
+            key={item.path}
+            type="button"
+            className="fx-ds-topnav-item"
+            data-active={currentPath === item.path ? "true" : undefined}
+            aria-current={currentPath === item.path ? "page" : undefined}
+            onClick={() => openNavItem(item)}
+            onPointerEnter={() => { if (!item.externalUrl) void prefetchRoute(item.path); }}
+          >
+            {item.label}
+            {item.badge ? <span className="fx-ds-topnav-badge">{item.badge > 99 ? "99+" : item.badge}</span> : null}
+          </button>
+        ))}
+        {more.length > 0 ? (
+          <DropdownMenu modal={false}>
+            <DropdownMenuTrigger asChild>
+              <button type="button" className="fx-ds-topnav-item" data-active={moreActive ? "true" : undefined}>
+                {isAdmin ? "管理" : "更多"}
+                <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="min-w-[200px]">
+              {more.map((item) => (
+                <DropdownMenuItem key={item.path} onSelect={() => openNavItem(item)} className={cn(currentPath === item.path && "font-semibold")}>
+                  <item.icon className="h-4 w-4" aria-hidden="true" />
+                  {item.label}
+                  {item.badge ? <span className="ml-auto text-[11px] text-[var(--fx-down-text)]">{item.badge > 99 ? "99+" : item.badge}</span> : null}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : null}
+        {showUpgradeNotice ? (
+          <button
+            type="button"
+            className="fx-ds-topnav-item fx-ds-topnav-upgrade"
+            onClick={() => { setShowUpgradeDialog(true); void refetchUpgradeStatus(); }}
+          >
+            {displayUpgradeJob?.status === "running" ? `正在${panelVersionActionLabel}` : `新版本 ${upgradeTargetVersion}`}
+          </button>
+        ) : null}
+      </nav>
+    );
+  };
+
   useEffect(() => {
     openMobileRef.current = openMobile;
   }, [openMobile]);
@@ -1701,7 +1766,7 @@ function DashboardLayoutContent({
       {pearl ? null : (
       <header className="workspace-appbar">
         <div className="workspace-appbar-inner">
-          {!isMobile ? (
+          {!isMobile && !deepspaceTopNav ? (
             <button
               type="button"
               onClick={toggleSidebar}
@@ -1716,6 +1781,7 @@ function DashboardLayoutContent({
             <span className="workspace-appbar-title">{siteTitle}</span>
             {publicInfo?.version ? <span className="workspace-appbar-version">v{String(publicInfo.version).replace(/^v/i, "")}</span> : null}
           </button>
+          {deepspaceTopNav ? renderTopNav() : null}
           <div className="workspace-appbar-actions">
             {appbarSearchButton}
             {appbarThemeButton}
@@ -1750,6 +1816,7 @@ function DashboardLayoutContent({
         侧栏是一列白纸，靠右侧一条细线和页面分开（参考站同款）。它从顶栏下面开始，
         只放导航：品牌、搜索、主题、账户都在顶栏上。
       */}
+      {deepspaceTopNav ? null : (
       <Sidebar collapsible="icon" className="workspace-sidebar">
         {pearl ? (
           <SidebarHeader className="fx-pearl-sidebar-header">
@@ -1907,6 +1974,7 @@ function DashboardLayoutContent({
           ) : null}
         </SidebarFooter>
       </Sidebar>
+      )}
 
       <SidebarInset className="workspace-inset workspace-with-mobile-nav">
         <a className="workspace-skip-link" href="#workspace-content">跳到主要内容</a>

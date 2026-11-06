@@ -120,17 +120,17 @@ test("界面主题：极光挂 data-ui-theme 并记进 localStorage，经典去�
   };
   try {
     const { root, attrs } = fakeRoot(false);
-    assert.equal(applyPersonalizationSurface({ uiTheme: "aurora" }, root).uiTheme, "aurora");
-    assert.equal(attrs.get("data-ui-theme"), "aurora");
-    assert.equal(store.get("forwardx-ui-theme"), "aurora");
-    // 不认识的值回到经典：属性去掉、本地记录也去掉（下次开机不会先挂上极光）
+    assert.equal(applyPersonalizationSurface({ uiTheme: "liquid-glass" }, root).uiTheme, "liquid-glass");
+    assert.equal(attrs.get("data-ui-theme"), "liquid-glass");
+    assert.equal(store.get("forwardx-ui-theme"), "liquid-glass");
+    // 不认识的值回到经典：属性去掉、本地记录也去掉（下次开机不会先挂上旧主题）
     assert.equal(applyPersonalizationSurface({ uiTheme: "neon" }, root).uiTheme, "classic");
     assert.equal(attrs.has("data-ui-theme"), false);
     assert.equal(store.has("forwardx-ui-theme"), false);
     assert.equal(applyPersonalizationSurface({ uiTheme: "gilt" }, root).uiTheme, "gilt");
     assert.equal(attrs.get("data-ui-theme"), "gilt");
     assert.equal(store.get("forwardx-ui-theme"), "gilt");
-    applyPersonalizationSurface({ uiTheme: "aurora" }, root);
+    applyPersonalizationSurface({ uiTheme: "liquid-glass" }, root);
     clearPersonalizationSurface(root);
     assert.equal(attrs.has("data-ui-theme"), false);
   } finally {
@@ -218,10 +218,10 @@ test("界面主题按需加载：页面上的 <html> 等那一套样式有了结
     // 真卸载：清掉之后没人接着挂，过一个微任务就忘掉，之后不会把旧的放回来
     clearPersonalizationSurface(root);
     await Promise.resolve();
-    applyPersonalizationSurface({ uiTheme: "aurora" }, root);
+    applyPersonalizationSurface({ uiTheme: "deepspace" }, root);
     assert.equal(attrs.has("data-ui-theme"), false);
-    await settle("aurora");
-    assert.equal(attrs.get("data-ui-theme"), "aurora");
+    await settle("deepspace");
+    assert.equal(attrs.get("data-ui-theme"), "deepspace");
 
     // 等的时候切回一套现成的：现成的立刻挂上，等的那套回来也不再改
     applyPersonalizationSurface({ uiTheme: "cinnabar" }, root);

@@ -25,13 +25,13 @@ import { trpc } from "@/lib/trpc";
 */
 export const UI_THEME_DOTS: Record<string, { a: string; b: string }> = {
   classic: { a: "#3ea4ec", b: "#f5f5f7" },
-  aurora: { a: "#a78bfa", b: "#eef1fb" },
   gilt: { a: "#b08d57", b: "#f5f2ec" },
   rose: { a: "#c13a66", b: "#fbf0f2" },
   cinnabar: { a: "#d42a33", b: "#f6f6f4" },
   "liquid-glass": { a: "#2563eb", b: "#dfe7f3" },
   indigo: { a: "#4268aa", b: "#f2f3f5" },
   pearl: { a: "#0e1116", b: "#f4f6f5" },
+  deepspace: { a: "#5aa9ff", b: "#0b0d10" },
 };
 
 export function UiThemeDot({ id }: { id: string }) {
