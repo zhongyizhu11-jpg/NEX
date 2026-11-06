@@ -181,8 +181,12 @@ function lastNumber(value: string): number | null {
   return fields.length > 0 && fields[fields.length - 1] !== "" && Number.isFinite(number) ? number : null;
 }
 
+/** 内核用 2^32 - 1（或更大）表示「不限」，例如 tcp_notsent_lowat 的默认值。 */
+const NETTUNE_UNLIMITED = 4294967295;
+
 function display(rule: NetTuneRule, value: string): string {
   const number = lastNumber(value);
+  if (rule.bytes && number !== null && number >= NETTUNE_UNLIMITED) return "不限";
   if (rule.bytes && number !== null) return formatNetTuneBytes(number);
   if (rule.kind === "atMost" && rule.want === 0) return number === 0 ? "关" : "开";
   if (rule.kind === "equals" && rule.want === 1 && rule.key === "net.ipv4.ip_forward") return number === 1 ? "开" : "关";

@@ -67,6 +67,7 @@ test("网络调优判断：发行版默认值大多偏低，调完全部达标",
   assert.equal(byKey["net.core.wmem_max"].current, "128 MB");
   assert.equal(byKey["net.ipv4.tcp_rmem"].current, "6 MB", "三元组看最后一个字段");
   assert.equal(byKey["net.ipv4.tcp_congestion_control"].status, "low");
+  assert.equal(byKey["net.ipv4.tcp_notsent_lowat"].current, "不限", "2^32-1 是内核的「不限」");
   assert.equal(byKey["net.netfilter.nf_conntrack_buckets"].status, "low");
   assert.equal(before.conntrackCount, 1234);
   assert.equal(before.conntrackMax, 262144);
