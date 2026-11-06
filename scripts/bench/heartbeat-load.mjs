@@ -1083,7 +1083,7 @@ async function profileTop(options) {
     if (key) return key;
     const frame = node.callFrame;
     const location = frame.url
-      ? (mapper && /\/dist\/index\.js$/.test(frame.url) ? mapper(frame.lineNumber, frame.columnNumber) : null)
+      ? (mapper && /\/dist[^/]*\/index\.js$/.test(frame.url) ? mapper(frame.lineNumber, frame.columnNumber) : null)
         || `${frame.url.replace(/^.*\/node_modules\//, "node_modules/").replace(/^file:\/\/.*\/dist\//, "dist/")}:${frame.lineNumber + 1}`
       : "";
     key = `${frame.functionName || "(anonymous)"} ${location}`.trim();
