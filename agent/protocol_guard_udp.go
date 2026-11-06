@@ -265,7 +265,9 @@ func (s *protocolGuardServer) openUDPSession(key netip.AddrPort, now time.Time, 
 	sessionMu.Lock()
 	full := len(sessions) >= protocolGuardUDPMaxSessions
 	sessionMu.Unlock()
-	if full && !s.makeUDPSessionRoom(sessions, sessionMu, now) {
+	// 这条规则到上限，或者全进程的 UDP 中继会话到顶（udp_session_budget.go）：都先在这条规则
+	// 里按 LRU 腾位置，腾不出来就不拨。
+	if (full || udpRelayGlobalFull()) && !s.makeUDPSessionRoom(sessions, sessionMu, now) {
 		return nil
 	}
 	target, err := net.DialTimeout("udp", net.JoinHostPort(s.rule.TargetIP, strconv.Itoa(s.rule.TargetPort)), 10*time.Second)
@@ -293,7 +295,7 @@ func (s *protocolGuardServer) openUDPSession(key netip.AddrPort, now time.Time, 
 		if evicted == nil {
 			sessionMu.Unlock()
 			_ = target.Close()
-			s.logUDPSessionLimit(false)
+			s.noteUDPSessionLimit(false)
 			return nil
 		}
 	}
@@ -301,39 +303,45 @@ func (s *protocolGuardServer) openUDPSession(key netip.AddrPort, now time.Time, 
 	sessionMu.Unlock()
 	if evicted != nil {
 		_ = evicted.target.Close()
-		s.logUDPSessionLimit(true)
+		s.noteUDPSessionLimit(true)
 	}
-	go s.copyUDPToClient(key, session, sessions, sessionMu, listener)
+	runUDPRelaySession(func() { s.copyUDPToClient(key, session, sessions, sessionMu, listener) })
 	return session
 }
 
 // makeUDPSessionRoom 在拨号前先腾位置，腾不出来就不必白拨一次。
 func (s *protocolGuardServer) makeUDPSessionRoom(sessions map[netip.AddrPort]*protocolGuardUDPSession, sessionMu *sync.Mutex, now time.Time) bool {
 	sessionMu.Lock()
-	if len(sessions) < protocolGuardUDPMaxSessions {
+	if len(sessions) < protocolGuardUDPMaxSessions && !udpRelayGlobalFull() {
 		sessionMu.Unlock()
 		return true
 	}
 	evicted := evictProtocolGuardUDPSessionLocked(sessions, now)
 	sessionMu.Unlock()
 	if evicted == nil {
-		s.logUDPSessionLimit(false)
+		s.noteUDPSessionLimit(false)
 		return false
 	}
 	_ = evicted.target.Close()
-	s.logUDPSessionLimit(true)
+	s.noteUDPSessionLimit(true)
 	return true
 }
 
-func (s *protocolGuardServer) logUDPSessionLimit(evicted bool) {
+// noteUDPSessionLimit 记一次「到上限」：回收了一个会话（evicted）还是拒掉了新会话，计数随心跳上报。
+func (s *protocolGuardServer) noteUDPSessionLimit(evicted bool) {
+	if evicted {
+		noteUDPRelaySessionEvicted()
+	} else {
+		noteUDPRelaySessionRejected()
+	}
 	if !shouldLogAgentReport(fmt.Sprintf("protocol-guard-udp-session-limit:%d", s.rule.RuleID), agentReportLogInterval) {
 		return
 	}
 	if evicted {
-		logf("protocol guard udp session limit reached rule=%d sessions=%d; evicted least recently used idle session", s.rule.RuleID, protocolGuardUDPMaxSessions)
+		logf("protocol guard udp session limit reached rule=%d sessions=%d processSessions=%d processCap=%d; evicted least recently used idle session", s.rule.RuleID, protocolGuardUDPMaxSessions, udpRelaySessionsActive.Load(), udpRelayGlobalSessionCap())
 		return
 	}
-	logf("protocol guard udp session limit reached rule=%d sessions=%d", s.rule.RuleID, protocolGuardUDPMaxSessions)
+	logf("protocol guard udp session limit reached rule=%d sessions=%d processSessions=%d processCap=%d", s.rule.RuleID, protocolGuardUDPMaxSessions, udpRelaySessionsActive.Load(), udpRelayGlobalSessionCap())
 }
 
 func (s *protocolGuardServer) copyUDPToClient(key netip.AddrPort, session *protocolGuardUDPSession, sessions map[netip.AddrPort]*protocolGuardUDPSession, sessionMu *sync.Mutex, listener *udpBatchConn) {

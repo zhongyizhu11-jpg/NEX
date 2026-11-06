@@ -433,10 +433,13 @@ func serveEntryUDPDirect(conn *net.UDPConn, cfg config, selector *exitEndpointSe
 	defer fec.close()
 	buf := make([]byte, 65535)
 	ws := newFXPUDPWorkspace()
+	// 一次 recvmmsg 收一批（开 GRO），读循环照旧一个一个地拿（udp_batch_linux.go）。
+	reader := newFXPUDPBatchReader(conn, true, true)
+	defer closeFXPUDPPacketReader(reader)
 	for {
 		// ReadFromUDPAddrPort 不像 ReadFromUDP 那样每包分配一个 *net.UDPAddr。
 		// 开了抗丢包时 fec.read 先交出还原出来的包。
-		n, clientAddrPort, err := fec.read(conn, buf)
+		n, clientAddrPort, err := fec.read(reader, buf)
 		if err != nil {
 			var closing []*udpDirectEntrySession
 			sessionsMu.Lock()
@@ -680,56 +683,105 @@ func (s *udpDirectEntrySession) enqueue(payload []byte, pooled bool) {
 func (s *udpDirectEntrySession) writeLoop() {
 	defer observeFXPUDPSequence(&s.sendSequence)
 	ws := newFXPUDPWorkspace()
+	// 不限速时醒一次就把队列里现成的包都取走，封进同一块缓冲、一次发出去（udp_wire_batch.go）；
+	// 限速或者不支持批量时一个一个地发，和以前一样。
+	wires := newFXPUDPWireBatch(s.conn)
+	defer wires.release(ws)
+	batch := make([]fxpUDPQueuedPacket, 0, fxpUDPBatchSize)
 	for {
-		queued, ok := s.send.nextTracked(s.done, &s.inFlight)
+		limit := 1
+		if wires != nil && s.inLimiter.unlimited() {
+			limit = fxpUDPBatchSize
+		}
+		var ok bool
+		batch, ok = s.send.nextBatchTracked(s.done, &s.inFlight, batch[:0], limit)
 		if !ok {
 			return
 		}
+		// 只取到一个包：照旧直接 sendto，不走攒批的那一套。
+		batchWires := wires
+		if len(batch) == 1 {
+			batchWires = nil
+		}
+		keepGoing := s.sendBatch(batch, ws, batchWires)
+		fxpUDPQueuedDone(batch)
+		clear(batch)
+		if !keepGoing {
+			return
+		}
+	}
+}
+
+// sendBatch 封好这一批发往出口。返回 false 表示会话结束了（发送失败、等限速时会话被关）。
+func (s *udpDirectEntrySession) sendBatch(batch []fxpUDPQueuedPacket, ws *fxpUDPWorkspace, wires *fxpUDPWireBatch) bool {
+	flush := func() error {
+		return wires.flushTo(s.remoteAddrPort, func(wire []byte) { s.fec.sent(wire, s.remoteAddr, false) })
+	}
+	var writeErr error
+	emit := func(wire []byte) error {
+		if wires == nil {
+			_, writeErr = s.conn.WriteToUDP(wire, s.remoteAddr)
+			if writeErr == nil {
+				s.fec.sent(wire, s.remoteAddr, false)
+			}
+			return writeErr
+		}
+		wires.add(wire)
+		if !wires.prepare(ws) {
+			if writeErr = flush(); writeErr != nil {
+				return writeErr
+			}
+			wires.prepare(ws)
+		}
+		return nil
+	}
+	for i := range batch {
+		queued := &batch[i]
 		if queued.superseded(time.Now(), s.send.pending()) {
 			fxpUDPDropLog.Printf("entry udp direct queued packet expired tunnel=%d rule=%d client=%s; dropping stale packet", s.cfg.TunnelID, s.cfg.RuleID, s.clientAddr)
-			queued.done()
 			continue
 		}
 		payload := queued.payload
 		s.touch()
 		if !s.inLimiter.waitDone(s.done, len(payload)) {
-			queued.done()
-			return
+			return false
 		}
 		if queued.superseded(time.Now(), s.send.pending()) {
 			fxpUDPDropLog.Printf("entry udp direct queued packet expired after wait tunnel=%d rule=%d client=%s; dropping stale packet", s.cfg.TunnelID, s.cfg.RuleID, s.clientAddr)
-			queued.done()
 			continue
 		}
-		var writeErr error
+		if wires != nil && !wires.prepare(ws) {
+			if writeErr = flush(); writeErr != nil {
+				break
+			}
+			wires.prepare(ws)
+		}
 		err := sealFXPUDPDatagramsEach(fxpUDPPacket{
 			packetType: fxpUDPTypeData,
 			tunnelID:   s.cfg.TunnelID,
 			ruleID:     s.cfg.RuleID,
 			sessionID:  s.sessionID,
 			payload:    payload,
-		}, s.dataSealer, &s.sendSequence, ws, func(wire []byte) error {
-			_, writeErr = s.conn.WriteToUDP(wire, s.remoteAddr)
-			if writeErr == nil {
-				s.fec.sent(wire, s.remoteAddr, false)
-			}
-			return writeErr
-		})
+		}, s.dataSealer, &s.sendSequence, ws, emit)
 		if writeErr != nil {
-			log.Printf("entry udp direct send failed tunnel=%d rule=%d client=%s exit=%s: %v", s.cfg.TunnelID, s.cfg.RuleID, s.clientAddr, s.remoteAddr, writeErr)
-			queued.done()
-			s.close()
-			return
+			break
 		}
 		if err != nil {
 			log.Printf("entry udp direct seal failed tunnel=%d rule=%d client=%s: %v", s.cfg.TunnelID, s.cfg.RuleID, s.clientAddr, err)
-			queued.done()
 			s.close()
-			return
+			return false
 		}
 		s.counter.in.Add(uint64(len(payload)))
-		queued.done()
 	}
+	if writeErr == nil && wires != nil {
+		writeErr = flush()
+	}
+	if writeErr != nil {
+		log.Printf("entry udp direct send failed tunnel=%d rule=%d client=%s exit=%s: %v", s.cfg.TunnelID, s.cfg.RuleID, s.clientAddr, s.remoteAddr, writeErr)
+		s.close()
+		return false
+	}
+	return true
 }
 
 // handleResponse 处理出口的一个回包。pooled 时 packet.payload 是借来的缓冲，
@@ -752,19 +804,56 @@ func (s *udpDirectEntrySession) handleResponse(packet fxpUDPPacket, pooled bool)
 }
 
 func (s *udpDirectEntrySession) clientWriteLoop() {
+	// 不限速、不整形时一批回包一次 sendmmsg 写回客户端。
+	sender := newFXPUDPBatchSender(s.conn)
+	batch := make([]fxpUDPQueuedPacket, 0, fxpUDPBatchSize)
 	for {
-		packet, ok := s.recv.nextTracked(s.done, &s.inFlight)
+		limit := 1
+		if sender != nil && s.outLimiter.unlimited() && !linkShaperActive() {
+			limit = fxpUDPBatchSize
+		}
+		var ok bool
+		batch, ok = s.recv.nextBatchTracked(s.done, &s.inFlight, batch[:0], limit)
 		if !ok {
 			return
 		}
-		if packet.superseded(time.Now(), s.recv.pending()) {
+		if limit == 1 || len(batch) == 1 {
+			if batch[0].superseded(time.Now(), s.recv.pending()) {
+				fxpUDPDropLog.Printf("entry udp direct response expired tunnel=%d rule=%d client=%s; dropping stale packet", s.cfg.TunnelID, s.cfg.RuleID, s.clientAddr)
+			} else {
+				s.writeResponse(batch[0].payload)
+			}
+		} else {
+			s.writeResponses(batch, sender)
+		}
+		fxpUDPQueuedDone(batch)
+		clear(batch)
+	}
+}
+
+// writeResponses 把一批回包一次写回客户端（调用方已确认不限速、不整形）。
+func (s *udpDirectEntrySession) writeResponses(batch []fxpUDPQueuedPacket, sender *fxpUDPBatchSender) {
+	total := 0
+	for i := range batch {
+		if batch[i].superseded(time.Now(), s.recv.pending()) {
 			fxpUDPDropLog.Printf("entry udp direct response expired tunnel=%d rule=%d client=%s; dropping stale packet", s.cfg.TunnelID, s.cfg.RuleID, s.clientAddr)
-			packet.done()
 			continue
 		}
-		s.writeResponse(packet.payload)
-		packet.done()
+		sender.add(batch[i].payload)
+		total += len(batch[i].payload)
 	}
+	if sender.pending() == 0 {
+		return
+	}
+	if err := sender.flushTo(s.key); err != nil {
+		if !isClosedErr(err) {
+			log.Printf("entry udp direct client write failed tunnel=%d rule=%d client=%s: %v", s.cfg.TunnelID, s.cfg.RuleID, s.clientAddr, err)
+		}
+		s.close()
+		return
+	}
+	s.counter.out.Add(uint64(total))
+	s.touch()
 }
 
 func (s *udpDirectEntrySession) writeResponse(payload []byte) {
@@ -897,8 +986,10 @@ func serveExitUDPDirect(conn *net.UDPConn, cfg config) error {
 	defer fec.close()
 	buf := make([]byte, 65535)
 	ws := newFXPUDPWorkspace()
+	reader := newFXPUDPBatchReader(conn, true, true)
+	defer closeFXPUDPPacketReader(reader)
 	for {
-		n, peerAddrPort, err := fec.read(conn, buf)
+		n, peerAddrPort, err := fec.read(reader, buf)
 		if err != nil {
 			var closing []*udpDirectExitSession
 			sessionsMu.Lock()
@@ -1196,19 +1287,56 @@ func (s *udpDirectExitSession) forwardToTarget(payload []byte, pooled bool) {
 }
 
 func (s *udpDirectExitSession) writeTargetLoop() {
+	// 不整形时一批包一次 sendmmsg 写给目标（已连接的套接字）。
+	sender := newFXPUDPBatchSender(s.target)
+	batch := make([]fxpUDPQueuedPacket, 0, fxpUDPBatchSize)
 	for {
-		packet, ok := s.send.nextTracked(s.done, &s.inFlight)
+		limit := 1
+		if sender != nil && !linkShaperActive() {
+			limit = fxpUDPBatchSize
+		}
+		var ok bool
+		batch, ok = s.send.nextBatchTracked(s.done, &s.inFlight, batch[:0], limit)
 		if !ok {
 			return
 		}
-		if packet.superseded(time.Now(), s.send.pending()) {
+		if limit == 1 || len(batch) == 1 {
+			if batch[0].superseded(time.Now(), s.send.pending()) {
+				fxpUDPDropLog.Printf("exit udp direct target packet expired tunnel=%d rule=%d peer=%s target=%s:%d; dropping stale packet", s.cfg.TunnelID, s.ruleID, s.peer(), s.targetIP, s.targetPort)
+			} else {
+				s.writeTarget(batch[0].payload)
+			}
+		} else {
+			s.writeTargets(batch, sender)
+		}
+		fxpUDPQueuedDone(batch)
+		clear(batch)
+	}
+}
+
+// writeTargets 把一批包一次写给目标（调用方已确认不整形）。
+func (s *udpDirectExitSession) writeTargets(batch []fxpUDPQueuedPacket, sender *fxpUDPBatchSender) {
+	total := 0
+	for i := range batch {
+		if batch[i].superseded(time.Now(), s.send.pending()) {
 			fxpUDPDropLog.Printf("exit udp direct target packet expired tunnel=%d rule=%d peer=%s target=%s:%d; dropping stale packet", s.cfg.TunnelID, s.ruleID, s.peer(), s.targetIP, s.targetPort)
-			packet.done()
 			continue
 		}
-		s.writeTarget(packet.payload)
-		packet.done()
+		sender.add(batch[i].payload)
+		total += len(batch[i].payload)
 	}
+	if sender.pending() == 0 {
+		return
+	}
+	if err := sender.flushConnected(); err != nil {
+		log.Printf("exit udp direct target write failed tunnel=%d rule=%d peer=%s target=%s:%d: %v", s.cfg.TunnelID, s.ruleID, s.peer(), s.targetIP, s.targetPort, err)
+		s.close()
+		return
+	}
+	if s.counter != nil {
+		s.counter.in.Add(uint64(total))
+	}
+	s.touch()
 }
 
 func (s *udpDirectExitSession) writeTarget(payload []byte) {
@@ -1229,12 +1357,36 @@ func (s *udpDirectExitSession) readTargetLoop() {
 	buf := getFXPByteBuffer(fxpUDPMaxDatagramPayload)
 	defer putFXPByteBuffer(buf)
 	ws := newFXPUDPWorkspace()
+	// 目标的回包一次 recvmmsg 收一批（开 GRO）；封好的线上包攒在一起，手里没有现成的包了
+	// 再一次发回入口（等长的合成 GSO）。不支持批量时逐包收发，和以前一样。
+	reader := newFXPUDPBatchReader(s.target, true, false)
+	defer closeFXPUDPPacketReader(reader)
+	wires := newFXPUDPWireBatch(s.conn)
+	defer wires.release(ws)
+	var batchPeer *net.UDPAddr
+	var batchPeerAddrPort netip.AddrPort
+	flush := func() error {
+		if wires == nil || wires.pending() == 0 {
+			return nil
+		}
+		peer := batchPeer
+		// 回程：只给发过冗余包的入口 / 中转发（旧入口会把冗余包当成客户端数据）。
+		return wires.flushTo(batchPeerAddrPort, func(wire []byte) { s.fec.sent(wire, peer, true) })
+	}
 	// 读超时只是用来定期醒一下、看会话关了没有（关会话本身也会关掉 target，
 	// 读会立刻返回）。不再每个包都重设一次，见 fxpRearmingReadDeadline。
 	deadline := fxpRearmingReadDeadline{period: fxpUDPTargetReadWake}
 	for {
+		if wires != nil && wires.pending() > 0 && !fxpUDPReaderBuffered(reader) {
+			// 现成的回包都封完了：先把攒下的发出去，再去等下一个。
+			if err := flush(); err != nil {
+				log.Printf("exit udp direct peer write failed tunnel=%d rule=%d peer=%s: %v", s.cfg.TunnelID, s.ruleID, batchPeer, err)
+				s.close()
+				return
+			}
+		}
 		deadline.arm(s.target, time.Now())
-		n, err := s.target.Read(buf)
+		n, _, err := reader.ReadFromUDPAddrPort(buf)
 		if err != nil {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 				select {
@@ -1257,20 +1409,47 @@ func (s *udpDirectExitSession) readTargetLoop() {
 		// 一个包的几片发往同一个回程地址，回程迁移不会把一个包拆到两个地址上。
 		peer := s.peer()
 		var writeErr error
-		err = sealFXPUDPDatagramsEach(fxpUDPPacket{
-			packetType: fxpUDPTypeReturn,
-			tunnelID:   s.cfg.TunnelID,
-			ruleID:     s.ruleID,
-			sessionID:  s.sessionID,
-			payload:    buf[:n],
-		}, s.returnSealer, &s.sendSequence, ws, func(wire []byte) error {
-			_, writeErr = s.conn.WriteToUDP(wire, peer)
-			if writeErr == nil {
-				// 回程：只给发过冗余包的入口 / 中转发（旧入口会把冗余包当成客户端数据）。
-				s.fec.sent(wire, peer, true)
+		// 手里没攒着、后面也没有现成的回包：这一个照旧直接 sendto，不走攒批的那一套。
+		batching := wires != nil && (wires.pending() > 0 || fxpUDPReaderBuffered(reader))
+		if batching {
+			// 回程地址变了（入口换了出口地址）：攒在手里的先按旧地址发掉。
+			peerAddrPort := fxpUDPAddrPortOf(peer)
+			if wires.pending() > 0 && peerAddrPort != batchPeerAddrPort {
+				writeErr = flush()
 			}
-			return writeErr
-		})
+			batchPeer, batchPeerAddrPort = peer, peerAddrPort
+			if writeErr == nil && !wires.prepare(ws) {
+				if writeErr = flush(); writeErr == nil {
+					wires.prepare(ws)
+				}
+			}
+		}
+		if writeErr == nil {
+			err = sealFXPUDPDatagramsEach(fxpUDPPacket{
+				packetType: fxpUDPTypeReturn,
+				tunnelID:   s.cfg.TunnelID,
+				ruleID:     s.ruleID,
+				sessionID:  s.sessionID,
+				payload:    buf[:n],
+			}, s.returnSealer, &s.sendSequence, ws, func(wire []byte) error {
+				if !batching {
+					_, writeErr = s.conn.WriteToUDP(wire, peer)
+					if writeErr == nil {
+						// 回程：只给发过冗余包的入口 / 中转发（旧入口会把冗余包当成客户端数据）。
+						s.fec.sent(wire, peer, true)
+					}
+					return writeErr
+				}
+				wires.add(wire)
+				if !wires.prepare(ws) {
+					if writeErr = flush(); writeErr != nil {
+						return writeErr
+					}
+					wires.prepare(ws)
+				}
+				return nil
+			})
+		}
 		if writeErr != nil {
 			log.Printf("exit udp direct peer write failed tunnel=%d rule=%d peer=%s: %v", s.cfg.TunnelID, s.ruleID, peer, writeErr)
 			s.close()
@@ -1368,8 +1547,10 @@ func serveRelayUDPDirect(conn *net.UDPConn, cfg config, selector *exitEndpointSe
 	defer fec.close()
 	buf := make([]byte, 65535)
 	ws := newFXPUDPWorkspace()
+	reader := newFXPUDPBatchReader(conn, true, true)
+	defer closeFXPUDPPacketReader(reader)
 	for {
-		n, addr, err := fec.read(conn, buf)
+		n, addr, err := fec.read(reader, buf)
 		if err != nil {
 			var closing []*udpDirectRelaySession
 			sessionsMu.Lock()

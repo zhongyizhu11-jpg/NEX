@@ -179,6 +179,7 @@ export const OPERATION_AUDIT_MODULE_LABELS: Record<string, string> = {
   trafficBilling: "流量计费",
   referral: "推广返利",
   hosts: "主机",
+  agentRuntime: "Agent 运行",
   rules: "转发规则",
   tunnels: "隧道",
   forwardGroups: "转发组",

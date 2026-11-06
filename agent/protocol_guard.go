@@ -432,7 +432,7 @@ func startProtocolGuard(cfg Config, rule guardRule) {
 	server := newProtocolGuardServer(rule)
 	listenAddress := protocolGuardListenAddress(rule)
 	if guardTCPEnabled(rule) {
-		ln, err := net.Listen("tcp", listenAddress)
+		ln, err := listenTCPForRelay(listenAddress)
 		if err != nil {
 			server.close()
 			logf("protocol guard tcp listen failed rule=%d port=%d: %v", rule.RuleID, rule.ListenPort, err)
