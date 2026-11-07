@@ -8,6 +8,7 @@
  */
 
 import { getHostEntryAddress, getHostEntryAddresses, hostAutoIpv4, hostAutoIpv6, hostNeverConnected, type HostEntryAddressSource } from "./hostEntryAddress";
+import { coordinatesFromMicro } from "./proxySubGeo";
 import { compileProxySubGroupFilter, type ProxySubGroupMatch } from "./proxySubGroupFilter";
 import { publishedRuleEntryDomain } from "./ruleEntryDomain";
 import { expandWeightedMembers, hostBandwidthHintMbps, PROXY_LOAD_BALANCE_MAX_WEIGHT, proxyLoadBalanceWeights } from "./linkWeights";
@@ -128,6 +129,9 @@ export type ProxySubscriptionHostRow = HostEntryAddressSource & {
   name?: unknown;
   /** 面板查到的机器所在国家码（hosts.geoCountryCode）；落地机器的给节点当地区。 */
   geoCountryCode?: unknown;
+  /** 面板查到的机器坐标（微度）；入口机器的给「按访客就近」算距离。 */
+  geoLatitudeMicro?: unknown;
+  geoLongitudeMicro?: unknown;
 };
 
 /** 一条转发没能进订阅的原因，用于在界面上解释而不是让节点无声消失。 */
@@ -185,6 +189,9 @@ export type ProxySubEntryMeta = {
   latencyMs?: number | null;
   /** 出口主机 id（直连 = 节点所在机器，中转 = 落地所在机器）；没有机器时 null。 */
   exitHostId?: number | null;
+  /** 入口主机的位置（度）；「按访客就近」按它算距离。 */
+  entryLat?: number | null;
+  entryLng?: number | null;
 };
 
 export type ProxySubscriptionSkip = {
@@ -300,6 +307,12 @@ function templateRegionCode(template: ProxyNodeTemplateRow, hostsById: Map<numbe
   const host = hostsById.get(Number(template.hostId || 0));
   const geo = text(host?.geoCountryCode).toUpperCase();
   return /^[A-Z]{2}$/.test(geo) ? geo : "";
+}
+
+/** 入口机器的坐标（给「按访客就近」）：没定位的不带字段。 */
+function entryCoordinates(host: ProxySubscriptionHostRow | undefined): { entryLat: number; entryLng: number } | Record<string, never> {
+  const point = coordinatesFromMicro(host?.geoLatitudeMicro, host?.geoLongitudeMicro);
+  return point ? { entryLat: point.lat, entryLng: point.lng } : {};
 }
 
 /** 节点流量出去的那台机器：自建节点所在的主机；粘来的 / 分享的没有。 */
@@ -494,7 +507,12 @@ export function buildProxySubscriptionPlan(input: BuildProxySubscriptionPlanInpu
       templateId,
       kind: "direct",
       frontTemplateId: 0,
-      meta: { hostName: "", templateName: node.name, ruleName: "", customName: false, regionCode: templateRegionCode(template, hostsById), exitHostId: templateExitHostId(template) },
+      meta: {
+        hostName: "", templateName: node.name, ruleName: "", customName: false,
+        regionCode: templateRegionCode(template, hostsById), exitHostId: templateExitHostId(template),
+        // 直连节点的入口就是它所在的机器。
+        ...entryCoordinates(hostsById.get(Number(template.hostId || 0))),
+      },
       node,
     });
   }
@@ -671,6 +689,8 @@ export function buildProxySubscriptionPlan(input: BuildProxySubscriptionPlanInpu
         regionCode: templateRegionCode(template, hostsById),
         // 出口同样看落地：入口机只是转发，网站看到的是落地的 IP。
         exitHostId: templateExitHostId(template),
+        // 「按访客就近」看入口：客户端连的是入口机，近的是它。
+        ...entryCoordinates(host),
         ...(input.latencyByRuleId?.has(ruleId) ? { latencyMs: input.latencyByRuleId.get(ruleId) ?? null } : {}),
       },
       node: relayProxyNode(templateNode, { address, port, name }),

@@ -1,6 +1,7 @@
 import { Router, Request, Response } from "express";
 import { parseFailoverTargets } from "../shared/failoverTargets";
 import {
+  ROUTE_EXIT_IP_AGENT_VERSION,
   ROUTE_GROUP_UDP_AGENT_VERSION,
   routeDeliveryStrategy,
   routeDestSpreadReady,
@@ -10,6 +11,7 @@ import {
   routeGroupOf,
   routeGroupSchedulerAgentVersion,
   routePathDial,
+  routePathExitIp,
   routePathFarEndHostId,
   routePathsOf,
   routeUdpEchoProbeReady,
@@ -76,7 +78,7 @@ import { setBoundedMapValue } from "./boundedCache";
 import { onHostDeleted, onRuleDeleted } from "./entityCleanup";
 import { ignoreErrorWith } from "./ignoredError";
 import { mergeAgentReportedAddress, observedAgentAddress } from "./agentAddressState";
-import { recordHostObservedAddress } from "./hostObservedAddress";
+import { hostEgressAddress, recordHostObservedAddress, type HostEgressSource } from "./hostObservedAddress";
 import { noteAgentPrivateIpv4 } from "./agentPrivateAddress";
 import {
   gostTunnelTransportType,
@@ -2041,6 +2043,30 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       isAgentVersionAtLeast(routeSchedulerAgentVersions.get(schedulerHostId) || "", version)
     ));
     /*
+      「故障切换优先同出口 IP」（2.3.520，Agent 2.2.251）：每条路径带上它最后从哪个 IP 出去（exitIp）。落地是 NEX 主机
+      （落地池成员）时是那台的出口地址 —— 面板看到的心跳来源，没有就是登记的 IPv4 / IPv6（hostEgressAddress）；落地是
+      手填地址、节点地址、规则自己的目标时就是那个地址本身。要用到的落地主机在这里一次查完，查不到就退回落地的拨号地址。
+      这台的 Agent 不够新时不查：下发给它的规格里不带 exitIp（调度器在这台上，按规则算的版本也过不了）。这里不能用
+      routeSchedulerAgentAtLeast —— 它要用到后面才定义的 tunnelExitEndpointsForRule。
+    */
+    const routeExitHostIds = new Set<number>();
+    if (isAgentVersionAtLeast(effectiveAgentVersion, ROUTE_EXIT_IP_AGENT_VERSION)) {
+      for (const rule of [...agentAllRules, ...agentHostRules]) {
+        if (!rule?.failoverEnabled) continue;
+        for (const path of routePathsOf(rule)) {
+          const destHostId = Number(path.destHostId || 0);
+          if (destHostId > 0) routeExitHostIds.add(destHostId);
+        }
+      }
+    }
+    const routeExitHostById = new Map<number, HostEgressSource>();
+    if (routeExitHostIds.size > 0) {
+      const rows: HostEgressSource[] = await db.getHostsByIds(Array.from(routeExitHostIds))
+        .catch(ignoreErrorWith("AgentHeartbeat route exit hosts", []));
+      for (const row of rows) routeExitHostById.set(Number(row.id), row);
+    }
+    const routeHostEgressIp = (hostId: number) => hostEgressAddress(routeExitHostById.get(hostId) || null);
+    /*
       「按访客固定」要让调度器知道访客是谁：规则本来不往目标发 PROXY 头的 gost 端口转发，由面板
       让 gost 专门给调度器加一个头，调度器读完就扔（proxyProtocolStrip）。名单在下面生成 gost
       配置之前填好（要等 shouldUseRuleGuard，见 routeHeaderStripReady）；gost 配置和下发给 Agent
@@ -2100,6 +2126,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         线路的几个落地里按这个分新连接。按权重（整组一起分）、聚合 / 复制（分层）不带：那时已经在分了。
       */
       const destSpreadReady = routeDestSpreadReady({ strategy, tiered, paths, agentAtLeast: (version) => routeSchedulerAgentAtLeast(rule, version) });
+      // 出口 IP 提示只给认得它的 Agent（2.2.251）；和 Down / extraLatencyMs 一样是运行时提示，Agent 那边不进签名。
+      const exitIpReady = routeSchedulerAgentAtLeast(rule, ROUTE_EXIT_IP_AGENT_VERSION);
       // 第 N 个目标的第一跳是哪台：入口 Agent 报的第一段延迟就是「进那台机器」的延迟（节点池卡上的毫秒数）。
       noteRouteFirstHops(Number(rule.id), paths.map((path) => (path.hops.length > 0 ? Number(path.hops[0]) : null)));
       // UDP 回声探测（Agent 2.2.251）：发探测报的是调度那台，它也得够新（老的不认这个字段）。
@@ -2120,6 +2148,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
           && routeUdpEchoProbeReady({ protocol, path, farEndAgentVersion: farEnd ? routeSchedulerAgentVersions.get(farEnd) : null });
         // 沿途主机里最忙那台的负载（0–100，整数）：Agent 2.2.251 起拿它扣评分、算「自动」的权重；老 Agent 不认这个字段。
         const loadPct = routePathLoadHint(path);
+        const exitIp = exitIpReady ? routePathExitIp(path, routeRule, routeHostEgressIp) : "";
         return {
           targetIp: dial.ip,
           targetPort: dial.port,
@@ -2133,6 +2162,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
           ...(extraLatencyMs > 0 ? { extraLatencyMs } : {}),
           // 和 extraLatencyMs 一样是运行时提示：不进 Agent 的签名、不重建代理。
           ...(loadPct > 0 ? { loadPct } : {}),
+          // 这条路径最后从哪个 IP 出去：挂了换路时 Agent 优先挑一样的（2.2.251）。
+          ...(exitIp ? { exitIp } : {}),
           ...(hint?.down ? { down: true, downReason: hint.reason } : {}),
         };
       });
@@ -2529,9 +2560,10 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     } = createForwardXHopSpecBuilder({
       addMimicFilter,
       applyForwardXTransport,
-      // 这两个在下面才声明：转调一层，真正调用时才读，和原来闭包的时机一样。
+      // 这几个在下面才声明：转调一层，真正调用时才读，和原来闭包的时机一样。
       exitCapacitiesForHostIds: (strategy: unknown, hostIds: number[]) => exitCapacitiesForHostIds(strategy, hostIds),
       exitWeightsForHostIds: (strategy: unknown, hostIds: number[]) => exitWeightsForHostIds(strategy, hostIds),
+      exitIpsForHostIds: (hostIds: number[]) => exitIpsForHostIds(hostIds),
       forwardXExtraExitRoutes,
       getHopDialAddress,
       hostInterface,
@@ -2592,6 +2624,23 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       const normalized = normalizeExitGroupStrategy(strategy);
       if ((normalized !== "least_load" && normalized !== "ip_hash") || hostIds.length < 2) return null;
       return exitGroupCapacities(strategy, await exitBandwidthsForHostIds(hostIds));
+    };
+    /*
+      出口组「故障切换优先同出口 IP」（2.3.520）：每个出口带上那台主机的出口地址（hostEgressAddress）。先写进 FXP 规格，
+      FXP 主备换出口时按它取舍要等 FXP 那边接上（现在的 FXP 不读这个字段）；Agent 不拿它算签名，带上不会重载 FXP。
+      只给认得它的 Agent（2.2.251）；出口不到两个用不上，不查。一次心跳里同一台只查一次。
+    */
+    const exitIpCache = new Map<number, string>();
+    const exitIpsForHostIds = async (hostIds: number[]): Promise<string[] | null> => {
+      if (hostIds.length < 2 || !isAgentVersionAtLeast(effectiveAgentVersion, ROUTE_EXIT_IP_AGENT_VERSION)) return null;
+      const missing = Array.from(new Set(hostIds.filter((id) => id > 0 && !exitIpCache.has(id))));
+      if (missing.length > 0) {
+        const rows: HostEgressSource[] = await db.getHostsByIds(missing).catch(ignoreErrorWith("AgentHeartbeat exit ips", []));
+        for (const id of missing) exitIpCache.set(id, "");
+        for (const row of rows) exitIpCache.set(Number(row.id), hostEgressAddress(row));
+      }
+      const ips = hostIds.map((id) => exitIpCache.get(id) || "");
+      return ips.some(Boolean) ? ips : null;
     };
     const forwardXEntryRoutes = async (_rule: any, tunnel: any) => {
       const routes: Array<{ hostId: number; host: string; port: number; udpPort: number; key: string }> = [];
@@ -4053,6 +4102,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
             const entryExitHostIds = entryRoutes.map((route) => Number((route as any).hostId || 0));
             const entryExitWeights = entryExitsAreRelays ? null : await exitWeightsForHostIds((tunnel as any).loadBalanceStrategy, entryExitHostIds);
             const entryExitCapacities = entryExitsAreRelays ? null : await exitCapacitiesForHostIds((tunnel as any).loadBalanceStrategy, entryExitHostIds);
+            // 每个出口从哪个 IP 出去（2.3.520，见 exitIpsForHostIds）。并排中转不是出口，不带。
+            const entryExitIps = entryExitsAreRelays ? null : await exitIpsForHostIds(entryExitHostIds);
             const fxpSpec = await applyForwardXTransport({
               role: "entry",
               tunnelId: tunnel.id,
@@ -4075,6 +4126,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
                 peerId: wireGuardV2 ? String(Number((route as any).hostId || 0)) : undefined,
                 ...(entryExitWeights ? { weight: entryExitWeights[index] } : {}),
                 ...(entryExitCapacities ? { capacityMbps: entryExitCapacities[index] } : {}),
+                ...(entryExitIps?.[index] ? { exitIp: entryExitIps[index] } : {}),
               })),
               targetIp: fxpTarget.targetIp,
               targetPort: fxpTarget.targetPort,

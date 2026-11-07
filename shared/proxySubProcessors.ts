@@ -13,6 +13,7 @@
 
 import { formatBytes } from "./formatBytes";
 import { createEmptyProxyNode, PROXY_NODE_PROTOCOL_LABELS, type ProxyNode } from "./proxyNode";
+import { greatCircleKm, type ProxySubVisitorGeo } from "./proxySubGeo";
 import type { ProxySubscriptionEntry, ProxySubscriptionPlan } from "./proxySubscriptionPlan";
 import { guessProxySubRegionCode, proxySubRegionFlag, proxySubRegionName, stripProxySubRegionFlag } from "./proxySubRegion";
 import type { ProxySubSettings } from "./proxySubSettings";
@@ -40,6 +41,9 @@ export type ProxySubEntryMeta = {
    * 粘来的 / 分享的节点没有，为 null。解锁出口分流按它查检测结论（shared/proxySubUnlock.ts）。
    */
   exitHostId?: number | null;
+  /** 入口主机的位置（hosts.geoLatitudeMicro / geoLongitudeMicro 换成度）；「按访客就近」按它算距离。没定位的没有。 */
+  entryLat?: number | null;
+  entryLng?: number | null;
 };
 
 export function entryMeta(entry: ProxySubscriptionEntry): ProxySubEntryMeta {
@@ -199,17 +203,33 @@ const PROTOCOL_ORDER = ["vless", "vmess", "trojan", "shadowsocks", "hysteria2", 
 let zhCollator: Intl.Collator | null = null;
 const compareNames = (a: string, b: string) => (zhCollator ??= new Intl.Collator("zh-Hans-CN")).compare(a, b);
 
-export function sortProxySubEntries(plan: ProxySubscriptionPlan, mode: ProxySubSortMode): ProxySubscriptionPlan {
+/**
+ * 按选的方式排。「按访客就近」（nearest，2.3.520）要知道访客在哪：visitor 是服务端用离线库查出来的；没查到就按地区排。
+ * 入口没有定位的排最后，距离一样的按地区、名字。
+ */
+export function sortProxySubEntries(plan: ProxySubscriptionPlan, mode: ProxySubSortMode, visitor?: ProxySubVisitorGeo | null): ProxySubscriptionPlan {
   if (mode === "manual") return plan;
+  if (mode === "nearest" && !visitor) mode = "region";
   const entries = plan.entries.map((entry, index) => ({ entry, index }));
   const byName = (a: ProxySubscriptionEntry, b: ProxySubscriptionEntry) => compareNames(a.node.name, b.node.name);
+  const byRegion = (a: ProxySubscriptionEntry, b: ProxySubscriptionEntry) => {
+    const ra = entryMeta(a).regionCode || "ZZ";
+    const rb = entryMeta(b).regionCode || "ZZ";
+    return ra.localeCompare(rb) || byName(a, b);
+  };
+  const distanceKm = (entry: ProxySubscriptionEntry): number => {
+    const meta = entryMeta(entry);
+    if (!visitor || typeof meta.entryLat !== "number" || typeof meta.entryLng !== "number") return Number.POSITIVE_INFINITY;
+    return greatCircleKm(visitor.lat, visitor.lng, meta.entryLat, meta.entryLng);
+  };
   entries.sort((a, b) => {
     let diff = 0;
     if (mode === "name") diff = byName(a.entry, b.entry);
-    else if (mode === "region") {
-      const ra = entryMeta(a.entry).regionCode || "ZZ";
-      const rb = entryMeta(b.entry).regionCode || "ZZ";
-      diff = ra.localeCompare(rb) || byName(a.entry, b.entry);
+    else if (mode === "region") diff = byRegion(a.entry, b.entry);
+    else if (mode === "nearest") {
+      const da = distanceKm(a.entry);
+      const db = distanceKm(b.entry);
+      diff = da === db ? byRegion(a.entry, b.entry) : da < db ? -1 : 1;
     } else if (mode === "protocol") {
       diff = PROTOCOL_ORDER.indexOf(a.entry.node.protocol) - PROTOCOL_ORDER.indexOf(b.entry.node.protocol) || byName(a.entry, b.entry);
     } else if (mode === "latency") {
@@ -244,6 +264,8 @@ export type ProxySubProcessorInput = {
   scope: ProxySubTokenScope;
   options: ProxySubTokenOptions;
   settings: ProxySubSettings;
+  /** 拉订阅的访客在哪（服务端用离线库查的）；只有「按访客就近」用它，没有就按地区。 */
+  visitor?: ProxySubVisitorGeo | null;
 };
 
 /** 按固定顺序跑完所有条目级处理器。 */
@@ -251,7 +273,7 @@ export function runProxySubEntryProcessors(plan: ProxySubscriptionPlan, input: P
   let next = applyProxySubScope(plan, input.scope);
   next = applyProxySubNaming(next, { options: input.options, settings: input.settings });
   if (input.options.dedupe) next = dedupeProxySubEntries(next);
-  next = sortProxySubEntries(next, input.options.sortMode);
+  next = sortProxySubEntries(next, input.options.sortMode, input.visitor);
   next = applyProxySubNodeOverrides(next, input.options);
   return next;
 }

@@ -27,6 +27,7 @@ import {
   type ProxySubBodyEncoding,
   type ProxySubPreparedBody,
 } from "./proxySubCache";
+import { proxySubVisitorCacheParts, resolveProxySubVisitorGeo } from "./proxySubVisitorGeo";
 import { checkProxySubRateLimit, proxySubMissBlockState, recordProxySubMiss } from "./proxySubRateLimit";
 import { clientIp } from "./clientIp";
 import { createKeyedSerial } from "./keyedSerial";
@@ -428,10 +429,14 @@ async function handleSubscription(req: Request, res: Response, options: { param:
       ...proxySubTemplateUserVars(gated.context.info),
     };
 
+    // 「按访客就近」：访客在哪只查面板自带的离线库（终端用户的 IP 不发给第三方）；别的排序不查、缓存键也不变。
+    const visitor = tokenOptions.sortMode === "nearest" ? await resolveProxySubVisitorGeo(clientIp(req)) : null;
     const cacheKey = proxySubCacheKey(Number(token.userId), [
       "v1", token.id, format, rulePreset, profile, client.family, client.version, tokenOptions, scope, template?.id || 0, renderSettings, selfUrl,
       // 信息节点带着用量，用量一直在变；进缓存键的是取整到 10 MB 的值，免得每次都不一样。
       infoNodesWanted(gated.context) ? Math.floor(gated.context.info.trafficUsed / 10_485_760) : -1,
+      // 只有按访客就近时多一格：国家 + 取整到 1° 的经纬度，同城访客共用一份缓存。
+      ...proxySubVisitorCacheParts(tokenOptions.sortMode, visitor),
     ]);
     // 开着缓存时存「发出去的样子」（字节、ETag、压好的 gzip / br，见 proxySubCache）；关着时和原来一样直接发字符串。
     let prepared = settings.cacheTtlSec > 0 ? getProxySubCached(cacheKey) : null;
@@ -446,6 +451,7 @@ async function handleSubscription(req: Request, res: Response, options: { param:
         template,
         info: infoNodesWanted(gated.context) ? gated.context.info : null,
         vars,
+        visitor,
       });
       body = renderProxySubPipeline({
         built,
@@ -512,7 +518,7 @@ function queryOverrides(req: Request): { options: Partial<ProxySubTokenContext["
   const scv = flag("scv");
   if (scv) options.skipCertVerify = scv;
   const sort = String(req.query.sort ?? "").trim().toLowerCase();
-  if (sort === "name" || sort === "region" || sort === "protocol" || sort === "latency") options.sortMode = sort;
+  if (sort === "name" || sort === "region" || sort === "protocol" || sort === "latency" || sort === "nearest") options.sortMode = sort;
   const include = String(req.query.include ?? "").trim().slice(0, 64);
   if (include) scope.include = include;
   const exclude = String(req.query.exclude ?? "").trim().slice(0, 64);
