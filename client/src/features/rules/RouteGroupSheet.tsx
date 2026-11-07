@@ -96,6 +96,9 @@ export type RouteStatusPath = {
   jitterMs: number | null;
   availabilityPct: number | null;
   healthy: boolean | null;
+  /** UDP 那一侧的健康（Agent 2.2.251 起）；老 Agent 没报就是 null。 */
+  udpHealthy?: boolean | null;
+  udpLatencyMs?: number | null;
   down: boolean;
   downReason: string;
   connections: number | null;

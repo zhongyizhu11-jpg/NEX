@@ -555,6 +555,11 @@ func (p *failoverProxy) rebuildForSpecLocked(spec failoverSpec, now time.Time) b
 			relayReason[i] = strings.TrimSpace(target.DownReason)
 		}
 	}
+	// UDP 那一侧（TCP+UDP 规格）按同一张对照表搬。
+	p.udpSide = p.udpSide.carried(n, func(i int) (int, bool) {
+		j, ok := oldIndex[targetStateKey(spec.Targets[i])]
+		return j, ok
+	})
 	p.spec = spec
 	p.targetHealth = health
 	p.failureSince = failureSince
@@ -691,6 +696,10 @@ type failoverTargetStatsReport struct {
 	DialSlow   int   `json:"dialSlow"`
 	DialMs     int   `json:"dialMs,omitempty"`
 	LastDialAt int64 `json:"lastDialAt,omitempty"`
+	// UDP 那一侧（2.2.251 起，route_group_udp_health.go）：只转 UDP 的规格就是 healthy / latencyMs 本身；
+	// TCP+UDP 规格是单独探出来的；只转 TCP 的不带。老 Agent 不报这两个字段，面板就什么都不多显示。
+	UDPHealthy   *bool `json:"udpHealthy,omitempty"`
+	UDPLatencyMs int   `json:"udpLatencyMs,omitempty"`
 }
 
 type failoverStatsReport struct {
@@ -790,6 +799,7 @@ func (p *failoverProxy) statsReportLocked() failoverStatsReport {
 		if !stats.lastProbeAt.IsZero() {
 			item.LastProbeAt = stats.lastProbeAt.UnixMilli()
 		}
+		item.UDPHealthy, item.UDPLatencyMs = p.udpReportLocked(index)
 		dials := stats.dialSummary(time.Now())
 		item.DialOK, item.DialFailed, item.DialSlow, item.DialMs = dials.ok, dials.failed, dials.slow, dials.avgMs
 		if !dials.lastAt.IsZero() {

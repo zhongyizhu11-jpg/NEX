@@ -31,6 +31,8 @@ type protocolGuardServer struct {
 	closed      bool
 	// halfCloseLinger 为 0 时用 tcpRelayHalfCloseLinger；测试里调短。
 	halfCloseLinger time.Duration
+	// 回声探测报的回包限速（udp_probe.go）：别的 Agent 探这条 UDP 规则通不通。
+	udpEcho udpEchoLimiter
 }
 
 func newProtocolGuardServer(rule guardRule) *protocolGuardServer {

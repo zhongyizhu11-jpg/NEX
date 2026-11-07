@@ -134,6 +134,10 @@ func (s *protocolGuardServer) serveUDP() {
 		// so the read buffer remains valid for the target Write. Avoid a heap
 		// allocation for every datagram on high-PPS UDP rules.
 		packet := buf[:n]
+		// 别的 Agent 的回声探测报：回掉、不转发、不算流量（udp_probe.go）。
+		if answerUDPProbe(s.udpConn, &s.udpEcho, packet, client) {
+			continue
+		}
 		// 限速等待留在读协程里：它就是这条规则入方向的背压，挪到每个会话各自的
 		// 队列里要额外的缓冲和排队丢包策略，收益不大。
 		if err := s.waitRate(s.ctx, protocolGuardRateIn, len(packet)); err != nil {
@@ -197,9 +201,22 @@ func (s *protocolGuardServer) serveUDPBatch(listener *udpBatchConn, sessions map
 // forwardUDPRun 把同一来源连着的 [from, to) 几个包写到它的会话目标；几个包就一次 sendmmsg。
 // 返回 false 表示守护正在收尾，读循环该退出。
 func (s *protocolGuardServer) forwardUDPRun(batch *udpBatch, from int, to int, now time.Time, sessions map[netip.AddrPort]*protocolGuardUDPSession, sessionMu *sync.Mutex, listener *udpBatchConn) bool {
+	// 回声探测报先挑出来回掉（udp_probe.go）；探测用的是自己的套接字，一串里要么全是探测报，要么一个都没有。
+	probes := 0
+	for i := from; i < to; i++ {
+		if answerUDPProbe(s.udpConn, &s.udpEcho, batch.packet(i), batch.addr(i)) {
+			probes++
+		}
+	}
+	if probes == to-from {
+		return true
+	}
 	// 限速等待照旧逐包做（限速器全规则共享、可热换，没限速时立刻返回）。等不成只在收尾
 	// 时发生：这一串包丢掉。
 	for i := from; i < to; i++ {
+		if probes > 0 && isUDPProbe(batch.packet(i)) {
+			continue
+		}
 		if err := s.waitRate(s.ctx, protocolGuardRateIn, len(batch.packet(i))); err != nil {
 			select {
 			case <-s.done:
@@ -220,10 +237,13 @@ func (s *protocolGuardServer) forwardUDPRun(batch *udpBatch, from int, to int, n
 	}
 	session.touch(now)
 	var err error
-	if to-from > 1 && session.batch != nil {
+	if probes == 0 && to-from > 1 && session.batch != nil {
 		err = session.batch.send(batch, from, to)
 	} else {
 		for i := from; i < to; i++ {
+			if probes > 0 && isUDPProbe(batch.packet(i)) {
+				continue
+			}
 			if _, err = session.target.Write(batch.packet(i)); err != nil {
 				break
 			}

@@ -10,7 +10,11 @@ import {
   routeGroupOf,
   routeGroupSchedulerAgentVersion,
   routePathDial,
+  routePathFarEndHostId,
+  routePathsOf,
+  routeUdpEchoProbeReady,
 } from "../shared/routeGroup";
+import { forwardGroupHealthProbeMethodForAgent } from "../shared/forwardGroupHealthCheck";
 import { noteRouteFirstHops, routeHopDownHints, routeNodeHints, routePathDownstreamMs } from "./routeGroupStats";
 import { ensureRouteNodeHealthFresh, getRouteNodeStatus } from "./routeNodeHealth";
 import { tunnelLinkShaping, hostEgressShaping } from "./tunnelFxpRuntime";
@@ -1998,7 +2002,15 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     // 先把要看版本的机器收齐，一次查完（以前每台各查一次）。
     const missingSchedulerHostIds = new Set<number>();
     for (const rule of [...agentAllRules, ...agentHostRules] as any[]) {
-      if (!rule?.failoverEnabled || !routeGroupSchedulerAgentVersion(rule?.protocol, routeTunnelOf(rule)?.mode)) continue;
+      if (!rule?.failoverEnabled) continue;
+      // 带 UDP 的线路组：每条路径对端那台的版本也要看（UDP 回声探测，routeUdpEchoProbeReady）。
+      if (normalizeForwardRuleProtocol(rule?.protocol) !== "tcp") {
+        for (const path of routePathsOf(rule)) {
+          const farEnd = routePathFarEndHostId(path);
+          if (farEnd && !routeSchedulerAgentVersions.has(farEnd)) missingSchedulerHostIds.add(farEnd);
+        }
+      }
+      if (!routeGroupSchedulerAgentVersion(rule?.protocol, routeTunnelOf(rule)?.mode)) continue;
       for (const schedulerHostId of routeSchedulerCandidateHostIds(rule)) {
         if (!routeSchedulerAgentVersions.has(schedulerHostId)) missingSchedulerHostIds.add(schedulerHostId);
       }
@@ -2086,11 +2098,15 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         const hint = nodeHints.get(path.key) || hints.get(path.key);
         // Agent 那边是整数毫秒（Go int），小数会让整份规格解不开。
         const extraLatencyMs = Math.round(routePathDownstreamMs(Number(rule.id), path));
+        // UDP 回声探测（Agent 2.2.251）：对端是自己的机器、它的 Agent 够新才带；老 Agent 的中继会把探测报转给落地。
+        const farEnd = routePathFarEndHostId(path);
+        const probeUdpEcho = routeUdpEchoProbeReady({ protocol, path, farEndAgentVersion: farEnd ? routeSchedulerAgentVersions.get(farEnd) : null });
         return {
           targetIp: dial.ip,
           targetPort: dial.port,
           // 每条路径可以有自己的探测目标（探落地而不是探中转），见 shared/failoverTargets 里为什么需要它。
           ...(path.probe ? { probeIp: path.probe.ip, probePort: path.probe.port } : {}),
+          ...(probeUdpEcho ? { probeUdpEcho: true } : {}),
           weight: path.weight,
           ...tier,
           ...lineSpread,
@@ -4403,7 +4419,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         probeType: "china",
         targetIp: probe.targetIp,
         targetPort: probe.targetPort,
-        method: "tcp",
+        // 按组里选的方法探（tcp / ping / udp）；「UDP」要 Agent 2.2.251 起，老 Agent 改发 ping。
+        method: forwardGroupHealthProbeMethodForAgent(probe.method, effectiveAgentVersion),
         hopIndex: 0,
         hopCount: 1,
         probeKey: `forward-group:${Number(probe.groupId)}:host:${Number(host.id)}:china:${Number(probe.memberId)}:${String(probe.targetIp).toLowerCase()}:${Number(probe.targetPort) || 0}`,

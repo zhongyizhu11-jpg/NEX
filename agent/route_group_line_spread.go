@@ -48,7 +48,7 @@ func (p *failoverProxy) sameLineLocked(index int, line int) bool {
 
 // spreadWithinLineLocked：anchor 是主备逻辑挑出来的那条；它所在的线路选了「一起分」时，在这条线路的几个落地
 // 里按分法重新挑一条。调用方持有 p.mu。
-func (p *failoverProxy) spreadWithinLineLocked(anchor int, hashKey string, exclude map[int]bool) int {
+func (p *failoverProxy) spreadWithinLineLocked(anchor int, hashKey string, exclude map[int]bool, udp bool) int {
 	if anchor < 0 || anchor >= len(p.spec.Targets) {
 		return anchor
 	}
@@ -66,7 +66,7 @@ func (p *failoverProxy) spreadWithinLineLocked(anchor int, hashKey string, exclu
 		if exclude != nil && exclude[i] {
 			continue
 		}
-		if !p.healthyLocked(i) {
+		if !p.usableLocked(i, udp) {
 			continue
 		}
 		landing := p.lineLandingLocked(i)

@@ -24,6 +24,7 @@ import { withForwardTestDates } from "./forwardTestRepository";
 import { inList, quoteIdentifier } from "../dbCompat";
 import { pageResult, pageWindowForTotal, type PageRequest } from "../../shared/pagination";
 import {
+  defaultHealthCheckPort,
   defaultHealthCheckTarget,
   healthCheckTargetNeedsPort,
   normalizeForwardGroupHealthCheckMethod,
@@ -432,14 +433,14 @@ export function normalizeChinaHealthTarget(raw: unknown, method?: unknown) {
   const probeMethod = normalizeForwardGroupHealthCheckMethod(method);
   const needsPort = healthCheckTargetNeedsPort(probeMethod);
   const source = String(raw || "").trim() || defaultHealthCheckTarget(probeMethod);
-  const withoutScheme = source.replace(/^(?:tcp|icmp|ping):\/\//i, "").replace(/：/g, ":").trim();
+  const withoutScheme = source.replace(/^(?:tcp|udp|icmp|ping):\/\//i, "").replace(/：/g, ":").trim();
   let host = withoutScheme;
-  let port = 80;
+  let port = defaultHealthCheckPort(probeMethod);
 
   const bracketMatch = withoutScheme.match(/^\[([^\]]+)\](?::(\d+))?$/);
   if (bracketMatch) {
     host = bracketMatch[1];
-    port = bracketMatch[2] ? Number(bracketMatch[2]) : 80;
+    port = bracketMatch[2] ? Number(bracketMatch[2]) : defaultHealthCheckPort(probeMethod);
   } else {
     const lastColon = withoutScheme.lastIndexOf(":");
     if (lastColon > 0) {

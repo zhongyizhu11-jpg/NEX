@@ -544,6 +544,10 @@ type failoverTarget struct {
 	Line    *int   `json:"line,omitempty"`
 	Landing string `json:"landing,omitempty"`
 	Spread  string `json:"spread,omitempty"`
+	// 这条路径的对端是 NEX 管的主机、Agent 够新（2.2.251）：UDP 健康探测发回声探测报（udp_probe.go），
+	// 而不是零长度包 + ping。面板按对端 Agent 的版本给；填了探测地址时不带（照填的拨 TCP）。
+	// 行为参数，进签名；不带时签名逐字不变。
+	ProbeUdpEcho bool `json:"probeUdpEcho,omitempty"`
 }
 
 // 规格是不是分层的：每一条出站都标了 Tier。缺一条就整组按不分层处理（老面板）。

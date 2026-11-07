@@ -48,6 +48,12 @@ func failoverTCPDialContext(ctx context.Context, network, address string) (net.C
 
 // probeFailoverTargets 有界并行地探测所有路径，结果按路径下标返回。
 func probeFailoverTargets(protocol string, targets []failoverTarget) ([]int, []bool) {
+	return probeFailoverTargetsWith(targets, func(target failoverTarget) (int, bool) {
+		return failoverProbeTarget(protocol, target)
+	})
+}
+
+func probeFailoverTargetsWith(targets []failoverTarget, probe func(failoverTarget) (int, bool)) ([]int, []bool) {
 	latencies := make([]int, len(targets))
 	results := make([]bool, len(targets))
 	sem := make(chan struct{}, failoverProbeParallelism)
@@ -58,7 +64,7 @@ func probeFailoverTargets(protocol string, targets []failoverTarget) ([]int, []b
 		go func(i int, target failoverTarget) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			latencies[i], results[i] = failoverProbeTarget(protocol, target)
+			latencies[i], results[i] = probe(target)
 		}(i, target)
 	}
 	wg.Wait()

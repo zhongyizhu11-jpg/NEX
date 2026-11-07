@@ -29,7 +29,10 @@ TCP 那边一条连接挑一次路径（handleConn）。UDP 没有连接，这�
     「断开让客户端重连」。
 
 不一样的地方：拨 UDP 不会因为对端不通而失败（没有握手），真实流量给不出「这条不通」的信号，
-健康只看探测：没填探测地址的路径 ping 拨号地址的主机（failoverProbeTarget）。
+健康只看探测：没填探测地址的路径探拨号地址的 UDP 端口，说不准再 ping 主机（failoverProbeUDP）。
+TCP+UDP 的规格两侧分开判（route_group_udp_health.go）：UDP 会话避开 UDP 不通的路径。
+
+监听收到 24 字节的回声探测报（udp_probe.go）直接回给发送方、不转发：别的 Agent 就是这么探我们的。
 */
 
 const (
@@ -163,6 +166,9 @@ func (p *failoverProxy) serveUDP() {
 		if n <= 0 || !client.IsValid() {
 			continue
 		}
+		if answerUDPProbe(p.udp, &p.udpEcho, buf[:n], client) {
+			continue
+		}
 		// 这个包在下一次 ReadFrom 之前就写出去了，buf 可以复用。
 		p.forwardUDPPacket(failoverUDPSessionKey(client), buf[:n])
 	}
@@ -214,6 +220,16 @@ func (p *failoverProxy) serveUDPBatch(listener *udpBatchConn, backoff *serveLoop
 // forwardUDPRun 把同一来源连着的 [from, to) 几个包写到它的会话上游；几个包就一次 sendmmsg。
 // 上游刚被关掉（强制切换断旧连接、或者刚好被回收）就和 forwardUDPPacket 一样丢掉会话重挑一次。
 func (p *failoverProxy) forwardUDPRun(key netip.AddrPort, batch *udpBatch, from int, to int) {
+	// 回声探测报先挑出来回掉；探测用的是自己的套接字，一串里要么全是探测报，要么一个都没有。
+	probes := 0
+	for i := from; i < to; i++ {
+		if answerUDPProbe(p.udp, &p.udpEcho, batch.packet(i), batch.addr(i)) {
+			probes++
+		}
+	}
+	if probes == to-from {
+		return
+	}
 	for attempt := 0; attempt < 2; attempt++ {
 		session := p.udpSessionFor(key)
 		if session == nil {
@@ -221,10 +237,13 @@ func (p *failoverProxy) forwardUDPRun(key netip.AddrPort, batch *udpBatch, from 
 		}
 		session.touch(time.Now())
 		var err error
-		if to-from > 1 && session.batch != nil {
+		if probes == 0 && to-from > 1 && session.batch != nil {
 			err = session.batch.send(batch, from, to)
 		} else {
 			for i := from; i < to; i++ {
+				if probes > 0 && isUDPProbe(batch.packet(i)) {
+					continue
+				}
 				// 别的写错误（对端回过 ICMP 不可达之类）只丢这一个包，下一个照发。
 				if _, err = session.upstream.Write(batch.packet(i)); err != nil && errors.Is(err, net.ErrClosed) {
 					break
@@ -332,7 +351,8 @@ func (p *failoverProxy) oldestUDPSessionLocked() *failoverUDPSession {
 func (p *failoverProxy) dialUDPPath(key string) (net.Conn, int) {
 	attempted := map[int]bool{}
 	for {
-		target, index := p.pickTargetForKey(key, attempted)
+		// UDP 会话按 UDP 那一侧的健康挑（TCP+UDP 规格两侧分开判，见 route_group_udp_health.go）。
+		target, index := p.pickTargetForKeyProto(key, attempted, true)
 		if index < 0 {
 			if shouldLogAgentReport(fmt.Sprintf("failover-udp-no-target:%d:%d", p.ruleID, p.sourcePort), agentReportLogInterval) {
 				logf("failover udp no target available rule=%d source=%d", p.ruleID, p.sourcePort)
@@ -488,18 +508,41 @@ func (t failoverTarget) hasExplicitProbe() bool {
 /*
 这条路径的健康探测怎么做。
 
-TCP（含 TCP+UDP）照旧拨探测地址。只转 UDP 的路径没有握手可拨：拨号地址上多半只有 UDP
-服务，拨 TCP 只会一直失败，所有路径都会被判成挂了。没单独填探测地址的话就 ping 拨号地址的
-主机 —— 中转机上探 UDP 中继规则用的也是这个办法（buildRuleLatencyProbeTask）。填了探测地址
-就照填的拨 TCP：用户填它，就是要探落地上某个确定开着的 TCP 端口。
+TCP（含 TCP+UDP 的 TCP 那一侧）照旧拨探测地址。只转 UDP 的路径没有握手可拨：拨号地址上多半只有
+UDP 服务，拨 TCP 只会一直失败，所有路径都会被判成挂了。没单独填探测地址的话就探 UDP 端口
+（failoverProbeUDP）；填了探测地址就照填的拨 TCP：用户填它，就是要探落地上某个确定开着的 TCP 端口。
 */
 func failoverProbeTarget(protocol string, target failoverTarget) (int, bool) {
 	if protocol == "udp" && !target.hasExplicitProbe() {
-		latency, ok, _ := failoverPingLatency(target.TargetIP, 2*time.Second, 1)
-		return latency, ok
+		return failoverProbeUDP(target)
 	}
 	host, port := target.probeEndpoint()
 	return tcpLatency(host, port, 2*time.Second)
+}
+
+/*
+UDP 那一侧的探测（只转 UDP 的路径，以及 TCP+UDP 路径的 UDP 侧；2.2.251 起）。
+
+填了探测地址照填的拨 TCP（老行为）。没填就探拨号地址的 UDP 端口（udp_probe.go）：对端是 Agent
+（probeUdpEcho）发回声探测报，回来了就是通、顺带有往返耗时；不是 Agent 发零长度包，对端回 ICMP
+端口不可达就是确定不通。两种都说不准（没回包）时退回原来的 ping 拨号地址的主机 —— 中转机上探
+UDP 中继规则用的也是这个办法（buildRuleLatencyProbeTask）。所以新探法只会比以前多认出「端口死了」，
+不会把以前判成通的判成不通。
+*/
+func failoverProbeUDP(target failoverTarget) (int, bool) {
+	if target.hasExplicitProbe() {
+		host, port := target.probeEndpoint()
+		return tcpLatency(host, port, 2*time.Second)
+	}
+	latency, verdict := udpProbeFn(target.TargetIP, target.TargetPort, target.ProbeUdpEcho, udpProbeTimeout)
+	switch verdict {
+	case udpProbeUp:
+		return latency, true
+	case udpProbeDown:
+		return 0, false
+	}
+	latency, ok, _ := failoverPingLatency(target.TargetIP, 2*time.Second, 1)
+	return latency, ok
 }
 
 // ---- 按访客固定：从 PROXY 头里读访客地址 ----

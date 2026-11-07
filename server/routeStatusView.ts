@@ -328,6 +328,9 @@ export async function buildRouteStatus(rule: any) {
       jitterMs: target?.jitterMs ?? null,
       availabilityPct: target?.availabilityPct ?? null,
       healthy: target ? target.healthy && !down : null,
+      /** UDP 那一侧（Agent 2.2.251 起）：TCP 通 UDP 不通（或反过来）时界面标出来；老 Agent 没报就是 null。 */
+      udpHealthy: target && typeof target.udpHealthy === "boolean" ? target.udpHealthy && !down : null,
+      udpLatencyMs: target?.udpLatencyMs ?? null,
       down,
       downReason: describeRouteIssue(downReason),
       connections: target?.connections ?? null,
