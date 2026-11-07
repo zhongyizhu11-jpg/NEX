@@ -34,6 +34,8 @@ export type RouteTargetStat = {
   samples: number;
   /** Unix 毫秒；0 = 没探过。 */
   lastProbeAt: number;
+  /** 面板下发、Agent 评分时扣了分的沿途主机负载（0–100；Agent 2.2.251 起回显）；没有 / 老 Agent 是 null。 */
+  loadPct?: number | null;
   /** 真实连接最近 10 分钟的拨号：成功 / 失败 / 慢（慢的也在成功里）、耗时折半均值（0 = 没拨过）、最近一次（Unix 毫秒）。 */
   dials?: RouteDialStat;
 };
@@ -127,6 +129,7 @@ function sanitizeTarget(raw: any, index: number): RouteTargetStat | null {
     connections: Math.max(0, integer(raw.connections)),
     samples: Math.max(0, integer(raw.samples)),
     lastProbeAt: reportedMillis(raw.lastProbeAt),
+    loadPct: finite(raw.loadPct, 0) > 0 ? Math.min(100, Math.round(finite(raw.loadPct, 0))) : null,
     dials: {
       ok: Math.max(0, integer(raw.dialOk)),
       failed: Math.max(0, integer(raw.dialFailed)),

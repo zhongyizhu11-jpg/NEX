@@ -125,9 +125,10 @@ test("手动主备在「怎么切」下面直接选走哪条，没有「自动�
   assert.doesNotMatch(html, /应急人工指定/, "手动模式下没有第二个人工指定");
 });
 
-test("按权重：分法四选一，按权重时一条线路一个权重和百分比，没有驻留和切回", () => {
+test("按权重：分法六选一（含「自动」），按权重时一条线路一个权重和百分比，没有驻留和切回", () => {
   const html = render(group("weighted"));
-  for (const label of ["按权重", "轮流", "随机", "按访客固定"]) assert.match(html, new RegExp(label));
+  for (const label of ["按权重", "按负载", "轮流", "随机", "按访客固定", "自动"]) assert.match(html, new RegExp(`role="radio"[^>]*>${label}<`), `少了「${label}」`);
+  assert.match(render(group("weighted", { spread: "auto" })), /沿途主机的负载自动算权重/, "选中「自动」时下面那句说它会怎么做");
   assert.match(html, /data-testid="route-line-weights"/);
   assert.match(html, /aria-label="主线路 的权重"/);
   assert.match(html, /aria-label="晚高峰 的权重"/);

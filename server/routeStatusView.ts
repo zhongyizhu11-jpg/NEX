@@ -323,6 +323,8 @@ export async function buildRouteStatus(rule: any) {
       probe: path.probe,
       score: target?.score ?? null,
       grade: routeScoreGrade(target?.score ?? null),
+      /** 沿途主机里最忙那台的负载（Agent 2.2.251 起回显，评分已按它扣过）；老 Agent 没有 = null。 */
+      loadPct: target?.loadPct ?? null,
       latencyMs: target?.latencyMs ?? null,
       lossPct: target?.lossPct ?? null,
       jitterMs: target?.jitterMs ?? null,

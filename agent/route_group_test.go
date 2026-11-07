@@ -64,6 +64,7 @@ func TestRouteScoreSharedCases(t *testing.T) {
 			JitterMs        float64  `json:"jitterMs"`
 			AvailabilityPct float64  `json:"availabilityPct"`
 			Healthy         bool     `json:"healthy"`
+			LoadPct         float64  `json:"loadPct"`
 			Expected        *int     `json:"expected"`
 		} `json:"cases"`
 	}
@@ -78,7 +79,7 @@ func TestRouteScoreSharedCases(t *testing.T) {
 		if testCase.LatencyMs != nil {
 			latency = *testCase.LatencyMs
 		}
-		actual, scored := routeScore(latency, testCase.LatencyMs != nil, testCase.LossPct, testCase.JitterMs, testCase.AvailabilityPct, testCase.Healthy)
+		actual, scored := routeScore(latency, testCase.LatencyMs != nil, testCase.LossPct, testCase.JitterMs, testCase.AvailabilityPct, testCase.Healthy, testCase.LoadPct)
 		if testCase.Expected == nil {
 			if scored {
 				t.Errorf("%s：应当不打分，拿到 %d", testCase.Name, actual)

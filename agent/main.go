@@ -537,6 +537,11 @@ type failoverTarget struct {
 	// 「本机探测延迟 + 它」比整条链路；上报的 latencyMs 仍只是第一段。
 	// 和 Down 一样是运行时提示：不进签名、不落盘，变了也不重建代理、不清统计。
 	ExtraLatencyMs int `json:"extraLatencyMs,omitempty"`
+	// 面板算好的、这条路径沿途主机（中转机、落地是 NEX 主机时的那台）里最忙那台的负载，0–100
+	// （CPU 和带宽占用取大；2.2.251 起）。评分按它扣分（routeLoadPenalty：70% 以下不扣，
+	// 95% 起扣满 15 分），「自动」分法按它压权重。0 = 不知道，不扣。和 ExtraLatencyMs 一样是运行时提示：
+	// 不进签名、不落盘，变了也不重建代理、不清统计（applyRelayHintsLocked）。
+	LoadPct int `json:"loadPct,omitempty"`
 	// 「落地怎么分」（2.2.245，面板 2.3.501）：一次走一条线路时，选了「一起分」的那条线路上的目标带着
 	// 第几条线路（Line）、落在哪个落地（Landing：同一个落地经不同中转的几条一样）、怎么分（Spread：
 	// least_load / round_robin / random / ip_hash）。主备逻辑挑出该走的那条之后，新连接在它那条线路的
