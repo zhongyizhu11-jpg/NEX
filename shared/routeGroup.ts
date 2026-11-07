@@ -729,8 +729,12 @@ export function routePathFarEndHostId(path: Pick<RoutePath, "hops" | "destHostId
 
 /**
  * 这条目标下发时带不带 probeUdpEcho（Agent 2.2.251 起，agent/udp_probe.go）：规则要带 UDP（udp / both）、
- * 没填探测地址（填了照填的拨 TCP）、对端是 NEX 管的主机而且它的 Agent 够新 —— 老 Agent 的中继会把 24 字节的
- * 探测报原样转给落地，所以版本不够就不带，探测照旧（零长度包探端口不可达，说不准再 ping）。
+ * 没填探测地址（填了照填的拨 TCP）、对端是 NEX 管的主机而且它的 Agent 够新 —— 老 Agent 的 UDP 监听不认探测报，
+ * 会把它当普通包转出去，所以版本不够就不带，探测照旧（零长度包探端口不可达，说不准按原来的判法）。
+ * 调度那台的 Agent 也得够新，由心跳另外判（routeSchedulerAgentAtLeast）。
+ *
+ * 只有落在 Agent 自己的 UDP 监听（协议守护）上的探测报才有回声；对端那个端口是 gost 在听（中转机上的中继规则）
+ * 时探测报会被转出去、收不到回声，结论退回零长度包那一档，不会误判。
  */
 export function routeUdpEchoProbeReady(options: {
   protocol: unknown;

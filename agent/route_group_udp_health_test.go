@@ -3,6 +3,7 @@ package main
 import (
 	"net"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 )
@@ -103,6 +104,76 @@ func TestFailoverBothJudgesUDPSeparately(t *testing.T) {
 	proxy.checkHealth()
 	if _, index := proxy.pickTargetForKeyProto("", nil, true); index != 0 {
 		t.Fatalf("A 的 UDP 恢复以后 UDP 会话该回到 A，挑到了 %d", index)
+	}
+}
+
+/*
+TCP+UDP 规格的 UDP 端口探测说不准时照 TCP 那一侧（以前就是只按 TCP 判的），不 ping：落地关了 ICMP 的话，
+按 ping 判会把今天好好在走的 UDP 判成不通。填了探测地址的路径两侧都按它判，UDP 端口不另探。
+*/
+func TestFailoverBothUnknownUDPFollowsTCP(t *testing.T) {
+	var mu sync.Mutex
+	probed := map[int]int{}
+	oldProbe := udpProbeFn
+	udpProbeFn = func(host string, port int, echo bool, timeout time.Duration) (int, udpProbeVerdict) {
+		mu.Lock()
+		probed[port]++
+		mu.Unlock()
+		return 0, udpProbeUnknown
+	}
+	pings := 0
+	oldPing := failoverPingLatency
+	failoverPingLatency = func(host string, timeout time.Duration, count int) (int, bool, string) {
+		mu.Lock()
+		pings++
+		mu.Unlock()
+		return 1, true, ""
+	}
+	t.Cleanup(func() {
+		udpProbeFn = oldProbe
+		failoverPingLatency = oldPing
+	})
+	closedTCP := failoverTestPort(t)
+	openTCP := failoverTCPAcceptor(t, "127.0.0.1:0")
+	const explicitTarget = 5353
+	proxy := &failoverProxy{
+		ruleID: 46, sourcePort: 20005,
+		spec: normalizeFailoverSpec(failoverSpec{
+			Enabled: true, ListenPort: 65008, BindAddress: "127.0.0.1", Protocol: "both", Strategy: "fallback",
+			FailoverSeconds: 1, RecoverSeconds: 1,
+			Targets: []failoverTarget{
+				{TargetIP: "127.0.0.1", TargetPort: closedTCP},
+				{TargetIP: "127.0.0.1", TargetPort: openTCP},
+				{TargetIP: "127.0.0.1", TargetPort: explicitTarget, ProbeIP: "127.0.0.1", ProbePort: openTCP},
+			},
+		}),
+	}
+	proxy.ensureHealthStateLocked()
+	proxy.checkHealth()
+	time.Sleep(1100 * time.Millisecond)
+	proxy.checkHealth()
+
+	proxy.mu.RLock()
+	defer proxy.mu.RUnlock()
+	for i := range proxy.spec.Targets {
+		if proxy.udpSide.health[i] != proxy.targetHealth[i] {
+			t.Fatalf("第 %d 条：UDP 说不准时应当照 TCP 那一侧（tcp=%v udp=%v）", i, proxy.targetHealth[i], proxy.udpSide.health[i])
+		}
+		if proxy.udpSide.lastLatencyMs[i] != proxy.lastLatencyMs[i] {
+			t.Fatalf("第 %d 条：说不准时 UDP 那一侧的耗时也该用 TCP 的（%d / %d）", i, proxy.udpSide.lastLatencyMs[i], proxy.lastLatencyMs[i])
+		}
+	}
+	if proxy.targetHealth[0] || !proxy.targetHealth[1] || !proxy.targetHealth[2] {
+		t.Fatalf("TCP 那一侧该是 A 不通、B 和 C 通：%v", proxy.targetHealth)
+	}
+	if pings != 0 {
+		t.Fatalf("TCP+UDP 规格的 UDP 那一侧不该 ping（ping 了 %d 次）", pings)
+	}
+	if probed[explicitTarget] != 0 {
+		t.Fatal("填了探测地址的路径不该再另探 UDP 端口")
+	}
+	if probed[closedTCP] != 2 || probed[openTCP] != 2 {
+		t.Fatalf("没填探测地址的路径每轮探一次 UDP 端口：%v", probed)
 	}
 }
 

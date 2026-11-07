@@ -167,12 +167,15 @@ func TestProtocolGuardUDPProbeRepliesAreRateLimited(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer client.Close()
-	const sent = udpProbeEchoBurst + 10
+	const sent = udpProbeEchoBurst * 3
+	started := time.Now()
 	for i := 0; i < sent; i++ {
 		if _, err := client.Write(newUDPProbePacket(time.Now())); err != nil {
 			t.Fatal(err)
 		}
 	}
+	// 发包期间令牌照常补（每秒 20 个）：机器慢、发得久，就多给那几个。
+	allowed := udpProbeEchoBurst + int(time.Since(started).Seconds()*udpProbeEchoRatePerSecond) + 1
 	replies := 0
 	buf := make([]byte, 2048)
 	for {
@@ -182,8 +185,34 @@ func TestProtocolGuardUDPProbeRepliesAreRateLimited(t *testing.T) {
 		}
 		replies++
 	}
-	if replies == 0 || replies > udpProbeEchoBurst {
-		t.Fatalf("一瞬间发 %d 个探测报，该回 1–%d 个，回了 %d 个", sent, udpProbeEchoBurst, replies)
+	if replies == 0 || replies > allowed || replies >= sent {
+		t.Fatalf("一瞬间发 %d 个探测报，该回 1–%d 个，回了 %d 个", sent, allowed, replies)
+	}
+}
+
+// 来源表有上限：满了新来源不回、老来源照回；也不在每个包上扫一遍整张表，一分钟清一次久没动静的。
+func TestUDPEchoLimiterBoundsSources(t *testing.T) {
+	var limiter udpEchoLimiter
+	now := time.Unix(1_700_000_000, 0)
+	first := netip.AddrFrom4([4]byte{10, 0, 0, 1})
+	for i := 0; i < udpProbeEchoMaxSources; i++ {
+		addr := netip.AddrFrom4([4]byte{10, byte(i >> 16), byte(i >> 8), byte(i)})
+		if !limiter.allow(addr, now) {
+			t.Fatalf("第 %d 个来源还没到上限就被拒了", i)
+		}
+	}
+	stranger := netip.MustParseAddr("198.51.100.200")
+	if limiter.allow(stranger, now.Add(time.Second)) {
+		t.Fatal("来源表满了，新来源不该再回")
+	}
+	if !limiter.allow(first, now.Add(time.Second)) {
+		t.Fatal("已经在表里的来源照样该回")
+	}
+	if !limiter.allow(stranger, now.Add(udpProbeEchoPruneAfter+2*time.Second)) {
+		t.Fatal("一分钟没动静的来源清掉以后，新来源该能拿到回包")
+	}
+	if len(limiter.buckets) > 2 {
+		t.Fatalf("清理后只该剩最近还在探的来源，还剩 %d 个", len(limiter.buckets))
 	}
 }
 

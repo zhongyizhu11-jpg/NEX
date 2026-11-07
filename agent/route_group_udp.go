@@ -521,7 +521,8 @@ func failoverProbeTarget(protocol string, target failoverTarget) (int, bool) {
 }
 
 /*
-UDP 那一侧的探测（只转 UDP 的路径，以及 TCP+UDP 路径的 UDP 侧；2.2.251 起）。
+只转 UDP 的路径的探测（2.2.251 起）。TCP+UDP 路径的 UDP 那一侧不走这里：说不准时照 TCP 那一侧、不 ping
+（route_group_udp_health.go 的 mergeUDPSide）。
 
 填了探测地址照填的拨 TCP（老行为）。没填就探拨号地址的 UDP 端口（udp_probe.go）：对端是 Agent
 （probeUdpEcho）发回声探测报，回来了就是通、顺带有往返耗时；不是 Agent 发零长度包，对端回 ICMP

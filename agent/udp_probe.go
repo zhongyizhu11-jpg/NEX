@@ -22,7 +22,11 @@ UDP 没有握手，以前只转 UDP 的路径只能 ping 拨号地址的主机�
     （8 字节魔数 NEXUDPP1 + 8 字节随机数 + 8 字节发送时刻），Agent 的每个 UDP 中继监听（协议守护、
     线路组调度器）收到正好这个形状的包就原样回给发送方、不转发。收到回包就是通，顺带量出往返耗时。
  2. 对端不是 Agent：用连接态 UDP 套接字发一个零长度的包，读 1 秒。对端回了 ICMP 端口不可达
-    （ECONNREFUSED）就是确定不通；超时说不准（服务可能只是不回陌生包），退回原来的 ping。
+    （ECONNREFUSED）就是确定不通；超时说不准（服务可能只是不回陌生包），退回原来的判法：只转 UDP 的
+    路径 ping 主机（failoverProbeUDP），TCP+UDP 路径的 UDP 那一侧照 TCP（mergeUDPSide）。
+
+只有探测报落在 Agent 自己的 UDP 监听上才有回声：对端那个端口要是 gost 之类在听（线路组中转机上的中继
+规则就是 gost），探测报会被当普通包转出去，收不到回声，结论和零长度包一样按说不准处理。
 
 回包按来源地址限速（每秒 20 个），免得被拿去当反射器 —— 放大倍数本来就是 1。
 */
@@ -72,7 +76,9 @@ func (l *udpEchoLimiter) allow(addr netip.Addr, now time.Time) bool {
 		l.buckets = map[netip.Addr]*udpEchoBucket{}
 		l.lastPrune = now
 	}
-	if now.Sub(l.lastPrune) >= udpProbeEchoPruneAfter || len(l.buckets) >= udpProbeEchoMaxSources {
+	// 一分钟清一次久没动静的来源。来源表满了也不在每个包上扫一遍：伪造来源的探测报一冲，每个包都要扫
+	// 4096 项，读协程反倒被拖住。满了只是新来源暂时收不到回包（对方按说不准处理）。
+	if now.Sub(l.lastPrune) >= udpProbeEchoPruneAfter {
 		for key, bucket := range l.buckets {
 			if now.Sub(bucket.last) >= udpProbeEchoPruneAfter {
 				delete(l.buckets, key)
@@ -83,7 +89,7 @@ func (l *udpEchoLimiter) allow(addr netip.Addr, now time.Time) bool {
 	bucket := l.buckets[addr]
 	if bucket == nil {
 		if len(l.buckets) >= udpProbeEchoMaxSources {
-			// 来源太多（扫描）：新来源不回，正在探的老来源不受影响。
+			// 来源太多（扫描、伪造来源）：新来源不回，正在探的老来源不受影响。
 			return false
 		}
 		bucket = &udpEchoBucket{tokens: udpProbeEchoBurst, last: now}

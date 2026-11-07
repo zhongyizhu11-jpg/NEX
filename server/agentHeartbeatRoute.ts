@@ -15,6 +15,7 @@ import {
   routeUdpEchoProbeReady,
 } from "../shared/routeGroup";
 import { forwardGroupHealthProbeMethodForAgent } from "../shared/forwardGroupHealthCheck";
+import { UDP_PROBE_MIN_AGENT_VERSION } from "../shared/udpProbe";
 import { noteRouteFirstHops, routeHopDownHints, routeNodeHints, routePathDownstreamMs } from "./routeGroupStats";
 import { ensureRouteNodeHealthFresh, getRouteNodeStatus } from "./routeNodeHealth";
 import { tunnelLinkShaping, hostEgressShaping } from "./tunnelFxpRuntime";
@@ -2088,6 +2089,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       const destSpreadReady = routeDestSpreadReady({ strategy, tiered, paths, agentAtLeast: (version) => routeSchedulerAgentAtLeast(rule, version) });
       // 第 N 个目标的第一跳是哪台：入口 Agent 报的第一段延迟就是「进那台机器」的延迟（节点池卡上的毫秒数）。
       noteRouteFirstHops(Number(rule.id), paths.map((path) => (path.hops.length > 0 ? Number(path.hops[0]) : null)));
+      // UDP 回声探测（Agent 2.2.251）：发探测报的是调度那台，它也得够新（老的不认这个字段）。
+      const udpEchoSchedulerReady = routeSchedulerAgentAtLeast(rule, UDP_PROBE_MIN_AGENT_VERSION);
       const targets = paths.map((path) => {
         const dial = routePathDial(path, routeRule);
         const tier = tiered ? { tier: Number(path.tier) } : {};
@@ -2098,9 +2101,10 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         const hint = nodeHints.get(path.key) || hints.get(path.key);
         // Agent 那边是整数毫秒（Go int），小数会让整份规格解不开。
         const extraLatencyMs = Math.round(routePathDownstreamMs(Number(rule.id), path));
-        // UDP 回声探测（Agent 2.2.251）：对端是自己的机器、它的 Agent 够新才带；老 Agent 的中继会把探测报转给落地。
+        // 回探测报的是对端那台：对端是自己的机器、它的 Agent 也够新才带（routeUdpEchoProbeReady）。
         const farEnd = routePathFarEndHostId(path);
-        const probeUdpEcho = routeUdpEchoProbeReady({ protocol, path, farEndAgentVersion: farEnd ? routeSchedulerAgentVersions.get(farEnd) : null });
+        const probeUdpEcho = udpEchoSchedulerReady
+          && routeUdpEchoProbeReady({ protocol, path, farEndAgentVersion: farEnd ? routeSchedulerAgentVersions.get(farEnd) : null });
         return {
           targetIp: dial.ip,
           targetPort: dial.port,

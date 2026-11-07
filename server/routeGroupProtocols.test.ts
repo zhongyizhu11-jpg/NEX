@@ -35,6 +35,7 @@ type Outcome = {
   mainDial: { ip: string; port: number } | null;
   oldAgent: Heartbeat;
   newAgent: Heartbeat;
+  echo: { before: boolean[]; ready: boolean[]; oldScheduler: boolean[]; oldFarEnd: boolean[]; socat: boolean[] };
   kernelError: string;
   udpAllowed: boolean;
   nginxTunnelAllowed: boolean;
@@ -202,6 +203,20 @@ function run(): Outcome {
     };
     const oldAgent = await beat("2.2.198");
     const newAgent = await beat("2.2.199");
+    // UDP 回声探测（2.2.251）：调度那台（入口机 1）和对端（东京中转 2）都够新才带 probeUdpEcho。
+    const echoFlags = (heartbeat, ruleId) => ((heartbeat.specs[String(ruleId)] || {}).targets || []).map((target) => target.probeUdpEcho === true);
+    await exec('UPDATE hosts SET "agentVersion" = ? WHERE id = 2', ["2.2.251"]);
+    const echoReady = await beat("2.2.251");
+    const echoOldScheduler = await beat("2.2.250");
+    await exec('UPDATE hosts SET "agentVersion" = ? WHERE id = 2', ["2.2.250"]);
+    const echoOldFarEnd = await beat("2.2.251");
+    const echo = {
+      before: echoFlags(newAgent, 1),
+      ready: echoFlags(echoReady, 1),
+      oldScheduler: echoFlags(echoOldScheduler, 1),
+      oldFarEnd: echoFlags(echoOldFarEnd, 1),
+      socat: echoFlags(echoReady, 4),
+    };
     server.close();
 
     // 保存那一层：内核转发上开线路组要被拦住，UDP 不再被拦。
@@ -255,7 +270,7 @@ function run(): Outcome {
       rulesRouter.oldestAgentVersion(["2.2.199"]),
       rulesRouter.oldestAgentVersion(["2.2.199", ""]),
     ];
-    console.log("OUTCOME " + JSON.stringify({ relays, mainDial, oldAgent, newAgent, kernelError, udpAllowed, nginxTunnelAllowed, forwardxTunnelAllowed, unknownTunnelError, statusHosts, oldest }));
+    console.log("OUTCOME " + JSON.stringify({ relays, mainDial, oldAgent, newAgent, echo, kernelError, udpAllowed, nginxTunnelAllowed, forwardxTunnelAllowed, unknownTunnelError, statusHosts, oldest }));
   `;
   const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
     cwd: path.resolve(import.meta.dirname, ".."),
@@ -293,6 +308,14 @@ test("Agent 早于 2.2.199：UDP 不下发调度，gost 直接拨路径 A（经�
   assert.ok(service, "UDP 规则没生成 gost UDP 服务");
   const dial = outcome.mainDial!;
   assert.equal(service.forwarder.nodes[0].addr, `${dial.ip}:${dial.port}`, "老 Agent 时应当拨路径 A 的中转，而不是直奔落地");
+});
+
+test("UDP 回声探测：调度那台和对端中转都够 2.2.251 才带 probeUdpEcho；直连手填的落地不带", () => {
+  assert.deepEqual(outcome.echo.before, [false, false], "对端中转的版本没报过就不带");
+  assert.deepEqual(outcome.echo.ready, [true, false], "主线路经过东京中转（新 Agent）带；备用直连手填的落地不知道是谁的机器，不带");
+  assert.deepEqual(outcome.echo.oldScheduler, [false, false], "调度那台太老不带：它不认这个字段");
+  assert.deepEqual(outcome.echo.oldFarEnd, [false, false], "对端中转太老不带：它的 UDP 监听不认探测报，会转给落地");
+  assert.deepEqual(outcome.echo.socat, [false, false], "直连路径不带");
 });
 
 test("realm 前置：拨本机的调度器，调度规格跟着 realm 的动作下发", () => {

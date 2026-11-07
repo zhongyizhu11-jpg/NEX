@@ -134,7 +134,7 @@ func failoverSignature(spec failoverSpec) string {
 			weight += "l" + strconv.Itoa(*target.Line) + "/" + target.Landing + "/" + target.Spread
 		}
 		if target.ProbeUdpEcho {
-			// 同上：探测方式变了要重建（换了探法，旧样本不可比）；不带时签名不变。
+			// 同上：不带时签名不变。探法变了得进签名，在跑的代理才会原地换上新规格（样本照旧带过去）。
 			weight += "e"
 		}
 		parts = append(parts, target.TargetIP, strconv.Itoa(target.TargetPort), target.ProbeIP, strconv.Itoa(target.ProbePort), weight)

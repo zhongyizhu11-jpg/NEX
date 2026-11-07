@@ -11,8 +11,11 @@ TCP+UDP 规格下 UDP 那一侧单独的健康（2.2.251 起）。
 中间设备丢 UDP），照样被判成健康，UDP 会话还是往它上面分。现在两侧分开：
 
   - TCP 那一侧照旧（targetHealth / stats / activeIndex，TCP 连接的选路一点没变）；
-  - UDP 那一侧每轮探测再探一次 UDP 端口（failoverProbeUDP），用同一套门槛（连续失败次数、异常多久切、
-    恢复多久算好）单独记健康；
+  - UDP 那一侧每轮和 TCP 同时探一次 UDP 端口（probeFailoverTargetsUDP），只认确定的结论：收到回包算通、
+    端口不可达算不通；说不准（没回包 —— 多数 UDP 服务不回陌生包）、或者填了探测地址时照 TCP 那一侧，也就是
+    以前 TCP+UDP 的判法（mergeUDPSide）。不像只转 UDP 的路径那样退回 ping：很多落地关了 ICMP，按 ping 判会把
+    今天好好在走的 UDP 判成不通；也不多等 ping，这一轮还是 TCP 探测那 2 秒。用同一套门槛（连续失败次数、
+    异常多久切、恢复多久算好）单独记健康；
   - UDP 会话挑路径时（pickTargetForKeyProto(udp=true)）只在 UDP 通的路径里挑：主备策略下 TCP 在走的那条
     UDP 也通就跟着它走（两种流量走同一条，面板上一目了然）；不通就按同一套优先次序 —— 人工指定 > 时段表 >
     数组顺序（分层规格先按层）—— 找第一条 UDP 通的。自动择优只体现在 TCP 在走的那条上，这里不再单独
@@ -132,9 +135,43 @@ func (p *failoverProxy) udpFallbackIndexLocked(candidates []int, exclude map[int
 	return candidates[0]
 }
 
-// probeFailoverTargetsUDP 有界并行地探所有路径的 UDP 那一侧（TCP+UDP 规格的 checkHealth 用）。
-func probeFailoverTargetsUDP(targets []failoverTarget) ([]int, []bool) {
-	return probeFailoverTargetsWith(targets, failoverProbeUDP)
+/*
+probeFailoverTargetsUDP 有界并行地探所有路径的 UDP 端口（TCP+UDP 规格的 checkHealth 用，和 TCP 探测同时跑），
+返回每条的往返毫秒数和结论。填了探测地址的不探：两侧都按填的那个 TCP 端口判（mergeUDPSide 直接用 TCP 的结果），
+免得同一个端口一轮拨两次。
+*/
+func probeFailoverTargetsUDP(targets []failoverTarget) ([]int, []udpProbeVerdict) {
+	return probeFailoverTargetsWith(targets, func(target failoverTarget) (int, udpProbeVerdict) {
+		if target.hasExplicitProbe() {
+			return 0, udpProbeUnknown
+		}
+		return udpProbeFn(target.TargetIP, target.TargetPort, target.ProbeUdpEcho, udpProbeTimeout)
+	})
+}
+
+// mergeUDPSide 把 UDP 探测的结论和这一轮 TCP 的结果合成 UDP 那一侧的样本：通（带 UDP 的往返耗时）、
+// 不通，说不准就照 TCP 那一侧（结果和耗时都用 TCP 的）。
+func mergeUDPSide(results []bool, latencies []int, verdicts []udpProbeVerdict, udpLatencies []int) ([]bool, []int) {
+	ok := make([]bool, len(results))
+	latency := make([]int, len(results))
+	for i := range results {
+		verdict := udpProbeUnknown
+		if i < len(verdicts) && i < len(udpLatencies) {
+			verdict = verdicts[i]
+		}
+		switch verdict {
+		case udpProbeUp:
+			ok[i], latency[i] = true, udpLatencies[i]
+		case udpProbeDown:
+			ok[i], latency[i] = false, 0
+		default:
+			ok[i] = results[i]
+			if i < len(latencies) {
+				latency[i] = latencies[i]
+			}
+		}
+	}
+	return ok, latency
 }
 
 /*
