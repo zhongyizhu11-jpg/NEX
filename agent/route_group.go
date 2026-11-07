@@ -301,6 +301,7 @@ func stripFailoverRelayHints(spec failoverSpec) failoverSpec {
 		targets[i].Down = false
 		targets[i].DownReason = ""
 		targets[i].ExtraLatencyMs = 0
+		targets[i].ExitIP = ""
 	}
 	spec.Targets = targets
 	return spec
@@ -446,6 +447,8 @@ func (p *failoverProxy) applyRelayHintsLocked(targets []failoverTarget) {
 		}
 		// 下游延迟只影响评分：直接换上，下一轮探测按新值评估，不记事件、不重新选路。
 		p.spec.Targets[i].ExtraLatencyMs = target.ExtraLatencyMs
+		// 出口 IP 只在下一次换路时当平手取舍用，同样直接换上。
+		p.spec.Targets[i].ExitIP = strings.TrimSpace(target.ExitIP)
 		down := target.Down
 		downReason := strings.TrimSpace(target.DownReason)
 		if !down {

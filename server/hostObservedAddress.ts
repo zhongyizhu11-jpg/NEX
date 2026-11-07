@@ -43,6 +43,24 @@ export function exitAddressMismatch(host: { ipv4?: unknown; ipv6?: unknown; ip?:
   return registered !== observed;
 }
 
+/** 算出口地址要用到的那几栏。 */
+export type HostEgressSource = { id: number | string; ipv4?: unknown; ipv6?: unknown; ip?: unknown };
+
+/**
+ * 这台机器的出口地址：面板看到的心跳来源（十分钟内）优先，没有就是登记的 IPv4、IPv6，再没有就是 ip 一栏
+ * （是 IP 字面量时）。线路组、隧道出口组的「故障切换优先同出口 IP」按它比；一个都没有返回空串。
+ */
+export function hostEgressAddress(host: HostEgressSource | null | undefined, nowMs = Date.now()): string {
+  if (!host) return "";
+  const observed = getHostObservedAddress(Number(host.id), nowMs);
+  if (observed) return observed;
+  for (const candidate of [host.ipv4, host.ipv6, host.ip]) {
+    const value = String(candidate || "").trim();
+    if (value && isIP(value)) return value;
+  }
+  return "";
+}
+
 export function withHostObservedAddress<T extends { id: number | string; ipv4?: unknown; ipv6?: unknown; ip?: unknown }>(rows: T[], nowMs = Date.now()): Array<T & { observedIp: string | null; exitIpMismatch: boolean }> {
   return rows.map((row) => {
     const observed = getHostObservedAddress(Number(row.id), nowMs);

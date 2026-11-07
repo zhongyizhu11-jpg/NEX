@@ -22,6 +22,8 @@ export type ForwardXHopSpecDeps = {
   applyForwardXTransport: (fxpSpec: HeartbeatRow, tunnel: HeartbeatRow) => Promise<HeartbeatRow>;
   exitCapacitiesForHostIds: (strategy: unknown, hostIds: number[]) => Promise<number[] | null>;
   exitWeightsForHostIds: (strategy: unknown, hostIds: number[]) => Promise<number[] | null>;
+  /** 每个出口主机的出口地址（「故障切换优先同出口 IP」，2.3.520）；不带的老 Agent / 一台都查不到时 null。 */
+  exitIpsForHostIds?: (hostIds: number[]) => Promise<string[] | null>;
   forwardXExtraExitRoutes: (tunnel: HeartbeatRow) => Promise<{ hostId: number; host: string; port: number; udpPort: number; key: string; }[]>;
   getHopDialAddress: (hop: HeartbeatRow, tunnel?: HeartbeatRow) => Promise<string>;
   hostInterface: string;
@@ -35,6 +37,7 @@ export function createForwardXHopSpecBuilder(deps: ForwardXHopSpecDeps) {
     applyForwardXTransport,
     exitCapacitiesForHostIds,
     exitWeightsForHostIds,
+    exitIpsForHostIds,
     forwardXExtraExitRoutes,
     getHopDialAddress,
     hostInterface,
@@ -94,6 +97,7 @@ export function createForwardXHopSpecBuilder(deps: ForwardXHopSpecDeps) {
           const relayExitHostIds = [Number(nextHop?.hostId || 0), ...extraRoutes.map((route) => Number(route.hostId || 0))];
           const relayExitWeights = await exitWeightsForHostIds((tunnel as any).loadBalanceStrategy, relayExitHostIds);
           const relayExitCapacities = await exitCapacitiesForHostIds((tunnel as any).loadBalanceStrategy, relayExitHostIds);
+          const relayExitIps = exitIpsForHostIds ? await exitIpsForHostIds(relayExitHostIds) : null;
           fxpSpec.exits = [
             { host: fxpSpec.relayExitHost, port: fxpSpec.relayExitPort, udpPort: fxpSpec.udpRelayExitPort || fxpSpec.relayExitPort, key: fxpSpec.relayKey, peerId: wireGuardV2 ? String(Number(nextHop?.hostId || 0)) : undefined },
             ...extraRoutes.map((route) => ({ host: route.host, port: route.port, udpPort: wireGuardV2 ? route.port : route.udpPort || 0, key: route.key, peerId: wireGuardV2 ? String(route.hostId) : undefined })),
@@ -101,6 +105,7 @@ export function createForwardXHopSpecBuilder(deps: ForwardXHopSpecDeps) {
             ...exit,
             ...(relayExitWeights ? { weight: relayExitWeights[index] } : {}),
             ...(relayExitCapacities ? { capacityMbps: relayExitCapacities[index] } : {}),
+            ...(relayExitIps?.[index] ? { exitIp: relayExitIps[index] } : {}),
           }));
           fxpSpec.exitStrategy = forwardXExitStrategy((tunnel as any).loadBalanceStrategy);
         }

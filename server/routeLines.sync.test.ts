@@ -23,6 +23,7 @@ type Outcome = {
   aggregateSpec: any;
   pausedSpec: any;
   maintenanceSpec: any;
+  exitIpSpec: any;
 };
 
 function run(): Outcome {
@@ -86,8 +87,8 @@ function run(): Outcome {
     const server = http.createServer(app);
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
     const base = "http://127.0.0.1:" + server.address().port;
-    const beat = async () => {
-      const response = await fetch(base + "/api/agent/heartbeat", { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer tok1" }, body: JSON.stringify({ agentVersion: "2.2.243", uptime: 10, cpuUsage: 1, memoryUsage: 1, diskUsage: 1, forceReconcile: true }) });
+    const beat = async (agentVersion = "2.2.243") => {
+      const response = await fetch(base + "/api/agent/heartbeat", { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer tok1" }, body: JSON.stringify({ agentVersion, uptime: 10, cpuUsage: 1, memoryUsage: 1, diskUsage: 1, forceReconcile: true }) });
       const json = await response.json();
       const actions = (json.desiredState && json.desiredState.actions) || [];
       const found = actions.find((action) => action && action.failover && action.failover.enabled);
@@ -112,12 +113,16 @@ function run(): Outcome {
     await exec('UPDATE hosts SET "maintenanceMode" = 1 WHERE id = 4');
     health.invalidateRouteNodeHealth();
     const maintenanceSpec = await beat();
+    await exec('UPDATE hosts SET "maintenanceMode" = 0 WHERE id = 4');
+    health.invalidateRouteNodeHealth();
+    // Agent 够新（2.2.251）才带 exitIp。放在最后，版本升上去不影响前面几份规格。
+    const exitIpSpec = await beat("2.2.251");
     server.close();
     console.log("LINES " + JSON.stringify({
       relays, paths: storedPaths,
       expanded: { pathCount: expandedPaths.length, keys: expandedPaths.map((p) => p.key) },
       afterPool: { pathCount: afterPaths.length, relayHosts: afterRelays.map((r) => Number(r.hostId)) },
-      spec, aggregateSpec, pausedSpec, maintenanceSpec,
+      spec, aggregateSpec, pausedSpec, maintenanceSpec, exitIpSpec,
     }));
     process.exit(0);
   `;
@@ -168,6 +173,15 @@ test("心跳：整链最优不分层（所有线路一起比），聚合才带 t
   assert.deepEqual((outcome.aggregateSpec.targets as any[]).map((target) => target.tier), [0, 1, 1], "聚合：主线路那组一起分担，备用组兜底");
   assert.ok(targets.some((target) => target.extraLatencyMs === 7), `下游延迟没下发：${JSON.stringify(targets)}`);
   assert.ok(targets.every((target) => !target.down));
+  // 这里的 Agent 是 2.2.243：「故障切换优先同出口 IP」的 exitIp 要 2.2.251 才带，老 Agent 的规格逐字不变。
+  assert.ok(targets.every((target) => target.exitIp === undefined), `老 Agent 不该收到 exitIp：${JSON.stringify(targets)}`);
+});
+
+test("心跳：Agent 2.2.251 起每条路径带 exitIp —— 规则目标就是目标地址，中转池那几条也是（落地仍是规则目标）", () => {
+  const targets = outcome.exitIpSpec.targets as any[];
+  assert.equal(targets.length, 3);
+  // 这条规则的线路都落在规则自己的目标上（198.51.100.7），对端看到的就是它；这里没有落地池成员。
+  assert.deepEqual(targets.map((target) => target.exitIp), ["198.51.100.7", "198.51.100.7", "198.51.100.7"], JSON.stringify(targets));
   const paused = outcome.pausedSpec.targets as any[];
   assert.deepEqual(paused.map((target) => !!target.down), [false, true, true]);
   assert.ok(paused.slice(1).every((target) => target.downReason === "paused"));

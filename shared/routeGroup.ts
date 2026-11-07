@@ -195,6 +195,25 @@ export function normalizeRouteDestSpread(value: unknown): RouteDestSpread {
 export const ROUTE_DEST_SPREAD_AGENT_VERSION = "2.2.245";
 
 /**
+ * 「故障切换优先同出口 IP」（2.3.520）：每条路径带上它最后从哪个 IP 出去（exitIp），当前这条挂了换路时，Agent 在
+ * 同样够格的候选里优先挑出口 IP 一样的（agent/failover_exit_ip.go）。Agent 2.2.251 起；更老的不认这个字段，照老规矩换。
+ */
+export const ROUTE_EXIT_IP_AGENT_VERSION = "2.2.251";
+
+/** Agent 切换事件原因后面的标记：这次是换到了同出口 IP 的备用（见 agent/failover_exit_ip.go）。 */
+export const ROUTE_REASON_SAME_EXIT_SUFFIX = "; same exit ip";
+
+/** 把切换原因拆成本来的原因和「换到了同出口 IP」这个标记；老 Agent 的原因没有标记，原样过。 */
+export function splitRouteReason(reason: unknown): { base: string; sameExitIp: boolean } {
+  const text = String(reason ?? "").trim();
+  const lower = text.toLowerCase();
+  if (lower.endsWith(ROUTE_REASON_SAME_EXIT_SUFFIX)) {
+    return { base: text.slice(0, text.length - ROUTE_REASON_SAME_EXIT_SUFFIX.length).trim(), sameExitIp: true };
+  }
+  return { base: text, sameExitIp: false };
+}
+
+/**
  * 下发给 Agent 时带不带「落地怎么分」：一次走一条线路（分配策略是 fallback、不分层 —— 按权重、聚合 / 复制时
  * 整组本来就在分）、有线路选了一起分、调度的 Agent 都够新（2.2.245）。
  */
@@ -716,6 +735,26 @@ export function routePathDial(path: RoutePath, rule: Pick<RouteGroupRule, "targe
 }
 
 /**
+ * 这条路径最后从哪个 IP 出去（下发给 Agent 的 exitIp，见 ROUTE_EXIT_IP_AGENT_VERSION）。
+ *
+ * 落地是 NEX 主机（落地池成员，destHostId）时是那台机器的出口地址 —— hostEgressIp 给：面板看到的心跳来源，
+ * 没有就是登记的 IPv4 / IPv6；那台一个地址都没有时退回落地的拨号地址。落地是手填地址、节点地址、或者规则
+ * 自己的目标时，就是那个地址本身：对端看到的就是它。算不出来返回空串，Agent 当成没有。
+ */
+export function routePathExitIp(
+  path: Pick<RoutePath, "dest" | "destHostId">,
+  rule: Pick<RouteGroupRule, "targetIp" | "targetPort">,
+  hostEgressIp: (hostId: number) => string | null | undefined,
+): string {
+  const destHostId = Number(path.destHostId || 0);
+  if (destHostId > 0) {
+    const egress = String(hostEgressIp(destHostId) || "").trim();
+    if (egress) return egress;
+  }
+  return String(path.dest ? path.dest.ip : rule.targetIp || "").trim();
+}
+
+/**
  * 老 failover* 列的读法，和上一版一样；只是「模式」这个概念在老数据里要推：
  * 分配方式不是主备的就是权重负载（轮流 / 随机 / 按访客），开了自动择优就是智能择优，
  * 有时段表就是定时主备，其余都是自动故障切换。
@@ -958,7 +997,14 @@ export function normalizeRouteEventKind(value: unknown): RouteEventKind | null {
  * 界面说的才是同一句。
  */
 export function describeRouteReason(reason: unknown): string {
-  const text = String(reason ?? "").trim();
+  const { base, sameExitIp } = splitRouteReason(reason);
+  const described = describeRouteReasonBase(base);
+  if (!sameExitIp) return described;
+  // Agent 2.2.251 起：挂了之后换到的是出口 IP 一样的备用（agent/failover_exit_ip.go）。
+  return described ? `${described}，换到同出口 IP 的备用` : "换到同出口 IP 的备用";
+}
+
+function describeRouteReasonBase(text: string): string {
   if (!text) return "";
   const lower = text.toLowerCase();
   if (lower === "health check") return "连续探测不通";

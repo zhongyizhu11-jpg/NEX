@@ -118,7 +118,7 @@ func failoverSignature(spec failoverSpec) string {
 		strconv.FormatBool(spec.ProxyProtocolStrip),
 	}
 	for _, target := range spec.Targets {
-		// Down / DownReason / ExtraLatencyMs 是面板随时会变的运行时提示，故意不进签名：进了的话
+		// Down / DownReason / ExtraLatencyMs / ExitIP 是面板随时会变的运行时提示，故意不进签名：进了的话
 		// 每次提示变化都会重建代理，探测样本和「现在走哪条」全部归零。它们走 applyRelayHintsLocked。
 		weight := strconv.Itoa(target.Weight)
 		if target.Tier != nil {
@@ -228,6 +228,7 @@ func normalizeFailoverSpec(spec failoverSpec) failoverSpec {
 		if target.ExtraLatencyMs > failoverMaxExtraLatencyMs {
 			target.ExtraLatencyMs = failoverMaxExtraLatencyMs
 		}
+		target.ExitIP = strings.TrimSpace(target.ExitIP)
 		// 「落地怎么分」三个字段一起才算数：缺线路号、分法不认识，就当没带（挑一个，老行为）。
 		target.Spread = strings.TrimSpace(target.Spread)
 		target.Landing = strings.TrimSpace(target.Landing)
@@ -559,7 +560,12 @@ func (p *failoverProxy) pickTargetForKey(hashKey string, exclude map[int]bool) (
 		index = p.rendezvousPickLocked(candidates, key)
 	default:
 		if !p.healthyLocked(p.activeIndex) || (exclude != nil && exclude[p.activeIndex]) {
+			// 当前这条用不了（挂了、或这条连接刚在它上面拨失败）：在候选里优先挑出口 IP 一样的（2.2.251），
+			// 没有就还是第一条，和以前一样。全都不健康时候选是兜底的全部，挑不出健康的，照旧第一条。
 			index = candidates[0]
+			if pick, _ := p.escapePickLocked(candidates, p.activeIndex, -1); pick >= 0 {
+				index = pick
+			}
 		} else {
 			index = p.activeIndex
 		}

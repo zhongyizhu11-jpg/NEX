@@ -84,7 +84,9 @@ func (p *failoverProxy) spreadWithinLineLocked(anchor int, hashKey string, exclu
 		now := time.Now()
 		start := p.roundRobinNext % len(reps)
 		p.roundRobinNext = (p.roundRobinNext + 1) % 1000000
-		best, bestCost := -1, 0.0
+		// 有落地挂了：负载一样的几个里优先挑和挂掉那个同出口 IP 的（2.2.251）。
+		deadExits := p.lineDeadExitIPsLocked(line, reps, exclude)
+		best, bestCost, bestSameExit := -1, 0.0, false
 		for offset := range reps {
 			index := reps[(start+offset)%len(reps)]
 			landing := p.lineLandingLocked(index)
@@ -96,8 +98,9 @@ func (p *failoverProxy) spreadWithinLineLocked(anchor int, hashKey string, exclu
 			}
 			// 刚恢复的落地 60 秒内慢慢加量，和整组「按负载」一样。
 			cost := float64(conns+1) / p.slowStartLocked(index, now)
-			if best < 0 || cost < bestCost {
-				best, bestCost = index, cost
+			sameExit := len(deadExits) > 0 && deadExits[p.exitIPLocked(index)]
+			if best < 0 || cost < bestCost || (cost == bestCost && sameExit && !bestSameExit) {
+				best, bestCost, bestSameExit = index, cost, sameExit
 			}
 		}
 		return best
@@ -116,19 +119,57 @@ func (p *failoverProxy) spreadWithinLineLocked(anchor int, hashKey string, exclu
 			key = strconv.Itoa(p.sourcePort)
 		}
 		// 按落地算分，不按下标：同一个落地换了中转、主备换了挑出来的那条，访客还落在这个落地上。
-		best, bestScore := -1, uint64(0)
-		for _, index := range reps {
-			hash := fnv.New64a()
-			_, _ = hash.Write([]byte(key))
-			_, _ = hash.Write([]byte{0})
-			_, _ = hash.Write([]byte(p.lineLandingLocked(index)))
-			if score := hash.Sum64(); best < 0 || score > bestScore {
-				best, bestScore = index, score
+		best := p.rendezvousLandingLocked(reps, key)
+		// 这个访客原本的落地（算上挂了的）用不了：优先换到同出口 IP 的落地上去（2.2.251），没有就照旧。
+		if home := p.rendezvousLandingLocked(p.lineLandingIndicesLocked(line), key); home >= 0 && p.lineLandingLocked(home) != p.lineLandingLocked(best) {
+			if want := p.exitIPLocked(home); want != "" {
+				sameExit := make([]int, 0, len(reps))
+				for _, index := range reps {
+					if p.exitIPLocked(index) == want {
+						sameExit = append(sameExit, index)
+					}
+				}
+				if len(sameExit) > 0 {
+					return p.rendezvousLandingLocked(sameExit, key)
+				}
 			}
 		}
 		return best
 	}
 	return anchor
+}
+
+// 这条线路上每个落地出一条代表（不管健不健康），按下标顺序。
+func (p *failoverProxy) lineLandingIndicesLocked(line int) []int {
+	indices := make([]int, 0, len(p.spec.Targets))
+	seen := map[string]bool{}
+	for i := range p.spec.Targets {
+		if !p.sameLineLocked(i, line) {
+			continue
+		}
+		landing := p.lineLandingLocked(i)
+		if seen[landing] {
+			continue
+		}
+		seen[landing] = true
+		indices = append(indices, i)
+	}
+	return indices
+}
+
+// 按「访客 + 落地」算 rendezvous 分：indices 里分最高的那条；空的是 -1。
+func (p *failoverProxy) rendezvousLandingLocked(indices []int, key string) int {
+	best, bestScore := -1, uint64(0)
+	for _, index := range indices {
+		hash := fnv.New64a()
+		_, _ = hash.Write([]byte(key))
+		_, _ = hash.Write([]byte{0})
+		_, _ = hash.Write([]byte(p.lineLandingLocked(index)))
+		if score := hash.Sum64(); best < 0 || score > bestScore {
+			best, bestScore = index, score
+		}
+	}
+	return best
 }
 
 // closeOldLineConnsLocked：从一条「一起分」的线路切到别的线路时，旧线路别的落地上的连接按切换方式处理 ——

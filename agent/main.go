@@ -546,6 +546,12 @@ type failoverTarget struct {
 	Line    *int   `json:"line,omitempty"`
 	Landing string `json:"landing,omitempty"`
 	Spread  string `json:"spread,omitempty"`
+	// 这条路径最后从哪个 IP 出去（2.2.251，面板 2.3.520「故障切换优先同出口 IP」）：落地是 NEX 主机时是那台的
+	// 出口地址（面板看到的心跳来源，没有就是登记的 IPv4 / IPv6），落地是手填地址时就是那个地址。当前这条挂了
+	// 要换的时候，在同样够格的候选里优先挑出口 IP 和它一样的（failover_exit_ip.go）—— 对端看到的来源不变，
+	// 登录态、IP 绑定不丢。只是平手时的取舍，不压过分层、人工指定和时段表。
+	// 和 Down 一样是运行时提示：不进签名、不落盘，变了也不重建代理。
+	ExitIP string `json:"exitIp,omitempty"`
 }
 
 // 规格是不是分层的：每一条出站都标了 Tier。缺一条就整组按不分层处理（老面板）。
@@ -810,6 +816,10 @@ type fxpExitEndpoint struct {
 	Weight int `json:"weight,omitempty"`
 	// CapacityMbps 是出口主机的线路带宽，FXP「按负载」按它折算；没写按一样大。
 	CapacityMbps int `json:"capacityMbps,omitempty"`
+	// ExitIP 是这个出口主机的出口地址（2.2.251，面板 2.3.520）：原样写进 FXP 的配置，留给以后 FXP 主备换出口时
+	// 按「同出口 IP」取舍用 —— 现在的 FXP 还不读它。不进 fxpServerSignature：它是面板随时会变的提示，
+	// 进了签名的话一变就要重载 FXP（WireGuard 的隧道没有热更新，是整个重启）。
+	ExitIP string `json:"exitIp,omitempty"`
 }
 
 type fxpUDPTarget struct {
