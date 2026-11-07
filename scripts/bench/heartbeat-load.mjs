@@ -792,7 +792,7 @@ class FakeAgent {
         sourcePort: rule.port,
         targetIp: rule.targetIp,
         targetPort: rule.targetPort,
-        method: "tcp",
+        method: "tcping",
         probeCount: 3,
         probeSuccesses: timeout ? 0 : 3,
         probeCounterEpoch: counter.epoch,
