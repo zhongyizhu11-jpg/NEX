@@ -149,6 +149,7 @@ import {
 } from "@shared/tunnelParallelStreams";
 import { exitGroupCapacities, exitGroupWeights, normalizeExitGroupStrategy } from "@shared/exitStrategy";
 import { hostBandwidthHintMbps } from "@shared/linkWeights";
+import { ensureLandingNodeHosts, recordHostLoadSample, routePathLoadHint } from "./hostLoad";
 import { forwardXExitStrategy } from "./tunnelExitStrategy";
 import {
   getMimicLifecycleRevisionSignature,
@@ -786,6 +787,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     }, { force: isHostMetricsWatching(host.id) || isHostLiveFocused(host.id) });
     // 资源告警：CPU / 内存 / 磁盘持续超过阈值时通知管理员（不阻塞心跳）
     observeHostResourceSample(host, { cpu: cpuUsage ?? null, memory: memoryUsage ?? null, disk: diskUsage ?? null });
+    // 这台此刻的负载（CPU、带宽占用取大）：线路组给沿途经过它的路径带 loadPct（server/hostLoad.ts）。
+    recordHostLoadSample(host.id, { at: Date.now(), cpuUsage: cpuUsage ?? null, networkIn: networkIn ?? null, networkOut: networkOut ?? null }, hostBandwidthHintMbps(host));
     // OOM / 服务崩溃（Agent ≥ 2.2.230 才报这两项）
     observeHostHealthCounters(host, { bootId: agentBootId, oomKillCount: req.body?.oomKillCount, serviceRestarts: req.body?.serviceRestarts });
     recordHostLiveSample(host.id, {
@@ -2028,6 +2031,12 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         routeSchedulerAgentVersions.set(schedulerHostId, versionById.get(schedulerHostId) || "");
       }
     }
+    // 落地是「我的节点」的路径：节点在哪台 NEX 主机上（loadPct 要算那台的负载，server/hostLoad.ts），也是拼规格前一次查齐。
+    await ensureLandingNodeHosts([...agentAllRules, ...agentHostRules]
+      .filter((rule) => rule?.failoverEnabled)
+      .flatMap((rule) => routePathsOf(rule))
+      .filter((path) => Number(path.destNodeId || 0) > 0 && !(Number(path.destHostId || 0) > 0))
+      .map((path) => Number(path.destNodeId)));
     const routeSchedulerAgentAtLeast = (rule: any, version: string) => routeSchedulerHostIds(rule).every((schedulerHostId) => (
       isAgentVersionAtLeast(routeSchedulerAgentVersions.get(schedulerHostId) || "", version)
     ));
@@ -2098,7 +2107,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       const targets = paths.map((path) => {
         const dial = routePathDial(path, routeRule);
         const tier = tiered ? { tier: Number(path.tier) } : {};
-        const lineSpread = routeDestSpreadTargetFields(path, destSpreadReady);
+        const lineSpread = routeDestSpreadTargetFields(path, destSpreadReady, (version) => routeSchedulerAgentAtLeast(rule, version));
         if (!dial) {
           return { targetIp: "127.0.0.1", targetPort: 1, weight: path.weight, ...tier, ...lineSpread, down: true, downReason: path.issue || "path unresolved" };
         }
@@ -2109,6 +2118,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         const farEnd = routePathFarEndHostId(path);
         const probeUdpEcho = udpEchoSchedulerReady
           && routeUdpEchoProbeReady({ protocol, path, farEndAgentVersion: farEnd ? routeSchedulerAgentVersions.get(farEnd) : null });
+        // 沿途主机里最忙那台的负载（0–100，整数）：Agent 2.2.251 起拿它扣评分、算「自动」的权重；老 Agent 不认这个字段。
+        const loadPct = routePathLoadHint(path);
         return {
           targetIp: dial.ip,
           targetPort: dial.port,
@@ -2120,6 +2131,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
           ...lineSpread,
           // 入口探不到的后面几段（中继各自探的）加起来：Agent 按整条链打分。
           ...(extraLatencyMs > 0 ? { extraLatencyMs } : {}),
+          // 和 extraLatencyMs 一样是运行时提示：不进 Agent 的签名、不重建代理。
+          ...(loadPct > 0 ? { loadPct } : {}),
           ...(hint?.down ? { down: true, downReason: hint.reason } : {}),
         };
       });

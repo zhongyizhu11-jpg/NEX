@@ -16,6 +16,8 @@ import (
 	round_robin 轮流
 	random      随机
 	ip_hash     按访客固定：按「访客 + 落地」算分（加权 rendezvous），一个落地挂了只有原来在它上面的访客换
+	auto        自动（2.2.251）：按最近延迟和面板给的主机负载算有效权重（route_group_balance.go 的 autoWeightsLocked），
+	            随机挑两个落地、取「这个落地的连接数 ÷ 有效权重」更小的那个
 
 主备逻辑照旧决定走哪条线路（activeIndex 落在哪条线路上），这里只在那条线路里面分：每个落地出一条代表 ——
 挑出来的那条代表它自己的落地，别的落地取这条线路上健康、没被排除的里面下标最小的那条（面板展开时已经按
@@ -27,7 +29,7 @@ import (
 
 func validLineSpread(spread string) bool {
 	switch spread {
-	case "least_load", "round_robin", "random", "ip_hash":
+	case "least_load", "round_robin", "random", "ip_hash", "auto":
 		return true
 	}
 	return false
@@ -101,6 +103,19 @@ func (p *failoverProxy) spreadWithinLineLocked(anchor int, hashKey string, exclu
 			}
 		}
 		return best
+	case "auto":
+		// 同一个落地的连接合着算（和按负载分一样），有效权重按代表那条路径的延迟和负载。
+		weights := p.autoWeightsLocked(reps, time.Now())
+		return p.powerOfTwoPickLocked(reps, weights, func(index int) int {
+			landing := p.lineLandingLocked(index)
+			conns := 0
+			for i := range p.spec.Targets {
+				if p.sameLineLocked(i, line) && p.lineLandingLocked(i) == landing {
+					conns += p.connectionsLocked(i)
+				}
+			}
+			return conns
+		})
 	case "round_robin":
 		index := reps[p.roundRobinNext%len(reps)]
 		p.roundRobinNext = (p.roundRobinNext + 1) % 1000000

@@ -122,7 +122,7 @@ func failoverSignature(spec failoverSpec) string {
 		strconv.FormatBool(spec.ProxyProtocolStrip),
 	}
 	for _, target := range spec.Targets {
-		// Down / DownReason / ExtraLatencyMs 是面板随时会变的运行时提示，故意不进签名：进了的话
+		// Down / DownReason / ExtraLatencyMs / LoadPct 是面板随时会变的运行时提示，故意不进签名：进了的话
 		// 每次提示变化都会重建代理，探测样本和「现在走哪条」全部归零。它们走 applyRelayHintsLocked。
 		weight := strconv.Itoa(target.Weight)
 		if target.Tier != nil {
@@ -148,7 +148,7 @@ func normalizeFailoverSpec(spec failoverSpec) failoverSpec {
 	}
 	spec.Protocol = failoverProtocol(spec)
 	switch strings.TrimSpace(spec.Strategy) {
-	case "round_robin", "random", "ip_hash", "weighted", "least_load", "fallback":
+	case "round_robin", "random", "ip_hash", "weighted", "least_load", "auto", "fallback":
 		spec.Strategy = strings.TrimSpace(spec.Strategy)
 	default:
 		spec.Strategy = "fallback"
@@ -563,6 +563,8 @@ func (p *failoverProxy) pickTargetForKeyProto(hashKey string, exclude map[int]bo
 		index = p.weightedPickLocked(candidates)
 	case "least_load":
 		index = p.leastLoadPickLocked(candidates)
+	case "auto":
+		index = p.autoPickLocked(candidates)
 	case "round_robin":
 		index = candidates[p.roundRobinNext%len(candidates)]
 		p.roundRobinNext = (p.roundRobinNext + 1) % 1000000

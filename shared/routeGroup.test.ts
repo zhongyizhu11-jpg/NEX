@@ -9,7 +9,10 @@ import {
   legacyFailoverFields,
   legacyRoutePaths,
   parseRoutePaths,
+  ROUTE_AUTO_SPREAD_AGENT_VERSION,
   routeAgentStrategy,
+  routeDeliveryStrategy,
+  routeDestSpreadTargetFields,
   routeGroupOf,
   routePathDial,
   routePathLabel,
@@ -21,6 +24,7 @@ import {
   type RouteGroup,
   type RoutePath,
 } from "./routeGroup";
+import { compareVersions } from "./version";
 
 /**
  * 线路组的模型：路径、六种模式、模板、和老主备列的互推。
@@ -132,6 +136,24 @@ test("线路组 → 老 failover 列：备用是各路径的拨号地址，模�
   assert.equal(weighted.failoverPreferFastest, false);
   assert.equal(routeAgentStrategy({ mode: "weighted", spread: "weighted" }), "weighted");
   assert.equal(routeAgentStrategy({ mode: "smart", spread: "weighted" }), "fallback");
+});
+
+test("「自动」分法要 Agent 2.2.251：老 Agent 整组改发按权重，线路里的落地改发按负载分", () => {
+  const atLeast = (version: string) => (target: string) => compareVersions(version, target) >= 0;
+  const policy = { mode: "weighted" as const, spread: "auto" as const };
+  assert.equal(routeDeliveryStrategy(policy, "cold", atLeast(ROUTE_AUTO_SPREAD_AGENT_VERSION)), "auto");
+  assert.equal(routeDeliveryStrategy(policy, "cold", atLeast("2.2.250")), "weighted", "2.2.250 不认 auto，退成按权重");
+  assert.equal(routeDeliveryStrategy(policy, "cold", () => false), "weighted", "版本不知道按不够算");
+  assert.equal(routeDeliveryStrategy({ mode: "weighted", spread: "round_robin" }, "cold", () => false), "round_robin", "别的分法不受影响");
+  assert.equal(routeDeliveryStrategy({ mode: "weighted", spread: "least_load" }, "cold", atLeast("2.2.250")), "least_load");
+  assert.equal(routeDeliveryStrategy(policy, "aggregate", atLeast("2.2.250")), "least_load", "聚合照旧按负载");
+  assert.equal(routeDeliveryStrategy({ mode: "smart", spread: "auto" }, "cold", () => false), "fallback", "不是权重负载模式就是主备");
+
+  const path = { destSpread: "auto" as const, tier: 0, dest: { ip: "10.0.0.1", port: 443 }, destNodeId: null };
+  assert.deepEqual(routeDestSpreadTargetFields(path, true, atLeast(ROUTE_AUTO_SPREAD_AGENT_VERSION)), { line: 0, landing: "10.0.0.1:443", spread: "auto" });
+  assert.deepEqual(routeDestSpreadTargetFields(path, true, atLeast("2.2.250")), { line: 0, landing: "10.0.0.1:443", spread: "least_load" });
+  assert.deepEqual(routeDestSpreadTargetFields({ ...path, destSpread: "ip_hash" }, true, atLeast("2.2.250")), { line: 0, landing: "10.0.0.1:443", spread: "ip_hash" });
+  assert.deepEqual(routeDestSpreadTargetFields(path, false, atLeast(ROUTE_AUTO_SPREAD_AGENT_VERSION)), {});
 });
 
 test("整个线路组只在开了主备时才有", () => {

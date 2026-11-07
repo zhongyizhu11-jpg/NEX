@@ -113,7 +113,7 @@ func failoverDialTCP(ctx context.Context, target failoverTarget, timeout time.Du
 // 挑出来的，也就是按优先级、分层规格下按层的下一条）。
 func (p *failoverProxy) raceAllowedLocked() bool {
 	switch p.spec.Strategy {
-	case "weighted", "round_robin", "random", "least_load":
+	case "weighted", "round_robin", "random", "least_load", "auto":
 		return len(p.spec.Targets) > 1
 	case "fallback":
 		return p.spec.Delivery == "hot" && len(p.spec.Targets) > 1

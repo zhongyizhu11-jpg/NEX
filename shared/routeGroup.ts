@@ -172,9 +172,10 @@ export type RoutePath = {
  *   round_robin 轮流
  *   random      随机
  *   ip_hash     按访客固定：同一个访客 IP 一直走同一个落地
+ *   auto        自动：按最近延迟和落地主机的负载算权重，随机挑两个取更好的那个（Agent 2.2.251 起）
  * 「怎么切」照旧决定走哪条线路；按权重（整组一起分）、聚合 / 复制时不用它。Agent 2.2.245 起。
  */
-export const ROUTE_DEST_SPREADS = ["one", "least_load", "round_robin", "random", "ip_hash"] as const;
+export const ROUTE_DEST_SPREADS = ["one", "least_load", "round_robin", "random", "ip_hash", "auto"] as const;
 export type RouteDestSpread = (typeof ROUTE_DEST_SPREADS)[number];
 /** 路径上记的：只有「一起分」的几种（主备不记）。 */
 export type RouteLineDestSpread = Exclude<RouteDestSpread, "one">;
@@ -185,6 +186,7 @@ export const ROUTE_DEST_SPREAD_LABELS: Record<RouteDestSpread, { label: string; 
   round_robin: { label: "轮流", hint: "这条线路在用时，新连接轮流走每个落地" },
   random: { label: "随机", hint: "这条线路在用时，新连接随机挑一个能用的落地" },
   ip_hash: { label: "按访客固定", hint: "同一个访客 IP 一直走同一个落地，适合要保持登录的服务" },
+  auto: { label: LINK_SPREAD_LABELS.auto.label, hint: "这条线路在用时，按最近延迟和落地主机的负载自动算权重，新连接随机挑两个落地取更好的那个" },
 };
 
 export function normalizeRouteDestSpread(value: unknown): RouteDestSpread {
@@ -194,6 +196,20 @@ export function normalizeRouteDestSpread(value: unknown): RouteDestSpread {
 
 /** 「落地怎么分」：Agent 2.2.245 起；更老的 Agent 拿到也只认一个落地（字段它不认）。 */
 export const ROUTE_DEST_SPREAD_AGENT_VERSION = "2.2.245";
+
+/**
+ * 「自动」（动态权重）：Agent 2.2.251 起。它按每条路径最近的探测延迟（指数平均）和面板给的主机负载
+ * （failoverTarget.loadPct）算有效权重，新连接随机挑两条、取连接数 ÷ 有效权重更小的那条。
+ * 更老的 Agent 认不出 auto：整组的分法面板改发「按权重」（和「按负载」退成按权重同一个路子），
+ * 线路里几个落地的「自动」改发「按负载分」（那边没有按权重，按负载最接近）。
+ */
+export const ROUTE_AUTO_SPREAD_AGENT_VERSION = "2.2.251";
+
+/** 「自动」在老 Agent 上怎么退：整组是按权重，线路里的几个落地是按负载分。 */
+export function routeSpreadForAgent<T extends string>(spread: T, fallback: T, agentAtLeast: (version: string) => boolean): T {
+  if (spread !== "auto") return spread;
+  return agentAtLeast(ROUTE_AUTO_SPREAD_AGENT_VERSION) ? spread : fallback;
+}
 
 /**
  * 下发给 Agent 时带不带「落地怎么分」：一次走一条线路（分配策略是 fallback、不分层 —— 按权重、聚合 / 复制时
@@ -214,9 +230,11 @@ export function routeDestSpreadReady(options: {
 export function routeDestSpreadTargetFields(
   path: Pick<RoutePath, "destSpread" | "tier" | "dest" | "destNodeId"> & { destHostId?: number | null },
   ready: boolean,
+  // 「自动」要 Agent 2.2.251，更老的改发「按负载分」（routeSpreadForAgent）。
+  agentAtLeast: (version: string) => boolean,
 ): { line: number; landing: string; spread: RouteLineDestSpread } | Record<string, never> {
   if (!ready || !path.destSpread || typeof path.tier !== "number") return {};
-  return { line: path.tier, landing: routePathLandingKey(path), spread: path.destSpread };
+  return { line: path.tier, landing: routePathLandingKey(path), spread: routeSpreadForAgent<RouteLineDestSpread>(path.destSpread, "least_load", agentAtLeast) };
 }
 
 /** 落地是哪一个（同一个落地经不同中转的几条路径算一个）：落地池按成员机，节点按节点，别的按地址，没写 = 规则目标。 */
@@ -230,8 +248,8 @@ export function routePathLandingKey(path: Pick<RoutePath, "dest" | "destNodeId">
 export const ROUTE_MODES = ["failover", "scheduled", "manual", "smart", "hybrid", "weighted"] as const;
 export type RouteMode = (typeof ROUTE_MODES)[number];
 
-/** 权重负载模式下新连接怎么分：按权重、轮流、随机、按访客固定。 */
-export const ROUTE_SPREADS = ["weighted", "least_load", "round_robin", "random", "ip_hash"] as const;
+/** 权重负载模式下新连接怎么分：按权重、按负载、轮流、随机、按访客固定、自动（动态权重，Agent 2.2.251 起）。 */
+export const ROUTE_SPREADS = ["weighted", "least_load", "round_robin", "random", "ip_hash", "auto"] as const;
 export type RouteSpread = (typeof ROUTE_SPREADS)[number];
 
 /**
@@ -370,6 +388,7 @@ export const ROUTE_SPREAD_LABELS: Record<RouteSpread, { label: string; hint: str
   round_robin: { label: LINK_SPREAD_LABELS.round_robin.label, hint: "新连接轮流走每一条" },
   random: { label: LINK_SPREAD_LABELS.random.label, hint: "新连接随机挑一条能用的" },
   ip_hash: { label: LINK_SPREAD_LABELS.ip_hash.label, hint: "同一个来源 IP 总走同一条，适合要保持登录的服务" },
+  auto: { label: LINK_SPREAD_LABELS.auto.label, hint: "按每条路径最近的延迟和沿途主机的负载自动算权重，新连接随机挑两条取更好的那条；慢了、忙了的少分" },
 };
 
 export const ROUTE_SWITCH_MODE_INFO: Record<RouteSwitchMode, { label: string; hint: string }> = {
@@ -388,6 +407,7 @@ export const ROUTE_SPREAD_SESSION_HINTS: Record<RouteSpread, string> = {
   round_robin: "新会话轮流走每一条",
   random: "新会话随机挑一条能用的",
   ip_hash: "UDP 分不出访客：同一个会话一直走同一条，同一个访客的不同会话可能分到不同路径",
+  auto: "按每条路径最近的延迟和沿途主机的负载自动算权重，新会话随机挑两条取更好的那条",
 };
 
 export const ROUTE_SWITCH_MODE_SESSION_HINTS: Record<RouteSwitchMode, string> = {
@@ -798,7 +818,8 @@ export function routeAgentStrategy(policy: Pick<RouteGroupPolicy, "mode" | "spre
 
 /**
  * 下发给 Agent 的分配策略，算上「备用怎么候着」：聚合 = 主线路那一组里按负载分（Agent 只在最低健康
- * tier 里挑，备用组照旧等着）；「按负载」老 Agent 不认（会退成主备），改发「按权重」。
+ * tier 里挑，备用组照旧等着）；「按负载」老 Agent 不认（会退成主备），改发「按权重」；「自动」
+ * 2.2.251 之前的 Agent 也不认，同样改发「按权重」（ROUTE_AUTO_SPREAD_AGENT_VERSION）。
  */
 export function routeDeliveryStrategy(
   policy: Pick<RouteGroupPolicy, "mode" | "spread">,
@@ -808,7 +829,8 @@ export function routeDeliveryStrategy(
   const leastLoad = agentAtLeast(ROUTE_LEAST_LOAD_AGENT_VERSION) ? "least_load" : "weighted";
   if (delivery === "aggregate") return leastLoad;
   const strategy = routeAgentStrategy(policy);
-  return strategy === "least_load" ? leastLoad : strategy;
+  if (strategy === "least_load") return leastLoad;
+  return routeSpreadForAgent<"fallback" | RouteSpread>(strategy, "weighted", agentAtLeast);
 }
 
 /** 「按负载」：Agent 2.2.232 起（和 shared/exitStrategy 的 LEAST_LOAD_AGENT_VERSION 同一个）。 */

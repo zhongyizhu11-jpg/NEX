@@ -275,6 +275,7 @@ export function describeRoutePolicy(rule: RoutePolicyRule, options: RoutePolicyO
       round_robin: `轮流走这 ${lineCount} 条`,
       random: `从 ${lineCount} 条里随机挑一条`,
       ip_hash: perSession ? "按会话固定分到其中一条" : "按来源 IP 固定分到其中一条",
+      auto: `按最近延迟和沿途主机负载自动算权重，从 ${lineCount} 条里随机挑两条取更好的那条`,
     };
     conditions.push({ kind: "spread", key: "spread", when: perSession ? "每个新会话" : "每条新连接", then: spread[policy.spread], targetIndex: null, state: "deciding" });
     deciding = "spread";
