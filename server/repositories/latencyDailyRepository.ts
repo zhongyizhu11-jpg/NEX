@@ -1,4 +1,5 @@
 import { executeRaw, getDatabaseKind, queryRaw, withDatabaseTransaction } from "../dbRuntime";
+import { flushPendingWrites } from "../dbWriteBatcher";
 import { boolLiteral, castInteger, quoteIdentifier as q } from "../dbCompat";
 import { getSetting, setSetting } from "./settingsRepository";
 import { deleteExpiredHistoryRows } from "./historyRetention";
@@ -116,6 +117,7 @@ function upsertSql(source: SourceTable) {
  * 可以随时重复调用：没有新样本就什么也不做。
  */
 export async function rollupLatencyDailyStats(nowMs = Date.now()) {
+  await flushPendingWrites();
   const now = Math.floor(nowMs / 1000);
   const end = now - ROLLUP_LAG_SECONDS;
   const stored = Number(await getSetting(LATENCY_DAILY_WATERMARK_KEY));

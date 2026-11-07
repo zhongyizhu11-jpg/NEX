@@ -20,6 +20,7 @@ import { appendPanelLog } from "../_core/panelLogger";
 import { invalidateProxySubCacheAll } from "../proxySubCache";
 import { DEFAULT_DDNS_TTL, getDdnsSettings, updateDdnsRecordValues } from "../ddns";
 import { afterDatabaseCommit, afterDatabaseTransactionSettled, executeRaw, getDb, insertAndGetId, isDatabaseTransactionActive, nowDate, queryRaw, rawEpochToDate, withDatabaseTransaction } from "../dbRuntime";
+import { flushPendingWrites } from "../dbWriteBatcher";
 import { withForwardTestDates } from "./forwardTestRepository";
 import { inList, quoteIdentifier } from "../dbCompat";
 import { pageResult, pageWindowForTotal, type PageRequest } from "../../shared/pagination";
@@ -1033,6 +1034,7 @@ export async function getForwardGroups(userId?: number, options: { includeRuntim
     const groupId = Number(rule.forwardGroupId || 0);
     templateCountByGroup.set(groupId, (templateCountByGroup.get(groupId) || 0) + 1);
   }
+  await flushPendingWrites("forward_group_latency_stats");
   const latencyRows = await queryRaw<any>(
     `SELECT s.${quoteIdentifier("groupId")}, s.${quoteIdentifier("latencyMs")}, s.${quoteIdentifier("isTimeout")}, s.${quoteIdentifier("recordedAt")}
      FROM ${quoteIdentifier("forward_group_latency_stats")} s
@@ -4484,6 +4486,7 @@ export async function scheduleForwardGroupsForHostHealthChange(hostId: number) {
 }
 
 async function latestTcping(ruleId: number) {
+  await flushPendingWrites("tcping_stats");
   const table = quoteIdentifier("tcping_stats");
   const result = await queryRaw<any>(
     `SELECT * FROM ${table} WHERE ${quoteIdentifier("ruleId")} = ? ORDER BY ${quoteIdentifier("recordedAt")} DESC LIMIT 1`,

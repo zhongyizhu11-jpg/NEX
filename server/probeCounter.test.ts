@@ -70,6 +70,8 @@ test("SQLite cumulative probe statistics deduplicate retries, include suppressed
     const runtime = await import(url("server/dbRuntime.ts"));
     const schema = await import(url("server/dbSchema.ts"));
     const counters = await import(url("server/repositories/probeCounterRepository.ts"));
+    // 样本行攒批写（server/dbWriteBatcher.ts）：直接查表之前先刷
+    const batcher = await import(url("server/dbWriteBatcher.ts"));
     const metrics = await import(url("server/repositories/metricsRepository.ts"));
     await import(url("server/routers.ts"));
     const { rulesRouter: selfTestRulesRouter } = await import(url("server/routers/rules.ts"));
@@ -160,6 +162,7 @@ test("SQLite cumulative probe statistics deduplicate retries, include suppressed
       const response = await fetch(endpoint,{method:"POST",headers:{"content-type":"application/json",authorization:"Bearer probe-token-"+hostId},body:JSON.stringify(body)});
       const result = await response.json();
       assert.equal(response.status,200,JSON.stringify(result));
+      await batcher.flushPendingWrites();
     };
     try {
       await post(1,{results:[wire]});
@@ -190,6 +193,7 @@ test("SQLite cumulative probe statistics deduplicate retries, include suppressed
     }
     // Retention batches reclaim old snapshots with a time-leading index.
     await save([row("rule", 999, 1, 3, 3)], now - 80 * 3600);
+    await batcher.flushPendingWrites();
     await metrics.cleanOldTcpingStats(72);
     assert.equal((await runtime.queryRaw('SELECT COUNT(*) AS n FROM "probe_counter_snapshots" WHERE "refId"=999'))[0].n, 0);
     await runtime.closeDatabase();

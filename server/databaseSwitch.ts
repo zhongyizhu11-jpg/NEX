@@ -29,6 +29,7 @@ import { ENV } from "./env";
 import { summarizeMigrationTableCounts, type MigrationSnapshotSummary } from "./migration";
 import { RUNTIME_CACHE_SETTING_PREFIX } from "./repositories/settingsRepository";
 import { beginDatabaseMaintenance, endDatabaseMaintenance } from "./databaseMaintenance";
+import { flushPendingWrites } from "./dbWriteBatcher";
 import { APP_VERSION } from "../shared/versions";
 import { maintainPostgresqlDatabase } from "./postgresqlMaintenance";
 
@@ -891,6 +892,8 @@ export function startDatabaseSwitch(target: DatabaseConfig) {
       // 从这里开始冻结面板的写入，直到切换结束（需要重启时一直冻到进程退出）。
       beginDatabaseMaintenance(`database-switch:${job.id}`);
       await new Promise<void>((resolve) => setTimeout(resolve, DATABASE_SWITCH_WRITE_DRAIN_MS));
+      // 攒着没写的探测样本写进旧库，随后才整表读出来拷过去。
+      await flushPendingWrites();
       const result = await runTargetTransaction(handle, async (session) => {
         setJobStage(job, "target-check", { progress: 32 });
         await assertTargetHasNoBusinessData(session);

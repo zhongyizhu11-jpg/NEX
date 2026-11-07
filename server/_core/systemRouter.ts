@@ -55,6 +55,7 @@ import { normalizeRuleEntryDomainSuffixInput, scheduleRuleEntryDomainReconcile }
 import { resolveRuleEntryDomainRuntimeSettings } from "../repositories/ruleEntryDomainRepository";
 import type { DatabaseConfig } from "../dbRuntime";
 import { defaultSqlitePath } from "../dbRuntime";
+import { flushPendingWrites } from "../dbWriteBatcher";
 import {
   getDatabaseSwitchJob,
   getDatabaseSwitchStatus,
@@ -1451,8 +1452,10 @@ async function updateEnvFileValue(filePath: string, key: string, value: string) 
 }
 
 function schedulePanelRestart(reason = "settings change") {
-  setTimeout(() => {
+  setTimeout(async () => {
     console.info(`[Settings] exiting process for service restart after ${reason}`);
+    // 攒着没写的探测样本先落库再退出（server/dbWriteBatcher.ts）。
+    await flushPendingWrites().catch(() => undefined);
     process.exit(0);
   }, 800);
 }

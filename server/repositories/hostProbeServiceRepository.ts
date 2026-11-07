@@ -6,6 +6,7 @@ import {
   type InsertHostProbeServiceStat,
 } from "../../drizzle/schema";
 import { executeRaw, getDb, insertAndGetId, nowDate, queryRaw } from "../dbRuntime";
+import { defineBatchedWrite } from "../dbWriteBatcher";
 import { boolLiteral, bucketExpression, inList, quoteIdentifier } from "../dbCompat";
 import { clampPositiveInt, epochSeconds, reorderRowsBySortOrder } from "./repositoryUtils";
 import { normalizeAgentProbeCounts } from "../../shared/agentDtos";
@@ -137,6 +138,8 @@ export async function updateHostProbeService(id: number, input: Omit<HostProbeSe
 export async function deleteHostProbeService(id: number) {
   const db = await getDb();
   if (!db) return;
+  // 攒着没写的样本先落库，不然删完它们才写进去。
+  await hostProbeServiceStatWrites.flush();
   await db.delete(hostProbeServiceStats).where(eq(hostProbeServiceStats.serviceId, id));
   await deleteHostProbeHourlyStats({ serviceId: id });
   await db.delete(hostProbeServices).where(eq(hostProbeServices.id, id));
@@ -202,10 +205,20 @@ export async function getHostProbeTasksForHost(hostId: number) {
     .filter((task: any) => task.serviceId > 0 && task.targetIp && (task.method === "ping" || task.targetPort > 0));
 }
 
+/** 样本行攒批写（server/dbWriteBatcher.ts）；下面读它的查询先刷再查。 */
+const HOST_PROBE_SERVICE_STATS_WRITE_QUEUE = "host_probe_service_stats";
+const hostProbeServiceStatWrites = defineBatchedWrite<InsertHostProbeServiceStat>(HOST_PROBE_SERVICE_STATS_WRITE_QUEUE, async (rows) => {
+  const db = await getDb();
+  if (!db) return;
+  await db.insert(hostProbeServiceStats).values(rows);
+});
+
 export async function insertHostProbeServiceStats(stats: InsertHostProbeServiceStat[]) {
   const db = await getDb();
   if (!db || stats.length === 0) return;
-  await db.insert(hostProbeServiceStats).values(stats.map((stat) => {
+  // 晚几秒落库的样本时间不能跟着晚：排队时就定下 recordedAt。
+  const recordedAt = nowDate();
+  await hostProbeServiceStatWrites.push(stats.map((stat) => {
     // Preserve an explicit zero-success report at the write boundary.  Read
     // paths retain the legacy compatibility behavior for pre-counter rows.
     const probeCounts = normalizeAgentProbeCounts(stat, { legacyZeroAsSuccess: false });
@@ -213,6 +226,7 @@ export async function insertHostProbeServiceStats(stats: InsertHostProbeServiceS
       ...stat,
       ...probeCounts,
       isTimeout: probeCounts.probeSuccesses <= 0,
+      recordedAt: stat.recordedAt ?? recordedAt,
     };
   }) as InsertHostProbeServiceStat[]);
 }
@@ -220,6 +234,7 @@ export async function insertHostProbeServiceStats(stats: InsertHostProbeServiceS
 export async function getLatestHostProbeServiceStats(serviceIds: number[], hostId?: number) {
   const ids = Array.from(new Set(serviceIds.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0)));
   if (ids.length === 0) return new Map<number, any>();
+  await hostProbeServiceStatWrites.flush();
   const scopedHostId = Number(hostId || 0);
   const q = quoteIdentifier;
   const list = inList(ids);
@@ -262,6 +277,7 @@ export async function getLatestHostProbeServiceStats(serviceIds: number[], hostI
 }
 
 export async function getHostProbeServiceSeries(opts: { serviceIds?: number[]; hostId?: number; hours?: number; limit?: number } = {}) {
+  await hostProbeServiceStatWrites.flush();
   const ids = Array.from(new Set((opts.serviceIds || []).map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0)));
   const hostId = Number(opts.hostId || 0);
   const requestedHours = Number(opts.hours);

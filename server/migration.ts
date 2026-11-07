@@ -22,6 +22,7 @@ import {
   withDatabaseTransaction,
   withSqliteExclusive,
 } from "./dbRuntime";
+import { flushPendingWrites } from "./dbWriteBatcher";
 import { countAll, quoteIdentifier } from "./dbCompat";
 import { getAllSettings, migrateSecretSettingsToEncrypted, RUNTIME_CACHE_SETTING_PREFIX, setSetting } from "./repositories/settingsRepository";
 import { decryptSettingRowsForExport, SETTINGS_SECRETS_MIGRATION_KEY } from "./settingsEncryption";
@@ -264,6 +265,8 @@ export async function exportMigrationSnapshot(
 ): Promise<MigrationSnapshot> {
   await connectDatabase();
   await ensureDatabaseSchema();
+  // 攒着没写的探测样本先落库，备份 / 迁移导出的才是全的。
+  await flushPendingWrites();
   const dataScope = normalizePanelMigrationScope(options.dataScope);
   const tables: MigrationSnapshot["tables"] = {};
   const includedTables = MIGRATION_TABLES.filter((table) => (
@@ -392,6 +395,7 @@ function decryptSecretSettingsInSqliteCopy(filePath: string) {
 async function createDirectSqliteBackup(meta: Omit<DirectSqliteMigrationMeta, "byteLength" | "sha256">) {
   const filePath = sqliteMigrationTempPath(`export-${Date.now()}`);
   try {
+    await flushPendingWrites();
     await withSqliteExclusive((sqlite) => sqlite.backup(filePath));
     decryptSecretSettingsInSqliteCopy(filePath);
     validateSqliteMigrationFile(filePath);
@@ -2058,6 +2062,8 @@ export async function importDirectSqliteBackup(
   targetPanelUrl: string,
 ) {
   if (getDatabaseKind() !== "sqlite") throw new Error("目标面板不是 SQLite，无法使用数据库快速迁移");
+  // 攒着没写的探测样本先落库，再判断目标面板有没有数据、换库文件
+  await flushPendingWrites();
   const existingData = await getPanelDataSummary({ useCache: false });
   if (existingData.hasExistingData || existingData.userCount > 0) {
     throw new Error("目标面板已有数据，不能直接写入 SQLite 数据库，已停止迁移");
@@ -2226,6 +2232,8 @@ export async function importMigrationSnapshot(
   if (!snapshot || snapshot.version !== 1 || !snapshot.tables || typeof snapshot.tables !== "object") {
     throw new Error("迁移数据格式无效");
   }
+  // 攒着没写的探测样本先落库，导入看到的是全的、导入之后也不会再冒出导入之前的行
+  await flushPendingWrites();
 
   const existingData = await getPanelDataSummary({ useCache: false });
   const mode = existingData.hasExistingData ? "incremental" : "restore";
