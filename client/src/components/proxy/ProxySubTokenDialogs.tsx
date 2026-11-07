@@ -29,6 +29,7 @@ import {
   PROXY_SUB_EMPTY_SCOPE,
   PROXY_SUB_NAME_TEMPLATE_VARIABLES,
   PROXY_SUB_SORT_MODES,
+  PROXY_SUB_SORT_MODE_HINTS,
   PROXY_SUB_SORT_MODE_LABELS,
   type ProxySubSortMode,
   type ProxySubTokenOptions,
@@ -535,7 +536,7 @@ export function ProxySubTokenEditDialog({
 
               <Section title="顺序">
                 <OptionGroup>
-                  <OptionRow label="排序">
+                  <OptionRow label="排序" hint={PROXY_SUB_SORT_MODE_HINTS[options.sortMode]}>
                     <Select value={options.sortMode} onValueChange={(value) => setOptions((prev) => ({ ...prev, sortMode: value as ProxySubSortMode }))}>
                       <SelectTrigger aria-label="排序" className="h-8 w-36 text-xs"><SelectValue /></SelectTrigger>
                       <SelectContent>

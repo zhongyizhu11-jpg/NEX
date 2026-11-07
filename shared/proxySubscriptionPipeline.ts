@@ -29,6 +29,7 @@ import {
   type ProxySubscriptionPlan,
 } from "./proxySubscriptionPlan";
 import { customRulesToRouteRules, parseProxyCustomRules } from "./proxySubCustomRules";
+import type { ProxySubVisitorGeo } from "./proxySubGeo";
 import { buildProxySubInfoNodes, runProxySubEntryProcessors, type ProxySubInfoNodeInput } from "./proxySubProcessors";
 import type { ProxySubSettings } from "./proxySubSettings";
 import { renderProxySubTemplatePrelude, PROXY_SUB_BUILTIN_PRELUDES, proxySubTemplateTargetForFormat, type ProxySubTemplate } from "./proxySubTemplates";
@@ -55,6 +56,8 @@ export type ProxySubPipelineInput = {
   providers?: readonly { name: string; url: string; intervalSec: number }[];
   /** 出口主机最新的解锁检测结论（服务端按条目的 exitHostId 批量查好），见 shared/proxySubUnlock.ts。 */
   unlockStatuses?: ProxySubUnlockStatusMap | null;
+  /** 拉订阅的访客在哪（服务端用离线库查的）；只有「按访客就近」排序用，见 shared/proxySubGeo.ts。 */
+  visitor?: ProxySubVisitorGeo | null;
 };
 
 export type ProxySubPipelineDocument = {
@@ -77,7 +80,7 @@ function spliceCustomRules(rules: readonly ProxyRouteRule[], prepend: readonly P
 
 /** 第一步到第五步：出文档。渲染拆开是为了预览界面只要文档不要正文。 */
 export function buildProxySubPipelineDocument(input: ProxySubPipelineInput): ProxySubPipelineDocument {
-  const plan = runProxySubEntryProcessors(input.plan, { scope: input.scope, options: input.options, settings: input.settings });
+  const plan = runProxySubEntryProcessors(input.plan, { scope: input.scope, options: input.options, settings: input.settings, visitor: input.visitor });
   const customGroups = input.template?.customGroups || [];
   const document = buildProxySubscriptionDocument(plan, input.templates, {
     mainGroupName: PROXY_SUBSCRIPTION_GROUP_NAME,

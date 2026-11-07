@@ -30,6 +30,8 @@ function entry(input: {
   custom?: boolean;
   latency?: number | null;
   front?: number;
+  /** 入口机器的坐标（给「按访客就近」）。 */
+  at?: [lat: number, lng: number];
 }): ProxySubscriptionEntry {
   const node = createEmptyProxyNode();
   node.name = input.name;
@@ -49,6 +51,7 @@ function entry(input: {
       customName: !!input.custom,
       regionCode: input.region || "",
       ...(input.latency !== undefined ? { latencyMs: input.latency } : {}),
+      ...(input.at ? { entryLat: input.at[0], entryLng: input.at[1] } : {}),
     },
     node,
   };
@@ -121,6 +124,40 @@ test("去重与排序", () => {
   assert.deepEqual(sortProxySubEntries(plan(list), "protocol").entries.map((item) => item.node.name), ["a", "b", "c"]);
   // 不通的（null）排最后。
   assert.deepEqual(sortProxySubEntries(plan(list), "latency").entries.map((item) => item.node.name), ["c", "b", "a"]);
+});
+
+test("按访客就近：离访客近的入口在前，没定位的排最后，距离一样按地区 / 名字；不知道访客在哪就按地区", () => {
+  const tokyo = { countryCode: "JP", lat: 35.6762, lng: 139.6503 };
+  const list = [
+    entry({ id: 1, name: "la", region: "US", at: [34.0522, -118.2437] }),
+    entry({ id: 2, name: "hk", region: "HK", at: [22.3193, 114.1694] }),
+    entry({ id: 3, name: "nowhere", region: "DE" }),
+    entry({ id: 4, name: "osaka", region: "JP", at: [34.6937, 135.5023] }),
+    // 和 hk 同一台入口机（同坐标）：距离一样，按地区、名字。
+    entry({ id: 5, name: "hk-2", region: "HK", at: [22.3193, 114.1694] }),
+    entry({ id: 6, name: "aa-same-spot", region: "CN", at: [22.3193, 114.1694] }),
+  ];
+  assert.deepEqual(
+    sortProxySubEntries(plan(list), "nearest", tokyo).entries.map((item) => item.node.name),
+    ["osaka", "aa-same-spot", "hk", "hk-2", "la", "nowhere"],
+  );
+  // 查不到访客位置：退回按地区（和 region 一模一样）。
+  assert.deepEqual(
+    sortProxySubEntries(plan(list), "nearest", null).entries.map((item) => item.node.name),
+    sortProxySubEntries(plan(list), "region").entries.map((item) => item.node.name),
+  );
+  assert.deepEqual(
+    sortProxySubEntries(plan(list), "nearest").entries.map((item) => item.node.name),
+    ["aa-same-spot", "nowhere", "hk", "hk-2", "osaka", "la"],
+  );
+  // 整条流水线带着访客：排序那一步拿到它。
+  const processed = runProxySubEntryProcessors(plan(list), { scope: PROXY_SUB_EMPTY_SCOPE, options: { ...options, sortMode: "nearest" }, settings, visitor: tokyo });
+  assert.equal(processed.entries[0].node.name, "osaka");
+  // 别的排序不看访客。
+  assert.deepEqual(
+    sortProxySubEntries(plan(list), "name", tokyo).entries.map((item) => item.node.name),
+    sortProxySubEntries(plan(list), "name").entries.map((item) => item.node.name),
+  );
 });
 
 test("udp / skip-cert-verify 覆盖只在令牌明确设了时生效", () => {
