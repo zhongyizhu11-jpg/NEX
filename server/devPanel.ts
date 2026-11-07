@@ -1509,9 +1509,10 @@ async function seedRouteGroupDemo(ruleId: number, hostIds: number[]) {
       activeSince: now - 20 * 60 * 1000,
       prewarmIndex: -1,
       targets: [
-        { index: 0, target: mainDial, healthy: true, score: 93, latencyMs: 38, lossPct: 0, jitterMs: 4, availabilityPct: 100, consecutiveFailures: 0, connections: 27, samples: 120, lastProbeAt: now - 3000 },
-        { index: 1, target: backupDial, healthy: true, score: 81, latencyMs: 74, lossPct: 0.8, jitterMs: 11, availabilityPct: 99.2, consecutiveFailures: 0, connections: 0, samples: 120, lastProbeAt: now - 3000 },
-        { index: 2, target: "10.95.0.12:443", healthy: true, score: 64, latencyMs: 186, lossPct: 2.5, jitterMs: 28, availabilityPct: 97.5, consecutiveFailures: 0, connections: 0, samples: 120, lastProbeAt: now - 3000 },
+        // 第 3 批的两种状态（Agent 2.2.251）：主线路 TCP 通、UDP 端口探不通（UDP 会话避开它）；直连那条沿途主机负载 85%（评分已扣）。
+        { index: 0, target: mainDial, healthy: true, score: 93, latencyMs: 38, lossPct: 0, jitterMs: 4, availabilityPct: 100, consecutiveFailures: 0, connections: 27, samples: 120, lastProbeAt: now - 3000, udpHealthy: false, udpLatencyMs: 0 },
+        { index: 1, target: backupDial, healthy: true, score: 81, latencyMs: 74, lossPct: 0.8, jitterMs: 11, availabilityPct: 99.2, consecutiveFailures: 0, connections: 0, samples: 120, lastProbeAt: now - 3000, udpHealthy: true, udpLatencyMs: 75 },
+        { index: 2, target: "10.95.0.12:443", healthy: true, score: 64, latencyMs: 186, lossPct: 2.5, jitterMs: 28, availabilityPct: 97.5, consecutiveFailures: 0, connections: 0, samples: 120, lastProbeAt: now - 3000, udpHealthy: true, udpLatencyMs: 188, loadPct: 85 },
       ],
     }],
   });

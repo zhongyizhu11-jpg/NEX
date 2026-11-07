@@ -87,7 +87,7 @@ func (p *failoverProxy) spreadWithinLineLocked(anchor int, hashKey string, exclu
 		start := p.roundRobinNext % len(reps)
 		p.roundRobinNext = (p.roundRobinNext + 1) % 1000000
 		// 有落地挂了：负载一样的几个里优先挑和挂掉那个同出口 IP 的（2.2.251）。
-		deadExits := p.lineDeadExitIPsLocked(line, reps, exclude)
+		deadExits := p.lineDeadExitIPsLocked(line, reps, exclude, udp)
 		best, bestCost, bestSameExit := -1, 0.0, false
 		for offset := range reps {
 			index := reps[(start+offset)%len(reps)]

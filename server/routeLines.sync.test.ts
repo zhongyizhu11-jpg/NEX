@@ -24,6 +24,8 @@ type Outcome = {
   pausedSpec: any;
   maintenanceSpec: any;
   exitIpSpec: any;
+  load: { oldAgent: any; first: any; second: any };
+  deliveries: Record<string, { desiredSent: boolean; viaRunning: boolean }>;
 };
 
 function run(): Outcome {
@@ -87,12 +89,17 @@ function run(): Outcome {
     const server = http.createServer(app);
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
     const base = "http://127.0.0.1:" + server.address().port;
-    const beat = async (agentVersion = "2.2.243") => {
+    // 每一拍：期望状态发了就看它里面的规格；只是运行时提示（暂停、维护、负载……）变了时期望状态不重发，
+    // 规格跟着 runningRules 走 —— 两边都看，记下这一拍是从哪边拿到的。
+    const deliveries = {};
+    const beat = async (agentVersion = "2.2.243", label = "") => {
       const response = await fetch(base + "/api/agent/heartbeat", { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer tok1" }, body: JSON.stringify({ agentVersion, uptime: 10, cpuUsage: 1, memoryUsage: 1, diskUsage: 1, forceReconcile: true }) });
       const json = await response.json();
       const actions = (json.desiredState && json.desiredState.actions) || [];
       const found = actions.find((action) => action && action.failover && action.failover.enabled);
-      return found ? found.failover : null;
+      const running = (json.runningRules || []).find((rule) => Number(rule.ruleId) === 1 && rule.failover && rule.failover.enabled);
+      if (label) deliveries[label] = { desiredSent: !!found, viaRunning: !!running };
+      return found ? found.failover : (running ? running.failover : null);
     };
     const stats = await import(url("server/routeGroupStats.ts"));
     // 备用那条第一跳之后（中转 → 落地）测到 7ms：下发的 extraLatencyMs 要带上。
@@ -106,23 +113,48 @@ function run(): Outcome {
     // 暂停备用那条线路
     const paused = afterPaths.map((p) => (p.lineKey === "bk" ? { ...p, paused: true } : p));
     await exec('UPDATE forward_rules SET "routePaths" = ? WHERE id = 1', [JSON.stringify(paused)]);
-    const pausedSpec = await beat();
+    const pausedSpec = await beat("2.2.243", "paused");
     await exec('UPDATE forward_rules SET "routePaths" = ? WHERE id = 1', [JSON.stringify(afterPaths)]);
     // 维护 HK2
     const health = await import(url("server/routeNodeHealth.ts"));
     await exec('UPDATE hosts SET "maintenanceMode" = 1 WHERE id = 4');
     health.invalidateRouteNodeHealth();
-    const maintenanceSpec = await beat();
+    const maintenanceSpec = await beat("2.2.243", "maintenance");
     await exec('UPDATE hosts SET "maintenanceMode" = 0 WHERE id = 4');
     health.invalidateRouteNodeHealth();
     // Agent 够新（2.2.251）才带 exitIp。放在最后，版本升上去不影响前面几份规格。
     const exitIpSpec = await beat("2.2.251");
+    /*
+      沿途负载（2.2.251）：老 Agent 不给；新 Agent 给，而且只是负载变了不算动作变了 —— 不重发整份期望状态，
+      新的负载跟着 runningRules 送到（Agent 每次心跳都按它原地换上提示）。
+    */
+    const beatFull = async (agentVersion) => {
+      const response = await fetch(base + "/api/agent/heartbeat", { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer tok1" }, body: JSON.stringify({ agentVersion, uptime: 10, cpuUsage: 1, memoryUsage: 1, diskUsage: 1, forceReconcile: true }) });
+      const json = await response.json();
+      const actions = (json.desiredState && json.desiredState.actions) || [];
+      const desired = actions.find((action) => action && action.failover && action.failover.enabled);
+      const running = (json.runningRules || []).find((rule) => Number(rule.ruleId) === 1 && rule.failover && rule.failover.enabled);
+      return {
+        desiredSent: !!json.desiredState,
+        desiredHash: json.desiredState ? json.desiredState.configHash : null,
+        desiredLoad: desired ? desired.failover.targets.map((target) => target.loadPct ?? null) : null,
+        runningLoad: running ? running.failover.targets.map((target) => target.loadPct ?? null) : null,
+      };
+    };
+    const hostLoad = await import(url("server/hostLoad.ts"));
+    hostLoad.recordHostLoadSample(2, { at: Date.now(), cpuUsage: 40, networkIn: null, networkOut: null }, 0);
+    const loadOldAgent = await beatFull("2.2.243");
+    const loadFirst = await beatFull("2.2.251");
+    hostLoad.recordHostLoadSample(2, { at: Date.now(), cpuUsage: 85, networkIn: null, networkOut: null }, 0);
+    const loadSecond = await beatFull("2.2.251");
     server.close();
     console.log("LINES " + JSON.stringify({
       relays, paths: storedPaths,
       expanded: { pathCount: expandedPaths.length, keys: expandedPaths.map((p) => p.key) },
       afterPool: { pathCount: afterPaths.length, relayHosts: afterRelays.map((r) => Number(r.hostId)) },
       spec, aggregateSpec, pausedSpec, maintenanceSpec, exitIpSpec,
+      load: { oldAgent: loadOldAgent, first: loadFirst, second: loadSecond },
+      deliveries,
     }));
     process.exit(0);
   `;
@@ -187,4 +219,20 @@ test("心跳：Agent 2.2.251 起每条路径带 exitIp —— 规则目标就是
   assert.ok(paused.slice(1).every((target) => target.downReason === "paused"));
   const maintenance = outcome.maintenanceSpec.targets as any[];
   assert.equal(maintenance.filter((target) => target.down && String(target.downReason).startsWith("maintenance:")).length, 1);
+  // 只是「维护中」这个提示变了：不重发整份期望状态（Agent 不会因此重新执行动作），提示跟着 runningRules 送到。
+  assert.deepEqual(outcome.deliveries.maintenance, { desiredSent: false, viaRunning: true });
+  assert.equal(outcome.deliveries.paused.viaRunning, true);
+});
+
+test("心跳：沿途负载只给 2.2.251 起的 Agent；只是负载变了不重发期望状态，新负载跟着 runningRules 送到", () => {
+  const { oldAgent, first, second } = outcome.load;
+  // 只有经 jinx（主机 2）的那条备用带负载；另外两条（隧道、HK2）的沿途主机没心跳过，不知道
+  const viaJinx = (loads: Array<number | null>) => loads.filter((load) => load !== null);
+  assert.ok(oldAgent.desiredLoad && oldAgent.desiredLoad.every((load: number | null) => load === null), `老 Agent 不该收到 loadPct：${JSON.stringify(oldAgent)}`);
+  assert.ok(oldAgent.runningLoad && oldAgent.runningLoad.every((load: number | null) => load === null), `老 Agent 的 runningRules 也不该带：${JSON.stringify(oldAgent)}`);
+  assert.equal(first.desiredSent, true, "换了 Agent 版本，规格变了，期望状态要发");
+  assert.deepEqual(viaJinx(first.desiredLoad), [40], JSON.stringify(first));
+  assert.deepEqual(viaJinx(first.runningLoad), [40], JSON.stringify(first));
+  assert.equal(second.desiredSent, false, `只是负载变了，不该重发整份期望状态：${JSON.stringify(second)}`);
+  assert.deepEqual(viaJinx(second.runningLoad), [85], `新负载要跟着 runningRules 送到：${JSON.stringify(second)}`);
 });

@@ -205,6 +205,12 @@ export const ROUTE_DEST_SPREAD_AGENT_VERSION = "2.2.245";
  */
 export const ROUTE_AUTO_SPREAD_AGENT_VERSION = "2.2.251";
 
+/**
+ * 沿途主机负载（failoverTarget.loadPct）：Agent 2.2.251 起拿它扣评分、压「自动」的权重。更老的 Agent 不认这个字段，
+ * 面板不给 —— 给了也白给，还会让下发的规格跟着负载一轮一轮地变。
+ */
+export const ROUTE_LOAD_HINT_AGENT_VERSION = "2.2.251";
+
 /** 「自动」在老 Agent 上怎么退：整组是按权重，线路里的几个落地是按负载分。 */
 export function routeSpreadForAgent<T extends string>(spread: T, fallback: T, agentAtLeast: (version: string) => boolean): T {
   if (spread !== "auto") return spread;

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"net"
@@ -337,6 +338,33 @@ func stripFailoverRelayHints(spec failoverSpec) failoverSpec {
 	}
 	spec.Targets = targets
 	return spec
+}
+
+/*
+failoverSpecSignatureJSON 动作签名（actionCommandSignature）和托管服务签名（managedServiceActionSignature）
+里的线路组规格：先去掉运行时提示再序列化。
+
+提示（中转异常、下游延迟、沿途负载、出口 IP）面板每一轮都可能换。算进这两个签名的话，提示一变 Agent 就当成
+动作变了重新执行一遍，realm / socat 这类托管服务跟着重启，正在走的连接全断。去掉之后提示照样送得到：
+runningRules 每次心跳都同步一遍（syncRunningRuleState → startFailoverProxyLocked），代理的规格签名没变就只
+原地换上提示（applyRelayHintsLocked）。
+
+没带提示的规格序列化出来和直接 json.Marshal 逐字节相同（Targets 为 nil 时保持 nil，不变成 []），
+升级后这类规格的签名不变，不会因此重做一遍。
+*/
+func failoverSpecSignatureJSON(spec *failoverSpec) (string, bool) {
+	if spec == nil {
+		return "", false
+	}
+	stripped := *spec
+	if spec.Targets != nil {
+		stripped = stripFailoverRelayHints(*spec)
+	}
+	raw, err := json.Marshal(stripped)
+	if err != nil {
+		return "", false
+	}
+	return string(raw), true
 }
 
 // 这条出站此刻能不能用：本机探测通，而且没被面板按「中转异常」标掉。

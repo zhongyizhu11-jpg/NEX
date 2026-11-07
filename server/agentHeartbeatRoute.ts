@@ -3,6 +3,7 @@ import { parseFailoverTargets } from "../shared/failoverTargets";
 import {
   ROUTE_EXIT_IP_AGENT_VERSION,
   ROUTE_GROUP_UDP_AGENT_VERSION,
+  ROUTE_LOAD_HINT_AGENT_VERSION,
   routeDeliveryStrategy,
   routeDestSpreadReady,
   routeDestSpreadTargetFields,
@@ -2132,6 +2133,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       noteRouteFirstHops(Number(rule.id), paths.map((path) => (path.hops.length > 0 ? Number(path.hops[0]) : null)));
       // UDP 回声探测（Agent 2.2.251）：发探测报的是调度那台，它也得够新（老的不认这个字段）。
       const udpEchoSchedulerReady = routeSchedulerAgentAtLeast(rule, UDP_PROBE_MIN_AGENT_VERSION);
+      // 沿途负载只给认得它的 Agent（2.2.251）。
+      const loadHintReady = routeSchedulerAgentAtLeast(rule, ROUTE_LOAD_HINT_AGENT_VERSION);
       const targets = paths.map((path) => {
         const dial = routePathDial(path, routeRule);
         const tier = tiered ? { tier: Number(path.tier) } : {};
@@ -2146,8 +2149,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         const farEnd = routePathFarEndHostId(path);
         const probeUdpEcho = udpEchoSchedulerReady
           && routeUdpEchoProbeReady({ protocol, path, farEndAgentVersion: farEnd ? routeSchedulerAgentVersions.get(farEnd) : null });
-        // 沿途主机里最忙那台的负载（0–100，整数）：Agent 2.2.251 起拿它扣评分、算「自动」的权重；老 Agent 不认这个字段。
-        const loadPct = routePathLoadHint(path);
+        // 沿途主机里最忙那台的负载（0–100，整数）：Agent 2.2.251 起拿它扣评分、算「自动」的权重；老 Agent 不给。
+        const loadPct = loadHintReady ? routePathLoadHint(path) : 0;
         const exitIp = exitIpReady ? routePathExitIp(path, routeRule, routeHostEgressIp) : "";
         return {
           targetIp: dial.ip,
@@ -2160,7 +2163,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
           ...lineSpread,
           // 入口探不到的后面几段（中继各自探的）加起来：Agent 按整条链打分。
           ...(extraLatencyMs > 0 ? { extraLatencyMs } : {}),
-          // 和 extraLatencyMs 一样是运行时提示：不进 Agent 的签名、不重建代理。
+          // 和 extraLatencyMs 一样是运行时提示：不进 Agent 的签名、不重建代理，面板也不因为它重发期望状态
+          // （server/agentDesiredStateHash.ts 的 failoverWithoutRuntimeHints），靠 runningRules 送到。
           ...(loadPct > 0 ? { loadPct } : {}),
           // 这条路径最后从哪个 IP 出去：挂了换路时 Agent 优先挑一样的（2.2.251）。
           ...(exitIp ? { exitIp } : {}),

@@ -107,8 +107,9 @@ func (p *failoverProxy) usableLocked(index int, udp bool) bool {
 /*
 主备策略下给 UDP 会话挑哪条（调用方已持有 p.mu；candidates 是按 UDP 健康过滤、分层后的候选，非空）。
 
-TCP 在走的那条 UDP 也通就用它；不通就按人工指定 > 时段表 > 数组顺序找第一条候选。不调 preferredLocked：
-它里面的自动择优会改 fastestCandidate / fastestSince，选路的热路径不该动评估状态。
+TCP 在走的那条 UDP 也通就用它；不通就按人工指定 > 时段表 > 数组顺序找第一条候选，同样够格时优先和 TCP 在走的
+那条同出口 IP 的（escapePickLocked，2.2.251）—— 同一个访客的 TCP 和 UDP 在对端看到的是同一个来源。不调
+preferredLocked：它里面的自动择优会改 fastestCandidate / fastestSince，选路的热路径不该动评估状态。
 */
 func (p *failoverProxy) udpFallbackIndexLocked(candidates []int, exclude map[int]bool) int {
 	inCandidates := func(index int) bool {
@@ -127,10 +128,17 @@ func (p *failoverProxy) udpFallbackIndexLocked(candidates []int, exclude map[int
 	if preferred < 0 {
 		preferred = failoverScheduleTargetIndexAt(p.spec.Schedule, now)
 	}
+	order := make([]int, 0, len(candidates))
 	for _, index := range p.orderFromPreferredLocked(preferred) {
 		if inCandidates(index) {
-			return index
+			order = append(order, index)
 		}
+	}
+	if pick, _ := p.escapePickLocked(order, p.activeIndex, preferred, true); pick >= 0 {
+		return pick
+	}
+	if len(order) > 0 {
+		return order[0]
 	}
 	return candidates[0]
 }

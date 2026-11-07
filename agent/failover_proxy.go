@@ -587,7 +587,7 @@ func (p *failoverProxy) pickTargetForKeyProto(hashKey string, exclude map[int]bo
 			// 当前这条用不了（挂了、或这条连接刚在它上面拨失败）：在候选里优先挑出口 IP 一样的（2.2.251），
 			// 没有就还是第一条，和以前一样。全都不健康时候选是兜底的全部，挑不出健康的，照旧第一条。
 			index = candidates[0]
-			if pick, _ := p.escapePickLocked(candidates, p.activeIndex, -1); pick >= 0 {
+			if pick, _ := p.escapePickLocked(candidates, p.activeIndex, -1, udp); pick >= 0 {
 				index = pick
 			}
 		} else {

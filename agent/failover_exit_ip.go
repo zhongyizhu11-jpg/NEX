@@ -31,13 +31,15 @@ func (p *failoverProxy) exitIPLocked(index int) string {
 /*
 escapePickLocked：当前这条（failed）用不了，按 order 的次序换哪条。
 
-返回挑中的下标（没有健康的是 -1）和「是不是因为出口 IP 一样才挑它 / 它正好和挂掉那条同出口」。
-explicit 是人工指定或时段表定的首选（-1 = 没有）：它健康就是它。调用方持有 p.mu。
+返回挑中的下标（没有能用的是 -1）和「是不是因为出口 IP 一样才挑它 / 它正好和挂掉那条同出口」。
+explicit 是人工指定或时段表定的首选（-1 = 没有）：它能用就是它。udp 为 true 按 UDP 那一侧判能不能用
+（usableLocked）—— TCP 在走的那条 UDP 不通时，UDP 会话也优先换到和它同出口的那条，同一个访客的 TCP 和 UDP
+在对端看到的是同一个来源。调用方持有 p.mu。
 */
-func (p *failoverProxy) escapePickLocked(order []int, failed int, explicit int) (int, bool) {
+func (p *failoverProxy) escapePickLocked(order []int, failed int, explicit int, udp bool) (int, bool) {
 	healthy := make([]int, 0, len(order))
 	for _, index := range order {
-		if index == failed || !p.healthyLocked(index) {
+		if index == failed || !p.usableLocked(index, udp) {
 			continue
 		}
 		healthy = append(healthy, index)
@@ -94,9 +96,10 @@ func (p *failoverProxy) escapePickLocked(order []int, failed int, explicit int) 
 /*
 一条「一起分」的线路上，这会儿用不了的落地（挂了、或这条连接拨失败过）各自的出口 IP。
 reps 是能用的落地代表。ip_hash / least_load 平手时优先挑出口 IP 在这里面的落地：原来在那个落地上的访客
-换到同出口的落地上，对端看到的来源不变。调用方持有 p.mu。
+换到同出口的落地上，对端看到的来源不变。udp 为 true 时「用不了」按 UDP 那一侧判（和挑 reps 时一样）。
+调用方持有 p.mu。
 */
-func (p *failoverProxy) lineDeadExitIPsLocked(line int, reps []int, exclude map[int]bool) map[string]bool {
+func (p *failoverProxy) lineDeadExitIPsLocked(line int, reps []int, exclude map[int]bool, udp bool) map[string]bool {
 	alive := map[string]bool{}
 	for _, index := range reps {
 		alive[p.lineLandingLocked(index)] = true
@@ -106,7 +109,7 @@ func (p *failoverProxy) lineDeadExitIPsLocked(line int, reps []int, exclude map[
 		if !p.sameLineLocked(i, line) || alive[p.lineLandingLocked(i)] {
 			continue
 		}
-		if (exclude != nil && exclude[i]) || !p.healthyLocked(i) {
+		if (exclude != nil && exclude[i]) || !p.usableLocked(i, udp) {
 			if ip := p.exitIPLocked(i); ip != "" {
 				dead[ip] = true
 			}

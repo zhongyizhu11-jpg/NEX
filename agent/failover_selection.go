@@ -296,7 +296,7 @@ func (p *failoverProxy) updateFallbackActiveAtLocked(now time.Time, reason strin
 	if source == "pin" || source == "schedule" {
 		explicit = preferred
 	}
-	if index, sameExit := p.escapePickLocked(order, p.activeIndex, explicit); index >= 0 {
+	if index, sameExit := p.escapePickLocked(order, p.activeIndex, explicit, false); index >= 0 {
 		if sameExit {
 			reason += failoverSameExitReasonSuffix
 		}

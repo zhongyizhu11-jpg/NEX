@@ -1676,6 +1676,8 @@ export async function getForwardGroupProbeTopologyForHost(hostId: number): Promi
       entryGroupId: forwardGroups.entryGroupId,
       chinaHealthCheckEnabled: forwardGroups.chinaHealthCheckEnabled,
       chinaHealthCheckTarget: forwardGroups.chinaHealthCheckTarget,
+      // 健康检查方法（TCPing / Ping / UDP）：漏取的话下面一律按 TCPing 下发，组里选的 Ping、UDP 都不生效。
+      chinaHealthCheckMethod: forwardGroups.chinaHealthCheckMethod,
       failoverSeconds: forwardGroups.failoverSeconds,
       recoverSeconds: forwardGroups.recoverSeconds,
       isEnabled: forwardGroups.isEnabled,

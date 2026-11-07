@@ -15,7 +15,26 @@ import { queryRaw } from "./dbRuntime";
 const LOAD_STALE_MS = 5 * 60 * 1000;
 const MAX_HOSTS = 10_000;
 
-type HostLoadState = { previous: HostLoadSample | null; latest: HostLoadSample; bandwidthMbps: number; loadPct: number | null };
+/*
+  下发给 Agent 的负载带回差（hint）：实际负载和上次给出去的差不到 10 个点、离上次换不到 5 分钟，就还给上次那个数。
+  CPU、带宽每次心跳都在抖，原样给的话线路组规格几乎每轮都在变 —— 每变一次面板要重发一遍 runningRules，Agent 还会
+  跟着立刻多跑一轮探测。差 10 个点以内对评分（70% 起才扣分）和「自动」的权重影响很小；慢慢漂过去的，5 分钟内也会跟上。
+*/
+const LOAD_HINT_STEP = 10;
+const LOAD_HINT_REFRESH_MS = 5 * 60 * 1000;
+
+export type HostLoadHint = { pct: number; at: number };
+
+export function nextHostLoadHint(previous: HostLoadHint | null, current: number | null, now: number): HostLoadHint | null {
+  if (current === null || !Number.isFinite(current)) return null;
+  const pct = Math.max(0, Math.min(100, Math.round(current)));
+  if (!previous) return { pct, at: now };
+  if (pct === previous.pct) return previous;
+  if (Math.abs(pct - previous.pct) >= LOAD_HINT_STEP || now - previous.at >= LOAD_HINT_REFRESH_MS) return { pct, at: now };
+  return previous;
+}
+
+type HostLoadState = { previous: HostLoadSample | null; latest: HostLoadSample; bandwidthMbps: number; loadPct: number | null; hint: HostLoadHint | null };
 
 const states = new Map<number, HostLoadState>();
 
@@ -31,7 +50,10 @@ export function recordHostLoadSample(hostId: number, sample: HostLoadSample, ban
   // 上一份太旧（机器离线了一阵）就不拿来算速率：中间那段流量平均到几分钟上没意义
   const previous = current && now - current.latest.at <= LOAD_STALE_MS ? current.latest : null;
   const bandwidth = Math.max(0, Math.floor(Number(bandwidthMbps) || 0));
-  states.set(id, { previous, latest: sample, bandwidthMbps: bandwidth, loadPct: hostLoadFromSamples(previous, sample, bandwidth) });
+  const loadPct = hostLoadFromSamples(previous, sample, bandwidth);
+  // 离线了一阵再回来时上次给出去的那个数也早过了 5 分钟，和这一次不一样就按这一次的重新给。
+  const hint = nextHostLoadHint(current?.hint ?? null, loadPct, now);
+  states.set(id, { previous, latest: sample, bandwidthMbps: bandwidth, loadPct, hint });
 }
 
 /** 这台主机此刻的负载（0–100）；不知道（没心跳、太旧、什么都没报）是 null。 */
@@ -39,6 +61,13 @@ export function hostLoadPctOf(hostId: number, now = Date.now()): number | null {
   const state = states.get(Math.floor(Number(hostId)));
   if (!state || now - state.latest.at > LOAD_STALE_MS) return null;
   return state.loadPct;
+}
+
+/** 下发给 Agent 用的负载（带回差，见 nextHostLoadHint）；不知道是 null。 */
+export function hostLoadHintPctOf(hostId: number, now = Date.now()): number | null {
+  const state = states.get(Math.floor(Number(hostId)));
+  if (!state || now - state.latest.at > LOAD_STALE_MS) return null;
+  return state.hint?.pct ?? null;
 }
 
 /*
@@ -95,11 +124,11 @@ export function landingNodeHostId(nodeId: number): number {
 }
 
 /**
- * 下发给 Agent 的 loadPct：路径沿途（中转 + 落地是 NEX 主机时）最忙那台的负载，取整；一台都不知道是 0（不带）。
- * Agent 2.2.251 起拿它扣评分、算「自动」分法的权重；更老的 Agent 不认这个字段，照旧。
+ * 下发给 Agent 的 loadPct：路径沿途（中转 + 落地是 NEX 主机时）最忙那台的负载（带回差的那个数），取整；一台都不知道是 0（不带）。
+ * Agent 2.2.251 起拿它扣评分、算「自动」分法的权重；更老的 Agent 面板不给（ROUTE_LOAD_HINT_AGENT_VERSION）。
  */
 export function routePathLoadHint(path: Pick<RoutePath, "hops"> & { destNodeId?: number | null; destHostId?: number | null }, now = Date.now()): number {
-  const load = routePathLoadPct(path, (hostId) => hostLoadPctOf(hostId, now), landingNodeHostId);
+  const load = routePathLoadPct(path, (hostId) => hostLoadHintPctOf(hostId, now), landingNodeHostId);
   return load === null ? 0 : Math.max(0, Math.min(100, Math.round(load)));
 }
 

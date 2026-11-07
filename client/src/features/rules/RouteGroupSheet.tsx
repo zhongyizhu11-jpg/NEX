@@ -99,6 +99,8 @@ export type RouteStatusPath = {
   /** UDP 那一侧的健康（Agent 2.2.251 起）；老 Agent 没报就是 null。 */
   udpHealthy?: boolean | null;
   udpLatencyMs?: number | null;
+  /** 沿途主机里最忙那台的负载（0–100，Agent 2.2.251 起回显，评分已按它扣过）；没有是 null。 */
+  loadPct?: number | null;
   down: boolean;
   downReason: string;
   connections: number | null;
