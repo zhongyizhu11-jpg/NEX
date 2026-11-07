@@ -9,7 +9,7 @@ import { createGzip } from "zlib";
 import Database from "better-sqlite3";
 import { MIGRATION_TABLES, ensureDatabaseSchema, getDatabaseTableDefs } from "./dbSchema";
 import {
-  connectDatabase,
+  getDb,
   defaultSqlitePath,
   executeRaw,
   getDatabaseKind,
@@ -262,7 +262,7 @@ export async function exportMigrationSnapshot(
     onProgress?: (progress: MigrationSnapshotExportProgress) => void;
   } = {},
 ): Promise<MigrationSnapshot> {
-  await connectDatabase();
+  await getDb();
   await ensureDatabaseSchema();
   const dataScope = normalizePanelMigrationScope(options.dataScope);
   const tables: MigrationSnapshot["tables"] = {};
@@ -679,7 +679,7 @@ async function ensurePanelSummarySchema(allowSkip: boolean) {
 }
 
 export async function getPanelDataSummary(options: { useCache?: boolean } = {}) {
-  await connectDatabase();
+  await getDb();
   await ensurePanelSummarySchema(options.useCache !== false);
   const useCache = options.useCache !== false;
   const cacheKind = getDatabaseKind();
@@ -2221,7 +2221,7 @@ export async function importMigrationSnapshot(
   const onProgress = typeof options === "function" ? options : options.onProgress;
   const targetPanelUrl = typeof options === "function" ? undefined : options.targetPanelUrl;
   const onImportedIds = typeof options === "function" ? undefined : options.onImportedIds;
-  await connectDatabase();
+  await getDb();
   await ensureDatabaseSchema();
   if (!snapshot || snapshot.version !== 1 || !snapshot.tables || typeof snapshot.tables !== "object") {
     throw new Error("迁移数据格式无效");
@@ -2573,7 +2573,7 @@ async function cancelPanelMigrationAnnouncement() {
 }
 
 async function markPanelAsMigrated(targetPanelUrl: string) {
-  await connectDatabase();
+  await getDb();
   await ensureDatabaseSchema();
   const normalized = normalizePanelUrl(targetPanelUrl);
   await setSetting("migratedToPanelUrl", normalized);
@@ -3111,7 +3111,7 @@ migrationRouter.post("/api/migration/target-probe", async (req: Request, res: Re
       res.status(404).json({ error: "迁移验证任务不存在" });
       return;
     }
-    await connectDatabase();
+    await getDb();
     await ensureDatabaseSchema();
     await queryRaw("SELECT 1 AS healthy");
     res.json({ success: true, jobId, appVersion: APP_VERSION, database: "ready" });
