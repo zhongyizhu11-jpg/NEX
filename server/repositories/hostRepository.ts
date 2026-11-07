@@ -29,6 +29,7 @@ import {
   users,
 } from "../../drizzle/schema";
 import { afterDatabaseCommit, executeRaw, getDb, insertAndGetId, nowDate, queryRaw, rawAffectedRows, refreshDatabasePoolSettings, withDatabaseTransaction } from "../dbRuntime";
+import { flushPendingWrites } from "../dbWriteBatcher";
 import { boolValue, inList, quoteIdentifier, sqlCountAll } from "../dbCompat";
 import { recordRuleEntryDomainCleanupsBeforeDelete } from "./ruleEntryDomainRepository";
 import { signalRuleEntryDomainCleanup } from "../ruleEntryDomainSignals";
@@ -760,6 +761,8 @@ export async function reorderVisibleHostsForUser(ids: number[], userId: number, 
 export async function deleteHost(id: number) {
   const db = await getDb();
   if (!db) return;
+  // 这台主机攒着没写的探测样本先落库，随后一起删掉。
+  await flushPendingWrites();
   const before = await getHostById(id).catch(() => undefined);
   await repairPortForwardRuleHostReferences();
   /**

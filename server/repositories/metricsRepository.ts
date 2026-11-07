@@ -13,6 +13,7 @@ import {
   forwardGroupLatencyStats, InsertForwardGroupLatencyStat,
 } from "../../drizzle/schema";
 import { executeRaw, getDb, getDatabaseKind, nowDate, queryRaw, rawAffectedRows, withDatabaseTransaction } from "../dbRuntime";
+import { defineBatchedWrite } from "../dbWriteBatcher";
 import { boolLiteral, bucketExpression, limitOffset, quoteIdentifier } from "../dbCompat";
 import { isRuleProbeUnreachable } from "../../shared/linkProbePolicy";
 import { clampPositiveInt, epochSeconds, sqlBool } from "./repositoryUtils";
@@ -1181,6 +1182,9 @@ export async function getTrafficStats(ruleId: number, limit = 60) {
 }
 
 export async function resetRuleTrafficStats(ruleIds: number[]) {
+  // 攒着没写的延迟样本先落库，不然重置之后它们才写进去，像是没删干净。
+  await tcpingStatWrites.flush();
+  await forwardGroupLatencyStatWrites.flush();
   const db = await getDb();
   if (!db) return { requestedRuleIds: [], clearedRuleIds: [], deletedStats: 0, deletedBuckets: 0, deletedCounters: 0, deletedTcping: 0, deletedForwardTests: 0, deletedGroupLatency: 0 };
   const requestedRuleIds = Array.from(new Set(ruleIds
@@ -2481,6 +2485,8 @@ export async function getTrafficSummaryByRule(opts: {
     ...Array.from(parentChainChildren.values()).flat(),
   ]));
   const q = quoteIdentifier;
+  // 最新延迟要算上攒着没写的 TCPing 样本：上报之后会清掉这份汇总的缓存，紧接着重算的要是新的
+  if (latencyRuleIds.length > 0) await tcpingStatWrites.flush();
   const latestRows = latencyRuleIds.length > 0
     ? await queryRaw<any>(
       `SELECT s.${q("ruleId")} AS ${q("ruleId")},
@@ -2918,20 +2924,52 @@ export async function getGlobalTrafficSeries(opts: { bucketMinutes?: number; sin
 
 // ==================== TCPing Stats ====================
 
-export async function insertTcpingStat(stat: InsertTcpingStat) {
+/*
+  三张延迟历史表的行都攒批写（server/dbWriteBatcher.ts）：Agent 每轮上报一条规则 / 一条隧道
+  一行，攒 2 秒一个事务写完。行里的 recordedAt 在排队时就定下来，不用库里的默认值 ——
+  否则晚 2 秒落库的样本时间也晚 2 秒。读这几张表的查询先刷再查，见下面各个 getXxx。
+*/
+const TCPING_STATS_WRITE_QUEUE = "tcping_stats";
+const TUNNEL_LATENCY_STATS_WRITE_QUEUE = "tunnel_latency_stats";
+const FORWARD_GROUP_LATENCY_STATS_WRITE_QUEUE = "forward_group_latency_stats";
+
+const tcpingStatWrites = defineBatchedWrite<InsertTcpingStat>(TCPING_STATS_WRITE_QUEUE, async (rows) => {
   const db = await getDb();
   if (!db) return;
-  await db.insert(tcpingStats).values(withProbeCounts(stat) as InsertTcpingStat);
+  await db.insert(tcpingStats).values(rows);
+});
+const tunnelLatencyStatWrites = defineBatchedWrite<InsertTunnelLatencyStat>(TUNNEL_LATENCY_STATS_WRITE_QUEUE, async (rows) => {
+  const db = await getDb();
+  if (!db) return;
+  await db.insert(tunnelLatencyStats).values(rows);
+});
+const forwardGroupLatencyStatWrites = defineBatchedWrite<InsertForwardGroupLatencyStat>(FORWARD_GROUP_LATENCY_STATS_WRITE_QUEUE, async (rows) => {
+  const db = await getDb();
+  if (!db) return;
+  await db.insert(forwardGroupLatencyStats).values(rows);
+});
+
+function withRecordedAt<T extends { recordedAt?: Date | null }>(row: T, now: Date): T {
+  return row.recordedAt ? row : { ...row, recordedAt: now };
+}
+
+export async function insertTcpingStat(stat: InsertTcpingStat) {
+  await insertTcpingStats([stat]);
 }
 
 export async function insertTcpingStats(stats: InsertTcpingStat[]) {
   const db = await getDb();
   if (!db) return;
   if (stats.length === 0) return;
-  await db.insert(tcpingStats).values(stats.map((stat) => withProbeCounts(stat)) as InsertTcpingStat[]);
+  const now = nowDate();
+  await tcpingStatWrites.push(stats.map((stat) => withRecordedAt(withProbeCounts(stat) as InsertTcpingStat, now)));
 }
 
-/** Insert a tunnel latency sample and update latest tunnel test state. */
+/**
+ * Insert a tunnel latency sample and update latest tunnel test state.
+ * 历史行攒批写；隧道上的「最近一次测试」几列和 notifyTunnelLatencyRefresh 立刻做 —— 链路卡、
+ * 隧道详情靠它们刷新，不能等 2 秒。
+ */
 export async function insertTunnelLatencyStat(
   stat: InsertTunnelLatencyStat,
   options: { message?: string | null; preserveMessage?: boolean; updateTunnel?: boolean } = {},
@@ -2939,7 +2977,7 @@ export async function insertTunnelLatencyStat(
   const db = await getDb();
   if (!db) return;
   const normalizedStat = withProbeCounts(stat) as InsertTunnelLatencyStat;
-  await db.insert(tunnelLatencyStats).values(normalizedStat);
+  await tunnelLatencyStatWrites.push(withRecordedAt(normalizedStat, nowDate()));
   const seriesKey = String((stat as any).seriesKey || "").trim().toLowerCase();
   if (!seriesKey || seriesKey === "total") notifyTunnelLatencyRefresh(stat.tunnelId);
   if (options.updateTunnel === false) return;
@@ -2969,6 +3007,7 @@ export async function insertTunnelLatencyStat(
 }
 
 export async function getLatestTunnelLatencies(tunnelIds: number[]) {
+  await tunnelLatencyStatWrites.flush();
   const db = await getDb();
   const ids = Array.from(new Set(tunnelIds
     .map((id) => Number(id))
@@ -3016,6 +3055,7 @@ function tunnelLatencySeriesSortRank(key: string) {
 }
 
 export async function getLatestTunnelLatencySeries(tunnelIds: number[]) {
+  await tunnelLatencyStatWrites.flush();
   const db = await getDb();
   const ids = Array.from(new Set(tunnelIds
     .map((id) => Number(id))
@@ -3074,6 +3114,7 @@ export async function getLatestTunnelLatencySeries(tunnelIds: number[]) {
 }
 
 export async function getTunnelLatencyBranchSeriesForTotal(tunnelId: number, totalId: number) {
+  await tunnelLatencyStatWrites.flush();
   const db = await getDb();
   const normalizedTunnelId = Number(tunnelId);
   const normalizedTotalId = Number(totalId);
@@ -3132,6 +3173,7 @@ export async function getTunnelLatencySeries(
   tunnelId: number,
   opts: { since?: Date; limit?: number } = {}
 ) {
+  await tunnelLatencyStatWrites.flush();
   const db = await getDb();
   if (!db) return [] as Array<{ latencyMs: number | null; isTimeout: boolean; probeCount: number; probeSuccesses: number; recordedAt: Date; seriesKey: string; seriesLabel: string | null }>;
   const since = opts.since ?? new Date(Date.now() - 24 * 60 * 60 * 1000);
@@ -3176,6 +3218,7 @@ export async function getTunnelLatencySparkBatch(
   tunnelIds: number[],
   opts: { since?: Date; bucketMinutes?: number; userId?: number } = {},
 ) {
+  await tunnelLatencyStatWrites.flush();
   const db = await getDb();
   const ids = [...new Set(tunnelIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0))];
   if (!db || ids.length === 0) return [] as Array<{ tunnelId: number; bucket: Date; avgMs: number; maxMs: number; samples: number; attempts: number }>;
@@ -3219,13 +3262,14 @@ export async function getTunnelLatencySparkBatch(
 export async function insertForwardGroupLatencyStat(stat: InsertForwardGroupLatencyStat) {
   const db = await getDb();
   if (!db) return;
-  await db.insert(forwardGroupLatencyStats).values(withProbeCounts(stat) as InsertForwardGroupLatencyStat);
+  await forwardGroupLatencyStatWrites.push(withRecordedAt(withProbeCounts(stat) as InsertForwardGroupLatencyStat, nowDate()));
 }
 
 export async function getForwardGroupLatencySeries(
   groupId: number,
   opts: { since?: Date; limit?: number } = {}
 ) {
+  await forwardGroupLatencyStatWrites.flush();
   const db = await getDb();
   if (!db) return [] as Array<{ latencyMs: number | null; isTimeout: boolean; probeCount: number; probeSuccesses: number; recordedAt: Date }>;
   const since = opts.since ?? new Date(Date.now() - 24 * 60 * 60 * 1000);
@@ -3257,6 +3301,7 @@ export async function getTcpingSeriesByRule(
   ruleId: number,
   opts: { since?: Date; limit?: number } = {}
 ) {
+  await tcpingStatWrites.flush();
   const db = await getDb();
   if (!db) return [] as Array<{ latencyMs: number | null; isTimeout: boolean; probeCount: number; probeSuccesses: number; recordedAt: Date }>;
   const since = opts.since ?? new Date(Date.now() - 24 * 60 * 60 * 1000);
@@ -3428,6 +3473,7 @@ export async function getUnreachableRuleIds(ruleIds: number[], now = Date.now())
   const ids = Array.from(new Set(ruleIds.map(Number).filter((id) => Number.isInteger(id) && id > 0)));
   const result = new Set<number>();
   if (ids.length === 0) return result;
+  await tcpingStatWrites.flush();
   const q = quoteIdentifier;
   const since = new Date(now - 15 * 60 * 1000);
   const rows = await queryRaw<any>(
@@ -3452,6 +3498,7 @@ export async function getUnreachableRuleIds(ruleIds: number[], now = Date.now())
 
 /** Aggregate global TCPing latency trend by time bucket. */
 export async function getGlobalTcpingSeries(opts: { bucketMinutes?: number; since?: Date; userId?: number } = {}) {
+  await tcpingStatWrites.flush();
   const db = await getDb();
   if (!db) return [] as Array<{ bucket: Date; avgLatency: number; maxLatency: number; minLatency: number; timeoutCount: number; totalCount: number }>;
   const bucket = clampPositiveInt(opts.bucketMinutes, 1, 60);

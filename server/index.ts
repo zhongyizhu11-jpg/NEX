@@ -37,6 +37,7 @@ import { discordAuthRouter } from "./discordAuthRoute";
 import { databaseRequestErrorHandler, databaseUnavailableApiGuard, registerDatabaseHealthRoutes } from "./databaseHealthRoutes";
 import { startDatabaseHealthMonitor } from "./databaseHealthMonitor";
 import { startPerfSamplerFromEnv } from "./perfSampler";
+import { installWriteBatcherShutdownHooks } from "./dbWriteBatcher";
 
 installPanelLogger();
 startPerfSamplerFromEnv();
@@ -174,6 +175,8 @@ async function startServer() {
 
   await runStartupStep("panel-clock", () => initializePanelClock());
   const databaseStatus = await runStartupStep("database", () => initDatabase());
+  // 退出（docker stop / systemctl stop）前把攒着没写的探测样本写进库，见 server/dbWriteBatcher.ts。
+  installWriteBatcherShutdownHooks();
 
   const app = express();
   app.set("trust proxy", resolveTrustProxySetting(ENV.trustProxy));

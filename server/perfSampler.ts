@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { enableStatementFingerprints, takeDatabaseStatementStats } from "./dbStatementStats";
+import { getWriteBatcherStats } from "./dbWriteBatcher";
 
 /*
   压测采样（只在设置了 FORWARDX_PERF_SAMPLE_FILE 时打开，平时什么也不做）。
@@ -8,7 +9,8 @@ import { enableStatementFingerprints, takeDatabaseStatementStats } from "./dbSta
   每隔 FORWARDX_PERF_SAMPLE_INTERVAL_MS（默认 5 秒）往文件里追加一行 JSON：
     - 进程 CPU（用户态 / 内核态，微秒增量）、RSS、堆；
     - 事件循环延迟（monitorEventLoopDelay 的 p50 / p99 / max，毫秒）和事件循环占用率；
-    - 这段时间里数据库读 / 写 / 其它语句的条数和耗时，以及跑得最多的语句（按指纹归并）。
+    - 这段时间里数据库读 / 写 / 其它语句的条数和耗时，以及跑得最多的语句（按指纹归并）；
+    - 探测样本攒批写的累计计数（排队 / 写出 / 丢弃 / 刷了几次，server/dbWriteBatcher.ts）。
   monoUs 是单调时钟（和 --cpu-prof 生成的 .cpuprofile 里的时间同一个时钟），
   scripts/bench/heartbeat-load.mjs 用它把 CPU 剖析截到压测的时间窗口里。
 
@@ -57,6 +59,7 @@ export function startPerfSamplerFromEnv(env: NodeJS.ProcessEnv = process.env) {
         utilization: Math.round(elu.utilization * 1000) / 1000,
       },
       db: takeDatabaseStatementStats(25),
+      writeBatcher: getWriteBatcherStats(),
     });
     histogram.reset();
     lastCpu = process.cpuUsage();

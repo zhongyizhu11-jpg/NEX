@@ -70,6 +70,8 @@ test("group rule tests follow active host/tunnel members and persist their selec
       assert.equal((await state(first.id)).status, "success");
       assert.equal((await db.getLatestForwardTest(100, { includeActive: false })).id, first.id);
       assert.equal(utils.parseSelfTestMeta((await state(first.id)).requestMessage).runtimeRuleId, 120);
+      // 自测写的 TCPing 样本走攒批（server/dbWriteBatcher.ts），直接查表之前先刷
+      await (await mod("server/dbWriteBatcher.ts")).flushPendingWrites("tcping_stats");
       assert.equal((await runtime.queryRaw('SELECT "hostId" FROM "tcping_stats" WHERE "ruleId" = 100'))[0].hostId, 2);
 
       const unauthorized = selfTestRulesRouter.createCaller({ user: { id: 9, role: "user" }, req: { headers: {} }, res: {} });

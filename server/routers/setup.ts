@@ -21,6 +21,7 @@ import {
   withDatabaseTransaction,
   writeDatabaseConfig,
 } from "../dbRuntime";
+import { flushPendingWrites } from "../dbWriteBatcher";
 import { countAll, quoteIdentifier } from "../dbCompat";
 import { createInitialAdmin, hasAdminUser, updateInitialAdmin } from "../db";
 import { getAllSettings, setSettings } from "../repositories/settingsRepository";
@@ -311,6 +312,7 @@ async function saveDatabase(input: DatabaseConfig) {
   await testDatabaseConnection(input);
   writeDatabaseConfig(input);
   if (getSchemaDialect() !== input.type) {
+    await flushPendingWrites();
     await closeDatabase();
     setTimeout(() => process.exit(0), 800);
     return {

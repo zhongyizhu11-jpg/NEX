@@ -22,6 +22,7 @@ import {
   type TopologyTunnelRow,
 } from "../shared/networkTopology";
 import { getDb, queryRaw } from "./dbRuntime";
+import { flushPendingWrites } from "./dbWriteBatcher";
 import { quoteIdentifier } from "./dbCompat";
 import { getLinkAccessScope } from "./linkAccessView";
 import { createQueryCache } from "./queryCache";
@@ -52,6 +53,7 @@ export type TopologyGraphResponse = TopologyGraph & {
 };
 
 async function latestRuleLatencies(): Promise<Map<number, number | null>> {
+  await flushPendingWrites("tcping_stats");
   const q = quoteIdentifier;
   const since = Math.floor(Date.now() / 1000) - RULE_LATENCY_WINDOW_SECONDS;
   const rows = await queryRaw<{ ruleId: unknown; latencyMs: unknown; isTimeout: unknown }>(
