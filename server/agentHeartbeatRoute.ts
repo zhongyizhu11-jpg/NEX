@@ -181,6 +181,7 @@ import { recordHostRestartEvent } from "./ops/eventHooks";
 import { observeHostHealthCounters, observeHostResourceSample } from "./resourceAlertNotifier";
 import { buildForwardRateTiers, forwardRateTiersForAgent, mbpsToBytesPerSecond, strictestForwardRate } from "../shared/forwardRateLimit";
 import { buildAgentSniInbounds, isSniRuntimeRule, recordTlsInboundRuntimeStatus, sniRuleRuntimeView } from "./tlsInboundRuntime";
+import { recordAgentRuntimeStats } from "./ops/agentRuntime";
 import { evaluateRuleEgress, loadEgressRuntimeContext, ruleEgressRuntimeView, tunnelEgressDialHostIdsOf } from "./ssEgress";
 import { normalizeRuleEgressType, parseAgentCapabilities, ruleEgressStateBlocksDelivery } from "../shared/ssEgress";
 import { hostSupportsGostApiSync } from "../shared/gostRuntimeApi";
@@ -427,6 +428,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         }
         const panelMigration = await getPanelMigrationAgentDirective(logHostId);
         const coalescedRequestLocalState = !!normalizeRuntimeStateSignature(req.body?.localStateSignature);
+        const coalescedRetrySeconds = agentHeartbeatGate.retryHintSeconds(logHostId);
         logAgentHeartbeatSummary({
           hostId: logHostId,
           hostName: logHostName,
@@ -440,13 +442,13 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
           requestLocalState: coalescedRequestLocalState,
           coalesced: true,
           stable: false,
-          nextInterval: 5,
+          nextInterval: coalescedRetrySeconds,
         });
         res.json({
           success: true,
           actions: [],
           selfTests: [],
-          nextInterval: 5,
+          nextInterval: coalescedRetrySeconds,
           requestLocalState: coalescedRequestLocalState,
           compactReports: true,
           presenceSupported: true,
@@ -529,6 +531,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     const mimicEnvironment = normalizeMimicEnvironment(req.body?.mimicEnvironment);
     // 共享 TLS 入站的监听状态随心跳带上来（不另开上报路径），只存内存，主机详情里显示。
     if (Array.isArray(req.body?.sniInbounds)) recordTlsInboundRuntimeStatus(Number(host.id), req.body.sniInbounds);
+    // Agent 进程自己的运行状况（内存 / 协程 / GC / UDP 会话 / AES），同样只存内存（ops/agentRuntime.ts）。
+    recordAgentRuntimeStats(Number(host.id), req.body?.agentRuntime);
     const fxpEndpointEvents = Array.isArray(req.body?.fxpEndpointEvents) ? req.body.fxpEndpointEvents.slice(0, 256) : [];
     for (const rawEvent of fxpEndpointEvents) {
       const tunnelId = Math.max(0, Math.floor(Number(rawEvent?.tunnelId || 0)));
@@ -4972,7 +4976,22 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     const ruleByIdForDesired = new Map((rules as any[]).map((rule: any) => [Number(rule.id), rule]));
     const desiredKnownRunning = (action: any) => {
       if (action?.op === "remove") return true;
-      if (action?.statusType === "runtime") return false;
+      /*
+        V2 隧道的 WireGuard 运行时动作：本机报上来的 localState 里有这条隧道的数据面（kernel / netstack），
+        就是已经在跑。原来所有 runtime 动作一律算「没在跑」，于是每台 V2 隧道两端的主机：
+          - 每次心跳都有待办，永远走不上稳定快路径，每次都整份重算期望状态；
+          - 期望状态每 60 秒整份重发一遍；
+          - 重连后的恢复进度永远差一条（「恢复中 23/24」），每次心跳还要写一次库。
+        配置变了动作内容就变，照样立刻下发（shouldSendDesiredState 比的是不含 knownRunning 的签名）；
+        Agent 对 runtime 动作不看 knownRunning，按自己的记录决定要不要重做，所以这里改成 true 不影响下发。
+      */
+      if (action?.statusType === "runtime") {
+        return action?.op === "apply"
+          && String(action?.forwardType || "") === "forwardx-wireguard"
+          && hasReportedRuntimeState
+          && Number(action?.tunnelId || 0) > 0
+          && !!getHostWireGuardPlane(Number(action.tunnelId), Number(host.id));
+      }
       const ruleId = Number(action?.ruleId || 0);
       if (ruleId > 0) {
         const rule = ruleByIdForDesired.get(ruleId) as any;
@@ -5110,9 +5129,19 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       metricsWatching: isHostMetricsWatching(host.id),
       serviceProbeIntervals: hostProbeServices.map((service: any) => service?.intervalSeconds),
     });
+    const desiredStateHash = stableDesiredStateHash(orderedActions, desiredStatePieceByAction);
+    /*
+      Agent 报上来的「已执行的期望状态摘要」和这一份对不上：它手里不是最新的。常见的是摘要里含
+      knownRunning，规则 / 隧道刚跑起来那一下摘要就变了，可动作内容（下发签名）没变，不会重发；
+      也可能是上一份推送丢了。稳定快路径要求两边摘要一致，对不上就一直走完整对账、一直对不上。
+      所以 Agent 落后时也重发一份，和有待办时一样最多 60 秒一次。不报摘要的旧 Agent 不受影响。
+    */
+    const agentBehindDesiredState = supportsStateSignatures
+      && !!agentLastAppliedHash
+      && agentLastAppliedHash.toLowerCase() !== desiredStateHash;
     const sendDesiredState = supportsDesiredState
       && !deferActionsForLocalState
-      && shouldSendDesiredState(Number(host.id), orderedActions, activeWorkActions, responseIssuedAt, configRevision);
+      && shouldSendDesiredState(Number(host.id), orderedActions, activeWorkActions, responseIssuedAt, configRevision, agentBehindDesiredState);
     if (sendDesiredState) {
       for (const action of orderedActions) {
         const statusKey = agentStatusOrderingKey(Number(host.id), action);
@@ -5121,7 +5150,6 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         agentStatusOrderGuard.expect(statusKey, action.issuedAt, responseIssuedAt);
       }
     }
-    const desiredStateHash = stableDesiredStateHash(orderedActions, desiredStatePieceByAction);
     const desiredState = sendDesiredState ? {
       version: 1,
       issuedAt: actionBatchIssuedAt,

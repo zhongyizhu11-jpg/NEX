@@ -230,7 +230,7 @@ const (
 	protocolGuardTLSMinRecordSize = 64
 	protocolGuardSOCKS5MaxMethods = 16
 	fxpMasterContext              = "forwardx-fxp-v2 master"
-	fxpRuntimeVersion             = "2.2.138"
+	fxpRuntimeVersion             = "2.2.139"
 	fxpFallbackRetry              = 5 * time.Second
 	// A node that stays down is re-probed on a growing delay, because probing a
 	// peer that accepts but never answers costs a whole handshake timeout.
@@ -2054,10 +2054,11 @@ var errSecurePeerVanished = errors.New("fxp peer closed without end-of-stream")
 
 func copyPlainToSecureWithPolicy(dst frameConn, src net.Conn, limiter *limiter, counter *atomic.Uint64, policy protocolPolicy, onBlock func(string), initialSample []byte) error {
 	// 一次读两帧的量：内核里攒着的有多少拿多少，读到多少立刻封帧写出，超过一帧
-	// 就切成几帧合成一次 write。没有攒着等的环节，小写不会被耽搁。
+	// 就切成几帧合成一次 write。没有攒着等的环节，小写不会被耽搁。读到大块时
+	// 交给另一个协程去封帧写出、这边接着读（copy_pipeline.go）。
 	buf := getFXPByteBuffer(fxpCopyReadSize)
-	defer putFXPByteBuffer(buf)
-	var frames [fxpCopyBatchFrames][]byte
+	defer func() { putFXPByteBuffer(buf) }()
+	sealer := newFXPSealPipeline(dst, src, counter)
 	sample := make([]byte, 0, fxpProtocolSampleMax)
 	initialSample = trimLeadingHTTPBlankLines(initialSample)
 	if len(initialSample) > 0 {
@@ -2087,32 +2088,32 @@ func copyPlainToSecureWithPolicy(dst frameConn, src net.Conn, limiter *limiter, 
 	}
 	for {
 		n, err := src.Read(buf)
+		if failure := sealer.failure(); failure != nil {
+			// 写出协程写隧道失败了（它把读超时设到了现在，Read 才回来）。
+			sealer.abandon()
+			return failure
+		}
 		if n > 0 {
 			chunk := buf[:n]
 			if proto, blocked := inspect(chunk); blocked {
+				sealer.abandon()
 				if onBlock != nil {
 					go onBlock(proto)
 				}
 				return fmt.Errorf("protocol blocked: %s", proto)
 			}
 			limiter.wait(n)
-			batch := frames[:0]
-			for len(chunk) > fxpCopyChunkSize {
-				batch = append(batch, chunk[:fxpCopyChunkSize])
-				chunk = chunk[fxpCopyChunkSize:]
-			}
-			batch = append(batch, chunk)
-			if wErr := dst.writeFrames(batch...); wErr != nil {
+			var wErr error
+			if buf, wErr = sealer.write(buf, n); wErr != nil {
+				sealer.abandon()
 				return wErr
-			}
-			if counter != nil {
-				counter.Add(uint64(n))
 			}
 		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				return dst.writeFrame(nil)
+				return sealer.finish()
 			}
+			sealer.abandon()
 			return err
 		}
 	}
@@ -2120,9 +2121,17 @@ func copyPlainToSecureWithPolicy(dst frameConn, src net.Conn, limiter *limiter, 
 
 func copySecureToPlain(dst net.Conn, src frameConn, limiter *limiter, counter *atomic.Uint64) error {
 	var scratch [fxpFrameBatchMax][]byte
+	// 大批交给另一个协程写到明文侧，这边接着收下一批、解密（copy_pipeline.go）。
+	writer := newFXPPlainPipeline(dst, src, counter)
 	for {
 		frames, err := src.readFrames(scratch[:0], fxpFrameBatchMax)
+		if failure := writer.failure(); failure != nil {
+			// 写明文侧失败了（写出协程关掉了隧道，readFrames 才回来）。
+			writer.abandon()
+			return failure
+		}
 		if err != nil {
+			writer.abandon()
 			if errors.Is(err, io.EOF) {
 				// 正常结束是一个空帧（下面那个分支）。没等到空帧就读到 EOF，是上一跳
 				// 直接断了（进程崩溃、连接被掐）：整条会话一起收掉。以前当成正常结束，
@@ -2144,30 +2153,19 @@ func copySecureToPlain(dst net.Conn, src frameConn, limiter *limiter, counter *a
 			limiter.wait(total)
 			// 往明文侧（入口的客户端、出口的目标）发的字节走主机公网出口整形。
 			linkShaperEgress().wait(total)
-			if err := writePlainFrames(dst, frames); err != nil {
+			if err := writer.write(frames, total); err != nil {
+				writer.abandon()
 				return err
-			}
-			if counter != nil {
-				counter.Add(uint64(total))
 			}
 		}
 		if ended {
+			if err := writer.finish(); err != nil {
+				return err
+			}
 			closeWriteConn(dst)
 			return nil
 		}
 	}
-}
-
-// writePlainFrames 把一批帧写到明文侧：一帧就直接写，几帧就 writev 一次写出
-// （net.Buffers 在 TCP 连接上走 writev，其它连接退化成逐帧写）。
-func writePlainFrames(dst net.Conn, frames [][]byte) error {
-	if len(frames) == 1 {
-		_, err := dst.Write(frames[0])
-		return err
-	}
-	buffers := net.Buffers(frames)
-	_, err := buffers.WriteTo(dst)
-	return err
 }
 
 type limiter struct {
@@ -2193,6 +2191,11 @@ func newLimiter(rate int64) *limiter {
 
 func (l *limiter) wait(n int) {
 	_ = l.waitDone(nil, n)
+}
+
+// unlimited：不限速，waitDone 从不等待。UDP 的发送协程据此决定能不能把一批包攒起来一次发。
+func (l *limiter) unlimited() bool {
+	return l == nil || l.rate <= 0
 }
 
 func (l *limiter) waitDone(done <-chan struct{}, n int) bool {

@@ -19,6 +19,9 @@ export type ProxySubTokenFailureReason =
   | "disabled"
   | "token-expired"
   | "not-eligible"
+  | "account-expired"
+  | "traffic-exhausted"
+  | "balance-insufficient"
   | "rate-limited"
   | "device-limit"
   | "hwid-required"
@@ -28,7 +31,11 @@ export const PROXY_SUB_TOKEN_FAILURE_LABELS: Record<ProxySubTokenFailureReason, 
   disabled: "这条地址被停用了",
   "token-expired": "这条地址已过期",
   // 到期、超流量、被收回权限，落到客户端都是同一件事：拉不到。
-  "not-eligible": "账号没有订阅资格（到期、超流量或权限被收回）",
+  "not-eligible": "账号没有订阅资格（被停用或订阅权限被收回）",
+  // 下面三种原来都算在 not-eligible 里；分开写，客户和商家一眼知道是去续费、充值还是加流量。
+  "account-expired": "账号已到期",
+  "traffic-exhausted": "流量已用完",
+  "balance-insufficient": "余额不足，按量计费已暂停",
   "rate-limited": "拉得太频繁，被限流了",
   "device-limit": "设备数已达上限",
   "hwid-required": "客户端没带设备标识（严格模式下不放行）",

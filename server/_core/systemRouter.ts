@@ -1,4 +1,5 @@
 import { resolveSiteTitle } from "../../shared/brand";
+import { undecryptableSecretSettingLabels } from "../settingsEncryption";
 import { router, publicProcedure, protectedProcedure, adminProcedure } from "./trpc";
 import { githubRepoParts } from "../../shared/githubAccelerator";
 import { updateMultiDeviceLoginSettingCache } from "./context";
@@ -1722,6 +1723,7 @@ function publicSystemSettings(all: Record<string, string | null>, activeProtocol
     twoFactorEnabled: all.twoFactorEnabled === "true",
     lookingGlassUserEnabled: all.lookingGlassUserEnabled !== "false",
     allowMultiDeviceLogin: all.allowMultiDeviceLogin === "true",
+    loginNewDeviceNotify: all.loginNewDeviceNotify !== "false",
     pluginsEnabled: all.pluginsEnabled === "true",
     publicHostMonitor: {
       enabled: all.publicHostMonitorEnabled === "true",
@@ -1871,6 +1873,7 @@ export const systemRouter = router({
       // 工单总开关：关了普通用户侧边栏不显示「工单」（server/routers/tickets.ts）。
       ticketsEnabled: all.ticketsEnabled !== "false",
       allowMultiDeviceLogin: all.allowMultiDeviceLogin === "true",
+      loginNewDeviceNotify: all.loginNewDeviceNotify !== "false",
       pluginsEnabled: all.pluginsEnabled === "true",
       updateAutoCheckEnabled: isUpdateAutoCheckEnabled(all),
       // 登录页据此显示「使用 Google 登录」：开关开着、客户端 ID / 密钥和面板公开地址都配好了才算。
@@ -1937,6 +1940,8 @@ export const systemRouter = router({
       },
       webPort: getPublicWebPort(),
       webPortManagement: getWebPortManagement(),
+      // 解不开的密钥类设置（数据库被拷到了 JWT_SECRET 不同的机器上），设置页提示重新填写，见 server/settingsEncryption.ts。
+      undecryptableSecretSettings: undecryptableSecretSettingLabels(),
       registrationEnabled: all.registrationEnabled !== "false",
       authCaptchaEnabled: all.authCaptchaEnabled !== "false",
       twoFactorEnabled: all.twoFactorEnabled === "true",
@@ -2178,6 +2183,7 @@ export const systemRouter = router({
         twoFactorEnabled: z.boolean().optional(),
         lookingGlassUserEnabled: z.boolean().optional(),
         allowMultiDeviceLogin: z.boolean().optional(),
+        loginNewDeviceNotify: z.boolean().optional(),
         updateAutoCheckEnabled: z.boolean().optional(),
         pluginsEnabled: z.boolean().optional(),
         publicHostMonitor: z.object({
@@ -2346,6 +2352,10 @@ export const systemRouter = router({
       if (input.lookingGlassUserEnabled !== undefined) {
         await db.setSetting("lookingGlassUserEnabled", input.lookingGlassUserEnabled ? "true" : "false");
         console.info(`[Settings] network test for users ${input.lookingGlassUserEnabled ? "enabled" : "disabled"}`);
+      }
+      if (input.loginNewDeviceNotify !== undefined) {
+        await db.setSetting("loginNewDeviceNotify", input.loginNewDeviceNotify ? "true" : "false");
+        console.info(`[Settings] new-device login alerts ${input.loginNewDeviceNotify ? "enabled" : "disabled"}`);
       }
       if (input.allowMultiDeviceLogin !== undefined) {
         await db.setSetting("allowMultiDeviceLogin", input.allowMultiDeviceLogin ? "true" : "false");

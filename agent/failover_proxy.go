@@ -328,7 +328,7 @@ func startFailoverProxyLocked(ruleID int, sourcePort int, spec failoverSpec, act
 	var udpConn net.PacketConn
 	var err error
 	if protocol != "udp" {
-		ln, err = net.Listen("tcp", addr)
+		ln, err = listenTCPForRelay(addr)
 	}
 	if err == nil && protocol != "tcp" {
 		udpConn, err = net.ListenPacket("udp", addr)

@@ -603,7 +603,7 @@ func (s *fxpUDPFECRecvStream) remember(id fxpUDPFECMemberID, wire []byte) {
 
 // read 替代 conn.ReadFromUDPAddrPort：先交还原出来的包；冗余包自己吃掉；记下属于
 // 有冗余的流的线上包。返回的地址没有规整，和 ReadFromUDPAddrPort 一样。
-func (f *fxpUDPFEC) read(conn *net.UDPConn, buf []byte) (int, netip.AddrPort, error) {
+func (f *fxpUDPFEC) read(conn fxpUDPPacketReader, buf []byte) (int, netip.AddrPort, error) {
 	if f == nil {
 		return conn.ReadFromUDPAddrPort(buf)
 	}

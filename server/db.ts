@@ -17,13 +17,14 @@ import { randomAvataaarsValue } from "../shared/avatar";
 import { migrateLegacyUserAvatars } from "./repositories/userRepository";
 import { revokeUserAuthSessions } from "./repositories/sessionRepository";
 import { cleanOldTrafficStatBuckets, cleanOldTrafficStats, ensureTrafficStatBucketsBackfilled, ensureUserTrafficCountersBackfilled } from "./repositories/metricsRepository";
-import { getSetting, setSetting } from "./repositories/settingsRepository";
+import { getSetting, migrateSecretSettingsToEncrypted, setSetting } from "./repositories/settingsRepository";
 import { ensureBundledDeveloperAnnouncements } from "./repositories/announcementRepository";
 import { backfillManualEntitlementsFromEffectiveUsers, repairSubscriptionBillingStateOnce } from "./repositories/billingRepository";
 import { backfillTrafficBillingRuleUsageFromStats } from "./repositories/trafficBillingRepository";
 import { purgeSettledPendingForwardRuleDeletes, repairConflictingProtocolPortRules } from "./repositories/forwardRuleRepository";
 import { markLocalSetupComplete } from "./setupState";
 import { seedDevPanelData } from "./devPanel";
+import { loadSlowQueryThresholdSetting } from "./slowQueryThresholdSetting";
 import { repairPortForwardRuleHostReferences } from "./portForwardRuleHosts";
 import { backfillTunnelExitGroupReferences } from "./repositories/tunnelRepository";
 import { repairForwardGroupRuleIntegrity } from "./forwardGroupRuleIntegrity";
@@ -417,6 +418,16 @@ export async function initDatabase() {
     }
 
     await runInitializationStep("schema", () => ensureDatabaseSchema());
+    // 慢查询阈值（设置 › 进阶 › 慢查询，server/slowQueryLog.ts）：没设过就用默认 200 毫秒。
+    await runInitializationStep("slow-query-threshold", () => loadSlowQueryThresholdSetting().catch((error) => {
+      console.warn("[Database] Slow query threshold not loaded:", error instanceof Error ? error.message : String(error));
+    }));
+    // 密钥类设置（SMTP 密码、机器人 Token、API Key……）落库加密，升级后第一次启动把老明文加密一遍（server/settingsEncryption.ts）。
+    await runInitializationStep("encrypt-secret-settings", () => migrateSecretSettingsToEncrypted().then((count) => {
+      if (count > 0) console.log(`[Database] Encrypted secret settings count=${count}`);
+    }).catch((error) => {
+      console.warn("[Database] Secret settings encryption skipped:", error instanceof Error ? error.message : String(error));
+    }));
     await runInitializationStep("clear-legacy-traffic-padding", () => clearLegacyTrafficPaddingOnce().then((count) => {
       if (count > 0) console.log(`[Database] Cleared legacy traffic padding settings count=${count}`);
     }).catch((error) => {

@@ -31,6 +31,7 @@ import { withKeyedTaskLock } from "../keyedTaskLock";
 import { ipRateLimitScope } from "../ipRateLimitScope";
 import { apiTokenProfileUpdateError } from "../ops/apiTokenPolicy";
 import { revokeAllUserApiTokens } from "../ops/apiTokens";
+import { noteLoginDevice } from "../ops/loginDevices";
 
 const emailCodeStore = new Map<string, { code: string; expiresAt: number; lastSentAt: number; attempts: number }>();
 const emailSendIpStore = new Map<string, LoginFailEntry>();
@@ -151,6 +152,8 @@ async function issueLoginSession(ctx: any, user: any, sessionKind: SessionKind, 
   });
   const token = jwt.sign({ userId: user.id, sid, kind: sessionKind }, ENV.cookieSecret, { expiresIn: SESSION_TOKEN_TTL_SECONDS });
   ctx.res.cookie(COOKIE_NAME, token, getSessionCookieOptions(ctx.req));
+  // 新设备 / 异地登录提醒：所有登录方式都汇到这里；尽力而为、不等它（查 IP 归属可能要几秒）
+  void noteLoginDevice(user, ctx.req, sessionKind);
   return { ...stripSessionSensitiveFields(user), mobileToken: mobile ? token : null };
 }
 

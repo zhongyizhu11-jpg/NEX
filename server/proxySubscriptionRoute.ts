@@ -16,9 +16,17 @@ import { proxySubTemplateUserVars, renderProxySubPipeline } from "../shared/prox
 import { normalizeProxySubHwid, evaluateProxySubDeviceAccess } from "../shared/proxySubDeviceLimit";
 import { normalizeProxySubAlias } from "../shared/proxySubTokenScope";
 import { PROXY_SUB_TOKEN_FAILURE_LABELS, type ProxySubTokenFailureReason } from "../shared/proxySubTokenStatus";
-import { proxyCredentialRecipientActive } from "./repositories/proxyInboundRepository";
+import { proxyCredentialRecipientBlockReason, type ProxyCredentialBlockReason } from "./repositories/proxyInboundRepository";
 import { infoNodesWanted, loadProxySubTokenContext, resolveTemplateForToken, type ProxySubTokenContext } from "./proxySubBundle";
-import { getProxySubCached, proxySubCacheKey, setProxySubCached } from "./proxySubCache";
+import {
+  compressedProxySubBody,
+  getProxySubCached,
+  prepareProxySubBody,
+  proxySubCacheKey,
+  setProxySubCached,
+  type ProxySubBodyEncoding,
+  type ProxySubPreparedBody,
+} from "./proxySubCache";
 import { checkProxySubRateLimit, proxySubMissBlockState, recordProxySubMiss } from "./proxySubRateLimit";
 import { clientIp } from "./clientIp";
 import { createKeyedSerial } from "./keyedSerial";
@@ -158,6 +166,16 @@ function requestedFormat(req: Request, pathFormat?: string): ProxySubscriptionFo
   return raw ? normalizeProxySubscriptionFormat(raw) : null;
 }
 
+/** 主人不能用的原因 → 记在令牌上、回给客户端的那句话（到期 / 流量用完 / 欠费分开说） */
+const OWNER_BLOCK_REASONS: Record<ProxyCredentialBlockReason, ProxySubTokenFailureReason> = {
+  missing: "not-eligible",
+  disabled: "not-eligible",
+  "no-permission": "not-eligible",
+  expired: "account-expired",
+  "traffic-exhausted": "traffic-exhausted",
+  "balance-insufficient": "balance-insufficient",
+};
+
 /**
  * 三步资格检查：令牌存在且启用、令牌没过期、主人有资格。
  * 不过的回 403 并写明是哪一步（见 rejected），面板这边也记下来。
@@ -169,11 +187,12 @@ async function gate(_req: Request, token: any, client: DetectedProxyClient): Pro
   const expiresAt = token.expiresAt ? new Date(token.expiresAt as any).getTime() : 0;
   if (expiresAt && expiresAt <= Date.now()) return { ok: false, reason: "token-expired", context };
   /**
-   * 订阅本身的资格：和落地机那边用**同一把尺子**（proxyCredentialRecipientActive）。
+   * 订阅本身的资格：和落地机那边用**同一把尺子**（proxyCredentialRecipientBlockReason）。
    * 到期的租户照样拉到一份列着全部节点的订阅，页头还老老实实写着他已经过期 ——
    * 落地机那边早就把他的凭据拿掉了，两处判定必须一致。
    */
-  if (!proxyCredentialRecipientActive(context.owner as any)) return { ok: false, reason: "not-eligible", context };
+  const blocked = proxyCredentialRecipientBlockReason(context.owner as any);
+  if (blocked) return { ok: false, reason: OWNER_BLOCK_REASONS[blocked], context };
   void client;
   return { ok: true, context };
 }
@@ -263,6 +282,54 @@ async function deviceGateLocked(req: Request, context: ProxySubTokenContext, cli
     void notifyProxySubEvent({ kind: "device-limit", tokenId: Number(token.id), tokenName: String(token.name || ""), userId: Number(token.userId), detail: `已有 ${decision.count} 台，上限 ${context.deviceLimit}；这次来自 ${client.label}（${clientIp(req) || "未知 IP"}）` });
   }
   return { allowed: decision.allowed, reason: decision.reason, headers: decision.headers, hwid };
+}
+
+/** 和 server/index.ts 的 compression({ threshold: 1024 }) 一致：小于它的不压。 */
+const COMPRESSION_THRESHOLD = 1024;
+
+/**
+ * 客户端要的压缩，只认最常见、结果确定的写法：没有 q 值、没有 *。这几种写法下压缩中间件
+ * （compression 1.8，br 优先于 gzip）会选哪一种是确定的 —— Go 客户端的 "gzip"、iOS 的
+ * "gzip, deflate, br"、.NET 的 "gzip, deflate"。别的（deflate、带 q 值的……）返回 null，
+ * 照旧交给中间件现压，和原来一模一样。
+ */
+function precompressedEncodingFor(req: Request): ProxySubBodyEncoding | null {
+  const header = req.headers["accept-encoding"];
+  if (typeof header !== "string" || !header || header.includes(";") || header.includes("*")) return null;
+  const tokens = header.toLowerCase().split(",").map((token) => token.trim());
+  if (tokens.includes("br")) return "br";
+  if (tokens.includes("gzip")) return "gzip";
+  return null;
+}
+
+function appendVaryAcceptEncoding(res: Response) {
+  const current = String(res.getHeader("Vary") || "");
+  if (!current) res.setHeader("Vary", "Accept-Encoding");
+  else if (current.trim() !== "*" && !/(?:^|,)\s*accept-encoding\s*(?:,|$)/i.test(current)) res.setHeader("Vary", `${current}, Accept-Encoding`);
+}
+
+/**
+ * 发缓存里的正文：ETag 用存好的（express 看到已经有 ETag 就不再对整份正文算一遍），客户端要
+ * gzip / br 时直接发这个条目压好的那份（中间件看到 Content-Encoding 已经有了就不再压）。
+ * 解开以后的字节、ETag、Content-Type、304 都和原来一样；HEAD、要 304 的、太小的、压缩写法
+ * 认不准的，都走原来的路。
+ */
+async function sendPreparedBody(req: Request, res: Response, prepared: ProxySubPreparedBody) {
+  res.setHeader("ETag", prepared.etag);
+  res.status(200);
+  const encoding = req.method === "GET" && prepared.buffer.length >= COMPRESSION_THRESHOLD && !req.fresh
+    ? precompressedEncodingFor(req)
+    : null;
+  if (encoding) {
+    const compressed = await compressedProxySubBody(prepared, encoding).catch(() => null);
+    if (compressed) {
+      appendVaryAcceptEncoding(res);
+      res.setHeader("Content-Encoding", encoding);
+      res.send(compressed);
+      return;
+    }
+  }
+  res.send(prepared.buffer);
 }
 
 /** 主流程：/api/sub/:token、/api/sub/:token/:format、/s/:alias 都走它。 */
@@ -366,8 +433,10 @@ async function handleSubscription(req: Request, res: Response, options: { param:
       // 信息节点带着用量，用量一直在变；进缓存键的是取整到 10 MB 的值，免得每次都不一样。
       infoNodesWanted(gated.context) ? Math.floor(gated.context.info.trafficUsed / 10_485_760) : -1,
     ]);
-    let body = settings.cacheTtlSec > 0 ? getProxySubCached(cacheKey) : null;
-    if (body === null) {
+    // 开着缓存时存「发出去的样子」（字节、ETag、压好的 gzip / br，见 proxySubCache）；关着时和原来一样直接发字符串。
+    let prepared = settings.cacheTtlSec > 0 ? getProxySubCached(cacheKey) : null;
+    let body: string | null = null;
+    if (prepared === null) {
       const built = await db.buildProxySubscriptionForToken(Number(token.userId), {
         rulePreset,
         scope,
@@ -390,16 +459,27 @@ async function handleSubscription(req: Request, res: Response, options: { param:
         weightedLoadBalance: clientSupportsWeightedLoadBalance(userAgent),
         shadowrocketClient: client.family === "shadowrocket",
       });
-      if (settings.cacheTtlSec > 0) setProxySubCached(cacheKey, body, settings.cacheTtlSec);
+      if (settings.cacheTtlSec > 0) {
+        prepared = prepareProxySubBody(body);
+        setProxySubCached(cacheKey, prepared, settings.cacheTtlSec);
+      }
     }
 
     applyHeaders(res, gated.context, { format, profile, panelUrl, token, byAlias: options.byAlias });
-    res.status(200).send(body);
+    let bytes: number;
+    if (prepared) {
+      bytes = prepared.buffer.length;
+      await sendPreparedBody(req, res, prepared);
+    } else {
+      const text = body ?? "";
+      bytes = Buffer.byteLength(text);
+      res.status(200).send(text);
+    }
 
     if (!token.lastAccessAt && Number(token.accessCount || 0) === 0) {
       void notifyProxySubEvent({ kind: "first-access", tokenId: Number(token.id), tokenName: String(token.name || ""), userId: Number(token.userId), detail: `${client.label}${client.version ? " " + client.version : ""}，来自 ${clientIp(req) || "未知 IP"}` });
     }
-    logAccess(req, context, client, { format, profile, result: "ok", hwid: device.hwid, bytes: Buffer.byteLength(body) });
+    logAccess(req, context, client, { format, profile, result: "ok", hwid: device.hwid, bytes });
   } catch (error) {
     console.error("[proxy-subscription] 生成订阅失败:", error);
     /*

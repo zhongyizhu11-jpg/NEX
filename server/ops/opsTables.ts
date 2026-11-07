@@ -15,6 +15,8 @@ import { unlockTables, unlockMigrationTables } from "./unlockTables";
 import { connStatsTables, connStatsMigrationTables } from "./connStatsTables";
 import { nodeCheckTables, nodeCheckMigrationTables } from "./nodeCheckTables";
 import { nodePoolTables, nodePoolMigrationTables } from "./nodePoolTables";
+import { loginDevicesTables, loginDevicesMigrationTables } from "./loginDevicesTables";
+import { operationAuditTables, operationAuditMigrationTables } from "./operationAuditTables";
 
 export const OPS_TABLE_DEFS: TableDef[] = [
   ...eventsTables,
@@ -33,6 +35,8 @@ export const OPS_TABLE_DEFS: TableDef[] = [
   ...connStatsTables,
   ...nodeCheckTables,
   ...nodePoolTables,
+  ...loginDevicesTables,
+  ...operationAuditTables,
 ];
 
 export const OPS_MIGRATION_TABLES: string[] = [
@@ -52,4 +56,6 @@ export const OPS_MIGRATION_TABLES: string[] = [
   ...connStatsMigrationTables,
   ...nodeCheckMigrationTables,
   ...nodePoolMigrationTables,
+  ...loginDevicesMigrationTables,
+  ...operationAuditMigrationTables,
 ];

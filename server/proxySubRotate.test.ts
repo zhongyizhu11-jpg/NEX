@@ -108,7 +108,8 @@ test("重置订阅地址：旧地址和旧短链失效、限流计数清零、�
     assert.match(out.disabled.body, /停用/);
     assert.match(String(out.warningWhenExpired), /没有订阅资格/);
     assert.equal(out.expiredPull.status, 403);
-    assert.match(out.expiredPull.body, /订阅资格/);
+    // 账号到期单独说（proxyCredentialRecipientBlockReason → account-expired），不再笼统写「没有订阅资格」
+    assert.match(out.expiredPull.body, /账号已到期/);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }

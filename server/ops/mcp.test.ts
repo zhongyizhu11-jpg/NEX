@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { handleMcpMessage, handleMcpPayload, JSON_RPC_INVALID_PARAMS, JSON_RPC_METHOD_NOT_FOUND, sanitizeForMcp, type McpSession } from "./mcp";
+import { callMcpTool, handleMcpMessage, handleMcpPayload, JSON_RPC_INVALID_PARAMS, JSON_RPC_METHOD_NOT_FOUND, listMcpTools, MCP_TOOL_PATHS, sanitizeForMcp, type McpSession } from "./mcp";
 import { API_TOKEN_FORBIDDEN_MESSAGE, API_TOKEN_READ_ONLY_MESSAGE, apiTokenPolicyError } from "./apiTokenPolicy";
 import { API_TOKEN_DISPLAY_PREFIX_LENGTH, generateApiToken, hashApiToken, isApiTokenFormat, readApiTokenFromHeader } from "./apiTokens";
 
@@ -250,4 +250,43 @@ test("网速测试工具：get_speed_test 只读、只认 hostId；speed_test �
   assert.equal(ran.result.isError, undefined);
   assert.equal(JSON.parse(ran.result.content[0].text).latest.speed.downloadMbps, 196.3, "等的是这一次的结果，不是上一次的");
   assert.equal(calls[0].path, "hosts.startSpeedTest");
+});
+
+test("MCP_TOOL_PATHS 写全了：每个工具真正调到的过程都在它声明的列表里", async () => {
+  const all = listMcpTools({ scope: "full", isAdmin: true, invoke: async () => null });
+  assert.deepEqual(all.map((tool) => tool.name).sort(), Object.keys(MCP_TOOL_PATHS).sort());
+  const args: Record<string, unknown> = { id: 1, ruleId: 1, hostId: 1, userId: 1, kind: "rule", enabled: true, name: "t", sourcePort: 10000, targetIp: "1.1.1.1", targetPort: 80 };
+  for (const tool of all) {
+    const called = new Set<string>();
+    const s: McpSession = {
+      scope: "full",
+      isAdmin: true,
+      pollIntervalMs: 0,
+      pollTimeoutMs: 5,
+      invoke: async (path) => {
+        called.add(path);
+        return { id: 1, runId: "r", status: "done", items: [], body: {} };
+      },
+    };
+    const props = ((tool.inputSchema as any).properties || {}) as Record<string, unknown>;
+    await callMcpTool(tool.name, Object.fromEntries(Object.entries(args).filter(([key]) => key in props)), s);
+    assert.ok(called.size > 0, `${tool.name} 一个过程都没调到（参数不对？）`);
+    for (const path of called) {
+      assert.ok(MCP_TOOL_PATHS[tool.name].includes(path), `${tool.name} 调了 ${path}，没写进 MCP_TOOL_PATHS`);
+    }
+  }
+});
+
+test("令牌勾了模块：tools/list 只列范围内的工具，范围外的调用给直白的拒绝，不会真去调过程", async () => {
+  const s = session({ scope: "full", modules: ["rules"] });
+  const names = listMcpTools(s).map((tool) => tool.name);
+  assert.ok(names.includes("list_rules"));
+  assert.ok(names.includes("set_rule_enabled"));
+  assert.ok(!names.includes("list_hosts"));
+  assert.ok(!names.includes("list_users"));
+  assert.ok(!names.includes("dashboard_stats"));
+  const result: any = await callMcpTool("list_hosts", {}, s);
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /只能访问：转发规则/);
+  assert.equal(s.calls.length, 0);
 });

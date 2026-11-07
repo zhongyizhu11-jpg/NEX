@@ -1465,8 +1465,30 @@ export type RenderProxySubscriptionOptions = {
 };
 
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f\u2028\u2029]/g;
+const HAS_CONTROL_CHARACTER = /[\u0000-\u001f\u007f\u2028\u2029]/;
 
+/** \u91cc\u9762\u6709\u6ca1\u6709\u54ea\u4e2a\u5b57\u7b26\u4e32\u5e26\u63a7\u5236\u5b57\u7b26\u3002\u53ea\u8bfb\uff0c\u4e0d\u5206\u914d\u3002 */
+function hasControlCharacters(value: unknown): boolean {
+  if (typeof value === "string") return HAS_CONTROL_CHARACTER.test(value);
+  if (Array.isArray(value)) {
+    for (const item of value) if (hasControlCharacters(item)) return true;
+    return false;
+  }
+  if (value && typeof value === "object") {
+    for (const key of Object.keys(value)) if (hasControlCharacters((value as Record<string, unknown>)[key])) return true;
+  }
+  return false;
+}
+
+/**
+ * \u53bb\u6389\u63a7\u5236\u5b57\u7b26\u3002\u5e72\u51c0\u7684\uff08\u51e0\u4e4e\u5168\u90e8\uff09\u539f\u6837\u8fd4\u56de\u540c\u4e00\u4e2a\u5bf9\u8c61\uff0c\u53ea\u6709\u771f\u5e26\u4e86\u63a7\u5236\u5b57\u7b26\u7684\u90a3\u4e00\u652f\u624d\u62f7\u4e00\u4efd\u3002
+ *
+ * \u539f\u6765\u4e0d\u7ba1\u6709\u6ca1\u6709\u90fd\u628a\u6574\u4efd\u8282\u70b9\u548c\u7b56\u7565\u7ec4\u6df1\u62f7\u4e00\u904d\uff1a\u4e00\u5343\u6761\u8282\u70b9\u3001\u51e0\u4e07\u4e2a\u5b57\u6bb5\uff0c\u6bcf\u6b21\u6e32\u67d3\u5149\u8fd9\u4e00\u6b65\u5c31\u5360\u4e86
+ * \u4e00\u534a\u7684\u65f6\u95f4\uff08\u89c1 server/proxySubBench.fixture.ts \u7684 stages\uff09\u3002\u6e32\u67d3\u5668\u53ea\u8bfb\u4e0d\u6539\u8282\u70b9\u548c\u7ec4
+ * \uff08shared/proxySubscriptionRender.test.ts \u51bb\u4f4f\u4e86\u8f93\u5165\u518d\u6e32\u67d3\uff0c\u786e\u8ba4\u8fc7\uff09\uff0c\u5171\u7528\u540c\u4e00\u4e2a\u5bf9\u8c61\u662f\u5b89\u5168\u7684\u3002
+ */
 function stripControlCharacters<T>(value: T): T {
+  if (!hasControlCharacters(value)) return value;
   if (typeof value === "string") return value.replace(CONTROL_CHARACTERS, "") as T;
   if (Array.isArray(value)) return value.map(stripControlCharacters) as T;
   if (value && typeof value === "object") {

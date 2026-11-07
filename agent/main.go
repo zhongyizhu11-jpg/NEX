@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-var Version = "2.2.249"
+var Version = "2.2.250"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -360,6 +360,8 @@ type agentHTTPStatusError struct {
 	StatusCode int
 	Status     string
 	Detail     string
+	// RetryAfter 是面板在 429 / 503 上带的 Retry-After（比如切换数据库期间回 503 + Retry-After: 30），没有就是 0。
+	RetryAfter time.Duration
 }
 
 func (e agentHTTPStatusError) Error() string {
@@ -963,7 +965,7 @@ func main() {
 				nextInterval = int(agentPresenceInterval / time.Second)
 			} else if err != nil {
 				// 失败重试加随机抖动，避免面板恢复时所有 Agent 同一秒一起打过来。
-				nextInterval = fullJitterSeconds(cfg.Interval, 2)
+				nextInterval = max(fullJitterSeconds(cfg.Interval, 2), panelRetryAfterSeconds(err))
 			} else if nextInterval < 2 {
 				nextInterval = cfg.Interval
 			}
@@ -998,9 +1000,9 @@ func main() {
 			if requestSkipped {
 				nextInterval = int(agentPresenceInterval / time.Second)
 			} else if err != nil {
-				nextInterval = fullJitterSeconds(cfg.Interval, 2)
+				nextInterval = max(fullJitterSeconds(cfg.Interval, 2), panelRetryAfterSeconds(err))
 			} else if result.ReconciliationCoalesced {
-				nextInterval = 5
+				nextInterval = coalescedHeartbeatRetrySeconds(result.NextInterval)
 			} else {
 				nextInterval = successfulHeartbeatDelaySeconds(
 					nextInterval,

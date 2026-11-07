@@ -11,3 +11,5 @@ import "./unlockAgent";
 import "./siteLatencyAgent";
 import "./hostLogsAgent";
 import "./nodeCheckAgent";
+import "./netTuneAgent";
+import "./agentRuntimeAgent";

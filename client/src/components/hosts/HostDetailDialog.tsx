@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatCpuPercent, hostGeoTooltip, hostInMaintenance, hostRegionText } from "./hostDisplay";
 import HostNetProfileSection from "./HostNetProfileSection";
+import HostNetTuneSection from "./HostNetTuneSection";
 import { HostOsAvatar, HostOsGlyph, hostOsOf } from "./HostOsBadge";
 import { fxpRuntimeBadgeTitle, fxpRuntimeDetailText } from "./FxpRuntimeBadge";
 import { buildHostActions, hostTrafficFailoverTitle, type HostSummaryCardProps } from "./HostSummaryCard";
@@ -24,6 +25,7 @@ import { HostTlsInboundSection } from "./HostTlsInboundManager";
 import HostUnlockSection from "./HostUnlockSection";
 import HostSpeedTestSection from "./HostSpeedTestSection";
 import HostLineSection from "./HostLineSection";
+import HostAgentRuntimeSection from "./HostAgentRuntimeSection";
 
 /**
  * 主机详情 —— Detail 态。
@@ -240,6 +242,9 @@ export default function HostDetailDialog(props: HostDetailDialogProps) {
           {/* 网络画像：双栈出站、运营商、25 端口、DNSBL（Agent 2.2.226 起在主机上测） */}
           <HostNetProfileSection host={host} canManage={user?.role === "admin"} />
 
+          {/* 网络调优：转发相关内核参数是否达标，一键按安装脚本那套规则调好（Agent 2.2.250 起，管理员） */}
+          {user?.role === "admin" ? <HostNetTuneSection host={host} /> : null}
+
           {user?.role === "admin" ? <HostTlsInboundSection hostId={Number(host.id)} /> : null}
 
           {/* mimic UDP 混淆环境：装没装、能不能用，管理员在这里一键安装 / 修复（2.3.439） */}
@@ -249,6 +254,9 @@ export default function HostDetailDialog(props: HostDetailDialogProps) {
 
           <OpsHostDetailExtraSections host={host} isAdmin={user?.role === "admin"} />
           {user?.role === "admin" ? <HostIpChangeSection hostId={Number(host.id)} /> : null}
+
+          {/* Agent 进程自己的内存 / 协程 / GC / UDP 会话 / AES，管理员可临时开性能剖析（老 Agent 不显示） */}
+          <HostAgentRuntimeSection hostId={Number(host.id)} isAdmin={user?.role === "admin"} />
     </>
   );
   return (

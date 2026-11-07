@@ -12,6 +12,7 @@ import { hostSecurityRouter } from "./hostSecurity";
 import { agentRelayRouter } from "./agentRelay";
 import { hostOpsRouter } from "./hostOps";
 import { apiTokensRouter } from "./apiTokens";
+import { apiRateLimitRouter } from "./apiRateLimit";
 import { passkeysRouter } from "./passkeys";
 import { sessionsRouter } from "./sessions";
 import { maintenanceRouter } from "./maintenance";
@@ -23,8 +24,13 @@ import { hostLogsRouter } from "./hostLogs";
 import { faultBoardRouter } from "./faultBoard";
 import { connStatsRouter } from "./connStats";
 import { opsBoardRouter } from "./opsBoard";
+import { auditRouter } from "./audit";
+import { profilingRouter } from "./profiling";
+import { netTuneRouter } from "./netTune";
+import { slowQueriesRouter } from "./slowQueries";
 
 export const opsRouter = router({
+  audit: auditRouter,
   events: eventsRouter,
   webhooks: webhooksRouter,
   digest: digestRouter,
@@ -34,6 +40,7 @@ export const opsRouter = router({
   agentRelay: agentRelayRouter,
   hostOps: hostOpsRouter,
   apiTokens: apiTokensRouter,
+  apiRateLimit: apiRateLimitRouter,
   passkeys: passkeysRouter,
   sessions: sessionsRouter,
   maintenance: maintenanceRouter,
@@ -45,4 +52,7 @@ export const opsRouter = router({
   faultBoard: faultBoardRouter,
   connStats: connStatsRouter,
   board: opsBoardRouter,
+  profiling: profilingRouter,
+  netTune: netTuneRouter,
+  slowQueries: slowQueriesRouter,
 });

@@ -53,6 +53,11 @@ function runProbe(): Probe {
     const schema = await import(url("server/dbSchema.ts"));
     await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
     await schema.ensureDatabaseSchema();
+    // 接口限流的配置第一次用到时才去库里读（server/apiRateLimitConfig.ts，之后 30 秒后台刷新一次）：
+    // 先固定下来，免得那一次读正好被算进第一轮测量，看起来像 N+1。
+    const rateLimitConfig = await import(url("server/apiRateLimitConfig.ts"));
+    const rateLimit = await import(url("server/apiRateLimit.ts"));
+    rateLimitConfig.setApiRateLimitConfigForTests(rateLimit.DEFAULT_API_RATE_LIMIT);
     const exec = (sql, params = []) => runtime.executeRaw(sql, params);
     const settings = await import(url("server/repositories/settingsRepository.ts"));
 

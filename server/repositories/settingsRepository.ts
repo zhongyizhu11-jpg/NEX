@@ -1,6 +1,14 @@
-﻿import { eq, inArray, like } from "drizzle-orm";
+﻿import { createHash } from "node:crypto";
+import { eq, inArray, like } from "drizzle-orm";
 import { systemSettings } from "../../drizzle/schema";
 import { executeRaw, getDatabaseKind, getDb, rawAffectedRows } from "../dbRuntime";
+import {
+  SETTINGS_SECRETS_MIGRATION_KEY,
+  decodeStoredSettingValue,
+  encodeSettingValueForStorage,
+  encryptPlaintextSecretSettings,
+} from "../settingsEncryption";
+import { SECRET_SETTING_KEYS } from "../settingsSecretKeys";
 
 // ==================== System Settings (key-value) ====================
 
@@ -109,7 +117,8 @@ export async function getSetting(key: string): Promise<string | null> {
   const db = await getDb();
   if (!db) return null;
   const r = await db.select().from(systemSettings).where(eq(systemSettings.key, key)).limit(1);
-  return r[0]?.value ?? null;
+  // 密钥类设置落库是密文（server/settingsEncryption.ts），读出来解开；缓存和调用方拿到的都是明文。
+  return decodeStoredSettingValue(key, r[0]?.value ?? null);
 }
 
 /**
@@ -160,7 +169,7 @@ export async function getAllSettings(): Promise<Record<string, string | null>> {
     // 每隔几秒就要重建的映射白白变大。
     for (const row of rows) {
       if (isEphemeralSettingKey(row.key) || String(row.key || "").startsWith(RUNTIME_CACHE_SETTING_PREFIX)) continue;
-      values[row.key] = row.value ?? null;
+      values[row.key] = decodeStoredSettingValue(row.key, row.value ?? null);
     }
     if (generation === allSettingsGeneration) {
       allSettingsCache = { db, expiresAt: Date.now() + ALL_SETTINGS_CACHE_TTL_MS, values };
@@ -186,7 +195,7 @@ export async function getSettingsByPrefix(prefix: string): Promise<Record<string
   const rows = await db.select().from(systemSettings).where(like(systemSettings.key, `${literal}%`));
   const values: Record<string, string | null> = {};
   for (const row of rows as Array<{ key: string; value: string | null }>) {
-    if (String(row.key || "").startsWith(prefix)) values[row.key] = row.value ?? null;
+    if (String(row.key || "").startsWith(prefix)) values[row.key] = decodeStoredSettingValue(row.key, row.value ?? null);
   }
   return values;
 }
@@ -202,9 +211,11 @@ function affectsAllSettingsCache(key: string) {
 }
 
 /** UPSERT 单个系统设置 */
-export async function setSetting(key: string, value: string | null): Promise<void> {
+export async function setSetting(key: string, rawValue: string | null): Promise<void> {
   const db = await getDb();
   if (!db) return;
+  // 密钥类设置加密后再写（server/settingsEncryption.ts）；库里只有密文，明文只在内存里。
+  const value = encodeSettingValueForStorage(key, rawValue);
   const invalidatesCache = affectsAllSettingsCache(key);
   if (invalidatesCache) invalidateAllSettingsCache();
   const nowSec = Math.floor(Date.now() / 1000);
@@ -232,9 +243,10 @@ export async function setSetting(key: string, value: string | null): Promise<voi
  * 给「一天只发一次」这类去重用。原来是 getSetting 看一眼、没有再 setSetting —— 两路同时来，
  * 都看到「没有」，就都发了。这里一条 INSERT 带冲突忽略，谁插进去算谁的。
  */
-export async function claimSettingKey(key: string, value = "1"): Promise<boolean> {
+export async function claimSettingKey(key: string, rawValue = "1"): Promise<boolean> {
   const db = await getDb();
   if (!db) return false;
+  const value = encodeSettingValueForStorage(key, rawValue);
   const invalidatesCache = affectsAllSettingsCache(key);
   const nowSec = Math.floor(Date.now() / 1000);
   let result: any;
@@ -257,3 +269,34 @@ export async function setSettings(map: Record<string, string | null>): Promise<v
   }
 }
 
+/**
+ * 把库里还是明文的密钥类设置加密掉（升级到加密存储的那一次，以及 SQLite 快速迁移导入之后）。
+ * 做完记 SETTINGS_SECRETS_MIGRATION_KEY，之后启动不再扫；force 无视这个记号（快速迁移导入时用：
+ * 源面板的记号跟着数据库文件一起过来了，但副本里的值已经解成了明文）。返回加密了几项。
+ */
+export async function migrateSecretSettingsToEncrypted(options: { force?: boolean } = {}): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  // 记号存的是名单的指纹：以后名单里加了新键，老面板上那个键的明文也会在下一次启动时加密掉。
+  const signature = secretSettingKeysSignature();
+  if (!options.force && (await getSetting(SETTINGS_SECRETS_MIGRATION_KEY)) === signature) return 0;
+  const count = await encryptPlaintextSecretSettings({
+    async readRaw(keys) {
+      if (keys.length === 0) return [];
+      const rows = await db.select({ key: systemSettings.key, value: systemSettings.value })
+        .from(systemSettings)
+        .where(inArray(systemSettings.key, keys));
+      return rows as Array<{ key: string; value: string | null }>;
+    },
+    // 传进来的已经是密文，setSetting 认得前缀不会再加密一层。
+    writeRaw: (key, value) => setSetting(key, value),
+  }, SECRET_SETTING_KEYS);
+  await setSetting(SETTINGS_SECRETS_MIGRATION_KEY, signature);
+  return count;
+}
+
+/** 密钥类键名单的指纹（排序后哈希），名单变了就和库里记的对不上。 */
+export function secretSettingKeysSignature(): string {
+  const digest = createHash("sha256").update(Array.from(SECRET_SETTING_KEYS).sort().join("\n")).digest("hex").slice(0, 16);
+  return `v1:${digest}`;
+}

@@ -12,6 +12,7 @@ import { SCHEMA_DIALECT } from "../drizzle/schema";
 import { ENV } from "./env";
 import { databasePoolSettingsForHostCount } from "./databasePoolSizing";
 import { databaseHealth } from "./databaseHealthState";
+import { recordDatabaseStatement, statementTimerStart } from "./dbStatementStats";
 // 让 drizzle 继续抛驱动原来的错误（0.44 起会包成 DrizzleQueryError），见文件里的说明
 import "./drizzleDriverErrors";
 
@@ -53,24 +54,73 @@ type Db = any;
  * 只套面板自己的连接池和事务连接 —— SMTP、GitHub、设置页「测试连接」、库切换连的另一个库
  * 出的网络错误都碰不到这里，不会把主库误判成故障。
  */
-function reportingDatabaseClient<T extends object>(client: T): T {
+function reportingDatabaseClient<T extends object>(client: T, kind: DatabaseKind): T {
   return new Proxy(client, {
     get(target, key) {
       const value = Reflect.get(target, key, target);
       if (typeof value !== "function") return value;
       if (key === "query" || key === "execute") {
         return (...args: any[]) => {
+          const sqlText = statementTextOf(args[0]);
+          const startedAt = statementTimerStart();
           try {
             const result = Reflect.apply(value, target, args);
-            return result && typeof result.catch === "function"
-              ? result.catch((error: unknown) => { databaseHealth.unavailable(error); throw error; })
+            return result && typeof result.then === "function"
+              ? result.then(
+                (rows: unknown) => { recordDatabaseStatement(kind, sqlText, startedAt); return rows; },
+                (error: unknown) => {
+                  recordDatabaseStatement(kind, sqlText, startedAt, error);
+                  databaseHealth.unavailable(error);
+                  throw error;
+                },
+              )
               : result;
-          } catch (error) { databaseHealth.unavailable(error); throw error; }
+          } catch (error) {
+            recordDatabaseStatement(kind, sqlText, startedAt, error);
+            databaseHealth.unavailable(error);
+            throw error;
+          }
         };
       }
       return value.bind(target);
     },
   });
+}
+
+/** mysql2 的 query({ sql }) / pg 的 query({ text }) / 直接传字符串，统一取出 SQL 文本（计时用）。 */
+function statementTextOf(input: unknown) {
+  if (typeof input === "string") return input;
+  if (input && typeof input === "object") {
+    const record = input as { sql?: unknown; text?: unknown };
+    const candidate = record.sql ?? record.text;
+    if (typeof candidate === "string") return candidate;
+  }
+  return "";
+}
+
+/** SQLite 语句是同步执行的：量到的就是语句本身（不含排队等连接锁）。 */
+function timedSqliteStatement<T>(sqlText: string, work: () => T): T {
+  const startedAt = statementTimerStart();
+  try {
+    const result = work();
+    recordDatabaseStatement("sqlite", sqlText, startedAt);
+    return result;
+  } catch (error) {
+    recordDatabaseStatement("sqlite", sqlText, startedAt, error);
+    throw error;
+  }
+}
+
+async function timedRemoteStatement<T>(kind: DatabaseKind, sqlText: string, work: () => Promise<T>): Promise<T> {
+  const startedAt = statementTimerStart();
+  try {
+    const result = await work();
+    recordDatabaseStatement(kind, sqlText, startedAt);
+    return result;
+  } catch (error) {
+    recordDatabaseStatement(kind, sqlText, startedAt, error);
+    throw error;
+  }
 }
 
 export async function reportDatabaseErrors<T>(work: () => Promise<T> | T): Promise<T> {
@@ -252,12 +302,12 @@ function prepareSqliteStatement(sqlite: Database.Database, sqlText: string): Dat
 
 function createSqliteDrizzleDatabase(sqlite: Database.Database): Db {
   const callback: any = (sqlText: string, params: any[], method: "run" | "all" | "get" | "values") => (
-    reportDatabaseErrors(() => withSqliteConnectionLock(sqlite, () => {
+    reportDatabaseErrors(() => withSqliteConnectionLock(sqlite, () => timedSqliteStatement(sqlText, () => {
       const statement = prepareSqliteStatement(sqlite, sqlText);
       if (method === "run") return { rows: [], ...statement.run(...params) };
       if (method === "get") return { rows: statement.raw(true).get(...params) };
       return { rows: statement.raw(true).all(...params) };
-    }, `drizzle-${method}`))
+    }), `drizzle-${method}`))
   );
   return drizzleSqliteProxy(callback) as Db;
 }
@@ -722,7 +772,7 @@ async function connectDatabaseOnce(config: DatabaseConfig | null): Promise<Db | 
     _pool = mysql.createPool(poolOptions(normalized));
     await _pool.query("SELECT 1");
     await assertSupportedMysqlServer((sqlText) => _pool!.query(sqlText));
-    _db = drizzleMysql(reportingDatabaseClient(_pool)) as Db;
+    _db = drizzleMysql(reportingDatabaseClient(_pool, "mysql")) as Db;
     _kind = "mysql";
     console.log(`[Database] MySQL connected at ${normalized.host}:${normalized.port}/${normalized.database}`);
     return _db;
@@ -738,7 +788,7 @@ async function connectDatabaseOnce(config: DatabaseConfig | null): Promise<Db | 
       databaseHealth.unavailable(error);
     });
     await _pgPool.query("SELECT 1");
-    _db = drizzlePostgres(reportingDatabaseClient(_pgPool)) as Db;
+    _db = drizzlePostgres(reportingDatabaseClient(_pgPool, "postgresql")) as Db;
     _kind = "postgresql";
     console.log(`[Database] PostgreSQL connected at ${normalized.host}:${normalized.port}/${normalized.database}`);
     return _db;
@@ -863,7 +913,7 @@ async function runDatabaseTransaction<T>(work: () => Promise<T>): Promise<T> {
     const afterCommit: Array<() => Promise<void> | void> = [];
     const afterSettled: Array<() => Promise<void> | void> = [];
     let result: T;
-    const db = drizzleMysql(reportingDatabaseClient(connection) as any) as Db;
+    const db = drizzleMysql(reportingDatabaseClient(connection, "mysql") as any) as Db;
     const context: DatabaseTransactionContext = { db, mysqlConnection: connection, afterCommit, afterSettled, active: true };
     try {
       try {
@@ -889,7 +939,7 @@ async function runDatabaseTransaction<T>(work: () => Promise<T>): Promise<T> {
     const afterCommit: Array<() => Promise<void> | void> = [];
     const afterSettled: Array<() => Promise<void> | void> = [];
     let result: T;
-    const db = drizzlePostgres(reportingDatabaseClient(client) as any) as Db;
+    const db = drizzlePostgres(reportingDatabaseClient(client, "postgresql") as any) as Db;
     const context: DatabaseTransactionContext = { db, postgresClient: client, afterCommit, afterSettled, active: true };
     try {
       try {
@@ -996,18 +1046,22 @@ async function executeRawImpl(sqlText: string, params: any[]) {
   if (_kind === "mysql") {
     const executor = active?.mysqlConnection || _pool;
     if (!executor) throw new DatabaseNotConfiguredError("MySQL database is not connected");
-    const [result] = await executor.execute(sqlText, normalizedParams);
+    const [result] = await timedRemoteStatement<unknown[]>("mysql", sqlText, () => executor.execute(sqlText, normalizedParams));
     return result as any;
   }
   if (_kind === "sqlite") {
     const sqlite = active?.sqlite || _sqlite;
     if (!sqlite) throw new DatabaseNotConfiguredError("SQLite database is not connected");
-    return withSqliteConnectionLock(sqlite, () => prepareSqliteStatement(sqlite, sqlText).run(...normalizedParams), "executeRaw");
+    return withSqliteConnectionLock(
+      sqlite,
+      () => timedSqliteStatement(sqlText, () => prepareSqliteStatement(sqlite, sqlText).run(...normalizedParams)),
+      "executeRaw",
+    );
   }
   if (_kind === "postgresql") {
     const executor = active?.postgresClient || _pgPool;
     if (!executor) throw new DatabaseNotConfiguredError("PostgreSQL database is not connected");
-    const result = await executor.query(postgresSql(sqlText, normalizedParams));
+    const result = await timedRemoteStatement<unknown>("postgresql", sqlText, () => executor.query(postgresSql(sqlText, normalizedParams)));
     return result as any;
   }
   throw new DatabaseNotConfiguredError();
@@ -1023,22 +1077,22 @@ async function queryRawImpl<T>(sqlText: string, params: any[]): Promise<T[]> {
   if (_kind === "mysql") {
     const executor = active?.mysqlConnection || _pool;
     if (!executor) throw new DatabaseNotConfiguredError("MySQL database is not connected");
-    const [rows] = await executor.query(sqlText, normalizedParams);
+    const [rows] = await timedRemoteStatement<unknown[]>("mysql", sqlText, () => executor.query(sqlText, normalizedParams));
     return rows as T[];
   }
   if (_kind === "sqlite") {
     const sqlite = active?.sqlite || _sqlite;
     if (!sqlite) throw new DatabaseNotConfiguredError("SQLite database is not connected");
-    return withSqliteConnectionLock(sqlite, () => {
+    return withSqliteConnectionLock(sqlite, () => timedSqliteStatement(sqlText, () => {
       const statement = prepareSqliteStatement(sqlite, sqlText);
       if (statement.reader) statement.raw(false);
       return statement.all(...normalizedParams) as T[];
-    }, "queryRaw");
+    }), "queryRaw");
   }
   if (_kind === "postgresql") {
     const executor = active?.postgresClient || _pgPool;
     if (!executor) throw new DatabaseNotConfiguredError("PostgreSQL database is not connected");
-    const result = await executor.query(postgresSql(sqlText, normalizedParams));
+    const result = await timedRemoteStatement<{ rows: unknown[] }>("postgresql", sqlText, () => executor.query(postgresSql(sqlText, normalizedParams)));
     return result.rows as T[];
   }
   throw new DatabaseNotConfiguredError();

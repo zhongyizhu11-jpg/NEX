@@ -78,8 +78,17 @@ test("SQLite 被拒的拉取要记下原因，成功之后不再挂着", () => {
     assert.equal((await get("/api/sub/tok-live")).status, 403);
     await settle();
     row = await tokenRow(1);
-    assert.equal(row.lastFailureReason, "not-eligible");
+    assert.equal(row.lastFailureReason, "account-expired", "到期单独说，不和「没资格」混在一起");
     assert.equal(Number(row.accessCount || 0), 0, "被拒不算一次成功拉取");
+
+    // 3b. 流量用完：额度调到已用量以下（还没等到下一次流量上报自动暂停）也立刻拒
+    await exec("UPDATE users SET expiresAt = NULL, trafficLimit = 1000, trafficUsed = 1000 WHERE id = 1");
+    const exhausted = await get("/api/sub/tok-live");
+    assert.equal(exhausted.status, 403);
+    assert.match(exhausted.body, /流量已用完/);
+    await settle();
+    assert.equal((await tokenRow(1)).lastFailureReason, "traffic-exhausted");
+    await exec("UPDATE users SET trafficLimit = 0, trafficUsed = 0 WHERE id = 1");
 
     // 4. 续上之后再拉：成功，行上不该再挂着那句红字
     await exec("UPDATE users SET expiresAt = NULL WHERE id = 1");

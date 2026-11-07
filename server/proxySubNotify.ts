@@ -9,10 +9,8 @@
  */
 
 import * as db from "./db";
-import { sendMail } from "./email";
-import { sendTelegramMessage } from "./telegramBot";
 import { loadProxySubSettings } from "./proxySubSettings";
-import { ENV } from "./env";
+import { notifyUserDirect } from "./userNotify";
 
 export type ProxySubNotifyKind = "first-access" | "new-device" | "device-limit" | "failure";
 
@@ -43,14 +41,6 @@ function enabledFor(kind: ProxySubNotifyKind, settings: Awaited<ReturnType<typeo
   return settings.notifyFailures;
 }
 
-async function telegramReady(): Promise<boolean> {
-  const all = await db.getAllSettings();
-  const envToken = ENV.telegramBotToken.trim();
-  const botEnabled = all.telegramBotEnabled === "true" || (!!envToken && all.telegramBotEnabled !== "false");
-  const botConfigured = !!String(all.telegramBotToken || envToken).trim();
-  return botEnabled && botConfigured;
-}
-
 export async function notifyProxySubEvent(event: ProxySubNotifyEvent): Promise<void> {
   try {
     const settings = await loadProxySubSettings();
@@ -64,17 +54,7 @@ export async function notifyProxySubEvent(event: ProxySubNotifyEvent): Promise<v
     const title = `${TITLES[event.kind]}：${event.tokenName}`;
     const body = `${title}\n${event.detail}\n\n登录面板的「订阅管理」可以查看拉取记录、设备列表，必要时重置这条地址。`;
 
-    const email = String(user.email || "").trim();
-    if (email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      await sendMail({ to: email, subject: title, text: body }).catch((error) => {
-        console.warn("[proxy-subscription] 通知邮件发送失败:", error instanceof Error ? error.message : error);
-      });
-    }
-    if (user.telegramId && await telegramReady()) {
-      await sendTelegramMessage(user.telegramId, body).catch((error) => {
-        console.warn("[proxy-subscription] Telegram 通知发送失败:", error instanceof Error ? error.message : error);
-      });
-    }
+    await notifyUserDirect(user, title, body, "proxy-subscription");
   } catch (error) {
     console.warn("[proxy-subscription] 通知处理失败:", error instanceof Error ? error.message : error);
   }

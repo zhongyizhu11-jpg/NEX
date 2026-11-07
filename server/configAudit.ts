@@ -6,6 +6,7 @@ import { afterDatabaseCommit, getDb, insertAndGetId, isDatabaseTransactionActive
 import { invalidateAgentStableHeartbeatPlan } from "./agentHeartbeatGate";
 import { deleteExpiredHistoryRows } from "./repositories/historyRetention";
 import { quoteIdentifier } from "./dbCompat";
+import { currentOperationAuditRequestId } from "./operationAudit";
 
 export type ConfigAuditContext = {
   actorUserId?: number | null;
@@ -114,7 +115,8 @@ export function runWithConfigAuditContext<T>(context: Partial<ConfigAuditContext
     source: context.source || "system",
     actorUserId: context.actorUserId || null,
     actorName: context.actorName || null,
-    requestId: sanitizeAuditRequestId(context.requestId) || randomUUID(),
+    // 在一次写操作里（server/operationAudit.ts）就用那次操作的 requestId：操作审计的详情靠它找回这里的字段差异
+    requestId: currentOperationAuditRequestId() || sanitizeAuditRequestId(context.requestId) || randomUUID(),
     requestPath: context.requestPath || null,
   }, callback);
 }

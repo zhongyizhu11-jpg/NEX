@@ -4,7 +4,7 @@ import { col, type TableDef } from "./tableDefs";
   api_tokens：个人 API 令牌（设置 › 进阶 › API 令牌与 MCP）。
 
   只存令牌的 sha256，明文只在创建那一刻给用户看一次 —— 库被拖走也拿不到能用的令牌。
-  prefix 是令牌开头 8 个字符，列表里让人认出是哪一个。scope 只有 read / full 两档：
+  prefix 是令牌开头 8 个字符，列表里让人认出是哪一个。scope 只有 read / full 两档，modules 再限定模块：
   read 只能跑查询，full 和网页上本人的权限一样（但永远碰不到令牌、密码、2FA、通行密钥、登录设备）。
 */
 export const apiTokensTables: TableDef[] = [
@@ -17,6 +17,8 @@ export const apiTokensTables: TableDef[] = [
       col("prefix", "varchar", { length: 16, notNull: true }),
       col("tokenHash", "varchar", { length: 64, notNull: true }),
       col("scope", "varchar", { length: 16, notNull: true, default: "read" }),
+      // 只能碰哪几个模块（逗号分隔，见 shared/apiTokenModules.ts）；空 = 不限，老令牌都是空。
+      col("modules", "varchar", { length: 255 }),
       col("lastUsedAt", "epoch"),
       col("lastUsedIp", "varchar", { length: 64 }),
       col("expiresAt", "epoch"),
