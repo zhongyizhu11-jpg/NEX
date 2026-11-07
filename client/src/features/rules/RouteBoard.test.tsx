@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { newRouteGroupDraft, routeGroupRuleFields, type RouteGroup } from "@shared/routeGroup";
 import { describeRoutePolicy } from "@shared/routePolicy";
-import { RouteMiniChain, RoutePathCards, RouteSwitchChip, describeRouteDials, routeBoardActiveChain, summarizeRouteChain, type RouteBoardPath } from "./RouteBoard";
+import { RouteMiniChain, RoutePathCards, RouteSwitchChip, describeRouteDials, describeRouteUdpSplit, routeBoardActiveChain, summarizeRouteChain, type RouteBoardPath } from "./RouteBoard";
 
 const NOW = Date.UTC(2026, 9, 28, 12, 0, 0);
 const draft = newRouteGroupDraft({ timezone: "Asia/Shanghai" });
@@ -166,4 +166,19 @@ test("规则卡的延迟标签用当前在走那条路径的整链：各段相�
   assert.equal(active?.partial, false);
   assert.equal(routeBoardActiveChain({ paths: [path(1)] }), null);
   assert.equal(routeBoardActiveChain(null), null);
+});
+
+test("TCP+UDP 两侧结论不一致时路径上标「UDP 不通」/「仅 UDP 通」；一致或老 Agent 没报就不标", () => {
+  assert.equal(describeRouteUdpSplit(path(0)), null, "老 Agent 没报 udpHealthy");
+  assert.equal(describeRouteUdpSplit(path(0, { udpHealthy: true })), null, "两侧都通");
+  assert.equal(describeRouteUdpSplit(path(0, { healthy: true, udpHealthy: false }))?.text, "UDP 不通");
+  assert.equal(describeRouteUdpSplit(path(0, { healthy: false, udpHealthy: true, udpLatencyMs: 12 }))?.text, "仅 UDP 通");
+  assert.equal(describeRouteUdpSplit(path(0, { down: true, healthy: false, udpHealthy: true })), null, "断了的路径交给「断了」说");
+  const policy = describeRoutePolicy(rule, { host: { isOnline: true, agentVersion: "2.2.251" }, nowMs: NOW })!;
+  const html = renderToStaticMarkup(<RoutePathCards status={{ paths: [path(0, { udpHealthy: false }), path(1, { udpHealthy: true })] }} policy={policy} />);
+  const cards = html.split('data-testid="route-path-card"');
+  assert.match(cards[1], /data-testid="route-udp-split"[^>]*>UDP 不通</);
+  assert.doesNotMatch(cards[2], /route-udp-split/);
+  const mini = renderToStaticMarkup(<RouteMiniChain status={{ paths: [path(0, { udpHealthy: false }), path(1)] }} policy={policy} onOpen={() => {}} />);
+  assert.match(mini, /在走 · UDP 不通/);
 });

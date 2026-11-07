@@ -68,6 +68,10 @@ type failoverProxy struct {
 	// 每个包都要查会话表，查表只拿读锁；增删会话才拿写锁。
 	udpMu       sync.RWMutex
 	udpSessions map[netip.AddrPort]*failoverUDPSession
+	// 回声探测报的回包限速（udp_probe.go）。
+	udpEcho udpEchoLimiter
+	// TCP+UDP 规格下 UDP 那一侧单独的健康（route_group_udp_health.go）；别的协议不用。
+	udpSide failoverUDPSide
 	// 进行中的一轮健康检查：所有目标都拨不通时，每个新连接都会要求立即检查一次，
 	// 同一时刻只跑一轮，其余连接等它的结果（见 checkHealthShared）。
 	healthFlightMu sync.Mutex
@@ -128,6 +132,10 @@ func failoverSignature(spec failoverSpec) string {
 		if target.Line != nil && target.Spread != "" {
 			// 同上：没有「落地怎么分」时签名不变。
 			weight += "l" + strconv.Itoa(*target.Line) + "/" + target.Landing + "/" + target.Spread
+		}
+		if target.ProbeUdpEcho {
+			// 同上：不带时签名不变。探法变了得进签名，在跑的代理才会原地换上新规格（样本照旧带过去）。
+			weight += "e"
 		}
 		parts = append(parts, target.TargetIP, strconv.Itoa(target.TargetPort), target.ProbeIP, strconv.Itoa(target.ProbePort), weight)
 	}
@@ -461,6 +469,7 @@ func (p *failoverProxy) ensureHealthStateLocked() {
 			p.conns[i] = map[net.Conn]struct{}{}
 		}
 	}
+	p.udpSide.ensure(n)
 	if p.activeIndex < 0 || p.activeIndex >= n {
 		p.activeIndex = 0
 	}
@@ -483,12 +492,17 @@ func failoverRemoteIP(conn net.Conn) string {
 healthyOnly=false（全挂时的兜底）不分层，和以前一样。
 */
 func (p *failoverProxy) candidateIndicesLocked(exclude map[int]bool, healthyOnly bool) []int {
+	return p.candidateIndicesForLocked(exclude, healthyOnly, false)
+}
+
+// udp 为 true 时「健康」按 UDP 那一侧算（udpUsableLocked）：TCP+UDP 规格的 UDP 会话用。
+func (p *failoverProxy) candidateIndicesForLocked(exclude map[int]bool, healthyOnly bool, udp bool) []int {
 	indices := make([]int, 0, len(p.spec.Targets))
 	for i := range p.spec.Targets {
 		if exclude != nil && exclude[i] {
 			continue
 		}
-		if healthyOnly && !p.healthyLocked(i) {
+		if healthyOnly && !p.usableLocked(i, udp) {
 			continue
 		}
 		indices = append(indices, i)
@@ -524,15 +538,21 @@ func (p *failoverProxy) pickTarget(client net.Conn, exclude map[int]bool) (failo
 // 挑一条路径。hashKey 只有「按访客固定」用：TCP 是访客 IP（带 PROXY 头时从头里读），
 // UDP 是会话的来源地址。
 func (p *failoverProxy) pickTargetForKey(hashKey string, exclude map[int]bool) (failoverTarget, int) {
+	return p.pickTargetForKeyProto(hashKey, exclude, false)
+}
+
+// udp 为 true 是给 UDP 会话挑：TCP+UDP 规格下只在 UDP 通的路径里挑（route_group_udp_health.go），
+// 别的规格和 TCP 完全一样。
+func (p *failoverProxy) pickTargetForKeyProto(hashKey string, exclude map[int]bool, udp bool) (failoverTarget, int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.ensureHealthStateLocked()
 	if len(p.spec.Targets) == 0 {
 		return failoverTarget{}, -1
 	}
-	candidates := p.candidateIndicesLocked(exclude, true)
+	candidates := p.candidateIndicesForLocked(exclude, true, udp)
 	if len(candidates) == 0 {
-		candidates = p.candidateIndicesLocked(exclude, false)
+		candidates = p.candidateIndicesForLocked(exclude, false, udp)
 	}
 	if len(candidates) == 0 {
 		return failoverTarget{}, -1
@@ -558,13 +578,15 @@ func (p *failoverProxy) pickTargetForKey(hashKey string, exclude map[int]bool) (
 		}
 		index = p.rendezvousPickLocked(candidates, key)
 	default:
-		if !p.healthyLocked(p.activeIndex) || (exclude != nil && exclude[p.activeIndex]) {
+		if udp && p.udpSeparateLocked() {
+			index = p.udpFallbackIndexLocked(candidates, exclude)
+		} else if !p.healthyLocked(p.activeIndex) || (exclude != nil && exclude[p.activeIndex]) {
 			index = candidates[0]
 		} else {
 			index = p.activeIndex
 		}
 		// 挑出来的这条所在线路选了「一起分」：在这条线路的几个落地之间分（2.2.245）。
-		index = p.spreadWithinLineLocked(index, hashKey, exclude)
+		index = p.spreadWithinLineLocked(index, hashKey, exclude, udp)
 	}
 	return p.spec.Targets[index], index
 }

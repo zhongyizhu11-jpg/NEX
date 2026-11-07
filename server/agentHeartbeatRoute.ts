@@ -10,7 +10,12 @@ import {
   routeGroupOf,
   routeGroupSchedulerAgentVersion,
   routePathDial,
+  routePathFarEndHostId,
+  routePathsOf,
+  routeUdpEchoProbeReady,
 } from "../shared/routeGroup";
+import { forwardGroupHealthProbeMethodForAgent } from "../shared/forwardGroupHealthCheck";
+import { UDP_PROBE_MIN_AGENT_VERSION } from "../shared/udpProbe";
 import { noteRouteFirstHops, routeHopDownHints, routeNodeHints, routePathDownstreamMs } from "./routeGroupStats";
 import { ensureRouteNodeHealthFresh, getRouteNodeStatus } from "./routeNodeHealth";
 import { tunnelLinkShaping, hostEgressShaping } from "./tunnelFxpRuntime";
@@ -2002,7 +2007,15 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     // 先把要看版本的机器收齐，一次查完（以前每台各查一次）。
     const missingSchedulerHostIds = new Set<number>();
     for (const rule of [...agentAllRules, ...agentHostRules] as any[]) {
-      if (!rule?.failoverEnabled || !routeGroupSchedulerAgentVersion(rule?.protocol, routeTunnelOf(rule)?.mode)) continue;
+      if (!rule?.failoverEnabled) continue;
+      // 带 UDP 的线路组：每条路径对端那台的版本也要看（UDP 回声探测，routeUdpEchoProbeReady）。
+      if (normalizeForwardRuleProtocol(rule?.protocol) !== "tcp") {
+        for (const path of routePathsOf(rule)) {
+          const farEnd = routePathFarEndHostId(path);
+          if (farEnd && !routeSchedulerAgentVersions.has(farEnd)) missingSchedulerHostIds.add(farEnd);
+        }
+      }
+      if (!routeGroupSchedulerAgentVersion(rule?.protocol, routeTunnelOf(rule)?.mode)) continue;
       for (const schedulerHostId of routeSchedulerCandidateHostIds(rule)) {
         if (!routeSchedulerAgentVersions.has(schedulerHostId)) missingSchedulerHostIds.add(schedulerHostId);
       }
@@ -2080,6 +2093,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       const destSpreadReady = routeDestSpreadReady({ strategy, tiered, paths, agentAtLeast: (version) => routeSchedulerAgentAtLeast(rule, version) });
       // 第 N 个目标的第一跳是哪台：入口 Agent 报的第一段延迟就是「进那台机器」的延迟（节点池卡上的毫秒数）。
       noteRouteFirstHops(Number(rule.id), paths.map((path) => (path.hops.length > 0 ? Number(path.hops[0]) : null)));
+      // UDP 回声探测（Agent 2.2.251）：发探测报的是调度那台，它也得够新（老的不认这个字段）。
+      const udpEchoSchedulerReady = routeSchedulerAgentAtLeast(rule, UDP_PROBE_MIN_AGENT_VERSION);
       const targets = paths.map((path) => {
         const dial = routePathDial(path, routeRule);
         const tier = tiered ? { tier: Number(path.tier) } : {};
@@ -2090,11 +2105,16 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         const hint = nodeHints.get(path.key) || hints.get(path.key);
         // Agent 那边是整数毫秒（Go int），小数会让整份规格解不开。
         const extraLatencyMs = Math.round(routePathDownstreamMs(Number(rule.id), path));
+        // 回探测报的是对端那台：对端是自己的机器、它的 Agent 也够新才带（routeUdpEchoProbeReady）。
+        const farEnd = routePathFarEndHostId(path);
+        const probeUdpEcho = udpEchoSchedulerReady
+          && routeUdpEchoProbeReady({ protocol, path, farEndAgentVersion: farEnd ? routeSchedulerAgentVersions.get(farEnd) : null });
         return {
           targetIp: dial.ip,
           targetPort: dial.port,
           // 每条路径可以有自己的探测目标（探落地而不是探中转），见 shared/failoverTargets 里为什么需要它。
           ...(path.probe ? { probeIp: path.probe.ip, probePort: path.probe.port } : {}),
+          ...(probeUdpEcho ? { probeUdpEcho: true } : {}),
           weight: path.weight,
           ...tier,
           ...lineSpread,
@@ -4407,7 +4427,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         probeType: "china",
         targetIp: probe.targetIp,
         targetPort: probe.targetPort,
-        method: "tcp",
+        // 按组里选的方法探（tcp / ping / udp）；「UDP」要 Agent 2.2.251 起，老 Agent 改发 ping。
+        method: forwardGroupHealthProbeMethodForAgent(probe.method, effectiveAgentVersion),
         hopIndex: 0,
         hopCount: 1,
         probeKey: `forward-group:${Number(probe.groupId)}:host:${Number(host.id)}:china:${Number(probe.memberId)}:${String(probe.targetIp).toLowerCase()}:${Number(probe.targetPort) || 0}`,

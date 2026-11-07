@@ -209,3 +209,24 @@ test("切换下限放低：异常多久切 / 恢复观察最少 1 秒，择优�
   assert.equal(routeSwitchWithinSeconds({ failoverSeconds: 1, failureThreshold: 1 }), 2);
   assert.equal(routeSwitchWithinSeconds({ failoverSeconds: 10, failureThreshold: 3 }), 15);
 });
+
+test("UDP 回声探测只给对端是自己的机器、Agent 够新的路径；填了探测地址、只转 TCP 不带", async () => {
+  const { routePathFarEndHostId, routeUdpEchoProbeReady } = await import("./routeGroup");
+  const relayed = path({ key: "a", hops: [2, 3] });
+  const direct = path({ key: "b", hops: [], dest: { ip: "198.51.100.8", port: 443 } });
+  const pooled = { ...direct, destNodeId: 9, destHostId: 6 };
+  // 有中转对端是第一跳；落地池成员是那台成员机；手填的落地不知道是谁
+  assert.equal(routePathFarEndHostId(relayed), 2);
+  assert.equal(routePathFarEndHostId(pooled), 6);
+  assert.equal(routePathFarEndHostId(direct), null);
+  // 对端 Agent 够新（2.2.251）才带；版本没报、太老都不带
+  assert.equal(routeUdpEchoProbeReady({ protocol: "udp", path: relayed, farEndAgentVersion: "2.2.251" }), true);
+  assert.equal(routeUdpEchoProbeReady({ protocol: "both", path: pooled, farEndAgentVersion: "2.3.0" }), true);
+  assert.equal(routeUdpEchoProbeReady({ protocol: "udp", path: relayed, farEndAgentVersion: "2.2.250" }), false);
+  assert.equal(routeUdpEchoProbeReady({ protocol: "udp", path: relayed, farEndAgentVersion: "" }), false);
+  assert.equal(routeUdpEchoProbeReady({ protocol: "udp", path: relayed, farEndAgentVersion: null }), false);
+  // 只转 TCP 的规则不探 UDP；填了探测地址照填的拨 TCP；对端不是自己的机器发零长度包
+  assert.equal(routeUdpEchoProbeReady({ protocol: "tcp", path: relayed, farEndAgentVersion: "2.2.251" }), false);
+  assert.equal(routeUdpEchoProbeReady({ protocol: "udp", path: { ...relayed, probe: { ip: "198.51.100.9", port: 9443 } }, farEndAgentVersion: "2.2.251" }), false);
+  assert.equal(routeUdpEchoProbeReady({ protocol: "udp", path: direct, farEndAgentVersion: "2.2.251" }), false);
+});

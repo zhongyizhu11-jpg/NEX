@@ -48,8 +48,15 @@ func failoverTCPDialContext(ctx context.Context, network, address string) (net.C
 
 // probeFailoverTargets 有界并行地探测所有路径，结果按路径下标返回。
 func probeFailoverTargets(protocol string, targets []failoverTarget) ([]int, []bool) {
+	return probeFailoverTargetsWith(targets, func(target failoverTarget) (int, bool) {
+		return failoverProbeTarget(protocol, target)
+	})
+}
+
+// probeFailoverTargetsWith 同上，探法和结论的类型由调用方给（UDP 那一侧的结论是 udpProbeVerdict）。
+func probeFailoverTargetsWith[T any](targets []failoverTarget, probe func(failoverTarget) (int, T)) ([]int, []T) {
 	latencies := make([]int, len(targets))
-	results := make([]bool, len(targets))
+	results := make([]T, len(targets))
 	sem := make(chan struct{}, failoverProbeParallelism)
 	var wg sync.WaitGroup
 	for i, target := range targets {
@@ -58,7 +65,7 @@ func probeFailoverTargets(protocol string, targets []failoverTarget) ([]int, []b
 		go func(i int, target failoverTarget) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			latencies[i], results[i] = failoverProbeTarget(protocol, target)
+			latencies[i], results[i] = probe(target)
 		}(i, target)
 	}
 	wg.Wait()

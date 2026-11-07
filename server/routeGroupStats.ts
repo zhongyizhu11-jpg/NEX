@@ -36,6 +36,9 @@ export type RouteTargetStat = {
   lastProbeAt: number;
   /** 真实连接最近 10 分钟的拨号：成功 / 失败 / 慢（慢的也在成功里）、耗时折半均值（0 = 没拨过）、最近一次（Unix 毫秒）。 */
   dials?: RouteDialStat;
+  /** UDP 那一侧（Agent 2.2.251 起）：TCP+UDP 规则单独探的；只转 UDP 等于 healthy；老 Agent / 只转 TCP 为 null。 */
+  udpHealthy?: boolean | null;
+  udpLatencyMs?: number | null;
 };
 
 export type RouteDialStat = { ok: number; failed: number; slow: number; dialMs: number; lastAt: number };
@@ -127,6 +130,8 @@ function sanitizeTarget(raw: any, index: number): RouteTargetStat | null {
     connections: Math.max(0, integer(raw.connections)),
     samples: Math.max(0, integer(raw.samples)),
     lastProbeAt: reportedMillis(raw.lastProbeAt),
+    udpHealthy: raw.udpHealthy === true ? true : raw.udpHealthy === false ? false : null,
+    udpLatencyMs: typeof raw.udpHealthy === "boolean" && finite(raw.udpLatencyMs, -1) >= 0 ? Math.round(finite(raw.udpLatencyMs) * 10) / 10 : null,
     dials: {
       ok: Math.max(0, integer(raw.dialOk)),
       failed: Math.max(0, integer(raw.dialFailed)),

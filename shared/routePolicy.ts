@@ -1,6 +1,6 @@
 import { describeFailoverActiveLine, failoverLineEndpoints } from "./failoverActiveLine";
 import type { FailoverPin } from "./failoverPin";
-import { defaultHealthCheckTarget, normalizeForwardGroupHealthCheckMethod } from "./forwardGroupHealthCheck";
+import { defaultHealthCheckTarget, healthCheckMethodShortLabel, normalizeForwardGroupHealthCheckMethod } from "./forwardGroupHealthCheck";
 import {
   describeFailoverScheduleDays,
   failoverScheduleWindowIndexAt,
@@ -681,7 +681,7 @@ export function describeGroupRoutePolicy(group: RoutePolicyGroup, options: Group
     ? (() => {
       const method = normalizeForwardGroupHealthCheckMethod(group.chinaHealthCheckMethod);
       const target = String(group.chinaHealthCheckTarget || "").trim() || defaultHealthCheckTarget(method);
-      return `，而且从成员上 ${method === "ping" ? "Ping" : "TCPing"} ${target} 能通`;
+      return `，而且从成员上 ${healthCheckMethodShortLabel(method)} ${target} 能通`;
     })()
     : "";
   const guards: RoutePolicyGuard[] = [{

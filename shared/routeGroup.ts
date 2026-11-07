@@ -10,6 +10,7 @@ import {
 } from "./failoverTargets";
 import { normalizeForwardRuleProtocol } from "./forwardTypes";
 import { timestampMillis } from "./timestamp";
+import { agentSupportsUdpProbe } from "./udpProbe";
 
 /**
  * 线路组：一个入口 + 多条路径 + 一个调度策略。全站唯一一份模型。
@@ -713,6 +714,37 @@ export function routePathDial(path: RoutePath, rule: Pick<RouteGroupRule, "targe
   if (path.hops.length > 0) return null;
   const dest = routePathDestination(path, rule);
   return dest.ip && dest.port > 0 ? dest : null;
+}
+
+/**
+ * 这条路径的对端是哪台 NEX 管的主机：有中转就是第一跳（入口拨的是它上面的中继规则）；没中转而落地是
+ * 落地池成员时是那台成员机（拨的是它上面的成员入站）；手填的落地地址不知道是不是自己的机器 → null。
+ * UDP 回声探测（routeUdpEchoProbeReady）按它的 Agent 版本给。
+ */
+export function routePathFarEndHostId(path: Pick<RoutePath, "hops" | "destHostId">): number | null {
+  if (path.hops.length > 0) return Number(path.hops[0]) > 0 ? Number(path.hops[0]) : null;
+  const member = Number(path.destHostId || 0);
+  return member > 0 ? member : null;
+}
+
+/**
+ * 这条目标下发时带不带 probeUdpEcho（Agent 2.2.251 起，agent/udp_probe.go）：规则要带 UDP（udp / both）、
+ * 没填探测地址（填了照填的拨 TCP）、对端是 NEX 管的主机而且它的 Agent 够新 —— 老 Agent 的 UDP 监听不认探测报，
+ * 会把它当普通包转出去，所以版本不够就不带，探测照旧（零长度包探端口不可达，说不准按原来的判法）。
+ * 调度那台的 Agent 也得够新，由心跳另外判（routeSchedulerAgentAtLeast）。
+ *
+ * 只有落在 Agent 自己的 UDP 监听（协议守护）上的探测报才有回声；对端那个端口是 gost 在听（中转机上的中继规则）
+ * 时探测报会被转出去、收不到回声，结论退回零长度包那一档，不会误判。
+ */
+export function routeUdpEchoProbeReady(options: {
+  protocol: unknown;
+  path: Pick<RoutePath, "hops" | "destHostId" | "probe">;
+  farEndAgentVersion: string | null | undefined;
+}): boolean {
+  if (normalizeForwardRuleProtocol(options.protocol) === "tcp") return false;
+  if (options.path.probe) return false;
+  if (routePathFarEndHostId(options.path) === null) return false;
+  return agentSupportsUdpProbe(options.farEndAgentVersion);
 }
 
 /**
