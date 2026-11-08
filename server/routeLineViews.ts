@@ -2,7 +2,7 @@ import * as db from "./db";
 import { queryRaw, quoteDbIdentifier } from "./dbRuntime";
 import { dbBool } from "./repositories/repositoryUtils";
 import { getRouteStatus, routeLatencyIntoHost, routeTrippedNodeIds } from "./routeGroupStats";
-import { describeRouteReason, routeEventMillis, routeGroupOf, splitRouteReason, type RoutePath } from "../shared/routeGroup";
+import { describeRouteIssue, describeRouteReason, routeEventMillis, routeGroupOf, splitRouteReason, unwrapRelayDownReason, type RoutePath } from "../shared/routeGroup";
 import { parseRouteLines } from "../shared/routeLines";
 import { normalizeExitGroupStrategy } from "../shared/exitStrategy";
 import { routeFaultCounts } from "./ops/routeFaultCounts";
@@ -39,7 +39,7 @@ const lineName = (index: number) => (index === 0 ? "主线路" : `备 ${index}`)
 /** 故障看板一行：左边出了什么事，右边系统做了什么。 */
 export type LineAlertRow = { tone: "down" | "warn" | "ok"; text: string; action: string; at: number; ruleId: number };
 
-function switchAlert(row: any, ruleName: string): LineAlertRow | null {
+export function switchAlert(row: any, ruleName: string): LineAlertRow | null {
   const kind = String(row.kind || "");
   // 「换到同出口 IP」（Agent 2.2.251）只是原因后面的标记：判断原因按本来的看，动作里写明换到了哪种备用。
   const { base: reason, sameExitIp } = splitRouteReason(row.reason);
@@ -50,7 +50,12 @@ function switchAlert(row: any, ruleName: string): LineAlertRow | null {
     const switched = sameExitIp ? "已换到同出口 IP 的备用" : "已切换线路";
     if (/failback/.test(lower)) return { tone: "ok", text: `${ruleName} 主线路恢复`, action: "自动切回", at, ruleId };
     if (/relay recovered/.test(lower)) return { tone: "ok", text: `${ruleName} 中转恢复`, action: "已恢复", at, ruleId };
-    if (lower.startsWith("relay down:")) return { tone: "down", text: reason.slice("relay down:".length).trim() || `${ruleName} 中转异常`, action: switched, at, ruleId };
+    if (lower.startsWith("relay down:")) {
+      // Agent 会在面板给的原因外面再包一层「relay down: 」：先剥掉，里面是维护 / 离线 / 熔断就翻成人话
+      const inner = unwrapRelayDownReason(reason);
+      const text = inner.toLowerCase().startsWith("relay down:") ? inner.slice("relay down:".length).trim() : describeRouteIssue(inner);
+      return { tone: "down", text: text || `${ruleName} 中转异常`, action: switched, at, ruleId };
+    }
     if (lower === "health check") return { tone: "down", text: `${ruleName} ${row.fromLabel || "当前线路"}探不通`, action: switched, at, ruleId };
     if (lower === "dial failed") return { tone: "down", text: `${ruleName} 新连接拨不通`, action: switched, at, ruleId };
     if (FAILURE_SWITCH.test(reason)) return { tone: "down", text: `${ruleName} ${describeRouteReason(reason)}`, action: switched, at, ruleId };

@@ -21,6 +21,7 @@ import {
   routeWeightShares,
   serializeRoutePaths,
   splitRouteReason,
+  unwrapRelayDownReason,
   validateRouteGroup,
   type RouteGroup,
   type RoutePath,
@@ -214,6 +215,17 @@ test("路径怎么走的一句话，和原因的翻译", () => {
   assert.deepEqual(splitRouteReason("health check"), { base: "health check", sameExitIp: false });
   assert.equal(describeRouteReason("health check; same exit ip"), "连续探测不通，换到同出口 IP 的备用");
   assert.equal(describeRouteReason("relay down: 东京中转 01; same exit ip"), "中转异常：东京中转 01，换到同出口 IP 的备用");
+  // Agent 在面板给的原因外面再包一层「relay down: 」：剥掉外层再翻，不再显示成「中转异常：relay down: …」
+  assert.equal(describeRouteReason("relay down: relay down: 东京中转 → 落地"), "中转异常：东京中转 → 落地");
+  assert.equal(describeRouteReason("relay down: relay down: 东京中转 → 落地; same exit ip"), "中转异常：东京中转 → 落地，换到同出口 IP 的备用");
+  assert.equal(describeRouteReason("relay down: maintenance: HK2"), "HK2 维护中");
+  assert.equal(describeRouteReason("relay down: node offline: JP01"), "JP01 离线");
+  assert.equal(describeRouteReason("relay down: paused"), "已手动暂停");
+  assert.equal(describeRouteReason("relay down"), "中转异常");
+  // 里面不是那几种短语的不剥：「relay down: maintenance window」不是维护提示
+  assert.equal(unwrapRelayDownReason("relay down: maintenance window"), "relay down: maintenance window");
+  assert.equal(unwrapRelayDownReason(" relay down: relay down: a → b "), "relay down: a → b");
+  assert.equal(unwrapRelayDownReason(null), "");
   assert.deepEqual(routeWeightShares([{ weight: 70 }, { weight: 30 }]), [70, 30]);
   assert.deepEqual(routeWeightShares([{ weight: 0 }, { weight: 0 }]), [50, 50]);
 });

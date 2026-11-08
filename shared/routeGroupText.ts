@@ -164,12 +164,34 @@ function describeRouteReasonBase(text: string): string {
   return text;
 }
 
+/** 面板下发的中转原因本身就是一整句的那几种（routeGroupStats.routeHopDownHints、节点维护 / 熔断 / 暂停）。 */
+function isRelayIssuePhrase(text: string) {
+  const lower = text.toLowerCase();
+  return lower === "relay down" || lower.startsWith("relay down:") || lower === "paused" || lower === "path unresolved"
+    || lower.startsWith("maintenance:") || lower.startsWith("node offline:") || lower.startsWith("breaker:");
+}
+
+/**
+ * 面板给 Agent 的中转原因已经是一整句（relay down: 东京 → 落地、maintenance: HK2…），Agent 报切换事件时
+ * 又在前面包一层「relay down: 」，库里就成了「relay down: relay down: 东京 → 落地」。剥掉外面那层，
+ * 留下里面那句；只有一层、或者里面不是这几种短语的，原样返回。
+ */
+export function unwrapRelayDownReason(reason: unknown): string {
+  let text = String(reason ?? "").trim();
+  while (text.toLowerCase().startsWith("relay down:")) {
+    const inner = text.slice("relay down:".length).trim();
+    if (!isRelayIssuePhrase(inner)) break;
+    text = inner;
+  }
+  return text;
+}
+
 /**
  * Agent 预检 / 中转探测报的问题 → 人话：unreachable、latency 520ms、loss 6%、relay down: JP01。
  * 面板自己写的问题（中转离线、没有入口地址）本来就是中文，原样过。
  */
 export function describeRouteIssue(issue: unknown): string {
-  const text = String(issue ?? "").trim();
+  const text = unwrapRelayDownReason(issue);
   if (!text) return "";
   const lower = text.toLowerCase();
   if (lower === "unreachable") return "连不上";
