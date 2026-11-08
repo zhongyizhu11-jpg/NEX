@@ -467,6 +467,16 @@ html.dark[data-ui-theme="liquid-glass"] .workspace-appbar {
     inset: 0 0 auto;
     height: calc(100% + 36px);
     background: linear-gradient(to bottom, rgb(255 255 255 / 72%) 0%, rgb(255 255 255 / 40%) 55%, transparent 100%);
+    /*
+      顶上这层白雾跟着设置里的「浅色白雾」（--fx-lg-wash，0～80%）一起浓淡：出厂 30% 时顶端 72%、中间 40%，
+      和上一版一模一样；拉到 0 就没有。上面那行是不认 min()/calc() 写在颜色里的老浏览器的退路。
+    */
+    background: linear-gradient(
+      to bottom,
+      rgb(255 255 255 / min(100%, calc(var(--fx-lg-wash, 30%) * 2.4))) 0%,
+      rgb(255 255 255 / min(100%, calc(var(--fx-lg-wash, 30%) * 4 / 3))) 55%,
+      transparent 100%
+    );
     pointer-events: none;
     z-index: -1;
   }
