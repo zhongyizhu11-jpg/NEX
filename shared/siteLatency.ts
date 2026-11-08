@@ -18,9 +18,6 @@
   只握手不发请求：不碰对方的应用层，也不会因为对方返回 403 / 跳转算成「不通」。
 */
 
-export const SITE_LATENCY_AGENT_VERSION = "2.2.237";
-/** 这一版起校验证书、一轮握多次。 */
-export const SITE_LATENCY_VERIFIED_AGENT_VERSION = "2.2.240";
 export const SITE_LATENCY_INTERVAL_SECONDS = 120;
 export const SITE_LATENCY_KEEP = 60;
 

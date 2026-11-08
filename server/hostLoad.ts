@@ -125,7 +125,7 @@ export function landingNodeHostId(nodeId: number): number {
 
 /**
  * 下发给 Agent 的 loadPct：路径沿途（中转 + 落地是 NEX 主机时）最忙那台的负载（带回差的那个数），取整；一台都不知道是 0（不带）。
- * Agent 2.2.251 起拿它扣评分、算「自动」分法的权重；更老的 Agent 面板不给（ROUTE_LOAD_HINT_AGENT_VERSION）。
+ * Agent 拿它扣评分、算「自动」分法的权重。
  */
 export function routePathLoadHint(path: Pick<RoutePath, "hops"> & { destNodeId?: number | null; destHostId?: number | null }, now = Date.now()): number {
   const load = routePathLoadPct(path, (hostId) => hostLoadHintPctOf(hostId, now), landingNodeHostId);

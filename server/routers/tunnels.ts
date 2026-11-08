@@ -26,12 +26,8 @@ import {
 import { withKeyedTaskLock } from "../keyedTaskLock";
 import { afterDatabaseCommit, afterDatabaseTransactionSettled } from "../dbRuntime";
 import { normalizeForwardXVersion } from "../../shared/forwardTypes";
-import { AGENT_FORWARDX_WIREGUARD_VERSION, isForwardXWireGuardV2 } from "../forwardXWireGuard";
-import { isAgentVersionAtLeast } from "../agentRouteUtils";
+import { isForwardXWireGuardV2 } from "../forwardXWireGuard";
 import {
-  AGENT_FORWARDX_RELAY_AGGREGATE_VERSION,
-  AGENT_FORWARDX_RELAY_FAILOVER_VERSION,
-  AGENT_FORWARDX_RELAY_HOT_STANDBY_VERSION,
   isTunnelRelayAggregate,
   normalizeTunnelRelayMode,
   tunnelRelayAggregateSupported,
@@ -40,9 +36,7 @@ import {
 } from "../../shared/tunnelRelay";
 import {
   normalizeTunnelParallelStreams,
-  TUNNEL_PARALLEL_STREAMS_ENTRY_AGENT_VERSION,
   TUNNEL_PARALLEL_STREAMS_MAX,
-  TUNNEL_PARALLEL_STREAMS_PEER_AGENT_VERSION,
   tunnelParallelStreamsUnavailableReason,
 } from "../../shared/tunnelParallelStreams";
 import { normalizeExitGroupStrategy } from "../../shared/exitStrategy";
@@ -99,56 +93,12 @@ export function isExplicitListenPortRequest(
     && (explicitHint === true || (explicitHint === undefined && requestedPort !== currentPort));
 }
 
-async function requireForwardXWireGuardAgentVersions(hostIds: number[]) {
-  const ids = Array.from(new Set(hostIds.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0)));
-  const hosts = await Promise.all(ids.map(async (id) => ({ id, host: await db.getHostById(id) as any })));
-  const unsupported = hosts.filter(({ host }) => (
-    !host || !isAgentVersionAtLeast(String(host.agentVersion || ""), AGENT_FORWARDX_WIREGUARD_VERSION)
-  ));
-  if (unsupported.length === 0) return;
-  const labels = unsupported.map(({ id, host }) => host?.name || host?.ip || `主机 ${id}`).slice(0, 5);
-  throw new Error(`NEX V2 需要链路内所有 Agent 升级到 v${AGENT_FORWARDX_WIREGUARD_VERSION} 或更高版本：${labels.join("、")}`);
-}
-
 async function requireMimicEnvironmentForHosts(hostIds: number[]) {
   const ids = Array.from(new Set(hostIds
     .map((id) => Number(id))
     .filter((id) => Number.isInteger(id) && id > 0)));
   const hosts = await Promise.all(ids.map((id) => db.getHostById(id)));
   assertMimicEnvironment(hosts.map((host, index) => host || { id: ids[index], isOnline: false }));
-}
-
-async function requireForwardXRelayFailoverAgentVersions(hostIds: number[]) {
-  const ids = Array.from(new Set(hostIds.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0)));
-  const hosts = await Promise.all(ids.map(async (id) => ({ id, host: await db.getHostById(id) as any })));
-  const unsupported = hosts.filter(({ host }) => (
-    !host || !isAgentVersionAtLeast(String(host.agentVersion || ""), AGENT_FORWARDX_RELAY_FAILOVER_VERSION)
-  ));
-  if (unsupported.length === 0) return;
-  const labels = unsupported.map(({ id, host }) => host?.name || host?.ip || `主机 ${id}`).slice(0, 5);
-  throw new Error(`NEX 中转故障转移需要入口 Agent 升级到 v${AGENT_FORWARDX_RELAY_FAILOVER_VERSION} 或更高版本：${labels.join("、")}`);
-}
-
-async function requireForwardXRelayAggregateAgentVersions(hostIds: number[]) {
-  const ids = Array.from(new Set(hostIds.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0)));
-  const hosts = await Promise.all(ids.map(async (id) => ({ id, host: await db.getHostById(id) as any })));
-  const unsupported = hosts.filter(({ host }) => (
-    !host || !isAgentVersionAtLeast(String(host.agentVersion || ""), AGENT_FORWARDX_RELAY_AGGREGATE_VERSION)
-  ));
-  if (unsupported.length === 0) return;
-  const labels = unsupported.map(({ id, host }) => host?.name || host?.ip || `主机 ${id}`).slice(0, 5);
-  throw new Error(`NEX 中转「单连接叠加」需要入口、中转和出口 Agent 升级到 v${AGENT_FORWARDX_RELAY_AGGREGATE_VERSION} 或更高版本：${labels.join("、")}`);
-}
-
-async function requireForwardXRelayHotStandbyAgentVersions(hostIds: number[]) {
-  const ids = Array.from(new Set(hostIds.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0)));
-  const hosts = await Promise.all(ids.map(async (id) => ({ id, host: await db.getHostById(id) as any })));
-  const unsupported = hosts.filter(({ host }) => (
-    !host || !isAgentVersionAtLeast(String(host.agentVersion || ""), AGENT_FORWARDX_RELAY_HOT_STANDBY_VERSION)
-  ));
-  if (unsupported.length === 0) return;
-  const labels = unsupported.map(({ id, host }) => host?.name || host?.ip || `主机 ${id}`).slice(0, 5);
-  throw new Error(`NEX 中转「热备」需要入口、中转和出口 Agent 升级到 v${AGENT_FORWARDX_RELAY_HOT_STANDBY_VERSION} 或更高版本：${labels.join("、")}`);
 }
 
 function isTunnelProxyProtocolSupported(mode: unknown) {
@@ -1151,47 +1101,6 @@ export const tunnelsRouter = router({
           exits: input.loadBalanceExits || [],
           reservations: heldReservations,
         });
-        if (forwardxVersion === "v2") {
-          const entryHostIds = await getTunnelEntryTestHostIds({
-            entryGroupId: input.entryGroupId ?? null,
-            entryHostId,
-          });
-          await requireForwardXWireGuardAgentVersions([
-            ...entryHostIds,
-            ...(hopHostIds || []),
-            exitHostId,
-            ...extraExitNodes.map((node) => node.hostId),
-          ]);
-        }
-        if (relayMode === "failover" && normalizedMode === "forwardx") {
-          const entryHostIds = await getTunnelEntryTestHostIds({
-            entryGroupId: input.entryGroupId ?? null,
-            entryHostId,
-          });
-          await requireForwardXRelayFailoverAgentVersions(entryHostIds);
-        }
-        if (relayMode === "aggregate") {
-          const entryHostIds = await getTunnelEntryTestHostIds({
-            entryGroupId: input.entryGroupId ?? null,
-            entryHostId,
-          });
-          await requireForwardXRelayAggregateAgentVersions([
-            ...entryHostIds,
-            ...(hopHostIds || []),
-            exitHostId,
-          ]);
-        }
-        if (relayMode === "hot_standby") {
-          const entryHostIds = await getTunnelEntryTestHostIds({
-            entryGroupId: input.entryGroupId ?? null,
-            entryHostId,
-          });
-          await requireForwardXRelayHotStandbyAgentVersions([
-            ...entryHostIds,
-            ...(hopHostIds || []),
-            exitHostId,
-          ]);
-        }
         const runtimeOptions = normalizeTunnelRuntimeOptions(input, normalizedMode);
         assertLinkShapingOptions(runtimeOptions);
         if (runtimeOptions.udpOverTcp) {
@@ -1670,31 +1579,6 @@ export const tunnelsRouter = router({
           (data as any).loadBalanceStrategy = inheritedExitGroupStrategy(nextExitGroup, (data as any).loadBalanceStrategy);
         }
         if ((data as any).isEnabled !== undefined) (data as any).disabledByGroup = false;
-        if (nextWireGuardEnabled && nextTunnelEnabled) {
-          const entryHostIds = await getTunnelEntryTestHostIds({
-            ...tunnel,
-            ...data,
-            entryHostId,
-            exitHostId,
-            entryGroupId: (data as any).entryGroupId !== undefined ? (data as any).entryGroupId : (tunnel as any).entryGroupId,
-          });
-          await requireForwardXWireGuardAgentVersions([
-            ...entryHostIds,
-            ...normalizedRequestedHopIds,
-            exitHostId,
-            ...extraExitNodes.map((node) => node.hostId),
-          ]);
-        }
-        if (nextRelayMode === "failover" && nextModeForRuntime === "forwardx" && nextTunnelEnabled) {
-          const entryHostIds = await getTunnelEntryTestHostIds({
-            ...tunnel,
-            ...data,
-            entryHostId,
-            exitHostId,
-            entryGroupId: (data as any).entryGroupId !== undefined ? (data as any).entryGroupId : (tunnel as any).entryGroupId,
-          });
-          await requireForwardXRelayFailoverAgentVersions(entryHostIds);
-        }
         const hopChanged = (requestedHopHostIds !== undefined || (hopConnectHostsProvided && existingHopHostIds.length >= 3))
           ? (
             JSON.stringify(normalizedRequestedHopIds) !== JSON.stringify(existingHopHostIds)
@@ -1982,18 +1866,7 @@ export const tunnelsRouter = router({
           await db.updateTunnel(input.id, { parallelStreams: streams } as any);
           await pushTunnelEndpointRefresh({ ...(tunnel as any), parallelStreams: streams }, "tunnel-parallel-streams-updated", { urgent: true });
         }
-        // 哪几台的 Agent 还太旧（这时照常按单路跑）：给界面提示「升级后生效」。
-        const entryHostId = Number(tunnel.entryHostId);
-        const hostIds = Array.from(new Set([entryHostId, Number(tunnel.exitHostId), ...((await hopRepo.getTunnelHops(Number(tunnel.id))) as any[]).map((hop) => Number(hop.hostId))]))
-          .filter((id) => id > 0);
-        const hosts = await Promise.all(hostIds.map(async (id) => ({ id, host: await db.getHostById(id) as any })));
-        const outdated = hosts
-          .filter(({ id, host }) => !isAgentVersionAtLeast(
-            String(host?.agentVersion || ""),
-            id === entryHostId ? TUNNEL_PARALLEL_STREAMS_ENTRY_AGENT_VERSION : TUNNEL_PARALLEL_STREAMS_PEER_AGENT_VERSION,
-          ))
-          .map(({ id, host }) => String(host?.name || host?.ip || `主机 ${id}`));
-        return { id: input.id, parallelStreams: streams, outdatedHosts: streams >= 2 ? outdated.slice(0, 5) : [] };
+        return { id: input.id, parallelStreams: streams };
       })),
 
     delete: protectedProcedure

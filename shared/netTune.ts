@@ -9,7 +9,6 @@
   这里放参数表、给人看的名字和「达标」的判断，界面和面板都用。
 */
 
-export const NETTUNE_MIN_AGENT_VERSION = "2.2.250";
 
 export type NetTuneRuleKind = "atLeast" | "atMost" | "bitsSet" | "equals";
 export type NetTuneGroup = "forwarding" | "congestion" | "buffers" | "conntrack" | "queues" | "tcp";

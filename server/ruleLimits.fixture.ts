@@ -144,11 +144,6 @@ try {
   await reconcileRuleLimits();
   assert.equal((await db.getForwardRuleById(id))!.ruleLimitReason, "expired");
 
-  // A per-rule speed cap needs entry Agents that enforce it.
-  await runtime.executeRaw(`UPDATE hosts SET "agentVersion"='2.2.186' WHERE id=1`);
-  await assert.rejects(admin.update({ id, rateLimitMbps: 1 }), /升级 Agent/);
-  assert.equal((await db.getForwardRuleById(id))!.rateLimitMbps, 0);
-  await runtime.executeRaw(`UPDATE hosts SET "agentVersion"='2.2.228' WHERE id=1`);
 
   // Administrators' own rules obey their own quota; other admin rules are unaffected.
   const self = await admin.create({ ...direct, sourcePort: 25010, trafficLimit: 1000, trafficMode: "both" });

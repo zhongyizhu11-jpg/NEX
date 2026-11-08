@@ -4,21 +4,6 @@ export const TUNNEL_RELAY_MODES = ["chain", "failover", "aggregate", "hot_standb
 
 export type TunnelRelayMode = (typeof TUNNEL_RELAY_MODES)[number];
 
-export const AGENT_FORWARDX_RELAY_FAILOVER_VERSION = "2.2.160";
-
-/**
- * Single-connection multipath aggregation is a NEX protocol feature, so an
- * Agent older than this cannot run an aggregate tunnel.
- */
-export const AGENT_FORWARDX_RELAY_AGGREGATE_VERSION = "2.2.194";
-
-/**
- * 热备（hot_standby）：每条连接同时连上全部中转，平时只走第一台，其余几条腿连着不送；
- * 第一台停住几百毫秒内就由下一台接手，连接不断。腿上的 standby 标记要 Agent / FXP 认得
- * 才有用（老的会把它当叠加腿一起送 —— 也能通，只是不省流量）。
- */
-export const AGENT_FORWARDX_RELAY_HOT_STANDBY_VERSION = "2.2.238";
-
 /**
  * 隧道编辑框里「中转方式」三个选项的名字：顺序 / 主备 / 叠加（叠加就是 shared/linkTerms.ts 的单连接叠加，
  * 和链路管理的「叠加」页签同一个东西；选叠加的隧道保存后列在那一栏）。

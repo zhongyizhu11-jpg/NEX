@@ -1,13 +1,11 @@
 import { z } from "zod";
 import * as db from "../db";
-import { isAgentVersionAtLeast } from "../agentRouteUtils";
 import { RULE_TRAFFIC_MODES, type RuleTrafficMode } from "../../shared/ruleLimits";
 
 /**
  * 单条规则限额的入参（创建 / 编辑共用）。只有管理员能传；校验和落库都在这里，
  * 三条创建路（直连、转发组、共享 TLS 入站）和编辑都调同一套。
  */
-export const RULE_RATE_LIMIT_MIN_AGENT_VERSION = "2.2.187";
 
 export const ruleLimitInputShape = {
   /** 限速 Mbps，0 = 不限。 */
@@ -86,8 +84,5 @@ export async function validateRuleRateLimitTargets(rule: Record<string, any>) {
   for (const id of new Set(hostIds)) {
     const host: any = await db.getHostById(id);
     if (!host) continue;
-    if (!isAgentVersionAtLeast(String(host.agentVersion || ""), RULE_RATE_LIMIT_MIN_AGENT_VERSION)) {
-      throw new Error(`单条规则限速需要入口机 Agent ${RULE_RATE_LIMIT_MIN_AGENT_VERSION} 或以上（${host.name || `主机 #${id}`} 还是 ${host.agentVersion || "未知版本"}），请先升级 Agent`);
-    }
   }
 }

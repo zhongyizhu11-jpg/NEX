@@ -58,13 +58,11 @@ export default function HostNetTuneSection({ host }: { host: { id?: number | str
   const evaluation = useMemo(() => (status?.latest?.values ? evaluateNetTune(status.latest.values) : null), [status?.latest]);
   const summary = !status
     ? undefined
-    : !status.supported
-      ? `需要 Agent ${status.minAgentVersion}`
-      : status.pending
-        ? (status.pending.apply ? "正在调优…" : "正在检查…")
-        : evaluation
-          ? (evaluation.low > 0 ? `${evaluation.low} 项可以调` : `${evaluation.ok}/${evaluation.total} 达标`)
-          : "未检查";
+    : status.pending
+      ? (status.pending.apply ? "正在调优…" : "正在检查…")
+      : evaluation
+        ? (evaluation.low > 0 ? `${evaluation.low} 项可以调` : `${evaluation.ok}/${evaluation.total} 达标`)
+        : "未检查";
   if (statusQuery.isError) return null;
   return (
     <CollapsibleSection title="网络调优" summary={summary}>
@@ -86,9 +84,6 @@ function HostNetTuneBody({ hostId }: { hostId: number }) {
   const evaluation = useMemo(() => (status?.latest?.values ? evaluateNetTune(status.latest.values) : null), [status?.latest]);
 
   if (!status) return <p className="text-meta text-muted-foreground">正在读取…</p>;
-  if (!status.supported) {
-    return <p className="text-meta text-muted-foreground">需要把这台机器的 Agent 升级到 {status.minAgentVersion} 才能检查和调优。安装脚本装机时已经按同样的规则调过一遍。</p>;
-  }
 
   const pending = status.pending;
   const latest = status.latest;

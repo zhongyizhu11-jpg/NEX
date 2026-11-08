@@ -51,7 +51,7 @@ test("per-rule speed caps reuse supported backend guards and cannot relax wider 
   assert.equal(effective({ ...base, forwardGroupId: 2, forwardGroupLimitMbps: 3 }).mbps, 3);
   assert.deepEqual(effective({ ...base, ruleLimitMbps: 0 }), { mbps: 0, scope: "" });
   for (const forwardType of ["iptables", "nftables", "realm", "socat", "nginx"]) {
-    assert.equal(selectProtocolGuardRateLimit({ agentVersion: "2.2.190", hostId: 1, rule: { forwardType, userId: 2 }, rateLimitScope: "rule-8-host-1", limitIn: 1250000, limitOut: 1250000 }).rateLimitScope, "rule-8-host-1");
+    assert.equal(selectProtocolGuardRateLimit({ hostId: 1, rule: { forwardType, userId: 2 }, rateLimitScope: "rule-8-host-1", limitIn: 1250000, limitOut: 1250000 }).rateLimitScope, "rule-8-host-1");
   }
   // Group members and route relays share their root rule's bucket.
   assert.equal(ruleLimitRootId({ id: 30, forwardGroupRuleId: 8 }), 8);

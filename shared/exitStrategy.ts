@@ -24,12 +24,6 @@ export const EXIT_GROUP_STRATEGY_LABELS: Record<ExitGroupStrategy, string> = {
   least_load: `${LINK_SPREAD_LABELS.least_load.label} - ${LINK_SPREAD_LABELS.least_load.hint}`,
 };
 
-/**
- * Agent 从这一版起认「按负载」（FXP 出口组、线路组），按访客固定也换成了一致性哈希。
- * 更老的 Agent：FXP 出口当轮流；线路组面板改发「按权重」，不让它退成主备。
- */
-export const LEAST_LOAD_AGENT_VERSION = "2.2.232";
-
 export function normalizeExitGroupStrategy(value: unknown): ExitGroupStrategy {
   const raw = String(value || "").trim().toLowerCase();
   // 隧道上老的 least_conn（以前从没真正生效，一直当轮流）就是现在的「按负载」。

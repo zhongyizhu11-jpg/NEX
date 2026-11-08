@@ -10,7 +10,6 @@
  * server/linkDiagnosticsChecks.ts 判。
  */
 
-export const LINK_DIAGNOSTICS_AGENT_VERSION = "2.2.226";
 
 export type DiagnosticStatus = "pass" | "warn" | "fail" | "skip" | "pending";
 export type DiagnosticGroup = "config" | "host" | "entry" | "link" | "target";
@@ -36,7 +35,6 @@ export const DIAGNOSTIC_STATUS_LABELS: Record<DiagnosticStatus, string> = {
 
 /** 旧 Agent 上那几项不算失败，换成这一句。 */
 export const DIAGNOSTIC_NEEDS_UPGRADE_LABEL = "需要升级 Agent";
-export const DIAGNOSTIC_NEEDS_UPGRADE_SUMMARY = `需要升级 Agent 到 ${LINK_DIAGNOSTICS_AGENT_VERSION}`;
 
 export type DiagnosticItem = {
   /** 在一次诊断里唯一，例如 `config.enabled`、`agent:3:listen:443/tcp`。 */

@@ -13,10 +13,8 @@ import test from "node:test";
  *
  *   · 入口给 FXP 的目标换成出口本机的调度器（127.0.0.1:端口），入口自己不跑调度器 —— 上一版把
  *     调度器开在入口、又把 127.0.0.1 当目标发给出口，出口拨的是它自己的本机，那里什么都没有；
- *   · 出口机收到一条「只跑调度器」的运行规则（schedulerOnly，Agent 2.2.199 起），出口 FXP 的
- *     UDP 目标表也指向它；
- *   · 出口 Agent 早于 2.2.199 时什么都不下发，入口和出口都拨路径 A（经过中转就拨中转）；
- *   · 开着负载均衡时每个出口各跑一个调度器，要每个出口都够版本；
+ *   · 出口机收到一条「只跑调度器」的运行规则（schedulerOnly），出口 FXP 的 UDP 目标表也指向它；
+ *   · 开着负载均衡时每个出口各跑一个调度器；
  *   · 调度器在出口，「现在走哪条」和评分是出口机报上来的 —— 只有主出口有权报这条规则；负载均衡的
  *     出口节点不报，不然几个出口的状态互相覆盖；入口不跑调度器，也不能报。
  *
@@ -34,12 +32,9 @@ type Beat = {
 };
 type Outcome = {
   mainDial: { ip: string; port: number } | null;
-  exitNew: Beat;
-  entryNew: Beat;
-  exitOld: Beat;
-  entryOld: Beat;
+  exitBeat: Beat;
+  entryBeat: Beat;
   reportable: Record<string, number[]>;
-  entryPlanKept: { before: boolean; afterSameVersion: boolean; afterVersionChange: boolean };
   allowed: boolean;
   schedulerHosts: Record<string, number[]>;
 };
@@ -65,10 +60,10 @@ function run(): Outcome {
 
     await exec("INSERT INTO users (id, username, password, role) VALUES (1, 'admin', 'hash', 'admin')");
     for (const [id, name, ip, token, version] of [
-      [1, "出口", "203.0.113.1", "tok1", "2.2.199"],
-      [2, "入口", "203.0.113.2", "tok2", "2.2.199"],
-      [3, "中转", "203.0.113.3", "tok3", "2.2.199"],
-      [4, "旧出口节点", "203.0.113.4", "tok4", "2.2.150"],
+      [1, "出口", "203.0.113.1", "tok1", "2.2.251"],
+      [2, "入口", "203.0.113.2", "tok2", "2.2.251"],
+      [3, "中转", "203.0.113.3", "tok3", "2.2.251"],
+      [4, "出口节点", "203.0.113.4", "tok4", "2.2.251"],
     ]) {
       await exec(
         'INSERT INTO hosts (id, name, ip, ipv4, "hostType", "agentToken", "agentVersion", "userId", "isOnline", "lastHeartbeat") VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1, ?)',
@@ -80,7 +75,7 @@ function run(): Outcome {
       'INSERT INTO tunnels (id, name, "entryHostId", "exitHostId", mode, "listenPort", "userId", "isEnabled") VALUES (1, ?, 2, 1, ?, ?, 1, 1)',
       ["NEX 隧道", "forwardx", 23001],
     );
-    // 隧道 2：NEX，开着负载均衡，另一个出口是 Agent 很旧的 4 号机。
+    // 隧道 2：NEX，开着负载均衡，另一个出口是 4 号机。
     await exec(
       'INSERT INTO tunnels (id, name, "entryHostId", "exitHostId", mode, "listenPort", "userId", "isEnabled", "loadBalanceEnabled", "loadBalanceStrategy") VALUES (2, ?, 2, 1, ?, ?, 1, 1, 1, ?)',
       ["NEX 负载均衡", "forwardx", 23002, "round_robin"],
@@ -164,44 +159,9 @@ function run(): Outcome {
       }
       return { entry, exitUdpTargets, exitStreamTargets, schedulers, runningFailover };
     };
-    const setVersion = (hostId, version) => exec('UPDATE hosts SET "agentVersion" = ? WHERE id = ?', [version, hostId]);
-
-    /*
-      入口的「稳定计划」：入口自己什么都没变时心跳走快路径，5 分钟才核对一次。出口换了 Agent 版本
-      之后入口得马上重算（让出口拨调度器还是拨路径 A 跟着变），这里放一份假的计划看它有没有被清掉。
-    */
-    const gate = await import(url("server/agentHeartbeatGate.ts"));
-    const hash = (c) => c.repeat(64);
-    const entryPlan = {
-      plannedAt: Date.now(), configRevision: 1, desiredStateHash: hash("a"), localStateSignature: hash("b"),
-      stateSignatures: { rules: hash("c") }, agentVersion: "2.2.199", agentBootId: "boot", agentProcessStartedAt: 1,
-      defaultNetworkInterface: "eth0", pluginInventorySignature: "", mimicEnvironmentSignature: "", idleNextInterval: 30, panelUrl: "",
-    };
-    const entryPlanMatch = {
-      forceReconcile: false, hasBlockingWork: false, recoveryTriggered: false, addressChanged: false, hasDnsChanges: false,
-      hasLocalStateUpload: false, hasEndpointEvents: false, localStateSignature: hash("b"), stateSignatures: { rules: hash("c") },
-      agentVersion: "2.2.199", agentBootId: "boot", agentProcessStartedAt: 1, defaultNetworkInterface: "eth0",
-      pluginInventorySignature: "", mimicEnvironmentSignature: "", agentLastReceivedRevision: 1, agentLastAppliedRevision: 1,
-      agentLastReceivedHash: hash("a"), agentLastAppliedHash: hash("a"),
-    };
-    const entryPlanKept = () => !!gate.agentStableHeartbeatPlanCache.match(2, entryPlanMatch);
-    const settle = () => new Promise((resolve) => setTimeout(resolve, 300));
-
-    const exitNew = await beat("tok1", "2.2.199");
-    await setVersion(1, "2.2.199");
-    const entryNew = await beat("tok2", "2.2.199");
-    gate.agentStableHeartbeatPlanCache.remember(2, entryPlan);
-    const planBefore = entryPlanKept();
-    await beat("tok1", "2.2.199");
-    await settle();
-    const planAfterSameVersion = entryPlanKept();
-    const exitOld = await beat("tok1", "2.2.198");
-    await settle();
-    const planAfterVersionChange = entryPlanKept();
-    await setVersion(1, "2.2.198");
-    const entryOld = await beat("tok2", "2.2.199");
+    const exitBeat = await beat("tok1", "2.2.251");
+    const entryBeat = await beat("tok2", "2.2.251");
     server.close();
-    const entryPlanKeptOutcome = { before: planBefore, afterSameVersion: planAfterSameVersion, afterVersionChange: planAfterVersionChange };
 
     // 谁有权报这条规则的「现在走哪条」和评分。入口上再放一条不走隧道的线路组规则（101），和一条
     // 隧道已经删掉的（102）：这两条的调度器在入口本机，入口照旧能报。心跳都跑完了才加，不影响上面。
@@ -227,7 +187,7 @@ function run(): Outcome {
     for (const tunnelId of [1, 2]) {
       schedulerHosts[tunnelId] = crud.routeSchedulerHostIds(2, await db.getTunnelById(tunnelId), await db.getTunnelExitNodes(tunnelId));
     }
-    console.log("OUTCOME " + JSON.stringify({ mainDial, exitNew, entryNew, exitOld, entryOld, reportable, entryPlanKept: entryPlanKeptOutcome, allowed, schedulerHosts }));
+    console.log("OUTCOME " + JSON.stringify({ mainDial, exitBeat, entryBeat, reportable, allowed, schedulerHosts }));
   `;
   const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
     cwd: path.resolve(import.meta.dirname, ".."),
@@ -248,8 +208,8 @@ test("前提：主线路经过中转，解析出了拨号地址", () => {
   assert.equal(outcome.mainDial!.ip, "203.0.113.3");
 });
 
-test("出口 Agent 2.2.199：出口机只跑调度器，不占规则端口", () => {
-  const scheduler = outcome.exitNew.schedulers["1"];
+test("出口机只跑调度器，不占规则端口", () => {
+  const scheduler = outcome.exitBeat.schedulers["1"];
   assert.ok(scheduler, "出口机没收到调度器");
   assert.equal(scheduler.forwardType, "route-scheduler");
   assert.equal(scheduler.failover.enabled, true);
@@ -264,15 +224,15 @@ test("出口 Agent 2.2.199：出口机只跑调度器，不占规则端口", () 
 });
 
 test("入口把 FXP 的目标换成出口本机的调度器，自己不跑调度器", () => {
-  const port = outcome.exitNew.schedulers["1"].failover.listenPort;
-  assert.deepEqual(outcome.entryNew.entry["1"], { targetIp: "127.0.0.1", targetPort: port, failover: false });
-  assert.equal(outcome.entryNew.runningFailover["1"], undefined, "入口不该再起调度器");
-  assert.deepEqual(outcome.entryNew.schedulers, {}, "入口不跑只调度的规则");
+  const port = outcome.exitBeat.schedulers["1"].failover.listenPort;
+  assert.deepEqual(outcome.entryBeat.entry["1"], { targetIp: "127.0.0.1", targetPort: port, failover: false });
+  assert.equal(outcome.entryBeat.runningFailover["1"], undefined, "入口不该再起调度器");
+  assert.deepEqual(outcome.entryBeat.schedulers, {}, "入口不跑只调度的规则");
 });
 
 test("出口 FXP 的 UDP 目标表：线路组规则交给调度器，别的规则照旧", () => {
-  const port = outcome.exitNew.schedulers["1"].failover.listenPort;
-  const targets = outcome.exitNew.exitUdpTargets["1"];
+  const port = outcome.exitBeat.schedulers["1"].failover.listenPort;
+  const targets = outcome.exitBeat.exitUdpTargets["1"];
   assert.ok(targets, "出口没收到 FXP 规格");
   assert.deepEqual(targets.find((item) => item.ruleId === 1), { ruleId: 1, targetIp: "127.0.0.1", targetPort: port });
   assert.deepEqual(targets.find((item) => item.ruleId === 2), { ruleId: 2, targetIp: "198.51.100.7", targetPort: 443 });
@@ -280,58 +240,43 @@ test("出口 FXP 的 UDP 目标表：线路组规则交给调度器，别的规�
 
 test("出口 FXP 的 TCP 目标表包含入口写进 hello 的目标，出口只拨表里的", () => {
   const tunnelOfRule: Record<string, string> = { "1": "1", "2": "1", "3": "2", "4": "3" };
-  for (const [label, entryBeat, exitBeat] of [["新", outcome.entryNew, outcome.exitNew], ["老", outcome.entryOld, outcome.exitOld]] as const) {
-    assert.ok(Object.keys(entryBeat.entry).length >= 3, `${label}入口的规则太少，这个测试没测到东西`);
-    for (const [ruleId, target] of Object.entries(entryBeat.entry)) {
-      const targets = exitBeat.exitStreamTargets[tunnelOfRule[ruleId]];
-      assert.ok(targets, `${label}出口没收到隧道 ${tunnelOfRule[ruleId]} 的 FXP 规格`);
-      assert.ok(
-        targets.some((item) => item.ruleId === Number(ruleId) && item.targetIp === target.targetIp && item.targetPort === target.targetPort),
-        `${label}出口的目标表里没有规则 ${ruleId} 的 ${target.targetIp}:${target.targetPort}：${JSON.stringify(targets)}`,
-      );
-    }
+  const { entryBeat, exitBeat } = outcome;
+  assert.ok(Object.keys(entryBeat.entry).length >= 3, "入口的规则太少，这个测试没测到东西");
+  for (const [ruleId, target] of Object.entries(entryBeat.entry)) {
+    const targets = exitBeat.exitStreamTargets[tunnelOfRule[ruleId]];
+    assert.ok(targets, `出口没收到隧道 ${tunnelOfRule[ruleId]} 的 FXP 规格`);
+    assert.ok(
+      targets.some((item) => item.ruleId === Number(ruleId) && item.targetIp === target.targetIp && item.targetPort === target.targetPort),
+      `出口的目标表里没有规则 ${ruleId} 的 ${target.targetIp}:${target.targetPort}：${JSON.stringify(targets)}`,
+    );
   }
   assert.ok(
-    outcome.exitNew.exitStreamTargets["1"].every((item) => [1, 2].includes(item.ruleId)),
+    outcome.exitBeat.exitStreamTargets["1"].every((item) => [1, 2].includes(item.ruleId)),
     "别的隧道的规则不该出现在这条隧道出口的目标表里",
   );
 });
 
 test("不开线路组的规则：入口照旧把规则目标给出口，出口没有调度器", () => {
-  assert.deepEqual(outcome.entryNew.entry["2"], { targetIp: "198.51.100.7", targetPort: 443, failover: false });
-  assert.equal(outcome.exitNew.schedulers["2"], undefined);
+  assert.deepEqual(outcome.entryBeat.entry["2"], { targetIp: "198.51.100.7", targetPort: 443, failover: false });
+  assert.equal(outcome.exitBeat.schedulers["2"], undefined);
 });
 
-test("出口 Agent 早于 2.2.199：不下发调度，入口和出口都拨路径 A（经过中转就拨中转）", () => {
-  const dial = outcome.mainDial!;
-  assert.deepEqual(outcome.exitOld.schedulers, {}, "老 Agent 认不出只跑调度器的规则，会去装端口状态");
-  assert.deepEqual(outcome.entryOld.entry["1"], { targetIp: dial.ip, targetPort: dial.port, failover: false });
-  const targets = outcome.exitOld.exitUdpTargets["1"];
-  assert.ok(targets, "出口没收到 FXP 规格");
-  assert.deepEqual(targets.find((item) => item.ruleId === 1), { ruleId: 1, targetIp: dial.ip, targetPort: dial.port });
-});
-
-test("负载均衡隧道：有一个出口的 Agent 太旧，就都不调度、都拨路径 A", () => {
-  assert.equal(outcome.exitNew.schedulers["3"], undefined, "另一个出口还是老 Agent，入口给的目标对每个出口都一样");
-  assert.deepEqual(outcome.entryNew.entry["3"], { targetIp: "198.51.100.7", targetPort: 443, failover: false });
-  assert.deepEqual(outcome.schedulerHosts["2"], [1, 4], "线路面板按两个出口里最旧的那台说");
+test("负载均衡隧道：每个出口各跑一个调度器，入口让出口拨本机的调度器", () => {
+  const scheduler = outcome.exitBeat.schedulers["3"];
+  assert.ok(scheduler, "主出口没收到调度器");
+  assert.deepEqual(outcome.entryBeat.entry["3"], { targetIp: "127.0.0.1", targetPort: scheduler.failover.listenPort, failover: false });
+  assert.deepEqual(outcome.schedulerHosts["2"], [1, 4], "两个出口都跑调度器");
   assert.deepEqual(outcome.schedulerHosts["1"], [1]);
 });
 
 test("按访客固定：隧道打开「出口发送到目标」时，调度器从出口发的 PROXY 头里读访客，头原样转给落地", () => {
-  const scheduler = outcome.exitNew.schedulers["4"];
+  const scheduler = outcome.exitBeat.schedulers["4"];
   assert.ok(scheduler, "出口机没收到调度器");
   assert.equal(scheduler.failover.strategy, "ip_hash");
   assert.equal(scheduler.failover.proxyProtocolReceive, true);
   assert.equal(scheduler.failover.proxyProtocolSend, true);
   assert.equal(scheduler.failover.proxyProtocolStrip, undefined, "头是给落地的，不能扔");
-  assert.deepEqual(outcome.entryNew.entry["4"], { targetIp: "127.0.0.1", targetPort: scheduler.failover.listenPort, failover: false });
-});
-
-test("出口的 Agent 换了版本，隧道入口马上重算，不等 5 分钟一次的核对", () => {
-  assert.equal(outcome.entryPlanKept.before, true, "前提：入口的稳定计划放进去了");
-  assert.equal(outcome.entryPlanKept.afterSameVersion, true, "出口版本没变时不打扰入口");
-  assert.equal(outcome.entryPlanKept.afterVersionChange, false, "出口降级后入口还按老计划让出口拨调度器，出口那边已经没有调度器了");
+  assert.deepEqual(outcome.entryBeat.entry["4"], { targetIp: "127.0.0.1", targetPort: scheduler.failover.listenPort, failover: false });
 });
 
 test("只有主出口有权报隧道上的线路组，入口、负载均衡的出口节点和中转机没有", () => {

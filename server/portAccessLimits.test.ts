@@ -2,8 +2,6 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
-  PORT_ACCESS_LIMIT_AGENT_VERSION,
-  agentSupportsPortAccessLimits,
   onlyPortAccessLimitChanged,
   portAccessLimitAction,
   portAccessLimitsEnabled,
@@ -51,17 +49,10 @@ test("canonical snapshots ignore rule ordering and duplicate ports", () => {
   );
 });
 
-test("Agent 2.2.229 gate: new Agents always get a snapshot (empty removes limits), old Agents get nothing", () => {
-  assert.equal(PORT_ACCESS_LIMIT_AGENT_VERSION, "2.2.229");
-  assert.equal(agentSupportsPortAccessLimits("2.2.228"), false);
-  assert.equal(agentSupportsPortAccessLimits(""), false);
-  assert.equal(agentSupportsPortAccessLimits("2.2.229"), true);
-  assert.equal(agentSupportsPortAccessLimits("2.2.230"), true);
-  assert.deepEqual(portAccessLimitAction([], true)?.portAccessLimits, []);
-  assert.equal(portAccessLimitAction([], false), null);
+test("Agents always get a snapshot (empty removes limits)", () => {
+  assert.deepEqual(portAccessLimitAction([]).portAccessLimits, []);
   const specs = [{ userId: 1, maxIPs: 2, ports: [22] }];
-  assert.equal(portAccessLimitAction(specs, false), null);
-  const action = portAccessLimitAction(specs, true)!;
+  const action = portAccessLimitAction(specs);
   assert.equal(action.statusType, "runtime");
   assert.equal(action.forwardType, "port-access-limit-sync");
   assert.equal(action.sourcePort, 0);
@@ -71,11 +62,11 @@ test("Agent 2.2.229 gate: new Agents always get a snapshot (empty removes limits
 
 test("heartbeat sync covers already-running entry rules without restarting their runtime", () => {
   const source = readFileSync(new URL("./agentHeartbeatRoute.ts", import.meta.url), "utf8");
-  const start = source.indexOf("agentSupportsPortAccessLimits(effectiveAgentVersion)");
+  const start = source.indexOf("const enforcePortLimits = await readPortAccessLimitsEnabled");
   const block = source.slice(start, source.indexOf("const effectiveActions = dropStalePortRemoveActions", start));
   assert.ok(start > 0 && block.length > 0, "heartbeat port-limit block not found");
   assert.match(block, /agentHostRules/);
-  assert.match(source.slice(start - 80, start), /!deferActionsForLocalState &&/);
+  assert.match(source.slice(source.lastIndexOf("\n    if (", start), start), /if \(!deferActionsForLocalState\) \{/);
   assert.match(block, /runtimeBool\(rule\.pendingDelete\)/);
   assert.match(block, /runtimeBool\(rule\.isEnabled\)/);
   assert.match(block, /isRuleProtocolEnabled/);
@@ -104,11 +95,11 @@ test("a failed setting read is not treated as off: the previous snapshot is reus
   // 从没发过：读失败这轮不发，Agent 保持现状。
   assert.equal(resolvePortAccessLimitAction(hostId, null, () => { throw new Error("must not build"); }), null);
   const specs = [{ userId: 1, maxIPs: 2, ports: [22] }];
-  const sent = resolvePortAccessLimitAction(hostId, true, () => portAccessLimitAction(structuredClone(specs), true));
+  const sent = resolvePortAccessLimitAction(hostId, true, () => portAccessLimitAction(structuredClone(specs)));
   assert.deepEqual(sent.portAccessLimits, specs);
   sent.portAccessLimits.push({ userId: 9, maxIPs: 1, ports: [1] }); // 心跳后面改动作不影响缓存
   const reused = resolvePortAccessLimitAction(hostId, null, () => { throw new Error("must not build"); });
   assert.deepEqual(reused.portAccessLimits, specs);
   // 开关真的关了才发空快照。
-  assert.deepEqual(resolvePortAccessLimitAction(hostId, false, () => portAccessLimitAction([], true)).portAccessLimits, []);
+  assert.deepEqual(resolvePortAccessLimitAction(hostId, false, () => portAccessLimitAction([])).portAccessLimits, []);
 });

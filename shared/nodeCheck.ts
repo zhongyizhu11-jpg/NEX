@@ -14,13 +14,6 @@
 */
 import { normalizeUnlockResults, type UnlockServiceResult } from "./unlockCheck";
 
-export const NODE_CHECK_MIN_AGENT_VERSION = "2.2.241";
-/** 连不上 Cloudflare 时改测到面板：Agent 2.2.242 起。 */
-export const NODE_CHECK_PANEL_FALLBACK_VERSION = "2.2.242";
-/** 就近的 Ookla 测速点、上传只算对端收下的、429 按 Retry-After 等：Agent 2.2.246 起（测得准）。 */
-export const NODE_CHECK_ACCURATE_VERSION = "2.2.247";
-/** 大陆的主机测国内三网的 Ookla 测速点（面板随指令带下去）：Agent 2.2.248 起；以前连不上 speedtest.net 只能测到面板。 */
-export const NODE_CHECK_DOMESTIC_VERSION = "2.2.248";
 
 export const SPEED_TEST_SERVERS = ["ookla", "cloudflare", "panel"] as const;
 export type SpeedTestServer = (typeof SPEED_TEST_SERVERS)[number];

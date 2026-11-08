@@ -7,7 +7,6 @@ import {
   dnsblListName,
   dualStackState,
   DUAL_STACK_LABELS,
-  NETPROFILE_MIN_AGENT_VERSION,
   SMTP25_LABELS,
   summarizeDnsbl,
   type NetProfileReport,
@@ -189,7 +188,6 @@ function HostNetProfileBody({ host, canManage }: { host: any; canManage: boolean
 
   const data = query.data;
   const profile = data?.profile ?? null;
-  const supported = !!data?.supported;
   const stack = dualStackState(profile);
   const network = hostNetworkText(host);
   const busy = recheck.isPending || !!data?.pending;
@@ -226,26 +224,14 @@ function HostNetProfileBody({ host, canManage }: { host: any; canManage: boolean
         value={data?.pending ? (data.running ? "Agent 正在检测…" : "等 Agent 来取…") : formatChecked(profile?.checkedAt)}
       />
       {!data && query.isLoading ? <p className="text-meta text-muted-foreground">读取中…</p> : null}
-      {data && !supported ? (
-        <p className="text-meta text-[var(--fx-warn-text)]">
-          需要升级 Agent：双栈和 25 端口要在主机上测，需要 Agent {data.minAgentVersion || NETPROFILE_MIN_AGENT_VERSION} 以上（当前 {host?.agentVersion ? `v${host.agentVersion}` : "未知"}）。
-          {canManage ? "现在只能从面板服务器查 DNSBL。" : ""}
-        </p>
-      ) : null}
       {data?.timedOut ? <p className="text-meta text-[var(--fx-warn-text)]">上次「重新检测」Agent 一直没回结果，可能离线了。</p> : null}
       {profile ? <RawDetails profile={profile} /> : null}
       {canManage ? (
         <div className="flex flex-wrap items-center justify-end gap-2 pt-1">
-          {data && !supported ? (
-            <Button size="sm" variant="ghost" disabled={recheck.isPending} onClick={() => recheck.mutate({ hostId, mode: "panelDnsbl" })}>
-              从面板查 DNSBL
-            </Button>
-          ) : null}
           <Button
             size="sm"
             variant="outline"
-            disabled={!supported || busy}
-            title={data && !supported ? `需要升级 Agent 到 ${NETPROFILE_MIN_AGENT_VERSION}` : undefined}
+            disabled={!data || busy}
             onClick={() => recheck.mutate({ hostId, mode: "agent" })}
           >
             {busy ? "检测中…" : "重新检测"}

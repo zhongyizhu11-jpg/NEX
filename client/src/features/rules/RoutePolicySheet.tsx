@@ -101,8 +101,6 @@ export type RoutePolicyPanelProps = {
 };
 
 const activeTagText: Partial<Record<RoutePolicy["report"]["kind"], string>> = {
-  // 老 Agent 的记录是「最近一次切到哪条」，不能说成「在走」。
-  lastSwitch: "最近切到",
   current: "在走",
   resolved: "在用",
   // 系统 DDNS 没开：面板挑出来了，但解析没改 —— 只是建议。

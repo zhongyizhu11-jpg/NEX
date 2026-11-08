@@ -9,10 +9,8 @@
   - 读到的行放在内存里，每个（主机, 来源）最多留 2000 行；面板重启就没了，重新打开窗口会再拉最近的。
 */
 import { randomBytes } from "node:crypto";
-import { isAgentVersionAtLeast } from "../../shared/version";
 import { registerAgentExtModule, wakeAgentExt, type AgentExtHost } from "./agentExt";
 
-export const HOST_LOGS_MIN_AGENT_VERSION = "2.2.230";
 const VIEWER_TTL_MS = 30_000;
 const INFLIGHT_TIMEOUT_MS = 20_000;
 const MAX_BUFFER_LINES = 2_000;
@@ -43,10 +41,6 @@ function watchKey(hostId: number, source: string) {
 
 export function isValidHostLogSource(source: string) {
   return SOURCE_PATTERN.test(source);
-}
-
-export function hostSupportsLogs(host: { agentVersion?: string | null } | null | undefined) {
-  return !!host && isAgentVersionAtLeast(String(host.agentVersion || ""), HOST_LOGS_MIN_AGENT_VERSION);
 }
 
 function isActive(watch: LogWatch, now: number) {

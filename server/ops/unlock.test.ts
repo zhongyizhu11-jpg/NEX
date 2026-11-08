@@ -15,10 +15,8 @@ import "./unlockAgent";
 
 const host = (id: number, agentVersion = "2.2.226", isOnline: unknown = true) => ({ id, name: `h${id}`, agentVersion, isOnline });
 
-test("旧 Agent、离线主机不能检测：提示升级到 2.2.226", () => {
+test("离线主机不能检测", () => {
   resetUnlockStateForTest();
-  assert.throws(() => startUnlockCheck(host(1, "2.2.224"), { family: "auto" }), /需要升级 Agent 到 2\.2\.226/);
-  assert.throws(() => startUnlockCheck(host(1, ""), { family: "auto" }), /需要升级 Agent/);
   assert.throws(() => startUnlockCheck(host(1, "2.2.226", false), { family: "auto" }), /主机离线/);
   assert.equal(pendingUnlockRunsForHost(1).length, 0);
   assert.ok(startUnlockCheck(host(1, "v2.2.230"), { family: "auto" }).runId);
@@ -88,19 +86,16 @@ test("走扩展通道：有在等的检测时下发指令、让 Agent 5 秒来�
   const busy = await handleAgentExtRound(host(8), { modules: {} });
   assert.deepEqual(busy.modules.unlock, { runs: [{ runId, family: "auto" }] });
   assert.equal(busy.interval, 5);
-  // 旧 Agent 收不到这个模块的指令。
-  const old = await handleAgentExtRound(host(8, "2.2.224"), { modules: {} });
-  assert.equal(old.modules.unlock, undefined);
   await handleAgentExtRound(host(8), { modules: { unlock: { runs: [{ runId, status: "done", results: [{ service: "gemini", status: "ok", region: "USA", detail: "可用" }] }] } } });
   assert.equal(recorded.length, 1);
   assert.equal(recorded[0].results[0].region, "USA");
   resetUnlockStateForTest();
 });
 
-test("计划检测：只挑在线、Agent 够新、到期、没在等的主机，最久没测的先来", () => {
+test("计划检测：只挑在线、到期、没在等的主机，最久没测的先来", () => {
   resetUnlockStateForTest();
   const now = 10_000_000;
-  const hosts = [host(1), host(2), host(3, "2.2.200"), host(4, "2.2.226", false), host(5), host(6)];
+  const hosts = [host(1), host(2), host(4, "2.2.226", false), host(5), host(6)];
   const last = new Map([[1, now - 3600], [2, now - 2 * 86400], [5, now - 90_000]]);
   startUnlockCheck(host(6), { family: "ipv6" });
   assert.deepEqual(pickScheduledUnlockHosts(hosts, last, "daily", now).map((h) => h.id), [2, 5]);

@@ -320,21 +320,18 @@ test("落地是哪一个：落地池按池节点 + 成员机，节点按节点�
   assert.ok(paths.every((path) => path.destSpread === "round_robin"));
 });
 
-test("下发给 Agent：一次走一条线路、有线路选了一起分、Agent 够新才带；按权重 / 聚合（分层）/ 老 Agent 不带", () => {
+test("下发给 Agent：一次走一条线路、有线路选了一起分才带；按权重 / 聚合（分层）不带", () => {
   const main = line("main", { dests: [{ dest: { ip: "1.1.1.1", port: 443 }, destNodeId: null }, { dest: { ip: "2.2.2.2", port: 443 }, destNodeId: null }], destSpread: "ip_hash" });
   const backup = line("bk", { layers: [newRouteLayer({ kind: "hosts", hostIds: [6] })] });
   const { paths } = expandRouteLines([main, backup], ctx());
-  const newAgent = () => true;
-  const oldAgent = (version: string) => version !== "2.2.245";
-  assert.equal(routeDestSpreadReady({ strategy: "fallback", tiered: false, paths, agentAtLeast: newAgent }), true);
-  assert.equal(routeDestSpreadReady({ strategy: "least_load", tiered: false, paths, agentAtLeast: newAgent }), false, "按权重（整组分）不带");
-  assert.equal(routeDestSpreadReady({ strategy: "fallback", tiered: true, paths, agentAtLeast: newAgent }), false, "聚合 / 复制（分层）不带");
-  assert.equal(routeDestSpreadReady({ strategy: "fallback", tiered: false, paths, agentAtLeast: oldAgent }), false, "老 Agent 不带");
-  assert.equal(routeDestSpreadReady({ strategy: "fallback", tiered: false, paths: expandRouteLines([backup], ctx()).paths, agentAtLeast: newAgent }), false, "没有线路选一起分不带");
-  assert.deepEqual(paths.map((path) => routeDestSpreadTargetFields(path, true, newAgent)), [
+  assert.equal(routeDestSpreadReady({ strategy: "fallback", tiered: false, paths }), true);
+  assert.equal(routeDestSpreadReady({ strategy: "least_load", tiered: false, paths }), false, "按权重（整组分）不带");
+  assert.equal(routeDestSpreadReady({ strategy: "fallback", tiered: true, paths }), false, "聚合 / 复制（分层）不带");
+  assert.equal(routeDestSpreadReady({ strategy: "fallback", tiered: false, paths: expandRouteLines([backup], ctx()).paths }), false, "没有线路选一起分不带");
+  assert.deepEqual(paths.map((path) => routeDestSpreadTargetFields(path, true)), [
     { line: 0, landing: "1.1.1.1:443", spread: "ip_hash" },
     { line: 0, landing: "2.2.2.2:443", spread: "ip_hash" },
     {},
   ]);
-  assert.deepEqual(routeDestSpreadTargetFields(paths[0], false, newAgent), {});
+  assert.deepEqual(routeDestSpreadTargetFields(paths[0], false), {});
 });

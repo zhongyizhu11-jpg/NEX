@@ -14,7 +14,6 @@
 */
 import { Resolver } from "node:dns/promises";
 import { randomBytes } from "node:crypto";
-import { isAgentVersionAtLeast } from "../../shared/version";
 import {
   DNSBL_LISTS,
   dnsblQueryName,
@@ -24,7 +23,6 @@ import {
   NETPROFILE_INTERVAL_SECONDS,
   NETPROFILE_IPV4_URLS,
   NETPROFILE_IPV6_URLS,
-  NETPROFILE_MIN_AGENT_VERSION,
   normalizeNetProfileReport,
   parseStoredNetProfile,
   reverseIpv4,
@@ -44,10 +42,6 @@ const DNSBL_TIMEOUT_MS = 5000;
 
 function nowSec() {
   return Math.floor(Date.now() / 1000);
-}
-
-export function hostSupportsNetProfile(host: { agentVersion?: string | null } | null | undefined) {
-  return !!host && isAgentVersionAtLeast(String(host.agentVersion || ""), NETPROFILE_MIN_AGENT_VERSION);
 }
 
 // ---------------------------------------------------------------- 存取
@@ -219,7 +213,6 @@ async function agentCheckedAtFor(hostId: number) {
 // ---------------------------------------------------------------- 扩展模块
 
 export async function netProfileDirectiveFor(host: AgentExtHost) {
-  if (!hostSupportsNetProfile(host)) return undefined;
   const hostId = Number(host.id);
   const state = netProfileRunState(hostId);
   return {

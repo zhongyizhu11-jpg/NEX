@@ -37,7 +37,6 @@ async function requireRuleVisible(user: { id: number; role: string }, ruleId: nu
   return rule;
 }
 
-export { oldestAgentVersion } from "../routeStatusView";
 
 async function withRuleResourceAccess<T extends any>(value: T, user: { id: number; role: string }): Promise<T> {
   if (user.role === "admin") return value;
@@ -191,8 +190,7 @@ export const rulesRouter = router({
    * 线路组此刻的样子：每条路径走哪几跳、拨哪个地址、评分几分、哪一跳断了、现在走的是哪条。
    *
    * 评分和逐跳探测都是内存里的（routeGroupStats）：入口 Agent 每次心跳带评分，中转机的
-   * Agent 一分钟报一次它那一跳。Agent 没升到 2.2.198 的，评分为空，界面据 agentSupportsScores
-   * 说明「升级 Agent 后才有评分」。
+   * Agent 一分钟报一次它那一跳。
    */
   routeStatus: protectedProcedure
     .input(z.object({ ruleId: z.number().int().positive() }))

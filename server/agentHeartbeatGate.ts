@@ -158,13 +158,6 @@ export function buildPresenceAgentHeartbeatResponse(input: {
   };
 }
 
-export function shouldDeferAgentWorkForLocalState(input: {
-  supportsDesiredState: boolean;
-  requestLocalState: boolean;
-}) {
-  return input.supportsDesiredState && input.requestLocalState;
-}
-
 export const AGENT_IDLE_HEARTBEAT_INTERVAL_SECONDS = 60;
 export const AGENT_PRESENCE_PERSIST_INTERVAL_MS = 90 * 1000;
 export const AGENT_TRAFFIC_REPORT_INTERACTIVE_SECONDS = 10;

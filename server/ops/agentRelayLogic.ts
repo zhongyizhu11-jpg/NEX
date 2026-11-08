@@ -2,10 +2,7 @@
   经其他主机连面板（#8）里不碰数据库的那部分：谁能当中转、放行名单、自动切换的判定、
   界面上那句「现在：……」。放在单独的文件里是为了能直接写单元测试。
 */
-import { isAgentVersionAtLeast } from "../../shared/version";
 import { isIP } from "node:net";
-
-export const AGENT_RELAY_MIN_VERSION = "2.2.216";
 
 /** 自动切换看多长一段时间（4 小时，每分钟一个样本）。 */
 export const AUTO_SWITCH_WINDOW_MINUTES = 240;
@@ -48,13 +45,9 @@ export type RelayReport = {
   failedConnections?: number;
 };
 
-export function hostSupportsRelay(host: { agentVersion?: string | null } | null | undefined) {
-  return !!host && isAgentVersionAtLeast(String(host.agentVersion || ""), AGENT_RELAY_MIN_VERSION);
-}
-
 /**
  * candidate 能不能给 target 当中转。规则：
- *   不能是自己；Agent 要 2.2.216 以上且在线；它自己不能也是经由别人连面板的（不串两级）；
+ *   不能是自己；要在线；它自己不能也是经由别人连面板的（不串两级）；
  *   target 自己正在给别人当中转时，它不能再经由别人（同样是两级）。
  */
 export function relayCandidateIssue(
@@ -63,7 +56,6 @@ export function relayCandidateIssue(
   configs: ReadonlyMap<number, RelayConfigRow>,
 ): string | null {
   if (candidate.id === targetHostId) return "不能经由自己";
-  if (!hostSupportsRelay(candidate)) return "Agent 需要 2.2.216 以上";
   if (!candidate.online) return "离线";
   if (configs.get(candidate.id)?.viaHostId) return "它自己也在经由别的主机";
   for (const row of configs.values()) {
@@ -143,12 +135,10 @@ export type RelayStatusTone = "ok" | "warn" | "muted";
 
 /** 主机详情里那一句「现在：……」。 */
 export function relayStatusLine(input: {
-  supported: boolean;
   configuredViaName: string | null;
   report: RelayReport | null;
   reportAgeSeconds: number | null;
 }): { text: string; tone: RelayStatusTone; detail: string | null } {
-  if (!input.supported) return { text: "需要把 Agent 升级到 2.2.216", tone: "muted", detail: null };
   const report = input.report;
   if (!report) {
     return input.configuredViaName

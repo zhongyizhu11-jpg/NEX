@@ -4,7 +4,6 @@ import { linkProbeMethodForRule, normalizeLinkProbeMethod } from "../shared/late
 import { ENV } from "./env";
 
 export const AGENT_PLUGIN_TASK_VERSION = "2.2.151";
-export const AGENT_PANEL_MIGRATION_VERSION = "2.2.153";
 
 // 版本比较的唯一一份在 shared/version.ts。这里保持再导出，是因为服务端十几处
 // 都从 agentRouteUtils 拿 isAgentVersionAtLeast，没必要为了搬家改一圈 import。

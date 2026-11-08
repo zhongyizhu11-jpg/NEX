@@ -5,7 +5,6 @@ import {
   buildParallelStreamLegs,
   describeTunnelParallelStreams,
   normalizeTunnelParallelStreams,
-  tunnelParallelStreamsAgentsReady,
   tunnelParallelStreamsUnavailableReason,
 } from "./tunnelParallelStreams";
 
@@ -28,13 +27,6 @@ test("哪些隧道能开：NEX V1、不是并排中转、单出口", () => {
   assert.match(tunnelParallelStreamsUnavailableReason({ ...nex, forwardxVersion: "v2" }, []), /WireGuard/);
   assert.match(tunnelParallelStreamsUnavailableReason({ ...nex, relayMode: "aggregate" }, [{}, {}, {}, {}]), /叠加/);
   assert.match(tunnelParallelStreamsUnavailableReason(nex, [], 2), /多出口/);
-});
-
-test("旧版本退回单路：入口要 2.2.231，中转 / 出口要 2.2.194", () => {
-  assert.equal(tunnelParallelStreamsAgentsReady("2.2.231", ["2.2.194"]), true);
-  assert.equal(tunnelParallelStreamsAgentsReady("2.2.230", ["2.2.231"]), false, "老入口会把同一地址的腿去重成一条");
-  assert.equal(tunnelParallelStreamsAgentsReady("2.2.231", ["2.2.193"]), false, "出口不会收多路会话");
-  assert.equal(tunnelParallelStreamsAgentsReady("", []), false);
 });
 
 test("腿：同一个出口重复 N 条，各带 stream#N（Agent 按地址 + via 去重）", () => {

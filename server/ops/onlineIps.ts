@@ -13,7 +13,7 @@
 import { executeRaw, insertAndGetId, queryRaw, quoteDbIdentifier } from "../dbRuntime";
 import { classifyIpAddress, isPrivateOrReservedAddress } from "../../shared/ipAddress";
 import { lookupOfflineIpRegion } from "../ipRegionOffline";
-import { hostSupportsAgentExt, wakeAgentExt, type AgentExtHost } from "./agentExt";
+import { wakeAgentExt, type AgentExtHost } from "./agentExt";
 import { recordPanelEvent } from "./panelEvents";
 import {
   OnlineSnapshotStore,
@@ -59,11 +59,11 @@ export async function markOnlineIpsWatching(now = Date.now()) {
   watchUntil = now + WATCH_TTL_MS;
   if (wasWatching) return { woke: 0 };
   let woke = 0;
-  const hosts = await queryRaw<{ id: number; agentVersion: string | null }>(
-    `SELECT ${q("id")}, ${q("agentVersion")} FROM ${q("hosts")}`,
+  const hosts = await queryRaw<{ id: number }>(
+    `SELECT ${q("id")} FROM ${q("hosts")}`,
   ).catch(() => []);
   for (const host of hosts) {
-    if (hostSupportsAgentExt(host) && wakeAgentExt(Number(host.id), "online-ips-watch")) woke += 1;
+    if (wakeAgentExt(Number(host.id), "online-ips-watch")) woke += 1;
   }
   return { woke };
 }
@@ -371,7 +371,6 @@ async function checkIpLimits(nowMs: number) {
 // ---------- 扩展通道 ----------
 
 export async function onlineDirectiveFor(host: AgentExtHost) {
-  if (!hostSupportsAgentExt(host)) return undefined;
   const owners = await loadHostPortOwners(Number(host.id));
   return {
     ports: owners.map((owner) => ({

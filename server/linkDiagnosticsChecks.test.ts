@@ -92,7 +92,7 @@ test("配置：账户停用 / 到期 / 暂停 / 快到期；流量用完 / 快�
   assert.equal(byKey(admin)["config.traffic"], undefined, "管理员不看流量额度");
 });
 
-test("主机：离线失败、FXP 握不上失败、Agent 旧警告、最新通过", () => {
+test("主机：离线失败、FXP 握不上失败、没报版本警告、最新通过", () => {
   const host = { id: 1, name: "hk-1", role: "入口", isOnline: true, agentVersion: AGENT_VERSION, fxpVersion: FXP_RUNTIME_VERSION };
   assert.equal(evaluateHostItem(host).status, "pass");
   const offline = evaluateHostItem({ ...host, isOnline: false, lastHeartbeat: new Date(NOW) });
@@ -100,9 +100,6 @@ test("主机：离线失败、FXP 握不上失败、Agent 旧警告、最新通�
   assert.match(offline.summary, /离线（最后心跳/);
   assert.equal(evaluateHostItem({ ...host, fxpVersion: "2.2.100" }, { requireFxp: true }).status, "fail");
   assert.equal(evaluateHostItem({ ...host, fxpVersion: "2.2.100" }).status, "pass", "不走 NEX 隧道就不看 FXP");
-  const old = evaluateHostItem({ ...host, agentVersion: "2.2.224" });
-  assert.equal(old.status, "warn");
-  assert.match(old.summary, /需要 2\.2\.226/);
   assert.equal(evaluateHostItem({ ...host, agentVersion: "" }).status, "warn");
   assert.equal(evaluateHostItem(host).title, "入口「hk-1」");
 });
@@ -157,13 +154,10 @@ function task(status: DiagnosticsTaskStatus["status"], results: DiagnosticsTaskS
   return { taskId: "t", hostId: 1, status, results, error, createdAt: "", startedAt: "", finishedAt: "", durationMs: 0 };
 }
 
-test("Agent 项：离线跳过；旧 Agent 显示「需要升级 Agent」而不是失败", () => {
+test("Agent 项：离线跳过", () => {
   const offline = agentCheckItems(planned, { online: false, agentVersion: AGENT_VERSION, detailVisible: true }, null);
   assert.ok(offline.every((entry) => entry.status === "skip" && !entry.needsUpgrade));
-  const old = agentCheckItems(planned, { online: true, agentVersion: "2.2.224", detailVisible: true }, null);
-  assert.ok(old.every((entry) => entry.status === "skip" && entry.needsUpgrade === true));
-  assert.equal(old[0].summary, "需要升级 Agent 到 2.2.226");
-  assert.ok(old.every((entry) => entry.source === "agent"));
+  assert.ok(offline.every((entry) => entry.source === "agent"));
 });
 
 test("Agent 项：排队 / 运行中是等待；超时是警告；回报后按结果给状态和修复建议", () => {

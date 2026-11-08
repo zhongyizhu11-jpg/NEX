@@ -13,7 +13,7 @@ import { segmentedControlClassName, segmentedIconClassName, segmentedOptionClass
 import { trpc } from "@/lib/trpc";
 import { pollingInterval } from "@/lib/polling";
 import { cn } from "@/lib/utils";
-import { BlockIpButton, LiveIpRowItem, OutdatedAgentNotice, limitText, regionText, useOnlineIpsWatch } from "./onlineIpParts";
+import { BlockIpButton, LiveIpRowItem, limitText, regionText, useOnlineIpsWatch } from "./onlineIpParts";
 
 /*
   监控 › 在线 IP（#6）。
@@ -71,7 +71,6 @@ function LiveView() {
   const rowCount = groups.reduce((sum, g) => sum + g.rows.length, 0);
   return (
     <div className="space-y-3">
-      <OutdatedAgentNotice hosts={data.outdatedHosts} minVersion={data.minAgentVersion} />
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
         <Select value={userFilter} onValueChange={setUserFilter}>
           <SelectTrigger className="h-9 w-full sm:w-44" aria-label="按用户筛选"><SelectValue /></SelectTrigger>

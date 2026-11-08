@@ -93,7 +93,7 @@ test("an out-of-range port fails TCPing but is ignored by ping", () => {
 });
 
 test("UDP 方法：认 udp、要端口、默认探公共 DNS 的 53 端口", async () => {
-  const { FORWARD_GROUP_HEALTH_CHECK_METHOD_LABELS, forwardGroupHealthProbeMethodForAgent } = await import("../shared/forwardGroupHealthCheck");
+  const { FORWARD_GROUP_HEALTH_CHECK_METHOD_LABELS } = await import("../shared/forwardGroupHealthCheck");
   assert.equal(normalizeForwardGroupHealthCheckMethod("udp"), "udp");
   assert.equal(normalizeForwardGroupHealthCheckMethod(" UDP "), "udp");
   assert.equal(healthCheckTargetNeedsPort("udp"), true);
@@ -105,10 +105,4 @@ test("UDP 方法：认 udp、要端口、默认探公共 DNS 的 53 端口", asy
   assert.equal(parsed.method, "udp");
   assert.equal(normalizeChinaHealthTarget("", "udp").text, "223.5.5.5:53");
   assert.equal(normalizeChinaHealthTarget("udp://1.1.1.1:5353", "udp").port, 5353);
-  // 探测那台的 Agent 要 2.2.251 起才认 udp，更老的改发 ping；tcp / ping 不受版本影响
-  assert.equal(forwardGroupHealthProbeMethodForAgent("udp", "2.2.251"), "udp");
-  assert.equal(forwardGroupHealthProbeMethodForAgent("udp", "2.2.250"), "ping");
-  assert.equal(forwardGroupHealthProbeMethodForAgent("udp", ""), "ping");
-  assert.equal(forwardGroupHealthProbeMethodForAgent("ping", "2.2.100"), "ping");
-  assert.equal(forwardGroupHealthProbeMethodForAgent("tcp", null), "tcp");
 });

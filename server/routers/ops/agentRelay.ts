@@ -3,7 +3,7 @@ import { adminProcedure, router } from "../../_core/trpc";
 import * as db from "../../db";
 import { isHostConsideredOnline } from "../../hostHeartbeatPolicy";
 import { getConfiguredPanelUrl } from "../../agentPanelUrl";
-import { hostSupportsAgentExt, wakeAgentExt } from "../../ops/agentExt";
+import { wakeAgentExt } from "../../ops/agentExt";
 import {
   autoSwitchStats,
   emptyRelayConfig,
@@ -46,9 +46,7 @@ async function relayView(hostId: number) {
   const viaHost = config.viaHostId ? byId.get(config.viaHostId) : null;
   const viaName = config.viaHostId ? hostLabel(viaHost, config.viaHostId) : null;
   const stored = getRelayReport(hostId);
-  const supported = hostSupportsAgentExt(host as any);
   const status = relayStatusLine({
-    supported,
     configuredViaName: viaName,
     report: stored?.report || null,
     reportAgeSeconds: stored ? Math.round((Date.now() - stored.at) / 1000) : null,
@@ -62,7 +60,6 @@ async function relayView(hostId: number) {
   const panelUrlConfigured = !!(await getConfiguredPanelUrl().catch(() => ""));
   return {
     hostId,
-    supported,
     viaHostId: config.viaHostId,
     viaHostName: viaName,
     viaPort: viaConfig?.listenPort ?? null,

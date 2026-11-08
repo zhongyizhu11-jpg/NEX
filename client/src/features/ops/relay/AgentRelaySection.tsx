@@ -80,14 +80,6 @@ export default function AgentRelaySection({ host }: { host: any }) {
     );
   }
 
-  if (!data.supported) {
-    return (
-      <CollapsibleSection title="与面板的连接">
-        <Row label="现在" value={<span className="text-muted-foreground">需要把 Agent 升级到 2.2.216</span>} />
-      </CollapsibleSection>
-    );
-  }
-
   const changed = via !== serverVia || auto !== serverAuto || (auto !== OFF && threshold !== serverThreshold);
   const viaName = via === DIRECT ? null : nameOf(via);
   const thresholdChoices: number[] = data.autoThresholdChoices || [3, 10, 30];
