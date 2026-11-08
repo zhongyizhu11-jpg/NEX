@@ -27,14 +27,12 @@ export default function HostSpeedTestSection({ host }: { host: any }) {
     <Section
       title="网速测试"
       action={(
-        <Button type="button" size="sm" variant="outline" className="h-7 px-2.5 text-xs" onClick={() => setOpen(true)} disabled={!data || !data.supported} title={data && !data.supported ? "需要升级 Agent" : undefined}>
+        <Button type="button" size="sm" variant="outline" className="h-7 px-2.5 text-xs" onClick={() => setOpen(true)} disabled={!data}>
           {data?.pending ? "测速中…" : speed ? "再测一次" : "测速"}
         </Button>
       )}
     >
-      {data && !data.supported ? (
-        <Row label="测速" value={<span className="text-[var(--fx-warn-text)]">需要升级 Agent（{data.minAgentVersion} 起）</span>} />
-      ) : speed ? (
+      {speed ? (
         <>
           <Row label="下载 / 上传" value={`${formatMbps(speed.downloadMbps)} / ${formatMbps(speed.uploadMbps)}${speed.server === "panel" ? "（到面板）" : ""}`} />
           <Row label="延迟 / 抖动" value={`${formatSpeedMs(speed.latencyMs)} / ${formatSpeedMs(speed.jitterMs)}`} />

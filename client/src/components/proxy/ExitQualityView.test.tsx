@@ -19,7 +19,6 @@ function host(patch: Partial<ExitQualityHostView> = {}): ExitQualityHostView {
     sites: [site("baidu", { latestMs: null, latestFail: "dns", tone: "down", lossPct: 12.5 }), site("google")],
     unlock: { checkedAt: 1, items: [{ service: "netflix", text: "NF 全解", status: "ok" }] },
     unlockDetail: { checkedAt: 1, family: "auto", results: [{ service: "netflix", name: "Netflix", status: "ok", region: "HK" }, { service: "chatgpt", name: "ChatGPT", status: "blocked", region: null }] },
-    unlockSupported: true,
     ...patch,
   };
 }
@@ -35,10 +34,9 @@ test("出口检测：每站一格，没连上写原因、丢失写比例，解�
   assert.match(html, /不可用/);
 });
 
-test("出口检测：DNS 被污染写出来，不显示假的毫秒数；老 Agent 提示没校验证书", () => {
-  const html = renderToStaticMarkup(<ExitHostPanel host={host({ unverified: true, sites: [site("google", { latestMs: null, latestFail: "poisoned", tone: "down" })] })} targets={targets} />);
+test("出口检测：DNS 被污染写出来，不显示假的毫秒数", () => {
+  const html = renderToStaticMarkup(<ExitHostPanel host={host({ sites: [site("google", { latestMs: null, latestFail: "poisoned", tone: "down" })] })} targets={targets} />);
   assert.match(html, /解析被污染/);
-  assert.match(html, /data-testid="exit-unverified"/);
   assert.equal(exitSiteHeadline({ latestMs: null, latestFail: "blocked", samples: 3 }), "被阻断");
   assert.equal(exitSiteHeadline({ latestMs: null, latestFail: "dns", samples: 3 }), "解析失败");
   assert.equal(exitSiteHeadline({ latestMs: null, latestFail: null, samples: 0 }), "—");

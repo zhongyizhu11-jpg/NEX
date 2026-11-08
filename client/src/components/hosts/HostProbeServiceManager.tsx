@@ -1,6 +1,6 @@
 import DataSectionLoading from "@/components/DataSectionLoading";
 import { readStoredViewMode, writeStoredViewMode } from "@/lib/viewModeStorage";
-import { normalizeProbeAddressFamily, PROBE_ADDRESS_FAMILIES, PROBE_ADDRESS_FAMILY_LABELS, PROBE_FAMILY_MIN_AGENT_VERSION, type ProbeAddressFamily } from "@shared/probeFamily";
+import { normalizeProbeAddressFamily, PROBE_ADDRESS_FAMILIES, PROBE_ADDRESS_FAMILY_LABELS, type ProbeAddressFamily } from "@shared/probeFamily";
 import { EntityActions } from "@/components/entity/EntityActions";
 import { CardActions } from "@/components/entity/EntityCard";
 import { useEffect, useMemo, useState } from "react";
@@ -594,7 +594,7 @@ export default function HostProbeServiceManager({
                   {PROBE_ADDRESS_FAMILIES.map((family) => <SelectItem key={family} value={family}>{PROBE_ADDRESS_FAMILY_LABELS[family]}</SelectItem>)}
                 </SelectContent>
               </Select>
-              <p data-fx-help="" className="text-meta text-muted-foreground">目标是域名时才有用：只用这一族的地址测。需要 Agent {PROBE_FAMILY_MIN_AGENT_VERSION} 以上，更旧的 Agent 照旧按「自动」。</p>
+              <p data-fx-help="" className="text-meta text-muted-foreground">目标是域名时才有用：只用这一族的地址测。</p>
             </FormField>
             <div className="grid gap-3 sm:grid-cols-[1fr_140px]">
               <FormField className="space-y-1.5"><Label>选择主机</Label><Select value={form.hostScope} onValueChange={(value) => setForm({ ...form, hostScope: value as ServiceForm["hostScope"] })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">所有主机</SelectItem><SelectItem value="exclude">排除主机</SelectItem><SelectItem value="specific">特定主机</SelectItem></SelectContent></Select></FormField>

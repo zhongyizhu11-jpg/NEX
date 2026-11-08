@@ -26,7 +26,6 @@ import { selectTunnelDialAddress, selectTunnelHopDialAddress } from "./tunnelAdd
 import {
   agentCheckHints,
   agentCheckItems,
-  agentSupportsDiagnostics,
   evaluateConfigItems,
   evaluateDomainItem,
   evaluateHostItem,
@@ -763,7 +762,7 @@ export async function startLinkDiagnostics(ctx: Ctx, subject: { kind: Diagnostic
       agentVersion: host?.agentVersion ? String(host.agentVersion) : null,
       detailVisible: isAdmin || Number(host?.userId) === Number(ctx.user.id),
     };
-    if (gate.online && agentSupportsDiagnostics(gate.agentVersion) && String(host?.agentToken || "")) {
+    if (gate.online && String(host?.agentToken || "")) {
       try {
         gate.taskId = enqueueDiagnosticsAgentTask(hostId, checks).taskId;
         pushAgentRefresh(hostId, "link-diagnostics", { urgent: true });

@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { countryFlagLabel } from "@/lib/flagEmojiSupport";
 import { trpc } from "@/lib/trpc";
 import { describeProbeFailure, describeProbeFailureShort } from "@shared/probeFailure";
-import { SITE_FAILURE_LABELS, SITE_LATENCY_BAD_MS, SITE_LATENCY_VERIFIED_AGENT_VERSION, SITE_LATENCY_WARN_MS } from "@shared/siteLatency";
+import { SITE_FAILURE_LABELS, SITE_LATENCY_BAD_MS, SITE_LATENCY_WARN_MS } from "@shared/siteLatency";
 import { UNLOCK_STATUS_LABELS, type UnlockStatus } from "@shared/unlockCheck";
 
 /*
@@ -44,11 +44,8 @@ export type ExitQualityHostView = {
   countryCode: string | null;
   sites: ExitQualitySiteView[];
   noEgress?: boolean;
-  unverified?: boolean;
-  unsupported?: boolean;
   unlock: { checkedAt: number; items: { service: string; text: string; status: string }[] } | null;
   unlockDetail?: { checkedAt: number; family: string; results: { service: string; name: string; status: string; region: string | null }[] } | null;
-  unlockSupported?: boolean;
 };
 
 export type ExitQualityTarget = { key: string; label: string; host: string };
@@ -124,9 +121,7 @@ export function ExitHostPanel({ host, targets, compact = false }: { host: ExitQu
         {!host.online ? <span className="text-meta text-[var(--fx-down-text)]">离线 · 显示的是掉线前的</span> : null}
       </div>
 
-      {host.unsupported ? (
-        <p className="rounded-md bg-[var(--fx-l2-group)] px-3 py-2 text-xs text-muted-foreground">这台机器的 Agent 太旧，还没有出口探测。升级 Agent 后两分钟内出现。</p>
-      ) : !hasSamples ? (
+      {!hasSamples ? (
         <p className="rounded-md bg-[var(--fx-l2-group)] px-3 py-2 text-xs text-muted-foreground">还没有样本：每 2 分钟测一轮，稍等一下再打开。</p>
       ) : host.noEgress ? (
         <p data-testid="exit-no-egress" className="rounded-md bg-[var(--fx-l2-group)] px-3 py-2 text-xs text-muted-foreground">
@@ -152,11 +147,6 @@ export function ExitHostPanel({ host, targets, compact = false }: { host: ExitQu
         </div>
       )}
 
-      {host.unverified && hasSamples ? (
-        <p data-testid="exit-unverified" className="text-[11px] text-[var(--fx-warn-text)]">
-          这台的 Agent 早于 {SITE_LATENCY_VERIFIED_AGENT_VERSION}，没校验证书：DNS 被污染时会显示一个假的低延迟。升级后准确。
-        </p>
-      ) : null}
 
       {compact ? (
         host.unlock && host.unlock.items.length > 0 ? (
@@ -185,7 +175,7 @@ export function ExitHostPanel({ host, targets, compact = false }: { host: ExitQu
               ))}
             </div>
           ) : (
-            <p className="text-xs text-muted-foreground">{host.unlockSupported === false ? "这台的 Agent 还不支持解锁检测。" : "还没做过解锁检测（管理员在主机详情里点「检测解锁」，或开定时检测）。"}</p>
+            <p className="text-xs text-muted-foreground">还没做过解锁检测（管理员在主机详情里点「检测解锁」，或开定时检测）。</p>
           )}
         </div>
       )}
@@ -212,7 +202,7 @@ function ViaHostExitCheck({ nodeId, address, targets }: { nodeId: number; addres
   });
   const data = status.data;
   const candidates = data?.plan.candidates ?? [];
-  const chosen = viaHostId || candidates.find((item) => item.online && item.supported)?.id || 0;
+  const chosen = viaHostId || candidates.find((item) => item.online)?.id || 0;
   const pending = data?.pending ?? null;
   const latest = data?.latest ?? null;
   return (
@@ -225,8 +215,8 @@ function ViaHostExitCheck({ nodeId, address, targets }: { nodeId: number; addres
           <SelectTrigger className="h-8 w-[200px]" aria-label="经哪台机器检测"><SelectValue placeholder={status.isLoading ? "读取中…" : "选一台机器"} /></SelectTrigger>
           <SelectContent>
             {candidates.map((item) => (
-              <SelectItem key={item.id} value={String(item.id)} disabled={!item.online || !item.supported}>
-                {item.name}{item.preferred ? " · 入口" : ""}{!item.online ? " · 离线" : !item.supported ? " · Agent 太旧" : ""}
+              <SelectItem key={item.id} value={String(item.id)} disabled={!item.online}>
+                {item.name}{item.preferred ? " · 入口" : ""}{!item.online ? " · 离线" : ""}
               </SelectItem>
             ))}
           </SelectContent>

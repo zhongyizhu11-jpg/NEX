@@ -3,7 +3,7 @@ import { runInDatabase as runSharedDatabaseTest } from "./testing/runInDatabase"
 
 /**
  * 一键链路诊断从库到清单走一遍：直连规则、隧道规则、隧道本身。看面板侧的项判得对、
- * 新 Agent 排了任务、旧 Agent 那几项是「需要升级 Agent」、Agent 回报后清单跟着变。
+ * 在线的主机排了任务、离线的跳过、Agent 回报后清单跟着变。
  */
 const setup = String.raw`
     const db = await import(url("server/db.ts"));
@@ -14,7 +14,7 @@ const setup = String.raw`
     await exec("INSERT INTO users (id, username, password, role) VALUES (1, 'admin', 'hash', 'admin')");
     await exec("INSERT INTO users (id, username, password, role, canAddRules, trafficLimit, trafficUsed) VALUES (2, 'bob', 'hash', 'user', 1, 1000, 1000)");
     await exec("INSERT INTO hosts (id, name, ip, ipv4, agentToken, userId, agentVersion) VALUES (10, 'hk', '203.0.113.10', '203.0.113.10', 'tok10', 1, '2.2.226')");
-    await exec("INSERT INTO hosts (id, name, ip, ipv4, agentToken, userId, agentVersion) VALUES (11, 'jp', '203.0.113.11', '203.0.113.11', 'tok11', 1, '2.2.224')");
+    await exec("INSERT INTO hosts (id, name, ip, ipv4, agentToken, userId, agentVersion) VALUES (11, 'jp', '203.0.113.11', '203.0.113.11', 'tok11', 1, '2.2.226')");
     await exec("INSERT INTO hosts (id, name, ip, ipv4, agentToken, userId, agentVersion) VALUES (12, 'us', '203.0.113.12', '203.0.113.12', 'tok12', 1, '2.2.226')");
     await db.updateHostHeartbeat(10);
     await db.updateHostHeartbeat(11);
@@ -66,7 +66,7 @@ test("直连规则：面板侧当场出结论，Agent 项先等待，回报后�
   `);
 });
 
-test("隧道规则：入口 / 出口都在清单里，旧 Agent 的出口项是「需要升级 Agent」，离线的跳过", () => {
+test("隧道规则：入口 / 出口都在清单里、各排一份任务，离线的跳过", () => {
   runInDatabase(String.raw`
     await exec("INSERT INTO tunnels (id, name, entryHostId, exitHostId, mode, listenPort, userId, isEnabled, isRunning) VALUES (5, '港日', 10, 11, 'tls', 30000, 1, 1, 1)");
     await exec("INSERT INTO forward_rules (id, userId, name, hostId, forwardType, protocol, sourcePort, targetIp, targetPort, tunnelId, isEnabled, isRunning, pendingDelete, isForwardGroupTemplate) VALUES (3, 1, 'via', 10, 'gost', 'tcp', 20443, 'example.invalid', 443, 5, 1, 1, 0, 0)");
@@ -75,13 +75,11 @@ test("隧道规则：入口 / 出口都在清单里，旧 Agent 的出口项是�
     const items = byKey(report);
     assert.equal(items["host:10"].title, "入口「hk」");
     assert.equal(items["host:11"].title, "出口「jp」");
-    assert.equal(items["host:11"].status, "warn", "2.2.224 低于诊断要求");
     assert.equal(items["runtime.tunnel:11"].status, "pass");
     assert.equal(items["target.address"].status, "warn", ".invalid 面板解析不了");
     const exitAgent = report.items.filter((item) => item.source === "agent" && item.hostId === 11);
     assert.ok(exitAgent.length >= 3);
-    assert.ok(exitAgent.every((item) => item.status === "skip" && item.needsUpgrade), "出口机没排任务，显示需要升级");
-    assert.equal(tasks.hasQueuedDiagnosticsAgentTasks(11), false);
+    assert.equal(tasks.hasQueuedDiagnosticsAgentTasks(11), true, "出口机也排了任务");
     const [task] = tasks.takeDiagnosticsAgentTasks(10);
     assert.ok(task.checks.some((check) => check.kind === "dial" && check.host === "203.0.113.11" && check.port === 30000), "入口拨出口的隧道端口");
     assert.ok(task.checks.some((check) => check.kind === "process" && check.forwardType === "gost"));

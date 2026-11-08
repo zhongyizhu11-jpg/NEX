@@ -121,12 +121,10 @@ test("Agent 上报收拾干净：非法 id、超长字段、乱类型", () => {
 test("面板一轮：点检查 → 下发 → 收到结果；调优优先；超时", () => {
   resetNetTuneStateForTest();
   const host = { id: 9, agentVersion: "2.2.250" };
-  const oldHost = { id: 9, agentVersion: "2.2.249" };
   assert.equal(__test.directiveFor(host, 500), undefined, "没点过不下发");
 
   const check = requestNetTuneRun(9, false, 1_000);
   assert.deepEqual(__test.directiveFor(host, 1_500), { runs: [{ id: check.id, apply: false }] });
-  assert.equal(__test.directiveFor(oldHost, 1_500), undefined, "老 Agent 不下发");
 
   // 在等检查时点调优：换成调优
   const apply = requestNetTuneRun(9, true, 2_000);

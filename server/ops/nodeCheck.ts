@@ -12,10 +12,8 @@
 */
 import { randomBytes } from "node:crypto";
 import { executeRaw, insertAndGetId, queryRaw, quoteDbIdentifier } from "../dbRuntime";
-import { isAgentVersionAtLeast } from "../../shared/version";
 import {
   NODE_CHECK_KINDS,
-  NODE_CHECK_MIN_AGENT_VERSION,
   normalizeNodeCheckRunReport,
   normalizeSpeedTestResult,
   type ExitCheckResult,
@@ -34,10 +32,6 @@ const TABLE = "host_speed_tests";
 export const SPEED_TEST_HISTORY_KEEP = 10;
 export const NODE_CHECK_RUN_TIMEOUT_MS = 6 * 60_000;
 const EXIT_RESULT_TTL_MS = 60 * 60_000;
-
-export function hostSupportsNodeCheck(host: { agentVersion?: string | null } | null | undefined) {
-  return !!host && isAgentVersionAtLeast(String(host.agentVersion || "").replace(/^v/i, ""), NODE_CHECK_MIN_AGENT_VERSION);
-}
 
 function nowSec() {
   return Math.floor(Date.now() / 1000);
@@ -131,7 +125,6 @@ export function startNodeCheck(
   const hostId = Number(host.id);
   if (!(hostId > 0)) throw new NodeCheckError("主机不存在");
   if (!NODE_CHECK_KINDS.includes(input.kind)) throw new NodeCheckError("不认识的检查");
-  if (!hostSupportsNodeCheck(host)) throw new NodeCheckError(`需要把这台机器的 Agent 升级到 ${NODE_CHECK_MIN_AGENT_VERSION} 或更新版本`);
   if (host.isOnline === false || host.isOnline === 0) throw new NodeCheckError("主机离线，等它上线再测");
   const nodeId = Math.max(0, Math.floor(Number(input.nodeId || 0)));
   if (input.kind === "exit" && !(nodeId > 0 && input.outbound)) throw new NodeCheckError("出口检测只给经节点的");

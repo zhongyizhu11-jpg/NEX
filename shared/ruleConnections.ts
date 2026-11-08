@@ -9,7 +9,6 @@
   Agent 2.2.237 起。
 */
 
-export const RULE_CONNECTIONS_AGENT_VERSION = "2.2.237";
 export const RULE_CONNECTIONS_MAX_ROWS = 200;
 
 export type RuleConnectionRow = {

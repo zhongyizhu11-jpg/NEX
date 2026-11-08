@@ -7,7 +7,6 @@
   这些都是按页面标记猜的，服务改了页面就可能不准（见 docs/guide/hosts.md）。
 */
 
-export const UNLOCK_MIN_AGENT_VERSION = "2.2.226";
 
 export const UNLOCK_STATUSES = ["ok", "partial", "blocked", "unknown"] as const;
 export type UnlockStatus = (typeof UNLOCK_STATUSES)[number];

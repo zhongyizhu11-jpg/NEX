@@ -4,7 +4,6 @@ import { adminProcedure, protectedProcedure } from "../_core/trpc";
 import { requireHostAccess } from "./helpers";
 import {
   getUnlockSchedule,
-  hostSupportsUnlock,
   latestUnlockRuns,
   listUnlockHistory,
   pendingUnlockRunsForHost,
@@ -12,7 +11,7 @@ import {
   startUnlockCheck,
   UnlockCheckError,
 } from "../ops/unlock";
-import { UNLOCK_FAMILIES, UNLOCK_MIN_AGENT_VERSION, UNLOCK_SCHEDULES } from "@shared/unlockCheck";
+import { UNLOCK_FAMILIES, UNLOCK_SCHEDULES } from "@shared/unlockCheck";
 import { buildHostExitQuality, EXIT_QUALITY_TARGETS } from "../exitQualityView";
 
 /*
@@ -52,8 +51,6 @@ export const hostUnlockProcedures = {
         isAdmin ? getUnlockSchedule() : Promise.resolve(null),
       ]);
       return {
-        supported: hostSupportsUnlock(host),
-        minAgentVersion: UNLOCK_MIN_AGENT_VERSION,
         agentVersion: host.agentVersion ? String(host.agentVersion) : null,
         online: !!host.isOnline,
         canManage: isAdmin,

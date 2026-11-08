@@ -2,11 +2,6 @@
   主机「内核快速转发」的面板侧逻辑：指令、Agent 上报解析、设置页状态。不依赖扩展通道本身，
   routers/hosts.ts 直接 import 也不会和 agentExt 绕成循环引用；注册在 flowOffloadAgent.ts。
 */
-import { isAgentVersionAtLeast } from "../../shared/version";
-
-/** 支持快速转发的最低 Agent 版本。 */
-export const AGENT_FLOW_OFFLOAD_MIN_VERSION = "2.2.221";
-
 export type FlowOffloadReport = {
   enabled: boolean;
   active: boolean;
@@ -22,10 +17,6 @@ export type FlowOffloadReport = {
 };
 
 const reports = new Map<number, FlowOffloadReport>();
-
-export function hostSupportsFlowOffload(host: { agentVersion?: string | null } | null | undefined) {
-  return !!host && isAgentVersionAtLeast(String(host.agentVersion || ""), AGENT_FLOW_OFFLOAD_MIN_VERSION);
-}
 
 export function flowOffloadReportFor(hostId: number): FlowOffloadReport | undefined {
   return reports.get(Number(hostId));
@@ -65,18 +56,15 @@ export const FLOW_OFFLOAD_REPORT_STALE_MS = 5 * 60_000;
 /** 主机设置页的状态：开关关着是 null。 */
 export function flowOffloadStatusView(host: any, now = Date.now()) {
   if (!host?.flowOffload) return null;
-  if (!hostSupportsFlowOffload(host)) {
-    return { state: "agent-old" as const, message: `主机 Agent 要升到 ${AGENT_FLOW_OFFLOAD_MIN_VERSION} 起才会生效`, offloaded: 0 };
-  }
   const report = flowOffloadReportFor(Number(host.id));
   if (!report || now - report.at > FLOW_OFFLOAD_REPORT_STALE_MS) return { state: "pending" as const, message: "等主机上报", offloaded: 0 };
   if (report.active) return { state: "active" as const, message: report.error || "", offloaded: report.offloaded };
   return { state: "error" as const, message: report.error || "没有生效", offloaded: 0 };
 }
 
-export function flowOffloadDirectiveFor(host: { agentVersion?: string | null; flowOffload?: boolean | null } | null | undefined) {
-  if (!hostSupportsFlowOffload(host)) return undefined;
-  return { enabled: !!host?.flowOffload };
+export function flowOffloadDirectiveFor(host: { flowOffload?: boolean | null } | null | undefined) {
+  if (!host) return undefined;
+  return { enabled: !!host.flowOffload };
 }
 
 export function ingestFlowOffloadReport(host: { id?: unknown }, report: unknown, now = Date.now()) {

@@ -17,9 +17,8 @@ import "./nodeCheckAgent";
 const host = (id: number, agentVersion = "2.2.241", isOnline: unknown = true) => ({ id, name: `h${id}`, agentVersion, isOnline });
 const outbound = { type: "vless", server: "node.example", server_port: 443, uuid: "u" };
 
-test("旧 Agent、离线主机不能测；出口检测只给经节点的", () => {
+test("离线主机不能测；出口检测只给经节点的", () => {
   resetNodeCheckStateForTest();
-  assert.throws(() => startNodeCheck(host(1, "2.2.240"), { kind: "speed" }), /需要把这台机器的 Agent 升级到 2\.2\.241/);
   assert.throws(() => startNodeCheck(host(1, "2.2.241", false), { kind: "speed" }), /主机离线/);
   assert.throws(() => startNodeCheck(host(1), { kind: "exit" }), /只给经节点的/);
   assert.equal(pendingNodeCheckRunsForHost(1).length, 0);
@@ -96,7 +95,7 @@ test("经节点的出口检测结果：站点样本和解锁都收进来", async
   assert.equal(status.latest?.exit?.unlock[0].region, "SG");
 });
 
-test("走扩展通道：有在等的检查时下发指令、让 Agent 5 秒来一次；旧 Agent 收不到", async () => {
+test("走扩展通道：有在等的检查时下发指令、让 Agent 5 秒来一次", async () => {
   resetNodeCheckStateForTest();
   const idle = await handleAgentExtRound(host(8), { modules: {} });
   assert.equal(idle.modules.nodecheck, undefined);
@@ -105,8 +104,6 @@ test("走扩展通道：有在等的检查时下发指令、让 Agent 5 秒来�
   const nodecheck = busy.modules.nodecheck as { runs: Record<string, unknown>[] };
   assert.deepEqual({ runs: nodecheck.runs.map((run) => ({ ...run, panel: undefined })) }, { runs: [{ runId, kind: "speed", family: "auto", panel: undefined }] });
   assert.equal(busy.interval, 5);
-  const old = await handleAgentExtRound(host(8, "2.2.240"), { modules: {} });
-  assert.equal(old.modules.nodecheck, undefined);
   resetNodeCheckStateForTest();
 });
 

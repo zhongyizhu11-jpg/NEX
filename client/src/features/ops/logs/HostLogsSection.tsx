@@ -58,7 +58,7 @@ function HostLogsViewer({ hostId }: { hostId: number }) {
       const afterSeq = cursor.source === source ? cursor.seq : 0;
       return utils.client.ops.hostLogs.poll.query({ hostId, source, afterSeq });
     },
-    enabled: !paused && !!status.data?.supported,
+    enabled: !paused && !!status.data,
     refetchInterval: pollingInterval("live"),
     refetchIntervalInBackground: false,
     retry: false,
@@ -109,9 +109,6 @@ function HostLogsViewer({ hostId }: { hostId: number }) {
   };
 
   if (status.isLoading) return <div className="text-meta text-muted-foreground">正在读取…</div>;
-  if (status.data && !status.data.supported) {
-    return <div className="text-meta text-muted-foreground">需要把这台主机的 Agent 升级到 {status.data.minAgentVersion} 或更新。</div>;
-  }
 
   const hint = poll.isError
     ? (poll.error?.message || "读取失败")

@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  AGENT_FLOW_OFFLOAD_MIN_VERSION,
   FLOW_OFFLOAD_REPORT_STALE_MS,
   flowOffloadDirectiveFor,
   flowOffloadStatusView,
@@ -12,11 +11,10 @@ import {
 
 const NOW = 1_800_000_000_000;
 
-test("快速转发指令只发给够新的 Agent，开关默认关", () => {
-  assert.equal(flowOffloadDirectiveFor({ agentVersion: "2.2.220", flowOffload: true }), undefined);
+test("快速转发指令按开关下发，开关默认关", () => {
   assert.equal(flowOffloadDirectiveFor(null), undefined);
-  assert.deepEqual(flowOffloadDirectiveFor({ agentVersion: AGENT_FLOW_OFFLOAD_MIN_VERSION }), { enabled: false });
-  assert.deepEqual(flowOffloadDirectiveFor({ agentVersion: AGENT_FLOW_OFFLOAD_MIN_VERSION, flowOffload: true }), { enabled: true });
+  assert.deepEqual(flowOffloadDirectiveFor({}), { enabled: false });
+  assert.deepEqual(flowOffloadDirectiveFor({ flowOffload: true }), { enabled: true });
 });
 
 test("Agent 上报解析：嵌套的 accounting、截断、坏值", () => {
@@ -45,11 +43,10 @@ test("Agent 上报解析：嵌套的 accounting、截断、坏值", () => {
   });
 });
 
-test("主机设置页状态：关、旧 Agent、等上报、生效、出错、上报过期", () => {
+test("主机设置页状态：关、等上报、生效、出错、上报过期", () => {
   resetFlowOffloadReportsForTest();
-  const host = { id: 7, agentVersion: AGENT_FLOW_OFFLOAD_MIN_VERSION, flowOffload: true };
+  const host = { id: 7, agentVersion: "2.2.251", flowOffload: true };
   assert.equal(flowOffloadStatusView({ ...host, flowOffload: false }, NOW), null);
-  assert.equal(flowOffloadStatusView({ ...host, agentVersion: "2.2.200" }, NOW)?.state, "agent-old");
   assert.equal(flowOffloadStatusView(host, NOW)?.state, "pending");
 
   ingestFlowOffloadReport(host, { enabled: true, active: true, accounting: { running: true, offloaded: 4 } }, NOW);

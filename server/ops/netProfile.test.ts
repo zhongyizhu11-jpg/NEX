@@ -47,7 +47,7 @@ test("面板兜底查 DNSBL：反写地址、读应答、错误不当列入", as
   assert.equal(dnsblAddressForHost({ ipv6: "2001:db8::1" }), null);
 });
 
-test("扩展通道一轮：收结果、回执、重新检测、旧 Agent 只能面板查 DNSBL", () => {
+test("扩展通道一轮：收结果、回执、重新检测、面板查 DNSBL", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "nex-netprofile-"));
   try {
     const script = String.raw`
@@ -62,16 +62,15 @@ test("扩展通道一轮：收结果、回执、重新检测、旧 Agent 只能�
       const exec = (sql, params = []) => runtime.executeRaw(sql, params);
       await exec("INSERT INTO users (id, username, password, role) VALUES (1, 'admin', 'hash', 'admin')");
       await exec('INSERT INTO hosts (id, name, ip, ipv4, "hostType", "agentToken", "userId", "agentVersion") VALUES (1, ?, ?, ?, ?, ?, 1, ?)', ["新", "203.0.113.7", "203.0.113.7", "slave", "tok1", "2.2.226"]);
-      await exec('INSERT INTO hosts (id, name, ip, ipv4, "hostType", "agentToken", "userId", "agentVersion") VALUES (2, ?, ?, ?, ?, ?, 1, ?)', ["旧", "198.51.100.9", "198.51.100.9", "slave", "tok2", "2.2.224"]);
+      await exec('INSERT INTO hosts (id, name, ip, ipv4, "hostType", "agentToken", "userId", "agentVersion") VALUES (2, ?, ?, ?, ?, ?, 1, ?)', ["二", "198.51.100.9", "198.51.100.9", "slave", "tok2", "2.2.251"]);
 
       const ext = await import(url("server/ops/agentExt.ts"));
       await import(url("server/ops/agentExtModules.ts"));
       const np = await import(url("server/ops/netProfile.ts"));
       const db = await import(url("server/db.ts"));
       const newHost = await db.getHostById(1);
-      const oldHost = await db.getHostById(2);
 
-      // 第一轮：没结果。指令里有 lastCheckedAt=0、默认列表；旧 Agent 不给指令
+      // 第一轮：没结果。指令里有 lastCheckedAt=0、默认列表
       let reply = await ext.handleAgentExtRound(newHost, { modules: {} });
       const directive = reply.modules.netprofile;
       assert.equal(directive.intervalSeconds, 21600);
@@ -79,8 +78,6 @@ test("扩展通道一轮：收结果、回执、重新检测、旧 Agent 只能�
       assert.equal(directive.runId, "");
       assert.ok(directive.dnsbl.includes("zen.spamhaus.org"));
       assert.ok(directive.smtpTargets.includes("gmail-smtp-in.l.google.com:25"));
-      reply = await ext.handleAgentExtRound(oldHost, { modules: {} });
-      assert.equal(reply.modules.netprofile, undefined);
 
       // 「重新检测」：带 runId、让 Agent 5 秒一轮
       const runId = np.requestNetProfileRun(1);
@@ -123,16 +120,12 @@ test("扩展通道一轮：收结果、回执、重新检测、旧 Agent 只能�
       assert.equal(stored.history.length, 2);
       assert.equal(stored.agentCheckedAt, now);
 
-      // 路由：新 Agent 叫 Agent 测；旧 Agent 只能面板查 DNSBL（这里换成假的解析结果）
+      // 路由：读结果；面板也能单独查 DNSBL（这里换成假的解析结果）
       const routerModule = await import(url("server/routers/netProfile.ts"));
       const caller = routerModule.netProfileRouter.createCaller({ user: { id: 1, role: "admin", username: "admin" }, req: { headers: {} }, res: { setHeader: () => {} } });
       const view = await caller.get({ hostId: 1 });
-      assert.equal(view.supported, true);
       assert.equal(view.profile.ipv4.address, "203.0.113.7");
-      await assert.rejects(caller.recheck({ hostId: 2, mode: "agent" }), /需要升级 Agent/);
-      const oldView = await caller.get({ hostId: 2 });
-      assert.equal(oldView.supported, false);
-      assert.equal(oldView.profile, null);
+      assert.equal((await caller.get({ hostId: 2 })).profile, null);
       // 面板兜底只换 DNSBL 那一块
       await np.savePanelDnsbl(2, "198.51.100.9", [{ list: "zen.spamhaus.org", listed: false, code: null, error: null }]);
       const fallback = await np.getHostNetProfile(2);
