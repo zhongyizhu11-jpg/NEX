@@ -35,12 +35,20 @@ export type LineRate = NonNullable<RouteBoardRate>;
 
 export type LineHop = {
   key: string;
+  /**
+   * 这一跳在「我的线路」整张图里是哪个节点：同一台主机、同一个组、同一个落地在几条线路里合成一个
+   * （host:<主机 id> / group:<组 id> / node:<我的节点 id> / addr:<落地地址> / exit:<出口>）。
+   */
+  nodeId: string;
   name: string;
   caption: string;
   health: NetworkHealth;
   title?: string;
   /** 这一跳此刻的速率：线路组的中转各报各的；别的线路只有整条的，写在入口。 */
   rate?: LineRate | null;
+  /** 是一台主机时：在不在线（画图上那颗点）、在哪个国家（画国旗）。不是主机是 null。 */
+  online?: boolean | null;
+  country?: string | null;
 };
 
 export type LineModel = {
@@ -105,6 +113,17 @@ function hostHealth(host: any | undefined, fallback: NetworkHealth = "unknown"):
   return fallback;
 }
 
+/** 一台主机在整张图里的身份、在线和国家（画点、画国旗）。 */
+function hostIdentity(context: LineModelContext, hostId: unknown): Pick<LineHop, "nodeId" | "online" | "country"> {
+  const id = Number(hostId || 0);
+  const host = id > 0 ? context.hostById.get(id) : undefined;
+  return {
+    nodeId: id > 0 ? `host:${id}` : "host:unknown",
+    online: host ? !(host.isOnline === false || host.isOnline === 0) : null,
+    country: host ? String(host.geoCountryCode || host.countryCode || "").trim() || null : null,
+  };
+}
+
 function hostName(context: LineModelContext, hostId: unknown) {
   const id = Number(hostId || 0);
   return String(context.hostById.get(id)?.name || (id > 0 ? `主机 ${id}` : "主机"));
@@ -162,6 +181,7 @@ export function buildLineModel(rule: any, context: LineModelContext): LineModel 
       const entryHosts = (Array.isArray(entryGroup.members) ? entryGroup.members : []).map((member: any) => context.hostById.get(Number(member?.hostId || 0))).filter(Boolean);
       entry = {
         key: "entry",
+        nodeId: `group:${Number(entryGroup.id || group.entryGroupId)}`,
         name: String(entryGroup.name || "入口组"),
         caption: `入口组 · ${entryHosts.length} 台入口`,
         address: entryHosts[0] ? entryAddressOf(entryHosts[0]) : "",
@@ -169,13 +189,14 @@ export function buildLineModel(rule: any, context: LineModelContext): LineModel 
       };
       for (const member of members) {
         const host = context.hostById.get(Number(member?.hostId || 0));
-        hops.push({ key: `member-${member.id}`, name: hostName(context, member?.hostId), caption: hostCaption(host, "中转"), health: hostHealth(host) });
+        hops.push({ key: `member-${member.id}`, ...hostIdentity(context, member?.hostId), name: hostName(context, member?.hostId), caption: hostCaption(host, "中转"), health: hostHealth(host) });
       }
     } else {
       const first = members[0];
       const firstHost = first ? context.hostById.get(Number(first.hostId || 0)) : entryHost;
       entry = {
         key: "entry",
+        ...hostIdentity(context, first?.hostId || rule?.hostId),
         name: hostName(context, first?.hostId || rule?.hostId),
         caption: hostCaption(firstHost, "入口"),
         address: entryAddressOf(firstHost),
@@ -183,7 +204,7 @@ export function buildLineModel(rule: any, context: LineModelContext): LineModel 
       };
       for (const member of members.slice(1)) {
         const host = context.hostById.get(Number(member?.hostId || 0));
-        hops.push({ key: `member-${member.id}`, name: hostName(context, member?.hostId), caption: hostCaption(host, "中转"), health: hostHealth(host) });
+        hops.push({ key: `member-${member.id}`, ...hostIdentity(context, member?.hostId), name: hostName(context, member?.hostId), caption: hostCaption(host, "中转"), health: hostHealth(host) });
       }
     }
   } else if (group) {
@@ -192,6 +213,7 @@ export function buildLineModel(rule: any, context: LineModelContext): LineModel 
     const modeLabel = groupMode === "port" ? "端口转发" : groupMode === "entry" ? "入口组" : "转发组";
     entry = {
       key: "entry",
+      nodeId: `group:${Number(group.id || rule?.forwardGroupId)}`,
       name: String(group.name || modeLabel),
       caption: `${modeLabel} · ${members.length} 台入口${groupMode === "failover" ? "主备" : ""}`,
       address: memberHosts[0] ? entryAddressOf(memberHosts[0]) : "",
@@ -200,6 +222,7 @@ export function buildLineModel(rule: any, context: LineModelContext): LineModel 
   } else {
     entry = {
       key: "entry",
+      ...hostIdentity(context, rule?.hostId),
       name: hostName(context, rule?.hostId),
       caption: hostCaption(entryHost, "入口"),
       address: entryAddressOf(entryHost),
@@ -214,6 +237,7 @@ export function buildLineModel(rule: any, context: LineModelContext): LineModel 
       const last = index === hopIds.length - 1;
       hops.push({
         key: `tunnel-hop-${index}`,
+        ...hostIdentity(context, hostId),
         name: String(tunnelHopHostName(tunnel, hostId, Array.from(context.hostById.values())) || hostName(context, hostId)),
         caption: hostCaption(host, last ? "出口" : "中转"),
         health: hostHealth(host),
@@ -231,6 +255,7 @@ export function buildLineModel(rule: any, context: LineModelContext): LineModel 
         const host = context.hostById.get(Number(hop.hostId || 0));
         hops.push({
           key: `route-hop-${index}`,
+          ...hostIdentity(context, hop.hostId),
           name: hop.name,
           caption: hostCaption(host, "中转"),
           health: hop.ok === false ? (hop.consecutiveFailures >= 3 ? "down" : "degraded") : hop.ok === true ? "healthy" : hostHealth(host),
@@ -244,7 +269,7 @@ export function buildLineModel(rule: any, context: LineModelContext): LineModel 
       const first = routeGroup.paths[0];
       for (const [index, hostId] of (first?.hops || []).entries()) {
         const host = context.hostById.get(Number(hostId));
-        hops.push({ key: `route-plan-${index}`, name: hostName(context, hostId), caption: hostCaption(host, "中转"), health: hostHealth(host), title: "线路组路径（还没有运行状态）" });
+        hops.push({ key: `route-plan-${index}`, ...hostIdentity(context, hostId), name: hostName(context, hostId), caption: hostCaption(host, "中转"), health: hostHealth(host), title: "线路组路径（还没有运行状态）" });
       }
     }
   }
@@ -256,6 +281,8 @@ export function buildLineModel(rule: any, context: LineModelContext): LineModel 
   const landingAddress = activeDest && activeDest.ip ? formatHostAddressWithPort(activeDest.ip, activeDest.port) : targetAddress;
   const landing: LineHop = {
     key: "landing",
+    // 落地按「我的节点」或者落地地址合并：几条线路落在同一个地方就画成一个落地。
+    nodeId: nodeId > 0 ? `node:${nodeId}` : landingAddress ? `addr:${landingAddress}` : `addr:rule-${id}`,
     name: nodeName ? nodeName : "落地",
     caption: nodeName ? `我的节点 · ${landingAddress}` : landingAddress,
     health: "unknown",
@@ -265,6 +292,7 @@ export function buildLineModel(rule: any, context: LineModelContext): LineModel 
   const egress = rule?.egress && String(rule.egress.type || "none") !== "none" ? rule.egress : null;
   const exit: LineHop | null = egress ? {
     key: "exit",
+    nodeId: `exit:${String(egress.landingHostName || egress.inboundName || egress.masked || `rule-${id}`)}`,
     name: String(egress.landingHostName || egress.inboundName || "外部 SS 出口"),
     caption: `出口 · Shadowsocks${egress.udp ? " · 含 UDP" : ""}${egress.state && egress.state !== "running" ? ` · ${String(egress.message || egress.state)}` : ""}`,
     health: egress.state === "running" ? "healthy" : egress.state === "paused" ? "standby" : egress.state ? "degraded" : "unknown",

@@ -92,7 +92,27 @@ export type TopologyCanvasProps = {
   onSelectEdge: (edge: TopologyEdge) => void;
   onClearSelection: () => void;
   className?: string;
+  /** 节点第二行写什么；不给就写角色（入口 · 中转 / 落地入站 / 外部目标…），和拓扑图一样。 */
+  nodeCaption?: (node: TopologyNode) => string;
+  /** 紧凑：字小一号、边距收窄，配窄格子用（手机上的「我的线路」）。 */
+  compact?: boolean;
+  /** 自动适应时，整张放下后不小于这个倍数就整张放下，否则按这个倍数放、上下拖着看。 */
+  minReadableScale?: number;
+  /** 顶上留给列标题的高度：适应窗口时图从这下面开始放，免得列标题压在第一行节点上。 */
+  topInset?: number;
+  /**
+   * 手指在图上竖着划交给谁："none" 全归画布（拖动 / 双指缩放，拓扑图）；"pan-y" 竖着划滚页面、
+   * 横着拖才平移（手机上「我的线路」画布和图一样高，整张图在页面里，下面还有线路清单要划到）。
+   */
+  touchAction?: "none" | "pan-y";
 };
+
+/** 节点里字的大小和位置：常规 / 紧凑。 */
+const NODE_TEXT = {
+  // labelPad 里含右上角状态点的位置（dotRoom）；没有状态点的节点（外部目标、落地地址）名字可以多写这么宽。
+  normal: { label: 12.5, caption: 10.5, x: 14, labelY: 20, captionY: 37, dotY: 12, dotR: 4, labelPad: 34, dotRoom: 12, captionPad: 22, flag: 20, badgeFont: 10, badgeChar: 6.2, badgePad: 12 },
+  compact: { label: 11.5, caption: 9.5, x: 11, labelY: 17, captionY: 31, dotY: 10, dotR: 3.5, labelPad: 28, dotRoom: 10, captionPad: 16, flag: 18, badgeFont: 9, badgeChar: 5.4, badgePad: 8 },
+} as const;
 
 type Hover = { kind: "node" | "edge"; id: string; x: number; y: number } | null;
 
@@ -100,8 +120,24 @@ function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
 }
 
-function truncate(text: string, max: number) {
-  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+/**
+ * 按格子宽度截断节点上的字：中日韩字、全角符号按一个字宽算，别的按 0.6 个（无衬线字体的大致平均）。
+ * 以前按字数截（16 / 19 / 22 个），中文名一长就画出格子；「我的线路」那张图的格子更窄，也得按宽度来。
+ */
+export function fitNodeText(text: string, maxWidth: number, fontSize: number) {
+  // 按码点走，表情、生僻字这种两个 UTF-16 单元的字不会被从中间切开。
+  const chars = Array.from(text);
+  const widthOf = (char: string) => ((char.codePointAt(0) ?? 0) >= 0x2e80 ? fontSize : fontSize * 0.6);
+  const total = chars.reduce((sum, char) => sum + widthOf(char), 0);
+  if (total <= maxWidth) return text;
+  const budget = maxWidth - widthOf("…");
+  let used = 0;
+  let end = 0;
+  while (end < chars.length && used + widthOf(chars[end]) <= budget) {
+    used += widthOf(chars[end]);
+    end += 1;
+  }
+  return `${chars.slice(0, Math.max(1, end)).join("")}…`;
 }
 
 export const TopologyCanvas = forwardRef<TopologyCanvasHandle, TopologyCanvasProps>(function TopologyCanvas({
@@ -116,7 +152,13 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, TopologyCanvasPro
   onSelectEdge,
   onClearSelection,
   className,
+  nodeCaption = topologyRoleText,
+  compact = false,
+  minReadableScale = 0.6,
+  topInset = 0,
+  touchAction = "none",
 }, ref) {
+  const nodeText = compact ? NODE_TEXT.compact : NODE_TEXT.normal;
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [transform, setTransform] = useState<Transform>({ k: 1, x: 0, y: 0 });
@@ -143,14 +185,15 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, TopologyCanvasPro
   */
   const fit = useCallback((mode: "all" | "readable" = "all") => {
     if (size.width <= 0 || size.height <= 0 || layout.width <= 0) return;
+    const usableHeight = Math.max(1, size.height - topInset);
     const widthFit = (size.width - 16) / layout.width;
-    const heightFit = (size.height - 16) / layout.height;
+    const heightFit = (usableHeight - 16) / layout.height;
     const all = clamp(Math.min(widthFit, heightFit), 0.15, 1.25);
-    if (mode === "all" || all >= 0.6) {
-      setTransform({ k: all, x: (size.width - layout.width * all) / 2, y: (size.height - layout.height * all) / 2 });
+    if (mode === "all" || all >= minReadableScale) {
+      setTransform({ k: all, x: (size.width - layout.width * all) / 2, y: topInset + (usableHeight - layout.height * all) / 2 });
       return;
     }
-    const k = clamp(Math.min(widthFit, 1), 0.6, 1.25);
+    const k = clamp(Math.min(widthFit, 1), minReadableScale, 1.25);
     // 对准主机那几列（入口、中转、出口）的中间：目标那一列再长，要紧的也是前面这几列。
     const inner = nodes.filter((node) => node.kind !== "target" && node.kind !== "inbound").map((node) => layout.nodes.get(node.id)).filter((box) => !!box);
     const boxes = inner.length > 0 ? inner : Array.from(layout.nodes.values());
@@ -159,8 +202,8 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, TopologyCanvasPro
     const left = Math.min(...boxes.map((box) => box!.x));
     const centerY = (top + bottom) / 2;
     const x = layout.width * k <= size.width ? (size.width - layout.width * k) / 2 : 8 - left * k;
-    setTransform({ k, x, y: size.height / 2 - centerY * k });
-  }, [size.width, size.height, layout, nodes]);
+    setTransform({ k, x, y: topInset + usableHeight / 2 - centerY * k });
+  }, [size.width, size.height, layout, nodes, minReadableScale, topInset]);
 
   const zoomAt = useCallback((factor: number, cx: number, cy: number) => {
     setTransform((current) => {
@@ -328,7 +371,7 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, TopologyCanvasPro
     <div
       ref={containerRef}
       className={`relative select-none overflow-hidden ${className || ""}`}
-      style={{ touchAction: "none", cursor: gesture.current?.dragged ? "grabbing" : "grab" }}
+      style={{ touchAction, cursor: gesture.current?.dragged ? "grabbing" : "grab" }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -359,7 +402,7 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, TopologyCanvasPro
             const standby = edge.activePath === false;
             const flowing = edgeFlowing(edge);
             const badge = transform.k >= 0.55 && !standby ? topologyEdgeBadge(edge) : null;
-            const badgeWidth = badge ? badge.length * 6.2 + 12 : 0;
+            const badgeWidth = badge ? badge.length * nodeText.badgeChar + nodeText.badgePad : 0;
             return (
               <g key={edge.id} data-edge-id={edge.id} data-flowing={flowing ? "" : undefined} data-standby={standby ? "" : undefined} opacity={faded ? 0.12 : edge.status === "stopped" ? 0.5 : standby ? 0.55 : 1}>
                 <path
@@ -400,7 +443,7 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, TopologyCanvasPro
                 {badge ? (
                   <g transform={`translate(${mid.x - badgeWidth / 2} ${mid.y - 9})`} pointerEvents="none">
                     <rect width={badgeWidth} height={18} rx={9} fill="var(--color-card)" stroke={color} strokeOpacity={0.55} strokeWidth={1} />
-                    <text x={badgeWidth / 2} y={12.5} textAnchor="middle" fontSize={10} fontWeight={600} fontFamily="var(--fx-font-mono)" className="fill-foreground">{badge}</text>
+                    <text x={badgeWidth / 2} y={compact ? 12 : 12.5} textAnchor="middle" fontSize={nodeText.badgeFont} fontWeight={600} fontFamily="var(--fx-font-mono)" className="fill-foreground">{badge}</text>
                   </g>
                 ) : null}
               </g>
@@ -445,18 +488,19 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, TopologyCanvasPro
                   strokeDasharray={node.masked ? "4 3" : undefined}
                 />
                 <rect x={0} y={0} width={5} height={box.height} rx={2.5} fill={tone} opacity={node.kind === "target" ? 0 : 1} />
-                {statusColor ? <circle cx={box.width - 11} cy={12} r={4} fill={statusColor} /> : null}
-                <text x={14} y={20} fontSize={12.5} fontWeight={600} className="fill-foreground">
-                  {flag && flag.length <= 4 ? `${flag} ` : ""}{truncate(node.label, flag ? 16 : 19)}
+                {statusColor ? <circle cx={box.width - nodeText.x + 3} cy={nodeText.dotY} r={nodeText.dotR} fill={statusColor} /> : null}
+                <text x={nodeText.x} y={nodeText.labelY} fontSize={nodeText.label} fontWeight={600} className="fill-foreground">
+                  {flag && flag.length <= 4 ? `${flag} ` : ""}{fitNodeText(node.label, box.width - nodeText.labelPad + (statusColor ? 0 : nodeText.dotRoom) - (flag && flag.length <= 4 ? nodeText.flag : 0), nodeText.label)}
                 </text>
-                <text x={14} y={37} fontSize={10.5} className="fill-muted-foreground">
-                  {truncate(topologyRoleText(node), 22)}
+                <text x={nodeText.x} y={nodeText.captionY} fontSize={nodeText.caption} className="fill-muted-foreground">
+                  {fitNodeText(nodeCaption(node), box.width - nodeText.captionPad, nodeText.caption)}
                 </text>
               </g>
             );
           })}
         </g>
-        {/* 列标题钉在画布顶上（跟着横向平移和缩放，不跟着上下拖走） */}
+        {/* 列标题钉在画布顶上（跟着横向平移和缩放，不跟着上下拖走）；留了顶边就垫一层底色，图往上拖时节点从标题下面过，不叠字 */}
+        {topInset > 0 ? <rect x={0} y={0} width={size.width} height={topInset} fill="var(--color-card)" opacity={0.92} pointerEvents="none" /> : null}
         {columnLabels.map((label, index) => {
           const column = layout.layers[index] || [];
           const first = column.length > 0 ? layout.nodes.get(column[0]) : undefined;

@@ -1,61 +1,45 @@
-import { useMemo, useState } from "react";
-import { ChevronDown, Signpost } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Maximize2, Minus, Plus, Signpost, X } from "lucide-react";
 import { useLocation } from "wouter";
 
 import EmptyState from "@/components/EmptyState";
+import { StatusDot } from "@/components/network/StatusDot";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { formatRate, type RouteSegment } from "@/features/rules/RouteBoard";
+import { formatRate } from "@/features/rules/RouteBoard";
+import { TopologyCanvas, type TopologyCanvasHandle } from "@/features/topology/TopologyCanvas";
+import { layoutTopology } from "@/features/topology/topologyLayout";
+import { topologyRoleText } from "@/features/topology/topologyView";
 import { pollingInterval } from "@/lib/polling";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { lineDetailHref } from "./lineLinks";
-import { buildLineModel, type LineHop, type LineModel, type LineProbe, type LineRate, type LineTraffic } from "./myLines";
+import { buildLineModel, type LineModel, type LineProbe, type LineRate, type LineTraffic } from "./myLines";
+import {
+  MY_LINES_LABEL_BAND,
+  MY_LINES_LAYOUT_COMPACT,
+  MY_LINES_MIN_SCALE,
+  MY_LINES_TERMINAL_TIERS,
+  buildMyLinesGraph,
+  myLinesCanvasHeight,
+  myLinesColumnLabels,
+  myLinesLayoutFor,
+  sortLinesForList,
+} from "./myLinesGraph";
 
 /*
-  网络拓扑 › 我的线路：泳道图。整块是点阵画布，三列（入口 / 中转 / 落地，配了出口再多一列）
-  上下对齐；每条线一条半透明泳道，泳道左上角一枚标题框（名字、几条路径、整链延迟、切换次数、
-  收起箭头）；泳道里节点是白卡 —— 空心圆环 + 名字、角色（入口写延迟）、↓ ↑ 此刻速率；
-  节点之间一条虚线，线中间骑一枚延迟药丸（没单独探测的段不骑）。
+  网络拓扑 › 我的线路：所有线路画在一张图上，一眼看完（和拓扑图同一张画布：滚轮 / 双指缩放、拖动、右上角「放下全图」）。
 
-  这是看「我的每条线现在从哪进、经过谁、到哪落地、通不通、跑多快」的地方，建和改还在
-  隧道 / 转发链 / 转发组那几页。数字来自现成的查询：rules.list（规则 + 出口）、
-  rules.trafficSummary（最近探测 + 此刻速率）、rules.routeBoard（线路组当前路径各段、各跳速率、
-  切换次数）、hosts / tunnels / forwardGroups 的 options。
+  图：入口 → 中转… → 落地 →（出口）分列；同一台主机、同一个组、同一个落地只画一个，几条线路共用的一段合成一条
+  连线，线上骑延迟，有问题的染黄 / 红（myLinesGraph.ts）。图下面一行一条线路，不通的排最前：点一行就在图上
+  高亮它走的路，并展开详情 / 诊断 / 编辑；点图上的节点或连线，下面只留经过那里的线路。
+
+  这是看「我的每条线现在从哪进、经过谁、到哪落地、通不通、跑多快」的地方，建和改还在隧道 / 转发链 / 转发组
+  那几页。数字来自现成的查询：rules.list（规则 + 出口）、rules.trafficSummary（最近探测 + 此刻速率）、
+  rules.routeBoard（线路组当前路径各段、各跳速率、切换次数）、hosts / tunnels / forwardGroups 的 options。
 */
 
-const PLANNED_SEGMENT: RouteSegment = { key: "planned", latencyMs: null, state: "planned", failures: 0, at: null, title: "这一段没有单独的探测，整条线的延迟看泳道头" };
-
-function LaneNode({ hop, role, caption, rate, title }: { hop: LineHop; role: "entry" | "relay" | "landing" | "exit"; caption: string; rate: LineRate | null; title?: string }) {
-  return (
-    <div className="fx-lane-node" data-health={hop.health} data-role={role} title={[hop.title, title].filter(Boolean).join("\n") || undefined}>
-      <span className="fx-lane-node-head"><i aria-hidden="true" /><b>{hop.name}</b></span>
-      <span className="fx-lane-node-caption">{caption}</span>
-      <span className="fx-lane-node-rate" title={rate ? `${rate.connections} 个连接` : "此刻没有流量"}>
-        <span>↓ {rate ? formatRate(rate.inBps) : "—"}</span>
-        <span>↑ {rate ? formatRate(rate.outBps) : "—"}</span>
-      </span>
-    </div>
-  );
-}
-
-function LaneSegment({ segment, flowing }: { segment: RouteSegment; flowing: boolean }) {
-  const pill = segment.state === "measured" && segment.latencyMs !== null
-    ? `${Math.round(segment.latencyMs)} ms`
-    : segment.state === "failed"
-      ? `不通${segment.failures > 0 ? ` ×${segment.failures}` : ""}`
-      : segment.state === "unknown"
-        ? "未测"
-        : null;
-  return (
-    <span className="fx-lane-seg" data-state={segment.state} data-flow={flowing && segment.state !== "failed" ? "" : undefined} title={segment.title}>
-      <i aria-hidden="true" />
-      {pill ? <span className="fx-lane-pill">{pill}</span> : null}
-    </span>
-  );
-}
-
-/** 泳道头上「N 个候选，M 个分流组」那一句，这里写线路是什么、几条路径、绑了哪个节点。 */
+/** 线路名后面那一句：线路是什么、几条路径、绑了哪个节点、谁的。 */
 function describeLine(line: LineModel) {
   const parts = [line.kindLabel];
   if (line.pathCount > 1) parts.push(`${line.pathCount} 条路径`);
@@ -64,87 +48,65 @@ function describeLine(line: LineModel) {
   return parts.join("，");
 }
 
-export function LineCard({ line, onEdit, onDiagnose, onOpenDetail, withExitColumn = !!line.exit }: { line: LineModel; onEdit?: () => void; onDiagnose?: () => void; onOpenDetail?: () => void; withExitColumn?: boolean }) {
-  const [collapsed, setCollapsed] = useState(false);
+/** 一行右边那枚：整链延迟 / 不通 / 未测 / 已停用。 */
+export function lineLatencyChip(line: LineModel): { text: string; tone: "ok" | "down" | "off" } {
   const probe = line.probe;
-  const flowing = line.health === "healthy" && !!line.rate && (line.rate.inBps > 0 || line.rate.outBps > 0);
-  // 节点之间的段：线路组有线路板各段；别的线路只有端到端一个数 —— 只有一段时就写在那一段上，
-  // 多段时每段只画线不骑药丸，整条线的延迟在泳道头。
-  const gaps = line.hops.length + 1;
-  const segments: RouteSegment[] = Array.from({ length: gaps }, (_, index) => {
-    const own = line.segments[index];
-    if (own) return { ...own, key: `${own.key}-${index}` };
-    if (gaps === 1 && probe && line.health !== "standby") {
-      if (probe.isTimeout) return { key: "e2e", latencyMs: null, state: "failed", failures: 0, at: null, title: `入口探落地不通（${line.statusText}）` };
-      if (probe.latencyMs !== null && line.health === "healthy") return { key: "e2e", latencyMs: probe.latencyMs, state: "measured", failures: 0, at: null, title: "入口探落地（端到端）" };
-    }
-    return { ...PLANNED_SEGMENT, key: `planned-${index}` };
-  });
-  const latencyChip = line.health === "standby"
-    ? <span className="fx-lane-chip" data-tone="off">已停用</span>
-    : probe?.isTimeout
-      ? <span className="fx-lane-chip" data-tone="down" title={line.statusText}>整链不通</span>
-      : probe && probe.latencyMs !== null
-        ? <span className="fx-lane-chip" data-tone={line.health === "down" ? "down" : undefined} title={line.statusText}>整链 {Math.round(probe.latencyMs)} ms</span>
-        : <span className="fx-lane-chip" data-tone="off" title={line.statusText}>整链未测</span>;
-  const entryCaption = probe && probe.latencyMs !== null && !probe.isTimeout && line.health !== "standby" ? `入口，${Math.round(probe.latencyMs)} ms` : line.entry.caption;
-  const lineRate = line.rate;
+  if (line.health === "standby") return { text: "已停用", tone: "off" };
+  if (probe?.isTimeout) return { text: "整链不通", tone: "down" };
+  if (probe && probe.latencyMs !== null) return { text: `整链 ${Math.round(probe.latencyMs)} ms`, tone: line.health === "down" ? "down" : "ok" };
+  return { text: "整链未测", tone: "off" };
+}
+
+function lineChainText(line: LineModel) {
+  return [line.entry.name, ...line.hops.map((hop) => hop.name), line.landing.name, ...(line.exit ? [line.exit.name] : [])].join(" → ");
+}
+
+function lineRateText(rate: LineRate | null) {
+  if (!rate || (rate.inBps <= 0 && rate.outBps <= 0)) return null;
+  return `↓ ${formatRate(rate.inBps)} · ↑ ${formatRate(rate.outBps)}`;
+}
+
+const CHIP_TONE: Record<"ok" | "down" | "off", string> = {
+  ok: "bg-[var(--fx-healthy-soft)] text-[var(--fx-healthy-text)]",
+  down: "bg-[var(--fx-down-soft)] text-[var(--fx-down-text)]",
+  off: "bg-[var(--fx-l3-control-fill)] text-muted-foreground",
+};
+
+export function MyLineRow({ line, selected, onSelect, onEdit, onDiagnose, onOpenDetail }: {
+  line: LineModel;
+  selected: boolean;
+  onSelect: () => void;
+  onEdit?: () => void;
+  onDiagnose?: () => void;
+  onOpenDetail?: () => void;
+}) {
+  const chip = lineLatencyChip(line);
+  const rate = lineRateText(line.rate);
   return (
-    <section className="fx-lane" data-health={line.health} data-collapsed={collapsed ? "" : undefined} data-testid="line-card" data-kind={line.kind}>
-      <header className="fx-lane-head">
-        <span className="fx-lane-title" title={line.statusText}>
-          <b className="truncate">{line.name}</b>
-          <span className="fx-lane-sub">{describeLine(line)}</span>
-          {latencyChip}
-          {line.switches && line.switches.count24h > 0 ? (
-            <button type="button" className="fx-lane-link" onClick={onOpenDetail ?? onDiagnose} title={line.switches.lastFromLabel && line.switches.lastToLabel ? `最近一次：${line.switches.lastFromLabel} → ${line.switches.lastToLabel}` : undefined} data-testid="route-switch-chip">
-              {line.switches.flapping ? "来回切换" : line.switches.manual24h > 0 ? "经手动切换" : "经切换"} ×{line.switches.count24h}
-            </button>
-          ) : null}
-          <button type="button" className="fx-lane-toggle" aria-label={collapsed ? "展开这条线路" : "收起这条线路"} aria-expanded={!collapsed} onClick={() => setCollapsed((value) => !value)}>
-            <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", collapsed && "-rotate-90")} aria-hidden="true" />
-          </button>
-        </span>
-        <span className="fx-lane-actions">
-          {/* 线路组：「详情」打开线路详情（/rules?line=，和线路概览里点卡片是同一个面板），切换记录也在那里 */}
-          {onOpenDetail ? <button type="button" className="fx-lane-link" onClick={onOpenDetail} data-testid="line-open-detail">详情</button> : null}
-          {onDiagnose ? <button type="button" className="fx-lane-link" onClick={onDiagnose}>诊断</button> : null}
-          {onEdit ? <button type="button" className="fx-lane-link" onClick={onEdit}>编辑</button> : null}
-        </span>
-      </header>
-      {collapsed ? null : (
-        <div className="fx-lane-row" data-exit={withExitColumn ? "" : undefined} data-testid="line-chain">
-          <div className="fx-lane-cell" data-col="entry">
-            <LaneNode hop={line.entry} role="entry" caption={entryCaption} rate={line.entry.rate ?? lineRate} title={line.entry.address ? `${line.entry.caption} · ${line.entry.address}` : line.entry.caption} />
-          </div>
-          <div className="fx-lane-cell fx-lane-middle" data-col="relay">
-            {line.hops.map((hop, index) => (
-              <span key={hop.key} className="contents">
-                <LaneSegment segment={segments[index]} flowing={flowing} />
-                <LaneNode hop={hop} role="relay" caption={hop.caption} rate={hop.rate ?? lineRate} />
-              </span>
-            ))}
-            <LaneSegment segment={segments[gaps - 1]} flowing={flowing} />
-          </div>
-          <div className="fx-lane-cell" data-col="landing">
-            <LaneNode hop={line.landing} role="landing" caption={`落地，${line.landing.caption}`} rate={line.hops.length > 0 ? line.hops[line.hops.length - 1].rate ?? lineRate : lineRate} />
-          </div>
-          {withExitColumn ? (
-            <div className="fx-lane-cell fx-lane-exit" data-col="exit">
-              {line.exit ? (
-                <>
-                  <LaneSegment segment={{ ...PLANNED_SEGMENT, key: "exit", title: "落地从这里出去，不单独探" }} flowing={flowing && line.exit.health !== "down"} />
-                  <LaneNode hop={line.exit} role="exit" caption={line.exit.caption} rate={lineRate} />
-                </>
-              ) : null}
-            </div>
-          ) : null}
+    <li className={cn("border-b border-[var(--fx-stroke-weak)] last:border-b-0", selected && "bg-[var(--fx-l3-control-fill)]")} data-testid="my-line-row" data-health={line.health}>
+      <button type="button" className="flex w-full min-w-0 items-center gap-2 px-3 py-2.5 text-left" onClick={onSelect} aria-expanded={selected} title={line.statusText}>
+        <StatusDot health={line.health} />
+        <span className="min-w-0 flex-1 truncate text-[13px] font-semibold">{line.name}</span>
+        <span className="hidden shrink-0 text-meta text-muted-foreground sm:inline">{describeLine(line)}</span>
+        <span className={cn("shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold", CHIP_TONE[chip.tone])}>{chip.text}</span>
+      </button>
+      {selected ? (
+        <div className="flex flex-col gap-1.5 px-3 pb-3 text-meta text-muted-foreground" data-testid="my-line-detail">
+          <span className="sm:hidden">{describeLine(line)}</span>
+          <span className="break-words font-mono text-[11.5px] text-foreground">{lineChainText(line)}</span>
+          <span>{line.statusText}{rate ? ` · ${rate}` : ""}{line.switches && line.switches.count24h > 0 ? ` · 24 小时切换 ${line.switches.count24h} 次` : ""}</span>
+          <span className="flex gap-4 pt-0.5 font-semibold text-[var(--fx-accent)]">
+            {onOpenDetail ? <button type="button" onClick={onOpenDetail} data-testid="line-open-detail">详情</button> : null}
+            {onDiagnose ? <button type="button" onClick={onDiagnose}>诊断</button> : null}
+            {onEdit ? <button type="button" onClick={onEdit}>编辑</button> : null}
+          </span>
         </div>
-      )}
-      <span className="sr-only" data-testid="line-status">{line.statusText}</span>
-    </section>
+      ) : null}
+    </li>
   );
 }
+
+type Selection = { type: "line"; id: number } | { type: "node"; id: string } | { type: "edge"; id: string } | null;
 
 export function MyLinesSection({ searchQuery = "", isAdmin = false }: { searchQuery?: string; isAdmin?: boolean }) {
   const [, setLocation] = useLocation();
@@ -206,6 +168,61 @@ export function MyLinesSection({ searchQuery = "", isAdmin = false }: { searchQu
       .filter((line) => !query || line.haystack.includes(query));
   }, [rules, hostsQuery.data, tunnelsQuery.data, groupsQuery.data, nodesQuery.data, boardQuery.data, summaryQuery.data, searchQuery]);
 
+  // 量图那张卡有多宽：手机上换紧凑格子，画布高度也按宽度整张放下来算。
+  const [frame, setFrame] = useState<HTMLDivElement | null>(null);
+  const [frameWidth, setFrameWidth] = useState(0);
+  useEffect(() => {
+    if (!frame) return;
+    const update = () => setFrameWidth(frame.clientWidth);
+    update();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(update);
+    observer.observe(frame);
+    return () => observer.disconnect();
+  }, [frame]);
+  const metrics = myLinesLayoutFor(frameWidth || (typeof window !== "undefined" ? window.innerWidth : 0));
+  const compact = metrics === MY_LINES_LAYOUT_COMPACT;
+
+  const graph = useMemo(() => buildMyLinesGraph(lines), [lines]);
+  const layout = useMemo(
+    () => layoutTopology(
+      graph.nodes.map((node) => ({ id: node.id, kind: graph.layoutKind.get(node.id) || "host" })),
+      graph.edges,
+      { ...metrics, terminalTiers: MY_LINES_TERMINAL_TIERS },
+    ),
+    [graph, metrics],
+  );
+  const columnLabels = useMemo(() => myLinesColumnLabels(layout.layers, graph.layoutKind), [layout, graph]);
+  const lineNames = useMemo(() => new Map(lines.map((line) => [line.id, line.name])), [lines]);
+  const [selection, setSelection] = useState<Selection>(null);
+  const canvasRef = useRef<TopologyCanvasHandle | null>(null);
+
+  // 选中的东西不在了（搜索换了、规则删了）就当没选
+  const nodeById = useMemo(() => new Map(graph.nodes.map((node) => [node.id, node])), [graph]);
+  const edgeById = useMemo(() => new Map(graph.edges.map((edge) => [edge.id, edge])), [graph]);
+  const active: Selection = selection && (
+    selection.type === "line" ? graph.pathByLine.has(selection.id) : selection.type === "node" ? nodeById.has(selection.id) : edgeById.has(selection.id)
+  ) ? selection : null;
+  // 点了节点 / 连线：经过那里的线路；点了线路或没点：全部
+  const throughIds = active?.type === "node" ? nodeById.get(active.id)!.ruleIds : active?.type === "edge" ? edgeById.get(active.id)!.ruleIds : null;
+  const highlight = useMemo(() => {
+    const ids = active?.type === "line" ? [active.id] : throughIds;
+    if (!ids) return null;
+    const nodeIds = new Set<string>();
+    const edgeIds = new Set<string>();
+    for (const id of ids) {
+      const path = graph.pathByLine.get(id);
+      if (!path) continue;
+      path.nodeIds.forEach((nodeId) => nodeIds.add(nodeId));
+      path.edgeIds.forEach((edgeId) => edgeIds.add(edgeId));
+    }
+    return { nodeIds, edgeIds };
+  }, [active, throughIds, graph]);
+  const listed = useMemo(() => {
+    const sorted = sortLinesForList(lines);
+    return throughIds ? sorted.filter((line) => throughIds.includes(line.id)) : sorted;
+  }, [lines, throughIds]);
+
   if (rulesQuery.isLoading) {
     return (
       <Card className="border-border bg-card">
@@ -223,25 +240,75 @@ export function MyLinesSection({ searchQuery = "", isAdmin = false }: { searchQu
       />
     );
   }
-  const withExitColumn = lines.some((line) => !!line.exit);
+  const down = lines.filter((line) => line.health === "down").length;
+  const standby = lines.filter((line) => line.health === "standby").length;
+  const selectedLabel = active?.type === "node"
+    ? nodeById.get(active.id)!.label
+    : active?.type === "edge"
+      ? `${nodeById.get(edgeById.get(active.id)!.from)?.label || "?"} → ${nodeById.get(edgeById.get(active.id)!.to)?.label || "?"}`
+      : null;
+  // 画布高度跟着图走：按宽度整张放下有多高就多高。手机上不封顶（竖着划滚的是页面，整张图都在页面里）；
+  // 电脑上封顶 680，太高的在图里上下拖。
+  const canvasHeight = myLinesCanvasHeight(layout, frameWidth, compact ? 2400 : 680);
   return (
-    <div className="fx-lanes" data-testid="my-lines">
-      <div className="fx-lane-row fx-lanes-cols" data-exit={withExitColumn ? "" : undefined} aria-hidden="true">
-        <span className="fx-lane-cell" data-col="entry">入口</span>
-        <span className="fx-lane-cell" data-col="relay">中转</span>
-        <span className="fx-lane-cell" data-col="landing">落地</span>
-        {withExitColumn ? <span className="fx-lane-cell" data-col="exit">出口</span> : null}
+    <div className="flex flex-col gap-3" data-testid="my-lines">
+      {/* 缩放按钮放在图上面这一行：放在图里会压住最右边那列（落地 / 出口） */}
+      <div className="flex items-center gap-2 px-1">
+        <p className="min-w-0 flex-1 text-meta text-muted-foreground" data-testid="my-lines-summary">
+          {lines.length} 条线路{down > 0 ? ` · ${down} 条不通` : ""}{standby > 0 ? ` · ${standby} 条停用` : ""} · 点线路、节点或连线看经过哪里
+        </p>
+        <div className="flex shrink-0 gap-1">
+          <Button type="button" variant="outline" size="icon" className="h-7 w-7 bg-card" aria-label="缩小" title="缩小" onClick={() => canvasRef.current?.zoomBy(0.8)}><Minus className="h-3.5 w-3.5" /></Button>
+          <Button type="button" variant="outline" size="icon" className="h-7 w-7 bg-card" aria-label="放大" title="放大" onClick={() => canvasRef.current?.zoomBy(1.25)}><Plus className="h-3.5 w-3.5" /></Button>
+          <Button type="button" variant="outline" size="icon" className="h-7 w-7 bg-card" aria-label="放下全图" title="放下全图" onClick={() => canvasRef.current?.fit()}><Maximize2 className="h-3.5 w-3.5" /></Button>
+        </div>
       </div>
-      {lines.map((line) => (
-        <LineCard
-          key={line.id}
-          line={line}
-          withExitColumn={withExitColumn}
-          onEdit={() => setLocation(`/rules?edit=${line.id}`)}
-          onDiagnose={() => setLocation(`/rules?diagnose=${line.id}`)}
-          onOpenDetail={line.kind === "route" ? () => setLocation(lineDetailHref(line.id)) : undefined}
-        />
-      ))}
+      <div ref={setFrame} className="overflow-hidden rounded-[var(--fx-radius-card,16px)] border border-[var(--fx-stroke-weak)] bg-card" data-testid="my-lines-graph">
+        <div style={{ height: canvasHeight }}>
+          <TopologyCanvas
+            ref={canvasRef}
+            nodes={graph.nodes}
+            edges={graph.edges}
+            layout={layout}
+            columnLabels={columnLabels}
+            highlight={highlight}
+            selectedId={active && active.type !== "line" ? active.id : null}
+            ruleNames={lineNames}
+            onSelectNode={(node) => setSelection({ type: "node", id: node.id })}
+            onSelectEdge={(edge) => setSelection({ type: "edge", id: edge.id })}
+            onClearSelection={() => setSelection(null)}
+            nodeCaption={(node) => graph.captions.get(node.id) || topologyRoleText(node)}
+            compact={compact}
+            minReadableScale={MY_LINES_MIN_SCALE}
+            topInset={MY_LINES_LABEL_BAND}
+            touchAction={compact ? "pan-y" : "none"}
+            className="h-full w-full"
+          />
+        </div>
+      </div>
+      <div className="overflow-hidden rounded-[var(--fx-radius-card,16px)] border border-[var(--fx-stroke-weak)] bg-card" data-testid="my-lines-list">
+        {selectedLabel ? (
+          <div className="flex items-center gap-2 border-b border-[var(--fx-stroke-weak)] px-3 py-2 text-meta">
+            <span className="min-w-0 flex-1 truncate">经过「{selectedLabel}」的 {listed.length} 条线路</span>
+            <button type="button" className="inline-flex items-center gap-1 font-semibold text-[var(--fx-accent)]" onClick={() => setSelection(null)} data-testid="my-lines-clear">
+              <X className="h-3.5 w-3.5" aria-hidden="true" />全部线路
+            </button>
+          </div>
+        ) : null}
+        <ul>
+          {listed.map((line) => (
+            <MyLineRow
+              key={line.id}
+              line={line}
+              selected={active?.type === "line" && active.id === line.id}
+              onSelect={() => setSelection(active?.type === "line" && active.id === line.id ? null : { type: "line", id: line.id })}
+              onEdit={() => setLocation(`/rules?edit=${line.id}`)}
+              onDiagnose={() => setLocation(`/rules?diagnose=${line.id}`)}
+              onOpenDetail={line.kind === "route" ? () => setLocation(lineDetailHref(line.id)) : undefined}
+            />
+          ))}
+        </ul>
+      </div>
     </div>
   );
 }

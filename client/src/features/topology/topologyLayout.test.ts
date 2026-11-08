@@ -104,3 +104,31 @@ test("空图", () => {
   assert.equal(layout.nodes.size, 0);
   assert.equal(layout.layers.length, 0);
 });
+
+test("终点分几列（我的线路：落地一列、出口再一列）：长短不一的线路落地也对齐在同一列", () => {
+  const nodes = [
+    { id: "e1", kind: "host" },
+    { id: "r1", kind: "host" },
+    { id: "r2", kind: "host" },
+    { id: "l1", kind: "landing" },
+    { id: "l2", kind: "landing" },
+    { id: "x1", kind: "exit" },
+  ];
+  const edges = [
+    { from: "e1", to: "r1" },
+    { from: "r1", to: "r2" },
+    { from: "r2", to: "l1" },
+    // 直连的那条：入口直接到落地，落地也要排在和 l1 同一列
+    { from: "e1", to: "l2" },
+    { from: "l1", to: "x1" },
+  ];
+  const layout = layoutTopology(nodes, edges, { terminalTiers: [["landing"], ["exit"]] });
+  const layerOf = (id: string) => layout.nodes.get(id)!.layer;
+  assert.deepEqual([layerOf("e1"), layerOf("r1"), layerOf("r2")], [0, 1, 2]);
+  assert.equal(layerOf("l1"), 3);
+  assert.equal(layerOf("l2"), 3, "直连的落地和经两跳中转的落地对齐");
+  assert.equal(layerOf("x1"), 4, "出口在落地后面单独一列");
+  // 没有出口时不空出一列
+  const noExit = layoutTopology(nodes.filter((node) => node.kind !== "exit"), edges.filter((edge) => edge.to !== "x1"), { terminalTiers: [["landing"], ["exit"]] });
+  assert.equal(noExit.layers.length, 4);
+});

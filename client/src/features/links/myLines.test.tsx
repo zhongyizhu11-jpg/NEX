@@ -2,8 +2,19 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { LineCard } from "./MyLinesSection";
+import { MyLineRow, lineLatencyChip } from "./MyLinesSection";
 import { buildLineModel, type LineModelContext } from "./myLines";
+import {
+  MY_LINES_LAYOUT,
+  MY_LINES_LAYOUT_COMPACT,
+  MY_LINES_MIN_SCALE,
+  buildMyLinesGraph,
+  myLinesCanvasHeight,
+  myLinesColumnLabels,
+  myLinesLayoutFor,
+  sortLinesForList,
+} from "./myLinesGraph";
+import { layoutTopology } from "@/features/topology/topologyLayout";
 
 const NOW = Date.parse("2026-10-29T08:00:00Z");
 
@@ -42,11 +53,16 @@ test("端口转发：入口 → 落地，端到端延迟写在卡头，24h 流�
   assert.equal(line.landing.caption, "198.51.100.9:443");
   assert.equal(line.health, "healthy");
   assert.match(line.statusText, /端到端 42 ms/);
-  const html = renderToStaticMarkup(<LineCard line={line} />);
-  assert.match(html, /端到端 42 ms/);
+  assert.deepEqual(lineLatencyChip(line), { text: "整链 42 ms", tone: "ok" });
+  const html = renderToStaticMarkup(<MyLineRow line={line} selected onSelect={() => {}} onEdit={() => {}} onDiagnose={() => {}} />);
   assert.match(html, />整链 42 ms</);
-  assert.equal((html.match(/class="fx-lane-node"/g) || []).length, 2, "泳道里入口、落地两张卡");
-  assert.match(html, />42 ms</, "只有一段时端到端延迟就写在那一段上");
+  assert.match(html, /HK entry → 落地/, "展开后写整条链");
+  assert.match(html, /端到端 42 ms/);
+  // 整张图：入口、落地两个节点，一条连线，只有一段时端到端延迟就骑在这一段上
+  const graph = buildMyLinesGraph([line]);
+  assert.deepEqual(graph.nodes.map((node) => node.id), ["host:1", "addr:198.51.100.9:443"]);
+  assert.equal(graph.edges.length, 1);
+  assert.deepEqual([graph.edges[0].status, graph.edges[0].latencyMs], ["running", 42]);
 });
 
 test("隧道转发：经过的只列入口后面的中转和出口，出口掉线整条线算断", () => {
@@ -61,9 +77,18 @@ test("隧道转发：经过的只列入口后面的中转和出口，出口掉�
   assert.equal(line.health, "down");
   assert.match(line.statusText, /主机离线：US exit/);
   assert.deepEqual(line.subscription, { nodeName: "美国 01", visible: true });
-  const html = renderToStaticMarkup(<LineCard line={line} />);
+  const html = renderToStaticMarkup(<MyLineRow line={line} selected onSelect={() => {}} />);
   assert.match(html, /订阅「美国 01」/);
-  assert.match(html, /data-state="planned"/, "隧道没有分段探测，段上画「—」");
+  // 图上：出口掉线那台连着的两段不通，落地按「我的节点」成一个节点
+  const graph = buildMyLinesGraph([line]);
+  assert.deepEqual(graph.nodes.map((node) => node.id), ["host:1", "host:2", "host:3", "node:7"]);
+  assert.deepEqual(graph.edges.map((edge) => [edge.from, edge.to, edge.kind, edge.status]), [
+    ["host:1", "host:2", "tunnel", "running"],
+    ["host:2", "host:3", "tunnel", "failed"],
+    ["host:3", "node:7", "tunnel", "failed"],
+  ]);
+  assert.equal(graph.captions.get("node:7"), "落地 · 198.51.100.9:443");
+  assert.equal(graph.nodes.find((node) => node.id === "host:3")?.online, false);
 });
 
 test("转发链：第一个成员是入口，其余是中转；配了 SS 出口就多一节", () => {
@@ -99,7 +124,77 @@ test("线路组：画当前在走的路径，段上是线路板各段的延迟",
   assert.equal(line.kind, "route");
   assert.deepEqual(line.hops.map((hop) => [hop.name, hop.health]), [["JP relay", "healthy"]]);
   assert.deepEqual(line.segments.map((segment) => [segment.state, segment.latencyMs]), [["measured", 23], ["measured", 50]]);
-  const html = renderToStaticMarkup(<LineCard line={line} />);
-  assert.match(html, />23 ms</);
-  assert.match(html, />50 ms</);
+  const graph = buildMyLinesGraph([line]);
+  assert.deepEqual(graph.edges.map((edge) => [edge.kind, edge.latencyMs]), [["routePath", 23], ["routePath", 50]], "段上是线路板各段的延迟");
+});
+
+test("整张图：几条线路共用的主机只画一个、共用的一段合成一条；落地对齐在同一列，出口在最后", () => {
+  const ctx = context({
+    probeByRule: new Map([
+      [11, { latencyMs: 40, isTimeout: false, at: NOW - 30_000 }],
+      [12, { latencyMs: null, isTimeout: true, at: NOW - 30_000 }],
+    ]),
+  });
+  const direct = buildLineModel({ id: 11, name: "直连 A", hostId: 1, sourcePort: 10011, targetIp: "198.51.100.9", targetPort: 443, isEnabled: true }, ctx);
+  // 同一个入口、同一个落地、另一条端口：直连的一段合进同一条连线
+  const directDown = buildLineModel({ id: 12, name: "直连 B", hostId: 1, sourcePort: 10012, targetIp: "198.51.100.9", targetPort: 443, isEnabled: true }, ctx);
+  const chain = buildLineModel(
+    {
+      id: 13, name: "家宽", hostId: 1, forwardGroupId: 20, isForwardGroupTemplate: true, sourcePort: 10013, targetIp: "198.51.100.20", targetPort: 8443, isEnabled: true,
+      egress: { type: "ss_host", landingHostName: "新加坡落地", state: "running", udp: true },
+    },
+    ctx,
+  );
+  const stopped = buildLineModel({ id: 14, name: "停用的", hostId: 2, sourcePort: 10014, targetIp: "198.51.100.30", targetPort: 443, isEnabled: false }, ctx);
+  const graph = buildMyLinesGraph([direct, directDown, chain, stopped]);
+
+  assert.equal(graph.nodes.filter((node) => node.id === "host:1").length, 1, "HK entry 是三条线的入口，只画一个");
+  assert.deepEqual(graph.nodes.find((node) => node.id === "host:1")?.ruleIds, [11, 12, 13]);
+  const shared = graph.edges.find((edge) => edge.id === "host:1>addr:198.51.100.9:443>rule");
+  assert.deepEqual(shared?.ruleIds, [11, 12], "两条直连走的同一段合成一条连线");
+  assert.equal(shared?.status, "failed", "合并取最差：有一条不通就标出来");
+  assert.equal(shared?.latencyMs, 40);
+  assert.equal(graph.edges.find((edge) => edge.from === "host:2" && edge.to === "addr:198.51.100.30:443")?.status, "stopped");
+  assert.equal(graph.captions.get("host:2"), "入口 · 中转", "JP relay 在一条线里是入口、在另一条里是中转");
+
+  const layout = layoutTopology(graph.nodes.map((node) => ({ id: node.id, kind: graph.layoutKind.get(node.id) || "host" })), graph.edges, { terminalTiers: [["landing"], ["exit"]] });
+  const layerOf = (id: string) => layout.nodes.get(id)!.layer;
+  assert.equal(layerOf("addr:198.51.100.9:443"), layerOf("addr:198.51.100.20:8443"), "直连的落地和经中转的落地在同一列");
+  assert.equal(layerOf("exit:新加坡落地"), layerOf("addr:198.51.100.20:8443") + 1, "出口在落地后面一列");
+  assert.deepEqual(myLinesColumnLabels(layout.layers, graph.layoutKind), ["入口", "中转", "落地", "出口"]);
+
+  // 高亮：每条线路经过哪些节点和连线
+  assert.deepEqual(Array.from(graph.pathByLine.get(13)!.nodeIds), ["host:1", "host:2", "addr:198.51.100.20:8443", "exit:新加坡落地"]);
+  // 下面的清单：不通的排最前，停用的最后
+  assert.deepEqual(sortLinesForList([direct, directDown, chain, stopped]).map((line) => line.id), [12, 13, 11, 14]);
+});
+
+test("手机上一眼看完：窄画布换紧凑格子，入口 / 中转 / 落地 / 出口四列整张放下；画布高度跟着图", () => {
+  assert.equal(myLinesLayoutFor(364), MY_LINES_LAYOUT_COMPACT);
+  assert.equal(myLinesLayoutFor(1000), MY_LINES_LAYOUT);
+  assert.equal(myLinesLayoutFor(0), MY_LINES_LAYOUT, "还没量到宽度先按电脑算");
+
+  const ctx = context();
+  const lines = [
+    buildLineModel({ id: 21, name: "直连", hostId: 1, sourcePort: 10021, targetIp: "198.51.100.9", targetPort: 443, isEnabled: true }, ctx),
+    buildLineModel(
+      {
+        id: 22, name: "家宽", hostId: 1, forwardGroupId: 20, isForwardGroupTemplate: true, sourcePort: 10022, targetIp: "198.51.100.20", targetPort: 8443, isEnabled: true,
+        egress: { type: "ss_host", landingHostName: "新加坡落地", state: "running", udp: true },
+      },
+      ctx,
+    ),
+  ];
+  const graph = buildMyLinesGraph(lines);
+  const layout = layoutTopology(graph.nodes.map((node) => ({ id: node.id, kind: graph.layoutKind.get(node.id) || "host" })), graph.edges, { ...MY_LINES_LAYOUT_COMPACT, terminalTiers: [["landing"], ["exit"]] });
+  assert.equal(layout.layers.length, 4);
+  assert.equal(layout.width, 552);
+  // 手机上图那张卡大约 364 宽：整张放下的倍数不小于下限，自动适应时就是整张放下
+  assert.ok((364 - 16) / layout.width >= MY_LINES_MIN_SCALE);
+  const scale = (364 - 16) / layout.width;
+  assert.equal(myLinesCanvasHeight(layout, 364, 2400), Math.round(Math.max(180, layout.height * scale + 16 + 22)), "画布和图一样高，不留一大块空白");
+  assert.equal(myLinesCanvasHeight({ width: 552, height: 40 }, 364, 2400), 180, "再矮也留 180");
+  assert.equal(myLinesCanvasHeight({ width: 552, height: 1400 }, 364, 2400), Math.round(1400 * (348 / 552) + 16 + 22), "手机上不封顶：整张图都在页面里，划页面看完");
+  assert.equal(myLinesCanvasHeight({ width: 552, height: 1400 }, 1000, 680), 680, "电脑上封顶，太高的在图里上下拖");
+  assert.equal(myLinesCanvasHeight({ width: 1200, height: 400 }, 364, 2400), Math.round(400 * MY_LINES_MIN_SCALE + 16 + 22), "太宽就按最小倍数算高度（左右拖着看）");
 });
