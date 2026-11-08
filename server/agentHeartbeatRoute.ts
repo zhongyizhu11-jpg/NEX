@@ -3,17 +3,15 @@ import { parseFailoverTargets } from "../shared/failoverTargets";
 import {
   routeDeliveryStrategy,
   routeDestSpreadReady,
-  routeDestSpreadTargetFields,
   normalizeRouteDelivery,
   routeGroupForwardTypeSupported,
   routeGroupOf,
   routePathDial,
-  routePathExitIp,
   routePathsOf,
-  routeUdpEchoProbeReady,
 } from "../shared/routeGroup";
 import { normalizeForwardGroupHealthCheckMethod } from "../shared/forwardGroupHealthCheck";
-import { noteRouteFirstHops, routeHopDownHints, routeNodeHints, routePathDownstreamMs } from "./routeGroupStats";
+import { noteRouteFirstHops, routeHopDownHints, routeNodeHints } from "./routeGroupStats";
+import { buildRouteFailoverTargets } from "./routeTargetHints";
 import { ensureRouteNodeHealthFresh, getRouteNodeStatus } from "./routeNodeHealth";
 import { tunnelLinkShaping, hostEgressShaping } from "./tunnelFxpRuntime";
 import { ingestFailoverLineReports } from "./failoverLineReports";
@@ -141,7 +139,7 @@ import {
 } from "@shared/tunnelParallelStreams";
 import { exitGroupCapacities, exitGroupWeights, normalizeExitGroupStrategy } from "@shared/exitStrategy";
 import { hostBandwidthHintMbps } from "@shared/linkWeights";
-import { ensureLandingNodeHosts, recordHostLoadSample, routePathLoadHint } from "./hostLoad";
+import { ensureLandingNodeHosts, recordHostLoadSample } from "./hostLoad";
 import { forwardXExitStrategy } from "./tunnelExitStrategy";
 import {
   getMimicLifecycleRevisionSignature,
@@ -2042,39 +2040,17 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       const destSpreadReady = routeDestSpreadReady({ strategy, tiered, paths });
       // 第 N 个目标的第一跳是哪台：入口 Agent 报的第一段延迟就是「进那台机器」的延迟（节点池卡上的毫秒数）。
       noteRouteFirstHops(Number(rule.id), paths.map((path) => (path.hops.length > 0 ? Number(path.hops[0]) : null)));
-      const targets = paths.map((path) => {
-        const dial = routePathDial(path, routeRule);
-        const tier = tiered ? { tier: Number(path.tier) } : {};
-        const lineSpread = routeDestSpreadTargetFields(path, destSpreadReady);
-        if (!dial) {
-          return { targetIp: "127.0.0.1", targetPort: 1, weight: path.weight, ...tier, ...lineSpread, down: true, downReason: path.issue || "path unresolved" };
-        }
-        const hint = nodeHints.get(path.key) || hints.get(path.key);
-        // Agent 那边是整数毫秒（Go int），小数会让整份规格解不开。
-        const extraLatencyMs = Math.round(routePathDownstreamMs(Number(rule.id), path));
-        // 回探测报的是对端那台：对端是自己的机器才带（routeUdpEchoProbeReady）。
-        const probeUdpEcho = routeUdpEchoProbeReady({ protocol, path });
-        // 沿途主机里最忙那台的负载（0–100，整数）：Agent 拿它扣评分、算「自动」的权重。
-        const loadPct = routePathLoadHint(path);
-        const exitIp = routePathExitIp(path, routeRule, routeHostEgressIp);
-        return {
-          targetIp: dial.ip,
-          targetPort: dial.port,
-          // 每条路径可以有自己的探测目标（探落地而不是探中转），见 shared/failoverTargets 里为什么需要它。
-          ...(path.probe ? { probeIp: path.probe.ip, probePort: path.probe.port } : {}),
-          ...(probeUdpEcho ? { probeUdpEcho: true } : {}),
-          weight: path.weight,
-          ...tier,
-          ...lineSpread,
-          // 入口探不到的后面几段（中继各自探的）加起来：Agent 按整条链打分。
-          ...(extraLatencyMs > 0 ? { extraLatencyMs } : {}),
-          // 和 extraLatencyMs 一样是运行时提示：不进 Agent 的签名、不重建代理，面板也不因为它重发期望状态
-          // （server/agentDesiredStateHash.ts 的 failoverWithoutRuntimeHints），靠 runningRules 送到。
-          ...(loadPct > 0 ? { loadPct } : {}),
-          // 这条路径最后从哪个 IP 出去：挂了换路时 Agent 优先挑一样的。
-          ...(exitIp ? { exitIp } : {}),
-          ...(hint?.down ? { down: true, downReason: hint.reason } : {}),
-        };
+      // 每条目标的字段（拨号地址、探测、权重、分层、落地怎么分、下游延迟、负载、出口 IP、用不了）
+      // 一个文件一种，按注册的顺序拼：server/routeTargetHints/。
+      const targets = buildRouteFailoverTargets(paths, {
+        ruleId: Number(rule.id),
+        routeRule,
+        protocol,
+        tiered,
+        destSpreadReady,
+        nodeHints,
+        hopHints: hints,
+        hostEgressIp: routeHostEgressIp,
       });
       // "none"：前面那一跳根本不发 PROXY 头（Nginx 隧道的出口）。
       const failoverProxyEnabled = options?.proxyDirection === "none" ? false : proxyProtocolEnabled(rule, options?.proxyDirection || "send");
