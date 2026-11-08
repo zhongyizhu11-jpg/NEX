@@ -7,7 +7,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { countryFlagLabel } from "@/lib/flagEmojiSupport";
 import { trpc } from "@/lib/trpc";
 import { formatSpeedMs, formatTraffic, speedServerLabel } from "./speedTestFormat";
-import { formatMbps, NODE_CHECK_ACCURATE_VERSION, NODE_CHECK_DOMESTIC_VERSION, NODE_CHECK_PANEL_FALLBACK_VERSION, NODE_CHECK_PHASE_LABELS, type SpeedSample, type SpeedTestResult } from "@shared/nodeCheck";
+import { formatMbps, NODE_CHECK_PHASE_LABELS, type SpeedSample, type SpeedTestResult } from "@shared/nodeCheck";
 
 /*
   网速测试：一台机器（或经一个节点）对 Cloudflare 测速。画法照 Stash 的「网速测试」：
@@ -101,7 +101,6 @@ export function SpeedTestDialog({ subject, name, onOpenChange }: { subject: Spee
   const status: Status | null = hostStatus.data ?? null;
   const pending = status?.pending ?? null;
   const latest = status?.latest ?? null;
-  const hostUnsupported = !!hostStatus.data && !hostStatus.data.supported;
   const hostOffline = !!hostStatus.data && !hostStatus.data.online;
 
   const samples = pending ? pending.samples : latest?.speed?.samples ?? [];
@@ -121,11 +120,8 @@ export function SpeedTestDialog({ subject, name, onOpenChange }: { subject: Spee
   );
 
   const result = latest?.speed ?? null;
-  // 2.2.247 起测得准：就近的 Ookla 测速点、上传只算对端收下的
-  const accurate = !!hostStatus.data?.accurate;
-  const agentKnown = !!hostStatus.data?.supported;
-  // 大陆的主机测自己：测国内三网的 Ookla 测速点（Agent 2.2.248 起）
-  const domesticHost = String(hostStatus.data?.countryCode || "").toUpperCase() === "CN" && !hostStatus.data?.domesticUpgrade;
+  // 大陆的主机测自己：测国内三网的 Ookla 测速点
+  const domesticHost = String(hostStatus.data?.countryCode || "").toUpperCase() === "CN";
 
   return (
     <Dialog open={!!subject} onOpenChange={onOpenChange}>
@@ -155,14 +151,13 @@ export function SpeedTestDialog({ subject, name, onOpenChange }: { subject: Spee
             type="button"
             className="h-10 w-full rounded-full text-[15px]"
             variant="outline"
-            disabled={!!pending || startHost.isPending || hostUnsupported || hostOffline}
-            title={hostUnsupported ? "需要升级 Agent（2.2.241 起）" : hostOffline ? "主机离线" : undefined}
+            disabled={!!pending || startHost.isPending || hostOffline}
+            title={hostOffline ? "主机离线" : undefined}
             onClick={() => startHost.mutate({ hostId })}
             data-testid="speed-test-start"
           >
             {pending ? "测速中…" : result ? "再测一次" : "启动"}
           </Button>
-          {hostUnsupported ? <p className="text-center text-[12px] text-[var(--fx-warn-text)]">Agent 需升级到 2.2.241</p> : null}
           {latest?.error && !pending ? <p className="text-center text-[12px] text-[var(--fx-down-text)]">{latest.error}</p> : null}
 
           {result ? (
@@ -181,26 +176,9 @@ export function SpeedTestDialog({ subject, name, onOpenChange }: { subject: Spee
             </div>
           ) : null}
           {result?.note ? <p className="text-center text-[11.5px] text-[var(--fx-warn-text)]" data-testid="speed-test-note">{result.note}</p> : null}
-          {hostStatus.data && hostStatus.data.supported && !hostStatus.data.panelFallback ? (
-            <p className="text-center text-[11.5px] text-[var(--fx-warn-text)]">这台的 Agent 早于 {NODE_CHECK_PANEL_FALLBACK_VERSION}：连不上 Cloudflare 时不会改测到面板，升级 Agent 后才会</p>
-          ) : agentKnown && !accurate ? (
-            <p className="text-center text-[11.5px] text-[var(--fx-warn-text)]" data-testid="speed-test-upgrade">
-              这台的 Agent 早于 {NODE_CHECK_ACCURATE_VERSION}：上传数偏高，国内机器多半只能测到面板（上限是面板的带宽）。升级 Agent 后就近找测速点，测得准
-            </p>
-          ) : hostStatus.data?.supported && hostStatus.data.domesticUpgrade ? (
-            <p className="text-center text-[11.5px] text-[var(--fx-warn-text)]" data-testid="speed-test-upgrade">
-              这台的 Agent 早于 {NODE_CHECK_DOMESTIC_VERSION}：国内机器连不上 speedtest.net，只能测到面板（上限是面板的带宽）。升级 Agent 后测国内三网的测速点
-            </p>
-          ) : null}
           <div className="text-center text-[11px] leading-[1.6] text-muted-foreground">
-            {accurate || !agentKnown ? (
-              <>
-                <p>就近找测速点：Ookla{domesticHost ? "（国内三网）" : ""} → Cloudflare → 面板</p>
-                <p>流量约为速度 × 18 秒，100M 约 230 MB</p>
-              </>
-            ) : (
-              <p>对 Cloudflare 测速 · 连不上时改测到面板</p>
-            )}
+            <p>就近找测速点：Ookla{domesticHost ? "（国内三网）" : ""} → Cloudflare → 面板</p>
+            <p>流量约为速度 × 18 秒，100M 约 230 MB</p>
           </div>
         </div>
       </DialogContent>

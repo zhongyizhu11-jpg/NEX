@@ -1,8 +1,7 @@
-import { isAgentVersionAtLeast, tunnelSecretSeed } from "./agentRouteUtils";
+import { tunnelSecretSeed } from "./agentRouteUtils";
 import { appendPanelLog } from "./_core/panelLogger";
 import { setBoundedMapValue } from "./boundedCache";
 import {
-  AGENT_FORWARDX_WIREGUARD_VERSION,
   buildForwardXWireGuardPlans,
   forwardXWireGuardMTU,
   type ForwardXWireGuardNodePlan,
@@ -144,15 +143,6 @@ export function createForwardXWireGuardPlanner(ctx: HeartbeatRequestContext, dep
   };
   const getCurrentHostForwardXWireGuardPlan = async (tunnel: any) => {
     if (!isForwardXWireGuardV2(tunnel)) return null;
-    if (!isAgentVersionAtLeast(String((host as any).agentVersion || ""), AGENT_FORWARDX_WIREGUARD_VERSION)) {
-      const logKey = `wireguard-agent-version:${Number(host.id)}:${Number(tunnel?.id || 0)}`;
-      const message = `NEX V2 requires Agent v${AGENT_FORWARDX_WIREGUARD_VERSION} or newer`;
-      if (tunnelRouteLogCache.get(logKey) !== message) {
-        setBoundedMapValue(tunnelRouteLogCache, logKey, message, AGENT_DYNAMIC_CACHE_MAX);
-        appendPanelLog("warn", `[Tunnel] V2 waiting for Agent upgrade tunnel=${tunnel?.id || 0} host=${host.id} current=${(host as any).agentVersion || "-"} required=${AGENT_FORWARDX_WIREGUARD_VERSION}`);
-      }
-      return null;
-    }
     try {
       return (await getForwardXWireGuardPlans(tunnel)).get(Number(host.id)) || null;
     } catch (error) {

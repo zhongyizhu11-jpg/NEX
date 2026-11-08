@@ -2,24 +2,17 @@
   全部重启（#15）和导入现有配置（#16）里不碰数据库的部分：谁会被跳过、结果那句话怎么说、
   扫描到的一项怎么变成一条规则的入参。单独放一个文件，方便写单元测试。
 */
-import { isAgentVersionAtLeast } from "../../shared/version";
-
-/** 和 agentExt.ts 的 AGENT_EXT_MIN_VERSION 一致（这里不引它，免得测试拖进事件流那一串模块）。 */
-const AGENT_EXT_MIN_VERSION = "2.2.216";
-
 export type RestartTargetHost = { id: number; name: string; online: boolean; agentVersion?: string | null };
 
 export type RestartSkip = { hostId: number; name: string; reason: string };
 
-/** 在线且 Agent 够新的才发；其余列进「跳过」并写明原因。 */
+/** 在线的才发；其余列进「跳过」并写明原因。 */
 export function classifyRestartTargets(hosts: RestartTargetHost[]) {
   const targets: RestartTargetHost[] = [];
   const skipped: RestartSkip[] = [];
   for (const host of hosts) {
     if (!host.online) {
       skipped.push({ hostId: host.id, name: host.name, reason: "离线" });
-    } else if (!isAgentVersionAtLeast(String(host.agentVersion || ""), AGENT_EXT_MIN_VERSION)) {
-      skipped.push({ hostId: host.id, name: host.name, reason: "Agent 太旧" });
     } else {
       targets.push(host);
     }

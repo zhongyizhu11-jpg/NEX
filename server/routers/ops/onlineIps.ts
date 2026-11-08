@@ -1,7 +1,6 @@
 import { z } from "zod";
 import { adminProcedure, router } from "../../_core/trpc";
 import { queryRaw, quoteDbIdentifier } from "../../dbRuntime";
-import { hostSupportsAgentExt, AGENT_EXT_MIN_VERSION } from "../../ops/agentExt";
 import {
   cachedOwnerLabel,
   ipRegionLabel,
@@ -43,14 +42,6 @@ function liveRowView(row: OnlineIpRow, hosts: Map<number, HostLite>) {
     conns: row.conns,
     since: row.since,
   };
-}
-
-/** 这些主机的 Agent 太老，看不到在线 IP（只列装过 Agent 的）。 */
-function outdatedHosts(hosts: Map<number, HostLite>) {
-  return Array.from(hosts.values())
-    .filter((host) => host.agentVersion && !hostSupportsAgentExt(host))
-    .map((host) => ({ id: host.id, name: host.name, agentVersion: host.agentVersion }))
-    .sort((a, b) => a.name.localeCompare(b.name, "zh-CN"));
 }
 
 const historyInput = z.object({
@@ -102,8 +93,6 @@ export const onlineIpsRouter = router({
         reportingHosts: onlineSnapshots.reportingHostIds(now).length,
         totalIps: new Set(filtered.map((row) => row.ip)).size,
         users: userGroups,
-        outdatedHosts: outdatedHosts(hosts),
-        minAgentVersion: AGENT_EXT_MIN_VERSION,
         hosts: Array.from(hosts.values()).map((host) => ({ id: host.id, name: host.name })).sort((a, b) => a.name.localeCompare(b.name, "zh-CN")),
       };
     }),
@@ -217,7 +206,6 @@ export const onlineIpsRouter = router({
           firstSeenAt: Number(row.firstSeen) || 0,
           online: onlineSet.has(String(row.ip)),
         })),
-        outdatedHosts: outdatedHosts(hosts),
       };
     }),
 

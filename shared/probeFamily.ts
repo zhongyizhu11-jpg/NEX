@@ -20,8 +20,6 @@ export const PROBE_ADDRESS_FAMILY_LABELS: Record<ProbeAddressFamily, string> = {
   ipv6: "仅 IPv6",
 };
 
-/** 探测服务按地址族解析需要的 Agent 版本。 */
-export const PROBE_FAMILY_MIN_AGENT_VERSION = "2.2.226";
 
 export function isProbeAddressFamily(value: unknown): value is ProbeAddressFamily {
   return typeof value === "string" && (PROBE_ADDRESS_FAMILIES as readonly string[]).includes(value);

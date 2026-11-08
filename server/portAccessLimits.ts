@@ -1,5 +1,4 @@
 import { isForwardRuleProtocolTcpEnabled } from "@shared/forwardTypes";
-import { isAgentVersionAtLeast } from "@shared/version";
 
 /**
  * 普通端口转发（不走隧道）上的用户「单 IP 接入限制」，和上游一致：限制每个来源 IP 的 TCP
@@ -12,15 +11,12 @@ import { isAgentVersionAtLeast } from "@shared/version";
  *   - 每个用户一条计数链，规则增删只改分发，不清零已在计数的连接；
  *   - 只看新建的 SYN，不碰已建立的连接，也不重启任何转发进程；
  *   - 空快照 = 删掉全部限制，删规则 / 改回不限都靠它收尾。
- *
- * 需要 Agent 2.2.229：老 Agent 不认这个动作，面板不给它发（行为和以前一样：普通规则不限）。
  */
-export const PORT_ACCESS_LIMIT_AGENT_VERSION = "2.2.229";
 export const PORT_ACCESS_LIMIT_FORWARD_TYPE = "port-access-limit-sync";
 /**
  * 系统设置开关，默认关：以前普通规则从来不受单 IP 接入限制，套餐默认又带着 maxIPs=10，
  * Agent 一升级就悄悄开始限会把正在用的人挡在门外。管理员在设置里打开后才执行；
- * 关着时新 Agent 照样收到一份空快照，把之前打开时留下的限制撤干净。
+ * 关着时 Agent 照样收到一份空快照，把之前打开时留下的限制撤干净。
  */
 export const PORT_ACCESS_LIMITS_ENABLED_SETTING = "portAccessLimitsEnabled";
 
@@ -82,16 +78,10 @@ export function portAccessLimitSpecs(
     .map((spec) => ({ ...spec, ports: [...new Set(spec.ports)].sort((a, b) => a - b) }));
 }
 
-export function agentSupportsPortAccessLimits(agentVersion: unknown) {
-  return isAgentVersionAtLeast(String(agentVersion || ""), PORT_ACCESS_LIMIT_AGENT_VERSION);
-}
-
 /**
- * 心跳里要附带的那条运行时动作；老 Agent 返回 null（不发，也就不会被老 Agent 当成一条
- * 什么都不做的空命令「成功」掉）。新 Agent 即使快照为空也要发：那是在撤销之前的限制。
+ * 心跳里要附带的那条运行时动作。快照为空也要发：那是在撤销之前的限制。
  */
-export function portAccessLimitAction(specs: PortAccessLimitSpec[], supported: boolean) {
-  if (!supported) return null;
+export function portAccessLimitAction(specs: PortAccessLimitSpec[]) {
   return {
     statusType: "runtime",
     ruleId: 0,

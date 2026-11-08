@@ -1,12 +1,10 @@
 import * as db from "./db";
-import { getSiteLatencySamples, hostSupportsSiteLatency } from "./ops/siteLatency";
-import { hostSupportsUnlock, latestUnlockRuns, latestUnlockSummariesByHostIds } from "./ops/unlock";
+import { getSiteLatencySamples } from "./ops/siteLatency";
+import { latestUnlockRuns, latestUnlockSummariesByHostIds } from "./ops/unlock";
 import { UNLOCK_SERVICES } from "../shared/unlockCheck";
-import { isAgentVersionAtLeast } from "../shared/version";
 import { getHostEntryAddresses } from "../shared/hostEntryAddress";
 import {
   SITE_LATENCY_TARGETS,
-  SITE_LATENCY_VERIFIED_AGENT_VERSION,
   siteLatencyNoEgress,
   summarizeSiteSamples,
   type SiteLatencySummary,
@@ -33,14 +31,9 @@ export type ExitQualityHost = {
   sites: ExitQualitySite[];
   /** 每个站点整个窗口都没连上过：这台机器多半没有公网出口（国内专线 / 中转入口常这样）。 */
   noEgress: boolean;
-  /** Agent 早于 2.2.240：没校验证书，DNS 被污染时可能显示一个假的低延迟。 */
-  unverified: boolean;
-  /** Agent 还不支持出口探测（早于 2.2.237）。 */
-  unsupported: boolean;
   unlock: { checkedAt: number; items: { service: string; text: string; status: string }[] } | null;
   /** 解锁检测最近一次的每一项（不只是卡片上那几个）；没测过是 null。 */
   unlockDetail: { checkedAt: number; family: string; results: { service: string; name: string; status: string; region: string | null }[] } | null;
-  unlockSupported: boolean;
 };
 
 export const EXIT_QUALITY_TARGETS = SITE_LATENCY_TARGETS.map(({ key, label, host }) => ({ key, label, host }));
@@ -52,7 +45,6 @@ export async function buildHostExitQuality(host: any): Promise<ExitQualityHost> 
     const list = samples.get(target.key) || [];
     return { key: target.key, ...summarizeSiteSamples(list), values: list.map((sample) => sample.ms ?? 0) };
   });
-  const version = String(host.agentVersion || "").replace(/^v/i, "");
   const unlock = await latestUnlockSummariesByHostIds([id]).catch(() => new Map());
   const summary = unlock.get(id);
   const runs = await latestUnlockRuns(id).catch(() => [] as Awaited<ReturnType<typeof latestUnlockRuns>>);
@@ -66,8 +58,6 @@ export async function buildHostExitQuality(host: any): Promise<ExitQualityHost> 
     countryCode: host.countryCode ? String(host.countryCode) : null,
     sites,
     noEgress: siteLatencyNoEgress(sites),
-    unverified: !!version && !isAgentVersionAtLeast(version, SITE_LATENCY_VERIFIED_AGENT_VERSION),
-    unsupported: !hostSupportsSiteLatency(host),
     unlock: summary ? { checkedAt: summary.checkedAt, items: summary.items } : null,
     unlockDetail: run ? {
       checkedAt: run.checkedAt,
@@ -76,7 +66,6 @@ export async function buildHostExitQuality(host: any): Promise<ExitQualityHost> 
         .sort((left, right) => (order.get(left.service) ?? 99) - (order.get(right.service) ?? 99))
         .map((item) => ({ service: item.service, name: names.get(item.service) || item.service, status: item.status, region: item.region })),
     } : null,
-    unlockSupported: hostSupportsUnlock(host),
   };
 }
 

@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Copy, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
-import { isAgentVersionAtLeast } from "@shared/version";
 import {
   buildMimicManualCommands,
   mimicFailureReason,
@@ -27,8 +26,6 @@ import { cn } from "@/lib/utils";
   失败时一行原因（下载不到 / 缺头文件 / 编译失败），下面「代理安装」「手动安装」「日志」按需展开。
   国内机连不上 GitHub：面板会替它转发安装包（哈希钉死），还不行就填个代理或复制手动命令。
 */
-
-export const MIMIC_INSTALL_AGENT_VERSION = "2.2.223";
 
 type MimicHost = {
   id: number;
@@ -169,16 +166,13 @@ export default function MimicInstallPanel({ host, canManage, compact = false }: 
 
   const status = mimicStatusText(host);
   const ready = host.mimicAvailable === true;
-  const agentSupported = isAgentVersionAtLeast(host.agentVersion, MIMIC_INSTALL_AGENT_VERSION);
   const mode = modeFor(host);
   const buttonLabel = ready ? "重新安装" : mode === "repair" ? "修复 mimic" : "安装 mimic";
   const disabledReason = !host.isOnline
     ? "主机离线"
-    : !agentSupported
-      ? `Agent 升到 ${MIMIC_INSTALL_AGENT_VERSION} 以上才能一键安装`
-      : status.tone === "muted" && String(host.mimicStatus || "") === "unsupported-os"
-        ? "这台机器的系统不支持 mimic"
-        : "";
+    : status.tone === "muted" && String(host.mimicStatus || "") === "unsupported-os"
+      ? "这台机器的系统不支持 mimic"
+      : "";
 
   const toneClass = status.tone === "ok"
     ? "text-[var(--fx-healthy-text)]"

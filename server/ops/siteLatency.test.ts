@@ -5,10 +5,9 @@ import { getSiteLatencySamples, ingestSiteLatencyReport, resetSiteLatencyForTest
 
 const NOW = 1_800_000_000_000;
 
-test("指令：老 Agent 不给；新 Agent 拿到站点表、间隔和面板已有到哪", () => {
+test("指令：站点表、间隔和面板已有到哪", () => {
   resetSiteLatencyForTest();
-  assert.equal(siteLatencyDirectiveFor({ id: 1, agentVersion: "2.2.236" }), undefined);
-  const directive = siteLatencyDirectiveFor({ id: 1, agentVersion: "2.2.237" })!;
+  const directive = siteLatencyDirectiveFor({ id: 1, agentVersion: "2.2.251" });
   assert.equal(directive.since, 0, "面板什么都没有时 since=0，Agent 整段补齐");
   assert.deepEqual(directive.targets.map((target) => target.key), ["baidu", "google", "github", "openai"]);
   assert.equal(directive.intervalSeconds, 120);

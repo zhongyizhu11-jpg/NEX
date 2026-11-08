@@ -2,7 +2,6 @@ import { z } from "zod";
 import { adminProcedure, router } from "../../_core/trpc";
 import * as db from "../../db";
 import { isHostConsideredOnline } from "../../hostHeartbeatPolicy";
-import { hostSupportsAgentExt } from "../../ops/agentExt";
 import {
   getRestartAllStatus,
   getScan,
@@ -48,7 +47,6 @@ async function restartTargets() {
 async function requireExtHost(hostId: number) {
   const host = await db.getHostById(hostId);
   if (!host) throw new Error("主机不存在");
-  if (!hostSupportsAgentExt(host as any)) throw new Error("需要把 Agent 升级到 2.2.216");
   return host;
 }
 

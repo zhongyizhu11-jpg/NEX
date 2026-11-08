@@ -18,11 +18,10 @@ const row = (hostId: number, viaHostId: number | null = null): RelayConfigRow =>
   hostId, viaHostId, autoViaHostId: null, autoThresholdMinutes: 3, autoSwitchedAt: null, listenPort: null,
 });
 
-test("relay candidates: no self, new online agents only, no two-level chains", () => {
+test("relay candidates: no self, online agents only, no two-level chains", () => {
   const configs = new Map<number, RelayConfigRow>([[3, row(3, 4)], [5, row(5, 1)]]);
   const fresh = { agentVersion: "2.2.216", online: true };
   assert.equal(relayCandidateIssue({ id: 1, ...fresh }, 1, new Map()), "不能经由自己");
-  assert.equal(relayCandidateIssue({ id: 2, agentVersion: "2.2.215", online: true }, 1, new Map()), "Agent 需要 2.2.216 以上");
   assert.equal(relayCandidateIssue({ id: 2, agentVersion: "2.2.216", online: false }, 1, new Map()), "离线");
   // 3 自己经由 4：不能再给别人当中转。
   assert.equal(relayCandidateIssue({ id: 3, ...fresh }, 7, configs), "它自己也在经由别的主机");
@@ -68,8 +67,7 @@ test("auto switch needs enough samples and offline minutes over the threshold", 
 });
 
 test("status line follows the agent's report", () => {
-  const base = { supported: true, configuredViaName: "东京-1", reportAgeSeconds: 10 };
-  assert.equal(relayStatusLine({ ...base, supported: false, report: null }).text, "需要把 Agent 升级到 2.2.216");
+  const base = { configuredViaName: "东京-1", reportAgeSeconds: 10 };
   assert.equal(relayStatusLine({ ...base, configuredViaName: null, report: { via: "" } }).text, "现在：直连");
   assert.equal(relayStatusLine({ ...base, report: { via: "1.2.3.4:20001", viaActive: true } }).text, "现在：经由 东京-1");
   const failed = relayStatusLine({ ...base, report: { via: "1.2.3.4:20001", fallbackActive: true, lastError: "连不上中转" } });

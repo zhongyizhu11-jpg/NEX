@@ -470,6 +470,21 @@ html.dark[data-ui-theme="liquid-glass"] .workspace-appbar {
     pointer-events: none;
     z-index: -1;
   }
+  /*
+    顶上这层白雾跟着设置里的「浅色白雾」（--fx-lg-wash，0～80%）一起浓淡：出厂 30% 时顶端 72%、中间 40%，
+    和上一版一模一样；拉到 0 就没有。放在 @supports 里：带 var() 的声明解析时总算有效，不认 min()/calc()
+    写在颜色里的老浏览器会在算值时整条作废（白雾直接没了），隔开以后它们用上面那行写死的渐变。
+  */
+  @supports (background: linear-gradient(rgb(255 255 255 / min(100%, calc(30% * 2.4))), transparent)) {
+    html[data-ui-theme="liquid-glass"] .workspace-appbar::before {
+      background: linear-gradient(
+        to bottom,
+        rgb(255 255 255 / min(100%, calc(var(--fx-lg-wash, 30%) * 2.4))) 0%,
+        rgb(255 255 255 / min(100%, calc(var(--fx-lg-wash, 30%) * 4 / 3))) 55%,
+        transparent 100%
+      );
+    }
+  }
   html.dark[data-ui-theme="liquid-glass"] .workspace-appbar::before {
     background: linear-gradient(to bottom, rgb(0 0 0 / 55%) 0%, rgb(0 0 0 / 30%) 55%, transparent 100%);
   }

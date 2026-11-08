@@ -9,17 +9,11 @@ import {
 import type { NetworkHealth } from "./networkHealth";
 import { normalizeForwardRuleProtocol } from "./forwardTypes";
 import {
-  ROUTE_DEST_SPREAD_AGENT_VERSION,
-  ROUTE_GROUP_AGENT_VERSION,
-  ROUTE_GROUP_UDP_AGENT_VERSION,
   ROUTE_SWITCH_MODE_INFO,
   ROUTE_SWITCH_MODE_SESSION_HINTS,
   describeRouteIssue,
-  normalizeRouteDelivery,
   routeAgentStrategy,
   routeGroupForwardTypeSupported,
-  routeGroupIsForwardXTunnel,
-  routeGroupSchedulerAgentVersion,
   routePathLabel,
   routePathsOf,
   routePolicyOf,
@@ -29,7 +23,6 @@ import {
   type RouteSpread,
 } from "./routeGroup";
 import { timestampMillis } from "./timestamp";
-import { isAgentVersionAtLeast } from "./version";
 
 /**
  * 一条主备规则的「路由策略」：此刻按什么规矩、首选哪条、实际走哪条。全站唯一一份。
@@ -54,11 +47,6 @@ import { isAgentVersionAtLeast } from "./version";
  *
  * 转发组的故障转移也用这一份模型说话（describeGroupRoutePolicy），见文件后半。
  */
-
-/** 探测目标、时段表、人工指定、自动择优、切换事件：Agent 2.2.196 起。更老的只认出站顺序。 */
-export const ROUTE_POLICY_AGENT_VERSION = "2.2.196";
-/** 每次心跳报「现在走哪条」：Agent 2.2.197 起。 */
-export const ACTIVE_LINE_SNAPSHOT_AGENT_VERSION = "2.2.197";
 
 /** Agent 那边的分配策略名：主备（fallback）或权重负载的四种分法。 */
 export type RoutePolicyStrategy = "fallback" | RouteSpread;
@@ -118,19 +106,13 @@ export type RoutePolicyGuard = {
 };
 
 export type RoutePolicyReport =
-  /** 新版 Agent 每次心跳确认的「现在」 */
+  /** Agent 每次心跳确认的「现在」 */
   | { kind: "current"; index: number; since: number | null }
-  /** 2.2.196 只报切换事件：这是最近一次切换，之后换过规格或重启过的话已经回到主线路 */
-  | { kind: "lastSwitch"; index: number; since: number | null }
   /** 报上来的地址不在线路清单里 —— 多半刚改过配置 */
   | { kind: "unlisted"; target: string }
-  /** 新版 Agent，还没报上来（刚起来、刚改过） */
+  /** 还没报上来（刚起来、刚改过） */
   | { kind: "pending" }
-  /** 2.2.196，没有切换记录 —— 不能当成「一直走主线路」：这一版之前面板会丢事件 */
-  | { kind: "noSwitch" }
   | { kind: "offline" }
-  /** Agent 早于 2.2.196：不报告，也不执行时段表、人工指定、自动择优 */
-  | { kind: "unsupported" }
   /**
    * 转发组：解析指向这个成员。writtenAt 是面板最近一次写解析的时刻（Unix 秒）——
    * **不是**「从什么时候起指向它」：手动同步、面板重启后的第一次核对都会原样重写一遍。
@@ -172,7 +154,7 @@ export type RoutePolicyRule = RouteGroupRule & {
   protocol?: unknown;
   /** 走隧道的规则：调度器在隧道出口，看不到访客（除非 PROXY 头一路带过来）。 */
   tunnelId?: unknown;
-  /** 隧道的类型（tls / wss / … / nginx_stream / forwardx）。Nginx 隧道传不了 PROXY 头，NEX 隧道要出口 Agent 2.2.199；不知道时按 GOST 隧道说。 */
+  /** 隧道的类型（tls / wss / … / nginx_stream / forwardx）。Nginx 隧道传不了 PROXY 头；不知道时按 GOST 隧道说。 */
   tunnelMode?: unknown;
   proxyProtocolSend?: unknown;
   proxyProtocolExitSend?: unknown;
@@ -180,7 +162,7 @@ export type RoutePolicyRule = RouteGroupRule & {
   failoverActiveAt?: unknown;
 };
 
-export type RoutePolicyHost = { isOnline?: unknown; agentVersion?: unknown } | null | undefined;
+export type RoutePolicyHost = { isOnline?: unknown } | null | undefined;
 
 export type RoutePolicyOptions = {
   host?: RoutePolicyHost;
@@ -230,14 +212,11 @@ function describeReport(
   host: RoutePolicyHost,
   lineCount: number,
 ): RoutePolicyReport {
-  const version = String(host?.agentVersion || "");
-  if (host && version && !isAgentVersionAtLeast(version, ROUTE_POLICY_AGENT_VERSION)) return { kind: "unsupported" };
   if (!host || !truthy(host.isOnline, false)) return { kind: "offline" };
-  const snapshots = isAgentVersionAtLeast(version, ACTIVE_LINE_SNAPSHOT_AGENT_VERSION);
   const active = describeFailoverActiveLine({ ...rule, failoverEnabled: true });
-  if (!active) return snapshots ? { kind: "pending" } : { kind: "noSwitch" };
+  if (!active) return { kind: "pending" };
   if (active.unknown || active.index >= lineCount) return { kind: "unlisted", target: active.target };
-  return { kind: snapshots ? "current" : "lastSwitch", index: active.index, since: active.since };
+  return { kind: "current", index: active.index, since: active.since };
 }
 
 export function describeRoutePolicy(rule: RoutePolicyRule, options: RoutePolicyOptions = {}): RoutePolicy | null {
@@ -280,7 +259,6 @@ export function describeRoutePolicy(rule: RoutePolicyRule, options: RoutePolicyO
     conditions.push({ kind: "spread", key: "spread", when: perSession ? "每个新会话" : "每条新连接", then: spread[policy.spread], targetIndex: null, state: "deciding" });
     deciding = "spread";
   } else {
-    const supported = report.kind !== "unsupported";
     pin = policy.pin;
     const schedule = policy.schedule;
     const allWindows = schedule?.windows || [];
@@ -292,14 +270,14 @@ export function describeRoutePolicy(rule: RoutePolicyRule, options: RoutePolicyO
     // 智能择优、混合策略都看评分：混合是「时段表定首选，时段外按评分」。
     const byScore = mode === "smart" || mode === "hybrid";
 
-    // 按 Agent 的次序一层层往下找第一个给出答案的。Agent 太旧时人工指定以外的几层它都不认，只剩顺序。
-    if (supported && pin) {
+    // 按 Agent 的次序一层层往下找第一个给出答案的。
+    if (pin) {
       deciding = "pin";
       preferredIndex = pin.index;
-    } else if (supported && bySchedule && matchedWindow !== null) {
+    } else if (bySchedule && matchedWindow !== null) {
       deciding = "schedule";
       preferredIndex = allWindows[matchedWindow].targetIndex;
-    } else if (supported && byScore) {
+    } else if (byScore) {
       deciding = "fastest";
       preferredIndex = null;
     } else {
@@ -333,7 +311,7 @@ export function describeRoutePolicy(rule: RoutePolicyRule, options: RoutePolicyO
           then: `首选 ${label(window.targetIndex)}${precheck}`,
           targetIndex: window.targetIndex,
           windowIndex: index,
-          state: matched && deciding === "schedule" ? "deciding" : matched && supported ? "overridden" : "idle",
+          state: matched && deciding === "schedule" ? "deciding" : matched ? "overridden" : "idle",
         });
       });
     }
@@ -345,7 +323,7 @@ export function describeRoutePolicy(rule: RoutePolicyRule, options: RoutePolicyO
         // 延迟那两道门槛写死在 Agent 里（failoverFastestMarginMs / Ratio），这里照抄。
         then: `挑评分明显更高的那条（高出 ${policy.scoreMargin} 分，或快 20ms 且快 20%），连续 ${formatPolicyDuration(policy.scoreHoldSeconds)}才换`,
         targetIndex: null,
-        state: deciding === "fastest" ? "deciding" : supported && (deciding === "pin" || deciding === "schedule") ? "overridden" : "idle",
+        state: deciding === "fastest" ? "deciding" : deciding === "pin" || deciding === "schedule" ? "overridden" : "idle",
       });
     }
     conditions.push({
@@ -357,35 +335,8 @@ export function describeRoutePolicy(rule: RoutePolicyRule, options: RoutePolicyO
       targetIndex: null,
       state: deciding === "order" ? "deciding" : "idle",
     });
-    if (!supported && (pin || validWindows.length > 0 || byScore)) {
-      warnings.push(`这台机器的 Agent 早于 ${ROUTE_POLICY_AGENT_VERSION}：人工指定、时段表、自动择优它都不认，只按路径顺序走。`);
-    }
   }
 
-  /*
-    评分择优、权重、预热预检、连续失败次数、强制切换：Agent 2.2.198 起。更老的 Agent 拿到
-    的仍是一份主备清单，照旧能切，但这些新东西它不认 —— 照实说，别让人以为配了就生效。
-  */
-  const version = String(options.host?.agentVersion || "");
-  if (options.host && version && !isAgentVersionAtLeast(version, ROUTE_GROUP_AGENT_VERSION)) {
-    const uses: string[] = [];
-    if (mode === "smart") uses.push("评分择优");
-    if (mode === "hybrid") uses.push("预热预检");
-    if (mode === "weighted" && policy.spread === "weighted") uses.push("权重");
-    if (policy.switchMode !== "smooth") uses.push("强制断旧连接");
-    if (uses.length > 0) {
-      warnings.push(`这台机器的 Agent 早于 ${ROUTE_GROUP_AGENT_VERSION}：${uses.join("、")}它不认，只按主备顺序切、切换时也不断旧连接。`);
-    }
-  }
-  /* 「落地怎么分」（2.3.501）：一次走一条线路、有线路选了几个落地一起分，调度的 Agent 要 2.2.245 起。 */
-  const spreadDelivery = normalizeRouteDelivery(policy.delivery);
-  if (
-    options.host && version && !isAgentVersionAtLeast(version, ROUTE_DEST_SPREAD_AGENT_VERSION)
-    && mode !== "weighted" && spreadDelivery !== "aggregate" && spreadDelivery !== "replicate"
-    && paths.some((path) => !!path.destSpread)
-  ) {
-    warnings.push(`这台机器的 Agent 早于 ${ROUTE_DEST_SPREAD_AGENT_VERSION}：多落地分流它不认，每条线路只用一个落地。升级 Agent 后才分。`);
-  }
   for (const [index, path] of paths.entries()) {
     if (path.issue) warnings.push(`「${label(index)}」眼下用不了：${describeRouteIssue(path.issue)}。`);
   }
@@ -399,20 +350,6 @@ export function describeRoutePolicy(rule: RoutePolicyRule, options: RoutePolicyO
   if (!routeGroupForwardTypeSupported(forwardType)) {
     warnings.push("线路组只在 gost、realm、socat、nginx 转发上生效。这条规则是内核转发（iptables / nftables），机器上不会走线路组；保存一次时它会被关掉。");
   }
-  const udpAgentReady = !version || isAgentVersionAtLeast(version, ROUTE_GROUP_UDP_AGENT_VERSION);
-  /*
-    NEX 隧道、UDP、TCP+UDP 要新 Agent 才调度（routeGroupSchedulerAgentVersion）。面板这时不
-    下发调度，前面的转发工具直接拨路径 A（server 的 routePrimaryEndpoint）；NEX 隧道是出口的
-    FXP 拨路径 A。
-  */
-  const forwardXTunnel = Number(rule.tunnelId || 0) > 0 && routeGroupIsForwardXTunnel(rule.tunnelMode);
-  const schedulerAgentVersion = routeGroupSchedulerAgentVersion(protocol, forwardXTunnel ? rule.tunnelMode : null);
-  const schedulerAgentReady = !schedulerAgentVersion || !version || isAgentVersionAtLeast(version, schedulerAgentVersion);
-  if (schedulerAgentVersion && options.host && !schedulerAgentReady) {
-    warnings.push(forwardXTunnel
-      ? `隧道出口的 Agent 早于 ${schedulerAgentVersion}，还不会调度 NEX 隧道：升级之前这条规则全部走 ${label(0)}、不切换。`
-      : `这台机器的 Agent 早于 ${schedulerAgentVersion}，还不会调度 UDP：升级之前这条规则全部走 ${label(0)}、不切换。`);
-  }
   if (protocol === "udp" && paths.some((path) => !path.probe)) {
     warnings.push("UDP 没有握手可探：没填探测地址的路径靠 ping 拨号地址判断通不通。落地或第一跳中转禁 ping 的，给那条路径填一个 TCP 探测地址，不然会被当成挂了。");
   }
@@ -422,11 +359,7 @@ export function describeRoutePolicy(rule: RoutePolicyRule, options: RoutePolicyO
     }
     const tunnelled = Number(rule.tunnelId || 0) > 0;
     const headerSent = truthy(tunnelled ? rule.proxyProtocolExitSend : rule.proxyProtocolSend, false);
-    if (!schedulerAgentReady) {
-      // 调度本身都没下发（上面那句已经说了全部走路径 A），按访客分不分无从谈起，不再多说一句。
-    } else if (protocol !== "udp" && options.host && !udpAgentReady) {
-      warnings.push(`这台机器的 Agent 早于 ${ROUTE_GROUP_UDP_AGENT_VERSION}：按访客固定读不到访客地址，所有访客都落在同一条路径上。升级 Agent 后才按访客分。`);
-    } else if (protocol !== "udp" && !headerSent && (tunnelled || forwardType !== "gost")) {
+    if (protocol !== "udp" && !headerSent && (tunnelled || forwardType !== "gost")) {
       /*
         调度器只监听本机，访客地址只能从前面加的 PROXY 头里读。gost 端口转发由面板专门加一个
         只给调度器的头（读完就扔）；realm / socat / nginx 前置、走隧道时加不了，除非规则本来就发。
@@ -476,7 +409,7 @@ export function describeRoutePolicy(rule: RoutePolicyRule, options: RoutePolicyO
     value: `${ROUTE_SWITCH_MODE_INFO[policy.switchMode].label}：${switchHint.replace("（推荐）", "")}`,
   });
 
-  const activeIndex = mode !== "weighted" && (report.kind === "current" || report.kind === "lastSwitch") ? report.index : null;
+  const activeIndex = mode !== "weighted" && report.kind === "current" ? report.index : null;
   let divergence: string | null = null;
   if (mode !== "weighted" && activeIndex !== null && preferredIndex !== null && activeIndex !== preferredIndex) {
     if (!autoFailback) {
@@ -818,7 +751,6 @@ export function describeRoutePolicyReport(policy: RoutePolicy, options: { nowMs?
   const since = (seconds: number | null) => seconds ? `，${formatPolicyClock(seconds * 1000, nowMs, options.timeZone)} 起` : "";
   const report = policy.report;
   const label = (index: number) => policy.lines[index]?.label || `第 ${index} 条`;
-  const upgradeNote = `Agent 升级到 ${ACTIVE_LINE_SNAPSHOT_AGENT_VERSION} 后每次心跳确认。`;
   const lineTone = (index: number) => policy.preferredIndex !== null && index !== policy.preferredIndex ? "deviated" : "normal";
   // 轮询、随机、哈希没有「现在走哪条」：每条新连接各走各的，报一条出来只会误导。
   if (policy.mode === "weighted") {
@@ -827,24 +759,14 @@ export function describeRoutePolicyReport(policy: RoutePolicy, options: { nowMs?
   switch (report.kind) {
     case "current":
       return { text: `现在走 ${label(report.index)}${since(report.since)}`, note: null, tone: lineTone(report.index) };
-    case "lastSwitch":
-      return {
-        text: `最近一次切到 ${label(report.index)}${since(report.since)}`,
-        note: `这台 Agent 只在切换时报告：之后改过主备设置或重启过，就已经回到主线路了。${upgradeNote}`,
-        tone: lineTone(report.index),
-      };
     case "unlisted":
       return { text: `Agent 报的 ${report.target} 不在线路清单里`, note: "多半是刚改过配置，Agent 还没跟上。", tone: "warn" };
     case "pending":
       return policy.subject === "group"
         ? { text: "还没选出入口", note: null, tone: "muted" }
         : { text: "等 Agent 报告现在走哪条", note: null, tone: "muted" };
-    case "noSwitch":
-      return { text: "没有切换记录", note: upgradeNote, tone: "muted" };
     case "offline":
       return { text: "机器离线，不知道现在走哪条", note: null, tone: "muted" };
-    case "unsupported":
-      return { text: `Agent 早于 ${ROUTE_POLICY_AGENT_VERSION}，不报告现在走哪条`, note: null, tone: "muted" };
     case "resolved": {
       /*
         转发组的成员有自己的健康：解析指着的那个要是不健康（一个健康的都没有时，解析保持原样），

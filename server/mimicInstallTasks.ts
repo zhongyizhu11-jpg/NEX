@@ -3,7 +3,6 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { appendPanelLog } from "./_core/panelLogger";
-import { isAgentVersionAtLeast } from "../shared/version";
 import { MIMIC_DEFAULT_VERSION, isShellSafeUrl, normalizeMimicDownloadProxy } from "../shared/mimicAssets";
 
 /*
@@ -16,7 +15,6 @@ import { MIMIC_DEFAULT_VERSION, isShellSafeUrl, normalizeMimicDownloadProxy } fr
   的 mimic 环境。全部在内存里，一台主机同一时刻只有一个任务，做完留 30 分钟给页面看。
 */
 
-export const AGENT_MIMIC_INSTALL_VERSION = "2.2.223";
 /** 面板这一版装的 mimic（hack3ric/mimic）版本，装 Agent 的脚本和面板一键安装都用它。 */
 export const MIMIC_TARGET_VERSION = MIMIC_DEFAULT_VERSION;
 export const MIMIC_INSTALLER_URL = "https://raw.githubusercontent.com/zhongyizhu11-jpg/NEX/main/scripts/install-mimic.sh";
@@ -100,7 +98,7 @@ function markTimedOut(hostId: number, taskId: string) {
   task.status = "timeout";
   task.error = task.dispatchedAt
     ? "Agent 没有在限定时间内报告结果；看 Agent 日志 /var/log/forwardx-agent/"
-    : `Agent 一直没来取任务：请确认主机在线且 Agent 不低于 ${AGENT_MIMIC_INSTALL_VERSION}`;
+    : "Agent 一直没来取任务：请确认主机在线";
   task.finishedAt = nowIso();
   task.updatedAt = task.finishedAt;
   task.expiresAt = Date.now() + RETENTION_MS;
@@ -171,9 +169,6 @@ export function enqueueMimicInstallTask(input: {
   const hostId = Math.floor(Number(input.host?.id));
   if (!Number.isInteger(hostId) || hostId <= 0) throw new Error("主机不存在");
   if (!input.host.isOnline) throw new Error("主机离线，等 Agent 在线后再装");
-  if (!isAgentVersionAtLeast(input.host.agentVersion, AGENT_MIMIC_INSTALL_VERSION)) {
-    throw new Error(`这台主机的 Agent ${String(input.host.agentVersion || "版本未知")} 还不支持面板安装 mimic，请先升级 Agent 到 ${AGENT_MIMIC_INSTALL_VERSION} 以上`);
-  }
   const existing = tasks.get(hostId);
   if (existing && !isTerminal(existing.status)) {
     return publicTask(existing);

@@ -14,13 +14,10 @@ import type { NetworkHealth } from "@shared/networkHealth";
 import {
   ROUTE_DEST_SPREAD_LABELS,
   ROUTE_EVENT_KIND_LABELS,
-  ROUTE_GROUP_FORWARDX_AGENT_VERSION,
-  ROUTE_GROUP_UDP_AGENT_VERSION,
   ROUTE_MODE_INFO,
   normalizeRouteEventKind,
   routeLineName,
   routeModeHint,
-  routePathLetter,
   type RouteDestSpread,
   type RouteEndpoint,
   type RouteGroupPolicy,
@@ -28,8 +25,7 @@ import {
 import { describeRoutePolicyReport, formatPolicyClock, type RoutePolicy } from "@shared/routePolicy";
 import { formatRouteScore } from "@shared/routeScore";
 import type { RouteSwitchSummary } from "@shared/routeSwitchSummary";
-import { isAgentVersionBehind } from "@shared/version";
-import { RoutePathCards, RouteSwitchChip, type RouteBoardEntry, type RouteBoardRate } from "./RouteBoard";
+import type { RouteBoardEntry, RouteBoardRate } from "./RouteBoard";
 import { ConditionRow, SentenceRow } from "./RoutePolicySheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RouteLineDetail, RouteLineTools, useRouteLinePause, type RouteLineSwitch } from "./RouteLineOverview";
@@ -131,15 +127,8 @@ export type RouteStatus = {
   prewarmIndex: number;
   agentReportedAt: number | null;
   agentStale: boolean;
-  agentVersion: string | null;
-  agentSupportsScores: boolean;
-  /** UDP、TCP+UDP 和 NEX 隧道的线路组：调度所在那台的 Agent 会不会调度（2.2.199 起）。其余永远是 true。 */
-  agentSupportsProtocol?: boolean;
-  /** 哪一样要新 Agent 才调度：NEX 隧道、UDP（含 TCP+UDP），都不是时为 null。 */
-  schedulerNeed?: "forwardx" | "udp" | null;
   /** tcp / udp / both */
   protocol?: string;
-  requiredAgentVersion: string;
   /** 这条规则（入口）此刻的速率。 */
   rate?: RouteBoardRate;
   switches?: RouteSwitchSummary | null;
@@ -148,8 +137,6 @@ export type RouteStatus = {
   delivery?: string;
   /** 线路定义（分层候选）。 */
   lines?: Array<{ key: string; name: string; paused: boolean; layers: unknown[]; dests: unknown[]; weight: number; destSpread?: RouteDestSpread }>;
-  /** 调度这条线路组的 Agent 会不会按「主线路那组先挑」（2.2.243 起）。 */
-  agentSupportsLines?: boolean;
   /** 最近 10 分钟客户端连进来：拨通了一条路径的 / 一条都没拨通的。 */
   inbound?: { ok: number; failed: number } | null;
 };
@@ -197,16 +184,12 @@ export type RouteGroupPanelProps = {
   events: RouteEvent[];
   nowMs?: number;
   timeZone?: string;
-  /** 画不画「路径」那几张卡：线路详情上面已经有分层图和线路列表，异常明细里就不再画一遍。 */
-  showPaths?: boolean;
 };
 
-export function RouteGroupPanel({ policy, status, events, nowMs, timeZone, showPaths = true }: RouteGroupPanelProps) {
+/* 线路详情的「异常明细」：上面已经有分层图和线路列表，这里只写结论、调度计划和最近切换，不再画路径。 */
+export function RouteGroupPanel({ policy, status, events, nowMs, timeZone }: RouteGroupPanelProps) {
   const now = nowMs ?? Date.now();
   const report = describeRoutePolicyReport(policy, { nowMs: now, timeZone });
-  const paths = status?.paths || [];
-  const activePath = paths.find((path) => path.active) || null;
-  const others = paths.filter((path) => !path.active);
   const weighted = policy.mode === "weighted";
   const modeInfo = ROUTE_MODE_INFO[policy.mode];
 
@@ -224,53 +207,11 @@ export function RouteGroupPanel({ policy, status, events, nowMs, timeZone, showP
         </div>
       </div>
 
-      {policy.warnings
-        /*
-          「Agent 早于 2.2.199」那几句是拿调用方给的机器算的（规则所在的机器）；隧道规则的调度
-          跑在出口机上，只有 status 读的是对的那台 —— 有 status 就以它为准，下面单独说。
-        */
-        .filter((warning) => !status || ![ROUTE_GROUP_UDP_AGENT_VERSION, ROUTE_GROUP_FORWARDX_AGENT_VERSION].some((version) => warning.includes(version)))
-        .map((warning) => (
-          <p key={warning} className="rounded-[var(--fx-radius-control)] bg-[var(--fx-warn-soft)] px-3 py-2 text-meta text-[var(--fx-warn-text)]">
-            {warning}
-          </p>
-        ))}
-      {status && status.agentSupportsProtocol === false ? (
-        <p className="rounded-[var(--fx-radius-control)] bg-[var(--fx-warn-soft)] px-3 py-2 text-meta text-[var(--fx-warn-text)]">
-          {status.schedulerNeed === "forwardx"
-            ? <>隧道出口的 Agent{status.agentVersion ? `（${status.agentVersion}）` : ""}早于 {status.requiredAgentVersion}，还不会调度 NEX 隧道：升级之前这条规则全部走 {policy.lines[0]?.label || routePathLetter(0)}、不切换。</>
-            : <>调度这条线路组的机器上 Agent{status.agentVersion ? `（${status.agentVersion}）` : ""}早于 {status.requiredAgentVersion}，还不会调度 UDP：升级之前这条规则全部走 {policy.lines[0]?.label || routePathLetter(0)}、不切换。</>}
+      {policy.warnings.map((warning) => (
+        <p key={warning} className="rounded-[var(--fx-radius-control)] bg-[var(--fx-warn-soft)] px-3 py-2 text-meta text-[var(--fx-warn-text)]">
+          {warning}
         </p>
-      ) : status && !status.agentSupportsScores ? (
-        <p className="rounded-[var(--fx-radius-control)] bg-[var(--fx-warn-soft)] px-3 py-2 text-meta text-[var(--fx-warn-text)]">
-          调度这条线路组的机器上 Agent{status.agentVersion ? `（${status.agentVersion}）` : ""}早于 {status.requiredAgentVersion}：没有评分、不预热预检、不按权重分，只按主备顺序切。升级 Agent 后这些才生效。
-        </p>
-      ) : null}
-      {status && policy.strategy === "ip_hash" && status.protocol !== "udp" && status.agentSupportsProtocol !== false
-        && !!status.agentVersion && isAgentVersionBehind(status.agentVersion, ROUTE_GROUP_UDP_AGENT_VERSION) ? (
-          <p className="rounded-[var(--fx-radius-control)] bg-[var(--fx-warn-soft)] px-3 py-2 text-meta text-[var(--fx-warn-text)]">
-            调度这条线路组的机器上 Agent（{status.agentVersion}）早于 {ROUTE_GROUP_UDP_AGENT_VERSION}：按访客固定读不到访客地址，所有访客都落在同一条路径上。升级 Agent 后才按访客分。
-          </p>
-        ) : null}
-
-      {/* 路径卡：一条路径一张，在走的排最前；每张是一条链，段上写延迟，节点下写速率。 */}
-      {showPaths ? <div className="flex flex-col gap-2">
-        <div className="flex items-center justify-between gap-2 px-1">
-          <span className="text-meta font-semibold text-muted-foreground">{weighted ? "路径（每条都在走）" : "路径"}</span>
-          {status?.switches ? <RouteSwitchChip switches={status.switches} /> : null}
-        </div>
-        {!status ? (
-          <p className="px-1 text-meta text-muted-foreground">在读线路状态…</p>
-        ) : (
-          <RoutePathCards status={status} policy={policy} />
-        )}
-        {status && activePath && activePath.hops.length > 0 ? (
-          <p className="px-1 text-meta text-muted-foreground">每一段的延迟是上一个节点探它下一跳的结果；「未测」是那台中转还没报、不是通。整链是各段相加。</p>
-        ) : null}
-        {status && others.some((path) => path.down) ? (
-          <p className="px-1 text-meta text-muted-foreground">用不了的路径会被跳过，恢复并稳定一阵后重新参与。</p>
-        ) : null}
-      </div> : null}
+      ))}
 
       <GroupedList>
         <ListSection
@@ -432,11 +373,6 @@ export function RouteGroupSheet({
             </div>
             <DialogDescription className="truncate text-[12.5px]">{routeLineSubtitle(status, mode)}</DialogDescription>
           </DialogHeader>
-          {status && status.agentSupportsLines === false && status.paths.some((path) => typeof path.tier === "number") ? (
-            <p className="rounded-[12px] bg-[var(--fx-warn-soft)] px-3 py-2 text-[11.5px] text-[var(--fx-warn-text)]">
-              调度这条线路的机器上 Agent{status.agentVersion ? `（${status.agentVersion}）` : ""}早于 2.2.243：还不会按「主线路那组先挑」和整条链的延迟选，也不会改完马上探。升级 Agent 后生效，之前照旧按顺序切。
-            </p>
-          ) : null}
           {!status ? (
             <p className="px-1 text-[12.5px] text-muted-foreground">在读线路状态…</p>
           ) : status.paths.length > 0 ? (
@@ -457,7 +393,7 @@ export function RouteGroupSheet({
           ) : null}
           {detailsOpen || (status && status.paths.length === 0) ? (
             <div className="flex min-w-0 flex-col gap-3 border-t border-[var(--fx-stroke-weak)] pt-3" data-testid="route-line-detail-panel">
-              <RouteGroupPanel {...panel} policy={shown.policy} status={status} events={events} showPaths={false} />
+              <RouteGroupPanel {...panel} policy={shown.policy} status={status} events={events} />
               {status ? <RouteLineTools status={status} /> : null}
               <Suspense fallback={<RouteQualityHistoryPlaceholder />}>
                 <RouteQualityHistory

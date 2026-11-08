@@ -37,8 +37,7 @@ type Outcome = {
   groupTemplate: any;
   retired: number;
   eventsAfterDelete: number;
-  spreadOld: any;
-  spreadNew: any;
+  spread: any;
   savedLines: any;
 };
 
@@ -223,7 +222,7 @@ function run(): Outcome {
 
     /*
       「几个落地怎么用」（2.3.501）：另一台入口上的规则，主线路三个落地选了按访客固定，备用经东京中转。
-      入口 Agent 2.2.245 起，下发的每条目标带上第几条线路、落地是哪一个、怎么分；更老的 Agent 不带。
+      下发的每条目标带上第几条线路、落地是哪一个、怎么分。
     */
     await exec(
       'INSERT INTO hosts (id, name, ip, ipv4, "hostType", "agentToken", "userId", "isOnline", "lastHeartbeat") VALUES (5, ?, ?, ?, ?, ?, 1, 1, ?)',
@@ -245,10 +244,7 @@ function run(): Outcome {
     );
     await routeGroups.syncRouteRelayRulesForRule(900, { reason: "test-spread" });
     const spreadBeat = (agentVersion) => post("/api/agent/heartbeat", "tok5", { agentVersion, uptime: 1000, cpuUsage: 1, memoryUsage: 1, diskUsage: 1, forceReconcile: true });
-    // 规格变了才随心跳重发：老版本的第一跳就拿到；换成新版本后，规格带上新字段的那一跳拿到。
-    const spreadOld = specOf(await spreadBeat("2.2.244"));
-    const spreadNewFirst = specOf(await spreadBeat("2.2.245"));
-    const spreadNew = spreadNewFirst || specOf(await spreadBeat("2.2.245"));
+    const spread = specOf(await spreadBeat("2.2.251"));
 
     /*
       保存那一层（编辑框按线路提交）：线路上的探测地址、「几个落地怎么用」都要落到 routeLines 和展开的
@@ -295,8 +291,7 @@ function run(): Outcome {
       groupTemplate: { routeMode: groupTemplate.routeMode, routePaths: groupTemplate.routePaths, failoverTargets: groupTemplate.failoverTargets },
       retired: retiredResult.retired,
       eventsAfterDelete,
-      spreadOld,
-      spreadNew,
+      spread,
       savedLines,
     }));
   `;
@@ -432,18 +427,16 @@ test("转发组模板上的线路组也保存成路径；routeGroup 不当成列
   );
 });
 
-test("几个落地一起分（2.3.501）：入口 Agent 2.2.245 起，主线路的每条目标带线路、落地、分法；备用和老 Agent 不带", () => {
+test("几个落地一起分（2.3.501）：主线路的每条目标带线路、落地、分法；备用不带", () => {
   const fields = (spec: any) => (spec?.targets || []).map((target: any) => [target.line ?? null, target.landing ?? null, target.spread ?? null]);
-  assert.ok(outcome.spreadNew, "新 Agent 应当拿到这条规则的调度规格");
-  assert.equal(outcome.spreadNew.strategy, "fallback", "整链最优照旧是主备那一路，Agent 挑出线路再在里面分");
-  assert.deepEqual(fields(outcome.spreadNew), [
+  assert.ok(outcome.spread, "入口 Agent 应当拿到这条规则的调度规格");
+  assert.equal(outcome.spread.strategy, "fallback", "整链最优照旧是主备那一路，Agent 挑出线路再在里面分");
+  assert.deepEqual(fields(outcome.spread), [
     [0, "target", "ip_hash"],
     [0, "198.51.100.21:443", "ip_hash"],
     [0, "198.51.100.22:443", "ip_hash"],
     [null, null, null],
   ]);
-  assert.ok(outcome.spreadOld, "老 Agent 照样拿到规格");
-  assert.deepEqual(fields(outcome.spreadOld), [[null, null, null], [null, null, null], [null, null, null], [null, null, null]], "老 Agent 不带这几个字段，它只用一个落地");
 });
 
 test("按线路保存：线路上的探测地址、「几个落地怎么用」落到 routeLines 和展开的每条路径上（以前探测地址被丢掉）", () => {

@@ -116,13 +116,3 @@ export function LiveIpRowItem({ row, onNavigate, showHost = true }: { row: LiveI
   );
 }
 
-/** 有些主机的 Agent 太旧，在线 IP 里看不到它们。 */
-export function OutdatedAgentNotice({ hosts, minVersion }: { hosts: Array<{ id: number; name: string }>; minVersion: string }) {
-  if (hosts.length === 0) return null;
-  const names = hosts.slice(0, 6).map((h) => h.name).join("、");
-  return (
-    <p className="rounded-[var(--fx-radius-surface)] bg-[var(--fx-warn-soft)] px-3 py-2 text-[12.5px] leading-relaxed text-[var(--fx-warn-text)]">
-      需要升级 Agent 才能看到在线 IP：{names}{hosts.length > 6 ? ` 等 ${hosts.length} 台` : ""}（要 {minVersion} 或更新）。
-    </p>
-  );
-}

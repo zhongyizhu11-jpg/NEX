@@ -2,12 +2,9 @@ import * as db from "./db";
 import { describeFailoverActiveLine } from "../shared/failoverActiveLine";
 import { normalizeForwardRuleProtocol } from "../shared/forwardTypes";
 import {
-  ROUTE_GROUP_AGENT_VERSION,
   describeRouteIssue,
   routeEventMillis,
-  routeGroupIsForwardXTunnel,
   routeGroupOf,
-  routeGroupSchedulerAgentVersion,
   routePathDestination,
   routePathDial,
   routePathLabel,
@@ -16,10 +13,9 @@ import {
 } from "../shared/routeGroup";
 import { routeScoreGrade } from "../shared/routeScore";
 import { summarizeRouteSwitches, type RouteSwitchSummary } from "../shared/routeSwitchSummary";
-import { isAgentVersionBehind } from "../shared/version";
 import { getRouteStatus, routeHopDownHints, routeHopSuccessPct, routeNodeHints, routePathDownstreamMs, routeTrippedNodeIds } from "./routeGroupStats";
 import { ensureRouteNodeHealthFresh, getRouteNodeStatus } from "./routeNodeHealth";
-import { ROUTE_DEST_SPREAD_AGENT_VERSION, ROUTE_LINES_AGENT_VERSION, normalizeRouteDelivery, routeAgentStrategy, routePathsOf, serializeRoutePaths } from "../shared/routeGroup";
+import { normalizeRouteDelivery, routeAgentStrategy, routePathsOf, serializeRoutePaths } from "../shared/routeGroup";
 import { routeLinesOf, ROUTE_ENTRY_RELAY_INDEX } from "../shared/routeLines";
 import { routeRelayRulesByKey } from "./routeGroups";
 import { routeSchedulerHostIds } from "./routers/rules.crud";
@@ -101,22 +97,8 @@ export async function routeDestNames(rule: any, paths: readonly RoutePath[]): Pr
   都从这里出，界面上规则卡的线路面板和链路管理页的线路板画的是同一份东西。
 
   评分和逐跳探测都是内存里的（routeGroupStats）：入口 Agent 每次心跳带评分，中转机的
-  Agent 一分钟报一次它那一跳。Agent 没升到 2.2.198 的，评分为空，界面据 agentSupportsScores
-  说明「升级 Agent 后才有评分」。
+  Agent 一分钟报一次它那一跳。
 */
-
-/**
- * 几台调度机里最旧的 Agent 版本。有一台读不到版本就返回空串：说不准它认不认，按不支持算，
- * 和心跳那边 isAgentVersionAtLeast("", …) 为假一致。
- */
-export function oldestAgentVersion(versions: readonly string[]): string {
-  let oldest = "";
-  for (const version of versions) {
-    if (!version) return "";
-    if (!oldest || isAgentVersionBehind(version, oldest)) oldest = version;
-  }
-  return oldest;
-}
 
 export type RouteStatusRate = RuleLiveRate | null;
 
@@ -245,20 +227,17 @@ export async function buildRouteStatus(rule: any) {
     if (tunnel) viaTunnels.set(tunnelId, tunnel);
   }
   /*
-    评分和预热跑在调度层那台机器上 —— GOST 隧道规则是隧道的出口机，不是规则的入口机。
-    版本读错机器的话，界面会说「支持评分」而真正跑调度的那台 Agent 还是旧的（或者反过来）。
-    负载均衡的隧道每个出口各跑一个调度器，心跳要每一台都够版本才下发 UDP 调度，所以这里
-    按最旧的那台说（routeSchedulerHostIds 和心跳是同一个口径）。
+    评分和预热跑在调度层那台机器上 —— GOST 隧道规则是隧道的出口机，不是规则的入口机；负载均衡的
+    隧道每个出口各跑一个调度器（routeSchedulerHostIds 和心跳是同一个口径）。
   */
   const routeTunnel = Number(subject.tunnelId || 0) > 0
     ? await (db.getTunnelById(Number(subject.tunnelId)) as Promise<any>).catch(() => null)
     : null;
   const routeExitNodes = routeTunnel ? await db.getTunnelExitNodes(Number(routeTunnel.id)).catch(() => []) : [];
   const schedulerHostIds = routeSchedulerHostIds(Number(subject.hostId), routeTunnel, routeExitNodes);
-  const [names, relays, schedulerHosts, events, entryHost, destNames] = await Promise.all([
+  const [names, relays, events, entryHost, destNames] = await Promise.all([
     hopIds.length > 0 ? db.getHostNamesByIds(hopIds) : Promise.resolve(new Map<number, string>()),
     routeRelayRulesByKey(Number(subject.id)),
-    Promise.all(schedulerHostIds.map((hostId) => (db.getHostById(hostId) as Promise<any>).catch(() => null))),
     routeSwitchEventsFor(rule, subject),
     (db.getHostById(Number(subject.hostId)) as Promise<any>).catch(() => null),
     routeDestNames(subject, paths).catch(() => new Map<string, string>()),
@@ -347,9 +326,8 @@ export async function buildRouteStatus(rule: any) {
       dials: target?.dials && (target.dials.ok > 0 || target.dials.failed > 0 || target.dials.lastAt > 0) ? target.dials : null,
     };
   });
-  const agentVersion = oldestAgentVersion(schedulerHosts.map((schedulerHost) => String(schedulerHost?.agentVersion || "").trim()));
   /*
-    「落地怎么分」（2.3.501）：在用的那条线路选了一起分、调度的 Agent 够新时，这条线路上能用的几个落地都在走，
+    「落地怎么分」（2.3.501）：在用的那条线路选了一起分时，这条线路上能用的几个落地都在走，
     不只是 Agent 报的那一条 —— 图上、行上都按「在走」画。
   */
   const deliveryNow = normalizeRouteDelivery(policy.delivery);
@@ -357,22 +335,13 @@ export async function buildRouteStatus(rule: any) {
   if (
     activePath?.destSpread && typeof activePath.tier === "number"
     && routeAgentStrategy(policy) === "fallback" && deliveryNow !== "aggregate" && deliveryNow !== "replicate"
-    && !!agentVersion && !isAgentVersionBehind(agentVersion, ROUTE_DEST_SPREAD_AGENT_VERSION)
   ) {
     for (const row of rows) {
       const path = paths[row.index];
       if (path.tier === activePath.tier && path.destSpread && !row.down && !row.paused && row.healthy !== false) row.active = true;
     }
   }
-  /*
-    UDP、TCP+UDP 和 NEX 隧道的线路组要 Agent 2.2.199 起才调度；更老的时候面板不下发
-    调度，流量走路径 A、不切换（server/agentHeartbeatRoute.ts 的 routePrimaryEndpoint）。
-    界面据 agentSupportsProtocol 把这件事说出来，别让人以为配了就生效；schedulerNeed 说是
-    哪一样要新 Agent，界面的说法跟着换。
-  */
   const protocol = normalizeForwardRuleProtocol(rule.protocol);
-  const schedulerAgentVersion = routeGroupSchedulerAgentVersion(protocol, routeTunnel?.mode);
-  const schedulerNeed = routeGroupIsForwardXTunnel(routeTunnel?.mode) ? "forwardx" : protocol !== "tcp" ? "udp" : null;
   const switches: RouteSwitchSummary = summarizeRouteSwitches(
     events.map((row) => ({
       kind: String(row.kind || ""),
@@ -398,13 +367,6 @@ export async function buildRouteStatus(rule: any) {
     prewarmIndex: agent?.prewarmIndex ?? -1,
     agentReportedAt: agent?.reportedAt ?? null,
     agentStale: !status.agent && !!status.staleAgent,
-    agentVersion: agentVersion || null,
-    agentSupportsScores: !!agentVersion && !isAgentVersionBehind(agentVersion, ROUTE_GROUP_AGENT_VERSION),
-    /** 分层候选按组挑、整链打分、热备抢拨、改完马上探：Agent 2.2.243 起；老的照旧按顺序 / 全部里挑。 */
-    agentSupportsLines: !!agentVersion && !isAgentVersionBehind(agentVersion, ROUTE_LINES_AGENT_VERSION),
-    agentSupportsProtocol: !schedulerAgentVersion || (!!agentVersion && !isAgentVersionBehind(agentVersion, schedulerAgentVersion)),
-    requiredAgentVersion: schedulerAgentVersion || ROUTE_GROUP_AGENT_VERSION,
-    schedulerNeed,
     tunnelMode: routeTunnel ? String(routeTunnel.mode || "") : null,
     /** 调度器跑在哪几台机器上（直连是规则所在机器，隧道是出口）。 */
     schedulerHostIds,

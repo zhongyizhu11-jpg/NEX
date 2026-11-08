@@ -1,7 +1,7 @@
 import * as db from "./db";
 import { resolveAgentAdvertisedPanelUrl } from "./agentPanelUrl";
 import { findNodeHost, type ExitQualityHost } from "./exitQualityView";
-import { hostSupportsNodeCheck, nodeCheckStatus, startNodeCheck, type NodeCheckSubject } from "./ops/nodeCheck";
+import { nodeCheckStatus, startNodeCheck, type NodeCheckSubject } from "./ops/nodeCheck";
 import { singboxAssetRelayBase } from "./singboxAssets";
 import { ensureSingboxBinaryCmd } from "./singboxRuntimePlan";
 import { effectiveGithubAccelerator } from "../shared/githubAccelerator";
@@ -24,7 +24,6 @@ type NodeCheckHostCandidate = {
   id: number;
   name: string;
   online: boolean;
-  supported: boolean;
   /** 出口检测：绑了这个节点的转发的入口机。 */
   preferred: boolean;
 };
@@ -34,13 +33,12 @@ function candidateOf(item: any, preferred: boolean): NodeCheckHostCandidate {
     id: Number(item.id),
     name: String(item.name || `主机 ${item.id}`),
     online: !!item.isOnline,
-    supported: hostSupportsNodeCheck(item),
     preferred,
   };
 }
 
 function sortCandidates(list: NodeCheckHostCandidate[]) {
-  return list.sort((left, right) => Number(right.preferred) - Number(left.preferred) || Number(right.online && right.supported) - Number(left.online && left.supported) || left.id - right.id);
+  return list.sort((left, right) => Number(right.preferred) - Number(left.preferred) || Number(right.online) - Number(left.online) || left.id - right.id);
 }
 
 async function viewerHosts(viewer: { id: number; role: string }) {
@@ -85,7 +83,7 @@ async function planNodeCheck(node: any, viewer: { id: number; role: string }): P
 /** 排一次经节点的出口检测。 */
 export async function startExitCheckForNode(node: any, viewer: { id: number; role: string }, input: { hostId?: number }) {
   const plan = await planNodeCheck(node, viewer);
-  const hostId = Number(input.hostId || plan.candidates.find((item) => item.online && item.supported)?.id || 0);
+  const hostId = Number(input.hostId || plan.candidates.find((item) => item.online)?.id || 0);
   const candidate = plan.candidates.find((item) => item.id === hostId);
   if (!candidate) throw new Error("没有可以用来检测的机器：要一台在线、Agent 2.2.241 以上的机器");
   const host = await db.getHostById(hostId);
@@ -127,10 +125,7 @@ export function exitCheckToHostView(result: ExitCheckResult, options: { hostId: 
     countryCode: options.countryCode || null,
     sites,
     noEgress: sites.length > 0 && sites.every((site) => site.samples > 0 && site.latestMs === null),
-    unverified: false,
-    unsupported: false,
     unlock: results.length > 0 ? { checkedAt: options.checkedAt, items: unlockChipItems(results) } : null,
     unlockDetail: results.length > 0 ? { checkedAt: options.checkedAt, family: "auto", results } : null,
-    unlockSupported: true,
   };
 }

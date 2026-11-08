@@ -122,7 +122,7 @@ func failoverSignature(spec failoverSpec) string {
 		strconv.FormatBool(spec.ProxyProtocolStrip),
 	}
 	for _, target := range spec.Targets {
-		// Down / DownReason / ExtraLatencyMs / LoadPct / ExitIP 是面板随时会变的运行时提示，故意不进签名：进了的话
+		// 运行时提示（failoverTargetHints：中转异常、下游延迟、沿途负载、出口 IP）面板随时会变，故意不进签名：进了的话
 		// 每次提示变化都会重建代理，探测样本和「现在走哪条」全部归零。它们走 applyRelayHintsLocked。
 		weight := strconv.Itoa(target.Weight)
 		if target.Tier != nil {
@@ -218,10 +218,8 @@ func normalizeFailoverSpec(spec failoverSpec) failoverSpec {
 		if target.Weight > 100 {
 			target.Weight = 100
 		}
-		target.DownReason = strings.TrimSpace(target.DownReason)
-		if !target.Down {
-			target.DownReason = ""
-		}
+		// 运行时提示的规矩在 failover_hints.go：原因去空白、没断不留原因、下游延迟夹在范围里、出口 IP 去空白。
+		target.failoverTargetHints = target.failoverTargetHints.normalized()
 		if target.Tier != nil {
 			// 复制一份：别和调用方的规格共用同一个指针。
 			tier := *target.Tier
@@ -230,13 +228,6 @@ func normalizeFailoverSpec(spec failoverSpec) failoverSpec {
 			}
 			target.Tier = &tier
 		}
-		if target.ExtraLatencyMs < 0 {
-			target.ExtraLatencyMs = 0
-		}
-		if target.ExtraLatencyMs > failoverMaxExtraLatencyMs {
-			target.ExtraLatencyMs = failoverMaxExtraLatencyMs
-		}
-		target.ExitIP = strings.TrimSpace(target.ExitIP)
 		// 「落地怎么分」三个字段一起才算数：缺线路号、分法不认识，就当没带（挑一个，老行为）。
 		target.Spread = strings.TrimSpace(target.Spread)
 		target.Landing = strings.TrimSpace(target.Landing)
@@ -485,118 +476,6 @@ func failoverRemoteIP(conn net.Conn) string {
 		return host
 	}
 	return conn.RemoteAddr().String()
-}
-
-/*
-候选路径。healthyOnly 时只要健康的；分层规格（failoverSpecTiered）下再只留「还有健康
-出站的最优一层」—— 权重 / 最少连接只在主线路组里分，整个主组都挂了才轮到备用组。
-healthyOnly=false（全挂时的兜底）不分层，和以前一样。
-*/
-func (p *failoverProxy) candidateIndicesLocked(exclude map[int]bool, healthyOnly bool) []int {
-	return p.candidateIndicesForLocked(exclude, healthyOnly, false)
-}
-
-// udp 为 true 时「健康」按 UDP 那一侧算（udpUsableLocked）：TCP+UDP 规格的 UDP 会话用。
-func (p *failoverProxy) candidateIndicesForLocked(exclude map[int]bool, healthyOnly bool, udp bool) []int {
-	indices := make([]int, 0, len(p.spec.Targets))
-	for i := range p.spec.Targets {
-		if exclude != nil && exclude[i] {
-			continue
-		}
-		if healthyOnly && !p.usableLocked(i, udp) {
-			continue
-		}
-		indices = append(indices, i)
-	}
-	if !healthyOnly || len(indices) < 2 || !failoverSpecTiered(p.spec) {
-		return indices
-	}
-	best := p.lowestTierLocked(indices)
-	filtered := indices[:0]
-	for _, i := range indices {
-		if *p.spec.Targets[i].Tier == best {
-			filtered = append(filtered, i)
-		}
-	}
-	return filtered
-}
-
-// indices 里最优（数字最小）的一层。调用方保证规格是分层的、indices 非空。
-func (p *failoverProxy) lowestTierLocked(indices []int) int {
-	best := *p.spec.Targets[indices[0]].Tier
-	for _, i := range indices[1:] {
-		if tier := *p.spec.Targets[i].Tier; tier < best {
-			best = tier
-		}
-	}
-	return best
-}
-
-func (p *failoverProxy) pickTarget(client net.Conn, exclude map[int]bool) (failoverTarget, int) {
-	return p.pickTargetForKey(failoverRemoteIP(client), exclude)
-}
-
-// 挑一条路径。hashKey 只有「按访客固定」用：TCP 是访客 IP（带 PROXY 头时从头里读），
-// UDP 是会话的来源地址。
-func (p *failoverProxy) pickTargetForKey(hashKey string, exclude map[int]bool) (failoverTarget, int) {
-	return p.pickTargetForKeyProto(hashKey, exclude, false)
-}
-
-// udp 为 true 是给 UDP 会话挑：TCP+UDP 规格下只在 UDP 通的路径里挑（route_group_udp_health.go），
-// 别的规格和 TCP 完全一样。
-func (p *failoverProxy) pickTargetForKeyProto(hashKey string, exclude map[int]bool, udp bool) (failoverTarget, int) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.ensureHealthStateLocked()
-	if len(p.spec.Targets) == 0 {
-		return failoverTarget{}, -1
-	}
-	candidates := p.candidateIndicesForLocked(exclude, true, udp)
-	if len(candidates) == 0 {
-		candidates = p.candidateIndicesForLocked(exclude, false, udp)
-	}
-	if len(candidates) == 0 {
-		return failoverTarget{}, -1
-	}
-	index := candidates[0]
-	switch p.spec.Strategy {
-	case "weighted":
-		index = p.weightedPickLocked(candidates)
-	case "least_load":
-		index = p.leastLoadPickLocked(candidates)
-	case "auto":
-		index = p.autoPickLocked(candidates)
-	case "round_robin":
-		index = candidates[p.roundRobinNext%len(candidates)]
-		p.roundRobinNext = (p.roundRobinNext + 1) % 1000000
-	case "random":
-		if p.rng == nil {
-			p.rng = newFailoverRand(p.ruleID, p.sourcePort)
-		}
-		index = candidates[p.rng.Intn(len(candidates))]
-	case "ip_hash":
-		key := hashKey
-		if key == "" {
-			key = strconv.Itoa(p.sourcePort)
-		}
-		index = p.rendezvousPickLocked(candidates, key)
-	default:
-		if udp && p.udpSeparateLocked() {
-			index = p.udpFallbackIndexLocked(candidates, exclude)
-		} else if !p.healthyLocked(p.activeIndex) || (exclude != nil && exclude[p.activeIndex]) {
-			// 当前这条用不了（挂了、或这条连接刚在它上面拨失败）：在候选里优先挑出口 IP 一样的（2.2.251），
-			// 没有就还是第一条，和以前一样。全都不健康时候选是兜底的全部，挑不出健康的，照旧第一条。
-			index = candidates[0]
-			if pick, _ := p.escapePickLocked(candidates, p.activeIndex, -1, udp); pick >= 0 {
-				index = pick
-			}
-		} else {
-			index = p.activeIndex
-		}
-		// 挑出来的这条所在线路选了「一起分」：在这条线路的几个落地之间分（2.2.245）。
-		index = p.spreadWithinLineLocked(index, hashKey, exclude, udp)
-	}
-	return p.spec.Targets[index], index
 }
 
 func (p *failoverProxy) setActiveLocked(index int, reason string) {

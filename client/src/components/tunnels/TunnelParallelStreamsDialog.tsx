@@ -3,7 +3,6 @@ import { toast } from "sonner";
 import {
   normalizeTunnelParallelStreams,
   TUNNEL_PARALLEL_STREAM_OPTIONS,
-  TUNNEL_PARALLEL_STREAMS_ENTRY_AGENT_VERSION,
 } from "@shared/tunnelParallelStreams";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -30,9 +29,7 @@ export default function TunnelParallelStreamsDialog({ tunnel, onClose }: {
     onSuccess: (result) => {
       void utils.tunnels.list.invalidate();
       if (result.parallelStreams < 2) toast.success("已改回单路");
-      else if (result.outdatedHosts.length > 0) {
-        toast.warning(`已保存为 ${result.parallelStreams} 路并发；${result.outdatedHosts.join("、")} 的 Agent 还太旧，升级前先按单路跑`);
-      } else toast.success(`已开启 ${result.parallelStreams} 路并发：每条连接拆到 ${result.parallelStreams} 条并行连接上`);
+      else toast.success(`已开启 ${result.parallelStreams} 路并发：每条连接拆到 ${result.parallelStreams} 条并行连接上`);
       onClose();
     },
     onError: (error) => toast.error(error.message || "设置失败"),
@@ -72,7 +69,6 @@ export default function TunnelParallelStreamsDialog({ tunnel, onClose }: {
           <ul className="list-disc space-y-1 pl-4 text-xs text-muted-foreground">
             <li>路数不是越多越好：线路本身没有按连接限速时，多拆只会多一点头部开销。一般 2–4 路就够。</li>
             <li>只拆 TCP；UDP 照旧。改了之后新连接生效，正在传的连接不受影响。</li>
-            <li>需要入口 Agent {TUNNEL_PARALLEL_STREAMS_ENTRY_AGENT_VERSION} 或更新（中转、出口 2.2.194 起）。版本不够时先按单路跑，不会断流。</li>
           </ul>
         </div>
         <DialogFooter>

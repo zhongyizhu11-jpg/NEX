@@ -10,8 +10,7 @@
 */
 import { randomUUID } from "node:crypto";
 
-import { isAgentVersionAtLeast } from "../../shared/version";
-import { NETTUNE_MIN_AGENT_VERSION, normalizeNetTuneResult, type NetTuneResult } from "../../shared/netTune";
+import { normalizeNetTuneResult, type NetTuneResult } from "../../shared/netTune";
 import { registerAgentExtModule, wakeAgentExt, type AgentExtHost } from "./agentExt";
 
 export const NETTUNE_PENDING_TIMEOUT_MS = 3 * 60_000;
@@ -44,10 +43,6 @@ function expirePending(state: HostState, now: number) {
   }
 }
 
-export function hostSupportsNetTune(host: { agentVersion?: string | null } | null | undefined) {
-  return !!host && isAgentVersionAtLeast(String(host.agentVersion || ""), NETTUNE_MIN_AGENT_VERSION);
-}
-
 /** 点「检查」或「一键调优」。同一台主机已经有一轮在等时直接返回那一轮（不叠加）。 */
 export function requestNetTuneRun(hostId: number, apply: boolean, now = Date.now()): NetTunePending {
   const state = stateOf(hostId);
@@ -78,7 +73,7 @@ function directiveFor(host: AgentExtHost, now = Date.now()) {
   const state = states.get(Number(host.id));
   if (!state) return undefined;
   expirePending(state, now);
-  if (!state.pending || !hostSupportsNetTune(host as { agentVersion?: string | null })) return undefined;
+  if (!state.pending) return undefined;
   return { runs: [{ id: state.pending.id, apply: state.pending.apply }] };
 }
 

@@ -7,15 +7,13 @@
 
 import net from "node:net";
 import {
-  DIAGNOSTIC_NEEDS_UPGRADE_SUMMARY,
-  LINK_DIAGNOSTICS_AGENT_VERSION,
   type DiagnosticGroup,
   type DiagnosticItem,
   type DiagnosticStatus,
 } from "../shared/linkDiagnostics";
 import { classifyIpAddress, isPrivateOrReservedAddress, sameNetworkAddress } from "../shared/ipAddress";
 import { forwardAccessBlockedReasonText } from "../shared/forwardAccessMessage";
-import { isAgentVersionAtLeast, isAgentVersionBehind } from "../shared/version";
+import { isAgentVersionBehind } from "../shared/version";
 import { AGENT_VERSION } from "../shared/versions";
 import { fxpRuntimeIncompatible, fxpRuntimeIssueMessage } from "../shared/fxpRuntime";
 import type { DiagnosticsAgentCheck, DiagnosticsTaskStatus } from "./diagnosticsAgentTasks";
@@ -278,9 +276,6 @@ export function evaluateHostItem(host: DiagnosticHostFacts, options: { requireFx
   if (!version) {
     return item({ ...base, status: "warn", summary: parts.join(" · "), hint: "Agent 没报版本，升级一次 Agent" });
   }
-  if (!isAgentVersionAtLeast(version, LINK_DIAGNOSTICS_AGENT_VERSION)) {
-    return item({ ...base, status: "warn", summary: `${parts.join(" · ")}（主机上的检查需要 ${LINK_DIAGNOSTICS_AGENT_VERSION}）`, hint: `在主机页点「升级 Agent」到 ${AGENT_VERSION}` });
-  }
   if (isAgentVersionBehind(version, AGENT_VERSION)) {
     return item({ ...base, status: "pass", summary: `${parts.join(" · ")}（可升级到 ${AGENT_VERSION}）` });
   }
@@ -437,15 +432,11 @@ export type PlannedAgentCheck = {
 export type AgentHostGate = {
   online: boolean;
   agentVersion?: string | null;
-  /** 面板给这台排了任务；没排（离线 / 太旧）就是 undefined。 */
+  /** 面板给这台排了任务；没排（离线）就是 undefined。 */
   taskId?: string;
   /** 非管理员看别人的主机：不给原始输出。 */
   detailVisible: boolean;
 };
-
-export function agentSupportsDiagnostics(agentVersion: string | null | undefined) {
-  return isAgentVersionAtLeast(agentVersion, LINK_DIAGNOSTICS_AGENT_VERSION);
-}
 
 /** 把这台主机上计划的检查变成清单里的项：没排任务、还在等、超时、已回报各是什么样。 */
 export function agentCheckItems(
@@ -464,13 +455,6 @@ export function agentCheckItems(
     };
     if (!gate.online) {
       return item({ ...base, status: "skip", summary: "主机离线，没法在上面检查" });
-    }
-    if (!agentSupportsDiagnostics(gate.agentVersion)) {
-      return item({
-        ...base, status: "skip", needsUpgrade: true,
-        summary: DIAGNOSTIC_NEEDS_UPGRADE_SUMMARY,
-        hint: `这台是 ${gate.agentVersion || "未知版本"}，在主机页点「升级 Agent」后再诊断`,
-      });
     }
     if (!gate.taskId || !task) {
       return item({ ...base, status: "skip", summary: "这一轮诊断的结果已过期，请重新诊断" });

@@ -5,7 +5,7 @@
   规则、封禁列表、主机地址这些每台主机都要读的东西缓存 10 秒，保存时立即作废 ——
   一百台主机一分钟一轮，不缓存就是一分钟几百次同样的查询。
 */
-import { registerAgentExtModule, hostSupportsAgentExt, wakeAgentExt, type AgentExtHost } from "./agentExt";
+import { registerAgentExtModule, wakeAgentExt, type AgentExtHost } from "./agentExt";
 import { buildFirewallDirective, counterDelta, effectiveFirewallMode } from "./firewallDirective";
 import {
   addDailyStats,
@@ -97,7 +97,6 @@ export async function firewallPlanForHost(hostId: number) {
 }
 
 async function directiveForHost(host: AgentExtHost) {
-  if (!hostSupportsAgentExt(host)) return undefined;
   const hostId = Number(host.id);
   const { context, rule, geo } = await firewallPlanForHost(hostId);
   scheduleCountryDataRefresh(context.selectedCountries);
@@ -207,7 +206,6 @@ export async function wakeFirewallHosts(hostIds?: number[]) {
   const hosts = await listFirewallHosts();
   const targets = hostIds ? hosts.filter((host) => hostIds.includes(host.id)) : hosts;
   for (const host of targets) {
-    if (!hostSupportsAgentExt(host)) continue;
     try {
       wakeAgentExt(host.id, "firewall");
     } catch {

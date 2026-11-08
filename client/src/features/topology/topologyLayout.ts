@@ -22,6 +22,11 @@ export type LayoutOptions = {
   margin?: number;
   /** 排到最后一列的节点种类 */
   terminalKinds?: readonly string[];
+  /**
+   * 排在最右边的几列，每一组种类占一列、按给的先后排（比如「我的线路」：落地一列、出口再一列）。
+   * 给了就不看 terminalKinds；不给就是 terminalKinds 那一列，和以前一样。没有节点的那组不占列。
+   */
+  terminalTiers?: readonly (readonly string[])[];
   sweeps?: number;
 };
 
@@ -61,7 +66,9 @@ export function layoutTopology(nodesInput: readonly LayoutNodeInput[], edgesInpu
   const nodeIds = Array.from(new Set(nodesInput.map((node) => node.id))).sort(compareIds);
   const kindById = new Map(nodesInput.map((node) => [node.id, node.kind]));
   const known = new Set(nodeIds);
-  const terminal = new Set(nodeIds.filter((id) => opts.terminalKinds.includes(kindById.get(id) || "")));
+  const tiers = opts.terminalTiers ?? [opts.terminalKinds];
+  const tierOf = (id: string) => tiers.findIndex((kinds) => kinds.includes(kindById.get(id) || ""));
+  const terminal = new Set(nodeIds.filter((id) => tierOf(id) >= 0));
 
   // 邻接表（去重、排序，保证遍历顺序确定）
   const outgoing = new Map<string, string[]>();
@@ -134,7 +141,9 @@ export function layoutTopology(nodesInput: readonly LayoutNodeInput[], edgesInpu
   let lastInner = -1;
   for (const id of nodeIds) if (!terminal.has(id)) lastInner = Math.max(lastInner, layer.get(id) ?? 0);
   const terminalLayer = lastInner + 1;
-  for (const id of terminal) layer.set(id, Math.max(terminalLayer, 0));
+  // 每组终点各占一列，按给的先后；没有节点的组不占列（只有一组时就是以前的「最后一列」）。
+  const usedTiers = Array.from(new Set(Array.from(terminal, tierOf))).sort((left, right) => left - right);
+  for (const id of terminal) layer.set(id, Math.max(terminalLayer + usedTiers.indexOf(tierOf(id)), 0));
   const layerCount = nodeIds.length === 0 ? 0 : Math.max(...nodeIds.map((id) => layer.get(id) ?? 0)) + 1;
   const layers: string[][] = Array.from({ length: layerCount }, () => []);
   for (const id of nodeIds) layers[layer.get(id) ?? 0].push(id);

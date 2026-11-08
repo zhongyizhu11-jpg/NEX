@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"math"
 	"net"
@@ -325,48 +324,6 @@ func targetStateKey(target failoverTarget) string {
 	return failoverTargetLabel(target) + "|" + host + ":" + strconv.Itoa(port)
 }
 
-// 面板下发的中转提示是运行时状态，不进落盘快照：Agent 重启后以面板下一次心跳给的为准。
-func stripFailoverRelayHints(spec failoverSpec) failoverSpec {
-	targets := make([]failoverTarget, len(spec.Targets))
-	copy(targets, spec.Targets)
-	for i := range targets {
-		targets[i].Down = false
-		targets[i].DownReason = ""
-		targets[i].ExtraLatencyMs = 0
-		targets[i].LoadPct = 0
-		targets[i].ExitIP = ""
-	}
-	spec.Targets = targets
-	return spec
-}
-
-/*
-failoverSpecSignatureJSON 动作签名（actionCommandSignature）和托管服务签名（managedServiceActionSignature）
-里的线路组规格：先去掉运行时提示再序列化。
-
-提示（中转异常、下游延迟、沿途负载、出口 IP）面板每一轮都可能换。算进这两个签名的话，提示一变 Agent 就当成
-动作变了重新执行一遍，realm / socat 这类托管服务跟着重启，正在走的连接全断。去掉之后提示照样送得到：
-runningRules 每次心跳都同步一遍（syncRunningRuleState → startFailoverProxyLocked），代理的规格签名没变就只
-原地换上提示（applyRelayHintsLocked）。
-
-没带提示的规格序列化出来和直接 json.Marshal 逐字节相同（Targets 为 nil 时保持 nil，不变成 []），
-升级后这类规格的签名不变，不会因此重做一遍。
-*/
-func failoverSpecSignatureJSON(spec *failoverSpec) (string, bool) {
-	if spec == nil {
-		return "", false
-	}
-	stripped := *spec
-	if spec.Targets != nil {
-		stripped = stripFailoverRelayHints(*spec)
-	}
-	raw, err := json.Marshal(stripped)
-	if err != nil {
-		return "", false
-	}
-	return string(raw), true
-}
-
 // 这条出站此刻能不能用：本机探测通，而且没被面板按「中转异常」标掉。
 func (p *failoverProxy) healthyLocked(index int) bool {
 	if index < 0 || index >= len(p.spec.Targets) {
@@ -489,65 +446,6 @@ func (p *failoverProxy) precheckIssueLocked(index int) string {
 		return fmt.Sprintf("loss %.0f%%", summary.lossPct)
 	}
 	return ""
-}
-
-/*
-面板下发的「中转异常」提示变了：不重建代理，只改这几条的可用性，再重新选路。
-
-提示不进签名（见 failoverSignature），所以同一份规格反复下发只会走到这里。变化才记事件：
-面板每次心跳都会重发同样的提示。
-*/
-func (p *failoverProxy) applyRelayHintsLocked(targets []failoverTarget) {
-	p.ensureHealthStateLocked()
-	reason := ""
-	changed := false
-	for i, target := range targets {
-		if i >= len(p.spec.Targets) {
-			break
-		}
-		// 下游延迟、沿途负载只影响评分和「自动」的权重：直接换上，下一轮探测按新值评估，不记事件、不重新选路。
-		p.spec.Targets[i].ExtraLatencyMs = target.ExtraLatencyMs
-		p.spec.Targets[i].LoadPct = target.LoadPct
-		// 出口 IP 只在下一次换路时当平手取舍用，同样直接换上。
-		p.spec.Targets[i].ExitIP = strings.TrimSpace(target.ExitIP)
-		down := target.Down
-		downReason := strings.TrimSpace(target.DownReason)
-		if !down {
-			downReason = ""
-		}
-		if down == p.relayDown[i] && downReason == p.relayDownReason[i] {
-			continue
-		}
-		flipped := down != p.relayDown[i]
-		p.relayDown[i] = down
-		p.relayDownReason[i] = downReason
-		p.spec.Targets[i].Down = down
-		p.spec.Targets[i].DownReason = downReason
-		if !flipped {
-			continue
-		}
-		changed = true
-		if down {
-			text := "relay down"
-			if downReason != "" {
-				text = "relay down: " + downReason
-			}
-			logf("failover target relay down rule=%d source=%d index=%d target=%s reason=%s", p.ruleID, p.sourcePort, i, failoverTargetLabel(p.spec.Targets[i]), downReason)
-			p.recordTargetEventLocked(i, "unhealthy", text)
-			if i == p.activeIndex || reason == "" {
-				reason = text
-			}
-		} else {
-			logf("failover target relay recovered rule=%d source=%d index=%d target=%s", p.ruleID, p.sourcePort, i, failoverTargetLabel(p.spec.Targets[i]))
-			p.recordTargetEventLocked(i, "recovered", "relay recovered")
-			if reason == "" {
-				reason = "relay recovered"
-			}
-		}
-	}
-	if changed {
-		p.updateFallbackActiveLocked(reason)
-	}
 }
 
 /*

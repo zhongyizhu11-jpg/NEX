@@ -46,7 +46,6 @@ export default function QuotaModeSection(_props: Record<string, never>) {
   const data = query.data!;
   const current = (setMode.isPending && setMode.variables?.mode) || data.mode;
   const active = OPTIONS.find((option) => option.value === current) || OPTIONS[0];
-  const outdated = data.outdatedHosts || [];
   const noConntrack = data.noConntrackHosts || [];
   const names = (list: string[]) => `${list.slice(0, 3).join("、")}${list.length > 3 ? ` 等 ${list.length} 台` : ""}`;
 
@@ -73,11 +72,6 @@ export default function QuotaModeSection(_props: Record<string, never>) {
           onChange={(mode) => setMode.mutate({ mode })}
         />
         <p className="text-meta text-muted-foreground">{active.hint}</p>
-        {current === "cut" && outdated.length > 0 ? (
-          <p className="text-meta text-[var(--fx-warn-text)]">
-            {names(outdated)} 的 Agent 低于 2.2.216，这几台上的 iptables / nftables 连接不会被清掉，需要把 Agent 升级到 2.2.216。
-          </p>
-        ) : null}
         {current === "cut" && noConntrack.length > 0 ? (
           <p className="text-meta text-[var(--fx-warn-text)]">
             {names(noConntrack)} 没有装 conntrack，这几台上的 iptables / nftables 连接不会被清掉。把 Agent 升级到最新会自动装上。

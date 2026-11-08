@@ -6,7 +6,7 @@ import { ExitHostPanel } from "@/components/proxy/ExitQualityView";
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
-import { CollapsibleSection, Row } from "./HostDetailDialog";
+import { CollapsibleSection } from "./HostDetailDialog";
 
 /*
   主机详情里「流媒体 / AI 解锁」一节（Agent 2.2.226 起）：默认折叠，展开是和订阅页节点菜单「出口检测」
@@ -84,10 +84,6 @@ function HostUnlockBody({ hostId }: { hostId: number }) {
   const data = status.data;
   return (
     <>
-      {data && !data.supported ? (
-        <Row label="解锁检测" value={<span className="text-[var(--fx-warn-text)]">需要升级 Agent（{data.minAgentVersion} 起）</span>} />
-      ) : null}
-
       {quality.data ? (
         <ExitHostPanel host={quality.data.host} targets={quality.data.targets} />
       ) : (
@@ -104,8 +100,8 @@ function HostUnlockBody({ hostId }: { hostId: number }) {
                 size="sm"
                 variant="outline"
                 className="h-7 px-2.5 text-xs"
-                disabled={!data.supported || !data.online || !!pending || start.isPending}
-                title={!data.supported ? "需要升级 Agent" : !data.online ? "主机离线" : "从这台主机按这个出口去各服务测一轮"}
+                disabled={!data.online || !!pending || start.isPending}
+                title={!data.online ? "主机离线" : "从这台主机按这个出口去各服务测一轮"}
                 onClick={() => start.mutate({ hostId, family })}
               >
                 {pending ? "检测中…" : label}

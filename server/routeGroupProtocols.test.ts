@@ -12,11 +12,9 @@ import test from "node:test";
  * 用户态转发工具把「另拨」的目标换成它。服务端这一半要做到：
  *
  *   · realm / socat / nginx 前置时拨本机的调度器，调度规格跟着下发；
- *   · UDP、TCP+UDP 只在调度所在机器的 Agent 到了 2.2.199 才下发调度 —— 更老的只开 TCP 监听，
- *     UDP 转过去就进了黑洞。版本不够时前面的转发工具拨路径 A，不切换；
+ *   · UDP、TCP+UDP 下发 UDP 调度；
  *   · 中转机上的中继规则跟着父规则的协议走；
- *   · gost 端口转发的「按访客固定」：面板让 gost 给调度器加一个 PROXY 头、调度器读完就扔，
- *     只在 Agent 认得这个（2.2.199 起）时才这么做 —— 老 Agent 会把头原样转给目标；
+ *   · gost 端口转发的「按访客固定」：面板让 gost 给调度器加一个 PROXY 头、调度器读完就扔；
  *   · Nginx 隧道：调度器在出口机上，出口的 nginx 拨它（NEX 隧道见 routeGroupForwardX.test.ts）。
  *
  * 起一个真的 sqlite 和真的心跳路由跑一遍。
@@ -33,16 +31,14 @@ type Heartbeat = {
 type Outcome = {
   relays: Array<{ hostId: number; protocol: string; forwardType: string; routePathKey: string }>;
   mainDial: { ip: string; port: number } | null;
-  oldAgent: Heartbeat;
-  newAgent: Heartbeat;
-  echo: { before: boolean[]; ready: boolean[]; oldScheduler: boolean[]; oldFarEnd: boolean[]; socat: boolean[] };
+  agent: Heartbeat;
+  echo: { relayed: boolean[]; socat: boolean[] };
   kernelError: string;
   udpAllowed: boolean;
   nginxTunnelAllowed: boolean;
   forwardxTunnelAllowed: boolean;
   unknownTunnelError: string;
   statusHosts: Record<string, number[]>;
-  oldest: string[];
 };
 
 function run(): Outcome {
@@ -104,15 +100,14 @@ function run(): Outcome {
     );
 
     /*
-      7–9：GOST 隧道（入口东京、出口入口机 1），UDP。第三台机器是一个 Agent 很旧的出口节点：
+      7–9：GOST 隧道（入口东京、出口入口机 1），UDP。第三台机器是一个额外的出口节点：
         7 —— 开着负载均衡，但这个节点停用了；
         8 —— 节点还在，但负载均衡关掉了；
         9 —— 开着负载均衡、节点也开着（它真的在出流量）。
-      7、8 用不上那台旧出口，UDP 调度照常下发；9 的入口会把流量分给它，得每个出口都够版本才下发。
     */
     await exec(
       'INSERT INTO hosts (id, name, ip, ipv4, "hostType", "agentToken", "agentVersion", "userId", "isOnline", "lastHeartbeat") VALUES (3, ?, ?, ?, ?, ?, ?, 1, 1, ?)',
-      ["旧出口", "203.0.113.3", "203.0.113.3", "slave", "tok3", "2.2.150", Math.floor(Date.now() / 1000)],
+      ["出口节点", "203.0.113.3", "203.0.113.3", "slave", "tok3", "2.2.251", Math.floor(Date.now() / 1000)],
     );
     for (const [tunnelId, listenPort, loadBalanceEnabled, nodeEnabled, ruleId, sourcePort] of [
       [2, 22007, 1, 0, 7, 21007],
@@ -201,21 +196,12 @@ function run(): Outcome {
       }
       return { specs, gostServices, realmConfig, socatUnits, nginxConfig };
     };
-    const oldAgent = await beat("2.2.198");
-    const newAgent = await beat("2.2.199");
-    // UDP 回声探测（2.2.251）：调度那台（入口机 1）和对端（东京中转 2）都够新才带 probeUdpEcho。
+    const agent = await beat("2.2.251");
+    // UDP 回声探测：对端（东京中转 2）是自己的机器才带 probeUdpEcho。
     const echoFlags = (heartbeat, ruleId) => ((heartbeat.specs[String(ruleId)] || {}).targets || []).map((target) => target.probeUdpEcho === true);
-    await exec('UPDATE hosts SET "agentVersion" = ? WHERE id = 2', ["2.2.251"]);
-    const echoReady = await beat("2.2.251");
-    const echoOldScheduler = await beat("2.2.250");
-    await exec('UPDATE hosts SET "agentVersion" = ? WHERE id = 2', ["2.2.250"]);
-    const echoOldFarEnd = await beat("2.2.251");
     const echo = {
-      before: echoFlags(newAgent, 1),
-      ready: echoFlags(echoReady, 1),
-      oldScheduler: echoFlags(echoOldScheduler, 1),
-      oldFarEnd: echoFlags(echoOldFarEnd, 1),
-      socat: echoFlags(echoReady, 4),
+      relayed: echoFlags(agent, 1),
+      socat: echoFlags(agent, 4),
     };
     server.close();
 
@@ -253,7 +239,7 @@ function run(): Outcome {
     } catch (error) {
       unknownTunnelError = String(error && error.message || error);
     }
-    // 线路面板按哪几台机器读 Agent 版本：和心跳同一个口径（真的从库里读隧道和出口节点）。
+    // 调度器跑在哪几台机器上：线路面板和心跳同一个口径（真的从库里读隧道和出口节点）。
     const dbModule = await import(url("server/db.ts"));
     const statusHosts = {};
     for (const tunnelId of [1, 2, 3, 4]) {
@@ -263,14 +249,7 @@ function run(): Outcome {
     statusHosts.direct = crud.routeSchedulerHostIds(5, null, []);
     statusHosts.forwardx = crud.routeSchedulerHostIds(2, { id: 9, mode: "forwardx", exitHostId: 1, loadBalanceEnabled: 1 }, [{ hostId: 3, listenPort: 1, isEnabled: 1 }]);
     statusHosts.forwardxSingle = crud.routeSchedulerHostIds(2, { id: 10, mode: "forwardx", exitHostId: 1, loadBalanceEnabled: 0 }, [{ hostId: 3, listenPort: 1, isEnabled: 1 }]);
-    const rulesRouter = await import(url("server/routers/rules.ts"));
-    const oldest = [
-      rulesRouter.oldestAgentVersion(["2.2.199", "2.2.150"]),
-      rulesRouter.oldestAgentVersion(["2.2.150", "2.2.199"]),
-      rulesRouter.oldestAgentVersion(["2.2.199"]),
-      rulesRouter.oldestAgentVersion(["2.2.199", ""]),
-    ];
-    console.log("OUTCOME " + JSON.stringify({ relays, mainDial, oldAgent, newAgent, echo, kernelError, udpAllowed, nginxTunnelAllowed, forwardxTunnelAllowed, unknownTunnelError, statusHosts, oldest }));
+    console.log("OUTCOME " + JSON.stringify({ relays, mainDial, agent, echo, kernelError, udpAllowed, nginxTunnelAllowed, forwardxTunnelAllowed, unknownTunnelError, statusHosts }));
   `;
   const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
     cwd: path.resolve(import.meta.dirname, ".."),
@@ -292,79 +271,54 @@ test("中转机上的中继规则跟着父规则的协议走", () => {
   assert.ok(outcome.mainDial, "主线路经过中转，应当解析出拨号地址");
 });
 
-test("Agent 2.2.199 起：UDP 规则下发 UDP 调度，gost 的 UDP 服务拨本机的调度器", () => {
-  const spec = outcome.newAgent.specs["1"];
+test("UDP 规则下发 UDP 调度，gost 的 UDP 服务拨本机的调度器", () => {
+  const spec = outcome.agent.specs["1"];
   assert.ok(spec, "UDP 线路组没有下发调度");
   assert.equal(spec.protocol, "udp");
   assert.equal(spec.targets.length, 2);
-  const service = outcome.newAgent.gostServices["fwx-1-udp"];
+  const service = outcome.agent.gostServices["fwx-1-udp"];
   assert.ok(service, "UDP 规则没生成 gost UDP 服务");
   assert.equal(service.forwarder.nodes[0].addr, `127.0.0.1:${spec.listenPort}`);
 });
 
-test("Agent 早于 2.2.199：UDP 不下发调度，gost 直接拨路径 A（经过中转），不绕开中转", () => {
-  assert.equal(outcome.oldAgent.specs["1"], undefined, "老 Agent 只会开 TCP 监听，UDP 调度下发过去是黑洞");
-  const service = outcome.oldAgent.gostServices["fwx-1-udp"];
-  assert.ok(service, "UDP 规则没生成 gost UDP 服务");
-  const dial = outcome.mainDial!;
-  assert.equal(service.forwarder.nodes[0].addr, `${dial.ip}:${dial.port}`, "老 Agent 时应当拨路径 A 的中转，而不是直奔落地");
-});
-
-test("UDP 回声探测：调度那台和对端中转都够 2.2.251 才带 probeUdpEcho；直连手填的落地不带", () => {
-  assert.deepEqual(outcome.echo.before, [false, false], "对端中转的版本没报过就不带");
-  assert.deepEqual(outcome.echo.ready, [true, false], "主线路经过东京中转（新 Agent）带；备用直连手填的落地不知道是谁的机器，不带");
-  assert.deepEqual(outcome.echo.oldScheduler, [false, false], "调度那台太老不带：它不认这个字段");
-  assert.deepEqual(outcome.echo.oldFarEnd, [false, false], "对端中转太老不带：它的 UDP 监听不认探测报，会转给落地");
+test("UDP 回声探测：对端是自己的中转才带 probeUdpEcho；直连手填的落地不带", () => {
+  assert.deepEqual(outcome.echo.relayed, [true, false], "主线路经过东京中转带；备用直连手填的落地不知道是谁的机器，不带");
   assert.deepEqual(outcome.echo.socat, [false, false], "直连路径不带");
 });
 
 test("realm 前置：拨本机的调度器，调度规格跟着 realm 的动作下发", () => {
-  for (const heartbeat of [outcome.oldAgent, outcome.newAgent]) {
-    const spec = heartbeat.specs["2"];
-    assert.ok(spec, "realm 规则没有下发调度");
-    assert.equal(spec.protocol, "tcp");
-    assert.match(heartbeat.realmConfig, new RegExp(`remote = "127\\.0\\.0\\.1:${spec.listenPort}"`), heartbeat.realmConfig);
-  }
+  const spec = outcome.agent.specs["2"];
+  assert.ok(spec, "realm 规则没有下发调度");
+  assert.equal(spec.protocol, "tcp");
+  assert.match(outcome.agent.realmConfig, new RegExp(`remote = "127\\.0\\.0\\.1:${spec.listenPort}"`), outcome.agent.realmConfig);
 });
 
-test("socat 前置、TCP+UDP：新 Agent 两个 socat 都拨调度器；老 Agent 两个都拨规则目标", () => {
-  const spec = outcome.newAgent.specs["4"];
+test("socat 前置、TCP+UDP：两个 socat 都拨调度器", () => {
+  const spec = outcome.agent.specs["4"];
   assert.ok(spec, "socat TCP+UDP 规则没有下发调度");
   assert.equal(spec.protocol, "both");
-  assert.equal(outcome.newAgent.socatUnits.length, 2);
-  for (const unit of outcome.newAgent.socatUnits) {
+  assert.equal(outcome.agent.socatUnits.length, 2);
+  for (const unit of outcome.agent.socatUnits) {
     assert.match(unit, new RegExp(`(TCP|UDP):127\\.0\\.0\\.1:${spec.listenPort}`), unit);
-  }
-  assert.equal(outcome.oldAgent.specs["4"], undefined);
-  for (const unit of outcome.oldAgent.socatUnits) {
-    assert.match(unit, /(TCP|UDP):198\.51\.100\.7:8443/, unit);
   }
 });
 
 test("nginx 前置：upstream 指向调度器，nginx 的动作带着调度规格", () => {
-  const spec = outcome.newAgent.specs["5"];
+  const spec = outcome.agent.specs["5"];
   assert.ok(spec, "nginx 规则没有下发调度");
-  assert.ok(outcome.newAgent.nginxConfig.includes(`127.0.0.1:${spec.listenPort}`), outcome.newAgent.nginxConfig);
-  assert.ok(!/server 198\.51\.100\.7:9443/.test(outcome.newAgent.nginxConfig), "nginx 还在直连规则目标");
+  assert.ok(outcome.agent.nginxConfig.includes(`127.0.0.1:${spec.listenPort}`), outcome.agent.nginxConfig);
+  assert.ok(!/server 198\.51\.100\.7:9443/.test(outcome.agent.nginxConfig), "nginx 还在直连规则目标");
 });
 
-test("gost 按访客固定：新 Agent 由 gost 给调度器加一个 PROXY 头、调度器读完就扔", () => {
-  const spec = outcome.newAgent.specs["3"];
+test("gost 按访客固定：由 gost 给调度器加一个 PROXY 头、调度器读完就扔", () => {
+  const spec = outcome.agent.specs["3"];
   assert.ok(spec);
   assert.equal(spec.strategy, "ip_hash");
   assert.equal(spec.proxyProtocolReceive, true);
   assert.equal(spec.proxyProtocolStrip, true);
-  assert.deepEqual(outcome.newAgent.gostServices["fwx-3-tcp"].handler.metadata, { proxyProtocol: "1" });
-});
-
-test("gost 按访客固定：老 Agent 不加头（它会把头原样转给目标）", () => {
-  const spec = outcome.oldAgent.specs["3"];
-  assert.ok(spec);
-  assert.equal(spec.proxyProtocolStrip, undefined);
-  assert.equal(spec.proxyProtocolReceive, false);
-  assert.equal(outcome.oldAgent.gostServices["fwx-3-tcp"].handler.metadata, undefined);
+  assert.deepEqual(outcome.agent.gostServices["fwx-3-tcp"].handler.metadata, { proxyProtocol: "1" });
   // 不按访客分的 gost 规则从来不加头。
-  assert.equal(outcome.newAgent.gostServices["fwx-1-udp"].handler.metadata, undefined);
+  assert.equal(outcome.agent.gostServices["fwx-1-udp"].handler.metadata, undefined);
 });
 
 test("保存时只拦内核转发，不再拦 UDP 和 realm / socat / nginx", () => {
@@ -372,17 +326,15 @@ test("保存时只拦内核转发，不再拦 UDP 和 realm / socat / nginx", ()
   assert.equal(outcome.udpAllowed, true);
 });
 
-test("Nginx 隧道：出口的 nginx 拨出口机上的调度器，规格下发给出口机；老 Agent 拨路径 A", () => {
-  const spec = outcome.newAgent.specs["6"];
+test("Nginx 隧道：出口的 nginx 拨出口机上的调度器，规格下发给出口机", () => {
+  const spec = outcome.agent.specs["6"];
   assert.ok(spec, "Nginx 隧道的线路组没有下发到出口机");
   assert.equal(spec.protocol, "both");
   assert.equal(spec.proxyProtocolReceive, false, "Nginx 隧道的出口不发 PROXY 头");
   for (const proto of ["tcp", "udp"]) {
     const upstream = new RegExp(`upstream fwx_texit_1_6_22006_${proto}\\s*\\{[^}]*127\\.0\\.0\\.1:${spec.listenPort}`);
-    assert.match(outcome.newAgent.nginxConfig, upstream, outcome.newAgent.nginxConfig);
+    assert.match(outcome.agent.nginxConfig, upstream, outcome.agent.nginxConfig);
   }
-  assert.equal(outcome.oldAgent.specs["6"], undefined, "出口机的 Agent 早于 2.2.199，TCP+UDP 不下发调度");
-  assert.match(outcome.oldAgent.nginxConfig, /upstream fwx_texit_1_6_22006_tcp\s*\{[^}]*198\.51\.100\.7:7443/, outcome.oldAgent.nginxConfig);
 });
 
 test("保存时放开 Nginx 隧道和 NEX 隧道，认不出来的隧道类型照样拦", () => {
@@ -391,15 +343,14 @@ test("保存时放开 Nginx 隧道和 NEX 隧道，认不出来的隧道类型�
   assert.match(outcome.unknownTunnelError, /这种隧道用不了线路组/);
 });
 
-test("负载均衡隧道：停用的出口节点、负载均衡关掉后留着的节点，不拖住 UDP 调度", () => {
-  assert.ok(outcome.newAgent.specs["7"], "停用的旧出口节点让 UDP 调度退回了路径 A");
-  assert.equal(outcome.newAgent.specs["7"].protocol, "udp");
-  assert.ok(outcome.newAgent.specs["8"], "负载均衡关掉后留着的旧节点让 UDP 调度退回了路径 A");
-  assert.equal(outcome.newAgent.specs["9"], undefined, "开着的出口里有一台旧 Agent：每个出口都够版本才下发");
-  assert.equal(outcome.oldAgent.specs["7"], undefined, "出口机自己是老 Agent 时照样不下发");
+test("负载均衡隧道：出口机照常收到 UDP 调度", () => {
+  for (const ruleId of ["7", "8", "9"]) {
+    assert.ok(outcome.agent.specs[ruleId], `规则 ${ruleId} 的 UDP 调度没下发到出口机`);
+    assert.equal(outcome.agent.specs[ruleId].protocol, "udp");
+  }
 });
 
-test("线路面板读版本的机器和心跳同一个口径；按最旧的那台说", () => {
+test("调度器跑在哪几台机器上：线路面板和心跳同一个口径", () => {
   assert.deepEqual(outcome.statusHosts["1"], [1], "Nginx 隧道：出口机");
   assert.deepEqual(outcome.statusHosts["2"], [1], "停用的出口节点不算");
   assert.deepEqual(outcome.statusHosts["3"], [1], "负载均衡关掉后留着的节点不算");
@@ -407,5 +358,4 @@ test("线路面板读版本的机器和心跳同一个口径；按最旧的那�
   assert.deepEqual(outcome.statusHosts.direct, [5], "直连规则：规则所在的机器");
   assert.deepEqual(outcome.statusHosts.forwardx, [1, 3], "NEX 隧道：出口和开着的负载均衡出口");
   assert.deepEqual(outcome.statusHosts.forwardxSingle, [1], "NEX 隧道没开负载均衡：只有出口");
-  assert.deepEqual(outcome.oldest, ["2.2.150", "2.2.150", "2.2.199", ""]);
 });

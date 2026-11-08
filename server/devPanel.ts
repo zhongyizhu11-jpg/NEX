@@ -1869,7 +1869,8 @@ async function seedRules(hostIds: number[], resources: DevResources, usersSeed: 
     await insertAndGetId("tcping_stats", {
       ruleId,
       hostId: rule.hostId,
-      latencyMs: 8 + ruleId * 11,
+      // 按第几条算，不按 id：开发库重建多次后 id 早过了几千，按 id 算出来是 7 万多毫秒。
+      latencyMs: 8 + (index + 1) * 11,
       isTimeout: false,
       recordedAt: nowDate(),
     });

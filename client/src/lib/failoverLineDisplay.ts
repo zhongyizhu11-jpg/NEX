@@ -61,7 +61,7 @@ export function describeFailoverLineDisplay(
   if (!policy) return null;
   const report = describeRoutePolicyReport(policy, { nowMs });
   const label = policy.mode === "weighted" ? spreadText[policy.strategy] : ROUTE_MODE_SHORT[policy.mode];
-  const activeIndex = policy.report.kind === "current" || policy.report.kind === "lastSwitch" ? policy.report.index : null;
+  const activeIndex = policy.report.kind === "current" ? policy.report.index : null;
   return {
     // 还不知道走哪条时报路径条数：「混合 · 3 条」比「混合 2」（备用条数）看得懂。
     text: activeIndex !== null ? `${label} · ${policy.lines[activeIndex].label}` : `${label} · ${policy.lines.length} 条`,

@@ -6,7 +6,7 @@
   上报：{ conntrack: 有没有 conntrack 工具, flushed: 累计清过几个端口 }，给设置页显示用。
 */
 import { queryRaw, quoteDbIdentifier } from "../dbRuntime";
-import { hostSupportsAgentExt, registerAgentExtModule, wakeAgentExt } from "./agentExt";
+import { registerAgentExtModule, wakeAgentExt } from "./agentExt";
 import { getQuotaMode, KERNEL_FORWARD_TYPES, quotaFlushItems } from "./quotaPolicy";
 
 const q = quoteDbIdentifier;
@@ -75,4 +75,3 @@ export function onUserTrafficQuotaExhausted(userId: number) {
   });
 }
 
-export { hostSupportsAgentExt };

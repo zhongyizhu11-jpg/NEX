@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import {
-  AGENT_MIMIC_INSTALL_VERSION,
   clearMimicInstallTasksForTest,
   enqueueMimicInstallTask,
   getMimicInstallTask,
@@ -14,12 +13,11 @@ import {
   takeMimicInstallTask,
 } from "./mimicInstallTasks";
 
-const host = { id: 7, name: "hk-1", isOnline: true, agentVersion: AGENT_MIMIC_INSTALL_VERSION };
+const host = { id: 7, name: "hk-1", isOnline: true, agentVersion: "2.2.251" };
 
-test("离线或 Agent 太旧的主机不排 mimic 安装任务", () => {
+test("离线的主机不排 mimic 安装任务", () => {
   clearMimicInstallTasksForTest();
   assert.throws(() => enqueueMimicInstallTask({ host: { ...host, isOnline: false }, mode: "install", version: "0.7.1" }), /离线/);
-  assert.throws(() => enqueueMimicInstallTask({ host: { ...host, agentVersion: "2.2.222" }, mode: "install", version: "0.7.1" }), /升级 Agent/);
   assert.equal(getMimicInstallTask(7), null);
 });
 

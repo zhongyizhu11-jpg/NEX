@@ -1,5 +1,5 @@
 /*
-  Agent 扩展通道（Agent 2.2.216 起）。
+  Agent 扩展通道。
 
   第五套主题那批要 Agent 配合的功能（地区规则、IP 封禁、在线 IP、安全巡检、Agent 中转、
   全部重启、导入现有配置）不去改那条已经很复杂的心跳，而是走一条独立的小通道：
@@ -14,11 +14,7 @@
   面板这边有变化想让 Agent 立刻来取（例如刚封了一个 IP），调 wakeAgentExt(hostId)，
   它通过已有的 SSE 事件流发一个 agent-ext 事件，Agent 收到就提前跑一轮。
 */
-import { isAgentVersionAtLeast } from "../../shared/version";
 import { sendAgentEvent } from "../agentEvents";
-
-/** 支持扩展通道的最低 Agent 版本。 */
-export const AGENT_EXT_MIN_VERSION = "2.2.216";
 
 export const AGENT_EXT_DEFAULT_INTERVAL_SECONDS = 60;
 export const AGENT_EXT_MIN_INTERVAL_SECONDS = 5;
@@ -47,10 +43,6 @@ export function registerAgentExtModule(module: AgentExtModule) {
   const name = String(module.name || "").trim();
   if (!/^[a-z][a-z0-9_-]{0,31}$/.test(name)) throw new Error(`invalid agent ext module name: ${name}`);
   modules.set(name, { ...module, name });
-}
-
-export function hostSupportsAgentExt(host: { agentVersion?: string | null } | null | undefined) {
-  return !!host && isAgentVersionAtLeast(String(host.agentVersion || ""), AGENT_EXT_MIN_VERSION);
 }
 
 /** 让这台主机的 Agent 立刻跑一轮扩展通道（没连着事件流时什么也不做，下一轮照常来取）。 */

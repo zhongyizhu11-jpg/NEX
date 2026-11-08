@@ -14,12 +14,10 @@
 import { randomBytes } from "node:crypto";
 import { executeRaw, insertAndGetId, queryRaw, quoteDbIdentifier } from "../dbRuntime";
 import { getSetting, setSetting } from "../repositories/settingsRepository";
-import { isAgentVersionAtLeast } from "../../shared/version";
 import {
   normalizeUnlockFamily,
   normalizeUnlockResults,
   normalizeUnlockSchedule,
-  UNLOCK_MIN_AGENT_VERSION,
   unlockChipItems,
   unlockScheduleIntervalSeconds,
   type UnlockChipItem,
@@ -40,10 +38,6 @@ const UNLOCK_SCHEDULE_TICK_MS = 30 * 60_000;
 const UNLOCK_SCHEDULE_BATCH = 20;
 
 export type UnlockTrigger = "manual" | "schedule";
-
-export function hostSupportsUnlock(host: { agentVersion?: string | null } | null | undefined) {
-  return !!host && isAgentVersionAtLeast(String(host.agentVersion || "").replace(/^v/i, ""), UNLOCK_MIN_AGENT_VERSION);
-}
 
 function nowSec() {
   return Math.floor(Date.now() / 1000);
@@ -91,7 +85,6 @@ export function startUnlockCheck(
 ) {
   const hostId = Number(host.id);
   if (!(hostId > 0)) throw new UnlockCheckError("主机不存在");
-  if (!hostSupportsUnlock(host)) throw new UnlockCheckError(`需要升级 Agent 到 ${UNLOCK_MIN_AGENT_VERSION} 或更新版本`);
   if (host.isOnline === false || host.isOnline === 0) throw new UnlockCheckError("主机离线，等它上线再检测");
   const family = normalizeUnlockFamily(input.family);
   sweepPending();
@@ -314,7 +307,7 @@ export function pickScheduledUnlockHosts<T extends { id: number; agentVersion?: 
   sweepPending();
   const busy = new Set(Array.from(pendingRuns.values()).map((run) => run.hostId));
   return hosts
-    .filter((host) => (host.isOnline === true || host.isOnline === 1) && hostSupportsUnlock(host) && !busy.has(Number(host.id)))
+    .filter((host) => (host.isOnline === true || host.isOnline === 1) && !busy.has(Number(host.id)))
     .map((host) => ({ host, last: lastCheckedAt.get(Number(host.id)) || 0 }))
     .filter((item) => now - item.last >= interval)
     .sort((a, b) => a.last - b.last)

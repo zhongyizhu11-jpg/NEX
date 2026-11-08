@@ -9,7 +9,6 @@ import {
   legacyFailoverFields,
   legacyRoutePaths,
   parseRoutePaths,
-  ROUTE_AUTO_SPREAD_AGENT_VERSION,
   routeAgentStrategy,
   routeDeliveryStrategy,
   routeDestSpreadTargetFields,
@@ -22,11 +21,11 @@ import {
   routeWeightShares,
   serializeRoutePaths,
   splitRouteReason,
+  unwrapRelayDownReason,
   validateRouteGroup,
   type RouteGroup,
   type RoutePath,
 } from "./routeGroup";
-import { compareVersions } from "./version";
 
 /**
  * 线路组的模型：路径、六种模式、模板、和老主备列的互推。
@@ -140,22 +139,18 @@ test("线路组 → 老 failover 列：备用是各路径的拨号地址，模�
   assert.equal(routeAgentStrategy({ mode: "smart", spread: "weighted" }), "fallback");
 });
 
-test("「自动」分法要 Agent 2.2.251：老 Agent 整组改发按权重，线路里的落地改发按负载分", () => {
-  const atLeast = (version: string) => (target: string) => compareVersions(version, target) >= 0;
+test("分配策略：「自动」整组和线路里的落地都原样下发；聚合按负载；不是权重负载模式就是主备", () => {
   const policy = { mode: "weighted" as const, spread: "auto" as const };
-  assert.equal(routeDeliveryStrategy(policy, "cold", atLeast(ROUTE_AUTO_SPREAD_AGENT_VERSION)), "auto");
-  assert.equal(routeDeliveryStrategy(policy, "cold", atLeast("2.2.250")), "weighted", "2.2.250 不认 auto，退成按权重");
-  assert.equal(routeDeliveryStrategy(policy, "cold", () => false), "weighted", "版本不知道按不够算");
-  assert.equal(routeDeliveryStrategy({ mode: "weighted", spread: "round_robin" }, "cold", () => false), "round_robin", "别的分法不受影响");
-  assert.equal(routeDeliveryStrategy({ mode: "weighted", spread: "least_load" }, "cold", atLeast("2.2.250")), "least_load");
-  assert.equal(routeDeliveryStrategy(policy, "aggregate", atLeast("2.2.250")), "least_load", "聚合照旧按负载");
-  assert.equal(routeDeliveryStrategy({ mode: "smart", spread: "auto" }, "cold", () => false), "fallback", "不是权重负载模式就是主备");
+  assert.equal(routeDeliveryStrategy(policy, "cold"), "auto");
+  assert.equal(routeDeliveryStrategy({ mode: "weighted", spread: "round_robin" }, "cold"), "round_robin");
+  assert.equal(routeDeliveryStrategy({ mode: "weighted", spread: "least_load" }, "cold"), "least_load");
+  assert.equal(routeDeliveryStrategy(policy, "aggregate"), "least_load", "聚合照旧按负载");
+  assert.equal(routeDeliveryStrategy({ mode: "smart", spread: "auto" }, "cold"), "fallback", "不是权重负载模式就是主备");
 
   const path = { destSpread: "auto" as const, tier: 0, dest: { ip: "10.0.0.1", port: 443 }, destNodeId: null };
-  assert.deepEqual(routeDestSpreadTargetFields(path, true, atLeast(ROUTE_AUTO_SPREAD_AGENT_VERSION)), { line: 0, landing: "10.0.0.1:443", spread: "auto" });
-  assert.deepEqual(routeDestSpreadTargetFields(path, true, atLeast("2.2.250")), { line: 0, landing: "10.0.0.1:443", spread: "least_load" });
-  assert.deepEqual(routeDestSpreadTargetFields({ ...path, destSpread: "ip_hash" }, true, atLeast("2.2.250")), { line: 0, landing: "10.0.0.1:443", spread: "ip_hash" });
-  assert.deepEqual(routeDestSpreadTargetFields(path, false, atLeast(ROUTE_AUTO_SPREAD_AGENT_VERSION)), {});
+  assert.deepEqual(routeDestSpreadTargetFields(path, true), { line: 0, landing: "10.0.0.1:443", spread: "auto" });
+  assert.deepEqual(routeDestSpreadTargetFields({ ...path, destSpread: "ip_hash" }, true), { line: 0, landing: "10.0.0.1:443", spread: "ip_hash" });
+  assert.deepEqual(routeDestSpreadTargetFields(path, false), {});
 });
 
 test("整个线路组只在开了主备时才有", () => {
@@ -220,6 +215,17 @@ test("路径怎么走的一句话，和原因的翻译", () => {
   assert.deepEqual(splitRouteReason("health check"), { base: "health check", sameExitIp: false });
   assert.equal(describeRouteReason("health check; same exit ip"), "连续探测不通，换到同出口 IP 的备用");
   assert.equal(describeRouteReason("relay down: 东京中转 01; same exit ip"), "中转异常：东京中转 01，换到同出口 IP 的备用");
+  // Agent 在面板给的原因外面再包一层「relay down: 」：剥掉外层再翻，不再显示成「中转异常：relay down: …」
+  assert.equal(describeRouteReason("relay down: relay down: 东京中转 → 落地"), "中转异常：东京中转 → 落地");
+  assert.equal(describeRouteReason("relay down: relay down: 东京中转 → 落地; same exit ip"), "中转异常：东京中转 → 落地，换到同出口 IP 的备用");
+  assert.equal(describeRouteReason("relay down: maintenance: HK2"), "HK2 维护中");
+  assert.equal(describeRouteReason("relay down: node offline: JP01"), "JP01 离线");
+  assert.equal(describeRouteReason("relay down: paused"), "已手动暂停");
+  assert.equal(describeRouteReason("relay down"), "中转异常");
+  // 里面不是那几种短语的不剥：「relay down: maintenance window」不是维护提示
+  assert.equal(unwrapRelayDownReason("relay down: maintenance window"), "relay down: maintenance window");
+  assert.equal(unwrapRelayDownReason(" relay down: relay down: a → b "), "relay down: a → b");
+  assert.equal(unwrapRelayDownReason(null), "");
   assert.deepEqual(routeWeightShares([{ weight: 70 }, { weight: 30 }]), [70, 30]);
   assert.deepEqual(routeWeightShares([{ weight: 0 }, { weight: 0 }]), [50, 50]);
 });
@@ -239,7 +245,7 @@ test("切换下限放低：异常多久切 / 恢复观察最少 1 秒，择优�
   assert.equal(routeSwitchWithinSeconds({ failoverSeconds: 10, failureThreshold: 3 }), 15);
 });
 
-test("UDP 回声探测只给对端是自己的机器、Agent 够新的路径；填了探测地址、只转 TCP 不带", async () => {
+test("UDP 回声探测只给对端是自己的机器的路径；填了探测地址、只转 TCP 不带", async () => {
   const { routePathFarEndHostId, routeUdpEchoProbeReady } = await import("./routeGroup");
   const relayed = path({ key: "a", hops: [2, 3] });
   const direct = path({ key: "b", hops: [], dest: { ip: "198.51.100.8", port: 443 } });
@@ -248,16 +254,13 @@ test("UDP 回声探测只给对端是自己的机器、Agent 够新的路径；�
   assert.equal(routePathFarEndHostId(relayed), 2);
   assert.equal(routePathFarEndHostId(pooled), 6);
   assert.equal(routePathFarEndHostId(direct), null);
-  // 对端 Agent 够新（2.2.251）才带；版本没报、太老都不带
-  assert.equal(routeUdpEchoProbeReady({ protocol: "udp", path: relayed, farEndAgentVersion: "2.2.251" }), true);
-  assert.equal(routeUdpEchoProbeReady({ protocol: "both", path: pooled, farEndAgentVersion: "2.3.0" }), true);
-  assert.equal(routeUdpEchoProbeReady({ protocol: "udp", path: relayed, farEndAgentVersion: "2.2.250" }), false);
-  assert.equal(routeUdpEchoProbeReady({ protocol: "udp", path: relayed, farEndAgentVersion: "" }), false);
-  assert.equal(routeUdpEchoProbeReady({ protocol: "udp", path: relayed, farEndAgentVersion: null }), false);
+  // 对端是自己的机器就带
+  assert.equal(routeUdpEchoProbeReady({ protocol: "udp", path: relayed }), true);
+  assert.equal(routeUdpEchoProbeReady({ protocol: "both", path: pooled }), true);
   // 只转 TCP 的规则不探 UDP；填了探测地址照填的拨 TCP；对端不是自己的机器发零长度包
-  assert.equal(routeUdpEchoProbeReady({ protocol: "tcp", path: relayed, farEndAgentVersion: "2.2.251" }), false);
-  assert.equal(routeUdpEchoProbeReady({ protocol: "udp", path: { ...relayed, probe: { ip: "198.51.100.9", port: 9443 } }, farEndAgentVersion: "2.2.251" }), false);
-  assert.equal(routeUdpEchoProbeReady({ protocol: "udp", path: direct, farEndAgentVersion: "2.2.251" }), false);
+  assert.equal(routeUdpEchoProbeReady({ protocol: "tcp", path: relayed }), false);
+  assert.equal(routeUdpEchoProbeReady({ protocol: "udp", path: { ...relayed, probe: { ip: "198.51.100.9", port: 9443 } } }), false);
+  assert.equal(routeUdpEchoProbeReady({ protocol: "udp", path: direct }), false);
 });
 
 test("路径的出口 IP：落地池成员按那台的出口地址（心跳来源优先，再登记地址），手填地址 / 节点地址 / 规则目标就是地址本身", () => {

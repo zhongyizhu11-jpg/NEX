@@ -10,7 +10,7 @@ import { generateInstallScript } from "./agentInstallScripts";
 import { isNginxForwardProtocolEnabled } from "../shared/forwardTypes";
 import { registerAgentEventClient, unregisterAgentEventClient } from "./agentEvents";
 import { agentEncryptionMiddleware, getAgentTunneledPath } from "./agentEncryptionMiddleware";
-import { AGENT_PANEL_MIGRATION_VERSION, hasAgentVersionChanged, isAgentUpgradeCompleted, isAgentVersionAtLeast, normalizeReportedFxpVersion } from "./agentRouteUtils";
+import { hasAgentVersionChanged, isAgentUpgradeCompleted, normalizeReportedFxpVersion } from "./agentRouteUtils";
 import { resolvePanelUrl } from "./agentPanelUrl";
 import { registerMimicAssetRoutes } from "./mimicAssets";
 import { registerRealmAssetRoutes } from "./realmAssets";
@@ -61,8 +61,6 @@ function parseForwardProtocolSettings(value: string | null | undefined) {
     return null;
   }
 }
-const AGENT_FIREWALL_COUNTER_REFRESH_VERSION = "2.2.178";
-const AGENT_PROTOCOL_GUARD_BACKEND_VERSION = "2.2.127";
 
 agentRouter.use((_req, res, next) => {
   res.setHeader("X-ForwardX-Agent-Auth", "challenge-v2");
@@ -163,20 +161,17 @@ async function openAgentEventStream(input: {
     setAgentEventStreamHeaders(res, "close");
     res.flushHeaders?.();
     res.write(`event: message\n`);
-    if (isAgentVersionAtLeast(input.agentVersion, AGENT_PANEL_MIGRATION_VERSION)) {
-      const migration = await getPanelMigrationAgentDirective();
-      res.write(`data: ${JSON.stringify(encryptPayload({
-        type: "agent-panel-migration",
-        data: {
-          id: migration?.id || `panel-migrated:${migratedTo}`,
-          state: "committed",
-          targetPanelUrl: migratedTo,
-          startedAt: migration?.startedAt,
-        },
-      }, token))}\n\n`);
-    } else {
-      res.write(`data: ${JSON.stringify(encryptPayload({ type: "agent-upgrade", data: migratedAgentPayload(migratedTo).agentUpgrade }, token))}\n\n`);
-    }
+    const migration = await getPanelMigrationAgentDirective();
+    res.write(`data: ${JSON.stringify(encryptPayload({
+      type: "agent-panel-migration",
+      data: {
+        id: migration?.id || `panel-migrated:${migratedTo}`,
+        state: "committed",
+        targetPanelUrl: migratedTo,
+        startedAt: migration?.startedAt,
+      },
+    }, token))}\n\n`);
+  
     res.end();
     return;
   }
@@ -197,10 +192,6 @@ async function openAgentEventStream(input: {
   recordAuthenticatedAgentActivity(host.id);
   observePresenceCapableHostActivity(host.id);
   if (agentVersion) {
-    const upgradedFirewallCounterAgent = isAgentVersionAtLeast(agentVersion, AGENT_FIREWALL_COUNTER_REFRESH_VERSION)
-      && !isAgentVersionAtLeast((host as any).agentVersion, AGENT_FIREWALL_COUNTER_REFRESH_VERSION);
-    const upgradedProtocolGuardBackendAgent = isAgentVersionAtLeast(agentVersion, AGENT_PROTOCOL_GUARD_BACKEND_VERSION)
-      && !isAgentVersionAtLeast((host as any).agentVersion, AGENT_PROTOCOL_GUARD_BACKEND_VERSION);
     await db.updateHostHeartbeat(host.id, { agentVersion, ...(fxpVersion ? { fxpVersion } : {}) } as any);
     if (agentVersionChanged) {
       prepareAgentDesiredStateResync(host.id);
@@ -208,12 +199,6 @@ async function openAgentEventStream(input: {
         "info",
         `[AgentUpgrade] host=${host.id} version=${String((host as any).agentVersion || "-")} -> ${agentVersion}; desired state marked for resync`,
       );
-    }
-    if (upgradedFirewallCounterAgent) {
-      await resetAgentRuntimeStateAfterReconnect(host.id, "agent-firewall-counter-upgrade");
-    }
-    if (upgradedProtocolGuardBackendAgent) {
-      await resetAgentRuntimeStateAfterReconnect(host.id, "agent-protocol-guard-backend-upgrade");
     }
     const requestedTargetVersion = (host as any).agentUpgradeTargetVersion || AGENT_VERSION;
     const agentUpgradeCompleted = (host as any).agentUpgradeRequested

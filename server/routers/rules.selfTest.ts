@@ -7,8 +7,6 @@ import { pushTunnelEndpointRefresh } from "./helpers";
 import { requireRuleProtocolEnabled } from "../forwardProtocolSettings";
 import { newForwardChainBatchId } from "../forwardChainManualProbe";
 import { enqueueRuleConnectionsTask, getRuleConnectionsTaskStatus } from "../ruleConnectionsAgentTasks";
-import { RULE_CONNECTIONS_AGENT_VERSION } from "@shared/ruleConnections";
-import { isAgentVersionBehind } from "@shared/version";
 import { isUserspaceForwardType, normalizeForwardRuleProtocol } from "@shared/forwardTypes";
 import { linkProbeMethodForRule } from "@shared/latencyProbe";
 import { ruleLatencySeriesQueryCache as selfTestQueryCache } from "../ruleLatencyQueryCache";
@@ -255,9 +253,6 @@ export const selfTestRulesRouter = router({
       const host = await db.getHostById(hostId) as any;
       if (!host) throw new Error("规则所在的机器不存在");
       if (!host.isOnline) throw new Error("机器离线，取不到连接清单");
-      if (host.agentVersion && isAgentVersionBehind(String(host.agentVersion), RULE_CONNECTIONS_AGENT_VERSION)) {
-        throw new Error(`这台机器的 Agent（${host.agentVersion}）早于 ${RULE_CONNECTIONS_AGENT_VERSION}，升级后才能看连接清单`);
-      }
       const task = enqueueRuleConnectionsTask(hostId, {
         ruleId: Number(rule.id),
         port: Number(rule.sourcePort),

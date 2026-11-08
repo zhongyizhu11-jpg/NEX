@@ -1,4 +1,3 @@
-import { isAgentVersionAtLeast } from "./agentRouteUtils";
 import { removeManagedServiceCmd, shQuote } from "./agentActionCommands";
 import { REALM_CONFIG_DIR } from "./forwardRuntimeConfigs";
 import { isForwardRuleProtocolTcpEnabled } from "@shared/forwardTypes";
@@ -10,9 +9,6 @@ import { forwardRateTiersForAgent } from "../shared/forwardRateLimit";
   从 server/agentHeartbeatRoute.ts 里原样搬出来，行为不变（心跳处理函数里那几个不依赖本次请求的小函数提到了模块顶层）。
 */
 
-export const AGENT_RATE_LIMIT_GUARD_VERSION = "2.2.187";
-/** 多级限速、上下行分开、突发（guardRule.rateLimits）从这一版 Agent 起。 */
-export const AGENT_RATE_TIERS_VERSION = "2.2.230";
 const RATE_LIMIT_GUARD_FORWARD_TYPES = new Set(["iptables", "nftables", "realm", "socat", "nginx"]);
 
 export type ProtocolGuardPortPlan = {
@@ -81,13 +77,12 @@ export function realmGuardConfigPathForPort(port: unknown) {
 }
 
 export function selectProtocolGuardRateLimit(options: {
-  agentVersion: string;
   hostId: number;
   rule: { forwardType?: unknown; tunnelId?: unknown; userId?: unknown; tunnelMode?: unknown; tunnelEntry?: unknown };
   limitIn: number;
   limitOut: number;
   rateLimitScope?: unknown;
-  /** 多级限速（shared/forwardRateLimit.ts 的 forwardRateTiersForAgent），Agent ≥ 2.2.230 才下发。 */
+  /** 多级限速（shared/forwardRateLimit.ts 的 forwardRateTiersForAgent）。 */
   rateLimits?: ReturnType<typeof forwardRateTiersForAgent>;
 }) {
   const forwardType = String(options.rule?.forwardType || "").trim();
@@ -99,8 +94,7 @@ export function selectProtocolGuardRateLimit(options: {
   const limitIn = Math.max(0, Math.floor(Number(options.limitIn) || 0));
   const limitOut = Math.max(0, Math.floor(Number(options.limitOut) || 0));
   if (
-    !isAgentVersionAtLeast(options.agentVersion, AGENT_RATE_LIMIT_GUARD_VERSION)
-    || (tunnelId > 0 && !nginxTunnelEntry)
+    (tunnelId > 0 && !nginxTunnelEntry)
     || (!RATE_LIMIT_GUARD_FORWARD_TYPES.has(forwardType) && !nginxTunnelEntry)
     || (nginxTunnelEntry && forwardType !== "gost")
     || userId <= 0
@@ -115,7 +109,7 @@ export function selectProtocolGuardRateLimit(options: {
       : `user-${userId}-host-${Math.max(0, Number(options.hostId) || 0)}`),
     limitIn,
     limitOut,
-    ...(tiers.length > 0 && isAgentVersionAtLeast(options.agentVersion, AGENT_RATE_TIERS_VERSION) ? { rateLimits: tiers } : {}),
+    ...(tiers.length > 0 ? { rateLimits: tiers } : {}),
   };
 }
 
