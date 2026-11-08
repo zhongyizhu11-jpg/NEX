@@ -6,8 +6,6 @@
   把 Agent 上报的东西收敛成干净的结构（界面只认这里出来的数据）。
 */
 
-/** 支持主机侧网络画像的最低 Agent 版本。 */
-export const NETPROFILE_MIN_AGENT_VERSION = "2.2.226";
 /** 定期检测间隔：6 小时。这些东西一天里基本不会变，测得太勤只会被对方限流。 */
 export const NETPROFILE_INTERVAL_SECONDS = 6 * 60 * 60;
 /** 历史只留最近 30 次的摘要。 */

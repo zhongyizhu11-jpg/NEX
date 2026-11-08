@@ -2,7 +2,6 @@ import crypto from "crypto";
 import { isIP } from "node:net";
 import { normalizeForwardXVersion } from "../shared/forwardTypes";
 
-export const AGENT_FORWARDX_WIREGUARD_VERSION = "2.2.154";
 export const FORWARDX_WIREGUARD_DEFAULT_MTU = 1380;
 // Mimic adds 12 bytes to the outer UDP packet. 1280 (IPv6 minimum MTU) keeps
 // the V2 userspace WireGuard path safely below any reasonable path MTU,

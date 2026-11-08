@@ -137,7 +137,6 @@ import { isTunnelRelayAggregate, isTunnelRelayFailover, isTunnelRelayHotStandby,
 import {
   buildParallelStreamLegs,
   normalizeTunnelParallelStreams,
-  tunnelParallelStreamsAgentsReady,
   tunnelParallelStreamsUnavailableReason,
 } from "@shared/tunnelParallelStreams";
 import { exitGroupCapacities, exitGroupWeights, normalizeExitGroupStrategy } from "@shared/exitStrategy";
@@ -2501,18 +2500,6 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         key: tunnelSecretSeed(tunnel),
       };
     };
-    // 单连接多路并发要看沿线每台主机的 Agent 版本；一次心跳里同一台只查一次。
-    const parallelStreamVersionCache = new Map<number, string>();
-    const parallelStreamAgentVersions = async (hostIds: number[]) => {
-      const ids = Array.from(new Set(hostIds.filter((id) => Number.isInteger(id) && id > 0)));
-      const missing = ids.filter((id) => !parallelStreamVersionCache.has(id));
-      if (missing.length > 0) {
-        const rows = await db.getHostsByIds(missing) as any[];
-        for (const id of missing) parallelStreamVersionCache.set(id, "");
-        for (const row of rows) parallelStreamVersionCache.set(Number(row.id), String(row.agentVersion || ""));
-      }
-      return ids.map((id) => parallelStreamVersionCache.get(id) || "");
-    };
     // 出口组「按权重」：每个出口主机的线路带宽，一次心跳里同一台只查一次。
     const exitBandwidthCache = new Map<number, number>();
     const exitBandwidthsForHostIds = async (hostIds: number[]) => {
@@ -3988,16 +3975,10 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
               ...(relayHotStandby && index > 0 ? { standby: true } : {}),
             }));
             // 单连接多路并发：没有并排中转时，把同一个出口（或链的第一跳）重复 N 条腿。
-            // 沿线有 Agent 太旧就不拆，按单路下发（原来的「每条连接各走各的」）。
             if (!relayAggregate && !relayHotStandby && normalizeTunnelParallelStreams((tunnel as any).parallelStreams) >= 2) {
               const hopsForStreams = tunnelHopsByTunnelId.get(Number(tunnel.id)) || [];
               if (!tunnelParallelStreamsUnavailableReason(tunnel, hopsForStreams, entryRoutes.length)) {
-                const peerIds = [Number(tunnel.exitHostId), ...hopsForStreams.map((hop: any) => Number(hop?.hostId || 0))]
-                  .filter((id) => id !== Number(host.id));
-                const peerVersions = await parallelStreamAgentVersions(peerIds);
-                if (tunnelParallelStreamsAgentsReady(String((host as any).agentVersion || ""), peerVersions)) {
-                  multipathLegs.push(...buildParallelStreamLegs(entryRoute, (tunnel as any).parallelStreams));
-                }
+                multipathLegs.push(...buildParallelStreamLegs(entryRoute, (tunnel as any).parallelStreams));
               }
             }
             // 并排中转时 entryRoutes 是几台中转（固定主备），权重只给出口组的出口。
