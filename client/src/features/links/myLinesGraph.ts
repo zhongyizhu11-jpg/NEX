@@ -69,6 +69,7 @@ const EDGE_KIND: Record<LineModel["kind"], TopologyEdgeKind> = {
 };
 
 const STATUS_RANK: Record<TopologyStatus, number> = { stopped: 0, running: 1, degraded: 2, failed: 3 };
+const HEALTH_RANK: Record<string, number> = { healthy: 0, unknown: 1, standby: 2, degraded: 3, down: 4 };
 const ROLE_LABELS: Record<TopologyRole, string> = { entry: "入口", relay: "中转", exit: "出口", landing: "落地" };
 const ROLE_ORDER: TopologyRole[] = ["entry", "relay", "exit", "landing"];
 
@@ -121,10 +122,13 @@ function segmentOf(line: LineModel, steps: Step[], index: number): { status: Top
     if (line.probe.isTimeout && line.health === "down") return { status: "failed", latencyMs: null };
     if (line.probe.latencyMs !== null && line.health === "healthy") return { status: "running", latencyMs: line.probe.latencyMs };
   }
-  const hostDown = (step: Step) => step.layoutKind !== "landing" && step.layoutKind !== "exit" && (step.hop.online === false || step.hop.health === "down");
+  // 只认真离线的（主机不在线，或者入口组整组都不在线）。线路组中转的 health「down」是它往下一跳探不通，那是它后面那一段的事。
+  const hostDown = (step: Step) => step.layoutKind !== "landing" && step.layoutKind !== "exit"
+    && (step.hop.online === false || (step.layoutKind === "group" && step.hop.health === "down"));
   if (hostDown(steps[index]) || hostDown(steps[index + 1])) return { status: "failed", latencyMs: null };
-  // 整条线不通，但哪台主机都没离线：不知道断在哪一段，这条线的每段都标黄（知道是哪台离线时只标挨着它的两段）
-  if (line.health === "down" && !steps.some(hostDown)) return { status: "degraded", latencyMs: null };
+  // 整条线不通，但哪台主机都没离线、也没有哪一段报了不通：不知道断在哪一段，这条线的每段都标黄
+  // （知道是哪台离线、或者哪一段不通时，只标那里，别的段照常）
+  if (line.health === "down" && !steps.some(hostDown) && !line.segments.some((segment) => segment?.state === "failed")) return { status: "degraded", latencyMs: null };
   return { status: "running", latencyMs: null };
 }
 
@@ -139,7 +143,9 @@ function captionOf(node: { roles: Set<TopologyRole>; steps: Step[] }): string {
     const address = first.hop.caption.replace(/^我的节点 · /, "");
     return first.hop.nodeId.startsWith("node:") ? `落地 · ${address}` : "落地";
   }
-  if (first.layoutKind === "exit" || first.layoutKind === "group") return first.hop.caption;
+  if (first.layoutKind === "group") return first.hop.caption;
+  // 出口几条线共用时，写状态最差的那条的说法（停了 / 没在跑的不被正常的那条盖掉）
+  if (first.layoutKind === "exit") return node.steps.reduce((worst, step) => (HEALTH_RANK[step.hop.health] > HEALTH_RANK[worst.hop.health] ? step : worst), first).hop.caption;
   const roles = ROLE_ORDER.filter((role) => node.roles.has(role)).map((role) => ROLE_LABELS[role]).join(" · ");
   return first.hop.online === false ? `${roles} · 离线` : roles;
 }
@@ -235,7 +241,8 @@ export function buildMyLinesGraph(lines: readonly LineModel[]): MyLinesGraph {
     protocol: null,
     port: null,
     status: edge.status ?? "running",
-    latencyMs: edge.latencyMs,
+    // 合成的线标红（有一条不通）时不挂另一条的延迟：红线上写「31 ms」看着像通的
+    latencyMs: edge.status === "failed" ? null : edge.latencyMs,
     label: null,
     activePath: null,
     rateBps: edge.rateBps > 0 ? edge.rateBps : null,

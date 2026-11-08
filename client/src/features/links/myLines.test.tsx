@@ -141,7 +141,7 @@ test("整张图：几条线路共用的主机只画一个、共用的一段合�
   const chain = buildLineModel(
     {
       id: 13, name: "家宽", hostId: 1, forwardGroupId: 20, isForwardGroupTemplate: true, sourcePort: 10013, targetIp: "198.51.100.20", targetPort: 8443, isEnabled: true,
-      egress: { type: "ss_host", landingHostName: "新加坡落地", state: "running", udp: true },
+      egress: { type: "ss_host", landingHostId: 9, landingHostName: "新加坡落地", state: "running", udp: true },
     },
     ctx,
   );
@@ -153,18 +153,18 @@ test("整张图：几条线路共用的主机只画一个、共用的一段合�
   const shared = graph.edges.find((edge) => edge.id === "host:1>addr:198.51.100.9:443>rule");
   assert.deepEqual(shared?.ruleIds, [11, 12], "两条直连走的同一段合成一条连线");
   assert.equal(shared?.status, "failed", "合并取最差：有一条不通就标出来");
-  assert.equal(shared?.latencyMs, 40);
+  assert.equal(shared?.latencyMs, null, "标红的线不挂另一条线的 40 ms，免得看着像通的");
   assert.equal(graph.edges.find((edge) => edge.from === "host:2" && edge.to === "addr:198.51.100.30:443")?.status, "stopped");
   assert.equal(graph.captions.get("host:2"), "入口 · 中转", "JP relay 在一条线里是入口、在另一条里是中转");
 
   const layout = layoutTopology(graph.nodes.map((node) => ({ id: node.id, kind: graph.layoutKind.get(node.id) || "host" })), graph.edges, { terminalTiers: [["landing"], ["exit"]] });
   const layerOf = (id: string) => layout.nodes.get(id)!.layer;
   assert.equal(layerOf("addr:198.51.100.9:443"), layerOf("addr:198.51.100.20:8443"), "直连的落地和经中转的落地在同一列");
-  assert.equal(layerOf("exit:新加坡落地"), layerOf("addr:198.51.100.20:8443") + 1, "出口在落地后面一列");
+  assert.equal(layerOf("exit:host:9"), layerOf("addr:198.51.100.20:8443") + 1, "出口在落地后面一列");
   assert.deepEqual(myLinesColumnLabels(layout.layers, graph.layoutKind), ["入口", "中转", "落地", "出口"]);
 
   // 高亮：每条线路经过哪些节点和连线
-  assert.deepEqual(Array.from(graph.pathByLine.get(13)!.nodeIds), ["host:1", "host:2", "addr:198.51.100.20:8443", "exit:新加坡落地"]);
+  assert.deepEqual(Array.from(graph.pathByLine.get(13)!.nodeIds), ["host:1", "host:2", "addr:198.51.100.20:8443", "exit:host:9"]);
   // 下面的清单：不通的排最前，停用的最后
   assert.deepEqual(sortLinesForList([direct, directDown, chain, stopped]).map((line) => line.id), [12, 13, 11, 14]);
 });
@@ -197,4 +197,43 @@ test("手机上一眼看完：窄画布换紧凑格子，入口 / 中转 / 落�
   assert.equal(myLinesCanvasHeight({ width: 552, height: 1400 }, 364, 2400), Math.round(1400 * (348 / 552) + 16 + 22), "手机上不封顶：整张图都在页面里，划页面看完");
   assert.equal(myLinesCanvasHeight({ width: 552, height: 1400 }, 1000, 680), 680, "电脑上封顶，太高的在图里上下拖");
   assert.equal(myLinesCanvasHeight({ width: 1200, height: 400 }, 364, 2400), Math.round(400 * MY_LINES_MIN_SCALE + 16 + 22), "太宽就按最小倍数算高度（左右拖着看）");
+});
+
+test("出口按机器认：同名的两台落地机不合成一个，同一台的合成一个、写状态最差那条的说法", () => {
+  const base = context();
+  const ctx = context({
+    hostById: new Map<number, any>([...base.hostById, [10, { id: 10, name: "HK", isOnline: true }], [11, { id: 11, name: "HK", isOnline: true }]]),
+  });
+  const line = (id: number, landingHostId: number, state: string) => buildLineModel(
+    { id, name: `线 ${id}`, hostId: 1, sourcePort: 10000 + id, targetIp: "198.51.100.9", targetPort: 443, isEnabled: true, egress: { type: "ss_host", landingHostId, landingHostName: "HK", state, udp: false } },
+    ctx,
+  );
+  const graph = buildMyLinesGraph([line(31, 10, "running"), line(32, 11, "running"), line(33, 10, "paused")]);
+  const exits = graph.nodes.filter((node) => graph.layoutKind.get(node.id) === "exit");
+  assert.deepEqual(exits.map((node) => [node.id, node.ruleIds]), [["exit:host:10", [31, 33]], ["exit:host:11", [32]]], "两台都叫 HK，但不是同一台");
+  assert.equal(graph.captions.get("exit:host:10"), "出口 · Shadowsocks · paused", "停了的那条不被正常的那条盖掉");
+  // 没有主机 id 的成员：只算自己这条线的，不和别的线路里同样认不出的合成一个
+  const unknownA = buildLineModel({ id: 41, name: "缺主机 A", hostId: 0, sourcePort: 10041, targetIp: "198.51.100.9", targetPort: 443, isEnabled: true }, ctx);
+  const unknownB = buildLineModel({ id: 42, name: "缺主机 B", hostId: 0, sourcePort: 10042, targetIp: "198.51.100.9", targetPort: 443, isEnabled: true }, ctx);
+  assert.notEqual(unknownA.entry.nodeId, unknownB.entry.nodeId);
+});
+
+test("线路组知道断在哪一段：只标那一段，别的段不跟着标黄", () => {
+  const status = {
+    paths: [
+      { key: "a", letter: "A", name: "主线路", active: true, healthy: true, down: false, prewarming: false, latencyMs: null, probedAt: null, probe: null,
+        hops: [{ hostId: 2, name: "JP relay", port: 25310, running: true, enabled: true, ok: false, latencyMs: null, consecutiveFailures: 3, probedAt: NOW - 5000, nextLabel: null }],
+        dest: { ip: "198.51.100.9", port: 443 }, score: null, lossPct: null, availabilityPct: null, connections: null, dials: null },
+    ],
+    entry: { hostId: 1, name: "HK entry", online: true, sourcePort: 10005 },
+  } as any;
+  const line = buildLineModel(
+    { id: 5, name: "断在后半段", hostId: 1, sourcePort: 10005, targetIp: "198.51.100.9", targetPort: 443, isEnabled: true, failoverEnabled: true, failoverStrategy: "failover", routeMode: "failover", routePaths: JSON.stringify([{ key: "a", name: "主线路", hops: [2], dest: null, weight: 1, probe: null, dial: null }]), failoverTargets: "[]" },
+    context({ routeStatusByRule: new Map([[5, status]]) }),
+  );
+  assert.equal(line.health, "down");
+  assert.equal(line.statusText, "当前路径有一段不通", "JP relay 在线，只是往下一跳探不通：不说「主机离线」");
+  assert.deepEqual(line.segments.map((segment) => segment.state), ["unknown", "failed"]);
+  const graph = buildMyLinesGraph([line]);
+  assert.deepEqual(graph.edges.map((edge) => edge.status), ["running", "failed"], "入口 → 中转那段没报不通，不标黄");
 });

@@ -292,16 +292,25 @@ export function buildLineModel(rule: any, context: LineModelContext): LineModel 
   const egress = rule?.egress && String(rule.egress.type || "none") !== "none" ? rule.egress : null;
   const exit: LineHop | null = egress ? {
     key: "exit",
-    nodeId: `exit:${String(egress.landingHostName || egress.inboundName || egress.masked || `rule-${id}`)}`,
+    // 按机器认出口：落地主机 id → 入站 id → 外部 SS 地址（只遮了密码）→ 认不出就单算这条线。不按名字：主机名可以重名。
+    nodeId: Number(egress.landingHostId || 0) > 0
+      ? `exit:host:${Number(egress.landingHostId)}`
+      : Number(egress.inboundId || 0) > 0
+        ? `exit:inbound:${Number(egress.inboundId)}`
+        : egress.masked ? `exit:ss:${String(egress.masked)}` : `exit:rule-${id}`,
     name: String(egress.landingHostName || egress.inboundName || "外部 SS 出口"),
     caption: `出口 · Shadowsocks${egress.udp ? " · 含 UDP" : ""}${egress.state && egress.state !== "running" ? ` · ${String(egress.message || egress.state)}` : ""}`,
     health: egress.state === "running" ? "healthy" : egress.state === "paused" ? "standby" : egress.state ? "degraded" : "unknown",
     title: egress.masked ? `流量从 ${egress.masked} 出去` : undefined,
   } : null;
 
+  // 找不到主机 id 的那一站（成员没绑主机之类）只算这条线自己的，不和别的线路里同样找不到的合成一个
+  for (const hop of [entry, ...hops]) if (hop.nodeId === "host:unknown") hop.nodeId = `host:unknown:${id}:${hop.key}`;
+
   const probe = context.probeByRule.get(id) || null;
   const fresh = !!probe?.at && isLinkProbeFresh(probe.at, nowMs);
-  const offline = [entry, ...hops].filter((hop) => hop.health === "down");
+  // 真离线的主机（入口组看整组）。线路组中转往下一跳探不通也是 health「down」，那不是离线，下面按「有一段不通」说。
+  const offline = [entry, ...hops].filter((hop) => hop.online === false || (hop.nodeId.startsWith("group:") && hop.health === "down"));
   let health: NetworkHealth;
   let statusText: string;
   if (!enabled) {
