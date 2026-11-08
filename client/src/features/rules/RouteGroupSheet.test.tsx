@@ -81,9 +81,6 @@ function status(patch: Partial<RouteStatus> = {}, paths?: RouteStatusPath[]): Ro
     prewarmIndex: -1,
     agentReportedAt: NOW - 10_000,
     agentStale: false,
-    agentVersion: "2.2.198",
-    agentSupportsScores: true,
-    requiredAgentVersion: "2.2.198",
     ...patch,
   };
 }
@@ -95,7 +92,7 @@ const events: RouteEvent[] = [
 ];
 
 function render(options: { status?: RouteStatus | null; events?: RouteEvent[]; host?: any; rule?: typeof rule } = {}) {
-  const policy = describeRoutePolicy(options.rule ?? rule, { host: options.host ?? { isOnline: true, agentVersion: "2.2.198" }, nowMs: NOW, timeZone: TZ })!;
+  const policy = describeRoutePolicy(options.rule ?? rule, { host: options.host ?? { isOnline: true }, nowMs: NOW, timeZone: TZ })!;
   return renderToStaticMarkup(
     <RouteGroupPanel
       policy={policy}
@@ -161,9 +158,7 @@ test("最近切换：时间、从哪条到哪条、原因；计划切换未执�
   assert.match(render({ events: [] }), /还没有记录/);
 });
 
-test("Agent 太旧时说清楚没有评分；状态没读到时不空着", () => {
-  const old = render({ status: status({ agentSupportsScores: false, agentVersion: "2.2.197" }) });
-  assert.match(old, /早于 2\.2\.198：没有评分、不预热预检、不按权重分/);
+test("状态没读到时不空着；评分是多久前报的照实说", () => {
   assert.match(render({ status: null }), /在读线路状态/);
   const stale = render({ status: status({ agentStale: true, agentReportedAt: NOW - 20 * 60_000 }) });
   assert.match(stale, /评分是 20 分钟前报的/);
@@ -177,10 +172,7 @@ test("异常明细里没有「强制走一条」（2.3.499）：手动切换只�
   assert.match(pinned, /data-state="overridden"/);
 });
 
-/*
-  「Agent 早于 2.2.199」那几句以调度那台机器为准：GOST / Nginx 隧道的调度在出口机上，调用方
-  传进来的是规则所在的机器（入口）。线路状态读的是对的那台，面板按它说、别说两遍。
-*/
+/* 按规则字段和线路状态画一份面板。 */
 function renderFor(ruleFields: Record<string, unknown>, statusPatch: Partial<RouteStatus>, host: any) {
   const subject = { ...rule, ...ruleFields };
   const policy = describeRoutePolicy(subject as any, { host, nowMs: NOW, timeZone: TZ })!;
@@ -195,70 +187,17 @@ function renderFor(ruleFields: Record<string, unknown>, statusPatch: Partial<Rou
   );
 }
 
-test("UDP：调度那台机器的 Agent 早于 2.2.199 时说一次「全部走路径 A、不切换」", () => {
-  const html = renderFor(
-    { protocol: "both" },
-    { protocol: "both", agentVersion: "2.2.198", agentSupportsProtocol: false, requiredAgentVersion: "2.2.199" },
-    { isOnline: true, agentVersion: "2.2.198" },
-  );
-  assert.equal((html.match(/还不会调度 UDP/g) || []).length, 1, "策略算出来的那句和线路状态那句不能都出来");
-  assert.match(html, /调度这条线路组的机器上 Agent（2\.2\.198）早于 2\.2\.199，还不会调度 UDP：升级之前这条规则全部走 主线路、不切换/);
-  const ready = renderFor(
-    { protocol: "both" },
-    { protocol: "both", agentVersion: "2.2.199", agentSupportsProtocol: true, requiredAgentVersion: "2.2.199" },
-    { isOnline: true, agentVersion: "2.2.198" },
-  );
-  assert.doesNotMatch(ready, /还不会调度 UDP/, "入口机旧、出口机（调度在这）新：不该报");
-});
-
-test("NEX 隧道：出口的 Agent 早于 2.2.199 时说一次，按 NEX 隧道说而不是按 UDP 说", () => {
-  const fxp = { protocol: "tcp", tunnelId: 7, tunnelMode: "forwardx" };
-  const html = renderFor(
-    fxp,
-    { protocol: "tcp", agentVersion: "2.2.198", agentSupportsProtocol: false, requiredAgentVersion: "2.2.199", schedulerNeed: "forwardx" },
-    { isOnline: true, agentVersion: "2.2.198" },
-  );
-  assert.equal((html.match(/还不会调度 NEX 隧道/g) || []).length, 1, "策略算出来的那句和线路状态那句不能都出来");
-  assert.match(html, /隧道出口的 Agent（2\.2\.198）早于 2\.2\.199，还不会调度 NEX 隧道：升级之前这条规则全部走 主线路、不切换/);
-  assert.doesNotMatch(html, /还不会调度 UDP/);
-  const ready = renderFor(
-    fxp,
-    { protocol: "tcp", agentVersion: "2.2.199", agentSupportsProtocol: true, requiredAgentVersion: "2.2.199", schedulerNeed: "forwardx" },
-    { isOnline: true, agentVersion: "2.2.198" },
-  );
-  assert.doesNotMatch(ready, /还不会调度/, "入口机旧、出口机（调度在这）新：不该报");
-});
-
-test("按访客固定：只看调度那台机器的 Agent 版本", () => {
-  const weighted = routeGroupRuleFields(
-    { ...group, policy: { ...group.policy, mode: "weighted", spread: "ip_hash" } },
-    { targetIp: "10.95.0.10", targetPort: 443 },
-  );
-  const oldScheduler = renderFor(
-    { ...weighted, protocol: "tcp" },
-    { protocol: "tcp", agentVersion: "2.2.198", agentSupportsProtocol: true },
-    { isOnline: true, agentVersion: "2.2.199" },
-  );
-  assert.match(oldScheduler, /调度这条线路组的机器上 Agent（2\.2\.198）早于 2\.2\.199：按访客固定读不到访客地址，所有访客都落在同一条路径上/);
-  const newScheduler = renderFor(
-    { ...weighted, protocol: "tcp" },
-    { protocol: "tcp", agentVersion: "2.2.199", agentSupportsProtocol: true },
-    { isOnline: true, agentVersion: "2.2.198" },
-  );
-  assert.doesNotMatch(newScheduler, /按访客固定读不到访客地址/);
-});
-
 test("纯 UDP：调度计划里策略那句和旧会话都按会话说", () => {
   const weighted = routeGroupRuleFields(
     { ...group, policy: { ...group.policy, mode: "weighted", spread: "weighted" } },
     { targetIp: "10.95.0.10", targetPort: 443 },
   );
-  const ready = { protocol: "udp", agentVersion: "2.2.199", agentSupportsProtocol: true, requiredAgentVersion: "2.2.199" } as const;
-  const udp = renderFor({ ...weighted, protocol: "udp" }, ready, { isOnline: true, agentVersion: "2.2.199" });
+  const ready = { protocol: "udp" } as const;
+  const udp = renderFor({ ...weighted, protocol: "udp" }, ready, { isOnline: true });
   assert.match(udp, /负载均衡 · 权重负载：新会话按权重分到各条路径，旧会话不动/);
   assert.match(udp, />旧会话</);
   assert.doesNotMatch(udp, /新连接按权重分到各条路径/);
-  const both = renderFor({ ...weighted, protocol: "both" }, { ...ready, protocol: "both" }, { isOnline: true, agentVersion: "2.2.199" });
+  const both = renderFor({ ...weighted, protocol: "both" }, { ...ready, protocol: "both" }, { isOnline: true });
   assert.match(both, /负载均衡 · 权重负载：新连接按权重分到各条路径，旧连接不动/);
 });
 

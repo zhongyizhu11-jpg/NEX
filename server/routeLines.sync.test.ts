@@ -23,8 +23,7 @@ type Outcome = {
   aggregateSpec: any;
   pausedSpec: any;
   maintenanceSpec: any;
-  exitIpSpec: any;
-  load: { oldAgent: any; first: any; second: any };
+  load: { first: any; second: any };
   deliveries: Record<string, { desiredSent: boolean; viaRunning: boolean }>;
 };
 
@@ -47,7 +46,7 @@ function run(): Outcome {
     await exec("INSERT INTO users (id, username, password, role) VALUES (1, 'admin', 'hash', 'admin')");
     // 1 入口；2、4 中转；3 隧道出口
     for (const [id, name, ip, token] of [[1, "入口机", "203.0.113.1", "tok1"], [2, "jinx", "203.0.113.2", "tok2"], [3, "Jinx出口", "203.0.113.3", "tok3"], [4, "HK2", "203.0.113.4", "tok4"]]) {
-      await exec('INSERT INTO hosts (id, name, ip, ipv4, "hostType", "agentToken", "userId", "isOnline", "lastHeartbeat", "agentVersion") VALUES (?, ?, ?, ?, ?, ?, 1, 1, ?, ?)', [id, name, ip, ip, "slave", token, Math.floor(Date.now() / 1000), "2.2.243"]);
+      await exec('INSERT INTO hosts (id, name, ip, ipv4, "hostType", "agentToken", "userId", "isOnline", "lastHeartbeat", "agentVersion") VALUES (?, ?, ?, ?, ?, ?, 1, 1, ?, ?)', [id, name, ip, ip, "slave", token, Math.floor(Date.now() / 1000), "2.2.251"]);
     }
     await exec('INSERT INTO tunnels (id, name, "entryHostId", "exitHostId", mode, "listenPort", secret, "userId", "isEnabled", "portRangeStart", "portRangeEnd") VALUES (10, ?, 1, 3, ?, 30000, ?, 1, 1, 31000, 31999)', ["华南-香港", "tcp", "s3cret"]);
     const pools = await import(url("server/nodePools.ts"));
@@ -92,7 +91,7 @@ function run(): Outcome {
     // 每一拍：期望状态发了就看它里面的规格；只是运行时提示（暂停、维护、负载……）变了时期望状态不重发，
     // 规格跟着 runningRules 走 —— 两边都看，记下这一拍是从哪边拿到的。
     const deliveries = {};
-    const beat = async (agentVersion = "2.2.243", label = "") => {
+    const beat = async (agentVersion = "2.2.251", label = "") => {
       const response = await fetch(base + "/api/agent/heartbeat", { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer tok1" }, body: JSON.stringify({ agentVersion, uptime: 10, cpuUsage: 1, memoryUsage: 1, diskUsage: 1, forceReconcile: true }) });
       const json = await response.json();
       const actions = (json.desiredState && json.desiredState.actions) || [];
@@ -105,6 +104,9 @@ function run(): Outcome {
     // 备用那条第一跳之后（中转 → 落地）测到 7ms：下发的 extraLatencyMs 要带上。
     const bkPath = afterPaths.find((p) => p.lineKey === "bk" && p.hops[0] === 2);
     stats.recordRouteHopProbe({ parentRuleId: 1, pathKey: bkPath.key, hopIndex: 0, hostId: 2, hostName: "jinx", nextLabel: "落地", ok: true, latencyMs: 7 });
+    // jinx（主机 2）的负载 40%：经它的那条备用带 loadPct。
+    const hostLoad = await import(url("server/hostLoad.ts"));
+    hostLoad.recordHostLoadSample(2, { at: Date.now(), cpuUsage: 40, networkIn: null, networkOut: null }, 0);
     const spec = await beat();
     // 聚合：主线路那组一起分担、备用只兜底 —— 这时才分层
     await exec('UPDATE forward_rules SET "routeDelivery" = ? WHERE id = 1', ["aggregate"]);
@@ -113,20 +115,18 @@ function run(): Outcome {
     // 暂停备用那条线路
     const paused = afterPaths.map((p) => (p.lineKey === "bk" ? { ...p, paused: true } : p));
     await exec('UPDATE forward_rules SET "routePaths" = ? WHERE id = 1', [JSON.stringify(paused)]);
-    const pausedSpec = await beat("2.2.243", "paused");
+    const pausedSpec = await beat("2.2.251", "paused");
     await exec('UPDATE forward_rules SET "routePaths" = ? WHERE id = 1', [JSON.stringify(afterPaths)]);
     // 维护 HK2
     const health = await import(url("server/routeNodeHealth.ts"));
     await exec('UPDATE hosts SET "maintenanceMode" = 1 WHERE id = 4');
     health.invalidateRouteNodeHealth();
-    const maintenanceSpec = await beat("2.2.243", "maintenance");
+    const maintenanceSpec = await beat("2.2.251", "maintenance");
     await exec('UPDATE hosts SET "maintenanceMode" = 0 WHERE id = 4');
     health.invalidateRouteNodeHealth();
-    // Agent 够新（2.2.251）才带 exitIp。放在最后，版本升上去不影响前面几份规格。
-    const exitIpSpec = await beat("2.2.251");
     /*
-      沿途负载（2.2.251）：老 Agent 不给；新 Agent 给，而且只是负载变了不算动作变了 —— 不重发整份期望状态，
-      新的负载跟着 runningRules 送到（Agent 每次心跳都按它原地换上提示）。
+      沿途负载：只是负载变了不算动作变了 —— 不重发整份期望状态，新的负载跟着 runningRules 送到
+      （Agent 每次心跳都按它原地换上提示）。
     */
     const beatFull = async (agentVersion) => {
       const response = await fetch(base + "/api/agent/heartbeat", { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer tok1" }, body: JSON.stringify({ agentVersion, uptime: 10, cpuUsage: 1, memoryUsage: 1, diskUsage: 1, forceReconcile: true }) });
@@ -141,9 +141,6 @@ function run(): Outcome {
         runningLoad: running ? running.failover.targets.map((target) => target.loadPct ?? null) : null,
       };
     };
-    const hostLoad = await import(url("server/hostLoad.ts"));
-    hostLoad.recordHostLoadSample(2, { at: Date.now(), cpuUsage: 40, networkIn: null, networkOut: null }, 0);
-    const loadOldAgent = await beatFull("2.2.243");
     const loadFirst = await beatFull("2.2.251");
     hostLoad.recordHostLoadSample(2, { at: Date.now(), cpuUsage: 85, networkIn: null, networkOut: null }, 0);
     const loadSecond = await beatFull("2.2.251");
@@ -152,8 +149,8 @@ function run(): Outcome {
       relays, paths: storedPaths,
       expanded: { pathCount: expandedPaths.length, keys: expandedPaths.map((p) => p.key) },
       afterPool: { pathCount: afterPaths.length, relayHosts: afterRelays.map((r) => Number(r.hostId)) },
-      spec, aggregateSpec, pausedSpec, maintenanceSpec, exitIpSpec,
-      load: { oldAgent: loadOldAgent, first: loadFirst, second: loadSecond },
+      spec, aggregateSpec, pausedSpec, maintenanceSpec,
+      load: { first: loadFirst, second: loadSecond },
       deliveries,
     }));
     process.exit(0);
@@ -205,12 +202,10 @@ test("心跳：整链最优不分层（所有线路一起比），聚合才带 t
   assert.deepEqual((outcome.aggregateSpec.targets as any[]).map((target) => target.tier), [0, 1, 1], "聚合：主线路那组一起分担，备用组兜底");
   assert.ok(targets.some((target) => target.extraLatencyMs === 7), `下游延迟没下发：${JSON.stringify(targets)}`);
   assert.ok(targets.every((target) => !target.down));
-  // 这里的 Agent 是 2.2.243：「故障切换优先同出口 IP」的 exitIp 要 2.2.251 才带，老 Agent 的规格逐字不变。
-  assert.ok(targets.every((target) => target.exitIp === undefined), `老 Agent 不该收到 exitIp：${JSON.stringify(targets)}`);
 });
 
-test("心跳：Agent 2.2.251 起每条路径带 exitIp —— 规则目标就是目标地址，中转池那几条也是（落地仍是规则目标）", () => {
-  const targets = outcome.exitIpSpec.targets as any[];
+test("心跳：每条路径带 exitIp —— 规则目标就是目标地址，中转池那几条也是（落地仍是规则目标）", () => {
+  const targets = outcome.spec.targets as any[];
   assert.equal(targets.length, 3);
   // 这条规则的线路都落在规则自己的目标上（198.51.100.7），对端看到的就是它；这里没有落地池成员。
   assert.deepEqual(targets.map((target) => target.exitIp), ["198.51.100.7", "198.51.100.7", "198.51.100.7"], JSON.stringify(targets));
@@ -224,14 +219,12 @@ test("心跳：Agent 2.2.251 起每条路径带 exitIp —— 规则目标就是
   assert.equal(outcome.deliveries.paused.viaRunning, true);
 });
 
-test("心跳：沿途负载只给 2.2.251 起的 Agent；只是负载变了不重发期望状态，新负载跟着 runningRules 送到", () => {
-  const { oldAgent, first, second } = outcome.load;
+test("心跳：沿途负载跟着规格下发；只是负载变了不重发期望状态，新负载跟着 runningRules 送到", () => {
+  const { first, second } = outcome.load;
   // 只有经 jinx（主机 2）的那条备用带负载；另外两条（隧道、HK2）的沿途主机没心跳过，不知道
   const viaJinx = (loads: Array<number | null>) => loads.filter((load) => load !== null);
-  assert.ok(oldAgent.desiredLoad && oldAgent.desiredLoad.every((load: number | null) => load === null), `老 Agent 不该收到 loadPct：${JSON.stringify(oldAgent)}`);
-  assert.ok(oldAgent.runningLoad && oldAgent.runningLoad.every((load: number | null) => load === null), `老 Agent 的 runningRules 也不该带：${JSON.stringify(oldAgent)}`);
-  assert.equal(first.desiredSent, true, "换了 Agent 版本，规格变了，期望状态要发");
-  assert.deepEqual(viaJinx(first.desiredLoad), [40], JSON.stringify(first));
+  const specLoad = (outcome.spec.targets as any[]).map((target) => target.loadPct ?? null);
+  assert.deepEqual(viaJinx(specLoad), [40], `期望状态里的规格要带负载：${JSON.stringify(outcome.spec.targets)}`);
   assert.deepEqual(viaJinx(first.runningLoad), [40], JSON.stringify(first));
   assert.equal(second.desiredSent, false, `只是负载变了，不该重发整份期望状态：${JSON.stringify(second)}`);
   assert.deepEqual(viaJinx(second.runningLoad), [85], `新负载要跟着 runningRules 送到：${JSON.stringify(second)}`);

@@ -1,24 +1,18 @@
 import { Router, Request, Response } from "express";
 import { parseFailoverTargets } from "../shared/failoverTargets";
 import {
-  ROUTE_EXIT_IP_AGENT_VERSION,
-  ROUTE_GROUP_UDP_AGENT_VERSION,
-  ROUTE_LOAD_HINT_AGENT_VERSION,
   routeDeliveryStrategy,
   routeDestSpreadReady,
   routeDestSpreadTargetFields,
   normalizeRouteDelivery,
   routeGroupForwardTypeSupported,
   routeGroupOf,
-  routeGroupSchedulerAgentVersion,
   routePathDial,
   routePathExitIp,
-  routePathFarEndHostId,
   routePathsOf,
   routeUdpEchoProbeReady,
 } from "../shared/routeGroup";
-import { forwardGroupHealthProbeMethodForAgent } from "../shared/forwardGroupHealthCheck";
-import { UDP_PROBE_MIN_AGENT_VERSION } from "../shared/udpProbe";
+import { normalizeForwardGroupHealthCheckMethod } from "../shared/forwardGroupHealthCheck";
 import { noteRouteFirstHops, routeHopDownHints, routeNodeHints, routePathDownstreamMs } from "./routeGroupStats";
 import { ensureRouteNodeHealthFresh, getRouteNodeStatus } from "./routeNodeHealth";
 import { tunnelLinkShaping, hostEgressShaping } from "./tunnelFxpRuntime";
@@ -37,7 +31,7 @@ import {
   proxyInboundTrafficProtocol,
   proxyInboundTrafficRuleId,
 } from "../shared/proxyInboundTraffic";
-import { AGENT_PLUGIN_TASK_VERSION, buildMetaAgentSelfTestPayload, buildRuleAgentSelfTestPayload, hasAgentVersionChanged, isAgentUpgradeCompleted, isAgentVersionAtLeast, normalizeReportedFxpVersion, parseSelfTestMeta, tunnelSecretSeed } from "./agentRouteUtils";
+import { buildMetaAgentSelfTestPayload, buildRuleAgentSelfTestPayload, hasAgentVersionChanged, isAgentUpgradeCompleted, normalizeReportedFxpVersion, parseSelfTestMeta, tunnelSecretSeed } from "./agentRouteUtils";
 import { resolveAgentAdvertisedPanelUrl } from "./agentPanelUrl";
 import { getAgentMigrationSwitchTarget, getPanelMigrationAgentDirective } from "./panelMigrationAgentState";
 import * as hopRepo from "./repositories/tunnelRepository";
@@ -54,11 +48,10 @@ import {
   buildPresenceAgentHeartbeatResponse,
   buildReportedRuntimeHeartbeatPatch,
   selectAgentHeartbeatInterval,
-  shouldDeferAgentWorkForLocalState,
   shouldPersistAgentPresence,
 } from "./agentHeartbeatGate";
 import { mapWithConcurrency } from "./asyncPool";
-import { agentSupportsPortAccessLimits, portAccessLimitAction, portAccessLimitSpecs, readPortAccessLimitsEnabled, resolvePortAccessLimitAction } from "./portAccessLimits";
+import { portAccessLimitAction, portAccessLimitSpecs, readPortAccessLimitsEnabled, resolvePortAccessLimitAction } from "./portAccessLimits";
 import { ruleLimitRootId } from "./ruleLimits";
 import { getHostWireGuardPlane, getTunnelRuntimeGeneration, isTunnelRuntimeHostReady } from "./tunnelRuntimeStatus";
 import { appendPanelLog } from "./_core/panelLogger";
@@ -66,8 +59,6 @@ import { isIP } from "net";
 import { hasQueuedLookingGlassAgentTasks, takeLookingGlassAgentTasks } from "./lookingGlassAgentTasks";
 import { hasQueuedDiagnosticsAgentTasks, hasRunningDiagnosticsAgentTasks, takeDiagnosticsAgentTasks } from "./diagnosticsAgentTasks";
 import { hasQueuedRuleConnectionsTasks, hasRunningRuleConnectionsTasks, takeRuleConnectionsTasks } from "./ruleConnectionsAgentTasks";
-import { RULE_CONNECTIONS_AGENT_VERSION } from "../shared/ruleConnections";
-import { LINK_DIAGNOSTICS_AGENT_VERSION } from "../shared/linkDiagnostics";
 import { hasQueuedIperf3AgentTasks, takeIperf3AgentTasks } from "./iperf3AgentTasks";
 import { hasQueuedPluginAgentTasks, takePluginAgentTasks } from "./pluginAgentTasks";
 import { hasPendingMimicInstallTask, hasQueuedMimicInstallTask, takeMimicInstallTask } from "./mimicInstallTasks";
@@ -135,7 +126,6 @@ import {
   normalizeForwardRuleProtocol,
 } from "@shared/forwardTypes";
 import {
-  AGENT_FORWARDX_WIREGUARD_VERSION,
   buildForwardXWireGuardMimicFilters,
   isForwardXWireGuardV2,
   type ForwardXWireGuardNodePlan,
@@ -319,10 +309,6 @@ onRuleDeleted(forgetAgentHeartbeatRule);
 
 const agentCacheCleanupTimer = setInterval(() => pruneAgentHeartbeatCaches(), 10 * 60 * 1000);
 agentCacheCleanupTimer.unref?.();
-const AGENT_FIREWALL_COUNTER_REFRESH_VERSION = "2.2.178";
-const AGENT_PROTOCOL_GUARD_BACKEND_VERSION = "2.2.127";
-const AGENT_DESIRED_STATE_VERSION = "2.2.134";
-const AGENT_STATE_SIGNATURE_VERSION = "2.2.137";
 const AGENT_RUNTIME_SYNC_REPAIR_RESEND_MS = 60 * 1000;
 const AGENT_GOST_RUNTIME_RECONCILE_MS = 5 * 60 * 1000;
 const AGENT_NGINX_RUNTIME_RECONCILE_MS = 5 * 60 * 1000;
@@ -604,12 +590,6 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       ["ipv4", reportedAddress.ipv4],
       ["ipv6", reportedAddress.ipv6],
     ].some(([key, value]) => String(value || "") !== String((host as any)[key as string] || ""));
-    const upgradedFirewallCounterAgent = !!nextAgentVersion
-      && isAgentVersionAtLeast(nextAgentVersion, AGENT_FIREWALL_COUNTER_REFRESH_VERSION)
-      && !isAgentVersionAtLeast(previousHost.agentVersion, AGENT_FIREWALL_COUNTER_REFRESH_VERSION);
-    const upgradedProtocolGuardBackendAgent = !!nextAgentVersion
-      && isAgentVersionAtLeast(nextAgentVersion, AGENT_PROTOCOL_GUARD_BACKEND_VERSION)
-      && !isAgentVersionAtLeast(previousHost.agentVersion, AGENT_PROTOCOL_GUARD_BACKEND_VERSION);
     const recoveredFromOffline = wasOnline === false;
     const rebootDetected = heartbeatIndicatesAgentReboot(previousHost, uptime, agentBootId);
     const previousProcessStartedAt = heartbeatTimestampMs(previousHost.agentProcessStartedAt);
@@ -625,14 +605,9 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     const processRestartDetected = processIdChanged || processStartChanged;
     const recoveryTriggered = recoveredFromOffline || rebootDetected || processRestartDetected;
     const effectiveAgentVersion = nextAgentVersion || String((host as any).agentVersion || "");
-    const supportsDesiredState = isAgentVersionAtLeast(effectiveAgentVersion, AGENT_DESIRED_STATE_VERSION);
-    const supportsStateSignatures = isAgentVersionAtLeast(effectiveAgentVersion, AGENT_STATE_SIGNATURE_VERSION);
-    const supportsPluginTasks = isAgentVersionAtLeast(effectiveAgentVersion, AGENT_PLUGIN_TASK_VERSION);
 
     const busyHeartbeatHostStateChanged = !wasOnline
       || recoveryTriggered
-      || upgradedFirewallCounterAgent
-      || upgradedProtocolGuardBackendAgent
       || addressChanged
       || agentVersionChanged
       || fxpVersionChanged
@@ -753,18 +728,6 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       await resetAgentRuntimeStateForRecovery(host.id, reason, {
         preserveReportedRuntime: !!localRuntimeState.state && !localRuntimeState.requestLocalState,
       });
-    }
-    if (upgradedFirewallCounterAgent) {
-      await resetAgentRuntimeStateForRecovery(host.id, "agent-firewall-counter-upgrade", {
-        preserveReportedRuntime: !!localRuntimeState.state && !localRuntimeState.requestLocalState,
-      });
-      appendPanelLog("info", `[AgentUpgrade] host=${host.id} agent=${nextAgentVersion} runtime state marked for firewall counter refresh`);
-    }
-    if (upgradedProtocolGuardBackendAgent) {
-      await resetAgentRuntimeStateForRecovery(host.id, "agent-protocol-guard-backend-upgrade", {
-        preserveReportedRuntime: !!localRuntimeState.state && !localRuntimeState.requestLocalState,
-      });
-      appendPanelLog("info", `[AgentUpgrade] host=${host.id} agent=${nextAgentVersion} runtime state marked for protocol guard backend refresh`);
     }
     if (dnsChangedReports.length > 0) {
       appendPanelLog("info", `[AgentDNS] host=${host.id} reported DNS change for ${dnsChangedReports.length} watched name(s); rule-specific refresh only`);
@@ -1955,26 +1918,13 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       }
     }
     /*
-      线路组的调度器跑在哪台机上，就看哪台机的 Agent：直连规则是规则所在的机器，隧道规则是
-      出口（多出口时每个出口各跑一个）。UDP、TCP+UDP 和 NEX 隧道的调度要 Agent 2.2.199 起
-      （shared/routeGroup 的 routeGroupSchedulerAgentVersion）—— 更老的只会开 TCP 监听、也不认
-      「只跑调度器」，下发了反而坏事。隧道规则的入口和出口各自心跳、各自生成配置：入口这边算
-      「出口拨哪儿」时也得按出口的版本判断，所以出口的版本先读好。
+      线路组的调度器跑在哪台机上：直连规则是规则所在的机器，隧道规则是出口（多出口时每个出口各跑
+      一个）。隧道规则的入口和出口各自心跳、各自生成配置：入口这边算「出口拨哪儿」时要用出口报上来的
+      调度器端口（server/tunnelExitPorts）。
     */
     // 出口报过的调度器、守卫端口（server/tunnelExitPorts）：面板重启后第一次用之前从库里读回来。
     await loadTunnelExitPorts();
-    const routeSchedulerAgentVersions = new Map<number, string>([[Number(host.id), String(effectiveAgentVersion || "")]]);
     const routeTunnelOf = (rule: any) => (Number(rule?.tunnelId || 0) > 0 ? tunnelById.get(Number(rule.tunnelId)) as any : null);
-    /** 可能跑调度器的机器，取全一点，只用来预读版本：规则所在机器、隧道入口、主出口、最后一跳和全部出口节点。 */
-    const routeSchedulerCandidateHostIds = (rule: any): number[] => {
-      const tunnel = routeTunnelOf(rule);
-      if (!tunnel) return [Number(rule?.hostId || host.id)];
-      const ids = [Number(rule?.hostId || 0), Number(tunnel.entryHostId || 0), Number(tunnel.exitHostId || 0)];
-      const hops = tunnelHopsByTunnelId.get(Number(tunnel.id));
-      if (Array.isArray(hops) && hops.length > 0) ids.push(Number((hops[hops.length - 1] as any)?.hostId || 0));
-      for (const exitNode of tunnelExitNodesByTunnelId.get(Number(tunnel.id)) || []) ids.push(Number((exitNode as any)?.hostId || 0));
-      return Array.from(new Set(ids.filter((id) => id > 0)));
-    };
     /*
       NEX 隧道由出口的 FXP 拨目标：主出口（多跳时是最后一跳），负载均衡开着时还有额外的
       出口节点 —— 和入口分流用的 forwardXExtraExitRoutes 同一个条件（开着负载均衡、分法不是
@@ -1993,12 +1943,10 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       return Array.from(new Set(ids.filter((id) => id > 0)));
     };
     /*
-      真正跑调度器的机器，要新 Agent 的调度得每一台都够版本：直连规则是规则所在的机器；GOST /
-      Nginx 隧道是这条规则实际用到的出口（tunnelExitEndpointsForRule：主出口加上开着的负载均衡
-      出口）—— 停用的出口节点、负载均衡关掉后还留着的节点不算，不然一台用不上的旧出口会让所有
-      出口都退回路径 A；NEX 隧道是 forwardXSchedulerHostIds。入口给出口的目标对每个出口
-      都一样，所以要每个出口都够版本。tunnelExitEndpointsForRule 定义在后面：这里只在调用时读，
-      而 actionFailover 都是在它定义之后才调的。
+      真正跑调度器的机器：直连规则是规则所在的机器；GOST / Nginx 隧道是这条规则实际用到的出口
+      （tunnelExitEndpointsForRule：主出口加上开着的负载均衡出口）—— 停用的出口节点、负载均衡关掉后
+      还留着的节点不算；NEX 隧道是 forwardXSchedulerHostIds。tunnelExitEndpointsForRule 定义在后面：
+      这里只在调用时读，而用到它的地方都在它定义之后。
     */
     const routeSchedulerHostIds = (rule: any): number[] => {
       const tunnel = routeTunnelOf(rule);
@@ -2010,54 +1958,23 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       const ids = Array.from(new Set(tunnelExitEndpointsForRule(rule, tunnel).map((endpoint) => endpoint.exitHostId).filter((id) => id > 0)));
       return ids.length > 0 ? ids : [Number(tunnel.exitHostId || rule?.hostId || host.id)];
     };
-    // 先把要看版本的机器收齐，一次查完（以前每台各查一次）。
-    const missingSchedulerHostIds = new Set<number>();
-    for (const rule of [...agentAllRules, ...agentHostRules] as any[]) {
-      if (!rule?.failoverEnabled) continue;
-      // 带 UDP 的线路组：每条路径对端那台的版本也要看（UDP 回声探测，routeUdpEchoProbeReady）。
-      if (normalizeForwardRuleProtocol(rule?.protocol) !== "tcp") {
-        for (const path of routePathsOf(rule)) {
-          const farEnd = routePathFarEndHostId(path);
-          if (farEnd && !routeSchedulerAgentVersions.has(farEnd)) missingSchedulerHostIds.add(farEnd);
-        }
-      }
-      if (!routeGroupSchedulerAgentVersion(rule?.protocol, routeTunnelOf(rule)?.mode)) continue;
-      for (const schedulerHostId of routeSchedulerCandidateHostIds(rule)) {
-        if (!routeSchedulerAgentVersions.has(schedulerHostId)) missingSchedulerHostIds.add(schedulerHostId);
-      }
-    }
-    if (missingSchedulerHostIds.size > 0) {
-      const schedulerHosts = await db.getHostsByIds(Array.from(missingSchedulerHostIds))
-        .catch(ignoreErrorWith("AgentHeartbeat scheduler hosts", [] as any[])) as any[];
-      const versionById = new Map(schedulerHosts.map((row: any) => [Number(row.id), String(row?.agentVersion || "")]));
-      for (const schedulerHostId of missingSchedulerHostIds) {
-        routeSchedulerAgentVersions.set(schedulerHostId, versionById.get(schedulerHostId) || "");
-      }
-    }
     // 落地是「我的节点」的路径：节点在哪台 NEX 主机上（loadPct 要算那台的负载，server/hostLoad.ts），也是拼规格前一次查齐。
     await ensureLandingNodeHosts([...agentAllRules, ...agentHostRules]
       .filter((rule) => rule?.failoverEnabled)
       .flatMap((rule) => routePathsOf(rule))
       .filter((path) => Number(path.destNodeId || 0) > 0 && !(Number(path.destHostId || 0) > 0))
       .map((path) => Number(path.destNodeId)));
-    const routeSchedulerAgentAtLeast = (rule: any, version: string) => routeSchedulerHostIds(rule).every((schedulerHostId) => (
-      isAgentVersionAtLeast(routeSchedulerAgentVersions.get(schedulerHostId) || "", version)
-    ));
     /*
-      「故障切换优先同出口 IP」（2.3.520，Agent 2.2.251）：每条路径带上它最后从哪个 IP 出去（exitIp）。落地是 NEX 主机
+      「故障切换优先同出口 IP」（2.3.520）：每条路径带上它最后从哪个 IP 出去（exitIp）。落地是 NEX 主机
       （落地池成员）时是那台的出口地址 —— 面板看到的心跳来源，没有就是登记的 IPv4 / IPv6（hostEgressAddress）；落地是
       手填地址、节点地址、规则自己的目标时就是那个地址本身。要用到的落地主机在这里一次查完，查不到就退回落地的拨号地址。
-      这台的 Agent 不够新时不查：下发给它的规格里不带 exitIp（调度器在这台上，按规则算的版本也过不了）。这里不能用
-      routeSchedulerAgentAtLeast —— 它要用到后面才定义的 tunnelExitEndpointsForRule。
     */
     const routeExitHostIds = new Set<number>();
-    if (isAgentVersionAtLeast(effectiveAgentVersion, ROUTE_EXIT_IP_AGENT_VERSION)) {
-      for (const rule of [...agentAllRules, ...agentHostRules]) {
-        if (!rule?.failoverEnabled) continue;
-        for (const path of routePathsOf(rule)) {
-          const destHostId = Number(path.destHostId || 0);
-          if (destHostId > 0) routeExitHostIds.add(destHostId);
-        }
+    for (const rule of [...agentAllRules, ...agentHostRules]) {
+      if (!rule?.failoverEnabled) continue;
+      for (const path of routePathsOf(rule)) {
+        const destHostId = Number(path.destHostId || 0);
+        if (destHostId > 0) routeExitHostIds.add(destHostId);
       }
     }
     const routeExitHostById = new Map<number, HostEgressSource>();
@@ -2074,7 +1991,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       的规格都按这一份名单，两边必须一致 —— gost 发了头而调度器不扔，目标就会收到一个它不认识的头。
     */
     const routeHeaderStripRuleIds = new Set<number>();
-    /** 线路组在这条规则上能不能由 Agent 调度（不看协议和版本）。 */
+    /** 线路组在这条规则上能不能由 Agent 调度。 */
     const routeSchedulingAllowed = (rule: any) => {
       if (!rule || !rule.failoverEnabled) return false;
       // 调度器插在前面那个用户态转发工具和路径之间；内核转发（iptables / nftables）没有这一步。
@@ -2088,9 +2005,6 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     const actionFailover = (rule: any, options?: { listenPort?: number; bindAddress?: string; proxyDirection?: "send" | "exitSend" | "none" }) => {
       if (!routeSchedulingAllowed(rule)) return undefined;
       const protocol = normalizeForwardRuleProtocol(rule.protocol);
-      // 版本不够时不下发：前面的转发工具（NEX 隧道是出口的 FXP）改拨主线路（routePrimaryEndpoint），等 Agent 升级。
-      const requiredAgentVersion = routeGroupSchedulerAgentVersion(protocol, routeTunnelOf(rule)?.mode);
-      if (requiredAgentVersion && !routeSchedulerAgentAtLeast(rule, requiredAgentVersion)) return undefined;
       /*
         线路组（shared/routeGroup）：一条路径对入口 Agent 来说就是一个要拨的地址（dial）。
         没有中转的路径拨落地；有中转的拨第一跳上那条中继规则的入口（server/routeGroups.ts
@@ -2120,38 +2034,30 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         （2.3.497 及以前：选了整链最优一直不切）。稳定优先 / 按时段 / 人工指定本来就按顺序走，分不分层一样。
       */
       const tiered = (delivery === "aggregate" || delivery === "replicate") && paths.every((path) => typeof path.tier === "number");
-      const strategy = routeDeliveryStrategy(policy, delivery, (version) => routeSchedulerAgentAtLeast(rule, version));
+      const strategy = routeDeliveryStrategy(policy, delivery);
       /*
-        「落地怎么分」（2.3.501，Agent 2.2.245）：一次走一条线路时（主备 / 择优 / 时段 / 人工指定都是 fallback），
+        「落地怎么分」（2.3.501）：一次走一条线路时（主备 / 择优 / 时段 / 人工指定都是 fallback），
         线路选了「一起分」的，每条目标带上第几条线路、落地是哪一个、怎么分 —— Agent 挑出该走的那条之后，在它那条
         线路的几个落地里按这个分新连接。按权重（整组一起分）、聚合 / 复制（分层）不带：那时已经在分了。
       */
-      const destSpreadReady = routeDestSpreadReady({ strategy, tiered, paths, agentAtLeast: (version) => routeSchedulerAgentAtLeast(rule, version) });
-      // 出口 IP 提示只给认得它的 Agent（2.2.251）；和 Down / extraLatencyMs 一样是运行时提示，Agent 那边不进签名。
-      const exitIpReady = routeSchedulerAgentAtLeast(rule, ROUTE_EXIT_IP_AGENT_VERSION);
+      const destSpreadReady = routeDestSpreadReady({ strategy, tiered, paths });
       // 第 N 个目标的第一跳是哪台：入口 Agent 报的第一段延迟就是「进那台机器」的延迟（节点池卡上的毫秒数）。
       noteRouteFirstHops(Number(rule.id), paths.map((path) => (path.hops.length > 0 ? Number(path.hops[0]) : null)));
-      // UDP 回声探测（Agent 2.2.251）：发探测报的是调度那台，它也得够新（老的不认这个字段）。
-      const udpEchoSchedulerReady = routeSchedulerAgentAtLeast(rule, UDP_PROBE_MIN_AGENT_VERSION);
-      // 沿途负载只给认得它的 Agent（2.2.251）。
-      const loadHintReady = routeSchedulerAgentAtLeast(rule, ROUTE_LOAD_HINT_AGENT_VERSION);
       const targets = paths.map((path) => {
         const dial = routePathDial(path, routeRule);
         const tier = tiered ? { tier: Number(path.tier) } : {};
-        const lineSpread = routeDestSpreadTargetFields(path, destSpreadReady, (version) => routeSchedulerAgentAtLeast(rule, version));
+        const lineSpread = routeDestSpreadTargetFields(path, destSpreadReady);
         if (!dial) {
           return { targetIp: "127.0.0.1", targetPort: 1, weight: path.weight, ...tier, ...lineSpread, down: true, downReason: path.issue || "path unresolved" };
         }
         const hint = nodeHints.get(path.key) || hints.get(path.key);
         // Agent 那边是整数毫秒（Go int），小数会让整份规格解不开。
         const extraLatencyMs = Math.round(routePathDownstreamMs(Number(rule.id), path));
-        // 回探测报的是对端那台：对端是自己的机器、它的 Agent 也够新才带（routeUdpEchoProbeReady）。
-        const farEnd = routePathFarEndHostId(path);
-        const probeUdpEcho = udpEchoSchedulerReady
-          && routeUdpEchoProbeReady({ protocol, path, farEndAgentVersion: farEnd ? routeSchedulerAgentVersions.get(farEnd) : null });
-        // 沿途主机里最忙那台的负载（0–100，整数）：Agent 2.2.251 起拿它扣评分、算「自动」的权重；老 Agent 不给。
-        const loadPct = loadHintReady ? routePathLoadHint(path) : 0;
-        const exitIp = exitIpReady ? routePathExitIp(path, routeRule, routeHostEgressIp) : "";
+        // 回探测报的是对端那台：对端是自己的机器才带（routeUdpEchoProbeReady）。
+        const probeUdpEcho = routeUdpEchoProbeReady({ protocol, path });
+        // 沿途主机里最忙那台的负载（0–100，整数）：Agent 拿它扣评分、算「自动」的权重。
+        const loadPct = routePathLoadHint(path);
+        const exitIp = routePathExitIp(path, routeRule, routeHostEgressIp);
         return {
           targetIp: dial.ip,
           targetPort: dial.port,
@@ -2166,7 +2072,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
           // 和 extraLatencyMs 一样是运行时提示：不进 Agent 的签名、不重建代理，面板也不因为它重发期望状态
           // （server/agentDesiredStateHash.ts 的 failoverWithoutRuntimeHints），靠 runningRules 送到。
           ...(loadPct > 0 ? { loadPct } : {}),
-          // 这条路径最后从哪个 IP 出去：挂了换路时 Agent 优先挑一样的（2.2.251）。
+          // 这条路径最后从哪个 IP 出去：挂了换路时 Agent 优先挑一样的。
           ...(exitIp ? { exitIp } : {}),
           ...(hint?.down ? { down: true, downReason: hint.reason } : {}),
         };
@@ -2632,11 +2538,11 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     /*
       出口组「故障切换优先同出口 IP」（2.3.520）：每个出口带上那台主机的出口地址（hostEgressAddress）。先写进 FXP 规格，
       FXP 主备换出口时按它取舍要等 FXP 那边接上（现在的 FXP 不读这个字段）；Agent 不拿它算签名，带上不会重载 FXP。
-      只给认得它的 Agent（2.2.251）；出口不到两个用不上，不查。一次心跳里同一台只查一次。
+      出口不到两个用不上，不查。一次心跳里同一台只查一次。
     */
     const exitIpCache = new Map<number, string>();
     const exitIpsForHostIds = async (hostIds: number[]): Promise<string[] | null> => {
-      if (hostIds.length < 2 || !isAgentVersionAtLeast(effectiveAgentVersion, ROUTE_EXIT_IP_AGENT_VERSION)) return null;
+      if (hostIds.length < 2) return null;
       const missing = Array.from(new Set(hostIds.filter((id) => id > 0 && !exitIpCache.has(id))));
       if (missing.length > 0) {
         const rows: HostEgressSource[] = await db.getHostsByIds(missing).catch(ignoreErrorWith("AgentHeartbeat exit ips", []));
@@ -2870,13 +2776,11 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
 
       只有这些条件全满足才直通，否则规则照旧走 FXP（切换是自动的，不用改规则）：
         - 隧道是 V2，单入口、单出口（没有中转、没有入口组、没有额外出口）；
-        - 两台机器都报告自己跑的是内核 WireGuard（用户态 wireguard-go 没有内核路由可用），
-          Agent 都 ≥ 2.2.220；
+        - 两台机器都报告自己跑的是内核 WireGuard（用户态 wireguard-go 没有内核路由可用）；
         - 隧道没开链路整形、UDP 抗丢包、协议拦截、PROXY protocol（这些都是 FXP 里做的）；
         - 规则没有限速、连接数 / IP 数限制、线路组、PROXY protocol，目标是 IPv4 地址
           （域名由面板解析成 IP 后同样可以）。
     */
-    const AGENT_KERNEL_PASSTHROUGH_VERSION = "2.2.220";
     type KernelPassthroughPlan = { entryHostId: number; exitHostId: number; entryAddress: string; exitAddress: string };
     const kernelPassthroughPlanPromises = new Map<number, Promise<KernelPassthroughPlan | null>>();
     const tunnelKernelPassthroughPlan = (tunnel: any): Promise<KernelPassthroughPlan | null> => {
@@ -2901,7 +2805,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         for (const hostId of [entryHostId, exitHostId]) {
           if (getHostWireGuardPlane(tunnelId, hostId) !== "kernel") return null;
           const member = hostId === Number(host.id) ? host : await getTunnelDialHost(hostId).catch(() => null);
-          if (!isAgentVersionAtLeast(String((member as any)?.agentVersion || ""), AGENT_KERNEL_PASSTHROUGH_VERSION)) return null;
+          if (!member) return null;
         }
         let plans: Map<number, ForwardXWireGuardNodePlan>;
         try {
@@ -3011,7 +2915,6 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       }
       if (tunnel) return false;
       if (!shouldUseProcessBackendGuard(rule)) return false;
-      if (!isAgentVersionAtLeast(String((host as any).agentVersion || ""), AGENT_PROTOCOL_GUARD_BACKEND_VERSION)) return false;
       if (!isForwardRuleProtocolTcpEnabled(rule.protocol)) return false;
       return hasProtocolPolicy(await ruleProtocolPolicy(rule));
     };
@@ -3107,13 +3010,11 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     /*
       填「按访客固定」要剥头的 gost 端口转发名单（routeHeaderStripRuleIds 的来历见那里）。条件：
       gost 直连、不过协议守卫（守卫在前面时 gost 看到的访客是守卫自己）、有 TCP、规则本身不发
-      PROXY 头（发的话头已经在了，调度器读完原样转）、调度确实会下发且分法是按访客、调度器那台
-      Agent 认得 proxyProtocolStrip（2.2.199 起；老的会把头原样转给目标）。
+      PROXY 头（发的话头已经在了，调度器读完原样转）、调度确实会下发且分法是按访客。
     */
     for (const rule of Array.from(new Set([...agentAllRules, ...agentHostRules])) as any[]) {
       if (!rule?.failoverEnabled || rule.forwardType !== "gost" || Number(rule.tunnelId || 0) > 0) continue;
       if (!isForwardRuleProtocolTcpEnabled(rule.protocol) || proxyProtocolEnabled(rule, "send")) continue;
-      if (!routeSchedulerAgentAtLeast(rule, ROUTE_GROUP_UDP_AGENT_VERSION)) continue;
       const spec = actionFailover(rule, { listenPort: failoverProxyPort(rule), bindAddress: "127.0.0.1" });
       if (!spec || spec.strategy !== "ip_hash") continue;
       if (await shouldUseRuleGuard(rule)) continue;
@@ -3287,13 +3188,11 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       reportedLocalRules,
     });
     const shouldForceStoppedKernelRuleCleanup = (rule: any) => !!rule?.resourceAccessDenied
-      || (supportsDesiredState && (
-        (isKernelForwardRule(rule) && localRuleNeedsRemoval(rule))
-        // The desired rule may already be disabled after a backend edit. If
-        // the Agent still reports the same rule as an iptables/nftables owner,
-        // issue one cleanup action so a stale kernel redirect cannot survive.
-        || localRuleHasKernelForwardState(rule)
-      ));
+      || (isKernelForwardRule(rule) && localRuleNeedsRemoval(rule))
+      // The desired rule may already be disabled after a backend edit. If
+      // the Agent still reports the same rule as an iptables/nftables owner,
+      // issue one cleanup action so a stale kernel redirect cannot survive.
+      || localRuleHasKernelForwardState(rule);
 
     const pendingTunnelExitRuleIds = new Set(
       tunnelExitRules
@@ -4292,10 +4191,9 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       }
     }
     /*
-      NEX 隧道的线路组：出口机上只跑调度器（schedulerOnly，Agent 2.2.199 起，见 shared/routeGroup
-      的 ROUTE_GROUP_FORWARDX_AGENT_VERSION）。这台机器上没有这条规则的端口：sourcePort 填调度器自己
-      的监听端口，只给 Agent 当认调度器的标识；Agent 不给它写端口状态、不装计数链，流量照旧在入口计。
-      版本不够时 forwardXSchedulerFailover 返回空、这里不发，老 Agent 不会把它当普通规则去装端口。
+      NEX 隧道的线路组：出口机上只跑调度器（schedulerOnly，见 shared/routeGroup 的
+      routeGroupIsForwardXTunnel）。这台机器上没有这条规则的端口：sourcePort 填调度器自己的监听端口，
+      只给 Agent 当认调度器的标识；Agent 不给它写端口状态、不装计数链，流量照旧在入口计。
     */
     for (const rule of agentAllRules as any[]) {
       if (!rule || runtimeBool(rule.pendingDelete) || !runtimeBool(rule.isEnabled) || !rule.failoverEnabled) continue;
@@ -4496,8 +4394,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         probeType: "china",
         targetIp: probe.targetIp,
         targetPort: probe.targetPort,
-        // 按组里选的方法探（tcp / ping / udp）；「UDP」要 Agent 2.2.251 起，老 Agent 改发 ping。
-        method: forwardGroupHealthProbeMethodForAgent(probe.method, effectiveAgentVersion),
+        // 按组里选的方法探（tcp / ping / udp）。
+        method: normalizeForwardGroupHealthCheckMethod(probe.method),
         hopIndex: 0,
         hopCount: 1,
         probeKey: `forward-group:${Number(probe.groupId)}:host:${Number(host.id)}:china:${Number(probe.memberId)}:${String(probe.targetIp).toLowerCase()}:${Number(probe.targetPort) || 0}`,
@@ -4557,29 +4455,27 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       ...await getIpChangeProbeTasksForHost(Number(host.id)),
     ];
 
-    if (isAgentVersionAtLeast(String((host as any).agentVersion || ""), AGENT_FORWARDX_WIREGUARD_VERSION)) {
-      for (const tunnel of hostTunnels as any[]) {
-        if (!isForwardXWireGuardV2(tunnel)) continue;
-        const tunnelProtocolEnabled = isTunnelProtocolEnabled(forwardProtocolSettings, tunnel);
-        const enabled = runtimeBool(tunnel.isEnabled) && tunnelProtocolEnabled;
-        const plan = enabled ? await getCurrentHostForwardXWireGuardPlan(tunnel) : null;
-        if (enabled && !plan) continue;
-        const passthrough = plan ? await kernelPassthroughEntriesForTunnel(tunnel) : [];
-        actions.push({
-          tunnelId: Number(tunnel.id),
-          statusType: "runtime",
-          ruleId: 0,
-          op: enabled ? "apply" : "remove",
-          forwardType: "forwardx-wireguard",
-          sourcePort: 0,
-          targetIp: "",
-          targetPort: 0,
-          protocol: "udp",
-          commands: [],
-          wireGuard: plan ? (passthrough.length > 0 ? { ...plan, passthrough } : plan) : undefined,
-          reportStatus: false,
-        });
-      }
+    for (const tunnel of hostTunnels as any[]) {
+      if (!isForwardXWireGuardV2(tunnel)) continue;
+      const tunnelProtocolEnabled = isTunnelProtocolEnabled(forwardProtocolSettings, tunnel);
+      const enabled = runtimeBool(tunnel.isEnabled) && tunnelProtocolEnabled;
+      const plan = enabled ? await getCurrentHostForwardXWireGuardPlan(tunnel) : null;
+      if (enabled && !plan) continue;
+      const passthrough = plan ? await kernelPassthroughEntriesForTunnel(tunnel) : [];
+      actions.push({
+        tunnelId: Number(tunnel.id),
+        statusType: "runtime",
+        ruleId: 0,
+        op: enabled ? "apply" : "remove",
+        forwardType: "forwardx-wireguard",
+        sourcePort: 0,
+        targetIp: "",
+        targetPort: 0,
+        protocol: "udp",
+        commands: [],
+        wireGuard: plan ? (passthrough.length > 0 ? { ...plan, passthrough } : plan) : undefined,
+        reportStatus: false,
+      });
     }
 
     const requestedTargetVersion = (host as any).agentUpgradeTargetVersion || AGENT_VERSION;
@@ -4612,10 +4508,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     // local runtime snapshot. Desired state is intentionally withheld for that
     // response, so caching the plugin action here would otherwise lose it until
     // the five-minute plugin retry window expires.
-    const deferActionsForLocalState = shouldDeferAgentWorkForLocalState({
-      supportsDesiredState,
-      requestLocalState: localRuntimeState.requestLocalState,
-    });
+    const deferActionsForLocalState = localRuntimeState.requestLocalState;
     const selfTests: any[] = [];
     if (!deferActionsForLocalState) {
       const pendingTests = await db.getPendingForwardTestsByHost(host.id);
@@ -4633,9 +4526,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         selfTests.push(buildRuleAgentSelfTestPayload(t, rule));
       }
     }
-    const pluginSyncTasks = supportsPluginTasks
-      ? await buildPluginHostAssetSyncActions(Number(host.id))
-      : [];
+    const pluginSyncTasks = await buildPluginHostAssetSyncActions(Number(host.id));
     const reportedPluginInventory = reportedPluginInventoryForFastPath;
     let pluginSyncActionQueued = false;
     for (const pluginSyncTask of pluginSyncTasks) {
@@ -4758,7 +4649,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         && (mimicRuntimeServiceUnhealthy || mimicRuntimeTopologyMismatch),
       revision: configRevision,
     });
-    const runtimeSyncBootstrap = !supportsDesiredState || !hasReportedRuntimeState || localRuntimeState.requestLocalState;
+    const runtimeSyncBootstrap = !hasReportedRuntimeState || localRuntimeState.requestLocalState;
     const gostReconcileCandidate = shouldReconcileGostRuntime({
       configChanged: gostRuntimeConfigChanged,
       serviceUnhealthy: gostRuntimeServiceUnhealthy,
@@ -5031,7 +4922,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       入站分过来的回环端口、换隧道留下的入口桥接，来源都是上一台机器或本机，按单 IP 一限
       全体用户都会被卡住。
     */
-    if (!deferActionsForLocalState && agentSupportsPortAccessLimits(effectiveAgentVersion)) {
+    if (!deferActionsForLocalState) {
       // 设置里没打开时候选为空 → 空快照：不限，并撤掉之前打开时下发的限制。
       // 读设置失败不能当成「关」：空快照会撤掉全部限制，这段时间放进来的连接之后也不会被踢掉。
       // 读不到就沿用上一次发给这台机器的快照（没有就这轮不发，Agent 保持现状）。
@@ -5057,7 +4948,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       const portLimitAction = resolvePortAccessLimitAction(
         Number(host.id),
         enforcePortLimits,
-        () => portAccessLimitAction(portAccessLimitSpecs(portLimitCandidates, userAccessLimits), true),
+        () => portAccessLimitAction(portAccessLimitSpecs(portLimitCandidates, userAccessLimits)),
       );
       if (portLimitAction) actions.push(portLimitAction);
     }
@@ -5145,9 +5036,9 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       action.statusType === "runtime" ? 0 : action.op === "apply" ? 1 : 2
     );
     const orderedActions = normalizedActions.slice().sort((a: any, b: any) => actionRank(a) - actionRank(b));
-    const activeWorkActions = supportsDesiredState
-      ? (deferActionsForLocalState ? [] : orderedActions.filter((action: any) => action.op === "remove" || !action.knownRunning))
-      : orderedActions;
+    const activeWorkActions = deferActionsForLocalState
+      ? []
+      : orderedActions.filter((action: any) => action.op === "remove" || !action.knownRunning);
     const recoveryWasInProgress = recoveryTriggered
       || (!!previousHost.agentRecoveryStartedAt && !previousHost.agentRecoveryCompletedAt);
     if (recoveryWasInProgress) {
@@ -5181,23 +5072,19 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     if (forceTcping) clearHostTcpingRequest(host.id);
 
     const lookingGlassTests = takeLookingGlassAgentTasks(host.id);
-    // 一键链路诊断只发给 2.2.226 起的 Agent（面板排任务时已经按版本挡过，这里再兜一次底）
-    const diagnosticsTasks = isAgentVersionAtLeast(effectiveAgentVersion, LINK_DIAGNOSTICS_AGENT_VERSION)
-      ? takeDiagnosticsAgentTasks(host.id)
-      : [];
-    // 规则的「连接」清单（Agent 2.2.237 起）；老 Agent 不下发，任务到点自己记超时。
-    const ruleConnectionTasks = isAgentVersionAtLeast(effectiveAgentVersion, RULE_CONNECTIONS_AGENT_VERSION)
-      ? takeRuleConnectionsTasks(host.id)
-      : [];
+    // 一键链路诊断
+    const diagnosticsTasks = takeDiagnosticsAgentTasks(host.id);
+    // 规则的「连接」清单
+    const ruleConnectionTasks = takeRuleConnectionsTasks(host.id);
     const iperf3Tasks = takeIperf3AgentTasks(host.id);
     const pluginsAwaitingSync = new Set(pluginSyncTasks.map((task) => task.pluginId));
-    const pluginTasks = supportsPluginTasks && reportedPluginInventory && !pluginSyncActionQueued
+    const pluginTasks = reportedPluginInventory && !pluginSyncActionQueued
       ? takePluginAgentTasks(host.id, 4, (task) => (
           !pluginsAwaitingSync.has(task.pluginId)
           && reportedPluginInventory.versions.get(task.pluginId) === task.pluginVersion
         ))
       : [];
-    const hasPendingPluginTasks = supportsPluginTasks && hasQueuedPluginAgentTasks(host.id);
+    const hasPendingPluginTasks = hasQueuedPluginAgentTasks(host.id);
     // 「安装 / 修复 mimic」（2.3.439）：排了就下一次心跳带下去，跑的时候心跳也勤一点，页面上进度跟得紧
     const mimicInstallTask = takeMimicInstallTask(host.id);
     const hasInteractiveTasks = lookingGlassTests.length > 0
@@ -5224,13 +5111,11 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       Agent 报上来的「已执行的期望状态摘要」和这一份对不上：它手里不是最新的。常见的是摘要里含
       knownRunning，规则 / 隧道刚跑起来那一下摘要就变了，可动作内容（下发签名）没变，不会重发；
       也可能是上一份推送丢了。稳定快路径要求两边摘要一致，对不上就一直走完整对账、一直对不上。
-      所以 Agent 落后时也重发一份，和有待办时一样最多 60 秒一次。不报摘要的旧 Agent 不受影响。
+      所以 Agent 落后时也重发一份，和有待办时一样最多 60 秒一次。
     */
-    const agentBehindDesiredState = supportsStateSignatures
-      && !!agentLastAppliedHash
+    const agentBehindDesiredState = !!agentLastAppliedHash
       && agentLastAppliedHash.toLowerCase() !== desiredStateHash;
-    const sendDesiredState = supportsDesiredState
-      && !deferActionsForLocalState
+    const sendDesiredState = !deferActionsForLocalState
       && shouldSendDesiredState(Number(host.id), orderedActions, activeWorkActions, responseIssuedAt, configRevision, agentBehindDesiredState);
     if (sendDesiredState) {
       for (const action of orderedActions) {
@@ -5329,9 +5214,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       });
     }
     const metricsWatching = isHostMetricsWatching(host.id);
-    const stablePlanReady = supportsDesiredState
-      && supportsStateSignatures
-      && !!localRuntimeState.state
+    const stablePlanReady = !!localRuntimeState.state
       && !!localRuntimeStateSignature
       && !localRuntimeState.requestLocalState
       && activeWorkActions.length === 0
@@ -5401,7 +5284,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     });
     res.json({
       success: true,
-      actions: supportsDesiredState ? [] : orderedActions,
+      actions: [],
       desiredState,
       selfTests,
       ...stateSections.payload,
@@ -5415,7 +5298,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       agentUpgrade,
       panelUrl,
       panelMigration,
-      forceTcping: forceTcping || (supportsStateSignatures && probeStateRefreshed),
+      forceTcping: forceTcping || probeStateRefreshed,
       nextInterval,
       requestLocalState: localRuntimeState.requestLocalState,
       compactReports: true,

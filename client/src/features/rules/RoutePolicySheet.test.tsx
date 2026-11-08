@@ -29,7 +29,7 @@ const rule = (patch: Partial<Record<keyof RoutePolicyRule, unknown>> = {}): Rout
 });
 
 function render(patch: Parameters<typeof rule>[0] = {}, canEdit = true) {
-  const policy = describeRoutePolicy(rule(patch), { host: { isOnline: true, agentVersion: "2.2.197" }, nowMs: NOW, timeZone: TZ })!;
+  const policy = describeRoutePolicy(rule(patch), { host: { isOnline: true }, nowMs: NOW, timeZone: TZ })!;
   return renderToStaticMarkup(
     <RoutePolicyPanel policy={policy} canEdit={canEdit} nowMs={NOW} timeZone={TZ} />,
   );

@@ -10,7 +10,6 @@ import {
 } from "./failoverTargets";
 import { normalizeForwardRuleProtocol } from "./forwardTypes";
 import { timestampMillis } from "./timestamp";
-import { agentSupportsUdpProbe } from "./udpProbe";
 
 /**
  * 线路组：一个入口 + 多条路径 + 一个调度策略。全站唯一一份模型。
@@ -44,15 +43,6 @@ import { agentSupportsUdpProbe } from "./udpProbe";
 /** 主线路 + 备用：Agent 那边出站上限是主线路外加 10 条。 */
 export const MAX_ROUTE_PATHS = MAX_FAILOVER_TARGETS + 1;
 export const MAX_ROUTE_HOPS = 5;
-/** 评分、权重、预热预检、强制切换、上报评分：Agent 2.2.198 起。更老的只按主备切。 */
-export const ROUTE_GROUP_AGENT_VERSION = "2.2.198";
-/**
- * UDP、TCP+UDP 的线路组：Agent 2.2.199 起（按会话调度，见 agent/route_group_udp.go）。
- *
- * 更老的 Agent 只会开 TCP 监听，前面的转发工具把 UDP 转给它就进了黑洞。所以版本不够时
- * 面板**不下发**调度：流量直接走主线路（路径 A），不切换，等 Agent 升级。
- */
-export const ROUTE_GROUP_UDP_AGENT_VERSION = "2.2.199";
 
 /**
  * 线路组能挂在哪些转发工具上。
@@ -82,34 +72,15 @@ export function routeGroupTunnelModeSupported(mode: unknown): boolean {
 }
 
 /**
- * NEX 隧道的线路组：出口 Agent 2.2.199 起。
- *
- * FXP 的出口是整条隧道共用的一个进程，按入口给的目标拨出去（UDP 按面板给出口的 udpTargets），
- * 出口机上没有这条规则自己的进程可以挂调度器。所以出口机收到一条「只跑调度器」的运行规则
- * （runningRules[].schedulerOnly）：只开调度器，不占规则端口、不写端口状态、不装计数链 ——
- * 流量照旧在入口计。入口让出口拨出口本机的调度器。更老的 Agent 认不出 schedulerOnly，会把它
- * 当成普通规则去装端口状态和计数链，所以版本不够时面板不下发，出口直接拨路径 A、不切换。
+ * NEX 隧道的线路组：FXP 的出口是整条隧道共用的一个进程，按入口给的目标拨出去（UDP 按面板给出口的
+ * udpTargets），出口机上没有这条规则自己的进程可以挂调度器。所以出口机收到一条「只跑调度器」的运行规则
+ * （runningRules[].schedulerOnly）：只开调度器，不占规则端口、不写端口状态、不装计数链 —— 流量照旧在
+ * 入口计。入口让出口拨出口本机的调度器。
  */
-export const ROUTE_GROUP_FORWARDX_AGENT_VERSION = "2.2.199";
-
 export function routeGroupIsForwardXTunnel(mode: unknown): boolean {
   return String(mode ?? "").trim().toLowerCase() === "forwardx";
 }
 
-/** 这条规则的线路组要不要 UDP 调度（Agent 2.2.199 起）。 */
-export function routeGroupNeedsUdpAgent(protocol: unknown): boolean {
-  return normalizeForwardRuleProtocol(protocol) !== "tcp";
-}
-
-/**
- * 调度所在机器的 Agent 至少要多新，面板才下发调度：NEX 隧道、UDP、TCP+UDP 要 2.2.199；
- * 其余返回 null（老 Agent 照老规矩按主备切）。版本不够时前面的转发工具拨路径 A、不切换。
- */
-export function routeGroupSchedulerAgentVersion(protocol: unknown, tunnelMode?: unknown): string | null {
-  if (routeGroupIsForwardXTunnel(tunnelMode)) return ROUTE_GROUP_FORWARDX_AGENT_VERSION;
-  if (routeGroupNeedsUdpAgent(protocol)) return ROUTE_GROUP_UDP_AGENT_VERSION;
-  return null;
-}
 
 export type RouteEndpoint = { ip: string; port: number };
 
@@ -194,35 +165,6 @@ export function normalizeRouteDestSpread(value: unknown): RouteDestSpread {
   return (ROUTE_DEST_SPREADS as readonly string[]).includes(text) ? text as RouteDestSpread : "one";
 }
 
-/** 「落地怎么分」：Agent 2.2.245 起；更老的 Agent 拿到也只认一个落地（字段它不认）。 */
-export const ROUTE_DEST_SPREAD_AGENT_VERSION = "2.2.245";
-
-/**
- * 「自动」（动态权重）：Agent 2.2.251 起。它按每条路径最近的探测延迟（指数平均）和面板给的主机负载
- * （failoverTarget.loadPct）算有效权重，新连接随机挑两条、取连接数 ÷ 有效权重更小的那条。
- * 更老的 Agent 认不出 auto：整组的分法面板改发「按权重」（和「按负载」退成按权重同一个路子），
- * 线路里几个落地的「自动」改发「按负载分」（那边没有按权重，按负载最接近）。
- */
-export const ROUTE_AUTO_SPREAD_AGENT_VERSION = "2.2.251";
-
-/**
- * 沿途主机负载（failoverTarget.loadPct）：Agent 2.2.251 起拿它扣评分、压「自动」的权重。更老的 Agent 不认这个字段，
- * 面板不给 —— 给了也白给，还会让下发的规格跟着负载一轮一轮地变。
- */
-export const ROUTE_LOAD_HINT_AGENT_VERSION = "2.2.251";
-
-/** 「自动」在老 Agent 上怎么退：整组是按权重，线路里的几个落地是按负载分。 */
-export function routeSpreadForAgent<T extends string>(spread: T, fallback: T, agentAtLeast: (version: string) => boolean): T {
-  if (spread !== "auto") return spread;
-  return agentAtLeast(ROUTE_AUTO_SPREAD_AGENT_VERSION) ? spread : fallback;
-}
-
-/**
- * 「故障切换优先同出口 IP」（2.3.520）：每条路径带上它最后从哪个 IP 出去（exitIp），当前这条挂了换路时，Agent 在
- * 同样够格的候选里优先挑出口 IP 一样的（agent/failover_exit_ip.go）。Agent 2.2.251 起；更老的不认这个字段，照老规矩换。
- */
-export const ROUTE_EXIT_IP_AGENT_VERSION = "2.2.251";
-
 /** Agent 切换事件原因后面的标记：这次是换到了同出口 IP 的备用（见 agent/failover_exit_ip.go）。 */
 export const ROUTE_REASON_SAME_EXIT_SUFFIX = "; same exit ip";
 
@@ -238,28 +180,24 @@ export function splitRouteReason(reason: unknown): { base: string; sameExitIp: b
 
 /**
  * 下发给 Agent 时带不带「落地怎么分」：一次走一条线路（分配策略是 fallback、不分层 —— 按权重、聚合 / 复制时
- * 整组本来就在分）、有线路选了一起分、调度的 Agent 都够新（2.2.245）。
+ * 整组本来就在分）、有线路选了一起分。
  */
 export function routeDestSpreadReady(options: {
   strategy: string;
   tiered: boolean;
   paths: ReadonlyArray<Pick<RoutePath, "destSpread" | "tier">>;
-  agentAtLeast: (version: string) => boolean;
 }): boolean {
   return options.strategy === "fallback" && !options.tiered
-    && options.paths.some((path) => !!path.destSpread && typeof path.tier === "number")
-    && options.agentAtLeast(ROUTE_DEST_SPREAD_AGENT_VERSION);
+    && options.paths.some((path) => !!path.destSpread && typeof path.tier === "number");
 }
 
 /** 一条目标上的「落地怎么分」字段：第几条线路、落地是哪一个、怎么分；这条线路没选一起分就不带。 */
 export function routeDestSpreadTargetFields(
   path: Pick<RoutePath, "destSpread" | "tier" | "dest" | "destNodeId"> & { destHostId?: number | null },
   ready: boolean,
-  // 「自动」要 Agent 2.2.251，更老的改发「按负载分」（routeSpreadForAgent）。
-  agentAtLeast: (version: string) => boolean,
 ): { line: number; landing: string; spread: RouteLineDestSpread } | Record<string, never> {
   if (!ready || !path.destSpread || typeof path.tier !== "number") return {};
-  return { line: path.tier, landing: routePathLandingKey(path), spread: routeSpreadForAgent<RouteLineDestSpread>(path.destSpread, "least_load", agentAtLeast) };
+  return { line: path.tier, landing: routePathLandingKey(path), spread: path.destSpread };
 }
 
 /** 落地是哪一个（同一个落地经不同中转的几条路径算一个）：落地池按成员机，节点按节点，别的按地址，没写 = 规则目标。 */
@@ -764,7 +702,7 @@ export function routePathDial(path: RoutePath, rule: Pick<RouteGroupRule, "targe
 /**
  * 这条路径的对端是哪台 NEX 管的主机：有中转就是第一跳（入口拨的是它上面的中继规则）；没中转而落地是
  * 落地池成员时是那台成员机（拨的是它上面的成员入站）；手填的落地地址不知道是不是自己的机器 → null。
- * UDP 回声探测（routeUdpEchoProbeReady）按它的 Agent 版本给。
+ * UDP 回声探测（routeUdpEchoProbeReady）只发给它。
  */
 export function routePathFarEndHostId(path: Pick<RoutePath, "hops" | "destHostId">): number | null {
   if (path.hops.length > 0) return Number(path.hops[0]) > 0 ? Number(path.hops[0]) : null;
@@ -773,10 +711,9 @@ export function routePathFarEndHostId(path: Pick<RoutePath, "hops" | "destHostId
 }
 
 /**
- * 这条目标下发时带不带 probeUdpEcho（Agent 2.2.251 起，agent/udp_probe.go）：规则要带 UDP（udp / both）、
- * 没填探测地址（填了照填的拨 TCP）、对端是 NEX 管的主机而且它的 Agent 够新 —— 老 Agent 的 UDP 监听不认探测报，
- * 会把它当普通包转出去，所以版本不够就不带，探测照旧（零长度包探端口不可达，说不准按原来的判法）。
- * 调度那台的 Agent 也得够新，由心跳另外判（routeSchedulerAgentAtLeast）。
+ * 这条目标下发时带不带 probeUdpEcho（agent/udp_probe.go）：规则要带 UDP（udp / both）、没填探测地址（填了照填的
+ * 拨 TCP）、对端是 NEX 管的主机 —— 手填的落地不知道是不是自己的机器，探测报会被当普通包转给落地，所以不带，
+ * 探测照旧（零长度包探端口不可达，说不准按原来的判法）。
  *
  * 只有落在 Agent 自己的 UDP 监听（协议守护）上的探测报才有回声；对端那个端口是 gost 在听（中转机上的中继规则）
  * 时探测报会被转出去、收不到回声，结论退回零长度包那一档，不会误判。
@@ -784,16 +721,15 @@ export function routePathFarEndHostId(path: Pick<RoutePath, "hops" | "destHostId
 export function routeUdpEchoProbeReady(options: {
   protocol: unknown;
   path: Pick<RoutePath, "hops" | "destHostId" | "probe">;
-  farEndAgentVersion: string | null | undefined;
 }): boolean {
   if (normalizeForwardRuleProtocol(options.protocol) === "tcp") return false;
   if (options.path.probe) return false;
-  if (routePathFarEndHostId(options.path) === null) return false;
-  return agentSupportsUdpProbe(options.farEndAgentVersion);
+  return routePathFarEndHostId(options.path) !== null;
 }
 
 /**
- * 这条路径最后从哪个 IP 出去（下发给 Agent 的 exitIp，见 ROUTE_EXIT_IP_AGENT_VERSION）。
+ * 这条路径最后从哪个 IP 出去（下发给 Agent 的 exitIp：当前这条挂了要换时，Agent 在同样够格的候选里优先挑出口 IP
+ * 一样的，见 agent/failover_exit_ip.go）。
  *
  * 落地是 NEX 主机（落地池成员，destHostId）时是那台机器的出口地址 —— hostEgressIp 给：面板看到的心跳来源，
  * 没有就是登记的 IPv4 / IPv6；那台一个地址都没有时退回落地的拨号地址。落地是手填地址、节点地址、或者规则
@@ -863,26 +799,15 @@ export function routeAgentStrategy(policy: Pick<RouteGroupPolicy, "mode" | "spre
 
 /**
  * 下发给 Agent 的分配策略，算上「备用怎么候着」：聚合 = 主线路那一组里按负载分（Agent 只在最低健康
- * tier 里挑，备用组照旧等着）；「按负载」老 Agent 不认（会退成主备），改发「按权重」；「自动」
- * 2.2.251 之前的 Agent 也不认，同样改发「按权重」（ROUTE_AUTO_SPREAD_AGENT_VERSION）。
+ * tier 里挑，备用组照旧等着）；其余按线路组自己的分法（routeAgentStrategy）。
  */
 export function routeDeliveryStrategy(
   policy: Pick<RouteGroupPolicy, "mode" | "spread">,
   delivery: RouteDelivery,
-  agentAtLeast: (version: string) => boolean,
 ): "fallback" | RouteSpread {
-  const leastLoad = agentAtLeast(ROUTE_LEAST_LOAD_AGENT_VERSION) ? "least_load" : "weighted";
-  if (delivery === "aggregate") return leastLoad;
-  const strategy = routeAgentStrategy(policy);
-  if (strategy === "least_load") return leastLoad;
-  return routeSpreadForAgent<"fallback" | RouteSpread>(strategy, "weighted", agentAtLeast);
+  if (delivery === "aggregate") return "least_load";
+  return routeAgentStrategy(policy);
 }
-
-/** 「按负载」：Agent 2.2.232 起（和 shared/exitStrategy 的 LEAST_LOAD_AGENT_VERSION 同一个）。 */
-export const ROUTE_LEAST_LOAD_AGENT_VERSION = "2.2.232";
-
-/** 线路（分层候选、tier、整链打分、热备抢拨、保存即测）：Agent 2.2.243 起。 */
-export const ROUTE_LINES_AGENT_VERSION = "2.2.243";
 
 /**
  * 线路组 → 老 failover* 列。

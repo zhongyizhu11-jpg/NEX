@@ -44,7 +44,6 @@ import {
   selectAgentHeartbeatInterval,
   selectAgentTrafficReportInterval,
   shouldPersistAgentPresence,
-  shouldDeferAgentWorkForLocalState,
 } from "./agentHeartbeatGate";
 
 test("normalizes legacy database boolean strings before runtime planning", () => {
@@ -733,12 +732,6 @@ test("metrics-only heartbeats do not erase the last reported mimic runtime state
     mimicRuntimeMessage: "mimic@eth0:active",
     mimicRuntimeCheckedAt: checkedAt,
   });
-});
-
-test("self-tests wait until a desired-state Agent uploads its requested local state", () => {
-  assert.equal(shouldDeferAgentWorkForLocalState({ supportsDesiredState: true, requestLocalState: true }), true);
-  assert.equal(shouldDeferAgentWorkForLocalState({ supportsDesiredState: true, requestLocalState: false }), false);
-  assert.equal(shouldDeferAgentWorkForLocalState({ supportsDesiredState: false, requestLocalState: true }), false);
 });
 
 test("heartbeat intervals slow down only when the Agent has no interactive work", () => {

@@ -1,4 +1,3 @@
-import { agentSupportsUdpProbe } from "./udpProbe";
 
 /**
  * Health check method for forward group and entry group members.
@@ -23,7 +22,7 @@ export const FORWARD_GROUP_HEALTH_CHECK_METHOD_LABELS: Record<ForwardGroupHealth
 export const FORWARD_GROUP_HEALTH_CHECK_METHOD_HINTS: Record<ForwardGroupHealthCheckMethod, string> = {
   tcp: "连接目标的 IP 和端口，能确认端口真的可用。目标必须写成 主机:端口。",
   ping: "只发 ICMP 探测延迟，不需要端口。适合目标不开放 TCP 端口、或只想看链路通断和延迟的场景。",
-  udp: "对目标的 UDP 端口发一个空包：端口关着（回 ICMP 端口不可达）算不通，有回包算通；UDP 服务多半不回陌生包，没回包时退回 Ping 探主机。目标必须写成 主机:端口；探测那台的 Agent 要 2.2.251 起，更老的按 Ping 探。",
+  udp: "对目标的 UDP 端口发一个空包：端口关着（回 ICMP 端口不可达）算不通，有回包算通；UDP 服务多半不回陌生包，没回包时退回 Ping 探主机。目标必须写成 主机:端口。",
 };
 
 /** TCPing and UDP need a port on the target; ping does not. */
@@ -63,14 +62,4 @@ export function healthCheckTargetPlaceholder(method: unknown) {
 export function healthCheckMethodShortLabel(method: unknown) {
   const normalized = normalizeForwardGroupHealthCheckMethod(method);
   return normalized === "ping" ? "Ping" : normalized === "udp" ? "UDP 探测" : "TCPing";
-}
-
-/**
- * 真正下发给探测那台 Agent 的方法：「UDP」要 Agent 2.2.251 起，更老的不认这个方法，改发 ping
- * （和它以前对 UDP 目标的办法一样）。tcp / ping 原样。
- */
-export function forwardGroupHealthProbeMethodForAgent(method: unknown, agentVersion: string | null | undefined): ForwardGroupHealthCheckMethod {
-  const normalized = normalizeForwardGroupHealthCheckMethod(method);
-  if (normalized === "udp" && !agentSupportsUdpProbe(agentVersion)) return "ping";
-  return normalized;
 }

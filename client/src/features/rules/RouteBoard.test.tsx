@@ -83,7 +83,7 @@ test("自定探测目标时第一段不算实测，整链用入口探到的那�
 });
 
 test("路径卡：每个节点的速率；备用路径写「空闲」；在走的那条有流动的小点", () => {
-  const policy = describeRoutePolicy(rule, { host: { isOnline: true, agentVersion: "2.2.198" }, nowMs: NOW })!;
+  const policy = describeRoutePolicy(rule, { host: { isOnline: true }, nowMs: NOW })!;
   const html = renderToStaticMarkup(
     <RoutePathCards
       status={{
@@ -127,7 +127,7 @@ test("真实连接的拨号药丸：有失败或慢的染琥珀，没拨过不�
   assert.equal(bad.text, "建连 12 · 失败 3 · 慢 2 · 拨号 640 ms");
   assert.equal(bad.tone, "warn");
   assert.match(bad.title, /拨不通 3 次、拨得慢 2 次/);
-  const policy = describeRoutePolicy(rule, { host: { isOnline: true, agentVersion: "2.2.237" }, nowMs: NOW })!;
+  const policy = describeRoutePolicy(rule, { host: { isOnline: true }, nowMs: NOW })!;
   const html = renderToStaticMarkup(
     <RoutePathCards
       status={{
@@ -155,7 +155,7 @@ test("主机负载药丸：沿途有一台忙到 70% 以上才显示，95% 起�
   const hot = describeRouteLoad(97)!;
   assert.equal(hot.tone, "down");
   assert.equal(hot.penalty, 15);
-  const policy = describeRoutePolicy(rule, { host: { isOnline: true, agentVersion: "2.2.251" }, nowMs: NOW })!;
+  const policy = describeRoutePolicy(rule, { host: { isOnline: true }, nowMs: NOW })!;
   const html = renderToStaticMarkup(
     <RoutePathCards
       status={{
@@ -177,7 +177,7 @@ test("规则卡上的迷你链：一行一条，段上写延迟、不通写 ✕�
   const html = renderToStaticMarkup(
     <RouteMiniChain
       status={{ paths: [path(0), path(1, { healthy: false, hops: [{ ...path(1).hops[0], ok: false, consecutiveFailures: 4 }] })], entry: { hostId: 1, name: "HK entry 01", online: true, sourcePort: 10001 } }}
-      policy={describeRoutePolicy(rule, { host: { isOnline: true, agentVersion: "2.2.237" }, nowMs: NOW })!}
+      policy={describeRoutePolicy(rule, { host: { isOnline: true }, nowMs: NOW })!}
       onOpen={() => {}}
     />,
   );
@@ -204,7 +204,7 @@ test("TCP+UDP 两侧结论不一致时路径上标「UDP 不通」/「仅 UDP �
   assert.equal(describeRouteUdpSplit(path(0, { healthy: true, udpHealthy: false }))?.text, "UDP 不通");
   assert.equal(describeRouteUdpSplit(path(0, { healthy: false, udpHealthy: true, udpLatencyMs: 12 }))?.text, "仅 UDP 通");
   assert.equal(describeRouteUdpSplit(path(0, { down: true, healthy: false, udpHealthy: true })), null, "断了的路径交给「断了」说");
-  const policy = describeRoutePolicy(rule, { host: { isOnline: true, agentVersion: "2.2.251" }, nowMs: NOW })!;
+  const policy = describeRoutePolicy(rule, { host: { isOnline: true }, nowMs: NOW })!;
   const html = renderToStaticMarkup(<RoutePathCards status={{ paths: [path(0, { udpHealthy: false }), path(1, { udpHealthy: true })] }} policy={policy} />);
   const cards = html.split('data-testid="route-path-card"');
   assert.match(cards[1], /data-testid="route-udp-split"[^>]*>UDP 不通</);
