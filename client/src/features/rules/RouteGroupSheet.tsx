@@ -25,7 +25,7 @@ import {
 import { describeRoutePolicyReport, formatPolicyClock, type RoutePolicy } from "@shared/routePolicy";
 import { formatRouteScore } from "@shared/routeScore";
 import type { RouteSwitchSummary } from "@shared/routeSwitchSummary";
-import { RoutePathCards, RouteSwitchChip, type RouteBoardEntry, type RouteBoardRate } from "./RouteBoard";
+import type { RouteBoardEntry, RouteBoardRate } from "./RouteBoard";
 import { ConditionRow, SentenceRow } from "./RoutePolicySheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RouteLineDetail, RouteLineTools, useRouteLinePause, type RouteLineSwitch } from "./RouteLineOverview";
@@ -184,16 +184,12 @@ export type RouteGroupPanelProps = {
   events: RouteEvent[];
   nowMs?: number;
   timeZone?: string;
-  /** 画不画「路径」那几张卡：线路详情上面已经有分层图和线路列表，异常明细里就不再画一遍。 */
-  showPaths?: boolean;
 };
 
-export function RouteGroupPanel({ policy, status, events, nowMs, timeZone, showPaths = true }: RouteGroupPanelProps) {
+/* 线路详情的「异常明细」：上面已经有分层图和线路列表，这里只写结论、调度计划和最近切换，不再画路径。 */
+export function RouteGroupPanel({ policy, status, events, nowMs, timeZone }: RouteGroupPanelProps) {
   const now = nowMs ?? Date.now();
   const report = describeRoutePolicyReport(policy, { nowMs: now, timeZone });
-  const paths = status?.paths || [];
-  const activePath = paths.find((path) => path.active) || null;
-  const others = paths.filter((path) => !path.active);
   const weighted = policy.mode === "weighted";
   const modeInfo = ROUTE_MODE_INFO[policy.mode];
 
@@ -216,25 +212,6 @@ export function RouteGroupPanel({ policy, status, events, nowMs, timeZone, showP
           {warning}
         </p>
       ))}
-
-      {/* 路径卡：一条路径一张，在走的排最前；每张是一条链，段上写延迟，节点下写速率。 */}
-      {showPaths ? <div className="flex flex-col gap-2">
-        <div className="flex items-center justify-between gap-2 px-1">
-          <span className="text-meta font-semibold text-muted-foreground">{weighted ? "路径（每条都在走）" : "路径"}</span>
-          {status?.switches ? <RouteSwitchChip switches={status.switches} /> : null}
-        </div>
-        {!status ? (
-          <p className="px-1 text-meta text-muted-foreground">在读线路状态…</p>
-        ) : (
-          <RoutePathCards status={status} policy={policy} />
-        )}
-        {status && activePath && activePath.hops.length > 0 ? (
-          <p className="px-1 text-meta text-muted-foreground">每一段的延迟是上一个节点探它下一跳的结果；「未测」是那台中转还没报、不是通。整链是各段相加。</p>
-        ) : null}
-        {status && others.some((path) => path.down) ? (
-          <p className="px-1 text-meta text-muted-foreground">用不了的路径会被跳过，恢复并稳定一阵后重新参与。</p>
-        ) : null}
-      </div> : null}
 
       <GroupedList>
         <ListSection
@@ -416,7 +393,7 @@ export function RouteGroupSheet({
           ) : null}
           {detailsOpen || (status && status.paths.length === 0) ? (
             <div className="flex min-w-0 flex-col gap-3 border-t border-[var(--fx-stroke-weak)] pt-3" data-testid="route-line-detail-panel">
-              <RouteGroupPanel {...panel} policy={shown.policy} status={status} events={events} showPaths={false} />
+              <RouteGroupPanel {...panel} policy={shown.policy} status={status} events={events} />
               {status ? <RouteLineTools status={status} /> : null}
               <Suspense fallback={<RouteQualityHistoryPlaceholder />}>
                 <RouteQualityHistory

@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { newRouteGroupDraft, routeGroupRuleFields, type RouteGroup } from "@shared/routeGroup";
 import { describeRoutePolicy } from "@shared/routePolicy";
-import { RouteMiniChain, RoutePathCards, RouteSwitchChip, describeRouteDials, describeRouteLoad, describeRouteUdpSplit, routeBoardActiveChain, summarizeRouteChain, type RouteBoardPath } from "./RouteBoard";
+import { RouteMiniChain, describeRouteLoad, describeRouteUdpSplit, routeBoardActiveChain, summarizeRouteChain, type RouteBoardPath } from "./RouteBoard";
 
 const NOW = Date.UTC(2026, 9, 28, 12, 0, 0);
 const draft = newRouteGroupDraft({ timezone: "Asia/Shanghai" });
@@ -82,68 +82,7 @@ test("自定探测目标时第一段不算实测，整链用入口探到的那�
   assert.equal(chain.partial, false);
 });
 
-test("路径卡：每个节点的速率；备用路径写「空闲」；在走的那条有流动的小点", () => {
-  const policy = describeRoutePolicy(rule, { host: { isOnline: true }, nowMs: NOW })!;
-  const html = renderToStaticMarkup(
-    <RoutePathCards
-      status={{
-        paths: [path(0), path(1)],
-        entry: { hostId: 1, name: "HK entry 01", online: true, sourcePort: 10001 },
-        rate: { inBps: 15_000, outBps: 1_200, connections: 8, at: NOW - 3_000 },
-        switches: { count24h: 6, count1h: 0, manual24h: 6, flapping: false, lastAt: NOW - 3_600_000, lastFromLabel: "A", lastToLabel: "B", lastReason: "pin" },
-      }}
-      policy={policy}
-    />,
-  );
-  const cards = html.split('data-testid="route-path-card"');
-  assert.equal(cards.length, 3);
-  // 在走的 A：入口写规则的速率，中转写各自中继的，落地写最后一跳的。
-  assert.match(cards[1], /↓ 14\.65 KB\/s[^]*?HK relay[^]*?↓ 14\.65 KB\/s[^]*?JP relay[^]*?↓ 29\.3 KB\/s[^]*?落地[^]*?↓ 29\.3 KB\/s/);
-  assert.match(cards[1], /整链 73 ms/);
-  // 备用的 B 直连：一段，空闲。
-  assert.match(cards[2], /直连备用/);
-  assert.match(cards[2], /144 ms/);
-  assert.equal((cards[2].match(/>空闲</g) || []).length, 2, "入口和落地两个节点都写空闲");
-  assert.doesNotMatch(cards[2], /fx-rb-flow/);
-  assert.match(cards[1], /fx-rb-flow/, "在走的那条有流动的小点");
-});
-
-test("来回漂的线路组在切换药丸上说出来", () => {
-  const html = renderToStaticMarkup(<RouteSwitchChip switches={{ count24h: 5, count1h: 4, manual24h: 0, flapping: true, lastAt: NOW - 60_000, lastFromLabel: "A", lastToLabel: "B", lastReason: "score" }} />);
-  assert.match(html, /24h 切换 ×5 · 来回漂/);
-  assert.match(html, /data-tone="warn"/);
-  const quiet = renderToStaticMarkup(<RouteSwitchChip switches={{ count24h: 0, count1h: 0, manual24h: 0, flapping: false, lastAt: null, lastFromLabel: null, lastToLabel: null, lastReason: null }} />);
-  assert.match(quiet, /24h 没切过/);
-});
-
-test("真实连接的拨号药丸：有失败或慢的染琥珀，没拨过不显示，老 Agent 没有这项", () => {
-  assert.equal(describeRouteDials(null), null);
-  assert.equal(describeRouteDials(undefined), null);
-  assert.equal(describeRouteDials({ ok: 0, failed: 0, slow: 0, dialMs: 0, lastAt: 0 }), null);
-  const fine = describeRouteDials({ ok: 120, failed: 0, slow: 0, dialMs: 28, lastAt: NOW })!;
-  assert.equal(fine.text, "建连 120 · 拨号 28 ms");
-  assert.equal(fine.tone, "ok");
-  const bad = describeRouteDials({ ok: 12, failed: 3, slow: 2, dialMs: 640, lastAt: NOW })!;
-  assert.equal(bad.text, "建连 12 · 失败 3 · 慢 2 · 拨号 640 ms");
-  assert.equal(bad.tone, "warn");
-  assert.match(bad.title, /拨不通 3 次、拨得慢 2 次/);
-  const policy = describeRoutePolicy(rule, { host: { isOnline: true }, nowMs: NOW })!;
-  const html = renderToStaticMarkup(
-    <RoutePathCards
-      status={{
-        paths: [path(0, { dials: { ok: 12, failed: 3, slow: 2, dialMs: 640, lastAt: NOW } }), path(1)],
-        entry: { hostId: 1, name: "HK entry 01", online: true, sourcePort: 10001 },
-        rate: null,
-        switches: { count24h: 0, count1h: 0, manual24h: 0, flapping: false, lastAt: null, lastFromLabel: null, lastToLabel: null, lastReason: null },
-      }}
-      policy={policy}
-    />,
-  );
-  assert.equal((html.match(/data-testid="route-dials"/g) || []).length, 1, "只有报了拨号的路径有药丸");
-  assert.match(html, /data-tone="warn"[^>]*data-testid="route-dials">建连 12 · 失败 3 · 慢 2 · 拨号 640 ms/);
-});
-
-test("主机负载药丸：沿途有一台忙到 70% 以上才显示，95% 起染红，title 和评分的 title 都写扣了几分；老 Agent 没报就没有", () => {
+test("主机负载药丸：沿途有一台忙到 70% 以上才显示，95% 起染红，title 写扣了几分；老 Agent 没报就没有", () => {
   assert.equal(describeRouteLoad(null), null);
   assert.equal(describeRouteLoad(undefined), null);
   assert.equal(describeRouteLoad(69), null, "70% 以下评分不扣，不显示");
@@ -155,22 +94,6 @@ test("主机负载药丸：沿途有一台忙到 70% 以上才显示，95% 起�
   const hot = describeRouteLoad(97)!;
   assert.equal(hot.tone, "down");
   assert.equal(hot.penalty, 15);
-  const policy = describeRoutePolicy(rule, { host: { isOnline: true }, nowMs: NOW })!;
-  const html = renderToStaticMarkup(
-    <RoutePathCards
-      status={{
-        paths: [path(0, { loadPct: 85, score: 83 }), path(1, { loadPct: 40 })],
-        entry: { hostId: 1, name: "HK entry 01", online: true, sourcePort: 10001 },
-        rate: null,
-        switches: { count24h: 0, count1h: 0, manual24h: 0, flapping: false, lastAt: null, lastFromLabel: null, lastToLabel: null, lastReason: null },
-      }}
-      policy={policy}
-    />,
-  );
-  assert.equal((html.match(/data-testid="route-load"/g) || []).length, 1, "只有忙到门槛的路径有药丸");
-  assert.match(html, /data-tone="warn"[^>]*data-testid="route-load">负载 85%/);
-  assert.match(html, /data-testid="route-score" title="[^"]*再减主机负载 9 分"[^>]*>83 良/);
-  assert.match(html, /data-testid="route-score" title="延迟、丢包、抖动、可用率合起来的分"[^>]*>70 较差/, "没扣分的评分 title 不提负载");
 });
 
 test("规则卡上的迷你链：一行一条，段上写延迟、不通写 ✕，在走的那条标出来", () => {
@@ -205,10 +128,6 @@ test("TCP+UDP 两侧结论不一致时路径上标「UDP 不通」/「仅 UDP �
   assert.equal(describeRouteUdpSplit(path(0, { healthy: false, udpHealthy: true, udpLatencyMs: 12 }))?.text, "仅 UDP 通");
   assert.equal(describeRouteUdpSplit(path(0, { down: true, healthy: false, udpHealthy: true })), null, "断了的路径交给「断了」说");
   const policy = describeRoutePolicy(rule, { host: { isOnline: true }, nowMs: NOW })!;
-  const html = renderToStaticMarkup(<RoutePathCards status={{ paths: [path(0, { udpHealthy: false }), path(1, { udpHealthy: true })] }} policy={policy} />);
-  const cards = html.split('data-testid="route-path-card"');
-  assert.match(cards[1], /data-testid="route-udp-split"[^>]*>UDP 不通</);
-  assert.doesNotMatch(cards[2], /route-udp-split/);
   const mini = renderToStaticMarkup(<RouteMiniChain status={{ paths: [path(0, { udpHealthy: false }), path(1)] }} policy={policy} onOpen={() => {}} />);
   assert.match(mini, /在走 · UDP 不通/);
 });

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 
@@ -104,39 +105,14 @@ function render(options: { status?: RouteStatus | null; events?: RouteEvent[]; h
   );
 }
 
-test("三段都在：路径、调度计划、最近切换", () => {
+test("两段：调度计划、最近切换；路径不在这里画（线路详情上面已经有分层图和线路列表）", () => {
   const html = render();
-  const order = ["路径", "调度计划", "最近切换"].map((header) => html.indexOf(`>${header}<`));
+  const order = ["调度计划", "最近切换"].map((header) => html.indexOf(`>${header}<`));
   assert.ok(order.every((position) => position > 0), `少了一段：${order.join(",")}`);
   assert.deepEqual([...order].sort((left, right) => left - right), order, "顺序就是从上往下");
+  assert.doesNotMatch(html, />路径(（每条都在走）)?</);
+  assert.doesNotMatch(html, /route-path-card/);
   assert.match(html, /现在走 晚高峰，18:00 起/);
-});
-
-test("路径画成链：在走的排最前，段上写每一跳的延迟、整链相加，节点下写中继端口；评分和连接数在卡头", () => {
-  const html = render();
-  const cards = html.split('data-testid="route-path-card"');
-  assert.equal(cards.length, 3, "两条路径两张卡");
-  const active = cards[1];
-  assert.match(active, /晚高峰/);
-  assert.match(active, />在走</);
-  // 入口探第一跳 61ms，SG 探 JP 18ms，JP 探落地 28ms：整链 107。
-  assert.match(active, /61 ms[^]*?SG relay 03[^]*?中继 <span[^>]*>:25310<[^]*?18 ms[^]*?JP relay 02[^]*?中继 <span[^>]*>:25311<[^]*?28 ms[^]*?落地/);
-  assert.match(active, /整链 107 ms/);
-  assert.match(active, /data-testid="route-score"[^>]*>81 良</);
-  assert.match(active, /12 连接/);
-  assert.match(cards[2], /主线路/);
-  assert.match(cards[2], />备用</);
-});
-
-test("断了的路径写明原因，没测到的段标「未测」而不是当成通", () => {
-  const html = render({ status: status({}, [path(0, { down: true, downReason: "中转异常：JP relay 02 → 落地", healthy: false, score: 0 }), path(1)]) });
-  assert.match(html, /断了 · 中转异常：JP relay 02 → 落地/);
-  assert.match(html, /用不了的路径会被跳过/);
-  // 20:00 在时段里，首选是按时段表的 B，所以 A 不带「首选」。
-  assert.doesNotMatch(html, />首选</);
-  const untested = render({ status: status({}, [path(0), path(1, { hops: path(1).hops.map((hop, index) => (index === 0 ? { ...hop, ok: null, latencyMs: null } : hop)) })]) });
-  assert.match(untested, /data-state="unknown"[^>]*>[^]*?未测/);
-  assert.match(untested, /整链 ≥ 89 ms/, "没测的那段不算进去，写成「≥」");
 });
 
 test("调度计划：策略模板、此刻起作用的那一行、切换保护、预热、旧连接", () => {
@@ -158,8 +134,12 @@ test("最近切换：时间、从哪条到哪条、原因；计划切换未执�
   assert.match(render({ events: [] }), /还没有记录/);
 });
 
-test("状态没读到时不空着；评分是多久前报的照实说", () => {
-  assert.match(render({ status: null }), /在读线路状态/);
+test("状态没读到时照样画调度计划和最近切换（「在读线路状态…」由外面的线路详情写）；评分是多久前报的照实说", () => {
+  const unread = render({ status: null });
+  assert.match(unread, />调度计划</);
+  assert.match(unread, />最近切换</);
+  const sheet = fs.readFileSync(new URL("./RouteGroupSheet.tsx", import.meta.url), "utf8");
+  assert.match(sheet, /\{!status \? \(\s*<p[^>]*>在读线路状态…<\/p>/, "线路详情在状态没读到时写「在读线路状态…」，不空着");
   const stale = render({ status: status({ agentStale: true, agentReportedAt: NOW - 20 * 60_000 }) });
   assert.match(stale, /评分是 20 分钟前报的/);
 });
