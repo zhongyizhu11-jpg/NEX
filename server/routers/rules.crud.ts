@@ -193,8 +193,8 @@ const routePathInputSchema = z.object({
   tier: z.number().int().min(0).max(MAX_ROUTE_PATHS).nullable().optional(),
   paused: z.boolean().optional(),
   lineKey: z.string().max(32).nullable().optional(),
-  /** 这条路径所在线路的「几个落地怎么用」（服务端展开时填，2.3.501）。 */
-  destSpread: z.enum(["least_load", "round_robin", "random", "ip_hash"]).nullable().optional(),
+  /** 这条路径所在线路的「几个落地怎么用」（服务端展开时填，2.3.501；「自动」要 Agent 2.2.251）。 */
+  destSpread: z.enum(["least_load", "round_robin", "random", "ip_hash", "auto"]).nullable().optional(),
 });
 
 /** 线路（shared/routeLines.ts）：每条几层候选。结构在 parseRouteLines 里再校验一遍，这里只挡大小。 */

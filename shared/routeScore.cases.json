@@ -1,5 +1,5 @@
 {
-  "comment": "线路评分的共用用例：面板（shared/routeScore.test.ts）和 Agent（agent/route_score_test.go）都跑这一张表。expected 是 routeScore 的返回值，null 表示还没探出延迟、不打分。",
+  "comment": "线路评分的共用用例：面板（shared/routeScore.test.ts）和 Agent（agent/route_group_test.go）都跑这一张表。expected 是 routeScore 的返回值，null 表示还没探出延迟、不打分。loadPct 是沿途主机负载（没写 = 不知道，不扣分）。",
   "cases": [
     { "name": "近乎完美的线路", "latencyMs": 30, "lossPct": 0, "jitterMs": 0, "availabilityPct": 100, "healthy": true, "expected": 100 },
     { "name": "设计稿里 118ms 0.1% 抖 4ms 的主线路", "latencyMs": 118, "lossPct": 0.1, "jitterMs": 4, "availabilityPct": 99.98, "healthy": true, "expected": 90 },
@@ -12,6 +12,16 @@
     { "name": "四舍五入到整数", "latencyMs": 220, "lossPct": 1, "jitterMs": 30, "availabilityPct": 99, "healthy": true, "expected": 68 },
     { "name": "探不通就是 0 分，不管别的指标", "latencyMs": 20, "lossPct": 0, "jitterMs": 0, "availabilityPct": 100, "healthy": false, "expected": 0 },
     { "name": "还没探出延迟不打分", "latencyMs": null, "lossPct": 0, "jitterMs": 0, "availabilityPct": 0, "healthy": true, "expected": null },
-    { "name": "负数当 0 算，不会得出负分", "latencyMs": -5, "lossPct": -1, "jitterMs": -1, "availabilityPct": -10, "healthy": true, "expected": 85 }
+    { "name": "负数当 0 算，不会得出负分", "latencyMs": -5, "lossPct": -1, "jitterMs": -1, "availabilityPct": -10, "healthy": true, "expected": 85 },
+    { "name": "负载 70% 以下不扣分", "latencyMs": 30, "lossPct": 0, "jitterMs": 0, "availabilityPct": 100, "healthy": true, "loadPct": 70, "expected": 100 },
+    { "name": "负载 69.9% 也不扣", "latencyMs": 68, "lossPct": 0.1, "jitterMs": 6, "availabilityPct": 100, "healthy": true, "loadPct": 69.9, "expected": 95 },
+    { "name": "负载 82.5% 扣一半（7.5 分）", "latencyMs": 30, "lossPct": 0, "jitterMs": 0, "availabilityPct": 100, "healthy": true, "loadPct": 82.5, "expected": 93 },
+    { "name": "负载 85% 扣 9 分", "latencyMs": 30, "lossPct": 0, "jitterMs": 0, "availabilityPct": 100, "healthy": true, "loadPct": 85, "expected": 91 },
+    { "name": "负载 95% 扣满 15 分", "latencyMs": 30, "lossPct": 0, "jitterMs": 0, "availabilityPct": 100, "healthy": true, "loadPct": 95, "expected": 85 },
+    { "name": "负载 100% 也只扣 15 分", "latencyMs": 118, "lossPct": 0.1, "jitterMs": 4, "availabilityPct": 99.98, "healthy": true, "loadPct": 100, "expected": 75 },
+    { "name": "本来就很低的分扣不到负数", "latencyMs": 650, "lossPct": 9.5, "jitterMs": 240, "availabilityPct": 0, "healthy": true, "loadPct": 99, "expected": 0 },
+    { "name": "负载不影响「探不通是 0 分」", "latencyMs": 20, "lossPct": 0, "jitterMs": 0, "availabilityPct": 100, "healthy": false, "loadPct": 10, "expected": 0 },
+    { "name": "负载不影响「还没探出延迟不打分」", "latencyMs": null, "lossPct": 0, "jitterMs": 0, "availabilityPct": 0, "healthy": true, "loadPct": 99, "expected": null },
+    { "name": "负载是负数或 0 当不忙", "latencyMs": 30, "lossPct": 0, "jitterMs": 0, "availabilityPct": 100, "healthy": true, "loadPct": -3, "expected": 100 }
   ]
 }

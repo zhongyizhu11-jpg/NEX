@@ -77,3 +77,12 @@ test("怎么算健康：入口检测没开时不摊开目标和方式；开了�
   assert.match(on, /value="1\.2\.4\.8:443"/);
   assert.match(on, /而且从成员上 TCPing 1\.2\.4\.8:443 能通/);
 });
+
+test("换检测方式：目标还是上一种的默认值就跟着换（UDP 不能拿 :80 去探），自己填的留着", async () => {
+  const { healthCheckMethodPatch } = await import("./GroupFailoverPolicyFields");
+  assert.deepEqual(healthCheckMethodPatch("tcp", "udp", "www.189.cn:80"), { chinaHealthCheckMethod: "udp", chinaHealthCheckTarget: "223.5.5.5:53" });
+  assert.deepEqual(healthCheckMethodPatch("udp", "ping", "223.5.5.5:53"), { chinaHealthCheckMethod: "ping", chinaHealthCheckTarget: "www.189.cn" });
+  assert.deepEqual(healthCheckMethodPatch("tcp", "udp", "dns.example.cn:5353"), { chinaHealthCheckMethod: "udp" }, "自己填的目标不动");
+  assert.deepEqual(healthCheckMethodPatch("tcp", "udp", ""), { chinaHealthCheckMethod: "udp" }, "空着就让面板按方式取默认");
+  assert.deepEqual(healthCheckMethodPatch("tcp", "tcp", "www.189.cn:80"), { chinaHealthCheckMethod: "tcp" });
+});

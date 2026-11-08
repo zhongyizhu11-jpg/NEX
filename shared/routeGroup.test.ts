@@ -9,18 +9,24 @@ import {
   legacyFailoverFields,
   legacyRoutePaths,
   parseRoutePaths,
+  ROUTE_AUTO_SPREAD_AGENT_VERSION,
   routeAgentStrategy,
+  routeDeliveryStrategy,
+  routeDestSpreadTargetFields,
   routeGroupOf,
   routePathDial,
+  routePathExitIp,
   routePathLabel,
   routePolicyOf,
   routeTemplateGuards,
   routeWeightShares,
   serializeRoutePaths,
+  splitRouteReason,
   validateRouteGroup,
   type RouteGroup,
   type RoutePath,
 } from "./routeGroup";
+import { compareVersions } from "./version";
 
 /**
  * 线路组的模型：路径、六种模式、模板、和老主备列的互推。
@@ -134,6 +140,24 @@ test("线路组 → 老 failover 列：备用是各路径的拨号地址，模�
   assert.equal(routeAgentStrategy({ mode: "smart", spread: "weighted" }), "fallback");
 });
 
+test("「自动」分法要 Agent 2.2.251：老 Agent 整组改发按权重，线路里的落地改发按负载分", () => {
+  const atLeast = (version: string) => (target: string) => compareVersions(version, target) >= 0;
+  const policy = { mode: "weighted" as const, spread: "auto" as const };
+  assert.equal(routeDeliveryStrategy(policy, "cold", atLeast(ROUTE_AUTO_SPREAD_AGENT_VERSION)), "auto");
+  assert.equal(routeDeliveryStrategy(policy, "cold", atLeast("2.2.250")), "weighted", "2.2.250 不认 auto，退成按权重");
+  assert.equal(routeDeliveryStrategy(policy, "cold", () => false), "weighted", "版本不知道按不够算");
+  assert.equal(routeDeliveryStrategy({ mode: "weighted", spread: "round_robin" }, "cold", () => false), "round_robin", "别的分法不受影响");
+  assert.equal(routeDeliveryStrategy({ mode: "weighted", spread: "least_load" }, "cold", atLeast("2.2.250")), "least_load");
+  assert.equal(routeDeliveryStrategy(policy, "aggregate", atLeast("2.2.250")), "least_load", "聚合照旧按负载");
+  assert.equal(routeDeliveryStrategy({ mode: "smart", spread: "auto" }, "cold", () => false), "fallback", "不是权重负载模式就是主备");
+
+  const path = { destSpread: "auto" as const, tier: 0, dest: { ip: "10.0.0.1", port: 443 }, destNodeId: null };
+  assert.deepEqual(routeDestSpreadTargetFields(path, true, atLeast(ROUTE_AUTO_SPREAD_AGENT_VERSION)), { line: 0, landing: "10.0.0.1:443", spread: "auto" });
+  assert.deepEqual(routeDestSpreadTargetFields(path, true, atLeast("2.2.250")), { line: 0, landing: "10.0.0.1:443", spread: "least_load" });
+  assert.deepEqual(routeDestSpreadTargetFields({ ...path, destSpread: "ip_hash" }, true, atLeast("2.2.250")), { line: 0, landing: "10.0.0.1:443", spread: "ip_hash" });
+  assert.deepEqual(routeDestSpreadTargetFields(path, false, atLeast(ROUTE_AUTO_SPREAD_AGENT_VERSION)), {});
+});
+
 test("整个线路组只在开了主备时才有", () => {
   assert.equal(routeGroupOf({ failoverEnabled: false }), null);
   const group = routeGroupOf({ failoverEnabled: true, ...rule, failoverTargets: JSON.stringify([{ targetIp: "198.51.100.8", targetPort: 443 }]) });
@@ -191,6 +215,11 @@ test("路径怎么走的一句话，和原因的翻译", () => {
   assert.equal(describeRouteReason("slow dial: 820ms x3, probe 40ms"), "新连接连续 3 次拨得慢（拨号约 820ms，探测 40ms）：记一次失败，立刻复查");
   assert.equal(describeRouteReason("slow dial: 600ms x3, probe 0ms"), "新连接连续 3 次拨得慢（拨号约 600ms）：记一次失败，立刻复查");
   assert.equal(describeRouteReason("something else"), "something else");
+  // Agent 2.2.251 起：挂了之后换到的是同出口 IP 的备用，原因后面带着标记。
+  assert.deepEqual(splitRouteReason("health check; same exit ip"), { base: "health check", sameExitIp: true });
+  assert.deepEqual(splitRouteReason("health check"), { base: "health check", sameExitIp: false });
+  assert.equal(describeRouteReason("health check; same exit ip"), "连续探测不通，换到同出口 IP 的备用");
+  assert.equal(describeRouteReason("relay down: 东京中转 01; same exit ip"), "中转异常：东京中转 01，换到同出口 IP 的备用");
   assert.deepEqual(routeWeightShares([{ weight: 70 }, { weight: 30 }]), [70, 30]);
   assert.deepEqual(routeWeightShares([{ weight: 0 }, { weight: 0 }]), [50, 50]);
 });
@@ -208,4 +237,40 @@ test("切换下限放低：异常多久切 / 恢复观察最少 1 秒，择优�
   assert.equal(routeSwitchWithinSeconds({ failoverSeconds: 3, failureThreshold: 2 }), 5);
   assert.equal(routeSwitchWithinSeconds({ failoverSeconds: 1, failureThreshold: 1 }), 2);
   assert.equal(routeSwitchWithinSeconds({ failoverSeconds: 10, failureThreshold: 3 }), 15);
+});
+
+test("UDP 回声探测只给对端是自己的机器、Agent 够新的路径；填了探测地址、只转 TCP 不带", async () => {
+  const { routePathFarEndHostId, routeUdpEchoProbeReady } = await import("./routeGroup");
+  const relayed = path({ key: "a", hops: [2, 3] });
+  const direct = path({ key: "b", hops: [], dest: { ip: "198.51.100.8", port: 443 } });
+  const pooled = { ...direct, destNodeId: 9, destHostId: 6 };
+  // 有中转对端是第一跳；落地池成员是那台成员机；手填的落地不知道是谁
+  assert.equal(routePathFarEndHostId(relayed), 2);
+  assert.equal(routePathFarEndHostId(pooled), 6);
+  assert.equal(routePathFarEndHostId(direct), null);
+  // 对端 Agent 够新（2.2.251）才带；版本没报、太老都不带
+  assert.equal(routeUdpEchoProbeReady({ protocol: "udp", path: relayed, farEndAgentVersion: "2.2.251" }), true);
+  assert.equal(routeUdpEchoProbeReady({ protocol: "both", path: pooled, farEndAgentVersion: "2.3.0" }), true);
+  assert.equal(routeUdpEchoProbeReady({ protocol: "udp", path: relayed, farEndAgentVersion: "2.2.250" }), false);
+  assert.equal(routeUdpEchoProbeReady({ protocol: "udp", path: relayed, farEndAgentVersion: "" }), false);
+  assert.equal(routeUdpEchoProbeReady({ protocol: "udp", path: relayed, farEndAgentVersion: null }), false);
+  // 只转 TCP 的规则不探 UDP；填了探测地址照填的拨 TCP；对端不是自己的机器发零长度包
+  assert.equal(routeUdpEchoProbeReady({ protocol: "tcp", path: relayed, farEndAgentVersion: "2.2.251" }), false);
+  assert.equal(routeUdpEchoProbeReady({ protocol: "udp", path: { ...relayed, probe: { ip: "198.51.100.9", port: 9443 } }, farEndAgentVersion: "2.2.251" }), false);
+  assert.equal(routeUdpEchoProbeReady({ protocol: "udp", path: direct, farEndAgentVersion: "2.2.251" }), false);
+});
+
+test("路径的出口 IP：落地池成员按那台的出口地址（心跳来源优先，再登记地址），手填地址 / 节点地址 / 规则目标就是地址本身", () => {
+  const egress = new Map<number, string>([[4, "203.0.113.4"], [5, ""]]);
+  const lookup = (hostId: number) => egress.get(hostId);
+  // 落地池成员：那台机器的出口地址，不是成员入站的拨号地址。
+  assert.equal(routePathExitIp(path({ destNodeId: 9, destHostId: 4, dest: { ip: "10.0.0.4", port: 8443 } }), rule, lookup), "203.0.113.4");
+  // 那台一个地址都没有：退回落地的拨号地址。
+  assert.equal(routePathExitIp(path({ destNodeId: 9, destHostId: 5, dest: { ip: "10.0.0.5", port: 8443 } }), rule, lookup), "10.0.0.5");
+  // 手填地址、节点地址：就是那个地址。
+  assert.equal(routePathExitIp(path({ dest: { ip: "198.51.100.9", port: 443 } }), rule, lookup), "198.51.100.9");
+  assert.equal(routePathExitIp(path({ destNodeId: 7, dest: { ip: "198.51.100.8", port: 443 } }), rule, lookup), "198.51.100.8");
+  // 没写落地 = 规则自己的目标；经过中转也一样（对端看到的还是目标那一侧）。
+  assert.equal(routePathExitIp(path({ hops: [2, 3] }), rule, lookup), "198.51.100.7");
+  assert.equal(routePathExitIp(path({}), { targetIp: "", targetPort: 0 }, lookup), "");
 });

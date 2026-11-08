@@ -1613,7 +1613,8 @@ func collectTCPing(cfg Config, ruleProbes []ruleLatencyProbe, probes []tunnelPro
 		if method != "ping" && method != "self" && probe.TargetPort <= 0 {
 			continue
 		}
-		if method != "ping" && method != "self" {
+		// udp（2.2.251 起）：探 UDP 端口，端口不可达算不通，说不准退回 ping（udpProbeMeasurement）。
+		if method != "ping" && method != "self" && method != "udp" {
 			method = "tcp"
 		}
 		forwardGroupTasks = append(forwardGroupTasks, tcpingTask{
@@ -2078,6 +2079,26 @@ func runTCPingTasks(tasks []tcpingTask) ([]map[string]any, []map[string]any, []m
 	return results, tunnels, forwardGroups, services
 }
 
+/*
+udpProbeMeasurement：转发组 / 入口组成员的「UDP」健康检查（2.2.251 起）。
+
+探 UDP 端口（udp_probe.go，发零长度包）：对端回 ICMP 端口不可达就是确定不通；回了包就是通。
+没回包说不准 —— UDP 服务多半不回陌生包 —— 退回 ping 探主机，和「Ping」方法一样。
+*/
+func udpProbeMeasurement(host string, port int, pingProbe func(string, time.Duration, int) probeMeasurement) probeMeasurement {
+	latency, verdict := udpProbeFn(host, port, false, udpProbeTimeout)
+	switch verdict {
+	case udpProbeUp:
+		return probeMeasurement{LatencyMs: latency, Reachable: true, ProbeCount: 1, ProbeSuccesses: 1}
+	case udpProbeDown:
+		return probeMeasurement{ProbeCount: 1, Detail: "UDP 端口不可达", Failure: "refused"}
+	}
+	if pingProbe == nil {
+		return probeMeasurement{ProbeCount: 1}
+	}
+	return pingProbe(host, tcpingProbeTimeout, tcpingPingProbeCount)
+}
+
 func tcpingTaskConcurrency(taskCount int) int {
 	if taskCount <= 0 {
 		return 0
@@ -2132,6 +2153,8 @@ func executeTCPingTaskWithProbes(
 		if pingProbe != nil {
 			measurement = pingProbe(probeTarget, tcpingProbeTimeout, tcpingPingProbeCount)
 		}
+	} else if task.Kind == "forwardGroup" && task.Method == "udp" {
+		measurement = udpProbeMeasurement(probeTarget, task.TargetPort, pingProbe)
 	} else if task.Kind == "tunnel" && task.WireGuardPeerID != "" {
 		status := wireGuardProbeTimeout
 		var latency int

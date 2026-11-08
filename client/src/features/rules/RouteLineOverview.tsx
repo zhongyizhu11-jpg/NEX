@@ -30,6 +30,7 @@ import { cn } from "@/lib/utils";
 import { describeRouteIssue, normalizeRouteEventKind } from "@shared/routeGroup";
 import { formatPolicyClock } from "@shared/routePolicy";
 import type { RouteEvent, RouteStatus, RouteStatusPath } from "./RouteGroupSheet";
+import { describeRouteLoad, describeRouteUdpSplit } from "./RouteBoard";
 import { RouteLineDiagram } from "./RouteLineDiagram";
 import {
   chainLatency,
@@ -94,6 +95,20 @@ function routeLinePill(group: RouteLineGroup, pinned = false): { tone: LineTone;
   if (group.active) return { tone: "ok", text: `使用中${tag}`, dot: true };
   if (group.allDown) return { tone: "down", text: `${group.failures >= 2 ? `不通 ×${group.failures}` : group.reason ? lineShortIssue(group.reason) : "不通"}${tag}` };
   return { tone: "gray", text: `待命${tag}` };
+}
+
+/**
+ * 状态胶囊前面的小提示（Agent 2.2.251 起）：这条线路行上画的那条路径 TCP 通、UDP 不通（UDP 会话会避开它；反过来是
+ * 「仅 UDP 通」），沿途有主机负载到 70% 以上（评分已经按它扣过）。暂停着、整条不通的不提示：状态胶囊已经说了。
+ */
+export function routeLineHints(group: RouteLineGroup): Array<{ text: string; title: string; tone: LineTone }> {
+  if (group.paused || group.allDown) return [];
+  const hints: Array<{ text: string; title: string; tone: LineTone }> = [];
+  const udp = describeRouteUdpSplit(group.shown);
+  if (udp) hints.push({ text: udp.text, title: udp.title, tone: "warn" });
+  const load = describeRouteLoad(group.shown.loadPct);
+  if (load) hints.push({ text: load.text, title: load.title, tone: load.tone });
+  return hints;
 }
 
 /**
@@ -221,6 +236,9 @@ function LineStatusControls({ group, onPause, pausing = false, lineSwitch }: { g
   const pillNode = <LinePill tone={pill.tone} dot={pill.dot} title={group.allDown && group.reason ? describeRouteIssue(group.reason) : undefined} testId="route-line-state">{pill.text}</LinePill>;
   return (
     <>
+      {routeLineHints(group).map((hint) => (
+        <LinePill key={hint.text} tone={hint.tone} title={hint.title} testId="route-line-hint" className="px-[7px] text-[11px]">{hint.text}</LinePill>
+      ))}
       {lineSwitch ? <LineSwitchMenu group={group} pill={pillNode} lineSwitch={lineSwitch} /> : pillNode}
       {onPause ? (
         <LineIconButton

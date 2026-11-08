@@ -65,6 +65,8 @@ func failoverUDPExchange(t *testing.T, client net.Conn, payload string) string {
 
 func failoverUDPTestSetup(t testing.TB) {
 	t.Helper()
+	// UDP 端口探测说不准，退回（替身的）ping：这些用例看的是会话调度，不是探测。
+	stubUDPProbeUnknown(t)
 	oldPersistentDir := persistentFailoverDir
 	persistentFailoverDir = filepath.Join(t.TempDir(), "failover")
 	oldPing := failoverPingLatency
@@ -332,6 +334,8 @@ func TestFailoverUDPIdleSessionsAreReaped(t *testing.T) {
 }
 
 func TestFailoverProbeFollowsProtocol(t *testing.T) {
+	// UDP 端口探测说不准时退回 ping（udp_probe_test.go 另测端口探测本身）。
+	stubUDPProbeUnknown(t)
 	var mu sync.Mutex
 	pinged := []string{}
 	oldPing := failoverPingLatency

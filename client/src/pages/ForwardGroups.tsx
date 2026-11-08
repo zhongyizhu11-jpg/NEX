@@ -131,6 +131,7 @@ import {
   FORWARD_GROUP_HEALTH_CHECK_METHODS,
   FORWARD_GROUP_HEALTH_CHECK_METHOD_HINTS,
   FORWARD_GROUP_HEALTH_CHECK_METHOD_LABELS,
+  defaultHealthCheckPort,
   healthCheckTargetNeedsPort,
   healthCheckTargetPlaceholder,
   normalizeForwardGroupHealthCheckMethod,
@@ -270,15 +271,16 @@ function isCollectionMode(mode: GroupMode) {
 
 function normalizeChinaHealthTargetInput(value: string, method: ForwardGroupHealthCheckMethod = "tcp") {
   const needsPort = healthCheckTargetNeedsPort(method);
-  const target = value.trim().replace(/^(?:tcp|icmp|ping):\/\//i, "").replace(/\uFF1A/g, ":");
+  const target = value.trim().replace(/^(?:tcp|udp|icmp|ping):\/\//i, "").replace(/\uFF1A/g, ":");
   if (!target) return "";
   if (target.length > 253 || /[\s'"<>/]/.test(target)) return undefined;
   let host = target;
-  let port = 80;
+  // 没写端口按方法补：TCPing 80、UDP 53。
+  let port = defaultHealthCheckPort(method);
   const bracketMatch = target.match(/^\[([^\]]+)\](?::(\d+))?$/);
   if (bracketMatch) {
     host = bracketMatch[1]?.trim() || "";
-    port = bracketMatch[2] ? Number(bracketMatch[2]) : 80;
+    port = bracketMatch[2] ? Number(bracketMatch[2]) : defaultHealthCheckPort(method);
   } else {
     const lastColon = target.lastIndexOf(":");
     if (lastColon > 0) {

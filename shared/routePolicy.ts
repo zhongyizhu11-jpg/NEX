@@ -1,6 +1,6 @@
 import { describeFailoverActiveLine, failoverLineEndpoints } from "./failoverActiveLine";
 import type { FailoverPin } from "./failoverPin";
-import { defaultHealthCheckTarget, normalizeForwardGroupHealthCheckMethod } from "./forwardGroupHealthCheck";
+import { defaultHealthCheckTarget, healthCheckMethodShortLabel, normalizeForwardGroupHealthCheckMethod } from "./forwardGroupHealthCheck";
 import {
   describeFailoverScheduleDays,
   failoverScheduleWindowIndexAt,
@@ -275,6 +275,7 @@ export function describeRoutePolicy(rule: RoutePolicyRule, options: RoutePolicyO
       round_robin: `轮流走这 ${lineCount} 条`,
       random: `从 ${lineCount} 条里随机挑一条`,
       ip_hash: perSession ? "按会话固定分到其中一条" : "按来源 IP 固定分到其中一条",
+      auto: `按最近延迟和沿途主机负载自动算权重，从 ${lineCount} 条里随机挑两条取更好的那条`,
     };
     conditions.push({ kind: "spread", key: "spread", when: perSession ? "每个新会话" : "每条新连接", then: spread[policy.spread], targetIndex: null, state: "deciding" });
     deciding = "spread";
@@ -681,7 +682,7 @@ export function describeGroupRoutePolicy(group: RoutePolicyGroup, options: Group
     ? (() => {
       const method = normalizeForwardGroupHealthCheckMethod(group.chinaHealthCheckMethod);
       const target = String(group.chinaHealthCheckTarget || "").trim() || defaultHealthCheckTarget(method);
-      return `，而且从成员上 ${method === "ping" ? "Ping" : "TCPing"} ${target} 能通`;
+      return `，而且从成员上 ${healthCheckMethodShortLabel(method)} ${target} 能通`;
     })()
     : "";
   const guards: RoutePolicyGuard[] = [{

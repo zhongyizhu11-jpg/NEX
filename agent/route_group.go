@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"net"
@@ -27,6 +28,10 @@ const (
 	routeScoreLatencyZeroMs = 400
 	routeScoreLossZeroPct   = 4
 	routeScoreJitterZeroMs  = 100
+	// 主机负载（failoverTarget.LoadPct）从多少起扣分、多少扣满、最多扣几分（2.2.251）。
+	routeScoreLoadFromPct    = 70
+	routeScoreLoadFullPct    = 95
+	routeScoreLoadMaxPenalty = 15
 )
 
 func clamp01(value float64) float64 {
@@ -39,8 +44,17 @@ func clamp01(value float64) float64 {
 	return value
 }
 
+// 主机负载扣几分（小数）：70% 以下 0，95% 起 15，中间线性。和 shared/routeScore.ts 的 routeLoadPenalty 逐字一致。
+func routeLoadPenalty(loadPct float64) float64 {
+	if math.IsNaN(loadPct) || math.IsInf(loadPct, 0) {
+		return 0
+	}
+	return clamp01((loadPct-routeScoreLoadFromPct)/(routeScoreLoadFullPct-routeScoreLoadFromPct)) * routeScoreLoadMaxPenalty
+}
+
 // 0–100 的整数；探不通是 0；还没探出延迟时 ok=false —— 「等评分」和「0 分」是两回事。
-func routeScore(latencyMs float64, hasLatency bool, lossPct float64, jitterMs float64, availabilityPct float64, healthy bool) (int, bool) {
+// loadPct 是沿途主机里最忙那台的负载（面板给的，0 = 不知道）：整体扣分，扣到负数按 0。
+func routeScore(latencyMs float64, hasLatency bool, lossPct float64, jitterMs float64, availabilityPct float64, healthy bool, loadPct float64) (int, bool) {
 	if !healthy {
 		return 0, true
 	}
@@ -51,7 +65,12 @@ func routeScore(latencyMs float64, hasLatency bool, lossPct float64, jitterMs fl
 	loss := clamp01(1-lossPct/routeScoreLossZeroPct) * 30
 	jitter := clamp01(1-jitterMs/routeScoreJitterZeroMs) * 15
 	availability := clamp01(availabilityPct/100) * 15
-	return int(math.Round(latency + loss + jitter + availability)), true
+	// 负载扣分是整体减的，不进四项里；减到负数按 0（先截再取整，和面板一样）。
+	total := latency + loss + jitter + availability - routeLoadPenalty(loadPct)
+	if total < 0 {
+		total = 0
+	}
+	return int(math.Round(total)), true
 }
 
 /*
@@ -79,6 +98,9 @@ type routeTargetStats struct {
 	consecutiveFailures int
 	lastProbeOK         bool
 	lastProbeAt         time.Time
+	// 探测延迟的指数平均（α = routeLatencyEwmaAlpha，第一次探通的那个数起头）：「自动」分法算权重用它 ——
+	// 比样本窗口的中位数跟得紧，又不像最近一次那样一跳就变。0 = 还没探通过。
+	latencyEwmaMs float64
 	// 真实连接的拨号记录（最近 routeDialWindow）：成功、失败、慢；见 recordDial。
 	dials []routeDialSample
 	// 拨号耗时的折半移动平均 (prev+sample)/2：跟着最近几次走，又不会被一次尖峰带飞。0 = 还没拨过。
@@ -225,10 +247,20 @@ func (s *routeTargetStats) recordProbe(ok bool, latencyMs int, at time.Time) {
 	s.lastProbeAt = at
 	if ok {
 		s.consecutiveFailures = 0
+		// 不到 1 毫秒按 1 算：0 留给「还没探通过」，同机房那种 0ms 的路径照样有个数可比。
+		sample := math.Max(1, float64(latencyMs))
+		if s.latencyEwmaMs <= 0 {
+			s.latencyEwmaMs = sample
+		} else {
+			s.latencyEwmaMs = s.latencyEwmaMs*(1-routeLatencyEwmaAlpha) + sample*routeLatencyEwmaAlpha
+		}
 	} else {
 		s.consecutiveFailures++
 	}
 }
+
+// 探测延迟指数平均的权重：新样本占三成。
+const routeLatencyEwmaAlpha = 0.3
 
 // 真实连接拨不通：算一次失败，但不进样本窗口（见 recordDial）。
 func (s *routeTargetStats) recordDialFailure() {
@@ -301,9 +333,38 @@ func stripFailoverRelayHints(spec failoverSpec) failoverSpec {
 		targets[i].Down = false
 		targets[i].DownReason = ""
 		targets[i].ExtraLatencyMs = 0
+		targets[i].LoadPct = 0
+		targets[i].ExitIP = ""
 	}
 	spec.Targets = targets
 	return spec
+}
+
+/*
+failoverSpecSignatureJSON 动作签名（actionCommandSignature）和托管服务签名（managedServiceActionSignature）
+里的线路组规格：先去掉运行时提示再序列化。
+
+提示（中转异常、下游延迟、沿途负载、出口 IP）面板每一轮都可能换。算进这两个签名的话，提示一变 Agent 就当成
+动作变了重新执行一遍，realm / socat 这类托管服务跟着重启，正在走的连接全断。去掉之后提示照样送得到：
+runningRules 每次心跳都同步一遍（syncRunningRuleState → startFailoverProxyLocked），代理的规格签名没变就只
+原地换上提示（applyRelayHintsLocked）。
+
+没带提示的规格序列化出来和直接 json.Marshal 逐字节相同（Targets 为 nil 时保持 nil，不变成 []），
+升级后这类规格的签名不变，不会因此重做一遍。
+*/
+func failoverSpecSignatureJSON(spec *failoverSpec) (string, bool) {
+	if spec == nil {
+		return "", false
+	}
+	stripped := *spec
+	if spec.Targets != nil {
+		stripped = stripFailoverRelayHints(*spec)
+	}
+	raw, err := json.Marshal(stripped)
+	if err != nil {
+		return "", false
+	}
+	return string(raw), true
 }
 
 // 这条出站此刻能不能用：本机探测通，而且没被面板按「中转异常」标掉。
@@ -375,13 +436,13 @@ func (p *failoverProxy) chainScoreInputLocked(index int) routeStatsSummary {
 	return summary
 }
 
-// 这条出站的评分（按整条链路的延迟）；ok=false 表示还没法打分。
+// 这条出站的评分（按整条链路的延迟，再按面板给的沿途主机负载扣分）；ok=false 表示还没法打分。
 func (p *failoverProxy) scoreLocked(index int) (int, bool) {
 	if index < 0 || index >= len(p.spec.Targets) {
 		return 0, false
 	}
 	summary := p.chainScoreInputLocked(index)
-	return routeScore(float64(summary.latencyMs), summary.hasLatency, summary.lossPct, summary.jitterMs, summary.availabilityPct, p.healthyLocked(index))
+	return routeScore(float64(summary.latencyMs), summary.hasLatency, summary.lossPct, summary.jitterMs, summary.availabilityPct, p.healthyLocked(index), float64(p.spec.Targets[index].LoadPct))
 }
 
 // 事件和快照里带的分：没法打分记 -1，面板显示成「等评分」。
@@ -444,8 +505,11 @@ func (p *failoverProxy) applyRelayHintsLocked(targets []failoverTarget) {
 		if i >= len(p.spec.Targets) {
 			break
 		}
-		// 下游延迟只影响评分：直接换上，下一轮探测按新值评估，不记事件、不重新选路。
+		// 下游延迟、沿途负载只影响评分和「自动」的权重：直接换上，下一轮探测按新值评估，不记事件、不重新选路。
 		p.spec.Targets[i].ExtraLatencyMs = target.ExtraLatencyMs
+		p.spec.Targets[i].LoadPct = target.LoadPct
+		// 出口 IP 只在下一次换路时当平手取舍用，同样直接换上。
+		p.spec.Targets[i].ExitIP = strings.TrimSpace(target.ExitIP)
 		down := target.Down
 		downReason := strings.TrimSpace(target.DownReason)
 		if !down {
@@ -555,6 +619,11 @@ func (p *failoverProxy) rebuildForSpecLocked(spec failoverSpec, now time.Time) b
 			relayReason[i] = strings.TrimSpace(target.DownReason)
 		}
 	}
+	// UDP 那一侧（TCP+UDP 规格）按同一张对照表搬。
+	p.udpSide = p.udpSide.carried(n, func(i int) (int, bool) {
+		j, ok := oldIndex[targetStateKey(spec.Targets[i])]
+		return j, ok
+	})
 	p.spec = spec
 	p.targetHealth = health
 	p.failureSince = failureSince
@@ -685,12 +754,18 @@ type failoverTargetStatsReport struct {
 	LastProbeAt         int64   `json:"lastProbeAt,omitempty"`
 	// 评分时加在 latencyMs 上的下游中转延迟（面板给的）。latencyMs 本身只是第一段。
 	ExtraLatencyMs int `json:"extraLatencyMs,omitempty"`
+	// 评分时扣了分的沿途主机负载（面板给的，0–100；0 = 不知道，没扣）。
+	LoadPct int `json:"loadPct,omitempty"`
 	// 真实连接最近 10 分钟的拨号：成功 / 失败 / 慢（慢的也算成功里的）、耗时折半均值、最近一次（Unix 毫秒）。
 	DialOK     int   `json:"dialOk"`
 	DialFailed int   `json:"dialFailed"`
 	DialSlow   int   `json:"dialSlow"`
 	DialMs     int   `json:"dialMs,omitempty"`
 	LastDialAt int64 `json:"lastDialAt,omitempty"`
+	// UDP 那一侧（2.2.251 起，route_group_udp_health.go）：只转 UDP 的规格就是 healthy / latencyMs 本身；
+	// TCP+UDP 规格是单独探出来的；只转 TCP 的不带。老 Agent 不报这两个字段，面板就什么都不多显示。
+	UDPHealthy   *bool `json:"udpHealthy,omitempty"`
+	UDPLatencyMs int   `json:"udpLatencyMs,omitempty"`
 }
 
 type failoverStatsReport struct {
@@ -786,10 +861,12 @@ func (p *failoverProxy) statsReportLocked() failoverStatsReport {
 			Connections:         p.connectionsLocked(index),
 			Samples:             summary.samples,
 			ExtraLatencyMs:      target.ExtraLatencyMs,
+			LoadPct:             target.LoadPct,
 		}
 		if !stats.lastProbeAt.IsZero() {
 			item.LastProbeAt = stats.lastProbeAt.UnixMilli()
 		}
+		item.UDPHealthy, item.UDPLatencyMs = p.udpReportLocked(index)
 		dials := stats.dialSummary(time.Now())
 		item.DialOK, item.DialFailed, item.DialSlow, item.DialMs = dials.ok, dials.failed, dials.slow, dials.avgMs
 		if !dials.lastAt.IsZero() {

@@ -79,14 +79,30 @@ func (p *failoverProxy) checkHealth() {
 		return
 	}
 	// 各条路径并行探测：客户端在所有路径都拨不通时会同步等这一轮（checkHealthShared），
-	// 串行时 N 条路径就要等 N×2 秒。
+	// 串行时 N 条路径就要等 N×2 秒。TCP+UDP 规格的 UDP 那一侧同时探（route_group_udp_health.go）。
+	var udpLatencies []int
+	var udpVerdicts []udpProbeVerdict
+	udpDone := make(chan struct{})
+	if protocol == "both" {
+		go func() {
+			defer close(udpDone)
+			udpLatencies, udpVerdicts = probeFailoverTargetsUDP(targets)
+		}()
+	} else {
+		close(udpDone)
+	}
 	latencies, results := probeFailoverTargets(protocol, targets)
+	<-udpDone
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if failoverSignature(p.spec) != specSignature {
 		return
 	}
 	p.ensureHealthStateLocked()
+	if udpVerdicts != nil {
+		udpResults, udpLatencyMs := mergeUDPSide(results, latencies, udpVerdicts, udpLatencies)
+		p.applyUDPProbeLocked(udpResults, udpLatencyMs, now)
+	}
 	for i := range results {
 		if i < len(p.lastLatencyMs) {
 			p.lastLatencyMs[i] = latencies[i]

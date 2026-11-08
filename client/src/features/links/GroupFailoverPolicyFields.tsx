@@ -8,6 +8,7 @@ import {
   FORWARD_GROUP_HEALTH_CHECK_METHODS,
   FORWARD_GROUP_HEALTH_CHECK_METHOD_HINTS,
   FORWARD_GROUP_HEALTH_CHECK_METHOD_LABELS,
+  defaultHealthCheckTarget,
   healthCheckTargetNeedsPort,
   healthCheckTargetPlaceholder,
   normalizeForwardGroupHealthCheckMethod,
@@ -26,6 +27,18 @@ import type { RoutePolicy } from "@shared/routePolicy";
   一个没有标题的输入框（入口健康度检测的目标 —— 开它的勾选框还在它下面）。读不出「谁决定
   用哪个成员、什么时候换」，成员顺序就是首选顺序这件事，整个编辑框里一个字都没有。
 */
+
+/*
+  换检测方式时，目标还是上一种方式的默认值（没动过）就跟着换成这一种的默认值：UDP 拿 TCPing 的 www.189.cn:80 去探，
+  80 端口不收 UDP，回个端口不可达就被当成不通，整组成员一起「不健康」。自己填过的目标原样留着。
+*/
+export function healthCheckMethodPatch(previous: ForwardGroupHealthCheckMethod, next: ForwardGroupHealthCheckMethod, target: string | null | undefined) {
+  const current = String(target || "").trim();
+  const followsDefault = current !== "" && current === defaultHealthCheckTarget(previous) && next !== previous;
+  return followsDefault
+    ? { chinaHealthCheckMethod: next, chinaHealthCheckTarget: defaultHealthCheckTarget(next) }
+    : { chinaHealthCheckMethod: next };
+}
 
 export type GroupFailoverPolicyValue = {
   failoverSeconds: string;
@@ -158,7 +171,7 @@ export function GroupFailoverPolicyFields({ value, onChange, policy, ddnsSwitchi
               <Label>检测方式</Label>
               <Select
                 value={method}
-                onValueChange={(next) => onChange({ chinaHealthCheckMethod: normalizeForwardGroupHealthCheckMethod(next) })}
+                onValueChange={(next) => onChange(healthCheckMethodPatch(method, normalizeForwardGroupHealthCheckMethod(next), value.chinaHealthCheckTarget))}
               >
                 <SelectTrigger aria-label="健康度检测方式"><SelectValue /></SelectTrigger>
                 <SelectContent>

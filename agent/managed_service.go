@@ -168,10 +168,9 @@ func managedServiceActionSignature(a action, serviceName string, unit string) st
 	for _, cmd := range a.PostCommands {
 		write(cmd)
 	}
-	if a.Failover != nil {
-		if raw, err := json.Marshal(a.Failover); err == nil {
-			write(string(raw))
-		}
+	// 线路组规格去掉运行时提示再算（failoverSpecSignatureJSON）：提示变了不重启 realm / socat。
+	if raw, ok := failoverSpecSignatureJSON(a.Failover); ok {
+		write(raw)
 	}
 	return "sha256:" + hex.EncodeToString(h.Sum(nil))
 }

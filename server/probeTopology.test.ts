@@ -88,15 +88,17 @@ test("heartbeat probe repositories batch chain, China-health, and tunnel topolog
 
       const addGroup = (values) => insert(
         "forward_groups",
-        ["id", "name", "groupType", "groupMode", "entryGroupId", "targetIp", "userId", "isEnabled", "chinaHealthCheckEnabled", "chinaHealthCheckTarget"],
+        ["id", "name", "groupType", "groupMode", "entryGroupId", "targetIp", "userId", "isEnabled", "chinaHealthCheckEnabled", "chinaHealthCheckTarget", "chinaHealthCheckMethod"],
         values,
       );
-      await addGroup([10, "entry group", "host", "entry", null, "0.0.0.0", 1, 1, 1, "entry-health.example.test:81"]);
-      await addGroup([20, "external chain", "host", "chain", 10, "0.0.0.0", 1, 1, 0, null]);
-      await addGroup([21, "direct chain", "host", "chain", null, "0.0.0.0", 1, 1, 0, null]);
-      await addGroup([22, "disabled chain", "host", "chain", null, "0.0.0.0", 1, 0, 0, null]);
-      await addGroup([30, "health group", "tunnel", "failover", null, "0.0.0.0", 1, 1, 1, "health.example.test:82"]);
-      await addGroup([31, "disabled health", "host", "failover", null, "0.0.0.0", 1, 0, 1, "disabled.example.test:83"]);
+      await addGroup([10, "entry group", "host", "entry", null, "0.0.0.0", 1, 1, 1, "entry-health.example.test:81", "tcp"]);
+      await addGroup([20, "external chain", "host", "chain", 10, "0.0.0.0", 1, 1, 0, null, "tcp"]);
+      await addGroup([21, "direct chain", "host", "chain", null, "0.0.0.0", 1, 1, 0, null, "tcp"]);
+      await addGroup([22, "disabled chain", "host", "chain", null, "0.0.0.0", 1, 0, 0, null, "tcp"]);
+      // 组里选的方法要原样下发：Ping 只探主机（不带端口），UDP 探 主机:端口。
+      await addGroup([30, "health group", "tunnel", "failover", null, "0.0.0.0", 1, 1, 1, "health.example.test", "ping"]);
+      await addGroup([31, "disabled health", "host", "failover", null, "0.0.0.0", 1, 0, 1, "disabled.example.test:83", "tcp"]);
+      await addGroup([32, "udp health", "host", "failover", null, "0.0.0.0", 1, 1, 1, "223.5.5.5:53", "udp"]);
 
       const addHostMember = (id, groupId, hostId, priority, isEnabled = 1, connectHost = null) => insert(
         "forward_group_members",
@@ -116,6 +118,7 @@ test("heartbeat probe repositories batch chain, China-health, and tunnel topolog
       await addHostMember(301, 30, 1, 0);
       await addHostMember(303, 30, 5, 2, 0);
       await addHostMember(311, 31, 1, 0);
+      await addHostMember(321, 32, 1, 0);
 
       await insert(
         "tunnels",
@@ -144,7 +147,11 @@ test("heartbeat probe repositories batch chain, China-health, and tunnel topolog
 
       const legacyChinaProbes = await groups.getForwardGroupChinaHealthProbesForHost(1);
       assert.deepEqual(snapshot.chinaHealthProbes, legacyChinaProbes);
-      assert.deepEqual(snapshot.chinaHealthProbes.map((probe) => probe.memberId).sort((a, b) => a - b), [101, 301, 302]);
+      assert.deepEqual(snapshot.chinaHealthProbes.map((probe) => probe.memberId).sort((a, b) => a - b), [101, 301, 302, 321]);
+      const methodOf = (memberId) => snapshot.chinaHealthProbes.find((probe) => probe.memberId === memberId);
+      assert.deepEqual([methodOf(101).method, methodOf(101).targetPort], ["tcp", 81]);
+      assert.deepEqual([methodOf(301).method, methodOf(301).targetIp, methodOf(301).targetPort], ["ping", "health.example.test", 0], "Ping 组按 Ping 下发，不能退成 TCPing");
+      assert.deepEqual([methodOf(321).method, methodOf(321).targetIp, methodOf(321).targetPort], ["udp", "223.5.5.5", 53], "UDP 组按 UDP 下发");
       assert.equal(snapshot.chinaHealthProbes.find((probe) => probe.memberId === 302).fromHostId, 1, "tunnel members should probe from the tunnel entry host");
 
       const hops = await tunnels.getTunnelHopsByTunnelIds([400, 0, 400, 999]);

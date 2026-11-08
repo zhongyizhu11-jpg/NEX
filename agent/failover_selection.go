@@ -291,11 +291,16 @@ func (p *failoverProxy) updateFallbackActiveAtLocked(now time.Time, reason strin
 		守着一条死路比抖动更糟 —— 最短驻留是拿来防「好线路之间来回切」的，
 		不是拿来拖着不逃生的。
 	*/
-	for _, index := range order {
-		if p.healthyLocked(index) {
-			p.setActiveLocked(index, reason)
-			return
+	// 人工指定和时段表是人定的首选：健康就走它，出口 IP 的取舍压不过它们。
+	explicit := -1
+	if source == "pin" || source == "schedule" {
+		explicit = preferred
+	}
+	if index, sameExit := p.escapePickLocked(order, p.activeIndex, explicit, false); index >= 0 {
+		if sameExit {
+			reason += failoverSameExitReasonSuffix
 		}
+		p.setActiveLocked(index, reason)
 	}
 }
 

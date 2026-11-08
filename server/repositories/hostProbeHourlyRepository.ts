@@ -1,4 +1,5 @@
 import { executeRaw, getDatabaseKind, queryRaw, withDatabaseTransaction } from "../dbRuntime";
+import { flushPendingWrites } from "../dbWriteBatcher";
 import { boolLiteral, castInteger, quoteIdentifier as q } from "../dbCompat";
 import { getSetting, setSetting } from "./settingsRepository";
 import { deleteExpiredHistoryRows } from "./historyRetention";
@@ -92,6 +93,7 @@ function upsertSql() {
  * 可以随时重复调用：没有新样本就什么也不做。第一次跑从 72 小时前开始，升级后马上就有三天。
  */
 export async function rollupHostProbeHourlyStats(nowMs = Date.now()) {
+  await flushPendingWrites();
   const now = Math.floor(nowMs / 1000);
   const end = now - ROLLUP_LAG_SECONDS;
   const stored = Number(await getSetting(HOST_PROBE_HOURLY_WATERMARK_KEY));

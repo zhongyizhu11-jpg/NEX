@@ -19,6 +19,7 @@ import {
   users,
 } from "../../drizzle/schema";
 import { afterDatabaseCommit, afterDatabaseTransactionSettled, executeRaw, getDatabaseKind, getDb, insertAndGetId, isDatabaseTransactionActive, nowDate, queryRaw, withDatabaseTransaction } from "../dbRuntime";
+import { flushPendingWrites } from "../dbWriteBatcher";
 import { boolValue, quoteIdentifier, sqlCountAll } from "../dbCompat";
 import { combineHostPortPolicyWithRange, combinePortPolicies, isPortAllowedByPolicy, pickAvailablePort, portPolicyFrom } from "@shared/portPolicy";
 import { releaseHostPortReservations, reserveAvailableHostPort, reserveSpecificHostPort, reserveSpecificHostPortOnHosts, type HostPortReservation } from "../portReservations";
@@ -616,6 +617,7 @@ export async function clearTunnelTestSnapshot(id: number, options: { clearHistor
   if (options.clearHistory) {
     // Measurements from a previous topology have different labels and are no
     // longer comparable (for example, an exit group changed to a direct exit).
+    await flushPendingWrites("tunnel_latency_stats");
     await db.delete(tunnelLatencyStats).where(eq(tunnelLatencyStats.tunnelId, id));
   }
   await db.update(tunnels).set({

@@ -10,6 +10,7 @@ import {
 } from "./failoverTargets";
 import { normalizeForwardRuleProtocol } from "./forwardTypes";
 import { timestampMillis } from "./timestamp";
+import { agentSupportsUdpProbe } from "./udpProbe";
 
 /**
  * 线路组：一个入口 + 多条路径 + 一个调度策略。全站唯一一份模型。
@@ -171,9 +172,10 @@ export type RoutePath = {
  *   round_robin 轮流
  *   random      随机
  *   ip_hash     按访客固定：同一个访客 IP 一直走同一个落地
+ *   auto        自动：按最近延迟和落地主机的负载算权重，随机挑两个取更好的那个（Agent 2.2.251 起）
  * 「怎么切」照旧决定走哪条线路；按权重（整组一起分）、聚合 / 复制时不用它。Agent 2.2.245 起。
  */
-export const ROUTE_DEST_SPREADS = ["one", "least_load", "round_robin", "random", "ip_hash"] as const;
+export const ROUTE_DEST_SPREADS = ["one", "least_load", "round_robin", "random", "ip_hash", "auto"] as const;
 export type RouteDestSpread = (typeof ROUTE_DEST_SPREADS)[number];
 /** 路径上记的：只有「一起分」的几种（主备不记）。 */
 export type RouteLineDestSpread = Exclude<RouteDestSpread, "one">;
@@ -184,6 +186,7 @@ export const ROUTE_DEST_SPREAD_LABELS: Record<RouteDestSpread, { label: string; 
   round_robin: { label: "轮流", hint: "这条线路在用时，新连接轮流走每个落地" },
   random: { label: "随机", hint: "这条线路在用时，新连接随机挑一个能用的落地" },
   ip_hash: { label: "按访客固定", hint: "同一个访客 IP 一直走同一个落地，适合要保持登录的服务" },
+  auto: { label: LINK_SPREAD_LABELS.auto.label, hint: "这条线路在用时，按最近延迟和落地主机的负载自动算权重，新连接随机挑两个落地取更好的那个" },
 };
 
 export function normalizeRouteDestSpread(value: unknown): RouteDestSpread {
@@ -193,6 +196,45 @@ export function normalizeRouteDestSpread(value: unknown): RouteDestSpread {
 
 /** 「落地怎么分」：Agent 2.2.245 起；更老的 Agent 拿到也只认一个落地（字段它不认）。 */
 export const ROUTE_DEST_SPREAD_AGENT_VERSION = "2.2.245";
+
+/**
+ * 「自动」（动态权重）：Agent 2.2.251 起。它按每条路径最近的探测延迟（指数平均）和面板给的主机负载
+ * （failoverTarget.loadPct）算有效权重，新连接随机挑两条、取连接数 ÷ 有效权重更小的那条。
+ * 更老的 Agent 认不出 auto：整组的分法面板改发「按权重」（和「按负载」退成按权重同一个路子），
+ * 线路里几个落地的「自动」改发「按负载分」（那边没有按权重，按负载最接近）。
+ */
+export const ROUTE_AUTO_SPREAD_AGENT_VERSION = "2.2.251";
+
+/**
+ * 沿途主机负载（failoverTarget.loadPct）：Agent 2.2.251 起拿它扣评分、压「自动」的权重。更老的 Agent 不认这个字段，
+ * 面板不给 —— 给了也白给，还会让下发的规格跟着负载一轮一轮地变。
+ */
+export const ROUTE_LOAD_HINT_AGENT_VERSION = "2.2.251";
+
+/** 「自动」在老 Agent 上怎么退：整组是按权重，线路里的几个落地是按负载分。 */
+export function routeSpreadForAgent<T extends string>(spread: T, fallback: T, agentAtLeast: (version: string) => boolean): T {
+  if (spread !== "auto") return spread;
+  return agentAtLeast(ROUTE_AUTO_SPREAD_AGENT_VERSION) ? spread : fallback;
+}
+
+/**
+ * 「故障切换优先同出口 IP」（2.3.520）：每条路径带上它最后从哪个 IP 出去（exitIp），当前这条挂了换路时，Agent 在
+ * 同样够格的候选里优先挑出口 IP 一样的（agent/failover_exit_ip.go）。Agent 2.2.251 起；更老的不认这个字段，照老规矩换。
+ */
+export const ROUTE_EXIT_IP_AGENT_VERSION = "2.2.251";
+
+/** Agent 切换事件原因后面的标记：这次是换到了同出口 IP 的备用（见 agent/failover_exit_ip.go）。 */
+export const ROUTE_REASON_SAME_EXIT_SUFFIX = "; same exit ip";
+
+/** 把切换原因拆成本来的原因和「换到了同出口 IP」这个标记；老 Agent 的原因没有标记，原样过。 */
+export function splitRouteReason(reason: unknown): { base: string; sameExitIp: boolean } {
+  const text = String(reason ?? "").trim();
+  const lower = text.toLowerCase();
+  if (lower.endsWith(ROUTE_REASON_SAME_EXIT_SUFFIX)) {
+    return { base: text.slice(0, text.length - ROUTE_REASON_SAME_EXIT_SUFFIX.length).trim(), sameExitIp: true };
+  }
+  return { base: text, sameExitIp: false };
+}
 
 /**
  * 下发给 Agent 时带不带「落地怎么分」：一次走一条线路（分配策略是 fallback、不分层 —— 按权重、聚合 / 复制时
@@ -213,9 +255,11 @@ export function routeDestSpreadReady(options: {
 export function routeDestSpreadTargetFields(
   path: Pick<RoutePath, "destSpread" | "tier" | "dest" | "destNodeId"> & { destHostId?: number | null },
   ready: boolean,
+  // 「自动」要 Agent 2.2.251，更老的改发「按负载分」（routeSpreadForAgent）。
+  agentAtLeast: (version: string) => boolean,
 ): { line: number; landing: string; spread: RouteLineDestSpread } | Record<string, never> {
   if (!ready || !path.destSpread || typeof path.tier !== "number") return {};
-  return { line: path.tier, landing: routePathLandingKey(path), spread: path.destSpread };
+  return { line: path.tier, landing: routePathLandingKey(path), spread: routeSpreadForAgent<RouteLineDestSpread>(path.destSpread, "least_load", agentAtLeast) };
 }
 
 /** 落地是哪一个（同一个落地经不同中转的几条路径算一个）：落地池按成员机，节点按节点，别的按地址，没写 = 规则目标。 */
@@ -229,8 +273,8 @@ export function routePathLandingKey(path: Pick<RoutePath, "dest" | "destNodeId">
 export const ROUTE_MODES = ["failover", "scheduled", "manual", "smart", "hybrid", "weighted"] as const;
 export type RouteMode = (typeof ROUTE_MODES)[number];
 
-/** 权重负载模式下新连接怎么分：按权重、轮流、随机、按访客固定。 */
-export const ROUTE_SPREADS = ["weighted", "least_load", "round_robin", "random", "ip_hash"] as const;
+/** 权重负载模式下新连接怎么分：按权重、按负载、轮流、随机、按访客固定、自动（动态权重，Agent 2.2.251 起）。 */
+export const ROUTE_SPREADS = ["weighted", "least_load", "round_robin", "random", "ip_hash", "auto"] as const;
 export type RouteSpread = (typeof ROUTE_SPREADS)[number];
 
 /**
@@ -369,6 +413,7 @@ export const ROUTE_SPREAD_LABELS: Record<RouteSpread, { label: string; hint: str
   round_robin: { label: LINK_SPREAD_LABELS.round_robin.label, hint: "新连接轮流走每一条" },
   random: { label: LINK_SPREAD_LABELS.random.label, hint: "新连接随机挑一条能用的" },
   ip_hash: { label: LINK_SPREAD_LABELS.ip_hash.label, hint: "同一个来源 IP 总走同一条，适合要保持登录的服务" },
+  auto: { label: LINK_SPREAD_LABELS.auto.label, hint: "按每条路径最近的延迟和沿途主机的负载自动算权重，新连接随机挑两条取更好的那条；慢了、忙了的少分" },
 };
 
 export const ROUTE_SWITCH_MODE_INFO: Record<RouteSwitchMode, { label: string; hint: string }> = {
@@ -387,6 +432,7 @@ export const ROUTE_SPREAD_SESSION_HINTS: Record<RouteSpread, string> = {
   round_robin: "新会话轮流走每一条",
   random: "新会话随机挑一条能用的",
   ip_hash: "UDP 分不出访客：同一个会话一直走同一条，同一个访客的不同会话可能分到不同路径",
+  auto: "按每条路径最近的延迟和沿途主机的负载自动算权重，新会话随机挑两条取更好的那条",
 };
 
 export const ROUTE_SWITCH_MODE_SESSION_HINTS: Record<RouteSwitchMode, string> = {
@@ -716,6 +762,57 @@ export function routePathDial(path: RoutePath, rule: Pick<RouteGroupRule, "targe
 }
 
 /**
+ * 这条路径的对端是哪台 NEX 管的主机：有中转就是第一跳（入口拨的是它上面的中继规则）；没中转而落地是
+ * 落地池成员时是那台成员机（拨的是它上面的成员入站）；手填的落地地址不知道是不是自己的机器 → null。
+ * UDP 回声探测（routeUdpEchoProbeReady）按它的 Agent 版本给。
+ */
+export function routePathFarEndHostId(path: Pick<RoutePath, "hops" | "destHostId">): number | null {
+  if (path.hops.length > 0) return Number(path.hops[0]) > 0 ? Number(path.hops[0]) : null;
+  const member = Number(path.destHostId || 0);
+  return member > 0 ? member : null;
+}
+
+/**
+ * 这条目标下发时带不带 probeUdpEcho（Agent 2.2.251 起，agent/udp_probe.go）：规则要带 UDP（udp / both）、
+ * 没填探测地址（填了照填的拨 TCP）、对端是 NEX 管的主机而且它的 Agent 够新 —— 老 Agent 的 UDP 监听不认探测报，
+ * 会把它当普通包转出去，所以版本不够就不带，探测照旧（零长度包探端口不可达，说不准按原来的判法）。
+ * 调度那台的 Agent 也得够新，由心跳另外判（routeSchedulerAgentAtLeast）。
+ *
+ * 只有落在 Agent 自己的 UDP 监听（协议守护）上的探测报才有回声；对端那个端口是 gost 在听（中转机上的中继规则）
+ * 时探测报会被转出去、收不到回声，结论退回零长度包那一档，不会误判。
+ */
+export function routeUdpEchoProbeReady(options: {
+  protocol: unknown;
+  path: Pick<RoutePath, "hops" | "destHostId" | "probe">;
+  farEndAgentVersion: string | null | undefined;
+}): boolean {
+  if (normalizeForwardRuleProtocol(options.protocol) === "tcp") return false;
+  if (options.path.probe) return false;
+  if (routePathFarEndHostId(options.path) === null) return false;
+  return agentSupportsUdpProbe(options.farEndAgentVersion);
+}
+
+/**
+ * 这条路径最后从哪个 IP 出去（下发给 Agent 的 exitIp，见 ROUTE_EXIT_IP_AGENT_VERSION）。
+ *
+ * 落地是 NEX 主机（落地池成员，destHostId）时是那台机器的出口地址 —— hostEgressIp 给：面板看到的心跳来源，
+ * 没有就是登记的 IPv4 / IPv6；那台一个地址都没有时退回落地的拨号地址。落地是手填地址、节点地址、或者规则
+ * 自己的目标时，就是那个地址本身：对端看到的就是它。算不出来返回空串，Agent 当成没有。
+ */
+export function routePathExitIp(
+  path: Pick<RoutePath, "dest" | "destHostId">,
+  rule: Pick<RouteGroupRule, "targetIp" | "targetPort">,
+  hostEgressIp: (hostId: number) => string | null | undefined,
+): string {
+  const destHostId = Number(path.destHostId || 0);
+  if (destHostId > 0) {
+    const egress = String(hostEgressIp(destHostId) || "").trim();
+    if (egress) return egress;
+  }
+  return String(path.dest ? path.dest.ip : rule.targetIp || "").trim();
+}
+
+/**
  * 老 failover* 列的读法，和上一版一样；只是「模式」这个概念在老数据里要推：
  * 分配方式不是主备的就是权重负载（轮流 / 随机 / 按访客），开了自动择优就是智能择优，
  * 有时段表就是定时主备，其余都是自动故障切换。
@@ -766,7 +863,8 @@ export function routeAgentStrategy(policy: Pick<RouteGroupPolicy, "mode" | "spre
 
 /**
  * 下发给 Agent 的分配策略，算上「备用怎么候着」：聚合 = 主线路那一组里按负载分（Agent 只在最低健康
- * tier 里挑，备用组照旧等着）；「按负载」老 Agent 不认（会退成主备），改发「按权重」。
+ * tier 里挑，备用组照旧等着）；「按负载」老 Agent 不认（会退成主备），改发「按权重」；「自动」
+ * 2.2.251 之前的 Agent 也不认，同样改发「按权重」（ROUTE_AUTO_SPREAD_AGENT_VERSION）。
  */
 export function routeDeliveryStrategy(
   policy: Pick<RouteGroupPolicy, "mode" | "spread">,
@@ -776,7 +874,8 @@ export function routeDeliveryStrategy(
   const leastLoad = agentAtLeast(ROUTE_LEAST_LOAD_AGENT_VERSION) ? "least_load" : "weighted";
   if (delivery === "aggregate") return leastLoad;
   const strategy = routeAgentStrategy(policy);
-  return strategy === "least_load" ? leastLoad : strategy;
+  if (strategy === "least_load") return leastLoad;
+  return routeSpreadForAgent<"fallback" | RouteSpread>(strategy, "weighted", agentAtLeast);
 }
 
 /** 「按负载」：Agent 2.2.232 起（和 shared/exitStrategy 的 LEAST_LOAD_AGENT_VERSION 同一个）。 */
@@ -958,7 +1057,14 @@ export function normalizeRouteEventKind(value: unknown): RouteEventKind | null {
  * 界面说的才是同一句。
  */
 export function describeRouteReason(reason: unknown): string {
-  const text = String(reason ?? "").trim();
+  const { base, sameExitIp } = splitRouteReason(reason);
+  const described = describeRouteReasonBase(base);
+  if (!sameExitIp) return described;
+  // Agent 2.2.251 起：挂了之后换到的是出口 IP 一样的备用（agent/failover_exit_ip.go）。
+  return described ? `${described}，换到同出口 IP 的备用` : "换到同出口 IP 的备用";
+}
+
+function describeRouteReasonBase(text: string): string {
   if (!text) return "";
   const lower = text.toLowerCase();
   if (lower === "health check") return "连续探测不通";

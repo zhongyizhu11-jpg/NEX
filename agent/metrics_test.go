@@ -1652,6 +1652,42 @@ func TestExecuteTCPingTaskPreservesPartialPingLoss(t *testing.T) {
 	}
 }
 
+/*
+转发组 / 入口组成员的「UDP」健康检查（2.2.251）：端口不可达算不通并写明是 refused；回了包算通；
+说不准退回 ping，和「Ping」方法一个结果。
+*/
+func TestExecuteTCPingTaskUDPMethod(t *testing.T) {
+	old := udpProbeFn
+	t.Cleanup(func() { udpProbeFn = old })
+	task := tcpingTask{Kind: "forwardGroup", GroupID: 3, MemberID: 7, ProbeType: "china", Method: "udp", TargetIP: "192.0.2.1", TargetPort: 53, HopCount: 1}
+	pinged := 0
+	ping := func(string, time.Duration, int) probeMeasurement {
+		pinged++
+		return probeMeasurement{LatencyMs: 31, Reachable: true, ProbeCount: 5, ProbeSuccesses: 5}
+	}
+
+	udpProbeFn = func(string, int, bool, time.Duration) (int, udpProbeVerdict) { return 0, udpProbeDown }
+	result := executeTCPingTaskWithProbes(task, nil, ping)
+	if result.Payload["isTimeout"] != true || result.Payload["failure"] != "refused" || result.Payload["method"] != "udp" {
+		t.Fatalf("端口不可达应当报不通、原因 refused：%v", result.Payload)
+	}
+	if pinged != 0 {
+		t.Fatal("确定不通时不该再 ping")
+	}
+
+	udpProbeFn = func(string, int, bool, time.Duration) (int, udpProbeVerdict) { return 12, udpProbeUp }
+	result = executeTCPingTaskWithProbes(task, nil, ping)
+	if result.Payload["isTimeout"] != false || result.Payload["latencyMs"] != 12 {
+		t.Fatalf("回了包应当报通并带耗时：%v", result.Payload)
+	}
+
+	udpProbeFn = func(string, int, bool, time.Duration) (int, udpProbeVerdict) { return 0, udpProbeUnknown }
+	result = executeTCPingTaskWithProbes(task, nil, ping)
+	if pinged != 1 || result.Payload["isTimeout"] != false || result.Payload["latencyMs"] != 31 {
+		t.Fatalf("说不准应当退回 ping 的结果：%v（ping %d 次）", result.Payload, pinged)
+	}
+}
+
 func TestTCPLatencyWithProbesPreservesPartialTCPFailures(t *testing.T) {
 	originalDial := dialNetworkTimeout
 	t.Cleanup(func() { dialNetworkTimeout = originalDial })

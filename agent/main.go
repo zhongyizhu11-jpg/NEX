@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-var Version = "2.2.250"
+var Version = "2.2.251"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value
@@ -539,6 +539,11 @@ type failoverTarget struct {
 	// 「本机探测延迟 + 它」比整条链路；上报的 latencyMs 仍只是第一段。
 	// 和 Down 一样是运行时提示：不进签名、不落盘，变了也不重建代理、不清统计。
 	ExtraLatencyMs int `json:"extraLatencyMs,omitempty"`
+	// 面板算好的、这条路径沿途主机（中转机、落地是 NEX 主机时的那台）里最忙那台的负载，0–100
+	// （CPU 和带宽占用取大；2.2.251 起）。评分按它扣分（routeLoadPenalty：70% 以下不扣，
+	// 95% 起扣满 15 分），「自动」分法按它压权重。0 = 不知道，不扣。和 ExtraLatencyMs 一样是运行时提示：
+	// 不进签名、不落盘，变了也不重建代理、不清统计（applyRelayHintsLocked）。
+	LoadPct int `json:"loadPct,omitempty"`
 	// 「落地怎么分」（2.2.245，面板 2.3.501）：一次走一条线路时，选了「一起分」的那条线路上的目标带着
 	// 第几条线路（Line）、落在哪个落地（Landing：同一个落地经不同中转的几条一样）、怎么分（Spread：
 	// least_load / round_robin / random / ip_hash）。主备逻辑挑出该走的那条之后，新连接在它那条线路的
@@ -546,6 +551,16 @@ type failoverTarget struct {
 	Line    *int   `json:"line,omitempty"`
 	Landing string `json:"landing,omitempty"`
 	Spread  string `json:"spread,omitempty"`
+	// 这条路径的对端是 NEX 管的主机、Agent 够新（2.2.251）：UDP 健康探测发回声探测报（udp_probe.go），
+	// 而不是零长度包 + ping。面板按对端 Agent 的版本给；填了探测地址时不带（照填的拨 TCP）。
+	// 行为参数，进签名；不带时签名逐字不变。
+	ProbeUdpEcho bool `json:"probeUdpEcho,omitempty"`
+	// 这条路径最后从哪个 IP 出去（2.2.251，面板 2.3.520「故障切换优先同出口 IP」）：落地是 NEX 主机时是那台的
+	// 出口地址（面板看到的心跳来源，没有就是登记的 IPv4 / IPv6），落地是手填地址时就是那个地址。当前这条挂了
+	// 要换的时候，在同样够格的候选里优先挑出口 IP 和它一样的（failover_exit_ip.go）—— 对端看到的来源不变，
+	// 登录态、IP 绑定不丢。只是平手时的取舍，不压过分层、人工指定和时段表。
+	// 和 Down 一样是运行时提示：不进签名、不落盘，变了也不重建代理。
+	ExitIP string `json:"exitIp,omitempty"`
 }
 
 // 规格是不是分层的：每一条出站都标了 Tier。缺一条就整组按不分层处理（老面板）。
@@ -810,6 +825,10 @@ type fxpExitEndpoint struct {
 	Weight int `json:"weight,omitempty"`
 	// CapacityMbps 是出口主机的线路带宽，FXP「按负载」按它折算；没写按一样大。
 	CapacityMbps int `json:"capacityMbps,omitempty"`
+	// ExitIP 是这个出口主机的出口地址（2.2.251，面板 2.3.520）：原样写进 FXP 的配置，留给以后 FXP 主备换出口时
+	// 按「同出口 IP」取舍用 —— 现在的 FXP 还不读它。不进 fxpServerSignature：它是面板随时会变的提示，
+	// 进了签名的话一变就要重载 FXP（WireGuard 的隧道没有热更新，是整个重启）。
+	ExitIP string `json:"exitIp,omitempty"`
 }
 
 type fxpUDPTarget struct {

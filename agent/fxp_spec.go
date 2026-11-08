@@ -83,6 +83,8 @@ func normalizeFXPSpec(spec fxpSpec) fxpSpec {
 	for i := range spec.Exits {
 		spec.Exits[i].Host = strings.TrimSpace(spec.Exits[i].Host)
 		spec.Exits[i].PeerID = strings.TrimSpace(spec.Exits[i].PeerID)
+		// 出口 IP 只是提示，不进 fxpServerSignature（见 fxpExitEndpoint.ExitIP）。
+		spec.Exits[i].ExitIP = strings.TrimSpace(spec.Exits[i].ExitIP)
 		if spec.Exits[i].UDPPort <= 0 {
 			spec.Exits[i].UDPPort = spec.Exits[i].Port
 		}

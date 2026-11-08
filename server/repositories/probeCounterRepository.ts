@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { hasAgentProbeCounter, normalizeAgentProbeCounts, type AgentProbeCounter } from "../../shared/agentDtos";
 import type { ProbeStatistics } from "../../shared/probeStatistics";
 import { executeRaw, getDatabaseKind, queryRaw } from "../dbRuntime";
+import { defineBatchedWrite } from "../dbWriteBatcher";
 import { quoteIdentifier as q } from "../dbCompat";
 
 export type ProbeCounterKind = "rule" | "tunnel" | "forwardGroup";
@@ -42,21 +43,26 @@ export function probeCounterInsertSql(rowCount: number, kind = getDatabaseKind()
       : ` ON CONFLICT (${unique.map(q).join(", ")}) DO NOTHING`);
 }
 
+const PROBE_COUNTER_SNAPSHOTS_WRITE_QUEUE = "probe_counter_snapshots";
+// 快照行攒批写（server/dbWriteBatcher.ts）。每块最多 80 行：一行 10 个参数，SQLite 的绑定上限留足余量。
+// 同一块里重复的行（HTTP 重发）靠 ON CONFLICT DO NOTHING / ON DUPLICATE KEY 吞掉。
+const probeCounterSnapshotWrites = defineBatchedWrite<ProbeCounterSnapshot & { at: number }>(PROBE_COUNTER_SNAPSHOTS_WRITE_QUEUE, async (rows) => {
+  await executeRaw(probeCounterInsertSql(rows.length), rows.flatMap((row) => [row.kind, row.refId, row.hostId,
+    row.probeKey, row.epoch, row.totalCount, row.totalSuccesses, row.batchCount, row.batchSuccesses, row.at]));
+}, { chunkRows: 80 });
+
 export async function insertProbeCounterSnapshots(rows: ProbeCounterSnapshot[], recordedAt = new Date()) {
-  // Keep SQLite bind counts and each write bounded. Duplicate HTTP delivery
-  // keeps the original timestamp rather than moving an old sample forward.
+  // Duplicate HTTP delivery keeps the original timestamp rather than moving an
+  // old sample forward.
   const at = Math.floor(recordedAt.getTime() / 1000);
-  for (let offset = 0; offset < rows.length; offset += 80) {
-    const batch = rows.slice(offset, offset + 80);
-    await executeRaw(probeCounterInsertSql(batch.length), batch.flatMap((row) => [row.kind, row.refId, row.hostId,
-      row.probeKey, row.epoch, row.totalCount, row.totalSuccesses, row.batchCount, row.batchSuccesses, at]));
-  }
+  await probeCounterSnapshotWrites.push(rows.map((row) => ({ ...row, at })));
 }
 
 export async function getProbeCounterStatistics(kind: ProbeCounterKind, refIds: number | number[], since: Date): Promise<ProbeStatistics> {
   const ids = [...new Set((Array.isArray(refIds) ? refIds : [refIds]).filter((id) => Number.isInteger(id) && id > 0))];
   const empty: ProbeStatistics = { total: 0, successes: 0, available: false, observedSince: null, latestAt: null };
   if (!ids.length) return empty;
+  await probeCounterSnapshotWrites.flush();
   const start = Math.floor(since.getTime() / 1000);
   // Retention is 72h. The latest pre-window snapshot is the baseline; for a
   // newly observed stream count only its first batch + subsequent deltas,

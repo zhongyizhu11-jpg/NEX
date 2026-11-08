@@ -49,6 +49,7 @@ const spreadText: Record<RoutePolicy["strategy"], string> = {
   round_robin: "轮流",
   random: "随机",
   ip_hash: "按访客",
+  auto: "自动",
 };
 
 export function describeFailoverLineDisplay(

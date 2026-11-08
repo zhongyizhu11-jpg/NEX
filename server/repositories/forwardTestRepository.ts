@@ -1,6 +1,7 @@
 import { and, desc, eq, isNull, or } from "drizzle-orm";
 import { forwardTests, InsertForwardTest, tunnelLatencyStats } from "../../drizzle/schema";
 import { executeRaw, getDatabaseKind, getDb, insertAndGetId, nowDate, queryRaw, rawAffectedRows, rawEpochToDate, withDatabaseTransaction } from "../dbRuntime";
+import { flushPendingWrites } from "../dbWriteBatcher";
 import { boolLiteral, quoteIdentifier } from "../dbCompat";
 import { selfTestSweepActivity, SELF_TEST_MAX_LIFETIME_SECONDS, selfTestTimeoutSeconds } from "../selfTestTiming";
 
@@ -207,6 +208,7 @@ export async function completeForwardTestIfActive(
 }
 
 export async function getLatestTunnelLatency(tunnelId: number) {
+  await flushPendingWrites("tunnel_latency_stats");
   const db = await getDb();
   if (!db) return undefined;
   const rows = await db

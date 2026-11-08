@@ -20,10 +20,12 @@ import { appendPanelLog } from "../_core/panelLogger";
 import { invalidateProxySubCacheAll } from "../proxySubCache";
 import { DEFAULT_DDNS_TTL, getDdnsSettings, updateDdnsRecordValues } from "../ddns";
 import { afterDatabaseCommit, afterDatabaseTransactionSettled, executeRaw, getDb, insertAndGetId, isDatabaseTransactionActive, nowDate, queryRaw, rawEpochToDate, withDatabaseTransaction } from "../dbRuntime";
+import { flushPendingWrites } from "../dbWriteBatcher";
 import { withForwardTestDates } from "./forwardTestRepository";
 import { inList, quoteIdentifier } from "../dbCompat";
 import { pageResult, pageWindowForTotal, type PageRequest } from "../../shared/pagination";
 import {
+  defaultHealthCheckPort,
   defaultHealthCheckTarget,
   healthCheckTargetNeedsPort,
   normalizeForwardGroupHealthCheckMethod,
@@ -432,14 +434,14 @@ export function normalizeChinaHealthTarget(raw: unknown, method?: unknown) {
   const probeMethod = normalizeForwardGroupHealthCheckMethod(method);
   const needsPort = healthCheckTargetNeedsPort(probeMethod);
   const source = String(raw || "").trim() || defaultHealthCheckTarget(probeMethod);
-  const withoutScheme = source.replace(/^(?:tcp|icmp|ping):\/\//i, "").replace(/：/g, ":").trim();
+  const withoutScheme = source.replace(/^(?:tcp|udp|icmp|ping):\/\//i, "").replace(/：/g, ":").trim();
   let host = withoutScheme;
-  let port = 80;
+  let port = defaultHealthCheckPort(probeMethod);
 
   const bracketMatch = withoutScheme.match(/^\[([^\]]+)\](?::(\d+))?$/);
   if (bracketMatch) {
     host = bracketMatch[1];
-    port = bracketMatch[2] ? Number(bracketMatch[2]) : 80;
+    port = bracketMatch[2] ? Number(bracketMatch[2]) : defaultHealthCheckPort(probeMethod);
   } else {
     const lastColon = withoutScheme.lastIndexOf(":");
     if (lastColon > 0) {
@@ -1033,6 +1035,7 @@ export async function getForwardGroups(userId?: number, options: { includeRuntim
     const groupId = Number(rule.forwardGroupId || 0);
     templateCountByGroup.set(groupId, (templateCountByGroup.get(groupId) || 0) + 1);
   }
+  await flushPendingWrites("forward_group_latency_stats");
   const latencyRows = await queryRaw<any>(
     `SELECT s.${quoteIdentifier("groupId")}, s.${quoteIdentifier("latencyMs")}, s.${quoteIdentifier("isTimeout")}, s.${quoteIdentifier("recordedAt")}
      FROM ${quoteIdentifier("forward_group_latency_stats")} s
@@ -1673,6 +1676,8 @@ export async function getForwardGroupProbeTopologyForHost(hostId: number): Promi
       entryGroupId: forwardGroups.entryGroupId,
       chinaHealthCheckEnabled: forwardGroups.chinaHealthCheckEnabled,
       chinaHealthCheckTarget: forwardGroups.chinaHealthCheckTarget,
+      // 健康检查方法（TCPing / Ping / UDP）：漏取的话下面一律按 TCPing 下发，组里选的 Ping、UDP 都不生效。
+      chinaHealthCheckMethod: forwardGroups.chinaHealthCheckMethod,
       failoverSeconds: forwardGroups.failoverSeconds,
       recoverSeconds: forwardGroups.recoverSeconds,
       isEnabled: forwardGroups.isEnabled,
@@ -4484,6 +4489,7 @@ export async function scheduleForwardGroupsForHostHealthChange(hostId: number) {
 }
 
 async function latestTcping(ruleId: number) {
+  await flushPendingWrites("tcping_stats");
   const table = quoteIdentifier("tcping_stats");
   const result = await queryRaw<any>(
     `SELECT * FROM ${table} WHERE ${quoteIdentifier("ruleId")} = ? ORDER BY ${quoteIdentifier("recordedAt")} DESC LIMIT 1`,

@@ -19,6 +19,10 @@
  *     抖动    15 分   0 ms 满分，≥ 100 ms 零分
  *     可用率  15 分   探测成功的比例
  *
+ * 再减主机负载（Agent 2.2.251 起）：面板按这条路径沿途的中转机、落地机（是 NEX 主机时）里最忙的
+ * 那台给一个 loadPct（CPU 和带宽占用取大的），70% 以下不扣，往上线性扣，95% 起扣满 15 分。一台快被跑满的
+ * 中转再快也该让一让 —— 分扣下来，整链最优和「自动」分法都会少走它。扣不到负数，最低 0。
+ *
  * 探不通（healthy = false）直接 0 分：一条连不上的线路谈不上「有多好」。还没探出延迟时
  * 不打分（null）—— 「等评分」和「0 分」是两回事，前者不该被显示成最差。
  *
@@ -37,16 +41,29 @@ export type RouteQuality = {
   availabilityPct: number;
   /** Agent 此刻认为这条线路能不能用。 */
   healthy: boolean;
+  /** 沿途主机里最忙那台的负载（0–100）；不知道是 null / 不给，不扣分。 */
+  loadPct?: number | null;
 };
 
 export const ROUTE_SCORE_LATENCY_FULL_MS = 40;
 export const ROUTE_SCORE_LATENCY_ZERO_MS = 400;
 export const ROUTE_SCORE_LOSS_ZERO_PCT = 4;
 export const ROUTE_SCORE_JITTER_ZERO_MS = 100;
+/** 主机负载从多少起扣分、多少扣满、最多扣几分。 */
+export const ROUTE_SCORE_LOAD_FROM_PCT = 70;
+export const ROUTE_SCORE_LOAD_FULL_PCT = 95;
+export const ROUTE_SCORE_LOAD_MAX_PENALTY = 15;
 
 function clamp01(value: number): number {
   if (!(value > 0)) return 0;
   return value > 1 ? 1 : value;
+}
+
+/** 主机负载扣几分（小数）：70% 以下 0，95% 起 15，中间线性。和 Agent 的 routeLoadPenalty 逐字一致。 */
+export function routeLoadPenalty(loadPct: number | null | undefined): number {
+  const load = Number(loadPct);
+  if (!Number.isFinite(load)) return 0;
+  return clamp01((load - ROUTE_SCORE_LOAD_FROM_PCT) / (ROUTE_SCORE_LOAD_FULL_PCT - ROUTE_SCORE_LOAD_FROM_PCT)) * ROUTE_SCORE_LOAD_MAX_PENALTY;
 }
 
 /** 0–100 的整数；探不通是 0，还没探出延迟是 null。运算顺序和 Agent 的 routeScore 逐字一致。 */
@@ -57,7 +74,9 @@ export function routeScore(quality: RouteQuality): number | null {
   const loss = clamp01(1 - (Number(quality.lossPct) || 0) / ROUTE_SCORE_LOSS_ZERO_PCT) * 30;
   const jitter = clamp01(1 - (Number(quality.jitterMs) || 0) / ROUTE_SCORE_JITTER_ZERO_MS) * 15;
   const availability = clamp01((Number(quality.availabilityPct) || 0) / 100) * 15;
-  return Math.round(latency + loss + jitter + availability);
+  // 负载扣分是整体减的，不进四项里；减到负数按 0（先截再取整，两边才一样）。
+  const total = latency + loss + jitter + availability - routeLoadPenalty(quality.loadPct);
+  return Math.round(total < 0 ? 0 : total);
 }
 
 export type RouteScoreGrade = {

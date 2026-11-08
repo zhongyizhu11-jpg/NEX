@@ -7,7 +7,7 @@ import { formatFailoverEndpoint } from "@shared/failoverTargets";
 import { formatBytes } from "@shared/formatBytes";
 import type { NetworkHealth } from "@shared/networkHealth";
 import { routeWeightShares } from "@shared/routeGroup";
-import { formatRouteScore, routeScoreGrade } from "@shared/routeScore";
+import { ROUTE_SCORE_LOAD_FROM_PCT, ROUTE_SCORE_LOAD_FULL_PCT, ROUTE_SCORE_LOAD_MAX_PENALTY, formatRouteScore, routeLoadPenalty, routeScoreGrade } from "@shared/routeScore";
 import type { RoutePolicy } from "@shared/routePolicy";
 import type { RouteSwitchSummary } from "@shared/routeSwitchSummary";
 
@@ -65,7 +65,44 @@ export type RouteBoardPath = {
   probedAt?: number | null;
   /** 真实连接最近 10 分钟的拨号：成功 / 失败 / 慢、耗时折半均值；老 Agent 没有。 */
   dials?: { ok: number; failed: number; slow: number; dialMs: number; lastAt: number } | null;
+  /** UDP 那一侧的健康（Agent 2.2.251 起）：TCP+UDP 规则两侧分开判；老 Agent 没报就是 null / 缺省。 */
+  udpHealthy?: boolean | null;
+  udpLatencyMs?: number | null;
+  /** 沿途主机里最忙那台的负载（0–100），评分已经按它扣过；老 Agent 没有。 */
+  loadPct?: number | null;
 };
+
+/**
+ * 「UDP 不通」/「仅 UDP 通」：TCP+UDP 规则两侧结论不一致时在路径行上标一枚小胶囊；一致、或者老 Agent
+ * 没报 UDP 那一侧，什么都不显示。断了的路径两侧都不通，交给「断了」那枚说。
+ */
+export function describeRouteUdpSplit(path: Pick<RouteBoardPath, "healthy" | "udpHealthy" | "udpLatencyMs" | "down">): { text: string; title: string } | null {
+  if (path.down || path.healthy === null || path.udpHealthy === null || path.udpHealthy === undefined) return null;
+  if (path.healthy && !path.udpHealthy) {
+    return { text: "UDP 不通", title: "TCP 探测通、UDP 端口探不通：TCP 连接照常走这条，UDP 会话会避开它" };
+  }
+  if (!path.healthy && path.udpHealthy) {
+    const latency = typeof path.udpLatencyMs === "number" && path.udpLatencyMs > 0 ? `（${Math.round(path.udpLatencyMs)} ms）` : "";
+    return { text: "仅 UDP 通", title: `TCP 探测不通、UDP 端口探得通${latency}：UDP 会话还能走这条，TCP 连接不走` };
+  }
+  return null;
+}
+
+/**
+ * 「负载 85%」那枚药丸：沿途有一台机器忙到 70% 以上才显示（70% 以下评分不扣，没什么可说的）。
+ * 95% 起染红，之间琥珀；title 里写扣了几分。没到门槛或老 Agent 没报返回 null。
+ */
+export function describeRouteLoad(loadPct: number | null | undefined): { text: string; title: string; tone: "warn" | "down"; penalty: number } | null {
+  if (loadPct === null || loadPct === undefined || !Number.isFinite(loadPct) || loadPct < ROUTE_SCORE_LOAD_FROM_PCT) return null;
+  const penalty = Math.round(routeLoadPenalty(loadPct) * 10) / 10;
+  const pct = Math.round(loadPct);
+  return {
+    text: `负载 ${pct}%`,
+    title: `沿途最忙的主机负载 ${pct}%（CPU 和带宽占用取大），评分扣 ${penalty} 分：${ROUTE_SCORE_LOAD_FROM_PCT}% 起扣，${ROUTE_SCORE_LOAD_FULL_PCT}% 扣满 ${ROUTE_SCORE_LOAD_MAX_PENALTY} 分`,
+    tone: loadPct >= ROUTE_SCORE_LOAD_FULL_PCT ? "down" : "warn",
+    penalty,
+  };
+}
 
 /** 「建连 120 · 失败 3 · 慢 2 · 拨号 28ms」：有失败或慢的染琥珀，什么都没拨过不显示。 */
 export function describeRouteDials(dials: RouteBoardPath["dials"]): { text: string; tone: "ok" | "warn" | "off"; title: string } | null {
@@ -279,6 +316,9 @@ export function RoutePathCard({ path, entry, ruleRate = null, share, preferred, 
   const totalLabel = chain.totalMs === null ? "整链 —" : `整链 ${chain.partial ? "≥ " : ""}${round(chain.totalMs)} ms`;
   const grade = routeScoreGrade(path.score);
   const dials = describeRouteDials(path.dials);
+  const udpSplit = describeRouteUdpSplit(path);
+  const load = describeRouteLoad(path.loadPct);
+  const scoreTitle = load ? `延迟、丢包、抖动、可用率合起来的分，再减主机负载 ${load.penalty} 分` : "延迟、丢包、抖动、可用率合起来的分";
   return (
     <section className={cn("fx-rb-path", className)} data-health={health} data-active={path.active ? "" : undefined} data-testid="route-path-card">
       <header className="fx-rb-path-head">
@@ -291,14 +331,16 @@ export function RoutePathCard({ path, entry, ruleRate = null, share, preferred, 
           {!path.active && !path.down && !weighted ? <EntityTag tone="standby">备用</EntityTag> : null}
           {weighted && typeof share === "number" ? <EntityTag tone="standby">{share}%</EntityTag> : null}
           {path.down ? <span className="fx-rule-tag" data-tone="down" title={path.downReason}>断了{path.downReason ? ` · ${path.downReason}` : ""}</span> : null}
+          {udpSplit ? <span className="fx-rule-tag" data-tone="warn" title={udpSplit.title} data-testid="route-udp-split">{udpSplit.text}</span> : null}
         </span>
         <span className="fx-rb-path-stats">
           <span className="fx-rb-chip" data-tone={chain.broken ? "down" : chain.partial && chain.totalMs !== null ? "warn" : chain.totalMs === null ? "off" : "ok"} title={chain.partial ? "有一段还没测到，这是已测各段相加" : "各段延迟相加"}>
             {totalLabel}
           </span>
           {path.score !== null ? (
-            <span className={cn("fx-rb-score", `fx-rb-score-${grade.tone}`)} data-testid="route-score">{formatRouteScore(path.score)}</span>
+            <span className={cn("fx-rb-score", `fx-rb-score-${grade.tone}`)} data-testid="route-score" title={scoreTitle}>{formatRouteScore(path.score)}</span>
           ) : null}
+          {load ? <span className="fx-rb-chip" data-tone={load.tone} title={load.title} data-testid="route-load">{load.text}</span> : null}
           {path.lossPct !== null && path.lossPct > 0 ? <span className="fx-rb-meta">丢包 {path.lossPct.toFixed(1)}%</span> : null}
           {path.availabilityPct !== null && path.availabilityPct < 100 ? <span className="fx-rb-meta">可用 {path.availabilityPct.toFixed(1)}%</span> : null}
           {path.connections !== null && path.connections > 0 ? <span className="fx-rb-meta">{path.connections} 连接</span> : null}
@@ -384,9 +426,10 @@ export function RouteMiniChain({ status, policy, onOpen, className }: { status: 
           }
           parts.push(<span key={`stop-${index}`} className="fx-rb-mini-stop">{stop}</span>);
         });
-        const state = weighted
+        const udpSplit = describeRouteUdpSplit(path);
+        const state = (weighted
           ? `${shares[path.index]}%`
-          : path.active ? "在走" : path.down ? "断了" : path.prewarming ? "预热中" : "备用";
+          : path.active ? "在走" : path.down ? "断了" : path.prewarming ? "预热中" : "备用") + (udpSplit ? ` · ${udpSplit.text}` : "");
         const total = chain.totalMs === null ? "" : `${chain.partial ? "≥" : ""}${round(chain.totalMs)} ms`;
         const row = (
           <>

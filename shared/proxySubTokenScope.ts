@@ -39,7 +39,7 @@ export const PROXY_SUB_EMPTY_SCOPE: ProxySubTokenScope = {
   excludeRelay: false,
 };
 
-export const PROXY_SUB_SORT_MODES = ["manual", "name", "region", "protocol", "latency"] as const;
+export const PROXY_SUB_SORT_MODES = ["manual", "name", "region", "protocol", "latency", "nearest"] as const;
 export type ProxySubSortMode = (typeof PROXY_SUB_SORT_MODES)[number];
 export const PROXY_SUB_SORT_MODE_LABELS: Record<ProxySubSortMode, string> = {
   manual: "按面板里的顺序",
@@ -47,6 +47,12 @@ export const PROXY_SUB_SORT_MODE_LABELS: Record<ProxySubSortMode, string> = {
   region: "按地区",
   protocol: "按协议",
   latency: "按延迟（面板探测）",
+  nearest: "按访客就近",
+};
+/** 选项下面的一句说明；没有的不显示。 */
+export const PROXY_SUB_SORT_MODE_HINTS: Partial<Record<ProxySubSortMode, string>> = {
+  // 2.3.520：访客的位置只查面板自带的离线库，IP 不发给任何第三方（shared/proxySubGeo.ts）。
+  nearest: "离访客近的入口排前面（访客位置只查面板自带离线库）；查不到位置时按地区。",
 };
 
 /** 三态：跟随全局 / 开 / 关。 */

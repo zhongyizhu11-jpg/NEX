@@ -20,6 +20,7 @@ func setFailoverTCPDialHookForTest(t *testing.T, hook failoverDialFunc) {
 
 // 一轮健康探测并行：5 条各要 300 ms 的路径，一轮不该要 1.5 秒。
 func TestFailoverHealthProbesRunInParallel(t *testing.T) {
+	stubUDPProbeUnknown(t)
 	oldPing := failoverPingLatency
 	var inflight, peak atomic.Int32
 	failoverPingLatency = func(host string, timeout time.Duration, count int) (int, bool, string) {
@@ -57,6 +58,7 @@ func TestFailoverHealthProbesRunInParallel(t *testing.T) {
 }
 
 func TestFailoverProbeParallelismIsBounded(t *testing.T) {
+	stubUDPProbeUnknown(t)
 	oldPing := failoverPingLatency
 	var inflight, peak atomic.Int32
 	failoverPingLatency = func(host string, timeout time.Duration, count int) (int, bool, string) {

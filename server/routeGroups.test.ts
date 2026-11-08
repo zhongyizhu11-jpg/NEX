@@ -126,7 +126,10 @@ function run(): Outcome {
     const specOf = (body) => {
       const actions = (body.desiredState && body.desiredState.actions) || [];
       const withFailover = actions.find((action) => action && action.failover && action.failover.enabled);
-      return withFailover ? withFailover.failover : null;
+      if (withFailover) return withFailover.failover;
+      // 只是运行时提示（中转断了、负载……）变了时期望状态不重发，规格跟着 runningRules 走（Agent 每次心跳都按它原地换上提示）。
+      const running = (body.runningRules || []).find((rule) => Number(rule.ruleId) === 1 && rule.failover && rule.failover.enabled);
+      return running ? running.failover : null;
     };
     const mainDial = storedPaths.find((path) => path.key === "main").dial;
     const sgDial = storedPaths.find((path) => path.key === "sg").dial;

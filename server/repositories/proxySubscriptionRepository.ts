@@ -1309,6 +1309,9 @@ export async function buildProxySubscriptionContextForUser(userId: number, optio
         egressMbps: hosts.egressMbps,
         // 落地机器所在国家：节点地区（国旗、地区组）看它。
         geoCountryCode: hosts.geoCountryCode,
+        // 入口机器的坐标：「按访客就近」排序按它算距离。
+        geoLatitudeMicro: hosts.geoLatitudeMicro,
+        geoLongitudeMicro: hosts.geoLongitudeMicro,
       })
       .from(hosts)
       .where(inArray(hosts.id, hostIds))

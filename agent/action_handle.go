@@ -539,10 +539,9 @@ func actionCommandSignature(a action) string {
 			write(string(raw))
 		}
 	}
-	if a.Failover != nil {
-		if raw, err := json.Marshal(a.Failover); err == nil {
-			write(string(raw))
-		}
+	// 线路组规格去掉运行时提示再算（failoverSpecSignatureJSON）：提示变了不重新执行动作。
+	if raw, ok := failoverSpecSignatureJSON(a.Failover); ok {
+		write(raw)
 	}
 	return strconv.FormatUint(h.Sum64(), 16)
 }

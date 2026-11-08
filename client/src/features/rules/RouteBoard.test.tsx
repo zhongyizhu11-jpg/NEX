@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { newRouteGroupDraft, routeGroupRuleFields, type RouteGroup } from "@shared/routeGroup";
 import { describeRoutePolicy } from "@shared/routePolicy";
-import { RouteMiniChain, RoutePathCards, RouteSwitchChip, describeRouteDials, routeBoardActiveChain, summarizeRouteChain, type RouteBoardPath } from "./RouteBoard";
+import { RouteMiniChain, RoutePathCards, RouteSwitchChip, describeRouteDials, describeRouteLoad, describeRouteUdpSplit, routeBoardActiveChain, summarizeRouteChain, type RouteBoardPath } from "./RouteBoard";
 
 const NOW = Date.UTC(2026, 9, 28, 12, 0, 0);
 const draft = newRouteGroupDraft({ timezone: "Asia/Shanghai" });
@@ -143,6 +143,36 @@ test("真实连接的拨号药丸：有失败或慢的染琥珀，没拨过不�
   assert.match(html, /data-tone="warn"[^>]*data-testid="route-dials">建连 12 · 失败 3 · 慢 2 · 拨号 640 ms/);
 });
 
+test("主机负载药丸：沿途有一台忙到 70% 以上才显示，95% 起染红，title 和评分的 title 都写扣了几分；老 Agent 没报就没有", () => {
+  assert.equal(describeRouteLoad(null), null);
+  assert.equal(describeRouteLoad(undefined), null);
+  assert.equal(describeRouteLoad(69), null, "70% 以下评分不扣，不显示");
+  const warm = describeRouteLoad(85)!;
+  assert.equal(warm.text, "负载 85%");
+  assert.equal(warm.tone, "warn");
+  assert.equal(warm.penalty, 9);
+  assert.match(warm.title, /评分扣 9 分/);
+  const hot = describeRouteLoad(97)!;
+  assert.equal(hot.tone, "down");
+  assert.equal(hot.penalty, 15);
+  const policy = describeRoutePolicy(rule, { host: { isOnline: true, agentVersion: "2.2.251" }, nowMs: NOW })!;
+  const html = renderToStaticMarkup(
+    <RoutePathCards
+      status={{
+        paths: [path(0, { loadPct: 85, score: 83 }), path(1, { loadPct: 40 })],
+        entry: { hostId: 1, name: "HK entry 01", online: true, sourcePort: 10001 },
+        rate: null,
+        switches: { count24h: 0, count1h: 0, manual24h: 0, flapping: false, lastAt: null, lastFromLabel: null, lastToLabel: null, lastReason: null },
+      }}
+      policy={policy}
+    />,
+  );
+  assert.equal((html.match(/data-testid="route-load"/g) || []).length, 1, "只有忙到门槛的路径有药丸");
+  assert.match(html, /data-tone="warn"[^>]*data-testid="route-load">负载 85%/);
+  assert.match(html, /data-testid="route-score" title="[^"]*再减主机负载 9 分"[^>]*>83 良/);
+  assert.match(html, /data-testid="route-score" title="延迟、丢包、抖动、可用率合起来的分"[^>]*>70 较差/, "没扣分的评分 title 不提负载");
+});
+
 test("规则卡上的迷你链：一行一条，段上写延迟、不通写 ✕，在走的那条标出来", () => {
   const html = renderToStaticMarkup(
     <RouteMiniChain
@@ -166,4 +196,19 @@ test("规则卡的延迟标签用当前在走那条路径的整链：各段相�
   assert.equal(active?.partial, false);
   assert.equal(routeBoardActiveChain({ paths: [path(1)] }), null);
   assert.equal(routeBoardActiveChain(null), null);
+});
+
+test("TCP+UDP 两侧结论不一致时路径上标「UDP 不通」/「仅 UDP 通」；一致或老 Agent 没报就不标", () => {
+  assert.equal(describeRouteUdpSplit(path(0)), null, "老 Agent 没报 udpHealthy");
+  assert.equal(describeRouteUdpSplit(path(0, { udpHealthy: true })), null, "两侧都通");
+  assert.equal(describeRouteUdpSplit(path(0, { healthy: true, udpHealthy: false }))?.text, "UDP 不通");
+  assert.equal(describeRouteUdpSplit(path(0, { healthy: false, udpHealthy: true, udpLatencyMs: 12 }))?.text, "仅 UDP 通");
+  assert.equal(describeRouteUdpSplit(path(0, { down: true, healthy: false, udpHealthy: true })), null, "断了的路径交给「断了」说");
+  const policy = describeRoutePolicy(rule, { host: { isOnline: true, agentVersion: "2.2.251" }, nowMs: NOW })!;
+  const html = renderToStaticMarkup(<RoutePathCards status={{ paths: [path(0, { udpHealthy: false }), path(1, { udpHealthy: true })] }} policy={policy} />);
+  const cards = html.split('data-testid="route-path-card"');
+  assert.match(cards[1], /data-testid="route-udp-split"[^>]*>UDP 不通</);
+  assert.doesNotMatch(cards[2], /route-udp-split/);
+  const mini = renderToStaticMarkup(<RouteMiniChain status={{ paths: [path(0, { udpHealthy: false }), path(1)] }} policy={policy} onOpen={() => {}} />);
+  assert.match(mini, /在走 · UDP 不通/);
 });

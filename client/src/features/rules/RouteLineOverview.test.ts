@@ -84,3 +84,27 @@ test("落地写名字：有名字写名字，没有写地址，地址也没有�
   assert.equal(routeLandingName(path({})), "落地");
   assert.equal(routeLandingName(null), "落地");
 });
+
+/*
+  线路行上状态胶囊前面的小提示（Agent 2.2.251 起）：TCP 通、UDP 不通的标「UDP 不通」，沿途负载 70% 起标「负载 N%」；
+  暂停着、整条不通的不标（状态胶囊已经说了），老 Agent 没报（null）也不标。
+*/
+test("线路行的提示：UDP 不通、负载 85% 才标，暂停 / 不通 / 没报的不标", async () => {
+  const { routeLineHints } = await import("./RouteLineOverview");
+  const path = (overrides: Record<string, unknown> = {}) => ({
+    key: "p", index: 0, healthy: true, udpHealthy: null, udpLatencyMs: null, loadPct: null, down: false, downReason: "", paused: false, ...overrides,
+  }) as unknown as RouteStatus["paths"][number];
+  const group = (shown: RouteStatus["paths"][number], overrides: Record<string, unknown> = {}) => ({
+    key: "main", index: 0, name: "主线路", paths: [shown], shown, active: true, paused: false, allDown: false, reason: "", failures: 0, ...overrides,
+  }) as Parameters<typeof routeLineHints>[0];
+
+  assert.deepEqual(routeLineHints(group(path())), [], "老 Agent 没报 UDP / 负载：什么都不标");
+  assert.deepEqual(routeLineHints(group(path({ udpHealthy: false }))).map((hint) => [hint.text, hint.tone]), [["UDP 不通", "warn"]]);
+  assert.deepEqual(routeLineHints(group(path({ healthy: false, udpHealthy: true }))).map((hint) => hint.text), ["仅 UDP 通"]);
+  assert.deepEqual(routeLineHints(group(path({ loadPct: 85 }))).map((hint) => [hint.text, hint.tone]), [["负载 85%", "warn"]]);
+  assert.deepEqual(routeLineHints(group(path({ loadPct: 97 }))).map((hint) => hint.tone), ["down"], "95% 起染红");
+  assert.deepEqual(routeLineHints(group(path({ loadPct: 60 }))), [], "70% 以下评分不扣，不标");
+  assert.deepEqual(routeLineHints(group(path({ udpHealthy: false, loadPct: 85 }))).map((hint) => hint.text), ["UDP 不通", "负载 85%"]);
+  assert.deepEqual(routeLineHints(group(path({ udpHealthy: false, loadPct: 85 }), { paused: true })), [], "暂停着不标");
+  assert.deepEqual(routeLineHints(group(path({ udpHealthy: false, loadPct: 85, down: true }), { allDown: true })), [], "整条不通不标");
+});
