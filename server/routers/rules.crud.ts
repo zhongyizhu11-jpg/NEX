@@ -82,7 +82,7 @@ import { assertRuleEgressNotDoubleLanding } from "../landingConflicts";
 import { mapWithConcurrency } from "../asyncPool";
 import { reserveRuleCreateQuota, type RuleQuotaReservation } from "../ruleQuotaReservations";
 import { assertRuleTargetsAllowedForActor } from "../ruleTargetPolicy";
-import { hasRuleLimitInput, ruleLimitColumns, ruleLimitInputShape, takeRuleLimitInput, validateRuleLimitInput, validateRuleRateLimitTargets } from "./ruleLimitInput";
+import { hasRuleLimitInput, ruleLimitColumns, ruleLimitInputShape, takeRuleLimitInput, validateRuleLimitInput } from "./ruleLimitInput";
 import { assertRuleWritable, isAdminManagedRule } from "../../shared/ruleLimits";
 import { reconcileRuleLimits } from "../ruleLimits";
 import { resolveRuleOperationOwner } from "../ruleOperationOwner";
@@ -2379,7 +2379,6 @@ export const crudRulesRouter = router({
       // 单条规则限额：只有管理员能设，按操作者（不是新规则的主人）判定；摘出来单独落库。
       const limitInput = takeRuleLimitInput(input as any);
       validateRuleLimitInput(ctx.user.role, limitInput);
-      await validateRuleRateLimitTargets({ ...input, ...limitInput });
       const requestedOwnerId = (input as any).userId as number | undefined;
       delete (input as any).userId;
       // 管理员替别人建的、或设了限额的：管理员管理，主人只能看。
@@ -2658,12 +2657,6 @@ export const crudRulesRouter = router({
         if (ctx.user.role !== "admin" && ruleBeforeUpdate.userId !== ctx.user.id) throw new Error("无权操作此规则");
         assertRuleWritable(ctx.user, ruleBeforeUpdate);
         validateRuleLimitInput(ctx.user.role, limitInput, ruleBeforeUpdate);
-        // 设限速、或者带着限速换了入口，才需要确认入口机的 Agent 撑得住；不相干的编辑不受旧 Agent 牵连。
-        const routeChanged = ["hostId", "tunnelId", "forwardGroupId"].some((key) => (input as any)[key] !== undefined
-          && Number((input as any)[key] || 0) !== Number((ruleBeforeUpdate as any)[key] || 0));
-        if (Number(limitInput.rateLimitMbps) > 0 || (routeChanged && Number((ruleBeforeUpdate as any).rateLimitMbps) > 0)) {
-          await validateRuleRateLimitTargets({ ...ruleBeforeUpdate, ...input, ...limitInput });
-        }
       }
       const limitPatch = ctx.user.role !== "admin" || !ruleBeforeUpdate
         ? null

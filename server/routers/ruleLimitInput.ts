@@ -1,5 +1,4 @@
 import { z } from "zod";
-import * as db from "../db";
 import { RULE_TRAFFIC_MODES, type RuleTrafficMode } from "../../shared/ruleLimits";
 
 /**
@@ -62,27 +61,4 @@ export function ruleLimitColumns(input: RuleLimitInput, adminManaged: boolean) {
   if (input.expiresAt !== undefined) columns.expiresAt = input.expiresAt;
   if (adminManaged) columns.adminManaged = true;
   return columns;
-}
-
-/**
- * 限速要靠入口机上的限速守卫（gost limiter / 协议守卫），太旧的 Agent 会悄悄忽略：
- * 设限速前先确认每台入口机都撑得住，免得界面写着限速、实际没限。
- */
-export async function validateRuleRateLimitTargets(rule: Record<string, any>) {
-  if (!(Number(rule.rateLimitMbps) > 0)) return;
-  let hostIds: number[] = [];
-  if (Number(rule.forwardGroupId || 0) > 0) {
-    hostIds = await db.getForwardGroupRuleEntryHostIds(Number(rule.forwardGroupId));
-  } else if (Number(rule.tunnelId || 0) > 0 && Number(rule.hostId || 0) > 0) {
-    hostIds = await db.forwardRuleListenHostIds(Number(rule.hostId), Number(rule.tunnelId));
-  } else if (Number(rule.tunnelId || 0) > 0) {
-    const tunnel: any = await db.getTunnelById(Number(rule.tunnelId));
-    if (tunnel) hostIds = [Number(tunnel.entryHostId)];
-  } else if (Number(rule.hostId || 0) > 0) {
-    hostIds = [Number(rule.hostId)];
-  }
-  for (const id of new Set(hostIds)) {
-    const host: any = await db.getHostById(id);
-    if (!host) continue;
-  }
 }
