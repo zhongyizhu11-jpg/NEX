@@ -34,7 +34,6 @@ import { maintainCurrentMysqlDatabase } from "./mysqlMaintenance";
 import { AGENT_VERSION, APP_VERSION } from "../shared/versions";
 import { parseRoutePaths, serializeRoutePaths } from "../shared/routeGroup";
 import { parseRouteLines, serializeRouteLines } from "../shared/routeLines";
-import { AGENT_PANEL_MIGRATION_VERSION, isAgentVersionAtLeast } from "./agentRouteUtils";
 import { ensureTrafficStatBucketsBackfilled, ensureUserTrafficCountersBackfilled } from "./repositories/metricsRepository";
 import {
   abortTakeoverToken,
@@ -2555,12 +2554,10 @@ export async function announcePanelMigration(
           ...options.directive,
           targetPanelUrl: normalizePanelUrl(options.directive.targetPanelUrl || normalized),
         });
-        if (isAgentVersionAtLeast(String(host.agentVersion || ""), AGENT_PANEL_MIGRATION_VERSION)) {
-          if (host.agentUpgradeRequested && host.agentUpgradeTargetVersion === "9999.0.0") {
-            await clearHostAgentUpgradeRequest(Number(host.id));
-          }
-          return;
+        if (host.agentUpgradeRequested && host.agentUpgradeTargetVersion === "9999.0.0") {
+          await clearHostAgentUpgradeRequest(Number(host.id));
         }
+        return;
       }
       await requestHostAgentUpgrade(Number(host.id), targetVersion);
       pushAgentUpgrade(Number(host.id), targetVersion, normalized);

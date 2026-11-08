@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import {
-  AGENT_LIVE_METRICS_VERSION,
   clearHostLiveMetricsForTest,
   ensureHostLiveStream,
   getHostLiveMetric,
@@ -15,7 +14,6 @@ import {
 } from "./hostLiveMetrics";
 import { AGENT_METRICS_WATCH_INTERVAL_SECONDS, buildBusyAgentHeartbeatResponse, selectAgentHeartbeatInterval } from "./agentHeartbeatGate";
 import { AGENT_VERSION } from "../shared/versions";
-import { isAgentVersionAtLeast } from "../shared/version";
 
 const m = (netIn: number, netOut: number, cpu = 12) => [cpu, 40, 400, 1000, 0, 0, 0, netIn, netOut, 8, 1, 20, 3600, 10, 3];
 
@@ -78,7 +76,7 @@ test("详情打开（focus）期间回 1 秒，关掉后回 0 让 Agent 停", ()
   assert.equal(liveMetricsIntervalFor(8, now + 60_000), 0);
 });
 
-test("只叫新 Agent 开实时通道，有样本在来或刚叫过就不重复发", () => {
+test("叫 Agent 开实时通道，有样本在来或刚叫过就不重复发", () => {
   clearHostLiveMetricsForTest();
   const sent: Array<[number, string, unknown]> = [];
   const send = (hostId: number, event: string, data: unknown) => {
@@ -86,13 +84,12 @@ test("只叫新 Agent 开实时通道，有样本在来或刚叫过就不重复�
     return true;
   };
   const now = 5_000_000;
-  assert.equal(ensureHostLiveStream({ id: 9, agentVersion: "2.2.224" }, now, send), false);
-  assert.equal(ensureHostLiveStream({ id: 9, agentVersion: AGENT_LIVE_METRICS_VERSION }, now, send), true);
+  assert.equal(ensureHostLiveStream({ id: 9, agentVersion: AGENT_VERSION }, now, send), true);
   assert.deepEqual(sent[0], [9, "agent-live-metrics", { intervalMs: 1000 }]);
-  assert.equal(ensureHostLiveStream({ id: 9, agentVersion: AGENT_LIVE_METRICS_VERSION }, now + 1000, send), false, "cooldown");
+  assert.equal(ensureHostLiveStream({ id: 9, agentVersion: AGENT_VERSION }, now + 1000, send), false, "cooldown");
   recordHostLiveSample(9, liveSampleFromCompactMetrics(m(1, 1), now + 4000, "live")!, now + 4000);
-  assert.equal(ensureHostLiveStream({ id: 9, agentVersion: AGENT_LIVE_METRICS_VERSION }, now + 5000, send), false, "stream already flowing");
-  assert.equal(ensureHostLiveStream({ id: 9, agentVersion: AGENT_LIVE_METRICS_VERSION }, now + 20_000, send), true, "restart after it stopped");
+  assert.equal(ensureHostLiveStream({ id: 9, agentVersion: AGENT_VERSION }, now + 5000, send), false, "stream already flowing");
+  assert.equal(ensureHostLiveStream({ id: 9, agentVersion: AGENT_VERSION }, now + 20_000, send), true, "restart after it stopped");
 });
 
 test("有人在看时心跳 2 秒（旧 Agent 的下限，更短会被它当成 30 秒）", () => {
@@ -101,9 +98,7 @@ test("有人在看时心跳 2 秒（旧 Agent 的下限，更短会被它当成 
   assert.equal(selectAgentHeartbeatInterval({ requestLocalState: false, hasInteractiveTasks: false, metricsWatching: true }), 2);
 });
 
-test("实时指标版本不高于当前 Agent；接口在 /api/sync 白名单里", () => {
-  assert.equal(AGENT_LIVE_METRICS_VERSION, "2.2.225");
-  assert.ok(isAgentVersionAtLeast(AGENT_VERSION, AGENT_LIVE_METRICS_VERSION));
+test("实时指标接口在 /api/sync 白名单里", () => {
   const middleware = fs.readFileSync(path.join(process.cwd(), "server/agentEncryptionMiddleware.ts"), "utf8");
   assert.match(middleware, /"\/api\/agent\/live-metrics"/);
   const agent = fs.readFileSync(path.join(process.cwd(), "agent/live_metrics.go"), "utf8");

@@ -172,9 +172,8 @@ test("guarded Nginx backends are reachable only through the Agent loopback proxy
   assert.doesNotMatch(`${tcpConfig}\n${udpConfig}`, /\[::\]|ipv6only=off/);
 });
 
-test("protocol guard rate limits require a supported rule and a current Agent", () => {
+test("protocol guard rate limits require a supported rule", () => {
   const enabled = selectProtocolGuardRateLimit({
-    agentVersion: "2.2.187",
     hostId: 3,
     rule: { forwardType: "realm", userId: 7 },
     limitIn: 125_000,
@@ -187,7 +186,6 @@ test("protocol guard rate limits require a supported rule and a current Agent", 
   });
 
   const resourceLimited = selectProtocolGuardRateLimit({
-    agentVersion: "2.2.187",
     hostId: 3,
     rule: { forwardType: "nftables", userId: 7 },
     rateLimitScope: "user-7-host-3-group-19",
@@ -197,7 +195,6 @@ test("protocol guard rate limits require a supported rule and a current Agent", 
   assert.equal(resourceLimited.rateLimitScope, "user-7-host-3-group-19");
 
   const nginxTunnelEntry = selectProtocolGuardRateLimit({
-    agentVersion: "2.2.187",
     hostId: 3,
     rule: { forwardType: "gost", userId: 7, tunnelId: 11, tunnelMode: "nginx_stream", tunnelEntry: true },
     limitIn: 125_000,
@@ -210,11 +207,10 @@ test("protocol guard rate limits require a supported rule and a current Agent", 
   });
 
   for (const options of [
-    { agentVersion: "2.2.186", rule: { forwardType: "iptables", userId: 7 }, limitIn: 125_000 },
-    { agentVersion: "2.2.187", rule: { forwardType: "gost", userId: 7 }, limitIn: 125_000 },
-    { agentVersion: "2.2.187", rule: { forwardType: "gost", userId: 7, tunnelId: 11, tunnelMode: "nginx_stream", tunnelEntry: false }, limitIn: 125_000 },
-    { agentVersion: "2.2.187", rule: { forwardType: "nftables", userId: 7, tunnelId: 8 }, limitIn: 125_000 },
-    { agentVersion: "2.2.187", rule: { forwardType: "nginx", userId: 7 }, limitIn: 0 },
+    { rule: { forwardType: "gost", userId: 7 }, limitIn: 125_000 },
+    { rule: { forwardType: "gost", userId: 7, tunnelId: 11, tunnelMode: "nginx_stream", tunnelEntry: false }, limitIn: 125_000 },
+    { rule: { forwardType: "nftables", userId: 7, tunnelId: 8 }, limitIn: 125_000 },
+    { rule: { forwardType: "nginx", userId: 7 }, limitIn: 0 },
   ]) {
     assert.deepEqual(selectProtocolGuardRateLimit({
       hostId: 3,
@@ -242,12 +238,11 @@ test("resource rate limits use the strictest configured scope", () => {
   assert.deepEqual(strictest({ userLimitMbps: 300, tunnelLimitMbps: 160, forwardGroupLimitMbps: 120 }), { mbps: 120, scope: "user-7-host-3-group-19" });
 });
 
-test("multi-tier rate limits only go to Agents that understand them", () => {
+test("multi-tier rate limits go out only when there are tiers", () => {
   const rateLimits = [{ scope: "user-7-host-3", in: 125_000, out: 250_000 }, { scope: "host-3", in: 1_250_000, out: 1_250_000 }];
   const base = { hostId: 3, rule: { forwardType: "realm", userId: 7 }, limitIn: 125_000, limitOut: 250_000, rateLimits };
-  assert.deepEqual(selectProtocolGuardRateLimit({ ...base, agentVersion: "2.2.230" }).rateLimits, rateLimits);
-  assert.equal("rateLimits" in selectProtocolGuardRateLimit({ ...base, agentVersion: "2.2.229" }), false);
-  assert.equal("rateLimits" in selectProtocolGuardRateLimit({ ...base, agentVersion: "2.2.230", rateLimits: [] }), false);
+  assert.deepEqual(selectProtocolGuardRateLimit(base).rateLimits, rateLimits);
+  assert.equal("rateLimits" in selectProtocolGuardRateLimit({ ...base, rateLimits: [] }), false);
 });
 
 test("running process-backed Guards remain in desired reconciliation", () => {

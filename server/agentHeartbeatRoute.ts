@@ -299,7 +299,7 @@ import {
 export { forgetAgentHeartbeatHost, forgetAgentHeartbeatRule, pruneAgentHeartbeatCaches, invalidateAgentDesiredStateCache } from "./agentHeartbeatState";
 export { normalizeAgentRuntimeBoolean, buildGostRuleListener, forwardXUDPTargetAddress, selectForwardChainListenerPort } from "./agentHeartbeatRuntime";
 export { buildNginxStreamServerBlock, buildNginxStreamConfig, buildNginxTunnelTlsClientOptions, buildNginxTunnelServerCertificate, buildNginxCertificateCleanupCmd, buildNginxRuntimeRetirementPlan } from "./agentHeartbeatNginx";
-export { AGENT_RATE_LIMIT_GUARD_VERSION, AGENT_RATE_TIERS_VERSION, shouldReconcileProtocolGuardBackend, allocateProtocolGuardPorts, selectProtocolGuardRateLimit, selectProtocolGuardProxyProtocol } from "./agentHeartbeatProtocolGuard";
+export { shouldReconcileProtocolGuardBackend, allocateProtocolGuardPorts, selectProtocolGuardRateLimit, selectProtocolGuardProxyProtocol } from "./agentHeartbeatProtocolGuard";
 export type { ProtocolGuardPortPlan } from "./agentHeartbeatProtocolGuard";
 export { isTunnelApplyBlockingProbe } from "./agentHeartbeatDispatch";
 
@@ -2874,7 +2874,6 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       const tunnel = tunnelForRule(rule);
       const limits = ruleRateLimits(rule, tunnel);
       return selectProtocolGuardRateLimit({
-        agentVersion: effectiveAgentVersion,
         hostId: Number(host.id) || 0,
         rule: {
           ...rule,

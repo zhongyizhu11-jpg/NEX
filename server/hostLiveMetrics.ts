@@ -1,5 +1,4 @@
 import { sendAgentEvent } from "./agentEvents";
-import { isAgentVersionAtLeast } from "../shared/version";
 
 /*
   主机指标「实时」（面板 2.3.444 / Agent 2.2.225）。
@@ -15,7 +14,6 @@ import { isAgentVersionAtLeast } from "../shared/version";
   前端 hosts.liveVitals 每 1~2 秒读这里，读不到新样本（旧 Agent、事件流没连上）就用心跳那份。
 */
 
-export const AGENT_LIVE_METRICS_VERSION = "2.2.225";
 export const LIVE_METRICS_FOCUS_INTERVAL_MS = 1000;
 /** 详情关掉以后多久停（前端每秒续一次，留几秒余量给网络抖动） */
 const FOCUS_TTL_MS = 6_000;
@@ -179,7 +177,6 @@ export function ensureHostLiveStream(
 ) {
   const id = Math.floor(Number(host?.id));
   if (!Number.isInteger(id) || id <= 0) return false;
-  if (!isAgentVersionAtLeast(host.agentVersion, AGENT_LIVE_METRICS_VERSION)) return false;
   const state = stateFor(id);
   if (now - state.lastLiveAt < LIVE_CHANNEL_ACTIVE_MS) return false;
   if (now - state.lastStartEventAt < START_EVENT_COOLDOWN_MS) return false;

@@ -148,7 +148,7 @@
     "server/agentPanelUrl.ts": 2,
     "server/agentReportRoutes.ts": 81,
     "server/agentRouteUtils.ts": 2,
-    "server/agentRoutes.ts": 13,
+    "server/agentRoutes.ts": 11,
     "server/agentRuntimeRuleState.ts": 1,
     "server/agentSelfTestRoutes.ts": 36,
     "server/agentStatusOrdering.ts": 1,
