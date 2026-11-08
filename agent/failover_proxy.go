@@ -122,7 +122,7 @@ func failoverSignature(spec failoverSpec) string {
 		strconv.FormatBool(spec.ProxyProtocolStrip),
 	}
 	for _, target := range spec.Targets {
-		// Down / DownReason / ExtraLatencyMs / LoadPct / ExitIP 是面板随时会变的运行时提示，故意不进签名：进了的话
+		// 运行时提示（failoverTargetHints：中转异常、下游延迟、沿途负载、出口 IP）面板随时会变，故意不进签名：进了的话
 		// 每次提示变化都会重建代理，探测样本和「现在走哪条」全部归零。它们走 applyRelayHintsLocked。
 		weight := strconv.Itoa(target.Weight)
 		if target.Tier != nil {
@@ -218,10 +218,8 @@ func normalizeFailoverSpec(spec failoverSpec) failoverSpec {
 		if target.Weight > 100 {
 			target.Weight = 100
 		}
-		target.DownReason = strings.TrimSpace(target.DownReason)
-		if !target.Down {
-			target.DownReason = ""
-		}
+		// 运行时提示的规矩在 failover_hints.go：原因去空白、没断不留原因、下游延迟夹在范围里、出口 IP 去空白。
+		target.failoverTargetHints = target.failoverTargetHints.normalized()
 		if target.Tier != nil {
 			// 复制一份：别和调用方的规格共用同一个指针。
 			tier := *target.Tier
@@ -230,13 +228,6 @@ func normalizeFailoverSpec(spec failoverSpec) failoverSpec {
 			}
 			target.Tier = &tier
 		}
-		if target.ExtraLatencyMs < 0 {
-			target.ExtraLatencyMs = 0
-		}
-		if target.ExtraLatencyMs > failoverMaxExtraLatencyMs {
-			target.ExtraLatencyMs = failoverMaxExtraLatencyMs
-		}
-		target.ExitIP = strings.TrimSpace(target.ExitIP)
 		// 「落地怎么分」三个字段一起才算数：缺线路号、分法不认识，就当没带（挑一个，老行为）。
 		target.Spread = strings.TrimSpace(target.Spread)
 		target.Landing = strings.TrimSpace(target.Landing)

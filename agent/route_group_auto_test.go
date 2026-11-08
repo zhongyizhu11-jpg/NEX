@@ -171,7 +171,7 @@ func TestFailoverUDPAutoSpreadsSessionsByLoad(t *testing.T) {
 	spec := failoverTestSpec(failoverTestDualPort(t))
 	spec.Protocol = "udp"
 	spec.Strategy = "auto"
-	spec.Targets = []failoverTarget{{TargetIP: "127.0.0.1", TargetPort: portA, LoadPct: 90}, {TargetIP: "127.0.0.1", TargetPort: portB}}
+	spec.Targets = []failoverTarget{{TargetIP: "127.0.0.1", TargetPort: portA, failoverTargetHints: failoverTargetHints{LoadPct: 90}}, {TargetIP: "127.0.0.1", TargetPort: portB}}
 	_, addr := startUDPFailoverForTest(t, 950047, 65047, spec)
 	for i := 0; i < 3; i++ {
 		client, err := net.Dial("udp", addr)
