@@ -74,7 +74,6 @@ export const FIREWALL_BLOCK_EXPIRY_SECONDS: Record<FirewallBlockExpiry, number |
 };
 
 /** 能用地区规则 / IP 封禁的最低 Agent 版本（扩展通道，见 server/ops/agentExt.ts）。 */
-export const FIREWALL_MIN_AGENT_VERSION = "2.2.216";
 
 /** 国家 IP 段的出处，界面底部注明。 */
 export const FIREWALL_COUNTRY_DATA_ATTRIBUTION =

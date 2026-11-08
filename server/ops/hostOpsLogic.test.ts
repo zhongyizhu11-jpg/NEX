@@ -9,15 +9,14 @@ import {
   type ScanItem,
 } from "./hostOpsLogic";
 
-test("restart-all skips offline hosts and old agents with a reason", () => {
+test("restart-all skips offline hosts with a reason", () => {
   const { targets, skipped } = classifyRestartTargets([
-    { id: 1, name: "香港-1", online: true, agentVersion: "2.2.216" },
-    { id: 2, name: "东京-1", online: true, agentVersion: "2.2.215" },
-    { id: 3, name: "洛杉矶", online: false, agentVersion: "2.3.0" },
+    { id: 1, name: "香港-1", online: true, agentVersion: "2.2.251" },
+    { id: 2, name: "东京-1", online: true, agentVersion: "2.2.251" },
+    { id: 3, name: "洛杉矶", online: false, agentVersion: "2.2.251" },
   ]);
-  assert.deepEqual(targets.map((host) => host.id), [1]);
+  assert.deepEqual(targets.map((host) => host.id), [1, 2]);
   assert.deepEqual(skipped, [
-    { hostId: 2, name: "东京-1", reason: "Agent 太旧" },
     { hostId: 3, name: "洛杉矶", reason: "离线" },
   ]);
 });
@@ -29,10 +28,10 @@ test("restart-all summary reads like the owner expects", () => {
   });
   assert.equal(
     restartAllSummary([done(1), done(2), done(3), done(4), done(5)], [
-      { hostId: 6, name: "东京-1", reason: "Agent 太旧" },
+      { hostId: 6, name: "东京-1", reason: "离线" },
       { hostId: 7, name: "香港-2", reason: "离线" },
     ]),
-    "已重启 5 台，跳过 2 台（东京-1：Agent 太旧；香港-2：离线）",
+    "已重启 5 台，跳过 2 台（东京-1：离线；香港-2：离线）",
   );
   assert.equal(
     restartAllSummary([done(1, 1), { ...done(2), status: "pending" }, { ...done(3), status: "timeout" }], []),

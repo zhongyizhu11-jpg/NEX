@@ -4,7 +4,6 @@ import { toast } from "sonner";
 import DataSectionError from "@/components/DataSectionError";
 import DataSectionLoading from "@/components/DataSectionLoading";
 import { SettingRow } from "@/components/SettingRow";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -79,7 +78,6 @@ type HostRow = {
   name: string;
   isOnline: boolean;
   agentVersion: string | null;
-  supported: boolean;
   policy: FirewallHostPolicy;
   customRule: RuleDraft;
   rule: RuleDraft;
@@ -89,15 +87,7 @@ type HostRow = {
   today: { blocked: number; country: number; total: number };
 };
 
-function EffectiveText({ host, minAgentVersion }: { host: HostRow; minAgentVersion: string }) {
-  if (!host.supported) {
-    return (
-      <span className="flex flex-wrap items-center gap-1.5">
-        <Badge variant="destructive">需要升级 Agent</Badge>
-        <span className="text-[12px] text-muted-foreground">升到 {minAgentVersion} 以上才会执行</span>
-      </span>
-    );
-  }
+function EffectiveText({ host }: { host: HostRow }) {
   const ruleText = host.rule.mode === "off"
     ? "不限制"
     : `${host.rule.mode === "block" ? "拦截" : "只放行"} ${describeCountries(host.rule.countries)}`;
@@ -111,7 +101,7 @@ function EffectiveText({ host, minAgentVersion }: { host: HostRow; minAgentVersi
   );
 }
 
-function HostCountryRows({ hosts, globalRule, minAgentVersion }: { hosts: HostRow[]; globalRule: RuleDraft; minAgentVersion: string }) {
+function HostCountryRows({ hosts, globalRule }: { hosts: HostRow[]; globalRule: RuleDraft }) {
   const utils = trpc.useUtils();
   const save = trpc.ops.firewall.saveCountryRule.useMutation({
     onSuccess: () => utils.ops.firewall.getCountryRule.invalidate(),
@@ -187,7 +177,7 @@ function HostCountryRows({ hosts, globalRule, minAgentVersion }: { hosts: HostRo
                 ) : null}
               </div>
               <div className="min-w-0">
-                <EffectiveText host={host} minAgentVersion={minAgentVersion} />
+                <EffectiveText host={host} />
                 {host.policy === "custom" ? (
                   <button type="button" className="mt-0.5 hidden text-[12px] text-primary underline-offset-2 hover:underline sm:inline" onClick={() => openCustom(host)}>
                     改本机规则
@@ -276,7 +266,6 @@ function HostRuleSection() {
   const dirty = draft.mode !== query.data.global.mode || !sameList(draft.countries, query.data.global.countries);
   const invalid = draft.mode !== "off" && draft.countries.length === 0;
   const hosts = query.data.hosts as HostRow[];
-  const outdated = hosts.filter((host) => !host.supported).length;
 
   return (
     <NumberedSection
@@ -308,12 +297,7 @@ function HostRuleSection() {
 
       <div className="pt-1">
         <h3 className="mb-1 text-[13px] font-medium">各主机</h3>
-        {outdated > 0 ? (
-          <p className="mb-2 text-[12.5px] text-muted-foreground">
-            有 {outdated} 台主机的 Agent 太旧，需要把 Agent 升级到 {query.data.minAgentVersion} 才会执行地区规则和 IP 封禁。
-          </p>
-        ) : null}
-        <HostCountryRows hosts={hosts} globalRule={query.data.global} minAgentVersion={query.data.minAgentVersion} />
+        <HostCountryRows hosts={hosts} globalRule={query.data.global} />
       </div>
       <p className="text-[12px] leading-relaxed text-muted-foreground">{query.data.attribution}</p>
     </NumberedSection>

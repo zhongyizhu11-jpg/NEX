@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
-import { isAgentVersionAtLeast } from "@shared/version";
 import { Section } from "@/components/hosts/HostDetailDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -95,14 +94,6 @@ export default function ImportExistingSection({ host }: { host: any }) {
   const detected = useMemo(() => items.filter((item) => !item.listenPort && !item.importable), [items]);
 
   if (!hostId) return null;
-  const supported = isAgentVersionAtLeast(String(host?.agentVersion || ""), "2.2.216");
-  if (!supported) {
-    return (
-      <Section title="导入现有配置">
-        <p className="text-meta text-muted-foreground">需要把 Agent 升级到 2.2.216</p>
-      </Section>
-    );
-  }
 
   const scanning = scan.isPending || result.data?.status === "pending" || (!!scanId && result.isLoading);
   const toggle = (key: string, checked: boolean) => {

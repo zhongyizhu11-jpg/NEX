@@ -5,7 +5,6 @@ import {
   FIREWALL_BLOCK_EXPIRY_SECONDS,
   FIREWALL_COUNTRY_DATA_ATTRIBUTION,
   FIREWALL_HOST_POLICIES,
-  FIREWALL_MIN_AGENT_VERSION,
   FIREWALL_MODES,
   firewallCountryLabel,
   normalizeFirewallCountries,
@@ -13,7 +12,6 @@ import {
   type FirewallMode,
 } from "../../../shared/firewallCountries";
 import { classifyIpAddress } from "../../../shared/ipAddress";
-import { hostSupportsAgentExt } from "../../ops/agentExt";
 import { formatIp, normalizeClientIp, parseCidr } from "../../ops/firewallCidr";
 import { countryDataStatus, ensureCountryData, lookupCachedCountry } from "../../ops/firewallCountryData";
 import { cachedHostFirewallState, firewallPlanForHost, getFirewallContext, invalidateFirewallContext, wakeFirewallHosts } from "../../ops/firewallAgent";
@@ -97,7 +95,6 @@ export const firewallRouter = router({
         name: host.name,
         isOnline: host.isOnline,
         agentVersion: host.agentVersion,
-        supported: hostSupportsAgentExt(host),
         policy: policy?.policy ?? "follow",
         customRule: policy?.policy === "custom" ? policy.rule : { mode: "off" as FirewallMode, countries: [] as string[] },
         rule,
@@ -120,7 +117,6 @@ export const firewallRouter = router({
       global,
       hosts: rows,
       data: await countryDataStatus(context.selectedCountries),
-      minAgentVersion: FIREWALL_MIN_AGENT_VERSION,
       attribution: FIREWALL_COUNTRY_DATA_ATTRIBUTION,
     };
   }),

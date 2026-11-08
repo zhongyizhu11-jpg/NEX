@@ -9,7 +9,7 @@
 */
 import { executeRaw, insertAndGetId, queryRaw, quoteDbIdentifier } from "../dbRuntime";
 import { getSetting, setSetting } from "../repositories/settingsRepository";
-import { hostSupportsAgentExt, wakeAgentExt, type AgentExtHost } from "./agentExt";
+import { wakeAgentExt, type AgentExtHost } from "./agentExt";
 import { recordPanelEvent } from "./panelEvents";
 import {
   applyIncomingFinding,
@@ -133,7 +133,6 @@ export async function securityIntervalMinutes() {
 }
 
 export async function securityDirectiveFor(host: AgentExtHost) {
-  if (!hostSupportsAgentExt(host)) return undefined;
   const hostId = Number(host.id);
   const pending = await queryRaw<any>(
     `SELECT ${q("id")}, ${q("action")}, ${q("payloadJson")} FROM ${q(ACTIONS)} WHERE ${q("hostId")} = ? AND ${q("status")} = ? ORDER BY ${q("id")} ASC LIMIT 20`,
@@ -450,8 +449,8 @@ export async function requestSecurityAction(id: number, action: SecurityActionKi
   const allowed = availableActions(String(row.kind), evidence, isQuarantined(history));
   if (!allowed.includes(action)) return { ok: false, message: "这条发现不能做这个操作" };
   const hostId = Number(row.hostId);
-  const hosts = await queryRaw<any>(`SELECT ${q("id")}, ${q("agentVersion")} FROM ${q("hosts")} WHERE ${q("id")} = ? LIMIT 1`, [hostId]);
-  if (!hosts[0] || !hostSupportsAgentExt(hosts[0])) return { ok: false, message: "这台主机的 Agent 太旧，先升级到 2.2.216" };
+  const hosts = await queryRaw<any>(`SELECT ${q("id")} FROM ${q("hosts")} WHERE ${q("id")} = ? LIMIT 1`, [hostId]);
+  if (!hosts[0]) return { ok: false, message: "主机不存在" };
   const payload: Record<string, unknown> = { fingerprint: String(row.fingerprint) };
   if (action === "kill") {
     payload.pid = Number(evidence.pid);
@@ -494,7 +493,6 @@ export async function hostSecuritySummary(hostId: number) {
   const counts: Record<FindingSeverity, number> = { low: 0, medium: 0, high: 0, critical: 0 };
   for (const row of rows) counts[normalizeSeverity(row.severity)] += num(row.n);
   const status = await readHostStatus(hostId);
-  const hosts = await queryRaw<any>(`SELECT ${q("id")}, ${q("agentVersion")} FROM ${q("hosts")} WHERE ${q("id")} = ? LIMIT 1`, [hostId]);
   return {
     hostId,
     open: counts,
@@ -503,7 +501,6 @@ export async function hostSecuritySummary(hostId: number) {
     baselineAt: status?.baselineAt || null,
     baselineReady: !!status?.baselineReady,
     intervalMinutes: status?.intervalMinutes || (await securityIntervalMinutes()),
-    supported: !!hosts[0] && hostSupportsAgentExt(hosts[0]),
   };
 }
 

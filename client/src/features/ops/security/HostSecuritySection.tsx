@@ -25,7 +25,7 @@ export default function HostSecuritySection({ host }: { host: any }) {
   if (!(hostId > 0)) return null;
   const data = summary.data;
 
-  const rebaselineButton = data?.supported ? (
+  const rebaselineButton = data ? (
     <Button
       size="sm"
       variant="outline"
@@ -48,8 +48,6 @@ export default function HostSecuritySection({ host }: { host: any }) {
     <Section title="安全" action={rebaselineButton}>
       {!data ? (
         <Row label="巡检" value={summary.isLoading ? "读取中…" : "读取失败"} />
-      ) : !data.supported ? (
-        <Row label="巡检" value="需要把 Agent 升级到 2.2.216" />
       ) : (
         <>
           <Row

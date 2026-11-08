@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { trpc } from "@/lib/trpc";
 import { pollingInterval } from "@/lib/polling";
 import { useOpsFeatures } from "../useOpsFeatures";
-import { LiveIpRowItem, OutdatedAgentNotice, limitText, regionText, useOnlineIpsWatch } from "./onlineIpParts";
+import { LiveIpRowItem, limitText, regionText, useOnlineIpsWatch } from "./onlineIpParts";
 
 /*
   用户管理每行 ··· 菜单里的「在线 IP」（#6）。
@@ -80,7 +80,6 @@ function UserOnlineIpsBody({ userId, onNavigate }: { userId: number; onNavigate:
           已经到了设备上限，再有新设备连进来会被拒绝。
         </p>
       ) : null}
-      <OutdatedAgentNotice hosts={data.outdatedHosts} minVersion="2.2.216" />
 
       <section className="min-w-0">
         <h4 className="text-meta font-medium text-muted-foreground">现在连着</h4>
