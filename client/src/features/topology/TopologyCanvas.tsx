@@ -288,7 +288,9 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, TopologyCanvasPro
       return;
     }
     const dx = point.x - current.startX;
-    const dy = point.y - current.startY;
+    // 竖着划交给页面（touchAction "pan-y"）时一根手指只左右拖：浏览器接手竖着滚之前的头一两下 move 也会到这里，
+    // 不吃掉竖向的那点位移，图就不会每划一次往上跳一截。
+    const dy = touchAction === "pan-y" && event.pointerType !== "mouse" ? 0 : point.y - current.startY;
     if (!current.dragged && Math.hypot(dx, dy) < 4) return;
     if (!current.dragged) {
       current.dragged = true;
