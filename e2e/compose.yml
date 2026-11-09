@@ -4,7 +4,8 @@
 #   入口 10.77.0.11 · 中转 A 10.77.0.21 · 中转 B 10.77.0.22 · 落地 10.77.0.31 · 面板 = 网关 10.77.0.1:9810
 #
 # Agent 镜像就是 docker/agent/Dockerfile 那一个（只带依赖），Agent 本身从面板装（PANEL_URL/api/agent/install.sh），
-# 所以测的是面板这次构建出来的 Agent，不是别处发过的版本。落地复用同一个镜像里的 socat。
+# 场景脚本先把面板设成「优先从面板装」，所以测的是面板这次构建出来的 Agent，不是 GitHub 上发过的版本。
+# 落地复用同一个镜像里的 socat。Token 变量默认空：stop / logs / down 这些不需要它的命令也能跑；up 一定带着。
 name: nex-e2e
 
 networks:
@@ -24,7 +25,7 @@ services:
     cap_add: [NET_ADMIN, NET_RAW]
     environment:
       PANEL_URL: http://10.77.0.1:9810
-      AGENT_TOKEN: ${ENTRY_TOKEN:?set ENTRY_TOKEN}
+      AGENT_TOKEN: ${ENTRY_TOKEN:-}
     networks:
       lab:
         ipv4_address: 10.77.0.11
@@ -34,7 +35,7 @@ services:
     cap_add: [NET_ADMIN, NET_RAW]
     environment:
       PANEL_URL: http://10.77.0.1:9810
-      AGENT_TOKEN: ${RELAY_A_TOKEN:?set RELAY_A_TOKEN}
+      AGENT_TOKEN: ${RELAY_A_TOKEN:-}
     networks:
       lab:
         ipv4_address: 10.77.0.21
@@ -44,7 +45,7 @@ services:
     cap_add: [NET_ADMIN, NET_RAW]
     environment:
       PANEL_URL: http://10.77.0.1:9810
-      AGENT_TOKEN: ${RELAY_B_TOKEN:?set RELAY_B_TOKEN}
+      AGENT_TOKEN: ${RELAY_B_TOKEN:-}
     networks:
       lab:
         ipv4_address: 10.77.0.22

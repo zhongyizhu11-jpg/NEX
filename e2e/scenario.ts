@@ -27,6 +27,8 @@ import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { AGENT_VERSION } from "../shared/versions";
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PANEL_URL = (process.env.PANEL_URL || "http://127.0.0.1:9810").replace(/\/+$/, "");
 const OUT_DIR = process.env.E2E_OUT || path.join(HERE, "out");
@@ -169,10 +171,13 @@ async function until<T>(what: string, check: () => Promise<T | null | false | un
   }
 }
 
+/** 起容器时定下来的 Token 变量：之后每次 compose 都带着（stop / start 也会插值 compose 文件）。 */
+let composeEnv: Record<string, string> = {};
+
 function compose(args: string[], env: Record<string, string> = {}) {
   const result = spawnSync("docker", ["compose", "-f", COMPOSE_FILE, "-p", COMPOSE_PROJECT, ...args], {
     stdio: "inherit",
-    env: { ...process.env, ...env },
+    env: { ...process.env, ...composeEnv, ...env },
   });
   if (result.status !== 0) throw new Error(`docker compose ${args.join(" ")} 退出码 ${result.status}`);
 }
@@ -251,6 +256,8 @@ async function setupPanel() {
     await panel.mutate("auth.login", { username: ADMIN_EMAIL, password: ADMIN_PASSWORD });
     const me = await panel.query<{ role?: string } | null>("auth.me");
     assert(me?.role === "admin", `登录后应是管理员，拿到 ${JSON.stringify(me)}`);
+    // 装机脚本默认先去 GitHub 拿发布版的 Agent；这里要测的是面板这次构建出来的那份（dist/agent），让它优先从面板装。
+    await panel.mutate("system.updateSettings", { agentPreferPanelInstall: true });
   });
 }
 
@@ -264,10 +271,9 @@ async function bringUpAgents(): Promise<Hosts> {
   });
 
   await step("构建 Agent 镜像并起容器（入口 / 中转 A / 中转 B / 落地）", async () => {
-    // compose 文件里 Token 是必填变量（${X:?}），build 也会插值，所以两步都带上
-    const env = { ENTRY_TOKEN: tokens.entry, RELAY_A_TOKEN: tokens.relayA, RELAY_B_TOKEN: tokens.relayB };
-    compose(["build"], env);
-    compose(["up", "-d", "--no-build"], env);
+    composeEnv = { ENTRY_TOKEN: tokens.entry, RELAY_A_TOKEN: tokens.relayA, RELAY_B_TOKEN: tokens.relayB };
+    compose(["build"]);
+    compose(["up", "-d", "--no-build"]);
   });
 
   const hosts = await step("等三台 Agent 注册并上线", async () => {
@@ -280,7 +286,11 @@ async function bringUpAgents(): Promise<Hosts> {
       if (!entry || !relayA || !relayB) return null;
       return { entry: Number(entry.id), relayA: Number(relayA.id), relayB: Number(relayB.id), versions: [entry.agentVersion, relayA.agentVersion, relayB.agentVersion] };
     }, 300_000, 3_000);
-    log(`Agent 版本：${found.versions.join(" / ")}`);
+    log(`Agent 版本：${found.versions.join(" / ")}（面板这次构建的是 ${AGENT_VERSION}）`);
+    // 装机脚本默认先去 GitHub 拿发布版；测的必须是这次构建的 Agent，不然新加的协议（比如规格回报）根本不在里面。
+    for (const version of found.versions) {
+      assert(String(version || "").trim() === AGENT_VERSION, `容器里装的 Agent 是 ${version}，不是面板这次构建的 ${AGENT_VERSION}：装机没有走面板资产`);
+    }
     return { entry: found.entry, relayA: found.relayA, relayB: found.relayB };
   });
 
