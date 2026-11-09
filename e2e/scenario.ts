@@ -8,14 +8,16 @@
                                               └→ 中转 B 10.77.0.22 ─┴→ 落地 10.77.0.31:9000
 
   落地是 socat：连上先把「谁连的我」（SOCAT_PEERADDR）写回来，然后原样回显 —— 所以客户端读第一行
-  就知道这次真走的是哪台中转，不用信面板说的。接着照着用户会做的事走一遍，每一步都拿真流量核对：
+  就知道这次真走的是哪台中转，不用信面板说的。接着照着用户会做的事走一遍，每一步都拿真流量核对（三条线路分家，
+  见下面 Lines 的说明）：
 
     1. 主备：新连接走主线路（中转 A）
     2. 人工指定备用 1 → 新连接走中转 B；指定前开着的长连接不断（平滑切换 + 子规则原地热更新）
     3. 交回自动 → 回到中转 A
-    4. 按时段（时段表命中备用 1）→ 走中转 B；撤掉时段表 → 回到 A
-    5. 把中转 A 的容器停掉 → 自动切到 B，记下几秒切完；再起回来 → 自动切回 A
-    6. 「重新下发」接口能用；全程期望 vs 实际对账（routeStatus.drift）都是空
+    4. 按时段（时段表命中备用 1）→ 走中转 B；撤掉时段表 → 回到 A；「重新下发」接口能用
+    5. 切换演练：把主线路当成挂了 20 秒 → 切到 B，到点切回 A，报告里有几秒切完、几秒切回
+    6. 把中转 A 的容器停掉 → 自动切到 B，记下几秒切完；再起回来 → 自动切回 A
+    7. 全程期望 vs 实际对账（routeStatus.drift）都是空
 
   只用 Agent / 界面同一套 tRPC 接口（auth、setup、agentTokens、hosts、forwardGroups、rules、
   lineDiagnostics），不碰数据库。E2E_DRY_RUN=1 时不起容器：用 hosts.create 造三台假机器，只走一遍面板侧
@@ -215,8 +217,8 @@ function connectThrough(host: string, port: number, timeoutMs = 8_000): Promise<
 }
 
 /** 新开一条连接看真走哪台中转，看完就关。 */
-async function peerOfNewConnection() {
-  const { socket, peer } = await connectThrough(NET.entry, ENTRY_PORT);
+async function peerOfNewConnection(port: number = ENTRY_PORT) {
+  const { socket, peer } = await connectThrough(NET.entry, port);
   socket.destroy();
   return peer;
 }
@@ -362,8 +364,20 @@ function baseRouteGroup(hosts: Hosts): RouteGroupInput {
   };
 }
 
-async function createLine(hosts: Hosts) {
-  return step("建端口转发组（入口机是成员）+ 一条两路中转的线路", async () => {
+/*
+  三条线路分家。Agent 有抖动抑制（agent/failover_selection.go）：同一条规则一小时内自动切 3 次以上，之后的切换要等
+  5–60 分钟（人工指定不算，当前线路挂了的逃生也不受限）。场景里交回、时段、撤时段、故障切换、演练加起来远不止
+  3 次 —— 第一版把这些都压在一条规则上，中转 A 回来后的切回就被它按规矩压住了 10 分钟。所以分三条规则各演各的：
+    manual   人工指定 / 交回 / 按时段 / 撤时段 / 重新下发（3 次自动切换，之后不再指望它切）
+    drill    切换演练（切走 + 切回 2 次）
+    failure  停掉中转 A 再起回来（切走 + 切回 2 次）
+  每条规则在入口机上一个端口，落地写回的对端地址就是它真走的中转。
+*/
+type Lines = { manual: number; drill: number; failure: number };
+const LINE_PORTS = { manual: ENTRY_PORT, drill: ENTRY_PORT + 1, failure: ENTRY_PORT + 2 } as const;
+
+async function createLines(hosts: Hosts): Promise<Lines> {
+  return step("建端口转发组（入口机是成员）+ 三条两路中转的线路", async () => {
     const group = await panel.mutate<{ id: number }>("forwardGroups.create", {
       name: "e2e 端口转发",
       groupMode: "port",
@@ -372,24 +386,31 @@ async function createLine(hosts: Hosts) {
       forwardType: "gost",
       members: [{ memberType: "host", hostId: hosts.entry, priority: 0, isEnabled: true }],
     });
-    const created = await panel.mutate<{ id: number; sourcePort: number }>("rules.create", {
-      forwardGroupId: group.id,
-      name: "e2e 线路",
-      forwardType: "gost",
-      protocol: "tcp",
-      sourcePort: ENTRY_PORT,
-      targetIp: NET.target,
-      targetPort: TARGET_PORT,
-      failoverEnabled: true,
-      routeGroup: baseRouteGroup(hosts),
-    });
-    assert(Number(created?.id) > 0, `rules.create 没返回 id：${JSON.stringify(created)}`);
-    const status = await panel.query<RouteStatus | null>("rules.routeStatus", { ruleId: created.id });
-    assert(status, "刚建的线路 routeStatus 为空");
-    assert(status.paths.length === 2, `应有 2 条路径，拿到 ${status.paths.length}`);
-    assert(status.paths[0].key === "a" && status.paths[1].key === "b", `路径 key 应保留 a / b，拿到 ${status.paths.map((row) => row.key).join(",")}`);
-    assert(status.paths[0].dial?.ip === NET.relayA && status.paths[1].dial?.ip === NET.relayB, `拨号地址应是两台中转：${JSON.stringify(status.paths.map((row) => row.dial))}`);
-    return { groupId: group.id, ruleId: created.id };
+    const make = async (name: string, sourcePort: number) => {
+      const created = await panel.mutate<{ id: number; sourcePort: number }>("rules.create", {
+        forwardGroupId: group.id,
+        name,
+        forwardType: "gost",
+        protocol: "tcp",
+        sourcePort,
+        targetIp: NET.target,
+        targetPort: TARGET_PORT,
+        failoverEnabled: true,
+        routeGroup: baseRouteGroup(hosts),
+      });
+      assert(Number(created?.id) > 0, `rules.create(${name}) 没返回 id：${JSON.stringify(created)}`);
+      const status = await panel.query<RouteStatus | null>("rules.routeStatus", { ruleId: created.id });
+      assert(status, `刚建的线路 ${name} routeStatus 为空`);
+      assert(status.paths.length === 2, `${name} 应有 2 条路径，拿到 ${status.paths.length}`);
+      assert(status.paths[0].key === "a" && status.paths[1].key === "b", `${name} 路径 key 应保留 a / b，拿到 ${status.paths.map((row) => row.key).join(",")}`);
+      assert(status.paths[0].dial?.ip === NET.relayA && status.paths[1].dial?.ip === NET.relayB, `${name} 拨号地址应是两台中转：${JSON.stringify(status.paths.map((row) => row.dial))}`);
+      return created.id;
+    };
+    return {
+      manual: await make("e2e 指定 / 时段", LINE_PORTS.manual),
+      drill: await make("e2e 演练", LINE_PORTS.drill),
+      failure: await make("e2e 故障切换", LINE_PORTS.failure),
+    };
   });
 }
 
@@ -399,13 +420,40 @@ async function routeStatus(ruleId: number) {
   return status;
 }
 
+/** 出错时把这条线路此刻的样子和最近几条切换记录带上，CI 日志里一眼看出卡在哪。 */
+async function describeLine(ruleId: number) {
+  const status = await routeStatus(ruleId).catch(() => null);
+  const events = await panel.query<RouteEvent[]>("rules.routeEvents", { ruleId, limit: 8 }).catch(() => [] as RouteEvent[]);
+  const paths = status?.paths.map((row) => ({ key: row.key, active: row.active, healthy: row.healthy, down: row.down, reason: row.downReason, hops: row.hops.map((hop) => ({ running: hop.running, offline: hop.offline, ok: hop.ok })) }));
+  const recent = events.map((event) => ({ kind: event.kind, from: event.fromKey, to: event.toKey, reason: event.reason, at: new Date(event.at).toISOString() }));
+  return `\n  线路状态：${JSON.stringify({ activeIndex: status?.activeIndex, agentReportedAt: status?.agentReportedAt, drill: status?.drill, paths })}\n  最近事件：${JSON.stringify(recent)}`;
+}
+
 /** 等 Agent 报的「现在走哪条」变成 index（要求不是陈旧报告）；返回从 since 到切到为止用了多少毫秒。 */
 async function waitActive(ruleId: number, index: number, what: string, timeoutMs: number, since = Date.now()) {
-  await until(what, async () => {
-    const status = await routeStatus(ruleId);
-    return status.activeIndex === index && !status.agentStale && status.agentReportedAt ? status : null;
-  }, timeoutMs, 1_500);
+  try {
+    await until(what, async () => {
+      const status = await routeStatus(ruleId);
+      return status.activeIndex === index && !status.agentStale && status.agentReportedAt ? status : null;
+    }, timeoutMs, 1_500);
+  } catch (error) {
+    throw new Error(`${error instanceof Error ? error.message : String(error)}${await describeLine(ruleId)}`);
+  }
   return Date.now() - since;
+}
+
+/** 线路在入口机上跑起来、两台中转的中继跑起来、主线路在用、Agent 报回了评分。 */
+async function waitLineUp(ruleId: number) {
+  try {
+    await until(`线路 ${ruleId} 在跑、主线路在用`, async () => {
+      const status = await routeStatus(ruleId);
+      const relaysRunning = status.paths.every((row) => row.hops.every((hop) => hop.running === true));
+      const healthy = status.paths.every((row) => row.healthy === true);
+      return relaysRunning && healthy && status.activeIndex === 0 && status.agentReportedAt ? status : null;
+    }, 240_000, 3_000);
+  } catch (error) {
+    throw new Error(`${error instanceof Error ? error.message : String(error)}${await describeLine(ruleId)}`);
+  }
 }
 
 /** 改完配置、留足宽限之后，面板该判「机器上跑的和面板一致」。 */
@@ -423,27 +471,22 @@ async function updateRouteGroup(ruleId: number, routeGroup: RouteGroupInput) {
   return Date.now();
 }
 
-async function runScenario(hosts: Hosts, ruleId: number) {
+async function runScenario(hosts: Hosts, lines: Lines) {
   const routeGroup = baseRouteGroup(hosts);
 
-  await step("等入口机上的线路跑起来、两台中转的中继跑起来、Agent 报回评分", async () => {
-    await until("线路在跑、主线路在用", async () => {
-      const status = await routeStatus(ruleId);
-      const relaysRunning = status.paths.every((row) => row.hops.every((hop) => hop.running === true));
-      const healthy = status.paths.every((row) => row.healthy === true);
-      return relaysRunning && healthy && status.activeIndex === 0 && status.agentReportedAt ? status : null;
-    }, 240_000, 3_000);
+  await step("等三条线路在入口机上跑起来、中继跑起来、Agent 报回评分", async () => {
+    for (const ruleId of Object.values(lines)) await waitLineUp(ruleId);
   });
 
-  await step("主备：新连接真走主线路（中转 A）", async () => {
-    for (let i = 0; i < 3; i += 1) {
-      const peer = await peerOfNewConnection();
-      assert(peer === NET.relayA, `第 ${i + 1} 条连接应从中转 A 到落地，落地看到的是 ${peer}`);
+  await step("主备：三条线路的新连接都真走主线路（中转 A）", async () => {
+    for (const [name, port] of Object.entries(LINE_PORTS)) {
+      const peer = await peerOfNewConnection(port);
+      assert(peer === NET.relayA, `${name} 的新连接应从中转 A 到落地，落地看到的是 ${peer}`);
     }
   });
 
   const longLived = await step("开一条长连接（走中转 A），一会儿切换时看它断不断", async () => {
-    const conn = await connectThrough(NET.entry, ENTRY_PORT);
+    const conn = await connectThrough(NET.entry, LINE_PORTS.manual);
     assert(conn.peer === NET.relayA, `长连接应走中转 A，落地看到的是 ${conn.peer}`);
     assert(await echoAlive(conn.socket, "hello-before-pin"), "长连接建好后回显不通");
     return conn.socket;
@@ -451,23 +494,23 @@ async function runScenario(hosts: Hosts, ruleId: number) {
 
   await step("人工指定备用 1 → 新连接走中转 B，长连接不断，切换记录有这一笔", async () => {
     routeGroup.pin = { index: 1, untilMs: null };
-    const changedAt = await updateRouteGroup(ruleId, routeGroup);
-    report.measurements.pinSwitchMs = await waitActive(ruleId, 1, "机器上切到备用 1", 60_000);
-    const peer = await peerOfNewConnection();
+    const changedAt = await updateRouteGroup(lines.manual, routeGroup);
+    report.measurements.pinSwitchMs = await waitActive(lines.manual, 1, "机器上切到备用 1", 60_000);
+    const peer = await peerOfNewConnection(LINE_PORTS.manual);
     assert(peer === NET.relayB, `指定备用 1 之后新连接应走中转 B，落地看到的是 ${peer}`);
     assert(await echoAlive(longLived, "hello-after-pin"), "指定之后，原来走中转 A 的长连接断了（平滑切换应留着旧连接）");
-    const events = await panel.query<RouteEvent[]>("rules.routeEvents", { ruleId, limit: 50 });
+    const events = await panel.query<RouteEvent[]>("rules.routeEvents", { ruleId: lines.manual, limit: 50 });
     assert(events.some((event) => event.toKey === "b" && event.at >= changedAt - 5_000), `切换记录里应有一条切到 b 的：${JSON.stringify(events.slice(0, 5))}`);
-    await expectNoDrift(ruleId, changedAt);
+    await expectNoDrift(lines.manual, changedAt);
   });
 
   await step("交回自动 → 回到主线路（中转 A）", async () => {
     routeGroup.pin = null;
-    const changedAt = await updateRouteGroup(ruleId, routeGroup);
-    await waitActive(ruleId, 0, "交回自动之后回到主线路", 60_000);
-    const peer = await peerOfNewConnection();
+    const changedAt = await updateRouteGroup(lines.manual, routeGroup);
+    await waitActive(lines.manual, 0, "交回自动之后回到主线路", 60_000);
+    const peer = await peerOfNewConnection(LINE_PORTS.manual);
     assert(peer === NET.relayA, `交回自动之后新连接应走中转 A，落地看到的是 ${peer}`);
-    await expectNoDrift(ruleId, changedAt);
+    await expectNoDrift(lines.manual, changedAt);
   });
 
   await step("按时段：此刻命中的时段指向备用 1 → 走中转 B", async () => {
@@ -476,77 +519,86 @@ async function runScenario(hosts: Hosts, ruleId: number) {
     const hhmm = (value: number) => `${String(Math.floor(((value % 1440) + 1440) % 1440 / 60)).padStart(2, "0")}:${String(((value % 1440) + 1440) % 1440 % 60).padStart(2, "0")}`;
     routeGroup.mode = "scheduled";
     routeGroup.schedule = { timezone: "UTC", windows: [{ days: [0, 1, 2, 3, 4, 5, 6], from: hhmm(minutes - 60), to: hhmm(minutes + 60), targetIndex: 1 }] };
-    const changedAt = await updateRouteGroup(ruleId, routeGroup);
-    await waitActive(ruleId, 1, "时段命中后切到备用 1", 60_000);
-    const peer = await peerOfNewConnection();
+    const changedAt = await updateRouteGroup(lines.manual, routeGroup);
+    await waitActive(lines.manual, 1, "时段命中后切到备用 1", 60_000);
+    const peer = await peerOfNewConnection(LINE_PORTS.manual);
     assert(peer === NET.relayB, `时段命中后新连接应走中转 B，落地看到的是 ${peer}`);
-    await expectNoDrift(ruleId, changedAt);
+    await expectNoDrift(lines.manual, changedAt);
   });
 
   await step("撤掉时段表、回到主备 → 回到中转 A", async () => {
     routeGroup.mode = "failover";
     routeGroup.schedule = null;
-    const changedAt = await updateRouteGroup(ruleId, routeGroup);
-    await waitActive(ruleId, 0, "撤掉时段表后回到主线路", 60_000);
-    const peer = await peerOfNewConnection();
+    const changedAt = await updateRouteGroup(lines.manual, routeGroup);
+    await waitActive(lines.manual, 0, "撤掉时段表后回到主线路", 60_000);
+    const peer = await peerOfNewConnection(LINE_PORTS.manual);
     assert(peer === NET.relayA, `撤掉时段表后新连接应走中转 A，落地看到的是 ${peer}`);
-    await expectNoDrift(ruleId, changedAt);
+    await expectNoDrift(lines.manual, changedAt);
+  });
+
+  await step("「重新下发」能用，之后对账仍然一致", async () => {
+    const result = await panel.mutate<{ ok: boolean }>("lineDiagnostics.lineResync", { ruleId: lines.manual });
+    assert(result?.ok === true, `lineResync 应返回 ok：${JSON.stringify(result)}`);
+    const changedAt = Date.now();
+    await waitActive(lines.manual, 0, "重新下发之后主线路仍在用", 60_000);
+    await expectNoDrift(lines.manual, changedAt);
+    const peer = await peerOfNewConnection(LINE_PORTS.manual);
+    assert(peer === NET.relayA, `重新下发之后新连接应走中转 A，落地看到的是 ${peer}`);
+  });
+
+  longLived.destroy();
+
+  await step("切换演练：把主线路当成挂了 20 秒 → 切到 B，到点切回 A，出报告", async () => {
+    const started = Date.now();
+    const result = await panel.mutate<{ ok: boolean; started: number; seconds: number }>("lineDiagnostics.lineDrillStart", { ruleId: lines.drill, lineKey: "a", seconds: 20 });
+    assert(result?.ok === true && result.started === 1, `lineDrillStart 应登记 1 份：${JSON.stringify(result)}`);
+    report.measurements.drillSwitchMs = await waitActive(lines.drill, 1, "演练：机器切到备用 1", 40_000, started);
+    const during = await routeStatus(lines.drill);
+    assert(during.drill?.active?.phase === "down", `演练应在进行中：${JSON.stringify(during.drill)}`);
+    assert(during.paths[0].down && /演练/.test(during.paths[0].downReason), `主线路应标成演练中：${JSON.stringify({ down: during.paths[0].down, reason: during.paths[0].downReason })}`);
+    const peer = await peerOfNewConnection(LINE_PORTS.drill);
+    assert(peer === NET.relayB, `演练中新连接应走中转 B，落地看到的是 ${peer}`);
+    const done = await until("演练结束出报告", async () => {
+      const status = await routeStatus(lines.drill);
+      return !status.drill?.active && status.drill?.reports[0] ? status.drill.reports[0] : null;
+    }, 150_000, 2_000);
+    assert(done.switched && done.switchMs !== null && done.switchMs <= 20_000, `报告应写几秒切完：${JSON.stringify(done)}${await describeLine(lines.drill)}`);
+    assert(done.restored === true && done.restoreMs !== null, `报告应写恢复后切回了：${JSON.stringify(done)}${await describeLine(lines.drill)}`);
+    report.measurements.drillRestoreMs = done.restoreMs;
+    await waitActive(lines.drill, 0, "演练结束后机器回到主线路", 30_000);
+    const after = await peerOfNewConnection(LINE_PORTS.drill);
+    assert(after === NET.relayA, `演练结束后新连接应回到中转 A，落地看到的是 ${after}`);
+    const events = await panel.query<RouteEvent[]>("rules.routeEvents", { ruleId: lines.drill, limit: 50 });
+    assert(events.filter((event) => event.kind === "drill").length >= 2, `切换记录里应有演练开始、结束两笔：${JSON.stringify(events.slice(0, 6))}`);
   });
 
   await step("中转 A 挂了（停容器）→ 自动切到 B", async () => {
     const stoppedAt = Date.now();
     compose(["stop", "relay-a"]);
-    report.measurements.failoverSwitchMs = await waitActive(ruleId, 1, "中转 A 停掉后切到备用 1", 120_000, stoppedAt);
-    const peer = await peerOfNewConnection();
+    report.measurements.failoverSwitchMs = await waitActive(lines.failure, 1, "中转 A 停掉后切到备用 1", 120_000, stoppedAt);
+    const peer = await peerOfNewConnection(LINE_PORTS.failure);
     assert(peer === NET.relayB, `中转 A 停掉后新连接应走中转 B，落地看到的是 ${peer}`);
-    const status = await routeStatus(ruleId);
+    const status = await routeStatus(lines.failure);
     assert(status.paths[0].down || status.paths[0].healthy === false, `主线路应标成异常：${JSON.stringify({ down: status.paths[0].down, healthy: status.paths[0].healthy, reason: status.paths[0].downReason })}`);
-    const events = await panel.query<RouteEvent[]>("rules.routeEvents", { ruleId, limit: 50 });
+    const events = await panel.query<RouteEvent[]>("rules.routeEvents", { ruleId: lines.failure, limit: 50 });
     assert(events.some((event) => event.kind === "switch" && event.toKey === "b" && event.at >= stoppedAt - 5_000), `切换记录里应有一条因故障切到 b 的 switch：${JSON.stringify(events.slice(0, 5))}`);
   });
 
   await step("中转 A 回来（起容器）→ 自动切回 A", async () => {
     const startedBack = Date.now();
     compose(["start", "relay-a"]);
-    report.measurements.failbackMs = await waitActive(ruleId, 0, "中转 A 回来后切回主线路", 240_000, startedBack);
-    const peer = await peerOfNewConnection();
+    // 另两条线路也跟着切过去了，但它们这一小时里已经自动切过几次，切回会被抖动抑制压住，这里只看这一条。
+    report.measurements.failbackMs = await waitActive(lines.failure, 0, "中转 A 回来后切回主线路", 240_000, startedBack);
+    const peer = await peerOfNewConnection(LINE_PORTS.failure);
     assert(peer === NET.relayA, `中转 A 回来后新连接应走中转 A，落地看到的是 ${peer}`);
   });
 
-  await step("「重新下发」能用，之后对账仍然一致", async () => {
-    const result = await panel.mutate<{ ok: boolean }>("lineDiagnostics.lineResync", { ruleId });
-    assert(result?.ok === true, `lineResync 应返回 ok：${JSON.stringify(result)}`);
-    const changedAt = Date.now();
-    await waitActive(ruleId, 0, "重新下发之后主线路仍在用", 60_000);
-    await expectNoDrift(ruleId, changedAt);
-    const peer = await peerOfNewConnection();
-    assert(peer === NET.relayA, `重新下发之后新连接应走中转 A，落地看到的是 ${peer}`);
-  });
-
-  await step("切换演练：把主线路当成挂了 20 秒 → 切到 B，到点切回 A，出报告", async () => {
-    const started = Date.now();
-    const result = await panel.mutate<{ ok: boolean; started: number; seconds: number }>("lineDiagnostics.lineDrillStart", { ruleId, lineKey: "a", seconds: 20 });
-    assert(result?.ok === true && result.started === 1, `lineDrillStart 应登记 1 份：${JSON.stringify(result)}`);
-    report.measurements.drillSwitchMs = await waitActive(ruleId, 1, "演练：机器切到备用 1", 40_000, started);
-    const during = await routeStatus(ruleId);
-    assert(during.drill?.active?.phase === "down", `演练应在进行中：${JSON.stringify(during.drill)}`);
-    assert(during.paths[0].down && /演练/.test(during.paths[0].downReason), `主线路应标成演练中：${JSON.stringify({ down: during.paths[0].down, reason: during.paths[0].downReason })}`);
-    const peer = await peerOfNewConnection();
-    assert(peer === NET.relayB, `演练中新连接应走中转 B，落地看到的是 ${peer}`);
-    const done = await until("演练结束出报告", async () => {
+  await step("收尾：三条线路的期望 vs 实际对账都没有差异", async () => {
+    for (const [name, ruleId] of Object.entries(lines)) {
       const status = await routeStatus(ruleId);
-      return !status.drill?.active && status.drill?.reports[0] ? status.drill.reports[0] : null;
-    }, 150_000, 2_000);
-    assert(done.switched && done.switchMs !== null && done.switchMs <= 20_000, `报告应写几秒切完：${JSON.stringify(done)}`);
-    assert(done.restored === true && done.restoreMs !== null, `报告应写恢复后切回了：${JSON.stringify(done)}`);
-    report.measurements.drillRestoreMs = done.restoreMs;
-    const after = await peerOfNewConnection();
-    assert(after === NET.relayA, `演练结束后新连接应回到中转 A，落地看到的是 ${after}`);
-    const events = await panel.query<RouteEvent[]>("rules.routeEvents", { ruleId, limit: 50 });
-    assert(events.filter((event) => event.kind === "drill").length >= 2, `切换记录里应有演练开始、结束两笔：${JSON.stringify(events.slice(0, 6))}`);
+      assert(!status.drift, `${name} 的面板配置和机器上跑的应一致：${JSON.stringify(status.drift)}`);
+    }
   });
-
-  longLived.destroy();
 }
 
 async function main() {
@@ -554,13 +606,15 @@ async function main() {
   await setupPanel();
   const hosts = DRY_RUN ? await fakeHosts() : await bringUpAgents();
   if (DRY_RUN) await fixAddresses(hosts);
-  const { ruleId } = await createLine(hosts);
+  const lines = await createLines(hosts);
   if (DRY_RUN) {
-    const status = await routeStatus(ruleId);
-    log(`干跑结束：ruleId=${ruleId} paths=${JSON.stringify(status.paths.map((row) => ({ key: row.key, dial: row.dial, hops: row.hops.map((hop) => hop.hostId) })))}`);
+    for (const [name, ruleId] of Object.entries(lines)) {
+      const status = await routeStatus(ruleId);
+      log(`干跑：${name} ruleId=${ruleId} paths=${JSON.stringify(status.paths.map((row) => ({ key: row.key, dial: row.dial, hops: row.hops.map((hop) => hop.hostId) })))}`);
+    }
     return;
   }
-  await runScenario(hosts, ruleId);
+  await runScenario(hosts, lines);
 }
 
 main()
