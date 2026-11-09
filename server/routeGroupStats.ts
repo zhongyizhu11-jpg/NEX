@@ -1,5 +1,6 @@
 import { normalizeAgentText } from "./agentInputValidation";
 import { type RoutePath } from "../shared/routeGroup";
+import { parseRouteAgentSpec, type RouteAgentSpec } from "../shared/routeSpecDrift";
 
 /*
   线路组的「现在怎么样」：两路数据，都只留在内存里。
@@ -57,6 +58,8 @@ export type RouteAgentStats = {
   targets: RouteTargetStat[];
   /** 最近 10 分钟连进来的客户端连接：拨通了一条路径的 / 一条都没拨通的（Agent 2.2.243 起；TCP）。 */
   inbound?: { ok: number; failed: number } | null;
+  /** 机器此刻真正在按什么跑（Agent 2.2.253 起；期望 vs 实际对账用）；老 Agent 没报是 null。 */
+  spec?: RouteAgentSpec | null;
   /** 面板收到的时刻（Unix 毫秒） */
   reportedAt: number;
 };
@@ -178,6 +181,7 @@ export function recordRouteAgentStats(input: {
       inbound: raw && ("inboundOk" in raw || "inboundFailed" in raw)
         ? { ok: Math.max(0, integer(raw.inboundOk)), failed: Math.max(0, integer(raw.inboundFailed)) }
         : null,
+      spec: parseRouteAgentSpec(raw?.spec),
       reportedAt: nowMs,
     };
     const existing = seen.get(ruleId);

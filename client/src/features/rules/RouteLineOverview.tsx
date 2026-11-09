@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { Fragment, useState, type ReactNode } from "react";
 import { ChevronDown, Download, Gauge } from "lucide-react";
 import { toast } from "sonner";
 
@@ -383,6 +383,52 @@ export function routeSwitchChip(status: RouteStatus, events: RouteEvent[], nowMs
   return { tone: "ok", text: `${lineShortClock(latest.at, timeZone)} 切到 ${to >= 0 ? lineLongName(to) : latest.toLabel || "另一条"}` };
 }
 
+// ---------------------------------------------------------------- 期望 vs 实际
+
+/**
+ * 机器上跑的不是面板里这份（Agent 2.2.253 起随心跳报它实际生效的规格，面板按用户配的比）：标红、逐项列差异、
+ * 一键重新下发。2.3.522 线上「切到备用 1 还是走主线路」就是面板存了、机器没拿到 —— 以前只看面板永远发现不了。
+ */
+export function RouteDriftBanner({
+  drift,
+  onResync,
+  resyncing = false,
+  timeZone,
+}: {
+  drift: NonNullable<RouteStatus["drift"]>;
+  onResync?: () => void;
+  resyncing?: boolean;
+  timeZone?: string;
+}) {
+  return (
+    <LineCard className="border border-[var(--fx-down-text)]/35 px-3 py-2.5" data-testid="route-drift">
+      <div className="flex min-w-0 items-center justify-between gap-2">
+        <span className="flex min-w-0 items-center gap-1.5 text-[12.5px] font-semibold text-[var(--fx-down-text)]">
+          <LineDot tone="down" />机器上跑的不是面板里这份
+        </span>
+        {onResync ? (
+          <LineChipButton className="shrink-0" variant="sel" disabled={resyncing} onClick={onResync} data-testid="route-drift-resync">
+            {resyncing ? "下发中…" : "重新下发"}
+          </LineChipButton>
+        ) : null}
+      </div>
+      <div className="mt-1.5 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[12px]">
+        {drift.fields.map((field) => (
+          <Fragment key={field.key}>
+            <span className="text-muted-foreground">{field.label}</span>
+            <span className="min-w-0">
+              面板 {field.expected}<span className="text-muted-foreground"> · </span><span className="text-[var(--fx-down-text)]">机器 {field.actual}</span>
+            </span>
+          </Fragment>
+        ))}
+      </div>
+      <p className="mt-1.5 text-[11.5px] text-muted-foreground">
+        按机器 {lineShortClock(drift.reportedAt, timeZone)} 报的比。改完配置 20 秒内不算；一直这样多半是入口机没收到，点「重新下发」。
+      </p>
+    </LineCard>
+  );
+}
+
 // ---------------------------------------------------------------- 整屏
 
 export function RouteLineDetail({
@@ -398,6 +444,8 @@ export function RouteLineDetail({
   editor,
   lineSwitch,
   settings,
+  onResync,
+  resyncing = false,
 }: {
   status: RouteStatus;
   events: RouteEvent[];
@@ -408,6 +456,9 @@ export function RouteLineDetail({
   onToggleDetails: () => void;
   nowMs?: number;
   timeZone?: string;
+  /** 期望 vs 实际对不上时「重新下发」；没给就只显示差异。 */
+  onResync?: () => void;
+  resyncing?: boolean;
   /** 能改的时候：线路这一节直接是编辑器（不再另开「编辑线路组」）；没给就是只读的线路列表。 */
   editor?: ReactNode;
   /** 手动换线路（点状态胶囊）；只读列表用，编辑器里的由编辑器自己带。 */
@@ -423,6 +474,7 @@ export function RouteLineDetail({
   return (
     <div className="fx-line-ui flex min-w-0 flex-col gap-3" data-testid="route-line-overview">
       <RouteLineHero status={status} />
+      {status.drift ? <RouteDriftBanner drift={status.drift} onResync={onResync} resyncing={resyncing} timeZone={timeZone} /> : null}
       <RouteLineDiagram status={status} modeLabel={modeLabel} timeZone={timeZone} />
       <div>
         <LineSec

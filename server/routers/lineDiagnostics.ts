@@ -469,6 +469,24 @@ export const lineDiagnosticsRouter = router({
       return { id, members: hostIds.length };
     }),
   /**
+   * 期望 vs 实际对不上时的「重新下发」（线路详情红条上的按钮）：端口转发模板重新同步子规则（只差调度设置时
+   * 原地热更新），别的规则推一次调度所在机器的心跳。不改任何配置，只是再送一遍。
+   */
+  lineResync: protectedProcedure
+    .input(z.object({ ruleId: z.number().int().positive() }))
+    .mutation(async ({ input, ctx }) => {
+      const viewed = await requireRuleVisible(ctx.user, input.ruleId);
+      if (ctx.user.role !== "admin" && Number(viewed.userId) !== Number(ctx.user.id)) throw new Error("无权操作此规则");
+      const groupId = Number(viewed.forwardGroupId || 0);
+      if (groupId > 0 && (dbBool(viewed.isForwardGroupTemplate) || Number(viewed.forwardGroupRuleId || 0) > 0)) {
+        await db.syncForwardGroupRules(groupId);
+      }
+      const status = await buildRouteStatus(viewed);
+      const { pushAgentRefresh } = await import("../agentEvents");
+      for (const hostId of status?.schedulerHostIds || [Number(viewed.hostId)]) pushAgentRefresh(hostId, "route-spec-resync", { urgent: true });
+      return { ok: true };
+    }),
+  /**
    * 暂停 / 恢复一条线路（运行中那一屏的暂停按钮）：只改 paused，不重建中继。调度器拿到「已暂停」
    * 提示就不再往这条上发新连接；不能把所有线路都停掉。
    */

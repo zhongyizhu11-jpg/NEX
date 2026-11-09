@@ -223,6 +223,22 @@ test("手动换线路：点状态胶囊就能切到这条；指定了的那条�
   assert.doesNotMatch(plain, /route-line-switch/);
 });
 
+test("期望 vs 实际对不上：线路详情顶上出红条，逐项列「面板 / 机器」，有「重新下发」；异常明细里也写一句", () => {
+  const drift = { fields: [{ key: "pin", label: "人工指定", expected: "备用 1 · 到 18:36", actual: "没有" }, { key: "minHold", label: "最短驻留", expected: "1 分钟", actual: "0 秒" }], reportedAt: NOW - 5_000 };
+  let resynced = 0;
+  const html = renderToStaticMarkup(
+    <RouteLineDetail status={status({ drift })} events={events} modeLabel="整链最优" detailsOpen={false} onToggleDetails={noop} nowMs={NOW} timeZone={TZ} onResync={() => { resynced += 1; }} />,
+  );
+  assert.match(html, /data-testid="route-drift"[^]*?机器上跑的不是面板里这份/);
+  assert.match(html, /人工指定[^]*?面板 备用 1 · 到 18:36[^]*?机器 没有/);
+  assert.match(html, /最短驻留[^]*?面板 1 分钟[^]*?机器 0 秒/);
+  assert.match(html, /data-testid="route-drift-resync"[^>]*>重新下发/);
+  // 一致（null）就什么都没有：别让人以为老 Agent 也有问题
+  assert.doesNotMatch(renderToStaticMarkup(<RouteLineDetail status={status({ drift: null })} events={events} modeLabel="整链最优" detailsOpen={false} onToggleDetails={noop} nowMs={NOW} timeZone={TZ} />), /route-drift/);
+  assert.equal(resynced, 0);
+  assert.match(render({ status: status({ drift }) }), /route-drift-note[^>]*>机器上跑的不是面板里这份：人工指定（面板 备用 1 · 到 18:36 \/ 机器 没有）；最短驻留（面板 1 分钟 \/ 机器 0 秒）。/);
+});
+
 test("手动切的时长自己填：几分钟 / 几小时，空、0、负数、超过 30 天都不行", () => {
   assert.equal(pinDurationSeconds("2", "hour"), 7200);
   assert.equal(pinDurationSeconds("1.5", "hour"), 5400);

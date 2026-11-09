@@ -1683,10 +1683,13 @@ async function seedLineDemo(adminId: number) {
     await insertAndGetId("traffic_stats", { ruleId: hkt, hostId: po0, bytesIn: Math.round(1.1 * 1024 ** 3), bytesOut: Math.round(1.76 * 1024 ** 3), connections: 300, recordedAt: minutesAgo(i * 60 - 30) });
   }
 
-  // Sg：主线路经 HK2（维护），在走备 1。
+  // Sg：主线路经 HK2（维护），在走备 1。机器报的规格和面板配的对不上（面板是聚合，机器还按冷备主备在跑）：
+  // 线路详情顶上出红条「机器上跑的不是面板里这份」。规则的改动时间往前拨，不然还在 20 秒宽限里。
+  await executeRaw(`UPDATE ${quoteDbIdentifier("forward_rules")} SET ${quoteDbIdentifier("updatedAt")} = ? WHERE ${quoteDbIdentifier("id")} = ?`, [minutesAgo(30), sg]);
   const sgPaths = await readPaths(sg);
   recordRouteAgentStats({ hostId: po0, isAllowed: () => true, reports: [{
-    ruleId: sg, sourcePort: 26310, strategy: "least_load", activeIndex: 1, activeSince: nowMs - 118 * 60_000, prewarmIndex: -1, inboundOk: 410, inboundFailed: 1,
+    ruleId: sg, sourcePort: 26310, strategy: "fallback", activeIndex: 1, activeSince: nowMs - 118 * 60_000, prewarmIndex: -1, inboundOk: 410, inboundFailed: 1,
+    spec: { pinnedIndex: null, minHoldSeconds: 0, preferFastest: false, strategy: "fallback", delivery: "cold", failoverSeconds: 5, recoverSeconds: 180, autoFailback: true, failureThreshold: 3, scoreMargin: 10, scoreHoldSeconds: 120, prewarmSeconds: 0, switchMode: "smooth", targetCount: 2 },
     targets: [
       { index: 0, target: dial(sgPaths[0]), healthy: false, down: true, downReason: "maintenance: HK2", score: 0, latencyMs: -1, lossPct: 100, jitterMs: 0, availabilityPct: 0, consecutiveFailures: 5, connections: 0, samples: 120, lastProbeAt: nowMs - 2000 },
       { index: 1, target: dial(sgPaths[1]), healthy: true, score: 88, latencyMs: 31, lossPct: 0, jitterMs: 2, availabilityPct: 100, consecutiveFailures: 0, connections: 12, samples: 120, lastProbeAt: nowMs - 2000, dialOk: 405, dialFailed: 2 },
