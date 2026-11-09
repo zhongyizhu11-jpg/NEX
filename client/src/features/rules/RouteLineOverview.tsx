@@ -88,13 +88,17 @@ export function RouteLineHero({ status }: { status: RouteStatus }) {
 
 // ---------------------------------------------------------------- 线路
 
-/** 一条线路此刻的状态胶囊：已暂停 / 使用中 / 不通 ×N（或原因）/ 待命；人工指定了这条，后面带「指定」。 */
+/**
+ * 一条线路此刻的状态胶囊：已暂停 / 使用中 / 不通 ×N（或原因）/ 待命；人工指定了这条，后面带「指定」。
+ * 指定了、通着、机器还没切过来：「切换中」—— 以前写「待命 · 指定」，看着像指定了也不走（为什么没切在调度计划里写）。
+ */
 function routeLinePill(group: RouteLineGroup, pinned = false): { tone: LineTone; text: string; dot?: boolean } {
   const tag = pinned ? " · 指定" : "";
   if (group.paused) return { tone: "gray", text: "已暂停" };
   if (group.active) return { tone: "ok", text: `使用中${tag}`, dot: true };
   if (group.allDown) return { tone: "down", text: `${group.failures >= 2 ? `不通 ×${group.failures}` : group.reason ? lineShortIssue(group.reason) : "不通"}${tag}` };
-  return { tone: "gray", text: `待命${tag}` };
+  if (pinned) return { tone: "acc", text: "切换中 · 指定" };
+  return { tone: "gray", text: "待命" };
 }
 
 /**

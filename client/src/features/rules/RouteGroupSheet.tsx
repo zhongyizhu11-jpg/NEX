@@ -156,6 +156,8 @@ export type RouteEvent = {
   fromChainMs?: number | null;
   toChainMs?: number | null;
   heldSeconds?: number | null;
+  /** 哪台入口报的：一条转发组线路展开在好几台入口机上时才有（服务端 routeLineEvents）。 */
+  entryHostName?: string | null;
   at: number;
 };
 
@@ -259,8 +261,9 @@ export function RouteGroupPanel({ policy, status, events, nowMs, timeZone }: Rou
                       {title}
                       {movement ? <span className="text-muted-foreground">　{movement}</span> : null}
                     </span>
-                    {event.reasonText || event.score ? (
+                    {event.reasonText || event.score || event.entryHostName ? (
                       <span className="text-meta text-muted-foreground">
+                        {event.entryHostName ? `${event.entryHostName}${event.reasonText || event.score ? " · " : ""}` : ""}
                         {event.reasonText}
                         {event.score ? `${event.reasonText ? " · " : ""}评分 ${formatRouteScore(event.score)}` : ""}
                         {kind === "precheck_failed" ? " · 继续使用原路径" : ""}

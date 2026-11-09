@@ -18,7 +18,8 @@ import { lineLongName, routeLineGroups } from "@/features/rules/routeLineText";
 
 const SHOWN_KINDS = new Set(["switch", "pinned", "unpinned", "precheck_failed", "flap_hold"]);
 
-type TimelineEntry = { key: string; at: number; manual: boolean; tone: "ok" | "down" | "acc"; title: ReactNode; detail: string };
+/** entryHostName：哪台入口报的（一条转发组线路展开在好几台入口机上时才有）。 */
+type TimelineEntry = { key: string; at: number; manual: boolean; entryHostName: string | null; tone: "ok" | "down" | "acc"; title: ReactNode; detail: string };
 
 function clock(ms: number, timeZone?: string) {
   try {
@@ -70,7 +71,7 @@ export function routeSwitchEntries(events: RouteEvent[], status: RouteStatus | n
       const manual = kind === "pinned" || kind === "unpinned" || /^panel:|^pin\b/.test(lower);
       const to = nameOf(event.toKey, event.toLabel);
       const from = nameOf(event.fromKey, event.fromLabel);
-      const base = { key: `${event.id}`, at: event.at, manual };
+      const base = { key: `${event.id}`, at: event.at, manual, entryHostName: event.entryHostName ?? null };
       if (kind === "pinned" || kind === "unpinned") {
         if (reason.includes("暂停这条线路")) return { ...base, tone: "acc", title: <>暂停 <b>{to}</b></>, detail: describeRouteReason(reason) };
         if (reason.includes("恢复这条线路")) return { ...base, tone: "ok", title: <>恢复 <b>{to}</b></>, detail: describeRouteReason(reason) };
@@ -113,7 +114,7 @@ export function RouteSwitchTimeline({ events, status, nowMs, timeZone, limit = 1
     <div className="relative pl-4 text-[12.5px] before:absolute before:bottom-1 before:left-1 before:top-1 before:w-0.5 before:bg-[var(--fx-stroke-weak)]" data-testid="route-switch-timeline">
       {entries.map((entry, index) => (
         <div key={entry.key} className={cn("relative before:absolute before:-left-[15px] before:top-[5px] before:h-2 before:w-2 before:rounded-full", DOT[entry.tone], index < entries.length - 1 && "mb-[11px]")}>
-          <div className="font-mono text-[11px] text-muted-foreground">{dayLabel(entry.at, now, timeZone)}{clock(entry.at, timeZone)} · {entry.manual ? "手动" : "自动"}</div>
+          <div className="font-mono text-[11px] text-muted-foreground">{dayLabel(entry.at, now, timeZone)}{clock(entry.at, timeZone)} · {entry.manual ? "手动" : "自动"}{entry.entryHostName ? ` · ${entry.entryHostName}` : ""}</div>
           <div>{entry.title}</div>
           {entry.detail ? <div className="mt-0.5 text-[11.5px] text-muted-foreground">{entry.detail}</div> : null}
         </div>

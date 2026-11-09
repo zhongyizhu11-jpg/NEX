@@ -1,7 +1,7 @@
 ﻿import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { notifyRuleDeleted } from "../entityCleanup";
 import { invalidateProxySubCacheForUser } from "../proxySubCache";
-import { forwardGroupMembers, forwardGroups, forwardRuleRouteEvents, forwardRuleTunnelExits, forwardRules, InsertForwardRule, tunnels } from "../../drizzle/schema";
+import { forwardGroupMembers, forwardGroups, forwardRuleRouteEvents, forwardRuleTunnelExits, forwardRules, InsertForwardRule, tunnels, type ForwardRule, type ForwardRuleRouteEvent } from "../../drizzle/schema";
 import { afterDatabaseCommit, executeRaw, getDb, insertAndGetId, nowDate } from "../dbRuntime";
 import { queryRaw } from "../dbRuntime";
 import { boolLiteral, boolValue, inList, quoteIdentifier } from "../dbCompat";
@@ -1135,7 +1135,7 @@ export async function getForwardGroupChildRules(groupId: number) {
     .orderBy(desc(forwardRules.createdAt));
 }
 
-export async function getForwardGroupChildRulesForTemplate(templateRuleId: number) {
+export async function getForwardGroupChildRulesForTemplate(templateRuleId: number): Promise<ForwardRule[]> {
   const db = await getDb();
   if (!db) return [];
   return db
@@ -1324,6 +1324,21 @@ export async function getForwardRuleRouteEvents(ruleId: number, limit = 20) {
     .select()
     .from(forwardRuleRouteEvents)
     .where(eq(forwardRuleRouteEvents.ruleId, ruleId))
+    .orderBy(desc(forwardRuleRouteEvents.createdAt), desc(forwardRuleRouteEvents.id))
+    .limit(size);
+}
+
+/** 几条规则的切换记录合在一起按时间倒序（端口转发模板 + 它在每台成员机上的子规则）。 */
+export async function getForwardRuleRouteEventsForRules(ruleIds: readonly number[], limit = 20): Promise<ForwardRuleRouteEvent[]> {
+  const ids = Array.from(new Set(ruleIds.map((id) => Math.floor(Number(id) || 0)).filter((id) => id > 0)));
+  if (ids.length <= 1) return ids.length === 1 ? getForwardRuleRouteEvents(ids[0], limit) : [];
+  const db = await getDb();
+  if (!db) return [];
+  const size = Math.min(200, Math.max(1, Math.floor(Number(limit) || 20)));
+  return db
+    .select()
+    .from(forwardRuleRouteEvents)
+    .where(inArray(forwardRuleRouteEvents.ruleId, ids))
     .orderBy(desc(forwardRuleRouteEvents.createdAt), desc(forwardRuleRouteEvents.id))
     .limit(size);
 }

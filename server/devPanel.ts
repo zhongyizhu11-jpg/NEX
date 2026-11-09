@@ -1706,6 +1706,59 @@ async function seedLineDemo(adminId: number) {
     if (hop && hop !== hk2) for (let i = 0; i < 5; i += 1) recordRouteHopProbe({ parentRuleId: jp, pathKey: path.key, hopIndex: 0, hostId: hop, hostName: names.get(hop) || "中转", nextLabel: "落地", ok: true, latencyMs: 40 });
   });
 
+  /*
+    端口转发（转发组模板）上的线路组，和线上「Jinx/hk/3」一个样子：模板不跑，跑的是 Po0 上展开的那条子规则，
+    中继建在子规则上。子规则在走主线路；在线路详情里「切到 备用 1」看指定带没带到子规则（2.3.523 之前没带）。
+  */
+  const portLineGroupId = await insertAndGetId("forward_groups", {
+    userId: adminId, name: "Jinx 端口转发", groupType: "host", groupMode: "port", forwardType: "gost",
+    sourcePort: 26340, protocol: "both", targetIp: "hkboil.ddos.top", targetPort: 45855, lastStatus: "healthy", isEnabled: true, sortOrder: 10,
+    createdAt: now, updatedAt: now,
+  });
+  await insertAndGetId("forward_group_members", {
+    groupId: portLineGroupId, memberType: "host", hostId: po0, priority: 1, isEnabled: true, healthStatus: "healthy",
+    lastLatencyMs: 2, healthySince: minutesAgo(90), lastCheckedAt: now, createdAt: now, updatedAt: now,
+  });
+  const templateLines = [
+    line("main", "主线路", [layer({ hostIds: [jinx] })]),
+    line("bk1", "备用 1", [layer({ hostIds: [jinx399] })]),
+  ];
+  const portTemplate = await insertAndGetId("forward_rules", {
+    userId: adminId, hostId: po0, name: "Jinx/hk/3", forwardType: "gost", protocol: "both", sourcePort: 26340, targetIp: "hkboil.ddos.top", targetPort: 45855,
+    sortOrder: 24, isRunning: false, isEnabled: true, failoverEnabled: true, routeMode: "smart", routeSwitchMode: "smooth", routeFailureThreshold: 2,
+    routeScoreMargin: 10, routeScoreHoldSeconds: 30, routePrewarmSeconds: 300, failoverSeconds: 3, recoverSeconds: 300, failoverMinHoldSeconds: 60,
+    failoverPreferFastest: true, failoverTargets: "[]", routeDelivery: "hot", routeLines: serializeRouteLines(templateLines as Parameters<typeof serializeRouteLines>[0]),
+    routePaths: JSON.stringify(expand(templateLines)), tunnelId: null, tunnelExitPort: null, forwardGroupId: portLineGroupId, forwardGroupRuleId: null,
+    forwardGroupMemberId: null, isForwardGroupTemplate: true, createdAt: now, updatedAt: now,
+  });
+  await syncForwardGroupRules(Number(portLineGroupId), { validatePorts: false }).catch((error) => console.warn(`[DevPanel] port line template: ${error instanceof Error ? error.message : String(error)}`));
+  const { getForwardGroupChildRulesForTemplate } = await import("./repositories/forwardRuleRepository");
+  const portChild = (await getForwardGroupChildRulesForTemplate(Number(portTemplate))).find((row) => !row.pendingDelete);
+  if (portChild) {
+    const childId = Number(portChild.id);
+    await syncRouteRelayRulesForRule(childId, { deferRefresh: true, reason: "dev-seed" }).catch(() => undefined);
+    await executeRaw(`UPDATE ${quoteDbIdentifier("forward_rules")} SET ${quoteDbIdentifier("isRunning")} = ? WHERE ${quoteDbIdentifier("id")} = ? OR ${quoteDbIdentifier("routeParentRuleId")} = ?`, [true, childId, childId]);
+    const childPaths = await readPaths(childId);
+    // Agent 报的「现在走哪条」（failoverLineReports 写的就是这两列）：主线路
+    await executeRaw(
+      `UPDATE ${quoteDbIdentifier("forward_rules")} SET ${quoteDbIdentifier("failoverActiveTarget")} = ?, ${quoteDbIdentifier("failoverActiveAt")} = ? WHERE ${quoteDbIdentifier("id")} = ?`,
+      [dial(childPaths[0]) || null, minutes(40), childId],
+    );
+    recordRouteAgentStats({ hostId: po0, isAllowed: () => true, reports: [{
+      ruleId: childId, sourcePort: 26340, strategy: "fallback", activeIndex: 0, activeSince: nowMs - 40 * 60_000, prewarmIndex: -1, inboundOk: 512, inboundFailed: 0,
+      targets: childPaths.map((path, index) => ({
+        index, target: dial(path), healthy: true, score: 95 - index * 2, latencyMs: 2 + index, lossPct: 0, jitterMs: 0.3, availabilityPct: 100,
+        consecutiveFailures: 0, connections: index === 0 ? 23 : 0, samples: 120, lastProbeAt: nowMs - 2000, ...(index === 0 ? { dialOk: 510, dialFailed: 0 } : {}),
+      })),
+    }] });
+    for (const [index, path] of childPaths.entries()) {
+      const hop = path.hops[0];
+      if (hop) for (let i = 0; i < 5; i += 1) recordRouteHopProbe({ parentRuleId: childId, pathKey: path.key, hopIndex: 0, hostId: hop, hostName: names.get(hop) || "中转", nextLabel: "落地", ok: true, latencyMs: 2 + index });
+    }
+    // Agent 报的切换记在子规则上：线路详情按模板看也得看得到
+    await insertForwardRuleRouteEvent({ ruleId: childId, kind: "switch", fromKey: childPaths[1]?.key, toKey: childPaths[0]?.key, fromLabel: "备用 1", toLabel: "主线路", reason: "score", score: 95, latencyMs: 2, fromChainMs: 3, toChainMs: 2, heldSeconds: 30, atSeconds: minutes(40) });
+  }
+
   // 落地池（2.3.500）：SG 落地 / 东京落地 / SG 原生开同一份 VLESS + REALITY；SG 原生的 443 被它自己的入站占了，换了端口。
   // 「Po0 到亚太落地池」目标是这个池：保存时做成线路组，三台一台一条路径，按负载分。
   const busyInbound = await insertAndGetId("proxy_inbounds", {
