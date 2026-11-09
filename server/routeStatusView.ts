@@ -24,6 +24,7 @@ import { expectedRouteAgentSpec, routeSpecDriftFields, routeSpecReportUsable, ty
 import { timestampMillis } from "../shared/timestamp";
 import { dbBool } from "./repositories/repositoryUtils";
 import { getRuleLiveRate, type RuleLiveRate } from "./ruleLiveRates";
+import { routeDrillView, withRouteDrillHints, type RouteDrillSubject } from "./routeDrill";
 import { queryRaw, quoteDbIdentifier } from "./dbRuntime";
 
 /*
@@ -171,6 +172,32 @@ export async function routeLineEvents(rule: RuleRow, limit: number) {
 }
 
 /**
+ * 切换演练的对象（server/routeDrill）：端口转发模板是每台成员机上在跑的子规则，别的规则就是它自己。
+ * 调度器在哪几台机器上和心跳一个口径（routeSchedulerHostIds）：提示要推到它们那里。
+ */
+export async function routeDrillSubjectsFor(rule: RuleRow): Promise<RouteDrillSubject[]> {
+  const candidates = dbBool(rule.isForwardGroupTemplate) ? await liveTemplateChildren(rule) : [rule];
+  const hostIds = Array.from(new Set(candidates.map((candidate) => Number(candidate.hostId || 0)).filter((id) => id > 0)));
+  const names = hostIds.length > 1 ? await db.getHostNamesByIds(hostIds).catch(() => new Map<number, string>()) : new Map<number, string>();
+  const subjects: RouteDrillSubject[] = [];
+  for (const candidate of candidates) {
+    const paths = routePathsOf(candidate as RouteGroupRule);
+    if (paths.length < 2) continue;
+    const tunnel = Number(candidate.tunnelId || 0) > 0
+      ? await (db.getTunnelById(Number(candidate.tunnelId)) as Promise<{ id: number } | null | undefined>).catch(() => null)
+      : null;
+    const exitNodes = tunnel ? await db.getTunnelExitNodes(Number(tunnel.id)).catch(() => []) : [];
+    subjects.push({
+      rule: { id: Number(candidate.id), hostId: Number(candidate.hostId || 0) },
+      paths,
+      entryHostName: hostIds.length > 1 ? names.get(Number(candidate.hostId || 0)) ?? null : null,
+      schedulerHostIds: routeSchedulerHostIds(Number(candidate.hostId), tunnel, exitNodes),
+    });
+  }
+  return subjects;
+}
+
+/**
  * 规则列表里的端口转发模板：「现在走哪条」（failoverActiveTarget / failoverActiveAt）换成它展开那条的。
  * 模板上留着的是转成端口转发之前那条规则最后报的，早就不对了 —— 规则卡和线路面板上会写成
  * 「Agent 报的 … 不在线路清单里」。别的规则原样返回。
@@ -270,7 +297,8 @@ export async function buildRouteStatus(rule: any) {
   const { paths, policy } = group;
   const status = getRouteStatus(Number(subject.id), nowMs);
   const agent = status.agent || status.staleAgent;
-  const hints = routeHopDownHints(Number(subject.id), paths, nowMs);
+  // 中转断了的提示 + 切换演练「当成挂了」的提示（和下发给 Agent 的是同一份读法，agentHeartbeatRoute）
+  const hints = withRouteDrillHints(Number(subject.id), routeHopDownHints(Number(subject.id), paths, nowMs), nowMs);
   await ensureRouteNodeHealthFresh();
   const nodeHints = routeNodeHints(paths, getRouteNodeStatus);
   const tripped = routeTrippedNodeIds();
@@ -424,6 +452,8 @@ export async function buildRouteStatus(rule: any) {
     agentStale: !status.agent && !!status.staleAgent,
     /** 机器上跑的和面板配的对不上（Agent 2.2.253 起；见 shared/routeSpecDrift）；一致、还在宽限里、老 Agent 都是 null。 */
     drift: status.agent ? routeSpecDriftOf(rule, subject, status.agent, nowMs) : null,
+    /** 切换演练：正在进行的和最近一小时的报告（端口转发是每台成员机一份），见 server/routeDrill。 */
+    drill: routeDrillView(dbBool(rule.isForwardGroupTemplate) ? (await liveTemplateChildren(rule)).map((child) => Number(child.id)) : [Number(subject.id)], nowMs),
     tunnelMode: routeTunnel ? String(routeTunnel.mode || "") : null,
     /** 调度器跑在哪几台机器上（直连是规则所在机器，隧道是出口）。 */
     schedulerHostIds,

@@ -6,11 +6,11 @@
 #   bash e2e/run.sh
 #
 # 做的事：在本机起一份干净的面板（sqlite，监听所有网卡的 9810，容器里的 Agent 走网关地址访问它），然后跑
-# e2e/scenario.ts（建管理员、建 Token、起容器、建线路、按场景切换并用真流量核对）。日志、报告都在 e2e/.out。
+# e2e/scenario.ts（建管理员、建 Token、起容器、建线路、按场景切换并用真流量核对）。日志、报告都在 e2e/out。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-OUT="$ROOT/e2e/.out"
+OUT="$ROOT/e2e/out"
 PORT="${E2E_PANEL_PORT:-9810}"
 COMPOSE=(docker compose -f "$ROOT/e2e/compose.yml" -p nex-e2e)
 

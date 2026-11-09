@@ -11,6 +11,7 @@ import { reconcileForwardRuleTunnelExits } from "./repositories/tunnelRepository
 import { insertForwardRuleRouteEvent } from "./repositories/forwardRuleRepository";
 import { syncRouteRelayRulesForRule } from "./routeGroups";
 import { recordRouteAgentStats, recordRouteHopProbe } from "./routeGroupStats";
+import { routeDrillInternals } from "./routeDrill";
 import { insertRoutePathQualityStats, type RoutePathQualityRow } from "./repositories/routePathQualityRepository";
 import { AGENT_VERSION } from "../shared/versions";
 
@@ -1683,6 +1684,17 @@ async function seedLineDemo(adminId: number) {
     await insertAndGetId("traffic_stats", { ruleId: hkt, hostId: po0, bytesIn: Math.round(1.1 * 1024 ** 3), bytesOut: Math.round(1.76 * 1024 ** 3), connections: 300, recordedAt: minutesAgo(i * 60 - 30) });
   }
 
+  // 切换演练（2.3.524）：广港hkt 八分钟前演练过主线路（线路详情顶上一张报告卡），切换记录里有开始、结束两笔。
+  routeDrillInternals.seedReport({
+    ruleId: hkt, subjectRuleId: hkt, entryHostId: po0, entryHostName: null, lineKey: "main", lineLabel: "主线路", seconds: 60,
+    startedAt: nowMs - 9 * 60_000, endedAt: nowMs - 8 * 60_000, finishedAt: nowMs - 8 * 60_000 + 3_400, wasActive: true, activeBeforeLabel: "主线路",
+    switched: true, switchMs: 2_100, switchedToLabel: "备用线路", restored: true, restoreMs: 3_400, connectionsBefore: 41, connectionsAfter: 41, events: 4, stoppedEarly: false,
+  });
+  await insertForwardRuleRouteEvent({ ruleId: hkt, kind: "drill", fromKey: null, toKey: hktPaths[0]?.key, fromLabel: null, toLabel: "主线路", reason: "drill: start; seconds=60", atSeconds: minutes(9) });
+  await insertForwardRuleRouteEvent({ ruleId: hkt, kind: "switch", fromKey: hktPaths[0]?.key, toKey: hktPaths[1]?.key, fromLabel: "主线路", toLabel: "备用线路", reason: "drill; relay down: drill", atSeconds: minutes(9) + 2 });
+  await insertForwardRuleRouteEvent({ ruleId: hkt, kind: "switch", fromKey: hktPaths[1]?.key, toKey: hktPaths[0]?.key, fromLabel: "备用线路", toLabel: "主线路", reason: "drill; failback", atSeconds: minutes(8) + 3 });
+  await insertForwardRuleRouteEvent({ ruleId: hkt, kind: "drill", fromKey: hktPaths[0]?.key, toKey: null, fromLabel: "主线路", toLabel: "备用线路", reason: "drill: done; seconds=60; was=active; switched=2100; to=备用线路; restored=3400; conns=41/41", latencyMs: 2100, atSeconds: minutes(8) + 3 });
+
   // Sg：主线路经 HK2（维护），在走备 1。机器报的规格和面板配的对不上（面板是聚合，机器还按冷备主备在跑）：
   // 线路详情顶上出红条「机器上跑的不是面板里这份」。规则的改动时间往前拨，不然还在 20 秒宽限里。
   await executeRaw(`UPDATE ${quoteDbIdentifier("forward_rules")} SET ${quoteDbIdentifier("updatedAt")} = ? WHERE ${quoteDbIdentifier("id")} = ?`, [minutesAgo(30), sg]);
@@ -1707,6 +1719,13 @@ async function seedLineDemo(adminId: number) {
   jpPaths.forEach((path) => {
     const hop = path.hops[0];
     if (hop && hop !== hk2) for (let i = 0; i < 5; i += 1) recordRouteHopProbe({ parentRuleId: jp, pathKey: path.key, hopIndex: 0, hostId: hop, hostName: names.get(hop) || "中转", nextLabel: "落地", ok: true, latencyMs: 40 });
+  });
+  // 日本：正在演练主线路（刚开始 12 秒，还没切走）：线路详情顶上是进度条那张卡，主线路那行写「演练中」。
+  routeDrillInternals.seedActive({
+    ruleId: jp, subjectRuleId: jp, entryHostId: po0, entryHostName: null, lineKey: "main", lineLabel: "主线路", seconds: 90,
+    startedAt: nowMs - 12_000, endsAt: nowMs + 78_000, phase: "down", wasActive: true, switchedAt: null, switchMs: null, switchedToLabel: null,
+    pathKeys: jpPaths.filter((path) => (path.lineKey || path.key) === "main").map((path) => path.key),
+    pathIndexes: jpPaths.map((path, index) => ((path.lineKey || path.key) === "main" ? index : -1)).filter((index) => index >= 0),
   });
 
   /*

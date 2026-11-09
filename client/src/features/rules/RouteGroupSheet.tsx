@@ -29,7 +29,7 @@ import type { RouteSwitchSummary } from "@shared/routeSwitchSummary";
 import type { RouteBoardEntry, RouteBoardRate } from "./RouteBoard";
 import { ConditionRow, SentenceRow } from "./RoutePolicySheet";
 import { Skeleton } from "@/components/ui/skeleton";
-import { RouteLineDetail, RouteLineTools, useRouteLinePause, type RouteLineSwitch } from "./RouteLineOverview";
+import { RouteLineDetail, RouteLineTools, useRouteLineDrill, useRouteLinePause, type RouteLineSwitch } from "./RouteLineOverview";
 import { ROUTE_LINE_MODE_LABEL, routeLineSubtitle } from "./routeLineText";
 import { useRouteLineEditor } from "./RouteLineInlineEditor";
 import type { LineRuleRow } from "./routeLineOptions";
@@ -122,6 +122,50 @@ export type RouteStatusPath = {
 /** 期望 vs 实际对账的一行差异（shared/routeSpecDrift）。 */
 export type RouteSpecDriftField = { key: string; label: string; expected: string; actual: string };
 
+/** 正在进行的切换演练（server/routeDrill）。 */
+export type RouteDrillActive = {
+  subjectRuleId: number;
+  entryHostId: number;
+  entryHostName: string | null;
+  lineKey: string;
+  lineLabel: string;
+  seconds: number;
+  startedAt: number;
+  endsAt: number;
+  /** down = 还当成挂着；restoring = 提示撤了，等它切回 */
+  phase: "down" | "restoring";
+  wasActive: boolean;
+  switchedAt: number | null;
+  switchMs: number | null;
+  switchedToLabel: string | null;
+};
+
+/** 演练报告（server/routeDrill）：reason 是写进切换记录的那一句，describeRouteDrillReason 翻成人话。 */
+export type RouteDrillReport = {
+  ruleId: number;
+  subjectRuleId: number;
+  entryHostId: number;
+  entryHostName: string | null;
+  lineKey: string;
+  lineLabel: string;
+  seconds: number;
+  startedAt: number;
+  endedAt: number;
+  finishedAt: number;
+  wasActive: boolean;
+  activeBeforeLabel: string | null;
+  switched: boolean;
+  switchMs: number | null;
+  switchedToLabel: string | null;
+  restored: boolean | null;
+  restoreMs: number | null;
+  connectionsBefore: number | null;
+  connectionsAfter: number | null;
+  events: number;
+  stoppedEarly: boolean;
+  reason: string;
+};
+
 export type RouteStatus = {
   ruleId: number;
   policy: RouteGroupPolicy;
@@ -133,6 +177,8 @@ export type RouteStatus = {
   agentStale: boolean;
   /** 机器上跑的和面板配的对不上（Agent 2.2.253 起）：差在哪、按机器几点报的比；一致 / 老 Agent 是 null。 */
   drift?: { fields: RouteSpecDriftField[]; reportedAt: number } | null;
+  /** 切换演练（server/routeDrill）：正在进行的那份 + 最近一小时的报告（端口转发每台成员机一份）；没有就是 null。 */
+  drill?: { active: RouteDrillActive | null; reports: RouteDrillReport[] } | null;
   /** tcp / udp / both */
   protocol?: string;
   /** 这条规则（入口）此刻的速率。 */
@@ -330,6 +376,7 @@ export function RouteGroupSheet({
 }: RouteGroupSheetProps) {
   const enabled = open && !!policy && !!ruleId;
   const linePause = useRouteLinePause(Number(ruleId) || 0);
+  const lineDrill = useRouteLineDrill(Number(ruleId) || 0);
   const statusQuery = trpc.rules.routeStatus.useQuery({ ruleId: Number(ruleId) }, { enabled, refetchInterval: refetchIntervalMs || false, staleTime: 5_000 });
   // 状态 3 秒一刷（数字要跟得上）；切换记录不会那么勤，10 秒够了
   const eventsQuery = trpc.rules.routeEvents.useQuery({ ruleId: Number(ruleId), limit: 20 }, { enabled, refetchInterval: refetchIntervalMs ? Math.max(refetchIntervalMs, 10_000) : false, staleTime: 5_000 });
@@ -366,6 +413,8 @@ export function RouteGroupSheet({
         onUnpin,
         nowMs: panel.nowMs,
         timeZone: panel.timeZone,
+        // 切换演练也在这个菜单里：把这条当成挂了几十秒，看切不切
+        drill: { active: !!status?.drill?.active, pending: lineDrill.pending, onStart: lineDrill.onStart },
       }
     : undefined;
   // 线路就在详情第一页改（没有单独的「编辑线路组」了）；只有拿不到规则本身时才退回去改整条规则
@@ -413,6 +462,8 @@ export function RouteGroupSheet({
               settings={editing.editor ? { open: settingsOpen, onToggle: () => setSettingsOpen(!settingsOpen) } : undefined}
               onResync={canEdit && ruleId ? () => resync.mutate({ ruleId: Number(ruleId) }) : undefined}
               resyncing={resync.isPending}
+              onDrillStop={canEdit && ruleId ? lineDrill.onStop : undefined}
+              drillStopping={lineDrill.pending}
             />
           ) : null}
           {detailsOpen || (status && status.paths.length === 0) ? (

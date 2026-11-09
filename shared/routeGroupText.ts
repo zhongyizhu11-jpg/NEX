@@ -123,6 +123,7 @@ export const ROUTE_EVENT_KIND_LABELS: Record<RouteEventKind, string> = {
   issue: "路径不可用",
   flap_hold: "抖动抑制",
   slow_dial: "连接变慢",
+  drill: "演练",
 };
 
 /**
@@ -143,6 +144,12 @@ export function describeRouteReason(reason: unknown): string {
 function describeRouteReasonBase(text: string): string {
   if (!text) return "";
   const lower = text.toLowerCase();
+  // 演练期间 Agent 报的切换，面板入库时打了标（server/routeDrill）：照常翻，尾巴注明是演练
+  if (lower.startsWith("drill;")) {
+    const inner = describeRouteReasonBase(text.slice("drill;".length).trim());
+    return inner ? `${inner}（演练）` : "演练";
+  }
+  if (lower.startsWith("drill:")) return describeRouteDrillReason(text);
   if (lower === "health check") return "连续探测不通";
   if (lower === "dial failed") return "新连接拨不通";
   if (lower === "schedule") return "按时段表";
@@ -153,7 +160,7 @@ function describeRouteReasonBase(text: string): string {
   if (lower === "startup" || lower === "spec updated") return "线路组重新下发";
   if (lower === "relay recovered") return "中转恢复";
   if (lower.startsWith("precheck:")) return `预检未通过：${describeRouteIssue(text.slice("precheck:".length))}`;
-  if (lower.startsWith("relay down") || lower === "paused" || lower.startsWith("maintenance:") || lower.startsWith("node offline:") || lower.startsWith("breaker:")) return describeRouteIssue(text);
+  if (lower.startsWith("relay down") || lower === "paused" || lower === "drill" || lower.startsWith("maintenance:") || lower.startsWith("node offline:") || lower.startsWith("breaker:")) return describeRouteIssue(text);
   if (lower.startsWith("panel:")) return text.slice("panel:".length).trim();
   // Agent 的抖动抑制：flap: 3 switches in 1h, hold 5m until 2026-…
   const flap = /^flap:\s*(\d+)\s+switches in 1h,\s*hold\s+(\d+)m/i.exec(text);
@@ -167,7 +174,7 @@ function describeRouteReasonBase(text: string): string {
 /** 面板下发的中转原因本身就是一整句的那几种（routeGroupStats.routeHopDownHints、节点维护 / 熔断 / 暂停）。 */
 function isRelayIssuePhrase(text: string) {
   const lower = text.toLowerCase();
-  return lower === "relay down" || lower.startsWith("relay down:") || lower === "paused" || lower === "path unresolved"
+  return lower === "relay down" || lower.startsWith("relay down:") || lower === "paused" || lower === "path unresolved" || lower === "drill"
     || lower.startsWith("maintenance:") || lower.startsWith("node offline:") || lower.startsWith("breaker:");
 }
 
@@ -203,8 +210,57 @@ export function describeRouteIssue(issue: unknown): string {
   if (loss) return `丢包 ${loss[1]}%`;
   if (lower === "path unresolved") return "路径还没解析出拨号地址";
   if (lower === "paused") return "已手动暂停";
+  if (lower === "drill") return "演练中：当成挂了";
   if (lower.startsWith("maintenance:")) return `${text.slice("maintenance:".length).trim()} 维护中`;
   if (lower.startsWith("node offline:")) return `${text.slice("node offline:".length).trim()} 离线`;
   if (lower.startsWith("breaker:")) return `${text.slice("breaker:".length).trim()} 熔断：几条线路都探不通它`;
   return text;
+}
+
+/** 毫秒 → 「2.1 秒」。 */
+function describeDrillSeconds(ms: number) {
+  if (ms < 1000) return `${ms} 毫秒`;
+  const seconds = ms / 1000;
+  return `${seconds >= 10 ? Math.round(seconds) : Math.round(seconds * 10) / 10} 秒`;
+}
+
+/**
+ * 切换演练写进切换记录的两句（server/routeDrill.ts）：
+ *   drill: start; seconds=60
+ *   drill: done; seconds=60; was=active; switched=2100; to=备用 1; restored=3400; conns=3/3; early
+ */
+export function describeRouteDrillReason(reason: unknown): string {
+  const text = String(reason ?? "").trim();
+  const body = text.replace(/^drill:\s*/i, "");
+  const [head, ...rest] = body.split(";").map((part) => part.trim());
+  const fields = new Map<string, string>();
+  for (const part of rest) {
+    const eq = part.indexOf("=");
+    if (eq > 0) fields.set(part.slice(0, eq).trim().toLowerCase(), part.slice(eq + 1).trim());
+    else if (part) fields.set(part.toLowerCase(), "");
+  }
+  const seconds = Number(fields.get("seconds") || 0);
+  if (head.toLowerCase() === "start") return `演练开始：把它当成挂了${seconds > 0 ? ` ${seconds} 秒` : ""}`;
+  if (head.toLowerCase() !== "done") return text;
+  const sentences: string[] = [];
+  const switched = fields.get("switched") || "none";
+  const to = fields.get("to") || "";
+  if (fields.get("was") === "standby") {
+    sentences.push("演练前就没走这条，只看它被标成异常");
+  } else if (switched === "none") {
+    sentences.push("当成挂了之后一直没切走");
+  } else {
+    sentences.push(`${describeDrillSeconds(Number(switched))}切到${to ? ` ${to}` : "备用"}`);
+  }
+  const restored = fields.get("restored");
+  if (restored && restored !== "n/a") sentences.push(restored === "none" ? "恢复后没切回来" : `恢复后 ${describeDrillSeconds(Number(restored))}切回`);
+  const conns = fields.get("conns");
+  if (conns) {
+    const [before, after] = conns.split("/").map((value) => Number(value));
+    if (Number.isFinite(before) && before > 0) {
+      sentences.push(Number.isFinite(after) && after < before ? `切换时它上面的 ${before} 个连接断了 ${before - after} 个` : `切换时它上面的 ${before} 个连接都留着`);
+    }
+  }
+  const early = fields.has("early") ? "（提前结束）" : "";
+  return `演练结束${seconds > 0 ? `（当成挂了 ${seconds} 秒）` : ""}：${sentences.join("，")}${early}`;
 }

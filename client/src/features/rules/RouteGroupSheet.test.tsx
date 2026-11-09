@@ -239,6 +239,37 @@ test("期望 vs 实际对不上：线路详情顶上出红条，逐项列「面�
   assert.match(render({ status: status({ drift }) }), /route-drift-note[^>]*>机器上跑的不是面板里这份：人工指定（面板 备用 1 · 到 18:36 \/ 机器 没有）；最短驻留（面板 1 分钟 \/ 机器 0 秒）。/);
 });
 
+test("切换演练：进行中是进度卡（还剩几秒、切了没、能提前结束），结束了是报告卡；菜单里有「开始演练」；演练那条胶囊写「演练中」", () => {
+  const active = { subjectRuleId: 7, entryHostId: 3, entryHostName: null, lineKey: group.paths[0].key, lineLabel: "主线路", seconds: 60, startedAt: NOW - 12_000, endsAt: NOW + 48_000, phase: "down" as const, wasActive: true, switchedAt: NOW - 9_900, switchMs: 2_100, switchedToLabel: "备用 1" };
+  let stopped = 0;
+  const running = renderToStaticMarkup(
+    <RouteLineDetail status={status({ drill: { active, reports: [] } })} events={events} modeLabel="整链最优" detailsOpen={false} onToggleDetails={noop} nowMs={NOW} timeZone={TZ} onDrillStop={() => { stopped += 1; }} />,
+  );
+  assert.match(running, /data-testid="route-drill"[^]*?演练中 · 把主线路当成挂了，还剩 48 秒/);
+  assert.match(running, /data-testid="route-drill-live"[^>]*>2\.1 秒切到 备用 1/);
+  assert.match(running, /data-testid="route-drill-stop"[^>]*>提前结束/);
+  assert.equal(stopped, 0);
+  const report = { ruleId: 1, subjectRuleId: 7, entryHostId: 3, entryHostName: null, lineKey: group.paths[0].key, lineLabel: "主线路", seconds: 60, startedAt: NOW - 90_000, endedAt: NOW - 30_000, finishedAt: NOW - 26_600, wasActive: true, activeBeforeLabel: "主线路", switched: true, switchMs: 2_100, switchedToLabel: "备用 1", restored: true, restoreMs: 3_400, connectionsBefore: 3, connectionsAfter: 3, events: 4, stoppedEarly: false, reason: "drill: done; seconds=60; was=active; switched=2100; to=备用 1; restored=3400; conns=3/3" };
+  const finished = renderToStaticMarkup(
+    <RouteLineDetail status={status({ drill: { active: null, reports: [report] } })} events={events} modeLabel="整链最优" detailsOpen={false} onToggleDetails={noop} nowMs={NOW} timeZone={TZ} />,
+  );
+  assert.match(finished, /data-testid="route-drill-report"[^]*?演练报告 · 主线路/);
+  assert.match(finished, /data-testid="route-drill-report-line"[^>]*>2\.1 秒切到 备用 1，恢复后 3\.4 秒切回，切换时它上面的 3 个连接都留着/);
+  assert.match(finished, /当成挂了 60 秒/);
+  assert.doesNotMatch(renderToStaticMarkup(<RouteLineDetail status={status({ drill: null })} events={events} modeLabel="整链最优" detailsOpen={false} onToggleDetails={noop} nowMs={NOW} timeZone={TZ} />), /route-drill/);
+  // 菜单里的演练一节
+  const lineSwitch = { pinIndex: null, pinUntilMs: null, pending: false, onPin: noop, onUnpin: noop, drill: { active: false, pending: false, onStart: noop } };
+  const menu = renderToStaticMarkup(<>{routeLineStatusControls(status(), group.paths[0].key, undefined, false, lineSwitch)}</>);
+  assert.match(menu, /route-line-switch/);
+  assert.doesNotMatch(renderToStaticMarkup(<>{routeLineStatusControls(status(), group.paths[0].key, undefined, false, { ...lineSwitch, drill: undefined })}</>), /route-line-drill/);
+  // 演练那条的胶囊：面板给的提示原因是 drill，写「演练中」而不是「不通」
+  const drilled = status();
+  drilled.paths = drilled.paths.map((path, index) => (index === 0 ? { ...path, active: false, down: true, downReason: "drill", healthy: false } : { ...path, active: index === 1 }));
+  const pill = renderToStaticMarkup(<>{routeLineStatusControls(drilled, group.paths[0].key, undefined, false, lineSwitch)}</>);
+  assert.match(pill, /演练中/);
+  assert.doesNotMatch(pill, /不通/);
+});
+
 test("手动切的时长自己填：几分钟 / 几小时，空、0、负数、超过 30 天都不行", () => {
   assert.equal(pinDurationSeconds("2", "hour"), 7200);
   assert.equal(pinDurationSeconds("1.5", "hour"), 5400);

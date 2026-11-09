@@ -11,6 +11,7 @@ import {
 } from "../shared/routeGroup";
 import { normalizeForwardGroupHealthCheckMethod } from "../shared/forwardGroupHealthCheck";
 import { noteRouteFirstHops, routeHopDownHints, routeNodeHints } from "./routeGroupStats";
+import { withRouteDrillHints } from "./routeDrill";
 import { buildRouteFailoverTargets } from "./routeTargetHints";
 import { ensureRouteNodeHealthFresh, getRouteNodeStatus } from "./routeNodeHealth";
 import { tunnelLinkShaping, hostEgressShaping } from "./tunnelFxpRuntime";
@@ -2020,7 +2021,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       const group = routeGroupOf(routeRule);
       if (!group || group.paths.length < 2) return undefined;
       const { paths, policy } = group;
-      const hints = routeHopDownHints(Number(rule.id), paths);
+      // 中转探测发现中间断了的，加上切换演练里「当成挂了」的那条（server/routeDrill）
+      const hints = withRouteDrillHints(Number(rule.id), routeHopDownHints(Number(rule.id), paths));
       // 暂停、维护中、离线、熔断：比中转探测的结论更硬，压过它。
       const nodeHints = routeNodeHints(paths, getRouteNodeStatus);
       const delivery = normalizeRouteDelivery(policy.delivery);

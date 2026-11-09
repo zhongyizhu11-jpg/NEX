@@ -6,7 +6,8 @@
     "server/*.fixture.ts",
     "{server,shared,client/src,scripts}/**/*.test.{ts,tsx}",
     "docs/.vitepress/config.mts",
-    "docs/.vitepress/theme/index.ts"
+    "docs/.vitepress/theme/index.ts",
+    "e2e/scenario.ts"
   ],
   "project": [
     "client/src/**/*.{ts,tsx}",
@@ -14,7 +15,13 @@
     "shared/**/*.ts",
     "drizzle/**/*.ts",
     "scripts/**/*.{ts,mjs}",
-    "docs/.vitepress/**/*.{ts,mts}"
+    "docs/.vitepress/**/*.{ts,mts}",
+    "e2e/**/*.ts"
   ],
-  "ignoreBinaries": ["convert", "openssl", "go", "ip"]
+  "ignoreBinaries": [
+    "convert",
+    "openssl",
+    "go",
+    "ip"
+  ]
 }

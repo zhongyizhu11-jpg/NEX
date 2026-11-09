@@ -27,7 +27,7 @@ import { Input } from "@/components/ui/input";
 import { trpc } from "@/lib/trpc";
 import { SegmentSpeedResult } from "@/features/network/SegmentSpeedResult";
 import { cn } from "@/lib/utils";
-import { describeRouteIssue, normalizeRouteEventKind } from "@shared/routeGroup";
+import { describeRouteDrillReason, describeRouteIssue, normalizeRouteEventKind } from "@shared/routeGroup";
 import { formatPolicyClock } from "@shared/routePolicy";
 import type { RouteEvent, RouteStatus, RouteStatusPath } from "./RouteGroupSheet";
 import { describeRouteLoad, describeRouteUdpSplit } from "./RouteBoard";
@@ -92,10 +92,16 @@ export function RouteLineHero({ status }: { status: RouteStatus }) {
  * 一条线路此刻的状态胶囊：已暂停 / 使用中 / 不通 ×N（或原因）/ 待命；人工指定了这条，后面带「指定」。
  * 指定了、通着、机器还没切过来：「切换中」—— 以前写「待命 · 指定」，看着像指定了也不走（为什么没切在调度计划里写）。
  */
+/** 面板给的「当成挂了」提示（server/routeDrill）：Agent 原样报回来时是 relay down: drill。 */
+export function isRouteDrillReason(reason: unknown) {
+  return /^(relay down:\s*)?drill\b/i.test(String(reason ?? "").trim());
+}
+
 function routeLinePill(group: RouteLineGroup, pinned = false): { tone: LineTone; text: string; dot?: boolean } {
   const tag = pinned ? " · 指定" : "";
   if (group.paused) return { tone: "gray", text: "已暂停" };
   if (group.active) return { tone: "ok", text: `使用中${tag}`, dot: true };
+  if (group.allDown && isRouteDrillReason(group.reason)) return { tone: "warn", text: `演练中${tag}` };
   if (group.allDown) return { tone: "down", text: `${group.failures >= 2 ? `不通 ×${group.failures}` : group.reason ? lineShortIssue(group.reason) : "不通"}${tag}` };
   if (pinned) return { tone: "acc", text: "切换中 · 指定" };
   return { tone: "gray", text: "待命" };
@@ -130,7 +136,12 @@ export type RouteLineSwitch = {
   onUnpin: (onDone?: () => void) => void;
   nowMs?: number;
   timeZone?: string;
+  /** 切换演练（2.3.524）：菜单里「把这条当成挂了 N 秒」；没给就没有这一节。 */
+  drill?: { active: boolean; pending: boolean; onStart: (lineKey: string, seconds: number) => void };
 };
+
+/** 演练秒数的范围（和 server/routeDrill 一致）。 */
+export const ROUTE_DRILL_SECONDS = { min: 10, max: 600, default: 60 } as const;
 
 /** 手动指定最长多久（防手滑多打一个 0）：30 天，再久就选「不限时」。 */
 const MAX_PIN_MINUTES = 30 * 24 * 60;
@@ -153,6 +164,9 @@ function LineSwitchMenu({ group, pill, lineSwitch }: { group: RouteLineGroup; pi
   const [amount, setAmount] = useState("2");
   const [unit, setUnit] = useState<"min" | "hour">("hour");
   const [forever, setForever] = useState(false);
+  const [drillSeconds, setDrillSeconds] = useState(String(ROUTE_DRILL_SECONDS.default));
+  const drillSecondsValue = Math.floor(Number(drillSeconds));
+  const drillSecondsValid = Number.isFinite(drillSecondsValue) && drillSecondsValue >= ROUTE_DRILL_SECONDS.min && drillSecondsValue <= ROUTE_DRILL_SECONDS.max;
   const pinnedHere = lineSwitch.pinIndex !== null && group.paths.some((path) => path.index === lineSwitch.pinIndex);
   const until = lineSwitch.pinUntilMs ? `，到 ${formatPolicyClock(lineSwitch.pinUntilMs, lineSwitch.nowMs ?? Date.now(), lineSwitch.timeZone)} 交回自动` : "，直到交回自动";
   const head = pinnedHere
@@ -227,6 +241,41 @@ function LineSwitchMenu({ group, pill, lineSwitch }: { group: RouteLineGroup; pi
           >
             交回自动
           </Button>
+        ) : null}
+        {lineSwitch.drill ? (
+          <div className="mt-2.5 border-t border-[var(--fx-stroke-weak)] pt-2.5" data-testid="route-line-drill">
+            <p className="text-[11.5px] leading-[1.45] text-muted-foreground">
+              演练：让面板把这条当成挂了几十秒（机器上的转发不动），看切不切、几秒切完、连接断不断；到点自动恢复。
+            </p>
+            <div className="mt-2 flex items-center gap-1.5 text-[12.5px]">
+              <span className="shrink-0">当成挂了</span>
+              <Input
+                type="number"
+                inputMode="numeric"
+                min={ROUTE_DRILL_SECONDS.min}
+                max={ROUTE_DRILL_SECONDS.max}
+                value={drillSeconds}
+                onChange={(event) => setDrillSeconds(event.target.value)}
+                onKeyDown={(event) => event.stopPropagation()}
+                aria-label="演练多少秒"
+                className="h-8 w-16 text-center text-[13px]"
+                data-testid="route-line-drill-seconds"
+              />
+              <span className="shrink-0">秒</span>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="ml-auto h-8 rounded-[10px]"
+                disabled={lineSwitch.drill.active || lineSwitch.drill.pending || group.paused || !drillSecondsValid}
+                title={group.paused ? "暂停着的线路不用演练" : undefined}
+                onClick={() => { lineSwitch.drill?.onStart(group.key, drillSecondsValue); setOpen(false); }}
+                data-testid="route-line-drill-start"
+              >
+                {lineSwitch.drill.active ? "演练中…" : "开始演练"}
+              </Button>
+            </div>
+          </div>
         ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
@@ -429,6 +478,87 @@ export function RouteDriftBanner({
   );
 }
 
+/** 毫秒 → 「2.1 秒」（和 shared/routeGroupText 里报告的写法一致）。 */
+function drillSecondsText(ms: number) {
+  if (ms < 1000) return `${ms} 毫秒`;
+  const seconds = ms / 1000;
+  return `${seconds >= 10 ? Math.round(seconds) : Math.round(seconds * 10) / 10} 秒`;
+}
+
+/**
+ * 切换演练（2.3.524）：进行中是一张带进度条的卡（还剩几秒、切了没、几秒切的、能提前结束）；结束了是报告卡
+ * （几秒切到哪、恢复后几秒切回、连接断没断），点「知道了」收起。端口转发每台成员机一行。
+ */
+export function RouteDrillBanner({
+  drill,
+  onStop,
+  stopping = false,
+  nowMs,
+  timeZone,
+}: {
+  drill: NonNullable<RouteStatus["drill"]>;
+  onStop?: () => void;
+  stopping?: boolean;
+  nowMs?: number;
+  timeZone?: string;
+}) {
+  const [dismissedAt, setDismissedAt] = useState<number | null>(null);
+  const now = nowMs ?? Date.now();
+  const active = drill.active;
+  if (active) {
+    const total = Math.max(1, active.seconds * 1000);
+    const elapsed = Math.min(total, Math.max(0, now - active.startedAt));
+    const remaining = Math.max(0, Math.ceil((active.endsAt - now) / 1000));
+    const live = active.switchMs !== null
+      ? `${drillSecondsText(active.switchMs)}切到 ${active.switchedToLabel || "备用"}`
+      : active.wasActive ? "还没切走…" : "这条本来就没在用：只看它被标成异常";
+    return (
+      <LineCard className="border border-[var(--fx-warn-text)]/40 px-3 py-2.5" data-testid="route-drill">
+        <div className="flex min-w-0 items-center justify-between gap-2">
+          <span className="flex min-w-0 items-center gap-1.5 text-[12.5px] font-semibold text-[var(--fx-warn-text)]">
+            <LineDot tone="warn" />
+            <span className="truncate">演练中 · 把{active.lineLabel}当成挂了{active.phase === "down" ? `，还剩 ${remaining} 秒` : "，已恢复，等它切回"}</span>
+          </span>
+          {onStop && active.phase === "down" ? (
+            <LineChipButton className="shrink-0" disabled={stopping} onClick={onStop} data-testid="route-drill-stop">
+              {stopping ? "结束中…" : "提前结束"}
+            </LineChipButton>
+          ) : null}
+        </div>
+        <div className="mt-2 h-1 overflow-hidden rounded-full bg-[var(--fx-stroke-weak)]" aria-hidden="true">
+          <div className="h-full rounded-full bg-[var(--fx-warn-text)] transition-[width]" style={{ width: `${active.phase === "down" ? Math.round((elapsed / total) * 100) : 100}%` }} />
+        </div>
+        <p className="mt-1.5 text-[12px]" data-testid="route-drill-live">
+          {live}{active.entryHostName ? <span className="text-muted-foreground"> · {active.entryHostName}</span> : null}
+        </p>
+      </LineCard>
+    );
+  }
+  const reports = drill.reports.filter((report) => report.finishedAt !== dismissedAt);
+  if (reports.length === 0) return null;
+  const head = reports[0];
+  const good = reports.every((report) => !report.wasActive || (report.switched && report.restored !== false));
+  return (
+    <LineCard className="px-3 py-2.5" data-testid="route-drill-report">
+      <div className="flex min-w-0 items-center justify-between gap-2">
+        <span className="flex min-w-0 items-center gap-1.5 text-[12.5px] font-semibold">
+          <LineDot tone={good ? "ok" : "down"} />演练报告 · {head.lineLabel}
+        </span>
+        <LineChipButton className="shrink-0" onClick={() => setDismissedAt(head.finishedAt)} data-testid="route-drill-dismiss">知道了</LineChipButton>
+      </div>
+      {reports.slice(0, 4).map((report) => (
+        <p key={report.subjectRuleId} className="mt-1 text-[12px]" data-testid="route-drill-report-line">
+          {report.entryHostName ? <span className="text-muted-foreground">{report.entryHostName} · </span> : null}
+          {describeRouteDrillReason(report.reason).replace(/^演练结束（[^）]*）：/, "")}
+        </p>
+      ))}
+      <p className="mt-1.5 text-[11.5px] text-muted-foreground">
+        {lineShortClock(head.startedAt, timeZone)} 开始，当成挂了 {head.seconds} 秒{head.stoppedEarly ? "（提前结束）" : ""}。切换记录里也有这两笔。
+      </p>
+    </LineCard>
+  );
+}
+
 // ---------------------------------------------------------------- 整屏
 
 export function RouteLineDetail({
@@ -446,6 +576,8 @@ export function RouteLineDetail({
   settings,
   onResync,
   resyncing = false,
+  onDrillStop,
+  drillStopping = false,
 }: {
   status: RouteStatus;
   events: RouteEvent[];
@@ -459,6 +591,9 @@ export function RouteLineDetail({
   /** 期望 vs 实际对不上时「重新下发」；没给就只显示差异。 */
   onResync?: () => void;
   resyncing?: boolean;
+  /** 切换演练进行中的「提前结束」；没给就只看。 */
+  onDrillStop?: () => void;
+  drillStopping?: boolean;
   /** 能改的时候：线路这一节直接是编辑器（不再另开「编辑线路组」）；没给就是只读的线路列表。 */
   editor?: ReactNode;
   /** 手动换线路（点状态胶囊）；只读列表用，编辑器里的由编辑器自己带。 */
@@ -475,6 +610,7 @@ export function RouteLineDetail({
     <div className="fx-line-ui flex min-w-0 flex-col gap-3" data-testid="route-line-overview">
       <RouteLineHero status={status} />
       {status.drift ? <RouteDriftBanner drift={status.drift} onResync={onResync} resyncing={resyncing} timeZone={timeZone} /> : null}
+      {status.drill ? <RouteDrillBanner drill={status.drill} onStop={onDrillStop} stopping={drillStopping} nowMs={nowMs} timeZone={timeZone} /> : null}
       <RouteLineDiagram status={status} modeLabel={modeLabel} timeZone={timeZone} />
       <div>
         <LineSec
@@ -536,6 +672,34 @@ export function useRouteLinePause(ruleId: number) {
   return {
     onPause: (lineKey: string, paused: boolean, onDone?: () => void) => pause.mutate({ ruleId, lineKey, paused }, { onSuccess: () => onDone?.() }),
     pausing: pause.isPending,
+  };
+}
+
+/** 切换演练（server/routeDrill）：开始 / 提前结束；成功后把状态和切换记录刷过来。 */
+export function useRouteLineDrill(ruleId: number) {
+  const utils = trpc.useUtils();
+  const refresh = () => {
+    void utils.rules.routeStatus.invalidate({ ruleId });
+    void utils.rules.routeEvents.invalidate({ ruleId });
+  };
+  const start = trpc.lineDiagnostics.lineDrillStart.useMutation({
+    onSuccess: (data) => {
+      refresh();
+      toast.success(`演练开始：当成挂了 ${data.seconds} 秒，看它切不切`);
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const stop = trpc.lineDiagnostics.lineDrillStop.useMutation({
+    onSuccess: () => {
+      refresh();
+      toast.success("已提前结束，看它切不切回");
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  return {
+    onStart: (lineKey: string, seconds: number) => start.mutate({ ruleId, lineKey, seconds }),
+    onStop: () => stop.mutate({ ruleId }),
+    pending: start.isPending || stop.isPending,
   };
 }
 

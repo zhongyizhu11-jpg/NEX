@@ -29,7 +29,7 @@ import { fileURLToPath } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PANEL_URL = (process.env.PANEL_URL || "http://127.0.0.1:9810").replace(/\/+$/, "");
-const OUT_DIR = process.env.E2E_OUT || path.join(HERE, ".out");
+const OUT_DIR = process.env.E2E_OUT || path.join(HERE, "out");
 const COMPOSE_FILE = process.env.E2E_COMPOSE_FILE || path.join(HERE, "compose.yml");
 const COMPOSE_PROJECT = process.env.E2E_COMPOSE_PROJECT || "nex-e2e";
 const DRY_RUN = process.env.E2E_DRY_RUN === "1";
@@ -111,6 +111,7 @@ type RouteStatus = {
   agentReportedAt: number | null;
   agentStale: boolean;
   drift: { fields: Array<{ key: string; label: string; expected: string; actual: string }>; reportedAt: number } | null;
+  drill: { active: { phase: string; switchMs: number | null; switchedToLabel: string | null } | null; reports: Array<{ switched: boolean; switchMs: number | null; restored: boolean | null; restoreMs: number | null; connectionsBefore: number | null; connectionsAfter: number | null; reason: string }> } | null;
   paths: RoutePathRow[];
   policy: { mode: string; pin: { index: number; untilMs: number | null } | null; schedule: unknown };
   entry: { hostId: number; online: boolean | null; sourcePort: number };
@@ -263,8 +264,10 @@ async function bringUpAgents(): Promise<Hosts> {
   });
 
   await step("构建 Agent 镜像并起容器（入口 / 中转 A / 中转 B / 落地）", async () => {
-    compose(["build"]);
-    compose(["up", "-d", "--no-build"], { ENTRY_TOKEN: tokens.entry, RELAY_A_TOKEN: tokens.relayA, RELAY_B_TOKEN: tokens.relayB });
+    // compose 文件里 Token 是必填变量（${X:?}），build 也会插值，所以两步都带上
+    const env = { ENTRY_TOKEN: tokens.entry, RELAY_A_TOKEN: tokens.relayA, RELAY_B_TOKEN: tokens.relayB };
+    compose(["build"], env);
+    compose(["up", "-d", "--no-build"], env);
   });
 
   const hosts = await step("等三台 Agent 注册并上线", async () => {
@@ -508,6 +511,29 @@ async function runScenario(hosts: Hosts, ruleId: number) {
     await expectNoDrift(ruleId, changedAt);
     const peer = await peerOfNewConnection();
     assert(peer === NET.relayA, `重新下发之后新连接应走中转 A，落地看到的是 ${peer}`);
+  });
+
+  await step("切换演练：把主线路当成挂了 20 秒 → 切到 B，到点切回 A，出报告", async () => {
+    const started = Date.now();
+    const result = await panel.mutate<{ ok: boolean; started: number; seconds: number }>("lineDiagnostics.lineDrillStart", { ruleId, lineKey: "a", seconds: 20 });
+    assert(result?.ok === true && result.started === 1, `lineDrillStart 应登记 1 份：${JSON.stringify(result)}`);
+    report.measurements.drillSwitchMs = await waitActive(ruleId, 1, "演练：机器切到备用 1", 40_000, started);
+    const during = await routeStatus(ruleId);
+    assert(during.drill?.active?.phase === "down", `演练应在进行中：${JSON.stringify(during.drill)}`);
+    assert(during.paths[0].down && /演练/.test(during.paths[0].downReason), `主线路应标成演练中：${JSON.stringify({ down: during.paths[0].down, reason: during.paths[0].downReason })}`);
+    const peer = await peerOfNewConnection();
+    assert(peer === NET.relayB, `演练中新连接应走中转 B，落地看到的是 ${peer}`);
+    const done = await until("演练结束出报告", async () => {
+      const status = await routeStatus(ruleId);
+      return !status.drill?.active && status.drill?.reports[0] ? status.drill.reports[0] : null;
+    }, 150_000, 2_000);
+    assert(done.switched && done.switchMs !== null && done.switchMs <= 20_000, `报告应写几秒切完：${JSON.stringify(done)}`);
+    assert(done.restored === true && done.restoreMs !== null, `报告应写恢复后切回了：${JSON.stringify(done)}`);
+    report.measurements.drillRestoreMs = done.restoreMs;
+    const after = await peerOfNewConnection();
+    assert(after === NET.relayA, `演练结束后新连接应回到中转 A，落地看到的是 ${after}`);
+    const events = await panel.query<RouteEvent[]>("rules.routeEvents", { ruleId, limit: 50 });
+    assert(events.filter((event) => event.kind === "drill").length >= 2, `切换记录里应有演练开始、结束两笔：${JSON.stringify(events.slice(0, 6))}`);
   });
 
   longLived.destroy();

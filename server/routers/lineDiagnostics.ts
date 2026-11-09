@@ -16,7 +16,8 @@ import { quoteDbIdentifier, queryRaw } from "../dbRuntime";
 import { dbBool } from "../repositories/repositoryUtils";
 import { ROUTE_PATH_QUALITY_RETENTION_HOURS, getRoutePathQualityHistory } from "../repositories/routePathQualityRepository";
 import { bucketRouteQualityRows, routeQualityBucketMs } from "../routePathQualityHistory";
-import { buildRouteStatus, routeLineDataRuleIds, routeStatusSubject } from "../routeStatusView";
+import { buildRouteStatus, routeDrillSubjectsFor, routeLineDataRuleIds, routeStatusSubject } from "../routeStatusView";
+import { ROUTE_DRILL_DEFAULT_SECONDS, ROUTE_DRILL_MAX_SECONDS, ROUTE_DRILL_MIN_SECONDS, startRouteDrill, stopRouteDrillForRule } from "../routeDrill";
 import { getSegmentSpeedRun, startSegmentSpeedRun, type SegmentEndpoints } from "../lineSegmentSpeed";
 import { lineSegmentLatencyStatus, startLineSegmentLatency, vetSegmentDest } from "../lineSegmentLatency";
 import { routeEntryHostId } from "./rules.crud";
@@ -490,6 +491,50 @@ export const lineDiagnosticsRouter = router({
    * 暂停 / 恢复一条线路（运行中那一屏的暂停按钮）：只改 paused，不重建中继。调度器拿到「已暂停」
    * 提示就不再往这条上发新连接；不能把所有线路都停掉。
    */
+  /**
+   * 切换演练（2.3.524）：把某条线路当成挂了 N 秒（只是给入口 Agent 的提示位，机器上的转发没动），看切没切、
+   * 几秒切完、连接断没断；到点撤掉，看切不切回。端口转发模板对每台成员机上的子规则各演一遍。
+   */
+  lineDrillStart: protectedProcedure
+    .input(z.object({
+      ruleId: z.number().int().positive(),
+      lineKey: z.string().min(1).max(32),
+      seconds: z.number().int().min(ROUTE_DRILL_MIN_SECONDS).max(ROUTE_DRILL_MAX_SECONDS).optional(),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      const viewed = await requireRuleVisible(ctx.user, input.ruleId);
+      // 端口转发的子规则照抄模板：演练记在模板名下，对每台成员机上的子规则各演一遍。
+      const template = Number(viewed.forwardGroupRuleId || 0) > 0 ? await db.getForwardRuleById(Number(viewed.forwardGroupRuleId)) : null;
+      const rule = template || viewed;
+      if (ctx.user.role !== "admin" && Number(rule.userId) !== Number(ctx.user.id)) throw new Error("无权操作此规则");
+      const status = await buildRouteStatus(rule);
+      if (!status) throw new Error("这条规则没有线路组");
+      const { routeLineName } = await import("@shared/routeGroup");
+      const { routeLinesOf } = await import("@shared/routeLines");
+      const lines = routeLinesOf(rule);
+      const lineIndex = lines.findIndex((line) => line.key === input.lineKey);
+      const lineLabel = lineIndex >= 0
+        ? routeLineName(lines[lineIndex].name, lineIndex)
+        : status.paths.find((path) => (path.lineKey || path.key) === input.lineKey)?.name || input.lineKey;
+      const result = await startRouteDrill({
+        ruleId: Number(rule.id),
+        lineKey: input.lineKey,
+        lineLabel,
+        seconds: input.seconds ?? ROUTE_DRILL_DEFAULT_SECONDS,
+        subjects: await routeDrillSubjectsFor(rule),
+        statusPaths: status.paths,
+      });
+      return { ok: true, ...result };
+    }),
+  lineDrillStop: protectedProcedure
+    .input(z.object({ ruleId: z.number().int().positive() }))
+    .mutation(async ({ input, ctx }) => {
+      const viewed = await requireRuleVisible(ctx.user, input.ruleId);
+      const template = Number(viewed.forwardGroupRuleId || 0) > 0 ? await db.getForwardRuleById(Number(viewed.forwardGroupRuleId)) : null;
+      const rule = template || viewed;
+      if (ctx.user.role !== "admin" && Number(rule.userId) !== Number(ctx.user.id)) throw new Error("无权操作此规则");
+      return { ok: true, stopped: await stopRouteDrillForRule(Number(rule.id)) };
+    }),
   linePause: protectedProcedure
     .input(z.object({ ruleId: z.number().int().positive(), lineKey: z.string().min(1).max(32), paused: z.boolean() }))
     .mutation(async ({ input, ctx }) => {
