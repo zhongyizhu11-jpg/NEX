@@ -33,6 +33,9 @@ data/
 .DS_Store
 Thumbs.db
 
+# e2e 联调的日志和报告（e2e/run.sh）
+e2e/.out/
+
 # Logs
 *.log
 npm-debug.log*
