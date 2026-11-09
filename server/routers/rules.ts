@@ -22,7 +22,7 @@ import {
   routePathLabel,
   routePathLetter,
 } from "@shared/routeGroup";
-import { buildRouteBoard, buildRouteStatus, withTemplateRouteActive } from "../routeStatusView";
+import { buildRouteBoard, buildRouteStatus, routeLineEvents, routeStatusSubject, withTemplateRouteActive } from "../routeStatusView";
 import { bucketRouteQualityRows, routeQualityBucketMs } from "../routePathQualityHistory";
 import { ROUTE_PATH_QUALITY_RETENTION_HOURS } from "../repositories/routePathQualityRepository";
 import { dbBool } from "../repositories/repositoryUtils";
@@ -141,7 +141,9 @@ export const rulesRouter = router({
       const group = routeGroupOf(rule);
       if (!group) return null;
       const bucketMs = routeQualityBucketMs(input.hours);
-      const rows = await db.getRoutePathQualityHistory(Number(rule.id), { sinceMs: Date.now() - input.hours * 3600 * 1000 });
+      // 端口转发模板不跑：评分是成员机上的子规则报的，按「现在走哪条」用的那条（routeStatusSubject）取。
+      const subject = await routeStatusSubject(rule);
+      const rows = await db.getRoutePathQualityHistory(Number(subject.id), { sinceMs: Date.now() - input.hours * 3600 * 1000 });
       const byPath = new Map<string, typeof rows>();
       for (const row of rows) {
         const list = byPath.get(row.pathKey) || [];
@@ -167,8 +169,9 @@ export const rulesRouter = router({
   routeEvents: protectedProcedure
     .input(z.object({ ruleId: z.number().int().positive(), limit: z.number().int().min(1).max(100).optional() }))
     .query(async ({ input, ctx }) => {
-      await requireRuleVisible(ctx.user, input.ruleId);
-      const rows = await db.getForwardRuleRouteEvents(input.ruleId, input.limit ?? 20) as any[];
+      const rule = await requireRuleVisible(ctx.user, input.ruleId);
+      // 端口转发模板：连同每台成员机上子规则报的一起（Agent 的切换记在子规则上），见 routeLineEvents。
+      const rows = await routeLineEvents(rule, input.limit ?? 20);
       return rows.map((row) => ({
         id: Number(row.id),
         kind: String(row.kind || ""),
@@ -183,6 +186,8 @@ export const rulesRouter = router({
         fromChainMs: row.fromChainMs ?? null,
         toChainMs: row.toChainMs ?? null,
         heldSeconds: row.heldSeconds ?? null,
+        /** 哪台入口报的：只有一条线路展开在好几台成员机上时才有。 */
+        entryHostName: row.entryHostName ?? null,
         at: routeEventMillis(row.createdAt),
       }));
     }),

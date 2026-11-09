@@ -192,6 +192,41 @@ function nullableString(value: unknown) {
   return text || null;
 }
 
+/** 人工指定钉的是第几条：0 是主线路（也是钉住），空 / 负数才是没钉。 */
+function pinIndexOf(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const index = Number(value);
+  return Number.isInteger(index) && index >= 0 ? index : null;
+}
+
+/**
+ * 线路的调度设置跟着模板走：人工指定（钉哪条、到几点）、按时段、最短驻留、只走最快、自定义探测目标。
+ *
+ * 跑的是每台成员机上的子规则，Agent 只看子规则。以前子规则只抄了策略、路径、切换时间这几列，
+ * 这几列没抄：在模板上「切到这条」「按时段」存进去了、界面也照着模板写「人工指定」，机器照旧按自动选
+ * （2.3.522 线上「切到备用 1 还是走主线路」就是这个）。子规则不做主备时一律清掉。
+ */
+function childRoutePolicyColumns(templateRule: Record<string, unknown> | null | undefined, childFailoverEnabled: boolean) {
+  if (!childFailoverEnabled) {
+    return {
+      failoverPinnedIndex: null,
+      failoverPinnedUntil: null,
+      failoverSchedule: null,
+      failoverMinHoldSeconds: 0,
+      failoverPreferFastest: false,
+      failoverProbeTarget: null,
+    };
+  }
+  return {
+    failoverPinnedIndex: pinIndexOf(templateRule?.failoverPinnedIndex),
+    failoverPinnedUntil: toDate(templateRule?.failoverPinnedUntil) ?? null,
+    failoverSchedule: nullableString(templateRule?.failoverSchedule),
+    failoverMinHoldSeconds: Math.max(0, Number(templateRule?.failoverMinHoldSeconds || 0)),
+    failoverPreferFastest: dbBool(templateRule?.failoverPreferFastest),
+    failoverProbeTarget: nullableString(templateRule?.failoverProbeTarget),
+  };
+}
+
 function runtimeFieldEqual(current: unknown, next: unknown) {
   if (next === null) return current === null || current === undefined || current === "";
   if (typeof next === "number") return Number(current || 0) === next;
@@ -241,7 +276,6 @@ function canPreserveChildRuleRuntime(existing: any, payload: any, options: SyncF
     "failoverSeconds",
     "recoverSeconds",
     "failoverMinHoldSeconds",
-    "failoverPinnedIndex",
   ];
   const stringKeys = ["forwardType", "protocol", "gostMode", "targetIp", "failoverStrategy", "failoverTargets", "failoverProbeTarget", "failoverSchedule", "protocolBlockReason"];
   const boolKeys = [
@@ -277,11 +311,58 @@ function canPreserveChildRuleRuntime(existing: any, payload: any, options: SyncF
         nullableString(existing?.routeSwitchMode) === nullableString(payload?.routeSwitchMode)
         && ["routeFailureThreshold", "routeScoreMargin", "routeScoreHoldSeconds", "routePrewarmSeconds"].every((key) => nullableNumber(existing?.[key]) === nullableNumber(payload?.[key]))
       )));
+  // 人工指定：钉在第 0 条（主线路）也是钉住，不能按「0 = 没有」比；到期时间按毫秒比。
+  const pinSame = pinIndexOf(existing?.failoverPinnedIndex) === pinIndexOf(payload?.failoverPinnedIndex)
+    && (toDate(existing?.failoverPinnedUntil)?.getTime() ?? null) === (toDate(payload?.failoverPinnedUntil)?.getTime() ?? null);
   return egressSame
     && routeSame
+    && pinSame
     && numberKeys.every((key) => nullableNumber(existing?.[key]) === nullableNumber(payload?.[key]))
     && stringKeys.every((key) => nullableString(existing?.[key]) === nullableString(payload?.[key]))
     && boolKeys.every((key) => dbBool(existing?.[key]) === dbBool(payload?.[key]));
+}
+
+/** 线路组的调度设置：Agent 能在同一个调度器上原地换（agent/failover_proxy.go startFailoverProxyLocked）。 */
+const CHILD_ROUTE_POLICY_KEYS = [
+  "failoverStrategy",
+  "failoverTargets",
+  "failoverProbeTarget",
+  "failoverSchedule",
+  "failoverMinHoldSeconds",
+  "failoverPinnedIndex",
+  "failoverPinnedUntil",
+  "failoverPreferFastest",
+  "failoverSeconds",
+  "recoverSeconds",
+  "autoFailback",
+  "routeMode",
+  "routePaths",
+  "routeLines",
+  "routeDelivery",
+  "routeSwitchMode",
+  "routeFailureThreshold",
+  "routeScoreMargin",
+  "routeScoreHoldSeconds",
+  "routePrewarmSeconds",
+] as const;
+
+/**
+ * 子规则和库里那条只差调度设置（人工指定、时段表、切换灵敏度、路径…）：原地改、不停转发。
+ * 和普通规则保存时的 isFailoverHotUpdate（server/routers/rules.crud.ts）是一个意思。
+ *
+ * 以前模板上点「切到这条 / 交回自动」、改个时段表，每台成员机上的子规则都被标成「没在跑」整条重下发：
+ * 转发停一下再起来，连着的人全断，「切换不断连」也就没了。只认 gost：realm / socat / nginx 的服务签名里
+ * 带着整份线路组规格（agent/managed_service.go），换规格照样要重启，那几种照旧整条重下发。
+ */
+function canHotUpdateChildRulePolicy(existing: Record<string, unknown>, payload: Record<string, unknown>) {
+  if (!dbBool(existing?.failoverEnabled) || !dbBool(payload?.failoverEnabled)) return false;
+  if (normalizeRuntimeForwardType(existing?.forwardType) !== "gost" || normalizeRuntimeForwardType(payload?.forwardType) !== "gost") return false;
+  // 调度那几列先换成要写的，剩下的（端口、目标、转发工具、开关、出口…）一样都不能差。
+  const policyApplied: Record<string, unknown> = { ...existing };
+  for (const key of CHILD_ROUTE_POLICY_KEYS) {
+    if (key in payload) policyApplied[key] = payload[key];
+  }
+  return canPreserveChildRuleRuntime(policyApplied, payload, { preserveRuntime: true });
 }
 
 function normalizedRoutePaths(raw: unknown): string | null {
@@ -297,20 +378,21 @@ function routePathDefinition(path: RoutePath) {
 }
 
 /**
- * 线路组带中转时，子规则要照抄模板的路径和策略：模板不跑，跑的是每台成员机上的子规则，中继由
+ * 子规则照抄模板的线路组（路径和策略）：模板不跑，跑的是每台成员机上的子规则；带中转时中继由
  * 子规则各自按自己的入口机在中转机上建（routeGroups.syncRouteRelayRulesForRule）。
  *
  * 中继解析出来的 dial / issue 是子规则自己的（每台入口拨的是自己那套中继的端口），路径定义没变
  * 就保留子规则上已有的，否则每次组同步都会把它冲掉、又触发一轮重建。failoverTargets 同理：
  * 中继同步会按 dial 重写它，组同步不再拿模板的去盖。
  *
- * 模板没有中转：不碰这几列（老样子，子规则按 failover* 列跑）；子规则上还留着以前抄来的路径就清掉。
- * 返回 null = 什么都不用改。
+ * 没带中转的也照抄（以前只抄带中转的，没中转的子规则按 failover* 列推出路径）：推出来的路径叫
+ * main / backup-1，和模板上的对不上 —— 「暂停这条」、权重、分层、落地怎么分都到不了机器上，
+ * Agent 按子规则路径记的质量历史，线路详情按模板路径去找也找不到。
+ * 模板没开线路组（没有路径）：子规则上还留着以前抄来的路径就清掉。返回 null = 什么都不用改。
  */
-function childRouteColumns(templateRule: any, existing: any, childFailoverEnabled: boolean, member: any): Record<string, unknown> | null {
+function childRouteColumns(templateRule: any, existing: any, childFailoverEnabled: boolean): Record<string, unknown> | null {
   const templatePaths = parseRoutePaths(templateRule?.routePaths);
-  const templateHasHops = templatePaths.some((path) => path.hops.length > 0);
-  if (childFailoverEnabled && member?.memberType !== "tunnel" && templateHasHops) {
+  if (childFailoverEnabled && templatePaths.length > 0) {
     const existingPaths = parseRoutePaths(existing?.routePaths);
     const merged = templatePaths.map((path) => {
       const previous = existingPaths.find((item) => item.key === path.key && routePathDefinition(item) === routePathDefinition(path));
@@ -3157,7 +3239,16 @@ async function preferredSharedTunnelListenPortForChild(tunnel: any, ruleId: numb
   return primaryId === candidateId ? listenPort : null;
 }
 
-async function ensureMemberRuleForTemplate(group: any, templateRule: any, member: any, options: SyncForwardGroupRulesOptions = {}) {
+/** ensureMemberRuleForTemplate 告诉调用方的：子规则原样跑着（原地换了调度设置，或者什么都没变），不用再标成没在跑。 */
+type MemberRuleSyncOutcome = { keptRunning: boolean };
+
+async function ensureMemberRuleForTemplate(
+  group: any,
+  templateRule: any,
+  member: any,
+  options: SyncForwardGroupRulesOptions = {},
+  outcome: MemberRuleSyncOutcome = { keptRunning: false },
+) {
   const existing = await existingChildRule(Number(templateRule.id), Number(member.id));
   const enabled = dbBool(group?.isEnabled) && dbBool(templateRule?.isEnabled) && dbBool(member?.isEnabled);
   if (!enabled) {
@@ -3352,6 +3443,7 @@ async function ensureMemberRuleForTemplate(group: any, templateRule: any, member
     failoverSeconds: Number((failoverRuntimeSource as any).failoverSeconds || 60),
     recoverSeconds: Number((failoverRuntimeSource as any).recoverSeconds || 120),
     autoFailback: dbBool((failoverRuntimeSource as any).autoFailback, true),
+    ...childRoutePolicyColumns(failoverRuntimeSource, childFailoverEnabled),
     isEnabled: !childDisabledByUser && !childDisabledByTunnel && !childProtocolBlockReason,
     disabledByGroup: false,
     disabledByTunnel: childDisabledByTunnel,
@@ -3364,7 +3456,7 @@ async function ensureMemberRuleForTemplate(group: any, templateRule: any, member
     ...(isPortGroup && member.memberType !== "tunnel" ? ruleEgressColumnsOf(templateRule) : { ...NO_EGRESS_COLUMNS }),
   };
 
-  const routeColumns = childRouteColumns(templateRule, existing, childFailoverEnabled, member);
+  const routeColumns = childRouteColumns(templateRule, existing, childFailoverEnabled);
   if (routeColumns) Object.assign(payload, routeColumns);
 
   // A 2.3.278 background sync could have copied group-level runtime fields
@@ -3399,6 +3491,14 @@ async function ensureMemberRuleForTemplate(group: any, templateRule: any, member
   if (existing) {
     if (canPreserveChildRuleRuntime(existing, payload, options)) {
       await syncPreservedChildRuleMetadata(existing, payload);
+      return Number(existing.id);
+    }
+    if (canHotUpdateChildRulePolicy(existing, payload)) {
+      // 照样写整份（名字、调度设置都换上），只是不把它标成没在跑：心跳把新规格带过去，Agent 原地换。
+      outcome.keptRunning = true;
+      await updateForwardRule(Number(existing.id), { ...payload, isRunning: true });
+      await refreshRuleEndpoints({ ...existing, ...payload, id: existing.id }, "forward-group-child-policy-updated");
+      await syncChildRouteRelays(Number(existing.id), routeColumns, "forward-group-child-policy-updated");
       return Number(existing.id);
     }
     await updateForwardRule(Number(existing.id), payload);
@@ -3750,6 +3850,12 @@ async function syncForwardGroupRulesUnlocked(groupId: number, options: SyncForwa
     }
   }
 
+  /*
+    这一轮同步里每条子规则都原样跑着（只原地换了调度设置，见 canHotUpdateChildRulePolicy）：隧道成员的隧道也不用
+    重下发。模板上点「切到这条」以前会顺带把组里每条隧道停掉重来。有一条新建、重下发、收掉的，照旧全部重下发。
+  */
+  let everyChildKeptRunning = groupMode !== "chain";
+  let childrenKeptRunning = 0;
   const liveMemberIds = new Set((groupMode === "chain" ? activeChainMembers : fanoutMembers).map((m: any) => Number(m.id)));
   const liveTemplateIds = new Set((templates as any[]).map((rule: any) => Number(rule.id)));
 
@@ -3775,12 +3881,14 @@ async function syncForwardGroupRulesUnlocked(groupId: number, options: SyncForwa
     for (const child of childRules as any[]) {
       if (!liveMemberIds.has(Number(child.forwardGroupMemberId)) || !liveTemplateIds.has(Number(child.forwardGroupRuleId))) {
         await removeManagedRule(Number(child.id));
+        everyChildKeptRunning = false;
       }
     }
   }
 
   for (const member of members) {
     if (member.ruleId) {
+      everyChildKeptRunning = false;
       await removeManagedRule(Number(member.ruleId), options);
       await db.update(forwardGroupMembers).set({ ruleId: null, updatedAt: nowDate() } as any).where(eq(forwardGroupMembers.id, member.id));
     }
@@ -3859,8 +3967,11 @@ async function syncForwardGroupRulesUnlocked(groupId: number, options: SyncForwa
       }
     } else {
       for (const member of fanoutMembers) {
-        const ruleId = await ensureMemberRuleForTemplate(group, template, member, options);
-        if (ruleId && !preserveRuntime) {
+        const outcome: MemberRuleSyncOutcome = { keptRunning: false };
+        const ruleId = await ensureMemberRuleForTemplate(group, template, member, options, outcome);
+        if (outcome.keptRunning) childrenKeptRunning += 1;
+        else everyChildKeptRunning = false;
+        if (ruleId && !preserveRuntime && !outcome.keptRunning) {
           await db.update(forwardRules).set({ isRunning: false, updatedAt: nowDate() }).where(eq(forwardRules.id, ruleId));
         }
       }
@@ -3870,7 +3981,7 @@ async function syncForwardGroupRulesUnlocked(groupId: number, options: SyncForwa
     }
   }
 
-  if (!preserveRuntime) {
+  if (!preserveRuntime && !(everyChildKeptRunning && childrenKeptRunning > 0)) {
     for (const member of members) {
       if (member.memberType === "tunnel" && member.tunnelId) {
         const tunnel = await getTunnelById(Number(member.tunnelId));

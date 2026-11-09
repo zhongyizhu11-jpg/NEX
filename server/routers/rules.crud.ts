@@ -3191,6 +3191,9 @@ export const crudRulesRouter = router({
         await runWithHeldHostPortReservations(heldReservations, () => db.withForwardGroupsSyncTransaction(touchedGroupIds, async () => {
           if (groupChanged) await markTemplateChildrenPendingDelete(input.id, "forward-group-rule-route-changed");
           await db.updateForwardRule(input.id, data);
+          // 模板上的「切到这条 / 交回自动」和普通规则一样记进切换记录（同一个事务：后面同步失败就不留这条）；
+          // 子规则跟着组同步拿到钉子（forwardGroupRepository.childRoutePolicyColumns），Agent 跑的是子规则。
+          if (failoverFieldsProvided(input) && !groupChanged) await recordRoutePinChange(rule, data);
         }));
         if (groupChanged) await db.runForwardGroupFailover(groupId);
         await db.runForwardGroupFailover(activeGroupId);

@@ -136,6 +136,37 @@ export async function routeStatusSubject<T extends RuleRow>(rule: T, nowMs = Dat
   return ranked[0].child;
 }
 
+/** 端口转发模板在每台成员机上的子规则（没在删的）；别的规则返回空。 */
+async function liveTemplateChildren(rule: RuleRow): Promise<RuleRow[]> {
+  if (!dbBool(rule?.isForwardGroupTemplate)) return [];
+  const rows: RuleRow[] = await db.getForwardGroupChildRulesForTemplate(Number(rule.id)).catch(() => []);
+  return rows.filter((child) => child && !dbBool(child.pendingDelete));
+}
+
+/**
+ * 线路的切换记录、质量记在哪几条规则上。端口转发模板不跑：Agent 报的切换、异常、到期交回、评分都记在
+ * 每台成员机的子规则上，面板上的指定 / 暂停记在模板上 —— 只按模板查，看到的只有面板上那几下，机器上
+ * 真切了没有、为什么切，一条都没有。别的规则就是它自己。
+ */
+export async function routeLineDataRuleIds(rule: RuleRow): Promise<number[]> {
+  const children = await liveTemplateChildren(rule);
+  return [Number(rule.id), ...children.map((child) => Number(child.id))].filter((id) => id > 0);
+}
+
+/** 线路详情、主机页时间线上的切换记录（见 routeLineDataRuleIds）。成员机不止一台时每条带上是哪台入口报的。 */
+export async function routeLineEvents(rule: RuleRow, limit: number) {
+  const children = await liveTemplateChildren(rule);
+  const ids = [Number(rule.id), ...children.map((child) => Number(child.id))];
+  const rows = await db.getForwardRuleRouteEventsForRules(ids, limit);
+  const entryHostIds = Array.from(new Set(children.map((child) => Number(child.hostId || 0)).filter((id) => id > 0)));
+  const names = entryHostIds.length > 1 ? await db.getHostNamesByIds(entryHostIds).catch(() => new Map<number, string>()) : new Map<number, string>();
+  const hostOfRule = new Map(children.map((child) => [Number(child.id), Number(child.hostId || 0)]));
+  return rows.map((row) => {
+    const hostId = hostOfRule.get(Number(row.ruleId)) || 0;
+    return { ...row, entryHostName: hostId > 0 ? names.get(hostId) ?? null : null };
+  });
+}
+
 /**
  * 规则列表里的端口转发模板：「现在走哪条」（failoverActiveTarget / failoverActiveAt）换成它展开那条的。
  * 模板上留着的是转成端口转发之前那条规则最后报的，早就不对了 —— 规则卡和线路面板上会写成

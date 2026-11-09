@@ -16,7 +16,7 @@ import { quoteDbIdentifier, queryRaw } from "../dbRuntime";
 import { dbBool } from "../repositories/repositoryUtils";
 import { ROUTE_PATH_QUALITY_RETENTION_HOURS, getRoutePathQualityHistory } from "../repositories/routePathQualityRepository";
 import { bucketRouteQualityRows, routeQualityBucketMs } from "../routePathQualityHistory";
-import { buildRouteStatus } from "../routeStatusView";
+import { buildRouteStatus, routeLineDataRuleIds, routeStatusSubject } from "../routeStatusView";
 import { getSegmentSpeedRun, startSegmentSpeedRun, type SegmentEndpoints } from "../lineSegmentSpeed";
 import { lineSegmentLatencyStatus, startLineSegmentLatency, vetSegmentDest } from "../lineSegmentLatency";
 import { routeEntryHostId } from "./rules.crud";
@@ -66,17 +66,22 @@ function scrubSecrets(value: unknown, depth = 0): unknown {
   return out;
 }
 
-/** 最近 hours 小时的线路事件（新的在前）。rules.routeEvents 一次最多 100 条，导出要整段时间的。 */
-async function lineEventsSince(ruleId: number, hours: number): Promise<LineEventRow[]> {
+/**
+ * 最近 hours 小时的线路事件（新的在前）。rules.routeEvents 一次最多 100 条，导出要整段时间的。
+ * 端口转发模板传它自己 + 每台成员机上的子规则（见 routeLineDataRuleIds）。
+ */
+async function lineEventsSince(ruleIds: readonly number[], hours: number): Promise<LineEventRow[]> {
   const q = quoteDbIdentifier;
+  const ids = Array.from(new Set(ruleIds.map((id) => Math.floor(Number(id) || 0)).filter((id) => id > 0)));
+  if (ids.length === 0) return [];
   const cutoff = Math.floor((Date.now() - hours * 3600 * 1000) / 1000);
   const rows = await queryRaw<any>(
     `SELECT ${q("id")}, ${q("kind")}, ${q("fromKey")}, ${q("toKey")}, ${q("fromLabel")}, ${q("toLabel")}, ${q("reason")}, ${q("score")}, ${q("latencyMs")}, ${q("createdAt")}
        FROM ${q("forward_rule_route_events")}
-      WHERE ${q("ruleId")} = ? AND ${q("createdAt")} >= ?
+      WHERE ${q("ruleId")} IN (${ids.map(() => "?").join(", ")}) AND ${q("createdAt")} >= ?
       ORDER BY ${q("createdAt")} DESC, ${q("id")} DESC
       LIMIT ${EXPORT_EVENT_LIMIT}`,
-    [ruleId, cutoff],
+    [...ids, cutoff],
   ).catch(() => [] as any[]);
   return rows.map((row) => {
     const createdAt = Number(row.createdAt);
@@ -180,10 +185,12 @@ export const lineDiagnosticsRouter = router({
       if (!group) throw new Error("这条规则没有开线路组");
       const nowMs = Date.now();
       const bucketMs = routeQualityBucketMs(input.hours);
+      // 端口转发模板不跑：切换和评分记在成员机上的子规则上（见 routeLineDataRuleIds / routeStatusSubject）。
+      const [eventRuleIds, subject] = await Promise.all([routeLineDataRuleIds(rule), routeStatusSubject(rule, nowMs)]);
       const [status, events, qualityRows] = await Promise.all([
         buildRouteStatus(rule),
-        lineEventsSince(Number(rule.id), input.hours),
-        getRoutePathQualityHistory(Number(rule.id), { sinceMs: nowMs - input.hours * 3600 * 1000 }).catch(() => []),
+        lineEventsSince(eventRuleIds, input.hours),
+        getRoutePathQualityHistory(Number(subject.id), { sinceMs: nowMs - input.hours * 3600 * 1000 }).catch(() => []),
       ]);
       const byPath = new Map<string, typeof qualityRows>();
       for (const row of qualityRows) {

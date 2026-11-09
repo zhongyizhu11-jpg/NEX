@@ -150,6 +150,24 @@ test("没走首选时只说确实可能的原因，不下结论", () => {
   assert.equal(noFailback.divergence, "首选是 主线路，但「恢复后切回」关着：备用 1 不出问题就不会换过去。");
 });
 
+test("指定了还没切过去：说的是指定的原因，不是「可能正挂着、刚恢复」那一套", () => {
+  // 2.3.522 线上：指定 备用 1、机器还在主线路，调度计划里只写着「首选是 备用 1，没走它：它可能正挂着……」。
+  // 钉子压过「恢复后切回」和最短驻留（Agent 跳过 holding），那几个原因对它都不成立。
+  const onMain = { failoverActiveTarget: "198.51.100.7:443", failoverActiveAt: new Date(OUT_OF_WINDOW) };
+  const pinned = policyAt(OUT_OF_WINDOW, { ...onMain, failoverPinnedIndex: 1, failoverPinnedUntil: new Date(OUT_OF_WINDOW + 2 * HOUR), failoverMinHoldSeconds: 600, autoFailback: false });
+  assert.equal(pinned.divergence, "已指定走 备用 1，机器还在 主线路 上：一般几秒内切过去；半分钟后还没切，看入口机在不在线、备用 1 通不通（不通的线路不会切过去）。");
+  // 指定的那条不通：机器不会切过去，说清楚
+  const downPaths = JSON.stringify([
+    { key: "a", name: "主线路", hops: [], dest: null, weight: 50, probe: null, dial: null },
+    { key: "b", name: "备用 1", hops: [9], dest: null, weight: 50, probe: null, dial: null, issue: "relay-offline" },
+  ]);
+  const down = policyAt(OUT_OF_WINDOW, { ...onMain, routePaths: downPaths, routeMode: "failover", failoverPinnedIndex: 1, failoverPinnedUntil: new Date(OUT_OF_WINDOW + 2 * HOUR) });
+  assert.match(String(down.divergence), /^已指定走 备用 1，但它现在不通（.+）：机器不会切到不通的线路，通了马上切过去。$/);
+  // 已经走在指定的那条上：什么都不用说
+  const onPinned = policyAt(OUT_OF_WINDOW, { failoverActiveTarget: "198.51.100.8:443", failoverActiveAt: new Date(OUT_OF_WINDOW), failoverPinnedIndex: 1, failoverPinnedUntil: new Date(OUT_OF_WINDOW + 2 * HOUR) });
+  assert.equal(onPinned.divergence, null);
+});
+
 test("切换条件：挂了就切、切不切回、最短驻留", () => {
   assert.deepEqual(policyAt(IN_WINDOW, { failoverMinHoldSeconds: 600 }).guards.map((guard) => `${guard.label}：${guard.value}`), [
     "挂了就切：探测连续失败 3 次才算异常，异常持续 60 秒就切走；新连接拨不通也算一次失败",

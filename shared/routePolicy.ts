@@ -412,7 +412,17 @@ export function describeRoutePolicy(rule: RoutePolicyRule, options: RoutePolicyO
   const activeIndex = mode !== "weighted" && report.kind === "current" ? report.index : null;
   let divergence: string | null = null;
   if (mode !== "weighted" && activeIndex !== null && preferredIndex !== null && activeIndex !== preferredIndex) {
-    if (!autoFailback) {
+    if (deciding === "pin") {
+      /*
+        人工指定压过「恢复后切回」、最短驻留和预检（agent/failover_selection.go：钉子跳过 holding），所以上面那几个
+        原因对它都不成立。机器没切过去只有两种：指定的那条不通（钉子不会守着一条断掉的路，通了马上切）、
+        入口机还没收到新规格（离线、刚点下去几秒）。
+      */
+      const issue = paths[preferredIndex]?.issue;
+      divergence = issue
+        ? `已指定走 ${label(preferredIndex)}，但它现在不通（${describeRouteIssue(issue)}）：机器不会切到不通的线路，通了马上切过去。`
+        : `已指定走 ${label(preferredIndex)}，机器还在 ${label(activeIndex)} 上：一般几秒内切过去；半分钟后还没切，看入口机在不在线、${label(preferredIndex)} 通不通（不通的线路不会切过去）。`;
+    } else if (!autoFailback) {
       divergence = `首选是 ${label(preferredIndex)}，但「恢复后切回」关着：${label(activeIndex)} 不出问题就不会换过去。`;
     } else {
       const reasons = ["正挂着", `刚恢复还在观察（${formatPolicyDuration(recoverSeconds)}）`];

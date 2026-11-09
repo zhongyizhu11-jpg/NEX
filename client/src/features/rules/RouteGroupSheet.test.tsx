@@ -215,6 +215,10 @@ test("手动换线路：点状态胶囊就能切到这条；指定了的那条�
   assert.match(idle, /aria-label="手动切换：主线路"[^>]*data-testid="route-line-switch"[^]*待命/, "胶囊本身就是切换按钮");
   const pinned = renderToStaticMarkup(<>{routeLineStatusControls(status(), group.paths[1].key, undefined, false, { ...lineSwitch, pinIndex: 1 })}</>);
   assert.match(pinned, /使用中 · 指定/);
+  // 指定了主线路、机器还走在备用上：不写「待命 · 指定」（看着像指定了也不走），写「切换中」
+  const switching = renderToStaticMarkup(<>{routeLineStatusControls(status(), group.paths[0].key, undefined, false, { ...lineSwitch, pinIndex: 0 })}</>);
+  assert.match(switching, /切换中 · 指定/);
+  assert.doesNotMatch(switching, /待命/);
   const plain = renderToStaticMarkup(<>{routeLineStatusControls(status(), group.paths[0].key)}</>);
   assert.doesNotMatch(plain, /route-line-switch/);
 });
