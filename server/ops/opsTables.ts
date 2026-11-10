@@ -18,6 +18,7 @@ import { nodePoolTables, nodePoolMigrationTables } from "./nodePoolTables";
 import { loginDevicesTables, loginDevicesMigrationTables } from "./loginDevicesTables";
 import { operationAuditTables, operationAuditMigrationTables } from "./operationAuditTables";
 import { trafficAnomalyTables, trafficAnomalyMigrationTables } from "./trafficAnomalyTables";
+import { shopSyncTables, shopSyncMigrationTables } from "../shopSync/tables";
 
 export const OPS_TABLE_DEFS: TableDef[] = [
   ...eventsTables,
@@ -39,6 +40,7 @@ export const OPS_TABLE_DEFS: TableDef[] = [
   ...loginDevicesTables,
   ...operationAuditTables,
   ...trafficAnomalyTables,
+  ...shopSyncTables,
 ];
 
 export const OPS_MIGRATION_TABLES: string[] = [
@@ -61,4 +63,5 @@ export const OPS_MIGRATION_TABLES: string[] = [
   ...loginDevicesMigrationTables,
   ...operationAuditMigrationTables,
   ...trafficAnomalyMigrationTables,
+  ...shopSyncMigrationTables,
 ];

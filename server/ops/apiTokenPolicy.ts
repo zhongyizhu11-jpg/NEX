@@ -86,6 +86,8 @@ const TOKEN_FORBIDDEN_PATHS = [
   "plugins.runAction",
   // 令牌不能给自己（和别的令牌）解除接口限流
   "ops.apiRateLimit.update",
+  // 商城对接页上的「生成对接令牌」：和 ops.apiTokens. 一样，令牌不能再签令牌
+  "shopSync.createToken",
 ];
 
 /** 测试和 MCP 自检用：当前禁止名单（只读副本）。 */
