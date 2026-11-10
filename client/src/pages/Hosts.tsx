@@ -34,6 +34,7 @@ import DateTimePickerInput, {
 } from "@/components/DatePickerInput";
 import AddSelfServiceHostDialog from "@/components/hosts/AddSelfServiceHostDialog";
 import HostTrafficBillingDialog from "@/components/hosts/HostTrafficBillingDialog";
+import HostReplaceDialog, { type HostReplaceTarget } from "@/components/hosts/HostReplaceDialog";
 import HostCard, { HostActionButtons } from "@/components/hosts/HostCard";
 // 本页 902 行已有一个同名的统计小卡，这里取别名区分：这个是主机列表里的实体卡
 import HostEntitySummaryCard from "@/components/hosts/HostSummaryCard";
@@ -1140,6 +1141,7 @@ type HostItemActions = {
   correctTraffic: (host: any) => void;
   editBilling: (host: any) => void;
   viewProbeLatency: (host: any) => void;
+  replace: (host: HostReplaceTarget) => void;
 };
 
 type HostCardItemProps = {
@@ -1249,6 +1251,7 @@ function HostCardItemView({
         onResetTraffic={isAdmin ? actions.resetTraffic : undefined}
         onCorrectTraffic={isAdmin ? actions.correctTraffic : undefined}
         onEditBilling={isAdmin ? actions.editBilling : undefined}
+        onReplace={isAdmin ? actions.replace : undefined}
         onViewProbeLatency={actions.viewProbeLatency}
       />
     );
@@ -1263,6 +1266,7 @@ function HostCardItemView({
       onResetTraffic={isAdmin ? actions.resetTraffic : undefined}
       onCorrectTraffic={isAdmin ? actions.correctTraffic : undefined}
       onEditBilling={isAdmin ? actions.editBilling : undefined}
+      onReplace={isAdmin ? actions.replace : undefined}
       onViewProbeLatency={actions.viewProbeLatency}
       resetTrafficPending={resetTrafficPending}
       traffic={traffic}
@@ -1330,6 +1334,7 @@ function HostDsItemView({
       onResetTraffic={isAdmin ? actions.resetTraffic : undefined}
       onCorrectTraffic={isAdmin ? actions.correctTraffic : undefined}
       onEditBilling={isAdmin ? actions.editBilling : undefined}
+      onReplace={isAdmin ? actions.replace : undefined}
       onViewProbeLatency={actions.viewProbeLatency}
       dragHandle={dragHandle}
       className={sortableClassName}
@@ -1485,6 +1490,7 @@ const HostTableRow = memo(function HostTableRow({
           onResetTraffic={isAdmin ? actions.resetTraffic : undefined}
           onCorrectTraffic={isAdmin ? actions.correctTraffic : undefined}
           onEditBilling={isAdmin ? actions.editBilling : undefined}
+          onReplace={isAdmin ? actions.replace : undefined}
           onViewProbeLatency={actions.viewProbeLatency}
           resetTrafficPending={resetTrafficPending}
           canUpgrade={isAdmin}
@@ -1600,6 +1606,7 @@ const HostTableRow = memo(function HostTableRow({
           onResetTraffic={isAdmin ? actions.resetTraffic : undefined}
           onCorrectTraffic={isAdmin ? actions.correctTraffic : undefined}
           onEditBilling={isAdmin ? actions.editBilling : undefined}
+          onReplace={isAdmin ? actions.replace : undefined}
           onViewProbeLatency={actions.viewProbeLatency}
           resetTrafficPending={resetTrafficPending}
           canUpgrade={isAdmin}
@@ -1665,6 +1672,7 @@ function HostsContent() {
   const [selfServiceAddOpen, setSelfServiceAddOpen] = useState(false);
   // 「这台机器怎么计费」的弹窗，只有管理员那边能打开。
   const [billingHost, setBillingHost] = useState<any>(null);
+  const [replaceHost, setReplaceHost] = useState<HostReplaceTarget | null>(null);
   const selfServiceQuotaQuery = trpc.hosts.selfServiceQuota.useQuery(undefined, {
     enabled: user?.role !== "admin",
     staleTime: 30_000,
@@ -2612,6 +2620,7 @@ function HostsContent() {
     correctTraffic: (host) => hostItemActionsRef.current?.correctTraffic(host),
     editBilling: (host) => hostItemActionsRef.current?.editBilling(host),
     viewProbeLatency: (host) => hostItemActionsRef.current?.viewProbeLatency(host),
+    replace: (host) => hostItemActionsRef.current?.replace(host),
   }), []);
   const isAdminUser = user?.role === "admin";
   const clockMinute = Math.floor(Date.now() / 60_000);
@@ -2736,6 +2745,7 @@ function HostsContent() {
     correctTraffic: requestCorrectHostTraffic,
     editBilling: setBillingHost,
     viewProbeLatency: setProbeLatencyHost,
+    replace: setReplaceHost,
   };
 
   /* 「添加主机 / 分组 / 服务」：标准在搜索行最右，精简上到页头（和规则 / 链路页一致） */
@@ -3224,6 +3234,7 @@ function HostsContent() {
         onResetTraffic={user?.role === "admin" ? requestResetHostTraffic : undefined}
         onCorrectTraffic={user?.role === "admin" ? requestCorrectHostTraffic : undefined}
         onEditBilling={user?.role === "admin" ? setBillingHost : undefined}
+        onReplace={user?.role === "admin" ? setReplaceHost : undefined}
         onViewProbeLatency={setProbeLatencyHost}
         refreshInterval={hostLiveRefreshInterval}
       />
@@ -3253,6 +3264,11 @@ function HostsContent() {
         }}
       />
 
+      <HostReplaceDialog
+        open={!!replaceHost}
+        onOpenChange={(open) => !open && setReplaceHost(null)}
+        host={replaceHost}
+      />
       {/* 整台机器的按量计费 —— 底层就是转发找配置时的最后一档兜底。 */}
       <HostTrafficBillingDialog
         open={!!billingHost}

@@ -6,6 +6,7 @@ import type pg from "pg";
 import { getDatabaseKind, getPool, getPostgresPool, getSqlite } from "./dbRuntime";
 import { OPS_TABLE_DEFS } from "./ops/opsTables";
 import { IP_CHANGE_TABLE_DEFS } from "./ipChange/tables";
+import { HOST_REPLACE_TABLE_DEFS } from "./hostReplace/tables";
 
 export type ColumnType = "id" | "text" | "longtext" | "varchar" | "int" | "bigint" | "bool" | "epoch";
 
@@ -912,6 +913,7 @@ const tables: TableDef[] = [
   // 第五套主题那批运维功能的表，各功能自己的文件里定义（server/ops/*Tables.ts）。
   ...OPS_TABLE_DEFS,
   ...IP_CHANGE_TABLE_DEFS,
+  ...HOST_REPLACE_TABLE_DEFS,
 ];
 
 const seedSettings = [

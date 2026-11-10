@@ -1,4 +1,5 @@
 import { Badge } from "@/components/ui/badge";
+import type { HostReplaceTarget } from "./HostReplaceDialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -14,6 +15,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { trpc } from "@/lib/trpc";
 import {
   Activity,
+  ArrowRightLeft,
   ArrowDownToLine,
   ArrowUpFromLine,
   Clock,
@@ -109,6 +111,8 @@ type HostCardProps = {
   /** 给这台机器配「整台按量计费」。只有管理员那边传，租户那边不渲染这一项。 */
   onEditBilling?: (host: any) => void;
   onViewProbeLatency?: (host: any) => void;
+  /** 换 VPS（HostReplaceDialog）。只有管理员那边传。 */
+  onReplace?: (host: HostReplaceTarget) => void;
   resetTrafficPending?: boolean;
   traffic?: { bytesIn?: number | null; bytesOut?: number | null } | null;
   metrics?: any[] | null;
@@ -122,7 +126,7 @@ type HostCardProps = {
 
 type HostActionButtonsProps = Pick<
   HostCardProps,
-  "host" | "onEdit" | "onDelete" | "onUpgrade" | "onResetTraffic" | "onCorrectTraffic" | "onEditBilling" | "onViewProbeLatency" | "resetTrafficPending" | "canUpgrade"
+  "host" | "onEdit" | "onDelete" | "onUpgrade" | "onResetTraffic" | "onCorrectTraffic" | "onEditBilling" | "onViewProbeLatency" | "onReplace" | "resetTrafficPending" | "canUpgrade"
 > & {
   className?: string;
   buttonClassName?: string;
@@ -137,6 +141,7 @@ export function HostActionButtons({
   onCorrectTraffic,
   onEditBilling,
   onViewProbeLatency,
+  onReplace,
   resetTrafficPending = false,
   canUpgrade,
   className = "flex shrink-0 items-center justify-end gap-1",
@@ -244,6 +249,12 @@ export function HostActionButtons({
             本来就是管理员专属的接口。旁边「重置流量」「用量修正」都是没权限
             就不渲染，这一项跟上。
           */}
+          {onReplace && (
+            <DropdownMenuItem onSelect={() => onReplace(host)}>
+              <ArrowRightLeft />
+              <span>替换到另一台主机</span>
+            </DropdownMenuItem>
+          )}
           {canUpgrade && (
             <DropdownMenuItem
               disabled={!isOnline}
@@ -279,6 +290,7 @@ export default function HostCard({
   onCorrectTraffic,
   onEditBilling,
   onViewProbeLatency,
+  onReplace,
   resetTrafficPending = false,
   traffic = null,
   metrics: externalMetrics,
@@ -599,6 +611,7 @@ export default function HostCard({
               onCorrectTraffic={onCorrectTraffic}
               onEditBilling={onEditBilling}
               onViewProbeLatency={onViewProbeLatency}
+              onReplace={onReplace}
               resetTrafficPending={resetTrafficPending}
               canUpgrade={canUpgrade}
             />
@@ -618,6 +631,7 @@ export default function HostCard({
               onCorrectTraffic={onCorrectTraffic}
               onEditBilling={onEditBilling}
               onViewProbeLatency={onViewProbeLatency}
+              onReplace={onReplace}
               resetTrafficPending={resetTrafficPending}
               canUpgrade={canUpgrade}
             />
