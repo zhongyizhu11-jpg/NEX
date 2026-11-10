@@ -2899,6 +2899,7 @@ export async function seedDevPanelData(options: { lineDemo?: boolean } = {}) {
   await seedAgentTokens(adminId, hostIds);
   await seedHostGroups(adminId, hostIds);
   await seedHostMetrics(hostIds);
+  await (await import("./devPanelHostLedger")).seedHostLedgerDemo(hostIds);
   await seedUnlockChecks(hostIds);
   const resources = await seedTunnelsAndGroups(adminId, hostIds);
   const rules = await seedRules(hostIds, resources, usersSeed);

@@ -365,6 +365,8 @@ export const FORWARD_RULE_ROUTE_EVENT_RETENTION_HOURS = 7 * 24;
 export async function runTcpingCleanup() {
   const steps: Array<[string, () => Promise<unknown>]> = [
     ["host_metrics", () => db.cleanOldHostMetrics(72)],
+    // 95 计费的 5 分钟桶留 40 天（server/hostRateBuckets.ts）。
+    ["host_rate_buckets", () => import("./hostRateBuckets").then((m) => m.cleanOldHostRateBuckets())],
     ["traffic_stats", () => db.cleanOldTrafficStats(72)],
     ["traffic_stat_buckets", () => db.cleanOldTrafficStatBuckets(72)],
     ["tcping_stats", () => db.cleanOldTcpingStats(72)],
