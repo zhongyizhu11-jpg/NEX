@@ -16,6 +16,7 @@ import { trpc } from "@/lib/trpc";
 import { applyLatencyPeakCut, getLatencyStabilityStats, getLatencyYAxisTicks, normalizeLatencyProbeCounts } from "@/lib/latencyChart";
 import { pollingInterval } from "@/lib/polling";
 import { cn } from "@/lib/utils";
+import { HOST_PROBE_HTTP_AGENT_VERSION, hostProbeBucketFailureLabel, hostProbeLossLabel } from "@shared/hostProbeService";
 
 const colors = ["var(--color-primary)", "#16a34a", "#d97706", "#dc2626", "#0d9488", "#be123c", "#f97316", "#64748b"];
 const hostServiceLatencyAnimatedKeys = new Set<number>();
@@ -125,11 +126,11 @@ function ChartTooltip({ active, payload, label, services, allServices }: any) {
               </span>
               <span className="text-right">
                 <span className={raw?.isTimeout ? "font-medium text-destructive" : "font-semibold tabular-nums"}>
-                  {raw?.isTimeout ? "超时" : typeof raw?.latencyMs === "number" ? `${raw.latencyMs}ms` : "--"}
+                  {raw?.isTimeout ? hostProbeBucketFailureLabel(service.method) : typeof raw?.latencyMs === "number" ? `${raw.latencyMs}ms` : "--"}
                 </span>
                 {Number(raw?.probeCount) > 1 && Number(raw?.probeSuccesses) < Number(raw?.probeCount) ? (
                   <span className="block text-[11px] font-normal text-muted-foreground">
-                    丢包 {Number(raw.probeCount) - Number(raw.probeSuccesses)}/{Number(raw.probeCount)}
+                    {hostProbeLossLabel(service.method)} {Number(raw.probeCount) - Number(raw.probeSuccesses)}/{Number(raw.probeCount)}
                   </span>
                 ) : null}
               </span>
@@ -352,6 +353,9 @@ export default function HostProbeServiceLatencyDialog({
               {hostServices.map((service, index) => {
                 const serviceId = Number(service.id);
                 const active = selectedServiceIds.size === 0 || selectedServiceIds.has(serviceId);
+                // URL 连接检测：这台的 Agent 版本不够，面板没下发，图上不会有它的数据
+                const needsUpgrade = Array.isArray(service.agentUpgradeHosts)
+                  && service.agentUpgradeHosts.some((item: { id?: unknown } | null) => Number(item?.id) === hostId);
                 return (
                   <button
                     key={service.id}
@@ -369,7 +373,10 @@ export default function HostProbeServiceLatencyDialog({
                     <span className="h-2 w-2 rounded-full" style={{ background: colors[index % colors.length] }} />
                     <span className="truncate">{service.name}</span>
                     {(lossByService.get(serviceId) || 0) > 0 ? (
-                      <span className="shrink-0 tabular-nums text-[var(--fx-warn-text)]">丢包 {formatLossPercent(lossByService.get(serviceId) || 0)}</span>
+                      <span className="shrink-0 tabular-nums text-[var(--fx-warn-text)]">{hostProbeLossLabel(service.method)} {formatLossPercent(lossByService.get(serviceId) || 0)}</span>
+                    ) : null}
+                    {needsUpgrade ? (
+                      <span className="shrink-0 text-[var(--fx-warn-text)]" title={`URL 连接检测需要 Agent ${HOST_PROBE_HTTP_AGENT_VERSION} 以上`}>需要升级 Agent</span>
                     ) : null}
                   </button>
                 );

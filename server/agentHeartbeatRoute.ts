@@ -1,5 +1,6 @@
 import { Router, Request, Response } from "express";
 import { parseFailoverTargets } from "../shared/failoverTargets";
+import { loadAverageToStored, parseAgentLoadAverage } from "../shared/hostLoadAverage";
 import {
   routeDeliveryStrategy,
   routeDestSpreadReady,
@@ -325,7 +326,7 @@ agentRouter.post("/api/agent/live-metrics", async (req: Request, res: Response) 
       return;
     }
     const hostId = Number((host as any).id);
-    const sample = liveSampleFromCompactMetrics(req.body?.m, Date.now(), "live");
+    const sample = liveSampleFromCompactMetrics(req.body?.m, Date.now(), "live", req.body?.loadAverage);
     if (sample) recordHostLiveSample(hostId, sample);
     res.json({ success: true, intervalMs: liveMetricsIntervalFor(hostId) });
   } catch (error) {
@@ -476,6 +477,9 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     // 2.2.215 起 Agent 多报两个数：此刻的 TCP / UDP 连接数。旧 Agent 没有这两项，存 null，界面画「—」。
     const tcpConnections = heartbeatMetric("tcpConnections", 13, 2147483647);
     const udpConnections = heartbeatMetric("udpConnections", 14, 2147483647);
+    // 2.2.253 起 Agent 多报 loadAverage：[1, 5, 15 分钟负载]，小数。不走上面的 heartbeatMetric（那边一律取整），
+    // 老 Agent、没有 /proc/loadavg 的平台不报，三个都是 null，界面上不多画。
+    const loadAverage = parseAgentLoadAverage(req.body?.loadAverage);
     const { cpuInfo, agentVersion } = req.body;
     const nextCpuInfo = normalizeAgentText(cpuInfo, 256);
     const nextAgentVersion = normalizeAgentText(agentVersion, 64);
@@ -747,6 +751,10 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       uptime: uptime ?? null,
       tcpConnections: tcpConnections ?? null,
       udpConnections: udpConnections ?? null,
+      // 库里存乘 100 的整数（没有浮点列），见 shared/hostLoadAverage.ts
+      loadAvg1: loadAverageToStored(loadAverage.load1),
+      loadAvg5: loadAverageToStored(loadAverage.load5),
+      loadAvg15: loadAverageToStored(loadAverage.load15),
     }, { force: isHostMetricsWatching(host.id) || isHostLiveFocused(host.id) });
     // 资源告警：CPU / 内存 / 磁盘持续超过阈值时通知管理员（不阻塞心跳）
     observeHostResourceSample(host, { cpu: cpuUsage ?? null, memory: memoryUsage ?? null, disk: diskUsage ?? null });
@@ -772,6 +780,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       uptime: uptime ?? null,
       tcpConnections: tcpConnections ?? null,
       udpConnections: udpConnections ?? null,
+      ...loadAverage,
     });
 
     if (busyHeartbeat) {
@@ -4407,7 +4416,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       .sort((left: any, right: any) => Number(left.ruleId) - Number(right.ruleId));
     // 自动换 IP 的探测借同一个通道下发（保留的 serviceId 段，不进 host_probe_services 表），见 server/ipChange/。
     const hostProbeServices = [
-      ...await db.getHostProbeTasksForHost(host.id),
+      // URL 连接检测只发给够版本的 Agent：用这一次心跳报上来的版本，升级后的第一次心跳就拿得到
+      ...await db.getHostProbeTasksForHost(host.id, { agentVersion: effectiveAgentVersion }),
       ...await getIpChangeProbeTasksForHost(Number(host.id)),
     ];
 

@@ -577,8 +577,11 @@ type probeMeasurement struct {
 	Detail         string
 	ProbeCount     int
 	ProbeSuccesses int
-	// 探不通时是哪一种不通（shared/probeFailure）：dns / refused / unreachable / timeout / resource / error。
+	// 探不通时是哪一种不通（shared/probeFailure）：dns / refused / unreachable / timeout / resource / error；
+	// URL 连接检测另有 http_status（状态码不符）和 tls（证书 / 握手不对）。
 	Failure string
+	// URL 连接检测拿到的 HTTP 状态码；没拿到响应是 0。
+	HTTPStatus int
 }
 
 /*
@@ -1573,12 +1576,18 @@ func collectTCPing(cfg Config, ruleProbes []ruleLatencyProbe, probes []tunnelPro
 
 	tunnelTasks := buildTunnelProbeTasks(probes)
 
+	// URL 连接检测不在这一轮里同步跑（一条 30 秒超时会把整轮拖住），交给 url_probe.go 自己的协程
+	dispatchURLProbes(cfg, serviceProbes)
+
 	serviceTasks := []tcpingTask{}
 	for _, probe := range serviceProbes {
 		if probe.ServiceID <= 0 || probe.TargetIP == "" {
 			continue
 		}
 		method := strings.ToLower(strings.TrimSpace(probe.Method))
+		if isURLProbeMethod(method) {
+			continue
+		}
 		if method == "ping" {
 			serviceTasks = append(serviceTasks, tcpingTask{
 				Kind:      "service",

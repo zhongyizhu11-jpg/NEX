@@ -12,6 +12,7 @@ import { StatusDot } from "@/components/network/StatusDot";
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 import { formatAgo } from "@shared/dashboardAttention";
 import { formatCpuPercent } from "./hostDisplay";
+import { hostLoadAverageTooltip } from "@shared/hostLoadAverage";
 import { hostGeoTooltip, hostInMaintenance, hostPrimaryAddressLines, hostRegionText } from "./hostDisplay";
 import { HostOsAvatar, hostOsOf } from "./HostOsBadge";
 import { deriveHostVitals, type HostVitals } from "./useHostVitals";
@@ -173,10 +174,10 @@ export function buildHostActions(
  *
  * 只在线时画：离线的机器那三个数是最后一次上报的化石，画出来像是此刻的占用。
  */
-function SpecBlock({ label, value, percent, tone, muted }: { label: string; value: string; percent: number | null; tone?: "warn" | "down"; muted?: boolean }) {
+function SpecBlock({ label, value, percent, tone, muted, title }: { label: string; value: string; percent: number | null; tone?: "warn" | "down"; muted?: boolean; title?: string }) {
   const ratio = percent === null || muted ? null : Math.max(0, Math.min(100, percent)) / 100;
   return (
-    <span className="fx-host-spec">
+    <span className="fx-host-spec" title={title}>
       <i>{label}</i>
       <b data-tone={tone} data-muted={muted ? "" : undefined}>{value}</b>
       {ratio === null ? null : (
@@ -215,7 +216,8 @@ export function ResourceRow({ vitals }: { vitals: HostVitals }) {
   const unknown = cpu === null;
   return (
     <div className="grid min-w-0 grid-cols-3 gap-2" data-fx-host-resources={offline ? "offline" : undefined}>
-      <SpecBlock label="CPU" value={formatCpuPercent(cpu, vitals.isOnline)} percent={cpu} tone={usageTone(cpu)} muted={unknown} />
+      {/* 精简卡不多占一行：1 / 5 / 15 分钟负载悬停 CPU 那一格看（Agent 没报就没有提示） */}
+      <SpecBlock label="CPU" value={formatCpuPercent(cpu, vitals.isOnline)} percent={cpu} tone={usageTone(cpu)} muted={unknown} title={offline ? undefined : hostLoadAverageTooltip(vitals) ?? undefined} />
       <SpecBlock label="内存" value={pct(memory)} percent={memory} tone={usageTone(memory)} muted={unknown} />
       <SpecBlock label="磁盘" value={pct(disk)} percent={disk} tone={usageTone(disk)} muted={unknown} />
     </div>

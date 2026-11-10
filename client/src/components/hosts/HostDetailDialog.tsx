@@ -11,6 +11,7 @@ import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatCpuPercent, hostGeoTooltip, hostInMaintenance, hostRegionText } from "./hostDisplay";
+import { formatHostLoadAverage } from "@shared/hostLoadAverage";
 import HostNetProfileSection from "./HostNetProfileSection";
 import HostNetTuneSection from "./HostNetTuneSection";
 import { HostOsAvatar, HostOsGlyph, hostOsOf } from "./HostOsBadge";
@@ -193,6 +194,8 @@ export default function HostDetailDialog(props: HostDetailDialogProps) {
               25%，而这两件事该做的处理完全不同。
             */}
             <ResourceMeter label="CPU" percent={vitals.cpuPercent} valueText={formatCpuPercent(vitals.cpuPercent, vitals.isOnline)} />
+            {/* 1 / 5 / 15 分钟负载（Agent 2.2.253 起）：没报就不占这一行 */}
+            {formatHostLoadAverage(vitals) ? <Row label="负载" value={formatHostLoadAverage(vitals)} /> : null}
             <ResourceMeter label="内存" percent={vitals.memoryPercent} />
             <Row label="" value={sizePair(vitals.memoryUsed, vitals.memoryTotal)} />
             <ResourceMeter label="磁盘" percent={vitals.diskPercent} />

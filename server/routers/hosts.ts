@@ -2,6 +2,21 @@ import { protectedProcedure, adminProcedure, publicProcedure, router } from "../
 import { getHostProbeServiceHourlySeries, HOST_PROBE_RAW_MAX_HOURS } from "../repositories/hostProbeHourlyRepository";
 import { invalidateAgentStableHeartbeatPlan } from "../agentHeartbeatGate";
 import { normalizeProbeAddressFamily, PROBE_ADDRESS_FAMILIES } from "../../shared/probeFamily";
+import {
+  checkHostProbeHttpUrl,
+  HOST_PROBE_HTTP_EXPECTED_STATUS_MAX_LENGTH,
+  HOST_PROBE_HTTP_TIMEOUT_DEFAULT_SECONDS,
+  HOST_PROBE_HTTP_TIMEOUT_MAX_SECONDS,
+  HOST_PROBE_HTTP_TIMEOUT_MIN_SECONDS,
+  HOST_PROBE_HTTP_URL_MAX_LENGTH,
+  HOST_PROBE_METHODS,
+  hostProbeHttpUrlHostname,
+  normalizeHostProbeFailure,
+  normalizeHostProbeHttpStatus,
+  normalizeHostProbeMethod,
+  parseHostProbeHttpExpectedStatus,
+} from "../../shared/hostProbeService";
+import { loadAverageFromStored } from "../../shared/hostLoadAverage";
 import { githubRepoParts } from "@shared/githubAccelerator";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
@@ -112,21 +127,42 @@ const pageRequestSchema = z.object({
   page: z.number().int().positive().default(1),
   pageSize: z.number().int().min(1).max(100).default(12),
 });
-const hostProbeTargetSchema = z.string().trim().min(1).max(253).refine(isValidHostOrIp, "Invalid target IP or host");
 const hostProbeIdsSchema = z.array(z.number().int().positive()).max(500).optional();
-const hostProbeServiceInputSchema = z.object({
+const hostProbeServiceFieldsSchema = z.object({
   name: z.string().trim().min(1).max(128),
-  method: z.enum(["tcping", "ping"]),
-  targetIp: hostProbeTargetSchema,
+  method: z.enum(HOST_PROBE_METHODS),
+  // Ping / TCPing 是 IP 或域名（最长 253）；URL 连接检测是完整 URL（最长 2048）。两种的校验在下面的 superRefine。
+  targetIp: z.string().trim().min(1).max(HOST_PROBE_HTTP_URL_MAX_LENGTH),
   targetPort: z.number().int().min(1).max(65535).nullable().optional(),
   // 目标是域名时按哪一族解析（Agent 2.2.226 起生效，老 Agent 照旧 auto）
   addressFamily: z.enum(PROBE_ADDRESS_FAMILIES).default("auto"),
+  // 下面三项只有 URL 连接检测用（Agent 2.2.253 起）：超时秒数、预期状态码、要不要忽略证书错误
+  httpTimeoutSeconds: z.number().int().min(HOST_PROBE_HTTP_TIMEOUT_MIN_SECONDS).max(HOST_PROBE_HTTP_TIMEOUT_MAX_SECONDS).default(HOST_PROBE_HTTP_TIMEOUT_DEFAULT_SECONDS),
+  httpExpectedStatus: z.string().trim().max(HOST_PROBE_HTTP_EXPECTED_STATUS_MAX_LENGTH).default(""),
+  httpSkipTlsVerify: z.boolean().default(false),
   hostScope: z.enum(["all", "exclude", "specific"]).default("all"),
   hostIds: hostProbeIdsSchema,
   excludeHostIds: hostProbeIdsSchema,
   intervalSeconds: z.number().int().min(5).max(86400).default(30),
   isEnabled: z.boolean().optional(),
 });
+// 目标怎么校验取决于方式，所以放在整个对象上；创建和更新（多一个 id）两份 schema 共用这一个函数。
+function refineHostProbeServiceInput(input: z.infer<typeof hostProbeServiceFieldsSchema>, ctx: z.RefinementCtx) {
+  if (input.method === "http") {
+    const url = checkHostProbeHttpUrl(input.targetIp);
+    if (!url.ok) ctx.addIssue({ code: "custom", path: ["targetIp"], message: url.error });
+    const status = parseHostProbeHttpExpectedStatus(input.httpExpectedStatus);
+    if (!status.ok) ctx.addIssue({ code: "custom", path: ["httpExpectedStatus"], message: status.error });
+    return;
+  }
+  if (input.targetIp.length > 253 || !isValidHostOrIp(input.targetIp)) {
+    ctx.addIssue({ code: "custom", path: ["targetIp"], message: "Invalid target IP or host" });
+  }
+}
+const hostProbeServiceInputSchema = hostProbeServiceFieldsSchema.superRefine(refineHostProbeServiceInput);
+const hostProbeServiceUpdateSchema = hostProbeServiceFieldsSchema
+  .extend({ id: z.number().int().positive() })
+  .superRefine(refineHostProbeServiceInput);
 const hostGroupInputSchema = z.object({
   name: z.string().trim().min(1).max(128),
   hostIds: z.array(z.number().int().positive()).max(500).optional(),
@@ -140,10 +176,13 @@ function normalizeHostProbeServiceInput(input: z.infer<typeof hostProbeServiceIn
   const hostIds = Array.from(new Set((input.hostIds || []).map(Number).filter((id) => Number.isInteger(id) && id > 0)));
   const excludeHostIds = Array.from(new Set((input.excludeHostIds || []).map(Number).filter((id) => Number.isInteger(id) && id > 0)));
   if (input.hostScope === "specific" && hostIds.length === 0) throw new Error("请选择需要运行服务的主机");
+  const expectedStatus = parseHostProbeHttpExpectedStatus(input.method === "http" ? input.httpExpectedStatus : "");
   return {
     ...input,
-    addressFamily: normalizeProbeAddressFamily(input.addressFamily, input.targetIp),
+    // 地址族看的是「目标是不是 IP」：URL 连接检测看 URL 里的主机名
+    addressFamily: normalizeProbeAddressFamily(input.addressFamily, input.method === "http" ? hostProbeHttpUrlHostname(input.targetIp) : input.targetIp),
     targetPort: input.method === "tcping" ? Number(input.targetPort) : null,
+    httpExpectedStatus: expectedStatus.ok ? expectedStatus.normalized : "",
     hostIds: input.hostScope === "specific" ? hostIds : [],
     excludeHostIds: input.hostScope === "exclude" ? excludeHostIds : [],
     intervalSeconds: Math.max(5, Number(input.intervalSeconds) || 30),
@@ -587,6 +626,10 @@ function compactHostMetricSummary(row: any) {
     uptime: row?.uptime ?? null,
     tcpConnections: row?.tcpConnections ?? null,
     udpConnections: row?.udpConnections ?? null,
+    // 1 / 5 / 15 分钟负载（Agent 2.2.253 起）；没报是 null，界面上什么都不多画
+    load1: row?.load1 ?? null,
+    load5: row?.load5 ?? null,
+    load15: row?.load15 ?? null,
     recordedAt: row?.recordedAt || null,
   };
 }
@@ -678,10 +721,13 @@ function compactPublicProbeService(service: any, latest?: any) {
   return {
     id: Number(service?.id || 0),
     name: String(service?.name || ""),
-    method: service?.method === "ping" ? "ping" : "tcping",
+    // 公开页只给方式，不给目标：URL 连接检测的地址（可能带密钥）不出现在这份响应里
+    method: normalizeHostProbeMethod(service?.method),
     latest: latest ? {
       latencyMs: latest.latencyMs == null ? null : Number(latest.latencyMs),
       isTimeout: latestCounts ? latestCounts.probeSuccesses <= 0 : !!latest.isTimeout,
+      failure: normalizeHostProbeFailure(latest.failure),
+      httpStatus: normalizeHostProbeHttpStatus(latest.httpStatus),
       // Keep packet-level counters in the public monitor response so a
       // partial-loss ping (for example 4/5 replies) is not collapsed into a
       // binary success when the detail page builds its statistics.
@@ -1239,10 +1285,16 @@ export const hostsRouter = router({
     probeServices: protectedProcedure.query(async ({ ctx }) => {
       const isAdmin = ctx.user.role === "admin";
       const services = await db.getHostProbeServices(isAdmin ? undefined : ctx.user.id);
-      const latestById = await db.getLatestHostProbeServiceStats(services.map((service: any) => Number(service.id)));
+      const [latestById, upgradeHostsById] = await Promise.all([
+        db.getLatestHostProbeServiceStats(services.map((service: { id: unknown }) => Number(service.id))),
+        // 主机名单只给管理员（服务也只有管理员能建）
+        isAdmin ? db.getHostProbeAgentUpgradeHosts(services) : Promise.resolve(new Map<number, Array<{ id: number; name: string; agentVersion: string }>>()),
+      ]);
       return services.map((service: any) => ({
         ...service,
         latest: latestById.get(Number(service.id)) || null,
+        // URL 连接检测：范围内 Agent 版本不够、所以这条没下发给它的主机；界面上写「需要升级 Agent」
+        agentUpgradeHosts: upgradeHostsById.get(Number(service.id)) || [],
       }));
     }),
     probeServiceSeries: protectedProcedure
@@ -1269,7 +1321,7 @@ export const hostsRouter = router({
         return { id };
       }),
     updateProbeService: adminProcedure
-      .input(hostProbeServiceInputSchema.extend({ id: z.number().int().positive() }))
+      .input(hostProbeServiceUpdateSchema)
       .mutation(async ({ input }) => {
         const service = await db.getHostProbeServiceById(input.id);
         if (!service) throw new Error("服务不存在");
@@ -1792,11 +1844,18 @@ export const hostsRouter = router({
       .input(z.object({ hostId: z.number(), limit: z.number().int().min(1).max(1440).default(60), live: z.boolean().optional() }))
       .query(async ({ input, ctx }) => {
         await requireHostAccess(ctx, input.hostId);
-        if (input.live) return db.getLatestHostMetrics(input.hostId, input.limit);
+        // 负载在库里是乘 100 的整数（loadAvg1…），给前端的是 load1 / load5 / load15 小数
+        const withLoadAverage = <T extends { loadAvg1?: unknown; loadAvg5?: unknown; loadAvg15?: unknown }>(rows: T[]) => rows.map((row) => ({
+          ...row,
+          load1: loadAverageFromStored(row?.loadAvg1),
+          load5: loadAverageFromStored(row?.loadAvg5),
+          load15: loadAverageFromStored(row?.loadAvg15),
+        }));
+        if (input.live) return withLoadAverage(await db.getLatestHostMetrics(input.hostId, input.limit));
         return hostQueryCache.get(
           `metrics:${ctx.user.id}:${input.hostId}:${input.limit}`,
           { ttlMs: 10_000, staleMs: 60_000 },
-          () => db.getLatestHostMetrics(input.hostId, input.limit),
+          async () => withLoadAverage(await db.getLatestHostMetrics(input.hostId, input.limit)),
         );
       }),
     latestMetricsSummary: protectedProcedure

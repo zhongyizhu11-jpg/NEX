@@ -2,6 +2,7 @@ import { Router, Request, Response } from "express";
 import * as db from "./db";
 import { reconcileRuleLimits, recordRuleQuotaTraffic, ruleLimitRootId } from "./ruleLimits";
 import { isIpChangeProbeServiceId } from "../shared/ipChange";
+import { normalizeHostProbeFailure, normalizeHostProbeHttpStatus, normalizeHostProbeMethod } from "../shared/hostProbeService";
 import { ingestIpChangeProbeReports } from "./ipChange/runtime";
 import { appendPanelLog } from "./_core/panelLogger";
 import { isHostMetricsWatching, pushAgentRefresh } from "./agentEvents";
@@ -480,6 +481,39 @@ export async function validateTunnelProbeSource(
     if (node?.isEnabled !== false && Number(node?.listenPort || 0) > 0) expectedPorts.add(Number(node.listenPort));
   }
   return !report.targetPort || expectedPorts.has(Number(report.targetPort));
+}
+
+/**
+ * 一条探测服务的回报 → 要入库的样本；对不上这条服务当前的配置（改之前在路上的结果、方式不符）回 null。
+ *
+ * Ping / TCPing 的回报带目标地址和端口，照旧比这两项。URL 连接检测的回报不带 URL，比的是面板下发时算好的
+ * 规格指纹 probeKey（hostProbeServiceRepository.hostProbeHttpTaskKey）；方式也要对上 —— 一条服务从 TCPing
+ * 改成 URL 检测后，旧的 TCP 延迟不能记到它头上，反过来也一样。失败种类、HTTP 状态码原样带进去，入库时再归一。
+ */
+export function hostProbeServiceStatFromReport(
+  hostId: number,
+  report: AgentHostProbeServiceResult,
+  expected: { serviceId: number; method?: string; targetIp?: string; targetPort?: number; probeKey?: string },
+) {
+  const expectedHttp = normalizeHostProbeMethod(expected.method) === "http";
+  const reportedHttp = ["http", "https", "url"].includes(String(report.method || "").trim().toLowerCase());
+  if (expectedHttp !== reportedHttp) return null;
+  if (expectedHttp) {
+    if (!expected.probeKey || String(report.probeKey || "") !== expected.probeKey) return null;
+  } else {
+    if (report.targetIp && !sameProbeTarget(report.targetIp, expected.targetIp)) return null;
+    if (report.targetPort && Number(report.targetPort) !== Number(expected.targetPort || 0)) return null;
+  }
+  return {
+    serviceId: Number(expected.serviceId),
+    hostId,
+    latencyMs: typeof report.latencyMs === "number" && report.latencyMs > 0 ? report.latencyMs : null,
+    isTimeout: !!report.isTimeout,
+    probeCount: Number(report.probeCount) || 1,
+    probeSuccesses: Number(report.probeSuccesses) || 0,
+    failure: report.isTimeout ? normalizeHostProbeFailure(report.failure) : null,
+    httpStatus: expectedHttp ? normalizeHostProbeHttpStatus(report.httpStatus) : null,
+  };
 }
 
 function sameProbeTarget(left: unknown, right: unknown) {
@@ -1821,16 +1855,8 @@ agentRouter.post("/api/agent/tcping", async (req: Request, res: Response) => {
       const serviceId = Number(report.serviceId || 0);
       const expected = expectedServiceById.get(serviceId) as any;
       if (!expected) return [];
-      if (report.targetIp && !sameProbeTarget(report.targetIp, expected.targetIp)) return [];
-      if (report.targetPort && Number(report.targetPort) !== Number(expected.targetPort || 0)) return [];
-      return [{
-        serviceId,
-        hostId: host.id,
-        latencyMs: typeof report.latencyMs === "number" && report.latencyMs > 0 ? report.latencyMs : null,
-        isTimeout: !!report.isTimeout,
-        probeCount: Number(report.probeCount) || 1,
-        probeSuccesses: Number(report.probeSuccesses) || 0,
-      }];
+      const stat = hostProbeServiceStatFromReport(Number(host.id), report, expected);
+      return stat ? [stat] : [];
     });
     if (serviceStats.length > 0) {
       await db.insertHostProbeServiceStats(serviceStats);

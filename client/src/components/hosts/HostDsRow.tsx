@@ -6,6 +6,7 @@ import { hostTrafficExcluded } from "@shared/hostTrafficPolicy";
 import { EntityActions } from "@/components/entity/EntityActions";
 import { StatusDot } from "@/components/network/StatusDot";
 import { formatCpuPercent, hostGeoTooltip, hostInMaintenance } from "./hostDisplay";
+import { hostLoadAverageTooltip } from "@shared/hostLoadAverage";
 import {
   deriveHostSummaryView,
   hostOfflineAgo,
@@ -43,10 +44,10 @@ function usageTone(value: number | null): "warn" | "down" | undefined {
   return undefined;
 }
 
-function Gauge({ area, label, value, text }: { area: string; label: string; value: number | null; text: string }) {
+function Gauge({ area, label, value, text, detail }: { area: string; label: string; value: number | null; text: string; detail?: string | null }) {
   const tone = usageTone(value);
   return (
-    <span className="fx-ds-host-gauge" data-area={area} title={`${label} ${text}`}>
+    <span className="fx-ds-host-gauge" data-area={area} title={[`${label} ${text}`, detail].filter(Boolean).join("\n")}>
       <i>{label}</i>
       <b data-tone={tone}>{text}</b>
       <span className="fx-ds-host-bar" aria-hidden="true">
@@ -109,7 +110,8 @@ export function HostDsRow(props: Props) {
         {[region, address].filter(Boolean).join(" · ") || "—"}
       </span>
       <span className="fx-ds-host-gauges">
-        <Gauge area="cpu" label="CPU" value={cpu} text={cpu === null ? "—" : formatCpuPercent(cpu, vitals.isOnline)} />
+        {/* 一台一行放不下第四个数：1 / 5 / 15 分钟负载悬停 CPU 看 */}
+        <Gauge area="cpu" label="CPU" value={cpu} text={cpu === null ? "—" : formatCpuPercent(cpu, vitals.isOnline)} detail={offline ? null : hostLoadAverageTooltip(vitals)} />
         <Gauge area="mem" label="MEM" value={memory} text={pct(memory)} />
         <Gauge area="dsk" label="DSK" value={disk} text={pct(disk)} />
       </span>

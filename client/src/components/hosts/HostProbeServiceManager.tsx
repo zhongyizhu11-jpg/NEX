@@ -1,6 +1,24 @@
 import DataSectionLoading from "@/components/DataSectionLoading";
 import { readStoredViewMode, writeStoredViewMode } from "@/lib/viewModeStorage";
 import { normalizeProbeAddressFamily, PROBE_ADDRESS_FAMILIES, PROBE_ADDRESS_FAMILY_LABELS, type ProbeAddressFamily } from "@shared/probeFamily";
+import {
+  checkHostProbeHttpUrl,
+  describeHostProbeFailure,
+  describeHostProbeFailureShort,
+  HOST_PROBE_HTTP_AGENT_VERSION,
+  HOST_PROBE_HTTP_DEFAULT_EXPECTED_STATUS,
+  HOST_PROBE_HTTP_TIMEOUT_DEFAULT_SECONDS,
+  HOST_PROBE_HTTP_TIMEOUT_MAX_SECONDS,
+  HOST_PROBE_HTTP_TIMEOUT_MIN_SECONDS,
+  HOST_PROBE_METHOD_LABELS,
+  HOST_PROBE_METHOD_SHORT_LABELS,
+  hostProbeHttpUrlHostname,
+  hostProbeLossLabel,
+  normalizeHostProbeHttpTimeout,
+  normalizeHostProbeMethod,
+  parseHostProbeHttpExpectedStatus,
+  type HostProbeMethod,
+} from "@shared/hostProbeService";
 import { EntityActions } from "@/components/entity/EntityActions";
 import { CardActions } from "@/components/entity/EntityCard";
 import { useEffect, useMemo, useState } from "react";
@@ -32,24 +50,53 @@ import EmptyState from "@/components/EmptyState";
  * Agent 每轮会探测多次（probeCount），成功几次记在 probeSuccesses —— 丢包一直在库里，
  * 只是列表上没露出来。只显示最近一轮，看趋势还是点开延迟图表。
  */
-function latestProbeSummary(latest: any): { text: string; lossy: boolean } | null {
+type LatestProbeSample = {
+  probeCount?: unknown;
+  probeSuccesses?: unknown;
+  isTimeout?: unknown;
+  latencyMs?: unknown;
+  httpStatus?: unknown;
+  failure?: unknown;
+};
+
+function latestProbeSummary(latest: LatestProbeSample | null | undefined, method?: unknown): { text: string; title?: string; lossy: boolean } | null {
   if (!latest) return null;
   const count = Math.max(1, Number(latest.probeCount) || 1);
   const successes = Math.max(0, Math.min(count, Number(latest.probeSuccesses ?? (latest.isTimeout ? 0 : count))));
-  if (successes === 0) return { text: "超时", lossy: true };
+  // URL 连接检测分开说「状态码不符」和「连接失败 / 超时」；Ping / TCPing 照旧「超时」
+  if (successes === 0) return { text: describeHostProbeFailureShort(method, latest), title: describeHostProbeFailure(method, latest), lossy: true };
   const latency = Number(latest.latencyMs);
   const latencyText = Number.isFinite(latency) && latency > 0 ? `${Math.round(latency)} ms` : "—";
-  if (successes >= count) return { text: latencyText, lossy: false };
-  return { text: `${latencyText} · 丢包 ${Math.round(((count - successes) / count) * 100)}%`, lossy: true };
+  const status = Number(latest.httpStatus);
+  const statusText = normalizeHostProbeMethod(method) === "http" && Number.isInteger(status) && status > 0 ? ` · HTTP ${status}` : "";
+  if (successes >= count) return { text: `${latencyText}${statusText}`, lossy: false };
+  return { text: `${latencyText} · ${hostProbeLossLabel(method)} ${Math.round(((count - successes) / count) * 100)}%`, lossy: true };
+}
+
+/** 「需要升级 Agent」：URL 连接检测在这些主机上没下发（Agent 版本不够）。没有就是 null。 */
+type AgentUpgradeHost = { id: number; name?: string; agentVersion?: string };
+
+function agentUpgradeText(service: { method?: unknown; agentUpgradeHosts?: unknown }): { text: string; title: string } | null {
+  const hosts: AgentUpgradeHost[] = Array.isArray(service?.agentUpgradeHosts) ? service.agentUpgradeHosts : [];
+  if (normalizeHostProbeMethod(service?.method) !== "http" || hosts.length === 0) return null;
+  const names = hosts.slice(0, 8).map((host) => `${host.name || `#${host.id}`}（v${host.agentVersion}）`).join("、");
+  return {
+    text: `${hosts.length} 台需要升级 Agent`,
+    title: `URL 连接检测需要 Agent ${HOST_PROBE_HTTP_AGENT_VERSION} 以上，这些主机升级前不会执行：${names}${hosts.length > 8 ? ` 等 ${hosts.length} 台` : ""}`,
+  };
 }
 
 type ServiceForm = {
   name: string;
-  method: "tcping" | "ping";
+  method: HostProbeMethod;
   targetIp: string;
   targetPort: string;
   /** 目标是域名时按哪一族解析（Agent 2.2.226 起生效） */
   addressFamily: ProbeAddressFamily;
+  /** 下面三项只有 URL 连接检测用（Agent 2.2.253 起）；这时 targetIp 是完整 URL */
+  httpTimeoutSeconds: number;
+  httpExpectedStatus: string;
+  httpSkipTlsVerify: boolean;
   hostScope: "all" | "exclude" | "specific";
   hostIds: number[];
   excludeHostIds: number[];
@@ -67,6 +114,9 @@ const defaultForm: ServiceForm = {
   targetIp: "",
   targetPort: "",
   addressFamily: "auto",
+  httpTimeoutSeconds: HOST_PROBE_HTTP_TIMEOUT_DEFAULT_SECONDS,
+  httpExpectedStatus: HOST_PROBE_HTTP_DEFAULT_EXPECTED_STATUS,
+  httpSkipTlsVerify: false,
   hostScope: "all",
   hostIds: [],
   excludeHostIds: [],
@@ -83,9 +133,15 @@ function storeServiceViewMode(viewMode: HostProbeServiceViewMode) {
 }
 
 function serviceTarget(service: any) {
-  const family = normalizeProbeAddressFamily(service.addressFamily, service.targetIp);
+  const method = normalizeHostProbeMethod(service.method);
+  const family = normalizeProbeAddressFamily(service.addressFamily, method === "http" ? hostProbeHttpUrlHostname(service.targetIp) : service.targetIp);
   const suffix = family === "auto" ? "" : ` · ${PROBE_ADDRESS_FAMILY_LABELS[family]}`;
-  return (service.method === "ping" ? service.targetIp : `${service.targetIp}:${service.targetPort || "-"}`) + suffix;
+  if (method === "http") {
+    const extras = [`预期 ${service.httpExpectedStatus || HOST_PROBE_HTTP_DEFAULT_EXPECTED_STATUS}`, `超时 ${normalizeHostProbeHttpTimeout(service.httpTimeoutSeconds)}s`];
+    if (service.httpSkipTlsVerify) extras.push("忽略证书错误");
+    return `${service.targetIp} · ${extras.join(" · ")}${suffix}`;
+  }
+  return (method === "ping" ? service.targetIp : `${service.targetIp}:${service.targetPort || "-"}`) + suffix;
 }
 
 function scopeText(service: any, hostsById: Map<number, any>) {
@@ -107,7 +163,8 @@ function serviceMatchesSearchQuery(service: any, query: string, hostsById: Map<n
     return [hostId, host?.name, host?.entryIp, host?.ipv4, host?.ipv6, host?.ip];
   });
   const status = service?.isEnabled !== false ? "启用 已启用" : "停用 已停用 禁用";
-  const method = service?.method === "ping" ? "ping" : "tcping tcp";
+  const methodValue = normalizeHostProbeMethod(service?.method);
+  const method = methodValue === "ping" ? "ping" : methodValue === "http" ? "http https url 连接检测" : "tcping tcp";
   const haystack = [
     service?.id,
     service?.name,
@@ -141,14 +198,17 @@ function ServiceActionButtons({
 }
 
 function buildServiceUpdatePayload(service: any, isEnabled = service?.isEnabled !== false) {
-  const method: ServiceForm["method"] = service?.method === "ping" ? "ping" : "tcping";
+  const method: ServiceForm["method"] = normalizeHostProbeMethod(service?.method);
   return {
     id: Number(service?.id),
     name: String(service?.name || "").trim(),
     method,
     targetIp: String(service?.targetIp || "").trim(),
     targetPort: method === "tcping" ? Number(service?.targetPort || 0) : null,
-    addressFamily: normalizeProbeAddressFamily(service?.addressFamily, service?.targetIp),
+    addressFamily: normalizeProbeAddressFamily(service?.addressFamily, method === "http" ? hostProbeHttpUrlHostname(service?.targetIp) : service?.targetIp),
+    httpTimeoutSeconds: normalizeHostProbeHttpTimeout(service?.httpTimeoutSeconds),
+    httpExpectedStatus: String(service?.httpExpectedStatus || HOST_PROBE_HTTP_DEFAULT_EXPECTED_STATUS),
+    httpSkipTlsVerify: service?.httpSkipTlsVerify === true,
     hostScope: service?.hostScope === "exclude" || service?.hostScope === "specific" ? service.hostScope : "all",
     hostIds: Array.isArray(service?.hostIds) ? service.hostIds.map(Number).filter(Boolean) : [],
     excludeHostIds: Array.isArray(service?.excludeHostIds) ? service.excludeHostIds.map(Number).filter(Boolean) : [],
@@ -198,7 +258,8 @@ function ServiceCard({
   const target = serviceTarget(service);
   const scope = scopeText(service, hostsById);
   const interval = Number(service.intervalSeconds) || 30;
-  const latest = latestProbeSummary(service.latest);
+  const latest = latestProbeSummary(service.latest, service.method);
+  const upgrade = agentUpgradeText(service);
   /*
     原来名字下面一个图标方块，底下三个灰框（目标、运行时间、主机范围）各装一个值 ——
     和 Token 卡、转发组卡片原来一样的「一个值一个框」。现在是名字那一行 + 细线下两行小表。
@@ -212,7 +273,7 @@ function ServiceCard({
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-medium" title={service.name}>{service.name}</p>
             <p className="truncate text-xs text-muted-foreground">
-              {String(service.method || "").toUpperCase()} · 每 {interval} 秒
+              {HOST_PROBE_METHOD_SHORT_LABELS[normalizeHostProbeMethod(service.method)]} · 每 {interval} 秒
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-1">
@@ -229,7 +290,13 @@ function ServiceCard({
           {latest ? (
             <>
               <dt className="text-muted-foreground">最近一轮</dt>
-              <dd className={cn("min-w-0 truncate text-right tabular-nums", latest.lossy ? "text-[var(--fx-warn-text)]" : "text-foreground")}>{latest.text}</dd>
+              <dd className={cn("min-w-0 truncate text-right tabular-nums", latest.lossy ? "text-[var(--fx-warn-text)]" : "text-foreground")} title={latest.title}>{latest.text}</dd>
+            </>
+          ) : null}
+          {upgrade ? (
+            <>
+              <dt className="text-muted-foreground">Agent</dt>
+              <dd className="min-w-0 truncate text-right text-[var(--fx-warn-text)]" title={upgrade.title}>{upgrade.text}</dd>
             </>
           ) : null}
         </dl>
@@ -368,10 +435,24 @@ export default function HostProbeServiceManager({
     const targetIp = form.targetIp.trim();
     const targetPort = Number(form.targetPort);
     if (!name) { toast.error("请输入服务名称"); return; }
-    if (!targetIp) { toast.error("请输入 IP 地址"); return; }
+    if (!targetIp) { toast.error(form.method === "http" ? "请输入要检测的 URL" : "请输入 IP 地址"); return; }
     if (form.method === "tcping" && (!Number.isInteger(targetPort) || targetPort < 1 || targetPort > 65535)) { toast.error("目标端口必须在 1-65535 之间"); return; }
+    if (form.method === "http") {
+      const url = checkHostProbeHttpUrl(targetIp);
+      if (!url.ok) { toast.error(url.error); return; }
+      const status = parseHostProbeHttpExpectedStatus(form.httpExpectedStatus);
+      if (!status.ok) { toast.error(status.error); return; }
+    }
     if (form.hostScope === "specific" && form.hostIds.length === 0) { toast.error("请选择需要运行服务的主机"); return; }
-    const payload = { ...form, name, targetIp, targetPort: form.method === "tcping" ? targetPort : null, intervalSeconds: Math.max(5, Number(form.intervalSeconds) || 30) };
+    const payload = {
+      ...form,
+      name,
+      targetIp,
+      targetPort: form.method === "tcping" ? targetPort : null,
+      httpTimeoutSeconds: normalizeHostProbeHttpTimeout(form.httpTimeoutSeconds),
+      httpExpectedStatus: form.httpExpectedStatus.trim(),
+      intervalSeconds: Math.max(5, Number(form.intervalSeconds) || 30),
+    };
     if (editingId) updateMutation.mutate({ ...payload, id: editingId });
     else createMutation.mutate(payload);
   };
@@ -408,10 +489,13 @@ export default function HostProbeServiceManager({
     setEditingId(Number(service.id));
     setForm({
       name: service.name || "",
-      method: service.method === "ping" ? "ping" : "tcping",
+      method: normalizeHostProbeMethod(service.method),
       targetIp: service.targetIp || "",
       targetPort: service.targetPort ? String(service.targetPort) : "",
-      addressFamily: normalizeProbeAddressFamily(service.addressFamily, service.targetIp),
+      addressFamily: normalizeProbeAddressFamily(service.addressFamily, normalizeHostProbeMethod(service.method) === "http" ? hostProbeHttpUrlHostname(service.targetIp) : service.targetIp),
+      httpTimeoutSeconds: normalizeHostProbeHttpTimeout(service.httpTimeoutSeconds),
+      httpExpectedStatus: String(service.httpExpectedStatus || HOST_PROBE_HTTP_DEFAULT_EXPECTED_STATUS),
+      httpSkipTlsVerify: service.httpSkipTlsVerify === true,
       hostScope: service.hostScope === "exclude" || service.hostScope === "specific" ? service.hostScope : "all",
       hostIds: Array.isArray(service.hostIds) ? service.hostIds.map(Number).filter(Boolean) : [],
       excludeHostIds: Array.isArray(service.excludeHostIds) ? service.excludeHostIds.map(Number).filter(Boolean) : [],
@@ -457,7 +541,7 @@ export default function HostProbeServiceManager({
               className="min-h-[220px]"
               icon={<RadioTower />}
               title={isTextFiltered && serviceItems.length > 0 ? "未找到匹配服务" : "暂无服务"}
-              description={isTextFiltered && serviceItems.length > 0 ? "调整筛选内容或清空搜索" : "加一个 Ping / TCPing 目标，选中的主机会定时探测它的延迟。"}
+              description={isTextFiltered && serviceItems.length > 0 ? "调整筛选内容或清空搜索" : "加一个 Ping / TCPing / URL 目标，选中的主机会定时探测它的延迟。"}
             />
           ) : viewMode === "card" ? (
             <SortableReorderContext sortable={serviceSortable} ids={displayedServiceItems.map((service) => Number(service.id))} strategy="rect">
@@ -539,17 +623,22 @@ export default function HostProbeServiceManager({
                           <Activity className="h-4 w-4 text-muted-foreground" />
                           <div>
                             <div className="font-medium">{service.name}</div>
-                            <Badge variant="outline" className="mt-1 px-1.5 py-0 text-[11px] uppercase">{service.method}</Badge>
+                            <Badge variant="outline" className="mt-1 px-1.5 py-0 text-[11px] uppercase">{HOST_PROBE_METHOD_SHORT_LABELS[normalizeHostProbeMethod(service.method)]}</Badge>
                           </div>
                         </div>
                       </TableCell>
-                      <TableCell className="font-mono text-xs">{serviceTarget(service)}</TableCell>
+                      <TableCell className="max-w-[360px] truncate font-mono text-xs" title={serviceTarget(service)}>
+                        {serviceTarget(service)}
+                        {agentUpgradeText(service) ? (
+                          <div className="font-sans text-[var(--fx-warn-text)]" title={agentUpgradeText(service)!.title}>{agentUpgradeText(service)!.text}</div>
+                        ) : null}
+                      </TableCell>
                       <TableCell className="max-w-[360px] truncate text-sm" title={scopeText(service, hostsById)}>{scopeText(service, hostsById)}</TableCell>
                       <TableCell className="text-sm tabular-nums">
                         每 {service.intervalSeconds || 30} 秒
-                        {latestProbeSummary(service.latest) ? (
-                          <div className={cn("text-xs", latestProbeSummary(service.latest)!.lossy ? "text-[var(--fx-warn-text)]" : "text-muted-foreground")}>
-                            最近 {latestProbeSummary(service.latest)!.text}
+                        {latestProbeSummary(service.latest, service.method) ? (
+                          <div className={cn("text-xs", latestProbeSummary(service.latest, service.method)!.lossy ? "text-[var(--fx-warn-text)]" : "text-muted-foreground")} title={latestProbeSummary(service.latest, service.method)!.title}>
+                            最近 {latestProbeSummary(service.latest, service.method)!.text}
                           </div>
                         ) : null}
                       </TableCell>
@@ -575,17 +664,47 @@ export default function HostProbeServiceManager({
         <DialogContent className="flex max-h-[88svh] flex-col overflow-hidden sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>{editingId ? "编辑服务" : "添加服务"}</DialogTitle>
-            <DialogDescription data-fx-help="">配置主机 Ping / TCPing 探测服务</DialogDescription>
+            <DialogDescription data-fx-help="">配置主机 Ping / TCPing / URL 连接检测服务</DialogDescription>
           </DialogHeader>
           <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-1.5"><Label>服务名</Label><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="例如: 公网 API 延迟" /></div>
-              <FormField className="space-y-1.5"><Label>类型</Label><Select value={form.method} onValueChange={(value) => setForm({ ...form, method: value as ServiceForm["method"] })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="tcping">TCPing</SelectItem><SelectItem value="ping">Ping</SelectItem></SelectContent></Select></FormField>
+              <FormField className="space-y-1.5"><Label>类型</Label><Select value={form.method} onValueChange={(value) => setForm({ ...form, method: value as ServiceForm["method"] })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="tcping">{HOST_PROBE_METHOD_LABELS.tcping}</SelectItem><SelectItem value="ping">{HOST_PROBE_METHOD_LABELS.ping}</SelectItem><SelectItem value="http">{HOST_PROBE_METHOD_LABELS.http}</SelectItem></SelectContent></Select></FormField>
             </div>
+            {form.method === "http" ? (
+              <>
+                <FormField className="space-y-1.5">
+                  <Label>URL</Label>
+                  <Input value={form.targetIp} onChange={(e) => setForm({ ...form, targetIp: e.target.value })} placeholder="https://example.com/health" maxLength={2048} />
+                  <p data-fx-help="" className="text-meta text-muted-foreground">
+                    由选中主机的 Agent 每次新建连接发一个 GET，延迟从建连到收到响应第一个字节；不跟随跳转、不读响应内容。需要 Agent {HOST_PROBE_HTTP_AGENT_VERSION} 以上。不要在地址里放密钥。
+                  </p>
+                </FormField>
+                <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_150px]">
+                  <FormField className="space-y-1.5">
+                    <Label>预期状态码</Label>
+                    <Input value={form.httpExpectedStatus} onChange={(e) => setForm({ ...form, httpExpectedStatus: e.target.value })} placeholder={HOST_PROBE_HTTP_DEFAULT_EXPECTED_STATUS} />
+                    <p data-fx-help="" className="text-meta text-muted-foreground">单个或区间，逗号分开，例如 200、200-399、200,204。留空 = 200-399。</p>
+                  </FormField>
+                  <FormField className="space-y-1.5">
+                    <Label>超时（秒）</Label>
+                    <Input type="number" min={HOST_PROBE_HTTP_TIMEOUT_MIN_SECONDS} max={HOST_PROBE_HTTP_TIMEOUT_MAX_SECONDS} value={form.httpTimeoutSeconds} onChange={(e) => setForm({ ...form, httpTimeoutSeconds: normalizeHostProbeHttpTimeout(e.target.value) })} />
+                  </FormField>
+                </div>
+                <label className="flex items-center justify-between gap-3 rounded-md border border-border/50 px-3 py-2.5">
+                  <span className="min-w-0">
+                    <span className="block text-sm font-medium">忽略证书错误</span>
+                    <span data-fx-help="" className="block text-meta text-muted-foreground">默认证书过期、域名不符、自签名都算检测失败；只在测自签名的内网服务时打开。</span>
+                  </span>
+                  <Checkbox aria-label="忽略证书错误" checked={form.httpSkipTlsVerify} onCheckedChange={(checked) => setForm({ ...form, httpSkipTlsVerify: checked === true })} />
+                </label>
+              </>
+            ) : (
             <div className={`grid gap-3 ${form.method === "tcping" ? "sm:grid-cols-[minmax(0,1fr)_150px]" : ""}`}>
               <div className="space-y-1.5"><Label>IP 地址 / 域名</Label><Input value={form.targetIp} onChange={(e) => setForm({ ...form, targetIp: e.target.value })} placeholder="1.1.1.1 或 example.com" /></div>
               {form.method === "tcping" && <div className="space-y-1.5"><Label>目标端口</Label><Input type="number" min={1} max={65535} value={form.targetPort} onChange={(e) => setForm({ ...form, targetPort: e.target.value })} placeholder="443" /></div>}
             </div>
+            )}
             <FormField className="space-y-1.5">
               <Label>地址族</Label>
               <Select value={form.addressFamily} onValueChange={(value) => setForm({ ...form, addressFamily: value as ProbeAddressFamily })}>
