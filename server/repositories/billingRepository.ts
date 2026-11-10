@@ -48,6 +48,7 @@ import { dbBool, sqlBool } from "./repositoryUtils";
 import { pushAgentRefresh } from "../agentEvents";
 import { getUserUsableTrafficBillingResourceIds } from "./trafficBillingRepository";
 import { getSetting, setSetting } from "./settingsRepository";
+import { PLAN_STOCK_SOLD_OUT_MESSAGE, releasePlanStock, tryReservePlanStock } from "./productStockRepository";
 import { getReferralSettings } from "./referralRepository";
 import {
   evaluateReferralCommission,
@@ -125,6 +126,15 @@ export async function createPaymentOrder(order: InsertPaymentOrder) {
         .where(eq(subscriptionPlans.id, Number(order.planId)))
         .limit(1);
       if (!plan[0]) throw new Error("套餐已删除，无法创建支付订单");
+      /*
+        新购的待支付订单下单时就占一份库存：不占的话，最后一份可以同时被几个人拉起
+        收银台，谁都付得了款，付完才发现没货。续费单（带 subscriptionId）不占 ——
+        那一份在当初新购时已经占过了。占额和建单在同一个事务里，建单失败一起回滚。
+      */
+      if (!order.subscriptionId) {
+        if (!(await tryReservePlanStock(Number(order.planId)))) throw new Error(PLAN_STOCK_SOLD_OUT_MESSAGE);
+        order = { ...order, stockReserved: true } as InsertPaymentOrder;
+      }
     }
     await db.insert(paymentOrders).values(order);
     return getPaymentOrderByOutTradeNo(order.outTradeNo);
@@ -298,6 +308,30 @@ export async function getPaymentOrderByOutTradeNoForUpdate(outTradeNo: string) {
   );
   if (!rows[0]) return undefined;
   return getPaymentOrderByOutTradeNo(outTradeNo);
+}
+
+/**
+ * 锁住订单行，同时把库存判断要用的三列一起读出来。
+ *
+ * 不复用上面那个「先锁、再用普通查询读整行」的写法：MySQL 默认隔离级别下普通查询读的是
+ * 事务快照，可能还是锁之前的旧状态；库存的占 / 退只能照着加锁读到的当前值来判断，
+ * 否则一笔订单可能被退两次。
+ */
+async function lockPaymentOrderStockState(outTradeNo: string) {
+  const q = quoteDbIdentifier;
+  const lock = getDatabaseKind() === "sqlite" ? "" : " FOR UPDATE";
+  const rows = await queryRaw<{ status: string; planId: number | null; stockReserved: unknown }>(
+    `SELECT ${q("status")} AS ${q("status")}, ${q("planId")} AS ${q("planId")}, ${q("stockReserved")} AS ${q("stockReserved")}
+       FROM ${q("payment_orders")} WHERE ${q("outTradeNo")} = ? LIMIT 1${lock}`,
+    [outTradeNo],
+  );
+  const row = rows[0];
+  if (!row) return undefined;
+  return {
+    status: String(row.status || ""),
+    planId: Number(row.planId || 0),
+    stockReserved: dbBool(row.stockReserved),
+  };
 }
 
 // ==================== Subscription Plans ====================
@@ -2848,6 +2882,34 @@ function addSubscriptionDays(base: Date, days: number) {
   return new Date(base.getTime() + days * 24 * 3600 * 1000);
 }
 
+/**
+ * 新开一条订阅时占一份套餐库存。
+ *
+ * - 余额购买、管理员分配、兑换码：这里直接占。
+ * - 在线支付：下单时已经占过的（订单上 stockReserved）不再占第二次；没占过的
+ *   （加库存之前建的老订单）在发货这一刻补占，并记到订单上。
+ *
+ * 卖完了抛「永久失败」：在线支付那边会把实付金额转入余额并结单（见 finalizePaidOrder），
+ * 其余入口把这句话原样告诉操作的人。和调用方在同一个事务里，后面分不到端口段之类的
+ * 失败会把占的这一份一起回滚。
+ */
+async function occupyPlanStockForNewSubscription(planId: number, source: SubscriptionSource, paymentOrderNo?: string | null) {
+  if (source === "payment" && paymentOrderNo) {
+    // 锁住订单行再看 stockReserved：和「订单过期关单、退回库存」互斥，不会一边退一边当成已占。
+    const order = await lockPaymentOrderStockState(paymentOrderNo);
+    if (order?.stockReserved) return;
+    if (!(await tryReservePlanStock(planId))) throw new PermanentDeliveryError(PLAN_STOCK_SOLD_OUT_MESSAGE);
+    if (order) {
+      const db = await getDb();
+      await db!.update(paymentOrders)
+        .set({ stockReserved: true, updatedAt: nowDate() } as Partial<InsertPaymentOrder>)
+        .where(eq(paymentOrders.outTradeNo, paymentOrderNo));
+    }
+    return;
+  }
+  if (!(await tryReservePlanStock(planId))) throw new PermanentDeliveryError(PLAN_STOCK_SOLD_OUT_MESSAGE);
+}
+
 async function applySubscriptionToUserUnlocked(
   userId: number,
   planId: number,
@@ -2970,6 +3032,8 @@ async function applySubscriptionToUserUnlocked(
     };
   }
 
+  // 走到这里就是开一条新订阅（续费在上面那一支已经返回了）：占一份销售库存。
+  await occupyPlanStockForNewSubscription(planId, source, paymentOrderNo);
   const block = await findAvailableSubscriptionPortBlock(Number(plan.portCount) || 1, hostIds, tunnelIds, forwardGroupIds);
   if (!block) throw new PermanentDeliveryError("套餐可用端口不足，无法分配连续端口段");
   const expiresAt = durationDays > 0 ? addSubscriptionDays(now, durationDays) : null;
@@ -3973,7 +4037,8 @@ export async function redeemCode(userId: number, code: string, attemptScope?: st
       });
     } catch (error) {
       const message = String((error as any)?.message || error || "");
-      if (message !== "Database not available" && !message.includes("兑换过于频繁")) {
+      // 码是对的、只是套餐卖完了：不是在猜码，不计入失败次数（否则补货后他还得等限流过去）。
+      if (message !== "Database not available" && !message.includes("兑换过于频繁") && message !== PLAN_STOCK_SOLD_OUT_MESSAGE) {
         recordRedemptionAttemptFailure(userId, attemptScope);
       }
       throw error;
@@ -4225,7 +4290,31 @@ export async function listPaymentOrders(limit = 100, userId?: number, selectedId
   return base.where(conditions.length > 0 ? and(...conditions) : undefined).orderBy(desc(paymentOrders.createdAt), desc(paymentOrders.id)).limit(limit);
 }
 
+const CLOSED_PAYMENT_ORDER_STATUSES = ["expired", "failed", "cancelled"];
+
 export async function updatePaymentOrder(outTradeNo: string, data: Partial<InsertPaymentOrder>) {
+  /*
+    把一笔还没付款的订单关掉（过期 / 取消 / 创建失败）时，它占着的那份套餐库存在这里退回。
+    放在仓库这一层而不是各个关单入口里：以后不管从哪条路关单，库存都不会漏退。
+    只认 pending → 关闭这一种：已付款的订单即使被改成关闭状态，货可能已经发了，不能退。
+  */
+  if (data.status && CLOSED_PAYMENT_ORDER_STATUSES.includes(String(data.status))) {
+    return withDatabaseTransaction(async () => {
+      const db = await getDb();
+      if (!db) return undefined;
+      const previous = await lockPaymentOrderStockState(outTradeNo);
+      let patch = data;
+      if (previous && previous.status === "pending" && previous.stockReserved) {
+        if (previous.planId) await releasePlanStock(previous.planId);
+        patch = { ...data, stockReserved: false } as Partial<InsertPaymentOrder>;
+      }
+      await db
+        .update(paymentOrders)
+        .set({ ...patch, updatedAt: nowDate() } as Partial<InsertPaymentOrder>)
+        .where(eq(paymentOrders.outTradeNo, outTradeNo));
+      return getPaymentOrderByOutTradeNo(outTradeNo);
+    });
+  }
   const db = await getDb();
   if (!db) return undefined;
   await db
@@ -4233,6 +4322,27 @@ export async function updatePaymentOrder(outTradeNo: string, data: Partial<Inser
     .set({ ...data, updatedAt: nowDate() } as Partial<InsertPaymentOrder>)
     .where(eq(paymentOrders.outTradeNo, outTradeNo));
   return getPaymentOrderByOutTradeNo(outTradeNo);
+}
+
+/**
+ * 付了款却发不了货（钱转入余额结单）时，把这笔订单占着的库存退回去。
+ *
+ * 要在锁着订单行的事务里调用。返回 true 表示确实退了一份 —— 调用方把订单更新成结单
+ * 状态时一并带上 stockReserved: false 也可以，这里已经写过，重复写无害。
+ */
+export async function releasePaymentOrderPlanStock(outTradeNo: string) {
+  return withDatabaseTransaction(async () => {
+    const db = await getDb();
+    if (!db) return false;
+    const order = await lockPaymentOrderStockState(outTradeNo);
+    if (!order || !order.stockReserved) return false;
+    if (order.planId) await releasePlanStock(order.planId);
+    await db
+      .update(paymentOrders)
+      .set({ stockReserved: false, updatedAt: nowDate() } as Partial<InsertPaymentOrder>)
+      .where(eq(paymentOrders.outTradeNo, outTradeNo));
+    return true;
+  });
 }
 
 function affectedRows(result: any) {

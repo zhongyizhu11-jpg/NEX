@@ -7,6 +7,7 @@ import { refreshUserForwardEndpoints } from "./helpers";
 import { parseExpiryReminderDays } from "@shared/expiryReminder";
 import { findPricingOption, normalizePlanPriceTiers, planPricingOptions, PLAN_PRICE_TIER_LIMIT } from "@shared/planPricing";
 import { REFERRAL_MAX_RATE_BPS } from "@shared/referral";
+import { MAX_PRODUCT_STOCK } from "@shared/productStock";
 
 const planInput = z.object({
   name: z.string().min(1).max(80),
@@ -49,6 +50,13 @@ const planInput = z.object({
    * 界面上填百分比，前端按字符串换成整数基点再传，不经过浮点。
    */
   referralRateBps: z.number().int().min(0).max(REFERRAL_MAX_RATE_BPS).default(0),
+  /**
+   * 销售库存总量，0 = 不限。
+   *
+   * 故意不给默认值：不带这个字段的请求（老客户端、只改状态的调用）不该把已经设好的
+   * 库存冲回「不限」。已占用数（stockUsed）不在入参里 —— 它只由购买 / 关单来改。
+   */
+  stockLimit: z.number().int().min(0).max(MAX_PRODUCT_STOCK).optional(),
   /**
    * 多周期定价：一个套餐挂一组「周期 → 价格」。
    *

@@ -40,6 +40,7 @@ import {
   type PaymentReturnPath,
 } from "./paymentUrls";
 import { clientIp } from "./clientIp";
+import { productStock } from "../shared/productStock";
 
 const PAYMENT_CONFIG_KEY = "paymentConfig";
 
@@ -945,6 +946,8 @@ async function creditPaidOrderToBalance(
     if ((latest as any).discountCodeId && (latest as any).discountConsumed) {
       await db.releaseDiscountCode(Number((latest as any).discountCodeId));
     }
+    // 同理，没发货就把这一单占着的套餐库存退回去（关单时已经退过的、续费单本来就不占的，这里都是空操作）。
+    await db.releasePaymentOrderPlanStock(outTradeNo);
     const note = "（已转入余额）";
     const subject = String(latest.subject || "");
     await db.updatePaymentOrder(outTradeNo, {
@@ -1546,6 +1549,9 @@ export const paymentRouter = router({
           }
         }
         if (!plan || !plan.isActive || !plan.isStoreVisible) throw new Error("套餐不可购买");
+        // 已售罄的先在这里拦下，省得白占一次折扣码名额、白拉一次网关。并发下真正防超售的
+        // 是 createPaymentOrder 里那条带条件的占额语句，这里只是早点把话说清楚。续费不受库存限制。
+        if (!input.subscriptionId && productStock(plan).soldOut) throw new Error(db.PLAN_STOCK_SOLD_OUT_MESSAGE);
         /**
          * 价格取**选中那一档**，不是套餐主表上的默认价。
          *

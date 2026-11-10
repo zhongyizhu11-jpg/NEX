@@ -30,6 +30,7 @@ import { cn } from "@/lib/utils";
 import { formatTrafficMultiplier } from "@shared/trafficMultiplier";
 import { LayoutGrid, List, Pencil, Plus, Route, Server, Trash2 } from "lucide-react";
 import EmptyState from "@/components/EmptyState";
+import { parseProductStockInput, ProductStockField, ProductStockSummary } from "@/components/ProductStock";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -87,6 +88,10 @@ type BillingConfigForm = {
   price: string;
   enabled: boolean;
   requiresPermission: boolean;
+  /** 账号库存：最多几个账号能用这个资源，0 = 不限。 */
+  stockLimit: string;
+  /** 每个账号在这个资源上最多建几条规则，0 = 不限。 */
+  maxRulesPerUser: string;
 };
 
 const defaultBillingConfigForm = (): BillingConfigForm => ({
@@ -98,6 +103,8 @@ const defaultBillingConfigForm = (): BillingConfigForm => ({
   price: "",
   enabled: true,
   requiresPermission: false,
+  stockLimit: "0",
+  maxRulesPerUser: "0",
 });
 
 function resourceCategoryForConfig(config: any, forwardGroups: any[]): BillingResourceCategory {
@@ -221,6 +228,8 @@ function BillingConfigCard({
             {config.requiresPermission ? "需要授权" : "公开可用"}
           </Badge>
         </MobileInfoRow>
+        <MobileInfoRow label="库存"><ProductStockSummary product={config} usedLabel="已占用" /></MobileInfoRow>
+        <MobileInfoRow label="每账号规则">{Number(config.maxRulesPerUser) > 0 ? `最多 ${config.maxRulesPerUser} 条` : "不限"}</MobileInfoRow>
         <MobileInfoRow label="状态"><Badge variant={config.enabled ? "outline" : "secondary"}>{config.enabled ? "启用" : "停用"}</Badge></MobileInfoRow>
       </div>
     </div>
@@ -349,6 +358,8 @@ export default function TrafficBillingConfigManager({
       price: formatPriceInput(pricePerGbMilliCentsOf(config)),
       enabled: config.enabled !== false,
       requiresPermission: !!config.requiresPermission,
+      stockLimit: String(config.stockLimit ?? 0),
+      maxRulesPerUser: String(config.maxRulesPerUser ?? 0),
     });
     setDialogOpen(true);
   };
@@ -367,6 +378,8 @@ export default function TrafficBillingConfigManager({
       requiresPermission: configForm.requiresPermission,
       description: configForm.description.trim() || undefined,
       pricePerGbMilliCents,
+      stockLimit: parseProductStockInput(configForm.stockLimit),
+      maxRulesPerUser: parseProductStockInput(configForm.maxRulesPerUser),
     });
   };
 
@@ -456,7 +469,7 @@ export default function TrafficBillingConfigManager({
               ) : (
                 <div key="billing-config-table-view" className="overflow-x-auto">
                   <Table>
-                    <TableHeader><TableRow><TableHead>资源</TableHead><TableHead>单价</TableHead><TableHead>倍率</TableHead><TableHead>权限</TableHead><TableHead>状态</TableHead><TableHead className="text-right">操作</TableHead></TableRow></TableHeader>
+                    <TableHeader><TableRow><TableHead>资源</TableHead><TableHead>单价</TableHead><TableHead>倍率</TableHead><TableHead>库存</TableHead><TableHead>权限</TableHead><TableHead>状态</TableHead><TableHead className="text-right">操作</TableHead></TableRow></TableHeader>
                     <AutoAnimateContainer as={TableBody} duration={220}>
                       {(data?.configs || []).map((config: any) => (
                         <TableRow key={config.id}>
@@ -469,6 +482,12 @@ export default function TrafficBillingConfigManager({
                           </TableCell>
                           <TableCell>{formatPricePerGb(config)} / GB</TableCell>
                           <TableCell>{config.multiplierText || formatTrafficMultiplier(config.multiplier || 100)}</TableCell>
+                          <TableCell>
+                            <ProductStockSummary product={config} usedLabel="已占用" className="justify-start" />
+                            {Number(config.maxRulesPerUser) > 0 ? (
+                              <div className="text-xs text-muted-foreground">每账号最多 {config.maxRulesPerUser} 条规则</div>
+                            ) : null}
+                          </TableCell>
                           <TableCell>
                             <Badge variant={config.requiresPermission ? "outline" : "secondary"}>
                               {config.requiresPermission ? "需要授权" : "公开可用"}
@@ -485,7 +504,7 @@ export default function TrafficBillingConfigManager({
                       ))}
                       {(data?.configs || []).length === 0 && (
                         <TableRow>
-                          <TableCell colSpan={6} className="py-8 text-center text-muted-foreground">暂无计费配置</TableCell>
+                          <TableCell colSpan={7} className="py-8 text-center text-muted-foreground">暂无计费配置</TableCell>
                         </TableRow>
                       )}
                     </AutoAnimateContainer>
@@ -583,6 +602,22 @@ export default function TrafficBillingConfigManager({
                   : "选择资源后显示"}
               </div>
             </div>
+            {/*
+              按量资源卖的是「席位」：一个账号不管建了多少条规则都只占一份，规则删光才让出来。
+              所以库存旁边配一个「每账号规则上限」—— 只限人数不限条数的话，一个人能把资源占满。
+            */}
+            <ProductStockField
+              label="账号库存"
+              value={configForm.stockLimit}
+              onChange={(stockLimit) => setConfigForm((current) => ({ ...current, stockLimit }))}
+              help="最多给几个账号用，0 为不限。同一账号只占一份，停用规则仍占，删掉他在这个资源上的全部规则后让出。"
+            />
+            <ProductStockField
+              label="每账号规则上限"
+              value={configForm.maxRulesPerUser}
+              onChange={(maxRulesPerUser) => setConfigForm((current) => ({ ...current, maxRulesPerUser }))}
+              help="每个账号在这个资源上最多建几条规则，0 为不限。调低不会删已有规则，只拦新增。"
+            />
             <div className="space-y-2 sm:col-span-2">
               <Label>说明</Label>
               <Textarea

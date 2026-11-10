@@ -1641,6 +1641,9 @@ export const paymentOrders = table("payment_orders", {
   subscriptionId: int("subscriptionId"),
   discountCodeId: int("discountCodeId"),
   discountConsumed: boolean("discountConsumed").notNull().default(false),
+  // 这笔订单是否占着套餐的一份库存。新购的待支付订单下单时就占；没付款关闭时退回、
+  // 这一列清掉。续费单不占。靠这一列保证同一笔订单只占一次、只退一次。
+  stockReserved: boolean("stockReserved").notNull().default(false),
   discountAmountCents: bigint("discountAmountCents", { mode: "number" }).notNull().default(0),
   clientIp: text("clientIp"),
   rawNotify: text("rawNotify"),
@@ -1697,6 +1700,13 @@ export const subscriptionPlans = table("subscription_plans", {
    * 按套餐分开设：利润薄的套餐可以不返，引流套餐可以多返。
    */
   referralRateBps: int("referralRateBps").notNull().default(0),
+  /**
+   * 销售库存。stockLimit 是总量，0 = 不限；stockUsed 是已占用的份数（新购、管理员分配、
+   * 兑换码、待支付订单各占一份，续费不占；卖出去的到期也不退回，只有没付款的订单关闭才退）。
+   * 历史销售不追溯：加这两列之前卖出去的不计入 stockUsed。
+   */
+  stockLimit: int("stockLimit").notNull().default(0),
+  stockUsed: int("stockUsed").notNull().default(0),
 });
 export type SubscriptionPlan = typeof subscriptionPlans.$inferSelect;
 export type InsertSubscriptionPlan = typeof subscriptionPlans.$inferInsert;
@@ -1854,6 +1864,13 @@ export const trafficBillingConfigs = table("traffic_billing_configs", {
   pricePerGbCents: bigint("pricePerGbCents", { mode: "number" }).notNull().default(0),
   pricePerGbMilliCents: bigint("pricePerGbMilliCents", { mode: "number" }).notNull().default(0),
   multiplier: int("multiplier").notNull().default(100), // snapshot from linked resource, 0.01x = 1, 1x = 100, 50x = 5000
+  /**
+   * 账号库存：这个资源最多给几个账号用，0 = 不限。一个账号不管建了多少条规则都只占一份，
+   * 占用数不落库 —— 按现有逻辑规则现算（见 productStockRepository）。
+   */
+  stockLimit: int("stockLimit").notNull().default(0),
+  // 每个账号在这个资源上最多建几条逻辑规则，0 = 不限。
+  maxRulesPerUser: int("maxRulesPerUser").notNull().default(0),
   createdAt: epoch("createdAt").notNull().default(nowDefault()),
   updatedAt: epoch("updatedAt").notNull().default(nowDefault()),
 });

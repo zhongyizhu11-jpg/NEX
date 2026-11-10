@@ -3,6 +3,7 @@ import { adminProcedure, protectedProcedure, router } from "../_core/trpc";
 import { appendPanelLog } from "../_core/panelLogger";
 import * as db from "../db";
 import { reconcileTrafficBillingAuthorization } from "../trafficBillingAuthorization";
+import { MAX_PRODUCT_STOCK } from "../../shared/productStock";
 
 const resourceTypeSchema = z.enum(["host", "tunnel", "forward_group"]);
 
@@ -32,12 +33,14 @@ export const trafficBillingRouter = router({
     return { enabled, configs };
   }),
 
-  storeResources: protectedProcedure.query(async () => {
+  storeResources: protectedProcedure.query(async ({ ctx }) => {
     const enabled = await db.isTrafficBillingEnabled();
     if (!enabled) return { enabled, configs: [] };
     return {
       enabled,
-      configs: (await db.listTrafficBillingConfigs()).filter((item: any) => item.enabled && !item.requiresPermission),
+      // 售罄的也照常返回：商店里要留着展示成「已售罄」，而不是让它凭空消失。
+      // 带上查看者自己占的规则数 —— 他已经占着席位的话，售罄对他不构成限制。
+      configs: (await db.listTrafficBillingConfigs(ctx.user.id)).filter((item: any) => item.enabled && !item.requiresPermission),
     };
   }),
 
@@ -80,6 +83,12 @@ export const trafficBillingRouter = router({
       pricePerGbCents: z.number().int().min(0).max(100_000_000).optional(),
       pricePerGbMilliCents: z.number().int().min(0).max(100_000_000_000).optional(),
       multiplier: z.number().int().min(1).max(5000).optional(),
+      /**
+       * 账号库存（最多几个账号能用，0 = 不限）和每账号规则上限（0 = 不限）。
+       * 不传 = 不改：主机管理里那个只配单价的弹窗也走这个接口，不能把这两项冲回 0。
+       */
+      stockLimit: z.number().int().min(0).max(MAX_PRODUCT_STOCK).optional(),
+      maxRulesPerUser: z.number().int().min(0).max(MAX_PRODUCT_STOCK).optional(),
     }))
     .mutation(async ({ input }) => {
       const config = await db.upsertTrafficBillingConfig(input as any);
