@@ -769,6 +769,8 @@ const tables: TableDef[] = [
       c("linkShapingMode", "varchar", { length: 16, notNull: true, default: "off" }),
       // 抗丢包：NEX 隧道的 UDP 直连额外发 Reed-Solomon 纠错包，默认关。
       c("udpFec", "bool", { notNull: true, default: false }),
+      // 抗丢包传输：NEX V1 隧道入口 / 中转到下一跳改走 UDP 上的 KCP + 纠错（FXP 的 loss_carrier.go），默认关。
+      c("lossTolerant", "bool", { notNull: true, default: false }),
       // 内核直通：V2 隧道两端都是内核 WireGuard 时，普通规则直接 iptables DNAT 进 nexwg，不经 FXP。默认关。
       c("kernelPassthrough", "bool", { notNull: true, default: false }),
       c("multipathReplicate", "bool", { notNull: true, default: false }),

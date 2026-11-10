@@ -660,6 +660,12 @@ func fxpListenEndpoints(spec fxpSpec) map[string]int {
 			endpoints[protocol] = spec.ListenPort
 		}
 	}
+	// 抗丢包传输：出口 / 中转还在和 TCP 监听同号的 UDP 端口上收承载的包。UDP 直连本来就在
+	// 这个端口上时不重复记；用了 mimic（UDP 直连在别的端口）时多记一条，就绪检查和端口冲突
+	// 都把它算进去。
+	if spec.LossTolerant && spec.Role != "entry" && spec.ListenPort > 0 && runtimeProtocolsOverlap(spec.Protocol, "tcp") && endpoints["udp"] != spec.ListenPort {
+		endpoints["udp:"+strconv.Itoa(spec.ListenPort)] = spec.ListenPort
+	}
 	return endpoints
 }
 

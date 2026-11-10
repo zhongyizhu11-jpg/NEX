@@ -1229,6 +1229,8 @@ export const tunnels = table("tunnels", {
   linkShapingMode: varchar("linkShapingMode", { length: 16 }).notNull().default("off"),
   /** 抗丢包：UDP 直连额外发纠错包（FXP 的 udp_fec.go）。只对 NEX 隧道有意义，默认关。 */
   udpFec: boolean("udpFec").notNull().default(false),
+  /** 抗丢包传输：V1 隧道的承载从 TCP 换成 UDP 上的 KCP + 纠错（FXP 的 loss_carrier.go），默认关。 */
+  lossTolerant: boolean("lossTolerant").notNull().default(false),
   /** 内核直通：V2 隧道两端都是内核 WireGuard 时，普通 TCP/UDP 规则改走 iptables DNAT 进 nexwg，不经 FXP。默认关。 */
   kernelPassthrough: boolean("kernelPassthrough").notNull().default(false),
   // 复制模式（2.3.449）：中转带宽叠加的隧道上，每一片都从两条中转各发一份，一条线路断了连接也不断。

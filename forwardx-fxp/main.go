@@ -413,6 +413,9 @@ func normalizeExitEndpoints(exits []exitEndpoint, fallback exitEndpoint) []exitE
 		if endpoint.Key == "" {
 			endpoint.Key = fallback.Key
 		}
+		// 承载方式跟着这条规则 / 中转走，同一个出口在两种承载下是两份端点状态（连接池里
+		// 的连接不能混用）。
+		endpoint.lossTolerant = fallback.lossTolerant
 		if endpoint.Host == "" || endpoint.Port <= 0 || endpoint.Port > 65535 || endpoint.UDPPort <= 0 || endpoint.UDPPort > 65535 {
 			return
 		}
@@ -1160,7 +1163,7 @@ func secureDialTimeout(cfg config) time.Duration {
 // dialSecureTCP 返回一条握完手、确认过的安全连接：池里有预热好的就直接用，
 // 没有才现拨。多路径的腿走这里。
 func dialSecureTCP(host string, port int, cfg config) (net.Conn, *secureConn, error) {
-	state := fxpEndpointStateFor(exitEndpoint{Host: host, Port: port, Key: cfg.Key})
+	state := fxpEndpointStateFor(exitEndpoint{Host: host, Port: port, Key: cfg.Key, lossTolerant: cfg.LossTolerant})
 	if conn, sec, ok := state.take(cfg); ok {
 		return conn, sec, nil
 	}
@@ -1170,7 +1173,7 @@ func dialSecureTCP(host string, port int, cfg config) (net.Conn, *secureConn, er
 // dialSecureTCPFresh 不碰连接池，现拨一条并完整握手。连接池预热和后台探测用它：
 // 它们要的就是真实地走一遍网络。
 func dialSecureTCPFresh(host string, port int, cfg config) (net.Conn, *secureConn, error) {
-	conn, err := dialTCP(host, port, secureDialTimeout(cfg), cfg.TCPFastOpen)
+	conn, err := dialNextHop(host, port, secureDialTimeout(cfg), cfg)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1688,6 +1691,9 @@ func handleExitSessionWithStartup(conn net.Conn, cfg config, in *fxpInbound) err
 	if !in.authenticated(cfg) {
 		return nil
 	}
+	if lossCarrierRefusesTCP("exit", cfg, conn) {
+		return nil
+	}
 	frame, err := awaitSecureHello(sec, in.stop())
 	if err != nil {
 		return quietHelloError(err)
@@ -1885,6 +1891,9 @@ func handleRelaySessionWithStartup(upConn net.Conn, cfg config, selector *exitEn
 		return err
 	}
 	if !in.authenticated(cfg) {
+		return nil
+	}
+	if lossCarrierRefusesTCP("relay", cfg, upConn) {
 		return nil
 	}
 	frame, err := awaitSecureHello(upSec, in.stop())

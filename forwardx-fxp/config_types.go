@@ -9,6 +9,8 @@ type exitEndpoint struct {
 	Weight int `json:"weight,omitempty"`
 	// CapacityMbps 是出口主机的线路带宽，「按负载」「按访客固定」按它折算每台该分多少。没写按一样大。
 	CapacityMbps int `json:"capacityMbps,omitempty"`
+	// lossTolerant 不上线：拨这个端点用不用抗丢包传输（跟着规则 / 中转的 LossTolerant）。
+	lossTolerant bool
 }
 
 // udpTarget is deliberately configured on the exit runtime. UDP direct packets
@@ -127,6 +129,10 @@ type config struct {
 	// 丢了几个包能当场补回来（见 udp_fec.go）。默认关；两端都打开才有效果，
 	// 对端是旧版本时照常互通。
 	UDPFEC bool `json:"udpFec,omitempty"`
+	// LossTolerant 是隧道的「抗丢包传输」：入口 / 中转到下一跳的承载从 TCP 换成 UDP 上的
+	// KCP + 前向纠错（见 loss_carrier.go），出口 / 中转在和 TCP 监听同号的 UDP 端口上接。
+	// 默认关；开了就只走它，连不上报错，不退回 TCP。只用于 V1。
+	LossTolerant bool `json:"lossTolerant,omitempty"`
 	// ReloadNonce 由 Agent 在热更新时写入，进程应用后原样写回 <config>.applied。
 	ReloadNonce string `json:"reloadNonce,omitempty"`
 }

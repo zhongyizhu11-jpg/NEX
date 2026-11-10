@@ -768,7 +768,10 @@ type fxpSpec struct {
 	EgressMbps     int    `json:"egressMbps,omitempty"`
 	EgressHintMbps int    `json:"egressHintMbps,omitempty"`
 	// UDPFEC 是隧道的「抗丢包」开关（见 forwardx-fxp/udp_fec.go），原样交给 FXP。
-	UDPFEC           bool   `json:"udpFec,omitempty"`
+	UDPFEC bool `json:"udpFec,omitempty"`
+	// LossTolerant 是隧道的「抗丢包传输」（见 forwardx-fxp/loss_carrier.go），原样交给 FXP：
+	// 入口 / 中转到下一跳改走 UDP 上的 KCP + 纠错，出口 / 中转在和 TCP 监听同号的 UDP 端口上接。
+	LossTolerant     bool   `json:"lossTolerant,omitempty"`
 	PanelURL         string `json:"panelUrl,omitempty"`
 	Token            string `json:"token,omitempty"`
 	RelayExitHost    string `json:"relayExitHost,omitempty"`

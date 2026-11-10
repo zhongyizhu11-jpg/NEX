@@ -84,6 +84,11 @@ func connStatsErrorText(err error) string {
 	if err == nil {
 		return ""
 	}
+	// 抗丢包传输没连上要让人在连接监控里一眼看出来，不能只剩一个 timeout。
+	var carrierErr *lossCarrierDialError
+	if errors.As(err, &carrierErr) {
+		return carrierErr.statsText()
+	}
 	var netErr net.Error
 	switch {
 	case errors.As(err, &netErr) && netErr.Timeout():
