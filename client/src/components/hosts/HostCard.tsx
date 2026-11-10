@@ -42,6 +42,7 @@ import { parseHostOs } from "@shared/hostOs";
 import { HostOsGlyph } from "./HostOsBadge";
 import { FxpRuntimeBadge } from "./FxpRuntimeBadge";
 import { hostEgressShapingCardText } from "./hostEgressShaping";
+import { formatHostLoadAverage } from "@shared/hostLoadAverage";
 import {
   formatBytes,
   formatCpuPercent,
@@ -445,6 +446,8 @@ export default function HostCard({
   const osInfoText = compactHostOsInfo(host.osInfo);
   const hostOs = parseHostOs(host.osInfo);
   const cpuUsageLabel = formatCpuPercent(latestMetric?.cpuUsage ?? 0, isOnline);
+  // 1 / 5 / 15 分钟负载（Agent 2.2.253 起）：离线、老 Agent 没报都是 null，什么都不多画
+  const loadAverageText = isOnline ? formatHostLoadAverage(latestMetric) : null;
   const remainingTimeClass = remainingTimeLabel === "已到期"
     ? "border-destructive/30 bg-destructive/10 text-destructive"
     : remainingTimeLabel === "不足1天"
@@ -479,7 +482,11 @@ export default function HostCard({
       value: cpuUsage,
       valueLabel: cpuUsageLabel,
       progressClass: metricUsageProgressClass(cpuUsage, isOnline),
-      tooltip: host.cpuInfo ? `CPU 使用率 ${cpuUsageLabel}\n${host.cpuInfo}` : `CPU 使用率 ${cpuUsageLabel}`,
+      tooltip: [
+        `CPU 使用率 ${cpuUsageLabel}`,
+        loadAverageText ? `负载（1 / 5 / 15 分钟）：${loadAverageText}` : "",
+        host.cpuInfo ? String(host.cpuInfo) : "",
+      ].filter(Boolean).join("\n"),
     },
     {
       key: "memory",
@@ -749,6 +756,12 @@ export default function HostCard({
               <p className="truncate text-[11px] text-muted-foreground" title={host.cpuInfo || ""}>
                 {host.cpuInfo || "未上报 CPU 型号"}
               </p>
+              {loadAverageText ? (
+                <p className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground" title="系统平均负载（1 / 5 / 15 分钟），不是百分比：到 CPU 核数才算满">
+                  <span>负载</span>
+                  <span className="font-medium tabular-nums text-foreground">{loadAverageText}</span>
+                </p>
+              ) : null}
               <Progress value={latestMetric.cpuUsage ?? 0} className={metricUsageProgressClass(latestMetric.cpuUsage, isOnline)} />
             </div>
             <TooltipProvider delayDuration={120}>

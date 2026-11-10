@@ -1329,6 +1329,13 @@ export const hostMetrics = table("host_metrics", {
   /** 此刻的 TCP / UDP 连接数（Agent 2.2.215 起上报；旧 Agent 为 null） */
   tcpConnections: int("tcpConnections"),
   udpConnections: int("udpConnections"),
+  /**
+   * 系统平均负载（1 / 5 / 15 分钟）乘 100 的整数（Agent 2.2.253 起上报；没报为 null）。
+   * 库里没有浮点列，所以 0.12 存成 12，读的地方除回去（shared/hostLoadAverage.ts）。
+   */
+  loadAvg1: int("loadAvg1"),
+  loadAvg5: int("loadAvg5"),
+  loadAvg15: int("loadAvg15"),
   recordedAt: epoch("recordedAt").notNull().default(nowDefault()),
 });
 export type HostMetric = typeof hostMetrics.$inferSelect;
@@ -1507,6 +1514,14 @@ export const hostProbeServices = table("host_probe_services", {
   targetPort: int("targetPort"),
   /** 目标是域名时按哪一族解析：auto / ipv4 / ipv6（shared/probeFamily.ts，Agent 2.2.225 起生效）。 */
   addressFamily: varchar("addressFamily", { length: 8 }).notNull().default("auto"),
+  /*
+    下面三项只有 method = "http"（URL 连接检测，Agent 2.2.253 起）用得上，这时 targetIp 里存的是完整 URL：
+    超时秒数（1-30）、预期状态码（"200-399"、"200,204" 这样的规范写法）、要不要忽略证书错误。
+    见 shared/hostProbeService.ts。
+  */
+  httpTimeoutSeconds: int("httpTimeoutSeconds").notNull().default(5),
+  httpExpectedStatus: varchar("httpExpectedStatus", { length: 128 }).notNull().default("200-399"),
+  httpSkipTlsVerify: boolean("httpSkipTlsVerify").notNull().default(false),
   hostScope: varchar("hostScope", { length: 16 }).notNull().default("all"),
   hostIds: text("hostIds"),
   excludeHostIds: text("excludeHostIds"),
@@ -1528,6 +1543,10 @@ export const hostProbeServiceStats = table("host_probe_service_stats", {
   isTimeout: boolean("isTimeout").notNull().default(false),
   probeCount: int("probeCount").notNull().default(1),
   probeSuccesses: int("probeSuccesses").notNull().default(0),
+  /** 没通时是哪一种不通（shared/hostProbeService.ts）；通了、或老 Agent 没报是 null。 */
+  failure: varchar("failure", { length: 16 }),
+  /** URL 连接检测拿到的 HTTP 状态码；没拿到响应、或不是 URL 检测是 null。 */
+  httpStatus: int("httpStatus"),
   recordedAt: epoch("recordedAt").notNull().default(nowDefault()),
 });
 export type HostProbeServiceStat = typeof hostProbeServiceStats.$inferSelect;

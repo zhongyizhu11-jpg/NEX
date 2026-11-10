@@ -138,6 +138,7 @@ func heartbeatKeepalive(cfg Config) (heartbeatResult, error) {
 	payload["fxpVersion"] = reportedFXPVersion()
 	addGostRuntimeReport(payload)
 	addAgentRuntimeReport(payload)
+	addLoadAverageReport(payload)
 	tcpConnections, udpConnections := connectionCounts()
 	if compactAgentReports.Load() {
 		payload["m"] = []any{

@@ -5,6 +5,7 @@ import {
   type InsertHostProbeService,
   type InsertHostProbeServiceStat,
 } from "../../drizzle/schema";
+import { createHash } from "node:crypto";
 import { executeRaw, getDb, insertAndGetId, nowDate, queryRaw } from "../dbRuntime";
 import { defineBatchedWrite } from "../dbWriteBatcher";
 import { boolLiteral, bucketExpression, inList, quoteIdentifier } from "../dbCompat";
@@ -12,8 +13,19 @@ import { clampPositiveInt, epochSeconds, reorderRowsBySortOrder } from "./reposi
 import { normalizeAgentProbeCounts } from "../../shared/agentDtos";
 import { deleteHostProbeHourlyStats } from "./hostProbeHourlyRepository";
 import { normalizeProbeAddressFamily, type ProbeAddressFamily } from "../../shared/probeFamily";
+import {
+  checkHostProbeHttpUrl,
+  hostAgentSupportsHttpProbe,
+  hostProbeHttpUrlHostname,
+  normalizeHostProbeFailure,
+  normalizeHostProbeHttpExpectedStatus,
+  normalizeHostProbeHttpStatus,
+  normalizeHostProbeHttpTimeout,
+  normalizeHostProbeMethod,
+  type HostProbeMethod,
+} from "../../shared/hostProbeService";
 
-export type HostProbeMethod = "tcping" | "ping";
+export type { HostProbeMethod };
 export type HostProbeScope = "all" | "exclude" | "specific";
 
 export type HostProbeServiceInput = {
@@ -23,6 +35,10 @@ export type HostProbeServiceInput = {
   targetPort?: number | null;
   /** 目标是域名时按哪一族解析（auto 照旧）；目标是 IP 时存 auto。 */
   addressFamily?: ProbeAddressFamily;
+  /** 下面三项只有 URL 连接检测（method = "http"）用；这时 targetIp 是完整 URL。 */
+  httpTimeoutSeconds?: number;
+  httpExpectedStatus?: string;
+  httpSkipTlsVerify?: boolean;
   hostScope: HostProbeScope;
   hostIds?: number[];
   excludeHostIds?: number[];
@@ -65,15 +81,24 @@ function normalizeSortOrder(value: unknown) {
   return Math.max(0, Math.floor(Number(value) || 0));
 }
 
+/** 地址族那个选项看的是「目标是不是 IP」：URL 连接检测看 URL 里的主机名，别的看目标本身。 */
+function probeFamilyTarget(method: HostProbeMethod, target: unknown) {
+  return method === "http" ? hostProbeHttpUrlHostname(target) : String(target ?? "");
+}
+
 function normalizeServiceInput(input: HostProbeServiceInput): InsertHostProbeService {
-  const method = input.method === "ping" ? "ping" : "tcping";
+  const method = normalizeHostProbeMethod(input.method);
   const hostScope = input.hostScope === "exclude" || input.hostScope === "specific" ? input.hostScope : "all";
   const payload = {
     name: input.name.trim(),
     method,
     targetIp: input.targetIp.trim(),
     targetPort: method === "tcping" ? Number(input.targetPort) : null,
-    addressFamily: normalizeProbeAddressFamily(input.addressFamily, input.targetIp),
+    addressFamily: normalizeProbeAddressFamily(input.addressFamily, probeFamilyTarget(method, input.targetIp)),
+    // 不是 URL 检测时这三项回到默认值：换成 TCPing 再换回来，不留着上一次的设置悄悄生效
+    httpTimeoutSeconds: normalizeHostProbeHttpTimeout(method === "http" ? input.httpTimeoutSeconds : undefined),
+    httpExpectedStatus: normalizeHostProbeHttpExpectedStatus(method === "http" ? input.httpExpectedStatus : undefined),
+    httpSkipTlsVerify: method === "http" && input.httpSkipTlsVerify === true,
     hostScope,
     hostIds: hostScope === "specific" ? serializeIds(input.hostIds) : null,
     excludeHostIds: hostScope === "exclude" ? serializeIds(input.excludeHostIds) : null,
@@ -88,11 +113,16 @@ function normalizeServiceInput(input: HostProbeServiceInput): InsertHostProbeSer
 }
 
 export function mapHostProbeService(row: any) {
+  const method = normalizeHostProbeMethod(row?.method);
   return {
     ...row,
     id: Number(row?.id || 0),
+    method,
     targetPort: row?.targetPort == null ? null : Number(row.targetPort),
-    addressFamily: normalizeProbeAddressFamily(row?.addressFamily, row?.targetIp),
+    addressFamily: normalizeProbeAddressFamily(row?.addressFamily, probeFamilyTarget(method, row?.targetIp)),
+    httpTimeoutSeconds: normalizeHostProbeHttpTimeout(row?.httpTimeoutSeconds),
+    httpExpectedStatus: normalizeHostProbeHttpExpectedStatus(row?.httpExpectedStatus),
+    httpSkipTlsVerify: rowBool(row?.httpSkipTlsVerify),
     intervalSeconds: normalizeIntervalSeconds(row?.intervalSeconds),
     isEnabled: rowBool(row?.isEnabled),
     sortOrder: normalizeSortOrder(row?.sortOrder),
@@ -170,39 +200,150 @@ function serviceAppliesToHost(service: any, hostId: number, hostOwnedByAdmin: ()
   return true;
 }
 
-async function isHostOwnedByAdmin(hostId: number) {
+/** 这台主机归谁、Agent 是哪个版本：前者决定「全部 / 排除」范围管不管它，后者决定发不发 URL 连接检测。 */
+async function loadHostProbeContext(hostId: number) {
   const q = quoteIdentifier;
   const [row] = await queryRaw<any>(
-    `SELECT h.${q("userId")} AS ${q("userId")}, u.${q("role")} AS ${q("role")}
+    `SELECT h.${q("userId")} AS ${q("userId")}, h.${q("agentVersion")} AS ${q("agentVersion")}, u.${q("role")} AS ${q("role")}
        FROM ${q("hosts")} h
        LEFT JOIN ${q("users")} u ON u.${q("id")} = h.${q("userId")}
       WHERE h.${q("id")} = ?`,
     [hostId],
   );
-  if (!row) return false;
-  // 没有归属的主机是面板自己加的系统主机，按管理员主机处理。
-  return Number(row.userId || 0) <= 0 || String(row.role || "") === "admin";
+  if (!row) return { ownedByAdmin: false, agentVersion: "" };
+  return {
+    // 没有归属的主机是面板自己加的系统主机，按管理员主机处理。
+    ownedByAdmin: Number(row.userId || 0) <= 0 || String(row.role || "") === "admin",
+    agentVersion: String(row.agentVersion || ""),
+  };
 }
 
-export async function getHostProbeTasksForHost(hostId: number) {
+/**
+ * URL 连接检测任务的「规格指纹」，随任务下发、Agent 原样带回。
+ *
+ * Ping / TCPing 的回报带着目标地址和端口，面板拿它核对「这是不是改之前的那条服务报上来的」。URL 检测的回报
+ * 不带 URL（地址里可能有密钥，不让它在回报和日志里多走一趟），改成比这个指纹：URL、超时、预期状态码、
+ * 证书开关、地址族任何一项变了，指纹就变，改之前还在路上的结果对不上，直接丢掉。
+ */
+export function hostProbeHttpTaskKey(service: {
+  id: number;
+  targetIp: string;
+  httpTimeoutSeconds: number;
+  httpExpectedStatus: string;
+  httpSkipTlsVerify: boolean;
+  addressFamily?: string | null;
+}) {
+  const digest = createHash("sha256")
+    .update([
+      service.targetIp,
+      service.httpTimeoutSeconds,
+      service.httpExpectedStatus,
+      service.httpSkipTlsVerify ? 1 : 0,
+      service.addressFamily || "auto",
+    ].join("\n"))
+    .digest("hex")
+    .slice(0, 32);
+  return `service:${service.id}:http:${digest}`;
+}
+
+/** 下发、核对时用到的那几项（mapHostProbeService 的结果里带 ...row，类型上是 any，这里写明）。 */
+type MappedHostProbeService = {
+  id: number;
+  method: HostProbeMethod;
+  targetIp: string;
+  targetPort: number | null;
+  addressFamily: ProbeAddressFamily;
+  httpTimeoutSeconds: number;
+  httpExpectedStatus: string;
+  httpSkipTlsVerify: boolean;
+  intervalSeconds: number;
+  isEnabled: boolean;
+  hostScope?: unknown;
+  hostIds?: unknown;
+  excludeHostIds?: unknown;
+};
+
+function hostProbeTaskForService(service: MappedHostProbeService) {
+  const base = {
+    serviceId: service.id,
+    method: service.method as HostProbeMethod,
+    targetIp: service.targetIp,
+    targetPort: service.method === "tcping" ? Number(service.targetPort || 0) : 0,
+    intervalSeconds: service.intervalSeconds,
+    // 只在不是 auto 时带上：老 Agent 不认这个字段；auto 不写也就不改动下发签名
+    ...(service.addressFamily && service.addressFamily !== "auto" ? { family: service.addressFamily } : {}),
+  };
+  if (service.method !== "http") return base;
+  return {
+    ...base,
+    timeoutSeconds: service.httpTimeoutSeconds,
+    expectStatus: service.httpExpectedStatus,
+    // 默认校验证书：只在勾了「忽略证书错误」时才带这一项
+    ...(service.httpSkipTlsVerify ? { insecureSkipVerify: true } : {}),
+    probeKey: hostProbeHttpTaskKey(service),
+  };
+}
+
+/**
+ * 这台主机要跑的探测服务（随心跳下发；回报入库时也拿它核对）。
+ *
+ * URL 连接检测只发给够版本的 Agent（HOST_PROBE_HTTP_AGENT_VERSION）：老 Agent 不认 method = "http"，
+ * 会把它当成 TCPing。agentVersion 不传就读库里这台主机当前的版本；心跳那头传这一次心跳报上来的版本
+ * （升级后的第一次心跳就能拿到任务，不用等库里那一行）。版本不知道（空）按不支持处理。
+ */
+export async function getHostProbeTasksForHost(hostId: number, options: { agentVersion?: string | null } = {}) {
   const db = await getDb();
   if (!db) return [];
   const rows = await db.select().from(hostProbeServices).where(eq(hostProbeServices.isEnabled, true)).orderBy(asc(hostProbeServices.sortOrder), desc(hostProbeServices.createdAt), desc(hostProbeServices.id));
-  const services = rows.map(mapHostProbeService);
-  const needsOwner = services.some((service: any) => String(service.hostScope || "all") !== "specific");
-  const ownedByAdmin = needsOwner ? await isHostOwnedByAdmin(Number(hostId)) : false;
+  const services: MappedHostProbeService[] = rows.map(mapHostProbeService);
+  const needsOwner = services.some((service) => String(service.hostScope || "all") !== "specific");
+  const needsAgentVersion = options.agentVersion === undefined && services.some((service) => service.method === "http");
+  const context = needsOwner || needsAgentVersion
+    ? await loadHostProbeContext(Number(hostId))
+    : { ownedByAdmin: false, agentVersion: "" };
+  const httpSupported = hostAgentSupportsHttpProbe(options.agentVersion === undefined ? context.agentVersion : options.agentVersion);
   return services
-    .filter((service: any) => serviceAppliesToHost(service, hostId, () => ownedByAdmin))
-    .map((service: any) => ({
-      serviceId: service.id,
-      method: service.method === "ping" ? "ping" : "tcping",
-      targetIp: service.targetIp,
-      targetPort: service.method === "tcping" ? Number(service.targetPort || 0) : 0,
-      intervalSeconds: service.intervalSeconds,
-      // 只在不是 auto 时带上：老 Agent 不认这个字段；auto 不写也就不改动下发签名
-      ...(service.addressFamily && service.addressFamily !== "auto" ? { family: service.addressFamily } : {}),
+    .filter((service) => serviceAppliesToHost(service, hostId, () => context.ownedByAdmin))
+    .filter((service) => service.method !== "http" || (httpSupported && checkHostProbeHttpUrl(service.targetIp).ok))
+    .map(hostProbeTaskForService)
+    .filter((task) => task.serviceId > 0 && task.targetIp && (task.method !== "tcping" || task.targetPort > 0));
+}
+
+/**
+ * 每条 URL 连接检测服务，范围内有哪些主机的 Agent 版本不够（面板因此没把这条下发给它）。
+ * 给「服务管理」和主机的服务延迟图表写「需要升级 Agent」用。没有 URL 检测服务时不查库。
+ *
+ * 范围的口径和下发一致（serviceAppliesToHost）：「全部 / 排除」只算管理员的主机。
+ * 从没连上来过的主机（没有版本号）不算 —— 它还没有 Agent，谈不上升级。
+ */
+export async function getHostProbeAgentUpgradeHosts(services: Array<MappedHostProbeService | Record<string, unknown>>) {
+  const result = new Map<number, Array<{ id: number; name: string; agentVersion: string }>>();
+  const httpServices = (services || []).filter((service) => service?.method === "http" && service?.isEnabled === true);
+  if (httpServices.length === 0) return result;
+  const q = quoteIdentifier;
+  const rows = await queryRaw<{ id: unknown; name: unknown; userId: unknown; agentVersion: unknown; role: unknown }>(
+    `SELECT h.${q("id")} AS ${q("id")}, h.${q("name")} AS ${q("name")}, h.${q("userId")} AS ${q("userId")},
+            h.${q("agentVersion")} AS ${q("agentVersion")}, u.${q("role")} AS ${q("role")}
+       FROM ${q("hosts")} h
+       LEFT JOIN ${q("users")} u ON u.${q("id")} = h.${q("userId")}
+      ORDER BY h.${q("id")} ASC`,
+  );
+  const outdated = rows
+    .map((row) => ({
+      id: Number(row.id),
+      name: String(row.name || ""),
+      agentVersion: String(row.agentVersion || ""),
+      ownedByAdmin: Number(row.userId || 0) <= 0 || String(row.role || "") === "admin",
     }))
-    .filter((task: any) => task.serviceId > 0 && task.targetIp && (task.method === "ping" || task.targetPort > 0));
+    .filter((host) => host.id > 0 && host.agentVersion && !hostAgentSupportsHttpProbe(host.agentVersion));
+  if (outdated.length === 0) return result;
+  for (const service of httpServices) {
+    const hosts = outdated
+      .filter((host) => serviceAppliesToHost(service, host.id, () => host.ownedByAdmin))
+      .map(({ id, name, agentVersion }) => ({ id, name, agentVersion }));
+    if (hosts.length > 0) result.set(Number(service.id), hosts);
+  }
+  return result;
 }
 
 /** 样本行攒批写（server/dbWriteBatcher.ts）；下面读它的查询先刷再查。 */
@@ -226,6 +367,9 @@ export async function insertHostProbeServiceStats(stats: InsertHostProbeServiceS
       ...stat,
       ...probeCounts,
       isTimeout: probeCounts.probeSuccesses <= 0,
+      // 失败种类只在一次都没通时有意义；通了（哪怕丢了几个包）就不留
+      failure: probeCounts.probeSuccesses <= 0 ? normalizeHostProbeFailure(stat.failure) : null,
+      httpStatus: normalizeHostProbeHttpStatus(stat.httpStatus),
       recordedAt: stat.recordedAt ?? recordedAt,
     };
   }) as InsertHostProbeServiceStat[]);
@@ -249,6 +393,8 @@ export async function getLatestHostProbeServiceStats(serviceIds: number[], hostI
             s.${q("isTimeout")} AS ${q("isTimeout")},
             s.${q("probeCount")} AS ${q("probeCount")},
             s.${q("probeSuccesses")} AS ${q("probeSuccesses")},
+            s.${q("failure")} AS ${q("failure")},
+            s.${q("httpStatus")} AS ${q("httpStatus")},
             s.${q("recordedAt")} AS ${q("recordedAt")}
        FROM ${q("host_probe_service_stats")} s
        INNER JOIN (
@@ -270,6 +416,8 @@ export async function getLatestHostProbeServiceStats(serviceIds: number[], hostI
       latencyMs: row.latencyMs == null ? null : Number(row.latencyMs),
       isTimeout: probeCounts.probeSuccesses <= 0,
       ...probeCounts,
+      failure: probeCounts.probeSuccesses <= 0 ? normalizeHostProbeFailure(row.failure) : null,
+      httpStatus: normalizeHostProbeHttpStatus(row.httpStatus),
       recordedAt: rowDate(row.recordedAt),
     });
   }

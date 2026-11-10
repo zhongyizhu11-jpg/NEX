@@ -44,6 +44,7 @@ import { hostDeleteNeedsOfflineConfirmation, offlineCleanupConfirmOptions } from
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 import OpsHostsMenuItems from "@/features/ops/slots/HostsMenuItems";
 import { FxpRuntimeBadge, fxpRuntimeDetailText } from "@/components/hosts/FxpRuntimeBadge";
+import { formatHostLoadAverage } from "@shared/hostLoadAverage";
 import { hostNeedsAgentUpgrade } from "@shared/fxpRuntime";
 import HostGroupManager, { compareHostGroupDisplayOrder, type HostGroupView, type HostGroupViewMode } from "@/components/hosts/HostGroupManager";
 import HostProbeServiceManager, { type HostProbeServiceViewMode } from "@/components/hosts/HostProbeServiceManager";
@@ -1409,6 +1410,9 @@ const HostTableRow = memo(function HostTableRow({
     host.mimicRuntimeStatus ? `Mimic: ${host.mimicRuntimeStatus}` : "",
     host.mimicRuntimeMessage ? String(host.mimicRuntimeMessage) : "",
   ].filter(Boolean).join("\n");
+  // 1 / 5 / 15 分钟负载（Agent 2.2.253 起）：离线、没报都不画
+  const loadAverageText = host.isOnline ? formatHostLoadAverage(latestMetric) : null;
+  const cpuTitle = [host.cpuInfo ? String(host.cpuInfo) : "", loadAverageText ? `负载（1 / 5 / 15 分钟）：${loadAverageText}` : ""].filter(Boolean).join("\n");
   const pct = (value: unknown) => (host.isOnline && typeof value === "number" && Number.isFinite(value) ? `${Math.round(value)}%` : "--");
   const pctClass = (value: unknown) => (host.isOnline && typeof value === "number" && value >= 90 ? "text-[var(--fx-down-text)]" : host.isOnline && typeof value === "number" && value >= 70 ? "text-[var(--fx-warn-text)]" : "");
   return (
@@ -1460,7 +1464,7 @@ const HostTableRow = memo(function HostTableRow({
         <span className={hostRemainingClass(remainingDays)} title={expiryTitle}>{remainingDays}</span>
       </TableCell>
       <TableCell className="whitespace-nowrap px-3 py-2 text-[11px] tabular-nums">
-        <span className="text-muted-foreground">CPU </span><span className={pctClass(latestMetric?.cpuUsage)} title={host.cpuInfo ? String(host.cpuInfo) : undefined}>{pct(latestMetric?.cpuUsage)}</span>
+        <span className="text-muted-foreground">CPU </span><span className={pctClass(latestMetric?.cpuUsage)} title={cpuTitle || undefined}>{pct(latestMetric?.cpuUsage)}</span>
         <span className="mx-1.5 text-muted-foreground opacity-50">·</span>
         <span className="text-muted-foreground">内存 </span><span className={pctClass(latestMetric?.memoryUsage)} title={memoryDetail}>{pct(latestMetric?.memoryUsage)}</span>
         <span className="mx-1.5 text-muted-foreground opacity-50">·</span>
@@ -1541,6 +1545,14 @@ const HostTableRow = memo(function HostTableRow({
               <RadioTower className="h-3 w-3 shrink-0" />
               <span className="min-w-0 truncate font-mono">{primaryAddressText}</span>
             </div>
+            {/* 列表视图的负载放在地区、地址下面；Agent 没报（老版本、没有 /proc/loadavg）就没有这一行 */}
+            {loadAverageText ? (
+              <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground" title="系统平均负载（1 / 5 / 15 分钟），不是百分比：到 CPU 核数才算满">
+                <Gauge className="h-3 w-3 shrink-0" />
+                <span className="shrink-0">负载</span>
+                <span className="min-w-0 truncate font-medium tabular-nums text-foreground">{loadAverageText}</span>
+              </div>
+            ) : null}
           </div>
         </div>
       </TableCell>
@@ -1559,7 +1571,7 @@ const HostTableRow = memo(function HostTableRow({
       <TableCell className="px-3 py-2.5">
         <HostListResourceBundle
           cpuValue={latestMetric?.cpuUsage}
-          cpuDetail={host.cpuInfo ? String(host.cpuInfo) : undefined}
+          cpuDetail={cpuTitle || undefined}
           memoryValue={latestMetric?.memoryUsage}
           memoryDetail={memoryDetail}
           diskValue={latestMetric?.diskUsage}

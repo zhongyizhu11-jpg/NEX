@@ -1,4 +1,5 @@
 import { sendAgentEvent } from "./agentEvents";
+import { parseAgentLoadAverage } from "../shared/hostLoadAverage";
 
 /*
   主机指标「实时」（面板 2.3.444 / Agent 2.2.225）。
@@ -43,6 +44,10 @@ export type HostLiveSample = {
   uptime: number | null;
   tcpConnections: number | null;
   udpConnections: number | null;
+  /** 1 / 5 / 15 分钟负载（小数）。Agent 2.2.253 起报；老 Agent、没有 /proc/loadavg 的平台是 null。 */
+  load1: number | null;
+  load5: number | null;
+  load15: number | null;
 };
 
 type HostLiveState = {
@@ -75,8 +80,11 @@ function finiteOrNull(value: unknown, max = Number.MAX_SAFE_INTEGER) {
 
 const INT_MAX = 2147483647;
 
-/** Agent 的紧凑指标数组 m（与心跳同一顺序）转成样本。 */
-export function liveSampleFromCompactMetrics(m: unknown, at: number, source: HostLiveSample["source"]): HostLiveSample | null {
+/**
+ * Agent 的紧凑指标数组 m（与心跳同一顺序）转成样本。
+ * 负载不在 m 里：它是小数、而且可能整个没有，Agent 另外带一个 loadAverage 数组（见 agent/load_average.go）。
+ */
+export function liveSampleFromCompactMetrics(m: unknown, at: number, source: HostLiveSample["source"], loadAverage?: unknown): HostLiveSample | null {
   if (!Array.isArray(m) || m.length < 12) return null;
   return {
     at,
@@ -96,6 +104,7 @@ export function liveSampleFromCompactMetrics(m: unknown, at: number, source: Hos
     uptime: finiteOrNull(m[12]),
     tcpConnections: finiteOrNull(m[13], INT_MAX),
     udpConnections: finiteOrNull(m[14], INT_MAX),
+    ...parseAgentLoadAverage(loadAverage),
   };
 }
 
