@@ -93,8 +93,8 @@ func (t *selectedTransport) connectLocked() error {
 			return nil
 		}
 		dialStarted := time.Now()
-		conn, err := dialTCP(endpoint.Host, endpoint.Port, secureDialTimeout(dialCfg), dialCfg.TCPFastOpen)
-		recordConnStage(t.cfg, t.cfg.TunnelID, t.cfg.RuleID, t.cfg.Role, "tcp", endpointLabel, time.Since(dialStarted), err)
+		conn, err := dialNextHop(endpoint.Host, endpoint.Port, secureDialTimeout(dialCfg), dialCfg)
+		recordConnStage(t.cfg, t.cfg.TunnelID, t.cfg.RuleID, t.cfg.Role, nextHopDialStage(dialCfg), endpointLabel, time.Since(dialStarted), err)
 		if err != nil {
 			lastErr = err
 			t.selector.markFailure(index, err)

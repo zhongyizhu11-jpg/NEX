@@ -137,6 +137,10 @@ func validateConfig(cfg config) error {
 			return errors.New("entry requires target host and port")
 		}
 	}
+	if cfg.LossTolerant && strings.EqualFold(strings.TrimSpace(cfg.TransportVersion), "v2") {
+		// V2 的外层已经是 WireGuard 的 UDP，再套一层没有意义；面板不会这样下发。
+		return errors.New("loss-tolerant transport is only supported on v1 tunnels")
+	}
 	if (cfg.ProxyProtocolReceive || cfg.ProxyProtocolSend || cfg.ProxyProtocolExitReceive || cfg.ProxyProtocolExitSend) && cfg.Protocol == "udp" {
 		return errors.New("proxy protocol requires tcp protocol")
 	}

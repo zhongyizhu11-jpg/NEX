@@ -53,6 +53,8 @@ type fxpEndpointID struct {
 	host string
 	port int
 	key  string
+	// lossTolerant：走抗丢包承载。同一个出口的 TCP 连接和抗丢包连接各有各的池和健康。
+	lossTolerant bool
 }
 
 type pooledSecureConn struct {
@@ -96,7 +98,7 @@ var fxpEndpoints = struct {
 var fxpProbeHello, _ = json.Marshal(helloFrame{Network: "probe"})
 
 func fxpEndpointStateFor(endpoint exitEndpoint) *fxpEndpointState {
-	id := fxpEndpointID{host: strings.TrimSpace(endpoint.Host), port: endpoint.Port, key: endpoint.Key}
+	id := fxpEndpointID{host: strings.TrimSpace(endpoint.Host), port: endpoint.Port, key: endpoint.Key, lossTolerant: endpoint.lossTolerant}
 	fxpEndpoints.mu.Lock()
 	state := fxpEndpoints.states[id]
 	if state == nil {
@@ -135,6 +137,8 @@ func (s *fxpEndpointState) noteDialConfigLocked(cfg config) {
 	}
 	s.dialCfg = cfg
 	s.dialCfg.Key = s.id.key
+	// 预热、探测拨的承载方式按端点自己的身份，不按头一个来取连接的配置。
+	s.dialCfg.LossTolerant = s.id.lossTolerant
 	s.dialCfgKnown = true
 }
 
@@ -319,7 +323,7 @@ func (s *fxpEndpointState) take(cfg config) (net.Conn, *secureConn, bool) {
 			continue
 		}
 		s.mu.Unlock()
-		if pooledConnAlive(pooled.conn) {
+		if pooledSecureConnAlive(pooled.conn) {
 			s.ensureFill()
 			return pooled.conn, pooled.sec, true
 		}
@@ -329,6 +333,14 @@ func (s *fxpEndpointState) take(cfg config) (net.Conn, *secureConn, bool) {
 	s.mu.Unlock()
 	s.ensureFill()
 	return nil, nil, false
+}
+
+// pooledSecureConnAlive：抗丢包承载没有套接字可偷看，问它自己（对端复位、关了、失联都知道）。
+func pooledSecureConnAlive(conn net.Conn) bool {
+	if carrier, ok := conn.(*lossCarrierConn); ok {
+		return carrier.alive()
+	}
+	return pooledConnAlive(conn)
 }
 
 func (s *fxpEndpointState) recordTakeLocked(now time.Time) {
