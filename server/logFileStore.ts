@@ -122,9 +122,24 @@ function parseLogLine(line: string): FileLogEntry | null {
   }
 }
 
+/*
+  面板日志留几天：今天和前两天（按北京时间零点切，和流量、运维看板的「一天」是同一个口径）。
+  2.3.524 以前只留最近 24 小时，晚上出的事第二天上午就查不到了（上游 poouo/Forwardx 2.3.292 也改成了三天）。
+  还是一个文件、按条过滤，不拆成每天一个文件：读日志的分页、导出、清空都只认一个文件，拆开要动的地方
+  比留三天本身多得多；到点的整理（pruneJsonLogFile）把三天以前的那几条去掉，文件不会无限长。
+*/
+export const LOG_RETENTION_DAYS = 3;
+const BEIJING_OFFSET_MS = 8 * 60 * 60 * 1000;
+
+/** 保留的最早那一刻：北京时间往前数 LOG_RETENTION_DAYS - 1 天的零点。 */
+export function logRetentionCutoff(now = Date.now()) {
+  const todayStart = Math.floor((now + BEIJING_OFFSET_MS) / DAY_MS) * DAY_MS - BEIJING_OFFSET_MS;
+  return todayStart - (LOG_RETENTION_DAYS - 1) * DAY_MS;
+}
+
 function recentEntry(entry: FileLogEntry, now = Date.now()) {
   const time = new Date(entry.createdAt).getTime();
-  return Number.isFinite(time) && time >= now - DAY_MS;
+  return Number.isFinite(time) && time >= logRetentionCutoff(now);
 }
 
 function normalizeLimit(limit: number | null | undefined) {

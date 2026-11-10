@@ -85,7 +85,7 @@ tcpdump -ni any 'tcp port 入口端口 or udp port 入口端口'
 
 | 组件 | 位置 | 查看命令 |
 |------|------|----------|
-| 面板网页日志 | 系统设置 → 面板日志（最近 24 小时） | 可按等级筛选或导出 |
+| 面板网页日志 | 系统设置 → 面板日志（今天和前两天，按北京时间零点切） | 可按等级筛选或导出 |
 | 面板持久日志（Docker） | 容器内 `/data/logs/panel.jsonl` | `docker exec forwardx-panel tail -n 300 /data/logs/panel.jsonl` |
 | 面板持久日志（非 Docker） | `<面板工作目录>/data/logs/panel.jsonl` | `tail -n 300 data/logs/panel.jsonl` |
 | 面板自定义日志目录 | `$FORWARDX_LOG_DIR/panel.jsonl` | `tail -n 300 "$FORWARDX_LOG_DIR/panel.jsonl"` |

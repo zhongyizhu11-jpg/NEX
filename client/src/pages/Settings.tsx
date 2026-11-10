@@ -848,7 +848,7 @@ function SettingsContent() {
   );
 }
 
-/** 日志时间：「09-23 12:51:27」。日志只保留 24 小时，年份和上下午都是多余的。 */
+/** 日志时间：「09-23 12:51:27」。日志只保留三天（今天和前两天），年份和上下午都是多余的。 */
 function formatLogTime(value: string | number | Date) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "-";
@@ -958,7 +958,7 @@ function PanelLogsSection() {
                 <FileText className="h-4 w-4 text-primary" />
                 面板日志
               </CardTitle>
-              <CardDescription>最近 24 小时运行日志。</CardDescription>
+              <CardDescription>今天和前两天的运行日志（按北京时间零点切）。</CardDescription>
             </div>
             {/*
               原来这里并排五样：一个「导出级别」选择框、导出、刷新、生成支持包、一个红色实心的
@@ -1000,7 +1000,7 @@ function PanelLogsSection() {
                   onSelect: () => {
                     void confirmDialog({
                       title: "清空面板日志",
-                      description: "最近 24 小时的面板日志会全部删除，删除后无法恢复。需要留底的话先导出。",
+                      description: "最近三天的面板日志会全部删除，删除后无法恢复。需要留底的话先导出。",
                       confirmText: "清空",
                       tone: "destructive",
                     }).then((confirmed) => {
@@ -1044,7 +1044,7 @@ function PanelLogsSection() {
                   <div key={entry.id} className="grid gap-x-2 sm:grid-cols-[112px_48px_1fr]">
                     {/*
                       原来是 toLocaleString()：英文系统上是「9/23/2026, 12:51:27 PM」，150px 的列放不下，
-                      每一条都折成两行，一屏只剩一半的日志。日志只看最近 24 小时，年份不用写；
+                      每一条都折成两行，一屏只剩一半的日志。日志只看最近三天，年份不用写；
                       固定成「09-23 12:51:27」，完整时间悬停看。
                     */}
                     <span className="whitespace-nowrap text-muted-foreground" title={new Date(entry.createdAt).toLocaleString()}>
