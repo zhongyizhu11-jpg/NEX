@@ -17,6 +17,8 @@
 export const AGENT_MANAGEMENT_PROXY_VERSION = "2.2.229";
 
 export const FWXM_PATH = "/usr/local/bin/fwxm";
+/** 面板安装脚本放的面板管理脚本（scripts/fwxm-panel.sh）。同机装了面板时，Agent 的 fwxm panel … 交给它。 */
+export const PANEL_MANAGER_PATH = "/usr/local/lib/nex/fwxm-panel";
 export const AGENT_MANAGE_DIR = "/etc/forwardx/manage";
 
 /** 安装脚本和 fwxm 共用的 bash 函数。依赖 CONFIG_DIR / LEGACY_CONFIG_DIR / GO_AGENT_BIN 三个变量。 */
@@ -175,11 +177,19 @@ export function fwxmScript(): string {
     '  fwxm repair              保留配置，重装二进制并重启（等同 upgrade）',
     '  fwxm uninstall           卸载 Agent（会中断这台机器上的转发）',
     '  fwxm version             Agent 版本',
+    '  fwxm panel …             同机装了面板时：管理面板（fwxm panel help 看用法）',
     '代理只管 Agent 和面板之间的通信、安装 / 升级时的下载；业务转发和延迟探测不走代理。',
     'HELP',
     '}',
     '',
     'case "${1:-}" in -h|--help|help) usage; exit 0 ;; esac',
+    // 同机装了面板：面板安装脚本放了一份面板的管理脚本（scripts/fwxm-panel.sh）。fwxm panel … 交给它。
+    `PANEL_MANAGER="\${FWXM_PANEL_MANAGER:-${PANEL_MANAGER_PATH}}"`,
+    'if [ "${1:-}" = panel ]; then',
+    '  shift',
+    '  [ -x "$PANEL_MANAGER" ] || die "这台机器上没有装面板（或面板安装脚本太旧，没有放管理脚本）"',
+    '  exec "$PANEL_MANAGER" "$@"',
+    'fi',
     '[ "$(id -u)" = 0 ] || die "请用 root（sudo fwxm）运行"',
     '[ -r "$MANAGE_DIR/agent-proxy.sh" ] || die "管理组件缺失，请重新运行一次 Agent 安装 / 升级脚本"',
     '# 安装脚本写入的 root 专属文件（600），不是用户配置。',
@@ -253,6 +263,11 @@ export function fwxmScript(): string {
     '[ "$ACTION" = agent ] && { ACTION="${1:-}"; [ "$#" = 0 ] || shift; }',
     'if [ -z "$ACTION" ]; then',
     '  [ -r /dev/tty ] || { usage; exit 0; }',
+    '  if [ -x "$PANEL_MANAGER" ]; then',
+    '    printf "\\n这台机器上装着面板和 Agent，要管理哪一个？\\n  1) 面板\\n  2) Agent\\n选择: " > /dev/tty',
+    '    IFS= read -r choice < /dev/tty || exit 0',
+    '    case "$choice" in 1) exec "$PANEL_MANAGER" ;; 2) ;; *) exit 0 ;; esac',
+    '  fi',
     '  printf "\\nNEX Agent 管理\\n" > /dev/tty',
     '  printf "%s\\n" "  1) 关键信息" "  2) 运行状态" "  3) 查看日志" "  4) 重启 Agent" "  5) 代理设置" "  6) 升级" "  7) 重装修复" "  8) 卸载" "  0) 退出" > /dev/tty',
     '  printf "选择: " > /dev/tty; IFS= read -r choice < /dev/tty || exit 0',

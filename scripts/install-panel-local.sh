@@ -947,6 +947,48 @@ FORWARDX_UPGRADE_COMMAND="/bin/bash $APP_DIR/scripts/install-panel-local.sh upgr
 EOF
 }
 
+# ── SSH 管理命令 fwxm（面板这一侧，脚本本体是 scripts/fwxm-panel.sh） ──
+# 放到 /usr/local/lib/nex/fwxm-panel，部署方式和目录写进 /etc/nex/panel-manage.conf。
+# /usr/local/bin/fwxm 没有、或者是我们自己写的转发脚本时，写一个转发脚本过去；已经是 Agent 的 fwxm 就不动
+# （Agent 的 fwxm 认 `fwxm panel …`，会交给面板这一份）。
+PANEL_MANAGER_DIR="/usr/local/lib/nex"
+PANEL_MANAGER="$PANEL_MANAGER_DIR/fwxm-panel"
+PANEL_MANAGER_CONF="/etc/nex/panel-manage.conf"
+PANEL_FWXM_LINK="/usr/local/bin/fwxm"
+PANEL_FWXM_MARKER="nex-panel-fwxm-dispatcher"
+
+install_panel_manager() {
+  local source="$1" mode="$2"
+  if [ ! -s "$source" ] || ! bash -n "$source" 2>/dev/null; then
+    echo "[WARN] SSH 管理命令 fwxm 没有装上（管理脚本缺失或校验失败），不影响面板运行"
+    return 0
+  fi
+  mkdir -p "$PANEL_MANAGER_DIR" "$(dirname "$PANEL_MANAGER_CONF")" /usr/local/bin || return 0
+  install -m 755 "$source" "$PANEL_MANAGER.new" && mv -f "$PANEL_MANAGER.new" "$PANEL_MANAGER" || return 0
+  {
+    echo "MODE=$mode"
+    echo "APP_DIR=$APP_DIR"
+    if [ "$mode" = docker ]; then echo "CONTAINER_NAME=$CONTAINER_NAME"; else echo "SERVICE_NAME=$SERVICE_NAME"; fi
+    echo "REPO_SLUG=$REPO_SLUG"
+  } > "$PANEL_MANAGER_CONF.new" && chmod 644 "$PANEL_MANAGER_CONF.new" && mv -f "$PANEL_MANAGER_CONF.new" "$PANEL_MANAGER_CONF"
+  if [ ! -e "$PANEL_FWXM_LINK" ] || grep -q "$PANEL_FWXM_MARKER" "$PANEL_FWXM_LINK" 2>/dev/null; then
+    cat > "$PANEL_FWXM_LINK.new" <<FWXM_DISPATCH
+#!/bin/bash
+# $PANEL_FWXM_MARKER：只装了面板时的 fwxm。同机装了 Agent 后会被 Agent 的 fwxm 换掉，它同样认 fwxm panel。
+[ "\${1:-}" = panel ] && shift
+exec "$PANEL_MANAGER" "\$@"
+FWXM_DISPATCH
+    chmod 755 "$PANEL_FWXM_LINK.new" && mv -f "$PANEL_FWXM_LINK.new" "$PANEL_FWXM_LINK"
+  fi
+  echo "[INFO] SSH 管理命令: fwxm（同机装了 Agent 时用 fwxm panel）查看状态、日志、升级、重置管理员密码"
+}
+
+remove_panel_manager() {
+  rm -f "$PANEL_MANAGER" "$PANEL_MANAGER_CONF"
+  rmdir "$PANEL_MANAGER_DIR" "$(dirname "$PANEL_MANAGER_CONF")" 2>/dev/null || true
+  if grep -q "$PANEL_FWXM_MARKER" "$PANEL_FWXM_LINK" 2>/dev/null; then rm -f "$PANEL_FWXM_LINK"; fi
+}
+
 install_panel() {
   local release_version
   require_root
@@ -961,6 +1003,7 @@ install_panel() {
   read_database_config
   write_service
   restart_service
+  install_panel_manager "$APP_DIR/scripts/fwxm-panel.sh" local
   echo "[NEX] elapsed $(elapsed_seconds)s"
   echo "[DONE] NEX panel started (release v$release_version) in $(elapsed_seconds)s: http://SERVER_IP:$PORT"
 }
@@ -977,6 +1020,7 @@ upgrade_panel() {
   write_env
   write_service
   restart_service
+  install_panel_manager "$APP_DIR/scripts/fwxm-panel.sh" local
   echo "[NEX] elapsed $(elapsed_seconds)s"
   echo "[DONE] NEX panel upgraded to release v$release_version and restarted in $(elapsed_seconds)s"
 }
@@ -991,6 +1035,7 @@ uninstall_panel() {
 
   if confirm_yes "Remove panel directory $APP_DIR ? [y/N] "; then
     rm -rf "$APP_DIR"
+    remove_panel_manager
     echo "[DONE] Removed $APP_DIR"
   else
     echo "[DONE] Service uninstalled, kept $APP_DIR"
