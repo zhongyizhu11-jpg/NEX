@@ -48,6 +48,7 @@ export * from "./repositories/permissionRepository";
 export * from "./repositories/settingsRepository";
 export * from "./repositories/billingRepository";
 export * from "./repositories/trafficBillingRepository";
+export * from "./repositories/productStockRepository";
 export * from "./repositories/announcementRepository";
 export * from "./repositories/ticketRepository";
 export * from "./repositories/forwardGroupRepository";

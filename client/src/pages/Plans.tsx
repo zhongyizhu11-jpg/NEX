@@ -47,6 +47,7 @@ import {
   planMonthlyEquivalentCents,
 } from "@shared/planPricing";
 import { formatRateBps, parseRatePercentToBps } from "@shared/referral";
+import { parseProductStockInput, ProductStockField, ProductStockSummary } from "@/components/ProductStock";
 import { Check, CheckCircle2, Coins, LayoutGrid, List, Package, Pencil, Plus, RefreshCw, Settings2, ShoppingBag, Trash2 } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 import { toast } from "sonner";
@@ -78,6 +79,8 @@ type PlanForm = {
   sortOrder: string;
   /** 邀请返利比例（%），字符串原样保存，提交时按字符串换成基点（shared/referral.ts）。 */
   referralRate: string;
+  /** 销售库存总量，0 = 不限。已售数量不在表单里 —— 那是卖出来的，不是填出来的。 */
+  stockLimit: string;
   hostIds: number[];
   tunnelIds: number[];
   forwardGroupIds: number[];
@@ -149,6 +152,7 @@ const emptyForm: PlanForm = {
   syncExistingSubscribers: true,
   sortOrder: "0",
   referralRate: "0",
+  stockLimit: "0",
   hostIds: [],
   tunnelIds: [],
   forwardGroupIds: [],
@@ -329,6 +333,8 @@ function PlanCard({
         <dd className="text-right tabular-nums text-foreground">{plan.trafficAddons?.length || 0} 档</dd>
         <dt className="text-muted-foreground">邀请返利</dt>
         <dd className="text-right tabular-nums text-foreground">{referralRateText(plan.referralRateBps)}</dd>
+        <dt className="text-muted-foreground">库存</dt>
+        <dd className="text-right text-foreground"><ProductStockSummary product={plan} /></dd>
       </dl>
       <div className="mx-[var(--fx-card-padding)] mt-3 border-t border-[var(--fx-stroke-weak)] py-3">
         <PlanStatusSwitches
@@ -618,6 +624,7 @@ function toForm(plan: any): PlanForm {
     syncExistingSubscribers: true,
     sortOrder: String(plan.sortOrder ?? 0),
     referralRate: formatRateBps(plan.referralRateBps),
+    stockLimit: String(plan.stockLimit ?? 0),
     hostIds: plan.hostIds || [],
     tunnelIds: plan.tunnelIds || [],
     forwardGroupIds: plan.forwardGroupIds || [],
@@ -662,6 +669,7 @@ function payload(form: PlanForm) {
     sortOrder: Math.max(0, Math.floor(Number(form.sortOrder || 0))),
     // save() 已经校验过；这里解析不了时按 0（不返利）兜底，不会凭空返钱。
     referralRateBps: parseRatePercentToBps(form.referralRate) ?? 0,
+    stockLimit: parseProductStockInput(form.stockLimit),
     hostIds: form.hostIds,
     tunnelIds: form.tunnelIds,
     forwardGroupIds: form.forwardGroupIds,
@@ -725,6 +733,9 @@ export default function Plans() {
     placeholderData: (previousData) => previousData,
   });
   const plans = (planPageQuery.data?.items || []) as any[];
+  // 正在编辑的那个套餐已经卖了多少份：库存输入框下面要告诉管理员，补货得在这个数上加。
+  // 从列表里现取而不是存进表单 —— 弹窗开着的时候有人下单，这个数会跟着列表刷新。
+  const editingStockUsed = form.id ? plans.find((plan) => Number(plan.id) === Number(form.id))?.stockUsed : 0;
   const isLoading = planPageQuery.isLoading;
   const planSummary = planSummaryQuery.data;
   const planSummaryLoading = planSummaryQuery.isLoading;
@@ -1307,6 +1318,7 @@ export default function Plans() {
                                     <div>附加流量 {plan.trafficAddons?.length || 0} 档</div>
                                     <div>连接 {plan.maxConnections || "不限"} · 单 IP {plan.maxIPs || "不限"} · 限速 {speed(plan.rateLimitMbps)}</div>
                                     <div>邀请返利 {referralRateText(plan.referralRateBps)}</div>
+                                    <div>库存 <ProductStockSummary product={plan} className="justify-start" /></div>
                                   </div>
                                 </TableCell>
                                 <TableCell data-label="状态">
@@ -1627,6 +1639,14 @@ export default function Plans() {
                 被邀请人买这个套餐（含续费）实付金额的百分之几返给邀请人，0 为不返。0 到 100，最多两位小数。需在「账单与兑换 › 邀请返利」里开启。
               </p>
             </FormField>
+            <ProductStockField
+              label="库存总量"
+              value={form.stockLimit}
+              onChange={(stockLimit) => setForm({ ...form, stockLimit })}
+              help={`0 为不限。新购、管理员分配、兑换码和待支付订单各占一份，续费不占；未付款的订单关闭后退回，已售出的到期不退。${
+                form.id ? `当前已售 ${Number(editingStockUsed) || 0} 份，补货请在这个数上加总量。` : ""
+              }`}
+            />
             <FormField className="space-y-2">
               <Label>排序</Label>
               <Input type="number" min={0} value={form.sortOrder} onChange={(e) => setForm({ ...form, sortOrder: e.target.value })} />

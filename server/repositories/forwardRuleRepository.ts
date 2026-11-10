@@ -2,7 +2,7 @@
 import { notifyRuleDeleted } from "../entityCleanup";
 import { invalidateProxySubCacheForUser } from "../proxySubCache";
 import { forwardGroupMembers, forwardGroups, forwardRuleRouteEvents, forwardRuleTunnelExits, forwardRules, InsertForwardRule, tunnels, type ForwardRule, type ForwardRuleRouteEvent } from "../../drizzle/schema";
-import { afterDatabaseCommit, executeRaw, getDb, insertAndGetId, nowDate } from "../dbRuntime";
+import { afterDatabaseCommit, executeRaw, getDatabaseKind, getDb, insertAndGetId, nowDate } from "../dbRuntime";
 import { queryRaw } from "../dbRuntime";
 import { boolLiteral, boolValue, inList, quoteIdentifier } from "../dbCompat";
 import { describePortPolicy, isPortAllowedByPolicy, portPolicyFrom, portPolicyHasRestriction, type PortPolicySource } from "@shared/portPolicy";
@@ -14,6 +14,7 @@ import { reorderWithinSortOrderScope } from "./sortOrderSlots";
 import { recordRuleEntryDomainCleanupsBeforeDelete } from "./ruleEntryDomainRepository";
 import { signalRuleEntryDomainChanged, signalRuleEntryDomainCleanup } from "../ruleEntryDomainSignals";
 import { releaseRuleSniNames } from "./tlsInboundRepository";
+import { isLogicalForwardRule, TRAFFIC_STOCK_RULE_KEYS, withTrafficRuleStockGuard, type TrafficStockRule } from "./productStockRepository";
 
 /*
   规则专属域名（server/ruleEntryDomain.ts）跟着这几列走：入口主机、开关、删除、订阅绑定、
@@ -1165,7 +1166,12 @@ export async function createForwardRule(rule: InsertForwardRule) {
   if (payload.sortOrder === undefined && !payload.forwardGroupRuleId && !payload.forwardGroupMemberId) {
     payload.sortOrder = await nextForwardRuleSortOrder(Number(payload.userId || 0), await forwardRuleCategoryForPayload(payload));
   }
-  const id = await insertAndGetId("forward_rules", payload);
+  /*
+    按量计费资源的账号库存 / 每账号规则上限在这里把关，而不是在路由里：面板、Telegram 机器人、
+    导入、转发组模板……所有建规则的路最后都落到这个函数。落在限量资源上的逻辑规则，
+    校验和插入在同一个事务、同一把配置行锁里完成；其余规则（子规则、不限量的资源）原样直接插入。
+  */
+  const id = await withTrafficRuleStockGuard(payload, null, () => insertAndGetId("forward_rules", payload));
   const created = await getForwardRuleById(id).catch(() => undefined);
   await recordConfigAuditEvent({ resourceType: "forward_rule", resourceId: id, hostId: Number((created as any)?.hostId || 0), action: "create", after: created });
   if (Number(payload.proxyNodeId || 0) > 0) signalRuleEntryDomainChanged(id, "rule-created");
@@ -1378,12 +1384,67 @@ export async function getAllRouteRelayRules() {
     .where(and(sql`${forwardRules.routeParentRuleId} IS NOT NULL`, sql`${forwardRules.routeParentRuleId} <> 0`));
 }
 
+function stockColumnValue(value: unknown) {
+  if (value === true) return 1;
+  if (value === false || value === null || value === undefined) return 0;
+  return Number(value) || 0;
+}
+
+/**
+ * 这次修改会不会改变规则占的按量席位。不会就返回 null，调用方照原来的路直接写。
+ *
+ * updateForwardRule 是热路径（心跳回写运行状态、转发组同步子规则都走它），所以先用
+ * 不查库的条件筛掉绝大多数调用：没碰那几列的、明摆着是子规则的，都不多查一次。
+ */
+async function trafficStockChangeForUpdate(id: number, data: Partial<InsertForwardRule>, loaded?: ForwardRule) {
+  const patch = data as Record<string, unknown>;
+  if (!TRAFFIC_STOCK_RULE_KEYS.some((key) => patch[key] !== undefined)) return null;
+  if (!isLogicalForwardRule(patch as TrafficStockRule)) return null;
+  const current = loaded || await getForwardRuleById(id).catch(() => undefined);
+  if (!current) return null;
+  const currentColumns = current as Record<string, unknown>;
+  const changed = TRAFFIC_STOCK_RULE_KEYS.some((key) => (
+    patch[key] !== undefined && stockColumnValue(patch[key]) !== stockColumnValue(currentColumns[key])
+  ));
+  if (!changed) return null;
+  const next: Record<string, unknown> = { ...current };
+  for (const key of TRAFFIC_STOCK_RULE_KEYS) {
+    if (patch[key] !== undefined) next[key] = patch[key];
+  }
+  if (!isLogicalForwardRule(next as TrafficStockRule)) return null;
+  return { current: current as TrafficStockRule, next: next as TrafficStockRule };
+}
+
 export async function updateForwardRule(id: number, data: Partial<InsertForwardRule>) {
   const db = await getDb();
   if (!db) return;
   const audit = shouldAuditConfigPatch(data as any);
   const before = audit ? await getForwardRuleById(id).catch(() => undefined) : undefined;
-  await db.update(forwardRules).set({ ...data, updatedAt: nowDate() }).where(eq(forwardRules.id, id));
+  const stockChange = await trafficStockChangeForUpdate(id, data, before);
+  if (stockChange) {
+    /*
+      规则换了主人、换了资源，或从待删除恢复：它占的按量席位变了，要和新建一样过一遍库存。
+      校验通过后在同一个事务里写入；写之前再锁一次规则行，确认刚才拿来校验的那几列没被
+      并发的另一次修改动过 —— 否则会拿着过期的判断把规则写到一个已经满了的资源上。
+    */
+    await withTrafficRuleStockGuard(stockChange.next, stockChange.current, async (guarded) => {
+      if (guarded) {
+        const q = quoteIdentifier;
+        const [locked] = await queryRaw<Record<string, unknown>>(
+          `SELECT ${TRAFFIC_STOCK_RULE_KEYS.map((key) => `${q(key)} AS ${q(key)}`).join(", ")}
+             FROM ${q("forward_rules")} WHERE ${q("id")} = ?${getDatabaseKind() === "sqlite" ? "" : " FOR UPDATE"}`,
+          [id],
+        );
+        if (!locked || TRAFFIC_STOCK_RULE_KEYS.some((key) => stockColumnValue(locked[key]) !== stockColumnValue(stockChange.current[key]))) {
+          throw new Error("规则已被其他操作修改，请刷新后重试");
+        }
+      }
+      // 在事务里要重新取 db：外面那个是连接池上的，写出去不在这个事务里。
+      await (await getDb())!.update(forwardRules).set({ ...data, updatedAt: nowDate() }).where(eq(forwardRules.id, id));
+    });
+  } else {
+    await db.update(forwardRules).set({ ...data, updatedAt: nowDate() }).where(eq(forwardRules.id, id));
+  }
   if (audit && before) {
     const after = await getForwardRuleById(id).catch(() => undefined);
     await recordConfigAuditEvent({ resourceType: "forward_rule", resourceId: id, hostId: Number((after as any)?.hostId || (before as any)?.hostId || 0), action: "update", before, after });

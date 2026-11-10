@@ -6,6 +6,7 @@ import { refreshUserForwardEndpoints } from "./helpers";
 import { adjustUserBalanceCommand, setUserBalanceCommand } from "../services/userCommandService";
 import { clearForwardxAiSettingsCache } from "../ai/settings";
 import { clientIp } from "../clientIp";
+import { productStock } from "../../shared/productStock";
 
 const dateInput = z.string().trim().max(64).optional().nullable();
 
@@ -157,6 +158,8 @@ export const billingRouter = router({
       if ((await db.getSetting("storeEnabled")) !== "true") throw new Error("商店功能未开启");
       const plan = await db.getSubscriptionPlanById(input.planId);
       if (!plan || !plan.isActive || !plan.isStoreVisible) throw new Error("套餐不可购买");
+      // 已售罄的先拦下（续费不受库存限制）。并发下真正防超售的是开通事务里那条带条件的占额语句。
+      if (!input.subscriptionId && productStock(plan).soldOut) throw new Error(db.PLAN_STOCK_SOLD_OUT_MESSAGE);
       // 折扣按**选中那一档**的价格预览，否则年付的单会按月付价算折扣。
       const { option } = await db.resolvePlanPricing(input.planId, input.durationDays ?? null);
       let discountCodeId: number | null = null;
