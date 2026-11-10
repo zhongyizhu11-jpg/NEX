@@ -2912,6 +2912,7 @@ export async function seedDevPanelData(options: { lineDemo?: boolean } = {}) {
   const catalog = await seedCatalog(adminId, resources, hostIds);
   await seedUserState(usersSeed, hostIds, resources, rules, catalog);
   await seedForwardTests(usersSeed, rules, hostIds);
+  await import("./ops/trafficAnomalyDemo").then((m) => m.seedTrafficAnomalyDemo(rules.adminRuleIds)).catch((error) => console.warn(`[DevPanel] traffic anomaly demo seed failed: ${error instanceof Error ? error.message : String(error)}`));
   await seedSettings();
   await setSetting("devPanelSeededAt", new Date().toISOString());
 

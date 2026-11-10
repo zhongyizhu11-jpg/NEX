@@ -52,6 +52,7 @@ import {
 import { mapWithConcurrency } from "./asyncPool";
 import { portAccessLimitAction, portAccessLimitSpecs, readPortAccessLimitsEnabled, resolvePortAccessLimitAction } from "./portAccessLimits";
 import { ruleLimitRootId } from "./ruleLimits";
+import { anomalyAwareRuleMbps } from "./ops/trafficAnomalyThrottles";
 import { getHostWireGuardPlane, getTunnelRuntimeGeneration, isTunnelRuntimeHostReady } from "./tunnelRuntimeStatus";
 import { appendPanelLog } from "./_core/panelLogger";
 import { isIP } from "net";
@@ -1784,6 +1785,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       const user = rateLimitUserById.get(userId) as any;
       const forwardGroupId = Number(rule?.forwardGroupId || 0);
       const group = forwardGroupRuntimeConfigById.get(forwardGroupId) as any;
+      // 流量异常的临时限速叠在规则这一级上，和手动设的取严的那个（server/ops/trafficAnomalyThrottles.ts）。
+      const ruleMbps = anomalyAwareRuleMbps(ruleLimitRootId(rule), rule?.rateLimitMbps);
       return buildForwardRateTiers({
         userId,
         hostId: Number(host.id) || 0,
@@ -1796,7 +1799,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         tunnel: { id: tunnel?.id, mbps: tunnel?.rateLimitMbps },
         group: { id: forwardGroupId, mbps: group?.rateLimitMbps },
         // 单条规则限速（server/ruleLimits.ts）：成员规则 / 中转跳按根规则算，同一台机器上共用一个桶。
-        rule: { id: ruleLimitRootId(rule), inMbps: rule?.rateLimitMbps, outMbps: rule?.rateLimitMbps },
+        rule: { id: ruleLimitRootId(rule), inMbps: ruleMbps, outMbps: ruleMbps },
         hostLimitMbps: (host as any).rateLimitMbps,
       });
     };

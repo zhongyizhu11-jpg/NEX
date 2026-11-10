@@ -30,6 +30,7 @@ import { profilingRouter } from "./profiling";
 import { netTuneRouter } from "./netTune";
 import { slowQueriesRouter } from "./slowQueries";
 import { metricsExportRouter } from "./metricsExport";
+import { trafficAnomalyRouter } from "./trafficAnomaly";
 
 export const opsRouter = router({
   audit: auditRouter,
@@ -59,4 +60,5 @@ export const opsRouter = router({
   netTune: netTuneRouter,
   slowQueries: slowQueriesRouter,
   metricsExport: metricsExportRouter,
+  trafficAnomaly: trafficAnomalyRouter,
 });

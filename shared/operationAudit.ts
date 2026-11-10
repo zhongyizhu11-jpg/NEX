@@ -213,6 +213,7 @@ export const OPERATION_AUDIT_MODULE_LABELS: Record<string, string> = {
   "ops.offsiteBackup": "异地备份",
   "ops.quotaPolicy": "额度策略",
   "ops.resourceAlert": "资源告警",
+  "ops.trafficAnomaly": "流量异常",
   "ops.audit": "操作审计",
   "ops.metricsExport": "指标导出",
 };

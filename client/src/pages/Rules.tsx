@@ -1265,7 +1265,7 @@ const RuleRow = memo(function RuleRow(props: RuleCardProps) {
         )}
       </div>
 
-      {alerts.length > 0 || notes.length > 0 || hasRuleLimits(rule) ? (
+      {alerts.length > 0 || notes.length > 0 || hasRuleLimits(rule) || rule.anomalyThrottle ? (
         <div className="fx-ds-rule-extra">
           {alerts.length > 0 ? <div className="fx-rule-alerts">{alerts}</div> : null}
           <RuleLimitSummary rule={rule} />
