@@ -121,6 +121,7 @@ import { OpsAdvancedSettingsPane, OpsBackupExtraSections, OpsTelegramExtraSectio
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import GoogleLoginSettingsCard from "@/components/settings/GoogleLoginSettingsCard";
 import DiscordSettingsCard from "@/components/settings/DiscordSettingsCard";
+import DnspodRecordsCard from "@/components/settings/DnspodRecordsCard";
 import PanelProfilingCard from "@/components/settings/PanelProfilingCard";
 import { useCallback, useMemo, useRef, useState, useEffect } from "react";
 import { SaveDockBar, SaveDockProvider, useSaveDockActive, useSaveDockItem } from "@/components/settings/SaveDock";
@@ -6570,6 +6571,9 @@ function SystemInfoSection() {
           </div>
         </CardContent>
       </Card>
+
+      {/* 记录管理用的是已保存的腾讯云凭据，所以按已保存的服务商判断，不看表单里还没存的选择 */}
+      {settings?.ddns?.provider === "tencentcloud" && <DnspodRecordsCard />}
 
       <Card className="border-border bg-card">
         <CardHeader>

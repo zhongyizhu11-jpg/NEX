@@ -33,6 +33,7 @@ import { discordAuthRouter } from "./routers/discordAuth";
 import { netProfileRouter } from "./routers/netProfile";
 import { agentRuntimeRouter } from "./routers/agentRuntime";
 import { uiThemesRouter } from "./routers/uiThemes";
+import { dnsRecordsRouter } from "./routers/dnsRecords";
 
 export const appRouter = router({
   system: systemRouter,
@@ -69,6 +70,7 @@ export const appRouter = router({
   netProfile: netProfileRouter,
   agentRuntime: agentRuntimeRouter,
   uiThemes: uiThemesRouter,
+  dnsRecords: dnsRecordsRouter,
 });
 
 export type AppRouter = typeof appRouter;
