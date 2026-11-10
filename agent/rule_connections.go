@@ -29,9 +29,11 @@ import (
 */
 
 type ruleConnectionsTask struct {
-	TaskID    string `json:"taskId"`
-	RuleID    int    `json:"ruleId"`
-	Port      int    `json:"port"`
+	TaskID string `json:"taskId"`
+	RuleID int    `json:"ruleId"`
+	Port   int    `json:"port"`
+	// 端口段规则的最后一个端口（面板 2.3.525 起带）；0 = 单端口。
+	PortEnd   int    `json:"portEnd,omitempty"`
 	Protocol  string `json:"protocol"`
 	DNAT      bool   `json:"dnat"`
 	Limit     int    `json:"limit"`
@@ -157,7 +159,7 @@ func runRuleConnectionsTaskContext(parent context.Context, task ruleConnectionsT
 		if wantTCP && task.DNAT {
 			protocols["tcp"] = true
 		}
-		ctRows := conntrackConnections(task.Port, protocols)
+		ctRows := conntrackConnections(task.Port, portSpanEnd(task.Port, task.PortEnd), protocols)
 		if len(ctRows) > 0 {
 			sources = append(sources, "conntrack")
 		}
@@ -314,13 +316,13 @@ func normalizeSSAddress(value string) string {
 }
 
 // conntrackConnections 读 nf_conntrack：原始方向 dport = port、协议对得上的条目。TCP 只要 ESTABLISHED。
-func conntrackConnections(port int, protocols map[string]bool) []ruleConnectionRow {
+func conntrackConnections(port int, portEnd int, protocols map[string]bool) []ruleConnectionRow {
 	for _, path := range []string{"/proc/net/nf_conntrack", "/proc/net/ip_conntrack"} {
 		f, err := os.Open(path)
 		if err != nil {
 			continue
 		}
-		rows := parseConntrackRows(f, port, protocols)
+		rows := parseConntrackRowsSpan(f, port, portEnd, protocols)
 		_ = f.Close()
 		return rows
 	}
@@ -328,6 +330,11 @@ func conntrackConnections(port int, protocols map[string]bool) []ruleConnectionR
 }
 
 func parseConntrackRows(r io.Reader, port int, protocols map[string]bool) []ruleConnectionRow {
+	return parseConntrackRowsSpan(r, port, port, protocols)
+}
+
+// parseConntrackRowsSpan：原始方向 dport 落在 [port, portEnd] 里的条目（端口段规则看整段）。
+func parseConntrackRowsSpan(r io.Reader, port int, portEnd int, protocols map[string]bool) []ruleConnectionRow {
 	var rows []ruleConnectionRow
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 64*1024), conntrackScanBufferMax)
@@ -343,7 +350,7 @@ func parseConntrackRows(r io.Reader, port int, protocols map[string]bool) []rule
 			continue
 		}
 		dport, err := strconv.Atoi(string(targetPort))
-		if err != nil || dport != port || !protocols[string(protocol)] {
+		if err != nil || dport < port || dport > portEnd || !protocols[string(protocol)] {
 			continue
 		}
 		if string(protocol) == "tcp" && !bytes.Contains(line, conntrackEstablished) {

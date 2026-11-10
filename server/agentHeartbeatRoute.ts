@@ -296,6 +296,8 @@ import {
   shouldLogAgentRuntimeDrift,
   shouldLogMimicRuntimePlan,
 } from "./agentHeartbeatLogging";
+import { isPortRangeRule, ruleSourcePortEnd } from "@shared/portRange";
+import { portRangeAgentUnsupportedReason } from "./rulePortRange";
 // 下面这些拆到了 agentHeartbeat*.ts，测试和别的模块还按老路径从本文件引用。
 export { forgetAgentHeartbeatHost, forgetAgentHeartbeatRule, pruneAgentHeartbeatCaches, invalidateAgentDesiredStateCache } from "./agentHeartbeatState";
 export { normalizeAgentRuntimeBoolean, buildGostRuleListener, forwardXUDPTargetAddress, selectForwardChainListenerPort } from "./agentHeartbeatRuntime";
@@ -2871,6 +2873,9 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       });
     };
     const shouldUseRuleGuard = async (rule: any) => {
+      // 端口段规则（shared/portRange.ts）只走内核 DNAT：守卫是一个端口一个进程，接不了一整段。
+      // 段规则要限速时不在这里悄悄放行，而是下面内核那一支直接报错（portRangeRuntimeBlocker）。
+      if (isPortRangeRule(rule)) return false;
       // 旧入口桥接只是把流量原样递给新入口，限速、协议封禁由新入口上的规则本身执行；
       // 这里再套一层守卫会多一个用户态进程，还会让同一份限速串联两次。
       if (isEntryBridgeRuntimeRule(rule)) return false;
@@ -2892,6 +2897,14 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       return hasProtocolPolicy(await ruleProtocolPolicy(rule));
     };
     const guardListenPort = (rule: any) => protocolGuardPortsForRule(rule).guardListenPort;
+    /** 端口段规则这一轮能不能下发；不能就是给用户看的原因（见内核转发那一支）。 */
+    const portRangeRuntimeBlocker = (rule: Record<string, unknown>): string | null => {
+      const agentReason = portRangeAgentUnsupportedReason(host);
+      if (agentReason) return agentReason;
+      const limits = guardRateLimitForRule(rule);
+      if (limits.limitIn > 0 || limits.limitOut > 0) return "端口段规则不能限速（内核转发限速要换成用户态守卫，一个端口一个进程），请取消限速或改回单端口";
+      return null;
+    };
     const guardBackendPort = (rule: any) => protocolGuardPortsForRule(rule).guardBackendPort;
     const guardTargetForRule = (rule: any, useRuleGuard: boolean) => (
       useRuleGuard && shouldUseProcessBackendGuard(rule)
@@ -3080,10 +3093,10 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
         exitPorts: tunnel ? currentHostTunnelExitPortsForRule(rule, tunnel) : [],
       });
     };
-    const runningRules: { ruleId: number; tunnelId?: number; sourcePort: number; targetIp: string; targetPort: number; protocol: string; forwardType: string; failover?: any; forwardGroupHealth?: any; schedulerOnly?: boolean }[] = [];
+    const runningRules: { ruleId: number; tunnelId?: number; sourcePort: number; sourcePortEnd?: number; targetIp: string; targetPort: number; protocol: string; forwardType: string; failover?: any; forwardGroupHealth?: any; schedulerOnly?: boolean }[] = [];
     const runningRuleSeen = new Set<string>();
     const guardRules: any[] = [];
-    const addRunningRule = (rule: { ruleId: number; tunnelId?: number; sourcePort: number; targetIp: string; targetPort: number; protocol: string; forwardType: string; failover?: any; forwardGroupHealth?: any; schedulerOnly?: boolean }) => {
+    const addRunningRule = (rule: { ruleId: number; tunnelId?: number; sourcePort: number; sourcePortEnd?: number; targetIp: string; targetPort: number; protocol: string; forwardType: string; failover?: any; forwardGroupHealth?: any; schedulerOnly?: boolean }) => {
       if (!rule.ruleId || !rule.sourcePort) return;
       const key = ruleRuntimeIdentityKey(rule.ruleId, rule.sourcePort, rule.protocol);
       if (runningRuleSeen.has(key)) return;
@@ -3452,6 +3465,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
             ruleId: rule.id,
             tunnelId: ruleTunnel ? Number(ruleTunnel.id) : 0,
             sourcePort: trafficPort,
+            // 端口段：Agent 按它装整段的计数规则、做就绪检查，并把这条规则排除在快速转发之外。
+            ...(isPortRangeRule(rule) && trafficPort === Number(rule.sourcePort) ? { sourcePortEnd: ruleSourcePortEnd(rule) } : {}),
             targetIp: rulePassthrough ? rulePassthrough.exitAddress : rule.targetIp,
             targetPort: rulePassthrough ? Number(rule.sourcePort) : rule.targetPort,
             protocol: rule.protocol,
@@ -3701,6 +3716,27 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
             failover: guardFailover,
           });
         } else if (rule.forwardType === "iptables" || rule.forwardType === "nftables") {
+          const rangeBlocker = isPortRangeRule(rule) ? portRangeRuntimeBlocker(rule) : null;
+          if (rangeBlocker) {
+            /*
+              端口段规则在这台机器上跑不了（Agent 太老，或者之后才加上了限速）：不下发半套规则，
+              发一条一定失败、带着原因的动作，规则卡上直接看到为什么。老 Agent 收到端口段命令
+              虽然也能执行，但它的就绪检查只认单端口，会一直当成「没装上」反复重下。
+            */
+            actions.push({
+              ruleId: rule.id,
+              op: "apply",
+              forwardType: rule.forwardType,
+              sourcePort: rule.sourcePort,
+              sourcePortEnd: ruleSourcePortEnd(rule),
+              targetIp: rule.targetIp,
+              targetPort: rule.targetPort,
+              protocol: rule.protocol,
+              networkInterface: hostInterface,
+              commands: [`echo ${shQuote(rangeBlocker)} >&2`, "exit 1"],
+              failureMessage: rangeBlocker,
+            });
+          } else {
           // 两种内核态转发只差三处，差别写在 buildKernelForwardCmds 里。
           cmds.push(...buildKernelForwardCmds(rule, rule.forwardType, buildRuleAccessLimitCmds(rule)));
           actions.push({
@@ -3708,12 +3744,14 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
             op: "apply",
             forwardType: rule.forwardType,
             sourcePort: rule.sourcePort,
+            ...(isPortRangeRule(rule) ? { sourcePortEnd: ruleSourcePortEnd(rule) } : {}),
             targetIp: rule.targetIp,
             targetPort: rule.targetPort,
             protocol: rule.protocol,
             networkInterface: hostInterface,
             commands: cmds,
           });
+          }
         } else if (rule.forwardType === "realm") {
           const svcName = realmServiceNameForPort(rule.sourcePort, rule.protocol);
           const realmConfigPath = realmConfigPathForPort(rule.sourcePort, rule.protocol);
@@ -4990,6 +5028,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
           ruleId: Number(action.ruleId),
           tunnelId: Number(action.tunnelId || 0) || undefined,
           sourcePort: Number(action.sourcePort),
+          ...(Number(action.sourcePortEnd || 0) > Number(action.sourcePort) ? { sourcePortEnd: Number(action.sourcePortEnd) } : {}),
           targetIp: String(action.targetIp || ""),
           targetPort: Number(action.targetPort || 0),
           protocol: action.protocol || "tcp",

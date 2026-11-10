@@ -112,6 +112,8 @@ import {
   prepareRuleEntryBridgeSwitch,
   refreshRuleEntryBridgeHosts,
 } from "../ruleEntryBridges";
+import { isPortRangeRule, portRangeShapeError, portRangeUnsupportedReason } from "@shared/portRange";
+import { reserveForwardGroupPortRangeTail, reserveRulePortRange, resolveNextSourcePortEnd } from "../rulePortRange";
 
 /**
  * 规则行上的协议封禁三列永远写 false。
@@ -1638,6 +1640,30 @@ export async function toggleForwardRuleForActor(
             throw new Error("套餐已到期，请续费后再启用规则");
           }
         }
+        // 端口段规则：停用期间段里的端口可能被别人拿走了，整段重新查、整段占住（server/rulePortRange.ts）。
+        if (isPortRangeRule(rule)) {
+          const rangeHost = await db.getHostById(Number(rule.hostId));
+          sourcePortReservation = await reserveRulePortRange({
+            actor,
+            ownerUserId: Number(rule.userId),
+            host: rangeHost,
+            rule: {
+              forwardType: rule.forwardType,
+              protocol: rule.protocol,
+              tunnelId: rule.tunnelId,
+              failoverEnabled: rule.failoverEnabled,
+              routeMode: rule.routeMode,
+              egressType: rule.egressType,
+              rateLimitMbps: rule.rateLimitMbps,
+              sourcePort: Number(rule.sourcePort),
+              sourcePortEnd: Number(rule.sourcePortEnd),
+              targetPort: Number(rule.targetPort),
+            },
+            entryPolicy: portPolicyFrom(rangeHost),
+            planRange: actor.role !== "admin" ? await db.getUserPlanPortRange(actor.id, Number(rule.hostId)) : null,
+            excludeRuleIds: [Number(rule.id)],
+          });
+        } else {
         // 隧道挂了入口组时，组里每台主机也在这个端口上监听，都要查、都要占住。
         sourcePortReservation = await reserveSpecificHostPortOnHosts({
           hostIds: await db.forwardRuleListenHostIds(rule.hostId, (rule as any).tunnelId),
@@ -1645,6 +1671,7 @@ export async function toggleForwardRuleForActor(
           protocol: (rule as any).protocol,
           isUsed: (hostId, port) => db.isPortUsedOnHost(hostId, port, Number(rule.id), (rule as any).protocol, undefined, false),
         });
+        }
         if (!sourcePortReservation) {
           throw await entryBridgeAwarePortError(
             await db.forwardRuleListenHostIds(rule.hostId, (rule as any).tunnelId),
@@ -1806,10 +1833,39 @@ export async function createDirectForwardRuleForActor(
   let sourcePortReservation: HostPortReservation | null = null;
   let tunnelExitPortReservation: HostPortReservation | null = null;
   let quotaReservation: RuleQuotaReservation | null = null;
+  // 端口段（shared/portRange.ts）：targetPortEnd 只用来核对长度，不是列，落库前摘掉。
+  const sourcePortEnd = resolveNextSourcePortEnd(input);
+  const targetPortEnd = Number(input.targetPortEnd || 0) || null;
+  input = { ...input, sourcePortEnd };
+  delete input.targetPortEnd;
+  {
+    const shapeError = portRangeShapeError({ sourcePort, sourcePortEnd, targetPort: Number(input.targetPort || 0), targetPortEnd });
+    if (shapeError) throw new Error(shapeError);
+  }
   // 规则在哪些主机上监听：隧道挂了入口组时，除了入口机还有组里每台启用的主机。
   const listenHostIds = tunnelId ? await db.tunnelRuleListenHostIds(selectedTunnelForRule, hostId) : [hostId];
   try {
-    if (sourcePort === 0) {
+    if (sourcePortEnd) {
+      // 段要整体过端口策略、套餐端口段、系统端口保护和占用检查，并整段占住（server/rulePortRange.ts）。
+      sourcePortReservation = await reserveRulePortRange({
+        actor,
+        ownerUserId: actor.id,
+        host,
+        rule: {
+          ...input,
+          tunnelId,
+          failoverEnabled: !!input.failoverEnabled || !!input.routeGroup,
+          sourcePort,
+          sourcePortEnd,
+          targetPort: Number(input.targetPort || 0),
+          targetPortEnd,
+          egressType: egressColumns?.egressType || "none",
+          rateLimitMbps: options.limitColumns?.rateLimitMbps,
+        },
+        entryPolicy,
+        planRange,
+      });
+    } else if (sourcePort === 0) {
       let randomRangeStart = selectedTunnelForRule ? (selectedTunnelForRule as any).portRangeStart : null;
       let randomRangeEnd = selectedTunnelForRule ? (selectedTunnelForRule as any).portRangeEnd : null;
       sourcePortReservation = await reserveAvailableHostPortOnHosts({
@@ -2339,6 +2395,9 @@ export const crudRulesRouter = router({
       tunnelId: z.number().nullable().optional(),
       forwardGroupId: z.number().nullable().optional(),
       sourcePort: z.number().int().min(0).max(65535), // 0 = 随机分配
+      // 端口段（shared/portRange.ts）：入口段结尾；目标段结尾只用来核对长度，不落库。
+      sourcePortEnd: z.number().int().min(1).max(65535).nullable().optional(),
+      targetPortEnd: z.number().int().min(1).max(65535).nullable().optional(),
       targetIp: z.string().min(1).max(253).refine(
         (v) => /^[a-zA-Z0-9]([a-zA-Z0-9\-_.]*[a-zA-Z0-9])?$|^[a-fA-F0-9:.]+$/.test(v.trim()),
         "请输入有效的 IP 地址或域名"
@@ -2386,6 +2445,9 @@ export const crudRulesRouter = router({
         && (hasRuleLimitInput(limitInput) || (requestedOwnerId !== undefined && Number(requestedOwnerId) !== Number(ctx.user.id)));
       const limitColumns = adminManaged ? ruleLimitColumns(limitInput, true) : {};
       ctx = { ...ctx, user: await resolveRuleOperationOwner(ctx.user, requestedOwnerId) as any };
+      if (Number(input.sourcePortEnd || 0) > 0 && input.tlsInboundId) {
+        throw new Error(portRangeUnsupportedReason({ tlsInboundId: input.tlsInboundId }) || "这类规则不能用端口段");
+      }
       const created: any = await (async () => {
       if (input.tlsInboundId) {
         if (egressRequested(egressInput)) throw new Error("共享 TLS 入站上的规则不能使用 Shadowsocks 出口");
@@ -2478,6 +2540,30 @@ export const crudRulesRouter = router({
         const hostId = await db.getForwardGroupDefaultHostId(forwardGroupId);
         const forwardType = lockedForwardTypeForGroup(group, input.forwardType);
         requireForwardTypeAllowedForActor(ctx.user, forwardType);
+        // 端口段：只在「端口转发」资源上，每台入口整段查、段尾占住（server/rulePortRange.ts）；起点上面已按单端口占了。
+        const groupSourcePortEnd = resolveNextSourcePortEnd(input);
+        if (groupSourcePortEnd) {
+          groupReservations.push(...await reserveForwardGroupPortRangeTail({
+            actor: ctx.user,
+            ownerUserId: ctx.user.id,
+            groupId: forwardGroupId,
+            rule: {
+              ...input,
+              forwardType,
+              sourcePort,
+              sourcePortEnd: groupSourcePortEnd,
+              targetPort: Number(input.targetPort),
+              targetPortEnd: input.targetPortEnd ?? null,
+              failoverEnabled: !!input.failoverEnabled || !!input.routeGroup,
+              egressType: egressRequested(egressInput) ? "ss" : "none",
+              rateLimitMbps: "rateLimitMbps" in limitColumns ? limitColumns.rateLimitMbps : 0,
+            },
+            planRange,
+          }));
+        } else {
+          const shapeError = portRangeShapeError({ sourcePort, targetPort: Number(input.targetPort), targetPortEnd: input.targetPortEnd ?? null });
+          if (shapeError) throw new Error(shapeError);
+        }
         const groupIsTunnel = !isForwardChain && (group as any).groupType === "tunnel";
         if (!isForwardChain && !groupIsTunnel) {
           await assertNoGroupSelfForwardLoop(forwardGroupId, { sourcePort, targetIp: input.targetIp, targetPort: input.targetPort });
@@ -2543,6 +2629,7 @@ export const crudRulesRouter = router({
           forwardGroupMemberId: null,
           isForwardGroupTemplate: true,
           sourcePort,
+          sourcePortEnd: groupSourcePortEnd,
           targetIp: normalizeRuleTargetIp(input.targetIp, { tunnelId: forwardType === "gost" && !isForwardChain && (group as any).groupType === "tunnel" ? 1 : null }),
           targetPort: input.targetPort,
           isEnabled: input.isEnabled,
@@ -2609,6 +2696,8 @@ export const crudRulesRouter = router({
       tunnelExitPort: z.number().int().min(1).max(65535).nullable().optional(),
       forwardGroupId: z.number().nullable().optional(),
       sourcePort: z.number().int().min(0).max(65535).optional(),
+      sourcePortEnd: z.number().int().min(1).max(65535).nullable().optional(),
+      targetPortEnd: z.number().int().min(1).max(65535).nullable().optional(),
       targetIp: z.string().min(1).max(253).refine(
         (v) => /^[a-zA-Z0-9]([a-zA-Z0-9\-_.]*[a-zA-Z0-9])?$|^[a-fA-F0-9:.]+$/.test(v.trim()),
         "请输入有效的 IP 地址或域名"
@@ -2742,6 +2831,47 @@ export const crudRulesRouter = router({
       if (isSniRule(rule)) return updateSniForwardRuleForActor(ctx.user, rule, input) as any;
       if (input.tlsInboundId) throw new Error("已有规则不能改成共享 TLS 入站，请新建一条规则");
       await requireRuleTelegramNotifyReady(input.telegramErrorNotifyEnabled);
+      /*
+        端口段（shared/portRange.ts）：先算出保存后的段结尾。转发组 / 转发链这两条路第一版不支持，
+        在它们各自的分支之前就拦住；改回单端口时把列清成 null（模板分支整份展开入参，转换分支显式写）。
+        直连那条路的完整校验在下面「源端口」那一步。targetPortEnd 只用来核对长度，不是列。
+      */
+      const nextSourcePortEnd = resolveNextSourcePortEnd(input, rule);
+      const requestedTargetPortEnd = Number(input.targetPortEnd || 0) || null;
+      delete input.targetPortEnd;
+      if (input.sourcePortEnd !== undefined || rule.sourcePortEnd != null) input.sourcePortEnd = nextSourcePortEnd;
+      const limitPatchRate = limitPatch && "rateLimitMbps" in limitPatch ? limitPatch.rateLimitMbps : rule.rateLimitMbps;
+      /** 转发组两条路（改模板 / 普通规则改成模板）上的端口段：只有「端口转发」资源能用，整段查每台入口。 */
+      const reserveGroupPortRangeForUpdate = async (groupId: number, forwardType: unknown, excludeRuleIds: number[]) => {
+        if (!nextSourcePortEnd) return;
+        heldReservations.push(...await reserveForwardGroupPortRangeTail({
+          actor: ctx.user,
+          ownerUserId: Number(rule.userId),
+          groupId,
+          rule: {
+            forwardType,
+            sourcePort: Number(input.sourcePort ?? rule.sourcePort),
+            sourcePortEnd: nextSourcePortEnd,
+            targetPort: Number(input.targetPort ?? rule.targetPort),
+            targetPortEnd: requestedTargetPortEnd,
+            failoverEnabled: input.failoverEnabled ?? rule.failoverEnabled,
+            routeMode: input.failoverEnabled === false ? null : rule.routeMode,
+            egressType: egressActiveAfterSave ? "ss" : "none",
+            protocol: input.protocol ?? rule.protocol,
+            rateLimitMbps: limitPatchRate,
+          },
+          planRange: ctx.user.role !== "admin" ? await db.getUserForwardGroupPlanPortRange(ctx.user.id, groupId) : null,
+          excludeRuleIds,
+        }));
+      };
+      if (!nextSourcePortEnd) {
+        const shapeError = portRangeShapeError({
+          sourcePort: Number(input.sourcePort ?? rule.sourcePort),
+          targetPort: Number(input.targetPort ?? rule.targetPort),
+          targetPortEnd: requestedTargetPortEnd,
+        });
+        if (shapeError) throw new Error(shapeError);
+      }
 
       if (input.sourcePort === 0) {
         const nextProtocol = input.protocol ?? (rule as any).protocol;
@@ -3077,12 +3207,14 @@ export const crudRulesRouter = router({
         }
         const nextProtocol = input.protocol ?? (rule as any).protocol;
         const childRules = await db.getForwardGroupChildRulesForTemplate(input.id);
+        const templateRuleIds = [Number(rule.id), ...(childRules as any[]).map((child: any) => Number(child.id))].filter(Boolean);
         await reserveForwardGroupEntryPorts(
           activeGroupId,
           Number(input.sourcePort ?? (rule as any).sourcePort),
           nextProtocol,
-          [Number(rule.id), ...(childRules as any[]).map((child: any) => Number(child.id))].filter(Boolean),
+          templateRuleIds,
         );
+        await reserveGroupPortRangeForUpdate(activeGroupId, nextForwardType, templateRuleIds);
         const groupIsTunnel = !isForwardChain && (group as any).groupType === "tunnel";
         const groupTunnelSupportsFailover = groupIsTunnel ? await forwardGroupTunnelMembersSupportMainBackup(group) : true;
         const groupSupportsFailover = !isForwardChain && routeGroupForwardTypeSupported(nextForwardType) && (!groupIsTunnel || groupTunnelSupportsFailover);
@@ -3170,7 +3302,7 @@ export const crudRulesRouter = router({
           isForwardGroupTemplate: true,
         };
         delete data.id;
-        const watchedFields = ["sourcePort", "targetIp", "targetPort", "forwardType", "protocol", "proxyProtocolReceive", "proxyProtocolSend", "proxyProtocolExitReceive", "proxyProtocolExitSend", "proxyProtocolVersion", "tcpFastOpen", "zeroCopy", "udpOverTcp", "udpOverTcpPort", "failoverEnabled", "failoverStrategy", "failoverTargets", "failoverProbeTarget", "failoverSchedule", "failoverMinHoldSeconds", "failoverPinnedIndex", "failoverPinnedUntil", "failoverPreferFastest", "failoverSeconds", "recoverSeconds", "autoFailback"] as const;
+        const watchedFields = ["sourcePort", "sourcePortEnd", "targetIp", "targetPort", "forwardType", "protocol", "proxyProtocolReceive", "proxyProtocolSend", "proxyProtocolExitReceive", "proxyProtocolExitSend", "proxyProtocolVersion", "tcpFastOpen", "zeroCopy", "udpOverTcp", "udpOverTcpPort", "failoverEnabled", "failoverStrategy", "failoverTargets", "failoverProbeTarget", "failoverSchedule", "failoverMinHoldSeconds", "failoverPinnedIndex", "failoverPinnedUntil", "failoverPreferFastest", "failoverSeconds", "recoverSeconds", "autoFailback"] as const;
         const keyFieldChanged = watchedFields.some((field) => data[field] !== undefined && data[field] !== (rule as any)[field]);
         if (dbBool(data.isEnabled)) {
           data.disabledByUser = false;
@@ -3235,6 +3367,7 @@ export const crudRulesRouter = router({
         requireForwardTypeAllowedForActor(ctx.user, nextForwardType);
         const nextProtocol = input.protocol ?? (rule as any).protocol;
         await reserveForwardGroupEntryPorts(groupId, sourcePort, nextProtocol, [Number(rule.id)]);
+        await reserveGroupPortRangeForUpdate(groupId, nextForwardType, [Number(rule.id)]);
         const nextMainBackupEnabled = false;
         requireMainBackupAllowed({
           enabled: nextMainBackupEnabled,
@@ -3267,6 +3400,7 @@ export const crudRulesRouter = router({
           forwardGroupMemberId: null,
           isForwardGroupTemplate: true,
           sourcePort,
+          sourcePortEnd: nextSourcePortEnd,
           targetIp: normalizeRuleTargetIp(input.targetIp ?? (rule as any).targetIp, { tunnelId: !isForwardChain && (group as any).groupType === "tunnel" ? 1 : null }),
           targetPort: Number(input.targetPort ?? (rule as any).targetPort),
           telegramErrorNotifyEnabled: input.telegramErrorNotifyEnabled ?? (rule as any).telegramErrorNotifyEnabled,
@@ -3418,10 +3552,35 @@ export const crudRulesRouter = router({
           tunnelId: nextTunnelIdForRule,
         });
       }
-      const shouldCheckSourcePort = input.sourcePort !== undefined
+      if (nextSourcePortEnd) {
+        // 端口段：整段过策略、套餐、系统端口保护、占用，整段占住；下面单端口那一套就不再走了。
+        const rangeHost = await db.getHostById(nextHostIdForRule);
+        heldReservations.push(await reserveRulePortRange({
+          actor: ctx.user,
+          ownerUserId: Number(rule.userId),
+          host: rangeHost,
+          rule: {
+            sourcePort: Number(nextSourcePortForRule),
+            sourcePortEnd: nextSourcePortEnd,
+            targetPort: Number(input.targetPort ?? rule.targetPort),
+            targetPortEnd: requestedTargetPortEnd,
+            forwardType: nextForwardTypeForRule,
+            tunnelId: nextTunnelIdForRule,
+            failoverEnabled: nextMainBackupEnabled,
+            routeMode: nextMainBackupEnabled ? rule.routeMode : null,
+            egressType: egressActiveAfterSave ? "ss" : "none",
+            protocol: nextProtocolForRule,
+            rateLimitMbps: limitPatchRate,
+          },
+          entryPolicy: portPolicyFrom(rangeHost),
+          planRange: ctx.user.role !== "admin" ? await db.getUserPlanPortRange(ctx.user.id, nextHostIdForRule) : null,
+          excludeRuleIds: [Number(rule.id)],
+        }));
+      }
+      const shouldCheckSourcePort = !nextSourcePortEnd && (input.sourcePort !== undefined
         || input.protocol !== undefined
         || Number(nextHostIdForRule) !== Number(rule.hostId)
-        || Number(nextTunnelIdForRule || 0) !== Number((rule as any).tunnelId || 0);
+        || Number(nextTunnelIdForRule || 0) !== Number((rule as any).tunnelId || 0));
       if (shouldCheckSourcePort) {
         const host = await db.getHostById(nextHostIdForRule);
         if (host) {
@@ -3685,6 +3844,7 @@ export const crudRulesRouter = router({
       // 关键字段变更时重置 isRunning
       const watchedFields: string[] = [
         "sourcePort",
+        "sourcePortEnd",
         "targetIp",
         "targetPort",
         "forwardType",

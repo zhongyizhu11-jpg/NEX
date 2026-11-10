@@ -1781,6 +1781,24 @@ async function seedLineDemo(adminId: number) {
     await insertForwardRuleRouteEvent({ ruleId: childId, kind: "switch", fromKey: childPaths[1]?.key, toKey: childPaths[0]?.key, fromLabel: "备用 1", toLabel: "主线路", reason: "score", score: 95, latencyMs: 2, fromChainMs: 3, toChainMs: 2, heldSeconds: 30, atSeconds: minutes(40) });
   }
 
+  // 端口段（shared/portRange.ts）：nftables 端口转发上一条 28000-28100 平移到 38000-38100 的规则（游戏 / 媒体）。
+  const rangeGroupId = await insertAndGetId("forward_groups", {
+    userId: adminId, name: "Po0 内核转发", groupType: "host", groupMode: "port", forwardType: "nftables",
+    sourcePort: 28000, protocol: "both", targetIp: "198.18.0.50", targetPort: 38000, lastStatus: "healthy", isEnabled: true, sortOrder: 11,
+    createdAt: now, updatedAt: now,
+  });
+  await insertAndGetId("forward_group_members", {
+    groupId: rangeGroupId, memberType: "host", hostId: po0, priority: 1, isEnabled: true, healthStatus: "healthy",
+    lastLatencyMs: 2, healthySince: minutesAgo(90), lastCheckedAt: now, createdAt: now, updatedAt: now,
+  });
+  await insertAndGetId("forward_rules", {
+    userId: adminId, hostId: po0, name: "游戏端口段", forwardType: "nftables", protocol: "both", sourcePort: 28000, sourcePortEnd: 28100,
+    targetIp: "198.18.0.50", targetPort: 38000, sortOrder: 25, isRunning: true, isEnabled: true, failoverTargets: "[]",
+    tunnelId: null, tunnelExitPort: null, forwardGroupId: rangeGroupId, forwardGroupRuleId: null, forwardGroupMemberId: null,
+    isForwardGroupTemplate: true, createdAt: now, updatedAt: now,
+  });
+  await syncForwardGroupRules(Number(rangeGroupId), { validatePorts: false }).catch((error) => console.warn(`[DevPanel] port range demo: ${error instanceof Error ? error.message : String(error)}`));
+
   // 落地池（2.3.500）：SG 落地 / 东京落地 / SG 原生开同一份 VLESS + REALITY；SG 原生的 443 被它自己的入站占了，换了端口。
   // 「Po0 到亚太落地池」目标是这个池：保存时做成线路组，三台一台一条路径，按负载分。
   const busyInbound = await insertAndGetId("proxy_inbounds", {

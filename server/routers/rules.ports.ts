@@ -8,6 +8,8 @@ import {
   requireTunnelUseOrTrafficBillingAccess,
 } from "./helpers";
 import { assertTenantListenPortAllowedOnHosts } from "../tenantListenPortGuard";
+import { formatPortSpan, normalizeSourcePortEnd, portRangeUnsupportedReason } from "@shared/portRange";
+import { reserveForwardGroupPortRangeTail, reserveRulePortRange } from "../rulePortRange";
 import { resolveRuleOperationOwner } from "../ruleOperationOwner";
 import { combineHostPortPolicyWithRange, combinePortPolicies, isPortAllowedByPolicy, portPolicyErrorMessage, portPolicyFrom, type PortPolicy } from "@shared/portPolicy";
 
@@ -93,6 +95,39 @@ async function resolveForwardGroupPortPolicy(
   return { base, plan, effective: plan ? combinePortPolicies(base, plan) : base };
 }
 
+/**
+ * 端口段的占用探测：直接走保存时那一道闸（server/rulePortRange.ts）—— 占一下马上放掉，
+ * 说出来的原因和保存时一字不差。转发方式由表单自己判（这里按内核转发算），隧道上不支持端口段。
+ */
+async function checkPortRange(
+  ctx: { user: { id: number; role: string } },
+  input: { hostId: number; forwardGroupId?: number; tunnelId?: number | null; sourcePort: number; sourcePortEnd: number; excludeRuleId?: number; protocol: "tcp" | "udp" | "both" },
+): Promise<{ used: boolean; reason?: string }> {
+  const span = formatPortSpan(input.sourcePort, input.sourcePortEnd);
+  const rule = { forwardType: "nftables", sourcePort: input.sourcePort, sourcePortEnd: input.sourcePortEnd, targetPort: input.sourcePort, protocol: input.protocol };
+  const excludeRuleIds = input.excludeRuleId
+    ? [input.excludeRuleId, ...((await db.getForwardGroupChildRulesForTemplate(input.excludeRuleId)) as Array<{ id: number }>).map((child) => Number(child.id))]
+    : [];
+  try {
+    if (input.forwardGroupId) {
+      await requireForwardGroupPortAccess(ctx, input.forwardGroupId);
+      const planRange = ctx.user.role !== "admin" ? await db.getUserForwardGroupPlanPortRange(ctx.user.id, input.forwardGroupId) : null;
+      const reservations = await reserveForwardGroupPortRangeTail({ actor: ctx.user, ownerUserId: ctx.user.id, groupId: input.forwardGroupId, rule, planRange, excludeRuleIds });
+      for (const reservation of reservations) reservation.release();
+    } else {
+      const unsupported = portRangeUnsupportedReason({ forwardType: "nftables", tunnelId: input.tunnelId });
+      if (unsupported) return { used: true, reason: unsupported };
+      const { host } = await requireHostUseAccess(ctx, input.hostId);
+      const planRange = ctx.user.role !== "admin" ? await db.getUserPlanPortRange(ctx.user.id, input.hostId) : null;
+      const reservation = await reserveRulePortRange({ actor: ctx.user, ownerUserId: ctx.user.id, host: host as never, rule, entryPolicy: portPolicyFrom(host as never), planRange, excludeRuleIds });
+      reservation.release();
+    }
+  } catch (error) {
+    return { used: true, reason: error instanceof Error ? error.message : "端口段不可用" };
+  }
+  return { used: false, reason: `${span} 共 ${input.sourcePortEnd - input.sourcePort + 1} 个端口可用` };
+}
+
 export const portsRulesRouter = router({
   /**
    * The effective entry port policy, for the dialog's hint.
@@ -129,6 +164,8 @@ export const portsRulesRouter = router({
       forwardGroupId: z.number().int().positive().optional(),
       tunnelId: z.number().nullable().optional(),
       sourcePort: z.number().int().min(1).max(65535),
+      // 端口段（shared/portRange.ts）：给了就整段查。
+      sourcePortEnd: z.number().int().min(1).max(65535).nullable().optional(),
       excludeRuleId: z.number().optional(),
       protocol: z.enum(["tcp", "udp", "both"]).optional().default("both"),
     }).refine(
@@ -139,6 +176,10 @@ export const portsRulesRouter = router({
       ctx = { ...ctx, user: await resolveRuleOperationOwner(ctx.user, input.userId) as any };
       if (input.excludeRuleId) {
         await requireRuleAccess(ctx, input.excludeRuleId);
+      }
+      const sourcePortEnd = normalizeSourcePortEnd(input.sourcePort, input.sourcePortEnd);
+      if (sourcePortEnd) {
+        return checkPortRange(ctx, { ...input, hostId: Number(input.hostId || 0), sourcePortEnd });
       }
       if (input.forwardGroupId) {
         if (ctx.user.role !== "admin") {

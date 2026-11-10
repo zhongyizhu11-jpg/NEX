@@ -3,6 +3,7 @@ import { withRuleEgressDisplay } from "../ssEgress";
 import { z } from "zod";
 import * as db from "../db";
 import { crudRulesRouter } from "./rules.crud";
+import { batchRulesRouter } from "./rules.batch";
 import { portsRulesRouter } from "./rules.ports";
 import { selfTestRulesRouter } from "./rules.selfTest";
 import { trafficRulesRouter } from "./rules.traffic";
@@ -437,6 +438,7 @@ export const rulesRouter = router({
     }),
   ...portsRulesRouter._def.procedures,
   ...crudRulesRouter._def.procedures,
+  ...batchRulesRouter._def.procedures,
   ...trafficRulesRouter._def.procedures,
   ...selfTestRulesRouter._def.procedures,
 });

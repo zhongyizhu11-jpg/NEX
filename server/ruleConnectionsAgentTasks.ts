@@ -17,6 +17,8 @@ export type RuleConnectionsAgentTask = {
   taskId: string;
   ruleId: number;
   port: number;
+  /** 端口段规则（shared/portRange.ts）的最后一个端口；单端口不带。老 Agent 不认，只看 port。 */
+  portEnd?: number;
   /** tcp / udp / both */
   protocol: string;
   /** iptables / nftables 这类内核转发：连接不在 /proc/net/tcp 里，要读 conntrack。 */
@@ -98,7 +100,7 @@ export function countActiveRuleConnectionsTasks(hostId: number) {
 
 export function enqueueRuleConnectionsTask(
   hostId: number,
-  input: { ruleId: number; port: number; protocol: string; dnat: boolean },
+  input: { ruleId: number; port: number; portEnd?: number; protocol: string; dnat: boolean },
   panelTimeoutMs = RULE_CONNECTIONS_PANEL_TIMEOUT_MS,
 ) {
   const id = Number(hostId);
@@ -109,6 +111,7 @@ export function enqueueRuleConnectionsTask(
     taskId: crypto.randomUUID(),
     ruleId: Number(input.ruleId),
     port: Number(input.port),
+    ...(Number(input.portEnd || 0) > Number(input.port) ? { portEnd: Number(input.portEnd) } : {}),
     protocol: String(input.protocol || "tcp"),
     dnat: !!input.dnat,
     limit: RULE_CONNECTIONS_MAX_ROWS,

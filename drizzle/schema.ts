@@ -444,6 +444,8 @@ export const forwardRules = table("forward_rules", {
   sourcePort: int("sourcePort").notNull(),
   targetIp: text("targetIp").notNull(),
   targetPort: int("targetPort").notNull(),
+  // 端口段（shared/portRange.ts）：空 = 单端口；不空 = 入口段最后一个端口，目标段从 targetPort 起、同样长。
+  sourcePortEnd: int("sourcePortEnd"),
   telegramErrorNotifyEnabled: boolean("telegramErrorNotifyEnabled").notNull().default(false),
   blockHttp: boolean("blockHttp").notNull().default(false),
   blockSocks: boolean("blockSocks").notNull().default(false),
