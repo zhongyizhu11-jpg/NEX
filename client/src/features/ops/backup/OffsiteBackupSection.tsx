@@ -1,47 +1,69 @@
-import { useEffect, useMemo, useState } from "react";
-import { CloudUpload, Loader2, RotateCcw } from "lucide-react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import type { inferRouterOutputs } from "@trpc/server";
+import { Check, CloudUpload, Loader2, X } from "lucide-react";
 import { toast } from "sonner";
 import DataSectionError from "@/components/DataSectionError";
 import DataSectionLoading from "@/components/DataSectionLoading";
 import { SettingList, SettingRow } from "@/components/SettingRow";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { FormField } from "@/components/ui/form-field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PasswordInput } from "@/components/ui/password-input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { SegmentedControl } from "@/components/ui/segmented-control";
-import { Switch } from "@/components/ui/switch";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
+import type { AppRouter } from "../../../../../server/routers";
 
 /**
  * 设置 › 备份恢复 › 异地自动备份（#10）。
  *
  * 和上面的手动导出是同一份加密备份，只是定时自动传到别处：机器整台没了，备份还在。
  * 口令存在面板里，定时任务才能加密；恢复时要再输一次 —— 那是一件会替换全部数据的事。
+ *
+ * 目的地可以同时开几个，所以是三行复选框而不是单选；都没勾就是关闭。勾选要点保存才生效，
+ * 所以用复选框不用开关（见 client/src/switchVsCheckbox.test.ts）。
+ * 远端有哪些备份要去请求对方服务器，只在点了「从远端恢复」之后才查。
+ * 已经配好的目的地只露一行摘要，点「修改」才展开那些输入框 —— 两个都开时卡片不至于拉成两屏。
  */
 
-type Destination = "off" | "webdav" | "s3" | "telegram";
+type BackupData = inferRouterOutputs<AppRouter>["ops"]["offsiteBackup"]["get"];
+type RemoteGroup = inferRouterOutputs<AppRouter>["ops"]["offsiteBackup"]["list"][number];
+type Target = BackupData["destinations"][number];
+type ScheduleMode = BackupData["schedule"]["mode"];
 
-const DESTINATIONS: Array<{ value: Destination; label: string }> = [
-  { value: "off", label: "关闭" },
-  { value: "webdav", label: "WebDAV" },
-  { value: "s3", label: "S3" },
-  { value: "telegram", label: "Telegram" },
+const TARGET_LABELS: Record<Target, string> = { webdav: "WebDAV", s3: "S3", telegram: "Telegram" };
+const TARGET_ROWS: Array<{ target: Target; key: "webdavOn" | "s3On" | "telegramOn"; label: string; description: string }> = [
+  { target: "webdav", key: "webdavOn", label: "WebDAV", description: "坚果云、Nextcloud、群晖、Alist 等。填一个专用目录。" },
+  { target: "s3", key: "s3On", label: "S3 兼容存储", description: "AWS S3、Cloudflare R2、MinIO、阿里云 OSS 等。" },
+  { target: "telegram", key: "telegramOn", label: "Telegram", description: "以文件发给绑定了 Telegram 的管理员。" },
 ];
-
-const DESTINATION_HINTS: Record<Destination, string> = {
-  off: "不自动备份。上面的「导出备份」照常可用。",
-  webdav: "坚果云、Nextcloud、群晖、Alist 等。填一个专用目录，面板只管 nex-backup- 开头的文件。",
-  s3: "AWS S3、Cloudflare R2、MinIO、阿里云 OSS 等 S3 兼容存储。",
-  telegram: "以文件发给绑定了 Telegram 的管理员（先在「设置 › Telegram」配好机器人）。超过 20 MB 的备份只能在 Telegram 里手动下载后导入。",
-};
+const SCHEDULE_MODES: Array<{ value: ScheduleMode; label: string }> = [
+  { value: "daily", label: "每天" },
+  { value: "weekly", label: "每周" },
+  { value: "interval", label: "每隔" },
+];
+/** 周一排第一个；值和服务端一样是 0 = 周日。 */
+const WEEKDAYS = [
+  { value: "1", label: "周一" },
+  { value: "2", label: "周二" },
+  { value: "3", label: "周三" },
+  { value: "4", label: "周四" },
+  { value: "5", label: "周五" },
+  { value: "6", label: "周六" },
+  { value: "0", label: "周日" },
+];
+const DEFAULT_KEEP = 14;
+/** 「最近结果」默认露出几条，其余点「全部」再看。 */
+const HISTORY_PREVIEW = 4;
 
 type Form = {
-  destination: Destination;
+  webdavOn: boolean;
+  s3On: boolean;
+  telegramOn: boolean;
   webdavUrl: string;
   webdavUser: string;
   webdavPassword: string;
@@ -54,31 +76,36 @@ type Form = {
   s3PathStyle: boolean;
   passphrase: string;
   passphraseConfirm: string;
-  scheduleMode: "daily" | "interval";
+  scheduleMode: ScheduleMode;
   scheduleHour: string;
+  scheduleWeekday: string;
   everyHours: string;
   keep: string;
 };
 
-function formFrom(data: any): Form {
+function formFrom(data: BackupData | undefined): Form {
+  const schedule = data?.schedule;
   return {
-    destination: (data?.destination || "off") as Destination,
-    webdavUrl: data?.webdav?.url || "",
-    webdavUser: data?.webdav?.user || "",
+    webdavOn: !!data?.destinations.includes("webdav"),
+    s3On: !!data?.destinations.includes("s3"),
+    telegramOn: !!data?.destinations.includes("telegram"),
+    webdavUrl: data?.webdav.url || "",
+    webdavUser: data?.webdav.user || "",
     webdavPassword: "",
-    s3Endpoint: data?.s3?.endpoint || "",
-    s3Region: data?.s3?.region || "",
-    s3Bucket: data?.s3?.bucket || "",
-    s3Prefix: data?.s3?.prefix || "",
-    s3AccessKey: data?.s3?.accessKeyId || "",
+    s3Endpoint: data?.s3.endpoint || "",
+    s3Region: data?.s3.region || "",
+    s3Bucket: data?.s3.bucket || "",
+    s3Prefix: data?.s3.prefix || "",
+    s3AccessKey: data?.s3.accessKeyId || "",
     s3SecretKey: "",
-    s3PathStyle: data?.s3?.pathStyle !== false,
+    s3PathStyle: data?.s3.pathStyle !== false,
     passphrase: "",
     passphraseConfirm: "",
-    scheduleMode: data?.schedule?.mode === "interval" ? "interval" : "daily",
-    scheduleHour: String(data?.schedule?.mode === "daily" ? data.schedule.hour : 4),
-    everyHours: String(data?.schedule?.mode === "interval" ? data.schedule.everyHours : 12),
-    keep: String(data?.keep || 7),
+    scheduleMode: schedule?.mode || "daily",
+    scheduleHour: String(schedule && schedule.mode !== "interval" ? schedule.hour : 4),
+    scheduleWeekday: String(schedule?.mode === "weekly" ? schedule.weekday : 1),
+    everyHours: String(schedule?.mode === "interval" ? schedule.everyHours : 12),
+    keep: String(data?.keep || DEFAULT_KEEP),
   };
 }
 
@@ -104,22 +131,38 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** 已保存的目的地的一行摘要（地址去掉 https://）。还没配好返回空串：那就直接展开输入框。 */
+function targetSummary(target: Target, data: BackupData): string {
+  if (!data.destinations.includes(target)) return "";
+  if (target === "webdav") return data.webdav.url.replace(/^https?:\/\//, "");
+  if (target === "s3") return data.s3.endpoint && data.s3.bucket ? `${data.s3.bucket} · ${data.s3.endpoint.replace(/^https?:\/\//, "")}` : "";
+  return "";
+}
+
+function clampInt(text: string, fallback: number, min: number, max: number) {
+  const n = Math.floor(Number(text));
+  return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
+}
+
 export default function OffsiteBackupSection(_props: Record<string, never>) {
   const utils = trpc.useUtils();
   const query = trpc.ops.offsiteBackup.get.useQuery(undefined, { refetchOnWindowFocus: false });
-  const data = query.data as any;
-  const [form, setForm] = useState<Form>(() => formFrom(null));
+  const data = query.data;
+  const [form, setForm] = useState<Form>(() => formFrom(undefined));
   const [editingPassphrase, setEditingPassphrase] = useState(false);
-  const [restoreName, setRestoreName] = useState<string | null>(null);
+  const [editingTarget, setEditingTarget] = useState<Partial<Record<Target, boolean>>>({});
+  const [showAllHistory, setShowAllHistory] = useState(false);
+  const [restoreOpen, setRestoreOpen] = useState(false);
+  const [restorePick, setRestorePick] = useState<{ destination: Target; name: string } | null>(null);
   const [restorePassword, setRestorePassword] = useState("");
 
   useEffect(() => {
     if (data) setForm(formFrom(data));
   }, [data]);
 
-  const savedDestination = (data?.destination || "off") as Destination;
+  const savedOn = (data?.destinations.length || 0) > 0;
   const listQuery = trpc.ops.offsiteBackup.list.useQuery(undefined, {
-    enabled: savedDestination !== "off",
+    enabled: restoreOpen && savedOn,
     retry: false,
     refetchOnWindowFocus: false,
   });
@@ -130,6 +173,7 @@ export default function OffsiteBackupSection(_props: Record<string, never>) {
   const restore = trpc.ops.offsiteBackup.restore.useMutation();
 
   const set = <K extends keyof Form>(key: K, value: Form[K]) => setForm((prev) => ({ ...prev, [key]: value }));
+  const anyOn = form.webdavOn || form.s3On || form.telegramOn;
   const needsPassphrase = !data?.hasPassphrase || editingPassphrase;
   const busy = save.isPending || testConnection.isPending || runNow.isPending;
 
@@ -140,12 +184,13 @@ export default function OffsiteBackupSection(_props: Record<string, never>) {
   }, [data, form]);
 
   const persist = async () => {
-    if (needsPassphrase && (form.passphrase || form.destination !== "off")) {
+    if (needsPassphrase && (form.passphrase || anyOn)) {
       if (form.passphrase.length < 8) throw new Error("备份口令至少 8 位");
       if (form.passphrase !== form.passphraseConfirm) throw new Error("两次输入的口令不一样");
     }
+    const hour = clampInt(form.scheduleHour, 4, 0, 23);
     await save.mutateAsync({
-      destination: form.destination,
+      destinations: TARGET_ROWS.filter((row) => form[row.key]).map((row) => row.target),
       webdav: { url: form.webdavUrl, user: form.webdavUser, password: form.webdavPassword || undefined },
       s3: {
         endpoint: form.s3Endpoint,
@@ -157,12 +202,15 @@ export default function OffsiteBackupSection(_props: Record<string, never>) {
         pathStyle: form.s3PathStyle,
       },
       passphrase: needsPassphrase && form.passphrase ? form.passphrase : undefined,
-      schedule: form.scheduleMode === "daily"
-        ? { mode: "daily", hour: Math.min(23, Math.max(0, Number(form.scheduleHour) || 0)) }
-        : { mode: "interval", everyHours: Math.min(168, Math.max(1, Math.floor(Number(form.everyHours) || 12))) },
-      keep: Math.min(100, Math.max(1, Math.floor(Number(form.keep) || 7))),
+      schedule: form.scheduleMode === "interval"
+        ? { mode: "interval", everyHours: clampInt(form.everyHours, 12, 1, 168) }
+        : form.scheduleMode === "weekly"
+          ? { mode: "weekly", weekday: clampInt(form.scheduleWeekday, 1, 0, 6), hour }
+          : { mode: "daily", hour },
+      keep: clampInt(form.keep, DEFAULT_KEEP, 1, 100),
     });
     setEditingPassphrase(false);
+    setEditingTarget({});
     await utils.ops.offsiteBackup.get.invalidate();
   };
 
@@ -170,7 +218,6 @@ export default function OffsiteBackupSection(_props: Record<string, never>) {
     try {
       await persist();
       toast.success("已保存");
-      void utils.ops.offsiteBackup.list.invalidate();
     } catch (error) {
       toast.error(errorMessage(error));
     }
@@ -197,28 +244,102 @@ export default function OffsiteBackupSection(_props: Record<string, never>) {
       toast.success(result.message);
     } finally {
       void utils.ops.offsiteBackup.get.invalidate();
-      void utils.ops.offsiteBackup.list.invalidate();
     }
   });
 
+  const closeRestore = () => {
+    if (restore.isPending) return;
+    setRestoreOpen(false);
+    setRestorePick(null);
+    setRestorePassword("");
+  };
+
   const onRestore = async () => {
-    if (!restoreName) return;
+    if (!restorePick) return;
     try {
-      const result: any = await restore.mutateAsync({ name: restoreName, password: restorePassword, confirmed: true });
-      setRestoreName(null);
+      const result = await restore.mutateAsync({ ...restorePick, password: restorePassword, confirmed: true });
+      const alreadyImported = "alreadyImported" in result && result.alreadyImported === true;
+      setRestoreOpen(false);
+      setRestorePick(null);
       setRestorePassword("");
-      toast.success(result?.alreadyImported ? "这份备份之前已经恢复过" : "已恢复，页面即将刷新");
-      if (!result?.alreadyImported) window.setTimeout(() => window.location.reload(), 1500);
+      toast.success(alreadyImported ? "这份备份之前已经恢复过" : "已恢复，页面即将刷新");
+      if (!alreadyImported) window.setTimeout(() => window.location.reload(), 1500);
     } catch (error) {
       toast.error(errorMessage(error));
     }
   };
 
   if (query.isLoading) return <DataSectionLoading />;
-  if (query.error) return <DataSectionError label="异地备份设置" error={query.error} onRetry={() => void query.refetch()} retrying={query.isFetching} />;
+  if (query.error || !data) return <DataSectionError label="异地备份设置" error={query.error} onRetry={() => void query.refetch()} retrying={query.isFetching} />;
 
-  const status = data?.status || {};
-  const files = (listQuery.data || []) as Array<{ name: string; size: number; modifiedAt: number | null }>;
+  const history = data.history;
+  const shownHistory = showAllHistory ? history : history.slice(0, HISTORY_PREVIEW);
+  const remoteGroups: RemoteGroup[] = listQuery.data || [];
+
+  const targetFields: Record<Target, ReactNode> = {
+    webdav: (
+      <div className="grid gap-3 sm:grid-cols-2">
+        <FormField className="space-y-1.5 sm:col-span-2">
+          <Label className="text-xs">目录地址</Label>
+          <Input value={form.webdavUrl} onChange={(event) => set("webdavUrl", event.target.value)} placeholder="https://dav.jianguoyun.com/dav/nex-backup/" inputMode="url" />
+        </FormField>
+        <FormField className="space-y-1.5">
+          <Label className="text-xs">用户名</Label>
+          <Input value={form.webdavUser} onChange={(event) => set("webdavUser", event.target.value)} autoComplete="off" />
+        </FormField>
+        <FormField className="space-y-1.5">
+          <Label className="text-xs">密码</Label>
+          <PasswordInput
+            value={form.webdavPassword}
+            onChange={(event) => set("webdavPassword", event.target.value)}
+            placeholder={data.webdav.hasPassword ? "已设置，留空不改" : "应用密码"}
+            autoComplete="new-password"
+          />
+        </FormField>
+      </div>
+    ),
+    s3: (
+      <div className="grid gap-3 sm:grid-cols-2">
+        <FormField className="space-y-1.5 sm:col-span-2">
+          <Label className="text-xs">地址（Endpoint）</Label>
+          <Input value={form.s3Endpoint} onChange={(event) => set("s3Endpoint", event.target.value)} placeholder="https://<账号>.r2.cloudflarestorage.com" inputMode="url" />
+        </FormField>
+        <FormField className="space-y-1.5">
+          <Label className="text-xs">存储桶</Label>
+          <Input value={form.s3Bucket} onChange={(event) => set("s3Bucket", event.target.value)} />
+        </FormField>
+        <FormField className="space-y-1.5">
+          <Label className="text-xs">区域</Label>
+          <Input value={form.s3Region} onChange={(event) => set("s3Region", event.target.value)} placeholder="us-east-1（R2 填 auto）" />
+        </FormField>
+        <FormField className="space-y-1.5 sm:col-span-2">
+          <Label className="text-xs">目录前缀</Label>
+          <Input value={form.s3Prefix} onChange={(event) => set("s3Prefix", event.target.value)} placeholder="nex/（可留空）" />
+        </FormField>
+        <FormField className="space-y-1.5">
+          <Label className="text-xs">Access Key</Label>
+          <Input value={form.s3AccessKey} onChange={(event) => set("s3AccessKey", event.target.value)} autoComplete="off" />
+        </FormField>
+        <FormField className="space-y-1.5">
+          <Label className="text-xs">Secret Key</Label>
+          <PasswordInput
+            value={form.s3SecretKey}
+            onChange={(event) => set("s3SecretKey", event.target.value)}
+            placeholder={data.s3.hasSecretKey ? "已设置，留空不改" : ""}
+            autoComplete="new-password"
+          />
+        </FormField>
+        <label className="flex cursor-pointer items-center justify-between gap-3 sm:col-span-2">
+          <span className="flex min-w-0 flex-col">
+            <span className="text-sm">路径风格地址</span>
+            <span className="text-meta text-muted-foreground">MinIO、R2 等要勾上；阿里云 OSS 要去掉。</span>
+          </span>
+          <Checkbox aria-label="路径风格地址" checked={form.s3PathStyle} onCheckedChange={(checked) => set("s3PathStyle", checked === true)} />
+        </label>
+      </div>
+    ),
+    telegram: null,
+  };
 
   return (
     <Card className="border-border bg-card">
@@ -231,77 +352,29 @@ export default function OffsiteBackupSection(_props: Record<string, never>) {
       </CardHeader>
       <CardContent className="space-y-4">
         <SettingList>
-          <SettingRow label="传到哪里" description={DESTINATION_HINTS[form.destination]}>
-            <SegmentedControl ariaLabel="备份目的地" className="grid grid-cols-4 gap-1" optionClassName="px-1" value={form.destination} options={DESTINATIONS} onChange={(destination) => set("destination", destination)} />
-            {form.destination === "webdav" ? (
-              <div className="grid gap-3 sm:grid-cols-2">
-                <FormField className="space-y-1.5 sm:col-span-2">
-                  <Label className="text-xs">目录地址</Label>
-                  <Input value={form.webdavUrl} onChange={(event) => set("webdavUrl", event.target.value)} placeholder="https://dav.jianguoyun.com/dav/nex-backup/" inputMode="url" />
-                </FormField>
-                <FormField className="space-y-1.5">
-                  <Label className="text-xs">用户名</Label>
-                  <Input value={form.webdavUser} onChange={(event) => set("webdavUser", event.target.value)} autoComplete="off" />
-                </FormField>
-                <FormField className="space-y-1.5">
-                  <Label className="text-xs">密码</Label>
-                  <PasswordInput
-                    value={form.webdavPassword}
-                    onChange={(event) => set("webdavPassword", event.target.value)}
-                    placeholder={data?.webdav?.hasPassword ? "已设置，留空不改" : "应用密码"}
-                    autoComplete="new-password"
-                  />
-                </FormField>
-              </div>
-            ) : null}
-            {form.destination === "s3" ? (
-              <div className="grid gap-3 sm:grid-cols-2">
-                <FormField className="space-y-1.5 sm:col-span-2">
-                  <Label className="text-xs">地址（Endpoint）</Label>
-                  <Input value={form.s3Endpoint} onChange={(event) => set("s3Endpoint", event.target.value)} placeholder="https://<账号>.r2.cloudflarestorage.com" inputMode="url" />
-                </FormField>
-                <FormField className="space-y-1.5">
-                  <Label className="text-xs">存储桶</Label>
-                  <Input value={form.s3Bucket} onChange={(event) => set("s3Bucket", event.target.value)} />
-                </FormField>
-                <FormField className="space-y-1.5">
-                  <Label className="text-xs">区域</Label>
-                  <Input value={form.s3Region} onChange={(event) => set("s3Region", event.target.value)} placeholder="us-east-1（R2 填 auto）" />
-                </FormField>
-                <FormField className="space-y-1.5 sm:col-span-2">
-                  <Label className="text-xs">目录前缀</Label>
-                  <Input value={form.s3Prefix} onChange={(event) => set("s3Prefix", event.target.value)} placeholder="nex/（可留空）" />
-                </FormField>
-                <FormField className="space-y-1.5">
-                  <Label className="text-xs">Access Key</Label>
-                  <Input value={form.s3AccessKey} onChange={(event) => set("s3AccessKey", event.target.value)} autoComplete="off" />
-                </FormField>
-                <FormField className="space-y-1.5">
-                  <Label className="text-xs">Secret Key</Label>
-                  <PasswordInput
-                    value={form.s3SecretKey}
-                    onChange={(event) => set("s3SecretKey", event.target.value)}
-                    placeholder={data?.s3?.hasSecretKey ? "已设置，留空不改" : ""}
-                    autoComplete="new-password"
-                  />
-                </FormField>
-                <label className="flex items-center justify-between gap-3 sm:col-span-2">
-                  <span className="flex min-w-0 flex-col">
-                    <span className="text-sm">路径风格地址</span>
-                    <span className="text-meta text-muted-foreground">MinIO、R2 等用路径风格；阿里云 OSS 要关掉。</span>
-                  </span>
-                  <Switch checked={form.s3PathStyle} onCheckedChange={(checked) => set("s3PathStyle", checked)} />
-                </label>
-              </div>
-            ) : null}
-          </SettingRow>
+          {TARGET_ROWS.map((row) => (
+            <SettingRow
+              key={row.target}
+              asLabel
+              label={row.label}
+              description={row.description}
+              control={<Checkbox aria-label={`备份到 ${row.label}`} checked={form[row.key]} onCheckedChange={(checked) => set(row.key, checked === true)} />}
+            >
+              {!form[row.key] || !targetFields[row.target] ? null : targetSummary(row.target, data) && !editingTarget[row.target] ? (
+                <div className="flex min-w-0 items-center justify-between gap-2">
+                  <span className="min-w-0 truncate text-meta text-muted-foreground">{targetSummary(row.target, data)}</span>
+                  <Button variant="link" size="sm" className="h-auto shrink-0 p-0 text-meta" onClick={() => setEditingTarget((prev) => ({ ...prev, [row.target]: true }))}>修改</Button>
+                </div>
+              ) : targetFields[row.target]}
+            </SettingRow>
+          ))}
 
-          {form.destination !== "off" ? (
+          {anyOn ? (
             <>
               <SettingRow
                 label="备份口令"
-                description="备份用它加密，恢复时要输入。口令存在面板里供定时任务使用；忘了它，备份就打不开。"
-                control={data?.hasPassphrase && !editingPassphrase ? (
+                description="备份用它加密，恢复时要输入。忘了它，备份就打不开。"
+                control={data.hasPassphrase && !editingPassphrase ? (
                   <Button variant="outline" size="sm" onClick={() => setEditingPassphrase(true)}>修改</Button>
                 ) : undefined}
               >
@@ -323,34 +396,41 @@ export default function OffsiteBackupSection(_props: Record<string, never>) {
                     />
                   </div>
                 ) : null}
-                {editingPassphrase && data?.hasPassphrase ? (
-                  <p className="text-meta text-[var(--fx-warn-text)]">改了以后，之前的备份仍要用旧口令打开。</p>
+                {editingPassphrase && data.hasPassphrase ? (
+                  <span className="text-meta text-[var(--fx-warn-text)]">改了以后，之前的备份仍要用旧口令打开。</span>
                 ) : null}
               </SettingRow>
 
               <SettingRow label="多久一次" description="北京时间。">
                 <div className="flex flex-wrap items-center gap-2">
-                  <SegmentedControl
-                    ariaLabel="备份节奏"
-                    className="grid grid-cols-2 gap-1"
-                    value={form.scheduleMode}
-                    options={[{ value: "daily", label: "每天" }, { value: "interval", label: "每隔" }] as const}
-                    onChange={(mode) => set("scheduleMode", mode)}
-                  />
-                  {form.scheduleMode === "daily" ? (
+                  <Select value={form.scheduleMode} onValueChange={(value) => set("scheduleMode", value as ScheduleMode)}>
+                    <SelectTrigger className="h-9 w-[88px]" aria-label="备份节奏"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {SCHEDULE_MODES.map((mode) => <SelectItem key={mode.value} value={mode.value}>{mode.label}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  {form.scheduleMode === "weekly" ? (
+                    <Select value={form.scheduleWeekday} onValueChange={(value) => set("scheduleWeekday", value)}>
+                      <SelectTrigger className="h-9 w-[88px]" aria-label="每周几备份"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {WEEKDAYS.map((day) => <SelectItem key={day.value} value={day.value}>{day.label}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  ) : null}
+                  {form.scheduleMode === "interval" ? (
+                    <span className="flex items-center gap-2 text-sm">
+                      <Input className="h-9 w-16" inputMode="numeric" aria-label="每隔几小时备份" value={form.everyHours} onChange={(event) => set("everyHours", event.target.value.replace(/\D/g, ""))} />
+                      小时
+                    </span>
+                  ) : (
                     <Select value={form.scheduleHour} onValueChange={(value) => set("scheduleHour", value)}>
-                      <SelectTrigger className="h-9 w-[104px]" aria-label="每天几点备份"><SelectValue /></SelectTrigger>
+                      <SelectTrigger className="h-9 w-[96px]" aria-label="几点备份"><SelectValue /></SelectTrigger>
                       <SelectContent>
                         {Array.from({ length: 24 }, (_, hour) => (
                           <SelectItem key={hour} value={String(hour)}>{String(hour).padStart(2, "0")}:00</SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
-                  ) : (
-                    <span className="flex items-center gap-2 text-sm">
-                      <Input className="h-9 w-20" inputMode="numeric" aria-label="每隔几小时备份" value={form.everyHours} onChange={(event) => set("everyHours", event.target.value.replace(/\D/g, ""))} />
-                      小时
-                    </span>
                   )}
                 </div>
               </SettingRow>
@@ -371,7 +451,7 @@ export default function OffsiteBackupSection(_props: Record<string, never>) {
             {save.isPending ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : null}
             保存
           </Button>
-          {form.destination !== "off" ? (
+          {anyOn ? (
             <>
               <Button variant="outline" onClick={() => void onTest()} disabled={busy}>
                 {testConnection.isPending ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : null}
@@ -385,57 +465,92 @@ export default function OffsiteBackupSection(_props: Record<string, never>) {
           ) : null}
         </div>
 
-        {savedDestination !== "off" && (status.lastMessage || data?.nextRunAt) ? (
-          <p className={cn("text-meta", status.lastStatus === "failed" ? "text-[var(--fx-warn-text)]" : "text-muted-foreground")}>
-            {status.lastMessage ? `${formatTime(status.lastAttemptAt)} ${status.lastMessage}` : "还没有备份过"}
-            {data?.nextRunAt ? ` · 下次 ${formatTime(data.nextRunAt)}` : ""}
-          </p>
-        ) : null}
-
-        {savedDestination !== "off" ? (
+        {savedOn ? (
           <div className="space-y-1.5 border-t border-[var(--fx-stroke-weak)] pt-3">
-            <p className="text-meta text-muted-foreground">远端的备份</p>
-            {listQuery.isLoading ? (
-              <p className="text-meta text-muted-foreground">正在读取…</p>
-            ) : listQuery.error ? (
-              <p className="text-meta text-[var(--fx-warn-text)]">读不到远端目录：{listQuery.error.message}</p>
-            ) : files.length === 0 ? (
-              <p className="text-meta text-muted-foreground">还没有。</p>
+            <div className="flex items-center justify-between gap-2 text-meta text-muted-foreground">
+              <span>最近结果</span>
+              {data.nextRunAt ? <span>下次 {formatTime(data.nextRunAt)}</span> : null}
+            </div>
+            {history.length === 0 ? (
+              <span className="block text-meta text-muted-foreground">还没有备份过。</span>
             ) : (
               <ul className="space-y-1">
-                {files.map((file) => (
-                  <li key={file.name} className="flex min-w-0 items-center gap-2">
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate font-mono text-xs">{file.name}</span>
-                      <span className="block text-meta text-muted-foreground">{formatTime(file.modifiedAt)} · {formatSize(file.size)}</span>
+                {shownHistory.map((entry, index) => (
+                  <li key={`${entry.at}-${entry.destination}-${index}`} className="flex min-w-0 items-start gap-2 text-meta">
+                    {entry.ok
+                      ? <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-label="成功" />
+                      : <X className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--fx-warn-text)]" aria-label="失败" />}
+                    <span className="shrink-0 tabular-nums text-muted-foreground">{formatTime(entry.at)}</span>
+                    <span className="shrink-0">{TARGET_LABELS[entry.destination]}</span>
+                    <span className={cn("min-w-0 flex-1 break-words", entry.ok ? "text-muted-foreground" : "text-[var(--fx-warn-text)]")}>
+                      {entry.ok ? [formatSize(entry.size), entry.message].filter(Boolean).join("，") : entry.message || "失败"}
                     </span>
-                    <Button variant="ghost" size="sm" className="h-8 shrink-0 gap-1 px-2" onClick={() => { setRestoreName(file.name); setRestorePassword(""); }}>
-                      <RotateCcw className="h-3.5 w-3.5" />
-                      恢复
-                    </Button>
                   </li>
                 ))}
               </ul>
             )}
+            <div className="flex items-center justify-between gap-2">
+              {history.length > HISTORY_PREVIEW ? (
+                <Button variant="link" size="sm" className="h-auto p-0 text-meta" onClick={() => setShowAllHistory((value) => !value)}>
+                  {showAllHistory ? "收起" : `全部 ${history.length} 条`}
+                </Button>
+              ) : <span />}
+              <Button variant="link" size="sm" className="h-auto p-0 text-meta" onClick={() => setRestoreOpen(true)} disabled={busy}>从远端恢复</Button>
+            </div>
           </div>
         ) : null}
       </CardContent>
 
-      <Dialog open={!!restoreName} onOpenChange={(open) => { if (!open && !restore.isPending) setRestoreName(null); }}>
+      <Dialog open={restoreOpen} onOpenChange={(open) => { if (!open) closeRestore(); }}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>从异地备份恢复？</DialogTitle>
+            <DialogTitle>从异地备份恢复</DialogTitle>
             <DialogDescription>
-              会用 {restoreName} 替换面板现在的全部数据（用户、主机、规则、设置……），之后的改动都会丢失。Agent 会按恢复后的配置重新同步。
+              会用选中的备份替换面板现在的全部数据（用户、主机、规则、设置……），之后的改动都会丢失。Agent 会按恢复后的配置重新同步。
             </DialogDescription>
           </DialogHeader>
+          {listQuery.isLoading ? (
+            <span className="text-meta text-muted-foreground">正在读取远端的备份…</span>
+          ) : listQuery.error ? (
+            <span className="text-meta text-[var(--fx-warn-text)]">读不到远端的备份：{listQuery.error.message}</span>
+          ) : (
+            <div className="max-h-[40svh] space-y-3 overflow-y-auto">
+              {remoteGroups.map((group) => (
+                <div key={group.destination} className="space-y-1">
+                  {remoteGroups.length > 1 ? <span className="block text-meta text-muted-foreground">{group.label}</span> : null}
+                  {group.error ? (
+                    <span className="block text-meta text-[var(--fx-warn-text)]">读不到：{group.error}</span>
+                  ) : group.files.length === 0 ? (
+                    <span className="block text-meta text-muted-foreground">还没有备份。</span>
+                  ) : group.files.map((file) => {
+                    const picked = restorePick?.destination === group.destination && restorePick.name === file.name;
+                    return (
+                      <button
+                        key={file.name}
+                        type="button"
+                        aria-pressed={picked}
+                        onClick={() => setRestorePick({ destination: group.destination, name: file.name })}
+                        className={cn(
+                          "flex min-h-11 w-full min-w-0 items-center justify-between gap-2 rounded-md border px-3 py-1.5 text-left",
+                          picked ? "border-primary bg-primary/10" : "border-[var(--fx-stroke-weak)]",
+                        )}
+                      >
+                        <span className="min-w-0 truncate font-mono text-xs">{file.name}</span>
+                        <span className="shrink-0 text-meta text-muted-foreground">{formatSize(file.size)}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
+          )}
           <FormField className="space-y-1.5">
             <Label className="text-xs">备份口令</Label>
             <PasswordInput value={restorePassword} onChange={(event) => setRestorePassword(event.target.value)} autoComplete="off" placeholder="这份备份当时的口令" />
           </FormField>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setRestoreName(null)} disabled={restore.isPending}>取消</Button>
-            <Button variant="destructive" onClick={() => void onRestore()} disabled={!restorePassword || restore.isPending}>
+            <Button variant="outline" onClick={closeRestore} disabled={restore.isPending}>取消</Button>
+            <Button variant="destructive" onClick={() => void onRestore()} disabled={!restorePick || !restorePassword || restore.isPending}>
               {restore.isPending ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : null}
               替换并恢复
             </Button>

@@ -36,6 +36,35 @@ test("SigV4：AWS 文档 S3 GET Object 示例", () => {
   assert.match(signed.authorization, /^AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE\/20130524\/us-east-1\/s3\/aws4_request, /);
 });
 
+/*
+  同一篇文档里的 PUT Object 示例：正文 "Welcome to Amazon S3."，对象名 test$file.text（$ 要编码成 %24），
+  期望签名 98ad7217…108bd。备份上传走的就是 PUT。
+*/
+test("SigV4：AWS 文档 S3 PUT Object 示例（带正文、对象名要编码）", () => {
+  const payloadHash = sha256Hex("Welcome to Amazon S3.");
+  assert.equal(payloadHash, "44ce7dd67c959e0d3524ffac1771dfbba87d2b6b4b4e99e42034a8b803f8b072");
+  const signed = signV4({
+    method: "PUT",
+    canonicalPath: `/${uriEncode("test$file.text", true)}`,
+    query: [],
+    headers: {
+      Date: "Fri, 24 May 2013 00:00:00 GMT",
+      Host: "examplebucket.s3.amazonaws.com",
+      "x-amz-content-sha256": payloadHash,
+      "x-amz-date": "20130524T000000Z",
+      "x-amz-storage-class": "REDUCED_REDUNDANCY",
+    },
+    payloadHash,
+    region: "us-east-1",
+    service: "s3",
+    accessKeyId: "AKIAIOSFODNN7EXAMPLE",
+    secretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+    amzDate: "20130524T000000Z",
+  });
+  assert.equal(signed.signedHeaders, "date;host;x-amz-content-sha256;x-amz-date;x-amz-storage-class");
+  assert.equal(signed.signature, "98ad721746da40c64f1a55b78f14c238d841ea1380cd77a1b5971af0ece108bd");
+});
+
 /* AWS SigV4 测试套件 get-vanilla。 */
 test("SigV4：官方测试套件 get-vanilla", () => {
   const signed = signV4({

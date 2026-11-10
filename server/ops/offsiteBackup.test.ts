@@ -55,7 +55,7 @@ test("异地备份：WebDAV 上传、保留份数、取回后能用口令解密"
     store.set("notes.txt", Buffer.from("keep me"));
 
     await backup.saveOffsiteBackupSettings({
-      destination: "webdav",
+      destinations: ["webdav"],
       webdav: { url: "https://93.184.216.34/dav/nex", user: "u", password: "p" },
       passphrase: "correct horse",
       schedule: { mode: "daily", hour: 4 },
@@ -78,21 +78,28 @@ test("异地备份：WebDAV 上传、保留份数、取回后能用口令解密"
     const uploaded = store.get(result.name)!.toString("utf8");
     assert.ok(!uploaded.includes("\"admin\""));
     const list = await backup.listOffsiteBackups();
-    assert.deepEqual(list.map((file) => file.name), [result.name, "nex-backup-20200102-0400.fwxbak"]);
-    const content = await backup.downloadOffsiteBackup(result.name);
+    assert.deepEqual(list.map((group) => [group.destination, group.error]), [["webdav", null]]);
+    assert.deepEqual(list[0].files.map((file) => file.name), [result.name, "nex-backup-20200102-0400.fwxbak"]);
+    const content = await backup.downloadOffsiteBackup("webdav", result.name);
     const snapshot = decryptMigrationSnapshotBackup(content, "correct horse");
     assert.ok(Array.isArray(snapshot.tables.users));
     assert.throws(() => decryptMigrationSnapshotBackup(content, "wrong password"));
-    await assert.rejects(() => backup.downloadOffsiteBackup("notes.txt"), /只能恢复/);
+    await assert.rejects(() => backup.downloadOffsiteBackup("webdav", "notes.txt"), /只能恢复/);
 
-    const state = await backup.readOffsiteBackupSettings();
-    assert.equal(state.status.lastStatus, "success");
+    const { state } = await backup.readOffsiteBackupSettings();
+    assert.ok(state.targets.webdav.successAt, "记下这个目的地上次成功的时间");
+    assert.equal(state.targets.s3.successAt, null);
+    assert.deepEqual(
+      state.history.map((entry) => [entry.destination, entry.ok, entry.name, entry.trigger]),
+      [["webdav", true, result.name, "manual"]],
+    );
+    assert.ok(state.history[0].size > 0);
     const events = await listPanelEvents({ kindPrefix: "ops.backup" });
     assert.equal(events[0]?.level, "info");
 
     // 只许 HTTPS
     await backup.saveOffsiteBackupSettings({
-      destination: "webdav",
+      destinations: ["webdav"],
       webdav: { url: "http://93.184.216.34/dav/nex" },
       schedule: { mode: "daily", hour: 4 },
       keep: 2,
@@ -101,6 +108,10 @@ test("异地备份：WebDAV 上传、保留份数、取回后能用口令解密"
     const failed = await listPanelEvents({ kindPrefix: "ops.backup" });
     assert.equal(failed[0]?.level, "warn");
     assert.match(failed[0]?.message || "", /异地备份失败/);
+    const after = await backup.readOffsiteBackupSettings();
+    assert.equal(after.state.history[0].ok, false);
+    assert.match(after.state.history[0].message, /HTTPS/, "失败原因进「最近结果」");
+    assert.equal(after.state.failStreak, 1);
   } finally {
     globalThis.fetch = realFetch;
     await runtime.closeDatabase().catch(() => undefined);

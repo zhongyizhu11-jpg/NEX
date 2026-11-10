@@ -2753,6 +2753,32 @@ async function seedSettings() {
     systemAnnouncementEnabled: "true",
     allowMultiDeviceLogin: "true",
   });
+  // 异地自动备份：一套填好的演示配置和几条「最近结果」。开发面板不跑定时任务；手动点「测试连接 /
+  // 立即备份 / 从远端恢复」会真的去连这些地址，地址是假的，只会得到一条失败。
+  const backupAt = (hoursAgo: number) => Date.now() - hoursAgo * 3600 * 1000;
+  await setSettings({
+    "ops.backup.destination": "webdav,s3",
+    "ops.backup.webdav.url": "https://dav.example.com/dav/nex-backup/",
+    "ops.backup.webdav.user": "nex",
+    "ops.backup.webdav.password": "dev-only",
+    "ops.backup.s3.endpoint": "https://demo.r2.cloudflarestorage.com",
+    "ops.backup.s3.region": "auto",
+    "ops.backup.s3.bucket": "nex-backup",
+    "ops.backup.s3.accessKey": "DEVACCESSKEY",
+    "ops.backup.s3.secretKey": "dev-only",
+    "ops.backup.passphrase": "forwardx-dev",
+    "ops.backup.last.s3.successAt": String(backupAt(5)),
+    "ops.backup.last.webdav.successAt": String(backupAt(29)),
+    "ops.backup.last.webdav.attemptAt": String(backupAt(4)),
+    "ops.backup.history": JSON.stringify([
+      { at: backupAt(4), trigger: "schedule", destination: "webdav", ok: false, name: "", size: 0, message: "上传失败，HTTP 507：空间不足" },
+      { at: backupAt(5), trigger: "schedule", destination: "webdav", ok: false, name: "", size: 0, message: "上传失败，HTTP 507：空间不足" },
+      { at: backupAt(5), trigger: "schedule", destination: "s3", ok: true, name: "nex-backup-demo.fwxbak", size: 1_260_000, message: "删掉 1 份旧的" },
+      { at: backupAt(29), trigger: "schedule", destination: "webdav", ok: true, name: "nex-backup-demo.fwxbak", size: 1_254_000, message: "" },
+      { at: backupAt(29), trigger: "schedule", destination: "s3", ok: true, name: "nex-backup-demo.fwxbak", size: 1_254_000, message: "" },
+      { at: backupAt(53), trigger: "manual", destination: "s3", ok: true, name: "nex-backup-demo.fwxbak", size: 1_249_000, message: "" },
+    ]),
+  });
 }
 
 /** lineDemo：线路工作台那套演示（Po0 / Jinx / HK2 …）；只看原来那几台机器的测试传 false。 */
