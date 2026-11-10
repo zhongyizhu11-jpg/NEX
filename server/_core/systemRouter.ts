@@ -5,6 +5,7 @@ import { githubRepoParts } from "../../shared/githubAccelerator";
 import { updateMultiDeviceLoginSettingCache } from "./context";
 import { z } from "zod";
 import * as db from "../db";
+import { DEVELOPER_ANNOUNCEMENT_FEED_PATH, syncDeveloperAnnouncementFeed } from "../developerAnnouncementFeed";
 import { listInstalledUiThemes } from "../uiThemes";
 import type { UiThemeSummary } from "../../shared/uiThemePackage";
 import { ENV } from "../env";
@@ -1142,6 +1143,14 @@ async function getLatestUpdateInfoCached(force = false): Promise<UpdateInfo> {
   const request = fetchLatestUpdateInfo()
     .then((info) => {
       lastUpdateInfo = info;
+      // 顺手拉一次开发者公告（同一个开关、同一个加速站；自己有半小时冷却，不拖慢检查更新）
+      void readPanelUpdateAccelerator()
+        .then((accelerator) => syncDeveloperAnnouncementFeed(() => fetchTextNoCache(
+          githubRawMainUrl(REPO_URL, DEVELOPER_ANNOUNCEMENT_FEED_PATH),
+          accelerator,
+          (text) => /^\s*[[{]/.test(text),
+        )))
+        .catch(() => undefined);
       return info;
     });
   if (force) return request;
