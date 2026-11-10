@@ -32,6 +32,7 @@ export const SECRET_SETTING_LABELS: Readonly<Record<string, string>> = {
   "ops.backup.passphrase": "异地备份 · 备份密码",
   "ops.webhook.url": "运维 Webhook 地址",
   "ops.metrics.token": "指标导出 · 抓取口令",
+  "ops.eventWebhooks.endpoints": "事件推送 · 接收地址与签名密钥",
 };
 
 export const SECRET_SETTING_KEYS: ReadonlySet<string> = new Set(Object.keys(SECRET_SETTING_LABELS));

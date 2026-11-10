@@ -14,6 +14,7 @@ import { SettingList, SettingRow } from "@/components/SettingRow";
 import DataSectionLoading from "@/components/DataSectionLoading";
 import DataSectionError from "@/components/DataSectionError";
 import { clipboardNeedsManualCopy, copyTextToClipboard } from "@/lib/clipboard";
+import { downloadTextFile } from "@/lib/fileDownload";
 import { mobileAuth } from "@/lib/mobileAuth";
 import { trpc } from "@/lib/trpc";
 import { usePanelFlags } from "@/hooks/usePanelFlags";
@@ -77,6 +78,7 @@ export default function ApiTokensSection(_props: Record<string, never>) {
   // 改模块：正在改哪一枚、勾了哪些
   const [editing, setEditing] = useState<{ id: number; name: string; modules: ApiTokenModule[] } | null>(null);
   const [created, setCreated] = useState<{ token: string; name: string } | null>(null);
+  const [downloadingDocs, setDownloadingDocs] = useState(false);
 
   const panelUrl = (panelPublicUrl.trim() || mobileAuth.panelOrigin()).replace(/\/+$/, "");
   const mcpUrl = `${panelUrl}/mcp`;
@@ -84,6 +86,29 @@ export default function ApiTokensSection(_props: Record<string, never>) {
   const claudeCommand = `claude mcp add --transport http nex ${mcpUrl} --header "Authorization: Bearer ${tokenPlaceholder}"`;
   const jsonConfig = JSON.stringify({ mcpServers: { nex: { type: "http", url: mcpUrl, headers: { Authorization: `Bearer ${tokenPlaceholder}` } } } }, null, 2);
   const items = listQuery.data ?? [];
+  // 接口文档（OpenAPI）：复制出去的是对外地址（脚本带令牌去取）；下载走当前会话，不用先建令牌
+  const openApiUrl = `${panelUrl}/api/openapi.json`;
+
+  const handleDownloadDocs = async () => {
+    setDownloadingDocs(true);
+    try {
+      const headers = new Headers();
+      if (mobileAuth.isNative) {
+        headers.set("x-forwardx-mobile", "1");
+        const token = mobileAuth.getToken();
+        if (token) headers.set("Authorization", `Bearer ${token}`);
+      }
+      // 网页上用相对地址：面板公开地址可能是另一个域名，会话 cookie 带不过去
+      const response = await fetch(mobileAuth.isNative ? openApiUrl : "/api/openapi.json", { headers, credentials: "include" });
+      if (!response.ok) throw new Error(response.status === 401 ? "登录已过期，请重新登录" : `下载失败（HTTP ${response.status}）`);
+      downloadTextFile("nex-openapi.json", await response.text(), "application/json");
+      toast.success("接口文档已下载");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "下载失败");
+    } finally {
+      setDownloadingDocs(false);
+    }
+  };
 
   const openCreate = () => {
     setName("");
@@ -200,6 +225,25 @@ export default function ApiTokensSection(_props: Record<string, never>) {
               ))}
             </SettingList>
           )}
+          {/* 和令牌列表隔一条线：这一行不是令牌，是「拿着令牌能调什么」 */}
+          <div className="mt-4 border-t border-border pt-4">
+            <SettingList>
+              <SettingRow
+                label="接口文档（OpenAPI）"
+                description="全部接口的清单，可以导入 Postman 或代码生成器；脚本带令牌也能取这个地址。"
+                control={(
+                  <span className="flex items-center gap-1">
+                    <Button variant="ghost" size="sm" onClick={handleDownloadDocs} disabled={downloadingDocs}>
+                      {downloadingDocs ? "下载中…" : "下载"}
+                    </Button>
+                    <Button variant="ghost" size="sm" onClick={() => copy(openApiUrl, "地址已复制")}>
+                      复制地址
+                    </Button>
+                  </span>
+                )}
+              />
+            </SettingList>
+          </div>
         </CardContent>
       </Card>
 

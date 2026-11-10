@@ -33,6 +33,7 @@ import { panelAccessGuard } from "./ops/firewallPanelAccess";
 import { mcpRouter } from "./ops/mcpRoute";
 import { llmsTxtRouter } from "./llmsTxt";
 import { metricsRouter } from "./ops/metricsExport";
+import { openApiRouter } from "./openApiRoute";
 import { googleAuthRouter } from "./googleAuthRoute";
 import { discordAuthRouter } from "./discordAuthRoute";
 import { databaseRequestErrorHandler, databaseUnavailableApiGuard, registerDatabaseHealthRoutes } from "./databaseHealthRoutes";
@@ -229,6 +230,8 @@ async function startServer() {
   app.use(llmsTxtRouter);
   // GET /metrics：Prometheus 指标导出（默认关，设置 › 进阶里开；关着回 404）：server/ops/metricsExport.ts。
   app.use(metricsRouter);
+  // GET /api/openapi.json：接口文档（OpenAPI 3.1），登录用户或带 API 令牌可取（server/openApiRoute.ts）。
+  app.use(openApiRouter);
   app.use(
     "/api/trpc",
     createExpressMiddleware({

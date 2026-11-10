@@ -38,6 +38,8 @@ export function normalizeApiTokenScope(value: unknown): ApiTokenScope {
   · 操作审计整个路由：审计记着所有人的 IP 和参数，令牌既不该能读走，也不该能把保留天数改短、借每天的清理删掉记录。
   · 面板性能剖析整个路由：堆快照就是面板进程内存的原样拷贝（会话、密码、密钥都在里面），下载路由也只认网页会话。
   · 指标导出整个路由：能看、能换 /metrics 的抓取口令，是另一枚凭据。
+  · 事件推送整个路由：接收地址允许填内网（自建用户要推到内网的 n8n / Home Assistant），泄露的令牌不该能借它
+    让面板往内网任意地址发请求、再从「测试」的返回里探内网；接收地址本身也常带着令牌，不给令牌读。
   auth.updateProfile 改邮箱在过程里单独拦（见 apiTokenProfileUpdateError）：只改昵称这类不受影响。
 */
 const TOKEN_FORBIDDEN_PATHS = [
@@ -48,6 +50,7 @@ const TOKEN_FORBIDDEN_PATHS = [
   "ops.audit.",
   "ops.profiling.",
   "ops.metricsExport.",
+  "ops.eventWebhooks.",
   "setup.",
   "auth.changePassword",
   "auth.beginTwoFactorSetup",
