@@ -112,6 +112,8 @@ import {
   prepareRuleEntryBridgeSwitch,
   refreshRuleEntryBridgeHosts,
 } from "../ruleEntryBridges";
+import { isPortRangeRule, portRangeShapeError, portRangeUnsupportedReason } from "@shared/portRange";
+import { reserveRulePortRange, resolveNextSourcePortEnd } from "../rulePortRange";
 
 /**
  * 规则行上的协议封禁三列永远写 false。
@@ -1638,6 +1640,19 @@ export async function toggleForwardRuleForActor(
             throw new Error("套餐已到期，请续费后再启用规则");
           }
         }
+        // 端口段规则：停用期间段里的端口可能被别人拿走了，整段重新查、整段占住（server/rulePortRange.ts）。
+        if (isPortRangeRule(rule)) {
+          const rangeHost = await db.getHostById(Number(rule.hostId));
+          sourcePortReservation = await reserveRulePortRange({
+            actor,
+            ownerUserId: Number(rule.userId),
+            host: rangeHost as any,
+            rule: { ...(rule as any), sourcePort: Number(rule.sourcePort), sourcePortEnd: Number((rule as any).sourcePortEnd), targetPort: Number(rule.targetPort) },
+            entryPolicy: portPolicyFrom(rangeHost as any),
+            planRange: actor.role !== "admin" ? await db.getUserPlanPortRange(actor.id, Number(rule.hostId)) : null,
+            excludeRuleIds: [Number(rule.id)],
+          });
+        } else {
         // 隧道挂了入口组时，组里每台主机也在这个端口上监听，都要查、都要占住。
         sourcePortReservation = await reserveSpecificHostPortOnHosts({
           hostIds: await db.forwardRuleListenHostIds(rule.hostId, (rule as any).tunnelId),
@@ -1645,6 +1660,7 @@ export async function toggleForwardRuleForActor(
           protocol: (rule as any).protocol,
           isUsed: (hostId, port) => db.isPortUsedOnHost(hostId, port, Number(rule.id), (rule as any).protocol, undefined, false),
         });
+        }
         if (!sourcePortReservation) {
           throw await entryBridgeAwarePortError(
             await db.forwardRuleListenHostIds(rule.hostId, (rule as any).tunnelId),
@@ -1806,10 +1822,39 @@ export async function createDirectForwardRuleForActor(
   let sourcePortReservation: HostPortReservation | null = null;
   let tunnelExitPortReservation: HostPortReservation | null = null;
   let quotaReservation: RuleQuotaReservation | null = null;
+  // 端口段（shared/portRange.ts）：targetPortEnd 只用来核对长度，不是列，落库前摘掉。
+  const sourcePortEnd = resolveNextSourcePortEnd(input);
+  const targetPortEnd = Number(input.targetPortEnd || 0) || null;
+  input = { ...input, sourcePortEnd };
+  delete input.targetPortEnd;
+  {
+    const shapeError = portRangeShapeError({ sourcePort, sourcePortEnd, targetPort: Number(input.targetPort || 0), targetPortEnd });
+    if (shapeError) throw new Error(shapeError);
+  }
   // 规则在哪些主机上监听：隧道挂了入口组时，除了入口机还有组里每台启用的主机。
   const listenHostIds = tunnelId ? await db.tunnelRuleListenHostIds(selectedTunnelForRule, hostId) : [hostId];
   try {
-    if (sourcePort === 0) {
+    if (sourcePortEnd) {
+      // 段要整体过端口策略、套餐端口段、系统端口保护和占用检查，并整段占住（server/rulePortRange.ts）。
+      sourcePortReservation = await reserveRulePortRange({
+        actor,
+        ownerUserId: actor.id,
+        host: host as any,
+        rule: {
+          ...input,
+          tunnelId,
+          failoverEnabled: !!input.failoverEnabled || !!input.routeGroup,
+          sourcePort,
+          sourcePortEnd,
+          targetPort: Number(input.targetPort || 0),
+          targetPortEnd,
+          egressType: egressColumns?.egressType || "none",
+          rateLimitMbps: (options.limitColumns as any)?.rateLimitMbps,
+        },
+        entryPolicy,
+        planRange,
+      });
+    } else if (sourcePort === 0) {
       let randomRangeStart = selectedTunnelForRule ? (selectedTunnelForRule as any).portRangeStart : null;
       let randomRangeEnd = selectedTunnelForRule ? (selectedTunnelForRule as any).portRangeEnd : null;
       sourcePortReservation = await reserveAvailableHostPortOnHosts({
@@ -2339,6 +2384,9 @@ export const crudRulesRouter = router({
       tunnelId: z.number().nullable().optional(),
       forwardGroupId: z.number().nullable().optional(),
       sourcePort: z.number().int().min(0).max(65535), // 0 = 随机分配
+      // 端口段（shared/portRange.ts）：入口段结尾；目标段结尾只用来核对长度，不落库。
+      sourcePortEnd: z.number().int().min(1).max(65535).nullable().optional(),
+      targetPortEnd: z.number().int().min(1).max(65535).nullable().optional(),
       targetIp: z.string().min(1).max(253).refine(
         (v) => /^[a-zA-Z0-9]([a-zA-Z0-9\-_.]*[a-zA-Z0-9])?$|^[a-fA-F0-9:.]+$/.test(v.trim()),
         "请输入有效的 IP 地址或域名"
@@ -2386,6 +2434,9 @@ export const crudRulesRouter = router({
         && (hasRuleLimitInput(limitInput) || (requestedOwnerId !== undefined && Number(requestedOwnerId) !== Number(ctx.user.id)));
       const limitColumns = adminManaged ? ruleLimitColumns(limitInput, true) : {};
       ctx = { ...ctx, user: await resolveRuleOperationOwner(ctx.user, requestedOwnerId) as any };
+      if (Number(input.sourcePortEnd || 0) > 0 && (input.tlsInboundId || input.forwardGroupId)) {
+        throw new Error(portRangeUnsupportedReason({ ...input, forwardType: input.forwardType }) || "这类规则不能用端口段");
+      }
       const created: any = await (async () => {
       if (input.tlsInboundId) {
         if (egressRequested(egressInput)) throw new Error("共享 TLS 入站上的规则不能使用 Shadowsocks 出口");
@@ -2609,6 +2660,8 @@ export const crudRulesRouter = router({
       tunnelExitPort: z.number().int().min(1).max(65535).nullable().optional(),
       forwardGroupId: z.number().nullable().optional(),
       sourcePort: z.number().int().min(0).max(65535).optional(),
+      sourcePortEnd: z.number().int().min(1).max(65535).nullable().optional(),
+      targetPortEnd: z.number().int().min(1).max(65535).nullable().optional(),
       targetIp: z.string().min(1).max(253).refine(
         (v) => /^[a-zA-Z0-9]([a-zA-Z0-9\-_.]*[a-zA-Z0-9])?$|^[a-fA-F0-9:.]+$/.test(v.trim()),
         "请输入有效的 IP 地址或域名"
@@ -2742,6 +2795,28 @@ export const crudRulesRouter = router({
       if (isSniRule(rule)) return updateSniForwardRuleForActor(ctx.user, rule, input) as any;
       if (input.tlsInboundId) throw new Error("已有规则不能改成共享 TLS 入站，请新建一条规则");
       await requireRuleTelegramNotifyReady(input.telegramErrorNotifyEnabled);
+      /*
+        端口段（shared/portRange.ts）：先算出保存后的段结尾。转发组 / 转发链这两条路第一版不支持，
+        在它们各自的分支之前就拦住；改回单端口时把列清成 null（模板分支整份展开入参，转换分支显式写）。
+        直连那条路的完整校验在下面「源端口」那一步。targetPortEnd 只用来核对长度，不是列。
+      */
+      const nextSourcePortEnd = resolveNextSourcePortEnd(input, rule as any);
+      const requestedTargetPortEnd = Number((input as any).targetPortEnd || 0) || null;
+      delete (input as any).targetPortEnd;
+      if (input.sourcePortEnd !== undefined || (rule as any).sourcePortEnd != null) (input as any).sourcePortEnd = nextSourcePortEnd;
+      if (nextSourcePortEnd) {
+        const nextGroupId = input.forwardGroupId !== undefined ? Number(input.forwardGroupId || 0) : Number((rule as any).forwardGroupId || 0);
+        if (nextGroupId > 0 || dbBool((rule as any).isForwardGroupTemplate)) {
+          throw new Error(portRangeUnsupportedReason({ forwardGroupId: nextGroupId || 1 }) || "转发组暂不支持端口段");
+        }
+      } else {
+        const shapeError = portRangeShapeError({
+          sourcePort: Number(input.sourcePort ?? rule.sourcePort),
+          targetPort: Number(input.targetPort ?? rule.targetPort),
+          targetPortEnd: requestedTargetPortEnd,
+        });
+        if (shapeError) throw new Error(shapeError);
+      }
 
       if (input.sourcePort === 0) {
         const nextProtocol = input.protocol ?? (rule as any).protocol;
@@ -3267,6 +3342,7 @@ export const crudRulesRouter = router({
           forwardGroupMemberId: null,
           isForwardGroupTemplate: true,
           sourcePort,
+          sourcePortEnd: null,
           targetIp: normalizeRuleTargetIp(input.targetIp ?? (rule as any).targetIp, { tunnelId: !isForwardChain && (group as any).groupType === "tunnel" ? 1 : null }),
           targetPort: Number(input.targetPort ?? (rule as any).targetPort),
           telegramErrorNotifyEnabled: input.telegramErrorNotifyEnabled ?? (rule as any).telegramErrorNotifyEnabled,
@@ -3418,10 +3494,37 @@ export const crudRulesRouter = router({
           tunnelId: nextTunnelIdForRule,
         });
       }
-      const shouldCheckSourcePort = input.sourcePort !== undefined
+      if (nextSourcePortEnd) {
+        // 端口段：整段过策略、套餐、系统端口保护、占用，整段占住；下面单端口那一套就不再走了。
+        const rangeHost = await db.getHostById(nextHostIdForRule);
+        heldReservations.push(await reserveRulePortRange({
+          actor: ctx.user,
+          ownerUserId: Number(rule.userId),
+          host: rangeHost as any,
+          rule: {
+            ...(rule as any),
+            ...(input as any),
+            sourcePort: Number(nextSourcePortForRule),
+            sourcePortEnd: nextSourcePortEnd,
+            targetPort: Number(input.targetPort ?? rule.targetPort),
+            targetPortEnd: requestedTargetPortEnd,
+            forwardType: nextForwardTypeForRule,
+            tunnelId: nextTunnelIdForRule,
+            failoverEnabled: nextMainBackupEnabled,
+            routeMode: nextMainBackupEnabled ? (rule as any).routeMode : null,
+            egressType: egressActiveAfterSave ? "ss" : "none",
+            protocol: nextProtocolForRule,
+            rateLimitMbps: (limitPatch as any)?.rateLimitMbps ?? (rule as any).rateLimitMbps,
+          },
+          entryPolicy: portPolicyFrom(rangeHost as any),
+          planRange: ctx.user.role !== "admin" ? await db.getUserPlanPortRange(ctx.user.id, nextHostIdForRule) : null,
+          excludeRuleIds: [Number(rule.id)],
+        }));
+      }
+      const shouldCheckSourcePort = !nextSourcePortEnd && (input.sourcePort !== undefined
         || input.protocol !== undefined
         || Number(nextHostIdForRule) !== Number(rule.hostId)
-        || Number(nextTunnelIdForRule || 0) !== Number((rule as any).tunnelId || 0);
+        || Number(nextTunnelIdForRule || 0) !== Number((rule as any).tunnelId || 0));
       if (shouldCheckSourcePort) {
         const host = await db.getHostById(nextHostIdForRule);
         if (host) {
@@ -3685,6 +3788,7 @@ export const crudRulesRouter = router({
       // 关键字段变更时重置 isRunning
       const watchedFields: string[] = [
         "sourcePort",
+        "sourcePortEnd",
         "targetIp",
         "targetPort",
         "forwardType",

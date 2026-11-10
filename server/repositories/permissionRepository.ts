@@ -11,6 +11,7 @@ import {
 } from "../../drizzle/schema";
 import { getDb } from "../dbRuntime";
 import { sqlCountAll, sqlCountDistinct } from "../dbCompat";
+import { addRulePortSpan } from "@shared/portRange";
 import { getActiveUserSubscriptions } from "./billingRepository";
 import { getTrafficBillingAccessSnapshot, getUserUsableTrafficBillingResourceIds } from "./trafficBillingRepository";
 import { clearLinkAccessScopeCache } from "../linkAccessView";
@@ -173,14 +174,25 @@ export async function getUserRuleCount(userId: number): Promise<number> {
 export async function getUserPortCount(userId: number): Promise<number> {
   const db = await getDb();
   if (!db) return 0;
-  const r = await db.select({ count: sqlCountDistinct(forwardRules.sourcePort) }).from(forwardRules).where(and(
+  const where = and(
     eq(forwardRules.userId, userId),
     eq(forwardRules.pendingDelete, false),
     sql`${forwardRules.forwardGroupRuleId} IS NULL`,
     // 挂在共享 TLS 入站上的规则没有自己的对外端口（sourcePort 是本机回环端口），不占端口额度。
     sql`${forwardRules.tlsInboundId} IS NULL`,
-  ));
-  return Number(r[0]?.count) || 0;
+  );
+  // 端口段规则（shared/portRange.ts）一段算段长那么多个端口，不然一条 1000 口的段只算 1 个，端口额度形同虚设。
+  const ranged = await db.select({ port: forwardRules.sourcePort, portEnd: forwardRules.sourcePortEnd })
+    .from(forwardRules)
+    .where(and(where, sql`${forwardRules.sourcePortEnd} IS NOT NULL`));
+  if ((ranged as any[]).length === 0) {
+    const r = await db.select({ count: sqlCountDistinct(forwardRules.sourcePort) }).from(forwardRules).where(where);
+    return Number(r[0]?.count) || 0;
+  }
+  const rows = await db.select({ port: forwardRules.sourcePort, portEnd: forwardRules.sourcePortEnd }).from(forwardRules).where(where);
+  const used = new Set<number>();
+  for (const row of rows as any[]) addRulePortSpan(used, row.port, row.portEnd);
+  return used.size;
 }
 
 /** 获取所有用户的主机权限映射 */

@@ -57,6 +57,7 @@ import {
   type ReferralSourceType,
 } from "../../shared/referral";
 import { pageResult, pageWindowForTotal, type PageRequest } from "../../shared/pagination";
+import { addRulePortSpan } from "../../shared/portRange";
 import { withKeyedTaskLock, withTrafficBillingUserLock } from "../keyedTaskLock";
 import {
   getUserForwardRuleIdsDisabledByAccess,
@@ -2749,13 +2750,13 @@ async function subscriptionPortAllocationState(
   if (start <= 0 || end < start) return null;
 
   const used = new Set<number>();
-  const ruleRows = await db.select({ port: forwardRules.sourcePort, userId: forwardRules.userId }).from(forwardRules).where(and(
+  const ruleRows = await db.select({ port: forwardRules.sourcePort, portEnd: forwardRules.sourcePortEnd, userId: forwardRules.userId }).from(forwardRules).where(and(
     eq(forwardRules.isEnabled, true),
     eq(forwardRules.pendingDelete, false),
   ));
   (ruleRows as any[]).forEach((row: any) => {
     if (exclude.ruleUserId && Number(row.userId) === exclude.ruleUserId) return;
-    used.add(Number(row.port));
+    addRulePortSpan(used, row.port, row.portEnd);
   });
   const subRows = await db.select({
     id: userSubscriptions.id,

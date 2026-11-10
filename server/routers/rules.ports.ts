@@ -7,9 +7,11 @@ import {
   requireTrafficBillingAccessIfConfigured,
   requireTunnelUseOrTrafficBillingAccess,
 } from "./helpers";
-import { assertTenantListenPortAllowedOnHosts } from "../tenantListenPortGuard";
+import { assertTenantListenPortAllowed, assertTenantListenPortAllowedOnHosts } from "../tenantListenPortGuard";
+import { formatPortSpan, normalizeSourcePortEnd, portRangeShapeError, portRangeUnsupportedReason } from "@shared/portRange";
+import { firstPortOutsidePolicy, portRangeAgentUnsupportedReason } from "../rulePortRange";
 import { resolveRuleOperationOwner } from "../ruleOperationOwner";
-import { combineHostPortPolicyWithRange, combinePortPolicies, isPortAllowedByPolicy, portPolicyErrorMessage, portPolicyFrom, type PortPolicy } from "@shared/portPolicy";
+import { combineHostPortPolicyWithRange, combinePortPolicies, describePortPolicy, isPortAllowedByPolicy, portPolicyErrorMessage, portPolicyFrom, type PortPolicy } from "@shared/portPolicy";
 
 const randomPortInputSchema = z.object({
   // 管理员替所选用户建规则时，按那个用户的权限和套餐端口段来挑（server/ruleOperationOwner.ts）。
@@ -93,6 +95,41 @@ async function resolveForwardGroupPortPolicy(
   return { base, plan, effective: plan ? combinePortPolicies(base, plan) : base };
 }
 
+/**
+ * 端口段的占用探测：和保存时（server/rulePortRange.ts）同一套口径，但只回答「能不能用、为什么」，
+ * 不占端口。隧道 / 转发组上不支持端口段，直接说原因。
+ */
+async function checkPortRange(
+  ctx: { user: { id: number; role: string } },
+  input: { hostId: number; forwardGroupId?: number; tunnelId?: number | null; sourcePort: number; sourcePortEnd: number; excludeRuleId?: number; protocol: "tcp" | "udp" | "both" },
+): Promise<{ used: boolean; reason?: string }> {
+  const span = formatPortSpan(input.sourcePort, input.sourcePortEnd);
+  const unsupported = portRangeUnsupportedReason({ forwardType: "nftables", tunnelId: input.tunnelId, forwardGroupId: input.forwardGroupId });
+  if (unsupported) return { used: true, reason: unsupported };
+  const shapeError = portRangeShapeError({ sourcePort: input.sourcePort, sourcePortEnd: input.sourcePortEnd, targetPort: 0 });
+  if (shapeError) return { used: true, reason: shapeError };
+  const { base, plan, effective } = await resolveEntryPortPolicy(ctx, { hostId: input.hostId, tunnelId: null });
+  const outsideBase = firstPortOutsidePolicy(input.sourcePort, input.sourcePortEnd, base);
+  if (outsideBase !== null) return { used: true, reason: `段里的 ${outsideBase} 不在允许范围：${describePortPolicy(base)}` };
+  if (plan) {
+    const outsidePlan = firstPortOutsidePolicy(input.sourcePort, input.sourcePortEnd, effective);
+    if (outsidePlan !== null) return { used: true, reason: `段里的 ${outsidePlan} 不在套餐端口：${describePortPolicy(effective)}` };
+  }
+  const host = await db.getHostById(input.hostId);
+  const agentReason = portRangeAgentUnsupportedReason(host as any);
+  if (agentReason) return { used: true, reason: agentReason };
+  try {
+    for (let port = input.sourcePort; port <= input.sourcePortEnd; port += 1) {
+      assertTenantListenPortAllowed({ actor: ctx.user, host: host as any, port, label: "段里的端口" });
+    }
+  } catch (error) {
+    return { used: true, reason: error instanceof Error ? error.message : "端口不可用" };
+  }
+  const used = await db.findUsedPortInRangeOnHost(input.hostId, input.sourcePort, input.sourcePortEnd, input.excludeRuleId ? [input.excludeRuleId] : [], input.protocol);
+  if (used !== null) return { used: true, reason: `段里的 ${used} 已被占用` };
+  return { used: false, reason: `${span} 共 ${input.sourcePortEnd - input.sourcePort + 1} 个端口可用` };
+}
+
 export const portsRulesRouter = router({
   /**
    * The effective entry port policy, for the dialog's hint.
@@ -129,6 +166,8 @@ export const portsRulesRouter = router({
       forwardGroupId: z.number().int().positive().optional(),
       tunnelId: z.number().nullable().optional(),
       sourcePort: z.number().int().min(1).max(65535),
+      // 端口段（shared/portRange.ts）：给了就整段查。
+      sourcePortEnd: z.number().int().min(1).max(65535).nullable().optional(),
       excludeRuleId: z.number().optional(),
       protocol: z.enum(["tcp", "udp", "both"]).optional().default("both"),
     }).refine(
@@ -139,6 +178,10 @@ export const portsRulesRouter = router({
       ctx = { ...ctx, user: await resolveRuleOperationOwner(ctx.user, input.userId) as any };
       if (input.excludeRuleId) {
         await requireRuleAccess(ctx, input.excludeRuleId);
+      }
+      const sourcePortEnd = normalizeSourcePortEnd(input.sourcePort, input.sourcePortEnd);
+      if (sourcePortEnd) {
+        return checkPortRange(ctx, { ...input, hostId: Number(input.hostId || 0), sourcePortEnd });
       }
       if (input.forwardGroupId) {
         if (ctx.user.role !== "admin") {

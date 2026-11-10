@@ -1,4 +1,5 @@
 import { forwardRuleProtocols, normalizeForwardRuleProtocol } from "@shared/forwardTypes";
+import { ruleSourcePortEnd, ruleTargetPortEnd } from "@shared/portRange";
 import { isEntryBridgeRuleId } from "@shared/ruleEntryBridge";
 import { GOST_API_DIR } from "@shared/gostRuntimeApi";
 import { isIP } from "net";
@@ -111,7 +112,7 @@ function iptablesDeleteByRuleTag(binary: IptablesBinary, table: string | null, c
  * 只有 nat PREROUTING 里已经没有别的端口 DNAT 到这个目标时才删它们；读 PREROUTING 失败时
  * 按“仍被引用”处理（宁可留一条无害的放行，也不能把另一条规则弄断）。
  */
-function iptablesUnreferencedTargetGuard(binary: IptablesBinary, proto: string, port: number, dnatTarget: string, deletes: string[]) {
+function iptablesUnreferencedTargetGuard(binary: IptablesBinary, proto: string, port: number | string, dnatTarget: string, deletes: string[]) {
   const bin = iptablesBin(binary);
   const check = `printf '%s\\n' "$__fwx_nat" | awk -v proto=${shellQuote(proto)} -v port=${shellQuote(String(port))} -v target=${shellQuote(dnatTarget)} '/^-A PREROUTING / && / -j DNAT / {p=""; d=""; t=""; for (i=1; i<NF; i++) {if ($i=="-p") p=$(i+1); else if ($i=="--dport") d=$(i+1); else if ($i=="--to-destination") t=$(i+1)} if (p==proto && d!=port && tolower(t)==tolower(target)) found=1} END {exit found ? 0 : 1}'`;
   const command = `if __fwx_nat=$(${bin} -t nat -S PREROUTING 2>/dev/null); then if ${check}; then :; else ${deletes.join("; ")}; fi; fi`;
@@ -134,11 +135,102 @@ function iptablesDnatTarget(targetIp: unknown, targetPort: unknown) {
   return isIpv6Address(host) ? `[${host}]:${Number(targetPort) || 0}` : `${host}:${Number(targetPort) || 0}`;
 }
 
+/*
+  端口段（shared/portRange.ts）在内核规则里的写法。
+
+  一条规则就是一整段：iptables 的 `--dport 20000:20100`、nft 的 `dport 20000-20100`，计数器还是
+  那一条，按规则 id / 起始端口记账，和单端口一样。目标那头分两种：
+
+    · 同端口（目标段起点 = 入口段起点）：DNAT 只改地址不写端口，内核保留原端口 —— 最简单也最稳。
+    · 平移：iptables 用 `--to-destination ip:30000-30100/20000`（按偏移一一对应，内核 5.9 /
+      iptables 1.8.6 起）；nft 没有偏移写法，用一张命名的端口映射表 fwx_pr_<规则>_<协议>，
+      每个入口端口一项。不用内联的匿名表：DNAT 那条有四个兜底写法，内联的话一千个元素要抄四遍。
+
+  不写成目标端口段（`ip:30000-30100`）：那样内核按哈希随便挑端口，不是一一对应，游戏、RTP 会乱。
+*/
+type KernelPortSpan = {
+  start: number;
+  end: number;
+  targetStart: number;
+  targetEnd: number;
+  ranged: boolean;
+  samePort: boolean;
+};
+
+function kernelPortSpan(rule: any): KernelPortSpan {
+  const start = Number(rule?.sourcePort) || 0;
+  const end = ruleSourcePortEnd(rule);
+  const targetStart = Number(rule?.targetPort) || 0;
+  const ranged = end > start;
+  return { start, end, targetStart, targetEnd: ruleTargetPortEnd(rule), ranged, samePort: ranged && targetStart === start };
+}
+
+function iptablesPortExpr(start: number, end: number) {
+  return end > start ? `${start}:${end}` : `${start}`;
+}
+
+function nftPortExpr(start: number, end: number) {
+  return end > start ? `${start}-${end}` : `${start}`;
+}
+
+/** 规则的 DNAT 目标（iptables）。单端口和以前一样。 */
+function iptablesDnatTargetForRule(rule: any) {
+  const span = kernelPortSpan(rule);
+  if (!span.ranged) return iptablesDnatTarget(rule.targetIp, rule.targetPort);
+  const host = cleanAddress(rule.targetIp);
+  if (span.samePort) return host;
+  const address = isIpv6Address(host) ? `[${host}]` : host;
+  return `${address}:${span.targetStart}-${span.targetEnd}/${span.start}`;
+}
+
+/** nft 平移用的端口映射表名。段规则一定有正整数 id；协议分开放，不共用。 */
+export function nftPortRangeMapName(ruleId: unknown, proto: string) {
+  return `fwx_pr_${Number(ruleId) || 0}_${proto}`;
+}
+
+/** nft 的 DNAT 目标（`dnat <family> to` 后面那段）。 */
+function nftDnatTargetForRule(rule: any, family: string, proto: string) {
+  const targetIp = cleanAddress(rule.targetIp);
+  const span = kernelPortSpan(rule);
+  const address = family === "ip6" ? `[${targetIp}]` : targetIp;
+  if (!span.ranged) return `${address}:${rule.targetPort}`;
+  if (span.samePort) return address;
+  return `${address} : ${proto} dport map @${nftPortRangeMapName(rule.id, proto)}`;
+}
+
+/** 平移时先建好映射表；每次清空重灌，段长或偏移变了不会留下旧映射。 */
+function buildNftPortRangeMapCmds(rule: any, proto: string): string[] {
+  const span = kernelPortSpan(rule);
+  if (!span.ranged || span.samePort) return [];
+  const name = nftPortRangeMapName(rule.id, proto);
+  const elements: string[] = [];
+  for (let port = span.start; port <= span.end; port += 1) {
+    elements.push(`${port} : ${span.targetStart + (port - span.start)}`);
+  }
+  return [
+    `nft add map inet ${nftTable} ${name} '{ type inet_service : inet_service; }'`,
+    `nft flush map inet ${nftTable} ${name}`,
+    `nft add element inet ${nftTable} ${name} '{ ${elements.join(", ")} }'`,
+  ];
+}
+
+/**
+ * 映射表要在引用它的规则删掉之后才能删（被引用时内核回 EBUSY）。只给段规则发：单端口规则的
+ * 命令一字不变，升级后不会因为多了两条清理命令把所有 nft 规则重下一遍；段改回单端口时留下的
+ * 那张空闲映射表不被任何规则引用，没有影响，再改回段时会被清空重灌。
+ */
+function buildNftPortRangeMapCleanupCmds(rule: any): string[] {
+  const ruleId = Number(rule?.id) || 0;
+  if (ruleId <= 0 || !kernelPortSpan(rule).ranged) return [];
+  return ["tcp", "udp"].map((proto) => nftOptional(`nft delete map inet ${nftTable} ${nftPortRangeMapName(ruleId, proto)}`));
+}
+
 function iptablesDeleteDnatRulesForPort(binary: IptablesBinary, port: number, protocol?: string) {
   const protos = forwardRuleProtocols(protocol, "both");
   const body = protos
     .map((proto) => {
-      const awk = `awk '/^-A PREROUTING / && / -p ${proto} / && /--dport ${port}( |$)/ && / -j DNAT / {sub(/^-A/, "-D"); print}'`;
+      // `--dport 20000` 和以 20000 开头的端口段 `--dport 20000:20100` 都算这个端口的。
+      const awk = `awk '/^-A PREROUTING / && / -p ${proto} / && /--dport ${port}(:[0-9]+)?( |$)/ && / -j DNAT / {sub(/^-A/, "-D"); print}'`;
       const bin = iptablesBin(binary);
       return `while rule=$(${bin} -t nat -S PREROUTING 2>/dev/null | ${awk} | head -n 1) && [ -n "$rule" ]; do ${bin} -t nat $rule 2>/dev/null || break; done`;
     })
@@ -179,7 +271,15 @@ function iptablesDeleteCountingRules(binary: IptablesBinary, port: number) {
   return ignoreShellFailure(command);
 }
 
-export function buildCountingChainCmds(port: number, targetIp?: string, targetPort?: number, protocol?: string, forwardType?: string): string[] {
+export function buildCountingChainCmds(
+  port: number,
+  targetIp?: string,
+  targetPort?: number,
+  protocol?: string,
+  forwardType?: string,
+  // 端口段规则：计数规则也按整段匹配，标记还是起始端口（fwx-stat-<起始端口>），Agent 那头按它记账。
+  options: { span?: { start: number; end: number; targetStart: number; targetEnd: number } } = {},
+): string[] {
   const protos = forwardRuleProtocols(protocol, "both");
   const inMarker = `fwx-stat-${port}:in`;
   const outMarker = `fwx-stat-${port}:out`;
@@ -193,6 +293,9 @@ export function buildCountingChainCmds(port: number, targetIp?: string, targetPo
   if (mode === "process") return [];
   const cmds: string[] = [...buildCountingCleanupCmds(port, targetIp, targetPort, protocol)];
   if (mode === "none") return cmds;
+  const span = options.span;
+  const origPort = span ? iptablesPortExpr(span.start, span.end) : String(port);
+  const targetPortMatch = span ? iptablesPortExpr(span.targetStart, span.targetEnd) : String(targetPort);
   for (const proto of protos) {
     const target = cleanAddress(targetIp);
     if (isIpAddress(target) && Number(targetPort) > 0) {
@@ -204,8 +307,8 @@ export function buildCountingChainCmds(port: number, targetIp?: string, targetPo
         // dials the same endpoint. Keep target matching for kernel DNAT,
         // where packets traverse FORWARD and conntrack retains the original
         // listener port.
-        ["FORWARD", `-p ${proto} -m conntrack --ctorigdstport ${port} -d ${target} --dport ${targetPort}`, inMarker],
-        ["FORWARD", `-p ${proto} -m conntrack --ctorigdstport ${port} -s ${target} --sport ${targetPort}`, outMarker],
+        ["FORWARD", `-p ${proto} -m conntrack --ctorigdstport ${origPort} -d ${target} --dport ${targetPortMatch}`, inMarker],
+        ["FORWARD", `-p ${proto} -m conntrack --ctorigdstport ${origPort} -s ${target} --sport ${targetPortMatch}`, outMarker],
       ] as const;
       for (const [chain, rule, marker] of targetRules) cmds.push(addStatRule(targetBinary, chain, rule, marker));
     }
@@ -381,6 +484,7 @@ export function buildNftCleanupCmds(rule: any, options: { removeStateFiles?: boo
     nftDeleteCommentedRulesCmd(nftTrafficPreroutingChain, comment),
     nftDeleteCommentedRulesCmd(nftTrafficPostroutingChain, comment),
     nftDeleteCommentedRulesCmd(nftTrafficForwardChain, comment),
+    ...buildNftPortRangeMapCleanupCmds(rule),
   ];
   // Tunnel/orphan snapshots can legitimately omit a rule ID. Never target a
   // synthetic in_0/out_0 chain in that case; comment/port cleanup above is
@@ -436,7 +540,10 @@ export function buildNftForwardCmds(rule: any): string[] {
   const comment = nftComment(rule);
   const targetIp = cleanAddress(rule.targetIp);
   const family = nftAddressFamily(targetIp);
-  const dnatTarget = family === "ip6" ? `[${targetIp}]:${rule.targetPort}` : `${targetIp}:${rule.targetPort}`;
+  const span = kernelPortSpan(rule);
+  // 单端口时这几个就是原来的 sourcePort / targetPort，生成的命令一字不变。
+  const sourcePortMatch = nftPortExpr(span.start, span.end);
+  const targetPortMatch = nftPortExpr(span.targetStart, span.targetEnd);
   const cmds = [
     `command -v nft >/dev/null 2>&1`,
     `sysctl -w net.ipv4.ip_forward=1 >/dev/null`,
@@ -456,13 +563,15 @@ export function buildNftForwardCmds(rule: any): string[] {
   for (const proto of protos) {
     const inComment = nftDirectionComment(comment, "in");
     const outComment = nftDirectionComment(comment, "out");
-    const originalPortMatch = `ct original proto-dst ${rule.sourcePort}`;
-    const targetOnlyInAccept = `nft add rule inet ${nftTable} forward meta l4proto ${proto} ${family} daddr ${targetIp} ${proto} dport ${rule.targetPort} accept comment ${nftCommentLiteral(inComment)}`;
-    const targetOnlyOutAccept = `nft add rule inet ${nftTable} forward meta l4proto ${proto} ${family} saddr ${targetIp} ${proto} sport ${rule.targetPort} ct state established,related accept comment ${nftCommentLiteral(outComment)}`;
+    const originalPortMatch = `ct original proto-dst ${sourcePortMatch}`;
+    const dnatTarget = nftDnatTargetForRule(rule, family, proto);
+    cmds.push(...buildNftPortRangeMapCmds(rule, proto));
+    const targetOnlyInAccept = `nft add rule inet ${nftTable} forward meta l4proto ${proto} ${family} daddr ${targetIp} ${proto} dport ${targetPortMatch} accept comment ${nftCommentLiteral(inComment)}`;
+    const targetOnlyOutAccept = `nft add rule inet ${nftTable} forward meta l4proto ${proto} ${family} saddr ${targetIp} ${proto} sport ${targetPortMatch} ct state established,related accept comment ${nftCommentLiteral(outComment)}`;
     const fallbackInCounterRule = nftCounterRuleWithFallback(
-      `nft add rule inet ${nftTable} forward meta l4proto ${proto} ${family} daddr ${targetIp} ${proto} dport ${rule.targetPort} ${originalPortMatch} counter accept comment ${nftCommentLiteral(inComment)}`,
-      `nft add rule inet ${nftTable} forward meta l4proto ${proto} ${family} daddr ${targetIp} ${proto} dport ${rule.targetPort} ${originalPortMatch} comment ${nftCommentLiteral(inComment)} counter accept`,
-      `nft add rule inet ${nftTable} forward meta l4proto ${proto} ${family} daddr ${targetIp} ${proto} dport ${rule.targetPort} ${originalPortMatch} comment ${nftCommentLiteral(inComment)} accept`,
+      `nft add rule inet ${nftTable} forward meta l4proto ${proto} ${family} daddr ${targetIp} ${proto} dport ${targetPortMatch} ${originalPortMatch} counter accept comment ${nftCommentLiteral(inComment)}`,
+      `nft add rule inet ${nftTable} forward meta l4proto ${proto} ${family} daddr ${targetIp} ${proto} dport ${targetPortMatch} ${originalPortMatch} comment ${nftCommentLiteral(inComment)} counter accept`,
+      `nft add rule inet ${nftTable} forward meta l4proto ${proto} ${family} daddr ${targetIp} ${proto} dport ${targetPortMatch} ${originalPortMatch} comment ${nftCommentLiteral(inComment)} accept`,
       targetOnlyInAccept,
       `${inComment}:${proto}`,
     );
@@ -471,24 +580,24 @@ export function buildNftForwardCmds(rule: any): string[] {
       nftDnatMasqueradeComment,
       "ct status dnat masquerade",
       `${comment}-masquerade-${proto}`,
-      `meta l4proto ${proto} ${family} daddr ${targetIp} ${proto} dport ${rule.targetPort} masquerade`,
+      `meta l4proto ${proto} ${family} daddr ${targetIp} ${proto} dport ${targetPortMatch} masquerade`,
     ));
     cmds.push(nftDnatCounterRuleWithFallback(
-      `nft add rule inet ${nftTable} prerouting meta l4proto ${proto} ${proto} dport ${rule.sourcePort} counter dnat ${family} to ${dnatTarget} comment ${nftCommentLiteral(inComment)}`,
-      `nft add rule inet ${nftTable} prerouting meta l4proto ${proto} ${proto} dport ${rule.sourcePort} comment ${nftCommentLiteral(inComment)} counter dnat ${family} to ${dnatTarget}`,
-      `nft add rule inet ${nftTable} prerouting meta l4proto ${proto} ${proto} dport ${rule.sourcePort} comment ${nftCommentLiteral(inComment)} dnat ${family} to ${dnatTarget}`,
-      `nft add rule inet ${nftTable} prerouting meta l4proto ${proto} ${proto} dport ${rule.sourcePort} dnat ${family} to ${dnatTarget}`,
+      `nft add rule inet ${nftTable} prerouting meta l4proto ${proto} ${proto} dport ${sourcePortMatch} counter dnat ${family} to ${dnatTarget} comment ${nftCommentLiteral(inComment)}`,
+      `nft add rule inet ${nftTable} prerouting meta l4proto ${proto} ${proto} dport ${sourcePortMatch} comment ${nftCommentLiteral(inComment)} counter dnat ${family} to ${dnatTarget}`,
+      `nft add rule inet ${nftTable} prerouting meta l4proto ${proto} ${proto} dport ${sourcePortMatch} comment ${nftCommentLiteral(inComment)} dnat ${family} to ${dnatTarget}`,
+      `nft add rule inet ${nftTable} prerouting meta l4proto ${proto} ${proto} dport ${sourcePortMatch} dnat ${family} to ${dnatTarget}`,
       fallbackInCounterRule,
       `${inComment}:${proto}`,
     ));
     cmds.push(nftCounterRuleWithFallback(
-      `nft add rule inet ${nftTable} forward meta l4proto ${proto} ${family} saddr ${targetIp} ${proto} sport ${rule.targetPort} ${originalPortMatch} ct state established,related counter accept comment ${nftCommentLiteral(outComment)}`,
-      `nft add rule inet ${nftTable} forward meta l4proto ${proto} ${family} saddr ${targetIp} ${proto} sport ${rule.targetPort} ${originalPortMatch} ct state established,related comment ${nftCommentLiteral(outComment)} counter accept`,
-      `nft add rule inet ${nftTable} forward meta l4proto ${proto} ${family} saddr ${targetIp} ${proto} sport ${rule.targetPort} ${originalPortMatch} ct state established,related comment ${nftCommentLiteral(outComment)} accept`,
+      `nft add rule inet ${nftTable} forward meta l4proto ${proto} ${family} saddr ${targetIp} ${proto} sport ${targetPortMatch} ${originalPortMatch} ct state established,related counter accept comment ${nftCommentLiteral(outComment)}`,
+      `nft add rule inet ${nftTable} forward meta l4proto ${proto} ${family} saddr ${targetIp} ${proto} sport ${targetPortMatch} ${originalPortMatch} ct state established,related comment ${nftCommentLiteral(outComment)} counter accept`,
+      `nft add rule inet ${nftTable} forward meta l4proto ${proto} ${family} saddr ${targetIp} ${proto} sport ${targetPortMatch} ${originalPortMatch} ct state established,related comment ${nftCommentLiteral(outComment)} accept`,
       targetOnlyOutAccept,
       `${outComment}:${proto}`,
     ));
-    cmds.push(`nft add rule inet ${nftTable} forward meta l4proto ${proto} ${family} daddr ${targetIp} ${proto} dport ${rule.targetPort} ${originalPortMatch} accept comment ${nftCommentLiteral(comment)} || { echo "[nftables] forward selector failed, fallback=fwx-rule-${ruleId}"; ${targetOnlyInAccept}; }`);
+    cmds.push(`nft add rule inet ${nftTable} forward meta l4proto ${proto} ${family} daddr ${targetIp} ${proto} dport ${targetPortMatch} ${originalPortMatch} accept comment ${nftCommentLiteral(comment)} || { echo "[nftables] forward selector failed, fallback=fwx-rule-${ruleId}"; ${targetOnlyInAccept}; }`);
   }
   return cmds;
 }
@@ -518,7 +627,8 @@ export function buildKernelForwardCmds(
     // 先清掉上一任后端可能留下的 nftables 状态，再装 iptables 规则。
     cmds.push(...buildNftTransitionCleanupCmds(rule));
     cmds.push(...buildIptablesForwardCmds(rule));
-    cmds.push(...buildCountingChainCmds(rule.sourcePort, rule.targetIp, rule.targetPort, rule.protocol, rule.forwardType));
+    const span = kernelPortSpan(rule);
+    cmds.push(...buildCountingChainCmds(rule.sourcePort, rule.targetIp, rule.targetPort, rule.protocol, rule.forwardType, span.ranged ? { span } : {}));
   } else {
     // nft 构造器自己会清 nftables；这个 helper 顺带清掉更早的 iptables DNAT/FORWARD 布局。
     cmds.push(...buildIptablesTransitionCleanupCmds(rule));
@@ -562,6 +672,9 @@ export function buildIptablesForwardCleanupCmds(rule: any): string[] {
   const binary = iptablesBinaryForTarget(targetIp);
   const protos = forwardRuleProtocols(rule.protocol);
   const tag = iptablesRuleTag(rule);
+  const span = kernelPortSpan(rule);
+  const sourcePortMatch = iptablesPortExpr(span.start, span.end);
+  const targetPortMatch = iptablesPortExpr(span.targetStart, span.targetEnd);
   const cmds: string[] = buildIptablesForwardPortCleanupCmds(Number(rule.sourcePort), rule.protocol);
   if (tag) {
     cmds.push(
@@ -570,12 +683,12 @@ export function buildIptablesForwardCleanupCmds(rule: any): string[] {
     );
   }
   for (const proto of protos) {
-    const dnatTarget = iptablesDnatTarget(targetIp, rule.targetPort);
-    cmds.push(iptablesDelete(binary, "nat", `PREROUTING -p ${proto} --dport ${rule.sourcePort} -j DNAT --to-destination ${dnatTarget}`));
-    cmds.push(iptablesUnreferencedTargetGuard(binary, proto, Number(rule.sourcePort), dnatTarget, [
-      iptablesDelete(binary, "nat", `POSTROUTING -p ${proto} -d ${targetIp} --dport ${rule.targetPort} -j MASQUERADE`),
-      iptablesDelete(binary, null, `FORWARD -p ${proto} -d ${targetIp} --dport ${rule.targetPort} -j ACCEPT`),
-      iptablesDelete(binary, null, `FORWARD -p ${proto} -s ${targetIp} --sport ${rule.targetPort} ${proto === "tcp" ? "-m state --state ESTABLISHED,RELATED " : ""}-j ACCEPT`),
+    const dnatTarget = iptablesDnatTargetForRule(rule);
+    cmds.push(iptablesDelete(binary, "nat", `PREROUTING -p ${proto} --dport ${sourcePortMatch} -j DNAT --to-destination ${dnatTarget}`));
+    cmds.push(iptablesUnreferencedTargetGuard(binary, proto, sourcePortMatch, dnatTarget, [
+      iptablesDelete(binary, "nat", `POSTROUTING -p ${proto} -d ${targetIp} --dport ${targetPortMatch} -j MASQUERADE`),
+      iptablesDelete(binary, null, `FORWARD -p ${proto} -d ${targetIp} --dport ${targetPortMatch} -j ACCEPT`),
+      iptablesDelete(binary, null, `FORWARD -p ${proto} -s ${targetIp} --sport ${targetPortMatch} ${proto === "tcp" ? "-m state --state ESTABLISHED,RELATED " : ""}-j ACCEPT`),
     ]));
   }
   return cmds;
@@ -600,6 +713,9 @@ export function buildIptablesForwardCmds(rule: any): string[] {
     先后由他自己定，不能因为这次改动把已有部署的顺序都换掉。
   */
   const appendFlag: "-A" | "-I" = isEntryBridgeRuleId(rule.id) ? "-I" : "-A";
+  const span = kernelPortSpan(rule);
+  const sourcePortMatch = iptablesPortExpr(span.start, span.end);
+  const targetPortMatch = iptablesPortExpr(span.targetStart, span.targetEnd);
   const cmds = [
     binary === "ip6tables"
       ? `sysctl -w net.ipv6.conf.all.forwarding=1 >/dev/null`
@@ -607,10 +723,10 @@ export function buildIptablesForwardCmds(rule: any): string[] {
     ...buildIptablesForwardCleanupCmds(rule),
   ];
   for (const proto of protos) {
-    cmds.push(iptablesEnsure(binary, "nat", `PREROUTING -p ${proto} --dport ${rule.sourcePort} -j DNAT --to-destination ${iptablesDnatTarget(targetIp, rule.targetPort)}`, false, appendFlag));
-    cmds.push(iptablesEnsure(binary, "nat", `POSTROUTING -p ${proto} -d ${targetIp} --dport ${rule.targetPort} ${tagMatch}-j MASQUERADE`, false, appendFlag));
-    cmds.push(iptablesEnsure(binary, null, `FORWARD -p ${proto} -d ${targetIp} --dport ${rule.targetPort} ${tagMatch}-j ACCEPT`, false, appendFlag));
-    cmds.push(iptablesEnsure(binary, null, `FORWARD -p ${proto} -s ${targetIp} --sport ${rule.targetPort} ${proto === "tcp" ? "-m state --state ESTABLISHED,RELATED " : ""}${tagMatch}-j ACCEPT`, false, appendFlag));
+    cmds.push(iptablesEnsure(binary, "nat", `PREROUTING -p ${proto} --dport ${sourcePortMatch} -j DNAT --to-destination ${iptablesDnatTargetForRule(rule)}`, false, appendFlag));
+    cmds.push(iptablesEnsure(binary, "nat", `POSTROUTING -p ${proto} -d ${targetIp} --dport ${targetPortMatch} ${tagMatch}-j MASQUERADE`, false, appendFlag));
+    cmds.push(iptablesEnsure(binary, null, `FORWARD -p ${proto} -d ${targetIp} --dport ${targetPortMatch} ${tagMatch}-j ACCEPT`, false, appendFlag));
+    cmds.push(iptablesEnsure(binary, null, `FORWARD -p ${proto} -s ${targetIp} --sport ${targetPortMatch} ${proto === "tcp" ? "-m state --state ESTABLISHED,RELATED " : ""}${tagMatch}-j ACCEPT`, false, appendFlag));
   }
   // 桥接：规则插好之后，把换之前就连着这个端口的老流从 conntrack 里清掉，让它们走新的 DNAT。
   if (appendFlag === "-I") cmds.push(...buildEntryBridgeConntrackFlushCmds(Number(rule.sourcePort), rule.protocol));

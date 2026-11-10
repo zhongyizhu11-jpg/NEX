@@ -22,6 +22,7 @@ import { afterDatabaseCommit, afterDatabaseTransactionSettled, executeRaw, getDa
 import { flushPendingWrites } from "../dbWriteBatcher";
 import { boolValue, quoteIdentifier, sqlCountAll } from "../dbCompat";
 import { combineHostPortPolicyWithRange, combinePortPolicies, isPortAllowedByPolicy, pickAvailablePort, portPolicyFrom } from "@shared/portPolicy";
+import { addRulePortSpan } from "@shared/portRange";
 import { releaseHostPortReservations, reserveAvailableHostPort, reserveSpecificHostPort, reserveSpecificHostPortOnHosts, type HostPortReservation } from "../portReservations";
 import { getHostById } from "./hostRepository";
 import { getForwardRulesByTunnel } from "./forwardRuleRepository";
@@ -1131,7 +1132,7 @@ export async function findAvailableTunnelExitPort(
     eq(forwardRules.pendingDelete, false),
   ];
   if (excludeRulesSql) usedRuleConds.push(excludeRulesSql);
-  const usedRulePorts = await db.select({ port: forwardRules.sourcePort }).from(forwardRules).where(and(...usedRuleConds));
+  const usedRulePorts = await db.select({ port: forwardRules.sourcePort, portEnd: forwardRules.sourcePortEnd }).from(forwardRules).where(and(...usedRuleConds));
   const usedTunnelPorts = await db.select({ port: tunnels.listenPort }).from(tunnels).where(eq(tunnels.exitHostId, exitHostId));
   const usedTunnelMimicPorts = await db.select({ port: tunnels.mimicPort }).from(tunnels).where(eq(tunnels.exitHostId, exitHostId));
   const usedExtraTunnelPorts = await db.select({ port: tunnelExitNodes.listenPort }).from(tunnelExitNodes).where(eq(tunnelExitNodes.hostId, exitHostId));
@@ -1157,7 +1158,7 @@ export async function findAvailableTunnelExitPort(
     const n = Number(port);
     if (Number.isInteger(n) && n > 0) used.add(n);
   });
-  usedRulePorts.forEach((r: any) => used.add(Number(r.port)));
+  usedRulePorts.forEach((r: any) => addRulePortSpan(used, r.port, r.portEnd));
   usedTunnelPorts.forEach((r: any) => used.add(Number(r.port)));
   usedTunnelMimicPorts.forEach((r: any) => used.add(Number(r.port)));
   usedExtraTunnelPorts.forEach((r: any) => used.add(Number(r.port)));
@@ -2097,8 +2098,8 @@ export async function getUsedPortsOnHost(
     usedExtraTunnelNodes,
     usedHops,
   ] = await Promise.all([
-    db.select({ port: forwardRules.sourcePort }).from(forwardRules).where(and(...usedRuleConds)),
-    db.select({ port: forwardRules.sourcePort }).from(forwardRules).where(and(...usedEntryGroupRuleConds)),
+    db.select({ port: forwardRules.sourcePort, portEnd: forwardRules.sourcePortEnd }).from(forwardRules).where(and(...usedRuleConds)),
+    db.select({ port: forwardRules.sourcePort, portEnd: forwardRules.sourcePortEnd }).from(forwardRules).where(and(...usedEntryGroupRuleConds)),
     db.select({ port: forwardRules.tunnelExitPort })
       .from(forwardRules)
       .innerJoin(tunnels, eq(forwardRules.tunnelId, tunnels.id))
@@ -2123,8 +2124,8 @@ export async function getUsedPortsOnHost(
     const port = Number(value);
     if (Number.isInteger(port) && port >= 1 && port <= 65535) used.add(port);
   };
-  usedRules.forEach((row: any) => addPort(row.port));
-  usedEntryGroupRules.forEach((row: any) => addPort(row.port));
+  usedRules.forEach((row: any) => addRulePortSpan(used, row.port, row.portEnd));
+  usedEntryGroupRules.forEach((row: any) => addRulePortSpan(used, row.port, row.portEnd));
   usedPrimaryExits.forEach((row: any) => addPort(row.port));
   usedMappedExits.forEach((row: any) => addPort(row.port));
   usedTunnels.forEach((row: any) => {
@@ -2215,7 +2216,8 @@ export async function isPortUsedOnHost(
     : normalizeTunnelListenerExemptions(allowTunnelListener);
   const conds: any[] = [
     eq(forwardRules.hostId, hostId),
-    eq(forwardRules.sourcePort, sourcePort),
+    // 端口段规则（sourcePortEnd 不空）整段都算占用：其他功能（隧道、落地、TLS 入站……）查冲突都走这里。
+    sql`(${forwardRules.sourcePort} <= ${sourcePort} AND COALESCE(${forwardRules.sourcePortEnd}, ${forwardRules.sourcePort}) >= ${sourcePort})`,
     eq(forwardRules.isForwardGroupTemplate, false),
     eq(forwardRules.isEnabled, true),
     eq(forwardRules.pendingDelete, false),
@@ -2323,6 +2325,27 @@ export async function isPortUsedOnHost(
     if (listenerExemptions !== undefined) return !sameListener;
     return !sameTunnel;
   });
+}
+
+/**
+ * 端口段规则查冲突：段里第一个已被占用的端口，没有就 null。
+ *
+ * 不逐个端口调 isPortUsedOnHost（一千个端口就是上万次查询）：getUsedPortsOnHost 一次把这台
+ * 机器上所有占用（规则含别的端口段、隧道监听、落地入站、TLS 入站、桥接、第五套主题保留）
+ * 取齐，再和段求交。和单端口的检查同一份口径。
+ */
+export async function findUsedPortInRangeOnHost(
+  hostId: number,
+  start: number,
+  end: number,
+  excludeRuleId?: number | number[],
+  protocol?: unknown,
+): Promise<number | null> {
+  const used = await getUsedPortsOnHost(hostId, excludeRuleId, protocol, undefined, false);
+  for (let port = start; port <= end; port += 1) {
+    if (used.has(port)) return port;
+  }
+  return null;
 }
 
 /** 在主机端口区间内找一个未被占用的随机端口 */

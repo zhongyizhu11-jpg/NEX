@@ -349,6 +349,8 @@ const tables: TableDef[] = [
       c("isForwardGroupTemplate", "bool", { notNull: true, default: false }),
       c("sourcePort", "int", { notNull: true }), c("targetIp", "text", { notNull: true }),
       c("targetPort", "int", { notNull: true }),
+      // 端口段（shared/portRange.ts）：空 = 单端口；目标段 = targetPort 起、同样长。只有内核转发能用。
+      c("sourcePortEnd", "int"),
       c("telegramErrorNotifyEnabled", "bool", { notNull: true, default: false }),
       c("blockHttp", "bool", { notNull: true, default: false }), c("blockSocks", "bool", { notNull: true, default: false }),
       c("blockTls", "bool", { notNull: true, default: false }),

@@ -1,4 +1,5 @@
 import { protectedProcedure, router } from "../_core/trpc";
+import { ruleSourcePortEnd } from "@shared/portRange";
 import { z } from "zod";
 import * as db from "../db";
 import { appendPanelLog } from "../_core/panelLogger";
@@ -256,6 +257,7 @@ export const selfTestRulesRouter = router({
       const task = enqueueRuleConnectionsTask(hostId, {
         ruleId: Number(rule.id),
         port: Number(rule.sourcePort),
+        portEnd: ruleSourcePortEnd(rule),
         protocol: normalizeForwardRuleProtocol(rule.protocol),
         dnat: !isUserspaceForwardType(rule.forwardType),
       });
