@@ -1,4 +1,5 @@
 import { isIP } from "node:net";
+import { ROUTE_POLICY_RULE_FIELDS } from "../../shared/routePolicyFields";
 import { groupModeSupportsMemberSchedule, resolveMemberScheduleState, serializeMemberSchedule } from "../../shared/memberSchedule";
 import { NO_EGRESS_COLUMNS, ruleEgressColumnsOf } from "../../shared/ssEgress";
 import { forwardGroupModeOf } from "../../shared/forwardTypes";
@@ -324,26 +325,13 @@ function canPreserveChildRuleRuntime(existing: any, payload: any, options: SyncF
 
 /** 线路组的调度设置：Agent 能在同一个调度器上原地换（agent/failover_proxy.go startFailoverProxyLocked）。 */
 const CHILD_ROUTE_POLICY_KEYS = [
-  "failoverStrategy",
+  // 调度参数只有一份清单（shared/routePolicyFields）：加了新参数这里自动跟上，不用记得再抄一遍
+  ...ROUTE_POLICY_RULE_FIELDS,
+  // 路径：子规则各有各的拨号地址，但换路径同样是 Agent 能原地换的
   "failoverTargets",
   "failoverProbeTarget",
-  "failoverSchedule",
-  "failoverMinHoldSeconds",
-  "failoverPinnedIndex",
-  "failoverPinnedUntil",
-  "failoverPreferFastest",
-  "failoverSeconds",
-  "recoverSeconds",
-  "autoFailback",
-  "routeMode",
   "routePaths",
   "routeLines",
-  "routeDelivery",
-  "routeSwitchMode",
-  "routeFailureThreshold",
-  "routeScoreMargin",
-  "routeScoreHoldSeconds",
-  "routePrewarmSeconds",
 ] as const;
 
 /**

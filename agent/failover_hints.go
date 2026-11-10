@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"strings"
+	"time"
 )
 
 /*
@@ -97,6 +98,33 @@ func failoverSpecSignatureJSON(spec *failoverSpec) (string, bool) {
 提示不进签名（见 failoverSignature），所以同一份规格反复下发只会走到这里。变化才记事件：
 面板每次心跳都会重发同样的提示。
 */
+// 面板「切换演练」下发的提示原因（server/routeDrill.ts 的 ROUTE_DRILL_HINT_REASON）。
+const failoverDrillReason = "drill"
+
+// 演练撤掉之后多久以内切回它还算「演练的切回」：恢复观察时间再加两分钟（探测、最短驻留都要时间）。
+const failoverDrillFailbackSlack = 2 * time.Minute
+
+/*
+这一次切换是不是切换演练引起的：从正在被演练（面板让它当成挂了）的那条切走，或者演练刚撤掉、切回那一条。
+
+演练是人故意做的，和人工指定一样不算进抖动抑制的次数 —— 不然一小时里演练两回，再碰上一次真故障，
+恢复后的切回就要多等 5 分钟起（flapHoldLocked），演练反而把线路弄得不灵了。
+*/
+func (p *failoverProxy) drillSwitchLocked(from, to int, at time.Time) bool {
+	if from >= 0 && from < len(p.relayDown) && p.relayDown[from] && p.relayDownReason[from] == failoverDrillReason {
+		return true
+	}
+	if to >= 0 && to < len(p.drillEndedAt) && !p.drillEndedAt[to].IsZero() {
+		window := time.Duration(p.spec.RecoverSeconds)*time.Second + failoverDrillFailbackSlack
+		if at.Sub(p.drillEndedAt[to]) <= window {
+			// 一次演练只免一次切回
+			p.drillEndedAt[to] = time.Time{}
+			return true
+		}
+	}
+	return false
+}
+
 func (p *failoverProxy) applyRelayHintsLocked(targets []failoverTarget) {
 	p.ensureHealthStateLocked()
 	reason := ""
@@ -122,6 +150,10 @@ func (p *failoverProxy) applyRelayHintsLocked(targets []failoverTarget) {
 			continue
 		}
 		flipped := down != p.relayDown[i]
+		// 演练的提示撤掉了（或者换成了别的原因）：记下时刻，接下来切回它的那一次不算进抖动抑制。
+		if p.relayDown[i] && p.relayDownReason[i] == failoverDrillReason && (!down || downReason != failoverDrillReason) {
+			p.drillEndedAt[i] = time.Now()
+		}
 		p.relayDown[i] = down
 		p.relayDownReason[i] = downReason
 		p.spec.Targets[i].Down = down
