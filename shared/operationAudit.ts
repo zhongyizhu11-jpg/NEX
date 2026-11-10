@@ -213,6 +213,7 @@ export const OPERATION_AUDIT_MODULE_LABELS: Record<string, string> = {
   "ops.quotaPolicy": "额度策略",
   "ops.resourceAlert": "资源告警",
   "ops.audit": "操作审计",
+  "ops.metricsExport": "指标导出",
 };
 
 export function operationAuditModuleLabel(module: string): string {

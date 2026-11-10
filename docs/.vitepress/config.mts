@@ -48,6 +48,7 @@ export default defineConfig({
           { text: "网络拓扑", link: "/guide/topology" },
           { text: "链路诊断", link: "/guide/link-diagnostics" },
           { text: "监控与告警", link: "/guide/monitoring-alerts" },
+          { text: "指标导出（Prometheus）", link: "/guide/metrics" },
         ],
       },
       {
