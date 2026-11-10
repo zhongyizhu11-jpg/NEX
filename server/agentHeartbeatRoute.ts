@@ -2889,8 +2889,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     };
     const guardListenPort = (rule: any) => protocolGuardPortsForRule(rule).guardListenPort;
     /** 端口段规则这一轮能不能下发；不能就是给用户看的原因（见内核转发那一支）。 */
-    const portRangeRuntimeBlocker = (rule: any): string | null => {
-      const agentReason = portRangeAgentUnsupportedReason(host as any);
+    const portRangeRuntimeBlocker = (rule: Record<string, unknown>): string | null => {
+      const agentReason = portRangeAgentUnsupportedReason(host);
       if (agentReason) return agentReason;
       const limits = guardRateLimitForRule(rule);
       if (limits.limitIn > 0 || limits.limitOut > 0) return "端口段规则不能限速（内核转发限速要换成用户态守卫，一个端口一个进程），请取消限速或改回单端口";

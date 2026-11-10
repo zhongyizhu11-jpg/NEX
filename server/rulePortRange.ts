@@ -131,3 +131,72 @@ export function resolveNextSourcePortEnd(input: { sourcePort?: unknown; sourcePo
   if (Number(rawEnd || 0) > 0 && Number(rawEnd) < nextStart) throw new Error("端口段要从小写到大，比如 20000-20100");
   return normalizeSourcePortEnd(nextStart, rawEnd);
 }
+
+/**
+ * 「端口转发」资源（port 模式的转发组）上的端口段：模板落库前，在每台入口主机上整段查一遍，
+ * 并把段里除起点以外的端口占住（起点由转发组那条路自己按单端口占，见 rules.crud）。
+ * 成员主机上的子规则由转发组同步照着模板建（forwardGroupRepository 的子规则同步会带上段结尾）。
+ *
+ * 转发链、主备转发组、带隧道成员的端口转发不支持：返回明确的原因。
+ */
+export async function reserveForwardGroupPortRangeTail(options: {
+  actor: PortRangeActor;
+  ownerUserId: number;
+  groupId: number;
+  rule: PortRangeSaveInput;
+  planRange: PlanPortRange;
+  excludeRuleIds?: number[];
+}): Promise<HostPortReservation[]> {
+  const group = await db.getForwardGroupById(Number(options.groupId)) as { groupMode?: unknown; rateLimitMbps?: unknown; members?: Array<{ memberType?: unknown; isEnabled?: unknown }> } | undefined;
+  if (!group) throw new Error("转发组不存在");
+  const isPortGroup = String(group.groupMode || "") === "port";
+  const hasTunnelMember = (group.members || []).some((member) => String(member.memberType || "host") !== "host");
+  const { rule } = options;
+  const start = Number(rule.sourcePort);
+  const end = Number(rule.sourcePortEnd);
+  const span = formatPortSpan(start, end);
+  const staticError = portRangeStaticError({
+    ...rule,
+    tunnelId: null,
+    portForwardGroup: isPortGroup,
+    rateLimited: Number(group.rateLimitMbps || 0) > 0 || await portRangeRuleRateLimited(null, options.ownerUserId, rule.rateLimitMbps),
+  });
+  if (staticError) throw new Error(staticError);
+  if (hasTunnelMember) throw new Error("这个端口转发里有隧道成员，隧道暂不支持端口段");
+  const entryPolicy = await db.getForwardGroupEntryPortPolicy(Number(options.groupId));
+  const outsideEntry = firstPortOutsidePolicy(start, end, entryPolicy);
+  if (outsideEntry !== null) {
+    throw new Error(`端口段 ${span} 里的 ${outsideEntry} 不在入口允许的范围内：${describePortPolicy(entryPolicy)}`);
+  }
+  if (options.planRange) {
+    for (let port = start; port <= end; port += 1) {
+      if (!db.isPortAllowedByUserPlanRange(port, options.planRange)) {
+        const ranges = options.planRange.ranges.map((range) => `${range.start}-${range.end}`).join(",");
+        throw new Error(`套餐端口必须在 ${ranges} 区间内（端口段 ${span} 里的 ${port} 不在）`);
+      }
+    }
+  }
+  const reservations: HostPortReservation[] = [];
+  try {
+    for (const hostId of await db.getForwardGroupRuleEntryHostIds(Number(options.groupId))) {
+      const host = await db.getHostById(Number(hostId)) as PortRangeHost;
+      const agentReason = portRangeAgentUnsupportedReason(host);
+      if (agentReason) throw new Error(`入口「${String(host?.name || hostId)}」：${agentReason}`);
+      if (Number(host?.rateLimitMbps || 0) > 0) throw new Error(`入口「${String(host?.name || hostId)}」设了限速，端口段规则不能限速`);
+      for (let port = start; port <= end; port += 1) {
+        assertTenantListenPortAllowed({ actor: options.actor, host: host as { userId?: number | null }, port, label: `端口段 ${span} 里的端口` });
+      }
+      if (end > start) {
+        const tail = tryReserveHostPortRange(Number(hostId), start + 1, end, rule.protocol);
+        if (!tail) throw new Error(`端口段 ${span} 里有端口正在被其他请求分配，请稍后重试`);
+        reservations.push(tail);
+      }
+      const used = await db.findUsedPortInRangeOnHost(Number(hostId), start, end, options.excludeRuleIds || [], rule.protocol);
+      if (used !== null) throw new Error(`入口「${String(host?.name || hostId)}」上端口 ${used} 已被占用（在端口段 ${span} 里），请换一段`);
+    }
+  } catch (error) {
+    for (const reservation of reservations) reservation.release();
+    throw error;
+  }
+  return reservations;
+}

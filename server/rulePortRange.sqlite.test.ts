@@ -110,7 +110,10 @@ test("端口段规则：用户态转发、隧道、转发组、线路组被拦�
       await assert.rejects(() => crud.createDirectForwardRuleForActor(admin, { ...base, forwardType, name: forwardType, sourcePort: 24000, sourcePortEnd: 24010, targetPort: 24000 }), /只支持 iptables \/ nftables/);
     }
     await assert.rejects(() => crud.createDirectForwardRuleForActor(admin, { ...base, name: "fo", sourcePort: 24000, sourcePortEnd: 24010, targetPort: 24000, failoverEnabled: true }), /线路组/);
-    await assert.rejects(() => caller.create({ ...base, forwardGroupId: 5, sourcePort: 24000, sourcePortEnd: 24010, targetPort: 24000 }), /转发组/);
+    // 主备转发组（多入口 DDNS 切换）不支持端口段；「端口转发」资源可以（见下面 port 模式那个用例）。
+    await insert("forward_groups", ["id", "name", "groupType", "groupMode", "forwardType", "targetIp", "userId", "isEnabled"], [5, "主备", "host", "failover", "nftables", "0.0.0.0", 1, 1]);
+    await insert("forward_group_members", ["id", "groupId", "memberType", "hostId", "priority", "isEnabled"], [51, 5, "host", 1, 0, 1]);
+    await assert.rejects(() => caller.create({ ...base, hostId: undefined, forwardGroupId: 5, sourcePort: 24000, sourcePortEnd: 24010, targetPort: 24000 }), /转发组 \/ 转发链暂不支持端口段/);
     await assert.rejects(() => crud.createDirectForwardRuleForActor(admin, { ...base, hostId: 2, name: "old", sourcePort: 24000, sourcePortEnd: 24010, targetPort: 24000 }), /需要 Agent 2\.2\.253/);
     // iptables 也支持。
     await crud.createDirectForwardRuleForActor(admin, { ...base, forwardType: "iptables", name: "ipt", sourcePort: 24000, sourcePortEnd: 24010, targetPort: 34000 });
@@ -195,5 +198,33 @@ test("批量添加：逐行给结论（格式错、批内重叠、和已有规�
     const again = await caller.batchCreate({ hostId: 1, forwardType: "nftables", protocol: "both", text });
     assert.equal(again.created, 0);
     assert.match(again.summary, /一条都没建成/);
+  `);
+});
+
+test("端口转发资源（port 模式转发组）：模板能用端口段，每台成员主机上的子规则带着整段；转发链被拦", () => {
+  runScenario("port-group", String.raw`
+    await insert("hosts", hostCols, [3, "edge-2", "198.51.100.3", "slave", 1, 1, "2.2.253", null, null]);
+    await insert("forward_groups", ["id", "name", "groupType", "groupMode", "forwardType", "targetIp", "userId", "isEnabled"], [10, "端口转发", "host", "port", "nftables", "0.0.0.0", 1, 1]);
+    await insert("forward_group_members", ["id", "groupId", "memberType", "hostId", "priority", "isEnabled"], [101, 10, "host", 1, 0, 1]);
+    await insert("forward_group_members", ["id", "groupId", "memberType", "hostId", "priority", "isEnabled"], [102, 10, "host", 3, 1, 1]);
+    await insert("forward_groups", ["id", "name", "groupType", "groupMode", "forwardType", "targetIp", "userId", "isEnabled"], [11, "链", "host", "chain", "gost", "0.0.0.0", 1, 1]);
+    await insert("forward_group_members", ["id", "groupId", "memberType", "hostId", "priority", "isEnabled"], [111, 11, "host", 1, 0, 1]);
+    await insert("forward_group_members", ["id", "groupId", "memberType", "hostId", "priority", "isEnabled"], [112, 11, "host", 3, 1, 1]);
+    // 第二台成员机上 20055 已被占：整段都得在每台入口上空着。
+    await crud.createDirectForwardRuleForActor(admin, { ...base, hostId: 3, forwardType: "gost", name: "blocker", sourcePort: 20055, targetPort: 443 });
+    const check = await caller.checkPort({ forwardGroupId: 10, sourcePort: 20000, sourcePortEnd: 20100, protocol: "both" });
+    assert.equal(check.used, true);
+    assert.match(check.reason, /edge-2.*20055/);
+    await assert.rejects(() => caller.create({ ...base, hostId: undefined, forwardGroupId: 10, sourcePort: 20000, sourcePortEnd: 20100, targetPort: 20000 }), /20055/);
+
+    const created = await caller.create({ ...base, hostId: undefined, forwardGroupId: 10, sourcePort: 21000, sourcePortEnd: 21010, targetPort: 31000 });
+    const children = await runtime.queryRaw('SELECT "hostId", "sourcePort", "sourcePortEnd", "targetPort", "forwardType" FROM forward_rules WHERE "forwardGroupRuleId" = ? ORDER BY "hostId"', [created.id]);
+    assert.deepEqual(children.map((row) => [Number(row.hostId), Number(row.sourcePort), Number(row.sourcePortEnd), Number(row.targetPort), row.forwardType]),
+      [[1, 21000, 21010, 31000, "nftables"], [3, 21000, 21010, 31000, "nftables"]]);
+    // 段里的端口在成员主机上算占用。
+    await assert.rejects(() => crud.createDirectForwardRuleForActor(admin, { ...base, hostId: 3, forwardType: "gost", name: "x", sourcePort: 21005, targetPort: 443 }), /21005/);
+
+    // 转发链（中转一跳跳拨下去）不支持端口段。
+    await assert.rejects(() => caller.create({ ...base, hostId: undefined, forwardGroupId: 11, sourcePort: 22000, sourcePortEnd: 22010, targetPort: 22000 }), /转发链/);
   `);
 });

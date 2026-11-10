@@ -156,6 +156,11 @@ export type PortRangeRuleContext = {
   tunnelId?: unknown;
   forwardGroupId?: unknown;
   isForwardGroupTemplate?: unknown;
+  /**
+   * 挂的是「端口转发」资源（groupMode = port 的转发组，界面上新建端口转发走的就是它）：每个成员
+   * 主机上一条一模一样的内核规则，可以用端口段。转发链、主备转发组不行。
+   */
+  portForwardGroup?: boolean;
   tlsInboundId?: unknown;
   failoverEnabled?: unknown;
   routeMode?: unknown;
@@ -165,7 +170,7 @@ export type PortRangeRuleContext = {
   rateLimited?: boolean;
 };
 
-export const PORT_RANGE_USERSPACE_REASON = "端口段只支持 iptables / nftables：gost、realm、socat、nginx 每个端口都要单独开一个监听，段一大就是几百上千个，所以不让选";
+export const PORT_RANGE_USERSPACE_REASON = "端口段只支持 iptables / nftables：gost、realm 这些每个端口都要单独开一个监听";
 
 function truthy(value: unknown) {
   return value === true || value === 1 || value === "1" || value === "true";
@@ -174,13 +179,16 @@ function truthy(value: unknown) {
 /**
  * 这条规则为什么不能用端口段；null = 可以。
  *
- * 线路组、隧道、转发组（含模板）第一版都不做：它们的每一跳、每个成员、每条线路都按单端口
+ * 线路组、隧道、转发链、主备转发组第一版都不做：它们的每一跳、每个成员、每条线路都按单端口
  * 设计（中转监听、出口端口、健康探测），做一半比不做更糟 —— 所以这里明确拦住。
+ * 「端口转发」资源（port 模式的转发组）例外：它只是在成员主机上各放一条同样的规则。
  */
 export function portRangeUnsupportedReason(rule: PortRangeRuleContext): string | null {
   if (Number(rule.tlsInboundId || 0) > 0) return "共享 TLS 入站上的规则不能用端口段";
   if (Number(rule.tunnelId || 0) > 0) return "隧道规则暂不支持端口段，只能用在直连主机的规则上";
-  if (Number(rule.forwardGroupId || 0) > 0 || truthy(rule.isForwardGroupTemplate)) return "转发组 / 转发链暂不支持端口段，只能用在直连主机的规则上";
+  if ((Number(rule.forwardGroupId || 0) > 0 || truthy(rule.isForwardGroupTemplate)) && !rule.portForwardGroup) {
+    return "转发组 / 转发链暂不支持端口段，端口转发和直连主机的规则可以";
+  }
   if (truthy(rule.failoverEnabled) || String(rule.routeMode || "").trim()) return "线路组（主备 / 多线路）暂不支持端口段";
   if (!forwardTypeSupportsPortRange(rule.forwardType)) return PORT_RANGE_USERSPACE_REASON;
   if (String(rule.egressType || "none") !== "none") return "走 Shadowsocks 出口的规则不能用端口段";

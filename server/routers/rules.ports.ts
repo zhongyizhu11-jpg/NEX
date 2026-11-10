@@ -7,11 +7,11 @@ import {
   requireTrafficBillingAccessIfConfigured,
   requireTunnelUseOrTrafficBillingAccess,
 } from "./helpers";
-import { assertTenantListenPortAllowed, assertTenantListenPortAllowedOnHosts } from "../tenantListenPortGuard";
-import { formatPortSpan, normalizeSourcePortEnd, portRangeShapeError, portRangeUnsupportedReason } from "@shared/portRange";
-import { firstPortOutsidePolicy, portRangeAgentUnsupportedReason } from "../rulePortRange";
+import { assertTenantListenPortAllowedOnHosts } from "../tenantListenPortGuard";
+import { formatPortSpan, normalizeSourcePortEnd, portRangeUnsupportedReason } from "@shared/portRange";
+import { reserveForwardGroupPortRangeTail, reserveRulePortRange } from "../rulePortRange";
 import { resolveRuleOperationOwner } from "../ruleOperationOwner";
-import { combineHostPortPolicyWithRange, combinePortPolicies, describePortPolicy, isPortAllowedByPolicy, portPolicyErrorMessage, portPolicyFrom, type PortPolicy } from "@shared/portPolicy";
+import { combineHostPortPolicyWithRange, combinePortPolicies, isPortAllowedByPolicy, portPolicyErrorMessage, portPolicyFrom, type PortPolicy } from "@shared/portPolicy";
 
 const randomPortInputSchema = z.object({
   // 管理员替所选用户建规则时，按那个用户的权限和套餐端口段来挑（server/ruleOperationOwner.ts）。
@@ -96,37 +96,35 @@ async function resolveForwardGroupPortPolicy(
 }
 
 /**
- * 端口段的占用探测：和保存时（server/rulePortRange.ts）同一套口径，但只回答「能不能用、为什么」，
- * 不占端口。隧道 / 转发组上不支持端口段，直接说原因。
+ * 端口段的占用探测：直接走保存时那一道闸（server/rulePortRange.ts）—— 占一下马上放掉，
+ * 说出来的原因和保存时一字不差。转发方式由表单自己判（这里按内核转发算），隧道上不支持端口段。
  */
 async function checkPortRange(
   ctx: { user: { id: number; role: string } },
   input: { hostId: number; forwardGroupId?: number; tunnelId?: number | null; sourcePort: number; sourcePortEnd: number; excludeRuleId?: number; protocol: "tcp" | "udp" | "both" },
 ): Promise<{ used: boolean; reason?: string }> {
   const span = formatPortSpan(input.sourcePort, input.sourcePortEnd);
-  const unsupported = portRangeUnsupportedReason({ forwardType: "nftables", tunnelId: input.tunnelId, forwardGroupId: input.forwardGroupId });
-  if (unsupported) return { used: true, reason: unsupported };
-  const shapeError = portRangeShapeError({ sourcePort: input.sourcePort, sourcePortEnd: input.sourcePortEnd, targetPort: 0 });
-  if (shapeError) return { used: true, reason: shapeError };
-  const { base, plan, effective } = await resolveEntryPortPolicy(ctx, { hostId: input.hostId, tunnelId: null });
-  const outsideBase = firstPortOutsidePolicy(input.sourcePort, input.sourcePortEnd, base);
-  if (outsideBase !== null) return { used: true, reason: `段里的 ${outsideBase} 不在允许范围：${describePortPolicy(base)}` };
-  if (plan) {
-    const outsidePlan = firstPortOutsidePolicy(input.sourcePort, input.sourcePortEnd, effective);
-    if (outsidePlan !== null) return { used: true, reason: `段里的 ${outsidePlan} 不在套餐端口：${describePortPolicy(effective)}` };
-  }
-  const host = await db.getHostById(input.hostId);
-  const agentReason = portRangeAgentUnsupportedReason(host as any);
-  if (agentReason) return { used: true, reason: agentReason };
+  const rule = { forwardType: "nftables", sourcePort: input.sourcePort, sourcePortEnd: input.sourcePortEnd, targetPort: input.sourcePort, protocol: input.protocol };
+  const excludeRuleIds = input.excludeRuleId
+    ? [input.excludeRuleId, ...((await db.getForwardGroupChildRulesForTemplate(input.excludeRuleId)) as Array<{ id: number }>).map((child) => Number(child.id))]
+    : [];
   try {
-    for (let port = input.sourcePort; port <= input.sourcePortEnd; port += 1) {
-      assertTenantListenPortAllowed({ actor: ctx.user, host: host as any, port, label: "段里的端口" });
+    if (input.forwardGroupId) {
+      await requireForwardGroupPortAccess(ctx, input.forwardGroupId);
+      const planRange = ctx.user.role !== "admin" ? await db.getUserForwardGroupPlanPortRange(ctx.user.id, input.forwardGroupId) : null;
+      const reservations = await reserveForwardGroupPortRangeTail({ actor: ctx.user, ownerUserId: ctx.user.id, groupId: input.forwardGroupId, rule, planRange, excludeRuleIds });
+      for (const reservation of reservations) reservation.release();
+    } else {
+      const unsupported = portRangeUnsupportedReason({ forwardType: "nftables", tunnelId: input.tunnelId });
+      if (unsupported) return { used: true, reason: unsupported };
+      const { host } = await requireHostUseAccess(ctx, input.hostId);
+      const planRange = ctx.user.role !== "admin" ? await db.getUserPlanPortRange(ctx.user.id, input.hostId) : null;
+      const reservation = await reserveRulePortRange({ actor: ctx.user, ownerUserId: ctx.user.id, host: host as never, rule, entryPolicy: portPolicyFrom(host as never), planRange, excludeRuleIds });
+      reservation.release();
     }
   } catch (error) {
-    return { used: true, reason: error instanceof Error ? error.message : "端口不可用" };
+    return { used: true, reason: error instanceof Error ? error.message : "端口段不可用" };
   }
-  const used = await db.findUsedPortInRangeOnHost(input.hostId, input.sourcePort, input.sourcePortEnd, input.excludeRuleId ? [input.excludeRuleId] : [], input.protocol);
-  if (used !== null) return { used: true, reason: `段里的 ${used} 已被占用` };
   return { used: false, reason: `${span} 共 ${input.sourcePortEnd - input.sourcePort + 1} 个端口可用` };
 }
 

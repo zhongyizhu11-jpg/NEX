@@ -148,6 +148,9 @@ function iptablesDnatTarget(targetIp: unknown, targetPort: unknown) {
 
   不写成目标端口段（`ip:30000-30100`）：那样内核按哈希随便挑端口，不是一一对应，游戏、RTP 会乱。
 */
+/** 生成内核规则要看的那几列（规则行、快照都行）。 */
+type KernelPortRangeRule = { id?: unknown; sourcePort?: unknown; sourcePortEnd?: unknown; targetIp?: unknown; targetPort?: unknown };
+
 type KernelPortSpan = {
   start: number;
   end: number;
@@ -157,7 +160,7 @@ type KernelPortSpan = {
   samePort: boolean;
 };
 
-function kernelPortSpan(rule: any): KernelPortSpan {
+function kernelPortSpan(rule: KernelPortRangeRule): KernelPortSpan {
   const start = Number(rule?.sourcePort) || 0;
   const end = ruleSourcePortEnd(rule);
   const targetStart = Number(rule?.targetPort) || 0;
@@ -174,7 +177,7 @@ function nftPortExpr(start: number, end: number) {
 }
 
 /** 规则的 DNAT 目标（iptables）。单端口和以前一样。 */
-function iptablesDnatTargetForRule(rule: any) {
+function iptablesDnatTargetForRule(rule: KernelPortRangeRule) {
   const span = kernelPortSpan(rule);
   if (!span.ranged) return iptablesDnatTarget(rule.targetIp, rule.targetPort);
   const host = cleanAddress(rule.targetIp);
@@ -189,7 +192,7 @@ export function nftPortRangeMapName(ruleId: unknown, proto: string) {
 }
 
 /** nft 的 DNAT 目标（`dnat <family> to` 后面那段）。 */
-function nftDnatTargetForRule(rule: any, family: string, proto: string) {
+function nftDnatTargetForRule(rule: KernelPortRangeRule, family: string, proto: string) {
   const targetIp = cleanAddress(rule.targetIp);
   const span = kernelPortSpan(rule);
   const address = family === "ip6" ? `[${targetIp}]` : targetIp;
@@ -199,7 +202,7 @@ function nftDnatTargetForRule(rule: any, family: string, proto: string) {
 }
 
 /** 平移时先建好映射表；每次清空重灌，段长或偏移变了不会留下旧映射。 */
-function buildNftPortRangeMapCmds(rule: any, proto: string): string[] {
+function buildNftPortRangeMapCmds(rule: KernelPortRangeRule, proto: string): string[] {
   const span = kernelPortSpan(rule);
   if (!span.ranged || span.samePort) return [];
   const name = nftPortRangeMapName(rule.id, proto);
@@ -219,7 +222,7 @@ function buildNftPortRangeMapCmds(rule: any, proto: string): string[] {
  * 命令一字不变，升级后不会因为多了两条清理命令把所有 nft 规则重下一遍；段改回单端口时留下的
  * 那张空闲映射表不被任何规则引用，没有影响，再改回段时会被清空重灌。
  */
-function buildNftPortRangeMapCleanupCmds(rule: any): string[] {
+function buildNftPortRangeMapCleanupCmds(rule: KernelPortRangeRule): string[] {
   const ruleId = Number(rule?.id) || 0;
   if (ruleId <= 0 || !kernelPortSpan(rule).ranged) return [];
   return ["tcp", "udp"].map((proto) => nftOptional(`nft delete map inet ${nftTable} ${nftPortRangeMapName(ruleId, proto)}`));

@@ -185,13 +185,13 @@ export async function getUserPortCount(userId: number): Promise<number> {
   const ranged = await db.select({ port: forwardRules.sourcePort, portEnd: forwardRules.sourcePortEnd })
     .from(forwardRules)
     .where(and(where, sql`${forwardRules.sourcePortEnd} IS NOT NULL`));
-  if ((ranged as any[]).length === 0) {
+  if (ranged.length === 0) {
     const r = await db.select({ count: sqlCountDistinct(forwardRules.sourcePort) }).from(forwardRules).where(where);
     return Number(r[0]?.count) || 0;
   }
   const rows = await db.select({ port: forwardRules.sourcePort, portEnd: forwardRules.sourcePortEnd }).from(forwardRules).where(where);
   const used = new Set<number>();
-  for (const row of rows as any[]) addRulePortSpan(used, row.port, row.portEnd);
+  for (const row of rows) addRulePortSpan(used, row.port, row.portEnd);
   return used.size;
 }
 

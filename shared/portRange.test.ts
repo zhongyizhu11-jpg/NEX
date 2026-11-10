@@ -65,7 +65,7 @@ test("不支持端口段的情况各有一句原因：用户态转发、隧道�
   assert.equal(portRangeUnsupportedReason(ok), null);
   assert.equal(portRangeUnsupportedReason({ ...ok, forwardType: "iptables" }), null);
   for (const forwardType of ["gost", "realm", "socat", "nginx"]) {
-    assert.match(portRangeUnsupportedReason({ ...ok, forwardType }) || "", /只支持 iptables \/ nftables.*每个端口都要单独开一个监听/);
+    assert.match(portRangeUnsupportedReason({ ...ok, forwardType }) || "", /只支持 iptables \/ nftables：gost、realm 这些每个端口都要单独开一个监听/);
   }
   assert.match(portRangeUnsupportedReason({ ...ok, tunnelId: 3 }) || "", /隧道/);
   assert.match(portRangeUnsupportedReason({ ...ok, forwardGroupId: 3 }) || "", /转发组/);
@@ -108,4 +108,15 @@ test("批量整段文本：跳过空行和注释，行号按原文，批内重�
     [4, "和第 3 行的入口端口重叠"],
     [5, "ok"],
   ]);
+});
+
+test("规则表单：写一半 / 写错的端口段直接说哪里错；段不能用时按钮灰着并给原因；段长对不上也拦", async () => {
+  const { forwardRuleFormBlocker } = await import("./forwardRuleForm");
+  const form = { routeMode: "local" as const, tunnelId: null, forwardGroupId: 3, hostId: null, sourcePort: 20000, sourcePortEnd: 20100, targetIp: "10.0.0.1", targetPort: 30000, protocol: "both", failoverEnabled: false };
+  const context = { editing: false, usesForwardGroup: true, canUseLocalForward: true, canUseForwardChain: true, canUseFailoverGroup: true, canUseGost: true, portStatus: "available" as const };
+  assert.equal(forwardRuleFormBlocker(form, context), null);
+  assert.match(forwardRuleFormBlocker({ ...form, sourcePortText: "20100-20000" }, context) || "", /源端口：端口段要从小写到大/);
+  assert.equal(forwardRuleFormBlocker(form, { ...context, portRangeBlocker: "端口段只支持 iptables / nftables" }), "端口段只支持 iptables / nftables");
+  assert.match(forwardRuleFormBlocker({ ...form, targetPortEnd: 30010 }, context) || "", /一样长/);
+  assert.match(forwardRuleFormBlocker({ ...form, targetPortText: "30000-" }, context) || "", /目标端口：/);
 });
