@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-var Version = "2.2.253"
+var Version = "2.2.254"
 var agentProcessStartedAt = time.Now()
 var agentBootID = readAgentBootID()
 var runtimeAgentToken atomic.Value

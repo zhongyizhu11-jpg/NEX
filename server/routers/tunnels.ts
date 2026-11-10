@@ -41,6 +41,7 @@ import {
 } from "../../shared/tunnelParallelStreams";
 import { normalizeExitGroupStrategy } from "../../shared/exitStrategy";
 import { assertMimicEnvironment } from "../mimicEnvironment";
+import { lossTolerantBlockerMessage, lossTolerantBlockers } from "../../shared/lossTolerantGate";
 import {
   defaultTunnelHostAddress,
   selectEntryGroupTunnelTestAddress,
@@ -99,6 +100,16 @@ async function requireMimicEnvironmentForHosts(hostIds: number[]) {
     .filter((id) => Number.isInteger(id) && id > 0)));
   const hosts = await Promise.all(ids.map((id) => db.getHostById(id)));
   assertMimicEnvironment(hosts.map((host, index) => host || { id: ids[index], isOnline: false }));
+}
+
+/** 抗丢包传输两端版本不齐就是直接不通（不会退回 TCP），保存时拦下。 */
+async function requireLossTolerantVersionForHosts(hostIds: number[]) {
+  const ids = Array.from(new Set(hostIds
+    .map((id) => Number(id))
+    .filter((id) => Number.isInteger(id) && id > 0)));
+  const hosts = await Promise.all(ids.map((id) => db.getHostById(id)));
+  const blockers = lossTolerantBlockers(hosts as Array<{ id: number; name?: string | null; agentVersion?: string | null; fxpVersion?: string | null } | null | undefined>, ids);
+  if (blockers.length > 0) throw new Error(lossTolerantBlockerMessage(blockers));
 }
 
 function isTunnelProxyProtocolSupported(mode: unknown) {
@@ -1117,6 +1128,18 @@ export const tunnelsRouter = router({
             ...extraExitNodes.map((node) => node.hostId),
           ]);
         }
+        if (runtimeOptions.lossTolerant) {
+          const entryHostIds = await getTunnelEntryTestHostIds({
+            entryGroupId: input.entryGroupId ?? null,
+            entryHostId,
+          });
+          await requireLossTolerantVersionForHosts([
+            ...entryHostIds,
+            ...(hopHostIds || []),
+            exitHostId,
+            ...extraExitNodes.map((node) => node.hostId),
+          ]);
+        }
         const mimicPort = (runtimeOptions.udpOverTcp || forwardxVersion === "v2")
           ? await validateMimicUdpPort({
             port: input.mimicPort,
@@ -1622,6 +1645,33 @@ export const tunnelsRouter = router({
             entryGroupId: (data as any).entryGroupId !== undefined ? (data as any).entryGroupId : (tunnel as any).entryGroupId,
           });
           await requireMimicEnvironmentForHosts([
+            ...entryHostIds,
+            ...normalizedRequestedHopIds,
+            exitHostId,
+            ...extraExitNodes.map((node) => node.hostId),
+          ]);
+        }
+        // 抗丢包：刚打开、或开着时换了机器，都要重新核一遍版本。
+        const nextLossTolerant = (data as any).lossTolerant !== undefined
+          ? dbBool((data as any).lossTolerant)
+          : dbBool((tunnel as any).lossTolerant);
+        const lossTolerantActivationChanged = nextLossTolerant && nextModeForRuntime === "forwardx" && (
+          !dbBool((tunnel as any).lossTolerant)
+          || hopChanged
+          || loadBalanceChanged
+          || (data as any).entryGroupId !== undefined
+          || (data as any).entryHostId !== undefined
+          || (data as any).exitHostId !== undefined
+        );
+        if (lossTolerantActivationChanged) {
+          const entryHostIds = await getTunnelEntryTestHostIds({
+            ...tunnel,
+            ...data,
+            entryHostId,
+            exitHostId,
+            entryGroupId: (data as any).entryGroupId !== undefined ? (data as any).entryGroupId : (tunnel as any).entryGroupId,
+          });
+          await requireLossTolerantVersionForHosts([
             ...entryHostIds,
             ...normalizedRequestedHopIds,
             exitHostId,
