@@ -1,0 +1,22 @@
+{
+  "apiVersion": 1,
+  "id": "liquid-glass",
+  "name": "液态玻璃",
+  "version": "1.0.0",
+  "description": "Apple Liquid Glass：页面后面两张随机照片（设了壁纸就用壁纸），卡片是真毛玻璃、鼠标移上去跟着亮一团光，浮着的玻璃顶栏、胶囊玻璃按钮、Apple 蓝选中态；深色是压暗的照片。",
+  "author": "NEX",
+  "homepage": "https://github.com/zhongyizhu11-jpg/NEX",
+  "stylesheet": "theme.css",
+  "preview": {
+    "light": {
+      "page": "#dfe7f3",
+      "card": "#ffffff",
+      "accent": "#2563eb"
+    },
+    "dark": {
+      "page": "#111318",
+      "card": "#181c26",
+      "accent": "#3b82f6"
+    }
+  }
+}

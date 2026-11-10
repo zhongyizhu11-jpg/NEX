@@ -118,6 +118,8 @@ export const MIGRATION_TABLES = [
   "host_unlock_checks",
   // 节点池（server/ops/nodePoolTables.ts）：线路里一层候选用的机器分组
   "node_pools",
+  // 已安装的界面主题包（server/ops/uiThemesTables.ts）：站点默认主题的样式在这里，换面板不带着就成了经典
+  "ui_theme_packages",
 ] as const;
 
 const LAST_AUTO_TRAFFIC_RESET_BACKFILL_MARKER = "last-auto-traffic-reset-backfill-v1";

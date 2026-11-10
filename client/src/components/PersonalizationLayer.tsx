@@ -1,6 +1,8 @@
 import { trpc } from "@/lib/trpc";
 import { mobileAuth } from "@/lib/mobileAuth";
 import { applyPersonalizationSurface, applyPersonalizationTheme, clearPersonalizationSurface, clearPersonalizationTheme, UI_THEME_OVERRIDE_EVENT, UI_THEME_OVERRIDE_STORAGE_KEY } from "@/lib/personalizationTheme";
+import { setInstalledUiThemes, uiThemeListKey } from "@/lib/installedUiThemes";
+import { setUiThemeAssetBase } from "@/lib/uiThemeStyles";
 import { useEffect, useLayoutEffect, useState } from "react";
 
 const MOBILE_BACKGROUND_MEDIA = "(max-width: 767px), (pointer: coarse)";
@@ -32,6 +34,9 @@ export default function PersonalizationLayer() {
   const personalizationPageTint = (data as any)?.personalizationPageTint;
   const personalizationCardStyle = (data as any)?.personalizationCardStyle;
   const personalizationUiTheme = (data as any)?.personalizationUiTheme;
+  // 这个面板上装着的主题包（id + 样式版本）：变了要重新算一遍现在该用哪套（刚装上的也许正是站点默认，正用着的也许被卸了）
+  const installedUiThemes: unknown = data && "installedUiThemes" in data ? data.installedUiThemes : undefined;
+  const installedUiThemesKey = uiThemeListKey(installedUiThemes);
   const effectiveBlur = reduceMobileBackground ? 0 : blur;
   const scale = 1 + effectiveBlur / 320;
   const isVideoBackground = source === "url" && urlType === "video" && !!effectiveUrl;
@@ -75,6 +80,9 @@ export default function PersonalizationLayer() {
 
   useLayoutEffect(() => {
     const root = document.documentElement;
+    // 名单要先于主题：下面算「该用哪一套」、去哪取样式都靠它。publicInfo 还没回来时不动开机读到的那份缓存。
+    if (installedUiThemesKey !== null) setInstalledUiThemes(installedUiThemes);
+    setUiThemeAssetBase(mobileAuth.isNative ? mobileAuth.panelOrigin() : "");
     const applyTheme = () => {
       applyPersonalizationTheme(personalizationTheme, root);
       // 底色只在浅色下写，所以深浅切换（class 变化）时要跟着重算
@@ -94,7 +102,9 @@ export default function PersonalizationLayer() {
       clearPersonalizationTheme(root);
       clearPersonalizationSurface(root);
     };
-  }, [personalizationTheme, personalizationPageTint, personalizationCardStyle, personalizationUiTheme]);
+    // installedUiThemes 本身每次请求都是新数组，用拼出来的 key 判断有没有变
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [personalizationTheme, personalizationPageTint, personalizationCardStyle, personalizationUiTheme, installedUiThemesKey]);
 
   if (!showVideo) return null;
 

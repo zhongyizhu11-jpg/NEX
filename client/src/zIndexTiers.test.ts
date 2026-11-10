@@ -38,15 +38,15 @@ const 在案: Record<string, { 值: number[]; 因为: string }> = {
     值: [-1, 0, 1],
     因为: "页面基座：背景视频压在 -1，#root 抬到 1 盖住它。不是分层，是一对固定搭配",
   },
-  "styles/theme-rose.css": {
+  "themes/official/rose/theme.css": {
     值: [-1],
     因为: "「玫瑰」主题的胭脂柔光底：和极光同一个搭配，body::after 固定在 -1，#root 的 1 盖住它",
   },
-  "styles/theme-cinnabar.css": {
+  "themes/official/cinnabar/theme.css": {
     值: [-1],
     因为: "「朱砂」主题的方格纸底：和极光、玫瑰同一个搭配，body::after 固定在 -1，#root 的 1 盖住它",
   },
-  "styles/theme-liquid-glass.css": {
+  "themes/official/liquid-glass/theme.css": {
     值: [-1],
     因为: "「液态玻璃」主题的照片底：.fx-lg-backdrop 固定在 #root 这个层叠上下文的 -1，落在页面内容之下、<html> 底色之上，和极光那一对是同一个搭配",
   },
@@ -78,10 +78,18 @@ function stripComments(source: string) {
   return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 }
 
+/*
+  官方主题库（themes/official，原来是 client/src/styles/theme-*.css）也一起扫：它们装上以后和页面是同一套层叠，
+  规矩不能因为搬了家就不管了。记在案里的名字从仓库根目录算（themes/official/<id>/theme.css）。
+*/
+const OFFICIAL_THEMES = path.resolve(ROOT, "../../themes/official");
+
 function scan() {
   const found = new Map<string, Set<number>>();
-  for (const file of collect(ROOT)) {
-    const relative = path.relative(ROOT, file);
+  for (const file of [...collect(ROOT), ...collect(OFFICIAL_THEMES)]) {
+    const relative = file.startsWith(OFFICIAL_THEMES)
+      ? path.posix.join("themes/official", path.relative(OFFICIAL_THEMES, file).split(path.sep).join("/"))
+      : path.relative(ROOT, file);
     const source = stripComments(fs.readFileSync(file, "utf8"));
     const values = new Set<number>();
     // Tailwind 的 z-10 / z-[70]；z-[var(--…)] 不算字面量，那正是我们要的写法

@@ -14,6 +14,7 @@ import { agentRouter } from "./agentRoutes";
 import { paymentCallbackRouter } from "./payment";
 import { migrationRouter } from "./migration";
 import { clientLogoRouter } from "./clientLogoRoute";
+import { uiThemeRouter } from "./uiThemeRoute";
 import { proxySubscriptionRouter } from "./proxySubscriptionRoute";
 import { panelProfilingRouter } from "./panelProfilingRoute";
 import { xboardCompatRouter } from "./xboardCompatRoute";
@@ -220,6 +221,8 @@ async function startServer() {
   // Xboard / V2Board 兼容的几个用户端接口（默认关，设置 › 订阅里开）：server/xboardCompatRoute.ts。
   app.use(xboardCompatRouter);
   app.use(clientLogoRouter);
+  // GET /api/ui-themes/<id>.css：已安装主题包的样式（server/uiThemeRoute.ts）。
+  app.use(uiThemeRouter);
   // GET /api/ops/profiling/:id/download：管理员下载面板的 CPU 剖析 / 堆快照（server/panelProfilingRoute.ts）。
   app.use(panelProfilingRouter);
   // POST /mcp：AI 客户端用个人 API 令牌接入（server/ops/mcp.ts）。

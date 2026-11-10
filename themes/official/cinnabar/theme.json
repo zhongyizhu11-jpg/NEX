@@ -1,0 +1,22 @@
+{
+  "apiVersion": 1,
+  "id": "cinnabar",
+  "name": "朱砂",
+  "version": "1.0.0",
+  "description": "素白纸面、3px 小方角、朱红短线和菱形标记，标签全大写加宽字距，一份技术规格书的样子。",
+  "author": "NEX",
+  "homepage": "https://github.com/zhongyizhu11-jpg/NEX",
+  "stylesheet": "theme.css",
+  "preview": {
+    "light": {
+      "page": "#f6f6f4",
+      "card": "#ffffff",
+      "accent": "#d42a33"
+    },
+    "dark": {
+      "page": "#0a0a0b",
+      "card": "#111113",
+      "accent": "#d42a33"
+    }
+  }
+}

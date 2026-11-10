@@ -36,6 +36,10 @@ import { EntityActions } from "@/components/entity/EntityActions";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { useIsMobile } from "@/hooks/useMobile";
 import { LayoutDefaultCard } from "@/components/settings/LayoutDefaultCard";
+import { UiThemeManagerCard } from "@/components/settings/UiThemeManagerCard";
+import { UiThemeSwatch } from "@/components/settings/UiThemeSwatch";
+import { useUiThemeOptions } from "@/hooks/useUiThemeOptions";
+import { setInstalledUiThemes, uiThemeListKey } from "@/lib/installedUiThemes";
 import DataSectionLoading from "@/components/DataSectionLoading";
 import { pollingInterval } from "@/lib/polling";
 import { mobileAuth } from "@/lib/mobileAuth";
@@ -43,7 +47,7 @@ import { trpc } from "@/lib/trpc";
 import { getPanelUpgradeProgress, PANEL_UPGRADE_REFRESH_DELAY_SECONDS } from "@/lib/panelUpgrade";
 import { compressImageFile, imageDataUrlSize } from "@/lib/imageUpload";
 import { downloadTextFile, type TextDownloadFile } from "@/lib/fileDownload";
-import { applyPersonalizationSurface, applyPersonalizationTheme, setUiThemeOverride } from "@/lib/personalizationTheme";
+import { applyPersonalizationSurface, applyPersonalizationTheme, setPersonalizationPreview, setUiThemeOverride } from "@/lib/personalizationTheme";
 import { cn } from "@/lib/utils";
 import {
   FORWARD_PROTOCOL_LABELS,
@@ -132,7 +136,6 @@ import {
   BUILTIN_WALLPAPERS,
   DEFAULT_PERSONALIZATION_BACKGROUND,
   PERSONALIZATION_CARD_STYLES,
-  PERSONALIZATION_UI_THEMES,
   PERSONALIZATION_PAGE_TINTS,
   PERSONALIZATION_THEME_PRESETS,
   isHexColor,
@@ -143,8 +146,8 @@ import {
   LIQUID_GLASS_PHOTO_SOURCES,
   LIQUID_GLASS_LAYOUTS,
   type LiquidGlassConfig,
-  normalizePersonalizationUiTheme,
   normalizePersonalizationPageTint,
+  normalizePersonalizationUiTheme,
   personalizationSwatchGradient,
   clampBackgroundBlur,
   clampBackgroundOpacity,
@@ -3265,6 +3268,9 @@ function PersonalizationSettingsSection() {
   const [savedCardStyle, setSavedCardStyle] = useState<string>("edge");
   const [uiTheme, setUiTheme] = useState<string>("classic");
   const [savedUiTheme, setSavedUiTheme] = useState<string>("classic");
+  /* 能选的主题：内置的三套 + 装着的主题包（下面「主题管理」里装 / 卸，名单跟着变） */
+  const uiThemeOptions = useUiThemeOptions();
+  const liquidGlassInstalled = uiThemeOptions.some((theme) => theme.id === "liquid-glass");
   /* 这台设备在顶栏调色盘里给自己选的主题；有它时页面显示的是它，不是下面存的站点默认 */
   const uiThemeOverride = useUiThemeOverride();
   const [liquidGlass, setLiquidGlass] = useState<LiquidGlassConfig>(DEFAULT_LIQUID_GLASS);
@@ -3299,7 +3305,8 @@ function PersonalizationSettingsSection() {
     const nextCardStyle = normalizePersonalizationCardStyle((settings as any).personalizationCardStyle);
     setCardStyle(nextCardStyle);
     setSavedCardStyle(nextCardStyle);
-    const nextUiTheme = normalizePersonalizationUiTheme((settings as any).personalizationUiTheme);
+    // 服务端已经按「内置 + 已安装的主题包」核对过这个值，这里不再用只认内置的那份名单过一遍
+    const nextUiTheme = String(settings.personalizationUiTheme || "classic");
     setUiTheme(nextUiTheme);
     setSavedUiTheme(nextUiTheme);
     const nextLiquidGlass = normalizeLiquidGlassConfig((settings as any).personalizationLiquidGlass);
@@ -3335,12 +3342,31 @@ function PersonalizationSettingsSection() {
   useEffect(() => {
     if (settingsRef.current) loadPersonalizationFromSettings(settingsRef.current);
   }, [personalizationSnapshot, loadPersonalizationFromSettings]);
-  const settingsUiTheme = settings ? normalizePersonalizationUiTheme((settings as any).personalizationUiTheme) : null;
+  const settingsUiTheme = settings ? String(settings.personalizationUiTheme || "classic") : null;
   useEffect(() => {
     if (!settingsUiTheme) return;
     setUiTheme(settingsUiTheme);
     setSavedUiTheme(settingsUiTheme);
   }, [settingsUiTheme]);
+  /*
+    getSettings 带着的「已安装主题包」名单：和上面的站点默认是同一次请求里的，拿它当准。
+    · 写进浏览器这头的名单（lib/installedUiThemes），上面的 uiThemeOptions、顶栏调色盘马上就有它们，
+      不用等 publicInfo 下一次刷新；
+    · 试看着的那套主题包刚被卸载了：回到存着的站点默认（它也没了就是经典）。只按这份名单判断 ——
+      用 uiThemeOptions 判断的话，设置先到、名单后到的那一下会把一个装着的主题误当成「没了」。
+  */
+  const settingsInstalledUiThemeKey = uiThemeListKey(settings?.installedUiThemes);
+  useEffect(() => {
+    if (settingsInstalledUiThemeKey === null) return;
+    setInstalledUiThemes(settingsRef.current?.installedUiThemes);
+  }, [settingsInstalledUiThemeKey]);
+  useEffect(() => {
+    if (settingsInstalledUiThemeKey === null) return;
+    const installedIds = settingsInstalledUiThemeKey.split(",").map((item) => item.split("@")[0]).filter(Boolean);
+    const known = (id: string) => normalizePersonalizationUiTheme(id, installedIds) === id;
+    if (known(uiTheme)) return;
+    setUiTheme(known(savedUiTheme) ? savedUiTheme : "classic");
+  }, [settingsInstalledUiThemeKey, uiTheme, savedUiTheme]);
 
   const updateSettingsMutation = trpc.system.updateSettings.useMutation({
     onSuccess: async () => {
@@ -3647,11 +3673,14 @@ function PersonalizationSettingsSection() {
     const changed = personalizationTheme !== saved.theme || pageTint !== saved.pageTint || cardStyle !== saved.cardStyle || uiTheme !== saved.uiTheme;
     if (!changed && !previewTouchedRef.current) return;
     previewTouchedRef.current = changed;
+    // 记成「试看中」：PersonalizationLayer 之后再重挂（深浅色、淡入改了 class）也挂这一份，不会把它改回存着的
+    setPersonalizationPreview(changed ? { theme: personalizationTheme, pageTint, cardStyle, uiTheme } : null);
     applyPersonalizationTheme(personalizationTheme);
     // 试看的是站点默认那一套：绕过顶栏给自己选的；什么都没改时回到平常的规矩
     applyPersonalizationSurface({ pageTint, cardStyle, uiTheme, ignoreOverride: changed });
   }, [settings, personalizationTheme, pageTint, cardStyle, uiTheme, savedPersonalizationTheme, savedPageTint, savedCardStyle, savedUiTheme]);
   useEffect(() => () => {
+    setPersonalizationPreview(null);
     if (!previewTouchedRef.current) return;
     const saved = savedLookRef.current;
     applyPersonalizationTheme(saved.theme);
@@ -3791,7 +3820,7 @@ function PersonalizationSettingsSection() {
     return <DataSectionLoading label="正在加载个性化配置" minHeight="min-h-[220px]" />;
   }
 
-  const previewUiTheme = PERSONALIZATION_UI_THEMES.find((theme) => theme.id === uiTheme) || PERSONALIZATION_UI_THEMES[0];
+  const previewUiTheme = uiThemeOptions.find((theme) => theme.id === uiTheme) || uiThemeOptions[0];
 
   return (
     <div className="space-y-4">
@@ -3813,7 +3842,7 @@ function PersonalizationSettingsSection() {
           </span>
           <b className="fx-brand-preview-name">{siteTitleInput.trim() || "NEX"}</b>
           <span className="fx-brand-preview-meta">
-            <UiThemeDot id={previewUiTheme.id} />
+            <UiThemeDot theme={previewUiTheme} />
             {previewUiTheme.name}
             {uiThemeDirty ? <em>试看中，未保存</em> : null}
           </span>
@@ -3999,7 +4028,7 @@ function PersonalizationSettingsSection() {
               界面主题
             </CardTitle>
             <CardDescription>
-              一套换掉底色、卡片、顶栏和控件形状的整体风格。下面的配色、页面底色、卡片风格都是在它之上微调。点一下就在这一页试看，保存后才对所有人生效；顶栏的调色盘和这里是同一个设置，在那里换也会存到这里。App 要更新到新版本才会跟着变。
+              一套换掉底色、卡片、顶栏和控件形状的整体风格。下面的配色、页面底色、卡片风格都是在它之上微调。点一下就在这一页试看，保存后才对所有人生效；顶栏的调色盘和这里是同一个设置，在那里换也会存到这里。这里列的是面板自带的三套和已经安装的主题包，更多主题在下面的「主题管理」里安装。
             </CardDescription>
           </div>
           <Button
@@ -4017,7 +4046,7 @@ function PersonalizationSettingsSection() {
           {uiThemeOverride && uiThemeOverride !== savedUiTheme ? (
             <div className="flex flex-col gap-2 rounded-lg border border-[color-mix(in_srgb,var(--fx-warn)_25%,transparent)] bg-[var(--fx-warn-soft)] px-3 py-2.5 text-xs leading-5 text-[var(--fx-warn-text)] sm:flex-row sm:items-center sm:justify-between">
               <span>
-                这台设备在顶栏调色盘里选了「{PERSONALIZATION_UI_THEMES.find((theme) => theme.id === uiThemeOverride)?.name || uiThemeOverride}」，它盖过了这里的站点默认，所以你现在看到的是它。在这里保存主题，这台设备会自动改回跟随站点默认。
+                这台设备在顶栏调色盘里选了「{uiThemeOptions.find((theme) => theme.id === uiThemeOverride)?.name || uiThemeOverride}」，它盖过了这里的站点默认，所以你现在看到的是它。在这里保存主题，这台设备会自动改回跟随站点默认。
               </span>
               <Button type="button" variant="outline" size="sm" className="shrink-0" onClick={() => setUiThemeOverride(null)}>
                 跟随站点默认
@@ -4025,7 +4054,7 @@ function PersonalizationSettingsSection() {
             </div>
           ) : null}
           <div className="grid grid-cols-2 gap-3 sm:max-w-3xl sm:grid-cols-3">
-            {PERSONALIZATION_UI_THEMES.map((theme) => {
+            {uiThemeOptions.map((theme) => {
               const active = uiTheme === theme.id;
               const deviceActive = (uiThemeOverride || savedUiTheme) === theme.id;
               return (
@@ -4040,9 +4069,7 @@ function PersonalizationSettingsSection() {
                     active ? "border-primary bg-primary/5 ring-2 ring-primary/15" : "border-border/40",
                   )}
                 >
-                  <span className="fx-uitheme-swatch" data-theme={theme.id} aria-hidden="true">
-                    <i /><i /><b />
-                  </span>
+                  <UiThemeSwatch id={theme.id} preview={theme.preview} builtin={theme.builtin} />
                   <span className="flex items-center justify-between gap-2">
                     <span className={cn("text-sm", active ? "font-semibold text-foreground" : "font-medium text-foreground")}>{theme.name}</span>
                     {active ? <CheckCircle2 className="h-4 w-4 shrink-0 text-primary" /> : null}
@@ -4058,13 +4085,17 @@ function PersonalizationSettingsSection() {
         </CardContent>
       </Card>
 
+      {/* 主题管理：装 / 更新 / 卸载主题包（官方主题库、上传、链接）。装好的出现在上面那张卡片里。 */}
+      <UiThemeManagerCard />
+
       {/* 布局密度：站点默认（standard / compact），每个账号可以在个人资料里覆盖。点了就存，不走上面的保存条。 */}
       <LayoutDefaultCard />
 
       {/*
-        液态玻璃的旋钮：只有界面主题是液态玻璃时才看得出效果，但一直露着 —— 先调好再切主题也行。
-        拨了就在这一页试看（setLiquidGlassPreview），保存后才对所有人生效。
+        液态玻璃的旋钮：液态玻璃现在是官方主题库里的主题包，装了它才有这一块（没装时这些旋钮什么也调不到）。
+        装着但没选它时也露着 —— 先调好再切主题也行。拨了就在这一页试看（setLiquidGlassPreview），保存后才对所有人生效。
       */}
+      {liquidGlassInstalled ? (
       <Card className="border-border bg-card">
         <CardHeader className="gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="space-y-1.5">
@@ -4181,6 +4212,7 @@ function PersonalizationSettingsSection() {
           />
         </CardContent>
       </Card>
+      ) : null}
 
       <Card className="border-border bg-card">
         <CardHeader className="gap-3 sm:flex-row sm:items-start sm:justify-between">

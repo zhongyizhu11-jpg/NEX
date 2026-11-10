@@ -1,10 +1,11 @@
 /*
   界面主题里「不管现在选的是哪一套都要画」的那几块，从各个 theme-*.css 里搬出来，跟主样式表一起下。
 
-  theme-*.css 现在按需加载（client/src/lib/uiThemeStyles.ts）：只有挑中的那一套才下载。可下面这些
+  主题的样式按需加载（client/src/lib/uiThemeStyles.ts）：只有挑中的那一套才下载；墨金、玫瑰、朱砂、液态玻璃、
+  靛蓝现在是官方主题库里的主题包（themes/official/），连样式文件都不在页面里了。可下面这些
   不挂在 html[data-ui-theme] 下 ——
-    · 设置 › 个性化 › 界面主题、顶栏调色盘里那一排小手机屏预览（.fx-uitheme-swatch[data-theme=…]），
-      八枚同时摆出来，每一枚都得是自己那套的样子，不能等用户切过去才有；
+    · 设置 › 个性化 › 界面主题和主题管理里那一排小手机屏预览（.fx-uitheme-swatch[data-theme=…]），
+      同时摆出来，每一枚都得是自己那套的样子，不能等用户切过去（主题库里的甚至还没装）才有；
     · 贴底保存栏（.fx-save-dock）和个性化顶上的预览卡（.fx-brand-preview），原来写在玫瑰里，
       紧凑外壳成了标准布局之后哪套主题下都画。
   留在主题文件里会出现「没选玫瑰就没有保存栏的样式」。
@@ -26,6 +27,21 @@
 .fx-uitheme-swatch > b { position: absolute; left: 50%; bottom: 7px; width: 54%; height: 12px; transform: translateX(-50%); border-radius: 999px; border: 1px solid rgb(0 0 0 / 6%); background: rgb(255 255 255 / 80%); }
 .dark .fx-uitheme-swatch > b { border-color: rgb(255 255 255 / 10%); background: rgb(42 42 42 / 85%); }
 .fx-uitheme-swatch > b::after { content: ""; position: absolute; left: 3px; top: 2px; width: 22%; height: 6px; border-radius: 999px; background: var(--fx-primary-gradient); }
+
+/* ═══ 主题包的通用预览 ═══ */
+/*
+  装上去的主题包（shared/uiThemePackage.ts）没有手画的预览：形状用上面经典那套，颜色用清单里的三种预览色
+  （页面底 / 卡片 / 强调色，组件写在 style 上，见 client/src/components/settings/UiThemeSwatch.tsx）。
+  要排在下面各套手画的预览前面：官方主题库的那几套两样都带着，手画的那份写在后面，盖过这里。
+*/
+.fx-uitheme-swatch[data-theme-package] { background: var(--sw-page, #f5f5f7); }
+.dark .fx-uitheme-swatch[data-theme-package] { background: var(--sw-page-dark, #1e1e1e); }
+.fx-uitheme-swatch[data-theme-package] > i { border-color: color-mix(in srgb, var(--sw-accent, #3ea4ec) 18%, transparent); background: var(--sw-card, #fff); box-shadow: none; }
+.dark .fx-uitheme-swatch[data-theme-package] > i { border-color: color-mix(in srgb, var(--sw-accent-dark, #3ea4ec) 24%, transparent); background: var(--sw-card-dark, #2a2a2a); }
+.fx-uitheme-swatch[data-theme-package] > b { border-color: color-mix(in srgb, var(--sw-accent, #3ea4ec) 18%, transparent); background: color-mix(in srgb, var(--sw-card, #fff) 85%, transparent); }
+.dark .fx-uitheme-swatch[data-theme-package] > b { border-color: color-mix(in srgb, var(--sw-accent-dark, #3ea4ec) 24%, transparent); background: color-mix(in srgb, var(--sw-card-dark, #2a2a2a) 85%, transparent); }
+.fx-uitheme-swatch[data-theme-package] > b::after { background: var(--sw-accent, #3ea4ec); }
+.dark .fx-uitheme-swatch[data-theme-package] > b::after { background: var(--sw-accent-dark, #3ea4ec); }
 
 /* ═══ 原在 theme-gilt.css ═══ */
 /* ── 设置页「界面主题」的预览 ───────────────────────────────── */

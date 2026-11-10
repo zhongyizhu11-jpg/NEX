@@ -5,6 +5,8 @@ import { githubRepoParts } from "../../shared/githubAccelerator";
 import { updateMultiDeviceLoginSettingCache } from "./context";
 import { z } from "zod";
 import * as db from "../db";
+import { listInstalledUiThemes } from "../uiThemes";
+import type { UiThemeSummary } from "../../shared/uiThemePackage";
 import { ENV } from "../env";
 import { compareVersions, normalizeVersion } from "../../shared/version";
 import { MAX_RULE_SWITCH_BRIDGE_HOURS, RULE_SWITCH_BRIDGE_HOURS_SETTING, normalizeRuleSwitchBridgeHours } from "../../shared/ruleEntryBridge";
@@ -1687,7 +1689,23 @@ function publicAdminFlags(all: Record<string, string | null>) {
   };
 }
 
-function publicSystemSettings(all: Record<string, string | null>, activeProtocol: string) {
+/**
+ * 已安装主题包里所有人都要知道的那几样（publicInfo / getSettings 带着）：浏览器靠它判断一个主题 id 认不认、
+ * 样式去哪取（/api/ui-themes/<id>.css?v=<revision>）、预览和顶栏调色盘里的小圆点用什么颜色。
+ */
+function publicUiThemes(installed: UiThemeSummary[]) {
+  return installed.map((theme) => ({
+    id: theme.id,
+    name: theme.name,
+    description: theme.description,
+    version: theme.version,
+    preview: theme.preview,
+    revision: theme.revision,
+  }));
+}
+
+function publicSystemSettings(all: Record<string, string | null>, activeProtocol: string, installedUiThemes: UiThemeSummary[]) {
+  const installedUiThemeIds = installedUiThemes.map((theme) => theme.id);
   const aiProvider = normalizeAiProvider(all.deepseekProvider);
   const aiProviderConfigs = buildAiProviderConfigMap(all);
   const aiActiveConfig = aiProviderConfigs[aiProvider];
@@ -1704,7 +1722,8 @@ function publicSystemSettings(all: Record<string, string | null>, activeProtocol
     personalizationTheme: normalizePersonalizationThemePresetId(all.personalizationTheme),
     personalizationPageTint: normalizePersonalizationPageTint(all.personalizationPageTint),
     personalizationCardStyle: normalizePersonalizationCardStyle(all.personalizationCardStyle),
-    personalizationUiTheme: normalizePersonalizationUiTheme(all.personalizationUiTheme),
+    personalizationUiTheme: normalizePersonalizationUiTheme(all.personalizationUiTheme, installedUiThemeIds),
+    installedUiThemes: publicUiThemes(installedUiThemes),
     personalizationLayout: normalizePersonalizationLayout(all.personalizationLayout),
     personalizationBackground: publicPersonalizationBackground(all),
     personalizationLiquidGlass: readPersonalizationLiquidGlass(all),
@@ -1850,7 +1869,7 @@ export const systemRouter = router({
   }),
 
   publicInfo: publicProcedure.query(({ ctx }) => {
-    return db.getAllSettings().then((all) => ({
+    return Promise.all([db.getAllSettings(), listInstalledUiThemes()]).then(([all, installedUiThemes]) => ({
       repoUrl: REPO_URL,
       telegramBotUrl: TELEGRAM_BOT_URL,
       version: APP_VERSION,
@@ -1863,7 +1882,8 @@ export const systemRouter = router({
       personalizationTheme: normalizePersonalizationThemePresetId(all.personalizationTheme),
       personalizationPageTint: normalizePersonalizationPageTint(all.personalizationPageTint),
       personalizationCardStyle: normalizePersonalizationCardStyle(all.personalizationCardStyle),
-      personalizationUiTheme: normalizePersonalizationUiTheme(all.personalizationUiTheme),
+      personalizationUiTheme: normalizePersonalizationUiTheme(all.personalizationUiTheme, installedUiThemes.map((theme) => theme.id)),
+      installedUiThemes: publicUiThemes(installedUiThemes),
       personalizationLayout: normalizePersonalizationLayout(all.personalizationLayout),
       personalizationBackground: publicPersonalizationBackground(all),
       personalizationLiquidGlass: readPersonalizationLiquidGlass(all),
@@ -1923,7 +1943,7 @@ export const systemRouter = router({
     const aiActiveConfig = aiProviderConfigs[aiProvider];
     const panelSsl = readPanelSslSettings(all);
     const activeProtocol = ctx.req.secure || ctx.req.headers["x-forwarded-proto"] === "https" ? "https" : "http";
-    const safeSettings = publicSystemSettings(all, activeProtocol);
+    const safeSettings = publicSystemSettings(all, activeProtocol, await listInstalledUiThemes());
     if (!ctx.user || ctx.user.role !== "admin") return safeSettings;
     const deploymentInfo = getDeploymentInfo(panelUpdateAcceleratorFromRecord(all));
     const emailPort = Number(all.emailPort || 587);
@@ -2179,7 +2199,7 @@ export const systemRouter = router({
         personalizationTheme: z.string().max(32).optional(),
         personalizationPageTint: z.string().max(16).optional(),
         personalizationCardStyle: z.string().max(16).optional(),
-        personalizationUiTheme: z.string().max(16).optional(),
+        personalizationUiTheme: z.string().max(64).optional(),
         personalizationLayout: z.string().max(16).optional(),
         registrationEnabled: z.boolean().optional(),
         authCaptchaEnabled: z.boolean().optional(),
@@ -2331,7 +2351,12 @@ export const systemRouter = router({
         console.info(`[Settings] personalization card style updated style=${cardStyle}`);
       }
       if (input.personalizationUiTheme !== undefined) {
-        const uiTheme = normalizePersonalizationUiTheme(input.personalizationUiTheme);
+        // 内置三套随便选；主题包要装着才能设成站点默认（没装的 id 存进去，所有人只会看到经典）
+        const requested = String(input.personalizationUiTheme || "").trim() || "classic";
+        const uiTheme = normalizePersonalizationUiTheme(requested, (await listInstalledUiThemes()).map((theme) => theme.id));
+        if (uiTheme !== requested) {
+          throw new Error("这套界面主题没有安装，请先在「主题管理」里安装");
+        }
         await db.setSetting("personalizationUiTheme", uiTheme);
         console.info(`[Settings] personalization ui theme updated theme=${uiTheme}`);
       }

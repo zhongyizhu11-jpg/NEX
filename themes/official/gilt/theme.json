@@ -1,0 +1,22 @@
+{
+  "apiVersion": 1,
+  "id": "gilt",
+  "name": "墨金",
+  "version": "1.0.0",
+  "description": "米白纸底、平贴的小圆角卡纸，数字放在米色带上；衬线标题、金色下划线分段、方标签筛选；深色是墨黑配金。",
+  "author": "NEX",
+  "homepage": "https://github.com/zhongyizhu11-jpg/NEX",
+  "stylesheet": "theme.css",
+  "preview": {
+    "light": {
+      "page": "#f5f2ec",
+      "card": "#fffdf9",
+      "accent": "#b08d57"
+    },
+    "dark": {
+      "page": "#131110",
+      "card": "#1c1917",
+      "accent": "#c9a66b"
+    }
+  }
+}

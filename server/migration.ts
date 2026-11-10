@@ -1,4 +1,5 @@
 import { parseInboundRouting } from "../shared/inboundRouting";
+import { invalidateUiThemeCache } from "./uiThemes";
 import { Request, Response, Router } from "express";
 import nodeCrypto from "crypto";
 import fs from "fs";
@@ -927,6 +928,8 @@ const IMPORT_TABLE_ORDER = [
   // 主机网络画像：只依赖主机
   "host_network_profiles",
   "host_unlock_checks",
+  // 已安装的主题包没有依赖；放在 system_settings 前面，导入完站点默认主题指着的那套已经在库里
+  "ui_theme_packages",
   "system_settings",
 ] as const;
 
@@ -2168,6 +2171,8 @@ export async function importDirectSqliteBackup(
   // 源面板发来的副本里密钥类设置已经是明文（decryptSecretSettingsInSqliteCopy），用本面板的密钥加密回去。
   await migrateSecretSettingsToEncrypted({ force: true });
   invalidatePanelDataSummaryCache();
+  // 备份里带着已安装的主题包（ui_theme_packages）：名单按导进来的库重读
+  invalidateUiThemeCache();
 
   return {
     importedIds,
@@ -2463,6 +2468,8 @@ export async function importMigrationSnapshot(
     if (targetPanelUrl) await setSetting("panelPublicUrl", normalizePanelUrl(targetPanelUrl));
   });
   invalidatePanelDataSummaryCache();
+  // 备份里带着已安装的主题包（ui_theme_packages）：名单按导进来的库重读
+  invalidateUiThemeCache();
 
   onProgress?.(96, "正在重建流量汇总缓存");
   const importedTrafficBuckets = (snapshot.tables.traffic_stat_buckets?.length || 0) > 0;
