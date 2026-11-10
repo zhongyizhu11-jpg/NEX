@@ -8,6 +8,7 @@ import { runWithConfigAuditContext } from "../configAudit";
 import { DATABASE_MAINTENANCE_MESSAGE, isDatabaseMaintenanceActive } from "../databaseMaintenance";
 import { formatTrpcErrorShape } from "./errorFormatter";
 import { apiTokenPolicyError } from "../ops/apiTokenPolicy";
+import { impersonationPolicyError } from "../ops/impersonationPolicy";
 import { assertMaintenanceAllows } from "../ops/maintenance";
 import { databaseHealth } from "../databaseHealthState";
 import { DATABASE_UNAVAILABLE_MESSAGE } from "../../shared/databaseHealth";
@@ -39,6 +40,18 @@ const enforceApiTokenPolicy = t.middleware(opts => {
   const apiToken = opts.ctx.apiToken;
   if (apiToken) {
     const reason = apiTokenPolicyError(apiToken.scope, opts.path, opts.type, apiToken.modules);
+    if (reason) throw new TRPCError({ code: "FORBIDDEN", message: reason });
+  }
+  return opts.next();
+});
+
+/**
+ * 管理员代入用户后台时碰不到的写操作（账号安全、登录绑定、付款），见 server/ops/impersonationPolicy.ts。
+ * 和令牌策略一样排在操作审计后面：被拒的也记一行「被拒绝」，记在发起代入的管理员名下。
+ */
+const enforceImpersonationPolicy = t.middleware(opts => {
+  if (opts.ctx.impersonation) {
+    const reason = impersonationPolicyError(opts.path, opts.type);
     if (reason) throw new TRPCError({ code: "FORBIDDEN", message: reason });
   }
   return opts.next();
@@ -104,15 +117,16 @@ const recordOperationAudit = t.middleware(opts => auditMutationCall({
 }));
 
 /**
- * 中间件顺序：数据库不可用 → 数据库维护 → 限流 → 操作审计 → 令牌权限。
- * 限流在审计前（被限流的不写库），审计在令牌权限前（被令牌策略拒掉的写操作记成「被拒绝」）。
+ * 中间件顺序：数据库不可用 → 数据库维护 → 限流 → 操作审计 → 令牌权限 → 代入限制。
+ * 限流在审计前（被限流的不写库），审计在令牌权限 / 代入限制前（被策略拒掉的写操作记成「被拒绝」）。
  */
 const baseProcedure = t.procedure
   .use(rejectWhileDatabaseUnavailable)
   .use(rejectMutationsDuringDatabaseMaintenance)
   .use(enforceApiRateLimit)
   .use(recordOperationAudit)
-  .use(enforceApiTokenPolicy);
+  .use(enforceApiTokenPolicy)
+  .use(enforceImpersonationPolicy);
 
 export const publicProcedure = baseProcedure;
 
@@ -134,10 +148,11 @@ const requireUser = t.middleware(async opts => {
   // 维护模式：普通用户调需要登录的接口一律「面板维护中」（管理员不受影响），见 server/ops/maintenance.ts。
   await assertMaintenanceAllows(ctx.user);
 
+  // 代入用户后台时，规则 / 主机这些配置的改动记在真正动手的管理员名下，来源标成代入。
   return runWithConfigAuditContext({
-    actorUserId: Number(ctx.user.id),
-    actorName: String(ctx.user.username || ctx.user.name || ""),
-    source: "panel:trpc",
+    actorUserId: ctx.impersonation ? ctx.impersonation.adminUserId : Number(ctx.user.id),
+    actorName: ctx.impersonation ? ctx.impersonation.adminName : String(ctx.user.username || ctx.user.name || ""),
+    source: ctx.impersonation ? "panel:impersonation" : "panel:trpc",
     requestId: String(ctx.req.headers["x-request-id"] || "") || undefined,
     requestPath: opts.path,
   }, () => next({ ctx: { ...ctx, user: ctx.user } }));
@@ -161,7 +176,9 @@ export const adminProcedure = baseProcedure.use(
       ctx.res.clearCookie(COOKIE_NAME, { ...getSessionCookieOptions(ctx.req), maxAge: -1 });
       throw new TRPCError({ code: "UNAUTHORIZED", message: ACCOUNT_DISABLED_ERR_MSG });
     }
-    if (ctx.user.role !== 'admin') {
+    // 代入的目标永远是普通用户，本来就过不了下面的角色判断；这里再明确拒一次，
+    // 不让「代入会话拿到管理员权限」只靠那一条兜着。
+    if (ctx.impersonation || ctx.user.role !== 'admin') {
       throw new TRPCError({ code: "FORBIDDEN", message: NOT_ADMIN_ERR_MSG });
     }
 

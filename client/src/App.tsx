@@ -20,6 +20,7 @@ import Live2DWidgetHost from "./components/plugins/Live2DWidgetHost";
 import HomePage from "@/pages/Home";
 import LoginPage from "@/pages/Login";
 import DatabaseHealthGate from "./components/DatabaseHealthGate";
+import { ImpersonationBoundary } from "./components/ImpersonationBoundary";
 
 const loadMotionFeatures = () => import("@/motionFeatures").then((mod) => mod.default);
 
@@ -346,9 +347,12 @@ function App() {
             <LiquidGlassBackdrop />
             <Live2DWidgetHost />
             <Toaster />
-            <DatabaseHealthGate>
-              <SetupGate />
-            </DatabaseHealthGate>
+            {/* 管理员「进入用户后台」的标签页：顶上一条横幅；代入结束后整页换成「已结束」（普通标签页不受影响） */}
+            <ImpersonationBoundary>
+              <DatabaseHealthGate>
+                <SetupGate />
+              </DatabaseHealthGate>
+            </ImpersonationBoundary>
           </ConfirmDialogProvider>
         </TooltipProvider>
       </ThemeProvider>

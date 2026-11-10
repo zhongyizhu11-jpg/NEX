@@ -19,6 +19,8 @@ import { ruleGroupsTables, ruleGroupsMigrationTables } from "./ruleGroupsTables"
 import { loginDevicesTables, loginDevicesMigrationTables } from "./loginDevicesTables";
 import { operationAuditTables, operationAuditMigrationTables } from "./operationAuditTables";
 import { uiThemesTables, uiThemesMigrationTables } from "./uiThemesTables";
+import { impersonationTables, impersonationMigrationTables } from "./impersonationTables";
+import { passwordResetTables, passwordResetMigrationTables } from "./passwordResetTables";
 
 export const OPS_TABLE_DEFS: TableDef[] = [
   ...eventsTables,
@@ -41,6 +43,8 @@ export const OPS_TABLE_DEFS: TableDef[] = [
   ...loginDevicesTables,
   ...operationAuditTables,
   ...uiThemesTables,
+  ...impersonationTables,
+  ...passwordResetTables,
 ];
 
 export const OPS_MIGRATION_TABLES: string[] = [
@@ -64,4 +68,6 @@ export const OPS_MIGRATION_TABLES: string[] = [
   ...loginDevicesMigrationTables,
   ...operationAuditMigrationTables,
   ...uiThemesMigrationTables,
+  ...impersonationMigrationTables,
+  ...passwordResetMigrationTables,
 ];

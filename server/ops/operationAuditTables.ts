@@ -20,6 +20,9 @@ export const operationAuditTables: TableDef[] = [
       col("actorRole", "varchar", { length: 16 }),
       col("apiTokenId", "int"),
       col("apiTokenName", "varchar", { length: 64 }),
+      // 管理员代入用户后台时做的操作：actor* 是管理员，这两列是被代入的用户（平时为空）。
+      col("onBehalfOfUserId", "int"),
+      col("onBehalfOfName", "varchar", { length: 128 }),
       col("channel", "varchar", { length: 16, notNull: true, default: "web" }),
       col("path", "varchar", { length: 128, notNull: true }),
       col("module", "varchar", { length: 96, notNull: true }),

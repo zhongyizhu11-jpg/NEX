@@ -24,6 +24,7 @@ import { parseGoogleLoginReturn, stripGoogleLoginReturnFromUrl } from "@/feature
 import DiscordLoginButton from "@/features/discordLogin/DiscordLoginButton";
 import DiscordMark from "@/features/discordLogin/DiscordMark";
 import { parseDiscordLoginReturn, stripDiscordLoginReturnFromUrl } from "@/features/discordLogin/discordLoginReturn";
+import PasswordResetDialog, { type PasswordResetCaptchaProps } from "@/features/passwordReset/PasswordResetDialog";
 
 const REGISTRATION_CLOSED_MESSAGE = "当前注册未开放，请联系管理员";
 
@@ -217,6 +218,11 @@ function CapVerificationField(props: {
 
 const ignoreCapError = () => undefined;
 
+/** 「忘记密码」里的人机验证：和登录用同一个 Cap 组件、同一个 purpose（服务端按 login 验）。 */
+function renderPasswordResetCaptcha(props: PasswordResetCaptchaProps) {
+  return <CapVerificationField purpose="login" disabled={props.disabled} resetKey={props.resetKey} onToken={props.onToken} onError={ignoreCapError} />;
+}
+
 function ImageCaptchaField(props: {
   id: string;
   value: string;
@@ -330,6 +336,7 @@ export default function Login() {
   const [twoFactorCode, setTwoFactorCode] = useState("");
   const [panelUrlDraft, setPanelUrlDraft] = useState(() => mobileAuth.getPanelUrl());
   const [showPanelSettings, setShowPanelSettings] = useState(false);
+  const [passwordResetOpen, setPasswordResetOpen] = useState(false);
   const { resolvedTheme, setTheme } = useTheme();
   const hasMobilePanelUrl = !mobileAuth.isNative || mobileAuth.hasPanelUrl();
   const showInsecurePanelWarning = mobileAuth.isNative && mobileAuth.isInsecurePanelUrl(mobileAuth.getPanelUrl());
@@ -1166,7 +1173,17 @@ export default function Login() {
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="password">密码</Label>
+                <div className="flex items-center justify-between gap-2">
+                  <Label htmlFor="password">密码</Label>
+                  <button
+                    type="button"
+                    className="text-meta text-muted-foreground transition-colors hover:text-primary disabled:opacity-50"
+                    disabled={isPending || !hasMobilePanelUrl}
+                    onClick={() => setPasswordResetOpen(true)}
+                  >
+                    忘记密码？
+                  </button>
+                </div>
                 <PasswordInput
                   id="password"
                   placeholder="请输入密码"
@@ -1488,6 +1505,19 @@ export default function Login() {
           </Card>
         </main>
       </div>
+
+      {/* 忘记密码：申请重置链接；从链接打开登录页时（#password-reset=…）它自己弹出来设新密码 */}
+      <PasswordResetDialog
+        open={passwordResetOpen}
+        onOpenChange={setPasswordResetOpen}
+        defaultIdentifier={username}
+        renderCaptcha={renderPasswordResetCaptcha}
+        onPasswordReset={() => {
+          // 输入框里可能还填着旧密码；App 里只记用户名，不存密码。
+          setPassword("");
+          setConfirmPassword("");
+        }}
+      />
 
       {mobileAuth.isNative && (
         <Dialog open={showPanelSettings} onOpenChange={setShowPanelSettings}>

@@ -1742,6 +1742,8 @@ function publicSystemSettings(all: Record<string, string | null>, activeProtocol
     webPortManagement: getWebPortManagement({ publicView: true }),
     registrationEnabled: all.registrationEnabled !== "false",
     authCaptchaEnabled: all.authCaptchaEnabled !== "false",
+      // 登录页「忘记密码」：默认开，只有明确存成 "false" 才关（server/ops/passwordReset.ts）。
+      passwordResetEnabled: all.passwordResetEnabled !== "false",
     twoFactorEnabled: all.twoFactorEnabled === "true",
     lookingGlassUserEnabled: all.lookingGlassUserEnabled !== "false",
     allowMultiDeviceLogin: all.allowMultiDeviceLogin === "true",
@@ -1889,6 +1891,8 @@ export const systemRouter = router({
       personalizationLiquidGlass: readPersonalizationLiquidGlass(all),
       registrationEnabled: all.registrationEnabled !== "false",
       authCaptchaEnabled: all.authCaptchaEnabled !== "false",
+      // 登录页「忘记密码」：默认开，只有明确存成 "false" 才关（server/ops/passwordReset.ts）。
+      passwordResetEnabled: all.passwordResetEnabled !== "false",
       // 邀请返利开没开（侧边栏「邀请返利」据此显隐）、注册是否必须带邀请码。
       ...db.publicReferralFlags(all),
       twoFactorEnabled: all.twoFactorEnabled === "true",
@@ -1967,6 +1971,8 @@ export const systemRouter = router({
       undecryptableSecretSettings: undecryptableSecretSettingLabels(),
       registrationEnabled: all.registrationEnabled !== "false",
       authCaptchaEnabled: all.authCaptchaEnabled !== "false",
+      // 登录页「忘记密码」：默认开，只有明确存成 "false" 才关（server/ops/passwordReset.ts）。
+      passwordResetEnabled: all.passwordResetEnabled !== "false",
       twoFactorEnabled: all.twoFactorEnabled === "true",
       lookingGlassUserEnabled: all.lookingGlassUserEnabled !== "false",
       pluginsEnabled: all.pluginsEnabled === "true",
@@ -2203,6 +2209,7 @@ export const systemRouter = router({
         personalizationLayout: z.string().max(16).optional(),
         registrationEnabled: z.boolean().optional(),
         authCaptchaEnabled: z.boolean().optional(),
+        passwordResetEnabled: z.boolean().optional(),
         twoFactorEnabled: z.boolean().optional(),
         lookingGlassUserEnabled: z.boolean().optional(),
         allowMultiDeviceLogin: z.boolean().optional(),
@@ -2372,6 +2379,10 @@ export const systemRouter = router({
       if (input.authCaptchaEnabled !== undefined) {
         await db.setSetting("authCaptchaEnabled", input.authCaptchaEnabled ? "true" : "false");
         console.info(`[Settings] authentication captcha ${input.authCaptchaEnabled ? "enabled" : "disabled"}`);
+      }
+      if (input.passwordResetEnabled !== undefined) {
+        await db.setSetting("passwordResetEnabled", input.passwordResetEnabled ? "true" : "false");
+        console.info(`[Settings] self-service password reset ${input.passwordResetEnabled ? "enabled" : "disabled"}`);
       }
       if (input.twoFactorEnabled !== undefined) {
         await db.setSetting("twoFactorEnabled", input.twoFactorEnabled ? "true" : "false");

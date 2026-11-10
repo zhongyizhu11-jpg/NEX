@@ -66,6 +66,13 @@ export function clearTwoFactorChallenge(challengeId: string) {
   challenges.delete(challengeId);
 }
 
+/** 这个人所有还在等输验证码的两步登录一起作废（密码被重置之后，用旧密码过了第一步的不能再继续）。 */
+export function clearTwoFactorChallengesForUser(userId: number) {
+  for (const [id, challenge] of challenges) {
+    if (challenge.userId === userId) challenges.delete(id);
+  }
+}
+
 export function recordTwoFactorChallengeFailure(challengeId: string) {
   const challenge = getTwoFactorChallenge(challengeId);
   if (!challenge) return false;

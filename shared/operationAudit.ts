@@ -8,7 +8,7 @@
 */
 
 export type OperationAuditResult = "ok" | "denied" | "error";
-export type OperationAuditChannel = "web" | "api" | "mcp" | "telegram" | "internal";
+export type OperationAuditChannel = "web" | "api" | "mcp" | "telegram" | "internal" | "impersonation";
 
 export const OPERATION_AUDIT_RESULT_LABELS: Record<OperationAuditResult, string> = {
   ok: "成功",
@@ -22,6 +22,8 @@ export const OPERATION_AUDIT_CHANNEL_LABELS: Record<OperationAuditChannel, strin
   mcp: "MCP",
   telegram: "Telegram 机器人",
   internal: "面板内部",
+  // 管理员在用户管理里「进入后台」后，以那个用户的身份做的操作（操作人记的是管理员）。
+  impersonation: "代入用户后台",
 };
 
 /** 保留天数的边界：至少 7 天（排查一次事故够用），最多 10 年。 */
@@ -90,12 +92,12 @@ export function isSecretAuditKey(key: string): boolean {
   return false;
 }
 
-/** 不看键名也要藏的值：PEM、面板 / Agent 令牌、Bearer 头、JWT。 */
+/** 不看键名也要藏的值：PEM、面板 / Agent 令牌、代入令牌（nxu_）、密码重置令牌（nxr_）、Bearer 头、JWT。 */
 export function looksLikeSecretValue(value: string): boolean {
   const text = value.trim();
   if (!text) return false;
   if (/-----BEGIN [A-Z ]*(PRIVATE KEY|CERTIFICATE)-----/.test(text)) return true;
-  if (/^(nex|fx|fxa)_[A-Za-z0-9_-]{16,}$/.test(text)) return true;
+  if (/^(nex|nxu|nxr|fx|fxa)_[A-Za-z0-9_-]{16,}$/.test(text)) return true;
   if (/^Bearer\s+\S{8,}$/i.test(text)) return true;
   if (/^eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}$/.test(text)) return true;
   return false;

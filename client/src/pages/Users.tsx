@@ -99,7 +99,10 @@ import {
   Mail,
   MoreHorizontal,
   Pencil,
+  LogIn,
 } from "lucide-react";
+import { openUserBackend } from "@/lib/userImpersonation";
+import { mobileAuth } from "@/lib/mobileAuth";
 import { useState, useEffect, useMemo } from "react";
 import { toast } from "sonner";
 import { useLocation } from "wouter";
@@ -463,6 +466,16 @@ function UsersContent() {
     },
     onError: (err) => toast.error(err.message || "创建用户失败"),
   });
+
+  /*
+    进入用户后台：新标签页里以这个用户的身份看面板，这个标签页还是管理员（lib/userImpersonation.ts）。
+    App 里没有「新标签页」，不提供。
+  */
+  const enterUserBackendMutation = trpc.users.enterUserBackend.useMutation();
+  const enterUserBackend = (u: { id: number }) => {
+    void openUserBackend(() => enterUserBackendMutation.mutateAsync({ userId: u.id }))
+      .catch((error) => toast.error(error instanceof Error ? error.message : "进入用户后台失败"));
+  };
 
   const resetPasswordMutation = trpc.users.resetPassword.useMutation({
     onSuccess: () => {
@@ -1327,6 +1340,16 @@ function UsersContent() {
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-44">
         <OpsUserMenuItems user={u} />
+        {!mobileAuth.isNative ? (
+          <DropdownMenuItem
+            disabled={u.role === "admin" || u.accountEnabled === false || enterUserBackendMutation.isPending}
+            onSelect={() => enterUserBackend(u)}
+            title={u.role === "admin" ? "不能进入管理员账号的后台" : u.accountEnabled === false ? "账号已停用" : "在新窗口以这个用户的身份查看，当前窗口不受影响"}
+          >
+            <LogIn />
+            <span>进入后台</span>
+          </DropdownMenuItem>
+        ) : null}
         <DropdownMenuItem onSelect={() => openRechargeDialog(u)}>
           <WalletCards />
           <span>余额充值</span>

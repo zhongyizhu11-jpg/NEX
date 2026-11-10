@@ -32,6 +32,10 @@ import { ipRateLimitScope } from "../ipRateLimitScope";
 import { apiTokenProfileUpdateError } from "../ops/apiTokenPolicy";
 import { revokeAllUserApiTokens } from "../ops/apiTokens";
 import { noteLoginDevice } from "../ops/loginDevices";
+import { endImpersonation } from "../ops/impersonation";
+import { passwordReset, PasswordResetError } from "../ops/passwordReset";
+import { PASSWORD_RESET_RATE_LIMITED_MESSAGE } from "../../shared/passwordReset";
+import { clientIp } from "../clientIp";
 
 const emailCodeStore = new Map<string, { code: string; expiresAt: number; lastSentAt: number; attempts: number }>();
 const emailSendIpStore = new Map<string, LoginFailEntry>();
@@ -227,7 +231,13 @@ export const authRouter = router({
       ctx.res.clearCookie(COOKIE_NAME, { ...getSessionCookieOptions(ctx.req), maxAge: -1 });
       throw new TRPCError({ code: "UNAUTHORIZED", message: ACCOUNT_DISABLED_ERR_MSG });
     }
-    return sanitizeUser(ctx.user);
+    // 代入窗口（管理员进入用户后台）：页面靠这一项显示「正在以 … 的身份查看」的横幅，平时是 null。
+    return {
+      ...sanitizeUser(ctx.user),
+      impersonation: ctx.impersonation
+        ? { adminName: ctx.impersonation.adminName, expiresAt: ctx.impersonation.expiresAt }
+        : null,
+    };
   }),
 
   createCaptcha: publicProcedure
@@ -298,6 +308,70 @@ export const authRouter = router({
         console.info(`[Auth] Verification email sent target=${maskIdentifier(email)} ip=${ip}`);
         return { success: true, expiresInSeconds: 300 };
       });
+    }),
+
+  /**
+   * 登录页「忘记密码」要显示什么：功能开没开、面板这边有没有配好能发链接的渠道（邮件 / Telegram / Discord
+   * 至少一个 + 面板公开访问地址）。只说面板的配置，不涉及任何账号。
+   */
+  passwordResetOptions: publicProcedure.query(async () => {
+    const [options, captcha] = await Promise.all([passwordReset.options(), captchaEnabled()]);
+    return { ...options, captchaEnabled: captcha };
+  }),
+
+  /**
+   * 申请重置链接。账号存不存在、有没有找回方式，回的都是同一句话（见 server/ops/passwordReset.ts）。
+   * 开着人机验证时每次都要过一遍（和注册一样，不看失败次数）：这个接口会往外发邮件和消息，不能让脚本白刷。
+   */
+  requestPasswordReset: publicProcedure
+    .input(z.object({
+      identifier: z.string().trim().min(1, "请输入用户名或邮箱").max(ACCOUNT_NAME_MAX_LENGTH, "用户名太长"),
+      captchaId: z.string().max(CHALLENGE_ID_MAX_LENGTH).optional(),
+      captchaAnswer: z.string().trim().min(1).max(12).optional(),
+      capToken: z.string().trim().min(1).max(256).optional(),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      ctx.res.setHeader?.("Cache-Control", "no-store");
+      const ip = clientIp(ctx.req, "unknown");
+      // 先看来源额度（不扣），再验人机：已经超了的来源不用再消耗一枚验证令牌。
+      if (passwordReset.requestLimited(ip)) {
+        throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: PASSWORD_RESET_RATE_LIMITED_MESSAGE });
+      }
+      if (await captchaEnabled()) {
+        let captchaValid = false;
+        if (input.capToken) captchaValid = await authCaptcha.verifyCapToken(ip, "login", input.capToken);
+        else if (input.captchaId && input.captchaAnswer) captchaValid = authCaptcha.verifyChallenge(input.captchaId, input.captchaAnswer, ip, "login");
+        if (!captchaValid) {
+          console.warn(`[Auth] Password reset captcha failed ip=${ip}`);
+          throw new Error(input.capToken || input.captchaId ? "CAPTCHA_INVALID" : "CAPTCHA_REQUIRED");
+        }
+      }
+      try {
+        return await passwordReset.request(input.identifier, { ip, userAgent: String(ctx.req.headers?.["user-agent"] || "") });
+      } catch (error) {
+        if (error instanceof PasswordResetError) throw new TRPCError({ code: error.code, message: error.message });
+        throw error;
+      }
+    }),
+
+  /** 拿重置链接里的令牌设新密码。成功后这个人所有登录和 API 令牌都失效，2FA / 通行密钥不动。 */
+  resetPasswordWithToken: publicProcedure
+    .input(z.object({
+      token: z.string().trim().min(1).max(128),
+      newPassword: z.string().max(PASSWORD_INPUT_MAX_LENGTH, "密码太长"),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      ctx.res.setHeader?.("Cache-Control", "no-store");
+      const ip = clientIp(ctx.req, "unknown");
+      try {
+        const result = await passwordReset.reset(input.token, input.newPassword, { ip, userAgent: String(ctx.req.headers?.["user-agent"] || "") });
+        // 这个浏览器里要是还留着谁的登录 cookie（可能就是这个账号的旧会话，已经被撤销了），一起清掉。
+        ctx.res.clearCookie(COOKIE_NAME, { ...getSessionCookieOptions(ctx.req), maxAge: -1 });
+        return result;
+      } catch (error) {
+        if (error instanceof PasswordResetError) throw new TRPCError({ code: error.code, message: error.message });
+        throw error;
+      }
     }),
 
   needsCaptcha: publicProcedure
@@ -528,6 +602,12 @@ export const authRouter = router({
     }),
 
   logout: publicProcedure.mutation(async ({ ctx }) => {
+    // 代入窗口里的「退出」只结束这一次代入：管理员自己的登录 cookie、被代入用户自己的登录都不动。
+    if (ctx.impersonation) {
+      await endImpersonation(ctx.impersonation.id, "exit");
+      console.info(`[Auth] Impersonation ended adminId=${ctx.impersonation.adminUserId} userId=${ctx.user?.id} ip=${getRequestIp(ctx)}`);
+      return { success: true } as const;
+    }
     const cookieOptions = getSessionCookieOptions(ctx.req);
     ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
     if (ctx.user && ctx.authSession?.sid) {
