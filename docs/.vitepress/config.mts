@@ -82,6 +82,8 @@ export default defineConfig({
           { text: "插件", link: "/guide/plugins" },
           { text: "iOS 客户端自签安装", link: "/ios-self-sign" },
           { text: "升级和备份", link: "/guide/upgrade-backup" },
+          { text: "目录、数据与日志", link: "/guide/paths-logs" },
+          { text: "管理员账号恢复", link: "/guide/account-recovery" },
           { text: "卸载 NEX", link: "/guide/uninstall" },
           { text: "常见问题排查", link: "/guide/troubleshooting" },
         ],
