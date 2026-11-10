@@ -74,6 +74,7 @@ export default defineConfig({
           { text: "客户端订阅", link: "/guide/subscriptions" },
           { text: "界面与精简布局", link: "/guide/layout" },
           { text: "邀请返利", link: "/guide/referrals" },
+          { text: "商城对接（Xboard / V2Board / SSPanel）", link: "/guide/shop-sync" },
           { text: "Telegram 和通知", link: "/guide/notifications" },
           { text: "工单", link: "/guide/tickets" },
           { text: "Google 登录", link: "/guide/google-login" },

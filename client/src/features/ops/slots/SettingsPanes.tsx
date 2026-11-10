@@ -8,8 +8,9 @@ import WebhookSettings from "../webhook/WebhookSettings";
 import ResourceAlertSettings from "../resource/ResourceAlertSettings";
 import OffsiteBackupSection from "../backup/OffsiteBackupSection";
 import DigestScheduleSection from "../digest/DigestScheduleSection";
+import ShopSyncSection from "../../shopSync/ShopSyncSection";
 
-/** 设置 › 进阶：流量用尽处理、维护模式、API 令牌与 MCP、接口限流、慢查询。 */
+/** 设置 › 进阶：流量用尽处理、维护模式、API 令牌与 MCP、商城对接、接口限流、慢查询。 */
 export function OpsAdvancedSettingsPane() {
   if (!useOpsFeatures()) return null;
   return (
@@ -17,6 +18,7 @@ export function OpsAdvancedSettingsPane() {
       <QuotaModeSection />
       <MaintenanceSection />
       <ApiTokensSection />
+      <ShopSyncSection />
       <ApiRateLimitSection />
       <SlowQuerySection />
     </>

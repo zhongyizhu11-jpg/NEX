@@ -118,6 +118,9 @@ export const MIGRATION_TABLES = [
   "host_unlock_checks",
   // 节点池（server/ops/nodePoolTables.ts）：线路里一层候选用的机器分组
   "node_pools",
+  // 商城对接（server/shopSync/tables.ts）：商城用户绑定和回调记录（幂等键），丢了会重复开通
+  "shop_sync_users",
+  "shop_sync_orders",
 ] as const;
 
 const LAST_AUTO_TRAFFIC_RESET_BACKFILL_MARKER = "last-auto-traffic-reset-backfill-v1";

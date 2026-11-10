@@ -32,6 +32,7 @@ import { topologyRouter } from "./routers/topology";
 import { discordAuthRouter } from "./routers/discordAuth";
 import { netProfileRouter } from "./routers/netProfile";
 import { agentRuntimeRouter } from "./routers/agentRuntime";
+import { shopSyncRouter } from "./routers/shopSync";
 
 export const appRouter = router({
   system: systemRouter,
@@ -67,6 +68,7 @@ export const appRouter = router({
   discordAuth: discordAuthRouter,
   netProfile: netProfileRouter,
   agentRuntime: agentRuntimeRouter,
+  shopSync: shopSyncRouter,
 });
 
 export type AppRouter = typeof appRouter;

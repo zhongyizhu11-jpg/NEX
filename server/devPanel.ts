@@ -2886,6 +2886,7 @@ export async function seedDevPanelData(options: { lineDemo?: boolean } = {}) {
   await seedUserState(usersSeed, hostIds, resources, rules, catalog);
   await seedForwardTests(usersSeed, rules, hostIds);
   await seedSettings();
+  await (await import("./shopSync/devSeed")).seedShopSyncDevData(catalog).catch((error) => console.warn(`[DevPanel] shop sync demo seed failed: ${error instanceof Error ? error.message : String(error)}`));
   await setSetting("devPanelSeededAt", new Date().toISOString());
 
   console.log(`[DevPanel] Seeded local development data as ${DEV_ADMIN_USERNAME}`);
