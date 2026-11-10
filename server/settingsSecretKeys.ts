@@ -31,6 +31,7 @@ export const SECRET_SETTING_LABELS: Readonly<Record<string, string>> = {
   "ops.backup.s3.secretKey": "异地备份 · S3 Secret Key",
   "ops.backup.passphrase": "异地备份 · 备份密码",
   "ops.webhook.url": "运维 Webhook 地址",
+  "ops.metrics.token": "指标导出 · 抓取口令",
 };
 
 export const SECRET_SETTING_KEYS: ReadonlySet<string> = new Set(Object.keys(SECRET_SETTING_LABELS));

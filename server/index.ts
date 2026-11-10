@@ -32,6 +32,7 @@ import { installJsonBodyParsers } from "./bodyParsers";
 import { panelAccessGuard } from "./ops/firewallPanelAccess";
 import { mcpRouter } from "./ops/mcpRoute";
 import { llmsTxtRouter } from "./llmsTxt";
+import { metricsRouter } from "./ops/metricsExport";
 import { googleAuthRouter } from "./googleAuthRoute";
 import { discordAuthRouter } from "./discordAuthRoute";
 import { databaseRequestErrorHandler, databaseUnavailableApiGuard, registerDatabaseHealthRoutes } from "./databaseHealthRoutes";
@@ -226,6 +227,8 @@ async function startServer() {
   app.use(mcpRouter);
   // GET /llms.txt：给 AI 助手看的说明书（怎么接 MCP、有哪些工具），不含面板数据。
   app.use(llmsTxtRouter);
+  // GET /metrics：Prometheus 指标导出（默认关，设置 › 进阶里开；关着回 404）：server/ops/metricsExport.ts。
+  app.use(metricsRouter);
   app.use(
     "/api/trpc",
     createExpressMiddleware({

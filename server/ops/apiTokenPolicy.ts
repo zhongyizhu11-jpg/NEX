@@ -37,6 +37,7 @@ export function normalizeApiTokenScope(value: unknown): ApiTokenScope {
   · 改接口限流：被限流的令牌不能自己把限流关掉；
   · 操作审计整个路由：审计记着所有人的 IP 和参数，令牌既不该能读走，也不该能把保留天数改短、借每天的清理删掉记录。
   · 面板性能剖析整个路由：堆快照就是面板进程内存的原样拷贝（会话、密码、密钥都在里面），下载路由也只认网页会话。
+  · 指标导出整个路由：能看、能换 /metrics 的抓取口令，是另一枚凭据。
   auth.updateProfile 改邮箱在过程里单独拦（见 apiTokenProfileUpdateError）：只改昵称这类不受影响。
 */
 const TOKEN_FORBIDDEN_PATHS = [
@@ -46,6 +47,7 @@ const TOKEN_FORBIDDEN_PATHS = [
   "ops.offsiteBackup.",
   "ops.audit.",
   "ops.profiling.",
+  "ops.metricsExport.",
   "setup.",
   "auth.changePassword",
   "auth.beginTwoFactorSetup",
