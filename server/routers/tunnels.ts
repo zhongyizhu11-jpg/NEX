@@ -1652,16 +1652,18 @@ export const tunnelsRouter = router({
           ]);
         }
         // 抗丢包：刚打开、或开着时换了机器，都要重新核一遍版本。
-        const nextLossTolerant = (data as any).lossTolerant !== undefined
-          ? dbBool((data as any).lossTolerant)
-          : dbBool((tunnel as any).lossTolerant);
+        const lossPatch = data as Record<string, unknown>;
+        const lossCurrent = tunnel as Record<string, unknown>;
+        const nextLossTolerant = lossPatch.lossTolerant !== undefined
+          ? dbBool(lossPatch.lossTolerant)
+          : dbBool(lossCurrent.lossTolerant);
         const lossTolerantActivationChanged = nextLossTolerant && nextModeForRuntime === "forwardx" && (
-          !dbBool((tunnel as any).lossTolerant)
+          !dbBool(lossCurrent.lossTolerant)
           || hopChanged
           || loadBalanceChanged
-          || (data as any).entryGroupId !== undefined
-          || (data as any).entryHostId !== undefined
-          || (data as any).exitHostId !== undefined
+          || lossPatch.entryGroupId !== undefined
+          || lossPatch.entryHostId !== undefined
+          || lossPatch.exitHostId !== undefined
         );
         if (lossTolerantActivationChanged) {
           const entryHostIds = await getTunnelEntryTestHostIds({
@@ -1669,8 +1671,8 @@ export const tunnelsRouter = router({
             ...data,
             entryHostId,
             exitHostId,
-            entryGroupId: (data as any).entryGroupId !== undefined ? (data as any).entryGroupId : (tunnel as any).entryGroupId,
-          });
+            entryGroupId: lossPatch.entryGroupId !== undefined ? lossPatch.entryGroupId : lossCurrent.entryGroupId,
+          } as Parameters<typeof getTunnelEntryTestHostIds>[0]);
           await requireLossTolerantVersionForHosts([
             ...entryHostIds,
             ...normalizedRequestedHopIds,

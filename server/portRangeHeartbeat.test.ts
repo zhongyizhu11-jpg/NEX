@@ -72,7 +72,7 @@ function heartbeatFor(token: string, agentVersion: string) {
 }
 
 test("新 Agent：段规则下发整段的内核规则，动作和 runningRules 都带段结尾", () => {
-  const { actions, runningRules } = heartbeatFor("tok-new", "2.2.253");
+  const { actions, runningRules } = heartbeatFor("tok-new", "2.2.254");
   const nft = actions.find((action) => Number(action.ruleId) === 11);
   const ipt = actions.find((action) => Number(action.ruleId) === 12);
   assert.ok(nft && ipt, JSON.stringify(actions).slice(0, 500));
@@ -92,11 +92,11 @@ test("新 Agent：段规则下发整段的内核规则，动作和 runningRules 
 });
 
 test("老 Agent：段规则不下发半套规则，而是一条一定失败、写明要升级的动作", () => {
-  const { actions } = heartbeatFor("tok-old", "2.2.252");
+  const { actions } = heartbeatFor("tok-old", "2.2.253");
   for (const ruleId of [11, 12]) {
     const action = actions.find((item) => Number(item.ruleId) === ruleId);
     assert.ok(action, JSON.stringify(actions).slice(0, 500));
-    assert.match(String(action.failureMessage), /端口段需要 Agent 2\.2\.253 或更新/);
+    assert.match(String(action.failureMessage), /端口段需要 Agent 2\.2\.254 或更新/);
     const text = (action.commands || []).join("\n");
     assert.match(text, /exit 1/);
     assert.doesNotMatch(text, /dnat|DNAT/);

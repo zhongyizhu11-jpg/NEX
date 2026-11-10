@@ -33,8 +33,8 @@ function runScenario(name: string, body: string) {
       await runtime.connectDatabase({ type: "sqlite", sqlite: { path: process.env.FORWARDX_TEST_DB } });
       await schema.ensureDatabaseSchema();
       await insert("users", ["id", "username", "password", "role", "canAddRules"], [1, "admin", "x", "admin", 1]);
-      await insert("hosts", hostCols, [1, "edge", "198.51.100.1", "slave", 1, 1, "2.2.253", 20000, 29999]);
-      await insert("hosts", hostCols, [2, "old-agent", "198.51.100.2", "slave", 1, 1, "2.2.252", null, null]);
+      await insert("hosts", hostCols, [1, "edge", "198.51.100.1", "slave", 1, 1, "2.2.254", 20000, 29999]);
+      await insert("hosts", hostCols, [2, "old-agent", "198.51.100.2", "slave", 1, 1, "2.2.253", null, null]);
       // 先加载 rules.ts 再加载 rules.crud（和 lifecycleAuditFixes.test.ts 同一个顺序：反过来会撞上路由模块的循环引用）。
       const { rulesRouter } = await import(moduleUrl("server/routers/rules.ts"));
       const crud = await import(moduleUrl("server/routers/rules.crud.ts"));
@@ -114,7 +114,7 @@ test("端口段规则：用户态转发、隧道、转发组、线路组被拦�
     await insert("forward_groups", ["id", "name", "groupType", "groupMode", "forwardType", "targetIp", "userId", "isEnabled"], [5, "主备", "host", "failover", "nftables", "0.0.0.0", 1, 1]);
     await insert("forward_group_members", ["id", "groupId", "memberType", "hostId", "priority", "isEnabled"], [51, 5, "host", 1, 0, 1]);
     await assert.rejects(() => caller.create({ ...base, hostId: undefined, forwardGroupId: 5, sourcePort: 24000, sourcePortEnd: 24010, targetPort: 24000 }), /转发组 \/ 转发链暂不支持端口段/);
-    await assert.rejects(() => crud.createDirectForwardRuleForActor(admin, { ...base, hostId: 2, name: "old", sourcePort: 24000, sourcePortEnd: 24010, targetPort: 24000 }), /需要 Agent 2\.2\.253/);
+    await assert.rejects(() => crud.createDirectForwardRuleForActor(admin, { ...base, hostId: 2, name: "old", sourcePort: 24000, sourcePortEnd: 24010, targetPort: 24000 }), /需要 Agent 2\.2\.254/);
     // iptables 也支持。
     await crud.createDirectForwardRuleForActor(admin, { ...base, forwardType: "iptables", name: "ipt", sourcePort: 24000, sourcePortEnd: 24010, targetPort: 34000 });
     // 已有的段规则改成 gost：说清楚为什么不行；先改回单端口就可以。
@@ -203,7 +203,7 @@ test("批量添加：逐行给结论（格式错、批内重叠、和已有规�
 
 test("端口转发资源（port 模式转发组）：模板能用端口段，每台成员主机上的子规则带着整段；转发链被拦", () => {
   runScenario("port-group", String.raw`
-    await insert("hosts", hostCols, [3, "edge-2", "198.51.100.3", "slave", 1, 1, "2.2.253", null, null]);
+    await insert("hosts", hostCols, [3, "edge-2", "198.51.100.3", "slave", 1, 1, "2.2.254", null, null]);
     await insert("forward_groups", ["id", "name", "groupType", "groupMode", "forwardType", "targetIp", "userId", "isEnabled"], [10, "端口转发", "host", "port", "nftables", "0.0.0.0", 1, 1]);
     await insert("forward_group_members", ["id", "groupId", "memberType", "hostId", "priority", "isEnabled"], [101, 10, "host", 1, 0, 1]);
     await insert("forward_group_members", ["id", "groupId", "memberType", "hostId", "priority", "isEnabled"], [102, 10, "host", 3, 1, 1]);

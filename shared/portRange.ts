@@ -21,7 +21,7 @@ export const PORT_RANGE_MAX_SIZE = 1000;
  * 只认单端口 —— 段规则会被一直当成「没装上」反复重下，iptables 的计数链也只数第一个端口。
  * 所以老 Agent 上不下发，保存时就拦住。
  */
-export const PORT_RANGE_MIN_AGENT_VERSION = "2.2.253";
+export const PORT_RANGE_MIN_AGENT_VERSION = "2.2.254";
 
 /** 支持端口段的转发方式。 */
 export const PORT_RANGE_FORWARD_TYPES = ["iptables", "nftables"] as const;
