@@ -28,6 +28,7 @@ import { ROUTE_PATH_QUALITY_RETENTION_HOURS } from "../repositories/routePathQua
 import { dbBool } from "../repositories/repositoryUtils";
 import { ruleTrafficQueryCache } from "../ruleLatencyQueryCache";
 import { idSetFingerprint } from "../queryCache";
+import { withAnomalyThrottles } from "../ops/trafficAnomalyThrottles";
 
 /** 看一条规则的线路状态：管理员随便看，别人只能看自己的。 */
 async function requireRuleVisible(user: { id: number; role: string }, ruleId: number) {
@@ -247,7 +248,7 @@ export const rulesRouter = router({
         : input.tunnelId === null
           ? rules.filter((rule: any) => !rule.tunnelId)
           : rules.filter((rule: any) => Number(rule.tunnelId || 0) === Number(input.tunnelId));
-      return withRuleResourceAccess(await withRuleEgressDisplay(await withRuleEntryBridges(await withTemplateRouteActive(filtered))), ctx.user);
+      return withRuleResourceAccess(await withAnomalyThrottles(await withRuleEgressDisplay(await withRuleEntryBridges(await withTemplateRouteActive(filtered)))), ctx.user);
     }),
   listPage: protectedProcedure
     .input(z.object({
@@ -264,7 +265,7 @@ export const rulesRouter = router({
     .query(async ({ input, ctx }) => {
       const repositoryInput = await getRuleListRepositoryInput(input, ctx.user);
       const page = await db.getForwardRulesPage({ ...repositoryInput, page: input.page, pageSize: input.pageSize });
-      return withRuleResourceAccess(await withRuleEgressDisplay(await withRuleEntryBridges(await withTemplateRouteActive(page))), ctx.user);
+      return withRuleResourceAccess(await withAnomalyThrottles(await withRuleEgressDisplay(await withRuleEntryBridges(await withTemplateRouteActive(page)))), ctx.user);
     }),
   mapItems: protectedProcedure
     .input(z.object({

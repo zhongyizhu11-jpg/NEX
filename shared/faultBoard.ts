@@ -17,7 +17,7 @@ export type FaultEventInput = {
   createdAt: Date | string | number;
 };
 
-export type FaultCategoryKey = "offline" | "resource" | "oom" | "crash" | "loss" | "rule" | "route" | "security" | "other";
+export type FaultCategoryKey = "offline" | "resource" | "oom" | "crash" | "loss" | "rule" | "route" | "traffic" | "security" | "other";
 
 export const FAULT_CATEGORIES: ReadonlyArray<{ key: FaultCategoryKey; label: string }> = [
   { key: "offline", label: "主机断线" },
@@ -27,6 +27,7 @@ export const FAULT_CATEGORIES: ReadonlyArray<{ key: FaultCategoryKey; label: str
   { key: "loss", label: "隧道丢包" },
   { key: "rule", label: "规则出错" },
   { key: "route", label: "线路切换 / 异常" },
+  { key: "traffic", label: "流量异常" },
   { key: "security", label: "安全巡检" },
   { key: "other", label: "其它" },
 ];
@@ -52,6 +53,11 @@ export function faultCategoryOf(kind: string, level: string): FaultCategoryKey |
     // 线路组里某条路径探测不通（Agent 报的 unhealthy）：没切线也是一次线路告警。
     case "route.unhealthy":
       return "route";
+    // 流量异常检测（server/ops/trafficAnomaly.ts）：规则 / 用户流量突增、单 IP 连接数暴涨。
+    case "rule.traffic_surge":
+    case "user.traffic_surge":
+    case "rule.ip_conn_surge":
+      return "traffic";
     case "security.finding":
       return "security";
     default:
@@ -70,6 +76,9 @@ const RECOVERY_KINDS: Record<string, string> = {
   "host.packet_loss_recovered": "durationSeconds",
   // 线路组路径恢复：durationSeconds 是这条路径异常了多久（面板重启后配不上的不带）。
   "route.recovered": "durationSeconds",
+  "rule.traffic_surge.recovered": "durationSeconds",
+  "user.traffic_surge.recovered": "durationSeconds",
+  "rule.ip_conn_surge.recovered": "durationSeconds",
 };
 
 export function isRecoveryEvent(event: Pick<FaultEventInput, "kind" | "data">) {

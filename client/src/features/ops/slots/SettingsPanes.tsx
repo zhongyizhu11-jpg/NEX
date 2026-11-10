@@ -6,6 +6,7 @@ import ApiRateLimitSection from "../api/ApiRateLimitSection";
 import SlowQuerySection from "../db/SlowQuerySection";
 import WebhookSettings from "../webhook/WebhookSettings";
 import ResourceAlertSettings from "../resource/ResourceAlertSettings";
+import TrafficAnomalySettings from "../traffic/TrafficAnomalySettings";
 import OffsiteBackupSection from "../backup/OffsiteBackupSection";
 import DigestScheduleSection from "../digest/DigestScheduleSection";
 
@@ -23,13 +24,14 @@ export function OpsAdvancedSettingsPane() {
   );
 }
 
-/** 设置 › Webhook：Webhook 推送和资源告警。 */
+/** 设置 › Webhook：Webhook 推送、资源告警和流量异常。 */
 export function OpsWebhookSettingsPane() {
   if (!useOpsFeatures()) return null;
   return (
     <>
       <WebhookSettings />
       <ResourceAlertSettings />
+      <TrafficAnomalySettings />
     </>
   );
 }
