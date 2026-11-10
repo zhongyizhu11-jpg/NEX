@@ -17,6 +17,7 @@ import {
 import { pageResult, pageWindowForTotal, type PageRequest } from "../../shared/pagination";
 import { billingCalendarParts, billingDaysInMonth, billingMonthStart } from "../../shared/billingTime";
 import { recordUserAccessPausedEvent } from "../ops/eventHooks";
+import { clearPersonalRuleGroupsForUser } from "../ruleGroupRelations";
 
 export type ForwardAccessPauseReason = "manual" | "traffic_billing_balance" | "traffic_limit" | "expired" | null;
 
@@ -844,6 +845,8 @@ export async function deleteUser(userId: number): Promise<{ hostIds: number[] }>
       }
     }
   }
+  // 他自己建的规则分组和里面的关系跟着账号一起删：分组只有本人看得见，人没了就是没人认领的数据。
+  await clearPersonalRuleGroupsForUser(userId);
   await db.delete(users).where(eq(users.id, userId));
   // 被他邀请来的人不再有邀请人：留着悬空的 id，哪天 id 被复用就错绑到别人头上。
   // 已经返过的返利记录保留，账要对得上。

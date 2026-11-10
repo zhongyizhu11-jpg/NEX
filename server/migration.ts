@@ -206,6 +206,9 @@ const DIRECT_SQLITE_OPTIONAL_SOURCE_TABLES = new Set([
   "rule_sni_names",
   "host_network_profiles",
   "host_unlock_checks",
+  // 个人分组是后加的：老面板的库里没有这两张表等于「还没建过分组」。
+  "rule_groups",
+  "rule_group_members",
 ]);
 
 function normalizePanelUrl(url: string) {
@@ -861,6 +864,9 @@ const IMPORT_TABLE_ORDER = [
   "forward_rules",
   // 规则占的 SNI 同时指向入站和规则，两边的 id 都得先映射好。
   "rule_sni_names",
+  // 个人分组排在用户和规则之后：组指向用户，成员同时指向组、规则和用户。
+  "rule_groups",
+  "rule_group_members",
   "forward_rule_tunnel_exits",
   "tunnel_hops",
   "agent_tokens",
@@ -1461,6 +1467,17 @@ async function prepareImportRow(table: string, source: Record<string, any>, maps
       row.tlsInboundId = mapRequiredId(maps, "host_tls_inbounds", source.tlsInboundId);
       row.ruleId = mapRequiredId(maps, "forward_rules", source.ruleId);
       return { row };
+
+    case "rule_groups":
+      // 增量合并时同一个账号里同名的组认作同一个（库里也有 userId + name 的唯一索引）。
+      row.userId = mapRequiredId(maps, "users", source.userId);
+      return { row, existingWhere: { userId: row.userId, name: row.name } };
+
+    case "rule_group_members":
+      row.userId = mapRequiredId(maps, "users", source.userId);
+      row.ruleId = mapRequiredId(maps, "forward_rules", source.ruleId);
+      row.groupId = mapRequiredId(maps, "rule_groups", source.groupId);
+      return { row, existingWhere: { userId: row.userId, ruleId: row.ruleId, groupId: row.groupId } };
 
     case "proxy_inbounds":
       row.userId = mapRequiredId(maps, "users", source.userId);

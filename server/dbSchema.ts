@@ -46,6 +46,9 @@ export const MIGRATION_TABLES = [
   "proxy_inbound_users",
   "host_tls_inbounds",
   "rule_sni_names",
+  // 转发规则的个人分组（server/ops/ruleGroupsTables.ts）：组在前，成员指向组、规则和用户
+  "rule_groups",
+  "rule_group_members",
   "proxy_sub_tokens",
   "proxy_node_shares",
   "proxy_sub_access_logs",
