@@ -21,7 +21,7 @@ import { tryReserveHostPortRange, type HostPortReservation } from "./portReserva
 
 type PortRangeActor = { id: number; role?: string | null };
 type PortRangeHost = { id?: unknown; userId?: unknown; agentVersion?: unknown; rateLimitMbps?: unknown; name?: unknown } | null | undefined;
-type PlanPortRange = { ranges: Array<{ start: number; end: number }> } | null | undefined;
+type PlanPortRange = Awaited<ReturnType<typeof db.getUserPlanPortRange>> | undefined;
 
 /** 老 Agent 上不下发端口段：它的就绪检查和计数修复只认单端口（见 PORT_RANGE_MIN_AGENT_VERSION）。 */
 export function portRangeAgentUnsupportedReason(host: PortRangeHost): string | null {
