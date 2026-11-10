@@ -5,11 +5,12 @@ import ApiTokensSection from "../api/ApiTokensSection";
 import ApiRateLimitSection from "../api/ApiRateLimitSection";
 import SlowQuerySection from "../db/SlowQuerySection";
 import WebhookSettings from "../webhook/WebhookSettings";
+import EventWebhooksSection from "../webhook/EventWebhooksSection";
 import ResourceAlertSettings from "../resource/ResourceAlertSettings";
 import OffsiteBackupSection from "../backup/OffsiteBackupSection";
 import DigestScheduleSection from "../digest/DigestScheduleSection";
 
-/** 设置 › 进阶：流量用尽处理、维护模式、API 令牌与 MCP、接口限流、慢查询。 */
+/** 设置 › 进阶：流量用尽处理、维护模式、API 令牌与 MCP、事件推送、接口限流、慢查询。 */
 export function OpsAdvancedSettingsPane() {
   if (!useOpsFeatures()) return null;
   return (
@@ -17,6 +18,7 @@ export function OpsAdvancedSettingsPane() {
       <QuotaModeSection />
       <MaintenanceSection />
       <ApiTokensSection />
+      <EventWebhooksSection />
       <ApiRateLimitSection />
       <SlowQuerySection />
     </>

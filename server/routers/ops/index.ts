@@ -5,6 +5,7 @@
 import { router } from "../../_core/trpc";
 import { eventsRouter } from "./events";
 import { webhooksRouter } from "./webhooks";
+import { eventWebhooksRouter } from "./eventWebhooks";
 import { digestRouter } from "./digest";
 import { firewallRouter } from "./firewall";
 import { onlineIpsRouter } from "./onlineIps";
@@ -33,6 +34,7 @@ export const opsRouter = router({
   audit: auditRouter,
   events: eventsRouter,
   webhooks: webhooksRouter,
+  eventWebhooks: eventWebhooksRouter,
   digest: digestRouter,
   firewall: firewallRouter,
   onlineIps: onlineIpsRouter,

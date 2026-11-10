@@ -204,6 +204,7 @@ export const OPERATION_AUDIT_MODULE_LABELS: Record<string, string> = {
   "ops.sessions": "登录设备",
   "ops.firewall": "防火墙",
   "ops.webhooks": "Webhook",
+  "ops.eventWebhooks": "事件推送",
   "ops.digest": "日报",
   "ops.hostSecurity": "安全巡检",
   "ops.agentRelay": "Agent 中转",
