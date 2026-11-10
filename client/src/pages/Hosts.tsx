@@ -33,6 +33,8 @@ import DateTimePickerInput, {
   parseDateInputValue as parseDateTimeLocal,
 } from "@/components/DatePickerInput";
 import AddSelfServiceHostDialog from "@/components/hosts/AddSelfServiceHostDialog";
+import { defaultHostCostForm, HostCostFields, hostCostFormFrom, hostCostPayload, type HostCostForm } from "@/components/hosts/HostCostFields";
+import { HostLedgerView } from "@/components/hosts/HostLedgerView";
 import HostTrafficBillingDialog from "@/components/hosts/HostTrafficBillingDialog";
 import HostCard, { HostActionButtons } from "@/components/hosts/HostCard";
 // 本页 902 行已有一个同名的统计小卡，这里取别名区分：这个是主机列表里的实体卡
@@ -137,6 +139,7 @@ import {
   XCircle,
   ActivitySquare,
   FolderKanban,
+  Wallet,
   Wifi,
 } from "lucide-react";
 import type { GlobeMethods } from "react-globe.gl";
@@ -616,6 +619,8 @@ type HostFormData = {
   rateLimitMbps: number;
   /** 线路带宽（Mbps，0 = 没填）：负载均衡按它分连接。 */
   lineBandwidthMbps: number;
+  /** 费用（主机账本），只有管理员能填。 */
+  cost: HostCostForm;
 };
 
 const defaultFormData: HostFormData = {
@@ -658,6 +663,7 @@ const defaultFormData: HostFormData = {
   flowOffload: false,
   rateLimitMbps: 0,
   lineBandwidthMbps: 0,
+  cost: defaultHostCostForm,
 };
 
 function clampMonthlyResetDay(value: number) {
@@ -967,14 +973,15 @@ function HostListStatusBadge({ host }: { host: any }) {
 }
 
 type HostViewMode = "card" | "compact-card" | "table" | "map" | "flat-map";
-type HostManageTab = "hosts" | "groups" | "services" | "tokens";
+type HostManageTab = "hosts" | "ledger" | "groups" | "services" | "tokens";
 type HostManageFilterStats = { filtered: number; total: number };
 type HostDialogTab = "basic" | "other";
 
-const HOST_MANAGE_TABS_ADMIN = ["hosts", "groups", "tokens", "services"] as const;
+const HOST_MANAGE_TABS_ADMIN = ["hosts", "ledger", "groups", "tokens", "services"] as const;
 const HOST_MANAGE_TABS_USER = ["hosts"] as const;
 const HOST_MANAGE_TAB_ITEMS_ADMIN = [
   { value: "hosts", label: "主机管理", icon: Server },
+  { value: "ledger", label: "账本", icon: Wallet },
   { value: "groups", label: "分组管理", icon: FolderKanban },
   { value: "tokens", label: "Token 管理", icon: Key },
   { value: "services", label: "服务管理", icon: Rows3 },
@@ -985,6 +992,7 @@ const HOST_MANAGE_TAB_ITEMS_USER = [
 
 const HOST_MANAGE_FILTER_CONFIG: Record<HostManageTab, { placeholder: string; unit: string }> = {
   hosts: { placeholder: "搜索主机 / IP / 系统", unit: "台" },
+  ledger: { placeholder: "搜索主机", unit: "台" },
   groups: { placeholder: "搜索分组 / 主机名称 / 状态", unit: "组" },
   tokens: { placeholder: "搜索 Token / 备注 / 状态 / 关联主机", unit: "个" },
   services: { placeholder: "搜索服务 / 目标地址 / 类型 / 主机范围", unit: "项" },
@@ -1648,6 +1656,7 @@ function HostsContent() {
   const [hostGroupCreateSignal, setHostGroupCreateSignal] = useState(0);
   const [manageSearchQueries, setManageSearchQueries] = useState<Record<HostManageTab, string>>({
     hosts: "",
+    ledger: "",
     groups: "",
     tokens: "",
     services: "",
@@ -1947,6 +1956,7 @@ function HostsContent() {
   const isInitialLoadingWithoutCache = isLoading && !hasDisplayHosts;
   const [manageFilterStats, setManageFilterStats] = useState<Record<HostManageTab, HostManageFilterStats>>({
     hosts: { filtered: 0, total: 0 },
+    ledger: { filtered: 0, total: 0 },
     groups: { filtered: 0, total: 0 },
     tokens: { filtered: 0, total: 0 },
     services: { filtered: 0, total: 0 },
@@ -1958,6 +1968,10 @@ function HostsContent() {
       return { ...current, [tab]: stats };
     });
   }, []);
+  const updateLedgerFilterStats = useCallback(
+    (stats: HostManageFilterStats) => updateManageFilterStats("ledger", stats),
+    [updateManageFilterStats],
+  );
   const updateGroupFilterStats = useCallback(
     (stats: HostManageFilterStats) => updateManageFilterStats("groups", stats),
     [updateManageFilterStats],
@@ -2285,6 +2299,7 @@ function HostsContent() {
       flowOffload: !!host.flowOffload,
       rateLimitMbps: Math.max(0, Math.floor(Number(host.rateLimitMbps) || 0)),
       lineBandwidthMbps: Math.max(0, Math.floor(Number(host.lineBandwidthMbps) || 0)),
+      cost: hostCostFormFrom(host),
     });
     setEditingId(host.id);
     setEditingHostSnapshot(host);
@@ -2369,8 +2384,15 @@ function HostsContent() {
     }
     const trafficAlertThresholdPercent = clampTrafficAlertThresholdPercent(form.trafficAlertThresholdPercent);
     const renewalReminderDays = clampRenewalReminderDays(form.renewalReminderDays);
+    const costResult = user?.role === "admin" ? hostCostPayload(form.cost) : null;
+    if (costResult && "error" in costResult) {
+      toast.error(costResult.error);
+      return;
+    }
+    const costPayload = costResult ?? {};
     const trafficConfigPayload = user?.role === "admin"
       ? {
+          ...costPayload,
           purchasedAt: purchasedAt ? purchasedAt.toISOString() : null,
           stoppedAt: stoppedAt ? stoppedAt.toISOString() : null,
           trafficLimit: trafficLimitBytes,
@@ -3155,6 +3177,11 @@ function HostsContent() {
         </Card>
       )}
         </TabsContent>{user?.role === "admin" && (
+          <TabsContent value="ledger" className="space-y-4">
+            {activeManageTab === "ledger" ? <HostLedgerView searchQuery={manageSearchQueries.ledger} onFilterStatsChange={updateLedgerFilterStats} /> : null}
+          </TabsContent>
+        )}
+        {user?.role === "admin" && (
           <TabsContent value="tokens" className="space-y-4">
             <AgentTokenManager
               showCreateButton={false}
@@ -3800,6 +3827,13 @@ function HostsContent() {
                           </Select>
                         </FormField>
                       </div>
+                      {/* 费用（主机账本用）：默认收起，收起时一行写着填了什么。 */}
+                      <HostCostFields
+                        className="mx-1 mt-2.5"
+                        value={form.cost}
+                        cycleMonths={normalizeHostBillingCycleMonths(form.billingCycleMonths)}
+                        onChange={(cost) => setForm({ ...form, cost })}
+                      />
                       <div data-fx-setting-box="" className="mt-2.5 flex min-h-9 flex-col gap-2 rounded-md bg-muted/35 px-3 py-2 sm:flex-row sm:items-center sm:justify-between" data-host-traffic-failover-setting="">
                         <div className="min-w-0 space-y-0.5">
                           <Label className="text-sm font-medium">流量故障转移</Label>

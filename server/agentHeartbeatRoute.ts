@@ -141,6 +141,7 @@ import {
 import { exitGroupCapacities, exitGroupWeights, normalizeExitGroupStrategy } from "@shared/exitStrategy";
 import { hostBandwidthHintMbps } from "@shared/linkWeights";
 import { ensureLandingNodeHosts, recordHostLoadSample } from "./hostLoad";
+import { recordHostRateSample } from "./hostRateBuckets";
 import { forwardXExitStrategy } from "./tunnelExitStrategy";
 import {
   getMimicLifecycleRevisionSignature,
@@ -749,6 +750,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       tcpConnections: tcpConnections ?? null,
       udpConnections: udpConnections ?? null,
     }, { force: isHostMetricsWatching(host.id) || isHostLiveFocused(host.id) });
+    // 按 95 值计费的主机记 5 分钟桶（主机账本用）；别的主机这里直接返回（server/hostRateBuckets.ts）。
+    void recordHostRateSample(host, { atMs: Date.now(), networkIn: networkIn ?? null, networkOut: networkOut ?? null }).catch(() => undefined);
     // 资源告警：CPU / 内存 / 磁盘持续超过阈值时通知管理员（不阻塞心跳）
     observeHostResourceSample(host, { cpu: cpuUsage ?? null, memory: memoryUsage ?? null, disk: diskUsage ?? null });
     // 这台此刻的负载（CPU、带宽占用取大）：线路组给沿途经过它的路径带 loadPct（server/hostLoad.ts）。

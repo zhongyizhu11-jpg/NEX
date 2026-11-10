@@ -327,6 +327,11 @@ export const hosts = table("hosts", {
   expiryHandling: varchar("expiryHandling", { length: 24 }).notNull().default("none"),
   trafficLimit: bigint("trafficLimit", { mode: "number" }).notNull().default(0),
   trafficMeasureMode: varchar("trafficMeasureMode", { length: 16 }).notNull().default("both"),
+  // 主机账本（shared/hostLedger.ts）：每期费用（分，0 = 没填）、币种、固定 / 95 计费、95 单价（分 / Mbps / 月）。
+  costCents: bigint("costCents", { mode: "number" }).notNull().default(0),
+  costCurrency: varchar("costCurrency", { length: 8 }).notNull().default("CNY"),
+  bandwidthBilling: varchar("bandwidthBilling", { length: 16 }).notNull().default("fixed"),
+  p95PriceCents: bigint("p95PriceCents", { mode: "number" }).notNull().default(0),
   // 流量故障转移（shared/hostTrafficPolicy.ts）：用到套餐流量的这个比例后暂停参与转发组 / 入口组 /
   // 出口组 / 多出口隧道。trafficFailoverExcluded 是按 host_traffic_counters 算出来的派生值，
   // 不改任何成员配置。
@@ -1350,6 +1355,16 @@ export const hostTrafficCounters = table("host_traffic_counters", {
 });
 export type HostTrafficCounter = typeof hostTrafficCounters.$inferSelect;
 export type InsertHostTrafficCounter = typeof hostTrafficCounters.$inferInsert;
+
+/* 按 95 计费的主机每 5 分钟一行（server/hostRateBuckets.ts）。只走原生 SQL，这里留一份给类型和对照。 */
+export const hostRateBuckets = table("host_rate_buckets", {
+  id: serial("id"),
+  hostId: int("hostId").notNull(),
+  bucketStart: int("bucketStart").notNull(),
+  bytesIn: bigint("bytesIn", { mode: "number" }).notNull().default(0),
+  bytesOut: bigint("bytesOut", { mode: "number" }).notNull().default(0),
+  coveredSeconds: int("coveredSeconds").notNull().default(0),
+});
 
 export const userTrafficCounters = table("user_traffic_counters", {
   id: serial("id"),
