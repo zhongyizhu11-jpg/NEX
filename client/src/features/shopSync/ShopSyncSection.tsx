@@ -196,7 +196,7 @@ export default function ShopSyncSection(_props: Record<string, never>) {
                 <span className="text-meta text-muted-foreground">没映射的商城套餐不开通，只记一条</span>
               </div>
               {form.plans.length === 0 ? (
-                <div className="rounded-md border border-dashed border-[var(--fx-stroke-weak)] px-3 py-3 text-meta text-muted-foreground">还没有映射：商城的订单都会被忽略</div>
+                <p className="px-0.5 text-meta text-muted-foreground">还没有映射：商城的订单都会被忽略</p>
               ) : (
                 <div className="space-y-2">
                   <div className="grid grid-cols-[6.5rem_minmax(0,1fr)_2rem] gap-2 px-0.5 text-meta text-muted-foreground">

@@ -348,13 +348,12 @@ type RuleFormData = {
   tunnelId: number | null;
   forwardGroupId: number | null;
   sourcePort: number;
-  /** 端口段（shared/portRange.ts）：入口段最后一个端口，0 = 单端口。 */
-  sourcePortEnd: number;
   targetIp: string;
   targetPort: number;
-  /** 用户写了目标段时它的最后一个端口，0 = 跟着入口段算（只用来核对长度，不落库）。 */
-  targetPortEnd: number;
-  /** 两个端口框里的原文（能写 20000-20100）；null = 按数字显示。 */
+  /**
+   * 两个端口框里的原文（能写端口段 20000-20100，shared/portRange.ts）；null = 按数字显示、单端口。
+   * 段尾不另存一个字段：从原文解析（portSpanEndFromText），原文就是唯一的出处，两份不会对不上。
+   */
   sourcePortText: string | null;
   targetPortText: string | null;
   /**
@@ -399,10 +398,8 @@ const defaultForm: RuleFormData = {
   tunnelId: null,
   forwardGroupId: null,
   sourcePort: 0,
-  sourcePortEnd: 0,
   targetIp: "",
   targetPort: 0,
-  targetPortEnd: 0,
   sourcePortText: null,
   targetPortText: null,
   targetNodeId: null,
@@ -1569,6 +1566,12 @@ type EntryAddress = HostEntryAddress;
 const pushUniqueEntryAddress = pushUniqueHostEntryAddress;
 const formatAddressWithPort = formatHostAddressWithPort;
 /** 规则卡上的入口地址：端口段写成 `地址:20000-20100`（shared/portRange.ts）。 */
+/** 端口框原文里的段尾（20000-20100 → 20100）；单端口、没写完或写错都是 0。 */
+function portSpanEndFromText(text: string | null): number {
+  const spec = text ? parsePortSpec(text) : null;
+  return spec && !("error" in spec) && spec.end > spec.start ? spec.end : 0;
+}
+
 const formatRuleEntryAddress = (host: string, rule: { sourcePort?: unknown; sourcePortEnd?: unknown }) => (
   isPortRangeRule(rule)
     ? `${formatAddressWithPort(host, Number(rule.sourcePort))}-${ruleSourcePortEnd(rule)}`
@@ -3486,11 +3489,10 @@ function RulesContent() {
       tunnelId: rule.tunnelId || null,
       forwardGroupId: rule.forwardGroupId || null,
       sourcePort: rule.sourcePort,
-      sourcePortEnd: isPortRangeRule(rule) ? ruleSourcePortEnd(rule) : 0,
       targetIp: rule.targetIp,
       targetPort: rule.targetPort,
-      targetPortEnd: 0,
-      sourcePortText: null,
+      // 段规则把整段写回端口框，段尾从原文解析。目标框写起点就够了（段长跟着入口）。
+      sourcePortText: isPortRangeRule(rule) ? formatPortSpan(rule.sourcePort, ruleSourcePortEnd(rule)) : null,
       targetPortText: null,
       targetNodeId: Number(rule.proxyNodeId || 0) > 0 ? Number(rule.proxyNodeId) : null,
       telegramErrorNotifyEnabled: !!rule.telegramErrorNotifyEnabled,
@@ -3900,7 +3902,9 @@ function RulesContent() {
     端口段（shared/portRange.ts）：入口写成 20000-20100 时，这条规则能不能用段、为什么不能，
     和服务端保存时同一句话。用户态转发不让选，而不是替他开几百个监听。
   */
-  const formIsPortRange = form.sourcePort > 0 && form.sourcePortEnd > form.sourcePort;
+  const formSourcePortEnd = portSpanEndFromText(form.sourcePortText);
+  const formTargetPortEnd = portSpanEndFromText(form.targetPortText);
+  const formIsPortRange = form.sourcePort > 0 && formSourcePortEnd > form.sourcePort;
   // 批量添加建的是直连主机的规则：管理员能挑所有主机，别人只有按量计费的主机。
   const batchAddHosts = useMemo(() => (user?.role === "admin" ? (hosts || []) : availableTrafficBillingHosts), [user?.role, hosts, availableTrafficBillingHosts]);
   const portRangeBlocker = useMemo(() => (formIsPortRange
@@ -4271,7 +4275,7 @@ function RulesContent() {
           : { hostId: Number(hostId), tunnelId: routeMode === "tunnel" ? tunnelId : null }),
         sourcePort,
         // 端口段整段查（隧道 / 转发组上服务端直接回「不支持」的原因）。
-        ...(form.sourcePortEnd > sourcePort ? { sourcePortEnd: form.sourcePortEnd } : {}),
+        ...(formSourcePortEnd > sourcePort ? { sourcePortEnd: formSourcePortEnd } : {}),
         excludeRuleId: editingId || undefined,
         protocol: form.protocol,
       });
@@ -4282,13 +4286,13 @@ function RulesContent() {
       if (latestPortCheckRef.current !== checkId) return;
       setPortStatus("idle");
     }
-  }, [form.forwardGroupId, form.hostId, form.protocol, form.routeMode, form.sourcePort, form.sourcePortEnd, form.tunnelId, form.entryMode, editingId, createOwnerUserId, utils, selectedEntryPortPolicy, isForwardGroupRouteMode]);
+  }, [form.forwardGroupId, form.hostId, form.protocol, form.routeMode, form.sourcePort, formSourcePortEnd, form.tunnelId, form.entryMode, editingId, createOwnerUserId, utils, selectedEntryPortPolicy, isForwardGroupRouteMode]);
 
   // A response started for the previous route must not mark the new route occupied.
   useEffect(() => {
     latestPortCheckRef.current += 1;
     setPortStatus("idle");
-  }, [editingId, form.forwardGroupId, form.hostId, form.protocol, form.routeMode, form.sourcePort, form.sourcePortEnd, form.tunnelId, isForwardGroupRouteMode]);
+  }, [editingId, form.forwardGroupId, form.hostId, form.protocol, form.routeMode, form.sourcePort, formSourcePortEnd, form.tunnelId, isForwardGroupRouteMode]);
 
   // 源端口变化时自动检测
   useEffect(() => {
@@ -4299,7 +4303,7 @@ function RulesContent() {
     } else {
       setPortStatus("idle");
     }
-  }, [form.sourcePort, form.sourcePortEnd, form.forwardGroupId, form.hostId, form.protocol, form.routeMode, form.tunnelId, checkPort, isForwardGroupRouteMode]);
+  }, [form.sourcePort, formSourcePortEnd, form.forwardGroupId, form.hostId, form.protocol, form.routeMode, form.tunnelId, checkPort, isForwardGroupRouteMode]);
 
   useEffect(() => {
     if (form.routeMode !== "local") return;
@@ -4360,7 +4364,7 @@ function RulesContent() {
         ? { forwardGroupId: Number(form.forwardGroupId), excludeRuleId: editingId || undefined, protocol: form.protocol }
         : { hostId: Number(form.hostId), tunnelId: form.routeMode === "tunnel" ? form.tunnelId : null, excludeRuleId: editingId || undefined, protocol: form.protocol };
       const result = await utils.rules.randomPort.fetch({ ...randomPortInput, userId: editingId ? undefined : createOwnerUserId });
-      setForm({ ...form, sourcePort: result.port, sourcePortEnd: 0, sourcePortText: null });
+      setForm({ ...form, sourcePort: result.port, sourcePortText: null });
       setPortStatus("available");
       toast.success(`已分配随机端口: ${result.port}`);
     } catch (err: any) {
@@ -4864,11 +4868,11 @@ function RulesContent() {
         tunnelId: form.routeMode === "tunnel" ? form.tunnelId : null,
         forwardGroupId: isForwardGroupRouteMode ? form.forwardGroupId : null,
         sourcePort: form.sourcePort,
-        sourcePortEnd: formIsPortRange ? form.sourcePortEnd : null,
+        sourcePortEnd: formIsPortRange ? formSourcePortEnd : null,
         isEnabled: portStatus === "available" ? true : undefined,
         targetIp: form.targetIp,
         targetPort: form.targetPort,
-        targetPortEnd: form.targetPortEnd > form.targetPort ? form.targetPortEnd : null,
+        targetPortEnd: formTargetPortEnd > form.targetPort ? formTargetPortEnd : null,
         ...(form.targetNodeId ? { proxyNodeId: form.targetNodeId } : {}),
         telegramErrorNotifyEnabled: form.telegramErrorNotifyEnabled,
         entryDomainEnabled: form.entryDomainEnabled,
@@ -4889,10 +4893,10 @@ function RulesContent() {
         tunnelId: form.routeMode === "tunnel" ? form.tunnelId : null,
         forwardGroupId: isForwardGroupRouteMode ? form.forwardGroupId : null,
         sourcePort: form.sourcePort,
-        ...(formIsPortRange ? { sourcePortEnd: form.sourcePortEnd } : {}),
+        ...(formIsPortRange ? { sourcePortEnd: formSourcePortEnd } : {}),
         targetIp: form.targetIp,
         targetPort: form.targetPort,
-        ...(form.targetPortEnd > form.targetPort ? { targetPortEnd: form.targetPortEnd } : {}),
+        ...(formTargetPortEnd > form.targetPort ? { targetPortEnd: formTargetPortEnd } : {}),
         ...(form.targetNodeId ? { proxyNodeId: form.targetNodeId } : {}),
         telegramErrorNotifyEnabled: form.telegramErrorNotifyEnabled,
         entryDomainEnabled: form.entryDomainEnabled,
@@ -8864,7 +8868,7 @@ function RulesContent() {
               placeholder={hideRuleFormHints && sourcePortRangeText !== "不限制"
                 ? `${sourcePortRangeText}${sourcePortRequired ? "" : "，留空随机"}`
                 : sourcePortRequired ? "例如 8080" : "留空随机分配"}
-              value={form.sourcePortText ?? (form.sourcePort ? formatPortSpan(form.sourcePort, form.sourcePortEnd) : "")}
+              value={form.sourcePortText ?? (form.sourcePort ? String(form.sourcePort) : "")}
               onChange={(e) => {
               latestPortCheckRef.current += 1;
               setPortRangeError(null);
@@ -8877,7 +8881,6 @@ function RulesContent() {
                 ...form,
                 sourcePortText: text,
                 sourcePort: parsed ? parsed.start : parseInt(text) || 0,
-                sourcePortEnd: parsed && parsed.end > parsed.start ? parsed.end : 0,
               });
               }}
               className={`pr-24 ${
@@ -8912,7 +8915,7 @@ function RulesContent() {
               </div>
               {formIsPortRange ? (
               <p className={cn("flex flex-wrap items-center gap-x-2 text-meta", portRangeBlocker || (portStatus === "used" && portRangeError) ? "text-destructive" : "text-muted-foreground")}>
-              <span>{portRangeBlocker || (portStatus === "used" && portRangeError) || `端口段 · ${form.sourcePortEnd - form.sourcePort + 1} 个端口 → ${form.targetPort ? (form.targetPort === form.sourcePort ? "目标同端口" : `目标 ${formatRuleTargetPort(form)}`) : "目标写起点或同样长的段"}`}</span>
+              <span>{portRangeBlocker || (portStatus === "used" && portRangeError) || `端口段 · ${formSourcePortEnd - form.sourcePort + 1} 个端口 → ${form.targetPort ? (form.targetPort === form.sourcePort ? "目标同端口" : `目标 ${formatRuleTargetPort({ ...form, sourcePortEnd: formSourcePortEnd })}`) : "目标写起点或同样长的段"}`}</span>
               {portRangeBlocker && !forwardTypeSupportsPortRange(effectiveRouteForwardType) && form.routeMode === "local" && !isForwardGroupRouteMode && !routeModeLocked && usableForwardTypes.includes("nftables") ? (
               <button type="button" className="font-medium text-primary underline-offset-2 hover:underline" onClick={() => setForm((prev) => ({ ...prev, forwardType: "nftables", tunnelId: null }))}>改用 nftables</button>
               ) : null}
@@ -8932,7 +8935,7 @@ function RulesContent() {
               value=""
               onValueChange={(value) => {
                 const node = targetNodeOptions.find((item) => String(item.id) === value);
-                if (node) setForm((prev) => ({ ...prev, targetIp: node.address, targetPort: node.port, targetPortEnd: 0, targetPortText: null, targetNodeId: node.id }));
+                if (node) setForm((prev) => ({ ...prev, targetIp: node.address, targetPort: node.port, targetPortText: null, targetNodeId: node.id }));
               }}
               >
               <SelectTrigger className="h-7 w-auto gap-1 border-dashed px-2 text-meta" aria-label="选我的节点作为目标">
@@ -8986,7 +8989,6 @@ function RulesContent() {
                   ...form,
                   targetPortText: text,
                   targetPort: parsed ? parsed.start : parseInt(text) || 0,
-                  targetPortEnd: parsed && parsed.end > parsed.start ? parsed.end : 0,
                   targetNodeId: null,
                 });
               }}

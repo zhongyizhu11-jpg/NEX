@@ -198,6 +198,8 @@ def verify_nex(secret: str, headers, raw_body: bytes) -> bool:
 | --- | --- | --- | --- |
 | `rule.error` | warn | 规则出错 / 停止运行（原因在 `message` 里） | — |
 | `rule.recovered` | info | 出错的规则恢复运行 | — |
+| `rule.traffic_surge` / `.recovered` | warn / info | 规则流量持续高出平时（流量异常检测）/ 回落 | `valueMbps`、`baselineMbps`、`thresholdMbps`；触发时有 `throttle`（自动限速的 `mbps`、`until`），回落时有 `peakMbps`、`durationSeconds` |
+| `rule.ip_conn_surge` / `.recovered` | warn / info | 单个来源 IP 连接数持续超阈值 / 回落 | `ip`、`conns`、`threshold`；回落时有 `peak`、`durationSeconds` |
 
 同一条规则同一个错误 5 分钟内只记一次。
 
@@ -209,6 +211,7 @@ def verify_nex(secret: str, headers, raw_body: bytes) -> bool:
 | `user.expired` | warn | 已到期，转发已暂停 | — |
 | `user.expiring` | info | 三天内到期（每人每天最多一条） | `expiresAt`（Unix 秒） |
 | `user.ip_limit_exceeded` | warn | 同时在线 IP 超过上限 | `count`、`limit`、`ips` |
+| `user.traffic_surge` / `.recovered` | warn / info | 用户总流量持续高出平时 / 回落 | 同 `rule.traffic_surge` |
 
 **登录与账号（account）**
 
@@ -254,6 +257,7 @@ def verify_nex(secret: str, headers, raw_body: bytes) -> bool:
 | `ops.import_existing` | info | 从主机导入了现有转发 | `ruleIds` |
 | `ops.import_switched` / `ops.import_stop_failed` | info / warn | 导入后停掉原来的服务 / 没停掉 | — |
 | `ops.country_data` | warn | 地区 IP 段下载失败 | `country` |
+| `ops.shop_sync` | info / warn | 商城回调开通 / 换套餐 / 停用了套餐，或没能处理 | `orderId`、`externalUserId`、`action`、`status`、`kind`、`planId`、`subscriptionId` |
 
 **测试**
 
