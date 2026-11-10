@@ -4918,6 +4918,7 @@ function SystemInfoSection() {
   const [panelSslCountdown, setPanelSslCountdown] = useState(5);
   const [registrationEnabled, setRegistrationEnabled] = useState(true);
   const [authCaptchaEnabled, setAuthCaptchaEnabled] = useState(true);
+  const [passwordResetEnabled, setPasswordResetEnabled] = useState(true);
   const [twoFactorEnabled, setTwoFactorEnabled] = useState(false);
   const [lookingGlassUserEnabled, setLookingGlassUserEnabled] = useState(true);
   const [forwardProtocols, setForwardProtocols] = useState<ForwardProtocolSettings>(() => normalizeForwardProtocolSettings());
@@ -4995,6 +4996,7 @@ function SystemInfoSection() {
       setPanelSslKeyPemSaved(!!settings.panelSsl?.keyPemConfigured);
       setRegistrationEnabled(settings.registrationEnabled ?? true);
       setAuthCaptchaEnabled(settings.authCaptchaEnabled ?? true);
+      setPasswordResetEnabled(settings.passwordResetEnabled ?? true);
       setTwoFactorEnabled(!!settings.twoFactorEnabled);
       setLookingGlassUserEnabled(settings.lookingGlassUserEnabled ?? true);
       setAllowMultiDeviceLogin(!!settings.allowMultiDeviceLogin);
@@ -5297,10 +5299,11 @@ function SystemInfoSection() {
   };
 
   const handleSaveRegistration = () => {
-    return saveSystemSettings("registration", { registrationEnabled, authCaptchaEnabled }, {
+    return saveSystemSettings("registration", { registrationEnabled, authCaptchaEnabled, passwordResetEnabled }, {
       onSuccess: () => {
         void utils.auth.emailConfig.invalidate();
         void utils.auth.needsCaptcha.invalidate();
+        void utils.auth.passwordResetOptions.invalidate();
       },
     });
   };
@@ -5526,7 +5529,7 @@ function SystemInfoSection() {
     { id: "entryBridge", label: "换线过渡", dirty: !!settings && ruleSwitchBridgeHours !== String(normalizeRuleSwitchBridgeHours((settings as any).ruleSwitchBridgeHours)), save: handleSaveEntryBridge },
     { id: "portAccessLimits", label: "接入限制", dirty: !!settings && portAccessLimitsEnabled !== !!(settings as any).portAccessLimitsEnabled, save: handleSavePortAccessLimits },
     { id: "linkWizard", label: "新建向导", dirty: !!settings && linkWizardEnabled !== !!(settings as any).linkWizardEnabled, save: handleSaveLinkWizard },
-    { id: "registration", label: "注册", dirty: !!settings && (registrationEnabled !== (settings.registrationEnabled ?? true) || authCaptchaEnabled !== (settings.authCaptchaEnabled ?? true)), save: handleSaveRegistration },
+    { id: "registration", label: "注册", dirty: !!settings && (registrationEnabled !== (settings.registrationEnabled ?? true) || authCaptchaEnabled !== (settings.authCaptchaEnabled ?? true) || passwordResetEnabled !== (settings.passwordResetEnabled ?? true)), save: handleSaveRegistration },
     { id: "twoFactor", label: "双重验证", dirty: !!settings && twoFactorEnabled !== !!settings.twoFactorEnabled, save: handleSaveTwoFactor },
     { id: "ddns", label: "DDNS", dirty: JSON.stringify(ddnsDraft) !== JSON.stringify(ddnsSaved), save: handleSaveDdns },
     {
@@ -6222,6 +6225,12 @@ function SystemInfoSection() {
                 label="登录 / 注册人机验证"
                 description="默认开启。只走 HTTP、浏览器跑不了验证组件时可以关掉；关掉后密码校验、登录失败限流和双重验证照旧。"
                 control={<Checkbox aria-label="登录 / 注册人机验证" checked={authCaptchaEnabled} onCheckedChange={setAuthCaptchaEnabled} />}
+              />
+              <SettingRow
+                asLabel
+                label="登录页「忘记密码」"
+                description="默认开启。用户填用户名或邮箱，一次性重置链接发到他已验证的邮箱、已绑定的 Telegram / Discord（30 分钟有效）。需要先配好面板公开访问地址和至少一个发送渠道；账号没有找回方式时，页面提示联系管理员。"
+                control={<Checkbox aria-label="登录页忘记密码" checked={passwordResetEnabled} onCheckedChange={setPasswordResetEnabled} />}
               />
             </SettingList>
             <div className="flex justify-end">

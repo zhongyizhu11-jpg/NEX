@@ -16,6 +16,9 @@ export type AuditListItem = {
   actorRole: string | null;
   apiTokenId: number | null;
   apiTokenName: string | null;
+  /** 管理员代入用户后台时做的操作：被代入的用户（操作人那一栏是管理员）。 */
+  onBehalfOfUserId?: number | null;
+  onBehalfOfName?: string | null;
   channel: OperationAuditChannel;
   path: string;
   module: string;
@@ -37,8 +40,11 @@ export function auditResultLabel(result: OperationAuditResult) {
   return OPERATION_AUDIT_RESULT_LABELS[result] || result;
 }
 
-export function auditChannelLabel(item: Pick<AuditListItem, "channel" | "apiTokenName">) {
+export function auditChannelLabel(item: Pick<AuditListItem, "channel" | "apiTokenName" | "onBehalfOfUserId" | "onBehalfOfName">) {
   const base = OPERATION_AUDIT_CHANNEL_LABELS[item.channel] || item.channel;
+  // 代入：写明是以谁的身份做的，不然只看到管理员改了一条「不是他的」规则。
+  const onBehalfOf = item.onBehalfOfName || (item.onBehalfOfUserId ? `#${item.onBehalfOfUserId}` : "");
+  if (onBehalfOf) return `${base}「${onBehalfOf}」`;
   return item.apiTokenName ? `${base}「${item.apiTokenName}」` : base;
 }
 

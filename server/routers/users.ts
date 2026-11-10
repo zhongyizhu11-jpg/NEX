@@ -18,6 +18,10 @@ import { withKeyedTaskLock } from "../keyedTaskLock";
 import { revokeAllUserApiTokens } from "../ops/apiTokens";
 import { reconcileUserRuleResourceAuthorization } from "../ruleResourceAuthorization";
 import { pushAgentRefresh } from "../agentEvents";
+import { TRPCError } from "@trpc/server";
+import { clientIp } from "../clientIp";
+import { ImpersonationStartError, startImpersonation } from "../ops/impersonation";
+import { recordPanelEvent } from "../ops/panelEvents";
 
 const DISPLAY_NAME_MAX_LENGTH = 24;
 // int 列（MySQL INT / PostgreSQL integer）能存的最大值；计数类上限写库前在入口挡住。
@@ -28,6 +32,51 @@ function actorLabel(ctx: { user?: { id: number; username?: string } | null }) {
 }
 
 export const usersRouter = router({
+    /**
+     * 管理员进入某个普通用户的后台（上游 v2.3.299）。返回一枚只给新标签页用的代入令牌，
+     * 不写 cookie —— 管理员自己的登录不变。能进谁、令牌怎么验、代入后能做什么见 server/ops/impersonation.ts。
+     *
+     * 只能从网页上的登录会话发起：API 令牌进不来（TOKEN_FORBIDDEN_PATHS），机器人 / MCP 没有会话也进不来；
+     * 代入窗口里也不能再代入别人（adminProcedure 拒掉代入会话）。
+     * 每次发起都进操作审计（中间件自动记：管理员、目标用户 id、IP）和事件时间线。
+     */
+    enterUserBackend: adminProcedure
+      .input(z.object({ userId: z.number().int().positive() }))
+      .mutation(async ({ input, ctx }) => {
+        if (ctx.apiToken || !ctx.authSession?.sid) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "只有在网页上登录的管理员可以进入用户后台" });
+        }
+        const ip = clientIp(ctx.req, "unknown");
+        let started: Awaited<ReturnType<typeof startImpersonation>>;
+        try {
+          started = await startImpersonation({
+            admin: ctx.user,
+            parent: { sid: ctx.authSession.sid, kind: ctx.authSession.kind },
+            targetUserId: input.userId,
+            ip,
+            userAgent: String(ctx.req.headers?.["user-agent"] || ""),
+          });
+        } catch (error) {
+          if (error instanceof ImpersonationStartError) {
+            console.warn(`[Users] Enter user backend rejected userId=${input.userId} ${actorLabel(ctx)} ip=${ip}`);
+            throw new TRPCError({ code: "FORBIDDEN", message: error.message });
+          }
+          throw error;
+        }
+        const adminName = ctx.user.name || ctx.user.username;
+        const targetName = started.target.username || started.target.name || `#${started.target.id}`;
+        void recordPanelEvent({
+          kind: "account.impersonation_started",
+          level: "info",
+          userId: started.target.id,
+          message: `管理员 ${adminName} 进入了用户 ${targetName} 的后台（${ip}）`,
+          data: { adminUserId: ctx.user.id, targetUserId: started.target.id, impersonationId: started.id, ip },
+        });
+        console.info(`[Users] Enter user backend userId=${started.target.id} impersonationId=${started.id} ${actorLabel(ctx)} ip=${ip}`);
+        // 令牌只在这一次响应里出现，不许任何一层缓存。
+        ctx.res.setHeader?.("Cache-Control", "no-store");
+        return { token: started.token, expiresAt: started.expiresAt, username: targetName };
+      }),
     list: adminProcedure.query(async () => {
       return db.getAllUsers();
     }),

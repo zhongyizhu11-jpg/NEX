@@ -154,7 +154,42 @@ export function recordTwoFactorChallengeIssue(ip: string, username: string, now 
   }
 }
 
+/*
+  「一段时间内最多几次」的通用额度（找回密码用）。上面那套是失败计数 —— 输错才记、成功就清；
+  发重置链接这种事每申请一次都要算，不管成没成，所以另开一份，但和上面共用同一个文件、同一个清理定时器。
+  键由调用方拼好（IP 先过 ipRateLimitScope，账号用 user id），这里只管数数。
+*/
+const attemptBudgetStore = new Map<string, number[]>();
+
+function activeAttempts(key: string, windowMs: number, now: number) {
+  const cutoff = now - windowMs;
+  return (attemptBudgetStore.get(key) || []).filter((timestamp) => timestamp > cutoff);
+}
+
+/** 只看不记：这个键现在是不是已经用完了额度。 */
+export function attemptBudgetState(key: string, max: number, windowMs: number, now = Date.now()): AuthRateLimitState {
+  const active = activeAttempts(key, windowMs, now);
+  if (active.length < max) return { limited: false, retryAfterSeconds: 0 };
+  return { limited: true, retryAfterSeconds: Math.max(1, Math.ceil((active[0] + windowMs - now) / 1000)) };
+}
+
+/** 占用一次额度。额度已满返回 limited（这一次不记，一直重试也不会把窗口越推越远）。 */
+export function consumeAttemptBudget(key: string, max: number, windowMs: number, now = Date.now()): AuthRateLimitState {
+  const active = activeAttempts(key, windowMs, now);
+  if (active.length >= max) {
+    setBoundedMapValue(attemptBudgetStore, key, active, AUTH_RATE_LIMIT_MAX_KEYS);
+    return { limited: true, retryAfterSeconds: Math.max(1, Math.ceil((active[0] + windowMs - now) / 1000)) };
+  }
+  active.push(now);
+  setBoundedMapValue(attemptBudgetStore, key, active, AUTH_RATE_LIMIT_MAX_KEYS);
+  return { limited: false, retryAfterSeconds: 0 };
+}
+
+/** 额度窗口最长一小时（找回密码按 IP 的那一档）；清理时按它算过期。 */
+const ATTEMPT_BUDGET_MAX_WINDOW_MS = 60 * 60 * 1000;
+
 export function pruneAuthRateLimitState(now = Date.now()) {
+  pruneMapEntries(attemptBudgetStore, (timestamps) => !timestamps.some((timestamp) => now - timestamp < ATTEMPT_BUDGET_MAX_WINDOW_MS));
   const failureExpired = (entry: FailureEntry) => now - entry.lastFailAt >= LOGIN_FAIL_WINDOW_MS;
   pruneMapEntries(loginFailStore, failureExpired);
   pruneMapEntries(loginAccountFailStore, failureExpired);
@@ -184,6 +219,7 @@ export function clearAuthRateLimitStateForTests() {
   challengeIssueStore.clear();
   challengeIssueAccountStore.clear();
   challengeIssueIpStore.clear();
+  attemptBudgetStore.clear();
 }
 
 export function authRateLimitStoreSizesForTests() {

@@ -37,6 +37,8 @@ export function normalizeApiTokenScope(value: unknown): ApiTokenScope {
   · 改接口限流：被限流的令牌不能自己把限流关掉；
   · 操作审计整个路由：审计记着所有人的 IP 和参数，令牌既不该能读走，也不该能把保留天数改短、借每天的清理删掉记录。
   · 面板性能剖析整个路由：堆快照就是面板进程内存的原样拷贝（会话、密码、密钥都在里面），下载路由也只认网页会话。
+  · 进入用户后台（users.enterUserBackend）：那是给网页上的管理员开一个代入窗口，令牌拿到代入凭据等于多了一个没人看着的身份。
+  · 找回密码（auth.requestPasswordReset / auth.resetPasswordWithToken）：本来就是没登录时用的，令牌没有理由替谁发重置链接、改密码。
   auth.updateProfile 改邮箱在过程里单独拦（见 apiTokenProfileUpdateError）：只改昵称这类不受影响。
 */
 const TOKEN_FORBIDDEN_PATHS = [
@@ -51,8 +53,11 @@ const TOKEN_FORBIDDEN_PATHS = [
   "auth.beginTwoFactorSetup",
   "auth.enableTwoFactor",
   "auth.disableTwoFactor",
+  "auth.requestPasswordReset",
+  "auth.resetPasswordWithToken",
   "users.resetPassword",
   "users.removeTwoFactor",
+  "users.enterUserBackend",
   "telegram.createBindCode",
   "telegram.unbind",
   "telegram.startMobileLogin",

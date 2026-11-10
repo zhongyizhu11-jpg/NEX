@@ -24,6 +24,8 @@ import { clearRuleLatencyQueryCache } from "./ruleLatencyQueryCache";
 import { tunnelHopLatencyMode, tunnelHopModeText } from "./linkTestMessages";
 import { cleanOldAddressGeoCache, runHostGeoSweep } from "./hostGeo";
 import { pruneStaleAuthSessions } from "./repositories/sessionRepository";
+import { pruneImpersonations } from "./ops/impersonation";
+import { prunePasswordResetTokens } from "./ops/passwordReset";
 import { pruneDispatchConfigAuditEvents } from "./configAudit";
 import { reconcileHostDdnsRecords } from "./hostDdns";
 import { reconcileRuleEntryDomains } from "./ruleEntryDomain";
@@ -383,6 +385,9 @@ export async function runTcpingCleanup() {
     ["address_geo_cache", () => cleanOldAddressGeoCache()],
     // 失效超过 7 天的登录会话（过期或已撤销），只有「未撤销且未过期」的行会被读取。
     ["auth_sessions", () => pruneStaleAuthSessions(7)],
+    // 找回密码的一次性令牌（半小时过期）和管理员代入用户后台的记录（一小时过期）：都是用完就没用的临时凭据。
+    ["password_reset_tokens", () => prunePasswordResetTokens(7)],
+    ["user_impersonations", () => pruneImpersonations(30)],
     // 只删 30 天前的 dispatch 审计行，配置改动（create/update/delete）一条不动。
     ["config_audit_events:dispatch", () => pruneDispatchConfigAuditEvents(30)],
     // 操作审计按「保留天数」清（默认 90 天，监控 › 操作审计里改），见 server/operationAudit.ts。

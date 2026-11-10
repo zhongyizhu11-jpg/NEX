@@ -15,6 +15,14 @@ import { startLayoutProbeIfRequested } from "./lib/layoutProbe";
 import { DATABASE_UNAVAILABLE_MESSAGE } from "@shared/databaseHealth";
 import { DATABASE_HEALTH_QUERY_KEY } from "./components/DatabaseHealthGate";
 import { loadUiThemeStyles } from "./lib/uiThemeStyles";
+import { userImpersonation } from "./lib/userImpersonation";
+
+/*
+  管理员「进入用户后台」开出来的标签页：在任何请求发出去之前认出来、把令牌从地址栏拿掉，
+  并让这个标签页的 /api/ 请求都带代入令牌、不带 cookie（lib/userImpersonation.ts）。普通标签页什么都不变。
+*/
+userImpersonation.initialize();
+globalThis.fetch = userImpersonation.wrapFetch(globalThis.fetch.bind(globalThis));
 
 // 精简布局：刷新时先按上次记住的挂上，auth.me 回来后 LayoutLayer 再校正
 applyRememberedLayout();
@@ -70,6 +78,16 @@ const queryClient = new QueryClient({
 const redirectToLoginIfUnauthorized = (error: unknown) => {
   if (!(error instanceof TRPCClientError)) return;
   if (typeof window === "undefined") return;
+  // 代入窗口：401 说明代入结束了（到期、管理员退出、目标被停用）。不去登录页、不清本机缓存 ——
+  // 登录页和那份缓存都是管理员自己的；这个标签页只显示「代入已结束」。
+  if (userImpersonation.isEntry()) {
+    if (error.data?.code === "UNAUTHORIZED") {
+      userImpersonation.finish();
+      void queryClient.cancelQueries();
+      queryClient.clear();
+    }
+    return;
+  }
 
   const isUnauthorized =
     error.message === UNAUTHED_ERR_MSG ||
@@ -195,8 +213,12 @@ async function bootstrap() {
   // 先把上一次的数据放进缓存再挂页面：有缓存时不再整屏空白等接口，接口回来再换新的。
   // App 里按面板地址分开存，换了面板不会串。
   const cacheScope = () => (mobileAuth.isNative ? mobileAuth.getPanelUrl() || "native" : "");
-  restorePersistedQueryCache(queryClient, { scope: cacheScope() });
-  startQueryCachePersistence(queryClient, { scope: cacheScope });
+  // 代入窗口不读也不写本机缓存：那份缓存和管理员的标签页共用一个 localStorage，
+  // 读了会先画出管理员的数据，写了会让管理员下次打开时先看到这个用户的数据。
+  if (!userImpersonation.isEntry()) {
+    restorePersistedQueryCache(queryClient, { scope: cacheScope() });
+    startQueryCachePersistence(queryClient, { scope: cacheScope });
+  }
 
   await Promise.race([bootUiThemeStyles, new Promise<void>((resolve) => setTimeout(resolve, BOOT_THEME_WAIT_MS))]);
 
