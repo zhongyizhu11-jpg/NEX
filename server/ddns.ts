@@ -114,7 +114,8 @@ function parseTtl(value: unknown, fallback = DEFAULT_DDNS_TTL) {
   return Math.min(MAX_DDNS_TTL, Math.max(MIN_DDNS_TTL, ttl));
 }
 
-class DdnsProviderError extends Error {
+/** 服务商明确答复了「不行」（带错误码）。没拿到答复的（超时、断线）不是这个类。 */
+export class DdnsProviderError extends Error {
   constructor(message: string, readonly code: string) {
     super(message);
     this.name = "DdnsProviderError";
@@ -650,7 +651,8 @@ function tencentDate(timestamp: number) {
   return new Date(timestamp * 1000).toISOString().slice(0, 10);
 }
 
-async function tencentCloudRequest(settings: DdnsSettings, action: string, payload: Record<string, any>) {
+/** 腾讯云 API 3.0（TC3-HMAC-SHA256）签名后调一次 DNSPod。DNSPod 解析记录管理（server/dnspodRecords.ts）也走这里。 */
+export async function tencentCloudRequest(settings: DdnsSettings, action: string, payload: Record<string, any>) {
   const host = "dnspod.tencentcloudapi.com";
   const service = "dnspod";
   const version = "2021-03-23";

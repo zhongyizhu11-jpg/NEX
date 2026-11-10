@@ -34,7 +34,7 @@ export const API_TOKEN_MODULE_DETAILS: Record<ApiTokenModule, string> = {
   proxy: "代理入站、订阅链接",
   users: "用户、推广、工单",
   billing: "套餐、钱包、支付、流量计费",
-  system: "系统设置、插件、公告、Webhook、维护模式",
+  system: "系统设置、DNS 解析记录、插件、公告、Webhook、维护模式",
   monitoring: "总览、诊断、事件、运维看板、可用率",
 };
 
@@ -60,7 +60,7 @@ export const API_TOKEN_MODULE_PREFIXES: Record<ApiTokenModule, readonly string[]
   proxy: ["proxyInbounds.", "proxySubscriptions."],
   users: ["users.", "referral.", "tickets."],
   billing: ["billing.", "plans.", "payment.", "trafficBilling."],
-  system: ["system.", "plugins.", "announcements.", "telegram.", "ops.webhooks.", "ops.maintenance.", "ops.quotaPolicy.", "ops.apiRateLimit.", "ops.slowQueries."],
+  system: ["system.", "dnsRecords.", "plugins.", "announcements.", "telegram.", "ops.webhooks.", "ops.maintenance.", "ops.quotaPolicy.", "ops.apiRateLimit.", "ops.slowQueries."],
   monitoring: [
     "dashboard.",
     "diagnostics.",
