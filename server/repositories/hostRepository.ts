@@ -32,6 +32,7 @@ import { afterDatabaseCommit, executeRaw, getDb, insertAndGetId, nowDate, queryR
 import { flushPendingWrites } from "../dbWriteBatcher";
 import { boolValue, inList, quoteIdentifier, sqlCountAll } from "../dbCompat";
 import { recordRuleEntryDomainCleanupsBeforeDelete } from "./ruleEntryDomainRepository";
+import { clearRuleGroupMembersForHost } from "../ruleGroupRelations";
 import { signalRuleEntryDomainCleanup } from "../ruleEntryDomainSignals";
 import { repairPortForwardRuleHostReferences } from "../portForwardRuleHosts";
 import { dbBool, sqlBool } from "./repositoryUtils";
@@ -784,7 +785,15 @@ export async function deleteHost(id: number) {
   await deleteTlsInboundsForHost(id);
   // 这台机器上的规则整批删行：先把它们发布过的专属域名记进待删表（见 ruleEntryDomainRepository）。
   const retiredRuleDomains = await recordRuleEntryDomainCleanupsBeforeDelete({ hostId: id }).catch(() => 0);
-  await db.delete(forwardRules).where(eq(forwardRules.hostId, id));
+  /*
+    规则行整批删之前，同一个事务里先清它们的个人分组关系（server/ruleGroupRelations.ts）：这里不走
+    finalizeForwardRuleDelete，不清的话每条规则都留下一行指向不存在规则的关系。
+    事务里重新拿一次 db —— 外面那个不一定在这个事务的连接上。
+  */
+  await withDatabaseTransaction(async () => {
+    await clearRuleGroupMembersForHost(id);
+    await (await getDb())!.delete(forwardRules).where(eq(forwardRules.hostId, id));
+  });
   if (retiredRuleDomains > 0) await afterDatabaseCommit(() => signalRuleEntryDomainCleanup("host-deleted"));
   await db.delete(forwardRuleTunnelExits).where(eq(forwardRuleTunnelExits.exitHostId, id));
   await db.delete(agentTokens).where(eq(agentTokens.hostId, id));

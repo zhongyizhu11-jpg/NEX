@@ -112,6 +112,14 @@ import { DEFAULT_RULE_EGRESS_FORM, RuleEgressSection, useEgressEntryCapabilities
 import { RuleFormCollapsible } from "@/components/rules/RuleFormCollapsible";
 import { RuleLimitsForm, newRuleLimitsForm, ruleLimitsChanges, ruleLimitsSummary, type RuleLimitsFormValue } from "@/components/rules/RuleLimitsForm";
 import { RuleLimitSummary } from "@/components/rules/RuleLimitSummary";
+import { RuleGroupManagerDialog, RulePersonalGroupBadges, useRefreshPersonalRuleGroups } from "@/components/rules/PersonalRuleGroups";
+import {
+  MAX_PERSONAL_RULE_GROUP_CHANGE,
+  canChangePersonalRuleGroups,
+  matchesPersonalRuleGroup,
+  personalRuleGroupRank,
+  type PersonalRuleGroup,
+} from "@shared/ruleGroups";
 import { hasRuleLimits } from "@shared/ruleLimits";
 import { ADMIN_MANAGED_RULE_MESSAGE, isAdminManagedRule, normalizeRuleLimitReason } from "@shared/ruleLimits";
 import {
@@ -217,6 +225,9 @@ import {
   RotateCcw,
   Lock,
   X,
+  Check,
+  Folder,
+  FolderCog,
 } from "lucide-react";
 import type { GlobeMethods } from "react-globe.gl";
 import {
@@ -422,7 +433,7 @@ type RuleCategory = "all" | "local" | "tunnel" | "chain" | "group";
 type RuleCategoryCounts = Record<RuleCategory, number>;
 type RuleTransferScopeType = Exclude<RuleCategory, "all">;
 type RuleResourceFilter = "all" | `${RuleTransferScopeType}` | `${RuleTransferScopeType}:${number}`;
-type RuleBatchManageMode = "copy" | "edit" | "export" | "import";
+type RuleBatchManageMode = "copy" | "edit" | "export" | "import" | "group";
 type BatchEditFormData = Pick<RuleFormData, "routeMode" | "forwardType" | "tunnelId" | "forwardGroupId" | "targetIp" | "targetPort">;
 
 const RULE_CATEGORIES = ["all", "local", "tunnel", "chain", "group"] as const;
@@ -468,6 +479,39 @@ const RULE_GROUP_COLLAPSED_STORAGE_KEY = "forwardx.rules.groupCollapsed";
 const RULE_CATEGORY_STORAGE_KEY = "forwardx.rules.category";
 const RULE_FILTER_USER_STORAGE_KEY = "forwardx.rules.filterUser";
 const RULE_FILTER_RESOURCE_STORAGE_KEY = "forwardx.rules.filterResource";
+/** 个人分组筛选（按账号记）："" = 全部，"0" = 未分组，数字 = 那个组。 */
+const RULE_FILTER_PERSONAL_GROUP_STORAGE_KEY = "forwardx.rules.filterPersonalGroup";
+const RULE_SORT_BY_PERSONAL_GROUP_STORAGE_KEY = "forwardx.rules.sortByPersonalGroup";
+const RULE_TABLE_GROUP_COLUMN_STORAGE_KEY = "forwardx.rules.tableGroupColumn";
+const EMPTY_PERSONAL_RULE_GROUPS: PersonalRuleGroup[] = [];
+/** 卡片上的分组名拼成一个字符串传给 memo 的卡片（数组每轮都是新的，会让卡片白重画）；分组名里打不出这个字符。 */
+const PERSONAL_GROUP_NAME_SEPARATOR = "\u001f";
+
+function parseStoredPersonalGroupFilter(value: string): number | null {
+  if (value === "") return null;
+  const id = Math.floor(Number(value));
+  return Number.isSafeInteger(id) && id >= 0 ? id : null;
+}
+
+/**
+ * 规则卡 / 深空行名字旁边的分组标签。拿的是拼好的名字串（见 PERSONAL_GROUP_NAME_SEPARATOR），只画前 max 个，
+ * 后面写「+N」，悬停看全部 —— 卡片上地方小，和链路、协议挤在同一行。
+ */
+function RuleCardGroupChips({ names, max = 1 }: { names: string; max?: number }) {
+  if (!names) return null;
+  const list = names.split(PERSONAL_GROUP_NAME_SEPARATOR);
+  return (
+    <span data-rule-personal-groups="" className="inline-flex min-w-0 shrink-0 items-center gap-1" title={`所属分组：${list.join("、")}`}>
+      {list.slice(0, max).map((name) => (
+        <Badge key={name} variant="outline" className="h-[18px] min-w-0 max-w-[6.5rem] gap-1 px-1.5 text-[10.5px] font-normal text-muted-foreground">
+          <Folder className="h-3 w-3 shrink-0" aria-hidden="true" />
+          <span className="truncate">{name}</span>
+        </Badge>
+      ))}
+      {list.length > max ? <Badge variant="secondary" className="h-[18px] shrink-0 px-1.5 text-[10.5px] font-normal">+{list.length - max}</Badge> : null}
+    </span>
+  );
+}
 const RULE_SORT_CATEGORY_ORDER: RuleTransferScopeType[] = ["local", "tunnel", "chain", "group"];
 const RULE_SORT_CATEGORY_RANK = new Map<RuleTransferScopeType, number>(
   RULE_SORT_CATEGORY_ORDER.map((category, index) => [category, index]),
@@ -766,6 +810,8 @@ type RuleCardProps = RuleCardDerivedProps & {
   rule: RuleCardRule;
   sortable?: RuleSortableRenderState;
   page: RuleCardPage;
+  /** 这条规则在当前登录的人的哪几个分组里：名字按组的顺序拼成一串（见 PERSONAL_GROUP_NAME_SEPARATOR），不在任何组是 ""。 */
+  personalGroupNames: string;
 };
 
 const RULE_TONE_COLOR: Record<RuleCardTone, string> = {
@@ -996,7 +1042,15 @@ const RuleCard = memo(function RuleCard(props: RuleCardProps) {
               <span className="truncate" title={rule.name}>{rule.name}</span>
               {ui.renderSubscriptionMark(rule)}
             </div>
-            <div className="fx-rule-sub" title={subtitle}>{subtitle}</div>
+            {/* 链路 · 工具 · 协议和分组标签同一行（上游 2.3.287）；还是这一个 .fx-rule-sub，精简布局的网格认的是它 */}
+            {props.personalGroupNames ? (
+              <div className="fx-rule-sub flex items-center gap-1.5" title={`${subtitle} · 分组：${props.personalGroupNames.split(PERSONAL_GROUP_NAME_SEPARATOR).join("、")}`}>
+                <span className="min-w-0 truncate">{subtitle}</span>
+                <RuleCardGroupChips names={props.personalGroupNames} />
+              </div>
+            ) : (
+              <div className="fx-rule-sub" title={subtitle}>{subtitle}</div>
+            )}
           </div>
           <div className="fx-rule-head-actions">
             {ui.renderRuleActions(rule)}
@@ -1193,6 +1247,7 @@ const RuleRow = memo(function RuleRow(props: RuleCardProps) {
             <span className="fx-ds-rule-kind" data-kind={category}>{desktopRuleTypeLabels[category as RuleGroupType] || "转发"}</span>
             <span className="truncate" title={rule.name}>{rule.name}</span>
             {ui.renderSubscriptionMark(rule)}
+            <RuleCardGroupChips names={props.personalGroupNames} />
           </div>
           <div className="fx-ds-rule-sub" title={subtitle}>{subtitle}</div>
         </div>
@@ -2796,6 +2851,21 @@ function RulesContent() {
     parseRuleResourceFilter(getStoredString(filterResourceStorageKey, "all")).type || "local",
   );
   const [filterUser, setFilterUser] = useState<string>(() => getStoredString(filterUserStorageKey, "self"));
+  /*
+    个人分组（上游 2.3.287，components/rules/PersonalRuleGroups.tsx）：筛选按账号记；组本身也只是自己的 ——
+    管理员切到「所有用户」照样只看得到自己的组，筛出来的是所有人的规则里放进了自己组的那些。
+  */
+  const filterPersonalGroupStorageKey = ruleFilterStorageKey(RULE_FILTER_PERSONAL_GROUP_STORAGE_KEY, user);
+  const [personalGroupFilter, setPersonalGroupFilter] = useState<number | null>(() => (
+    parseStoredPersonalGroupFilter(getStoredString(filterPersonalGroupStorageKey, ""))
+  ));
+  const handlePersonalGroupFilterChange = useCallback((value: number | null) => {
+    setPersonalGroupFilter(value);
+    storeString(filterPersonalGroupStorageKey, value === null ? "" : String(value));
+  }, [filterPersonalGroupStorageKey]);
+  const [ruleSortByGroup, setRuleSortByGroup] = useState(() => getStoredString(RULE_SORT_BY_PERSONAL_GROUP_STORAGE_KEY, "") === "1");
+  const [showRuleGroupColumn, setShowRuleGroupColumn] = useState(() => getStoredString(RULE_TABLE_GROUP_COLUMN_STORAGE_KEY, "1") !== "0");
+  const [ruleGroupManagerOpen, setRuleGroupManagerOpen] = useState(false);
   const previousFilterIdentity = useRef(filterResourceStorageKey);
   useEffect(() => {
     if (previousFilterIdentity.current === filterResourceStorageKey) return;
@@ -2805,7 +2875,9 @@ function RulesContent() {
     setFilterResource(nextResource);
     setRuleResourceMenuType(parseRuleResourceFilter(nextResource).type || "local");
     setFilterUser(nextUser);
-  }, [filterResourceStorageKey, filterUserStorageKey, user?.role]);
+    // 换了账号：上一个人的分组 id 在这个人这里没有意义
+    setPersonalGroupFilter(parseStoredPersonalGroupFilter(getStoredString(filterPersonalGroupStorageKey, "")));
+  }, [filterPersonalGroupStorageKey, filterResourceStorageKey, filterUserStorageKey, user?.role]);
   const [ruleSearchQuery, setRuleSearchQuery] = useState((() => {
     // 从别处（网络拓扑的详情面板）带着 ?q= 跳过来：先按它搜一遍。
     try {
@@ -2849,6 +2921,44 @@ function RulesContent() {
   }, [filterUser, user?.id, user?.role]);
   const effectiveRulesQuery = selectedRulesQuery || undefined;
   /*
+    分组栏那一份：自己的组（按顺序、带规则数）和「全部 / 未分组」的数字，数的范围跟着用户筛选走。
+    卡片、表格的分组标签、筛选下拉、批量管理都用这一份，不各查各的。
+  */
+  const personalGroupsQuery = trpc.rules.personalGroups.useQuery(effectiveRulesQuery, {
+    refetchInterval: pollingInterval("slow"),
+    staleTime: 10_000,
+    refetchOnWindowFocus: false,
+    placeholderData: (previous) => previous,
+  });
+  const personalGroups = personalGroupsQuery.data?.groups || EMPTY_PERSONAL_RULE_GROUPS;
+  const personalGroupRankById = useMemo(
+    () => new Map(personalGroups.map((group, index) => [Number(group.id), index])),
+    [personalGroups],
+  );
+  // 选中的组没了（在别的标签页、别的设备上删了）：退回「全部」，不留一个永远是空的列表。
+  useEffect(() => {
+    if (!personalGroupsQuery.data || personalGroupsQuery.isPlaceholderData || !personalGroupFilter) return;
+    if (!personalGroupsQuery.data.groups.some((group) => Number(group.id) === personalGroupFilter)) handlePersonalGroupFilterChange(null);
+  }, [handlePersonalGroupFilterChange, personalGroupFilter, personalGroupsQuery.data, personalGroupsQuery.isPlaceholderData]);
+  // 一个组都没有时「按分组排序」没有意义，照原来的顺序排
+  const personalGroupSortActive = ruleSortByGroup && personalGroups.length > 0;
+  const toggleRuleSortByGroup = () => {
+    const next = !ruleSortByGroup;
+    setRuleSortByGroup(next);
+    storeString(RULE_SORT_BY_PERSONAL_GROUP_STORAGE_KEY, next ? "1" : "");
+  };
+  const toggleRuleGroupColumn = () => {
+    const next = !showRuleGroupColumn;
+    setShowRuleGroupColumn(next);
+    storeString(RULE_TABLE_GROUP_COLUMN_STORAGE_KEY, next ? "1" : "0");
+  };
+  const personalGroupNamesOf = (rule: { personalGroupIds?: number[] | null }) => {
+    const ids = rule?.personalGroupIds;
+    if (!ids || ids.length === 0) return "";
+    const set = new Set(ids.map(Number));
+    return personalGroups.filter((group) => set.has(Number(group.id))).map((group) => group.name).join(PERSONAL_GROUP_NAME_SEPARATOR);
+  };
+  /*
     管理员在「用户」筛选里选中了某个人：新建 / 复制 / 导入的规则归他（server/ruleOperationOwner.ts），
     端口提示、端口检查、随机端口也按他的权限和套餐端口段来。编辑不改归属。
   */
@@ -2878,6 +2988,15 @@ function RulesContent() {
   const [copyRuleSearch, setCopyRuleSearch] = useState("");
   const [copyRuleCategory, setCopyRuleCategory] = useState<RuleCategory>("all");
   const [copyManageMode, setCopyManageMode] = useState<RuleBatchManageMode>("copy");
+  /*
+    批量管理里的个人分组（上游 2.3.290）：左边按分组筛（每种操作都能用，打开时沿用页面上的分组筛选）；
+    「调整分组」先选目标分组和加入 / 移出，左边只列出真的会被改到的规则（canChangePersonalRuleGroups）。
+  */
+  const [copyRulePersonalGroup, setCopyRulePersonalGroup] = useState<number | null>(null);
+  const [batchGroupTargetIds, setBatchGroupTargetIds] = useState<number[]>([]);
+  const [batchGroupMode, setBatchGroupMode] = useState<"add" | "remove">("add");
+  const moveToPersonalGroupsMutation = trpc.rules.moveToPersonalGroups.useMutation();
+  const refreshPersonalRuleGroups = useRefreshPersonalRuleGroups();
   const [copyTargetScopeType, setCopyTargetScopeType] = useState<RuleTransferScopeType>("local");
   const [copyTargetResourceIds, setCopyTargetResourceIds] = useState<number[]>([]);
   // Keep an eagerly-updated snapshot of the target selection.  React state is
@@ -2927,7 +3046,7 @@ function RulesContent() {
   const importingRulesRef = useRef(false);
   const rulePageRequest = usePersistentPageRequest("forwardx.rules.page");
   const rulePageResource = parseRuleResourceFilter(filterResource);
-  const rulePageFilterKey = [filterUser, filterResource, ruleCategory, ruleSearchQuery.trim(), rulePageSize].join(":");
+  const rulePageFilterKey = [filterUser, filterResource, ruleCategory, ruleSearchQuery.trim(), rulePageSize, personalGroupFilter ?? "all", personalGroupSortActive ? "group" : "default"].join(":");
   const previousRulePageFilterKey = useRef(rulePageFilterKey);
   useEffect(() => {
     if (previousRulePageFilterKey.current === rulePageFilterKey) return;
@@ -2942,6 +3061,8 @@ function RulesContent() {
     resourceId: rulePageResource.id,
     category: ruleCategory,
     search: ruleSearchQuery,
+    personalGroupId: personalGroupFilter,
+    sortBy: personalGroupSortActive ? "personalGroup" : undefined,
   }, {
     refetchInterval: pollingInterval("normal"),
     staleTime: 10_000,
@@ -2956,6 +3077,7 @@ function RulesContent() {
     resourceId: rulePageResource.id,
     category: ruleCategory,
     search: ruleSearchQuery,
+    personalGroupId: personalGroupFilter,
   }, {
     enabled: isRuleGlobeView,
     initialCursor: 0,
@@ -3005,6 +3127,7 @@ function RulesContent() {
     resourceId: rulePageResource.id,
     category: ruleCategory,
     search: ruleSearchQuery,
+    personalGroupId: personalGroupFilter,
   }, {
     enabled: secondaryQueriesReady,
     // 页头的统计数字：30 秒一轮；增删改、启停后各自 invalidate，不等这一轮。
@@ -3143,6 +3266,8 @@ function RulesContent() {
       utils.rules.listPage.invalidate();
       utils.rules.mapItems.invalidate();
       utils.rules.listSummary.invalidate();
+      // 删掉的规则的分组关系服务端已经清了，分组上的数字跟着刷新
+      void utils.rules.personalGroups.invalidate();
       toast.success("规则已删除");
     },
     onError: (err) => toast.error(err.message || "删除失败"),
@@ -3413,6 +3538,9 @@ function RulesContent() {
   const openCopyDialog = () => {
     setCopyManageMode(transferSourceRules.length ? "copy" : "import");
     setBatchEditForm(buildEmptyBatchEditForm());
+    setCopyRulePersonalGroup(personalGroupFilter);
+    setBatchGroupTargetIds([]);
+    setBatchGroupMode("add");
     setCopyRuleCategory(ruleCategory);
     setCopyRuleSearch(ruleSearchQuery);
     const preferredCopyTargetScope: RuleTransferScopeType = canUseSavedLocalForward
@@ -4316,6 +4444,8 @@ function RulesContent() {
   };
 
   const switchCopyManageMode = (mode: RuleBatchManageMode) => {
+    // 进出「调整分组」时清掉勾选：那里只列得出能改的规则，带着别处勾的规则过去，等于改了看不见的规则。
+    if ((mode === "group") !== (copyManageMode === "group")) setCopyRuleIds([]);
     setCopyManageMode(mode);
     if (mode === "edit") {
       commitCopyTargetSelection(copyTargetSelectionRef.current.scopeType, []);
@@ -4889,15 +5019,24 @@ function RulesContent() {
       ruleCategory: copyRuleCategory,
       searchQuery: copyRuleSearch,
     };
+    const groupMode = copyManageMode === "group";
     return transferSourceRules
       // 共享 TLS 入站上的规则不参与批量复制 / 迁移：它们没有自己的端口，搬到别的资源上就不是同一条规则了。
-      .filter((rule: any) => !rule.forwardGroupRuleId && !rule.forwardGroupMemberId && !(Number(rule.tlsInboundId || 0) > 0) && isRuleSupported(rule))
-      .filter((rule: any) => isForwardRuleVisibleByFilters(rule, batchFilters));
-  }, [copyRuleCategory, copyRuleSearch, isRuleSupported, ruleFilters, transferSourceRules]);
+      // 调整分组只是贴标签，这些规则照样能分组。
+      .filter((rule: any) => !rule.forwardGroupRuleId && !rule.forwardGroupMemberId && (groupMode || (!(Number(rule.tlsInboundId || 0) > 0) && isRuleSupported(rule))))
+      .filter((rule: any) => isForwardRuleVisibleByFilters(rule, batchFilters))
+      .filter((rule) => matchesPersonalRuleGroup(rule.personalGroupIds, copyRulePersonalGroup))
+      .filter((rule) => !groupMode || canChangePersonalRuleGroups(rule.personalGroupIds, batchGroupMode, batchGroupTargetIds));
+  }, [batchGroupMode, batchGroupTargetIds, copyManageMode, copyRuleCategory, copyRulePersonalGroup, copyRuleSearch, isRuleSupported, ruleFilters, transferSourceRules]);
   const copySelectedRules = useMemo(() => {
     const selected = new Set(copyRuleIds.map(Number));
+    if (copyManageMode === "group") {
+      // 勾着的、而且此刻还真的会被改到的（列表刷新后有的规则可能已经在组里了）
+      return transferSourceRules.filter((rule) => selected.has(Number(rule.id)) && !rule.forwardGroupRuleId && !rule.forwardGroupMemberId
+        && canChangePersonalRuleGroups(rule.personalGroupIds, batchGroupMode, batchGroupTargetIds));
+    }
     return transferSourceRules.filter((rule: any) => selected.has(Number(rule.id)) && !rule.forwardGroupRuleId && !rule.forwardGroupMemberId && !(Number(rule.tlsInboundId || 0) > 0));
-  }, [copyRuleIds, transferSourceRules]);
+  }, [batchGroupMode, batchGroupTargetIds, copyManageMode, copyRuleIds, transferSourceRules]);
   const copyTargetResources = useMemo(() => {
     if (copyTargetScopeType === "local") return availablePortForwardGroups;
     if (copyTargetScopeType === "tunnel") return supportedTunnels;
@@ -4935,7 +5074,8 @@ function RulesContent() {
     return copyTargetResources.filter((resource: any) => selected.has(Number(resource.id)));
   }, [copyTargetResourceIds, copyTargetResources]);
   const copyTargetScopeLabel = ruleTransferScopeLabels[copyTargetScopeType];
-  const copyActionPending = copyWorking || batchCreateMutation.isPending || batchUpdateMutation.isPending || batchDeleteMutation.isPending;
+  const copyActionPending = copyWorking || batchCreateMutation.isPending || batchUpdateMutation.isPending || batchDeleteMutation.isPending || moveToPersonalGroupsMutation.isPending;
+  const isBatchGroupMode = copyManageMode === "group";
   const isBatchEditMode = copyManageMode === "edit";
   const isBatchCopyMode = copyManageMode === "copy";
   const isBatchExportMode = copyManageMode === "export";
@@ -4946,7 +5086,9 @@ function RulesContent() {
     && copyableSourceRules.every((rule: any) => copyRuleIds.includes(Number(rule.id)));
   const allVisibleCopyTargetsSelected = filteredCopyTargetResources.length > 0
     && filteredCopyTargetResources.every((resource: any) => copyTargetResourceIds.includes(Number(resource.id)));
-  const batchFlowHintLabel = isBatchEditMode
+  const batchFlowHintLabel = isBatchGroupMode
+    ? batchGroupMode === "add" ? "加入右侧分组" : "移出右侧分组"
+    : isBatchEditMode
     ? "按右侧设置处理"
     : isBatchExportMode
       ? "导出左侧已选规则"
@@ -5017,6 +5159,22 @@ function RulesContent() {
         <span className="text-xs text-muted-foreground tabular-nums">
           {copyableSourceRules.length} 项
         </span>
+        {/* 按个人分组筛：换一个分组就清掉勾选，免得带着看不见的规则去做批量操作 */}
+        <Select
+          value={copyRulePersonalGroup === null ? "all" : String(copyRulePersonalGroup)}
+          onValueChange={(value) => {
+            setCopyRulePersonalGroup(value === "all" ? null : Number(value));
+            setCopyRuleIds([]);
+          }}
+          disabled={copyActionPending}
+        >
+          <SelectTrigger aria-label="按个人分组筛选" className="ml-auto h-8 w-[9.5rem] text-xs"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">全部分组</SelectItem>
+            {personalGroups.map((group) => <SelectItem key={group.id} value={String(group.id)}>{group.name}</SelectItem>)}
+            <SelectItem value="0">未分组</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
       <div className="max-h-[24rem] space-y-2 overflow-y-auto rounded-md border border-border/60 p-2">
         {copyableSourceRules.length > 0 ? copyableSourceRules.map((rule: any) => {
@@ -5046,12 +5204,99 @@ function RulesContent() {
                 <span className="mt-1 block truncate text-xs text-muted-foreground">
                   :{rule.sourcePort} -&gt; {rule.targetIp}:{rule.targetPort} / {forwardTypeDisplayLabel(rule.forwardType)} / {formatForwardRuleProtocol(rule.protocol)}
                 </span>
+                {rule.personalGroupIds?.length ? (
+                  <span className="mt-1 flex min-w-0"><RulePersonalGroupBadges groupIds={rule.personalGroupIds} groups={personalGroups} maxVisible={3} /></span>
+                ) : null}
               </span>
             </label>
           );
         }) : (
-          <div className="py-10 text-center text-sm text-muted-foreground">没有匹配的转发规则</div>
+          <div className="py-10 text-center text-sm text-muted-foreground">
+            {isBatchGroupMode && batchGroupTargetIds.length === 0 ? "先在右侧选择目标分组" : "没有匹配的转发规则"}
+          </div>
         )}
+      </div>
+    </div>
+  );
+  /** 「调整分组」：把勾选的规则加入 / 移出右边选的那几个组。一次最多 500 条，多了分几次交。 */
+  const handleBatchGroupRules = async () => {
+    const ids = Array.from(new Set(copySelectedRules.map((rule) => Number(rule.id))));
+    if (ids.length === 0 || batchGroupTargetIds.length === 0) return;
+    setCopyWorking(true);
+    let done = 0;
+    try {
+      for (const chunk of chunkBatchItems(ids, MAX_PERSONAL_RULE_GROUP_CHANGE)) {
+        const result = await moveToPersonalGroupsMutation.mutateAsync({ ids: chunk, groupIds: batchGroupTargetIds, mode: batchGroupMode });
+        done += Number(result.count || chunk.length);
+      }
+      setCopyRuleIds([]);
+      toast.success(`已${batchGroupMode === "add" ? "加入" : "移出"}分组：${done} 条规则`);
+    } catch (error) {
+      toast.error(`${done > 0 ? `已处理 ${done} 条，其余` : ""}调整分组失败：${(error instanceof Error && error.message) || "请稍后重试"}`);
+    } finally {
+      await refreshPersonalRuleGroups();
+      if (showCopyDialog) await fullRulesQuery.refetch();
+      setCopyWorking(false);
+    }
+  };
+  const batchGroupPanel = (
+    <div className="space-y-3 rounded-md border border-border/60 bg-background/55 p-3">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="space-y-1">
+          <Label>目标分组</Label>
+          <div className="text-xs text-muted-foreground">分组只有你自己看得见，不影响转发和授权。</div>
+        </div>
+        <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5 self-start text-xs" onClick={() => setRuleGroupManagerOpen(true)} disabled={copyActionPending}>
+          <FolderCog className="h-3.5 w-3.5" />管理分组
+        </Button>
+      </div>
+      <div className={segmentedControlClassName}>
+        <div className="grid grid-cols-2 gap-1">
+          {(["add", "remove"] as const).map((mode) => (
+            <button
+              key={mode}
+              type="button"
+              className={routeModeOptionClass(batchGroupMode === mode, copyActionPending)}
+              aria-pressed={batchGroupMode === mode}
+              disabled={copyActionPending}
+              onClick={() => {
+                if (batchGroupMode === mode) return;
+                setBatchGroupMode(mode);
+                setCopyRuleIds([]);
+              }}
+            >
+              <span className="truncate">{mode === "add" ? "加入分组" : "移出分组"}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="max-h-[19rem] space-y-1 overflow-y-auto rounded-md border border-border/60 p-2">
+        {personalGroups.length > 0 ? personalGroups.map((group) => {
+          const checked = batchGroupTargetIds.includes(Number(group.id));
+          return (
+            <label key={group.id} className={`flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-muted/40 ${checked ? "bg-primary/5" : ""}`}>
+              <Checkbox
+                checked={checked}
+                disabled={copyActionPending}
+                onCheckedChange={(next) => {
+                  setBatchGroupTargetIds((current) => next ? Array.from(new Set([...current, Number(group.id)])) : current.filter((id) => id !== Number(group.id)));
+                  // 目标分组变了，左边能改的规则也跟着变：清掉勾选，不带着看不见的规则走
+                  setCopyRuleIds([]);
+                }}
+              />
+              <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+              <span className="min-w-0 flex-1 truncate">{group.name}</span>
+              <span className="text-xs tabular-nums text-muted-foreground">{group.count}</span>
+            </label>
+          );
+        }) : (
+          <div className="py-8 text-center text-sm text-muted-foreground">还没有分组，先点「管理分组」建一个</div>
+        )}
+      </div>
+      <div className="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-xs leading-5 text-muted-foreground">
+        {batchGroupMode === "add"
+          ? "左边只列出还没在全部所选分组里的规则；只在其中几个组里的照样列出，加入时补齐。规则原来的其他分组不变。"
+          : "左边只列出在任一所选分组里的规则；移出只去掉所选的分组，规则的其他分组保留。"}
       </div>
     </div>
   );
@@ -5422,6 +5667,11 @@ function RulesContent() {
   const effectiveRuleListSummary = ruleListSummary ?? stableRuleListSummary;
   const dailyTrafficTotals = effectiveRuleListSummary?.dailyTraffic || pageDailyTrafficTotals;
   const compareRulesBySavedOrder = useCallback((a: any, b: any) => {
+    // 按分组排序：和服务端同一个名次（所在组里最靠前那个组的顺序，未分组最后），同名次里照原来的排
+    if (personalGroupSortActive) {
+      const groupCompare = personalRuleGroupRank(a.personalGroupIds, personalGroupRankById) - personalRuleGroupRank(b.personalGroupIds, personalGroupRankById);
+      if (groupCompare !== 0) return groupCompare;
+    }
     const aCategory = getRuleCategory(a, forwardGroupById);
     const bCategory = getRuleCategory(b, forwardGroupById);
     if (ruleCategory === "all") {
@@ -5434,7 +5684,7 @@ function RulesContent() {
     const createdCompare = new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
     if (createdCompare !== 0) return createdCompare;
     return Number(b.id || 0) - Number(a.id || 0);
-  }, [forwardGroupById, ruleCategory]);
+  }, [forwardGroupById, personalGroupRankById, personalGroupSortActive, ruleCategory]);
   const sortedFilteredRules = useMemo(() => {
     return [...filteredRules].sort(compareRulesBySavedOrder);
   }, [compareRulesBySavedOrder, filteredRules]);
@@ -5453,7 +5703,7 @@ function RulesContent() {
     [filterResource, ruleCategory, ruleFilterCacheScope, ruleSearchQuery],
   );
   const hasActiveUserFilter = user?.role === "admin" && filterUser !== "self";
-  const hasActiveRuleFilter = hasActiveUserFilter || filterResource !== "all" || ruleCategory !== "all" || ruleSearchQuery.trim().length > 0;
+  const hasActiveRuleFilter = hasActiveUserFilter || filterResource !== "all" || ruleCategory !== "all" || ruleSearchQuery.trim().length > 0 || personalGroupFilter !== null;
   const rulesHeaderLoading = isLoading || !rules || !scopedRulesReady || !filteredRulesPrimed;
   const dailyTrafficTotalsLoading = rulesHeaderLoading || !secondaryQueriesReady || ruleListSummaryLoading;
   const [stableRulePageMeta, setStableRulePageMeta] = useState({ activeItems: 0, totalItems: 0, scopeTotalItems: 0 });
@@ -5478,9 +5728,12 @@ function RulesContent() {
    * 能不能拖：不在地球视图、没按资源筛、没在搜索。管理员看「全部用户」时，这一页的规则只要都是同一个人的
    * 也能拖（单人自用的面板就是这样）；混着几个人的不给拖，免得把别人的顺序一起挪了。
    */
+  // 按个人分组筛 / 排的时候也不给拖：这一页不是那个分类的连续一段，拖完存回去的顺序会把别的规则挤乱。
   const ruleSortingBase = effectiveViewMode !== "globe"
     && filterResource === "all"
-    && ruleSearchQuery.trim().length === 0;
+    && ruleSearchQuery.trim().length === 0
+    && personalGroupFilter === null
+    && !personalGroupSortActive;
   const ruleSortOwnersOk = (rules: ReadonlyArray<{ userId?: unknown }>) => user?.role !== "admin"
     || filterUser !== "all"
     || new Set(rules.map((rule) => Number(rule.userId || 0))).size <= 1;
@@ -5528,7 +5781,8 @@ function RulesContent() {
     return groups.filter((group) => group.rules.length > 0);
   }, [forwardGroupById, pagedRules]);
   // 「深空」主题：「全部」也不分组，一张表到底；类型写在每一行名字前面的小标签上（RuleRow）
-  const shouldGroupRuleCards = ruleCategory === "all" && uiTheme !== "deepspace";
+  // 按个人分组排序时也不按类型分段：分段会把排好的分组顺序拆开
+  const shouldGroupRuleCards = ruleCategory === "all" && uiTheme !== "deepspace" && !personalGroupSortActive;
   /*
     换进这一页时先只画前几张卡（手机上刚好一屏），剩下的交给 React 的低优先级渲染随后补上：
     第一帧要画十几张卡的整棵树在手机上要几百毫秒，期间点什么都没反应（用户 2026-11-03 录屏
@@ -7644,6 +7898,7 @@ function RulesContent() {
     setRuleSearchQuery("");
     setRuleCategory("all");
     handleFilterResourceChange("all");
+    handlePersonalGroupFilterChange(null);
     if (user?.role === "admin") {
       setFilterUser("self");
       storeString(filterUserStorageKey, "self");
@@ -7814,6 +8069,27 @@ function RulesContent() {
         );
       },
     },
+    /*
+      分组列（上游 2.3.287）：最多画两个，多的写「+N」；表头点一下按分组排序（未分组排最后），再点一下回到原来的顺序。
+      ··· 菜单里能把这一列关掉。
+    */
+    ...(showRuleGroupColumn ? [{
+      key: "personalGroups",
+      width: compactLayout ? 120 : 140,
+      head: (
+        <button
+          type="button"
+          className={cn("inline-flex items-center gap-1 hover:text-foreground", personalGroupSortActive && "text-foreground")}
+          onClick={toggleRuleSortByGroup}
+          title={personalGroupSortActive ? "按分组排序中（未分组在最后），点一下恢复默认顺序" : "按分组排序（未分组在最后）"}
+          aria-pressed={personalGroupSortActive}
+        >
+          分组{personalGroupSortActive ? <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" /> : null}
+        </button>
+      ),
+      cellClassName: "overflow-hidden",
+      cell: (rule) => <RulePersonalGroupBadges groupIds={rule.personalGroupIds} groups={personalGroups} emptyPlaceholder />,
+    } satisfies RuleTableColumn] : []),
     {
       key: "resource",
       width: compactLayout ? 110 : 150,
@@ -8077,6 +8353,7 @@ function RulesContent() {
       rule={rule}
       sortable={sortable}
       page={ruleCardPage}
+      personalGroupNames={personalGroupNamesOf(rule)}
       {...buildRuleCardDerivedProps(rule, ruleCardSources)}
     />
   );
@@ -8123,6 +8400,13 @@ function RulesContent() {
             <DropdownMenuTrigger asChild><Button variant={variant} size="icon" aria-label="更多规则操作"><span aria-hidden="true">•••</span></Button></DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuItem onSelect={openCopyDialog} disabled={!transferSourceRules.length && !canAdd}><ClipboardCopy className="h-4 w-4" />批量管理</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setRuleGroupManagerOpen(true)}><FolderCog className="h-4 w-4" />管理分组</DropdownMenuItem>
+              <DropdownMenuItem onSelect={toggleRuleSortByGroup} disabled={personalGroups.length === 0}>
+                {personalGroupSortActive ? <Check className="h-4 w-4" /> : <span className="h-4 w-4" aria-hidden="true" />}按分组排序
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={toggleRuleGroupColumn}>
+                {showRuleGroupColumn ? <Check className="h-4 w-4" /> : <span className="h-4 w-4" aria-hidden="true" />}列表显示分组列
+              </DropdownMenuItem>
               <DropdownMenuItem onSelect={() => setResetTrafficTarget({ scope: "all" })} disabled={visibleRuleIdsForMetrics.length === 0 || resetTrafficMutation.isPending}><RotateCcw className="h-4 w-4" />重置数据</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -8207,14 +8491,14 @@ function RulesContent() {
           {collapsePhoneSearch ? (
             <SearchToggle
               open={phoneSearchOpen}
-              active={ruleSearchQuery.length > 0 || hasActiveUserFilter || filterResource !== "all"}
+              active={ruleSearchQuery.length > 0 || hasActiveUserFilter || filterResource !== "all" || personalGroupFilter !== null}
               onToggle={() => setPhoneSearchOpen((value) => !value)}
             />
           ) : null}
           </div>
           {showSearchRow ? (
           <FilterToolbar
-            activeCount={Number(hasActiveUserFilter) + Number(filterResource !== "all")}
+            activeCount={Number(hasActiveUserFilter) + Number(filterResource !== "all") + Number(personalGroupFilter !== null)}
             collapsed={mergeListControls}
             action={mergeListControls ? undefined : createRuleAction}
             search={
@@ -8335,6 +8619,27 @@ function RulesContent() {
                 </div>
               </DropdownMenuContent>
             </DropdownMenu>
+            {/* 个人分组：全部 → 自己的组（按管理分组里的顺序）→ 未分组；旁边那枚是「管理分组」 */}
+            <div className="flex w-full items-center gap-1.5 sm:w-auto">
+              <Select
+                value={personalGroupFilter === null ? "all" : String(personalGroupFilter)}
+                onValueChange={(value) => handlePersonalGroupFilterChange(value === "all" ? null : Number(value))}
+              >
+                <SelectTrigger aria-label="按个人分组筛选规则" className="h-8 min-w-0 flex-1 text-xs sm:w-[150px] sm:flex-none">
+                  <SelectValue placeholder="全部分组" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">全部分组{personalGroupsQuery.data ? ` · ${personalGroupsQuery.data.total}` : ""}</SelectItem>
+                  {personalGroups.map((group) => (
+                    <SelectItem key={group.id} value={String(group.id)}>{group.name} · {group.count}</SelectItem>
+                  ))}
+                  <SelectItem value="0">未分组{personalGroupsQuery.data ? ` · ${personalGroupsQuery.data.ungrouped}` : ""}</SelectItem>
+                </SelectContent>
+              </Select>
+              <Button type="button" variant="outline" size="icon" className="h-8 w-8 shrink-0" title="管理分组" aria-label="管理分组" onClick={() => setRuleGroupManagerOpen(true)}>
+                <FolderCog className="h-4 w-4" />
+              </Button>
+            </div>
             <Select value={String(rulePageSize)} onValueChange={handleRulePageSizeChange}>
               <SelectTrigger aria-label="每页数量" className="h-8 w-full text-xs sm:w-[120px]">
                 <SelectValue placeholder="每页数量" />
@@ -9197,6 +9502,8 @@ function RulesContent() {
       </Dialog>
 
 
+      <RuleGroupManagerDialog open={ruleGroupManagerOpen} onOpenChange={setRuleGroupManagerOpen} ruleScope={effectiveRulesQuery} />
+
       <Dialog open={showCopyDialog} onOpenChange={(open) => !copyActionPending && setShowCopyDialog(open)}>
         <DialogContent className="sm:max-w-4xl">
           <DialogHeader>
@@ -9204,11 +9511,11 @@ function RulesContent() {
               <ClipboardCopy className="h-5 w-5" />
               批量管理转发规则
             </DialogTitle>
-            <DialogDescription data-fx-help="">筛选并选择规则后，可批量复制、编辑、导出或删除。</DialogDescription>
+            <DialogDescription data-fx-help="">筛选并选择规则后，可批量复制、编辑、导出、删除或调整分组。</DialogDescription>
           </DialogHeader>
           <div className="max-h-[72svh] space-y-4 overflow-y-auto pr-1">
             <div className={segmentedControlClassName}>
-              <div className="grid grid-cols-2 gap-1 sm:grid-cols-4">
+              <div className="grid grid-cols-2 gap-1 sm:grid-cols-5">
                 <button
                   type="button"
                   className={routeModeOptionClass(isBatchCopyMode, copyActionPending)}
@@ -9248,6 +9555,16 @@ function RulesContent() {
                 >
                   <Upload className="h-4 w-4 shrink-0" />
                   <span className="truncate">批量导入</span>
+                </button>
+                <button
+                  type="button"
+                  className={routeModeOptionClass(isBatchGroupMode, copyActionPending)}
+                  aria-pressed={isBatchGroupMode}
+                  onClick={() => switchCopyManageMode("group")}
+                  disabled={copyActionPending || !transferSourceRules.length}
+                >
+                  <Folder className="h-4 w-4 shrink-0" />
+                  <span className="truncate">调整分组</span>
                 </button>
               </div>
             </div>
@@ -9518,7 +9835,7 @@ function RulesContent() {
               </div>
 
               <div className="space-y-3">
-                {isBatchExportMode ? (
+                {isBatchGroupMode ? batchGroupPanel : isBatchExportMode ? (
                 <div className="space-y-3 rounded-md border border-border/60 bg-background/55 p-3">
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                     <div className="space-y-1">
@@ -9856,7 +10173,9 @@ function RulesContent() {
               </div>
             </div>
             <div className="rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-xs leading-5 text-muted-foreground">
-              {isBatchExportMode
+              {isBatchGroupMode
+                ? "调整分组只改你自己的分组归属，不会重启、停用或修改任何转发规则。"
+                : isBatchExportMode
                 ? "批量导出会按左侧当前选中的规则生成 JSON 文件，不会受右侧资源范围限制。"
                 : isBatchEditMode
                 ? "批量编辑会按你实际填写的项逐条覆盖：入口资源未选择则保留原入口，目标地址或端口留空则保留原目标值。"
@@ -9874,6 +10193,17 @@ function RulesContent() {
                   <Button type="button" onClick={handleImportRules} disabled={!importValidation.ok || importingRules}>
                     {importingRules && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     导入规则
+                  </Button>
+                </div>
+              </>
+            ) : isBatchGroupMode ? (
+              <>
+                <div />
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="outline" onClick={() => setShowCopyDialog(false)} disabled={copyActionPending}>取消</Button>
+                  <Button type="button" onClick={handleBatchGroupRules} disabled={selectedBatchRuleCount === 0 || batchGroupTargetIds.length === 0 || copyActionPending}>
+                    {copyActionPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Folder className="mr-2 h-4 w-4" />}
+                    {batchGroupMode === "add" ? "加入分组" : "移出分组"}（{selectedBatchRuleCount} 条）
                   </Button>
                 </div>
               </>
