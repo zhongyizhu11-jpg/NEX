@@ -10,12 +10,12 @@
 */
 import { randomUUID } from "node:crypto";
 
-import { normalizeNetTuneResult, type NetTuneResult } from "../../shared/netTune";
+import { normalizeNetTuneResult, type NetTuneMode, type NetTuneResult } from "../../shared/netTune";
 import { registerAgentExtModule, wakeAgentExt, type AgentExtHost } from "./agentExt";
 
 export const NETTUNE_PENDING_TIMEOUT_MS = 3 * 60_000;
 
-export type NetTunePending = { id: string; apply: boolean; requestedAt: number };
+export type NetTunePending = { id: string; apply: boolean; mode: NetTuneMode; values?: Record<string, string>; requestedAt: number };
 
 type HostState = {
   pending: NetTunePending | null;
@@ -43,18 +43,24 @@ function expirePending(state: HostState, now: number) {
   }
 }
 
-/** 点「检查」或「一键调优」。同一台主机已经有一轮在等时直接返回那一轮（不叠加）。 */
-export function requestNetTuneRun(hostId: number, apply: boolean, now = Date.now()): NetTunePending {
+/**
+ * 点「检查」「一键调优」「保存设置」「还原」。同一台主机已经有一轮在等时：
+ * 只读的检查让位给会改东西的那几种（改完也会读一遍值）；已经在等一轮改动时，再点改动就返回那一轮，不叠加。
+ */
+export function requestNetTuneRun(hostId: number, apply: boolean | NetTuneMode, now = Date.now(), values?: Record<string, string>): NetTunePending {
+  const mode: NetTuneMode = typeof apply === "boolean" ? (apply ? "apply" : "check") : apply;
+  const changes = mode !== "check";
   const state = stateOf(hostId);
   expirePending(state, now);
   if (state.pending) {
-    // 在等「检查」时又点了「调优」：调优优先（调优完也会读一遍值）。
-    if (apply && !state.pending.apply) state.pending = { id: randomUUID().replace(/-/g, ""), apply: true, requestedAt: now };
+    if (changes && state.pending.mode === "check") {
+      state.pending = { id: randomUUID().replace(/-/g, ""), apply: mode === "apply", mode, values, requestedAt: now };
+    }
     return state.pending;
   }
-  state.pending = { id: randomUUID().replace(/-/g, ""), apply, requestedAt: now };
+  state.pending = { id: randomUUID().replace(/-/g, ""), apply: mode === "apply", mode, values, requestedAt: now };
   state.timedOut = null;
-  void wakeAgentExt(hostId, apply ? "nettune-apply" : "nettune-check");
+  void wakeAgentExt(hostId, `nettune-${mode}`);
   return state.pending;
 }
 
@@ -74,7 +80,8 @@ function directiveFor(host: AgentExtHost, now = Date.now()) {
   if (!state) return undefined;
   expirePending(state, now);
   if (!state.pending) return undefined;
-  return { runs: [{ id: state.pending.id, apply: state.pending.apply }] };
+  const { id, apply, mode, values } = state.pending;
+  return { runs: [{ id, apply, mode, ...(values ? { values } : {}) }] };
 }
 
 export function ingestNetTuneReport(host: AgentExtHost, report: unknown) {
@@ -85,7 +92,8 @@ export function ingestNetTuneReport(host: AgentExtHost, report: unknown) {
     const result = normalizeNetTuneResult(raw);
     if (!result || result.id !== state.pending.id || result.status !== "done") continue;
     state.latest = result;
-    if (result.apply) state.lastApply = result;
+    // 「最近一次改动」：一键调优、逐项设置、还原都算（老 Agent 没有 mode，按 apply）
+    if (result.apply || (result.mode && result.mode !== "check")) state.lastApply = result;
     state.pending = null;
     state.timedOut = null;
     break;

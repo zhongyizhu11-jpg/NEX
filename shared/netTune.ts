@@ -73,9 +73,22 @@ const NETTUNE_DEFAULT_CC = new Set(["cubic", "reno", "bbr"]);
 export type NetTuneChange = { key: string; from: string; to: string };
 export type NetTuneFailure = { key: string; error: string };
 
+/*
+  2.2.253 起除了「检查 / 一键调优」还有两种（老 Agent 不认，只当一次检查，不会误改）：
+    set      逐项设置：只收 NETTUNE_EDITABLE_KEYS 里的键，值在面板和 Agent 两头都校验，
+             Agent 写完读回来核对，内核没接受就改回原值；
+    restore  还原到面板第一次改这台机器之前的值（第一次改动前 Agent 自动存一份），并删掉面板写的持久化文件。
+  上游 poouo/Forwardx 的 BBR 管理插件（2.3.287）给的也是这两样：按参数改、能还原。
+*/
+export type NetTuneMode = "check" | "apply" | "set" | "restore";
+export const NETTUNE_CUSTOM_AGENT_VERSION = "2.2.253";
+
 export type NetTuneResult = {
   id: string;
   apply: boolean;
+  mode?: NetTuneMode;
+  /** Agent 上有没有「调优前的原值」备份（有才能还原）。老 Agent 不报，按 undefined。 */
+  hasBackup?: boolean;
   status: "running" | "done";
   startedAt: number;
   finishedAt?: number;
@@ -116,9 +129,12 @@ export function normalizeNetTuneResult(raw: unknown): NetTuneResult | null {
   }
   const list = <T,>(value: unknown, map: (entry: Record<string, unknown>) => T | null): T[] =>
     (Array.isArray(value) ? value : []).slice(0, 64).map((entry) => (entry && typeof entry === "object" ? map(entry as Record<string, unknown>) : null)).filter((entry): entry is T => entry !== null);
+  const mode = typeof item.mode === "string" && ["check", "apply", "set", "restore"].includes(item.mode) ? item.mode as NetTuneMode : undefined;
   return {
     id,
     apply: item.apply === true,
+    mode,
+    hasBackup: typeof item.hasBackup === "boolean" ? item.hasBackup : undefined,
     status,
     startedAt: epoch(item.startedAt),
     finishedAt: epoch(item.finishedAt) || undefined,
@@ -304,4 +320,35 @@ export function netTuneKeyLabel(key: string): string {
   if (key === NETTUNE_KEY_QDISC) return "默认队列";
   if (key === NETTUNE_KEY_BUCKETS) return "连接跟踪哈希桶";
   return NETTUNE_RULES.find((rule) => rule.key === key)?.label ?? key;
+}
+
+/* ---------- 逐项设置（2.2.253） ---------- */
+
+/** 能逐项设置的键：规则表里的全部，加拥塞控制和默认队列。和 agent/ext_nettune.go 的 netTuneEditableKey 一致。 */
+export const NETTUNE_EDITABLE_KEYS: readonly string[] = [...NETTUNE_RULES.map((rule) => rule.key), NETTUNE_KEY_CC, NETTUNE_KEY_QDISC];
+export const NETTUNE_QDISC_CHOICES = ["fq", "fq_codel", "cake", "pfifo_fast", "sfq", "codel"] as const;
+
+/**
+ * 面板这头先校验一遍（Agent 那头还会再校验，并且按当前值核对段数、拥塞控制是否可用）。
+ * 返回整理后的值；不合法抛出带原因的 Error。
+ */
+export function normalizeNetTuneSetting(key: string, raw: string): string {
+  if (!NETTUNE_EDITABLE_KEYS.includes(key)) throw new Error(`${key} 不能在这里改`);
+  const fields = String(raw ?? "").trim().split(/\s+/).filter(Boolean);
+  if (fields.length === 0) throw new Error(`${netTuneKeyLabel(key)}：值是空的`);
+  if (key === NETTUNE_KEY_CC) {
+    if (fields.length !== 1 || !/^[a-z0-9_]{1,32}$/.test(fields[0])) throw new Error("拥塞控制算法名不对");
+    return fields[0];
+  }
+  if (key === NETTUNE_KEY_QDISC) {
+    if (fields.length !== 1 || !(NETTUNE_QDISC_CHOICES as readonly string[]).includes(fields[0])) {
+      throw new Error(`默认队列只支持 ${NETTUNE_QDISC_CHOICES.join("、")}`);
+    }
+    return fields[0];
+  }
+  if (fields.length > 3) throw new Error(`${netTuneKeyLabel(key)}：最多 3 个数`);
+  for (const field of fields) {
+    if (!/^\d{1,19}$/.test(field)) throw new Error(`${netTuneKeyLabel(key)}：「${field}」不是非负整数`);
+  }
+  return fields.join(" ");
 }

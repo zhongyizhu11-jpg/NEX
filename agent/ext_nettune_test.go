@@ -14,14 +14,15 @@ import (
 func netTuneFakeProc(t *testing.T, values map[string]string) string {
 	t.Helper()
 	root := t.TempDir()
-	oldRoot, oldConf, oldHash, oldModprobe, oldLoad := netTuneProcRoot, netTuneConfPath, netTuneHashsizePath, netTuneModprobeConf, netTuneLoadBBR
+	oldRoot, oldConf, oldHash, oldModprobe, oldLoad, oldBackup := netTuneProcRoot, netTuneConfPath, netTuneHashsizePath, netTuneModprobeConf, netTuneLoadBBR, netTuneBackupPath
+	netTuneBackupPath = filepath.Join(root, "etc", "forwardx-nettune", "backup.json")
 	netTuneProcRoot = filepath.Join(root, "proc")
 	netTuneConfPath = filepath.Join(root, "etc", "sysctl.d", "99-forwardx-network.conf")
 	netTuneHashsizePath = filepath.Join(root, "sys", "hashsize")
 	netTuneModprobeConf = filepath.Join(root, "etc", "modprobe.d", "99-forwardx-conntrack.conf")
 	netTuneLoadBBR = func() {}
 	t.Cleanup(func() {
-		netTuneProcRoot, netTuneConfPath, netTuneHashsizePath, netTuneModprobeConf, netTuneLoadBBR = oldRoot, oldConf, oldHash, oldModprobe, oldLoad
+		netTuneProcRoot, netTuneConfPath, netTuneHashsizePath, netTuneModprobeConf, netTuneLoadBBR, netTuneBackupPath = oldRoot, oldConf, oldHash, oldModprobe, oldLoad, oldBackup
 	})
 	for key, value := range values {
 		path := netTuneProcPath(key)
@@ -272,5 +273,135 @@ func TestNetTuneModuleRunsOncePerID(t *testing.T) {
 	module.Apply(Config{}, bad)
 	if len(module.Report(Config{}).(netTuneReport).Results) != 1 {
 		t.Error("非法 id 不该接")
+	}
+}
+
+func TestNetTuneSetValuesValidatesAndPersists(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("只在 Linux 上跑")
+	}
+	netTuneFakeProc(t, netTuneDistroDefaults())
+	result := netTuneRunMode("set", map[string]string{
+		"net.core.somaxconn":              "65535",
+		"net.ipv4.tcp_rmem":               "4096 131072 33554432",
+		"net.core.default_qdisc":          "cake",
+		"net.ipv4.tcp_congestion_control": "bbr",
+		"net.ipv4.tcp_wmem":               "4096 16384", // 段数不对
+		"net.core.rmem_max":               "-1",         // 负数
+		"kernel.panic":                    "1",          // 不在名单里
+		"net.ipv4.tcp_fastopen":           "abc",        // 不是数
+		"net.ipv4.tcp_tw_reuse":           "2",          // 和现在一样：不算改动
+	})
+	if result.Mode != "set" || !result.HasBackup {
+		t.Fatalf("mode / 备份不对：%+v", result)
+	}
+	changed := map[string]string{}
+	for _, change := range result.Changed {
+		changed[change.Key] = change.To
+	}
+	want := map[string]string{
+		"net.core.somaxconn":              "65535",
+		"net.ipv4.tcp_rmem":               "4096 131072 33554432",
+		"net.core.default_qdisc":          "cake",
+		"net.ipv4.tcp_congestion_control": "bbr",
+	}
+	for key, value := range want {
+		if changed[key] != value {
+			t.Errorf("%s 应该改成 %s，实际 %q（全部：%+v）", key, value, changed[key], result.Changed)
+		}
+	}
+	if len(changed) != len(want) {
+		t.Errorf("多改了：%+v", result.Changed)
+	}
+	failed := map[string]string{}
+	for _, failure := range result.Failed {
+		failed[failure.Key] = failure.Error
+	}
+	for _, key := range []string{"net.ipv4.tcp_wmem", "net.core.rmem_max", "kernel.panic", "net.ipv4.tcp_fastopen"} {
+		if failed[key] == "" {
+			t.Errorf("%s 应该被拒绝：%+v", key, result.Failed)
+		}
+	}
+	if !strings.Contains(failed["net.ipv4.tcp_wmem"], "3 个数") {
+		t.Errorf("段数不对的提示：%q", failed["net.ipv4.tcp_wmem"])
+	}
+	conf, err := os.ReadFile(netTuneConfPath)
+	if err != nil || !strings.Contains(string(conf), "net.core.somaxconn = 65535") || !strings.Contains(string(conf), "net.core.default_qdisc = cake") {
+		t.Errorf("没写进 sysctl.d：%v\n%s", err, conf)
+	}
+	// 内核里没有的拥塞控制：拒绝（modprobe 在测试里什么也装不上）
+	again := netTuneRunMode("set", map[string]string{"net.ipv4.tcp_congestion_control": "nosuchcc"})
+	if len(again.Failed) != 1 || !strings.Contains(again.Failed[0].Error, "没有 nosuchcc") {
+		t.Errorf("不存在的算法应该被拒绝：%+v", again.Failed)
+	}
+	// 空的、太多的
+	if empty := netTuneRunMode("set", nil); empty.Error == "" {
+		t.Error("空的应该报错")
+	}
+}
+
+func TestNetTuneSetRollsBackWhenKernelRewritesValue(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("只在 Linux 上跑")
+	}
+	netTuneFakeProc(t, netTuneDistroDefaults())
+	// 假的 /proc 文件：写进去的值原样留着；把它换成目录，写就会失败 —— 模拟内核拒绝
+	path := netTuneProcPath("net.core.netdev_max_backlog")
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(path, 0755); err != nil {
+		t.Fatal(err)
+	}
+	result := netTuneRunMode("set", map[string]string{"net.core.netdev_max_backlog": "32768"})
+	if len(result.Changed) != 0 || len(result.Failed) != 1 {
+		t.Fatalf("写不进去的应该报失败、不算改动：%+v", result)
+	}
+}
+
+func TestNetTuneRestoreGoesBackToFirstBackup(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("只在 Linux 上跑")
+	}
+	netTuneFakeProc(t, netTuneDistroDefaults())
+	if check := netTuneRunMode("check", nil); check.HasBackup {
+		t.Fatal("只检查不该留备份")
+	}
+	if restore := netTuneRunMode("restore", nil); !strings.Contains(restore.Error, "没有找到调优前的原值") {
+		t.Fatalf("没备份时还原应该说清楚：%+v", restore)
+	}
+	applied := netTuneRunMode("apply", nil)
+	if !applied.HasBackup || len(applied.Changed) == 0 {
+		t.Fatalf("一键调优要先存备份再改：%+v", applied)
+	}
+	// 第二次改动不覆盖备份：原样还是第一次之前那份
+	netTuneRunMode("set", map[string]string{"net.core.somaxconn": "1024"})
+	if value, _, _ := netTuneRead("net.core.somaxconn"); value != "1024" {
+		t.Fatalf("设置没生效：%s", value)
+	}
+	restored := netTuneRunMode("restore", nil)
+	if restored.Error != "" || len(restored.Changed) == 0 {
+		t.Fatalf("还原失败：%+v", restored)
+	}
+	for key, want := range map[string]string{
+		"net.ipv4.tcp_congestion_control": "cubic",
+		"net.core.default_qdisc":          "fq_codel",
+		"net.core.rmem_max":               "212992",
+		"net.core.somaxconn":              "4096",
+		"net.ipv4.tcp_rmem":               "4096 131072 6291456",
+	} {
+		if value, _, _ := netTuneRead(key); value != want {
+			t.Errorf("%s 应该还原成 %s，实际 %s", key, want, value)
+		}
+	}
+	if _, err := os.Stat(netTuneConfPath); !os.IsNotExist(err) {
+		t.Errorf("还原后 sysctl.d 文件应该删掉：%v", err)
+	}
+	// 老面板只发 apply=false：当一次检查
+	if mode := netTuneMode("", false); mode != "check" {
+		t.Errorf("老指令的 mode：%s", mode)
+	}
+	if mode := netTuneMode("weird", true); mode != "apply" {
+		t.Errorf("认不出的 mode 按 apply 字段：%s", mode)
 	}
 }
