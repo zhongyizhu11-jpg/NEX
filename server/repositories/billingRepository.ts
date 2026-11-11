@@ -58,6 +58,7 @@ import {
   type ReferralSourceType,
 } from "../../shared/referral";
 import { pageResult, pageWindowForTotal, type PageRequest } from "../../shared/pagination";
+import { paymentOrderUndeletableReason } from "../../shared/paymentOrderDeletion";
 import { withKeyedTaskLock, withTrafficBillingUserLock } from "../keyedTaskLock";
 import {
   getUserForwardRuleIdsDisabledByAccess,
@@ -3446,26 +3447,12 @@ async function listUserSubscriptionsForLedger(
     .limit(limit);
 }
 
-export async function listBillingLedger(options?: {
-  viewerUserId?: number;
-  isAdmin?: boolean;
-  userId?: number;
-  limit?: number;
-  includeCancelledSubscriptions?: boolean;
-}, selectedIds?: { balance: number[]; payment: number[]; subscription: number[] }) {
-  const limit = normalizeBillingLimit(options?.limit);
-  const targetUserId = options?.isAdmin ? options?.userId : options?.viewerUserId;
-  if (!options?.isAdmin && !targetUserId) return [];
-
-  const [transactions, orders, subscriptions] = await Promise.all([
-    listBalanceTransactions(targetUserId, limit, selectedIds?.balance),
-    listPaymentOrders(limit, targetUserId, selectedIds?.payment),
-    listUserSubscriptionsForLedger(targetUserId, limit, {
-      isAdmin: !!options?.isAdmin,
-      includeCancelledSubscriptions: !!options?.includeCancelledSubscriptions,
-    }, selectedIds?.subscription),
-  ]);
-
+/** 三张表的行合成账单条目（按时间倒序）。列表和 Excel 导出共用这一份，两边的口径不会漂。 */
+function buildBillingLedgerItems(
+  transactions: Awaited<ReturnType<typeof listBalanceTransactions>>,
+  orders: Awaited<ReturnType<typeof listPaymentOrders>>,
+  subscriptions: Awaited<ReturnType<typeof listUserSubscriptionsForLedger>>,
+) {
   const items = [
     ...transactions.map((tx: any) => ({
       id: `balance-${tx.id}`,
@@ -3536,9 +3523,82 @@ export async function listBillingLedger(options?: {
     })),
   ];
 
-  return items
-    .sort((a, b) => billingTime(b.createdAt) - billingTime(a.createdAt))
-    .slice(0, limit);
+  return items.sort((a, b) => billingTime(b.createdAt) - billingTime(a.createdAt));
+}
+
+export async function listBillingLedger(options?: {
+  viewerUserId?: number;
+  isAdmin?: boolean;
+  userId?: number;
+  limit?: number;
+  includeCancelledSubscriptions?: boolean;
+}, selectedIds?: { balance: number[]; payment: number[]; subscription: number[] }) {
+  const limit = normalizeBillingLimit(options?.limit);
+  const targetUserId = options?.isAdmin ? options?.userId : options?.viewerUserId;
+  if (!options?.isAdmin && !targetUserId) return [];
+
+  const [transactions, orders, subscriptions] = await Promise.all([
+    listBalanceTransactions(targetUserId, limit, selectedIds?.balance),
+    listPaymentOrders(limit, targetUserId, selectedIds?.payment),
+    listUserSubscriptionsForLedger(targetUserId, limit, {
+      isAdmin: !!options?.isAdmin,
+      includeCancelledSubscriptions: !!options?.includeCancelledSubscriptions,
+    }, selectedIds?.subscription),
+  ]);
+
+  return buildBillingLedgerItems(transactions, orders, subscriptions).slice(0, limit);
+}
+
+/**
+ * 账单 Excel 导出要的三份数据（上游 2.3.286）：账单流水（三张表合在一起，和账单页同一份口径）、
+ * 余额流水、支付订单。
+ *
+ * 看谁的由调用方（server/billingExport.ts）按登录的人算好再传进来：普通用户永远是自己，
+ * 这里不再信任任何外来的 userId。先数再读：超过上限直接说清楚，不读一半给一份残缺的表。
+ */
+export async function countBillingExportRows(options: { targetUserId?: number; isAdmin: boolean; includeCancelledSubscriptions: boolean }) {
+  const q = quoteDbIdentifier;
+  const count = async (table: string, extra: string[] = [], extraParams: unknown[] = []) => {
+    const conditions = [...extra];
+    const params: unknown[] = [...extraParams];
+    if (options.targetUserId !== undefined) { conditions.push(`${q("userId")} = ?`); params.push(options.targetUserId); }
+    const [row] = await queryRaw<{ n: number }>(
+      `SELECT COUNT(*) AS ${q("n")} FROM ${q(table)}${conditions.length ? ` WHERE ${conditions.join(" AND ")}` : ""}`,
+      params,
+    );
+    return Number(row?.n || 0);
+  };
+  const subscriptionConditions = [`${q("adminDismissedAt")} IS NULL`];
+  const subscriptionParams: unknown[] = [];
+  if (!options.isAdmin) subscriptionConditions.push(`${q("userDismissedAt")} IS NULL`);
+  if (!options.includeCancelledSubscriptions) { subscriptionConditions.push(`${q("status")} <> ?`); subscriptionParams.push("cancelled"); }
+  const [balance, payment, subscription] = await Promise.all([
+    count("balance_transactions"),
+    count("payment_orders"),
+    count("user_subscriptions", subscriptionConditions, subscriptionParams),
+  ]);
+  return { balance, payment, subscription, ledger: balance + payment + subscription };
+}
+
+export async function listBillingExportData(options: { targetUserId?: number; isAdmin: boolean; includeCancelledSubscriptions: boolean; limit: number }) {
+  const limit = Math.max(1, Math.floor(options.limit));
+  const [transactions, orders, subscriptions] = await Promise.all([
+    listBalanceTransactions(options.targetUserId, limit),
+    listPaymentOrders(limit, options.targetUserId),
+    listUserSubscriptionsForLedger(options.targetUserId, limit, {
+      isAdmin: options.isAdmin,
+      includeCancelledSubscriptions: options.includeCancelledSubscriptions,
+    }),
+  ]);
+  return {
+    ledger: buildBillingLedgerItems(transactions, orders, subscriptions),
+    transactions,
+    orders: (orders as Array<(typeof orders)[number]>).map((order) => ({
+      ...order,
+      statusLabel: paymentStatusLabel(order.status),
+      orderTypeLabel: paymentOrderTypeLabel(order.orderType),
+    })),
+  };
 }
 
 /**
@@ -4347,6 +4407,139 @@ export async function releasePaymentOrderPlanStock(outTradeNo: string) {
 
 function affectedRows(result: any) {
   return rawAffectedRows(result);
+}
+
+// ==================== 删除未支付订单（上游 2.3.298） ====================
+
+/** 墓碑留多久：支付网关的回调重试一般几小时到几天，留半年足够，再久没意义。 */
+const PAYMENT_ORDER_TOMBSTONE_RETENTION_SECONDS = 180 * 24 * 60 * 60;
+
+export type PaymentOrderTombstone = {
+  outTradeNo: string;
+  userId: number;
+  provider: string;
+  orderType: string;
+  status: string;
+  amountCents: number;
+  currency: string;
+  tradeNo: string | null;
+  creditedAt: number | null;
+};
+
+function mapTombstone(row: Record<string, unknown> | undefined): PaymentOrderTombstone | undefined {
+  if (!row) return undefined;
+  return {
+    outTradeNo: String(row.outTradeNo),
+    userId: Number(row.userId),
+    provider: String(row.provider || ""),
+    orderType: String(row.orderType || "balance"),
+    status: String(row.status || ""),
+    amountCents: Number(row.amountCents || 0),
+    currency: String(row.currency || "CNY"),
+    tradeNo: row.tradeNo ? String(row.tradeNo) : null,
+    creditedAt: row.creditedAt ? Number(row.creditedAt) : null,
+  };
+}
+
+/** 读一条墓碑；forUpdate 时要在事务里调用，锁住这一行（转入余额只能做一次）。 */
+export async function getPaymentOrderTombstone(outTradeNo: string, options: { forUpdate?: boolean } = {}) {
+  const q = quoteDbIdentifier;
+  const lock = options.forUpdate && getDatabaseKind() !== "sqlite" ? " FOR UPDATE" : "";
+  const rows = await queryRaw<Record<string, unknown>>(
+    `SELECT ${["outTradeNo", "userId", "provider", "orderType", "status", "amountCents", "currency", "tradeNo", "creditedAt"].map((name) => q(name)).join(", ")}
+       FROM ${q("payment_order_tombstones")} WHERE ${q("outTradeNo")} = ? LIMIT 1${lock}`,
+    [outTradeNo],
+  );
+  return mapTombstone(rows[0]);
+}
+
+export async function markPaymentOrderTombstoneCredited(outTradeNo: string) {
+  const q = quoteDbIdentifier;
+  await executeRaw(
+    `UPDATE ${q("payment_order_tombstones")} SET ${q("creditedAt")} = ? WHERE ${q("outTradeNo")} = ? AND ${q("creditedAt")} IS NULL`,
+    [Math.floor(Date.now() / 1000), outTradeNo],
+  );
+}
+
+export type DeleteUnpaidPaymentOrdersResult = {
+  deleted: Array<{ id: number; outTradeNo: string; stockReleased: boolean; discountReleased: boolean }>;
+  skipped: Array<{ id: number; outTradeNo: string | null; reason: string }>;
+};
+
+/**
+ * 删掉没付过款的支付订单（单笔、批量都走这里）。
+ *
+ * 每笔一个事务：锁住订单行，按锁到的当前状态再判一次能不能删（列表是几秒前的快照，期间可能刚好付了款）；
+ * 还占着的套餐库存、折扣码名额在同一个事务里退回去，再写墓碑、删行 —— 任何一步失败整笔回滚，
+ * 不会出现「订单删了、库存没退」。已支付 / 已完成的不删，返回原因。
+ */
+export async function deleteUnpaidPaymentOrders(ids: number[], operatorUserId: number | null): Promise<DeleteUnpaidPaymentOrdersResult> {
+  const q = quoteDbIdentifier;
+  const result: DeleteUnpaidPaymentOrdersResult = { deleted: [], skipped: [] };
+  const uniqueIds = Array.from(new Set(ids.map(Number).filter((id) => Number.isInteger(id) && id > 0)));
+  if (uniqueIds.length === 0) return result;
+  const nowSec = Math.floor(Date.now() / 1000);
+  // 顺手清掉过期的墓碑，不另起定时任务。
+  await executeRaw(`DELETE FROM ${q("payment_order_tombstones")} WHERE ${q("deletedAt")} < ?`, [nowSec - PAYMENT_ORDER_TOMBSTONE_RETENTION_SECONDS]);
+  const lock = getDatabaseKind() === "sqlite" ? "" : " FOR UPDATE";
+  const columns = ["id", "outTradeNo", "userId", "provider", "orderType", "status", "amountCents", "currency", "tradeNo",
+    "planId", "stockReserved", "discountCodeId", "discountConsumed", "paidAt", "rawNotify"];
+  for (const id of uniqueIds) {
+    try {
+      const outcome = await withDatabaseTransaction(async () => {
+        const [order] = await queryRaw<Record<string, unknown>>(
+          `SELECT ${columns.map((name) => q(name)).join(", ")} FROM ${q("payment_orders")} WHERE ${q("id")} = ? LIMIT 1${lock}`,
+          [id],
+        );
+        if (!order) return { skipped: { id, outTradeNo: null, reason: "订单不存在或已删除" } };
+        const outTradeNo = String(order.outTradeNo);
+        const reason = paymentOrderUndeletableReason({ status: String(order.status || ""), paidAt: order.paidAt, rawNotify: order.rawNotify });
+        if (reason) return { skipped: { id, outTradeNo, reason } };
+        // 兜底：已经有入账流水或开出过订阅的，不管状态写的是什么都不删（账要对得上）。
+        const [linked] = await queryRaw<{ n: number }>(
+          `SELECT (SELECT COUNT(*) FROM ${q("balance_transactions")} WHERE ${q("paymentOrderNo")} = ?)
+                + (SELECT COUNT(*) FROM ${q("user_subscriptions")} WHERE ${q("paymentOrderNo")} = ?) AS ${q("n")}`,
+          [outTradeNo, outTradeNo],
+        );
+        if (Number(linked?.n || 0) > 0) return { skipped: { id, outTradeNo, reason: "这笔订单已有入账或开通记录，不能删除" } };
+        // 没付款的单占着的那一份库存退回去（关单时已经退过的 stockReserved 早就清了，这里不会退第二次）。
+        let stockReleased = false;
+        if (dbBool(order.stockReserved) && Number(order.planId || 0) > 0) {
+          await releasePlanStock(Number(order.planId));
+          stockReleased = true;
+        }
+        // 待支付的单下单时就占了折扣码名额，删单一起还回去。
+        let discountReleased = false;
+        if (Number(order.discountCodeId || 0) > 0 && dbBool(order.discountConsumed)) {
+          discountReleased = await releaseDiscountCode(Number(order.discountCodeId));
+        }
+        await executeRaw(
+          `DELETE FROM ${q("payment_order_tombstones")} WHERE ${q("outTradeNo")} = ?`,
+          [outTradeNo],
+        );
+        await insertAndGetId("payment_order_tombstones", {
+          outTradeNo,
+          userId: Number(order.userId),
+          provider: String(order.provider || ""),
+          orderType: String(order.orderType || "balance"),
+          status: String(order.status || ""),
+          amountCents: Number(order.amountCents || 0),
+          currency: String(order.currency || "CNY"),
+          tradeNo: order.tradeNo ? String(order.tradeNo) : null,
+          deletedByUserId: operatorUserId,
+          deletedAt: nowSec,
+          creditedAt: null,
+        });
+        await executeRaw(`DELETE FROM ${q("payment_orders")} WHERE ${q("id")} = ?`, [id]);
+        return { deleted: { id, outTradeNo, stockReleased, discountReleased } };
+      });
+      if ("deleted" in outcome && outcome.deleted) result.deleted.push(outcome.deleted);
+      else if ("skipped" in outcome && outcome.skipped) result.skipped.push(outcome.skipped);
+    } catch (error) {
+      result.skipped.push({ id, outTradeNo: null, reason: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  return result;
 }
 
 export async function claimPaidPaymentOrder(outTradeNo: string) {

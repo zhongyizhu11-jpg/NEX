@@ -9,6 +9,7 @@ import { getConfiguredPanelUrl, resolvePanelUrl } from "./agentPanelUrl";
 import * as db from "./db";
 import { withKeyedTaskLock, withTrafficBillingUserLock } from "./keyedTaskLock";
 import { paymentOrderFailureMessage } from "./paymentFailureMessage";
+import { MAX_PAYMENT_ORDER_DELETE_BATCH } from "../shared/paymentOrderDeletion";
 import { alipayTimestamp, fetchPaymentText, normalizePaymentLink, verifyAlipayResponse } from "./paymentProtocol";
 import { TRPCError } from "@trpc/server";
 import {
@@ -1306,9 +1307,63 @@ export async function recoverStaleProcessingPaymentOrders() {
   }
 }
 
-async function processPaidNotification(outTradeNo: string, notification: PaidNotification) {
+/**
+ * 付款通知到的时候订单已经被管理员删了（删除未支付订单，上游 2.3.298）。
+ *
+ * NEX 对「已关闭的订单收到付款」的处理是把实付转入余额（creditPaidOrderToBalance），删掉的订单也照这个来：
+ * 删的时候留了墓碑（payment_order_tombstones），金额、币种、渠道都对得上就把钱转入那个用户的余额，
+ * 对不上就拒绝并记错误日志。不重新建订单、不发货 —— 管理员删单就是不想再按这笔单交付了，
+ * 可钱确实收了，不能让它凭空消失。以订单号为幂等键（余额流水的 paymentOrderNo + 墓碑 creditedAt），
+ * 回调重放只入账一次。没有墓碑（从来不存在的单号）照旧只记一行日志。
+ */
+async function creditDeletedPaymentOrder(outTradeNo: string, notification: PaidNotification) {
+  const tombstone = await db.getPaymentOrderTombstone(outTradeNo);
+  if (!tombstone) return { handled: false as const, credited: false };
+  try {
+    assertPaidNotificationMatchesOrder({ ...tombstone }, notification);
+  } catch (error) {
+    appendPanelLog("error", `[Payment] ${notification.provider} late notify for deleted order rejected: ${error instanceof Error ? error.message : String(error)}`);
+    return { handled: true as const, credited: false };
+  }
+  if (tombstone.orderType === "test") {
+    appendPanelLog("warn", `[Payment] ${notification.provider} late notify for deleted test order=${outTradeNo}; nothing credited`);
+    return { handled: true as const, credited: false };
+  }
+  let credited = false;
+  try {
+    await withTrafficBillingUserLock(tombstone.userId, () => db.withDatabaseTransaction(async () => {
+      const latest = await db.getPaymentOrderTombstone(outTradeNo, { forUpdate: true });
+      if (!latest || latest.creditedAt) return;
+      if (!(await db.getBalanceTransactionByPaymentOrderNo(outTradeNo)) && latest.amountCents > 0) {
+        await db.addUserBalance(latest.userId, latest.amountCents, {
+          type: "payment",
+          description: `订单 ${outTradeNo} 已被管理员删除，付款到账后实付金额已转入余额`,
+          paymentOrderNo: outTradeNo,
+        });
+        credited = true;
+      }
+      await db.markPaymentOrderTombstoneCredited(outTradeNo);
+    }));
+  } catch (error) {
+    // 比如用户也被删了：重试不会好，记错误日志等人工处理，不让网关一直重发。
+    appendPanelLog("error", `[Payment] ${notification.provider} late notify for deleted order=${outTradeNo} could not be credited: ${error instanceof Error ? error.message : String(error)}`);
+    return { handled: true as const, credited: false };
+  }
+  appendPanelLog("warn", `[Payment] ${notification.provider} paid deleted order=${outTradeNo} user=${tombstone.userId} amount=${tombstone.amountCents} ${credited ? "credited to balance" : "already credited"}`);
+  if (credited) {
+    await db.recoverUserForwardAccessIfEligible(tombstone.userId).catch((error: unknown) => {
+      appendPanelLog("warn", `[Payment] access recovery after balance credit failed order=${outTradeNo}: ${error instanceof Error ? error.message : String(error)}`);
+    });
+  }
+  return { handled: true as const, credited };
+}
+
+/** 导出给测试用：模拟一次验签通过的付款通知。 */
+export async function processPaidNotification(outTradeNo: string, notification: PaidNotification) {
   const order = await db.getPaymentOrderByOutTradeNo(outTradeNo);
   if (!order) {
+    const deleted = await creditDeletedPaymentOrder(outTradeNo, notification);
+    if (deleted.handled) return { ignored: !deleted.credited, reason: "deleted_order" as const };
     appendPanelLog("warn", `[Payment] ${notification.provider} notify ignored unknown order=${outTradeNo}`);
     return { ignored: true, reason: "unknown_order" as const };
   }
@@ -1488,6 +1543,21 @@ export const paymentRouter = router({
     .query(async ({ input }) => {
       await expireStalePendingOrders();
       return db.listPaymentOrders(input?.limit || 100);
+    }),
+
+  /**
+   * 删除没付过款的订单（上游 2.3.298），单笔和批量都走这一个。已支付 / 处理中 / 已完成的不删，
+   * 逐笔带原因返回；占着的库存和折扣码在同一个事务里退回（db.deleteUnpaidPaymentOrders）。
+   * 删掉之后迟到的付款回调转入余额，见 creditDeletedPaymentOrder。
+   */
+  deleteOrders: adminProcedure
+    .input(z.object({ ids: z.array(z.number().int().positive()).min(1).max(MAX_PAYMENT_ORDER_DELETE_BATCH) }))
+    .mutation(async ({ input, ctx }) => {
+      const result = await db.deleteUnpaidPaymentOrders(input.ids, Number(ctx.user.id));
+      if (result.deleted.length > 0) {
+        appendPanelLog("info", `[Payment] admin=${ctx.user.id} deleted unpaid orders=${result.deleted.map((item) => item.outTradeNo).join(",")} stockReleased=${result.deleted.filter((item) => item.stockReleased).length}`);
+      }
+      return result;
     }),
 
   myOrders: protectedProcedure
@@ -1790,7 +1860,8 @@ async function handleGmPayNotification(req: express.Request, res: express.Respon
     const outTradeNo = String(params.order_id || "").trim();
     const tradeId = String(params.trade_id || "").trim();
     if (!outTradeNo || !tradeId) throw new Error("missing order_id or trade_id");
-    const order = await db.getPaymentOrderByOutTradeNo(outTradeNo);
+    // 被管理员删掉的订单只剩墓碑：同样核对渠道和交易号，再交给 processPaidNotification 转入余额。
+    const order = await db.getPaymentOrderByOutTradeNo(outTradeNo) ?? await db.getPaymentOrderTombstone(outTradeNo);
     if (!order) throw new Error(`unknown order=${outTradeNo}`);
     if (order.provider !== "gmpay") throw new Error(`provider mismatch order=${outTradeNo}`);
     if (order.tradeNo && order.tradeNo !== tradeId) throw new Error(`trade id mismatch order=${outTradeNo}`);

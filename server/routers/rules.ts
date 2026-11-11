@@ -7,6 +7,7 @@ import { portsRulesRouter } from "./rules.ports";
 import { selfTestRulesRouter } from "./rules.selfTest";
 import { trafficRulesRouter } from "./rules.traffic";
 import { personalRuleGroupsRouter } from "./rules.groups";
+import { ruleBatchJobsRouter } from "./rules.batchJobs";
 import { getRulePersonalGroupIds } from "../ruleGroups";
 import { ruleGroupFilterSchema } from "../../shared/ruleGroups";
 import { canUseForwardRuleResource, getLinkAccessScope } from "../linkAccessView";
@@ -477,4 +478,6 @@ export const rulesRouter = router({
   ...selfTestRulesRouter._def.procedures,
   // 个人分组（rules.personalGroups / savePersonalGroup / deletePersonalGroup / reorderPersonalGroups / moveToPersonalGroups）
   ...personalRuleGroupsRouter._def.procedures,
+  // 批量任务（rules.batchJobStart / batchJobs / batchJobStatus / batchJobStop / batchJobRetryFailed / batchJobDismiss）
+  ...ruleBatchJobsRouter._def.procedures,
 });

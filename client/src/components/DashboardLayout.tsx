@@ -109,6 +109,7 @@ import { useUiTheme } from "@/hooks/useUiTheme";
 import { useLayoutPreference } from "@/hooks/useCompactLayout";
 import { navigateAfterPrefetch, prefetchRoute, prefetchRoutesWhenIdle } from "@/pages/routeChunks";
 import { docsUrl } from "@/lib/docsLinks";
+import RuleBatchJobDock from "@/components/rules/RuleBatchJobDock";
 
 const TWO_FACTOR_SETUP_SECONDS = 5 * 60;
 /*
@@ -2038,6 +2039,8 @@ function DashboardLayoutContent({
             </MobileNavContext.Provider>
           </div>
         </main>
+        {/* 规则批量任务的进度小窗（右下角）：挂在布局上，换页面也看得到 */}
+        <RuleBatchJobDock />
         {/* 精简布局：页脚那一行链接不占每页的底部（设置 › 关于 里都有） */}
         <footer data-fx-compact-hide="" className="hidden pb-4 text-center text-xs text-muted-foreground md:block">
           <div className="inline-flex flex-wrap items-center justify-center gap-x-3 gap-y-1">

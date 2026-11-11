@@ -151,3 +151,23 @@ export function downloadTextFile(
     throw new Error("浏览器未能保存文件，请检查下载权限后重试");
   }
 }
+
+/**
+ * 把接口用 base64 带回来的二进制文件（比如账单 Excel）存下来。
+ * 走 Blob + 临时链接；二进制没法退回 data: 文本链接那条兼容路，失败就直接报错。
+ */
+export function downloadBase64File(filename: string, dataBase64: string, mimeType = "application/octet-stream") {
+  const runtime = getBrowserDownloadRuntime();
+  const binary = globalThis.atob(dataBase64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  if (typeof Blob === "undefined") throw new Error("当前浏览器不支持 Blob 文件下载");
+  const objectUrl = runtime.createObjectUrl(new Blob([bytes], { type: normalizeDownloadMimeType(mimeType) }));
+  try {
+    triggerDownloadLink(runtime, objectUrl, sanitizeDownloadFilename(filename));
+  } catch {
+    safeRevokeObjectUrl(runtime, objectUrl);
+    throw new Error("浏览器未能保存文件，请检查下载权限后重试");
+  }
+  scheduleCleanup(runtime, () => safeRevokeObjectUrl(runtime, objectUrl), DOWNLOAD_OBJECT_URL_REVOKE_DELAY_MS);
+}
