@@ -9,8 +9,9 @@ import {
   vlessEgressEndpointError,
   vlessEgressInboundError,
   VLESS_EGRESS_AGENT_VERSION,
-  VLESS_EGRESS_TCP_ONLY_MESSAGE,
   VLESS_EGRESS_TUNNEL_MESSAGE,
+  VLESS_EGRESS_UDP_PACKET_ENCODING,
+  VLESS_EGRESS_UDP_SUPPORTED,
 } from "./vlessEgress";
 import {
   NO_EGRESS_COLUMNS,
@@ -25,7 +26,7 @@ import {
 
 /**
  * VLESS Reality 出口的纯规则：外部链接只收 RAW/TCP + REALITY + Vision（别的组合拒绝并说清楚是哪一项）、
- * 落地入站能不能做出口、规则形态（只转 TCP、不接隧道）、Agent 门槛。
+ * 落地入站能不能做出口、规则形态（UDP 和协议要对得上、不接隧道）、Agent 门槛。
  */
 
 const PBK = "TiSmUw53M68pgep1_Cc7AXzh1QpUzeBM74jRZbWHj3Q";
@@ -129,14 +130,14 @@ test("落地入站能不能做 VLESS 出口：只收 VLESS + RAW/TCP + REALITY +
   assert.match(String(vlessEgressInboundError({ ...good, realityPublicKey: "" })), /公钥/);
 });
 
-test("出口类型：VLESS 两种和 SS 两种共用 egressInboundId / egressConfigJson；VLESS 不存 UDP", () => {
+test("出口类型：VLESS 两种和 SS 两种共用 egressInboundId / egressConfigJson / egressUdp", () => {
   assert.deepEqual([...RULE_EGRESS_TYPES], ["none", "ss_host", "ss_link", "vless_host", "vless_link"]);
   assert.equal(ruleEgressProtocolOf("vless_host"), "vless");
   assert.equal(ruleEgressProtocolOf("ss_link"), "shadowsocks");
   assert.equal(ruleEgressProtocolOf("none"), null);
   assert.equal(ruleEgressUsesInbound("vless_host") && ruleEgressUsesLink("vless_link"), true);
   assert.deepEqual(ruleEgressColumnsOf({ egressType: "vless_host", egressInboundId: 9, egressConfigJson: "x", egressUdp: true }), {
-    egressType: "vless_host", egressInboundId: 9, egressConfigJson: null, egressUdp: false,
+    egressType: "vless_host", egressInboundId: 9, egressConfigJson: null, egressUdp: true,
   });
   assert.deepEqual(ruleEgressColumnsOf({ egressType: "vless_link", egressInboundId: 9, egressConfigJson: "enc", egressUdp: false }), {
     egressType: "vless_link", egressInboundId: null, egressConfigJson: "enc", egressUdp: false,
@@ -144,16 +145,26 @@ test("出口类型：VLESS 两种和 SS 两种共用 egressInboundId / egressCon
   assert.deepEqual(ruleEgressColumnsOf({ egressType: "bogus" }), NO_EGRESS_COLUMNS);
   assert.equal(ruleEgressSummaryText({ type: "vless_host", landingHostName: "东京" }), "经 落地主机 东京 VLESS 出口");
   assert.equal(ruleEgressSummaryText({ type: "vless_link" }), "经 外部 VLESS 出口");
+  // 「含 UDP」只看真的下发了 UDP（udp === true），不看勾没勾。
+  assert.equal(ruleEgressSummaryText({ type: "vless_host", landingHostName: "东京", udp: true }), "经 落地主机 东京 VLESS 出口（含 UDP）");
+  assert.equal(ruleEgressSummaryText({ type: "vless_link", udp: true }), "经 外部 VLESS 出口（含 UDP，需对端支持 UDP）");
+  assert.equal(ruleEgressSummaryText({ type: "vless_link", udp: 1 }), "经 外部 VLESS 出口");
 });
 
-test("规则形态：VLESS 出口只转 TCP、不接隧道、不接转发链 / 线路组", () => {
+test("规则形态：VLESS 出口的 UDP 和协议要对得上、不接隧道、不接转发链 / 线路组", () => {
   const shape = { egressType: "vless_link", forwardType: "gost", protocol: "tcp", egressUdp: false };
+  assert.equal(VLESS_EGRESS_UDP_SUPPORTED, true);
+  assert.equal(VLESS_EGRESS_UDP_PACKET_ENCODING, "xudp");
   assert.equal(ruleEgressShapeError(shape), null);
   // 端口转发资源（realm 之类）照样能开：下发时这一条换成 gost。
   assert.equal(ruleEgressShapeError({ ...shape, forwardType: "realm", forwardGroupMode: "port" }), null);
-  assert.equal(ruleEgressShapeError({ ...shape, protocol: "both" }), VLESS_EGRESS_TCP_ONLY_MESSAGE);
-  assert.equal(ruleEgressShapeError({ ...shape, protocol: "udp" }), VLESS_EGRESS_TCP_ONLY_MESSAGE);
-  assert.equal(ruleEgressShapeError({ ...shape, egressUdp: true }), VLESS_EGRESS_TCP_ONLY_MESSAGE);
+  // UDP / TCP+UDP：UDP 跟着走出口；和 Shadowsocks 一样，UDP 不能绕过出口直连。
+  assert.equal(ruleEgressShapeError({ ...shape, protocol: "both", egressUdp: true }), null);
+  assert.equal(ruleEgressShapeError({ ...shape, egressType: "vless_host", protocol: "udp", egressUdp: true }), null);
+  assert.match(String(ruleEgressShapeError({ ...shape, protocol: "both" })), /UDP 也要走出口/);
+  assert.match(String(ruleEgressShapeError({ ...shape, protocol: "udp" })), /UDP 必须走出口/);
+  assert.match(String(ruleEgressShapeError({ ...shape, egressUdp: true })), /不需要 UDP 走出口/);
+  // 不看入口机的 ssEgressUdp 能力（形态检查本来也不拿主机），UDP 出口不依赖 NEX 运行时补丁。
   assert.equal(ruleEgressShapeError({ ...shape, tunnelId: 3, tunnelMode: "forwardx" }), VLESS_EGRESS_TUNNEL_MESSAGE);
   assert.match(String(ruleEgressShapeError({ ...shape, forwardGroupMode: "chain" })), /转发链/);
   assert.match(String(ruleEgressShapeError({ ...shape, failoverEnabled: true })), /线路组/);

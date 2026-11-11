@@ -7,7 +7,7 @@ import test from "node:test";
 
 /**
  * VLESS Reality 出口落到库里、接口、心跳上的那几条规矩（Shadowsocks 那份见 ssEgressDb.test.ts，同一个测试架子）：
- *   - 保存：落地入站要是 VLESS + RAW/TCP + REALITY + Vision；外部链接严格解析、加密保存；只转 TCP；
+ *   - 保存：落地入站要是 VLESS + RAW/TCP + REALITY + Vision；外部链接严格解析、加密保存；UDP 跟着协议走出口；
  *     入口机 Agent 低于 2.2.253 时不能新挂；
  *   - 心跳：2.2.253 起的 Agent 拿到 gost 的本机 socks5 链 + 单独一份 sing-box 桥接配置，两边的端口和凭据对得上；
  *     旧 Agent 上这种规则按停用下发，也不发桥接；
@@ -157,7 +157,14 @@ test("保存：落地入站 / 外部链接两种来源，形态、Agent 版本�
     await rules.update({ id: viaLink.id, name: "改个名", egressType: "vless_link", egressLink: listed.egress.masked });
     assert.equal((await ruleRow(viaLink.id)).egressConfigJson, row.egressConfigJson);
 
-    await assert.rejects(rules.create(directRule({ protocol: "both", egressType: "vless_host", egressInboundId: inboundId, egressUdp: true })), /只转发 TCP/);
+    // UDP / TCP+UDP：UDP 跟着走出口（存成 egressUdp）；UDP 不走出口的组合拒收（否则 UDP 会绕过出口直连目标）。
+    const both = await rules.create(directRule({ protocol: "both", egressType: "vless_host", egressInboundId: inboundId, egressUdp: true }));
+    assert.equal(Boolean(Number((await ruleRow(both.id)).egressUdp)), true);
+    const udpLink = await rules.create(directRule({ protocol: "udp", egressType: "vless_link", egressLink: vlessLink, egressUdp: true }));
+    assert.equal(Boolean(Number((await ruleRow(udpLink.id)).egressUdp)), true);
+    assert.equal((await rules.list()).find((item) => item.id === both.id).egress.udp, true);
+    await assert.rejects(rules.create(directRule({ protocol: "both", egressType: "vless_host", egressInboundId: inboundId })), /UDP 也要走出口/);
+    await assert.rejects(rules.create(directRule({ protocol: "udp", egressType: "vless_link", egressLink: vlessLink, egressUdp: false })), /UDP 必须走出口/);
     await assert.rejects(rules.create(directRule({ egressType: "vless_link", egressLink: vlessLink.replace("type=tcp", "type=ws") })), /RAW\/TCP/);
     await assert.rejects(rules.create(directRule({ hostId: 30, egressType: "vless_host", egressInboundId: inboundId })), /需要升级到 2\.2\.253/);
     const wsInbound = await makeInbound({ name: "东京 ws", port: 8443, transport: "ws" });
@@ -175,6 +182,7 @@ test("心跳：2.2.253 起拿到本机 socks5 链和 sing-box 桥接；旧 Agent
     const viaHost = await rules.create(directRule({ egressType: "vless_host", egressInboundId: inboundId }));
     const viaLink = await rules.create(directRule({ egressType: "vless_link", egressLink: vlessLink }));
     const plain = await rules.create(directRule());
+    const viaHostBoth = await rules.create(directRule({ protocol: "both", egressType: "vless_host", egressInboundId: inboundId, egressUdp: true }));
 
     const { gost, bridge, bridgeAction } = await heartbeat("tok10", "2.2.253");
     const service = (name) => gost.services.find((item) => item.name === name);
@@ -193,7 +201,7 @@ test("心跳：2.2.253 起拿到本机 socks5 链和 sing-box 桥接；旧 Agent
     assert.equal(bridge.serviceName, "forwardx-singbox-egress");
     assert.equal(bridge.mode, 0o600);
     const config = bridge.json;
-    assert.deepEqual(config.inbounds.map((item) => item.tag), ["bridge-" + viaHost.id, "bridge-" + viaLink.id]);
+    assert.deepEqual(config.inbounds.map((item) => item.tag), ["bridge-" + viaHost.id, "bridge-" + viaLink.id, "bridge-" + viaHostBoth.id]);
     const inbound = config.inbounds.find((item) => item.tag === "bridge-" + viaHost.id);
     // gost 拨的端口、带的凭据和桥接听的、认的是同一份。
     assert.equal("127.0.0.1:" + inbound.listen_port, node.addr);
@@ -206,6 +214,28 @@ test("心跳：2.2.253 起拿到本机 socks5 链和 sing-box 桥接；旧 Agent
     assert.equal(linkOutbound.server, "198.51.100.50");
     assert.equal(linkOutbound.tls.server_name, "www.amd.com");
     assert.equal(config.outbounds.some((item) => item.type === "direct"), false);
+    // 只 TCP 的规则的出站不带 packet_encoding（和以前一字不差）。
+    assert.equal("packet_encoding" in outbound, false);
+    assert.equal("packet_encoding" in linkOutbound, false);
+
+    // TCP+UDP：两个 gost 服务，UDP 那条挂 relay=udp 的 socks5 链，指向同一个桥接入站；出站带 xudp。
+    const bothTcp = service("fwx-" + viaHostBoth.id + "-tcp");
+    const bothUdp = service("fwx-" + viaHostBoth.id + "-udp");
+    assert.ok(bothTcp && bothUdp, "TCP+UDP 规则要有两个 gost 服务");
+    assert.equal(bothUdp.handler.type, "udp");
+    assert.equal(bothUdp.handler.chain, "chain-egress-" + viaHostBoth.id + "-udp");
+    assert.equal(bothUdp.listener.type, "udp");
+    assert.equal(bothUdp.forwarder.nodes[0].addr, "198.51.100.7:443", "UDP 的 forwarder 也是最终目标");
+    const udpNode = gost.chains.find((item) => item.name === bothUdp.handler.chain).hops[0].nodes[0];
+    const tcpNode = gost.chains.find((item) => item.name === bothTcp.handler.chain).hops[0].nodes[0];
+    assert.deepEqual(udpNode.connector.metadata, { notls: true, relay: "udp", udpBufferSize: "65535" });
+    assert.deepEqual(udpNode.dialer, { type: "tcp" });
+    assert.deepEqual(tcpNode.connector.metadata, { notls: true });
+    assert.equal(udpNode.addr, tcpNode.addr);
+    assert.deepEqual(udpNode.connector.auth, tcpNode.connector.auth);
+    const bothInbound = config.inbounds.find((item) => item.tag === "bridge-" + viaHostBoth.id);
+    assert.equal("127.0.0.1:" + bothInbound.listen_port, udpNode.addr);
+    assert.equal(config.outbounds.find((item) => item.tag === "egress-" + viaHostBoth.id).packet_encoding, "xudp");
 
     // 旧 Agent（2.2.252）：保存时会拦，这里直接写库模拟「建好后主机被重装成旧 Agent」。
     await exec(

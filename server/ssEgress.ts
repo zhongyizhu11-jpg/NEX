@@ -55,6 +55,7 @@ import {
   vlessEgressEndpointError,
   vlessEgressInboundError,
   VLESS_EGRESS_DEFAULT_FINGERPRINT,
+  VLESS_EGRESS_UDP_SUPPORTED,
   type VlessEgressEndpoint,
 } from "../shared/vlessEgress";
 import {
@@ -274,7 +275,7 @@ export async function resolveRuleEgressColumns(input: RuleEgressInput, context: 
   };
 
   if (egressType === "vless_host" || egressType === "vless_link") {
-    return resolveVlessEgressColumns(input, context, { egressType, current, entryHosts, entryHostIds, assertEntryAgents });
+    return resolveVlessEgressColumns(input, context, { egressType, current, entryHosts, entryHostIds, assertEntryAgents, egressUdp });
   }
 
   if (egressType === "ss_host") {
@@ -333,7 +334,8 @@ export async function resolveRuleEgressColumns(input: RuleEgressInput, context: 
 
 /**
  * VLESS Reality 出口那一半（shared/vlessEgress.ts）。和 SS 的区别：入站要是 VLESS + RAW/TCP + REALITY + Vision，
- * 链接走严格解析，只转 TCP（形态检查已经在 ruleEgressShapeError 里拦了），Agent 门槛是 2.2.253。
+ * 链接走严格解析，Agent 门槛是 2.2.253。UDP 走出口（egressUdp）和协议对不对得上已经在 ruleEgressShapeError 里查过；
+ * 不查入口机的 ssEgressUdp 能力：VLESS 的 UDP 用的是上游 gost 的 socks5 UDP，和 NEX 运行时补丁无关。
  */
 async function resolveVlessEgressColumns(
   input: RuleEgressInput,
@@ -344,9 +346,11 @@ async function resolveVlessEgressColumns(
     entryHosts: readonly Parameters<typeof addressTokens>[0][];
     entryHostIds: number[];
     assertEntryAgents: () => void;
+    egressUdp: boolean;
   },
 ): Promise<RuleEgressColumns> {
   const { egressType, current, entryHosts, entryHostIds, assertEntryAgents } = state;
+  const egressUdp = VLESS_EGRESS_UDP_SUPPORTED && state.egressUdp;
   if (egressType === "vless_host") {
     const inboundId = Number(input.egressInboundId !== undefined ? input.egressInboundId : current.egressInboundId) || 0;
     if (!inboundId) throw new Error("请选择落地主机上的 VLESS Reality 入站");
@@ -366,7 +370,7 @@ async function resolveVlessEgressColumns(
     if (changed && !isHostConsideredOnline(landingHost)) throw new Error(`落地主机「${landingHost.name}」当前离线，请等它上线后再选`);
     if (!getHostEntryAddress(landingHost)) throw new Error(`落地主机「${landingHost.name}」还没有可用地址`);
     await assertEgressTargetAllowed(context.actor, context.targetIp, landingHost);
-    return { egressType, egressInboundId: inboundId, egressConfigJson: null, egressUdp: false };
+    return { egressType, egressInboundId: inboundId, egressConfigJson: null, egressUdp };
   }
   let stored = current.egressType === "vless_link" ? current.egressConfigJson : null;
   let endpoint: VlessEgressEndpoint | null = null;
@@ -388,7 +392,7 @@ async function resolveVlessEgressColumns(
   if (entryHosts.some((host) => addressTokens(host).has(server))) {
     throw new Error("外部链接指向的是规则的入口主机自己，这会绕回入口，请换一条链接");
   }
-  return { egressType, egressInboundId: null, egressConfigJson: stored, egressUdp: false };
+  return { egressType, egressInboundId: null, egressConfigJson: stored, egressUdp };
 }
 
 /**
@@ -612,7 +616,7 @@ export type SsEgressRuntime = {
 
 /**
  * VLESS Reality 出口：gost 链上是本机 127.0.0.1:bridgePort 的 socks5（带凭据），sing-box 桥接再经 vless 出去
- * （server/vlessEgress.ts）。只转 TCP，udp 恒为 false。
+ * （server/vlessEgress.ts）。udp：这条规则的 UDP 也经桥接出去（socks5 UDP ASSOCIATE → xudp）。
  */
 export type VlessEgressRuntime = {
   kind: "vless";
@@ -623,7 +627,7 @@ export type VlessEgressRuntime = {
   publicKey: string;
   shortId: string;
   fingerprint: string;
-  udp: false;
+  udp: boolean;
   bridgePort: number;
   bridgeUsername: string;
   bridgePassword: string;
@@ -845,7 +849,8 @@ function evaluateVlessRuleEgress(rule: Parameters<typeof evaluateRuleEgress>[0],
     publicKey: endpoint.publicKey,
     shortId: endpoint.shortId,
     fingerprint: endpoint.fingerprint || VLESS_EGRESS_DEFAULT_FINGERPRINT,
-    udp: false,
+    // 形态检查已经保证协议和 egressUdp 对得上；不需要入口机额外的能力（见 resolveVlessEgressColumns）。
+    udp: VLESS_EGRESS_UDP_SUPPORTED && ruleEgressWantsUdp(rule),
     bridgePort,
     bridgeUsername: credentials.username,
     bridgePassword: credentials.password,
@@ -914,7 +919,14 @@ export function buildGostEgressChain(ruleId: number, proto: "tcp" | "udp", runti
       VLESS 出口：链上一跳是本机 sing-box 桥接的 socks5（server/vlessEgress.ts）。notls：gost 的 socks5 连接器默认还会
       提议它自己的 TLS 扩展方法，sing-box 不认，关掉只用用户名密码。socks5 有真正的 CONNECT 应答（sing-box 连上落地
       之后才回成功），不像 ss 连接器那样要 nodelay。
+
+      UDP 那条链：同一个 socks5 节点、同一份凭据、拨号器仍是 tcp（那是 UDP ASSOCIATE 的控制连接）。relay=udp 让 gost
+      走标准的 UDP ASSOCIATE —— 不写的话 gost 用它自己的 UDP-over-TCP 扩展命令，sing-box 不认，每个 UDP 流都建不起来。
+      udpBufferSize：默认 4096，带上 SOCKS5 UDP 头超过它的数据报 gost 会悄悄截断（真二进制上 4096、8192 字节的包
+      都回不来），放到 65535。必须写成字符串：gost 3.2.6 的 GetInt 不认 JSON 解出来的数字（float64），写数字等于没写
+      （见 agentHeartbeatRuntime.ts 的 GOST_UDP_LISTENER_METADATA）。TCP 那条链一个字节都不变。
     */
+    const metadata = proto === "udp" ? { notls: true, relay: "udp", udpBufferSize: "65535" } : { notls: true };
     return {
       name: gostEgressChainName(ruleId, proto),
       hops: [{
@@ -925,7 +937,7 @@ export function buildGostEgressChain(ruleId: number, proto: "tcp" | "udp", runti
           connector: {
             type: "socks5",
             auth: { username: runtime.bridgeUsername, password: runtime.bridgePassword },
-            metadata: { notls: true },
+            metadata,
           },
           dialer: { type: "tcp" },
         }],

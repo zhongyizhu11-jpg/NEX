@@ -107,7 +107,8 @@ test("出口失效的几种情况都按停用下发", () => {
     ["入站停用", { context: context({ inbound: { ...inbound, isEnabled: false } }) }, {}, "inbound_disabled"],
     ["入站没有用户", { context: context({ users: [] }) }, {}, "config_invalid"],
     ["落地就是入口", { entryHostId: 20, context: context() }, {}, "self_loop"],
-    ["协议改成 TCP+UDP", { context: context() }, { protocol: "both" }, "shape_invalid"],
+    ["协议改成 TCP+UDP 但 UDP 不走出口", { context: context() }, { protocol: "both" }, "shape_invalid"],
+    ["协议是 TCP 却标了 UDP 走出口", { context: context() }, { egressUdp: true }, "shape_invalid"],
     ["外部链接解不开", { context: context() }, { egressType: "vless_link", egressConfigJson: "garbage" }, "config_invalid"],
   ];
   for (const [name, options, ruleOverrides, state] of cases) {
@@ -140,7 +141,47 @@ test("外部 vless:// 链接：加密往返、换面板密钥解不开；SS 链�
   setVlessEgressCipherSecretForTests("unit-test-secret");
 });
 
-test("gost 出口链：一跳本机 socks5（带凭据、关掉 gost 自己的 TLS 方法），只有 TCP；SS 出口的链不变", () => {
+test("UDP / TCP+UDP：UDP 经同一个 socks 入站（relay=udp 的 UDP ASSOCIATE）出去，出站带 xudp；TCP 那一半一字不差", () => {
+  const ports = createVlessEgressBridgePortAllocator([], [7, 9]);
+  const both: any = ruleEgressRuntimeView(rule({ protocol: "both", egressUdp: true }), { ...entry, context: context(), vlessBridgePorts: ports });
+  assert.equal(both.isEnabled, true);
+  assert.equal(both.protocol, "both", "UDP 走出口时协议不收窄");
+  const runtime = ruleEgressRuntime(both)!;
+  assert.equal(runtime.udp, true);
+  const credentials = vlessEgressBridgeCredentials(7, UUID);
+  assert.deepEqual(buildGostEgressChain(7, "udp", runtime), {
+    name: gostEgressChainName(7, "udp"),
+    hops: [{
+      name: "hop-egress-7-udp",
+      nodes: [{
+        name: "egress-7-udp",
+        addr: `127.0.0.1:${VLESS_EGRESS_BRIDGE_PORT_MIN + 7}`,
+        // 拨号器仍是 tcp：那是 UDP ASSOCIATE 的控制连接；数据报 gost 自己另开 UDP 套接字发到 sing-box 回的地址。
+        connector: { type: "socks5", auth: credentials, metadata: { notls: true, relay: "udp", udpBufferSize: "65535" } },
+        dialer: { type: "tcp" },
+      }],
+    }],
+  });
+  // 同一条规则的 TCP 链和只 TCP 的规则完全一样。
+  assert.deepEqual(buildGostEgressChain(7, "tcp", runtime).hops[0].nodes[0].connector.metadata, { notls: true });
+  const udpOnly: any = ruleEgressRuntimeView(rule({ id: 9, protocol: "udp", egressUdp: true }), { ...entry, context: context(), vlessBridgePorts: ports });
+  assert.equal(udpOnly.protocol, "udp");
+  assert.equal(ruleEgressRuntime(udpOnly)?.udp, true);
+  // 不看入口机的 ssEgressUdp 能力：没报能力的入口机上 VLESS 的 UDP 照样下发。
+  assert.equal(evaluateRuleEgress(rule({ protocol: "both", egressUdp: true }), { ...entry, entryAgentCapabilities: [], context: context() })?.state, "running");
+
+  const tcpOnly = ruleEgressRuntimeView(rule({ id: 11 }), { ...entry, context: context(), vlessBridgePorts: createVlessEgressBridgePortAllocator([], [11]) });
+  const bridges = collectVlessEgressBridges([both, udpOnly, tcpOnly], 10);
+  assert.deepEqual(bridges.map((bridge) => [bridge.ruleId, bridge.udp === true]), [[7, true], [9, true], [11, false]]);
+  const config = JSON.parse(buildVlessEgressBridgeConfig(bridges));
+  // UDP 不另开入站、不另分端口：还是那一个带凭据的 socks 入站。
+  assert.deepEqual(config.inbounds.map((item: any) => item.type), ["socks", "socks", "socks"]);
+  assert.deepEqual(config.outbounds.map((item: any) => item.packet_encoding), ["xudp", "xudp", undefined]);
+  assert.deepEqual(Object.keys(config.outbounds[2]), ["type", "tag", "server", "server_port", "uuid", "flow", "tls"]);
+  assert.deepEqual(Object.keys(config.outbounds[0]), ["type", "tag", "server", "server_port", "uuid", "flow", "packet_encoding", "tls"]);
+});
+
+test("gost 出口链：一跳本机 socks5（带凭据、关掉 gost 自己的 TLS 方法）；SS 出口的链不变", () => {
   const view: any = ruleEgressRuntimeView(rule(), { ...entry, context: context(), vlessBridgePorts: createVlessEgressBridgePortAllocator([], [7]) });
   const runtime = ruleEgressRuntime(view)!;
   const credentials = vlessEgressBridgeCredentials(7, UUID);

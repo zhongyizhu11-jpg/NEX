@@ -21,8 +21,20 @@
  * 普通 TLS、不带 Vision、spiderX、后量子校验 pqv……）sing-box 的出站要么没有对应字段、要么行为不一样，
  * 静默丢掉只会换来一个「显示在走出口、其实连不上」的规则，所以解析时直接拒绝并说清是哪一项。
  *
- * 只转 TCP：gost 的 socks5 连接器转 UDP 时默认走它自己的 UDP-over-TCP 扩展，sing-box 的 socks 入站不认；
- * 标准 UDP ASSOCIATE 这条路也没拿真二进制验过。没验过的组合不发，规则协议必须是 TCP（见 ruleEgressShapeError）。
+ * UDP（规则协议 UDP / TCP+UDP）走同一个桥接，同一条 socks 入站、同一份凭据：
+ *
+ *   客户端 ─UDP─▶ gost UDP 监听（入口:sourcePort，计数、限速照旧）
+ *                └─ chain：socks5 连接器 relay=udp —— 先用 TCP 连 127.0.0.1:桥接端口做认证 + 标准 UDP ASSOCIATE，
+ *                   再把数据报带上 SOCKS5 UDP 头发到 sing-box 回给的 127.0.0.1:随机端口
+ *                     └─ vless 出站 packet_encoding=xudp（REALITY + Vision）──▶ 落地 ──▶ 目标
+ *
+ * 必须写 relay=udp：gost 的 socks5 连接器转 UDP 默认走它自己的 UDP-over-TCP 扩展命令，sing-box 的 socks 入站
+ * 不认。xudp 是 Xray 定义、Xray 客户端在 Vision 下转 UDP 用的封装，也是 sing-box vless 出站的默认值，所以写死它：
+ * 对外部 Xray 落地最稳妥（实测用的是 sing-box 落地，Xray 落地没有拿真二进制验过）。
+ * 这条路是拿随 Agent 下发的真二进制（gost 3.2.6-nex5、sing-box 1.14.0）端到端跑通的（scripts/verify-vless-egress.mjs），
+ * 用到的都是上游 gost 本来就有的代码，不依赖 NEX 补丁（官方 gost 3.2.6 跑同一套也通），所以 UDP 不另设运行时能力
+ * 门槛，门槛还是 Agent 2.2.253。
+ * 只 TCP 的规则生成的 gost / sing-box 配置和以前一字不差（packet_encoding 只写在带 UDP 的规则的出站上）。
  *
  * 这里只放纯函数和常量（客户端也 import，不能碰 node:crypto / Buffer）；凭据加密、查库在 server/vlessEgress.ts。
  */
@@ -271,6 +283,12 @@ export function vlessEgressAgentUpgradeMessage(hostName?: unknown) {
   const name = text(hostName);
   return `${name ? `主机「${name}」` : "入口主机"}的 Agent 需要升级到 ${VLESS_EGRESS_AGENT_VERSION} 或更新版本才能使用 VLESS Reality 出口`;
 }
+
+/** 总开关：UDP 能不能走 VLESS Reality 出口。关掉就回到「只转 TCP」（规则协议必须是 TCP）。 */
+export const VLESS_EGRESS_UDP_SUPPORTED = true;
+
+/** UDP 经 VLESS 出口时 sing-box 出站的封装（见文件开头）。 */
+export const VLESS_EGRESS_UDP_PACKET_ENCODING = "xudp";
 
 export const VLESS_EGRESS_TCP_ONLY_MESSAGE = "VLESS Reality 出口只转发 TCP，请把协议改成 TCP";
 export const VLESS_EGRESS_TUNNEL_MESSAGE = "走隧道的规则暂时只能接 Shadowsocks 出口，VLESS Reality 出口只支持直连规则和端口转发资源";
