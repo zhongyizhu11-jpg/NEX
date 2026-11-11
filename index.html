@@ -19,11 +19,11 @@
           document.documentElement.classList.remove("light", "dark");
           document.documentElement.classList.add(resolved === "dark" ? "dark" : "light");
           // 界面主题（设置 › 个性化 › 界面主题）：上次选的记在本地，开机先挂上，免得首屏从经典闪到别的主题。
-          // 内置的是珍珠、深空；其余是装上去的主题包，认不认要看上次记下的那份名单（client/src/lib/installedUiThemes.ts）。
+          // 内置的是珍珠、液态玻璃；其余是装上去的主题包，认不认要看上次记下的那份名单（client/src/lib/installedUiThemes.ts）。
           var uiTheme = window.localStorage.getItem("forwardx-ui-theme");
-          var pages = { classic: ["#f5f5f7", "#1e1e1e"], pearl: ["#f4f6f5", "#161b1e"], deepspace: ["#f7f8fa", "#0b0d10"] };
+          var pages = { classic: ["#f5f5f7", "#1e1e1e"], pearl: ["#f4f6f5", "#161b1e"], "liquid-glass": ["#f8f9fb", "#111318"] };
           var hex = /^#[0-9a-fA-F]{3,8}$/;
-          var known = uiTheme === "pearl" || uiTheme === "deepspace";
+          var known = uiTheme === "pearl" || uiTheme === "liquid-glass";
           // 主题安全模式（?themeSafe=1，见 client/src/lib/personalizationTheme.ts）：这个标签页里不挂主题包
           var safeFlag = new URLSearchParams(window.location.search).get("themeSafe");
           if (safeFlag === "1") window.sessionStorage.setItem("forwardx-ui-theme-safe", "1");
@@ -48,7 +48,7 @@
           // 浏览器外框（iOS 地址栏 / 状态栏）开机就涂成这一套的页面底色；进来之后 personalizationTheme.ts 按实际底色再校一次
           var page = (known ? pages[uiTheme] : pages.classic)[resolved === "dark" ? 1 : 0];
           // 启动底色：内置的写在下面的 <style> 里，主题包的在这里补一条
-          if (known && uiTheme !== "pearl" && uiTheme !== "deepspace") {
+          if (known && uiTheme !== "pearl" && uiTheme !== "liquid-glass") {
             var bootStyle = document.createElement("style");
             bootStyle.textContent = "html.fx-booting, html.fx-booting body { background: " + page + " !important; }";
             document.head.appendChild(bootStyle);
@@ -66,9 +66,9 @@
       /* 脚本还没跑起来之前：先铺页面底色，不闪白；慢的时候顶上出一条细进度条。React 挂上后整块被替换。 */
       html.fx-booting, html.fx-booting body { margin: 0; background: #f5f5f7; }
       html.fx-booting.dark, html.fx-booting.dark body { background: #1e1e1e; }
-      html.fx-booting.dark[data-ui-theme="deepspace"], html.fx-booting.dark[data-ui-theme="deepspace"] body { background: #0b0d10; }
 
-      html.fx-booting[data-ui-theme="deepspace"], html.fx-booting[data-ui-theme="deepspace"] body { background: #f7f8fa; }
+      html.fx-booting[data-ui-theme="liquid-glass"], html.fx-booting[data-ui-theme="liquid-glass"] body { background: #f8f9fb; }
+      html.fx-booting.dark[data-ui-theme="liquid-glass"], html.fx-booting.dark[data-ui-theme="liquid-glass"] body { background: #111318; }
       html.fx-booting[data-ui-theme="pearl"], html.fx-booting[data-ui-theme="pearl"] body { background: #f4f6f5; }
       html.fx-booting.dark[data-ui-theme="pearl"], html.fx-booting.dark[data-ui-theme="pearl"] body { background: #161b1e; }
       #fx-boot { position: fixed; inset: 0 0 auto 0; height: 2px; overflow: hidden; opacity: 0; animation: fx-boot-in 0.2s ease 0.25s forwards; }

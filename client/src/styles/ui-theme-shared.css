@@ -236,7 +236,7 @@ html.dark .fx-save-dock { border-color: rgb(255 180 200 / 12%); box-shadow: inse
 .fx-uitheme-swatch[data-theme="pearl"] > b::after { border-radius: 4px; background: #0e1116; }
 .dark .fx-uitheme-swatch[data-theme="pearl"] > b::after { background: #e8ecef; }
 
-/* ═══ 深空（theme-deepspace.css）═══ */
+/* ═══ 深空（themes/official/deepspace/theme.css）═══ */
 /* ── 设置页「界面主题」的预览 ───────────────────────────────── */
 /* 近黑底、两张暗色面板卡各一圈暗线和一根天蓝细条、底下一条贴底通栏；浅色下是冷白托白卡 */
 .fx-uitheme-swatch[data-theme="deepspace"] { background: #f7f8fa; }

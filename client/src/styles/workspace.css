@@ -2045,7 +2045,7 @@ html.fx-theme-fading *::after {
 /* ── 监控 › 操作审计（client/src/features/ops/audit/AuditTab.tsx）────────────── */
 /*
   所有主题共用的骨架：电脑上一张表（表头和行同一套列宽），手机上每行两截。
-  深空主题另在 theme-deepspace.css 第 13 节改成面板行 + 等宽字。
+  深空主题另在 themes/official/deepspace/theme.css 第 13 节改成面板行 + 等宽字。
   哪一截显示由这里的媒体查询定，不用 Tailwind 的 hidden / md:grid：这份文件不在 @layer 里，
   写在这里的 display 会压过分层的工具类，两套写法混用时手机那截在电脑上也会露出来。
 */

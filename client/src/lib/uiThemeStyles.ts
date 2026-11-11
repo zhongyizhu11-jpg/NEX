@@ -5,7 +5,7 @@ import { findInstalledUiTheme } from "./installedUiThemes";
 
   一个人同时只看得到一套主题，所以主题的 CSS 都不在主样式表里，用到哪套才下哪套。两种来源：
 
-  · 内置的珍珠、深空：各是一个单独的样式包（client/src/styles/ui-themes/ui-theme-*.css，Vite 按动态
+  · 内置的珍珠、液态玻璃：各是一个单独的样式包（client/src/styles/ui-themes/ui-theme-*.css，Vite 按动态
     import 拆成独立的 CSS 文件）。经典没有主题文件，一直在主样式表里。
   · 装上去的主题包（shared/uiThemePackage.ts）：样式存在面板的库里，从 /api/ui-themes/<id>.css 取，
     这里往 <head> 里挂一条 <link>。
@@ -37,7 +37,7 @@ import { findInstalledUiTheme } from "./installedUiThemes";
 */
 const BUNDLED_LOADERS: Record<string, () => Promise<unknown>> = {
   pearl: () => import("../styles/ui-themes/ui-theme-pearl.css"),
-  deepspace: () => import("../styles/ui-themes/ui-theme-deepspace.css"),
+  "liquid-glass": () => import("../styles/ui-themes/ui-theme-liquid-glass.css"),
 };
 
 /* 已经有结果的内置样式包（下完了，或者下失败了）。失败的也算：见 loadUiThemeStyles 的说明。 */

@@ -21,7 +21,7 @@ export type UiThemeOption = {
 const BUILTIN_PREVIEWS: Record<string, UiThemePreview> = {
   classic: DEFAULT_UI_THEME_PREVIEW,
   pearl: { light: { page: "#f4f6f5", card: "#ffffff", accent: "#0e1116" }, dark: { page: "#161b1e", card: "#1f2629", accent: "#f4f6f5" } },
-  deepspace: { light: { page: "#0b0d10", card: "#12161b", accent: "#5aa9ff" }, dark: { page: "#0b0d10", card: "#12161b", accent: "#5aa9ff" } },
+  "liquid-glass": { light: { page: "#dfe7f3", card: "#ffffff", accent: "#2563eb" }, dark: { page: "#111318", card: "#181c26", accent: "#3b82f6" } },
 };
 
 export function useUiThemeOptions(): UiThemeOption[] {

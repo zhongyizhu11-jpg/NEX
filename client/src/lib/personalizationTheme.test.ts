@@ -209,7 +209,7 @@ test("界面主题按需加载：页面上的 <html> 等那一套样式有了结
   /*
     一个够用的假 <head>：主题包的样式是往里挂 <link>，挂上去之后下一个微任务「下完」。
     地址里带 broken 的那条报错（主题被卸载后样式地址 404 就是这样）。
-    内置的珍珠 / 深空在 node 里 import 不了 .css：下载会「失败」，正好走一遍失败也照样往下走的那条路；
+    内置的珍珠 / 液态玻璃在 node 里 import 不了 .css：下载会「失败」，正好走一遍失败也照样往下走的那条路；
     主题包后面那条 compact.css 也 import 不了，同样照常往下走。
   */
   const links: any[] = [];
@@ -302,10 +302,10 @@ test("界面主题按需加载：页面上的 <html> 等那一套样式有了结
     // 真卸载：清掉之后没人接着挂，过一个微任务就忘掉，之后不会把旧的放回来
     clearPersonalizationSurface(root);
     await Promise.resolve();
-    applyPersonalizationSurface({ uiTheme: "deepspace" }, root);
+    applyPersonalizationSurface({ uiTheme: "liquid-glass" }, root);
     assert.equal(attrs.has("data-ui-theme"), false);
-    await settle("deepspace");
-    assert.equal(attrs.get("data-ui-theme"), "deepspace");
+    await settle("liquid-glass");
+    assert.equal(attrs.get("data-ui-theme"), "liquid-glass");
 
     // 等的时候切回一套现成的：现成的立刻挂上，等的那套回来也不再改
     setInstalledUiThemes([pkg("rose", "b".repeat(64)), pkg("cinnabar")]);
@@ -338,7 +338,7 @@ test("主题安全模式：?themeSafe=1 之后这个标签页只认内置的三�
     assert.equal(resolveUiTheme("gilt"), "gilt");
     g.window.location.search = "?themeSafe=1";
     assert.equal(resolveUiTheme("gilt"), "classic", "安全模式不挂主题包");
-    assert.equal(resolveUiTheme("deepspace"), "deepspace", "内置的照常");
+    assert.equal(resolveUiTheme("liquid-glass"), "liquid-glass", "内置的照常");
     g.window.location.search = "?tab=personalization";
     assert.equal(isUiThemeSafeMode(), true, "换了页面还在安全模式里（记在这个标签页）");
     g.window.location.search = "?themeSafe=0";

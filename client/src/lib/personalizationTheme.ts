@@ -158,7 +158,7 @@ export function clearPersonalizationTheme(root?: HTMLElement) {
 const PAGE_TINT_VARS = ["--fx-l0-page", "--fx-l3-control-fill"] as const;
 
 /*
-  界面主题（内置的经典 / 珍珠 / 深空，和装上去的主题包）是 <html data-ui-theme>，画法在各自的样式里。经典不写属性。
+  界面主题（内置的经典 / 珍珠 / 液态玻璃，和装上去的主题包）是 <html data-ui-theme>，画法在各自的样式里。经典不写属性。
   首屏在 publicInfo 回来之前先按经典画，再切到极光会闪一下：所以把选过的主题记进 localStorage，
   index.html 顶部那段内联脚本开机就按它先把属性挂上（和深浅色 forwardx-theme 同一套做法）。
   主题样式现在按需下（uiThemeStyles.ts），main.tsx 也按这个属性先把那一套的样式下完再画第一帧。

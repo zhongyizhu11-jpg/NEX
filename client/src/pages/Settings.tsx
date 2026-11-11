@@ -3271,7 +3271,6 @@ function PersonalizationSettingsSection() {
   const [savedUiTheme, setSavedUiTheme] = useState<string>("classic");
   /* 能选的主题：内置的三套 + 装着的主题包（下面「主题管理」里装 / 卸，名单跟着变） */
   const uiThemeOptions = useUiThemeOptions();
-  const liquidGlassInstalled = uiThemeOptions.some((theme) => theme.id === "liquid-glass");
   /* 这台设备在顶栏调色盘里给自己选的主题；有它时页面显示的是它，不是下面存的站点默认 */
   const uiThemeOverride = useUiThemeOverride();
   const [liquidGlass, setLiquidGlass] = useState<LiquidGlassConfig>(DEFAULT_LIQUID_GLASS);
@@ -4093,10 +4092,9 @@ function PersonalizationSettingsSection() {
       <LayoutDefaultCard />
 
       {/*
-        液态玻璃的旋钮：液态玻璃现在是官方主题库里的主题包，装了它才有这一块（没装时这些旋钮什么也调不到）。
-        装着但没选它时也露着 —— 先调好再切主题也行。拨了就在这一页试看（setLiquidGlassPreview），保存后才对所有人生效。
+        液态玻璃的旋钮：只有界面主题是液态玻璃时才看得出效果，但一直露着 —— 先调好再切主题也行。
+        拨了就在这一页试看（setLiquidGlassPreview），保存后才对所有人生效。
       */}
-      {liquidGlassInstalled ? (
       <Card className="border-border bg-card">
         <CardHeader className="gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="space-y-1.5">
@@ -4213,7 +4211,6 @@ function PersonalizationSettingsSection() {
           />
         </CardContent>
       </Card>
-      ) : null}
 
       <Card className="border-border bg-card">
         <CardHeader className="gap-3 sm:flex-row sm:items-start sm:justify-between">

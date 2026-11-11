@@ -1211,7 +1211,7 @@ const RuleCard = memo(function RuleCard(props: RuleCardProps) {
   手机：三行 —— ● 名字 · 副标题 ……… 延迟 ··· [开关] / 入口 → 目标 ……… 累计 / 一条贴满整行的走势。
   桌面：一行一条的表格 —— 名字 | 入口 → 目标 | 延迟 | 近 24 小时走势 | 近 24 小时 ↓↑ | 累计 | 操作。
   内容、判断、按钮和规则卡完全一样（deriveRuleView），只是排法不同；告警、限速、到期这些附加信息
-  有才出现，在行的最下面另起一行。排法全在 theme-deepspace.css 的 .fx-ds-rule*。
+  有才出现，在行的最下面另起一行。排法全在 themes/official/deepspace/theme.css 的 .fx-ds-rule*。
 */
 const RuleRow = memo(function RuleRow(props: RuleCardProps) {
   const { rule, sortable, page, totalIn, totalOut, hasTotal, dailyIn, dailyOut, spark, routeBoard, failover } = props;

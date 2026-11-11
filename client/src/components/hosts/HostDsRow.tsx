@@ -26,7 +26,7 @@ import {
  *
  *   电脑（≥768px）是一张真表：状态 / 主机 / 系统 / 地区·地址 / CPU / 内存 / 磁盘 / 网速 / 转发 / 版本 / ···
  *
- * 同一份 DOM，两种排法全在 theme-deepspace.css 的 grid-template-areas 里。
+ * 同一份 DOM，两种排法全在 themes/official/deepspace/theme.css 的 grid-template-areas 里。
  * 要画的数和 Summary 卡同一份推导（deriveHostSummaryView / useHostEntityActions），
  * 两种画法口径不会走岔。别的主题不渲染这个组件。
  */

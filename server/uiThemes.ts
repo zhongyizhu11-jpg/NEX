@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import {
   OFFICIAL_UI_THEME_IDS,
   UI_THEME_LIMITS,
+  BUILTIN_UI_THEME_IDS,
   isOfficialUiThemeId,
   isValidUiThemePackageId,
   normalizeUiThemePreview,
@@ -382,6 +383,11 @@ export function uiThemeStarterArchive(): { filename: string; archive: Buffer } {
  * 只补站点默认这一套：其余几套谁想用谁在「主题管理」里装，这正是改成按需安装的意思。
  */
 export async function ensureSiteUiThemeInstalled(): Promise<string | null> {
+  // 现在是内置的主题，以前可能当主题包装过（液态玻璃在 2.3.524 开发期间是主题包）：那一行已经用不上了，
+  // 名单里也认不出它（id 和内置重名），删掉免得占着「最多装几套」的名额
+  const builtinPlaceholders = BUILTIN_UI_THEME_IDS.map(() => "?").join(", ");
+  const removed = await executeRaw(`DELETE FROM ${q(TABLE)} WHERE ${q("themeId")} IN (${builtinPlaceholders})`, [...BUILTIN_UI_THEME_IDS]).catch(() => null);
+  if (removed) invalidateInstalledCache();
   const siteTheme = String((await getSetting(SITE_THEME_SETTING)) || "").trim();
   if (!isOfficialUiThemeId(siteTheme)) return null;
   if ((await installedUiThemeIds()).includes(siteTheme)) return null;

@@ -10,7 +10,7 @@ import { isValidUiThemePackageId, normalizeUiThemePreview, type UiThemePreview }
   得先知道「这个 id 是不是装着的主题、样式地址带哪个 revision、启动底色是什么」。所以每次更新都往
   localStorage 里记一份（UI_THEMES_STORAGE_KEY），开机先读它；publicInfo 回来后以服务端的为准。
 
-  内置的三套（经典 / 珍珠 / 深空）不在这份名单里：它们的样式跟着页面打包，不用问服务端。
+  内置的三套（经典 / 珍珠 / 液态玻璃）不在这份名单里：它们的样式跟着页面打包，不用问服务端。
 */
 export type InstalledUiTheme = {
   id: string;

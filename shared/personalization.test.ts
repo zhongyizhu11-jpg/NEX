@@ -58,17 +58,17 @@ test("卡片风格：四选一，默认彩色描边", async () => {
   assert.equal(normalizePersonalizationCardStyle(""), "edge");
 });
 
-test("界面主题：内置经典 / 珍珠 / 深空三套，其余要装了主题包才认，默认经典", async () => {
+test("界面主题：内置经典 / 珍珠 / 液态玻璃三套，其余要装了主题包才认，默认经典", async () => {
   const { normalizePersonalizationUiTheme, PERSONALIZATION_UI_THEMES } = await import("./personalization");
   const { BUILTIN_UI_THEME_IDS } = await import("./uiThemePackage");
-  assert.deepEqual(PERSONALIZATION_UI_THEMES.map((theme) => theme.id), ["classic", "pearl", "deepspace"]);
+  assert.deepEqual(PERSONALIZATION_UI_THEMES.map((theme) => theme.id), ["classic", "pearl", "liquid-glass"]);
   assert.deepEqual(PERSONALIZATION_UI_THEMES.map((theme) => theme.id), [...BUILTIN_UI_THEME_IDS], "两处的内置名单要一致");
   assert.equal(normalizePersonalizationUiTheme("pearl"), "pearl");
-  assert.equal(normalizePersonalizationUiTheme("deepspace"), "deepspace");
+  assert.equal(normalizePersonalizationUiTheme("liquid-glass"), "liquid-glass");
   assert.equal(normalizePersonalizationUiTheme("classic"), "classic");
   // 原来内置、现在是官方主题库里的主题包：没装就回经典，装了才认
   assert.equal(normalizePersonalizationUiTheme("gilt"), "classic");
-  assert.equal(normalizePersonalizationUiTheme("liquid-glass"), "classic");
+  assert.equal(normalizePersonalizationUiTheme("deepspace"), "classic");
   assert.equal(normalizePersonalizationUiTheme("gilt", ["gilt", "my-theme"]), "gilt");
   assert.equal(normalizePersonalizationUiTheme("my-theme", new Set(["gilt", "my-theme"])), "my-theme");
   assert.equal(normalizePersonalizationUiTheme("rose", ["gilt"]), "classic");

@@ -1,5 +1,5 @@
 /*
-  界面主题包（2.3.524 起）：面板只自带三套界面主题（经典 / 珍珠 / 深空），其余按需安装。
+  界面主题包（2.3.524 起）：面板只自带三套界面主题（经典 / 珍珠 / 液态玻璃），其余按需安装。
 
   为什么拆：八套主题全打在面板里，可一个站点一般只用一套；新主题每加一套，所有人的安装包都跟着变大，
   第三方也没法自己做一套。现在一套主题就是一个压缩包：
@@ -14,8 +14,8 @@
     · 从链接安装：填一个压缩包直链，面板去下。
   装好的主题和内置的排在一起，谁都能在顶栏调色盘里选；卸载后选着它的设备自动回到站点默认。
 
-  原来内置、现在挪进官方主题库的五套（墨金 / 玫瑰 / 朱砂 / 靛蓝 / 液态玻璃）id 不变：
-  界面里按主题换结构的那几处（墨金手机上的分类条、液态玻璃的照片底）认的就是 id，装上以后照旧生效。
+  原来内置、现在挪进官方主题库的五套（深空 / 墨金 / 玫瑰 / 朱砂 / 靛蓝）id 不变：
+  界面里按主题换结构的那几处（深空的顶部导航和转发一张表、墨金手机上的分类条）认的就是 id，装上以后照旧生效。
   升级时站点默认正好是这五套之一的，面板开机会自动把它装上（server/uiThemes.ts 的 ensureSiteUiThemeInstalled）。
 
   这里只放两头都要用的东西：id 规则、清单的形状和校验、预览色、上限。读包 / 校验 CSS 在 server/uiThemePackage.ts。
@@ -24,11 +24,11 @@
 export const UI_THEME_API_VERSION = 1;
 
 /** 面板自带、不能卸载的三套。和 shared/personalization.ts 的 PERSONALIZATION_UI_THEMES 是同一份名单（那边有测试守着）。 */
-export const BUILTIN_UI_THEME_IDS = ["classic", "pearl", "deepspace"] as const;
+export const BUILTIN_UI_THEME_IDS = ["classic", "pearl", "liquid-glass"] as const;
 export type BuiltinUiThemeId = typeof BUILTIN_UI_THEME_IDS[number];
 
 /** 官方主题库里的那几套（原来内置的）。顺序就是主题库里的显示顺序。 */
-export const OFFICIAL_UI_THEME_IDS = ["gilt", "rose", "cinnabar", "liquid-glass", "indigo"] as const;
+export const OFFICIAL_UI_THEME_IDS = ["deepspace", "gilt", "rose", "cinnabar", "indigo"] as const;
 export type OfficialUiThemeId = typeof OFFICIAL_UI_THEME_IDS[number];
 
 export const UI_THEME_LIMITS = {

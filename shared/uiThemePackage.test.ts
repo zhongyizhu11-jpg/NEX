@@ -19,8 +19,8 @@ import {
 const manifest = (patch: Record<string, unknown> = {}) => ({ apiVersion: 1, id: "my-theme", name: "我的主题", version: "1.2.3", ...patch });
 
 test("主题包 id：小写字母开头，字母 / 数字 / 连字符，3～32 个字符，不和内置的重名", () => {
-  for (const id of ["gilt", "liquid-glass", "my-theme", "abc", "t2-dark", `a${"b".repeat(31)}`]) assert.equal(isValidUiThemePackageId(id), true, id);
-  for (const id of ["", "ab", "Gilt", "1theme", "my_theme", "my theme", "-theme", "theme-", "my--theme", `a${"b".repeat(32)}`, "classic", "pearl", "deepspace", "../x", "a.b"]) {
+  for (const id of ["gilt", "deepspace", "my-theme", "abc", "t2-dark", `a${"b".repeat(31)}`]) assert.equal(isValidUiThemePackageId(id), true, id);
+  for (const id of ["", "ab", "Gilt", "1theme", "my_theme", "my theme", "-theme", "theme-", "my--theme", `a${"b".repeat(32)}`, "classic", "pearl", "liquid-glass", "../x", "a.b"]) {
     assert.equal(isValidUiThemePackageId(id), false, id);
   }
   // 官方主题库里的 id 都得是合法的主题包 id，而且不和内置的撞

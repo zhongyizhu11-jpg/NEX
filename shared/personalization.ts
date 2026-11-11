@@ -611,21 +611,23 @@ export function normalizePersonalizationCardStyle(value: unknown): Personalizati
             浮起来的瓷片；侧栏选中项也是一块瓷片，换页时滑过去（client/src/components/PearlNavMarker.tsx）；
             页面标题下一道细线，系统字。深色是蓝灰墨（#161b1e）。
 
-    deepspace 深空 —— 运维控制台那一类（Cloudflare / Tailscale / Vercel 的深色后台）：近黑蓝灰底托低一档的面板卡，
-            1px 暗线、不投影、不模糊；流量 / 延迟 / 统计数字一律等宽字；控件 8px，主按钮平的天蓝，分段控件是一排带细边的
-            小方块；手机底栏贴底通栏。深色是本色，浅色是冷白托白卡。2026-11-05 用户从三个商业化方向里挑的这一套。
+    liquid-glass 液态玻璃 —— 照 freetodo/monitor-theme-liquid-glass（Apple Liquid Glass）搬过来：页面后面两张大幅圆角
+            照片错落铺着（默认随机拉，设了壁纸就用壁纸），卡片是真毛玻璃（白 45% + 白边 + backdrop 模糊 28px），
+            鼠标移上去卡里跟着亮一团光；顶栏是浮着的玻璃条，按钮 / chip / 分段全是胶囊玻璃，选中态 Apple 蓝实心；
+            Inter 字体、标题和大数字字重 500。深色是 #111318 底上压暗到 40% 的照片。
+            照片层和光标跟随在 client/src/components/LiquidGlassBackdrop.tsx，旋钮见下面的 LiquidGlassConfig。
 
-  这三套留在面板里，是因为珍珠和深空不只是样式：侧栏会滑的瓷片、顶部导航、转发一张表这些是组件里按主题换的结构，
-  拆成只有 CSS 的主题包就不完整了。墨金 / 玫瑰 / 朱砂 / 液态玻璃 / 靛蓝原来也在这张表里，现在是官方主题库里的主题包
-  （themes/official/<id>/），想用的站点在「主题管理」里点一下安装；它们的 id 没变。
+  留在面板里的是用户选定的这三套（2026-11-11）。珍珠和液态玻璃不只是样式：侧栏会滑的瓷片、照片底和光标跟随是组件。
+  深空 / 墨金 / 玫瑰 / 朱砂 / 靛蓝是官方主题库里的主题包（themes/official/<id>/），想用的站点在「主题管理」里点一下安装；
+  它们的 id 没变，组件里按 id 换结构的地方（深空的顶部导航、转发一张表）装上以后照旧生效。
 
-  内置的画法在 client/src/styles/theme-pearl.css / theme-deepspace.css 里按 <html data-ui-theme> 选；这里只管 id 和文案。
+  内置的画法在 client/src/styles/theme-pearl.css / theme-liquid-glass.css 里按 <html data-ui-theme> 选；这里只管 id 和文案。
   存的是 id；不是内置、也没安装的值一律回到 classic。
 */
 export const PERSONALIZATION_UI_THEMES = [
   { id: "classic", name: "经典", description: "浅灰底托白卡、细线分区、天蓝渐变控件；深色是炭灰。现在这套。" },
   { id: "pearl", name: "珍珠", description: "珍珠灰底托瓷片卡：细线、淡渐变、两层软影和一道顶部高光；墨色主按钮、凹槽分段控件里浮起的选中格，侧栏选中项会滑；深色是蓝灰墨。照上游 Forwardx 的 Pearl Glass。" },
-  { id: "deepspace", name: "深空", description: "运维控制台：近黑底托暗色面板卡、1px 暗线、不投影不模糊；流量和延迟用等宽数字，带细边的分段方块、平色天蓝按钮、贴底通栏标签栏。建议配深色使用；浅色是冷白托白卡。" },
+  { id: "liquid-glass", name: "液态玻璃", description: "Apple Liquid Glass：页面后面两张随机照片（设了壁纸就用壁纸），卡片是真毛玻璃、鼠标移上去跟着亮一团光，浮着的玻璃顶栏、胶囊玻璃按钮、Apple 蓝选中态；深色是压暗的照片。" },
 ] as const;
 
 export type PersonalizationUiThemeId = typeof PERSONALIZATION_UI_THEMES[number]["id"];
@@ -687,9 +689,8 @@ export function resolveEffectiveLayout(
 }
 
 /*
-  「液态玻璃」主题的几个旋钮（设置 › 个性化 › 液态玻璃）。液态玻璃现在是官方主题库里的主题包，装了它才显示这一块；
-  只在界面主题是 liquid-glass 时生效，
-  存成一段 JSON（personalizationLiquidGlass），画法在 themes/official/liquid-glass/theme.css，
+  「液态玻璃」主题的几个旋钮（设置 › 个性化 › 液态玻璃）。只在界面主题是 liquid-glass 时生效，
+  存成一段 JSON（personalizationLiquidGlass），画法在 client/src/styles/theme-liquid-glass.css，
   照片和光标跟随在 client/src/components/LiquidGlassBackdrop.tsx。
 
     photoSource  照片从哪来：

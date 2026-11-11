@@ -13,7 +13,7 @@ import { UiThemeSwatch } from "./UiThemeSwatch";
 /*
   设置 › 个性化 › 主题管理（只有管理员）：装、更新、卸载界面主题包。
 
-  面板自带经典、珍珠、深空三套；别的主题都是主题包（shared/uiThemePackage.ts），三条路装：
+  面板自带经典、珍珠、液态玻璃三套；别的主题都是主题包（shared/uiThemePackage.ts），三条路装：
     · 官方主题库 —— 随面板发布的那几套，点一下就装，不用外网；
     · 上传压缩包 —— ZIP / TAR.GZ；
     · 从链接安装 —— 填压缩包直链，面板去下。
@@ -165,7 +165,7 @@ export function UiThemeManagerCard() {
           主题管理
         </CardTitle>
         <CardDescription>
-          面板自带经典、珍珠、深空三套界面主题，其余的按需安装：从官方主题库点一下，或者上传 / 用链接装别人做的主题包。装好以后在上面的「界面主题」和顶栏调色盘里选用；不装的主题不占用任何人的流量。
+          面板自带经典、珍珠、液态玻璃三套界面主题，其余的按需安装：从官方主题库点一下，或者上传 / 用链接装别人做的主题包。装好以后在上面的「界面主题」和顶栏调色盘里选用；不装的主题不占用任何人的流量。
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">

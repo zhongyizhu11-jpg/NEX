@@ -96,7 +96,7 @@ test("输入框字号低于 16px 的前提：viewport 里有 maximum-scale=1", (
 
 test("iOS App 手机顶栏往上收：安全区只留 72%（最少 20px）、顶栏 44px；液态玻璃的顶栏融进壁纸", () => {
   assert.match(css, /html\.capacitor-ios \.workspace-appbar \{ --fx-header-height: 44px; padding-top: max\(20px, calc\(env\(safe-area-inset-top, 0px\) \* 0\.72\)\); height: calc\(44px \+ max\(20px, calc\(env\(safe-area-inset-top, 0px\) \* 0\.72\)\)\); \}/);
-  const glass = fs.readFileSync(path.resolve(import.meta.dirname, "../../../themes/official/liquid-glass/theme.css"), "utf8");
+  const glass = fs.readFileSync(path.resolve(import.meta.dirname, "theme-liquid-glass.css"), "utf8");
   /*
     手机上顶栏没有容器：栏透明、没有边和模糊，顶上一层淡白雾（深色黑雾）淡到页头
     （2026-11-03 用户从四个候选里选的 A）。iOS 壳里只是往上收，雾把状态栏也盖住。
@@ -110,7 +110,7 @@ test("iOS App 手机顶栏往上收：安全区只留 72%（最少 20px）、顶
 });
 
 test("液态玻璃：进场动画不动透明度和 clip-path，玻璃卡的模糊在切页时不会消失再出现", () => {
-  const glass = fs.readFileSync(path.resolve(import.meta.dirname, "../../../themes/official/liquid-glass/theme.css"), "utf8");
+  const glass = fs.readFileSync(path.resolve(import.meta.dirname, "theme-liquid-glass.css"), "utf8");
   assert.match(glass, /\.route-content-enter,\s*html\[data-ui-theme="liquid-glass"\] \.tab-content-enter\[data-state="active"\] \{\s*animation-name: fx-lg-page-enter;/);
   assert.match(glass, /\.host-card-grid-static > \* \{\s*animation: none;\s*clip-path: none;\s*will-change: auto;/);
   for (const name of ["fx-lg-page-enter", "fx-lg-card-enter"]) {
