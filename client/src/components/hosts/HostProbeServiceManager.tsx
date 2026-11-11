@@ -1,9 +1,10 @@
 import DataSectionLoading from "@/components/DataSectionLoading";
 import { readStoredViewMode, writeStoredViewMode } from "@/lib/viewModeStorage";
 import { normalizeProbeAddressFamily, PROBE_ADDRESS_FAMILIES, PROBE_ADDRESS_FAMILY_LABELS, type ProbeAddressFamily } from "@shared/probeFamily";
+import { normalizeProbeCarrier, PROBE_CARRIER_LABELS, PROBE_CARRIERS, type ProbeCarrier } from "@shared/probeCarrier";
 import { EntityActions } from "@/components/entity/EntityActions";
 import { CardActions } from "@/components/entity/EntityCard";
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { Activity, LayoutGrid, List, Pencil, RadioTower, Trash2 } from "lucide-react";
 import HostStatusLabel from "@/components/HostStatusLabel";
 import { SortableDragHandle, SortableItem, SortableReorderContext, useOptimisticSortableOrder, useSortableReorder } from "@/components/SortableDragHandle";
@@ -25,6 +26,9 @@ import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import EmptyState from "@/components/EmptyState";
+
+// 三网视图只在切过去时才加载（它会再懒加载图表库）
+const ProbeCarrierView = lazy(() => import("./ProbeCarrierView"));
 
 /**
  * 最近一轮探测：「23 ms · 丢包 1/5」。
@@ -50,6 +54,8 @@ type ServiceForm = {
   targetPort: string;
   /** 目标是域名时按哪一族解析（Agent 2.2.226 起生效） */
   addressFamily: ProbeAddressFamily;
+  /** 三网视图的运营商标签；"none" = 不归哪一网 */
+  carrier: ProbeCarrier | "none";
   hostScope: "all" | "exclude" | "specific";
   hostIds: number[];
   excludeHostIds: number[];
@@ -67,6 +73,7 @@ const defaultForm: ServiceForm = {
   targetIp: "",
   targetPort: "",
   addressFamily: "auto",
+  carrier: "none",
   hostScope: "all",
   hostIds: [],
   excludeHostIds: [],
@@ -213,6 +220,7 @@ function ServiceCard({
             <p className="truncate text-sm font-medium" title={service.name}>{service.name}</p>
             <p className="truncate text-xs text-muted-foreground">
               {String(service.method || "").toUpperCase()} · 每 {interval} 秒
+              {normalizeProbeCarrier(service.carrier) ? ` · ${PROBE_CARRIER_LABELS[normalizeProbeCarrier(service.carrier)!]}` : ""}
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-1">
@@ -287,6 +295,8 @@ export default function HostProbeServiceManager({
   const [editingId, setEditingId] = useState<number | null>(null);
   const [form, setForm] = useState<ServiceForm>(defaultForm);
   const [internalViewMode, setInternalViewMode] = useState<HostProbeServiceViewMode>(() => getStoredServiceViewMode());
+  // 服务列表 / 三网视图（按电信、联通、移动看已有的探测数据）
+  const [section, setSection] = useState<"list" | "carrier">("list");
   const viewMode = controlledViewMode ?? internalViewMode;
   const selectedScopeHostIds = form.hostScope === "exclude" ? form.excludeHostIds : form.hostIds;
   const selectedScopeHostIdSet = useMemo(() => new Set(selectedScopeHostIds.map(Number)), [selectedScopeHostIds]);
@@ -371,7 +381,7 @@ export default function HostProbeServiceManager({
     if (!targetIp) { toast.error("请输入 IP 地址"); return; }
     if (form.method === "tcping" && (!Number.isInteger(targetPort) || targetPort < 1 || targetPort > 65535)) { toast.error("目标端口必须在 1-65535 之间"); return; }
     if (form.hostScope === "specific" && form.hostIds.length === 0) { toast.error("请选择需要运行服务的主机"); return; }
-    const payload = { ...form, name, targetIp, targetPort: form.method === "tcping" ? targetPort : null, intervalSeconds: Math.max(5, Number(form.intervalSeconds) || 30) };
+    const payload = { ...form, name, targetIp, targetPort: form.method === "tcping" ? targetPort : null, carrier: form.carrier === "none" ? null : form.carrier, intervalSeconds: Math.max(5, Number(form.intervalSeconds) || 30) };
     if (editingId) updateMutation.mutate({ ...payload, id: editingId });
     else createMutation.mutate(payload);
   };
@@ -412,6 +422,7 @@ export default function HostProbeServiceManager({
       targetIp: service.targetIp || "",
       targetPort: service.targetPort ? String(service.targetPort) : "",
       addressFamily: normalizeProbeAddressFamily(service.addressFamily, service.targetIp),
+      carrier: normalizeProbeCarrier(service.carrier) || "none",
       hostScope: service.hostScope === "exclude" || service.hostScope === "specific" ? service.hostScope : "all",
       hostIds: Array.isArray(service.hostIds) ? service.hostIds.map(Number).filter(Boolean) : [],
       excludeHostIds: Array.isArray(service.excludeHostIds) ? service.excludeHostIds.map(Number).filter(Boolean) : [],
@@ -432,6 +443,30 @@ export default function HostProbeServiceManager({
 
   return (
     <div className="space-y-4">
+      <div className="inline-flex h-8 items-center gap-0.5 rounded-md bg-[var(--fx-l3-control-fill)] p-[3px]" role="tablist" aria-label="服务视图" data-testid="probe-service-section">
+        {([["list", "服务列表"], ["carrier", "三网视图"]] as const).map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            role="tab"
+            aria-selected={section === value}
+            onClick={() => setSection(value)}
+            className={cn(
+              "inline-flex h-full items-center justify-center whitespace-nowrap rounded-inner px-3 text-xs font-medium text-muted-foreground transition-all hover:text-foreground",
+              section === value && "bg-[image:var(--fx-primary-gradient)] font-semibold text-[var(--fx-primary-text)] hover:text-[var(--fx-primary-text)]",
+            )}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {section === "carrier" ? (
+        <Suspense fallback={<DataSectionLoading label="正在加载三网视图" />}>
+          <ProbeCarrierView />
+        </Suspense>
+      ) : (
+      <>
       {!hideViewModeToggle && (
       <div className="flex justify-end">
         <ViewModeToggle
@@ -570,6 +605,8 @@ export default function HostProbeServiceManager({
             </div>
           )}
       </div>
+      </>
+      )}
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="flex max-h-[88svh] flex-col overflow-hidden sm:max-w-2xl">
@@ -595,6 +632,17 @@ export default function HostProbeServiceManager({
                 </SelectContent>
               </Select>
               <p data-fx-help="" className="text-meta text-muted-foreground">目标是域名时才有用：只用这一族的地址测。</p>
+            </FormField>
+            <FormField className="space-y-1.5">
+              <Label>运营商（三网视图）</Label>
+              <Select value={form.carrier} onValueChange={(value) => setForm({ ...form, carrier: value as ServiceForm["carrier"] })}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">不归哪一网</SelectItem>
+                  {PROBE_CARRIERS.map((carrier) => <SelectItem key={carrier} value={carrier}>{PROBE_CARRIER_LABELS[carrier]}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              <p data-fx-help="" className="text-meta text-muted-foreground">选了以后这条服务出现在「三网视图」对应的那一网里。探的只是一个固定目标，它不回不代表整网断了。</p>
             </FormField>
             <div className="grid gap-3 sm:grid-cols-[1fr_140px]">
               <FormField className="space-y-1.5"><Label>选择主机</Label><Select value={form.hostScope} onValueChange={(value) => setForm({ ...form, hostScope: value as ServiceForm["hostScope"] })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">所有主机</SelectItem><SelectItem value="exclude">排除主机</SelectItem><SelectItem value="specific">特定主机</SelectItem></SelectContent></Select></FormField>

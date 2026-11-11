@@ -2,6 +2,7 @@ import { protectedProcedure, adminProcedure, publicProcedure, router } from "../
 import { getHostProbeServiceHourlySeries, HOST_PROBE_RAW_MAX_HOURS } from "../repositories/hostProbeHourlyRepository";
 import { invalidateAgentStableHeartbeatPlan } from "../agentHeartbeatGate";
 import { normalizeProbeAddressFamily, PROBE_ADDRESS_FAMILIES } from "../../shared/probeFamily";
+import { PROBE_CARRIERS } from "../../shared/probeCarrier";
 import { githubRepoParts } from "@shared/githubAccelerator";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
@@ -121,6 +122,8 @@ const hostProbeServiceInputSchema = z.object({
   targetPort: z.number().int().min(1).max(65535).nullable().optional(),
   // 目标是域名时按哪一族解析（Agent 2.2.226 起生效，老 Agent 照旧 auto）
   addressFamily: z.enum(PROBE_ADDRESS_FAMILIES).default("auto"),
+  // 三网视图的运营商标签（shared/probeCarrier.ts）；不传 = 不改
+  carrier: z.enum(PROBE_CARRIERS).nullable().optional(),
   hostScope: z.enum(["all", "exclude", "specific"]).default("all"),
   hostIds: hostProbeIdsSchema,
   excludeHostIds: hostProbeIdsSchema,

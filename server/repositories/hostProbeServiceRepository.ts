@@ -12,6 +12,7 @@ import { clampPositiveInt, epochSeconds, reorderRowsBySortOrder } from "./reposi
 import { normalizeAgentProbeCounts } from "../../shared/agentDtos";
 import { deleteHostProbeHourlyStats } from "./hostProbeHourlyRepository";
 import { normalizeProbeAddressFamily, type ProbeAddressFamily } from "../../shared/probeFamily";
+import { normalizeProbeCarrier, type ProbeCarrier } from "../../shared/probeCarrier";
 
 export type HostProbeMethod = "tcping" | "ping";
 export type HostProbeScope = "all" | "exclude" | "specific";
@@ -29,6 +30,8 @@ export type HostProbeServiceInput = {
   intervalSeconds?: number;
   isEnabled?: boolean;
   sortOrder?: number;
+  /** 三网视图的运营商标签；undefined = 更新时不动它，null = 清掉。 */
+  carrier?: ProbeCarrier | null;
   userId: number;
 };
 
@@ -84,6 +87,8 @@ function normalizeServiceInput(input: HostProbeServiceInput): InsertHostProbeSer
     updatedAt: nowDate(),
   } as InsertHostProbeService;
   if (input.sortOrder !== undefined) (payload as any).sortOrder = normalizeSortOrder(input.sortOrder);
+  // 没传就不写：列表上的启停开关只带老字段，不能顺手把标签清掉
+  if (input.carrier !== undefined) (payload as any).carrier = normalizeProbeCarrier(input.carrier);
   return payload;
 }
 
@@ -93,6 +98,7 @@ export function mapHostProbeService(row: any) {
     id: Number(row?.id || 0),
     targetPort: row?.targetPort == null ? null : Number(row.targetPort),
     addressFamily: normalizeProbeAddressFamily(row?.addressFamily, row?.targetIp),
+    carrier: normalizeProbeCarrier(row?.carrier),
     intervalSeconds: normalizeIntervalSeconds(row?.intervalSeconds),
     isEnabled: rowBool(row?.isEnabled),
     sortOrder: normalizeSortOrder(row?.sortOrder),
