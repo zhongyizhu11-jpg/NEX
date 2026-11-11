@@ -12,7 +12,7 @@ import { countryFlagLabel } from "@/lib/flagEmojiSupport";
 import { trpc } from "@/lib/trpc";
 import { describeProbeFailure, describeProbeFailureShort } from "@shared/probeFailure";
 import { SITE_FAILURE_LABELS, SITE_LATENCY_BAD_MS, SITE_LATENCY_WARN_MS } from "@shared/siteLatency";
-import { UNLOCK_STATUS_LABELS, type UnlockStatus } from "@shared/unlockCheck";
+import { UnlockRegionGrid, type UnlockGridFamily } from "./UnlockRegionGrid";
 
 /*
   落地出口检测：这个节点从哪台机器出去，那台出去以后到百度 / Google / GitHub / OpenAI 连不连得上，
@@ -45,7 +45,11 @@ export type ExitQualityHostView = {
   sites: ExitQualitySiteView[];
   noEgress?: boolean;
   unlock: { checkedAt: number; items: { service: string; text: string; status: string }[] } | null;
-  unlockDetail?: { checkedAt: number; family: string; results: { service: string; name: string; status: string; region: string | null }[] } | null;
+  unlockDetail?: { checkedAt: number; family: string; results: { service: string; name: string; status: string; region: string | null; detail?: string | null }[] } | null;
+  /** 每个协议族最新的一次（双栈主机 IPv4、IPv6 分开测）；没有就只看 unlockDetail。 */
+  unlockFamilies?: UnlockGridFamily[];
+  /** 给了就提示「这几项要升级 Agent」。 */
+  agentVersion?: string | null;
 };
 
 export type ExitQualityTarget = { key: string; label: string; host: string };
@@ -98,12 +102,6 @@ export function exitSiteTitle(label: string, host: string, site: ExitQualitySite
   if (site.lossPct > 0) parts.push(`没连上 ${site.lossPct}%`);
   parts.push(`${site.samples} 轮，≤${SITE_LATENCY_WARN_MS} ms 绿、≤${SITE_LATENCY_BAD_MS} ms 黄`);
   return parts.join("；");
-}
-
-function formatCheckedAt(value: number) {
-  if (!value) return "";
-  const date = new Date(value);
-  return Number.isFinite(date.getTime()) ? date.toLocaleString("zh-CN", { hour12: false, month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
 }
 
 /** 一台主机的出口：四个站点各一格 + 解锁。概览不再放，订阅管理的出口检测和线路详情共用。 */
@@ -160,20 +158,11 @@ export function ExitHostPanel({ host, targets, compact = false }: { host: ExitQu
         <div className="space-y-1.5">
           <div className="flex items-baseline justify-between gap-2">
             <span className="text-meta font-medium text-muted-foreground">解锁</span>
-            {host.unlockDetail ? <span className="text-[11px] text-muted-foreground">{formatCheckedAt(host.unlockDetail.checkedAt)} 检测</span> : null}
           </div>
-          {host.unlockDetail && host.unlockDetail.results.length > 0 ? (
-            <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3" data-testid="exit-unlock">
-              {host.unlockDetail.results.map((item) => (
-                <div key={item.service} className="flex min-w-0 items-center justify-between gap-2 rounded-md bg-[var(--fx-l2-group)] px-2.5 py-1.5 text-xs">
-                  <span className="truncate">{item.name}</span>
-                  <span className="shrink-0" style={{ color: UNLOCK_TONE[item.status] || "var(--fx-text-muted)" }}>
-                    {UNLOCK_STATUS_LABELS[item.status as UnlockStatus] || item.status}
-                    {item.region ? ` · ${item.region}` : ""}
-                  </span>
-                </div>
-              ))}
-            </div>
+          {host.unlockFamilies && host.unlockFamilies.length > 0 ? (
+            <UnlockRegionGrid families={host.unlockFamilies} hostCountry={host.countryCode} agentVersion={host.agentVersion} />
+          ) : host.unlockDetail && host.unlockDetail.results.length > 0 ? (
+            <UnlockRegionGrid families={[host.unlockDetail]} hostCountry={host.countryCode} agentVersion={host.agentVersion} />
           ) : (
             <p className="text-xs text-muted-foreground">还没做过解锁检测（管理员在主机详情里点「检测解锁」，或开定时检测）。</p>
           )}

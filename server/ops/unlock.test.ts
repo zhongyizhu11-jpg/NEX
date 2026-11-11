@@ -6,6 +6,7 @@ import {
   pickScheduledUnlockHosts,
   resetUnlockStateForTest,
   setUnlockRecorderForTest,
+  startDualStackUnlockCheck,
   startUnlockCheck,
   unlockDirectiveFor,
   type UnlockRunRecord,
@@ -103,4 +104,15 @@ test("计划检测：只挑在线、到期、没在等的主机，最久没测�
   assert.deepEqual(pickScheduledUnlockHosts(hosts, last, "off", now), []);
   assert.deepEqual(pickScheduledUnlockHosts(hosts, new Map(), "weekly", now, 2).map((h) => h.id), [1, 2]);
   resetUnlockStateForTest();
+});
+
+test("检测双栈：IPv4、IPv6 各排一次，各自的 runId；再点一次复用", () => {
+  resetUnlockStateForTest();
+  const first = startDualStackUnlockCheck(host(9), { trigger: "manual" });
+  assert.deepEqual(first.runs.map((run) => run.family), ["ipv4", "ipv6"]);
+  assert.notEqual(first.runs[0].runId, first.runs[1].runId);
+  assert.equal(first.reused, false);
+  assert.deepEqual(unlockDirectiveFor(9)?.runs.map((run) => run.family), ["ipv4", "ipv6"]);
+  assert.equal(startDualStackUnlockCheck(host(9), {}).reused, true);
+  assert.throws(() => startDualStackUnlockCheck(host(10, "2.2.226", false), {}), /主机离线/);
 });
