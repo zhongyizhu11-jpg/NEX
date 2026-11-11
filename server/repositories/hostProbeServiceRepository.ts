@@ -88,7 +88,7 @@ function normalizeServiceInput(input: HostProbeServiceInput): InsertHostProbeSer
   } as InsertHostProbeService;
   if (input.sortOrder !== undefined) (payload as any).sortOrder = normalizeSortOrder(input.sortOrder);
   // 没传就不写：列表上的启停开关只带老字段，不能顺手把标签清掉
-  if (input.carrier !== undefined) (payload as any).carrier = normalizeProbeCarrier(input.carrier);
+  if (input.carrier !== undefined) (payload as InsertHostProbeService & { carrier?: string | null }).carrier = normalizeProbeCarrier(input.carrier);
   return payload;
 }
 

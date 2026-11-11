@@ -246,7 +246,7 @@ export async function ingestNetProfileReport(host: AgentExtHost, raw: unknown) {
     if (!normalized) return;
     await saveAgentNetProfile(hostId, normalized);
     // IP 信息：Agent 查回来的原始响应先存，再让面板在后台补查注册地和带 Key 的几家（不等它）
-    await ingestAgentIpIntel(hostId, (report.result as any).intel).catch((error) => {
+    await ingestAgentIpIntel(hostId, (report.result as Record<string, unknown>).intel).catch((error) => {
       console.warn(`[NetProfile] host=${hostId} IP 信息入库失败：${error instanceof Error ? error.message : String(error)}`);
     });
     const manual = !!(pending && runId && pending.runId === runId);

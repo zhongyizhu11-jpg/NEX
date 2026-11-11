@@ -41,6 +41,9 @@ import { safeHttpGet } from "../ssrf";
 
 const q = quoteDbIdentifier;
 const TABLE = "host_ip_intel";
+
+/** 这里只用到主机行上的这几个字段（主机行、扩展通道的 AgentExtHost 都满足）。 */
+export type IntelHost = { id?: unknown; agentVersion?: unknown; ip?: unknown; ipv4?: unknown; ipv6?: unknown };
 const PANEL_TIMEOUT_MS = 8000;
 const PANEL_MAX_BYTES = 64 * 1024;
 
@@ -159,7 +162,7 @@ export async function queryIntelFromPanel(provider: IpIntelProvider, family: IpI
 
 // ---------------------------------------------------------------- 存取
 
-function rowToResult(row: any): IpIntelProviderResult | null {
+function rowToResult(row: Record<string, unknown>): IpIntelProviderResult | null {
   const provider = String(row.provider || "");
   if (!isIpIntelProvider(provider)) return null;
   const family = Number(row.family) === 6 ? 6 : 4;
@@ -186,7 +189,7 @@ function rowToResult(row: any): IpIntelProviderResult | null {
 }
 
 export async function listHostIpIntel(hostId: number): Promise<IpIntelProviderResult[]> {
-  const rows = await queryRaw<any>(`SELECT * FROM ${q(TABLE)} WHERE ${q("hostId")} = ?`, [hostId]).catch(() => []);
+  const rows = await queryRaw<Record<string, unknown>>(`SELECT * FROM ${q(TABLE)} WHERE ${q("hostId")} = ?`, [hostId]).catch(() => []);
   return rows.map(rowToResult).filter((item): item is IpIntelProviderResult => !!item);
 }
 
@@ -235,7 +238,7 @@ function publicAddress(value: unknown, family: IpIntelFamily): string | null {
 }
 
 /** 每个协议族查哪个地址：优先 Agent 测到的出口，其次主机行上的地址。内网 / 保留地址不查。 */
-export function ipIntelAddresses(host: any, profile?: Pick<NetProfileReport, "ipv4" | "ipv6"> | null): Record<IpIntelFamily, string | null> {
+export function ipIntelAddresses(host: IntelHost | null | undefined, profile?: Pick<NetProfileReport, "ipv4" | "ipv6"> | null): Record<IpIntelFamily, string | null> {
   return {
     4: publicAddress(profile?.ipv4?.ok ? profile.ipv4.address : null, 4) || publicAddress(host?.ipv4, 4) || publicAddress(host?.ip, 4),
     6: publicAddress(profile?.ipv6?.ok ? profile.ipv6.address : null, 6) || publicAddress(host?.ipv6, 6),
@@ -254,7 +257,7 @@ export function ipIntelRefreshing(hostId: number) {
  * 面板这头查一遍（只查过期的，force 时全查）。同一台主机同时只跑一份；各家各协议族并发，
  * 一家失败不影响别家。调用方不等它：用 scheduleHostIpIntelRefresh。
  */
-export async function refreshHostIpIntelFromPanel(host: any, profile: Pick<NetProfileReport, "ipv4" | "ipv6"> | null, options: { force?: boolean } = {}) {
+export async function refreshHostIpIntelFromPanel(host: IntelHost, profile: Pick<NetProfileReport, "ipv4" | "ipv6"> | null, options: { force?: boolean } = {}) {
   const hostId = Number(host?.id);
   if (!(hostId > 0)) return;
   const existing = refreshing.get(hostId);
@@ -286,7 +289,7 @@ export async function refreshHostIpIntelFromPanel(host: any, profile: Pick<NetPr
   return work;
 }
 
-export function scheduleHostIpIntelRefresh(host: any, profile: Pick<NetProfileReport, "ipv4" | "ipv6"> | null, options: { force?: boolean } = {}) {
+export function scheduleHostIpIntelRefresh(host: IntelHost, profile: Pick<NetProfileReport, "ipv4" | "ipv6"> | null, options: { force?: boolean } = {}) {
   void refreshHostIpIntelFromPanel(host, profile, options);
 }
 
@@ -351,7 +354,7 @@ export async function ingestAgentIpIntel(hostId: number, raw: unknown, now = now
 
 // ---------------------------------------------------------------- 给界面
 
-export async function hostIpIntelView(host: any, profile: Pick<NetProfileReport, "ipv4" | "ipv6"> | null) {
+export async function hostIpIntelView(host: IntelHost, profile: Pick<NetProfileReport, "ipv4" | "ipv6"> | null) {
   const hostId = Number(host?.id);
   const results = await listHostIpIntel(hostId);
   const addresses = ipIntelAddresses(host, profile);

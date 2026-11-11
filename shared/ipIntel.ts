@@ -166,7 +166,14 @@ function ipText(value: unknown): string | null {
   return t && /^[0-9a-f:.]+$/i.test(t) && (t.includes(".") || t.includes(":")) ? t.toLowerCase() : null;
 }
 
-function asObject(raw: unknown): Record<string, any> | null {
+/*
+  第三方接口的 JSON 形状各家不一、随时会变，这里按「随便取、取到的每个字段都再过一遍 text() / country() /
+  flag() / score() 校验」的方式读，所以用一个宽松类型，不给每家写一套接口定义。
+*/
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type LooseJson = Record<string, any>;
+
+function asObject(raw: unknown): LooseJson | null {
   if (typeof raw === "string") {
     try {
       raw = JSON.parse(raw);
@@ -174,7 +181,7 @@ function asObject(raw: unknown): Record<string, any> | null {
       return null;
     }
   }
-  return raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, any>) : null;
+  return raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as LooseJson) : null;
 }
 
 /**
@@ -349,7 +356,7 @@ export function parseRipestatCountry(raw: unknown): IpIntelParseResult {
   if (!body) return failure("返回的不是 JSON");
   if (String(body.status || "ok").toLowerCase() !== "ok") return failure(`对方报错：${text(body.message, 120) || body.status}`);
   const located = Array.isArray(body.data?.located_resources) ? body.data.located_resources : [];
-  const code = located.map((item: any) => country(item?.location)).find(Boolean) || null;
+  const code = located.map((item: LooseJson | null) => country(item?.location)).find(Boolean) || null;
   if (!code) return failure("分配记录里没有国家");
   const info = emptyIpIntelInfo();
   info.ip = ipText(body.data?.resource);

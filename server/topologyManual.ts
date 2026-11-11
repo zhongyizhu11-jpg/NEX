@@ -33,8 +33,8 @@ export class TopologyManualError extends Error {}
 
 export async function listTopologyManual(userId: number): Promise<{ nodes: TopologyManualNodeRow[]; links: TopologyManualLinkRow[] }> {
   const [nodes, links] = await Promise.all([
-    queryRaw<any>(`SELECT ${q("id")}, ${q("label")}, ${q("note")}, ${q("country")} FROM ${q(NODES)} WHERE ${q("userId")} = ? ORDER BY ${q("id")} ASC`, [userId]).catch(() => []),
-    queryRaw<any>(`SELECT ${q("id")}, ${q("fromRef")}, ${q("toRef")}, ${q("label")}, ${q("note")} FROM ${q(LINKS)} WHERE ${q("userId")} = ? ORDER BY ${q("id")} ASC`, [userId]).catch(() => []),
+    queryRaw<Record<string, unknown>>(`SELECT ${q("id")}, ${q("label")}, ${q("note")}, ${q("country")} FROM ${q(NODES)} WHERE ${q("userId")} = ? ORDER BY ${q("id")} ASC`, [userId]).catch(() => []),
+    queryRaw<Record<string, unknown>>(`SELECT ${q("id")}, ${q("fromRef")}, ${q("toRef")}, ${q("label")}, ${q("note")} FROM ${q(LINKS)} WHERE ${q("userId")} = ? ORDER BY ${q("id")} ASC`, [userId]).catch(() => []),
   ]);
   return {
     nodes: nodes.map((row) => ({ id: Number(row.id), label: String(row.label || ""), note: row.note ? String(row.note) : null, country: cleanCountry(row.country) })),
@@ -43,7 +43,7 @@ export async function listTopologyManual(userId: number): Promise<{ nodes: Topol
 }
 
 async function countRows(table: string, userId: number) {
-  const rows = await queryRaw<any>(`SELECT COUNT(*) AS ${q("count")} FROM ${q(table)} WHERE ${q("userId")} = ?`, [userId]);
+  const rows = await queryRaw<Record<string, unknown>>(`SELECT COUNT(*) AS ${q("count")} FROM ${q(table)} WHERE ${q("userId")} = ?`, [userId]);
   return Number(rows[0]?.count) || 0;
 }
 

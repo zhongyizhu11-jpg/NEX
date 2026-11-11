@@ -47,7 +47,7 @@ export function TopologyManualEditor({ open, onOpenChange, graphNodes }: { open:
   const manualEndpoints: Endpoint[] = nodes.map((node) => ({ ref: manualNodeId(node.id), label: `外部 · ${node.label}` }));
   const otherEndpoints: Endpoint[] = useMemo(() => {
     const out: Endpoint[] = [];
-    for (const host of (hostOptions.data as any[] | undefined) || []) out.push({ ref: `host:${Number(host.id)}`, label: `主机 · ${String(host.name || host.id)}` });
+    for (const host of (hostOptions.data as Array<{ id: unknown; name?: unknown }> | undefined) || []) out.push({ ref: `host:${Number(host.id)}`, label: `主机 · ${String(host.name || host.id)}` });
     for (const node of graphNodes) if (node.kind === "target") out.push({ ref: node.id, label: `目标 · ${node.label}` });
     return out;
   }, [hostOptions.data, graphNodes]);

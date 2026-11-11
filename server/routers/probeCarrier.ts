@@ -22,13 +22,15 @@ import {
   只给管理员：探测服务本身就是管理员在管（服务页只有管理员看得到），而且「全部主机」范围的服务跑在
   管理员的机器上，普通用户不该看到那些机器。只读已有的探测样本，不新增采集。
 */
+type ProbeServiceRow = { id: number; name: string; carrier?: unknown; method: string; targetIp: string; targetPort?: number | null; isEnabled?: boolean };
+
 export const probeCarrierRouter = router({
   view: adminProcedure
     .input(z.object({ hours: z.number().min(1).max(72).default(CARRIER_VIEW_HOURS) }).optional())
     .query(async ({ input }) => {
       const hours = input?.hours ?? CARRIER_VIEW_HOURS;
       const now = Math.floor(Date.now() / 1000);
-      const services = (await db.getHostProbeServices()) as any[];
+      const services: ProbeServiceRow[] = await db.getHostProbeServices();
       const tagged = services.filter((service) => normalizeProbeCarrier(service.carrier));
       const presetMissing = missingCarrierPreset(services).map((item) => item.name);
       if (tagged.length === 0) return { groups: buildCarrierView([], [], now, { hours }), hosts: [], series: [], presetMissing, now };
@@ -45,7 +47,7 @@ export const probeCarrierRouter = router({
       const q = quoteIdentifier;
       const list = inList(hostIds);
       const hostRows = hostIds.length > 0
-        ? await queryRaw<any>(`SELECT ${q("id")}, ${q("name")}, ${q("isOnline")}, ${q("geoCountryCode")} FROM ${q("hosts")} WHERE ${q("id")} IN ${list.sql}`, list.params)
+        ? await queryRaw<Record<string, unknown>>(`SELECT ${q("id")}, ${q("name")}, ${q("isOnline")}, ${q("geoCountryCode")} FROM ${q("hosts")} WHERE ${q("id")} IN ${list.sql}`, list.params)
         : [];
       return {
         groups,
@@ -63,7 +65,7 @@ export const probeCarrierRouter = router({
     }),
 
   addShanghaiPreset: adminProcedure.mutation(async ({ ctx }) => {
-    const services = (await db.getHostProbeServices()) as any[];
+    const services: ProbeServiceRow[] = await db.getHostProbeServices();
     const missing = missingCarrierPreset(services);
     for (const item of missing) {
       await db.createHostProbeService({

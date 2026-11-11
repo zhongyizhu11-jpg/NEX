@@ -74,7 +74,7 @@ export function aggregateBucketsByDay(rows: ReadonlyArray<{ userId: unknown; rul
 export async function rollupUserTrafficDaily(now = new Date()) {
   const firstDay = billingDayStarts(RECOMPUTE_DAYS, now)[0];
   // 转发组成员的子规则记到模板规则上（和仪表盘按用户算流量是同一个口径）
-  const buckets = await queryRaw<any>(
+  const buckets = await queryRaw<{ userId: unknown; ruleId: unknown; bucketStart: unknown; bytesIn: unknown; bytesOut: unknown }>(
     `SELECT b.${q("userId")} AS ${q("userId")},
             COALESCE(parent.${q("id")}, b.${q("ruleId")}) AS ${q("ruleId")},
             b.${q("bucketStart")} AS ${q("bucketStart")},
@@ -149,7 +149,7 @@ export async function getUserTrafficHistory(userId: number, days: number, now = 
   const count = Math.max(1, Math.min(USER_TRAFFIC_DAILY_RETENTION_DAYS, Math.floor(days)));
   const starts = billingDayStarts(count, now);
   const since = starts[0];
-  const rows = await queryRaw<any>(
+  const rows = await queryRaw<Record<string, unknown>>(
     `SELECT ${q("ruleId")}, ${q("dayStart")}, ${q("bytesIn")}, ${q("bytesOut")} FROM ${q(TABLE)} WHERE ${q("userId")} = ? AND ${q("dayStart")} >= ?`,
     [userId, since],
   );
@@ -176,10 +176,10 @@ export async function getUserTrafficHistory(userId: number, days: number, now = 
   const list = inList(ids);
   const names = new Map<number, string>(
     ids.length > 0
-      ? (await queryRaw<any>(`SELECT ${q("id")}, ${q("name")} FROM ${q("forward_rules")} WHERE ${q("id")} IN ${list.sql}`, list.params)).map((row) => [Number(row.id), String(row.name || "")])
+      ? (await queryRaw<Record<string, unknown>>(`SELECT ${q("id")}, ${q("name")} FROM ${q("forward_rules")} WHERE ${q("id")} IN ${list.sql}`, list.params)).map((row) => [Number(row.id), String(row.name || "")])
       : [],
   );
-  const earliest = await queryRaw<any>(`SELECT MIN(${q("dayStart")}) AS ${q("first")} FROM ${q(TABLE)}`).catch(() => []);
+  const earliest = await queryRaw<Record<string, unknown>>(`SELECT MIN(${q("dayStart")}) AS ${q("first")} FROM ${q(TABLE)}`).catch(() => []);
   const first = Number(earliest[0]?.first) || 0;
   const daysOut = starts.map((dayStart) => ({ day: billingDayKey(dayStart), dayStart, ...(byDay.get(dayStart) || { bytesIn: 0, bytesOut: 0 }) }));
   return {

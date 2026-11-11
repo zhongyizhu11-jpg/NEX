@@ -38,7 +38,7 @@ async function visibleManualHosts(ctx: Viewer, refs: string[]) {
   const out = new Map<number, TopologyManualHost>();
   for (const id of ids.slice(0, TOPOLOGY_MANUAL_LIMITS.links)) {
     try {
-      const host: any = await requireHostAccess(ctx, id);
+      const host = await requireHostAccess(ctx, id);
       out.set(id, {
         name: String(host.name || `主机 ${id}`),
         address: host.entryIp || host.ip ? String(host.entryIp || host.ip) : null,

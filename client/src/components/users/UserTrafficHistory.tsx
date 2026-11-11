@@ -34,7 +34,7 @@ function subscribe(listener: () => void) {
   return () => listeners.delete(listener);
 }
 
-export function UserTrafficHistoryMenuItem({ user }: { user: any }) {
+export function UserTrafficHistoryMenuItem({ user }: { user: { id?: unknown; name?: unknown; username?: unknown } }) {
   const id = Number(user?.id);
   if (!Number.isFinite(id) || id <= 0) return null;
   return (
