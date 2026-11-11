@@ -90,6 +90,16 @@ test("拼接文字：分隔符逐段翻、顿号列表全翻才换、括号、�
   assert.equal(translator.translate("状态：用到套餐的百分之百以后暂停"), null);
 });
 
+test("主机账本：「预计 …」几段可有可无的尾巴、样本数提示没有原因时", () => {
+  const translator = createTranslator(DICTIONARY, PATTERNS);
+  assert.equal(translator.translate("预计 120 GB"), "Projected 120 GB");
+  assert.equal(translator.translate("预计 120 GB（粗估）"), "Projected 120 GB (rough)");
+  assert.equal(translator.translate("预计 1.2 TB 会超"), "Projected 1.2 TB will exceed");
+  assert.equal(translator.translate("预计 1.2 TB 会超，约 2026-11-20 用完（粗估）"), "Projected 1.2 TB will exceed, runs out around 2026-11-20 (rough)");
+  assert.equal(translator.translate("预计 3 天"), null, "数值里还有中文就不是这一格");
+  assert.equal(translator.translate("本周期 288 个 5 分钟样本（应有 288 个）"), "288 5-minute samples this cycle (expected 288)");
+});
+
 test("t() 与运行时语言：中文原样插值，英文先找整句键再插值", async () => {
   installDictionary(DICTIONARY);
   assert.equal(getLanguage(), "zh-CN");
