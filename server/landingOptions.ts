@@ -27,7 +27,7 @@ export type LandingOptionInbound = {
   name: string;
   port: number;
   /**
-   * shadowsocks，或者 vless（2.3.525 起，VLESS Reality 出口用；分流只走 Shadowsocks，选择器按调用方要的协议过滤）。
+   * shadowsocks，或者 vless（2.3.524 起，VLESS Reality 出口用；分流只走 Shadowsocks，选择器按调用方要的协议过滤）。
    * 老界面不看这个字段：它们只认 Shadowsocks，所以 VLESS 入站在它们眼里是 methodError 不为空的那种（不能选）。
    */
   protocol: "shadowsocks" | "vless";

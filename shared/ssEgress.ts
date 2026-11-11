@@ -35,7 +35,7 @@ import { VLESS_EGRESS_TCP_ONLY_MESSAGE, VLESS_EGRESS_TUNNEL_MESSAGE, VLESS_EGRES
 export const SS_EGRESS_AGENT_VERSION = "2.2.226";
 
 /**
- * vless_host / vless_link 是 VLESS Reality 出口（面板 2.3.525，规则见 shared/vlessEgress.ts）：落地入站 / 外部
+ * vless_host / vless_link 是 VLESS Reality 出口（面板 2.3.524，规则见 shared/vlessEgress.ts）：落地入站 / 外部
  * vless:// 链接，入口机上的 gost 经本机 sing-box 桥接出去。列名、存法和 Shadowsocks 出口共用（egressInboundId 指向
  * 落地入站，egressConfigJson 存加密后的外部链接），所以这一份 helper 两种协议都管。
  */

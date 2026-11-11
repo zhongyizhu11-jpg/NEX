@@ -8,6 +8,7 @@ import {
   parseProxyNodeLink,
   PROXY_NODE_PROTOCOL_LABELS,
   proxyNodeRequiresUdp,
+  proxyNodeOnlyUdp,
   type ProxyNode,
   type ProxyNodeProtocol,
 } from "../../shared/proxyNode";
@@ -122,6 +123,10 @@ function nodeToRow(node: ProxyNode, sourceLink: string) {
     snellVersion: node.snellVersion,
     snellMode: node.snellMode || null,
     xhttpMode: node.xhttpMode || null,
+    // SOCKS5 / Mieru 的用户名，Mieru 的端口段与承载（粘 mierus:// 进来时有）。
+    username: node.username || null,
+    portRangeEnd: Number(node.portRangeEnd || 0),
+    mieruTransport: node.protocol === "mieru" ? node.mieruTransport || "TCP" : null,
   };
 }
 
@@ -664,6 +669,10 @@ export const proxySubscriptionsRouter = router({
             `${PROXY_NODE_PROTOCOL_LABELS[node.protocol as ProxyNodeProtocol] || node.protocol} 走 QUIC，只用 UDP；`
             + "这条转发目前只放行 TCP，请先把转发协议改成 UDP 或 TCP+UDP",
           );
+        }
+        // 只开 UDP 承载的 Mieru 同理：握手包全在 UDP 上。
+        if (proxyNodeOnlyUdp(node) && String(rule.protocol || "").toLowerCase() === "tcp") {
+          throw new Error("这个 Mieru 节点只开了 UDP 承载；这条转发目前只放行 TCP，请先把转发协议改成 UDP 或 TCP+UDP");
         }
       }
       const data: Record<string, unknown> = { proxyNodeId: input.proxyNodeId };

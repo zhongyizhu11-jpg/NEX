@@ -1,6 +1,6 @@
 /**
  * 规则编辑器里的「出口」一段：直接连接 / 落地主机 / 外部链接。落地主机上的入站可以是 Shadowsocks，也可以是
- * VLESS + REALITY + Vision（2.3.525）；外部链接粘 ss:// 或 vless://。具体存成哪种出口（ss_host / vless_host、
+ * VLESS + REALITY + Vision（2.3.524）；外部链接粘 ss:// 或 vless://。具体存成哪种出口（ss_host / vless_host、
  * ss_link / vless_link）跟着选中的入站 / 粘的链接走，三个按钮不用变成五个。VLESS 出口不接隧道，入口机 Agent
  * 要 2.2.253 起（shared/vlessEgress.ts）；它的 UDP（协议选 TCP+UDP）经同一个本机桥接走 xudp，不看下面说的运行时能力。
  *

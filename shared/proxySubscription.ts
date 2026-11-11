@@ -67,8 +67,8 @@ export const PROXY_SUBSCRIPTION_FORMAT_LABELS: Record<ProxySubscriptionFormat, s
 };
 
 export const PROXY_SUBSCRIPTION_FORMAT_HINTS: Record<ProxySubscriptionFormat, string> = {
-  base64: "v2rayN、v2rayNG、Shadowrocket 等通用客户端。不支持 Snell（该协议没有分享链接）。",
-  clash: "Clash、Clash.Meta、mihomo、Stash。协议最全，Snell 到 v5。",
+  base64: "v2rayN、v2rayNG、Shadowrocket 等通用客户端。不支持 Snell（该协议没有分享链接）和 Mieru。",
+  clash: "Clash、Clash.Meta、mihomo、Stash。协议最全，Snell 到 v5；Mieru 只发给 mihomo（只走 TCP 的那份）。",
   singbox: "sing-box 及基于它的客户端。协议最全，不支持 XHTTP 传输。",
   v2rayjson: "v2rayN 6.40+、v2rayNG 1.8.29+、Happ 的完整 Xray 配置订阅，每个节点一份配置，分流规则一起带。只有 Xray 内核有的协议（VLESS / VMess / Trojan / Shadowsocks / SOCKS）。",
   loon: "Loon（iOS）。不支持 TUIC、Snell、XHTTP。",
@@ -159,7 +159,10 @@ function clashProxyLines(node: ProxyNode): YamlLine[] {
   const field = (key: string, value: string) => push(4, value ? `${key}: ${value}` : `${key}:`);
 
   field("server", yamlQuote(node.address));
-  field("port", String(node.port));
+  // Mieru 的端口段写 port-range，而且不能和 port 同时写（mihomo 文档原话）。
+  const portRangeEnd = node.protocol === "mieru" ? Number(node.portRangeEnd || 0) : 0;
+  if (portRangeEnd > node.port) field("port-range", yamlQuote(`${node.port}-${portRangeEnd}`));
+  else field("port", String(node.port));
 
   /**
    * Hysteria2 / TUIC / AnyTLS 的字段自成一套：没有 network 与 ws-opts，TLS 也不是
@@ -178,6 +181,21 @@ function clashProxyLines(node: ProxyNode): YamlLine[] {
       push(6, `mode: ${yamlQuote(node.obfs)}`);
       if (node.host) push(6, `host: ${yamlQuote(node.host)}`);
     }
+    if (node.frontProxyName) field("dialer-proxy", yamlQuote(node.frontProxyName));
+    return lines;
+  }
+
+  /**
+   * Mieru：mihomo 的 type: mieru，端口段已在上面写成 port-range。
+   * transport 只写 TCP —— mihomo 文档里 mieru 的 transport 只有 TCP，只开 UDP 的节点在
+   * unsupportedReason 里就挡掉了，两个都开的这里走 TCP 那一份。udp: true 是 Mieru 在连接里转 UDP。
+   */
+  if (node.protocol === "mieru") {
+    field("type", "mieru");
+    field("transport", "TCP");
+    field("username", yamlQuote(node.username));
+    field("password", yamlQuote(node.password));
+    field("udp", node.udp ? "true" : "false");
     if (node.frontProxyName) field("dialer-proxy", yamlQuote(node.frontProxyName));
     return lines;
   }
@@ -713,19 +731,25 @@ function renderSingbox(
  * 只会看到节点凭空少了，跟协议毫无字面关联。
  */
 const FORMAT_UNSUPPORTED_PROTOCOLS: Record<ProxySubscriptionFormat, readonly ProxyNodeProtocol[]> = {
-  // Snell 没有分享链接，base64 订阅是 URI 列表，装不下它。
-  base64: ["snell"],
+  /**
+   * Snell 没有分享链接，base64 订阅是 URI 列表，装不下它。
+   * Mieru 有 mierus:// 链接，但吃 base64 订阅的那些客户端（v2rayN / Shadowrocket / Hiddify……）
+   * 都不认，混进去轻则这一行报错、重则个别客户端整份订阅解析失败。链接只在「复制链接」里给。
+   */
+  base64: ["snell", "mieru"],
   clash: [],
-  singbox: [],
-  // Xray 内核没有 QUIC 系协议，也没有 AnyTLS 和 Snell。
-  v2rayjson: ["hysteria2", "tuic", "anytls", "snell"],
-  loon: ["tuic", "snell"],
-  surge: ["vless"],
-  quantumultx: ["hysteria2", "tuic", "anytls", "snell"],
+  // sing-box 没有 Mieru（服务端、客户端都没有）。
+  singbox: ["mieru"],
+  // Xray 内核没有 QUIC 系协议，也没有 AnyTLS、Snell 和 Mieru。
+  v2rayjson: ["hysteria2", "tuic", "anytls", "snell", "mieru"],
+  // Loon / Surge / Quantumult X 的手册里都没有 Mieru。
+  loon: ["tuic", "snell", "mieru"],
+  surge: ["vless", "mieru"],
+  quantumultx: ["hysteria2", "tuic", "anytls", "snell", "mieru"],
   // Shadowrocket 的节点来自 base64 订阅，能力按 base64 算。
-  shadowrocket: ["snell"],
-  // Egern 九种都有；参数层面的（Snell v6、gecko 混淆、Trojan 的 gRPC……）在 proxySubEgern.ts 里挡。
-  egern: [],
+  shadowrocket: ["snell", "mieru"],
+  // Egern 九种都有，没有 Mieru；参数层面的（Snell v6、gecko 混淆、Trojan 的 gRPC……）在 proxySubEgern.ts 里挡。
+  egern: ["mieru"],
 };
 
 /** 能表达 REALITY 的格式。Surge 与 Quantumult X 的手册里根本没有这一层。 */
@@ -792,6 +816,10 @@ function unsupportedReason(node: ProxyNode, format: ProxySubscriptionFormat): st
     const reason = snellUnsupportedReason(node, format);
     if (reason) return reason;
   }
+  // mihomo 的 Mieru 只有 TCP 承载：只开了 UDP 的写进去，mihomo 会拒绝整份配置。
+  if (format === "clash" && node.protocol === "mieru" && String(node.mieruTransport || "").toUpperCase() === "UDP") {
+    return "mihomo 的 Mieru 只支持 TCP 承载，这个节点只开了 UDP";
+  }
   // Loon 的 Hysteria2 只有 salamander-password 这一个混淆参数，gecko 没有位置可写。
   if (format === "loon" && node.protocol === "hysteria2" && node.obfs && node.obfs !== "salamander") {
     return `Loon 的 Hysteria2 只支持 salamander 混淆，这个节点用的是 ${node.obfs}`;
@@ -817,6 +845,7 @@ function nodeCapabilities(node: ProxyNode): ProxyClientCapability[] {
   if (node.protocol === "hysteria2") out.push("hysteria2");
   if (node.protocol === "tuic") out.push("tuic");
   if (node.protocol === "anytls") out.push("anytls");
+  if (node.protocol === "mieru") out.push("mieru");
   if (node.realityPublicKey) out.push("reality");
   if (node.transport === "xhttp") out.push("xhttp");
   if (node.transport === "httpupgrade") out.push("httpupgrade");

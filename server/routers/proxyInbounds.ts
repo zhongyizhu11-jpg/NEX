@@ -68,12 +68,22 @@ import {
   refreshEgressDependents,
 } from "../ssEgress";
 import {
+  generateMieruUsername,
   generateProxyInboundPassword,
   generateProxyInboundPsk,
   generateProxyInboundUuid,
   generateRealityKeyPair,
   generateRealityShortId,
 } from "../proxyRealityKeys";
+import {
+  MIERU_PORT_RANGE_MAX_PORTS,
+  MIERU_TRANSPORT_LABELS,
+  MIERU_TRANSPORTS,
+  mieruInboundPorts,
+  normalizeMieruTransport,
+} from "../../shared/mieruInbound";
+import { mieruInboundStatusView } from "../mitaRuntime";
+import { wakeAgentExt } from "../ops/agentExt";
 
 const DEFAULT_REALITY_SERVER_NAME = PROXY_INBOUND_DEFAULT_REALITY_SERVER_NAME;
 
@@ -194,6 +204,45 @@ async function assertInboundPortAllowed(ctx: any, host: any, port: number, exclu
   if (policyError) throw new Error(policyError);
 }
 
+/**
+ * Mieru 可以占一段端口：段里每一个都要过一遍和单端口一样的检查（转发 / 隧道占用、端口策略、
+ * 系统端口），只查起点的话，段的后半截可能正压在一条转发的监听上，mita 起来时整个进程 bind 失败。
+ */
+function inboundPortsOf(port: number, protocol: unknown, portRangeEnd: unknown): number[] {
+  return String(protocol || "") === "mieru" ? mieruInboundPorts(port, portRangeEnd) : [port];
+}
+
+async function assertInboundPortsAllowed(
+  ctx: Parameters<typeof assertInboundPortAllowed>[0],
+  host: Parameters<typeof assertInboundPortAllowed>[1],
+  ports: number[],
+  excludeInboundId?: number,
+) {
+  for (const port of ports) await assertInboundPortAllowed(ctx, host, port, excludeInboundId);
+}
+
+function assertTenantListenPortsAllowed(
+  ctx: { user: Parameters<typeof assertTenantListenPortAllowed>[0]["actor"] },
+  host: Parameters<typeof assertTenantListenPortAllowed>[0]["host"],
+  ports: number[],
+) {
+  for (const port of ports) assertTenantListenPortAllowed({ actor: ctx.user, host, port, label: "落地节点端口" });
+}
+
+/** 端口撞了别的落地节点时的那句话：单端口还是原来的说法，端口段带上是哪一段。 */
+function inboundPortConflictMessage(port: number, ports: number[], conflictName: string) {
+  const where = ports.length > 1 ? `${port}-${ports[ports.length - 1]} 端口段` : `${port} 端口`;
+  return `该主机的 ${where}已被落地节点「${conflictName}」占用`;
+}
+
+/** Mieru 不走 sing-box，分流（按服务 / 域名换出口）是 sing-box 的路由做的，mita 这边没有。 */
+function assertRoutingSupported(protocol: unknown, routing: { routes?: unknown[] } | null | undefined) {
+  if (String(protocol || "") !== "mieru") return;
+  if (routing && Array.isArray(routing.routes) && routing.routes.length > 0) {
+    throw new Error("Mieru 落地由 mita 承担，不支持分流；请把分流清空再保存");
+  }
+}
+
 /** 别人机器上的端口策略（范围 / 白名单）和套餐端口区间；自己的机器不受限。null = 能开。 */
 async function inboundHostPortPolicyError(ctx: any, host: any, port: number): Promise<string | null> {
   if (!inboundNeedsHostGrant(ctx, host)) return null;
@@ -231,9 +280,11 @@ function assertInboundCertPathsAllowed(ctx: any, host: any, inbound: ProxyInboun
 /** 给一个用户补齐它这个协议需要的凭据。已有值不动 —— 编辑时不该把别人的凭据换掉。 */
 function fillUserCredentials(user: ProxyInboundUser, protocol: ProxyInbound["protocol"]): ProxyInboundUser {
   const kinds = proxyInboundUserCredentialKinds(protocol);
+  // Mieru 的「uuid」位置放的是用户名：整台机器唯一的随机串（见 generateMieruUsername）。
+  const generateId = protocol === "mieru" ? generateMieruUsername : generateProxyInboundUuid;
   return {
     ...user,
-    uuid: kinds.includes("uuid") ? (user.uuid || generateProxyInboundUuid()) : "",
+    uuid: kinds.includes("uuid") ? (user.uuid || generateId()) : "",
     password: kinds.includes("password") ? (user.password || generateProxyInboundPassword()) : "",
   };
 }
@@ -310,6 +361,8 @@ async function applyInbound(inboundId: number, hostId: number) {
   invalidateInboundRoutingContext();
   await db.syncProxyNodeFromInbound(inboundId);
   pushAgentRefresh(hostId, `proxy-inbound-${inboundId}`, { urgent: true });
+  // Mieru 走扩展通道（mita 模块），心跳那一催够不着它；不是 Mieru 的机器多跑一轮也只是一次空指令。
+  void wakeAgentExt(hostId, `proxy-inbound-${inboundId}`);
 }
 
 const inboundInput = z.object({
@@ -344,6 +397,9 @@ const inboundInput = z.object({
   congestionControl: z.string().trim().max(32).optional(),
   snellVersion: z.number().int().optional(),
   snellMode: z.string().trim().max(32).optional(),
+  /** Mieru 的承载（TCP / UDP / 两个都开）和端口段终点（0 = 只开 port 一个端口）。 */
+  mieruTransport: z.enum(MIERU_TRANSPORTS).optional(),
+  portRangeEnd: z.number().int().min(0).max(65535).optional(),
   /**
    * 这个端口自己的额度与用量。
    *
@@ -423,6 +479,15 @@ function mergeInbound(base: ProxyInbound, input: Partial<InboundInput>): ProxyIn
   if (input.congestionControl !== undefined) merged.congestionControl = input.congestionControl;
   if (input.snellVersion !== undefined) merged.snellVersion = input.snellVersion;
   if (input.snellMode !== undefined) merged.snellMode = input.snellMode;
+  if (input.mieruTransport !== undefined) merged.mieruTransport = input.mieruTransport;
+  if (input.portRangeEnd !== undefined) merged.portRangeEnd = input.portRangeEnd;
+  // 端口段和承载只属于 Mieru：换成别的协议时清掉，否则校验会说「只能开一个端口」。
+  if (merged.protocol === "mieru") {
+    merged.mieruTransport = normalizeMieruTransport(merged.mieruTransport);
+  } else {
+    merged.mieruTransport = "";
+    merged.portRangeEnd = 0;
+  }
   if (input.users !== undefined) {
     /**
      * 按 id 对上已有用户，把凭据带过来 —— 前端不传凭据，这里若不保留，
@@ -456,14 +521,17 @@ function mergeInbound(base: ProxyInbound, input: Partial<InboundInput>): ProxyIn
 export async function createProxyInboundForActor(ctx: any, input: InboundInput, options: { landingEgress?: boolean } = {}) {
   await assertAllowed(ctx);
   const host = await assertUsableHost(input.hostId, ctx);
-  assertTenantListenPortAllowed({ actor: ctx.user, host, port: input.port, label: "落地节点端口" });
+  const ports = inboundPortsOf(input.port, input.protocol, input.portRangeEnd);
+  assertTenantListenPortsAllowed(ctx, host, ports);
   const ownerId = await resolveOwnerId(ctx, input.userId);
 
   await assertInboundQuota(ownerId, ctx);
 
-  const conflict = await db.findProxyInboundPortConflict(input.hostId, input.port);
-  if (conflict) throw new Error(`该主机的 ${input.port} 端口已被落地节点「${conflict.name}」占用`);
-  await assertInboundPortAllowed(ctx, host, input.port);
+  const rangeEnd = ports.length > 1 ? ports[ports.length - 1] : 0;
+  const conflict = await db.findProxyInboundPortConflict(input.hostId, input.port, 0, rangeEnd);
+  if (conflict) throw new Error(inboundPortConflictMessage(input.port, ports, String(conflict.name || "")));
+  await assertInboundPortsAllowed(ctx, host, ports);
+  assertRoutingSupported(input.protocol, input.routing);
 
   const inbound = fillGeneratedCredentials(mergeInbound(createEmptyProxyInbound(), input));
   const reason = validateProxyInbound(inbound);
@@ -499,6 +567,8 @@ export const proxyInboundsRouter = router({
       multiUser: proxyInboundSupportsMultiUser(protocol),
     })),
     snellVersions: [...PROXY_INBOUND_SNELL_VERSIONS],
+    mieruTransports: MIERU_TRANSPORTS.map((value) => ({ value, label: MIERU_TRANSPORT_LABELS[value] })),
+    mieruPortRangeMaxPorts: MIERU_PORT_RANGE_MAX_PORTS,
     defaultRealityServerName: DEFAULT_REALITY_SERVER_NAME,
     shadowsocksMethods: [...PROXY_INBOUND_SHADOWSOCKS_METHODS],
     defaultShadowsocksMethod: PROXY_INBOUND_SHADOWSOCKS_DEFAULT_METHOD,
@@ -580,7 +650,19 @@ export const proxyInboundsRouter = router({
         id: user.id,
         name: user.name,
         sharedUserId: Number(user.sharedUserId || 0),
+        // 这份凭据自己的用量：只有 Mieru 有（mita 按用户计数），别的协议一直是 0。
+        trafficUsed: Number(user.trafficUsed || 0),
       })),
+      // Mieru 由 mita 承担：Agent 够不够新、mita 起没起来、端口听没听上（别的协议是 null）。
+      mieruStatus: String(row.protocol || "") === "mieru"
+        ? mieruInboundStatusView({
+          inboundId: Number(row.id),
+          hostId: Number(row.hostId),
+          isEnabled: dbBool(row.isEnabled, true),
+          agentVersion: hostById.get(Number(row.hostId))?.agentVersion ?? null,
+          ports: mieruInboundPorts(row.port, row.portRangeEnd),
+        })
+        : null,
       derivedNodeIds: derived.get(Number(row.id))?.ids || [],
       derivedNodes: derived.get(Number(row.id))?.nodes || [],
       includeDirect: derived.get(Number(row.id))?.includeDirect ?? false,
@@ -738,15 +820,21 @@ export const proxyInboundsRouter = router({
       if (!host) throw new Error("主机不存在");
 
       const port = input.port ?? Number(row.port);
-      if (port !== Number(row.port) || hostId !== Number(row.hostId)) {
-        assertTenantListenPortAllowed({ actor: ctx.user, host: await db.getHostById(hostId), port, label: "落地节点端口" });
+      const protocol = input.protocol ?? String(row.protocol || "");
+      const ports = inboundPortsOf(port, protocol, input.portRangeEnd ?? Number(row.portRangeEnd || 0));
+      const rangeEnd = ports.length > 1 ? ports[ports.length - 1] : 0;
+      const previousRangeEnd = String(row.protocol || "") === "mieru" ? Number(row.portRangeEnd || 0) : 0;
+      const portsChanged = port !== Number(row.port) || rangeEnd !== previousRangeEnd;
+      if (portsChanged || hostId !== Number(row.hostId)) {
+        assertTenantListenPortsAllowed(ctx, await db.getHostById(hostId), ports);
       }
-      const conflict = await db.findProxyInboundPortConflict(hostId, port, input.id);
-      if (conflict) throw new Error(`该主机的 ${port} 端口已被落地节点「${conflict.name}」占用`);
+      const conflict = await db.findProxyInboundPortConflict(hostId, port, input.id, rangeEnd);
+      if (conflict) throw new Error(inboundPortConflictMessage(port, ports, String(conflict.name || "")));
       // 端口没动、也不是重新启用时不查：已经在跑的老入站改个名字不该被卡住。
-      if (hostChanged || port !== Number(row.port) || (input.isEnabled === true && !dbBool((row as any).isEnabled, true))) {
-        await assertInboundPortAllowed(ctx, host, port, input.id);
+      if (hostChanged || portsChanged || (input.isEnabled === true && !dbBool((row as any).isEnabled, true))) {
+        await assertInboundPortsAllowed(ctx, host, ports, input.id);
       }
+      assertRoutingSupported(protocol, input.routing !== undefined ? input.routing : parseInboundRouting(row.routingJson));
 
       // 正被转发规则当作出口的入站：换协议 / 换成出口不支持的方法、传输、安全层、流控 / 换主机都会让那些规则失效，先拦下。
       await assertProxyInboundEgressCompatibleChange(input.id, {
@@ -832,6 +920,7 @@ export const proxyInboundsRouter = router({
       // 换过主机时旧主机也要重推一遍，否则那边的配置里还留着这个入站。
       if (input.hostId !== undefined && Number(row.hostId) !== hostId) {
         pushAgentRefresh(Number(row.hostId), `proxy-inbound-moved-${input.id}`, { urgent: true });
+        void wakeAgentExt(Number(row.hostId), `proxy-inbound-moved-${input.id}`);
       }
       return { success: true };
     }),
@@ -883,6 +972,7 @@ export const proxyInboundsRouter = router({
       const result = await db.deleteProxyInbound(input.id);
       invalidateInboundRoutingContext();
       pushAgentRefresh(Number(row.hostId), `proxy-inbound-deleted-${input.id}`, { urgent: true });
+      void wakeAgentExt(Number(row.hostId), `proxy-inbound-deleted-${input.id}`);
       return { success: true, ...result };
     }),
 });

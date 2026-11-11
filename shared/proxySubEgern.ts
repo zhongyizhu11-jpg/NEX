@@ -164,6 +164,7 @@ const S = EGERN_SCHEMA;
  * REALITY / XHTTP / HTTPUpgrade 这几样由 proxySubscription.ts 的通用表管。
  */
 export function egernUnsupportedReason(node: ProxyNode): string {
+  if (node.protocol === "mieru") return "Egern 不支持 Mieru";
   if (node.protocol === "shadowsocks" && !EGERN_SHADOWSOCKS_METHODS.includes(String(node.method || "").toLowerCase())) {
     return `Egern 的 Shadowsocks 没有 ${node.method || "（空）"} 这种加密方式`;
   }
@@ -278,7 +279,8 @@ export function egernProxyLines(node: ProxyNode): string[] {
   const lines = new Lines();
   const P = S.proxy;
   const tlsSocks = node.protocol === "socks5" && node.tls;
-  const type = tlsSocks ? S.proxyType.socks5Tls : S.proxyType[node.protocol];
+  // Mieru 在 egernUnsupportedReason 里已经挡掉（PROXY_SUBSCRIPTION_UNSUPPORTED_PROTOCOLS.egern）
+  const type = tlsSocks ? S.proxyType.socks5Tls : S.proxyType[node.protocol as Exclude<ProxyNode["protocol"], "mieru">];
   lines.item(2, `${type}:`);
   const at = 6;
   lines.push(at, P.name, q(node.name));

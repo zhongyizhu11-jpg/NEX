@@ -36,6 +36,7 @@ import {
   type ProxyInboundUser,
 } from "../../shared/proxyInbound";
 import { PROXY_NODE_TRANSPORTS, type ProxyNodeTransport } from "../../shared/proxyNode";
+import { mieruInboundPorts, normalizeMieruTransport } from "../../shared/mieruInbound";
 
 function text(value: unknown): string {
   return String(value ?? "").trim();
@@ -78,6 +79,8 @@ export function proxyInboundFromRow(row: Record<string, unknown>): ProxyInbound 
   inbound.congestionControl = text(row.congestionControl);
   inbound.snellVersion = num(row.snellVersion);
   inbound.snellMode = text(row.snellMode);
+  inbound.portRangeEnd = num(row.portRangeEnd);
+  inbound.mieruTransport = inbound.protocol === "mieru" ? normalizeMieruTransport(row.mieruTransport) : "";
   return inbound;
 }
 
@@ -111,6 +114,9 @@ export function proxyInboundToRow(inbound: ProxyInbound): Partial<InsertProxyInb
     congestionControl: inbound.congestionControl || null,
     snellVersion: inbound.snellVersion,
     snellMode: inbound.snellMode || null,
+    // 端口段与承载只对 Mieru 有意义：换成别的协议时清掉，免得端口冲突检查还按旧的一段算。
+    portRangeEnd: inbound.protocol === "mieru" ? Number(inbound.portRangeEnd || 0) : 0,
+    mieruTransport: inbound.protocol === "mieru" ? normalizeMieruTransport(inbound.mieruTransport) : null,
   } as Partial<InsertProxyInbound>;
 }
 
@@ -201,14 +207,25 @@ export async function getEnabledProxyInboundsByHost(hostId: number) {
  * 端口撞车的后果不是「新的这个起不来」，而是 sing-box 拒绝加载整份配置 ——
  * 同一台机器上其他入站会跟着一起停。所以要在保存前就挡住。
  */
-export async function findProxyInboundPortConflict(hostId: number, port: number, exceptId = 0) {
+export async function findProxyInboundPortConflict(hostId: number, port: number, exceptId = 0, portRangeEnd = 0) {
   const db = await getDb();
   if (!db) return undefined;
-  const rows = await db
-    .select()
-    .from(proxyInbounds)
-    .where(and(eq(proxyInbounds.hostId, hostId), eq(proxyInbounds.port, port)));
-  return rows.find((row: any) => Number(row.id) !== Number(exceptId));
+  const wanted = new Set(mieruInboundPorts(port, portRangeEnd));
+  /*
+    Mieru 的入站可以占一段端口：新端口落在别人那一段里、或者自己这一段盖住了别人的端口，都算撞。
+    只有端口段才要整台机器读一遍；两边都是单端口时照旧按端口精确查。
+  */
+  const rows = Number(portRangeEnd || 0) > Number(port)
+    ? await db.select().from(proxyInbounds).where(eq(proxyInbounds.hostId, hostId))
+    : await db
+      .select()
+      .from(proxyInbounds)
+      .where(and(
+        eq(proxyInbounds.hostId, hostId),
+        sql`(${proxyInbounds.port} = ${port} OR (${proxyInbounds.portRangeEnd} >= ${port} AND ${proxyInbounds.port} <= ${port}))`,
+      ));
+  return rows.find((row: any) => Number(row.id) !== Number(exceptId)
+    && mieruInboundPorts(row.port, row.portRangeEnd).some((value) => wanted.has(value)));
 }
 
 // ==================== 写 ====================
@@ -516,6 +533,8 @@ export async function getProxyInboundUsersByInbounds(
       uuid: text(row.uuid),
       password: text(row.password),
       sharedUserId: Number(row.sharedUserId || 0),
+      // 只有能按用户计数的运行时（Mieru）才会涨，别的协议一直是 0。
+      trafficUsed: Math.max(0, Number(row.trafficUsed) || 0),
     });
   }
   return result;
@@ -1091,6 +1110,10 @@ export async function syncProxyNodeFromInbound(inboundId: number): Promise<numbe
       snellVersion: node.snellVersion,
       snellMode: node.snellMode || null,
       xhttpMode: node.xhttpMode || null,
+      // SOCKS5 / Mieru 的用户名在节点模型的 username 上（入站那边存在 uuid 里）。
+      username: node.username || null,
+      portRangeEnd: Number(node.portRangeEnd || 0),
+      mieruTransport: node.protocol === "mieru" ? node.mieruTransport || "TCP" : null,
       isEnabled: !!(row as any).isEnabled,
     };
     const current = byUserId.get(inboundUserId);

@@ -2,7 +2,7 @@
 
 普通的端口转发是入口机自己去连目标，目标看到的来源 IP 就是入口机。给规则设一个 **出口** 之后，入口机不再直接连目标，而是经 Shadowsocks 或 VLESS Reality 让另一台服务器（「落地」）代为连接：流量从落地出去，目标看到的是落地的 IP。
 
-页面前半部分讲 Shadowsocks 出口；VLESS Reality 出口（面板 2.3.525 起）和它的不同之处见下面的 [VLESS Reality 出口](#vless-reality)。
+页面前半部分讲 Shadowsocks 出口；VLESS Reality 出口（面板 2.3.524 起）和它的不同之处见下面的 [VLESS Reality 出口](#vless-reality)。
 
 ```text
 客户端 ──▶ 入口机:端口（gost 监听，计数、限速都在这里）
@@ -100,7 +100,7 @@
 
 ## VLESS Reality 出口 {#vless-reality}
 
-面板 2.3.525 起，出口也可以是 **VLESS + REALITY + Vision**：选落地主机上的 VLESS Reality 入站（「落地入站」页面开的那种），或者粘贴一条外部 `vless://` 链接。
+面板 2.3.524 起，出口也可以是 **VLESS + REALITY + Vision**：选落地主机上的 VLESS Reality 入站（「落地入站」页面开的那种），或者粘贴一条外部 `vless://` 链接。
 
 ```text
 客户端 ──TCP/UDP──▶ 入口机:端口（gost 监听，计数、限速都在这里，TCP 和 UDP 一样）

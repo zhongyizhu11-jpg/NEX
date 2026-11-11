@@ -466,6 +466,8 @@ const tables: TableDef[] = [
       c("congestionControl", "text"), c("udpRelayMode", "text"),
       c("disableSni", "bool", { notNull: true, default: false }),
       c("snellVersion", "int", { notNull: true, default: 0 }), c("snellMode", "text"), c("xhttpMode", "text"),
+      // socks5 / mieru 的用户名；Mieru 的端口段终点（0 = 单端口）与承载（TCP / UDP / BOTH）。
+      c("username", "text"), c("portRangeEnd", "int", { notNull: true, default: 0 }), c("mieruTransport", "varchar", { length: 8 }),
       c("autoGroup", "varchar", { length: 16, notNull: true, default: "url-test" }), c("includeDirect", "bool", { notNull: true, default: false }), c("frontProxyId", "int", { notNull: true, default: 0 }),
       c("inboundId", "int", { notNull: true, default: 0 }), c("inboundUserId", "int", { notNull: true, default: 0 }),
       // 落地池的节点（2.3.500，server/landingPools.ts）：整个池在订阅里就这一条；poolSharedUserId > 0
@@ -509,6 +511,8 @@ const tables: TableDef[] = [
       c("upMbps", "int", { notNull: true, default: 0 }), c("downMbps", "int", { notNull: true, default: 0 }),
       c("congestionControl", "text"),
       c("snellVersion", "int", { notNull: true, default: 0 }), c("snellMode", "text"),
+      // Mieru（由 mita 承担，shared/mieruInbound.ts）：端口段终点（0 = 单端口）与承载（TCP / UDP / BOTH）。
+      c("portRangeEnd", "int", { notNull: true, default: 0 }), c("mieruTransport", "varchar", { length: 8 }),
       c("clonedFromInboundId", "int", { notNull: true, default: 0 }),
       // 落地池的成员入站（2.3.500）：面板照池的配置开的，只读，跟着池走。
       c("nodePoolId", "int", { notNull: true, default: 0 }),
@@ -536,6 +540,14 @@ const tables: TableDef[] = [
       c("name", "text", { notNull: true }), c("uuid", "text"), c("password", "text"),
       c("sharedUserId", "int", { notNull: true, default: 0 }),
       c("sortOrder", "int", { notNull: true, default: 0 }),
+      /*
+        这一份凭据自己跑了多少（字节）。只有能按用户计数的运行时才有：目前是 Mieru（mita 的 per-user 计数，
+        server/mitaTraffic.ts）。sing-box 那几个协议按端口计，分不到人头，这一列一直是 0。
+        mitaCounter* 是上一次见到的 mita 累计值和它属于哪一个 mita 进程（进程换了计数从 0 重来）。
+      */
+      c("trafficUsed", "bigint", { notNull: true, default: 0 }),
+      c("mitaCounterKey", "text"),
+      c("mitaCounterUp", "bigint", { notNull: true, default: 0 }), c("mitaCounterDown", "bigint", { notNull: true, default: 0 }),
       c("createdAt", "epoch", { notNull: true, default: "now" }), c("updatedAt", "epoch", { notNull: true, default: "now" }),
     ],
     indexes: [["inboundId"], ["inboundId", "sortOrder"]],

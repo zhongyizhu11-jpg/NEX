@@ -24,6 +24,8 @@ export const PROXY_NODE_PROTOCOLS = [
   "anytls",
   "snell",
   "socks5",
+  // Mieru：服务端是 mita（不是 sing-box），只有 mihomo 系客户端认，见 shared/mieruInbound.ts。
+  "mieru",
 ] as const;
 
 export type ProxyNodeProtocol = (typeof PROXY_NODE_PROTOCOLS)[number];
@@ -38,6 +40,7 @@ export const PROXY_NODE_PROTOCOL_LABELS: Record<ProxyNodeProtocol, string> = {
   anytls: "AnyTLS",
   snell: "Snell",
   socks5: "SOCKS5",
+  mieru: "Mieru",
 };
 
 /**
@@ -51,6 +54,17 @@ export const PROXY_NODE_QUIC_PROTOCOLS: readonly ProxyNodeProtocol[] = ["hysteri
 
 export function proxyNodeRequiresUdp(protocol: unknown): boolean {
   return PROXY_NODE_QUIC_PROTOCOLS.includes(String(protocol ?? "") as ProxyNodeProtocol);
+}
+
+/**
+ * 这个节点是不是只走 UDP —— 比 proxyNodeRequiresUdp 多看一层 Mieru 的承载。
+ *
+ * Mieru 的承载是可选的：TCP、UDP 或两个都开。只开 UDP 的 Mieru 和 Hysteria2 一样，
+ * 绑到只放行 TCP 的转发上握手永远收不到回包；两个都开的还能走 TCP，不算。
+ */
+export function proxyNodeOnlyUdp(node: { protocol?: unknown; mieruTransport?: unknown }): boolean {
+  if (proxyNodeRequiresUdp(node.protocol)) return true;
+  return String(node.protocol ?? "") === "mieru" && String(node.mieruTransport ?? "").toUpperCase() === "UDP";
 }
 
 /**
@@ -79,7 +93,7 @@ export type ProxyNode = {
   port: number;
   /** vless / vmess 的用户 ID */
   uuid: string;
-  /** socks5 的用户名（空 = 不认证） */
+  /** socks5 / mieru 的用户名（socks5 空 = 不认证） */
   username: string;
   /** trojan / shadowsocks / socks5 的密码 */
   password: string;
@@ -141,6 +155,14 @@ export type ProxyNode = {
   snellMode: string;
   /** XHTTP 的模式：auto / stream-one / stream-up / packet-up */
   xhttpMode: string;
+  /**
+   * 端口段的终点（含），0 = 只有 port 这一个端口。目前只有 Mieru 用：mita 可以在一段端口上
+   * 一起听，客户端每条连接随便挑一个，比钉死一个端口难封。经中转时中转只转一个端口，
+   * relayProxyNode 会把它清零。
+   */
+  portRangeEnd?: number;
+  /** Mieru 的承载：TCP / UDP / BOTH（两个都开）。空当 TCP。 */
+  mieruTransport?: string;
   /**
    * 前置代理：这个节点的连接要先经由哪个节点建立（按名称引用）。
    *
@@ -600,6 +622,54 @@ function parseSocksLink(link: string, scheme: string): ProxyNode | null {
 }
 
 /**
+ * mierus:// 是 Mieru 官方的「简单分享链接」（mieru export config simple 导出的那种）：
+ *
+ *   mierus://用户名:密码@地址?profile=名字&port=6666&protocol=TCP&port=9998-9999&protocol=UDP&mtu=1400
+ *
+ * port 与 protocol 成对、按出现顺序一一对应，port 可以是一段（a-b）。节点模型只装得下一段端口，
+ * 所以只取第一对；第一对是 TCP 而后面还有同一段的 UDP 时记成 BOTH。没有 # 名字，名字在 profile 里。
+ */
+function parseMierusLink(link: string): ProxyNode | null {
+  const { body, query, name } = splitLink(stripScheme(link, "mierus://"));
+  const at = body.lastIndexOf("@");
+  if (at < 0) return null;
+  const credential = body.slice(0, at);
+  const colon = credential.indexOf(":");
+  if (colon <= 0) return null;
+  const decode = (value: string) => {
+    try {
+      return decodeURIComponent(value);
+    } catch {
+      return value;
+    }
+  };
+  const username = text(decode(credential.slice(0, colon)));
+  const password = decode(credential.slice(colon + 1));
+  const { address } = splitHostPort(body.slice(at + 1));
+  const ports = query.getAll("port").map((item) => text(item));
+  const protocols = query.getAll("protocol").map((item) => text(item).toUpperCase());
+  if (!username || !password || !address || ports.length === 0) return null;
+  const range = ports[0].match(/^(\d{1,5})(?:-(\d{1,5}))?$/);
+  if (!range) return null;
+  const start = toPort(range[1]);
+  const end = range[2] ? toPort(range[2]) : 0;
+  if (!start || (range[2] && (!end || end < start))) return null;
+  const first = protocols[0] === "UDP" ? "UDP" : "TCP";
+  const alsoOther = ports.some((port, index) => index > 0 && port === ports[0] && (protocols[index] || "TCP") !== first);
+
+  const node = createEmptyProxyNode();
+  node.protocol = "mieru";
+  node.name = name || text(query.get("profile"));
+  node.address = address;
+  node.port = start;
+  node.portRangeEnd = end > start ? end : 0;
+  node.username = username;
+  node.password = password;
+  node.mieruTransport = alsoOther ? "BOTH" : first;
+  return node;
+}
+
+/**
  * anytls:// 见 anytls-go 的 URI Scheme：
  *
  *   anytls://password@hostname[:port]/?sni=&insecure=
@@ -722,6 +792,7 @@ export function parseProxyNodeLink(input: unknown): ParseProxyNodeResult {
   else if (lower.startsWith("anytls://")) node = parseAnytlsLink(link);
   else if (lower.startsWith("socks5://")) node = parseSocksLink(link, "socks5://");
   else if (lower.startsWith("socks://")) node = parseSocksLink(link, "socks://");
+  else if (lower.startsWith("mierus://")) node = parseMierusLink(link);
   else {
     return {
       ok: false,
@@ -758,6 +829,8 @@ export function relayProxyNode(node: ProxyNode, entry: ProxyNodeRelayEntry): Pro
   relayed.address = text(entry.address);
   relayed.port = toPort(entry.port);
   relayed.name = text(entry.name) || node.name;
+  // 中转只转发一个端口：落地那段端口里起点那个一定在听，经中转就只连中转的这一个。
+  if (relayed.portRangeEnd) relayed.portRangeEnd = 0;
   return relayed;
 }
 
@@ -858,6 +931,7 @@ export function formatProxyNodeLink(node: ProxyNode): string {
       : "";
     return `socks://${credential}${host}:${node.port}${fragment}`;
   }
+  if (node.protocol === "mieru") return formatMierusLink(node);
   if (node.protocol === "shadowsocks") {
     const credential = encodeBase64Utf8(`${node.method}:${node.password}`)
       .replace(/\+/g, "-")
@@ -874,4 +948,23 @@ export function formatProxyNodeLink(node: ProxyNode): string {
   buildTransportQuery(node, params);
   const credential = encodeURIComponent(node.protocol === "trojan" ? node.password : node.uuid);
   return `${node.protocol}://${credential}@${host}:${node.port}?${params.toString()}${fragment}`;
+}
+
+/**
+ * Mieru 的简单分享链接（格式见 parseMierusLink）。名字放在 profile 里 —— 官方格式没有 # 片段，
+ * 多写一段 # 有的解析器会把它当成密码的一部分。两个承载都开时写两对 port / protocol。
+ */
+export function formatMierusLink(node: ProxyNode): string {
+  const host = formatHostForUri(node.address);
+  const end = Number(node.portRangeEnd || 0);
+  const portText = end > node.port ? `${node.port}-${end}` : String(node.port);
+  const transport = String(node.mieruTransport || "TCP").toUpperCase();
+  const protocols = transport === "BOTH" ? ["TCP", "UDP"] : [transport === "UDP" ? "UDP" : "TCP"];
+  const params = new URLSearchParams();
+  params.set("profile", node.name || "default");
+  for (const protocol of protocols) {
+    params.append("port", portText);
+    params.append("protocol", protocol);
+  }
+  return `mierus://${encodeURIComponent(node.username)}:${encodeURIComponent(node.password)}@${host}?${params.toString()}`;
 }

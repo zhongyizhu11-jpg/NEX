@@ -27,7 +27,7 @@ import {
 import {
   createEmptyProxyNode,
   proxyNodeAlwaysTls,
-  proxyNodeRequiresUdp,
+  proxyNodeOnlyUdp,
   PROXY_NODE_PROTOCOLS,
   PROXY_NODE_TRANSPORTS,
   relayProxyNode,
@@ -54,6 +54,8 @@ export type ProxyNodeTemplateRow = {
   address?: unknown;
   port?: unknown;
   uuid?: unknown;
+  /** socks5 / mieru 的用户名 */
+  username?: unknown;
   password?: unknown;
   method?: unknown;
   alterId?: unknown;
@@ -80,6 +82,9 @@ export type ProxyNodeTemplateRow = {
   snellVersion?: unknown;
   snellMode?: unknown;
   xhttpMode?: unknown;
+  /** Mieru：端口段终点与承载（TCP / UDP / BOTH） */
+  portRangeEnd?: unknown;
+  mieruTransport?: unknown;
   isEnabled?: unknown;
   autoGroup?: unknown;
   /** 手工填的地区（国家码）；空则看落地机器的 geo，再猜名字。 */
@@ -276,6 +281,18 @@ function toPort(value: unknown): number {
 const PROTOCOLS = new Set<ProxyNodeProtocol>(PROXY_NODE_PROTOCOLS);
 const TRANSPORTS = new Set<ProxyNodeTransport>(PROXY_NODE_TRANSPORTS);
 
+/**
+ * 经中转的 Mieru 两个承载都开时，只留转发放行的那一个：转发只放 TCP，客户端拿着 UDP 那份
+ * 去连只会超时；只放 UDP 的反过来。转发的协议没查（缺省）或者两个都放，就原样留着。
+ */
+function relayedForRuleProtocol(node: ProxyNode, ruleProtocol: unknown): ProxyNode {
+  if (node.protocol !== "mieru" || String(node.mieruTransport || "").toUpperCase() !== "BOTH") return node;
+  const forwarded = text(ruleProtocol).toLowerCase();
+  if (forwarded === "tcp") return { ...node, mieruTransport: "TCP" };
+  if (forwarded === "udp") return { ...node, mieruTransport: "UDP" };
+  return node;
+}
+
 /** 把数据库行还原成节点模型。列都是宽松类型，这里统一收敛。 */
 export function proxyNodeFromTemplateRow(row: ProxyNodeTemplateRow): ProxyNode {
   const node = createEmptyProxyNode();
@@ -285,6 +302,7 @@ export function proxyNodeFromTemplateRow(row: ProxyNodeTemplateRow): ProxyNode {
   node.address = text(row.address);
   node.port = toPort(row.port);
   node.uuid = text(row.uuid);
+  node.username = text(row.username);
   node.password = text(row.password);
   node.method = text(row.method);
   node.alterId = Number(text(row.alterId)) || 0;
@@ -312,6 +330,11 @@ export function proxyNodeFromTemplateRow(row: ProxyNodeTemplateRow): ProxyNode {
   node.snellVersion = Number(text(row.snellVersion)) || 0;
   node.snellMode = text(row.snellMode);
   node.xhttpMode = text(row.xhttpMode);
+  if (node.protocol === "mieru") {
+    const end = toPort(row.portRangeEnd);
+    node.portRangeEnd = end > node.port ? end : 0;
+    node.mieruTransport = text(row.mieruTransport).toUpperCase() || "TCP";
+  }
   // Hysteria2 / TUIC / AnyTLS 的 TLS 是协议自带的，老行里 tls 列可能是 0。
   if (proxyNodeAlwaysTls(node.protocol)) node.tls = true;
   return node;
@@ -647,7 +670,7 @@ export function buildProxySubscriptionPlan(input: BuildProxySubscriptionPlanInpu
      * 只在明确是 tcp 时排除：protocol 缺省（调用方没查这一列）时不做判断，
      * 宁可放行也不要凭猜测吞掉节点。
      */
-    if (proxyNodeRequiresUdp(text(template.protocol).toLowerCase()) && text(rule.protocol).toLowerCase() === "tcp") {
+    if (proxyNodeOnlyUdp({ protocol: text(template.protocol).toLowerCase(), mieruTransport: text(template.mieruTransport) }) && text(rule.protocol).toLowerCase() === "tcp") {
       skip("udp-not-forwarded");
       continue;
     }
@@ -722,7 +745,7 @@ export function buildProxySubscriptionPlan(input: BuildProxySubscriptionPlanInpu
         ...entryCoordinates(host),
         ...(input.latencyByRuleId?.has(ruleId) ? { latencyMs: input.latencyByRuleId.get(ruleId) ?? null } : {}),
       },
-      node: relayProxyNode(templateNode, { address, port, name }),
+      node: relayedForRuleProtocol(relayProxyNode(templateNode, { address, port, name }), rule.protocol),
     });
   }
 

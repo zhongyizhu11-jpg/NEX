@@ -95,6 +95,25 @@ Egern 拿到的是**它自己的 YAML 配置**（`proxies` / `policy_groups` / `
 
 开启后订阅最前面多几条连不上的占位节点：「📊 剩余 90 GB / 100 GB」「📅 2026-12-31 到期」「🔄 11月1日 重置流量」「📢 公告」。客户端不读 `Subscription-Userinfo` 响应头时（老版本、部分路由器插件）靠它看用量。代价是客户端测速会把它们标红，所以默认关着，令牌上、套餐上、全局设置里都能开。
 
+<a id="mieru"></a>
+
+### Mieru 节点进哪些订阅
+
+Mieru 落地（运行时是 mita，见[落地池 › Mieru 落地](./landing-pools.md#mieru)）只有一部分客户端认，订阅按格式和客户端分别处理：
+
+| 客户端 / 格式 | Mieru |
+| --- | --- |
+| Clash Verge / mihomo（Clash 订阅） | 进订阅：`type: mieru`，`transport: TCP`，端口段写 `port-range`。需要 mihomo 1.19.0 以上，更旧的按版本跳过。只开了 UDP 承载的节点不进（mihomo 的 Mieru 只有 TCP） |
+| Stash、原版 Clash（同一份 Clash 订阅） | 不进：两家的协议表里都没有 Mieru，混进去会让整份配置导入失败；按 User-Agent 跳过 |
+| sing-box、Karing（sing-box 订阅） | 不进：sing-box 没有 Mieru |
+| v2rayN / v2rayNG / Happ / v2RayTun / Streisand（Xray JSON / Base64） | 不进：Xray 内核没有 Mieru |
+| Shadowrocket、Hiddify、NekoBox（Base64） | 不进：通用订阅是一串链接，这些客户端不认 `mierus://` |
+| Surge / Surfboard、Loon、Quantumult X | 不进：手册里没有 Mieru |
+
+跳过的节点在 Clash / Surge / Loon / QX 的文件头写明原因，「预览内容」里也看得到。
+
+要在别的设备上用，在「我的节点」里点这一行的「复制链接」：Mieru 给的是官方的 `mierus://` 简单分享链接（`mierus://用户名:密码@地址?profile=名字&port=端口或端口段&protocol=TCP`），Mieru 官方客户端 `mieru import config simple <链接>` 能导入。「添加节点」里也能直接粘这种链接。
+
 ## 外部订阅
 
 管理员开了「允许用户添加外部订阅」、套餐也开了之后，「订阅管理」底部多一张「外部订阅」卡：填别处的订阅地址，面板定时拉取（最短 10 分钟）、解析（链接列表 / base64 / Clash YAML / sing-box JSON 都认），节点并进你的订阅，也能绑到转发上走中转。上游变了就自动对账：新增、更新、下线。
@@ -172,7 +191,7 @@ GEOSITE,netflix,🎥 奈飞视频
 
 ## 常见问题
 
-**导进去没节点 / 少节点。** 看令牌菜单的「预览内容」：没进订阅的转发会写明原因（没绑节点、隐藏了、转发停用、探测不通）。Surge 不支持 VLESS，QX 不支持 Hysteria2 / TUIC / REALITY，老版本 v2rayNG 不支持 Hysteria2 —— 这些会按客户端跳过并在文件头注明。
+**导进去没节点 / 少节点。** 看令牌菜单的「预览内容」：没进订阅的转发会写明原因（没绑节点、隐藏了、转发停用、探测不通）。Surge 不支持 VLESS，QX 不支持 Hysteria2 / TUIC / REALITY，老版本 v2rayNG 不支持 Hysteria2，Mieru 只有 mihomo 认（见[上面](#mieru)）—— 这些会按客户端跳过并在文件头注明。
 
 **链路换了入口机器，节点全超时。** 订阅按链路**当前**的入口机器出节点，换完入口面板这边立刻就是新地址，但客户端手里那份还是旧的，让客户更新一次订阅即可；换出口或中间机器不影响节点地址，客户端什么都不用做。想连刷新都省掉，给转发开「入口域名」。
 

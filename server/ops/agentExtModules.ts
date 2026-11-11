@@ -16,3 +16,4 @@ import "./agentRuntimeAgent";
 import "./portOccupancyAgent";
 import "./realityCheckAgent";
 import "./trafficShutdownAgent";
+import "./mitaAgent";

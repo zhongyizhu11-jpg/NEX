@@ -102,6 +102,9 @@ jobs:
             dist/agent/forwardx-fxp-linux-arm64
             dist/agent/forwardx-runtime-linux-amd64
             dist/agent/forwardx-runtime-linux-arm64
+            # mita（Mieru 服务端，GPLv3 独立程序）：哈希钉在 shared/mitaAssets.ts，面板经 /api/agent/assets 转发
+            dist/agent/forwardx-mita-linux-amd64
+            dist/agent/forwardx-mita-linux-arm64
             dist/agent/SHA256SUMS
             dist/agent/THIRD_PARTY_NOTICES.md
           )

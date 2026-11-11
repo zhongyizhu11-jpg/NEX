@@ -32,6 +32,7 @@ import { mapWithConcurrency } from "../asyncPool";
 import { withKeyedTaskLock } from "../keyedTaskLock";
 import { pageResult, pageWindowForTotal, type PageRequest } from "../../shared/pagination";
 import { normalizeExitGroupStrategy } from "../../shared/exitStrategy";
+import { mieruInboundPorts } from "../../shared/mieruInbound";
 import { recordConfigAuditEvent, shouldAuditConfigPatch } from "../configAudit";
 import { appendPanelLog } from "../_core/panelLogger";
 import { invalidateProxySubCacheAll } from "../proxySubCache";
@@ -2174,12 +2175,13 @@ async function getProxyInboundPortsOnHost(hostId: number, excludeInboundId = 0):
   // 动态导入：proxyInboundRepository 那边也会回头用这个文件里的函数，静态引会成环。
   const { proxyInbounds } = await import("../../drizzle/schema");
   const rows = await db
-    .select({ id: proxyInbounds.id, port: proxyInbounds.port })
+    .select({ id: proxyInbounds.id, port: proxyInbounds.port, portRangeEnd: proxyInbounds.portRangeEnd })
     .from(proxyInbounds)
     .where(and(eq(proxyInbounds.hostId, Number(hostId)), eq(proxyInbounds.isEnabled, true)));
+  // Mieru 入站可以占一段端口（mita 整段都在听），段里每一个都算占用。
   return (rows as any[])
     .filter((row) => !excludeInboundId || Number(row.id) !== Number(excludeInboundId))
-    .map((row) => Number(row.port))
+    .flatMap((row) => mieruInboundPorts(row.port, row.portRangeEnd))
     .filter((port) => port > 0);
 }
 

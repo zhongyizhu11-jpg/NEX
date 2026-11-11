@@ -4244,6 +4244,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
      */
     const hostProxyInbounds = await getEnabledProxyInboundsWithUsersByHost(Number(host.id));
     for (const row of hostProxyInbounds) {
+      // Mieru 由 mita 按用户计数（server/mitaTraffic.ts）：mita 的用户不分端口，按端口计会记错人。
+      if (row.protocol === "mieru") continue;
       addRunningRule({
         ruleId: proxyInboundTrafficRuleId(row.id),
         sourcePort: row.port,
