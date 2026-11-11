@@ -955,8 +955,9 @@ export function buildGostEgressChain(ruleId: number, proto: "tcp" | "udp", runti
         addr: `${host}:${Number(runtime.port)}`,
         connector: proto === "tcp"
           ? { type: "ss", auth, metadata: { nodelay: true } }
-          // 回包缓冲默认 4096，再大的回包（带 DNSSEC 的 DNS 回答之类）会被截断、解密失败、悄悄丢掉
-          : { type: "ssu", auth, metadata: { udpBufferSize: 65535 } },
+          // 回包缓冲默认 4096，再大的回包（带 DNSSEC 的 DNS 回答之类）会被截断、解密失败、悄悄丢掉。
+          // 要写成字符串：gost 的 mdutil.GetInt 只认 int 和 string，JSON 数字解出来是 float64，会被当成没写
+          : { type: "ssu", auth, metadata: { udpBufferSize: "65535" } },
         dialer: { type: proto },
       }],
     }],

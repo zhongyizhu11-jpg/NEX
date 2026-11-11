@@ -198,7 +198,7 @@ test("gost 出口链：TCP 是 ss 连接器 + tcp 拨号器 + nodelay；UDP 是 
   const udp = buildGostEgressChain(7, "udp", runtime);
   assert.equal(udp.name, gostEgressChainName(7, "udp"));
   // 回包缓冲开到 65535：默认 4096 装不下大的 DNS 回答，会被截断、解密失败、悄悄丢掉。
-  assert.deepEqual(udp.hops[0].nodes[0].connector, { type: "ssu", auth: { username: "aes-256-gcm", password: "pw" }, metadata: { udpBufferSize: 65535 } });
+  assert.deepEqual(udp.hops[0].nodes[0].connector, { type: "ssu", auth: { username: "aes-256-gcm", password: "pw" }, metadata: { udpBufferSize: "65535" } });
   assert.deepEqual(udp.hops[0].nodes[0].dialer, { type: "udp" });
   // SS2022 的方法和 key 原样带过去。
   const ss2022 = buildGostEgressChain(8, "tcp", { ...runtime, method: "2022-blake3-aes-128-gcm", password: Buffer.alloc(16, 2).toString("base64") });
