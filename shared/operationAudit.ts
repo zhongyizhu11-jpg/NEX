@@ -198,6 +198,7 @@ export const OPERATION_AUDIT_MODULE_LABELS: Record<string, string> = {
   googleAuth: "Google 登录",
   discordAuth: "Discord",
   dnsRecords: "DNS 解析记录",
+  oidcAuth: "OIDC 登录",
   auth: "账号",
   "ipChange.accounts": "换 IP · 云账号",
   "ipChange.hosts": "换 IP · 主机",

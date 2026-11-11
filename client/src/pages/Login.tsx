@@ -27,6 +27,7 @@ import { parseDiscordLoginReturn, stripDiscordLoginReturnFromUrl } from "@/featu
 import PasswordResetDialog, { type PasswordResetCaptchaProps } from "@/features/passwordReset/PasswordResetDialog";
 import AuthCaptchaField from "@/features/authCaptcha/AuthCaptchaField";
 import { authCaptchaSubmissionFields, normalizeAuthCaptchaMode, type AuthCaptchaSubmission } from "@shared/authCaptchaMode";
+import OidcLoginButton from "@/features/oidcLogin/OidcLoginButton";
 
 const REGISTRATION_CLOSED_MESSAGE = "当前注册未开放，请联系管理员";
 
@@ -1016,6 +1017,15 @@ export default function Login() {
                   }}
                 />
               ) : null}
+
+              {/* 通用 OIDC（Pocket ID、Keycloak……）：显不显示、失败提示、2FA 跳回都在组件里自己处理 */}
+              <OidcLoginButton
+                disabled={isPending}
+                inviteCode={referralEnabled ? inviteCode : null}
+                onTwoFactorRequired={(data) => {
+                  startTwoFactorFromTelegram({ twoFactorRequired: true, ...data });
+                }}
+              />
 
               <OpsLoginExtras disabled={isPending} />
 

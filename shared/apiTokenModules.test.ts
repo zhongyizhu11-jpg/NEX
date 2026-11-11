@@ -28,7 +28,7 @@ function routerKeys(file: string, marker: string) {
   这些本来就在 TOKEN_FORBIDDEN_PATHS 里或者只给网页用，故意不归任何模块。
   新加了一个路由却没归类，这个测试会红：要么归进一个模块，要么加到这里并写明为什么。
 */
-const DELIBERATELY_UNMAPPED_TOP = new Set(["setup", "googleAuth", "discordAuth"]);
+const DELIBERATELY_UNMAPPED_TOP = new Set(["setup", "googleAuth", "discordAuth", "oidcAuth"]);
 const DELIBERATELY_UNMAPPED_OPS = new Set(["apiTokens", "passkeys", "sessions", "offsiteBackup", "audit", "profiling"]);
 
 test("appRouter 的每个顶层路由都有归属（模块、永远放行，或写明了不给）", () => {

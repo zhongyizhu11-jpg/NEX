@@ -30,6 +30,7 @@ export function normalizeApiTokenScope(value: unknown): ApiTokenScope {
   · 安装向导整个 setup.*：装好以后本来就锁着，令牌更不该碰；
   · Telegram 绑定 / 解绑和机器人登录：绑上自己的 Telegram 就能用机器人登录拿到浏览器会话；
   · Google / Discord 设初始密码、解绑：给没设密码的账号设密码再解绑，能把主人锁在外面；
+  · 通用 OIDC 整个 oidcAuth.*：除了上面那两样，改 Issuer 就是改「信谁来证明身份」，测试发现还会发出站请求；
   · 面板备份导出导入、迁移码、面板迁移、切换数据库：整库带走（含 Agent 令牌和 2FA 密钥）或改写用户表；
   · 面板 SSL 私钥查看：私钥只给网页上的管理员；
   · 插件安装、更新、授予信任、执行动作：插件能在所有 Agent 上以 root 跑脚本；
@@ -69,6 +70,8 @@ const TOKEN_FORBIDDEN_PATHS = [
   "googleAuth.unlink",
   "discordAuth.setInitialPassword",
   "discordAuth.unlink",
+  // 通用 OIDC 整个路由：改信任哪个 IdP、发出站请求（测试发现）、解绑、设初始密码都只能在网页上做
+  "oidcAuth.",
   "system.exportPanelBackup",
   "system.importPanelBackup",
   "system.createMigrationCode",

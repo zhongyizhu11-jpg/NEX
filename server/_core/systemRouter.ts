@@ -55,6 +55,7 @@ import { AGENT_ASSET_NAMES } from "../agentAssets";
 import { DEFAULT_DDNS_TTL, maskSecret } from "../ddns";
 import { isGoogleLoginUsable, readGoogleLoginSettings } from "../googleLoginSettings";
 import { isDiscordLoginUsable, readDiscordLoginSettings } from "../discordSettings";
+import { isOidcLoginUsable, readOidcLoginSettings } from "../oidcLoginSettings";
 import { reconcileHostDdnsRecords } from "../hostDdns";
 import { normalizeRuleEntryDomainSuffixInput, scheduleRuleEntryDomainReconcile } from "../ruleEntryDomain";
 import { resolveRuleEntryDomainRuntimeSettings } from "../repositories/ruleEntryDomainRepository";
@@ -1687,6 +1688,12 @@ function databaseSettingsSummary(all: Record<string, string | null>, exposeDetai
   };
 }
 
+/** 登录页的「使用 … 登录」（通用 OIDC）：能不能用、按钮上的名字。 */
+function publicOidcLoginFlags(all: Record<string, string | null>) {
+  const oidc = readOidcLoginSettings(all);
+  return { oidcLoginEnabled: isOidcLoginUsable(oidc), oidcLoginName: oidc.providerName };
+}
+
 /** publicInfo 里给管理员的几个开关；算法和 getSettings 里对应字段一致。 */
 function publicAdminFlags(all: Record<string, string | null>) {
   const envToken = ENV.telegramBotToken.trim();
@@ -1928,6 +1935,8 @@ export const systemRouter = router({
       googleLoginEnabled: isGoogleLoginUsable(readGoogleLoginSettings(all)),
       // 「使用 Discord 登录」同理：开关 + Client ID / Secret + https 的面板公开地址。
       discordLoginEnabled: isDiscordLoginUsable(readDiscordLoginSettings(all)),
+      // 通用 OIDC：开关 + 合法的 Issuer + 客户端 ID + 面板公开地址；按钮上写「使用 <显示名称> 登录」。
+      ...publicOidcLoginFlags(all),
       publicHostMonitor: {
         enabled: all.publicHostMonitorEnabled === "true",
         path: normalizePublicHostMonitorPath(all.publicHostMonitorPath),

@@ -1270,6 +1270,13 @@ async function sanitizeUserUniqueFields(row: Record<string, any>) {
       }
     }
   }
+  // 通用 OIDC 的唯一键是 (oidcIssuer, oidcSub) 两列：目标面板上同一个身份已经绑了别人时，导入的这一条不带绑定。
+  if (row.oidcIssuer && row.oidcSub && await findExistingId("users", { oidcIssuer: row.oidcIssuer, oidcSub: row.oidcSub })) {
+    row.oidcIssuer = null;
+    row.oidcSub = null;
+    row.oidcEmail = null;
+    row.oidcLinkedAt = null;
+  }
 }
 
 function mappedResourceId(maps: ImportMaps, resourceType: unknown, resourceId: unknown) {

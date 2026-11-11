@@ -402,6 +402,10 @@ export async function registerUser(data: {
   discordId?: string | null;
   discordUsername?: string | null;
   discordEmail?: string | null;
+  /** 通用 OIDC 注册同理：(oidcIssuer, oidcSub) 有唯一索引，并发注册只会成功一个。 */
+  oidcIssuer?: string | null;
+  oidcSub?: string | null;
+  oidcEmail?: string | null;
 }) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -410,6 +414,7 @@ export async function registerUser(data: {
     password: data.unusablePassword ? createUnusablePasswordHash() : await hashPassword(data.password),
     ...(data.googleSub ? { googleSub: data.googleSub, googleEmail: data.googleEmail ?? null, googleLinkedAt: nowDate() } : {}),
     ...(data.discordId ? { discordId: data.discordId, discordUsername: data.discordUsername ?? null, discordEmail: data.discordEmail ?? null, discordLinkedAt: nowDate() } : {}),
+    ...(data.oidcIssuer && data.oidcSub ? { oidcIssuer: data.oidcIssuer, oidcSub: data.oidcSub, oidcEmail: data.oidcEmail ?? null, oidcLinkedAt: nowDate() } : {}),
     name: data.name ?? data.username,
     email: data.email ?? null,
     emailVerified: data.emailVerified ?? false,
