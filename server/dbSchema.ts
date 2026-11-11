@@ -283,6 +283,8 @@ const tables: TableDef[] = [
       c("agentToken", "text"), c("entryIp", "text"), c("tunnelEntryIp", "text"), c("osInfo", "text"), c("cpuInfo", "text"),
       c("memoryTotal", "bigint"), c("agentVersion", "text"), c("fxpVersion", "varchar", { length: 64 }),
       c("runtimeVersion", "varchar", { length: 64 }), c("agentCapabilities", "text"),
+      // Agent 2.2.256 起上报：能不能开 IPv6 监听（shared/hostIpv6Listen.ts）。NULL = 没报过，按能用。
+      c("ipv6ListenAvailable", "bool"),
       c("mimicAvailable", "bool"), c("mimicVersion", "text"), c("mimicStatus", "varchar", { length: 64 }),
       c("mimicMessage", "text"), c("mimicCheckedAt", "epoch"),
       c("mimicRuntimeStatus", "varchar", { length: 32 }), c("mimicRuntimeMessage", "text"), c("mimicRuntimeCheckedAt", "epoch"),

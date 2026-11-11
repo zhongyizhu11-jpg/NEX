@@ -369,7 +369,7 @@ async function applyAgentRuleStatus(host: any, payload: any, lookups?: AgentStat
   // 规则行在本函数开头刚读过（处在「本机 + 这条规则」的有序锁里），直接交给仓库，省掉它内部的再读一遍。
   await db.updateRuleRunningStatus(ruleId, !!isRunning, rule);
   // 端口被占、内核转发没装全这类失败原因留给规则卡显示（红色），报运行时清掉。
-  recordRuleRuntimeStatus({ rule, hostId: Number(host.id), isRunning: !!isRunning, message });
+  recordRuleRuntimeStatus({ rule, hostId: Number(host.id), isRunning: !!isRunning, message, agentVersion: host.agentVersion });
   recordRuleStatusEvent({ rule, host, wasRunning, isRunning: !!isRunning, message }); // 事件时间线：规则出错 / 恢复
   if (
     (wasRunning || !!message)

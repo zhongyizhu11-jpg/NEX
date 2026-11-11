@@ -231,6 +231,8 @@ func handleActionJobWithRuntimeSnapshot(cfg Config, a action, releaseRuntimeGate
 			if occupant := portOccupantSummary(a.SourcePort, a.Protocol); occupant != "" {
 				message += "; " + occupant
 			}
+			// 服务自己的日志里最后一两行原因（IPv6 不可用、二进制没装、绑定失败……），面板换成中文显示。
+			message = appendManagedRuntimeFailureDetail(message, a, defaultRuntimeFailureEnv())
 			actionMessage.set("%s", message)
 			if shouldLogAgentReport(fmt.Sprintf("managed-runtime-listen-missing:%d:%s:%s", a.SourcePort, normalizeRuntimeProtocol(a.Protocol), a.ForwardType), agentReportLogInterval) {
 				logf("%s %s readiness={%s} owner=%s", message, actionLogSummary(a), managedRuntimeActionReadinessDiagnostic(a), listenPortOwnerSummary(a.SourcePort))

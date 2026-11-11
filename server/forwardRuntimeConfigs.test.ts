@@ -14,6 +14,8 @@ import {
   socatDialEndpoint,
   socatServiceNameForPort,
 } from "./forwardRuntimeConfigs";
+import { buildNginxStreamConfig, buildNginxStreamServerBlock } from "./agentHeartbeatNginx";
+import { hostIpv6ListenAvailable, parseReportedIpv6Listen } from "../shared/hostIpv6Listen";
 
 /**
  * realm 的配置文件与服务单元。
@@ -155,4 +157,67 @@ test("已经带方括号的 IPv6 不会被再包一层", () => {
   assert.equal(socatDialEndpoint("TCP", "[2001:db8::1]", 443), "TCP6:[2001:db8::1]:443");
   // 域名既不加方括号也不加 6 后缀。
   assert.equal(socatDialEndpoint("TCP", "exit.example.com", 443), "TCP:exit.example.com:443");
+});
+
+/* ---------------------------------------------------------------------------
+ * 内核关了 IPv6 的机器（ipv6.disable=1）：socket(AF_INET6) 直接 EAFNOSUPPORT
+ * ------------------------------------------------------------------------- */
+
+test("主机的 IPv6 监听结论：只有明确报过 false 才算不能用，老 Agent 没报按能用", () => {
+  assert.equal(hostIpv6ListenAvailable(null), true);
+  assert.equal(hostIpv6ListenAvailable({}), true);
+  assert.equal(hostIpv6ListenAvailable({ ipv6ListenAvailable: null }), true);
+  assert.equal(hostIpv6ListenAvailable({ ipv6ListenAvailable: true }), true);
+  assert.equal(hostIpv6ListenAvailable({ ipv6ListenAvailable: 1 }), true);
+  assert.equal(hostIpv6ListenAvailable({ ipv6ListenAvailable: false }), false);
+  assert.equal(hostIpv6ListenAvailable({ ipv6ListenAvailable: 0 }), false, "SQLite / MySQL 的布尔列读回来是 0/1");
+  assert.equal(parseReportedIpv6Listen(false), false);
+  assert.equal(parseReportedIpv6Listen(true), true);
+  assert.equal(parseReportedIpv6Listen(undefined), null);
+  assert.equal(parseReportedIpv6Listen("false"), null, "只认布尔值");
+});
+
+test("realm：没有 IPv6 的机器听 0.0.0.0，有 IPv6 的（含不传）逐字节不变", () => {
+  const legacy = buildRealmConfigToml({ ...base, protocol: "tcp" });
+  assert.equal(buildRealmConfigToml({ ...base, protocol: "tcp", ipv6Listen: true }), legacy);
+  assert.match(legacy, /^listen = "\[::0\]:20001"$/m);
+  const v4 = buildRealmConfigToml({ ...base, protocol: "both", ipv6Listen: false });
+  assert.match(v4, /^listen = "0\.0\.0\.0:20001"$/m);
+  assert.doesNotMatch(v4, /\[::/);
+  // 其余一行不差：只换监听地址。
+  assert.equal(v4.replace("0.0.0.0:20001", "[::0]:20001"), buildRealmConfigToml({ ...base, protocol: "both" }));
+});
+
+test("socat：没有 IPv6 的机器用 TCP4/UDP4-LISTEN，不带 ipv6only（加在 v4 套接字上 socat 会拒绝）", () => {
+  const legacyTcp = buildSocatServiceUnit({ ...socatBase, descriptionProtocol: "TCP", dialProtocol: "TCP" });
+  assert.equal(buildSocatServiceUnit({ ...socatBase, descriptionProtocol: "TCP", dialProtocol: "TCP", ipv6Listen: true }), legacyTcp);
+  const tcp = buildSocatServiceUnit({ ...socatBase, descriptionProtocol: "TCP", dialProtocol: "TCP", ipv6Listen: false });
+  assert.match(tcp, /^ExecStart=\/usr\/bin\/socat -b65536 TCP4-LISTEN:20002,fork,reuseaddr,nodelay TCP:198\.51\.100\.7:443,nodelay$/m);
+  assert.doesNotMatch(tcp, /ipv6only|TCP6-LISTEN/);
+  const udp = buildSocatServiceUnit({ ...socatBase, descriptionProtocol: "UDP", dialProtocol: "UDP", ipv6Listen: false });
+  assert.match(udp, /^ExecStart=\/usr\/bin\/socat -b65536 UDP4-LISTEN:20002,fork,reuseaddr UDP:198\.51\.100\.7:443$/m);
+  // 只换监听端，单元其余部分（Description 等，属于 Agent 的服务签名）不变。
+  assert.equal(tcp.replace("TCP4-LISTEN:20002,fork,reuseaddr", "TCP6-LISTEN:20002,fork,reuseaddr,ipv6only=0"), legacyTcp);
+});
+
+test("nginx：没有 IPv6 的机器 listen 0.0.0.0:端口、解析只要 IPv4；回环和有 IPv6 的不变", () => {
+  const server = { name: "rule 1 tcp", listenPort: 20003, proto: "tcp" as const, upstream: "fwx_rule_1_tcp" };
+  const legacy = buildNginxStreamServerBlock(server);
+  assert.match(legacy, /listen \[::\]:20003 so_keepalive=60s:15s:4 ipv6only=off;/);
+  assert.equal(buildNginxStreamServerBlock({ ...server, ipv6Listen: true }), legacy);
+  const v4 = buildNginxStreamServerBlock({ ...server, ipv6Listen: false });
+  assert.match(v4, /^    listen 0\.0\.0\.0:20003 so_keepalive=60s:15s:4;$/m);
+  assert.doesNotMatch(v4, /ipv6only|\[::\]/);
+  const udp = buildNginxStreamServerBlock({ ...server, proto: "udp", ipv6Listen: false });
+  assert.match(udp, /^    listen 0\.0\.0\.0:20003 udp reuseport;$/m);
+  const ssl = buildNginxStreamServerBlock({ ...server, ipv6Listen: false, sslServer: { certPath: "/c", keyPath: "/k" } });
+  assert.match(ssl, /^    listen 0\.0\.0\.0:20003 ssl so_keepalive=60s:15s:4;$/m);
+  assert.match(buildNginxStreamServerBlock({ ...server, sslServer: { certPath: "/c", keyPath: "/k" } }), /listen \[::\]:20003 ssl so_keepalive=60s:15s:4 ipv6only=off;/);
+  // 守卫后面的回环监听本来就只听 127.0.0.1，和 IPv6 无关。
+  assert.equal(buildNginxStreamServerBlock({ ...server, loopbackOnly: true, ipv6Listen: false }), buildNginxStreamServerBlock({ ...server, loopbackOnly: true }));
+
+  const config = { upstreams: ["  upstream u {\n  }"], servers: [legacy] };
+  assert.match(buildNginxStreamConfig(config), /resolver 1\.1\.1\.1 8\.8\.8\.8 valid=60s ipv6=on;/);
+  assert.equal(buildNginxStreamConfig({ ...config, ipv6Listen: true }), buildNginxStreamConfig(config));
+  assert.match(buildNginxStreamConfig({ ...config, servers: [v4], ipv6Listen: false }), /resolver 1\.1\.1\.1 8\.8\.8\.8 valid=60s ipv6=off;/);
 });

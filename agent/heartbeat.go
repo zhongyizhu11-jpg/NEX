@@ -197,6 +197,8 @@ func heartbeatKeepalive(cfg Config) (heartbeatResult, error) {
 	if currentStatic.PrivateIPv4 != "" {
 		payload["privateIpv4"] = currentStatic.PrivateIPv4
 	}
+	// 2.2.256 起：这台机器能不能开 IPv6 监听（ipv6_listen.go）。false 时面板给 realm / socat / nginx 改写成只听 IPv4。
+	payload["ipv6Listen"] = ipv6ListenAvailable()
 	var resp heartbeatResp
 	if err := postHeartbeat(cfg, "/api/agent/heartbeat", payload, &resp); err != nil {
 		return heartbeatResult{NextInterval: cfg.Interval}, err

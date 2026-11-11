@@ -61,7 +61,18 @@ export type RealmConfigInput = {
   acceptProxy: boolean;
   /** PROXY protocol 版本，1 或 2。 */
   proxyVersion: number;
+  /**
+   * 这台机器能不能开 IPv6 监听（shared/hostIpv6Listen.ts）。不传 / true：双栈 `[::0]`，和以前一样；
+   * false（内核关了 IPv6）：只听 `0.0.0.0`，不然 realm 绑 `[::]` 直接 panic（os error 97）。
+   */
+  ipv6Listen?: boolean;
 };
+
+/** 入口监听地址：有 IPv6 的机器一个双栈套接字收 v4 + v6，内核关了 IPv6 的只听 IPv4。 */
+export function realmListenAddress(sourcePort: unknown, ipv6Listen = true) {
+  const port = Number(sourcePort) || 0;
+  return ipv6Listen === false ? `0.0.0.0:${port}` : `[::0]:${port}`;
+}
 
 /**
  * realm 的配置文件内容。
@@ -85,7 +96,7 @@ export function buildRealmConfigToml(input: RealmConfigInput): string {
     "accept_proxy_timeout = 5",
     "",
     "[[endpoints]]",
-    `listen = ${realmTomlString(`[::0]:${Number(input.sourcePort) || 0}`)}`,
+    `listen = ${realmTomlString(realmListenAddress(input.sourcePort, input.ipv6Listen))}`,
     `remote = ${realmTomlString(input.remote)}`,
     "",
   ].join("\n");
@@ -192,7 +203,7 @@ export type SocatUnitInput = {
    * 统一成一种写法会改掉已经装在真机上的单元文件内容，触发一次没必要的重下发。
    */
   descriptionProtocol: unknown;
-  /** 监听和拨号用的协议，决定 `TCP6-LISTEN` 还是 `UDP6-LISTEN`。 */
+  /** 监听和拨号用的协议，决定 `TCP6-LISTEN` 还是 `UDP6-LISTEN`（没有 IPv6 时是 `TCP4` / `UDP4`）。 */
   dialProtocol: "TCP" | "UDP";
   sourcePort: unknown;
   /** 只用于 Description 里那句人看的说明，不参与拨号。 */
@@ -201,13 +212,26 @@ export type SocatUnitInput = {
   /** 真正拨过去的地址：走故障转移时是本机代理端口，不等于 `targetIp`。 */
   dialHost: unknown;
   dialPort: unknown;
+  /** 同 RealmConfigInput.ipv6Listen：false 时改用 `TCP4/UDP4-LISTEN`（没有 IPv6 的内核开不了 AF_INET6 套接字）。 */
+  ipv6Listen?: boolean;
 };
+
+/**
+ * socat 的监听端：`TCP6-LISTEN:端口,fork,reuseaddr,ipv6only=0`；内核关了 IPv6 时是
+ * `TCP4-LISTEN:端口,fork,reuseaddr`（ipv6only 是 IPv6 套接字的选项，加在 TCP4 上 socat 会拒绝）。
+ */
+export function socatListenAddress(protocol: "TCP" | "UDP", sourcePort: unknown, ipv6Listen = true) {
+  return ipv6Listen === false
+    ? `${protocol}4-LISTEN:${sourcePort},fork,reuseaddr`
+    : `${protocol}6-LISTEN:${sourcePort},fork,reuseaddr,ipv6only=0`;
+}
 
 /**
  * socat 的 systemd 单元。
  *
  * 监听一律用 `TCP6/UDP6-LISTEN` 加 `ipv6only=0`：一个双栈套接字同时收 v4 和 v6，
  * 比起两个单元各监听一个协议栈少一半进程，也不会出现「v6 起来了 v4 没起来」。
+ * 内核关了 IPv6 的机器例外（ipv6Listen=false），见 socatListenAddress。
  */
 export function buildSocatServiceUnit(input: SocatUnitInput): string {
   const dial = socatDialAddress(input.dialProtocol, input.dialHost, input.dialPort);
@@ -218,7 +242,7 @@ export function buildSocatServiceUnit(input: SocatUnitInput): string {
     "",
     "[Service]",
     "Type=simple",
-    `ExecStart=/usr/bin/socat ${SOCAT_TRANSFER_BUFFER_FLAG} ${input.dialProtocol}6-LISTEN:${input.sourcePort},fork,reuseaddr,ipv6only=0${socatSocketOptions(input.dialProtocol)} ${dial}`,
+    `ExecStart=/usr/bin/socat ${SOCAT_TRANSFER_BUFFER_FLAG} ${socatListenAddress(input.dialProtocol, input.sourcePort, input.ipv6Listen)}${socatSocketOptions(input.dialProtocol)} ${dial}`,
     "Restart=always",
     "RestartSec=5",
     "LimitNOFILE=65535",
