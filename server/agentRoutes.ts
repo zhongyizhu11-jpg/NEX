@@ -48,6 +48,8 @@ import { observePresenceCapableHostActivity } from "./agentFastLiveness";
 import { pruneMapEntries, setBoundedMapValue } from "./boundedCache";
 import { AGENT_INSTALL_SCRIPT_SIGNATURE_HEADER, installScriptSignatureForRequest } from "./agentInstallScriptSignature";
 import { DATABASE_MAINTENANCE_MESSAGE, isDatabaseMaintenanceActive } from "./databaseMaintenance";
+import { createAgentInstallationGuard, isAgentInstallationRejected } from "./agentInstallation";
+import { registerAgentManagementRoutes } from "./agentManagementRoutes";
 
 const agentRouter = Router();
 const agentApiRouter = Router();
@@ -153,6 +155,7 @@ async function openAgentEventStream(input: {
   token: string;
   agentVersion?: string | null;
   fxpVersion?: string | null;
+  installationId?: unknown;
 }) {
   const { req, res, token } = input;
   const migratedTo = await db.getSetting("migratedToPanelUrl");
@@ -183,6 +186,12 @@ async function openAgentEventStream(input: {
       return;
     }
     res.status(401).json({ error: "Invalid token" });
+    return;
+  }
+  // 被另一台机器接管下来的旧实例不再开事件流（不然它还会收到配置推送）。没带实例的旧 Agent
+  // 只有在主机已经绑定了新实例时才挡，见 server/agentInstallation.ts。
+  if (input.installationId !== undefined && await isAgentInstallationRejected(Number(host.id), input.installationId)) {
+    res.status(409).json({ error: "Agent installation superseded" });
     return;
   }
   const agentVersion = normalizeAgentText(input.agentVersion, 64);
@@ -273,6 +282,32 @@ agentApiRouter.use((req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
+/*
+  同 Token 换机接管（server/agentInstallation.ts）：新机器上的 Agent 带着没见过的实例 ID 来，由它接管这条
+  主机记录；运行时状态标成待重新下发，否则面板以为规则都已经在新机器上跑着了。
+*/
+agentApiRouter.use(createAgentInstallationGuard({
+  onTakeover: async (hostId, previous, next) => {
+    await resetAgentRuntimeStateAfterReconnect(hostId, "agent-installation-takeover");
+    try {
+      const { recordPanelEvent } = await import("./ops/panelEvents");
+      await recordPanelEvent({
+        kind: "host.agent_takeover",
+        level: "warn",
+        hostId,
+        message: `主机 #${hostId} 由另一台机器上新装的 Agent 接管（实例 ${next.slice(0, 8)}，原实例 ${previous.slice(0, 8)} 停止同步）`,
+        data: { installationId: next.slice(0, 8), previous: previous.slice(0, 8) },
+      });
+    } catch {
+      // 事件只是记录，写不进去不影响接管。
+    }
+  },
+  onBind: async (hostId) => {
+    // 第一次登记也可能就是换了机器（旧 Agent 没有实例 ID 可比）：让配置按新上报的本机状态重新对一遍。
+    invalidateAgentDesiredStateCache(hostId);
+  },
+}));
+
 agentRouter.get("/api/stream", async (req: Request, res: Response) => {
   try {
     const protocolNowMs = panelCryptoNowMs();
@@ -308,6 +343,8 @@ agentRouter.get("/api/stream", async (req: Request, res: Response) => {
       token,
       agentVersion: payload?.agentVersion,
       fxpVersion: payload?.fxpVersion,
+      // 带了实例 ID 的新 Agent 按实例判；不带的旧 Agent 传空串，主机已绑定实例时一样挡掉。
+      installationId: typeof payload?.installationId === "string" ? payload.installationId : "",
     });
   } catch (error) {
     const message = agentErrorMessage(error);
@@ -477,6 +514,7 @@ registerAgentStatusRoutes(agentApiRouter);
 registerAgentSelfTestRoutes(agentApiRouter);
 registerAgentReportRoutes(agentApiRouter);
 registerAgentExtRoutes(agentApiRouter);
+registerAgentManagementRoutes(agentApiRouter);
 // 面板当测速服务器（/api/nodecheck/speed/*）：不在 /api/agent 下，不走加密信封，按一次性口令认。
 registerNodeCheckSpeedRoutes(agentRouter);
 

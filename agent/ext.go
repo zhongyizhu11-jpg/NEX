@@ -140,7 +140,7 @@ func agentExtLoop(cfg Config) {
 			}
 		}
 		next, err := runAgentExtRound(cfg)
-		if err != nil {
+		if err != nil && !errors.Is(err, errAgentSuperseded) {
 			if extErrorLooksLikeMissingRoute(err) {
 				next = extNotFoundBackoff
 			}

@@ -9,6 +9,11 @@
   - Telegram / Discord 走「资源告警」这一类（每个管理员可以在机器人菜单里自己关掉）；邮件发给
     有邮箱的管理员，需要面板的邮件服务已经开着。
   - observeHostResourceSample 不抛错、不阻塞心跳：发消息全在后台做。
+  - 按主机（上游 2.3.287 / 2.3.290）：全局设置里选「对哪些主机生效」（全部 / 指定 / 排除），
+    每台主机还可以单独覆盖 CPU / 内存 / 磁盘阈值或者干脆开 / 关（hosts.resourceAlertOverride）。
+    没有覆盖、范围是全部主机时和以前完全一样。覆盖从库里整批读、缓存 30 秒，心跳路径上不逐台查库。
+  - 可选「同时通知主机所属用户」：管理员照常收；主机归普通用户的，再按他自己的 Telegram 通知开关
+    和邮箱发一份（隧道丢包不在此列：隧道不一定是这台主机主人的）。
 */
 import { getAllSettings, setSettings } from "./repositories/settingsRepository";
 import { queryRaw, quoteDbIdentifier } from "./dbRuntime";
@@ -25,7 +30,11 @@ import {
   serviceRestartIncreases,
   type LossWindowState,
   evaluateResourceAlertSample,
+  isHostInResourceAlertScope,
+  normalizeHostResourceAlertOverride,
   normalizeResourceAlertConfig,
+  resolveHostResourceAlertConfig,
+  type HostResourceAlertOverride,
   resourceAlertMetricLabel,
   type ResourceAlertConfig,
   type ResourceAlertHostState,
@@ -47,7 +56,14 @@ const CONFIG_KEYS: Array<keyof ResourceAlertConfig> = [
   "oomAlert",
   "crashAlert",
   "lossPercent",
+  "scope",
+  "scopeHostIds",
+  "notifyOwner",
 ];
+
+function serializeConfigValue(value: unknown) {
+  return Array.isArray(value) ? JSON.stringify(value) : String(value);
+}
 
 export async function readResourceAlertConfig(): Promise<ResourceAlertConfig> {
   const settings = await getAllSettings().catch(() => ({} as Record<string, string | null>));
@@ -63,7 +79,7 @@ export async function saveResourceAlertConfig(input: Partial<ResourceAlertConfig
   const current = await readResourceAlertConfig();
   const next = normalizeResourceAlertConfig({ ...current, ...input });
   const map: Record<string, string> = {};
-  for (const key of CONFIG_KEYS) map[`${KEY_PREFIX}${key}`] = String(next[key]);
+  for (const key of CONFIG_KEYS) map[`${KEY_PREFIX}${key}`] = serializeConfigValue(next[key]);
   await setSettings(map);
   if (!next.enabled) {
     hostStates.clear();
@@ -161,6 +177,114 @@ export async function sendAdminAlert(message: AdminAlertMessage, options: { emai
   }
 }
 
+// ---------------- 主机所属用户 ----------------
+
+function enabledAccount(value: unknown) {
+  return !(value === false || value === 0 || value === "0" || value === "f");
+}
+
+/**
+ * 发给主机的所属用户（「同时通知主机所属用户」打开时）。所属用户本身是管理员的已经在 sendAdminAlert 里收过，
+ * 不重复发；账号停用的不发。Telegram 按他自己在机器人菜单里的「资源告警」开关；邮件跟全局「同时发邮件」。永远不抛。
+ */
+export async function sendHostOwnerAlert(hostId: number, message: AdminAlertMessage, options: { email: boolean }) {
+  const q = quoteDbIdentifier;
+  try {
+    const rows = await queryRaw<{ id: number; role?: string; email?: string | null; telegramId?: string | number | null; accountEnabled?: unknown }>(
+      `SELECT u.${q("id")} AS ${q("id")}, u.${q("role")} AS ${q("role")}, u.${q("email")} AS ${q("email")}, u.${q("telegramId")} AS ${q("telegramId")}, u.${q("accountEnabled")} AS ${q("accountEnabled")}
+         FROM ${q("hosts")} h JOIN ${q("users")} u ON u.${q("id")} = h.${q("userId")} WHERE h.${q("id")} = ?`,
+      [hostId],
+    );
+    const owner = rows[0];
+    if (!owner || owner.role === "admin" || !enabledAccount(owner.accountEnabled)) return;
+    const html = alertHtml(message);
+    if (owner.telegramId) {
+      const settings = await getAllSettings();
+      if (telegramBotReady(settings)) {
+        const [{ filterTelegramRecipients }, { sendTelegramMessage }] = await Promise.all([
+          import("./telegramNotifyPrefs"),
+          import("./telegramBot"),
+        ]);
+        const recipients = await filterTelegramRecipients([{ id: owner.id, telegramId: owner.telegramId }], "resource");
+        for (const user of recipients) {
+          await sendTelegramMessage(String(user.telegramId), html).catch((error: unknown) => {
+            appendPanelLog("warn", `[ResourceAlert] Telegram owner ${message.logLabel} user=${owner.id} failed: ${error instanceof Error ? error.message : String(error)}`);
+          });
+        }
+      }
+    }
+    const email = String(owner.email || "").trim();
+    if (options.email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      const { sendMail, getEmailConfig } = await import("./email");
+      if ((await getEmailConfig()).enabled) {
+        const text = [message.title, "", ...message.fields.map(([label, value]) => `${label}：${value}`), `时间：${formatTime()}`].join("\n");
+        await sendMail({ to: email, subject: `[NEX] ${message.title}`, text }).catch((error: unknown) => {
+          appendPanelLog("warn", `[ResourceAlert] email owner ${message.logLabel} user=${owner.id} failed: ${error instanceof Error ? error.message : String(error)}`);
+        });
+      }
+    }
+  } catch (error) {
+    appendPanelLog("warn", `[ResourceAlert] owner ${message.logLabel} host=${hostId} failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+/** 管理员 + （打开时）主机所属用户。 */
+async function sendHostAlert(hostId: number, message: AdminAlertMessage, config: ResourceAlertConfig) {
+  await sendAdminAlert(message, { email: config.emailEnabled });
+  if (config.notifyOwner) await sendHostOwnerAlert(hostId, message, { email: config.emailEnabled });
+}
+
+// ---------------- 按主机覆盖 ----------------
+
+const OVERRIDE_CACHE_TTL_MS = 30_000;
+let overrideCache: { loadedAt: number; overrides: Map<number, HostResourceAlertOverride> } | null = null;
+let overrideLoad: Promise<Map<number, HostResourceAlertOverride>> | null = null;
+
+/** 主机的覆盖改了之后立刻生效，不等缓存过期。 */
+export function invalidateHostResourceAlertOverrides() {
+  overrideCache = null;
+  overrideLoad = null;
+}
+
+async function loadHostResourceAlertOverrides() {
+  const q = quoteDbIdentifier;
+  const rows = await queryRaw<{ id: number; resourceAlertOverride?: unknown }>(
+    `SELECT ${q("id")}, ${q("resourceAlertOverride")} FROM ${q("hosts")} WHERE ${q("resourceAlertOverride")} IS NOT NULL`,
+  );
+  const overrides = new Map<number, HostResourceAlertOverride>();
+  for (const row of rows) {
+    const override = normalizeHostResourceAlertOverride(row.resourceAlertOverride);
+    if (override) overrides.set(Number(row.id), override);
+  }
+  return overrides;
+}
+
+export async function getHostResourceAlertOverride(hostId: number): Promise<HostResourceAlertOverride | null> {
+  const now = Date.now();
+  if (!overrideCache || now - overrideCache.loadedAt >= OVERRIDE_CACHE_TTL_MS) {
+    if (!overrideLoad) {
+      const load = loadHostResourceAlertOverrides()
+        // 读不到（列还没建好、库忙）按「没有覆盖」走，和以前的全局行为一致。
+        .catch(() => overrideCache?.overrides ?? new Map<number, HostResourceAlertOverride>())
+        .then((overrides) => {
+          if (overrideLoad === load) overrideCache = { loadedAt: Date.now(), overrides };
+          return overrides;
+        })
+        .finally(() => { if (overrideLoad === load) overrideLoad = null; });
+      overrideLoad = load;
+    }
+    return (await overrideLoad).get(Number(hostId)) ?? null;
+  }
+  return overrideCache.overrides.get(Number(hostId)) ?? null;
+}
+
+/** 这台主机实际用的设置（范围、覆盖都算进去）。 */
+export async function readHostResourceAlertConfig(hostId: number): Promise<ResourceAlertConfig> {
+  const config = await readResourceAlertConfig();
+  if (!config.enabled) return config;
+  return resolveHostResourceAlertConfig(config, hostId, await getHostResourceAlertOverride(hostId));
+}
+
 // ---------------- 每台主机串行 ----------------
 
 /*
@@ -238,7 +362,7 @@ export function observeHostResourceSample(host: any, sample: ResourceAlertSample
   const hostId = Number(host?.id || 0);
   if (!Number.isInteger(hostId) || hostId <= 0) return;
   runSerialized(`resource:${hostId}`, async () => {
-    const config = await readResourceAlertConfig();
+    const config = await readHostResourceAlertConfig(hostId);
     if (!config.enabled) {
       hostStates.delete(hostId);
       return;
@@ -261,7 +385,7 @@ export function observeHostResourceSample(host: any, sample: ResourceAlertSample
         message: described.event,
         data: { metric: transition.metric, value: transition.value, threshold: transition.threshold, peak: transition.peak, durationSeconds: transition.durationSeconds },
       });
-      await sendAdminAlert(described.alert, { email: config.emailEnabled });
+      await sendHostAlert(hostId, described.alert, config);
     }
   }, `host=${hostId} evaluate`);
 }
@@ -333,7 +457,7 @@ export function observeHostHealthCounters(host: any, input: { bootId?: string | 
   const crashes = serviceRestarts ? serviceRestartIncreases(previous!.serviceRestarts, serviceRestarts) : [];
   if (oomDelta <= 0 && crashes.length === 0) return;
   void (async () => {
-    const config = await readResourceAlertConfig();
+    const config = await readHostResourceAlertConfig(hostId);
     if (!config.enabled) return;
     const name = hostLabel(host);
     // 先把事件都记下，再发通知：时间线不该等 Telegram / 邮件。
@@ -378,7 +502,7 @@ export function observeHostHealthCounters(host: any, input: { bootId?: string | 
         logLabel: `crash host=${hostId}`,
       });
     }
-    for (const alert of alerts) await sendAdminAlert(alert, { email: config.emailEnabled });
+    for (const alert of alerts) await sendHostAlert(hostId, alert, config);
   })().catch((error) => {
     appendPanelLog("warn", `[ResourceAlert] host=${hostId} counters failed: ${error instanceof Error ? error.message : String(error)}`);
   });
@@ -402,7 +526,10 @@ export function observeTunnelProbeLoss(host: any, reports: Array<{ tunnelId: num
   const hostId = Number(host?.id || 0);
   if (!Number.isInteger(hostId) || hostId <= 0 || reports.length === 0) return;
   runSerialized(`loss:${hostId}`, async () => {
-    const config = await readResourceAlertConfig();
+    const globalConfig = await readResourceAlertConfig();
+    // 丢包按探测主机算范围（指定 / 排除 / 本机关掉都认），阈值只有全局一份。
+    const inScope = globalConfig.enabled && isHostInResourceAlertScope(globalConfig, hostId, await getHostResourceAlertOverride(hostId));
+    const config = inScope ? globalConfig : { ...globalConfig, enabled: false };
     if (!config.enabled || config.lossPercent <= 0) {
       for (const key of [...lossStates.keys()]) if (key.startsWith(`${hostId}:`)) lossStates.delete(key);
       return;

@@ -41,6 +41,8 @@ export const AGENT_TUNNEL_PATHS = new Set([
   "/api/agent/rule-status",
   "/api/agent/rule-status-batch",
   "/api/agent/ext",
+  // 切换面板地址前的认证探测（主机独立的 Agent 面板连接地址，Agent 2.2.253 起）
+  "/api/agent/panel-url-probe",
 ]);
 
 const AGENT_AUTH_FAILURE_LOG_INTERVAL_MS = 5 * 60 * 1000;
@@ -177,6 +179,8 @@ export async function agentEncryptionMiddleware(req: Request, res: Response, nex
     }
     if (tunneledPath) {
       (req as any).agentTunneledPath = tunneledPath;
+      // 安装实例 ID 跟 path、payload 同在加密信封里（同 Token 换机接管，见 server/agentInstallation.ts）。
+      if (typeof req.body?.installationId === "string") (req as Request & { agentInstallationId?: string }).agentInstallationId = req.body.installationId;
       req.body = req.body?.payload ?? {};
     }
   } catch (err: any) {

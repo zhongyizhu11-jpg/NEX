@@ -30,7 +30,8 @@ import {
   proxyInboundTrafficRuleId,
 } from "../shared/proxyInboundTraffic";
 import { buildMetaAgentSelfTestPayload, buildRuleAgentSelfTestPayload, hasAgentVersionChanged, isAgentUpgradeCompleted, normalizeReportedFxpVersion, parseSelfTestMeta, tunnelSecretSeed } from "./agentRouteUtils";
-import { resolveAgentAdvertisedPanelUrl } from "./agentPanelUrl";
+// 主机可以单独指定 Agent 连哪个面板地址（server/hostAgentPanelUrl.ts），没指定时就是全局的公开地址。
+import { resolveHostAgentAdvertisedPanelUrl } from "./hostAgentPanelUrl";
 import { getAgentMigrationSwitchTarget, getPanelMigrationAgentDirective } from "./panelMigrationAgentState";
 import * as hopRepo from "./repositories/tunnelRepository";
 import {
@@ -775,7 +776,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     });
 
     if (busyHeartbeat) {
-      const panelUrl = await resolveAgentAdvertisedPanelUrl();
+      const panelUrl = await resolveHostAgentAdvertisedPanelUrl(host);
       const metricsWatching = isHostMetricsWatching(host.id);
       logAgentHeartbeatSummary({
         hostId: logHostId,
@@ -4445,7 +4446,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     if (agentUpgradeCompleted) {
       await db.clearHostAgentUpgradeRequest(host.id);
     }
-    const panelUrl = await resolveAgentAdvertisedPanelUrl();
+    const panelUrl = await resolveHostAgentAdvertisedPanelUrl(host);
     const agentMigrationTargetPanelUrl = await getAgentMigrationSwitchTarget();
     const panelMigration = await getPanelMigrationAgentDirective(Number(host.id));
     const staleMigrationUpgrade = (host as any).agentUpgradeRequested

@@ -168,6 +168,9 @@ func persistPanelURL(panelURL string) error {
 	return writeConfigFileAtomic(path, next)
 }
 
+// syncPanelURLFromResponse：面板在心跳回包里给了另一个地址（全局「面板公开地址」改了，或者这台主机
+// 配了独立的 Agent 面板连接地址）。不再直接切：先在后台用本机 Token 验证新地址，通了才切换并落盘，
+// 不通就继续用现在的地址（panel_url_switch.go）。
 func syncPanelURLFromResponse(panelURL string) {
 	normalized := normalizePanelURL(panelURL)
 	if normalized == "" {
@@ -177,12 +180,7 @@ func syncPanelURLFromResponse(panelURL string) {
 	if current == normalized {
 		return
 	}
-	setRuntimePanelURL(normalized)
-	if err := persistPanelURL(normalized); err != nil {
-		logf("panel URL switched to %s for runtime, persist failed: %v", normalized, err)
-		return
-	}
-	logf("panel URL updated to %s", normalized)
+	requestVerifiedPanelURLSwitch(current, normalized)
 }
 
 func register(cfg Config) error {
