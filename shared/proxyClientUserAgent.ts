@@ -125,8 +125,12 @@ const RULES: readonly Rule[] = [
   // QX 的 UA 里域名部分是 URL 编码的 "Quantumult%20X"。
   { family: "quantumultx", pattern: /quantumult/i, version: v("quantumult(?:%20| )?x[/ ]v?([0-9.]+)"), target: "quantumultx" },
   { family: "surfboard", pattern: /surfboard/i, version: v("surfboard[/ ]v?([0-9.]+)"), target: "surge" },
-  // Egern 读 Surge 格式。
-  { family: "egern", pattern: /egern/i, version: v("egern[/ ]v?([0-9.]+)"), target: "surge" },
+  /*
+    Egern 给它自己的 YAML（shared/proxySubEgern.ts）。以前给的是 Surge 格式（它也读得懂），
+    但那里面写不了模块、VLESS / REALITY 也没位置，所以改成原生格式（有意改的默认，已有的 Egern 订阅下次更新就拿到 YAML）。
+    还想要 Surge 格式的，地址上加 ?target=surge（或 /surge 路径）照旧拿得到 —— 显式格式优先于 UA。
+  */
+  { family: "egern", pattern: /egern/i, version: v("egern[/ ]v?([0-9.]+)"), target: "egern" },
   { family: "surge", pattern: /surge/i, version: v("surge(?: ios| mac|ios|mac)?[/ ]v?([0-9.]+)"), target: "surge" },
   { family: "loon", pattern: /loon/i, version: v("loon[/ ]v?([0-9.]+)"), target: "loon" },
   // v2rayNG 必须排在 v2rayN 前面：两者都含 "v2rayN"。

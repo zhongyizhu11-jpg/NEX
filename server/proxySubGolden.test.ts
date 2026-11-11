@@ -9,7 +9,7 @@ import test from "node:test";
  * 订阅输出的金样。
  *
  * server/proxySubBench.fixture.ts 的小档账号（自建 / 粘来 / 落地池 / 分享来的节点，转发组、前置代理、
- * 停用 / 隐藏 / 只放 TCP 的转发，四条作用域和模板各不相同的令牌）按「8 种格式 × 典型客户端 ×
+ * 停用 / 隐藏 / 只放 TCP 的转发，四条作用域和模板各不相同的令牌）按「9 种格式 × 典型客户端 ×
  * 节点订阅 / 规则订阅」和「只靠 UA 识别格式」各拉一遍。每一份的字节数、sha256、Content-Type、
  * ETag 都得和下面一样；带 gzip 再拉一次，解压后也必须一模一样。再开着缓存把整张表拉几遍
  * （命中缓存、不压 / gzip / br / deflate）：发出去的解开以后、ETag、Content-Type 都得和冷的一样。
@@ -84,6 +84,15 @@ const GOLDEN: Record<string, string> = {
   "info/quantumultx/rules": "12104 2286841df67a81e9c7b78935 text/plain 2f48-3+AeXDLSjZOSOFudaKReeQZJxNg",
   "info/shadowrocket/nodes": "14056 2fe0fdd2ba76b46ad0be6f64 text/plain 36e8-kUGXOIQkgaV1XiQg0Dsn+wzXQu8",
   "info/shadowrocket/rules": "7928 ad6d7b54f516f2c847547cc4 text/plain 1ef8-k1ruhEZoikXaMMwfnRL2vBAXTbs",
+  // Egern 原生 YAML（后加的；上面那些一个字节都没变）。
+  "default/egern/nodes": "15961 c5beee1649cbcee0372e87ea text/yaml 3e59-vVNXmQkyunZaG50n6LQydLMxbrc",
+  "default/egern/rules": "49002 456d445a847e6292ec068a78 text/yaml bf6a-7IEv2cwRT6XhCghEuglNZXW9KR4",
+  "scoped/egern/nodes": "7224 453faf986083e66eb2551ded text/yaml 1c38-cDICVmOs4mBU2zZrrsBpGuucDL0",
+  "scoped/egern/rules": "44264 de523f610143d89c81dad9b7 text/yaml ace8-t7l7plDxsbKc+OoB9rjGrxMYjhE",
+  "templated/egern/nodes": "17694 6f7bb475c83ecb161640059a text/yaml 451e-LIgNtHoUg1k8Jwyo1NedgICiDHI",
+  "templated/egern/rules": "55725 a01eb06d56330b611e0433bd text/yaml d9ad-qvePsu5poJbmMKkSgTpM0WjmS1I",
+  "info/egern/nodes": "12184 886bedc59ecd76661c9b5405 text/yaml 2f98-kHga2fObHKGCmdsAER0p0mYEeuo",
+  "info/egern/rules": "22482 a2f5fb8068e7d101c3346c62 text/yaml 57d2-4UuMOgCwhfyiBHjI6bqUyv07VkY",
   "ua:mihomo": "39629 775b31b4c592629a34d2a938 text/yaml 9acd-Q0WpdouPBnBZrQi5CtOhJlegoX0",
   "ua:clash-verge": "45736 d2754117d0a9f953468b2494 text/yaml b2a8-OOCHBAxVS53BWHCrVXl7H1YzE3s",
   "ua:stash": "45441 14e2c6334d8e9ffb29ea72cf text/yaml b181-uggA4iXsVyVSEC88hBEMHKY2TUM",
@@ -99,6 +108,8 @@ const GOLDEN: Record<string, string> = {
   "ua:qx": "25777 ed7c1c984b373153d728ec65 text/plain 64b1-kMcIIq50+Mffy3dacRXnvxYpmbw",
   "ua:hiddify": "17956 d1a3917acf5b173f489c9af0 text/plain 4624-Yl0gNV7ho56RaMXaasJkdWKvRfw",
   "ua:unknown": "45441 14e2c6334d8e9ffb29ea72cf text/yaml b181-uggA4iXsVyVSEC88hBEMHKY2TUM",
+  // Egern 的 UA 现在拿原生 YAML（以前是 Surge 格式，那时这一份不在表里）。
+  "ua:egern": "48996 b7d27fab98daa8a00abf75d5 text/yaml bf64-S3/gtcNq/RE2DLkeNZba9NE1I+A",
   "alias/mihomo": "39629 775b31b4c592629a34d2a938 text/yaml 9acd-Q0WpdouPBnBZrQi5CtOhJlegoX0",
   "query/emoji-region": "18519 a14a6e0976a137d5230129ba text/yaml 4857-BJ17vsxosOo8PaFhg9YhPaA3XKM",
   // ipVersion=4 / 6（后加的几份，上面那些一个字节都没变）：只用入口真实的那一种地址，没有的跳过并计数。
@@ -109,6 +120,11 @@ const GOLDEN: Record<string, string> = {
   "query/ipv4-surge": "17006 d3929b6615cafa9d9a0c3887 text/plain 426e-E7OVJeOD9CIDILLeenz052hVV+c",
   "query/ipv6-none": "131 c81403fc1a78c5cb53d299c7 text/plain 83-WNQCHsuydKfbFcIVF8HG4M712vw",
   "query/ipversion-invalid": "27 bec05d82c3acf69c55f6d72c text/plain 1b-jMa2b09t8FykHuI7RcGFgWLauwE",
+  // Egern：挂 Egern 模板（开头部分 + 自定义组 + 模板规则 + 两个模块）的完整配置、同一条的节点订阅，
+  // 以及 Egern 的 UA 带 ?target=surge 照旧拿 Surge 格式（text/plain，不是 YAML）。
+  "query/egern-template-rules": "49875 2084979dc01c74450b8669a9 text/yaml c2d3-FtySlu2bvkNSJC+IUm/gZmnqaSI",
+  "query/egern-template-nodes": "15961 c5beee1649cbcee0372e87ea text/yaml 3e59-vVNXmQkyunZaG50n6LQydLMxbrc",
+  "query/egern-target-surge": "18168 1692cfe754e0f0c78719f856 text/plain 46f8-nu4nO6pzYjicPIkyl3qEQhOU7J4",
 };
 
 /**

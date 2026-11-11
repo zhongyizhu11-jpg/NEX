@@ -28,7 +28,15 @@ import { formatDateTime as timeText } from "@/lib/formatTime";
 import { trpc } from "@/lib/trpc";
 import { PROXY_SUB_TOKEN_FAILURE_LABELS, proxySubTokenStatus } from "@shared/proxySubTokenStatus";
 import { PROXY_SUB_DEFAULT_SETTINGS, type ProxySubSettings } from "@shared/proxySubSettings";
-import { PROXY_SUB_TEMPLATE_MODULE_TARGETS, PROXY_SUB_TEMPLATE_TARGETS, PROXY_SUB_TEMPLATE_TARGET_LABELS, type ProxySubTemplate, type ProxySubTemplateTarget } from "@shared/proxySubTemplates";
+import {
+  proxySubTemplateModuleFlavor,
+  PROXY_SUB_TEMPLATE_MODULE_NOUNS,
+  PROXY_SUB_TEMPLATE_MODULE_TARGETS,
+  PROXY_SUB_TEMPLATE_TARGETS,
+  PROXY_SUB_TEMPLATE_TARGET_LABELS,
+  type ProxySubTemplate,
+  type ProxySubTemplateTarget,
+} from "@shared/proxySubTemplates";
 import ProxySubTemplateVisualEditor, { type ProxySubTemplateEditorValue } from "@/components/proxy/ProxySubTemplateVisualEditor";
 import { parseProxySubTokenOptions, parseProxySubTokenScope } from "@shared/proxySubTokenScope";
 import { Activity, FileCode2, KeyRound, Plus, Settings2 } from "lucide-react";
@@ -301,7 +309,7 @@ function TemplatesTab() {
                   {template.isDefault ? <Badge>默认</Badge> : null}
                   {template.customGroups.length > 0 ? <Badge variant="secondary">{template.customGroups.length} 个自定义组</Badge> : null}
                   {template.customRules?.trim() ? <Badge variant="secondary">{template.customRules.split("\n").filter((line) => line.trim() && !/^\s*(#|;|\/\/)/.test(line)).length} 条规则</Badge> : null}
-                  {template.modules?.length ? <Badge variant="secondary">{template.modules.length} 个插件</Badge> : null}
+                  {template.modules?.length ? <Badge variant="secondary">{template.modules.length} 个{PROXY_SUB_TEMPLATE_MODULE_NOUNS[proxySubTemplateModuleFlavor(template.target)]}</Badge> : null}
                 </div>
                 <pre className="max-h-24 overflow-hidden whitespace-pre-wrap rounded bg-muted p-2 font-mono text-[11px] text-muted-foreground">{template.prelude.slice(0, 400) || "（空）"}</pre>
                 <div className="flex gap-1">
@@ -332,7 +340,7 @@ function TemplatesTab() {
                 <Label>目标格式</Label>
                 <Select value={target} onValueChange={(value) => {
                   const next = value as ProxySubTemplateTarget;
-                  // 换目标格式时：开头部分是空的或还是上一种格式的内置默认，就换成这一种的内置默认；插件只有 Loon 有。
+                  // 换目标格式时：开头部分是空的或还是上一种格式的内置默认，就换成这一种的内置默认；插件 / 模块只有 Loon 和 Egern 有。
                   setContent((prev) => ({
                     ...prev,
                     prelude: !prev.prelude.trim() || prev.prelude === (query.data?.builtin[target] || "") ? query.data?.builtin[next] || "" : prev.prelude,

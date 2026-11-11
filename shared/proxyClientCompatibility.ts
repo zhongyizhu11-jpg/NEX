@@ -12,6 +12,9 @@
  * 依据（只写有把握的）：
  *   - 订阅格式能力：proxySubscription.ts 的 FORMAT_UNSUPPORTED_PROTOCOLS 等表，那边逐条对过官方手册。
  *   - Surge 手册的策略类型里没有 VLESS；传输只有 WebSocket（没有 gRPC / H2 / HTTPUpgrade）。
+ *   - Egern 官方文档（egernapp.com/docs/configuration/proxies）：九种协议都有，REALITY / Vision / SS2022 都有，
+ *     Snell 只到 v5；VMess / VLESS 的传输是 ws / wss / tls / grpc / http1 / http2，没有 HTTPUpgrade；
+ *     Trojan 只有 WebSocket（这一层由订阅格式那边挡）。
  *   - Quantumult X 官方 sample.conf：只有 shadowsocks / vmess / vless / trojan / http，
  *     传输写在 obfs 里（ws / wss / over-tls / http），没有 gRPC，也没有 REALITY。
  *   - 原版 Clash（Dreamacro/clash，Premium 内核，ClashX / Clash for Windows 用它）2023 年已停更，
@@ -236,6 +239,22 @@ export const PROXY_CLIENT_FAMILIES: readonly ProxyClientFamily[] = [
       ss2022: U,
       snellVersions: [],
       transports: { tcp: Y, ws: Y, grpc: U, http: U, httpupgrade: N },
+    },
+  },
+  {
+    id: "egern",
+    label: "Egern",
+    format: "egern",
+    importTargets: ["egern"],
+    facts: {
+      // egernapp.com/docs/configuration/proxies：九种协议都在，Snell 1-5（v5 按 v4），没有 v6。
+      protocols: ALL_PROTOCOLS_YES,
+      reality: Y,
+      vision: Y,
+      ss2022: Y,
+      snellVersions: [1, 2, 3, 4, 5],
+      // transport 只有 http1 / http2 / tls / ws / wss / grpc；NEX 的 http 传输对到 http2 没实测过。
+      transports: { tcp: Y, ws: Y, grpc: Y, http: U, httpupgrade: N },
     },
   },
   {

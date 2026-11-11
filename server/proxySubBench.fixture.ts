@@ -60,6 +60,11 @@ const TOKENS = {
 } as const;
 type TokenKey = keyof typeof TOKENS;
 const ALIAS = "golden-alias";
+/**
+ * 挂着 Egern 模板（开头部分、自定义组、模板规则、模块）的令牌。不放进 TOKENS：放进去就要把
+ * 9 种格式 × 两种订阅全拉一遍，别的格式拿到的和「主力」那条一样，只多出一堆重复的金样。
+ */
+const EGERN_TOKEN = "goldenEgernToken0000000000000000000000000005";
 
 /** 典型客户端。每种格式配一个「平时就用它拉这种格式」的客户端；后面一段只靠 UA 识别格式。 */
 const FORMAT_CLIENT: Record<(typeof PROXY_SUBSCRIPTION_FORMATS)[number], string> = {
@@ -71,6 +76,7 @@ const FORMAT_CLIENT: Record<(typeof PROXY_SUBSCRIPTION_FORMATS)[number], string>
   surge: "Surge iOS/3048",
   quantumultx: "Quantumult%20X/1.5.0",
   shadowrocket: "Shadowrocket/2.2.48 CFNetwork/1494.0.7 Darwin/23.4.0",
+  egern: "Egern/1.20 CFNetwork/1568.200.51 Darwin/24.1.0",
 };
 const DETECTED_CLIENTS: Record<string, string> = {
   mihomo: "mihomo/1.18.10",
@@ -88,6 +94,7 @@ const DETECTED_CLIENTS: Record<string, string> = {
   qx: "Quantumult%20X/1.5.0",
   hiddify: "HiddifyNext/2.5.7",
   unknown: "curl/8.5.0",
+  egern: "Egern/1.20 CFNetwork/1568.200.51 Darwin/24.1.0",
 };
 
 const COUNTRIES = [
@@ -345,6 +352,17 @@ async function seed(scale: Scale) {
       ]),
     },
     { id: 2, name: "sing-box 默认", target: "singbox", isDefault: 1, prelude: "", customGroupsJson: JSON.stringify([{ name: "🇭🇰 香港", type: "url-test", filter: "香港", match: "any" }]) },
+    {
+      // 不设成默认：只有 EGERN_TOKEN 用它，别的令牌拉 Egern 拿到的是内置开头部分。
+      id: 3, name: "Egern 模板", target: "egern", isDefault: 0,
+      prelude: "# {{app_name}} · {{username}}\nipv6: true\nproxy_latency_test_url: \"{{test_url}}\"\ndns:\n  bootstrap:\n    - system\n",
+      customGroupsJson: JSON.stringify([{ name: "🇯🇵 日本", type: "fallback", filter: "日本", match: "any" }]),
+      customRules: "DOMAIN-SUFFIX,egern.example,DIRECT\n# DOMAIN,disabled.example,REJECT",
+      modulesJson: JSON.stringify([
+        { url: "https://modules.example/adblock.yaml", enabled: true, tag: "去广告", argument: "BLOCK_MODE=reject&REGION=cn" },
+        { url: "https://modules.example/boxjs.sgmodule", enabled: false, tag: "", argument: "" },
+      ]),
+    },
   ]);
 
   const tokens: Row[] = [
@@ -364,6 +382,7 @@ async function seed(scale: Scale) {
       optionsJson: JSON.stringify({ infoNodes: "on", unlockGroups: true, prefix: "[NEX] ", udp: "off", sortMode: "protocol" }),
     },
   ];
+  tokens.push({ id: 5, userId: OWNER_ID, name: "Egern", token: EGERN_TOKEN, defaultFormat: "egern", rulePreset: "balanced", isEnabled: 1, templateId: 3 });
   await insertRows("proxy_sub_tokens", tokens);
 
   const settings: Record<string, string> = {
@@ -425,6 +444,10 @@ function goldenRequests(): GoldenRequest[] {
   // 「信息节点」那条令牌排除了直连，中转机又都没有 IPv6：一个不剩 → 422。写错参数 → 400。
   requests.push({ label: "query/ipv6-none", path: `/api/sub/${TOKENS.info}/clash?ipVersion=6`, userAgent: DETECTED_CLIENTS.mihomo });
   requests.push({ label: "query/ipversion-invalid", path: `/api/sub/${TOKENS.default}/clash?ipVersion=5`, userAgent: DETECTED_CLIENTS.mihomo });
+  // Egern：挂模板（含模块）的完整配置、同一条的节点订阅（UA 识别）、还想要 Surge 格式的显式参数。
+  requests.push({ label: "query/egern-template-rules", path: `/api/sub/${EGERN_TOKEN}?rules=1`, userAgent: DETECTED_CLIENTS.egern });
+  requests.push({ label: "query/egern-template-nodes", path: `/api/sub/${EGERN_TOKEN}`, userAgent: DETECTED_CLIENTS.egern });
+  requests.push({ label: "query/egern-target-surge", path: `/api/sub/${TOKENS.default}?rules=1&target=surge`, userAgent: DETECTED_CLIENTS.egern });
   return requests;
 }
 

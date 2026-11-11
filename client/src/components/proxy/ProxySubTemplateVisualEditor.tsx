@@ -1,5 +1,5 @@
 /**
- * 订阅模板的可视化编辑：策略组、分流规则、Loon 插件一张张卡片地改，旁边实时出一份按示例节点
+ * 订阅模板的可视化编辑：策略组、分流规则、Loon 插件 / Egern 模块一张张卡片地改，旁边实时出一份按示例节点
  * 渲染的配置。「高级 / 代码」里还是原来那几段文本（开头部分、规则文本、组的 JSON），两边改的是
  * 同一份数据，随时切换：
  *
@@ -24,7 +24,7 @@ import { PROXY_SUB_GROUP_MATCHES, PROXY_SUB_GROUP_MATCH_LABELS, normalizeProxySu
 import type { ProxySubCustomGroup } from "@shared/proxySubscriptionPlan";
 import { PROXY_SUBSCRIPTION_GROUP_NAME } from "@shared/proxySubscription";
 import { PROXY_RULE_CATEGORIES, proxyRuleCategoryGroupName } from "@shared/proxyRuleset";
-import { proxySubModuleProblem, PROXY_SUB_TEMPLATE_MODULE_LIMITS, type ProxySubTemplateModule } from "@shared/proxySubModules";
+import { proxySubModuleProblem, PROXY_SUB_TEMPLATE_MODULE_LIMITS, type ProxySubModuleFlavor, type ProxySubTemplateModule } from "@shared/proxySubModules";
 import {
   formatProxySubRuleRows,
   moveProxySubRow,
@@ -36,7 +36,14 @@ import {
   PROXY_CUSTOM_RULE_TYPES,
   type ProxySubRuleRow,
 } from "@shared/proxySubTemplateEditor";
-import { findProxySubCustomGroupCycle, normalizeProxySubCustomGroups, PROXY_SUB_TEMPLATE_MODULE_TARGETS, PROXY_SUB_TEMPLATE_TARGET_LABELS, type ProxySubTemplateTarget } from "@shared/proxySubTemplates";
+import {
+  findProxySubCustomGroupCycle,
+  normalizeProxySubCustomGroups,
+  proxySubTemplateModuleFlavor,
+  PROXY_SUB_TEMPLATE_MODULE_TARGETS,
+  PROXY_SUB_TEMPLATE_TARGET_LABELS,
+  type ProxySubTemplateTarget,
+} from "@shared/proxySubTemplates";
 import { renderProxySubTemplatePreview } from "@shared/proxySubTemplatePreview";
 import type { ProxyCustomRuleType } from "@shared/proxySubCustomRules";
 
@@ -91,7 +98,7 @@ export default function ProxySubTemplateVisualEditor({ target, value, onChange, 
             <GroupsEditor groups={value.customGroups} onChange={(customGroups) => onChange({ customGroups })} />
             <RulesEditor text={value.customRules} onChange={(customRules) => onChange({ customRules })} targetOptions={targetOptions} />
             {PROXY_SUB_TEMPLATE_MODULE_TARGETS.includes(target) ? (
-              <ModulesEditor modules={value.modules} onChange={(modules) => onChange({ modules })} />
+              <ModulesEditor flavor={proxySubTemplateModuleFlavor(target)} modules={value.modules} onChange={(modules) => onChange({ modules })} />
             ) : null}
           </div>
           <PreviewPane target={target} value={value} />
@@ -321,37 +328,61 @@ function RuleCard({ row, listId, controls, onPatch }: { row: RuleRow; listId: st
   );
 }
 
-// ==================== Loon 插件 ====================
+// ==================== Loon 插件 / Egern 模块 ====================
 
-function ModulesEditor({ modules, onChange }: { modules: ProxySubTemplateModule[]; onChange: (modules: ProxySubTemplateModule[]) => void }) {
+/**
+ * 两家存的是同一份（地址 / 开关 / 名字 / 参数），差在叫法和参数的写法：Loon 的 argument 原样写进
+ * [Plugin]，Egern 的是 KEY=值 键值对，写成模块引用上的 compat_arguments（shared/proxySubModules.ts）。
+ */
+const MODULE_COPY: Record<ProxySubModuleFlavor, { title: string; noun: string; urlPlaceholder: string; namePlaceholder: string; argumentPlaceholder: string; help: (limit: number) => string }> = {
+  loon: {
+    title: "Loon 插件",
+    noun: "插件",
+    urlPlaceholder: "https://example.com/xxx.plugin",
+    namePlaceholder: "名字（tag，可不填）",
+    argumentPlaceholder: "参数（argument，可不填）",
+    help: (limit) => `写进规则订阅的 [Plugin] 段，插件本身由 Loon 下载和更新。只收 http / https 地址，最多 ${limit} 个；关掉的照样写进去（enabled=false），用户在 Loon 里能自己打开。`,
+  },
+  egern: {
+    title: "Egern 模块",
+    noun: "模块",
+    urlPlaceholder: "https://example.com/xxx.yaml 或 .sgmodule",
+    namePlaceholder: "名字（盖过模块自己的名字，可不填）",
+    argumentPlaceholder: "参数：KEY=值&KEY2=值（可不填）",
+    help: (limit) => `写进规则订阅的 modules 段，模块本身由 Egern 下载和更新。只收 http / https 地址，最多 ${limit} 个；关掉的照样写进去（enabled: false），用户在 Egern 里能自己打开。参数写成 KEY=值、多个用 & 隔开，变成模块的 compat_arguments，只覆盖模块文件里声明过的参数；值里不能有双引号和反斜杠。`,
+  },
+};
+
+function ModulesEditor({ flavor, modules, onChange }: { flavor: ProxySubModuleFlavor; modules: ProxySubTemplateModule[]; onChange: (modules: ProxySubTemplateModule[]) => void }) {
   const update = (index: number, patch: Partial<ProxySubTemplateModule>) => onChange(modules.map((item, i) => (i === index ? { ...item, ...patch } : item)));
+  const copy = MODULE_COPY[flavor];
   return (
     <section className="space-y-2">
       <div className="flex items-center justify-between gap-2">
-        <Label>Loon 插件</Label>
+        <Label>{copy.title}</Label>
         <Button size="sm" variant="outline" disabled={modules.length >= PROXY_SUB_TEMPLATE_MODULE_LIMITS.count} onClick={() => onChange([...modules, { url: "", enabled: true, tag: "", argument: "" }])}>
           <Plus className="mr-1 h-3.5 w-3.5" />加一个
         </Button>
       </div>
       <p data-fx-help="" className="text-xs text-muted-foreground">
-        写进规则订阅的 [Plugin] 段，插件本身由 Loon 下载和更新。只收 http / https 地址，最多 {PROXY_SUB_TEMPLATE_MODULE_LIMITS.count} 个；关掉的照样写进去（enabled=false），用户在 Loon 里能自己打开。
+        {copy.help(PROXY_SUB_TEMPLATE_MODULE_LIMITS.count)}
       </p>
       {modules.map((module, index) => {
-        const problem = module.url.trim() ? proxySubModuleProblem(module, index) : null;
+        const problem = module.url.trim() ? proxySubModuleProblem(module, index, flavor) : null;
         return (
           <div key={index} className={`space-y-1.5 rounded-md border p-2 ${module.enabled ? "" : "opacity-60"}`}>
             <div className="grid items-center gap-2 sm:grid-cols-[auto_minmax(0,1fr)_auto]">
-              <Switch aria-label={module.enabled ? "停用这个插件" : "启用这个插件"} size="sm" checked={module.enabled} onCheckedChange={(checked) => update(index, { enabled: checked })} />
-              <Input aria-label="插件地址" className="h-8 font-mono text-xs" value={module.url} maxLength={PROXY_SUB_TEMPLATE_MODULE_LIMITS.url} placeholder="https://example.com/xxx.plugin" onChange={(event) => update(index, { url: event.target.value })} />
+              <Switch aria-label={module.enabled ? `停用这个${copy.noun}` : `启用这个${copy.noun}`} size="sm" checked={module.enabled} onCheckedChange={(checked) => update(index, { enabled: checked })} />
+              <Input aria-label={`${copy.noun}地址`} className="h-8 font-mono text-xs" value={module.url} maxLength={PROXY_SUB_TEMPLATE_MODULE_LIMITS.url} placeholder={copy.urlPlaceholder} onChange={(event) => update(index, { url: event.target.value })} />
               <div className="flex items-center gap-0.5">
                 <Button size="sm" variant="ghost" className="h-8 w-8 p-0" aria-label="上移" disabled={index === 0} onClick={() => onChange(moveProxySubRow(modules, index, -1))}><ArrowUp className="h-3.5 w-3.5" /></Button>
                 <Button size="sm" variant="ghost" className="h-8 w-8 p-0" aria-label="下移" disabled={index === modules.length - 1} onClick={() => onChange(moveProxySubRow(modules, index, 1))}><ArrowDown className="h-3.5 w-3.5" /></Button>
-                <Button size="sm" variant="ghost" className="h-8 w-8 p-0" aria-label="删除这个插件" onClick={() => onChange(modules.filter((_item, i) => i !== index))}><Trash2 className="h-3.5 w-3.5" /></Button>
+                <Button size="sm" variant="ghost" className="h-8 w-8 p-0" aria-label={`删除这个${copy.noun}`} onClick={() => onChange(modules.filter((_item, i) => i !== index))}><Trash2 className="h-3.5 w-3.5" /></Button>
               </div>
             </div>
             <div className="grid gap-2 sm:grid-cols-2">
-              <Input aria-label="插件名字" className="h-8 text-xs" value={module.tag} maxLength={PROXY_SUB_TEMPLATE_MODULE_LIMITS.tag} placeholder="名字（tag，可不填）" onChange={(event) => update(index, { tag: event.target.value })} />
-              <Input aria-label="插件参数" className="h-8 font-mono text-xs" value={module.argument} maxLength={PROXY_SUB_TEMPLATE_MODULE_LIMITS.argument} placeholder="参数（argument，可不填）" onChange={(event) => update(index, { argument: event.target.value })} />
+              <Input aria-label={`${copy.noun}名字`} className="h-8 text-xs" value={module.tag} maxLength={PROXY_SUB_TEMPLATE_MODULE_LIMITS.tag} placeholder={copy.namePlaceholder} onChange={(event) => update(index, { tag: event.target.value })} />
+              <Input aria-label={`${copy.noun}参数`} className="h-8 font-mono text-xs" value={module.argument} maxLength={PROXY_SUB_TEMPLATE_MODULE_LIMITS.argument} placeholder={copy.argumentPlaceholder} onChange={(event) => update(index, { argument: event.target.value })} />
             </div>
             {problem ? <p className="text-[11px] text-[var(--fx-down-text)]">{problem}</p> : null}
           </div>
@@ -413,7 +444,13 @@ function CodeEditor({ target, value, onChange, builtinPrelude }: Props) {
         </div>
         <Textarea aria-label="开头部分" value={value.prelude} onChange={(event) => onChange({ prelude: event.target.value })} rows={14} className="font-mono text-xs" />
         <p data-fx-help="" className="text-xs text-muted-foreground">
-          {target === "clash" ? "放在 proxies: 前面的 YAML，不能含 proxies / proxy-groups / rule-providers / rules。" : target === "singbox" ? "一个 JSON 对象（log / dns / inbounds / experimental / route.rules……），面板把 outbounds 和 route 并进去。" : "整段 [General]（含那一行表头）。"}
+          {target === "clash"
+            ? "放在 proxies: 前面的 YAML，不能含 proxies / proxy-groups / rule-providers / rules。"
+            : target === "singbox"
+              ? "一个 JSON 对象（log / dns / inbounds / experimental / route.rules……），面板把 outbounds 和 route 并进去。"
+              : target === "egern"
+                ? "放在 proxies: 前面的 Egern YAML（ipv6 / dns / mitm……），不能含 proxies / policy_groups / rules / modules；不写 auto_update 时面板会补上。"
+                : "整段 [General]（含那一行表头）。"}
         </p>
       </div>
       <div className="space-y-1.5">
@@ -433,8 +470,10 @@ function CodeEditor({ target, value, onChange, builtinPrelude }: Props) {
       />
       {PROXY_SUB_TEMPLATE_MODULE_TARGETS.includes(target) ? (
         <JsonField
-          label="Loon 插件（JSON）"
-          hint={'每项 {"url": "https://…", "enabled": true, "tag": "", "argument": ""}。'}
+          label={`${MODULE_COPY[proxySubTemplateModuleFlavor(target)].title}（JSON）`}
+          hint={target === "egern"
+            ? '每项 {"url": "https://…", "enabled": true, "tag": "名字", "argument": "KEY=值&KEY2=值"}。'
+            : '每项 {"url": "https://…", "enabled": true, "tag": "", "argument": ""}。'}
           value={value.modules}
           onValid={(parsed) => {
             if (!Array.isArray(parsed)) return "要是一个数组";

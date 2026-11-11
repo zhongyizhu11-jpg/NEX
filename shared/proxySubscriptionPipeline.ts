@@ -195,7 +195,7 @@ export function renderProxySubPipeline(input: ProxySubRenderInput): string {
     client: input.client || undefined,
     // 按 IPv4 / IPv6 输出时跳过的节点：能写注释的格式在文件头写一句（和「格式不支持」的跳过同一处）。
     extraNotices: proxySubAddressFamilyNotices(input.built.plan),
-    // 模块 / 插件只进规则订阅（完整配置）；节点订阅是裸节点行，放不下。目前只有 Loon 渲染它们。
+    // 模块 / 插件只进规则订阅（完整配置）；节点订阅是裸节点行 / 只有 proxies，放不下。Loon 和 Egern 渲染它们。
     modules: wantPrelude ? (input.template?.modules || []) : [],
   });
 }

@@ -47,8 +47,10 @@ import {
 import { renderV2rayJsonSubscription } from "./proxySubscriptionV2rayJson";
 import { formatHostAddressWithPort } from "./hostEntryAddress";
 import { loonPluginSection, type ProxySubTemplateModule } from "./proxySubModules";
+import { egernUnsupportedReason, renderEgernNodes, renderEgernProfile } from "./proxySubEgern";
 
-export const PROXY_SUBSCRIPTION_FORMATS = ["base64", "clash", "singbox", "v2rayjson", "loon", "surge", "quantumultx", "shadowrocket"] as const;
+// egern 排在最后：金样和各处按这张表遍历，加在末尾原有格式的顺序就不动。
+export const PROXY_SUBSCRIPTION_FORMATS = ["base64", "clash", "singbox", "v2rayjson", "loon", "surge", "quantumultx", "shadowrocket", "egern"] as const;
 
 export type ProxySubscriptionFormat = (typeof PROXY_SUBSCRIPTION_FORMATS)[number];
 
@@ -61,6 +63,7 @@ export const PROXY_SUBSCRIPTION_FORMAT_LABELS: Record<ProxySubscriptionFormat, s
   surge: "Surge / Surfboard",
   quantumultx: "Quantumult X",
   shadowrocket: "Shadowrocket",
+  egern: "Egern",
 };
 
 export const PROXY_SUBSCRIPTION_FORMAT_HINTS: Record<ProxySubscriptionFormat, string> = {
@@ -72,6 +75,7 @@ export const PROXY_SUBSCRIPTION_FORMAT_HINTS: Record<ProxySubscriptionFormat, st
   surge: "Surge（iOS/Mac）与 Surfboard（Android）。不支持 VLESS、REALITY、XHTTP。",
   quantumultx: "Quantumult X（iOS）。不支持 Hysteria2 / TUIC / AnyTLS / Snell / REALITY / XHTTP。",
   shadowrocket: "Shadowrocket（iOS）。节点订阅同通用 Base64；规则订阅是一份完整配置，节点仍来自节点订阅。",
+  egern: "Egern（iOS）自己的 YAML 配置。节点订阅只有 proxies；规则订阅是完整配置，能带模板里的模块。不支持 XHTTP、HTTPUpgrade、Snell v6。",
 };
 
 export const PROXY_SUBSCRIPTION_FORMAT_CONTENT_TYPES: Record<ProxySubscriptionFormat, string> = {
@@ -83,6 +87,7 @@ export const PROXY_SUBSCRIPTION_FORMAT_CONTENT_TYPES: Record<ProxySubscriptionFo
   surge: "text/plain; charset=utf-8",
   quantumultx: "text/plain; charset=utf-8",
   shadowrocket: "text/plain; charset=utf-8",
+  egern: "text/yaml; charset=utf-8",
 };
 
 export function normalizeProxySubscriptionFormat(value: unknown): ProxySubscriptionFormat {
@@ -95,6 +100,7 @@ export function normalizeProxySubscriptionFormat(value: unknown): ProxySubscript
   if (raw === "surge" || raw === "surfboard") return "surge";
   if (raw === "quantumultx" || raw === "quanx" || raw === "qx") return "quantumultx";
   if (raw === "shadowrocket") return "shadowrocket";
+  if (raw === "egern") return "egern";
   return "base64";
 }
 
@@ -718,10 +724,12 @@ const FORMAT_UNSUPPORTED_PROTOCOLS: Record<ProxySubscriptionFormat, readonly Pro
   quantumultx: ["hysteria2", "tuic", "anytls", "snell"],
   // Shadowrocket 的节点来自 base64 订阅，能力按 base64 算。
   shadowrocket: ["snell"],
+  // Egern 九种都有；参数层面的（Snell v6、gecko 混淆、Trojan 的 gRPC……）在 proxySubEgern.ts 里挡。
+  egern: [],
 };
 
 /** 能表达 REALITY 的格式。Surge 与 Quantumult X 的手册里根本没有这一层。 */
-const FORMATS_WITH_REALITY: readonly ProxySubscriptionFormat[] = ["base64", "clash", "singbox", "v2rayjson", "loon", "shadowrocket"];
+const FORMATS_WITH_REALITY: readonly ProxySubscriptionFormat[] = ["base64", "clash", "singbox", "v2rayjson", "loon", "shadowrocket", "egern"];
 
 /** 能表达 XHTTP 传输的格式。这是 Xray 的传输，只有 mihomo 跟进了。 */
 const FORMATS_WITH_XHTTP: readonly ProxySubscriptionFormat[] = ["base64", "clash", "v2rayjson", "shadowrocket"];
@@ -788,6 +796,7 @@ function unsupportedReason(node: ProxyNode, format: ProxySubscriptionFormat): st
   if (format === "loon" && node.protocol === "hysteria2" && node.obfs && node.obfs !== "salamander") {
     return `Loon 的 Hysteria2 只支持 salamander 混淆，这个节点用的是 ${node.obfs}`;
   }
+  if (format === "egern") return egernUnsupportedReason(node);
   return "";
 }
 
@@ -1134,9 +1143,10 @@ function renderQuantumultX(nodes: readonly ProxyNode[], notices: readonly string
  *                 [Proxy] 只为兼容保留、写法自成一套，所以节点不写进配置，
  *                 仍由节点订阅提供，组按名字引用。
  */
-export const PROXY_SUBSCRIPTION_PROFILE_FORMATS = ["surge", "loon", "quantumultx", "shadowrocket"] as const;
+export const PROXY_SUBSCRIPTION_PROFILE_FORMATS = ["surge", "loon", "quantumultx", "shadowrocket", "egern"] as const;
 
-type IosProfileFormat = (typeof PROXY_SUBSCRIPTION_PROFILE_FORMATS)[number];
+/** Egern 也有「节点订阅 / 完整配置」之分，但它的配置是 YAML，走 proxySubEgern.ts，不走下面这套 INI 式的。 */
+type IosProfileFormat = Exclude<(typeof PROXY_SUBSCRIPTION_PROFILE_FORMATS)[number], "egern">;
 
 export function proxySubscriptionFormatHasProfile(format: ProxySubscriptionFormat): boolean {
   return (PROXY_SUBSCRIPTION_PROFILE_FORMATS as readonly string[]).includes(format);
@@ -1475,7 +1485,7 @@ export type RenderProxySubscriptionOptions = {
    * 只有能写注释的格式（Clash、Surge、Loon、QX、Shadowrocket 的配置）写，JSON / base64 不写。
    */
   extraNotices?: readonly string[];
-  /** 模板里挂的模块 / 插件。目前只有 Loon 的完整配置写成 [Plugin]，别的格式忽略。 */
+  /** 模板里挂的模块 / 插件。Loon 的完整配置写成 [Plugin]，Egern 的写成 modules，别的格式忽略。 */
   modules?: readonly ProxySubTemplateModule[];
 };
 
@@ -1545,6 +1555,25 @@ export function renderProxySubscription(
   if (format === "singbox") return renderSingbox(nodes, groups, ruleSets, rules, prelude);
   if (format === "v2rayjson") {
     return renderV2rayJsonSubscription(nodes, rules, { testUrl: currentSettings.testUrl }, new Map(ruleSets.map((ref) => [ref.name, { geoKey: ref.geoKey, behavior: ref.behavior }])));
+  }
+  if (format === "egern") {
+    /*
+      Egern 和 Surge 一样分两种：节点订阅只有 proxies（挂在它的外部组 / 订阅上），规则订阅是完整配置。
+      规则按 Surge 的那几份规则列表展开：Egern 认 Surge 的规则集，镜像设置也就和 Surge 一样生效。
+      它有 prev_hop，前置代理照常写，名字不用带「需手动接」。
+    */
+    if (!options.profile) return renderEgernNodes(nodes, notices);
+    return renderEgernProfile({
+      nodes,
+      groups,
+      rules: iosProfileRules(rules, ruleSets, "Surge", (target) => target),
+      notices,
+      prelude,
+      profileUrl: options.profileUrl || "",
+      modules: options.modules || [],
+      providers: document.providers || [],
+      settings: currentSettings,
+    });
   }
   if (options.profile && proxySubscriptionFormatHasProfile(format)) {
     return renderIosProfile({ ...filtered, nodes, notices }, format as IosProfileFormat, options.profileUrl || "", !!options.shadowrocketClient, prelude, options.modules || []);

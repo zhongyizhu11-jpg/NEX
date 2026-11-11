@@ -1,6 +1,6 @@
 # 客户端订阅
 
-NEX 把你的转发规则和落地节点组装成一条订阅地址，各家客户端（Clash / mihomo、sing-box、v2rayN、Shadowrocket、Surge、Loon、Quantumult X、Hiddify、Happ……）导入即用。本页讲订阅地址怎么用、能调什么、商家怎么管。
+NEX 把你的转发规则和落地节点组装成一条订阅地址，各家客户端（Clash / mihomo、sing-box、v2rayN、Shadowrocket、Surge、Loon、Quantumult X、Egern、Hiddify、Happ……）导入即用。本页讲订阅地址怎么用、能调什么、商家怎么管。
 
 这里的「订阅」只指客户端订阅；买的套餐在「我的套餐」。各个叫法的意思见[术语表](./glossary.md)。
 
@@ -24,13 +24,22 @@ NEX 把你的转发规则和落地节点组装成一条订阅地址，各家客�
 | --- | --- |
 | `/api/sub/<令牌>` | 主地址。按客户端的 User-Agent 自动给对应格式；浏览器打开是落地页。 |
 | `/api/sub/<令牌>?rules=1` | 规则订阅：节点 + 策略组 + 分流规则的完整配置。 |
-| `/api/sub/<令牌>/<格式>` | 显式格式：`clash`、`singbox`、`v2ray-json`、`surge`、`loon`、`quantumultx`、`shadowrocket`、`base64`。 |
+| `/api/sub/<令牌>/<格式>` | 显式格式：`clash`、`singbox`、`v2ray-json`、`surge`、`loon`、`quantumultx`、`shadowrocket`、`egern`、`base64`。 |
 | `/api/sub/<令牌>/info` | JSON：用量、到期、节点数、设备数、公告。给自定义客户端或排查用。 |
 | `/s/<别名>` | 短链。在令牌编辑里设别名后可用，内容和主地址一样。 |
 
 同一条地址粘到哪个客户端都能拿到对的格式。认不出客户端时用令牌上设的「认不出来时按 … 返回」，也可以在地址上加 `flag=clash` 这类参数强制指定。
 
 v2rayN 6.40+、v2rayNG 1.8.29+、Happ 1.63+ 会拿到 Xray JSON 配置（参数更全，分流一起带）；老版本照旧 base64。
+
+### Egern
+
+Egern 拿到的是**它自己的 YAML 配置**（`proxies` / `policy_groups` / `rules` / `modules`），不再是 Surge 格式。这是有意改的默认：Surge 格式里写不了 VLESS / REALITY，也没有放模块的位置。已经导入过的 Egern 订阅不用重新导，下次更新就拿到新格式。
+
+- **节点订阅**（不带 `rules`）：只有 `proxies`，就是 Egern 文档里的「订阅文件」，用 Egern 的「添加订阅」导入（一键订阅面板里的 Egern 图标就是 `egern:/subscriptions/new?url=…`）。
+- **规则订阅**（`?rules=1`）：完整配置——模板开头部分、节点、策略组（手动选择 `select`、自动选最快 `auto_test`、主备 `fallback`、负载均衡 `load_balance` 按轮询）、分流规则（规则集用和 Surge 同一份规则列表，镜像设置一样生效；兜底写成 `default`）、模板里的模块。带 `auto_update`，Egern 会按设置里的更新间隔自己重新下载。
+- 协议：Shadowsocks（含 2022）、VMess、VLESS（含 REALITY / Vision）、Trojan、Hysteria2、TUIC、AnyTLS、Snell（v1–v5）、SOCKS5 都有；前置节点写成 `prev_hop`。写不出来的跳过并在文件头注明：XHTTP / HTTPUpgrade 传输、Snell v6、Hysteria2 的 gecko 混淆、Trojan 走 gRPC、没开 TLS 的 gRPC、配在 WebSocket 上的 REALITY、Egern 没有的加密方式。
+- **还想要 Surge 格式**：地址上加 `?target=surge`（或用 `/api/sub/<令牌>/surge`）。显式格式永远优先于 User-Agent。
 
 ### 地址上的临时参数
 
@@ -108,15 +117,28 @@ v2rayN 6.40+、v2rayNG 1.8.29+、Happ 1.63+ 会拿到 Xray JSON 配置（参数�
 
 ### 模板
 
-「订阅运营 → 模板」。模板只管「节点之外」的部分：Clash 的端口 / DNS / TUN / sniffer，sing-box 的 log / dns / inbounds / experimental / route.rules，Surge / Loon / QX / Shadowrocket 的 `[General]`。节点、策略组、规则集、分流规则照旧由面板生成接在后面。模板只进**规则订阅**；节点订阅保持最小配置。
+「订阅运营 → 模板」。模板只管「节点之外」的部分：Clash 的端口 / DNS / TUN / sniffer，sing-box 的 log / dns / inbounds / experimental / route.rules，Surge / Loon / QX / Shadowrocket 的 `[General]`，Egern 放在 `proxies:` 前面的那段 YAML（`ipv6` / `dns` / `mitm`……，不能含 `proxies` / `policy_groups` / `rules` / `modules`；内置的只有一行 `proxy_latency_test_url`）。节点、策略组、规则集、分流规则照旧由面板生成接在后面。模板只进**规则订阅**；节点订阅保持最小配置。
 
 模板还能定义自定义策略组：按正则从节点名里挑成员（`港|HK` → 「🇭🇰 香港」），出现在主选择器和各分类组里。组的成员也可以**点名**：别的自定义组、自动选路组 / 地区组、某个节点、`DIRECT`（排在最前，按点名的顺序），再关掉「按名字挑节点」，就是「🚀 节点选择 = ⚡ 专线 / 🇭🇰 香港 / DIRECT」这种组。点名的名字订阅里没有时丢掉；不能点名 `REJECT`（sing-box 里没有这个出站）和主选择器，组之间互相引用成环时保存不了。
 
 模板里还可以写**分流规则**（写法同下面的自定义规则），排在全局前置规则之后、用户 / 令牌规则之前。
 
-**Loon 插件**：Loon 模板可以挂插件（地址、开关、名字、参数），写进规则订阅的 `[Plugin]` 段（`https://…plugin, tag=名字, argument=参数, enabled=true`），插件本身由 Loon 下载和更新。只收 http / https 地址、不能含空白和逗号，最多 30 个；关掉的照样写进去（`enabled=false`），用户在 Loon 里自己能打开。别的格式不写插件；Shadowrocket 来拉 Loon 格式时也不写。Egern 的模块暂时不支持：面板给 Egern 发的是 Surge 格式，那种配置里没有模块的位置。
+**Loon 插件**：Loon 模板可以挂插件（地址、开关、名字、参数），写进规则订阅的 `[Plugin]` 段（`https://…plugin, tag=名字, argument=参数, enabled=true`），插件本身由 Loon 下载和更新。只收 http / https 地址、不能含空白和逗号，最多 30 个；关掉的照样写进去（`enabled=false`），用户在 Loon 里自己能打开。别的格式不写插件；Shadowrocket 来拉 Loon 格式时也不写。
 
-**可视化编辑**：编辑模板时默认是「可视化」——策略组（名字、类型、点名的成员、按名字挑节点）、分流规则（类型下拉附说明、匹配值、去向、不解析、开关、上下挪）、Loon 插件一张张卡片地改，旁边按一组示例节点实时渲染出 Clash YAML（非 Clash 模板还能切到它自己的格式看开头部分和插件），走的是和真订阅同一条生成流程。「高级 / 代码」里还是原来的文本：开头部分、规则文本、组的 JSON。两边改的是同一份数据：没动过的规则行原样保存，注释和这里认不出的写法照存不丢，停用的规则存成 `# ` 开头的注释行；组上认不出的字段也原样留着。
+**Egern 模块**：Egern 模板同样能挂模块（地址、开关、名字、参数），写进规则订阅的 `modules`：
+
+```yaml
+modules:
+  - url: "https://example.com/adblock.yaml"
+    name: "去广告"
+    enabled: true
+    compat_arguments:
+      "BLOCK_MODE": "reject"
+```
+
+模块本身由 Egern 下载和更新（`.yaml` 和 Surge 的 `.sgmodule` 都行）。地址的要求和 Loon 插件一样（http / https、不含空白和逗号、最多 30 个），关掉的照样写进去（`enabled: false`）。名字填了就盖过模块文件里的名字。参数写成 `KEY=值`，多个用 `&` 隔开（`BLOCK_MODE=reject&REGION=cn`），变成 `compat_arguments`：只覆盖模块文件里声明过的参数，值里不能有双引号和反斜杠（模块里的占位符是按纯文本替换的）。Loon 那种 `[…]` 写法的参数在 Egern 模板里保存不了。
+
+**可视化编辑**：编辑模板时默认是「可视化」——策略组（名字、类型、点名的成员、按名字挑节点）、分流规则（类型下拉附说明、匹配值、去向、不解析、开关、上下挪）、Loon 插件 / Egern 模块一张张卡片地改，旁边按一组示例节点实时渲染出 Clash YAML（非 Clash 模板还能切到它自己的格式看开头部分和插件），走的是和真订阅同一条生成流程。「高级 / 代码」里还是原来的文本：开头部分、规则文本、组的 JSON。两边改的是同一份数据：没动过的规则行原样保存，注释和这里认不出的写法照存不丢，停用的规则存成 `# ` 开头的注释行；组上认不出的字段也原样留着。
 
 分配顺序：令牌指定 → 用户指定（用户页）→ 套餐指定 → 该格式的默认模板 → 内置。
 
@@ -136,7 +158,7 @@ GEOIP,JP,PROXY
 GEOSITE,netflix,🎥 奈飞视频
 ```
 
-去向：`DIRECT` / `REJECT` / `PROXY`（主选择器）/ 策略组名。四处可写：全局前置 / 后置（设置页）、模板、按用户（用户管理 → 编辑用户 → 订阅）、按令牌。前置的排在预设规则前（命中即止，顺序是全局前置 → 模板 → 用户 → 令牌），后置的排在 MATCH 前。`#` 开头的行是注释。GEOSITE 在 Surge / Loon / QX / Shadowrocket 上没有对应写法，会跳过。
+去向：`DIRECT` / `REJECT` / `PROXY`（主选择器）/ 策略组名。四处可写：全局前置 / 后置（设置页）、模板、按用户（用户管理 → 编辑用户 → 订阅）、按令牌。前置的排在预设规则前（命中即止，顺序是全局前置 → 模板 → 用户 → 令牌），后置的排在 MATCH 前。`#` 开头的行是注释。GEOSITE 在 Surge / Loon / QX / Shadowrocket / Egern 上没有对应写法，会跳过。
 
 ### 可调参数
 
