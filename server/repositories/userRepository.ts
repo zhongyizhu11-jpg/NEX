@@ -119,7 +119,7 @@ export async function verifyUserPassword(userId: number, password: string) {
   return await verifyPassword(password, user.password);
 }
 
-export async function updateUserProfile(userId: number, data: { name?: string; email?: string; displayRemark?: string | null; avatar?: string | null; telegramAnnouncementSubscribed?: boolean; uiLayout?: "standard" | "compact" | null }) {
+export async function updateUserProfile(userId: number, data: { name?: string; email?: string; displayRemark?: string | null; avatar?: string | null; telegramAnnouncementSubscribed?: boolean; uiLayout?: "standard" | "compact" | null; uiPreferences?: string | null }) {
   const db = await getDb();
   if (!db) return;
   const patch: Record<string, unknown> = { ...data, updatedAt: nowDate() };

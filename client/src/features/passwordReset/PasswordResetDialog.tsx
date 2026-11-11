@@ -12,6 +12,7 @@ import {
   PASSWORD_RESET_MIN_LENGTH,
   PASSWORD_RESET_TTL_MINUTES,
 } from "@shared/passwordReset";
+import { authCaptchaSubmissionFields, normalizeAuthCaptchaMode, type AuthCaptchaMode, type AuthCaptchaSubmission } from "@shared/authCaptchaMode";
 import { takePasswordResetToken } from "./passwordResetLink";
 
 /*
@@ -22,10 +23,16 @@ import { takePasswordResetToken } from "./passwordResetLink";
   2. 设新密码：从邮件 / 消息里点开 /login#password-reset=…，这里认出令牌、立刻从地址栏删掉，
      弹出设新密码。成功后这个账号所有登录都失效，用新密码重新登录；双重验证不变。
 
-  人机验证组件在 Login.tsx 里（按需加载的 Cap），由 renderCaptcha 传进来，不在这里再写一份。
+  人机验证组件（features/authCaptcha/AuthCaptchaField.tsx）由 Login.tsx 的 renderCaptcha 传进来；用哪种方式
+  （点击 / 图片）跟着系统设置走（passwordResetOptions.captchaMode），服务端也只认那一种。
 */
 
-export type PasswordResetCaptchaProps = { resetKey: number; disabled: boolean; onToken: (token: string) => void };
+export type PasswordResetCaptchaProps = {
+  mode: AuthCaptchaMode;
+  resetKey: number;
+  disabled: boolean;
+  onChange: (submission: AuthCaptchaSubmission | null) => void;
+};
 
 type Stage = "request" | "requested" | "reset" | "done";
 
@@ -41,7 +48,7 @@ export default function PasswordResetDialog(props: {
   const [stage, setStage] = useState<Stage>("request");
   const [token, setToken] = useState<string | null>(null);
   const [identifier, setIdentifier] = useState("");
-  const [capToken, setCapToken] = useState("");
+  const [captchaSubmission, setCaptchaSubmission] = useState<AuthCaptchaSubmission | null>(null);
   const [captchaResetKey, setCaptchaResetKey] = useState(0);
   const [requestedMessage, setRequestedMessage] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -61,8 +68,8 @@ export default function PasswordResetDialog(props: {
     },
     onError: (failure) => {
       setError(authErrorMessage(failure.message || "申请失败，请稍后重试"));
-      // 验证令牌用一次就作废：失败了得重新验证。
-      setCapToken("");
+      // 验证结果用一次就作废：失败了得重新验证。
+      setCaptchaSubmission(null);
       setCaptchaResetKey((value) => value + 1);
     },
   });
@@ -101,15 +108,17 @@ export default function PasswordResetDialog(props: {
     }
     setNewPassword("");
     setConfirmPassword("");
-    setCapToken("");
+    setCaptchaSubmission(null);
     setError("");
     if (stage !== "reset") setStage("request");
   }, [open, defaultIdentifier, stage]);
 
-  const handleCaptchaToken = useCallback((value: string) => setCapToken(value), []);
+  const handleCaptchaChange = useCallback((value: AuthCaptchaSubmission | null) => setCaptchaSubmission(value), []);
   const pending = requestMutation.isPending || resetMutation.isPending;
   const options = optionsQuery.data;
   const captchaRequired = options?.captchaEnabled !== false;
+  const captchaMode = normalizeAuthCaptchaMode(options?.captchaMode);
+  const captchaFields = authCaptchaSubmissionFields(captchaSubmission);
   const canRequest = !!options?.enabled && options.available;
 
   const submitRequest = (event: React.FormEvent) => {
@@ -119,12 +128,12 @@ export default function PasswordResetDialog(props: {
       setError("请输入用户名或邮箱");
       return;
     }
-    if (captchaRequired && !capToken) {
-      setError("请先完成人机验证");
+    if (captchaRequired && Object.keys(captchaFields).length === 0) {
+      setError(captchaMode === "image" ? "请输入图片中的验证码" : "请先完成人机验证");
       return;
     }
     setError("");
-    requestMutation.mutate({ identifier: identifier.trim(), capToken: captchaRequired ? capToken : undefined });
+    requestMutation.mutate({ identifier: identifier.trim(), ...(captchaRequired ? captchaFields : {}) });
   };
 
   const submitReset = (event: React.FormEvent) => {
@@ -242,7 +251,7 @@ export default function PasswordResetDialog(props: {
                     disabled={pending}
                   />
                 </div>
-                {captchaRequired ? renderCaptcha({ resetKey: captchaResetKey, disabled: pending, onToken: handleCaptchaToken }) : null}
+                {captchaRequired ? renderCaptcha({ mode: captchaMode, resetKey: captchaResetKey, disabled: pending, onChange: handleCaptchaChange }) : null}
               </>
             )}
             {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}

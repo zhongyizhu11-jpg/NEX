@@ -113,6 +113,8 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SlidingTabsList, type SlidingTabItem } from "@/components/ui/sliding-tabs";
 import { useCompactLayout } from "@/hooks/useCompactLayout";
+import { TableColumnResizeHandle, TableColumnSettingsMenu, tableColumnsMinWidth, useTableColumnSettings, type TableColumnMeta } from "@/components/TableColumnSettings";
+import type { ResolvedTableColumn } from "@shared/uiPreferences";
 import { SearchToggle } from "@/components/ListControls";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import DataSectionLoading from "@/components/DataSectionLoading";
@@ -153,7 +155,7 @@ import {
   Wifi,
 } from "lucide-react";
 import type { GlobeMethods } from "react-globe.gl";
-import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useStableRows } from "@/lib/stableRows";
 import { toast } from "sonner";
 import { useSearchIdParam } from "@/features/links/lineLinks";
@@ -1380,6 +1382,44 @@ const SortableHostDsItem = memo(function SortableHostDsItem({
   );
 });
 
+/*
+  主机列表视图的列（上游 2.3.287 的「列设置」）：显示哪些、什么顺序、多宽按账号存（shared/uiPreferences.ts）。
+  标准和精简两张表的列不完全一样（精简多一列「系统 · Agent」，标准多一列「系统累计」），存在同一份偏好里，
+  哪张表没有的列就忽略。名称、操作两列必须显示，钉在头尾 —— 标准表里它们还是左右冻结列。
+  defaultWidth 是没拖过时 <col> 的宽度（标准表中间四列按剩下的宽度分，所以是 calc）；basis 是算表格最小宽度用的像素数。
+*/
+type HostTableColumnMeta = TableColumnMeta & { defaultWidth: number | string; basis: number };
+const HOST_TABLE_COLUMNS_STANDARD: HostTableColumnMeta[] = [
+  { key: "name", label: "设备名称", required: true, pin: "start", minWidth: 200, defaultWidth: 320, basis: 320 },
+  { key: "runtime", label: "运行信息", minWidth: 96, defaultWidth: 128, basis: 128 },
+  { key: "resources", label: "资源", minWidth: 160, defaultWidth: "calc(25% + 5px)", basis: 340 },
+  { key: "traffic", label: "累计流量", minWidth: 96, defaultWidth: "calc(25% - 191px)", basis: 144 },
+  { key: "realtime", label: "实时网络", minWidth: 96, defaultWidth: "calc(25% - 191px)", basis: 144 },
+  { key: "systemTotal", label: "系统累计", minWidth: 96, defaultWidth: "calc(25% - 191px)", basis: 144 },
+  { key: "actions", label: "操作", required: true, pin: "end", minWidth: 120, defaultWidth: 120, basis: 120 },
+];
+/* 精简的表：七列合计 1130，table-fixed 下按比例缩放，1366 宽不横滚（最小宽度按 1000 / 1130 缩） */
+const HOST_TABLE_COLUMNS_COMPACT: HostTableColumnMeta[] = [
+  { key: "name", label: "主机", required: true, pin: "start", minWidth: 140, defaultWidth: 240, basis: 240 },
+  { key: "system", label: "系统 · Agent", minWidth: 80, defaultWidth: 140, basis: 140 },
+  { key: "runtime", label: "在线 · 到期", minWidth: 80, defaultWidth: 120, basis: 120 },
+  { key: "resources", label: "资源", minWidth: 120, defaultWidth: 200, basis: 200 },
+  { key: "traffic", label: "累计流量", minWidth: 96, defaultWidth: 150, basis: 150 },
+  { key: "realtime", label: "实时网络", minWidth: 96, defaultWidth: 130, basis: 130 },
+  { key: "actions", label: "操作", required: true, pin: "end", minWidth: 120, defaultWidth: 150, basis: 150 },
+];
+const HOST_TABLE_MIN_WIDTH_RATIO = { standard: 1, compact: 1000 / 1130 } as const;
+
+function renderHostTableCells(columns: readonly ResolvedTableColumn[], cells: Record<string, ReactNode>) {
+  return columns.map((column) => cells[column.key] ?? null);
+}
+
+/** 冻结列拖过宽度：盖掉类名里写死的 w / min-w / max-w。 */
+function hostFrozenColumnStyle(columns: readonly ResolvedTableColumn[], key: string): CSSProperties | undefined {
+  const width = columns.find((column) => column.key === key)?.width;
+  return width ? { width, minWidth: width, maxWidth: width } : undefined;
+}
+
 const HostTableRow = memo(function HostTableRow({
   host,
   latestMetric,
@@ -1392,6 +1432,7 @@ const HostTableRow = memo(function HostTableRow({
   sortDisabled,
   sortBusy,
   dense = false,
+  columns,
 }: {
   host: any;
   latestMetric: any;
@@ -1407,6 +1448,8 @@ const HostTableRow = memo(function HostTableRow({
   clockMinute: number;
   /** 精简布局的表：一行 40px 左右，七列，不冻结、不横滚（和规则表同一密度） */
   dense?: boolean;
+  /** 列设置（components/TableColumnSettings.tsx）落下来的可见列，按显示顺序；数组按内容记住，不会每次都变。 */
+  columns: readonly ResolvedTableColumn[];
 }) {
   const agentUpgradeTimedOut = isAgentUpgradeTimedOut(host);
   const agentNeedsUpdate = isAgentVersionBehind(host.agentVersion, latestAgentVersion);
@@ -1451,74 +1494,90 @@ const HostTableRow = memo(function HostTableRow({
         isDropTarget && "ring-1 ring-primary/45",
       )}
     >
-      <TableCell className="px-3 py-2">
-        <div className="flex min-w-0 items-center gap-2">
-          {sortingEnabled && (
-            <SortableDragHandle dragHandleProps={handleProps} visible={isDragging} busy={sortBusy} className="shrink-0" />
-          )}
-          <div className="min-w-0 flex-1">
-            <div className="flex min-w-0 items-center gap-1.5">
-              <HostListStatusBadge host={host} />
-              <span className="min-w-0 truncate font-medium" title={hostRuntimeTitle}>{host.name}</span>
-            </div>
-            <div className="flex min-w-0 items-center gap-1.5 text-[11px] leading-4 text-muted-foreground" title={extraAddresses.extra > 0 ? extraAddresses.title : primaryAddressText}>
-              <span className="min-w-0 truncate font-mono">{primaryAddressText}</span>
-              {extraAddresses.extra > 0 ? <span className="shrink-0">+{extraAddresses.extra}</span> : null}
-              {extraAddresses.warnings.length > 0 ? <span className="shrink-0 text-[var(--fx-warn-text)]" title={extraAddresses.warnings.join("\n")}>主 IP 需确认</span> : null}
-              <HostRegionBadge host={host} compact />
+      {renderHostTableCells(columns, {
+        name: (
+        <TableCell key="name" className="px-3 py-2">
+          <div className="flex min-w-0 items-center gap-2">
+            {sortingEnabled && (
+              <SortableDragHandle dragHandleProps={handleProps} visible={isDragging} busy={sortBusy} className="shrink-0" />
+            )}
+            <div className="min-w-0 flex-1">
+              <div className="flex min-w-0 items-center gap-1.5">
+                <HostListStatusBadge host={host} />
+                <span className="min-w-0 truncate font-medium" title={hostRuntimeTitle}>{host.name}</span>
+              </div>
+              <div className="flex min-w-0 items-center gap-1.5 text-[11px] leading-4 text-muted-foreground" title={extraAddresses.extra > 0 ? extraAddresses.title : primaryAddressText}>
+                <span className="min-w-0 truncate font-mono">{primaryAddressText}</span>
+                {extraAddresses.extra > 0 ? <span className="shrink-0">+{extraAddresses.extra}</span> : null}
+                {extraAddresses.warnings.length > 0 ? <span className="shrink-0 text-[var(--fx-warn-text)]" title={extraAddresses.warnings.join("\n")}>主 IP 需确认</span> : null}
+                <HostRegionBadge host={host} compact />
+              </div>
             </div>
           </div>
-        </div>
-      </TableCell>
-      <TableCell className="px-3 py-2">
-        <div className="flex min-w-0 flex-wrap items-center gap-1 text-[11px] text-muted-foreground">
-          {hostOs.label ? <span className="truncate" title={hostOs.full}>{hostOs.label}</span> : <span>--</span>}
-          {host.agentVersion && <span className="font-mono" title="Agent 版本">v{host.agentVersion}</span>}
-          {agentNeedsUpdate && <span className="text-[var(--fx-warn-text)]">新版本</span>}
-          <FxpRuntimeBadge host={host} className="h-4 px-1 text-[11px] leading-none" />
-          {host.agentUpgradeRequested && (
-            <span className={agentUpgradeTimedOut ? "text-destructive" : "text-primary"}>{agentUpgradeTimedOut ? "升级失败" : "升级中"}</span>
-          )}
-        </div>
-      </TableCell>
-      <TableCell className="whitespace-nowrap px-3 py-2 text-[11px] tabular-nums text-muted-foreground">
-        <span title={uptimeTitle}>{uptimeText}</span>
-        <span className="mx-1 opacity-50">·</span>
-        <span className={hostRemainingClass(remainingDays)} title={expiryTitle}>{remainingDays}</span>
-      </TableCell>
-      <TableCell className="whitespace-nowrap px-3 py-2 text-[11px] tabular-nums">
-        <span className="text-muted-foreground">CPU </span><span className={pctClass(latestMetric?.cpuUsage)} title={cpuTitle || undefined}>{pct(latestMetric?.cpuUsage)}</span>
-        <span className="mx-1.5 text-muted-foreground opacity-50">·</span>
-        <span className="text-muted-foreground">内存 </span><span className={pctClass(latestMetric?.memoryUsage)} title={memoryDetail}>{pct(latestMetric?.memoryUsage)}</span>
-        <span className="mx-1.5 text-muted-foreground opacity-50">·</span>
-        <span className="text-muted-foreground">磁盘 </span><span className={pctClass(latestMetric?.diskUsage)} title={diskDetail}>{pct(latestMetric?.diskUsage)}</span>
-      </TableCell>
-      <TableCell className="whitespace-nowrap px-3 py-2 text-[11px] tabular-nums">
-        <span className="text-[var(--fx-flow-in)]" title={`累计入向：${formatBytes(Number(traffic?.bytesIn || 0))}`}>↓ {formatBytes(Number(traffic?.bytesIn || 0))}</span>
-        <span className="mx-1.5 text-muted-foreground opacity-50">·</span>
-        <span className="text-[var(--fx-flow-out)]" title={`累计出向：${formatBytes(Number(traffic?.bytesOut || 0))}`}>↑ {formatBytes(Number(traffic?.bytesOut || 0))}</span>
-      </TableCell>
-      <TableCell className="whitespace-nowrap px-3 py-2 text-[11px] tabular-nums text-muted-foreground">
-        <span title="实时入向">↓ {formatOptionalBytesPerSecond(latestMetric?.networkSpeedIn)}</span>
-        <span className="mx-1.5 opacity-50">·</span>
-        <span title="实时出向">↑ {formatOptionalBytesPerSecond(latestMetric?.networkSpeedOut)}</span>
-      </TableCell>
-      <TableCell className="px-2 py-2 text-right">
-        <HostActionButtons
-          host={host}
-          onEdit={actions.edit}
-          onDelete={actions.remove}
-          onUpgrade={actions.upgrade}
-          onResetTraffic={isAdmin ? actions.resetTraffic : undefined}
-          onCorrectTraffic={isAdmin ? actions.correctTraffic : undefined}
-          onEditBilling={isAdmin ? actions.editBilling : undefined}
-          onViewProbeLatency={actions.viewProbeLatency}
-          resetTrafficPending={resetTrafficPending}
-          canUpgrade={isAdmin}
-          className="flex items-center justify-end gap-0.5"
-          buttonClassName="h-7 w-7"
-        />
-      </TableCell>
+        </TableCell>
+        ),
+        system: (
+        <TableCell key="system" className="px-3 py-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-1 text-[11px] text-muted-foreground">
+            {hostOs.label ? <span className="truncate" title={hostOs.full}>{hostOs.label}</span> : <span>--</span>}
+            {host.agentVersion && <span className="font-mono" title="Agent 版本">v{host.agentVersion}</span>}
+            {agentNeedsUpdate && <span className="text-[var(--fx-warn-text)]">新版本</span>}
+            <FxpRuntimeBadge host={host} className="h-4 px-1 text-[11px] leading-none" />
+            {host.agentUpgradeRequested && (
+              <span className={agentUpgradeTimedOut ? "text-destructive" : "text-primary"}>{agentUpgradeTimedOut ? "升级失败" : "升级中"}</span>
+            )}
+          </div>
+        </TableCell>
+        ),
+        runtime: (
+        <TableCell key="runtime" className="whitespace-nowrap px-3 py-2 text-[11px] tabular-nums text-muted-foreground">
+          <span title={uptimeTitle}>{uptimeText}</span>
+          <span className="mx-1 opacity-50">·</span>
+          <span className={hostRemainingClass(remainingDays)} title={expiryTitle}>{remainingDays}</span>
+        </TableCell>
+        ),
+        resources: (
+        <TableCell key="resources" className="whitespace-nowrap px-3 py-2 text-[11px] tabular-nums">
+          <span className="text-muted-foreground">CPU </span><span className={pctClass(latestMetric?.cpuUsage)} title={cpuTitle || undefined}>{pct(latestMetric?.cpuUsage)}</span>
+          <span className="mx-1.5 text-muted-foreground opacity-50">·</span>
+          <span className="text-muted-foreground">内存 </span><span className={pctClass(latestMetric?.memoryUsage)} title={memoryDetail}>{pct(latestMetric?.memoryUsage)}</span>
+          <span className="mx-1.5 text-muted-foreground opacity-50">·</span>
+          <span className="text-muted-foreground">磁盘 </span><span className={pctClass(latestMetric?.diskUsage)} title={diskDetail}>{pct(latestMetric?.diskUsage)}</span>
+        </TableCell>
+        ),
+        traffic: (
+        <TableCell key="traffic" className="whitespace-nowrap px-3 py-2 text-[11px] tabular-nums">
+          <span className="text-[var(--fx-flow-in)]" title={`累计入向：${formatBytes(Number(traffic?.bytesIn || 0))}`}>↓ {formatBytes(Number(traffic?.bytesIn || 0))}</span>
+          <span className="mx-1.5 text-muted-foreground opacity-50">·</span>
+          <span className="text-[var(--fx-flow-out)]" title={`累计出向：${formatBytes(Number(traffic?.bytesOut || 0))}`}>↑ {formatBytes(Number(traffic?.bytesOut || 0))}</span>
+        </TableCell>
+        ),
+        realtime: (
+        <TableCell key="realtime" className="whitespace-nowrap px-3 py-2 text-[11px] tabular-nums text-muted-foreground">
+          <span title="实时入向">↓ {formatOptionalBytesPerSecond(latestMetric?.networkSpeedIn)}</span>
+          <span className="mx-1.5 opacity-50">·</span>
+          <span title="实时出向">↑ {formatOptionalBytesPerSecond(latestMetric?.networkSpeedOut)}</span>
+        </TableCell>
+        ),
+        actions: (
+        <TableCell key="actions" className="px-2 py-2 text-right">
+          <HostActionButtons
+            host={host}
+            onEdit={actions.edit}
+            onDelete={actions.remove}
+            onUpgrade={actions.upgrade}
+            onResetTraffic={isAdmin ? actions.resetTraffic : undefined}
+            onCorrectTraffic={isAdmin ? actions.correctTraffic : undefined}
+            onEditBilling={isAdmin ? actions.editBilling : undefined}
+            onViewProbeLatency={actions.viewProbeLatency}
+            resetTrafficPending={resetTrafficPending}
+            canUpgrade={isAdmin}
+            className="flex items-center justify-end gap-0.5"
+            buttonClassName="h-7 w-7"
+          />
+        </TableCell>
+        ),
+      })}
     </TableRow>
       ) : (
     <TableRow
@@ -1529,119 +1588,135 @@ const HostTableRow = memo(function HostTableRow({
         isDropTarget && "ring-1 ring-primary/45",
       )}
     >
-      <TableCell className="host-table-frozen-cell host-table-frozen-left sticky left-0 z-20 w-[320px] min-w-[320px] max-w-[320px] border-r border-border/60 bg-card px-3 py-2.5">
-        <div className="flex min-w-0 items-center gap-2">
-          {sortingEnabled && (
-            <SortableDragHandle dragHandleProps={handleProps} visible={isDragging} busy={sortBusy} className="shrink-0" />
-          )}
-          <HostOsAvatar os={hostOs} size="sm" />
-          <div className="min-w-0 flex-1 space-y-0.5">
-            <div className="flex min-w-0 items-center gap-1.5">
-              <HostListStatusBadge host={host} />
-              <span className="min-w-0 truncate font-semibold" title={hostRuntimeTitle}>{host.name}</span>
-            </div>
-            <div className="flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-[11px] text-muted-foreground">
-              {hostOs.label && (
-                <span className="shrink-0 rounded border border-border/50 bg-muted/35 px-1.5 py-0.5 text-[11px] font-medium leading-none text-foreground/80" title={hostOs.full}>
-                  {hostOs.label}
-                </span>
-              )}
-              {host.agentVersion && (
-                <span className="shrink-0 rounded border border-border/50 bg-muted/35 px-1.5 py-0.5 font-mono text-[11px] leading-none text-muted-foreground" title="Agent 版本">
-                  v{host.agentVersion}
-                </span>
-              )}
-              {agentNeedsUpdate && (
-                <Badge variant="outline" className="h-4 shrink-0 border-[color-mix(in_srgb,var(--fx-warn)_30%,transparent)] px-1 py-0 text-[11px] leading-none text-[var(--fx-warn-text)]">
-                  新版本
-                </Badge>
-              )}
-              <FxpRuntimeBadge host={host} className="h-4 px-1 text-[11px] leading-none" />
-              {host.agentUpgradeRequested && (
-                <Badge variant="outline" className={`h-4 shrink-0 px-1 py-0 text-[11px] leading-none ${agentUpgradeTimedOut ? "border-destructive/30 text-destructive" : "border-primary/25 text-primary"}`}>
-                  {agentUpgradeTimedOut ? "升级失败" : "升级中"}
-                </Badge>
-              )}
-              <HostRegionBadge host={host} compact />
-            </div>
-            <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground" title={primaryAddressText}>
-              <RadioTower className="h-3 w-3 shrink-0" />
-              <span className="min-w-0 truncate font-mono">{primaryAddressText}</span>
-            </div>
-            {/* 列表视图的负载放在地区、地址下面；Agent 没报（老版本、没有 /proc/loadavg）就没有这一行 */}
-            {loadAverageText ? (
-              <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground" title="系统平均负载（1 / 5 / 15 分钟），不是百分比：到 CPU 核数才算满">
-                <Gauge className="h-3 w-3 shrink-0" />
-                <span className="shrink-0">负载</span>
-                <span className="min-w-0 truncate font-medium tabular-nums text-foreground">{loadAverageText}</span>
+      {renderHostTableCells(columns, {
+        name: (
+        <TableCell key="name" className="host-table-frozen-cell host-table-frozen-left sticky left-0 z-20 w-[320px] min-w-[320px] max-w-[320px] border-r border-border/60 bg-card px-3 py-2.5" style={hostFrozenColumnStyle(columns, "name")}>
+          <div className="flex min-w-0 items-center gap-2">
+            {sortingEnabled && (
+              <SortableDragHandle dragHandleProps={handleProps} visible={isDragging} busy={sortBusy} className="shrink-0" />
+            )}
+            <HostOsAvatar os={hostOs} size="sm" />
+            <div className="min-w-0 flex-1 space-y-0.5">
+              <div className="flex min-w-0 items-center gap-1.5">
+                <HostListStatusBadge host={host} />
+                <span className="min-w-0 truncate font-semibold" title={hostRuntimeTitle}>{host.name}</span>
               </div>
-            ) : null}
+              <div className="flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-[11px] text-muted-foreground">
+                {hostOs.label && (
+                  <span className="shrink-0 rounded border border-border/50 bg-muted/35 px-1.5 py-0.5 text-[11px] font-medium leading-none text-foreground/80" title={hostOs.full}>
+                    {hostOs.label}
+                  </span>
+                )}
+                {host.agentVersion && (
+                  <span className="shrink-0 rounded border border-border/50 bg-muted/35 px-1.5 py-0.5 font-mono text-[11px] leading-none text-muted-foreground" title="Agent 版本">
+                    v{host.agentVersion}
+                  </span>
+                )}
+                {agentNeedsUpdate && (
+                  <Badge variant="outline" className="h-4 shrink-0 border-[color-mix(in_srgb,var(--fx-warn)_30%,transparent)] px-1 py-0 text-[11px] leading-none text-[var(--fx-warn-text)]">
+                    新版本
+                  </Badge>
+                )}
+                <FxpRuntimeBadge host={host} className="h-4 px-1 text-[11px] leading-none" />
+                {host.agentUpgradeRequested && (
+                  <Badge variant="outline" className={`h-4 shrink-0 px-1 py-0 text-[11px] leading-none ${agentUpgradeTimedOut ? "border-destructive/30 text-destructive" : "border-primary/25 text-primary"}`}>
+                    {agentUpgradeTimedOut ? "升级失败" : "升级中"}
+                  </Badge>
+                )}
+                <HostRegionBadge host={host} compact />
+              </div>
+              <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground" title={primaryAddressText}>
+                <RadioTower className="h-3 w-3 shrink-0" />
+                <span className="min-w-0 truncate font-mono">{primaryAddressText}</span>
+              </div>
+              {/* 列表视图的负载放在地区、地址下面；Agent 没报（老版本、没有 /proc/loadavg）就没有这一行 */}
+              {loadAverageText ? (
+                <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground" title="系统平均负载（1 / 5 / 15 分钟），不是百分比：到 CPU 核数才算满">
+                  <Gauge className="h-3 w-3 shrink-0" />
+                  <span className="shrink-0">负载</span>
+                  <span className="min-w-0 truncate font-medium tabular-nums text-foreground">{loadAverageText}</span>
+                </div>
+              ) : null}
+            </div>
           </div>
-        </div>
-      </TableCell>
-      <TableCell className="w-[128px] whitespace-nowrap py-2.5 text-center">
-        <div className="flex flex-col items-center justify-center gap-1.5 text-center">
-          <div className="flex items-center justify-center gap-1.5 text-[11px] font-medium tabular-nums text-muted-foreground" title={uptimeTitle}>
-            <Clock className="h-3.5 w-3.5 shrink-0" />
-            <span>{uptimeText}</span>
+        </TableCell>
+        ),
+        runtime: (
+        <TableCell key="runtime" className="w-[128px] whitespace-nowrap py-2.5 text-center">
+          <div className="flex flex-col items-center justify-center gap-1.5 text-center">
+            <div className="flex items-center justify-center gap-1.5 text-[11px] font-medium tabular-nums text-muted-foreground" title={uptimeTitle}>
+              <Clock className="h-3.5 w-3.5 shrink-0" />
+              <span>{uptimeText}</span>
+            </div>
+            <div className="flex items-center justify-center gap-1.5 text-[11px] font-semibold tabular-nums" title={expiryTitle}>
+              <CalendarDays className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <span className={hostRemainingClass(remainingDays)}>{remainingDays}</span>
+            </div>
           </div>
-          <div className="flex items-center justify-center gap-1.5 text-[11px] font-semibold tabular-nums" title={expiryTitle}>
-            <CalendarDays className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-            <span className={hostRemainingClass(remainingDays)}>{remainingDays}</span>
-          </div>
-        </div>
-      </TableCell>
-      <TableCell className="px-3 py-2.5">
-        <HostListResourceBundle
-          cpuValue={latestMetric?.cpuUsage}
-          cpuDetail={cpuTitle || undefined}
-          memoryValue={latestMetric?.memoryUsage}
-          memoryDetail={memoryDetail}
-          diskValue={latestMetric?.diskUsage}
-          diskDetail={diskDetail}
-          isOnline={!!host.isOnline}
-        />
-      </TableCell>
-      <TableCell className="px-3 py-2.5">
-        <HostListFlowPair
-          inValue={formatBytes(Number(traffic?.bytesIn || 0))}
-          outValue={formatBytes(Number(traffic?.bytesOut || 0))}
-          inTitle={`累计入向：${formatBytes(Number(traffic?.bytesIn || 0))}`}
-          outTitle={`累计出向：${formatBytes(Number(traffic?.bytesOut || 0))}`}
-        />
-      </TableCell>
-      <TableCell className="px-3 py-2.5">
-        <HostListFlowPair
-          inValue={formatOptionalBytesPerSecond(latestMetric?.networkSpeedIn)}
-          outValue={formatOptionalBytesPerSecond(latestMetric?.networkSpeedOut)}
-          inTitle="实时入向"
-          outTitle="实时出向"
-        />
-      </TableCell>
-      <TableCell className="px-3 py-2.5">
-        <HostListFlowPair
-          inValue={formatOptionalBytes(latestMetric?.networkIn)}
-          outValue={formatOptionalBytes(latestMetric?.networkOut)}
-          inTitle={systemNetworkTotalTitle(latestMetric)}
-          outTitle={systemNetworkTotalTitle(latestMetric)}
-        />
-      </TableCell>
-      <TableCell className="host-table-frozen-cell host-table-frozen-right sticky right-0 z-20 w-[120px] min-w-[120px] max-w-[120px] border-l border-border/60 bg-card px-2 py-2.5 text-right">
-        <HostActionButtons
-          host={host}
-          onEdit={actions.edit}
-          onDelete={actions.remove}
-          onUpgrade={actions.upgrade}
-          onResetTraffic={isAdmin ? actions.resetTraffic : undefined}
-          onCorrectTraffic={isAdmin ? actions.correctTraffic : undefined}
-          onEditBilling={isAdmin ? actions.editBilling : undefined}
-          onViewProbeLatency={actions.viewProbeLatency}
-          resetTrafficPending={resetTrafficPending}
-          canUpgrade={isAdmin}
-          className="flex items-center justify-end gap-0.5"
-          buttonClassName="h-8 w-8"
-        />
-      </TableCell>
+        </TableCell>
+        ),
+        resources: (
+        <TableCell key="resources" className="px-3 py-2.5">
+          <HostListResourceBundle
+            cpuValue={latestMetric?.cpuUsage}
+            cpuDetail={cpuTitle || undefined}
+            memoryValue={latestMetric?.memoryUsage}
+            memoryDetail={memoryDetail}
+            diskValue={latestMetric?.diskUsage}
+            diskDetail={diskDetail}
+            isOnline={!!host.isOnline}
+          />
+        </TableCell>
+        ),
+        traffic: (
+        <TableCell key="traffic" className="px-3 py-2.5">
+          <HostListFlowPair
+            inValue={formatBytes(Number(traffic?.bytesIn || 0))}
+            outValue={formatBytes(Number(traffic?.bytesOut || 0))}
+            inTitle={`累计入向：${formatBytes(Number(traffic?.bytesIn || 0))}`}
+            outTitle={`累计出向：${formatBytes(Number(traffic?.bytesOut || 0))}`}
+          />
+        </TableCell>
+        ),
+        realtime: (
+        <TableCell key="realtime" className="px-3 py-2.5">
+          <HostListFlowPair
+            inValue={formatOptionalBytesPerSecond(latestMetric?.networkSpeedIn)}
+            outValue={formatOptionalBytesPerSecond(latestMetric?.networkSpeedOut)}
+            inTitle="实时入向"
+            outTitle="实时出向"
+          />
+        </TableCell>
+        ),
+        systemTotal: (
+        <TableCell key="systemTotal" className="px-3 py-2.5">
+          <HostListFlowPair
+            inValue={formatOptionalBytes(latestMetric?.networkIn)}
+            outValue={formatOptionalBytes(latestMetric?.networkOut)}
+            inTitle={systemNetworkTotalTitle(latestMetric)}
+            outTitle={systemNetworkTotalTitle(latestMetric)}
+          />
+        </TableCell>
+        ),
+        actions: (
+        <TableCell key="actions" className="host-table-frozen-cell host-table-frozen-right sticky right-0 z-20 w-[120px] min-w-[120px] max-w-[120px] border-l border-border/60 bg-card px-2 py-2.5 text-right">
+          <HostActionButtons
+            host={host}
+            onEdit={actions.edit}
+            onDelete={actions.remove}
+            onUpgrade={actions.upgrade}
+            onResetTraffic={isAdmin ? actions.resetTraffic : undefined}
+            onCorrectTraffic={isAdmin ? actions.correctTraffic : undefined}
+            onEditBilling={isAdmin ? actions.editBilling : undefined}
+            onViewProbeLatency={actions.viewProbeLatency}
+            resetTrafficPending={resetTrafficPending}
+            canUpgrade={isAdmin}
+            className="flex items-center justify-end gap-0.5"
+            buttonClassName="h-8 w-8"
+          />
+        </TableCell>
+        ),
+      })}
     </TableRow>
       )}
     </SortableItem>
@@ -1665,6 +1740,51 @@ function HostsContent() {
     就是在看不见的地方跑一个 3D 地球、列表却是空的。手机上按精简卡片显示，记住的选择不动。
   */
   const compactLayout = useCompactLayout();
+  const hostColumnDefinitions = compactLayout ? HOST_TABLE_COLUMNS_COMPACT : HOST_TABLE_COLUMNS_STANDARD;
+  const hostColumnSettings = useTableColumnSettings("hosts", hostColumnDefinitions);
+  const hostColumnMeta = useMemo(() => new Map(hostColumnDefinitions.map((column) => [column.key, column])), [hostColumnDefinitions]);
+  const hostTableMinWidth = Math.round(tableColumnsMinWidth(
+    hostColumnSettings.visibleColumns,
+    (key) => hostColumnMeta.get(key)?.basis ?? 120,
+  ) * HOST_TABLE_MIN_WIDTH_RATIO[compactLayout ? "compact" : "standard"]);
+  // 表头每一列：positioned = 本身就是 sticky（冻结列），不要再加 relative 把 sticky 盖掉
+  const hostTableHeads: Record<string, { content: ReactNode; className: string; positioned?: boolean }> = compactLayout ? {
+    name: { content: "主机", className: "whitespace-nowrap" },
+    system: { content: "系统 · Agent", className: "whitespace-nowrap" },
+    runtime: { content: "在线 · 到期", className: "whitespace-nowrap" },
+    resources: { content: "资源", className: "whitespace-nowrap" },
+    traffic: { content: "累计流量", className: "whitespace-nowrap" },
+    realtime: { content: "实时网络", className: "whitespace-nowrap" },
+    actions: { content: "操作", className: "px-2 text-right" },
+  } : {
+    name: {
+      content: "设备名称",
+      positioned: true,
+      className: "host-table-frozen-cell host-table-frozen-left sticky left-0 z-30 w-[320px] min-w-[320px] max-w-[320px] border-r border-border/60 bg-card",
+    },
+    runtime: { content: "运行信息", className: "w-[128px] whitespace-nowrap text-center" },
+    resources: {
+      content: <span className="inline-flex items-center gap-1.5"><Gauge className="h-3.5 w-3.5" />资源</span>,
+      className: "min-w-[204px] whitespace-nowrap",
+    },
+    traffic: {
+      content: <span className="inline-flex items-center gap-1.5"><ArrowRightLeft className="h-3.5 w-3.5" />累计流量</span>,
+      className: "w-[128px] whitespace-nowrap px-3 text-center",
+    },
+    realtime: {
+      content: <span className="inline-flex items-center gap-1.5"><Wifi className="h-3.5 w-3.5" />实时网络</span>,
+      className: "w-[128px] whitespace-nowrap px-3 text-center",
+    },
+    systemTotal: {
+      content: <span className="inline-flex items-center gap-1.5"><Activity className="h-3.5 w-3.5" />系统累计</span>,
+      className: "w-[128px] whitespace-nowrap px-3 text-center",
+    },
+    actions: {
+      content: "操作",
+      positioned: true,
+      className: "host-table-frozen-cell host-table-frozen-right sticky right-0 z-30 w-[120px] min-w-[120px] max-w-[120px] border-l border-border/60 bg-card px-2 text-right",
+    },
+  };
   /*
     精简布局（桌面）：主机就是一张表（用户 2026-10-21 定的「条状」）；记住的卡片视图不动，
     回到标准布局还是卡片。地图两种照旧可切。手机上没有表，走两行的列表行（compact.css）。
@@ -2854,6 +2974,7 @@ function HostsContent() {
                 都是管理员的事。
               */}
               {user?.role === "admin" ? (overflowInHeader ? hostOverflowMenu("outline") : null) : null}
+              {viewMode === "table" && !isBelowSm ? <TableColumnSettingsMenu settings={hostColumnSettings} /> : null}
               <ViewModeToggle
                 value={viewMode}
                 onChange={handleViewModeChange}
@@ -3089,64 +3210,33 @@ function HostsContent() {
           ) : (
             <Card className="host-table-shell hidden overflow-hidden border-border bg-card sm:block">
               <CardContent className="p-0">
-                <Table className={cn("host-management-table w-full table-fixed", compactLayout ? "fx-hosts-table-dense min-w-[1000px]" : "min-w-[1340px]")}>
-                  {compactLayout ? (
-                    /* 精简的表：七列合计 1130，table-fixed 下按比例缩放，1366 宽不横滚 */
-                    <colgroup>
-                      <col style={{ width: 240 }} />
-                      <col style={{ width: 140 }} />
-                      <col style={{ width: 120 }} />
-                      <col style={{ width: 200 }} />
-                      <col style={{ width: 150 }} />
-                      <col style={{ width: 130 }} />
-                      <col style={{ width: 150 }} />
-                    </colgroup>
-                  ) : (
+                <Table
+                  className={cn("host-management-table w-full table-fixed", compactLayout && "fx-hosts-table-dense")}
+                  style={{ minWidth: hostTableMinWidth }}
+                >
                   <colgroup>
-                    <col className="w-[320px]" />
-                    <col className="w-[128px]" />
-                    {/* The center columns divide only the width left after the pinned columns. */}
-                    <col style={{ width: "calc(25% + 5px)" }} />
-                    <col style={{ width: "calc(25% - 191px)" }} />
-                    <col style={{ width: "calc(25% - 191px)" }} />
-                    <col style={{ width: "calc(25% - 191px)" }} />
-                    <col className="w-[120px]" />
+                    {hostColumnSettings.visibleColumns.map((column) => (
+                      <col key={column.key} style={{ width: column.width ?? hostColumnMeta.get(column.key)?.defaultWidth }} />
+                    ))}
                   </colgroup>
-                  )}
                   <TableHeader>
-                    {compactLayout ? (
-                      <TableRow className="hover:bg-transparent">
-                        <TableHead className="whitespace-nowrap">主机</TableHead>
-                        <TableHead className="whitespace-nowrap">系统 · Agent</TableHead>
-                        <TableHead className="whitespace-nowrap">在线 · 到期</TableHead>
-                        <TableHead className="whitespace-nowrap">资源</TableHead>
-                        <TableHead className="whitespace-nowrap">累计流量</TableHead>
-                        <TableHead className="whitespace-nowrap">实时网络</TableHead>
-                        <TableHead className="px-2 text-right">操作</TableHead>
-                      </TableRow>
-                    ) : (
                     <TableRow className="hover:bg-transparent">
-                      <TableHead className="host-table-frozen-cell host-table-frozen-left sticky left-0 z-30 w-[320px] min-w-[320px] max-w-[320px] border-r border-border/60 bg-card">
-                        设备名称
-                      </TableHead>
-                      <TableHead className="w-[128px] whitespace-nowrap text-center">运行信息</TableHead>
-                      <TableHead className="min-w-[204px] whitespace-nowrap">
-                        <span className="inline-flex items-center gap-1.5"><Gauge className="h-3.5 w-3.5" />{"\u8d44\u6e90"}</span>
-                      </TableHead>
-                      <TableHead className="w-[128px] whitespace-nowrap px-3 text-center">
-                        <span className="inline-flex items-center gap-1.5"><ArrowRightLeft className="h-3.5 w-3.5" />累计流量</span>
-                      </TableHead>
-                      <TableHead className="w-[128px] whitespace-nowrap px-3 text-center">
-                        <span className="inline-flex items-center gap-1.5"><Wifi className="h-3.5 w-3.5" />实时网络</span>
-                      </TableHead>
-                      <TableHead className="w-[128px] whitespace-nowrap px-3 text-center">
-                        <span className="inline-flex items-center gap-1.5"><Activity className="h-3.5 w-3.5" />{"\u7cfb\u7edf\u7d2f\u8ba1"}</span>
-                      </TableHead>
-                      <TableHead className="host-table-frozen-cell host-table-frozen-right sticky right-0 z-30 w-[120px] min-w-[120px] max-w-[120px] border-l border-border/60 bg-card px-2 text-right">
-                        操作
-                      </TableHead>
+                      {hostColumnSettings.visibleColumns.map((column) => {
+                        const head = hostTableHeads[column.key];
+                        if (!head) return null;
+                        const label = hostColumnMeta.get(column.key)?.label ?? column.key;
+                        return (
+                          <TableHead
+                            key={column.key}
+                            className={cn(head.className, !head.positioned && "relative")}
+                            style={column.key === "name" || column.key === "actions" ? hostFrozenColumnStyle(hostColumnSettings.visibleColumns, column.key) : undefined}
+                          >
+                            {head.content}
+                            {column.key !== "actions" ? <TableColumnResizeHandle settings={hostColumnSettings} column={column} label={label} /> : null}
+                          </TableHead>
+                        );
+                      })}
                     </TableRow>
-                    )}
                   </TableHeader>
                   <SortableReorderContext sortable={hostSortable} ids={pagedHostIds} strategy="vertical" restrictToList>
                   <TableBody>
@@ -3165,6 +3255,7 @@ function HostsContent() {
                         sortBusy={hostReorderPending}
                         clockMinute={clockMinute}
                         dense={compactLayout}
+                        columns={hostColumnSettings.visibleColumns}
                       />
                     ))}
                   </TableBody>

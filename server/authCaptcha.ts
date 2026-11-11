@@ -6,6 +6,7 @@ import { Router, type Request, type Response } from "express";
 import { setBoundedMapValue } from "./boundedCache";
 import { ipRateLimitScope } from "./ipRateLimitScope";
 import { clientIp } from "./clientIp";
+import { captchaChallengeAllowed, readAuthCaptchaMode } from "./authCaptchaMode";
 
 export const LOGIN_CAPTCHA_FAILURE_THRESHOLD = 3;
 /**
@@ -391,12 +392,25 @@ function capPurpose(value: unknown): CaptchaPurpose | null {
  */
 export const authCapRouter = Router();
 
+/*
+  管理员选了图片验证码（shared/authCaptchaMode.ts）时，Cap 的挑战和兑换都不开：
+  登录 / 注册反正只认图片答案，再发 Cap 挑战只是给脚本白送一条可刷的路。
+  读设置失败就按默认的点击验证放行 —— 这一步挡不住也不该挡住正常的点击验证。
+*/
+async function capRouteAllowed(res: Response) {
+  const mode = await readAuthCaptchaMode().catch(() => "click" as const);
+  if (captchaChallengeAllowed(mode, "cap")) return true;
+  res.status(409).json({ success: false, error: "CAPTCHA_MODE_MISMATCH" });
+  return false;
+}
+
 authCapRouter.post("/api/auth/cap/:purpose/challenge", async (req: Request, res: Response) => {
   const purpose = capPurpose(req.params.purpose);
   if (!purpose) {
     res.status(404).json({ success: false, error: "Not found" });
     return;
   }
+  if (!(await capRouteAllowed(res))) return;
   try {
     const challenge = await authCaptcha.createCapChallenge(requestIp(req), purpose);
     res.setHeader("Cache-Control", "no-store");
@@ -418,6 +432,7 @@ authCapRouter.post("/api/auth/cap/:purpose/redeem", async (req: Request, res: Re
     res.status(404).json({ success: false, error: "Not found" });
     return;
   }
+  if (!(await capRouteAllowed(res))) return;
   const token = typeof req.body?.token === "string" ? req.body.token.trim() : "";
   const solutions = req.body?.solutions;
   // Challenge tokens are randomHex(25) in Cap.js (50 hexadecimal chars).

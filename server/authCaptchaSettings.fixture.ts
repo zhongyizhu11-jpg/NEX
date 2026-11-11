@@ -28,7 +28,7 @@ try {
   assert.equal((await anonymous.getSettings()).authCaptchaEnabled, true);
   await assert.rejects(auth.register(registration), /CAPTCHA_REQUIRED/);
   for (let i = 0; i < 3; i++) authCaptcha.recordLoginFailure(ip, "user@example.com");
-  assert.deepEqual(await auth.needsCaptcha({ username: "user@example.com" }), { enabled: true, required: true });
+  assert.deepEqual(await auth.needsCaptcha({ username: "user@example.com" }), { enabled: true, required: true, mode: "click" });
   await assert.rejects(auth.login({ username: "user@example.com", password: "test-user-password" }), /CAPTCHA_REQUIRED/);
   await assert.rejects(ordinary.updateSettings({ authCaptchaEnabled: false }), error => (error as any).code === "FORBIDDEN");
   await assert.rejects(anonymous.updateSettings({ authCaptchaEnabled: false }), error => (error as any).code === "UNAUTHORIZED");
@@ -38,7 +38,7 @@ try {
   assert.equal((await auth.emailConfig()).authCaptchaEnabled, false);
   assert.equal((await anonymous.publicInfo()).authCaptchaEnabled, false);
   assert.equal((await anonymous.getSettings()).authCaptchaEnabled, false);
-  assert.deepEqual(await auth.needsCaptcha({ username: "user@example.com" }), { enabled: false, required: false });
+  assert.deepEqual(await auth.needsCaptcha({ username: "user@example.com" }), { enabled: false, required: false, mode: "click" });
   assert.equal((await auth.login({ username: "user@example.com", password: "test-user-password" }) as any).id, userId);
   assert.ok((await auth.register(registration)).id);
 

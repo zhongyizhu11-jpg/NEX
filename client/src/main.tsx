@@ -10,6 +10,7 @@ import { mobileAuth } from "./lib/mobileAuth";
 import { clearPersistedQueryCache, restorePersistedQueryCache, startQueryCachePersistence } from "./lib/queryPersistence";
 import "./index.css";
 import { applyRememberedLayout } from "./components/LayoutLayer";
+import { applyRememberedMotion } from "./lib/uiMotion";
 import { prefetchRoute } from "./pages/routeChunks";
 import { startLayoutProbeIfRequested } from "./lib/layoutProbe";
 import { DATABASE_UNAVAILABLE_MESSAGE } from "@shared/databaseHealth";
@@ -26,6 +27,8 @@ globalThis.fetch = userImpersonation.wrapFetch(globalThis.fetch.bind(globalThis)
 
 // 精简布局：刷新时先按上次记住的挂上，auth.me 回来后 LayoutLayer 再校正
 applyRememberedLayout();
+// 界面动画关着的账号：同样先按本机记住的挂上 <html data-motion="off">，第一帧就不播动画
+applyRememberedMotion();
 
 /*
   界面主题的样式按需下（lib/uiThemeStyles.ts）：index.html 的内联脚本已经按上次记住的那套挂好了

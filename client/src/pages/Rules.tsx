@@ -59,6 +59,8 @@ import { Tabs } from "@/components/ui/tabs";
 import { SlidingTabsList, type SlidingTabItem } from "@/components/ui/sliding-tabs";
 import type { FilterChipItem } from "@/components/ui/filter-chips";
 import { useCompactLayout } from "@/hooks/useCompactLayout";
+import { TableColumnResizeHandle, TableColumnSettingsMenu, useTableColumnSettings, type TableColumnMeta } from "@/components/TableColumnSettings";
+import type { ResolvedTableColumn, TableColumnPreference } from "@shared/uiPreferences";
 import { useUiTheme } from "@/hooks/useUiTheme";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -486,6 +488,39 @@ const RULE_FILTER_RESOURCE_STORAGE_KEY = "forwardx.rules.filterResource";
 const RULE_FILTER_PERSONAL_GROUP_STORAGE_KEY = "forwardx.rules.filterPersonalGroup";
 const RULE_SORT_BY_PERSONAL_GROUP_STORAGE_KEY = "forwardx.rules.sortByPersonalGroup";
 const RULE_TABLE_GROUP_COLUMN_STORAGE_KEY = "forwardx.rules.tableGroupColumn";
+/*
+  规则列表视图的「列设置」（上游 2.3.287，components/TableColumnSettings.tsx）：显示哪些列、顺序、列宽按账号存。
+  key 和下面 ruleTableColumns 里的一一对应（标准 / 精简各有几列不一样，存在同一份偏好里，没有的列忽略）。
+  规则名、操作两列必须显示，钉在头尾。
+*/
+const RULE_TABLE_COLUMN_LABELS: Record<string, string> = {
+  rule: "规则",
+  personalGroups: "分组",
+  resource: "所属资源",
+  entry: "转发入口",
+  exit: "转发出口",
+  protocol: "协议",
+  total: "累计",
+  traffic: "流量",
+  latency: "延迟",
+  enabled: "开关",
+  actions: "操作",
+};
+function ruleTableColumnMeta(keys: string[]): TableColumnMeta[] {
+  return keys.map((key) => ({
+    key,
+    label: RULE_TABLE_COLUMN_LABELS[key] ?? key,
+    required: key === "rule" || key === "actions",
+    pin: key === "rule" ? "start" as const : key === "actions" ? "end" as const : undefined,
+    minWidth: key === "rule" ? 120 : key === "actions" ? 100 : 48,
+  }));
+}
+const RULE_TABLE_COLUMNS_STANDARD = ruleTableColumnMeta(["rule", "personalGroups", "resource", "entry", "exit", "traffic", "latency", "enabled", "actions"]);
+const RULE_TABLE_COLUMNS_COMPACT = ruleTableColumnMeta(["rule", "personalGroups", "resource", "entry", "exit", "protocol", "total", "latency", "actions"]);
+/** 账号上还没存过列设置、本机原来记着「不显示分组列」时，照它来。 */
+const LEGACY_HIDDEN_GROUP_COLUMN_PREFERENCE: TableColumnPreference = { order: [], hidden: ["personalGroups"], widths: {} };
+/** 默认八、九列加起来约 1016px，表格最小宽度原来写死 1000：拖宽、藏列以后按这个比例跟着变。 */
+const RULE_TABLE_MIN_WIDTH_RATIO = 1000 / 1016;
 const EMPTY_PERSONAL_RULE_GROUPS: PersonalRuleGroup[] = [];
 /** 卡片上的分组名拼成一个字符串传给 memo 的卡片（数组每轮都是新的，会让卡片白重画）；分组名里打不出这个字符。 */
 const PERSONAL_GROUP_NAME_SEPARATOR = "\u001f";
@@ -2876,7 +2911,17 @@ function RulesContent() {
     storeString(filterPersonalGroupStorageKey, value === null ? "" : String(value));
   }, [filterPersonalGroupStorageKey]);
   const [ruleSortByGroup, setRuleSortByGroup] = useState(() => getStoredString(RULE_SORT_BY_PERSONAL_GROUP_STORAGE_KEY, "") === "1");
-  const [showRuleGroupColumn, setShowRuleGroupColumn] = useState(() => getStoredString(RULE_TABLE_GROUP_COLUMN_STORAGE_KEY, "1") !== "0");
+  /*
+    列设置按账号存（components/TableColumnSettings.tsx）。「列表显示分组列」原来记在本机：账号上还没存过列设置时，
+    照本机那个值决定分组列显不显示；以后 ··· 菜单里那一项和「列设置」改的是同一份。
+  */
+  const [legacyRuleGroupColumnHidden] = useState(() => getStoredString(RULE_TABLE_GROUP_COLUMN_STORAGE_KEY, "1") === "0");
+  const ruleColumnSettings = useTableColumnSettings(
+    "rules",
+    compactLayout ? RULE_TABLE_COLUMNS_COMPACT : RULE_TABLE_COLUMNS_STANDARD,
+    legacyRuleGroupColumnHidden ? LEGACY_HIDDEN_GROUP_COLUMN_PREFERENCE : null,
+  );
+  const showRuleGroupColumn = ruleColumnSettings.columns.some((column) => column.key === "personalGroups" && column.visible);
   const [ruleGroupManagerOpen, setRuleGroupManagerOpen] = useState(false);
   const previousFilterIdentity = useRef(filterResourceStorageKey);
   useEffect(() => {
@@ -2961,7 +3006,7 @@ function RulesContent() {
   };
   const toggleRuleGroupColumn = () => {
     const next = !showRuleGroupColumn;
-    setShowRuleGroupColumn(next);
+    ruleColumnSettings.toggle("personalGroups", next);
     storeString(RULE_TABLE_GROUP_COLUMN_STORAGE_KEY, next ? "1" : "0");
   };
   const personalGroupNamesOf = (rule: { personalGroupIds?: number[] | null }) => {
@@ -8119,9 +8164,9 @@ function RulesContent() {
     },
     /*
       分组列（上游 2.3.287）：最多画两个，多的写「+N」；表头点一下按分组排序（未分组排最后），再点一下回到原来的顺序。
-      ··· 菜单里能把这一列关掉。
+      ··· 菜单、「列设置」里都能把这一列关掉（显不显示由 ruleColumnSettings 定，这里总是定义着）。
     */
-    ...(showRuleGroupColumn ? [{
+    {
       key: "personalGroups",
       width: compactLayout ? 120 : 140,
       head: (
@@ -8137,7 +8182,7 @@ function RulesContent() {
       ),
       cellClassName: "overflow-hidden",
       cell: (rule) => <RulePersonalGroupBadges groupIds={rule.personalGroupIds} groups={personalGroups} emptyPlaceholder />,
-    } satisfies RuleTableColumn] : []),
+    },
     {
       key: "resource",
       width: compactLayout ? 110 : 150,
@@ -8237,7 +8282,14 @@ function RulesContent() {
       ) : renderRuleActions(rule),
     },
   ];
-  const ruleTableColumnCount = ruleTableColumns.length + (ruleSortingEnabled ? 1 : 0);
+  /* 真正画出来的列：按列设置的顺序、只要显示的那些，拖过的列宽盖掉默认宽度 */
+  const ruleTableColumnByKey = new Map(ruleTableColumns.map((column) => [column.key, column]));
+  const shownRuleTableColumns: (RuleTableColumn & { resolved: ResolvedTableColumn })[] = ruleColumnSettings.visibleColumns.flatMap((resolved) => {
+    const column = ruleTableColumnByKey.get(resolved.key);
+    return column ? [{ ...column, width: resolved.width ?? column.width, resolved }] : [];
+  });
+  const ruleTableColumnCount = shownRuleTableColumns.length + (ruleSortingEnabled ? 1 : 0);
+  const ruleTableMinWidth = Math.round(shownRuleTableColumns.reduce((sum, column) => sum + column.width, ruleSortingEnabled ? 44 : 0) * RULE_TABLE_MIN_WIDTH_RATIO);
   const renderRuleTableRow = (rule: any, sortable?: RuleSortableRenderState) => {
     const supported = isRuleSupported(rule);
     return (
@@ -8262,7 +8314,7 @@ function RulesContent() {
             />
           </TableCell>
         )}
-        {ruleTableColumns.map((column) => (
+        {shownRuleTableColumns.map((column) => (
           <TableCell key={column.key} className={cn("px-3 py-2", column.cellClassName)}>
             {column.cell(rule)}
           </TableCell>
@@ -8510,6 +8562,8 @@ function RulesContent() {
               { value: "globe", label: "3D 流量转发图", icon: Globe, onHover: prefetchReactGlobe },
             ]}
           />
+          {effectiveViewMode === "table" && !isMobile ? <TableColumnSettingsMenu settings={ruleColumnSettings} /> : null}
+
           {overflowInHeader ? ruleOverflowMenu("outline") : null}
           {mergeListControls ? createRuleAction : null}
       </>} />
@@ -8784,16 +8838,21 @@ function RulesContent() {
               <Card className="hidden border-border bg-card sm:block">
                 <CardContent className="p-0">
                   <div className="overflow-x-auto">
-                    <Table className="fx-rules-table table-fixed min-w-[1000px]">
+                    <Table className="fx-rules-table table-fixed" style={{ minWidth: ruleTableMinWidth }}>
                       <colgroup>
                         {ruleSortingEnabled && <col className="w-[44px]" />}
-                        {ruleTableColumns.map((column) => <col key={column.key} style={{ width: column.width }} />)}
+                        {shownRuleTableColumns.map((column) => <col key={column.key} style={{ width: column.width }} />)}
                       </colgroup>
                       <TableHeader>
                         <TableRow className="hover:bg-transparent">
                           {ruleSortingEnabled && <TableHead className="w-[44px] px-2" aria-label="排序" />}
-                          {ruleTableColumns.map((column) => (
-                            <TableHead key={column.key} className={cn("whitespace-nowrap", column.headClassName)}>{column.head}</TableHead>
+                          {shownRuleTableColumns.map((column) => (
+                            <TableHead key={column.key} className={cn("relative whitespace-nowrap", column.headClassName)}>
+                              {column.head}
+                              {column.key !== "actions" ? (
+                                <TableColumnResizeHandle settings={ruleColumnSettings} column={column.resolved} label={RULE_TABLE_COLUMN_LABELS[column.key] ?? column.key} />
+                              ) : null}
+                            </TableHead>
                           ))}
                         </TableRow>
                       </TableHeader>
