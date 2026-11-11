@@ -181,7 +181,7 @@ import { recordAuthenticatedAgentActivity } from "./agentActivity";
 import { recordHostRestartEvent } from "./ops/eventHooks";
 import { observeHostHealthCounters, observeHostResourceSample } from "./resourceAlertNotifier";
 import { buildForwardRateTiers, forwardRateTiersForAgent, mbpsToBytesPerSecond, strictestForwardRate } from "../shared/forwardRateLimit";
-import { buildAgentSniInbounds, isSniRuntimeRule, recordTlsInboundRuntimeStatus, sniRuleRuntimeView } from "./tlsInboundRuntime";
+import { isSniRuntimeRule, planAgentSniInbounds, recordTlsInboundRuntimeStatus, sniRuleRuntimeView } from "./tlsInboundRuntime";
 import { recordAgentRuntimeStats } from "./ops/agentRuntime";
 import { evaluateRuleEgress, loadEgressRuntimeContext, ruleEgressRuntimeView, tunnelEgressDialHostIdsOf } from "./ssEgress";
 import { normalizeRuleEgressType, parseAgentCapabilities, ruleEgressStateBlocksDelivery } from "../shared/ssEgress";
@@ -2813,6 +2813,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       if (!rule || rule.forwardType !== "gost" || runtimeBool(rule.pendingDelete) || !runtimeBool(rule.isEnabled)) return false;
       if (Number(rule.tunnelId || 0) !== Number(tunnel?.id || 0) || !isRuleProtocolEnabled(forwardProtocolSettings, rule, tunnel)) return false;
       if (isEntryBridgeRuntimeRule(rule) || runtimeBool(rule.failoverEnabled) || forwardGroupHealthByRuleId.has(Number(rule.id))) return false;
+      // 共享 TLS 入站上的规则：连接从本机回环进来，PREROUTING 的直通规则接不到。
+      if (isSniRuntimeRule(rule)) return false;
       const port = Number(rule.sourcePort || 0);
       if (!Number.isInteger(port) || port <= 0 || port > 65535 || !kernelPassthroughRuleTarget(rule)) return false;
       const limits = ruleRateLimits(rule, tunnel);
@@ -2883,9 +2885,9 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
       // 这里再套一层守卫会多一个用户态进程，还会让同一份限速串联两次。
       if (isEntryBridgeRuntimeRule(rule)) return false;
       // 共享 TLS 入站上的规则一律由守卫在回环上接（入站把连接交到 127.0.0.1:sourcePort），
-      // 计数、限速和普通规则同一套。
-      if (isSniRuntimeRule(rule)) return true;
+      // 计数、限速和普通规则同一套。经隧道的不用守卫：隧道入口自己只听回环（见 tlsInboundRuntime.ts）。
       const tunnel = tunnelForRule(rule);
+      if (isSniRuntimeRule(rule) && !tunnel) return true;
       const nginxTunnelEntry = isNginxTunnelEntryRule(rule, tunnel);
       const rateLimits = guardRateLimitForRule(rule);
       if (rateLimits.limitIn > 0 || rateLimits.limitOut > 0) {
@@ -3987,6 +3989,8 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
               tunnelId: tunnel.id,
               ruleId: rule.id,
               listenPort: rule.sourcePort,
+              // 共享 TLS 入站上的规则：入口只听回环，客户端连的是入站端口（SNI 分流器交过来）。
+              ...(isSniRuntimeRule(rule) ? { listenHost: "127.0.0.1" } : {}),
               protocol: rule.protocol,
               exitHost: entryRoute.host,
               exitPort: entryRoute.port,
@@ -5176,7 +5180,7 @@ agentRouter.post("/api/agent/heartbeat", async (req: Request, res: Response) => 
     for (const entryHostId of recordTunnelExitPorts(Number(host.id), tunnelExitPortEntries)) {
       pushAgentRefresh(entryHostId, "tunnel-exit-ports-changed");
     }
-    const sniInbounds = buildAgentSniInbounds({
+    const sniInbounds = planAgentSniInbounds({
       hostId: Number(host.id),
       agentVersion: effectiveAgentVersion,
       inbounds: hostTlsInbounds,

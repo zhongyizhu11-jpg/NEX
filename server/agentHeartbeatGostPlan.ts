@@ -11,6 +11,7 @@ import { forwardRuleProtocols } from "@shared/forwardTypes";
 import { isTunnelRelayFailover, tunnelRelayCandidates, tunnelRelayUsesParallelRelays } from "@shared/tunnelRelay";
 import { gostExitSelector, shouldUseFastTunnelFailover } from "./tunnelExitStrategy";
 import { buildGostEgressChain, gostEgressChainName, ruleEgressRuntime } from "./ssEgress";
+import { isSniRuntimeRule } from "./tlsInboundRuntime";
 import { AGENT_DYNAMIC_CACHE_MAX, tunnelRouteLogCache } from "./agentHeartbeatState";
 import {
   buildGostRuleListener,
@@ -156,9 +157,11 @@ export async function createGostRuntimePlan(ctx: HeartbeatRequestContext, deps: 
               || (routeHeaderStripRuleIds.has(Number(r.id)) ? gostProxyProtocolMetadata(1) : undefined))
           : undefined;
         const serviceListenPort = useRuleGuard && !tunnel ? guardBackendPort(r) : Number(r.sourcePort);
+        // 共享 TLS 入站上经隧道的规则：隧道入口只听回环，客户端连的是入站端口（SNI 分流器交过来）。
+        const loopbackOnly = (useRuleGuard && !tunnel) || (!!tunnel && isSniRuntimeRule(r));
         const service: any = {
           name: `fwx-${r.id}-${proto}`,
-          addr: useRuleGuard && !tunnel ? `127.0.0.1:${serviceListenPort}` : `:${serviceListenPort}`,
+          addr: loopbackOnly ? `127.0.0.1:${serviceListenPort}` : `:${serviceListenPort}`,
           handler: tunnel
             ? {
                 type: proto,

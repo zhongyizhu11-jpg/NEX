@@ -10,6 +10,7 @@ import {
   tunnelRouteLogCache,
 } from "./agentHeartbeatState";
 import { runtimeBool } from "./agentHeartbeatRuntime";
+import { isSniRuntimeRule } from "./tlsInboundRuntime";
 import {
   buildNginxCertificateCleanupCmd,
   buildNginxRuntimeRetirementPlan,
@@ -198,7 +199,8 @@ export function createNginxRuntimeSyncPlanBuilder(ctx: HeartbeatRequestContext, 
           listenPort,
           proto,
           upstream,
-          loopbackOnly: useRuleGuard,
+          // 共享 TLS 入站上经隧道的规则：入口只听回环，客户端连的是入站端口（SNI 分流器交过来）。
+          loopbackOnly: useRuleGuard || isSniRuntimeRule(rule),
           sslClient: proto === "tcp" ? tlsClient : null,
         });
       }

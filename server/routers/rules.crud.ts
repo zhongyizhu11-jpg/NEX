@@ -88,14 +88,20 @@ import { reconcileRuleLimits } from "../ruleLimits";
 import { resolveRuleOperationOwner } from "../ruleOperationOwner";
 import {
   assertSniRuleTargetNotLoop,
+  assertSniTunnelUsable,
   isSniRule,
   requireTlsInboundHostAccess,
   requireTlsInboundRunnable,
   reserveSniBackendPort,
+  reserveSniBackendPortOnHosts,
   SNI_RULE_FORWARD_TYPES,
+  sniGroupUnsupportedReason,
+  validateSniNamesOnGroupHosts,
   validateSniRuleNames,
 } from "../tlsInbounds";
-import { parseSniNameJson } from "@shared/tlsInbound";
+import { parseSniNameJson, sniRuleRouteKind } from "@shared/tlsInbound";
+import type { TlsInboundRow } from "../repositories/tlsInboundRepository";
+import type { ForwardRule, InsertForwardRule } from "../../drizzle/schema";
 import { forwardGroupModeOf } from "@shared/forwardTypes";
 import { RULE_EGRESS_TYPES, ruleEgressShapeError, ruleHasEgress } from "@shared/ssEgress";
 import {
@@ -1549,25 +1555,34 @@ export async function toggleForwardRuleForActor(
             if (owner.expiresAt && new Date(owner.expiresAt) <= new Date()) {
               throw new Error("套餐已到期，请续费后再启用规则");
             }
-            await assertForwardGroupPortWithinUserPlanRange({
-              userId: actor.id,
-              forwardGroupId: groupId,
-              sourcePort: Number(rule.sourcePort),
-            });
-            await assertTenantListenPortAllowedOnHosts({
-              actor,
-              hostIds: await db.getForwardGroupRuleEntryHostIds(groupId),
-              port: Number(rule.sourcePort),
-              label: "入口端口",
-            });
+            // SNI 规则的端口是本机回环端口，不对外：套餐端口段、租户端口限制都管不到它。
+            if (!isSniRule(rule)) {
+              await assertForwardGroupPortWithinUserPlanRange({
+                userId: actor.id,
+                forwardGroupId: groupId,
+                sourcePort: Number(rule.sourcePort),
+              });
+              await assertTenantListenPortAllowedOnHosts({
+                actor,
+                hostIds: await db.getForwardGroupRuleEntryHostIds(groupId),
+                port: Number(rule.sourcePort),
+                label: "入口端口",
+              });
+            }
           }
         }
         if (isEnabled) {
           const groupId = Number((rule as any).forwardGroupId || 0);
+          if (isSniRule(rule)) {
+            const anchor = await db.getTlsInboundById(Number(rule.tlsInboundId));
+            if (!anchor) throw new Error("这条规则挂的共享 TLS 入站已不存在，请删除后重新建规则");
+            await requireTlsInboundRunnable(anchor, { routeKind: "group" });
+          }
           const group = await db.validateForwardGroupRuleConfig(groupId, {
             sourcePort: rule.sourcePort,
             protocol: (rule as any).protocol,
             excludeTemplateRuleId: rule.id,
+            sniBackendPort: isSniRule(rule),
           });
           const isForwardChain = (group as any).groupMode === "chain";
           const isPortGroup = (group as any).groupMode === "port";
@@ -1618,7 +1633,7 @@ export async function toggleForwardRuleForActor(
         const sniInbound = isSniRule(rule) ? await db.getTlsInboundById(Number((rule as any).tlsInboundId)) : null;
         if (isSniRule(rule)) {
           if (!sniInbound) throw new Error("这条规则挂的共享 TLS 入站已不存在，请编辑规则换一个入站");
-          await requireTlsInboundRunnable(sniInbound);
+          await requireTlsInboundRunnable(sniInbound, { routeKind: sniRuleRouteKind(rule) });
         } else {
           await assertRulePortWithinEntryPolicy({
             hostId: Number(rule.hostId),
@@ -1741,8 +1756,15 @@ export async function toggleForwardRuleForActor(
 export async function createDirectForwardRuleForActor(
   actor: { id: number; role: string; allowedForwardTypes?: string | null },
   input: any,
-  options: { reasonPrefix?: string; egress?: RuleEgressInput; limitColumns?: Record<string, unknown> } = {},
+  options: {
+    reasonPrefix?: string;
+    egress?: RuleEgressInput;
+    limitColumns?: Record<string, unknown>;
+    /** 共享 TLS 入站上经隧道的规则（createSniForwardRuleForActor 校验过才传）：入口端口换成本机回环端口。 */
+    sni?: { inbound: TlsInboundRow; names: string[] };
+  } = {},
 ) {
+  const sni = options.sni || null;
   await requireRuleTelegramNotifyReady(!!input.telegramErrorNotifyEnabled);
   // 出口字段不能跟着入参一起展开进规则行（外部链接要先解析加密）。没走 tRPC 的调用方传进来的也一并摘掉。
   input = { ...input };
@@ -1822,8 +1844,16 @@ export async function createDirectForwardRuleForActor(
   let quotaReservation: RuleQuotaReservation | null = null;
   // 规则在哪些主机上监听：隧道挂了入口组时，除了入口机还有组里每台启用的主机。
   const listenHostIds = tunnelId ? await db.tunnelRuleListenHostIds(selectedTunnelForRule, hostId) : [hostId];
+  if (sni && (listenHostIds.length !== 1 || listenHostIds[0] !== hostId)) {
+    throw new Error("挂了入口组的隧道暂不支持共享 TLS 入站，请选一条单入口的隧道");
+  }
   try {
-    if (sourcePort === 0) {
+    if (sni) {
+      // 不占对外端口：规则在入口机上只听回环，端口策略、套餐端口段都不适用（见 server/tlsInbounds.ts）。
+      sourcePortReservation = await reserveSniBackendPort(hostId);
+      if (!sourcePortReservation) throw new Error("这台主机上已无可分配的内部端口");
+      sourcePort = sourcePortReservation.port;
+    } else if (sourcePort === 0) {
       let randomRangeStart = selectedTunnelForRule ? (selectedTunnelForRule as any).portRangeStart : null;
       let randomRangeEnd = selectedTunnelForRule ? (selectedTunnelForRule as any).portRangeEnd : null;
       sourcePortReservation = await reserveAvailableHostPortOnHosts({
@@ -1874,7 +1904,8 @@ export async function createDirectForwardRuleForActor(
     quotaReservation = await reserveRuleCreateQuota({
       userId: actor.id,
       maxRules: Number(currentUser?.maxRules || 0),
-      maxPorts: Number(currentUser?.maxPorts || 0),
+      // SNI 规则不占对外端口，端口额度不算它（getUserPortCount 也把它排除了）。
+      maxPorts: sni ? 0 : Number(currentUser?.maxPorts || 0),
       getRuleCount: () => db.getUserRuleCount(actor.id),
       getPortCount: () => db.getUserPortCount(actor.id),
     });
@@ -1924,7 +1955,10 @@ export async function createDirectForwardRuleForActor(
       tunnelExitPort = tunnelExitPortReservation.port;
     }
     const runtimeOptionInput = tunnelId ? tunnelRuntimeOptionInput(selectedTunnelForRule) : input;
-    const proxyProtocol = normalizeProxyProtocolInput(runtimeOptionInput, input.protocol, input.forwardType, false, { tunnelRoute: !!tunnelId, clearUnsupported: !!tunnelId });
+    const proxyProtocol = sni
+      // 经隧道的 SNI 规则不带 PROXY 头（入口在回环上，看到的来源都是本机），四段一律关掉。
+      ? { proxyProtocolReceive: false, proxyProtocolSend: false, proxyProtocolExitReceive: false, proxyProtocolExitSend: false, proxyProtocolVersion: 1 }
+      : normalizeProxyProtocolInput(runtimeOptionInput, input.protocol, input.forwardType, false, { tunnelRoute: !!tunnelId, clearUnsupported: !!tunnelId });
     const transportTuning = normalizeTransportTuningInput(runtimeOptionInput, input.protocol, input.forwardType, false, { tunnelRoute: !!tunnelId, forwardxTunnel: String(selectedTunnelForRule?.mode || "").toLowerCase() === "forwardx", clearUnsupported: !!tunnelId });
     const failoverColumns = normalizeFailoverInput(input, input.protocol, {
       entryHostId: routeEntryHostId(hostId, selectedTunnelForRule),
@@ -1958,10 +1992,18 @@ export async function createDirectForwardRuleForActor(
         tunnelExitPort,
         ...(egressColumns || {}),
         ...(options.limitColumns || {}),
+        ...(sni ? {
+          protocol: "tcp",
+          // 专属域名指向的是主机地址，SNI 规则的入口是用户自己的域名，用不上。
+          entryDomainEnabled: false,
+          tlsInboundId: sni.inbound.id,
+          sniNames: JSON.stringify(sni.names),
+        } : {}),
         userId: actor.id,
       });
-      // 走 Shadowsocks 出口的规则不自动绑订阅（目标不是落地节点本身）。
-      const bound = egressColumns && egressColumns.egressType !== "none" ? null : await autoBindProxyNodeForRule({
+      if (sni) await db.replaceRuleSniNames(Number(createdId), sni.inbound.id, sni.names);
+      // 走 Shadowsocks 出口的规则不自动绑订阅（目标不是落地节点本身）；SNI 规则不进订阅，也不绑。
+      const bound = (egressColumns && egressColumns.egressType !== "none") || sni ? null : await autoBindProxyNodeForRule({
         ruleId: Number(createdId),
         userId: actor.id,
         targetIp: input.targetIp,
@@ -2020,7 +2062,31 @@ export async function createDirectForwardRuleForActor(
 
   走自己的一条路，不混进下面那一千多行的通用分支：入口方式定了就不能互相切换（要换就新建），
   能改的只有名字、目标、转发工具、SNI 和同一台主机上的另一个入站。
+
+  转送规则（Agent 2.2.253 起，见 server/tlsInbounds.ts 开头）：
+  - 经隧道：就是一条普通的隧道规则，只是入口端口换成回环端口（借 createDirectForwardRuleForActor 的
+    隧道那一套：出口端口、出口映射、权限都一样）。入站必须在隧道的入口机上，隧道不能挂入口组。
+  - 转发组 / 转发链 / 端口转发资源：模板挂入站（锚点），同步时每台入口机上的子规则挂它自己同端口的入站
+    （server/sniGroupChildren.ts）。模板的 sourcePort 是在每台入口机上都空着的回环端口。
+  走法也定死：建好以后不能在直连 / 隧道 / 转发组之间换。
 */
+/** SNI 规则建 / 改的入参（tRPC 那一层已经校验过形状），只列这几个函数用到的。 */
+type SniRuleInput = {
+  [key: string]: unknown;
+  name?: string;
+  forwardType?: string;
+  targetIp?: string;
+  targetPort?: number;
+  tlsInboundId?: number | null;
+  sniNames?: unknown;
+  tunnelId?: number | null;
+  forwardGroupId?: number | null;
+  isEnabled?: boolean;
+  telegramErrorNotifyEnabled?: boolean;
+  proxyProtocolSend?: boolean;
+  proxyProtocolVersion?: number;
+};
+
 const sniNamesInputSchema = z.union([z.string().max(20000), z.array(z.string().max(300)).max(256)]);
 
 function sniRuleProxyProtocolColumns(input: { proxyProtocolSend?: boolean; proxyProtocolVersion?: number }, forwardType: string) {
@@ -2044,10 +2110,11 @@ async function requireSniRuleOwnerReady(
   actor: { id: number; role: string },
   hostId: number,
   isTrafficBillingRule: boolean,
+  tunnelId: number | null = null,
 ) {
   if (actor.role === "admin") return db.getUserById(actor.id);
   const currentUser = await requireForwardAccessReady(actor.id, { allowTrafficBillingRecovery: isTrafficBillingRule });
-  await requireTrafficBillingBalanceForRule(actor.id, isTrafficBillingRule, undefined, { tunnelId: null, hostId });
+  await requireTrafficBillingBalanceForRule(actor.id, isTrafficBillingRule, undefined, { tunnelId, hostId });
   if (currentUser?.expiresAt && new Date(currentUser.expiresAt) <= new Date()) {
     throw new Error("您的账户已到期，无法添加或启用规则");
   }
@@ -2060,12 +2127,14 @@ export async function createSniForwardRuleForActor(
   options: { reasonPrefix?: string; limitColumns?: Record<string, unknown> } = {},
 ) {
   await requireRuleTelegramNotifyReady(!!input.telegramErrorNotifyEnabled);
-  if (Number(input.tunnelId || 0) > 0 || Number(input.forwardGroupId || 0) > 0) {
-    throw new Error("共享 TLS 入站规则不能同时使用隧道或转发组");
+  if (Number(input.tunnelId || 0) > 0 && Number(input.forwardGroupId || 0) > 0) {
+    throw new Error("共享 TLS 入站规则只能选一种走法：隧道或转发组");
   }
   if (input.failoverEnabled) throw new Error("共享 TLS 入站规则暂不支持主备线路 / 线路组");
+  if (Number(input.forwardGroupId || 0) > 0) return createSniForwardGroupRuleForActor(actor, input, options);
   const inbound = await db.getTlsInboundById(Number(input.tlsInboundId));
   if (!inbound) throw new Error("共享 TLS 入站不存在");
+  if (Number(input.tunnelId || 0) > 0) return createSniTunnelRuleForActor(actor, inbound, input, options);
   const hostId = inbound.hostId;
   const forwardType = String(input.forwardType || "iptables");
   assertSniRuleForwardType(forwardType);
@@ -2144,18 +2213,173 @@ export async function createSniForwardRuleForActor(
   }
 }
 
+/** 经隧道的 SNI 规则：校验 SNI 这一块，其余整套交给隧道规则的建法。 */
+async function createSniTunnelRuleForActor(
+  actor: { id: number; role: string; allowedForwardTypes?: string | null },
+  inbound: TlsInboundRow,
+  input: SniRuleInput,
+  options: { reasonPrefix?: string; limitColumns?: Record<string, unknown> },
+) {
+  const tunnelId = Number(input.tunnelId);
+  const tunnel = await db.getTunnelById(tunnelId);
+  assertSniTunnelUsable(tunnel, inbound);
+  await requireTlsInboundRunnable(inbound, { routeKind: "tunnel" });
+  const names = await validateSniRuleNames({ inbound, names: input.sniNames });
+  const created = await createDirectForwardRuleForActor(actor, {
+    ...input,
+    hostId: inbound.hostId,
+    tunnelId,
+    forwardType: "gost",
+    protocol: "tcp",
+    sourcePort: 0,
+    failoverEnabled: false,
+    failoverTargets: [],
+    routeGroup: null,
+    proxyProtocolReceive: false,
+    proxyProtocolSend: false,
+    proxyProtocolExitReceive: false,
+    proxyProtocolExitSend: false,
+    udpOverTcp: false,
+    entryDomainEnabled: false,
+    tlsInboundId: undefined,
+    sniNames: undefined,
+  }, { reasonPrefix: options.reasonPrefix, limitColumns: options.limitColumns, sni: { inbound, names } });
+  return { ...created, sourcePort: 0, tlsInboundId: inbound.id, sniNames: names };
+}
+
+/**
+ * 转发组 / 转发链 / 端口转发资源上的 SNI 规则：建模板，子规则由组同步按每台入口机铺开
+ * （每台挂它自己同端口的入站，见 server/sniGroupChildren.ts）。检查和普通组规则同一套，
+ * 只是入口端口换成每台入口机上都空着的回环端口。
+ */
+async function createSniForwardGroupRuleForActor(
+  actor: { id: number; role: string; allowedForwardTypes?: string | null },
+  input: SniRuleInput,
+  options: { reasonPrefix?: string; limitColumns?: Record<string, unknown> } = {},
+) {
+  const forwardGroupId = Number(input.forwardGroupId);
+  return withKeyedTaskLock(`forward-group:${forwardGroupId}`, async () => {
+    let quotaReservation: RuleQuotaReservation | null = null;
+    let backendReservation: HostPortReservation | null = null;
+    try {
+      const inbound = await db.getTlsInboundById(Number(input.tlsInboundId));
+      if (!inbound) throw new Error("共享 TLS 入站不存在");
+      let currentUser = await db.getUserById(actor.id);
+      let groupAccess = { isTrafficBillingResource: false };
+      if (actor.role !== "admin") {
+        groupAccess = await requireForwardGroupUseAccess({ user: actor }, forwardGroupId);
+        currentUser = await requireForwardAccessReady(actor.id, { allowTrafficBillingRecovery: groupAccess.isTrafficBillingResource });
+        if (currentUser?.expiresAt && new Date(currentUser.expiresAt) <= new Date()) throw new Error("您的账户已到期，无法添加规则");
+        await requireTrafficBillingBalanceForRule(actor.id, groupAccess.isTrafficBillingResource);
+        if (!groupAccess.isTrafficBillingResource
+          && Number(currentUser?.trafficLimit || 0) > 0
+          && Number(currentUser?.trafficUsed || 0) >= Number(currentUser?.trafficLimit || 0)) {
+          throw new Error("您的流量已用完，无法添加规则");
+        }
+      }
+      const group = await db.getForwardGroupById(forwardGroupId);
+      const unsupported = sniGroupUnsupportedReason(group);
+      if (unsupported) throw new Error(unsupported);
+      const entryHostIds = (await db.getForwardGroupRuleEntryHostIds(forwardGroupId)).map(Number);
+      if (!entryHostIds.includes(inbound.hostId)) throw new Error("所选的共享 TLS 入站不在这个转发资源的入口主机上");
+      await requireTlsInboundRunnable(inbound, { routeKind: "group" });
+      const names = await validateSniRuleNames({ inbound, names: input.sniNames });
+      await validateSniNamesOnGroupHosts({ anchor: inbound, names, hostIds: entryHostIds });
+      const forwardType = lockedForwardTypeForGroup(group, input.forwardType);
+      assertSniRuleForwardType(forwardType);
+      requireForwardTypeAllowedForActor(actor, forwardType);
+      await requireRuleProtocolEnabled({ forwardType, tunnelId: null });
+      await assertRuleTargetsAllowedForActor(actor, { targetIp: input.targetIp }, { forwardGroupId });
+      const isForwardChain = forwardGroupModeOf(group) === "chain";
+      if (actor.role !== "admin") {
+        quotaReservation = await reserveRuleCreateQuota({
+          userId: actor.id,
+          maxRules: Number(currentUser?.maxRules || 0),
+          // 不占对外端口，端口额度不算它。
+          maxPorts: 0,
+          getRuleCount: () => db.getUserRuleCount(actor.id),
+          getPortCount: () => db.getUserPortCount(actor.id),
+        });
+      }
+      backendReservation = await reserveSniBackendPortOnHosts(entryHostIds);
+      if (!backendReservation) throw new Error("入口主机上已无可分配的内部端口");
+      const sourcePort = backendReservation.port;
+      await db.validateForwardGroupRuleConfig(forwardGroupId, { sourcePort, protocol: "tcp", sniBackendPort: true });
+      if (!isForwardChain) {
+        // 端口转发 / 主备组的成员直接拨目标：目标不能是成员自己的入站（入站端口）。
+        for (const hostId of entryHostIds) {
+          assertSniRuleTargetNotLoop({ host: await db.getHostById(hostId), inboundPort: inbound.port, backendPort: sourcePort, targetIp: input.targetIp, targetPort: Number(input.targetPort) });
+        }
+      }
+      const hostId = await db.getForwardGroupDefaultHostId(forwardGroupId);
+      const name = resolveForwardRuleName(input.name, { targetIp: input.targetIp, targetPort: input.targetPort });
+      const createTemplateRule = async () => {
+        const createdId = Number(await db.createForwardRule({
+          hostId,
+          name,
+          forwardType,
+          protocol: "tcp",
+          gostMode: "direct",
+          gostRelayHost: null,
+          gostRelayPort: null,
+          tunnelId: null,
+          tunnelExitPort: null,
+          forwardGroupId,
+          forwardGroupRuleId: null,
+          forwardGroupMemberId: null,
+          isForwardGroupTemplate: true,
+          sourcePort,
+          targetIp: normalizeRuleTargetIp(String(input.targetIp || ""), { tunnelId: null }),
+          targetPort: Number(input.targetPort),
+          isEnabled: input.isEnabled !== false,
+          telegramErrorNotifyEnabled: !!input.telegramErrorNotifyEnabled,
+          entryDomainEnabled: false,
+          ...RULE_PROTOCOL_BLOCK_COLUMNS,
+          ...sniRuleProxyProtocolColumns(input, forwardType),
+          tcpFastOpen: false,
+          zeroCopy: false,
+          udpOverTcp: false,
+          udpOverTcpPort: null,
+          failoverEnabled: false,
+          tlsInboundId: inbound.id,
+          sniNames: JSON.stringify(names),
+          ...(options.limitColumns || {}),
+          isRunning: false,
+          userId: actor.id,
+        } as InsertForwardRule));
+        await db.replaceRuleSniNames(createdId, inbound.id, names);
+        return createdId;
+      };
+      // 模板和每台入口机上的子规则在一个事务里写（同普通组规则）；回环端口是本请求自己占着的。
+      const id = await runWithHeldHostPortReservations([backendReservation], () => db.withForwardGroupSyncTransaction(forwardGroupId, createTemplateRule));
+      await quotaReservation?.release();
+      quotaReservation = null;
+      await db.runForwardGroupFailover(forwardGroupId);
+      return { id, sourcePort: 0, tlsInboundId: inbound.id, sniNames: names, autoBoundProxyNodeId: null, autoBoundProxyNodeName: null };
+    } finally {
+      await quotaReservation?.release();
+      backendReservation?.release();
+    }
+  });
+}
+
 export async function updateSniForwardRuleForActor(
   actor: { id: number; role: string; allowedForwardTypes?: string | null },
   rule: any,
   input: any,
 ) {
-  if (Number(input.tunnelId || 0) > 0 || Number(input.forwardGroupId || 0) > 0 || input.tlsInboundId === null) {
-    throw new Error("共享 TLS 入站规则不能改成其他入口方式，如需更换请新建规则");
+  const routeKind = sniRuleRouteKind(rule);
+  // 走法（直连 / 隧道 / 转发组）建好就定了：界面把原值原样传回来不算改。
+  const tunnelChanged = input.tunnelId !== undefined && Number(input.tunnelId || 0) !== Number(rule.tunnelId || 0);
+  const groupChanged = input.forwardGroupId !== undefined && Number(input.forwardGroupId || 0) !== Number(rule.forwardGroupId || 0);
+  if (tunnelChanged || groupChanged || input.tlsInboundId === null) {
+    throw new Error("共享 TLS 入站规则不能改成其他入口方式或换走法，如需更换请新建规则");
   }
+  if (input.failoverEnabled) throw new Error("共享 TLS 入站规则暂不支持主备线路 / 线路组");
+  if (routeKind === "group") return updateSniForwardGroupRuleForActor(actor, rule, input);
   if (input.hostId !== undefined && input.hostId !== null && Number(input.hostId) !== Number(rule.hostId)) {
     throw new Error("共享 TLS 入站规则不能换主机，如需更换请新建规则");
   }
-  if (input.failoverEnabled) throw new Error("共享 TLS 入站规则暂不支持主备线路 / 线路组");
   await requireRuleTelegramNotifyReady(input.telegramErrorNotifyEnabled);
   const nextInboundId = Number(input.tlsInboundId || rule.tlsInboundId);
   const inbound = await db.getTlsInboundById(nextInboundId);
@@ -2164,14 +2388,25 @@ export async function updateSniForwardRuleForActor(
     throw new Error("只能换到同一台主机上的另一个共享 TLS 入站，如需更换主机请新建规则");
   }
   const inboundChanged = inbound.id !== Number(rule.tlsInboundId);
-  const forwardType = String(input.forwardType ?? rule.forwardType);
+  const tunnelId = routeKind === "tunnel" ? Number(rule.tunnelId) : null;
+  // 经隧道的规则在入口机上就是一条隧道规则，转发工具固定 gost。
+  const forwardType = tunnelId ? "gost" : String(input.forwardType ?? rule.forwardType);
   assertSniRuleForwardType(forwardType);
   if (forwardType !== rule.forwardType) requireForwardTypeAllowedForActor(actor, forwardType);
-  const access = await requireTlsInboundHostAccess(actor, inbound.hostId);
+  let tunnel: Awaited<ReturnType<typeof db.getTunnelById>> | null = null;
+  let isTrafficBillingResource = false;
+  if (tunnelId) {
+    const access = await requireTunnelUseOrTrafficBillingAccess({ user: actor }, tunnelId);
+    tunnel = access.tunnel;
+    isTrafficBillingResource = !!access.isTrafficBillingResource;
+    assertSniTunnelUsable(tunnel, inbound);
+  } else {
+    isTrafficBillingResource = !!(await requireTlsInboundHostAccess(actor, inbound.hostId)).isTrafficBillingResource;
+  }
   const nextEnabled = input.isEnabled === undefined ? dbBool(rule.isEnabled) : input.isEnabled === true;
-  if (inboundChanged || (nextEnabled && !dbBool(rule.isEnabled))) await requireTlsInboundRunnable(inbound);
-  if (nextEnabled && !dbBool(rule.isEnabled)) await requireSniRuleOwnerReady(actor, inbound.hostId, !!access.isTrafficBillingResource);
-  if (forwardType !== rule.forwardType) await requireRuleProtocolEnabled({ forwardType, tunnelId: null });
+  if (inboundChanged || (nextEnabled && !dbBool(rule.isEnabled))) await requireTlsInboundRunnable(inbound, { routeKind });
+  if (nextEnabled && !dbBool(rule.isEnabled)) await requireSniRuleOwnerReady(actor, inbound.hostId, isTrafficBillingResource, tunnelId);
+  if (forwardType !== rule.forwardType) await requireRuleProtocolEnabled({ forwardType, tunnelId });
   const names = input.sniNames !== undefined || inboundChanged
     ? await validateSniRuleNames({
       inbound,
@@ -2179,11 +2414,11 @@ export async function updateSniForwardRuleForActor(
       excludeRuleId: Number(rule.id),
     })
     : parseSniNameJson(rule.sniNames);
-  const targetIp = input.targetIp !== undefined ? normalizeRuleTargetIp(input.targetIp, { tunnelId: null }) : rule.targetIp;
+  const targetIp = input.targetIp !== undefined ? normalizeRuleTargetIp(input.targetIp, { tunnelId }) : rule.targetIp;
   const targetPort = Number(input.targetPort ?? rule.targetPort);
-  await assertRuleTargetsAllowedForActor(actor, { targetIp }, { hostId: inbound.hostId, tunnel: null });
+  await assertRuleTargetsAllowedForActor(actor, { targetIp }, { hostId: inbound.hostId, tunnel });
   const host = await db.getHostById(inbound.hostId);
-  assertSniRuleTargetNotLoop({ host, inboundPort: inbound.port, backendPort: Number(rule.sourcePort), targetIp, targetPort });
+  if (!tunnelId) assertSniRuleTargetNotLoop({ host, inboundPort: inbound.port, backendPort: Number(rule.sourcePort), targetIp, targetPort });
 
   const data: Record<string, unknown> = {
     forwardType,
@@ -2192,10 +2427,12 @@ export async function updateSniForwardRuleForActor(
     targetPort,
     tlsInboundId: inbound.id,
     sniNames: JSON.stringify(names),
-    ...sniRuleProxyProtocolColumns({
-      proxyProtocolSend: input.proxyProtocolSend ?? dbBool(rule.proxyProtocolSend),
-      proxyProtocolVersion: input.proxyProtocolVersion ?? Number(rule.proxyProtocolVersion || 1),
-    }, forwardType),
+    ...(tunnelId
+      ? { proxyProtocolReceive: false, proxyProtocolSend: false, proxyProtocolExitReceive: false, proxyProtocolExitSend: false }
+      : sniRuleProxyProtocolColumns({
+        proxyProtocolSend: input.proxyProtocolSend ?? dbBool(rule.proxyProtocolSend),
+        proxyProtocolVersion: input.proxyProtocolVersion ?? Number(rule.proxyProtocolVersion || 1),
+      }, forwardType)),
   };
   if (input.name !== undefined) data.name = resolveForwardRuleName(input.name, { targetIp, targetPort });
   if (input.telegramErrorNotifyEnabled !== undefined) data.telegramErrorNotifyEnabled = !!input.telegramErrorNotifyEnabled;
@@ -2215,9 +2452,95 @@ export async function updateSniForwardRuleForActor(
   await db.withDatabaseTransaction(async () => {
     await db.updateForwardRule(Number(rule.id), data as any);
     await db.replaceRuleSniNames(Number(rule.id), inbound.id, names);
+    if (tunnel && runtimeChanged) await db.updateTunnel(Number(tunnel.id), { isRunning: false });
   });
-  if (runtimeChanged || routingChanged) pushAgentRefresh(Number(rule.hostId), "forward-rule-sni-updated");
+  if (tunnel && (runtimeChanged || routingChanged)) {
+    // 出口机上的那一半（隧道出口拨的目标）也跟着换，入口、出口一起催。
+    const fresh = await db.getTunnelById(Number(tunnel.id));
+    if (fresh) await pushTunnelEndpointRefresh(fresh, "forward-rule-sni-updated");
+  } else if (runtimeChanged || routingChanged) {
+    pushAgentRefresh(Number(rule.hostId), "forward-rule-sni-updated");
+  }
   return { success: true, reset: runtimeChanged, hotUpdated: !runtimeChanged && routingChanged, proxyNodeBinding: null };
+}
+
+/**
+ * 转发组上的 SNI 模板：能改名字、目标、SNI、开关和锚点入站（换成组里另一台入口机上的同端口入站）。
+ * 转发工具跟着组走。模板和子规则在一个事务里写，子规则由组同步按每台入口机重铺。
+ */
+async function updateSniForwardGroupRuleForActor(
+  actor: { id: number; role: string; allowedForwardTypes?: string | null },
+  rule: ForwardRule,
+  input: SniRuleInput,
+) {
+  await requireRuleTelegramNotifyReady(input.telegramErrorNotifyEnabled);
+  const forwardGroupId = Number(rule.forwardGroupId);
+  return withKeyedTaskLock(`forward-group:${forwardGroupId}`, async () => {
+    const group = await db.getForwardGroupById(forwardGroupId);
+    const unsupported = sniGroupUnsupportedReason(group);
+    if (unsupported) throw new Error(unsupported);
+    let isTrafficBillingResource = false;
+    if (actor.role !== "admin") isTrafficBillingResource = (await requireForwardGroupUseAccess({ user: actor }, forwardGroupId)).isTrafficBillingResource;
+    const inbound = await db.getTlsInboundById(Number(input.tlsInboundId || rule.tlsInboundId));
+    if (!inbound) throw new Error("共享 TLS 入站不存在");
+    const entryHostIds = (await db.getForwardGroupRuleEntryHostIds(forwardGroupId)).map(Number);
+    if (!entryHostIds.includes(inbound.hostId)) throw new Error("所选的共享 TLS 入站不在这个转发资源的入口主机上");
+    const anchor = await db.getTlsInboundById(Number(rule.tlsInboundId));
+    if (anchor && anchor.port !== inbound.port) throw new Error("转发资源上的 SNI 规则不能换入站端口，如需更换请新建规则");
+    const inboundChanged = inbound.id !== Number(rule.tlsInboundId);
+    const nextEnabled = input.isEnabled === undefined ? dbBool(rule.isEnabled) : input.isEnabled === true;
+    if (inboundChanged || (nextEnabled && !dbBool(rule.isEnabled))) await requireTlsInboundRunnable(inbound, { routeKind: "group" });
+    if (nextEnabled && !dbBool(rule.isEnabled) && actor.role !== "admin") {
+      const owner = await requireForwardAccessReady(actor.id, { allowTrafficBillingRecovery: isTrafficBillingResource });
+      await requireTrafficBillingBalanceForRule(actor.id, isTrafficBillingResource);
+      if (owner.expiresAt && new Date(owner.expiresAt) <= new Date()) throw new Error("套餐已到期，请续费后再启用规则");
+    }
+    const children = await db.getForwardGroupChildRulesForTemplate(Number(rule.id));
+    const ownIds = [Number(rule.id), ...children.map((child) => Number(child.id))];
+    const names = await validateSniRuleNames({
+      inbound,
+      names: input.sniNames !== undefined ? input.sniNames : parseSniNameJson(rule.sniNames),
+      excludeRuleId: Number(rule.id),
+      excludeRuleIds: ownIds,
+    });
+    await validateSniNamesOnGroupHosts({ anchor: inbound, names, hostIds: entryHostIds, excludeRuleIds: ownIds });
+    const forwardType = lockedForwardTypeForGroup(group, rule.forwardType);
+    const targetIp = input.targetIp !== undefined ? normalizeRuleTargetIp(input.targetIp, { tunnelId: null }) : rule.targetIp;
+    const targetPort = Number(input.targetPort ?? rule.targetPort);
+    await assertRuleTargetsAllowedForActor(actor, { targetIp }, { forwardGroupId });
+    if (forwardGroupModeOf(group) !== "chain") {
+      for (const hostId of entryHostIds) {
+        assertSniRuleTargetNotLoop({ host: await db.getHostById(hostId), inboundPort: inbound.port, backendPort: Number(rule.sourcePort), targetIp, targetPort });
+      }
+    }
+    const data: Record<string, unknown> = {
+      forwardType,
+      protocol: "tcp",
+      targetIp,
+      targetPort,
+      tlsInboundId: inbound.id,
+      sniNames: JSON.stringify(names),
+    };
+    if (input.name !== undefined) data.name = resolveForwardRuleName(input.name, { targetIp, targetPort });
+    if (input.telegramErrorNotifyEnabled !== undefined) data.telegramErrorNotifyEnabled = !!input.telegramErrorNotifyEnabled;
+    if (input.isEnabled !== undefined && nextEnabled !== dbBool(rule.isEnabled)) {
+      data.isEnabled = nextEnabled;
+      data.disabledByUser = !nextEnabled;
+      if (nextEnabled) {
+        data.disabledByTunnel = false;
+        data.disabledByGroup = false;
+        data.protocolBlockReason = null;
+      }
+    }
+    await db.withForwardGroupSyncTransaction(forwardGroupId, async () => {
+      await db.updateForwardRule(Number(rule.id), data as Partial<InsertForwardRule>);
+      // 子规则的名字先全放掉，模板记到（可能换了的）锚点上，同步再按每台入口机重新记。
+      for (const child of children) await db.releaseRuleSniNames(Number(child.id));
+      await db.replaceRuleSniNames(Number(rule.id), inbound.id, names);
+    });
+    await db.runForwardGroupFailover(forwardGroupId);
+    return { success: true, reset: true, hotUpdated: false, proxyNodeBinding: null };
+  });
 }
 
 /*
