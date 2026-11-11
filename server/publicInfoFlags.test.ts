@@ -61,6 +61,7 @@ function run() {
           ruleEntryDomainActive: settings.ddns.ruleEntryDomainActive,
           telegramBotReady: !!settings.telegram.enabled && !!settings.telegram.configured,
           ddnsEnabled: !!settings.ddns.enabled && settings.ddns.provider !== "disabled",
+          ddnsProvider: settings.ddns.provider,
           linkWizardEnabled: !!settings.linkWizardEnabled,
         },
       };
@@ -94,9 +95,11 @@ test("publicInfo 的开关和 getSettings 一致，管理员才有的开关只�
   assert.deepEqual(outcome.admin.info.adminFlags, {
     telegramBotReady: outcome.admin.settings.telegramBotReady,
     ddnsEnabled: outcome.admin.settings.ddnsEnabled,
+    // 只有服务商名字（多公网 IP 那块按服务商写说明），密钥之类的不在这里
+    ddnsProvider: outcome.admin.settings.ddnsProvider,
     linkWizardEnabled: outcome.admin.settings.linkWizardEnabled,
   });
-  assert.deepEqual(outcome.admin.info.adminFlags, { telegramBotReady: true, ddnsEnabled: true, linkWizardEnabled: true });
+  assert.deepEqual(outcome.admin.info.adminFlags, { telegramBotReady: true, ddnsEnabled: true, ddnsProvider: "webhook", linkWizardEnabled: true });
   for (const name of ["user", "anonymous"]) {
     assert.equal(outcome[name].info.adminFlags, null, name);
     assert.equal(outcome[name].settings.telegramBotReady, false, name);

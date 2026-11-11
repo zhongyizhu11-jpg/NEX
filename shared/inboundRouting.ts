@@ -43,6 +43,12 @@ const PRESET_DOMAINS: Record<string, readonly string[]> = {
   gemini: ["gemini.google.com", "bard.google.com", "generativelanguage.googleapis.com", "aistudio.google.com", "makersuite.google.com", "alkalimakersuite-pa.clients6.google.com"],
   grok: ["grok.com", "x.ai"],
   perplexity: ["perplexity.ai", "pplx.ai"],
+  // Prime Video：只收视频自己的子域，不收整个 amazon.com（购物、AWS 控制台不该跟着绕路）
+  prime_video: ["primevideo.com", "amazonvideo.com", "aiv-cdn.net", "aiv-delivery.net", "pv-cdn.net", "atv-ps.amazon.com", "atv-ps-eu.amazon.com", "atv-ps-fe.amazon.com", "atv-ext.amazon.com"],
+  spotify: ["spotify.com", "scdn.co", "spotifycdn.com", "spotifycdn.net", "pscdn.co", "spotilocal.com", "spoti.fi"],
+  steam: ["steampowered.com", "steamcommunity.com", "steamstatic.com", "steamcontent.com", "steamserver.net", "steamusercontent.com", "steamgames.com", "steam-chat.com"],
+  // 港澳台番剧：整个 B 站一起走（看 B 站本来就是为了这个），bilibili.tv 是国际版，另一套账号，不收
+  bilibili_hmt: ["bilibili.com", "bilivideo.com", "bilivideo.cn", "hdslb.com", "biliapi.net", "biliapi.com", "acgvideo.com"],
 };
 
 export const INBOUND_ROUTE_PRESETS: readonly InboundRoutePreset[] = UNLOCK_SERVICES

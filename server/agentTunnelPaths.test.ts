@@ -40,6 +40,8 @@ test("Agent 代码里上报的每个路径都在 /api/sync 白名单里", () => 
   }
   // auth-challenge 不走加密信封（它就是拿信封之前的那一步）
   paths.delete("/api/agent/auth-challenge");
+  // /api/agent/assets/<版本>/<文件> 是普通 GET 下载（agentRoutes.ts），不走 /api/sync；mita 只用这个前缀校验面板下发的地址
+  paths.delete("/api/agent/assets/");
   assert.ok(paths.has("/api/agent/mimic-install-result"));
   const missing = [...paths].filter((p) => !AGENT_TUNNEL_PATHS.has(p));
   assert.deepEqual(missing, [], `the agent posts to paths the panel rejects: ${missing.join(", ")}`);

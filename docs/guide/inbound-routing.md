@@ -11,7 +11,7 @@
 
 在「我的节点」里编辑一个自建节点，找到 **分流** 一段，点「加一条」：
 
-1. **选服务**：Netflix、Disney+、YouTube Premium、TikTok、ChatGPT、Claude、Gemini、Grok、Perplexity（和主机「解锁检测」是同一份清单），也可以填自定义域名（一行一个，`example.com` 同时匹配它的子域名）。
+1. **选服务**：Netflix、Disney+、YouTube Premium、TikTok、ChatGPT、Claude、Gemini、Grok、Perplexity、Prime Video、Spotify、Steam、Bilibili 港澳台（和主机「解锁检测」是同一份清单；Bilibili 港澳台选上以后整个 B 站都走这条），也可以填自定义域名（一行一个，`example.com` 同时匹配它的子域名）。
 2. **选去哪**：
    - **直连**：从这台落地自己出去（用来给前面的规则开例外）。
    - **拒绝**：直接断开。
