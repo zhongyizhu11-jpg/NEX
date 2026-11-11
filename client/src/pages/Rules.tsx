@@ -10399,7 +10399,7 @@ function RulesContent() {
                   <Button variant="outline" onClick={() => setShowCopyDialog(false)} disabled={copyActionPending}>取消</Button>
                   <Button type="button" onClick={handleBatchGroupRules} disabled={selectedBatchRuleCount === 0 || batchGroupTargetIds.length === 0 || copyActionPending}>
                     {copyActionPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Folder className="mr-2 h-4 w-4" />}
-                    {batchGroupMode === "add" ? "加入分组" : "移出分组"}（{selectedBatchRuleCount} 条）
+                    {`${batchGroupMode === "add" ? "加入分组" : "移出分组"}（${selectedBatchRuleCount} 条）`}
                   </Button>
                 </div>
               </>
