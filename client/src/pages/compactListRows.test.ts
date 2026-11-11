@@ -32,9 +32,12 @@ test("主机页：精简 + 桌面把两档卡片都换成表，地图照旧；�
 
 test("主机页精简的表：七列、不冻结、1000 最小宽；行走 dense", () => {
   const source = read("Hosts.tsx");
-  assert.match(source, /compactLayout \? "fx-hosts-table-dense min-w-\[1000px\]" : "min-w-\[1340px\]"/);
+  // 列、列宽现在按「列设置」（按账号存）出；默认的最小宽度照旧：精简 1130 列宽按 1000 / 1130 缩到 1000，标准 1340
+  assert.match(source, /cn\("host-management-table w-full table-fixed", compactLayout && "fx-hosts-table-dense"\)/);
+  assert.match(source, /style=\{\{ minWidth: hostTableMinWidth \}\}/);
+  assert.match(source, /HOST_TABLE_MIN_WIDTH_RATIO = \{ standard: 1, compact: 1000 \/ 1130 \}/);
   assert.match(source, /dense=\{compactLayout\}/);
-  assert.match(source, /<TableHead className="whitespace-nowrap">系统 · Agent<\/TableHead>/);
+  assert.match(source, /system: \{ content: "系统 · Agent", className: "whitespace-nowrap" \}/);
 });
 
 test("规则表精简：入口地址写全不截（不再只写端口），列宽让给入口；24H 为零不画", () => {

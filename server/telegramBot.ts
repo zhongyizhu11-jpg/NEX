@@ -67,6 +67,8 @@ import {
   setUserForwardAccessCommand,
 } from "./services/userCommandService";
 import { escapeHtmlText as escapeHtml } from "../shared/htmlEscape";
+import { isTelegramLoginEnabled, TELEGRAM_LOGIN_SWITCHED_OFF_MESSAGE } from "./telegramLoginSwitch";
+
 
 type TelegramUser = {
   id: number;
@@ -1351,6 +1353,8 @@ async function renewUserOneMonth(actor: any, userId: number) {
 }
 
 async function loginText(user: any) {
+  // 管理员关了 Telegram 登录：不再发一次性网页登录链接（发了面板那头也不认，见 server/telegramLoginSwitch.ts）。
+  if (!(await isTelegramLoginEnabled())) return TELEGRAM_LOGIN_SWITCHED_OFF_MESSAGE;
   const settings = await getTelegramSettings();
   const code = randomCode(32);
   const expiresAt = new Date(Date.now() + LOGIN_CODE_TTL_MS);

@@ -1,4 +1,6 @@
 import { resolveSiteTitle } from "../../shared/brand";
+import { AUTH_CAPTCHA_MODES, normalizeAuthCaptchaMode } from "../../shared/authCaptchaMode";
+import { TELEGRAM_LOGIN_ENABLED_SETTING, telegramLoginSwitchOn } from "../telegramLoginSwitch";
 import { undecryptableSecretSettingLabels } from "../settingsEncryption";
 import { router, publicProcedure, protectedProcedure, adminProcedure } from "./trpc";
 import { githubRepoParts } from "../../shared/githubAccelerator";
@@ -1742,6 +1744,10 @@ function publicSystemSettings(all: Record<string, string | null>, activeProtocol
     webPortManagement: getWebPortManagement({ publicView: true }),
     registrationEnabled: all.registrationEnabled !== "false",
     authCaptchaEnabled: all.authCaptchaEnabled !== "false",
+    // 人机验证方式：click（点击验证，默认）/ image（图片验证码），登录、注册、找回密码都按它画（shared/authCaptchaMode.ts）。
+    authCaptchaMode: normalizeAuthCaptchaMode(all.authCaptchaMode),
+    // Telegram 登录单独开关：默认开；关了登录页不显示 Telegram 登录（server/telegramLoginSwitch.ts）。
+    telegramLoginEnabled: telegramLoginSwitchOn(all[TELEGRAM_LOGIN_ENABLED_SETTING]),
       // 登录页「忘记密码」：默认开，只有明确存成 "false" 才关（server/ops/passwordReset.ts）。
       passwordResetEnabled: all.passwordResetEnabled !== "false",
     twoFactorEnabled: all.twoFactorEnabled === "true",
@@ -1891,6 +1897,10 @@ export const systemRouter = router({
       personalizationLiquidGlass: readPersonalizationLiquidGlass(all),
       registrationEnabled: all.registrationEnabled !== "false",
       authCaptchaEnabled: all.authCaptchaEnabled !== "false",
+      // 人机验证方式：click（点击验证，默认）/ image（图片验证码），登录、注册、找回密码都按它画（shared/authCaptchaMode.ts）。
+      authCaptchaMode: normalizeAuthCaptchaMode(all.authCaptchaMode),
+      // Telegram 登录单独开关：默认开；关了登录页不显示 Telegram 登录（server/telegramLoginSwitch.ts）。
+      telegramLoginEnabled: telegramLoginSwitchOn(all[TELEGRAM_LOGIN_ENABLED_SETTING]),
       // 登录页「忘记密码」：默认开，只有明确存成 "false" 才关（server/ops/passwordReset.ts）。
       passwordResetEnabled: all.passwordResetEnabled !== "false",
       // 邀请返利开没开（侧边栏「邀请返利」据此显隐）、注册是否必须带邀请码。
@@ -1971,6 +1981,10 @@ export const systemRouter = router({
       undecryptableSecretSettings: undecryptableSecretSettingLabels(),
       registrationEnabled: all.registrationEnabled !== "false",
       authCaptchaEnabled: all.authCaptchaEnabled !== "false",
+      // 人机验证方式：click（点击验证，默认）/ image（图片验证码），登录、注册、找回密码都按它画（shared/authCaptchaMode.ts）。
+      authCaptchaMode: normalizeAuthCaptchaMode(all.authCaptchaMode),
+      // Telegram 登录单独开关：默认开；关了登录页不显示 Telegram 登录（server/telegramLoginSwitch.ts）。
+      telegramLoginEnabled: telegramLoginSwitchOn(all[TELEGRAM_LOGIN_ENABLED_SETTING]),
       // 登录页「忘记密码」：默认开，只有明确存成 "false" 才关（server/ops/passwordReset.ts）。
       passwordResetEnabled: all.passwordResetEnabled !== "false",
       twoFactorEnabled: all.twoFactorEnabled === "true",
@@ -2209,6 +2223,8 @@ export const systemRouter = router({
         personalizationLayout: z.string().max(16).optional(),
         registrationEnabled: z.boolean().optional(),
         authCaptchaEnabled: z.boolean().optional(),
+        authCaptchaMode: z.enum(AUTH_CAPTCHA_MODES).optional(),
+        telegramLoginEnabled: z.boolean().optional(),
         passwordResetEnabled: z.boolean().optional(),
         twoFactorEnabled: z.boolean().optional(),
         lookingGlassUserEnabled: z.boolean().optional(),
@@ -2380,6 +2396,15 @@ export const systemRouter = router({
         await db.setSetting("authCaptchaEnabled", input.authCaptchaEnabled ? "true" : "false");
         console.info(`[Settings] authentication captcha ${input.authCaptchaEnabled ? "enabled" : "disabled"}`);
       }
+      if (input.authCaptchaMode !== undefined) {
+        await db.setSetting("authCaptchaMode", input.authCaptchaMode);
+        console.info(`[Settings] authentication captcha mode=${input.authCaptchaMode}`);
+      }
+      if (input.telegramLoginEnabled !== undefined) {
+        await db.setSetting(TELEGRAM_LOGIN_ENABLED_SETTING, input.telegramLoginEnabled ? "true" : "false");
+        console.info(`[Settings] Telegram login ${input.telegramLoginEnabled ? "enabled" : "disabled"}`);
+      }
+
       if (input.passwordResetEnabled !== undefined) {
         await db.setSetting("passwordResetEnabled", input.passwordResetEnabled ? "true" : "false");
         console.info(`[Settings] self-service password reset ${input.passwordResetEnabled ? "enabled" : "disabled"}`);

@@ -17,6 +17,7 @@ import { createTotpSecret, createTotpUri, verifyTotpToken } from "../totp";
 import { clearTwoFactorChallenge, createTwoFactorChallenge, getTwoFactorChallenge, recordTwoFactorChallengeFailure } from "../twoFactorChallenges";
 import { clearTwoFactorSetupChallenge, clearTwoFactorSetupChallengesForUser, createTwoFactorSetupChallenge, getTwoFactorSetupChallenge } from "../twoFactorSetupChallenges";
 import { authCaptcha, CaptchaRefreshRateLimitError } from "../authCaptcha";
+import { captchaChallengeAllowed, readAuthCaptchaMode, verifyAuthCaptcha } from "../authCaptchaMode";
 import {
   authRateLimitState,
   clearAuthAccountFailures,
@@ -36,6 +37,7 @@ import { endImpersonation } from "../ops/impersonation";
 import { passwordReset, PasswordResetError } from "../ops/passwordReset";
 import { PASSWORD_RESET_RATE_LIMITED_MESSAGE } from "../../shared/passwordReset";
 import { clientIp } from "../clientIp";
+import { mergeUiPreferences, parseUiPreferences, serializeUiPreferences, UI_PREFERENCE_TABLES } from "../../shared/uiPreferences";
 
 const emailCodeStore = new Map<string, { code: string; expiresAt: number; lastSentAt: number; attempts: number }>();
 const emailSendIpStore = new Map<string, LoginFailEntry>();
@@ -242,7 +244,11 @@ export const authRouter = router({
 
   createCaptcha: publicProcedure
     .input(z.object({ purpose: z.enum(["login", "register"]) }))
-    .mutation(({ input, ctx }) => {
+    .mutation(async ({ input, ctx }) => {
+      // 只有选了图片验证码才发图片挑战（shared/authCaptchaMode.ts）：点击模式下登录 / 注册不认图片答案。
+      if (!captchaChallengeAllowed(await readAuthCaptchaMode(), "image")) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "CAPTCHA_MODE_MISMATCH" });
+      }
       try {
         return authCaptcha.createImageChallenge(getRequestIp(ctx), input.purpose);
       } catch (error) {
@@ -265,6 +271,7 @@ export const authRouter = router({
       verifyRegistration: config.enabled && config.verifyRegistration,
       registrationEnabled,
       authCaptchaEnabled: await captchaEnabled(),
+      authCaptchaMode: await readAuthCaptchaMode(),
       referralEnabled: referral.enabled,
       referralForceInvite: referral.enabled && referral.forceInvite,
     };
@@ -315,8 +322,8 @@ export const authRouter = router({
    * 至少一个 + 面板公开访问地址）。只说面板的配置，不涉及任何账号。
    */
   passwordResetOptions: publicProcedure.query(async () => {
-    const [options, captcha] = await Promise.all([passwordReset.options(), captchaEnabled()]);
-    return { ...options, captchaEnabled: captcha };
+    const [options, captcha, captchaMode] = await Promise.all([passwordReset.options(), captchaEnabled(), readAuthCaptchaMode()]);
+    return { ...options, captchaEnabled: captcha, captchaMode };
   }),
 
   /**
@@ -338,12 +345,11 @@ export const authRouter = router({
         throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: PASSWORD_RESET_RATE_LIMITED_MESSAGE });
       }
       if (await captchaEnabled()) {
-        let captchaValid = false;
-        if (input.capToken) captchaValid = await authCaptcha.verifyCapToken(ip, "login", input.capToken);
-        else if (input.captchaId && input.captchaAnswer) captchaValid = authCaptcha.verifyChallenge(input.captchaId, input.captchaAnswer, ip, "login");
-        if (!captchaValid) {
+        // 只认管理员选的那一种（点击 / 图片），另一种的答案当验证失败。
+        const verdict = await verifyAuthCaptcha(authCaptcha, await readAuthCaptchaMode(), ip, "login", input);
+        if (verdict !== "ok") {
           console.warn(`[Auth] Password reset captcha failed ip=${ip}`);
-          throw new Error(input.capToken || input.captchaId ? "CAPTCHA_INVALID" : "CAPTCHA_REQUIRED");
+          throw new Error(verdict === "missing" ? "CAPTCHA_REQUIRED" : "CAPTCHA_INVALID");
         }
       }
       try {
@@ -379,7 +385,7 @@ export const authRouter = router({
     .query(async ({ input, ctx }) => {
       const ip = ctx.req.ip || ctx.req.socket.remoteAddress || "unknown";
       const enabled = await captchaEnabled();
-      return { enabled, required: enabled && needsCaptcha(ip, input.username) };
+      return { enabled, required: enabled && needsCaptcha(ip, input.username), mode: await readAuthCaptchaMode() };
     }),
 
   login: publicProcedure
@@ -406,19 +412,16 @@ export const authRouter = router({
 
         const useCaptcha = await captchaEnabled();
         if (useCaptcha && needsCaptcha(ip, input.username)) {
-          let captchaValid = false;
-          if (input.capToken) {
-            captchaValid = await authCaptcha.verifyCapToken(ip, "login", input.capToken);
-          } else if (input.captchaId && input.captchaAnswer) {
-            // Keep accepting the image challenge for older clients during the
-            // rollout. New clients use Cap's server-verifiable PoW token.
-            captchaValid = authCaptcha.verifyChallenge(input.captchaId, input.captchaAnswer, ip, "login");
-          }
-          if (!input.capToken && !input.captchaId && !input.captchaAnswer) {
+          /*
+            只认管理员选的那一种（shared/authCaptchaMode.ts）：图片模式下的 Cap 令牌、点击模式下的图片答案
+            都按验证失败算，照样记一次失败。原来两种都收，「换成图片」挡不住专挑 Cap 来刷的脚本。
+          */
+          const verdict = await verifyAuthCaptcha(authCaptcha, await readAuthCaptchaMode(), ip, "login", input);
+          if (verdict === "missing") {
             console.warn(`[Auth] Login requires captcha username=${maskIdentifier(input.username)} ip=${ip}`);
             throw new Error("CAPTCHA_REQUIRED");
           }
-          if (!captchaValid) {
+          if (verdict !== "ok") {
             recordPasswordFail(ip, input.username);
             console.warn(`[Auth] Login captcha failed username=${maskIdentifier(input.username)} ip=${ip}`);
             throw new Error("CAPTCHA_INVALID");
@@ -548,19 +551,13 @@ export const authRouter = router({
       }
       const ip = getRequestIp(ctx);
       if (await captchaEnabled()) {
-        let captchaValid = false;
-        if (input.capToken) {
-          captchaValid = await authCaptcha.verifyCapToken(ip, "register", input.capToken);
-        } else if (input.captchaId && input.captchaAnswer) {
-          // Legacy image challenge compatibility for clients that have not yet
-          // loaded the Cap widget.
-          captchaValid = authCaptcha.verifyChallenge(input.captchaId, input.captchaAnswer, ip, "register");
-        }
-        if (!captchaValid) {
+        const verdict = await verifyAuthCaptcha(authCaptcha, await readAuthCaptchaMode(), ip, "register", input);
+        if (verdict !== "ok") {
           console.warn(`[Auth] Register captcha failed username=${maskIdentifier(input.username)} ip=${ip}`);
-          throw new Error(input.capToken || input.captchaId ? "CAPTCHA_INVALID" : "CAPTCHA_REQUIRED");
+          throw new Error(verdict === "missing" ? "CAPTCHA_REQUIRED" : "CAPTCHA_INVALID");
         }
       }
+
       const emailConfig = await getEmailConfig();
       const usernameEmail = ensureAllowedEmail(input.username, emailConfig);
       const existing = await db.getUserByUsername(usernameEmail);
@@ -755,7 +752,34 @@ export const authRouter = router({
       console.info(`[Auth] Profile updated userId=${ctx.user.id}`);
       return { success: true };
     }),
+
+  /**
+   * 按账号保存的界面偏好（shared/uiPreferences.ts）：界面动画、列表的列 / 顺序 / 列宽。
+   * 一次只改一项，在服务端按「读 → 合并 → 写」做，按账号串行：两个标签页一个改列、一个关动画，谁也不盖掉谁。
+   * 列的内容这里只做结构清洗；哪些列还在、哪些必须显示，画表时按当时的列定义算。
+   */
+  updateUiPreferences: protectedProcedure
+    .input(z.object({
+      motion: z.boolean().nullable().optional(),
+      table: z.object({
+        id: z.enum(UI_PREFERENCE_TABLES),
+        columns: z.object({
+          order: z.array(z.string().max(48)).max(64).optional(),
+          hidden: z.array(z.string().max(48)).max(64).optional(),
+          widths: z.record(z.string().max(48), z.number().finite()).optional(),
+        }).nullable(),
+      }).optional(),
+    }))
+    .mutation(async ({ input, ctx }) => withKeyedTaskLock(`ui-preferences:${ctx.user.id}`, async () => {
+      // 从库里重读一次：ctx.user 是请求开始时的那份，排队期间可能已经被另一个请求改过
+      const current = await db.getUserById(ctx.user.id);
+      const merged = mergeUiPreferences(parseUiPreferences(current?.uiPreferences), input);
+      const serialized = serializeUiPreferences(merged);
+      await db.updateUserProfile(ctx.user.id, { uiPreferences: serialized });
+      return { uiPreferences: serialized };
+    })),
 });
+
 
 const emailAuthStoreCleanupTimer = setInterval(() => pruneEmailAuthStores(), 5 * 60 * 1000);
 emailAuthStoreCleanupTimer.unref?.();

@@ -1,4 +1,5 @@
 import { useAutoAnimate } from "@formkit/auto-animate/react";
+import { isMotionAttributeOff } from "@/lib/uiMotion";
 import {
   type ComponentPropsWithoutRef,
   type ElementType,
@@ -51,7 +52,9 @@ function getVisibleChildCount(container: Element) {
 
 function shouldSkipMotion() {
   return typeof window === "undefined"
-    || window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    || window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    // 个人资料 › 界面 › 界面动画 关了（lib/uiMotion.ts）
+    || isMotionAttributeOff();
 }
 
 export default function AutoAnimateContainer<T extends ElementType = "div">({
@@ -89,7 +92,8 @@ export default function AutoAnimateContainer<T extends ElementType = "div">({
     */
     attachTimerRef.current = window.setTimeout(() => {
       attachTimerRef.current = null;
-      if (elementRef.current === node) parent(node);
+      // 界面动画关着就不接 auto-animate（它只认系统的「减少动态效果」，不认账号里的开关）
+      if (elementRef.current === node && !shouldSkipMotion()) parent(node);
     }, 320);
   }, [parent]);
 

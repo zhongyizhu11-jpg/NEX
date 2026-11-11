@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -9,6 +8,7 @@ import {
   AuthCaptchaService,
   CaptchaRefreshRateLimitError,
 } from "./authCaptcha";
+import { capSolutions } from "./authCaptchaTestSolver";
 
 test("captcha setting defaults on, gates login/register and preserves authorization, limits and 2FA", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "forwardx-captcha-settings-"));
@@ -32,35 +32,6 @@ function createService(overrides: ConstructorParameters<typeof AuthCaptchaServic
     refreshMaxPerWindow: 3,
     svgGenerator: () => ({ text: "A7K9P", data: "<svg></svg>" }),
     ...overrides,
-  });
-}
-
-function capPrng(seed: string, length: number) {
-  let state = 2166136261;
-  for (let index = 0; index < seed.length; index += 1) {
-    state ^= seed.charCodeAt(index);
-    state += (state << 1) + (state << 4) + (state << 7) + (state << 8) + (state << 24);
-  }
-  state >>>= 0;
-  let result = "";
-  while (result.length < length) {
-    state ^= state << 13;
-    state ^= state >>> 17;
-    state ^= state << 5;
-    result += (state >>> 0).toString(16).padStart(8, "0");
-  }
-  return result.substring(0, length);
-}
-
-function capSolutions(token: string, challenge: { c: number; s: number; d: number }) {
-  return Array.from({ length: challenge.c }, (_, index) => {
-    const salt = capPrng(`${token}${index + 1}`, challenge.s);
-    const target = capPrng(`${token}${index + 1}d`, challenge.d);
-    for (let nonce = 0; nonce < 2_000_000; nonce += 1) {
-      const digest = createHash("sha256").update(`${salt}${nonce}`).digest("hex");
-      if (digest.startsWith(target)) return nonce;
-    }
-    throw new Error("unable to solve Cap test challenge");
   });
 }
 

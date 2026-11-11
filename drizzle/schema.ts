@@ -217,6 +217,8 @@ export const users = table("users", {
   telegramAnnouncementSubscribed: boolean("telegramAnnouncementSubscribed").notNull().default(false),
   /** 布局偏好：null 跟随站点默认（设置 › 个性化 › 布局），"standard" / "compact" 自己定。见 shared/personalization.ts。 */
   uiLayout: varchar("uiLayout", { length: 16 }),
+  /** 其他按账号保存的界面偏好（界面动画、列表的列 / 顺序 / 列宽），一段 JSON。见 shared/uiPreferences.ts。 */
+  uiPreferences: text("uiPreferences"),
   telegramBindCode: text("telegramBindCode").unique(),
   telegramBindCodeExpiresAt: epoch("telegramBindCodeExpiresAt"),
   telegramLoginCode: text("telegramLoginCode").unique(),

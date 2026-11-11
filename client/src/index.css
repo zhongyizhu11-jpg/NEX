@@ -1913,3 +1913,26 @@ html[data-personalization-background="video"] .fx-mesh {
 @keyframes topo-flow { to { stroke-dashoffset: -28; } }
 .topo-flow { animation: topo-flow 1.1s linear infinite; }
 @media (prefers-reduced-motion: reduce) { .topo-flow { animation: none; } }
+
+/*
+  界面动画开关（个人资料 › 界面，lib/uiMotion.ts）：关掉的账号在 <html data-motion="off">。
+  CSS 的过渡和动画一律压到一瞬（不是 none：有的地方等 transitionend / animationend 才收尾，压短了照样触发）；
+  motion 库的动画走 JS，那边用 MotionGlobalConfig.skipAnimations 关。
+  例外只有转圈的加载图标：它说的是「还在加载」，停住了就看不出页面在干活。
+*/
+html[data-motion="off"],
+html[data-motion="off"] *,
+html[data-motion="off"] *::before,
+html[data-motion="off"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-delay: 0s !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  transition-delay: 0s !important;
+  scroll-behavior: auto !important;
+}
+
+html[data-motion="off"] .animate-spin {
+  animation-duration: 1s !important;
+  animation-iteration-count: infinite !important;
+}

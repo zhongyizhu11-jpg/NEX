@@ -1,4 +1,5 @@
 import { resolveSiteTitle } from "@shared/brand";
+import { AUTH_CAPTCHA_MODE_LABELS, AUTH_CAPTCHA_MODES, normalizeAuthCaptchaMode, type AuthCaptchaMode } from "@shared/authCaptchaMode";
 import { clipboardNeedsManualCopy, copyTextToClipboard } from "@/lib/clipboard";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
 import { FormField } from "@/components/ui/form-field";
@@ -4951,6 +4952,8 @@ function SystemInfoSection() {
   const [panelSslCountdown, setPanelSslCountdown] = useState(5);
   const [registrationEnabled, setRegistrationEnabled] = useState(true);
   const [authCaptchaEnabled, setAuthCaptchaEnabled] = useState(true);
+  const [authCaptchaMode, setAuthCaptchaMode] = useState<AuthCaptchaMode>("click");
+  const [telegramLoginEnabled, setTelegramLoginEnabled] = useState(true);
   const [passwordResetEnabled, setPasswordResetEnabled] = useState(true);
   const [twoFactorEnabled, setTwoFactorEnabled] = useState(false);
   const [lookingGlassUserEnabled, setLookingGlassUserEnabled] = useState(true);
@@ -5029,6 +5032,8 @@ function SystemInfoSection() {
       setPanelSslKeyPemSaved(!!settings.panelSsl?.keyPemConfigured);
       setRegistrationEnabled(settings.registrationEnabled ?? true);
       setAuthCaptchaEnabled(settings.authCaptchaEnabled ?? true);
+      setAuthCaptchaMode(normalizeAuthCaptchaMode(settings.authCaptchaMode));
+      setTelegramLoginEnabled(settings.telegramLoginEnabled !== false);
       setPasswordResetEnabled(settings.passwordResetEnabled ?? true);
       setTwoFactorEnabled(!!settings.twoFactorEnabled);
       setLookingGlassUserEnabled(settings.lookingGlassUserEnabled ?? true);
@@ -5332,8 +5337,9 @@ function SystemInfoSection() {
   };
 
   const handleSaveRegistration = () => {
-    return saveSystemSettings("registration", { registrationEnabled, authCaptchaEnabled, passwordResetEnabled }, {
+    return saveSystemSettings("registration", { registrationEnabled, authCaptchaEnabled, authCaptchaMode, telegramLoginEnabled, passwordResetEnabled }, {
       onSuccess: () => {
+        void utils.system.publicInfo.invalidate();
         void utils.auth.emailConfig.invalidate();
         void utils.auth.needsCaptcha.invalidate();
         void utils.auth.passwordResetOptions.invalidate();
@@ -5562,7 +5568,7 @@ function SystemInfoSection() {
     { id: "entryBridge", label: "换线过渡", dirty: !!settings && ruleSwitchBridgeHours !== String(normalizeRuleSwitchBridgeHours((settings as any).ruleSwitchBridgeHours)), save: handleSaveEntryBridge },
     { id: "portAccessLimits", label: "接入限制", dirty: !!settings && portAccessLimitsEnabled !== !!(settings as any).portAccessLimitsEnabled, save: handleSavePortAccessLimits },
     { id: "linkWizard", label: "新建向导", dirty: !!settings && linkWizardEnabled !== !!(settings as any).linkWizardEnabled, save: handleSaveLinkWizard },
-    { id: "registration", label: "注册", dirty: !!settings && (registrationEnabled !== (settings.registrationEnabled ?? true) || authCaptchaEnabled !== (settings.authCaptchaEnabled ?? true) || passwordResetEnabled !== (settings.passwordResetEnabled ?? true)), save: handleSaveRegistration },
+    { id: "registration", label: "注册", dirty: !!settings && (registrationEnabled !== (settings.registrationEnabled ?? true) || authCaptchaEnabled !== (settings.authCaptchaEnabled ?? true) || authCaptchaMode !== normalizeAuthCaptchaMode(settings.authCaptchaMode) || telegramLoginEnabled !== (settings.telegramLoginEnabled !== false) || passwordResetEnabled !== (settings.passwordResetEnabled ?? true)), save: handleSaveRegistration },
     { id: "twoFactor", label: "双重验证", dirty: !!settings && twoFactorEnabled !== !!settings.twoFactorEnabled, save: handleSaveTwoFactor },
     { id: "ddns", label: "DDNS", dirty: JSON.stringify(ddnsDraft) !== JSON.stringify(ddnsSaved), save: handleSaveDdns },
     {
@@ -6239,10 +6245,10 @@ function SystemInfoSection() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <UserPlus className="h-4 w-4 text-primary" />
-              用户注册
+              注册与登录
             </CardTitle>
             <CardDescription>
-              控制新用户自助注册。
+              控制新用户自助注册，以及登录页的人机验证、找回密码和 Telegram 登录。
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -6259,6 +6265,33 @@ function SystemInfoSection() {
                 description="默认开启。只走 HTTP、浏览器跑不了验证组件时可以关掉；关掉后密码校验、登录失败限流和双重验证照旧。"
                 control={<Checkbox aria-label="登录 / 注册人机验证" checked={authCaptchaEnabled} onCheckedChange={setAuthCaptchaEnabled} />}
               />
+              {/*
+                验证方式（上游 2.3.286）：服务端只认选中的那一种，另一种的答案按验证失败算、挑战也不发
+                （server/authCaptchaMode.ts）。登录、注册、忘记密码三处都跟着它。
+              */}
+              <SettingRow
+                label="人机验证方式"
+                description={authCaptchaMode === "image"
+                  ? "图片验证码：看图填字符，不依赖浏览器跑验证脚本，老浏览器、只走 HTTP 的环境也能用。"
+                  : "点击验证：点一下，浏览器在后台算一小段工作量证明，不用看图打字。"}
+                control={(
+                  <SegmentedControl<AuthCaptchaMode>
+                    ariaLabel="人机验证方式"
+                    className="grid grid-cols-2 gap-1"
+                    optionClassName="px-2.5"
+                    disabled={!authCaptchaEnabled}
+                    value={authCaptchaMode}
+                    options={AUTH_CAPTCHA_MODES.map((value) => ({ value, label: AUTH_CAPTCHA_MODE_LABELS[value] }))}
+                    onChange={setAuthCaptchaMode}
+                  />
+                )}
+              />
+              <SettingRow
+                asLabel
+                label="Telegram 登录"
+                description="默认开启。关掉后登录页不再显示 Telegram 登录，机器人发的网页登录链接、WebApp 自动登录、App 里的 Telegram 登录都不能用；机器人通知和账号绑定照旧。"
+                control={<Checkbox aria-label="Telegram 登录" checked={telegramLoginEnabled} onCheckedChange={setTelegramLoginEnabled} />}
+              />
               <SettingRow
                 asLabel
                 label="登录页「忘记密码」"
@@ -6268,7 +6301,7 @@ function SystemInfoSection() {
             </SettingList>
             <div className="flex justify-end">
               <Button data-dock-save onClick={handleSaveRegistration} disabled={isSavingSetting("registration")}>
-                保存注册设置
+                保存注册与登录设置
               </Button>
             </div>
           </CardContent>
