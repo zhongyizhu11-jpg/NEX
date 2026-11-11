@@ -1,3 +1,4 @@
+import { getFormatLocale } from "@/i18n";
 import { useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
 
@@ -88,7 +89,7 @@ export function RuleConnectionsBody({ ruleId, active }: { ruleId: number; active
     <div className="flex min-w-0 flex-col gap-3" data-testid="rule-connections">
       <div className="flex items-center justify-between gap-2">
         <p className="text-meta text-muted-foreground">
-          {snapshot ? `取自 ${new Date(snapshot.at).toLocaleTimeString("zh-CN", { hour12: false })}` : busy ? "正在让机器上的 Agent 读一遍…" : "点刷新取这条规则此刻的连接"}
+          {snapshot ? `取自 ${new Date(snapshot.at).toLocaleTimeString(getFormatLocale(), { hour12: false })}` : busy ? "正在让机器上的 Agent 读一遍…" : "点刷新取这条规则此刻的连接"}
         </p>
         <Button type="button" variant="outline" size="sm" className="gap-1.5" disabled={busy} onClick={() => { setFailure(null); start.mutate({ ruleId }); }}>
           <RefreshCw className={`h-3.5 w-3.5 ${busy ? "animate-spin" : ""}`} />刷新

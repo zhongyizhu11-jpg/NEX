@@ -1,3 +1,4 @@
+import { getFormatLocale } from "@/i18n";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
@@ -31,7 +32,7 @@ const toneClass = {
 
 function formatTime(seconds: number | null | undefined) {
   if (!seconds) return "";
-  return new Date(seconds * 1000).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  return new Date(seconds * 1000).toLocaleString(getFormatLocale(), { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
 export default function AgentRelaySection({ host }: { host: any }) {

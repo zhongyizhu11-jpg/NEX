@@ -1,3 +1,4 @@
+import { getFormatLocale } from "@/i18n";
 import {
   describeHostEgressShaping,
   normalizeHostEgressMbpsInput,
@@ -827,7 +828,7 @@ const hostListDayMs = 24 * 60 * 60 * 1000;
 function formatHostDateTimeText(value: unknown) {
   const ms = parseHostDateTime(value);
   if (ms === null) return "--";
-  return new Date(ms).toLocaleString("zh-CN", { hour12: false });
+  return new Date(ms).toLocaleString(getFormatLocale(), { hour12: false });
 }
 
 function formatHostRemainingDays(purchasedAt: unknown, stoppedAt: unknown) {
@@ -844,7 +845,7 @@ function formatHostUptimeTitle(uptime: unknown, uptimeText: string) {
   const seconds = Number(uptime);
   if (!Number.isFinite(seconds) || seconds < 0) return "运行时间：--";
   const startedAt = new Date(Date.now() - seconds * 1000);
-  return `运行时间：${uptimeText}\n启动时间：${startedAt.toLocaleString("zh-CN", { hour12: false })}`;
+  return `运行时间：${uptimeText}\n启动时间：${startedAt.toLocaleString(getFormatLocale(), { hour12: false })}`;
 }
 
 function formatHostExpiryTitle(stoppedAt: unknown, remainingDays: string) {
@@ -1505,7 +1506,7 @@ const HostTableRow = memo(function HostTableRow({
             <div className="min-w-0 flex-1">
               <div className="flex min-w-0 items-center gap-1.5">
                 <HostListStatusBadge host={host} />
-                <span className="min-w-0 truncate font-medium" title={hostRuntimeTitle}>{host.name}</span>
+                <span className="min-w-0 truncate font-medium" title={hostRuntimeTitle} data-no-translate="">{host.name}</span>
               </div>
               <div className="flex min-w-0 items-center gap-1.5 text-[11px] leading-4 text-muted-foreground" title={extraAddresses.extra > 0 ? extraAddresses.title : primaryAddressText}>
                 <span className="min-w-0 truncate font-mono">{primaryAddressText}</span>
@@ -1600,7 +1601,7 @@ const HostTableRow = memo(function HostTableRow({
             <div className="min-w-0 flex-1 space-y-0.5">
               <div className="flex min-w-0 items-center gap-1.5">
                 <HostListStatusBadge host={host} />
-                <span className="min-w-0 truncate font-semibold" title={hostRuntimeTitle}>{host.name}</span>
+                <span className="min-w-0 truncate font-semibold" title={hostRuntimeTitle} data-no-translate="">{host.name}</span>
               </div>
               <div className="flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-[11px] text-muted-foreground">
                 {hostOs.label && (

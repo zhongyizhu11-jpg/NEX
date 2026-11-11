@@ -1,3 +1,4 @@
+import { getFormatLocale } from "@/i18n";
 import { StatusDot } from "@/components/network/StatusDot";
 import { cn } from "@/lib/utils";
 import { eventRelativeTime, isRecoveryEventKind } from "@shared/opsEvents";
@@ -71,7 +72,7 @@ export function EventRow({
           <time
             className="text-meta tabular-nums text-muted-foreground"
             dateTime={Number.isFinite(at.getTime()) ? at.toISOString() : undefined}
-            title={Number.isFinite(at.getTime()) ? at.toLocaleString("zh-CN") : undefined}
+            title={Number.isFinite(at.getTime()) ? at.toLocaleString(getFormatLocale()) : undefined}
           >
             {eventRelativeTime(at, now)}
           </time>

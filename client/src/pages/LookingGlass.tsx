@@ -1,3 +1,4 @@
+import { getFormatLocale } from "@/i18n";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
 import { FormField } from "@/components/ui/form-field";
 import DashboardLayout from "@/components/DashboardLayout";
@@ -120,7 +121,7 @@ function buildPendingOutput(
   iperf3?: { reverse: boolean; streams: string; seconds: string; udp?: boolean; udpMbps?: string },
 ) {
   const lines = [
-    `[${new Date().toLocaleTimeString("zh-CN", { hour12: false })}] 已创建网络测试任务`,
+    `[${new Date().toLocaleTimeString(getFormatLocale(), { hour12: false })}] 已创建网络测试任务`,
     `测试主机: ${hostName || "-"}`,
     `测试类型: ${methodMeta(method).label}`,
     `目标地址: ${target || "-"}`,

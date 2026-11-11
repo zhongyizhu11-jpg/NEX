@@ -1,3 +1,4 @@
+import { getFormatLocale } from "@/i18n";
 /*
   工单页：用户的 /tickets 和管理员的 /admin/tickets 是同一个组件，mode 决定走哪套接口。
 
@@ -116,7 +117,7 @@ function toDate(value: Date | string | null | undefined) {
 function fullTime(value: Date | string | null | undefined) {
   const date = toDate(value);
   // 跟着界面用中文 24 小时制，不随浏览器语言变成 10/16/2026, 3:40:50 AM
-  return date ? date.toLocaleString("zh-CN", { hour12: false }) : "";
+  return date ? date.toLocaleString(getFormatLocale(), { hour12: false }) : "";
 }
 
 /** 列表里的短时间：今天只写时分，今年写月日，再早写年月日。 */

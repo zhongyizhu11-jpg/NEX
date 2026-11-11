@@ -1,3 +1,4 @@
+import { getFormatLocale } from "@/i18n";
 import { useEffect, useMemo, useState } from "react";
 import { CloudUpload, Loader2, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
@@ -90,7 +91,7 @@ function formatSize(bytes: number) {
 
 function formatTime(ms: number | null | undefined) {
   if (!ms) return "";
-  return new Intl.DateTimeFormat("zh-CN", {
+  return new Intl.DateTimeFormat(getFormatLocale(), {
     timeZone: "Asia/Shanghai",
     month: "numeric",
     day: "numeric",

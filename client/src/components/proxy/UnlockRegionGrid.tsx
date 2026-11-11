@@ -1,3 +1,4 @@
+import { getFormatLocale } from "@/i18n";
 import { useState } from "react";
 
 import {
@@ -49,7 +50,7 @@ function formatCheckedAt(value: number) {
   if (!value) return "";
   // 检测时间存的是秒（host_unlock_checks.checkedAt）；万一传进来的是毫秒也认
   const date = new Date(value < 1e12 ? value * 1000 : value);
-  return Number.isFinite(date.getTime()) ? date.toLocaleString("zh-CN", { hour12: false, month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
+  return Number.isFinite(date.getTime()) ? date.toLocaleString(getFormatLocale(), { hour12: false, month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
 }
 
 export function UnlockRegionGrid({ families, hostCountry, agentVersion }: { families: UnlockGridFamily[]; hostCountry: string | null; agentVersion?: string | null }) {

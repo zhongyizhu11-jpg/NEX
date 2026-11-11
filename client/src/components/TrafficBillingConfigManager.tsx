@@ -1,3 +1,4 @@
+import { getFormatLocale } from "@/i18n";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
 import { readStoredViewMode, writeStoredViewMode } from "@/lib/viewModeStorage";
 import { resourceStatusTone } from "@/lib/statusDot";
@@ -39,7 +40,7 @@ const MIN_PRICE_PER_GB_MILLI_CENTS = 100;
 
 function formatPricePerGb(config: any) {
   const yuan = pricePerGbMilliCentsOf(config) / MILLI_CENTS_PER_YUAN;
-  return new Intl.NumberFormat("zh-CN", {
+  return new Intl.NumberFormat(getFormatLocale(), {
     style: "currency",
     currency: "CNY",
     minimumFractionDigits: yuan > 0 && yuan < 0.01 ? 3 : 2,

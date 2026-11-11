@@ -1,3 +1,4 @@
+import { getFormatLocale } from "@/i18n";
 import { useMemo } from "react";
 
 import { trpc } from "@/lib/trpc";
@@ -161,7 +162,7 @@ export function deriveHostVitals(
     uptimeText: latest?.uptime == null ? "—" : formatUptime(latest.uptime),
     uptimeLabel: isOnline ? "已运行" : "最后运行",
     lastReportedText: latest?.recordedAt
-      ? new Date(latest.recordedAt).toLocaleString("zh-CN", { hour12: false })
+      ? new Date(latest.recordedAt).toLocaleString(getFormatLocale(), { hour12: false })
       : "",
     memoryUsed: bytesOrNull(latest?.memoryUsed),
     memoryTotal: bytesOrNull(host?.memoryTotal),

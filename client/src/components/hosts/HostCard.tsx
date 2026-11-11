@@ -1,3 +1,4 @@
+import { getFormatLocale } from "@/i18n";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -379,7 +380,7 @@ export default function HostCard({
     数字照留（掉线前跑到哪儿是有用的线索，抹掉更糟），只把名字改对。
   */
   const lastReportedText = latestMetric?.recordedAt
-    ? new Date(latestMetric.recordedAt).toLocaleString("zh-CN", { hour12: false })
+    ? new Date(latestMetric.recordedAt).toLocaleString(getFormatLocale(), { hour12: false })
     : "";
   const currentTrafficLabel = isOnline ? "当前" : "最后一次";
   const currentTrafficTitle = [
@@ -653,7 +654,7 @@ export default function HostCard({
                   className={`h-2 w-2 shrink-0 rounded-full ${isOnline ? "bg-[var(--fx-healthy)] shadow-[0_0_0_3px_var(--fx-healthy-soft)]" : "bg-[var(--fx-down)] shadow-[0_0_0_3px_var(--fx-down-soft)]"}`}
                   title={isOnline ? "在线" : "离线"}
                 />
-                <span className="selectable min-w-0 truncate text-sm font-semibold leading-5" title={hostName}>{hostName}</span>
+                <span className="selectable min-w-0 truncate text-sm font-semibold leading-5" title={hostName} data-no-translate="">{hostName}</span>
                 <span
                   className={`shrink-0 rounded-[5px] border px-1.5 py-0.5 font-mono text-[10.5px] font-normal leading-none text-muted-foreground ${
                     isOnline ? "border-[var(--fx-stroke-base)]" : "border-[var(--fx-stroke-weak)]"
@@ -686,7 +687,7 @@ export default function HostCard({
                   className={`h-2 w-2 shrink-0 rounded-full ${isOnline ? "bg-[var(--fx-healthy)] shadow-[0_0_0_3px_var(--fx-healthy-soft)]" : "bg-[var(--fx-down)] shadow-[0_0_0_3px_var(--fx-down-soft)]"}`}
                   title={isOnline ? "在线" : "离线"}
                 />
-                <span className="selectable min-w-0 truncate text-sm font-semibold leading-5" title={hostName}>{hostName}</span>
+                <span className="selectable min-w-0 truncate text-sm font-semibold leading-5" title={hostName} data-no-translate="">{hostName}</span>
                 <span
                   className={`shrink-0 rounded-[5px] border px-1.5 py-0.5 font-mono text-[10.5px] font-normal leading-none text-muted-foreground ${
                     isOnline ? "border-[var(--fx-stroke-base)]" : "border-[var(--fx-stroke-weak)]"

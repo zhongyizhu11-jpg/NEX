@@ -61,7 +61,7 @@ function JobCard({ id, job, onRefetch }: { id: string; job: RuleBatchJobSnapshot
         <div className="min-w-0">
           <p className="flex items-center gap-1.5 truncate text-sm font-medium">
             {finished
-              ? job.failed > 0 || job.state === "stopped" ? <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-500" /> : <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+              ? job.failed > 0 || job.state === "stopped" ? <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-[var(--fx-warn-text)]" /> : <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-[var(--fx-healthy-text)]" />
               : <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />}
             <span className="truncate">{job.title}</span>
           </p>

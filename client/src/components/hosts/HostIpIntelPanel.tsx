@@ -16,7 +16,7 @@ import {
 } from "@shared/ipIntel";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/ui/password-input";
 import { Label } from "@/components/ui/label";
 import { countryFlagLabel } from "@/lib/flagEmojiSupport";
 import { trpc } from "@/lib/trpc";
@@ -188,9 +188,8 @@ function IntelKeysDialog({ open, onOpenChange }: { open: boolean; onOpenChange: 
               <div key={item.field} className="flex flex-col gap-1">
                 <Label htmlFor={`intel-key-${item.field}`}>{item.label}</Label>
                 <div className="flex items-center gap-2">
-                  <Input
+                  <PasswordInput
                     id={`intel-key-${item.field}`}
-                    type="password"
                     autoComplete="off"
                     value={values[item.field] || ""}
                     placeholder={isCleared ? "保存后清除" : current?.configured ? `已配置 ${current.masked || ""}，留空不改` : "未配置"}

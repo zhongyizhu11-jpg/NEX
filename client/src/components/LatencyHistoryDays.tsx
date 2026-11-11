@@ -1,3 +1,4 @@
+import { getFormatLocale } from "@/i18n";
 import { useMemo } from "react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -75,7 +76,7 @@ function DayTooltip({ day }: { day: LatencyHistoryDay }) {
       <p className="font-medium">{day.date}{day.isToday ? "（今天）" : ""} · {HEALTH_LABEL[day.health]}</p>
       {summary && summary.probeCount > 0 ? (
         <>
-          <p className="tabular-nums">探测 {summary.probeCount.toLocaleString("zh-CN")} 次 · 丢包 {formatLoss(latencyDayLossPercent(summary))}</p>
+          <p className="tabular-nums">探测 {summary.probeCount.toLocaleString(getFormatLocale())} 次 · 丢包 {formatLoss(latencyDayLossPercent(summary))}</p>
           <p className="tabular-nums">
             平均 {summary.avgLatencyMs == null ? "—" : `${summary.avgLatencyMs} ms`}
             {summary.minLatencyMs != null ? ` · 最低 ${summary.minLatencyMs}` : ""}

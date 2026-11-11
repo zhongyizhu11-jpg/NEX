@@ -1,3 +1,4 @@
+import { getFormatLocale } from "@/i18n";
 import type { ReactNode } from "react";
 
 import { cn } from "@/lib/utils";
@@ -23,7 +24,7 @@ type TimelineEntry = { key: string; at: number; manual: boolean; entryHostName: 
 
 function clock(ms: number, timeZone?: string) {
   try {
-    return new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false, timeZone }).format(new Date(ms));
+    return new Intl.DateTimeFormat(getFormatLocale(), { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false, timeZone }).format(new Date(ms));
   } catch {
     return new Date(ms).toTimeString().slice(0, 8);
   }
@@ -31,7 +32,7 @@ function clock(ms: number, timeZone?: string) {
 
 function dayLabel(ms: number, nowMs: number, timeZone?: string) {
   try {
-    const format = (value: number) => new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric", timeZone }).format(new Date(value));
+    const format = (value: number) => new Intl.DateTimeFormat(getFormatLocale(), { month: "numeric", day: "numeric", timeZone }).format(new Date(value));
     const day = format(ms);
     if (day === format(nowMs)) return "";
     if (day === format(nowMs - 86400_000)) return "昨天 ";

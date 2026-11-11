@@ -1,3 +1,4 @@
+import { getFormatLocale } from "@/i18n";
 import { toast } from "sonner";
 
 import { formatAgo } from "@shared/dashboardAttention";
@@ -14,10 +15,10 @@ import { CollapsibleSection, Row } from "./HostDetailDialog";
   性能剖析只在那台机器的 127.0.0.1 上开，到点 Agent 自己关；面板这里只是开关和看状态。
 */
 
-const n = (value: number) => value.toLocaleString("zh-CN");
+const n = (value: number) => value.toLocaleString(getFormatLocale());
 
 function formatClock(unixSeconds: number) {
-  return new Date(unixSeconds * 1000).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+  return new Date(unixSeconds * 1000).toLocaleTimeString(getFormatLocale(), { hour: "2-digit", minute: "2-digit" });
 }
 
 export default function HostAgentRuntimeSection({ hostId, isAdmin }: { hostId: number; isAdmin: boolean }) {

@@ -1,3 +1,4 @@
+import { getFormatLocale } from "@/i18n";
 import { useEffect, useSyncExternalStore, type ReactNode } from "react";
 import { Eye, Loader2, LogOut } from "lucide-react";
 import { trpc } from "@/lib/trpc";
@@ -19,7 +20,7 @@ function ImpersonationBanner({ expiresAt }: { expiresAt: number }) {
   const exit = trpc.auth.logout.useMutation({ onSettled: () => userImpersonation.finish() });
   const name = me ? (me.username || me.name || `#${me.id}`) : "";
   const admin = me?.impersonation?.adminName;
-  const until = new Date(expiresAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
+  const until = new Date(expiresAt).toLocaleTimeString(getFormatLocale(), { hour: "2-digit", minute: "2-digit", hour12: false });
   return (
     <div
       role="status"

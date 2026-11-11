@@ -28,6 +28,7 @@ import PasswordResetDialog, { type PasswordResetCaptchaProps } from "@/features/
 import AuthCaptchaField from "@/features/authCaptcha/AuthCaptchaField";
 import { authCaptchaSubmissionFields, normalizeAuthCaptchaMode, type AuthCaptchaSubmission } from "@shared/authCaptchaMode";
 import OidcLoginButton from "@/features/oidcLogin/OidcLoginButton";
+import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 
 const REGISTRATION_CLOSED_MESSAGE = "当前注册未开放，请联系管理员";
 
@@ -838,6 +839,7 @@ export default function Login() {
             <SettingsIcon className={mobileAuth.hasPanelUrl() ? "h-5 w-5 text-muted-foreground" : "h-5 w-5 text-[var(--fx-warn-text)]"} />
           </button>
         )}
+        <LanguageSwitcher />
         <button
           onClick={toggleTheme}
           className="flex h-9 w-9 items-center justify-center rounded-md bg-[var(--fx-l1-surface)] text-foreground shadow-[var(--fx-elevation-control)] transition-colors hover:bg-[var(--fx-hover)] focus:outline-none focus-visible:shadow-[var(--fx-focus-ring)]"

@@ -1,3 +1,4 @@
+import { getFormatLocale } from "@/i18n";
 import type { ReactNode } from "react";
 import { toast } from "sonner";
 
@@ -64,7 +65,7 @@ const SMTP_TONE: Record<Smtp25Status, Tone> = { open: "good", blocked: "warn", t
 function formatChecked(sec: number | null | undefined) {
   if (!sec) return "—";
   const date = new Date(sec * 1000);
-  return `${formatAgo(Date.now() - date.getTime())} · ${date.toLocaleString("zh-CN", { hour12: false, month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}`;
+  return `${formatAgo(Date.now() - date.getTime())} · ${date.toLocaleString(getFormatLocale(), { hour12: false, month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}`;
 }
 
 function FamilyValue({ check, fallback }: { check: NetProfileReport["ipv4"] | null | undefined; fallback: string }) {

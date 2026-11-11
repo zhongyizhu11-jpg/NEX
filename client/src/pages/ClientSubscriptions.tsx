@@ -1,3 +1,4 @@
+import { getFormatLocale } from "@/i18n";
 import { FormField } from "@/components/ui/form-field";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
 import { useAuth } from "@/_core/hooks/useAuth";
@@ -1255,7 +1256,7 @@ export default function ClientSubscriptionsPage() {
                         {token.alias ? <Badge variant="outline" className="font-mono">/s/{token.alias}</Badge> : null}
                         {token.expiresAt ? (
                           <span className={`text-xs ${new Date(token.expiresAt).getTime() < Date.now() ? "text-[var(--fx-down-text)]" : "text-muted-foreground"}`}>
-                            {new Date(token.expiresAt).getTime() < Date.now() ? "已过期" : `${new Date(token.expiresAt).toLocaleDateString("zh-CN")} 到期`}
+                            {new Date(token.expiresAt).getTime() < Date.now() ? "已过期" : `${new Date(token.expiresAt).toLocaleDateString(getFormatLocale())} 到期`}
                           </span>
                         ) : null}
                         {token.lastClientLabel ? <span className="text-xs text-muted-foreground">最近 {token.lastClientLabel}</span> : null}

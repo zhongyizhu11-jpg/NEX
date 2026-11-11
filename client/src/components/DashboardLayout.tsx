@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/sidebar";
 import { useTheme } from "@/contexts/ThemeContext";
 import { UiThemeQuickSwitch } from "@/components/UiThemeQuickSwitch";
+import { LanguageMenuItem } from "@/components/LanguageSwitcher";
 import {
   LayoutDashboard,
   Ellipsis,
@@ -1650,8 +1651,8 @@ function DashboardLayoutContent({
                 <div className="flex items-start gap-2">
                   <UserAvatar user={user as any} className="h-8 w-8 shrink-0" />
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium">{accountDisplayName}</p>
-                    <p className="mt-1 truncate text-xs text-muted-foreground">{isAdmin ? "管理员" : "普通用户"} · {accountUsername}</p>
+                    <p className="truncate text-sm font-medium" data-no-translate="">{accountDisplayName}</p>
+                    <p className="mt-1 truncate text-xs text-muted-foreground">{isAdmin ? "管理员" : "普通用户"} · <span data-no-translate="">{accountUsername}</span></p>
                   </div>
                 </div>
               </div>
@@ -1713,6 +1714,8 @@ function DashboardLayoutContent({
                 <span>精简布局</span>
                 {compactLayout ? <Check className="ml-auto h-4 w-4 text-primary" aria-hidden="true" /> : null}
               </DropdownMenuItem>
+              {/* 界面语言：中英互换，记在这台设备上（见 client/src/i18n） */}
+              <LanguageMenuItem />
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 onClick={handleLogout}
@@ -2615,7 +2618,7 @@ function DashboardLayoutContent({
           <DialogDescription>关闭后可在公告中查看。</DialogDescription>
           <div
             className="max-h-[50svh] overflow-y-auto rounded-lg border bg-background/45 p-4 text-sm leading-6"
-            dangerouslySetInnerHTML={{ __html: renderMixedHtml(popupAnnouncement?.content || "") }}
+            data-no-translate="" dangerouslySetInnerHTML={{ __html: renderMixedHtml(popupAnnouncement?.content || "") }}
           />
           <DialogFooter>
             <Button onClick={() => popupAnnouncement?.id && dismissAnnouncement.mutate({ id: popupAnnouncement.id })}>我知道了</Button>
@@ -2636,7 +2639,7 @@ function DashboardLayoutContent({
           </DialogDescription>
           <div
             className="max-h-[50svh] overflow-y-auto rounded-lg border bg-background/45 p-4 text-sm leading-6"
-            dangerouslySetInnerHTML={{ __html: renderMixedHtml(upgradeAnnouncement?.content || "") }}
+            data-no-translate="" dangerouslySetInnerHTML={{ __html: renderMixedHtml(upgradeAnnouncement?.content || "") }}
           />
           <DialogFooter>
             <Countdown deadlineMs={upgradeAnnouncementDeadline}>

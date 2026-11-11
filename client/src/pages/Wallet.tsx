@@ -1,3 +1,4 @@
+import { getFormatLocale } from "@/i18n";
 import { FormField } from "@/components/ui/form-field";
 import WorkspaceHeader from "@/components/WorkspaceHeader";
 import { useAuth } from "@/_core/hooks/useAuth";
@@ -33,7 +34,7 @@ type PaymentType = "alipay" | "wxpay" | "stripe" | "usdt";
 function dateText(value?: string | Date | null) {
   if (!value) return "-";
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "-" : date.toLocaleString("zh-CN");
+  return Number.isNaN(date.getTime()) ? "-" : date.toLocaleString(getFormatLocale());
 }
 
 function orderTypeText(type?: string | null) {

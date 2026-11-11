@@ -30,7 +30,7 @@ export function PlanDescriptionView({ text, fallback }: { text: string; fallback
     <div className="mt-1 min-w-0">
       <div
         className={`fx-rich-text relative min-w-0 overflow-hidden text-secondary-type text-muted-foreground ${expanded ? "" : "max-h-28 [mask-image:linear-gradient(to_bottom,black_60%,transparent)]"}`}
-        dangerouslySetInnerHTML={{ __html: html }}
+        data-no-translate="" dangerouslySetInnerHTML={{ __html: html }}
       />
       <button
         type="button"
@@ -82,7 +82,7 @@ export function PlanDescriptionEditor({ value, onChange }: { value: string; onCh
       {preview ? (
         <div id="plan-description-preview" className="min-w-0 rounded-lg border bg-background/50 p-3">
           {value.trim()
-            ? <div className="fx-rich-text min-w-0 text-secondary-type text-muted-foreground" dangerouslySetInnerHTML={{ __html: renderMixedHtml(value) }} />
+            ? <div className="fx-rich-text min-w-0 text-secondary-type text-muted-foreground" data-no-translate="" dangerouslySetInnerHTML={{ __html: renderMixedHtml(value) }} />
             : <p className="text-sm text-muted-foreground">说明为空，商店里显示默认的一句介绍。</p>}
         </div>
       ) : null}

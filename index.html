@@ -15,6 +15,10 @@
           var resolved = theme === "system"
             ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
             : theme;
+          // 界面语言（client/src/i18n）：先把 <html lang> 定下来，读屏和浏览器的「翻译此页」不会误判
+          var lang = window.localStorage.getItem("forwardx.language");
+          if (lang !== "en" && lang !== "zh-CN") lang = /^en(?:-|$)/i.test((navigator.languages && navigator.languages[0]) || navigator.language || "") ? "en" : "zh-CN";
+          document.documentElement.lang = lang;
           document.documentElement.classList.add("fx-booting");
           document.documentElement.classList.remove("light", "dark");
           document.documentElement.classList.add(resolved === "dark" ? "dark" : "light");

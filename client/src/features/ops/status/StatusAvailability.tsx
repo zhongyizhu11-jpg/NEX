@@ -1,3 +1,4 @@
+import { getFormatLocale } from "@/i18n";
 import { useMemo, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { trpc } from "@/lib/trpc";
@@ -64,7 +65,7 @@ function formatClock(iso: string | null) {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "";
   // 统一按北京时间显示，和每日条的切日一致。
-  const parts = new Intl.DateTimeFormat("zh-CN", {
+  const parts = new Intl.DateTimeFormat(getFormatLocale(), {
     timeZone: "Asia/Shanghai",
     month: "numeric",
     day: "numeric",
