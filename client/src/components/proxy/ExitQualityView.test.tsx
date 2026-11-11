@@ -64,5 +64,5 @@ test("出口检测：双栈分页签，地区按主机所在地上色，老 Agen
   assert.match(html, /data-region-tone="match"[^>]*>JP</);
   assert.match(html, /data-region-tone="china"[^>]*>CN</);
   assert.doesNotMatch(html, /仅自制/);
-  assert.match(html, /Prime Video、Spotify 注册、Steam 商店、Bilibili 港澳台 要 Agent 2\.2\.253/);
+  assert.match(html, /Prime Video、Spotify 注册、Steam 商店、Bilibili 港澳台 要 Agent 2\.2\.255/);
 });

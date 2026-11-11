@@ -166,7 +166,7 @@ test("保存：落地入站 / 外部链接两种来源，形态、Agent 版本�
     await assert.rejects(rules.create(directRule({ protocol: "both", egressType: "vless_host", egressInboundId: inboundId })), /UDP 也要走出口/);
     await assert.rejects(rules.create(directRule({ protocol: "udp", egressType: "vless_link", egressLink: vlessLink, egressUdp: false })), /UDP 必须走出口/);
     await assert.rejects(rules.create(directRule({ egressType: "vless_link", egressLink: vlessLink.replace("type=tcp", "type=ws") })), /RAW\/TCP/);
-    await assert.rejects(rules.create(directRule({ hostId: 30, egressType: "vless_host", egressInboundId: inboundId })), /需要升级到 2\.2\.253/);
+    await assert.rejects(rules.create(directRule({ hostId: 30, egressType: "vless_host", egressInboundId: inboundId })), /需要升级到 2\.2\.255/);
     const wsInbound = await makeInbound({ name: "东京 ws", port: 8443, transport: "ws" });
     await assert.rejects(rules.create(directRule({ egressType: "vless_host", egressInboundId: wsInbound })), /RAW\/TCP/);
     // 正被当作出口：不能删、不能改成 ws。
@@ -247,6 +247,6 @@ test("心跳：2.2.255 起拿到本机 socks5 链和 sing-box 桥接；旧 Agent
     assert.equal(old.bridgeAction, null, "旧 Agent 不发桥接动作");
     const listedOld = (await rules.list()).find((item) => item.id === 900);
     assert.equal(listedOld.egress.state, "agent_upgrade");
-    assert.match(listedOld.egress.message, /2\.2\.253/);
+    assert.match(listedOld.egress.message, /2\.2\.255/);
   `);
 });

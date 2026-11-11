@@ -92,7 +92,7 @@ test("旧 Agent（低于 2.2.255）：按停用下发，卡片显示「需要升
     assert.equal(ruleEgressRuntime(view), null, version);
   }
   const evaluation = evaluateRuleEgress(rule(), { ...entry, entryAgentVersion: "2.2.252", context: context() });
-  assert.match(String(evaluation?.message), /香港入口.*2\.2\.253.*VLESS/);
+  assert.match(String(evaluation?.message), /香港入口.*2\.2\.255.*VLESS/);
   // 桥接只收能跑的规则：旧 Agent 上一条都没有。
   const blocked = ruleEgressRuntimeView(rule(), { ...entry, entryAgentVersion: "2.2.252", context: context(), vlessBridgePorts: ports });
   assert.deepEqual(collectVlessEgressBridges([blocked], 10), []);

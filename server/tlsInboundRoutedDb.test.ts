@@ -127,7 +127,7 @@ test("回环端口在每台入口机上都空着；老 Agent 挂不上转送规�
     const inbound = await db.getTlsInboundById(inboundId);
     await exec("UPDATE hosts SET agentVersion = '2.2.252' WHERE id = 10");
     await service.requireTlsInboundRunnable(inbound);
-    await assert.rejects(service.requireTlsInboundRunnable(inbound, { routeKind: "tunnel" }), /2\.2\.253/);
+    await assert.rejects(service.requireTlsInboundRunnable(inbound, { routeKind: "tunnel" }), /2\.2\.255/);
     await assert.rejects(service.requireTlsInboundRunnable(inbound, { routeKind: "group" }), /需要升级 Agent/);
   `);
 });

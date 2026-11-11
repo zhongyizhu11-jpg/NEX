@@ -117,11 +117,11 @@ test("转送规则（经隧道 / 转发链 / 转发组）的 Agent 门槛是一�
   assert.equal(isSniRouteAgentSupported("tunnel", "2.2.230"), false);
   assert.equal(tlsInboundRuleState({ inbound: { isEnabled: true }, agentVersion: "2.2.230", routeKind: "group" }), "agent_upgrade");
   assert.equal(tlsInboundRuleState({ inbound: { isEnabled: true }, agentVersion: "2.2.230" }), "ok");
-  assert.match(tlsInboundRoutedAgentUpgradeMessage("HK"), /主机「HK」.*2\.2\.253.*需要升级 Agent/);
+  assert.match(tlsInboundRoutedAgentUpgradeMessage("HK"), /主机「HK」.*2\.2\.255.*需要升级 Agent/);
   const inbound = { allowedSni: [], isEnabled: true, agentSupported: true, routedAgentSupported: false, hostName: "HK" };
   const form = { tlsInboundId: 1, sniNamesText: "a.example.com", targetIp: "1.1.1.1", targetPort: 443 };
   assert.equal(sniRuleFormBlocker(form, inbound), null);
-  assert.match(String(sniRuleFormBlocker(form, inbound, undefined, "tunnel")), /2\.2\.253/);
+  assert.match(String(sniRuleFormBlocker(form, inbound, undefined, "tunnel")), /2\.2\.255/);
 });
 
 test("转发组的每台入口机用自己身上和锚点同端口的入站；没有就是 null", () => {

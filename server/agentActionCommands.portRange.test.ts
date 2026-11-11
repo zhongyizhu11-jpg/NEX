@@ -58,7 +58,8 @@ test("单端口 nft 规则的命令和以前一样（端口、目标都是原样
   const text = buildNftForwardCmds(single).join("\n");
   assert.match(text, /tcp dport 22222 counter dnat ip to 203\.0\.113\.10:443 comment/);
   assert.match(text, /tcp dport 443 ct original proto-dst 22222 counter accept/);
-  assert.doesNotMatch(text, /22222-|443-|fwx_pr_/);
+  // 只看端口段语法（「22222-」后面跟数字）；Docker 放行的注释名 fwx-docker-<规则>-22222-tcp 不算
+  assert.doesNotMatch(text, /22222-\d|443-\d|fwx_pr_/);
 });
 
 test("iptables 同端口段：--dport 起:止，DNAT 只写地址；放行和 MASQUERADE 按目标段匹配", () => {

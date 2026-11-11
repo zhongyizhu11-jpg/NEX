@@ -1,6 +1,7 @@
 import { createHash } from "crypto";
 import { isIP } from "net";
 import { forwardRuleProtocols } from "@shared/forwardTypes";
+import { ruleSourcePortEnd, ruleTargetPortEnd } from "@shared/portRange";
 
 /*
   内核转发（iptables / nftables）在装了 Docker 的入口机上的放行。
@@ -29,7 +30,7 @@ export const DOCKER_COMPAT_CHAIN = "DOCKER-USER";
 const dockerCompatLabel = "[docker-compat]";
 
 /** 构造器只读规则的这几个字段（数据库行、隧道 / 孤儿快照都传得进来）。 */
-export type DockerCompatRule = { id?: unknown; sourcePort?: unknown; targetIp?: unknown; targetPort?: unknown; protocol?: unknown };
+export type DockerCompatRule = { id?: unknown; sourcePort?: unknown; sourcePortEnd?: unknown; targetIp?: unknown; targetPort?: unknown; protocol?: unknown };
 
 type DockerCompatSpec = {
   proto: "tcp" | "udp";
@@ -48,8 +49,9 @@ function validPort(value: unknown) {
 }
 
 /** 目标摘要：目标一变注释就变，改目标的规则因此能「先装新的、再删旧的」。 */
-export function dockerCompatTargetTag(targetIp: string, targetPort: number) {
-  return createHash("sha1").update(`${targetIp}:${targetPort}`).digest("hex").slice(0, 8);
+export function dockerCompatTargetTag(targetIp: string, targetPort: number, span = "") {
+  // 单端口的摘要和 Agent（agent/docker_forward_compat.go）算法一致，Agent 按它核实；端口段多带一截，Agent 不核实端口段
+  return createHash("sha1").update(span ? `${targetIp}:${targetPort}-${span}` : `${targetIp}:${targetPort}`).digest("hex").slice(0, 8);
 }
 
 function dockerCompatSpecs(rule: DockerCompatRule): DockerCompatSpec[] {
@@ -58,7 +60,15 @@ function dockerCompatSpecs(rule: DockerCompatRule): DockerCompatSpec[] {
   const sourcePort = validPort(rule?.sourcePort);
   if (isIP(targetIp) !== 4 || !targetPort || !sourcePort) return [];
   const ruleId = Number(rule?.id) || 0;
-  const tag = dockerCompatTargetTag(targetIp, targetPort);
+  // 端口段（shared/portRange.ts）：入口段、目标段整段放行（iptables 的 --dport / --ctorigdstport 都认「起:止」）。
+  // 注释名里还是入口起点，Agent 的清理匹配不用改；目标摘要把段带上，段一变注释就变，照样「先装新的、再删旧的」。
+  const sourceEnd = ruleSourcePortEnd({ sourcePort, sourcePortEnd: rule?.sourcePortEnd });
+  const targetEnd = ruleTargetPortEnd({ sourcePort, sourcePortEnd: rule?.sourcePortEnd, targetPort });
+  const ranged = sourceEnd > sourcePort && targetEnd <= 65535;
+  if (sourceEnd > sourcePort && !ranged) return [];
+  const sourceSpan = ranged ? `${sourcePort}:${sourceEnd}` : String(sourcePort);
+  const targetSpan = ranged ? `${targetPort}:${targetEnd}` : String(targetPort);
+  const tag = ranged ? dockerCompatTargetTag(targetIp, targetPort, `${targetEnd}/${sourceEnd}`) : dockerCompatTargetTag(targetIp, targetPort);
   const specs: DockerCompatSpec[] = [];
   for (const proto of forwardRuleProtocols(rule?.protocol)) {
     const inComment = `fwx-docker-${ruleId}-${sourcePort}-${proto}-in-${tag}`;
@@ -68,12 +78,12 @@ function dockerCompatSpecs(rule: DockerCompatRule): DockerCompatSpec[] {
       proto,
       direction: "in",
       comment: inComment,
-      args: `-p ${proto} -d ${targetIp} --dport ${targetPort} -m conntrack --ctorigdstport ${sourcePort} -m comment --comment ${inComment} -j ACCEPT`,
+      args: `-p ${proto} -d ${targetIp} --dport ${targetSpan} -m conntrack --ctorigdstport ${sourceSpan} -m comment --comment ${inComment} -j ACCEPT`,
     }, {
       proto,
       direction: "out",
       comment: outComment,
-      args: `-p ${proto} -s ${targetIp} --sport ${targetPort} -m conntrack --ctorigdstport ${sourcePort} --ctdir REPLY --ctstate ESTABLISHED,RELATED -m comment --comment ${outComment} -j ACCEPT`,
+      args: `-p ${proto} -s ${targetIp} --sport ${targetSpan} -m conntrack --ctorigdstport ${sourceSpan} --ctdir REPLY --ctstate ESTABLISHED,RELATED -m comment --comment ${outComment} -j ACCEPT`,
     });
   }
   return specs;

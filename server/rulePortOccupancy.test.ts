@@ -28,7 +28,7 @@ test("下一个 Agent 版本起才发指令；版本号常量和 Agent 那头对
   assert.equal(agentSupportsPortOccupancy(null), false);
   const goSource = fs.readFileSync(path.join(process.cwd(), "agent/ext_ports.go"), "utf8");
   assert.match(goSource, /func \(m \*portOccupancyModule\) Name\(\) string \{ return "ports" \}/);
-  assert.match(goSource, /只发给 2\.2\.253 起的 Agent/);
+  assert.match(goSource, /只发给 2\.2\.255 起的 Agent/);
 });
 
 test("上报格式不对整份丢掉", () => {

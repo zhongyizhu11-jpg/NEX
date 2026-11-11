@@ -123,7 +123,7 @@ test("Agent 版本门槛：低于 2.2.255 不下发，提示需要升级 Agent",
   assert.equal(isMieruAgentSupported(""), false);
   assert.equal(isMieruAgentSupported("2.2.255"), true);
   assert.equal(isMieruAgentSupported("2.3.0"), true);
-  assert.match(mieruAgentUpgradeMessage("2.2.251"), /需要升级 Agent.*2\.2\.253.*2\.2\.251/);
+  assert.match(mieruAgentUpgradeMessage("2.2.251"), /需要升级 Agent.*2\.2\.255.*2\.2\.251/);
 });
 
 test("派生节点：用户名在 username 上，承载和端口段带过去；sing-box 配置里没有 Mieru", () => {

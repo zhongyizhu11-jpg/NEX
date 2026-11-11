@@ -225,3 +225,17 @@ test("没有 Docker 的主机：什么都不做，正常退出", () => {
     assert.deepEqual(allowances(read("iptables-nft")), []);
   });
 });
+
+test("端口段规则：入口段、目标段整段放行，注释名还用入口起点，改段时摘要跟着变", () => {
+  const ranged = { id: 7, sourcePort: 30000, sourcePortEnd: 30100, targetIp: "203.0.113.10", targetPort: 20000, protocol: "tcp" };
+  const text = buildDockerForwardCompatCmds(ranged).join("\n");
+  assert.match(text, /-p tcp -d 203\.0\.113\.10 --dport 20000:20100 -m conntrack --ctorigdstport 30000:30100 -m comment --comment fwx-docker-7-30000-tcp-in-[0-9a-f]{8} -j ACCEPT/);
+  assert.match(text, /-p tcp -s 203\.0\.113\.10 --sport 20000:20100 -m conntrack --ctorigdstport 30000:30100 --ctdir REPLY/);
+  const shrunk = buildDockerForwardCompatCmds({ ...ranged, sourcePortEnd: 30050 }).join("\n");
+  const tagOf = (value: string) => value.match(/fwx-docker-7-30000-tcp-in-([0-9a-f]{8})/)?.[1];
+  assert.notEqual(tagOf(text), tagOf(shrunk), "段一变注释就变，重新下发先装新的再删旧的");
+  // 单端口的摘要和 Agent 那头（agent/docker_forward_compat.go）一样，不受这次改动影响
+  assert.equal(dockerCompatTargetTag("203.0.113.10", 443), createHash("sha1").update("203.0.113.10:443").digest("hex").slice(0, 8));
+  // 目标段超出 65535 的段（保存时就会被挡）不装放行
+  assert.deepEqual(buildDockerForwardCompatCmds({ ...ranged, targetPort: 65500 }).filter((line) => line.includes("--dport")), []);
+});

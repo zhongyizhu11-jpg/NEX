@@ -116,7 +116,7 @@ test("fwxm-panel.sh：读配置不执行它；info / address / version 按部署
     assert.equal(info.status, 0, info.stderr);
     assert.match(info.stdout, /部署方式:\s+local/);
     assert.match(info.stdout, /访问端口:\s+9911/);
-    assert.match(info.stdout, /面板版本:\s+2\.3\.524/);
+    assert.match(info.stdout, /面板版本:\s+2\.3\.525/);
     assert.equal(fs.existsSync(path.join(dir, "pwned")), false, "配置文件不当脚本执行");
 
     const address = run(`bash ${JSON.stringify(manager)} address`, env);
