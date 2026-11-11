@@ -254,3 +254,66 @@ html.dark .fx-save-dock { border-color: rgb(255 180 200 / 12%); box-shadow: inse
 }
 .fx-uitheme-swatch[data-theme="deepspace"] > b { border-radius: 0; border-color: #e3e6ea; background: #fff; }
 .dark .fx-uitheme-swatch[data-theme="deepspace"] > b { border-color: #1e232b; background: #0f1216; }
+
+/* ═══ 控制台（themes/official/console/theme.css）═══ */
+/* ── 设置页「界面主题」的预览 ───────────────────────────────── */
+/* 近白中性灰底、两张白卡各一圈浅灰线、不投影；底下一条白通栏，选中项是一根深蓝下划线 */
+.fx-uitheme-swatch[data-theme="console"] { background: #f7f8fa; }
+.dark .fx-uitheme-swatch[data-theme="console"] { background: #111318; }
+.fx-uitheme-swatch[data-theme="console"] > i {
+  border-radius: 4px;
+  border-color: #e5e7eb;
+  background: linear-gradient(#1d4ed8, #1d4ed8) 6px 5px / 18% 2px no-repeat, linear-gradient(#e5e7eb, #e5e7eb) 6px calc(100% - 5px) / calc(100% - 12px) 1px no-repeat, #fff;
+  box-shadow: none;
+}
+.dark .fx-uitheme-swatch[data-theme="console"] > i {
+  border-color: #2a2e36;
+  background: linear-gradient(#8ab4ff, #8ab4ff) 6px 5px / 18% 2px no-repeat, linear-gradient(#2a2e36, #2a2e36) 6px calc(100% - 5px) / calc(100% - 12px) 1px no-repeat, #181b21;
+  box-shadow: none;
+}
+.fx-uitheme-swatch[data-theme="console"] > b { border-radius: 0; border-color: #e5e7eb; background: #fff; }
+.dark .fx-uitheme-swatch[data-theme="console"] > b { border-color: #2a2e36; background: #181b21; }
+.fx-uitheme-swatch[data-theme="console"] > b::after { top: auto; bottom: 1px; height: 2px; border-radius: 0; background: #1d4ed8; }
+.dark .fx-uitheme-swatch[data-theme="console"] > b::after { background: #8ab4ff; }
+
+/* ═══ 精修（themes/official/refined/theme.css）═══ */
+/* ── 设置页「界面主题」的预览 ───────────────────────────────── */
+/* 浅灰底、两张白卡（细线 + 一点点影子、圆一点）、底下一枚白胶囊里一块墨色（选中的分类） */
+.fx-uitheme-swatch[data-theme="refined"] { background: #f3f5f8; }
+.dark .fx-uitheme-swatch[data-theme="refined"] { background: #0f141c; }
+.fx-uitheme-swatch[data-theme="refined"] > i {
+  border-radius: 7px;
+  border-color: #e3e7ed;
+  background: linear-gradient(#2563eb, #2563eb) 6px calc(100% - 5px) / 40% 3px no-repeat, linear-gradient(#edf1f5, #edf1f5) 6px calc(100% - 5px) / calc(100% - 12px) 3px no-repeat, #fff;
+  box-shadow: 0 1px 2px rgb(15 23 42 / 6%);
+}
+.dark .fx-uitheme-swatch[data-theme="refined"] > i {
+  border-color: #263043;
+  background: linear-gradient(#7aa7ff, #7aa7ff) 6px calc(100% - 5px) / 40% 3px no-repeat, linear-gradient(#263043, #263043) 6px calc(100% - 5px) / calc(100% - 12px) 3px no-repeat, #172030;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 30%);
+}
+.fx-uitheme-swatch[data-theme="refined"] > b { border-radius: 7px; border-color: #e3e7ed; background: #fff; }
+.dark .fx-uitheme-swatch[data-theme="refined"] > b { border-color: #263043; background: #172030; }
+.fx-uitheme-swatch[data-theme="refined"] > b::after { border-radius: 4px; background: #0f172a; }
+.dark .fx-uitheme-swatch[data-theme="refined"] > b::after { background: #e5eaf2; }
+
+/* ═══ 深色运维（themes/official/nightops/theme.css）═══ */
+/* ── 设置页「界面主题」的预览 ───────────────────────────────── */
+/* 深浅两边都是近黑底、两张深灰面板各一圈暗线和一根蓝 / 绿细条、底下一条贴底暗栏 */
+.fx-uitheme-swatch[data-theme="nightops"],
+.dark .fx-uitheme-swatch[data-theme="nightops"] { background: #0d1117; }
+.fx-uitheme-swatch[data-theme="nightops"] > i,
+.dark .fx-uitheme-swatch[data-theme="nightops"] > i {
+  border-radius: 4px;
+  border-color: #262e38;
+  background: linear-gradient(#58a6ff, #58a6ff) 6px calc(100% - 4px) / 46% 2px no-repeat, linear-gradient(#1f262f, #1f262f) 6px calc(100% - 4px) / calc(100% - 12px) 2px no-repeat, #151b23;
+  box-shadow: none;
+}
+.fx-uitheme-swatch[data-theme="nightops"] > i:nth-child(2),
+.dark .fx-uitheme-swatch[data-theme="nightops"] > i:nth-child(2) {
+  background: linear-gradient(#3fb950, #3fb950) 6px calc(100% - 4px) / 30% 2px no-repeat, linear-gradient(#1f262f, #1f262f) 6px calc(100% - 4px) / calc(100% - 12px) 2px no-repeat, #151b23;
+}
+.fx-uitheme-swatch[data-theme="nightops"] > b,
+.dark .fx-uitheme-swatch[data-theme="nightops"] > b { border-radius: 0; border-color: #262e38; background: #0a0d12; }
+.fx-uitheme-swatch[data-theme="nightops"] > b::after,
+.dark .fx-uitheme-swatch[data-theme="nightops"] > b::after { border-radius: 2px; background: #1f6feb; }
