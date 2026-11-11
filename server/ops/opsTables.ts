@@ -11,6 +11,7 @@ import { offsiteBackupTables, offsiteBackupMigrationTables } from "./offsiteBack
 import { webhooksTables, webhooksMigrationTables } from "./webhooksTables";
 import { statusAvailabilityTables, statusAvailabilityMigrationTables } from "./statusAvailabilityTables";
 import { netProfileTables, netProfileMigrationTables } from "./netProfileTables";
+import { ipIntelTables } from "./ipIntelTables";
 import { unlockTables, unlockMigrationTables } from "./unlockTables";
 import { connStatsTables, connStatsMigrationTables } from "./connStatsTables";
 import { nodeCheckTables, nodeCheckMigrationTables } from "./nodeCheckTables";
@@ -31,6 +32,7 @@ export const OPS_TABLE_DEFS: TableDef[] = [
   ...webhooksTables,
   ...statusAvailabilityTables,
   ...netProfileTables,
+  ...ipIntelTables,
   ...unlockTables,
   ...connStatsTables,
   ...nodeCheckTables,

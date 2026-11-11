@@ -813,6 +813,7 @@ export async function deleteHost(id: number) {
   // 网络画像、解锁检测记录（server/ops/netProfileTables.ts / unlockTables.ts）：表是后加的，老库里可能还没建好，失败不拦删除
   await executeRaw(`DELETE FROM ${quoteIdentifier("host_network_profiles")} WHERE ${quoteIdentifier("hostId")} = ?`, [id]).catch(() => undefined);
   await executeRaw(`DELETE FROM ${quoteIdentifier("host_unlock_checks")} WHERE ${quoteIdentifier("hostId")} = ?`, [id]).catch(() => undefined);
+  await executeRaw(`DELETE FROM ${quoteIdentifier("host_ip_intel")} WHERE ${quoteIdentifier("hostId")} = ?`, [id]).catch(() => undefined);
   await db.delete(trafficBillingConfigs).where(and(
     eq(trafficBillingConfigs.resourceType, "host"),
     eq(trafficBillingConfigs.resourceId, id),
