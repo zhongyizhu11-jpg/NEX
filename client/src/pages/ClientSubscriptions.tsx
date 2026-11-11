@@ -100,6 +100,7 @@ import {
   Shield,
   Boxes,
   Ship,
+  Squirrel,
   Binary,
   Blocks,
   Trash2,
@@ -154,6 +155,8 @@ const CLIENT_ICONS: Record<string, { icon: LucideIcon; className: string }> = {
   nekobox: { icon: Boxes, className: "bg-[var(--fx-warn-soft)] text-[var(--fx-warn-text)]" },
   nekoray: { icon: Blocks, className: "bg-[var(--fx-delivery-soft)] text-[var(--fx-delivery)]" },
   v2rayn: { icon: Binary, className: "bg-[var(--fx-l3-control-fill)] text-muted-foreground" },
+  // Egern 在丹麦语里是松鼠。
+  egern: { icon: Squirrel, className: "bg-[var(--fx-warn-soft)] text-[var(--fx-warn-text)]" },
 };
 
 function clientIcon(target: ProxyClientTarget) {

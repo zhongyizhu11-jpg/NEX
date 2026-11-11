@@ -33,7 +33,7 @@ const SAMPLES: Array<[string, string, string]> = [
   ["Surge iOS/3000", "surge", "surge"],
   ["Surge Mac/2700", "surge", "surge"],
   ["Surfboard/2.24.0", "surfboard", "surge"],
-  ["Egern/1.20", "egern", "surge"],
+  ["Egern/1.20", "egern", "egern"],
   ["Loon/700", "loon", "loon"],
   ["v2rayN/6.45", "v2rayn", "v2rayjson"],
   ["v2rayN/6.23", "v2rayn", "base64"],

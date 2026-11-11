@@ -137,6 +137,19 @@ export const PROXY_CLIENT_TARGETS: readonly ProxyClientTarget[] = [
     profileImport: { buildImportUrl: (url) => `surge:///install-config?url=${q(url)}` },
   },
   {
+    id: "egern",
+    label: "Egern",
+    shortLabel: "Egern",
+    // 只标 iOS：别的平台上有没有、认不认这个 scheme 没核实，宁可少一格也不摆一个点不动的按钮。
+    platforms: ["ios"],
+    format: "egern",
+    // 官方 URL Scheme 文档：egern:/subscriptions/new?url=…（单斜杠）。加的是订阅（节点进默认的外部组），
+    // 正好对应节点订阅那份只有 proxies 的 YAML。
+    buildImportUrl: (url) => `egern:/subscriptions/new?url=${q(url)}`,
+    // 完整配置没有文档里的导入 scheme，走手动；配置里带 auto_update，导进去之后会自己更新。
+    profileImport: { manualHint: "在 Egern 的配置文件列表里选「从 URL 添加」，粘贴这条地址，之后切到这份配置" },
+  },
+  {
     id: "quantumultx",
     label: "Quantumult X",
     shortLabel: "QuantumultX",
@@ -320,7 +333,7 @@ export const PROXY_SUBSCRIPTION_KIND_LABELS: Record<ProxySubscriptionKind, strin
 
 export const PROXY_SUBSCRIPTION_KIND_HINTS: Record<ProxySubscriptionKind, string> = {
   nodes: "只有节点，分流规则由你在客户端里自己配。所有客户端都适用。",
-  rules: "一份完整配置：节点、策略组（自动选路、负载均衡）和分流规则一起给，导入后不用再设置。Clash、sing-box、Surge、Loon、Quantumult X、Shadowrocket 都有；Shadowrocket 的节点仍来自节点订阅。",
+  rules: "一份完整配置：节点、策略组（自动选路、负载均衡）和分流规则一起给，导入后不用再设置。Clash、sing-box、Surge、Loon、Quantumult X、Shadowrocket、Egern 都有；Shadowrocket 的节点仍来自节点订阅。",
 };
 
 /**

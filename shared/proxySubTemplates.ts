@@ -13,6 +13,7 @@
  *   - sing-box：一个 JSON 对象（log / dns / inbounds / experimental / route.rules……），面板把
  *     outbounds 和 route 并进去。
  *   - Surge / Loon / Quantumult X / Shadowrocket：整段 [General]（含那一行表头）。
+ *   - Egern：放在 proxies: 前面的 YAML 文本（和 Clash 同理），不能含 proxies / policy_groups / rules / modules。
  *   - Base64 / Xray JSON 没有模板（前者没有位置，后者的 DNS / 入站由客户端自己管）。
  *
  * 占位符：{{app_name}} {{panel_url}} {{sub_url}} {{username}} {{expire_date}} {{data_left}} {{test_url}}。
@@ -20,7 +21,7 @@
  * 另外两样（都只进规则订阅）：
  *   - 分流规则：和全局 / 用户 / 令牌的自定义规则同一种文本（shared/proxySubCustomRules.ts），
  *     排在全局前置之后。停用的规则存成注释行（`# DOMAIN,…`），文本里看得见、渲染时跳过。
- *   - 模块 / 插件：目前是 Loon 的 [Plugin]（shared/proxySubModules.ts）。
+ *   - 模块 / 插件：Loon 的 [Plugin]、Egern 的 modules（shared/proxySubModules.ts）。
  *
  * 管理员界面上有可视化编辑（client/src/components/proxy/ProxySubTemplateVisualEditor.tsx），
  * 存的还是这几样原始数据：可视化只是换个方式改它们，不另存一份。
@@ -30,9 +31,9 @@ import type { ProxySubCustomGroup } from "./proxySubscriptionPlan";
 import { normalizeProxySubGroupMatch, validateProxySubGroupFilter } from "./proxySubGroupFilter";
 import { PROXY_SUBSCRIPTION_GROUP_NAME, type ProxySubscriptionFormat } from "./proxySubscription";
 import { parseProxyCustomRules } from "./proxySubCustomRules";
-import { proxySubModuleProblem, PROXY_SUB_TEMPLATE_MODULE_LIMITS, type ProxySubTemplateModule } from "./proxySubModules";
+import { proxySubModuleProblem, PROXY_SUB_TEMPLATE_MODULE_LIMITS, type ProxySubModuleFlavor, type ProxySubTemplateModule } from "./proxySubModules";
 
-export const PROXY_SUB_TEMPLATE_TARGETS = ["clash", "singbox", "surge", "loon", "quantumultx", "shadowrocket"] as const;
+export const PROXY_SUB_TEMPLATE_TARGETS = ["clash", "singbox", "surge", "loon", "quantumultx", "shadowrocket", "egern"] as const;
 
 export type ProxySubTemplateTarget = (typeof PROXY_SUB_TEMPLATE_TARGETS)[number];
 
@@ -43,6 +44,7 @@ export const PROXY_SUB_TEMPLATE_TARGET_LABELS: Record<ProxySubTemplateTarget, st
   loon: "Loon",
   quantumultx: "Quantumult X",
   shadowrocket: "Shadowrocket",
+  egern: "Egern",
 };
 
 export function proxySubTemplateTargetForFormat(format: ProxySubscriptionFormat): ProxySubTemplateTarget | null {
@@ -57,13 +59,20 @@ export type ProxySubTemplate = {
   customGroups: ProxySubCustomGroup[];
   /** 模板里的分流规则文本；空串 = 没有。 */
   customRules: string;
-  /** 模块 / 插件引用；目前只有 Loon 模板用得上。 */
+  /** 模块 / 插件引用；Loon 和 Egern 模板用得上。 */
   modules: ProxySubTemplateModule[];
   isDefault?: boolean;
 };
 
 /** 哪些目标格式的模板能挂模块 / 插件（界面据此显示那一块，保存时据此校验）。 */
-export const PROXY_SUB_TEMPLATE_MODULE_TARGETS: readonly ProxySubTemplateTarget[] = ["loon"];
+export const PROXY_SUB_TEMPLATE_MODULE_TARGETS: readonly ProxySubTemplateTarget[] = ["loon", "egern"];
+
+/** 界面和报错里怎么叫它：Loon 叫插件（[Plugin]），Egern 叫模块（modules）。参数的写法也跟着不同。 */
+export function proxySubTemplateModuleFlavor(target: ProxySubTemplateTarget): ProxySubModuleFlavor {
+  return target === "egern" ? "egern" : "loon";
+}
+
+export const PROXY_SUB_TEMPLATE_MODULE_NOUNS: Record<ProxySubModuleFlavor, string> = { loon: "插件", egern: "模块" };
 
 /** 模板分流规则文本的长度上限（条数上限和别处的自定义规则一样，见 parseProxyCustomRules）。 */
 export const PROXY_SUB_TEMPLATE_RULES_MAX_LENGTH = 60_000;
@@ -168,6 +177,14 @@ export const PROXY_SUB_BUILTIN_PRELUDES: Record<ProxySubTemplateTarget, string> 
     "skip-proxy = 127.0.0.1, 192.168.0.0/16, 10.0.0.0/8, 172.16.0.0/12, 100.64.0.0/10, localhost, *.local",
     "dns-server = system",
   ].join("\n"),
+  /*
+    Egern 只放一个全局测速地址：DNS、TUN 这些 Egern 自己的默认就能用，内置模板不替用户改；
+    要定制的管理员自己建 Egern 模板。组上的测速地址面板另外写（见 proxySubEgern.ts）。
+  */
+  egern: [
+    "# {{app_name}} 订阅 · {{username}}",
+    "proxy_latency_test_url: \"{{test_url}}\"",
+  ].join("\n"),
 };
 
 export type ProxySubTemplateVariables = {
@@ -200,6 +217,9 @@ export function renderProxySubTemplatePrelude(prelude: string, vars: ProxySubTem
 /** Clash 的开头部分不能带这几个键 —— 带了就和面板生成的部分撞车，客户端读到两份 proxies。 */
 const CLASH_RESERVED_KEYS = /^(proxies|proxy-groups|rule-providers|rules|proxy-providers)\s*:/m;
 
+/** Egern 同理；modules 也由面板写（模板的「模块」一栏），两份 modules 键同样会撞车。 */
+const EGERN_RESERVED_KEYS = /^(proxies|policy_groups|rules|modules)\s*:/m;
+
 export type ProxySubTemplateValidation = { ok: true } | { ok: false; error: string };
 
 export function validateProxySubTemplate(template: Pick<ProxySubTemplate, "target" | "prelude" | "customGroups"> & Partial<Pick<ProxySubTemplate, "customRules" | "modules">>): ProxySubTemplateValidation {
@@ -208,6 +228,9 @@ export function validateProxySubTemplate(template: Pick<ProxySubTemplate, "targe
   if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(prelude)) return { ok: false, error: "模板里有控制字符" };
   if (template.target === "clash" && CLASH_RESERVED_KEYS.test(prelude)) {
     return { ok: false, error: "Clash 模板不能含 proxies / proxy-groups / rule-providers / rules，这几段由面板生成" };
+  }
+  if (template.target === "egern" && EGERN_RESERVED_KEYS.test(prelude)) {
+    return { ok: false, error: "Egern 模板不能含 proxies / policy_groups / rules / modules，这几段由面板生成（模块写在下面的「Egern 模块」里）" };
   }
   if (template.target === "singbox" && prelude.trim()) {
     try {
@@ -264,11 +287,12 @@ export function validateProxySubTemplate(template: Pick<ProxySubTemplate, "targe
 
   const modules = template.modules || [];
   if (modules.length > 0 && !PROXY_SUB_TEMPLATE_MODULE_TARGETS.includes(template.target)) {
-    return { ok: false, error: "只有 Loon 模板能挂插件" };
+    return { ok: false, error: "只有 Loon 和 Egern 模板能挂插件 / 模块" };
   }
-  if (modules.length > PROXY_SUB_TEMPLATE_MODULE_LIMITS.count) return { ok: false, error: `插件最多 ${PROXY_SUB_TEMPLATE_MODULE_LIMITS.count} 个` };
+  const flavor = proxySubTemplateModuleFlavor(template.target);
+  if (modules.length > PROXY_SUB_TEMPLATE_MODULE_LIMITS.count) return { ok: false, error: `${PROXY_SUB_TEMPLATE_MODULE_NOUNS[flavor]}最多 ${PROXY_SUB_TEMPLATE_MODULE_LIMITS.count} 个` };
   for (const [index, module] of modules.entries()) {
-    const problem = proxySubModuleProblem(module, index);
+    const problem = proxySubModuleProblem(module, index, flavor);
     if (problem) return { ok: false, error: problem };
   }
   return { ok: true };

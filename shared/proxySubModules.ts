@@ -1,26 +1,30 @@
 /**
- * 订阅模板里挂的「模块 / 插件」：Loon 的 [Plugin]（去广告、BoxJs、各种脚本……）。
+ * 订阅模板里挂的「模块 / 插件」：Loon 的 [Plugin]（去广告、BoxJs、各种脚本……）和 Egern 的 modules。
  *
- * 模板只存**引用**（地址、开没开、标签、参数），不存插件正文：插件由 Loon 自己下载、自己更新，
+ * 模板只存**引用**（地址、开没开、名字、参数），不存插件正文：插件由客户端自己下载、自己更新，
  * 面板去拉一份再塞进订阅既多一处会过期的拷贝，又等于替第三方脚本做了分发。
  *
- * Egern 的 modules 没做：Egern 的完整配置是它自己的一套 YAML（proxies / policy_groups / rules
- * 的写法都和 Clash 不同），面板目前给 Egern 发的是 Surge 格式（shared/proxyClientUserAgent.ts），
- * Surge 格式的配置里没有模块的位置（Surge 的模块要在客户端里单独装）。要做得先有一个 Egern
- * 渲染器，不是这里几行的事。存储格式是通用的，到时候直接复用。
+ * 两家共用同一份存储（url / enabled / tag / argument），差别只在参数怎么写：
+ *   - Loon：argument 原样写进 `argument=`（整段 [ ] 或一个带引号的串）；
+ *   - Egern：写成 `KEY=值`，多个用 & 隔开，渲染成模块引用上的 compat_arguments 对象
+ *     （egernapp.com/docs/configuration/modules：只覆盖模块文件里声明过的参数）。
  *
  * 校验从严：只收 http / https、不含空白和逗号（Loon 的 [Plugin] 一行以逗号分隔，地址里一个
- * 逗号就把后面的选项全拆错位）、不含控制字符（防往配置里插段落），数量和长度都有上限。
+ * 逗号就把后面的选项全拆错位；Egern 跟着同一套，模板换目标格式时不用重新检查地址）、
+ * 不含控制字符（防往配置里插段落），数量和长度都有上限。
  */
 
 export type ProxySubTemplateModule = {
   url: string;
   enabled: boolean;
-  /** 客户端里显示的名字（Loon 的 tag）；空 = 让客户端用插件自己的名字。 */
+  /** 客户端里显示的名字（Loon 的 tag、Egern 的 name）；空 = 让客户端用插件自己的名字。 */
   tag: string;
-  /** 插件参数（Loon 的 argument）：原样写进 argument=。空 = 不写。 */
+  /** 插件参数：Loon 原样写进 argument=；Egern 是 `KEY=值&KEY2=值`。空 = 不写。 */
   argument: string;
 };
+
+/** 按哪家的写法校验参数。存储一样，报错文字也跟着叫「插件」或「模块」。 */
+export type ProxySubModuleFlavor = "loon" | "egern";
 
 export const PROXY_SUB_TEMPLATE_MODULE_LIMITS = {
   count: 30,
@@ -48,17 +52,49 @@ export function proxySubModuleUrlProblem(url: string): string | null {
 }
 
 /** 一条模块哪里不对；没问题返回 null。index 从 0 起，只用在报错文字里。 */
-export function proxySubModuleProblem(module: ProxySubTemplateModule, index: number): string | null {
-  const label = `第 ${index + 1} 个插件`;
+export function proxySubModuleProblem(module: ProxySubTemplateModule, index: number, flavor: ProxySubModuleFlavor = "loon"): string | null {
+  const label = `第 ${index + 1} 个${flavor === "egern" ? "模块" : "插件"}`;
   const urlProblem = proxySubModuleUrlProblem(module.url);
   if (urlProblem) return `${label}：${urlProblem}`;
   if (module.tag.length > PROXY_SUB_TEMPLATE_MODULE_LIMITS.tag) return `${label}：名字太长（上限 ${PROXY_SUB_TEMPLATE_MODULE_LIMITS.tag} 字符）`;
   if (CONTROL.test(module.tag) || /[,=]/.test(module.tag)) return `${label}：名字里不能有逗号、等号或控制字符`;
   if (module.argument.length > PROXY_SUB_TEMPLATE_MODULE_LIMITS.argument) return `${label}：参数太长（上限 ${PROXY_SUB_TEMPLATE_MODULE_LIMITS.argument} 字符）`;
   if (CONTROL.test(module.argument)) return `${label}：参数里不能有换行或控制字符`;
+  if (flavor === "egern") {
+    const parsed = parseEgernModuleArguments(module.argument);
+    return parsed.ok ? null : `${label}：${parsed.error}`;
+  }
   // 不是方括号包着的整段时，要给它加引号；里面再有引号就没法写了。
   if (!isBracketed(module.argument) && module.argument.includes("\"")) return `${label}：参数里有双引号时要整段用 [ ] 包起来`;
   return null;
+}
+
+/**
+ * Egern 的模块参数：`KEY=值&KEY2=值` → 键值对。
+ *
+ * 为什么用 & 分隔而不是逗号：Egern 文档明说值里可以有逗号和冒号；不能有的是双引号、反斜杠
+ * （模块文件里的占位符多半写在双引号里，按纯文本替换，一个引号就把那行 YAML 打坏）。
+ * 键重复算错：同一个键在 YAML 对象里出现两次，解析器可能直接拒绝整份配置。
+ */
+export function parseEgernModuleArguments(argument: string): { ok: true; pairs: Array<[string, string]> } | { ok: false; error: string } {
+  const text = String(argument || "").trim();
+  if (!text) return { ok: true, pairs: [] };
+  const pairs: Array<[string, string]> = [];
+  const seen = new Set<string>();
+  for (const raw of text.split("&")) {
+    const part = raw.trim();
+    if (!part) continue;
+    const eq = part.indexOf("=");
+    if (eq <= 0) return { ok: false, error: `参数「${part.slice(0, 40)}」要写成 KEY=值，多个用 & 隔开` };
+    const key = part.slice(0, eq).trim();
+    const value = part.slice(eq + 1).trim();
+    if (!/^[^\s=&"\\]{1,64}$/.test(key)) return { ok: false, error: `参数名「${key.slice(0, 40)}」不合法（不能有空白、引号、反斜杠，最长 64 字符）` };
+    if (/["\\]/.test(value)) return { ok: false, error: `参数 ${key} 的值里不能有双引号或反斜杠` };
+    if (seen.has(key)) return { ok: false, error: `参数 ${key} 写了两次` };
+    seen.add(key);
+    pairs.push([key, value]);
+  }
+  return { ok: true, pairs };
 }
 
 function isBracketed(value: string): boolean {

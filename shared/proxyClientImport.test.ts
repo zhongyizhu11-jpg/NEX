@@ -254,7 +254,7 @@ test("按平台筛出来的都是该平台真能装的", () => {
   );
   assert.deepEqual(
     proxyClientTargetsForPlatform("ios").map((item) => item.id).sort(),
-    ["clash", "happ", "hiddify", "karing", "loon", "quantumultx", "shadowrocket", "singbox", "stash", "streisand", "surge", "v2raytun"],
+    ["clash", "egern", "happ", "hiddify", "karing", "loon", "quantumultx", "shadowrocket", "singbox", "stash", "streisand", "surge", "v2raytun"],
   );
 });
 
@@ -330,7 +330,7 @@ test("节点订阅下全部客户端可用，规则订阅下只剩能出完整�
   // 其余客户端在界面上置灰而不是隐藏，所以这里断言的是"可用数量"，不是"展示数量"。
   assert.deepEqual(
     usable("rules").map((target) => target.id).sort(),
-    ["clash", "karing", "loon", "quantumultx", "shadowrocket", "singbox", "stash", "surfboard", "surge"],
+    ["clash", "egern", "karing", "loon", "quantumultx", "shadowrocket", "singbox", "stash", "surfboard", "surge"],
   );
 });
 
