@@ -14,6 +14,15 @@ import { isAgentVersionAtLeast } from "./version";
 
 /** Agent 从这一版起认得 sniInbounds 段。比它旧的 Agent 上，共享入站和挂在上面的规则都不下发。 */
 export const TLS_INBOUND_AGENT_VERSION = "2.2.224";
+/**
+ * 经隧道、转发链、转发组 / 入口组走的 SNI 规则（下面叫「转送规则」）要的 Agent 版本。
+ *
+ * 从这一版起 Agent 在心跳里回报它装上的每张 SNI 路由表的版本号（revision）。面板只有看到
+ * 入口机回报的版本号和自己下发的一致，才算这台入口的 SNI 配置「已确认」：转发组 / 入口组的
+ * DDNS 只会切到（加进）已确认的成员。老 Agent 不回报，永远确认不了，所以转送规则在它上面
+ * 一律不下发、显示「需要升级 Agent」，老的直连 SNI 规则不受影响。
+ */
+export const TLS_INBOUND_ROUTED_AGENT_VERSION = "2.2.253";
 /** 一台主机最多开几个共享入站。 */
 export const TLS_INBOUND_MAX_PER_HOST = 64;
 /** 一条规则最多几个 SNI。 */
@@ -226,10 +235,47 @@ export function isTlsInboundAgentSupported(agentVersion: string | null | undefin
   return isAgentVersionAtLeast(agentVersion, TLS_INBOUND_AGENT_VERSION);
 }
 
+export function isTlsInboundRoutedAgentSupported(agentVersion: string | null | undefined) {
+  return isAgentVersionAtLeast(agentVersion, TLS_INBOUND_ROUTED_AGENT_VERSION);
+}
+
+/**
+ * SNI 规则从入口往后怎么走：
+ *   direct = 入口机直接拨目标（最早那种）；
+ *   tunnel = 入口机上的隧道入口接住，经隧道到出口再拨目标；
+ *   group  = 转发组 / 转发链 / 端口转发资源的模板或它在成员机上的子规则。
+ * 后两种叫「转送规则」，要 TLS_INBOUND_ROUTED_AGENT_VERSION。
+ */
+export type SniRuleRouteKind = "direct" | "tunnel" | "group";
+
+export function sniRuleRouteKind(rule: { tunnelId?: unknown; forwardGroupId?: unknown } | null | undefined): SniRuleRouteKind {
+  if (Number(rule?.forwardGroupId || 0) > 0) return "group";
+  if (Number(rule?.tunnelId || 0) > 0) return "tunnel";
+  return "direct";
+}
+
+export function isRoutedSniRule(rule: { tunnelId?: unknown; forwardGroupId?: unknown } | null | undefined) {
+  return sniRuleRouteKind(rule) !== "direct";
+}
+
+/** 这种走法在这个版本的 Agent 上能不能跑。 */
+export function isSniRouteAgentSupported(kind: SniRuleRouteKind, agentVersion: string | null | undefined) {
+  return kind === "direct" ? isTlsInboundAgentSupported(agentVersion) : isTlsInboundRoutedAgentSupported(agentVersion);
+}
+
 /** 老 Agent 上的提示语，界面和服务端说同一句。 */
 export function tlsInboundAgentUpgradeMessage(hostName?: string | null) {
   const name = String(hostName || "").trim();
   return `${name ? `主机「${name}」的` : ""}Agent 版本低于 ${TLS_INBOUND_AGENT_VERSION}，不支持共享 TLS 入站，需要升级 Agent`;
+}
+
+export function tlsInboundRoutedAgentUpgradeMessage(hostName?: string | null) {
+  const name = String(hostName || "").trim();
+  return `${name ? `主机「${name}」的` : ""}Agent 版本低于 ${TLS_INBOUND_ROUTED_AGENT_VERSION}，不支持经隧道 / 转发链 / 转发组走共享 TLS 入站，需要升级 Agent`;
+}
+
+export function sniRouteAgentUpgradeMessage(kind: SniRuleRouteKind, hostName?: string | null) {
+  return kind === "direct" ? tlsInboundAgentUpgradeMessage(hostName) : tlsInboundRoutedAgentUpgradeMessage(hostName);
 }
 
 /** 规则卡片上的一行：「SNI：a.com、b.com @ 主机:443」。名字多了只列前三个。 */
@@ -248,11 +294,13 @@ export type TlsInboundRuleState = "ok" | "agent_upgrade" | "inbound_disabled" | 
 export function tlsInboundRuleState(options: {
   inbound: { isEnabled?: unknown } | null | undefined;
   agentVersion: string | null | undefined;
+  /** 规则怎么走（不给按直连）：转送规则要更新的 Agent。 */
+  routeKind?: SniRuleRouteKind;
 }): TlsInboundRuleState {
   if (!options.inbound) return "inbound_missing";
   const enabled = options.inbound.isEnabled === true || options.inbound.isEnabled === 1 || options.inbound.isEnabled === "1";
   if (!enabled) return "inbound_disabled";
-  if (!isTlsInboundAgentSupported(options.agentVersion)) return "agent_upgrade";
+  if (!isSniRouteAgentSupported(options.routeKind || "direct", options.agentVersion)) return "agent_upgrade";
   return "ok";
 }
 
@@ -278,12 +326,21 @@ export function urlHostnameToAscii(value: string): string {
 /** 规则编辑框里「共享 TLS 入站」这一种入口还差什么；null 表示可以提交。和服务端说同样的话。 */
 export function sniRuleFormBlocker(
   form: { tlsInboundId: number | null; sniNamesText: string; targetIp: string; targetPort: number },
-  inbound: { allowedSni?: readonly string[]; isEnabled?: boolean; agentSupported?: boolean; hostName?: string } | null | undefined,
+  inbound: {
+    allowedSni?: readonly string[];
+    isEnabled?: boolean;
+    agentSupported?: boolean;
+    /** 入口机 Agent 够不够跑转送规则（经隧道 / 转发链 / 转发组）。 */
+    routedAgentSupported?: boolean;
+    hostName?: string;
+  } | null | undefined,
   toAscii: ToAscii = urlHostnameToAscii,
+  routeKind: SniRuleRouteKind = "direct",
 ): string | null {
   if (!form.tlsInboundId || !inbound) return "还没选共享 TLS 入站";
   if (inbound.isEnabled === false) return "这个共享 TLS 入站已停用";
   if (inbound.agentSupported === false) return tlsInboundAgentUpgradeMessage(inbound.hostName);
+  if (routeKind !== "direct" && inbound.routedAgentSupported === false) return tlsInboundRoutedAgentUpgradeMessage(inbound.hostName);
   const names = normalizeSniNameList(form.sniNamesText, toAscii);
   if (!names.ok) return names.error;
   const outside = sniNamesOutsideAllowlist(names.names, inbound.allowedSni || []);
@@ -293,4 +350,90 @@ export function sniRuleFormBlocker(
   if (!port) return "还缺目标端口";
   if (!Number.isInteger(port) || port < 1 || port > 65535) return "目标端口必须在 1-65535 之间";
   return null;
+}
+
+/**
+ * 转发组 / 转发链 / 端口转发资源上的 SNI 规则：模板挂的是某一台入口机上的入站（「锚点」），
+ * 其余每台入口机用**它自己身上、端口相同**的那个入站。这样一台机器的 443 只有一张表，
+ * 直连规则和各个组的规则共用它，名字在这张表里照样唯一。
+ *
+ * 这里只做「每台入口机该用哪个入站」这一步，纯函数：入口机上没有同端口的入站 → null
+ * （这台成员机上的子规则不会下发，DDNS 也不会切过去）。
+ */
+export function pickMemberTlsInbound<T extends { id: number; hostId: number; port: number }>(
+  anchor: { port: number } | null | undefined,
+  hostId: number,
+  inbounds: readonly T[],
+): T | null {
+  const port = Number(anchor?.port || 0);
+  if (!(port > 0)) return null;
+  return inbounds
+    .filter((inbound) => Number(inbound.hostId) === Number(hostId) && Number(inbound.port) === port)
+    .sort((left, right) => left.id - right.id)[0] || null;
+}
+
+/** 规则编辑框里一个可选的入站（tlsInbounds.listForUser 的一行）。 */
+export type SniInboundOption = {
+  id: number;
+  hostId: number;
+  isEnabled?: boolean;
+  usable?: boolean;
+  tunnelIds?: readonly number[];
+  forwardGroupIds?: readonly number[];
+};
+
+export type SniInboundChoice<T extends SniInboundOption> = {
+  /** Select 的值：入站 id + 经哪个转发资源（0 = 不经转发资源）。 */
+  key: string;
+  inbound: T;
+  forwardGroupId: number | null;
+};
+
+export function sniInboundChoiceKey(inboundId: unknown, forwardGroupId?: unknown) {
+  return `${Number(inboundId || 0)}:${Number(forwardGroupId || 0)}`;
+}
+
+/**
+ * 规则编辑框里「共享 TLS 入站」能选哪些：
+ *   - 端口转发页签：自己有权用的主机上的入站（直连），加上经每个端口转发资源能用的入站；
+ *   - 隧道页签：所选隧道入口机上的入站；
+ *   - 转发链 / 转发组页签：所选转发资源某台入口机上的入站（其余入口机用各自同端口的入站）。
+ * 停用的不列；keep（编辑时规则现在挂的）总是留着，免得下拉框显示成空的。
+ */
+export function sniInboundChoices<T extends SniInboundOption>(
+  inbounds: readonly T[],
+  scope:
+    | { kind: "direct"; portGroupIds: readonly number[] }
+    | { kind: "tunnel"; tunnelId: number | null }
+    | { kind: "group"; forwardGroupId: number | null },
+  keep?: { inboundId: number | null; forwardGroupId?: number | null },
+): SniInboundChoice<T>[] {
+  const choices: SniInboundChoice<T>[] = [];
+  const seen = new Set<string>();
+  const push = (inbound: T, forwardGroupId: number | null) => {
+    const key = sniInboundChoiceKey(inbound.id, forwardGroupId);
+    if (seen.has(key)) return;
+    seen.add(key);
+    choices.push({ key, inbound, forwardGroupId });
+  };
+  for (const inbound of inbounds) {
+    if (inbound.isEnabled === false) continue;
+    if (scope.kind === "direct") {
+      if (inbound.usable) push(inbound, null);
+      for (const groupId of scope.portGroupIds) {
+        if ((inbound.forwardGroupIds || []).map(Number).includes(Number(groupId))) push(inbound, Number(groupId));
+      }
+    } else if (scope.kind === "tunnel") {
+      if (scope.tunnelId && (inbound.tunnelIds || []).map(Number).includes(Number(scope.tunnelId))) push(inbound, null);
+    } else if (scope.forwardGroupId && (inbound.forwardGroupIds || []).map(Number).includes(Number(scope.forwardGroupId))) {
+      push(inbound, Number(scope.forwardGroupId));
+    }
+  }
+  const keepId = Number(keep?.inboundId || 0);
+  if (keepId > 0) {
+    const keepGroupId = Number(keep?.forwardGroupId || 0) || null;
+    const inbound = inbounds.find((item) => Number(item.id) === keepId);
+    if (inbound && !seen.has(sniInboundChoiceKey(keepId, keepGroupId))) push(inbound, keepGroupId);
+  }
+  return choices;
 }

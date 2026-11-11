@@ -129,7 +129,8 @@ test("心跳接上了：sniInbounds 是一个状态段，SNI 规则一律走守�
   const reportSource = fs.readFileSync(path.resolve(import.meta.dirname, "agentHeartbeatReport.ts"), "utf8");
   const sectionNames = /const AGENT_STATE_SECTION_NAMES = \[([\s\S]*?)\] as const;/.exec(reportSource)?.[1] || "";
   assert.match(sectionNames, /"sniInbounds"/);
-  assert.match(source, /if \(isSniRuntimeRule\(rule\)\) return true;/);
+  // 直连的 SNI 规则走守卫；经隧道的不走（隧道入口自己只听回环，见 tlsInboundRouted.test.ts）。
+  assert.match(source, /if \(isSniRuntimeRule\(rule\) && !tunnel\) return true;/);
   assert.equal((source.match(/isSniRuntimeRule\(rule\) \? \{ bindAddress: "127\.0\.0\.1" \} : \{\}/g) || []).length, 2);
   assert.match(source, /sniInbounds,\n\s*\}, agentStateSignatures\);/);
   // 没有新的上报路径：状态随心跳带上来。

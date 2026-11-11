@@ -12,9 +12,11 @@ import {
   tunnels,
   subscriptionPlanForwardGroups,
   userForwardGroupPermissions,
+  type ForwardRule,
   type InsertForwardGroup,
   type InsertForwardGroupMember,
 } from "../../drizzle/schema";
+import type { SniReadinessTemplate } from "../tlsInboundReadiness";
 import { pushAgentRefresh } from "../agentEvents";
 import { appendPanelLog } from "../_core/panelLogger";
 import { invalidateProxySubCacheAll } from "../proxySubCache";
@@ -108,6 +110,7 @@ import { repairPortForwardRuleHostReferences } from "../portForwardRuleHosts";
 import { assertNoDirectSelfForwardLoop } from "../selfForwardLoop";
 import { summarizeForwardGroupRuntime } from "../forwardGroupRuntimeStatus";
 import { dbBool, sqlBool } from "./repositoryUtils";
+import { isSniGroupTemplate, planSniChild, syncSniChildNames } from "../sniGroupChildren";
 import { reorderWithinSortOrderScope } from "./sortOrderSlots";
 import { normalizeExitGroupStrategy } from "@shared/exitStrategy";
 import { MAX_FORWARD_GROUP_MEMBERS, forwardGroupRouteMembers } from "../../shared/forwardGroup";
@@ -173,6 +176,8 @@ type ForwardGroupRuleConfig = {
   sourcePort: number;
   protocol?: "tcp" | "udp" | "both" | string | null;
   excludeTemplateRuleId?: number | null;
+  /** 共享 TLS 入站上的规则：sourcePort 是面板分的本机回环端口，不受对外端口策略管（见 server/tlsInbounds.ts）。 */
+  sniBackendPort?: boolean;
 };
 
 type SyncForwardGroupRulesOptions = {
@@ -461,8 +466,19 @@ async function syncPreservedChildRuleMetadata(existing: any, payload: any) {
   const patch: Record<string, unknown> = {};
   if (String(existing?.name || "") !== String(payload?.name || "")) patch.name = payload.name;
   if (Number(existing?.userId || 0) !== Number(payload?.userId || 0)) patch.userId = Number(payload.userId);
+  // 共享 TLS 入站：换入站 / 换名字只动分流表，规则在本机回环上的入口不用重起，原地写上、催 Agent 重算表。
+  let sniChanged = false;
+  if (payload?.tlsInboundId !== undefined && nullableNumber(existing?.tlsInboundId) !== nullableNumber(payload.tlsInboundId)) {
+    patch.tlsInboundId = payload.tlsInboundId;
+    sniChanged = true;
+  }
+  if (payload?.sniNames !== undefined && String(existing?.sniNames || "") !== String(payload.sniNames || "")) {
+    patch.sniNames = payload.sniNames;
+    sniChanged = true;
+  }
   if (Object.keys(patch).length === 0) return;
   await updateForwardRule(Number(existing.id), patch as any);
+  if (sniChanged) pushAgentRefresh(Number(existing.hostId), "forward-group-child-sni-updated");
 }
 
 type ForwardGroupMode = "port" | "failover" | "chain" | "entry" | "exit";
@@ -2734,7 +2750,7 @@ export async function validateForwardGroupRuleConfig(groupId: number, config: Fo
   // 一次判完，而不是逐个成员判：报错时说出来的才是**真正**的允许范围，
   // 也正是界面显示的那一份；逐个判只会报到第一个不满足的成员为止。
   const entryPolicy = await forwardGroupEntryPortPolicy(group);
-  if (!isPortAllowedByPolicy(sourcePort, entryPolicy)) {
+  if (!config.sniBackendPort && !isPortAllowedByPolicy(sourcePort, entryPolicy)) {
     throw new Error(portPolicyErrorMessage(entryPolicy, "入口端口"));
   }
   for (const member of portCheckMembers) {
@@ -3261,7 +3277,8 @@ async function ensureMemberRuleForTemplate(
 
   const hostId = await memberEntryHostId(member);
   if (!hostId) throw new Error("Forward group member has no valid entry agent");
-  await assertEntryPortAllowed(member, Number(templateRule.sourcePort));
+  // SNI 规则的端口是本机回环端口，不对外，成员的对外端口策略管不到它。
+  if (!isSniGroupTemplate(templateRule)) await assertEntryPortAllowed(member, Number(templateRule.sourcePort));
   const sourcePort = Number(templateRule.sourcePort);
   // 子规则实际监听的主机：隧道成员挂了入口组时不只入口机。
   const listenHostIds = Array.from(new Set([hostId, ...await memberListenHostIds(member)]));
@@ -3458,6 +3475,12 @@ async function ensureMemberRuleForTemplate(
 
   const routeColumns = childRouteColumns(templateRule, existing, childFailoverEnabled);
   if (routeColumns) Object.assign(payload, routeColumns);
+  // 共享 TLS 入站：子规则挂这台成员机自己同端口的入站（server/sniGroupChildren.ts）。隧道成员不支持，挂锚点 = 不下发。
+  const sniPlan = await planSniChild(templateRule, hostId, [Number(existing?.id || 0)]);
+  if (sniPlan) {
+    Object.assign(payload, sniPlan.columns);
+    if (member.memberType === "tunnel") payload.tlsInboundId = Number(templateRule.tlsInboundId);
+  }
 
   // A 2.3.278 background sync could have copied group-level runtime fields
   // into legacy failover children. Keep those fields stable while the group
@@ -3580,9 +3603,12 @@ async function ensureChainRuleForTemplate(
     targetIp?: string | null;
     targetPort?: number | null;
     namePrefix?: string;
+    /** 这一跳是对外的入口（第一跳或入口组里的一台）：SNI 规则时它只听回环、挂共享 TLS 入站。 */
+    sniEdge?: boolean;
   } = {},
 ) {
   const sourceMember = overrides.sourceMember || member;
+  const sniEdge = !!overrides.sniEdge && isSniGroupTemplate(templateRule);
   if (sourceMember.memberType !== "host") throw new Error("Port forwarding chain only supports host members");
   const sourceHostId = Number(overrides.sourceHost?.id || sourceMember.hostId || 0);
   const existing = await existingChildRule(Number(templateRule.id), Number(member.id), sourceHostId);
@@ -3604,7 +3630,7 @@ async function ensureChainRuleForTemplate(
   if (!hostId) throw new Error("Port forwarding chain member has no valid entry agent");
   const sourcePort = Number(overrides.sourcePort || templateRule.sourcePort);
   if (options.validatePorts !== false) {
-    await assertEntryPortAllowed(sourceMember, sourcePort);
+    if (!sniEdge) await assertEntryPortAllowed(sourceMember, sourcePort);
     const used = await isPortUsedOnHostForGroupChild(
       hostId,
       sourcePort,
@@ -3684,6 +3710,10 @@ async function ensureChainRuleForTemplate(
     pendingDelete: false,
     userId: Number(templateRule.userId),
   };
+  if (sniEdge) {
+    const sniPlan = await planSniChild(templateRule, hostId, [Number(existing?.id || 0)]);
+    if (sniPlan) Object.assign(payload, sniPlan.columns);
+  }
 
   if (existing) {
     if (canPreserveChildRuleRuntime(existing, payload, options)) {
@@ -3930,10 +3960,13 @@ async function syncForwardGroupRulesUnlocked(groupId: number, options: SyncForwa
         for (let index = activeChainMembers.length - 1; index >= 0; index--) {
           const member = activeChainMembers[index];
           const nextMember = activeChainMembers[index + 1] || null;
+          const sniEdge = index === 0 && entryMembers.length === 0;
           const ruleId = await ensureChainRuleForTemplate(group, template, member, nextMember, index, activeChainMembers.length, options, {
             sourcePort: chainSourcePorts[index],
             targetPort: nextMember ? chainSourcePorts[index + 1] : null,
+            sniEdge,
           });
+          if (ruleId && sniEdge) await syncSniChildNames(ruleId, template, { groupId: Number(group.id) });
           if (ruleId && !preserveRuntime) {
             await db.update(forwardRules).set({ isRunning: false, updatedAt: nowDate() }).where(eq(forwardRules.id, ruleId));
           }
@@ -3956,7 +3989,9 @@ async function syncForwardGroupRulesUnlocked(groupId: number, options: SyncForwa
               targetIp,
               targetPort: chainSourcePorts[0],
               namePrefix: `entry ${entryIndex + 1}/${entryMembers.length}`,
+              sniEdge: true,
             });
+            if (ruleId) await syncSniChildNames(ruleId, template, { groupId: Number(group.id) });
             if (ruleId && !preserveRuntime) {
               await db.update(forwardRules).set({ isRunning: false, updatedAt: nowDate() }).where(eq(forwardRules.id, ruleId));
             }
@@ -3969,6 +4004,7 @@ async function syncForwardGroupRulesUnlocked(groupId: number, options: SyncForwa
       for (const member of fanoutMembers) {
         const outcome: MemberRuleSyncOutcome = { keptRunning: false };
         const ruleId = await ensureMemberRuleForTemplate(group, template, member, options, outcome);
+        if (ruleId) await syncSniChildNames(ruleId, template, { groupId: Number(group.id) });
         if (outcome.keptRunning) childrenKeptRunning += 1;
         else everyChildKeptRunning = false;
         if (ruleId && !preserveRuntime && !outcome.keptRunning) {
@@ -5008,9 +5044,56 @@ async function resolveEntryGroupAggregation(
   return { ...applied, plan };
 }
 
+/*
+  共享 TLS 入站（SNI 分流）：组里有 SNI 规则时，DDNS 只切到 SNI 配置已确认的成员（判断见
+  server/tlsInboundReadiness.ts）。当前在用的成员不在这里被撤掉：面板刚重启时谁都还没确认，
+  不能因此把正在用的入口切走。没确认的成员记一条事件（同样的原因不重复记）。
+*/
+const sniBlockedEventByMember = new Map<number, string>();
+
+async function sniReadyGroupCandidates<M extends { id: unknown }>(
+  group: { id: unknown; activeMemberId?: unknown },
+  templates: readonly SniReadinessTemplate[],
+  candidates: M[],
+): Promise<M[]> {
+  const { activeSniTemplates, filterSniReadyCandidates } = await import("../tlsInboundReadiness");
+  if (activeSniTemplates(templates).length === 0) return candidates;
+  const { ready, blocked } = await filterSniReadyCandidates({
+    candidates,
+    keepMemberId: group?.activeMemberId,
+    templates,
+    hostIdOf: (member) => memberEntryHostId(member),
+  });
+  for (const { member, reason } of blocked) {
+    const memberId = Number(member.id);
+    if (sniBlockedEventByMember.get(memberId) === reason) continue;
+    if (sniBlockedEventByMember.size >= 4096) sniBlockedEventByMember.clear();
+    sniBlockedEventByMember.set(memberId, reason);
+    await insertForwardGroupEvent(Number(group.id), memberId, "sni-not-ready", `共享 TLS 入站未就绪，暂不切到这个成员：${reason}`).catch(() => undefined);
+  }
+  for (const member of ready) sniBlockedEventByMember.delete(Number(member.id));
+  return ready;
+}
+
+/** 入口组本身没有模板：看挂着它的端口转发 / 转发链里的 SNI 模板。 */
+async function sniTemplatesUsingEntryGroup(entryGroupId: number) {
+  const db = await getDb();
+  if (!db) return [] as ForwardRule[];
+  const dependents = await db.select({ id: forwardGroups.id }).from(forwardGroups)
+    .where(and(eq(forwardGroups.entryGroupId, Number(entryGroupId)), sql`${forwardGroups.id} <> ${Number(entryGroupId)}`));
+  const templates: ForwardRule[] = [];
+  for (const dependent of dependents) {
+    for (const template of await getForwardGroupTemplateRules(Number(dependent.id))) {
+      if (Number(template?.tlsInboundId || 0) > 0) templates.push(template);
+    }
+  }
+  return templates;
+}
+
 async function syncEntryGroupDdns(group: any, ddnsSettings: any, options: ForwardGroupFailoverOptions = {}) {
   const db = await getDb();
   const members = sortedMembers(group, true) as any[];
+  const sniTemplates = await sniTemplatesUsingEntryGroup(Number(group.id));
   const recordType = normalizeForwardGroupRecordType(group.recordType);
   const forceSync = !!options.forceSync;
   const previousValue = String(group.lastDdnsValue || "").trim();
@@ -5054,6 +5137,12 @@ async function syncEntryGroupDdns(group: any, ddnsSettings: any, options: Forwar
     const value = await memberDdnsValue(member, recordType).catch(() => "");
     if (!value) continue;
     const previouslyIncluded = previousValues.has(value);
+    // SNI：还没解析到它的成员，SNI 配置没确认就先不加进来（已经在解析里的照旧按健康度判断）。
+    if (!previouslyIncluded && sniTemplates.length > 0
+      && (await sniReadyGroupCandidates({ id: group.id, activeMemberId: null }, sniTemplates, [member])).length === 0) {
+      if (!excluded.includes(value)) excluded.push(value);
+      continue;
+    }
     const liveness = await resolveMemberAgentLiveness(member, chinaHealthNow);
     const memberId = Number(member.id);
     initialAgentLivenessSnapshot.set(memberId, liveness.signature);
@@ -5599,12 +5688,12 @@ async function runForwardGroupFailoverForGroups(
     // explicit here. A failover may pass through several members; when a
     // higher-priority member recovers, it must win over the currently active
     // lower-priority member regardless of how the evaluation array was built.
-    const healthyMembers = evaluated
+    const healthyMembers = (await sniReadyGroupCandidates(group, templates, evaluated
       .filter((member) => member.healthy)
       .sort((left, right) => {
         const priorityDelta = Number(left.priority) - Number(right.priority);
         return priorityDelta || Number(left.id) - Number(right.id);
-      });
+      })));
     const firstHealthy = healthyMembers[0];
     const anyPending = evaluated.some((member) => member.healthPending);
     if ((active?.healthPending && String(group.lastDdnsValue || "").trim()) || (!active && !firstHealthy && anyPending)) {

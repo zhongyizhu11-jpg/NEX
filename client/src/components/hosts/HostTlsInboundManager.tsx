@@ -72,6 +72,9 @@ export function HostTlsInboundSection({ hostId }: { hostId: number }) {
       {data && !data.agentSupported && (
         <p className="text-meta text-[var(--fx-warn-text)]">需要升级 Agent：{TLS_INBOUND_AGENT_VERSION} 起支持共享 TLS 入站，当前 {data.agentVersion || "未知"}。</p>
       )}
+      {data && data.agentSupported && !data.routedAgentSupported && inbounds.length > 0 && (
+        <p className="text-meta text-muted-foreground">经隧道 / 转发链 / 转发组走这里的 SNI 规则需要 Agent {data.routedAgentVersion} 起，当前 {data.agentVersion || "未知"}，这类规则在这台主机上暂不下发。</p>
+      )}
       <HostTlsInboundManager hostId={hostId} open={open} onOpenChange={setOpen} />
     </Section>
   );
@@ -177,6 +180,10 @@ export default function HostTlsInboundManager({ hostId, open, onOpenChange }: { 
                       {inbound.runtime && !inbound.runtime.listening && inbound.isEnabled && (
                         <Badge variant="destructive" title={inbound.runtime.error || undefined}>监听失败</Badge>
                       )}
+                      {/* 2.2.253 起 Agent 回报路由表版本号；对不上时转发组 / 入口组的 DDNS 不会切到这台。 */}
+                      {data?.routedAgentSupported && inbound.isEnabled && inbound.runtime?.listening && !inbound.tableConfirmed && (
+                        <Badge variant="outline" title="Agent 还没回报装上最新的 SNI 路由表；转发组 / 入口组的 DDNS 暂不会切到这台">路由表待确认</Badge>
+                      )}
                     </div>
                     <div className="flex shrink-0 items-center gap-1">
                       <OptimisticSwitch
@@ -194,6 +201,12 @@ export default function HostTlsInboundManager({ hostId, open, onOpenChange }: { 
                     {inbound.proxyProtocol === "auto" ? " · 接受 PROXY 头" : ""}
                   </p>
                   {inbound.runtime?.error && <p className="text-meta text-[var(--fx-down-text)]">{inbound.runtime.error}</p>}
+                  {inbound.runtime?.listening && data?.routedAgentSupported && (
+                    <p className="text-meta text-muted-foreground">
+                      监听以来：分到规则 {Number(inbound.runtime.matched || 0)} 条连接 · 断开 {Number(inbound.runtime.dropped || 0)} 条
+                      {Number(inbound.runtime.backendErrors || 0) > 0 ? ` · 规则入口拨不通 ${Number(inbound.runtime.backendErrors)} 次` : ""}
+                    </p>
+                  )}
                   <p className="text-meta text-muted-foreground">
                     {inbound.rules.length > 0
                       ? `${inbound.rules.length} 条规则：${inbound.rules.slice(0, 6).map((rule: any) => `${rule.name}（${rule.sniNames.join("、")}${rule.isEnabled ? "" : "，已暂停"}）`).join("；")}`

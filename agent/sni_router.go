@@ -16,6 +16,12 @@ package main
 //   - 没人认领的 SNI：按 unknownSniAction 关掉或交给默认规则。
 //
 // 路由表整份原子替换：改配置不影响已经建立的连接，换端口才会关掉旧监听（已建立的连接照旧跑完）。
+//
+// 转送规则（经隧道 / 转发链 / 转发组走的 SNI 规则，Agent 2.2.253 起）在这里和直连规则没有区别：
+// 规则在本机的入口（隧道入口、转发链第一跳、组成员上的子规则）由面板改成只听 127.0.0.1:<规则端口>，
+// 这里照样把连接交到那个端口。限速、计数、配额都挂在规则自己的入口上，所以照旧按规则算。
+// 面板要知道这张表真的装上了（DDNS 只切到 SNI 配置已确认的成员），所以每张表带一个 revision，
+// 装上以后原样回报；再加上分流计数（分出去 / 断开 / 后端拨不通），给面板判断和排查用。
 
 import (
 	"bytes"
@@ -83,6 +89,8 @@ type sniInboundSpec struct {
 	AllowedSNI              []string    `json:"allowedSni"`
 	DefaultBackend          *sniBackend `json:"defaultBackend"`
 	Routes                  []sniRoute  `json:"routes"`
+	// Revision 是面板给这张表算的版本号（2.2.253 起）。原样回报，面板拿它确认表已经装上。
+	Revision string `json:"revision,omitempty"`
 }
 
 // ── ClientHello 解析 ─────────────────────────────────────────────
@@ -304,6 +312,8 @@ func normalizeSNIHostName(value string) (string, bool) {
 
 type sniRoutingTable struct {
 	inboundID        int
+	revision         string
+	activeRoutes     int
 	routes           map[string]sniRoute
 	allowed          []string
 	rejectEmptySNI   bool
@@ -358,7 +368,11 @@ func newSNIRoutingTable(spec sniInboundSpec) *sniRoutingTable {
 		}
 		route.Name = name
 		table.routes[name] = route
+		if route.Active && route.BackendPort > 0 {
+			table.activeRoutes++
+		}
 	}
+	table.revision = strings.TrimSpace(spec.Revision)
 	if strings.TrimSpace(spec.UnknownSNIAction) == "default_rule" && spec.DefaultBackend != nil && spec.DefaultBackend.BackendPort > 0 {
 		backend := *spec.DefaultBackend
 		table.defaultBackend = &backend
@@ -416,6 +430,35 @@ func (t *sniRoutingTable) decide(serverName string, hasSNI bool) sniDecision {
 		return sniDecision{backend: *t.defaultBackend, ok: true, reason: "unknown-default"}
 	}
 	return sniDecision{reason: "unknown-sni"}
+}
+
+// ── 分流计数 ────────────────────────────────────────────────────
+
+// sniInboundCounters 是每个入站的分流计数：分出去多少条、断开多少条、后端（规则的本机入口）拨不通
+// 多少次。只统计连接条数 —— 字节数和按规则的流量在规则自己的入口上算，这里不重复算。
+// 换路由表（同一端口）不清零；换端口 / 停掉入站时跟着监听一起没了。
+type sniInboundCounters struct {
+	matched       atomic.Uint64
+	dropped       atomic.Uint64
+	backendErrors atomic.Uint64
+}
+
+func (c *sniInboundCounters) recordDecision(decision sniDecision) {
+	if c == nil {
+		return
+	}
+	if decision.ok {
+		c.matched.Add(1)
+		return
+	}
+	c.dropped.Add(1)
+}
+
+func (c *sniInboundCounters) recordBackendError() {
+	if c == nil {
+		return
+	}
+	c.backendErrors.Add(1)
 }
 
 // ── 握手并发限制 ────────────────────────────────────────────────
@@ -485,6 +528,7 @@ type sniInboundServer struct {
 	listener net.Listener
 	table    atomic.Pointer[sniRoutingTable]
 	limiter  *sniHandshakeLimiter
+	counters sniInboundCounters
 	done     chan struct{}
 	once     sync.Once
 }
@@ -494,6 +538,12 @@ type sniInboundStatus struct {
 	Port      int    `json:"port"`
 	Listening bool   `json:"listening"`
 	Error     string `json:"error,omitempty"`
+	// 以下 2.2.253 起：装上的表的版本号、其中可用的名字数、分流计数。
+	Revision      string `json:"revision,omitempty"`
+	Routes        int    `json:"routes"`
+	Matched       uint64 `json:"matched"`
+	Dropped       uint64 `json:"dropped"`
+	BackendErrors uint64 `json:"backendErrors"`
 }
 
 var (
@@ -547,7 +597,8 @@ func syncSNIInbounds(specs []sniInboundSpec) {
 		}
 		ln, err := sniListen(spec.Port)
 		if err != nil {
-			sniInboundErrors[id] = sniInboundStatus{ID: id, Port: spec.Port, Error: err.Error()}
+			// 版本号照样报：面板能分清「表收到了但端口没听起来」和「还没收到」。
+			sniInboundErrors[id] = sniInboundStatus{ID: id, Port: spec.Port, Error: err.Error(), Revision: table.revision, Routes: table.activeRoutes}
 			if shouldLogAgentReport(fmt.Sprintf("sni-inbound-listen:%d:%d", id, spec.Port), agentReportLogInterval) {
 				logf("sni inbound listen failed id=%d port=%d: %v", id, spec.Port, err)
 			}
@@ -568,14 +619,31 @@ func sniInboundStatusSnapshot() []sniInboundStatus {
 	sniInboundMu.Lock()
 	defer sniInboundMu.Unlock()
 	out := make([]sniInboundStatus, 0, len(sniInboundServers)+len(sniInboundErrors))
-	for id, server := range sniInboundServers {
-		out = append(out, sniInboundStatus{ID: id, Port: server.port, Listening: true})
+	for _, server := range sniInboundServers {
+		out = append(out, server.status())
 	}
 	for _, status := range sniInboundErrors {
 		out = append(out, status)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
+}
+
+// status 是这个入站此刻的状态：表的版本号取当前装着的那张，计数是监听起来以后的累计。
+func (s *sniInboundServer) status() sniInboundStatus {
+	status := sniInboundStatus{
+		ID:            s.id,
+		Port:          s.port,
+		Listening:     true,
+		Matched:       s.counters.matched.Load(),
+		Dropped:       s.counters.dropped.Load(),
+		BackendErrors: s.counters.backendErrors.Load(),
+	}
+	if table := s.table.Load(); table != nil {
+		status.Revision = table.revision
+		status.Routes = table.activeRoutes
+	}
+	return status
 }
 
 func (s *sniInboundServer) close() {
@@ -692,6 +760,7 @@ func (s *sniInboundServer) handleConn(client net.Conn) {
 		table = latest
 	}
 	decision := table.decide(hello.ServerName, hello.HasSNI)
+	s.counters.recordDecision(decision)
 	if !decision.ok {
 		if shouldLogAgentReport(fmt.Sprintf("sni-drop:%d:%s", s.id, decision.reason), agentReportLogInterval) {
 			logf("sni inbound dropped id=%d port=%d sni=%q reason=%s", s.id, s.port, hello.ServerName, decision.reason)
@@ -703,6 +772,7 @@ func (s *sniInboundServer) handleConn(client net.Conn) {
 	releaseTotal()
 	upstream, err := sniDialBackend(decision.backend.BackendPort)
 	if err != nil {
+		s.counters.recordBackendError()
 		if shouldLogAgentReport(fmt.Sprintf("sni-backend:%d:%d", s.id, decision.backend.RuleID), agentReportLogInterval) {
 			logf("sni inbound backend unavailable id=%d rule=%d port=%d: %v", s.id, decision.backend.RuleID, decision.backend.BackendPort, err)
 		}
